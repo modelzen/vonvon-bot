@@ -12,8 +12,8 @@
     "test": "tsx --test tests/*.test.ts",
     "start": "electron .",
     "prepare:runtime": "node scripts/prepare-runtime.mjs",
-    "package:mac": "npm run build && node scripts/check-package.mjs darwin-arm64 && electron-builder --mac dir --arm64",
-    "package:win": "npm run build && node scripts/check-package.mjs win32-x64 && electron-builder --win nsis --x64",
+    "package:mac": "npm run build && node scripts/check-package.mjs darwin-arm64 && electron-builder --mac dir --arm64 --publish never",
+    "package:win": "npm run build && node scripts/check-package.mjs win32-x64 && electron-builder --win nsis --x64 --publish never",
     "test:native": "node scripts/test-native.mjs",
     "package:preview:mac": "node scripts/package-preview.mjs"
   },
