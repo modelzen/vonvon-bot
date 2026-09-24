@@ -772,37 +772,34 @@ export function App() {
                     trailing={
                       t.tool === "codex" ? (
                         <div className="desktop-actions">
-                          <Button
-                            size="sm"
-                            disabled={
-                              busy ||
-                              !ready ||
-                              snapshot.jobs.some(
-                                (job) =>
-                                  isActive(job) && job.type === "installCodex",
-                              )
-                            }
-                            onClick={() => void run({ type: "installCodex" })}
-                          >
-                            安装 Codex
-                          </Button>
-                          <Button
-                            size="sm"
-                            disabled={
-                              busy ||
-                              !ready ||
-                              t.installation !== "installed" ||
-                              snapshot.jobs.some(
-                                (job) =>
-                                  isActive(job) && job.type === "loginCodex",
-                              )
-                            }
-                            onClick={() =>
-                              void run({ type: "startCodexLogin" })
-                            }
-                          >
-                            登录 Codex
-                          </Button>
+                          {t.installation === "missing" &&
+                            !snapshot.jobs.some(
+                              (job) =>
+                                isActive(job) && job.type === "installCodex",
+                            ) && (
+                              <Button
+                                size="sm"
+                                disabled={busy || !ready}
+                                onClick={() => void run({ type: "installCodex" })}
+                              >
+                                安装 Codex
+                              </Button>
+                            )}
+                          {t.installation === "installed" &&
+                            t.authentication === "signedOut" &&
+                            !snapshot.jobs.some(
+                              (job) => isActive(job) && job.type === "loginCodex",
+                            ) && (
+                              <Button
+                                size="sm"
+                                disabled={busy || !ready}
+                                onClick={() =>
+                                  void run({ type: "startCodexLogin" })
+                                }
+                              >
+                                登录 Codex
+                              </Button>
+                            )}
                         </div>
                       ) : undefined
                     }
@@ -1219,6 +1216,15 @@ function JobPanel({
   run: (command: Command) => Promise<CommandResult>;
   busy: boolean;
 }) {
+  const [now, setNow] = useState(Date.now);
+  const expiresAt = job.phase === "qr" ? job.expiresAt : null;
+  useEffect(() => {
+    if (expiresAt === null) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [expiresAt]);
+  const expired = expiresAt !== null && expiresAt <= now;
   return (
     <SettingsGroup
       label={
@@ -1232,11 +1238,40 @@ function JobPanel({
       <div className="desktop-job" role="status">
         {job.phase === "qr" ? (
           <>
-            <img className="desktop-qr" src={job.image} alt="飞书注册二维码" />
-            <p>
-              请用飞书扫码。二维码有效期至{" "}
-              {new Date(job.expiresAt).toLocaleTimeString()}。
-            </p>
+            {expired ? (
+              <p>
+                二维码和注册链接已过期。请取消本次操作，关闭此对话框后重新注册 Agent。
+              </p>
+            ) : (
+              <>
+                <img className="desktop-qr" src={job.image} alt="飞书注册二维码" />
+                <p>
+                  请用飞书扫码，或打开注册链接。有效期至{" "}
+                  {new Date(job.expiresAt).toLocaleTimeString()}。
+                </p>
+                <FormField label="完整注册链接">
+                  <input aria-label="完整注册链接" readOnly value={job.url} />
+                </FormField>
+                <div className="desktop-actions">
+                  <Button
+                    disabled={busy}
+                    onClick={() =>
+                      void run({ type: "openJobAuthorization", jobId: job.id })
+                    }
+                  >
+                    打开链接
+                  </Button>
+                  <Button
+                    disabled={busy}
+                    onClick={() =>
+                      void run({ type: "copyJobAuthorization", jobId: job.id })
+                    }
+                  >
+                    复制链接
+                  </Button>
+                </div>
+              </>
+            )}
           </>
         ) : job.phase === "authorizing" ? (
           <>

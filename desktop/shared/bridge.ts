@@ -94,6 +94,9 @@ export const commandSchema = z.discriminatedUnion("type", [
     .object({ type: z.literal("openJobAuthorization"), jobId: jobIdSchema })
     .strict(),
   z
+    .object({ type: z.literal("copyJobAuthorization"), jobId: jobIdSchema })
+    .strict(),
+  z
     .object({ type: z.literal("inspectAgent"), agentId: agentIdSchema })
     .strict(),
 ]);
@@ -142,7 +145,7 @@ type JobBase = {
 export type Job = JobBase &
   (
     | { phase: "running" | "unresolved"; message: string }
-    | { phase: "qr"; image: string; expiresAt: number }
+    | { phase: "qr"; image: string; url: string; expiresAt: number }
     | { phase: "authorizing"; userCode: string }
     | { phase: "activating"; message: string }
     | { phase: "succeeded" | "failed" | "cancelled"; message: string }

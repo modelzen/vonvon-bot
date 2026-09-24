@@ -1,4 +1,4 @@
-import {app,BrowserWindow,dialog,ipcMain,Menu,nativeImage,shell,Tray} from 'electron';
+import {app,BrowserWindow,clipboard,dialog,ipcMain,Menu,nativeImage,shell,Tray} from 'electron';
 import {homedir} from 'node:os';
 import {join,dirname,delimiter} from 'node:path';
 import {pathToFileURL} from 'node:url';
@@ -69,6 +69,7 @@ async function start():Promise<void> {
           break;
         }
         case 'openJobAuthorization':await shell.openExternal(controller.authorization(command.jobId));result={kind:'applied',revision:controller.current().revision};break;
+        case 'copyJobAuthorization':clipboard.writeText(controller.authorization(command.jobId));result={kind:'applied',revision:controller.current().revision};break;
         case 'setLoginItem':
           if(process.env.VONVON_DESKTOP_TEST_HOME)throw new Error('隔离验证模式不修改登录启动项。');
           app.setLoginItemSettings({openAtLogin:command.enabled});controller.setLoginItem(app.getLoginItemSettings().openAtLogin);result={kind:'applied',revision:controller.current().revision};break;
