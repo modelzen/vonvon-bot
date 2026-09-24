@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, mkdir, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import QRCode from "qrcode";
 import {
   commandSchema,
   agentIdSchema,
@@ -12,6 +13,7 @@ import {
 import {
   FolderCapabilities,
   authorizationUrl,
+  registrationUrl,
   trustedSender,
 } from "../desktop/main/capabilities";
 import {
@@ -174,6 +176,9 @@ test("IPC denies foreign documents, subframes, arbitrary capabilities and malfor
       network: true,
     },
     { type: "openJobAuthorization", jobId: "../../path" },
+    { type: "copyJobAuthorization", jobId: "../../path" },
+    { type: "copyJobAuthorization", jobId: "job_valid", url: "https://accounts.feishu.cn/register" },
+    { type: "openJobAuthorization", jobId: "job_valid", url: "https://auth.openai.com/codex/device" },
   ])
     assert.equal(commandSchema.safeParse(command).success, false);
 });
@@ -187,8 +192,30 @@ test("authorization browser capability only permits exact official HTTPS host", 
     "https://auth.openai.com.evil.test",
     "https://user:pass@auth.openai.com",
     "https://auth.openai.com:444",
+    "https://accounts.feishu.cn/register",
+    "https://open.larksuite.com/register",
   ])
     assert.throws(() => authorizationUrl(url));
+});
+test("registration URLs allow exact Feishu and Lark hosts without credentials or ports", () => {
+  for (const host of ["accounts.feishu.cn", "accounts.larksuite.com", "open.feishu.cn", "open.larksuite.com"])
+    assert.equal(registrationUrl(`https://${host}/register?token=sample%2Fvalue`), `https://${host}/register?token=sample%2Fvalue`);
+  for (const url of [
+    "http://accounts.feishu.cn/register",
+    "https://accounts.feishu.cn.evil.test/register",
+    "https://evil.test/accounts.feishu.cn/register",
+    "https://sub.accounts.feishu.cn/register",
+    "https://accounts.feishu.cn@evil.test/register",
+    "https://user:pass@accounts.feishu.cn/register",
+    "https://accounts.feishu.cn:444/register",
+    "https://accounts.feishu.cn:443/register",
+    " https://accounts.feishu.cn:443/register",
+    "https://accounts.feishu.cn./register",
+    "https://auth.openai.com/codex/device",
+    "file:///accounts.feishu.cn/register",
+    "javascript:alert(1)",
+  ]) assert.throws(() => registrationUrl(url), url);
+  assert.equal(commandSchema.safeParse({type: "copyJobAuthorization", jobId: "job_valid"}).success, true);
 });
 test("folder tokens are scoped, canonical and rechecked at commit", async () => {
   const home = await mkdtemp(join(tmpdir(), "vonvon-folder-"));
@@ -870,7 +897,7 @@ test("QR cancellation waits for exact session persistence before reconciliation"
               stream = controller;
               controller.enqueue(
                 new TextEncoder().encode(
-                  'event: qr\ndata: {"qrUrl":"https://example.test/register","expireIn":120,"sessionId":"12345678-1234-4234-8234-123456789012"}\n\n',
+                  'event: qr\ndata: {"qrUrl":"https://accounts.feishu.cn/register","expireIn":120,"sessionId":"12345678-1234-4234-8234-123456789012"}\n\n',
                 ),
               );
               init?.signal?.addEventListener(
@@ -1041,4 +1068,154 @@ test("failed exact QR cancellation acknowledgment remains unresolved and retryab
   assert.equal(aborted, true);
   assert.equal(f.counts().closes, 1);
   assert.equal(f.controller.current().jobs[0]?.phase, "cancelled");
+});
+
+async function waitingRegistration(qrUrl: string, expireIn = 120) {
+  const f = fixture();
+  let stream: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const emit = (name: string, payload: unknown) => stream?.enqueue(
+    new TextEncoder().encode(`event: ${name}\ndata: ${JSON.stringify(payload)}\n\n`),
+  );
+  f.setIntercept((path, init) => {
+    if (path.includes('register-qr/stream')) return Promise.resolve(registrationStream(new ReadableStream({
+      start(controller) {
+        stream = controller;
+        emit('qr', {qrUrl, expireIn, sessionId: registrationSession});
+        init?.signal?.addEventListener('abort', () => controller.error(new DOMException('Aborted', 'AbortError')), {once: true});
+      },
+    })));
+    return undefined;
+  });
+  await f.controller.start();
+  const started = await f.controller.run({type: 'registerAgent'}, async () => '/tmp/work');
+  if (started.kind !== 'started') throw new Error('Registration did not start');
+  return {...f, id: started.jobId, emit, end: () => stream?.close()};
+}
+
+test('registration exposes the exact QR URL through its job capability and invalidates it on cancel', async () => {
+  const url = 'https://accounts.feishu.cn/register?token=sample%2Fvalue&next=%2Fconsole';
+  const f = await waitingRegistration(url);
+  try {
+    await until(() => f.controller.current().jobs[0]?.phase === 'qr');
+    assert.equal(f.controller.authorization(f.id), url);
+    const job = f.controller.current().jobs[0];
+    if (job?.phase !== 'qr') throw new Error('Missing QR');
+    assert.equal(job.url, url);
+    assert.equal(job.image, await QRCode.toDataURL(job.url, {width: 256, margin: 2}));
+    assert.throws(() => f.controller.authorization(jobIdSchema.parse('other_job')));
+    await f.controller.cancel(f.id);
+    assert.throws(() => f.controller.authorization(f.id));
+    assert.equal(f.controller.current().jobs[0]?.phase, 'cancelled');
+  } finally { await f.controller.quit(); }
+});
+
+test('registration authorization expires at its deadline', async (t) => {
+  const f = await waitingRegistration('https://open.feishu.cn/register');
+  try {
+    await until(() => f.controller.current().jobs[0]?.phase === 'qr');
+    const job = f.controller.current().jobs[0];
+    if (job?.phase !== 'qr') throw new Error('Missing QR');
+    assert.equal(f.controller.authorization(f.id), 'https://open.feishu.cn/register');
+    t.mock.method(Date, 'now', () => job.expiresAt);
+    assert.throws(() => f.controller.authorization(f.id), /已过期/);
+  } finally { t.mock.restoreAll(); await f.controller.quit(); }
+});
+
+test('ended or failed registration streams invalidate their authorization', async () => {
+  for (const event of ['end', 'error', 'done']) {
+    const f = await waitingRegistration('https://accounts.larksuite.com/register');
+    try {
+      await until(() => f.controller.current().jobs[0]?.phase === 'qr');
+      assert.equal(f.controller.authorization(f.id), 'https://accounts.larksuite.com/register');
+      if (event === 'end') f.end();
+      else f.emit(event, event === 'done' ? {appId: 'cli_new'} : {message: 'Rejected'});
+      await until(() => ['failed', 'succeeded'].includes(f.controller.current().jobs[0]?.phase ?? ''));
+      assert.throws(() => f.controller.authorization(f.id));
+    } finally { await f.controller.quit(); }
+  }
+});
+
+test('registration rejects hostile QR URLs before exposing an image or authorization', async () => {
+  for (const url of ['https://accounts.feishu.cn.evil.test/register', 'https://auth.openai.com/codex/device', 'https://user:pass@open.feishu.cn/register']) {
+    const f = await waitingRegistration(url);
+    try {
+      await until(() => f.controller.current().jobs[0]?.phase === 'failed');
+      assert.throws(() => f.controller.authorization(f.id));
+      assert.equal(f.controller.current().jobs.some(job => job.phase === 'qr'), false);
+    } finally { await f.controller.quit(); }
+  }
+});
+
+test('cancelling registration invalidates the link before acknowledgment and rejects late QR frames', async () => {
+  const f = await waitingRegistration('https://open.larksuite.com/register');
+  let release: ((response: Response) => void) | undefined;
+  try {
+    await until(() => f.controller.current().jobs[0]?.phase === 'qr');
+    f.setIntercept((path, init) => path.includes('register-qr?sessionId=') && init?.method === 'DELETE'
+      ? new Promise(resolve => { release = resolve; }) : undefined);
+    const cancelling = f.controller.cancel(f.id);
+    await until(() => release !== undefined);
+    assert.throws(() => f.controller.authorization(f.id));
+    f.emit('qr', {qrUrl: 'https://accounts.feishu.cn/new', expireIn: 120, sessionId: registrationSession});
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.notEqual(f.controller.current().jobs[0]?.phase, 'qr');
+    assert.throws(() => f.controller.authorization(f.id));
+    release?.(Response.json({error: 'Try again'}, {status: 503}));
+    assert.equal((await cancelling).kind, 'refused');
+    assert.equal(f.controller.current().jobs[0]?.phase, 'unresolved');
+    assert.throws(() => f.controller.authorization(f.id));
+  } finally {
+    release?.(new Response(null, {status: 204}));
+    f.setIntercept(undefined);
+    await f.controller.quit();
+  }
+});
+
+test('ended registration invalidates the link while exact-session closure remains pending', async () => {
+  const f = await waitingRegistration('https://open.feishu.cn/register');
+  let release: ((response: Response) => void) | undefined;
+  try {
+    await until(() => f.controller.current().jobs[0]?.phase === 'qr');
+    f.setIntercept((path, init) => path.includes('register-qr?sessionId=') && init?.method === 'DELETE'
+      ? new Promise(resolve => { release = resolve; }) : undefined);
+    f.end();
+    await until(() => release !== undefined);
+    assert.throws(() => f.controller.authorization(f.id));
+    assert.equal(f.controller.current().jobs[0]?.phase, 'running');
+    release?.(new Response(null, {status: 204}));
+    await until(() => f.controller.current().jobs[0]?.phase === 'failed');
+  } finally {
+    release?.(new Response(null, {status: 204}));
+    f.setIntercept(undefined);
+    await f.controller.quit();
+  }
+});
+
+test('only a current Codex login authorizing phase exposes an OpenAI URL', async () => {
+  for (const scenario of [
+    {type: 'login', url: 'https://auth.openai.com/codex/device', allowed: true},
+    {type: 'login', url: 'https://accounts.feishu.cn/register', allowed: false},
+    {type: 'install', url: 'https://auth.openai.com/codex/device', allowed: false},
+  ] as const) {
+    const f = fixture();
+    let cancelled = false;
+    const id = jobIdSchema.parse('job_auth');
+    f.setIntercept((path, init) => {
+      if (path === `/api/tools/codex/${scenario.type}`) return Promise.resolve(Response.json({id}));
+      if (path === `/api/tools/codex/jobs/${id}`) {
+        if (init?.method === 'DELETE') cancelled = true;
+        return Promise.resolve(Response.json({id, type: scenario.type, state: cancelled ? 'cancelled' : 'authorizing', userCode: 'SAMPLE', verificationUrl: scenario.url}));
+      }
+      return undefined;
+    });
+    await f.controller.start();
+    try {
+      await f.controller.run({type: scenario.type === 'login' ? 'startCodexLogin' : 'installCodex'}, async () => '/tmp/work');
+      await until(() => f.controller.current().jobs[0]?.phase === (scenario.allowed ? 'authorizing' : 'unresolved'));
+      if (scenario.allowed) assert.equal(f.controller.authorization(id), scenario.url);
+      else assert.throws(() => f.controller.authorization(id));
+      await f.controller.cancel(id);
+      assert.throws(() => f.controller.authorization(id));
+    } finally { await f.controller.quit(); }
+  }
 });

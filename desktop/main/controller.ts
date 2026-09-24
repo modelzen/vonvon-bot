@@ -27,7 +27,7 @@ import {
   readJson,
   stateSchema,
 } from "./projection";
-import { authorizationUrl } from "./capabilities";
+import { authorizationUrl, registrationUrl } from "./capabilities";
 
 const setupSchema = z.object({
   installation: z.enum(["missing", "installed", "unknown"]),
@@ -283,6 +283,11 @@ export class DesktopController {
     }
   }
   private job(job: Job): void {
+    if (
+      !(job.type === "loginCodex" && job.phase === "authorizing") &&
+      !(job.type === "registerAgent" && job.phase === "qr")
+    )
+      this.authorizations.delete(job.id);
     const jobs = this.snapshot.jobs.filter((current) => current.id !== job.id);
     jobs.push(job);
     while (jobs.length > 24) {
@@ -444,6 +449,7 @@ export class DesktopController {
             return { kind: "applied", revision: this.snapshot.revision };
           case "chooseFolder":
           case "openJobAuthorization":
+          case "copyJobAuthorization":
           case "setLoginItem":
           case "quit":
           case "hideWindow":
@@ -523,6 +529,8 @@ export class DesktopController {
         const value = await this.readToolJob(id, type, signal);
         if (signal.aborted) return;
         if (value.state === "authorizing") {
+          if (type !== "loginCodex")
+            throw new CoreError("job-mismatch", "安装操作不能请求账号授权。");
           this.authorizations.set(id, authorizationUrl(value.verificationUrl));
           this.job({
             id,
@@ -607,6 +615,7 @@ export class DesktopController {
     };
     const confirmEnd = (cancelRequested = false): Promise<void> => {
       cancellationRequested ||= cancelRequested;
+      this.authorizations.delete(id);
       if (committed.size || requestRejected) return Promise.resolve();
       if (confirmedEnd) return confirmedEnd;
       confirmedEnd = (async () => {
@@ -737,13 +746,22 @@ export class DesktopController {
       abort.signal,
       committed,
       recordSession,
+      () => cancellationRequested,
     )
       .catch((error) => {
         failure = error;
         requestRejected =
           error instanceof CoreError && error.code === "registration-refused";
       })
-      .finally(() => resolveSession(undefined))
+      .finally(() => {
+        resolveSession(undefined);
+        this.job({
+          id,
+          type: "registerAgent",
+          phase: "running",
+          message: "注册连接已结束，正在确认结果。",
+        });
+      })
       .then(async () => {
         await confirmEnd();
         await reconcile();
@@ -773,6 +791,7 @@ export class DesktopController {
     signal: AbortSignal,
     committed: Set<AgentId>,
     recordSession: (value: string) => void,
+    isCancelling: () => boolean,
   ): Promise<void> {
     const response = await this.connected().request(
       "/api/bots/register-qr/stream",
@@ -834,20 +853,22 @@ export class DesktopController {
               })
               .parse(payload);
             recordSession(qr.sessionId);
-            if (new URL(qr.qrUrl).protocol !== "https:")
-              throw new CoreError("invalid-qr", "飞书返回了不受支持的二维码。");
-            const image = await QRCode.toDataURL(qr.qrUrl, {
+            const url = registrationUrl(qr.qrUrl);
+            const image = await QRCode.toDataURL(url, {
               width: 256,
               margin: 2,
             });
-            if (!signal.aborted)
+            if (!signal.aborted && !isCancelling()) {
+              this.authorizations.set(id, url);
               this.job({
                 id,
                 type: "registerAgent",
                 phase: "qr",
                 image,
+                url,
                 expiresAt: Date.now() + qr.expireIn * 1000,
               });
+            }
           } else if (!signal.aborted && name === "error") {
             throw new CoreError(
               "registration-failed",
@@ -887,8 +908,15 @@ export class DesktopController {
           });
         } else await operation.finished;
       } else {
-        if (job.phase !== "activating" && !terminal(job))
+        if (job.phase !== "activating" && !terminal(job)) {
+          this.job({
+            id,
+            type: "registerAgent",
+            phase: "running",
+            message: "正在结束本次注册并确认结果。",
+          });
           await operation.confirmEnd(true);
+        }
         await operation.finished;
         if (
           this.snapshot.jobs.some(
@@ -924,10 +952,25 @@ export class DesktopController {
     }
   }
   authorization(id: JobId): string {
+    const job = this.snapshot.jobs.find((job) => job.id === id);
+    if (
+      job?.type === "registerAgent" &&
+      job.phase === "qr" &&
+      job.expiresAt <= Date.now()
+    ) {
+      this.authorizations.delete(id);
+      throw new CoreError(
+        "authorization-expired",
+        "二维码和注册链接已过期，请取消本次操作后重新注册。",
+      );
+    }
     const url = this.authorizations.get(id);
-    if (!url)
-      throw new CoreError("no-authorization", "这个操作没有等待浏览器授权。");
-    return authorizationUrl(url);
+    if (url && job?.type === "registerAgent" && job.phase === "qr")
+      return registrationUrl(url);
+    if (url && job?.type === "loginCodex" && job.phase === "authorizing")
+      return authorizationUrl(url);
+    this.authorizations.delete(id);
+    throw new CoreError("no-authorization", "这个操作没有等待浏览器授权。");
   }
   setLoginItem(enabled: boolean): void {
     this.publish({
