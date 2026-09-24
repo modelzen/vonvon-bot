@@ -9,7 +9,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "node scripts/build.mjs",
-    "test": "tsx --test tests/*.test.ts",
+    "test": "tsx --test tests/*.test.ts tests/*.test.mjs",
     "start": "electron .",
     "prepare:runtime": "node scripts/prepare-runtime.mjs",
     "package:mac": "npm run build && node scripts/check-package.mjs darwin-arm64 && electron-builder --mac dir --arm64 --publish never",

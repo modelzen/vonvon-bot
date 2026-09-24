@@ -3,6 +3,7 @@ import {readFile,writeFile,mkdir,cp,rm,rename,stat} from 'node:fs/promises';
 import {join,resolve,dirname,basename} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {execFileSync} from 'node:child_process';
+import {promoteRuntimeStage} from './runtime-stage.mjs';
 
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const target=process.argv[2]??`${process.platform}-${process.arch}`;
@@ -52,5 +53,5 @@ execFileSync(node,[npm,'ci','--omit=dev','--ignore-scripts','--no-audit','--no-f
 const pkg=JSON.parse(await readFile(join(core,'package.json'),'utf8'));
 if(!pkg.exports?.['./host']?.import)throw new Error('Core does not export the frozen Host API.');
 await writeFile(join(stage,'provenance.json'),JSON.stringify({...provenance,nodeArchiveSha256:entry.sha256,target,coreVersion:pkg.version},null,2)+'\n');
-await rm(destination,{recursive:true,force:true});await rename(stage,destination);
+await rm(destination,{recursive:true,force:true});await promoteRuntimeStage(stage,destination);
 process.stdout.write(`Staged ${dev?'development':'pinned'} runtime at ${destination}\n`);
