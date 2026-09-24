@@ -3,6 +3,7 @@ on: [push, pull_request]
 jobs:
   desktop:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: macos-15
@@ -25,7 +26,16 @@ jobs:
       - run: npm run build
       - run: npm run test:native
       - run: npm run package:${{ matrix.package }}
-      - uses: actions/upload-artifact@v4
+      - if: runner.os == 'macOS'
+        run: tar -czf "release/Vonvon-Bridge-macOS-arm64.tar.gz" -C release/mac-arm64 "Vonvon Bridge.app"
+      - name: Upload optional preview download
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: desktop-${{ matrix.target }}
-          path: release/
+          path: |
+            release/*.tar.gz
+            release/*.exe
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
