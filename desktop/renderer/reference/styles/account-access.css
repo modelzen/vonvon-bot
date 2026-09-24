@@ -1,0 +1,471 @@
+.bridge-login {
+  --bridge-login-ink: #1c1814;
+  --bridge-login-secondary: #71685f;
+  --bridge-login-tertiary: #9b8f84;
+  --bridge-login-amber: #f5a313;
+  --bridge-login-amber-hover: #ee9705;
+  --bridge-login-coral: #ff7448;
+  --bridge-login-canvas: #fbf8f2;
+  position: relative;
+  display: grid;
+  width: 100%;
+  height: 100vh;
+  min-width: 0;
+  min-height: 0;
+  padding: 72px 48px 48px;
+  overflow: hidden;
+  color: var(--bridge-login-ink);
+  background:
+    radial-gradient(circle at 82% 12%, rgb(255 184 42 / 16%), transparent 34%),
+    radial-gradient(circle at 12% 88%, rgb(255 116 72 / 9%), transparent 31%),
+    linear-gradient(155deg, #fffdf9 0%, var(--bridge-login-canvas) 68%, #f8f1e7 100%);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI", sans-serif;
+  isolation: isolate;
+  place-items: center;
+}
+
+.bridge-login::before {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  opacity: 0.32;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.88' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.08'/%3E%3C/svg%3E");
+  content: "";
+  pointer-events: none;
+}
+
+.bridge-login__drag-region {
+  position: absolute;
+  z-index: 10;
+  inset: 0 0 auto;
+  display: none;
+  height: 58px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+html[data-desktop-platform="macos"] .bridge-login__drag-region {
+  display: block;
+}
+
+.bridge-login__ambient {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.bridge-login__ambient span {
+  position: absolute;
+  border-radius: 999px;
+  filter: blur(1px);
+}
+
+.bridge-login__ambient span:first-child {
+  top: 13%;
+  right: -28%;
+  width: 65%;
+  aspect-ratio: 1;
+  border: 1px solid rgb(245 163 19 / 12%);
+  background: radial-gradient(circle, rgb(255 194 63 / 13%), transparent 70%);
+}
+
+.bridge-login__ambient span:last-child {
+  bottom: -26%;
+  left: -24%;
+  width: 57%;
+  aspect-ratio: 1;
+  border: 1px solid rgb(255 116 72 / 8%);
+  background: radial-gradient(circle, rgb(255 116 72 / 8%), transparent 70%);
+}
+
+.bridge-login__content {
+  display: flex;
+  width: min(100%, 386px);
+  flex-direction: column;
+  align-items: center;
+  transform: translateY(-8px);
+}
+
+.bridge-login__brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: var(--bridge-login-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.bridge-login__logo-shell {
+  position: relative;
+  display: grid;
+  width: 78px;
+  height: 78px;
+  border: 1px solid rgb(42 31 20 / 9%);
+  border-radius: 24px;
+  background: rgb(255 255 255 / 88%);
+  box-shadow:
+    0 18px 45px rgb(94 60 19 / 10%),
+    0 3px 10px rgb(44 31 18 / 7%),
+    inset 0 1px rgb(255 255 255 / 90%);
+  place-items: center;
+}
+
+.bridge-login__logo-shell::after {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 9px;
+  height: 9px;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  background: var(--bridge-login-coral);
+  box-shadow: 0 2px 5px rgb(94 44 22 / 20%);
+  content: "";
+}
+
+.bridge-login__logo-shell img {
+  width: 60px;
+  height: 60px;
+  border-radius: 17px;
+  object-fit: cover;
+}
+
+.bridge-login__heading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-top: 23px;
+  text-align: center;
+}
+
+.bridge-login__heading p {
+  margin: 0 0 7px;
+  color: #bd7108;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+}
+
+.bridge-login__heading h1 {
+  margin: 0;
+  color: var(--bridge-login-ink);
+  font-size: 27px;
+  font-weight: 720;
+  letter-spacing: -0.035em;
+  line-height: 1.16;
+}
+
+.bridge-login__heading > span {
+  max-width: 310px;
+  margin-top: 10px;
+  color: var(--bridge-login-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.bridge-login__action-panel {
+  display: flex;
+  width: 100%;
+  min-height: 124px;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 27px;
+  padding: 18px;
+  border: 1px solid rgb(71 46 20 / 9%);
+  border-radius: 20px;
+  background: rgb(255 255 255 / 76%);
+  box-shadow:
+    0 20px 55px rgb(83 53 20 / 8%),
+    inset 0 1px rgb(255 255 255 / 82%);
+  backdrop-filter: blur(18px) saturate(125%);
+  -webkit-backdrop-filter: blur(18px) saturate(125%);
+}
+
+.bridge-login__browser-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: var(--bridge-login-secondary);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.bridge-login__browser-hint > span:first-child {
+  display: grid;
+  width: 17px;
+  height: 17px;
+  border-radius: 999px;
+  color: #9b5f09;
+  background: rgb(245 163 19 / 15%);
+  place-items: center;
+}
+
+.bridge-login__browser-hint svg {
+  width: 11px;
+  height: 11px;
+  stroke-width: 2.5;
+}
+
+.bridge-login .bridge-login__primary-action.ui-button {
+  width: 100%;
+  min-height: 47px;
+  justify-content: center;
+  gap: 9px;
+  border: 1px solid rgb(133 76 0 / 16%);
+  border-radius: 13px;
+  color: #281908;
+  background: linear-gradient(180deg, #ffb52e 0%, var(--bridge-login-amber) 100%);
+  box-shadow:
+    0 8px 18px rgb(181 104 0 / 18%),
+    inset 0 1px rgb(255 255 255 / 38%);
+  font-size: 14px;
+  font-weight: 680;
+  letter-spacing: -0.006em;
+  transition:
+    transform 100ms ease-out,
+    background-color 150ms ease-out,
+    box-shadow 150ms ease-out;
+}
+
+.bridge-login .bridge-login__primary-action.ui-button:hover:not(:disabled) {
+  color: #201204;
+  background: linear-gradient(180deg, #ffb127 0%, var(--bridge-login-amber-hover) 100%);
+  box-shadow:
+    0 10px 22px rgb(181 104 0 / 23%),
+    inset 0 1px rgb(255 255 255 / 38%);
+  transform: translateY(-1px);
+}
+
+.bridge-login .bridge-login__primary-action.ui-button:active:not(:disabled) {
+  box-shadow:
+    0 4px 10px rgb(181 104 0 / 18%),
+    inset 0 1px rgb(255 255 255 / 28%);
+  transform: scale(0.985);
+}
+
+.bridge-login .bridge-login__primary-action.ui-button:focus-visible,
+.bridge-login .bridge-login__cancel-action.ui-button:focus-visible {
+  outline: 3px solid rgb(245 163 19 / 27%);
+  outline-offset: 2px;
+}
+
+.bridge-login .bridge-login__primary-action.ui-button:disabled {
+  border-color: rgb(71 46 20 / 7%);
+  color: var(--bridge-login-tertiary);
+  background: #eee8df;
+  box-shadow: none;
+  opacity: 1;
+}
+
+.bridge-login .bridge-login__cancel-action.ui-button {
+  min-height: 28px;
+  align-self: center;
+  margin: -3px 0 -5px;
+  padding-inline: 10px;
+  color: var(--bridge-login-secondary);
+  background: transparent;
+  font-size: 11px;
+}
+
+.bridge-login .bridge-login__cancel-action.ui-button:hover:not(:disabled) {
+  color: var(--bridge-login-ink);
+  background: rgb(48 35 22 / 5%);
+}
+
+.bridge-login__pending-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 34px;
+  color: var(--bridge-login-secondary);
+}
+
+.bridge-login__pending-status > span:last-child {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.bridge-login__pending-status strong {
+  color: var(--bridge-login-ink);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.bridge-login__pending-status small {
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.bridge-login__pending-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  border-radius: 10px;
+  color: #9d6008;
+  background: rgb(245 163 19 / 14%);
+  place-items: center;
+}
+
+.bridge-login__pending-icon svg {
+  width: 16px;
+  height: 16px;
+  animation: bridge-login-spin 900ms linear infinite;
+}
+
+.bridge-login__error {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 13px;
+  padding: 11px 13px;
+  border: 1px solid rgb(208 72 35 / 12%);
+  border-radius: 12px;
+  color: #88402c;
+  background: rgb(255 116 72 / 8%);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.bridge-login__error strong {
+  color: #74321f;
+  font-weight: 650;
+}
+
+.bridge-login__privacy {
+  display: flex;
+  max-width: 340px;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 7px;
+  margin: 18px 0 0;
+  color: var(--bridge-login-tertiary);
+  font-size: 10px;
+  line-height: 1.45;
+  text-align: left;
+}
+
+.bridge-login__privacy svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: #b76c09;
+}
+
+.bridge-login__site {
+  position: absolute;
+  right: 0;
+  bottom: 22px;
+  left: 0;
+  margin: 0;
+  color: rgb(83 69 55 / 42%);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  line-height: 1;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.account-identity-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.account-identity-actions .ui-button {
+  white-space: nowrap;
+}
+
+@keyframes bridge-login-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-height: 660px) {
+  .bridge-login {
+    padding-top: 62px;
+    padding-bottom: 38px;
+  }
+
+  .bridge-login__content {
+    transform: translateY(-4px);
+  }
+
+  .bridge-login__logo-shell {
+    width: 68px;
+    height: 68px;
+    border-radius: 21px;
+  }
+
+  .bridge-login__logo-shell img {
+    width: 52px;
+    height: 52px;
+    border-radius: 15px;
+  }
+
+  .bridge-login__heading {
+    margin-top: 18px;
+  }
+
+  .bridge-login__action-panel {
+    margin-top: 21px;
+  }
+
+  .bridge-login__privacy {
+    margin-top: 13px;
+  }
+
+  .bridge-login__site {
+    bottom: 15px;
+  }
+}
+
+@media (max-width: 470px) {
+  .bridge-login {
+    padding-inline: 30px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bridge-login *,
+  .bridge-login *::before,
+  .bridge-login *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .bridge-login__action-panel {
+    background: #ffffff;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .bridge-login__action-panel,
+  .bridge-login__logo-shell {
+    border-color: rgb(28 24 20 / 35%);
+    background: #ffffff;
+  }
+
+  .bridge-login .bridge-login__primary-action.ui-button {
+    border-color: var(--bridge-login-ink);
+  }
+}
