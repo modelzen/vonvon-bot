@@ -1,12 +1,12 @@
 {
   "repository": "https://github.com/modelzen/feishu-codex-bridge",
-  "sourceCommit": "b6d05bb64d946c036b8974f9e7a12f0e63943aa6",
+  "sourceCommit": "130f5e76a9aa6c0d67e09b3b44da5ec3cf4d21d6",
   "package": "@modelzen/feishu-codex-bridge",
-  "version": "0.6.14",
-  "artifact": "0.6.14-b6d05bb64d94.tgz",
-  "artifactSha256": "c4104c749a4205a996b84b87166923a2e81405a2b78d33fe4cb376fdf0b8c5e3",
-  "artifactIntegrity": "sha512-rn2QvBXF7fD0wg373OENtOtHGW6ncBGX62MYkcbByWVyvlf/TkBlfNBthx6SLe70BE/Jc/ZDCjHFk6YKx5tmMA==",
-  "sourceLockSha256": "d1b2f99ef7eb716ecbe888a9ef23aae6435ea9d51d0a78a461626e6692028ed8",
-  "packCommand": "npm pack --ignore-scripts --json --pack-destination /tmp/vonvon-core-rebase-20260925",
+  "version": "0.7.0",
+  "artifact": "0.7.0-130f5e76a9aa.tgz",
+  "artifactSha256": "7d1d935e262c2974fab7faa653b28548e0c26eff247b9c8d04173236be03b1b7",
+  "artifactIntegrity": "sha512-8lsruLmi4auN/NqZFbGIQ48MiRekXl+ZngPOS7Xg6E1NVj6za+XWpBOB3mf4GrqfrPFkGY5KP54TJ3CqDoITaw==",
+  "sourceLockSha256": "ed6e78a853f0a61ad87fd2c4af3ac41736713526963b8874fac405f5df347f10",
+  "packCommand": "npm pack --ignore-scripts --json --pack-destination /tmp/vonvon-settings-core-pack",
   "containsCompanionCapabilities": true
 }

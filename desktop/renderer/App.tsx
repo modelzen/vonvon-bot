@@ -23,9 +23,8 @@ import {
   StatusBadge,
   Toggle,
 } from "./reference/components/ui";
-import { Dialog } from "./reference/components/ui/Dialog";
+import { ConfirmDialog,Dialog } from "./reference/components/ui/Dialog";
 import {
-  permissionSchema,
   toolSchema,
   conversationSchema,
   type AgentId,
@@ -37,9 +36,9 @@ import {
   type Job,
   type JobId,
   type Membership,
-  type Permission,
 } from "../shared/bridge";
 import type { CollaborationView, Page } from "./collaboration-model";
+import {SettingsPanel,membershipSettingsTarget} from "./settings/SettingsPanel";
 
 type Selection =
   | { kind: "overview" }
@@ -50,6 +49,7 @@ type Modal =
   | { kind: "register"; jobId: JobId }
   | { kind: "join"; agentId: AgentId }
   | { kind: "collaboration"; membership: Membership }
+  | { kind: "deleteAgent"; agentId: AgentId; name: string }
   | null;
 type GroupsResult = Extract<CommandResult, { kind: "groups" }>;
 const backendName = (backend: string) =>
@@ -584,6 +584,10 @@ export function App() {
                       }
                     />
                   </SettingsGroup>
+                  <SettingsPanel
+                    key={`agent-${agent.id}`}
+                    target={{ kind: "agent", botId: agent.id }}
+                  />
                   <SettingsGroup
                     label="已绑定的飞书群"
                     action={
@@ -607,6 +611,40 @@ export function App() {
                         (m) => m.agentId === agent.id,
                       ) && <SettingsRow title="尚未绑定飞书群" />}
                     </div>
+                  </SettingsGroup>
+                  <SettingsGroup
+                    label="移除 Agent"
+                    footer="删除本地注册信息、凭据、群绑定、会话记录与设置。飞书开发者平台中的应用仍保留。"
+                  >
+                    <SettingsRow
+                      title="删除本地 Agent 数据"
+                      description={
+                        agent.enabled || agent.connection !== "disconnected"
+                          ? "请先停用 Agent，并等待它停止运行。"
+                          : "此操作无法撤销。"
+                      }
+                      trailing={
+                        <Button
+                          size="sm"
+                          disabled={
+                            busy ||
+                            host.kind !== "connected" ||
+                            agent.enabled ||
+                            agent.connection !== "disconnected" ||
+                            agent.activation !== "active"
+                          }
+                          onClick={() =>
+                            setModal({
+                              kind: "deleteAgent",
+                              agentId: agent.id,
+                              name: agent.name,
+                            })
+                          }
+                        >
+                          移除 Agent
+                        </Button>
+                      }
+                    />
                   </SettingsGroup>
                 </>
               )}
@@ -686,35 +724,10 @@ export function App() {
                           : "整群连续会话"
                       }
                     />
-                    <SettingsRow
-                      title="响应方式"
-                      trailing={
-                        <select
-                          aria-label="响应方式"
-                          disabled={busy || member.stale}
-                          value={member.response}
-                          onChange={(event) =>
-                            void run({
-                              type: "setResponse",
-                              membershipId: member.id,
-                              response:
-                                event.target.value === "all"
-                                  ? "all"
-                                  : "mention",
-                            })
-                          }
-                        >
-                          <option value="mention">仅在 @ 时响应</option>
-                          <option value="all">允许不 @ 发起任务</option>
-                        </select>
-                      }
-                    />
                   </SettingsGroup>
-                  <PermissionSettings
-                    key={`${member.id}-${JSON.stringify(member.permission)}`}
-                    member={member}
-                    busy={busy}
-                    onSave={run}
+                  <SettingsPanel
+                    key={`project-${member.id}`}
+                    target={membershipSettingsTarget(member)}
                   />
                   <div className="desktop-actions">
                     <Button
@@ -850,11 +863,7 @@ export function App() {
                   trailing={
                     <Button
                       size="sm"
-                      disabled={
-                        busy ||
-                        host.kind !== "connected" ||
-                        host.ownership !== "owned"
-                      }
+                      disabled={busy || host.kind !== "connected"}
                       onClick={() => void run({ type: "restartHost" })}
                     >
                       重启
@@ -878,6 +887,7 @@ export function App() {
                   }
                 />
               </SettingsGroup>
+              <SettingsPanel target={{ kind: "host" }} />
               <SettingsGroup
                 label="窗口与退出"
                 footer="关闭窗口会留在菜单栏或托盘继续运行。退出只停止本应用启动的 Bridge。"
@@ -956,7 +966,7 @@ export function App() {
         </div>
       </AppShell>
       <Dialog
-        open={modal !== null}
+        open={modal !== null && modal.kind !== "deleteAgent"}
         onClose={() => void closeModal()}
         title={
           modal?.kind === "register"
@@ -1115,96 +1125,32 @@ export function App() {
           )}
         </div>
       </Dialog>
+      <ConfirmDialog
+        open={modal?.kind === "deleteAgent"}
+        title="移除本地 Agent"
+        description={
+          modal?.kind === "deleteAgent"
+            ? `将移除「${modal.name}」的本地注册信息、凭据、群绑定、设置和会话记录。飞书开发者平台中的应用不会删除。请确认这个 Agent 已停用并停止运行。`
+            : ""
+        }
+        tone="danger"
+        confirmLabel="删除本地数据"
+        pending={busy}
+        error={notice?.error ? notice.message : undefined}
+        onCancel={() => void closeModal()}
+        onConfirm={() => {
+          if (modal?.kind !== "deleteAgent") return;
+          const id = modal.agentId;
+          void run({ type: "deleteAgent", agentId: id }).then((result) => {
+            if (result.kind === "applied") {
+              setModal(null);
+              select({ kind: "overview" });
+              setNotice({ message: "本地 Agent 数据已删除。", error: false });
+            }
+          });
+        }}
+      />
     </>
-  );
-}
-function PermissionSettings({
-  member,
-  busy,
-  onSave,
-}: {
-  member: Membership;
-  busy: boolean;
-  onSave: (command: Command) => Promise<CommandResult>;
-}) {
-  const [administrator, setAdministrator] = useState<Permission>(
-    member.permission.administrator,
-  );
-  const [ordinary, setOrdinary] = useState<Permission>(
-    member.permission.member,
-  );
-  const [network, setNetwork] = useState(member.permission.network);
-  const options = (
-    <>
-      <option value="qa">只读问答</option>
-      <option value="write">允许写入</option>
-      <option value="full">完全访问</option>
-    </>
-  );
-  return (
-    <SettingsGroup
-      label="工作目录权限"
-      footer="保存后由内核应用权限，失败会保留原有设置。"
-    >
-      <SettingsRow
-        title="管理员"
-        trailing={
-          <select
-            aria-label="管理员权限"
-            value={administrator}
-            onChange={(event) =>
-              setAdministrator(permissionSchema.parse(event.target.value))
-            }
-          >
-            {options}
-          </select>
-        }
-      />
-      <SettingsRow
-        title="普通成员"
-        trailing={
-          <select
-            aria-label="普通成员权限"
-            value={ordinary}
-            onChange={(event) =>
-              setOrdinary(permissionSchema.parse(event.target.value))
-            }
-          >
-            {options}
-          </select>
-        }
-      />
-      <SettingsRow
-        title="允许网络访问"
-        trailing={
-          <Toggle
-            label="允许网络访问"
-            checked={network}
-            onChange={(event) => setNetwork(event.target.checked)}
-          />
-        }
-      />
-      <SettingsRow
-        title="保存权限设置"
-        trailing={
-          <Button
-            size="sm"
-            disabled={busy || member.stale}
-            onClick={() =>
-              void onSave({
-                type: "setPermission",
-                membershipId: member.id,
-                administrator,
-                member: ordinary,
-                network,
-              })
-            }
-          >
-            保存
-          </Button>
-        }
-      />
-    </SettingsGroup>
   );
 }
 function JobPanel({
@@ -1249,7 +1195,7 @@ function JobPanel({
                   请用飞书扫码，或打开注册链接。有效期至{" "}
                   {new Date(job.expiresAt).toLocaleTimeString()}。
                 </p>
-                <FormField label="完整注册链接">
+                <FormField className="desktop-registration-url" label="完整注册链接">
                   <input aria-label="完整注册链接" readOnly value={job.url} />
                 </FormField>
                 <div className="desktop-actions">
