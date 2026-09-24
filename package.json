@@ -1,0 +1,88 @@
+{
+  "name": "vonvon-bridge-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local Feishu collaboration desktop",
+  "author": "Vonvon",
+  "main": "dist/main.cjs",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "node scripts/build.mjs",
+    "test": "tsx --test tests/*.test.ts",
+    "start": "electron .",
+    "prepare:runtime": "node scripts/prepare-runtime.mjs",
+    "package:mac": "npm run build && node scripts/check-package.mjs darwin-arm64 && electron-builder --mac dir --arm64",
+    "package:win": "npm run build && node scripts/check-package.mjs win32-x64 && electron-builder --win nsis --x64",
+    "test:native": "node scripts/test-native.mjs",
+    "package:preview:mac": "node scripts/package-preview.mjs"
+  },
+  "dependencies": {
+    "@base-ui/react": "1.6.0",
+    "lucide-react": "1.25.0",
+    "motion": "12.42.0",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "zod": "3.25.76",
+    "qrcode": "1.5.4"
+  },
+  "devDependencies": {
+    "electron": "44.4.5",
+    "electron-builder": "26.15.3",
+    "@types/node": "24.3.0",
+    "@types/react": "19.1.10",
+    "@types/react-dom": "19.1.9",
+    "@types/qrcode": "1.5.5",
+    "typescript": "5.8.3",
+    "vite": "7.0.4",
+    "esbuild": "0.25.9",
+    "tsx": "4.20.5"
+  },
+  "build": {
+    "appId": "com.vonvon.bridge",
+    "productName": "Vonvon Bridge",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/runtime/${os}-${arch}",
+        "to": "runtime"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "identity": null,
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "beforePack": "scripts/before-pack.cjs",
+    "icon": "desktop/renderer/public/vonvon-logo.png"
+  }
+}

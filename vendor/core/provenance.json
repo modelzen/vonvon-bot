@@ -1,0 +1,12 @@
+{
+  "repository": "https://github.com/modelzen/feishu-codex-bridge",
+  "sourceCommit": "a4a9836a82758b006d3a5fbaf8a44fa567ddca9a",
+  "package": "@modelzen/feishu-codex-bridge",
+  "version": "0.6.13",
+  "artifact": "0.6.13-a4a9836a8275.tgz",
+  "artifactSha256": "e46a0edc83358725aabb69ff5be2a39a35014248ddcbf0f428eaa2501170220a",
+  "artifactIntegrity": "sha512-R99z/KTSCz8Uz8gGRT++ebWfqlZVXZjeIPoCRAkCLjJ1gKwtK+grwFto/9LcAX9vzzN3//sj2eW5ZDXZKz4ezw==",
+  "sourceLockSha256": "9c5ba21e934b6da78c68ad401d2c009b239c8fdad798f1dae9c227bc8a258b5c",
+  "packCommand": "npm pack --ignore-scripts --json --pack-destination /tmp/vonvon-reviewed-companion-core",
+  "containsCompanionCapabilities": true
+}

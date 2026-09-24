@@ -1,0 +1,31 @@
+name: Native desktop validation
+on: [push, pull_request]
+jobs:
+  desktop:
+    strategy:
+      matrix:
+        include:
+          - os: macos-15
+            target: darwin-arm64
+            package: mac
+          - os: windows-2025
+            target: win32-x64
+            package: win
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.1
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run prepare:runtime -- ${{ matrix.target }}
+      - run: npm run build
+      - run: npm run test:native
+      - run: npm run package:${{ matrix.package }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.target }}
+          path: release/
