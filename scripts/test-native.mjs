@@ -76,7 +76,7 @@ for (const mode of ["fresh", "existing"]) {
       : "real",
     PATH:
       process.platform === "win32"
-        ? `${join(runtime, "node")};${process.env.SystemRoot}\\System32`
+        ? `${join(runtime, "node")};${process.env.SystemRoot}\\System32;${process.env.SystemRoot}\\System32\\WindowsPowerShell\\v1.0`
         : `${join(runtime, "node", "bin")}:${fixtureServiceQueries ? join(home, "probe-bin") + ":" : ""}/usr/bin:/bin:/usr/sbin:/sbin`,
   };
   delete env.CODEX_BIN;
