@@ -28,6 +28,12 @@ import {
   stateSchema,
 } from "./projection";
 import { authorizationUrl, registrationUrl } from "./capabilities";
+import {
+  agentViewSchema, projectViewSchema, sessionViewSchema, hostViewSchema,
+  modelCatalogSchema, settingsReplySchema,
+  settingsRequestSchema,
+  type ParsedSettingsRequest, type SettingsReply, type SettingsScope,
+} from "../shared/settings";
 
 const setupSchema = z.object({
   installation: z.enum(["missing", "installed", "unknown"]),
@@ -198,6 +204,235 @@ export class DesktopController {
       }),
     );
   }
+  private settingsPath(scope: SettingsScope): string {
+    switch (scope.kind) {
+      case "host":
+        return "/api/settings/host";
+      case "agent":
+        return `/api/bots/${encodeURIComponent(scope.botId)}/settings`;
+      case "project":
+        return `/api/project/${encodeURIComponent(scope.projectName)}/settings?bot=${encodeURIComponent(scope.botId)}`;
+      case "session":
+        return `/api/bots/${encodeURIComponent(scope.botId)}/sessions/${encodeURIComponent(scope.threadId)}/settings`;
+    }
+  }
+  private async settingsJson(
+    path: string,
+    init: RequestInit = {},
+  ): Promise<unknown> {
+    const response = await this.connected().request(path, {
+      ...init,
+      signal: init.signal ?? AbortSignal.timeout(20_000),
+    });
+    const body = await response.text();
+    if (body.length > 4_000_000)
+      throw new CoreError("invalid-response", "设置响应过大。");
+    let data: unknown;
+    try {
+      data = JSON.parse(body);
+    } catch {
+      throw new CoreError("invalid-response", "设置响应无法解析。");
+    }
+    if (response.status === 404 || response.status === 501) {
+      const missing = z
+        .object({
+          kind: z.literal("rejected"),
+          fields: z.array(z.object({ message: z.string() })),
+        })
+        .safeParse(data);
+      if (missing.success)
+        throw new CoreError(
+          "missing-settings",
+          missing.data.fields.map((field) => field.message).join("；"),
+        );
+      throw new CoreError(
+        "unsupported-host",
+        "当前 Bridge 版本不支持桌面设置，请更新后重试。",
+      );
+    }
+    if (response.status >= 500 && response.status !== 503)
+      throw new CoreError(
+        "host-error",
+        "Bridge 暂时无法处理设置，请稍后重试。",
+      );
+    return data;
+  }
+  async settings(request: ParsedSettingsRequest): Promise<SettingsReply> {
+    if (
+      request.type === "save" &&
+      request.edit.scope.kind === "host" &&
+      request.edit.section === "execution" &&
+      z.object({ codexBin: z.string() }).safeParse(request.edit.patch).success
+    )
+      return {
+        kind: "refused",
+        code: "file-picker-required",
+        message: "请使用本机文件选择器指定 Codex 可执行文件。",
+      };
+    return this.settingsInternal(request);
+  }
+  async saveExecutable(path: string, revision: string): Promise<SettingsReply> {
+    const request = settingsRequestSchema.parse({
+      type: "save",
+      edit: {
+        scope: { kind: "host" },
+        section: "execution",
+        revision,
+        patch: { codexBin: path },
+      },
+    });
+    return this.settingsInternal(request);
+  }
+  private async settingsInternal(
+    request: ParsedSettingsRequest,
+  ): Promise<SettingsReply> {
+    try {
+      if (this.lifecycle !== "open")
+        throw new CoreError("closing", "应用正在退出。");
+      if (request.type === "read") {
+        const raw = await this.settingsJson(this.settingsPath(request.scope));
+        const unavailable = z
+          .object({
+            kind: z.literal("unavailable"),
+            reason: z.object({
+              kind: z.literal("readonly"),
+              message: z.string(),
+            }),
+          })
+          .safeParse(raw);
+        if (unavailable.success)
+          throw new CoreError(
+            "settings-unavailable",
+            unavailable.data.reason.message,
+          );
+        const view =
+          request.scope.kind === "agent"
+            ? agentViewSchema.parse(raw)
+            : request.scope.kind === "project"
+              ? projectViewSchema.parse(raw)
+              : request.scope.kind === "session"
+                ? sessionViewSchema.parse(raw)
+                : hostViewSchema.parse(raw);
+        if (JSON.stringify(view.scope) !== JSON.stringify(request.scope))
+          throw new CoreError("scope-mismatch", "设置响应与当前选择不匹配。");
+        return { kind: "view", view };
+      }
+      if (request.type === "models") {
+        const { botId, backend, purpose } = request.query;
+        const query = new URLSearchParams({ backend, purpose });
+        const catalog = modelCatalogSchema.parse(
+          await this.settingsJson(
+            `/api/bots/${encodeURIComponent(botId)}/models?${query}`,
+          ),
+        );
+        if (catalog.backend !== backend)
+          throw new CoreError(
+            "scope-mismatch",
+            "模型列表与当前执行工具不匹配。",
+          );
+        return { kind: "models", catalog };
+      }
+      if (request.type === "sessions") {
+        const path = `/api/project/${encodeURIComponent(request.projectName)}/sessions?bot=${encodeURIComponent(request.botId)}`;
+        const raw = await this.settingsJson(path);
+        return settingsReplySchema.parse({
+          kind: "sessions",
+          ...z.object({ sessions: z.unknown() }).parse(raw),
+        });
+      }
+      if (
+        request.type === "chooseExecutable" ||
+        request.type === "saveExecutable"
+      )
+        throw new CoreError("native-command", "请选择应用窗口提供的文件。");
+      return await this.enqueue(async () => {
+        const path =
+          request.type === "save"
+            ? this.settingsPath(request.edit.scope)
+            : `/api/bots/${encodeURIComponent(request.action.botId)}/settings/actions`;
+        const body =
+          request.type === "save"
+            ? request.edit.scope.kind === "agent"
+              ? { revision: request.edit.revision, patch: request.edit.patch }
+              : {
+                  section: request.edit.section,
+                  revision: request.edit.revision,
+                  patch: request.edit.patch,
+                }
+            : request.action;
+        const raw = await this.settingsJson(
+          request.type === "save" && request.edit.scope.kind === "agent"
+            ? `${path}/${encodeURIComponent(request.edit.section)}`
+            : path,
+          {
+            method: request.type === "save" ? "PATCH" : "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          },
+        );
+        const reply = settingsReplySchema.parse(
+          request.type === "save"
+            ? { kind: "saved", result: raw }
+            : { kind: "acted", result: raw },
+        );
+        if (request.type === "save" && reply.kind === "saved") {
+          const result = reply.result;
+          const section =
+            result.kind === "saved"
+              ? result.section
+              : result.kind === "conflict"
+                ? result.current
+                : undefined;
+          if (
+            section &&
+            (section.section !== request.edit.section ||
+              JSON.stringify(section.scope) !==
+                JSON.stringify(request.edit.scope))
+          )
+            throw new CoreError(
+              "scope-mismatch",
+              "保存结果与当前设置范围不匹配。",
+            );
+        }
+        if (request.type === "act" && reply.kind === "acted") {
+          const result = reply.result;
+          const view =
+            result.kind === "saved" ||
+            result.kind === "conflict" ||
+            result.kind === "diverged"
+              ? result.view
+              : undefined;
+          if (
+            view &&
+            (view.scope.botId !== request.action.botId ||
+              ("projectName" in request.action
+                ? view.scope.kind !== "project" ||
+                  view.scope.projectName !== request.action.projectName
+                : view.scope.kind !== "agent"))
+          )
+            throw new CoreError(
+              "scope-mismatch",
+              "操作结果与当前 Agent 或群不匹配。",
+            );
+        }
+        return reply;
+      });
+    } catch (error) {
+      return {
+        kind: "refused",
+        code:
+          error instanceof CoreError
+            ? error.code
+            : error instanceof z.ZodError
+              ? "invalid-response"
+              : "settings-failed",
+        message:
+          error instanceof z.ZodError
+            ? "Bridge 设置响应与支持的协议不一致。"
+            : messageOf(error),
+      };
+    }
+  }
   async refresh(duringClose = false): Promise<void> {
     if (this.lifecycle !== "open" && !duringClose) return;
     const generation = this.generation;
@@ -305,7 +540,7 @@ export class DesktopController {
       return {
         kind: "activationPending",
         message:
-          "配置已保存。当前 Bridge 由其他程序管理，请在原程序中重启后启用。",
+          "配置已保存。请到「应用与启动」重启 Bridge，使更改生效。",
       };
     }
     try {
@@ -326,6 +561,40 @@ export class DesktopController {
         message: `配置已保存，但重启未完成。${messageOf(error)}`,
       };
     }
+  }
+  private async restartAttached(): Promise<CommandResult> {
+    const host = this.connected();
+    const daemon = z.object({
+      installed: z.boolean(), running: z.boolean(), supported: z.boolean(),
+      selfHosted: z.boolean(), pid: z.number().optional(),
+    }).parse(await this.json("/api/daemon"));
+    if (!daemon.installed || !daemon.running || !daemon.supported || daemon.selfHosted || daemon.pid !== host.pid)
+      throw new CoreError("external-owner", "当前服务不是此安装的系统后台服务，请在启动它的应用中重启。");
+    if (this.snapshot.jobs.some(job => !terminal(job)))
+      throw new CoreError("operation-active", "请先完成或取消安装、登录及注册操作，再重启 Bridge。");
+    await this.json("/api/daemon/restart", { method: "POST" });
+    this.generation++;
+    if (this.poll) clearInterval(this.poll);
+    this.poll = undefined;
+    await host.close();
+    this.host = undefined;
+    this.publish({ stale: true, host: { kind: "starting" } });
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline && this.lifecycle === "open") {
+      const next = await this.module.inspectHost(this.runtime.home);
+      if (next.kind === "attached" && next.pid !== host.pid) {
+        await this.connect();
+        if (this.snapshot.host.kind === "connected" && !this.snapshot.stale) {
+          this.pendingActivation.clear();
+          await this.refresh();
+          return { kind: "applied", revision: this.snapshot.revision };
+        }
+        break;
+      }
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    this.publish({ stale: true, host: { kind: "disconnected", message: "重启请求已发出，尚未连接到新服务。请重新检查。" } });
+    return { kind: "activationPending", message: "重启请求已发出，尚未连接到新服务。请重新检查。" };
   }
   private async write(
     path: string,
@@ -364,10 +633,7 @@ export class DesktopController {
             return { kind: "applied", revision: this.snapshot.revision };
           case "restartHost":
             if (this.connected().ownership === "attached")
-              throw new CoreError(
-                "attached",
-                "当前 Bridge 由其他程序管理，请在原程序中重启。",
-              );
+              return await this.restartAttached();
             return await this.activate();
           case "listJoinedGroups": {
             const page = groupPageSchema.parse(
@@ -438,6 +704,33 @@ export class DesktopController {
               "PATCH",
             );
             return await this.activate(command.agentId);
+          case "deleteAgent": {
+            const state = stateSchema.parse(await this.json("/api/state"));
+            const target = state.bots.find(
+              (bot) => bot.appId === command.agentId,
+            );
+            if (!target)
+              throw new CoreError(
+                "missing-agent",
+                "Agent 已不存在，请刷新列表。",
+              );
+            if (target.active || target.running)
+              throw new CoreError(
+                "agent-active",
+                "请先停用 Agent 并让它停止运行，再删除本地数据。",
+              );
+            this.generation++;
+            try {
+              await this.json(
+                `/api/bots/${encodeURIComponent(command.agentId)}`,
+                { method: "DELETE" },
+              );
+            } finally {
+              this.generation++;
+            }
+            await this.refresh();
+            return { kind: "applied", revision: this.snapshot.revision };
+          }
           case "registerAgent":
             return await this.register();
           case "installCodex":
@@ -698,7 +991,11 @@ export class DesktopController {
               phase: "activating",
               message: "飞书身份已保存，正在启用。",
             });
-            const result = await this.enqueue(() => this.activate());
+            const result = await this.enqueue(async () => {
+              for (const appId of committed)
+                await this.write(`/api/bots/${encodeURIComponent(appId)}`, { enabled: true }, "PATCH");
+              return this.activate();
+            });
             await this.refresh(true);
             this.job({
               id,

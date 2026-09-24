@@ -62,6 +62,23 @@ void app
       JSON.stringify(snapshot.host),
     );
     assert.equal(snapshot.host.ownership, "owned");
+    assert.equal(snapshot.host.version, "0.7.0");
+    const settings = request => window.webContents.executeJavaScript(
+      `window.bridge.settings(${JSON.stringify(request)})`,
+    );
+    const hostSettings = await settings({ type: "read", scope: { kind: "host" } });
+    assert.equal(hostSettings.kind, "view", JSON.stringify(hostSettings));
+    assert.equal(hostSettings.view.scope.kind, "host");
+    assert.equal(hostSettings.view.sections.execution.access.kind, "writable");
+    const reset = await settings({ type: "save", edit: {
+      scope: { kind: "host" }, section: "execution",
+      revision: hostSettings.view.sections.execution.revision,
+      patch: { codexBin: null },
+    } });
+    assert.equal(reset.kind, "saved", JSON.stringify(reset));
+    assert.equal(reset.result.kind, "saved", JSON.stringify(reset));
+    assert.equal(reset.result.section.value.stored.codexBin, null);
+    assert.equal(reset.result.effects.some(effect => effect.when === "restart"), true);
     if (process.env.VONVON_DESKTOP_FIXTURE_MODE === "existing") {
       assert.deepEqual(snapshot.agents.map((agent) => agent.id).sort(), [
         "cli_fixture_content",
@@ -83,6 +100,49 @@ void app
         ),
         true,
       );
+      const agentScope = { kind: "agent", botId: "cli_fixture_engineering" };
+      const agent = await settings({ type: "read", scope: agentScope });
+      assert.equal(agent.kind, "view", JSON.stringify(agent));
+      assert.equal(agent.view.sections.cards.stored.showToolCalls, false);
+      assert.equal(agent.view.sections.run.stored.maxConcurrentRuns, 5);
+      assert.equal(agent.view.sections.completion.stored.longTaskMinutes, 7);
+      assert.equal(agent.view.sections.cards.access.kind, "readonly");
+      const denied = await settings({ type: "save", edit: {
+        scope: agentScope, section: "cards",
+        revision: agent.view.sections.cards.revision,
+        patch: { showToolCalls: true },
+      } });
+      assert.equal(denied.kind, "saved", JSON.stringify(denied));
+      assert.equal(denied.result.kind, "unavailable", JSON.stringify(denied));
+      const project = await settings({ type: "read", scope: {
+        kind: "project", botId: agentScope.botId, projectName: "产品研发群",
+      } });
+      assert.equal(project.kind, "view", JSON.stringify(project));
+      assert.equal(project.view.sections.compact.stored.autoCompact, false);
+      assert.equal(project.view.sections.model.stored.selection.model, "fixture-saved-model");
+      const sessions = await settings({ type: "sessions", botId: agentScope.botId, projectName: "产品研发群" });
+      assert.equal(sessions.kind, "sessions", JSON.stringify(sessions));
+      assert.equal(sessions.sessions.length, 1);
+      const session = await settings({ type: "read", scope: {
+        kind: "session", botId: agentScope.botId, threadId: sessions.sessions[0].threadId,
+      } });
+      assert.equal(session.kind, "view", JSON.stringify(session));
+      assert.equal(session.view.sections.model.stored.selection.model, "fixture-saved-session-model");
+      await window.webContents.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(button => button.textContent.includes('产品研发群') && button.textContent.includes('Codex')).click()`);
+      await poll(() => window.webContents.executeJavaScript(`document.querySelector('select[aria-label="选择话题"]')?.options.length`), value => value === 2);
+      const layout = await window.webContents.executeJavaScript(`(() => {
+        const select = document.querySelector('select[aria-label="选择话题"]');
+        select.scrollIntoView();
+        const scroll = document.querySelector('.settings-content-scroll');
+        const row = select.closest('.ss-row');
+        return { clientWidth: scroll.clientWidth, scrollWidth: scroll.scrollWidth, labelWidth: row.querySelector('.ss-row__copy').getBoundingClientRect().width, options: [...select.options].map(option => option.textContent) };
+      })()`);
+      assert.ok(layout.scrollWidth <= layout.clientWidth + 1, JSON.stringify(layout));
+      assert.ok(layout.labelWidth > 60, JSON.stringify(layout));
+      assert.match(layout.options[1], /^共用 ·/);
+      await writeFile(path.join(home, "native-long-topic.png"), (await window.capturePage()).toPNG());
+      await window.webContents.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === 'Agent').click()`);
+      await writeFile(path.join(home, "native-settings.json"), JSON.stringify({ hostSettings, reset, agent, denied, project, sessions, session }, null, 2));
     } else assert.equal(snapshot.agents.length, 0);
     assert.equal(snapshot.stale, false);
     const text = await window.webContents.executeJavaScript(

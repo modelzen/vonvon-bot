@@ -1,12 +1,13 @@
 import { z } from "zod";
+import type { SettingsReply, SettingsRequest } from "./settings";
 
 export const agentIdSchema = z
   .string()
-  .regex(/^cli_[A-Za-z0-9_-]{1,160}$/)
+  .regex(/^cli_[A-Za-z0-9_-]{1,200}$/)
   .brand<"AgentId">();
 export const groupIdSchema = z
   .string()
-  .regex(/^oc_[A-Za-z0-9_-]{1,160}$/)
+  .regex(/^oc_[A-Za-z0-9_-]{1,200}$/)
   .brand<"GroupId">();
 export const membershipIdSchema = z
   .string()
@@ -89,6 +90,7 @@ export const commandSchema = z.discriminatedUnion("type", [
       enabled: z.boolean(),
     })
     .strict(),
+  z.object({type:z.literal("deleteAgent"),agentId:agentIdSchema}).strict(),
   z.object({ type: z.literal("cancelJob"), jobId: jobIdSchema }).strict(),
   z
     .object({ type: z.literal("openJobAuthorization"), jobId: jobIdSchema })
@@ -191,6 +193,7 @@ export type CommandReply = { command: Command["type"]; result: CommandResult };
 export interface DesktopBridge {
   watch(listener: (snapshot: DesktopSnapshot) => void): () => void;
   run(command: Command): Promise<CommandResult>;
+  settings(request: SettingsRequest): Promise<SettingsReply>;
 }
 declare global {
   interface Window {

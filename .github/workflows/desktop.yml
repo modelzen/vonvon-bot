@@ -24,6 +24,7 @@ jobs:
       - run: npm test
       - run: npm run prepare:runtime -- ${{ matrix.target }}
       - run: npm run build
+      - run: npm run test:controls
       - run: npm run test:native
       - run: npm run package:${{ matrix.package }}
       - if: runner.os == 'macOS'
