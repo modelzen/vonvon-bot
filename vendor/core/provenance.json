@@ -1,11 +1,11 @@
 {
   "repository": "https://github.com/modelzen/feishu-codex-bridge",
-  "sourceCommit": "130f5e76a9aa6c0d67e09b3b44da5ec3cf4d21d6",
+  "sourceCommit": "21ed17cab64df7c1b481c56d63ea6aa51fc212ad",
   "package": "@modelzen/feishu-codex-bridge",
   "version": "0.7.0",
-  "artifact": "0.7.0-130f5e76a9aa.tgz",
-  "artifactSha256": "7d1d935e262c2974fab7faa653b28548e0c26eff247b9c8d04173236be03b1b7",
-  "artifactIntegrity": "sha512-8lsruLmi4auN/NqZFbGIQ48MiRekXl+ZngPOS7Xg6E1NVj6za+XWpBOB3mf4GrqfrPFkGY5KP54TJ3CqDoITaw==",
+  "artifact": "0.7.0-21ed17cab64d.tgz",
+  "artifactSha256": "2a6f0d0a3d2cd76efe37fbd20cee8c156d88c660ed3de70f783d39faa6d1c597",
+  "artifactIntegrity": "sha512-Sbpu8pxNzd6k6dWKuVl9qXslpwc8gUD3GexrJGn7LEZYoczsShMNE9uhkJcBN9By59lg6wZgY5qwhsMuZ/Lvjw==",
   "sourceLockSha256": "ed6e78a853f0a61ad87fd2c4af3ac41736713526963b8874fac405f5df347f10",
   "packCommand": "npm pack --ignore-scripts --json --pack-destination /tmp/vonvon-settings-core-pack",
   "containsCompanionCapabilities": true
