@@ -143,3 +143,73 @@ test("Authorization reads Codex stderr and structured Claude and effective Lark 
     assert.deepEqual(await service.run({ type: "authStatus", tool: "lark-cli" }), { kind: "auth", tool: "lark-cli", state: "signedIn", message: "已授权" });
   } finally { await rm(home, { recursive: true, force: true }); }
 });
+
+test("Close drains login and its subprocess before refusing further requests", async () => {
+  const home = await mkdtemp(join(tmpdir(), "vonvon-close-login-"));
+  const cli = join(home, "codex");
+  const service = new EnvironmentService({ home, ...resolution(home), nodePath: process.execPath, path: home });
+  try {
+    await writeFile(cli, '#!/bin/sh\nsleep 120 &\necho "$!" > "$HOME/child-pid"\nwait\n', { mode: 0o700 });
+    const started = await service.run({ type: "startLogin", tool: "codex" });
+    assert.equal(started.kind, "operation");
+    const pid = await fixturePid(join(home, "child-pid"));
+    await service.close();
+    assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+    assert.deepEqual(await service.run({ type: "startLogin", tool: "codex" }), { kind: "refused", code: "environment-closed", message: "本机环境正在退出。" });
+    await service.close();
+  } finally { await service.close(); await rm(home, { recursive: true, force: true }); }
+});
+
+test("Close drains an npm install instead of allowing it to survive the desktop", async () => {
+  const home = await mkdtemp(join(tmpdir(), "vonvon-close-install-"));
+  const npm = join(home, "npm");
+  const service = new EnvironmentService({ home, ...resolution(home), nodePath: process.execPath, npmPath: npm, path: home });
+  try {
+    await writeFile(npm, '#!/bin/sh\ntrap "" TERM\necho "$$" > "$HOME/npm-pid"\nwhile :; do sleep 1; done\n', { mode: 0o700 });
+    const install = service.run({ type: "install", tool: "codex" });
+    const pid = await fixturePid(join(home, "npm-pid"));
+    await service.close();
+    assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+    assert.equal((await install).kind, "refused");
+  } finally { await service.close(); await rm(home, { recursive: true, force: true }); }
+});
+
+test("Close prevents a delayed asynchronous resolver from launching a new login", async () => {
+  const home = await mkdtemp(join(tmpdir(), "vonvon-close-resolver-"));
+  let release: (value: string | null) => void = () => { throw new Error("Resolver not initialized"); };
+  const selected = new Promise<string | null>((resolve) => { release = resolve; });
+  const service = new EnvironmentService({ home, getDataRoot: () => home, resolveCodex: () => selected, nodePath: process.execPath });
+  try {
+    const pending = service.run({ type: "startLogin", tool: "codex" });
+    const close = service.close();
+    release(process.execPath);
+    await close;
+    assert.equal((await pending).kind, "refused");
+  } finally { await service.close(); await rm(home, { recursive: true, force: true }); }
+});
+
+async function fixturePid(file: string): Promise<number> {
+  const deadline = Date.now() + 3_000;
+  while (Date.now() < deadline) {
+    const text = await readFile(file, "utf8").catch(() => "");
+    const pid = Number(text.trim());
+    if (Number.isInteger(pid) && pid > 0) return pid;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error("Fixture did not start");
+}
+
+test("Close refuses to confirm completion while an environment request is still running", async () => {
+  const home = await mkdtemp(join(tmpdir(), "vonvon-close-pending-"));
+  let release: (value: Response) => void = () => { throw new Error("Request not initialized"); };
+  const response = new Promise<Response>((resolve) => { release = resolve; });
+  const service = new EnvironmentService({ home, ...resolution(home), nodePath: process.execPath, hostRequest: () => response });
+  try {
+    const request = service.run({ type: "backendCatalog" });
+    await assert.rejects(service.close(), /尚未退出/);
+    assert.equal((await service.run({ type: "backendCatalog" })).kind, "refused");
+    release(Response.json({ entries: [] }));
+    await request;
+    await service.close();
+  } finally { release(Response.json({ entries: [] })); await service.close(); await rm(home, { recursive: true, force: true }); }
+});
