@@ -199,6 +199,47 @@ chmod +x "$prefix/bin/codex"
   } finally { await rm(home, { recursive: true, force: true }); }
 });
 
+test("Cancelling a running CLI update stops npm and keeps the old pointer", async () => {
+  const home = await mkdtemp(join(tmpdir(), "vonvon-tool-cancel-"));
+  const npm = join(home, "npm");
+  const root = join(home, ".vonvon-bridge");
+  try {
+    await writeFile(npm, `#!/bin/sh
+prefix="$4"
+version="$(cat "$HOME/next-version")"
+mkdir -p "$prefix/lib/node_modules/@openai/codex" "$prefix/bin"
+printf '{"name":"@openai/codex","version":"%s"}' "$version" > "$prefix/lib/node_modules/@openai/codex/package.json"
+printf '#!/bin/sh\\necho codex-cli %s\\n' "$version" > "$prefix/bin/codex"
+chmod +x "$prefix/bin/codex"
+if [ -f "$HOME/hold-install" ]; then
+  echo "$$" > "$HOME/npm-pid"
+  sleep 120
+fi
+`, { mode: 0o700 });
+    await writeFile(join(home, "next-version"), "1.0.0");
+    const service = new EnvironmentService({ home, ...resolution(home, root), nodePath: process.execPath, npmPath: npm, path: home, fetchLatest: async () => null });
+    assert.equal((await service.run({ type: "install", tool: "codex" })).kind, "applied");
+    const pointer = join(root, "managed-tools", "codex", "current.json");
+    const prior = await readFile(pointer, "utf8");
+    await writeFile(join(home, "next-version"), "2.0.0");
+    await writeFile(join(home, "hold-install"), "yes");
+    const pending = service.run({ type: "update", tool: "codex" });
+    const status = await service.run({ type: "toolInstallStatus" });
+    assert.equal(status.kind, "toolInstall");
+    assert.equal(status.kind === "toolInstall" && status.operation?.kind, "running");
+    if (status.kind !== "toolInstall" || !status.operation || status.operation.kind !== "running") return;
+    const pid = await fixturePid(join(home, "npm-pid"));
+    assert.equal((await service.run({ type: "cancelInstall", operationId: "00000000-0000-4000-8000-000000000000" })).kind, "refused");
+    process.kill(pid, 0);
+    const cancelled = await service.run({ type: "cancelInstall", operationId: status.operation.id });
+    assert.equal(cancelled.kind, "toolInstall");
+    if (cancelled.kind === "toolInstall") assert.equal(cancelled.operation?.kind, "cancelled");
+    assert.deepEqual(await pending, { kind: "refused", code: "install-cancelled", message: "已取消安装，原工具仍可使用。" });
+    assert.equal(await readFile(pointer, "utf8"), prior);
+    assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+  } finally { await rm(home, { recursive: true, force: true }); }
+});
+
 function resolution(home: string, root = join(home, ".vonvon-bridge")) {
   return {
     getDataRoot: () => root,
