@@ -2,8 +2,8 @@ import { z } from "zod";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { access, mkdir, readFile, realpath } from "node:fs/promises";
-import { delimiter, dirname, isAbsolute, join } from "node:path";
+import { access, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { basename, delimiter, dirname, isAbsolute, join, relative } from "node:path";
 import {
   backendEntrySchema,
   environmentProfileSchema,
@@ -26,6 +26,11 @@ const allowedHosts = new Set([
   "claude.ai", "console.anthropic.com", "platform.claude.com",
 ]);
 const outputLimit = 64 * 1024;
+const generationPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+type ManagedSelection =
+  | { kind: "absent" | "disabled" | "invalid" }
+  | { kind: "active"; executable: string; version: string };
 
 export type EnvironmentServiceOptions = {
   home: string;
@@ -189,17 +194,51 @@ export class EnvironmentService {
   }
 
   private managedRoot(): string { return join(this.getDataRoot(), "managed-tools"); }
-  private managedExecutable(tool: EnvironmentTool): string {
+  private legacyManagedExecutable(tool: EnvironmentTool): string {
     return join(this.managedRoot(), "bin", process.platform === "win32" ? `${tools[tool].executable}.cmd` : tools[tool].executable);
   }
 
+  private managedToolRoot(tool: EnvironmentTool): string { return join(this.managedRoot(), tool); }
+  private managedPointer(tool: EnvironmentTool): string { return join(this.managedToolRoot(tool), "current.json"); }
+  private releaseExecutable(prefix: string, tool: EnvironmentTool): string {
+    const name = tools[tool].executable;
+    return process.platform === "win32" ? join(prefix, `${name}.cmd`) : join(prefix, "bin", name);
+  }
+
+  private async managedSelection(tool: EnvironmentTool): Promise<ManagedSelection> {
+    let data: unknown;
+    try { data = JSON.parse(await readFile(this.managedPointer(tool), "utf8")); }
+    catch (error) { return error instanceof Error && "code" in error && error.code === "ENOENT" ? { kind: "absent" } : { kind: "invalid" }; }
+    if (typeof data !== "object" || data === null || !("schemaVersion" in data) || data.schemaVersion !== 1 || !("tool" in data) || data.tool !== tool || !("state" in data)) return { kind: "invalid" };
+    if (data.state === "disabled") return { kind: "disabled" };
+    if (data.state !== "active" || !("generation" in data) || typeof data.generation !== "string" || !generationPattern.test(data.generation) || !("version" in data) || typeof data.version !== "string" || !/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(data.version)) return { kind: "invalid" };
+    const bin = this.releaseExecutable(join(this.managedToolRoot(tool), "releases", data.generation), tool);
+    return await executable(bin) ? { kind: "active", executable: bin, version: data.version } : { kind: "invalid" };
+  }
+
+  private async publishManaged(tool: EnvironmentTool, selection: { schemaVersion: 1; tool: EnvironmentTool; state: "active"; generation: string; version: string } | { schemaVersion: 1; tool: EnvironmentTool; state: "disabled" }): Promise<void> {
+    await this.writeManagedPointer(tool, JSON.stringify(selection));
+  }
+
+  private async writeManagedPointer(tool: EnvironmentTool, body: string): Promise<void> {
+    const root = this.managedToolRoot(tool);
+    await mkdir(root, { recursive: true, mode: 0o700 });
+    const temporary = join(root, `current-${randomUUID()}.json`);
+    try {
+      await writeFile(temporary, body, { mode: 0o600 });
+      await rename(temporary, this.managedPointer(tool));
+    } finally { await rm(temporary, { force: true }); }
+  }
+
   private async resolveTool(tool: EnvironmentTool): Promise<{ executable: string; ownership: "managed" | "external" } | null> {
-    const managed = this.managedExecutable(tool);
+    const selection = await this.managedSelection(tool);
+    const managed = selection.kind === "active" ? selection.executable : this.legacyManagedExecutable(tool);
     if (tool === "codex") {
       const selected = await this.resolveCodex();
-      return selected ? { executable: selected, ownership: selected === managed ? "managed" : "external" } : null;
+      return selected ? { executable: selected, ownership: selected === managed && selection.kind !== "disabled" && selection.kind !== "invalid" ? "managed" : "external" } : null;
     }
-    if (await executable(managed)) return { executable: managed, ownership: "managed" };
+    if (selection.kind === "active") return { executable: managed, ownership: "managed" };
+    if (selection.kind === "absent" && await executable(managed)) return { executable: managed, ownership: "managed" };
     const candidates = [dirname(this.nodePath), ...this.searchPath.split(delimiter), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"];
     for (const directory of candidates) {
       if (!isAbsolute(directory)) continue;
@@ -228,6 +267,9 @@ export class EnvironmentService {
   }
 
   private async managedVersion(tool: EnvironmentTool): Promise<string | null> {
+    const selection = await this.managedSelection(tool);
+    if (selection.kind === "active") return selection.version;
+    if (selection.kind !== "absent") return null;
     const file = join(this.managedRoot(), "lib", "node_modules", tools[tool].package, "package.json");
     try {
       const body: unknown = JSON.parse(await readFile(file, "utf8"));
@@ -309,29 +351,60 @@ export class EnvironmentService {
 
   private async install(tool: EnvironmentTool, update: boolean): Promise<EnvironmentReply> {
     if (this.mutation || this.active) return refused("busy", "另一个本机环境操作正在进行。");
-    const npm = await this.resolveNpm();
-    if (!npm) return refused("npm-missing", "未找到 npm，无法安装工具。");
     this.mutation = true;
+    const release = join(this.managedToolRoot(tool), "releases", randomUUID());
+    let published = false;
     try {
-      await mkdir(this.managedRoot(), { recursive: true });
-      const result = await this.command(npm, ["install", "--global", "--prefix", this.managedRoot(), `${tools[tool].package}@latest`, "--no-audit", "--no-fund"], 10 * 60_000);
+      if (tool === "codex" && process.env.CODEX_BIN) return refused("explicit-codex", "当前使用显式 CODEX_BIN，请先移除此覆盖再安装托管 Codex。");
+      const npm = await this.resolveNpm();
+      if (!npm) return refused("npm-missing", "未找到 npm，无法安装工具。");
+      await mkdir(release, { recursive: true, mode: 0o700 });
+      const result = await this.command(npm, ["install", "--global", "--prefix", release, `${tools[tool].package}@latest`, "--no-audit", "--no-fund"], 10 * 60_000);
       if (result.exitCode !== 0) return refused("install-failed", "工具安装失败，请检查网络连接或 npm 配置。");
-      const after = await this.inspect(tool);
-      if (after.installation !== "managed" || !after.version) return refused("install-incomplete", "安装命令已结束，但 Bridge 尚未选用托管工具。请检查 CODEX_BIN 等显式配置。");
-      return { kind: "applied", message: `${tools[tool].executable} ${after.version} 已${update ? "更新" : "安装"}。` };
-    } finally { this.mutation = false; }
+      const file = join(release, process.platform === "win32" ? "node_modules" : join("lib", "node_modules"), tools[tool].package, "package.json");
+      const manifest: unknown = JSON.parse(await readFile(file, "utf8"));
+      if (typeof manifest !== "object" || manifest === null || !("name" in manifest) || manifest.name !== tools[tool].package || !("version" in manifest) || typeof manifest.version !== "string" || !/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(manifest.version)) return refused("install-incomplete", "新版本的安装信息无效，旧版本仍可使用。");
+      const bin = this.releaseExecutable(release, tool);
+      if (!await executable(bin)) return refused("install-incomplete", "新版本的可执行文件缺失，旧版本仍可使用。");
+      const physicalRoot = await realpath(release);
+      const physical = await realpath(bin);
+      const relativePath = relative(physicalRoot, physical);
+      if (relativePath === ".." || relativePath.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(relativePath)) return refused("install-incomplete", "新版本的可执行文件超出安装目录，旧版本仍可使用。");
+      const verified = await this.command(bin, ["--version"], 20_000);
+      if (verified.exitCode !== 0 || !new RegExp(`(?:^|[^\\d])${manifest.version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:$|[^\\d])`).test(`${verified.stdout}\n${verified.stderr}`)) return refused("install-incomplete", "新版本未通过运行校验，旧版本仍可使用。");
+      if (this.closing) return refused("environment-closed", "本机环境正在退出。");
+      const previousPointer = await readFile(this.managedPointer(tool), "utf8").catch((error: unknown) => {
+        if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+        throw error;
+      });
+      await this.publishManaged(tool, { schemaVersion: 1, tool, state: "active", generation: basename(release), version: manifest.version });
+      published = true;
+      let selected = false;
+      try {
+        const after = await this.resolveTool(tool);
+        selected = after?.ownership === "managed" && after.executable === bin;
+      } finally {
+        if (!selected) {
+          if (previousPointer === null) await rm(this.managedPointer(tool), { force: true });
+          else await this.writeManagedPointer(tool, previousPointer);
+          published = false;
+        }
+      }
+      if (!selected) return refused("install-not-selected", "当前 Bridge 未选用新版本，已保留原有工具；请检查 CODEX_BIN 等显式配置。");
+      return { kind: "applied", message: `${tools[tool].executable} ${manifest.version} 已${update ? "更新" : "安装"}。` };
+    } finally {
+      if (!published && this.children.size === 0) await rm(release, { recursive: true, force: true });
+      this.mutation = false;
+    }
   }
 
   private async uninstall(tool: EnvironmentTool): Promise<EnvironmentReply> {
     if (this.mutation || this.active) return refused("busy", "另一个本机环境操作正在进行。");
-    if (!await this.managedVersion(tool)) return refused("external-install", "此工具不是 Vonvon Bridge 托管的副本，不能卸载。");
-    const npm = await this.resolveNpm();
-    if (!npm) return refused("npm-missing", "未找到 npm，无法卸载工具。");
     this.mutation = true;
     try {
-      const result = await this.command(npm, ["uninstall", "--global", "--prefix", this.managedRoot(), tools[tool].package], 10 * 60_000);
-      if (result.exitCode !== 0 || await this.managedVersion(tool)) return refused("uninstall-failed", "未能移除托管工具。");
-      return { kind: "applied", message: "已移除 Vonvon Bridge 托管的工具，其他安装不受影响。" };
+      if (!await this.managedVersion(tool)) return refused("external-install", "此工具不是 Vonvon Bridge 托管的副本，不能卸载。");
+      await this.publishManaged(tool, { schemaVersion: 1, tool, state: "disabled" });
+      return { kind: "applied", message: "已停用 Vonvon Bridge 托管的工具，其他安装不受影响。" };
     } finally { this.mutation = false; }
   }
 
@@ -463,7 +536,7 @@ export class EnvironmentService {
   }
 
   private environment(): NodeJS.ProcessEnv {
-    return { HOME: this.home, USERPROFILE: this.home, PATH: [dirname(this.nodePath), join(this.managedRoot(), "bin"), this.searchPath, "/usr/bin", "/bin"].join(delimiter), LANG: "en_US.UTF-8", LARKSUITE_CLI_NO_SKILLS_NOTIFIER: "1", LARKSUITE_CLI_NO_UPDATE_NOTIFIER: "1" };
+    return { HOME: this.home, USERPROFILE: this.home, PATH: [dirname(this.nodePath), this.searchPath, "/usr/bin", "/bin"].join(delimiter), LANG: "en_US.UTF-8", LARKSUITE_CLI_NO_SKILLS_NOTIFIER: "1", LARKSUITE_CLI_NO_UPDATE_NOTIFIER: "1" };
   }
 
   private command(executablePath: string, args: string[], timeoutMs: number, secret?: string): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
