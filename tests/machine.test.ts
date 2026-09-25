@@ -131,3 +131,78 @@ test('unpackaged and unsigned artifacts do not enable native updates',async()=>{
   assert.deepEqual(await desktopUpdateConfiguration({appPath:'/fixture',isPackaged:false}),{signed:false});
   assert.deepEqual(await desktopUpdateConfiguration({appPath:'/fixture/app.asar',isPackaged:true,platform:'darwin'}),{signed:false});
 });
+
+function deferred() {
+  let resolve!:()=>void;
+  const promise=new Promise<void>(done=>{resolve=done;});
+  return {promise,resolve};
+}
+
+test('close waits for an in-flight service installation and cancels queued mutations',async()=>{
+  const started=deferred(),finish=deferred();
+  const calls:string[]=[];
+  let current:HostHandle|undefined;
+  const service=new MachineService({runtime,host:()=>current,stopHost:async()=>{current=undefined;},startHost:async()=>{calls.push('connect');current=host('attached');},serviceCommand:async action=>{
+    calls.push(action);
+    if(action==='install'){started.resolve();await finish.promise;}
+    return status;
+  },updater:new DesktopUpdater({current:'0.7.0',signed:false,driver:new Driver()})});
+  const installing=service.request({type:'service',action:'install'});
+  await started.promise;
+  const queued=assert.rejects(service.request({type:'service',action:'stop'}),/退出/);
+  let closed=false;
+  const closing=service.close().then(()=>{closed=true;});
+  await assert.rejects(service.request({type:'startHost'}),/退出/);
+  assert.equal(closed,false);
+  assert.deepEqual(calls,['status','install']);
+  finish.resolve();
+  await Promise.all([installing,queued,closing]);
+  assert.deepEqual(calls,['status','install','connect']);
+  assert.equal(closed,true);
+  await service.close();
+});
+
+test('close fails closed on timeout and a retry waits for the same running operation',async()=>{
+  const started=deferred(),finish=deferred();
+  const service=new MachineService({runtime,host:()=>undefined,stopHost:async()=>{},startHost:async()=>{},serviceCommand:async()=>{
+    started.resolve();await finish.promise;return status;
+  },updater:new DesktopUpdater({current:'0.7.0',signed:false,driver:new Driver()})});
+  const running=service.request({type:'status'});
+  await started.promise;
+  await assert.rejects(service.close(5),/阻止桌面退出/);
+  await assert.rejects(service.request({type:'status'}),/退出/);
+  finish.resolve();
+  await Promise.all([running,service.close()]);
+});
+
+test('failed machine operation settles before close completes',async()=>{
+  const started=deferred(),finish=deferred();
+  const service=new MachineService({runtime,host:()=>undefined,stopHost:async()=>{},startHost:async()=>{},serviceCommand:async()=>{
+    started.resolve();await finish.promise;throw new Error('service failed');
+  },updater:new DesktopUpdater({current:'0.7.0',signed:false,driver:new Driver()})});
+  const failed=assert.rejects(service.request({type:'status'}),/service failed/);
+  await started.promise;
+  const closing=service.close();
+  finish.resolve();
+  await Promise.all([failed,closing]);
+});
+
+test('updater shutdown inside the machine lane prevents later work without self-deadlock',async()=>{
+  const driver=new Driver();
+  const shutdown=deferred(),finish=deferred();
+  const updater=new DesktopUpdater({current:'0.7.0',signed:true,manifestURL:'https://updates.example/manifest',driver,fetch:async()=>Response.json({version:'0.8.0',feedURL:'https://updates.example/feed'}),beforeInstall:async()=>{
+    service.beginClosing();shutdown.resolve();await finish.promise;
+  }});
+  let commands=0;
+  const service=new MachineService({runtime,host:()=>undefined,stopHost:async()=>{},startHost:async()=>{},serviceCommand:async()=>{commands++;return status;},updater});
+  await service.request({type:'checkDesktopUpdate'});
+  await service.request({type:'installDesktopUpdate'});
+  const installing=service.request({type:'installDesktopUpdate'});
+  const queued=assert.rejects(service.request({type:'service',action:'install'}),/退出/);
+  await shutdown.promise;
+  await assert.rejects(service.request({type:'status'}),/退出/);
+  finish.resolve();
+  await Promise.all([installing,queued,service.close()]);
+  assert.equal(commands,0);
+  assert.equal(driver.calls.at(-1),'install');
+});

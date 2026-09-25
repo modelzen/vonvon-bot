@@ -17,13 +17,35 @@ export interface MachineHooks {
 }
 export class MachineService {
   private lane:Promise<unknown> = Promise.resolve();
+  private closing = false;
   private temporaryAgent?:string;
   constructor(private readonly hooks:MachineHooks) {}
   request(input:MachineRequest):Promise<MachineReply> {
+    if (this.closing) return Promise.reject(new Error('桌面正在退出，无法开始新的服务操作。'));
     const request = machineRequestSchema.parse(input);
-    const next = this.lane.then(()=>this.perform(request));
+    const next = this.lane.then(()=>{
+      if (this.closing) throw new Error('桌面正在退出，已取消尚未开始的服务操作。');
+      return this.perform(request);
+    });
     this.lane = next.catch(()=>{});
     return next;
+  }
+  beginClosing():void {
+    this.closing = true;
+  }
+  async close(timeoutMs = 60000):Promise<void> {
+    this.beginClosing();
+    let timer:ReturnType<typeof setTimeout>|undefined;
+    try {
+      await Promise.race([
+        this.lane,
+        new Promise<never>((_,reject)=>{
+          timer = setTimeout(()=>reject(new Error('服务操作仍未结束，已阻止桌面退出。请稍后重试。')),timeoutMs);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
   private async service(action:'status'|'install'|'start'|'stop'|'uninstall') {
     if (this.hooks.serviceCommand) return serviceStatusSchema.parse(await this.hooks.serviceCommand(action));
