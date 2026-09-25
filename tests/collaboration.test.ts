@@ -83,3 +83,15 @@ test("remove result preserves group side-effect warning and allows only validate
   assert.equal(opened.kind, "opened");
   assert.equal(url.startsWith("https://applink.feishu.cn/client/thread/open?open_chat_id=oc_testgroup"), true);
 });
+
+test("history preserves archived bindings and the native session needed for recovery", async () => {
+  const host: HostHandle = { kind: "connected", ownership: "owned", pid: 1, async request() {
+    return Response.json({ backend: "codex-appserver", sessions: [{ threadId: "omt_old", chatId: groupId, sessionId: "old", cwd: "/tmp/project", backend: "codex-appserver", summary: "old", createdAt: 1, updatedAt: 2, detached: true }], threads: [{ sessionId: "old", preview: "old", createdAt: 1, updatedAt: 2 }] });
+  }, async restart() {}, async close() {} };
+  const execute = createCollaborationService({ host: () => host, snapshot: () => snapshot, async resolveFolder() { throw new Error("not expected"); }, async openExternal() {} });
+  const reply = await execute({ action: "history", agentId, groupId, projectName: "Test project" });
+  assert.equal(reply.kind, "history");
+  if (reply.kind !== "history") throw new Error("Expected history");
+  assert.equal(reply.sessions[0]?.detached, true);
+  assert.equal(reply.threads[0]?.sessionId, "old");
+});

@@ -33,7 +33,7 @@ export function ConversationPanel({ agentId, projectName, groupId, conversation,
     const reply = await requestRef.current({ action: "history", ...target });
     if (reply.kind === "history") {
       setHistory(reply);
-      setSelected((current) => current && reply.sessions.some((item) => item.threadId === current) ? current : reply.sessions[0]?.threadId ?? "");
+      setSelected((current) => current && reply.sessions.some((item) => item.threadId === current && !item.detached) ? current : reply.sessions.find((item) => !item.detached)?.threadId ?? "");
       setError("");
     } else setError(reply.kind === "refused" ? reply.message : "无法读取会话历史。");
   }, [target]);
@@ -44,7 +44,7 @@ export function ConversationPanel({ agentId, projectName, groupId, conversation,
       if (!active) return;
       if (reply.kind === "history") {
         setHistory(reply);
-        setSelected(reply.sessions[0]?.threadId ?? "");
+        setSelected(reply.sessions.find((item) => !item.detached)?.threadId ?? "");
       } else setError(reply.kind === "refused" ? reply.message : "无法读取会话历史。");
     }).catch((failure: unknown) => { if (active) setError(failure instanceof Error ? failure.message : "无法读取会话历史。"); });
     return () => { active = false; };
@@ -85,17 +85,17 @@ export function ConversationPanel({ agentId, projectName, groupId, conversation,
     filter !== "resumable" && (!needle || `${item.summary} ${item.threadId} ${item.backend}`.toLocaleLowerCase().includes(needle)),
   ) ?? [];
   const threads = history?.threads.filter((item) =>
-    filter !== "bound" && !history.sessions.some((bound) => bound.sessionId === item.sessionId) &&
+    filter !== "bound" && !history.sessions.some((bound) => !bound.detached && bound.sessionId === item.sessionId) &&
     (!needle || `${item.name ?? ""} ${item.preview} ${item.sessionId}`.toLocaleLowerCase().includes(needle)),
   ) ?? [];
-  const current = history?.sessions.find((item) => item.threadId === selected);
+  const current = history?.sessions.find((item) => item.threadId === selected && !item.detached);
   const run = context?.threadId === selected ? context.run : null;
 
   return <>
     <SettingsGroup label="历史会话" action={<Button size="sm" disabled={busy} onClick={() => void refresh()}>刷新</Button>} footer="可以在飞书打开已绑定的话题。可恢复的旧会话会重新绑定到此项目。">
       <SettingsRow title="搜索" trailing={<input aria-label="搜索历史会话" className="settings-field" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="标题、摘要或会话 ID" />} />
       <SettingsRow title="筛选" trailing={<select aria-label="筛选历史会话" value={filter} onChange={(event) => setFilter(event.target.value === "bound" ? "bound" : event.target.value === "resumable" ? "resumable" : "all")}><option value="all">全部</option><option value="bound">已绑定话题</option><option value="resumable">可恢复会话</option></select>} />
-      {sessions.map((item) => <SettingsRow key={item.threadId} title={item.summary || "未命名会话"} description={`${new Date(item.updatedAt).toLocaleString()} · ${item.backend}`} trailing={<div className="settings-inline-actions"><Button size="sm" onClick={() => setSelected(item.threadId)}>管理</Button><Button size="sm" onClick={() => void request({ action: "openGroup", ...target, threadId: item.threadId }).then((reply) => { if (reply.kind === "refused") setError(reply.message); })}>在飞书打开</Button></div>} />)}
+      {sessions.map((item) => <SettingsRow key={item.threadId} title={item.summary || "未命名会话"} description={`${new Date(item.updatedAt).toLocaleString()} · ${item.backend}${item.detached ? " · 已归档" : ""}`} trailing={<div className="settings-inline-actions">{!item.detached && <Button size="sm" onClick={() => setSelected(item.threadId)}>管理</Button>}<Button size="sm" onClick={() => void request({ action: "openGroup", ...target, threadId: item.threadId }).then((reply) => { if (reply.kind === "refused") setError(reply.message); })}>在飞书打开</Button></div>} />)}
       {history?.threadsError && <InlineNotice title="旧会话暂不可读取" tone="warning">{history.threadsError}</InlineNotice>}
       {threads.map((item) => <SettingsRow key={item.sessionId} title={item.name || item.preview || "旧会话"} description={`${new Date(item.updatedAt * 1000).toLocaleString()} · 可恢复`} trailing={<Button size="sm" loading={busy} onClick={() => history && void execute({ action: "resume", ...target, sessionId: item.sessionId, backend: history.backend }, "已恢复会话。")}>恢复</Button>} />)}
       {sessions.length === 0 && threads.length === 0 && !history?.threadsError && <SettingsRow title="没有匹配的会话" description="可调整关键词或筛选条件。" />}

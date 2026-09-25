@@ -46,6 +46,7 @@ export const projectRecordSchema = z.object({
 export type ProjectRecord = z.infer<typeof projectRecordSchema>;
 
 const boundSession = z.object({
+  detached: z.boolean().optional(),
   threadId,
   chatId: groupIdSchema,
   sessionId,
