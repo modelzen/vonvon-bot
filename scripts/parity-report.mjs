@@ -109,7 +109,7 @@ if (!local) lines.push(
   "",
 );
 if (local) lines.push(
-  `本地观察汇总。通过 ${totals.PASS}，失败 ${totals.FAIL}，受阻 ${totals.BLOCKED}，待测 ${totals.NOT_RUN}。另有 ${checks.length} 条用例做过 Core 分项检查，分项结果不计为整条通过。`,
+  `本地观察汇总。通过 ${totals.PASS}，失败 ${totals.FAIL}，受阻 ${totals.BLOCKED}，待测 ${totals.NOT_RUN}。另有 ${checks.length} 条用例有分项检查记录，分项结果不计为整条通过。`,
   "",
   "本报告含本机执行证据。请保存在忽略目录中，不要提交真实群名、设备路径、聊天记录或临时文件路径。历史失败记录保留在输入观察文件内，表格展示每个平台最后一次观察。",
   "",
@@ -128,7 +128,7 @@ for (const item of manifest.cases) {
   if (item.desktopEvidence?.length) lines.push("**桌面源码核对位置**", "", ...item.desktopEvidence.map(value => `- ${source(value, item.id)}`), "");
   if (local) {
     const partial = checks.find(check => check.id === item.id);
-    if (partial) lines.push("**已执行的 Core 分项检查**", "", ...partial.checks.map(check => `- ${check.result}。${check.name} 证据 ${check.evidence}。`), "", "**仍需验证**", "", ...partial.remaining.map(value => `- ${value}`), "");
+    if (partial) lines.push("**已执行的分项检查**", "", ...partial.checks.map(check => `- ${check.result}。${check.name} 证据 ${check.evidence}。`), "", "**仍需验证**", "", ...partial.remaining.map(value => `- ${value}`), "");
     for (const platform of ["macos", "windows"]) {
       const result = latest.get(`${item.id}:${platform}`);
       lines.push(`**${platform}。${states[result?.status ?? "NOT_RUN"]}**`, "");
