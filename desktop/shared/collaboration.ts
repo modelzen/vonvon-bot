@@ -6,6 +6,8 @@ const threadId = z.string().min(1).max(1000);
 const sessionId = z.string().min(1).max(1000);
 const revision = z.string().min(1).max(256);
 const target = { agentId: agentIdSchema, projectName, groupId: groupIdSchema };
+export const usageShareSectionSchema = z.enum(["stats", "heatmap", "insights", "limits", "plan"]);
+export type UsageShareSection = z.infer<typeof usageShareSectionSchema>;
 const sessionTarget = { ...target, threadId };
 const backend = z.enum(["codex-appserver", "claude-agent"]);
 const conversation = z.enum(["shared", "threads"]);
@@ -29,7 +31,7 @@ export const collaborationRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("endGoal"), ...sessionTarget, runId: z.string().min(1).max(256) }).strict(),
   z.object({ action: z.literal("reminder"), ...sessionTarget, runId: z.string().min(1).max(256), requested: z.boolean() }).strict(),
   z.object({ action: z.literal("usage"), agentId: agentIdSchema, force: z.boolean() }).strict(),
-  z.object({ action: z.literal("shareUsage"), ...target }).strict(),
+  z.object({ action: z.literal("shareUsage"), ...target, sections: z.array(usageShareSectionSchema).max(5).optional() }).strict(),
   z.object({ action: z.literal("openGroup"), ...target, threadId: threadId.optional() }).strict(),
 ]);
 export type CollaborationRequest = z.infer<typeof collaborationRequestSchema>;
@@ -66,7 +68,15 @@ const resumableThread = z.object({
 const usageWindow = z.object({ usedPercent: z.number(), windowSeconds: z.number().optional(), resetAt: z.number().optional() });
 const usageBucket = z.object({ name: z.string().optional(), primary: usageWindow.optional(), secondary: usageWindow.optional() });
 const usageBundle = z.object({
-  profile: z.object({ displayName: z.string().optional(), lifetimeTokens: z.number().optional(), totalThreads: z.number().optional(), statsAsOf: z.string().optional() }),
+  profile: z.object({
+    displayName: z.string().optional(), lifetimeTokens: z.number().optional(), peakDailyTokens: z.number().optional(),
+    currentStreakDays: z.number().optional(), longestStreakDays: z.number().optional(), longestTurnSec: z.number().optional(),
+    totalThreads: z.number().optional(), fastModePct: z.number().optional(), totalSkillsUsed: z.number().optional(),
+    uniqueSkillsUsed: z.number().optional(), mostUsedEffort: z.string().optional(), mostUsedEffortPct: z.number().optional(),
+    topInvocations: z.array(z.object({ name: z.string(), count: z.number(), kind: z.enum(["plugin", "skill"]) })),
+    dailyBuckets: z.array(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), tokens: z.number() })),
+    statsAsOf: z.string().optional(),
+  }),
   usage: z.object({ planType: z.string().optional(), main: usageBucket, extras: z.array(usageBucket), fetchedAt: z.number() }),
 });
 
