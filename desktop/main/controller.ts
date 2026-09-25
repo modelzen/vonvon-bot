@@ -179,6 +179,7 @@ export class DesktopController {
         },
       });
       await this.refresh();
+      if (this.lifecycle === "open") await this.diagnose();
       if (this.lifecycle === "open")
         this.poll = setInterval(() => {
           if (!this.refreshing && this.lifecycle === "open")

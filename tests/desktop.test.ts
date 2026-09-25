@@ -155,6 +155,20 @@ async function until(condition: () => boolean) {
   assert.fail("Condition did not become true");
 }
 
+test("initial attachment displays the Host data directory without a manual diagnosis", async () => {
+  const f = fixture("attached");
+  f.setIntercept(path => path === "/api/host-doctor" ? Promise.resolve(Response.json({
+    node: "v24.14.1", platform: "darwin", arch: "arm64",
+    appDir: "/tmp/isolated/.feishu-codex-bridge", backends: [],
+  })) : undefined);
+  try {
+    await f.controller.start();
+    assert.equal(f.controller.current().application.dataPath, "/tmp/isolated/.feishu-codex-bridge");
+  } finally {
+    await f.controller.quit();
+  }
+});
+
 test("IPC denies foreign documents, subframes, arbitrary capabilities and malformed values", () => {
   assert.equal(
     trustedSender(

@@ -16,6 +16,7 @@
     "package:win": "npm run build && node scripts/check-package.mjs win32-x64 && electron-builder --win nsis --x64 --publish never",
     "test:native": "node scripts/test-native.mjs",
     "test:controls": "electron scripts/native-controls.cjs",
+    "test:settings-ui": "electron scripts/native-settings.cjs",
     "package:preview:mac": "node scripts/package-preview.mjs"
   },
   "dependencies": {
