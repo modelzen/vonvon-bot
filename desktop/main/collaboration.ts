@@ -32,7 +32,7 @@ const historyResult = z.object({
   sessions: z.array(z.object({
     threadId: z.string(), chatId: z.string(), sessionId: z.string(), summary: z.string(),
     backend: z.string(), cwd: z.string(),
-    createdAt: z.number(), updatedAt: z.number(),
+    createdAt: z.number(), updatedAt: z.number(), detached: z.boolean().optional(),
   })),
   threads: z.array(z.object({
     sessionId: z.string(), preview: z.string(), name: z.string().optional(),
