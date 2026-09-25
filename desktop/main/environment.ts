@@ -30,7 +30,7 @@ const outputLimit = 64 * 1024;
 export type EnvironmentServiceOptions = {
   home: string;
   getDataRoot: () => string;
-  resolveCodex: () => string | null;
+  resolveCodex: () => string | null | Promise<string | null>;
   nodePath: string;
   npmPath?: string;
   path?: string;
@@ -50,7 +50,7 @@ type ActiveOperation = {
 export class EnvironmentService {
   private readonly home: string;
   private readonly getDataRoot: () => string;
-  private readonly resolveCodex: () => string | null;
+  private readonly resolveCodex: () => string | null | Promise<string | null>;
   private readonly nodePath: string;
   private readonly npmPath?: string;
   private readonly searchPath: string;
@@ -61,6 +61,10 @@ export class EnvironmentService {
   private active?: ActiveOperation;
   private lastOperation: EnvironmentOperation | null = null;
   private mutation = false;
+  private closing = false;
+  private closePromise?: Promise<void>;
+  private readonly children = new Map<ChildProcess, Promise<void>>();
+  private readonly requests = new Set<Promise<EnvironmentReply>>();
 
   constructor(options: EnvironmentServiceOptions) {
     if (!isAbsolute(options.home) || !isAbsolute(options.nodePath)) throw new Error("Absolute home and Node paths required.");
@@ -72,11 +76,87 @@ export class EnvironmentService {
     this.searchPath = options.path ?? process.env.PATH ?? "";
     this.spawnProcess = options.spawnProcess ?? spawn;
     this.fetchLatest = options.fetchLatest ?? latestVersion;
-    this.hostRequest = options.hostRequest;
+    if (options.hostRequest) {
+      const request = options.hostRequest;
+      this.hostRequest = (path, init) => {
+        if (this.closing) return Promise.reject(new Error("本机环境正在退出。"));
+        return request(path, init);
+      };
+    }
     this.openExternal = options.openExternal;
   }
 
-  async run(request: EnvironmentRequest): Promise<EnvironmentReply> {
+  run(request: EnvironmentRequest): Promise<EnvironmentReply> {
+    if (this.closing) return Promise.resolve(refused("environment-closed", "本机环境正在退出。"));
+    const pending = this.execute(request);
+    this.requests.add(pending);
+    void pending.finally(() => this.requests.delete(pending));
+    return pending;
+  }
+
+  close(): Promise<void> {
+    this.closing = true;
+    this.closePromise ??= this.drain().catch((error: unknown) => {
+      this.closePromise = undefined;
+      throw error;
+    });
+    return this.closePromise;
+  }
+
+  private async drain(): Promise<void> {
+    await Promise.all([...this.children.keys()].map((child) => this.terminate(child)));
+    await within(Promise.all([...this.requests]), 5_000);
+  }
+
+  private launch(executablePath: string, args: string[], secret?: string): ChildProcess {
+    if (this.closing) throw new Error("本机环境正在退出。");
+    const child = this.spawnProcess(executablePath, args, {
+      env: this.environment(), stdio: [secret === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+      windowsHide: true, detached: process.platform !== "win32",
+    });
+    const closed = new Promise<void>((resolve) => child.once("close", resolve));
+    this.children.set(child, closed);
+    void closed.then(() => {
+      try { if (!this.groupAlive(child)) this.children.delete(child); }
+      catch { /* Retain ownership until close can confirm termination. */ }
+    });
+    return child;
+  }
+
+  private groupAlive(child: ChildProcess): boolean {
+    if (!child.pid) return false;
+    try { process.kill(process.platform === "win32" ? child.pid : -child.pid, 0); return true; }
+    catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ESRCH") return false;
+      throw error;
+    }
+  }
+
+  private async terminate(child: ChildProcess): Promise<void> {
+    const closed = this.children.get(child);
+    if (!closed) return;
+    for (const signal of ["SIGTERM", "SIGKILL"] as const) {
+      if (this.groupAlive(child)) {
+        if (process.platform === "win32") throw new Error("无法确认 Windows 工具进程树已退出。");
+        const pid = child.pid;
+        if (!pid) throw new Error("无法确认本机工具进程编号。");
+        try { process.kill(-pid, signal); }
+        catch (error) {
+          if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) throw error;
+        }
+      }
+      const deadline = Date.now() + 2_000;
+      while (this.groupAlive(child) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 25));
+      if (!this.groupAlive(child)) {
+        await within(closed, 2_000);
+        this.children.delete(child);
+        return;
+      }
+    }
+    throw new Error("无法确认本机工具进程已退出。");
+  }
+
+  private async execute(request: EnvironmentRequest): Promise<EnvironmentReply> {
     try {
       switch (request.type) {
         case "scan": return { kind: "tools", tools: await Promise.all(kinds.map((tool) => this.inspect(tool))) };
@@ -91,13 +171,13 @@ export class EnvironmentService {
         case "startLogin": return await this.startLogin(request.tool);
         case "loginStatus": return { kind: "operation", operation: this.lastOperation };
         case "openVerification": return await this.openVerification(request.operationId);
-        case "cancelLogin": return this.cancel(request.operationId);
+        case "cancelLogin": return await this.cancel(request.operationId);
         case "profileList": return await this.profileList();
         case "profileUse": return await this.profileUse(request.name);
         case "profileAdd": return await this.profileAdd(request);
         case "profileInit": return await this.profileInit(request.name);
         case "profileInitStatus": return { kind: "operation", operation: this.lastOperation };
-        case "profileInitCancel": return this.cancel(request.operationId);
+        case "profileInitCancel": return await this.cancel(request.operationId);
         default: {
           const exhaustive: never = request;
           return exhaustive;
@@ -116,7 +196,7 @@ export class EnvironmentService {
   private async resolveTool(tool: EnvironmentTool): Promise<{ executable: string; ownership: "managed" | "external" } | null> {
     const managed = this.managedExecutable(tool);
     if (tool === "codex") {
-      const selected = this.resolveCodex();
+      const selected = await this.resolveCodex();
       return selected ? { executable: selected, ownership: selected === managed ? "managed" : "external" } : null;
     }
     if (await executable(managed)) return { executable: managed, ownership: "managed" };
@@ -320,9 +400,9 @@ export class EnvironmentService {
     const id = randomUUID();
     const snapshot: EnvironmentOperation = { kind: "running", id, purpose, startedAt: Date.now() };
     let child: ChildProcess;
-    try { child = this.spawnProcess(executablePath, args, { env: this.environment(), stdio: ["ignore", "pipe", "pipe"], windowsHide: true }); }
+    try { child = this.launch(executablePath, args); }
     catch { return refused("launch-failed", "无法启动授权或创建流程。"); }
-    const timer = setTimeout(() => this.finishOperation(id, "timedOut", "操作超时。", true), timeoutMs);
+    const timer = setTimeout(() => { void this.stopOperation(id, "timedOut", "操作超时。").catch(() => undefined); }, timeoutMs);
     this.active = { snapshot, child, timer, output: "" };
     this.lastOperation = snapshot;
     const consume = (chunk: Buffer | string) => {
@@ -337,24 +417,35 @@ export class EnvironmentService {
     };
     child.stdout?.on("data", consume);
     child.stderr?.on("data", consume);
-    child.once("error", () => this.finishOperation(id, "failed", "无法启动授权或创建流程。", false));
-    child.once("close", (exitCode) => this.finishOperation(id, exitCode === 0 ? "succeeded" : "failed", exitCode === 0 ? "操作已完成。" : "操作未完成，请重试。", false));
+    child.once("error", () => this.finishOperation(id, "failed", "无法启动授权或创建流程。"));
+    child.once("close", (exitCode) => this.finishOperation(id, exitCode === 0 ? "succeeded" : "failed", exitCode === 0 ? "操作已完成。" : "操作未完成，请重试。"));
     return { kind: "operation", operation: snapshot };
   }
 
-  private finishOperation(id: string, kind: "succeeded" | "failed" | "cancelled" | "timedOut", message: string, kill: boolean): void {
+  private finishOperation(id: string, kind: "succeeded" | "failed" | "cancelled" | "timedOut", message: string): void {
     const current = this.active;
     if (!current || current.snapshot.id !== id) return;
     clearTimeout(current.timer);
-    if (kill) current.child.kill("SIGTERM");
     current.output = "";
     this.active = undefined;
     this.lastOperation = { kind, id, message };
   }
 
-  private cancel(id: string): EnvironmentReply {
+  private async stopOperation(id: string, kind: "cancelled" | "timedOut", message: string): Promise<void> {
+    const current = this.active;
+    if (!current || current.snapshot.id !== id) return;
+    clearTimeout(current.timer);
+    this.mutation = true;
+    try {
+      await this.terminate(current.child);
+      this.finishOperation(id, kind, message);
+      this.lastOperation = { kind, id, message };
+    } finally { this.mutation = false; }
+  }
+
+  private async cancel(id: string): Promise<EnvironmentReply> {
     if (!this.active || this.active.snapshot.id !== id) return refused("not-running", "操作已结束。");
-    this.finishOperation(id, "cancelled", "已取消。", true);
+    await this.stopOperation(id, "cancelled", "已取消。");
     return { kind: "operation", operation: this.lastOperation };
   }
 
@@ -377,12 +468,18 @@ export class EnvironmentService {
 
   private command(executablePath: string, args: string[], timeoutMs: number, secret?: string): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
     return new Promise((resolve, reject) => {
-      const child = this.spawnProcess(executablePath, args, { env: this.environment(), stdio: [secret === undefined ? "ignore" : "pipe", "pipe", "pipe"], windowsHide: true });
+      const child = this.launch(executablePath, args, secret);
       let stdout = "";
       let stderr = "";
       let bytes = 0;
       let settled = false;
-      const timer = setTimeout(() => { child.kill("SIGTERM"); finish(new Error("操作超时。")); }, timeoutMs);
+      let stoppingError: Error | undefined;
+      const stop = (error: Error) => {
+        if (stoppingError || settled) return;
+        stoppingError = error;
+        void this.terminate(child).then(() => finish(error), () => finish(new Error("无法停止本机工具。")));
+      };
+      const timer = setTimeout(() => stop(new Error("操作超时。")), timeoutMs);
       const finish = (error?: Error, exitCode?: number | null) => {
         if (settled) return;
         settled = true;
@@ -392,14 +489,14 @@ export class EnvironmentService {
       };
       const collect = (chunk: Buffer | string, retain: boolean) => {
         bytes += Buffer.byteLength(chunk);
-        if (bytes > outputLimit) { child.kill("SIGTERM"); finish(new Error("工具输出超过限制。")); return; }
+        if (bytes > outputLimit) { stop(new Error("工具输出超过限制。")); return; }
         if (retain) stdout += chunk.toString();
         else stderr += chunk.toString();
       };
       child.stdout?.on("data", (chunk: Buffer | string) => collect(chunk, true));
       child.stderr?.on("data", (chunk: Buffer | string) => collect(chunk, false));
       child.once("error", () => finish(new Error("无法启动本机工具。")));
-      child.once("close", (code) => finish(undefined, code));
+      child.once("close", (code) => finish(stoppingError, code));
       if (secret !== undefined) child.stdin?.end(`${secret}\n`);
     });
   }
@@ -448,4 +545,13 @@ function authenticationState(tool: EnvironmentTool, result: { exitCode: number |
   const identity = z.object({ available: z.boolean() });
   const parsed = z.object({ defaultAs: z.enum(["user", "bot"]), identities: z.object({ user: identity, bot: identity }) }).safeParse(json);
   return parsed.success ? parsed.data.identities[parsed.data.defaultAs].available ? "signedIn" : "signedOut" : "unknown";
+}
+
+async function within<T>(pending: Promise<T>, milliseconds: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([pending, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("本机环境仍有操作尚未退出。")), milliseconds);
+    })]);
+  } finally { clearTimeout(timer); }
 }
