@@ -1,7 +1,7 @@
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {z} from 'zod';
-import {machineRequestSchema, serviceStatusSchema, type MachineRequest, type MachineReply} from '../shared/machine';
+import {machineRequestSchema, serviceStatusSchema, coreUpdateStatusSchema, type MachineRequest, type MachineReply} from '../shared/machine';
 import type {HostHandle, HostRuntime} from './host';
 import {recentLogs} from './logs';
 import type {DesktopUpdater} from './updates';
@@ -77,7 +77,7 @@ export class MachineService {
         if (this.connected().ownership !== 'attached') throw new Error('内置 Core 随桌面应用更新。全局 CLI 更新仅适用于外部服务。');
         await this.json('/api/update','POST');
         return {type:'done',message:'外部 Core 更新已开始，可查看进度。桌面应用版本不受此操作影响。'};
-      case 'coreUpdateStatus': return {type:'coreUpdateStatus',status:await this.json('/api/update/status')};
+      case 'coreUpdateStatus': return {type:'coreUpdateStatus',status:coreUpdateStatusSchema.parse(await this.json('/api/update/status'))};
       case 'checkDesktopUpdate': return {type:'desktopUpdate',update:await this.hooks.updater.check()};
       case 'installDesktopUpdate': return {type:'desktopUpdate',update:await this.hooks.updater.install()};
     }
