@@ -1,15 +1,17 @@
 import {z} from 'zod';
+import {agentIdSchema} from './bridge';
 
 export const machineRequestSchema = z.discriminatedUnion('type', [
   z.object({type:z.literal('status')}),
   z.object({type:z.literal('service'), action:z.enum(['install','start','stop','uninstall'])}),
-  z.object({type:z.literal('startHost'), bot:z.string().regex(/^cli_[a-zA-Z0-9]+$/).optional()}),
+  z.object({type:z.literal('startHost'), bot:agentIdSchema.unwrap().optional()}),
   z.object({type:z.literal('stopHost')}),
   z.object({type:z.literal('logs')}),
   z.object({type:z.literal('checkCoreUpdate')}),
   z.object({type:z.literal('applyCoreUpdate')}),
   z.object({type:z.literal('coreUpdateStatus')}),
   z.object({type:z.literal('checkDesktopUpdate')}),
+  z.object({type:z.literal('openReleases')}),
   z.object({type:z.literal('installDesktopUpdate')}),
 ]);
 export type MachineRequest = z.infer<typeof machineRequestSchema>;

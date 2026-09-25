@@ -387,7 +387,7 @@ export class EnvironmentService {
 
   private async performInstall(tool: EnvironmentTool, update: boolean, signal: AbortSignal): Promise<EnvironmentReply> {
     const release = join(this.managedToolRoot(tool), "releases", randomUUID());
-    let published = false;
+    let exposed = false;
     try {
       signal.throwIfAborted();
       if (tool === "codex" && process.env.CODEX_BIN) return refused("explicit-codex", "当前使用显式 CODEX_BIN，请先移除此覆盖再安装托管 Codex。");
@@ -417,7 +417,7 @@ export class EnvironmentService {
       });
       signal.throwIfAborted();
       await this.publishManaged(tool, { schemaVersion: 1, tool, state: "active", generation: basename(release), version: manifest.version });
-      published = true;
+      exposed = true;
       let selected = false;
       try {
         const after = await this.resolveTool(tool);
@@ -426,13 +426,12 @@ export class EnvironmentService {
         if (!selected) {
           if (previousPointer === null) await rm(this.managedPointer(tool), { force: true });
           else await this.writeManagedPointer(tool, previousPointer);
-          published = false;
         }
       }
       if (!selected) return refused("install-not-selected", "当前 Bridge 未选用新版本，已保留原有工具；请检查 CODEX_BIN 等显式配置。");
       return { kind: "applied", message: `${tools[tool].executable} ${manifest.version} 已${update ? "更新" : "安装"}。` };
     } finally {
-      if (!published && this.children.size === 0) await rm(release, { recursive: true, force: true });
+      if (!exposed && this.children.size === 0) await rm(release, { recursive: true, force: true });
     }
   }
 
@@ -447,6 +446,13 @@ export class EnvironmentService {
   }
 
   private async authStatus(tool: EnvironmentTool): Promise<EnvironmentReply> {
+    if (tool === 'codex' && this.hostRequest) {
+      const response = await this.hostRequest('/api/tools/codex/setup');
+      if (!response.ok) return {kind: 'auth', tool, state: 'unknown', message: '无法检查 Bridge 当前 Codex 的授权。'};
+      const setup = z.object({authentication: z.enum(['signedIn', 'signedOut', 'notRequired', 'unknown'])}).parse(await response.json());
+      const state = setup.authentication === 'notRequired' ? 'signedIn' : setup.authentication;
+      return {kind: 'auth', tool, state, message: setup.authentication === 'notRequired' ? '当前服务无需 OpenAI 授权' : state === 'signedIn' ? '已授权' : state === 'signedOut' ? '尚未授权' : '无法确认授权状态，请重新检测。'};
+    }
     const resolved = await this.resolveTool(tool);
     if (!resolved) return { kind: "auth", tool, state: "unknown", message: "尚未安装。" };
     const args = tool === "codex" ? ["login", "status"] : tool === "claude" ? ["auth", "status"] : ["auth", "status", "--json"];
@@ -459,9 +465,10 @@ export class EnvironmentService {
   }
 
   private async startLogin(tool: EnvironmentTool): Promise<EnvironmentReply> {
+    if (tool === "codex") return refused("core-login-required", "请通过 Codex 授权入口完成设备码登录。");
     const resolved = await this.resolveTool(tool);
     if (!resolved) return refused("tool-missing", "请先安装工具。");
-    const args = tool === "codex" ? ["login", "--device-auth"] : tool === "claude" ? ["auth", "login"] : ["auth", "login", "--recommend", "--json"];
+    const args = tool === "claude" ? ["auth", "login"] : ["auth", "login", "--recommend", "--json"];
     return this.startOperation(resolved.executable, args, { kind: "login", tool }, 5 * 60_000);
   }
 
@@ -610,7 +617,7 @@ export class EnvironmentService {
       child.stdout?.on("data", (chunk: Buffer | string) => collect(chunk, true));
       child.stderr?.on("data", (chunk: Buffer | string) => collect(chunk, false));
       child.once("error", () => finish(new Error("无法启动本机工具。")));
-      child.once("close", (code) => finish(stoppingError, code));
+      child.once("close", (code) => {if (!stoppingError) finish(undefined, code);});
       signal?.addEventListener("abort", onAbort, { once: true });
       if (signal?.aborted) onAbort();
       if (secret !== undefined) child.stdin?.end(`${secret}\n`);

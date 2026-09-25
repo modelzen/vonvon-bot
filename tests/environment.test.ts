@@ -213,7 +213,8 @@ printf '#!/bin/sh\\necho codex-cli %s\\n' "$version" > "$prefix/bin/codex"
 chmod +x "$prefix/bin/codex"
 if [ -f "$HOME/hold-install" ]; then
   echo "$$" > "$HOME/npm-pid"
-  sleep 120
+  "${process.execPath}" -e 'process.on("SIGTERM",()=>{});require("fs").writeFileSync(process.env.HOME+"/npm-descendant",String(process.pid));setInterval(()=>{},1000)' >/dev/null 2>&1 &
+  wait
 fi
 `, { mode: 0o700 });
     await writeFile(join(home, "next-version"), "1.0.0");
@@ -229,6 +230,7 @@ fi
     assert.equal(status.kind === "toolInstall" && status.operation?.kind, "running");
     if (status.kind !== "toolInstall" || !status.operation || status.operation.kind !== "running") return;
     const pid = await fixturePid(join(home, "npm-pid"));
+    const descendant = await fixturePid(join(home, "npm-descendant"));
     assert.equal((await service.run({ type: "cancelInstall", operationId: "00000000-0000-4000-8000-000000000000" })).kind, "refused");
     process.kill(pid, 0);
     const cancelled = await service.run({ type: "cancelInstall", operationId: status.operation.id });
@@ -237,6 +239,7 @@ fi
     assert.deepEqual(await pending, { kind: "refused", code: "install-cancelled", message: "已取消安装，原工具仍可使用。" });
     assert.equal(await readFile(pointer, "utf8"), prior);
     assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+    assert.throws(() => process.kill(descendant, 0), { code: "ESRCH" });
   } finally { await rm(home, { recursive: true, force: true }); }
 });
 
@@ -274,16 +277,16 @@ test("Authorization reads Codex stderr and structured Claude and effective Lark 
 
 test("Close drains login and its subprocess before refusing further requests", async () => {
   const home = await mkdtemp(join(tmpdir(), "vonvon-close-login-"));
-  const cli = join(home, "codex");
+  const cli = join(home, "claude");
   const service = new EnvironmentService({ home, ...resolution(home), nodePath: process.execPath, path: home });
   try {
     await writeFile(cli, '#!/bin/sh\nsleep 120 &\necho "$!" > "$HOME/child-pid"\nwait\n', { mode: 0o700 });
-    const started = await service.run({ type: "startLogin", tool: "codex" });
+    const started = await service.run({ type: "startLogin", tool: "claude" });
     assert.equal(started.kind, "operation");
     const pid = await fixturePid(join(home, "child-pid"));
     await service.close();
     assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
-    assert.deepEqual(await service.run({ type: "startLogin", tool: "codex" }), { kind: "refused", code: "environment-closed", message: "本机环境正在退出。" });
+    assert.deepEqual(await service.run({ type: "startLogin", tool: "claude" }), { kind: "refused", code: "environment-closed", message: "本机环境正在退出。" });
     await service.close();
   } finally { await service.close(); await rm(home, { recursive: true, force: true }); }
 });
@@ -302,17 +305,17 @@ test("Close drains an npm install instead of allowing it to survive the desktop"
   } finally { await service.close(); await rm(home, { recursive: true, force: true }); }
 });
 
-test("Close prevents a delayed asynchronous resolver from launching a new login", async () => {
+test("Close prevents a delayed asynchronous resolver from launching an authorization probe", async () => {
   const home = await mkdtemp(join(tmpdir(), "vonvon-close-resolver-"));
   let release: (value: string | null) => void = () => { throw new Error("Resolver not initialized"); };
   const selected = new Promise<string | null>((resolve) => { release = resolve; });
   const service = new EnvironmentService({ home, getDataRoot: () => home, resolveCodex: () => selected, nodePath: process.execPath });
   try {
-    const pending = service.run({ type: "startLogin", tool: "codex" });
+    const pending = service.run({ type: "authStatus", tool: "codex" });
     const close = service.close();
     release(process.execPath);
     await close;
-    assert.equal((await pending).kind, "refused");
+    assert.deepEqual(await pending, {kind: "auth", tool: "codex", state: "unknown", message: "无法检查授权。"});
   } finally { await service.close(); await rm(home, { recursive: true, force: true }); }
 });
 

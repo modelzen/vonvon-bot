@@ -1,11 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import QRCode from "qrcode";
 import { Button } from "../reference/components/ui";
 import { SettingsGroup } from "../reference/components/system-settings";
 import "./environment.css";
+import {useDraft} from "../settings/DraftGuard";
 import type {
   BackendEntry,
   EnvironmentOperation,
+  ToolInstallOperation,
   EnvironmentProfile,
   EnvironmentReply,
   EnvironmentRequest,
@@ -13,18 +15,20 @@ import type {
   EnvironmentToolState,
 } from "../../shared/environment";
 
-type Props = { request: (request: EnvironmentRequest) => Promise<EnvironmentReply> };
+type Props = { request: (request: EnvironmentRequest) => Promise<EnvironmentReply>; onCodexLogin: () => Promise<void>; codexJobs: ReactNode; codexBusy: boolean };
 const labels: Record<EnvironmentTool, string> = {
   codex: "Codex CLI",
   claude: "Claude Code CLI",
   "lark-cli": "飞书 CLI",
 };
 
-export function EnvironmentPanel({ request }: Props) {
+export function EnvironmentPanel({ request, onCodexLogin, codexJobs, codexBusy }: Props) {
   const [tools, setTools] = useState<EnvironmentToolState[]>([]);
   const [profiles, setProfiles] = useState<EnvironmentProfile[]>([]);
   const [backends, setBackends] = useState<BackendEntry[]>([]);
   const [operation, setOperation] = useState<EnvironmentOperation | null>(null);
+  const [toolInstall, setToolInstall] = useState<ToolInstallOperation | null>(null);
+  const [cancelling, setCancelling] = useState(false);
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [name, setName] = useState("");
@@ -45,6 +49,31 @@ export function EnvironmentPanel({ request }: Props) {
 
   useEffect(() => { void refresh(); }, []);
   useEffect(() => {
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    async function poll() {
+      try {
+        const reply = await request({type: 'toolInstallStatus'});
+        if (active && reply.kind === 'toolInstall') setToolInstall(reply.operation);
+      } catch {if (active) setNotice('暂时无法读取安装进度，正在重试。');}
+      if (active) timer = setTimeout(() => void poll(), 500);
+    }
+    void poll();
+    return () => {active = false; clearTimeout(timer);};
+  }, [request]);
+  useEffect(() => {
+    if (toolInstall && toolInstall.kind !== 'running') void refresh();
+  }, [toolInstall?.id, toolInstall?.kind]);
+  async function cancelInstall(id: string) {
+    setCancelling(true);
+    try {
+      const reply = await request({type: 'cancelInstall', operationId: id});
+      if (reply.kind === 'toolInstall') setToolInstall(reply.operation);
+      if (reply.kind === 'refused') setNotice(reply.message);
+    } catch (error) {setNotice(error instanceof Error ? error.message : '无法取消安装。');}
+    finally {setCancelling(false);}
+  }
+  useEffect(() => {
     if (operation?.kind !== "running") return;
     const timer = setInterval(() => {
       void request({ type: "profileInitStatus" }).then((reply) => {
@@ -62,25 +91,40 @@ export function EnvironmentPanel({ request }: Props) {
 
   async function act(next: EnvironmentRequest) {
     setBusy(true);
-    setNotice("");
+    const actionName = next.type === 'install' || next.type === 'backendInstall' ? '安装' : next.type === 'update' ? '更新' : next.type === 'uninstall' || next.type === 'backendUninstall' ? '卸载' : '处理';
+    setNotice(`正在${actionName}，请稍候。`);
     try {
       const reply = await request(next);
       if (reply.kind === "refused" || reply.kind === "applied") setNotice(reply.message);
       if (reply.kind === "profiles") setProfiles(reply.profiles);
       if (reply.kind === "operation") setOperation(reply.operation);
-      if (["install", "update", "uninstall", "backendInstall", "backendUninstall"].includes(next.type)) await refresh();
-    } catch (error) { setNotice(error instanceof Error ? error.message : "操作失败。"); }
+      if (["install", "update", "uninstall", "backendInstall", "backendUninstall", "profileAdd", "profileUse"].includes(next.type)) await refresh();
+      return reply.kind !== "refused";
+    } catch (error) { setNotice(error instanceof Error ? error.message : "操作失败。"); return false; }
     finally { setBusy(false); }
   }
 
+  function discardProfile() {setName(''); setAppId(''); setAppSecret(''); setBrand('feishu'); setUseProfile(false);}
+  async function saveProfile() {
+    if (busy || !name.trim() || !appId.trim() || !appSecret) return false;
+    const saved = await act({type: 'profileAdd', name: name.trim(), appId: appId.trim(), appSecret, brand, use: useProfile});
+    if (saved) discardProfile();
+    return saved;
+  }
+  useDraft(Boolean(name || appId || appSecret || useProfile || brand !== 'feishu'), {title: '飞书 CLI Profile', save: saveProfile, discard: discardProfile});
   return <div className="environment-panel">
     <h2>本机环境</h2>
     <p>工具与飞书 CLI Profile 属于这台设备。Agent 和群配置在 Bridge 中单独管理。</p>
     {notice && <p role="status">{notice}</p>}
     <Button type="button" disabled={busy} onClick={() => void refresh()}>重新检测</Button>
     <SettingsGroup label="执行工具">
-      {tools.map((tool) => <ToolRow key={tool.tool} tool={tool} busy={busy} act={act} request={request} />)}
+      {tools.map((tool) => <ToolRow key={tool.tool} tool={tool} busy={busy || toolInstall?.kind === 'running' || (tool.tool === "codex" && codexBusy)} act={act} request={request} onCodexLogin={onCodexLogin} />)}
     </SettingsGroup>
+    {toolInstall && <div role="status" className="environment-operation">
+      <p>{toolInstall.kind === 'running' ? `${labels[toolInstall.tool]} 正在${toolInstall.update ? '更新' : '安装'}` : toolInstall.message}</p>
+      {toolInstall.kind === 'running' && <Button disabled={cancelling} onClick={() => void cancelInstall(toolInstall.id)}>{cancelling ? '正在取消' : '取消安装'}</Button>}
+    </div>}
+    {codexJobs}
     <SettingsGroup label="执行后端">
       <p>后端依赖与 Claude Code CLI 是不同的软件。只有由 Bridge 托管的后端可卸载。</p>
       {backends.map((backend) => <div key={backend.id} className="environment-row">
@@ -115,7 +159,7 @@ export function EnvironmentPanel({ request }: Props) {
         <label>App Secret<input type="password" value={appSecret} maxLength={512} onChange={(event) => setAppSecret(event.target.value)} /></label>
         <label>平台<select value={brand} onChange={(event) => setBrand(event.target.value === "lark" ? "lark" : "feishu")}><option value="feishu">飞书</option><option value="lark">Lark</option></select></label>
         <label><input type="checkbox" checked={useProfile} onChange={(event) => setUseProfile(event.target.checked)} />添加后设为当前</label>
-        <Button type="button" disabled={busy || !name.trim() || !appId.trim() || !appSecret} onClick={() => void act({ type: "profileAdd", name: name.trim(), appId: appId.trim(), appSecret, brand, use: useProfile }).then(() => setAppSecret(""))}>添加 Profile</Button>
+        <Button type="button" disabled={busy || !name.trim() || !appId.trim() || !appSecret} onClick={() => void saveProfile()}>添加 Profile</Button>
       </div>
       <h4>创建新应用 Profile</h4>
       <Button type="button" disabled={busy || !name.trim() || operation?.kind === "running"} onClick={() => void act({ type: "profileInit", name: name.trim() })}>创建并授权</Button>
@@ -123,11 +167,12 @@ export function EnvironmentPanel({ request }: Props) {
   </div>;
 }
 
-function ToolRow({ tool, busy, act, request }: {
+function ToolRow({ tool, busy, act, request, onCodexLogin }: {
   tool: EnvironmentToolState;
   busy: boolean;
-  act: (next: EnvironmentRequest) => Promise<void>;
+  act: (next: EnvironmentRequest) => Promise<boolean>;
   request: Props["request"];
+  onCodexLogin: Props["onCodexLogin"];
 }) {
   const [auth, setAuth] = useState<Extract<EnvironmentReply, { kind: "auth" }> | null>(null);
   async function checkAuth() {
@@ -139,7 +184,7 @@ function ToolRow({ tool, busy, act, request }: {
     let live = true;
     void request({ type: "authStatus", tool: tool.tool }).then(reply => { if (live && reply.kind === "auth") setAuth(reply); });
     return () => { live = false; };
-  }, [tool, request]);
+  }, [tool, request, busy]);
   return <div className="environment-row">
     <strong>{labels[tool.tool]}</strong>
     <span>{tool.installation === "missing" ? "未安装" : tool.installation === "managed" ? "Vonvon Bridge 托管" : "现有安装"} · {tool.version ?? "版本未知"}</span>
@@ -147,7 +192,7 @@ function ToolRow({ tool, busy, act, request }: {
     {tool.installation === "missing" && <Button type="button" disabled={busy} onClick={() => void act({ type: "install", tool: tool.tool })}>安装</Button>}
     {tool.installation !== "missing" && <Button type="button" disabled={busy} onClick={() => void checkAuth()}>检查授权</Button>}
     {auth && <span>{auth.message}</span>}
-    {tool.installation !== "missing" && auth?.state === "signedOut" && <Button type="button" disabled={busy} onClick={() => void act({ type: "startLogin", tool: tool.tool })}>授权</Button>}
+    {tool.installation !== "missing" && auth?.state === "signedOut" && <Button type="button" disabled={busy} onClick={() => {if (tool.tool === "codex") void onCodexLogin(); else void act({ type: "startLogin", tool: tool.tool });}}>授权</Button>}
     {tool.installation === "external" && <Button type="button" disabled={busy} onClick={() => void act({ type: "update", tool: tool.tool })}>安装新版托管副本</Button>}
     {tool.installation === "managed" && <Button type="button" disabled={busy} onClick={() => void act({ type: "update", tool: tool.tool })}>更新</Button>}
     {tool.canUninstall && <Button type="button" disabled={busy} onClick={() => void act({ type: "uninstall", tool: tool.tool })}>卸载托管副本</Button>}

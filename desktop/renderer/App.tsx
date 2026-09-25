@@ -39,14 +39,19 @@ import {
 } from "../shared/bridge";
 import type { CollaborationView, Page } from "./collaboration-model";
 import {SettingsPanel,membershipSettingsTarget} from "./settings/SettingsPanel";
+import {DraftGuardProvider, useDraftGuard} from './settings/DraftGuard';
+import {searchEntries, settingAnchor, type SearchEntry, type Selection} from './search';
+import {SearchDialog} from './SearchDialog';
+import {ProjectPanel} from './management/ProjectPanel';
+import {ConversationPanel} from './management/ConversationPanel';
+import {UsagePanel} from './management/UsagePanel';
+import {EnvironmentPanel} from './management/EnvironmentPanel';
+import {MachinePanel} from './management/MachinePanel';
+import {LogPanel} from './management/LogPanel';
+import {UpdatePanel} from './management/UpdatePanel';
 
-type Selection =
-  | { kind: "overview" }
-  | { kind: "agent"; id: AgentId }
-  | { kind: "group"; id: GroupId }
-  | { kind: "membership"; id: Membership["id"] };
 type Modal =
-  | { kind: "register"; jobId: JobId }
+  | { kind: "register"; jobId: JobId; refresh?: boolean }
   | { kind: "join"; agentId: AgentId }
   | { kind: "collaboration"; membership: Membership }
   | { kind: "deleteAgent"; agentId: AgentId; name: string }
@@ -72,6 +77,12 @@ const isActive = (job: Job) =>
   !["succeeded", "failed", "cancelled"].includes(job.phase);
 
 export function App() {
+  return <DraftGuardProvider><DesktopApp /></DraftGuardProvider>;
+}
+function DesktopApp() {
+  const {navigate} = useDraftGuard();
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [focusSection, setFocusSection] = useState<string>();
   const [snapshot, setSnapshot] = useState<DesktopSnapshot>();
   const [view, setView] = useState<CollaborationView>("agents");
   const [page, setPage] = useState<Page>("collaboration");
@@ -94,6 +105,32 @@ export function App() {
     "threads",
   );
   const [attachedNotice, setAttachedNotice] = useState(true);
+  useEffect(() => window.bridge.onQuitRequested(() => navigate(() => void window.bridge.run({type: 'quit'}))), [navigate]);
+  useEffect(() => {
+    function keydown(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault(); setSearchOpen(true);
+      }
+    }
+    window.addEventListener('keydown', keydown);
+    return () => window.removeEventListener('keydown', keydown);
+  }, []);
+  useEffect(() => {
+    if (!focusSection) return;
+    function focus() {
+      const section = document.getElementById(settingAnchor(focusSection!));
+      if (!section) return false;
+      section.scrollIntoView({block: 'start'});
+      section.tabIndex = -1;
+      section.focus({preventScroll: true});
+      setFocusSection(undefined);
+      return true;
+    }
+    if (focus()) return;
+    const observer = new MutationObserver(() => {if (focus()) observer.disconnect();});
+    observer.observe(document.getElementById('main-content') ?? document.body, {childList: true, subtree: true});
+    return () => observer.disconnect();
+  }, [focusSection, page, selection]);
   useEffect(
     () =>
       window.bridge.watch((next) => {
@@ -129,18 +166,35 @@ export function App() {
     }
   }
   function select(next: Selection) {
-    setSelection(next);
-    setPage("collaboration");
-    setNotice(undefined);
+    navigate(() => {
+      setSelection(next);
+      setPage("collaboration");
+      setNotice(undefined);
+    });
   }
   function openList(next: CollaborationView) {
-    setView(next);
-    select({ kind: "overview" });
+    navigate(() => {
+      setView(next);
+      setSelection({kind: 'overview'});
+      setPage('collaboration');
+      setNotice(undefined);
+    });
   }
-  async function register() {
-    const result = await run({ type: "registerAgent" });
+  function openPage(next: Page) { navigate(() => setPage(next)); }
+  function openSearchResult(entry: SearchEntry) {
+    setSearchOpen(false);
+    navigate(() => {
+      setPage(entry.destination.page);
+      if (entry.destination.view) setView(entry.destination.view);
+      if (entry.destination.selection) setSelection(entry.destination.selection);
+      setFocusSection(entry.destination.section);
+      setNotice(undefined);
+    });
+  }
+  async function register(agentId?: AgentId) {
+    const result = await run(agentId ? {type: "refreshAgentCredentials", agentId} : { type: "registerAgent" });
     if (result.kind === "started")
-      setModal({ kind: "register", jobId: result.jobId });
+      setModal({ kind: "register", jobId: result.jobId, refresh: Boolean(agentId) });
   }
   async function loadGroups(agentId: AgentId, cursor?: string) {
     const generation = modalGeneration.current;
@@ -306,7 +360,8 @@ export function App() {
         page={page}
         view={view}
         title={titles[page]}
-        onNavigate={setPage}
+        onNavigate={openPage}
+        onSearch={() => setSearchOpen(true)}
         onOpenList={openList}
         onBack={
           page === "collaboration" && selection.kind !== "overview"
@@ -372,7 +427,7 @@ export function App() {
                   <SettingsRow
                     icon={Wrench}
                     title="准备执行工具"
-                    onClick={() => setPage("environment")}
+                    onClick={() => openPage("environment")}
                     value={
                       snapshot.tools.some(
                         (t) =>
@@ -565,6 +620,8 @@ export function App() {
                         />
                       }
                     />
+                    <SettingsRow title="刷新飞书凭据" description="重新授权当前 Agent，保留群绑定、会话和设置。"
+                      trailing={<Button size="sm" disabled={busy || !ready} onClick={() => void register(agent.id)}>重新授权</Button>}/>
                     <SettingsRow
                       title="飞书权限与连接"
                       trailing={
@@ -576,7 +633,7 @@ export function App() {
                               type: "inspectAgent",
                               agentId: agent.id,
                             });
-                            setPage("diagnostics");
+                            openPage("diagnostics");
                           }}
                         >
                           检查
@@ -584,6 +641,8 @@ export function App() {
                       }
                     />
                   </SettingsGroup>
+                  <ProjectPanel key={`create-${agent.id}`} scope={{kind: 'agent', agentId: agent.id}} request={window.bridge.collaboration} onChanged={async () => {await run({type: 'refresh'});}}/>
+                  <UsagePanel key={`agent-usage-${agent.id}`} agentId={agent.id} request={window.bridge.collaboration}/>
                   <SettingsPanel
                     key={`agent-${agent.id}`}
                     target={{ kind: "agent", botId: agent.id }}
@@ -704,27 +763,9 @@ export function App() {
                       查看飞书群
                     </button>
                   </div>
-                  <SettingsGroup
-                    label="群内工作设置"
-                    footer="已有群的工作目录、执行工具和会话方式暂只支持查看，以保留已有会话。新绑定时可以选择。"
-                  >
-                    <SettingsRow
-                      title="工作目录"
-                      value={<code>{member.directory || "未设置"}</code>}
-                    />
-                    <SettingsRow
-                      title="执行工具"
-                      value={backendName(member.backend)}
-                    />
-                    <SettingsRow
-                      title="会话方式"
-                      value={
-                        member.conversation === "threads"
-                          ? "按话题独立会话"
-                          : "整群连续会话"
-                      }
-                    />
-                  </SettingsGroup>
+                  <ProjectPanel key={`manage-${member.id}`} scope={{kind: 'project', agentId: agent.id, groupId: group.id, projectName: member.name}} request={window.bridge.collaboration} onChanged={async () => {await run({type: 'refresh'});}} />
+                  <ConversationPanel key={`sessions-${member.id}`} agentId={agent.id} groupId={group.id} projectName={member.name} conversation={member.conversation} request={window.bridge.collaboration}/>
+                  <UsagePanel key={`usage-${member.id}`} agentId={agent.id} project={{groupId: group.id, projectName: member.name}} request={window.bridge.collaboration}/>
                   <SettingsPanel
                     key={`project-${member.id}`}
                     target={membershipSettingsTarget(member)}
@@ -748,90 +789,7 @@ export function App() {
               )}
             </>
           )}
-          {page === "environment" && (
-            <>
-              <SettingsGroup
-                label="Agent 的执行工具"
-                footer="执行工具负责在本机完成任务。工具安装和账号授权分别检查。"
-              >
-                {snapshot.tools.map((t) => (
-                  <SettingsRow
-                    key={t.tool}
-                    icon={Terminal}
-                    title={t.tool === "codex" ? "Codex" : "Claude"}
-                    description={
-                      <>
-                        {t.installation === "installed"
-                          ? "已安装"
-                          : t.installation === "missing"
-                            ? "未安装"
-                            : "安装状态未知"}
-                        {t.version ? ` · ${t.version}` : ""} ·{" "}
-                        {t.authentication === "signedIn"
-                          ? "已授权"
-                          : t.authentication === "notRequired"
-                            ? "当前提供方无需 OpenAI 登录"
-                            : t.authentication === "signedOut"
-                              ? "尚未授权"
-                              : "授权状态未知"}
-                        {t.message && (
-                          <>
-                            <br />
-                            {t.message}
-                          </>
-                        )}
-                      </>
-                    }
-                    trailing={
-                      t.tool === "codex" ? (
-                        <div className="desktop-actions">
-                          {t.installation === "missing" &&
-                            !snapshot.jobs.some(
-                              (job) =>
-                                isActive(job) && job.type === "installCodex",
-                            ) && (
-                              <Button
-                                size="sm"
-                                disabled={busy || !ready}
-                                onClick={() => void run({ type: "installCodex" })}
-                              >
-                                安装 Codex
-                              </Button>
-                            )}
-                          {t.installation === "installed" &&
-                            t.authentication === "signedOut" &&
-                            !snapshot.jobs.some(
-                              (job) => isActive(job) && job.type === "loginCodex",
-                            ) && (
-                              <Button
-                                size="sm"
-                                disabled={busy || !ready}
-                                onClick={() =>
-                                  void run({ type: "startCodexLogin" })
-                                }
-                              >
-                                登录 Codex
-                              </Button>
-                            )}
-                        </div>
-                      ) : undefined
-                    }
-                  />
-                ))}
-              </SettingsGroup>
-              {snapshot.jobs
-                .filter((job) => job.type !== "registerAgent")
-                .map((job) => (
-                  <JobPanel key={job.id} job={job} run={run} busy={busy} />
-                ))}
-              <Button
-                disabled={busy}
-                onClick={() => void run({ type: "refresh" })}
-              >
-                重新检查
-              </Button>
-            </>
-          )}
+          {page === "environment" && <EnvironmentPanel codexBusy={snapshot.jobs.some(job => (job.type === "loginCodex" || job.type === "installCodex") && isActive(job))} request={window.bridge.environment} onCodexLogin={async () => {await run({type: "startCodexLogin"});}} codexJobs={snapshot.jobs.filter(job => job.type === "loginCodex" || job.type === "installCodex").map(job => <JobPanel key={job.id} job={job} run={run} busy={busy}/>)}/>}
           {page === "application" && (
             <>
               <SettingsGroup label="这台设备">
@@ -887,6 +845,8 @@ export function App() {
                   }
                 />
               </SettingsGroup>
+              <MachinePanel request={window.bridge.machine} agents={snapshot.agents}/>
+              <UpdatePanel request={window.bridge.machine} attached={host.kind === 'connected' && host.ownership === 'attached'}/>
               <SettingsPanel target={{ kind: "host" }} />
               <SettingsGroup
                 label="窗口与退出"
@@ -909,7 +869,7 @@ export function App() {
                     <Button
                       size="sm"
                       disabled={busy}
-                      onClick={() => void run({ type: "quit" })}
+                      onClick={() => navigate(() => void run({ type: "quit" }))}
                     >
                       退出应用
                     </Button>
@@ -946,13 +906,15 @@ export function App() {
                   value={<code>{snapshot.application.dataPath}</code>}
                 />
               </SettingsGroup>
+              <LogPanel request={window.bridge.machine}/>
               {snapshot.diagnostics.map((diagnostic, index) => (
                 <InlineNotice
                   key={`${diagnostic.title}-${index}`}
                   title={diagnostic.title}
-                  tone={diagnostic.status === "ok" ? "success" : "warning"}
+                  tone={diagnostic.status === "ok" ? "success" : diagnostic.status === "error" ? "danger" : "warning"}
                 >
                   {diagnostic.message}
+                  {diagnostic.eventConfigUrl && <Button size="sm" onClick={() => {if (diagnostic.eventConfigUrl) void run({type: "openEventSettings", url: diagnostic.eventConfigUrl});}}>打开事件设置</Button>}
                 </InlineNotice>
               ))}
               <Button
@@ -965,12 +927,13 @@ export function App() {
           )}
         </div>
       </AppShell>
+      <SearchDialog open={searchOpen} entries={searchEntries(snapshot)} onClose={() => setSearchOpen(false)} onSelect={openSearchResult}/>
       <Dialog
         open={modal !== null && modal.kind !== "deleteAgent"}
         onClose={() => void closeModal()}
         title={
           modal?.kind === "register"
-            ? "注册 Agent"
+            ? modal.refresh ? "刷新 Agent 凭据" : "注册 Agent"
             : modal?.kind === "join"
               ? "让 Agent 加入飞书群"
               : "开始一次协作"
@@ -979,7 +942,7 @@ export function App() {
         <div className="page-stack">
           {feedback}
           {modal?.kind === "register" && registration && (
-            <JobPanel job={registration} run={run} busy={busy} />
+            <><p>{modal.refresh ? "重新授权这个 Agent，保留原有项目、群绑定和设置。请使用此 Agent 的管理员身份完成授权。" : "连接飞书机器人身份。"}</p><JobPanel job={registration} run={run} busy={busy} /></>
           )}
           {modal?.kind === "join" && (
             <>

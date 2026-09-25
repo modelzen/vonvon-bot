@@ -13,6 +13,7 @@ export interface MachineHooks {
   stopHost():Promise<void>;
   startHost(bot?:string):Promise<void>;
   updater:DesktopUpdater;
+  openReleases?:()=>Promise<void>;
   serviceCommand?:(action:'status'|'install'|'start'|'stop'|'uninstall')=>Promise<unknown>;
 }
 export class MachineService {
@@ -122,6 +123,10 @@ export class MachineService {
         await this.json('/api/update','POST');
         return {type:'done',message:'外部 Core 更新已开始，可查看进度。桌面应用版本不受此操作影响。'};
       case 'coreUpdateStatus': return {type:'coreUpdateStatus',status:coreUpdateStatusSchema.parse(await this.json('/api/update/status'))};
+      case 'openReleases':
+        if (!this.hooks.openReleases) throw new Error('发布页入口不可用。');
+        await this.hooks.openReleases();
+        return {type:'done',message:'已打开官方发布页'};
       case 'checkDesktopUpdate': return {type:'desktopUpdate',update:await this.hooks.updater.check()};
       case 'installDesktopUpdate': return {type:'desktopUpdate',update:await this.hooks.updater.install()};
     }

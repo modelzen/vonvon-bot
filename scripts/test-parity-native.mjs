@@ -12,11 +12,13 @@ import { createNativeFixture } from './native-fixtures.mjs';
 if (process.platform !== 'darwin' || process.arch !== 'arm64' || process.env.CI) throw new Error('Local macOS arm64 test only');
 const args = process.argv.slice(2);
 const injectedFailure = args.includes('--inject-failure=after-host');
-if (args.length !== (injectedFailure ? 2 : 1) || !args.includes('--os-service-fixture=absent') || args.some(arg => !['--os-service-fixture=absent', '--inject-failure=after-host'].includes(arg))) throw new Error('Requires explicit absent OS service fixture; only after-host failure injection is supported');
+const requestedScenario = args.find(arg => arg.startsWith('--scenario='))?.slice('--scenario='.length);
+const availableScenarios = ['migration', 'conflict', 'delete', 'active', 'restart', 'temporary', 'crash', 'logs', 'environment'];
+if (!args.includes('--os-service-fixture=absent') || args.some(arg => !['--os-service-fixture=absent', '--inject-failure=after-host', ...(requestedScenario ? [`--scenario=${requestedScenario}`] : [])].includes(arg)) || (requestedScenario && !availableScenarios.includes(requestedScenario)) || (requestedScenario && injectedFailure)) throw new Error('Use --os-service-fixture=absent and optional --scenario=<name> or --inject-failure=after-host');
 const require = createRequire(import.meta.url);
 const runtime = resolve('build/runtime/mac-arm64');
 const node = join(runtime, 'node/bin/node');
-const modes = injectedFailure ? ['migration'] : ['migration', 'conflict', 'delete', 'active', 'restart'];
+const modes = injectedFailure ? ['migration'] : requestedScenario ? [requestedScenario] : availableScenarios;
 const summary = [];
 const audit = resolve('.audit/macos-round2');
 await mkdir(audit, { recursive: true });
@@ -87,14 +89,17 @@ for (const mode of modes) {
   const env = {
     ...process.env,
     HOME: home, USERPROFILE: home, CODEX_HOME: join(home, '.codex'),
+    CLAUDE_CONFIG_DIR: join(home, '.claude'), npm_config_cache: join(home, '.npm'),
     XDG_CONFIG_HOME: join(home, '.config'), XDG_CACHE_HOME: join(home, '.cache'), XDG_DATA_HOME: join(home, '.local/share'),
     VONVON_DESKTOP_TEST_HOME: home, VONVON_PARITY_MODE: mode,
     ...(injectedFailure ? { VONVON_PARITY_INJECT_FAILURE: 'after-host' } : {}),
     VONVON_OS_QUERIES: 'explicit-development-fixture',
+    VONVON_UNUSED_FIXTURE_SECRET: 'unused-isolated-test-secret',
     VONVON_NPM_CLI: join(runtime, 'node/lib/node_modules/npm/bin/npm-cli.js'),
     PATH: `${join(runtime, 'node/bin')}:${join(home, 'probe-bin')}:/usr/bin:/bin:/usr/sbin:/sbin`,
   };
   for (const key of ['CODEX_BIN','CLAUDE_BIN','ELECTRON_RUN_AS_NODE','OPENAI_API_KEY','CODEX_API_KEY','CHATGPT_AUTH_TOKEN']) delete env[key];
+  for (const key of Object.keys(env)) if (/^(LARK|LARKSUITE|ANTHROPIC)_/.test(key)) delete env[key];
   const run = (file, args) => new Promise((accept, reject) => {
     const child = spawn(file, args, { env, stdio: 'inherit' });
     child.once('error', reject);
@@ -145,6 +150,8 @@ for (const mode of modes) {
       assert.equal(result.restart.savedSetting, null);
       assert.deepEqual(result.restart.preservedAgentIds, ['cli_fixture_content', 'cli_fixture_engineering']);
     }
+    if (mode === 'crash') assert.equal(result.rendererCrashed, true);
+    if (mode === 'temporary') assert.equal(result.temporary.persistedSetUnchanged, true);
     const inspector = join(home, 'inspect.mjs');
     await writeFile(inspector, `import {inspectHost} from ${JSON.stringify(pathToFileURL(join(runtime, 'core/dist/host.js')).href)}; const result=await inspectHost(${JSON.stringify(home)}); if(result.kind!=='absent')throw new Error(JSON.stringify(result)); process.stdout.write('Owned Host absent after quit.\\n');`);
     await run(node, [inspector]);
@@ -154,5 +161,5 @@ for (const mode of modes) {
     await writeFile(join(audit, `${mode}-cleanup.json`), JSON.stringify(cleanup, null, 2));
   }
 }
-await writeFile(join(audit, injectedFailure ? 'injected-failure-cleanup.json' : 'native-summary.json'), JSON.stringify(injectedFailure ? { cleaned: true, mode: 'migration', cleanup: JSON.parse(await readFile(join(audit, 'migration-cleanup.json'), 'utf8')) } : summary, null, 2));
+await writeFile(join(audit, injectedFailure ? 'injected-failure-cleanup.json' : requestedScenario ? `${requestedScenario}-summary.json` : 'native-summary.json'), JSON.stringify(injectedFailure ? { cleaned: true, mode: 'migration', cleanup: JSON.parse(await readFile(join(audit, 'migration-cleanup.json'), 'utf8')) } : summary, null, 2));
 process.stdout.write(`macOS native parity scenarios complete: ${modes.join(', ')}\n`);

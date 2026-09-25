@@ -29,6 +29,8 @@ test("usage reply retains activity statistics and daily buckets from Core", () =
 
 test("share request accepts Core card sections and rejects unknown choices", () => {
   const request = { action: "shareUsage", agentId, projectName: "Demo", groupId, sections: ["stats", "heatmap"] };
-  assert.deepEqual(collaborationRequestSchema.parse(request).sections, ["stats", "heatmap"]);
+  const parsed = collaborationRequestSchema.parse(request);
+  assert.equal(parsed.action, "shareUsage");
+  if (parsed.action === "shareUsage") assert.deepEqual(parsed.sections, ["stats", "heatmap"]);
   assert.equal(collaborationRequestSchema.safeParse({ ...request, sections: ["unlisted"] }).success, false);
 });
