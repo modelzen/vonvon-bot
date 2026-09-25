@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EnvironmentService } from "../desktop/main/environment";
@@ -71,7 +71,7 @@ test("Only an eligible managed backend can invoke the authenticated Core install
     const blocked = await service.run({ type: "backendInstall", id: "codex-appserver", update: false });
     assert.equal(blocked.kind, "refused");
     const installed = await service.run({ type: "backendInstall", id: "claude-agent", update: false });
-    assert.equal(installed.kind, "applied");
+    assert.equal(installed.kind, "applied", JSON.stringify(installed));
     assert.deepEqual(calls, ["GET /api/backends", "GET /api/backends", "POST /api/backends/claude-agent/install"]);
   } finally { await rm(home, { recursive: true, force: true }); }
 });
@@ -86,14 +86,10 @@ test("Tool installation and removal stay in the Vonvon managed directory", async
     await writeFile(npm, `#!/bin/sh
 prefix="$4"
 printf '%s\\n' "$@" > "$HOME/npm-args"
-if [ "$1" = install ]; then
-  mkdir -p "$prefix/lib/node_modules/@openai/codex" "$prefix/bin"
-  printf '{"name":"@openai/codex","version":"1.2.3"}' > "$prefix/lib/node_modules/@openai/codex/package.json"
-  printf '#!/bin/sh\\necho codex-cli 1.2.3\\n' > "$prefix/bin/codex"
-  chmod +x "$prefix/bin/codex"
-else
-  rm -f "$prefix/lib/node_modules/@openai/codex/package.json" "$prefix/bin/codex"
-fi
+mkdir -p "$prefix/lib/node_modules/@openai/codex" "$prefix/bin"
+printf '{"name":"@openai/codex","version":"1.2.3"}' > "$prefix/lib/node_modules/@openai/codex/package.json"
+printf '#!/bin/sh\\necho codex-cli 1.2.3\\n' > "$prefix/bin/codex"
+chmod +x "$prefix/bin/codex"
 `);
     await chmod(npm, 0o700);
     const service = new EnvironmentService({ home, ...resolution(home, root), nodePath: "/usr/bin/node", npmPath: npm, path: home, fetchLatest: async () => "1.2.3" });
@@ -101,7 +97,7 @@ fi
     assert.equal(initial.kind, "tools");
     if (initial.kind === "tools") assert.equal(initial.tools.find((tool) => tool.tool === "codex")?.installation, "external");
     const installed = await service.run({ type: "update", tool: "codex" });
-    assert.equal(installed.kind, "applied");
+    assert.equal(installed.kind, "applied", JSON.stringify(installed));
     const after = await service.run({ type: "scan" });
     assert.equal(after.kind, "tools");
     if (after.kind === "tools") {
@@ -113,6 +109,7 @@ fi
     assert.match(await readFile(join(home, "npm-args"), "utf8"), /@openai\/codex@latest/);
     const removed = await service.run({ type: "uninstall", tool: "codex" });
     assert.equal(removed.kind, "applied");
+    assert.match(await readFile(join(root, "managed-tools", "codex", "current.json"), "utf8"), /"state":"disabled"/);
     const final = await service.run({ type: "scan" });
     if (final.kind === "tools") assert.equal(final.tools.find((tool) => tool.tool === "codex")?.installation, "external");
     assert.equal(existsSync(join(home, ".vonvon-bridge")), false);
@@ -120,10 +117,100 @@ fi
   } finally { await rm(home, { recursive: true, force: true }); }
 });
 
+test("A failed or unselected CLI update keeps the previously selected release", async () => {
+  const home = await mkdtemp(join(tmpdir(), "vonvon-tool-update-"));
+  const npm = join(home, "npm");
+  const root = join(home, ".vonvon-bridge");
+  try {
+    await writeFile(npm, `#!/bin/sh
+prefix="$4"
+version="$(cat "$HOME/next-version")"
+mkdir -p "$prefix/lib/node_modules/@openai/codex" "$prefix/bin"
+printf '{"name":"@openai/codex","version":"%s"}' "$version" > "$prefix/lib/node_modules/@openai/codex/package.json"
+printf '#!/bin/sh\\necho codex-cli %s\\n' "$version" > "$prefix/bin/codex"
+chmod +x "$prefix/bin/codex"
+if [ -f "$HOME/fail-install" ]; then exit 7; fi
+`);
+    await chmod(npm, 0o700);
+    await writeFile(join(home, "next-version"), "1.2.3");
+    const service = new EnvironmentService({ home, ...resolution(home, root), nodePath: process.execPath, npmPath: npm, path: home, fetchLatest: async () => null });
+    assert.equal((await service.run({ type: "install", tool: "codex" })).kind, "applied");
+    const pointer = join(root, "managed-tools", "codex", "current.json");
+    const first = await readFile(pointer, "utf8");
+    const firstSelection = await service.run({ type: "scan" });
+    assert.equal(firstSelection.kind, "tools");
+    const firstBin = firstSelection.kind === "tools" ? firstSelection.tools.find((tool) => tool.tool === "codex")?.executable : null;
+    assert.ok(firstBin);
+    await writeFile(join(home, "next-version"), "2.0.0");
+    await writeFile(join(home, "fail-install"), "yes");
+    const failed = await service.run({ type: "update", tool: "codex" });
+    assert.deepEqual(failed, { kind: "refused", code: "install-failed", message: "工具安装失败，请检查网络连接或 npm 配置。" });
+    assert.equal(await readFile(pointer, "utf8"), first);
+    assert.equal((await service.run({ type: "scan" })).kind, "tools");
+    assert.match(await readFile(firstBin, "utf8"), /1\.2\.3/);
+    await rm(join(home, "fail-install"));
+    assert.equal((await service.run({ type: "update", tool: "codex" })).kind, "applied");
+    const second = await readFile(pointer, "utf8");
+    assert.notEqual(second, first);
+    assert.match(second, /"version":"2\.0\.0"/);
+    assert.match(await readFile(firstBin, "utf8"), /1\.2\.3/);
+    const finalSelection = await service.run({ type: "scan" });
+    assert.equal(finalSelection.kind, "tools");
+    if (finalSelection.kind === "tools") assert.equal(finalSelection.tools.find((tool) => tool.tool === "codex")?.version, "2.0.0");
+  } finally { await rm(home, { recursive: true, force: true }); }
+});
+
+test("A resolver override refuses to replace the selected CLI", async () => {
+  const home = await mkdtemp(join(tmpdir(), "vonvon-tool-override-"));
+  const npm = join(home, "npm");
+  const external = join(home, "codex");
+  try {
+    await writeFile(external, "#!/bin/sh\necho codex-cli 1.0.0\n", { mode: 0o700 });
+    await writeFile(npm, `#!/bin/sh
+prefix="$4"
+mkdir -p "$prefix/lib/node_modules/@openai/codex" "$prefix/bin"
+printf '{"name":"@openai/codex","version":"2.0.0"}' > "$prefix/lib/node_modules/@openai/codex/package.json"
+printf '#!/bin/sh\\necho codex-cli 2.0.0\\n' > "$prefix/bin/codex"
+chmod +x "$prefix/bin/codex"
+`, { mode: 0o700 });
+    const service = new EnvironmentService({ home, getDataRoot: () => join(home, ".vonvon-bridge"), resolveCodex: () => external, nodePath: process.execPath, npmPath: npm, path: home, fetchLatest: async () => null });
+    assert.deepEqual(await service.run({ type: "update", tool: "codex" }), { kind: "refused", code: "install-not-selected", message: "当前 Bridge 未选用新版本，已保留原有工具；请检查 CODEX_BIN 等显式配置。" });
+    assert.equal(existsSync(join(home, ".vonvon-bridge", "managed-tools", "codex", "current.json")), false);
+    assert.match(await readFile(external, "utf8"), /1\.0\.0/);
+  } finally { await rm(home, { recursive: true, force: true }); }
+});
+
+test("Concurrent tool mutations serialize before resolving npm", async () => {
+  const home = await mkdtemp(join(tmpdir(), "vonvon-tool-concurrent-"));
+  const npm = join(home, "npm");
+  try {
+    await writeFile(npm, `#!/bin/sh
+prefix="$4"
+sleep 0.2
+mkdir -p "$prefix/lib/node_modules/@openai/codex" "$prefix/bin"
+printf '{"name":"@openai/codex","version":"1.0.0"}' > "$prefix/lib/node_modules/@openai/codex/package.json"
+printf '#!/bin/sh\\necho codex-cli 1.0.0\\n' > "$prefix/bin/codex"
+chmod +x "$prefix/bin/codex"
+`, { mode: 0o700 });
+    const service = new EnvironmentService({ home, ...resolution(home), nodePath: process.execPath, npmPath: npm, path: home, fetchLatest: async () => null });
+    const first = service.run({ type: "install", tool: "codex" });
+    assert.deepEqual(await service.run({ type: "update", tool: "codex" }), { kind: "refused", code: "busy", message: "另一个本机环境操作正在进行。" });
+    assert.equal((await first).kind, "applied");
+  } finally { await rm(home, { recursive: true, force: true }); }
+});
+
 function resolution(home: string, root = join(home, ".vonvon-bridge")) {
   return {
     getDataRoot: () => root,
     resolveCodex: () => {
+      const pointer = join(root, "managed-tools", "codex", "current.json");
+      if (existsSync(pointer)) {
+        const selected: unknown = JSON.parse(readFileSync(pointer, "utf8"));
+        if (typeof selected === "object" && selected !== null && "state" in selected) {
+          if (selected.state === "disabled") return existsSync(join(home, "codex")) ? join(home, "codex") : null;
+          if (selected.state === "active" && "generation" in selected && typeof selected.generation === "string") return join(root, "managed-tools", "codex", "releases", selected.generation, "bin", "codex");
+        }
+      }
       const managed = join(root, "managed-tools", "bin", "codex");
       const external = join(home, "codex");
       return existsSync(managed) ? managed : existsSync(external) ? external : null;
