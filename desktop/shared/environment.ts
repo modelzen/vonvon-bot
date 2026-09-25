@@ -13,6 +13,8 @@ export const environmentRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("backendUninstall"), id: z.string().regex(/^[a-z0-9-]{1,80}$/) }).strict(),
   z.object({ type: z.literal("install"), tool: environmentToolSchema }).strict(),
   z.object({ type: z.literal("update"), tool: environmentToolSchema }).strict(),
+  z.object({ type: z.literal("toolInstallStatus") }).strict(),
+  z.object({ type: z.literal("cancelInstall"), operationId }).strict(),
   z.object({ type: z.literal("uninstall"), tool: environmentToolSchema }).strict(),
   z.object({ type: z.literal("authStatus"), tool: environmentToolSchema }).strict(),
   z.object({ type: z.literal("startLogin"), tool: environmentToolSchema }).strict(),
@@ -65,6 +67,9 @@ export type BackendEntry = z.infer<typeof backendEntrySchema>;
 export type EnvironmentOperation =
   | { kind: "running"; id: string; purpose: { kind: "login"; tool: EnvironmentTool } | { kind: "profileInit" }; url?: string; startedAt: number }
   | { kind: "succeeded" | "failed" | "cancelled" | "timedOut"; id: string; message: string };
+export type ToolInstallOperation =
+  | { kind: "running"; id: string; tool: EnvironmentTool; update: boolean; startedAt: number }
+  | { kind: "succeeded" | "failed" | "cancelled"; id: string; message: string };
 export type EnvironmentReply =
   | { kind: "tools"; tools: EnvironmentToolState[] }
   | { kind: "backends"; entries: BackendEntry[] }
@@ -72,5 +77,6 @@ export type EnvironmentReply =
   | { kind: "profiles"; profiles: EnvironmentProfile[] }
   | { kind: "auth"; tool: EnvironmentTool; state: "signedIn" | "signedOut" | "unknown"; message: string }
   | { kind: "operation"; operation: EnvironmentOperation | null }
+  | { kind: "toolInstall"; operation: ToolInstallOperation | null }
   | { kind: "applied"; message: string }
   | { kind: "refused"; code: string; message: string };
