@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
 import QRCode from "qrcode";
+import { Button } from "../reference/components/ui";
+import { SettingsGroup } from "../reference/components/system-settings";
+import "./environment.css";
 import type {
   BackendEntry,
   EnvironmentOperation,
@@ -35,6 +38,7 @@ export function EnvironmentPanel({ request }: Props) {
     const [toolReply, profileReply, backendReply, operationReply] = await Promise.all([request({ type: "scan" }), request({ type: "profileList" }), request({ type: "backendCatalog" }), request({ type: "profileInitStatus" })]);
     if (toolReply.kind === "tools") setTools(toolReply.tools);
     if (profileReply.kind === "profiles") setProfiles(profileReply.profiles);
+    else if (profileReply.kind === "refused" && profileReply.code !== "tool-missing") setNotice(profileReply.message);
     if (backendReply.kind === "backends") setBackends(backendReply.entries);
     if (operationReply.kind === "operation") setOperation(operationReply.operation);
   }
@@ -73,36 +77,36 @@ export function EnvironmentPanel({ request }: Props) {
     <h2>本机环境</h2>
     <p>工具与飞书 CLI Profile 属于这台设备。Agent 和群配置在 Bridge 中单独管理。</p>
     {notice && <p role="status">{notice}</p>}
-    <button type="button" disabled={busy} onClick={() => void refresh()}>重新检测</button>
-    <section aria-label="执行工具"><h3>执行工具</h3>
+    <Button type="button" disabled={busy} onClick={() => void refresh()}>重新检测</Button>
+    <SettingsGroup label="执行工具">
       {tools.map((tool) => <ToolRow key={tool.tool} tool={tool} busy={busy} act={act} request={request} />)}
-    </section>
-    <section aria-label="执行后端"><h3>执行后端</h3>
+    </SettingsGroup>
+    <SettingsGroup label="执行后端">
       <p>后端依赖与 Claude Code CLI 是不同的软件。只有由 Bridge 托管的后端可卸载。</p>
       {backends.map((backend) => <div key={backend.id} className="environment-row">
         <strong>{backend.displayName}</strong>
         <span>{backend.depState} · {backend.version ?? backend.installedVersion ?? "版本未知"}</span>
         {backend.hint && <span>{backend.hint}</span>}
-        {backend.installable && <button type="button" disabled={busy} onClick={() => void act({ type: "backendInstall", id: backend.id, update: false })}>安装</button>}
-        {backend.installedVersion && backend.depKind === "npm-ondemand" && <button type="button" disabled={busy} onClick={() => void request({ type: "backendVersion", id: backend.id }).then((reply) => { if (reply.kind === "backendVersion") setNotice(reply.latest ? `已安装 ${reply.installed ?? "未知"}，最新 ${reply.latest}` : "暂时无法查询最新版本。"); })}>检查版本</button>}
-        {backend.installedVersion && backend.depKind === "npm-ondemand" && <button type="button" disabled={busy} onClick={() => void act({ type: "backendInstall", id: backend.id, update: true })}>更新</button>}
-        {backend.canUninstall && <button type="button" disabled={busy} onClick={() => void act({ type: "backendUninstall", id: backend.id })}>卸载</button>}
+        {backend.installable && <Button type="button" disabled={busy} onClick={() => void act({ type: "backendInstall", id: backend.id, update: false })}>安装</Button>}
+        {backend.installedVersion && backend.depKind === "npm-ondemand" && <Button type="button" disabled={busy} onClick={() => void request({ type: "backendVersion", id: backend.id }).then((reply) => { if (reply.kind === "backendVersion") setNotice(reply.latest ? `已安装 ${reply.installed ?? "未知"}，最新 ${reply.latest}` : "暂时无法查询最新版本。"); })}>检查版本</Button>}
+        {backend.installedVersion && backend.depKind === "npm-ondemand" && <Button type="button" disabled={busy} onClick={() => void act({ type: "backendInstall", id: backend.id, update: true })}>更新</Button>}
+        {backend.canUninstall && <Button type="button" disabled={busy} onClick={() => void act({ type: "backendUninstall", id: backend.id })}>卸载</Button>}
       </div>)}
-    </section>
+    </SettingsGroup>
     {operation && <div role="status" className="environment-operation">
       <p>{operation.kind === "running" ? operation.purpose.kind === "login" ? `${labels[operation.purpose.tool]} 等待授权` : "等待创建应用" : operation.message}</p>
       {operation.kind === "running" && <>
-        {operation.url && <><button type="button" onClick={() => void act({ type: "openVerification", operationId: operation.id })}>打开授权链接</button><input readOnly aria-label="授权链接" value={operation.url} />{qr && <img src={qr} alt="授权二维码" width={210} height={210} />}</>}
-        <button type="button" onClick={() => void act({ type: operation.purpose.kind === "login" ? "cancelLogin" : "profileInitCancel", operationId: operation.id })}>取消</button>
+        {operation.url && <><Button type="button" onClick={() => void act({ type: "openVerification", operationId: operation.id })}>打开授权链接</Button><input readOnly aria-label="授权链接" value={operation.url} />{qr && <img src={qr} alt="授权二维码" width={210} height={210} />}</>}
+        <Button type="button" onClick={() => void act({ type: operation.purpose.kind === "login" ? "cancelLogin" : "profileInitCancel", operationId: operation.id })}>取消</Button>
       </>}
-      {operation.kind === "succeeded" && <button type="button" onClick={() => void refresh()}>重新检测</button>}
+      {operation.kind === "succeeded" && <Button type="button" onClick={() => void refresh()}>重新检测</Button>}
     </div>}
-    <section aria-label="飞书 CLI Profile"><h3>飞书 CLI Profile</h3>
+    <SettingsGroup label="飞书 CLI Profile">
       <p>切换 Profile 会影响飞书 CLI 的登录和 API 调用，不会改变已注册 Agent。</p>
       {profiles.map((profile) => <div key={profile.name} className="environment-row">
-        <strong>{profile.name}{profile.active ? " · 当前" : ""}</strong>
+        <strong>{profile.name}{profile.effective ? " · 生效中" : profile.active ? " · 默认" : ""}</strong>
         <span>{profile.brand} · {profile.appId} · {profile.user ?? "未登录"} · {profile.tokenStatus ?? "状态未知"}</span>
-        {!profile.active && <button type="button" disabled={busy} onClick={() => void act({ type: "profileUse", name: profile.name })}>设为当前</button>}
+        {!profile.active && <Button type="button" disabled={busy} onClick={() => void act({ type: "profileUse", name: profile.name })}>设为当前</Button>}
       </div>)}
       <h4>添加已有应用</h4>
       <div className="environment-form">
@@ -111,11 +115,11 @@ export function EnvironmentPanel({ request }: Props) {
         <label>App Secret<input type="password" value={appSecret} maxLength={512} onChange={(event) => setAppSecret(event.target.value)} /></label>
         <label>平台<select value={brand} onChange={(event) => setBrand(event.target.value === "lark" ? "lark" : "feishu")}><option value="feishu">飞书</option><option value="lark">Lark</option></select></label>
         <label><input type="checkbox" checked={useProfile} onChange={(event) => setUseProfile(event.target.checked)} />添加后设为当前</label>
-        <button type="button" disabled={busy || !name.trim() || !appId.trim() || !appSecret} onClick={() => void act({ type: "profileAdd", name: name.trim(), appId: appId.trim(), appSecret, brand, use: useProfile }).then(() => setAppSecret(""))}>添加 Profile</button>
+        <Button type="button" disabled={busy || !name.trim() || !appId.trim() || !appSecret} onClick={() => void act({ type: "profileAdd", name: name.trim(), appId: appId.trim(), appSecret, brand, use: useProfile }).then(() => setAppSecret(""))}>添加 Profile</Button>
       </div>
       <h4>创建新应用 Profile</h4>
-      <button type="button" disabled={busy || !name.trim() || operation?.kind === "running"} onClick={() => void act({ type: "profileInit", name: name.trim() })}>创建并授权</button>
-    </section>
+      <Button type="button" disabled={busy || !name.trim() || operation?.kind === "running"} onClick={() => void act({ type: "profileInit", name: name.trim() })}>创建并授权</Button>
+    </SettingsGroup>
   </div>;
 }
 
@@ -125,16 +129,27 @@ function ToolRow({ tool, busy, act, request }: {
   act: (next: EnvironmentRequest) => Promise<void>;
   request: Props["request"];
 }) {
-  const [auth, setAuth] = useState("");
+  const [auth, setAuth] = useState<Extract<EnvironmentReply, { kind: "auth" }> | null>(null);
+  async function checkAuth() {
+    const reply = await request({ type: "authStatus", tool: tool.tool });
+    if (reply.kind === "auth") setAuth(reply);
+  }
+  useEffect(() => {
+    if (tool.installation === "missing") { setAuth(null); return; }
+    let live = true;
+    void request({ type: "authStatus", tool: tool.tool }).then(reply => { if (live && reply.kind === "auth") setAuth(reply); });
+    return () => { live = false; };
+  }, [tool, request]);
   return <div className="environment-row">
     <strong>{labels[tool.tool]}</strong>
-    <span>{tool.installation === "missing" ? "未安装" : tool.installation === "managed" ? "Vonvon Bridge 托管" : "外部安装"} · {tool.version ?? "版本未知"}</span>
+    <span>{tool.installation === "missing" ? "未安装" : tool.installation === "managed" ? "Vonvon Bridge 托管" : "现有安装"} · {tool.version ?? "版本未知"}</span>
     {tool.latestVersion && <span>最新 {tool.latestVersion}</span>}
-    {tool.installation === "missing" && <button type="button" disabled={busy} onClick={() => void act({ type: "install", tool: tool.tool })}>安装</button>}
-    {tool.installation !== "missing" && <button type="button" disabled={busy} onClick={() => void request({ type: "authStatus", tool: tool.tool }).then((reply) => { if (reply.kind === "auth") setAuth(reply.message); })}>检查授权</button>}
-    {auth && <span>{auth}</span>}
-    {tool.installation !== "missing" && <button type="button" disabled={busy} onClick={() => void act({ type: "startLogin", tool: tool.tool })}>授权</button>}
-    {tool.installation === "managed" && <button type="button" disabled={busy} onClick={() => void act({ type: "update", tool: tool.tool })}>更新</button>}
-    {tool.canUninstall && <button type="button" disabled={busy} onClick={() => void act({ type: "uninstall", tool: tool.tool })}>卸载托管副本</button>}
+    {tool.installation === "missing" && <Button type="button" disabled={busy} onClick={() => void act({ type: "install", tool: tool.tool })}>安装</Button>}
+    {tool.installation !== "missing" && <Button type="button" disabled={busy} onClick={() => void checkAuth()}>检查授权</Button>}
+    {auth && <span>{auth.message}</span>}
+    {tool.installation !== "missing" && auth?.state === "signedOut" && <Button type="button" disabled={busy} onClick={() => void act({ type: "startLogin", tool: tool.tool })}>授权</Button>}
+    {tool.installation === "external" && <Button type="button" disabled={busy} onClick={() => void act({ type: "update", tool: tool.tool })}>安装新版托管副本</Button>}
+    {tool.installation === "managed" && <Button type="button" disabled={busy} onClick={() => void act({ type: "update", tool: tool.tool })}>更新</Button>}
+    {tool.canUninstall && <Button type="button" disabled={busy} onClick={() => void act({ type: "uninstall", tool: tool.tool })}>卸载托管副本</Button>}
   </div>;
 }

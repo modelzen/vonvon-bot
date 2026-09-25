@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
@@ -28,6 +29,8 @@ const outputLimit = 64 * 1024;
 
 export type EnvironmentServiceOptions = {
   home: string;
+  getDataRoot: () => string;
+  resolveCodex: () => string | null;
   nodePath: string;
   npmPath?: string;
   path?: string;
@@ -46,6 +49,8 @@ type ActiveOperation = {
 
 export class EnvironmentService {
   private readonly home: string;
+  private readonly getDataRoot: () => string;
+  private readonly resolveCodex: () => string | null;
   private readonly nodePath: string;
   private readonly npmPath?: string;
   private readonly searchPath: string;
@@ -60,6 +65,8 @@ export class EnvironmentService {
   constructor(options: EnvironmentServiceOptions) {
     if (!isAbsolute(options.home) || !isAbsolute(options.nodePath)) throw new Error("Absolute home and Node paths required.");
     this.home = options.home;
+    this.getDataRoot = options.getDataRoot;
+    this.resolveCodex = options.resolveCodex;
     this.nodePath = options.nodePath;
     this.npmPath = options.npmPath;
     this.searchPath = options.path ?? process.env.PATH ?? "";
@@ -101,13 +108,17 @@ export class EnvironmentService {
     }
   }
 
-  private managedRoot(): string { return join(this.home, ".vonvon-bridge", "managed-tools"); }
+  private managedRoot(): string { return join(this.getDataRoot(), "managed-tools"); }
   private managedExecutable(tool: EnvironmentTool): string {
     return join(this.managedRoot(), "bin", process.platform === "win32" ? `${tools[tool].executable}.cmd` : tools[tool].executable);
   }
 
   private async resolveTool(tool: EnvironmentTool): Promise<{ executable: string; ownership: "managed" | "external" } | null> {
     const managed = this.managedExecutable(tool);
+    if (tool === "codex") {
+      const selected = this.resolveCodex();
+      return selected ? { executable: selected, ownership: selected === managed ? "managed" : "external" } : null;
+    }
     if (await executable(managed)) return { executable: managed, ownership: "managed" };
     const candidates = [dirname(this.nodePath), ...this.searchPath.split(delimiter), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"];
     for (const directory of candidates) {
@@ -218,8 +229,6 @@ export class EnvironmentService {
 
   private async install(tool: EnvironmentTool, update: boolean): Promise<EnvironmentReply> {
     if (this.mutation || this.active) return refused("busy", "另一个本机环境操作正在进行。");
-    const before = await this.inspect(tool);
-    if (update && before.installation !== "managed") return refused("external-install", "此工具由其他安装方式管理，无法从 Vonvon Bridge 更新。可安装独立的托管副本。");
     const npm = await this.resolveNpm();
     if (!npm) return refused("npm-missing", "未找到 npm，无法安装工具。");
     this.mutation = true;
@@ -228,7 +237,7 @@ export class EnvironmentService {
       const result = await this.command(npm, ["install", "--global", "--prefix", this.managedRoot(), `${tools[tool].package}@latest`, "--no-audit", "--no-fund"], 10 * 60_000);
       if (result.exitCode !== 0) return refused("install-failed", "工具安装失败，请检查网络连接或 npm 配置。");
       const after = await this.inspect(tool);
-      if (after.installation !== "managed" || !after.version) return refused("install-incomplete", "安装命令已结束，但没有检测到可用的工具。");
+      if (after.installation !== "managed" || !after.version) return refused("install-incomplete", "安装命令已结束，但 Bridge 尚未选用托管工具。请检查 CODEX_BIN 等显式配置。");
       return { kind: "applied", message: `${tools[tool].executable} ${after.version} 已${update ? "更新" : "安装"}。` };
     } finally { this.mutation = false; }
   }
@@ -249,10 +258,12 @@ export class EnvironmentService {
   private async authStatus(tool: EnvironmentTool): Promise<EnvironmentReply> {
     const resolved = await this.resolveTool(tool);
     if (!resolved) return { kind: "auth", tool, state: "unknown", message: "尚未安装。" };
-    const args = tool === "codex" ? ["login", "status"] : tool === "claude" ? ["auth", "status"] : ["auth", "status"];
+    const args = tool === "codex" ? ["login", "status"] : tool === "claude" ? ["auth", "status"] : ["auth", "status", "--json"];
     const result = await this.command(resolved.executable, args, 12_000).catch(() => null);
     if (!result) return { kind: "auth", tool, state: "unknown", message: "无法检查授权。" };
-    const signedIn = result.exitCode === 0 && !/not logged in|not authenticated|no active token|未登录|未授权/i.test(result.stdout);
+    const state = authenticationState(tool, result);
+    const signedIn = state === "signedIn";
+    if (state === "unknown") return { kind: "auth", tool, state, message: "无法确认授权状态，请重新检测。" };
     return { kind: "auth", tool, state: signedIn ? "signedIn" : "signedOut", message: signedIn ? "已授权" : "尚未授权" };
   }
 
@@ -364,10 +375,11 @@ export class EnvironmentService {
     return { HOME: this.home, USERPROFILE: this.home, PATH: [dirname(this.nodePath), join(this.managedRoot(), "bin"), this.searchPath, "/usr/bin", "/bin"].join(delimiter), LANG: "en_US.UTF-8", LARKSUITE_CLI_NO_SKILLS_NOTIFIER: "1", LARKSUITE_CLI_NO_UPDATE_NOTIFIER: "1" };
   }
 
-  private command(executablePath: string, args: string[], timeoutMs: number, secret?: string): Promise<{ exitCode: number | null; stdout: string }> {
+  private command(executablePath: string, args: string[], timeoutMs: number, secret?: string): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
     return new Promise((resolve, reject) => {
       const child = this.spawnProcess(executablePath, args, { env: this.environment(), stdio: [secret === undefined ? "ignore" : "pipe", "pipe", "pipe"], windowsHide: true });
       let stdout = "";
+      let stderr = "";
       let bytes = 0;
       let settled = false;
       const timer = setTimeout(() => { child.kill("SIGTERM"); finish(new Error("操作超时。")); }, timeoutMs);
@@ -376,12 +388,13 @@ export class EnvironmentService {
         settled = true;
         clearTimeout(timer);
         if (error) reject(error);
-        else resolve({ exitCode: exitCode ?? null, stdout });
+        else resolve({ exitCode: exitCode ?? null, stdout, stderr });
       };
       const collect = (chunk: Buffer | string, retain: boolean) => {
         bytes += Buffer.byteLength(chunk);
         if (bytes > outputLimit) { child.kill("SIGTERM"); finish(new Error("工具输出超过限制。")); return; }
         if (retain) stdout += chunk.toString();
+        else stderr += chunk.toString();
       };
       child.stdout?.on("data", (chunk: Buffer | string) => collect(chunk, true));
       child.stderr?.on("data", (chunk: Buffer | string) => collect(chunk, false));
@@ -405,7 +418,7 @@ function verificationUrl(output: string): string | undefined {
     try {
       const url = new URL(value.replace(/[),.;]+$/, ""));
       if (url.protocol === "https:" && !url.username && !url.password && !url.port && allowedHosts.has(url.hostname)) return url.toString();
-    } catch { /* Ignore malformed command output. */ }
+    } catch {}
   }
   return undefined;
 }
@@ -418,4 +431,21 @@ async function latestVersion(name: string): Promise<string | null> {
   const body: unknown = JSON.parse(new TextDecoder().decode(bytes));
   if (typeof body !== "object" || body === null || !("name" in body) || !("version" in body)) return null;
   return body.name === name && typeof body.version === "string" && /^\d+\.\d+\.\d+/.test(body.version) ? body.version : null;
+}
+
+function authenticationState(tool: EnvironmentTool, result: { exitCode: number | null; stdout: string; stderr: string }): "signedIn" | "signedOut" | "unknown" {
+  if (tool === "codex") {
+    const output = `${result.stdout}\n${result.stderr}`;
+    if (/not logged in|not authenticated|未登录|未授权/i.test(output)) return "signedOut";
+    return result.exitCode === 0 && /logged in|authenticated|已登录|已授权/i.test(output) ? "signedIn" : "unknown";
+  }
+  let json: unknown;
+  try { json = JSON.parse(result.stdout); } catch { return "unknown"; }
+  if (tool === "claude") {
+    const parsed = z.object({ loggedIn: z.boolean() }).safeParse(json);
+    return parsed.success ? parsed.data.loggedIn ? "signedIn" : "signedOut" : "unknown";
+  }
+  const identity = z.object({ available: z.boolean() });
+  const parsed = z.object({ defaultAs: z.enum(["user", "bot"]), identities: z.object({ user: identity, bot: identity }) }).safeParse(json);
+  return parsed.success ? parsed.data.identities[parsed.data.defaultAs].available ? "signedIn" : "signedOut" : "unknown";
 }
