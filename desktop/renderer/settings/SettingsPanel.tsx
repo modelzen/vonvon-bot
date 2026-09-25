@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Button, InlineNotice, Toggle } from "../reference/components/ui";
 import {
   SettingsGroup,
@@ -1486,6 +1486,7 @@ function ProjectPanel({
         render={(draft, set, disabled) => (
           <SettingsRow
             title="不 @ 也能发起任务"
+            description="按话题独立会话时，已有话题和群内支持的命令免 @。整群连续会话时，群内普通消息也会响应。"
             trailing={
               <Switch
                 label="不 @ 也能发起任务"
@@ -1963,78 +1964,94 @@ function HostPanel({
   );
 }
 export function SettingsPanel({ target }: { target: Target }) {
+  const key = JSON.stringify([
+    target.kind,
+    "botId" in target ? target.botId : null,
+    "projectName" in target ? target.projectName : null,
+  ]);
+  return <ScopedSettingsPanel key={key} target={target} />;
+}
+function ScopedSettingsPanel({ target }: { target: Target }) {
+  const [scope] = useState(target);
   const [view, setView] = useState<SettingsView>();
-  const [error, setError] = useState<string>();
-  async function refresh() {
-    try {
-      const reply = await window.bridge.settings({
-        type: "read",
-        scope: target,
-      });
-      if (
-        reply.kind === "view" &&
-        JSON.stringify(reply.view.scope) === JSON.stringify(target)
-      ) {
+  const [notice, setNotice] = useState<{
+    kind: "error" | "paused";
+    message: string;
+  }>();
+  const mounted = useRef(false);
+  const cancelRead = useRef<() => void>(() => {});
+  const refresh = useCallback(async () => {
+    if (!mounted.current) return;
+    cancelRead.current();
+    let cancelled = false;
+    let timer: number | undefined;
+    let timeout: number | undefined;
+    const deadline = Date.now() + 30000;
+    const delays = [1000, 2000, 4000, 8000, 8000];
+    const cancellation = new Promise<undefined>((resolve) => {
+      cancelRead.current = () => {
+        cancelled = true;
+        window.clearTimeout(timer);
+        window.clearTimeout(timeout);
+        resolve(undefined);
+      };
+    });
+    setNotice(undefined);
+    async function read(attempt: number): Promise<void> {
+      if (cancelled) return;
+      try {
+        const reply = await Promise.race([
+          cancellation,
+          window.bridge.settings({ type: "read", scope }),
+          new Promise<never>((_, reject) => {
+            timeout = window.setTimeout(
+              () => reject(new Error("读取超时，请重新读取。未保存的修改已保留。")),
+              Math.min(10000, Math.max(0, deadline - Date.now())),
+            );
+          }),
+        ]);
+        window.clearTimeout(timeout);
+        if (cancelled || reply === undefined) return;
+        if (reply.kind !== "view" || JSON.stringify(reply.view.scope) !== JSON.stringify(scope)) {
+          throw new Error(reply.kind === "refused" ? reply.message : "设置身份与当前选择不一致。");
+        }
         setView(reply.view);
-        setError(undefined);
-      } else
-        setError(
-          reply.kind === "refused"
-            ? reply.message
-            : "设置身份与当前选择不一致。",
-        );
-    } catch (failure) {
-      setError(
-        failure instanceof Error
-          ? failure.message
-          : "设置暂不可用，请重新读取。",
-      );
+        setNotice(undefined);
+        if (!isAgentView(reply.view) || reply.view.voice.feishu.state !== "testing") return;
+        const wait = delays[attempt];
+        if (wait === undefined || Date.now() + wait >= deadline) {
+          setNotice({ kind: "paused", message: "检查尚未完成，已暂停自动刷新。可重新读取；未保存的修改已保留。" });
+          return;
+        }
+        timer = window.setTimeout(() => void read(attempt + 1), wait);
+      } catch (failure) {
+        window.clearTimeout(timeout);
+        if (!cancelled) setNotice({
+          kind: "error",
+          message: failure instanceof Error ? failure.message : "设置暂不可用，请重新读取。",
+        });
+      }
     }
-  }
+    await read(0);
+  }, [scope]);
   useEffect(() => {
-    let active = true;
-    setView(undefined);
-    setError(undefined);
-    void window.bridge
-      .settings({ type: "read", scope: target })
-      .then((reply) => {
-        if (!active) return;
-        if (
-          reply.kind === "view" &&
-          JSON.stringify(reply.view.scope) === JSON.stringify(target)
-        )
-          setView(reply.view);
-        else
-          setError(
-            reply.kind === "refused"
-              ? reply.message
-              : "设置身份与当前选择不一致。",
-          );
-      })
-      .catch((failure: unknown) => {
-        if (active)
-          setError(
-            failure instanceof Error
-              ? failure.message
-              : "设置暂不可用，请重新读取。",
-          );
-      });
+    mounted.current = true;
+    void refresh();
     return () => {
-      active = false;
+      mounted.current = false;
+      cancelRead.current();
     };
-  }, [JSON.stringify(target)]);
-  if (error)
-    return (
-      <InlineNotice title="设置暂不可用" tone="danger">
-        {error}
-      </InlineNotice>
-    );
-  if (!view)
-    return (
-      <SettingsGroup label="设置">
-        <SettingsRow title="正在读取当前设置…" />
-      </SettingsGroup>
-    );
+  }, [refresh]);
+  const status = notice ? (
+    <InlineNotice title={notice.kind === "error" ? "设置暂不可用" : "检查仍在进行"} tone="warning">
+      {notice.message}
+    </InlineNotice>
+  ) : null;
+  if (!view) return (
+    <SettingsGroup label="设置" action={<Button size="sm" onClick={() => void refresh()}>重新读取</Button>}>
+      {status ?? <SettingsRow title="正在读取当前设置…" />}
+    </SettingsGroup>
+  );
   const content = isAgentView(view) ? (
     <AgentPanel view={view} refresh={refresh} />
   ) : isProjectView(view) ? (
@@ -2065,6 +2082,7 @@ export function SettingsPanel({ target }: { target: Target }) {
           }
         />
       </SettingsGroup>
+      {status}
       {content}
     </>
   );

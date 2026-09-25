@@ -153,7 +153,7 @@ async function start():Promise<void> {
   const coreRoot=join(runtime,'core');
   const coreHost=join(coreRoot,'dist','host.js');
   const cliPath=join(coreRoot,'bin','feishu-codex-bridge.mjs');
-  const application={platform:process.platform==='darwin'?'macos':process.platform==='win32'?'windows':'unsupported',version:app.getVersion(),loginItem:app.getLoginItemSettings().openAtLogin,dataPath:join(home,'.vonvon-bridge')} as const;
+  const application={platform:process.platform==='darwin'?'macos':process.platform==='win32'?'windows':'unsupported',version:app.getVersion(),loginItem:app.getLoginItemSettings().openAtLogin,dataPath:'尚未确认'} as const;
   try {
     await Promise.all([nodePath,npmPath,coreHost,cliPath].map(path=>stat(path)));
     process.env.PATH=`${dirname(nodePath)}${delimiter}${process.env.PATH??''}`;
