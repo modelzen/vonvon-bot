@@ -33,9 +33,11 @@ export const environmentProfileSchema = z.object({
   appId: z.string().min(1).max(256),
   brand: z.enum(["feishu", "lark"]),
   active: z.boolean(),
+  effective: z.boolean().optional(),
+  effectiveSource: z.string().max(128).optional(),
   user: z.string().max(256).optional(),
   tokenStatus: z.string().max(128).optional(),
-}).strict();
+});
 export type EnvironmentProfile = z.infer<typeof environmentProfileSchema>;
 
 export type EnvironmentToolState = {

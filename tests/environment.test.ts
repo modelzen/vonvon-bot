@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EnvironmentService } from "../desktop/main/environment";
@@ -13,7 +14,7 @@ test("Profile operations use fixed arguments, secret stdin and isolated CLI stat
     await writeFile(cli, `#!/bin/sh
 case "$1 $2" in
   "--version ") echo 'lark-cli version 1.2.3' ;;
-  "profile list") echo '[{"name":"demo","appId":"cli_fixture","brand":"feishu","active":true}]' ;;
+  "profile list") echo '[{"name":"demo","appId":"cli_fixture","brand":"feishu","active":true,"effective":true,"effectiveSource":"active","futureField":"ignored"}]' ;;
   "profile add") printf '%s\\n' "$@" > "$HOME/args"; IFS= read -r secret; printf '%s' "$secret" > "$HOME/secret" ;;
   "profile use") printf '%s' "$3" > "$HOME/used" ;;
   "config init") echo 'verification_url: https://open.feishu.cn/example'; exec sleep 20 ;;
@@ -21,12 +22,13 @@ esac
 `);
     await chmod(cli, 0o700);
     const opened: string[] = [];
-    const service = new EnvironmentService({ home, nodePath: "/usr/bin/node", path: home, fetchLatest: async () => null, openExternal: async (url) => { opened.push(url); } });
+    const service = new EnvironmentService({ home, ...resolution(home), nodePath: "/usr/bin/node", path: home, fetchLatest: async () => null, openExternal: async (url) => { opened.push(url); } });
     const scanned = await service.run({ type: "scan" });
     assert.equal(scanned.kind, "tools");
     if (scanned.kind === "tools") assert.equal(scanned.tools.find((tool) => tool.tool === "lark-cli")?.installation, "external");
     const before = await service.run({ type: "profileList" });
     assert.equal(before.kind, "profiles");
+    if (before.kind === "profiles") assert.deepEqual(before.profiles[0], { name: "demo", appId: "cli_fixture", brand: "feishu", active: true, effective: true, effectiveSource: "active" });
     const added = await service.run(environmentRequestSchema.parse({ type: "profileAdd", name: "demo", appId: "cli_fixture", appSecret: "test-secret", brand: "feishu", use: true }));
     assert.equal(added.kind, "profiles");
     assert.equal(await readFile(join(home, "secret"), "utf8"), "test-secret");
@@ -55,7 +57,7 @@ test("Only an eligible managed backend can invoke the authenticated Core install
   const calls: string[] = [];
   try {
     const service = new EnvironmentService({
-      home, nodePath: "/usr/bin/node", path: home, fetchLatest: async () => null,
+      home, ...resolution(home), nodePath: "/usr/bin/node", path: home, fetchLatest: async () => null,
       hostRequest: async (path, init) => {
         calls.push(`${init?.method ?? "GET"} ${path}`);
         if (path === "/api/backends") return Response.json({ entries: [
@@ -77,6 +79,9 @@ test("Only an eligible managed backend can invoke the authenticated Core install
 test("Tool installation and removal stay in the Vonvon managed directory", async () => {
   const home = await mkdtemp(join(tmpdir(), "vonvon-tool-"));
   const npm = join(home, "npm");
+  const root = join(home, ".feishu-codex-bridge");
+  await mkdir(root);
+  await writeFile(join(home, "codex"), "#!/bin/sh\necho codex-cli 1.0.0\n", { mode: 0o700 });
   try {
     await writeFile(npm, `#!/bin/sh
 prefix="$4"
@@ -91,11 +96,11 @@ else
 fi
 `);
     await chmod(npm, 0o700);
-    const service = new EnvironmentService({ home, nodePath: "/usr/bin/node", npmPath: npm, path: home, fetchLatest: async () => "1.2.3" });
+    const service = new EnvironmentService({ home, ...resolution(home, root), nodePath: "/usr/bin/node", npmPath: npm, path: home, fetchLatest: async () => "1.2.3" });
     const initial = await service.run({ type: "scan" });
     assert.equal(initial.kind, "tools");
-    if (initial.kind === "tools") assert.equal(initial.tools.find((tool) => tool.tool === "codex")?.installation, "missing");
-    const installed = await service.run({ type: "install", tool: "codex" });
+    if (initial.kind === "tools") assert.equal(initial.tools.find((tool) => tool.tool === "codex")?.installation, "external");
+    const installed = await service.run({ type: "update", tool: "codex" });
     assert.equal(installed.kind, "applied");
     const after = await service.run({ type: "scan" });
     assert.equal(after.kind, "tools");
@@ -109,6 +114,32 @@ fi
     const removed = await service.run({ type: "uninstall", tool: "codex" });
     assert.equal(removed.kind, "applied");
     const final = await service.run({ type: "scan" });
-    if (final.kind === "tools") assert.equal(final.tools.find((tool) => tool.tool === "codex")?.installation, "missing");
+    if (final.kind === "tools") assert.equal(final.tools.find((tool) => tool.tool === "codex")?.installation, "external");
+    assert.equal(existsSync(join(home, ".vonvon-bridge")), false);
+    assert.match(await readFile(join(home, "codex"), "utf8"), /1.0.0/);
+  } finally { await rm(home, { recursive: true, force: true }); }
+});
+
+function resolution(home: string, root = join(home, ".vonvon-bridge")) {
+  return {
+    getDataRoot: () => root,
+    resolveCodex: () => {
+      const managed = join(root, "managed-tools", "bin", "codex");
+      const external = join(home, "codex");
+      return existsSync(managed) ? managed : existsSync(external) ? external : null;
+    },
+  };
+}
+
+test("Authorization reads Codex stderr and structured Claude and effective Lark identity status", async () => {
+  const home = await mkdtemp(join(tmpdir(), "vonvon-auth-"));
+  try {
+    await writeFile(join(home, "codex"), '#!/bin/sh\necho "Logged in using ChatGPT" >&2\n', { mode: 0o700 });
+    await writeFile(join(home, "claude"), '#!/bin/sh\necho \'{"loggedIn":false,"authMethod":"none"}\'\n', { mode: 0o700 });
+    await writeFile(join(home, "lark-cli"), '#!/bin/sh\necho \'{"defaultAs":"user","identities":{"user":{"available":true,"status":"valid"},"bot":{"available":false}},"note":"test"}\'\n', { mode: 0o700 });
+    const service = new EnvironmentService({ home, ...resolution(home), nodePath: "/usr/bin/node", path: home, fetchLatest: async () => null });
+    assert.deepEqual(await service.run({ type: "authStatus", tool: "codex" }), { kind: "auth", tool: "codex", state: "signedIn", message: "已授权" });
+    assert.deepEqual(await service.run({ type: "authStatus", tool: "claude" }), { kind: "auth", tool: "claude", state: "signedOut", message: "尚未授权" });
+    assert.deepEqual(await service.run({ type: "authStatus", tool: "lark-cli" }), { kind: "auth", tool: "lark-cli", state: "signedIn", message: "已授权" });
   } finally { await rm(home, { recursive: true, force: true }); }
 });
