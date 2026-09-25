@@ -41,6 +41,9 @@ export class MachineService {
     if (!response.ok) throw new Error(`Bridge 请求失败 (${response.status})`);
     return response.json();
   }
+  private async distribution() {
+    return z.object({distribution:z.object({kind:z.enum(['global-npm','bundled','development','unknown']),cliPath:z.string()}).optional()}).parse(await this.json('/api/daemon')).distribution ?? {kind:'unknown' as const,cliPath:''};
+  }
   private async perform(request:MachineRequest):Promise<MachineReply> {
     switch(request.type) {
       case 'status': {
@@ -49,21 +52,40 @@ export class MachineService {
       }
       case 'service': {
         const host = this.hooks.host();
-        if (host?.ownership === 'attached' && (request.action === 'stop' || request.action === 'uninstall')) {
-          const service = await this.service('status');
-          if (!service.running || Number(service.pid) !== host.pid) throw new Error('当前 Bridge 不属于已识别的后台服务，不能从这里停止。');
+        const before = await this.service('status');
+        const starts = request.action === 'install' || request.action === 'start';
+        if (request.action === 'install' && before.installed) throw new Error('后台服务已安装。');
+        if (request.action === 'start' && (!before.installed || before.running)) throw new Error('只有已安装且停止的服务可以启动。');
+        if (!starts && !before.installed) throw new Error('后台服务尚未安装。');
+        if (host?.ownership === 'attached') {
+          if (starts) throw new Error('外部 Bridge 正在运行，请先停止后切换服务。');
+          if (!before.running || Number(before.pid) !== host.pid) throw new Error('当前 Bridge 不属于已识别的后台服务，不能从这里停止。');
         }
+        const previousAgent = this.temporaryAgent;
         if (host?.ownership === 'owned') await this.hooks.stopHost();
-        if (host?.ownership === 'attached' && (request.action === 'install' || request.action === 'start')) throw new Error('外部 Bridge 正在运行，请先停止后切换服务。');
-        await this.service(request.action);
-        this.temporaryAgent = undefined;
-        if (request.action === 'install' || request.action === 'start') await this.hooks.startHost();
-        else await this.hooks.stopHost();
+        try {
+          await this.service(request.action);
+          if (starts) {
+            await this.hooks.startHost();
+            this.connected();
+          } else await this.hooks.stopHost();
+          this.temporaryAgent = undefined;
+        } catch (error) {
+          if (host?.ownership === 'owned' && !this.hooks.host()) {
+            const after = await this.service('status');
+            if (!after.installed && !after.running) {
+              await this.hooks.startHost(previousAgent);
+              this.connected();
+            }
+          }
+          throw error;
+        }
         return {type:'done',message:'后台服务操作已完成'};
       }
       case 'startHost':
         if (this.hooks.host()) throw new Error('请先停止当前 Bridge，再选择临时运行的 Agent。');
         await this.hooks.startHost(request.bot);
+        this.connected();
         this.temporaryAgent = request.bot;
         return {type:'done',message:request.bot?'临时 Agent 已启动，默认选择保持不变':'Bridge 已启动'};
       case 'stopHost':
@@ -72,9 +94,9 @@ export class MachineService {
         this.temporaryAgent = undefined;
         return {type:'done',message:'Bridge 已停止'};
       case 'logs': return {type:'logs',text:await recentLogs(this.connected())};
-      case 'checkCoreUpdate': return {type:'coreUpdate',...z.object({current:z.string(),latest:z.string().nullable(),hasUpdate:z.boolean(),dev:z.boolean()}).parse(await this.json('/api/update/check'))};
+      case 'checkCoreUpdate': return {type:'coreUpdate',distribution:await this.distribution(),...z.object({current:z.string(),latest:z.string().nullable(),hasUpdate:z.boolean(),dev:z.boolean()}).parse(await this.json('/api/update/check'))};
       case 'applyCoreUpdate':
-        if (this.connected().ownership !== 'attached') throw new Error('内置 Core 随桌面应用更新。全局 CLI 更新仅适用于外部服务。');
+        if (this.connected().ownership !== 'attached' || (await this.distribution()).kind !== 'global-npm') throw new Error('内置 Core 随桌面应用更新。全局 CLI 更新仅适用于外部服务。');
         await this.json('/api/update','POST');
         return {type:'done',message:'外部 Core 更新已开始，可查看进度。桌面应用版本不受此操作影响。'};
       case 'coreUpdateStatus': return {type:'coreUpdateStatus',status:coreUpdateStatusSchema.parse(await this.json('/api/update/status'))};
