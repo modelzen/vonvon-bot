@@ -47,7 +47,8 @@ void app.whenReady().then(async () => {
     ipcMain.removeHandler("bridge:settings");
     ipcMain.handle("bridge:watch", () => snapshot);
     ipcMain.handle("bridge:settings", (_event, request) => {
-      if (request.type !== "read") return { kind: "refused", code: "fixture", message: "Model catalogs are outside this fixture." };
+      if (request.type === "models") return { kind: "refused", code: "fixture", message: "Model catalogs are outside this fixture." };
+      assert.equal(request.type, "read", "Unexpected settings mutation in a read-only fixture");
       if (request.scope.botId === secondId) return reply("SECOND AGENT STATUS", secondId);
       reads++;
       if (scenario === "initial-error" && reads === 1) throw new Error("FIXTURE CONNECTION LOST");
