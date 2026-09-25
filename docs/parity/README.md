@@ -711,8 +711,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts:1333](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/main/controller.ts#L1333)。diagnose
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:921](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L921)。Diagnostics page
+- [desktop@c374a4a:desktop/main/controller.ts:1384](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/main/controller.ts#L1384)。private async diagnose
 
 
 ## CLI-017
@@ -2697,7 +2696,7 @@ Codex 用量查询、刷新与分享
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:921](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L921)。诊断页面
+- [desktop@c374a4a:desktop/renderer/management/UsagePanel.tsx:63](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/UsagePanel.tsx#L63)。export function UsagePanel
 
 
 ## CARD-056
@@ -2953,7 +2952,7 @@ Codex 用量查询、刷新与分享
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts:37](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/shared/bridge.ts#L37)。commandSchema
+- [desktop@c374a4a:desktop/main/environment.ts:388](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/main/environment.ts#L388)。private async performInstall
 
 
 ## LEGACY-005
@@ -2985,7 +2984,7 @@ Codex 用量查询、刷新与分享
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts:37](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/shared/bridge.ts#L37)。commandSchema
+- [desktop@c374a4a:desktop/main/environment.ts:381](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/main/environment.ts#L381)。private async cancelInstall
 
 
 ## LEGACY-006
@@ -3517,7 +3516,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1966](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1966)。SettingsPanel
+- [desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx:95](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/ConversationPanel.tsx#L95)。历史会话
 
 
 ## LEGACY-022

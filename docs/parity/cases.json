@@ -183,7 +183,7 @@
       "cleanup": [
         "Remove isolated home"
       ],
-      "coverage": "partial",
+      "coverage": "present",
       "verification": "native"
     },
     {
@@ -454,7 +454,7 @@
       "cleanup": [
         "Uninstall fixture service"
       ],
-      "coverage": "partial",
+      "coverage": "present",
       "verification": "native"
     },
     {
@@ -544,7 +544,7 @@
       "cleanup": [
         "Stop fixture Host"
       ],
-      "coverage": "missing",
+      "coverage": "present",
       "verification": "native"
     },
     {
@@ -585,7 +585,7 @@
       "cleanup": [
         "Restore original OS login item state"
       ],
-      "coverage": "partial",
+      "coverage": "present",
       "verification": "native"
     },
     {
@@ -625,7 +625,7 @@
       "cleanup": [
         "Stop fixture Host"
       ],
-      "coverage": "partial",
+      "coverage": "present",
       "verification": "native"
     },
     {
@@ -668,7 +668,7 @@
       "cleanup": [
         "Remove fixture logs"
       ],
-      "coverage": "missing",
+      "coverage": "present",
       "verification": "native"
     },
     {
@@ -689,14 +689,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts",
-          "line": 1333,
-          "symbol": "diagnose"
-        },
-        {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
-          "line": 921,
-          "symbol": "Diagnostics page"
+          "path": "desktop@c374a4a:desktop/main/controller.ts",
+          "line": 1384,
+          "symbol": "private async diagnose"
         }
       ],
       "preconditions": [
@@ -714,7 +709,7 @@
       "cleanup": [
         "Remove fixture home"
       ],
-      "coverage": "partial",
+      "coverage": "present",
       "verification": "integration"
     },
     {
@@ -851,7 +846,7 @@
       "cleanup": [
         "Restore fixture package directory"
       ],
-      "coverage": "missing",
+      "coverage": "partial",
       "verification": "native"
     },
     {
@@ -936,7 +931,7 @@
       "cleanup": [
         "Restore update stub"
       ],
-      "coverage": "missing",
+      "coverage": "present",
       "verification": "integration"
     },
     {
@@ -980,7 +975,7 @@
       "cleanup": [
         "Restore disposable installation"
       ],
-      "coverage": "missing",
+      "coverage": "partial",
       "verification": "native"
     },
     {
@@ -1019,7 +1014,7 @@
       "cleanup": [
         "Close console"
       ],
-      "coverage": "partial",
+      "coverage": "present",
       "verification": "native"
     },
     {
@@ -1052,7 +1047,7 @@
       "cleanup": [
         "删除测试项目并处理新建群。"
       ],
-      "coverage": "missing",
+      "coverage": "present",
       "verification": "external",
       "parityClass": "desktop-control"
     },
@@ -1155,7 +1150,7 @@
       "cleanup": [
         "移除测试绑定。"
       ],
-      "coverage": "partial",
+      "coverage": "present",
       "verification": "external",
       "parityClass": "desktop-control"
     },
@@ -1257,7 +1252,7 @@
       "cleanup": [
         "需要时重新绑定测试群。"
       ],
-      "coverage": "missing",
+      "coverage": "present",
       "verification": "external",
       "parityClass": "desktop-control"
     },
@@ -1291,7 +1286,7 @@
       "cleanup": [
         "结束测试任务，恢复测试前的设置与服务状态。保留验证证据后清理隔离测试数据；不清理用户真实数据。"
       ],
-      "coverage": "missing",
+      "coverage": "present",
       "verification": "external",
       "parityClass": "desktop-control"
     },
@@ -2349,7 +2344,7 @@
       "cleanup": [
         "恢复原值并删除测试项目。"
       ],
-      "coverage": "partial",
+      "coverage": "present",
       "verification": "integration",
       "parityClass": "desktop-control"
     },
@@ -2488,7 +2483,7 @@
       "cleanup": [
         "结束测试任务，恢复测试前的设置与服务状态。保留验证证据后清理隔离测试数据；不清理用户真实数据。"
       ],
-      "coverage": "missing",
+      "coverage": "present",
       "verification": "external",
       "parityClass": "desktop-control"
     },
@@ -2524,7 +2519,7 @@
       "cleanup": [
         "结束测试任务，恢复测试前的设置与服务状态。保留验证证据后清理隔离测试数据；不清理用户真实数据。"
       ],
-      "coverage": "missing",
+      "coverage": "present",
       "verification": "external",
       "parityClass": "desktop-control"
     },
@@ -2561,7 +2556,7 @@
       "cleanup": [
         "结束测试任务，恢复测试前的设置与服务状态。保留验证证据后清理隔离测试数据；不清理用户真实数据。"
       ],
-      "coverage": "missing",
+      "coverage": "present",
       "verification": "external",
       "parityClass": "desktop-control"
     },
@@ -2598,7 +2593,7 @@
       "cleanup": [
         "结束测试任务，恢复测试前的设置与服务状态。保留验证证据后清理隔离测试数据；不清理用户真实数据。"
       ],
-      "coverage": "missing",
+      "coverage": "present",
       "verification": "external",
       "parityClass": "desktop-control"
     },
@@ -2635,7 +2630,7 @@
       "cleanup": [
         "结束测试目标。"
       ],
-      "coverage": "missing",
+      "coverage": "present",
       "verification": "external",
       "parityClass": "desktop-control"
     },
@@ -2672,7 +2667,7 @@
       "cleanup": [
         "结束测试任务，恢复测试前的设置与服务状态。保留验证证据后清理隔离测试数据；不清理用户真实数据。"
       ],
-      "coverage": "missing",
+      "coverage": "present",
       "verification": "external",
       "parityClass": "desktop-control"
     },
@@ -2709,7 +2704,7 @@
       "cleanup": [
         "恢复原值。"
       ],
-      "coverage": "missing",
+      "coverage": "present",
       "verification": "external",
       "parityClass": "desktop-control"
     },
@@ -2879,7 +2874,7 @@
       "cleanup": [
         "结束测试任务，恢复测试前的设置与服务状态。保留验证证据后清理隔离测试数据；不清理用户真实数据。"
       ],
-      "coverage": "missing",
+      "coverage": "partial",
       "verification": "native",
       "parityClass": "desktop-control"
     },
@@ -2896,9 +2891,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
-          "line": 921,
-          "symbol": "诊断页面"
+          "path": "desktop@c374a4a:desktop/renderer/management/UsagePanel.tsx",
+          "line": 63,
+          "symbol": "export function UsagePanel"
         }
       ],
       "preconditions": [
@@ -2913,7 +2908,7 @@
       "cleanup": [
         "结束测试任务，恢复测试前的设置与服务状态。保留验证证据后清理隔离测试数据；不清理用户真实数据。"
       ],
-      "coverage": "missing",
+      "coverage": "present",
       "verification": "external",
       "parityClass": "desktop-control"
     },
@@ -3052,7 +3047,7 @@
       "cleanup": [
         "仅做只读核对，无需恢复。"
       ],
-      "coverage": "partial",
+      "coverage": "present",
       "verification": "native"
     },
     {
@@ -3155,7 +3150,7 @@
       "cleanup": [
         "清理隔离环境安装目录"
       ],
-      "coverage": "missing",
+      "coverage": "present",
       "verification": "native"
     },
     {
@@ -3171,9 +3166,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts",
-          "line": 37,
-          "symbol": "commandSchema"
+          "path": "desktop@c374a4a:desktop/main/environment.ts",
+          "line": 388,
+          "symbol": "private async performInstall"
         }
       ],
       "preconditions": [
@@ -3189,7 +3184,7 @@
       "cleanup": [
         "清理隔离环境安装目录"
       ],
-      "coverage": "missing",
+      "coverage": "present",
       "verification": "native"
     },
     {
@@ -3205,9 +3200,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts",
-          "line": 37,
-          "symbol": "commandSchema"
+          "path": "desktop@c374a4a:desktop/main/environment.ts",
+          "line": 381,
+          "symbol": "private async cancelInstall"
         }
       ],
       "preconditions": [
@@ -3223,7 +3218,7 @@
       "cleanup": [
         "清理隔离环境下载目录"
       ],
-      "coverage": "missing",
+      "coverage": "present",
       "verification": "native"
     },
     {
@@ -3259,7 +3254,7 @@
       "cleanup": [
         "撤销隔离环境授权"
       ],
-      "coverage": "partial",
+      "coverage": "present",
       "verification": "native"
     },
     {
@@ -3295,7 +3290,7 @@
       "cleanup": [
         "撤销隔离环境授权"
       ],
-      "coverage": "missing",
+      "coverage": "present",
       "verification": "native"
     },
     {
@@ -3331,7 +3326,7 @@
       "cleanup": [
         "切回 A"
       ],
-      "coverage": "missing",
+      "coverage": "present",
       "verification": "native"
     },
     {
@@ -3366,7 +3361,7 @@
       "cleanup": [
         "删除隔离测试 Profile"
       ],
-      "coverage": "missing",
+      "coverage": "present",
       "verification": "native"
     },
     {
@@ -3401,7 +3396,7 @@
       "cleanup": [
         "删除隔离测试 Profile 与测试应用"
       ],
-      "coverage": "missing",
+      "coverage": "present",
       "verification": "external"
     },
     {
@@ -3471,7 +3466,7 @@
       "cleanup": [
         "恢复测试应用凭据或清理隔离数据"
       ],
-      "coverage": "partial",
+      "coverage": "present",
       "verification": "external"
     },
     {
@@ -3507,7 +3502,7 @@
       "cleanup": [
         "恢复 Agent 原状态"
       ],
-      "coverage": "partial",
+      "coverage": "present",
       "verification": "integration"
     },
     {
@@ -3575,7 +3570,7 @@
       "cleanup": [
         "恢复原值"
       ],
-      "coverage": "partial",
+      "coverage": "present",
       "verification": "integration"
     },
     {
@@ -3646,7 +3641,7 @@
       "cleanup": [
         "删除测试项目绑定与外部测试群"
       ],
-      "coverage": "partial",
+      "coverage": "present",
       "verification": "external"
     },
     {
@@ -3682,7 +3677,7 @@
       "cleanup": [
         "恢复目录 A 和原会话模式"
       ],
-      "coverage": "missing",
+      "coverage": "present",
       "verification": "integration"
     },
     {
@@ -3717,7 +3712,7 @@
       "cleanup": [
         "恢复原设置"
       ],
-      "coverage": "partial",
+      "coverage": "present",
       "verification": "integration"
     },
     {
@@ -3751,7 +3746,7 @@
       "cleanup": [
         "重建隔离测试项目"
       ],
-      "coverage": "missing",
+      "coverage": "present",
       "verification": "native"
     },
     {
@@ -3767,9 +3762,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 1966,
-          "symbol": "SettingsPanel"
+          "path": "desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx",
+          "line": 95,
+          "symbol": "历史会话"
         }
       ],
       "preconditions": [
@@ -3787,7 +3782,7 @@
       "cleanup": [
         "只读或拒绝写入检查。核对隔离数据与测试前一致，退出测试实例。"
       ],
-      "coverage": "missing",
+      "coverage": "present",
       "verification": "native"
     },
     {
@@ -3821,7 +3816,7 @@
       "cleanup": [
         "只读或拒绝写入检查。核对隔离数据与测试前一致，退出测试实例。"
       ],
-      "coverage": "missing",
+      "coverage": "present",
       "verification": "native"
     },
     {
@@ -3857,7 +3852,7 @@
       "cleanup": [
         "恢复初始根目录"
       ],
-      "coverage": "partial",
+      "coverage": "present",
       "verification": "native"
     },
     {
@@ -3892,7 +3887,7 @@
       "cleanup": [
         "恢复原设置"
       ],
-      "coverage": "partial",
+      "coverage": "present",
       "verification": "integration"
     },
     {
@@ -3963,7 +3958,7 @@
       "cleanup": [
         "恢复服务及自启原状态"
       ],
-      "coverage": "partial",
+      "coverage": "present",
       "verification": "native"
     },
     {
@@ -3999,7 +3994,7 @@
       "cleanup": [
         "恢复测试环境初始版本"
       ],
-      "coverage": "missing",
+      "coverage": "partial",
       "verification": "native"
     },
     {
@@ -4069,7 +4064,7 @@
       "cleanup": [
         "恢复测试项目设置"
       ],
-      "coverage": "missing",
+      "coverage": "present",
       "verification": "native"
     },
     {
