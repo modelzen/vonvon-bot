@@ -12,6 +12,7 @@ import {
   type EnvironmentRequest,
   type EnvironmentTool,
   type EnvironmentToolState,
+  type ToolInstallOperation,
 } from "../shared/environment";
 
 const tools = {
@@ -66,6 +67,9 @@ export class EnvironmentService {
   private active?: ActiveOperation;
   private lastOperation: EnvironmentOperation | null = null;
   private mutation = false;
+  private toolInstall: ToolInstallOperation | null = null;
+  private installAbort?: AbortController;
+  private installCompletion?: Promise<EnvironmentReply>;
   private closing = false;
   private closePromise?: Promise<void>;
   private readonly children = new Map<ChildProcess, Promise<void>>();
@@ -171,6 +175,8 @@ export class EnvironmentService {
         case "backendUninstall": return await this.backendUninstall(request.id);
         case "install": return await this.install(request.tool, false);
         case "update": return await this.install(request.tool, true);
+        case "toolInstallStatus": return { kind: "toolInstall", operation: this.toolInstall };
+        case "cancelInstall": return await this.cancelInstall(request.operationId);
         case "uninstall": return await this.uninstall(request.tool);
         case "authStatus": return await this.authStatus(request.tool);
         case "startLogin": return await this.startLogin(request.tool);
@@ -349,18 +355,49 @@ export class EnvironmentService {
     return { kind: "applied", message: `${entry.displayName} 已卸载。` };
   }
 
-  private async install(tool: EnvironmentTool, update: boolean): Promise<EnvironmentReply> {
-    if (this.mutation || this.active) return refused("busy", "另一个本机环境操作正在进行。");
+  private install(tool: EnvironmentTool, update: boolean): Promise<EnvironmentReply> {
+    if (this.mutation || this.active) return Promise.resolve(refused("busy", "另一个本机环境操作正在进行。"));
     this.mutation = true;
+    const id = randomUUID();
+    const abort = new AbortController();
+    this.toolInstall = { kind: "running", id, tool, update, startedAt: Date.now() };
+    this.installAbort = abort;
+    const pending = this.performInstall(tool, update, abort.signal).then((reply) => {
+      this.toolInstall = { kind: reply.kind === "applied" ? "succeeded" : abort.signal.aborted ? "cancelled" : "failed", id, message: reply.kind === "applied" || reply.kind === "refused" ? reply.message : "安装已结束。" };
+      return reply;
+    }).catch(() => {
+      const message = abort.signal.aborted ? "已取消安装，原工具仍可使用。" : "工具安装失败，原工具仍可使用。";
+      this.toolInstall = { kind: abort.signal.aborted ? "cancelled" : "failed", id, message };
+      return refused(abort.signal.aborted ? "install-cancelled" : "install-failed", message);
+    }).finally(() => {
+      this.mutation = false;
+      this.installAbort = undefined;
+      this.installCompletion = undefined;
+    });
+    this.installCompletion = pending;
+    return pending;
+  }
+
+  private async cancelInstall(id: string): Promise<EnvironmentReply> {
+    if (this.toolInstall?.kind !== "running" || this.toolInstall.id !== id || !this.installAbort || !this.installCompletion) return refused("not-running", "安装操作已结束。");
+    this.installAbort.abort();
+    await this.installCompletion;
+    return { kind: "toolInstall", operation: this.toolInstall };
+  }
+
+  private async performInstall(tool: EnvironmentTool, update: boolean, signal: AbortSignal): Promise<EnvironmentReply> {
     const release = join(this.managedToolRoot(tool), "releases", randomUUID());
     let published = false;
     try {
+      signal.throwIfAborted();
       if (tool === "codex" && process.env.CODEX_BIN) return refused("explicit-codex", "当前使用显式 CODEX_BIN，请先移除此覆盖再安装托管 Codex。");
       const npm = await this.resolveNpm();
       if (!npm) return refused("npm-missing", "未找到 npm，无法安装工具。");
+      signal.throwIfAborted();
       await mkdir(release, { recursive: true, mode: 0o700 });
-      const result = await this.command(npm, ["install", "--global", "--prefix", release, `${tools[tool].package}@latest`, "--no-audit", "--no-fund"], 10 * 60_000);
+      const result = await this.command(npm, ["install", "--global", "--prefix", release, `${tools[tool].package}@latest`, "--no-audit", "--no-fund"], 10 * 60_000, undefined, signal);
       if (result.exitCode !== 0) return refused("install-failed", "工具安装失败，请检查网络连接或 npm 配置。");
+      signal.throwIfAborted();
       const file = join(release, process.platform === "win32" ? "node_modules" : join("lib", "node_modules"), tools[tool].package, "package.json");
       const manifest: unknown = JSON.parse(await readFile(file, "utf8"));
       if (typeof manifest !== "object" || manifest === null || !("name" in manifest) || manifest.name !== tools[tool].package || !("version" in manifest) || typeof manifest.version !== "string" || !/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(manifest.version)) return refused("install-incomplete", "新版本的安装信息无效，旧版本仍可使用。");
@@ -370,19 +407,21 @@ export class EnvironmentService {
       const physical = await realpath(bin);
       const relativePath = relative(physicalRoot, physical);
       if (relativePath === ".." || relativePath.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(relativePath)) return refused("install-incomplete", "新版本的可执行文件超出安装目录，旧版本仍可使用。");
-      const verified = await this.command(bin, ["--version"], 20_000);
+      const verified = await this.command(bin, ["--version"], 20_000, undefined, signal);
       if (verified.exitCode !== 0 || !new RegExp(`(?:^|[^\\d])${manifest.version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:$|[^\\d])`).test(`${verified.stdout}\n${verified.stderr}`)) return refused("install-incomplete", "新版本未通过运行校验，旧版本仍可使用。");
       if (this.closing) return refused("environment-closed", "本机环境正在退出。");
+      signal.throwIfAborted();
       const previousPointer = await readFile(this.managedPointer(tool), "utf8").catch((error: unknown) => {
         if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
         throw error;
       });
+      signal.throwIfAborted();
       await this.publishManaged(tool, { schemaVersion: 1, tool, state: "active", generation: basename(release), version: manifest.version });
       published = true;
       let selected = false;
       try {
         const after = await this.resolveTool(tool);
-        selected = after?.ownership === "managed" && after.executable === bin;
+        selected = !signal.aborted && after?.ownership === "managed" && after.executable === bin;
       } finally {
         if (!selected) {
           if (previousPointer === null) await rm(this.managedPointer(tool), { force: true });
@@ -394,7 +433,6 @@ export class EnvironmentService {
       return { kind: "applied", message: `${tools[tool].executable} ${manifest.version} 已${update ? "更新" : "安装"}。` };
     } finally {
       if (!published && this.children.size === 0) await rm(release, { recursive: true, force: true });
-      this.mutation = false;
     }
   }
 
@@ -539,8 +577,9 @@ export class EnvironmentService {
     return { HOME: this.home, USERPROFILE: this.home, PATH: [dirname(this.nodePath), this.searchPath, "/usr/bin", "/bin"].join(delimiter), LANG: "en_US.UTF-8", LARKSUITE_CLI_NO_SKILLS_NOTIFIER: "1", LARKSUITE_CLI_NO_UPDATE_NOTIFIER: "1" };
   }
 
-  private command(executablePath: string, args: string[], timeoutMs: number, secret?: string): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
+  private command(executablePath: string, args: string[], timeoutMs: number, secret?: string, signal?: AbortSignal): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
     return new Promise((resolve, reject) => {
+      signal?.throwIfAborted();
       const child = this.launch(executablePath, args, secret);
       let stdout = "";
       let stderr = "";
@@ -552,11 +591,13 @@ export class EnvironmentService {
         stoppingError = error;
         void this.terminate(child).then(() => finish(error), () => finish(new Error("无法停止本机工具。")));
       };
+      const onAbort = () => stop(new Error("已取消安装。"));
       const timer = setTimeout(() => stop(new Error("操作超时。")), timeoutMs);
       const finish = (error?: Error, exitCode?: number | null) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
         if (error) reject(error);
         else resolve({ exitCode: exitCode ?? null, stdout, stderr });
       };
@@ -570,6 +611,8 @@ export class EnvironmentService {
       child.stderr?.on("data", (chunk: Buffer | string) => collect(chunk, false));
       child.once("error", () => finish(new Error("无法启动本机工具。")));
       child.once("close", (code) => finish(stoppingError, code));
+      signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) onAbort();
       if (secret !== undefined) child.stdin?.end(`${secret}\n`);
     });
   }
