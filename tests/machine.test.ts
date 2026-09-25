@@ -32,17 +32,17 @@ test('service install stops owned Host before registering and reconnects afterwa
   const calls:string[]=[];
   const service=new MachineService({runtime,host:()=>current,stopHost:async()=>{calls.push('stop');current=undefined;},startHost:async()=>{calls.push('connect');current=host('attached');},serviceCommand:async action=>{calls.push(action);return status;},updater:new DesktopUpdater({current:'0.7.0',signed:false,driver:new Driver()})});
   await service.request({type:'service',action:'install'});
-  assert.deepEqual(calls,['stop','install','connect']);
+  assert.deepEqual(calls,['status','stop','install','connect']);
   await assert.rejects(service.request({type:'service',action:'install'}),/外部/);
 });
 test('owned Core refuses global npm update and attached check never installs',async()=>{
   const requests:string[]=[];
-  let current=host('owned',async(path)=>{requests.push(path);return Response.json({current:'0.7.0',latest:'0.8.0',hasUpdate:true,dev:false});});
+  let current=host('owned',async(path)=>{requests.push(path);return Response.json(path==='/api/daemon'?{distribution:{kind:'global-npm',cliPath:'/npm/bridge'}}:{current:'0.7.0',latest:'0.8.0',hasUpdate:true,dev:false});});
   const service=new MachineService({runtime,host:()=>current,stopHost:async()=>{},startHost:async()=>{},serviceCommand:async()=>status,updater:new DesktopUpdater({current:'0.7.0',signed:false,driver:new Driver()})});
   await assert.rejects(service.request({type:'applyCoreUpdate'}),/内置/);
   current={...current,ownership:'attached'};
   await service.request({type:'checkCoreUpdate'});
-  assert.deepEqual(requests,['/api/update/check']);
+  assert.deepEqual(requests,['/api/daemon','/api/update/check']);
 });
 test('logs preserve server text and reject oversized response',async()=>{
   assert.equal(await recentLogs(host('owned',async()=>new Response('one\ntwo'))),'one\ntwo');
@@ -90,7 +90,44 @@ test('install honors draft veto and records expected version for restart verific
 
 test('attached foreground Host cannot stop a different OS service',async()=>{
   const calls:string[]=[];
-  const service=new MachineService({runtime,host:()=>host('attached'),stopHost:async()=>{calls.push('detach');},startHost:async()=>{},serviceCommand:async action=>{calls.push(action);return {...status,running:true,pid:'99'};},updater:new DesktopUpdater({current:'0.7.0',signed:false,driver:new Driver()})});
+  const service=new MachineService({runtime,host:()=>host('attached'),stopHost:async()=>{calls.push('detach');},startHost:async()=>{},serviceCommand:async action=>{calls.push(action);return {...status,installed:true,running:true,pid:'99'};},updater:new DesktopUpdater({current:'0.7.0',signed:false,driver:new Driver()})});
   await assert.rejects(service.request({type:'service',action:'stop'}),/不属于/);
   assert.deepEqual(calls,['status']);
+});
+
+
+test('failed conversion restores owned temporary run only when service remains unregistered',async()=>{
+  for (const registered of [false,true]) {
+    let current:HostHandle|undefined;
+    let attempted=false;
+    const starts:(string|undefined)[]=[];
+    const service=new MachineService({runtime,host:()=>current,stopHost:async()=>{current=undefined;},startHost:async bot=>{starts.push(bot);current=host();},serviceCommand:async action=>{if(action==='install'){attempted=true;throw new Error('installation failed');}return {...status,installed:attempted&&registered};},updater:new DesktopUpdater({current:'0.7.0',signed:false,driver:new Driver()})});
+    await service.request({type:'startHost',bot:'cli_temp'});
+    await assert.rejects(service.request({type:'service',action:'install'}),/installation failed/);
+    assert.deepEqual(starts,registered?['cli_temp']:['cli_temp','cli_temp']);
+    assert.equal(!!current,!registered);
+  }
+});
+test('inapplicable service start leaves working Host untouched',async()=>{
+  let stopped=false;
+  const service=new MachineService({runtime,host:()=>host(),stopHost:async()=>{stopped=true;},startHost:async()=>{},serviceCommand:async()=>status,updater:new DesktopUpdater({current:'0.7.0',signed:false,driver:new Driver()})});
+  await assert.rejects(service.request({type:'service',action:'start'}),/已安装/);
+  assert.equal(stopped,false);
+});
+test('resolved start without a connected Host is a failure',async()=>{
+  const service=new MachineService({runtime,host:()=>undefined,stopHost:async()=>{},startHost:async()=>{},serviceCommand:async()=>status,updater:new DesktopUpdater({current:'0.7.0',signed:false,driver:new Driver()})});
+  await assert.rejects(service.request({type:'startHost',bot:'cli_temp'}),/已停止/);
+  const reply=await service.request({type:'status'});
+  assert.equal(reply.type==='status'&&reply.temporaryAgent,undefined);
+});
+test('attached bundled service cannot update an unrelated global npm installation',async()=>{
+  const calls:string[]=[];
+  const service=new MachineService({runtime,host:()=>host('attached',async path=>{calls.push(path);return Response.json({distribution:{kind:'bundled',cliPath:'/App/runtime/core/bin/bridge'}});}),stopHost:async()=>{},startHost:async()=>{},serviceCommand:async()=>status,updater:new DesktopUpdater({current:'0.7.0',signed:false,driver:new Driver()})});
+  await assert.rejects(service.request({type:'applyCoreUpdate'}),/内置/);
+  assert.deepEqual(calls,['/api/daemon']);
+});
+test('unpackaged and unsigned artifacts do not enable native updates',async()=>{
+  const {desktopUpdateConfiguration}=await import('../desktop/main/update-configuration');
+  assert.deepEqual(await desktopUpdateConfiguration({appPath:'/fixture',isPackaged:false}),{signed:false});
+  assert.deepEqual(await desktopUpdateConfiguration({appPath:'/fixture/app.asar',isPackaged:true,platform:'darwin'}),{signed:false});
 });

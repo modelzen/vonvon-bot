@@ -21,7 +21,7 @@ export type MachineReply =
  | {type:'status';service:ServiceStatus;host:{ownership:'owned'|'attached';pid:number}|null;temporaryAgent?:string}
  | {type:'done';message:string}
  | {type:'logs';text:string}
- | {type:'coreUpdate';current:string;latest:string|null;hasUpdate:boolean;dev:boolean}
+ | {type:'coreUpdate';distribution:{kind:'global-npm'|'bundled'|'development'|'unknown';cliPath:string};current:string;latest:string|null;hasUpdate:boolean;dev:boolean}
  | {type:'coreUpdateStatus';status:z.infer<typeof coreUpdateStatusSchema>}
  | {type:'desktopUpdate';update:DesktopUpdate};
 export type MachineRequestHandler = (request:MachineRequest)=>Promise<MachineReply>;
