@@ -14,6 +14,7 @@ export const machineRequestSchema = z.discriminatedUnion('type', [
 ]);
 export type MachineRequest = z.infer<typeof machineRequestSchema>;
 export const serviceStatusSchema = z.object({platformName:z.string(),installed:z.boolean(),running:z.boolean(),servicePath:z.string(),stdoutPath:z.string(),stderrPath:z.string(),pid:z.string().optional(),lastExit:z.string().optional()});
+export const coreUpdateStatusSchema = z.object({phase:z.enum(['installing','restarting','done','error']),ok:z.boolean().optional(),message:z.string().optional(),from:z.string().optional(),to:z.string().optional(),at:z.number()}).nullable();
 export type ServiceStatus = z.infer<typeof serviceStatusSchema>;
 export type DesktopUpdate = {state:'current'|'available'|'unavailable'|'downloaded';current:string;latest?:string;message:string};
 export type MachineReply =
@@ -21,6 +22,6 @@ export type MachineReply =
  | {type:'done';message:string}
  | {type:'logs';text:string}
  | {type:'coreUpdate';current:string;latest:string|null;hasUpdate:boolean;dev:boolean}
- | {type:'coreUpdateStatus';status:unknown}
+ | {type:'coreUpdateStatus';status:z.infer<typeof coreUpdateStatusSchema>}
  | {type:'desktopUpdate';update:DesktopUpdate};
 export type MachineRequestHandler = (request:MachineRequest)=>Promise<MachineReply>;
