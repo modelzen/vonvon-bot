@@ -51,6 +51,15 @@ The runner generates and tests both fresh and existing-user homes without extern
 
 CI queries the real OS service state. A developer Mac with a registered service can explicitly use `npm run test:native -- --os-service-fixture=absent`. That flag creates test-only `launchctl list` and broad `ps -axo` fixtures. Other process queries use the OS, and every service mutation is refused. It is rejected in CI and on other platforms. Evidence records the fixture declaration. Production Host admission is unchanged.
 
+The additional macOS arm64 parity runner exercises offline data migration, conflicting stores and retry, local Agent deletion guards, stopped settings, and owned Host restart:
+
+```sh
+npm run build
+node scripts/test-parity-native.mjs --os-service-fixture=absent
+```
+
+It uses hidden Electron windows, the real preload and bundled Core, isolated homes, and synthetic encrypted secrets. Results are written under `.audit/macos-round2/`. These probes establish local lifecycle behavior; connected-bot recovery, deletion confirmation, attached system services, and external Feishu behavior still need separate acceptance evidence. The [parity cases](docs/parity/README.md) define those complete requirements. Partial checks must remain distinct from complete case passes.
+
 ## Lifecycle and limitations
 
 Window close hides to the menu bar or tray. Explicit quit cancels application-owned operations and awaits Host cleanup. Attached services only detach. A failed cleanup keeps the app visible. Agent enable changes and completed QR registration restart only an owned Host. Attached services show restart required.
