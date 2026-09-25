@@ -4,14 +4,14 @@
 
 共 113 条用例。每条分别在 macOS 和 Windows 验证。
 
-源码位置用于确认基线和查找实现，不代表整条用例通过。完成操作步骤、核对预期并保存证据后，才能记录平台测试结果。
+源码位置用于确认基线和查找实现，不代表整条用例通过。定位说明可以是代码符号或附近行为的描述。完成操作步骤、核对预期并保存证据后，才能记录平台测试结果。
 
 本页只含可公开的测试规格。运行 `node scripts/parity-report.mjs --check` 检查它是否与 cases.json 同步。执行记录另行保存在本机忽略目录，用 `--results <观察文件> --checks <分项文件> --output <本地报告路径>` 生成；执行结果不会进入本页。
 
 ## 基线
 
 - core。v0.6.14; current 21ed17cab64df7c1b481c56d63ea6aa51fc212ad
-- desktop。3449674dca93ef7af16d61eda127b91746e65085
+- desktop。aab1bb34442d6723016cfbdc3217159108b4348f
 - legacy。3a168535c11a4f403553967908d272127e6a23af
 
 ## 覆盖表
@@ -158,13 +158,13 @@
 
 **原功能依据**
 
-- [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts:41](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/cli/index.ts#L41)。run
+- [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts:44](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/cli/index.ts#L44)。run
 - [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/commands/daemon.ts:17](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/cli/commands/daemon.ts#L17)。runStart
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/host.ts:13](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/main/host.ts#L13)。acquireHost
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/index.ts:149](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/main/index.ts#L149)。bundled runtime
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/host.ts:13](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/main/host.ts#L13)。acquireHost
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/index.ts:149](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/main/index.ts#L149)。bundled runtime
 
 
 ## CLI-002
@@ -196,12 +196,12 @@
 
 **原功能依据**
 
-- [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/config/data-root.ts:49](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/config/data-root.ts#L49)。resolveDataRoot
+- [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/config/data-root.ts:48](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/config/data-root.ts#L48)。resolveDataRoot
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/host.ts:13](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/main/host.ts#L13)。acquireHost
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/controller.ts:437](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/main/controller.ts#L437)。refresh
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/host.ts:13](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/main/host.ts#L13)。acquireHost
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts:437](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/main/controller.ts#L437)。refresh
 
 
 ## CLI-003
@@ -234,12 +234,12 @@
 
 **原功能依据**
 
-- [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/config/data-root-migration.ts:143](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/config/data-root-migration.ts#L143)。relocateOfflineDataRoot
+- [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/config/data-root-migration.ts:112](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/config/data-root-migration.ts#L112)。relocateOfflineDataRoot
 - [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts:29](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/cli/index.ts#L29)。data migrate
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/host.ts:17](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/main/host.ts#L17)。migrateHostDataOffline
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/host.ts:17](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/main/host.ts#L17)。migrateHostDataOffline
 
 
 ## CLI-004
@@ -276,8 +276,8 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/host.ts:18](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/main/host.ts#L18)。recovery-required
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/shared/bridge.ts:35](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/shared/bridge.ts#L35)。commandSchema
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/host.ts:18](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/main/host.ts#L18)。recovery-required
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts:37](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/shared/bridge.ts#L37)。commandSchema
 
 
 ## CLI-005
@@ -309,13 +309,13 @@
 
 **原功能依据**
 
-- [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/commands/bot.ts:9](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/cli/commands/bot.ts#L9)。runBotInit
+- [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/commands/bot.ts:10](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/cli/commands/bot.ts#L10)。runBotInit
 - [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/admin/service.ts:753](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/admin/service.ts#L753)。registerBotByQr
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/controller.ts:877](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/main/controller.ts#L877)。register
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:1193](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L1193)。registration link
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts:878](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/main/controller.ts#L878)。register
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:1193](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L1193)。registration link
 
 
 ## CLI-006
@@ -349,8 +349,8 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/controller.ts:1182](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/main/controller.ts#L1182)。cancel
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:1189](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L1189)。expired QR
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts:1183](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/main/controller.ts#L1183)。cancel
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:1189](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L1189)。expired QR
 
 
 ## CLI-007
@@ -388,8 +388,8 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/controller.ts:716](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/main/controller.ts#L716)。setAgentEnabled
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:551](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L551)。Agent toggle
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts:701](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/main/controller.ts#L701)。setAgentEnabled
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:551](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L551)。Agent toggle
 
 
 ## CLI-008
@@ -420,12 +420,12 @@
 
 **原功能依据**
 
-- [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/commands/bot.ts:103](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/cli/commands/bot.ts#L103)。runBotRm
+- [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/commands/bot.ts:104](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/cli/commands/bot.ts#L104)。runBotRm
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/controller.ts:727](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/main/controller.ts#L727)。deleteAgent
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:615](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L615)。Remove Agent
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts:708](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/main/controller.ts#L708)。deleteAgent
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:615](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L615)。Remove Agent
 
 
 ## CLI-009
@@ -457,8 +457,8 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/controller.ts:734](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/main/controller.ts#L734)。agent-active
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:629](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L629)。Remove disabled
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts:734](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/main/controller.ts#L734)。agent-active
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:629](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L629)。Remove disabled
 
 
 ## CLI-010
@@ -490,13 +490,13 @@
 **原功能依据**
 
 - [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/commands/daemon.ts:17](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/cli/commands/daemon.ts#L17)。runStart
-- [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts:64](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/cli/index.ts#L64)。stop
+- [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts:62](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/cli/index.ts#L62)。stop
 - [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/web/server.ts:275](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/web/server.ts#L275)。daemon start/stop
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/shared/bridge.ts:35](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/shared/bridge.ts#L35)。commandSchema
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:849](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L849)。Bridge run
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts:37](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/shared/bridge.ts#L37)。commandSchema
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:849](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L849)。Bridge run
 
 
 ## CLI-011
@@ -528,13 +528,13 @@
 
 **原功能依据**
 
-- [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts:75](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/cli/index.ts#L75)。restart
+- [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts:66](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/cli/index.ts#L66)。restart
 - [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/web/server.ts:260](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/web/server.ts#L260)。daemon restart
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/controller.ts:540](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/main/controller.ts#L540)。restartAttached
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:861](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L861)。Restart Bridge
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts:566](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/main/controller.ts#L566)。restartAttached
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:861](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L861)。Restart Bridge
 
 
 ## CLI-012
@@ -566,11 +566,11 @@
 **原功能依据**
 
 - [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts:41](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/cli/index.ts#L41)。run --bot
-- [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/host/bootstrap.ts:1](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/host/bootstrap.ts#L1)。runHostRuntime
+- [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/host/bootstrap.ts:8](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/host/bootstrap.ts#L8)。runHostRuntime
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/shared/bridge.ts:35](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/shared/bridge.ts#L35)。commandSchema
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts:37](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/shared/bridge.ts#L37)。commandSchema
 
 
 ## CLI-013
@@ -604,8 +604,8 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/index.ts:75](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/main/index.ts#L75)。setLoginItem
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:874](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L874)。Login at computer start
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/index.ts:75](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/main/index.ts#L75)。setLoginItem
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:874](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L874)。Login at computer start
 
 
 ## CLI-014
@@ -635,11 +635,11 @@
 **原功能依据**
 
 - [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/commands/daemon.ts:102](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/cli/commands/daemon.ts#L102)。printStatus
-- [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts:82](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/cli/index.ts#L82)。status
+- [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts:73](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/cli/index.ts#L73)。status
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:921](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L921)。Current status
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:921](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L921)。Current status
 
 
 ## CLI-015
@@ -676,7 +676,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:921](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L921)。Diagnostics page
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:921](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L921)。Diagnostics page
 
 
 ## CLI-016
@@ -711,8 +711,8 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/controller.ts:1332](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/main/controller.ts#L1332)。diagnose
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:921](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L921)。Diagnostics page
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts:1333](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/main/controller.ts#L1333)。diagnose
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:921](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L921)。Diagnostics page
 
 
 ## CLI-017
@@ -746,8 +746,8 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/controller.ts:463](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/main/controller.ts#L463)。Codex setup refresh
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:786](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L786)。Codex actions
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts:463](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/main/controller.ts#L463)。Codex setup refresh
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:786](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L786)。Codex actions
 
 
 ## CLI-018
@@ -782,8 +782,8 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/controller.ts:775](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/main/controller.ts#L775)。startTool
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:798](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L798)。Install Codex
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts:776](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/main/controller.ts#L776)。startTool
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:798](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L798)。Install Codex
 
 
 ## CLI-019
@@ -822,8 +822,8 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/controller.ts:463](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/main/controller.ts#L463)。catalog for Claude status
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:753](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L753)。Tool list
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts:463](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/main/controller.ts#L463)。catalog for Claude status
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:753](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L753)。Tool list
 
 
 ## CLI-020
@@ -859,8 +859,8 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1873](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1873)。Host execution
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/index.ts:109](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/main/index.ts#L109)。chooseExecutable
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1873](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1873)。Host execution
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/index.ts:109](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/main/index.ts#L109)。chooseExecutable
 
 
 ## CLI-021
@@ -896,7 +896,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/shared/bridge.ts:35](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/shared/bridge.ts#L35)。commandSchema
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts:37](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/shared/bridge.ts#L37)。commandSchema
 
 
 ## CLI-022
@@ -929,12 +929,12 @@
 
 **原功能依据**
 
-- [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/commands/update.ts:44](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/cli/commands/update.ts#L44)。installLatest
+- [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/commands/update.ts:45](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/cli/commands/update.ts#L45)。installLatest
 - [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/web/server.ts:326](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/web/server.ts#L326)。update status/apply
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:835](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L835)。Application page
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:835](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L835)。Application page
 
 
 ## CLI-023
@@ -962,12 +962,12 @@
 
 **原功能依据**
 
-- [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts:101](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/cli/index.ts#L101)。web
+- [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts:99](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/cli/index.ts#L99)。web
 - [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/web/server.ts:254](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/web/server.ts#L254)。console APIs
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:237](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L237)。Desktop pages
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:237](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L237)。Desktop pages
 
 
 ## CARD-001
@@ -998,7 +998,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:969](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L969)。加入飞书群
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:969](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L969)。加入飞书群
 
 
 ## CARD-002
@@ -1029,7 +1029,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:969](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L969)。加入飞书群
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:969](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L969)。加入飞书群
 
 
 ## CARD-003
@@ -1061,7 +1061,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:1039](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L1039)。目录选择器
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:1039](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L1039)。目录选择器
 
 
 ## CARD-004
@@ -1092,7 +1092,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:1060](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L1060)。群绑定会话类型
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:1060](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L1060)。群绑定会话类型
 
 
 ## CARD-005
@@ -1119,11 +1119,11 @@
 
 **原功能依据**
 
-- [core@v0.6.14:src/bot/handle-message.ts:2942](https://github.com/modelzen/feishu-codex-bridge/blob/v0.6.14/src/bot/handle-message.ts#L2942)。DM.projects
+- [core@v0.6.14:src/bot/handle-message.ts:2964](https://github.com/modelzen/feishu-codex-bridge/blob/v0.6.14/src/bot/handle-message.ts#L2964)。DM.projects
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:400](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L400)。Agent 和群视图
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:400](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L400)。Agent 和群视图
 
 
 ## CARD-006
@@ -1154,7 +1154,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1668](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1668)。SessionPicker
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1669](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1669)。SessionPicker
 
 
 ## CARD-007
@@ -1185,7 +1185,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1435](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1435)。ProjectPanel
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1435](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1435)。ProjectPanel
 
 
 ## CARD-008
@@ -1216,7 +1216,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1435](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1435)。ProjectPanel
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1435](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1435)。ProjectPanel
 
 
 ## CARD-009
@@ -1247,7 +1247,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:969](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L969)。加入飞书群
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:969](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L969)。加入飞书群
 
 
 ## CARD-010
@@ -1282,7 +1282,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1483](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1483)。不 @ 也能发起任务
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1483](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1483)。不 @ 也能发起任务
 
 
 ## CARD-011
@@ -1313,7 +1313,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1553](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1553)。自动压缩上下文
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1553](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1553)。自动压缩上下文
 
 
 ## CARD-012
@@ -1344,7 +1344,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1501](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1501)。管理员权限
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1501](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1501)。管理员权限
 
 
 ## CARD-013
@@ -1375,7 +1375,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1517](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1517)。普通成员权限
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1517](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1517)。普通成员权限
 
 
 ## CARD-014
@@ -1406,7 +1406,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1533](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1533)。允许网络访问
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1533](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1533)。允许网络访问
 
 
 ## CARD-015
@@ -1437,7 +1437,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1577](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1577)。新会话默认模型
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1577](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1577)。新会话默认模型
 
 
 ## CARD-016
@@ -1468,7 +1468,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1577](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1577)。新会话默认模型
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1577](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1577)。新会话默认模型
 
 
 ## CARD-017
@@ -1499,7 +1499,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1593](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1593)。响应成员
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1593](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1593)。响应成员
 
 
 ## CARD-018
@@ -1526,11 +1526,11 @@
 
 **原功能依据**
 
-- [core@v0.6.14:src/bot/handle-message.ts:3625](https://github.com/modelzen/feishu-codex-bridge/blob/v0.6.14/src/bot/handle-message.ts#L3625)。DM.addAdminSubmit
+- [core@v0.6.14:src/bot/handle-message.ts:3639](https://github.com/modelzen/feishu-codex-bridge/blob/v0.6.14/src/bot/handle-message.ts#L3639)。DM.addAdminSubmit
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1274](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1274)。管理员
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1274](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1274)。管理员
 
 
 ## CARD-019
@@ -1557,11 +1557,11 @@
 
 **原功能依据**
 
-- [core@v0.6.14:src/bot/handle-message.ts:930](https://github.com/modelzen/feishu-codex-bridge/blob/v0.6.14/src/bot/handle-message.ts#L930)。isChatAllowed
+- [core@v0.6.14:src/bot/handle-message.ts:941](https://github.com/modelzen/feishu-codex-bridge/blob/v0.6.14/src/bot/handle-message.ts#L941)。isChatAllowed
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1362](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1362)。允许的飞书群
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1362](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1362)。允许的飞书群
 
 
 ## CARD-020
@@ -1592,7 +1592,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:535](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L535)。任务卡片
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:535](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L535)。任务卡片
 
 
 ## CARD-021
@@ -1623,7 +1623,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:535](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L535)。任务卡片
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:535](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L535)。任务卡片
 
 
 ## CARD-022
@@ -1654,7 +1654,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:567](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L567)。最大并发任务
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:567](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L567)。最大并发任务
 
 
 ## CARD-023
@@ -1685,7 +1685,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:597](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L597)。空闲超时
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:597](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L597)。空闲超时
 
 
 ## CARD-024
@@ -1716,7 +1716,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:612](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L612)。待处理消息策略
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:612](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L612)。待处理消息策略
 
 
 ## CARD-025
@@ -1747,7 +1747,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:630](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L630)。任务结束提醒
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:630](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L630)。任务结束提醒
 
 
 ## CARD-026
@@ -1778,7 +1778,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:653](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L653)。长任务阈值
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:653](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L653)。长任务阈值
 
 
 ## CARD-027
@@ -1809,7 +1809,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:670](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L670)。语音转文字
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:670](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L670)。语音转文字
 
 
 ## CARD-028
@@ -1836,11 +1836,11 @@ CLI 桥接启停与 Hook 修复
 
 **原功能依据**
 
-- [core@v0.6.14:src/bot/handle-message.ts:2957](https://github.com/modelzen/feishu-codex-bridge/blob/v0.6.14/src/bot/handle-message.ts#L2957)。CLI.toggleEnabled
+- [core@v0.6.14:src/bot/handle-message.ts:2979](https://github.com/modelzen/feishu-codex-bridge/blob/v0.6.14/src/bot/handle-message.ts#L2979)。CLI.toggleEnabled
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:740](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L740)。CLI 协作
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:740](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L740)。CLI 协作
 
 
 ## CARD-029
@@ -1867,11 +1867,11 @@ CLI 通知范围
 
 **原功能依据**
 
-- [core@v0.6.14:src/bot/handle-message.ts:2974](https://github.com/modelzen/feishu-codex-bridge/blob/v0.6.14/src/bot/handle-message.ts#L2974)。CLI.setNotifyScope
+- [core@v0.6.14:src/bot/handle-message.ts:3008](https://github.com/modelzen/feishu-codex-bridge/blob/v0.6.14/src/bot/handle-message.ts#L3008)。CLI.setNotifyScope
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:809](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L809)。通知范围
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:809](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L809)。通知范围
 
 
 ## CARD-030
@@ -1898,11 +1898,11 @@ CLI Claude 和 Codex 事件过滤
 
 **原功能依据**
 
-- [core@v0.6.14:src/bot/handle-message.ts:2985](https://github.com/modelzen/feishu-codex-bridge/blob/v0.6.14/src/bot/handle-message.ts#L2985)。CLI.toggleAgent
+- [core@v0.6.14:src/bot/handle-message.ts:3019](https://github.com/modelzen/feishu-codex-bridge/blob/v0.6.14/src/bot/handle-message.ts#L3019)。CLI.toggleAgent
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:824](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L824)。转发 Claude
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:824](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L824)。转发 Claude
 
 
 ## CARD-031
@@ -1929,11 +1929,11 @@ CLI 离开保活
 
 **原功能依据**
 
-- [core@v0.6.14:src/bot/handle-message.ts:2998](https://github.com/modelzen/feishu-codex-bridge/blob/v0.6.14/src/bot/handle-message.ts#L2998)。CLI.toggleKeepAwake
+- [core@v0.6.14:src/bot/handle-message.ts:3032](https://github.com/modelzen/feishu-codex-bridge/blob/v0.6.14/src/bot/handle-message.ts#L3032)。CLI.toggleKeepAwake
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:853](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L853)。离开时保活
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:853](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L853)。离开时保活
 
 
 ## CARD-032
@@ -1960,11 +1960,11 @@ CLI 审批与超时
 
 **原功能依据**
 
-- [core@v0.6.14:src/bot/handle-message.ts:2985](https://github.com/modelzen/feishu-codex-bridge/blob/v0.6.14/src/bot/handle-message.ts#L2985)。CLI.toggleAgent
+- [core@v0.6.14:src/config/schema.ts:485](https://github.com/modelzen/feishu-codex-bridge/blob/v0.6.14/src/config/schema.ts#L485)。timeoutSeconds: secondsOr
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:880](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L880)。转发权限审批
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:880](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L880)。转发权限审批
 
 
 ## CARD-033
@@ -1991,11 +1991,11 @@ CLI 完成卡与回复续聊
 
 **原功能依据**
 
-- [core@v0.6.14:src/bot/handle-message.ts:2957](https://github.com/modelzen/feishu-codex-bridge/blob/v0.6.14/src/bot/handle-message.ts#L2957)。CLI.toggleEnabled
+- [core@v0.6.14:src/config/schema.ts:490](https://github.com/modelzen/feishu-codex-bridge/blob/v0.6.14/src/config/schema.ts#L490)。replyTimeoutSeconds: secondsOr
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:919](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L919)。发送任务完成卡
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:919](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L919)。发送任务完成卡
 
 
 ## CARD-034
@@ -2022,11 +2022,11 @@ CLI 会话放行缓存
 
 **原功能依据**
 
-- [core@v0.6.14:src/bot/handle-message.ts:2957](https://github.com/modelzen/feishu-codex-bridge/blob/v0.6.14/src/bot/handle-message.ts#L2957)。CLI.toggleEnabled
+- [core@v0.6.14:src/config/schema.ts:493](https://github.com/modelzen/feishu-codex-bridge/blob/v0.6.14/src/config/schema.ts#L493)。enabled: boolOr(raw?.allowCache?.enabled
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:976](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L976)。本会话放行缓存
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:976](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L976)。本会话放行缓存
 
 
 ## CARD-035
@@ -2053,11 +2053,11 @@ CLI 在场检测
 
 **原功能依据**
 
-- [core@v0.6.14:src/bot/handle-message.ts:2957](https://github.com/modelzen/feishu-codex-bridge/blob/v0.6.14/src/bot/handle-message.ts#L2957)。CLI.toggleEnabled
+- [core@v0.6.14:src/config/schema.ts:499](https://github.com/modelzen/feishu-codex-bridge/blob/v0.6.14/src/config/schema.ts#L499)。idleThresholdSeconds: secondsOr
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:992](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L992)。在场检测
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:992](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L992)。在场检测
 
 
 ## CARD-036
@@ -2088,7 +2088,7 @@ CLI 在场检测
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1060](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1060)。云文档评论
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1060](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1060)。云文档评论
 
 
 ## CARD-037
@@ -2119,7 +2119,7 @@ CLI 在场检测
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1099](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1099)。评论回复规则
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1099](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1099)。评论回复规则
 
 
 ## CARD-038
@@ -2150,7 +2150,7 @@ CLI 在场检测
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1169](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1169)。新会话标题
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1169](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1169)。新会话标题
 
 
 ## CARD-039
@@ -2181,7 +2181,7 @@ CLI 在场检测
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1342](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1342)。新项目默认目录
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1342](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1342)。新项目默认目录
 
 
 ## CARD-040
@@ -2212,7 +2212,7 @@ CLI 在场检测
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1668](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1668)。SessionPicker
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1669](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1669)。SessionPicker
 
 
 ## CARD-041
@@ -2243,7 +2243,7 @@ CLI 在场检测
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1668](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1668)。SessionPicker
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1669](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1669)。SessionPicker
 
 
 ## CARD-042
@@ -2274,7 +2274,7 @@ CLI 在场检测
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1668](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1668)。SessionPicker
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1669](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1669)。SessionPicker
 
 
 ## CARD-043
@@ -2308,7 +2308,7 @@ CLI 在场检测
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1668](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1668)。SessionPicker
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1669](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1669)。SessionPicker
 
 
 ## CARD-044
@@ -2341,7 +2341,7 @@ CLI 在场检测
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1668](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1668)。SessionPicker
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1669](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1669)。SessionPicker
 
 
 ## CARD-045
@@ -2375,7 +2375,7 @@ CLI 在场检测
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1553](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1553)。自动压缩上下文
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1553](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1553)。自动压缩上下文
 
 
 ## CARD-046
@@ -2405,11 +2405,11 @@ CLI 在场检测
 
 **原功能依据**
 
-- [core@v0.6.14:src/bot/handle-message.ts:1918](https://github.com/modelzen/feishu-codex-bridge/blob/v0.6.14/src/bot/handle-message.ts#L1918)。postContextCard
+- [core@v0.6.14:src/bot/handle-message.ts:1927](https://github.com/modelzen/feishu-codex-bridge/blob/v0.6.14/src/bot/handle-message.ts#L1927)。postContextCard
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1668](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1668)。SessionPicker
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1669](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1669)。SessionPicker
 
 
 ## CARD-047
@@ -2443,7 +2443,7 @@ CLI 在场检测
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1668](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1668)。SessionPicker
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1669](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1669)。SessionPicker
 
 
 ## CARD-048
@@ -2477,7 +2477,7 @@ CLI 在场检测
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1668](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1668)。SessionPicker
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1669](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1669)。SessionPicker
 
 
 ## CARD-049
@@ -2511,7 +2511,7 @@ CLI 在场检测
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:630](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L630)。任务结束提醒
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:630](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L630)。任务结束提醒
 
 
 ## CARD-050
@@ -2542,7 +2542,7 @@ CLI 在场检测
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1668](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1668)。SessionPicker
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1669](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1669)。SessionPicker
 
 
 ## CARD-051
@@ -2573,7 +2573,7 @@ CLI 在场检测
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1668](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1668)。SessionPicker
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1669](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1669)。SessionPicker
 
 
 ## CARD-052
@@ -2604,7 +2604,7 @@ CLI 在场检测
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1060](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1060)。云文档评论
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1060](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1060)。云文档评论
 
 
 ## CARD-053
@@ -2635,7 +2635,7 @@ CLI 在场检测
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:921](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L921)。诊断页面
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:921](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L921)。诊断页面
 
 
 ## CARD-054
@@ -2666,7 +2666,7 @@ CLI 在场检测
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:835](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L835)。应用与启动
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:835](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L835)。应用与启动
 
 
 ## CARD-055
@@ -2697,7 +2697,7 @@ Codex 用量查询、刷新与分享
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:921](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L921)。诊断页面
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:921](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L921)。诊断页面
 
 
 ## CARD-056
@@ -2728,7 +2728,7 @@ Codex 用量查询、刷新与分享
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1435](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1435)。ProjectPanel
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1435](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1435)。ProjectPanel
 
 
 ## CARD-057
@@ -2759,7 +2759,7 @@ Codex 用量查询、刷新与分享
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:535](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L535)。Editor
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:530](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L530)。Editor
 
 
 ## CARD-058
@@ -2790,7 +2790,7 @@ Codex 用量查询、刷新与分享
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1965](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1965)。SettingsPanel
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1966](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1966)。SettingsPanel
 
 
 ## DATA-001
@@ -2820,11 +2820,11 @@ Codex 用量查询、刷新与分享
 
 **原功能依据**
 
-- [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/config/data-root.ts:49](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/config/data-root.ts#L49)。resolveDataRoot
+- [core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/config/data-root.ts:48](https://github.com/modelzen/feishu-codex-bridge/blob/21ed17cab64df7c1b481c56d63ea6aa51fc212ad/src/config/data-root.ts#L48)。resolveDataRoot
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:951](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L951)。application.dataPath
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:946](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L946)。application.dataPath
 
 
 ## LEGACY-001
@@ -2856,7 +2856,7 @@ Codex 用量查询、刷新与分享
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/controller.ts:466](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/main/controller.ts#L466)。refresh
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts:437](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/main/controller.ts#L437)。refresh lifecycle
 
 
 ## LEGACY-002
@@ -2889,7 +2889,7 @@ Codex 用量查询、刷新与分享
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:788](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L788)。installCodex
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:791](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L791)。installCodex
 
 
 ## LEGACY-003
@@ -2921,7 +2921,7 @@ Codex 用量查询、刷新与分享
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/shared/bridge.ts:27](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/shared/bridge.ts#L27)。commandSchema
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts:37](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/shared/bridge.ts#L37)。commandSchema
 
 
 ## LEGACY-004
@@ -2953,7 +2953,7 @@ Codex 用量查询、刷新与分享
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/shared/bridge.ts:27](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/shared/bridge.ts#L27)。commandSchema
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts:37](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/shared/bridge.ts#L37)。commandSchema
 
 
 ## LEGACY-005
@@ -2981,11 +2981,11 @@ Codex 用量查询、刷新与分享
 
 **原功能依据**
 
-- [legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/pages/EnvironmentPage.tsx:338](https://github.com/modelzen/vonvon-bridge-legacy/blob/3a168535c11a4f403553967908d272127e6a23af/apps/desktop/src/pages/EnvironmentPage.tsx#L338)。cancelOperation
+- [legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/pages/EnvironmentPage.tsx:341](https://github.com/modelzen/vonvon-bridge-legacy/blob/3a168535c11a4f403553967908d272127e6a23af/apps/desktop/src/pages/EnvironmentPage.tsx#L341)。cancelOperation
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/shared/bridge.ts:27](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/shared/bridge.ts#L27)。commandSchema
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts:37](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/shared/bridge.ts#L37)。commandSchema
 
 
 ## LEGACY-006
@@ -3019,7 +3019,7 @@ Codex 官方账号授权及取消
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:801](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L801)。startCodexLogin
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:810](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L810)。startCodexLogin
 
 
 ## LEGACY-007
@@ -3053,7 +3053,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/shared/bridge.ts:27](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/shared/bridge.ts#L27)。commandSchema
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts:37](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/shared/bridge.ts#L37)。commandSchema
 
 
 ## LEGACY-008
@@ -3087,7 +3087,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/shared/bridge.ts:27](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/shared/bridge.ts#L27)。commandSchema
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts:37](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/shared/bridge.ts#L37)。commandSchema
 
 
 ## LEGACY-009
@@ -3120,7 +3120,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/shared/bridge.ts:27](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/shared/bridge.ts#L27)。commandSchema
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts:37](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/shared/bridge.ts#L37)。commandSchema
 
 
 ## LEGACY-010
@@ -3153,7 +3153,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/shared/bridge.ts:27](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/shared/bridge.ts#L27)。commandSchema
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts:37](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/shared/bridge.ts#L37)。commandSchema
 
 
 ## LEGACY-011
@@ -3182,11 +3182,11 @@ Claude Code 和飞书 CLI 登录及重验
 
 **原功能依据**
 
-- [legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/components/RobotRegistrationCard.tsx:6](https://github.com/modelzen/vonvon-bridge-legacy/blob/3a168535c11a4f403553967908d272127e6a23af/apps/desktop/src/components/RobotRegistrationCard.tsx#L6)。RobotRegistrationCard
+- [legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/components/RobotRegistrationCard.tsx:18](https://github.com/modelzen/vonvon-bridge-legacy/blob/3a168535c11a4f403553967908d272127e6a23af/apps/desktop/src/components/RobotRegistrationCard.tsx#L18)。RobotRegistrationCard
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:1156](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L1156)。JobPanel
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:1156](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L1156)。JobPanel
 
 
 ## LEGACY-012
@@ -3219,7 +3219,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:1156](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L1156)。JobPanel
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:1156](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L1156)。JobPanel
 
 
 ## LEGACY-013
@@ -3253,7 +3253,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:545](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L545)。Agent details
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:545](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L545)。Agent details
 
 
 ## LEGACY-014
@@ -3285,7 +3285,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:449](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L449)。AgentPanel
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:449](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L449)。AgentPanel
 
 
 ## LEGACY-015
@@ -3317,7 +3317,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:449](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L449)。AgentPanel
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:449](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L449)。AgentPanel
 
 
 ## LEGACY-016
@@ -3351,7 +3351,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1280](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1280)。AgentPanel administrators
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1280](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1280)。AgentPanel administrators
 
 
 ## LEGACY-017
@@ -3384,7 +3384,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:969](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L969)。Join dialog
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:969](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L969)。Join dialog
 
 
 ## LEGACY-018
@@ -3418,7 +3418,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1435](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1435)。ProjectPanel
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1435](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1435)。ProjectPanel
 
 
 ## LEGACY-019
@@ -3451,7 +3451,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1435](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1435)。ProjectPanel
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1435](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1435)。ProjectPanel
 
 
 ## LEGACY-020
@@ -3483,7 +3483,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/shared/bridge.ts:27](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/shared/bridge.ts#L27)。commandSchema
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts:37](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/shared/bridge.ts#L37)。commandSchema
 
 
 ## LEGACY-021
@@ -3517,7 +3517,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1965](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1965)。SettingsPanel
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1966](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1966)。SettingsPanel
 
 
 ## LEGACY-022
@@ -3549,7 +3549,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:684](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L684)。Membership details
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:684](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L684)。Membership details
 
 
 ## LEGACY-023
@@ -3583,7 +3583,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:1338](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L1338)。HostPanel paths
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1338](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1338)。HostPanel paths
 
 
 ## LEGACY-024
@@ -3612,11 +3612,11 @@ Claude Code 和飞书 CLI 登录及重验
 
 **原功能依据**
 
-- [legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/pages/DeviceSettingsSectionPage.tsx:306](https://github.com/modelzen/vonvon-bridge-legacy/blob/3a168535c11a4f403553967908d272127e6a23af/apps/desktop/src/pages/DeviceSettingsSectionPage.tsx#L306)。handoff
+- [legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/pages/DeviceSettingsSectionPage.tsx:305](https://github.com/modelzen/vonvon-bridge-legacy/blob/3a168535c11a4f403553967908d272127e6a23af/apps/desktop/src/pages/DeviceSettingsSectionPage.tsx#L305)。handoff
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:739](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L739)。AgentPanel cliBridge
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:739](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L739)。AgentPanel cliBridge
 
 
 ## LEGACY-025
@@ -3649,7 +3649,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx:780](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/settings/SettingsPanel.tsx#L780)。AgentPanel hooks
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:780](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L780)。AgentPanel hooks
 
 
 ## LEGACY-026
@@ -3679,11 +3679,11 @@ Claude Code 和飞书 CLI 登录及重验
 
 **原功能依据**
 
-- [legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/pages/DeviceSettingsSectionPage.tsx:472](https://github.com/modelzen/vonvon-bridge-legacy/blob/3a168535c11a4f403553967908d272127e6a23af/apps/desktop/src/pages/DeviceSettingsSectionPage.tsx#L472)。application
+- [legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/pages/DeviceSettingsSectionPage.tsx:471](https://github.com/modelzen/vonvon-bridge-legacy/blob/3a168535c11a4f403553967908d272127e6a23af/apps/desktop/src/pages/DeviceSettingsSectionPage.tsx#L471)。application
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:845](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L845)。Local environment
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:845](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L845)。Local environment
 
 
 ## LEGACY-027
@@ -3717,7 +3717,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/shared/bridge.ts:27](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/shared/bridge.ts#L27)。commandSchema
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts:37](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/shared/bridge.ts#L37)。commandSchema
 
 
 ## LEGACY-028
@@ -3750,7 +3750,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:921](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L921)。diagnostics page
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:921](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L921)。diagnostics page
 
 
 ## LEGACY-029
@@ -3783,7 +3783,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx:309](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/renderer/App.tsx#L309)。onNavigate={setPage}
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:309](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L309)。onNavigate={setPage}
 
 
 ## LEGACY-030
@@ -3812,11 +3812,11 @@ Claude Code 和飞书 CLI 登录及重验
 
 **原功能依据**
 
-- [legacy@3a168535c11a4f403553967908d272127e6a23af:packages/runtime/src/desktop-runtime-api.ts:94](https://github.com/modelzen/vonvon-bridge-legacy/blob/3a168535c11a4f403553967908d272127e6a23af/packages/runtime/src/desktop-runtime-api.ts#L94)。desktop.snapshot
+- [legacy@3a168535c11a4f403553967908d272127e6a23af:packages/runtime/src/desktop-runtime-api.ts:303](https://github.com/modelzen/vonvon-bridge-legacy/blob/3a168535c11a4f403553967908d272127e6a23af/packages/runtime/src/desktop-runtime-api.ts#L303)。desktop.snapshot
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/controller.ts:434](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/main/controller.ts#L434)。refresh
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts:437](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/main/controller.ts#L437)。refresh
 
 
 ## LEGACY-031
@@ -3849,7 +3849,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/controller.ts:707](https://github.com/modelzen/vonvon-bridge/blob/3449674dca93ef7af16d61eda127b91746e65085/desktop/main/controller.ts#L707)。deleteAgent
+- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts:708](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/main/controller.ts#L708)。deleteAgent
 
 
 ## 单列的范围说明

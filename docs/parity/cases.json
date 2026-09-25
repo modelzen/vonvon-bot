@@ -2,7 +2,7 @@
   "scope": "以原 feishu-codex-bridge CLI、飞书管理卡片、本地 Web 控制台和参考旧 Vonvon 桌面的本地管理能力为基线。升级目标是接续 feishu-codex-bridge 的同一份数据，本地不要求产品账号。编号保留不同入口的测试变体，不代表同等数量的独立功能。",
   "baseline": {
     "core": "v0.6.14; current 21ed17cab64df7c1b481c56d63ea6aa51fc212ad",
-    "desktop": "3449674dca93ef7af16d61eda127b91746e65085",
+    "desktop": "aab1bb34442d6723016cfbdc3217159108b4348f",
     "legacy": "3a168535c11a4f403553967908d272127e6a23af"
   },
   "cases": [
@@ -13,7 +13,7 @@
       "baselineEvidence": [
         {
           "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts",
-          "line": 41,
+          "line": 44,
           "symbol": "run"
         },
         {
@@ -24,12 +24,12 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/host.ts",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/host.ts",
           "line": 13,
           "symbol": "acquireHost"
         },
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/index.ts",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/index.ts",
           "line": 149,
           "symbol": "bundled runtime"
         }
@@ -58,18 +58,18 @@
       "baselineEvidence": [
         {
           "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/config/data-root.ts",
-          "line": 49,
+          "line": 48,
           "symbol": "resolveDataRoot"
         }
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/host.ts",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/host.ts",
           "line": 13,
           "symbol": "acquireHost"
         },
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/controller.ts",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts",
           "line": 437,
           "symbol": "refresh"
         }
@@ -101,7 +101,7 @@
       "baselineEvidence": [
         {
           "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/config/data-root-migration.ts",
-          "line": 143,
+          "line": 112,
           "symbol": "relocateOfflineDataRoot"
         },
         {
@@ -112,7 +112,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/host.ts",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/host.ts",
           "line": 17,
           "symbol": "migrateHostDataOffline"
         }
@@ -156,13 +156,13 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/host.ts",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/host.ts",
           "line": 18,
           "symbol": "recovery-required"
         },
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/shared/bridge.ts",
-          "line": 35,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts",
+          "line": 37,
           "symbol": "commandSchema"
         }
       ],
@@ -193,7 +193,7 @@
       "baselineEvidence": [
         {
           "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/commands/bot.ts",
-          "line": 9,
+          "line": 10,
           "symbol": "runBotInit"
         },
         {
@@ -204,12 +204,12 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/controller.ts",
-          "line": 877,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts",
+          "line": 878,
           "symbol": "register"
         },
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 1193,
           "symbol": "registration link"
         }
@@ -247,12 +247,12 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/controller.ts",
-          "line": 1182,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts",
+          "line": 1183,
           "symbol": "cancel"
         },
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 1189,
           "symbol": "expired QR"
         }
@@ -293,12 +293,12 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/controller.ts",
-          "line": 716,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts",
+          "line": 701,
           "symbol": "setAgentEnabled"
         },
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 551,
           "symbol": "Agent toggle"
         }
@@ -331,18 +331,18 @@
       "baselineEvidence": [
         {
           "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/commands/bot.ts",
-          "line": 103,
+          "line": 104,
           "symbol": "runBotRm"
         }
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/controller.ts",
-          "line": 727,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts",
+          "line": 708,
           "symbol": "deleteAgent"
         },
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 615,
           "symbol": "Remove Agent"
         }
@@ -379,12 +379,12 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/controller.ts",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts",
           "line": 734,
           "symbol": "agent-active"
         },
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 629,
           "symbol": "Remove disabled"
         }
@@ -417,7 +417,7 @@
         },
         {
           "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts",
-          "line": 64,
+          "line": 62,
           "symbol": "stop"
         },
         {
@@ -428,12 +428,12 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/shared/bridge.ts",
-          "line": 35,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts",
+          "line": 37,
           "symbol": "commandSchema"
         },
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 849,
           "symbol": "Bridge run"
         }
@@ -464,7 +464,7 @@
       "baselineEvidence": [
         {
           "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts",
-          "line": 75,
+          "line": 66,
           "symbol": "restart"
         },
         {
@@ -475,12 +475,12 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/controller.ts",
-          "line": 540,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts",
+          "line": 566,
           "symbol": "restartAttached"
         },
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 861,
           "symbol": "Restart Bridge"
         }
@@ -517,14 +517,14 @@
         },
         {
           "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/host/bootstrap.ts",
-          "line": 1,
+          "line": 8,
           "symbol": "runHostRuntime"
         }
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/shared/bridge.ts",
-          "line": 35,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts",
+          "line": 37,
           "symbol": "commandSchema"
         }
       ],
@@ -560,12 +560,12 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/index.ts",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/index.ts",
           "line": 75,
           "symbol": "setLoginItem"
         },
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 874,
           "symbol": "Login at computer start"
         }
@@ -600,13 +600,13 @@
         },
         {
           "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts",
-          "line": 82,
+          "line": 73,
           "symbol": "status"
         }
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 921,
           "symbol": "Current status"
         }
@@ -646,7 +646,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 921,
           "symbol": "Diagnostics page"
         }
@@ -689,12 +689,12 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/controller.ts",
-          "line": 1332,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts",
+          "line": 1333,
           "symbol": "diagnose"
         },
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 921,
           "symbol": "Diagnostics page"
         }
@@ -735,12 +735,12 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/controller.ts",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts",
           "line": 463,
           "symbol": "Codex setup refresh"
         },
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 786,
           "symbol": "Codex actions"
         }
@@ -775,12 +775,12 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/controller.ts",
-          "line": 775,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts",
+          "line": 776,
           "symbol": "startTool"
         },
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 798,
           "symbol": "Install Codex"
         }
@@ -822,12 +822,12 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/controller.ts",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts",
           "line": 463,
           "symbol": "catalog for Claude status"
         },
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 753,
           "symbol": "Tool list"
         }
@@ -867,12 +867,12 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 1873,
           "symbol": "Host execution"
         },
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/index.ts",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/index.ts",
           "line": 109,
           "symbol": "chooseExecutable"
         }
@@ -915,8 +915,8 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/shared/bridge.ts",
-          "line": 35,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts",
+          "line": 37,
           "symbol": "commandSchema"
         }
       ],
@@ -946,7 +946,7 @@
       "baselineEvidence": [
         {
           "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/commands/update.ts",
-          "line": 44,
+          "line": 45,
           "symbol": "installLatest"
         },
         {
@@ -957,7 +957,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 835,
           "symbol": "Application page"
         }
@@ -990,7 +990,7 @@
       "baselineEvidence": [
         {
           "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts",
-          "line": 101,
+          "line": 99,
           "symbol": "web"
         },
         {
@@ -1001,7 +1001,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 237,
           "symbol": "Desktop pages"
         }
@@ -1035,7 +1035,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 969,
           "symbol": "加入飞书群"
         }
@@ -1069,7 +1069,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 969,
           "symbol": "加入飞书群"
         }
@@ -1103,7 +1103,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 1039,
           "symbol": "目录选择器"
         }
@@ -1138,7 +1138,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 1060,
           "symbol": "群绑定会话类型"
         }
@@ -1166,13 +1166,13 @@
       "baselineEvidence": [
         {
           "path": "core@v0.6.14:src/bot/handle-message.ts",
-          "line": 2942,
+          "line": 2964,
           "symbol": "DM.projects"
         }
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 400,
           "symbol": "Agent 和群视图"
         }
@@ -1206,8 +1206,8 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 1668,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1669,
           "symbol": "SessionPicker"
         }
       ],
@@ -1240,7 +1240,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 1435,
           "symbol": "ProjectPanel"
         }
@@ -1274,7 +1274,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 1435,
           "symbol": "ProjectPanel"
         }
@@ -1308,7 +1308,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 969,
           "symbol": "加入飞书群"
         }
@@ -1342,7 +1342,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 1483,
           "symbol": "不 @ 也能发起任务"
         }
@@ -1380,7 +1380,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 1553,
           "symbol": "自动压缩上下文"
         }
@@ -1414,7 +1414,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 1501,
           "symbol": "管理员权限"
         }
@@ -1448,7 +1448,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 1517,
           "symbol": "普通成员权限"
         }
@@ -1482,7 +1482,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 1533,
           "symbol": "允许网络访问"
         }
@@ -1516,7 +1516,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 1577,
           "symbol": "新会话默认模型"
         }
@@ -1550,7 +1550,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 1577,
           "symbol": "新会话默认模型"
         }
@@ -1584,7 +1584,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 1593,
           "symbol": "响应成员"
         }
@@ -1612,13 +1612,13 @@
       "baselineEvidence": [
         {
           "path": "core@v0.6.14:src/bot/handle-message.ts",
-          "line": 3625,
+          "line": 3639,
           "symbol": "DM.addAdminSubmit"
         }
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 1274,
           "symbol": "管理员"
         }
@@ -1646,13 +1646,13 @@
       "baselineEvidence": [
         {
           "path": "core@v0.6.14:src/bot/handle-message.ts",
-          "line": 930,
+          "line": 941,
           "symbol": "isChatAllowed"
         }
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 1362,
           "symbol": "允许的飞书群"
         }
@@ -1686,7 +1686,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 535,
           "symbol": "任务卡片"
         }
@@ -1720,7 +1720,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 535,
           "symbol": "任务卡片"
         }
@@ -1754,7 +1754,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 567,
           "symbol": "最大并发任务"
         }
@@ -1788,7 +1788,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 597,
           "symbol": "空闲超时"
         }
@@ -1822,7 +1822,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 612,
           "symbol": "待处理消息策略"
         }
@@ -1856,7 +1856,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 630,
           "symbol": "任务结束提醒"
         }
@@ -1890,7 +1890,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 653,
           "symbol": "长任务阈值"
         }
@@ -1924,7 +1924,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 670,
           "symbol": "语音转文字"
         }
@@ -1952,13 +1952,13 @@
       "baselineEvidence": [
         {
           "path": "core@v0.6.14:src/bot/handle-message.ts",
-          "line": 2957,
+          "line": 2979,
           "symbol": "CLI.toggleEnabled"
         }
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 740,
           "symbol": "CLI 协作"
         }
@@ -1986,13 +1986,13 @@
       "baselineEvidence": [
         {
           "path": "core@v0.6.14:src/bot/handle-message.ts",
-          "line": 2974,
+          "line": 3008,
           "symbol": "CLI.setNotifyScope"
         }
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 809,
           "symbol": "通知范围"
         }
@@ -2020,13 +2020,13 @@
       "baselineEvidence": [
         {
           "path": "core@v0.6.14:src/bot/handle-message.ts",
-          "line": 2985,
+          "line": 3019,
           "symbol": "CLI.toggleAgent"
         }
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 824,
           "symbol": "转发 Claude"
         }
@@ -2054,13 +2054,13 @@
       "baselineEvidence": [
         {
           "path": "core@v0.6.14:src/bot/handle-message.ts",
-          "line": 2998,
+          "line": 3032,
           "symbol": "CLI.toggleKeepAwake"
         }
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 853,
           "symbol": "离开时保活"
         }
@@ -2087,14 +2087,14 @@
       "title": "CLI 审批与超时",
       "baselineEvidence": [
         {
-          "path": "core@v0.6.14:src/bot/handle-message.ts",
-          "line": 2985,
-          "symbol": "CLI.toggleAgent"
+          "path": "core@v0.6.14:src/config/schema.ts",
+          "line": 485,
+          "symbol": "timeoutSeconds: secondsOr"
         }
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 880,
           "symbol": "转发权限审批"
         }
@@ -2121,14 +2121,14 @@
       "title": "CLI 完成卡与回复续聊",
       "baselineEvidence": [
         {
-          "path": "core@v0.6.14:src/bot/handle-message.ts",
-          "line": 2957,
-          "symbol": "CLI.toggleEnabled"
+          "path": "core@v0.6.14:src/config/schema.ts",
+          "line": 490,
+          "symbol": "replyTimeoutSeconds: secondsOr"
         }
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 919,
           "symbol": "发送任务完成卡"
         }
@@ -2155,14 +2155,14 @@
       "title": "CLI 会话放行缓存",
       "baselineEvidence": [
         {
-          "path": "core@v0.6.14:src/bot/handle-message.ts",
-          "line": 2957,
-          "symbol": "CLI.toggleEnabled"
+          "path": "core@v0.6.14:src/config/schema.ts",
+          "line": 493,
+          "symbol": "enabled: boolOr(raw?.allowCache?.enabled"
         }
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 976,
           "symbol": "本会话放行缓存"
         }
@@ -2189,14 +2189,14 @@
       "title": "CLI 在场检测",
       "baselineEvidence": [
         {
-          "path": "core@v0.6.14:src/bot/handle-message.ts",
-          "line": 2957,
-          "symbol": "CLI.toggleEnabled"
+          "path": "core@v0.6.14:src/config/schema.ts",
+          "line": 499,
+          "symbol": "idleThresholdSeconds: secondsOr"
         }
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 992,
           "symbol": "在场检测"
         }
@@ -2230,7 +2230,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 1060,
           "symbol": "云文档评论"
         }
@@ -2264,7 +2264,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 1099,
           "symbol": "评论回复规则"
         }
@@ -2298,7 +2298,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 1169,
           "symbol": "新会话标题"
         }
@@ -2332,7 +2332,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 1342,
           "symbol": "新项目默认目录"
         }
@@ -2366,8 +2366,8 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 1668,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1669,
           "symbol": "SessionPicker"
         }
       ],
@@ -2400,8 +2400,8 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 1668,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1669,
           "symbol": "SessionPicker"
         }
       ],
@@ -2434,8 +2434,8 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 1668,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1669,
           "symbol": "SessionPicker"
         }
       ],
@@ -2468,8 +2468,8 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 1668,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1669,
           "symbol": "SessionPicker"
         }
       ],
@@ -2505,8 +2505,8 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 1668,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1669,
           "symbol": "SessionPicker"
         }
       ],
@@ -2541,7 +2541,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 1553,
           "symbol": "自动压缩上下文"
         }
@@ -2572,14 +2572,14 @@
       "baselineEvidence": [
         {
           "path": "core@v0.6.14:src/bot/handle-message.ts",
-          "line": 1918,
+          "line": 1927,
           "symbol": "postContextCard"
         }
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 1668,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1669,
           "symbol": "SessionPicker"
         }
       ],
@@ -2615,8 +2615,8 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 1668,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1669,
           "symbol": "SessionPicker"
         }
       ],
@@ -2652,8 +2652,8 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 1668,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1669,
           "symbol": "SessionPicker"
         }
       ],
@@ -2689,7 +2689,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 630,
           "symbol": "任务结束提醒"
         }
@@ -2726,8 +2726,8 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 1668,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1669,
           "symbol": "SessionPicker"
         }
       ],
@@ -2760,8 +2760,8 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 1668,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1669,
           "symbol": "SessionPicker"
         }
       ],
@@ -2794,7 +2794,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 1060,
           "symbol": "云文档评论"
         }
@@ -2828,7 +2828,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 921,
           "symbol": "诊断页面"
         }
@@ -2862,7 +2862,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 835,
           "symbol": "应用与启动"
         }
@@ -2896,7 +2896,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 921,
           "symbol": "诊断页面"
         }
@@ -2930,7 +2930,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 1435,
           "symbol": "ProjectPanel"
         }
@@ -2964,8 +2964,8 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 535,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 530,
           "symbol": "Editor"
         }
       ],
@@ -2998,8 +2998,8 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 1965,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1966,
           "symbol": "SettingsPanel"
         }
       ],
@@ -3026,14 +3026,14 @@
       "baselineEvidence": [
         {
           "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/config/data-root.ts",
-          "line": 49,
+          "line": 48,
           "symbol": "resolveDataRoot"
         }
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
-          "line": 951,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
+          "line": 946,
           "symbol": "application.dataPath"
         }
       ],
@@ -3068,9 +3068,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/controller.ts",
-          "line": 466,
-          "symbol": "refresh"
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts",
+          "line": 437,
+          "symbol": "refresh lifecycle"
         }
       ],
       "preconditions": [
@@ -3102,8 +3102,8 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
-          "line": 788,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
+          "line": 791,
           "symbol": "installCodex"
         }
       ],
@@ -3137,8 +3137,8 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/shared/bridge.ts",
-          "line": 27,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts",
+          "line": 37,
           "symbol": "commandSchema"
         }
       ],
@@ -3171,8 +3171,8 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/shared/bridge.ts",
-          "line": 27,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts",
+          "line": 37,
           "symbol": "commandSchema"
         }
       ],
@@ -3199,14 +3199,14 @@
       "baselineEvidence": [
         {
           "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/pages/EnvironmentPage.tsx",
-          "line": 338,
+          "line": 341,
           "symbol": "cancelOperation"
         }
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/shared/bridge.ts",
-          "line": 27,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts",
+          "line": 37,
           "symbol": "commandSchema"
         }
       ],
@@ -3239,8 +3239,8 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
-          "line": 801,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
+          "line": 810,
           "symbol": "startCodexLogin"
         }
       ],
@@ -3275,8 +3275,8 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/shared/bridge.ts",
-          "line": 27,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts",
+          "line": 37,
           "symbol": "commandSchema"
         }
       ],
@@ -3311,8 +3311,8 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/shared/bridge.ts",
-          "line": 27,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts",
+          "line": 37,
           "symbol": "commandSchema"
         }
       ],
@@ -3347,8 +3347,8 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/shared/bridge.ts",
-          "line": 27,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts",
+          "line": 37,
           "symbol": "commandSchema"
         }
       ],
@@ -3382,8 +3382,8 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/shared/bridge.ts",
-          "line": 27,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts",
+          "line": 37,
           "symbol": "commandSchema"
         }
       ],
@@ -3411,13 +3411,13 @@
       "baselineEvidence": [
         {
           "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/components/RobotRegistrationCard.tsx",
-          "line": 6,
+          "line": 18,
           "symbol": "RobotRegistrationCard"
         }
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 1156,
           "symbol": "JobPanel"
         }
@@ -3452,7 +3452,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 1156,
           "symbol": "JobPanel"
         }
@@ -3487,7 +3487,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 545,
           "symbol": "Agent details"
         }
@@ -3523,7 +3523,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 449,
           "symbol": "AgentPanel"
         }
@@ -3557,7 +3557,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 449,
           "symbol": "AgentPanel"
         }
@@ -3591,7 +3591,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 1280,
           "symbol": "AgentPanel administrators"
         }
@@ -3627,7 +3627,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 969,
           "symbol": "Join dialog"
         }
@@ -3662,7 +3662,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 1435,
           "symbol": "ProjectPanel"
         }
@@ -3698,7 +3698,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 1435,
           "symbol": "ProjectPanel"
         }
@@ -3733,8 +3733,8 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/shared/bridge.ts",
-          "line": 27,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts",
+          "line": 37,
           "symbol": "commandSchema"
         }
       ],
@@ -3767,8 +3767,8 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 1965,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1966,
           "symbol": "SettingsPanel"
         }
       ],
@@ -3803,7 +3803,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 684,
           "symbol": "Membership details"
         }
@@ -3837,7 +3837,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 1338,
           "symbol": "HostPanel paths"
         }
@@ -3867,13 +3867,13 @@
       "baselineEvidence": [
         {
           "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/pages/DeviceSettingsSectionPage.tsx",
-          "line": 306,
+          "line": 305,
           "symbol": "handoff"
         }
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 739,
           "symbol": "AgentPanel cliBridge"
         }
@@ -3908,7 +3908,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/settings/SettingsPanel.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
           "line": 780,
           "symbol": "AgentPanel hooks"
         }
@@ -3937,13 +3937,13 @@
       "baselineEvidence": [
         {
           "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/pages/DeviceSettingsSectionPage.tsx",
-          "line": 472,
+          "line": 471,
           "symbol": "application"
         }
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 845,
           "symbol": "Local environment"
         }
@@ -3979,8 +3979,8 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/shared/bridge.ts",
-          "line": 27,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts",
+          "line": 37,
           "symbol": "commandSchema"
         }
       ],
@@ -4015,7 +4015,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 921,
           "symbol": "diagnostics page"
         }
@@ -4050,7 +4050,7 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/renderer/App.tsx",
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
           "line": 309,
           "symbol": "onNavigate={setPage}"
         }
@@ -4079,14 +4079,14 @@
       "baselineEvidence": [
         {
           "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:packages/runtime/src/desktop-runtime-api.ts",
-          "line": 94,
+          "line": 303,
           "symbol": "desktop.snapshot"
         }
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/controller.ts",
-          "line": 434,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts",
+          "line": 437,
           "symbol": "refresh"
         }
       ],
@@ -4120,8 +4120,8 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/controller.ts",
-          "line": 707,
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts",
+          "line": 708,
           "symbol": "deleteAgent"
         }
       ],
