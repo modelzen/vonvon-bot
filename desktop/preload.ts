@@ -4,6 +4,14 @@ import type {SettingsReply,SettingsRequest} from './shared/settings';
 import {watchSnapshots} from './shared/watch';
 
 const bridge:DesktopBridge={
+  collaboration: request => ipcRenderer.invoke('bridge:collaboration', request),
+  environment: request => ipcRenderer.invoke('bridge:environment', request),
+  machine: request => ipcRenderer.invoke('bridge:machine', request),
+  onQuitRequested(listener) {
+    const receive = () => listener();
+    ipcRenderer.on('bridge:quitRequested', receive);
+    return () => ipcRenderer.removeListener('bridge:quitRequested', receive);
+  },
   watch(listener) {
     return watchSnapshots({listener,initial:()=>ipcRenderer.invoke('bridge:watch'),listen(receive){
       const onSnapshot=(_event:unknown,snapshot:DesktopSnapshot)=>receive(snapshot);

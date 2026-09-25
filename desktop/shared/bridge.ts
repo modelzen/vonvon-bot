@@ -1,5 +1,8 @@
 import { z } from "zod";
 import type { SettingsReply, SettingsRequest } from "./settings";
+import type {MachineReply, MachineRequest} from './machine';
+import type {CollaborationClient} from './collaboration';
+import type {EnvironmentReply, EnvironmentRequest} from './environment';
 
 export const agentIdSchema = z
   .string()
@@ -36,8 +39,10 @@ const empty = <T extends string>(type: T) =>
   z.object({ type: z.literal(type) }).strict();
 export const commandSchema = z.discriminatedUnion("type", [
   empty("refresh"),
+  z.object({type: z.literal("openEventSettings"), url: z.string().regex(/^https:\/\/open\.(?:feishu\.cn|larksuite\.com)\/app\/cli_[\w-]{1,200}\/event$/)}).strict(),
   empty("chooseFolder"),
   empty("registerAgent"),
+  z.object({type: z.literal("refreshAgentCredentials"), agentId: agentIdSchema}).strict(),
   empty("installCodex"),
   empty("startCodexLogin"),
   empty("restartHost"),
@@ -156,6 +161,7 @@ export type Diagnostic = {
   title: string;
   message: string;
   status: "ok" | "warning" | "error";
+  eventConfigUrl?: string;
 };
 export type DesktopSnapshot = {
   revision: number;
@@ -191,6 +197,10 @@ export type CommandResult =
   | { kind: "outcomeUnknown"; message: string };
 export type CommandReply = { command: Command["type"]; result: CommandResult };
 export interface DesktopBridge {
+  collaboration: CollaborationClient;
+  environment(request: EnvironmentRequest): Promise<EnvironmentReply>;
+  machine(request: MachineRequest): Promise<MachineReply>;
+  onQuitRequested(listener: () => void): () => void;
   watch(listener: (snapshot: DesktopSnapshot) => void): () => void;
   run(command: Command): Promise<CommandResult>;
   settings(request: SettingsRequest): Promise<SettingsReply>;

@@ -8,9 +8,8 @@ module.exports=async function beforePack(context){
   if(process.env.VONVON_DESKTOP_PREVIEW==='1'){
     const directory=target==='darwin-arm64'?'mac-arm64':'win-x64';
     const provenance=JSON.parse(readFileSync(join(context.packager.info.appDir,'build','runtime',directory,'provenance.json'),'utf8'));
-    if(!provenance.development)throw new Error('Preview packaging requires explicitly staged development provenance.');
     if(!context.packager.appInfo.productName.endsWith('Preview'))throw new Error('Development app must be labelled Preview.');
-    return;
+    if(provenance.development)return;
   }
   execFileSync(process.execPath,['scripts/check-package.mjs',target],{cwd:context.packager.info.appDir,stdio:'inherit'});
 };

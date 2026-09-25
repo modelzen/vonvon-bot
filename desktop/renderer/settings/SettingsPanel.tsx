@@ -23,6 +23,8 @@ import {
   type TitlePolicy,
 } from "../../shared/settings";
 import "./settings.css";
+import {useDraft} from './DraftGuard';
+import {settingAnchor} from '../search';
 
 type AgentScope = { kind: "agent"; botId: AgentId };
 type ProjectScope = { kind: "project"; botId: AgentId; projectName: string };
@@ -117,27 +119,42 @@ function Editor<T>({
   }, [section.revision, section.stored, baseRevision, base]);
   const dirty = JSON.stringify(draft) !== JSON.stringify(base);
   const disabled = pending || section.access.kind === "readonly";
-  async function submit() {
+  async function submit(): Promise<boolean> {
+    if (disabled) return false;
     setPending(true);
     setError(undefined);
     setNotice(undefined);
     try {
       const result = await save(draft);
       const failure = errorText(result);
-      if (failure) setError(failure);
-      else if (result.kind === "saved" && result.result.kind === "saved")
+      if (failure) { setError(failure); return false; }
+      if (result.kind === "saved" && result.result.kind === "saved") {
+        setBase(draft);
         setNotice(
           result.result.effects.map((item) => item.detail).join(" ") ||
             "已保存。",
         );
+        return true;
+      }
+      setError('未收到保存确认，请重新读取后重试。');
+      return false;
     } catch (error) {
       setError(error instanceof Error ? error.message : "保存失败。");
+      return false;
     } finally {
       setPending(false);
     }
   }
+  function discard() {
+    setDraft(section.stored);
+    setBase(section.stored);
+    setBaseRevision(section.revision);
+    setError(undefined);
+  }
+  useDraft(dirty, {title, save: submit, discard});
   return (
     <SettingsGroup
+      id={settingAnchor(title)}
       label={title}
       footer={
         section.access.kind === "readonly"
@@ -150,12 +167,7 @@ function Editor<T>({
         <Button
           size="sm"
           disabled={!dirty || disabled}
-          onClick={() => {
-            setDraft(section.stored);
-            setBase(section.stored);
-            setBaseRevision(section.revision);
-            setError(undefined);
-          }}
+          onClick={discard}
         >
           放弃修改
         </Button>
@@ -515,7 +527,31 @@ function AgentPanel({
         setInstructions(result.result.view.commentInstructions.content.text);
       await refresh();
     }
+    return result.kind === 'acted' && result.result.kind === 'saved';
   }
+  async function saveInstructions() {
+    if (view.sections.cards.access.kind === 'readonly' || !instructions.trim()) return false;
+    const saved = await act({type: 'act', action: {
+      kind: 'commentInstructions', botId: view.scope.botId,
+      revision: view.commentInstructions.revision,
+      content: {kind: 'custom', text: instructions},
+    }});
+    if (saved) setInstructionBase(instructions);
+    return saved;
+  }
+  async function addAdministrator() {
+    const parsed = openIdSchema.safeParse(adminId.trim());
+    if (!parsed.success) return false;
+    const saved = await act({type: 'act', action: {kind: 'adminMember', botId: view.scope.botId, openId: parsed.data, membership: 'present', revision: view.administrators.revision}});
+    if (saved) setAdminId('');
+    return saved;
+  }
+  useDraft(Boolean(adminId), {title: '添加管理员', save: addAdministrator, discard: () => setAdminId('')});
+  useDraft(Boolean(chatId), {title: '添加群 ID', save: async () => {setActionMessage('请先将群 ID 添加到列表，再保存。'); return false;}, discard: () => setChatId('')});
+  useDraft(instructions !== instructionBase, {
+    title: '评论回复规则', save: saveInstructions,
+    discard: () => setInstructions(view.commentInstructions.content.text),
+  });
   const cards = view.sections.cards,
     run = view.sections.run,
     completion = view.sections.completion,
@@ -668,6 +704,7 @@ function AgentPanel({
       />
       <SettingsGroup
         label="语音转文字"
+        id={settingAnchor("语音转文字")}
         footer={
           cards.access.kind === "readonly"
             ? cards.access.message
@@ -737,6 +774,7 @@ function AgentPanel({
       </SettingsGroup>
       <SettingsGroup
         label="CLI 协作"
+        id={settingAnchor("CLI 协作")}
         footer={
           cards.access.kind === "readonly"
             ? cards.access.message
@@ -1096,6 +1134,7 @@ function AgentPanel({
       </Catalog>
       <SettingsGroup
         label="评论回复规则"
+        id={settingAnchor("评论回复规则")}
         footer={
           cards.access.kind === "readonly"
             ? cards.access.message
@@ -1127,17 +1166,7 @@ function AgentPanel({
               !instructions.trim() ||
               instructions === view.commentInstructions.content.text
             }
-            onClick={() =>
-              void act({
-                type: "act",
-                action: {
-                  kind: "commentInstructions",
-                  botId: view.scope.botId,
-                  revision: view.commentInstructions.revision,
-                  content: { kind: "custom", text: instructions },
-                },
-              })
-            }
+            onClick={() => void saveInstructions()}
           >
             保存规则
           </Button>
@@ -1271,6 +1300,7 @@ function AgentPanel({
       </Catalog>
       <SettingsGroup
         label="管理员"
+        id={settingAnchor("管理员")}
         footer={
           cards.access.kind === "readonly"
             ? cards.access.message
@@ -1320,16 +1350,7 @@ function AgentPanel({
                 size="sm"
                 disabled={!openIdSchema.safeParse(adminId.trim()).success}
                 onClick={() =>
-                  void act({
-                    type: "act",
-                    action: {
-                      kind: "adminMember",
-                      botId: view.scope.botId,
-                      openId: adminId.trim(),
-                      membership: "present",
-                      revision: view.administrators.revision,
-                    },
-                  })
+                  void addAdministrator()
                 }
               >
                 添加
@@ -1470,9 +1491,17 @@ function ProjectPanel({
       },
     });
     setNotice(errorText(result) ?? "成员范围已保存。");
-    if (result.kind === "acted" && result.result.kind === "saved")
+    if (result.kind === "acted" && result.result.kind === "saved") {
+      if (membership === 'present' && memberId.trim() === openId) setMemberId('');
       await refresh();
+      return true;
+    }
+    return false;
   }
+  useDraft(Boolean(memberId), {title: '添加项目成员', save: async () => {
+    const parsed = openIdSchema.safeParse(memberId.trim());
+    return parsed.success ? memberAction(parsed.data, 'present') : false;
+  }, discard: () => setMemberId('')});
   const permission = view.sections.permission,
     response = view.sections.response,
     compact = view.sections.compact,
@@ -1591,6 +1620,7 @@ function ProjectPanel({
       </Catalog>
       <SettingsGroup
         label="响应成员"
+        id={settingAnchor("响应成员")}
         footer={
           permission.access.kind === "readonly"
             ? permission.access.message
@@ -1709,6 +1739,7 @@ function SessionPicker({ view }: { view: ProjectSettingsView }) {
   return (
     <SettingsGroup
       label="话题模型"
+        id={settingAnchor("话题模型")}
       action={<Button onClick={() => setRefresh((value) => value + 1)}>刷新话题</Button>}
       footer="权限分开时，管理员与普通成员使用独立会话。请选择对应会话；模型从该会话下一轮生效。"
     >
@@ -1877,8 +1908,8 @@ function HostPanel({
     if (reply.kind === "fileChosen") setChoice(reply.file);
     else if (reply.kind === "refused") setNotice(reply.message);
   }
-  async function save() {
-    if (!choice) return;
+  async function save(): Promise<boolean> {
+    if (!choice || execution.access.kind === 'readonly') return false;
     const reply = await window.bridge.settings({
       type: "saveExecutable",
       token: choice.token,
@@ -1890,8 +1921,11 @@ function HostPanel({
     if (reply.kind === "saved" && reply.result.kind === "saved") {
       setChoice(undefined);
       await refresh();
+      return true;
     }
+    return false;
   }
+  useDraft(choice !== undefined, {title: 'Codex 可执行文件', save, discard: () => setChoice(undefined)});
   async function reset() {
     const reply = await window.bridge.settings({
       type: "save",
@@ -1909,6 +1943,7 @@ function HostPanel({
   return (
     <SettingsGroup
       label="Codex 可执行文件"
+        id={settingAnchor("Codex 可执行文件")}
       footer={
         execution.access.kind === "readonly"
           ? execution.access.message

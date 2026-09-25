@@ -113,6 +113,7 @@ export class DesktopController {
   private refreshing = false;
   private lifecycle: "open" | "closing" | "closed" = "open";
   private quitting: Promise<void> | undefined;
+  private paused = false;
   constructor(
     private readonly module: HostModule,
     private readonly runtime: HostRuntime,
@@ -152,15 +153,35 @@ export class DesktopController {
     this.lane = next.catch(() => undefined);
     return next;
   }
-  start(): Promise<void> {
+  start(bot?: string): Promise<void> {
     return this.enqueue(async () => {
       if (this.lifecycle !== "open" || this.host) return;
-      await this.connect();
+      this.paused = false;
+      await this.connect(bot);
     });
   }
-  private async connect(): Promise<void> {
+  currentHost(): HostHandle | undefined { return this.host; }
+  requestManagement(path: string, init: RequestInit = {}): Promise<Response> {
+    return this.enqueue(async () => {
+      if (this.lifecycle !== 'open') throw new CoreError('closing', '应用正在退出。');
+      return this.connected().request(path, {...init, signal: init.signal ?? AbortSignal.timeout(60_000)});
+    });
+  }
+  stop(): Promise<void> {
+    return this.enqueue(async () => {
+      if (this.snapshot.jobs.some(job => !terminal(job))) throw new CoreError('operation-active', '请先完成或取消安装、登录及注册操作。');
+      this.generation++;
+      await this.host?.close();
+      if (this.poll) clearInterval(this.poll);
+      this.poll = undefined;
+      this.host = undefined;
+      this.paused = true;
+      this.publish({host: {kind: 'disconnected', message: 'Bridge 已停止，可到应用与启动页重新启动。'}, stale: true});
+    });
+  }
+  private async connect(bot?: string): Promise<void> {
     try {
-      const host = await acquireHost(this.module, this.runtime);
+      const host = await acquireHost(this.module, {...this.runtime, ...(bot ? {bot} : {})});
       if (host.kind === "blocked") {
         if (this.lifecycle === "open")
           this.publish({
@@ -628,6 +649,7 @@ export class DesktopController {
       try {
         switch (command.type) {
           case "refresh":
+            if (!this.host && this.paused) return {kind: 'applied', revision: this.snapshot.revision};
             if (!this.host) await this.connect();
             else await this.refresh();
             await this.diagnose();
@@ -734,6 +756,8 @@ export class DesktopController {
           }
           case "registerAgent":
             return await this.register();
+          case "refreshAgentCredentials":
+            return await this.register(command.agentId);
           case "installCodex":
             return await this.startTool("install");
           case "startCodexLogin":
@@ -742,6 +766,7 @@ export class DesktopController {
             await this.inspectAgent(command.agentId);
             return { kind: "applied", revision: this.snapshot.revision };
           case "chooseFolder":
+          case "openEventSettings":
           case "openJobAuthorization":
           case "copyJobAuthorization":
           case "setLoginItem":
@@ -875,7 +900,7 @@ export class DesktopController {
       });
     }
   }
-  private async register(): Promise<CommandResult> {
+  private async register(target?: AgentId): Promise<CommandResult> {
     if (
       this.snapshot.jobs.some(
         (job) => job.type === "registerAgent" && !terminal(job),
@@ -883,6 +908,8 @@ export class DesktopController {
     )
       throw new CoreError("registration-running", "已有扫码注册正在进行。");
     const before = stateSchema.parse(await this.json("/api/state"));
+    if (target && !before.bots.some(bot => bot.appId === target))
+      throw new CoreError("missing-agent", "Agent 已不存在，请刷新列表。");
     const registered = new Set(before.bots.map((bot) => bot.appId));
     const id = jobIdSchema.parse(randomUUID());
     const abort = new AbortController();
@@ -978,23 +1005,43 @@ export class DesktopController {
           }
           this.generation++;
           const state = stateSchema.parse(await this.json("/api/state"));
-          for (const bot of state.bots)
-            if (!registered.has(bot.appId)) committed.add(bot.appId);
+          if (target && !committed.has(target)) {
+            if (!sessionId) throw new CoreError("session-unknown", "无法确认凭据刷新会话。");
+            const outcome = z.discriminatedUnion("state", [
+              z.object({state: z.literal("running")}),
+              z.object({state: z.literal("succeeded"), appId: agentIdSchema}),
+              z.object({state: z.literal("failed"), code: z.string().optional(), message: z.string().max(1024)}),
+              z.object({state: z.literal("cancelled")}),
+            ]).parse(await this.json(`/api/bots/register-qr?sessionId=${encodeURIComponent(sessionId)}`));
+            if (outcome.state === "running") throw new CoreError("refresh-running", "凭据刷新尚未结束。");
+            if (outcome.state === "succeeded") {
+              if (outcome.appId !== target) throw new CoreError("identity-mismatch", "刷新结果与所选 Agent 不一致。");
+              committed.add(target);
+            } else if (outcome.state === "failed") failure = new Error(outcome.message);
+          } else if (!target) {
+            for (const bot of state.bots)
+              if (!registered.has(bot.appId)) committed.add(bot.appId);
+          }
           this.publish({
             ...projectState(state, this.snapshot, this.pendingActivation),
             observedAt: Date.now(),
           });
           if (committed.size) {
-            for (const appId of committed) this.pendingActivation.add(appId);
+            for (const appId of committed)
+              if (!target || state.bots.some(bot => bot.appId === appId && bot.active)) this.pendingActivation.add(appId);
             this.job({
               id,
               type: "registerAgent",
               phase: "activating",
-              message: "飞书身份已保存，正在启用。",
+              message: target ? "飞书凭据已保存，正在确认生效状态。" : "飞书身份已保存，正在启用。",
             });
             const result = await this.enqueue(async () => {
-              for (const appId of committed)
-                await this.write(`/api/bots/${encodeURIComponent(appId)}`, { enabled: true }, "PATCH");
+              if (!target) {
+                for (const appId of committed)
+                  await this.write(`/api/bots/${encodeURIComponent(appId)}`, { enabled: true }, "PATCH");
+              }
+              if (target && !state.bots.some(bot => bot.appId === target && bot.active))
+                return {kind: "applied", revision: this.snapshot.revision} as const;
               return this.activate();
             });
             await this.refresh(true);
@@ -1005,7 +1052,7 @@ export class DesktopController {
               message:
                 result.kind === "activationPending"
                   ? result.message
-                  : "Agent 已注册并启用。请检查飞书权限后加入群。",
+                  : target ? "Agent 凭据已刷新，原有设置和群绑定已保留。" : "Agent 已注册并启用。请检查飞书权限后加入群。",
             });
           } else {
             this.job({
@@ -1013,7 +1060,7 @@ export class DesktopController {
               type: "registerAgent",
               phase: cancellationRequested ? "cancelled" : "failed",
               message: cancellationRequested
-                ? "已关闭本次注册请求，未发现新保存的身份。"
+                ? target ? "已取消凭据刷新，凭据未更改。" : "已关闭本次注册请求，未发现新保存的身份。"
                 : messageOf(
                     failure ?? new Error("注册连接已结束，尚未收到保存确认。"),
                   ),
@@ -1037,7 +1084,7 @@ export class DesktopController {
       id,
       type: "registerAgent",
       phase: "running",
-      message: "正在向飞书请求注册二维码。",
+      message: target ? "正在向飞书请求凭据刷新二维码。" : "正在向飞书请求注册二维码。",
     });
     const finished = this.readRegistration(
       id,
@@ -1045,6 +1092,7 @@ export class DesktopController {
       committed,
       recordSession,
       () => cancellationRequested,
+      target,
     )
       .catch((error) => {
         failure = error;
@@ -1090,9 +1138,10 @@ export class DesktopController {
     committed: Set<AgentId>,
     recordSession: (value: string) => void,
     isCancelling: () => boolean,
+    target?: AgentId,
   ): Promise<void> {
     const response = await this.connected().request(
-      "/api/bots/register-qr/stream",
+      target ? `/api/bots/${encodeURIComponent(target)}/refresh-qr/stream` : "/api/bots/register-qr/stream",
       { signal },
     );
     if (!response.ok) {
@@ -1137,9 +1186,9 @@ export class DesktopController {
           if (!text) continue;
           const payload: unknown = JSON.parse(text);
           if (name === "done") {
-            committed.add(
-              z.object({ appId: agentIdSchema }).parse(payload).appId,
-            );
+            const appId = z.object({ appId: agentIdSchema }).parse(payload).appId;
+            if (target && appId !== target) throw new CoreError("identity-mismatch", "刷新结果与所选 Agent 不一致。");
+            committed.add(appId);
             return;
           }
           if (!signal.aborted && name === "qr") {
@@ -1286,6 +1335,7 @@ export class DesktopController {
   private async inspectAgent(id: AgentId): Promise<void> {
     const value = z
       .object({
+        eventConfigUrl: z.string().optional(),
         credentials: z.object({
           ok: z.boolean(),
           reason: z.string().optional(),
@@ -1320,7 +1370,8 @@ export class DesktopController {
         },
         {
           title: "飞书权限",
-          status: value.scopes.missingRequired?.length === 0 ? "ok" : "warning",
+          eventConfigUrl: value.eventConfigUrl,
+          status: value.scopes.missingRequired?.length ? "error" : value.scopes.missingRequired ? "ok" : "warning",
           message: value.scopes.missingRequired
             ? value.scopes.missingRequired.length
               ? `缺少权限：${value.scopes.missingRequired.join("、")}`
@@ -1347,6 +1398,7 @@ export class DesktopController {
     });
     const diagnosisSchema = z.object({
       backends: z.array(backend),
+      eventConfigUrl: z.string().optional(),
       event: z
         .object({
           state: z.enum(["unchecked", "unpublished", "missing", "ok"]),
@@ -1401,7 +1453,8 @@ export class DesktopController {
       const event = diagnosis.data.event;
       diagnostics.push({
         title: "飞书事件订阅",
-        status: event?.state === "ok" ? "ok" : "warning",
+        eventConfigUrl: diagnosis.data.eventConfigUrl,
+        status: event?.state === "ok" ? "ok" : event?.state === "missing" || event?.state === "unpublished" ? "error" : "warning",
         message: !event
           ? "尚未注册 Agent。"
           : event.state === "ok"

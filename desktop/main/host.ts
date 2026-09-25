@@ -4,7 +4,7 @@ export interface HostHandle {
   request(path:string, init?:RequestInit):Promise<Response>;
   restart():Promise<void>; close():Promise<void>;
 }
-export interface HostRuntime {home:string;nodePath:string;cliPath:string}
+export interface HostRuntime {home:string;nodePath:string;cliPath:string;bot?:string}
 export interface HostModule {
   inspectHost(home:string):Promise<{kind:'absent'}|{kind:'attached';pid:number}|HostRefusal>;
   connectHost(options:HostRuntime):Promise<HostHandle|HostRefusal>;

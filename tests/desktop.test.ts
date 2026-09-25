@@ -1703,3 +1703,49 @@ test('only a current Codex login authorizing phase exposes an OpenAI URL', async
     } finally { await f.controller.quit(); }
   }
 });
+
+test("credential refresh reconciles a dropped completion for a disabled Agent without enabling it", async () => {
+  const f = fixture();
+  const state = coreState();
+  const bot = state.bots[0];
+  assert.ok(bot);
+  bot.active = false;
+  bot.running = false;
+  f.setState(state);
+  await f.controller.start();
+  f.setIntercept((path, init) => {
+    if (path === `/api/bots/${agentId}/refresh-qr/stream`) return Promise.resolve(registrationStream(new ReadableStream({start(stream) {stream.close();}})));
+    if (path === `/api/bots/register-qr?sessionId=${registrationSession}` && init?.method !== 'DELETE') return Promise.resolve(Response.json({state: 'succeeded', appId: agentId}));
+  });
+  try {
+    const reply = await f.controller.run({type: 'refreshAgentCredentials', agentId}, async () => '/tmp/work');
+    assert.equal(reply.kind, 'started');
+    await until(() => f.controller.current().jobs.some(job => job.phase === 'succeeded'));
+    assert.equal(f.requests.some(request => request.init?.method === 'PATCH'), false);
+    assert.equal(f.counts().restarts, 0);
+    assert.equal(f.controller.current().agents[0]?.enabled, false);
+    assert.equal(f.controller.current().memberships.length, 1);
+  } finally {await f.controller.quit();}
+});
+
+test("credential refresh keeps attached active Agent pending activation and rejects another identity", async () => {
+  for (const wrongIdentity of [false, true]) {
+    const f = fixture('attached');
+    await f.controller.start();
+    f.setIntercept((path, init) => {
+      if (path === `/api/bots/${agentId}/refresh-qr/stream`) return Promise.resolve(registrationStream(new ReadableStream({start(stream) {
+        stream.enqueue(new TextEncoder().encode(`event: done\ndata: ${JSON.stringify({appId: wrongIdentity ? 'cli_other' : agentId})}\n\n`));stream.close();
+      }})));
+      if (path === `/api/bots/register-qr?sessionId=${registrationSession}` && init?.method !== 'DELETE') return Promise.resolve(Response.json({state: 'failed', code: 'identity-mismatch', message: 'Wrong app identity'}));
+    });
+    try {
+      await f.controller.run({type: 'refreshAgentCredentials', agentId}, async () => '/tmp/work');
+      await until(() => f.controller.current().jobs.some(job => job.phase === (wrongIdentity ? 'failed' : 'succeeded')));
+      assert.equal(f.counts().restarts, 0);
+      assert.equal(f.requests.some(request => request.init?.method === 'PATCH'), false);
+      assert.equal(f.controller.current().agents[0]?.enabled, true);
+      const job = f.controller.current().jobs[0];
+      if (!wrongIdentity) {assert.ok(job && 'message' in job); assert.match(job.message ?? '', /重启/);}
+    } finally {await f.controller.quit();}
+  }
+});

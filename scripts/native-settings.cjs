@@ -45,7 +45,9 @@ void app.whenReady().then(async () => {
     };
     ipcMain.removeHandler("bridge:watch");
     ipcMain.removeHandler("bridge:settings");
-    ipcMain.handle("bridge:watch", () => snapshot);
+    ipcMain.removeHandler('bridge:collaboration');
+    ipcMain.handle('bridge:collaboration', () => ({kind: 'refused', code: 'fixture-unused', message: 'This fixture covers settings navigation.'}));
+ipcMain.handle("bridge:watch", () => snapshot);
     ipcMain.handle("bridge:settings", (_event, request) => {
       if (request.type === "models") return { kind: "refused", code: "fixture", message: "Model catalogs are outside this fixture." };
       assert.equal(request.type, "read", "Unexpected settings mutation in a read-only fixture");
@@ -103,6 +105,7 @@ void app.whenReady().then(async () => {
             assert.ok(release, "Background read is pending before navigation");
           }
           await evaluate("document.querySelector('button[aria-label=\"返回列表\"]').click()");
+          await click("放弃并离开");
           await click("Second Agent");
           await until("document.body.innerText.includes('SECOND AGENT STATUS')");
           const count = reads;
