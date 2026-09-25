@@ -156,14 +156,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/host.ts",
-          "line": 18,
-          "symbol": "recovery-required"
-        },
-        {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts",
-          "line": 37,
-          "symbol": "commandSchema"
+          "path": "desktop@c374a4a:desktop/main/controller.ts",
+          "line": 103,
+          "symbol": "class DesktopController"
         }
       ],
       "preconditions": [
@@ -428,14 +423,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts",
-          "line": 37,
-          "symbol": "commandSchema"
-        },
-        {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
-          "line": 849,
-          "symbol": "Bridge run"
+          "path": "desktop@c374a4a:desktop/renderer/management/MachinePanel.tsx",
+          "line": 6,
+          "symbol": "function MachinePanel"
         }
       ],
       "preconditions": [
@@ -523,9 +513,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts",
-          "line": 37,
-          "symbol": "commandSchema"
+          "path": "desktop@c374a4a:desktop/renderer/management/MachinePanel.tsx",
+          "line": 6,
+          "symbol": "function MachinePanel"
         }
       ],
       "preconditions": [
@@ -560,14 +550,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/index.ts",
-          "line": 75,
-          "symbol": "setLoginItem"
-        },
-        {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
-          "line": 874,
-          "symbol": "Login at computer start"
+          "path": "desktop@c374a4a:desktop/renderer/management/MachinePanel.tsx",
+          "line": 6,
+          "symbol": "function MachinePanel"
         }
       ],
       "preconditions": [
@@ -606,9 +591,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
-          "line": 921,
-          "symbol": "Current status"
+          "path": "desktop@c374a4a:desktop/renderer/management/MachinePanel.tsx",
+          "line": 6,
+          "symbol": "function MachinePanel"
         }
       ],
       "preconditions": [
@@ -646,9 +631,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
-          "line": 921,
-          "symbol": "Diagnostics page"
+          "path": "desktop@c374a4a:desktop/renderer/management/LogPanel.tsx",
+          "line": 3,
+          "symbol": "function LogPanel"
         }
       ],
       "preconditions": [
@@ -690,8 +675,8 @@
       "desktopEvidence": [
         {
           "path": "desktop@c374a4a:desktop/main/controller.ts",
-          "line": 1384,
-          "symbol": "private async diagnose"
+          "line": 103,
+          "symbol": "class DesktopController"
         }
       ],
       "preconditions": [
@@ -817,14 +802,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts",
-          "line": 463,
-          "symbol": "catalog for Claude status"
-        },
-        {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
-          "line": 753,
-          "symbol": "Tool list"
+          "path": "desktop@c374a4a:desktop/renderer/management/EnvironmentPanel.tsx",
+          "line": 25,
+          "symbol": "function EnvironmentPanel"
         }
       ],
       "preconditions": [
@@ -910,9 +890,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts",
-          "line": 37,
-          "symbol": "commandSchema"
+          "path": "desktop@c374a4a:desktop/renderer/management/UpdatePanel.tsx",
+          "line": 6,
+          "symbol": "function UpdatePanel"
         }
       ],
       "preconditions": [
@@ -952,9 +932,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
-          "line": 835,
-          "symbol": "Application page"
+          "path": "desktop@c374a4a:desktop/renderer/management/UpdatePanel.tsx",
+          "line": 6,
+          "symbol": "function UpdatePanel"
         }
       ],
       "preconditions": [
@@ -996,9 +976,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
-          "line": 237,
-          "symbol": "Desktop pages"
+          "path": "desktop@c374a4a:desktop/renderer/App.tsx",
+          "line": 79,
+          "symbol": "function App"
         }
       ],
       "preconditions": [
@@ -1030,9 +1010,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
-          "line": 969,
-          "symbol": "加入飞书群"
+          "path": "desktop@c374a4a:desktop/renderer/management/ProjectPanel.tsx",
+          "line": 26,
+          "symbol": "function ProjectPanel"
         }
       ],
       "preconditions": [
@@ -1133,9 +1113,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
-          "line": 1060,
-          "symbol": "群绑定会话类型"
+          "path": "desktop@c374a4a:desktop/renderer/management/ProjectPanel.tsx",
+          "line": 26,
+          "symbol": "function ProjectPanel"
         }
       ],
       "preconditions": [
@@ -1235,9 +1215,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 1435,
-          "symbol": "ProjectPanel"
+          "path": "desktop@c374a4a:desktop/renderer/management/ProjectPanel.tsx",
+          "line": 26,
+          "symbol": "function ProjectPanel"
         }
       ],
       "preconditions": [
@@ -1269,9 +1249,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 1435,
-          "symbol": "ProjectPanel"
+          "path": "desktop@c374a4a:desktop/renderer/management/ProjectPanel.tsx",
+          "line": 26,
+          "symbol": "function ProjectPanel"
         }
       ],
       "preconditions": [
@@ -2327,9 +2307,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 1342,
-          "symbol": "新项目默认目录"
+          "path": "desktop@c374a4a:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 2001,
+          "symbol": "function SettingsPanel"
         }
       ],
       "preconditions": [
@@ -2463,9 +2443,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 1669,
-          "symbol": "SessionPicker"
+          "path": "desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx",
+          "line": 18,
+          "symbol": "function ConversationPanel"
         }
       ],
       "preconditions": [
@@ -2500,9 +2480,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 1669,
-          "symbol": "SessionPicker"
+          "path": "desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx",
+          "line": 18,
+          "symbol": "function ConversationPanel"
         }
       ],
       "preconditions": [
@@ -2536,9 +2516,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 1553,
-          "symbol": "自动压缩上下文"
+          "path": "desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx",
+          "line": 18,
+          "symbol": "function ConversationPanel"
         }
       ],
       "preconditions": [
@@ -2573,9 +2553,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 1669,
-          "symbol": "SessionPicker"
+          "path": "desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx",
+          "line": 18,
+          "symbol": "function ConversationPanel"
         }
       ],
       "preconditions": [
@@ -2610,9 +2590,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 1669,
-          "symbol": "SessionPicker"
+          "path": "desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx",
+          "line": 18,
+          "symbol": "function ConversationPanel"
         }
       ],
       "preconditions": [
@@ -2647,9 +2627,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 1669,
-          "symbol": "SessionPicker"
+          "path": "desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx",
+          "line": 18,
+          "symbol": "function ConversationPanel"
         }
       ],
       "preconditions": [
@@ -2684,9 +2664,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 630,
-          "symbol": "任务结束提醒"
+          "path": "desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx",
+          "line": 18,
+          "symbol": "function ConversationPanel"
         }
       ],
       "preconditions": [
@@ -2857,9 +2837,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
-          "line": 835,
-          "symbol": "应用与启动"
+          "path": "desktop@c374a4a:desktop/renderer/management/UpdatePanel.tsx",
+          "line": 6,
+          "symbol": "function UpdatePanel"
         }
       ],
       "preconditions": [
@@ -2893,7 +2873,7 @@
         {
           "path": "desktop@c374a4a:desktop/renderer/management/UsagePanel.tsx",
           "line": 63,
-          "symbol": "export function UsagePanel"
+          "symbol": "function UsagePanel"
         }
       ],
       "preconditions": [
@@ -3027,9 +3007,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
-          "line": 946,
-          "symbol": "application.dataPath"
+          "path": "desktop@c374a4a:desktop/main/controller.ts",
+          "line": 103,
+          "symbol": "class DesktopController"
         }
       ],
       "preconditions": [
@@ -3132,9 +3112,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts",
-          "line": 37,
-          "symbol": "commandSchema"
+          "path": "desktop@c374a4a:desktop/renderer/management/EnvironmentPanel.tsx",
+          "line": 25,
+          "symbol": "function EnvironmentPanel"
         }
       ],
       "preconditions": [
@@ -3166,9 +3146,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@c374a4a:desktop/main/environment.ts",
-          "line": 388,
-          "symbol": "private async performInstall"
+          "path": "desktop@c374a4a:desktop/renderer/management/EnvironmentPanel.tsx",
+          "line": 25,
+          "symbol": "function EnvironmentPanel"
         }
       ],
       "preconditions": [
@@ -3200,9 +3180,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@c374a4a:desktop/main/environment.ts",
-          "line": 381,
-          "symbol": "private async cancelInstall"
+          "path": "desktop@c374a4a:desktop/renderer/management/EnvironmentPanel.tsx",
+          "line": 25,
+          "symbol": "function EnvironmentPanel"
         }
       ],
       "preconditions": [
@@ -3234,9 +3214,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
-          "line": 810,
-          "symbol": "startCodexLogin"
+          "path": "desktop@c374a4a:desktop/main/controller.ts",
+          "line": 103,
+          "symbol": "class DesktopController"
         }
       ],
       "preconditions": [
@@ -3270,9 +3250,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts",
-          "line": 37,
-          "symbol": "commandSchema"
+          "path": "desktop@c374a4a:desktop/renderer/management/EnvironmentPanel.tsx",
+          "line": 25,
+          "symbol": "function EnvironmentPanel"
         }
       ],
       "preconditions": [
@@ -3306,9 +3286,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts",
-          "line": 37,
-          "symbol": "commandSchema"
+          "path": "desktop@c374a4a:desktop/renderer/management/EnvironmentPanel.tsx",
+          "line": 25,
+          "symbol": "function EnvironmentPanel"
         }
       ],
       "preconditions": [
@@ -3342,9 +3322,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts",
-          "line": 37,
-          "symbol": "commandSchema"
+          "path": "desktop@c374a4a:desktop/renderer/management/EnvironmentPanel.tsx",
+          "line": 25,
+          "symbol": "function EnvironmentPanel"
         }
       ],
       "preconditions": [
@@ -3377,9 +3357,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts",
-          "line": 37,
-          "symbol": "commandSchema"
+          "path": "desktop@c374a4a:desktop/renderer/management/EnvironmentPanel.tsx",
+          "line": 25,
+          "symbol": "function EnvironmentPanel"
         }
       ],
       "preconditions": [
@@ -3447,9 +3427,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
-          "line": 1156,
-          "symbol": "JobPanel"
+          "path": "desktop@c374a4a:desktop/main/controller.ts",
+          "line": 103,
+          "symbol": "class DesktopController"
         }
       ],
       "preconditions": [
@@ -3482,9 +3462,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
-          "line": 545,
-          "symbol": "Agent details"
+          "path": "desktop@c374a4a:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 2001,
+          "symbol": "function SettingsPanel"
         }
       ],
       "preconditions": [
@@ -3552,9 +3532,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 449,
-          "symbol": "AgentPanel"
+          "path": "desktop@c374a4a:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 2001,
+          "symbol": "function SettingsPanel"
         }
       ],
       "preconditions": [
@@ -3622,9 +3602,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
-          "line": 969,
-          "symbol": "Join dialog"
+          "path": "desktop@c374a4a:desktop/renderer/management/ProjectPanel.tsx",
+          "line": 26,
+          "symbol": "function ProjectPanel"
         }
       ],
       "preconditions": [
@@ -3657,9 +3637,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 1435,
-          "symbol": "ProjectPanel"
+          "path": "desktop@c374a4a:desktop/renderer/management/ProjectPanel.tsx",
+          "line": 26,
+          "symbol": "function ProjectPanel"
         }
       ],
       "preconditions": [
@@ -3693,9 +3673,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 1435,
-          "symbol": "ProjectPanel"
+          "path": "desktop@c374a4a:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 2001,
+          "symbol": "function SettingsPanel"
         }
       ],
       "preconditions": [
@@ -3728,9 +3708,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts",
-          "line": 37,
-          "symbol": "commandSchema"
+          "path": "desktop@c374a4a:desktop/renderer/management/ProjectPanel.tsx",
+          "line": 26,
+          "symbol": "function ProjectPanel"
         }
       ],
       "preconditions": [
@@ -3763,8 +3743,8 @@
       "desktopEvidence": [
         {
           "path": "desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx",
-          "line": 95,
-          "symbol": "历史会话"
+          "line": 18,
+          "symbol": "function ConversationPanel"
         }
       ],
       "preconditions": [
@@ -3798,9 +3778,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
-          "line": 684,
-          "symbol": "Membership details"
+          "path": "desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx",
+          "line": 18,
+          "symbol": "function ConversationPanel"
         }
       ],
       "preconditions": [
@@ -3832,9 +3812,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 1338,
-          "symbol": "HostPanel paths"
+          "path": "desktop@c374a4a:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 2001,
+          "symbol": "function SettingsPanel"
         }
       ],
       "preconditions": [
@@ -3868,9 +3848,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
-          "line": 739,
-          "symbol": "AgentPanel cliBridge"
+          "path": "desktop@c374a4a:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 2001,
+          "symbol": "function SettingsPanel"
         }
       ],
       "preconditions": [
@@ -3938,9 +3918,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
-          "line": 845,
-          "symbol": "Local environment"
+          "path": "desktop@c374a4a:desktop/renderer/management/MachinePanel.tsx",
+          "line": 6,
+          "symbol": "function MachinePanel"
         }
       ],
       "preconditions": [
@@ -3974,9 +3954,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts",
-          "line": 37,
-          "symbol": "commandSchema"
+          "path": "desktop@c374a4a:desktop/renderer/management/UpdatePanel.tsx",
+          "line": 6,
+          "symbol": "function UpdatePanel"
         }
       ],
       "preconditions": [
@@ -4045,9 +4025,9 @@
       ],
       "desktopEvidence": [
         {
-          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
-          "line": 309,
-          "symbol": "onNavigate={setPage}"
+          "path": "desktop@c374a4a:desktop/renderer/SearchDialog.tsx",
+          "line": 5,
+          "symbol": "function SearchDialog"
         }
       ],
       "preconditions": [

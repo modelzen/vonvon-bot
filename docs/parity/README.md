@@ -276,8 +276,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/host.ts:18](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/main/host.ts#L18)。recovery-required
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts:37](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/shared/bridge.ts#L37)。commandSchema
+- [desktop@c374a4a:desktop/main/controller.ts:103](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/main/controller.ts#L103)。class DesktopController
 
 
 ## CLI-005
@@ -495,8 +494,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts:37](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/shared/bridge.ts#L37)。commandSchema
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:849](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L849)。Bridge run
+- [desktop@c374a4a:desktop/renderer/management/MachinePanel.tsx:6](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/MachinePanel.tsx#L6)。function MachinePanel
 
 
 ## CLI-011
@@ -570,7 +568,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts:37](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/shared/bridge.ts#L37)。commandSchema
+- [desktop@c374a4a:desktop/renderer/management/MachinePanel.tsx:6](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/MachinePanel.tsx#L6)。function MachinePanel
 
 
 ## CLI-013
@@ -604,8 +602,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/index.ts:75](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/main/index.ts#L75)。setLoginItem
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:874](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L874)。Login at computer start
+- [desktop@c374a4a:desktop/renderer/management/MachinePanel.tsx:6](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/MachinePanel.tsx#L6)。function MachinePanel
 
 
 ## CLI-014
@@ -639,7 +636,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:921](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L921)。Current status
+- [desktop@c374a4a:desktop/renderer/management/MachinePanel.tsx:6](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/MachinePanel.tsx#L6)。function MachinePanel
 
 
 ## CLI-015
@@ -676,7 +673,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:921](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L921)。Diagnostics page
+- [desktop@c374a4a:desktop/renderer/management/LogPanel.tsx:3](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/LogPanel.tsx#L3)。function LogPanel
 
 
 ## CLI-016
@@ -711,7 +708,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@c374a4a:desktop/main/controller.ts:1384](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/main/controller.ts#L1384)。private async diagnose
+- [desktop@c374a4a:desktop/main/controller.ts:103](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/main/controller.ts#L103)。class DesktopController
 
 
 ## CLI-017
@@ -821,8 +818,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts:463](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/main/controller.ts#L463)。catalog for Claude status
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:753](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L753)。Tool list
+- [desktop@c374a4a:desktop/renderer/management/EnvironmentPanel.tsx:25](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/EnvironmentPanel.tsx#L25)。function EnvironmentPanel
 
 
 ## CLI-020
@@ -895,7 +891,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts:37](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/shared/bridge.ts#L37)。commandSchema
+- [desktop@c374a4a:desktop/renderer/management/UpdatePanel.tsx:6](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/UpdatePanel.tsx#L6)。function UpdatePanel
 
 
 ## CLI-022
@@ -933,7 +929,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:835](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L835)。Application page
+- [desktop@c374a4a:desktop/renderer/management/UpdatePanel.tsx:6](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/UpdatePanel.tsx#L6)。function UpdatePanel
 
 
 ## CLI-023
@@ -966,7 +962,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:237](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L237)。Desktop pages
+- [desktop@c374a4a:desktop/renderer/App.tsx:79](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/App.tsx#L79)。function App
 
 
 ## CARD-001
@@ -997,7 +993,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:969](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L969)。加入飞书群
+- [desktop@c374a4a:desktop/renderer/management/ProjectPanel.tsx:26](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/ProjectPanel.tsx#L26)。function ProjectPanel
 
 
 ## CARD-002
@@ -1091,7 +1087,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:1060](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L1060)。群绑定会话类型
+- [desktop@c374a4a:desktop/renderer/management/ProjectPanel.tsx:26](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/ProjectPanel.tsx#L26)。function ProjectPanel
 
 
 ## CARD-005
@@ -1184,7 +1180,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1435](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1435)。ProjectPanel
+- [desktop@c374a4a:desktop/renderer/management/ProjectPanel.tsx:26](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/ProjectPanel.tsx#L26)。function ProjectPanel
 
 
 ## CARD-008
@@ -1215,7 +1211,7 @@
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1435](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1435)。ProjectPanel
+- [desktop@c374a4a:desktop/renderer/management/ProjectPanel.tsx:26](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/ProjectPanel.tsx#L26)。function ProjectPanel
 
 
 ## CARD-009
@@ -2180,7 +2176,7 @@ CLI 在场检测
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1342](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1342)。新项目默认目录
+- [desktop@c374a4a:desktop/renderer/settings/SettingsPanel.tsx:2001](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/settings/SettingsPanel.tsx#L2001)。function SettingsPanel
 
 
 ## CARD-040
@@ -2307,7 +2303,7 @@ CLI 在场检测
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1669](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1669)。SessionPicker
+- [desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx:18](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/ConversationPanel.tsx#L18)。function ConversationPanel
 
 
 ## CARD-044
@@ -2340,7 +2336,7 @@ CLI 在场检测
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1669](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1669)。SessionPicker
+- [desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx:18](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/ConversationPanel.tsx#L18)。function ConversationPanel
 
 
 ## CARD-045
@@ -2374,7 +2370,7 @@ CLI 在场检测
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1553](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1553)。自动压缩上下文
+- [desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx:18](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/ConversationPanel.tsx#L18)。function ConversationPanel
 
 
 ## CARD-046
@@ -2408,7 +2404,7 @@ CLI 在场检测
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1669](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1669)。SessionPicker
+- [desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx:18](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/ConversationPanel.tsx#L18)。function ConversationPanel
 
 
 ## CARD-047
@@ -2442,7 +2438,7 @@ CLI 在场检测
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1669](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1669)。SessionPicker
+- [desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx:18](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/ConversationPanel.tsx#L18)。function ConversationPanel
 
 
 ## CARD-048
@@ -2476,7 +2472,7 @@ CLI 在场检测
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1669](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1669)。SessionPicker
+- [desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx:18](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/ConversationPanel.tsx#L18)。function ConversationPanel
 
 
 ## CARD-049
@@ -2510,7 +2506,7 @@ CLI 在场检测
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:630](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L630)。任务结束提醒
+- [desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx:18](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/ConversationPanel.tsx#L18)。function ConversationPanel
 
 
 ## CARD-050
@@ -2665,7 +2661,7 @@ CLI 在场检测
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:835](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L835)。应用与启动
+- [desktop@c374a4a:desktop/renderer/management/UpdatePanel.tsx:6](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/UpdatePanel.tsx#L6)。function UpdatePanel
 
 
 ## CARD-055
@@ -2696,7 +2692,7 @@ Codex 用量查询、刷新与分享
 
 **桌面源码核对位置**
 
-- [desktop@c374a4a:desktop/renderer/management/UsagePanel.tsx:63](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/UsagePanel.tsx#L63)。export function UsagePanel
+- [desktop@c374a4a:desktop/renderer/management/UsagePanel.tsx:63](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/UsagePanel.tsx#L63)。function UsagePanel
 
 
 ## CARD-056
@@ -2823,7 +2819,7 @@ Codex 用量查询、刷新与分享
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:946](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L946)。application.dataPath
+- [desktop@c374a4a:desktop/main/controller.ts:103](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/main/controller.ts#L103)。class DesktopController
 
 
 ## LEGACY-001
@@ -2920,7 +2916,7 @@ Codex 用量查询、刷新与分享
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts:37](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/shared/bridge.ts#L37)。commandSchema
+- [desktop@c374a4a:desktop/renderer/management/EnvironmentPanel.tsx:25](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/EnvironmentPanel.tsx#L25)。function EnvironmentPanel
 
 
 ## LEGACY-004
@@ -2952,7 +2948,7 @@ Codex 用量查询、刷新与分享
 
 **桌面源码核对位置**
 
-- [desktop@c374a4a:desktop/main/environment.ts:388](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/main/environment.ts#L388)。private async performInstall
+- [desktop@c374a4a:desktop/renderer/management/EnvironmentPanel.tsx:25](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/EnvironmentPanel.tsx#L25)。function EnvironmentPanel
 
 
 ## LEGACY-005
@@ -2984,7 +2980,7 @@ Codex 用量查询、刷新与分享
 
 **桌面源码核对位置**
 
-- [desktop@c374a4a:desktop/main/environment.ts:381](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/main/environment.ts#L381)。private async cancelInstall
+- [desktop@c374a4a:desktop/renderer/management/EnvironmentPanel.tsx:25](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/EnvironmentPanel.tsx#L25)。function EnvironmentPanel
 
 
 ## LEGACY-006
@@ -3018,7 +3014,7 @@ Codex 官方账号授权及取消
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:810](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L810)。startCodexLogin
+- [desktop@c374a4a:desktop/main/controller.ts:103](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/main/controller.ts#L103)。class DesktopController
 
 
 ## LEGACY-007
@@ -3052,7 +3048,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts:37](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/shared/bridge.ts#L37)。commandSchema
+- [desktop@c374a4a:desktop/renderer/management/EnvironmentPanel.tsx:25](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/EnvironmentPanel.tsx#L25)。function EnvironmentPanel
 
 
 ## LEGACY-008
@@ -3086,7 +3082,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts:37](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/shared/bridge.ts#L37)。commandSchema
+- [desktop@c374a4a:desktop/renderer/management/EnvironmentPanel.tsx:25](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/EnvironmentPanel.tsx#L25)。function EnvironmentPanel
 
 
 ## LEGACY-009
@@ -3119,7 +3115,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts:37](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/shared/bridge.ts#L37)。commandSchema
+- [desktop@c374a4a:desktop/renderer/management/EnvironmentPanel.tsx:25](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/EnvironmentPanel.tsx#L25)。function EnvironmentPanel
 
 
 ## LEGACY-010
@@ -3152,7 +3148,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts:37](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/shared/bridge.ts#L37)。commandSchema
+- [desktop@c374a4a:desktop/renderer/management/EnvironmentPanel.tsx:25](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/EnvironmentPanel.tsx#L25)。function EnvironmentPanel
 
 
 ## LEGACY-011
@@ -3218,7 +3214,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:1156](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L1156)。JobPanel
+- [desktop@c374a4a:desktop/main/controller.ts:103](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/main/controller.ts#L103)。class DesktopController
 
 
 ## LEGACY-013
@@ -3252,7 +3248,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:545](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L545)。Agent details
+- [desktop@c374a4a:desktop/renderer/settings/SettingsPanel.tsx:2001](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/settings/SettingsPanel.tsx#L2001)。function SettingsPanel
 
 
 ## LEGACY-014
@@ -3316,7 +3312,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:449](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L449)。AgentPanel
+- [desktop@c374a4a:desktop/renderer/settings/SettingsPanel.tsx:2001](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/settings/SettingsPanel.tsx#L2001)。function SettingsPanel
 
 
 ## LEGACY-016
@@ -3383,7 +3379,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:969](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L969)。Join dialog
+- [desktop@c374a4a:desktop/renderer/management/ProjectPanel.tsx:26](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/ProjectPanel.tsx#L26)。function ProjectPanel
 
 
 ## LEGACY-018
@@ -3417,7 +3413,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1435](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1435)。ProjectPanel
+- [desktop@c374a4a:desktop/renderer/management/ProjectPanel.tsx:26](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/ProjectPanel.tsx#L26)。function ProjectPanel
 
 
 ## LEGACY-019
@@ -3450,7 +3446,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1435](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1435)。ProjectPanel
+- [desktop@c374a4a:desktop/renderer/settings/SettingsPanel.tsx:2001](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/settings/SettingsPanel.tsx#L2001)。function SettingsPanel
 
 
 ## LEGACY-020
@@ -3482,7 +3478,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts:37](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/shared/bridge.ts#L37)。commandSchema
+- [desktop@c374a4a:desktop/renderer/management/ProjectPanel.tsx:26](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/ProjectPanel.tsx#L26)。function ProjectPanel
 
 
 ## LEGACY-021
@@ -3516,7 +3512,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx:95](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/ConversationPanel.tsx#L95)。历史会话
+- [desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx:18](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/ConversationPanel.tsx#L18)。function ConversationPanel
 
 
 ## LEGACY-022
@@ -3548,7 +3544,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:684](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L684)。Membership details
+- [desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx:18](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/ConversationPanel.tsx#L18)。function ConversationPanel
 
 
 ## LEGACY-023
@@ -3582,7 +3578,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:1338](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L1338)。HostPanel paths
+- [desktop@c374a4a:desktop/renderer/settings/SettingsPanel.tsx:2001](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/settings/SettingsPanel.tsx#L2001)。function SettingsPanel
 
 
 ## LEGACY-024
@@ -3615,7 +3611,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx:739](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/settings/SettingsPanel.tsx#L739)。AgentPanel cliBridge
+- [desktop@c374a4a:desktop/renderer/settings/SettingsPanel.tsx:2001](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/settings/SettingsPanel.tsx#L2001)。function SettingsPanel
 
 
 ## LEGACY-025
@@ -3682,7 +3678,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:845](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L845)。Local environment
+- [desktop@c374a4a:desktop/renderer/management/MachinePanel.tsx:6](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/MachinePanel.tsx#L6)。function MachinePanel
 
 
 ## LEGACY-027
@@ -3716,7 +3712,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/shared/bridge.ts:37](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/shared/bridge.ts#L37)。commandSchema
+- [desktop@c374a4a:desktop/renderer/management/UpdatePanel.tsx:6](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/management/UpdatePanel.tsx#L6)。function UpdatePanel
 
 
 ## LEGACY-028
@@ -3782,7 +3778,7 @@ Claude Code 和飞书 CLI 登录及重验
 
 **桌面源码核对位置**
 
-- [desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx:309](https://github.com/modelzen/vonvon-bridge/blob/aab1bb34442d6723016cfbdc3217159108b4348f/desktop/renderer/App.tsx#L309)。onNavigate={setPage}
+- [desktop@c374a4a:desktop/renderer/SearchDialog.tsx:5](https://github.com/modelzen/vonvon-bridge/blob/c374a4a/desktop/renderer/SearchDialog.tsx#L5)。function SearchDialog
 
 
 ## LEGACY-030
