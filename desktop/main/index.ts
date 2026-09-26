@@ -18,6 +18,7 @@ import {createCollaborationService} from './collaboration';
 import {collaborationRequestSchema} from '../shared/collaboration';
 import {EnvironmentService} from './environment';
 import {environmentRequestSchema} from '../shared/environment';
+import {registerCli,type Registration} from './cli-registration';
 
 const home=homedir();
 if(process.env.VONVON_DESKTOP_TEST_HOME) {
@@ -32,6 +33,7 @@ let collaboration: ReturnType<typeof createCollaborationService> | undefined;
 let environment: EnvironmentService | undefined;
 let allowQuit=false;
 let quitPending=false;
+let cliRegistration:Registration={kind:'error',message:'尚未检查命令行工具。'};
 const folders=new FolderCapabilities();
 const executables=new ExecutableCapabilities();
 const documentPath=join(__dirname,'renderer','index.html');
@@ -191,6 +193,15 @@ async function start():Promise<void> {
   const coreRoot=join(runtime,'core');
   const coreHost=join(coreRoot,'dist','host.js');
   const cliPath=join(coreRoot,'bin','feishu-codex-bridge.mjs');
+  const repairCli=async ():Promise<Registration> => {
+    if (!app.isPackaged || process.env.VONVON_DESKTOP_TEST_HOME) {
+      cliRegistration={kind:'error',message:'开发或隔离验证模式不会修改本机 PATH。'};
+      return cliRegistration;
+    }
+    cliRegistration=await registerCli({platform:process.platform==='win32'?'win32':'darwin',scope:'user',runtime,home});
+    return cliRegistration;
+  };
+  await repairCli();
   const application={platform:process.platform==='darwin'?'macos':process.platform==='win32'?'windows':'unsupported',version:app.getVersion(),loginItem:app.getLoginItemSettings().openAtLogin,dataPath:'尚未确认'} as const;
   let coreResolution: {resolveDataRoot: (home: string) => {path: string}; resolveCodexBin: (options: {force: boolean; home: string; dataRoot: string; env: NodeJS.ProcessEnv}) => Promise<string | null>} | undefined;
   try {
@@ -240,6 +251,8 @@ async function start():Promise<void> {
   });
   const updateConfiguration = await desktopUpdateConfiguration({appPath: app.getAppPath(), isPackaged: app.isPackaged});
   machine = new MachineService({
+    cliRegistration:()=>cliRegistration,
+    repairCli,
     runtime: {home, nodePath, cliPath},
     host: () => activeController.currentHost(),
     stopHost: () => activeController.stop(),

@@ -39,6 +39,7 @@ jobs:
           path: |
             release/*.tar.gz
             release/*.exe
+            release/*.pkg
           if-no-files-found: error
           retention-days: 3
           compression-level: 0
