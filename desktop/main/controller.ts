@@ -1,3 +1,4 @@
+import {pendingGroupsSchema} from "../shared/bridge";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import QRCode from "qrcode";
@@ -658,6 +659,13 @@ export class DesktopController {
             if (this.connected().ownership === "attached")
               return await this.restartAttached();
             return await this.activate();
+          case "listPendingGroups": {
+            const response = await this.connected().request(`/api/bots/${encodeURIComponent(command.agentId)}/pending-groups`, {signal: AbortSignal.timeout(20_000)});
+            if (response.status === 404 || response.status === 501)
+              return {kind: "refused", code: "unsupported", message: "当前 Bridge 版本不支持绑定通知，请更新后台或查找已经加入的群。"};
+            const page = pendingGroupsSchema.parse(await readJson(response));
+            return {kind: "pendingGroups", groups: page.groups};
+          }
           case "listJoinedGroups": {
             const page = groupPageSchema.parse(
               await this.json(

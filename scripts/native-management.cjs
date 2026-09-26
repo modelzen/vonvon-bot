@@ -21,6 +21,7 @@ function publish(){snapshot.revision++;window.webContents.send('bridge:snapshot'
 ipcMain.handle('bridge:watch',()=>snapshot);
 ipcMain.handle('bridge:settings',()=>({kind:'refused',code:'fixture',message:'Settings covered by separate native scenarios.'}));
 ipcMain.handle('bridge:run',(_event,command)=>{
+  if(command.type==='listPendingGroups')return {command:command.type,result:{kind:'pendingGroups',groups:[]}};
   if(command.type==='chooseFolder')return {command:command.type,result:{kind:'folderChosen',folder:{token:'12345678-1234-4234-8234-123456789012',displayPath:path.join(home,'chosen')}}};
   assert.equal(command.type,'refresh');publish();return {command:command.type,result:{kind:'applied',revision:snapshot.revision}};
 });
@@ -55,9 +56,9 @@ void app.whenReady().then(async()=>{
   await window.loadFile(path.resolve('dist/renderer/index.html'));
   await wait("Array.from(document.querySelectorAll('.settings-entity-row__copy strong')).some(name => name.textContent.trim() === 'Management Agent')");
   await evaluate("Array.from(document.querySelectorAll('.settings-entity-row')).find(row => row.querySelector('.settings-entity-row__copy strong')?.textContent.trim() === 'Management Agent').click()");
-  await value('项目名称','Created from desktop');await value('会话方式','shared',true);await value('执行工具','claude',true);
-  await value('目录来源','existing',true);await click('选择目录');await click('创建项目群');
-  await wait("document.body.innerText.includes('项目群已创建。')");
+  await click('加入飞书群');await value('飞书群名称','Created from desktop');await value('会话方式','shared',true);await value('执行工具','claude',true);
+  await value('目录来源','existing',true);await click('选择文件夹');await click('创建飞书群并加入');
+  await wait("!document.querySelector('[aria-label=\"飞书群名称\"]')");
   assert.deepEqual(calls.find(c=>c.action==='createProject'),{action:'createProject',agentId,name:'Created from desktop',folder:{kind:'existing',folderToken:'12345678-1234-4234-8234-123456789012'},tool:'claude',conversation:'shared'});
   pass('create project carries selected folder, backend and conversation');
   await evaluate("[...document.querySelectorAll('.settings-entity-row')].find(b=>b.innerText.includes('Management Project')).click()");

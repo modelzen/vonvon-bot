@@ -7,7 +7,7 @@ import "../settings/settings.css";
 import {useDraft} from "../settings/DraftGuard";
 
 type Props = {
-  scope: { kind: "agent"; agentId: AgentId } | { kind: "project"; agentId: AgentId; groupId: GroupId; projectName: string };
+  scope: { kind: "project"; agentId: AgentId; groupId: GroupId; projectName: string };
   request: CollaborationClient;
   onChanged: () => Promise<void>;
 };
@@ -26,11 +26,8 @@ function replyError(reply: CollaborationReply): string | undefined {
 export function ProjectPanel({ scope, request, onChanged }: Props) {
   const requestRef = useRef(request);
   requestRef.current = request;
-  const [name, setName] = useState("");
   const [folder, setFolder] = useState<FolderChoice>();
-  const [useExisting, setUseExisting] = useState(false);
   const [conversation, setConversation] = useState<"shared" | "threads">("threads");
-  const [tool, setTool] = useState<"codex" | "claude">("codex");
   const [enabled, setEnabled] = useState(true);
   const [project, setProject] = useState<ProjectRecord>();
   const [loading, setLoading] = useState(false);
@@ -40,7 +37,6 @@ export function ProjectPanel({ scope, request, onChanged }: Props) {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (scope.kind !== "project") return;
     let active = true;
     setLoading(true);
     setError("");
@@ -58,7 +54,7 @@ export function ProjectPanel({ scope, request, onChanged }: Props) {
       })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [scope.kind, scope.agentId, scope.kind === "project" ? scope.projectName : "", scope.kind === "project" ? scope.groupId : ""]);
+  }, [scope.agentId, scope.projectName, scope.groupId]);
 
   async function run(operation: () => Promise<CollaborationReply>, success: string) {
     setSaving(true);
@@ -71,8 +67,7 @@ export function ProjectPanel({ scope, request, onChanged }: Props) {
       if (reply.project) {
         setProject(reply.project);
         setFolder(undefined);
-        if (scope.kind === "agent") {setName(""); setUseExisting(false); setTool("codex"); setConversation("threads");}
-      } else if (scope.kind === "project") {
+      } else {
         setProject(undefined);
         setDeleteArmed(false);
       }
@@ -85,36 +80,18 @@ export function ProjectPanel({ scope, request, onChanged }: Props) {
     } finally { setSaving(false); }
   }
 
-  const changed = scope.kind === 'agent'
-    ? Boolean(name || folder || useExisting || conversation !== 'threads' || tool !== 'codex')
-    : !!project && (conversation !== (project.kind === "multi" ? "threads" : "shared") || enabled !== project.enabled || !!folder);
+  const changed = !!project && (conversation !== (project.kind === "multi" ? "threads" : "shared") || enabled !== project.enabled || !!folder);
   async function saveDraft() {
     if (saving) return false;
-    if (scope.kind === 'agent') {
-      if (!name.trim() || (useExisting && !folder)) {setError('请填写项目名称并选择工作目录。'); return false;}
-      return run(() => request({action: 'createProject', agentId: scope.agentId, name: name.trim(), folder: useExisting && folder ? {kind: 'existing', folderToken: folder.token} : {kind: 'default'}, tool, conversation}), '项目群已创建。');
-    }
     if (!project) return false;
     return run(() => request({action: 'editProject', agentId: scope.agentId, projectName: scope.projectName, groupId: scope.groupId, expectedRevision: project.revision, ...(folder ? {folderToken: folder.token} : {}), conversation, enabled}), '项目已更新。');
   }
   function discard() {
-    setName(''); setFolder(undefined); setUseExisting(false); setTool('codex');
-    setConversation(scope.kind === 'project' && project?.kind === 'single' ? 'shared' : 'threads');
+    setFolder(undefined);
+    setConversation(project?.kind === 'single' ? 'shared' : 'threads');
     setEnabled(project?.enabled ?? true);
   }
-  useDraft(changed, {title: scope.kind === 'agent' ? '新建项目群' : '项目管理', save: saveDraft, discard});
-
-  if (scope.kind === "agent") return (
-    <SettingsGroup label="新建项目群" footer="创建后，Agent 会加入新群并绑定项目。空白项目使用 Agent 设置中的新项目默认目录。">
-      <SettingsRow title="项目名称" trailing={<input aria-label="项目名称" className="settings-field" value={name} maxLength={100} onChange={(event) => setName(event.target.value)} />} />
-      <SettingsRow title="会话方式" trailing={<select aria-label="会话方式" value={conversation} onChange={(event) => setConversation(event.target.value === "shared" ? "shared" : "threads")}><option value="threads">每个话题独立会话</option><option value="shared">整群共享会话</option></select>} />
-      <SettingsRow title="执行工具" trailing={<select aria-label="执行工具" value={tool} onChange={(event) => setTool(event.target.value === "claude" ? "claude" : "codex")}><option value="codex">Codex</option><option value="claude">Claude</option></select>} />
-      <SettingsRow title="工作目录" description={useExisting ? folder?.displayPath ?? "请选择现有目录" : "在默认项目根目录创建空白目录"} trailing={<div className="settings-inline-actions"><select aria-label="目录来源" value={useExisting ? "existing" : "default"} onChange={(event) => { setUseExisting(event.target.value === "existing"); setFolder(undefined); }}><option value="default">新建空白项目</option><option value="existing">使用现有目录</option></select>{useExisting && <Button size="sm" onClick={() => void chooseDirectory().then((choice) => { if (choice) setFolder(choice); }).catch((failure: unknown) => setError(failure instanceof Error ? failure.message : "目录选择失败。"))}>选择目录</Button>}</div>} />
-      <div className="settings-edit-actions"><Button variant="primary" size="sm" loading={saving} disabled={!name.trim() || (useExisting && !folder)} onClick={() => void saveDraft()}>创建项目群</Button></div>
-      {error && <InlineNotice title="创建失败" tone="danger">{error}</InlineNotice>}
-      {notice && <InlineNotice title="项目已创建">{notice}</InlineNotice>}
-    </SettingsGroup>
-  );
+  useDraft(changed, {title: '项目管理', save: saveDraft, discard});
 
   const target = { agentId: scope.agentId, projectName: scope.projectName, groupId: scope.groupId };
   return <>

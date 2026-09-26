@@ -25,7 +25,7 @@ const snapshot = {
 ipcMain.handle('bridge:collaboration', () => ({kind: 'refused', code: 'fixture-unused', message: 'This fixture covers settings navigation.'}));
 ipcMain.handle('bridge:watch', () => snapshot);
 ipcMain.handle('bridge:environment', (_event, request) => {if(request.type==='scan')return {kind:'tools',tools:[]};if(request.type==='profileList')return {kind:'profiles',profiles:[]};if(request.type==='backendCatalog')return {kind:'backends',entries:[]};return {kind:'operation',operation:null};});
-ipcMain.handle('bridge:run', (_event, command) => {assert.equal(command.type, 'quit'); quitCount++; return {command: 'quit', result: {kind: 'applied', revision: 1}};});
+ipcMain.handle('bridge:run', (_event, command) => {if(command.type === 'listPendingGroups')return {command:command.type,result:{kind:'pendingGroups',groups:[]}};assert.equal(command.type, 'quit'); quitCount++; return {command: 'quit', result: {kind: 'applied', revision: 1}};});
 ipcMain.handle('bridge:settings', (_event, request) => {
   if (request.type === 'models') return {kind: 'refused', code: 'fixture', message: 'Catalog not in this fixture'};
   const view = views.get(request.scope?.botId ?? request.edit?.scope.botId);

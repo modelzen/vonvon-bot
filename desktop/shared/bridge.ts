@@ -39,6 +39,7 @@ const empty = <T extends string>(type: T) =>
   z.object({ type: z.literal(type) }).strict();
 export const commandSchema = z.discriminatedUnion("type", [
   empty("refresh"),
+  z.object({type: z.literal("listPendingGroups"), agentId: agentIdSchema}).strict(),
   z.object({type: z.literal("openEventSettings"), url: z.string().regex(/^https:\/\/open\.(?:feishu\.cn|larksuite\.com)\/app\/cli_[\w-]{1,200}\/event$/)}).strict(),
   empty("chooseFolder"),
   empty("registerAgent"),
@@ -184,7 +185,11 @@ export type DesktopSnapshot = {
   };
 };
 export type FolderChoice = { token: FolderToken; displayPath: string };
+export const pendingGroupSchema = z.object({chatId: groupIdSchema, name: z.string().min(1).max(1000), addedAt: z.number().finite().nonnegative()});
+export const pendingGroupsSchema = z.object({groups: z.array(pendingGroupSchema).max(1000)});
+export type PendingGroup = z.infer<typeof pendingGroupSchema>;
 export type CommandResult =
+  | {kind: "pendingGroups"; groups: PendingGroup[]}
   | { kind: "applied"; revision: number }
   | { kind: "started"; jobId: JobId }
   | { kind: "folderChosen"; folder: FolderChoice }
