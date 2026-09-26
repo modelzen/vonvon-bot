@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { AppShell } from "./LocalShell";
 import { AgentAvatar } from './AgentAvatar';
+import { GroupAvatar } from './GroupAvatar';
 import {
   SettingsGroup,
   SettingsRow,
@@ -325,7 +326,7 @@ function DesktopApp() {
           onClick={() => select({ kind: "membership", id: m.id })}
         >
           {perspective === 'agents'
-            ? <span className="collaboration-avatar group"><MessageSquare size={16} /></span>
+            ? <GroupAvatar group={g} />
             : <AgentAvatar agent={a} />}
           <span className="settings-entity-row__copy">
             <strong>{perspective === "agents" ? g.name : a.name}</strong>
@@ -538,6 +539,7 @@ function DesktopApp() {
                                 select({ kind: "group", id: g.id })
                               }
                             >
+                              <GroupAvatar group={g} />
                               {g.name}
                               <ChevronRight size={13} />
                             </button>
@@ -721,9 +723,7 @@ function DesktopApp() {
               {selection.kind === "group" && group && (
                 <>
                   <header className="collaboration-profile">
-                    <span className="collaboration-avatar group large">
-                      <MessageSquare size={24} />
-                    </span>
+                    <GroupAvatar group={group} large />
                     <div>
                       <h2>{group.name}</h2>
                       <p>

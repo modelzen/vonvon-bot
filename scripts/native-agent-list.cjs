@@ -7,13 +7,15 @@ const path = require('node:path');
 app.setPath('userData', mkdtempSync(path.join(tmpdir(), 'vonvon-agent-list-')));
 app.on('window-all-closed', () => {});
 const fixture = JSON.parse(readFileSync('tests/fixtures/agent-settings.json', 'utf8'));
+const portrait = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==';
+const brokenPortrait = 'data:image/png;base64,AAAA';
 const agents = [
-  {id: fixture.scope.botId, name: 'Connected Agent', enabled: true, connection: 'connected', activation: 'active'},
+  {id: fixture.scope.botId, name: 'Connected Agent', avatarDataUrl: portrait, enabled: true, connection: 'connected', activation: 'active'},
   {id: 'cli_waiting', name: 'Waiting Agent', enabled: false, connection: 'disconnected', activation: 'restartRequired'},
   {id: 'cli_disabled', name: 'Disabled Agent', enabled: false, connection: 'disconnected', activation: 'active'},
   {id: 'cli_error', name: 'Error Agent', enabled: false, connection: 'disconnected', activation: 'restartRequired', readError: 'Private diagnostic message'},
 ];
-const groups = [{id: 'oc_one', name: 'One'}, {id: 'oc_two', name: 'Two'}];
+const groups = [{id: 'oc_one', name: 'One', avatarDataUrl: portrait}, {id: 'oc_two', name: 'Two', avatarDataUrl: brokenPortrait}];
 const memberships = ['oc_one', 'oc_one', 'oc_two'].map((groupId, index) => ({
   id: `membership_${index}`, agentId: agents[0].id, groupId,
   backend: 'codex-appserver', conversation: 'threads', stale: false,
@@ -79,6 +81,7 @@ void app.whenReady().then(async () => {
     ]);
     assert.equal(await evaluate("document.querySelectorAll('section[aria-label=\"Agent 列表\"] .settings-add-row').length"), 1);
     assert.equal(await evaluate("document.querySelectorAll('section[aria-label=\"Agent 列表\"] .settings-entity-row').length"), 4);
+    await until("document.querySelector('.collaboration-avatar.agent img')?.dataset.loaded === 'true'");
     process.stdout.write('PASS compact list, unique groups and status precedence\n');
     await evaluate("Array.from(document.querySelectorAll('.collaboration-agent-list-row')).find(row => row.querySelector('strong').textContent === 'Error Agent').click()");
     await until("document.querySelector('.settings-toolbar h1')?.textContent === 'Error Agent'");
@@ -88,6 +91,21 @@ void app.whenReady().then(async () => {
     await until("document.querySelectorAll('.collaboration-agent-list-row').length === 4");
     await evaluate("document.querySelector('.collaboration-agent-list-row').click()");
     await until("document.querySelector('.settings-toolbar h1')?.textContent === 'Connected Agent'");
+    await until("document.querySelectorAll('.settings-entity-row .collaboration-avatar.group img[data-loaded=true]').length === 2");
+    await until("document.querySelector('.settings-entity-row .collaboration-avatar.group img[data-failed=true]') !== null");
+    assert.equal(await evaluate("getComputedStyle(document.querySelector('.collaboration-avatar.group img[data-failed=true]')).display"), 'none');
+    assert.equal(await evaluate("document.querySelector('.collaboration-avatar.group img[data-failed=true]').parentElement.querySelector('svg') !== null"), true);
+    await evaluate("document.querySelector('button[aria-label=\"返回列表\"]').click()");
+    await evaluate("Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === '群聊').click()");
+    await until("document.querySelector('.section-title-link .collaboration-avatar.group img[data-loaded=true]') !== null");
+    await evaluate("Array.from(document.querySelectorAll('.section-title-link')).find(button => button.textContent.trim() === 'One').click()");
+    await until("document.querySelector('.collaboration-profile .collaboration-avatar.group.large img[data-loaded=true]') !== null");
+    assert.equal(await evaluate("document.querySelector('.collaboration-profile .collaboration-avatar.group img').naturalWidth"), 1);
+    await evaluate("document.querySelector('button[aria-label=\"返回列表\"]').click()");
+    await evaluate("Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === 'Agent').click()");
+    await evaluate("document.querySelector('.collaboration-agent-list-row').click()");
+    await until("document.querySelector('.settings-toolbar h1')?.textContent === 'Connected Agent'");
+    process.stdout.write('PASS actual group portraits on bound rows, list and detail with failed-image fallback\n');
     await evaluate("Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === '加入飞书群').click()");
     await until("document.body.innerText.includes('让 Agent 加入飞书群')");
     await until("document.body.innerText.includes('没有可显示的群。请先确认 Agent 已在飞书群中，并已启用。')");

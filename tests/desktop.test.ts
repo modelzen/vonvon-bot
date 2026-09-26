@@ -1763,3 +1763,21 @@ test("credential refresh keeps attached active Agent pending activation and reje
     } finally {await f.controller.quit();}
   }
 });
+
+test('group portraits survive shared-group aggregation and invalid optional metadata', () => {
+  const portrait = 'data:image/png;base64,iVBORw0KGgo=';
+  const bot = coreState().bots[0];
+  assert.ok(bot);
+  const previous = fixture().controller.current();
+  for (const otherAvatar of [undefined, 'https://example.com/avatar.png', 123]) {
+    const state = stateSchema.parse({...coreState(), bots: [
+      {...bot, projects: bot.projects.map(project => ({...project, avatarDataUrl: portrait}))},
+      {...bot, appId: 'cli_other', projects: bot.projects.map(project => ({...project, avatarDataUrl: otherAvatar}))},
+    ]});
+    const projected = projectState(state, previous, new Set());
+    assert.equal(projected.memberships[0]?.avatarDataUrl, portrait);
+    assert.equal(projected.memberships[1]?.avatarDataUrl, undefined);
+    assert.equal(projected.groups[0]?.avatarDataUrl, portrait);
+    assert.equal(projected.groups.length, 1);
+  }
+});
