@@ -11,6 +11,7 @@ import {
   X,
 } from "lucide-react";
 import { AppShell } from "./LocalShell";
+import { AgentAvatar } from './AgentAvatar';
 import {
   SettingsGroup,
   SettingsRow,
@@ -313,15 +314,9 @@ function DesktopApp() {
           key={m.id}
           onClick={() => select({ kind: "membership", id: m.id })}
         >
-          <span
-            className={`collaboration-avatar ${perspective === "agents" ? "group" : "agent"}`}
-          >
-            {perspective === "agents" ? (
-              <MessageSquare size={16} />
-            ) : (
-              <Bot size={16} />
-            )}
-          </span>
+          {perspective === 'agents'
+            ? <span className="collaboration-avatar group"><MessageSquare size={16} /></span>
+            : <AgentAvatar agent={a} />}
           <span className="settings-entity-row__copy">
             <strong>{perspective === "agents" ? g.name : a.name}</strong>
             <small>
@@ -487,6 +482,7 @@ function DesktopApp() {
                                 select({ kind: "agent", id: a.id })
                               }
                             >
+                              <AgentAvatar agent={a} />
                               {a.name}
                               <ChevronRight size={13} />
                             </button>
@@ -582,9 +578,7 @@ function DesktopApp() {
               {selection.kind === "agent" && agent && (
                 <>
                   <header className="collaboration-profile">
-                    <span className="collaboration-avatar agent large">
-                      <Bot size={24} />
-                    </span>
+                    <AgentAvatar agent={agent} large />
                     <div>
                       <h2>{agent.name}</h2>
                       <p>通过飞书机器人身份参与协作</p>
@@ -743,9 +737,7 @@ function DesktopApp() {
               {member && agent && group && (
                 <>
                   <header className="collaboration-profile">
-                    <span className="collaboration-avatar agent large">
-                      <Bot size={24} />
-                    </span>
+                    <AgentAvatar agent={agent} large />
                     <div>
                       <h2>{agent.name}</h2>
                       <p>在 {group.name} 中的配置</p>

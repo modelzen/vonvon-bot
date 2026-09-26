@@ -17,6 +17,7 @@
     "test:native": "node scripts/test-native.mjs",
     "test:controls": "electron scripts/native-controls.cjs",
     "test:settings-ui": "electron scripts/native-settings.cjs",
+    "test:editor-ui": "electron scripts/native-editor.cjs",
     "package:preview:mac": "node scripts/package-preview.mjs"
   },
   "dependencies": {

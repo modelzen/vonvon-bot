@@ -77,7 +77,7 @@ ipcMain.handle("bridge:watch", () => snapshot);
       assert.fail(`${scenario}: condition not met: ${expression}; reads=${reads}`);
     };
     const button = label => `Array.from(document.querySelectorAll('button')).find(button=>button.textContent.trim()===${JSON.stringify(label)})`;
-    const toggle = "Array.from(document.querySelectorAll('label')).find(label=>label.textContent.trim()==='显示工具调用')?.querySelector('input')";
+    const draftField = "document.querySelector('input[aria-label=\"最大并发任务\"]')";
     const click = async label => { await until(`Boolean(${button(label)})`); await evaluate(`${button(label)}.click()`); };
     try {
       await window.loadFile(path.resolve("dist/renderer/index.html"));
@@ -97,8 +97,9 @@ ipcMain.handle("bridge:watch", () => snapshot);
         assert.equal(await evaluate("document.body.innerText.includes('NEWEST STATUS') && !document.body.innerText.includes('STALE STATUS')"), true);
       } else {
         await until("document.body.innerText.includes('正在检查权限')");
-        await evaluate(`${toggle}.click()`);
-        const draft = await evaluate(`${toggle}.checked`);
+        await evaluate(`{const field=${draftField}; const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; setter.call(field, '6'); field.dispatchEvent(new Event('input', {bubbles:true}));}`);
+        await until(`${draftField}?.value === '6'`);
+        const draft = await evaluate(`${draftField}.value`);
         if (scenario === "navigation" || scenario === "unmount") {
           if (scenario === "navigation") {
             for (let index = 0; index < 30 && !release; index++) await delay(100);
@@ -116,7 +117,7 @@ ipcMain.handle("bridge:watch", () => snapshot);
         } else {
           if (scenario === "error") {
             await until("document.body.innerText.includes('FIXTURE CONNECTION LOST')");
-            assert.equal(await evaluate(`${toggle}?.checked`), draft, "A refresh failure preserves the draft");
+            assert.equal(await evaluate(`${draftField}?.value`), draft, "A refresh failure preserves the draft");
             const count = reads;
             await delay(1300);
             assert.equal(reads, count, "Failed refresh pauses automatic reads");
@@ -126,7 +127,7 @@ ipcMain.handle("bridge:watch", () => snapshot);
           if (scenario === "stuck") await until("document.body.innerText.includes('已暂停自动刷新')", 35000);
           else if (scenario === "pending") await until("document.body.innerText.includes('读取超时')", 15000);
           else await until("document.body.innerText.includes('尚未获得语音识别权限')");
-          assert.equal(await evaluate(`${toggle}?.checked`), draft, "Refresh preserves unsaved draft");
+          assert.equal(await evaluate(`${draftField}?.value`), draft, "Refresh preserves unsaved draft");
           const count = reads;
           await delay(1600);
           assert.equal(reads, count, "Terminal, failed or exhausted refresh stops polling");

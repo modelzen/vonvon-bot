@@ -2,7 +2,8 @@ import { z } from 'zod';
 import {agentIdSchema,groupIdSchema,membershipIdSchema,permissionSchema,type DesktopSnapshot,type Agent,type Membership} from '../shared/bridge';
 
 export const projectSchema = z.object({name:z.string(),chatId:groupIdSchema,cwd:z.string(),kind:z.enum(['multi','single']),noMention:z.boolean(),mode:permissionSchema,guestMode:permissionSchema,network:z.boolean(),backend:z.string()});
-export const stateSchema = z.object({version:z.string(),generatedAt:z.number(),bots:z.array(z.object({appId:agentIdSchema,name:z.string(),botName:z.string().optional(),active:z.boolean(),running:z.boolean(),connection:z.string().optional(),projects:z.array(projectSchema),projectsError:z.string().optional()}))});
+const avatarSchema = z.string().max(350_000).refine(value => /^data:image\/(png|jpeg|webp);base64,[a-zA-Z0-9+/]+={0,2}$/.test(value));
+export const stateSchema = z.object({version:z.string(),generatedAt:z.number(),bots:z.array(z.object({appId:agentIdSchema,name:z.string(),botName:z.string().optional(),avatarDataUrl:avatarSchema.optional().catch(undefined),active:z.boolean(),running:z.boolean(),connection:z.string().optional(),projects:z.array(projectSchema),projectsError:z.string().optional()}))});
 export type CoreState = z.infer<typeof stateSchema>;
 export function projectState(state:CoreState, previous:DesktopSnapshot, pending:ReadonlySet<string>) {
   const agents:Agent[] = [];
@@ -10,7 +11,7 @@ export function projectState(state:CoreState, previous:DesktopSnapshot, pending:
   for (const bot of state.bots) {
     const duplicate = new Set(bot.projects.map(project=>project.chatId)).size!==bot.projects.length;
     const readError = bot.projectsError ?? (duplicate ? '同一个 Agent 存在冲突的群绑定，请在内核中修复。' : undefined);
-    agents.push({id:bot.appId,name:bot.botName || bot.name,enabled:bot.active,connection:bot.connection ?? (bot.running ? 'unknown' : 'disconnected'),activation:pending.has(bot.appId)?'restartRequired':'active',...(readError?{readError}:{})});
+    agents.push({id:bot.appId,name:bot.botName || bot.name,...(bot.avatarDataUrl?{avatarDataUrl:bot.avatarDataUrl}:{}),enabled:bot.active,connection:bot.connection ?? (bot.running ? 'unknown' : 'disconnected'),activation:pending.has(bot.appId)?'restartRequired':'active',...(readError?{readError}:{})});
     if (readError) {
       memberships.push(...previous.memberships.filter(member=>member.agentId===bot.appId).map(member=>({...member,stale:true})));
       continue;
