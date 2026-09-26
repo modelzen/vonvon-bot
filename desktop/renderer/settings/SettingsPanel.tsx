@@ -377,6 +377,8 @@ function Switch({
 }) {
   return (
     <Toggle
+      className="settings-row-switch"
+      aria-label={label}
       label={label}
       checked={value}
       disabled={disabled}
@@ -736,6 +738,7 @@ function AgentPanel({
             />
             <SettingsRow
               title="运行中收到新消息"
+              description="选择新消息加入当前任务，或等当前任务结束后处理。"
               trailing={
                 <Select
                   label="待处理消息策略"
@@ -760,6 +763,7 @@ function AgentPanel({
           <>
             <SettingsRow
               title="提醒方式"
+              description="控制 Agent 任务结束后何时发送提醒。"
               trailing={
                 <Select
                   label="提醒方式"
@@ -775,8 +779,9 @@ function AgentPanel({
                 />
               }
             />
-            <SettingsRow
+            {draft.mode === "long" && <SettingsRow
               title="长任务阈值（分钟）"
+              description="任务运行超过这个时长时发送提醒。"
               trailing={
                 <NumberField
                   label="长任务阈值"
@@ -789,7 +794,7 @@ function AgentPanel({
                   }
                 />
               }
-            />
+            />}
           </>
         )}
       />
