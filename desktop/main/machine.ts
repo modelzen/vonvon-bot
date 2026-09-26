@@ -89,8 +89,19 @@ export class MachineService {
         try {
           await this.service(request.action);
           if (starts) {
-            await this.hooks.startHost();
-            this.connected();
+            const deadline = Date.now() + 20_000;
+            for (;;) {
+              try {
+                await this.hooks.startHost();
+                this.connected();
+                break;
+              } catch (error) {
+                if (this.hooks.host() || Date.now() >= deadline) throw error;
+                const pending = await this.service('status');
+                if (!pending.installed) throw error;
+                await new Promise(resolve => setTimeout(resolve, 250));
+              }
+            }
           } else await this.hooks.stopHost();
           this.temporaryAgent = undefined;
         } catch (error) {
