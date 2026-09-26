@@ -1,3 +1,7 @@
+import {PendingGroupToasts} from './PendingGroupToasts';
+import {JoinGroupDialog} from './JoinGroupDialog';
+import {usePendingGroups} from './pending-groups';
+import type {PendingGroup} from '../shared/bridge';
 import { useEffect, useRef, useState } from "react";
 import {
   Bot,
@@ -27,14 +31,10 @@ import {
 } from "./reference/components/ui";
 import { ConfirmDialog,Dialog } from "./reference/components/ui/Dialog";
 import {
-  toolSchema,
-  conversationSchema,
   type AgentId,
   type Command,
   type CommandResult,
   type DesktopSnapshot,
-  type FolderChoice,
-  type GroupId,
   type Job,
   type JobId,
   type Membership,
@@ -54,11 +54,11 @@ import {UpdatePanel} from './management/UpdatePanel';
 
 type Modal =
   | { kind: "register"; jobId: JobId; refresh?: boolean }
-  | { kind: "join"; agentId: AgentId }
+  | { kind: "join"; agentId: AgentId; group?: PendingGroup }
   | { kind: "collaboration"; membership: Membership }
   | { kind: "deleteAgent"; agentId: AgentId; name: string }
   | null;
-type GroupsResult = Extract<CommandResult, { kind: "groups" }>;
+
 const backendName = (backend: string) =>
   backend === "codex-appserver"
     ? "Codex"
@@ -103,19 +103,8 @@ function DesktopApp() {
   const [pending, setPending] = useState(0);
   const busy = pending > 0;
   const modalGeneration = useRef(0);
-  const groupRequest = useRef(0);
   const [notice, setNotice] = useState<{ message: string; error: boolean }>();
-  const [groups, setGroups] = useState<GroupsResult>({
-    kind: "groups",
-    groups: [],
-  });
-  const [chosenGroup, setChosenGroup] = useState<GroupId>();
-  const [folder, setFolder] = useState<FolderChoice>();
-  const [projectName, setProjectName] = useState("");
-  const [tool, setTool] = useState<"codex" | "claude">("codex");
-  const [conversation, setConversation] = useState<"threads" | "shared">(
-    "threads",
-  );
+  const pendingGroups = usePendingGroups(snapshot);
   const [attachedNotice, setAttachedNotice] = useState(true);
   useEffect(() => window.bridge.onQuitRequested(() => navigate(() => void window.bridge.run({type: 'quit'}))), [navigate]);
   useEffect(() => {
@@ -208,72 +197,14 @@ function DesktopApp() {
     if (result.kind === "started")
       setModal({ kind: "register", jobId: result.jobId, refresh: Boolean(agentId) });
   }
-  async function loadGroups(agentId: AgentId, cursor?: string) {
-    const generation = modalGeneration.current;
-    const request = ++groupRequest.current;
-    const isCurrent = () =>
-      generation === modalGeneration.current &&
-      request === groupRequest.current;
-    const result = await run(
-      { type: "listJoinedGroups", agentId, ...(cursor ? { cursor } : {}) },
-      isCurrent,
-    );
-    if (isCurrent() && result.kind === "groups")
-      setGroups((previous) =>
-        cursor
-          ? {
-              ...result,
-              groups: [
-                ...previous.groups,
-                ...result.groups.filter(
-                  (group) =>
-                    !previous.groups.some(
-                      (existing) => existing.id === group.id,
-                    ),
-                ),
-              ],
-            }
-          : result,
-      );
-  }
-  async function openJoin(agentId: AgentId) {
-    modalGeneration.current++;
-    setGroups({ kind: "groups", groups: [] });
-    setFolder(undefined);
-    setChosenGroup(undefined);
-    setProjectName("");
-    setModal({ kind: "join", agentId });
-    await loadGroups(agentId);
+  function openJoin(agentId: AgentId, group?: PendingGroup) {
+    navigate(() => setModal({kind: 'join', agentId, group}));
   }
   async function closeModal() {
     const generation = ++modalGeneration.current;
     if (modal?.kind === "register")
       await run({ type: "cancelJob", jobId: modal.jobId });
     if (generation === modalGeneration.current) setModal(null);
-  }
-  async function chooseFolder() {
-    const generation = modalGeneration.current;
-    const isCurrent = () => generation === modalGeneration.current;
-    const result = await run({ type: "chooseFolder" }, isCurrent);
-    if (isCurrent() && result.kind === "folderChosen") setFolder(result.folder);
-  }
-  async function bind() {
-    if (modal?.kind !== "join" || !chosenGroup || !folder) return;
-    const generation = modalGeneration.current;
-    const result = await run({
-      type: "bindGroup",
-      agentId: modal.agentId,
-      groupId: chosenGroup,
-      projectName,
-      folderToken: folder.token,
-      tool,
-      conversation,
-    });
-    if (generation === modalGeneration.current && result.kind === "applied") {
-      modalGeneration.current++;
-      setModal(null);
-      setNotice({ message: "工作目录已绑定，内核已确认保存。", error: false });
-    }
   }
   if (!snapshot)
     return (
@@ -376,6 +307,14 @@ function DesktopApp() {
         }
       >
         <div className="page-stack">
+          {pendingGroups.map(page => {
+            const owner = snapshot.agents.find(item => item.id === page.agentId);
+            if (!owner || (!page.groups.length && page.problem?.kind !== 'failed')) return null;
+            return <div key={page.agentId} className="page-stack">
+              {page.problem?.kind === 'failed' && <InlineNotice title={`${owner.name} 的绑定通知读取失败`} tone="warning">{page.problem.message}</InlineNotice>}
+              {page.groups.map(group => <InlineNotice key={group.chatId} title={`${owner.name} 已加入 ${group.name}`} actions={<Button onClick={() => openJoin(owner.id, group)}>继续绑定</Button>}>尚未绑定工作目录，可以继续完成设置。</InlineNotice>)}
+            </div>;
+          })}
           {feedback}
           {!ready && (
             <InlineNotice
@@ -678,7 +617,7 @@ function DesktopApp() {
                       }
                     />
                   </SettingsGroup>
-                  <ProjectPanel key={`create-${agent.id}`} scope={{kind: 'agent', agentId: agent.id}} request={window.bridge.collaboration} onChanged={async () => {await run({type: 'refresh'});}}/>
+
                   <UsagePanel key={`agent-usage-${agent.id}`} agentId={agent.id} request={window.bridge.collaboration}/>
                   <SettingsPanel
                     key={`agent-${agent.id}`}
@@ -937,8 +876,13 @@ function DesktopApp() {
         </div>
       </AppShell>
       <SearchDialog open={searchOpen} entries={searchEntries(snapshot)} onClose={() => setSearchOpen(false)} onSelect={openSearchResult}/>
+      <PendingGroupToasts pages={pendingGroups} agents={snapshot.agents} hidden={modal !== null} onContinue={(owner, group) => openJoin(owner.id, group)} />
+      {modal?.kind === 'join' && (() => {
+        const owner = snapshot.agents.find(item => item.id === modal.agentId);
+        return owner ? <JoinGroupDialog key={`${owner.id}:${modal.group?.chatId ?? 'new'}`} agent={owner} initialGroup={modal.group} pending={pendingGroups.find(item => item.agentId === owner.id)} onClose={() => setModal(null)} onChanged={async () => {await run({type: 'refresh'});}} /> : null;
+      })()}
       <Dialog
-        open={modal !== null && modal.kind !== "deleteAgent"}
+        open={modal !== null && modal.kind !== "deleteAgent" && modal.kind !== "join"}
         onClose={() => void closeModal()}
         title={
           modal?.kind === "register"
@@ -952,123 +896,6 @@ function DesktopApp() {
           {feedback}
           {modal?.kind === "register" && registration && (
             <><p>{modal.refresh ? "重新授权这个 Agent，保留原有项目、群绑定和设置。请使用此 Agent 的管理员身份完成授权。" : "连接飞书机器人身份。"}</p><JobPanel job={registration} run={run} busy={busy} /></>
-          )}
-          {modal?.kind === "join" && (
-            <>
-              <p>先在飞书群中添加这个 Agent 的机器人，再刷新已加入的群列表。</p>
-              <FormField label="飞书群">
-                <select
-                  aria-label="选择飞书群"
-                  value={chosenGroup ?? ""}
-                  onChange={(event) => {
-                    const selected = groups.groups.find(
-                      (group) => group.id === event.target.value,
-                    );
-                    setChosenGroup(selected?.id);
-                    setProjectName(selected?.name ?? "");
-                  }}
-                >
-                  <option value="">请选择已加入的群</option>
-                  {groups.groups.map((group) => (
-                    <option
-                      key={group.id}
-                      value={group.id}
-                      disabled={group.bound}
-                    >
-                      {group.name}
-                      {group.bound ? "（已绑定）" : ""}
-                    </option>
-                  ))}
-                </select>
-              </FormField>
-              <div className="desktop-actions">
-                <Button
-                  size="sm"
-                  disabled={busy}
-                  onClick={() => void loadGroups(modal.agentId)}
-                >
-                  刷新群列表
-                </Button>
-                {groups.nextCursor && (
-                  <Button
-                    size="sm"
-                    disabled={busy}
-                    onClick={() =>
-                      void loadGroups(modal.agentId, groups.nextCursor)
-                    }
-                  >
-                    加载更多
-                  </Button>
-                )}
-              </div>
-              {!groups.groups.length && !busy && (
-                <p>没有可显示的群。请先确认 Agent 已在飞书群中，并已启用。</p>
-              )}
-              <FormField label="本地绑定名称">
-                <input
-                  aria-label="本地绑定名称"
-                  maxLength={100}
-                  value={projectName}
-                  onChange={(event) => setProjectName(event.target.value)}
-                />
-              </FormField>
-              <SettingsGroup>
-                <SettingsRow
-                  title="工作目录"
-                  value={folder?.displayPath ?? "未选择"}
-                  trailing={
-                    <Button
-                      size="sm"
-                      disabled={busy}
-                      onClick={() => void chooseFolder()}
-                    >
-                      选择文件夹
-                    </Button>
-                  }
-                />
-                <SettingsRow
-                  title="执行工具"
-                  trailing={
-                    <select
-                      aria-label="执行工具"
-                      value={tool}
-                      onChange={(event) =>
-                        setTool(toolSchema.parse(event.target.value))
-                      }
-                    >
-                      <option value="codex">Codex</option>
-                      <option value="claude">Claude</option>
-                    </select>
-                  }
-                />
-                <SettingsRow
-                  title="会话方式"
-                  trailing={
-                    <select
-                      aria-label="会话方式"
-                      value={conversation}
-                      onChange={(event) =>
-                        setConversation(
-                          conversationSchema.parse(event.target.value),
-                        )
-                      }
-                    >
-                      <option value="threads">按话题独立会话</option>
-                      <option value="shared">整群连续会话</option>
-                    </select>
-                  }
-                />
-              </SettingsGroup>
-              <Button
-                variant="primary"
-                disabled={
-                  busy || !chosenGroup || !folder || !projectName.trim()
-                }
-                onClick={() => void bind()}
-              >
-                绑定工作目录并发送欢迎卡片
-              </Button>
-            </>
           )}
           {modal?.kind === "collaboration" && (
             <>

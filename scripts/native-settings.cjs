@@ -18,6 +18,11 @@ const deadline = setTimeout(() => {
 }, 160000);
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
+ipcMain.handle('bridge:run', (_event, command) => {
+  assert.equal(command.type, 'listPendingGroups');
+  return {command: command.type, result: {kind: 'pendingGroups', groups: []}};
+});
+
 void app.whenReady().then(async () => {
   for (const scenario of scenarios) {
     assert.ok(["terminal", "error", "initial-error", "stuck", "pending", "navigation", "overlap", "unmount"].includes(scenario));

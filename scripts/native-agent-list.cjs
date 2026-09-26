@@ -38,6 +38,7 @@ ipcMain.handle('bridge:settings', (_event, request) => {
 ipcMain.handle('bridge:collaboration', () => ({kind: 'refused', code: 'fixture', message: 'No project action'}));
 ipcMain.handle('bridge:run', (_event, command) => {
   commands.push(command);
+  if(command.type==='listPendingGroups')return {command:command.type,result:{kind:'pendingGroups',groups:[]}};
   const result = command.type === 'listJoinedGroups'
     ? {kind: 'groups', groups: [], hasMore: false}
     : {kind: 'refused', code: 'fixture', message: 'No external action'};
@@ -108,8 +109,8 @@ void app.whenReady().then(async () => {
     process.stdout.write('PASS actual group portraits on bound rows, list and detail with failed-image fallback\n');
     await evaluate("Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === '加入飞书群').click()");
     await until("document.body.innerText.includes('让 Agent 加入飞书群')");
-    await until("document.body.innerText.includes('没有可显示的群。请先确认 Agent 已在飞书群中，并已启用。')");
-    assert.equal(commands.some(command => command.type === 'listJoinedGroups' && command.agentId === agents[0].id), true);
+    await until("Boolean(document.querySelector('[aria-label=\"飞书群名称\"]'))");
+    assert.equal(commands.some(command => command.type === 'listJoinedGroups'), false);
     assert.equal(await evaluate("document.body.innerText.includes('操作未完成')"), false);
     process.stdout.write('PASS detail navigation and join-group entry\n');
     snapshot.agents = [];

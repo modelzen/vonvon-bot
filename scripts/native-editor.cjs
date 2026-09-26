@@ -18,6 +18,11 @@ const snapshot = {
   application: { platform: 'macos', version: '0.7.0', loginItem: false, dataPath: tmpdir() },
 };
 
+ipcMain.handle('bridge:run', (_event, command) => {
+  assert.equal(command.type, 'listPendingGroups');
+  return {command: command.type, result: {kind: 'pendingGroups', groups: []}};
+});
+
 void app.whenReady().then(async () => {
   const interactive = process.argv.includes('--interactive');
   for (const scenario of interactive ? ['mixed'] : ['mixed', 'failure', 'conflict', 'pending']) {

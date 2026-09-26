@@ -18,6 +18,7 @@
     "test:controls": "electron scripts/native-controls.cjs",
     "test:settings-ui": "electron scripts/native-settings.cjs",
     "test:editor-ui": "electron scripts/native-editor.cjs",
+    "test:join-ui": "electron scripts/native-join.cjs",
     "package:preview:mac": "node scripts/package-preview.mjs"
   },
   "dependencies": {

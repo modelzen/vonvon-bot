@@ -1781,3 +1781,19 @@ test('group portraits survive shared-group aggregation and invalid optional meta
     assert.equal(projected.groups.length, 1);
   }
 });
+
+test('pending group command validates event data and distinguishes old Host from failure', async () => {
+  const f = fixture();
+  await f.controller.start();
+  try {
+    const group = {chatId: 'oc_pending', name: 'New group', addedAt: 123};
+    f.setIntercept(path => path.endsWith('/pending-groups') ? Promise.resolve(Response.json({groups: [group]})) : undefined);
+    assert.deepEqual(await f.controller.run({type: 'listPendingGroups', agentId}, async () => '/tmp/work'), {kind: 'pendingGroups', groups: [group]});
+    for (const status of [404, 500]) {
+      f.setIntercept(path => path.endsWith('/pending-groups') ? Promise.resolve(Response.json({message: 'fixture'}, {status})) : undefined);
+      assert.deepEqual(await f.controller.run({type: 'listPendingGroups', agentId}, async () => '/tmp/work'), {kind: 'refused', code: status === 404 ? 'unsupported' : 'http-500', message: status === 404 ? '当前 Bridge 版本不支持绑定通知，请更新后台或查找已经加入的群。' : 'fixture'});
+    }
+    f.setIntercept(path => path.endsWith('/pending-groups') ? Promise.resolve(Response.json({groups: [{...group, chatId: '../../invalid'}]})) : undefined);
+    assert.equal((await f.controller.run({type: 'listPendingGroups', agentId}, async () => '/tmp/work')).kind, 'refused');
+  } finally {await f.controller.quit();}
+});
