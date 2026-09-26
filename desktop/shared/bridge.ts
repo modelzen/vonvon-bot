@@ -123,6 +123,7 @@ export type Agent = {
   readError?: string;
 };
 export type Membership = {
+  avatarDataUrl?: string;
   id: MembershipId;
   agentId: AgentId;
   groupId: GroupId;
@@ -138,7 +139,7 @@ export type Membership = {
   };
   stale: boolean;
 };
-export type Group = { id: GroupId; name: string };
+export type Group = { id: GroupId; name: string; avatarDataUrl?: string };
 export type ToolState = {
   tool: Tool;
   installation: "missing" | "installed" | "unknown";

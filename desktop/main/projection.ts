@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import {agentIdSchema,groupIdSchema,membershipIdSchema,permissionSchema,type DesktopSnapshot,type Agent,type Membership} from '../shared/bridge';
+import {agentIdSchema,groupIdSchema,membershipIdSchema,permissionSchema,type DesktopSnapshot,type Agent,type Membership,type Group} from '../shared/bridge';
 
-export const projectSchema = z.object({name:z.string(),chatId:groupIdSchema,cwd:z.string(),kind:z.enum(['multi','single']),noMention:z.boolean(),mode:permissionSchema,guestMode:permissionSchema,network:z.boolean(),backend:z.string()});
 const avatarSchema = z.string().max(350_000).refine(value => /^data:image\/(png|jpeg|webp);base64,[a-zA-Z0-9+/]+={0,2}$/.test(value));
+export const projectSchema = z.object({name:z.string(),chatId:groupIdSchema,avatarDataUrl:avatarSchema.optional().catch(undefined),cwd:z.string(),kind:z.enum(['multi','single']),noMention:z.boolean(),mode:permissionSchema,guestMode:permissionSchema,network:z.boolean(),backend:z.string()});
 export const stateSchema = z.object({version:z.string(),generatedAt:z.number(),bots:z.array(z.object({appId:agentIdSchema,name:z.string(),botName:z.string().optional(),avatarDataUrl:avatarSchema.optional().catch(undefined),active:z.boolean(),running:z.boolean(),connection:z.string().optional(),projects:z.array(projectSchema),projectsError:z.string().optional()}))});
 export type CoreState = z.infer<typeof stateSchema>;
 export function projectState(state:CoreState, previous:DesktopSnapshot, pending:ReadonlySet<string>) {
@@ -16,10 +16,14 @@ export function projectState(state:CoreState, previous:DesktopSnapshot, pending:
       memberships.push(...previous.memberships.filter(member=>member.agentId===bot.appId).map(member=>({...member,stale:true})));
       continue;
     }
-    for (const project of bot.projects) memberships.push({id:membershipIdSchema.parse(JSON.stringify([bot.appId,project.chatId])),agentId:bot.appId,groupId:project.chatId,name:project.name,directory:project.cwd,backend:project.backend,conversation:project.kind==='multi'?'threads':'shared',response:project.noMention?'all':'mention',permission:{administrator:project.mode,member:project.guestMode,network:project.network},stale:false});
+    for (const project of bot.projects) memberships.push({id:membershipIdSchema.parse(JSON.stringify([bot.appId,project.chatId])),agentId:bot.appId,groupId:project.chatId,name:project.name,...(project.avatarDataUrl?{avatarDataUrl:project.avatarDataUrl}:{}),directory:project.cwd,backend:project.backend,conversation:project.kind==='multi'?'threads':'shared',response:project.noMention?'all':'mention',permission:{administrator:project.mode,member:project.guestMode,network:project.network},stale:false});
   }
-  const names = new Map(memberships.map(member=>[member.groupId,member.name]));
-  return {agents,memberships,groups:[...names].map(([id,name])=>({id,name})),stale:agents.some(agent=>!!agent.readError)};
+  const groups = new Map<string, Group>();
+  for (const member of memberships) {
+    const avatarDataUrl = member.avatarDataUrl ?? groups.get(member.groupId)?.avatarDataUrl;
+    groups.set(member.groupId, {id:member.groupId,name:member.name,...(avatarDataUrl?{avatarDataUrl}:{})});
+  }
+  return {agents,memberships,groups:[...groups.values()],stale:agents.some(agent=>!!agent.readError)};
 }
 
 export class CoreError extends Error {
