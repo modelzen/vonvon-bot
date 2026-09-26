@@ -287,7 +287,7 @@ function backendStateLabel(state: string): string {
 }
 
 function profileSourceLabel(source: string): string {
-  if (source === "active") return "默认 Profile";
+  if (source === "active" || source === "config") return "默认 Profile";
   if (source === "environment") return "环境变量";
   return "生效来源未知";
 }
