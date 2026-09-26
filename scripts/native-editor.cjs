@@ -103,13 +103,23 @@ void app.whenReady().then(async () => {
         assert.equal(saves[1].revision, 'rev-1');
       } else if (scenario === 'failure') {
         await until("document.body.innerText.includes('FIXTURE REJECTED')");
+        assert.equal(await evalJs(`${field('待处理消息策略')}.disabled`), true);
+        assert.equal(await evalJs(`${field('最大并发任务')}.disabled`), true);
+        assert.equal(await evalJs(`${field('待处理消息策略')}.value`), 'steer');
+        assert.equal(saves.length, 1, 'failed patch remains pending until retry');
+        await click('重试');
+        await until("document.body.innerText.includes('本次修改已保存')");
+        assert.deepEqual(saves[1].patch, {pendingPolicy:'steer'});
+        assert.equal(await evalJs(`${field('最大并发任务')}.value`), '6');
+        await click('保存');
+        await until("document.querySelector('input[aria-label=\"最大并发任务\"]')?.value === '6' && document.body.innerText.includes('已保存')");
+        assert.deepEqual(saves[2].patch, {maxConcurrentRuns:6});
+        assert.equal(saves[2].revision, 'rev-2');
+        assert.equal(view.sections.run.stored.maxConcurrentRuns, 6);
         await evalJs("document.querySelector('button[aria-label=\"返回列表\"]').click()");
         await until("document.body.innerText.includes('有未保存的修改')");
         await click('保存并离开');
         await until("document.body.innerText.includes('Parity Agent') && !document.body.innerText.includes('最大并发任务')");
-        assert.deepEqual(saves[1].patch, {pendingPolicy:'steer'});
-        assert.deepEqual(saves[2].patch, {maxConcurrentRuns:6});
-        assert.equal(saves[2].revision, 'rev-2');
       } else if (scenario === 'pending') {
         await until("document.body.innerText.includes('正在保存')");
         await evalJs("document.querySelector('button[aria-label=\"返回列表\"]').click()");

@@ -126,7 +126,7 @@ function Editor<T extends object>({
   }, [section, confirmed.revision, draft, immediate.kind, pendingManual]);
   const dirty = Object.keys(draft).length > 0;
   const guarded = dirty || immediate.kind !== 'idle' || pendingManual;
-  const disabled = pendingManual || immediate.kind === 'pending' || section.access.kind === "readonly" || conflict;
+  const disabled = pendingManual || immediate.kind !== 'idle' || section.access.kind === "readonly" || conflict;
   const value = { ...confirmed.stored, ...draft, ...(immediate.kind === 'idle' ? {} : immediate.patch) };
   function edit(next: T) {
     const changed: Partial<T> = {};
