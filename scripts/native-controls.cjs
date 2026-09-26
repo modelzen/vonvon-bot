@@ -86,6 +86,7 @@ void app.whenReady().then(async () => {
   } });
   await window.loadFile(path.resolve("dist/renderer/index.html"));
   await click("本机环境");
+  await waitFor("document.querySelector('.environment-brand img')?.complete && document.querySelector('.environment-brand img')?.naturalWidth > 0");
   const states = [
     ["missing", "unknown", true, false],
     ["installed", "signedOut", false, true],
@@ -97,21 +98,22 @@ void app.whenReady().then(async () => {
   for (const [nextInstallation, nextAuthentication, install, login] of states) {
     installation=nextInstallation;authentication=nextAuthentication;marker=`fixture-${installation}-${authentication}`;
     await click('重新检测');
-    await waitFor(`document.body.innerText.includes(${JSON.stringify(marker)})`);
-    if (installation !== 'missing') await waitFor(`document.body.innerText.includes(${JSON.stringify('auth-'+marker)})`);
-    const buttons = await window.webContents.executeJavaScript("Array.from(document.querySelectorAll('main button')).map(button=>button.textContent.trim())");
+    await waitFor(`document.querySelector('[aria-label="Codex CLI 本机环境"]')?.textContent.includes(${JSON.stringify(install?'未安装':marker)})`);
+    if (login) await waitFor("document.querySelector('[aria-label=\"Codex CLI 本机环境\"]')?.textContent.includes('需要授权')");
+    const buttons = await window.webContents.executeJavaScript("Array.from(document.querySelectorAll('[aria-label=\"Codex CLI 本机环境\"] button')).map(button=>button.textContent.trim())");
     assert.equal(buttons.includes('安装'), install, marker);
-    assert.equal(buttons.includes('授权'), login, marker);
+    assert.equal(buttons.includes('登录'), login, marker);
+    if (nextAuthentication === 'unknown' && !install) assert.ok(await window.webContents.executeJavaScript("document.querySelector('[aria-label=\"Codex CLI 本机环境\"]')?.textContent.includes('授权未确认')"));
   }
   installation='installed';authentication='signedOut';marker='device-auth';
-  await click('重新检测');await waitFor("document.body.innerText.includes('auth-device-auth')");
-  await click('授权');await waitFor("document.querySelector('.desktop-device-code')?.textContent==='CODE-1234'");
+  await click('重新检测');await waitFor("document.querySelector('[aria-label=\"Codex CLI 本机环境\"]')?.textContent.includes('需要授权')");
+  await click('登录');await waitFor("document.querySelector('.desktop-device-code')?.textContent==='CODE-1234'");
   await click('打开官方授权页面');
   assert.ok(commands.some(command=>command.type==='openJobAuthorization'&&command.jobId==='fixture_codex_login'));
   await click('取消本次操作');
   assert.ok(commands.some(command=>command.type==='cancelJob'&&command.jobId==='fixture_codex_login'));
   installation='missing';authentication='unknown';marker='active-install';
-  await click('重新检测');await waitFor("document.body.innerText.includes('active-install')");
+  await click('重新检测');await waitFor("document.querySelector('[aria-label=\"Codex CLI 本机环境\"]')?.textContent.includes('未安装')");
   snapshot.jobs = [{ id: "fixture_install", type: "installCodex", phase: "running", message: "fixture-install-running" }];
   publish();
   await waitFor("document.body.innerText.includes('fixture-install-running')");
@@ -119,16 +121,22 @@ void app.whenReady().then(async () => {
   snapshot.jobs = [];
   publish();
   await waitFor("![...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='安装')?.disabled");
-  await click('安装');await waitFor("document.body.innerText.includes('取消安装')");
-  await click('取消安装');await waitFor("document.body.innerText.includes('安装已取消，旧版本保留。')");
+  await click('安装');
+  await waitFor("document.querySelector('[role=dialog]')?.textContent.includes('开始安装')");
+  assert.equal(installOperation, null, 'confirmation must not start installation');
+  await click('开始安装');await waitFor("document.body.innerText.includes('取消任务')");
+  await click('取消任务');await waitFor("document.body.innerText.includes('安装已取消，旧版本保留。')");
   assert.equal(installOperation.kind,'cancelled');
-  await click('安装');await waitFor("document.body.innerText.includes('取消安装')");
-  await click('Agent');await click('本机环境');await waitFor("document.body.innerText.includes('取消安装')");
+  await click('完成');
+  await click('安装');await click('开始安装');await waitFor("document.body.innerText.includes('后台继续')");
+  await click('后台继续');await waitFor("document.body.innerText.includes('返回进度')");
+  await click('Agent');await click('本机环境');await waitFor("document.body.innerText.includes('取消任务')");
   installation='installed';authentication='signedOut';marker='installed-after-navigation';
   installOperation={kind:'succeeded',id:installOperation.id,message:'工具已安装。'};
   finishInstall({kind:'applied',message:'工具已安装。'});
   await waitFor("document.body.innerText.includes('installed-after-navigation')");
   assert.equal(await window.webContents.executeJavaScript("[...document.querySelectorAll('main button')].some(b=>b.textContent.trim()==='安装')"),false);
+  await click('完成');
   snapshot.diagnostics=[{title:'飞书事件订阅',status:'error',message:'缺少必需事件',eventConfigUrl:'https://open.larksuite.com/app/cli_fixture/event'}];publish();
   await click('状态与诊断');await click('打开事件设置');
   assert.ok(commands.some(c=>c.type==='openEventSettings'&&c.url==='https://open.larksuite.com/app/cli_fixture/event'));
