@@ -12,7 +12,7 @@
     "test": "tsx --test tests/*.test.ts tests/*.test.mjs",
     "start": "electron .",
     "prepare:runtime": "node scripts/prepare-runtime.mjs",
-    "package:mac": "npm run build && node scripts/check-package.mjs darwin-arm64 && electron-builder --mac dir --arm64 --publish never",
+    "package:mac": "npm run build && node scripts/check-package.mjs darwin-arm64 && electron-builder --mac pkg dir --arm64 --publish never",
     "package:win": "npm run build && node scripts/check-package.mjs win32-x64 && electron-builder --win nsis --x64 --publish never",
     "test:native": "node scripts/test-native.mjs",
     "test:controls": "electron scripts/native-controls.cjs",
@@ -57,12 +57,23 @@
       {
         "from": "build/runtime/${os}-${arch}",
         "to": "runtime"
+      },
+      {
+        "from": "dist/cli-registration.cjs",
+        "to": "cli-registration.cjs"
       }
     ],
     "mac": {
+      "artifactName": "Vonvon-Bridge-${version}-mac-arm64.${ext}",
       "category": "public.app-category.developer-tools",
       "identity": null,
       "target": [
+        {
+          "target": "pkg",
+          "arch": [
+            "arm64"
+          ]
+        },
         {
           "target": "dir",
           "arch": [
@@ -71,7 +82,15 @@
         }
       ]
     },
+    "pkg": {
+      "scripts": "../installer/pkg-scripts",
+      "allowAnywhere": false,
+      "allowCurrentUserHome": false,
+      "isRelocatable": false,
+      "mustClose": ["com.vonvon.bridge"]
+    },
     "win": {
+      "artifactName": "Vonvon-Bridge-${version}-win-x64.${ext}",
       "target": [
         {
           "target": "nsis",
@@ -82,9 +101,11 @@
       ]
     },
     "nsis": {
-      "oneClick": false,
+      "oneClick": true,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true
+      "allowElevation": false,
+      "allowToChangeInstallationDirectory": false,
+      "include": "installer/installer.nsh"
     },
     "beforePack": "scripts/before-pack.cjs",
     "icon": "desktop/renderer/public/vonvon-logo.png"

@@ -37,6 +37,11 @@ export function MachinePanel({request, agents}: {request: MachineRequestHandler;
         : !status.service.installed);
 
   return <>
+    <SettingsGroup label="命令行工具" footer="安装后请打开新的终端，输入 vonvon-bridge。兼容命令 feishu-codex-bridge 也可用。">
+      <SettingsRow title="vonvon-bridge" description={status?.cli.kind==='error'?status.cli.message:status?.cli.bin??'正在检查…'}
+        value={status?.cli.kind==='ready'?'已安装':'需要修复'}
+        trailing={<Button size="sm" disabled={busy} onClick={() => void run({type:'repairCli'})}>修复命令行工具</Button>} />
+    </SettingsGroup>
     <SettingsGroup label="Bridge 运行" action={<Button size="sm" disabled={busy} onClick={() => void run({type: 'status'})}>刷新状态</Button>}>
       <SettingsRow title="运行方式"
         description={status?.host?.ownership === 'attached' ? '当前由外部服务管理。' : 'Bridge 负责接收飞书消息并运行 Agent。'}

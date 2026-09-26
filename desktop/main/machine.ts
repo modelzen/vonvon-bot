@@ -5,6 +5,7 @@ import {machineRequestSchema, serviceStatusSchema, coreUpdateStatusSchema, type 
 import type {HostHandle, HostRuntime} from './host';
 import {recentLogs} from './logs';
 import type {DesktopUpdater} from './updates';
+import type {Registration} from './cli-registration';
 
 const exec = promisify(execFile);
 export interface MachineHooks {
@@ -15,6 +16,8 @@ export interface MachineHooks {
   updater:DesktopUpdater;
   openReleases?:()=>Promise<void>;
   serviceCommand?:(action:'status'|'install'|'start'|'stop'|'uninstall')=>Promise<unknown>;
+  cliRegistration?:()=>Registration;
+  repairCli?:()=>Promise<Registration>;
 }
 export class MachineService {
   private lane:Promise<unknown> = Promise.resolve();
@@ -71,7 +74,13 @@ export class MachineService {
     switch(request.type) {
       case 'status': {
         const host = this.hooks.host();
-        return {type:'status',service:await this.service('status'),host:host ? {ownership:host.ownership,pid:host.pid}:null,temporaryAgent:this.temporaryAgent};
+        return {type:'status',service:await this.service('status'),host:host ? {ownership:host.ownership,pid:host.pid}:null,temporaryAgent:this.temporaryAgent,cli:this.hooks.cliRegistration?.()??{kind:'error',message:'此运行方式未配置 CLI。'}};
+      }
+      case 'repairCli': {
+        if (!this.hooks.repairCli) throw new Error('此运行方式无法修复 CLI。');
+        const result=await this.hooks.repairCli();
+        if(result.kind==='error')throw new Error(result.message);
+        return {type:'done',message:result.message};
       }
       case 'service': {
         const host = this.hooks.host();
