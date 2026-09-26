@@ -32,4 +32,6 @@
 .collaboration-window .ss-row__trailing {min-width:0;}
 .collaboration-window select,.collaboration-window input.membership-directory {font-size:12px;padding:5px 8px;border:1px solid #dddde2;border-radius:6px;background:#fff;color:#37373c;}
 .collaboration-window .settings-entity-row {gap:10px;}
+.collaboration-agent-list-avatar {display:grid;width:28px;height:28px;place-items:center;}
+.collaboration-agent-list-avatar .collaboration-avatar {width:28px;height:28px;border-radius:50%;}
 @media(max-width:950px){.collaboration-window{grid-template-columns:203px minmax(0,1fr);}.collaboration-page-heading{flex-wrap:wrap;}.collaboration-window .ss-row--described:has(.membership-directory){flex-wrap:wrap;}.collaboration-window .ss-row:has(.membership-directory) .ss-row__trailing{width:100%;}.collaboration-window input.membership-directory{width:100%;}}

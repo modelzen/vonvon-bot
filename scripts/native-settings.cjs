@@ -76,7 +76,7 @@ ipcMain.handle("bridge:watch", () => snapshot);
       }
       assert.fail(`${scenario}: condition not met: ${expression}; reads=${reads}`);
     };
-    const button = label => `Array.from(document.querySelectorAll('button')).find(button=>button.textContent.trim()===${JSON.stringify(label)})`;
+    const button = label => `Array.from(document.querySelectorAll('button')).find(button=>button.textContent.trim()===${JSON.stringify(label)} || button.querySelector('.settings-entity-row__copy strong')?.textContent.trim()===${JSON.stringify(label)})`;
     const draftField = "document.querySelector('input[aria-label=\"最大并发任务\"]')";
     const click = async label => { await until(`Boolean(${button(label)})`); await evaluate(`${button(label)}.click()`); };
     try {

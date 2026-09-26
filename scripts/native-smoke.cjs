@@ -128,6 +128,9 @@ void app
       } });
       assert.equal(session.kind, "view", JSON.stringify(session));
       assert.equal(session.view.sections.model.stored.selection.model, "fixture-saved-session-model");
+      const engineeringAgent = snapshot.agents.find(agent => agent.id === agentScope.botId);
+      await window.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.collaboration-agent-list-row')).find(row => row.querySelector('strong').textContent === ${JSON.stringify(engineeringAgent.name)}).click()`);
+      await poll(() => window.webContents.executeJavaScript("Boolean(document.querySelector('.collaboration-profile'))"), Boolean);
       await window.webContents.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(button => button.textContent.includes('产品研发群') && button.textContent.includes('Codex')).click()`);
       await poll(() => window.webContents.executeJavaScript(`document.querySelector('select[aria-label="选择话题"]')?.options.length`), value => value === 2);
       const layout = await window.webContents.executeJavaScript(`(() => {
@@ -148,7 +151,10 @@ void app
     const text = await window.webContents.executeJavaScript(
       "document.body.innerText",
     );
-    assert.match(text, /你的 Agent/);
+    if (snapshot.agents.length) {
+      for (const agent of snapshot.agents) assert.ok(text.includes(agent.name), agent.name);
+      assert.match(text, /添加 Agent/);
+    } else assert.match(text, /添加你的第一个 Agent/);
     assert.match(text, /本机环境/);
     assert.doesNotMatch(text, /交互原型|模拟授权|示例数据/);
     const malformed = await window.webContents.executeJavaScript(

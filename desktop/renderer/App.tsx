@@ -74,6 +74,16 @@ const connectedLabel = (connection: string) =>
         : connection === "reconnecting"
           ? "重连中"
           : "连接状态未知";
+const agentListStatus = (agent: DesktopSnapshot["agents"][number]) => {
+  if (agent.readError) return { label: "读取失败", tone: "warning" };
+  if (agent.activation === "restartRequired")
+    return { label: "待重启", tone: "warning" };
+  if (!agent.enabled) return { label: "已停用", tone: "neutral" };
+  return {
+    label: connectedLabel(agent.connection),
+    tone: agent.connection === "connected" ? "success" : "neutral",
+  };
+};
 const isActive = (job: Job) =>
   !["succeeded", "failed", "cancelled"].includes(job.phase);
 
@@ -449,82 +459,75 @@ function DesktopApp() {
               )}
               {selection.kind === "overview" && (
                 <>
-                  <div className="collaboration-page-heading">
-                    <div>
-                      <h2>
-                        {view === "agents" ? "你的 Agent" : "已连接的飞书群"}
-                      </h2>
-                      <p>
-                        {view === "agents"
-                          ? "每个 Agent 使用独立的飞书机器人身份，在已加入的群里协作。"
-                          : "同一个群可以有多个 Agent，各自保留工作目录和群内配置。"}
-                      </p>
+                  {view === "groups" && (
+                    <div className="collaboration-page-heading">
+                      <div>
+                        <h2>已连接的飞书群</h2>
+                        <p>同一个群可以有多个 Agent，各自保留工作目录和群内配置。</p>
+                      </div>
                     </div>
-                    {view === "agents" && (
-                      <Button
-                        size="sm"
-                        icon={<Plus size={14} />}
-                        disabled={!ready || busy}
-                        onClick={() => void register()}
-                      >
-                        添加 Agent
-                      </Button>
-                    )}
-                  </div>
+                  )}
                   {view === "agents"
-                    ? snapshot.agents.map((a) => (
-                        <SettingsGroup
-                          key={a.id}
-                          label={
-                            <button
-                              className="section-title-link"
-                              onClick={() =>
-                                select({ kind: "agent", id: a.id })
-                              }
-                            >
-                              <AgentAvatar agent={a} />
-                              {a.name}
-                              <ChevronRight size={13} />
-                            </button>
-                          }
-                          action={
-                            <Button
-                              size="sm"
-                              disabled={busy || !ready || !a.enabled}
-                              onClick={() => void openJoin(a.id)}
-                            >
-                              加入飞书群
-                            </Button>
-                          }
-                          footer={
-                            a.readError ??
-                            (a.activation === "restartRequired"
-                              ? "配置已保存，等待原有 Bridge 重启。"
-                              : connectedLabel(a.connection))
-                          }
+                    ? snapshot.agents.length > 0 && (
+                        <section
+                          aria-label="Agent 列表"
+                          className="settings-entity-group"
                         >
                           <div className="settings-entity-group__surface">
-                            {membershipRows(
-                              snapshot.memberships.filter(
-                                (m) => m.agentId === a.id,
-                              ),
-                              "agents",
-                            )}
-                            {!snapshot.memberships.some(
-                              (m) => m.agentId === a.id,
-                            ) && (
-                              <SettingsRow
-                                title={
-                                  a.readError
-                                    ? "群配置读取失败"
-                                    : "尚未绑定飞书群"
-                                }
-                                onClick={() => void openJoin(a.id)}
-                              />
-                            )}
+                            {snapshot.agents.map((agent) => {
+                              const status = agentListStatus(agent);
+                              const groupCount = new Set(
+                                snapshot.memberships
+                                  .filter((member) => member.agentId === agent.id)
+                                  .map((member) => member.groupId),
+                              ).size;
+                              return (
+                                <button
+                                  className="settings-entity-row collaboration-agent-list-row"
+                                  key={agent.id}
+                                  type="button"
+                                  onClick={() =>
+                                    select({ kind: "agent", id: agent.id })
+                                  }
+                                >
+                                  <span className="collaboration-agent-list-avatar" aria-hidden="true">
+                                    <AgentAvatar agent={agent} />
+                                  </span>
+                                  <span className="settings-entity-row__copy">
+                                    <strong>{agent.name}</strong>
+                                    <small title={agent.readError || undefined}>
+                                      {agent.readError
+                                        ? "群配置读取失败"
+                                        : `飞书 · ${groupCount} 个群聊`}
+                                    </small>
+                                  </span>
+                                  <span
+                                    className={`settings-entity-row__value settings-entity-row__value--${status.tone}`}
+                                  >
+                                    {status.label}
+                                  </span>
+                                  <ChevronRight
+                                    aria-hidden="true"
+                                    className="settings-entity-row__chevron"
+                                    size={15}
+                                  />
+                                </button>
+                              );
+                            })}
+                            <button
+                              className="settings-add-row"
+                              type="button"
+                              disabled={!ready || busy}
+                              onClick={() => void register()}
+                            >
+                              <span aria-hidden="true" className="settings-add-row__icon">
+                                <Plus size={15} />
+                              </span>
+                              <span>添加 Agent</span>
+                            </button>
                           </div>
-                        </SettingsGroup>
-                      ))
+                        </section>
+                      )
                     : snapshot.groups.map((g) => (
                         <SettingsGroup
                           key={g.id}
@@ -565,6 +568,16 @@ function DesktopApp() {
                           ? "连接飞书机器人，再让它加入群开始协作。"
                           : "在 Agent 页面选择已加入的飞书群并绑定工作目录。"}
                       </p>
+                      {view === "agents" && (
+                        <Button
+                          size="sm"
+                          icon={<Plus size={14} />}
+                          disabled={!ready || busy}
+                          onClick={() => void register()}
+                        >
+                          添加 Agent
+                        </Button>
+                      )}
                     </div>
                   )}
                   {view === "groups" && (
@@ -591,6 +604,34 @@ function DesktopApp() {
                       {connectedLabel(agent.connection)}
                     </StatusBadge>
                   </header>
+                  <SettingsGroup
+                    label="已绑定的飞书群"
+                    action={
+                      <Button
+                        size="sm"
+                        disabled={busy || !ready || !agent.enabled}
+                        onClick={() => void openJoin(agent.id)}
+                      >
+                        加入飞书群
+                      </Button>
+                    }
+                  >
+                    <div className="settings-entity-group__surface">
+                      {membershipRows(
+                        snapshot.memberships.filter(
+                          (m) => m.agentId === agent.id,
+                        ),
+                        "agents",
+                      )}
+                      {!snapshot.memberships.some(
+                        (m) => m.agentId === agent.id,
+                      ) && (
+                        <SettingsRow
+                          title={agent.readError ? "群配置读取失败" : "尚未绑定飞书群"}
+                        />
+                      )}
+                    </div>
+                  </SettingsGroup>
                   <SettingsGroup label="Agent 身份">
                     <SettingsRow
                       title="应用 ID"
@@ -641,30 +682,6 @@ function DesktopApp() {
                     key={`agent-${agent.id}`}
                     target={{ kind: "agent", botId: agent.id }}
                   />
-                  <SettingsGroup
-                    label="已绑定的飞书群"
-                    action={
-                      <Button
-                        size="sm"
-                        disabled={busy || !agent.enabled}
-                        onClick={() => void openJoin(agent.id)}
-                      >
-                        加入飞书群
-                      </Button>
-                    }
-                  >
-                    <div className="settings-entity-group__surface">
-                      {membershipRows(
-                        snapshot.memberships.filter(
-                          (m) => m.agentId === agent.id,
-                        ),
-                        "agents",
-                      )}
-                      {!snapshot.memberships.some(
-                        (m) => m.agentId === agent.id,
-                      ) && <SettingsRow title="尚未绑定飞书群" />}
-                    </div>
-                  </SettingsGroup>
                   <SettingsGroup
                     label="移除 Agent"
                     footer="删除本地注册信息、凭据、群绑定、会话记录与设置。飞书开发者平台中的应用仍保留。"
