@@ -86,7 +86,7 @@ const errorText = (reply: SettingsReply): string | undefined => {
     if (reply.result.kind === "diverged") return reply.result.message;
   }
 };
-function Editor<T>({
+function Editor<T extends object>({
   title,
   section,
   render,
@@ -98,42 +98,117 @@ function Editor<T>({
     draft: T,
     change: (value: T) => void,
     disabled: boolean,
+    commit: (patch: Partial<T>) => Promise<void>,
   ) => ReactNode;
-  save: (draft: T) => Promise<SettingsReply>;
+  save: (patch: Partial<T>, revision: string) => Promise<SettingsReply>;
 }) {
-  const [draft, setDraft] = useState(section.stored);
-  const [base, setBase] = useState(section.stored);
-  const [baseRevision, setBaseRevision] = useState(section.revision);
-  const [pending, setPending] = useState(false);
+  const [confirmed, setConfirmed] = useState(section);
+  const [draft, setDraft] = useState<Partial<T>>({});
+  const [immediate, setImmediate] = useState<
+    | { kind: 'idle' }
+    | { kind: 'pending'; patch: Partial<T> }
+    | { kind: 'failed'; patch: Partial<T>; message: string }
+  >({kind: 'idle'});
+  const [pendingManual, setPendingManual] = useState(false);
+  const [conflict, setConflict] = useState(false);
+  const [conflictCurrent, setConflictCurrent] = useState<Section<T>>();
+  const priorRevision = useRef<string | undefined>(undefined);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   useEffect(() => {
-    if (section.revision === baseRevision) return;
-    setDraft((current) =>
-      JSON.stringify(current) === JSON.stringify(base)
-        ? section.stored
-        : current,
-    );
-    setBase(section.stored);
-    setBaseRevision(section.revision);
-  }, [section.revision, section.stored, baseRevision, base]);
-  const dirty = JSON.stringify(draft) !== JSON.stringify(base);
-  const disabled = pending || section.access.kind === "readonly";
+    if (section.revision === confirmed.revision || section.revision === priorRevision.current) return;
+    if (pendingManual || immediate.kind === 'pending') return;
+    if (Object.keys(draft).length || immediate.kind === 'failed') {
+      setConflictCurrent(section);
+      setConflict(true);
+    }
+    else { setConfirmed(section); setConflict(false); }
+  }, [section, confirmed.revision, draft, immediate.kind, pendingManual]);
+  const dirty = Object.keys(draft).length > 0;
+  const guarded = dirty || immediate.kind !== 'idle' || pendingManual;
+  const disabled = pendingManual || immediate.kind === 'pending' || section.access.kind === "readonly" || conflict;
+  const value = { ...confirmed.stored, ...draft, ...(immediate.kind === 'idle' ? {} : immediate.patch) };
+  function edit(next: T) {
+    const changed: Partial<T> = {};
+    for (const key of Object.keys(next) as (keyof T)[]) {
+      if (JSON.stringify(next[key]) !== JSON.stringify(value[key])) changed[key] = next[key];
+    }
+    setDraft(current => {
+      const updated = { ...current, ...changed };
+      for (const key of Object.keys(updated) as (keyof T)[]) {
+        if (JSON.stringify(updated[key]) === JSON.stringify(confirmed.stored[key])) delete updated[key];
+      }
+      return updated;
+    });
+    setError(undefined);
+    setNotice(undefined);
+  }
+  function accept(reply: SettingsReply) {
+    if (reply.kind !== 'saved' || reply.result.kind !== 'saved') return false;
+    const canonical = reply.result.section.value;
+    priorRevision.current = confirmed.revision;
+    setConfirmed({ ...confirmed, stored: canonical.stored as T, effective: canonical.effective as T, revision: canonical.revision, apply: canonical.apply });
+    setNotice(reply.result.effects.map(item => item.detail).join(' ') || '已保存。');
+    return true;
+  }
+  function noteConflict(reply: SettingsReply) {
+    if (reply.kind !== 'saved' || reply.result.kind !== 'conflict') return;
+    const current = reply.result.current.value;
+    setConflictCurrent({ ...confirmed, stored: current.stored as T, effective: current.effective as T, revision: current.revision, apply: current.apply });
+    setConflict(true);
+  }
+  async function commit(patch: Partial<T>): Promise<void> {
+    if (disabled || !Object.keys(patch).length) return;
+    setImmediate({kind: 'pending', patch});
+    setError(undefined); setNotice(undefined);
+    try {
+      const reply = await save(patch, confirmed.revision);
+      if (accept(reply)) setImmediate({kind: 'idle'});
+      else {
+        noteConflict(reply);
+        setImmediate({kind: 'failed', patch, message: errorText(reply) ?? '未收到保存确认，请重试。'});
+      }
+    } catch (error) {
+      setImmediate({kind: 'failed', patch, message: error instanceof Error ? error.message : '保存失败。'});
+    }
+  }
+  async function retry(): Promise<string | undefined> {
+    if (immediate.kind !== 'failed' || conflict || section.access.kind === 'readonly') return undefined;
+    const patch = immediate.patch;
+    setImmediate({kind: 'pending', patch});
+    try {
+      const reply = await save(patch, confirmed.revision);
+      if (accept(reply) && reply.kind === 'saved' && reply.result.kind === 'saved') {
+        setImmediate({kind: 'idle'});
+        return reply.result.section.value.revision;
+      }
+      noteConflict(reply);
+      setImmediate({kind: 'failed', patch, message: errorText(reply) ?? '未收到保存确认，请重试。'});
+      return undefined;
+    } catch (error) {
+      setImmediate({kind: 'failed', patch, message: error instanceof Error ? error.message : '保存失败。'});
+      return undefined;
+    }
+  }
   async function submit(): Promise<boolean> {
-    if (disabled) return false;
-    setPending(true);
+    let revision = confirmed.revision;
+    if (immediate.kind === 'failed') {
+      const savedRevision = await retry();
+      if (!savedRevision) return false;
+      if (!dirty) return true;
+      revision = savedRevision;
+    } else if (disabled || !dirty) return false;
+    const patch = draft;
+    setPendingManual(true);
     setError(undefined);
     setNotice(undefined);
     try {
-      const result = await save(draft);
+      const result = await save(patch, revision);
+      noteConflict(result);
       const failure = errorText(result);
       if (failure) { setError(failure); return false; }
-      if (result.kind === "saved" && result.result.kind === "saved") {
-        setBase(draft);
-        setNotice(
-          result.result.effects.map((item) => item.detail).join(" ") ||
-            "已保存。",
-        );
+      if (accept(result)) {
+        setDraft({});
         return true;
       }
       setError('未收到保存确认，请重新读取后重试。');
@@ -142,16 +217,20 @@ function Editor<T>({
       setError(error instanceof Error ? error.message : "保存失败。");
       return false;
     } finally {
-      setPending(false);
+      setPendingManual(false);
     }
   }
   function discard() {
-    setDraft(section.stored);
-    setBase(section.stored);
-    setBaseRevision(section.revision);
+    setDraft({});
+    setImmediate({kind: 'idle'});
+    const latest = conflictCurrent ?? section;
+    priorRevision.current = confirmed.revision;
+    setConfirmed(latest);
+    setConflictCurrent(undefined);
+    setConflict(false);
     setError(undefined);
   }
-  useDraft(dirty, {title, save: submit, discard});
+  useDraft(guarded, {title, save: submit, discard});
   return (
     <SettingsGroup
       id={settingAnchor(title)}
@@ -162,8 +241,8 @@ function Editor<T>({
           : effectText(section)
       }
     >
-      {render(draft, setDraft, disabled)}
-      <div className="settings-edit-actions">
+      {render(value, edit, disabled, commit)}
+      {dirty && <div className="settings-edit-actions">
         <Button
           size="sm"
           disabled={!dirty || disabled}
@@ -178,13 +257,25 @@ function Editor<T>({
         >
           保存
         </Button>
-      </div>
+      </div>}
+      {immediate.kind === 'pending' && <InlineNotice title="正在保存">这项设置正在保存。</InlineNotice>}
+      {immediate.kind === 'failed' && <InlineNotice title="保存未完成" tone="danger">
+        {immediate.message}
+        <div className="settings-edit-actions">
+          <Button size="sm" disabled={conflict} onClick={() => void retry()}>重试</Button>
+          <Button size="sm" onClick={() => setImmediate({kind: 'idle'})}>放弃这项修改</Button>
+        </div>
+      </InlineNotice>}
+      {conflict && <InlineNotice title="设置已在别处更改" tone="danger">
+        当前草稿已保留。重新读取后可基于最新设置修改。
+        <Button size="sm" onClick={discard}>重新读取并放弃草稿</Button>
+      </InlineNotice>}
       {error && (
         <InlineNotice title="保存未完成" tone="danger">
           {error}
         </InlineNotice>
       )}
-      {notice && <InlineNotice title="设置已保存">{notice}</InlineNotice>}
+      {notice && <InlineNotice title="本次修改已保存">{notice}{dirty ? ' 其他修改尚未保存。' : ''}</InlineNotice>}
     </SettingsGroup>
   );
 }
@@ -566,8 +657,8 @@ function AgentPanel({
       <Editor
         title="任务卡片"
         section={cards}
-        save={(draft) => save("cards", draft, cards.revision)}
-        render={(draft, set, disabled) => (
+        save={(draft, revision) => save("cards", draft, revision)}
+        render={(draft, set, disabled, commit) => (
           <>
             <SettingsRow
               title="显示工具调用"
@@ -576,7 +667,7 @@ function AgentPanel({
                   label="显示工具调用"
                   value={draft.showToolCalls}
                   disabled={disabled}
-                  onChange={(value) => set({ ...draft, showToolCalls: value })}
+                  onChange={(value) => void commit({ showToolCalls: value })}
                 />
               }
             />
@@ -592,7 +683,7 @@ function AgentPanel({
                     { value: "running", label: "运行时" },
                     { value: "always", label: "始终" },
                   ]}
-                  onChange={(value) => set({ ...draft, showModel: value })}
+                  onChange={(value) => void commit({ showModel: value })}
                 />
               }
             />
@@ -602,8 +693,8 @@ function AgentPanel({
       <Editor
         title="运行策略"
         section={run}
-        save={(draft) => save("run", draft, run.revision)}
-        render={(draft, set, disabled) => (
+        save={(draft, revision) => save("run", draft, revision)}
+        render={(draft, set, disabled, commit) => (
           <>
             <SettingsRow
               title="最大并发任务"
@@ -654,7 +745,7 @@ function AgentPanel({
                     { value: "steer", label: "引导当前任务" },
                     { value: "queue", label: "排队" },
                   ]}
-                  onChange={(value) => set({ ...draft, pendingPolicy: value })}
+                  onChange={(value) => void commit({ pendingPolicy: value })}
                 />
               }
             />
@@ -664,8 +755,8 @@ function AgentPanel({
       <Editor
         title="任务结束提醒"
         section={completion}
-        save={(draft) => save("completion", draft, completion.revision)}
-        render={(draft, set, disabled) => (
+        save={(draft, revision) => save("completion", draft, revision)}
+        render={(draft, set, disabled, commit) => (
           <>
             <SettingsRow
               title="提醒方式"
@@ -680,7 +771,7 @@ function AgentPanel({
                     { value: "failures", label: "失败时" },
                     { value: "always", label: "每次" },
                   ]}
-                  onChange={(value) => set({ ...draft, mode: value })}
+                  onChange={(value) => void commit({ mode: value })}
                 />
               }
             />
@@ -838,8 +929,8 @@ function AgentPanel({
       <Editor
         title="CLI 通知设置"
         section={cli}
-        save={(draft) => save("cliBridge", draft, cli.revision)}
-        render={(draft, set, disabled) => (
+        save={(draft, revision) => save("cliBridge", draft, revision)}
+        render={(draft, set, disabled, commit) => (
           <>
             <SettingsRow
               title="通知范围"
@@ -853,7 +944,7 @@ function AgentPanel({
                     { value: "bound_projects", label: "已绑定项目" },
                     { value: "none", label: "不通知" },
                   ]}
-                  onChange={(value) => set({ ...draft, notifyScope: value })}
+                  onChange={(value) => void commit({ notifyScope: value })}
                 />
               }
             />
@@ -1096,7 +1187,7 @@ function AgentPanel({
           <Editor
             title="云文档评论"
             section={comments}
-            save={(draft) => save("comments", draft, comments.revision)}
+            save={(draft, revision) => save("comments", draft, revision)}
             render={(draft, set, disabled) => (
               <>
                 <SettingsRow
@@ -1197,17 +1288,17 @@ function AgentPanel({
           <Editor
             title="新会话标题"
             section={titles}
-            save={(draft) =>
+            save={(draft, revision) =>
               save(
                 "titles",
                 {
                   byBackend: {
-                    [titleBackend]: draft.byBackend[titleBackend] ?? {
+                    [titleBackend]: draft.byBackend?.[titleBackend] ?? {
                       enabled: false,
                     },
                   },
                 },
-                titles.revision,
+                revision,
               )
             }
             render={(draft, set, disabled) => {
@@ -1362,7 +1453,7 @@ function AgentPanel({
       <Editor
         title="新项目默认目录"
         section={paths}
-        save={(draft) => save("paths", draft, paths.revision)}
+        save={(draft, revision) => save("paths", draft, revision)}
         render={(draft, set, disabled) => (
           <SettingsRow
             title="根目录"
@@ -1382,7 +1473,7 @@ function AgentPanel({
       <Editor
         title="允许的飞书群"
         section={access}
-        save={(draft) => save("access", draft, access.revision)}
+        save={(draft, revision) => save("access", draft, revision)}
         render={(draft, set, disabled) => (
           <>
             <SettingsRow
@@ -1511,8 +1602,8 @@ function ProjectPanel({
       <Editor
         title="群内响应"
         section={response}
-        save={(draft) => save("response", draft, response.revision)}
-        render={(draft, set, disabled) => (
+        save={(draft, revision) => save("response", draft, revision)}
+        render={(draft, set, disabled, commit) => (
           <SettingsRow
             title="不 @ 也能发起任务"
             description="按话题独立会话时，已有话题和群内支持的命令免 @。整群连续会话时，群内普通消息也会响应。"
@@ -1521,7 +1612,7 @@ function ProjectPanel({
                 label="不 @ 也能发起任务"
                 value={draft.noMention}
                 disabled={disabled}
-                onChange={(noMention) => set({ noMention })}
+                onChange={(noMention) => void commit({ noMention })}
               />
             }
           />
@@ -1530,8 +1621,8 @@ function ProjectPanel({
       <Editor
         title="工作目录权限"
         section={permission}
-        save={(draft) => save("permission", draft, permission.revision)}
-        render={(draft, set, disabled) => (
+        save={(draft, revision) => save("permission", draft, revision)}
+        render={(draft, set, disabled, commit) => (
           <>
             <SettingsRow
               title="管理员权限"
@@ -1545,7 +1636,7 @@ function ProjectPanel({
                     { value: "write", label: "允许写入" },
                     { value: "full", label: "完全访问" },
                   ]}
-                  onChange={(mode) => set({ ...draft, mode })}
+                  onChange={(mode) => void commit({ mode })}
                 />
               }
             />
@@ -1561,7 +1652,7 @@ function ProjectPanel({
                     { value: "write", label: "允许写入" },
                     { value: "full", label: "完全访问" },
                   ]}
-                  onChange={(guestMode) => set({ ...draft, guestMode })}
+                  onChange={(guestMode) => void commit({ guestMode })}
                 />
               }
             />
@@ -1572,7 +1663,7 @@ function ProjectPanel({
                   label="允许网络访问"
                   value={draft.network}
                   disabled={disabled}
-                  onChange={(network) => set({ ...draft, network })}
+                  onChange={(network) => void commit({ network })}
                 />
               }
             />
@@ -1582,8 +1673,8 @@ function ProjectPanel({
       <Editor
         title="会话压缩"
         section={compact}
-        save={(draft) => save("compact", draft, compact.revision)}
-        render={(draft, set, disabled) => (
+        save={(draft, revision) => save("compact", draft, revision)}
+        render={(draft, set, disabled, commit) => (
           <SettingsRow
             title="自动压缩上下文"
             trailing={
@@ -1591,7 +1682,7 @@ function ProjectPanel({
                 label="自动压缩上下文"
                 value={draft.autoCompact}
                 disabled={disabled}
-                onChange={(autoCompact) => set({ autoCompact })}
+                onChange={(autoCompact) => void commit({ autoCompact })}
               />
             }
           />
@@ -1606,7 +1697,7 @@ function ProjectPanel({
           <Editor
             title="新会话默认模型"
             section={model}
-            save={(draft) => save("model", draft, model.revision)}
+            save={(draft, revision) => save("model", draft, revision)}
             render={(draft, set, disabled) => (
               <ModelChoice
                 value={draft.selection}
@@ -1862,13 +1953,13 @@ function SessionPanel({
           <Editor
             title="本话题模型"
             section={model}
-            save={async (draft) => {
+            save={async (draft, revision) => {
               const reply = await window.bridge.settings({
                 type: "save",
                 edit: {
                   scope,
                   section: "model",
-                  revision: model.revision,
+                  revision,
                   patch: draft,
                 },
               });

@@ -732,6 +732,20 @@ test("state read failures and per-Agent errors retain last good memberships", as
     await f.controller.quit();
   }
 });
+test("Agent portrait is optional and malformed image data falls back without hiding the Agent", () => {
+  const portrait = `data:image/png;base64,${Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString('base64')}`;
+  const valid = stateSchema.parse({
+    ...coreState(), bots: [{ ...coreState().bots[0], avatarDataUrl: portrait }],
+  });
+  const previous = fixture().controller.current();
+  assert.equal(projectState(valid, previous, new Set()).agents[0]?.avatarDataUrl, portrait);
+  const invalid = stateSchema.parse({
+    ...coreState(), bots: [{ ...coreState().bots[0], avatarDataUrl: 'https://example.com/avatar.svg' }],
+  });
+  const projected = projectState(invalid, previous, new Set());
+  assert.equal(projected.agents.length, 1);
+  assert.equal(projected.agents[0]?.avatarDataUrl, undefined);
+});
 test("group identity aggregates chat across Agents and unknown saved backend survives", async () => {
   const f = fixture();
   await f.controller.start();

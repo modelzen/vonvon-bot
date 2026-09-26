@@ -116,6 +116,7 @@ export type HostState =
 export type Agent = {
   id: AgentId;
   name: string;
+  avatarDataUrl?: string;
   enabled: boolean;
   connection: string;
   activation: "active" | "restartRequired";

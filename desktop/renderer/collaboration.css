@@ -1,7 +1,9 @@
 .collaboration-window {grid-template-columns:223px minmax(0,1fr);}
 .collaboration-window .settings-sidebar {padding-left:12px;padding-right:12px;}
 .collaboration-window .settings-account-row {margin-bottom:8px;}
-.collaboration-avatar {display:inline-grid;place-items:center;width:29px;height:29px;flex:none;border-radius:9px;}
+.collaboration-avatar {display:inline-grid;place-items:center;width:29px;height:29px;flex:none;border-radius:9px;position:relative;overflow:hidden;}
+.collaboration-avatar-image {position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
+.collaboration-avatar-image[data-loaded="false"],.collaboration-avatar-image[data-failed="true"] {display:none;}
 .collaboration-avatar.agent {background:#efe7fc;color:#8552c4;}
 .collaboration-avatar.group {background:#e0f0f7;color:#3188a9;}
 .collaboration-avatar.large {width:46px;height:46px;border-radius:13px;}
