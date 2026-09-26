@@ -1,4 +1,4 @@
-import type { EnvironmentProfile, EnvironmentReply, EnvironmentToolState, EnvironmentTool } from "../../shared/environment";
+import type { BackendEntry, EnvironmentProfile, EnvironmentReply, EnvironmentToolState, EnvironmentTool } from "../../shared/environment";
 
 export type ToolAction = "install" | "update" | "login" | "none";
 export type ToolPresentation = {
@@ -13,6 +13,13 @@ export const toolNames: Record<EnvironmentTool, string> = {
   claude: "Claude Code CLI",
   "lark-cli": "飞书 CLI",
 };
+
+export function groupAgentBackends(tools: EnvironmentToolState[], backends: BackendEntry[]): { codexHost?: BackendEntry; otherBackends: BackendEntry[] } {
+  if (!tools.some((tool) => tool.tool === "codex")) return { otherBackends: backends };
+  const index = backends.findIndex((backend) => backend.id === "codex-appserver" && backend.depKind === "external-cli");
+  if (index < 0) return { otherBackends: backends };
+  return { codexHost: backends[index], otherBackends: backends.filter((_, position) => position !== index) };
+}
 
 export function profileTokenLabel(status: string | undefined): string {
   if (status === "valid") return "凭据有效";
@@ -34,7 +41,7 @@ export function presentTool(tool: EnvironmentToolState, auth: Extract<Environmen
     action: "login", status: profileTokenLabel(profile.tokenStatus), tone: "warning", summary,
   };
   if (auth?.state === "signedOut") return { action: "login", status: "需要授权", tone: "warning", summary };
-  if (tool.updateAvailable) return { action: "update", status: "可更新", tone: "info", summary };
-  if (auth?.state === "signedIn") return { action: "none", status: "已授权", tone: "success", summary };
-  return { action: "none", status: "授权未确认", tone: "neutral", summary };
+  const action = tool.updateAvailable ? "update" : "none";
+  if (auth?.state === "signedIn") return { action, status: "已授权", tone: "success", summary };
+  return { action, status: "授权未确认", tone: "neutral", summary };
 }
