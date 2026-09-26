@@ -72,7 +72,7 @@ void app.whenReady().then(async () => {
     const field = label => `document.querySelector('[aria-label=${JSON.stringify(label)}]')`;
     const setInput = async (label, value) => evalJs(`{const element=${field(label)}; Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(element,${JSON.stringify(value)}); element.dispatchEvent(new Event('input',{bubbles:true}));}`);
     const setSelect = async (label, value) => evalJs(`{const element=${field(label)}; Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(element,${JSON.stringify(value)}); element.dispatchEvent(new Event('change',{bubbles:true}));}`);
-    const click = async label => evalJs(`Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === ${JSON.stringify(label)}).click()`);
+    const click = async label => evalJs(`Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === ${JSON.stringify(label)} || button.querySelector('.settings-entity-row__copy strong')?.textContent.trim() === ${JSON.stringify(label)}).click()`);
     try {
       await window.loadFile(path.resolve('dist/renderer/index.html'));
       if (interactive) {
@@ -81,7 +81,7 @@ void app.whenReady().then(async () => {
         await new Promise(resolve => window.once('closed', resolve));
         continue;
       }
-      await until("Array.from(document.querySelectorAll('button')).some(button => button.textContent.trim() === 'Parity Agent')");
+      await until("Array.from(document.querySelectorAll('.settings-entity-row__copy strong')).some(name => name.textContent.trim() === 'Parity Agent')");
       await click('Parity Agent');
       await until(`Boolean(${field('最大并发任务')})`);
       await until("document.querySelector('.collaboration-profile .collaboration-avatar-image')?.naturalWidth === 1");

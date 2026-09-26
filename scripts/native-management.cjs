@@ -53,7 +53,8 @@ void app.whenReady().then(async()=>{
   const value=async(label,value,select=false)=>{const query=`document.querySelector('[aria-label="${label}"]')`;await wait(`Boolean(${query})`);await evaluate(`Object.getOwnPropertyDescriptor(${select?'HTMLSelectElement':'HTMLInputElement'}.prototype,'value').set.call(${query},${JSON.stringify(value)});${query}.dispatchEvent(new Event('${select?'change':'input'}',{bubbles:true}));`);await pause(50);};
   const pass=name=>{results.push(name);process.stdout.write(`PASS ${name}\n`);};
   await window.loadFile(path.resolve('dist/renderer/index.html'));
-  await click('Management Agent');
+  await wait("Array.from(document.querySelectorAll('.settings-entity-row__copy strong')).some(name => name.textContent.trim() === 'Management Agent')");
+  await evaluate("Array.from(document.querySelectorAll('.settings-entity-row')).find(row => row.querySelector('.settings-entity-row__copy strong')?.textContent.trim() === 'Management Agent').click()");
   await value('项目名称','Created from desktop');await value('会话方式','shared',true);await value('执行工具','claude',true);
   await value('目录来源','existing',true);await click('选择目录');await click('创建项目群');
   await wait("document.body.innerText.includes('项目群已创建。')");
