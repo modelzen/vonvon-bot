@@ -583,6 +583,8 @@ function DesktopApp() {
                       description="更改后需要重新启动当前 Bridge。"
                       trailing={
                         <Toggle
+                          className="settings-row-switch"
+                          aria-label="启用 Agent"
                           label="启用 Agent"
                           checked={agent.enabled}
                           disabled={busy || !ready}
@@ -752,7 +754,7 @@ function DesktopApp() {
                   value={`v${snapshot.application.version}`}
                 />
               </SettingsGroup>
-              <SettingsGroup label="Bridge 运行">
+              <SettingsGroup label="启动选项">
                 <SettingsRow
                   title="运行状态"
                   value={
@@ -780,6 +782,8 @@ function DesktopApp() {
                   title="登录电脑时启动"
                   trailing={
                     <Toggle
+                      className="settings-row-switch"
+                      aria-label="登录电脑时启动"
                       label="登录电脑时启动"
                       checked={snapshot.application.loginItem}
                       disabled={busy}
