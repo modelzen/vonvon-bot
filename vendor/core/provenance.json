@@ -1,11 +1,11 @@
 {
   "repository": "https://github.com/modelzen/feishu-codex-bridge",
-  "sourceCommit": "bb893f83ed1000b641afd4e24806ed20cbfc5f20",
+  "sourceCommit": "a251f7b70a89c2d61131c751c54e2d9e74611dc1",
   "package": "@modelzen/feishu-codex-bridge",
   "version": "0.7.0",
-  "artifact": "0.7.0-bb893f83ed10.tgz",
-  "artifactSha256": "9d4f2d3de6117051891b40ed47d5cbce4cf4fb138e2b41689a539902af4f9f0f",
-  "artifactIntegrity": "sha512-YmPuIOrtU19e/i6nvl4qZkHAqjMjxQ+r3tkuQGp+bFHgjBNe4sYq7KOJ+9DPssV3cdYJzUdSb1EUa7JDP4YlCA==",
+  "artifact": "0.7.0-a251f7b70a89.tgz",
+  "artifactSha256": "930d9f6c92f5d742aa36cba56962ca9a009f8a053291d38a391ad1bda2fc02d6",
+  "artifactIntegrity": "sha512-PH0eLyj8tfghO2tRLn6uCHE62SieR127SP11QhiToRXVMLtRrmOdpHf6XVWOEHMruQJ0R+dbZNyQjuDp0J/ipw==",
   "sourceLockSha256": "653020ae14cb63b8b3e46bc7af6e39ac0b012dac4b0548d270cb608f101ffaf8",
   "packCommand": "npm pack --ignore-scripts --json --pack-destination .audit/agent-ux/pack",
   "containsCompanionCapabilities": true
