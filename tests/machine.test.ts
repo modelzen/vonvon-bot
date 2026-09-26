@@ -206,3 +206,40 @@ test('updater shutdown inside the machine lane prevents later work without self-
   assert.equal(commands,0);
   assert.equal(driver.calls.at(-1),'install');
 });
+test('installed service waits for its Host endpoint without reinstalling or spawning an owned Host',async()=>{
+  let current:HostHandle|undefined;
+  let installed=false;
+  let attempts=0;
+  const actions:string[]=[];
+  const service=new MachineService({runtime,host:()=>current,stopHost:async()=>{},startHost:async()=>{
+    attempts++;
+    assert.equal(installed,true);
+    if(attempts===1) throw new Error('An existing service is registered. Start it to attach.');
+    current=host('attached');
+  },serviceCommand:async action=>{
+    actions.push(action);
+    if(action==='install') installed=true;
+    return {...status,installed,running:installed};
+  },updater:new DesktopUpdater({current:'0.7.0',signed:false,driver:new Driver()})});
+  assert.equal((await service.request({type:'service',action:'install'})).type,'done');
+  assert.equal(current?.ownership,'attached');
+  assert.equal(attempts,2);
+  assert.equal(actions.filter(action=>action==='install').length,1);
+});
+
+test('service readiness stops retrying if registration disappears',async()=>{
+  let attempts=0;
+  const service=new MachineService({runtime,host:()=>undefined,stopHost:async()=>{},startHost:async()=>{attempts++;throw new Error('endpoint unavailable');},serviceCommand:async()=>status,updater:new DesktopUpdater({current:'0.7.0',signed:false,driver:new Driver()})});
+  await assert.rejects(service.request({type:'service',action:'install'}),/endpoint unavailable/);
+  assert.equal(attempts,1);
+});
+
+test('service readiness has a deadline and keeps the original connection failure',async t=>{
+  let now=0;
+  t.mock.method(Date,'now',()=>now);
+  let attempts=0;
+  let installed=false;
+  const service=new MachineService({runtime,host:()=>undefined,stopHost:async()=>{},startHost:async()=>{attempts++;now=20001;throw new Error('endpoint unavailable');},serviceCommand:async action=>{if(action==='install')installed=true;return {...status,installed,running:installed};},updater:new DesktopUpdater({current:'0.7.0',signed:false,driver:new Driver()})});
+  await assert.rejects(service.request({type:'service',action:'install'}),/endpoint unavailable/);
+  assert.equal(attempts,1);
+});
