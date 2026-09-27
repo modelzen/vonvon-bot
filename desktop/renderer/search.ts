@@ -1,3 +1,4 @@
+import {toolNames} from './management/environmentPresentation';
 import type {AgentId, DesktopSnapshot, GroupId, MembershipId} from '../shared/bridge';
 import type {CollaborationView, Page} from './collaboration-model';
 
@@ -63,7 +64,7 @@ const globalGroups: readonly {page: Page; section: string; fields: readonly Targ
   {page: 'application', section: 'Codex 可执行文件', fields: [item('已保存路径'), item('当前路径配置'), item('本次所选'), item('选择文件'), item('保存路径'), item('恢复自动检测'), item('未绑定工作目录时的运行后备')]},
   {page: 'application', section: '窗口与退出', fields: [item('隐藏到托盘'), item('退出 Vonvon Bridge', ['退出应用'])]},
   {page: 'environment', section: '本机环境', fields: [item('重新检测'), ...['安装执行后端', '检查后端版本', '更新执行后端', '卸载执行后端'].map(title => item(title, ['Claude Agent SDK', '托管后端'], {field: '', guide: '在本机环境的执行后端条目中操作；可用按钮取决于已安装状态。'}))]},
-  ...(['Codex', 'Claude', '飞书 CLI'] as const).map((section, index) => ({page: 'environment' as const, section, fields: ['安装', '更新', '登录', '检查授权', '重新登录', '安装托管副本', '重新安装最新版', '停用托管副本', '安装来源', '安装位置', '当前版本', '托管版本', '最新版本', '授权状态', ...(section === 'Codex' ? ['Host 状态', 'Host 版本'] : []), ...(section === '飞书 CLI' ? ['当前 Profile'] : [])].map(title => item(`${title} ${section}`, [title], {field: title, reveal: (['codex-tool', 'claude-tool', 'lark-tool'] as const)[index], guide: '此操作是否可用取决于本机工具的安装与授权状态。'}))})),
+  ...(['Codex', 'Claude', '飞书 CLI'] as const).map((section, index) => ({page: 'environment' as const, section: toolNames[(['codex', 'claude', 'lark-cli'] as const)[index]!], fields: ['安装', '更新', '登录', '检查授权', '重新登录', '安装托管副本', '重新安装最新版', '停用托管副本', '安装来源', '安装位置', '当前版本', '托管版本', '最新版本', '授权状态', ...(section === 'Codex' ? ['Host 状态', 'Host 版本'] : []), ...(section === '飞书 CLI' ? ['当前 Profile'] : [])].map(title => item(`${title} ${section}`, [title], {field: title, reveal: (['codex-tool', 'claude-tool', 'lark-tool'] as const)[index], guide: ['安装来源', '安装位置', '当前版本', '托管版本', '最新版本', '授权状态', 'Host 状态', 'Host 版本', '当前 Profile'].includes(title) ? undefined : '此操作是否可用取决于本机工具的安装与授权状态。'}))})),
   {page: 'environment', section: '飞书 Profile', fields: [item('管理飞书 CLI', ['管理 Profile', '切换 Profile'], {reveal: 'profile-manager'}), item('添加已有应用', ['添加 Profile'], {reveal: 'profile-add'}), item('创建新应用', ['创建 Profile'], {reveal: 'profile-create'}), ...['Profile 名称', 'App ID', 'App Secret', '平台', '添加后设为当前'].map(title => item(title, ['飞书应用'], {reveal: 'profile-add'})), item('设为当前', ['切换飞书 Profile'], {reveal: 'profile-manager'})]},
   {page: 'diagnostics', section: '当前状态', fields: [item('Bridge 版本'), item('已注册 Agent'), item('已连接飞书群'), item('最近读取'), item('数据目录')]},
   {page: 'diagnostics', section: '诊断操作', fields: [item('重新检查'), item('打开事件设置', [], {guide: '出现飞书事件配置诊断时，可打开对应设置。'})]},

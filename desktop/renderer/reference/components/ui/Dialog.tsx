@@ -47,6 +47,7 @@ export function Dialog(props: {
     root?.setAttribute("aria-hidden", "true");
 
     const focusTimer = window.setTimeout(() => {
+      if (panelRef.current?.contains(document.activeElement)) return;
       const target = props.initialFocusRef?.current
         ?? panelRef.current?.querySelector<HTMLElement>(focusableSelector)
         ?? panelRef.current;
