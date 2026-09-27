@@ -4,6 +4,7 @@ import {SettingsGroup, SettingsRow} from '../reference/components/system-setting
 import {useDraftGuard} from '../settings/DraftGuard';
 import type {MachineReply, MachineRequest, MachineRequestHandler, DesktopUpdate} from '../../shared/machine';
 import '../settings/settings.css';
+import {settingAnchor} from '../search';
 
 export function UpdatePanel({request, attached}: {request: MachineRequestHandler; attached: boolean}) {
   const {navigate} = useDraftGuard();
@@ -35,7 +36,7 @@ export function UpdatePanel({request, attached}: {request: MachineRequestHandler
       : desktop?.state === 'current' ? '已是最新版本'
         : desktop?.state === 'unavailable' ? '更新源不可用' : '尚未检查';
   return <>
-    <SettingsGroup label="软件更新" footer="桌面更新包含内置 Core。检查更新不会安装软件。">
+    <SettingsGroup id={settingAnchor('软件更新')} label="软件更新" footer="桌面更新包含内置 Core。检查更新不会安装软件。">
       <SettingsRow title="桌面版" value={desktop?.current ?? '尚未检查'} />
       <SettingsRow title="更新状态" description={desktop?.message} value={desktopState} />
       {desktop?.latest && <SettingsRow title="可用版本" value={desktop.latest} />}
@@ -49,7 +50,7 @@ export function UpdatePanel({request, attached}: {request: MachineRequestHandler
       <SettingsRow title="发布说明" trailing={<Button size="sm" disabled={busy} onClick={() => void run({type: 'openReleases'}, 'desktop')}>查看发布说明</Button>} />
       {desktopMessage && <p className="settings-operation-message" role="status">{desktopMessage}</p>}
     </SettingsGroup>
-    <SettingsGroup label="外部 Core / CLI" footer={attached ? '更新外部 Core 不会更改桌面版本。' : '内置 Core 随桌面更新，无需单独安装。'}>
+    <SettingsGroup id={settingAnchor('外部 Core / CLI')} label="外部 Core / CLI" footer={attached ? '更新外部 Core 不会更改桌面版本。' : '内置 Core 随桌面更新，无需单独安装。'}>
       <SettingsRow title="Core 来源" value={core ? (core.distribution.kind === 'global-npm' ? '全局 npm 安装' : '当前 Core 不由全局 npm 管理') : '尚未检查'} />
       {core && <SettingsRow title="当前版本" value={core.current} />}
       {core && <SettingsRow title="可用版本" value={core.latest ?? '更新源不可用'} />}

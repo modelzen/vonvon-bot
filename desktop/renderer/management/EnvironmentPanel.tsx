@@ -10,12 +10,13 @@ import type {
   EnvironmentRequest, EnvironmentTool, EnvironmentToolState, ToolInstallOperation,
 } from "../../shared/environment";
 import "./environment.css";
+import {settingAnchor, type SearchReveal} from '../search';
 
-type Props = { request: (request: EnvironmentRequest) => Promise<EnvironmentReply>; onCodexLogin: () => Promise<void>; codexJobs: ReactNode; codexBusy: boolean };
+type Props = { request: (request: EnvironmentRequest) => Promise<EnvironmentReply>; onCodexLogin: () => Promise<void>; codexJobs: ReactNode; codexBusy: boolean; reveal?: SearchReveal };
 type Intent = { kind: "install" | "update" | "disable"; tool: EnvironmentTool };
 const order: EnvironmentTool[] = ["codex", "claude", "lark-cli"];
 
-export function EnvironmentPanel({ request, onCodexLogin, codexJobs, codexBusy }: Props) {
+export function EnvironmentPanel({ request, onCodexLogin, codexJobs, codexBusy, reveal }: Props) {
   const [tools, setTools] = useState<EnvironmentToolState[]>([]);
   const [profiles, setProfiles] = useState<EnvironmentProfile[]>([]);
   const [backends, setBackends] = useState<BackendEntry[]>([]);
@@ -37,6 +38,13 @@ export function EnvironmentPanel({ request, onCodexLogin, codexJobs, codexBusy }
   const [useProfile, setUseProfile] = useState(false);
   const [profileMode, setProfileMode] = useState<"add" | "create" | null>(null);
   const [qr, setQr] = useState("");
+  useEffect(() => {
+    if (reveal === 'profile-manager' || reveal === 'profile-add' || reveal === 'profile-create') {
+      setProfilesOpen(true);
+      if (reveal === 'profile-add') setProfileMode('add');
+      if (reveal === 'profile-create') setProfileMode('create');
+    }
+  }, [reveal]);
 
   const refresh = useCallback(async () => {
     const replies = await Promise.allSettled([
@@ -179,7 +187,7 @@ export function EnvironmentPanel({ request, onCodexLogin, codexJobs, codexBusy }
     onUninstall: setBackendDisable,
   };
 
-  return <section className="environment-panel" aria-label="本机环境">
+  return <section className="environment-panel" aria-label="本机环境" id={settingAnchor('本机环境')}>
     <header className="environment-lead">
       <p>管理这台设备上的 Agent 工具和飞书 CLI。</p>
       <Button size="sm" icon={<RefreshCw size={15} />} disabled={busy} onClick={() => void refresh()}>重新检测</Button>
@@ -188,12 +196,12 @@ export function EnvironmentPanel({ request, onCodexLogin, codexJobs, codexBusy }
     {running && !progressOpen && <div className="environment-notice" role="status">{toolNames[running.tool]} 正在{running.update ? "更新" : "安装"}。<Button size="sm" onClick={() => setProgressOpen(true)}>返回进度</Button></div>}
     <div className="environment-groups">
       <DependencyGroup title="Agent" description="Codex 或 Claude 至少需要一个可用。">
-        {order.slice(0, 2).map((kind) => tools.find((item) => item.tool === kind)).filter((item): item is EnvironmentToolState => Boolean(item)).map((tool) => <ToolRow key={tool.tool} tool={tool} auth={auth[tool.tool]} hostBackend={tool.tool === "codex" ? codexHost : undefined} backendActions={backendActions} profiles={profiles} busy={busy || Boolean(running) || (tool.tool === "codex" && codexBusy)} running={running?.tool === tool.tool} onIntent={setIntent} onCheckAuth={checkAuth} onLogin={() => { if (tool.tool === "codex") void onCodexLogin(); else void act({ type: "startLogin", tool: tool.tool }); }} onProgress={() => setProgressOpen(true)} />)}
+        {order.slice(0, 2).map((kind) => tools.find((item) => item.tool === kind)).filter((item): item is EnvironmentToolState => Boolean(item)).map((tool) => <ToolRow key={tool.tool} reveal={reveal === `${tool.tool}-tool`} tool={tool} auth={auth[tool.tool]} hostBackend={tool.tool === "codex" ? codexHost : undefined} backendActions={backendActions} profiles={profiles} busy={busy || Boolean(running) || (tool.tool === "codex" && codexBusy)} running={running?.tool === tool.tool} onIntent={setIntent} onCheckAuth={checkAuth} onLogin={() => { if (tool.tool === "codex") void onCodexLogin(); else void act({ type: "startLogin", tool: tool.tool }); }} onProgress={() => setProgressOpen(true)} />)}
         {otherBackends.map((backend) => <BackendRow key={backend.id} backend={backend} actions={backendActions} />)}
       </DependencyGroup>
       {codexJobs}
       <DependencyGroup title="飞书 CLI" description="用于云文档与群聊任务；在这里管理登录身份。">
-        {tools.filter((tool) => tool.tool === "lark-cli").map((tool) => <ToolRow key={tool.tool} tool={tool} auth={auth[tool.tool]} profiles={profiles} busy={busy || Boolean(running)} running={running?.tool === tool.tool} onIntent={setIntent} onCheckAuth={checkAuth} onLogin={() => void act({ type: "startLogin", tool: tool.tool })} onProgress={() => setProgressOpen(true)} onManageProfiles={() => setProfilesOpen(true)} />)}
+        {tools.filter((tool) => tool.tool === "lark-cli").map((tool) => <ToolRow key={tool.tool} reveal={reveal === 'lark-tool'} tool={tool} auth={auth[tool.tool]} profiles={profiles} busy={busy || Boolean(running)} running={running?.tool === tool.tool} onIntent={setIntent} onCheckAuth={checkAuth} onLogin={() => void act({ type: "startLogin", tool: tool.tool })} onProgress={() => setProgressOpen(true)} onManageProfiles={() => setProfilesOpen(true)} />)}
       </DependencyGroup>
     </div>
     {!tools.length && <p className="environment-empty">正在检测本机工具…</p>}
@@ -215,7 +223,7 @@ export function EnvironmentPanel({ request, onCodexLogin, codexJobs, codexBusy }
     <ConfirmDialog open={Boolean(backendDisable)} title={backendDisable ? `卸载 ${backendDisable.displayName}` : "卸载后端"} description="仅卸载 Bridge 托管的后端依赖。" confirmLabel="卸载后端" tone="danger" onCancel={() => setBackendDisable(null)} onConfirm={() => { const selected = backendDisable; setBackendDisable(null); if (selected) void act({ type: "backendUninstall", id: selected.id }); }} />
     <ConfirmDialog open={Boolean(intent)} title={intent ? `${intent.kind === "disable" ? "停用" : intent.kind === "update" ? "更新" : "安装"} ${toolNames[intent.tool]}` : "确认操作"} description={intent?.kind === "disable" ? "只停用 Bridge 托管副本。其他已安装的工具不会被删除。" : intent?.kind === "update" ? "Bridge 将安装并验证新版本，然后切换到托管副本。" : "Bridge 将在本机安装并验证托管副本。"} confirmLabel={intent?.kind === "disable" ? "停用托管副本" : intent?.kind === "update" ? "开始更新" : "开始安装"} tone={intent?.kind === "disable" ? "danger" : "primary"} onCancel={() => setIntent(null)} onConfirm={() => void confirm()} />
     <Dialog open={profilesOpen} onClose={() => setProfilesOpen(false)} size="md" title="管理飞书 CLI" description="添加应用、切换 Profile，并查看当前生效的身份。">
-      <div className="environment-profiles">
+      <div className="environment-profiles" id={settingAnchor('飞书 Profile')}>
         {notice && <p className="environment-notice" role="status">{notice}</p>}
         <p>当前生效：{activeProfile ? `${activeProfile.name} · ${activeProfile.appId}${activeProfile.effectiveSource ? ` · ${profileSourceLabel(activeProfile.effectiveSource)}` : ""}` : "尚未确认"}</p>
         {profiles.map((profile) => <div className="environment-profile" key={profile.name}>
@@ -225,8 +233,8 @@ export function EnvironmentPanel({ request, onCodexLogin, codexJobs, codexBusy }
         {!profiles.length && <p>还没有 Profile，请先添加或创建应用。</p>}
         <div className="environment-profile-choice"><Button size="sm" onClick={() => setProfileMode(profileMode === "add" ? null : "add")}>添加已有应用</Button><Button size="sm" onClick={() => setProfileMode(profileMode === "create" ? null : "create")}>创建新应用</Button></div>
         {profileMode && <form className="environment-form" onSubmit={(event) => { event.preventDefault(); if (profileMode === "add") void saveProfile(); else void act({ type: "profileInit", name: name.trim() }).then((started) => { if (started) { setName(""); setProfileMode(null); setProfilesOpen(false); } }); }}>
-          <label>Profile 名称<input value={name} maxLength={128} required onChange={(event) => setName(event.target.value)} /></label>
-          {profileMode === "add" && <><label>App ID<input value={appId} maxLength={256} required onChange={(event) => setAppId(event.target.value)} /></label><label>App Secret<input type="password" value={appSecret} maxLength={512} required onChange={(event) => setAppSecret(event.target.value)} /></label><label>平台<select value={brand} onChange={(event) => setBrand(event.target.value === "lark" ? "lark" : "feishu")}><option value="feishu">飞书</option><option value="lark">Lark</option></select></label><label className="environment-checkbox"><input type="checkbox" checked={useProfile} onChange={(event) => setUseProfile(event.target.checked)} />添加后设为当前</label></>}
+          <label data-search-title="Profile 名称">Profile 名称<input value={name} maxLength={128} required onChange={(event) => setName(event.target.value)} /></label>
+          {profileMode === "add" && <><label data-search-title="App ID">App ID<input value={appId} maxLength={256} required onChange={(event) => setAppId(event.target.value)} /></label><label data-search-title="App Secret">App Secret<input type="password" value={appSecret} maxLength={512} required onChange={(event) => setAppSecret(event.target.value)} /></label><label data-search-title="平台">平台<select value={brand} onChange={(event) => setBrand(event.target.value === "lark" ? "lark" : "feishu")}><option value="feishu">飞书</option><option value="lark">Lark</option></select></label><label data-search-title="添加后设为当前" className="environment-checkbox"><input type="checkbox" checked={useProfile} onChange={(event) => setUseProfile(event.target.checked)} />添加后设为当前</label></>}
           <Button type="submit" variant="primary" disabled={busy || !name.trim() || (profileMode === "add" && (!appId.trim() || !appSecret))}>{profileMode === "add" ? "添加 Profile" : "创建并授权"}</Button>
         </form>}
       </div>
@@ -268,7 +276,7 @@ function BackendRow({ backend, actions }: { backend: BackendEntry; actions: Back
   </article>;
 }
 
-function ToolRow({ tool, auth, hostBackend, backendActions, profiles, busy, running, onIntent, onCheckAuth, onLogin, onProgress, onManageProfiles }: {
+function ToolRow({ tool, auth, hostBackend, backendActions, profiles, busy, running, onIntent, onCheckAuth, onLogin, onProgress, onManageProfiles, reveal }: {
   tool: EnvironmentToolState;
   auth?: Extract<EnvironmentReply, { kind: "auth" }>;
   hostBackend?: BackendEntry;
@@ -281,8 +289,10 @@ function ToolRow({ tool, auth, hostBackend, backendActions, profiles, busy, runn
   onLogin: () => void;
   onProgress: () => void;
   onManageProfiles?: () => void;
+  reveal?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
+  useEffect(() => {if (reveal) setExpanded(true);}, [reveal]);
   const profile = profiles.find((item) => item.effective) ?? profiles.find((item) => item.active);
   const presentation = presentTool(tool, auth, tool.tool === "lark-cli" ? profile : undefined);
   const hostWarning = hostBackend && hostBackend.depState !== "ready" && hostBackend.depState !== "installed";
@@ -292,7 +302,7 @@ function ToolRow({ tool, auth, hostBackend, backendActions, profiles, busy, runn
     if (presentation.action === "login") { onLogin(); return; }
     if (presentation.action === "install" || presentation.action === "update") onIntent({ kind: presentation.action, tool: tool.tool });
   }
-  return <article className="environment-tool" aria-label={`${toolNames[tool.tool]} 本机环境`}>
+  return <article className="environment-tool" id={settingAnchor(toolNames[tool.tool])} aria-label={`${toolNames[tool.tool]} 本机环境`}>
     <div className="environment-tool-summary">
       <button type="button" className="environment-disclosure" aria-controls={detailsId} aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
         <picture className="environment-brand">

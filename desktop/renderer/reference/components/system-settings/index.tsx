@@ -219,6 +219,7 @@ export function PreferenceRow(props: {
           props.className,
         )}
         data-described={described ? "true" : undefined}
+        data-search-title={typeof props.title === "string" ? props.title : undefined}
         disabled={props.disabled}
         onClick={props.onClick}
         title={props.tooltip}
@@ -239,6 +240,7 @@ export function PreferenceRow(props: {
         props.className,
       )}
       data-described={described ? "true" : undefined}
+      data-search-title={typeof props.title === "string" ? props.title : undefined}
     >
       {content}
     </div>

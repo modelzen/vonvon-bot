@@ -25,12 +25,12 @@ import {
 import "./settings.css";
 import {useDraft} from './DraftGuard';
 import {settingAnchor} from '../search';
-import type {AgentCategory, MembershipCategory} from '../search';
+import type {AgentCategory, MembershipCategory, SearchReveal} from '../search';
 
 type AgentScope = { kind: "agent"; botId: AgentId };
 type ProjectScope = { kind: "project"; botId: AgentId; projectName: string };
 type PanelProps =
-  | {scope: 'agent'; target: AgentScope; category: AgentCategory}
+  | {scope: 'agent'; target: AgentScope; category: AgentCategory; reveal?: SearchReveal}
   | {scope: 'project'; target: ProjectScope; category: MembershipCategory}
   | {scope: 'host'; target: {kind: 'host'}; category?: never};
 const isAgentView = (view: SettingsView): view is AgentSettingsView =>
@@ -559,10 +559,12 @@ function AgentPanel({
   view,
   refresh,
   category,
+  reveal,
 }: {
   view: AgentSettingsView;
   refresh: () => Promise<void>;
   category: AgentCategory;
+  reveal?: SearchReveal;
 }) {
   const [actionMessage, setActionMessage] = useState<string>();
   const [adminId, setAdminId] = useState("");
@@ -586,6 +588,7 @@ function AgentPanel({
     instructionBase,
   ]);
   const [advanced, setAdvanced] = useState(false);
+  useEffect(() => {if (reveal === 'cli-advanced') setAdvanced(true);}, [reveal]);
   const [titleBackend, setTitleBackend] = useState("codex-appserver");
   const [commentBackend, setCommentBackend] = useState(
     view.sections.comments.stored.backend,
@@ -2214,7 +2217,7 @@ function ScopedSettingsPanel(props: PanelProps) {
     </SettingsGroup>
   );
   const content = isAgentView(view) && props.scope === 'agent' ? (
-    <AgentPanel view={view} refresh={refresh} category={props.category} />
+    <AgentPanel view={view} refresh={refresh} category={props.category} reveal={props.reveal} />
   ) : isProjectView(view) && props.scope === 'project' ? (
     <ProjectPanel view={view} refresh={refresh} category={props.category} />
   ) : isHostView(view) ? (

@@ -28,6 +28,7 @@ export function Dialog(props: {
   onClose?: () => void;
   open: boolean;
   size?: "sm" | "md" | "lg";
+  variant?: "search";
   title: ReactNode;
 }) {
   const titleId = useId();
@@ -54,7 +55,7 @@ export function Dialog(props: {
 
     function onKeyDown(event: KeyboardEvent) {
       const closeState = closeStateRef.current;
-      if (event.key === "Escape" && closeState.dismissible && closeState.onClose) {
+      if (event.key === "Escape" && !event.isComposing && closeState.dismissible && closeState.onClose) {
         event.preventDefault();
         closeState.onClose();
         return;
@@ -104,30 +105,30 @@ export function Dialog(props: {
       {props.open && (
         <motion.div
           animate={{ opacity: 1 }}
-          className="ui-dialog-backdrop"
+          className={props.variant === "search" ? "ui-dialog-backdrop ui-dialog-backdrop--search" : "ui-dialog-backdrop"}
           exit={{ opacity: 0 }}
           initial={{ opacity: 0 }}
           onMouseDown={(event) => {
             if (event.currentTarget === event.target && dismissible) props.onClose?.();
           }}
-          transition={{ duration: reduceMotion ? 0.1 : 0.18 }}
+          transition={{ duration: props.variant === "search" ? 0 : reduceMotion ? 0.1 : 0.18 }}
         >
           <motion.div
             animate={{ opacity: 1, scale: 1, y: 0 }}
             aria-describedby={props.description ? descriptionId : undefined}
             aria-labelledby={titleId}
             aria-modal="true"
-            className={`ui-dialog ui-dialog--${props.size ?? "md"}`}
+            className={`ui-dialog ui-dialog--${props.size ?? "md"}${props.variant === "search" ? " ui-dialog--search" : ""}`}
             exit={{ opacity: 0, scale: reduceMotion ? 1 : 0.985, y: reduceMotion ? 0 : 7 }}
             initial={{ opacity: 0, scale: reduceMotion ? 1 : 0.975, y: reduceMotion ? 0 : 10 }}
             ref={panelRef}
             role="dialog"
             tabIndex={-1}
-            transition={reduceMotion
+            transition={props.variant === "search" ? {duration: 0} : reduceMotion
               ? { duration: 0.1 }
               : { type: "spring", bounce: 0, duration: 0.32 }}
           >
-            <header className="ui-dialog__header">
+            {props.variant !== "search" && <header className="ui-dialog__header">
               <div>
                 <h2 id={titleId}>{props.title}</h2>
                 {props.description && <p id={descriptionId}>{props.description}</p>}
@@ -135,7 +136,8 @@ export function Dialog(props: {
               {dismissible && props.onClose && (
                 <IconButton label="关闭" onClick={props.onClose} variant="ghost"><X size={18} /></IconButton>
               )}
-            </header>
+            </header>}
+            {props.variant === "search" && <h2 className="ui-dialog__visually-hidden" id={titleId}>{props.title}</h2>}
             <div className="ui-dialog__content">{props.children}</div>
             {props.footer && <footer className="ui-dialog__footer">{props.footer}</footer>}
           </motion.div>

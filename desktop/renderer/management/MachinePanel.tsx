@@ -1,11 +1,14 @@
-import {useEffect, useState} from 'react';
+import {useEffect, useRef, useState} from 'react';
 import {Button} from '../reference/components/ui';
 import {Dialog} from '../reference/components/ui/Dialog';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import type {MachineRequest, MachineRequestHandler, MachineReply} from '../../shared/machine';
 import '../settings/settings.css';
+import {settingAnchor, type SearchReveal} from '../search';
 
-export function MachinePanel({request, agents}: {request: MachineRequestHandler; agents: ReadonlyArray<{id: string; name: string}>}) {
+export function MachinePanel({request, agents, reveal}: {request: MachineRequestHandler; agents: ReadonlyArray<{id: string; name: string}>; reveal?: SearchReveal}) {
+  const advanced = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {if (reveal === 'machine-advanced' && advanced.current) advanced.current.open = true;}, [reveal]);
   const [status, setStatus] = useState<Extract<MachineReply, {type: 'status'}>>();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -37,12 +40,12 @@ export function MachinePanel({request, agents}: {request: MachineRequestHandler;
         : !status.service.installed);
 
   return <>
-    <SettingsGroup label="命令行工具" footer="安装后请打开新的终端，输入 vonvon-bridge。兼容命令 feishu-codex-bridge 也可用。">
+    <SettingsGroup id={settingAnchor('命令行工具')} label="命令行工具" footer="安装后请打开新的终端，输入 vonvon-bridge。兼容命令 feishu-codex-bridge 也可用。">
       <SettingsRow title="vonvon-bridge" description={status?.cli.kind==='error'?status.cli.message:status?.cli.bin??'正在检查…'}
         value={status?.cli.kind==='ready'?'已安装':'需要修复'}
         trailing={<Button size="sm" disabled={busy} onClick={() => void run({type:'repairCli'})}>修复命令行工具</Button>} />
     </SettingsGroup>
-    <SettingsGroup label="Bridge 运行" action={<Button size="sm" disabled={busy} onClick={() => void run({type: 'status'})}>刷新状态</Button>}>
+    <SettingsGroup id={settingAnchor('Bridge 运行')} label="Bridge 运行" action={<Button size="sm" disabled={busy} onClick={() => void run({type: 'status'})}>刷新状态</Button>}>
       <SettingsRow title="运行方式"
         description={status?.host?.ownership === 'attached' ? '当前由外部服务管理。' : 'Bridge 负责接收飞书消息并运行 Agent。'}
         value={!status ? '正在读取…' : status.host ? (status.host.ownership === 'owned' ? '桌面管理' : '外部服务') : '已停止'} />
@@ -54,7 +57,7 @@ export function MachinePanel({request, agents}: {request: MachineRequestHandler;
       {status?.temporaryAgent && <SettingsRow title="临时运行 Agent" description="默认 Agent 选择未改变。" value={status.temporaryAgent} />}
     </SettingsGroup>
 
-    <SettingsGroup label="后台服务" footer="后台服务在桌面退出后仍运行。桌面应用的登录启动是另一项设置。">
+    <SettingsGroup id={settingAnchor('后台服务')} label="后台服务" footer="后台服务在桌面退出后仍运行。桌面应用的登录启动是另一项设置。">
       <SettingsRow title="系统服务" description={service?.platformName ?? '正在读取服务状态…'}
         value={service ? `${service.installed ? '已安装' : '未安装'} · ${service.running ? '运行中' : '已停止'}` : undefined} />
       <SettingsRow title="安装并启动" description="让 Bridge 在桌面应用关闭后继续运行。"
@@ -66,7 +69,7 @@ export function MachinePanel({request, agents}: {request: MachineRequestHandler;
         </span>} />
       <SettingsRow title="卸载后台服务" description="移除系统服务及其自动启动设置。"
         trailing={<Button size="sm" disabled={busy || serviceDisabled('uninstall')} onClick={() => setConfirm({type: 'service', action: 'uninstall'})}>卸载后台服务</Button>} />
-      <details className="settings-disclosure">
+      <details ref={advanced} className="settings-disclosure">
         <summary>高级</summary>
         <SettingsRow title="仅运行指定 Agent" description="临时运行前需停止当前 Bridge。此操作不会修改默认启用列表。"
           trailing={<span className="settings-inline-actions">
