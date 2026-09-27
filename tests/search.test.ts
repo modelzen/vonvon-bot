@@ -64,3 +64,18 @@ test('conditional settings lead to parent controls with clear prerequisites', ()
   assert.equal(topic?.destination.field, '选择话题');
   assert.match(topic?.destination.guide ?? '', /选择话题/);
 });
+
+
+test('tool search destinations use the same section names as the rendered tool cards', () => {
+  for (const [query, section, reveal] of [
+    ['安装位置 Codex', 'Codex CLI', 'codex-tool'],
+    ['安装位置 Claude', 'Claude Code CLI', 'claude-tool'],
+    ['安装位置 飞书 CLI', '飞书 CLI', 'lark-tool'],
+  ]) {
+    const result = findEntries(entries, query!)[0];
+    assert.equal(result?.destination.section, section);
+    assert.equal(result?.destination.field, '安装位置');
+    assert.equal(result?.destination.reveal, reveal);
+    assert.equal(result?.destination.guide, undefined);
+  }
+});

@@ -137,15 +137,14 @@ function DesktopApp() {
       const row = searchTarget?.field ? rows.find(element => element.dataset.searchTitle === searchTarget.field) : undefined;
       const controls = Array.from(section.querySelectorAll<HTMLElement>('button, input, select, textarea, label, dt'));
       const control = searchTarget?.field ? controls.find(element => element.getAttribute('aria-label') === searchTarget.field || element.textContent?.trim() === searchTarget.field) : undefined;
-      if (searchTarget?.field && !row && !control && !searchTarget.guide && !searchTarget.reveal) return false;
-      if (searchTarget?.field && !row && (searchTarget.reveal === 'cli-advanced' || searchTarget.reveal === 'machine-advanced')) return false;
+      if (searchTarget?.field && !row && !control) return false;
       const candidate = row ?? control;
       if (candidate?.closest('details:not([open]), [hidden]')) return false;
       const target = candidate && !candidate.closest('[hidden]') ? candidate.querySelector<HTMLElement>('input, select, textarea, button') ?? candidate : section;
       target.scrollIntoView({block: 'center'});
       if (!target.matches('input, select, textarea, button')) target.tabIndex = -1;
       target.focus({preventScroll: true});
-      if (searchTarget.guide) setNotice({message: searchTarget.guide, error: false});
+      if (searchTarget.guide && !searchTarget.reveal?.endsWith('-tool')) setNotice({message: searchTarget.guide, error: false});
       setSearchTarget(undefined);
       return true;
     }
