@@ -1,0 +1,16 @@
+import {readFile,writeFile,mkdir,copyFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
+import {join} from 'node:path';
+const [artifact,sourceLock,metadata]=process.argv.slice(2);
+if(!artifact||!sourceLock||!metadata)throw new Error('Usage: node scripts/pin-core.mjs artifact.tgz package-lock.json provenance.json');
+const source=JSON.parse(await readFile(metadata,'utf8'));
+const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
+const artifactHash=hash(await readFile(artifact));
+const lockHash=hash(await readFile(sourceLock));
+if(!/^[a-f0-9]{40}$/.test(source.commit)||source.sha256!==artifactHash||source.lockSha256!==lockHash||!source.repository||!source.packCommand)throw new Error('Reviewed source provenance does not match artifact and source lock.');
+if(source.containsCompanionCapabilities!==true)throw new Error('Release pin requires the reviewed companion capabilities, not only the Host baseline.');
+const name=`${source.version}-${source.commit.slice(0,12)}.tgz`;
+const directory='vendor/core';await mkdir(directory,{recursive:true});
+await copyFile(artifact,join(directory,name));await copyFile(sourceLock,join(directory,'source-package-lock.json'));
+await writeFile(join(directory,'provenance.json'),JSON.stringify({repository:source.repository,sourceCommit:source.commit,package:source.package,version:source.version,artifact:name,artifactSha256:artifactHash,artifactIntegrity:source.integrity,sourceLockSha256:lockHash,packCommand:source.packCommand,containsCompanionCapabilities:true},null,2)+'\n');
+process.stdout.write(`Pinned reviewed core ${source.commit} at ${directory}/${name}.\n`);

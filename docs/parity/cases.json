@@ -1,0 +1,4267 @@
+{
+  "scope": "以原 feishu-codex-bridge CLI、飞书管理卡片、本地 Web 控制台和参考旧 Vonvon 桌面的本地管理能力为基线。升级目标是接续 feishu-codex-bridge 的同一份数据，本地不要求产品账号。编号保留不同入口的测试变体，不代表同等数量的独立功能。",
+  "baseline": {
+    "core": "v0.6.14; current 21ed17cab64df7c1b481c56d63ea6aa51fc212ad",
+    "desktop": "aab1bb34442d6723016cfbdc3217159108b4348f",
+    "legacy": "3a168535c11a4f403553967908d272127e6a23af"
+  },
+  "cases": [
+    {
+      "id": "CLI-001",
+      "area": "installation",
+      "title": "新用户无需终端或产品账号即可启动桌面 Host",
+      "baselineEvidence": [
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts",
+          "line": 44,
+          "symbol": "run"
+        },
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/commands/daemon.ts",
+          "line": 17,
+          "symbol": "runStart"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/host.ts",
+          "line": 13,
+          "symbol": "acquireHost"
+        },
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/index.ts",
+          "line": 149,
+          "symbol": "bundled runtime"
+        }
+      ],
+      "preconditions": [
+        "Isolated empty user home; packaged macOS/Windows app"
+      ],
+      "steps": [
+        "Launch app through OS shell",
+        "Wait for local Host and open Agent page"
+      ],
+      "expected": [
+        "Host reports connected/owned and core version 0.7.0",
+        "Add Agent is reachable without a product account or terminal"
+      ],
+      "cleanup": [
+        "Quit app and remove isolated home"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "CLI-002",
+      "area": "installation",
+      "title": "接续旧版后台服务并保持单份数据",
+      "baselineEvidence": [
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/config/data-root.ts",
+          "line": 48,
+          "symbol": "resolveDataRoot"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/host.ts",
+          "line": 13,
+          "symbol": "acquireHost"
+        },
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts",
+          "line": 437,
+          "symbol": "refresh"
+        }
+      ],
+      "preconditions": [
+        "Isolated legacy .feishu-codex-bridge directory; live service with two Agents"
+      ],
+      "steps": [
+        "Record service PID and file hashes",
+        "Launch app",
+        "Read Agent list",
+        "Quit app"
+      ],
+      "expected": [
+        "Ownership is attached, both Agents appear",
+        "Legacy PID remains running after quit",
+        "File hashes remain unchanged"
+      ],
+      "cleanup": [
+        "Stop fixture service and remove fixture home"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "CLI-003",
+      "area": "data",
+      "title": "离线升级迁移目录并建立兼容链接",
+      "baselineEvidence": [
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/config/data-root-migration.ts",
+          "line": 112,
+          "symbol": "relocateOfflineDataRoot"
+        },
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts",
+          "line": 29,
+          "symbol": "data migrate"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/host.ts",
+          "line": 17,
+          "symbol": "migrateHostDataOffline"
+        }
+      ],
+      "preconditions": [
+        "Isolated old physical directory with registry, secret and session fixtures; no Host running"
+      ],
+      "steps": [
+        "Hash fixture files",
+        "Launch app and await migration",
+        "Write one harmless setting using desktop",
+        "Read it via both old and new paths"
+      ],
+      "expected": [
+        "Physical .vonvon-bridge contains the original files",
+        "Old path resolves to the same directory through symlink or Windows junction",
+        "Hashes and secret values remain intact",
+        "There is no second divergent copy"
+      ],
+      "cleanup": [
+        "Quit app; remove isolated home"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "CLI-004",
+      "area": "data",
+      "title": "数据迁移冲突提示与恢复重试",
+      "baselineEvidence": [
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/config/data-root.ts",
+          "line": 57,
+          "symbol": "conflicting stores"
+        },
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts",
+          "line": 29,
+          "symbol": "data retry"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/main/controller.ts",
+          "line": 103,
+          "symbol": "class DesktopController"
+        }
+      ],
+      "preconditions": [
+        "Isolated home with distinct physical old/new stores and explicit backup"
+      ],
+      "steps": [
+        "Launch app",
+        "Inspect blocked message",
+        "Resolve fixture conflict",
+        "Use in-app retry/recover control"
+      ],
+      "expected": [
+        "Neither store is silently overwritten",
+        "Desktop names both paths and offers a recover/retry route",
+        "After resolution, app reconnects without terminal"
+      ],
+      "cleanup": [
+        "Remove isolated home"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "CLI-005",
+      "area": "agents",
+      "title": "使用二维码或完整链接注册首个及后续 Agent",
+      "baselineEvidence": [
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/commands/bot.ts",
+          "line": 10,
+          "symbol": "runBotInit"
+        },
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/admin/service.ts",
+          "line": 753,
+          "symbol": "registerBotByQr"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts",
+          "line": 878,
+          "symbol": "register"
+        },
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
+          "line": 1193,
+          "symbol": "registration link"
+        }
+      ],
+      "preconditions": [
+        "Isolated Host; test Feishu application or authorized target"
+      ],
+      "steps": [
+        "Click Add Agent",
+        "Verify QR and complete link both point to the same registration",
+        "Open link and finish authorization",
+        "Repeat for a second Agent"
+      ],
+      "expected": [
+        "Both distinct appIds appear once in registry and UI",
+        "Each has an encrypted secret and separate state directory",
+        "Both are enabled and connect after restart"
+      ],
+      "cleanup": [
+        "Delete disposable test Agents and their local fixture data"
+      ],
+      "coverage": "present",
+      "verification": "external"
+    },
+    {
+      "id": "CLI-006",
+      "area": "agents",
+      "title": "取消或过期注册不残留半成品数据",
+      "baselineEvidence": [
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/web/server.ts",
+          "line": 362,
+          "symbol": "DELETE register-qr"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts",
+          "line": 1183,
+          "symbol": "cancel"
+        },
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
+          "line": 1189,
+          "symbol": "expired QR"
+        }
+      ],
+      "preconditions": [
+        "Isolated Host with one existing Agent"
+      ],
+      "steps": [
+        "Start registration and cancel",
+        "Start another registration and simulate QR expiry"
+      ],
+      "expected": [
+        "No new registry row, credential or bot directory is left",
+        "Existing Agent remains enabled and connected",
+        "A new registration can be started"
+      ],
+      "cleanup": [
+        "Remove isolated home"
+      ],
+      "coverage": "present",
+      "verification": "integration"
+    },
+    {
+      "id": "CLI-007",
+      "area": "agents",
+      "title": "启停多个 Agent 后保持准确的运行集合",
+      "baselineEvidence": [
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/commands/bot.ts",
+          "line": 47,
+          "symbol": "runBotUse"
+        },
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/commands/bot.ts",
+          "line": 91,
+          "symbol": "setActiveBots"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts",
+          "line": 701,
+          "symbol": "setAgentEnabled"
+        },
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
+          "line": 551,
+          "symbol": "Agent toggle"
+        }
+      ],
+      "preconditions": [
+        "Three fixture Agents A, B, C active and connected"
+      ],
+      "steps": [
+        "Disable B",
+        "Restart Host",
+        "Quit and relaunch app",
+        "Enable B and disable C",
+        "Restart again"
+      ],
+      "expected": [
+        "Persisted active set is A+C, then A+B",
+        "Disabled Agent process stops; enabled Agent connects",
+        "No unrelated Agent settings change"
+      ],
+      "cleanup": [
+        "Remove fixture home"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "CLI-008",
+      "area": "agents",
+      "title": "移除已停止 Agent 只删除该 Agent 的本地数据",
+      "baselineEvidence": [
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/commands/bot.ts",
+          "line": 104,
+          "symbol": "runBotRm"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts",
+          "line": 708,
+          "symbol": "deleteAgent"
+        },
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
+          "line": 615,
+          "symbol": "Remove Agent"
+        }
+      ],
+      "preconditions": [
+        "Two fixture Agents; target B disabled and disconnected"
+      ],
+      "steps": [
+        "Capture A directory/secret hash",
+        "Confirm Remove B in desktop",
+        "Refresh list"
+      ],
+      "expected": [
+        "B registry, encrypted secret and state directory removed",
+        "A hashes unchanged and A remains connected",
+        "Feishu developer application is not deleted"
+      ],
+      "cleanup": [
+        "Remove fixture home"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "CLI-009",
+      "area": "agents",
+      "title": "阻止删除仍启用或运行中的 Agent",
+      "baselineEvidence": [
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/admin/service.ts",
+          "line": 941,
+          "symbol": "deleteBot"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts",
+          "line": 734,
+          "symbol": "agent-active"
+        },
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
+          "line": 629,
+          "symbol": "Remove disabled"
+        }
+      ],
+      "preconditions": [
+        "One running fixture Agent"
+      ],
+      "steps": [
+        "Attempt delete through controller and visible UI"
+      ],
+      "expected": [
+        "Action unavailable or refused",
+        "Registry, secret and session directory remain byte-identical"
+      ],
+      "cleanup": [
+        "Remove fixture home after Host stopped"
+      ],
+      "coverage": "present",
+      "verification": "integration"
+    },
+    {
+      "id": "CLI-010",
+      "area": "service",
+      "title": "安装启动及停止卸载后台服务",
+      "baselineEvidence": [
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/commands/daemon.ts",
+          "line": 17,
+          "symbol": "runStart"
+        },
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts",
+          "line": 62,
+          "symbol": "stop"
+        },
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/web/server.ts",
+          "line": 275,
+          "symbol": "daemon start/stop"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/MachinePanel.tsx",
+          "line": 6,
+          "symbol": "function MachinePanel"
+        }
+      ],
+      "preconditions": [
+        "Isolated home and no user service; macOS launchd or Windows login service fixture"
+      ],
+      "steps": [
+        "Use desktop to install/start service",
+        "Quit and relaunch app to attach",
+        "Use desktop to stop/uninstall service"
+      ],
+      "expected": [
+        "Service registered and running without terminal",
+        "Desktop attaches after relaunch",
+        "Stop removes service definition and leaves Agent data intact"
+      ],
+      "cleanup": [
+        "Uninstall fixture service"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "CLI-011",
+      "area": "service",
+      "title": "重启桌面启动或接续的 Host 并恢复连接",
+      "baselineEvidence": [
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts",
+          "line": 66,
+          "symbol": "restart"
+        },
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/web/server.ts",
+          "line": 260,
+          "symbol": "daemon restart"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts",
+          "line": 566,
+          "symbol": "restartAttached"
+        },
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
+          "line": 861,
+          "symbol": "Restart Bridge"
+        }
+      ],
+      "preconditions": [
+        "Fixture Host running with two connected Agents"
+      ],
+      "steps": [
+        "Change one non-secret setting",
+        "Click Restart",
+        "Wait for new PID and reconnect",
+        "Repeat in owned mode"
+      ],
+      "expected": [
+        "New Host process loads saved setting",
+        "Both Agents reconnect",
+        "No detached duplicate service remains"
+      ],
+      "cleanup": [
+        "Restore fixture setting and stop Host"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "CLI-012",
+      "area": "service",
+      "title": "临时只运行指定 Agent 而不修改默认运行集合",
+      "baselineEvidence": [
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts",
+          "line": 41,
+          "symbol": "run --bot"
+        },
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/host/bootstrap.ts",
+          "line": 8,
+          "symbol": "runHostRuntime"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/MachinePanel.tsx",
+          "line": 6,
+          "symbol": "function MachinePanel"
+        }
+      ],
+      "preconditions": [
+        "Two active fixture Agents"
+      ],
+      "steps": [
+        "Select only Agent B for a temporary desktop-run session",
+        "Inspect running bot processes",
+        "End session"
+      ],
+      "expected": [
+        "Only B starts temporarily",
+        "Persisted active set remains A+B",
+        "Ending temporary run leaves neither process orphaned"
+      ],
+      "cleanup": [
+        "Stop fixture Host"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "CLI-013",
+      "area": "service",
+      "title": "区分桌面开机启动与旧版系统服务",
+      "baselineEvidence": [
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/commands/daemon.ts",
+          "line": 17,
+          "symbol": "service install"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/MachinePanel.tsx",
+          "line": 6,
+          "symbol": "function MachinePanel"
+        }
+      ],
+      "preconditions": [
+        "Packaged app; isolated service state"
+      ],
+      "steps": [
+        "Toggle desktop login item on/off",
+        "Inspect OS login item and legacy service definition separately"
+      ],
+      "expected": [
+        "Toggle controls only desktop app launch",
+        "UI states whether legacy service is installed/running",
+        "No second Host starts when both are enabled"
+      ],
+      "cleanup": [
+        "Restore original OS login item state"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "CLI-014",
+      "area": "service",
+      "title": "查看进程、服务归属、退出状态和日志路径",
+      "baselineEvidence": [
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/commands/daemon.ts",
+          "line": 102,
+          "symbol": "printStatus"
+        },
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts",
+          "line": 73,
+          "symbol": "status"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/MachinePanel.tsx",
+          "line": 6,
+          "symbol": "function MachinePanel"
+        }
+      ],
+      "preconditions": [
+        "Running fixture daemon with known PID and log path"
+      ],
+      "steps": [
+        "Open Status and diagnostics",
+        "Compare visible fields with CLI status"
+      ],
+      "expected": [
+        "Installed/running, ownership, PID, service path, last exit and stdout/stderr paths are visible",
+        "Unmanaged foreground process is not called an installed service"
+      ],
+      "cleanup": [
+        "Stop fixture Host"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "CLI-015",
+      "area": "diagnostics",
+      "title": "查看最近日志并实时跟随新日志",
+      "baselineEvidence": [
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts",
+          "line": 89,
+          "symbol": "logs --follow"
+        },
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/web/server.ts",
+          "line": 498,
+          "symbol": "logs and logs/stream"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/LogPanel.tsx",
+          "line": 3,
+          "symbol": "function LogPanel"
+        }
+      ],
+      "preconditions": [
+        "Fixture Host writes two log lines after desktop opens"
+      ],
+      "steps": [
+        "Open log view",
+        "Verify initial tail",
+        "Append a third line",
+        "Toggle follow and disconnect Host"
+      ],
+      "expected": [
+        "Tail and new line appear in order with bounded memory",
+        "Disconnect/reconnect is visible",
+        "Secret-like fixture text is redacted where Core contract requires it"
+      ],
+      "cleanup": [
+        "Remove fixture logs"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "CLI-016",
+      "area": "diagnostics",
+      "title": "诊断工具、授权、配置和飞书事件权限",
+      "baselineEvidence": [
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/commands/doctor.ts",
+          "line": 27,
+          "symbol": "runDoctor"
+        },
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/web/server.ts",
+          "line": 348,
+          "symbol": "host-doctor"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/main/controller.ts",
+          "line": 103,
+          "symbol": "class DesktopController"
+        }
+      ],
+      "preconditions": [
+        "Fixture matrix: missing Codex, signed out, no lark-cli, missing config, missing required event"
+      ],
+      "steps": [
+        "Run desktop refresh and per-Agent check for each fixture state"
+      ],
+      "expected": [
+        "Each failed check has a distinct actionable line",
+        "Warnings are distinguished from failures",
+        "Event settings link targets the selected Feishu/Lark tenant",
+        "Successful fixture clears previous warning"
+      ],
+      "cleanup": [
+        "Remove fixture home"
+      ],
+      "coverage": "present",
+      "verification": "integration"
+    },
+    {
+      "id": "CLI-017",
+      "area": "tools",
+      "title": "分别判断 Codex 安装与授权并显示正确操作",
+      "baselineEvidence": [
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/commands/doctor.ts",
+          "line": 30,
+          "symbol": "Codex probe/login"
+        },
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/web/server.ts",
+          "line": 219,
+          "symbol": "Codex setup"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts",
+          "line": 463,
+          "symbol": "Codex setup refresh"
+        },
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
+          "line": 786,
+          "symbol": "Codex actions"
+        }
+      ],
+      "preconditions": [
+        "Fixtures for installed/signed in, installed/signed out and missing Codex"
+      ],
+      "steps": [
+        "Open Local environment for each state"
+      ],
+      "expected": [
+        "Installed tool never offers install",
+        "Signed-in tool never offers login",
+        "Missing tool offers install and signed-out installed tool offers login"
+      ],
+      "cleanup": [
+        "Remove fixtures"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "CLI-018",
+      "area": "tools",
+      "title": "无需终端完成 Codex 安装和授权",
+      "baselineEvidence": [
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/web/server.ts",
+          "line": 224,
+          "symbol": "Codex install/login jobs"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts",
+          "line": 776,
+          "symbol": "startTool"
+        },
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
+          "line": 798,
+          "symbol": "Install Codex"
+        }
+      ],
+      "preconditions": [
+        "Fresh isolated packaged app with no Codex installation; test account/device authorization"
+      ],
+      "steps": [
+        "Click Install and wait for success",
+        "Click Login and use official authorization URL",
+        "Refresh state"
+      ],
+      "expected": [
+        "Installation becomes installed and version appears",
+        "Login becomes signedIn",
+        "Cancel and failure states remain actionable"
+      ],
+      "cleanup": [
+        "Remove isolated tool installation or restore fixture"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "CLI-019",
+      "area": "tools",
+      "title": "查看并安装、更新、卸载可管理的执行工具",
+      "baselineEvidence": [
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/web/server.ts",
+          "line": 511,
+          "symbol": "backend catalog/install/update/version/uninstall"
+        },
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/admin/service.ts",
+          "line": 798,
+          "symbol": "listBackendCatalog"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/EnvironmentPanel.tsx",
+          "line": 25,
+          "symbol": "function EnvironmentPanel"
+        }
+      ],
+      "preconditions": [
+        "Isolated user package directory; one installable backend missing and one already installed"
+      ],
+      "steps": [
+        "Open backend manager",
+        "Install missing backend",
+        "Check available version",
+        "Update installed backend",
+        "Uninstall disposable backend"
+      ],
+      "expected": [
+        "Catalog labels installable versus external CLI",
+        "Progress, installed/latest versions and errors appear",
+        "Only user-managed backend is removed",
+        "A running backend is protected or safely restarted"
+      ],
+      "cleanup": [
+        "Restore fixture package directory"
+      ],
+      "coverage": "partial",
+      "verification": "native"
+    },
+    {
+      "id": "CLI-020",
+      "area": "tools",
+      "title": "选择 Codex 可执行文件并恢复自动检测",
+      "baselineEvidence": [
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/commands/doctor.ts",
+          "line": 38,
+          "symbol": "CODEX_BIN"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1873,
+          "symbol": "Host execution"
+        },
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/index.ts",
+          "line": 109,
+          "symbol": "chooseExecutable"
+        }
+      ],
+      "preconditions": [
+        "Isolated home and two test executables"
+      ],
+      "steps": [
+        "Choose executable through OS picker",
+        "Save setting",
+        "Restart Host",
+        "Reset to auto-detect"
+      ],
+      "expected": [
+        "Chosen executable path persists and is the running one after restart",
+        "Arbitrary renderer-supplied raw path is refused",
+        "Reset removes override without changing unrelated settings"
+      ],
+      "cleanup": [
+        "Remove fixture home"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "CLI-021",
+      "area": "updates",
+      "title": "只检查 Bridge 新版本而不安装",
+      "baselineEvidence": [
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/commands/update.ts",
+          "line": 17,
+          "symbol": "runUpdate check"
+        },
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/web/server.ts",
+          "line": 321,
+          "symbol": "update check"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/UpdatePanel.tsx",
+          "line": 6,
+          "symbol": "function UpdatePanel"
+        }
+      ],
+      "preconditions": [
+        "Controlled update metadata: current 0.7.0, latest 0.7.1; offline result also available"
+      ],
+      "steps": [
+        "Open app update page",
+        "Check now",
+        "Repeat with registry unavailable"
+      ],
+      "expected": [
+        "Current/latest and update availability are accurate",
+        "No package is installed by check",
+        "Offline state is explicit rather than falsely latest"
+      ],
+      "cleanup": [
+        "Restore update stub"
+      ],
+      "coverage": "present",
+      "verification": "integration"
+    },
+    {
+      "id": "CLI-022",
+      "area": "updates",
+      "title": "执行升级并验证实际桌面与 Core 版本",
+      "baselineEvidence": [
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/commands/update.ts",
+          "line": 45,
+          "symbol": "installLatest"
+        },
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/web/server.ts",
+          "line": 326,
+          "symbol": "update status/apply"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/UpdatePanel.tsx",
+          "line": 6,
+          "symbol": "function UpdatePanel"
+        }
+      ],
+      "preconditions": [
+        "Disposable packaged version 0.7.0; controlled 0.7.1 installer"
+      ],
+      "steps": [
+        "Accept offered update",
+        "Watch progress",
+        "Relaunch app",
+        "Inspect both app and Core versions"
+      ],
+      "expected": [
+        "Update progress and failure are visible",
+        "App and bundled Core both report intended compatible versions",
+        "Agent data and active service remain usable",
+        "A global CLI upgrade alone is never shown as a desktop upgrade"
+      ],
+      "cleanup": [
+        "Restore disposable installation"
+      ],
+      "coverage": "partial",
+      "verification": "native"
+    },
+    {
+      "id": "CLI-023",
+      "area": "web",
+      "title": "无需终端访问完整本地管理功能",
+      "baselineEvidence": [
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts",
+          "line": 99,
+          "symbol": "web"
+        },
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/web/server.ts",
+          "line": 254,
+          "symbol": "console APIs"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/App.tsx",
+          "line": 79,
+          "symbol": "function App"
+        }
+      ],
+      "preconditions": [
+        "Existing local Host and disabled network"
+      ],
+      "steps": [
+        "从桌面依次定位日志查看、执行工具管理和 Bridge 更新入口。",
+        "逐一对照 CLI-015、CLI-019、CLI-021 的入口，无需终端命令。"
+      ],
+      "expected": [
+        "三项能力均有桌面内可发现的入口。其完整行为由对应的独立用例记录，不能只凭外链或摘要算作通过。"
+      ],
+      "cleanup": [
+        "Close console"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "CARD-001",
+      "area": "项目",
+      "title": "新建飞书群并创建项目",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 2884,
+          "symbol": "DM.newProjectSubmit"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/ProjectPanel.tsx",
+          "line": 26,
+          "symbol": "function ProjectPanel"
+        }
+      ],
+      "preconditions": [
+        "隔离数据目录内有已注册且运行的 Agent。"
+      ],
+      "steps": [
+        "桌面选择 Agent，寻找新建群入口并输入项目名、会话类型、后端、目录。"
+      ],
+      "expected": [
+        "飞书产生新群；projects.json 新增 origin=created、chatId、cwd、kind、backend；桌面显示群。"
+      ],
+      "cleanup": [
+        "删除测试项目并处理新建群。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-002",
+      "area": "项目",
+      "title": "绑定已有飞书群",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 2921,
+          "symbol": "DM.joinGroupSubmit"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
+          "line": 969,
+          "symbol": "加入飞书群"
+        }
+      ],
+      "preconditions": [
+        "隔离群已绑定到测试目录，Agent 在线。"
+      ],
+      "steps": [
+        "选择未绑定群、真实目录、项目名、会话类型、后端并提交。"
+      ],
+      "expected": [
+        "projects.json 写入 origin=joined；相同绑定重试不重复；群详情显示目录。"
+      ],
+      "cleanup": [
+        "仅删除本次测试绑定。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-003",
+      "area": "项目",
+      "title": "项目目录真实存在且不改已有绑定",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 2921,
+          "symbol": "DM.joinGroupSubmit"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
+          "line": 1039,
+          "symbol": "目录选择器"
+        }
+      ],
+      "preconditions": [
+        "隔离群已绑定到测试目录，Agent 在线。"
+      ],
+      "steps": [
+        "在绑定已有群入口提交不存在的目录或普通文件。",
+        "在同一绑定入口再次提交已经绑定的群和另一个目录，不走项目编辑入口。"
+      ],
+      "expected": [
+        "两种非法绑定均拒绝，projects.json 与原会话保持不变。"
+      ],
+      "cleanup": [
+        "只读或拒绝写入检查。核对隔离数据与测试前一致，退出测试实例。"
+      ],
+      "coverage": "present",
+      "verification": "integration",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-004",
+      "area": "项目",
+      "title": "项目后端与单会话或多话题类型",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 2884,
+          "symbol": "DM.newProjectSubmit"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/ProjectPanel.tsx",
+          "line": 26,
+          "symbol": "function ProjectPanel"
+        }
+      ],
+      "preconditions": [
+        "隔离群已绑定到测试目录，Agent 在线。"
+      ],
+      "steps": [
+        "绑定两个隔离群，分别选择单会话与多话题、Codex 与可用 Claude。"
+      ],
+      "expected": [
+        "每个项目保存所选 kind/backend；后端在创建后不可切换。"
+      ],
+      "cleanup": [
+        "移除测试绑定。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-005",
+      "area": "项目",
+      "title": "项目列表与群内 Agent 视图",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 2964,
+          "symbol": "DM.projects"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
+          "line": 400,
+          "symbol": "Agent 和群视图"
+        }
+      ],
+      "preconditions": [
+        "隔离数据目录内有已注册且运行的 Agent。"
+      ],
+      "steps": [
+        "打开 Agent 和群聊列表，进入同一个绑定详情后返回。"
+      ],
+      "expected": [
+        "两个视图指向同一绑定，不出现重复项目；返回保持列表视图。"
+      ],
+      "cleanup": [
+        "只读或拒绝写入检查。核对隔离数据与测试前一致，退出测试实例。"
+      ],
+      "coverage": "present",
+      "verification": "native",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-006",
+      "area": "项目",
+      "title": "项目话题列表",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3728,
+          "symbol": "DM.projectTopics"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1669,
+          "symbol": "SessionPicker"
+        }
+      ],
+      "preconditions": [
+        "隔离群已绑定到测试目录，Agent 在线。"
+      ],
+      "steps": [
+        "给群创建两个话题，进入项目话题列表并刷新。"
+      ],
+      "expected": [
+        "列表只显示该 chatId 的 session，展示标题和对应管理员或普通成员会话。"
+      ],
+      "cleanup": [
+        "结束测试任务，恢复测试前的设置与服务状态。保留验证证据后清理隔离测试数据；不清理用户真实数据。"
+      ],
+      "coverage": "present",
+      "verification": "integration",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-007",
+      "area": "项目",
+      "title": "删除或解绑项目",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3202,
+          "symbol": "DM.rmDo"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/ProjectPanel.tsx",
+          "line": 26,
+          "symbol": "function ProjectPanel"
+        }
+      ],
+      "preconditions": [
+        "隔离群已绑定到测试目录，Agent 在线。"
+      ],
+      "steps": [
+        "在桌面项目详情删除一个 origin=joined 的测试项目。"
+      ],
+      "expected": [
+        "projects.json 删除对应项目；代码目录保留；机器人退出原群或明确提示退出失败；其他项目无变化。"
+      ],
+      "cleanup": [
+        "需要时重新绑定测试群。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-008",
+      "area": "项目",
+      "title": "原创建群删除时转让群主",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3202,
+          "symbol": "DM.rmDo"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/ProjectPanel.tsx",
+          "line": 26,
+          "symbol": "function ProjectPanel"
+        }
+      ],
+      "preconditions": [
+        "隔离的 origin=created 群由机器人创建。"
+      ],
+      "steps": [
+        "在桌面删除该项目。"
+      ],
+      "expected": [
+        "项目解绑，代码目录保留，群主转给操作者；飞书群仍在且用户可自行解散。"
+      ],
+      "cleanup": [
+        "结束测试任务，恢复测试前的设置与服务状态。保留验证证据后清理隔离测试数据；不清理用户真实数据。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-009",
+      "area": "项目",
+      "title": "加入群后提醒绑定",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 2921,
+          "symbol": "DM.joinGroupSubmit"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
+          "line": 969,
+          "symbol": "加入飞书群"
+        }
+      ],
+      "preconditions": [
+        "机器人由用户加入未绑定群。"
+      ],
+      "steps": [
+        "在群触发绑定提示，再到桌面选择该群绑定。"
+      ],
+      "expected": [
+        "桌面能发现该群并绑定，不要求先在飞书卡片填写。"
+      ],
+      "cleanup": [
+        "结束测试任务，恢复测试前的设置与服务状态。保留验证证据后清理隔离测试数据；不清理用户真实数据。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-010",
+      "area": "项目设置",
+      "title": "群里无需 @ 的响应开关",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3554,
+          "symbol": "GS.setNoMention"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1483,
+          "symbol": "不 @ 也能发起任务"
+        }
+      ],
+      "preconditions": [
+        "隔离群已绑定到测试目录，Agent 在线。"
+      ],
+      "steps": [
+        "在多话题测试群开启免 @，分别向群主区和已有话题发送普通消息。",
+        "从桌面关闭免 @ 并保存，再在已有话题发送未 @ 的消息；随后发送 @ 机器人的正向对照。",
+        "恢复原值，读取 projects.json。整群连续会话变体通过隔离项目执行。"
+      ],
+      "expected": [
+        "多话题模式仅已有话题和支持的命令免 @；主区普通闲聊仍不会新建任务。",
+        "关闭后未 @ 消息不进入任务，@ 机器人仍可用；single 模式开启时整群免 @。",
+        "保存只作用于目标项目，其他群不变。界面说明与两种模式相符。"
+      ],
+      "cleanup": [
+        "恢复原值。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-011",
+      "area": "项目设置",
+      "title": "自动压缩上下文",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3567,
+          "symbol": "GS.setAutoCompact"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1553,
+          "symbol": "自动压缩上下文"
+        }
+      ],
+      "preconditions": [
+        "隔离群已绑定到测试目录，Agent 在线。"
+      ],
+      "steps": [
+        "桌面关闭再开启并保存，分别新开会话。"
+      ],
+      "expected": [
+        "projects.json autoCompact 保存；现有 LIVE 线程被重绑，下次启动应用新值。"
+      ],
+      "cleanup": [
+        "恢复原值。"
+      ],
+      "coverage": "present",
+      "verification": "integration",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-012",
+      "area": "项目设置",
+      "title": "管理员权限档位",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3774,
+          "symbol": "DM.permissionSubmit"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1501,
+          "symbol": "管理员权限"
+        }
+      ],
+      "preconditions": [
+        "隔离群已绑定到测试目录，Agent 在线。"
+      ],
+      "steps": [
+        "依次选择 qa、write、full 并保存，用管理员发受限任务。"
+      ],
+      "expected": [
+        "projects.json mode 正确保存；会话按新沙箱重绑；禁止档不能写文件。"
+      ],
+      "cleanup": [
+        "恢复原值。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-013",
+      "area": "项目设置",
+      "title": "普通成员权限档位",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3774,
+          "symbol": "DM.permissionSubmit"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1517,
+          "symbol": "普通成员权限"
+        }
+      ],
+      "preconditions": [
+        "测试群有普通成员。"
+      ],
+      "steps": [
+        "选择 qa、write、full 并保存，由普通成员发任务。"
+      ],
+      "expected": [
+        "projects.json guestMode 保存；普通成员使用对应隔离会话与沙箱。"
+      ],
+      "cleanup": [
+        "恢复原值。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-014",
+      "area": "项目设置",
+      "title": "联网许可",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3774,
+          "symbol": "DM.permissionSubmit"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1533,
+          "symbol": "允许网络访问"
+        }
+      ],
+      "preconditions": [
+        "隔离群已绑定到测试目录，Agent 在线。"
+      ],
+      "steps": [
+        "在 qa 或 write 档切换 network，并发出需联网的任务。"
+      ],
+      "expected": [
+        "projects.json network 保存；下一轮沙箱按许可变化，full 档结果按后端规则。"
+      ],
+      "cleanup": [
+        "恢复原值。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-015",
+      "area": "项目设置",
+      "title": "新会话默认模型和推理强度",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3805,
+          "symbol": "DM.modelDefaultSubmit"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1577,
+          "symbol": "新会话默认模型"
+        }
+      ],
+      "preconditions": [
+        "隔离群已绑定到测试目录，Agent 在线。"
+      ],
+      "steps": [
+        "选择当前后端可用模型及支持的 effort，保存后新建话题。"
+      ],
+      "expected": [
+        "projects.json defaultModel/defaultEffort 保存；仅新会话采用新值，旧会话不变。"
+      ],
+      "cleanup": [
+        "恢复原值。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-016",
+      "area": "项目设置",
+      "title": "已下架或跨后端模型拒绝",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3805,
+          "symbol": "DM.modelDefaultSubmit"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1577,
+          "symbol": "新会话默认模型"
+        }
+      ],
+      "preconditions": [
+        "隔离群已绑定到测试目录，Agent 在线。"
+      ],
+      "steps": [
+        "用过期模型 ID 或另一后端模型提交。"
+      ],
+      "expected": [
+        "拒绝写入，原模型与强度保留，界面提示具体字段。"
+      ],
+      "cleanup": [
+        "只读或拒绝写入检查。核对隔离数据与测试前一致，退出测试实例。"
+      ],
+      "coverage": "present",
+      "verification": "integration",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-017",
+      "area": "项目设置",
+      "title": "项目响应成员添加删除与允许所有人",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3674,
+          "symbol": "DM.allowlist"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1593,
+          "symbol": "响应成员"
+        }
+      ],
+      "preconditions": [
+        "隔离群已绑定到测试目录，Agent 在线。"
+      ],
+      "steps": [
+        "添加普通成员 Open ID，删除，再设允许所有成员。"
+      ],
+      "expected": [
+        "projects.json allowedUsers 去重；空列表代表全体；owner/admin 始终可用。"
+      ],
+      "cleanup": [
+        "恢复原值。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-018",
+      "area": "项目设置",
+      "title": "管理员列表增删",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3639,
+          "symbol": "DM.addAdminSubmit"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1274,
+          "symbol": "管理员"
+        }
+      ],
+      "preconditions": [
+        "隔离数据目录内有已注册且运行的 Agent。"
+      ],
+      "steps": [
+        "添加测试管理员 Open ID，再删除；尝试移除 owner。"
+      ],
+      "expected": [
+        "config.json admins 正确保存；owner 保留且始终有权限。"
+      ],
+      "cleanup": [
+        "移除测试管理员。"
+      ],
+      "coverage": "present",
+      "verification": "integration",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-019",
+      "area": "项目设置",
+      "title": "允许群名单",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 941,
+          "symbol": "isChatAllowed"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1362,
+          "symbol": "允许的飞书群"
+        }
+      ],
+      "preconditions": [
+        "隔离数据目录内有已注册且运行的 Agent。"
+      ],
+      "steps": [
+        "将测试群设为唯一允许群，另一个群发消息。"
+      ],
+      "expected": [
+        "config.json allowedChats 保存；非允许群不响应，空列表恢复全群。"
+      ],
+      "cleanup": [
+        "清空测试限制。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-020",
+      "area": "Agent 设置",
+      "title": "工具调用显示",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3249,
+          "symbol": "DM.setTools"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 535,
+          "symbol": "任务卡片"
+        }
+      ],
+      "preconditions": [
+        "隔离数据目录内有已注册且运行的 Agent。"
+      ],
+      "steps": [
+        "关闭与开启工具调用显示，各执行含工具任务。"
+      ],
+      "expected": [
+        "config.json showToolCalls 保存；后续运行卡按值隐藏或显示调用。"
+      ],
+      "cleanup": [
+        "恢复原值。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-021",
+      "area": "Agent 设置",
+      "title": "模型显示 off/running/always",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3252,
+          "symbol": "DM.setShowModel"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 535,
+          "symbol": "任务卡片"
+        }
+      ],
+      "preconditions": [
+        "隔离数据目录内有已注册且运行的 Agent。"
+      ],
+      "steps": [
+        "逐档保存并执行任务。"
+      ],
+      "expected": [
+        "config.json showModel 为所选枚举；运行和终态卡显示时机符合枚举。"
+      ],
+      "cleanup": [
+        "恢复原值。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-022",
+      "area": "Agent 设置",
+      "title": "并发任务上限 1 到 50",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3342,
+          "symbol": "DM.setConcurrency"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 567,
+          "symbol": "最大并发任务"
+        }
+      ],
+      "preconditions": [
+        "隔离数据目录内有已注册且运行的 Agent。"
+      ],
+      "steps": [
+        "保存 1 与 50，尝试 0、51、非整数；重启并并发发任务。"
+      ],
+      "expected": [
+        "合法值持久化，非法值拒绝；重启后的信号量使用新上限。"
+      ],
+      "cleanup": [
+        "恢复原值并重启。"
+      ],
+      "coverage": "present",
+      "verification": "integration",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-023",
+      "area": "Agent 设置",
+      "title": "空闲超时 0 或 10 到 3600 秒",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3257,
+          "symbol": "DM.setWatchdog"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 597,
+          "symbol": "空闲超时"
+        }
+      ],
+      "preconditions": [
+        "隔离数据目录内有已注册且运行的 Agent。"
+      ],
+      "steps": [
+        "保存 0、10、3600，尝试 9、3601 和非整数。"
+      ],
+      "expected": [
+        "config.json 存合法值；非法值拒绝；下一轮 watchdog 使用新值。"
+      ],
+      "cleanup": [
+        "恢复原值。"
+      ],
+      "coverage": "present",
+      "verification": "integration",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-024",
+      "area": "Agent 设置",
+      "title": "运行中消息 steer 或 queue",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3339,
+          "symbol": "DM.setPending"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 612,
+          "symbol": "待处理消息策略"
+        }
+      ],
+      "preconditions": [
+        "隔离群已绑定到测试目录，Agent 在线。"
+      ],
+      "steps": [
+        "运行长任务时依次用 steer 与 queue 发送新消息。"
+      ],
+      "expected": [
+        "config.json pendingPolicy 保存；steer 进入当前任务，queue 排队到任务后。"
+      ],
+      "cleanup": [
+        "恢复原值。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-025",
+      "area": "Agent 设置",
+      "title": "任务结束提醒四档",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3279,
+          "symbol": "DM.setCompletionReminder"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 630,
+          "symbol": "任务结束提醒"
+        }
+      ],
+      "preconditions": [
+        "隔离群已绑定到测试目录，Agent 在线。"
+      ],
+      "steps": [
+        "依次保存 manual、long、failures、always 并完成对应任务。"
+      ],
+      "expected": [
+        "config.json completionReminder.mode 保存；提醒仅在对应条件出现。"
+      ],
+      "cleanup": [
+        "恢复原值。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-026",
+      "area": "Agent 设置",
+      "title": "长任务阈值 1 到 1440 分钟",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3303,
+          "symbol": "DM.completionReminderCustomSubmit numeric validation"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 653,
+          "symbol": "长任务阈值"
+        }
+      ],
+      "preconditions": [
+        "隔离数据目录内有已注册且运行的 Agent。"
+      ],
+      "steps": [
+        "保存边界值并尝试 0、1441、非整数。"
+      ],
+      "expected": [
+        "合法阈值保存，非法值拒绝；长任务提醒按新阈值。"
+      ],
+      "cleanup": [
+        "恢复原值。"
+      ],
+      "coverage": "present",
+      "verification": "integration",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-027",
+      "area": "Agent 设置",
+      "title": "语音转文字启停及诊断",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/voice-console.ts",
+          "line": 69,
+          "symbol": "DM.setVoice"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 670,
+          "symbol": "语音转文字"
+        }
+      ],
+      "preconditions": [
+        "隔离数据目录内有已注册且运行的 Agent。"
+      ],
+      "steps": [
+        "启用、测试、刷新权限、禁用；发语音消息。"
+      ],
+      "expected": [
+        "config.json voice.enabled 变化；权限诊断显示状态；启用时语音进入任务，禁用后不转写。"
+      ],
+      "cleanup": [
+        "恢复原值。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-028",
+      "area": "Agent 设置",
+      "title": "CLI 桥接启停与 Hook 修复",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 2979,
+          "symbol": "CLI.toggleEnabled"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 740,
+          "symbol": "CLI 协作"
+        }
+      ],
+      "preconditions": [
+        "隔离数据目录内有已注册且运行的 Agent。"
+      ],
+      "steps": [
+        "启用 CLI 桥接，检测并修复 Hook，禁用。"
+      ],
+      "expected": [
+        "config.json cliBridge.enabled 保存；服务和 Hook 状态与界面一致；修复警告可见。"
+      ],
+      "cleanup": [
+        "恢复原值及测试 Hook。"
+      ],
+      "coverage": "present",
+      "verification": "native",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-029",
+      "area": "Agent 设置",
+      "title": "CLI 通知范围",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3008,
+          "symbol": "CLI.setNotifyScope"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 809,
+          "symbol": "通知范围"
+        }
+      ],
+      "preconditions": [
+        "隔离数据目录内有已注册且运行的 Agent。"
+      ],
+      "steps": [
+        "选择 all、bound_projects、none，触发 CLI Hook。"
+      ],
+      "expected": [
+        "config.json notifyScope 保存；飞书转发范围符合档位。"
+      ],
+      "cleanup": [
+        "恢复原值。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-030",
+      "area": "Agent 设置",
+      "title": "CLI Claude 和 Codex 事件过滤",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3019,
+          "symbol": "CLI.toggleAgent"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 824,
+          "symbol": "转发 Claude"
+        }
+      ],
+      "preconditions": [
+        "隔离数据目录内有已注册且运行的 Agent。"
+      ],
+      "steps": [
+        "分别关闭 Claude 和 Codex 转发并触发对应 Hook。"
+      ],
+      "expected": [
+        "config.json agents.claude/codex 保存；只转发启用后端事件。"
+      ],
+      "cleanup": [
+        "恢复原值。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-031",
+      "area": "Agent 设置",
+      "title": "CLI 离开保活",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3032,
+          "symbol": "CLI.toggleKeepAwake"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 853,
+          "symbol": "离开时保活"
+        }
+      ],
+      "preconditions": [
+        "macOS 隔离测试环境有 CLI 桥接。"
+      ],
+      "steps": [
+        "切换 keepAwake 并模拟离开。"
+      ],
+      "expected": [
+        "config.json keepAwake.enabled 保存；仅 macOS 启用 caffeinate。"
+      ],
+      "cleanup": [
+        "恢复原值。"
+      ],
+      "coverage": "present",
+      "verification": "native",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-032",
+      "area": "Agent 设置",
+      "title": "CLI 审批与超时",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/config/schema.ts",
+          "line": 485,
+          "symbol": "timeoutSeconds: secondsOr"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 880,
+          "symbol": "转发权限审批"
+        }
+      ],
+      "preconditions": [
+        "隔离数据目录内有已注册且运行的 Agent。"
+      ],
+      "steps": [
+        "先关闭再开启审批转发；审批超时设为 1 秒和 86400 秒；输入 0 与 86401 验证拒绝；触发一次测试审批。"
+      ],
+      "expected": [
+        "config.json 两字段保存；飞书审批按开关和时限发生。"
+      ],
+      "cleanup": [
+        "恢复原值。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-033",
+      "area": "Agent 设置",
+      "title": "CLI 完成卡与回复续聊",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/config/schema.ts",
+          "line": 490,
+          "symbol": "replyTimeoutSeconds: secondsOr"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 919,
+          "symbol": "发送任务完成卡"
+        }
+      ],
+      "preconditions": [
+        "隔离数据目录内有已注册且运行的 Agent。"
+      ],
+      "steps": [
+        "先关闭再开启任务完成卡和完成卡回复；续聊超时设为 1 秒和 86400 秒；输入 0 与 86401 验证拒绝；完成任务并回复卡片。"
+      ],
+      "expected": [
+        "config.json 三字段保存；完成卡出现与否、回复是否续聊和超时符合配置。"
+      ],
+      "cleanup": [
+        "恢复原值。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-034",
+      "area": "Agent 设置",
+      "title": "CLI 会话放行缓存",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/config/schema.ts",
+          "line": 493,
+          "symbol": "enabled: boolOr(raw?.allowCache?.enabled"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 976,
+          "symbol": "本会话放行缓存"
+        }
+      ],
+      "preconditions": [
+        "隔离数据目录内有已注册且运行的 Agent。"
+      ],
+      "steps": [
+        "切换 allowCache.enabled，触发同一会话重复审批。"
+      ],
+      "expected": [
+        "config.json 保存；缓存仅本会话有效。"
+      ],
+      "cleanup": [
+        "恢复原值。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-035",
+      "area": "Agent 设置",
+      "title": "CLI 在场检测",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/config/schema.ts",
+          "line": 499,
+          "symbol": "idleThresholdSeconds: secondsOr"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 992,
+          "symbol": "在场检测"
+        }
+      ],
+      "preconditions": [
+        "隔离数据目录内有已注册且运行的 Agent。"
+      ],
+      "steps": [
+        "先关闭再开启在场检测；平台分别选 auto 与 macos；离开阈值设为 10 秒和 3600 秒；输入 9 与 3601 验证拒绝；模拟活动和离开。"
+      ],
+      "expected": [
+        "config.json 三字段保存；转发根据检测平台和阈值变化。"
+      ],
+      "cleanup": [
+        "恢复原值。"
+      ],
+      "coverage": "present",
+      "verification": "native",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-036",
+      "area": "Agent 设置",
+      "title": "云文档评论执行后端模型强度",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3404,
+          "symbol": "DM.commentSubmit"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1060,
+          "symbol": "云文档评论"
+        }
+      ],
+      "preconditions": [
+        "隔离数据目录内有已注册且运行的 Agent。"
+      ],
+      "steps": [
+        "选择可用后端、模型、强度并在文档评论中 @bot。"
+      ],
+      "expected": [
+        "config.json comments 写入；下一条评论用所选后端模型，不改变群任务默认值。"
+      ],
+      "cleanup": [
+        "恢复原值。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-037",
+      "area": "Agent 设置",
+      "title": "云文档评论回复规则编辑重置",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3469,
+          "symbol": "DM.commentPromptSubmit"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1099,
+          "symbol": "评论回复规则"
+        }
+      ],
+      "preconditions": [
+        "隔离数据目录内有已注册且运行的 Agent。"
+      ],
+      "steps": [
+        "保存带占位符的非空规则，触发评论，随后重置。"
+      ],
+      "expected": [
+        "comment-instructions.md 写入并同步已有评论目录；重置回内置规则；空文本拒绝。"
+      ],
+      "cleanup": [
+        "恢复原规则。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-038",
+      "area": "Agent 设置",
+      "title": "新会话标题按后端配置",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3361,
+          "symbol": "DM.sessionTitleSubmit"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1169,
+          "symbol": "新会话标题"
+        }
+      ],
+      "preconditions": [
+        "隔离数据目录内有已注册且运行的 Agent。"
+      ],
+      "steps": [
+        "Codex 与 Claude 分别关闭标题生成，再分别选可用模型 ID 和 medium 强度启用；创建新会话并检查一个旧会话标题。"
+      ],
+      "expected": [
+        "config.json sessionTitles.byBackend 独立保存；新会话标题策略生效，旧标题不回填。"
+      ],
+      "cleanup": [
+        "恢复原值。"
+      ],
+      "coverage": "present",
+      "verification": "integration",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-039",
+      "area": "Agent 设置",
+      "title": "新项目默认根目录",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 2884,
+          "symbol": "DM.newProjectSubmit"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 2001,
+          "symbol": "function SettingsPanel"
+        }
+      ],
+      "preconditions": [
+        "隔离数据目录内有已注册且运行的 Agent。"
+      ],
+      "steps": [
+        "将新项目根目录设为隔离的绝对路径，再从桌面创建 QA-root-check 空白项目。"
+      ],
+      "expected": [
+        "config.json projectsRootDir 保存；新项目使用该根目录，现有项目不搬迁。"
+      ],
+      "cleanup": [
+        "恢复原值并删除测试项目。"
+      ],
+      "coverage": "present",
+      "verification": "integration",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-040",
+      "area": "会话",
+      "title": "会话模型与推理强度覆盖",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 2266,
+          "symbol": "MC.model"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1669,
+          "symbol": "SessionPicker"
+        }
+      ],
+      "preconditions": [
+        "隔离群已绑定到测试目录，Agent 在线。"
+      ],
+      "steps": [
+        "选择一个已有 Codex 话题，选可用 Codex 模型及 medium 强度，保存并发下一轮；重启后回读。"
+      ],
+      "expected": [
+        "sessions.json 记录新值；下一轮生效；重启后仍保留；跨后端型号拒绝。"
+      ],
+      "cleanup": [
+        "恢复原值。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-041",
+      "area": "会话",
+      "title": "多话题首条消息创建话题",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 1741,
+          "symbol": "startTopicDirectly"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1669,
+          "symbol": "SessionPicker"
+        }
+      ],
+      "preconditions": [
+        "多话题测试群已绑定。"
+      ],
+      "steps": [
+        "在群主区 @bot 发送任务并查看桌面话题列表。"
+      ],
+      "expected": [
+        "飞书创建新话题，sessions.json 绑定 threadId/cwd，桌面显示话题。"
+      ],
+      "cleanup": [
+        "结束测试任务，恢复测试前的设置与服务状态。保留验证证据后清理隔离测试数据；不清理用户真实数据。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "runtime-e2e"
+    },
+    {
+      "id": "CARD-042",
+      "area": "会话",
+      "title": "单会话群连续对话",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 1266,
+          "symbol": "handleTurn"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1669,
+          "symbol": "SessionPicker"
+        }
+      ],
+      "preconditions": [
+        "单会话测试群已绑定。"
+      ],
+      "steps": [
+        "连续发送两条相关消息，在桌面检查会话。"
+      ],
+      "expected": [
+        "第二条沿用同一 sessionId 与项目目录。"
+      ],
+      "cleanup": [
+        "结束测试任务，恢复测试前的设置与服务状态。保留验证证据后清理隔离测试数据；不清理用户真实数据。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "runtime-e2e"
+    },
+    {
+      "id": "CARD-043",
+      "area": "会话",
+      "title": "恢复历史会话",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 2299,
+          "symbol": "RES.pick"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx",
+          "line": 18,
+          "symbol": "function ConversationPanel"
+        }
+      ],
+      "preconditions": [
+        "隔离群已绑定到测试目录，Agent 在线。"
+      ],
+      "steps": [
+        "从桌面群详情打开历史会话。",
+        "选择标记为 QA-history-A 的已有会话，点击恢复。",
+        "在飞书发下一条测试消息，再核对桌面会话和持久化 sessionId。"
+      ],
+      "expected": [
+        "恢复从桌面发起。多话题模式关联新话题，单群模式切换当前会话。",
+        "下一条消息使用选中的历史 sessionId；其他群会话不变。"
+      ],
+      "cleanup": [
+        "结束测试任务，恢复测试前的设置与服务状态。保留验证证据后清理隔离测试数据；不清理用户真实数据。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-044",
+      "area": "会话",
+      "title": "清空当前单群会话",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 2066,
+          "symbol": "runClear"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx",
+          "line": 18,
+          "symbol": "function ConversationPanel"
+        }
+      ],
+      "preconditions": [
+        "单会话群有历史会话。"
+      ],
+      "steps": [
+        "在桌面打开已存在连续会话的测试群。",
+        "执行清空当前会话并确认。",
+        "在飞书发送下一条消息，再从历史列表定位旧会话。"
+      ],
+      "expected": [
+        "下一条消息创建不同的 sessionId。旧会话仍可恢复，项目目录与其他群不变。"
+      ],
+      "cleanup": [
+        "结束测试任务，恢复测试前的设置与服务状态。保留验证证据后清理隔离测试数据；不清理用户真实数据。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-045",
+      "area": "会话",
+      "title": "手动压缩上下文",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 1950,
+          "symbol": "runCompact"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx",
+          "line": 18,
+          "symbol": "function ConversationPanel"
+        }
+      ],
+      "preconditions": [
+        "测试会话空闲且后端支持 compact。"
+      ],
+      "steps": [
+        "在桌面选择空闲且支持压缩的测试会话，记录上下文占用。",
+        "执行手动压缩并等待完成。",
+        "发送下一条测试消息。"
+      ],
+      "expected": [
+        "压缩动作由桌面发起并显示完成或明确失败。",
+        "成功后沿用同一 sessionId，可以继续协作；运行中不允许冲突压缩。"
+      ],
+      "cleanup": [
+        "结束测试任务，恢复测试前的设置与服务状态。保留验证证据后清理隔离测试数据；不清理用户真实数据。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-046",
+      "area": "会话",
+      "title": "查看上下文用量",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 1927,
+          "symbol": "postContextCard"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx",
+          "line": 18,
+          "symbol": "function ConversationPanel"
+        }
+      ],
+      "preconditions": [
+        "隔离群已绑定到测试目录，Agent 在线。"
+      ],
+      "steps": [
+        "在桌面选择有至少两轮历史的测试会话。",
+        "打开上下文用量并刷新。",
+        "切换另一会话并再次查看。"
+      ],
+      "expected": [
+        "展示选中会话的上下文占用和可用容量，不串到另一个会话。",
+        "后端不支持时明确显示不可用，不用零值冒充成功。"
+      ],
+      "cleanup": [
+        "结束测试任务，恢复测试前的设置与服务状态。保留验证证据后清理隔离测试数据；不清理用户真实数据。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-047",
+      "area": "会话",
+      "title": "自治目标启动与结束",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 4759,
+          "symbol": "launchGoalRun"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx",
+          "line": 18,
+          "symbol": "function ConversationPanel"
+        }
+      ],
+      "preconditions": [
+        "Codex 后端支持目标，测试目录可写。"
+      ],
+      "steps": [
+        "在桌面选中测试会话并设置目标“读取 fixture README，写入 goal-result.txt 后结束”。",
+        "启动目标并观察状态。",
+        "在第二个受控长任务中从桌面停止目标。"
+      ],
+      "expected": [
+        "目标由桌面发起并驱动对应会话执行。",
+        "完成或停止状态正确，不继续自动推进，不影响别的会话。"
+      ],
+      "cleanup": [
+        "结束测试目标。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-048",
+      "area": "运行卡",
+      "title": "终止运行任务",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 2383,
+          "symbol": "RC.stop"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx",
+          "line": 18,
+          "symbol": "function ConversationPanel"
+        }
+      ],
+      "preconditions": [
+        "隔离群已绑定到测试目录，Agent 在线。"
+      ],
+      "steps": [
+        "在测试会话启动可控的等待任务。",
+        "从桌面选中该任务并点击终止。",
+        "检查执行进程状态和结果卡，随后再发一个正常任务。"
+      ],
+      "expected": [
+        "目标任务停止并显示已终止。其他任务继续。",
+        "下一次协作正常，不残留占用槽位。"
+      ],
+      "cleanup": [
+        "结束测试任务，恢复测试前的设置与服务状态。保留验证证据后清理隔离测试数据；不清理用户真实数据。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-049",
+      "area": "运行卡",
+      "title": "单次完成提醒请求",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 2400,
+          "symbol": "RC.remind"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx",
+          "line": 18,
+          "symbol": "function ConversationPanel"
+        }
+      ],
+      "preconditions": [
+        "隔离群已绑定到测试目录，Agent 在线。"
+      ],
+      "steps": [
+        "将测试 Agent 常规结束提醒设为关闭。",
+        "启动测试任务，从桌面请求本次完成提醒。",
+        "等待任务结束，再执行不请求提醒的下一次任务。"
+      ],
+      "expected": [
+        "仅目标任务发送一次结束提醒。后续任务不继承本次请求。",
+        "原提醒配置没有被临时请求修改。"
+      ],
+      "cleanup": [
+        "恢复原值。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-050",
+      "area": "消息",
+      "title": "文件、图片、引用、语音输入",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 1266,
+          "symbol": "handleTurn"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1669,
+          "symbol": "SessionPicker"
+        }
+      ],
+      "preconditions": [
+        "隔离群已绑定到测试目录，Agent 在线。"
+      ],
+      "steps": [
+        "依次发送附件、图片、引用回复和语音。"
+      ],
+      "expected": [
+        "附件写入本地清单且输入交给 Agent；引用内容附加；已授权语音可转写；桌面可观察会话但无任务输入界面。"
+      ],
+      "cleanup": [
+        "清理测试附件。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "runtime-e2e"
+    },
+    {
+      "id": "CARD-051",
+      "area": "消息",
+      "title": "文件与图片输出",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 4116,
+          "symbol": "launchRun"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1669,
+          "symbol": "SessionPicker"
+        }
+      ],
+      "preconditions": [
+        "隔离群已绑定到测试目录，Agent 在线。"
+      ],
+      "steps": [
+        "让 Agent 在测试目录生成文件和图片。"
+      ],
+      "expected": [
+        "飞书结果卡提供可打开的输出；路径限制只允许测试目录文件；桌面无结果/文件浏览。"
+      ],
+      "cleanup": [
+        "删除测试产物。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "runtime-e2e"
+    },
+    {
+      "id": "CARD-052",
+      "area": "消息",
+      "title": "云文档评论任务执行",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 5036,
+          "symbol": "comment run"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1060,
+          "symbol": "云文档评论"
+        }
+      ],
+      "preconditions": [
+        "机器人已获文档评论权限且有测试文档。"
+      ],
+      "steps": [
+        "在评论中 @bot 提问，查看回复和桌面设置。"
+      ],
+      "expected": [
+        "评论原线程回复，使用评论专属规则、后端与会话目录；桌面不显示评论任务记录。"
+      ],
+      "cleanup": [
+        "删除测试评论。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "runtime-e2e"
+    },
+    {
+      "id": "CARD-053",
+      "area": "诊断",
+      "title": "飞书 DM 重连与诊断",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3044,
+          "symbol": "DM.doctor"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
+          "line": 921,
+          "symbol": "诊断页面"
+        }
+      ],
+      "preconditions": [
+        "隔离数据目录内有已注册且运行的 Agent。"
+      ],
+      "steps": [
+        "打开桌面诊断；在受控断线时尝试恢复。"
+      ],
+      "expected": [
+        "桌面显示机器人、依赖与服务问题，并提供可执行的重连；飞书 DM 重连仍有效。"
+      ],
+      "cleanup": [
+        "结束测试任务，恢复测试前的设置与服务状态。保留验证证据后清理隔离测试数据；不清理用户真实数据。"
+      ],
+      "coverage": "partial",
+      "verification": "native",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-054",
+      "area": "诊断",
+      "title": "飞书 DM 原地更新与进度",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3111,
+          "symbol": "DM.updateDo"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/UpdatePanel.tsx",
+          "line": 6,
+          "symbol": "function UpdatePanel"
+        }
+      ],
+      "preconditions": [
+        "测试安装版本低于可用发布版本。"
+      ],
+      "steps": [
+        "在桌面检查更新并执行到下载、替换与重启。"
+      ],
+      "expected": [
+        "桌面可完成 DM 更新同等流程且显示失败或成功。"
+      ],
+      "cleanup": [
+        "结束测试任务，恢复测试前的设置与服务状态。保留验证证据后清理隔离测试数据；不清理用户真实数据。"
+      ],
+      "coverage": "partial",
+      "verification": "native",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-055",
+      "area": "用量",
+      "title": "Codex 用量查询、刷新与分享",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3172,
+          "symbol": "DM.usageShareDo"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/UsagePanel.tsx",
+          "line": 63,
+          "symbol": "function UsagePanel"
+        }
+      ],
+      "preconditions": [
+        "Codex 已授权且有用量。"
+      ],
+      "steps": [
+        "桌面读取 Codex 配额，刷新一次，选择配额与活动区块，生成分享卡。"
+      ],
+      "expected": [
+        "可见配额、统计与热力图，并可生成可转发卡。"
+      ],
+      "cleanup": [
+        "结束测试任务，恢复测试前的设置与服务状态。保留验证证据后清理隔离测试数据；不清理用户真实数据。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-056",
+      "area": "安全",
+      "title": "非管理员不能修改设置和删除绑定",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3202,
+          "symbol": "DM.rmDo"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1435,
+          "symbol": "ProjectPanel"
+        }
+      ],
+      "preconditions": [
+        "隔离环境中有普通成员身份。"
+      ],
+      "steps": [
+        "以普通成员打开飞书卡片并尝试项目设置；本机桌面离线操作也检查权限模型。"
+      ],
+      "expected": [
+        "飞书拒绝普通成员；桌面只允许本机 Host 授权操作者，对远程用户无桌面入口；无数据变化。"
+      ],
+      "cleanup": [
+        "只读或拒绝写入检查。核对隔离数据与测试前一致，退出测试实例。"
+      ],
+      "coverage": "present",
+      "verification": "external",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-057",
+      "area": "设置一致性",
+      "title": "卡片与桌面交叉编辑同一配置",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3249,
+          "symbol": "DM.setTools"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 530,
+          "symbol": "Editor"
+        }
+      ],
+      "preconditions": [
+        "隔离数据目录内有已注册且运行的 Agent。"
+      ],
+      "steps": [
+        "飞书卡片改 showToolCalls 后桌面刷新；再从桌面改并打开飞书新设置卡。"
+      ],
+      "expected": [
+        "双方读到同一 config.json；旧 revision 提交冲突，不能静默覆盖。"
+      ],
+      "cleanup": [
+        "恢复原值。"
+      ],
+      "coverage": "present",
+      "verification": "integration",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "CARD-058",
+      "area": "设置一致性",
+      "title": "停止或离线 Agent 只读",
+      "baselineEvidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3249,
+          "symbol": "DM.setTools"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1966,
+          "symbol": "SettingsPanel"
+        }
+      ],
+      "preconditions": [
+        "隔离数据目录内有已注册且运行的 Agent。"
+      ],
+      "steps": [
+        "停用 Agent 或断开 Host，打开其桌面设置并尝试保存。"
+      ],
+      "expected": [
+        "当前值可预览，编辑拒绝；重连后重新读取，未写旧状态。"
+      ],
+      "cleanup": [
+        "恢复 Agent 启用。"
+      ],
+      "coverage": "present",
+      "verification": "native",
+      "parityClass": "desktop-control"
+    },
+    {
+      "id": "DATA-001",
+      "area": "data",
+      "title": "诊断页显示当前接续 Host 的实际数据目录",
+      "baselineEvidence": [
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/config/data-root.ts",
+          "line": 48,
+          "symbol": "resolveDataRoot"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/main/controller.ts",
+          "line": 103,
+          "symbol": "class DesktopController"
+        }
+      ],
+      "preconditions": [
+        "旧版数据保存在 .feishu-codex-bridge，现有服务正在运行，新目录尚不存在。"
+      ],
+      "steps": [
+        "启动桌面版并接续现有服务。",
+        "打开状态与诊断，读取数据目录。",
+        "与该服务发现文件所在目录和真实目录比较。"
+      ],
+      "expected": [
+        "显示实际使用的 .feishu-codex-bridge。",
+        "不显示尚不存在的 .vonvon-bridge，不为修正显示而迁移运行中的数据。"
+      ],
+      "cleanup": [
+        "仅做只读核对，无需恢复。"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "LEGACY-001",
+      "area": "本机环境",
+      "title": "识别已安装且已授权的 Codex 与 Claude",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:packages/runtime/src/toolchain-manager.ts",
+          "line": 148,
+          "symbol": "scan"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts",
+          "line": 437,
+          "symbol": "refresh lifecycle"
+        }
+      ],
+      "preconditions": [
+        "隔离环境预置 Codex 与 Claude 可执行文件；Codex 已授权"
+      ],
+      "steps": [
+        "启动桌面端",
+        "打开本机环境并刷新"
+      ],
+      "expected": [
+        "两个工具均显示正确安装状态和版本；Codex 显示已授权，不出现安装或授权按钮；Claude 安装状态准确"
+      ],
+      "cleanup": [
+        "只读或拒绝写入检查。核对隔离数据与测试前一致，退出测试实例。"
+      ],
+      "coverage": "partial",
+      "verification": "native"
+    },
+    {
+      "id": "LEGACY-002",
+      "area": "本机环境",
+      "title": "安装缺失的 Codex",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/pages/EnvironmentPage.tsx",
+          "line": 331,
+          "symbol": "ToolSummary install"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
+          "line": 791,
+          "symbol": "installCodex"
+        }
+      ],
+      "preconditions": [
+        "隔离环境未安装 Codex"
+      ],
+      "steps": [
+        "打开本机环境",
+        "点击安装 Codex",
+        "等待完成并重新检测"
+      ],
+      "expected": [
+        "Codex 可执行文件可运行，版本显示；安装失败有可操作错误"
+      ],
+      "cleanup": [
+        "清理隔离环境安装目录"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "LEGACY-003",
+      "area": "本机环境",
+      "title": "安装缺失的 Claude Code 与飞书 CLI",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/pages/EnvironmentPage.tsx",
+          "line": 331,
+          "symbol": "ToolSummary install"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/EnvironmentPanel.tsx",
+          "line": 25,
+          "symbol": "function EnvironmentPanel"
+        }
+      ],
+      "preconditions": [
+        "隔离环境缺失 Claude Code 与 lark-cli"
+      ],
+      "steps": [
+        "分别点击安装 Claude Code、飞书 CLI",
+        "重新检测两者"
+      ],
+      "expected": [
+        "两者可执行文件可运行且版本显示"
+      ],
+      "cleanup": [
+        "清理隔离环境安装目录"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "LEGACY-004",
+      "area": "本机环境",
+      "title": "更新 Codex、Claude Code 和飞书 CLI",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/pages/EnvironmentPage.tsx",
+          "line": 426,
+          "symbol": "ToolDetails update"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/EnvironmentPanel.tsx",
+          "line": 25,
+          "symbol": "function EnvironmentPanel"
+        }
+      ],
+      "preconditions": [
+        "隔离环境预置旧版三个工具；更新源可达"
+      ],
+      "steps": [
+        "逐个选择版本更新",
+        "完成后重新检测"
+      ],
+      "expected": [
+        "每个工具实际版本变更；失败保留旧版且界面给出错误"
+      ],
+      "cleanup": [
+        "清理隔离环境安装目录"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "LEGACY-005",
+      "area": "本机环境",
+      "title": "取消正在安装或更新的工具",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/pages/EnvironmentPage.tsx",
+          "line": 341,
+          "symbol": "cancelOperation"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/EnvironmentPanel.tsx",
+          "line": 25,
+          "symbol": "function EnvironmentPanel"
+        }
+      ],
+      "preconditions": [
+        "隔离环境模拟缓慢下载或安装"
+      ],
+      "steps": [
+        "开始安装或更新",
+        "点击取消"
+      ],
+      "expected": [
+        "操作终止；工具状态回到可重新操作；未留下损坏的可执行文件"
+      ],
+      "cleanup": [
+        "清理隔离环境下载目录"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "LEGACY-006",
+      "area": "本机环境",
+      "title": "Codex 官方账号授权及取消",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/pages/EnvironmentPage.tsx",
+          "line": 606,
+          "symbol": "environment-inline-login"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/main/controller.ts",
+          "line": 103,
+          "symbol": "class DesktopController"
+        }
+      ],
+      "preconditions": [
+        "隔离环境 Codex 已安装但未授权"
+      ],
+      "steps": [
+        "点击授权",
+        "打开官方授权页",
+        "完成授权后刷新",
+        "再次开始授权并取消"
+      ],
+      "expected": [
+        "授权状态变为已登录；取消后无挂起任务；授权码和链接可见"
+      ],
+      "cleanup": [
+        "撤销隔离环境授权"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "LEGACY-007",
+      "area": "本机环境",
+      "title": "Claude Code 和飞书 CLI 登录及重验",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/pages/EnvironmentPage.tsx",
+          "line": 369,
+          "symbol": "startLogin"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/EnvironmentPanel.tsx",
+          "line": 25,
+          "symbol": "function EnvironmentPanel"
+        }
+      ],
+      "preconditions": [
+        "隔离环境对应工具已安装且未登录"
+      ],
+      "steps": [
+        "分别启动 Claude Code、飞书 CLI 登录",
+        "完成官方授权",
+        "重新检测",
+        "对已授权账号触发重验"
+      ],
+      "expected": [
+        "每个工具从未授权转为可用，重验结果准确"
+      ],
+      "cleanup": [
+        "撤销隔离环境授权"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "LEGACY-008",
+      "area": "飞书 CLI",
+      "title": "列出并切换 Profile",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/pages/EnvironmentPage.tsx",
+          "line": 927,
+          "symbol": "Profile list/use"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/EnvironmentPanel.tsx",
+          "line": 25,
+          "symbol": "function EnvironmentPanel"
+        }
+      ],
+      "preconditions": [
+        "隔离环境 lark-cli 有 A、B 两个 Profile"
+      ],
+      "steps": [
+        "打开管理飞书 CLI",
+        "查看 Profile",
+        "将当前 Profile 从 A 切到 B",
+        "重新打开"
+      ],
+      "expected": [
+        "B 持续标记为当前 Profile，其他 Profile 保留"
+      ],
+      "cleanup": [
+        "切回 A"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "LEGACY-009",
+      "area": "飞书 CLI",
+      "title": "新增已有应用 Profile 并安全保存凭据",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/pages/EnvironmentPage.tsx",
+          "line": 996,
+          "symbol": "Add profile"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/EnvironmentPanel.tsx",
+          "line": 25,
+          "symbol": "function EnvironmentPanel"
+        }
+      ],
+      "preconditions": [
+        "隔离环境有测试 App ID/Secret"
+      ],
+      "steps": [
+        "管理飞书 CLI → 添加已有应用 Profile",
+        "输入名称、App ID、Secret",
+        "设为当前并保存"
+      ],
+      "expected": [
+        "lark-cli 能以新 Profile 使用；秘密不显示在日志/快照；重启后仍可用"
+      ],
+      "cleanup": [
+        "删除隔离测试 Profile"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "LEGACY-010",
+      "area": "飞书 CLI",
+      "title": "通过扫码新建应用 Profile",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/pages/EnvironmentPage.tsx",
+          "line": 1097,
+          "symbol": "Profile config init"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/EnvironmentPanel.tsx",
+          "line": 25,
+          "symbol": "function EnvironmentPanel"
+        }
+      ],
+      "preconditions": [
+        "测试飞书账号与隔离 lark-cli 可用"
+      ],
+      "steps": [
+        "管理飞书 CLI → 创建机器人 Profile",
+        "扫码或打开验证链接",
+        "完成官方流程"
+      ],
+      "expected": [
+        "新 Profile 显示并可设为当前；取消和超时路径可恢复"
+      ],
+      "cleanup": [
+        "删除隔离测试 Profile 与测试应用"
+      ],
+      "coverage": "present",
+      "verification": "external"
+    },
+    {
+      "id": "LEGACY-011",
+      "area": "Agent",
+      "title": "扫码注册机器人并使用完整链接",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/components/RobotRegistrationCard.tsx",
+          "line": 18,
+          "symbol": "RobotRegistrationCard"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
+          "line": 1156,
+          "symbol": "JobPanel"
+        }
+      ],
+      "preconditions": [
+        "隔离数据目录；飞书测试应用可创建"
+      ],
+      "steps": [
+        "点击添加 Agent",
+        "验证二维码、完整链接、打开/复制/刷新",
+        "完成飞书注册"
+      ],
+      "expected": [
+        "一个 Agent 注册并可启用；链接过期可重试；没有重复注册"
+      ],
+      "cleanup": [
+        "停用并删除隔离 Agent"
+      ],
+      "coverage": "present",
+      "verification": "external"
+    },
+    {
+      "id": "LEGACY-012",
+      "area": "Agent",
+      "title": "复用已存在的飞书应用并刷新凭据",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/pages/RobotsPage.tsx",
+          "line": 291,
+          "symbol": "registrationTaskPurpose refresh"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/main/controller.ts",
+          "line": 103,
+          "symbol": "class DesktopController"
+        }
+      ],
+      "preconditions": [
+        "已有测试 App ID 的 Agent"
+      ],
+      "steps": [
+        "在 Agent 详情中刷新应用凭据",
+        "通过飞书授权完成",
+        "重新读取并重启服务"
+      ],
+      "expected": [
+        "同一 Agent 身份保留，秘密更新，既有群和项目配置保留"
+      ],
+      "cleanup": [
+        "恢复测试应用凭据或清理隔离数据"
+      ],
+      "coverage": "present",
+      "verification": "external"
+    },
+    {
+      "id": "LEGACY-013",
+      "area": "Agent",
+      "title": "启用、停用与权限检查/修复入口",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/ManagementPanel.tsx",
+          "line": 487,
+          "symbol": "RobotDetails"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 2001,
+          "symbol": "function SettingsPanel"
+        }
+      ],
+      "preconditions": [
+        "已注册 Agent"
+      ],
+      "steps": [
+        "启用 Agent，检查连接",
+        "停用 Agent",
+        "重新检查权限",
+        "对缺失事件/权限打开飞书控制台"
+      ],
+      "expected": [
+        "运行状态与实际一致；权限缺口明确；修复后重查转为正常"
+      ],
+      "cleanup": [
+        "恢复 Agent 原状态"
+      ],
+      "coverage": "present",
+      "verification": "integration"
+    },
+    {
+      "id": "LEGACY-014",
+      "area": "Agent",
+      "title": "配置机器人任务卡显示、并发、超时、待处理策略和提醒",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/ManagementPanel.tsx",
+          "line": 500,
+          "symbol": "RobotDetails settings"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 449,
+          "symbol": "AgentPanel"
+        }
+      ],
+      "preconditions": [
+        "隔离 Agent 存在"
+      ],
+      "steps": [
+        "分别更改显示工具调用、模型展示、并发数、空闲超时、待处理策略、完成提醒",
+        "保存并重新读取"
+      ],
+      "expected": [
+        "每项保存为有效值；下一次任务按新设置运行；越界值被拒绝"
+      ],
+      "cleanup": [
+        "恢复全部原值"
+      ],
+      "coverage": "present",
+      "verification": "integration"
+    },
+    {
+      "id": "LEGACY-015",
+      "area": "Agent",
+      "title": "配置标题精炼与评论生成的执行模型",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/ManagementPanel.tsx",
+          "line": 1163,
+          "symbol": "RobotDetails title/comments"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 2001,
+          "symbol": "function SettingsPanel"
+        }
+      ],
+      "preconditions": [
+        "隔离 Agent 可列出 Codex/Claude 模型"
+      ],
+      "steps": [
+        "分别设置两种后端标题模型、effort；更改评论 backend/model/effort/instructions",
+        "保存并新建对应任务"
+      ],
+      "expected": [
+        "每项持久化；标题和评论实际使用所选后端/模型，失败可见"
+      ],
+      "cleanup": [
+        "恢复原值"
+      ],
+      "coverage": "present",
+      "verification": "integration"
+    },
+    {
+      "id": "LEGACY-016",
+      "area": "Agent",
+      "title": "永久管理员与额外管理员管理",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/ManagementPanel.tsx",
+          "line": 1351,
+          "symbol": "RobotDetails admins"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 1280,
+          "symbol": "AgentPanel administrators"
+        }
+      ],
+      "preconditions": [
+        "测试 Agent 有 owner 和额外管理员"
+      ],
+      "steps": [
+        "查看 owner",
+        "新增一个额外管理员",
+        "移除该管理员",
+        "尝试移除 owner"
+      ],
+      "expected": [
+        "owner 保持不可删除；额外管理员增删生效且远端卡片权限同步"
+      ],
+      "cleanup": [
+        "恢复额外管理员原列表"
+      ],
+      "coverage": "present",
+      "verification": "integration"
+    },
+    {
+      "id": "LEGACY-017",
+      "area": "项目",
+      "title": "创建项目群或绑定已有群，选择目录与会话模式",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/components/ProjectCreateDialog.tsx",
+          "line": 17,
+          "symbol": "ProjectCreateDialog"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/ProjectPanel.tsx",
+          "line": 26,
+          "symbol": "function ProjectPanel"
+        }
+      ],
+      "preconditions": [
+        "隔离 Agent 已加入测试群；可选本地空目录"
+      ],
+      "steps": [
+        "创建一个新项目群",
+        "再绑定已有群",
+        "分别选择共享/话题会话模式与工作目录"
+      ],
+      "expected": [
+        "群、目录、会话模式和 Agent 绑定持久化；不重名；重启后可见"
+      ],
+      "cleanup": [
+        "删除测试项目绑定与外部测试群"
+      ],
+      "coverage": "present",
+      "verification": "external"
+    },
+    {
+      "id": "LEGACY-018",
+      "area": "项目",
+      "title": "编辑项目目录、会话模式、启用状态",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/ManagementPanel.tsx",
+          "line": 1680,
+          "symbol": "ProjectDetails state"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/ProjectPanel.tsx",
+          "line": 26,
+          "symbol": "function ProjectPanel"
+        }
+      ],
+      "preconditions": [
+        "已有测试项目，工作目录 A/B 均存在"
+      ],
+      "steps": [
+        "将目录从 A 改为 B",
+        "将共享切为话题",
+        "停用再启用项目",
+        "重新读取"
+      ],
+      "expected": [
+        "每项变更持久化；新的任务使用 B/话题模式；已有目录不删除"
+      ],
+      "cleanup": [
+        "恢复目录 A 和原会话模式"
+      ],
+      "coverage": "present",
+      "verification": "integration"
+    },
+    {
+      "id": "LEGACY-019",
+      "area": "项目",
+      "title": "配置权限、成员、免 @、网络、压缩、待处理和模型",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/ManagementPanel.tsx",
+          "line": 2204,
+          "symbol": "ProjectDetails settings"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 2001,
+          "symbol": "function SettingsPanel"
+        }
+      ],
+      "preconditions": [
+        "已有测试项目与不同权限测试成员"
+      ],
+      "steps": [
+        "逐项更改管理员/普通成员权限、允许成员、免 @、联网、自动压缩、待处理策略、默认模型/effort",
+        "保存并重读",
+        "分别发送触发任务"
+      ],
+      "expected": [
+        "设置持久化；允许/拒绝、网络和模型行为符合设置"
+      ],
+      "cleanup": [
+        "恢复原设置"
+      ],
+      "coverage": "present",
+      "verification": "integration"
+    },
+    {
+      "id": "LEGACY-020",
+      "area": "项目",
+      "title": "删除项目后保留工作目录并清除绑定",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:packages/runtime/src/project-service.ts",
+          "line": 616,
+          "symbol": "delete"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/ProjectPanel.tsx",
+          "line": 26,
+          "symbol": "function ProjectPanel"
+        }
+      ],
+      "preconditions": [
+        "隔离项目绑定目录含标记文件"
+      ],
+      "steps": [
+        "在项目详情点击删除并确认",
+        "重新读取项目列表和目录"
+      ],
+      "expected": [
+        "项目绑定与关联会话映射清除；本地目录及标记文件仍在；其他项目不变"
+      ],
+      "cleanup": [
+        "重建隔离测试项目"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "LEGACY-021",
+      "area": "项目",
+      "title": "查看、搜索、筛选并跳转历史会话",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/ManagementPanel.tsx",
+          "line": 1422,
+          "symbol": "ProjectSessionHistoryPage"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx",
+          "line": 18,
+          "symbol": "function ConversationPanel"
+        }
+      ],
+      "preconditions": [
+        "测试项目有共享与话题历史会话"
+      ],
+      "steps": [
+        "打开项目历史会话",
+        "搜索关键词",
+        "按来源筛选",
+        "打开对应飞书群或话题"
+      ],
+      "expected": [
+        "列表含来源/时间/目标；搜索筛选准确；跳转到对应群或话题"
+      ],
+      "cleanup": [
+        "只读或拒绝写入检查。核对隔离数据与测试前一致，退出测试实例。"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "LEGACY-022",
+      "area": "项目",
+      "title": "从桌面打开绑定的飞书项目群",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/ManagementPanel.tsx",
+          "line": 2000,
+          "symbol": "ProjectDetails openProject"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/ConversationPanel.tsx",
+          "line": 18,
+          "symbol": "function ConversationPanel"
+        }
+      ],
+      "preconditions": [
+        "测试项目已绑定飞书群"
+      ],
+      "steps": [
+        "打开项目详情",
+        "点击打开项目群"
+      ],
+      "expected": [
+        "系统浏览器或飞书客户端定位到绑定群"
+      ],
+      "cleanup": [
+        "只读或拒绝写入检查。核对隔离数据与测试前一致，退出测试实例。"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "LEGACY-023",
+      "area": "设备设置",
+      "title": "设置新项目默认根目录并恢复默认",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/pages/DeviceSettingsSectionPage.tsx",
+          "line": 249,
+          "symbol": "project-preferences"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 2001,
+          "symbol": "function SettingsPanel"
+        }
+      ],
+      "preconditions": [
+        "隔离数据目录，目录 A 存在"
+      ],
+      "steps": [
+        "选择 A 为新项目默认位置",
+        "创建空白项目验证路径",
+        "点击恢复默认",
+        "再创建项目验证默认路径"
+      ],
+      "expected": [
+        "新项目按设定根目录创建；已有项目目录不移动"
+      ],
+      "cleanup": [
+        "恢复初始根目录"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "LEGACY-024",
+      "area": "设备设置",
+      "title": "配置 CLI 活动通知、范围、工具和唤醒",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/pages/DeviceSettingsSectionPage.tsx",
+          "line": 305,
+          "symbol": "handoff"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 2001,
+          "symbol": "function SettingsPanel"
+        }
+      ],
+      "preconditions": [
+        "测试 Agent 有 owner；CLI hook 可安装"
+      ],
+      "steps": [
+        "启用本机 CLI 活动转发",
+        "依次设置 all/bound_projects/none、Claude/Codex 开关与保持唤醒",
+        "触发各 CLI 事件"
+      ],
+      "expected": [
+        "设置持久化；仅允许的事件被推送；等待时唤醒行为正确"
+      ],
+      "cleanup": [
+        "恢复原设置"
+      ],
+      "coverage": "present",
+      "verification": "integration"
+    },
+    {
+      "id": "LEGACY-025",
+      "area": "设备设置",
+      "title": "检查并修复 Claude/Codex hooks",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/pages/DeviceSettingsSectionPage.tsx",
+          "line": 433,
+          "symbol": "repairHooks"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/settings/SettingsPanel.tsx",
+          "line": 780,
+          "symbol": "AgentPanel hooks"
+        }
+      ],
+      "preconditions": [
+        "隔离 hook 配置可写且至少一项缺失"
+      ],
+      "steps": [
+        "查看 hook 状态",
+        "点击检查并修复",
+        "重新读取 hook 状态"
+      ],
+      "expected": [
+        "缺失或损坏 hook 变为已安装；冲突不被覆盖；原有其他 hook 保留"
+      ],
+      "cleanup": [
+        "恢复隔离 hook 配置"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "LEGACY-026",
+      "area": "设备设置",
+      "title": "控制 Bridge 服务启动、停止、接管及登录自启",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/pages/DeviceSettingsSectionPage.tsx",
+          "line": 471,
+          "symbol": "application"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/MachinePanel.tsx",
+          "line": 6,
+          "symbol": "function MachinePanel"
+        }
+      ],
+      "preconditions": [
+        "隔离 CLI 服务可运行；桌面应用可管理登录项"
+      ],
+      "steps": [
+        "启动服务并确认飞书连接",
+        "停止服务并确认停止",
+        "在 CLI 已占用时执行接管",
+        "切换桌面登录自启"
+      ],
+      "expected": [
+        "同一设备只有一个宿主；期望运行状态保留；登录自启准确；无任务数据丢失"
+      ],
+      "cleanup": [
+        "恢复服务及自启原状态"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "LEGACY-027",
+      "area": "设备设置",
+      "title": "检查并安装桌面软件更新",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/pages/DeviceSettingsSectionPage.tsx",
+          "line": 563,
+          "symbol": "application software update"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/management/UpdatePanel.tsx",
+          "line": 6,
+          "symbol": "function UpdatePanel"
+        }
+      ],
+      "preconditions": [
+        "隔离更新源提供比当前版本新的签名包"
+      ],
+      "steps": [
+        "打开应用与启动",
+        "检查更新",
+        "查看版本及发布页",
+        "安装更新并重启"
+      ],
+      "expected": [
+        "新版本启动且本机配置保留；下载/安装失败可恢复"
+      ],
+      "cleanup": [
+        "恢复测试环境初始版本"
+      ],
+      "coverage": "partial",
+      "verification": "native"
+    },
+    {
+      "id": "LEGACY-028",
+      "area": "诊断",
+      "title": "查看 Bridge、机器人、项目、工具和 CLI 数据诊断",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/DiagnosticsPanel.tsx",
+          "line": 35,
+          "symbol": "DiagnosticsPanel"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/renderer/App.tsx",
+          "line": 921,
+          "symbol": "diagnostics page"
+        }
+      ],
+      "preconditions": [
+        "隔离环境准备正常与权限缺失两种状态"
+      ],
+      "steps": [
+        "打开状态与诊断",
+        "刷新",
+        "检查各项及跳转修复入口"
+      ],
+      "expected": [
+        "状态与真实服务/权限一致；缺失项给出可操作入口；历史状态不会伪装为实时"
+      ],
+      "cleanup": [
+        "结束测试任务，恢复测试前的设置与服务状态。保留验证证据后清理隔离测试数据；不清理用户真实数据。"
+      ],
+      "coverage": "partial",
+      "verification": "native"
+    },
+    {
+      "id": "LEGACY-029",
+      "area": "交互",
+      "title": "搜索设置、机器人与项目，并保护未保存修改",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/app/AppShell.tsx",
+          "line": 256,
+          "symbol": "AppShell search"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@c374a4a:desktop/renderer/SearchDialog.tsx",
+          "line": 5,
+          "symbol": "function SearchDialog"
+        }
+      ],
+      "preconditions": [
+        "已有 Agent/群绑定且项目设置有未保存改动"
+      ],
+      "steps": [
+        "搜索设置项及实体名称",
+        "尝试离开编辑页",
+        "选择保存/放弃/继续编辑"
+      ],
+      "expected": [
+        "搜索定位正确；三种选择分别保存、丢弃或继续，不会静默丢失改动"
+      ],
+      "cleanup": [
+        "恢复测试项目设置"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "LEGACY-030",
+      "area": "桌面运行",
+      "title": "重启桌面后继续读取原本 Bridge 数据",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:packages/runtime/src/desktop-runtime-api.ts",
+          "line": 303,
+          "symbol": "desktop.snapshot"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts",
+          "line": 437,
+          "symbol": "refresh"
+        }
+      ],
+      "preconditions": [
+        "现有用户数据根有 Agent、项目与会话关联；隔离副本"
+      ],
+      "steps": [
+        "退出桌面应用",
+        "重新启动",
+        "查看 Agent/群/设置"
+      ],
+      "expected": [
+        "原始数据无副本分叉；Agent、群与设置同 CLI 读取；无需重新导入或产品账号"
+      ],
+      "cleanup": [
+        "结束测试任务，恢复测试前的设置与服务状态。保留验证证据后清理隔离测试数据；不清理用户真实数据。"
+      ],
+      "coverage": "present",
+      "verification": "native"
+    },
+    {
+      "id": "LEGACY-031",
+      "area": "Agent",
+      "title": "本地移除并重新添加同一 Agent",
+      "baselineEvidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:packages/runtime/src/robot-service.ts",
+          "line": 27,
+          "symbol": "removeRobotData"
+        }
+      ],
+      "desktopEvidence": [
+        {
+          "path": "desktop@aab1bb34442d6723016cfbdc3217159108b4348f:desktop/main/controller.ts",
+          "line": 708,
+          "symbol": "deleteAgent"
+        }
+      ],
+      "preconditions": [
+        "隔离测试 Agent 已注册且停用"
+      ],
+      "steps": [
+        "移除本地 Agent",
+        "核查凭据/群绑定/设置/会话记录",
+        "通过扫码重新注册同一 App ID"
+      ],
+      "expected": [
+        "仅目标 Agent 本地记录删除；飞书应用保留；重新注册后名称稳定，无重复 Agent"
+      ],
+      "cleanup": [
+        "清理隔离 Agent"
+      ],
+      "coverage": "present",
+      "verification": "external"
+    }
+  ],
+  "exclusions": [
+    {
+      "capability": "Hidden secrets get/set/list/remove",
+      "reason": "Internal exec-provider and keystore plumbing. Desktop must preserve it for CLI interoperability, but must not expose raw secret values.",
+      "evidence": [
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts",
+          "line": 162,
+          "symbol": "hidden secrets command"
+        }
+      ]
+    },
+    {
+      "capability": "Hidden hook, host and daemon-control helpers",
+      "reason": "Process integration entry points, not end-user controls. Their behavior is covered through registration, CLI collaboration and lifecycle cases.",
+      "evidence": [
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts",
+          "line": 164,
+          "symbol": "hidden hook"
+        },
+        {
+          "path": "core@21ed17cab64df7c1b481c56d63ea6aa51fc212ad:src/cli/index.ts",
+          "line": 108,
+          "symbol": "hidden daemon-control"
+        }
+      ]
+    },
+    {
+      "capability": "messageReply, requireMentionInGroup, agentStopGraceMs, access.allowedUsers",
+      "reason": "Schema accepts historical values but effective code path absent or field deprecated; preserve on migration, do not present as active controls.",
+      "evidence": [
+        {
+          "path": "core@v0.6.14:src/config/schema.ts",
+          "line": 81,
+          "symbol": "legacy getters and deprecated access field"
+        }
+      ]
+    },
+    {
+      "capability": "backend switch on existing project",
+      "reason": "Old implementation already removed it; backend is fixed after project creation.",
+      "evidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 3838,
+          "symbol": "backend switch removed"
+        }
+      ]
+    },
+    {
+      "capability": "Feishu-only send/reaction transport",
+      "reason": "Messages, cards, and emoji still run in the bundled core and should be tested end to end, but a desktop inbox is a separate product requirement. Cases CARD-041 to CARD-052 mark desktop observability/controls separately.",
+      "evidence": [
+        {
+          "path": "core@v0.6.14:src/bot/handle-message.ts",
+          "line": 881,
+          "symbol": "runReaction"
+        }
+      ]
+    },
+    {
+      "capability": "旧版 Vonvon 账号登录与账号切换",
+      "reason": "用户明确指定本地功能无需产品账号，团队空间再登录；旧版 ADR 0012 的登录门槛与新产品决策冲突。保留云端账号能力仅在团队空间设计后另行立项。",
+      "evidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:docs/adr/0012-require-login-and-defer-multi-device-capabilities.md",
+          "line": 8,
+          "symbol": "Require login and defer multi-device capabilities"
+        },
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:CONTEXT.md",
+          "line": 11,
+          "symbol": "Vonvon Bridge account"
+        }
+      ]
+    },
+    {
+      "capability": "旧版一次性从 Bridge CLI 导入独立副本",
+      "reason": "用户明确指定升级直接接续旧数据，旧目录与 .vonvon-bridge 链接并保持随时切换；复制导入会制造两份数据，与新流程冲突。需测试路径别名和同一数据事实源。",
+      "evidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:docs/adr/0005-keep-data-roots-independent-and-share-the-schema.md",
+          "line": 8,
+          "symbol": "independent roots"
+        },
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:apps/desktop/src/StartupGuide.tsx",
+          "line": 197,
+          "symbol": "import UI"
+        }
+      ]
+    },
+    {
+      "capability": "多设备远程管理与设备快照",
+      "reason": "旧版 ADR 0012 说明当前桌面发布版并未交付这些能力，不能作为旧版已有效功能。",
+      "evidence": [
+        {
+          "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:docs/adr/0012-require-login-and-defer-multi-device-capabilities.md",
+          "line": 19,
+          "symbol": "deferred multi-device"
+        }
+      ]
+    }
+  ],
+  "scopeNotes": [
+    {
+      "id": "LEGACY-032",
+      "decision": "单列研究，未列为本轮升级承诺",
+      "reason": "当前明确的升级来源是 feishu-codex-bridge；旧 Vonvon 仓库用于设计和实现参考，不能把其独立私有数据格式迁移自动加入本轮。",
+      "case": {
+        "id": "LEGACY-032",
+        "area": "数据",
+        "title": "旧版 Vonvon 已有数据格式升级可恢复",
+        "baselineEvidence": [
+          {
+            "path": "legacy@3a168535c11a4f403553967908d272127e6a23af:packages/runtime/src/legacy-desktop-store-upgrade.ts",
+            "line": 37,
+            "symbol": "LegacyDesktopStoreUpgrade"
+          }
+        ],
+        "desktopEvidence": [
+          {
+            "path": "desktop@3449674dca93ef7af16d61eda127b91746e65085:desktop/main/host.ts",
+            "line": 1,
+            "symbol": "acquireHost"
+          }
+        ],
+        "preconditions": [
+          "隔离副本含旧版 Vonvon Bridge 数据"
+        ],
+        "steps": [
+          "启动新桌面并读取数据",
+          "对迁移前后目录及关键对象做快照比较"
+        ],
+        "expected": [
+          "机器人/项目/凭据/会话关联可继续使用；失败可恢复且原副本不破坏"
+        ],
+        "cleanup": [
+          "清理隔离副本"
+        ],
+        "coverage": "missing",
+        "verification": "native"
+      }
+    }
+  ]
+}

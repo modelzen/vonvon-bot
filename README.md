@@ -1,2 +1,25 @@
-# vonvon-bridge
-Electron desktop product for Feishu agents, powered by the independently usable feishu-codex-bridge Host.
+# Vonvon Bridge
+
+面向 Windows 和 macOS 的 Electron 桌面协作工具。目标是让新老用户都能在不打开终端的情况下完成第一次飞书协作。
+
+桌面预览正在开发和验证，运行内核来自可独立使用的 [feishu-codex-bridge](https://github.com/modelzen/feishu-codex-bridge)。目前尚未发布正式安装包。原生 Windows 验证、签名和真实飞书任务验收仍是发布前的检查项。
+
+## 桌面预览
+
+- Agent 页显示注册的飞书机器人及其已绑定群，提供注册和加入飞书群入口。
+- 群聊页按群显示 Vonvon 注册的 Agent，与 Agent 页共用配置。
+- 本机环境页检查 Codex 安装和账号授权，提供私有安装与设备码登录。
+- 新绑定可以选择本机文件夹、执行工具和会话方式。已有绑定保留原工作目录、工具和会话，只提供响应方式与权限设置。
+- 关闭窗口后继续在菜单栏或托盘运行。退出应用只停止它自己启动的 Bridge，接续的外部服务继续运行。
+
+本地功能无需产品账号。飞书与执行工具分别授权。首次协作需要在实际飞书群中发送任务，并收到来自所选工作目录的真实回复。
+
+开发、打包和隔离验证方法见 [DEVELOPMENT.md](DEVELOPMENT.md)。打包目标是 macOS arm64 和 Windows x64。开发预览未签名，不能视为正式发布版。
+
+## 已有用户
+
+已有机器人、授权和群绑定会被继续读取，无需导入。程序先检查现有 Bridge；能够接续时不启动第二个服务。由其他程序管理的服务需要在原程序中重启后应用新增 Agent 等设置。旧内核不支持的操作会显示明确提示。
+
+升级后的实际数据目录统一为 `.vonvon-bridge`。离线迁移把旧目录移动到新位置，再让 `.feishu-codex-bridge` 链接到同一份数据。它不复制两份数据，也不运行同步任务。检测到数据正在使用、目录冲突或迁移未完成时，程序停止迁移并显示原因。
+
+macOS `.pkg` 和 Windows 安装程序会自动注册命令行工具并加入新终端的 PATH。主命令为 `vonvon-bridge`，`feishu-codex-bridge` 保留为兼容入口。两个命令共用应用内置的 Node 和 Bridge Core，不需要单独安装全局 Node。移动应用后重新打开桌面端会修复命令路径；状态和修复入口位于「应用与启动」的命令行工具分组。安装后请新开终端。已有全局 CLI 文件不会被覆盖，卸载时只移除桌面端管理的入口。

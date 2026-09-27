@@ -1,0 +1,45 @@
+name: Native desktop validation
+on: [push, pull_request]
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: darwin-arm64
+            package: mac
+          - os: windows-2025
+            target: win32-x64
+            package: win
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.1
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: node scripts/parity-report.mjs --check
+      - run: npm run prepare:runtime -- ${{ matrix.target }}
+      - run: npm run build
+      - run: npm run test:controls
+      - run: npm run test:settings-ui
+      - run: npm run test:native
+      - run: npm run package:${{ matrix.package }}
+      - if: runner.os == 'macOS'
+        run: tar -czf "release/Vonvon-Bridge-macOS-arm64.tar.gz" -C release/mac-arm64 "Vonvon Bridge.app"
+      - name: Upload optional preview download
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: desktop-${{ matrix.target }}
+          path: |
+            release/*.tar.gz
+            release/*.exe
+            release/*.pkg
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
