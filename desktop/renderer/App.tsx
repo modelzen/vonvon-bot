@@ -295,6 +295,7 @@ function DesktopApp() {
       : (agent?.name ?? group?.name ?? (view === "agents" ? "Agent" : "群聊")),
     environment: "本机环境",
     usage: "用量",
+    coffee: "咖啡一下",
     application: "应用与启动",
     diagnostics: "状态与诊断",
   };
@@ -832,7 +833,8 @@ function DesktopApp() {
               )}
             </>
           )}
-          {page === "environment" && <><EnvironmentPanel reveal={searchTarget?.reveal} codexBusy={snapshot.jobs.some(job => (job.type === "loginCodex" || job.type === "installCodex") && isActive(job))} request={window.bridge.environment} onCodexLogin={async () => {await run({type: "startCodexLogin"});}} codexJobs={snapshot.jobs.filter(job => job.type === "loginCodex" || job.type === "installCodex").map(job => <JobPanel key={job.id} job={job} run={run} busy={busy}/>)}/><SettingsPanel scope="host" target={{kind: 'host'}} category="coffee" reveal={searchTarget?.reveal}/></>}
+          {page === "environment" && <><EnvironmentPanel reveal={searchTarget?.reveal} codexBusy={snapshot.jobs.some(job => (job.type === "loginCodex" || job.type === "installCodex") && isActive(job))} request={window.bridge.environment} onCodexLogin={async () => {await run({type: "startCodexLogin"});}} codexJobs={snapshot.jobs.filter(job => job.type === "loginCodex" || job.type === "installCodex").map(job => <JobPanel key={job.id} job={job} run={run} busy={busy}/>)}/></>}
+          {page === "coffee" && <SettingsPanel scope="host" target={{kind: 'host'}} category="coffee" reveal={searchTarget?.reveal}/> }
           {page === "usage" && <UsagePanel request={window.bridge.collaboration} onOpenEnvironment={() => openPage('environment')}/>}
           {page === "application" && (
             <>

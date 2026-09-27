@@ -1,11 +1,11 @@
 import type {ReactNode} from 'react';
-import {Activity,Bot,MessageSquare,MonitorCog,Search,Stethoscope,Wrench} from 'lucide-react';
+import {Activity,Coffee,Bot,MessageSquare,MonitorCog,Search,Stethoscope,Wrench} from 'lucide-react';
 import {SettingsToolbar} from './reference/components/system-settings';
 import type {CollaborationView,Page} from './collaboration-model';
 
 export function AppShell(props:{page:Page;view:CollaborationView;title:string;children:ReactNode;onNavigate:(page:Page)=>void;onOpenList:(view:CollaborationView)=>void;onBack?:()=>void;backLabel?:string;onSearch?:()=>void}){
   const lists=[{id:'agents',label:'Agent',icon:Bot},{id:'groups',label:'群聊',icon:MessageSquare}] as const;
-  const settings=[{id:'usage',label:'用量',icon:Activity},{id:'environment',label:'本机环境',icon:Wrench},{id:'application',label:'应用与启动',icon:MonitorCog},{id:'diagnostics',label:'状态与诊断',icon:Stethoscope}] as const;
+  const settings=[{id:'coffee',label:'咖啡一下',icon:Coffee},{id:'usage',label:'用量',icon:Activity},{id:'environment',label:'本机环境',icon:Wrench},{id:'application',label:'应用与启动',icon:MonitorCog},{id:'diagnostics',label:'状态与诊断',icon:Stethoscope}] as const;
   return <div className="settings-window collaboration-window">
     <aside aria-label="应用侧栏" className="settings-sidebar">
       <div className="settings-sidebar-drag-region" aria-hidden="true"/>
