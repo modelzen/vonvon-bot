@@ -89,7 +89,7 @@ export function searchEntries(snapshot: DesktopSnapshot): SearchEntry[] {
   ];
   const entries: SearchEntry[] = pages.map(page => ({id: page.id, title: page.title, context: '页面', aliases: page.aliases, destination: {page: page.page, view: page.view, selection: page.view ? {kind: 'overview'} : undefined}, kind: 'page'}));
   for (const group of globalGroups) group.fields.forEach((field, index) => entries.push({
-    id: `global-${group.page}-${group.section}-${index}`, title: field.title, context: ['本机 Hook', '接力设置', '通知偏好'].includes(group.section) ? `咖啡一下 · ${group.section}` : group.section, aliases: field.aliases ?? [], destination: {page: group.page, section: group.section, field: field.field ?? field.title, reveal: field.reveal, guide: field.guide}, kind: 'setting',
+    id: `global-${group.page}-${group.section}-${index}`, title: field.title, context: ['本机 Hook', '接力设置', '通知偏好'].includes(group.section) ? `咖啡一下 · ${group.section}` : group.section, aliases: field.aliases ?? [], destination: {page: group.page, section: group.section, field: field.field ?? field.title, reveal: field.reveal, guide: group.page === 'coffee' && snapshot.agents.length > 0 ? undefined : field.guide}, kind: 'setting',
   }));
   for (const agent of snapshot.agents) {
     const base: Destination = {page: 'collaboration', view: 'agents', selection: {kind: 'agent', id: agent.id}};
