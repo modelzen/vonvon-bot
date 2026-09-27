@@ -295,7 +295,7 @@ function DesktopApp() {
     ? route.parent.kind === 'agent'
       ? snapshot.agents.find(item => item.id === route.parent.id)?.name ?? 'Agent'
       : snapshot.groups.find(item => item.id === route.parent.id)?.name ?? '群聊'
-    : route.kind === 'agent' ? 'Agent 列表' : '群聊列表';
+    : routeView(route) === 'agents' ? 'Agent 列表' : '群聊列表';
   function membershipRows(
     members: Membership[],
     perspective: CollaborationView,
@@ -778,7 +778,7 @@ function DesktopApp() {
                   </header>
                   <div className="collaboration-member-context">
                     <AgentAvatar agent={agent} />
-                    <span><strong>{agent.name}</strong><small>此 Agent 在本群内协作</small></span>
+                    <span className="collaboration-member-context__copy"><strong>{agent.name}</strong><small>此 Agent 在本群内协作</small></span>
                     <button type="button" onClick={() => changeRoute(() => ({kind: 'agent', id: agent.id, pane: {kind: 'settings', category: 'general'}}))}>Agent 设置</button>
                     <button type="button" onClick={() => changeRoute(() => ({kind: 'group', id: group.id}))}>查看飞书群</button>
                   </div>
