@@ -1,2 +1,82 @@
 html,body,#root{height:100%;margin:0;overflow:hidden}button,input,select,textarea{-webkit-app-region:no-drag}button{cursor:pointer}button:disabled{cursor:default}.settings-sidebar-drag-region,.ss-toolbar__drag-region{-webkit-app-region:drag}.desktop-loading{padding:48px;color:#65656d;font:14px system-ui}.desktop-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}.desktop-job{padding:20px;display:flex;flex-direction:column;align-items:center;gap:12px;font-size:13px}.desktop-qr{width:256px;height:256px;max-width:100%;border-radius:12px}.desktop-device-code{font-size:23px;letter-spacing:3px;padding:12px}.ss-row code{white-space:normal;overflow-wrap:anywhere}.collaboration-window .ss-row__value{overflow-wrap:anywhere;max-width:55%}.ui-dialog input,.ui-dialog select,.ui-dialog textarea{max-width:100%}.settings-entity-row__value{font-size:11px}.settings-content-page{padding-bottom:32px}html[data-desktop-platform=windows] .settings-sidebar-drag-region{height:12px}html[data-desktop-platform=windows] .settings-toolbar{padding-top:12px}.desktop-job p{margin:0;text-align:center}
+
+.join-group-flow {
+  gap: 14px;
+}
+
+.join-group-flow > p {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.join-group-flow .ss-row__value {
+  overflow: visible;
+  white-space: normal;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
+
+.join-group-flow__agent {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.join-group-flow__modes {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 6px;
+  background: #e9e9ed;
+}
+
+.join-group-flow__modes .ui-button {
+  min-height: 24px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  box-shadow: none;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.join-group-flow__modes .ui-button[aria-pressed="true"] {
+  background: var(--color-surface);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.join-group-flow__modes .ui-button:hover:not(:disabled):not([aria-pressed="true"]) {
+  background: rgba(255, 255, 255, 0.45);
+}
+
+.join-group-flow .ss-row__trailing select {
+  width: auto;
+  max-width: min(100%, 210px);
+}
+
+.ss-row__trailing input.settings-number {
+  width: 86px;
+}
+
+.ui-dialog .desktop-job {
+  gap: 10px;
+  padding: 8px 4px;
+}
+
+.ui-dialog .desktop-job > p {
+  line-height: 1.4;
+}
+
+@media (max-width: 800px) {
+  .join-group-flow .ss-row:has(.ss-row__value):has(.ss-row__trailing) {
+    flex-wrap: wrap;
+  }
+
+  .join-group-flow .ss-row:has(.ss-row__value) .ss-row__trailing {
+    max-width: 100%;
+  }
+}
 html,body{min-width:720px;min-height:560px}

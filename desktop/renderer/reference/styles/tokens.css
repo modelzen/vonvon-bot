@@ -38,18 +38,18 @@
   --space-16: 4rem;
 
   --settings-sidebar-width: 223px;
-  --settings-toolbar-height: 52px;
+  --settings-toolbar-height: 48px;
   --settings-content-width: 560px;
-  --settings-section-gap: 26px;
+  --settings-section-gap: 20px;
   --settings-group-radius: 12px;
-  --settings-row-height: 43px;
-  --settings-row-described-height: 52px;
-  --settings-row-padding: 7px 12px;
-  --settings-control-height: 26px;
-  --settings-control-radius: 7px;
-  --settings-toggle-width: 32px;
-  --settings-toggle-height: 20px;
-  --settings-segmented-height: 27px;
+  --settings-row-height: 48px;
+  --settings-row-described-height: 60px;
+  --settings-row-padding: 8px 12px;
+  --settings-control-height: 28px;
+  --settings-control-radius: 6px;
+  --settings-toggle-width: 30px;
+  --settings-toggle-height: 18px;
+  --settings-segmented-height: 28px;
 
   --radius-xs: 0.375rem;
   --radius-sm: 0.5rem;
