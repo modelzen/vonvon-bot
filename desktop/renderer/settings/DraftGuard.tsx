@@ -56,7 +56,7 @@ export function DraftGuardProvider({children}: {children: ReactNode}) {
       footer={<>
         <Button disabled={saving} onClick={stay}>继续编辑</Button>
         <Button disabled={saving} onClick={() => {for (const draft of drafts.current.values()) draft.discard(); drafts.current.clear(); proceed();}}>放弃并离开</Button>
-        <Button loading={saving} onClick={() => void saveAll()}>保存并离开</Button>
+        <Button variant="primary" loading={saving} onClick={() => void saveAll()}>保存并离开</Button>
       </>}>
       <p>离开前，请选择如何处理当前修改。</p>
       {failure && <InlineNotice title="保存未完成" tone="danger">{failure}</InlineNotice>}

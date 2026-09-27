@@ -65,11 +65,11 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
     finally {setBusy(false);}
   }
   return <Dialog open title="让 Agent 加入飞书群" onClose={busy ? undefined : close}>
-    <div className="page-stack">
-      <p>Agent · {agent.name}</p>
-      {mode.kind !== 'bind' && <div className="desktop-actions" role="group" aria-label="加入方式">
-        <Button variant={mode.kind === 'create' ? 'primary' : 'secondary'} disabled={busy} onClick={() => switchMode({kind: 'create'})}>创建新飞书群</Button>
-        <Button variant={mode.kind === 'existing' ? 'primary' : 'secondary'} disabled={busy} onClick={() => switchMode({kind: 'existing'})}>加入现有飞书群</Button>
+    <div className="page-stack join-group-flow">
+      <p className="join-group-flow__agent">Agent · {agent.name}</p>
+      {mode.kind !== 'bind' && <div className="join-group-flow__modes" role="group" aria-label="加入方式">
+        <Button aria-pressed={mode.kind === 'create'} disabled={busy} onClick={() => switchMode({kind: 'create'})}>创建新飞书群</Button>
+        <Button aria-pressed={mode.kind === 'existing'} disabled={busy} onClick={() => switchMode({kind: 'existing'})}>加入现有飞书群</Button>
       </div>}
       {mode.kind === 'existing' ? <>
         <p>在飞书客户端打开目标群，进入「设置 → 群机器人 → 添加机器人」，搜索并添加「{agent.name}」。请使用这个 Agent 的管理员身份操作。</p>

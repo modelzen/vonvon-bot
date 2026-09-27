@@ -355,8 +355,8 @@ html[data-desktop-platform="macos"] .ss-toolbar__drag-region {
 }
 
 .settings-toolbar .ss-toolbar__history {
-  border: 1px solid rgba(0, 0, 0, 0.04);
-  background: rgba(247, 247, 247, 0.92);
+  border: 0;
+  background: transparent;
 }
 
 .settings-content-scroll {
@@ -1109,34 +1109,15 @@ html[data-desktop-platform="macos"] .ss-toolbar__drag-region {
   min-height: var(--settings-control-height);
   gap: 5px;
   padding: 3px 10px;
-  border: 1px solid rgba(0, 0, 0, 0.14);
   border-radius: var(--settings-control-radius);
-  color: #262629;
-  background: linear-gradient(#ffffff, #f6f6f6);
-  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.05);
-  font-size: 12px;
-  font-weight: 450;
-}
-
-.ui-button:hover:not(:disabled) {
-  background: #f2f2f2;
-}
-
-.ui-button:active:not(:disabled) {
-  transform: none;
-  background: #e9e9e9;
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .ui-button--primary,
 .primary-button {
-  border-color: #0074d9;
-  color: #ffffff;
-  background: #007aff;
-  box-shadow: none;
-}
-
-.ui-button--primary:hover:not(:disabled) {
-  background: #0874df;
+  color: var(--color-on-accent);
+  background: var(--color-accent);
 }
 
 .ui-button--ghost {
@@ -1146,9 +1127,8 @@ html[data-desktop-platform="macos"] .ss-toolbar__drag-region {
 }
 
 .ui-button--danger {
-  border-color: color-mix(in srgb, var(--color-status-danger) 35%, transparent);
   color: var(--color-status-danger);
-  background: transparent;
+  background: var(--color-status-danger-bg);
 }
 
 .ui-button--lg {
@@ -1338,7 +1318,7 @@ html[data-desktop-platform="macos"] .ss-toolbar__drag-region {
 }
 
 .ui-select-control,
-.ui-form-field input:not([type="checkbox"]),
+.ui-form-field input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
 .ui-form-field select,
 .directory-path-input {
   min-height: var(--settings-control-height);
@@ -1346,9 +1326,9 @@ html[data-desktop-platform="macos"] .ss-toolbar__drag-region {
   border-radius: var(--settings-control-radius);
   color: var(--color-text);
   background: #ffffff;
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.04);
+  box-shadow: none;
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .ui-number-stepper {
@@ -2135,17 +2115,11 @@ html[data-desktop-platform="macos"] .ss-toolbar__drag-region {
 }
 
 .ui-dialog-backdrop {
-  background: rgba(0, 0, 0, 0.2);
-  backdrop-filter: blur(2px);
+  background: rgba(0, 0, 0, 0.16);
 }
 
 .ui-dialog {
   width: min(480px, calc(100vw - 32px));
-  overflow: hidden;
-  border: 1px solid rgba(0, 0, 0, 0.16);
-  border-radius: 12px;
-  background: rgba(252, 252, 252, 0.98);
-  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.26);
 }
 
 .ui-dialog--sm {
@@ -2158,12 +2132,6 @@ html[data-desktop-platform="macos"] .ss-toolbar__drag-region {
 
 .ui-dialog--lg {
   width: min(620px, calc(100vw - 32px));
-}
-
-.ui-dialog__header,
-.ui-dialog__content,
-.ui-dialog__footer {
-  padding-inline: 16px;
 }
 
 .account-login-page__footer {
