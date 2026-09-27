@@ -24,6 +24,13 @@ function amount(value: number | undefined) {
   return value === undefined ? "未提供" : value.toLocaleString("zh-CN");
 }
 
+function windowLabel(seconds: number | undefined, fallback: string) {
+  if (!seconds) return fallback;
+  if (seconds % 86400 === 0) return `${seconds / 86400} 天限额`;
+  if (seconds % 3600 === 0) return `${seconds / 3600} 小时限额`;
+  return `${Math.round(seconds / 60)} 分钟限额`;
+}
+
 function windowValue(window: { usedPercent: number; resetAt?: number } | undefined) {
   if (!window) return "暂不可用";
   const reset = window.resetAt ? ` · ${new Date(window.resetAt * 1000).toLocaleString()} 重置` : "";
@@ -95,18 +102,20 @@ export function UsagePanel({ request, onOpenEnvironment }: Props) {
   }
 
   const profile = data?.profile;
+  const primaryLabel = windowLabel(data?.usage.main.primary?.windowSeconds, "主要限额");
+  const secondaryLabel = windowLabel(data?.usage.main.secondary?.windowSeconds, "额外限额");
   return <div className="usage-panel">
     <header className="usage-intro"><div><h2>Codex 用量</h2><p>本机登录的 Codex 账号。所有 Agent 共享同一份用量。</p></div><Button size="sm" loading={busy} onClick={() => void refresh()}>刷新用量</Button></header>
     {data?.usage.main.primary && <div className="usage-summary" aria-label="Codex 当前用量">
-      <div><span>短期窗口</span><strong>{Math.round(data.usage.main.primary.usedPercent)}<small>% 已用</small></strong><div className="usage-progress" role="progressbar" aria-label="短期窗口已用" aria-valuenow={data.usage.main.primary.usedPercent} aria-valuemin={0} aria-valuemax={100}><span style={{width: `${Math.max(0, Math.min(100, data.usage.main.primary.usedPercent))}%`}}/></div></div>
-      <div><span>长期窗口</span><strong>{data.usage.main.secondary ? Math.round(data.usage.main.secondary.usedPercent) : '—'}<small>{data.usage.main.secondary ? '% 已用' : '暂不可用'}</small></strong><div className="usage-progress" role="progressbar" aria-label="长期窗口已用" aria-valuenow={data.usage.main.secondary?.usedPercent ?? 0} aria-valuemin={0} aria-valuemax={100}><span style={{width: `${Math.max(0, Math.min(100, data.usage.main.secondary?.usedPercent ?? 0))}%`}}/></div></div>
+      <div><span>{primaryLabel}</span><strong>{Math.round(data.usage.main.primary.usedPercent)}<small>% 已用</small></strong><div className="usage-progress" role="progressbar" aria-label={`${primaryLabel}已用`} aria-valuenow={data.usage.main.primary.usedPercent} aria-valuemin={0} aria-valuemax={100}><span style={{width: `${Math.max(0, Math.min(100, data.usage.main.primary.usedPercent))}%`}}/></div></div>
+      <div><span>{secondaryLabel}</span><strong>{data.usage.main.secondary ? Math.round(data.usage.main.secondary.usedPercent) : '—'}<small>{data.usage.main.secondary ? '% 已用' : '暂不可用'}</small></strong><div className="usage-progress" role="progressbar" aria-label={`${secondaryLabel}已用`} aria-valuenow={data.usage.main.secondary?.usedPercent ?? 0} aria-valuemin={0} aria-valuemax={100}><span style={{width: `${Math.max(0, Math.min(100, data.usage.main.secondary?.usedPercent ?? 0))}%`}}/></div></div>
     </div>}
     <SettingsGroup label="当前账号" footer="数据来自本机 Codex 登录账号。">
       {data ? <>
         <SettingsRow title="账号" value={profile?.displayName || "当前 Codex 账号"} />
         <SettingsRow title="套餐" value={data.usage.planType || "未提供"} />
-        <SettingsRow title="短期窗口" value={windowValue(data.usage.main.primary)} />
-        <SettingsRow title="长期窗口" value={windowValue(data.usage.main.secondary)} />
+        <SettingsRow title={primaryLabel} value={windowValue(data.usage.main.primary)} />
+        <SettingsRow title={secondaryLabel} value={windowValue(data.usage.main.secondary)} />
         {data.usage.extras.map((item, index) => <SettingsRow key={`${item.name ?? "额外限额"}-${index}`} title={item.name || "额外限额"} value={`${windowValue(item.primary)}；${windowValue(item.secondary)}`} />)}
         <SettingsRow title="最近读取" value={new Date(data.usage.fetchedAt).toLocaleString()} />
       </> : <SettingsRow title={loading ? "正在读取用量" : "用量尚未读取"} description={loading ? "请稍候。" : "在本机环境中登录 Codex 后可查看用量。"} trailing={!loading && <Button size="sm" onClick={onOpenEnvironment}>打开本机环境</Button>} />}
