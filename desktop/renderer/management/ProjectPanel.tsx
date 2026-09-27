@@ -35,7 +35,7 @@ export function ProjectStatus({ scope, request }: Pick<Props, "scope" | "request
   useEffect(() => {
     let active = true;
     setState({ kind: "loading" });
-    void request({ action: "project", ...scope })
+    void request({ action: "project", agentId: scope.agentId, groupId: scope.groupId, projectName: scope.projectName })
       .then((reply) => {
         if (!active) return;
         setState(reply.kind === "project"
