@@ -1,12 +1,12 @@
 {
   "repository": "https://github.com/modelzen/feishu-codex-bridge",
-  "sourceCommit": "8c11067fba5e2e6aae5b3f8f6d3a56771d08fcbe",
+  "sourceCommit": "805a7c2e04e54b5d68f14f5e0304a0c55174e306",
   "package": "@modelzen/feishu-codex-bridge",
   "version": "0.7.0",
-  "artifact": "0.7.0-8c11067fba5e.tgz",
-  "artifactSha256": "4921af1b892cd79e19d6162044d66a903ee658da838537a9babd5e524dc061e2",
-  "artifactIntegrity": "sha512-krUXj0CQU32FNSfeamAICF7Ogv8dI0OuWlrgTS0CMeOl4F7YaeqPXNc3asYI/XkKkSq47WYthVQ9tLtPpZUJNA==",
+  "artifact": "0.7.0-805a7c2e04e5.tgz",
+  "artifactSha256": "53ef41fa5a97cb6e3c279945100311ee13d7101b3f352df03c01e9cfb46f5524",
+  "artifactIntegrity": "sha512-y2ibgw3SX5w1YsVuyw+PUzq8ptLrR2i+J5CRfwJMzmI5wwepu3H7UoXWqQwzqYg+ZpCmHAkU/slkP+VnRpj1cg==",
   "sourceLockSha256": "653020ae14cb63b8b3e46bc7af6e39ac0b012dac4b0548d270cb608f101ffaf8",
-  "packCommand": "npm pack --ignore-scripts --json --pack-destination .audit/cli-install-core",
+  "packCommand": "npm pack --ignore-scripts --json --pack-destination .audit/disable-agent",
   "containsCompanionCapabilities": true
 }
