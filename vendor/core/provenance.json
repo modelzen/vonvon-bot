@@ -1,11 +1,11 @@
 {
   "repository": "https://github.com/modelzen/feishu-codex-bridge",
-  "sourceCommit": "9b0a8e36bb948167e10b2aaf24e62a55050741ce",
+  "sourceCommit": "ef4f9d6f769e80ec533d8df2a848bdd9b1d9a0a3",
   "package": "@modelzen/feishu-codex-bridge",
   "version": "0.7.0",
-  "artifact": "0.7.0-9b0a8e36bb94.tgz",
-  "artifactSha256": "b2c130706205f47045ca908c78bc5ff9bc8399f1fe4b78d74f2e62b0622b9c14",
-  "artifactIntegrity": "sha512-4TcXhJ9n9fGzVBIoRUm6lixtk1owY38ZTNUFzR8RNop1w/DalWgSyrKRta4yhsQLMl74sLW/MAkQ8HXJV67GUQ==",
+  "artifact": "0.7.0-ef4f9d6f769e.tgz",
+  "artifactSha256": "30ce62a8402ff7ea7aa151239963befba7c041f2bb86cc1a88be2e4e8c728a7c",
+  "artifactIntegrity": "sha512-Ga8SEvbtPLhQZRz3cWz98DiSVBR7bSQTPE/Hdh4WpW0SC/yL6Jgap0iRpr2VzFa+WEZMbIF3mGHcqzgn1o2k0Q==",
   "sourceLockSha256": "653020ae14cb63b8b3e46bc7af6e39ac0b012dac4b0548d270cb608f101ffaf8",
   "packCommand": "npm pack --ignore-scripts --json",
   "containsCompanionCapabilities": true
