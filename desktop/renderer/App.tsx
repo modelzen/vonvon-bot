@@ -42,11 +42,11 @@ import {
 import type { CollaborationView, Page } from "./collaboration-model";
 import {SettingsPanel,membershipSettingsTarget} from "./settings/SettingsPanel";
 import {DraftGuardProvider, useDraftGuard} from './settings/DraftGuard';
-import {searchEntries, settingAnchor, type SearchEntry, type Selection} from './search';
+import {agentCategories, membershipCategories, searchEntries, settingAnchor, type DetailPane, type SearchEntry, type Selection} from './search';
 import {SearchDialog} from './SearchDialog';
 import {ProjectPanel} from './management/ProjectPanel';
 import {ConversationPanel} from './management/ConversationPanel';
-import {UsagePanel} from './management/UsagePanel';
+import {ShareUsagePanel, UsagePanel} from './management/UsagePanel';
 import {EnvironmentPanel} from './management/EnvironmentPanel';
 import {MachinePanel} from './management/MachinePanel';
 import {LogPanel} from './management/LogPanel';
@@ -56,6 +56,7 @@ type Modal =
   | { kind: "register"; jobId: JobId; refresh?: boolean }
   | { kind: "join"; agentId: AgentId; group?: PendingGroup }
   | { kind: "collaboration"; membership: Membership }
+  | { kind: "shareUsage"; membership: Membership }
   | { kind: "deleteAgent"; agentId: AgentId; name: string }
   | null;
 
@@ -90,6 +91,13 @@ const agentListStatus = (agent: DesktopSnapshot["agents"][number]): { label: str
 const isActive = (job: Job) =>
   !["succeeded", "failed", "cancelled"].includes(job.phase);
 
+function DetailTabs({selected, onSelect}: {selected: 'overview' | 'settings'; onSelect: (next: 'overview' | 'settings') => void}) {
+  return <nav className="collaboration-detail-tabs" aria-label="详情视图">
+    <button type="button" aria-current={selected === 'overview' ? 'page' : undefined} className={selected === 'overview' ? 'is-selected' : ''} onClick={() => onSelect('overview')}>概览</button>
+    <button type="button" aria-current={selected === 'settings' ? 'page' : undefined} className={selected === 'settings' ? 'is-selected' : ''} onClick={() => onSelect('settings')}>设置</button>
+  </nav>;
+}
+
 export function App() {
   return <DraftGuardProvider><DesktopApp /></DraftGuardProvider>;
 }
@@ -101,6 +109,7 @@ function DesktopApp() {
   const [view, setView] = useState<CollaborationView>("agents");
   const [page, setPage] = useState<Page>("collaboration");
   const [selection, setSelection] = useState<Selection>({ kind: "overview" });
+  const [detail, setDetail] = useState<DetailPane>({kind: 'overview'});
   const [modal, setModal] = useState<Modal>(null);
   const [pending, setPending] = useState(0);
   const busy = pending > 0;
@@ -171,6 +180,7 @@ function DesktopApp() {
   function select(next: Selection) {
     navigate(() => {
       setSelection(next);
+      setDetail({kind: 'overview'});
       setPage("collaboration");
       setNotice(undefined);
     });
@@ -179,6 +189,7 @@ function DesktopApp() {
     navigate(() => {
       setView(next);
       setSelection({kind: 'overview'});
+      setDetail({kind: 'overview'});
       setPage('collaboration');
       setNotice(undefined);
     });
@@ -190,6 +201,7 @@ function DesktopApp() {
       setPage(entry.destination.page);
       if (entry.destination.view) setView(entry.destination.view);
       if (entry.destination.selection) setSelection(entry.destination.selection);
+      setDetail(entry.destination.detail ?? {kind: 'overview'});
       setFocusSection(entry.destination.section);
       setNotice(undefined);
     });
@@ -235,6 +247,7 @@ function DesktopApp() {
       ? `${agent?.name ?? ""} · ${group?.name ?? ""}`
       : (agent?.name ?? group?.name ?? (view === "agents" ? "Agent" : "群聊")),
     environment: "本机环境",
+    usage: "用量",
     application: "应用与启动",
     diagnostics: "状态与诊断",
   };
@@ -543,6 +556,8 @@ function DesktopApp() {
                       {agentListStatus(agent).label}
                     </StatusBadge>
                   </header>
+                  <DetailTabs selected={detail.kind === 'agent-settings' ? 'settings' : 'overview'} onSelect={next => navigate(() => setDetail(next === 'overview' ? {kind: 'overview'} : {kind: 'agent-settings', category: 'general'}))}/>
+                  {detail.kind !== 'agent-settings' ? <>
                   <SettingsGroup
                     label="已绑定的飞书群"
                     action={
@@ -571,7 +586,11 @@ function DesktopApp() {
                       )}
                     </div>
                   </SettingsGroup>
-                  <SettingsGroup label="Agent 身份">
+                  </> : <>
+                  <nav className="collaboration-category-nav" aria-label="Agent 设置分类">{agentCategories.map(item => <button key={item.id} type="button" aria-current={detail.category === item.id ? 'page' : undefined} className={detail.category === item.id ? 'is-selected' : ''} onClick={() => navigate(() => setDetail({kind: 'agent-settings', category: item.id}))}>{item.label}</button>)}</nav>
+                  <p className="collaboration-category-description">{agentCategories.find(item => item.id === detail.category)?.description}</p>
+                  {detail.category === 'general' && <>
+                  <SettingsGroup label="Agent 身份" id={settingAnchor('Agent 身份')}>
                     <SettingsRow
                       title="应用 ID"
                       value={<code>{agent.id}</code>}
@@ -617,13 +636,15 @@ function DesktopApp() {
                       }
                     />
                   </SettingsGroup>
-
-                  <UsagePanel key={`agent-usage-${agent.id}`} agentId={agent.id} request={window.bridge.collaboration}/>
+                  </>}
                   <SettingsPanel
                     key={`agent-${agent.id}`}
+                    scope="agent"
                     target={{ kind: "agent", botId: agent.id }}
+                    category={detail.category}
                   />
-                  <SettingsGroup
+                  {detail.category === 'access' &&
+                  <SettingsGroup id={settingAnchor('移除 Agent')}
                     label="移除 Agent"
                     footer="删除本地注册信息、凭据、群绑定、会话记录与设置。飞书开发者平台中的应用仍保留。"
                   >
@@ -656,7 +677,8 @@ function DesktopApp() {
                         </Button>
                       }
                     />
-                  </SettingsGroup>
+                  </SettingsGroup>}
+                  </>}
                 </>
               )}
               {selection.kind === "group" && group && (
@@ -699,6 +721,8 @@ function DesktopApp() {
                       <p>在 {group.name} 中的配置</p>
                     </div>
                   </header>
+                  <DetailTabs selected={detail.kind === 'membership-settings' ? 'settings' : 'overview'} onSelect={next => navigate(() => setDetail(next === 'overview' ? {kind: 'overview'} : {kind: 'membership-settings', category: 'binding'}))}/>
+                  {detail.kind !== 'membership-settings' ? <>
                   <div className="collaboration-context-links">
                     <button
                       onClick={() => select({ kind: "agent", id: agent.id })}
@@ -711,23 +735,30 @@ function DesktopApp() {
                       查看飞书群
                     </button>
                   </div>
-                  <ProjectPanel key={`manage-${member.id}`} scope={{kind: 'project', agentId: agent.id, groupId: group.id, projectName: member.name}} request={window.bridge.collaboration} onChanged={async () => {await run({type: 'refresh'});}} />
+                  <SettingsGroup label="群内协作">
+                    <SettingsRow title="工作目录" value={<code>{member.directory}</code>}/>
+                    <SettingsRow title="执行工具" value={backendName(member.backend)}/>
+                    <SettingsRow title="会话方式" value={member.conversation === 'threads' ? '按话题独立会话' : '整群连续会话'}/>
+                    <SettingsRow title="连接状态" value={member.stale ? '状态过期' : agentListStatus(agent).label}/>
+                  </SettingsGroup>
                   <ConversationPanel key={`sessions-${member.id}`} agentId={agent.id} groupId={group.id} projectName={member.name} conversation={member.conversation} request={window.bridge.collaboration}/>
-                  <UsagePanel key={`usage-${member.id}`} agentId={agent.id} project={{groupId: group.id, projectName: member.name}} request={window.bridge.collaboration}/>
+                  <SettingsGroup label="快捷操作">
+                    <SettingsRow title="飞书群" value={group.name} trailing={<Button size="sm" onClick={() => void window.bridge.collaboration({action: 'openGroup', agentId: agent.id, groupId: group.id, projectName: member.name}).then(reply => {if (reply.kind === 'refused') setNotice({message: reply.message, error: true});}).catch(error => setNotice({message: error instanceof Error ? error.message : '无法打开飞书群。', error: true}))}>在飞书打开</Button>}/>
+                    <SettingsRow title="分享 Codex 用量" description="生成可转发的用量卡片。" trailing={<Button size="sm" onClick={() => setModal({kind: 'shareUsage', membership: member})}>选择内容</Button>}/>
+                  </SettingsGroup>
+                  <div className="desktop-actions"><Button disabled={member.stale} onClick={() => setModal({kind: 'collaboration', membership: member})}>开始一次协作</Button></div>
+                  </> : <>
+                  <nav className="collaboration-category-nav" aria-label="群绑定设置分类">{membershipCategories.map(item => <button key={item.id} type="button" aria-current={detail.category === item.id ? 'page' : undefined} className={detail.category === item.id ? 'is-selected' : ''} onClick={() => navigate(() => setDetail({kind: 'membership-settings', category: item.id}))}>{item.label}</button>)}</nav>
+                  <p className="collaboration-category-description">{membershipCategories.find(item => item.id === detail.category)?.description}</p>
+                  {detail.category === 'binding' && <ProjectPanel key={`manage-${member.id}`} scope={{kind: 'project', agentId: agent.id, groupId: group.id, projectName: member.name}} request={window.bridge.collaboration} onChanged={async () => {await run({type: 'refresh'});}} />}
+                  {detail.category !== 'binding' &&
                   <SettingsPanel
                     key={`project-${member.id}`}
+                    scope="project"
                     target={membershipSettingsTarget(member)}
-                  />
-                  <div className="desktop-actions">
-                    <Button
-                      disabled={member.stale}
-                      onClick={() =>
-                        setModal({ kind: "collaboration", membership: member })
-                      }
-                    >
-                      开始一次协作
-                    </Button>
-                  </div>
+                    category={detail.category}
+                  />}
+                  </>}
                 </>
               )}
               {selection.kind !== "overview" && !member && !agent && !group && (
@@ -738,6 +769,7 @@ function DesktopApp() {
             </>
           )}
           {page === "environment" && <EnvironmentPanel codexBusy={snapshot.jobs.some(job => (job.type === "loginCodex" || job.type === "installCodex") && isActive(job))} request={window.bridge.environment} onCodexLogin={async () => {await run({type: "startCodexLogin"});}} codexJobs={snapshot.jobs.filter(job => job.type === "loginCodex" || job.type === "installCodex").map(job => <JobPanel key={job.id} job={job} run={run} busy={busy}/>)}/>}
+          {page === "usage" && <UsagePanel request={window.bridge.collaboration} onOpenEnvironment={() => openPage('environment')}/>}
           {page === "application" && (
             <>
               <SettingsGroup label="这台设备">
@@ -797,7 +829,7 @@ function DesktopApp() {
               </SettingsGroup>
               <MachinePanel request={window.bridge.machine} agents={snapshot.agents}/>
               <UpdatePanel request={window.bridge.machine} attached={host.kind === 'connected' && host.ownership === 'attached'}/>
-              <SettingsPanel target={{ kind: "host" }} />
+              <SettingsPanel scope="host" target={{ kind: "host" }} />
               <SettingsGroup
                 label="窗口与退出"
                 footer="关闭窗口会留在菜单栏或托盘继续运行。退出只停止本应用启动的 Bridge。"
@@ -891,7 +923,9 @@ function DesktopApp() {
             ? modal.refresh ? "刷新 Agent 凭据" : "注册 Agent"
             : modal?.kind === "join"
               ? "让 Agent 加入飞书群"
-              : "开始一次协作"
+              : modal?.kind === "shareUsage"
+                ? "分享 Codex 用量"
+                : "开始一次协作"
         }
       >
         <div className="page-stack">
@@ -924,6 +958,7 @@ function DesktopApp() {
               </p>
             </>
           )}
+          {modal?.kind === 'shareUsage' && <ShareUsagePanel agentId={modal.membership.agentId} project={{projectName: modal.membership.name, groupId: modal.membership.groupId}} request={window.bridge.collaboration}/>}
         </div>
       </Dialog>
       <ConfirmDialog

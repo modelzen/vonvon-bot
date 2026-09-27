@@ -67,6 +67,13 @@ export function createCollaborationService(deps: Dependencies) {
       const snapshot = deps.snapshot();
       if (snapshot.host.kind !== "connected")
         throw new CoreError("host-offline", "Bridge 服务未连接，请稍后重试。");
+      if (request.action === "usage") {
+        const response = await deps.host().request(
+          `/api/account/codex/usage${request.force ? "?force=1" : ""}`,
+          { method: "GET", signal: AbortSignal.timeout(60_000) },
+        );
+        return collaborationReplySchema.parse({kind: "usage", ...z.object({data: z.unknown()}).parse(await readJson(response))});
+      }
       if (!snapshot.agents.some((agent) => agent.id === request.agentId && !agent.readError))
         throw new CoreError("agent-unavailable", "Agent 已变更，请刷新列表后重试。");
       if ("projectName" in request) {
@@ -141,9 +148,6 @@ export function createCollaborationService(deps: Dependencies) {
           break;
         case "context":
           reply = { kind: "context", ...contextResult.parse(rawResult) };
-          break;
-        case "usage":
-          reply = collaborationReplySchema.parse({ kind: "usage", ...z.object({ data: z.unknown() }).parse(rawResult) });
           break;
         case "shareUsage":
           reply = { kind: "applied", ...shareResult.parse(rawResult) };

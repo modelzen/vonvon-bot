@@ -25,10 +25,14 @@ import {
 import "./settings.css";
 import {useDraft} from './DraftGuard';
 import {settingAnchor} from '../search';
+import type {AgentCategory, MembershipCategory} from '../search';
 
 type AgentScope = { kind: "agent"; botId: AgentId };
 type ProjectScope = { kind: "project"; botId: AgentId; projectName: string };
-type Target = AgentScope | ProjectScope | { kind: "host" };
+type PanelProps =
+  | {scope: 'agent'; target: AgentScope; category: AgentCategory}
+  | {scope: 'project'; target: ProjectScope; category: MembershipCategory}
+  | {scope: 'host'; target: {kind: 'host'}; category?: never};
 const isAgentView = (view: SettingsView): view is AgentSettingsView =>
   view.scope.kind === "agent" && "cliRuntime" in view;
 const isProjectView = (view: SettingsView): view is ProjectSettingsView =>
@@ -554,9 +558,11 @@ function ActionNotice({ message }: { message: string | undefined }) {
 function AgentPanel({
   view,
   refresh,
+  category,
 }: {
   view: AgentSettingsView;
   refresh: () => Promise<void>;
+  category: AgentCategory;
 }) {
   const [actionMessage, setActionMessage] = useState<string>();
   const [adminId, setAdminId] = useState("");
@@ -656,6 +662,7 @@ function AgentPanel({
     access = view.sections.access;
   return (
     <>
+      {category === "interaction" && <>
       <Editor
         title="任务卡片"
         section={cards}
@@ -868,6 +875,8 @@ function AgentPanel({
           }
         />
       </SettingsGroup>
+      </>}
+      {category === "cli" && <>
       <SettingsGroup
         label="CLI 协作"
         id={settingAnchor("CLI 协作")}
@@ -1183,6 +1192,8 @@ function AgentPanel({
           </>
         )}
       />
+      </>}
+      {category === "interaction" && <>
       <Catalog
         botId={view.scope.botId}
         backend={commentBackend}
@@ -1394,6 +1405,8 @@ function AgentPanel({
           />
         )}
       </Catalog>
+      </>}
+      {category === "access" && <>
       <SettingsGroup
         label="管理员"
         id={settingAnchor("管理员")}
@@ -1455,6 +1468,8 @@ function AgentPanel({
           }
         />
       </SettingsGroup>
+      </>}
+      {category === "general" && <>
       <Editor
         title="新项目默认目录"
         section={paths}
@@ -1475,6 +1490,8 @@ function AgentPanel({
           />
         )}
       />
+      </>}
+      {category === "access" && <>
       <Editor
         title="允许的飞书群"
         section={access}
@@ -1545,6 +1562,7 @@ function AgentPanel({
           </>
         )}
       />
+      </>}
       <ActionNotice message={actionMessage} />
     </>
   );
@@ -1552,9 +1570,11 @@ function AgentPanel({
 function ProjectPanel({
   view,
   refresh,
+  category,
 }: {
   view: ProjectSettingsView;
   refresh: () => Promise<void>;
+  category: MembershipCategory;
 }) {
   const [memberId, setMemberId] = useState("");
   const [notice, setNotice] = useState<string>();
@@ -1604,6 +1624,7 @@ function ProjectPanel({
     model = view.sections.model;
   return (
     <>
+      {category === "behavior" && <>
       <Editor
         title="群内响应"
         section={response}
@@ -1623,6 +1644,8 @@ function ProjectPanel({
           />
         )}
       />
+      </>}
+      {category === "access" && <>
       <Editor
         title="工作目录权限"
         section={permission}
@@ -1675,6 +1698,8 @@ function ProjectPanel({
           </>
         )}
       />
+      </>}
+      {category === "behavior" && <>
       <Editor
         title="会话压缩"
         section={compact}
@@ -1714,6 +1739,8 @@ function ProjectPanel({
           />
         )}
       </Catalog>
+      </>}
+      {category === "access" && <>
       <SettingsGroup
         label="响应成员"
         id={settingAnchor("响应成员")}
@@ -1787,7 +1814,8 @@ function ProjectPanel({
           />
         )}
       </SettingsGroup>
-      <SessionPicker view={view} />
+      </>}
+      {category === "behavior" && <SessionPicker view={view} />}
       <ActionNotice message={notice} />
     </>
   );
@@ -2094,15 +2122,17 @@ function HostPanel({
     </SettingsGroup>
   );
 }
-export function SettingsPanel({ target }: { target: Target }) {
+export function SettingsPanel(props: PanelProps) {
+  const {target} = props;
   const key = JSON.stringify([
     target.kind,
     "botId" in target ? target.botId : null,
     "projectName" in target ? target.projectName : null,
   ]);
-  return <ScopedSettingsPanel key={key} target={target} />;
+  return <ScopedSettingsPanel key={key} {...props} />;
 }
-function ScopedSettingsPanel({ target }: { target: Target }) {
+function ScopedSettingsPanel(props: PanelProps) {
+  const {target} = props;
   const [scope] = useState(target);
   const [view, setView] = useState<SettingsView>();
   const [notice, setNotice] = useState<{
@@ -2183,36 +2213,16 @@ function ScopedSettingsPanel({ target }: { target: Target }) {
       {status ?? <SettingsRow title="正在读取当前设置…" />}
     </SettingsGroup>
   );
-  const content = isAgentView(view) ? (
-    <AgentPanel view={view} refresh={refresh} />
-  ) : isProjectView(view) ? (
-    <ProjectPanel view={view} refresh={refresh} />
+  const content = isAgentView(view) && props.scope === 'agent' ? (
+    <AgentPanel view={view} refresh={refresh} category={props.category} />
+  ) : isProjectView(view) && props.scope === 'project' ? (
+    <ProjectPanel view={view} refresh={refresh} category={props.category} />
   ) : isHostView(view) ? (
     <HostPanel view={view} refresh={refresh} />
   ) : null;
   return (
     <>
-      <SettingsGroup
-        label="当前设置"
-        action={
-          <Button size="sm" onClick={() => void refresh()}>
-            重新读取
-          </Button>
-        }
-      >
-        <SettingsRow
-          title="配置范围"
-          value={
-            view.scope.kind === "agent"
-              ? "当前 Agent"
-              : view.scope.kind === "project"
-                ? "当前 Agent 在此群"
-                : view.scope.kind === "host"
-                  ? "这台设备"
-                  : "当前话题"
-          }
-        />
-      </SettingsGroup>
+      <div className="settings-scope-bar"><span>{view.scope.kind === 'agent' ? '当前 Agent' : view.scope.kind === 'project' ? '当前 Agent 在此群' : view.scope.kind === 'host' ? '这台设备' : '当前话题'}</span><Button size="sm" onClick={() => void refresh()}>重新读取</Button></div>
       {status}
       {content}
     </>

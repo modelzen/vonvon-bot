@@ -8,9 +8,8 @@ import "./usage.css";
 type Usage = Extract<CollaborationReply, { kind: "usage" }>["data"];
 type Profile = Usage["profile"];
 type Props = {
-  agentId: AgentId;
-  project?: { projectName: string; groupId: GroupId };
   request: CollaborationClient;
+  onOpenEnvironment: () => void;
 };
 
 const shareSections: { key: UsageShareSection; label: string }[] = [
@@ -60,7 +59,7 @@ function Heatmap({ profile }: { profile: Profile }) {
   </div>;
 }
 
-export function UsagePanel({ agentId, project, request }: Props) {
+export function UsagePanel({ request, onOpenEnvironment }: Props) {
   const requestRef = useRef(request);
   requestRef.current = request;
   const [data, setData] = useState<Usage>();
@@ -68,36 +67,75 @@ export function UsagePanel({ agentId, project, request }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [sections, setSections] = useState<UsageShareSection[]>([]);
 
   useEffect(() => {
     let active = true;
     setLoading(true);
     setData(undefined);
     setError("");
-    void requestRef.current({ action: "usage", agentId, force: false }).then(reply => {
+    void requestRef.current({ action: "usage", force: false }).then(reply => {
       if (!active) return;
       if (reply.kind === "usage") setData(reply.data);
       else setError(reply.kind === "refused" ? reply.message : "无法读取 Codex 用量。");
     }).catch((failure: unknown) => { if (active) setError(failure instanceof Error ? failure.message : "无法读取 Codex 用量。"); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [agentId]);
+  }, []);
 
   async function refresh() {
     setBusy(true);
     setError("");
     setNotice("");
     try {
-      const reply = await request({ action: "usage", agentId, force: true });
+      const reply = await request({ action: "usage", force: true });
       if (reply.kind === "usage") { setData(reply.data); setNotice("用量已刷新。"); }
       else setError(reply.kind === "refused" ? reply.message : "无法读取 Codex 用量。");
     } catch (failure) { setError(failure instanceof Error ? failure.message : "无法刷新 Codex 用量。"); }
     finally { setBusy(false); }
   }
 
+  const profile = data?.profile;
+  return <div className="usage-panel">
+    <header className="usage-intro"><div><h2>Codex 用量</h2><p>本机登录的 Codex 账号。所有 Agent 共享同一份用量。</p></div><Button size="sm" loading={busy} onClick={() => void refresh()}>刷新用量</Button></header>
+    {data?.usage.main.primary && <div className="usage-summary" aria-label="Codex 当前用量">
+      <div><span>短期窗口</span><strong>{Math.round(data.usage.main.primary.usedPercent)}<small>% 已用</small></strong><div className="usage-progress" role="progressbar" aria-label="短期窗口已用" aria-valuenow={data.usage.main.primary.usedPercent} aria-valuemin={0} aria-valuemax={100}><span style={{width: `${Math.max(0, Math.min(100, data.usage.main.primary.usedPercent))}%`}}/></div></div>
+      <div><span>长期窗口</span><strong>{data.usage.main.secondary ? Math.round(data.usage.main.secondary.usedPercent) : '—'}<small>{data.usage.main.secondary ? '% 已用' : '暂不可用'}</small></strong><div className="usage-progress" role="progressbar" aria-label="长期窗口已用" aria-valuenow={data.usage.main.secondary?.usedPercent ?? 0} aria-valuemin={0} aria-valuemax={100}><span style={{width: `${Math.max(0, Math.min(100, data.usage.main.secondary?.usedPercent ?? 0))}%`}}/></div></div>
+    </div>}
+    <SettingsGroup label="当前账号" footer="数据来自本机 Codex 登录账号。">
+      {data ? <>
+        <SettingsRow title="账号" value={profile?.displayName || "当前 Codex 账号"} />
+        <SettingsRow title="套餐" value={data.usage.planType || "未提供"} />
+        <SettingsRow title="短期窗口" value={windowValue(data.usage.main.primary)} />
+        <SettingsRow title="长期窗口" value={windowValue(data.usage.main.secondary)} />
+        {data.usage.extras.map((item, index) => <SettingsRow key={`${item.name ?? "额外限额"}-${index}`} title={item.name || "额外限额"} value={`${windowValue(item.primary)}；${windowValue(item.secondary)}`} />)}
+        <SettingsRow title="最近读取" value={new Date(data.usage.fetchedAt).toLocaleString()} />
+      </> : <SettingsRow title={loading ? "正在读取用量" : "用量尚未读取"} description={loading ? "请稍候。" : "在本机环境中登录 Codex 后可查看用量。"} trailing={!loading && <Button size="sm" onClick={onOpenEnvironment}>打开本机环境</Button>} />}
+      {error && <InlineNotice title="用量读取失败" tone="warning">{error}</InlineNotice>}
+      {notice && <InlineNotice title="用量操作完成">{notice}</InlineNotice>}
+    </SettingsGroup>
+    {profile && <>
+      <SettingsGroup label="每日活动"><Heatmap profile={profile} /></SettingsGroup>
+      <details className="usage-details"><summary>查看详细活动统计</summary>
+      <SettingsGroup label="活动统计" footer={profile.statsAsOf ? `统计截至 ${profile.statsAsOf}` : undefined}>
+        {profileStats(profile).map(item => <SettingsRow key={item.label} title={item.label} value={item.value} />)}
+        <SettingsRow title="会话总数" value={amount(profile.totalThreads)} />
+        <SettingsRow title="技能调用总数" value={amount(profile.totalSkillsUsed)} />
+        <SettingsRow title="不同技能数" value={amount(profile.uniqueSkillsUsed)} />
+        <SettingsRow title="Fast Mode 占比" value={profile.fastModePct === undefined ? "未提供" : `${Math.round(profile.fastModePct)}%`} />
+        <SettingsRow title="常用推理强度" value={profile.mostUsedEffort ? `${profile.mostUsedEffort}${profile.mostUsedEffortPct === undefined ? "" : ` · ${Math.round(profile.mostUsedEffortPct)}%`}` : "未提供"} />
+        {profile.topInvocations.map(item => <SettingsRow key={`${item.kind}:${item.name}`} title={`${item.kind === "plugin" ? "插件" : "技能"} · ${item.name}`} value={`${amount(item.count)} 次`} />)}
+      </SettingsGroup>
+      </details>
+    </>}
+  </div>;
+}
+
+export function ShareUsagePanel({agentId, project, request}: {agentId: AgentId; project: {projectName: string; groupId: GroupId}; request: CollaborationClient}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [sections, setSections] = useState<UsageShareSection[]>([]);
   async function share() {
-    if (!project) return;
     setBusy(true);
     setError("");
     setNotice("");
@@ -108,41 +146,16 @@ export function UsagePanel({ agentId, project, request }: Props) {
     } catch (failure) { setError(failure instanceof Error ? failure.message : "无法生成用量卡片。"); }
     finally { setBusy(false); }
   }
-
-  const profile = data?.profile;
-  return <div className="usage-panel">
-    <SettingsGroup label="Codex 用量" action={<Button size="sm" loading={busy} onClick={() => void refresh()}>刷新</Button>} footer="用量来自本机 Codex 登录账号。">
-      {data ? <>
-        <SettingsRow title="账号" value={profile?.displayName || "当前 Codex 账号"} />
-        <SettingsRow title="套餐" value={data.usage.planType || "未提供"} />
-        <SettingsRow title="短期窗口" value={windowValue(data.usage.main.primary)} />
-        <SettingsRow title="长期窗口" value={windowValue(data.usage.main.secondary)} />
-        {data.usage.extras.map((item, index) => <SettingsRow key={`${item.name ?? "额外限额"}-${index}`} title={item.name || "额外限额"} value={`${windowValue(item.primary)}；${windowValue(item.secondary)}`} />)}
-        <SettingsRow title="最近读取" value={new Date(data.usage.fetchedAt).toLocaleString()} />
-      </> : <SettingsRow title={loading ? "正在读取用量" : "用量尚未读取"} description={loading ? "请稍候。" : "登录 Codex 后可查看本机账号用量。"} />}
-      {error && <InlineNotice title="用量读取失败" tone="warning">{error}</InlineNotice>}
-      {notice && <InlineNotice title="用量操作完成">{notice}</InlineNotice>}
-    </SettingsGroup>
-    {profile && <>
-      <SettingsGroup label="活动统计" footer={profile.statsAsOf ? `统计截至 ${profile.statsAsOf}` : undefined}>
-        {profileStats(profile).map(item => <SettingsRow key={item.label} title={item.label} value={item.value} />)}
-        <SettingsRow title="会话总数" value={amount(profile.totalThreads)} />
-        <SettingsRow title="技能调用总数" value={amount(profile.totalSkillsUsed)} />
-        <SettingsRow title="不同技能数" value={amount(profile.uniqueSkillsUsed)} />
-        <SettingsRow title="Fast Mode 占比" value={profile.fastModePct === undefined ? "未提供" : `${Math.round(profile.fastModePct)}%`} />
-        <SettingsRow title="常用推理强度" value={profile.mostUsedEffort ? `${profile.mostUsedEffort}${profile.mostUsedEffortPct === undefined ? "" : ` · ${Math.round(profile.mostUsedEffortPct)}%`}` : "未提供"} />
-        {profile.topInvocations.map(item => <SettingsRow key={`${item.kind}:${item.name}`} title={`${item.kind === "plugin" ? "插件" : "技能"} · ${item.name}`} value={`${amount(item.count)} 次`} />)}
-      </SettingsGroup>
-      <SettingsGroup label="每日活动"><Heatmap profile={profile} /></SettingsGroup>
-    </>}
-    {project && <SettingsGroup label="分享到飞书群" footer="生成后可在飞书中转发。不选区块则包含全部内容。">
+  return <div className="usage-panel"><SettingsGroup label="分享到飞书群" footer="生成后可在飞书中转发。不选区块则包含全部内容。">
       <div className="usage-sections" role="group" aria-label="选择分享内容">
         {shareSections.map(option => <label key={option.key} className="usage-sections__item">
           <input type="checkbox" checked={sections.includes(option.key)} onChange={event => setSections(current => event.target.checked ? [...current, option.key] : current.filter(key => key !== option.key))} />
           {option.label}
         </label>)}
       </div>
-      <SettingsRow title="当前飞书群" value={project.projectName} trailing={<Button size="sm" disabled={busy || !data} onClick={() => void share()}>生成分享卡</Button>} />
-    </SettingsGroup>}
+      <SettingsRow title="当前飞书群" value={project.projectName} trailing={<Button size="sm" disabled={busy} onClick={() => void share()}>生成分享卡</Button>} />
+      {error && <InlineNotice title="分享未完成" tone="warning">{error}</InlineNotice>}
+      {notice && <InlineNotice title="分享完成">{notice}</InlineNotice>}
+    </SettingsGroup>
   </div>;
 }
