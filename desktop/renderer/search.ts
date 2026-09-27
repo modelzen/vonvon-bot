@@ -95,17 +95,19 @@ export function searchEntries(snapshot: DesktopSnapshot): SearchEntry[] {
   for (const agent of snapshot.agents) {
     const base: Destination = {page: 'collaboration', view: 'agents', selection: {kind: 'agent', id: agent.id}};
     entries.push({id: agent.id, title: agent.name, context: 'Agent', aliases: [agent.id], destination: base, kind: 'item'});
-    entries.push(...expand(agent.id, agent.name, base, agentGroups, category => ({kind: 'agent-settings', category})));
+    entries.push(...agentCategories.map(category => ({id: `${agent.id}-category-${category.id}`, title: category.id === 'access' ? 'Agent 权限' : `Agent 设置 · ${category.label}`, context: `Agent 设置 · ${agent.name}`, aliases: [category.label], destination: {...base, detail: {kind: 'agent-settings' as const, category: category.id}}, kind: 'setting' as const})));
+    entries.push(...expand(agent.id, `Agent 设置 · ${agent.name}`, base, agentGroups, category => ({kind: 'agent-settings', category})));
   }
   for (const group of snapshot.groups) entries.push({id: group.id, title: group.name, context: '飞书群', aliases: [group.id], destination: {page: 'collaboration', view: 'groups', selection: {kind: 'group', id: group.id}}, kind: 'item'});
   const agents = new Map(snapshot.agents.map(agent => [agent.id, agent]));
   const groups = new Map(snapshot.groups.map(group => [group.id, group]));
   for (const member of snapshot.memberships) {
-    const context = [agents.get(member.agentId)?.name ?? member.agentId, groups.get(member.groupId)?.name ?? member.name, member.name, member.directory].join(' · ');
+    const context = `群内设置 · ${groups.get(member.groupId)?.name ?? member.name} · ${agents.get(member.agentId)?.name ?? member.agentId} · 本地绑定 ${member.name} · ${member.directory}`;
     const base: Destination = {page: 'collaboration', view: 'groups', selection: {kind: 'membership', id: member.id}};
     entries.push({id: member.id, title: member.name, context, aliases: [member.directory, member.backend], destination: base, kind: 'item'});
+    entries.push(...membershipCategories.map(category => ({id: `${member.id}-category-${category.id}`, title: category.id === 'access' ? '群内权限' : `群内设置 · ${category.label}`, context, aliases: [category.label], destination: {...base, detail: {kind: 'membership-settings' as const, category: category.id}}, kind: 'setting' as const})));
     entries.push(...expand(member.id, context, base, membershipGroups, category => ({kind: 'membership-settings', category})));
-    ['搜索历史会话', '筛选历史会话', '恢复会话', '当前会话上下文', '刷新上下文', '清空会话', '压缩上下文', '自主任务目标', '停止当前任务', '结束目标', '完成时提醒'].forEach((title, index) => entries.push({id: `${member.id}-session-${index}`, title, context: `${context} · 当前会话`, aliases: ({'搜索历史会话': ['搜索'], '筛选历史会话': ['筛选'], '当前会话上下文': ['会话', '上下文'], '清空会话': ['会话操作'], '完成时提醒': ['正在运行']} as Record<string, string[]>)[title] ?? [], destination: {...base, section: '会话管理', field: ({'搜索历史会话': '搜索', '筛选历史会话': '筛选', '当前会话上下文': '上下文', '清空会话': '会话操作', '压缩上下文': '会话操作', '停止当前任务': '正在运行', '结束目标': '正在运行'} as Record<string, string>)[title] ?? title, guide: '进入概览中的「会话管理」，选择会话后可执行此操作。'}, kind: 'action'}));
+    ['搜索历史会话', '筛选历史会话', '恢复会话', '当前会话上下文', '刷新上下文', '清空会话', '压缩上下文', '自主任务目标', '停止当前任务', '结束目标', '完成时提醒'].forEach((title, index) => entries.push({id: `${member.id}-session-${index}`, title, context: `${context} · 当前会话`, aliases: ({'搜索历史会话': ['搜索'], '筛选历史会话': ['筛选'], '当前会话上下文': ['会话', '上下文'], '清空会话': ['会话操作'], '完成时提醒': ['正在运行']} as Record<string, string[]>)[title] ?? [], destination: {...base, section: '会话管理', field: ({'搜索历史会话': '搜索', '筛选历史会话': '筛选', '当前会话上下文': '上下文', '清空会话': '会话操作', '压缩上下文': '会话操作', '停止当前任务': '正在运行', '结束目标': '正在运行'} as Record<string, string>)[title] ?? title, guide: '进入「会话与状态」中的「会话管理」，选择会话后可执行此操作。'}, kind: 'action'}));
     entries.push({id: `${member.id}-connection`, title: 'Agent 连接', context, aliases: [], destination: base, kind: 'item'});
     entries.push({id: `${member.id}-share-usage`, title: '分享 Codex 用量', context, aliases: [], destination: base, kind: 'action'});
   }

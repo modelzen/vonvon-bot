@@ -42,7 +42,8 @@ import {
 import type { CollaborationView, Page } from "./collaboration-model";
 import {SettingsPanel,membershipSettingsTarget} from "./settings/SettingsPanel";
 import {DraftGuardProvider, useDraftGuard} from './settings/DraftGuard';
-import {agentCategories, membershipCategories, searchEntries, settingAnchor, type Destination, type DetailPane, type SearchEntry, type Selection} from './search';
+import {agentCategories, membershipCategories, searchEntries, settingAnchor, type Destination, type SearchEntry, type Selection} from './search';
+import {initialRoute, openMembership, routeBack, routeDetail, routeFromSearch, routeSelection, routeView, type AgentPane, type CollaborationRoute, type MembershipPane} from './collaboration-navigation';
 import {SearchDialog} from './SearchDialog';
 import {flushSync} from 'react-dom';
 import {ProjectPanel, ProjectStatus} from './management/ProjectPanel';
@@ -92,10 +93,10 @@ const agentListStatus = (agent: DesktopSnapshot["agents"][number]): { label: str
 const isActive = (job: Job) =>
   !["succeeded", "failed", "cancelled"].includes(job.phase);
 
-function DetailTabs({selected, onSelect}: {selected: 'overview' | 'settings'; onSelect: (next: 'overview' | 'settings') => void}) {
+function DetailTabs({selected, onSelect, first, second}: {selected: 'overview' | 'settings'; onSelect: (next: 'overview' | 'settings') => void; first: string; second: string}) {
   return <nav className="collaboration-detail-tabs" aria-label="详情视图">
-    <button type="button" aria-current={selected === 'overview' ? 'page' : undefined} className={selected === 'overview' ? 'is-selected' : ''} onClick={() => onSelect('overview')}>概览</button>
-    <button type="button" aria-current={selected === 'settings' ? 'page' : undefined} className={selected === 'settings' ? 'is-selected' : ''} onClick={() => onSelect('settings')}>设置</button>
+    <button type="button" aria-current={selected === 'overview' ? 'page' : undefined} className={selected === 'overview' ? 'is-selected' : ''} onClick={() => onSelect('overview')}>{first}</button>
+    <button type="button" aria-current={selected === 'settings' ? 'page' : undefined} className={selected === 'settings' ? 'is-selected' : ''} onClick={() => onSelect('settings')}>{second}</button>
   </nav>;
 }
 
@@ -107,10 +108,11 @@ function DesktopApp() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchTarget, setSearchTarget] = useState<Destination>();
   const [snapshot, setSnapshot] = useState<DesktopSnapshot>();
-  const [view, setView] = useState<CollaborationView>("agents");
+  const [route, setRoute] = useState<CollaborationRoute>(initialRoute);
   const [page, setPage] = useState<Page>("collaboration");
-  const [selection, setSelection] = useState<Selection>({ kind: "overview" });
-  const [detail, setDetail] = useState<DetailPane>({kind: 'overview'});
+  const view = routeView(route);
+  const selection = routeSelection(route);
+  const detail = routeDetail(route);
   const [modal, setModal] = useState<Modal>(null);
   const [pending, setPending] = useState(0);
   const busy = pending > 0;
@@ -193,32 +195,49 @@ function DesktopApp() {
     }
   }
   function select(next: Selection) {
+    if (!snapshot) return;
     navigate(() => {
-      setSelection(next);
-      setDetail({kind: 'overview'});
+      setRoute(current => next.kind === 'overview'
+        ? {kind: 'list', view: routeView(current)}
+        : next.kind === 'agent'
+          ? {kind: 'agent', id: next.id, pane: {kind: 'groups'}}
+          : next.kind === 'group'
+            ? {kind: 'group', id: next.id}
+            : openMembership(current, next.id, snapshot));
       setPage("collaboration");
       setNotice(undefined);
     });
   }
+  function changeRoute(next: (current: CollaborationRoute) => CollaborationRoute) {
+    navigate(() => {
+      setRoute(next);
+      setPage('collaboration');
+      setNotice(undefined);
+    });
+  }
+  function agentPane(pane: AgentPane) {
+    changeRoute(current => current.kind === 'agent' ? {...current, pane} : current);
+  }
+  function membershipPane(pane: MembershipPane) {
+    changeRoute(current => current.kind === 'membership' ? {...current, pane} : current);
+  }
   function openList(next: CollaborationView) {
     navigate(() => {
-      setView(next);
-      setSelection({kind: 'overview'});
-      setDetail({kind: 'overview'});
+      setRoute({kind: 'list', view: next});
       setPage('collaboration');
       setNotice(undefined);
     });
   }
   function openPage(next: Page) { navigate(() => setPage(next)); }
   function openSearchResult(entry: SearchEntry) {
+    if (!snapshot) return;
     flushSync(() => setSearchOpen(false));
     navigate(() => {
       setPage(entry.destination.page);
-      if (entry.destination.view) setView(entry.destination.view);
-      if (entry.destination.selection) setSelection(entry.destination.selection);
-      setDetail(entry.destination.detail ?? {kind: 'overview'});
-      setSearchTarget(entry.destination.section ? entry.destination : undefined);
-      setNotice(undefined);
+      const target = routeFromSearch(entry.destination, snapshot);
+      if (target) setRoute(target.route);
+      setSearchTarget(target?.missing ? undefined : entry.destination.section ? entry.destination : undefined);
+      setNotice(target?.missing ? {message: target.missing, error: false} : undefined);
     });
   }
   async function register(agentId?: AgentId) {
@@ -259,7 +278,7 @@ function DesktopApp() {
         : undefined;
   const titles: Record<Page, string> = {
     collaboration: member
-      ? `${agent?.name ?? ""} · ${group?.name ?? ""}`
+      ? `${group?.name ?? '飞书群'} · ${agent?.name ?? 'Agent'}`
       : (agent?.name ?? group?.name ?? (view === "agents" ? "Agent" : "群聊")),
     environment: "本机环境",
     usage: "用量",
@@ -272,6 +291,11 @@ function DesktopApp() {
     modal?.kind === "register"
       ? snapshot.jobs.find((job) => job.id === modal.jobId)
       : undefined;
+  const parentLabel = route.kind === 'membership'
+    ? route.parent.kind === 'agent'
+      ? snapshot.agents.find(item => item.id === route.parent.id)?.name ?? 'Agent'
+      : snapshot.groups.find(item => item.id === route.parent.id)?.name ?? '群聊'
+    : route.kind === 'agent' ? 'Agent 列表' : '群聊列表';
   function membershipRows(
     members: Membership[],
     perspective: CollaborationView,
@@ -294,6 +318,7 @@ function DesktopApp() {
             <small>
               {backendName(m.backend)} ·{" "}
               {m.conversation === "threads" ? "按话题独立会话" : "整群连续会话"}
+              {' '}· 查看群内协作
             </small>
           </span>
           <span className="settings-entity-row__value">
@@ -328,13 +353,23 @@ function DesktopApp() {
         onNavigate={openPage}
         onSearch={() => setSearchOpen(true)}
         onOpenList={openList}
+        backLabel={`返回 ${parentLabel}`}
         onBack={
-          page === "collaboration" && selection.kind !== "overview"
-            ? () => select({ kind: "overview" })
+          page === "collaboration" && route.kind !== 'list'
+            ? () => changeRoute(routeBack)
             : undefined
         }
       >
         <div className="page-stack">
+          {page === 'collaboration' && route.kind !== 'list' && <nav className="collaboration-breadcrumb" aria-label="当前位置">
+            <button type="button" onClick={() => openList(view)}>{view === 'agents' ? 'Agent' : '群聊'}</button>
+            <ChevronRight size={12} aria-hidden="true" />
+            {route.kind === 'membership' && <>
+              <button type="button" onClick={() => changeRoute(routeBack)}>{parentLabel}</button>
+              <ChevronRight size={12} aria-hidden="true" />
+            </>}
+            <span aria-current="page">{route.kind === 'membership' ? route.parent.kind === 'agent' ? group?.name ?? '飞书群' : agent?.name ?? 'Agent' : agent?.name ?? group?.name ?? '内容已变化'}</span>
+          </nav>}
           {pendingGroups.map(page => {
             const owner = snapshot.agents.find(item => item.id === page.agentId);
             if (!owner || (!page.groups.length && page.problem?.kind !== 'failed')) return null;
@@ -375,7 +410,7 @@ function DesktopApp() {
           )}
           {page === "collaboration" && (
             <>
-              {host.kind === "connected" &&
+              {route.kind === 'list' && host.kind === "connected" &&
                 host.ownership === "attached" &&
                 attachedNotice && (
                   <InlineNotice
@@ -392,7 +427,7 @@ function DesktopApp() {
                     已有 Agent 与群配置继续保留。关闭本应用不会停止原有服务。
                   </InlineNotice>
                 )}
-              {!snapshot.agents.length && (
+              {route.kind === 'list' && !snapshot.agents.length && (
                 <SettingsGroup
                   label="开始第一次协作"
                   footer="配置完成后，请在飞书群发送真实任务并查看回复。"
@@ -562,6 +597,7 @@ function DesktopApp() {
                   <header className="collaboration-profile">
                     <AgentAvatar agent={agent} large />
                     <div>
+                      <span className="collaboration-profile__kind">Agent</span>
                       <h2>{agent.name}</h2>
                       <p>通过飞书机器人身份参与协作</p>
                     </div>
@@ -571,10 +607,10 @@ function DesktopApp() {
                       {agentListStatus(agent).label}
                     </StatusBadge>
                   </header>
-                  <DetailTabs selected={detail.kind === 'agent-settings' ? 'settings' : 'overview'} onSelect={next => navigate(() => setDetail(next === 'overview' ? {kind: 'overview'} : {kind: 'agent-settings', category: 'general'}))}/>
+                  <DetailTabs first="已加入的群聊" second="Agent 设置" selected={detail.kind === 'agent-settings' ? 'settings' : 'overview'} onSelect={next => agentPane(next === 'overview' ? {kind: 'groups'} : {kind: 'settings', category: 'general'})}/>
                   {detail.kind !== 'agent-settings' ? <>
                   <SettingsGroup
-                    label="已绑定的飞书群"
+                    label="已加入的飞书群"
                     action={
                       <Button
                         size="sm"
@@ -602,7 +638,8 @@ function DesktopApp() {
                     </div>
                   </SettingsGroup>
                   </> : <>
-                  <nav className="collaboration-category-nav" aria-label="Agent 设置分类">{agentCategories.map(item => <button key={item.id} type="button" aria-current={detail.category === item.id ? 'page' : undefined} className={detail.category === item.id ? 'is-selected' : ''} onClick={() => navigate(() => setDetail({kind: 'agent-settings', category: item.id}))}>{item.label}</button>)}</nav>
+                  <p className="collaboration-scope-note">这里管理 {agent.name} 的身份、运行与通知。群内工作目录和响应方式在对应飞书群中设置。</p>
+                  <nav className="collaboration-category-nav" aria-label="Agent 设置分类">{agentCategories.map(item => <button key={item.id} type="button" aria-current={detail.category === item.id ? 'page' : undefined} className={detail.category === item.id ? 'is-selected' : ''} onClick={() => agentPane({kind: 'settings', category: item.id})}>{item.id === 'access' ? 'Agent 权限' : item.label}</button>)}</nav>
                   <p className="collaboration-category-description">{agentCategories.find(item => item.id === detail.category)?.description}</p>
                   {detail.category === 'general' && <>
                   <SettingsGroup label="Agent 身份" id={settingAnchor('Agent 身份')}>
@@ -702,6 +739,7 @@ function DesktopApp() {
                   <header className="collaboration-profile">
                     <GroupAvatar group={group} large />
                     <div>
+                      <span className="collaboration-profile__kind">飞书群</span>
                       <h2>{group.name}</h2>
                       <p>
                         本地绑定名称 ·{" "}
@@ -714,7 +752,7 @@ function DesktopApp() {
                       </p>
                     </div>
                   </header>
-                  <SettingsGroup label="Vonvon 注册的机器人">
+                  <SettingsGroup label="这个群中的 Agent">
                     {membershipRows(
                       snapshot.memberships.filter(
                         (m) => m.groupId === group.id,
@@ -731,26 +769,21 @@ function DesktopApp() {
               {member && agent && group && (
                 <>
                   <header className="collaboration-profile">
-                    <AgentAvatar agent={agent} large />
+                    <GroupAvatar group={group} large />
                     <div>
-                      <h2>{agent.name}</h2>
-                      <p>在 {group.name} 中的配置</p>
+                      <span className="collaboration-profile__kind">群内协作</span>
+                      <h2>{group.name}</h2>
+                      {member.name !== group.name && <p>绑定名称：{member.name}</p>}
                     </div>
                   </header>
-                  <DetailTabs selected={detail.kind === 'membership-settings' ? 'settings' : 'overview'} onSelect={next => navigate(() => setDetail(next === 'overview' ? {kind: 'overview'} : {kind: 'membership-settings', category: 'binding'}))}/>
-                  {detail.kind !== 'membership-settings' ? <>
-                  <div className="collaboration-context-links">
-                    <button
-                      onClick={() => select({ kind: "agent", id: agent.id })}
-                    >
-                      查看 Agent
-                    </button>
-                    <button
-                      onClick={() => select({ kind: "group", id: group.id })}
-                    >
-                      查看飞书群
-                    </button>
+                  <div className="collaboration-member-context">
+                    <AgentAvatar agent={agent} />
+                    <span><strong>{agent.name}</strong><small>此 Agent 在本群内协作</small></span>
+                    <button type="button" onClick={() => changeRoute(() => ({kind: 'agent', id: agent.id, pane: {kind: 'settings', category: 'general'}}))}>Agent 设置</button>
+                    <button type="button" onClick={() => changeRoute(() => ({kind: 'group', id: group.id}))}>查看飞书群</button>
                   </div>
+                  <DetailTabs first="会话与状态" second="群内设置" selected={detail.kind === 'membership-settings' ? 'settings' : 'overview'} onSelect={next => membershipPane(next === 'overview' ? {kind: 'activity'} : {kind: 'settings', category: 'binding'})}/>
+                  {detail.kind !== 'membership-settings' ? <>
                   <SettingsGroup label="群内协作">
                     <SettingsRow title="工作目录" value={<code>{member.directory}</code>}/>
                     <SettingsRow title="执行工具" value={backendName(member.backend)}/>
@@ -765,7 +798,8 @@ function DesktopApp() {
                   </SettingsGroup>
                   <div className="desktop-actions"><Button disabled={member.stale} onClick={() => setModal({kind: 'collaboration', membership: member})}>开始一次协作</Button></div>
                   </> : <>
-                  <nav className="collaboration-category-nav" aria-label="群绑定设置分类">{membershipCategories.map(item => <button key={item.id} type="button" aria-current={detail.category === item.id ? 'page' : undefined} className={detail.category === item.id ? 'is-selected' : ''} onClick={() => navigate(() => setDetail({kind: 'membership-settings', category: item.id}))}>{item.label}</button>)}</nav>
+                  <p className="collaboration-scope-note">这里只配置 {agent.name} 在 {group.name} 中的工作目录、响应方式和权限。</p>
+                  <nav className="collaboration-category-nav" aria-label="群内设置分类">{membershipCategories.map(item => <button key={item.id} type="button" aria-current={detail.category === item.id ? 'page' : undefined} className={detail.category === item.id ? 'is-selected' : ''} onClick={() => membershipPane({kind: 'settings', category: item.id})}>{item.id === 'access' ? '群内权限' : item.label}</button>)}</nav>
                   <p className="collaboration-category-description">{membershipCategories.find(item => item.id === detail.category)?.description}</p>
                   {detail.category === 'binding' && <ProjectPanel key={`manage-${member.id}`} scope={{kind: 'project', agentId: agent.id, groupId: group.id, projectName: member.name}} request={window.bridge.collaboration} onChanged={async () => {await run({type: 'refresh'});}} />}
                   {detail.category !== 'binding' &&
@@ -778,9 +812,9 @@ function DesktopApp() {
                   </>}
                 </>
               )}
-              {selection.kind !== "overview" && !member && !agent && !group && (
+              {((route.kind === 'agent' && !agent) || (route.kind === 'group' && !group) || (route.kind === 'membership' && (!member || !agent || !group))) && (
                 <InlineNotice title="内容暂不可用">
-                  这个项目可能已经变更。请返回列表并刷新。
+                  {route.kind === 'membership' ? '这条群内协作或关联的 Agent、飞书群已变化。请返回上一级并刷新。' : '这个 Agent 或飞书群已变化。请返回列表并刷新。'}
                 </InlineNotice>
               )}
             </>
