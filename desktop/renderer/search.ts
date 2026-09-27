@@ -6,7 +6,6 @@ export type Selection = {kind: 'overview'} | {kind: 'agent'; id: AgentId} | {kin
 export const agentCategories = [
   {id: 'general', label: '常规', description: '身份、启用状态与默认目录'},
   {id: 'interaction', label: '交互与通知', description: '任务卡片、提醒与飞书内容'},
-  {id: 'cli', label: 'CLI 协作', description: '本机 CLI 活动与通知'},
   {id: 'access', label: '权限', description: '管理员与允许的飞书群'},
 ] as const;
 export const membershipCategories = [
@@ -31,11 +30,6 @@ const agentGroups: readonly Group<AgentCategory>[] = [
   {title: '运行策略', category: 'interaction', fields: [item('最大并发任务'), item('当前运行并发'), item('空闲超时（秒，0 为关闭）', ['空闲超时']), item('运行中收到新消息', ['待处理消息策略', 'steer', 'queue'])]},
   {title: '任务结束提醒', category: 'interaction', fields: [item('提醒方式'), item('长任务阈值（分钟）', ['长任务阈值'], {guide: '先将提醒方式设为「长任务」，即可调整阈值。'})]},
   {title: '语音转文字', category: 'interaction', fields: [item('启用语音', ['语音识别']), item('权限与测试'), item('重新检测'), item('测试语音', [], {field: '测试'})]},
-  {title: 'CLI 协作', category: 'cli', fields: [item('转发本机 CLI 活动'), item('Claude Hook'), item('Codex Hook'), item('修复 Hook')]},
-  {title: 'CLI 通知设置', category: 'cli', fields: [
-    item('通知范围'), item('转发 Claude'), item('转发 Codex'), item('离开时保活'),
-    ...['转发权限审批', '审批超时（秒）', '发送任务完成卡', '允许从完成卡续聊', '续聊等待（秒）', '本会话放行缓存', '在场检测', '在场检测平台', '离开判定（秒）'].map(title => item(title, [], {reveal: 'cli-advanced'})),
-  ]},
   {title: '云文档评论', category: 'interaction', fields: [item('执行工具'), item('模型'), item('推理强度', [], {guide: '先选择一个具体模型，再调整推理强度。'})]},
   {title: '评论回复规则', category: 'interaction', fields: [item('评论规则文本', ['提示词', 'instructions'], {field: '评论回复规则'}), item('保存规则', ['保存评论规则']), item('恢复默认', ['恢复默认评论规则'])]},
   {title: '新会话标题', category: 'interaction', fields: [item('执行工具', ['标题执行工具']), item('用模型生成标题'), item('自定义模型 ID', ['标题模型 ID'], {guide: '先打开「用模型生成标题」，即可设置模型 ID。'}), item('推理强度', ['标题推理强度'], {guide: '先打开「用模型生成标题」，即可设置推理强度。'})]},
@@ -55,6 +49,10 @@ const membershipGroups: readonly Group<MembershipCategory>[] = [
   {title: '话题模型', category: 'behavior', fields: [item('选择话题'), item('话题身份', [], {field: '选择话题', guide: '选择话题后可以查看身份。'}), item('本话题模型', [], {field: '选择话题', guide: '先选择话题，再设置该话题的模型。'}), item('推理强度', ['话题推理强度'], {field: '选择话题', guide: '先选择话题并选定具体模型，再调整推理强度。'})]},
 ];
 const globalGroups: readonly {page: Page; section: string; fields: readonly Target[]}[] = [
+  {page: 'environment', section: '咖啡一下', fields: [item('咖啡一下', [], {field: '通知 Agent'}), item('通知 Agent'), item('当前规则来自', ['候选规则来自']), item('通知状态')]},
+  {page: 'environment', section: '本机 Hook', fields: [item('本机 Hook', [], {field: 'Codex Hook'}), item('Codex Hook', ['修复 Codex Hook']), item('Claude Hook', ['修复 Claude Hook'])]},
+  {page: 'environment', section: 'CLI 转发', fields: [item('CLI 转发', [], {field: '转发本机 CLI 活动', guide: '请先选择通知 Agent；规则属于所选 Agent。'}), item('转发本机 CLI 活动', [], {guide: '请先选择通知 Agent；规则属于所选 Agent。'})]},
+  {page: 'environment', section: 'CLI 通知设置', fields: [item('CLI 通知设置', [], {field: '通知范围', guide: '请先选择通知 Agent；规则属于所选 Agent。'}), ...['通知范围', '转发 Claude', '转发 Codex', '离开时保活'].map(title => item(title, [], {guide: '请先选择通知 Agent；规则属于所选 Agent。'})), ...['转发权限审批', '审批超时（秒）', '发送任务完成卡', '允许从完成卡续聊', '续聊等待（秒）', '本会话放行缓存', '在场检测', '在场检测平台', '离开判定（秒）'].map(title => item(title, [], {reveal: 'cli-advanced', guide: '请先选择通知 Agent；规则属于所选 Agent。'}))]},
   {page: 'application', section: '启动选项', fields: [item('运行状态'), item('重启 Bridge'), item('登录电脑时启动', ['开机启动'])]},
   {page: 'application', section: '命令行工具', fields: [item('vonvon-bridge', ['CLI', '修复命令行工具'])]},
   {page: 'application', section: 'Bridge 运行', fields: [item('运行方式'), item('Bridge 服务', ['启动 Bridge', '停止 Bridge']), item('临时运行 Agent', [], {guide: '仅运行指定 Agent 时显示当前临时运行状态。'})]},
@@ -90,7 +88,7 @@ export function searchEntries(snapshot: DesktopSnapshot): SearchEntry[] {
   ];
   const entries: SearchEntry[] = pages.map(page => ({id: page.id, title: page.title, context: '页面', aliases: page.aliases, destination: {page: page.page, view: page.view, selection: page.view ? {kind: 'overview'} : undefined}, kind: 'page'}));
   for (const group of globalGroups) group.fields.forEach((field, index) => entries.push({
-    id: `global-${group.page}-${group.section}-${index}`, title: field.title, context: group.section, aliases: field.aliases ?? [], destination: {page: group.page, section: group.section, field: field.field ?? field.title, reveal: field.reveal, guide: field.guide}, kind: 'setting',
+    id: `global-${group.page}-${group.section}-${index}`, title: field.title, context: ['本机 Hook', 'CLI 转发', 'CLI 通知设置'].includes(group.section) ? `咖啡一下 · ${group.section}` : group.section, aliases: field.aliases ?? [], destination: {page: group.page, section: group.section, field: field.field ?? field.title, reveal: field.reveal, guide: field.guide}, kind: 'setting',
   }));
   for (const agent of snapshot.agents) {
     const base: Destination = {page: 'collaboration', view: 'agents', selection: {kind: 'agent', id: agent.id}};

@@ -372,7 +372,9 @@ export class DesktopController {
         const path =
           request.type === "save"
             ? this.settingsPath(request.edit.scope)
-            : `/api/bots/${encodeURIComponent(request.action.botId)}/settings/actions`;
+            : request.action.kind !== 'setHostCliRoute' && request.action.kind !== 'repairHostCliHooks'
+              ? `/api/bots/${encodeURIComponent(request.action.botId)}/settings/actions`
+              : '/api/settings/host/actions';
         const body =
           request.type === "save"
             ? request.edit.scope.kind === "agent"
@@ -427,11 +429,12 @@ export class DesktopController {
               : undefined;
           if (
             view &&
-            (view.scope.botId !== request.action.botId ||
-              ("projectName" in request.action
-                ? view.scope.kind !== "project" ||
-                  view.scope.projectName !== request.action.projectName
-                : view.scope.kind !== "agent"))
+            (request.action.kind !== 'setHostCliRoute' && request.action.kind !== 'repairHostCliHooks'
+              ? view.scope.kind === 'host' || view.scope.botId !== request.action.botId ||
+                ("projectName" in request.action
+                  ? view.scope.kind !== "project" || view.scope.projectName !== request.action.projectName
+                  : view.scope.kind !== "agent")
+              : view.scope.kind !== 'host')
           )
             throw new CoreError(
               "scope-mismatch",

@@ -134,7 +134,20 @@ function DesktopApp() {
     if (!searchTarget) return;
     function focus() {
       const section = searchTarget?.section && document.getElementById(settingAnchor(searchTarget.section));
-      if (!section) return false;
+      if (!section) {
+        if ((searchTarget?.section === 'CLI 转发' || searchTarget?.section === 'CLI 通知设置') &&
+          document.querySelector('[data-search-title="通知状态"]')) {
+          const selector = document.querySelector<HTMLSelectElement>('select[aria-label="通知 Agent"]');
+          if (selector) {
+            selector.scrollIntoView({block: 'center'});
+            selector.focus({preventScroll: true});
+            setNotice({message: searchTarget?.guide ?? '请先选择通知 Agent。', error: false});
+            setSearchTarget(undefined);
+            return true;
+          }
+        }
+        return false;
+      }
       const rows = Array.from(section.querySelectorAll<HTMLElement>('[data-search-title]'));
       const row = searchTarget?.field ? rows.find(element => element.dataset.searchTitle === searchTarget.field) : undefined;
       const controls = Array.from(section.querySelectorAll<HTMLElement>('button, input, select, textarea, label, dt'));
@@ -819,7 +832,7 @@ function DesktopApp() {
               )}
             </>
           )}
-          {page === "environment" && <EnvironmentPanel reveal={searchTarget?.reveal} codexBusy={snapshot.jobs.some(job => (job.type === "loginCodex" || job.type === "installCodex") && isActive(job))} request={window.bridge.environment} onCodexLogin={async () => {await run({type: "startCodexLogin"});}} codexJobs={snapshot.jobs.filter(job => job.type === "loginCodex" || job.type === "installCodex").map(job => <JobPanel key={job.id} job={job} run={run} busy={busy}/>)}/>}
+          {page === "environment" && <><EnvironmentPanel reveal={searchTarget?.reveal} codexBusy={snapshot.jobs.some(job => (job.type === "loginCodex" || job.type === "installCodex") && isActive(job))} request={window.bridge.environment} onCodexLogin={async () => {await run({type: "startCodexLogin"});}} codexJobs={snapshot.jobs.filter(job => job.type === "loginCodex" || job.type === "installCodex").map(job => <JobPanel key={job.id} job={job} run={run} busy={busy}/>)}/><SettingsPanel scope="host" target={{kind: 'host'}} category="coffee" reveal={searchTarget?.reveal}/></>}
           {page === "usage" && <UsagePanel request={window.bridge.collaboration} onOpenEnvironment={() => openPage('environment')}/>}
           {page === "application" && (
             <>
@@ -880,7 +893,7 @@ function DesktopApp() {
               </SettingsGroup>
               <MachinePanel reveal={searchTarget?.reveal} request={window.bridge.machine} agents={snapshot.agents}/>
               <UpdatePanel request={window.bridge.machine} attached={host.kind === 'connected' && host.ownership === 'attached'}/>
-              <SettingsPanel scope="host" target={{ kind: "host" }} />
+              <SettingsPanel scope="host" target={{ kind: "host" }} category="execution" />
               <SettingsGroup
                 label="窗口与退出"
                 id={settingAnchor('窗口与退出')}
