@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, InlineNotice } from "../reference/components/ui";
 import { SettingsGroup, SettingsRow } from "../reference/components/system-settings";
+import {settingAnchor} from '../search';
 import type { AgentId, GroupId } from "../../shared/bridge";
 import type { CollaborationClient, CollaborationReply } from "../../shared/collaboration";
 import "../settings/settings.css";
@@ -91,7 +92,7 @@ export function ConversationPanel({ agentId, projectName, groupId, conversation,
   const current = history?.sessions.find((item) => item.threadId === selected && !item.detached);
   const run = context?.threadId === selected ? context.run : null;
 
-  return <>
+  return <div id={settingAnchor('会话管理')}>
     <SettingsGroup label="历史会话" action={<Button size="sm" disabled={busy} onClick={() => void refresh()}>刷新</Button>} footer="可以在飞书打开已绑定的话题。可恢复的旧会话会重新绑定到此项目。">
       <SettingsRow title="搜索" trailing={<input aria-label="搜索历史会话" className="settings-field" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="标题、摘要或会话 ID" />} />
       <SettingsRow title="筛选" trailing={<select aria-label="筛选历史会话" value={filter} onChange={(event) => setFilter(event.target.value === "bound" ? "bound" : event.target.value === "resumable" ? "resumable" : "all")}><option value="all">全部</option><option value="bound">已绑定话题</option><option value="resumable">可恢复会话</option></select>} />
@@ -112,5 +113,5 @@ export function ConversationPanel({ agentId, projectName, groupId, conversation,
     </SettingsGroup>}
     {error && <InlineNotice title="会话操作未完成" tone="danger">{error}</InlineNotice>}
     {notice && <InlineNotice title="会话已更新">{notice}</InlineNotice>}
-  </>;
+  </div>;
 }

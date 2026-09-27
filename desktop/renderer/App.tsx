@@ -42,8 +42,9 @@ import {
 import type { CollaborationView, Page } from "./collaboration-model";
 import {SettingsPanel,membershipSettingsTarget} from "./settings/SettingsPanel";
 import {DraftGuardProvider, useDraftGuard} from './settings/DraftGuard';
-import {agentCategories, membershipCategories, searchEntries, settingAnchor, type DetailPane, type SearchEntry, type Selection} from './search';
+import {agentCategories, membershipCategories, searchEntries, settingAnchor, type Destination, type DetailPane, type SearchEntry, type Selection} from './search';
 import {SearchDialog} from './SearchDialog';
+import {flushSync} from 'react-dom';
 import {ProjectPanel, ProjectStatus} from './management/ProjectPanel';
 import {ConversationPanel} from './management/ConversationPanel';
 import {ShareUsagePanel, UsagePanel} from './management/UsagePanel';
@@ -104,7 +105,7 @@ export function App() {
 function DesktopApp() {
   const {navigate} = useDraftGuard();
   const [searchOpen, setSearchOpen] = useState(false);
-  const [focusSection, setFocusSection] = useState<string>();
+  const [searchTarget, setSearchTarget] = useState<Destination>();
   const [snapshot, setSnapshot] = useState<DesktopSnapshot>();
   const [view, setView] = useState<CollaborationView>("agents");
   const [page, setPage] = useState<Page>("collaboration");
@@ -128,21 +129,36 @@ function DesktopApp() {
     return () => window.removeEventListener('keydown', keydown);
   }, []);
   useEffect(() => {
-    if (!focusSection) return;
+    if (!searchTarget) return;
     function focus() {
-      const section = document.getElementById(settingAnchor(focusSection!));
+      const section = searchTarget?.section && document.getElementById(settingAnchor(searchTarget.section));
       if (!section) return false;
-      section.scrollIntoView({block: 'start'});
-      section.tabIndex = -1;
-      section.focus({preventScroll: true});
-      setFocusSection(undefined);
+      const rows = Array.from(section.querySelectorAll<HTMLElement>('[data-search-title]'));
+      const row = searchTarget?.field ? rows.find(element => element.dataset.searchTitle === searchTarget.field) : undefined;
+      const controls = Array.from(section.querySelectorAll<HTMLElement>('button, input, select, textarea, label, dt'));
+      const control = searchTarget?.field ? controls.find(element => element.getAttribute('aria-label') === searchTarget.field || element.textContent?.trim() === searchTarget.field) : undefined;
+      if (searchTarget?.field && !row && !control && !searchTarget.guide && !searchTarget.reveal) return false;
+      if (searchTarget?.field && !row && (searchTarget.reveal === 'cli-advanced' || searchTarget.reveal === 'machine-advanced')) return false;
+      const candidate = row ?? control;
+      if (candidate?.closest('details:not([open]), [hidden]')) return false;
+      const target = candidate && !candidate.closest('[hidden]') ? candidate.querySelector<HTMLElement>('input, select, textarea, button') ?? candidate : section;
+      target.scrollIntoView({block: 'center'});
+      if (!target.matches('input, select, textarea, button')) target.tabIndex = -1;
+      target.focus({preventScroll: true});
+      if (searchTarget.guide) setNotice({message: searchTarget.guide, error: false});
+      setSearchTarget(undefined);
       return true;
     }
     if (focus()) return;
     const observer = new MutationObserver(() => {if (focus()) observer.disconnect();});
-    observer.observe(document.getElementById('main-content') ?? document.body, {childList: true, subtree: true});
-    return () => observer.disconnect();
-  }, [focusSection, page, selection]);
+    observer.observe(document.body, {childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'open']});
+    const timeout = window.setTimeout(() => {
+      observer.disconnect();
+      setNotice({message: searchTarget.guide ?? '这项设置当前不可用。请检查页面状态或重新读取。', error: false});
+      setSearchTarget(undefined);
+    }, 3500);
+    return () => {observer.disconnect(); window.clearTimeout(timeout);};
+  }, [searchTarget, page, selection]);
   useEffect(
     () =>
       window.bridge.watch((next) => {
@@ -196,13 +212,13 @@ function DesktopApp() {
   }
   function openPage(next: Page) { navigate(() => setPage(next)); }
   function openSearchResult(entry: SearchEntry) {
-    setSearchOpen(false);
+    flushSync(() => setSearchOpen(false));
     navigate(() => {
       setPage(entry.destination.page);
       if (entry.destination.view) setView(entry.destination.view);
       if (entry.destination.selection) setSelection(entry.destination.selection);
       setDetail(entry.destination.detail ?? {kind: 'overview'});
-      setFocusSection(entry.destination.section);
+      setSearchTarget(entry.destination.section ? entry.destination : undefined);
       setNotice(undefined);
     });
   }
@@ -642,6 +658,7 @@ function DesktopApp() {
                     scope="agent"
                     target={{ kind: "agent", botId: agent.id }}
                     category={detail.category}
+                    reveal={searchTarget?.reveal}
                   />
                   {detail.category === 'access' &&
                   <SettingsGroup id={settingAnchor('移除 Agent')}
@@ -769,7 +786,7 @@ function DesktopApp() {
               )}
             </>
           )}
-          {page === "environment" && <EnvironmentPanel codexBusy={snapshot.jobs.some(job => (job.type === "loginCodex" || job.type === "installCodex") && isActive(job))} request={window.bridge.environment} onCodexLogin={async () => {await run({type: "startCodexLogin"});}} codexJobs={snapshot.jobs.filter(job => job.type === "loginCodex" || job.type === "installCodex").map(job => <JobPanel key={job.id} job={job} run={run} busy={busy}/>)}/>}
+          {page === "environment" && <EnvironmentPanel reveal={searchTarget?.reveal} codexBusy={snapshot.jobs.some(job => (job.type === "loginCodex" || job.type === "installCodex") && isActive(job))} request={window.bridge.environment} onCodexLogin={async () => {await run({type: "startCodexLogin"});}} codexJobs={snapshot.jobs.filter(job => job.type === "loginCodex" || job.type === "installCodex").map(job => <JobPanel key={job.id} job={job} run={run} busy={busy}/>)}/>}
           {page === "usage" && <UsagePanel request={window.bridge.collaboration} onOpenEnvironment={() => openPage('environment')}/>}
           {page === "application" && (
             <>
@@ -785,7 +802,7 @@ function DesktopApp() {
                   value={`v${snapshot.application.version}`}
                 />
               </SettingsGroup>
-              <SettingsGroup label="启动选项">
+              <SettingsGroup label="启动选项" id={settingAnchor('启动选项')}>
                 <SettingsRow
                   title="运行状态"
                   value={
@@ -828,11 +845,12 @@ function DesktopApp() {
                   }
                 />
               </SettingsGroup>
-              <MachinePanel request={window.bridge.machine} agents={snapshot.agents}/>
+              <MachinePanel reveal={searchTarget?.reveal} request={window.bridge.machine} agents={snapshot.agents}/>
               <UpdatePanel request={window.bridge.machine} attached={host.kind === 'connected' && host.ownership === 'attached'}/>
               <SettingsPanel scope="host" target={{ kind: "host" }} />
               <SettingsGroup
                 label="窗口与退出"
+                id={settingAnchor('窗口与退出')}
                 footer="关闭窗口会留在菜单栏或托盘继续运行。退出只停止本应用启动的 Bridge。"
               >
                 <SettingsRow
@@ -862,8 +880,8 @@ function DesktopApp() {
             </>
           )}
           {page === "diagnostics" && (
-            <>
-              <SettingsGroup label="当前状态">
+            <div id={settingAnchor('诊断操作')}>
+              <SettingsGroup label="当前状态" id={settingAnchor('当前状态')}>
                 <SettingsRow
                   title="Bridge 版本"
                   value={host.kind === "connected" ? host.version : "未知"}
@@ -906,11 +924,11 @@ function DesktopApp() {
               >
                 重新检查
               </Button>
-            </>
+            </div>
           )}
         </div>
       </AppShell>
-      <SearchDialog open={searchOpen} entries={searchEntries(snapshot)} onClose={() => setSearchOpen(false)} onSelect={openSearchResult}/>
+      {searchOpen && <SearchDialog open entries={searchEntries(snapshot)} onClose={() => setSearchOpen(false)} onSelect={openSearchResult}/>}
       <PendingGroupToasts pages={pendingGroups} agents={snapshot.agents} hidden={modal !== null} onContinue={(owner, group) => openJoin(owner.id, group)} />
       {modal?.kind === 'join' && (() => {
         const owner = snapshot.agents.find(item => item.id === modal.agentId);

@@ -1,0 +1,66 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import test from 'node:test';
+import {agentIdSchema, groupIdSchema, membershipIdSchema, type DesktopSnapshot} from '../desktop/shared/bridge';
+import {findEntries, searchEntries, settingAnchor} from '../desktop/renderer/search';
+
+const agentId = agentIdSchema.parse('cli_searchagent');
+const groupId = groupIdSchema.parse('oc_searchgroup');
+const membershipId = membershipIdSchema.parse('searchmember');
+const snapshot: DesktopSnapshot = {
+  revision: 1, observedAt: Date.now(), stale: false,
+  host: {kind: 'connected', ownership: 'owned', version: '0.7.0'},
+  agents: [{id: agentId, name: '研发助手', enabled: true, running: true, connection: 'connected', activation: 'active'}],
+  groups: [{id: groupId, name: '研发群'}],
+  memberships: [{id: membershipId, agentId, groupId, name: '研发项目', directory: '/tmp/research', backend: 'codex-appserver', conversation: 'threads', response: 'mention', permission: {administrator: 'full', member: 'qa', network: false}, stale: false}],
+  tools: [], jobs: [], diagnostics: [],
+  application: {platform: 'macos', version: '0.7.0', loginItem: false, dataPath: '/tmp/test'},
+};
+const entries = searchEntries(snapshot);
+
+test('every literal configuration row label in the current desktop UI is indexed', () => {
+  const source = [
+    'desktop/renderer/settings/SettingsPanel.tsx',
+    'desktop/renderer/management/MachinePanel.tsx',
+    'desktop/renderer/management/UpdatePanel.tsx',
+    'desktop/renderer/management/ProjectPanel.tsx',
+    'desktop/renderer/management/ConversationPanel.tsx',
+    'desktop/renderer/App.tsx',
+  ].map(path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8')).join('\n');
+  const labels = [...source.matchAll(/<SettingsRow\s+(?:[^>]*?\s)?title="([^"]+)"/gs)].map(match => match[1]!);
+  const transient = new Set(['正在读取当前设置…', '正在读取项目', '没有匹配的会话']);
+  const missing = [...new Set(labels)].filter(label => !transient.has(label) && !entries.some(entry => entry.title === label || entry.aliases.includes(label)));
+  assert.deepEqual(missing, []);
+});
+
+test('rare field, aliases, and multi-term scope queries resolve to their real category', () => {
+  const timeout = findEntries(entries, '审批超时')[0];
+  assert.equal(timeout?.title, '审批超时（秒）');
+  assert.equal(timeout?.destination.reveal, 'cli-advanced');
+  assert.deepEqual(timeout?.destination.detail, {kind: 'agent-settings', category: 'cli'});
+  const scope = findEntries(entries, '研发助手 在场检测平台')[0];
+  assert.equal(scope?.destination.selection?.kind, 'agent');
+  assert.equal(findEntries(entries, '清空白名单')[0]?.destination.detail?.kind, 'membership-settings');
+  assert.equal(findEntries(entries, 'App Secret')[0]?.destination.reveal, 'profile-add');
+  assert.equal(findEntries(entries, '修复命令行工具')[0]?.destination.section, '命令行工具');
+});
+
+test('results are complete, ranked, uniquely identified, and have valid destinations', () => {
+  const many: DesktopSnapshot = {...snapshot, agents: Array.from({length: 70}, (_, index) => ({...snapshot.agents[0]!, id: agentIdSchema.parse(`cli_search${index}`), name: `Agent ${index}`}))};
+  const catalog = searchEntries(many);
+  const matches = findEntries(catalog, '最大并发任务');
+  assert.equal(matches.length, 70);
+  assert.equal(matches[0]?.title, '最大并发任务');
+  assert.equal(new Set(catalog.map(entry => entry.id)).size, catalog.length);
+  assert.ok(catalog.every(entry => !entry.destination.section || settingAnchor(entry.destination.section).startsWith('setting-')));
+  assert.equal(findEntries(entries, '')[0]?.id, 'agents');
+});
+
+test('conditional settings lead to parent controls with clear prerequisites', () => {
+  const threshold = findEntries(entries, '长任务阈值')[0];
+  assert.equal(threshold?.destination.section, '任务结束提醒');
+  assert.match(threshold?.destination.guide ?? '', /提醒方式/);
+  const topic = findEntries(entries, '本话题模型')[0];
+  assert.equal(topic?.destination.field, '选择话题');
+  assert.match(topic?.destination.guide ?? '', /选择话题/);
+});

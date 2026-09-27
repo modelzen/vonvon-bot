@@ -134,7 +134,7 @@ export function ProjectPanel({ scope, request, onChanged }: Props) {
         <div className="settings-edit-actions"><Button size="sm" disabled={!changed || saving} onClick={() => { setConversation(project.kind === "multi" ? "threads" : "shared"); setEnabled(project.enabled); setFolder(undefined); }}>放弃修改</Button><Button size="sm" variant="primary" loading={saving} disabled={!changed} onClick={() => void saveDraft()}>保存项目</Button></div>
       </>}
     </SettingsGroup>
-    {project && <SettingsGroup label="解除项目绑定" footer="只移除 Bridge 的项目绑定。工作目录和其中的文件不会删除。">
+    {project && <SettingsGroup id={settingAnchor('解除项目绑定')} label="解除项目绑定" footer="只移除 Bridge 的项目绑定。工作目录和其中的文件不会删除。">
       <SettingsRow title="解除绑定" description="此操作会结束 Agent 与此项目群的关联。" trailing={!deleteArmed ? <Button size="sm" variant="danger" disabled={saving} onClick={() => setDeleteArmed(true)}>解除绑定…</Button> : <div className="settings-inline-actions"><Button size="sm" onClick={() => setDeleteArmed(false)}>取消</Button><Button size="sm" variant="danger" loading={saving} onClick={() => void run(() => request({ action: "removeProject", ...target, expectedRevision: project.revision }), "项目绑定已解除，目录已保留。")}>确认解除</Button></div>} />
     </SettingsGroup>}
     {error && <InlineNotice title="项目操作未完成" tone="danger">{error}</InlineNotice>}
