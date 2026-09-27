@@ -49,10 +49,10 @@ const membershipGroups: readonly Group<MembershipCategory>[] = [
   {title: '话题模型', category: 'behavior', fields: [item('选择话题'), item('话题身份', [], {field: '选择话题', guide: '选择话题后可以查看身份。'}), item('本话题模型', [], {field: '选择话题', guide: '先选择话题，再设置该话题的模型。'}), item('推理强度', ['话题推理强度'], {field: '选择话题', guide: '先选择话题并选定具体模型，再调整推理强度。'})]},
 ];
 const globalGroups: readonly {page: Page; section: string; fields: readonly Target[]}[] = [
-  {page: 'environment', section: '咖啡一下', fields: [item('咖啡一下', [], {field: '通知 Agent'}), item('通知 Agent'), item('当前规则来自', ['候选规则来自']), item('通知状态')]},
-  {page: 'environment', section: '本机 Hook', fields: [item('本机 Hook', [], {field: 'Codex Hook'}), item('Codex Hook', ['修复 Codex Hook']), item('Claude Hook', ['修复 Claude Hook'])]},
-  {page: 'environment', section: 'CLI 转发', fields: [item('CLI 转发', [], {field: '转发本机 CLI 活动', guide: '请先选择通知 Agent；规则属于所选 Agent。'}), item('转发本机 CLI 活动', [], {guide: '请先选择通知 Agent；规则属于所选 Agent。'})]},
-  {page: 'environment', section: 'CLI 通知设置', fields: [item('CLI 通知设置', [], {field: '通知范围', guide: '请先选择通知 Agent；规则属于所选 Agent。'}), ...['通知范围', '转发 Claude', '转发 Codex', '离开时保活'].map(title => item(title, [], {guide: '请先选择通知 Agent；规则属于所选 Agent。'})), ...['转发权限审批', '审批超时（秒）', '发送任务完成卡', '允许从完成卡续聊', '续聊等待（秒）', '本会话放行缓存', '在场检测', '在场检测平台', '离开判定（秒）'].map(title => item(title, [], {reveal: 'cli-advanced', guide: '请先选择通知 Agent；规则属于所选 Agent。'}))]},
+  {page: 'coffee', section: '咖啡一下', fields: [item('通知 Agent'), item('通知状态'), item('查看通知规则'), item('Hook 配置')]},
+  {page: 'coffee', section: '本机 Hook', fields: [item('本机 Hook', [], {field: 'Codex Hook'}), item('Codex Hook', ['修复 Codex Hook']), item('Claude Hook', ['修复 Claude Hook'])]},
+  {page: 'coffee', section: '接力设置', fields: [item('接力设置', ['CLI 转发'], {field: '启用咖啡一下', guide: '没有 Agent 时，请先添加 Agent。'}), item('启用咖啡一下', [], {guide: '没有 Agent 时，请先添加 Agent。'})]},
+  {page: 'coffee', section: '通知偏好', fields: [item('通知偏好', ['CLI 通知设置'], {field: '通知范围', guide: '没有 Agent 时，请先添加 Agent。'}), ...['通知范围', '转发 Claude', '转发 Codex', '离开时保活'].map(title => item(title, [], {guide: '没有 Agent 时，请先添加 Agent。'})), ...['转发权限审批', '审批超时（秒）', '发送任务完成卡', '允许从完成卡续聊', '续聊等待（秒）', '本会话放行缓存', '在场检测', '在场检测平台', '离开判定（秒）'].map(title => item(title, [], {reveal: 'cli-advanced', guide: '没有 Agent 时，请先添加 Agent。'}))]},
   {page: 'application', section: '启动选项', fields: [item('运行状态'), item('重启 Bridge'), item('登录电脑时启动', ['开机启动'])]},
   {page: 'application', section: '命令行工具', fields: [item('vonvon-bridge', ['CLI', '修复命令行工具'])]},
   {page: 'application', section: 'Bridge 运行', fields: [item('运行方式'), item('Bridge 服务', ['启动 Bridge', '停止 Bridge']), item('临时运行 Agent', [], {guide: '仅运行指定 Agent 时显示当前临时运行状态。'})]},
@@ -82,13 +82,14 @@ export function searchEntries(snapshot: DesktopSnapshot): SearchEntry[] {
     {id: 'agents', title: 'Agent', aliases: ['机器人', '准备执行工具', '注册 Agent', '加入飞书群并设置工作目录'], page: 'collaboration', view: 'agents'},
     {id: 'groups', title: '群聊', aliases: ['飞书群', '项目', '已连接飞书群'], page: 'collaboration', view: 'groups'},
     {id: 'usage', title: 'Codex 用量', aliases: ['账号', '套餐', '限额', '活动', '热力图'], page: 'usage'},
+    {id: 'coffee', title: '咖啡一下', aliases: ['Hook', '通知', '离开电脑'], page: 'coffee'},
     {id: 'environment', title: '本机环境', aliases: ['工具', '安装', '授权'], page: 'environment'},
     {id: 'application', title: '应用与启动', aliases: ['版本', '更新', '后台服务'], page: 'application'},
     {id: 'diagnostics', title: '状态与诊断', aliases: ['日志', '数据目录', '连接'], page: 'diagnostics'},
   ];
   const entries: SearchEntry[] = pages.map(page => ({id: page.id, title: page.title, context: '页面', aliases: page.aliases, destination: {page: page.page, view: page.view, selection: page.view ? {kind: 'overview'} : undefined}, kind: 'page'}));
   for (const group of globalGroups) group.fields.forEach((field, index) => entries.push({
-    id: `global-${group.page}-${group.section}-${index}`, title: field.title, context: ['本机 Hook', 'CLI 转发', 'CLI 通知设置'].includes(group.section) ? `咖啡一下 · ${group.section}` : group.section, aliases: field.aliases ?? [], destination: {page: group.page, section: group.section, field: field.field ?? field.title, reveal: field.reveal, guide: field.guide}, kind: 'setting',
+    id: `global-${group.page}-${group.section}-${index}`, title: field.title, context: ['本机 Hook', '接力设置', '通知偏好'].includes(group.section) ? `咖啡一下 · ${group.section}` : group.section, aliases: field.aliases ?? [], destination: {page: group.page, section: group.section, field: field.field ?? field.title, reveal: field.reveal, guide: field.guide}, kind: 'setting',
   }));
   for (const agent of snapshot.agents) {
     const base: Destination = {page: 'collaboration', view: 'agents', selection: {kind: 'agent', id: agent.id}};
@@ -113,7 +114,7 @@ export function searchEntries(snapshot: DesktopSnapshot): SearchEntry[] {
 }
 export function findEntries(entries: readonly SearchEntry[], query: string): SearchEntry[] {
   const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
-  if (!terms.length) return ['agents', 'groups', 'usage', 'environment', 'application', 'diagnostics'].flatMap(id => entries.find(entry => entry.id === id) ?? []);
+  if (!terms.length) return ['agents', 'groups', 'usage', 'coffee', 'environment', 'application', 'diagnostics'].flatMap(id => entries.find(entry => entry.id === id) ?? []);
   const rank = (entry: SearchEntry) => {
     const title = entry.title.toLocaleLowerCase();
     const needle = terms.join(' ');

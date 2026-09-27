@@ -560,10 +560,18 @@ function AgentPanel({
   refresh,
   category,
   reveal,
+  coffeeControls,
+  onCoffeeEnabled,
+  coffeeEnabled,
+  coffeeBusy,
 }: {
   view: AgentSettingsView;
   refresh: () => Promise<void>;
   category: AgentCategory | 'cli';
+  coffeeControls?: ReactNode;
+  coffeeEnabled?: boolean;
+  coffeeBusy?: boolean;
+  onCoffeeEnabled?: (enabled: boolean) => Promise<void>;
   reveal?: SearchReveal;
 }) {
   const [actionMessage, setActionMessage] = useState<string>();
@@ -880,10 +888,10 @@ function AgentPanel({
       </SettingsGroup>
       </>}
       {category === "cli" && <>
-      <SettingsGroup label="CLI 转发" id={settingAnchor("CLI 转发")}
-        footer={cards.access.kind === 'readonly' ? cards.access.message : '这些规则保存在当前通知 Agent 中。'}>
+      <SettingsGroup label="接力设置" id={settingAnchor("接力设置")}
+        footer={cards.access.kind === 'readonly' ? cards.access.message : undefined}>
         <SettingsRow
-          title="转发本机 CLI 活动"
+          title="启用咖啡一下"
           description={
             !view.ownerOpenId
               ? "需要先确认 Agent 所有者。"
@@ -893,11 +901,11 @@ function AgentPanel({
           }
           trailing={
             <Switch
-              label="转发本机 CLI 活动"
-              value={view.cliRuntime.enabled}
-              disabled={cards.access.kind === "readonly" || !view.ownerOpenId}
+              label="启用咖啡一下"
+              value={coffeeEnabled ?? view.cliRuntime.enabled}
+              disabled={coffeeBusy || cards.access.kind === "readonly" || !view.ownerOpenId}
               onChange={(enabled) =>
-                void act({
+                void (onCoffeeEnabled ? onCoffeeEnabled(enabled) : act({
                   type: "act",
                   action: {
                     kind: "setCliBridgeEnabled",
@@ -905,14 +913,15 @@ function AgentPanel({
                     enabled,
                     revision: view.cliRuntime.revision,
                   },
-                })
+                }))
               }
             />
           }
         />
       </SettingsGroup>
+      {coffeeControls}
       <Editor
-        title="CLI 通知设置"
+        title="通知偏好"
         section={cli}
         save={(draft, revision) => save("cliBridge", draft, revision)}
         render={(draft, set, disabled, commit) => (
@@ -1989,13 +1998,15 @@ function CoffeeHostPanel({view, refresh, reveal}: {view: HostSettingsView; refre
   const guard = useDraftGuard();
   const coffee = view.runtime.coffee;
   const [recipient, setRecipient] = useState<AgentSettingsView>();
+  const [inspectedBotId, setInspectedBotId] = useState<AgentId>();
+  const editorBotId = inspectedBotId ?? coffee?.editorBotId ?? coffee?.botId;
   const [notice, setNotice] = useState<string>();
   const [busy, setBusy] = useState<'route' | 'codex' | 'claude' | null>(null);
   const pending = useRef(false);
   const recipientRequest = useRef(0);
   const refreshRecipient = useCallback(async () => {
     const requestId = ++recipientRequest.current;
-    const botId = coffee?.route === 'agent' ? coffee.botId : null;
+    const botId = editorBotId;
     if (!botId) { setRecipient(undefined); return; }
     const reply = await window.bridge.settings({type: 'read', scope: {kind: 'agent', botId}});
     if (requestId !== recipientRequest.current) return;
@@ -2004,7 +2015,7 @@ function CoffeeHostPanel({view, refresh, reveal}: {view: HostSettingsView; refre
       return;
     }
     setNotice(reply.kind === 'refused' ? reply.message : '通知 Agent 的设置暂不可用。');
-  }, [coffee?.botId, coffee?.revision, view]);
+  }, [editorBotId, coffee?.revision, view]);
   useEffect(() => { void refreshRecipient(); return () => { recipientRequest.current += 1; }; }, [refreshRecipient]);
   async function saveRoute(next: AgentId | '') {
     if (!coffee || pending.current) return false;
@@ -2015,7 +2026,7 @@ function CoffeeHostPanel({view, refresh, reveal}: {view: HostSettingsView; refre
       setNotice(errorText(reply) ?? (reply.kind === 'acted' && reply.result.kind === 'saved'
         ? reply.result.effects.map(effect => effect.detail).join(' ') || '通知目标已保存。'
         : '无法保存通知目标。'));
-      if (reply.kind === 'acted' && reply.result.kind === 'saved') { await refresh(); return true; }
+      if (reply.kind === 'acted' && reply.result.kind === 'saved') { if (next) setInspectedBotId(undefined); await refresh(); return true; }
       return false;
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '无法保存通知目标。');
@@ -2038,31 +2049,42 @@ function CoffeeHostPanel({view, refresh, reveal}: {view: HostSettingsView; refre
   }
   const statusLabel = {installed: '已安装', not_installed: '未安装', needs_repair: '需要修复', conflict_agent2lark: '与已有 Hook 冲突'};
   if (!coffee) return <InlineNotice title="咖啡一下暂不可用">当前 Bridge 版本尚不支持全局设置，请更新 Bridge 后重新读取。</InlineNotice>;
-  const routeUnconfirmed = coffee.route === 'legacy' && coffee.agents.length > 0;
-  const selected = coffee.agents.find(agent => agent.botId === coffee.botId);
-  const routeChoice = coffee.route === 'legacy' ? '__legacy__' as const : coffee.botId ?? '';
+  const selected = coffee.agents.find(agent => agent.botId === editorBotId);
+  const missingTarget = coffee.botId && !coffee.agents.some(agent => agent.botId === coffee.botId);
+  const targetIds = [...new Set([...coffee.targets.codex, ...coffee.targets.claude])];
+  const split = targetIds.length > 1;
+  const controls = <SettingsGroup label="通知设置" id={settingAnchor('咖啡一下')}>
+    <SettingsRow title="通知 Agent" description="通过这个 Agent 的飞书私聊接收通知。"
+      trailing={<Select label="通知 Agent" value={!coffee.targetsReadable && coffee.route === 'legacy' ? '__unknown__' : split ? '__split__' : selected?.botId ?? coffee.botId ?? ''} choices={[...(!coffee.targetsReadable && coffee.route === 'legacy' ? [{value: '__unknown__' as const, label: '无法读取通知目标'}] : []), ...(missingTarget ? [{value: coffee.botId ?? '' as const, label: '通知 Agent 已不可用'}] : []), ...(split ? [{value: '__split__' as const, label: '按工具分别设置'}] : []), {value: '' as const, label: '停止发送到飞书'}, ...coffee.agents.map(agent => ({value: agent.botId, label: agent.name}))]} onChange={next => {if (next !== '__split__' && next !== '__unknown__') guard.navigate(() => { if (coffee.route === 'none' && next) setInspectedBotId(next); else void saveRoute(next); });}} disabled={busy !== null}/>}/>
+    {split && <SettingsRow title="查看通知规则" trailing={<Select label="查看通知规则" disabled={busy !== null} value={selected?.botId ?? ''} choices={coffee.agents.filter(agent => targetIds.includes(agent.botId)).map(agent => ({value: agent.botId, label: agent.name}))} onChange={next => guard.navigate(() => setInspectedBotId(next || undefined))}/>}/>}
+    {coffee.route === 'none' && <SettingsRow title="通知状态" value="已关闭" description="可继续修改设置，开启后开始发送通知。"/>}
+    {!coffee.targetsReadable && <SettingsRow title="Hook 配置" value="无法读取通知目标" description="请检查配置文件权限后重新读取。"/>}
+  </SettingsGroup>;
   return <>
-    <SettingsGroup label="咖啡一下" id={settingAnchor('咖啡一下')}
-      footer="离开电脑时，将本机 Codex 或 Claude 的审批、问答与任务完成提醒发送到所选 Agent 的飞书私聊。">
-      <SettingsRow title="通知 Agent" description={coffee.route === 'legacy' ? '沿用升级前的通知选择，实际目标尚未确认。选择 Agent 后将明确由它发送通知。' : '切换 Agent 将使用它已有的咖啡一下规则。'}
-        trailing={<div className="settings-inline-actions">
-          <Select label="通知 Agent" value={routeChoice} choices={[...(coffee.route === 'legacy' ? [{value: '__legacy__' as const, label: '沿用升级前的选择'}] : []), {value: '' as const, label: '停止发送到飞书'}, ...coffee.agents.map(agent => ({value: agent.botId, label: agent.name}))]} onChange={next => {if (next !== '__legacy__') guard.navigate(() => void saveRoute(next));}} disabled={busy !== null}/>
-          {coffee.route === 'legacy' && coffee.botId && <Button size="sm" loading={busy === 'route'} disabled={busy !== null} onClick={() => guard.navigate(() => void saveRoute(coffee.botId ?? ''))}>确认 {selected?.name ?? '通知 Agent'}</Button>}
-        </div>}/>
-      {selected && <SettingsRow title={coffee.route === 'legacy' ? '候选规则来自' : '当前规则来自'} value={selected.name} description={!selected.enabled ? '此 Agent 的本机 CLI 转发未启用。' : !selected.hasOwner ? '请先为此 Agent 设置所有者。' : undefined}/>}
-      {!selected && <SettingsRow title="通知状态" value={coffee.route === 'legacy' ? '沿用升级前的通知选择' : '暂不发送到飞书'}/>}
-    </SettingsGroup>
-    <SettingsGroup label="本机 Hook" id={settingAnchor('本机 Hook')}
-      footer={routeUnconfirmed ? '请先保存通知 Agent，再修复 Hook。' : 'Hook 安装在这台设备上，由所有 Agent 共用。'}>
+    <p className="settings-description">离开电脑，也能继续协作。在飞书中接收本机 Codex 和 Claude 的审批、问答与任务完成提醒。</p>
+    {selected && recipient?.scope.botId === selected.botId
+      ? <AgentPanel key={selected.botId} view={recipient} refresh={refreshRecipient} category="cli" reveal={reveal} coffeeControls={controls} coffeeEnabled={coffee.route !== 'none' && recipient.cliRuntime.enabled} coffeeBusy={busy !== null} onCoffeeEnabled={async enabled => {
+        if (pending.current) return;
+        if (!enabled) { setInspectedBotId(selected.botId); await saveRoute(''); return; }
+        pending.current = true;
+        setBusy('route');
+        try {
+          const reply = await window.bridge.settings({type: 'act', action: {kind: 'setCliBridgeEnabled', botId: selected.botId, enabled, revision: recipient.cliRuntime.revision}});
+          const error = errorText(reply);
+          if (error || reply.kind !== 'acted' || reply.result.kind !== 'saved') { setNotice(error ?? '咖啡一下设置未保存，请重试。'); return; }
+          pending.current = false;
+          if (await saveRoute(selected.botId)) await refreshRecipient();
+        } catch (error) { setNotice(error instanceof Error ? error.message : '无法更新咖啡一下设置。'); }
+        finally { pending.current = false; setBusy(null); }
+      }}/>
+      : <><SettingsGroup label="咖啡一下"><SettingsRow title="启用咖啡一下" value={coffee.route === 'none' ? '已关闭' : !coffee.targetsReadable ? '无法读取 Hook 配置' : missingTarget ? '通知 Agent 已不可用，请选择其他 Agent' : selected ? '正在读取设置' : '请先添加 Agent'}/></SettingsGroup>{controls}</>}
+    <SettingsGroup label="本机 Hook" id={settingAnchor('本机 Hook')} footer="Hook 安装在这台设备上，由所有 Agent 共用。">
       {(['codex', 'claude'] as const).map(agent => <SettingsRow key={agent} title={agent === 'codex' ? 'Codex Hook' : 'Claude Hook'}
         value={statusLabel[coffee.hooks[agent].status]}
-        description={coffee.hooks[agent].status === 'conflict_agent2lark' ? '修复会替换 agent2lark 的 Hook。' : undefined}
-        trailing={<Button size="sm" loading={busy === agent} disabled={routeUnconfirmed || busy !== null} onClick={() => void repair(agent)}>检查并修复</Button>}/>)}
+        description={split ? `通知 Agent：${coffee.targets[agent].map(id => coffee.agents.find(item => item.botId === id)?.name ?? id).join('、') || '未设置'}` : coffee.hooks[agent].status === 'conflict_agent2lark' ? '修复会替换 agent2lark 的 Hook。' : undefined}
+        trailing={<Button size="sm" loading={busy === agent} disabled={busy !== null} onClick={() => void repair(agent)}>检查并修复</Button>}/>)}
     </SettingsGroup>
     {notice && <InlineNotice title="操作结果">{notice}</InlineNotice>}
-    {coffee.route === 'legacy' && selected && <InlineNotice title="确认通知 Agent">确认通知 Agent 后可修改它的咖啡一下规则，原有配置会继续保留。</InlineNotice>}
-    {coffee.route === 'agent' && selected && recipient?.scope.botId === selected.botId && <AgentPanel key={selected.botId} view={recipient} refresh={refreshRecipient} category="cli" reveal={reveal}/>}
-    {coffee.route === 'agent' && selected && recipient?.scope.botId !== selected.botId && <InlineNotice title="通知规则暂不可编辑">请先启动此 Agent，再重新读取规则。本机 Hook 仍可单独检查。</InlineNotice>}
   </>;
 }
 

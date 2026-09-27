@@ -37,10 +37,10 @@ test('rare field, aliases, and multi-term scope queries resolve to their real ca
   const timeout = findEntries(entries, '审批超时')[0];
   assert.equal(timeout?.title, '审批超时（秒）');
   assert.equal(timeout?.destination.reveal, 'cli-advanced');
-  assert.equal(timeout?.destination.page, 'environment');
-  assert.equal(timeout?.destination.section, 'CLI 通知设置');
+  assert.equal(timeout?.destination.page, 'coffee');
+  assert.equal(timeout?.destination.section, '通知偏好');
   const scope = findEntries(entries, '在场检测平台')[0];
-  assert.equal(scope?.destination.page, 'environment');
+  assert.equal(scope?.destination.page, 'coffee');
   assert.equal(findEntries(entries, '清空白名单')[0]?.destination.detail?.kind, 'membership-settings');
   assert.equal(findEntries(entries, 'App Secret')[0]?.destination.reveal, 'profile-add');
   assert.equal(findEntries(entries, '修复命令行工具')[0]?.destination.section, '命令行工具');
@@ -48,15 +48,15 @@ test('rare field, aliases, and multi-term scope queries resolve to their real ca
 
 test('coffee and Hook settings are indexed once globally, including without Agents', () => {
   const empty = searchEntries({...snapshot, agents: []});
-  for (const title of ['咖啡一下', '本机 Hook', 'CLI 转发', 'CLI 通知设置']) {
+  for (const title of ['咖啡一下', '本机 Hook', '接力设置', '通知偏好']) {
     const matches = empty.filter(entry => entry.title === title);
     assert.equal(matches.length, 1);
-    assert.equal(matches[0]?.destination.page, 'environment');
+    assert.equal(matches[0]?.destination.page, 'coffee');
   }
   assert.equal(findEntries(empty, 'Codex Hook')[0]?.destination.section, '本机 Hook');
   assert.equal(findEntries(empty, '咖啡一下 Codex Hook')[0]?.destination.section, '本机 Hook');
-  assert.equal(findEntries(empty, '咖啡一下 审批')[0]?.destination.section, 'CLI 通知设置');
-  assert.equal(findEntries(entries, '转发本机 CLI 活动').length, 1);
+  assert.equal(findEntries(empty, '咖啡一下 审批')[0]?.destination.section, '通知偏好');
+  assert.equal(findEntries(entries, '启用咖啡一下').length, 1);
   assert.equal(entries.some(entry => entry.destination.detail?.kind === 'agent-settings' && entry.title === 'CLI 协作'), false);
 });
 

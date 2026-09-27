@@ -229,6 +229,9 @@ export const hostViewSchema = z.object({
     platform: z.string(),
     coffee: z.object({
       route: z.enum(['legacy', 'none', 'agent']),
+      targets: z.object({codex: z.array(z.string()), claude: z.array(z.string())}).default({codex: [], claude: []}),
+      editorBotId: agentIdSchema.nullable().optional(),
+      targetsReadable: z.boolean().default(false),
       botId: agentIdSchema.nullable(),
       revision: z.string(),
       agents: z.array(z.object({ botId: agentIdSchema, name: z.string(), enabled: z.boolean(), hasOwner: z.boolean() })),
