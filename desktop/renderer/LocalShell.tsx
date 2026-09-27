@@ -3,7 +3,7 @@ import {Activity,Bot,MessageSquare,MonitorCog,Search,Stethoscope,Wrench} from 'l
 import {SettingsToolbar} from './reference/components/system-settings';
 import type {CollaborationView,Page} from './collaboration-model';
 
-export function AppShell(props:{page:Page;view:CollaborationView;title:string;children:ReactNode;onNavigate:(page:Page)=>void;onOpenList:(view:CollaborationView)=>void;onBack?:()=>void;onSearch?:()=>void}){
+export function AppShell(props:{page:Page;view:CollaborationView;title:string;children:ReactNode;onNavigate:(page:Page)=>void;onOpenList:(view:CollaborationView)=>void;onBack?:()=>void;backLabel?:string;onSearch?:()=>void}){
   const lists=[{id:'agents',label:'Agent',icon:Bot},{id:'groups',label:'群聊',icon:MessageSquare}] as const;
   const settings=[{id:'usage',label:'用量',icon:Activity},{id:'environment',label:'本机环境',icon:Wrench},{id:'application',label:'应用与启动',icon:MonitorCog},{id:'diagnostics',label:'状态与诊断',icon:Stethoscope}] as const;
   return <div className="settings-window collaboration-window">
@@ -16,6 +16,6 @@ export function AppShell(props:{page:Page;view:CollaborationView;title:string;ch
       </nav>
       <nav aria-label="这台设备" className="collaboration-device-nav">{settings.map(item=>{const Icon=item.icon;return <button key={item.id} className={`settings-sidebar-item ${props.page===item.id?'is-selected':''}`} aria-current={props.page===item.id?'page':undefined} onClick={()=>props.onNavigate(item.id)}><span className={`settings-sidebar-icon settings-sidebar-icon--${item.id}`}><Icon size={14}/></span><span>{item.label}</span></button>})}</nav>
     </aside>
-    <main className="settings-main-pane" aria-label={props.title}><SettingsToolbar className="settings-toolbar" title={props.title} onBack={props.onBack} backLabel="返回列表"/><div className="settings-content-scroll" id="main-content"><div className="settings-content-page">{props.children}</div></div></main>
+    <main className="settings-main-pane" aria-label={props.title}><SettingsToolbar className="settings-toolbar" title={props.title} onBack={props.onBack} backLabel={props.backLabel}/><div className="settings-content-scroll" id="main-content"><div className="settings-content-page">{props.children}</div></div></main>
   </div>;
 }
