@@ -24,6 +24,34 @@ function replyError(reply: CollaborationReply): string | undefined {
   return reply.kind === "refused" ? reply.message : undefined;
 }
 
+type ProjectStatusState =
+  | { kind: "loading" }
+  | { kind: "ready"; enabled: boolean }
+  | { kind: "error"; message: string };
+
+export function ProjectStatus({ scope, request }: Pick<Props, "scope" | "request">) {
+  const [state, setState] = useState<ProjectStatusState>({ kind: "loading" });
+
+  useEffect(() => {
+    let active = true;
+    setState({ kind: "loading" });
+    void request({ action: "project", ...scope })
+      .then((reply) => {
+        if (!active) return;
+        setState(reply.kind === "project"
+          ? { kind: "ready", enabled: reply.project.enabled }
+          : { kind: "error", message: replyError(reply) ?? "无法读取项目状态。" });
+      })
+      .catch((failure: unknown) => {
+        if (active) setState({ kind: "error", message: failure instanceof Error ? failure.message : "无法读取项目状态。" });
+      });
+    return () => { active = false; };
+  }, [scope.agentId, scope.groupId, scope.projectName, request]);
+
+  const status = state.kind === "loading" ? "读取中…" : state.kind === "ready" ? (state.enabled ? "已启用" : "已停用") : "读取失败";
+  return <SettingsRow title="项目状态" description={state.kind === "error" ? state.message : undefined} value={<span role="status">{status}</span>} />;
+}
+
 export function ProjectPanel({ scope, request, onChanged }: Props) {
   const requestRef = useRef(request);
   requestRef.current = request;
@@ -99,7 +127,7 @@ export function ProjectPanel({ scope, request, onChanged }: Props) {
     <SettingsGroup id={settingAnchor('群绑定')} label="项目管理" footer="修改目录或会话方式会影响此后开始的任务。已有工作目录保留。">
       {loading && <SettingsRow title="正在读取项目" />}
       {project && <>
-        <SettingsRow title="飞书群" value={project.name} trailing={<Button size="sm" onClick={() => void request({ action: "openGroup", ...target }).then((reply) => { if (reply.kind === "refused") setError(reply.message); })}>在飞书打开</Button>} />
+        <SettingsRow title="飞书群" value={project.name} trailing={<Button size="sm" onClick={() => void request({ action: "openGroup", ...target }).then((reply) => { if (reply.kind === "refused") setError(reply.message); }).catch((failure: unknown) => setError(failure instanceof Error ? failure.message : "无法打开飞书群。"))}>在飞书打开</Button>} />
         <SettingsRow title="工作目录" description={folder?.displayPath ?? project.cwd} trailing={<Button size="sm" disabled={saving} onClick={() => void chooseDirectory().then((choice) => { if (choice) setFolder(choice); }).catch((failure: unknown) => setError(failure instanceof Error ? failure.message : "目录选择失败。"))}>更换目录</Button>} />
         <SettingsRow title="会话方式" trailing={<select aria-label="项目会话方式" value={conversation} disabled={saving} onChange={(event) => setConversation(event.target.value === "shared" ? "shared" : "threads")}><option value="threads">每个话题独立会话</option><option value="shared">整群共享会话</option></select>} />
         <SettingsRow title="项目状态" trailing={<select aria-label="项目状态" value={enabled ? "enabled" : "disabled"} disabled={saving} onChange={(event) => setEnabled(event.target.value === "enabled")}><option value="enabled">启用</option><option value="disabled">停用</option></select>} />
