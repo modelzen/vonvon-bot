@@ -11,7 +11,7 @@ const folderToken = folderTokenSchema.parse("a87a68a0-197d-4f2a-bc7b-835b55d68d3
 const snapshot: DesktopSnapshot = {
   revision: 2, observedAt: Date.now(), stale: false,
   host: { kind: "connected", ownership: "owned", version: "0.7.0" },
-  agents: [{ id: agentId, name: "Test", enabled: true, connection: "connected", activation: "active" }],
+  agents: [{ id: agentId, name: "Test", enabled: true, running: true, connection: "connected", activation: "active" }],
   groups: [{ id: groupId, name: "Test group" }],
   memberships: [{ id: membershipIdSchema.parse("test"), agentId, groupId, name: "Test project", directory: "/tmp/project", backend: "codex-appserver", conversation: "threads", response: "mention", permission: { administrator: "full", member: "qa", network: false }, stale: false }],
   tools: [], jobs: [], diagnostics: [],

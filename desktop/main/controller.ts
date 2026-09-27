@@ -623,10 +623,10 @@ export class DesktopController {
     path: string,
     body: unknown,
     method = "POST",
-  ): Promise<void> {
+  ): Promise<unknown> {
     this.generation++;
     try {
-      await this.json(path, {
+      return await this.json(path, {
         method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -634,6 +634,28 @@ export class DesktopController {
     } finally {
       this.generation++;
     }
+  }
+  private async setAgentEnabled(agentId: AgentId, enabled: boolean): Promise<CommandResult> {
+    const response = z.object({
+      activation: z.enum(["applied", "restartRequired"]).optional(),
+    }).parse(await this.write(`/api/bots/${encodeURIComponent(agentId)}`, { enabled }, "PATCH")
+      .finally(() => this.refresh(true)));
+    if (response.activation !== "applied") {
+      const result = await this.activate(agentId);
+      if (result.kind === "activationPending" && !enabled)
+        return { kind: "activationPending", message: "停用配置已保存，但 Agent 尚未停止，仍可能回复飞书消息。请到「应用与启动」重启 Bridge，使停用生效。" };
+      if (result.kind !== "applied") return result;
+    }
+    this.pendingActivation.delete(agentId);
+    await this.refresh(true);
+    const agent = this.snapshot.agents.find(candidate => candidate.id === agentId);
+    if (this.snapshot.stale || !agent || agent.enabled !== enabled || agent.running !== enabled) {
+      return {
+        kind: "activationPending",
+        message: enabled ? "尚未确认 Agent 已启动，请重新检查状态。" : "Agent 尚未停止，仍可能回复飞书消息。请重新检查状态。",
+      };
+    }
+    return { kind: "applied", revision: this.snapshot.revision };
   }
   async run(
     command: Command,
@@ -729,12 +751,7 @@ export class DesktopController {
             return { kind: "applied", revision: this.snapshot.revision };
           }
           case "setAgentEnabled":
-            await this.write(
-              `/api/bots/${encodeURIComponent(command.agentId)}`,
-              { enabled: command.enabled },
-              "PATCH",
-            );
-            return await this.activate(command.agentId);
+            return await this.setAgentEnabled(command.agentId, command.enabled);
           case "deleteAgent": {
             const state = stateSchema.parse(await this.json("/api/state"));
             const target = state.bots.find(
@@ -1045,8 +1062,12 @@ export class DesktopController {
             });
             const result = await this.enqueue(async () => {
               if (!target) {
-                for (const appId of committed)
-                  await this.write(`/api/bots/${encodeURIComponent(appId)}`, { enabled: true }, "PATCH");
+                let result: CommandResult = { kind: "applied", revision: this.snapshot.revision };
+                for (const appId of committed) {
+                  const activation = await this.setAgentEnabled(appId, true);
+                  if (activation.kind !== "applied") result = activation;
+                }
+                return result;
               }
               if (target && !state.bots.some(bot => bot.appId === target && bot.active))
                 return {kind: "applied", revision: this.snapshot.revision} as const;

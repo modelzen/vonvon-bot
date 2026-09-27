@@ -75,10 +75,12 @@ const connectedLabel = (connection: string) =>
         : connection === "reconnecting"
           ? "重连中"
           : "连接状态未知";
-const agentListStatus = (agent: DesktopSnapshot["agents"][number]) => {
+const agentListStatus = (agent: DesktopSnapshot["agents"][number]): { label: string; tone: "warning" | "neutral" | "success" } => {
   if (agent.readError) return { label: "读取失败", tone: "warning" };
+  if (!agent.enabled && agent.running)
+    return { label: "尚未停止", tone: "warning" };
   if (agent.activation === "restartRequired")
-    return { label: "待重启", tone: "warning" };
+    return { label: "待生效", tone: "warning" };
   if (!agent.enabled) return { label: "已停用", tone: "neutral" };
   return {
     label: connectedLabel(agent.connection),
@@ -269,9 +271,7 @@ function DesktopApp() {
           <span className="settings-entity-row__value">
             {m.stale
               ? "状态过期"
-              : a.activation === "restartRequired"
-                ? "等待重启"
-                : connectedLabel(a.connection)}
+              : agentListStatus(a).label}
           </span>
           <ChevronRight size={15} />
         </button>
@@ -538,11 +538,9 @@ function DesktopApp() {
                       <p>通过飞书机器人身份参与协作</p>
                     </div>
                     <StatusBadge
-                      tone={
-                        agent.connection === "connected" ? "success" : "neutral"
-                      }
+                      tone={agentListStatus(agent).tone}
                     >
-                      {connectedLabel(agent.connection)}
+                      {agentListStatus(agent).label}
                     </StatusBadge>
                   </header>
                   <SettingsGroup
@@ -580,7 +578,7 @@ function DesktopApp() {
                     />
                     <SettingsRow
                       title="启用 Agent"
-                      description="更改后需要重新启动当前 Bridge。"
+                      description={!agent.enabled && agent.running ? "Agent 尚未停止，仍可能回复飞书消息。请到「应用与启动」重启 Bridge。" : "更改立即生效。停用会结束此 Agent 的运行中任务。"}
                       trailing={
                         <Toggle
                           className="settings-row-switch"
@@ -632,7 +630,7 @@ function DesktopApp() {
                     <SettingsRow
                       title="删除本地 Agent 数据"
                       description={
-                        agent.enabled || agent.connection !== "disconnected"
+                        agent.enabled || agent.running
                           ? "请先停用 Agent，并等待它停止运行。"
                           : "此操作无法撤销。"
                       }
@@ -643,7 +641,7 @@ function DesktopApp() {
                             busy ||
                             host.kind !== "connected" ||
                             agent.enabled ||
-                            agent.connection !== "disconnected" ||
+                            agent.running ||
                             agent.activation !== "active"
                           }
                           onClick={() =>
