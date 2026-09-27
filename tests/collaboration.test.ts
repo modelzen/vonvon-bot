@@ -4,6 +4,7 @@ import { z } from "zod";
 import { createCollaborationService } from "../desktop/main/collaboration";
 import { agentIdSchema, folderTokenSchema, groupIdSchema, membershipIdSchema, type DesktopSnapshot } from "../desktop/shared/bridge";
 import type { HostHandle } from "../desktop/main/host";
+import {searchEntries} from "../desktop/renderer/search";
 
 const agentId = agentIdSchema.parse("cli_testagent");
 const groupId = groupIdSchema.parse("oc_testgroup");
@@ -17,6 +18,30 @@ const snapshot: DesktopSnapshot = {
   tools: [], jobs: [], diagnostics: [],
   application: { platform: "macos", version: "0.7.0", loginItem: false, dataPath: "/tmp/test" },
 };
+
+test("Codex account usage is available without any Agent and refreshes through the Host endpoint", async () => {
+  const paths: string[] = [];
+  const usage = {profile: {topInvocations: [], dailyBuckets: []}, usage: {main: {}, extras: [], fetchedAt: 1000}};
+  const host: HostHandle = {kind: "connected", ownership: "owned", pid: 1, async request(path, init) {
+    paths.push(path);
+    assert.equal(init?.method, "GET");
+    return Response.json({data: usage});
+  }, async restart() {}, async close() {}};
+  const empty = {...snapshot, agents: [], memberships: []};
+  const execute = createCollaborationService({host: () => host, snapshot: () => empty, async resolveFolder() {throw new Error("unexpected folder read");}, async openExternal() {throw new Error("unexpected link");}});
+  assert.equal((await execute({action: "usage", force: false})).kind, "usage");
+  assert.equal((await execute({action: "usage", force: true})).kind, "usage");
+  assert.deepEqual(paths, ["/api/account/codex/usage", "/api/account/codex/usage?force=1"]);
+});
+
+test("settings search opens the owning detail category", () => {
+  const entries = searchEntries(snapshot);
+  const card = entries.find(item => item.id === `${agentId}-任务卡片`);
+  const permission = entries.find(item => item.id === `${snapshot.memberships[0]?.id}-工作目录权限`);
+  assert.deepEqual(card?.destination.detail, {kind: "agent-settings", category: "interaction"});
+  assert.deepEqual(permission?.destination.detail, {kind: "membership-settings", category: "access"});
+  assert.equal(entries.find(item => item.id === "usage")?.destination.page, "usage");
+});
 
 test("project creation resolves the selected folder only in main and sends a scoped Core request", async () => {
   let path = "";

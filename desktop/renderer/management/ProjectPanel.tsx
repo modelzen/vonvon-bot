@@ -5,6 +5,7 @@ import type { AgentId, FolderChoice, GroupId } from "../../shared/bridge";
 import type { CollaborationClient, CollaborationReply, ProjectRecord } from "../../shared/collaboration";
 import "../settings/settings.css";
 import {useDraft} from "../settings/DraftGuard";
+import {settingAnchor} from '../search';
 
 type Props = {
   scope: { kind: "project"; agentId: AgentId; groupId: GroupId; projectName: string };
@@ -95,7 +96,7 @@ export function ProjectPanel({ scope, request, onChanged }: Props) {
 
   const target = { agentId: scope.agentId, projectName: scope.projectName, groupId: scope.groupId };
   return <>
-    <SettingsGroup label="项目管理" footer="修改目录或会话方式会影响此后开始的任务。已有工作目录保留。">
+    <SettingsGroup id={settingAnchor('群绑定')} label="项目管理" footer="修改目录或会话方式会影响此后开始的任务。已有工作目录保留。">
       {loading && <SettingsRow title="正在读取项目" />}
       {project && <>
         <SettingsRow title="飞书群" value={project.name} trailing={<Button size="sm" onClick={() => void request({ action: "openGroup", ...target }).then((reply) => { if (reply.kind === "refused") setError(reply.message); })}>在飞书打开</Button>} />

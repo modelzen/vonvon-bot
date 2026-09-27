@@ -27,6 +27,11 @@ test("usage reply retains activity statistics and daily buckets from Core", () =
   assert.deepEqual(reply.data.profile.topInvocations, [{ name: "review", count: 4, kind: "skill" }]);
 });
 
+test("account usage request has no Agent identity", () => {
+  assert.deepEqual(collaborationRequestSchema.parse({action: "usage", force: true}), {action: "usage", force: true});
+  assert.equal(collaborationRequestSchema.safeParse({action: "usage", force: false, agentId}).success, false);
+});
+
 test("share request accepts Core card sections and rejects unknown choices", () => {
   const request = { action: "shareUsage", agentId, projectName: "Demo", groupId, sections: ["stats", "heatmap"] };
   const parsed = collaborationRequestSchema.parse(request);

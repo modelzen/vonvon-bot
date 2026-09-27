@@ -30,7 +30,7 @@ export const collaborationRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("stop"), ...sessionTarget, runId: z.string().min(1).max(256) }).strict(),
   z.object({ action: z.literal("endGoal"), ...sessionTarget, runId: z.string().min(1).max(256) }).strict(),
   z.object({ action: z.literal("reminder"), ...sessionTarget, runId: z.string().min(1).max(256), requested: z.boolean() }).strict(),
-  z.object({ action: z.literal("usage"), agentId: agentIdSchema, force: z.boolean() }).strict(),
+  z.object({ action: z.literal("usage"), force: z.boolean() }).strict(),
   z.object({ action: z.literal("shareUsage"), ...target, sections: z.array(usageShareSectionSchema).max(5).optional() }).strict(),
   z.object({ action: z.literal("openGroup"), ...target, threadId: threadId.optional() }).strict(),
 ]);
