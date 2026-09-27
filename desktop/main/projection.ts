@@ -11,7 +11,7 @@ export function projectState(state:CoreState, previous:DesktopSnapshot, pending:
   for (const bot of state.bots) {
     const duplicate = new Set(bot.projects.map(project=>project.chatId)).size!==bot.projects.length;
     const readError = bot.projectsError ?? (duplicate ? '同一个 Agent 存在冲突的群绑定，请在内核中修复。' : undefined);
-    agents.push({id:bot.appId,name:bot.botName || bot.name,...(bot.avatarDataUrl?{avatarDataUrl:bot.avatarDataUrl}:{}),enabled:bot.active,connection:bot.connection ?? (bot.running ? 'unknown' : 'disconnected'),activation:pending.has(bot.appId)?'restartRequired':'active',...(readError?{readError}:{})});
+    agents.push({id:bot.appId,name:bot.botName || bot.name,...(bot.avatarDataUrl?{avatarDataUrl:bot.avatarDataUrl}:{}),enabled:bot.active,running:bot.running,connection:bot.connection ?? (bot.running ? 'unknown' : 'disconnected'),activation:pending.has(bot.appId)||bot.active!==bot.running?'restartRequired':'active',...(readError?{readError}:{})});
     if (readError) {
       memberships.push(...previous.memberships.filter(member=>member.agentId===bot.appId).map(member=>({...member,stale:true})));
       continue;

@@ -119,6 +119,7 @@ export type Agent = {
   name: string;
   avatarDataUrl?: string;
   enabled: boolean;
+  running: boolean;
   connection: string;
   activation: "active" | "restartRequired";
   readError?: string;
