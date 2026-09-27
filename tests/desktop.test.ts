@@ -802,6 +802,102 @@ test("reads begun before completed writes cannot regress the projection", async 
     await f.controller.quit();
   }
 });
+test("disabled but running Agent stays pending after recreating the controller", async () => {
+  const f = fixture("attached");
+  const state = coreState();
+  state.bots = state.bots.map(bot => ({ ...bot, active: false }));
+  f.setState(state);
+  const reopened = new DesktopController(f.module, runtime, application);
+  try {
+    await reopened.start();
+    const agent = reopened.current().agents[0];
+    assert.equal(agent?.enabled, false);
+    assert.equal(agent?.activation, "restartRequired");
+  } finally {
+    await reopened.quit();
+  }
+});
+
+test("applied Agent lifecycle changes confirm runtime state without restarting any Host", async () => {
+  for (const ownership of ["owned", "attached"] as const) {
+    const f = fixture(ownership);
+    f.setIntercept((path, init) => {
+      if (path !== `/api/bots/${agentId}` || init?.method !== "PATCH") return;
+      const state = coreState();
+      const enabled = JSON.parse(String(init.body)).enabled;
+      state.bots = state.bots.map(bot => ({ ...bot, active: enabled, running: enabled, connection: enabled ? "connected" : "disconnected" }));
+      f.setState(state);
+      return Promise.resolve(Response.json({ ok: true, activation: "applied" }));
+    });
+    try {
+      await f.controller.start();
+      for (const enabled of [false, true]) {
+        const result = await f.controller.run({ type: "setAgentEnabled", agentId, enabled }, async () => "/tmp/work");
+        assert.equal(result.kind, "applied");
+        assert.equal(f.controller.current().agents[0]?.enabled, enabled);
+        assert.equal(f.controller.current().agents[0]?.activation, "active");
+      }
+      assert.equal(f.counts().restarts, 0);
+    } finally { await f.controller.quit(); }
+  }
+});
+
+test("applied response cannot hide an Agent that is still running", async () => {
+  const f = fixture("attached");
+  f.setIntercept((path, init) => {
+    if (path !== `/api/bots/${agentId}` || init?.method !== "PATCH") return;
+    const state = coreState();
+    state.bots = state.bots.map(bot => ({ ...bot, active: false }));
+    f.setState(state);
+    return Promise.resolve(Response.json({ ok: true, activation: "applied" }));
+  });
+  try {
+    await f.controller.start();
+    const result = await f.controller.run({ type: "setAgentEnabled", agentId, enabled: false }, async () => "/tmp/work");
+    assert.equal(result.kind, "activationPending");
+    if (result.kind === "activationPending") assert.match(result.message, /尚未停止/);
+    assert.equal(f.controller.current().agents[0]?.activation, "restartRequired");
+    assert.equal(f.counts().restarts, 0);
+  } finally { await f.controller.quit(); }
+});
+
+test("failed Agent stop refreshes saved configuration and follows later runtime recovery", async () => {
+  const f = fixture("attached");
+  f.setIntercept((path, init) => {
+    if (path !== `/api/bots/${agentId}` || init?.method !== "PATCH") return;
+    const state = coreState();
+    state.bots = state.bots.map(bot => ({ ...bot, active: false }));
+    f.setState(state);
+    return Promise.resolve(Response.json({ error: "stop-timeout", message: "Agent 尚未停止" }, { status: 409 }));
+  });
+  try {
+    await f.controller.start();
+    const result = await f.controller.run({ type: "setAgentEnabled", agentId, enabled: false }, async () => "/tmp/work");
+    assert.equal(result.kind, "refused");
+    assert.equal(f.controller.current().agents[0]?.enabled, false);
+    assert.equal(f.controller.current().agents[0]?.activation, "restartRequired");
+    const stopped = coreState();
+    stopped.bots = stopped.bots.map(bot => ({ ...bot, active: false, running: false, connection: "disconnected" }));
+    f.setState(stopped);
+    await f.controller.refresh();
+    assert.equal(f.controller.current().agents[0]?.activation, "active");
+    assert.equal(f.counts().restarts, 0);
+  } finally { await f.controller.quit(); }
+});
+
+test("legacy attached Host reports that a disabled Agent is still running", async () => {
+  const f = fixture("attached");
+  try {
+    await f.controller.start();
+    const result = await f.controller.run({ type: "setAgentEnabled", agentId, enabled: false }, async () => "/tmp/work");
+    assert.equal(result.kind, "activationPending");
+    if (result.kind === "activationPending") assert.match(result.message, /尚未停止.*仍可能回复/);
+    assert.equal(f.controller.current().agents[0]?.running, true);
+    assert.equal(f.controller.current().agents[0]?.activation, "restartRequired");
+    assert.equal(f.counts().restarts, 0);
+  } finally { await f.controller.quit(); }
+});
+
 test("owned changes restart while attached changes only report pending activation", async () => {
   for (const ownership of ["owned", "attached"] as const) {
     const f = fixture(ownership);
