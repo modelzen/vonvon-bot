@@ -75,10 +75,10 @@ html[data-desktop-platform="windows"] .collaboration-window .settings-sidebar {p
 .collaboration-window .collaboration-breadcrumb span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:#4b4b51;}
 .collaboration-window .collaboration-profile__kind{display:block;margin-bottom:2px;color:#777780;font-size:10px;font-weight:650;letter-spacing:.04em;}
 .collaboration-window .collaboration-member-context{display:flex;align-items:center;gap:9px;min-width:0;padding:10px 12px;border:1px solid rgba(60,60,67,.095);border-radius:10px;background:#fff;}
-.collaboration-window .collaboration-member-context>span{display:grid;gap:2px;flex:1;min-width:0;}
+.collaboration-window .collaboration-member-context__copy{display:grid;gap:2px;flex:1;min-width:0;}
 .collaboration-window .collaboration-member-context strong{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:12px;font-weight:620;}
 .collaboration-window .collaboration-member-context small{color:#777780;font-size:11px;}
 .collaboration-window .collaboration-member-context button{flex:none;border:0;padding:5px 2px;background:transparent;color:#0878ef;font:600 11px system-ui;}
 .collaboration-window .collaboration-scope-note{margin:-3px 0 -8px;color:#696970;font-size:12px;line-height:1.5;}
 .collaboration-window .collaboration-breadcrumb button:focus-visible,.collaboration-window .collaboration-member-context button:focus-visible{outline:2px solid #0878ef;outline-offset:2px;border-radius:3px;}
-@media(max-width:800px){.collaboration-window .collaboration-member-context{flex-wrap:wrap;}.collaboration-window .collaboration-member-context>span{min-width:125px;}.collaboration-window .collaboration-member-context button{padding:4px 2px;}}
+@media(max-width:800px){.collaboration-window .collaboration-member-context{flex-wrap:wrap;}.collaboration-window .collaboration-member-context__copy{min-width:125px;}.collaboration-window .collaboration-member-context button{padding:4px 2px;}}
