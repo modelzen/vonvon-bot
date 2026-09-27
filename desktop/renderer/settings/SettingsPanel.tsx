@@ -23,7 +23,7 @@ import {
   type TitlePolicy,
 } from "../../shared/settings";
 import "./settings.css";
-import {useDraft} from './DraftGuard';
+import {useDraft, useDraftGuard} from './DraftGuard';
 import {settingAnchor} from '../search';
 import type {AgentCategory, MembershipCategory, SearchReveal} from '../search';
 
@@ -32,7 +32,7 @@ type ProjectScope = { kind: "project"; botId: AgentId; projectName: string };
 type PanelProps =
   | {scope: 'agent'; target: AgentScope; category: AgentCategory; reveal?: SearchReveal}
   | {scope: 'project'; target: ProjectScope; category: MembershipCategory}
-  | {scope: 'host'; target: {kind: 'host'}; category?: never};
+  | {scope: 'host'; target: {kind: 'host'}; category: 'coffee' | 'execution'; reveal?: SearchReveal};
 const isAgentView = (view: SettingsView): view is AgentSettingsView =>
   view.scope.kind === "agent" && "cliRuntime" in view;
 const isProjectView = (view: SettingsView): view is ProjectSettingsView =>
@@ -563,7 +563,7 @@ function AgentPanel({
 }: {
   view: AgentSettingsView;
   refresh: () => Promise<void>;
-  category: AgentCategory;
+  category: AgentCategory | 'cli';
   reveal?: SearchReveal;
 }) {
   const [actionMessage, setActionMessage] = useState<string>();
@@ -880,15 +880,8 @@ function AgentPanel({
       </SettingsGroup>
       </>}
       {category === "cli" && <>
-      <SettingsGroup
-        label="CLI 协作"
-        id={settingAnchor("CLI 协作")}
-        footer={
-          cards.access.kind === "readonly"
-            ? cards.access.message
-            : "后台 CLI 服务与桌面登录自启分别管理。保存普通选项后，下次对应 Hook 事件使用新值。"
-        }
-      >
+      <SettingsGroup label="CLI 转发" id={settingAnchor("CLI 转发")}
+        footer={cards.access.kind === 'readonly' ? cards.access.message : '这些规则保存在当前通知 Agent 中。'}>
         <SettingsRow
           title="转发本机 CLI 活动"
           description={
@@ -915,31 +908,6 @@ function AgentPanel({
                 })
               }
             />
-          }
-        />
-        <SettingsRow
-          title="Claude Hook"
-          value={{ installed: "已安装", not_installed: "未安装", needs_repair: "需要修复", conflict_agent2lark: "与已有 Hook 冲突" }[view.cliRuntime.hooks.claude.status]}
-        />
-        <SettingsRow
-          title="Codex Hook"
-          value={{ installed: "已安装", not_installed: "未安装", needs_repair: "需要修复", conflict_agent2lark: "与已有 Hook 冲突" }[view.cliRuntime.hooks.codex.status]}
-        />
-        <SettingsRow
-          title="修复 Hook"
-          trailing={
-            <Button
-              size="sm"
-              disabled={cards.access.kind === "readonly"}
-              onClick={() =>
-                void act({
-                  type: "act",
-                  action: { kind: "repairCliHooks", botId: view.scope.botId },
-                })
-              }
-            >
-              检查并修复
-            </Button>
           }
         />
       </SettingsGroup>
@@ -2017,6 +1985,87 @@ function SessionPanel({
     </>
   );
 }
+function CoffeeHostPanel({view, refresh, reveal}: {view: HostSettingsView; refresh: () => Promise<void>; reveal?: SearchReveal}) {
+  const guard = useDraftGuard();
+  const coffee = view.runtime.coffee;
+  const [recipient, setRecipient] = useState<AgentSettingsView>();
+  const [notice, setNotice] = useState<string>();
+  const [busy, setBusy] = useState<'route' | 'codex' | 'claude' | null>(null);
+  const pending = useRef(false);
+  const recipientRequest = useRef(0);
+  const refreshRecipient = useCallback(async () => {
+    const requestId = ++recipientRequest.current;
+    const botId = coffee?.route === 'agent' ? coffee.botId : null;
+    if (!botId) { setRecipient(undefined); return; }
+    const reply = await window.bridge.settings({type: 'read', scope: {kind: 'agent', botId}});
+    if (requestId !== recipientRequest.current) return;
+    if (reply.kind === 'view' && isAgentView(reply.view) && reply.view.scope.botId === botId) {
+      setRecipient(reply.view);
+      return;
+    }
+    setNotice(reply.kind === 'refused' ? reply.message : '通知 Agent 的设置暂不可用。');
+  }, [coffee?.botId, coffee?.revision, view]);
+  useEffect(() => { void refreshRecipient(); return () => { recipientRequest.current += 1; }; }, [refreshRecipient]);
+  async function saveRoute(next: AgentId | '') {
+    if (!coffee || pending.current) return false;
+    pending.current = true;
+    setBusy('route');
+    try {
+      const reply = await window.bridge.settings({type: 'act', action: {kind: 'setHostCliRoute', botId: next || null, revision: coffee.revision}});
+      setNotice(errorText(reply) ?? (reply.kind === 'acted' && reply.result.kind === 'saved'
+        ? reply.result.effects.map(effect => effect.detail).join(' ') || '通知目标已保存。'
+        : '无法保存通知目标。'));
+      if (reply.kind === 'acted' && reply.result.kind === 'saved') { await refresh(); return true; }
+      return false;
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '无法保存通知目标。');
+      return false;
+    } finally { pending.current = false; setBusy(null); }
+  }
+  async function repair(agent: 'claude' | 'codex') {
+    if (pending.current) return;
+    pending.current = true;
+    setBusy(agent);
+    try {
+      const reply = await window.bridge.settings({type: 'act', action: {kind: 'repairHostCliHooks', agents: [agent]}});
+      setNotice(errorText(reply) ?? (reply.kind === 'acted' && reply.result.kind === 'saved'
+        ? reply.result.warnings.join(' ') || `${agent === 'codex' ? 'Codex' : 'Claude'} Hook 已检查并修复。`
+        : 'Hook 修复未完成。'));
+      await refresh();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Hook 修复未完成。');
+    } finally { pending.current = false; setBusy(null); }
+  }
+  const statusLabel = {installed: '已安装', not_installed: '未安装', needs_repair: '需要修复', conflict_agent2lark: '与已有 Hook 冲突'};
+  if (!coffee) return <InlineNotice title="咖啡一下暂不可用">当前 Bridge 版本尚不支持全局设置，请更新 Bridge 后重新读取。</InlineNotice>;
+  const routeUnconfirmed = coffee.route === 'legacy' && coffee.agents.length > 0;
+  const selected = coffee.agents.find(agent => agent.botId === coffee.botId);
+  const routeChoice = coffee.route === 'legacy' ? '__legacy__' as const : coffee.botId ?? '';
+  return <>
+    <SettingsGroup label="咖啡一下" id={settingAnchor('咖啡一下')}
+      footer="离开电脑时，将本机 Codex 或 Claude 的审批、问答与任务完成提醒发送到所选 Agent 的飞书私聊。">
+      <SettingsRow title="通知 Agent" description={coffee.route === 'legacy' ? '沿用升级前的通知选择，实际目标尚未确认。选择 Agent 后将明确由它发送通知。' : '切换 Agent 将使用它已有的咖啡一下规则。'}
+        trailing={<div className="settings-inline-actions">
+          <Select label="通知 Agent" value={routeChoice} choices={[...(coffee.route === 'legacy' ? [{value: '__legacy__' as const, label: '沿用升级前的选择'}] : []), {value: '' as const, label: '停止发送到飞书'}, ...coffee.agents.map(agent => ({value: agent.botId, label: agent.name}))]} onChange={next => {if (next !== '__legacy__') guard.navigate(() => void saveRoute(next));}} disabled={busy !== null}/>
+          {coffee.route === 'legacy' && coffee.botId && <Button size="sm" loading={busy === 'route'} disabled={busy !== null} onClick={() => guard.navigate(() => void saveRoute(coffee.botId ?? ''))}>确认 {selected?.name ?? '通知 Agent'}</Button>}
+        </div>}/>
+      {selected && <SettingsRow title={coffee.route === 'legacy' ? '候选规则来自' : '当前规则来自'} value={selected.name} description={!selected.enabled ? '此 Agent 的本机 CLI 转发未启用。' : !selected.hasOwner ? '请先为此 Agent 设置所有者。' : undefined}/>}
+      {!selected && <SettingsRow title="通知状态" value={coffee.route === 'legacy' ? '沿用升级前的通知选择' : '暂不发送到飞书'}/>}
+    </SettingsGroup>
+    <SettingsGroup label="本机 Hook" id={settingAnchor('本机 Hook')}
+      footer={routeUnconfirmed ? '请先保存通知 Agent，再修复 Hook。' : 'Hook 安装在这台设备上，由所有 Agent 共用。'}>
+      {(['codex', 'claude'] as const).map(agent => <SettingsRow key={agent} title={agent === 'codex' ? 'Codex Hook' : 'Claude Hook'}
+        value={statusLabel[coffee.hooks[agent].status]}
+        description={coffee.hooks[agent].status === 'conflict_agent2lark' ? '修复会替换 agent2lark 的 Hook。' : undefined}
+        trailing={<Button size="sm" loading={busy === agent} disabled={routeUnconfirmed || busy !== null} onClick={() => void repair(agent)}>检查并修复</Button>}/>)}
+    </SettingsGroup>
+    {notice && <InlineNotice title="操作结果">{notice}</InlineNotice>}
+    {coffee.route === 'legacy' && selected && <InlineNotice title="确认通知 Agent">确认通知 Agent 后可修改它的咖啡一下规则，原有配置会继续保留。</InlineNotice>}
+    {coffee.route === 'agent' && selected && recipient?.scope.botId === selected.botId && <AgentPanel key={selected.botId} view={recipient} refresh={refreshRecipient} category="cli" reveal={reveal}/>}
+    {coffee.route === 'agent' && selected && recipient?.scope.botId !== selected.botId && <InlineNotice title="通知规则暂不可编辑">请先启动此 Agent，再重新读取规则。本机 Hook 仍可单独检查。</InlineNotice>}
+  </>;
+}
+
 function HostPanel({
   view,
   refresh,
@@ -2221,7 +2270,9 @@ function ScopedSettingsPanel(props: PanelProps) {
   ) : isProjectView(view) && props.scope === 'project' ? (
     <ProjectPanel view={view} refresh={refresh} category={props.category} />
   ) : isHostView(view) ? (
-    <HostPanel view={view} refresh={refresh} />
+    props.scope === 'host' && props.category === 'coffee'
+      ? <CoffeeHostPanel view={view} refresh={refresh} reveal={props.reveal}/>
+      : <HostPanel view={view} refresh={refresh} />
   ) : null;
   return (
     <>

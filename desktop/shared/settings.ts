@@ -227,6 +227,13 @@ export const hostViewSchema = z.object({
     codexBin: z.string().nullable(),
     fallbackCwd: z.string(),
     platform: z.string(),
+    coffee: z.object({
+      route: z.enum(['legacy', 'none', 'agent']),
+      botId: agentIdSchema.nullable(),
+      revision: z.string(),
+      agents: z.array(z.object({ botId: agentIdSchema, name: z.string(), enabled: z.boolean(), hasOwner: z.boolean() })),
+      hooks: z.object({ claude: hook, codex: hook }),
+    }).optional(),
   }),
 });
 export const settingsViewSchema = z.union([
@@ -312,6 +319,8 @@ export type SettingsEdit =
       patch: Partial<z.infer<typeof hostSectionSchemas.execution>>;
     };
 export const actionSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal('setHostCliRoute'), botId: agentIdSchema.nullable(), revision: z.string() }).strict(),
+  z.object({ kind: z.literal('repairHostCliHooks'), agents: z.array(z.enum(['claude', 'codex'])).min(1).max(2) }).strict(),
   z
     .object({
       kind: z.literal("setCliBridgeEnabled"),
@@ -463,13 +472,13 @@ const saveSchema = z.discriminatedUnion("kind", [
 const actionResultSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("saved"),
-    view: z.union([agentViewSchema, projectViewSchema]),
+    view: z.union([agentViewSchema, projectViewSchema, hostViewSchema]),
     effects: z.array(effect),
     warnings: z.array(z.string()),
   }),
   z.object({
     kind: z.literal("conflict"),
-    view: z.union([agentViewSchema, projectViewSchema]),
+    view: z.union([agentViewSchema, projectViewSchema, hostViewSchema]),
   }),
   z.object({
     kind: z.literal("rejected"),
