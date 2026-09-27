@@ -44,7 +44,7 @@ import {SettingsPanel,membershipSettingsTarget} from "./settings/SettingsPanel";
 import {DraftGuardProvider, useDraftGuard} from './settings/DraftGuard';
 import {agentCategories, membershipCategories, searchEntries, settingAnchor, type DetailPane, type SearchEntry, type Selection} from './search';
 import {SearchDialog} from './SearchDialog';
-import {ProjectPanel} from './management/ProjectPanel';
+import {ProjectPanel, ProjectStatus} from './management/ProjectPanel';
 import {ConversationPanel} from './management/ConversationPanel';
 import {ShareUsagePanel, UsagePanel} from './management/UsagePanel';
 import {EnvironmentPanel} from './management/EnvironmentPanel';
@@ -739,7 +739,8 @@ function DesktopApp() {
                     <SettingsRow title="工作目录" value={<code>{member.directory}</code>}/>
                     <SettingsRow title="执行工具" value={backendName(member.backend)}/>
                     <SettingsRow title="会话方式" value={member.conversation === 'threads' ? '按话题独立会话' : '整群连续会话'}/>
-                    <SettingsRow title="连接状态" value={member.stale ? '状态过期' : agentListStatus(agent).label}/>
+                    <ProjectStatus scope={{kind: 'project', agentId: agent.id, groupId: group.id, projectName: member.name}} request={window.bridge.collaboration}/>
+                    <SettingsRow title="Agent 连接" value={member.stale ? '状态过期' : agentListStatus(agent).label}/>
                   </SettingsGroup>
                   <ConversationPanel key={`sessions-${member.id}`} agentId={agent.id} groupId={group.id} projectName={member.name} conversation={member.conversation} request={window.bridge.collaboration}/>
                   <SettingsGroup label="快捷操作">
