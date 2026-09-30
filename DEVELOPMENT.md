@@ -38,7 +38,7 @@ npm run prepare:runtime -- darwin-arm64
 npm run package:preview:mac
 ```
 
-The preview is `release/mac-arm64/Vonvon Bridge Preview.app`. It is unsigned and not notarized. Preview packaging must be requested explicitly and labels the application Preview. Normal release packaging rejects this runtime.
+The preview is `release/mac-arm64/Vonvon Bot Preview.app`. It is unsigned and not notarized. Preview packaging must be requested explicitly and labels the application Preview. Normal release packaging rejects this runtime.
 
 ## Isolated native verification
 

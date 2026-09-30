@@ -1,4 +1,4 @@
-# Vonvon Bridge
+# Vonvon Bot
 
 面向 Windows 和 macOS 的 Electron 桌面协作工具。目标是让新老用户都能在不打开终端的情况下完成第一次飞书协作。
 
@@ -22,4 +22,4 @@
 
 升级后的实际数据目录统一为 `.vonvon-bridge`。离线迁移把旧目录移动到新位置，再让 `.feishu-codex-bridge` 链接到同一份数据。它不复制两份数据，也不运行同步任务。检测到数据正在使用、目录冲突或迁移未完成时，程序停止迁移并显示原因。
 
-macOS `.pkg` 和 Windows 安装程序会自动注册命令行工具并加入新终端的 PATH。主命令为 `vonvon-bridge`，`feishu-codex-bridge` 保留为兼容入口。两个命令共用应用内置的 Node 和 Bridge Core，不需要单独安装全局 Node。移动应用后重新打开桌面端会修复命令路径；状态和修复入口位于「应用与启动」的命令行工具分组。安装后请新开终端。已有全局 CLI 文件不会被覆盖，卸载时只移除桌面端管理的入口。
+macOS `.pkg` 和 Windows 安装程序会自动注册命令行工具并加入新终端的 PATH。主命令为 `vonvon-bot`，`vonvon-bridge` 和 `feishu-codex-bridge` 保留为兼容入口。两个命令共用应用内置的 Node 和 Bridge Core，不需要单独安装全局 Node。移动应用后重新打开桌面端会修复命令路径；状态和修复入口位于「应用与启动」的命令行工具分组。安装后请新开终端。已有全局 CLI 文件不会被覆盖，卸载时只移除桌面端管理的入口。
