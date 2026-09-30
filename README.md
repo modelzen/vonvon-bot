@@ -1,2 +1,2 @@
-# vonvon-bridge
+# vonvon-bot
 Electron desktop product for Feishu agents, powered by the independently usable feishu-codex-bridge Host.
