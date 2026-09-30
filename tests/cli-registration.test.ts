@@ -10,7 +10,7 @@ async function fixture() {
   const root=await mkdtemp(join(tmpdir(),"vonvon cli %&()' "));
   const home=join(root,'home');
   await mkdir(home);
-  const runtime=join(root,'Vonvon Bridge.app','Contents','Resources','runtime');
+  const runtime=join(root,'Vonvon Bot.app','Contents','Resources','runtime');
   await mkdir(join(runtime,'node','bin'),{recursive:true});
   await mkdir(join(runtime,'node','lib','node_modules','npm','bin'),{recursive:true});
   await mkdir(join(runtime,'core','bin'),{recursive:true});
@@ -20,7 +20,7 @@ async function fixture() {
   return {root,home,runtime};
 }
 
-test('macOS registration runs both aliases through bundled Node, preserves args and existing rc content',{skip:process.platform!=='darwin'},async t=>{
+test('macOS registration runs the new command and legacy aliases through bundled Node',{skip:process.platform!=='darwin'},async t=>{
   const {root,home,runtime}=await fixture();
   t.after(()=>rm(root,{recursive:true,force:true}));
   await writeFile(join(home,'.zshrc'),'export ORIGINAL=yes');
@@ -33,12 +33,12 @@ test('macOS registration runs both aliases through bundled Node, preserves args 
   assert.equal(rc.match(/>>> Vonvon Bridge CLI/g)?.length,1);
   assert.match(rc,/export ORIGINAL=yes\n#/);
   const bin=join(home,'.local','share','vonvon-bridge','bin');
-  const zsh=execFileSync('/bin/zsh',['-c','source "$ZDOTDIR/.zshrc"; source "$ZDOTDIR/.zshrc"; command -v vonvon-bridge; echo "$PATH"'],{encoding:'utf8',env:{...process.env,HOME:home,ZDOTDIR:home,PATH:`/usr/bin:/bin`}}).trim().split('\n');
-  assert.equal(zsh[0],join(bin,'vonvon-bridge'));
+  const zsh=execFileSync('/bin/zsh',['-c','source "$ZDOTDIR/.zshrc"; source "$ZDOTDIR/.zshrc"; command -v vonvon-bot; echo "$PATH"'],{encoding:'utf8',env:{...process.env,HOME:home,ZDOTDIR:home,PATH:`/usr/bin:/bin`}}).trim().split('\n');
+  assert.equal(zsh[0],join(bin,'vonvon-bot'));
   assert.equal(zsh[1]?.split(':').filter(path=>path===bin).length,1);
-  const login=execFileSync('/bin/zsh',['-lc','command -v vonvon-bridge'],{encoding:'utf8',env:{...process.env,HOME:home,ZDOTDIR:home,PATH:'/usr/bin:/bin'}}).trim();
-  assert.equal(login,join(bin,'vonvon-bridge'));
-  for(const name of ['vonvon-bridge','feishu-codex-bridge']) {
+  const login=execFileSync('/bin/zsh',['-lc','command -v vonvon-bot'],{encoding:'utf8',env:{...process.env,HOME:home,ZDOTDIR:home,PATH:'/usr/bin:/bin'}}).trim();
+  assert.equal(login,join(bin,'vonvon-bot'));
+  for(const name of ['vonvon-bot','vonvon-bridge','feishu-codex-bridge']) {
     const output=execFileSync(join(bin,name),['alpha beta',"'&()%"],{encoding:'utf8'});
     const parsed=JSON.parse(output);
     assert.deepEqual(parsed.args,['alpha beta',"'&()%"]);
@@ -89,13 +89,13 @@ test('older app uninstall preserves registration repaired by a moved app',{skip:
   assert.equal((await registerCli(old)).kind,'ready');
   assert.equal((await registerCli({...old,runtime:b})).kind,'ready');
   assert.equal((await removeCli(old)).kind,'ready');
-  assert.equal(execFileSync(join(a.home,'.local','share','vonvon-bridge','bin','vonvon-bridge'),{encoding:'utf8'}),'moved');
+  assert.equal(execFileSync(join(a.home,'.local','share','vonvon-bridge','bin','vonvon-bot'),{encoding:'utf8'}),'moved');
 });
 
 test('Windows registration preserves raw user PATH type and foreign entries',async t=>{
   const root=await mkdtemp(join(tmpdir(),'vonvon-win-%&()'));
   t.after(()=>rm(root,{recursive:true,force:true}));
-  const runtime=join(root,'Vonvon Bridge','resources','runtime');
+  const runtime=join(root,'Vonvon Bot','resources','runtime');
   const localAppData=join(root,'Local AppData');
   await mkdir(join(runtime,'node','node_modules','npm','bin'),{recursive:true});
   await mkdir(join(runtime,'core','bin'),{recursive:true});
@@ -111,7 +111,7 @@ test('Windows registration preserves raw user PATH type and foreign entries',asy
   assert.equal(value,`${bin};C:\\Legacy\\bin;C:\\Other`);
   assert.equal((await registerCli(options)).kind,'ready');
   assert.deepEqual(types,['REG_EXPAND_SZ']);
-  const wrapper=await readFile(join(bin,'vonvon-bridge.cmd'),'utf8');
+  const wrapper=await readFile(join(bin,'vonvon-bot.cmd'),'utf8');
   assert.match(wrapper,/setlocal EnableExtensions DisableDelayedExpansion/);
   assert.match(wrapper,/%%&\(\)/);
   assert.match(wrapper,/%\*/);
@@ -122,7 +122,7 @@ test('Windows registration preserves raw user PATH type and foreign entries',asy
 test('Windows command uses bundled Node and preserves arguments and exit status',{skip:process.platform!=='win32'},async t=>{
   const root=await mkdtemp(join(tmpdir(),'vonvon-native-中文-%&()'));
   t.after(()=>rm(root,{recursive:true,force:true}));
-  const runtime=join(root,'Vonvon Bridge','resources','runtime');
+  const runtime=join(root,'Vonvon Bot','resources','runtime');
   const localAppData=join(root,'Local AppData');
   await mkdir(join(runtime,'node','node_modules','npm','bin'),{recursive:true});
   await mkdir(join(runtime,'core','bin'),{recursive:true});
@@ -131,7 +131,7 @@ test('Windows command uses bundled Node and preserves arguments and exit status'
   await writeFile(join(runtime,'core','bin','feishu-codex-bridge.mjs'),'console.log(JSON.stringify({args:process.argv.slice(2),npm:process.env.VONVON_NPM_CLI}));process.exitCode=37;');
   const windowsPath={read:async()=>({value:'',type:'REG_EXPAND_SZ' as const}),write:async()=>{}};
   assert.equal((await registerCli({platform:'win32',scope:'user',runtime,localAppData,windowsPath})).kind,'ready');
-  for(const name of ['vonvon-bridge','feishu-codex-bridge']) {
+  for(const name of ['vonvon-bot','vonvon-bridge','feishu-codex-bridge']) {
     const command=join(localAppData,'Vonvon Bridge','bin',`${name}.cmd`);
     try {
       execFileSync('cmd.exe',['/d','/s','/c',`""${command}" "alpha beta" "&()!" "中文""`],{encoding:'utf8'});

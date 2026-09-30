@@ -439,9 +439,9 @@ export class EnvironmentService {
     if (this.mutation || this.active) return refused("busy", "另一个本机环境操作正在进行。");
     this.mutation = true;
     try {
-      if (!await this.managedVersion(tool)) return refused("external-install", "此工具不是 Vonvon Bridge 托管的副本，不能卸载。");
+      if (!await this.managedVersion(tool)) return refused("external-install", "此工具不是 Vonvon Bot 托管的副本，不能卸载。");
       await this.publishManaged(tool, { schemaVersion: 1, tool, state: "disabled" });
-      return { kind: "applied", message: "已停用 Vonvon Bridge 托管的工具，其他安装不受影响。" };
+      return { kind: "applied", message: "已停用 Vonvon Bot 托管的工具，其他安装不受影响。" };
     } finally { this.mutation = false; }
   }
 

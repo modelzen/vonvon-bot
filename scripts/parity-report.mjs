@@ -33,7 +33,7 @@ const stringList = (value, label) => {
 };
 const sourceRepos = {
   core: "modelzen/feishu-codex-bridge",
-  desktop: "modelzen/vonvon-bridge",
+  desktop: "modelzen/vonvon-bot",
   legacy: "modelzen/vonvon-bridge-legacy",
 };
 const sourcePattern = /^(core|desktop|legacy)@([\w.-]+):([\w./-]+)$/;
