@@ -60,6 +60,7 @@ void app.whenReady().then(async () => {
   try {
     await window.loadFile(path.resolve('dist/renderer/index.html'));
     await click('Parity Agent');
+    await click('Agent 设置');
     await until(`Boolean(${concurrency})`);
     await setConcurrent('6');
     await click('本机环境');
@@ -69,9 +70,10 @@ void app.whenReady().then(async () => {
     assert.equal(await evaluate(`${concurrency}.value`), '6');
     assert.equal(saved.length, 0);
     pass('sidebar and continue preserve draft');
-    await evaluate("document.querySelector('button[aria-label=\"返回列表\"]').click()");
+    await evaluate("document.querySelector('button[aria-label=\"返回 Agent 列表\"]').click()");
     await click('放弃并离开');
     await click('Parity Agent');
+    await click('Agent 设置');
     await until(`Boolean(${concurrency})`);
     assert.equal(await evaluate(`${concurrency}.value`), '5');
     pass('back discards only after explicit choice');
@@ -93,12 +95,12 @@ void app.whenReady().then(async () => {
     assert.equal(views.get(secondId).sections.run.stored.maxConcurrentRuns, 5);
     pass('save and leave persists correct Agent');
     await evaluate("document.querySelector('button[aria-label=\"搜索设置、Agent 或项目\"]').click()");
-    await until("Boolean(document.querySelector('input[type=search]'))");
-    await evaluate("Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(document.querySelector('input[type=search]'),'Second Agent 最大并发任务');document.querySelector('input[type=search]').dispatchEvent(new Event('input',{bubbles:true}))");
+    await until("Boolean(document.querySelector('input[aria-label=\"搜索设置、Agent 或飞书群\"]'))");
+    await evaluate("{const field=document.querySelector('input[aria-label=\"搜索设置、Agent 或飞书群\"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(field,'Second Agent 最大并发任务');field.dispatchEvent(new Event('input',{bubbles:true}));}");
     await until("document.querySelectorAll('.desktop-search-results button').length===1");
     await evaluate("document.querySelector('.desktop-search-results button').click()");
     await until(`${title}==='Second Agent' && Boolean(${concurrency})`);
-    await until("document.activeElement?.id==='setting-'+encodeURIComponent('运行策略')");
+    await until("document.activeElement === document.querySelector('input[aria-label=\"最大并发任务\"]')");
     assert.equal(await evaluate(`${concurrency}.value`), '5');
     pass('setting search selects exact Agent and section');
     await setConcurrent('7');

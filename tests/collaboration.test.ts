@@ -34,11 +34,12 @@ test("Codex account usage is available without any Agent and refreshes through t
   assert.deepEqual(paths, ["/api/account/codex/usage", "/api/account/codex/usage?force=1"]);
 });
 
-test("settings search opens the owning detail category", () => {
+test("settings search opens the owning detail pane", () => {
   const entries = searchEntries(snapshot);
   const card = entries.find(item => item.id === `${agentId}-任务卡片`);
   const permission = entries.find(item => item.id === `${snapshot.memberships[0]?.id}-工作目录权限`);
-  assert.deepEqual(card?.destination.detail, {kind: "agent-settings", category: "interaction"});
+  assert.deepEqual(card?.destination.detail, {kind: "agent-settings"});
+  assert.ok(card?.aliases.includes('飞书任务卡片'));
   assert.deepEqual(permission?.destination.detail, {kind: "membership-settings", category: "access"});
   assert.equal(entries.find(item => item.id === "usage")?.destination.page, "usage");
 });
