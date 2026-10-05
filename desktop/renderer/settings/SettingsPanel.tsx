@@ -25,12 +25,12 @@ import {
 import "./settings.css";
 import {useDraft, useDraftGuard} from './DraftGuard';
 import {settingAnchor} from '../search';
-import type {AgentCategory, MembershipCategory, SearchReveal} from '../search';
+import type {MembershipCategory, SearchReveal} from '../search';
 
 type AgentScope = { kind: "agent"; botId: AgentId };
 type ProjectScope = { kind: "project"; botId: AgentId; projectName: string };
 type PanelProps =
-  | {scope: 'agent'; target: AgentScope; category: AgentCategory; reveal?: SearchReveal}
+  | {scope: 'agent'; target: AgentScope; reveal?: SearchReveal}
   | {scope: 'project'; target: ProjectScope; category: MembershipCategory}
   | {scope: 'host'; target: {kind: 'host'}; category: 'coffee' | 'execution'; reveal?: SearchReveal};
 const isAgentView = (view: SettingsView): view is AgentSettingsView =>
@@ -558,7 +558,7 @@ function ActionNotice({ message }: { message: string | undefined }) {
 function AgentPanel({
   view,
   refresh,
-  category,
+  mode,
   reveal,
   coffeeControls,
   onCoffeeEnabled,
@@ -567,7 +567,7 @@ function AgentPanel({
 }: {
   view: AgentSettingsView;
   refresh: () => Promise<void>;
-  category: AgentCategory | 'cli';
+  mode: 'settings' | 'cli';
   coffeeControls?: ReactNode;
   coffeeEnabled?: boolean;
   coffeeBusy?: boolean;
@@ -673,7 +673,11 @@ function AgentPanel({
     access = view.sections.access;
   return (
     <>
-      {category === "interaction" && <>
+      {mode === "settings" && <>
+      <section className="agent-card-section" aria-labelledby="agent-card-heading">
+        <h3 id="agent-card-heading">飞书任务卡片</h3>
+        <div className="agent-card-cluster agent-card-display">
+          <h4>卡片显示</h4>
       <Editor
         title="任务卡片"
         section={cards}
@@ -710,6 +714,9 @@ function AgentPanel({
           </>
         )}
       />
+        </div>
+        <div className="agent-card-cluster">
+          <h4>任务行为与提醒</h4>
       <Editor
         title="运行策略"
         section={run}
@@ -816,6 +823,8 @@ function AgentPanel({
           </>
         )}
       />
+        </div>
+      </section>
       <SettingsGroup
         label="语音转文字"
         id={settingAnchor("语音转文字")}
@@ -887,7 +896,7 @@ function AgentPanel({
         />
       </SettingsGroup>
       </>}
-      {category === "cli" && <>
+      {mode === "cli" && <>
       <SettingsGroup label="接力设置" id={settingAnchor("接力设置")}
         footer={cards.access.kind === 'readonly' ? cards.access.message : undefined}>
         <SettingsRow
@@ -1173,112 +1182,9 @@ function AgentPanel({
         )}
       />
       </>}
-      {category === "interaction" && <>
-      <Catalog
-        botId={view.scope.botId}
-        backend={commentBackend}
-        purpose="comments"
-      >
-        {(catalog) => (
-          <Editor
-            title="云文档评论"
-            section={comments}
-            save={(draft, revision) => save("comments", draft, revision)}
-            render={(draft, set, disabled) => (
-              <>
-                <SettingsRow
-                  title="执行工具"
-                  trailing={
-                    <Select
-                      label="评论执行工具"
-                      value={draft.backend}
-                      disabled={disabled}
-                      choices={[
-                        { value: "codex-appserver", label: "Codex" },
-                        { value: "claude-agent", label: "Claude" },
-                      ]}
-                      onChange={(value) => {
-                        setCommentBackend(value);
-                        set({
-                          ...draft,
-                          backend: value,
-                          selection: { kind: "default" },
-                        });
-                      }}
-                    />
-                  }
-                />
-                <ModelChoice
-                  value={draft.selection}
-                  onChange={(selection) => set({ ...draft, selection })}
-                  catalog={catalog}
-                  disabled={disabled}
-                />
-              </>
-            )}
-          />
-        )}
-      </Catalog>
-      <SettingsGroup
-        label="评论回复规则"
-        id={settingAnchor("评论回复规则")}
-        footer={
-          cards.access.kind === "readonly"
-            ? cards.access.message
-            : "最多编辑 30000 字。保存后同步已有评论目录；下条新评论使用新规则。"
-        }
-      >
-        <textarea
-          aria-label="评论回复规则"
-          className="settings-instructions"
-          value={instructions}
-          maxLength={30000}
-          disabled={cards.access.kind === "readonly"}
-          onChange={(event) => setInstructions(event.target.value)}
-        />
-        <div className="settings-edit-actions">
-          <Button
-            size="sm"
-            disabled={instructions === view.commentInstructions.content.text}
-            onClick={() =>
-              setInstructions(view.commentInstructions.content.text)
-            }
-          >
-            放弃修改
-          </Button>
-          <Button
-            size="sm"
-            disabled={
-              cards.access.kind === "readonly" ||
-              !instructions.trim() ||
-              instructions === view.commentInstructions.content.text
-            }
-            onClick={() => void saveInstructions()}
-          >
-            保存规则
-          </Button>
-          <Button
-            size="sm"
-            disabled={
-              cards.access.kind === "readonly" ||
-              view.commentInstructions.content.kind === "default"
-            }
-            onClick={() =>
-              void act({
-                type: "act",
-                action: {
-                  kind: "commentInstructions",
-                  botId: view.scope.botId,
-                  revision: view.commentInstructions.revision,
-                  content: { kind: "default" },
-                },
-              })
-            }
-          >
-            恢复默认
-          </Button>
-        </div>
-      </SettingsGroup>
+      {mode === "settings" && <>
+      <details className="agent-settings-disclosure">
+        <summary><span>会话标题<small>生成简短名称</small></span></summary>
       <Catalog botId={view.scope.botId} backend={titleBackend} purpose="titles">
         {(catalog) => (
           <Editor
@@ -1385,8 +1291,117 @@ function AgentPanel({
           />
         )}
       </Catalog>
-      </>}
-      {category === "access" && <>
+      </details>
+      <details className="agent-settings-disclosure">
+        <summary><span>云文档评论<small>模型与回复规则</small></span></summary>
+      <Catalog
+        botId={view.scope.botId}
+        backend={commentBackend}
+        purpose="comments"
+      >
+        {(catalog) => (
+          <Editor
+            title="云文档评论"
+            section={comments}
+            save={(draft, revision) => save("comments", draft, revision)}
+            render={(draft, set, disabled) => (
+              <>
+                <SettingsRow
+                  title="执行工具"
+                  trailing={
+                    <Select
+                      label="评论执行工具"
+                      value={draft.backend}
+                      disabled={disabled}
+                      choices={[
+                        { value: "codex-appserver", label: "Codex" },
+                        { value: "claude-agent", label: "Claude" },
+                      ]}
+                      onChange={(value) => {
+                        setCommentBackend(value);
+                        set({
+                          ...draft,
+                          backend: value,
+                          selection: { kind: "default" },
+                        });
+                      }}
+                    />
+                  }
+                />
+                <ModelChoice
+                  value={draft.selection}
+                  onChange={(selection) => set({ ...draft, selection })}
+                  catalog={catalog}
+                  disabled={disabled}
+                />
+              </>
+            )}
+          />
+        )}
+      </Catalog>
+      <SettingsGroup
+        label="评论回复规则"
+        id={settingAnchor("评论回复规则")}
+        footer={
+          cards.access.kind === "readonly"
+            ? cards.access.message
+            : "最多编辑 30000 字。保存后同步已有评论目录；下条新评论使用新规则。"
+        }
+      >
+        <textarea
+          aria-label="评论回复规则"
+          className="settings-instructions"
+          value={instructions}
+          maxLength={30000}
+          disabled={cards.access.kind === "readonly"}
+          onChange={(event) => setInstructions(event.target.value)}
+        />
+        <div className="settings-edit-actions">
+          <Button
+            size="sm"
+            disabled={instructions === view.commentInstructions.content.text}
+            onClick={() =>
+              setInstructions(view.commentInstructions.content.text)
+            }
+          >
+            放弃修改
+          </Button>
+          <Button
+            size="sm"
+            disabled={
+              cards.access.kind === "readonly" ||
+              !instructions.trim() ||
+              instructions === view.commentInstructions.content.text
+            }
+            onClick={() => void saveInstructions()}
+          >
+            保存规则
+          </Button>
+          <Button
+            size="sm"
+            disabled={
+              cards.access.kind === "readonly" ||
+              view.commentInstructions.content.kind === "default"
+            }
+            onClick={() =>
+              void act({
+                type: "act",
+                action: {
+                  kind: "commentInstructions",
+                  botId: view.scope.botId,
+                  revision: view.commentInstructions.revision,
+                  content: { kind: "default" },
+                },
+              })
+            }
+          >
+            恢复默认
+          </Button>
+        </div>
+      </SettingsGroup>
+      </details>
+      <details className="agent-settings-disclosure">
+        <summary><span>管理员<small>管理可操作 Agent 的人</small></span></summary>
       <SettingsGroup
         label="管理员"
         id={settingAnchor("管理员")}
@@ -1448,8 +1463,9 @@ function AgentPanel({
           }
         />
       </SettingsGroup>
-      </>}
-      {category === "general" && <>
+      </details>
+      <details className="agent-settings-disclosure">
+        <summary><span>更多设置<small>项目目录与允许的飞书群</small></span></summary>
       <Editor
         title="新项目默认目录"
         section={paths}
@@ -1470,8 +1486,6 @@ function AgentPanel({
           />
         )}
       />
-      </>}
-      {category === "access" && <>
       <Editor
         title="允许的飞书群"
         section={access}
@@ -1542,6 +1556,7 @@ function AgentPanel({
           </>
         )}
       />
+      </details>
       </>}
       <ActionNotice message={actionMessage} />
     </>
@@ -2063,7 +2078,7 @@ function CoffeeHostPanel({view, refresh, reveal}: {view: HostSettingsView; refre
   return <>
     <p className="settings-description">离开电脑，也能继续协作。在飞书中接收本机 Codex 和 Claude 的审批、问答与任务完成提醒。</p>
     {selected && recipient?.scope.botId === selected.botId
-      ? <AgentPanel key={selected.botId} view={recipient} refresh={refreshRecipient} category="cli" reveal={reveal} coffeeControls={controls} coffeeEnabled={coffee.route !== 'none' && recipient.cliRuntime.enabled} coffeeBusy={busy !== null} onCoffeeEnabled={async enabled => {
+      ? <AgentPanel key={selected.botId} view={recipient} refresh={refreshRecipient} mode="cli" reveal={reveal} coffeeControls={controls} coffeeEnabled={coffee.route !== 'none' && recipient.cliRuntime.enabled} coffeeBusy={busy !== null} onCoffeeEnabled={async enabled => {
         if (pending.current) return;
         if (!enabled) { setInspectedBotId(selected.botId); await saveRoute(''); return; }
         pending.current = true;
@@ -2288,7 +2303,7 @@ function ScopedSettingsPanel(props: PanelProps) {
     </SettingsGroup>
   );
   const content = isAgentView(view) && props.scope === 'agent' ? (
-    <AgentPanel view={view} refresh={refresh} category={props.category} reveal={props.reveal} />
+    <AgentPanel view={view} refresh={refresh} mode="settings" reveal={props.reveal} />
   ) : isProjectView(view) && props.scope === 'project' ? (
     <ProjectPanel view={view} refresh={refresh} category={props.category} />
   ) : isHostView(view) ? (

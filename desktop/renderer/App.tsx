@@ -42,7 +42,7 @@ import {
 import type { CollaborationView, Page } from "./collaboration-model";
 import {SettingsPanel,membershipSettingsTarget} from "./settings/SettingsPanel";
 import {DraftGuardProvider, useDraftGuard} from './settings/DraftGuard';
-import {agentCategories, membershipCategories, searchEntries, settingAnchor, type Destination, type SearchEntry, type Selection} from './search';
+import {membershipCategories, searchEntries, settingAnchor, type Destination, type SearchEntry, type Selection} from './search';
 import {initialRoute, openMembership, routeBack, routeDetail, routeFromSearch, routeSelection, routeView, type AgentPane, type CollaborationRoute, type MembershipPane} from './collaboration-navigation';
 import {SearchDialog} from './SearchDialog';
 import {flushSync} from 'react-dom';
@@ -147,6 +147,13 @@ function DesktopApp() {
           }
         }
         return false;
+      }
+      if (searchTarget.selection?.kind === 'agent' && searchTarget.detail?.kind === 'agent-settings') {
+        let ancestor: HTMLElement | null = section;
+        while (ancestor) {
+          if (ancestor instanceof HTMLDetailsElement) ancestor.open = true;
+          ancestor = ancestor.parentElement;
+        }
       }
       const rows = Array.from(section.querySelectorAll<HTMLElement>('[data-search-title]'));
       const row = searchTarget?.field ? rows.find(element => element.dataset.searchTitle === searchTarget.field) : undefined;
@@ -621,7 +628,7 @@ function DesktopApp() {
                       {agentListStatus(agent).label}
                     </StatusBadge>
                   </header>
-                  <DetailTabs first="已加入的群聊" second="Agent 设置" selected={detail.kind === 'agent-settings' ? 'settings' : 'overview'} onSelect={next => agentPane(next === 'overview' ? {kind: 'groups'} : {kind: 'settings', category: 'general'})}/>
+                  <DetailTabs first="已加入的群聊" second="Agent 设置" selected={detail.kind === 'agent-settings' ? 'settings' : 'overview'} onSelect={next => agentPane(next === 'overview' ? {kind: 'groups'} : {kind: 'settings'})}/>
                   {detail.kind !== 'agent-settings' ? <>
                   <SettingsGroup
                     label="已加入的飞书群"
@@ -651,16 +658,9 @@ function DesktopApp() {
                       )}
                     </div>
                   </SettingsGroup>
-                  </> : <>
+                  </> : <div className="agent-settings-page">
                   <p className="collaboration-scope-note">这里管理 {agent.name} 的身份、运行与通知。群内工作目录和响应方式在对应飞书群中设置。</p>
-                  <nav className="collaboration-category-nav" aria-label="Agent 设置分类">{agentCategories.map(item => <button key={item.id} type="button" aria-current={detail.category === item.id ? 'page' : undefined} className={detail.category === item.id ? 'is-selected' : ''} onClick={() => agentPane({kind: 'settings', category: item.id})}>{item.id === 'access' ? 'Agent 权限' : item.label}</button>)}</nav>
-                  <p className="collaboration-category-description">{agentCategories.find(item => item.id === detail.category)?.description}</p>
-                  {detail.category === 'general' && <>
-                  <SettingsGroup label="Agent 身份" id={settingAnchor('Agent 身份')}>
-                    <SettingsRow
-                      title="应用 ID"
-                      value={<code>{agent.id}</code>}
-                    />
+                  <SettingsGroup className="agent-activation" id={settingAnchor('Agent 身份')}>
                     <SettingsRow
                       title="启用 Agent"
                       description={!agent.enabled && agent.running ? "Agent 尚未停止，仍可能回复飞书消息。请到「应用与启动」重启 Bridge。" : "更改立即生效。停用会结束此 Agent 的运行中任务。"}
@@ -681,6 +681,9 @@ function DesktopApp() {
                         />
                       }
                     />
+                  </SettingsGroup>
+                  <SettingsGroup label="连接与权限" id={settingAnchor('连接与权限')}>
+                    <SettingsRow title="应用 ID" value={<code>{agent.id}</code>} />
                     <SettingsRow title="刷新飞书凭据" description="重新授权当前 Agent，保留群绑定、会话和设置。"
                       trailing={<Button size="sm" disabled={busy || !ready} onClick={() => void register(agent.id)}>重新授权</Button>}/>
                     <SettingsRow
@@ -702,15 +705,12 @@ function DesktopApp() {
                       }
                     />
                   </SettingsGroup>
-                  </>}
                   <SettingsPanel
                     key={`agent-${agent.id}`}
                     scope="agent"
                     target={{ kind: "agent", botId: agent.id }}
-                    category={detail.category}
                     reveal={searchTarget?.reveal}
                   />
-                  {detail.category === 'access' &&
                   <SettingsGroup id={settingAnchor('移除 Agent')}
                     label="移除 Agent"
                     footer="删除本地注册信息、凭据、群绑定、会话记录与设置。飞书开发者平台中的应用仍保留。"
@@ -744,8 +744,8 @@ function DesktopApp() {
                         </Button>
                       }
                     />
-                  </SettingsGroup>}
-                  </>}
+                  </SettingsGroup>
+                  </div>}
                 </>
               )}
               {selection.kind === "group" && group && (
@@ -793,7 +793,7 @@ function DesktopApp() {
                   <div className="collaboration-member-context">
                     <AgentAvatar agent={agent} />
                     <span className="collaboration-member-context__copy"><strong>{agent.name}</strong><small>此 Agent 在本群内协作</small></span>
-                    <button type="button" onClick={() => changeRoute(() => ({kind: 'agent', id: agent.id, pane: {kind: 'settings', category: 'general'}}))}>Agent 设置</button>
+                    <button type="button" onClick={() => changeRoute(() => ({kind: 'agent', id: agent.id, pane: {kind: 'settings'}}))}>Agent 设置</button>
                     <button type="button" onClick={() => changeRoute(() => ({kind: 'group', id: group.id}))}>查看飞书群</button>
                   </div>
                   <DetailTabs first="会话与状态" second="群内设置" selected={detail.kind === 'membership-settings' ? 'settings' : 'overview'} onSelect={next => membershipPane(next === 'overview' ? {kind: 'activity'} : {kind: 'settings', category: 'binding'})}/>
