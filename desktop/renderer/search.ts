@@ -3,20 +3,14 @@ import type {AgentId, DesktopSnapshot, GroupId, MembershipId} from '../shared/br
 import type {CollaborationView, Page} from './collaboration-model';
 
 export type Selection = {kind: 'overview'} | {kind: 'agent'; id: AgentId} | {kind: 'group'; id: GroupId} | {kind: 'membership'; id: MembershipId};
-export const membershipCategories = [
-  {id: 'binding', label: '绑定', description: '工作目录、会话方式与项目状态'},
-  {id: 'behavior', label: '行为', description: '群内响应、模型与会话'},
-  {id: 'access', label: '权限', description: '成员与工作目录权限'},
-] as const;
-export type MembershipCategory = typeof membershipCategories[number]['id'];
-export type DetailPane = {kind: 'overview'} | {kind: 'agent-settings'} | {kind: 'membership-settings'; category: MembershipCategory};
+export type DetailPane = {kind: 'overview'} | {kind: 'agent-settings'} | {kind: 'membership-settings'};
 export type SearchReveal = 'cli-advanced' | 'machine-advanced' | 'codex-tool' | 'claude-tool' | 'lark-tool' | 'profile-manager' | 'profile-add' | 'profile-create';
 export type Destination = {page: Page; view?: CollaborationView; selection?: Selection; detail?: DetailPane; section?: string; field?: string; reveal?: SearchReveal; guide?: string};
 export type SearchEntry = {id: string; title: string; context: string; aliases: readonly string[]; destination: Destination; kind: 'page' | 'setting' | 'action' | 'item'};
 export const settingAnchor = (title: string) => `setting-${encodeURIComponent(title)}`;
 
 type Target = {title: string; aliases?: readonly string[]; reveal?: SearchReveal; guide?: string; field?: string};
-type Group<Category extends string> = {title: string; category: Category; fields: readonly Target[]};
+type Group = {title: string; fields: readonly Target[]};
 type AgentGroup = {title: string; aliases?: readonly string[]; fields: readonly Target[]};
 const item = (title: string, aliases: readonly string[] = [], options: Omit<Target, 'title' | 'aliases'> = {}): Target => ({title, aliases, ...options});
 const agentGroups: readonly AgentGroup[] = [
@@ -34,15 +28,15 @@ const agentGroups: readonly AgentGroup[] = [
   {title: '允许的飞书群', fields: [item('群范围'), item('添加群 ID'), item('移除群 ID', [], {field: '', guide: '在允许的飞书群列表中找到要移除的群。'})]},
   {title: '移除 Agent', fields: [item('删除本地 Agent 数据', ['删除机器人'])]},
 ];
-const membershipGroups: readonly Group<MembershipCategory>[] = [
-  {title: '群绑定', category: 'binding', fields: [item('飞书群'), item('工作目录', ['更换目录']), item('会话方式'), item('项目状态')]},
-  {title: '解除项目绑定', category: 'binding', fields: [item('解除绑定')]},
-  {title: '群内响应', category: 'behavior', fields: [item('不 @ 也能发起任务', ['免 @'])]},
-  {title: '工作目录权限', category: 'access', fields: [item('管理员权限'), item('普通成员权限'), item('允许网络访问')]},
-  {title: '会话压缩', category: 'behavior', fields: [item('自动压缩上下文')]},
-  {title: '新会话默认模型', category: 'behavior', fields: [item('模型'), item('推理强度', [], {guide: '先选择一个具体模型，再调整推理强度。'})]},
-  {title: '响应成员', category: 'access', fields: [item('添加成员 Open ID'), item('移除成员', [], {field: '', guide: '在响应成员列表中找到要移除的成员。'}), item('允许所有成员', ['清空白名单'], {guide: '设置了成员白名单后，会显示「清空白名单」。'})]},
-  {title: '话题模型', category: 'behavior', fields: [item('选择话题'), item('话题身份', [], {field: '选择话题', guide: '选择话题后可以查看身份。'}), item('本话题模型', [], {field: '选择话题', guide: '先选择话题，再设置该话题的模型。'}), item('推理强度', ['话题推理强度'], {field: '选择话题', guide: '先选择话题并选定具体模型，再调整推理强度。'})]},
+const membershipGroups: readonly Group[] = [
+  {title: '群绑定', fields: [item('飞书群'), item('工作目录', ['更换目录']), item('会话方式'), item('项目状态')]},
+  {title: '解除项目绑定', fields: [item('解除绑定')]},
+  {title: '群内响应', fields: [item('不 @ 也能发起任务', ['免 @'])]},
+  {title: '工作目录权限', fields: [item('管理员权限'), item('普通成员权限'), item('允许网络访问')]},
+  {title: '会话压缩', fields: [item('自动压缩上下文')]},
+  {title: '新会话默认模型', fields: [item('模型'), item('推理强度', [], {guide: '先选择一个具体模型，再调整推理强度。'})]},
+  {title: '响应成员', fields: [item('添加成员 Open ID'), item('移除成员', [], {field: '', guide: '在响应成员列表中找到要移除的成员。'}), item('允许所有成员', ['清空白名单'], {guide: '设置了成员白名单后，会显示「清空白名单」。'})]},
+  {title: '话题模型', fields: [item('选择话题'), item('话题身份', [], {field: '选择话题', guide: '选择话题后可以查看身份。'}), item('本话题模型', [], {field: '选择话题', guide: '先选择话题，再设置该话题的模型。'}), item('推理强度', ['话题推理强度'], {field: '选择话题', guide: '先选择话题并选定具体模型，再调整推理强度。'})]},
 ];
 const globalGroups: readonly {page: Page; section: string; fields: readonly Target[]}[] = [
   {page: 'coffee', section: '咖啡一下', fields: [item('通知 Agent'), item('通知状态'), item('查看通知规则'), item('Hook 配置')]},
@@ -64,9 +58,9 @@ const globalGroups: readonly {page: Page; section: string; fields: readonly Targ
   {page: 'diagnostics', section: '诊断操作', fields: [item('重新检查'), item('打开事件设置', [], {guide: '出现飞书事件配置诊断时，可打开对应设置。'})]},
   {page: 'diagnostics', section: 'Bridge 日志', fields: [item('刷新日志'), item('持续跟随'), item('Bridge 日志')]},
 ];
-function expand<Category extends string>(id: string, context: string, base: Destination, groups: readonly Group<Category>[], pane: (category: Category) => DetailPane): SearchEntry[] {
+function expand(id: string, context: string, base: Destination, groups: readonly Group[], pane: DetailPane): SearchEntry[] {
   return groups.flatMap(group => {
-    const destination = {...base, detail: pane(group.category), section: group.title};
+    const destination = {...base, detail: pane, section: group.title};
     return [
       {id: `${id}-${group.title}`, title: group.title, context, aliases: [], destination, kind: 'setting' as const},
       ...group.fields.map((field, index) => ({id: `${id}-${group.title}-${index}`, title: field.title, context: `${context} · ${group.title}`, aliases: field.aliases ?? [], destination: {...destination, field: field.field ?? field.title, reveal: field.reveal, guide: field.guide}, kind: 'setting' as const})),
@@ -104,8 +98,9 @@ export function searchEntries(snapshot: DesktopSnapshot): SearchEntry[] {
     const context = `群内设置 · ${groups.get(member.groupId)?.name ?? member.name} · ${agents.get(member.agentId)?.name ?? member.agentId} · 本地绑定 ${member.name} · ${member.directory}`;
     const base: Destination = {page: 'collaboration', view: 'groups', selection: {kind: 'membership', id: member.id}};
     entries.push({id: member.id, title: member.name, context, aliases: [member.directory, member.backend], destination: base, kind: 'item'});
-    entries.push(...membershipCategories.map(category => ({id: `${member.id}-category-${category.id}`, title: category.id === 'access' ? '群内权限' : `群内设置 · ${category.label}`, context, aliases: [category.label], destination: {...base, detail: {kind: 'membership-settings' as const, category: category.id}}, kind: 'setting' as const})));
-    entries.push(...expand(member.id, context, base, membershipGroups, category => ({kind: 'membership-settings', category})));
+    entries.push({id: `${member.id}-settings`, title: '群内设置', context, aliases: ['群内权限', '绑定', '行为', '权限'], destination: {...base, detail: {kind: 'membership-settings'}}, kind: 'setting'});
+    entries.push({id: `${member.id}-history-link`, title: '会话与状态', context, aliases: ['历史会话'], destination: {...base, detail: {kind: 'membership-settings'}, section: '历史会话', field: '会话与状态'}, kind: 'setting'});
+    entries.push(...expand(member.id, context, base, membershipGroups, {kind: 'membership-settings'}));
     ['搜索历史会话', '筛选历史会话', '恢复会话', '当前会话上下文', '刷新上下文', '清空会话', '压缩上下文', '自主任务目标', '停止当前任务', '结束目标', '完成时提醒'].forEach((title, index) => entries.push({id: `${member.id}-session-${index}`, title, context: `${context} · 当前会话`, aliases: ({'搜索历史会话': ['搜索'], '筛选历史会话': ['筛选'], '当前会话上下文': ['会话', '上下文'], '清空会话': ['会话操作'], '完成时提醒': ['正在运行']} as Record<string, string[]>)[title] ?? [], destination: {...base, section: '会话管理', field: ({'搜索历史会话': '搜索', '筛选历史会话': '筛选', '当前会话上下文': '上下文', '清空会话': '会话操作', '压缩上下文': '会话操作', '停止当前任务': '正在运行', '结束目标': '正在运行'} as Record<string, string>)[title] ?? title, guide: '进入「会话与状态」中的「会话管理」，选择会话后可执行此操作。'}, kind: 'action'}));
     entries.push({id: `${member.id}-connection`, title: 'Agent 连接', context, aliases: [], destination: base, kind: 'item'});
     entries.push({id: `${member.id}-share-usage`, title: '分享 Codex 用量', context, aliases: [], destination: base, kind: 'action'});
