@@ -6,16 +6,17 @@ const path = require('node:path');
 const home = mkdtempSync(path.join(tmpdir(), 'vonvon-management-ui-'));
 app.setPath('userData', path.join(home, 'electron'));
 const agentId = 'cli_management', groupId = 'oc_management';
+const secondAgentId = 'cli_second', secondGroupId = 'oc_second';
 const distPath = path.resolve(process.env.MANAGEMENT_DIST || 'dist');
 const calls = [], results = [];
 let project = {name:'Management Project', chatId:groupId, cwd:path.join(home,'project'), kind:'single', enabled:true, backend:'codex-appserver', revision:'r1'};
 let currentRun = {id:'run-fixture',goal:true,canStop:true,canEndGoal:true,canRemind:true,reminderRequested:false};
-let rejectProject = false, window;
+let rejectProject = false, rejectShare = false, holdShare = false, resolveShare, window;
 const snapshot = {
   revision:1, observedAt:Date.now(), stale:false, host:{kind:'connected',ownership:'owned',version:'0.7.0'},
-  agents:[{id:agentId,name:'Management Agent',enabled:true,connection:'connected',activation:'active'}],
-  groups:[{id:groupId,name:project.name}],
-  memberships:[{id:'membership_management',agentId,groupId,name:project.name,cwd:project.cwd,backend:'codex-appserver',conversation:'shared',response:'mention',administrator:'write',member:'qa',network:false,stale:false}],
+  agents:[{id:agentId,name:'Management Agent',enabled:true,connection:'connected',activation:'active'},{id:secondAgentId,name:'Second Agent',enabled:false,running:false,connection:'disconnected',activation:'active'}],
+  groups:[{id:groupId,name:project.name},{id:secondGroupId,name:'Second Group'}],
+  memberships:[{id:'membership_management',agentId,groupId,name:project.name,cwd:project.cwd,backend:'codex-appserver',conversation:'shared',response:'mention',administrator:'write',member:'qa',network:false,stale:false},{id:'membership_second',agentId:secondAgentId,groupId:secondGroupId,name:'Second Binding',cwd:path.join(home,'second'),backend:'claude-agent',conversation:'shared',response:'mention',administrator:'write',member:'qa',network:false,stale:false}],
   tools:[],jobs:[],diagnostics:[],application:{platform:'macos',version:'0.7.0',loginItem:false,dataPath:home},
 };
 function publish(){snapshot.revision++;window.webContents.send('bridge:snapshot',snapshot);}
@@ -27,8 +28,9 @@ ipcMain.handle('bridge:run',(_event,command)=>{
   assert.equal(command.type,'refresh');publish();return {command:command.type,result:{kind:'applied',revision:snapshot.revision}};
 });
 ipcMain.handle('bridge:collaboration',(_event,request)=>{
-  calls.push(request);assert.equal(request.agentId,agentId);
-  if(request.groupId)assert.equal(request.groupId,groupId);
+  calls.push(request);
+  if(request.action!=='usage' && request.action!=='shareUsage')assert.equal(request.agentId,agentId);
+  if(request.groupId && request.action!=='shareUsage')assert.equal(request.groupId,groupId);
   switch(request.action){
     case 'project':return {kind:'project',project};
     case 'history':return {kind:'history',backend:'codex-appserver',sessions:[{threadId:'thread_current',sessionId:'session_current',chatId:groupId,summary:'Current session',backend:'codex-appserver',updatedAt:Date.now()},{threadId:'thread_other',sessionId:'session_other',chatId:groupId,summary:'Other bound session',backend:'codex-appserver',updatedAt:Date.now()},{threadId:'thread_archived',sessionId:'session_archived',chatId:groupId,summary:'Archived session',backend:'codex-appserver',detached:true,updatedAt:Date.now()}],threads:[{sessionId:'session_archived',name:'Recover archived',preview:'old work',updatedAt:Date.now()/1000}]};
@@ -41,7 +43,8 @@ ipcMain.handle('bridge:collaboration',(_event,request)=>{
     case 'reminder':assert.equal(request.runId,'run-fixture');currentRun={...currentRun,reminderRequested:request.requested};return {kind:'applied'};
     case 'stop':case 'endGoal':assert.equal(request.runId,'run-fixture');return {kind:'applied'};
     case 'removeProject':return {kind:'applied',message:'项目绑定已解除，目录已保留。'};
-    default:assert.ok(['compact','clear','startGoal','resume','openGroup','shareUsage'].includes(request.action));return {kind:'applied'};
+    case 'shareUsage':return rejectShare ? {kind:'refused',code:'fixture',message:'Share refused by fixture'} : holdShare ? new Promise(resolve=>{resolveShare=resolve;}) : {kind:'applied'};
+    default:assert.ok(['compact','clear','startGoal','resume','openGroup'].includes(request.action));return {kind:'applied'};
   }
 });
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -65,6 +68,8 @@ void app.whenReady().then(async()=>{
   pass('create project carries selected folder, backend and conversation');
   await evaluate("[...document.querySelectorAll('.settings-entity-row')].find(b=>b.innerText.includes('Management Project')).click()");
   await wait("document.body.innerText.includes('Current session') && document.body.innerText.includes('1,200 / 10,000')");
+  assert.equal(await evaluate("document.body.innerText.includes('分享 Codex 用量')"),false,'group activity no longer shows the share row');
+  assert.equal(await evaluate("[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='选择内容')"),false,'group activity has no share button');
   assert.equal(calls.filter(c=>c.action==='context').at(-1).threadId,'thread_current');
   assert.equal(await evaluate("[...document.querySelectorAll('button')].filter(b=>b.textContent.trim()==='管理').length"),0,'history rows must not offer 管理 buttons');
   assert.deepEqual(await evaluate(`[...${selector}.options].map(option=>({value:option.value,label:option.textContent}))`),[{value:'thread_current',label:'Current session'},{value:'thread_other',label:'Other bound session'}],'only bound sessions are selectable');
@@ -89,15 +94,14 @@ void app.whenReady().then(async()=>{
   assert.equal(await evaluate(`${selector}.value`),'thread_other');
   assert.deepEqual(calls.slice(selectionStart).filter(c=>c.action==='context').map(c=>c.threadId),['thread_other']);
   await click('压缩上下文');await click('清空会话');await value('自主任务目标','Complete fixture goal');await click('开始');
-  await click('开启提醒');await wait("document.body.innerText.includes('关闭提醒')");await click('关闭提醒');await click('停止');await click('结束目标');await click('选择内容');await wait("Boolean(document.querySelector('[aria-label=\"选择分享内容\"]'))");await evaluate("[...document.querySelectorAll('.usage-sections__item')].find(label=>label.textContent.includes('核心统计')).querySelector('input').click()");await click('生成分享卡');assert.deepEqual(calls.find(c=>c.action==='shareUsage').sections,['stats']);
-  await evaluate("document.querySelector('button[aria-label=\"关闭\"]').click()");await wait("!document.querySelector('[aria-label=\"选择分享内容\"]')");
-  for(const action of ['compact','clear','startGoal','reminder','stop','endGoal','shareUsage'])assert.ok(calls.some(c=>c.action===action),action);
+  await click('开启提醒');await wait("document.body.innerText.includes('关闭提醒')");await click('关闭提醒');await click('停止');await click('结束目标');
+  for(const action of ['compact','clear','startGoal','reminder','stop','endGoal'])assert.ok(calls.some(c=>c.action===action),action);
   const selectedCalls=calls.slice(selectionStart).filter(c=>['context','compact','clear','startGoal','reminder','stop','endGoal'].includes(c.action));
   assert.ok(selectedCalls.length>0);
   assert.ok(selectedCalls.every(c=>c.threadId==='thread_other'),JSON.stringify(selectedCalls));
   assert.equal(await evaluate(`${selector}.value`),'thread_other','history refresh preserves selected session');
   pass('switching management updates context and all subsequent scoped requests use exactly thread_other');
-  pass('conversation and usage controls target the selected group, thread and live run');
+  pass('conversation controls target the selected group, thread and live run');
   await click('群内设置');await value('项目会话方式','threads',true);await value('项目状态','disabled',true);await click('更换目录');
   rejectProject=true;await click('群聊');await click('保存并离开');await wait("document.body.innerText.includes('未能保存')");await click('继续编辑');
   assert.equal(await evaluate("document.querySelector('[aria-label=\"项目状态\"]').value"),'disabled');
@@ -105,6 +109,45 @@ void app.whenReady().then(async()=>{
   pass('project conflict preserves draft and successful retry saves the same target');
   await click('解除绑定…');assert.equal(calls.some(c=>c.action==='removeProject'),false);await click('确认解除');await wait("document.body.innerText.includes('目录已保留')");
   pass('project removal requires confirmation and displays directory retention');
+  await click('用量');await wait("document.body.innerText.includes('分享 Codex 用量')");
+  assert.equal(await evaluate("Boolean(document.getElementById('setting-'+encodeURIComponent('分享 Codex 用量')))"),true);
+  assert.equal(await evaluate("document.body.innerText.includes('当前账号')"),true);
+  await click('选择飞书群');await wait("Boolean(document.querySelector('[aria-label=\"选择分享飞书群\"]'))");
+  const recipient="document.querySelector('[aria-label=\"选择分享飞书群\"]')";
+  assert.equal(await evaluate(`${recipient}.value`),'');
+  assert.equal(await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='生成分享卡').disabled"),true);
+  assert.equal(calls.filter(c=>c.action==='shareUsage').length,0);
+  assert.deepEqual(await evaluate(`[...${recipient}.options].map(option=>({value:option.value,label:option.textContent}))`),[{value:'',label:'请选择飞书群'},{value:'membership_management',label:'Management Project · Management Agent'},{value:'membership_second',label:'Second Group · Second Agent · 绑定名称：Second Binding'}]);
+  await value('选择分享飞书群','membership_second',true);
+  await evaluate("[...document.querySelectorAll('.usage-sections__item')].find(label=>label.textContent.includes('核心统计')).querySelector('input').click()");
+  rejectShare=true;await click('生成分享卡');await wait("document.body.innerText.includes('Share refused by fixture')");
+  assert.deepEqual(calls.filter(c=>c.action==='shareUsage').at(-1),{action:'shareUsage',agentId:secondAgentId,projectName:'Second Binding',groupId:secondGroupId,sections:['stats']});
+  assert.equal(await evaluate(`${recipient}.value`),'membership_second');
+  rejectShare=false;holdShare=true;await click('生成分享卡');
+  assert.equal(await evaluate(`${recipient}.disabled`),true,'recipient cannot change while sending');
+  resolveShare({kind:'applied'});holdShare=false;await wait("document.body.innerText.includes('分享完成')");
+  assert.equal(calls.filter(c=>c.action==='shareUsage').length,2);
+  assert.deepEqual(calls.filter(c=>c.action==='shareUsage')[1],calls.filter(c=>c.action==='shareUsage')[0]);
+  pass('usage share requires explicit second recipient, sends exact tuple and retries refusal');
+  snapshot.memberships[1].stale=true;publish();await wait("document.body.innerText.includes('绑定状态已过期')");
+  assert.equal(await evaluate(`${recipient}.value`),'membership_second');
+  assert.equal(await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='生成分享卡').disabled"),true);
+  assert.equal(calls.filter(c=>c.action==='shareUsage').length,2);
+  snapshot.memberships[1].stale=false;snapshot.agents[1].readError='Fixture read error';publish();await wait("document.body.innerText.includes('Agent 暂不可用')");
+  assert.equal(await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='生成分享卡').disabled"),true);
+  snapshot.agents[1].readError=undefined;snapshot.memberships.splice(1,1);publish();await wait("document.body.innerText.includes('原绑定已移除')");
+  assert.equal(await evaluate(`${recipient}.value`),'membership_second');
+  assert.equal(await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='生成分享卡').disabled"),true);
+  assert.equal(calls.filter(c=>c.action==='shareUsage').length,2);
+  pass('stale, unreadable and removed choices never silently change recipient or send');
+  snapshot.memberships.splice(0,1);publish();await wait("document.body.innerText.includes('暂无可分享的飞书群')");
+  assert.equal(await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='生成分享卡').disabled"),true);
+  assert.equal(calls.filter(c=>c.action==='shareUsage').length,2);
+  snapshot.memberships.push({id:'membership_unavailable',agentId,groupId,name:'Unavailable Binding',cwd:project.cwd,backend:'codex-appserver',conversation:'shared',response:'mention',administrator:'write',member:'qa',network:false,stale:true});publish();
+  await wait("document.body.innerText.includes('绑定状态已过期')");
+  assert.equal(await evaluate("document.body.innerText.includes('暂无可分享的飞书群')"),true);
+  assert.equal(await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='生成分享卡').disabled"),true);
+  pass('empty and all-unavailable bindings explain why sharing is unavailable');
   writeFileSync(path.join(home,'result.json'),JSON.stringify({results,calls},null,2));
   process.stdout.write(`Evidence: ${home}\n`);clearTimeout(deadline);app.quit();
 }).catch(error=>{process.stderr.write(`${error.stack}\n`);clearTimeout(deadline);app.exit(1);});
