@@ -11,7 +11,7 @@ const distPath = path.resolve(process.env.MANAGEMENT_DIST || 'dist');
 const calls = [], results = [];
 let project = {name:'Management Project', chatId:groupId, cwd:path.join(home,'project'), kind:'single', enabled:true, backend:'codex-appserver', revision:'r1'};
 let currentRun = {id:'run-fixture',goal:true,canStop:true,canEndGoal:true,canRemind:true,reminderRequested:false};
-let rejectProject = false, rejectShare = false, holdShare = false, resolveShare, window;
+let rejectProject = false, rejectShare = false, holdShare = false, resolveShare, window, reorderHistory = false;
 const snapshot = {
   revision:1, observedAt:Date.now(), stale:false, host:{kind:'connected',ownership:'owned',version:'0.7.0'},
   agents:[{id:agentId,name:'Management Agent',enabled:true,connection:'connected',activation:'active'},{id:secondAgentId,name:'Second Agent',enabled:false,running:false,connection:'disconnected',activation:'active'}],
@@ -31,10 +31,14 @@ ipcMain.handle('bridge:collaboration',(_event,request)=>{
   calls.push(request);
   if(request.action!=='usage' && request.action!=='shareUsage')assert.equal(request.agentId,agentId);
   if(request.groupId && request.action!=='shareUsage')assert.equal(request.groupId,groupId);
+  if(['context','compact','clear','startGoal','reminder','stop','endGoal'].includes(request.action))assert.equal(request.threadId,'thread_current',JSON.stringify(request));
   switch(request.action){
     case 'project':return {kind:'project',project};
-    case 'history':return {kind:'history',backend:'codex-appserver',sessions:[{threadId:'thread_current',sessionId:'session_current',chatId:groupId,summary:'Current session',backend:'codex-appserver',updatedAt:Date.now()},{threadId:'thread_other',sessionId:'session_other',chatId:groupId,summary:'Other bound session',backend:'codex-appserver',updatedAt:Date.now()},{threadId:'thread_archived',sessionId:'session_archived',chatId:groupId,summary:'Archived session',backend:'codex-appserver',detached:true,updatedAt:Date.now()}],threads:[{sessionId:'session_archived',name:'Recover archived',preview:'old work',updatedAt:Date.now()/1000}]};
-    case 'context':return {kind:'context',threadId:request.threadId,usage:{used:request.threadId==='thread_other'?2400:1200,window:10000},run:currentRun};
+    case 'history':{
+      const sessions=[{threadId:'thread_current',sessionId:'session_current',chatId:groupId,summary:'Current session',backend:'codex-appserver',updatedAt:Date.now()},{threadId:'thread_other',sessionId:'session_other',chatId:groupId,summary:'Other bound session',backend:'codex-appserver',updatedAt:Date.now()},{threadId:'thread_archived',sessionId:'session_archived',chatId:groupId,summary:'Archived session',backend:'codex-appserver',detached:true,updatedAt:Date.now()}];
+      return {kind:'history',backend:'codex-appserver',sessions:reorderHistory ? [sessions[1],sessions[0],sessions[2]] : sessions,threads:[{sessionId:'session_archived',name:'Recover archived',preview:'old work',updatedAt:Date.now()/1000}]};
+    }
+    case 'context':return {kind:'context',threadId:request.threadId,usage:{used:1200,window:10000},run:currentRun};
     case 'usage':return {kind:'usage',data:{profile:{displayName:'Fixture account',lifetimeTokens:123456,topInvocations:[],dailyBuckets:[{date:new Date().toISOString().slice(0,10),tokens:3000}]},usage:{planType:'fixture',main:{primary:{usedPercent:12}},extras:[],fetchedAt:Date.now()}}};
     case 'createProject':return {kind:'applied',project:{...project,name:request.name},message:'项目群已创建。'};
     case 'editProject':
@@ -56,7 +60,7 @@ void app.whenReady().then(async()=>{
   const button=label=>`[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===${JSON.stringify(label)})`;
   const click=async label=>{await wait(`Boolean(${button(label)})`);assert.equal(await evaluate(`(()=>{const b=${button(label)};if(b.disabled)return false;b.click();return true})()`),true,label);await pause(70);};
   const value=async(label,value,select=false)=>{const query=`document.querySelector('[aria-label="${label}"]')`;await wait(`Boolean(${query})`);await evaluate(`Object.getOwnPropertyDescriptor(${select?'HTMLSelectElement':'HTMLInputElement'}.prototype,'value').set.call(${query},${JSON.stringify(value)});${query}.dispatchEvent(new Event('${select?'change':'input'}',{bubbles:true}));`);await pause(50);};
-  const selector="document.querySelector('[aria-label=\"选择会话\"]')";
+  const identity="[...document.querySelectorAll('section.ss-section')].find(section=>section.querySelector('.ss-section__label')?.textContent.trim()==='当前会话')?.querySelector('[data-search-title=\"会话\"] .ss-row__value')";
   const pass=name=>{results.push(name);process.stdout.write(`PASS ${name}\n`);};
   await window.loadFile(path.join(distPath,'renderer/index.html'));
   await wait("Array.from(document.querySelectorAll('.settings-entity-row__copy strong')).some(name => name.textContent.trim() === 'Management Agent')");
@@ -72,36 +76,36 @@ void app.whenReady().then(async()=>{
   assert.equal(await evaluate("[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='选择内容')"),false,'group activity has no share button');
   assert.equal(calls.filter(c=>c.action==='context').at(-1).threadId,'thread_current');
   assert.equal(await evaluate("[...document.querySelectorAll('button')].filter(b=>b.textContent.trim()==='管理').length"),0,'history rows must not offer 管理 buttons');
-  assert.deepEqual(await evaluate(`[...${selector}.options].map(option=>({value:option.value,label:option.textContent}))`),[{value:'thread_current',label:'Current session'},{value:'thread_other',label:'Other bound session'}],'only bound sessions are selectable');
-  assert.equal(await evaluate(`${selector}.value`),'thread_current');
-  assert.equal(await evaluate(`(()=>{const picker=${selector};const search=document.querySelector('[aria-label="搜索历史会话"]');return Boolean(picker.compareDocumentPosition(search)&Node.DOCUMENT_POSITION_FOLLOWING)})()`),true,'current session controls precede history');
-  assert.equal(await evaluate(`(()=>{const picker=${selector};for(let parent=picker.parentElement;parent;parent=parent.parentElement)if(parent.scrollTop!==0)return false;const rect=picker.getBoundingClientRect();return rect.top>=0&&rect.bottom<=window.innerHeight})()`),true,'session selector is visible at initial scroll position');
-  pass('history omits all management buttons and visible session selector contains only bound sessions');
+  assert.equal(await evaluate("Boolean(document.querySelector('[aria-label=\"选择会话\"]'))"),false,'current session picker is absent');
+  assert.equal(await evaluate(`${identity}?.textContent.trim()`),'Current session');
+  assert.equal(await evaluate(`(()=>{const row=${identity};const search=document.querySelector('[aria-label="搜索历史会话"]');return Boolean(row.compareDocumentPosition(search)&Node.DOCUMENT_POSITION_FOLLOWING)})()`),true,'current session identity precedes history');
+  assert.equal(await evaluate(`(()=>{const row=${identity};for(let parent=row.parentElement;parent;parent=parent.parentElement)if(parent.scrollTop!==0)return false;const rect=row.getBoundingClientRect();return rect.top>=0&&rect.bottom<=window.innerHeight})()`),true,'current session identity is visible at initial scroll position');
+  pass('history omits management buttons and current session identity is visible without a picker');
   await value('筛选历史会话','resumable',true);await wait("document.body.innerText.includes('Recover archived')");
-  assert.deepEqual(await evaluate(`[...${selector}.options].map(option=>option.value)`),['thread_current','thread_other'],'resumable filter preserves bound session choices');
+  assert.equal(await evaluate(`${identity}?.textContent.trim()`),'Current session','resumable filter preserves current session');
   await click('恢复');
   assert.equal(calls.find(c=>c.action==='resume').sessionId,'session_archived');
   await value('筛选历史会话','all',true);await value('搜索历史会话','no match');await wait("document.body.innerText.includes('没有匹配的会话')");
-  assert.deepEqual(await evaluate(`[...${selector}.options].map(option=>option.value)`),['thread_current','thread_other'],'history search preserves bound session choices');
+  assert.equal(await evaluate(`${identity}?.textContent.trim()`),'Current session','history search preserves current session');
   await value('搜索历史会话','');
   pass('history filtering keeps archived session recoverable and out of live management');
   await click('压缩上下文');
   assert.equal(calls.filter(c=>c.action==='compact').at(-1).threadId,'thread_current');
-  const selectionStart=calls.length;
-  await value('选择会话','thread_other',true);
-  await wait("document.body.innerText.includes('2,400 / 10,000')");
-  assert.equal(await evaluate(`${selector}.selectedOptions[0].textContent`),'Other bound session');
-  assert.equal(await evaluate(`${selector}.value`),'thread_other');
-  assert.deepEqual(calls.slice(selectionStart).filter(c=>c.action==='context').map(c=>c.threadId),['thread_other']);
+  reorderHistory=true;
+  await evaluate("[...document.querySelectorAll('section.ss-section')].find(section=>section.querySelector('.ss-section__label')?.textContent.trim()==='历史会话').querySelector('.ss-section__action button').click()");
+  await wait("(()=>{const section=[...document.querySelectorAll('section.ss-section')].find(section=>section.querySelector('.ss-section__label')?.textContent.trim()==='历史会话');const other=section?.querySelector('[data-search-title=\"Other bound session\"]');const current=section?.querySelector('[data-search-title=\"Current session\"]');return Boolean(other&&current&&(other.compareDocumentPosition(current)&Node.DOCUMENT_POSITION_FOLLOWING))})()");
+  assert.equal(await evaluate(`${identity}?.textContent.trim()`),'Current session','history refresh preserves current target after records reorder');
+  const actionStart=calls.length;
   await click('压缩上下文');await click('清空会话');await value('自主任务目标','Complete fixture goal');await click('开始');
   await click('开启提醒');await wait("document.body.innerText.includes('关闭提醒')");await click('关闭提醒');await click('停止');await click('结束目标');
   for(const action of ['compact','clear','startGoal','reminder','stop','endGoal'])assert.ok(calls.some(c=>c.action===action),action);
-  const selectedCalls=calls.slice(selectionStart).filter(c=>['context','compact','clear','startGoal','reminder','stop','endGoal'].includes(c.action));
-  assert.ok(selectedCalls.length>0);
-  assert.ok(selectedCalls.every(c=>c.threadId==='thread_other'),JSON.stringify(selectedCalls));
-  assert.equal(await evaluate(`${selector}.value`),'thread_other','history refresh preserves selected session');
-  pass('switching management updates context and all subsequent scoped requests use exactly thread_other');
-  pass('conversation controls target the selected group, thread and live run');
+  const scopedCalls=calls.slice(actionStart).filter(c=>['context','compact','clear','startGoal','reminder','stop','endGoal'].includes(c.action));
+  assert.ok(scopedCalls.length>0);
+  assert.ok(scopedCalls.every(c=>c.threadId==='thread_current'),JSON.stringify(scopedCalls));
+  assert.equal(await evaluate(`${identity}?.textContent.trim()`),'Current session');
+  assert.equal(calls.filter(c=>c.agentId===secondAgentId && c.action!=='shareUsage').length,0);
+  pass('reordered history preserves current target and all scoped requests use thread_current');
+  pass('conversation controls target the current group, thread and live run');
   await click('群内设置');await value('项目会话方式','threads',true);await value('项目状态','disabled',true);await click('更换目录');
   rejectProject=true;await click('群聊');await click('保存并离开');await wait("document.body.innerText.includes('未能保存')");await click('继续编辑');
   assert.equal(await evaluate("document.querySelector('[aria-label=\"项目状态\"]').value"),'disabled');
