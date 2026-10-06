@@ -179,9 +179,15 @@ async function start():Promise<void> {
       }
     },
   );
-  const icon=nativeImage.createFromPath(join(__dirname,'renderer','vonvon-logo.png')).resize({width:18,height:18});
-  icon.setTemplateImage(process.platform==='darwin');
-  tray=new Tray(icon);
+  let trayIcon: Electron.NativeImage|string=join(__dirname,'renderer','vonvon-tray.ico');
+  if(process.platform==='darwin') {
+    const source=nativeImage.createFromPath(join(__dirname,'renderer','vonvon-tray.png'));
+    const icon=source.resize({width:18,height:18});
+    icon.addRepresentation({scaleFactor:2,width:36,height:36,buffer:source.resize({width:36,height:36}).toPNG()});
+    icon.setTemplateImage(false);
+    trayIcon=icon;
+  }
+  tray=new Tray(trayIcon);
   tray.setToolTip('Vonvon Bot');
   tray.setContextMenu(Menu.buildFromTemplate([{label:'显示 Vonvon Bot',click:()=>currentWindow.show()},{type:'separator'},{label:'退出 Vonvon Bot',click:()=>requestQuit()}]));
   tray.on('click',()=>currentWindow.show());
