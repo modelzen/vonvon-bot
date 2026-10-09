@@ -12,7 +12,7 @@ vonvon-bot is the Vonvon Bot desktop app, an Electron 44 and React 19 client for
 
 | Host | Agent | Display | Runtime | What it can prove |
 | --- | --- | --- | --- | --- |
-| Mac mini, Apple Silicon | Codex | Yes | `npm run prepare:runtime` works for `darwin-arm64`, so the Host connects | Everything CI runs, plus the native runners (`npm run test:native`, `test:controls`, `test:settings-ui`), packaging, and the live Host in the real window |
+| Mac (any Apple Silicon Mac) | Codex | Yes | `npm run prepare:runtime` works for `darwin-arm64`, so the Host connects | Everything CI runs, plus the native runners (`npm run test:native`, `test:controls`, `test:settings-ui`), packaging, and the live Host in the real window |
 | Linux server, Ubuntu 24.04 x86_64 | Claude Code | None, Xvfb only | None for Linux, so the window shows `Bridge 尚未就绪` with `打包运行时不可用` | `npm run typecheck`, `npm test`, `node scripts/parity-report.mjs --check`, `npm run build`, and the UI shell through the `verify` skill |
 
 Git is the only channel between the hosts. Each host runs its own `npm ci`. Never copy `node_modules`, `dist`, `build` or `release` between machines.
