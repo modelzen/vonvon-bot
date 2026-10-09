@@ -17,10 +17,12 @@ vonvon-bot is the Vonvon Bot desktop app, an Electron 44 and React 19 client for
 
 Git is the only channel between the hosts. Each host runs its own `npm ci`. Never copy `node_modules`, `dist`, `build` or `release` between machines.
 
-## Branches and PRs
+## One branch per change, handed between hosts
 
-- The branch prefix names the owner. `codex/*` belongs to the Mac agent and `claude/*` to the Linux agent.
-- Never commit to, rebase or force-push the other agent's branch. To change it, branch from it and open a PR whose base is that branch.
+- Each change lives on one branch, and both agents work on that same branch, one at a time. The prefix only records which agent created it: `claude/*` on Linux, `codex/*` on the Mac.
+- The usual flow is that the Linux agent writes the change, runs its checks and pushes. The Mac agent then pulls the same branch, starts the app, checks the real window and reports what it saw in the PR.
+- If the Mac agent finds a problem that only the Mac shows, it fixes it on the same branch and pushes. The Linux agent pulls before its next edit.
+- Pull before you start and push when you stop. Never force-push a branch the other host may have pulled.
 - Stack each PR on its parent branch. The current line is `codex/device-handoff`.
 - Write Conventional Commits in the repo's style, such as `fix(desktop): ...` or `docs(agents): ...`.
 
