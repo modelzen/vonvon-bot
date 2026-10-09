@@ -136,8 +136,8 @@ async function test() {
   process.stdout.write(`PASS ${old ? 'baseline' : 'continuous'} model/member saves and binding edit\n`);
   if (!old) {
     await evaluate("document.querySelector('.membership-settings-details summary').click()");
-    await evaluate("document.querySelector('button[aria-label=\"搜索设置、Agent 或项目\"]').click()");
-    await setValue('搜索设置、Agent 或飞书群', '选择话题');
+    await evaluate("document.querySelector('button[aria-label=\"搜索设置、Bot 或项目\"]').click()");
+    await setValue('搜索设置、Bot 或飞书群', '选择话题');
     await wait("[...document.querySelectorAll('[role=\"option\"]')].some(n=>n.textContent.includes('选择话题'))");
     await evaluate("[...document.querySelectorAll('[role=\"option\"]')].find(n=>n.textContent.includes('选择话题')).click()");
     await wait("document.querySelector('.membership-settings-details').open && document.activeElement?.closest('[data-search-title=\"选择话题\"]')");

@@ -91,12 +91,12 @@ void app.whenReady().then(async () => {
       }
       await until("Array.from(document.querySelectorAll('.settings-entity-row__copy strong')).some(name => name.textContent.trim() === 'Parity Agent')");
       await click('Parity Agent');
-      await click('Agent 设置');
+      await click('Bot 设置');
       if (scenario === 'search-draft') {
         const search = async (query, result) => {
-          await evalJs("document.querySelector('button[aria-label=\"搜索设置、Agent 或项目\"]').click()");
-          await until("Boolean(document.querySelector('input[aria-label=\"搜索设置、Agent 或飞书群\"]'))");
-          await setInput('搜索设置、Agent 或飞书群', query);
+          await evalJs("document.querySelector('button[aria-label=\"搜索设置、Bot 或项目\"]').click()");
+          await until("Boolean(document.querySelector('input[aria-label=\"搜索设置、Bot 或飞书群\"]'))");
+          await setInput('搜索设置、Bot 或飞书群', query);
           await until(`Array.from(document.querySelectorAll('[role="option"] .desktop-search-result-copy strong')).some(item => item.textContent.trim() === ${JSON.stringify(result)})`);
           await evalJs(`Array.from(document.querySelectorAll('[role="option"]')).find(item => item.querySelector('.desktop-search-result-copy strong')?.textContent.trim() === ${JSON.stringify(result)}).click()`);
         };
@@ -115,11 +115,11 @@ void app.whenReady().then(async () => {
         assert.equal(await evalJs("document.querySelector('textarea[aria-label=\"评论回复规则\"]').closest('details').open"), false);
         await evalJs("document.querySelector('textarea[aria-label=\"评论回复规则\"]').closest('details').querySelector('summary').click()");
         assert.equal(await evalJs("document.querySelector('textarea[aria-label=\"评论回复规则\"]').value"), '保留这条未保存的草稿');
-        await evalJs("document.querySelector('button[aria-label=\"返回 Agent 列表\"]').click()");
+        await evalJs("document.querySelector('button[aria-label=\"返回 Bot 列表\"]').click()");
         await until("document.body.innerText.includes('有未保存的修改')");
         await click('继续编辑');
         assert.equal(await evalJs("document.querySelector('textarea[aria-label=\"评论回复规则\"]').value"), '保留这条未保存的草稿');
-        await evalJs("document.querySelector('button[aria-label=\"返回 Agent 列表\"]').click()");
+        await evalJs("document.querySelector('button[aria-label=\"返回 Bot 列表\"]').click()");
         await click('放弃并离开');
         await until("!document.querySelector('textarea[aria-label=\"评论回复规则\"]')");
         process.stdout.write('PASS editor search-draft\n');
@@ -158,13 +158,13 @@ void app.whenReady().then(async () => {
         assert.deepEqual(saves[2].patch, {maxConcurrentRuns:6});
         assert.equal(saves[2].revision, 'rev-2');
         assert.equal(view.sections.run.stored.maxConcurrentRuns, 6);
-        await evalJs("document.querySelector('button[aria-label=\"返回 Agent 列表\"]').click()");
+        await evalJs("document.querySelector('button[aria-label=\"返回 Bot 列表\"]').click()");
         await until("document.body.innerText.includes('有未保存的修改')");
         await click('保存并离开');
         await until("document.body.innerText.includes('Parity Agent') && !document.body.innerText.includes('最大并发任务')");
       } else if (scenario === 'pending') {
         await until("document.body.innerText.includes('正在保存')");
-        await evalJs("document.querySelector('button[aria-label=\"返回 Agent 列表\"]').click()");
+        await evalJs("document.querySelector('button[aria-label=\"返回 Bot 列表\"]').click()");
         await until("document.body.innerText.includes('有未保存的修改')");
         await click('继续编辑');
         assert.equal(await evalJs(`${field('待处理消息策略')}.disabled`), true);

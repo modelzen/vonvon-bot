@@ -137,11 +137,11 @@ function DesktopApp() {
       if (!section) {
         if ((searchTarget?.section === 'CLI 转发' || searchTarget?.section === 'CLI 通知设置') &&
           document.querySelector('[data-search-title="通知状态"]')) {
-          const selector = document.querySelector<HTMLSelectElement>('select[aria-label="通知 Agent"]');
+          const selector = document.querySelector<HTMLSelectElement>('select[aria-label="通知 Bot"]');
           if (selector) {
             selector.scrollIntoView({block: 'center'});
             selector.focus({preventScroll: true});
-            setNotice({message: searchTarget?.guide ?? '请先选择通知 Agent。', error: false});
+            setNotice({message: searchTarget?.guide ?? '请先选择通知 Bot。', error: false});
             setSearchTarget(undefined);
             return true;
           }
@@ -298,8 +298,8 @@ function DesktopApp() {
         : undefined;
   const titles: Record<Page, string> = {
     collaboration: member
-      ? `${group?.name ?? '飞书群'} · ${agent?.name ?? 'Agent'}`
-      : (agent?.name ?? group?.name ?? (view === "agents" ? "Agent" : "群聊")),
+      ? `${group?.name ?? '飞书群'} · ${agent?.name ?? 'Bot'}`
+      : (agent?.name ?? group?.name ?? (view === "agents" ? "Bot" : "群聊")),
     environment: "本机环境",
     usage: "用量",
     coffee: "咖啡一下",
@@ -314,9 +314,9 @@ function DesktopApp() {
       : undefined;
   const parentLabel = route.kind === 'membership'
     ? route.parent.kind === 'agent'
-      ? snapshot.agents.find(item => item.id === route.parent.id)?.name ?? 'Agent'
+      ? snapshot.agents.find(item => item.id === route.parent.id)?.name ?? 'Bot'
       : snapshot.groups.find(item => item.id === route.parent.id)?.name ?? '群聊'
-    : routeView(route) === 'agents' ? 'Agent 列表' : '群聊列表';
+    : routeView(route) === 'agents' ? 'Bot 列表' : '群聊列表';
   function membershipRows(
     members: Membership[],
     perspective: CollaborationView,
@@ -383,13 +383,13 @@ function DesktopApp() {
       >
         <div className="page-stack">
           {page === 'collaboration' && route.kind !== 'list' && <nav className="collaboration-breadcrumb" aria-label="当前位置">
-            <button type="button" onClick={() => openList(view)}>{view === 'agents' ? 'Agent' : '群聊'}</button>
+            <button type="button" onClick={() => openList(view)}>{view === 'agents' ? 'Bot' : '群聊'}</button>
             <ChevronRight size={12} aria-hidden="true" />
             {route.kind === 'membership' && <>
               <button type="button" onClick={() => changeRoute(routeBack)}>{parentLabel}</button>
               <ChevronRight size={12} aria-hidden="true" />
             </>}
-            <span aria-current="page">{route.kind === 'membership' ? route.parent.kind === 'agent' ? group?.name ?? '飞书群' : agent?.name ?? 'Agent' : agent?.name ?? group?.name ?? '内容已变化'}</span>
+            <span aria-current="page">{route.kind === 'membership' ? route.parent.kind === 'agent' ? group?.name ?? '飞书群' : agent?.name ?? 'Bot' : agent?.name ?? group?.name ?? '内容已变化'}</span>
           </nav>}
           {pendingGroups.map(page => {
             const owner = snapshot.agents.find(item => item.id === page.agentId);
@@ -445,12 +445,12 @@ function DesktopApp() {
                       </IconButton>
                     }
                   >
-                    已有 Agent 与群配置继续保留。关闭本应用不会停止原有服务。
+                    已有 Bot 与群配置继续保留。关闭本应用不会停止原有服务。
                   </InlineNotice>
                 )}
               {route.kind === 'list' && !snapshot.agents.length && (
                 <SettingsGroup
-                  label="开始第一次协作"
+                  label="邀请你的第一个 Bot"
                   footer="配置完成后，请在飞书群发送真实任务并查看回复。"
                 >
                   <SettingsRow
@@ -469,7 +469,7 @@ function DesktopApp() {
                   />
                   <SettingsRow
                     icon={Bot}
-                    title="注册 Agent"
+                    title="注册 Bot"
                     disabled={!ready || busy}
                     onClick={() => void register()}
                     value="飞书扫码授权"
@@ -477,7 +477,7 @@ function DesktopApp() {
                   <SettingsRow
                     icon={MessageSquare}
                     title="加入飞书群并设置工作目录"
-                    description="注册后，从 Agent 页面进入。"
+                    description="注册后，从 Bot 页面进入。"
                   />
                 </SettingsGroup>
               )}
@@ -487,14 +487,14 @@ function DesktopApp() {
                     <div className="collaboration-page-heading">
                       <div>
                         <h2>已连接的飞书群</h2>
-                        <p>同一个群可以有多个 Agent，各自保留工作目录和群内配置。</p>
+                        <p>同一个群可以有多个 Bot，各自保留工作目录和群内配置。</p>
                       </div>
                     </div>
                   )}
                   {view === "agents"
                     ? snapshot.agents.length > 0 && (
                         <section
-                          aria-label="Agent 列表"
+                          aria-label="Bot 列表"
                           className="settings-entity-group"
                         >
                           <div className="settings-entity-group__surface">
@@ -547,7 +547,7 @@ function DesktopApp() {
                               <span aria-hidden="true" className="settings-add-row__icon">
                                 <Plus size={15} />
                               </span>
-                              <span>添加 Agent</span>
+                              <span>添加 Bot</span>
                             </button>
                           </div>
                         </section>
@@ -585,13 +585,13 @@ function DesktopApp() {
                       <Bot size={28} />
                       <h3>
                         {view === "agents"
-                          ? "添加你的第一个 Agent"
+                          ? "邀请你的第一个 Bot"
                           : "还没有连接的飞书群"}
                       </h3>
                       <p>
                         {view === "agents"
                           ? "连接飞书机器人，再让它加入群开始协作。"
-                          : "在 Agent 页面选择已加入的飞书群并绑定工作目录。"}
+                          : "在 Bot 页面选择已加入的飞书群并绑定工作目录。"}
                       </p>
                       {view === "agents" && (
                         <Button
@@ -600,7 +600,7 @@ function DesktopApp() {
                           disabled={!ready || busy}
                           onClick={() => void register()}
                         >
-                          添加 Agent
+                          添加 Bot
                         </Button>
                       )}
                     </div>
@@ -618,7 +618,7 @@ function DesktopApp() {
                   <header className="collaboration-profile">
                     <AgentAvatar agent={agent} large />
                     <div>
-                      <span className="collaboration-profile__kind">Agent</span>
+                      <span className="collaboration-profile__kind">Bot</span>
                       <h2>{agent.name}</h2>
                       <p>通过飞书机器人身份参与协作</p>
                     </div>
@@ -628,7 +628,7 @@ function DesktopApp() {
                       {agentListStatus(agent).label}
                     </StatusBadge>
                   </header>
-                  <DetailTabs first="已加入的群聊" second="Agent 设置" selected={detail.kind === 'agent-settings' ? 'settings' : 'overview'} onSelect={next => agentPane(next === 'overview' ? {kind: 'groups'} : {kind: 'settings'})}/>
+                  <DetailTabs first="已加入的群聊" second="Bot 设置" selected={detail.kind === 'agent-settings' ? 'settings' : 'overview'} onSelect={next => agentPane(next === 'overview' ? {kind: 'groups'} : {kind: 'settings'})}/>
                   {detail.kind !== 'agent-settings' ? <>
                   <SettingsGroup
                     label="已加入的飞书群"
@@ -660,15 +660,15 @@ function DesktopApp() {
                   </SettingsGroup>
                   </> : <div className="agent-settings-page">
                   <p className="collaboration-scope-note">这里管理 {agent.name} 的身份、运行与通知。群内工作目录和响应方式在对应飞书群中设置。</p>
-                  <SettingsGroup className="agent-activation" id={settingAnchor('Agent 身份')}>
+                  <SettingsGroup className="agent-activation" id={settingAnchor('Bot 身份')}>
                     <SettingsRow
-                      title="启用 Agent"
-                      description={!agent.enabled && agent.running ? "Agent 尚未停止，仍可能回复飞书消息。请到「应用与启动」重启 Bridge。" : "更改立即生效。停用会结束此 Agent 的运行中任务。"}
+                      title="启用 Bot"
+                      description={!agent.enabled && agent.running ? "Bot 尚未停止，仍可能回复飞书消息。请到「应用与启动」重启 Bridge。" : "更改立即生效。停用会结束此 Bot 的运行中任务。"}
                       trailing={
                         <Toggle
                           className="settings-row-switch"
-                          aria-label="启用 Agent"
-                          label="启用 Agent"
+                          aria-label="启用 Bot"
+                          label="启用 Bot"
                           checked={agent.enabled}
                           disabled={busy || !ready}
                           onChange={(event) =>
@@ -684,7 +684,7 @@ function DesktopApp() {
                   </SettingsGroup>
                   <SettingsGroup label="连接与权限" id={settingAnchor('连接与权限')}>
                     <SettingsRow title="应用 ID" value={<code>{agent.id}</code>} />
-                    <SettingsRow title="刷新飞书凭据" description="重新授权当前 Agent，保留群绑定、会话和设置。"
+                    <SettingsRow title="刷新飞书凭据" description="重新授权当前 Bot，保留群绑定、会话和设置。"
                       trailing={<Button size="sm" disabled={busy || !ready} onClick={() => void register(agent.id)}>重新授权</Button>}/>
                     <SettingsRow
                       title="飞书权限与连接"
@@ -711,15 +711,15 @@ function DesktopApp() {
                     target={{ kind: "agent", botId: agent.id }}
                     reveal={searchTarget?.reveal}
                   />
-                  <SettingsGroup id={settingAnchor('移除 Agent')}
-                    label="移除 Agent"
+                  <SettingsGroup id={settingAnchor('移除 Bot')}
+                    label="移除 Bot"
                     footer="删除本地注册信息、凭据、群绑定、会话记录与设置。飞书开发者平台中的应用仍保留。"
                   >
                     <SettingsRow
-                      title="删除本地 Agent 数据"
+                      title="删除本地 Bot 数据"
                       description={
                         agent.enabled || agent.running
-                          ? "请先停用 Agent，并等待它停止运行。"
+                          ? "请先停用 Bot，并等待它停止运行。"
                           : "此操作无法撤销。"
                       }
                       trailing={
@@ -740,7 +740,7 @@ function DesktopApp() {
                             })
                           }
                         >
-                          移除 Agent
+                          移除 Bot
                         </Button>
                       }
                     />
@@ -762,11 +762,11 @@ function DesktopApp() {
                             (m) => m.groupId === group.id,
                           ).length
                         }{" "}
-                        个 Vonvon Agent
+                        个 Vonvon Bot
                       </p>
                     </div>
                   </header>
-                  <SettingsGroup label="这个群中的 Agent">
+                  <SettingsGroup label="这个群中的 Bot">
                     {membershipRows(
                       snapshot.memberships.filter(
                         (m) => m.groupId === group.id,
@@ -793,8 +793,8 @@ function DesktopApp() {
                   </header>
                   <div className="collaboration-member-context">
                     <AgentAvatar agent={agent} />
-                    <span className="collaboration-member-context__copy"><strong>{agent.name}</strong><small>此 Agent 在本群内协作</small></span>
-                    <button type="button" onClick={() => changeRoute(() => ({kind: 'agent', id: agent.id, pane: {kind: 'settings'}}))}>Agent 设置</button>
+                    <span className="collaboration-member-context__copy"><strong>{agent.name}</strong><small>此 Bot 在本群内协作</small></span>
+                    <button type="button" onClick={() => changeRoute(() => ({kind: 'agent', id: agent.id, pane: {kind: 'settings'}}))}>Bot 设置</button>
                     <button type="button" onClick={() => changeRoute(() => ({kind: 'group', id: group.id}))}>查看飞书群</button>
                   </div>
                   <DetailTabs first="会话与状态" second="群内设置" selected={detail.kind === 'membership-settings' ? 'settings' : 'overview'} onSelect={next => membershipPane(next === 'overview' ? {kind: 'activity'} : {kind: 'settings'})}/>
@@ -804,7 +804,7 @@ function DesktopApp() {
                     <SettingsRow title="执行工具" value={backendName(member.backend)}/>
                     <SettingsRow title="会话方式" value={member.conversation === 'threads' ? '按话题独立会话' : '整群连续会话'}/>
                     <ProjectStatus scope={{kind: 'project', agentId: agent.id, groupId: group.id, projectName: member.name}} request={window.bridge.collaboration}/>
-                    <SettingsRow title="Agent 连接" value={member.stale ? '状态过期' : agentListStatus(agent).label}/>
+                    <SettingsRow title="Bot 连接" value={member.stale ? '状态过期' : agentListStatus(agent).label}/>
                   </SettingsGroup>
                   <ConversationPanel key={`sessions-${member.id}`} agentId={agent.id} groupId={group.id} projectName={member.name} conversation={member.conversation} request={window.bridge.collaboration}/>
                   <SettingsGroup label="快捷操作">
@@ -823,7 +823,7 @@ function DesktopApp() {
               )}
               {((route.kind === 'agent' && !agent) || (route.kind === 'group' && !group) || (route.kind === 'membership' && (!member || !agent || !group))) && (
                 <InlineNotice title="内容暂不可用">
-                  {route.kind === 'membership' ? '这条群内协作或关联的 Agent、飞书群已变化。请返回上一级并刷新。' : '这个 Agent 或飞书群已变化。请返回列表并刷新。'}
+                  {route.kind === 'membership' ? '这条群内协作或关联的 Bot、飞书群已变化。请返回上一级并刷新。' : '这个 Bot 或飞书群已变化。请返回列表并刷新。'}
                 </InlineNotice>
               )}
             </>
@@ -858,7 +858,7 @@ function DesktopApp() {
                 />
                 <SettingsRow
                   title="重启 Bridge"
-                  description="重新加载已保存的 Agent 设置。"
+                  description="重新加载已保存的 Bot 设置。"
                   trailing={
                     <Button
                       size="sm"
@@ -930,7 +930,7 @@ function DesktopApp() {
                   value={host.kind === "connected" ? host.version : "未知"}
                 />
                 <SettingsRow
-                  title="已注册 Agent"
+                  title="已注册 Bot"
                   value={`${snapshot.agents.length} 个`}
                 />
                 <SettingsRow
@@ -982,9 +982,9 @@ function DesktopApp() {
         onClose={() => void closeModal()}
         title={
           modal?.kind === "register"
-            ? modal.refresh ? "刷新 Agent 凭据" : "注册 Agent"
+            ? modal.refresh ? "刷新 Bot 凭据" : "注册 Bot"
             : modal?.kind === "join"
-              ? "让 Agent 加入飞书群"
+              ? "让 Bot 加入飞书群"
               : modal?.kind === "shareUsage"
                 ? "分享 Codex 用量"
                 : "开始一次协作"
@@ -993,13 +993,13 @@ function DesktopApp() {
         <div className="page-stack">
           {feedback}
           {modal?.kind === "register" && registration && (
-            <><p>{modal.refresh ? "重新授权这个 Agent，保留原有项目、群绑定和设置。请使用此 Agent 的管理员身份完成授权。" : "连接飞书机器人身份。"}</p><JobPanel job={registration} run={run} busy={busy} /></>
+            <><p>{modal.refresh ? "重新授权这个 Bot，保留原有项目、群绑定和设置。请使用此 Bot 的管理员身份完成授权。" : "连接飞书机器人身份。"}</p><JobPanel job={registration} run={run} busy={busy} /></>
           )}
           {modal?.kind === "collaboration" && (
             <>
               <p>
                 请在飞书的对应群中 @ 这个
-                Agent，发送下面的任务。实际回复由飞书中的 Agent 返回。
+                Bot，发送下面的任务。实际回复由飞书中的 Bot 返回。
               </p>
               <SettingsGroup>
                 <SettingsRow title="群绑定" value={modal.membership.name} />
@@ -1025,10 +1025,10 @@ function DesktopApp() {
       </Dialog>
       <ConfirmDialog
         open={modal?.kind === "deleteAgent"}
-        title="移除本地 Agent"
+        title="移除本地 Bot"
         description={
           modal?.kind === "deleteAgent"
-            ? `将移除「${modal.name}」的本地注册信息、凭据、群绑定、设置和会话记录。飞书开发者平台中的应用不会删除。请确认这个 Agent 已停用并停止运行。`
+            ? `将移除「${modal.name}」的本地注册信息、凭据、群绑定、设置和会话记录。飞书开发者平台中的应用不会删除。请确认这个 Bot 已停用并停止运行。`
             : ""
         }
         tone="danger"
@@ -1043,7 +1043,7 @@ function DesktopApp() {
             if (result.kind === "applied") {
               setModal(null);
               select({ kind: "overview" });
-              setNotice({ message: "本地 Agent 数据已删除。", error: false });
+              setNotice({ message: "本地 Bot 数据已删除。", error: false });
             }
           });
         }}
@@ -1084,7 +1084,7 @@ function JobPanel({
           <>
             {expired ? (
               <p>
-                二维码和注册链接已过期。请取消本次操作，关闭此对话框后重新注册 Agent。
+                二维码和注册链接已过期。请取消本次操作，关闭此对话框后重新注册 Bot。
               </p>
             ) : (
               <>

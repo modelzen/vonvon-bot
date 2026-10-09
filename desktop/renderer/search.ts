@@ -14,7 +14,7 @@ type Group = {title: string; fields: readonly Target[]};
 type AgentGroup = {title: string; aliases?: readonly string[]; fields: readonly Target[]};
 const item = (title: string, aliases: readonly string[] = [], options: Omit<Target, 'title' | 'aliases'> = {}): Target => ({title, aliases, ...options});
 const agentGroups: readonly AgentGroup[] = [
-  {title: 'Agent 身份', fields: [item('启用 Agent', ['停用 Agent'])]},
+  {title: 'Bot 身份', fields: [item('启用 Bot', ['停用 Bot'])]},
   {title: '连接与权限', fields: [item('应用 ID', ['App ID']), item('刷新飞书凭据', ['重新授权']), item('飞书权限与连接', ['检查连接'])]},
   {title: '任务卡片', aliases: ['飞书任务卡片', '卡片显示'], fields: [item('显示工具调用'), item('显示模型')]},
   {title: '运行策略', aliases: ['任务行为与提醒'], fields: [item('最大并发任务'), item('当前运行并发'), item('空闲超时（秒，0 为关闭）', ['空闲超时']), item('运行中收到新消息', ['待处理消息策略', 'steer', 'queue'])]},
@@ -26,7 +26,7 @@ const agentGroups: readonly AgentGroup[] = [
   {title: '管理员', fields: [item('所有者'), item('添加管理员 Open ID'), item('移除管理员', [], {field: '', guide: '在管理员列表中找到要移除的成员。'})]},
   {title: '新项目默认目录', fields: [item('根目录', ['新项目根目录', '文件夹'])]},
   {title: '允许的飞书群', fields: [item('群范围'), item('添加群 ID'), item('移除群 ID', [], {field: '', guide: '在允许的飞书群列表中找到要移除的群。'})]},
-  {title: '移除 Agent', fields: [item('删除本地 Agent 数据', ['删除机器人'])]},
+  {title: '移除 Bot', fields: [item('删除本地 Bot 数据', ['删除机器人'])]},
 ];
 const membershipGroups: readonly Group[] = [
   {title: '群绑定', fields: [item('飞书群'), item('工作目录', ['更换目录']), item('会话方式'), item('项目状态')]},
@@ -39,14 +39,14 @@ const membershipGroups: readonly Group[] = [
   {title: '话题模型', fields: [item('选择话题'), item('话题身份', [], {field: '选择话题', guide: '选择话题后可以查看身份。'}), item('本话题模型', [], {field: '选择话题', guide: '先选择话题，再设置该话题的模型。'}), item('推理强度', ['话题推理强度'], {field: '选择话题', guide: '先选择话题并选定具体模型，再调整推理强度。'})]},
 ];
 const globalGroups: readonly {page: Page; section: string; fields: readonly Target[]}[] = [
-  {page: 'coffee', section: '咖啡一下', fields: [item('通知 Agent'), item('通知状态'), item('查看通知规则'), item('Hook 配置')]},
+  {page: 'coffee', section: '咖啡一下', fields: [item('通知 Bot'), item('通知状态'), item('查看通知规则'), item('Hook 配置')]},
   {page: 'coffee', section: '本机 Hook', fields: [item('本机 Hook', [], {field: 'Codex Hook'}), item('Codex Hook', ['修复 Codex Hook']), item('Claude Hook', ['修复 Claude Hook'])]},
-  {page: 'coffee', section: '接力设置', fields: [item('接力设置', ['CLI 转发'], {field: '启用咖啡一下', guide: '没有 Agent 时，请先添加 Agent。'}), item('启用咖啡一下', [], {guide: '没有 Agent 时，请先添加 Agent。'})]},
-  {page: 'coffee', section: '通知偏好', fields: [item('通知偏好', ['CLI 通知设置'], {field: '通知范围', guide: '没有 Agent 时，请先添加 Agent。'}), ...['通知范围', '转发 Claude', '转发 Codex', '离开时保活'].map(title => item(title, [], {guide: '没有 Agent 时，请先添加 Agent。'})), ...['转发权限审批', '审批超时（秒）', '发送任务完成卡', '允许从完成卡续聊', '续聊等待（秒）', '本会话放行缓存', '在场检测', '在场检测平台', '离开判定（秒）'].map(title => item(title, [], {reveal: 'cli-advanced', guide: '没有 Agent 时，请先添加 Agent。'}))]},
+  {page: 'coffee', section: '接力设置', fields: [item('接力设置', ['CLI 转发'], {field: '启用咖啡一下', guide: '没有 Bot 时，请先添加 Bot。'}), item('启用咖啡一下', [], {guide: '没有 Bot 时，请先添加 Bot。'})]},
+  {page: 'coffee', section: '通知偏好', fields: [item('通知偏好', ['CLI 通知设置'], {field: '通知范围', guide: '没有 Bot 时，请先添加 Bot。'}), ...['通知范围', '转发 Claude', '转发 Codex', '离开时保活'].map(title => item(title, [], {guide: '没有 Bot 时，请先添加 Bot。'})), ...['转发权限审批', '审批超时（秒）', '发送任务完成卡', '允许从完成卡续聊', '续聊等待（秒）', '本会话放行缓存', '在场检测', '在场检测平台', '离开判定（秒）'].map(title => item(title, [], {reveal: 'cli-advanced', guide: '没有 Bot 时，请先添加 Bot。'}))]},
   {page: 'application', section: '启动选项', fields: [item('运行状态'), item('重启 Bridge'), item('登录电脑时启动', ['开机启动'])]},
   {page: 'application', section: '命令行工具', fields: [item('vonvon-bot', ['CLI', '修复命令行工具'])]},
-  {page: 'application', section: 'Bridge 运行', fields: [item('运行方式'), item('Bridge 服务', ['启动 Bridge', '停止 Bridge']), item('临时运行 Agent', [], {guide: '仅运行指定 Agent 时显示当前临时运行状态。'})]},
-  {page: 'application', section: '后台服务', fields: [item('系统服务'), item('安装并启动', ['安装并启动后台服务']), item('服务运行', ['启动已安装服务', '停止后台服务并关闭自启']), item('卸载后台服务'), item('仅运行指定 Agent', [], {reveal: 'machine-advanced'}), ...['进程 PID', '上次退出码', '服务定义', '标准输出', '错误日志'].map(title => item(title, [], {reveal: 'machine-advanced'}))]},
+  {page: 'application', section: 'Bridge 运行', fields: [item('运行方式'), item('Bridge 服务', ['启动 Bridge', '停止 Bridge']), item('临时运行 Bot', [], {guide: '仅运行指定 Bot 时显示当前临时运行状态。'})]},
+  {page: 'application', section: '后台服务', fields: [item('系统服务'), item('安装并启动', ['安装并启动后台服务']), item('服务运行', ['启动已安装服务', '停止后台服务并关闭自启']), item('卸载后台服务'), item('仅运行指定 Bot', [], {reveal: 'machine-advanced'}), ...['进程 PID', '上次退出码', '服务定义', '标准输出', '错误日志'].map(title => item(title, [], {reveal: 'machine-advanced'}))]},
   {page: 'application', section: '软件更新', fields: [item('桌面版'), item('更新状态'), item('可用版本'), item('检查更新', ['检查桌面更新']), item('下载更新', [], {guide: '有可用更新时显示下载操作。'}), item('安装更新', [], {guide: '下载完成后显示安装操作。'}), item('发布说明')]},
   {page: 'application', section: '外部 Core / CLI', fields: [item('Core 来源'), item('当前版本'), item('可用版本'), item('检查 Core 更新'), item('更新外部 Core'), item('更新进度', ['查看 Core 更新进度'])]},
   {page: 'application', section: 'Codex 可执行文件', fields: [item('已保存路径'), item('当前路径配置'), item('本次所选'), item('选择文件'), item('保存路径'), item('恢复自动检测'), item('未绑定工作目录时的运行后备')]},
@@ -54,7 +54,7 @@ const globalGroups: readonly {page: Page; section: string; fields: readonly Targ
   {page: 'environment', section: '本机环境', fields: [item('重新检测'), ...['安装执行后端', '检查后端版本', '更新执行后端', '卸载执行后端'].map(title => item(title, ['Claude Agent SDK', '托管后端'], {field: '', guide: '在本机环境的执行后端条目中操作；可用按钮取决于已安装状态。'}))]},
   ...(['Codex', 'Claude', '飞书 CLI'] as const).map((section, index) => ({page: 'environment' as const, section: toolNames[(['codex', 'claude', 'lark-cli'] as const)[index]!], fields: ['安装', '更新', '登录', '检查授权', '重新登录', '安装托管副本', '重新安装最新版', '停用托管副本', '安装来源', '安装位置', '当前版本', '托管版本', '最新版本', '授权状态', ...(section === 'Codex' ? ['Host 状态', 'Host 版本'] : []), ...(section === '飞书 CLI' ? ['当前 Profile'] : [])].map(title => item(`${title} ${section}`, [title], {field: title, reveal: (['codex-tool', 'claude-tool', 'lark-tool'] as const)[index], guide: ['安装来源', '安装位置', '当前版本', '托管版本', '最新版本', '授权状态', 'Host 状态', 'Host 版本', '当前 Profile'].includes(title) ? undefined : '此操作是否可用取决于本机工具的安装与授权状态。'}))})),
   {page: 'environment', section: '飞书 Profile', fields: [item('管理飞书 CLI', ['管理 Profile', '切换 Profile'], {reveal: 'profile-manager'}), item('添加已有应用', ['添加 Profile'], {reveal: 'profile-add'}), item('创建新应用', ['创建 Profile'], {reveal: 'profile-create'}), ...['Profile 名称', 'App ID', 'App Secret', '平台', '添加后设为当前'].map(title => item(title, ['飞书应用'], {reveal: 'profile-add'})), item('设为当前', ['切换飞书 Profile'], {reveal: 'profile-manager'})]},
-  {page: 'diagnostics', section: '当前状态', fields: [item('Bridge 版本'), item('已注册 Agent'), item('已连接飞书群'), item('最近读取'), item('数据目录')]},
+  {page: 'diagnostics', section: '当前状态', fields: [item('Bridge 版本'), item('已注册 Bot'), item('已连接飞书群'), item('最近读取'), item('数据目录')]},
   {page: 'diagnostics', section: '诊断操作', fields: [item('重新检查'), item('打开事件设置', [], {guide: '出现飞书事件配置诊断时，可打开对应设置。'})]},
   {page: 'diagnostics', section: 'Bridge 日志', fields: [item('刷新日志'), item('持续跟随'), item('Bridge 日志')]},
 ];
@@ -69,7 +69,7 @@ function expand(id: string, context: string, base: Destination, groups: readonly
 }
 export function searchEntries(snapshot: DesktopSnapshot): SearchEntry[] {
   const pages: readonly {id: string; title: string; aliases: readonly string[]; page: Page; view?: CollaborationView}[] = [
-    {id: 'agents', title: 'Agent', aliases: ['机器人', '准备执行工具', '注册 Agent', '加入飞书群并设置工作目录'], page: 'collaboration', view: 'agents'},
+    {id: 'agents', title: 'Bot', aliases: ['机器人', '准备执行工具', '注册 Bot', '加入飞书群并设置工作目录'], page: 'collaboration', view: 'agents'},
     {id: 'groups', title: '群聊', aliases: ['飞书群', '项目', '已连接飞书群'], page: 'collaboration', view: 'groups'},
     {id: 'usage', title: 'Codex 用量', aliases: ['账号', '套餐', '限额', '活动', '热力图'], page: 'usage'},
     {id: 'coffee', title: '咖啡一下', aliases: ['Hook', '通知', '离开电脑'], page: 'coffee'},
@@ -83,12 +83,12 @@ export function searchEntries(snapshot: DesktopSnapshot): SearchEntry[] {
   }));
   for (const agent of snapshot.agents) {
     const base: Destination = {page: 'collaboration', view: 'agents', selection: {kind: 'agent', id: agent.id}};
-    entries.push({id: agent.id, title: agent.name, context: 'Agent', aliases: [agent.id], destination: base, kind: 'item'});
-    entries.push({id: `${agent.id}-settings`, title: 'Agent 设置', context: agent.name, aliases: ['机器人设置', 'Agent 权限'], destination: {...base, detail: {kind: 'agent-settings'}}, kind: 'setting'});
+    entries.push({id: agent.id, title: agent.name, context: 'Bot', aliases: [agent.id], destination: base, kind: 'item'});
+    entries.push({id: `${agent.id}-settings`, title: 'Bot 设置', context: agent.name, aliases: ['机器人设置', 'Bot 权限'], destination: {...base, detail: {kind: 'agent-settings'}}, kind: 'setting'});
     for (const group of agentGroups) {
       const destination: Destination = {...base, detail: {kind: 'agent-settings'}, section: group.title};
-      entries.push({id: `${agent.id}-${group.title}`, title: group.title, context: `Agent 设置 · ${agent.name}`, aliases: group.aliases ?? [], destination, kind: 'setting'});
-      group.fields.forEach((field, index) => entries.push({id: `${agent.id}-${group.title}-${index}`, title: field.title, context: `Agent 设置 · ${agent.name} · ${group.title}`, aliases: field.aliases ?? [], destination: {...destination, field: field.field ?? field.title, guide: field.guide}, kind: 'setting'}));
+      entries.push({id: `${agent.id}-${group.title}`, title: group.title, context: `Bot 设置 · ${agent.name}`, aliases: group.aliases ?? [], destination, kind: 'setting'});
+      group.fields.forEach((field, index) => entries.push({id: `${agent.id}-${group.title}-${index}`, title: field.title, context: `Bot 设置 · ${agent.name} · ${group.title}`, aliases: field.aliases ?? [], destination: {...destination, field: field.field ?? field.title, guide: field.guide}, kind: 'setting'}));
     }
   }
   for (const group of snapshot.groups) entries.push({id: group.id, title: group.name, context: '飞书群', aliases: [group.id], destination: {page: 'collaboration', view: 'groups', selection: {kind: 'group', id: group.id}}, kind: 'item'});
@@ -102,7 +102,7 @@ export function searchEntries(snapshot: DesktopSnapshot): SearchEntry[] {
     entries.push({id: `${member.id}-history-link`, title: '会话与状态', context, aliases: ['历史会话'], destination: {...base, detail: {kind: 'membership-settings'}, section: '历史会话', field: '会话与状态'}, kind: 'setting'});
     entries.push(...expand(member.id, context, base, membershipGroups, {kind: 'membership-settings'}));
     ['搜索历史会话', '筛选历史会话', '恢复会话', '当前会话上下文', '刷新上下文', '清空会话', '压缩上下文', '自主任务目标', '停止当前任务', '结束目标', '完成时提醒'].forEach((title, index) => entries.push({id: `${member.id}-session-${index}`, title, context: `${context} · 当前会话`, aliases: ({'搜索历史会话': ['搜索'], '筛选历史会话': ['筛选'], '当前会话上下文': ['会话', '上下文'], '清空会话': ['会话操作'], '完成时提醒': ['正在运行']} as Record<string, string[]>)[title] ?? [], destination: {...base, section: '会话管理', field: ({'搜索历史会话': '搜索', '筛选历史会话': '筛选', '当前会话上下文': '上下文', '清空会话': '会话操作', '压缩上下文': '会话操作', '停止当前任务': '正在运行', '结束目标': '正在运行'} as Record<string, string>)[title] ?? title, guide: '进入「会话与状态」中的「会话管理」，可查看状态并操作当前会话。'}, kind: 'action'}));
-    entries.push({id: `${member.id}-connection`, title: 'Agent 连接', context, aliases: [], destination: base, kind: 'item'});
+    entries.push({id: `${member.id}-connection`, title: 'Bot 连接', context, aliases: [], destination: base, kind: 'item'});
   }
   entries.push({id: 'usage-share', title: '分享 Codex 用量', context: '用量', aliases: ['用量卡片'], destination: {page: 'usage', section: '分享 Codex 用量'}, kind: 'action'});
   return entries;

@@ -189,13 +189,13 @@ export function EnvironmentPanel({ request, onCodexLogin, codexJobs, codexBusy, 
 
   return <section className="environment-panel" aria-label="本机环境" id={settingAnchor('本机环境')}>
     <header className="environment-lead">
-      <p>管理这台设备上的 Agent 工具和飞书 CLI。</p>
+      <p>管理这台设备上的 Bot 工具和飞书 CLI。</p>
       <Button size="sm" icon={<RefreshCw size={15} />} disabled={busy} onClick={() => void refresh()}>重新检测</Button>
     </header>
     {notice && <p className="environment-notice" role="status">{notice}</p>}
     {running && !progressOpen && <div className="environment-notice" role="status">{toolNames[running.tool]} 正在{running.update ? "更新" : "安装"}。<Button size="sm" onClick={() => setProgressOpen(true)}>返回进度</Button></div>}
     <div className="environment-groups">
-      <DependencyGroup title="Agent" description="Codex 或 Claude 至少需要一个可用。">
+      <DependencyGroup title="Bot" description="Codex 或 Claude 至少需要一个可用。">
         {order.slice(0, 2).map((kind) => tools.find((item) => item.tool === kind)).filter((item): item is EnvironmentToolState => Boolean(item)).map((tool) => <ToolRow key={tool.tool} reveal={reveal === `${tool.tool}-tool`} tool={tool} auth={auth[tool.tool]} hostBackend={tool.tool === "codex" ? codexHost : undefined} backendActions={backendActions} profiles={profiles} busy={busy || Boolean(running) || (tool.tool === "codex" && codexBusy)} running={running?.tool === tool.tool} onIntent={setIntent} onCheckAuth={checkAuth} onLogin={() => { if (tool.tool === "codex") void onCodexLogin(); else void act({ type: "startLogin", tool: tool.tool }); }} onProgress={() => setProgressOpen(true)} />)}
         {otherBackends.map((backend) => <BackendRow key={backend.id} backend={backend} actions={backendActions} />)}
       </DependencyGroup>
@@ -269,7 +269,7 @@ function BackendRow({ backend, actions }: { backend: BackendEntry; actions: Back
     <div>
       <strong>{sdk ? "Claude Agent SDK" : backend.displayName}</strong>
       <span>{state}{state === "状态未知" ? `（${backend.depState}）` : ""} · {backend.installedVersion ?? backend.version ?? "版本未知"}</span>
-      {sdk && <small>Agent 任务执行依赖，与 Claude Code CLI 分开管理。</small>}
+      {sdk && <small>Bot 任务执行依赖，与 Claude Code CLI 分开管理。</small>}
       {backend.hint && <small>{backend.hint}</small>}
     </div>
     <BackendActions backend={backend} actions={actions} />
