@@ -65,7 +65,7 @@ function validateSender(event:Electron.IpcMainInvokeEvent):void {
   if(!valid)throw new Error('Untrusted IPC sender.');
 }
 async function start():Promise<void> {
-  window=new BrowserWindow({width:1060,height:780,minWidth:720,minHeight:560,title:'Vonvon Bot',backgroundColor:'#f7f7f8',titleBarStyle:process.platform==='darwin'?'hiddenInset':'default',webPreferences:{preload:join(__dirname,'preload.cjs'),sandbox:true,contextIsolation:true,nodeIntegration:false,webSecurity:true}});
+  window=new BrowserWindow({width:720,height:630,minWidth:720,minHeight:560,title:'Vonvon Bot',backgroundColor:'#f7f7f8',titleBarStyle:process.platform==='darwin'?'hiddenInset':'default',webPreferences:{preload:join(__dirname,'preload.cjs'),sandbox:true,contextIsolation:true,nodeIntegration:false,webSecurity:true}});
   const currentWindow=window;
   currentWindow.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   currentWindow.webContents.on('will-navigate',event=>event.preventDefault());
