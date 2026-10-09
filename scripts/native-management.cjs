@@ -137,7 +137,7 @@ void app.whenReady().then(async()=>{
   assert.equal(await evaluate(`${recipient}.value`),'membership_second');
   assert.equal(await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='生成分享卡').disabled"),true);
   assert.equal(calls.filter(c=>c.action==='shareUsage').length,2);
-  snapshot.memberships[1].stale=false;snapshot.agents[1].readError='Fixture read error';publish();await wait("document.body.innerText.includes('Agent 暂不可用')");
+  snapshot.memberships[1].stale=false;snapshot.agents[1].readError='Fixture read error';publish();await wait("document.body.innerText.includes('Bot 暂不可用')");
   assert.equal(await evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='生成分享卡').disabled"),true);
   snapshot.agents[1].readError=undefined;snapshot.memberships.splice(1,1);publish();await wait("document.body.innerText.includes('原绑定已移除')");
   assert.equal(await evaluate(`${recipient}.value`),'membership_second');

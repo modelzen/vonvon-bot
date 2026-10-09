@@ -144,7 +144,7 @@ void app
       assert.ok(layout.labelWidth > 60, JSON.stringify(layout));
       assert.match(layout.options[1], /^共用 ·/);
       await writeFile(path.join(home, "native-long-topic.png"), (await window.capturePage()).toPNG());
-      await window.webContents.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === 'Agent').click()`);
+      await window.webContents.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(button => button.textContent.trim() === 'Bot').click()`);
       await writeFile(path.join(home, "native-settings.json"), JSON.stringify({ hostSettings, reset, agent, denied, project, sessions, session }, null, 2));
     } else assert.equal(snapshot.agents.length, 0);
     assert.equal(snapshot.stale, false);
@@ -153,8 +153,8 @@ void app
     );
     if (snapshot.agents.length) {
       for (const agent of snapshot.agents) assert.ok(text.includes(agent.name), agent.name);
-      assert.match(text, /添加 Agent/);
-    } else assert.match(text, /添加你的第一个 Agent/);
+      assert.match(text, /添加 Bot/);
+    } else assert.match(text, /邀请你的第一个 Bot/);
     assert.match(text, /本机环境/);
     assert.doesNotMatch(text, /交互原型|模拟授权|示例数据/);
     const malformed = await window.webContents.executeJavaScript(

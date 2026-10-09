@@ -438,7 +438,7 @@ export class DesktopController {
           )
             throw new CoreError(
               "scope-mismatch",
-              "操作结果与当前 Agent 或群不匹配。",
+              "操作结果与当前 Bot 或群不匹配。",
             );
         }
         return reply;
@@ -646,7 +646,7 @@ export class DesktopController {
     if (response.activation !== "applied") {
       const result = await this.activate(agentId);
       if (result.kind === "activationPending" && !enabled)
-        return { kind: "activationPending", message: "停用配置已保存，但 Agent 尚未停止，仍可能回复飞书消息。请到「应用与启动」重启 Bridge，使停用生效。" };
+        return { kind: "activationPending", message: "停用配置已保存，但 Bot 尚未停止，仍可能回复飞书消息。请到「应用与启动」重启 Bridge，使停用生效。" };
       if (result.kind !== "applied") return result;
     }
     this.pendingActivation.delete(agentId);
@@ -655,7 +655,7 @@ export class DesktopController {
     if (this.snapshot.stale || !agent || agent.enabled !== enabled || agent.running !== enabled) {
       return {
         kind: "activationPending",
-        message: enabled ? "尚未确认 Agent 已启动，请重新检查状态。" : "Agent 尚未停止，仍可能回复飞书消息。请重新检查状态。",
+        message: enabled ? "尚未确认 Bot 已启动，请重新检查状态。" : "Bot 尚未停止，仍可能回复飞书消息。请重新检查状态。",
       };
     }
     return { kind: "applied", revision: this.snapshot.revision };
@@ -763,12 +763,12 @@ export class DesktopController {
             if (!target)
               throw new CoreError(
                 "missing-agent",
-                "Agent 已不存在，请刷新列表。",
+                "Bot 已不存在，请刷新列表。",
               );
             if (target.active || target.running)
               throw new CoreError(
                 "agent-active",
-                "请先停用 Agent 并让它停止运行，再删除本地数据。",
+                "请先停用 Bot 并让它停止运行，再删除本地数据。",
               );
             this.generation++;
             try {
@@ -937,7 +937,7 @@ export class DesktopController {
       throw new CoreError("registration-running", "已有扫码注册正在进行。");
     const before = stateSchema.parse(await this.json("/api/state"));
     if (target && !before.bots.some(bot => bot.appId === target))
-      throw new CoreError("missing-agent", "Agent 已不存在，请刷新列表。");
+      throw new CoreError("missing-agent", "Bot 已不存在，请刷新列表。");
     const registered = new Set(before.bots.map((bot) => bot.appId));
     const id = jobIdSchema.parse(randomUUID());
     const abort = new AbortController();
@@ -1043,7 +1043,7 @@ export class DesktopController {
             ]).parse(await this.json(`/api/bots/register-qr?sessionId=${encodeURIComponent(sessionId)}`));
             if (outcome.state === "running") throw new CoreError("refresh-running", "凭据刷新尚未结束。");
             if (outcome.state === "succeeded") {
-              if (outcome.appId !== target) throw new CoreError("identity-mismatch", "刷新结果与所选 Agent 不一致。");
+              if (outcome.appId !== target) throw new CoreError("identity-mismatch", "刷新结果与所选 Bot 不一致。");
               committed.add(target);
             } else if (outcome.state === "failed") failure = new Error(outcome.message);
           } else if (!target) {
@@ -1084,7 +1084,7 @@ export class DesktopController {
               message:
                 result.kind === "activationPending"
                   ? result.message
-                  : target ? "Agent 凭据已刷新，原有设置和群绑定已保留。" : "Agent 已注册并启用。请检查飞书权限后加入群。",
+                  : target ? "Bot 凭据已刷新，原有设置和群绑定已保留。" : "Bot 已注册并启用。请检查飞书权限后加入群。",
             });
           } else {
             this.job({
@@ -1219,7 +1219,7 @@ export class DesktopController {
           const payload: unknown = JSON.parse(text);
           if (name === "done") {
             const appId = z.object({ appId: agentIdSchema }).parse(payload).appId;
-            if (target && appId !== target) throw new CoreError("identity-mismatch", "刷新结果与所选 Agent 不一致。");
+            if (target && appId !== target) throw new CoreError("identity-mismatch", "刷新结果与所选 Bot 不一致。");
             committed.add(appId);
             return;
           }
@@ -1488,7 +1488,7 @@ export class DesktopController {
         eventConfigUrl: diagnosis.data.eventConfigUrl,
         status: event?.state === "ok" ? "ok" : event?.state === "missing" || event?.state === "unpublished" ? "error" : "warning",
         message: !event
-          ? "尚未注册 Agent。"
+          ? "尚未注册 Bot。"
           : event.state === "ok"
             ? "必需事件已订阅。"
             : (event.reason ??

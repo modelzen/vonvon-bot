@@ -178,7 +178,7 @@ export function ProjectPanel({ scope, request, onChanged, children }: Props) {
     </SettingsGroup>
     {!removed && children}
     {project && !removed && <SettingsGroup id={settingAnchor('解除项目绑定')} className="membership-settings-danger" label="解除项目绑定" footer="只移除 Bridge 的项目绑定。工作目录和其中的文件不会删除。">
-      <SettingsRow title="解除绑定" description="此操作会结束 Agent 与此项目群的关联。" trailing={!deleteArmed ? <Button size="sm" variant="danger" disabled={saving} onClick={() => setDeleteArmed(true)}>解除绑定…</Button> : <div className="settings-inline-actions"><Button size="sm" onClick={() => setDeleteArmed(false)}>取消</Button><Button size="sm" variant="danger" loading={saving} onClick={() => {setDeleteArmed(false); guard.navigate(() => {void removeProject();});}}>确认解除</Button></div>} />
+      <SettingsRow title="解除绑定" description="此操作会结束 Bot 与此项目群的关联。" trailing={!deleteArmed ? <Button size="sm" variant="danger" disabled={saving} onClick={() => setDeleteArmed(true)}>解除绑定…</Button> : <div className="settings-inline-actions"><Button size="sm" onClick={() => setDeleteArmed(false)}>取消</Button><Button size="sm" variant="danger" loading={saving} onClick={() => {setDeleteArmed(false); guard.navigate(() => {void removeProject();});}}>确认解除</Button></div>} />
     </SettingsGroup>}
     {error && <InlineNotice title="项目操作未完成" tone="danger">{error}</InlineNotice>}
     {notice && <InlineNotice title="项目已更新">{notice}</InlineNotice>}

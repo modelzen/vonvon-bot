@@ -130,7 +130,7 @@ void app.whenReady().then(async () => {
   await click('完成');
   await click('安装');await click('开始安装');await waitFor("document.body.innerText.includes('后台继续')");
   await click('后台继续');await waitFor("document.body.innerText.includes('返回进度')");
-  await click('Agent');await click('本机环境');await waitFor("document.body.innerText.includes('取消任务')");
+  await click('Bot');await click('本机环境');await waitFor("document.body.innerText.includes('取消任务')");
   installation='installed';authentication='signedOut';marker='installed-after-navigation';
   installOperation={kind:'succeeded',id:installOperation.id,message:'工具已安装。'};
   finishInstall({kind:'applied',message:'工具已安装。'});
@@ -140,8 +140,8 @@ void app.whenReady().then(async () => {
   snapshot.diagnostics=[{title:'飞书事件订阅',status:'error',message:'缺少必需事件',eventConfigUrl:'https://open.larksuite.com/app/cli_fixture/event'}];publish();
   await click('状态与诊断');await click('打开事件设置');
   assert.ok(commands.some(c=>c.type==='openEventSettings'&&c.url==='https://open.larksuite.com/app/cli_fixture/event'));
-  await click("Agent");
-  await click("添加 Agent");
+  await click("Bot");
+  await click("添加 Bot");
   await waitFor("Boolean(document.querySelector('input[aria-label=\"完整注册链接\"]'))");
   await waitFor("Number(getComputedStyle(document.querySelector('[role=dialog]')).opacity) >= 0.999");
   assert.equal(await window.webContents.executeJavaScript("document.querySelector('input[aria-label=\"完整注册链接\"]').value"), registrationUrl);
