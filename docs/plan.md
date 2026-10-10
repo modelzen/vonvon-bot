@@ -83,7 +83,7 @@ Hosted CI is the GitHub Actions run on GitHub-hosted runners. This policy sets w
 
 - `docs` only when every changed path is exactly `README.md`, `AGENTS.md`, or `CLAUDE.md` at the root, or matches `docs/**/*.md`. Every other path is `full`, including protocol source and tests, Markdown elsewhere, `.github/**`, `scripts/**`, every `package.json`, `package-lock.json`, and config.
 - Changed paths come from local Git on a full-history checkout (`fetch-depth: 0`) with `git diff --name-only --no-renames -z`. For `pull_request` the range is `git merge-base <base.sha> <head.sha>` to `<head.sha>` from the event payload. For a `push` to `main` it is `before` to `after`. A move lists both paths and a deletion stays listed.
-- The script selects `full` on `workflow_dispatch`, an unknown event, a missing, all-zero, or locally absent SHA, a failing Git command, an empty, malformed, or ambiguous list, or a list over its own size bound. It never truncates the list and reports `docs`. A crash of the script also counts as `full`.
+- The script selects `full` on `workflow_dispatch`, an unknown event, a missing, all-zero, or locally absent SHA, a failing Git command, an empty, malformed, or ambiguous list, or a list over its own size bound. It never truncates the list and reports `docs`. An unrecoverable script failure fails the job and never authorizes `docs`.
 
 *Linux job.* `ubuntu-latest`, always starts, and runs the script first.
 
