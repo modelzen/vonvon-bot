@@ -10,8 +10,8 @@
 | --- | --- | --- |
 | V1 | 建 monorepo 和 `packages/protocol`。从 `codex/device-handoff` 移植 zod 合同，加握手和机器维度。加 Linux 上的 CI | 无 |
 | V2 | 建 `packages/daemon`。用脚本从 bridge `446b2a4` 复制完整 `src/` 和 `test/`，暂留 `src/web` 以保持可运行基线；数据目录改成 `~/.vonvon-bot`。`vonvon daemon run` 能在前台跑起 Bot | V1 |
-| V3 | daemon 的 API 服务。WebSocket、本机凭据、pid 锁、RPC 处理、快照事件、目录浏览 RPC、`vonvon daemon start/stop/status`；旧网页管理路由改成 RPC 后删除 `src/web` | V2 |
-| V4 | `packages/client` 和 `packages/ui`。移植界面，`window.bridge` 换成注入的客户端，daemon 在本机提供网页 | V3 |
+| V3 | daemon 的 API 服务。WebSocket、本机凭据、pid 锁、RPC 处理、快照请求和快照事件、无损的 `admin` 状态请求、目录浏览 RPC、`vonvon daemon start/stop/status`，以及 lane 要用的本机最小 `packages/client`；旧网页管理路由改成 RPC 后删除 `src/web` | V2 |
+| V4 | 补全 `packages/client`，新建 `packages/ui`。移植界面，`window.bridge` 换成注入的客户端，daemon 在本机提供网页 | V3 |
 | V5 | `packages/desktop`。Electron 外壳拉起或连接 daemon，加载界面，托盘，开机自动运行，自动更新 | V4 |
 | V6 | Claude Code provider。移植 Paseo 的实现和 `AgentSession` 到 `AgentBackend` 的适配器，删除 bridge 的 Claude 后端 | V3 |
 | V7 | 其他 provider。通用 ACP 和 Copilot、OpenCode、Pi | V6 |
