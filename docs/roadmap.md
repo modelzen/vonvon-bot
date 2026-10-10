@@ -10,8 +10,8 @@
 | --- | --- | --- |
 | V1 | 建 monorepo 和 `packages/protocol`。从 `codex/device-handoff` 移植 zod 合同，加握手和机器维度。加 Linux 上的 CI | 无 |
 | V2 | 建 `packages/daemon`。用脚本从 bridge `446b2a4` 复制完整 `src/` 和 `test/`，暂留 `src/web` 以保持可运行基线；数据目录改成 `~/.vonvon-bot`。`vonvon daemon run` 能在前台跑起 Bot | V1 |
-| V3 | daemon 的 API 服务。WebSocket、本机凭据、pid 锁、RPC 处理、快照事件、目录浏览 RPC、`vonvon daemon start/stop/status`；旧网页管理路由改成 RPC 后删除 `src/web` | V2 |
-| V4 | `packages/client` 和 `packages/ui`。移植界面，`window.bridge` 换成注入的客户端，daemon 在本机提供网页 | V3 |
+| V3 | daemon 的 API 服务。WebSocket、本机凭据、pid 锁、RPC 处理、快照请求和快照事件、无损的 `admin` 状态请求、目录浏览 RPC、`vonvon daemon start/stop/status`，以及 lane 要用的本机最小 `packages/client`；旧网页管理路由改成 RPC，只读预览和旧网页页面退役，私聊菜单去掉旧控制台按钮，然后删除 `src/web` | V2 |
+| V4 | 补全 `packages/client`，新建 `packages/ui`。移植界面，`window.bridge` 换成注入的客户端，daemon 在本机提供网页 | V3 |
 | V5 | `packages/desktop`。Electron 外壳拉起或连接 daemon，加载界面，托盘，开机自动运行，自动更新 | V4 |
 | V6 | Claude Code provider。移植 Paseo 的实现和 `AgentSession` 到 `AgentBackend` 的适配器，删除 bridge 的 Claude 后端 | V3 |
 | V7 | 其他 provider。通用 ACP 和 Copilot、OpenCode、Pi | V6 |
@@ -44,7 +44,7 @@ V5 和 V8 里有 systemd 检查，Mac 上跑不了。Codex 在 Linux CI 或 Linu
 
 - 飞书长连接模式下，同一个 Bot 的两个客户端只有一个收到事件。在 V8 里用两个进程连同一个测试 Bot 验证，结果决定导入时是否必须先暂停 bridge。
 - `AgentSession` 到 `AgentBackend` 的适配器能完整映射文本流、工具调用、权限请求、中断和追加消息。在 V6 里用真实的 Claude Code 跑一遍飞书卡片的完整流程。
-- bridge `446b2a4` 的已测基线为 153 个测试文件，其中 152 个通过、1 个有意跳过；1683 个用例通过、15 个有意跳过。搬进 `packages/daemon` 后，V2 要核对通过数和跳过数。跳过的 provider 实时测试不算作运行验收。
+- bridge `446b2a4` 的已测基线为 153 个测试文件，其中 152 个通过、1 个有意跳过；1683 个用例通过、15 个有意跳过。搬进 `packages/daemon` 后，V2 要核对通过数和跳过数。跳过的 provider 实时测试不算作运行验收。V3 删除 `src/web` 后不再要求这个文件数，改为全部测试通过，并在 PR 里附上旧测试到 RPC 测试的映射表。
 
 ## 已知风险
 
