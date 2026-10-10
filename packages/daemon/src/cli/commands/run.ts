@@ -80,10 +80,6 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
 
   try {
     if (process.send) {
-      // supervisor 子进程（'ipc' stdio）：控制台由 supervisor 聚合挂载，本进程只
-      // 接写请求——在进程内执行（registry withLock + 共享校验 + 驱逐 LIVE 会话，
-      // 这正是写操作必须 IPC 转发、不能 supervisor 文件直写的原因）。status 请求
-      // 回报真实 WS 连接状态，替代锁文件探测。
       const respond = createAdminIpcResponder(
         async (op) => {
           if (op.kind === 'status') {
@@ -99,9 +95,6 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
       );
       process.on('message', respond);
     } else {
-      // 独立 daemon（单 bot inline）：进程内挂全局控制台。本 bot 的写/实时状态走
-      // 进程内 orchestrator；其他已注册 bot 仍可只读快照（写需该 bot 进程在跑——
-      // 多 bot 写请用 `bot use` 选多个后由 supervisor 聚合）。
       const ownAppId = cfg.accounts.app.id;
       const startedAt = Date.now();
       api = await startApi({
@@ -138,7 +131,6 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
                 }
               : undefined,
           daemonStartedAt: startedAt,
-          // 按需后端安装在 daemon 进程内直跑（owns runtime，装完即能解析加载）。
           installBackend: installBackendDep,
           uninstallBackend: uninstallBackendDep,
           applyUpdate: performCoreUpdate,

@@ -131,7 +131,6 @@ export async function installLatest(opts: { inherit?: boolean } = {}): Promise<I
   });
 }
 
-/** Install in the owning daemon before its RPC reply schedules the normal same-port restart. */
 export async function performCoreUpdate(options: { install?: typeof installLatest } = {}): Promise<void> {
   const release = acquireUpdateLock();
   if (!release) throw new Error('A Core update is already in progress.');

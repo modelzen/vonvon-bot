@@ -127,7 +127,6 @@ const napDefault = (ms: number): Promise<void> => new Promise((resolve) => setTi
 type KillFn = (pid: number, signal: NodeJS.Signals | 0) => void;
 
 export interface StopSelfHostedDeps {
-  /** Read the current parent daemon PID from its validated owner record. */
   readDaemonPid?: () => Promise<number | undefined> | number | undefined;
   /** 注入 process.kill（测试用，绝不真杀）。 */
   kill?: KillFn;
