@@ -74,3 +74,12 @@ describe('published desktop release guidance', () => {
     expect(bundled).not.toContain('立即更新');
   });
 });
+
+describe('V2 update guidance regression', () => {
+  it('never appends legacy package installation or sudo advice to foreground guidance', () => {
+    const text = JSON.stringify(buildUpdateCard({ phase: 'error', from: '0.7.0', message: 'V2 前台 daemon 不支持服务更新。' }));
+    expect(text).not.toContain('npm i -g');
+    expect(text).not.toContain('sudo');
+    expect(text).toContain('V2');
+  });
+});
