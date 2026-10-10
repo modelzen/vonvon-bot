@@ -1,6 +1,7 @@
 import { mkdir, rm, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 import { spawnProcess } from '../platform/spawn';
 import { paths } from '../config/paths';
 import { log } from '../core/logger';
@@ -167,15 +168,27 @@ export async function installBackendDep(
     }
 
     let out = '';
-    const capture = (d: Buffer): void => {
-      const s = d.toString('utf8');
+    const capture = (s: string): void => {
+      if (!s) return;
       out += s;
       // 只保留尾部，避免长安装把内存撑大（SSE/卡片只需要最近的进度）。
       if (out.length > 8192) out = out.slice(-8192);
       onProgress?.(s);
     };
-    child.stdout?.on('data', capture);
-    child.stderr?.on('data', capture);
+    const decode = (stream: typeof child.stdout): (() => void) => {
+      const decoder = new StringDecoder('utf8');
+      let ended = false;
+      const flush = (): void => {
+        if (ended) return;
+        ended = true;
+        capture(decoder.end());
+      };
+      stream?.on('data', (data: Buffer) => capture(decoder.write(data)));
+      stream?.once('end', flush);
+      return flush;
+    };
+    const flushStdout = decode(child.stdout);
+    const flushStderr = decode(child.stderr);
 
     let aborted = false;
     const onAbort = (): void => {
@@ -192,6 +205,8 @@ export async function installBackendDep(
       resolve({ ok: false, code: null, aborted, tail: (out + e.message).slice(-2000) });
     });
     child.on('close', (code) => {
+      flushStdout();
+      flushStderr();
       if (signal) signal.removeEventListener('abort', onAbort);
       resolve({ ok: code === 0 && !aborted, code, aborted, tail: out.slice(-2000) });
     });
