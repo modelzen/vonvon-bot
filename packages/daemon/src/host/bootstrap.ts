@@ -2,7 +2,7 @@ import { paths } from '../config/paths';
 import { acquireMutex, closeMutex } from '../config/data-access';
 import { observeShutdown, type ShutdownControl } from './lifecycle';
 import { readServiceCodexBin } from '../service/codex-bin';
-import { acquirePidLock, releasePidLock, type PidLockInfo } from '../server/pid-lock';
+import { acquirePidLock, publishPidLock, releasePidLock, type PidLockInfo } from '../server/pid-lock';
 
 export async function runHostRuntime(options: { bot?: string; port?: number; managed: boolean; control?: ShutdownControl }): Promise<void> {
   const control = options.control ?? observeShutdown(options.managed);
@@ -20,7 +20,13 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
       else if (codexBin !== undefined) process.env.CODEX_BIN = codexBin;
     }
     const { runRun } = await import('../cli/commands/run');
-    await runRun(options.bot, { control, managed: options.managed });
+    const claimedOwner = owner;
+    await runRun(options.bot, {
+      control,
+      managed: options.managed,
+      port: options.port,
+      onListening: claimedOwner ? async (listen) => { await publishPidLock(paths.appDir, claimedOwner, listen); } : undefined,
+    });
   } finally {
     control.dispose();
     if (owner) await releasePidLock(paths.appDir, owner);

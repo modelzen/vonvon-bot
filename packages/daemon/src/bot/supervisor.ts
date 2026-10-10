@@ -11,7 +11,7 @@ import { AdminWriteError } from '../admin/ops';
 import { createAdminService } from '../admin/service';
 import { installBackendDep, uninstallBackendDep } from '../agent';
 import { performCoreUpdate } from '../service/update';
-import { mountWebConsole } from '../web/mount';
+import { startApi } from '../server/http';
 
 const BACKOFF_MIN_MS = 1_000;
 const BACKOFF_MAX_MS = 30_000;
@@ -34,7 +34,7 @@ interface Child {
  * 假死子进程拖住整页——超时按 connection:'unknown' 渲染。 */
 const STATUS_IPC_TIMEOUT_MS = 2_000;
 
-export async function runSupervisor(bots: BotEntry[], options: { control?: ShutdownControl; managed?: boolean } = {}): Promise<void> {
+export async function runSupervisor(bots: BotEntry[], options: { control?: ShutdownControl; managed?: boolean; port?: number; onListening?: (listen: string) => Promise<void> } = {}): Promise<void> {
   const control = options.control ?? observeShutdown();
   const supervisorStartedAt = Date.now();
   const cliEntry = process.argv[1];
@@ -44,6 +44,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   delete childEnv[SERVICE_ENV_FLAG];
 
   let shuttingDown = false;
+  let api: Awaited<ReturnType<typeof startApi>> | undefined;
   const children = new Map<string, Child>(bots.map((bot) => [bot.appId, { bot, enabled: true, backoffMs: BACKOFF_MIN_MS, startedAt: 0 } satisfies Child]));
 
   console.log(`\n正在启动 ${bots.length} 个机器人（各自独立进程）：`);
@@ -79,6 +80,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
       env: childEnv,
     });
     c.proc = proc;
+    api?.invalidate();
     const ipc = createAdminIpcCaller((msg) => {
       // connected=false 才算通道关闭；send 返回 false 还可能只是背压（消息仍会
       // 送达），不能据此误拒——真丢失由 caller 的超时兜底。
@@ -95,6 +97,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
       if (c.proc !== proc) return;
       c.proc = undefined;
       c.ipc = undefined;
+      api?.invalidate();
       ipc.rejectAll(`机器人「${c.bot.name}」进程已退出（等待自动重启）`);
       if (shuttingDown || !c.enabled) return;
       // Reset backoff if it had been healthy a while; otherwise grow it.
@@ -113,16 +116,15 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     });
   };
 
-  let webConsole: Awaited<ReturnType<typeof mountWebConsole>>;
   try {
     for (const c of children.values()) spawnChild(c);
 
-    // ── 全局 Web 控制台（多 bot 聚合）─────────────────────────────────────────
-    // 读 = 各 bot 目录文件快照（显式路径，不切全局目录）；写 + 实时连接状态 =
-    // IPC 转发给对应子进程（崩溃重启窗口内明确拒绝，绝不静默丢写）。
+    // Parent reads local state and forwards live Bot writes through child IPC.
     const byAppId = (botId: string): Child | undefined => children.get(botId);
-    webConsole = await mountWebConsole(
-      createAdminService({
+    api = await startApi({
+      port: options.port,
+      control,
+      service: createAdminService({
         applyBotActivation: async (appId, enabled) => {
           if (shuttingDown) throw new Error('Host 正在退出。');
           let child = children.get(appId);
@@ -205,9 +207,9 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
         uninstallBackend: uninstallBackendDep,
         applyUpdate: performCoreUpdate,
       }),
-    );
-    if (!webConsole && bots.length === 0) throw new Error('Web 控制台未能启动，无法进入引导。');
-    if (webConsole) console.log(`Web console listening on 127.0.0.1:${webConsole.port}`);
+    });
+    await options.onListening?.(api.listen);
+    console.log(`Daemon API listening on ${api.listen}`);
 
     console.log('vonvon daemon ready');
     await control.waitForRequest();
@@ -215,7 +217,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     shuttingDown = true;
     for (const child of children.values()) if (child.restartTimer) clearTimeout(child.restartTimer);
     const live = [...children.values()].flatMap((child) => child.proc ? [stopChild(child.proc, CHILD_SHUTDOWN_GRACE_MS)] : []);
-    const cleanup = await Promise.allSettled([webConsole?.close(), ...live]);
+    const cleanup = await Promise.allSettled([api?.close(), ...live]);
     control.dispose();
     const failures = cleanup.filter((result) => result.status === 'rejected');
     if (failures.length) throw new AggregateError(failures.map((failure) => failure.reason), 'Supervisor cleanup failed.');

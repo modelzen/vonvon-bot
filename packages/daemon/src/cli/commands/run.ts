@@ -10,15 +10,22 @@ import { createAdminIpcResponder } from '../../admin/ipc';
 import { createAdminService } from '../../admin/service';
 import { installBackendDep, uninstallBackendDep } from '../../agent';
 import { performCoreUpdate } from '../../service/update';
-import { mountWebConsole, type MountedWebConsole } from '../../web/mount';
+import { startApi } from '../../server/http';
 
-export async function runRun(botName?: string, options: { control?: ShutdownControl; managed?: boolean } = {}): Promise<void> {
+interface RunOptions {
+  control?: ShutdownControl;
+  managed?: boolean;
+  port?: number;
+  onListening?: (listen: string) => Promise<void>;
+}
+
+export async function runRun(botName?: string, options: RunOptions = {}): Promise<void> {
   const control = options.control ?? observeShutdown();
   const managed = Boolean(options.managed);
   // Explicit selector always runs exactly that one bot inline (this is also how
   // the supervisor launches each child: `run --bot <appId>`).
   if (botName) {
-    await runSingle(botName, control);
+    await runSingle(botName, control, options);
     return;
   }
 
@@ -28,12 +35,12 @@ export async function runRun(botName?: string, options: { control?: ShutdownCont
     if (!ready) { process.exitCode = 1; return; }
     registry = await ensureRegistry();
   }
-  await runSupervisor(activeBots(registry), { control, managed });
+  await runSupervisor(activeBots(registry), { control, managed, port: options.port, onListening: options.onListening });
 }
 
 /** Run a single bot inline in this process. `botName` undefined → the implicit
  *  current/default bot (with first-run onboarding allowed). */
-async function runSingle(botName: string | undefined, control: ShutdownControl): Promise<void> {
+async function runSingle(botName: string | undefined, control: ShutdownControl, options: RunOptions): Promise<void> {
   const ready = await ensureOnboarded({ allowCreate: !botName, bot: botName });
   if (!ready) {
     process.exitCode = 1;
@@ -59,12 +66,14 @@ async function runSingle(botName: string | undefined, control: ShutdownControl):
   const fallbackCwd = process.env.FEISHU_CODEX_CWD || process.cwd();
   console.log('\n正在启动长连接 bot…');
   console.log('私聊我 `/new <名>` 建项目；在项目群里 @我 干活。Ctrl+C 退出。\n');
-  const handle = await startBridge({ cfg, appSecret: secret, fallbackCwd });
+  let handle: Awaited<ReturnType<typeof startBridge>>;
+  try { handle = await startBridge({ cfg, appSecret: secret, fallbackCwd }); }
+  catch (error) { releaseLock(); throw error; }
   // 配置长连接需要 bridge 在线，启动后继续检查用户发布的订阅更新。
   void announceEventsWhenLive(ready);
 
-  // ── Web 控制台 / supervisor IPC（按进程形态二选一）────────────────────────
-  let webConsole: MountedWebConsole | undefined;
+  let api: Awaited<ReturnType<typeof startApi>> | undefined;
+  try {
   if (process.send) {
     // supervisor 子进程（'ipc' stdio）：控制台由 supervisor 聚合挂载，本进程只
     // 接写请求——在进程内执行（registry withLock + 共享校验 + 驱逐 LIVE 会话，
@@ -90,8 +99,10 @@ async function runSingle(botName: string | undefined, control: ShutdownControl):
     // 多 bot 写请用 `bot use` 选多个后由 supervisor 聚合）。
     const ownAppId = cfg.accounts.app.id;
     const startedAt = Date.now();
-    webConsole = await mountWebConsole(
-      createAdminService({
+    api = await startApi({
+      port: options.port,
+      control,
+      service: createAdminService({
         executeCollaboration: async (botId, request) => {
           if (botId !== ownAppId) throw new AdminWriteError('机器人不在本进程的活跃集里');
           return handle.collaboration(request);
@@ -127,14 +138,17 @@ async function runSingle(botName: string | undefined, control: ShutdownControl):
         uninstallBackend: uninstallBackendDep,
         applyUpdate: performCoreUpdate,
       }),
-    );
-    if (webConsole) console.log(`Web console listening on 127.0.0.1:${webConsole.port}`);
+    });
+    await options.onListening?.(api.listen);
+    console.log(`Daemon API listening on ${api.listen}`);
   }
 
   if (!process.send) console.log('vonvon daemon ready');
   await control.waitForRequest();
-  try {
-    await webConsole?.close();
-    await handle.shutdown();
-  } finally { releaseLock(); }
+  } finally {
+    const cleanup = await Promise.allSettled([api?.close(), handle.shutdown()]);
+    releaseLock();
+    const failures = cleanup.filter((result) => result.status === 'rejected');
+    if (failures.length) throw new AggregateError(failures.map((failure) => failure.reason), 'Single Bot cleanup failed.');
+  }
 }
