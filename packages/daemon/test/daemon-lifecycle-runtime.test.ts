@@ -9,6 +9,7 @@ import type { ShutdownControl } from '../src/host/lifecycle';
 import { createApiLifetimeFake } from './helpers/api-lifetime';
 
 const f = vi.hoisted(() => ({ root: '', spawn: vi.fn(), api: vi.fn(), calls: [] as string[] }));
+vi.mock('node:child_process', async original => ({ ...await original<typeof import('node:child_process')>(), spawn: f.spawn }));
 vi.mock('../src/agent/codex-appserver/owned-process', () => ({ closeOwnedCodexProcesses: async () => {}, unconfirmedCodexPids: () => [] }));
 vi.mock('../src/config/paths', async original => ({
   ...await original<typeof import('../src/config/paths')>(), paths: { get appDir() { return f.root; } },
@@ -44,7 +45,15 @@ beforeEach(() => {
   closeGate = gate(); stopGate = gate(); started = gate(); settled = false;
   owned = new ChildProcess(); Object.defineProperty(owned, 'pid', { value: 54321 });
   owned.kill = vi.fn(() => true);
-  f.spawn.mockReturnValue(owned);
+  f.spawn.mockImplementation((command: string) => {
+    if (command !== 'taskkill') return owned;
+    const killer = new ChildProcess();
+    queueMicrotask(() => {
+      Object.defineProperty(killer, 'exitCode', { value: 0, configurable: true });
+      killer.emit('exit', 0, null);
+    });
+    return killer;
+  });
   const lifetime = createApiLifetimeFake(f.calls);
   f.api.mockResolvedValue({
     ...lifetime, port: 43119, listen: '127.0.0.1:43119', invalidate() {},
@@ -78,7 +87,11 @@ it('retains real PID and host mutex after cleanup rejection until child death an
   stopGate.release();
   await vi.advanceTimersByTimeAsync(120_000);
   await settleIO(30);
-  expect.soft(owned.kill).toHaveBeenCalledWith('SIGKILL');
+  if (process.platform === 'win32') {
+    expect.soft(f.spawn).toHaveBeenCalledWith('taskkill', ['/pid', String(owned.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+    expect.soft(f.spawn.mock.calls.filter(([command]) => command === 'taskkill')).toHaveLength(1);
+    expect.soft(owned.kill).not.toHaveBeenCalled();
+  } else expect.soft(owned.kill).toHaveBeenCalledWith('SIGKILL');
   expect.soft(settled).toBe(false);
   expect.soft(existsSync(join(f.root, 'daemon.pid'))).toBe(true);
   const contender = await acquireMutex(f.root, 'host', 0).then(async lock => { await closeMutex(lock); return 'acquired'; }, () => 'held');

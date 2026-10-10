@@ -112,7 +112,7 @@ import { runSupervisor } from '../src/bot/supervisor';
 import { acquireSingleInstanceLock } from '../src/core/single-instance';
 import { acquireMutex, closeMutex } from '../src/config/data-access';
 import { paths } from '../src/config/paths';
-import { observeShutdown, type ShutdownControl } from '../src/host/lifecycle';
+import { observeShutdown, settleOwnedChild, type ShutdownControl } from '../src/host/lifecycle';
 import { runSamePortRestartHelper } from '../src/host/restart';
 import { runStart, runStop } from '../src/cli/commands/daemon';
 import { runServiceCommand } from '../src/cli/commands/service';
@@ -473,9 +473,49 @@ function supervisorShell(): ChildProcess {
   const value = child();
   Object.defineProperty(value, 'connected', { value: true, configurable: true });
   value.send = vi.fn(() => true);
-  fixture.spawn.mockReturnValue(value);
+  fixture.spawn.mockImplementation((command: string) => {
+    if (command !== 'taskkill') return value;
+    const killer = child();
+    queueMicrotask(() => {
+      exitShell(killer);
+      exitShell(value, 1);
+    });
+    return killer;
+  });
   return value;
 }
+function expectNoForcedTreeTermination(value: ChildProcess): void {
+  if (process.platform === 'win32') {
+    expect.soft(fixture.spawn.mock.calls.filter(([command]) => command === 'taskkill')).toEqual([]);
+    expect.soft(value.kill).not.toHaveBeenCalled();
+  } else expect.soft(value.kill).not.toHaveBeenCalledWith('SIGKILL');
+}
+function expectForcedTreeTermination(value: ChildProcess): void {
+  if (process.platform === 'win32') {
+    expect.soft(fixture.spawn).toHaveBeenCalledWith('taskkill', ['/pid', String(value.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+    expect.soft(fixture.spawn.mock.calls.filter(([command]) => command === 'taskkill')).toHaveLength(1);
+    expect.soft(value.kill).not.toHaveBeenCalled();
+  } else expect.soft(value.kill).toHaveBeenCalledWith('SIGKILL');
+}
+it.skipIf(process.platform !== 'win32')('taskkill failure retains ownership until host death', async () => {
+  const shell = supervisorShell();
+  const killer = child();
+  fixture.spawn.mockImplementation((command: string) => {
+    if (command !== 'taskkill') return shell;
+    queueMicrotask(() => exitShell(killer, 1));
+    return killer;
+  });
+  const stopping = observed(settleOwnedChild(shell, 100));
+  await vi.advanceTimersByTimeAsync(1100);
+  expectForcedTreeTermination(shell);
+  expect.soft(stopping.state()).toBe('pending');
+  expect.soft(fixture.logWarn.mock.calls.some(([, message]) => message === 'owned_work_unconfirmed')).toBe(true);
+  exitShell(shell, 1);
+  await vi.advanceTimersByTimeAsync(1000);
+  await stopping.settled;
+  expect(stopping.state()).toBe('rejected');
+  expect(String(stopping.error())).toContain(`Host tree termination failed for ${shell.pid}`);
+});
 function allReasons(error: unknown): string[] {
   return error instanceof AggregateError ? [error.message, ...error.errors.flatMap(allReasons)] : [error instanceof Error ? error.message : String(error)];
 }
@@ -593,7 +633,7 @@ describe('provider runner ownership', () => {
       if (report) shell.emit('message', report);
       owner.requestStop(); await vi.advanceTimersByTimeAsync(121_000);
       expect.soft(shell.send).toHaveBeenCalledWith({ type: 'bridge:shutdown' }, expect.any(Function));
-      expect.soft(shell.kill).not.toHaveBeenCalledWith('SIGKILL');
+      expectNoForcedTreeTermination(shell);
       const warnings = fixture.logWarn.mock.calls.filter(call => call[1] === 'owned_work_unconfirmed');
       expect.soft(warnings.length).toBeGreaterThan(100);
       expect.soft(JSON.stringify(warnings)).toContain('54321');
@@ -602,7 +642,7 @@ describe('provider runner ownership', () => {
       expect.soft(fixture.apiRelease).not.toHaveBeenCalled();
       shell.emit('message', { fcb: 'fcb.owned-work', pids: [], settled: true });
       await vi.advanceTimersByTimeAsync(12_000);
-      expect.soft(shell.kill).toHaveBeenCalledWith('SIGKILL');
+      expectForcedTreeTermination(shell);
       exitShell(shell, 1); await vi.advanceTimersByTimeAsync(1000); await running.settled;
       expect.soft(running.state()).toBe('rejected');
     } finally { exitShell(shell); owner.requestStop(); await vi.advanceTimersByTimeAsync(2000); await running.settled; }
@@ -619,11 +659,11 @@ describe('provider runner ownership', () => {
       const disabling = observed(apply(botEntry.appId, false));
       await vi.advanceTimersByTimeAsync(121_000);
       expect.soft(shell.send).toHaveBeenCalledWith({ type: 'bridge:shutdown' }, expect.any(Function));
-      expect.soft(shell.kill).not.toHaveBeenCalledWith('SIGKILL');
+      expectNoForcedTreeTermination(shell);
       expect.soft(disabling.state()).toBe('pending');
       shell.emit('message', { fcb: 'fcb.owned-work', pids: [], settled: true });
       await vi.advanceTimersByTimeAsync(12_000);
-      expect.soft(shell.kill).toHaveBeenCalledWith('SIGKILL');
+      expectForcedTreeTermination(shell);
       exitShell(shell, 1); await vi.advanceTimersByTimeAsync(1000); await disabling.settled;
       expect.soft(disabling.state()).toBe('rejected');
     } finally { exitShell(shell); owner.requestStop(); await vi.advanceTimersByTimeAsync(2000); await running.settled; }
@@ -641,11 +681,11 @@ describe('provider runner ownership', () => {
       expect(fixture.spawn).toHaveBeenCalledTimes(2);
       first.emit('message', { fcb: 'fcb.owned-work', pids: [], settled: true });
       owner.requestStop(); await vi.advanceTimersByTimeAsync(121_000);
-      expect.soft(next.kill).not.toHaveBeenCalledWith('SIGKILL');
+      expectNoForcedTreeTermination(next);
       expect.soft(running.state()).toBe('pending');
       next.emit('message', { fcb: 'fcb.owned-work', pids: [], settled: true });
       await vi.advanceTimersByTimeAsync(12_000);
-      expect.soft(next.kill).toHaveBeenCalledWith('SIGKILL');
+      expectForcedTreeTermination(next);
     } finally { exitShell(next); owner.requestStop(); await vi.advanceTimersByTimeAsync(2000); await running.settled; }
   });
 });

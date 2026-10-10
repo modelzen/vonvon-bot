@@ -1,15 +1,22 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { Server as HttpServer } from 'node:http';
 import { createServer, type Server } from 'node:net';
 import { join } from 'node:path';
 import { WebSocket, WebSocketServer } from 'ws';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, expect, it, vi } from 'vitest';
 import type { DaemonApi } from '../src/server/http';
 
-const owned = vi.hoisted(() => ({
-  mutexes: new Set<Server>(), apis: new Set<DaemonApi>(),
-  listening: vi.fn<(listen: string) => void>(), release: vi.fn(),
-}));
+const owned = await vi.hoisted(async () => {
+  const { mkdtempSync, realpathSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const appDir = realpathSync(mkdtempSync(join(tmpdir(), 'vonvon-release-errors-')));
+  vi.stubEnv('VONVON_HOME', appDir);
+  return {
+    appDir, mutexes: new Set<Server>(), apis: new Set<DaemonApi>(),
+    listening: vi.fn<(listen: string) => void>(), release: vi.fn(),
+  };
+});
 vi.mock('../src/agent/codex-appserver/owned-process', () => ({ closeOwnedCodexProcesses: async () => {}, unconfirmedCodexPids: () => [] }));
 vi.mock('../src/config/data-access', async original => {
   const actual = await original<typeof import('../src/config/data-access')>();
@@ -66,6 +73,11 @@ let peer: WebSocket | undefined;
 let forwardHttpClose: () => void = () => {};
 const httpServers = new Set<HttpServer>();
 const boundPorts = new Set<Server>();
+
+afterAll(() => {
+  rmSync(owned.appDir, { recursive: true, force: true });
+  vi.unstubAllEnvs();
+});
 
 afterEach(async () => {
   control?.requestStop();
