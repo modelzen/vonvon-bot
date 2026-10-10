@@ -102,49 +102,61 @@ export function createSocketServer(options: { server: Server; credential: string
       void completion.then(() => { accepted.delete(completion); }, () => { accepted.delete(completion); });
     });
   });
-  function closePeers(): unknown[] {
+  function closePeers(): Promise<void> {
     const errors: unknown[] = [];
+    const pending: Promise<void>[] = [];
     for (const socket of sockets.clients) {
-      const detach = detachments.get(socket);
-      try { detach?.(); }
-      catch (error) { errors.push(error); }
-      try { socket.close(1001, 'server_shutdown'); }
-      catch (error) {
-        errors.push(error);
-        try { socket.terminate(); } catch (terminationError) { errors.push(terminationError); }
-      }
-      if (socket.readyState !== WebSocket.CLOSED) {
-        const deadline = setTimeout(() => socket.terminate(), 250);
+      pending.push(new Promise<void>(resolve => {
+        const detach = detachments.get(socket);
+        try { detach?.(); }
+        catch (error) { errors.push(error); }
+        try { socket.close(1001, 'server_shutdown'); }
+        catch (error) {
+          errors.push(error);
+          try { socket.terminate(); } catch (terminationError) { errors.push(terminationError); }
+          resolve();
+          return;
+        }
+        if (socket.readyState === WebSocket.CLOSED) { resolve(); return; }
+        const deadline = setTimeout(() => {
+          try { socket.terminate(); }
+          catch (error) { errors.push(error); }
+          resolve();
+        }, 250);
         deadline.unref();
-        socket.once('close', () => clearTimeout(deadline));
-      }
+        socket.once('close', () => { clearTimeout(deadline); resolve(); });
+      }));
     }
-    return errors;
+    return Promise.all(pending).then(() => {
+      if (errors.length) throw new AggregateError(errors, 'Socket peer cleanup failed');
+    });
   }
   function beginDrain(): Promise<void> {
     if (draining) return draining;
     if (state === 'open') state = 'draining';
-    const errors: unknown[] = [];
+    let peerCleanup: Promise<void>;
     draining = Promise.resolve().then(async () => {
-      const results = await Promise.allSettled([...accepted]);
-      errors.push(...results.flatMap(result => result.status === 'rejected' ? [result.reason] : []));
+      const results = await Promise.allSettled([...accepted, peerCleanup]);
+      const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
       if (errors.length) throw new AggregateError(errors, 'Socket drain failed');
     });
-    errors.push(...closePeers());
+    peerCleanup = closePeers();
     return draining;
   }
   function release(): Promise<void> {
     if (released) return released;
     state = 'released';
-    const errors: unknown[] = [];
+    let peerCleanup: Promise<void>;
+    let serverClosed: Promise<void>;
     released = Promise.resolve().then(async () => {
-      await new Promise<void>((resolve, reject) => {
-        try { sockets.close(error => { if (error) reject(error); else resolve(); }); }
-        catch (error) { reject(error); }
-      }).catch(error => { errors.push(error); });
-      if (errors.length) throw new AggregateError(errors, 'Socket release failed');
+      await peerCleanup;
+      await serverClosed;
     });
-    errors.push(...closePeers());
+    peerCleanup = closePeers();
+    serverClosed = new Promise<void>((resolve, reject) => {
+      sockets.close(error => { if (error) reject(error); else resolve(); });
+    });
+    void serverClosed.catch(() => undefined);
     return released;
   }
   return {

@@ -10,8 +10,8 @@ vi.mock('../src/server/ws', async importOriginal => {
   const original = await importOriginal<typeof import('../src/server/ws')>();
   return { ...original, createSocketServer: (...args: Parameters<typeof original.createSocketServer>) => {
     const sockets = original.createSocketServer(...args);
-    return { ...sockets, close: async () => {
-      await sockets.close();
+    return { ...sockets, release: async () => {
+      await sockets.release();
       teardown.socketClosed = true;
       if (teardown.failSocket) throw new Error('socket teardown failed');
     } };
