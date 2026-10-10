@@ -8,7 +8,7 @@
 
 | 编号 | 内容 | 依赖 |
 | --- | --- | --- |
-| V1 | 建 monorepo 和 `packages/protocol`。从 `codex/device-handoff` 移植 zod 合同，加握手和机器维度。加托管 CI（V1 当时有 Linux 和 macOS 两个任务，均通过验收；之后按下文 CI 规则保留托管 Linux，macOS 改为自托管并按用户要求暂停） | 无 |
+| V1 | 建 monorepo 和 `packages/protocol`。从 `codex/device-handoff` 移植 zod 合同，加握手和机器维度。加托管 CI（V1 当时有 Linux 和 macOS 两个任务，均通过验收；之后按下文 CI 规则保留托管 Linux，macOS 改为自托管） | 无 |
 | V2 | 建 `packages/daemon`。用脚本从 bridge `446b2a4` 复制完整 `src/` 和 `test/`，暂留 `src/web` 以保持可运行基线；数据目录改成 `~/.vonvon-bot`。`vonvon daemon run` 能在前台跑起 Bot | V1 |
 | V3 | daemon 的 API 服务。WebSocket、本机凭据、pid 锁、RPC 处理、快照请求和快照事件、无损的 `admin` 状态请求、目录浏览 RPC、`vonvon daemon start/stop/status` 和停止、重启的生命周期规则（等已接受的操作做完、确认 Bot、npm 和 Codex 进程都已退出才放锁，重启保持原端口，`vonvon service` 命令在 V5 之前一律拒绝），以及 lane 要用的本机最小 `packages/client`；旧网页管理路由改成 RPC，只读预览和旧网页页面退役，私聊菜单去掉旧控制台按钮，然后删除 `src/web` | V2 |
 | V4 | 补全 `packages/client`，新建 `packages/ui`。移植界面，`window.bridge` 换成注入的客户端，daemon 在本机提供网页 | V3 |
@@ -38,15 +38,15 @@ Codex 可以并行开发，本机同时最多一个根代理加三个工作代�
 
 ## CI
 
-Linux 保留 GitHub 托管的 Ubuntu；macOS 配置为组织共享的 Mac mini 自托管 runner。未来 Windows 检查继续托管。用户当前要求不运行 macOS，两个仓库的 `ENABLE_SELF_HOSTED_MACOS_CI` 均为 `false`，旧 runner 注册和服务已移除；只有用户要求恢复并配置无发布凭据的专用标准账户后才开启。每台 Mac 只运行一个 runner，两个仓库排队共享。安装位置、权限和服务管理见 [self-hosted-ci.md](self-hosted-ci.md)。
+Linux 保留 GitHub 托管的 Ubuntu；macOS 配置为组织共享的 Mac mini 自托管 runner。原有 Windows 原生检查继续托管，保留在旧桌面分支的工作流中；当前 main 的检查不包含 Windows。两个仓库的 `ENABLE_SELF_HOSTED_MACOS_CI` 均已开启，使用无发布凭据的专用标准账户 `github-ci`。重启后先登录该账户一次，再切回日常用户并保留后台图形会话。每台 Mac 只运行一个 runner，两个仓库排队共享。安装位置、权限和服务管理见 [self-hosted-ci.md](self-hosted-ci.md)。
 
 目标为 `main` 的 PR 在 opened、synchronize、reopened 时自动检查，也可手动触发。取消合入 main 后重复跑相同套件的 push 触发，不设置定时任务。同一 PR 的旧运行会被新运行取消。改目标或改基线后没有当前结果时，手动补跑。
 
 范围脚本保留 `docs` 和 `full`，未知或异常差异按 `full` 处理。文档改动只跑范围回归和空白检查，不装依赖，也不启动 Mac。完整改动先在 Linux 跑 Node 22 的安装、构建、类型检查、测试和 lint，再在自托管 Mac 的准确 PR head 跑同一套检查。daemon 原先的 lint 与类型检查完全相同，删除重复的 lint 别名，协议 lint 保留。
 
-合入要求当前 Linux 成功，完整改动还要求 Mac 成功。暂停期间完整改动的 Mac 验证保持待办。计费、离线或超时阻塞不能记为通过。Mac CI 已覆盖的常规命令不再手动重复，里程碑要求的实时、性能、原生桌面、launchd、systemd 和独立审查照旧。完整规则见 [plan.md](plan.md) 的 *CI policy*。
+合入要求当前 Linux 成功，完整改动还要求 Mac 成功。如果再次暂停 Mac CI，完整改动的 Mac 验证保持待办。计费、离线或超时阻塞不能记为通过。Mac CI 已覆盖的常规命令不再手动重复，里程碑要求的实时、性能、原生桌面、launchd、systemd 和独立审查照旧。完整规则见 [plan.md](plan.md) 的 *CI policy*。
 
-临时豁免（2026-10-10）：组织共用的 Actions 分钟数用完，用户明确要求暂时跳过 CI。授权有效期间，不手动触发或重跑 workflow，不把 `ENABLE_SELF_HOSTED_MACOS_CI` 改成 `true`，也不注册、启动或激活任何 runner，Mac runner 保持暂停。head 可以没有 GitHub 结果就推送和合入，记录写“GitHub Linux：SKIPPED（用户授权，Actions 分钟数用完）”，完整改动另写“GitHub Mac：SKIPPED/PENDING（自托管 runner 暂停）”，都不算通过；GitHub 自己启动并跑完的运行按实际结果记录。完整改动必须由 Codex 在 Mac 上对准确的源码 head 从干净工作树跑完整条链（`npm ci`、build、typecheck、test、lint），把 head SHA、系统和 Node 版本、每条命令的结果和日志写进 PR；这是必需的证据，但不是 GitHub 检查，也不能记成 GitHub 检查。适用的单元测试、十路实时检查、生命周期验证、性能检查、原生检查和截图、独立审查和准确 head 的 Shipping 判定都照旧。豁免不改分支保护，不伪造或合成状态检查，也不授权管理员绕过；GitHub 本身阻止合入时，这个 PR 保持受阻，不依赖它的工作继续推进。用户撤回授权后，所有未合入的 head 重新按完整规则检查。详见 [plan.md](plan.md) 的 *Temporary CI waiver*。
+临时豁免（2026-10-10）：组织共用的 Actions 分钟数用完，用户明确要求暂时跳过 CI。授权有效期间，不为拿结果手动触发或重跑 workflow，不改任何 Actions 变量（包括 `ENABLE_SELF_HOSTED_MACOS_CI`），不注册、启动、停止或重新配置任何 runner 及其服务，也不动 `github-ci` 账户。上文记录的自托管 runner 和变量是用户另行授权配置的，保持原样；豁免既不暂停也不回退它们，这次配置也不等于撤回豁免。head 可以没有 GitHub 结果就推送（包括普通的 `[skip ci]` 推送）和合入，记录写“GitHub Linux：SKIPPED（用户授权）”，完整改动另写“GitHub Mac：SKIPPED（用户授权）”，都不算通过；GitHub 自己启动并跑完的运行（包括在用的自托管 runner 接到的 Mac 任务）按实际结果记录。完整改动必须由 Codex 在 Mac 上对准确的源码 head 从干净工作树跑完整条链（`npm ci`、build、typecheck、test、lint），把 head SHA、系统和 Node 版本、每条命令的结果和日志写进 PR；这是必需的证据，但不是 GitHub 检查，也不能记成 GitHub 检查。适用的单元测试、十路实时检查、生命周期验证、性能检查、原生检查和截图、独立审查和准确 head 的 Shipping 判定都照旧。豁免不改分支保护，不伪造或合成状态检查，也不授权管理员绕过；GitHub 本身阻止合入时（例如强制要求 Linux 检查），这个 PR 保持受阻，直到该检查真正通过，不依赖它的工作继续推进。用户撤回授权后，所有未合入的 head 重新按完整规则检查。详见 [plan.md](plan.md) 的 *Temporary CI waiver*。
 
 ## 现有 PR 栈怎么处理
 
