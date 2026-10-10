@@ -2,6 +2,7 @@ import { ChildProcess } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AdminServiceDeps } from '../src/admin/service';
 import type { PidLockInfo } from '../src/server/pid-lock';
 
 const fixture = vi.hoisted(() => ({
@@ -15,13 +16,27 @@ const fixture = vi.hoisted(() => ({
     status: vi.fn(async () => ({ supported: true, installed: false, running: false })),
   },
   getAdapter: vi.fn(),
+  registryClose: vi.fn<() => Promise<void>>(async () => {}),
+  registryPids: vi.fn<() => number[]>(() => []),
+  startBridge: vi.fn(),
+  bridgeShutdown: vi.fn(async () => {}),
+  apiRelease: vi.fn(async () => {}),
+  apiDrain: vi.fn(async () => {}),
+  apiReady: vi.fn(),
+  logWarn: vi.fn(), logFail: vi.fn(),
+  admin: undefined as AdminServiceDeps | undefined,
+  mutexHeld: false,
+  botHeld: false,
+  botRelease: vi.fn(),
 }));
 vi.mock('node:child_process', async (original) => ({ ...await original<typeof import('node:child_process')>(), spawn: fixture.spawn, spawnSync: fixture.spawnSync }));
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync, realpathSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
-  return { paths: { appDir: realpathSync(mkdtempSync(join(tmpdir(), 'vonvon-lifecycle-red-'))) } };
+  const appDir = realpathSync(mkdtempSync(join(tmpdir(), 'vonvon-lifecycle-red-')));
+  console.log('runner fixture root', appDir);
+  return { paths: { appDir }, botPaths: (appId: string) => ({ processesFile: join(appDir, appId + '.lock') }) };
 });
 vi.mock('../src/server/pid-lock', async (original) => {
   const real = await original<typeof import('../src/server/pid-lock')>();
@@ -47,6 +62,55 @@ vi.mock('../src/server/pid-lock', async (original) => {
 vi.mock('../src/server/owner-verification', () => ({ verifyPidLockOwner: fixture.verify, stopVerifiedOwner: fixture.stopVerified }));
 vi.mock('../src/service/adapter', () => ({ getServiceAdapter: fixture.getAdapter, isServiceRunning: () => false }));
 
+vi.mock('../src/agent/codex-appserver/owned-process', () => ({
+  closeOwnedCodexProcesses: fixture.registryClose,
+  unconfirmedCodexPids: fixture.registryPids,
+}));
+vi.mock('../src/agent', () => ({ installBackendDep() {}, uninstallBackendDep() {} }));
+vi.mock('../src/bot/bridge', () => ({ startBridge: fixture.startBridge }));
+vi.mock('../src/bot/onboarding', () => ({
+  ensureOnboarded: async () => ({ cfg: { accounts: { app: { id: 'runner-bot' } } }, secret: 'fixture' }),
+  announceEventsWhenLive() {},
+}));
+vi.mock('../src/config/bots', () => ({ ensureRegistry: async () => ({ bots: [] }), activeBots: () => [], loadBots: async () => ({ bots: [] }) }));
+vi.mock('../src/platform/spawn', () => ({ spawnProcess: fixture.spawn, spawnProcessSync: fixture.spawnSync }));
+vi.mock('../src/admin/service', () => ({ createAdminService: (deps: AdminServiceDeps) => { fixture.admin = deps; return deps; } }));
+vi.mock('../src/core/logger', () => ({ log: { info() {}, warn: fixture.logWarn, fail: fixture.logFail } }));
+vi.mock('../src/core/single-instance', () => ({
+  BridgeAlreadyRunningError: class extends Error {},
+  readSingleInstanceHolder: () => undefined,
+  acquireSingleInstanceLock: () => {
+    if (fixture.botHeld) throw new Error('Bot lock busy');
+    fixture.botHeld = true;
+    return () => { fixture.botHeld = false; fixture.botRelease(); };
+  },
+}));
+vi.mock('../src/config/data-access', async original => ({
+  ...await original<typeof import('../src/config/data-access')>(),
+  acquireMutex: async () => {
+    if (fixture.mutexHeld) throw new Error('Host mutex busy');
+    fixture.mutexHeld = true;
+    return {};
+  },
+  closeMutex: async () => { fixture.mutexHeld = false; },
+}));
+vi.mock('../src/service/win-startup', () => ({ SERVICE_ENV_FLAG: 'VONVON_TEST_SERVICE', recordServicePid() {}, clearServicePid() {} }));
+vi.mock('../src/server/http', () => ({
+  ApiCleanupError: class ApiCleanupError extends AggregateError {
+    constructor(errors: Iterable<unknown>) { super(errors, 'API cleanup failed after listener cutoff'); }
+  },
+  startApi: async () => {
+    fixture.apiReady();
+    return { port: 43119, listen: '127.0.0.1:43119', invalidate() {}, beginDrain: fixture.apiDrain, release: fixture.apiRelease, close: fixture.apiRelease };
+  },
+}));
+
+import * as http from '../src/server/http';
+import { runRun } from '../src/cli/commands/run';
+import { runHostRuntime } from '../src/host/bootstrap';
+import { runSupervisor } from '../src/bot/supervisor';
+import { acquireSingleInstanceLock } from '../src/core/single-instance';
+import { acquireMutex, closeMutex } from '../src/config/data-access';
 import { paths } from '../src/config/paths';
 import { observeShutdown, type ShutdownControl } from '../src/host/lifecycle';
 import { runSamePortRestartHelper } from '../src/host/restart';
@@ -82,6 +146,13 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date('2026-10-10T00:00:00.000Z'));
   vi.clearAllMocks();
+  fixture.registryClose.mockReset().mockResolvedValue();
+  fixture.registryPids.mockReset().mockReturnValue([]);
+  fixture.apiRelease.mockReset().mockResolvedValue();
+  fixture.apiDrain.mockReset().mockResolvedValue();
+  fixture.bridgeShutdown.mockReset().mockResolvedValue();
+  fixture.startBridge.mockReset().mockResolvedValue({ shutdown: fixture.bridgeShutdown, channel: {} });
+  fixture.botHeld = false; fixture.mutexHeld = false; fixture.admin = undefined;
   fixture.alive.clear();
   fixture.getAdapter.mockReturnValue(fixture.adapter);
   fixture.spawn.mockImplementation(() => {
@@ -97,11 +168,12 @@ afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   if (originalEntry === undefined) delete process.argv[1];
   else process.argv[1] = originalEntry;
   for (const name of readdirSync(paths.appDir)) rmSync(join(paths.appDir, name), { recursive: true, force: true });
 });
-afterAll(() => rmSync(paths.appDir, { recursive: true, force: true }));
+afterAll(() => { console.log('runner fixture removed', paths.appDir); rmSync(paths.appDir, { recursive: true, force: true }); });
 
 describe('same-port helper ownership', () => {
   it('waits through 120 seconds of retained ownership and starts exactly once after release', async () => {
@@ -380,4 +452,224 @@ it('records stop immediately while leaving reply microtasks ahead of drain wakeu
   expect(order).toEqual(['done']);
   await vi.advanceTimersByTimeAsync(0);
   expect(order).toEqual(['done', 'drain']);
+});
+
+function deferredRegistry() {
+  let resolve: () => void = () => {};
+  let reject: (error: Error) => void = () => {};
+  const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+  void promise.catch(() => {});
+  fixture.registryClose.mockReturnValue(promise);
+  fixture.registryPids.mockReturnValue([65432]);
+  return { resolve: () => { fixture.registryPids.mockReturnValue([]); resolve(); }, reject: (error: Error) => { fixture.registryPids.mockReturnValue([]); reject(error); } };
+}
+function runnerControl(): ShutdownControl {
+  const value = observeShutdown(); controls.push(value); return value;
+}
+function exitShell(value: ChildProcess, code = 0): void {
+  Object.defineProperty(value, 'exitCode', { value: code, configurable: true }); value.emit('exit', code, null);
+}
+function supervisorShell(): ChildProcess {
+  const value = child();
+  Object.defineProperty(value, 'connected', { value: true, configurable: true });
+  value.send = vi.fn(() => true);
+  fixture.spawn.mockReturnValue(value);
+  return value;
+}
+function allReasons(error: unknown): string[] {
+  return error instanceof AggregateError ? [error.message, ...error.errors.flatMap(allReasons)] : [error instanceof Error ? error.message : String(error)];
+}
+async function assertLocksHeld(): Promise<void> {
+  expect.soft(fixture.botHeld).toBe(true);
+  expect.soft(existsSync(join(paths.appDir, 'daemon.pid'))).toBe(true);
+  expect.soft(fixture.mutexHeld).toBe(true);
+  expect.soft(() => { const release = acquireSingleInstanceLock('runner-bot'); release(); }).toThrow('busy');
+  const contender = await acquireMutex(paths.appDir, 'host', 0).then(async mutex => { await closeMutex(mutex); return 'acquired'; }, error => String(error));
+  expect.soft(contender).toContain('busy');
+}
+const botEntry = { appId: 'runner-bot', name: 'runner', tenant: 'feishu' as const, createdAt: 0 };
+
+async function startInline() {
+  vi.stubGlobal('process', Object.defineProperty(Object.create(process), 'send', { value: undefined }));
+  const owner = runnerControl();
+  const running = observed(runHostRuntime({ bot: 'runner-bot', managed: false, control: owner }));
+  await vi.waitFor(() => expect(fixture.startBridge).toHaveBeenCalledOnce());
+  return { owner, running };
+}
+
+describe('provider runner ownership', () => {
+  it.each([false, true])('retains inline and host ownership beyond 120 seconds, startup failure=%s', async startupFailure => {
+    const registry = deferredRegistry();
+    if (startupFailure) fixture.startBridge.mockRejectedValueOnce(new Error('fixture bridge start failed after provider birth'));
+    const { owner, running } = await startInline();
+    try {
+      owner.requestStop();
+      await vi.advanceTimersByTimeAsync(121_000);
+      expect.soft(running.state()).toBe('pending');
+      await assertLocksHeld();
+      const warnings = fixture.logWarn.mock.calls.filter(call => call[1] === 'owned_work_unconfirmed');
+      expect.soft(warnings.length).toBeGreaterThanOrEqual(120);
+      expect.soft(JSON.stringify(warnings)).toContain('65432');
+      registry.reject(new Error('fixture providers died after forced cleanup'));
+      await vi.waitFor(() => expect(running.state()).toBe('rejected'));
+      expect.soft(allReasons(running.error())).toContain('fixture providers died after forced cleanup');
+      if (startupFailure) expect.soft(allReasons(running.error())).toContain('fixture bridge start failed after provider birth');
+      expect.soft(fixture.botHeld).toBe(false);
+      expect.soft(existsSync(join(paths.appDir, 'daemon.pid'))).toBe(false);
+      expect.soft(fixture.mutexHeld).toBe(false);
+    } finally { registry.resolve(); owner.requestStop(); await vi.advanceTimersByTimeAsync(2000); await running.settled; }
+  });
+
+  it('empty supervisor holds host ownership for its own provider registry', async () => {
+    vi.stubGlobal('process', Object.defineProperty(Object.create(process), 'send', { value: undefined }));
+    const registry = deferredRegistry();
+    const owner = runnerControl();
+    const running = observed(runHostRuntime({ managed: false, control: owner }));
+    try {
+      await vi.waitFor(() => expect(fixture.apiReady).toHaveBeenCalledOnce());
+      owner.requestStop(); await vi.advanceTimersByTimeAsync(121_000);
+      expect.soft(running.state()).toBe('pending');
+      expect.soft(existsSync(join(paths.appDir, 'daemon.pid'))).toBe(true);
+      expect.soft(fixture.mutexHeld).toBe(true);
+      expect.soft(fixture.apiRelease).not.toHaveBeenCalled();
+      registry.resolve();
+      await vi.waitFor(() => expect(running.state()).toBe('fulfilled'));
+      expect.soft(fixture.mutexHeld).toBe(false);
+      expect.soft(existsSync(join(paths.appDir, 'daemon.pid'))).toBe(false);
+    } finally { registry.resolve(); owner.requestStop(); await vi.advanceTimersByTimeAsync(2000); await running.settled; }
+  });
+
+  it('managed Bot reports pending ownership each second and flushes final settlement before returning', async () => {
+    const registry = deferredRegistry();
+    const callbacks: (() => void)[] = [];
+    const sent: unknown[] = [];
+    const send = vi.fn((...args: unknown[]) => {
+      const message = args[0]; sent.push(message);
+      const callback = args.at(-1);
+      if (typeof callback === 'function') {
+        if (typeof message === 'object' && message !== null && 'settled' in message && message.settled === true) callbacks.push(() => callback(null));
+        else callback(null);
+      }
+      return true;
+    });
+    vi.stubGlobal('process', Object.defineProperties(Object.create(process), { send: { value: send }, connected: { value: true } }));
+    const owner = runnerControl(); const running = observed(runRun('runner-bot', { control: owner }));
+    try {
+      await vi.advanceTimersByTimeAsync(0); owner.requestStop();
+      await vi.advanceTimersByTimeAsync(121_000);
+      expect.soft(running.state()).toBe('pending');
+      const pending = sent.filter(value => typeof value === 'object' && value !== null && 'fcb' in value && value.fcb === 'fcb.owned-work' && 'settled' in value && value.settled === false);
+      expect.soft(pending.length).toBeGreaterThanOrEqual(120);
+      expect.soft(pending[0]).toEqual({ fcb: 'fcb.owned-work', pids: [65432], settled: false });
+      registry.reject(new Error('fixture managed provider cleanup failed'));
+      await vi.advanceTimersByTimeAsync(1000);
+      expect.soft(sent).toContainEqual({ fcb: 'fcb.owned-work', pids: [], settled: true });
+      expect.soft(callbacks.length).toBeGreaterThan(0);
+      expect.soft(running.state()).toBe('pending');
+      for (const callback of callbacks.splice(0)) callback();
+      await vi.advanceTimersByTimeAsync(0); await running.settled;
+      expect.soft(running.state()).toBe('rejected');
+      expect.soft(allReasons(running.error())).toContain('fixture managed provider cleanup failed');
+    } finally {
+      registry.resolve(); for (const callback of callbacks.splice(0)) callback();
+      owner.requestStop(); await vi.advanceTimersByTimeAsync(2000); await running.settled;
+    }
+  });
+
+  const unsettledReports = [
+    { name: 'no report', report: undefined },
+    { name: 'empty pending diagnostics', report: { fcb: 'fcb.owned-work', pids: [], settled: false } },
+    { name: 'retained providers', report: { fcb: 'fcb.owned-work', pids: [65432], settled: false } },
+    { name: 'negative pid', report: { fcb: 'fcb.owned-work', pids: [-1], settled: true } },
+    { name: 'fractional pid', report: { fcb: 'fcb.owned-work', pids: [1.5], settled: true } },
+    { name: 'zero pid', report: { fcb: 'fcb.owned-work', pids: [0], settled: true } },
+    { name: 'string settled', report: { fcb: 'fcb.owned-work', pids: [], settled: 'true' } },
+  ];
+  it.each(unsettledReports)('does not kill a Bot past grace for $name and permits escalation only after settlement', async ({ report }) => {
+    const shell = supervisorShell(); const owner = runnerControl();
+    const running = observed(runSupervisor([botEntry], { control: owner }));
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      if (report) shell.emit('message', report);
+      owner.requestStop(); await vi.advanceTimersByTimeAsync(121_000);
+      expect.soft(shell.send).toHaveBeenCalledWith({ type: 'bridge:shutdown' }, expect.any(Function));
+      expect.soft(shell.kill).not.toHaveBeenCalledWith('SIGKILL');
+      const warnings = fixture.logWarn.mock.calls.filter(call => call[1] === 'owned_work_unconfirmed');
+      expect.soft(warnings.length).toBeGreaterThan(100);
+      expect.soft(JSON.stringify(warnings)).toContain('54321');
+      if (report && 'pids' in report && report.pids.some(pid => pid === 65432)) expect.soft(JSON.stringify(warnings)).toContain('65432');
+      expect.soft(running.state()).toBe('pending');
+      expect.soft(fixture.apiRelease).not.toHaveBeenCalled();
+      shell.emit('message', { fcb: 'fcb.owned-work', pids: [], settled: true });
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect.soft(shell.kill).toHaveBeenCalledWith('SIGKILL');
+      exitShell(shell, 1); await vi.advanceTimersByTimeAsync(1000); await running.settled;
+      expect.soft(running.state()).toBe('rejected');
+    } finally { exitShell(shell); owner.requestStop(); await vi.advanceTimersByTimeAsync(2000); await running.settled; }
+  });
+
+  it('toggle-off waits for the same provider settlement before acknowledging', async () => {
+    const shell = supervisorShell(); const owner = runnerControl();
+    const running = observed(runSupervisor([botEntry], { control: owner }));
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      const apply = fixture.admin?.applyBotActivation;
+      if (!apply) throw new Error('Missing activation boundary');
+      shell.emit('message', { fcb: 'fcb.owned-work', pids: [], settled: false });
+      const disabling = observed(apply(botEntry.appId, false));
+      await vi.advanceTimersByTimeAsync(121_000);
+      expect.soft(shell.send).toHaveBeenCalledWith({ type: 'bridge:shutdown' }, expect.any(Function));
+      expect.soft(shell.kill).not.toHaveBeenCalledWith('SIGKILL');
+      expect.soft(disabling.state()).toBe('pending');
+      shell.emit('message', { fcb: 'fcb.owned-work', pids: [], settled: true });
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect.soft(shell.kill).toHaveBeenCalledWith('SIGKILL');
+      exitShell(shell, 1); await vi.advanceTimersByTimeAsync(1000); await disabling.settled;
+      expect.soft(disabling.state()).toBe('rejected');
+    } finally { exitShell(shell); owner.requestStop(); await vi.advanceTimersByTimeAsync(2000); await running.settled; }
+  });
+
+  it('a late settlement report from a dead generation cannot authorize killing its replacement', async () => {
+    const first = supervisorShell(); const owner = runnerControl();
+    const running = observed(runSupervisor([botEntry], { control: owner }));
+    let next = first;
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      first.emit('message', { fcb: 'fcb.owned-work', pids: [], settled: true });
+      next = supervisorShell(); exitShell(first);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(fixture.spawn).toHaveBeenCalledTimes(2);
+      first.emit('message', { fcb: 'fcb.owned-work', pids: [], settled: true });
+      owner.requestStop(); await vi.advanceTimersByTimeAsync(121_000);
+      expect.soft(next.kill).not.toHaveBeenCalledWith('SIGKILL');
+      expect.soft(running.state()).toBe('pending');
+      next.emit('message', { fcb: 'fcb.owned-work', pids: [], settled: true });
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect.soft(next.kill).toHaveBeenCalledWith('SIGKILL');
+    } finally { exitShell(next); owner.requestStop(); await vi.advanceTimersByTimeAsync(2000); await running.settled; }
+  });
+});
+
+describe('listener cutoff classification through runner and cached shutdown', () => {
+  it.each(['confirmed cleanup', 'unknown cutoff'] as const)('%s preserves rejection and releases only confirmed ownership', async kind => {
+    const failure = new Error('fixture listener cleanup failure');
+    fixture.apiRelease.mockRejectedValueOnce(kind === 'confirmed cleanup' ? new http.ApiCleanupError([failure]) : failure);
+    const { owner, running } = await startInline();
+    owner.requestStop();
+    await vi.waitFor(() => expect(running.state()).toBe('rejected'));
+    expect.soft(allReasons(running.error())).toContain(failure.message);
+    const cached = observed(owner.completeShutdown(async () => { throw new Error('must not replace cached release'); }));
+    await cached.settled;
+    expect.soft(cached.state()).toBe('rejected');
+    expect.soft(allReasons(cached.error())).toContain(failure.message);
+    expect.soft(fixture.apiRelease).toHaveBeenCalledOnce();
+    const retained = kind === 'unknown cutoff';
+    expect.soft(fixture.botHeld).toBe(retained);
+    expect.soft(fixture.mutexHeld).toBe(retained);
+    expect.soft(existsSync(join(paths.appDir, 'daemon.pid'))).toBe(retained);
+    if (retained) {
+      expect.soft(fixture.botRelease).not.toHaveBeenCalled();
+      expect.soft(JSON.stringify([...fixture.logWarn.mock.calls, ...fixture.logFail.mock.calls])).toContain('listener_close_unconfirmed');
+    }
+  });
 });
