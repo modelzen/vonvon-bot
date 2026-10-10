@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { codexVersion, codexVersionAsync, resolveCodexBin } from '../src/agent/codex-appserver/locate';
 import { writeNodeExecutable } from './helpers/node-executable';
 
@@ -100,7 +100,10 @@ describe('codexVersionAsync 真实子进程', () => {
 });
 
 describe('desktop and Agent executable selection', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   it('uses the daemon physical root, managed copy and generation pointer with explicit override priority', async () => {
+    vi.stubEnv('VONVON_HOME', undefined);
     const { mkdirSync, existsSync, realpathSync } = await import('node:fs');
     const { resolveDataRoot } = await import('../src/config/data-root');
     const home = join(realpathSync(dir), 'legacy-home');
