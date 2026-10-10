@@ -67,4 +67,3 @@ describe('foreground lifecycle callback delivery', () => {
     expect(send).toHaveBeenCalledWith(eventKey === DM.restart ? buildForegroundRestartCard() : buildForegroundUpdateCard({ current: '0.7.0' }));
   });
 });
-
