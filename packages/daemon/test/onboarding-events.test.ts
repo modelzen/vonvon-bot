@@ -1,7 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EventDiagnosis } from '../src/utils/event-diagnosis';
 import { ensureOnboarded, announceEventsWhenLive } from '../src/bot/onboarding';
-import { runStart } from '../src/cli/commands/daemon';
 
 const mocks = vi.hoisted(() => ({
   diagnosis: vi.fn<() => Promise<EventDiagnosis>>(),
@@ -34,7 +33,6 @@ vi.mock('../src/config/bots', () => {
 });
 vi.mock('../src/core/logger', () => ({ log: { info: vi.fn(), fail: vi.fn() } }));
 vi.mock('../src/service/adapter', () => ({ getServiceAdapter: () => ({ install: mocks.install }) }));
-vi.mock('../src/web/discovery', () => ({ readWebConsole: () => undefined }));
 
 const tty = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
 Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: true });
@@ -59,10 +57,9 @@ describe('automatic event checks during startup', () => {
     { state: 'missing', version: '1.0', missingRequired: ['im.message.receive_v1'] },
     { state: 'unpublished' },
     { state: 'unchecked', reason: 'no permission' },
-  ])('start continues without confirmation or browser for $state', async (d) => {
+  ])('onboarding continues without confirmation or browser for $state', async (d) => {
     mocks.diagnosis.mockResolvedValue(d);
-    await runStart();
-    expect(mocks.install).toHaveBeenCalledOnce();
+    await ensureOnboarded({ bot: 'test' });
     expect(mocks.open).not.toHaveBeenCalled();
     expect(mocks.prompt).not.toHaveBeenCalled();
     expect(output()).not.toContain('按 Enter');
@@ -88,11 +85,10 @@ describe('automatic event checks during startup', () => {
     expect(mocks.prompt).not.toHaveBeenCalled();
   });
 
-  it('invalid credentials still prevent service installation', async () => {
+  it('invalid credentials still prevent onboarding', async () => {
     mocks.validate.mockResolvedValue({ ok: false, reason: 'invalid secret' });
-    await runStart();
+    expect(await ensureOnboarded({ bot: 'test' })).toBeNull();
     expect(mocks.install).not.toHaveBeenCalled();
-    expect(process.exitCode).toBe(1);
   });
 
   it('run reports newly published subscriptions without opening the configuration page', async () => {

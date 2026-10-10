@@ -58,6 +58,12 @@ export async function runStart(port = 0): Promise<DaemonStatus> {
     const lock = await readRunningPidLock(paths.appDir);
     if (lock && lock.pid === child.pid && lock.listen) return daemonStatus();
     if (lock && lock.pid !== child.pid) {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill('SIGTERM');
+        const loserDeadline = Date.now() + 5_000;
+        while (child.exitCode === null && child.signalCode === null && Date.now() < loserDeadline) await pause(25);
+        if (child.exitCode === null && child.signalCode === null) throw new Error(`Cannot stop competing daemon PID ${child.pid}.`);
+      }
       const winner = await waitReady(lock.pid);
       if (winner) return winner;
     }
