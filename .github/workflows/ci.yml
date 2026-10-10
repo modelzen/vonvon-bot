@@ -1,13 +1,76 @@
 name: CI
+
 on:
-  push:
   pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_macos:
+        description: Run optional hosted macOS verification
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('{0}-{1}', github.event_name, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  protocol:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Test CI scope rules
+        run: node --test .github/scripts/ci-scope.test.mjs
+      - name: Classify changed paths
+        id: scope
+        run: node .github/scripts/ci-scope.mjs
+      - name: Check documentation whitespace
+        if: steps.scope.outputs.scope == 'docs'
+        run: git diff --check "${{ steps.scope.outputs.base }}" "${{ steps.scope.outputs.head }}"
+      - name: Install dependencies
+        if: steps.scope.outputs.scope == 'full'
+        run: npm ci
+      - name: Build
+        if: steps.scope.outputs.scope == 'full'
+        run: npm run build
+      - name: Typecheck
+        if: steps.scope.outputs.scope == 'full'
+        run: npm run typecheck
+      - name: Test
+        if: steps.scope.outputs.scope == 'full'
+        run: npm test
+      - name: Lint
+        if: steps.scope.outputs.scope == 'full'
+        run: npm run lint
+      - name: Record result
+        if: success()
+        env:
+          SCOPE: ${{ steps.scope.outputs.scope }}
+        run: |
+          if [ "$SCOPE" = docs ]; then
+            echo 'docs: lightweight checks passed; full suite not run.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'full: suite passed.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  macos:
+    if: ${{ success() && github.event_name == 'workflow_dispatch' && inputs.run_macos == true }}
+    needs: linux
+    runs-on: macos-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -15,7 +78,17 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
+      - run: npm run build
       - run: npm run typecheck
       - run: npm test
-      - run: npm run build
       - run: npm run lint
+      - name: Record Mac result
+        if: success()
+        run: |
+          {
+            echo "Head: $GITHUB_SHA"
+            echo "macOS image: $ImageOS $ImageVersion"
+            echo "macOS: $(sw_vers -productVersion)"
+            echo "Node: $(node --version)"
+            echo 'full: suite passed.'
+          } >> "$GITHUB_STEP_SUMMARY"
