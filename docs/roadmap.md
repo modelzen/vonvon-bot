@@ -36,7 +36,7 @@ V5 和 V8 里有 systemd 检查，Mac 上跑不了。Codex 在 Linux CI 或 Linu
 
 ## CI
 
-Linux 保留 GitHub 托管的 Ubuntu；macOS 配置为组织共享的 Mac mini 自托管 runner。未来 Windows 检查继续托管。用户当前要求不运行 macOS，两个仓库的 `ENABLE_SELF_HOSTED_MACOS_CI` 均为 `false`，runner 服务也已停止；只有用户要求恢复后才开启。每台 Mac 只运行一个 runner，两个仓库排队共享。安装位置、权限和服务管理见 [self-hosted-ci.md](self-hosted-ci.md)。
+Linux 保留 GitHub 托管的 Ubuntu；macOS 配置为组织共享的 Mac mini 自托管 runner。未来 Windows 检查继续托管。用户当前要求不运行 macOS，两个仓库的 `ENABLE_SELF_HOSTED_MACOS_CI` 均为 `false`，旧 runner 注册和服务已移除；只有用户要求恢复并配置无发布凭据的专用标准账户后才开启。每台 Mac 只运行一个 runner，两个仓库排队共享。安装位置、权限和服务管理见 [self-hosted-ci.md](self-hosted-ci.md)。
 
 目标为 `main` 的 PR 在 opened、synchronize、reopened 时自动检查，也可手动触发。取消合入 main 后重复跑相同套件的 push 触发，不设置定时任务。同一 PR 的旧运行会被新运行取消。改目标或改基线后没有当前结果时，手动补跑。
 
