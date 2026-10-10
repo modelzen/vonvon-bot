@@ -6,7 +6,7 @@ import type { HostSettingsView } from '../src/admin/settings-types';
 import { readAdminState } from '../src/server/state';
 import { fakeService, socketClient, startFixture } from './server-fixture';
 
-const bot: AdminBot = { appId: 'cli_fixture', name: 'fixture', tenant: 'feishu', active: false, current: true, running: false, pid: 42, startedAt: 12, completionReminder: { mode: 'always', longTaskMinutes: 7 } };
+const bot: AdminBot = { appId: 'cli_fixture', name: 'fixture', tenant: 'feishu', active: false, current: true, running: true, pid: 42, startedAt: 12, completionReminder: { mode: 'always', longTaskMinutes: 7 } };
 const project: AdminProject = { name: 'project', chatId: 'oc_fixture', cwd: '/fixture', blank: false, kind: 'multi', origin: 'joined', noMention: false, autoCompact: true, mode: 'qa', guestMode: 'qa', network: false, backend: 'codex-appserver', allowedUsersCount: 0, sessionCount: 2, createdAt: 1 };
 const host: HostSettingsView = { scope: { kind: 'host' }, sections: { execution: { stored: { codexBin: null }, effective: { codexBin: null }, revision: 'section-token', access: { kind: 'writable' }, apply: [] } }, runtime: { codexBin: null, fallbackCwd: '/fixture', platform: 'darwin' } };
 const agentScope = { kind: 'agent', botId: bot.appId };
