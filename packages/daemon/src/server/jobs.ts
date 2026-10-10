@@ -120,8 +120,10 @@ export class Jobs {
   }
   async cancel(id: JobId): Promise<CommandResult> {
     const registration = this.registrations.get(id);
-    if (registration) this.cancelRegistration(registration);
-    else if (this.codex.has(id)) { await this.options.service.cancelCodexJob?.(id); this.refresh(); }
+    if (registration) {
+      this.cancelRegistration(registration);
+      await registration.done;
+    } else if (this.codex.has(id)) { await this.options.service.cancelCodexJob?.(id); this.refresh(); }
     else return { kind: 'refused', code: 'unknown_job', message: '任务不存在。' };
     return { kind: 'cancelled' };
   }
