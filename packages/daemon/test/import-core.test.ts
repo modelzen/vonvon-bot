@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
@@ -128,3 +128,55 @@ it('cleans staging left after the complete manifest was published without rewrit
   expect(await readFile(join(f.destination, 'src/main.ts'), 'utf8')).toBe('fork after complete');
   expect((await readdir(f.destination)).some(entry => entry.startsWith('.import-'))).toBe(false);
 });
+
+for (const phase of ['complete', 'seeding', 'rejected']) {
+  for (const kind of ['file', 'directory', 'symlink']) {
+    it.each([
+      '.import-ABC123',
+      'import-core.json.12345678-1234-4234-8234-123456789abc.tmp',
+      'PROVENANCE.md.12345678-1234-4234-8234-123456789abc.tmp',
+    ])(`preserves foreign ${kind} %s during ${phase} import`, async name => {
+      const f = await fixture();
+      expect((await f.run()).code).toBe(0);
+      if (phase !== 'complete') {
+        const manifest = manifestSchema.parse(JSON.parse(await readFile(join(f.destination, 'import-core.json'), 'utf8')));
+        await writeFile(join(f.destination, 'import-core.json'), JSON.stringify({ ...manifest, phase: 'seeding' }));
+        if (phase === 'seeding') await rm(join(f.destination, 'src/main.ts'));
+        else await writeFile(join(f.destination, 'src/main.ts'), 'fork conflict');
+      }
+      const foreign = join(f.destination, name);
+      const outside = join(f.root, 'foreign-target');
+      const content = 'foreign bytes must survive\n';
+      if (kind === 'directory') {
+        await mkdir(foreign);
+        await writeFile(join(foreign, 'foreign.txt'), content);
+      } else if (kind === 'symlink') {
+        await writeFile(outside, content);
+        await symlink(outside, foreign);
+      } else {
+        await writeFile(foreign, content);
+      }
+      const result = await f.run();
+      expect(await readdir(f.destination), 'foreign path must survive the import').toContain(name);
+      if (kind === 'directory') {
+        expect((await lstat(foreign)).isDirectory()).toBe(true);
+        expect(await readFile(join(foreign, 'foreign.txt'), 'utf8')).toBe(content);
+      } else if (kind === 'symlink') {
+        expect((await lstat(foreign)).isSymbolicLink()).toBe(true);
+        expect(await readlink(foreign)).toBe(outside);
+        expect(await readFile(outside, 'utf8')).toBe(content);
+      } else {
+        expect((await lstat(foreign)).isFile()).toBe(true);
+        expect(await readFile(foreign, 'utf8')).toBe(content);
+      }
+      expect(result.code, result.output).toBe(phase === 'rejected' ? 1 : 0);
+      if (phase === 'rejected') {
+        expect(result.output).toContain('Conflicting partial import: src/main.ts');
+        expect(await readFile(join(f.destination, 'src/main.ts'), 'utf8')).toBe('fork conflict');
+      } else {
+        expect(manifestSchema.parse(JSON.parse(await readFile(join(f.destination, 'import-core.json'), 'utf8'))).phase).toBe('complete');
+        expect(await readFile(join(f.destination, 'src/main.ts'), 'utf8')).toBe('original source\n');
+      }
+    });
+  }
+}
