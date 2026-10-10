@@ -152,11 +152,11 @@ CI maintenance does not change the V1 to V11 order, product architecture, unit, 
 
 *Temporary CI waiver, 2026-10-10.* The organization's shared Actions minutes are exhausted, and the operator explicitly said to skip CI temporarily. This waiver sits on top of the policy above and changes none of its workflow semantics. While the authorization stands:
 
-- Nobody dispatches or reruns a workflow, sets `ENABLE_SELF_HOSTED_MACOS_CI` to `true`, or registers, starts, or activates a runner to get a result. The Mac runner stays paused, as *Mac job* states.
-- A head may be pushed and merged without GitHub results. Its record says `GitHub Linux: SKIPPED, operator authorization, Actions minutes exhausted`, and for a `full` change `GitHub Mac: SKIPPED/PENDING, self-hosted runner paused`. Neither is ever recorded as PASS. For such a head, the waiver replaces the merge rule's Linux and Mac result conditions, including the rule that an absent run blocks merge. Nothing else in the merge rule changes. A run that GitHub starts on its own and completes keeps its real result, and a real failure there is a failure.
+- Work under the waiver does not dispatch or rerun a workflow to get a result. It changes no Actions variable, including `ENABLE_SELF_HOSTED_MACOS_CI`. It registers, starts, stops, or reconfigures no runner or runner service, and it does not touch the `ci-user` account. The active self-hosted runner and variables that *Mac job* records were set up under a separate operator authorization. They stay exactly as recorded. The waiver neither pauses nor reverts them, and that setup does not withdraw the waiver.
+- A head may be pushed, including as a normal `[skip ci]` push, and merged without GitHub results. Its record says `GitHub Linux: SKIPPED, operator authorization`, and for a `full` change `GitHub Mac: SKIPPED, operator authorization`. Neither is ever recorded as PASS. For such a head, the waiver replaces the merge rule's Linux and Mac result conditions, including the rule that an absent run blocks merge. Nothing else in the merge rule changes. A run that GitHub starts on its own and completes keeps its real result, including a self-hosted Mac job that the active runner picks up, and a real failure there is a failure.
 - For a `full` change, Codex runs the clean chain on the operator's Mac at the exact source head, from a fresh worktree: `npm ci`, `npm run build`, `npm run typecheck`, `npm test`, `npm run lint`. The PR records the head SHA, macOS and Node versions, each command's exit status, and the log. A new head needs a new run. It is required evidence, not a GitHub check, and is never recorded as one. For a `docs` change it is N/A.
 - Every other gate stays: every applicable unit test, the ten live lanes, the lifecycle proofs, perf, native checks and captures where a PR names them, independent review, and the exact-head Shipping verdict.
-- The waiver changes no branch protection, creates or synthesizes no status check, and authorizes no admin bypass. If GitHub itself refuses a merge, that PR stays blocked, and work that does not depend on it continues.
+- The waiver changes no branch protection, creates or synthesizes no status check, and authorizes no admin bypass. If GitHub itself refuses a merge, for example because it enforces a required Linux check, that PR stays blocked until the check really succeeds, and work that does not depend on it continues.
 - When the operator withdraws the authorization, the merge rule applies in full to every unmerged head.
 
 ### Boot recipe, for every live lane
@@ -177,7 +177,7 @@ Each live lane runs in its own worktree at the PR head. Drive through the skill 
 - [ ] Create `package.json` with npm workspaces `packages/*`, plus `tsconfig.base.json` and `vitest.config.ts`.
 - [ ] Create `packages/protocol/src/domain.ts`, `rpc.ts`, `events.ts`, `handshake.ts`, and `index.ts`.
 - [ ] Create `packages/protocol/test/protocol.test.ts`.
-- [ ] Create `.github/workflows/ci.yml`. V1 shipped it with automatic `ubuntu-latest` and `macos-latest` jobs; *CI policy* now replaces them with a GitHub-hosted Linux job and a gated, currently paused, self-hosted Mac job.
+- [ ] Create `.github/workflows/ci.yml`. V1 shipped it with automatic `ubuntu-latest` and `macos-latest` jobs; *CI policy* now replaces them with a GitHub-hosted Linux job and a gated self-hosted Mac job.
 - [ ] Create `NOTICE`.
 - [ ] Edit `README.md`.
 
