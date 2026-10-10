@@ -38,7 +38,7 @@ function enqueueMutation<T>(kind: 'install' | 'uninstall', pkg: string, run: () 
 }
 
 /** 查 npm registry 上某包的最新版本（`npm view <pkg> version`）。用于后端「检查更新」。
- *  绝不抛错：网络/registry 失败或超时 → null。8s 超时（registry 慢也不卡 UI）。 */
+ *  8s 后尝试终止 npm，等待 close 后返回；失败时返回 null。 */
 export async function latestNpmVersion(pkg: string, timeoutMs = 8000): Promise<string | null> {
   const bare = stripVersion(pkg);
   return new Promise((resolve) => {
@@ -51,18 +51,25 @@ export async function latestNpmVersion(pkg: string, timeoutMs = 8000): Promise<s
       resolve(null);
       return;
     }
+    let failed = false;
+    child.on('error', () => { failed = true; });
+    const pid = child.pid;
+    if (pid === undefined) {
+      resolve(null);
+      return;
+    }
     let out = '';
     const timer = setTimeout(() => {
-      try { child.kill('SIGTERM'); } catch { /* ignore */ }
-      resolve(null);
+      failed = true;
+      try { child.kill('SIGTERM'); } catch { }
+      log.info('backend-version', 'term_sent', { pkg, pid });
     }, timeoutMs);
     child.stdout?.setEncoding('utf8');
     child.stdout?.on('data', (d: string) => { out += d; });
-    child.on('error', () => { clearTimeout(timer); resolve(null); });
     child.on('close', (code) => {
       clearTimeout(timer);
       const v = out.trim().split('\n').pop()?.trim() ?? '';
-      resolve(code === 0 && /^\d+\.\d+\.\d+/.test(v) ? v : null);
+      resolve(!failed && code === 0 && /^\d+\.\d+\.\d+/.test(v) ? v : null);
     });
   });
 }
