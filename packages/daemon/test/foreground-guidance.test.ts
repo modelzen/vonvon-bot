@@ -21,9 +21,9 @@ function callbackFixture(orphan = false) {
     between(handler, '  const patch = (', '  async function renderForegroundUpdate'),
     'router' + between(handler, '    .on(DM.restart,', '    .on(DM.usage,') + ';',
   ].join('\n');
-  new Function('router', 'DM', 'dmAdmin', 'channel', 'updateManagedCard', 'sendManagedCard', 'log', 'CARD_SETTLE_MS', 'buildForegroundRestartCard', 'renderForegroundUpdate', transpile(code))(
+  new Function('router', 'DM', 'dmAdmin', 'channel', 'updateManagedCard', 'sendManagedCard', 'log', 'CARD_SETTLE_MS', 'buildForegroundRestartCard', 'renderForegroundUpdate', 'trackTask', transpile(code))(
     router, DM, (id: string) => id === 'owner', {}, update, send, { info() {}, fail() {} }, 500,
-    buildForegroundRestartCard, () => buildForegroundUpdateCard({ current: '0.7.0' }),
+    buildForegroundRestartCard, () => buildForegroundUpdateCard({ current: '0.7.0' }), <T>(task: Promise<T>) => task,
   );
   return { update, send, click(action: string, openId = 'owner') {
     const callback = callbacks.get(action);
