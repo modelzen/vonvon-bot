@@ -20,13 +20,15 @@ async function exists(file) {
 }
 
 async function lock(root) {
-  const port = 20000 + Number.parseInt(hash(root).slice(0, 8), 16) % 40000;
+  const endpoint = process.platform === 'win32'
+    ? { path: `\\\\.\\pipe\\vonvon-import-core-${hash(root.toLowerCase())}` }
+    : { port: 20000 + Number.parseInt(hash(root).slice(0, 8), 16) % 40000, host: '127.0.0.1' };
   for (let attempt = 0; attempt < 200; attempt++) {
     const server = net.createServer(socket => socket.destroy());
     try {
       await new Promise((resolve, reject) => {
         server.once('error', reject);
-        server.listen(port, '127.0.0.1', resolve);
+        server.listen(endpoint, resolve);
       });
       return server;
     } catch (error) {

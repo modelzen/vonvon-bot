@@ -44,6 +44,7 @@ function windowsStartTime(pid: number): string | undefined {
   return value || undefined;
 }
 function captureProcess(pid: number): FixtureProcess {
+  expect(Number.isSafeInteger(pid) && pid > 0, `Invalid fixture PID: ${pid}`).toBe(true);
   const started = process.platform === 'win32' ? windowsStartTime(pid) : undefined;
   if (process.platform === 'win32') expect(started).toBeDefined();
   return { pid, started };
@@ -74,7 +75,9 @@ function fixture(inherit: boolean) {
     require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid));
     setInterval(()=>{},100);
   `);
-  const start = `require('node:child_process').spawn(process.execPath,[${JSON.stringify(grandchild)}],{stdio:${inherit ? "['ignore',process.stdout,process.stderr]" : "'ignore'"}});`;
+  // Windows libuv kills non-detached children when their parent exits. A detached
+  // fixture survives that parent but still belongs to the non-breakaway Codex Job.
+  const start = `require('node:child_process').spawn(process.execPath,[${JSON.stringify(grandchild)}],{detached:process.platform==='win32',stdio:${inherit ? "['ignore',process.stdout,process.stderr]" : "'ignore'"}});`;
   return { root, ready, start };
 }
 async function descendant(ready: string): Promise<FixtureProcess> {
@@ -147,11 +150,12 @@ describe('owned Codex process trees', () => {
       const leaderProcess = captureProcess(leader);
       const wrapper = process.platform === 'win32'
         ? captureProcess(Number(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-          `(Get-CimInstance Win32_Process -Filter "ParentProcessId=${client.pid}").ProcessId`], { encoding: 'utf8', timeout: 5000 }).trim()))
+          `$ErrorActionPreference='Stop'; $wrappers=@(Get-CimInstance Win32_Process -Filter "ParentProcessId=${client.pid} AND Name='node.exe'"); if ($wrappers.Count -ne 1) { throw "Expected one Node wrapper, found $($wrappers.Count)" }; [Console]::Out.WriteLine($wrappers[0].ProcessId)`], { encoding: 'utf8', timeout: 5000 }).trim()))
         : undefined;
       client.notify('exit');
       await vi.waitFor(() => expect(originalAlive(leaderProcess)).toBe(false), { timeout: 5000 });
       if (wrapper) await vi.waitFor(() => expect(originalAlive(wrapper)).toBe(false), { timeout: 5000 });
+      expect(originalAlive(target)).toBe(true);
       if (process.platform !== 'win32') expect(client.exited).toBe(true);
     }
     const result = await Promise.race([client.close(50).catch(error => error), delay(8000).then(() => 'timeout')]);
