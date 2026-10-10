@@ -68,9 +68,10 @@ export async function startApi(options: { service: AdminService; port?: number; 
   const sockets = createSocketServer({ server, credential, info: { type: 'serverInfo', machineId, version: bridgeVersion(), protocolVersion: PROTOCOL_VERSION }, request, detached: peer => { jobs.detach(peer); logs.detach(peer); } });
   let closing: Promise<void> | undefined;
   const close = (): Promise<void> => closing ??= (async () => {
+    const serviceDrain = Promise.resolve().then(() => options.service.close?.());
     const draining = jobs.close();
     logs.close();
-    const results = await Promise.allSettled([draining, sockets.close()]);
+    const results = await Promise.allSettled([serviceDrain, draining, sockets.close()]);
     results.push(...await Promise.allSettled([snapshots?.close()]));
     results.push(...await Promise.allSettled([new Promise<void>((resolve, reject) => server.close(error => { if (error && !('code' in error && error.code === 'ERR_SERVER_NOT_RUNNING')) reject(error); else resolve(); }))]));
     const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
@@ -83,5 +84,9 @@ export async function startApi(options: { service: AdminService; port?: number; 
     if (!address || typeof address === 'string') throw new Error('API did not bind a TCP port');
     port = address.port;
     return { port, listen: `127.0.0.1:${port}`, invalidate, close };
-  } catch (error) { await close(); throw error; }
+  } catch (error) {
+    try { await close(); }
+    catch (cleanupError) { throw new AggregateError([error, cleanupError], 'API startup and cleanup failed'); }
+    throw error;
+  }
 }
