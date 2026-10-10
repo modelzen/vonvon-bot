@@ -1,7 +1,6 @@
-import { getServiceAdapter, type ServiceAdapter } from '../../service/adapter';
+import type { ServiceAdapter } from '../../service/adapter';
+import { SERVICE_UNAVAILABLE } from '../../host/service';
 
-export async function runServiceCommand(action: 'install' | 'uninstall', adapter: Pick<ServiceAdapter, 'install' | 'uninstall'> = getServiceAdapter()): Promise<void> {
-  if (action === 'install') await adapter.install();
-  else await adapter.uninstall();
-  process.stdout.write(action === 'install' ? 'service installed\n' : 'service uninstalled\n');
+export async function runServiceCommand(_action: 'install' | 'uninstall', _adapter?: Pick<ServiceAdapter, 'install' | 'uninstall'>): Promise<void> {
+  throw new Error(SERVICE_UNAVAILABLE);
 }

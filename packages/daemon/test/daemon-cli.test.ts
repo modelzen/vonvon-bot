@@ -130,3 +130,20 @@ it('refuses a reused PID without signaling the unrelated process or changing its
   expect((await readdir(f.root)).filter(name => name !== '.access')).toEqual(before);
   expect(await readdir(f.home)).toEqual([]);
 }, 30_000);
+
+it('service refusal leaves an absent data home untouched for public and hidden commands', async () => {
+  const f = await fixture();
+  await rm(f.root, { recursive: true });
+  const refusal = 'Vonvon Bot cannot manage an OS service in this version. Use vonvon daemon start and vonvon daemon stop.';
+  for (const args of [
+    ['service', 'install'], ['service', 'uninstall'],
+    ['__daemon-control', 'start'], ['__daemon-control', 'stop'],
+    ['__daemon-control', 'restart'], ['__daemon-control', 'update'],
+  ]) {
+    const attempt = launch(f.home, f.root, args);
+    expect(await attempt.exited).toBe(1);
+    expect(attempt.output()).toContain(refusal);
+    await expect(readdir(f.root)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readdir(f.home)).toEqual([]);
+  }
+});

@@ -64,7 +64,7 @@ it('holds PID and mutex through usage then Codex cleanup despite a rejecting Job
     };
     vi.stubGlobal('process', Object.defineProperty(Object.create(process), 'send', { value: undefined }));
     const { runHostRuntime } = await import('../src/host/bootstrap');
-    host = runHostRuntime({ managed: false, control: { requested: false, waitForRequest: async () => {}, requestStop() {}, requestRestart() {}, dispose() {} } }).catch(error => error);
+    host = runHostRuntime({ managed: false, control: { requested: false, waitForRequest: async () => {}, requestStop() {}, requestRestart() {}, completeShutdown: async release => release(), dispose() {} } }).catch(error => error);
     void host.then(() => { settled = true; });
     await Promise.race([closingStarted.promise, host.then(error => { throw error; })]);
     await vi.waitFor(() => expect(client?.socket.readyState).toBe(WebSocket.CLOSED));
@@ -133,7 +133,7 @@ it('retains acquired PID and mutex until a detached uninstall and its snapshot f
     };
     vi.stubGlobal('process', Object.defineProperty(Object.create(process), 'send', { value: undefined }));
     const { runHostRuntime } = await import('../src/host/bootstrap');
-    host = runHostRuntime({ managed: false, control: { requested: false, waitForRequest: async () => {}, requestStop() {}, requestRestart() {}, dispose() {} } }).catch(error => error);
+    host = runHostRuntime({ managed: false, control: { requested: false, waitForRequest: async () => {}, requestStop() {}, requestRestart() {}, completeShutdown: async release => release(), dispose() {} } }).catch(error => error);
     void host.then(() => { settled = true; });
     await Promise.race([closingStarted.promise, host.then(error => { throw error; })]);
     await tick(); await tick();

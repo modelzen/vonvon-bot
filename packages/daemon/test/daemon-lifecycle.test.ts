@@ -53,7 +53,7 @@ import { runSamePortRestartHelper } from '../src/host/restart';
 import { runStart, runStop } from '../src/cli/commands/daemon';
 import { runServiceCommand } from '../src/cli/commands/service';
 import { controlDesktopService } from '../src/host/service';
-import { acquireUpdateLock, readUpdateStatus, restartDaemon, writeUpdateStatus } from '../src/service/update';
+import { acquireUpdateLock, finishOwnedUpdate, readUpdateStatus, restartDaemon, writeUpdateStatus } from '../src/service/update';
 
 const old = { pid: 43210, startedAt: '2026-10-10T00:00:00.000Z', listen: '127.0.0.1:43119' } satisfies PidLockInfo;
 const replacement = { pid: 43211, startedAt: '2026-10-10T00:02:00.000Z', listen: old.listen } satisfies PidLockInfo;
@@ -70,7 +70,7 @@ function child(): ChildProcess {
   children.push(value);
   return value;
 }
-function control(): ShutdownControl { const value = observeShutdown(); controls.push(value); return value; }
+function control(): ShutdownControl { writeFileSync(join(paths.appDir, 'daemon.pid'), JSON.stringify({ ...old, pid: process.pid })); const value = observeShutdown(); controls.push(value); return value; }
 function observed<T>(promise: Promise<T>) {
   let state: 'pending' | 'fulfilled' | 'rejected' = 'pending';
   let error: unknown;
@@ -106,7 +106,7 @@ afterAll(() => rmSync(paths.appDir, { recursive: true, force: true }));
 describe('same-port helper ownership', () => {
   it('waits through 120 seconds of retained ownership and starts exactly once after release', async () => {
     publish(old);
-    const running = observed(runSamePortRestartHelper({ port: 43119, oldPid: old.pid }));
+    const running = observed(runSamePortRestartHelper({ port: 43119, oldPid: old.pid, oldStartedAt: old.startedAt }));
     await vi.advanceTimersByTimeAsync(31_000);
     expect.soft(running.state()).toBe('pending');
     await vi.advanceTimersByTimeAsync(88_000);
@@ -122,20 +122,20 @@ describe('same-port helper ownership', () => {
   it('rejects a foreign-port owner without spawning or signaling it', async () => {
     publish({ ...replacement, listen: '127.0.0.1:43120' });
     const signal = vi.spyOn(process, 'kill').mockReturnValue(true);
-    await expect(runSamePortRestartHelper({ port: 43119, oldPid: old.pid })).rejects.toThrow(/superseded|43120|port/i);
+    await expect(runSamePortRestartHelper({ port: 43119, oldPid: old.pid, oldStartedAt: old.startedAt })).rejects.toThrow(/superseded|43120|port/i);
     expect(fixture.spawn).not.toHaveBeenCalled();
     expect(signal.mock.calls.filter(([, value]) => value !== 0)).toEqual([]);
   });
   it('verifies an already-ready same-port replacement before counting success', async () => {
     publish(replacement);
-    await runSamePortRestartHelper({ port: 43119, oldPid: old.pid });
+    await runSamePortRestartHelper({ port: 43119, oldPid: old.pid, oldStartedAt: old.startedAt });
     expect(fixture.verify).toHaveBeenCalledWith(paths.appDir, replacement);
     expect(fixture.spawn).not.toHaveBeenCalled();
   });
   it('plain restart cannot complete an unrelated restarting update record', async () => {
     const unrelated = { phase: 'restarting', ok: true, from: '1', to: '2', at: 10 } as const;
     writeUpdateStatus(unrelated);
-    const running = observed(runSamePortRestartHelper({ port: 43119, oldPid: old.pid }));
+    const running = observed(runSamePortRestartHelper({ port: 43119, oldPid: old.pid, oldStartedAt: old.startedAt }));
     await vi.advanceTimersByTimeAsync(100);
     await running.settled;
     expect(running.state()).toBe('fulfilled');
@@ -289,4 +289,95 @@ it('an aged live update lock remains owned and its bytes stay unchanged', () => 
     expect.soft(readFileSync(file, 'utf8')).toBe(record);
     expect(existsSync(file)).toBe(true);
   } finally { release?.(); }
+});
+
+describe('exact update record ownership', () => {
+  const record = { phase: 'restarting', ok: true, message: 'owned', from: '1', to: '2', at: 10 } as const;
+  it.each([
+    { phase: 'installing' as const }, { ok: false }, { message: 'other' },
+    { from: 'other' }, { to: 'other' }, { at: 11 }, { message: undefined },
+  ])('preserves a record differing in %j', change => {
+    const newer = { ...record, ...change };
+    writeUpdateStatus(newer);
+    finishOwnedUpdate(record, 'done');
+    expect(readUpdateStatus()).toEqual(JSON.parse(JSON.stringify(newer)));
+  });
+  it('compares all fields and writes only while holding the existing lock', () => {
+    writeUpdateStatus(record);
+    const release = acquireUpdateLock();
+    expect(release).not.toBeNull();
+    finishOwnedUpdate(record, 'done');
+    expect(readUpdateStatus()).toEqual(record);
+    release?.();
+    finishOwnedUpdate(record, 'done');
+    expect(readUpdateStatus()).toMatchObject({ phase: 'done', ok: true, from: '1', to: '2', message: 'owned' });
+    expect(existsSync(join(paths.appDir, 'update.lock'))).toBe(false);
+  });
+  it('writes cancellation before release and never overwrites a later update', async () => {
+    const helper = child(); fixture.spawn.mockReturnValue(helper);
+    const owner = control(); writeUpdateStatus(record);
+    owner.requestRestart(43119, record); helper.emit('spawn');
+    owner.requestStop();
+    expect(readUpdateStatus()).toMatchObject({ phase: 'error', message: '重启已被停止取消', from: '1', to: '2' });
+    const newer = { ...record, at: 11 }; writeUpdateStatus(newer);
+    helper.emit('exit', 0, null);
+    await owner.completeShutdown(async () => { expect(readUpdateStatus()).toEqual(newer); });
+  });
+  it('writes done only after verified same-port replacement', async () => {
+    writeUpdateStatus(record); publish(replacement);
+    fixture.verify.mockImplementationOnce(async () => { expect(readUpdateStatus()).toEqual(record); });
+    await runSamePortRestartHelper({ port: 43119, oldPid: old.pid, oldStartedAt: old.startedAt, update: record });
+    expect(readUpdateStatus()).toMatchObject({ phase: 'done', from: '1', to: '2' });
+  });
+  it('does not finalize an update that changed during owner verification', async () => {
+    writeUpdateStatus(record); publish(replacement);
+    const newer = { ...record, message: 'new invocation' };
+    fixture.verify.mockImplementationOnce(async () => { writeUpdateStatus(newer); });
+    await runSamePortRestartHelper({ port: 43119, oldPid: old.pid, oldStartedAt: old.startedAt, update: record });
+    expect(readUpdateStatus()).toEqual(newer);
+  });
+  it('marks only its own superseded update as failed', async () => {
+    writeUpdateStatus(record); publish({ ...replacement, listen: '127.0.0.1:43120' });
+    await expect(runSamePortRestartHelper({ port: 43119, oldPid: old.pid, oldStartedAt: old.startedAt, update: record })).rejects.toThrow('superseded');
+    expect(readUpdateStatus()).toMatchObject({ phase: 'error', ok: false, message: 'superseded' });
+    expect(fixture.spawn).not.toHaveBeenCalled();
+  });
+});
+
+it('treats the same PID with a newer startedAt as a replacement', async () => {
+  const reused = { ...replacement, pid: old.pid }; publish(reused);
+  await runSamePortRestartHelper({ port: 43119, oldPid: old.pid, oldStartedAt: old.startedAt });
+  expect(fixture.verify).toHaveBeenCalledWith(paths.appDir, reused);
+  expect(fixture.spawn).not.toHaveBeenCalled();
+});
+it('stop rejects a same-PID replacement rather than waiting on its reused process number', async () => {
+  publish(old);
+  const running = observed(runStop()); await vi.advanceTimersByTimeAsync(100);
+  publish({ ...replacement, pid: old.pid });
+  await vi.advanceTimersByTimeAsync(100); await running.settled;
+  expect(running.state()).toBe('rejected');
+  expect(String(running.error())).toContain(replacement.listen);
+});
+it('retains the old identity in the hidden helper arguments', () => {
+  const helper = child(); fixture.spawn.mockReturnValue(helper);
+  const owner = control(); owner.requestRestart(43119);
+  expect(fixture.spawn.mock.calls[0]?.[1]).toEqual(['/owned/fixture/vonvon.mjs', '__restart-after-exit', '43119', String(process.pid), old.startedAt]);
+});
+it('initial helper spawn failure confirms no child and permits stop release', async () => {
+  const helper = new ChildProcess(); helper.unref = vi.fn(); children.push(helper);
+  fixture.spawn.mockReturnValue(helper);
+  const owner = control(); owner.requestRestart(43119);
+  helper.emit('error', new Error('ENOENT'));
+  const release = vi.fn(async () => {}); await owner.completeShutdown(release);
+  expect(release).toHaveBeenCalledTimes(1);
+});
+it('records stop immediately while leaving reply microtasks ahead of drain wakeup', async () => {
+  const owner = control(); const order: string[] = [];
+  void owner.waitForRequest().then(() => { order.push('drain'); });
+  owner.requestStop();
+  expect(owner.requested).toBe(true);
+  await Promise.resolve(); order.push('done');
+  expect(order).toEqual(['done']);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(order).toEqual(['done', 'drain']);
 });

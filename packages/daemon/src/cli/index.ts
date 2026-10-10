@@ -9,6 +9,7 @@ const program = new Command().name('vonvon').description('Vonvon Bot daemon').ve
 let lease: DataLease | undefined;
 let control: ShutdownControl | undefined;
 program.hook('preAction', async (_command, action) => {
+  if (action.parent?.name() === 'service' || action.name() === '__daemon-control') return;
   if (action.name() === 'run') control = observeShutdown(Boolean(action.opts().parentControl));
   if (action.name() === 'status' || action.name() === 'logs' || action.name() === '__restart-after-exit' || action.name() === '__win-relaunch') return;
   await mkdir(paths.appDir, { recursive: true, mode: 0o700 });
@@ -52,8 +53,12 @@ service.command('uninstall').description('Stop and remove the OS service').actio
 program.command('__win-relaunch <requestPath>', { hidden: true }).action(async (requestPath: string) => {
   await (await import('../service/win-startup')).runWinRelaunch({ requestPath });
 });
-program.command('__restart-after-exit <port> <oldPid>', { hidden: true }).action(async (port: string, oldPid: string) => {
-  await (await import('../host/restart')).runSamePortRestartHelper({ port: Number(port), oldPid: Number(oldPid) });
+program.command('__daemon-control <action>', { hidden: true }).action(async (action: string) => {
+  await (await import('./commands/daemon-control')).runDaemonControl(action);
+});
+program.command('__restart-after-exit <port> <oldPid> <oldStartedAt> [update]', { hidden: true }).action(async (port: string, oldPid: string, oldStartedAt: string, update?: string) => {
+  const { updateStatusSchema } = await import('../service/update');
+  await (await import('../host/restart')).runSamePortRestartHelper({ port: Number(port), oldPid: Number(oldPid), oldStartedAt, ...(update ? { update: updateStatusSchema.parse(JSON.parse(update)) } : {}) });
 });
 
 // Internal plumbing — the `secrets-getter` wrapper execs `secrets get` to

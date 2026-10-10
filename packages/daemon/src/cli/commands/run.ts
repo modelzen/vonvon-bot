@@ -143,7 +143,9 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
     if (!process.send) console.log('vonvon daemon ready');
     await control.waitForRequest();
   } finally {
-    const cleanup = await Promise.allSettled([api?.close(), handle.shutdown()]);
+    const cleanup = await Promise.allSettled([api?.beginDrain()]);
+    cleanup.push(...await Promise.allSettled([handle.shutdown()]));
+    cleanup.push(...await Promise.allSettled([control.completeShutdown(() => api?.release() ?? Promise.resolve())]));
     releaseLock();
     const failures = cleanup.filter((result) => result.status === 'rejected');
     if (failures.length) throw new AggregateError(failures.map((failure) => failure.reason), 'Single Bot cleanup failed.');

@@ -18,7 +18,7 @@ function control() {
 it('accepts stop intent before producing the done reply', async () => {
   const owner = control();
   const outcome = await machineRpc(fakeService(), owner, 43119, { type: 'stopHost' });
-  expect(outcome.kind).toBe('shutdown');
+  expect(outcome.kind).toBe('read');
   expect(owner.requestStop).toHaveBeenCalledTimes(1);
 });
 

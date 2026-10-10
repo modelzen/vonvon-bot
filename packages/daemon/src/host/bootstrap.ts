@@ -30,6 +30,7 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
       onListening: claimedOwner ? async (listen) => { await publishPidLock(paths.appDir, claimedOwner, listen); } : undefined,
     });
   } finally {
+    await control.completeShutdown(async () => {});
     control.dispose();
     if (owner) {
       clearServicePid();
