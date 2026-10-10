@@ -8,59 +8,49 @@ import {
   collectHostDoctor,
   toDaemonStatus,
 } from '../src/admin/host';
-import type { ServiceStatus } from '../src/service/common';
-
-describe('host · toDaemonStatus（service 快照 → daemon 状态，纯函数）', () => {
-  const base: ServiceStatus = {
-    platformName: 'launchd (macOS)',
-    installed: true,
-    running: true,
-    servicePath: '/x/y.plist',
-    stdoutPath: '/x/out.log',
-    stderrPath: '/x/err.log',
-    pid: '4242',
-    lastExit: '0',
-    raw: '',
-  };
-
-  it('已安装+在跑：归一字段 + uptime 按 startedAt 算 + supported=true', () => {
-    const d = toDaemonStatus({ status: base, version: '0.3.11', startedAt: 1000, now: 61_000 });
-    expect(d.installed).toBe(true);
+describe('host · toDaemonStatus（前台进程快照）', () => {
+  it('前台运行：实际 PID、版本和启动时间，服务管理不可用', () => {
+    const d = toDaemonStatus({ foreground: { pid: 4242, startedAt: 1000 }, version: '0.3.11', now: 61_000 });
+    expect(d.installed).toBe(false);
     expect(d.running).toBe(true);
-    expect(d.pid).toBe(4242); // string → number
+    expect(d.pid).toBe(4242);
     expect(d.version).toBe('0.3.11');
     expect(d.uptimeMs).toBe(60_000);
-    expect(d.supported).toBe(true);
-    expect(d.platformName).toBe('launchd (macOS)');
-    expect(d.selfHosted).toBe(false); // service manager 托管，非手动
+    expect(d.supported).toBe(false);
+    expect(d.platformName).toBeUndefined();
+    expect(d.selfHosted).toBe(true);
   });
 
-  it('未传 startedAt（只读预览进程）→ uptimeMs undefined', () => {
-    const d = toDaemonStatus({ status: base, version: '0.3.11' });
+  it('只读预览没有运行时长', () => {
+    const d = toDaemonStatus({ version: '0.3.11' });
     expect(d.uptimeMs).toBeUndefined();
   });
 
-  it('手动 nohup 起的 daemon（startedAt 有值但 service manager 报未运行）→ running=true + selfHosted=true', () => {
-    const manual: ServiceStatus = { ...base, installed: false, running: false, pid: undefined };
-    const d = toDaemonStatus({ status: manual, version: '0.3.11', startedAt: 1000, now: 5000 });
-    expect(d.running).toBe(true); // 内嵌 web 在响应即证明 daemon 活着
-    expect(d.selfHosted).toBe(true); // 但未注册为开机服务
+  it('手动前台 daemon 运行且不注册服务', () => {
+    const d = toDaemonStatus({ foreground: { pid: 4242, startedAt: 1000 }, version: '0.3.11', now: 5000 });
+    expect(d.running).toBe(true);
+    expect(d.selfHosted).toBe(true);
     expect(d.installed).toBe(false);
   });
 
-  it('status undefined（未支持平台）→ supported=false、installed/running 兜底 false', () => {
-    const d = toDaemonStatus({ status: undefined, version: '0.3.11' });
+  it('无前台进程时不支持服务管理且未运行', () => {
+    const d = toDaemonStatus({ version: '0.3.11' });
     expect(d.supported).toBe(false);
     expect(d.installed).toBe(false);
     expect(d.running).toBe(false);
     expect(d.pid).toBeUndefined();
   });
 
-  it('未在跑但已安装：running=false、installed=true', () => {
-    const d = toDaemonStatus({ status: { ...base, running: false, pid: undefined }, version: '0.3.11' });
-    expect(d.installed).toBe(true);
+  it('预览不会认领旧服务注册状态和 PID', () => {
+    const d = toDaemonStatus({ version: '0.3.11' });
+    expect(d.installed).toBe(false);
     expect(d.running).toBe(false);
     expect(d.pid).toBeUndefined();
+    expect(d.selfHosted).toBe(false);
+  });
+
+  it('时钟回拨时运行时长至少为零', () => {
+    expect(toDaemonStatus({ foreground: { pid: 42, startedAt: 5000 }, version: '0.3.11', now: 1000 }).uptimeMs).toBe(0);
   });
 });
 

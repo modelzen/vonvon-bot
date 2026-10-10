@@ -14,7 +14,6 @@ import {
   type BackendCatalogEntry,
 } from '../agent';
 import type { BackendDepState } from '../agent/types';
-import type { ServiceStatus } from '../service/common';
 import type { UpdateCheck } from '../service/update';
 
 /**
@@ -35,18 +34,18 @@ import type { UpdateCheck } from '../service/update';
  *   同步等它（那会把重启阻塞在被杀的进程上）。
  */
 
-/** daemon 生命周期快照（GET /api/daemon）。service 注册状态 + 运行 pid/版本/时长。 */
+/** daemon 生命周期快照（GET /api/daemon）。V2 前台进程的 pid/版本/时长。 */
 export interface DaemonStatus {
   distribution?: Distribution;
   /** 本平台的服务管理器名（launchd / Task Scheduler / systemd），未支持平台为 undefined。 */
   platformName?: string;
   /** 服务定义（plist/task/unit）已注册到 OS。 */
   installed: boolean;
-  /** daemon 进程当前存活：service manager 报 running，**或**当前内嵌 web 的进程自身就是活 daemon。 */
+  /** 当前内嵌 Web 的 daemon 进程正在运行。 */
   running: boolean;
-  /** daemon 在跑但不由 service manager 托管（手动前台 / nohup 起的）——UI 提示「未注册为开机自启」。 */
+  /** 当前 daemon 为前台进程。 */
   selfHosted: boolean;
-  /** 服务进程 pid（service manager 报的；可能与内嵌 web 的 process.pid 不同）。 */
+  /** 当前前台 daemon 的实际 PID。 */
   pid?: number;
   /** 上次退出码（诊断用）。 */
   lastExit?: string;
@@ -58,7 +57,7 @@ export interface DaemonStatus {
   servicePath?: string;
   stdoutPath?: string;
   stderrPath?: string;
-  /** 本平台是否支持后台服务（不支持时 restart 按钮置灰，引导前台 run）。 */
+  /** 当前运行时是否支持服务管理。V2 为 false。 */
   supported: boolean;
 }
 
@@ -78,36 +77,19 @@ export interface HostDoctor {
   version: string;
 }
 
-/**
- * 把 {@link ServiceStatus}（service 适配器的平台无关快照）+ 本进程运行时长归一成
- * {@link DaemonStatus}。纯函数（exported for tests）——不碰 service manager，输入
- * 是已探好的 status，便于单测 mock。`status` 为 undefined ⇒ 本平台不支持后台服务。
- */
 export function toDaemonStatus(opts: {
-  status?: ServiceStatus;
+  foreground?: { pid: number; startedAt: number };
   version: string;
-  /** daemon 进程启动时刻（内嵌 web 注入）；只读预览不传 → uptime undefined。 */
-  startedAt?: number;
   now?: number;
 }): DaemonStatus {
-  const s = opts.status;
-  // startedAt 仅在 daemon 进程内嵌 web 时注入：它存在即证明「当前有 daemon 进程在响应」，
-  // 哪怕该进程是手动 nohup/前台起的（service manager 视角 running=false）。
-  const selfRunning = opts.startedAt !== undefined;
-  const serviceRunning = s?.running ?? false;
   return {
-    platformName: s?.platformName,
-    installed: s?.installed ?? false,
-    running: serviceRunning || selfRunning,
-    selfHosted: selfRunning && !serviceRunning,
-    pid: s?.pid ? Number(s.pid) : undefined,
-    lastExit: s?.lastExit,
+    installed: false,
+    running: opts.foreground !== undefined,
+    selfHosted: opts.foreground !== undefined,
+    pid: opts.foreground?.pid,
     version: opts.version,
-    uptimeMs: opts.startedAt !== undefined ? Math.max(0, (opts.now ?? Date.now()) - opts.startedAt) : undefined,
-    servicePath: s?.servicePath,
-    stdoutPath: s?.stdoutPath,
-    stderrPath: s?.stderrPath,
-    supported: s !== undefined,
+    uptimeMs: opts.foreground ? Math.max(0, (opts.now ?? Date.now()) - opts.foreground.startedAt) : undefined,
+    supported: false,
   };
 }
 

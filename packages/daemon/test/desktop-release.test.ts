@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createDesktopReleaseLookup, parseDesktopRelease } from '../src/service/desktop-release';
-import { buildDmMenuCard, buildUpdateCard } from '../src/card/dm-cards';
+import { buildDmMenuCard, buildForegroundUpdateCard } from '../src/card/dm-cards';
 
 const tag = 'v0.7.0';
 const macName = 'Vonvon-Bridge-0.7.0-mac-arm64.pkg';
@@ -67,9 +67,9 @@ describe('published desktop release guidance', () => {
     expect(menu).toContain(winName);
     expect(menu.indexOf('桌面版')).toBeLessThan(menu.indexOf('私聊用于'));
     expect(JSON.stringify(buildDmMenuCard())).not.toContain('安装桌面版');
-    const update = JSON.stringify(buildUpdateCard({ phase: 'checked', current: '0.7.0', latest: '0.7.0', hasUpdate: false, desktopRelease: available }));
+    const update = JSON.stringify(buildForegroundUpdateCard({ current: '0.7.0', desktopRelease: available }));
     expect(update).toContain('安装桌面版');
-    const bundled = JSON.stringify(buildUpdateCard({ phase: 'checked', current: '0.7.0', latest: '0.7.1', hasUpdate: true, distribution: 'bundled', desktopRelease: available }));
+    const bundled = JSON.stringify(buildForegroundUpdateCard({ current: '0.7.0', distribution: 'bundled', desktopRelease: available }));
     expect(bundled).toContain('请在桌面应用中更新');
     expect(bundled).not.toContain('立即更新');
   });
@@ -77,7 +77,7 @@ describe('published desktop release guidance', () => {
 
 describe('V2 update guidance regression', () => {
   it('never appends legacy package installation or sudo advice to foreground guidance', () => {
-    const text = JSON.stringify(buildUpdateCard({ phase: 'error', from: '0.7.0', message: 'V2 前台 daemon 不支持服务更新。' }));
+    const text = JSON.stringify(buildForegroundUpdateCard({ current: '0.7.0' }));
     expect(text).not.toContain('npm i -g');
     expect(text).not.toContain('sudo');
     expect(text).toContain('V2');
