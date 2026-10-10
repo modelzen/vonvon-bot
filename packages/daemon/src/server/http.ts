@@ -27,6 +27,13 @@ export interface ApiLifetime {
   release(): Promise<void>;
 }
 
+export class ApiCleanupError extends AggregateError {
+  constructor(errors: Iterable<unknown>) {
+    super(errors, 'API listener closed with cleanup errors');
+    this.name = 'ApiCleanupError';
+  }
+}
+
 export interface DaemonApi extends ApiLifetime {
   port: number;
   listen: string;
