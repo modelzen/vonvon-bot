@@ -1039,7 +1039,6 @@ export function createWebServer(opts: WebServerOptions): WebServer {
           resolve({ port: actual, url: `http://127.0.0.1:${actual}/?token=${token}` });
         };
         server.once('error', onError);
-        // 安全清单 #1：仅 loopback，绝不 0.0.0.0。
         server.listen(port, '127.0.0.1', onListening);
       });
     },
