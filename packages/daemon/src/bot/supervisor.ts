@@ -122,7 +122,6 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   try {
     for (const c of children.values()) spawnChild(c);
 
-    // Parent reads local state and forwards live Bot writes through child IPC.
     const byAppId = (botId: string): Child | undefined => children.get(botId);
     api = await startApi({
       port: options.port,
@@ -205,7 +204,6 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
           };
         },
         daemonStartedAt: supervisorStartedAt,
-        // 按需后端安装在 daemon 进程内直跑（owns runtime，装完即能解析加载）。
         installBackend: installBackendDep,
         uninstallBackend: uninstallBackendDep,
         applyUpdate: performCoreUpdate,

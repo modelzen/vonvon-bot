@@ -1,7 +1,7 @@
 import { agentIdSchema, groupIdSchema, membershipIdSchema, type DesktopSnapshot, type Agent, type Membership, type Group } from '@vonvon/protocol';
 import type { AdminState } from './state';
 
-// Ported from desktop/main/projection.ts at fab5237. Full admin state is preserved before projection.
+// Ported from desktop/main/projection.ts at fab5237.
 export function projectState(state: AdminState, previous: DesktopSnapshot, pending: ReadonlySet<string>) {
   const agents: Agent[] = [];
   const memberships: Membership[] = [];

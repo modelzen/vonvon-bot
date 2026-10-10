@@ -193,7 +193,6 @@ export function buildDmMenuCard(opts: { version?: string; desktopRelease?: Deskt
         template: 'blue',
         textTags: version ? [{ text: `v${version}`, color: 'green' }] : undefined,
       },
-      // 管理操作仅供当前管理员使用。
       forward: false,
     },
   );
