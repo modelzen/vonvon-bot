@@ -1028,13 +1028,19 @@ export function createWebServer(opts: WebServerOptions): WebServer {
     token,
     listen(port: number): Promise<{ port: number; url: string }> {
       return new Promise((resolve, reject) => {
-        server.once('error', reject);
-        // 安全清单 #1：仅 loopback，绝不 0.0.0.0。
-        server.listen(port, '127.0.0.1', () => {
+        const onError = (error: Error): void => {
+          server.off('listening', onListening);
+          reject(error);
+        };
+        const onListening = (): void => {
+          server.off('error', onError);
           const addr = server.address();
           const actual = typeof addr === 'object' && addr ? addr.port : port;
           resolve({ port: actual, url: `http://127.0.0.1:${actual}/?token=${token}` });
-        });
+        };
+        server.once('error', onError);
+        // 安全清单 #1：仅 loopback，绝不 0.0.0.0。
+        server.listen(port, '127.0.0.1', onListening);
       });
     },
     close(): Promise<void> {
