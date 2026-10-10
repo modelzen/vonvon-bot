@@ -21,7 +21,7 @@ async function fixture() {
   const dir = await mkdtemp(join(tmpdir(), 'vonvon-executable-'));
   dirs.push(dir);
   const executable = join(dir, process.platform === 'win32' ? 'codex.exe' : 'codex');
-  const nonExecutable = join(dir, process.platform === 'win32' ? 'plain.exe' : 'plain');
+  const nonExecutable = join(dir, process.platform === 'win32' ? 'plain.txt' : 'plain');
   const link = join(dir, process.platform === 'win32' ? 'codex-link.exe' : 'codex-link');
   await writeFile(executable, '', { mode: 0o700 });
   await writeFile(nonExecutable, '', { mode: 0o600 });

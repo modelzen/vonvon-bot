@@ -18,11 +18,17 @@ export function DirectoryPickerProvider({ children }: { children: ReactNode }) {
   const client = useClient();
   const [request, setRequest] = useState<Request | null>(null);
   const pending = useRef<Promise<FolderChoice | null> | null>(null);
+  const owner = useRef<Request | null>(null);
   const [path, setPath] = useState<string>();
   const [parent, setParent] = useState<string | null>(null);
   const [entries, setEntries] = useState<DirectoryEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  useEffect(() => () => {
+    owner.current?.resolve(null);
+    owner.current = null;
+    pending.current = null;
+  }, []);
   useEffect(() => {
     if (!request) return;
     let active = true;
@@ -39,7 +45,9 @@ export function DirectoryPickerProvider({ children }: { children: ReactNode }) {
     return () => { active = false; };
   }, [client, request, path]);
   function finish(folder: FolderChoice | null) {
-    request?.resolve(folder);
+    if (!request || owner.current !== request) return;
+    request.resolve(folder);
+    owner.current = null;
     pending.current = null;
     setRequest(null);
     setPath(undefined);
@@ -47,16 +55,23 @@ export function DirectoryPickerProvider({ children }: { children: ReactNode }) {
     setError('');
   }
   async function choose() {
-    if (!path || loading) return;
+    if (!path || loading || !request || owner.current !== request) return;
     setLoading(true);
     try {
       const reply = await client.directory({ type: 'choose', path });
       if (reply.kind !== 'folderChosen') throw new Error('无法选择目录。');
       finish(reply.folder);
-    } catch (failure) { setError(failure instanceof Error ? failure.message : '无法选择目录。'); setLoading(false); }
+    } catch (failure) {
+      if (owner.current !== request) return;
+      setError(failure instanceof Error ? failure.message : '无法选择目录。');
+      setLoading(false);
+    }
   }
   const pick: Picker = () => {
-    if (!pending.current) pending.current = new Promise(resolve => setRequest({ resolve }));
+    if (!pending.current) pending.current = new Promise(resolve => {
+      owner.current = { resolve };
+      setRequest(owner.current);
+    });
     return pending.current;
   };
   return <PickerContext.Provider value={pick}>
