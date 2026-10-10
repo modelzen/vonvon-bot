@@ -10,9 +10,9 @@
 | --- | --- | --- |
 | V1 | 建 monorepo 和 `packages/protocol`。从 `codex/device-handoff` 移植 zod 合同，加握手和机器维度。加托管 CI（V1 当时有 Linux 和 macOS 两个任务，均通过验收；之后按下文“托管 CI”自动运行只留 Linux 任务，常规 macOS 检查改在本地 Mac 上跑，另留一个只能手动请求的可选托管 macOS 任务） | 无 |
 | V2 | 建 `packages/daemon`。用脚本从 bridge `446b2a4` 复制完整 `src/` 和 `test/`，暂留 `src/web` 以保持可运行基线；数据目录改成 `~/.vonvon-bot`。`vonvon daemon run` 能在前台跑起 Bot | V1 |
-| V3 | daemon 的 API 服务。WebSocket、本机凭据、pid 锁、RPC 处理、快照请求和快照事件、无损的 `admin` 状态请求、目录浏览 RPC、`vonvon daemon start/stop/status`，以及 lane 要用的本机最小 `packages/client`；旧网页管理路由改成 RPC，只读预览和旧网页页面退役，私聊菜单去掉旧控制台按钮，然后删除 `src/web` | V2 |
+| V3 | daemon 的 API 服务。WebSocket、本机凭据、pid 锁、RPC 处理、快照请求和快照事件、无损的 `admin` 状态请求、目录浏览 RPC、`vonvon daemon start/stop/status` 和停止、重启的生命周期规则（等已接受的操作做完才放锁，重启保持原端口，`vonvon service` 命令在 V5 之前一律拒绝），以及 lane 要用的本机最小 `packages/client`；旧网页管理路由改成 RPC，只读预览和旧网页页面退役，私聊菜单去掉旧控制台按钮，然后删除 `src/web` | V2 |
 | V4 | 补全 `packages/client`，新建 `packages/ui`。移植界面，`window.bridge` 换成注入的客户端，daemon 在本机提供网页 | V3 |
-| V5 | `packages/desktop`。Electron 外壳拉起或连接 daemon，加载界面，托盘，开机自动运行，自动更新 | V4 |
+| V5 | `packages/desktop`。Electron 外壳拉起或连接 daemon，加载界面，托盘，开机自动运行，自动更新。Vonvon 自己的系统服务（服务标识、安装和卸载、原生验收）也在这里第一次提供 | V4 |
 | V6 | Claude Code provider。移植 Paseo 的实现和 `AgentSession` 到 `AgentBackend` 的适配器，删除 bridge 的 Claude 后端 | V3 |
 | V7 | 其他 provider。通用 ACP 和 Copilot、OpenCode、Pi | V6 |
 | V8 | 导入 bridge 数据并关停旧服务。macOS、Linux、Windows 三个平台，界面引导和 `vonvon import feishu-codex-bridge` | V4 |
@@ -26,7 +26,9 @@ V6 和 V7 可以和 V4、V5 并行。V10 可以在 V8 之前开始。
 
 分工按仓库根目录的 `AGENTS.md`。Linux 上的 Claude Code 通常负责这三份文档，不写产品代码。2026-10-10 Claude Code CLI 认证返回 HTTP 401 后，用户明确授权 Codex 直接修订这次 V2 澄清并继续。Mac 上的 Codex 负责全部实现和检查，也负责打包、签名、公证。V9 需要的安装包下载地址来自 Mac 的发布。
 
-V5 和 V8 里有 systemd 检查，Mac 上跑不了。Codex 在 Linux CI 或 Linux 虚拟机里跑这两条。
+V5 和 V8 里有 systemd 检查，Mac 上跑不了。Codex 在 Linux 虚拟机或有用户会话的 Linux 环境里跑这几条，托管 CI 不能顶替。V5 的原生服务检查要用专门的系统测试用户，不在用户自己的账号里跑。按目前的环境报告，Mac 上只有用户自己的账号有图形会话，也没有运行中的、带 systemd 用户会话的 Linux，所以 V5 开始前要请用户提供。
+
+Codex 可以并行开发，本机同时最多一个根代理加三个工作代理。根代理是唯一的 Git 和 forge 写入者，负责建工作树、集成、提交、推送、开 PR、合并和 Shipping。工作代理各用根代理建的工作树，只改分给自己的文件，各自运行 npm ci，不提交、不推送。每个 PR 先由各工作代理写测试、做组件验证，根代理集成后跑一次完整检查，再做独立审查，冻结 head 后才跑十路实时、性能、原生检查和 Shipping。连着测试 Bot 的检查仍然逐个跑，用独立数据目录的检查可以同时跑。并行不改变 PR 顺序、依赖、架构、数据形状和验证门槛，合并仍按路线顺序。V10 在 V4 合并后就可以开始开发，但按路线顺序要等 V9 合并后才合并，不需要另问用户。merge `main` 之后，patch-id 不变只是审查结论继续有效的必要条件：基线、依赖版本或相关证据变了，就要重跑受影响的检查，并重新拿独立审查结论。具体分工见 [plan.md](plan.md) 的 *Parallel execution*。
 
 此后实现时发现计划要改架构、数据形状或 PR 顺序，Codex 在 PR 里写明，按 `AGENTS.md` 交给 Claude Code 更新。上述授权只适用于这次 V2 澄清。
 
@@ -56,6 +58,7 @@ Linux 任务里一个不依赖 npm 包的脚本判定范围，只有 `docs` 和 
 
 - 飞书长连接模式下，同一个 Bot 的两个客户端只有一个收到事件。在 V8 里用两个进程连同一个测试 Bot 验证，结果决定导入时是否必须先暂停 bridge。
 - `AgentSession` 到 `AgentBackend` 的适配器能完整映射文本流、工具调用、权限请求、中断和追加消息。在 V6 里用真实的 Claude Code 跑一遍飞书卡片的完整流程。
+- launchd 和 systemd 在 daemon 正常停止、异常退出、崩溃或 `kill -9` 后是否重新拉起。V3 不装系统服务。V5 的服务设计定下拉起策略后，用专门的系统测试用户在 Mac 和 Linux 上实测。实测之前，所有和系统服务有关的结论都只来自源码和文档。
 - bridge `446b2a4` 的已测基线为 153 个测试文件，其中 152 个通过、1 个有意跳过；1683 个用例通过、15 个有意跳过。搬进 `packages/daemon` 后，V2 要核对通过数和跳过数。跳过的 provider 实时测试不算作运行验收。V3 删除 `src/web` 后不再要求这个文件数，改为全部测试通过，并在 PR 里附上旧测试到 RPC 测试的映射表。
 
 ## 已知风险
@@ -63,4 +66,6 @@ Linux 任务里一个不依赖 npm 包的脚本判定范围，只有 `docs` 和 
 - 远程访问信任云端分发的 daemon 公钥。云端被攻破时可能被中间人攻击。V11 可以加一个可选的指纹核对，在 daemon 本机界面和远程客户端上显示同一串指纹。
 - 桌面端内置的 daemon 和 npm 全局安装的 daemon 版本可能不同。V5 要处理协议版本不兼容时的提示和重启。
 - 云端的部署平台还没定。vonvon-bridge-legacy 有 `deploy/tencent` 可以参考。
-- V3 起后端安装的输出只保留最后 256 KiB，`omittedBytes` 记下丢掉的字节数。从中途接上的客户端看不到更早的输出，失败原因仍由错误尾部给出。V3 不限制 npm 的运行时长。npm 卡住时，它会占着一个进程和对应的安装槽，直到 npm 退出或 daemon 停止。等界面需要取消安装时，再定超时和取消的语义。
+- V3 起后端安装的输出只保留最后 256 KiB，`omittedBytes` 记下丢掉的字节数。从中途接上的客户端看不到更早的输出，失败原因仍由错误尾部给出。V3 不限制 npm 的运行时长。npm 卡住时，它会占着一个进程和对应的安装槽，直到 npm 退出或 daemon 停止。V3 起后端的安装、更新、卸载排队逐个执行，所以卡住的 npm 还会挡住排在后面的所有后端操作。等界面需要取消安装时，再定超时和取消的语义。
+- V2 合并后运行中的 daemon 没有接上停止和重启的回调，旧网页的这两个接口都返回 501（PR #24 和旧测试有记录）。复制来的源码里那段“停止时卸载服务”的辅助代码从没在 daemon 上运行过，不能当作旧版能用的证据。V3 第一次真正提供停止和重启，只针对用 CLI 启动的 daemon。复制来的服务代码仍用 bridge 的服务标识，运行它可能覆盖或删除原 bridge 的注册，所以 V3 的 `vonvon service install` 和 `uninstall` 一律报错退出，什么也不改。V2 时期如果有人用过 `vonvon service install`，留下的注册 V3 不检测也不删除。
+- V3 重启时，旧 daemon 放锁之后、新 daemon 拿到锁之前有一小段时间没有进程负责这个数据目录。这时运行 `vonvon daemon stop` 会报“已停止”，新 daemon 仍会起来，再运行一次 `vonvon daemon stop` 即可。放锁之前收到的停止请求一定会取消重启。
