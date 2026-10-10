@@ -78,7 +78,9 @@ import {
   type PendingPolicy,
   type SessionTitleBackendConfig,
 } from '../config/schema';
-import { CardDispatcher } from '../card/dispatcher';
+import { CardDispatcher, type CardActionHandler } from '../card/dispatcher';
+import { closeOwnedCodexProcesses } from '../agent/codex-appserver/owned-process';
+import { shutdownResidentClients } from '../agent/codex-appserver/client-pool';
 import { sendManagedCard, updateManagedCard } from '../card/managed';
 import { RunRender } from '../card/run-render';
 import { finalMessageText, initialState, reduce, type RunState } from '../card/run-state';
@@ -756,6 +758,10 @@ export function createOrchestrator(
   const sessionTouchedAt = new Map<string, number>();
   /** sessions.set + 打点 —— 所有放进 LIVE 缓存的会话一律走这里。 */
   function trackSession(key: string, thread: AgentThread): void {
+    if (shuttingDown) {
+      void trackTask(thread.close());
+      return;
+    }
     sessions.set(key, thread);
     sessionTouchedAt.set(key, Date.now());
   }
@@ -773,6 +779,33 @@ export function createOrchestrator(
   const commentInstrUsed = new Map<string, string>();
   const sema = new Semaphore(getMaxConcurrentRuns(cfg));
   let shuttingDown = false;
+  let shutdownPromise: Promise<void> | undefined;
+  const acceptedTasks = new Set<Promise<unknown>>();
+  const shutdownErrors = new Set<unknown>();
+
+  function trackTask<T>(task: Promise<T>): Promise<T> {
+    acceptedTasks.add(task);
+    void task.then(() => acceptedTasks.delete(task), error => {
+      acceptedTasks.delete(task);
+      if (shuttingDown) shutdownErrors.add(error);
+      else log.fail('bridge', error, { phase: 'background-task' });
+    });
+    return task;
+  }
+
+  function admit<Args extends unknown[], Result>(handler: (...args: Args) => Promise<Result>): (...args: Args) => Promise<Result> {
+    return (...args) => {
+      if (shuttingDown) return Promise.reject(new Error('Bridge is shutting down'));
+      return trackTask(handler(...args));
+    };
+  }
+
+  function admitEvent<Args extends unknown[]>(handler: (...args: Args) => Promise<void> | void): (...args: Args) => Promise<void> {
+    return (...args) => {
+      if (shuttingDown) return Promise.resolve();
+      return trackTask(Promise.resolve(handler(...args)));
+    };
+  }
   const runTasks = new Set<Promise<void>>();
   async function trackRun(task: Promise<void>): Promise<void> {
     runTasks.add(task);
@@ -854,9 +887,9 @@ export function createOrchestrator(
     }
   }
   function removeReaction(messageId: string, reactionId: string): void {
-    void channel.rawClient.im.v1.messageReaction
+    void trackTask(channel.rawClient.im.v1.messageReaction
       .delete({ path: { message_id: messageId, reaction_id: reactionId } })
-      .catch((err) => log.fail('card', err, { phase: 'reaction-del' }));
+      .catch((err) => log.fail('card', err, { phase: 'reaction-del' })));
   }
 
   /**
@@ -867,13 +900,13 @@ export function createOrchestrator(
    * `chain` so each step removes the prior emoji first.
    */
   function runReaction(messageId: string, queued: boolean): RunReaction {
-    let chain: Promise<string | undefined> = addReaction(messageId, queued ? 'OneSecond' : 'Typing');
+    let chain: Promise<string | undefined> = trackTask(addReaction(messageId, queued ? 'OneSecond' : 'Typing'));
     let phase = queued ? 0 : 1; // 0 = waiting(OneSecond), 1 = running(Typing), 2 = done(cleared)
     const swap = (emoji: string): void => {
-      chain = chain.then(async (prevId) => {
+      chain = trackTask(chain.then(async (prevId) => {
         if (prevId) removeReaction(messageId, prevId);
         return addReaction(messageId, emoji);
-      });
+      }));
     };
     return {
       started: () => {
@@ -885,10 +918,10 @@ export function createOrchestrator(
       done: () => {
         if (phase < 2) {
           phase = 2;
-          chain = chain.then((prevId) => {
+          chain = trackTask(chain.then((prevId) => {
             if (prevId) removeReaction(messageId, prevId);
             return undefined;
-          });
+          }));
         }
       },
     };
@@ -1023,11 +1056,11 @@ export function createOrchestrator(
           await denyGoal(msg, false);
           return;
         }
-        void addReaction(msg.messageId, 'OKR');
+        void trackTask(addReaction(msg.messageId, 'OKR'));
         startReservedRun(msg, goalObjective, ts.sessionKey, true, project, ts, undefined, undefined, undefined, true);
         return;
       }
-      void handleTurn(msg, text, ts.sessionKey, true, project, ts).catch((err) => log.fail('intake', err));
+      void trackTask(handleTurn(msg, text, ts.sessionKey, true, project, ts).catch((err) => log.fail('intake', err)));
       return;
     }
 
@@ -1073,11 +1106,11 @@ export function createOrchestrator(
           await denyGoal(msg, true);
           return;
         }
-        void addReaction(msg.messageId, 'OKR');
+        void trackTask(addReaction(msg.messageId, 'OKR'));
         startReservedRun(msg, goalObjective, ts.sessionKey, false, project, ts, undefined, undefined, undefined, true);
         return;
       }
-      void handleTurn(msg, text, ts.sessionKey, false, project, ts).catch((err) => log.fail('intake', err));
+      void trackTask(handleTurn(msg, text, ts.sessionKey, false, project, ts).catch((err) => log.fail('intake', err)));
       return;
     }
     // Main group area: /resume opens the history picker; /settings opens the
@@ -1116,7 +1149,7 @@ export function createOrchestrator(
         await denyGoal(msg, false);
         return;
       }
-      void addReaction(msg.messageId, 'OKR');
+      void trackTask(addReaction(msg.messageId, 'OKR'));
       startTopicDirectly(msg, goalObjective, project, true);
       return;
     }
@@ -1319,8 +1352,8 @@ export function createOrchestrator(
         await replyGoalBusy(msg, flat);
         return;
       }
-      void deliverPreparedTurn(msg, woven, images, text, sessionKey, flat, project, perm, cur)
-        .catch((err) => log.fail('intake', err));
+      void trackTask(deliverPreparedTurn(msg, woven, images, text, sessionKey, flat, project, perm, cur)
+        .catch((err) => log.fail('intake', err)));
       return;
     }
 
@@ -1347,9 +1380,9 @@ export function createOrchestrator(
         } catch (err) {
           log.warn('intake', 'steer-failed', { err: String(err) });
           if (!isRejectedSteer(err)) {
-            void channel.send(msg.chatId,
+            void trackTask(channel.send(msg.chatId,
               { markdown: '⚠️ 本条消息的接收确认失败，可能已进入模型。为避免重复执行，未自动重投；请先核对本轮结果。' },
-              { replyTo: msg.messageId, replyInThread: !flat }).catch(() => undefined);
+              { replyTo: msg.messageId, replyInThread: !flat }).catch(() => undefined));
             return;
           }
         }
@@ -1413,15 +1446,15 @@ export function createOrchestrator(
       // A goal can't co-run with (or queue behind) a turn on the same session —
       // it's an autonomous multi-turn run, not a follow-up. Tell the user and skip.
       if (goal) {
-        void channel
+        void trackTask(channel
           .send(msg.chatId, { markdown: '当前会话有任务在跑，请等它结束后再发 `/goal`。' }, { replyTo: msg.messageId, replyInThread: !flat })
-          .catch(() => undefined);
+          .catch(() => undefined));
         return;
       }
       // A goal appeared in that window — its queue is never consumed, so prompt
       // instead of queueing (same as handleTurn's isGoal gate).
       if (existing.isGoal) {
-        void replyGoalBusy(msg, flat);
+        void trackTask(replyGoalBusy(msg, flat));
         return;
       }
       // A run appeared between handleTurn's check and here (we awaited an image
@@ -1440,7 +1473,7 @@ export function createOrchestrator(
     }
     const reserved: ActiveState = { queue: [], requesterOpenId: msg.senderId, isGoal: goal };
     active.set(sessionKey, reserved);
-    void withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
+    void trackTask(withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
       // Goal runs use the OKR reaction (added at dispatch) as their only receipt,
       // not the ⏳/🫳 run-reaction lifecycle.
       const reaction = goal ? undefined : runReaction(msg.messageId, !sema.hasFree());
@@ -1601,7 +1634,7 @@ export function createOrchestrator(
         }
         // Advance the high-water mark so the NEXT turn only catches up新消息.
         // (a brand-new session already wrote it in the upsert above.)
-        if (!neverSeen) void patchSession(sessionKey, { lastSeenAt: msg.createTime }).catch(() => undefined);
+        if (!neverSeen) void trackTask(patchSession(sessionKey, { lastSeenAt: msg.createTime }).catch(() => undefined));
         reserved.thread = thread;
         const launchOpts: LaunchOpts = {
           chatId: msg.chatId,
@@ -1644,7 +1677,7 @@ export function createOrchestrator(
           .send(msg.chatId, { markdown: runFailureMessage(err, dropped) }, { replyTo: msg.messageId, replyInThread: !flat })
           .catch(() => undefined);
       }
-    });
+    }));
   }
 
   /** Reuse an in-memory codex thread, else resume from the persisted store.
@@ -1735,7 +1768,7 @@ export function createOrchestrator(
       const live = sessions.get(rec.threadId);
       if (!live) continue;
       sessions.delete(rec.threadId); // synchronous: next turn can't reuse it
-      void live.close().catch(() => undefined); // SIGKILLs the app-server child
+      void trackTask(live.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
       closed++;
     }
     if (closed) log.info('console', 'tier-evict', { chatId, closed });
@@ -1750,7 +1783,7 @@ export function createOrchestrator(
     const titleSource: SessionTitleSource = goal
       ? { text, rawContentType: 'text' }
       : sessionTitleSourceFromMessage(msg, text);
-    void withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
+    void trackTask(withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
       // 🫳 Typing on receive (⏳ OneSecond if a slot isn't free) → ✅ DONE once
       // the topic is created (onTopicCreated, below). For this path the acked
       // action is "建话题", not the full reply — so DONE fires on first card,
@@ -1763,7 +1796,7 @@ export function createOrchestrator(
       // its own thread on its first message (see turnSession / adoptThreadId).
       const perm = turnPerm(project, msg.senderId);
       // lazy banner branch refresh (design §3.2) — best-effort, non-blocking
-      if (project) void refreshBranch(channel, project).catch(() => undefined);
+      if (project) void trackTask(refreshBranch(channel, project).catch(() => undefined));
       // Pick the default model FROM THE PROJECT'S BACKEND — a claude project must
       // not be handed codex's default ('gpt-5.5'). Unset backend → codex, as before.
       const be = backendFor(project?.backend);
@@ -1801,7 +1834,7 @@ export function createOrchestrator(
       } catch (err) {
         reaction?.done();
         // Keep the project reserved until any delayed backend process has closed.
-        await threadP.then((s) => s.thread.close()).catch(() => undefined);
+        await threadP.then((s) => s.thread.close()).catch(error => log.fail('agent', error, { phase: 'unadopted-thread-close' }));
         log.fail('card', err, { phase: 'start-topic' });
         await channel
           .send(msg.chatId, { markdown: `❌ 启动失败：${err instanceof Error ? err.message : String(err)}` }, { replyTo: msg.messageId })
@@ -1849,7 +1882,7 @@ export function createOrchestrator(
     }).catch((err) => log.fail('intake', err)).finally(() => {
       const remaining = (pendingTopics.get(msg.chatId) ?? 1) - 1;
       if (remaining) pendingTopics.set(msg.chatId, remaining); else pendingTopics.delete(msg.chatId);
-    });
+    }));
   }
 
   /** Group @bot /resume: post the history picker for this project's cwd. Owner-only
@@ -1857,7 +1890,7 @@ export function createOrchestrator(
    * Detached — listThreads spawns an app-server (slow); holding onMessage on it
    * would pin the SDK's per-chat queue (sibling topics + ⏹ card-actions stall). */
   function postResumeCard(msg: NormalizedMessage, singleSessionKey?: string): void {
-    void withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
+    void trackTask(withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
       if (!isAdmin(cfg, msg.senderId)) {
         await denyAdminCommand(msg, 'resume');
         return;
@@ -1894,14 +1927,14 @@ export function createOrchestrator(
           .send(msg.chatId, { markdown: `❌ ${err instanceof Error ? err.message : String(err)}` }, { replyTo: msg.messageId })
           .catch(() => undefined);
       }
-    });
+    }));
   }
 
   /** @bot /model: post the model/effort picker for the session keyed by
    * `sessionKey` (topic threadId for multi, chatId for single).
    * Detached — listModels can cold-spawn an app-server; see postResumeCard. */
   function postModelCard(msg: NormalizedMessage, sessionKey: string, inThread: boolean): void {
-    void withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
+    void trackTask(withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
       try {
         // 按会话/项目后端路由（已有会话以记录为准，未开张的用项目配置）：
         // claude 项目的 /model 卡绝不能列 codex 模型——选中即经 patchSession
@@ -1937,7 +1970,7 @@ export function createOrchestrator(
           .send(msg.chatId, { markdown: `❌ ${err instanceof Error ? err.message : String(err)}` }, { replyTo: msg.messageId })
           .catch(() => undefined);
       }
-    });
+    }));
   }
 
   /** `/context`: show the session's current context-window usage (always — even
@@ -1977,12 +2010,12 @@ export function createOrchestrator(
         .send(msg.chatId, { markdown }, { replyTo: msg.messageId, replyInThread: inThread })
         .then(() => undefined, () => undefined);
     if (active.get(sessionKey)) {
-      void reply('⏳ 这一轮还在跑，结束后再 `/compact`。');
+      void trackTask(reply('⏳ 这一轮还在跑，结束后再 `/compact`。'));
       return;
     }
     const reserved: ActiveState = { queue: [], requesterOpenId: msg.senderId };
     active.set(sessionKey, reserved);
-    void withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
+    void trackTask(withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
       try {
         const { thread } = await resolveThread(sessionKey, msg.chatId, {
           mode: perm.mode,
@@ -2069,7 +2102,7 @@ export function createOrchestrator(
           await reply(`⚠️ 压缩期间收到的 ${reserved.queue.length} 条消息未进入会话，请重发。`);
         }
       }
-    });
+    }));
   }
 
   /**
@@ -2089,16 +2122,16 @@ export function createOrchestrator(
         () => undefined,
       );
     if (!isAdmin(cfg, msg.senderId)) {
-      void denyAdminCommand(msg, 'clear');
+      void trackTask(denyAdminCommand(msg, 'clear'));
       return;
     }
     if (active.get(sessionKey)) {
-      void reply('⏳ 这一轮还在跑，结束后再 `/clear`。');
+      void trackTask(reply('⏳ 这一轮还在跑，结束后再 `/clear`。'));
       return;
     }
     const reserved: ActiveState = { queue: [], requesterOpenId: msg.senderId };
     active.set(sessionKey, reserved);
-    void withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
+    void trackTask(withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
       try {
         const [rec, project] = await Promise.all([getSession(sessionKey), getProjectByChatId(msg.chatId)]);
         // Route by the session's backend (fall back to the project's) — a fresh
@@ -2121,7 +2154,7 @@ export function createOrchestrator(
         const old = sessions.get(sessionKey);
         if (old && old !== fresh) {
           sessions.delete(sessionKey);
-          void old.close().catch(() => undefined);
+          void trackTask(old.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
         }
         trackSession(sessionKey, fresh);
         lastUsage.delete(sessionKey); // context gauge → 0 until the next turn
@@ -2157,7 +2190,7 @@ export function createOrchestrator(
           await reply(`⚠️ 清空期间收到的 ${reserved.queue.length} 条消息未进入会话，请重发。`);
         }
       }
-    });
+    }));
   }
 
   /** `/help`: post the command cheat-sheet for the caller's current scope. */
@@ -2180,9 +2213,13 @@ export function createOrchestrator(
   }
 
   // ── card actions ──────────────────────────────────────────────────
-  const dispatcher = new CardDispatcher(channel, cfg);
+  const dispatcher = new class extends CardDispatcher {
+    override on(actionId: string, handler: CardActionHandler): this {
+      return super.on(actionId, admitEvent(handler));
+    }
+  }(channel, cfg);
   const outboundFiles = new OutboundFiles(paths.outboundFilesDir);
-  void outboundFiles.recover(channel);
+  void trackTask(outboundFiles.recover(channel));
   outboundFiles.register(dispatcher, async (record, openId) => {
     if (!openId || !isChatAllowed(cfg, record.chatId)) return undefined;
     const project = await getProjectByChatId(record.chatId);
@@ -2232,7 +2269,7 @@ export function createOrchestrator(
     fallbackChatId?: string,
   ): void => {
     const armedAt = Date.now();
-    void (async () => {
+    void trackTask((async () => {
       // Wrap the WHOLE flow: a throwing builder (`c()`), a rejected card update,
       // or a rejected fallback must never die silently — that surfaces to the user
       // as a dead button ("点击没反应") with nothing in the log to diagnose it.
@@ -2247,7 +2284,7 @@ export function createOrchestrator(
       } catch (err) {
         log.fail('console', err, { phase: 'settle-update', msgId });
       }
-    })();
+    })());
   };
   function pruneResumePending(): void {
     const now = Date.now();
@@ -2325,7 +2362,7 @@ export function createOrchestrator(
       state.launching = true;
       settleUpdate(evt.messageId, buildResumeLaunchingCard(state));
       // detach: don't hold the cardAction callback for the whole resume + run
-      void resumeFromCard(evt, state, sessionId, backendId);
+      void trackTask(resumeFromCard(evt, state, sessionId, backendId));
     });
 
   /** Run-card actions: gated by chat/user allow lists (design §5). */
@@ -2351,9 +2388,9 @@ export function createOrchestrator(
   /** 非发起人/非管理员点 ⏹/🎯：明确告知规则。 */
   const denyRunControl = (evt: CardActionEvent, key: string, actionId: string, verb: string): void => {
     if (!runControlNotes.seen(`deny:${key}:${evt.operator?.openId ?? ''}`)) {
-      void channel
+      void trackTask(channel
         .send(evt.chatId, { markdown: `⚠️ 仅发起人或管理员可${verb}。` }, { replyTo: evt.messageId })
-        .catch(() => undefined);
+        .catch(() => undefined));
     }
     log.info('card', 'action', { actionId, denied: true });
   };
@@ -2365,13 +2402,13 @@ export function createOrchestrator(
    * 删除失败仅记日志（告知已发出）。卡片改动等 CARD_SETTLE_MS，避开点击互动窗。 */
   const healDeadRunCard = (evt: CardActionEvent, key: string, actionId: string): void => {
     if (runControlNotes.seen(`dead:${key}`)) return; // 已答复过 / 自愈在路上
-    void channel
+    void trackTask(channel
       .send(evt.chatId, { markdown: 'ℹ️ 该任务已结束，按钮已失效。' }, { replyTo: evt.messageId })
-      .catch(() => undefined);
+      .catch(() => undefined));
     const rc = runCards.get(key);
     const stream = runStreams.get(key);
     log.info('card', 'action', { actionId, orphan: true, inProcess: Boolean(rc && stream) });
-    void (async () => {
+    void trackTask((async () => {
       try {
         await new Promise((r) => setTimeout(r, CARD_SETTLE_MS));
         if (rc && stream) {
@@ -2391,7 +2428,7 @@ export function createOrchestrator(
       } catch (err) {
         log.fail('card', err, { phase: 'run-card-heal', key });
       }
-    })();
+    })());
   };
 
   // run card buttons (design §3.3). ⏹ (st.interrupt) sends turn/interrupt and
@@ -2422,9 +2459,9 @@ export function createOrchestrator(
       const st = runsByCard.get(key);
       if (!st) {
         if (!runControlNotes.seen(`remind-ended:${key}:${evt.operator?.openId ?? ''}`)) {
-          void channel
+          void trackTask(channel
             .send(evt.chatId, { markdown: 'ℹ️ 该任务已结束，无需再开启完成提醒。' }, { replyTo: evt.messageId })
-            .catch(() => undefined);
+            .catch(() => undefined));
         }
         log.info('card', 'action', { actionId: RC.remind, ended: true });
         return;
@@ -2432,9 +2469,9 @@ export function createOrchestrator(
       const op = evt.operator?.openId;
       if (!isCompletionReminderRequester(op, st.requesterOpenId)) {
         if (!runControlNotes.seen(`remind-deny:${key}:${op ?? ''}`)) {
-          void channel
+          void trackTask(channel
             .send(evt.chatId, { markdown: '⚠️ 仅本轮发起人可开启完成提醒。' }, { replyTo: evt.messageId })
-            .catch(() => undefined);
+            .catch(() => undefined));
         }
         log.info('card', 'action', { actionId: RC.remind, denied: true });
         return;
@@ -2558,10 +2595,10 @@ export function createOrchestrator(
     render: () => object | Promise<object>,
     phase: string,
   ): void {
-    void (async () => {
+    void trackTask((async () => {
       const next = await render();
       await sendManagedCard(channel, evt.chatId, next);
-    })().catch((err) => log.fail('console', err, { phase }));
+    })().catch((err) => log.fail('console', err, { phase })));
   }
 
   /** Old interactive cards can be abandoned without a callback. Bound their
@@ -2800,7 +2837,7 @@ export function createOrchestrator(
   // 一张新卡并把结果更新指向它，否则旧菜单卡上这颗按钮就是「点了毫无反应」的死按钮。
   const runUsage = (evt: CardActionEvent, force: boolean): void => {
     if (!dmAdmin(evt.operator?.openId)) return;
-    void (async () => {
+    void trackTask((async () => {
       await new Promise((r) => setTimeout(r, CARD_SETTLE_MS));
       let msgId = evt.messageId;
       const okLoading = await updateManagedCard(channel, msgId, buildUsageCard({ phase: 'loading' })).catch(
@@ -2837,7 +2874,7 @@ export function createOrchestrator(
           log.fail('console', e, { phase: 'usage-fallback' }),
         );
       }
-    })();
+    })());
   };
 
   // Build the project list card with each project's topics (sessions) grouped
@@ -2914,7 +2951,7 @@ export function createOrchestrator(
       // re-render — stop firing, and an in-place update no-ops). So the result
       // goes to a *fresh* card; the submitted form stays above as a 留痕. Detach
       // so the submit callback acks immediately (createProject is slow).
-      void (async () => {
+      void trackTask((async () => {
         let result;
         if (!name) result = buildNewProjectFormCard({ cwd: cwdIn, error: '项目名不能为空', backends });
         else if (!op) result = buildNewProjectFormCard({ name, cwd: cwdIn, error: '无法识别操作者身份', backends });
@@ -2937,7 +2974,7 @@ export function createOrchestrator(
         await sendManagedCard(channel, evt.chatId, result).catch((e) =>
           log.fail('console', e, { phase: 'new-project-result' }),
         );
-      })();
+      })());
     })
     .on(DM.joinGroupSubmit, ({ evt, formValue, value }) => {
       const op = evt.operator?.openId;
@@ -2953,7 +2990,7 @@ export function createOrchestrator(
       // Same fresh-card pattern as DM.newProjectSubmit: a submitted form locks
       // its card_id, so the result goes to a new card while the form stays above
       // as a 留痕. Detached so the click acks immediately (join is slow).
-      void (async () => {
+      void trackTask((async () => {
         let result;
         if (!chatId)
           result = buildJoinGroupFormCard({ chatId: '', name, cwd: cwdIn, error: '缺少群标识，请重新从进群通知里打开绑定卡', backends });
@@ -2980,7 +3017,7 @@ export function createOrchestrator(
         await sendManagedCard(channel, evt.chatId, result).catch((e) =>
           log.fail('console', e, { phase: 'join-group-result' }),
         );
-      })();
+      })());
     })
     .on(DM.projects, ({ evt, value }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
@@ -3093,7 +3130,7 @@ export function createOrchestrator(
     .on(DM.usageShareDo, ({ evt, formValue }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
       const sections = parseShareSections(formValue?.secs);
-      void (async () => {
+      void trackTask((async () => {
         await new Promise((r) => setTimeout(r, CARD_SETTLE_MS));
         try {
           const data = await fetchUsageBundle();
@@ -3108,7 +3145,7 @@ export function createOrchestrator(
             .send(evt.chatId, { markdown: `⚠️ 生成分享卡失败：${reason}` }, { replyTo: evt.messageId })
             .catch(() => undefined);
         }
-      })();
+      })());
     })
     .on(DM.rmConfirm, async ({ evt, value }) => {
       const name = typeof value.n === 'string' ? value.n : undefined;
@@ -3344,7 +3381,7 @@ export function createOrchestrator(
         );
         return;
       }
-      void (async () => {
+      void trackTask((async () => {
         const models = await listModels(backendFor(backendId)).catch(() => [] as ModelInfo[]);
         const resolved = resolveCommentModelFormValue(models, modelId, requestedEffort);
         if (!resolved.ok) {
@@ -3372,7 +3409,7 @@ export function createOrchestrator(
               : `✅ 已保存：${summary}。下一条新评论起生效。`,
           },
         );
-      })().catch((err) => log.fail('console', err, { phase: 'comment-settings-submit' }));
+      })().catch((err) => log.fail('console', err, { phase: 'comment-settings-submit' })));
     })
     // ✍️ 编辑提示词：打开预填当前 master 模板（含 {变量}）的编辑子卡。
     .on(DM.commentEditPrompt, ({ evt }) => {
@@ -3390,11 +3427,11 @@ export function createOrchestrator(
     .on(DM.commentPromptSubmit, ({ evt, formValue }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
       const content = typeof formValue?.prompt === 'string' ? formValue.prompt : '';
-      void saveCommentRulesFromCard(evt, { kind: 'custom', text: content });
+      void trackTask(saveCommentRulesFromCard(evt, { kind: 'custom', text: content }));
     })
     .on(DM.commentResetPrompt, ({ evt }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
-      void saveCommentRulesFromCard(evt, { kind: 'default' });
+      void trackTask(saveCommentRulesFromCard(evt, { kind: 'default' }));
     })
     // In-group settings: toggle 免@ for the project bound to evt.chatId. Admin-gated.
     // 写路径走管理面共享层（admin/ops.ts）——与 DM 卡片 / Web 控制台同一套落盘逻辑。
@@ -3449,7 +3486,7 @@ export function createOrchestrator(
       if (!isAdmin(cfg, evt.operator?.openId ?? '')) return;
       const modelId = selectValue(formValue, 'model');
       const effortRaw = asEffort(selectValue(formValue, 'effort'));
-      void (async () => {
+      void trackTask((async () => {
         const project = await getProjectByChatId(evt.chatId);
         if (!project) return;
         const models = await listModels(backendFor(project.backend));
@@ -3464,7 +3501,7 @@ export function createOrchestrator(
         await sendManagedCard(channel, evt.chatId, buildGroupSettingsCard(fresh)).catch((e) =>
           log.fail('console', e, { phase: 'group-model-default-result' }),
         );
-      })();
+      })());
     })
     // ── 权限管理回调（admins 全局 / 项目响应白名单）。均 dmAdmin 门控（私聊管理台）。
     // 列表卡用 patch 原地重渲染（纯按钮不锁）；加人是 form 提交，结果发**新卡**（旧表单
@@ -3488,7 +3525,7 @@ export function createOrchestrator(
       const manual = String(formValue?.open_id ?? '').trim();
       const id = manual.startsWith('ou_') ? manual : pickOpenId(formValue);
       log.info('console', 'admin-add', { picked: id?.slice(-6) ?? null });
-      void (async () => {
+      void trackTask((async () => {
         if (id) {
           await writePreferences((preferences) => {
             const access: AppAccess = { ...(preferences.access ?? {}) };
@@ -3500,7 +3537,7 @@ export function createOrchestrator(
         const ids = [resolveOwner(cfg), ...(cfg.preferences?.access?.admins ?? [])];
         const next = buildAdminsCard(cfg, await namesWithOperator(evt, ids));
         await sendManagedCard(channel, evt.chatId, next).catch((e) => log.fail('console', e, { phase: 'admin-add-result' }));
-      })();
+      })());
     })
     .on(DM.rmAdmin, ({ evt, value }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
@@ -3543,14 +3580,14 @@ export function createOrchestrator(
       const manual = String(formValue?.open_id ?? '').trim();
       const id = manual.startsWith('ou_') ? manual : pickOpenId(formValue);
       log.info('console', 'allow-add', { project: name, picked: id?.slice(-6) ?? null });
-      void (async () => {
+      void trackTask((async () => {
         // 函数式 updater：在 registry 临界区内基于最新盘值 append 去重，避免并发丢更新。
         if (id) await updateProject(name, (p) => ({ allowedUsers: Array.from(new Set([...(p.allowedUsers ?? []), id])) }));
         const fresh = await getProjectByName(name); // 写后回读，卡片显示与盘上一致
         if (!fresh) return;
         const card = buildAllowlistCard(fresh, await namesWithOperator(evt, fresh.allowedUsers ?? []));
         await sendManagedCard(channel, evt.chatId, card).catch((e) => log.fail('console', e, { phase: 'allow-add-result' }));
-      })();
+      })());
     })
     .on(DM.rmAllowed, ({ evt, value }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
@@ -3624,7 +3661,7 @@ export function createOrchestrator(
       const mode = asTier(selectValue(formValue, 'mode'));
       const guestMode = asTier(selectValue(formValue, 'guestMode'));
       const network = selectValue(formValue, 'network') === 'on';
-      void (async () => {
+      void trackTask((async () => {
         // 共享层（admin/ops.ts）：落盘 + 驱逐活跃会话让新档立即生效；写后回读，
         // 卡片与盘上一致——与 Web 控制台的 setPermissionMode 完全同一条路径。
         const r = await performSetPermissionMode({ projectName: name, mode, guestMode, network, evictLiveSessionsForChat });
@@ -3633,7 +3670,7 @@ export function createOrchestrator(
         await sendManagedCard(channel, evt.chatId, buildProjectSettingsCard(r.project, backendDisplayName(r.project.backend))).catch((e) =>
           log.fail('console', e, { phase: 'permission-result' }),
         );
-      })();
+      })());
     })
     // 🤖 默认模型/强度：打开下拉表单子卡（按项目后端实时列模型；选完提交）。
     .on(DM.modelDefault, ({ evt, value }) => {
@@ -3654,7 +3691,7 @@ export function createOrchestrator(
       const name = typeof value.n === 'string' ? value.n : '';
       const modelId = selectValue(formValue, 'model');
       const effortRaw = asEffort(selectValue(formValue, 'effort'));
-      void (async () => {
+      void trackTask((async () => {
         const p = await getProjectByName(name);
         if (!p) return;
         const models = await listModels(backendFor(p.backend));
@@ -3677,7 +3714,7 @@ export function createOrchestrator(
           evt.chatId,
           buildProjectSettingsCard(fresh, backendDisplayName(fresh.backend), notice),
         ).catch((e) => log.fail('console', e, { phase: 'model-default-result' }));
-      })();
+      })());
     });
   // 〔已移除〕DM.backend / DM.backendSubmit 处理器（项目后端「运行时切换」检测卡 +
   // 单点切换）。产品改为「创建时选定、运行时固定、不支持切换」后整条路径废弃：UI 入口
@@ -3736,7 +3773,7 @@ export function createOrchestrator(
             const old = sessions.get(sessionKey);
             if (old) {
               sessions.delete(sessionKey);
-              void old.close().catch(() => undefined);
+              void trackTask(old.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
             }
             lastUsage.delete(sessionKey); // context gauge reflects the resumed thread on its next turn
             const now = Date.now();
@@ -4123,7 +4160,7 @@ export function createOrchestrator(
         const key = msgId;
         completionReminderRefreshers.set(key, () => {
           const currentPos = q.position();
-          if (currentPos > 0) void stream.updateLiveCard(channel, queueCard({ position: currentPos, cardKey: key }));
+          if (currentPos > 0) void trackTask(stream.updateLiveCard(channel, queueCard({ position: currentPos, cardKey: key })));
         });
       }
     } catch (err) {
@@ -4139,12 +4176,12 @@ export function createOrchestrator(
       active.delete(activeKey);
       if (opts.knownThreadId) sessions.delete(opts.knownThreadId);
       // 还没跑过任何 turn：直接回收进程。持久化记录保留，重发消息经 resume 兜底。
-      void opts.thread.close().catch(() => undefined);
+      void trackTask(opts.thread.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
       if (msgId) {
         runsByCard.delete(msgId);
         runStreams.delete(msgId);
         completionReminderRefreshers.delete(msgId);
-        void stream.updateCard(channel, queueCard({ cancelled: true, dropped: state.queue.length }));
+        void trackTask(stream.updateCard(channel, queueCard({ cancelled: true, dropped: state.queue.length })));
       }
       reaction?.done();
       log.info('card', 'action', { actionId: 'run.stop', queuedCancel: true });
@@ -4213,7 +4250,7 @@ export function createOrchestrator(
       titleApplyRequested = true;
       const key = opts.titleJobKey;
       const bindingKey = topicThreadId;
-      void titleStart.then(async (activated) => {
+      void trackTask(titleStart.then(async (activated) => {
         if (!activated) {
           titleStart = undefined;
           titleApplyRequested = false;
@@ -4225,12 +4262,12 @@ export function createOrchestrator(
           );
         }
         await sessionTitles.apply(key);
-      });
+      }));
     };
     const retrySessionTitleAfterTurn = (): void => {
       if (!opts.titleJobKey || !titleStart) return;
       const key = opts.titleJobKey;
-      void (async () => {
+      void trackTask((async () => {
         if (!(await titleStart)) return;
         // Claude's native session row may appear only after the first result. An
         // idempotent post-turn attempt plus a short delayed retry covers that
@@ -4238,7 +4275,7 @@ export function createOrchestrator(
         await sessionTitles.apply(key);
         await new Promise((resolve) => setTimeout(resolve, 250));
         await sessionTitles.apply(key);
-      })();
+      })());
     };
 
     const persist = async (threadId: string): Promise<void> => {
@@ -4264,7 +4301,7 @@ export function createOrchestrator(
       if (prev && prev !== cardMsgId) {
         const prevState = runCards.get(prev);
         const prevStream = runStreams.get(prev);
-        if (prevState && prevStream) void prevStream.updateCard(channel, buildRunCardPlain(prevState));
+        if (prevState && prevStream) void trackTask(prevStream.updateCard(channel, buildRunCardPlain(prevState)));
         runCards.delete(prev);
         runStreams.delete(prev);
       }
@@ -4370,8 +4407,8 @@ export function createOrchestrator(
             messages.push(voice);
             if (!cardMsgId) return; // The post-create frame picks it up below.
             if (rc.rs.terminal === 'running') stream.streamCoalesced(channel, buildRunCard(rc), ANSWER_EID);
-            else void stream.updateCard(channel, buildRunCard(rc))
-              .catch((err) => log.fail('card', err, { phase: 'voice-steer-reply' }));
+            else void trackTask(stream.updateCard(channel, buildRunCard(rc))
+              .catch((err) => log.fail('card', err, { phase: 'voice-steer-reply' })));
           },
         };
         attachRunImages({
@@ -4400,7 +4437,7 @@ export function createOrchestrator(
           // 这轮。下一条消息经 resolveThread 的 resume 兜底自愈。
           const tid = run.turnId();
           if (tid) void opts.thread.abort(tid).catch(() => undefined);
-          void opts.thread.close().catch(() => undefined);
+          void trackTask(opts.thread.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
           if (topicThreadId) sessions.delete(topicThreadId);
           throw err; // 外层 catch 把错误回给用户
         }
@@ -4412,7 +4449,7 @@ export function createOrchestrator(
         const registerReminder = (messageId: string, target: RunCardState, targetStream: RunCardStream): void => {
           completionReminderRefreshers.set(messageId, () => {
             target.completionReminder = completionReminderView(state);
-            void targetStream.updateLiveCard(channel, buildRunCard(target));
+            void trackTask(targetStream.updateLiveCard(channel, buildRunCard(target)));
           });
         };
         registerReminder(cardMsgId, rc, stream);
@@ -4451,8 +4488,8 @@ export function createOrchestrator(
           } catch (err) {
             log.fail('card', err, { phase: 'steer-card-create' });
             if (event.voice) state.voiceReply?.add(event.voice);
-            void channel.send(opts.chatId, { markdown: '补充消息已送达；新卡片创建失败，本轮继续在原卡片输出。' },
-              { replyTo: event.messageId, replyInThread: !opts.flat }).catch(() => undefined);
+            void trackTask(channel.send(opts.chatId, { markdown: '补充消息已送达；新卡片创建失败，本轮继续在原卡片输出。' },
+              { replyTo: event.messageId, replyInThread: !opts.flat }).catch(() => undefined));
             return;
           }
           const previous = rc;
@@ -4565,9 +4602,9 @@ export function createOrchestrator(
             // Only genuine auto-compaction reaches the turn loop — a manual
             // /compact drains its own events in runCompact, so this is always an
             // auto-compaction → post the special notice (non-blocking).
-            void sendManagedCard(channel, opts.chatId, buildAutoCompactCard(), cardMsgId, !opts.flat).catch((err) =>
+            void trackTask(sendManagedCard(channel, opts.chatId, buildAutoCompactCard(), cardMsgId, !opts.flat).catch((err) =>
               log.fail('card', err, { phase: 'auto-compact-notice' }),
-            );
+            ));
           }
           render.apply(ev);
           rc.rs = segmentSnapshot();
@@ -4620,7 +4657,7 @@ export function createOrchestrator(
         // 同走回收：立即清出缓存，下一条消息直接经 resolveThread 的 resume 兜底
         // 自愈（快路径的 isAlive 守卫是兜底的兜底）。
         if (killed || procDead) {
-          void opts.thread.close().catch(() => undefined);
+          void trackTask(opts.thread.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
           if (topicThreadId) sessions.delete(topicThreadId);
           // 自愈观测：这里是「kill 中途死」唯一的驱逐点且原先静默——进程死在轮中
           // 时 LIVE 缓存在本轮收尾就清掉，下一条消息的 resolveThread 不会再命中
@@ -4714,7 +4751,7 @@ export function createOrchestrator(
           });
         } catch (err) {
           log.fail('card', err, { phase: 'terminal-delivery' });
-          void channel.send(opts.chatId, { markdown: '⚠️ 本轮已结束，但结果同步失败，请检查会话记录。' }, { replyTo: finalMsgId, replyInThread: !opts.flat }).catch(() => undefined);
+          void trackTask(channel.send(opts.chatId, { markdown: '⚠️ 本轮已结束，但结果同步失败，请检查会话记录。' }, { replyTo: finalMsgId, replyInThread: !opts.flat }).catch(() => undefined));
         }
         retrySessionTitleAfterTurn();
         replyTo = finalMsgId;
@@ -4728,13 +4765,13 @@ export function createOrchestrator(
         if (killed || procDead || interrupted) {
           state.intakeCancelled = true;
           if (state.queue.length > 0) {
-            void channel
+            void trackTask(channel
               .send(
                 opts.chatId,
                 { markdown: `⚠️ ${state.queue.length} 条排队消息已丢弃，请重发。` },
                 { replyTo: finalMsgId, replyInThread: !opts.flat },
               )
-              .catch(() => undefined);
+              .catch(() => undefined));
             log.info('intake', 'queue-dropped', { depth: state.queue.length, killed, procDead, interrupted });
           }
           break;
@@ -4756,7 +4793,7 @@ export function createOrchestrator(
       // A stream/card failure can leave an agent turn running. Retire that
       // client before the next message resumes the persisted session.
       if (topicThreadId && sessions.get(topicThreadId) === opts.thread) sessions.delete(topicThreadId);
-      await opts.thread.close().catch(() => undefined);
+      await opts.thread.close().catch(error => log.fail('agent', error, { phase: 'thread-close' }));
       log.fail('intake', err);
       await channel
         .send(opts.chatId, { markdown: runFailureMessage(err, dropped) }, { replyTo: opts.replyTo, replyInThread: !opts.flat })
@@ -4777,7 +4814,7 @@ export function createOrchestrator(
       // ——保活只会把常驻 agent 进程（~172MB/个）泄漏到停机。与 goal 路径
       // 一致直接回收（close 幂等，已死/已关的也无害）。
       if (activeKey.startsWith('pending:')) {
-        void opts.thread.close().catch(() => undefined);
+        void trackTask(opts.thread.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
         log.warn('intake', 'unadopted-thread-closed', { activeKey });
       }
       reaction?.done(); // run ended (complete / ⏹ / timeout / error) → ✅ DONE
@@ -4828,7 +4865,7 @@ export function createOrchestrator(
       // 「已开始执行」短报（同一实体 update，不闪烁），后续 run 卡照常另出。
       runsByCard.delete(slot.queuedCard.msgId);
       runStreams.delete(slot.queuedCard.msgId);
-      void slot.queuedCard.stream.updateCard(channel, buildQueuedCard({ started: true }));
+      void trackTask(slot.queuedCard.stream.updateCard(channel, buildQueuedCard({ started: true })));
     }
 
     let titleStart: Promise<boolean> | undefined;
@@ -4853,7 +4890,7 @@ export function createOrchestrator(
       titleApplyRequested = true;
       const key = opts.titleJobKey;
       const bindingKey = topicThreadId;
-      void titleStart.then(async (activated) => {
+      void trackTask(titleStart.then(async (activated) => {
         if (!activated) {
           titleStart = undefined;
           titleApplyRequested = false;
@@ -4865,17 +4902,17 @@ export function createOrchestrator(
           );
         }
         await sessionTitles.apply(key);
-      });
+      }));
     };
     const retryGoalSessionTitleAfterRun = (): void => {
       if (!opts.titleJobKey || !titleStart) return;
       const key = opts.titleJobKey;
-      void (async () => {
+      void trackTask((async () => {
         if (!(await titleStart)) return;
         await sessionTitles.apply(key);
         await new Promise((resolve) => setTimeout(resolve, 250));
         await sessionTitles.apply(key);
-      })();
+      })());
     };
 
     const persist = async (threadId: string): Promise<void> => {
@@ -4928,7 +4965,7 @@ export function createOrchestrator(
       if (prev && prev !== msgId) {
         const prevState = runCards.get(prev);
         const prevStream = runStreams.get(prev);
-        if (prevState && prevStream) void prevStream.updateCard(channel, buildRunCardPlain(prevState));
+        if (prevState && prevStream) void trackTask(prevStream.updateCard(channel, buildRunCardPlain(prevState)));
         runCards.delete(prev);
         runStreams.delete(prev);
       }
@@ -5073,9 +5110,9 @@ export function createOrchestrator(
           continue;
         }
         if (ev.type === 'context_compacted') {
-          void sendManagedCard(channel, opts.chatId, buildAutoCompactCard(), cur?.cardMsgId ?? undefined, !opts.flat).catch((err) =>
+          void trackTask(sendManagedCard(channel, opts.chatId, buildAutoCompactCard(), cur?.cardMsgId ?? undefined, !opts.flat).catch((err) =>
             log.fail('card', err, { phase: 'auto-compact-notice' }),
-          );
+          ));
           continue;
         }
         if (ev.type === 'turn_started') {
@@ -5169,7 +5206,7 @@ export function createOrchestrator(
       // Recycle the codex process (it may still be mid-goal, and a terminated goal
       // leaves trailing notifications); the persisted record stays so the next
       // message resumes a fresh process.
-      void opts.thread.close().catch(() => undefined);
+      void trackTask(opts.thread.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
       if (topicThreadId) sessions.delete(topicThreadId);
       release();
     }
@@ -5259,7 +5296,9 @@ export function createOrchestrator(
         await withDocLock(sessionKey, async () => {
           const release = await sema.acquire();
           try {
+            if (shuttingDown) return;
             const thread = await resolveDocThread(sessionKey, cwd, instructions, ctx.question);
+            if (shuttingDown) { await thread.close(); return; }
             const rec = await getSession(sessionKey);
             const run = thread.runStreamed({ text: prompt }, { model: rec?.model, effort: rec?.effort });
 
@@ -5281,7 +5320,7 @@ export function createOrchestrator(
               // hangs. sessions.delete stays synchronous + before release() so
               // the next queued same-doc comment always starts fresh.
               if (tid) void thread.abort(tid).catch(() => undefined);
-              void thread.close().catch(() => undefined);
+              void trackTask(thread.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
               sessions.delete(sessionKey);
               commentInstrUsed.delete(sessionKey);
             } else {
@@ -5344,7 +5383,7 @@ export function createOrchestrator(
     const live = sessions.get(sessionKey);
     if (live) {
       if (live.isAlive() && !selectionChanged && commentInstrUsed.get(sessionKey) === instructions) return live;
-      await live.close().catch(() => undefined);
+      await live.close().catch(error => log.fail('agent', error, { phase: 'thread-close' }));
       sessions.delete(sessionKey);
       commentInstrUsed.delete(sessionKey);
     }
@@ -5392,8 +5431,8 @@ export function createOrchestrator(
     },
     onError: error => log.fail('intake', error, { phase: 'pending-groups' }),
   });
-  void pendingGroups.refresh();
-  const pendingGroupTimer = setInterval(() => { void pendingGroups.refresh(); }, 15_000);
+  void trackTask(pendingGroups.refresh());
+  const pendingGroupTimer = setInterval(() => { void trackTask(pendingGroups.refresh()); }, 15_000);
   pendingGroupTimer.unref();
 
   /**
@@ -5418,7 +5457,7 @@ export function createOrchestrator(
         return;
       }
       await pendingGroups.add(evt.chatId, op).catch(error => log.fail('intake', error, { phase: 'pending-group-add' }));
-      void pendingGroups.refresh();
+      void trackTask(pendingGroups.refresh());
       // Best-effort group name (needs im:chat:readonly); the bind card's name is
       // editable, so an empty/failed lookup just means the admin types one.
       const info = await channel.getChatInfo(evt.chatId).catch((err) => {
@@ -5646,31 +5685,45 @@ export function createOrchestrator(
       const thread = sessions.get(key);
       sessions.delete(key);
       sessionTouchedAt.delete(key);
-      if (thread) void thread.close().catch(() => undefined);
+      if (thread) void trackTask(thread.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
     }
     if (idle.length > 0) log.info('agent', 'idle-reap', { reaped: idle.length, live: sessions.size });
   }, SESSION_REAP_SWEEP_MS);
   reaper.unref(); // 不挡进程退出（CLI/测试里 orchestrator 可能不走 shutdown）
 
-  async function shutdown(): Promise<void> {
-    clearInterval(pendingGroupTimer);
+  function shutdown(): Promise<void> {
+    if (shutdownPromise) return shutdownPromise;
     shuttingDown = true;
+    clearInterval(pendingGroupTimer);
     clearInterval(reaper);
+    const cleanup: Promise<unknown>[] = [];
+    const startCleanup = (operation: () => Promise<unknown>): void => {
+      try { cleanup.push(operation()); }
+      catch (error) { shutdownErrors.add(error); }
+    };
+    startCleanup(closeOwnedCodexProcesses);
+    startCleanup(shutdownResidentClients);
     for (const state of active.values()) {
       state.intakeCancelled = true;
       state.queue.length = 0;
-      state.interrupt?.();
+      try { state.interrupt?.(); }
+      catch (error) { shutdownErrors.add(error); }
     }
-    await sessionTitles.shutdown();
-    // adopt 失败的孤儿线程已在 launchRun/launchGoalRun 的 finally 就地 close，
-    // 这里只需回收 LIVE 会话缓存。
+    startCleanup(() => sessionTitles.shutdown());
     const live = [...new Set(sessions.values())];
     sessions.clear();
-    // close() SIGKILLs each app-server child; settle all so one hang/throw
-    // doesn't block reaping the rest.
-    await Promise.allSettled(live.map((t) => t.close()));
-    await Promise.allSettled([...runTasks]);
-    log.info('bridge', 'shutdown', { closed: live.length });
+    for (const thread of live) startCleanup(() => thread.close());
+    const cleanupResults = Promise.allSettled(cleanup);
+    shutdownPromise = (async () => {
+      while (acceptedTasks.size || runTasks.size) {
+        const results = await Promise.allSettled([...acceptedTasks, ...runTasks]);
+        for (const result of results) if (result.status === 'rejected') shutdownErrors.add(result.reason);
+      }
+      for (const result of await cleanupResults) if (result.status === 'rejected') shutdownErrors.add(result.reason);
+      log.info('bridge', 'shutdown', { closed: live.length });
+      if (shutdownErrors.size) throw new AggregateError(shutdownErrors, 'Bridge orchestrator cleanup failed');
+    })();
+    return shutdownPromise;
   }
 
   // Recover only ledger rows created by this feature. v1/v2 sessions migrate
@@ -5681,7 +5734,7 @@ export function createOrchestrator(
   // ~150–300ms），启动是空闲期，提前付掉。成功时只填 backend 内部缓存，后续
   // listModels() 零成本；失败时 backend 返回 STATIC_MODELS 兜底但不写缓存——
   // 首次真实调用会自动重试，fallback 绝不被钉死（listModels 包装层也不缓存）。
-  void backend.listModels().catch((err) => log.fail('agent', err, { phase: 'models-prewarm' }));
+  void trackTask(backend.listModels().catch((err) => log.fail('agent', err, { phase: 'models-prewarm' })));
 
   const settings = createSettingsOwner({ cfg, backendFor, evictLiveSessionsForChat, writePreferences, voiceAction: voice.action, refreshCompletionReminders: refreshCompletionReminderCards,
     cliBridge: cliBridge?.start && cliBridge.shutdown ? { start: cliBridge.start, shutdown: cliBridge.shutdown, isRunning: cliBridge.isRunning } : undefined,
@@ -5693,7 +5746,19 @@ export function createOrchestrator(
     return result;
   };
 
-  return { collaboration, onMessage, onComment, onBotAddedToChat, onBotRemovedFromChat, onReaction, onBotMenu, dispatcher, adminExecute, settings, shutdown };
+  return {
+    collaboration: admit(collaboration),
+    onMessage: admitEvent(onMessage),
+    onComment: admitEvent(onComment),
+    onBotAddedToChat: admitEvent(onBotAddedToChat),
+    onBotRemovedFromChat: admitEvent(onBotRemovedFromChat),
+    onReaction: admitEvent(onReaction),
+    onBotMenu: admitEvent(onBotMenu),
+    dispatcher,
+    adminExecute: admit(adminExecute),
+    settings: { read: admit(settings.read), save: admit(settings.save), models: admit(settings.models), act: admit(settings.act) },
+    shutdown,
+  };
 }
 
 /** Resolve a message's thread_id via raw API (reply response omits it). The

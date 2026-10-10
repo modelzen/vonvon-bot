@@ -158,13 +158,33 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   }
   log.info('ws', 'connected', { appId: app.id, fallbackCwd: opts.fallbackCwd });
 
-  let closed = false;
-  const shutdown = async (): Promise<void> => {
-    if (closed) return;
-    closed = true;
-    await orchestrator.shutdown();
-    await cliBridge.shutdown().catch((err) => log.fail('cli-bridge', err, { phase: 'shutdown' }));
-    await channel.disconnect().catch((err) => log.fail('ws', err, { phase: 'disconnect' }));
+  let closing: Promise<void> | undefined;
+  const shutdown = (): Promise<void> => {
+    if (closing) return closing;
+    const groupsClosing = Promise.allSettled([...groupTasks]);
+    const orchestratorClosing = orchestrator.shutdown();
+    closing = (async () => {
+      const errors: unknown[] = [];
+      try { await orchestratorClosing; }
+      catch (error) { errors.push(error); }
+      const groups = await groupsClosing;
+      for (const result of groups) if (result.status === 'rejected') errors.push(result.reason);
+      try { await cliBridge.shutdown(); }
+      catch (error) { log.fail('cli-bridge', error, { phase: 'shutdown' }); errors.push(error); }
+      try { await channel.disconnect(); }
+      catch (error) { log.fail('ws', error, { phase: 'disconnect' }); errors.push(error); }
+      if (errors.length) throw new AggregateError(errors, 'Bridge cleanup failed');
+    })();
+    return closing;
   };
-  return { channel, collaboration: orchestrator.collaboration, adminGroups: createGroupExecutor(channel), adminExecute: orchestrator.adminExecute, settings: orchestrator.settings, shutdown };
+  const executeGroup = createGroupExecutor(channel);
+  const groupTasks = new Set<Promise<JoinedGroups | Project>>();
+  const adminGroups: BridgeHandle['adminGroups'] = op => {
+    if (closing) return Promise.reject(new Error('Bridge is shutting down'));
+    const task = executeGroup(op);
+    groupTasks.add(task);
+    void task.then(() => groupTasks.delete(task), () => groupTasks.delete(task));
+    return task;
+  };
+  return { channel, collaboration: orchestrator.collaboration, adminGroups, adminExecute: orchestrator.adminExecute, settings: orchestrator.settings, shutdown };
 }

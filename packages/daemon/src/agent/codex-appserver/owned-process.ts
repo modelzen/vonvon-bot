@@ -4,90 +4,159 @@ import { WindowsCodexJob } from './windows-job';
 
 export class CodexProcessCleanupError extends Error {}
 
+const ownedProcesses = new Set<OwnedCodexProcess>();
+let accepting = true;
+let registryClose: Promise<void> | undefined;
+
 export function closeOwnedCodexProcesses(): Promise<void> {
-  throw new Error('Provider registry shutdown is not implemented');
+  if (registryClose) return registryClose;
+  accepting = false;
+  registryClose = Promise.allSettled([...ownedProcesses].map(process => process.close())).then(results => {
+    const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+    if (errors.length) throw new AggregateError(errors, 'Codex process cleanup failed');
+  });
+  return registryClose;
 }
 
 export function unconfirmedCodexPids(): number[] {
-  throw new Error('Provider registry diagnostics are not implemented');
+  return [...ownedProcesses].flatMap(process => process.unconfirmedPid === undefined ? [] : [process.unconfirmedPid]);
 }
 
-type Exit = { kind: 'exit'; code: number | null; signal: NodeJS.Signals | null } | { kind: 'error'; error: Error };
+type Exit = { kind: 'exit'; code: number | null; signal: NodeJS.Signals | null };
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
-const missing = (error: unknown): boolean => error instanceof Error && 'code' in error && error.code === 'ESRCH';
+const hasCode = (error: unknown, code: string): boolean => error instanceof Error && 'code' in error && error.code === code;
 
 export class OwnedCodexProcess {
   readonly child: ChildProcess;
-  private readonly windowsJob = process.platform === 'win32' ? new WindowsCodexJob() : undefined;
+  private readonly pid: number | undefined;
+  private readonly windowsJob: WindowsCodexJob | undefined;
   readonly exited: Promise<Exit>;
+  private directExit: Exit | undefined;
+  private groupGone = false;
+  private unconfirmed = false;
+  private readonly errors = new Map<string, unknown>();
   private readonly closed: Promise<void>;
   private closing: Promise<void> | undefined;
 
   constructor(command: string, args: string[], options: SpawnOptions) {
-    this.child = this.windowsJob
-      ? spawnProcess(this.windowsJob.executable, this.windowsJob.launch(command, args), options)
-      : spawnProcess(command, args, { ...options, detached: true });
+    if (!accepting) throw new Error('Codex process registry is closed');
+    this.windowsJob = process.platform === 'win32' ? new WindowsCodexJob() : undefined;
+    try {
+      this.child = this.windowsJob
+        ? spawnProcess(this.windowsJob.executable, this.windowsJob.launch(command, args), options)
+        : spawnProcess(command, args, { ...options, detached: true });
+    } catch (error) {
+      this.windowsJob?.dispose();
+      throw error;
+    }
+    this.pid = this.child.pid;
     this.closed = new Promise(resolve => this.child.once('close', () => resolve()));
-    this.exited = new Promise(resolve => {
-      this.child.once('exit', (code, signal) => resolve({ kind: 'exit', code, signal }));
-      this.child.once('error', error => resolve({ kind: 'error', error }));
+    this.exited = new Promise((resolve, reject) => {
+      this.child.once('exit', (code, signal) => {
+        this.directExit = { kind: 'exit', code, signal };
+        if (code !== null && code !== 0) this.record('exit', new Error(`Codex child exited with code ${code}`));
+        resolve(this.directExit);
+      });
+      this.child.on('error', error => {
+        if (this.pid === undefined) reject(error);
+        else this.record('process', error);
+      });
     });
+    void this.exited.catch(() => undefined);
+    if (this.pid !== undefined) ownedProcesses.add(this);
+    else this.windowsJob?.dispose();
+  }
+
+  get unconfirmedPid(): number | undefined {
+    return this.unconfirmed ? this.pid : undefined;
   }
 
   close(graceMs = 4000): Promise<void> {
-    this.closing ??= this.stop(graceMs).catch(error => {
-      throw new CodexProcessCleanupError('无法确认 Codex 子进程树已退出', { cause: error });
-    });
+    if (this.closing) return this.closing;
+    this.closing = this.stop(graceMs);
+    void this.closing.then(() => ownedProcesses.delete(this), () => ownedProcesses.delete(this));
     return this.closing;
   }
 
-  private async stop(graceMs: number): Promise<void> {
-    const child = this.child;
-    const pid = child.pid;
-    if (pid === undefined) { this.windowsJob?.dispose(); return; }
-    if (this.windowsJob) {
-      const job = this.windowsJob;
-      job.requestStop();
-      await this.waitForDirectExit(6500);
-      if (!job.verifiedEmpty) throw new Error('Windows job termination could not be verified');
-      job.dispose();
-    } else {
-      const signalGroup = (signal: NodeJS.Signals | 0): boolean => {
-        try { process.kill(-pid, signal); return true; }
-        catch (error) {
-          if (missing(error)) return false;
-          if (signal === 0 && error instanceof Error && 'code' in error && error.code === 'EPERM') return true;
-          throw error;
-        }
-      };
-      const waitForGroup = async (ms: number): Promise<boolean> => {
-        const deadline = Date.now() + ms;
-        while (signalGroup(0)) {
-          if (Date.now() >= deadline) return false;
-          await sleep(25);
-        }
-        return true;
-      };
-      if (signalGroup('SIGTERM') && !await waitForGroup(Math.min(Math.max(0, graceMs), 4000))) {
-        signalGroup('SIGKILL');
-        if (!await waitForGroup(2000)) throw new Error(`Codex process group ${pid} still exists`);
-      }
-      await this.waitForDirectExit(100);
-    }
-    let timer: NodeJS.Timeout | undefined;
-    try {
-      await Promise.race([this.closed, new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error('Codex child pipes did not close')), 500);
-      })]);
-    } finally { clearTimeout(timer); }
+  private record(kind: string, error: unknown): void {
+    if (!this.errors.has(kind)) this.errors.set(kind, error);
   }
 
-  private async waitForDirectExit(ms: number): Promise<void> {
+  private signalGroup(signal: NodeJS.Signals | 0): void {
+    if (this.groupGone || this.pid === undefined) return;
+    try { process.kill(-this.pid, signal); }
+    catch (error) {
+      if (hasCode(error, 'ESRCH')) this.groupGone = true;
+      else if (!(signal === 0 && hasCode(error, 'EPERM'))) this.record(`signal-${signal}`, error);
+    }
+  }
+
+  private deathConfirmed(): boolean {
+    if (this.windowsJob) {
+      if (!this.groupGone) {
+        try { this.groupGone = this.windowsJob.verifiedEmpty; }
+        catch (error) { this.record('job-proof', error); }
+      }
+    } else this.signalGroup(0);
+    return this.directExit !== undefined && this.groupGone;
+  }
+
+  private async waitForDeath(ms: number): Promise<boolean> {
+    const deadline = Date.now() + ms;
+    while (!this.deathConfirmed()) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return false;
+      await sleep(Math.min(25, remaining));
+    }
+    return true;
+  }
+
+  private requestJobStop(): void {
+    try { this.windowsJob?.requestStop(); }
+    catch (error) { this.record('job-stop', error); }
+  }
+
+  private killGroup(): void {
+    this.signalGroup(0);
+    if (this.groupGone) return;
+    this.record('forced', new Error('Codex process group required SIGKILL'));
+    this.signalGroup('SIGKILL');
+  }
+
+  private async stop(graceMs: number): Promise<void> {
+    if (this.pid === undefined) return;
+    if (this.windowsJob) {
+      this.requestJobStop();
+      await this.waitForDeath(6000);
+    } else {
+      this.signalGroup('SIGTERM');
+      if (!await this.waitForDeath(Math.min(Math.max(0, graceMs), 4000))) {
+        this.killGroup();
+        await this.waitForDeath(2000);
+      }
+    }
+    while (!this.deathConfirmed()) {
+      this.unconfirmed = true;
+      if (this.windowsJob) this.requestJobStop();
+      else this.killGroup();
+      await sleep(1000);
+    }
+    this.unconfirmed = false;
     let timer: NodeJS.Timeout | undefined;
     try {
-      await Promise.race([this.exited, new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error('Codex child exit could not be confirmed')), ms);
+      await Promise.race([this.closed, new Promise<void>(resolve => {
+        timer = setTimeout(() => {
+          this.record('pipes', new Error('Codex child pipes did not close'));
+          resolve();
+        }, 500);
       })]);
     } finally { clearTimeout(timer); }
+    try { this.windowsJob?.dispose(); }
+    catch (error) { this.record('job-dispose', error); }
+    if (this.errors.size) {
+      throw new CodexProcessCleanupError('Codex 子进程树已退出，但清理失败', {
+        cause: new AggregateError(this.errors.values(), 'Codex cleanup errors'),
+      });
+    }
   }
 }
