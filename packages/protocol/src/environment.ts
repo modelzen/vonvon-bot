@@ -89,7 +89,7 @@ export const environmentReplySchema = z.discriminatedUnion("kind", [
   z.object({kind:z.literal("operation"), operation:environmentOperationSchema.nullable()}),
   z.object({kind:z.literal("toolInstall"), operation:toolInstallOperationSchema.nullable()}),
   z.object({kind:z.literal("applied"), message:z.string()}),
-  z.object({kind:z.literal("backendInstall"), operationId, id:z.string(), update:z.boolean(), attached:z.boolean(), replay:z.array(backendInstallItemSchema)}),
+  z.object({kind:z.literal("backendInstall"), operationId, id:z.string(), update:z.boolean(), attached:z.boolean(), replay:z.array(backendInstallItemSchema), omittedBytes:z.number().int().nonnegative().optional()}),
   z.object({kind:z.literal("refused"), code:z.string(), message:z.string()}),
 ]);
 export type EnvironmentReply = z.infer<typeof environmentReplySchema>;

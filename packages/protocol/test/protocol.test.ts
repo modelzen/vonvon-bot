@@ -138,3 +138,11 @@ describe("pinned contract extraction", () => {
     expect(seen).toEqual([2]);
   });
 });
+
+it("accepts optional omittedBytes and rejects negative or fractional counts", () => {
+  const reply = {kind:"backendInstall",operationId:randomUUID(),id:"claude-agent",update:false,attached:false,replay:[]};
+  expect(environmentReplySchema.parse(reply)).toEqual(reply);
+  expect(environmentReplySchema.parse({...reply,omittedBytes:123})).toEqual({...reply,omittedBytes:123});
+  expect(environmentReplySchema.safeParse({...reply,omittedBytes:-1}).success).toBe(false);
+  expect(environmentReplySchema.safeParse({...reply,omittedBytes:0.5}).success).toBe(false);
+});

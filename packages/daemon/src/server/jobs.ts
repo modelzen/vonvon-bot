@@ -4,6 +4,7 @@ import { agentIdSchema, jobIdSchema, type BackendInstallItem, type CommandResult
 import type { AdminService } from '../admin/service';
 import { CodexSetupConflict } from '../agent/codex-appserver/setup';
 import { unsupported } from './errors';
+import { BackendOutput, backendErrorSuffix } from './backend-output';
 
 export interface JobPeer {
   readonly id: string;
@@ -22,7 +23,7 @@ interface BackendOperation {
   operationId: string;
   id: string;
   update: boolean;
-  buffer: BackendInstallItem[];
+  output: BackendOutput;
   peers: Set<JobPeer>;
   done: Promise<void>;
   terminal?: BackendInstallItem;
@@ -150,24 +151,26 @@ export class Jobs {
     const key = JSON.stringify([id, update]);
     const existing = this.backends.get(key);
     if (existing) return { operation: existing, attached: true };
-    const operation: BackendOperation = { operationId: randomUUID(), id, update, buffer: [], peers: new Set(), done: Promise.resolve() };
+    const operation: BackendOperation = { operationId: randomUUID(), id, update, output: new BackendOutput(), peers: new Set(), done: Promise.resolve() };
     this.backends.set(key, operation);
     this.backendWork.add(operation);
     const emit = (item: BackendInstallItem): void => {
-      if (item.type === 'log') operation.buffer.push(item);
-      else { operation.terminal = item; if (this.backends.get(key) === operation) this.backends.delete(key); }
+      if (item.type !== 'log') { operation.terminal = item; if (this.backends.get(key) === operation) this.backends.delete(key); }
       for (const peer of operation.peers) if (peer.open) peer.event({ type: 'event', event: 'backendInstall', payload: { operationId: operation.operationId, id, update, item } });
     };
-    operation.done = Promise.resolve().then(() => this.options.service.installBackend(id, chunk => emit({ type: 'log', chunk }), undefined, { update }))
-      .then(result => { emit(result.ok ? { type: 'done' } : { type: 'error', code: result.aborted ? 'aborted' : 'install_failed', message: result.tail }); })
-      .catch(error => { emit({ type: 'error', code: 'unknown', message: error instanceof Error ? error.message : '安装失败。' }); })
+    operation.done = Promise.resolve().then(() => this.options.service.installBackend(id, chunk => operation.output.append(chunk, piece => emit({ type: 'log', chunk: piece })), undefined, { update }))
+      .then(result => { emit(result.ok ? { type: 'done' } : { type: 'error', code: result.aborted ? 'aborted' : 'install_failed', message: backendErrorSuffix(result.tail) }); })
+      .catch(error => { emit({ type: 'error', code: 'unknown', message: backendErrorSuffix(error instanceof Error ? error.message : '安装失败。') }); })
       .finally(() => { if (this.backends.get(key) === operation) this.backends.delete(key); this.backendWork.delete(operation); operation.peers.clear(); this.options.toolsSettled(); });
     return { operation, attached: false };
   }
   attachBackend(admission: BackendAdmission, peer: JobPeer): Extract<EnvironmentReply, { kind: 'backendInstall' }> {
     const { operation, attached } = admission;
+    const { text, omittedBytes } = operation.output.snapshot();
+    const replay: BackendInstallItem[] = text ? [{ type: 'log', chunk: text }] : [];
+    if (operation.terminal) replay.push(operation.terminal);
     if (peer.open && !operation.terminal) operation.peers.add(peer);
-    return { kind: 'backendInstall', operationId: operation.operationId, id: operation.id, update: operation.update, attached, replay: [...operation.buffer, ...(operation.terminal ? [operation.terminal] : [])] };
+    return { kind: 'backendInstall', operationId: operation.operationId, id: operation.id, update: operation.update, attached, replay, omittedBytes };
   }
   detach(peer: JobPeer): void {
     for (const entry of this.unsettled) if (entry.owner === peer.id) this.cancelRegistration(entry);
