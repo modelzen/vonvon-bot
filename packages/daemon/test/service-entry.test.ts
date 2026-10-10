@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildPlist } from '../src/service/launchd';
 import { buildUnit } from '../src/service/systemd';
@@ -44,5 +45,27 @@ describe('OS service foreground entry', () => {
     expect(line).toBeDefined();
     const args = [...line!.matchAll(/"([^"]+)"|\b(daemon|run)\b/g)].slice(0, 4).map((match) => match[1] ?? match[2]!);
     assertPackagedCommand(args);
+  });
+});
+
+
+describe('Windows relaunch helper entry', () => {
+  it('dispatches the captured request path without taking a data lease and stays hidden', () => {
+    const root = mkdtempSync(join(tmpdir(), 'vonvon-relaunch-cli-'));
+    try {
+      const data = join(root, 'data');
+      const requestDir = join(root, 'request');
+      mkdirSync(data); mkdirSync(requestDir);
+      writeFileSync(join(data, '.access'), 'admission must not be entered');
+      const env = { ...process.env, HOME: root, USERPROFILE: root, VONVON_HOME: data };
+      const result = spawnSync(process.execPath, [bin, '__win-relaunch', join(requestDir, 'missing.json')], { env, encoding: 'utf8', timeout: 10_000 });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(join(requestDir, 'service.err.log'), 'utf8')).toContain('no relaunch request to claim');
+      expect(readFileSync(join(data, '.access'), 'utf8')).toBe('admission must not be entered');
+      const help = spawnSync(process.execPath, [bin, '--help'], { env, encoding: 'utf8', timeout: 10_000 });
+      expect(help.status).toBe(0);
+      expect(help.stdout).not.toContain('__win-relaunch');
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

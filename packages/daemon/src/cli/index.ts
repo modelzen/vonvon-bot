@@ -10,7 +10,7 @@ let lease: DataLease | undefined;
 let control: ShutdownControl | undefined;
 program.hook('preAction', async (_command, action) => {
   if (action.name() === 'run') control = observeShutdown(Boolean(action.opts().parentControl));
-  if (action.name() === 'status' || action.name() === 'logs' || action.name() === '__restart-after-exit') return;
+  if (action.name() === 'status' || action.name() === 'logs' || action.name() === '__restart-after-exit' || action.name() === '__win-relaunch') return;
   await mkdir(paths.appDir, { recursive: true, mode: 0o700 });
   lease = await enterDataAccess(paths.appDir);
 });
@@ -48,6 +48,9 @@ service.command('install').description('Install and start the OS service').actio
 });
 service.command('uninstall').description('Stop and remove the OS service').action(async () => {
   await (await import('./commands/service')).runServiceCommand('uninstall');
+});
+program.command('__win-relaunch <requestPath>', { hidden: true }).action(async (requestPath: string) => {
+  await (await import('../service/win-startup')).runWinRelaunch({ requestPath });
 });
 program.command('__restart-after-exit <port> <oldPid>', { hidden: true }).action(async (port: string, oldPid: string) => {
   await (await import('../host/restart')).runSamePortRestartHelper({ port: Number(port), oldPid: Number(oldPid) });
