@@ -7,6 +7,7 @@ import type { Jobs, JobPeer } from '../jobs';
 import type { RpcOutcome } from '../rpc';
 import type { SnapshotStore } from '../snapshot';
 import { diagnosis } from './admin';
+import { requireRunningAgent } from './ownership';
 
 export async function commandRpc(options: { service: AdminService; jobs: Jobs; peer: JobPeer; directory: DirectoryBrowser; snapshots: SnapshotStore; control?: ShutdownControl; port: number }, request: Command): Promise<RpcOutcome<CommandResult>> {
   const { service, jobs, peer, directory, snapshots, control, port } = options;
@@ -25,15 +26,18 @@ export async function commandRpc(options: { service: AdminService; jobs: Jobs; p
       return { kind: 'mutation', reply: () => value };
     }
     case 'listPendingGroups': {
+      await requireRunningAgent(service, request.agentId);
       if (!service.pendingGroups) return unsupported();
       return { kind: 'read', value: { kind: 'pendingGroups', ...pendingGroupsSchema.parse(await service.pendingGroups(request.agentId)) } };
     }
     case 'listJoinedGroups': {
+      await requireRunningAgent(service, request.agentId);
       if (!service.joinedGroups) return unsupported();
       const result = await service.joinedGroups(request.agentId, request.cursor);
       return { kind: 'read', value: { kind: 'groups', groups: result.groups.map(group => ({ id: groupIdSchema.parse(group.chatId), name: group.name, bound: group.bound })), ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}) } };
     }
     case 'bindGroup': {
+      await requireRunningAgent(service, request.agentId);
       if (!service.bindGroup) return unsupported();
       await service.bindGroup(request.agentId, { chatId: request.groupId, projectName: request.projectName, directory: await directory.resolve(request.folderToken), backend: request.tool === 'codex' ? 'codex-appserver' : 'claude-agent', kind: request.conversation === 'threads' ? 'multi' : 'single' });
       return applied;
