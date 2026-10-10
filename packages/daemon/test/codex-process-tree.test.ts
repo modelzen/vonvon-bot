@@ -2,6 +2,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { runInNewContext } from 'node:vm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CodexProcessCleanupError, OwnedCodexProcess } from '../src/agent/codex-appserver/owned-process';
 import { AppServerClient } from '../src/agent/codex-appserver/app-server-client';
@@ -164,6 +165,63 @@ describe('owned Codex process trees', () => {
     expect(originalAlive(target)).toBe(false);
     expectedCleanupErrors.add(result);
   }, 30_000);
+});
+
+describe('Windows Job stop exit arbitration', () => {
+  it.each([
+    { name: 'owner termination', terminated: true, code: 0xe0560001, active: true, expected: 0 },
+    { name: 'natural failure wins accepted termination', terminated: true, code: 7, active: true, expected: 7 },
+    { name: 'natural 254 wins accepted termination', terminated: true, code: 254, active: true, expected: 254 },
+    { name: 'natural success leaves descendants', terminated: true, code: 0, active: true, expected: 252 },
+    { name: 'natural success empties job', terminated: true, code: 0, active: false, expected: 0 },
+    { name: 'pending natural failure', terminated: false, code: 7, active: true, expected: 7 },
+    { name: 'pending natural 254', terminated: false, code: 254, active: true, expected: 254 },
+    { name: 'pending success leaves descendants', terminated: false, code: 0, active: true, expected: 252 },
+    { name: 'termination failure remains an error', terminated: false, code: 7, active: true, error: 6, expected: new Error('6') },
+    { name: 'unconfirmed exit remains an error', terminated: false, code: 7, active: true, wait: 258, expected: new Error('Native check failed') },
+    { name: 'unowned marker is not success', terminated: false, code: 0xe0560001, active: true, expected: 0xe0560001 | 0 },
+  ])('$name', outcome => {
+    const job = new WindowsCodexJob();
+    try {
+      const launch = job.launch(process.execPath, []);
+      const script = Buffer.from(launch[launch.length - 1]!, 'base64').toString('utf16le');
+      const branch = script.match(/const uint stopMarker=[\s\S]*?return unchecked\(\(int\)code\);/)?.[0];
+      expect(branch).toBeDefined();
+      if (!branch) throw new Error('Missing embedded Windows stop branch');
+      const executable = branch
+        .replace(/\b(?:const uint|bool|int) /g, 'let ')
+        .replace('GetExitCodeProcess(child.process,out code)', '(code=GetExitCodeProcess(child.process),true)')
+        .replace('unchecked((int)code)', '(code | 0)');
+      const events: string[] = [];
+      const context = {
+        child: { process: 'owned-process' }, job: 'owned-job', proof: 'proof', name: job.name, code: 0,
+        TerminateProcess: (handle: string, marker: number) => {
+          expect(handle).toBe('owned-process'); expect(marker).toBe(0xe0560001);
+          events.push('terminate-process'); return outcome.terminated;
+        },
+        Marshal: { GetLastWin32Error: () => 'error' in outcome ? outcome.error : 5 },
+        WaitForSingleObject: (handle: string, timeout: number) => {
+          expect(handle).toBe('owned-process'); events.push(`wait-${timeout}`);
+          return timeout === 0 ? 258 : ('wait' in outcome ? outcome.wait : 0);
+        },
+        GetExitCodeProcess: () => { events.push('exit-code'); return outcome.code; },
+        Empty: () => !outcome.active,
+        TerminateJobObject: (handle: string) => { expect(handle).toBe('owned-job'); events.push('terminate-job'); return true; },
+        Drain: () => { events.push('drain'); },
+        File: { WriteAllText: (path: string, value: string) => { expect(path).toBe('proof'); expect(value).toBe(job.name); events.push('proof'); } },
+        Check: (ok: boolean) => { if (!ok) throw new Error('Native check failed'); },
+        Win32Exception: Error, Exception: Error,
+      };
+      const run = () => runInNewContext(`(function(){${executable}})()`, context);
+      if (outcome.expected instanceof Error) {
+        expect(run).toThrow(outcome.expected.message);
+        expect(events).not.toContain('proof');
+        return;
+      }
+      expect(run()).toBe(outcome.expected);
+      expect(events).toEqual(['terminate-process', 'wait-1000', 'exit-code', 'terminate-job', 'drain', 'proof']);
+    } finally { job.dispose(); }
+  });
 });
 
 describe.skipIf(process.platform !== 'win32')('Windows Job shutdown outcomes', () => {

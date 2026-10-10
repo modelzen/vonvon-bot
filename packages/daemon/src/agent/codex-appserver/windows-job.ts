@@ -72,15 +72,14 @@ public static class CodexJob {
           bool terminated=TerminateProcess(child.process,stopMarker);
           if(!terminated) {
             int error=Marshal.GetLastWin32Error();
-            if(error!=5 || WaitForSingleObject(child.process,0)!=0) throw new Win32Exception(error);
+            if(error!=5) throw new Win32Exception(error);
           }
           // Observe the wrapper before Job termination can replace its exit code.
           Check(WaitForSingleObject(child.process,1000)==0);
           Check(GetExitCodeProcess(child.process,out code));
-          if(terminated) {
-            if(code!=stopMarker) throw new Exception("Unexpected terminated wrapper exit code");
-            code=0;
-          } else if(code==0 && !Empty(job)) code=252;
+          // A concurrent natural exit can retain its code even when termination succeeds.
+          if(terminated && code==stopMarker) code=0;
+          else if(code==0 && !Empty(job)) code=252;
           Check(TerminateJobObject(job,1)); Drain(job);
           File.WriteAllText(proof,name);
           return unchecked((int)code);
