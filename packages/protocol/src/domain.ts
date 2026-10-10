@@ -134,11 +134,11 @@ const jobBase = { id: jobIdSchema, type: z.enum(["registerAgent", "installCodex"
 export const jobSchema = z.discriminatedUnion("phase", [
   z.object({ ...jobBase, phase: z.literal("running"), message: z.string() }),
   z.object({ ...jobBase, phase: z.literal("unresolved"), message: z.string() }),
-  z.object({ ...jobBase, phase: z.literal("qr"), image: z.string(), url: z.string(), expiresAt: z.number() }),
-  z.object({ ...jobBase, phase: z.literal("authorizing"), userCode: z.string() }),
+  z.object({ ...jobBase, phase: z.literal("qr"), image: z.string(), url: z.string(), expiresAt: z.number(), status: z.string().optional() }),
+  z.object({ ...jobBase, phase: z.literal("authorizing"), userCode: z.string(), verificationUrl: z.string().optional() }),
   z.object({ ...jobBase, phase: z.literal("activating"), message: z.string() }),
-  z.object({ ...jobBase, phase: z.literal("succeeded"), message: z.string() }),
-  z.object({ ...jobBase, phase: z.literal("failed"), message: z.string() }),
+  z.object({ ...jobBase, phase: z.literal("succeeded"), message: z.string(), agentId: agentIdSchema.optional() }),
+  z.object({ ...jobBase, phase: z.literal("failed"), message: z.string(), code: z.string().optional() }),
   z.object({ ...jobBase, phase: z.literal("cancelled"), message: z.string() }),
 ]);
 export type Job = z.infer<typeof jobSchema>;
