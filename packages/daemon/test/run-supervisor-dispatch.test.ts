@@ -7,7 +7,7 @@ import { runRun } from '../src/cli/commands/run';
 vi.mock('../src/config/bots', async (original) => ({ ...await original<typeof import('../src/config/bots')>(), ensureRegistry: vi.fn() }));
 vi.mock('../src/bot/supervisor', () => ({ runSupervisor: vi.fn(async () => {}) }));
 vi.mock('../src/bot/onboarding', () => ({ ensureOnboarded: vi.fn(async () => null), announceEventsWhenLive() {} }));
-const control = { requested: false, waitForRequest: async () => {}, dispose() {} };
+const control = { requested: false, waitForRequest: async () => {}, requestStop() {}, requestRestart(_port: number) {}, dispose() {} };
 const originalTty = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
 afterEach(() => {
   if (originalTty) Object.defineProperty(process.stdout, 'isTTY', originalTty);

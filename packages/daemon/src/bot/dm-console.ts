@@ -4,7 +4,6 @@ import { buildDmMenuCard } from '../card/dm-cards';
 import { sendManagedCard } from '../card/managed';
 import { log, withTrace } from '../core/logger';
 import { bridgeVersion } from '../core/version';
-import { webConsoleUrl } from '../web/discovery';
 import { getDesktopRelease } from '../service/desktop-release';
 
 /**
@@ -26,7 +25,7 @@ export async function handleDmConsole(channel: LarkChannel, cfg: AppConfig, msg:
     // (raw-JSON cards can't be patched — they flash and revert).
     const desktopRelease = await getDesktopRelease();
     try {
-      const { messageId } = await sendManagedCard(channel, msg.chatId, buildDmMenuCard({ webConsoleUrl: webConsoleUrl(), version: bridgeVersion(), desktopRelease }), msg.messageId);
+      const { messageId } = await sendManagedCard(channel, msg.chatId, buildDmMenuCard({ version: bridgeVersion(), desktopRelease }), msg.messageId);
       log.info('console', 'menu-sent', { messageId });
     } catch (error) {
       log.fail('console', error, { cmd: 'menu-send' });

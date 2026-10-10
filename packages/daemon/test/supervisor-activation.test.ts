@@ -48,7 +48,7 @@ async function start(ids: string[]) {
     return child;
   });
   const pending = new Promise<void>((resolve) => { requestShutdown = resolve; });
-  supervisor = runSupervisor(ids.map(bot), { control: { requested: false, waitForRequest: () => pending, dispose() {} } });
+  supervisor = runSupervisor(ids.map(bot), { control: { requested: false, waitForRequest: () => pending, requestStop() {}, requestRestart(_port: number) {}, dispose() {} } });
   await vi.waitFor(() => expect(captured.deps).toBeDefined());
   const deps = (() : AdminServiceDeps | undefined => captured.deps)();
   if (!deps?.applyBotActivation || !deps.liveStatus || !deps.executeGroups) throw new Error('Runtime activation unavailable');
@@ -117,7 +117,7 @@ it('does not claim to stop a bot running in an independent process', async () =>
 it('fails an empty host when its only usable interface cannot start', async () => {
   vi.mocked(mountWebConsole).mockResolvedValueOnce(undefined);
   supervisor = undefined;
-  await expect(runSupervisor([], { control: { requested: false, waitForRequest: () => new Promise(() => {}), dispose() {} } })).rejects.toThrow('无法进入引导');
+  await expect(runSupervisor([], { control: { requested: false, waitForRequest: () => new Promise(() => {}), requestStop() {}, requestRestart(_port: number) {}, dispose() {} } })).rejects.toThrow('无法进入引导');
 });
 
 it('reexecutes the foreground CLI and does not expose inherited service callbacks', async () => {

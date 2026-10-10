@@ -10,7 +10,7 @@ let lease: DataLease | undefined;
 let control: ShutdownControl | undefined;
 program.hook('preAction', async (_command, action) => {
   if (action.name() === 'run') control = observeShutdown();
-  if (action.name() === 'status' || action.name() === 'logs') return;
+  if (action.name() === 'status' || action.name() === 'logs' || action.name() === '__restart-after-exit') return;
   await mkdir(paths.appDir, { recursive: true, mode: 0o700 });
   lease = await enterDataAccess(paths.appDir);
 });
@@ -41,6 +41,9 @@ daemon.command('logs').description('Read recent daemon logs').option('--tail <li
     if (!Number.isInteger(options.tail) || options.tail < 1) throw new Error('Invalid tail count.');
     await (await import('./commands/daemon')).runLogs(options.tail);
   });
+program.command('__restart-after-exit <port> <oldPid>', { hidden: true }).action(async (port: string, oldPid: string) => {
+  await (await import('../host/restart')).runSamePortRestartHelper({ port: Number(port), oldPid: Number(oldPid) });
+});
 
 // Internal plumbing — the `secrets-getter` wrapper execs `secrets get` to
 // resolve the App Secret from the keystore. Users never call it, so hide it

@@ -174,7 +174,6 @@ import {
 } from '../card/usage-cards';
 import { serviceStdoutPath, serviceStderrPath } from '../service/common';
 import { bridgeVersion } from '../core/version';
-import { webConsoleUrl } from '../web/discovery';
 import { getDesktopRelease } from '../service/desktop-release';
 import { runtimeDistribution } from '../service/distribution';
 import { paths } from '../config/paths';
@@ -2787,7 +2786,6 @@ export function createOrchestrator(
   // new-project form isn't locked until it's submitted, so 返回 always lands on
   // a card we can update in place — no recall, no fresh entity needed.
   const renderDmMenuCard = async (): Promise<object> => buildDmMenuCard({
-      webConsoleUrl: webConsoleUrl(),
       version: bridgeVersion(),
       desktopRelease: await getDesktopRelease(),
     });
