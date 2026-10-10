@@ -19,7 +19,7 @@ import { environmentRpc } from './rpc/environment';
 import { machineRpc } from './rpc/machine';
 import { settingsRpc } from './rpc/settings';
 import { readLocalIdentity } from './local-credential';
-import { RpcError } from './errors';
+import { getRpcErrorCode } from './errors';
 
 export async function startApi(options: { service: AdminService; port?: number; control?: ShutdownControl }): Promise<{ port: number; listen: string; invalidate: () => void; close: () => Promise<void> }> {
   await mkdir(paths.appDir, { recursive: true });
@@ -62,7 +62,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
     try { await dispatch(peer, request); }
     catch (error) {
       if (!snapshots) throw error;
-      await snapshots.rebuild(() => peer.send({ type: 'error', id: request.id, code: error instanceof RpcError ? error.code : 'operation_failed', message: error instanceof Error ? error.message : '操作失败。' }));
+      await snapshots.rebuild(() => peer.send({ type: 'error', id: request.id, code: getRpcErrorCode(error), message: error instanceof Error ? error.message : '操作失败。' }));
     }
   }
   const sockets = createSocketServer({ server, credential, info: { type: 'serverInfo', machineId, version: bridgeVersion(), protocolVersion: PROTOCOL_VERSION }, request, detached: peer => { jobs.detach(peer); logs.detach(peer); } });

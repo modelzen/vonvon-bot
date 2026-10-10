@@ -2,7 +2,7 @@ import { randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Server } from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
 import { helloSchema, requestSchema, type ErrorEnvelope, type Event, type Request, type Response, type ServerInfo } from '@vonvon/protocol';
-import { RpcError } from './errors';
+import { getRpcErrorCode } from './errors';
 import type { JobPeer } from './jobs';
 
 export interface Peer extends JobPeer {
@@ -71,7 +71,7 @@ export function createSocketServer(options: { server: Server; credential: string
       const parsed = requestSchema.safeParse(raw);
       if (!parsed.success) { peer.send({ type: 'error', id, code: 'invalid_request', message: '请求参数无效。' }); return; }
       void options.request(peer, parsed.data).catch(error => {
-        peer.send({ type: 'error', id, code: error instanceof RpcError ? error.code : 'operation_failed', message: error instanceof Error ? error.message : '操作失败。' });
+        peer.send({ type: 'error', id, code: getRpcErrorCode(error), message: error instanceof Error ? error.message : '操作失败。' });
       });
     });
   });
