@@ -20,7 +20,7 @@ function callbackFixture(orphan = false) {
   const code = [
     between(handler, '  const settleUpdate = (', '  function pruneResumePending'),
     between(handler, '  const patch = (', '  async function renderForegroundUpdate'),
-    'router' + between(handler, '    .on(DM.restart,', '    // handler 立即返回让 SDK ack') + ';',
+    'router' + between(handler, '    .on(DM.restart,', '    .on(DM.usage,') + ';',
   ].join('\n');
   new Function('router', 'DM', 'dmAdmin', 'channel', 'updateManagedCard', 'sendManagedCard', 'log', 'CARD_SETTLE_MS', 'buildForegroundRestartCard', 'renderForegroundUpdate', transpile(code))(
     router, DM, (id: string) => id === 'owner', {}, update, send, { info() {}, fail() {} }, 500,
