@@ -414,6 +414,7 @@ it('real orchestrator shutdown caches one Promise and propagates provider failur
   expect.soft(result.status).toBe('pending');
   fixture.die();
   await vi.advanceTimersByTimeAsync(1000);
+  await expect(first).rejects.toThrow('Bridge orchestrator cleanup failed');
   expect.soft(result.status).toBe('rejected');
   expect(o.shutdown()).toBe(first);
 });
@@ -422,11 +423,13 @@ it('idle-reaped provider remains owned after removal from the real orchestrator 
   const { o, run, fixture } = await activeOrchestrator();
   await vi.advanceTimersByTimeAsync(50 * 60000);
   expect(run.t.close).toHaveBeenCalled();
-  const result = observe(o.shutdown());
+  const closing = o.shutdown();
+  const result = observe(closing);
   await vi.advanceTimersByTimeAsync(120000);
   expect.soft(result.status).toBe('pending');
   fixture.die();
   await vi.advanceTimersByTimeAsync(1000);
+  await expect(closing).rejects.toThrow('Bridge orchestrator cleanup failed');
   expect(result.status).toBe('rejected');
 });
 
@@ -453,6 +456,7 @@ it('real BridgeHandle shares shutdown and retains provider failure through trans
   expect.soft(fake.channel.disconnect).not.toHaveBeenCalled();
   fixture.die();
   await vi.advanceTimersByTimeAsync(1000);
+  await expect(closing).rejects.toThrow('Bridge cleanup failed');
   expect.soft(result.status).toBe('rejected');
   expect.soft(fake.channel.disconnect).toHaveBeenCalledOnce();
   expect(bridge.shutdown()).toBe(closing);
@@ -467,7 +471,8 @@ it('real orchestrator shutdown awaits an accepted message continuation before it
   const accepted = o.onMessage(message('/help'));
   observe(accepted);
   await vi.advanceTimersByTimeAsync(0);
-  const closing = observe(o.shutdown());
+  const shutdown = o.shutdown();
+  const closing = observe(shutdown);
   await vi.advanceTimersByTimeAsync(0);
   expect.soft(closing.status).toBe('pending');
   project.resolve({ name: 'test', chatId: 'chat', cwd: '/test', groupMode: 'single' });
@@ -477,6 +482,7 @@ it('real orchestrator shutdown awaits an accepted message continuation before it
   sent.resolve({});
   await accepted;
   await vi.advanceTimersByTimeAsync(0);
+  await expect(shutdown).resolves.toBeUndefined();
   expect(closing.status).toBe('fulfilled');
 });
 
@@ -495,7 +501,8 @@ it.each(['clean', 'failed'] as const)('startup failure waits for the accepted ru
     throw startupError;
   });
   const { startBridge } = await import('../src/bot/bridge');
-  const starting = observe(startBridge({ cfg, appSecret: 'fixture', fallbackCwd: '/test' }));
+  const startup = startBridge({ cfg, appSecret: 'fixture', fallbackCwd: '/test' });
+  const starting = observe(startup);
   await vi.advanceTimersByTimeAsync(0);
   expect(run.consumed).toHaveLength(1);
   expect(transport.spawn).toHaveBeenCalledOnce();
@@ -528,6 +535,7 @@ it.each(['clean', 'failed'] as const)('startup failure waits for the accepted ru
     fixture.die(17);
   }
   await vi.advanceTimersByTimeAsync(1000);
+  await expect(startup).rejects.toThrow(cleanup === 'clean' ? startupError : 'Bridge startup and cleanup failed');
   expect(starting.status).toBe('rejected');
   expect(ownerModule.unconfirmedCodexPids()).toEqual([]);
   expect(fake.channel.disconnect).toHaveBeenCalledOnce();
