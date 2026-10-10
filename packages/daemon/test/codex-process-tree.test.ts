@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,6 +9,8 @@ import { runSetupChild } from '../src/agent/codex-appserver/managed-install';
 import { writeNodeExecutable } from './helpers/node-executable';
 
 const roots: string[] = [];
+const cleanups: Array<() => Promise<void>> = [];
+const expectedCleanupErrors = new Set<unknown>();
 const owners = vi.hoisted(() => new Set<{ close(): Promise<void> }>());
 vi.mock('../src/agent/codex-appserver/owned-process', async original => {
   const actual = await original<typeof import('../src/agent/codex-appserver/owned-process')>();
@@ -20,10 +23,46 @@ vi.mock('../src/agent/codex-appserver/owned-process', async original => {
 });
 const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+type FixtureProcess = { pid: number; started: string | undefined };
+function windowsStartTime(pid: number): string | undefined {
+  const script = `
+    $ErrorActionPreference='Stop'
+    try { $target=Get-Process -Id ${pid} -ErrorAction Stop }
+    catch {
+      if ($_.FullyQualifiedErrorId -like 'NoProcessFoundForGivenId*') { exit 0 }
+      throw
+    }
+    try {
+      $null=$target.Handle
+      $started=$target.StartTime.ToUniversalTime().Ticks
+      if (-not $target.HasExited) { [Console]::Out.WriteLine($started.ToString()) }
+    } finally { $target.Dispose() }
+  `;
+  const value = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', timeout: 5000 }).trim();
+  if (value && !/^\d+$/.test(value)) throw new Error('Invalid Windows fixture process creation time');
+  return value || undefined;
+}
+function captureProcess(pid: number): FixtureProcess {
+  const started = process.platform === 'win32' ? windowsStartTime(pid) : undefined;
+  if (process.platform === 'win32') expect(started).toBeDefined();
+  return { pid, started };
+}
+function originalAlive(target: FixtureProcess): boolean {
+  if (!alive(target.pid)) return false;
+  return process.platform !== 'win32' || windowsStartTime(target.pid) === target.started;
+}
 afterEach(async () => {
-  await Promise.allSettled([...owners].map(owner => owner.close()));
+  const results = await Promise.allSettled([...cleanups.splice(0).map(cleanup => cleanup()), ...[...owners].map(owner => owner.close())]);
   owners.clear();
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  const failures: unknown[] = [];
+  for (const result of results) {
+    if (result.status === 'rejected' && !expectedCleanupErrors.has(result.reason)) failures.push(result.reason);
+  }
+  expectedCleanupErrors.clear();
+  for (const root of roots.splice(0)) {
+    try { rmSync(root, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+  }
+  if (failures.length) throw new AggregateError(failures, 'Fixture cleanup failed');
 });
 function fixture(inherit: boolean) {
   const root = mkdtempSync(join(tmpdir(), 'codex-tree-')); roots.push(root);
@@ -37,9 +76,9 @@ function fixture(inherit: boolean) {
   const start = `require('node:child_process').spawn(process.execPath,[${JSON.stringify(grandchild)}],{stdio:${inherit ? "['ignore',process.stdout,process.stderr]" : "'ignore'"}});`;
   return { root, ready, start };
 }
-async function descendant(ready: string): Promise<number> {
-  await vi.waitFor(() => expect(existsSync(ready)).toBe(true));
-  return Number(readFileSync(ready, 'utf8'));
+async function descendant(ready: string): Promise<FixtureProcess> {
+  await vi.waitFor(() => expect(existsSync(ready)).toBe(true), { timeout: 10_000 });
+  return captureProcess(Number(readFileSync(ready, 'utf8')));
 }
 
 describe('owned Codex process trees', () => {
@@ -77,11 +116,14 @@ describe('owned Codex process trees', () => {
     writeFileSync(parent, `${f.start}setInterval(()=>{},100);`);
     const abort = new AbortController();
     const running = runSetupChild(process.execPath, [parent], { cwd: f.root, signal: abort.signal }).catch(error => error);
-    const pid = await descendant(f.ready);
+    cleanups.push(async () => { abort.abort(); await running; });
+    const target = await descendant(f.ready);
     abort.abort();
-    await running;
-    expect(alive(pid)).toBe(false);
-  }, 10_000);
+    const result = await running;
+    expect(result).toBeInstanceOf(CodexProcessCleanupError);
+    expect(originalAlive(target)).toBe(false);
+    expectedCleanupErrors.add(result);
+  }, 20_000);
 
   it.each([false, true])('close reaps inherited pipes after leader already exited=%s', async earlyExit => {
     const f = fixture(true);
@@ -97,15 +139,17 @@ describe('owned Codex process trees', () => {
     `);
     const client = new AppServerClient({ bin: server.bin, cwd: f.root, initializeTimeoutMs: 10_000 });
     await client.connect();
-    const pid = await descendant(f.ready);
+    const target = await descendant(f.ready);
     const leader = Number(readFileSync(leaderFile, 'utf8'));
     if (earlyExit) {
+      const leaderProcess = captureProcess(leader);
       client.notify('exit');
-      await vi.waitFor(() => expect(alive(leader)).toBe(false));
+      await vi.waitFor(() => expect(originalAlive(leaderProcess)).toBe(false), { timeout: 5000 });
       if (process.platform !== 'win32') expect(client.exited).toBe(true);
     }
     const result = await Promise.race([client.close(50).catch(error => error), delay(8000).then(() => 'timeout')]);
     expect(result).toBeInstanceOf(CodexProcessCleanupError);
-    expect(alive(pid)).toBe(false);
-  }, 20_000);
+    expect(originalAlive(target)).toBe(false);
+    expectedCleanupErrors.add(result);
+  }, 30_000);
 });

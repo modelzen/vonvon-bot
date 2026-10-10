@@ -62,6 +62,36 @@ jobs:
             echo 'full: suite passed.' >> "$GITHUB_STEP_SUMMARY"
           fi
 
+  windows:
+    name: Windows checks
+    needs: linux
+    if: needs.linux.outputs.scope == 'full'
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run lint
+      - name: Record tested platform
+        if: always()
+        shell: pwsh
+        run: |
+          "Source: $(git rev-parse HEAD)" >> $env:GITHUB_STEP_SUMMARY
+          "Runner: $env:RUNNER_NAME" >> $env:GITHUB_STEP_SUMMARY
+          "Windows: $([System.Environment]::OSVersion.VersionString)" >> $env:GITHUB_STEP_SUMMARY
+          "Architecture: $env:PROCESSOR_ARCHITECTURE" >> $env:GITHUB_STEP_SUMMARY
+          "Node: $(node --version)" >> $env:GITHUB_STEP_SUMMARY
+
   macos:
     name: macOS checks
     needs: linux
