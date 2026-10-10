@@ -9,6 +9,7 @@ import type { ShutdownControl } from '../src/host/lifecycle';
 import { createApiLifetimeFake } from './helpers/api-lifetime';
 
 const f = vi.hoisted(() => ({ root: '', spawn: vi.fn(), api: vi.fn(), calls: [] as string[] }));
+vi.mock('../src/agent/codex-appserver/owned-process', () => ({ closeOwnedCodexProcesses: async () => {}, unconfirmedCodexPids: () => [] }));
 vi.mock('../src/config/paths', async original => ({
   ...await original<typeof import('../src/config/paths')>(), paths: { get appDir() { return f.root; } },
 }));
@@ -16,7 +17,7 @@ vi.mock('../src/platform/spawn', () => ({ spawnProcess: f.spawn }));
 vi.mock('../src/service/win-startup', () => ({ SERVICE_ENV_FLAG: 'VONVON_TEST_SERVICE', recordServicePid() {}, clearServicePid() {} }));
 vi.mock('../src/admin/service', () => ({ createAdminService: vi.fn() }));
 vi.mock('../src/agent', () => ({ installBackendDep: vi.fn(), uninstallBackendDep: vi.fn() }));
-vi.mock('../src/server/http', () => ({ startApi: f.api }));
+vi.mock('../src/server/http', async original => ({ ...await original<typeof import('../src/server/http')>(), startApi: f.api }));
 vi.mock('../src/cli/commands/run', async () => {
   const { runSupervisor } = await import('../src/bot/supervisor');
   return { runRun: (_bot: unknown, options: Parameters<typeof runSupervisor>[1]) => runSupervisor([
@@ -60,6 +61,7 @@ afterEach(async () => {
   await running;
   owned.removeAllListeners();
   vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks();
+  console.log('runner runtime fixture removed', f.root);
   rmSync(f.root, { recursive: true, force: true });
 });
 
@@ -72,6 +74,7 @@ it('retains real PID and host mutex after cleanup rejection until child death an
   running = runHostRuntime({ managed: false, control: owner }).then(() => { settled = true; }, error => { settled = true; return error; });
   await Promise.race([started.promise, running.then(error => { throw error ?? new Error('Host ended before readiness'); })]);
   expect(existsSync(join(f.root, 'daemon.pid'))).toBe(true);
+  owned.emit('message', { fcb: 'fcb.owned-work', pids: [], settled: true });
   stopGate.release();
   await vi.advanceTimersByTimeAsync(120_000);
   await settleIO(30);
