@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { Server as HttpServer } from 'node:http';
 import { createServer, type Server } from 'node:net';
 import { join } from 'node:path';
-import { WebSocket } from 'ws';
+import { WebSocket, WebSocketServer } from 'ws';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { DaemonApi } from '../src/server/http';
 
@@ -134,6 +134,78 @@ it('releases PID and mutex after confirmed API closure even when peer cleanup fa
   expect(result).toBeInstanceOf(Error);
   expect(reasons(result)).toContain(cleanupError.message);
   expect(owned.release).toHaveBeenCalledOnce();
+  expect(failures.mock.calls.some(([scope, error]) => scope === 'daemon-shutdown' && reasons(error).includes(cleanupError.message))).toBe(true);
+  expect.soft(existsSync(join(paths.appDir, 'daemon.pid')), 'confirmed closure must remove the old daemon.pid').toBe(false);
+  const contender = await acquireMutex(paths.appDir, 'host', 0).then(
+    async server => { await closeMutex(server); return 'acquired'; },
+    error => error,
+  );
+  expect.soft(contender, 'confirmed closure must return the host mutex to the next owner').toBe('acquired');
+  const port = Number(listen.split(':')[1]);
+  const replacement = createServer();
+  boundPorts.add(replacement);
+  await new Promise<void>((resolve, reject) => {
+    replacement.once('error', reject);
+    replacement.listen(port, '127.0.0.1', resolve);
+  });
+  expect(replacement.address()).toMatchObject({ port });
+});
+
+it('releases PID and mutex after a release-phase WSS failure and held actual HTTP callback', async () => {
+  vi.stubGlobal('process', Object.defineProperty(Object.create(process), 'send', { value: undefined }));
+  const ready = gate<string>();
+  const actualHttpClose = gate<void>();
+  const permitHttpCallback = gate<void>();
+  forwardHttpClose = () => permitHttpCallback.resolve();
+  owned.listening.mockImplementation(ready.resolve);
+  const cleanupError = new Error('fixture detached peer cleanup failed');
+  const realWssClose = WebSocketServer.prototype.close;
+  vi.spyOn(WebSocketServer.prototype, 'close').mockImplementationOnce(function (this: WebSocketServer, callback) {
+    return realWssClose.call(this, error => callback?.(error ?? cleanupError));
+  });
+  const releaseCount = owned.release.mock.calls.length;
+  const failures = vi.spyOn(log, 'fail');
+  const realClose = HttpServer.prototype.close;
+  vi.spyOn(HttpServer.prototype, 'close').mockImplementation(function (this: HttpServer, callback) {
+    httpServers.add(this);
+    return realClose.call(this, error => {
+      actualHttpClose.resolve();
+      void permitHttpCallback.promise.then(() => callback?.(error));
+    });
+  });
+  control = observeShutdown();
+  let settled = false;
+  running = runHostRuntime({ managed: false, port: 0, control }).then(
+    () => { settled = true; return undefined; },
+    error => { settled = true; return error; },
+  );
+  const listen = await Promise.race([ready.promise, running.then(error => { throw error ?? new Error('Host stopped before ready'); })]);
+  const owner = await getPidLockInfo(paths.appDir);
+  expect(owner).toMatchObject({ pid: process.pid, listen });
+  console.log('release-error test owns', paths.appDir, listen);
+  const credential = readFileSync(join(paths.appDir, 'local-credential'), 'utf8').trim();
+  peer = new WebSocket(`ws://${listen}`);
+  const authenticated = gate<void>();
+  const disconnected = gate<void>();
+  peer.on('message', bytes => {
+    const frame: unknown = JSON.parse(bytes.toString());
+    if (typeof frame === 'object' && frame !== null && 'type' in frame && frame.type === 'serverInfo') authenticated.resolve();
+  });
+  peer.once('close', () => disconnected.resolve());
+  await new Promise<void>((resolve, reject) => { peer?.once('open', resolve); peer?.once('error', reject); });
+  peer.send(JSON.stringify({ type: 'hello', clientKind: 'cli', protocolVersion: 1, credential }));
+  await authenticated.promise;
+  control.requestStop();
+  await Promise.all([actualHttpClose.promise, disconnected.promise]);
+  expect(peer.readyState).toBe(WebSocket.CLOSED);
+  expect(settled).toBe(false);
+  expect(await getPidLockInfo(paths.appDir)).toEqual(owner);
+  await expect(acquireMutex(paths.appDir, 'host', 0)).rejects.toThrow('busy');
+  forwardHttpClose();
+  const result = await running;
+  expect(result).toBeInstanceOf(Error);
+  expect(reasons(result)).toContain(cleanupError.message);
+  expect(owned.release.mock.calls.length - releaseCount).toBe(1);
   expect(failures.mock.calls.some(([scope, error]) => scope === 'daemon-shutdown' && reasons(error).includes(cleanupError.message))).toBe(true);
   expect.soft(existsSync(join(paths.appDir, 'daemon.pid')), 'confirmed closure must remove the old daemon.pid').toBe(false);
   const contender = await acquireMutex(paths.appDir, 'host', 0).then(

@@ -1,10 +1,10 @@
 import { fakeService, socketClient, startFixture } from './server-fixture';
 import { createServer } from 'node:net';
 import { Server } from 'node:http';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
-import { WebSocket } from 'ws';
+import { WebSocket, WebSocketServer } from 'ws';
 import type { Request } from '@vonvon/protocol';
 import { getPidLockInfo, releasePidLock, type PidLockInfo } from '../src/server/pid-lock';
 
@@ -217,6 +217,138 @@ it('initiates listener closure synchronously and awaits its actual completion ca
   } finally {
     close.mockRestore();
     confirmClosure();
+    await releasing;
+    await fixture.close();
+  }
+});
+
+function cleanupReasons(error: unknown): unknown[] {
+  return error instanceof AggregateError ? [error, ...error.errors.flatMap(cleanupReasons)] : [error];
+}
+
+it('settles a failed 250ms peer termination after actual HTTP cutoff without a WSS callback', async () => {
+  const fixture = await startFixture();
+  await recordOwner(fixture);
+  await fixture.api.beginDrain();
+  const client = await socketClient(fixture.api.port, fixture.credential);
+  await client.ready();
+  const terminationError = new Error('fixture release timer terminate failed');
+  const actualHttpClose = gate();
+  const realHttpClose = Server.prototype.close;
+  const realSocketClose = WebSocket.prototype.close;
+  const realTerminate = WebSocket.prototype.terminate;
+  const realWssClose = WebSocketServer.prototype.close;
+  let wssCallbackObserved = false;
+  let forwardWss = (): void => {};
+  const serverPeers = new Set<WebSocket>();
+  vi.spyOn(Server.prototype, 'close').mockImplementation(function (this: Server, callback) {
+    return realHttpClose.call(this, error => { actualHttpClose.release(); callback?.(error); });
+  });
+  vi.spyOn(WebSocket.prototype, 'close').mockImplementation(function (this: WebSocket, ...args) {
+    if (this === client.socket) return realSocketClose.apply(this, args);
+    serverPeers.add(this);
+  });
+  vi.spyOn(WebSocket.prototype, 'terminate').mockImplementation(function (this: WebSocket) {
+    if (serverPeers.has(this)) { realTerminate.call(this); throw terminationError; }
+    return realTerminate.call(this);
+  });
+  vi.spyOn(WebSocketServer.prototype, 'close').mockImplementation(function (this: WebSocketServer, callback) {
+    return realWssClose.call(this, error => { forwardWss = () => { wssCallbackObserved = true; callback?.(error); }; });
+  });
+  let releasing: Promise<unknown> | undefined;
+  try {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const settled = vi.fn();
+    releasing = fixture.api.release().then(() => { settled(); return undefined; }, error => { settled(); return error; });
+    let escaped: unknown;
+    try { await vi.advanceTimersByTimeAsync(250); } catch (error) { escaped = error; }
+    vi.useRealTimers();
+    await actualHttpClose.promise;
+    expect.soft(escaped, 'termination errors belong to release, not the timer callback').toBeUndefined();
+    expect(wssCallbackObserved).toBe(false);
+    await vi.waitFor(() => expect(settled, 'known termination failure must settle without WSS close callback').toHaveBeenCalledOnce(), { timeout: 500 });
+    const { ApiCleanupError } = await import('../src/server/http');
+    const error = await releasing;
+    expect(error).toBeInstanceOf(ApiCleanupError);
+    expect(cleanupReasons(error)).toContain(terminationError);
+    const replacement = createServer();
+    try {
+      await new Promise<void>((resolve, reject) => { replacement.once('error', reject); replacement.listen(fixture.api.port, '127.0.0.1', resolve); });
+      expect(replacement.address()).toMatchObject({ port: fixture.api.port });
+    } finally { await new Promise<void>(resolve => replacement.close(() => resolve())); }
+  } finally {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    for (const socket of serverPeers) realTerminate.call(socket);
+    client.socket.terminate();
+    forwardWss();
+    await releasing;
+    await fixture.api.close().catch(() => undefined);
+    await rm(fixture.home, { recursive: true, force: true });
+  }
+});
+
+it.each(['throw', 'callback'] as const)('keeps HTTP close %s untyped when connection cleanup also fails', async failure => {
+  const fixture = await startFixture();
+  await fixture.api.beginDrain();
+  const cleanupError = new Error('fixture WSS release failure');
+  const listenerError = new Error('fixture HTTP cutoff unknown');
+  const realHttpClose = Server.prototype.close;
+  const realWssClose = WebSocketServer.prototype.close;
+  const servers = new Set<Server>();
+  const sockets = new Set<WebSocketServer>();
+  vi.spyOn(WebSocketServer.prototype, 'close').mockImplementation(function (this: WebSocketServer) {
+    sockets.add(this); throw cleanupError;
+  });
+  vi.spyOn(Server.prototype, 'close').mockImplementation(function (this: Server, callback) {
+    servers.add(this);
+    if (failure === 'throw') throw listenerError;
+    callback?.(listenerError);
+    return this;
+  });
+  try {
+    const error = await fixture.api.release().then(() => undefined, error => error);
+    const { ApiCleanupError } = await import('../src/server/http');
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(ApiCleanupError);
+    expect(cleanupReasons(error)).toContain(listenerError);
+    expect([...servers].every(server => server.listening)).toBe(true);
+  } finally {
+    vi.restoreAllMocks();
+    await Promise.all([...sockets].map(socket => new Promise<void>(resolve => realWssClose.call(socket, () => resolve()))));
+    await Promise.all([...servers].map(server => new Promise<void>(resolve => realHttpClose.call(server, () => resolve()))));
+    await fixture.api.close().catch(() => undefined);
+    await rm(fixture.home, { recursive: true, force: true });
+  }
+});
+
+it('retains successful peer release until the real WSS callback is forwarded', async () => {
+  const fixture = await startFixture();
+  await fixture.api.beginDrain();
+  const client = await socketClient(fixture.api.port, fixture.credential);
+  await client.ready();
+  const actualWssClose = gate();
+  const realClose = WebSocketServer.prototype.close;
+  let forward = (): void => {};
+  vi.spyOn(WebSocketServer.prototype, 'close').mockImplementation(function (this: WebSocketServer, callback) {
+    return realClose.call(this, error => {
+      forward = () => callback?.(error);
+      actualWssClose.release();
+    });
+  });
+  const settled = vi.fn();
+  const releasing = fixture.api.release();
+  void releasing.then(settled, settled);
+  try {
+    await actualWssClose.promise;
+    expect(settled).not.toHaveBeenCalled();
+    forward();
+    await releasing;
+    expect(settled).toHaveBeenCalledOnce();
+  } finally {
+    forward();
+    vi.restoreAllMocks();
+    client.socket.terminate();
     await releasing;
     await fixture.close();
   }
