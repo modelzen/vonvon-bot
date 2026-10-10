@@ -57,7 +57,7 @@ Bot 不依赖桌面窗口。关掉窗口或退出桌面端，飞书里的 Bot �
 
 复制的起点是 feishu-codex-bridge 的 `codex/device-handoff` 分支（`446b2a4`）。现在桌面端 vendor 的就是这个分支，它比 bridge `main` 多 49 个提交，包括桌面端要用的接口、咖啡 Hook 设置和 Codex 用量。
 
-V2 先复制 `446b2a4` 的完整 `src/` 和 `test/`，包括 `src/web`，保留能运行、能对比的 bridge 基线。V2 不增加网页功能。V3 把旧网页控制台的管理路由改成 daemon RPC，然后删除 `src/web`。最终架构不依赖 bridge 的网页控制台。
+V2 先复制 `446b2a4` 的完整 `src/` 和 `test/`，包括 `src/web`，保留能运行、能对比的 bridge 基线。V2 不增加网页功能。V3 把旧网页控制台的管理路由改成 daemon RPC，然后删除 `src/web`。daemon 没运行时的只读预览页和它的“启动 daemon”按钮一起退役，改用 `vonvon daemon start`，V4 起用 `vonvon open` 打开新界面。私聊菜单卡里指向旧控制台的“网页控制台”按钮也在 V3 去掉，其他按钮不变。等 V4 真正提供新网页后，才考虑加回指向新界面的链接。旧测试里仍然有效的管理行为改成 RPC 测试保留，只有旧页面、静态资源和只读预览的断言可以删除。最终架构不依赖 bridge 的网页控制台。
 
 这样做的理由是独立。vendor 构建产物时，每改一处内核都要在 bridge 仓库提交、发版、再 pin 版本。复制源码以后，一个功能在一个分支里就能改完。
 
@@ -74,6 +74,14 @@ V2 先复制 `446b2a4` 的完整 `src/` 和 `test/`，包括 `src/web`，保留�
 协议的起点是现在 `desktop/shared` 下的 zod 合同，也就是 `bridge.ts` 的 `commandSchema` 以及 settings、collaboration、environment、machine 四组请求。`commandSchema` 里的 `quit`、`hideWindow`、`setLoginItem`、`chooseFolder` 只和桌面窗口有关，留在桌面端，不进协议。
 
 在此基础上加两样东西。一是握手，客户端发 `hello`，daemon 回自己的 `machineId`、版本和协议版本。二是机器维度，客户端可能同时连着多台机器。
+
+### 快照给界面，管理状态单独读
+
+daemon 提供两种读状态的方式。`snapshot` 请求和 `snapshot` 事件用 V1 的 `DesktopSnapshot`，供界面使用，带递增的数字 revision。这个数字只出现在快照里，以及 `command` 和 `admin` 里本来就定义为数字 revision 的 `applied` 回复里。settings 和 collaboration 里的字符串 revision 仍是各自设置段或项目的并发令牌，含义和形状都不变。`admin` 组的 `state` 请求原样返回旧网页控制台 `GET /api/state` 的内容。其中 Bot 的字段包括进程号、启动时间和完成提醒，项目的字段包括话题数、分支和创建时间。会话列表走 `settings` 组的 `sessions` 请求。
+
+分开读有三个理由。界面只需要投影后的数据，快照事件不必每次带上进程字段和头像。旧状态的字段一个不丢，V3 能逐字段核对新旧两条读路径。快照形状不变，V4 移植界面时不用改合同。
+
+请求、事件、任务和 revision 的具体规则写在 [plan.md](plan.md) 的 V3 一节。
 
 ### 界面沿用现在的 React 界面
 
