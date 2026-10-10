@@ -55,6 +55,7 @@ afterAll(async () => {
 });
 
 describe('listModels 预热不钉死 fallback（QW-2）', () => {
+  // Windows starts two PowerShell Job Object hosts and compiles each host before initialize.
   it('失败返回 STATIC_MODELS 但不写缓存；恢复后重试拿真实列表，此后走缓存', async () => {
     const backend = new CodexAppServerBackend();
 
@@ -72,5 +73,5 @@ describe('listModels 预热不钉死 fallback（QW-2）', () => {
     const again = await backend.listModels();
     expect(again).toBe(live);
     expect(readFileSync(`${script}.count`, 'utf8').trim().split('\n')).toHaveLength(1);
-  });
+  }, 20_000);
 });
