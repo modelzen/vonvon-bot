@@ -4,6 +4,7 @@ import { bridgeVersion } from '../core/version';
 import { paths } from '../config/paths';
 import { enterDataAccess, type DataLease } from '../config/data-access';
 import { observeShutdown, type ShutdownControl } from '../host/lifecycle';
+import { SERVICE_UNAVAILABLE } from '../host/service';
 
 const program = new Command().name('vonvon').description('Vonvon Bot daemon').version(bridgeVersion());
 let lease: DataLease | undefined;
@@ -50,8 +51,8 @@ service.command('install').description('Install and start the OS service').actio
 service.command('uninstall').description('Stop and remove the OS service').action(async () => {
   await (await import('./commands/service')).runServiceCommand('uninstall');
 });
-program.command('__win-relaunch <requestPath>', { hidden: true }).action(async (requestPath: string) => {
-  await (await import('../service/win-startup')).runWinRelaunch({ requestPath });
+program.command('__win-relaunch <requestPath>', { hidden: true }).action(() => {
+  throw new Error(SERVICE_UNAVAILABLE);
 });
 program.command('__daemon-control <action>', { hidden: true }).action(async (action: string) => {
   await (await import('./commands/daemon-control')).runDaemonControl(action);
