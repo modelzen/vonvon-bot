@@ -121,7 +121,7 @@ public static class CodexJob {
 }`;
 const encoded = (value: string): string => Buffer.from(value, 'utf16le').toString('base64');
 const literal = (value: string): string => `'${value.replaceAll("'", "''")}'`;
-const source = `$ErrorActionPreference='Stop'; Add-Type -TypeDefinition ${literal(jobSource)}; `;
+const source = `$ErrorActionPreference='Stop'; Microsoft.PowerShell.Utility\\Add-Type -TypeDefinition ${literal(jobSource)}; `;
 const args = (script: string): string[] => ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded(source + script)];
 
 export class WindowsCodexJob {
