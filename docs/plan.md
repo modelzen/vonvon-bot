@@ -64,65 +64,25 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 - [ ] At the code-ready head SHA and at each later push that changes the patch, run the swarm per `skills/swarm/SKILL.md`. One gates lane. The ten live lanes from the PR's **Verify, live** block. The perf lane from its **Verify, perf** block. Two or more audit lanes, each with its own focus, that read the diff and the receipts and distrust the PR body. The root audits the receipts in the merge-ready report before the verdict.
 - [ ] Clean only when every lane is `PASS`. Findings go back to the owner, including a defect that a lane filed as a note. A new head gets a fresh swarm and a fresh verdict, except for results that stay valid under the patch-id rule in `playbooks/shipping.md`.
 - [ ] A clean verdict appends the PR to the linear stack in roadmap order. Codex runs guarded Shipping on the contiguous verified stack from the root, bottom-up. A verdict stays valid across a merge-sync only when the stable patch-id of base to head is unchanged under the patch-id rule in `playbooks/shipping.md`.
-- [ ] Merge only when the hosted Linux job succeeded at the exact head being merged, for a `full` change the local Mac check passed at that head, and any hosted Mac run requested for the PR succeeded at that head, per *Hosted CI policy*. A docs-only run is recorded as lightweight, never as a full-suite pass.
+- [ ] Merge only when the hosted Linux job succeeded at the exact head being merged, for a `full` change the local Mac check passed at that head, per *CI policy*. A docs-only run is recorded as lightweight, never as a full-suite pass.
 
-### Hosted CI policy
+### CI policy
 
-Hosted CI is the GitHub Actions run on GitHub-hosted runners. This policy sets when it runs and which jobs a PR must pass. It leaves the V1 to V11 order, the architecture, every wire and data shape, and every unit, live, perf, native, audit, and Shipping gate unchanged. Hosted CI never stands in for a live lane, a perf probe, or a native desktop, launchd, or systemd test. The change that introduced this policy is CI maintenance on one branch: these docs, `.github/workflows/ci.yml`, and the scope script with its tests and the guard fixtures. It is not a milestone and sits outside the V1 to V11 file boundaries.
+CI maintenance does not change the V1 to V11 order, product architecture, unit, live, perf, native, independent audit, or Shipping requirements. CI does not replace a real desktop, launchd, or systemd acceptance check.
 
-*Runners.* Every automatic run is one GitHub-hosted Ubuntu job. The routine macOS check runs locally on the operator's Mac at the exact PR head and is recorded in the PR, under *Local Mac check*. One optional GitHub-hosted `macos-latest` job remains, and it starts only on a manual run that asks for it, under *Optional hosted Mac job*. No automatic event, path rule, or schedule allocates a Mac runner, and no extra routing job decides it.
+*Runners.* The `linux` job uses GitHub-hosted `ubuntu-latest`. The `macos` job uses the shared organization runner labelled `self-hosted`, `macOS`, `ARM64`, `modelzen-macos`, and `modelzen-macos-isolated`. Linux and any future Windows jobs stay hosted. macOS no longer consumes GitHub-hosted compute. The organization runner group permits only `modelzen/vonvon-bot` and `modelzen/notelet`. One Mac runner runs one job at a time. Setup and service commands are in [self-hosted-ci.md](self-hosted-ci.md).
 
-*Triggers.* One workflow, `.github/workflows/ci.yml`, with no `paths` or `paths-ignore` filter.
+*Triggers.* `.github/workflows/ci.yml` runs for PRs targeting `main`, on `opened`, `synchronize`, and `reopened`, and by `workflow_dispatch`. It has no path filter, branch-push trigger, or schedule. PR checks validate the proposed merge; repeating the same suite after that merge adds no platform coverage. Use a manual full run for an exceptional direct commit, a retargeted PR, or a changed base when no current run exists. A newer PR run cancels the old one. Manual runs retain separate records.
 
-- Automatic runs fire only for a `pull_request` targeting `main`, types `opened`, `synchronize`, and `reopened`, and a `push` to `main`. A push to any other branch starts nothing by itself. No `schedule`.
-- A PR run's concurrency group is the workflow plus the PR number, with `cancel-in-progress`. A `push` to `main` or a `workflow_dispatch` run uses a group keyed by its own `github.run_id`, so no later run cancels it and every `main` commit keeps its record.
-- `workflow_dispatch` takes one boolean input, `run_macos`, default `false`. It runs the same Linux job with scope `full` on the chosen ref. It starts the hosted Mac job only when `run_macos` is `true` and that Linux job succeeded.
-- A stack child that targets its parent branch gets no automatic run, and retargeting to `main` may not fire one. When no run exists at the current head after a retarget or a merge of `main`, dispatch the full run at that exact head, with `run_macos` left `false` unless that head needs a hosted Mac run.
+*Scope.* `.github/scripts/ci-scope.mjs` is the only classifier. It uses full Git history and `git diff --name-only --no-renames -z`. A PR compares the merge-base of the event base and head with the head. It reports `docs` only when every path is root `README.md`, `AGENTS.md`, `CLAUDE.md`, or `docs/**/*.md`. Everything else is `full`. Manual dispatch, unknown events, missing SHAs, empty, malformed, oversized or ambiguous differences select `full`. Git collection failure cannot authorize a lightweight pass.
 
-*Scope.* One dependency-free script, `.github/scripts/ci-scope.mjs`, inside the Linux job, owns the whole decision. It prints the scope, `docs` or `full`, and the changed-path list. Nothing else classifies paths, and there is no separate classifier or aggregator job.
+*Linux job.* The job first runs the classifier's regression tests and collects the scope with the runner's bundled Node. A `docs` change runs `git diff --check`, without setting up Node, restoring npm cache, installing dependencies, or running product tests. A `full` change sets up Node 22 and npm cache, then runs `npm ci`, `npm run build`, `npm run typecheck`, `npm test`, and `npm run lint`, stopping on the first failure. The daemon's former `lint` script repeated `tsc --noEmit`; daemon type checking now runs once through `typecheck`. Protocol lint remains in `npm run lint`.
 
-- `docs` only when every changed path is exactly `README.md`, `AGENTS.md`, or `CLAUDE.md` at the root, or matches `docs/**/*.md`. Every other path is `full`, including protocol source and tests, Markdown elsewhere, `.github/**`, `scripts/**`, every `package.json`, `package-lock.json`, and config.
-- Changed paths come from local Git on a full-history checkout (`fetch-depth: 0`) with `git diff --name-only --no-renames -z`. For `pull_request` the range is `git merge-base <base.sha> <head.sha>` to `<head.sha>` from the event payload. For a `push` to `main` it is `before` to `after`. A move lists both paths and a deletion stays listed.
-- The script selects `full` on `workflow_dispatch`, an unknown event, a missing, all-zero, or locally absent SHA, a failing Git command, an empty, malformed, or ambiguous list, or a list over its own size bound. It never truncates the list and reports `docs`. An unrecoverable script failure fails the job and never authorizes `docs`.
+*Mac job.* The job requires `ENABLE_SELF_HOSTED_MACOS_CI=true` in repository Actions variables. The operator currently requests no macOS runs, so both repositories set it to `false`. The old developer-account runner registration and service are removed. Restore Mac CI only after provisioning a dedicated standard `ci-user` account without release credentials, as described in the service guide. Fork PRs are excluded, and the job checks the account before checkout. Linux checks continue independently. After the operator requests restoration and full Linux checks succeed, the self-hosted Mac checks out the exact PR head, or the dispatched commit, and runs the same clean Node 22 chain. It records the source SHA, runner, macOS, architecture and Node version in the job summary. Documentation changes skip this job. A successful self-hosted job supplies the routine Mac check, so the operator does not rerun an identical manual Mac chain. Native, interactive and platform-specific acceptance from each milestone remains separate.
 
-*Linux job.* `ubuntu-latest`, always starts, and runs the script first.
+*Merge rule.* The merge owner requires the current Linux result, plus the Mac result for a `full` change. Record a documentation run as lightweight and its skipped Mac job as not applicable. During the operator's Mac pause, full changes retain Mac verification as pending, not passed. A billing failure, unavailable runner, timeout or absent run is blocked, never passed. Branch protection stays enabled. A manual local chain may help diagnose a blocked job but is not a successful GitHub check.
 
-- `docs`: lightweight checks only, with no `npm ci` and no product suite. It runs the script's own regression tests and `git diff --check` on the range, then succeeds.
-- `full`: Node 22 with the npm cache, then the clean chain from the fresh checkout, stopping at the first failure: `npm ci`, `npm run build`, `npm run typecheck`, `npm test`, `npm run lint`.
-- The job summary prints the scope, the changed-path list, and either `docs: lightweight checks passed, full suite not run` or `full: suite passed`.
-
-*Optional hosted Mac job.* It lives in the same workflow and adds no other job.
-
-- `runs-on: macos-latest`, `timeout-minutes: 15`, and `needs` the Linux job.
-- Guard: `if: ${{ success() && github.event_name == 'workflow_dispatch' && inputs.run_macos == true }}`. On `pull_request` and `push` the `inputs` context is empty, so the guard is false and the job is skipped. A manual run with `run_macos` false skips it. A manual run with `run_macos` true allocates it only after the Linux job, which is always `full` on a manual run, succeeded. A failed or cancelled Linux job leaves it skipped, so no Mac minute is spent.
-- Steps: a fresh checkout, Node 22 with the npm cache, then the same clean chain, stopping at the first failure: `npm ci`, `npm run build`, `npm run typecheck`, `npm test`, `npm run lint`. It runs no scope script, packaging, signing, notarization, live lane, or perf probe. Its summary prints the head SHA, the macOS image and Node versions, and `full: suite passed`.
-- Request it deliberately, at a specific head, for release preparation, desktop packaging work, a native dependency change, or reproducing a failure in a clean hosted macOS environment. The requester records the reason and the run URL in the PR. Nobody requests it routinely or merely to exercise this policy.
-- It supplements the local Mac check and never replaces it. It is never native acceptance: the Electron window, launchd, the `_electron` lanes, every live lane, perf, packaging, signing, and notarization stay on the operator's Mac where a PR's section names them.
-
-A docs-only change still spends one short Linux job; that is accepted over GitHub's native path filter. The native filter compares only the first 3000 changed files ([workflow syntax, Git diff comparisons](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#git-diff-comparisons)), and a filtered-out workflow leaves required checks pending. This workflow always runs and lists paths with local Git, so that cap does not apply to it.
-
-*Local Mac check.* For every `full` change, code or config maintenance and milestones alike, Codex runs the same clean chain on the Mac at the exact PR head, from a fresh worktree: `npm ci`, `npm run build`, `npm run typecheck`, `npm test`, `npm run lint`. The PR records the head SHA, macOS and Node versions, each command's exit status, and the log. A new head needs a new run. This check is independent of the hosted Linux job and does not replace it, and a hosted Mac run does not replace this check. For a `docs` change it is recorded as N/A, never as passed. Codex still runs lint and typecheck before each PR-facing push, per *PR mechanics*.
-
-*Merge rule.* The server has no required status checks, and this policy changes no branch protection. The merge owner checks at the exact head being merged; a run at an older head does not count.
-
-- `docs`: the hosted Linux job succeeded, and its changed-path list matches the exact diff.
-- `full`: the hosted Linux job ran the full chain and succeeded, and the local Mac check passed at that head.
-- Hosted Mac requested: once a hosted Mac run has been requested for a PR, the merge head also needs a manual run at that exact head whose hosted Mac job succeeded. A new head after the request needs a new requested run. A PR with no request records the job as `not requested`, never as passed or failed.
-- A hosted Linux run, or a requested hosted Mac run, that is blocked by the Actions allowance, a runner that never arrives, the timeout, or anything else stays blocked, and the PR does not merge. Nobody withdraws a request, moves to a head without one, or offers the local Mac check in its place. The local Mac check replaces the former automatic hosted macOS job only; it never stands in for hosted Linux or a requested hosted Mac run. Nobody reclassifies a path to avoid a failing job or uses an admin override.
-
-*No bypass.* This policy changes no subscription, billing, spending limit, branch protection, or self-hosted runner setup. The ten live lanes, perf, native desktop, launchd, and systemd tests, independent audit, and exact-head Shipping stay mandatory wherever a PR's section names them.
-
-*Evidence.*
-
-- On a milestone PR, the gates lane records the head SHA, the scope and changed-path list, the hosted Linux result and run URL, the local Mac check record or its N/A, and the hosted Mac result, reason, and run URL, or `not requested`.
-- A standalone CI or documentation maintenance PR does not rerun unrelated Bot ten-lane or perf tests. The change that introduces this policy is `full` and needs before merge:
-  - Regression fixtures of the script, next to it, covering `docs`, `full`, protocol paths as `full`, a move and a deletion under `--no-renames`, Markdown under `packages/**`, more than 3000 changed paths, an empty diff, a missing or all-zero base, a Git failure, an unknown event, and `workflow_dispatch`.
-  - Guard fixtures read the Mac job's `if`, `needs`, `runs-on`, and `timeout-minutes` and the `run_macos` input from `ci.yml` itself, not from a copy, and evaluate the guard with GitHub's official `@actions/expressions` engine in temporary verification tooling. Save that tooling and its results with the PR's evidence; it adds no repository dependency. `pull_request` and a `push` to `main` skip the job. A manual run with `run_macos` false skips it. A manual run with `run_macos` true and a successful Linux job runs it. A manual run with `run_macos` true and a failed Linux job skips it. They also check that the input is a boolean defaulting to `false`, that the workflow has no `schedule` and no `paths` filter, and that no other job names a `macos` runner.
-  - `actionlint` on the workflow, with `macos-latest` only in the optional Mac job.
-  - The local Mac check at the exact head.
-  - An independent review.
-  - The actual hosted Linux run at the head, succeeded with scope `full`.
-  - No hosted Mac run. This PR does not request one to test the policy, so the merge rule does not require one. The PR states that the actual hosted Mac job remains unrun and that the guard is validated only by the fixtures and `actionlint`.
+*Evidence.* Each PR records the exact head, changed paths, scope and Linux run URL. Full changes also record the self-hosted Mac result and tested platform. CI maintenance requires actionlint, the scope regressions, the full chains, and independent review before merge. It does not require unrelated Bot live or perf lanes. New source heads require new evidence. No subscription, spending limit, product-release signing or notarization changes are part of this policy.
 
 ### Boot recipe, for every live lane
 
@@ -142,7 +102,7 @@ Each live lane runs in its own worktree at the PR head. Drive through the skill 
 - [ ] Create `package.json` with npm workspaces `packages/*`, plus `tsconfig.base.json` and `vitest.config.ts`.
 - [ ] Create `packages/protocol/src/domain.ts`, `rpc.ts`, `events.ts`, `handshake.ts`, and `index.ts`.
 - [ ] Create `packages/protocol/test/protocol.test.ts`.
-- [ ] Create `.github/workflows/ci.yml`. V1 shipped it with automatic `ubuntu-latest` and `macos-latest` jobs; *Hosted CI policy* now replaces it with one automatic Linux job, the local Mac check, and an optional manual hosted Mac job.
+- [ ] Create `.github/workflows/ci.yml`. V1 shipped it with automatic `ubuntu-latest` and `macos-latest` jobs; *Hosted CI policy* now replaces it with one automatic Linux job and the local Mac check.
 - [ ] Create `NOTICE`.
 - [ ] Edit `README.md`.
 
@@ -154,7 +114,7 @@ Each live lane runs in its own worktree at the PR head. Drive through the skill 
 
 **You see.**
 
-- [ ] `npm ci && npm run typecheck && npm test` passes on the Mac, and hosted CI succeeds at the PR head. History: V1 was accepted with both its hosted Linux and hosted macOS jobs green. Later PRs gate on hosted Linux plus the local Mac check, and on a hosted Mac run only when one is requested, per *Hosted CI policy*.
+- [ ] `npm ci && npm run typecheck && npm test` passes on the Mac, and hosted CI succeeds at the PR head. History: V1 was accepted with both its hosted Linux and hosted macOS jobs green. Later PRs gate on hosted Linux plus the local Mac check, per *CI policy*.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
