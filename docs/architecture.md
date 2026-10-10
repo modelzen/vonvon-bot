@@ -75,6 +75,14 @@ V2 先复制 `446b2a4` 的完整 `src/` 和 `test/`，包括 `src/web`，保留�
 
 在此基础上加两样东西。一是握手，客户端发 `hello`，daemon 回自己的 `machineId`、版本和协议版本。二是机器维度，客户端可能同时连着多台机器。
 
+### 快照给界面，管理状态单独读
+
+daemon 提供两种读状态的方式。`snapshot` 请求和 `snapshot` 事件用 V1 的 `DesktopSnapshot`，供界面使用，带递增的 revision。`admin` 组的 `state` 请求原样返回旧网页控制台 `GET /api/state` 的内容。其中 Bot 的字段包括进程号、启动时间和完成提醒，项目的字段包括话题数、分支和创建时间。会话列表走 `settings` 组的 `sessions` 请求。
+
+分开读有三个理由。界面只需要投影后的数据，快照事件不必每次带上进程字段和头像。旧状态的字段一个不丢，V3 能逐字段核对新旧两条读路径。快照形状不变，V4 移植界面时不用改合同。
+
+请求、事件、任务和 revision 的具体规则写在 [plan.md](plan.md) 的 V3 一节。
+
 ### 界面沿用现在的 React 界面
 
 界面保留现在的 React 19 + Vite 代码和 `desktop/renderer/reference` 里的 UI 组件，也就是原来的样式。改动是把直接调用 `window.bridge` 的地方换成注入的客户端对象。
