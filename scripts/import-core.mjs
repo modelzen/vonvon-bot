@@ -148,7 +148,9 @@ async function main() {
       }
       if (await exists(target)) {
         const stat = await fs.lstat(target);
-        if (!stat.isFile() || hash(await fs.readFile(target)) !== file.sha256 || (stat.mode & 0o777) !== (file.mode === '100755' ? 0o755 : 0o644)) throw new Error(`Conflicting partial import: ${file.path}`);
+        const modeMask = process.platform === 'win32' ? 0o200 : 0o777;
+        const expectedMode = file.mode === '100755' ? 0o755 : 0o644;
+        if (!stat.isFile() || hash(await fs.readFile(target)) !== file.sha256 || (stat.mode & modeMask) !== (expectedMode & modeMask)) throw new Error(`Conflicting partial import: ${file.path}`);
         continue;
       }
       await fs.mkdir(path.dirname(target), { recursive: true });

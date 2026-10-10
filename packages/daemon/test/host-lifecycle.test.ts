@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
-import { stopChild } from '../src/host/lifecycle';
+import { stopChild, waitForExit } from '../src/host/lifecycle';
 import { endpointRequest } from '../src/host/discovery';
 
 describe('Host child shutdown', () => {
@@ -14,10 +14,15 @@ describe('Host child shutdown', () => {
   });
   it('reports forced shutdown and waits for actual exit', async () => {
     const child = spawn(process.execPath, ['-e', `process.on('SIGTERM',()=>{}); process.on('message',()=>{}); process.send('ready');`], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
-    await new Promise((resolve) => child.once('message', resolve));
-    await expect(stopChild(child, 30)).rejects.toThrow(/forced termination/);
-    expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
-  });
+    try {
+      await new Promise((resolve) => child.once('message', resolve));
+      await expect(stopChild(child, 30)).rejects.toThrow(/required forced termination/);
+      expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      expect(await waitForExit(child, 3000)).toBe(true);
+    }
+  }, 15_000);
   it('retains a child cleanup failure across repeated stop attempts', async () => {
     const child = spawn(process.execPath, ['-e', `process.on('SIGTERM',()=>{}); process.on('message',()=>process.exit(1)); process.send('ready');`], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
     try {

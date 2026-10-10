@@ -61,7 +61,7 @@ Linux 保留 GitHub 托管的 Ubuntu，Windows 用托管的 `windows-2025`；mac
 
 范围脚本保留 `docs` 和 `full`，未知或异常差异按 `full` 处理。文档改动只跑范围回归和空白检查，不装依赖，也不启动 Mac。完整改动先在 Linux 跑 Node 22 的安装、构建、类型检查、测试和 lint，再在托管 Windows 和自托管 Mac 的准确 PR head 跑同一套检查。daemon 原先的 lint 与类型检查完全相同，删除重复的 lint 别名，协议 lint 保留。
 
-合入要求当前 Linux 成功，完整改动还要求 Windows 和 Mac 都成功。如果再次暂停 Mac CI，完整改动的 Mac 验证保持待办。计费、离线或超时阻塞不能记为通过。Mac CI 已覆盖的常规命令不再手动重复，里程碑要求的实时、性能、原生桌面、launchd、systemd 和独立审查照旧。完整规则见 [plan.md](plan.md) 的 *CI policy*。
+合入要求当前 Linux 成功，完整改动还要求 Windows 和 Mac 都成功。如果再次暂停 Mac CI，完整改动的 Mac 验证保持待办。计费、离线或超时阻塞不能记为通过。Mac CI 已覆盖的常规命令不再手动重复，里程碑要求的实时、性能、原生桌面、launchd、systemd 和独立审查照旧。完整规则见 [plan.md](plan.md) 的 *CI policy*，触发示例和费用计算见 [ci-costs.md](ci-costs.md)。
 
 临时豁免（2026-10-10，已撤回）：组织共用的 Actions 分钟数用完时，用户曾授权不等 GitHub 结果就推送和合入，记录写“SKIPPED（用户授权）”，从不记为通过。`main` 的 `48251d9` 恢复了 Linux、托管 Windows 和自托管 Mac 的完整 CI，用户已撤回豁免。所有未合入的 head 按上面的完整规则检查。豁免期间的记录保留 SKIPPED 原文，不改成通过，也不能用于今后合入的任何 head。详见 [plan.md](plan.md) 的 *Temporary CI waiver*。
 

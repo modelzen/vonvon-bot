@@ -83,8 +83,8 @@ describe('cli bridge config helpers', () => {
 describe('cli bridge paths', () => {
   it('uses a bot-scoped native IPC endpoint', () => {
     if (process.platform === 'win32') {
-      expect(paths.cliBridgeSocket.startsWith('\\\\.\\pipe\\feishu-cli-bridge-')).toBe(true);
-      expect(paths.cliBridgeSocket.slice(-16)).toMatch(/^[a-f0-9]{16}$/);
+      expect(paths.cliBridgeSocket.startsWith('\\\\.\\pipe\\vonvon-bot-')).toBe(true);
+      expect(paths.cliBridgeSocket.slice(-32)).toMatch(/^[a-f0-9]{32}$/);
     } else {
       expect(paths.cliBridgeSocket.endsWith('/cli-bridge.sock')).toBe(true);
     }

@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -13,14 +14,14 @@ describe('daemon data root', () => {
     await writeFile(join(home, '.vonvon-bridge-migration.json'), 'pending');
     const before = await readdir(home);
     vi.stubEnv('VONVON_HOME', undefined);
-    expect(resolveDataRoot(home)).toEqual({ path: join(await realpath(home), '.vonvon-bot'), kind: 'fresh' });
+    expect(resolveDataRoot(home)).toEqual({ path: join(realpathSync(home), '.vonvon-bot'), kind: 'fresh' });
     expect(await readdir(home)).toEqual(before);
     expect(await readFile(join(home, '.vonvon-bridge-migration.json'), 'utf8')).toBe('pending');
   });
   it('uses VONVON_HOME and canonicalizes normal ancestor aliases without creating a home directory', async () => {
     const home = await fixture(); const selected = await fixture();
     vi.stubEnv('VONVON_HOME', selected);
-    expect(resolveDataRoot(home)).toEqual({ path: await realpath(selected), kind: 'canonical' });
+    expect(resolveDataRoot(home)).toEqual({ path: realpathSync(selected), kind: 'canonical' });
     expect(await readdir(home)).toEqual([]);
   });
   it.each(['', 'relative/path', '   '])('rejects invalid override %j', async override => {
