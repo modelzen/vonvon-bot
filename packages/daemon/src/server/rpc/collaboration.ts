@@ -2,13 +2,26 @@ import { randomUUID } from 'node:crypto';
 import { collaborationReplySchema, type CollaborationRequest, type CollaborationReply } from '@vonvon/protocol';
 import type { AdminService } from '../../admin/service';
 import type { CollaborationRequest as ServiceRequest } from '../../admin/collaboration';
+import { UsageError, type UsageErrorKind } from '../../agent/types';
 import type { DirectoryBrowser } from '../directory-browser';
 import type { RpcOutcome } from '../rpc';
-import { unsupported } from '../errors';
+import { RpcError, unsupported } from '../errors';
 import { requireRunningAgent } from './ownership';
 
+const usageErrorMessages: Record<UsageErrorKind, string> = {
+  'no-auth': '请先登录 Codex，再查看用量。',
+  'api-key-mode': '当前 Codex 使用 API Key 登录，无法读取 ChatGPT 账号用量。',
+  'need-relogin': 'Codex 登录已失效，请重新登录。',
+  transient: '暂时无法读取 Codex 用量，请稍后重试。',
+};
+
 export async function collaborationRpc(service: AdminService, directory: DirectoryBrowser, request: CollaborationRequest): Promise<RpcOutcome<CollaborationReply>> {
-  if (request.action === 'usage') return { kind: 'read', value: collaborationReplySchema.parse({ kind: 'usage', data: await service.accountUsage(request.force) }) };
+  if (request.action === 'usage') {
+    try { return { kind: 'read', value: collaborationReplySchema.parse({ kind: 'usage', data: await service.accountUsage(request.force) }) }; }
+    catch (error) {
+      throw new RpcError(error instanceof UsageError ? 'usage_unavailable' : 'operation_failed', error instanceof UsageError ? usageErrorMessages[error.kind] : '读取 Codex 用量失败');
+    }
+  }
   if (request.action === 'openGroup') return unsupported();
   await requireRunningAgent(service, request.agentId);
   if (!service.collaboration) return unsupported();
