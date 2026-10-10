@@ -17,10 +17,14 @@ it('waits for installation, reports restart only after success, and records fail
   let complete: (value: { ok: boolean; message: string }) => void = () => {};
   const running = performCoreUpdate({ install: () => new Promise((resolve) => { complete = resolve; }) });
   await expect.poll(() => readUpdateStatus()?.phase).toBe('installing');
+  await expect(performCoreUpdate({ install: async () => ({ ok: true, message: 'must not run' }) })).rejects.toThrow('already in progress');
+  expect(readUpdateStatus()?.phase).toBe('installing');
   complete({ ok: true, message: 'installed' });
   await running;
   expect(readUpdateStatus()).toMatchObject({ phase: 'restarting', ok: true });
 
   await expect(performCoreUpdate({ install: async () => ({ ok: false, message: 'fixture install failure' }) })).rejects.toThrow('fixture install failure');
   expect(readUpdateStatus()).toMatchObject({ phase: 'error', ok: false, message: 'fixture install failure' });
+  await expect(performCoreUpdate({ install: async () => { throw new Error('fixture process failure'); } })).rejects.toThrow('fixture process failure');
+  expect(readUpdateStatus()).toMatchObject({ phase: 'error', ok: false, message: 'fixture process failure' });
 });

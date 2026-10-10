@@ -140,11 +140,11 @@ export async function performCoreUpdate(options: { install?: typeof installLates
   writeUpdateStatus({ phase: 'installing', from, at: Date.now() });
   try {
     const result = await (options.install ?? installLatest)();
-    if (!result.ok) {
-      writeUpdateStatus({ phase: 'error', ok: false, from, message: result.message.slice(0, 300), at: Date.now() });
-      throw new Error(result.message);
-    }
+    if (!result.ok) throw new Error(result.message);
     writeUpdateStatus({ phase: 'restarting', ok: true, from, to: currentVersion(), at: Date.now() });
+  } catch (error) {
+    writeUpdateStatus({ phase: 'error', ok: false, from, message: (error instanceof Error ? error.message : String(error)).slice(0, 300), at: Date.now() });
+    throw error;
   } finally {
     release();
   }

@@ -9,7 +9,7 @@ const program = new Command().name('vonvon').description('Vonvon Bot daemon').ve
 let lease: DataLease | undefined;
 let control: ShutdownControl | undefined;
 program.hook('preAction', async (_command, action) => {
-  if (action.name() === 'run') control = observeShutdown();
+  if (action.name() === 'run') control = observeShutdown(Boolean(action.opts().parentControl));
   if (action.name() === 'status' || action.name() === 'logs' || action.name() === '__restart-after-exit') return;
   await mkdir(paths.appDir, { recursive: true, mode: 0o700 });
   lease = await enterDataAccess(paths.appDir);
@@ -18,8 +18,9 @@ program.hook('postAction', () => { lease?.release(); control?.dispose(); });
 const daemon = program.command('daemon').description('Run the local daemon');
 daemon.command('run').description('Run in the foreground')
   .option('--bot <appId>', 'Run one bot')
+  .option('--parent-control', 'Accept shutdown through stdin', false)
   .option('--port <port>', 'Loopback API port', (value) => Number(value), 0)
-  .action(async (options: { bot?: string; port: number }) => {
+  .action(async (options: { bot?: string; port: number; parentControl?: boolean }) => {
     await (await import('../host/bootstrap')).runHostRuntime({ bot: options.bot, port: options.port, managed: false, control });
   });
 daemon.command('start').description('Start a detached daemon')
