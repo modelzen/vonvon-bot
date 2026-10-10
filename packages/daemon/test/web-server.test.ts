@@ -250,6 +250,53 @@ afterAll(async () => {
   rmSync(logDir, { recursive: true, force: true });
 });
 
+describe('web server listen lifecycle', () => {
+  it('releases failed-attempt listeners before retrying an occupied port', async () => {
+    const retrying = createWebServer({ service: stubService(), token: TOKEN, logDir });
+    const occupiedPort = Number(new URL(base).port);
+    const listeningCounts: number[] = [];
+    const errorCounts: number[] = [];
+    const baselineListening = retrying.server.listenerCount('listening');
+    const baselineErrors = retrying.server.listenerCount('error');
+    try {
+      for (let attempt = 0; attempt < 25; attempt++) {
+        await expect(retrying.listen(occupiedPort)).rejects.toMatchObject({ code: 'EADDRINUSE' });
+        listeningCounts.push(retrying.server.listenerCount('listening'));
+        errorCounts.push(retrying.server.listenerCount('error'));
+      }
+      const { port, url } = await retrying.listen(0);
+      expect(port).not.toBe(occupiedPort);
+      expect(url).toBe(`http://127.0.0.1:${port}/?token=${TOKEN}`);
+      const response = await fetch(`http://127.0.0.1:${port}/api/state`, {
+        headers: { Authorization: `Bearer ${TOKEN}` },
+      });
+      expect(response.status).toBe(200);
+      expect(listeningCounts).toEqual(Array(25).fill(baselineListening));
+      expect(errorCounts).toEqual(Array(25).fill(baselineErrors));
+      expect(retrying.server.listenerCount('error')).toBe(baselineErrors);
+    } finally {
+      if (retrying.server.listening) await retrying.close();
+    }
+  });
+
+  it('releases the listen error handler after success and retains existing listeners', async () => {
+    const fresh = createWebServer({ service: stubService(), token: TOKEN, logDir });
+    const onError = () => {};
+    const onListening = () => {};
+    fresh.server.on('error', onError);
+    fresh.server.on('listening', onListening);
+    const baselineListening = fresh.server.listeners('listening');
+    const baselineErrors = fresh.server.listeners('error');
+    try {
+      await fresh.listen(0);
+      expect(fresh.server.listeners('listening')).toEqual(baselineListening);
+      expect(fresh.server.listeners('error')).toEqual(baselineErrors);
+    } finally {
+      if (fresh.server.listening) await fresh.close();
+    }
+  });
+});
+
 describe('web server · 安全（loopback + token + Host 校验）', () => {
   it('仅绑定 127.0.0.1（绝不 0.0.0.0）', () => {
     const addr = web.server.address();
