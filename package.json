@@ -9,7 +9,8 @@
     "packages/protocol",
     "packages/client",
     "packages/daemon",
-    "packages/ui"
+    "packages/ui",
+    "packages/desktop"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
