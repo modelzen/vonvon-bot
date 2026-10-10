@@ -3,7 +3,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {expect, it, vi} from 'vitest';
 
-it('imports the desktop Host during a data conflict and recovers in the same process', async () => {
+it('ignores legacy data conflicts when inspecting the daemon Host', async () => {
   const home = await mkdtemp(join(tmpdir(), 'vonvon-host-import-'));
   await mkdir(join(home, '.feishu-codex-bridge'));
   await mkdir(join(home, '.vonvon-bridge'));
@@ -12,7 +12,7 @@ it('imports the desktop Host during a data conflict and recovers in the same pro
   vi.resetModules();
   try {
     const host = await import('../src/host/client');
-    expect((await host.inspectHost(home)).kind).toBe('blocked');
+    expect((await host.inspectHost(home)).kind).toBe('absent');
     await rename(join(home, '.vonvon-bridge'), join(home, 'held-canonical'));
     expect(await host.inspectHost(home)).toEqual({kind: 'absent'});
     const bin = join(home, 'codex');

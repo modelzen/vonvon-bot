@@ -1,16 +1,15 @@
 import { readSingleInstanceHolder } from '../core/single-instance';
-import { botPaths } from '../config/paths';
+import { botPaths, paths } from '../config/paths';
 import { CHILD_SHUTDOWN_GRACE_MS, observeShutdown, stopChild, type ShutdownControl } from '../host/lifecycle';
 import type { ChildProcess } from 'node:child_process';
 import { spawnProcess } from '../platform/spawn';
-import { recordServicePid, SERVICE_ENV_FLAG } from '../service/win-startup';
+import { SERVICE_ENV_FLAG } from '../service/win-startup';
 import { log } from '../core/logger';
 import { loadBots, type BotEntry } from '../config/bots';
 import { createAdminIpcCaller, type AdminIpcCaller } from '../admin/ipc';
 import { AdminWriteError } from '../admin/ops';
 import { createAdminService } from '../admin/service';
 import { installBackendDep, uninstallBackendDep } from '../agent';
-import { spawnDaemonControl } from '../cli/commands/daemon-control';
 import { mountWebConsole } from '../web/mount';
 
 const BACKOFF_MIN_MS = 1_000;
@@ -40,21 +39,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   const cliEntry = process.argv[1];
   if (!cliEntry) throw new Error('supervisor: 无法解析 CLI 入口（process.argv[1] 为空）');
 
-  // The supervisor IS the Windows background service process — publish OUR pid to
-  // service.pid so `status`/`stop` and the update flow's isServiceRunning() find
-  // us. Historically this was never called on the supervisor path (only runSingle
-  // / onboarding did), so multi-bot + logon-autostart left service.pid stale →
-  // isServiceRunning()=false → the update button silently skipped the restart
-  // (restart-skipped-no-service, "updated but not relaunched"). No-op off Windows
-  // / when not launched as the service. (recordServicePid reads process.env, which
-  // the strip below never touches — see there — so the ordering isn't load-bearing.)
-  recordServicePid();
-
-  // Children must NOT record service.pid (that's the supervisor's job on Windows).
-  // Strip the flag from a COPY of the env (not process.env — mutating that would
-  // also disable the supervisor's own exit-time clearServicePid) so the flag is
-  // absent only for children and recordServicePid no-ops in them.
-  const childEnv = { ...process.env };
+  const childEnv: NodeJS.ProcessEnv = { ...process.env, VONVON_HOME: paths.appDir };
   delete childEnv[SERVICE_ENV_FLAG];
 
   let shuttingDown = false;
@@ -88,7 +73,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     c.startedAt = Date.now();
     // 'ipc' 通道：子进程据此识别自己被 supervisor 托管（不自己挂 Web 控制台），
     // 并接收管理面写请求（admin/ipc.ts 协议）。
-    const proc = spawnProcess(process.execPath, [cliEntry, 'run', '--bot', c.bot.appId], {
+    const proc = spawnProcess(process.execPath, [cliEntry, 'daemon', 'run', '--bot', c.bot.appId], {
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
       env: childEnv,
     });
@@ -214,27 +199,15 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
           };
         },
         daemonStartedAt: supervisorStartedAt,
-        ...(options.managed ? {} : {
-          restartDaemon: () => spawnDaemonControl('restart'),
-          applyUpdate: () => spawnDaemonControl('update'),
-          stopDaemon: () => spawnDaemonControl('stop'),
-        }),
         // 按需后端安装在 daemon 进程内直跑（owns runtime，装完即能解析加载）。
         installBackend: installBackendDep,
         uninstallBackend: uninstallBackendDep,
       }),
     );
     if (!webConsole && bots.length === 0) throw new Error('Web 控制台未能启动，无法进入引导。');
-    if (webConsole) {
-      if (process.stdout.isTTY) {
-        // 含 token 的 URL 只在前台 TTY 打印（后台 stdout 会落盘成日志，token 不进
-        // 日志——后台用 `web` 命令经 0600 发现文件跳转）。
-        console.log(`🌐 Web 控制台（聚合 ${bots.length} 个机器人）：${webConsole.url}\n`);
-      } else {
-        console.log(`🌐 Web 控制台已内嵌启动（127.0.0.1:${webConsole.port}）：运行 \`feishu-codex-bridge web\` 获取登录链接。`);
-      }
-    }
+    if (webConsole) console.log(`Web console listening on 127.0.0.1:${webConsole.port}`);
 
+    console.log('vonvon daemon ready');
     await control.waitForRequest();
   } finally {
     shuttingDown = true;

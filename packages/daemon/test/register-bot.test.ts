@@ -32,6 +32,7 @@ vi.mock('../src/config/paths', async () => {
       cacheDir: appDir,
       botsFile: join(appDir, 'bots.json'),
       secretsFile: join(appDir, 'secrets.enc'),
+      masterKeyFile: join(appDir, 'master.key'),
       keystoreSaltFile: join(appDir, '.keystore.salt'),
       secretsGetterScript: join(appDir, 'secrets-getter'),
       get configFile(): string {

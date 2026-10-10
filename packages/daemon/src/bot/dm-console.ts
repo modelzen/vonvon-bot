@@ -25,8 +25,11 @@ export async function handleDmConsole(channel: LarkChannel, cfg: AppConfig, msg:
     // The menu is a CardKit entity so dm.* button clicks can update it in place
     // (raw-JSON cards can't be patched — they flash and revert).
     const desktopRelease = await getDesktopRelease();
-    await sendManagedCard(channel, msg.chatId, buildDmMenuCard({ webConsoleUrl: webConsoleUrl(), version: bridgeVersion(), desktopRelease }), msg.messageId).catch((err) =>
-      log.fail('console', err, { cmd: 'menu-send' }),
-    );
+    try {
+      const { messageId } = await sendManagedCard(channel, msg.chatId, buildDmMenuCard({ webConsoleUrl: webConsoleUrl(), version: bridgeVersion(), desktopRelease }), msg.messageId);
+      log.info('console', 'menu-sent', { messageId });
+    } catch (error) {
+      log.fail('console', error, { cmd: 'menu-send' });
+    }
   });
 }

@@ -1,10 +1,11 @@
+import { resolveLegacyDataRoot as resolveDataRoot } from '../src/config/legacy-data-root';
 import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DataRootMigrationError, migrationJournalName, migrationWitnessName, resolveDataRoot } from '../src/config/data-root';
+import { DataRootMigrationError, migrationJournalName, migrationWitnessName } from '../src/config/data-root';
 import { relocateOfflineDataRoot } from '../src/config/data-root-migration';
 
 vi.mock('node:fs', async (original) => ({ ...await original<typeof import('node:fs')>() }));
@@ -235,12 +236,13 @@ describe('offline data root relocation', () => {
     fs.writeFileSync(join(source, 'kept'), 'child bytes');
     const compile = (name: string) => {
       const sourceCode = fs.readFileSync(join(process.cwd(), 'src/config', `${name}.ts`), 'utf8')
-        .replace("'./data-root'", "'./data-root.cjs'");
+        .replace("'./data-root'", "'./data-root.cjs'")
+        .replace("'./legacy-data-root'", "'./legacy-data-root.cjs'");
       fs.writeFileSync(join(home, `${name}.cjs`), ts.transpileModule(sourceCode, {
         compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, esModuleInterop: true },
       }).outputText);
     };
-    compile('data-root'); compile('data-root-migration');
+    compile('data-root'); compile('legacy-data-root'); compile('data-root-migration');
     const script = join(home, 'child.cjs');
     fs.writeFileSync(script, `const fs = require('node:fs');
 if (process.argv[3] === 'crash') { const rename = fs.renameSync; fs.renameSync = (...args) => { rename(...args); process.exit(73); }; }

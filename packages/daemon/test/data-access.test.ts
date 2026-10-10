@@ -28,10 +28,10 @@ describe('offline access admission', () => {
     expect((await migrateHostDataOffline(dir, runtime)).kind).toBe('linked');
   });
   it('fails closed on partial durable publication', () => {
-    const dir = home(); mkdirSync(join(dir, '.vonvon-bridge-access'));
-    writeFileSync(join(dir, '.vonvon-bridge-access', 'partial.json'), '{');
+    const dir = home(); mkdirSync(join(dir, '.access'));
+    writeFileSync(join(dir, '.access', 'partial.json'), '{');
     expect(() => assertNoDataLeases(dir)).toThrow();
-    expect(readFileSync(join(dir, '.vonvon-bridge-access', 'partial.json'), 'utf8')).toBe('{');
+    expect(readFileSync(join(dir, '.access', 'partial.json'), 'utf8')).toBe('{');
   });
   it('does not bypass a bound coordination port', async () => {
     const dir = home(); const owner = await acquireMutex(dir, 'admission');
@@ -48,8 +48,8 @@ describe('offline access admission', () => {
     expect(assertKnownOwnersStopped).not.toHaveBeenCalled();
   });
   it('retains a lease when process liveness is unknown', () => {
-    const dir = home(); mkdirSync(join(dir, '.vonvon-bridge-access'));
-    const file = join(dir, '.vonvon-bridge-access', 'unknown.json');
+    const dir = home(); mkdirSync(join(dir, '.access'));
+    const file = join(dir, '.access', 'unknown.json');
     writeFileSync(file, JSON.stringify({ version: 1, pid: 424242 }));
     const kill = vi.spyOn(process, 'kill').mockImplementation(() => { throw Object.assign(new Error('denied'), { code: 'EPERM' }); });
     try {

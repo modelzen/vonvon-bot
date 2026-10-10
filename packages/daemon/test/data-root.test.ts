@@ -13,7 +13,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { resolveDataRoot } from '../src/config/data-root';
+import { resolveLegacyDataRoot as resolveDataRoot } from '../src/config/legacy-data-root';
 
 const homes: string[] = [];
 

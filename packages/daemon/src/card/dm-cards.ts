@@ -390,7 +390,7 @@ export function buildRestartingCard(mode: 'restarting' | 'foreground' = 'restart
     return card(
       [
         md('ℹ️ 当前为**前台运行**（非后台守护服务）。'),
-        note('此按钮只重启由 `feishu-codex-bridge start` 安装的后台服务。前台运行请在其终端里 Ctrl+C 后重跑 `feishu-codex-bridge run`。'),
+        note('V2 不支持服务重启。请在启动终端里 Ctrl+C 后重新运行 `vonvon daemon run`。'),
         backToMenu(),
       ],
       { header: { title: '🔁 重启后台服务', template: 'orange' } },

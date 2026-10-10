@@ -2,7 +2,6 @@ import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import { join } from 'node:path';
-import { resolveDataRoot } from './data-root';
 
 export class DataAccessError extends Error {}
 export interface DataLease { release(): void }
@@ -15,15 +14,15 @@ export function isDead(pid: number): boolean {
   }
 }
 
-function coordinationAddress(home: string, role: 'admission' | 'host'): { path: string } | { host: string; port: number; exclusive: true } {
+function coordinationAddress(home: string, role: 'admission' | 'host' | 'keystore'): { path: string } | { host: string; port: number; exclusive: true } {
   const path = realpathSync(home);
   const normalized = process.platform === 'win32' ? path.toLowerCase() : path;
-  const hash = createHash('sha256').update(`vonvon-bridge-v1:${role}:${normalized}`).digest();
-  if (process.platform === 'win32') return { path: `\\\\.\\pipe\\vonvon-bridge-${role}-${hash.toString('hex')}` };
+  const hash = createHash('sha256').update(`vonvon-bot-v2:${role}:${normalized}`).digest();
+  if (process.platform === 'win32') return { path: `\\\\.\\pipe\\vonvon-bot-${role}-${hash.toString('hex')}` };
   return { host: '127.0.0.1', port: 20000 + hash.readUInt32BE(0) % 30000, exclusive: true };
 }
 
-export async function acquireMutex(home: string, role: 'admission' | 'host', timeoutMs = 1500): Promise<Server> {
+export async function acquireMutex(home: string, role: 'admission' | 'host' | 'keystore', timeoutMs = 1500): Promise<Server> {
   const address = coordinationAddress(home, role);
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -50,7 +49,7 @@ export function closeMutex(server: Server): Promise<void> {
   return new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 }
 
-const leaseDirectory = (home: string): string => join(realpathSync(home), '.vonvon-bridge-access');
+const leaseDirectory = (home: string): string => join(realpathSync(home), '.access');
 
 function requirePrivateDirectory(path: string): void {
   const stat = lstatSync(path);
@@ -81,7 +80,6 @@ export function assertNoDataLeases(home: string): void {
 export async function enterDataAccess(home: string): Promise<DataLease> {
   const mutex = await acquireMutex(home, 'admission');
   try {
-    resolveDataRoot(home);
     const dir = leaseDirectory(home);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     requirePrivateDirectory(dir);

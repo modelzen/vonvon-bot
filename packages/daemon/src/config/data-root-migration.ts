@@ -1,7 +1,8 @@
+import { resolveLegacyDataRoot as resolveDataRoot } from './legacy-data-root';
 import * as fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
-import { DataRootMigrationError, migrationJournalName, migrationWitnessName, resolveDataRoot } from './data-root';
+import { DataRootMigrationError, migrationJournalName, migrationWitnessName } from './data-root';
 
 type Identity = { dev: string; ino: string };
 type Intent = { version: 1; transaction: string; home: string; homeIdentity: Identity; sourceIdentity: Identity };

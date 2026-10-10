@@ -165,14 +165,10 @@ import {
   type CompletionReminderReplyInput,
 } from './completion-reminder';
 import {
-  acquireUpdateLock,
   currentVersion,
-  daemonRunning,
-  installLatest,
-  isDevSource,
-  isNewer,
   latestVersion,
-  restartDaemon,
+  isNewer,
+  isDevSource,
 } from '../service/update';
 import { fetchUsageBundle } from '../agent/usage';
 import {
@@ -3077,105 +3073,17 @@ export function createOrchestrator(
         log.fail('console', err, { cmd: 'restart' }),
       );
     })
-    // 重启（第二步·确认）：先把「正在重启」卡落地，再触发 restartDaemon。重启最终替换掉
-    // 当前 daemon（本回调就跑在它里面）：macOS 走 launchctl kickstart -k，Windows 走树外
-    // relauncher（本进程不自杀）——两种都在卡片渲染落地后才触发。没有后台服务（前台 run）
-    // 时不做无效的 service.restart，改引导去终端。
-    .on(DM.restartDo, ({ evt }) => {
+    .on(DM.restartDo, async ({ evt }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
-      void (async () => {
-        await new Promise((r) => setTimeout(r, CARD_SETTLE_MS));
-        if (!daemonRunning()) {
-          await updateManagedCard(channel, evt.messageId, buildRestartingCard('foreground')).catch(() => undefined);
-          return;
-        }
-        await updateManagedCard(channel, evt.messageId, buildRestartingCard('restarting')).catch(() => undefined);
-        await new Promise((r) => setTimeout(r, 800)); // 给「正在重启」卡渲染时间，再触发替换
-        await restartDaemon().catch((e) => log.fail('console', e, { phase: 'restart' }));
-      })();
+      await updateManagedCard(channel, evt.messageId, buildRestartingCard('foreground'));
     })
-    // 版本更新（检查）：查 npm 最新版，渲染结果。npm view 走异步 execFile —— 卡片
-    // 回调里**绝不能** spawnSync，否则冻结整条 event loop。先 settle 再更新，避开
-    // 点击回调窗口；checking→checked 是顺序 await，天然有序。
-    .on(DM.update, ({ evt }) => {
+    .on(DM.update, async ({ evt }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
-      void (async () => {
-        await new Promise((r) => setTimeout(r, CARD_SETTLE_MS));
-        await updateManagedCard(channel, evt.messageId, buildUpdateCard({ phase: 'checking' })).catch(
-          () => undefined,
-        );
-        const current = currentVersion();
-        const [latest, desktopRelease, distribution] = await Promise.all([
-          latestVersion().catch(() => null), getDesktopRelease(), runtimeDistribution(),
-        ]);
-        const hasUpdate = !!latest && isNewer(latest, current);
-        log.info('console', 'update-check', { current, latest, hasUpdate });
-        await updateManagedCard(
-          channel,
-          evt.messageId,
-          buildUpdateCard({ phase: 'checked', current, latest, hasUpdate, dev: isDevSource(), desktopRelease, distribution: distribution.kind === 'bundled' ? 'bundled' : 'other' }),
-        ).catch((e) => log.fail('console', e, { phase: 'update-check' }));
-      })();
+      await updateManagedCard(channel, evt.messageId, buildUpdateCard({ phase: 'error', from: currentVersion(), message: 'V2 前台 daemon 不支持服务更新。' }));
     })
-    // 版本更新（执行）：npm i -g 最新版（async spawn），成功后**先发完成卡再**重启
-    // daemon。重启最终会替换掉当前这个 daemon（卡片回调就跑在它里面）：macOS 走
-    // launchctl kickstart -k（本进程被 kill、launchd 复活），Windows 走「树外
-    // relauncher」（本进程不自杀，稍后由树外进程 kill+拉新）。两种都得先让完成卡
-    // 渲染落地再触发，否则用户看不到结果。
-    .on(DM.updateDo, ({ evt }) => {
+    .on(DM.updateDo, async ({ evt }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
-      void (async () => {
-        await new Promise((r) => setTimeout(r, CARD_SETTLE_MS));
-        const from = currentVersion();
-        if ((await runtimeDistribution()).kind === 'bundled') {
-          await updateManagedCard(channel, evt.messageId, buildUpdateCard({ phase: 'checked', current: from, distribution: 'bundled' })).catch(() => undefined);
-          return;
-        }
-        // 跨进程更新锁（B）：与 Web「升级」共用一把锁，防止两个 `npm i -g` 并发装坏全局
-        // 目录。拿不到＝已有更新在跑，直接提示「进行中」并退出，不叠跑第二个安装。
-        const release = acquireUpdateLock();
-        if (!release) {
-          await updateManagedCard(
-            channel,
-            evt.messageId,
-            buildUpdateCard({ phase: 'error', from, message: '已有一个更新正在进行中，请稍候再试。' }),
-          ).catch(() => undefined);
-          return;
-        }
-        await updateManagedCard(channel, evt.messageId, buildUpdateCard({ phase: 'updating', from })).catch(
-          () => undefined,
-        );
-        let res;
-        try {
-          res = await installLatest();
-        } finally {
-          release(); // npm 跑完即放锁；重启不需持锁
-        }
-        if (!res.ok) {
-          log.info('console', 'update-failed', { from });
-          await updateManagedCard(
-            channel,
-            evt.messageId,
-            buildUpdateCard({ phase: 'error', from, message: res.message }),
-          ).catch((e) => log.fail('console', e, { phase: 'update-error' }));
-          return;
-        }
-        const to = currentVersion();
-        const willRestart = daemonRunning();
-        const desktopRelease = await getDesktopRelease();
-        log.info('console', 'update-done', { from, to, willRestart });
-        await updateManagedCard(
-          channel,
-          evt.messageId,
-          buildUpdateCard({ phase: 'done', from, to, willRestart, desktopRelease }),
-        ).catch((e) => log.fail('console', e, { phase: 'update-done' }));
-        if (willRestart) {
-          // 给完成卡一点渲染时间，再触发重启（mac：kill 自己靠 launchd 复活；Windows：
-          // 委托树外 relauncher，本进程不自杀）。
-          await new Promise((r) => setTimeout(r, 800));
-          await restartDaemon().catch((e) => log.fail('console', e, { phase: 'update-restart' }));
-        }
-      })();
+      await updateManagedCard(channel, evt.messageId, buildUpdateCard({ phase: 'error', from: currentVersion(), message: 'V2 前台 daemon 不支持服务更新。' }));
     })
     // 📊 Codex 用量：loading → 并行拉 wham/usage + wham/profiles/me → 原地更新结果卡。
     // 同 DM.update 的双阶段模式：handler 立即返回让 SDK ack，慢活全在 settle 之后。

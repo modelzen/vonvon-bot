@@ -3,14 +3,12 @@ import { ensureOnboarded, announceEventsWhenLive } from '../../bot/onboarding';
 import { startBridge } from '../../bot/bridge';
 import { runSupervisor } from '../../bot/supervisor';
 import { acquireSingleInstanceLock, BridgeAlreadyRunningError } from '../../core/single-instance';
-import { clearServicePid, recordServicePid } from '../../service/win-startup';
 import { activeBots, ensureRegistry } from '../../config/bots';
 import { log } from '../../core/logger';
 import { AdminWriteError } from '../../admin/ops';
 import { createAdminIpcResponder } from '../../admin/ipc';
 import { createAdminService } from '../../admin/service';
 import { installBackendDep, uninstallBackendDep } from '../../agent';
-import { spawnDaemonControl } from './daemon-control';
 import { mountWebConsole, type MountedWebConsole } from '../../web/mount';
 
 export async function runRun(botName?: string, options: { control?: ShutdownControl; managed?: boolean } = {}): Promise<void> {
@@ -19,7 +17,7 @@ export async function runRun(botName?: string, options: { control?: ShutdownCont
   // Explicit selector always runs exactly that one bot inline (this is also how
   // the supervisor launches each child: `run --bot <appId>`).
   if (botName) {
-    await runSingle(botName, control, managed);
+    await runSingle(botName, control);
     return;
   }
 
@@ -34,7 +32,7 @@ export async function runRun(botName?: string, options: { control?: ShutdownCont
 
 /** Run a single bot inline in this process. `botName` undefined → the implicit
  *  current/default bot (with first-run onboarding allowed). */
-async function runSingle(botName: string | undefined, control: ShutdownControl, managed: boolean): Promise<void> {
+async function runSingle(botName: string | undefined, control: ShutdownControl): Promise<void> {
   const ready = await ensureOnboarded({ allowCreate: !botName, bot: botName });
   if (!ready) {
     process.exitCode = 1;
@@ -49,10 +47,6 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
     releaseLock = acquireSingleInstanceLock(cfg.accounts.app.id);
   } catch (err) {
     if (err instanceof BridgeAlreadyRunningError) {
-      // startNow (Windows service) eagerly wrote our pid to service.pid before we
-      // lost the lock — drop it so it doesn't linger as a dead pid (no-op unless
-      // service.pid still points at us; the live winner keeps its own).
-      clearServicePid();
       console.error(`✗ ${err.message}`);
       log.info('run', 'already-running', { pid: err.pid });
       process.exitCode = 1;
@@ -60,11 +54,6 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
     }
     throw err;
   }
-
-  // If launched as the Windows background service, publish our PID so
-  // `status`/`stop` can find us (no-op for a foreground run / other platforms /
-  // a supervised child, whose service env flag the supervisor strips).
-  recordServicePid();
 
   const fallbackCwd = process.env.FEISHU_CODEX_CWD || process.cwd();
   console.log('\n正在启动长连接 bot…');
@@ -132,30 +121,15 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
               }
             : undefined,
         daemonStartedAt: startedAt,
-        // 重启 / 升级 / 停止走 detached helper：本进程被 service stop 杀掉后由 helper 续命。
-        ...(managed ? {} : {
-          restartDaemon: () => spawnDaemonControl('restart'),
-          applyUpdate: () => spawnDaemonControl('update'),
-          stopDaemon: () => spawnDaemonControl('stop'),
-        }),
         // 按需后端安装在 daemon 进程内直跑（owns runtime，装完即能解析加载）。
         installBackend: installBackendDep,
         uninstallBackend: uninstallBackendDep,
       }),
     );
-    if (webConsole) {
-      if (process.stdout.isTTY) {
-        // 含 token 的 URL 只在前台 TTY 打印；后台 daemon 的 stdout 会被 launchd/
-        // systemd 重定向落盘——token 绝不进日志，后台改用 `web` 命令经 0600 发现
-        // 文件跳转。
-        console.log(`🌐 Web 控制台：${webConsole.url}`);
-        console.log('   仅本机可访问（127.0.0.1）；URL 含 token 勿外传。也可随时 `feishu-codex-bridge web` 重新打开。\n');
-      } else {
-        console.log(`🌐 Web 控制台已内嵌启动（127.0.0.1:${webConsole.port}）：运行 \`feishu-codex-bridge web\` 获取登录链接。`);
-      }
-    }
+    if (webConsole) console.log(`Web console listening on 127.0.0.1:${webConsole.port}`);
   }
 
+  if (!process.send) console.log('vonvon daemon ready');
   await control.waitForRequest();
   try {
     await webConsole?.close();
