@@ -6,7 +6,9 @@ Vonvon Bot becomes an independent product with a per-machine daemon, a web UI an
 
 One box is one unit of work. Every box names the evidence that checks it. A nested box is a sub-step of the box above it. Check a box only when its evidence exists, a file, a log line, a screenshot, a test run, or a SHA. The body is a how-to. The appendices explain and record.
 
-The program runs `skills/poteto-mode/playbooks/autopilot-stack.md` from the installed plugin. Codex on the operator's Mac runs it. Read `skills/poteto-mode/references/codex-tools.md` for the Codex equivalent of each Claude tool, model, and skill this plan names. The repository's `AGENTS.md` overrides one step of the playbook. Nobody force-pushes or rebases a shared branch. A child syncs its parent by merging the parent branch in, and a child whose parent landed retargets to `main` and merges `main` in. The operator lands every PR. Codex owns all code, every check in this plan, and packaging. Claude Code on the Linux server owns this plan and the design docs, and writes no product code. When the plan is wrong or incomplete, Codex says so in the PR. Codex decides a small deviation that leaves the design intact and records why in the PR. A change to the architecture, a data shape, or the PR order goes back to Claude Code, which updates the docs on a `claude/` branch before Codex continues.
+The program runs `skills/poteto-mode/playbooks/autopilot-stack.md` from the installed plugin. Codex on the operator's Mac runs it. Read `skills/poteto-mode/references/codex-tools.md` for the Codex equivalent of each Claude tool, model, and skill this plan names. The repository's `AGENTS.md` overrides one step of the playbook. Nobody force-pushes or rebases a pushed branch. A child syncs its parent by merging the parent branch in, and a child whose parent landed retargets to `main` and merges `main` in. Codex owns all code, every check in this plan, packaging, and guarded Shipping after verification. Claude Code on the Linux server normally owns this plan and the design docs, and writes no product code. When the plan is wrong or incomplete, Codex says so in the PR. Codex decides a small deviation that leaves the design intact and records why in the PR. A later change to the architecture, a data shape, or the PR order goes back to Claude Code, which updates the docs on a `claude/` branch before Codex continues.
+
+On 2026-10-10 the Claude Code CLI returned HTTP 401 during the docs-only V2 clarification. The operator explicitly authorized Codex to apply that clarification and continue. The operator also authorized Codex to merge V2 and later planned PRs when verified, without personal UI review or a manual merge click. This exception does not waive screenshots, video, unit tests, all ten live lanes, perf checks, independent audits, or the exact-head Shipping verdict. It does not authorize force-push, rebase of pushed branches, or an hourly audit.
 
 Pin every reference source to the commit below. Clone the ones the Mac does not have.
 
@@ -25,15 +27,13 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 ### Arm the program
 
 - [ ] State the protocol and this plan to the operator, then stop. Start execution only on the operator's explicit go.
-- [ ] On the operator's go, write this exact text into the standing orders and restate it in your todolist. "Plan is docs/plan.md in modelzen/vonvon-bot. PRs V1 to V11 in roadmap order. Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. The operator lands every PR. No force-push and no rebase of shared branches. Done when V11 is verified and every earlier PR has landed or been parked with a reason."
+- [ ] On the operator's go, record in standing orders and the todolist that V1 to V11 follow roadmap order. Tests alone do not verify a PR. Codex merges only after unit, all live, perf, independent audit, and exact-head Shipping checks pass. No force-push or rebase of pushed branches. The program ends when V11 is verified and earlier PRs have landed or been parked with a reason.
 - [ ] Read these from the installed plugin at program start. Re-read them at every tick.
   - [ ] `skills/poteto-mode/playbooks/autopilot-stack.md`
   - [ ] `skills/swarm/SKILL.md`
   - [ ] `run` (the bundled Claude Code skill) until V4 lands, then `.agents/skills/verify/SKILL.md` in the repository
   - [ ] `skills/poteto-mode/playbooks/opening-a-pr.md`
   - [ ] `skills/how/SKILL.md`, `skills/interrogate/SKILL.md`, `skills/show-me-your-work/SKILL.md`, `skills/create-verification-skill/SKILL.md`
-- [ ] Arm the hourly audit tick as a real `/loop` in dynamic mode, which schedules its own wake-up rather than blocking on a sleep. Never leave the cadence to memory. Codex has no `/loop`, so use a Codex scheduled task, or run the tick at the start of every turn and log its time.
-- [ ] Use this tick prompt, verbatim. "Re-read the execution playbook from the installed plugin and the standing objective. Audit the operation against both and fix drift in this tick. Probe every active lane and judge progress by side effects only. Stand down a stuck lane and dispatch its replacement now. Then post a short status message to the operator in chat only when the audit found a tracked change that no earlier status message reported, such as a PR opened, a code-ready head, a round launched or closed, a verdict, a merge, a stuck agent and the action taken, a blocker added or cleared, or a decision only the operator can make. Name every such change and nothing else. Do not repeat a table, the merged list, or an unchanged blocker. If the audit found none, end the turn with no reply text. Either way, log this tick's row in your decision trail. The row names the items reported, or none."
 - [ ] On the operator's hold or stand-down, send every owner a zero-writes order at once.
 
 ### Spawn owners
@@ -46,8 +46,8 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
   - [ ] V5 after V4. V7 after V6. V8 after V4. V10 after V4.
   - [ ] V9 after V8 and after Codex publishes a signed installer. V9 lives in `modelzen/feishu-codex-bridge`, branched from `origin/codex/device-handoff`.
   - [ ] V11 after V10.
-- [ ] Hold the file boundaries. V1 touches only the root config, `packages/protocol/**`, `.github/**`, `NOTICE`, and `README.md`. V2 and V3 touch only `packages/daemon/**`, `scripts/import-core.mjs`, and `packages/protocol/**`. V4 adds `packages/client/**`, `packages/ui/**`, and `.agents/skills/verify/**`. V5 touches only `packages/desktop/**`. V6 and V7 touch only `packages/daemon/src/agent/**`, provider entries in `packages/protocol/**`, the provider picker in `packages/ui/**`, and `NOTICE`. V8 touches only `packages/daemon/src/import/**`, `packages/protocol/src/import.ts`, and `packages/ui/src/import/**`. V10 and V11 add `packages/cloud/**` and `packages/daemon/src/cloud/**`.
-- [ ] Hold the review gate. V3, V4, V5, V6, V7, V8, V9, V10, and V11 change an interaction. They wait for the operator's review in chat with screenshots and a video before merge.
+- [ ] Hold the file boundaries. V1 touches only the root config, `packages/protocol/**`, `.github/**`, `NOTICE`, and `README.md`. V2 and V3 touch only `packages/daemon/**`, `scripts/import-core.mjs`, `packages/protocol/**`, and necessary root package metadata or lockfile changes for workspace integration. V4 adds `packages/client/**`, `packages/ui/**`, and `.agents/skills/verify/**`. V5 touches only `packages/desktop/**`. V6 and V7 touch only `packages/daemon/src/agent/**`, provider entries in `packages/protocol/**`, the provider picker in `packages/ui/**`, and `NOTICE`. V8 touches only `packages/daemon/src/import/**`, `packages/protocol/src/import.ts`, and `packages/ui/src/import/**`. V10 and V11 add `packages/cloud/**` and `packages/daemon/src/cloud/**`.
+- [ ] Preserve interaction evidence. V3 through V11 keep their prescribed screenshots and video, then proceed through independent review and guarded Shipping without waiting for personal review or a manual merge click.
 
 ### PR mechanics, for every PR
 
@@ -63,7 +63,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 
 - [ ] At the code-ready head SHA and at each later push that changes the patch, run the swarm per `skills/swarm/SKILL.md`. One gates lane. The ten live lanes from the PR's **Verify, live** block. The perf lane from its **Verify, perf** block. Two or more audit lanes, each with its own focus, that read the diff and the receipts and distrust the PR body. The root audits the receipts in the merge-ready report before the verdict.
 - [ ] Clean only when every lane is `PASS`. Findings go back to the owner, including a defect that a lane filed as a note. A new head gets a fresh swarm and a fresh verdict, except for results that stay valid under the patch-id rule in `playbooks/shipping.md`.
-- [ ] A clean verdict appends the PR to the linear stack in roadmap order. The operator lands the stack bottom-up. A verdict stays valid across a merge-sync only when the stable patch-id of base to head is unchanged under the patch-id rule in `playbooks/shipping.md`.
+- [ ] A clean verdict appends the PR to the linear stack in roadmap order. Codex runs guarded Shipping on the contiguous verified stack from the root, bottom-up. A verdict stays valid across a merge-sync only when the stable patch-id of base to head is unchanged under the patch-id rule in `playbooks/shipping.md`.
 
 ### Boot recipe, for every live lane
 
@@ -71,7 +71,7 @@ Each live lane runs in its own worktree at the PR head. Drive through the skill 
 
 - [ ] `git fetch origin <head-branch> && git checkout <head SHA>`.
 - [ ] Run `npm ci` and `npm run build` from the repository root. Export `VONVON_HOME=$(mktemp -d)` so no lane touches a real home. From V3 on, start the daemon with `node packages/daemon/bin/vonvon.mjs daemon start --port 0` and wait until `vonvon daemon status --json` reports a `listen` address.
-- [ ] Deliver input only through the driver skill's commands. Before V4, run the `vonvon` CLI from the shell and drive the daemon's WebSocket through `packages/client`. From V4 on, use the repository `verify` skill. It drives the web UI in Playwright Chromium (`npx playwright install chromium` once) and the Electron shell in a real macOS window through Playwright's `_electron` launcher. Lanes that need Feishu read the test bot from `~/.vonvon-test/feishu-bot.json`. Read-only diagnostics are `vonvon daemon status --json`, `$VONVON_HOME/logs/`, and `vonvon daemon logs --tail 200`.
+- [ ] Deliver input only through the driver skill's commands. Before V4, run the `vonvon` CLI from the shell and drive the daemon's WebSocket through `packages/client`. From V4 on, use the repository `verify` skill. It drives the web UI in Playwright Chromium (`npx playwright install chromium` once) and the Electron shell in a real macOS window through Playwright's `_electron` launcher. Feishu lanes use an isolated `VONVON_HOME` fixture from existing bridge data as specified in V2. Read-only diagnostics are `vonvon daemon status --json`, `$VONVON_HOME/logs/`, and `vonvon daemon logs --tail 200`.
 - [ ] Save every screenshot to `/tmp/swarm-<pr-id>/worker-<n>/<slug>.png` and return the paths with the report. A CLI lane saves its terminal transcript as `<slug>.txt` in the same folder.
 
 ## Build the monorepo and the protocol package (V1)
@@ -121,14 +121,14 @@ Each live lane runs in its own worktree at the PR head. Drive through the skill 
 - [ ] Baseline. Record that trunk `main` has no test suite and no parse path.
 - [ ] Rule. Fail if the test suite takes more than 10 s or one snapshot parse takes more than 2 ms on the Mac.
 
-**Review gate.** None. V1 is not review-gated.
+**Review gate.** V1 needs the independent verdict and exact-head Shipping check; no personal UI review is prescribed.
 
 **Merge.**
 
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Base and verdict are current under the execution playbook and the patch-id rule in `playbooks/shipping.md`.
-- [ ] The root appends V1 to the stack and the operator lands it bottom-up.
+- [ ] Codex merges V1 only after the exact-head independent Shipping verdict is clean.
 
 ## Copy the bot runtime into the daemon package (V2)
 
@@ -137,13 +137,13 @@ Each live lane runs in its own worktree at the PR head. Drive through the skill 
 **Files.**
 
 - [ ] Create `scripts/import-core.mjs`.
-- [ ] Create `packages/daemon/` with the copied `src/**`, `test/**`, and `PROVENANCE.md`.
+- [ ] Create `packages/daemon/` with the full copied `src/**`, including `src/web/**`, the full `test/**`, and `PROVENANCE.md`. V3 removes `src/web` after RPC parity.
 - [ ] Create `packages/daemon/bin/vonvon.mjs`.
 - [ ] Edit `packages/daemon/src/config/paths.ts` and `packages/daemon/src/config/keystore.ts`.
 
 **Build.**
 
-- [ ] `scripts/import-core.mjs` takes the path of a feishu-codex-bridge checkout, copies `src/` and `test/` at `446b2a4` into `packages/daemon`, and writes the source SHA into `PROVENANCE.md`. Rerunning it on a clean tree gives the same bytes.
+- [ ] `scripts/import-core.mjs` takes the path of a feishu-codex-bridge checkout, copies all of `src/` and `test/` at `446b2a4` into `packages/daemon`, and writes the source SHA into `PROVENANCE.md`. Keep `src/web` temporarily for V2 startup and V3 HTTP comparison. Rerunning the script on a clean tree gives the same bytes.
 - [ ] Point `appDir` in `paths.ts` at `VONVON_HOME`, defaulting to `~/.vonvon-bot`.
 - [ ] Replace the hostname-derived key in `keystore.ts` with a random key in `$VONVON_HOME/master.key`, mode 0600.
 - [ ] Rename the CLI entry to `vonvon` in `bin/vonvon.mjs` and keep `vonvon daemon run` as the foreground runner.
@@ -154,38 +154,39 @@ Each live lane runs in its own worktree at the PR head. Drive through the skill 
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] The copied suite runs green. Run `npm test -w packages/daemon` and record the pass count against the 153 files at `446b2a4`.
+- [ ] The copied suite matches or improves the measured `446b2a4` baseline. Run `npm test -w packages/daemon` and compare with 153 test files, 152 passing and one intentionally skipped, plus 1683 passing cases and 15 intentionally skipped cases. Record every skip; skipped provider live tests do not count toward live verification.
 - [ ] `packages/daemon/test/data-root.test.ts` gains a case that `VONVON_HOME` wins and that nothing is written under `~/.feishu-codex-bridge`.
-- [ ] `packages/daemon/test/keystore.test.ts` gains a case that a renamed host still decrypts. Run `npm test -w packages/daemon -- keystore`.
+- [ ] Add `packages/daemon/test/keystore.test.ts`, which does not exist in the source tree. Test that a renamed host still decrypts. Run `npm test -w packages/daemon -- keystore`.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on the configured `swarm workers` model at the PR head, per the boot recipe.
 
-- [ ] Lane 1. Regression lane against trunk. Run the bridge at `446b2a4` with `node bin/feishu-codex-bridge.mjs run` and the daemon at head with `vonvon daemon run`, each with the test bot. Save `startup.txt`. Pass when both reach the bot connected log line.
+- [ ] Prepare the V2 Feishu fixture from existing bridge data under an isolated `VONVON_HOME`. Prefer a saved inactive Bot; validate its credentials before connecting. Read its old secret with the bridge keystore and register the plaintext in the new isolated keystore, without copying old ciphertext under the new random `master.key`. This is test setup, not the V8 production importer. Preserve the original bridge data and both active Bot connections. Create a private test group containing only the operator and the selected Bot. Run all Bot-connected lanes serially, with baseline and daemon never connected to that Bot at the same time. Keep credentials out of reports.
+- [ ] Lane 1. Regression lane against trunk. Run the bridge at `446b2a4` with `node bin/feishu-codex-bridge.mjs run` and the daemon at head with `vonvon daemon run` in separate, serial turns on the fixture Bot. Save `startup.txt`. Pass when each reaches the bot connected log line.
 - [ ] Lane 2. Send a DM to the test bot and open the DM menu card. Save `dm-menu.txt`. Pass when the daemon log shows the card sent and the Feishu API returns success.
 - [ ] Lane 3. Bind a test group to a temp folder through the DM card flow. Save `bind.txt`. Pass when `$VONVON_HOME/bots/<appId>/projects.json` lists the group.
 - [ ] Lane 4. Mention the bot in the test group with `pwd`. Save `codex-turn.txt`. Pass when the run card finishes and its text contains the temp folder path.
 - [ ] Lane 5. Kill the codex app-server child mid-turn. Save `codex-crash.txt`. Pass when the run card shows an error and the next mention succeeds.
 - [ ] Lane 6. Start a second `vonvon daemon run` against the same `VONVON_HOME`. Save `second-instance.txt`. Pass when the second process exits with the single-instance error.
 - [ ] Lane 7. Run the daemon with `HOME` and `VONVON_HOME` both set to fresh temp folders, then list what exists under each. Save `paths.txt`. Pass when `$HOME/.feishu-codex-bridge` does not exist and every new file is under `VONVON_HOME`.
-- [ ] Lane 8. Store the test bot secret, then restart the daemon with `node --require` of a shim that makes `os.hostname()` return a different name. Save `rename.txt`. Pass when the bot reconnects.
+- [ ] Lane 8. Register the fixture Bot secret in the isolated keystore, then restart the daemon with `node --require` of a shim that makes `os.hostname()` return a different name. Save `rename.txt`. Pass when the bot reconnects.
 - [ ] Lane 9. Run `node scripts/import-core.mjs` twice on a clean tree. Save `import-core.txt`. Pass when `git status --porcelain` is empty after the second run.
 - [ ] Lane 10. Send SIGTERM to the supervisor. Save `shutdown.txt`. Pass when every child exits within 10 s and the lock files are gone.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
 - [ ] Metric. Time from process start to the bot connected log line, and supervisor plus child RSS after 60 s idle with one bot.
-- [ ] Probe. Interleave five runs of the bridge at `446b2a4` and five of the daemon at head, timing with the log timestamps and reading RSS from `/proc/<pid>/status`.
+- [ ] Probe. Interleave five serial runs of the bridge at `446b2a4` and five of the daemon at head. Time from process start to the connected log line. After each reaches a 60 s idle window, use macOS `ps` to sum supervisor and child process-tree RSS in KiB. Never keep both clients connected to the same Bot.
 - [ ] Baseline. Record the bridge numbers first.
 - [ ] Rule. Fail if the median start time is more than 10% slower or the RSS is more than 10% higher than the bridge.
 
-**Review gate.** None. V2 is not review-gated.
+**Review gate.** V2 needs the independent verdict and exact-head Shipping check; no personal UI review is prescribed.
 
 **Merge.**
 
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Base and verdict are current under the execution playbook and the patch-id rule in `playbooks/shipping.md`.
-- [ ] The root appends V2 to the stack and the operator lands it bottom-up.
+- [ ] Codex merges V2 only after the exact-head independent Shipping verdict is clean.
 
 ## Serve the daemon API over WebSocket (V3)
 
@@ -237,18 +238,18 @@ Each live lane runs in its own worktree at the PR head. Drive through the skill 
 - [ ] Baseline. Record the V2 HTTP numbers first.
 - [ ] Rule. Fail if the RPC p95 is more than 20% above the HTTP p95 or the payload is larger.
 
-**Review gate.** The operator reviews before merge.
+**Review evidence.** Keep the prescribed captures and independent verdict before guarded Shipping.
 
 - [ ] Copy lane 3 and lane 10 transcripts into `~/vonvon-review/V3-review-cli.txt`, and save a screenshot of the terminal session as `V3-review-cli.png`.
 - [ ] Record a 30 to 60 second video of the change in a lane worktree. Save it as `~/vonvon-review/V3-review.mp4`.
-- [ ] Post the screenshots and the video in chat. Stop at merge-ready. Wait for the operator's click.
+- [ ] Save the screenshots and video with the PR evidence. Codex proceeds after the independent exact-head Shipping verdict; personal review is optional.
 
 **Merge.**
 
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Base and verdict are current under the execution playbook and the patch-id rule in `playbooks/shipping.md`.
-- [ ] The root appends V3 to the stack and the operator lands it bottom-up.
+- [ ] Codex merges V3 only after the exact-head independent Shipping verdict is clean.
 
 ## Port the UI to a web client served by the daemon (V4)
 
@@ -296,18 +297,18 @@ Each live lane runs in its own worktree at the PR head. Drive through the skill 
 - [ ] Baseline. Record the old renderer numbers first.
 - [ ] Rule. Fail if the web UI paints more than 20% later or its bundle is more than 10% larger.
 
-**Review gate.** The operator reviews before merge.
+**Review evidence.** Keep the prescribed captures and independent verdict before guarded Shipping.
 
 - [ ] Copy lane 1, 2, 3, and 4 screenshots into `~/vonvon-review/V4-review-<slug>.png`.
 - [ ] Record a 30 to 60 second video of the change in a lane worktree. Save it as `~/vonvon-review/V4-review.mp4`.
-- [ ] Post the screenshots and the video in chat. Stop at merge-ready. Wait for the operator's click.
+- [ ] Save the screenshots and video with the PR evidence. Codex proceeds after the independent exact-head Shipping verdict; personal review is optional.
 
 **Merge.**
 
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Base and verdict are current under the execution playbook and the patch-id rule in `playbooks/shipping.md`.
-- [ ] The root appends V4 to the stack and the operator lands it bottom-up.
+- [ ] Codex merges V4 only after the exact-head independent Shipping verdict is clean.
 
 ## Wrap the UI in an Electron shell that runs the daemon (V5)
 
@@ -354,18 +355,18 @@ Each live lane runs in its own worktree at the PR head. Drive through the skill 
 - [ ] Baseline. Record the old app numbers first.
 - [ ] Rule. Fail if the new shell is more than 15% slower or uses more than 15% more memory.
 
-**Review gate.** The operator reviews before merge.
+**Review evidence.** Keep the prescribed captures and independent verdict before guarded Shipping.
 
 - [ ] Copy lane 1, 2, and 8 screenshots into `~/vonvon-review/V5-review-<slug>.png`. Include the Linux transcript from lane 6.
 - [ ] Record a 30 to 60 second video of the change in a lane worktree. Save it as `~/vonvon-review/V5-review.mp4`.
-- [ ] Post the screenshots and the video in chat. Stop at merge-ready. Wait for the operator's click.
+- [ ] Save the screenshots and video with the PR evidence. Codex proceeds after the independent exact-head Shipping verdict; personal review is optional.
 
 **Merge.**
 
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Base and verdict are current under the execution playbook and the patch-id rule in `playbooks/shipping.md`.
-- [ ] The root appends V5 to the stack and the operator lands it bottom-up.
+- [ ] Codex merges V5 only after the exact-head independent Shipping verdict is clean.
 
 ## Replace the Claude Code backend with the Paseo provider (V6)
 
@@ -413,18 +414,18 @@ Each live lane runs in its own worktree at the PR head. Drive through the skill 
 - [ ] Baseline. Record the V3 numbers first.
 - [ ] Rule. Fail if first-token latency is more than 10% slower or stop takes longer than 2 s.
 
-**Review gate.** The operator reviews before merge.
+**Review evidence.** Keep the prescribed captures and independent verdict before guarded Shipping.
 
 - [ ] Copy Feishu client screenshots of lanes 1, 2, and 3 into `~/vonvon-review/V6-review-<slug>.png`.
 - [ ] Record a 30 to 60 second video of the change in a lane worktree. Save it as `~/vonvon-review/V6-review.mp4`.
-- [ ] Post the screenshots and the video in chat. Stop at merge-ready. Wait for the operator's click.
+- [ ] Save the screenshots and video with the PR evidence. Codex proceeds after the independent exact-head Shipping verdict; personal review is optional.
 
 **Merge.**
 
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Base and verdict are current under the execution playbook and the patch-id rule in `playbooks/shipping.md`.
-- [ ] The root appends V6 to the stack and the operator lands it bottom-up.
+- [ ] Codex merges V6 only after the exact-head independent Shipping verdict is clean.
 
 ## Add ACP, Copilot, OpenCode, and Pi providers (V7)
 
@@ -469,18 +470,18 @@ Each live lane runs in its own worktree at the PR head. Drive through the skill 
 - [ ] Baseline. Record the V6 Codex number first.
 - [ ] Rule. Fail if Codex is more than 5% slower at V7, or if any new provider's first token takes more than 15 s.
 
-**Review gate.** The operator reviews before merge.
+**Review evidence.** Keep the prescribed captures and independent verdict before guarded Shipping.
 
 - [ ] Copy lane 2, 3, 4, and 7 screenshots into `~/vonvon-review/V7-review-<slug>.png`.
 - [ ] Record a 30 to 60 second video of the change in a lane worktree. Save it as `~/vonvon-review/V7-review.mp4`.
-- [ ] Post the screenshots and the video in chat. Stop at merge-ready. Wait for the operator's click.
+- [ ] Save the screenshots and video with the PR evidence. Codex proceeds after the independent exact-head Shipping verdict; personal review is optional.
 
 **Merge.**
 
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Base and verdict are current under the execution playbook and the patch-id rule in `playbooks/shipping.md`.
-- [ ] The root appends V7 to the stack and the operator lands it bottom-up.
+- [ ] Codex merges V7 only after the exact-head independent Shipping verdict is clean.
 
 ## Import bridge data and shut the bridge down (V8)
 
@@ -530,18 +531,18 @@ Each live lane runs in its own worktree at the PR head. Drive through the skill 
 - [ ] Baseline. Record that trunk has no import path, so the budget is absolute.
 - [ ] Rule. Fail if the median downtime is over 30 s.
 
-**Review gate.** The operator reviews before merge.
+**Review evidence.** Keep the prescribed captures and independent verdict before guarded Shipping.
 
 - [ ] Copy lane 1, 2, and 3 screenshots into `~/vonvon-review/V8-review-<slug>.png`.
 - [ ] Record a 30 to 60 second video of the change in a lane worktree. Save it as `~/vonvon-review/V8-review.mp4`.
-- [ ] Post the screenshots and the video in chat. Stop at merge-ready. Wait for the operator's click.
+- [ ] Save the screenshots and video with the PR evidence. Codex proceeds after the independent exact-head Shipping verdict; personal review is optional.
 
 **Merge.**
 
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Base and verdict are current under the execution playbook and the patch-id rule in `playbooks/shipping.md`.
-- [ ] The root appends V8 to the stack and the operator lands it bottom-up.
+- [ ] Codex merges V8 only after the exact-head independent Shipping verdict is clean.
 
 ## Ship the bridge release that points users to Vonvon Bot (V9)
 
@@ -587,18 +588,18 @@ Each live lane runs in its own worktree at the PR head. Drive through the skill 
 - [ ] Baseline. Record the `446b2a4` number first.
 - [ ] Rule. Fail if head is more than 200 ms slower in the median.
 
-**Review gate.** The operator reviews before merge.
+**Review evidence.** Keep the prescribed captures and independent verdict before guarded Shipping.
 
 - [ ] Copy lane 3, 5, and 6 captures into `~/vonvon-review/V9-review-<slug>.png`.
 - [ ] Record a 30 to 60 second video of the change in a lane worktree. Save it as `~/vonvon-review/V9-review.mp4`.
-- [ ] Post the screenshots and the video in chat. Stop at merge-ready. Wait for the operator's click.
+- [ ] Save the screenshots and video with the PR evidence. Codex proceeds after the independent exact-head Shipping verdict; personal review is optional.
 
 **Merge.**
 
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Base and verdict are current under the execution playbook and the patch-id rule in `playbooks/shipping.md`.
-- [ ] The operator lands V9 in the bridge repo and publishes the npm release after V8 lands.
+- [ ] Codex merges V9 in the bridge repo after the exact-head independent Shipping verdict is clean and V8 has landed. Publish the npm release only after its release checks and required external gates are satisfied.
 
 ## Add accounts and the machine list (V10)
 
@@ -647,18 +648,18 @@ Each live lane runs in its own worktree at the PR head. Drive through the skill 
 - [ ] Baseline. Record that trunk has no cloud, so the budget is absolute.
 - [ ] Rule. Fail if online takes more than 5 s or offline more than 45 s in the median.
 
-**Review gate.** The operator reviews before merge.
+**Review evidence.** Keep the prescribed captures and independent verdict before guarded Shipping.
 
 - [ ] Copy lane 2, 3, and 8 screenshots into `~/vonvon-review/V10-review-<slug>.png`.
 - [ ] Record a 30 to 60 second video of the change in a lane worktree. Save it as `~/vonvon-review/V10-review.mp4`.
-- [ ] Post the screenshots and the video in chat. Stop at merge-ready. Wait for the operator's click.
+- [ ] Save the screenshots and video with the PR evidence. Codex proceeds after the independent exact-head Shipping verdict; personal review is optional.
 
 **Merge.**
 
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Base and verdict are current under the execution playbook and the patch-id rule in `playbooks/shipping.md`.
-- [ ] The root appends V10 to the stack and the operator lands it bottom-up.
+- [ ] Codex merges V10 only after the exact-head independent Shipping verdict is clean.
 
 ## Manage any machine remotely through an encrypted relay (V11)
 
@@ -706,18 +707,18 @@ Each live lane runs in its own worktree at the PR head. Drive through the skill 
 - [ ] Baseline. Record the local numbers first.
 - [ ] Rule. Fail if relay p95 exceeds local p95 plus 150 ms on the same host.
 
-**Review gate.** The operator reviews before merge.
+**Review evidence.** Keep the prescribed captures and independent verdict before guarded Shipping.
 
 - [ ] Copy lane 1, 3, 4, and 7 screenshots into `~/vonvon-review/V11-review-<slug>.png`.
 - [ ] Record a 30 to 60 second video of the change in a lane worktree. Save it as `~/vonvon-review/V11-review.mp4`.
-- [ ] Post the screenshots and the video in chat. Stop at merge-ready. Wait for the operator's click.
+- [ ] Save the screenshots and video with the PR evidence. Codex proceeds after the independent exact-head Shipping verdict; personal review is optional.
 
 **Merge.**
 
 - [ ] Root's clean verdict at the exact head SHA.
 - [ ] Bugbot triage done.
 - [ ] Base and verdict are current under the execution playbook and the patch-id rule in `playbooks/shipping.md`.
-- [ ] The root appends V11 to the stack and the operator lands it bottom-up.
+- [ ] Codex merges V11 only after the exact-head independent Shipping verdict is clean.
 
 ## Close the program
 
@@ -750,7 +751,7 @@ The facts below were read from source this session, not run.
 
 ## Appendix C. Risks
 
-- No Feishu test bot exists yet. V2, V6, V7, V8, and V9 lanes need `~/.vonvon-test/feishu-bot.json` on the Mac. The operator creates a test app and writes that file before V2 starts.
+- V2, V6, V7, V8, and V9 need an isolated Feishu fixture from existing bridge data. Prefer a saved inactive Bot and a private group with only the operator and that Bot. Verify credentials and run Bot-connected lanes serially. Preserve the original data and both active Bot connections. Never connect concurrent baseline and daemon clients to the same Bot.
 - Ten parallel lanes that each start a daemon, Chromium, or Electron may exhaust the Mac's memory. Run lanes in waves when `vm_stat` shows free pages running low. V5 lanes run one at a time because they share the login item.
 - Remote access trusts the cloud to hand out the right daemon key. V11 lane 9 checks a swapped key fails, and a fingerprint check in the local UI is a follow-up.
 - A desktop-bundled daemon and an npm-installed daemon may differ in version. V5 lane 8 watches it.
