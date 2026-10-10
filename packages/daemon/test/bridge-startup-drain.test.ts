@@ -1,7 +1,8 @@
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { AppConfig } from '../src/config/schema';
 
 const fixture = vi.hoisted(() => ({
@@ -61,9 +62,6 @@ vi.mock('../src/core/logger', () => ({
 }));
 vi.mock('../src/service/win-startup', () => ({ recordServicePid() {}, clearServicePid() {} }));
 
-import { paths } from '../src/config/paths';
-import { pendingGroupsFile, readPendingGroups } from '../src/project/pending-groups';
-import { runHostRuntime } from '../src/host/bootstrap';
 import type { ShutdownControl } from '../src/host/lifecycle';
 
 const cfg: AppConfig = {
@@ -84,6 +82,18 @@ function outcome(promise: Promise<unknown>) {
   return { state: () => state, error: () => error, settled };
 }
 
+beforeEach(async () => {
+  vi.resetModules();
+  const root = await mkdtemp(join(tmpdir(), 'vonvon-startup-drain-'));
+  vi.stubEnv('HOME', join(root, 'home'));
+  vi.stubEnv('VONVON_HOME', join(root, 'vonvon'));
+  vi.stubEnv('CODEX_HOME', join(root, 'codex'));
+  vi.stubEnv('CODEX_BIN', join(root, 'unavailable-codex'));
+  const standaloneProcess = Object.create(process);
+  Object.defineProperty(standaloneProcess, 'send', { value: undefined });
+  vi.stubGlobal('process', standaloneProcess);
+});
+
 afterEach(() => {
   fixture.connect.mockReset();
   fixture.membership.mockReset();
@@ -92,6 +102,8 @@ afterEach(() => {
   fixture.registryClose.mockClear();
   fixture.releaseLock.mockClear();
   fixture.logFail.mockClear();
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 function reasons(error: unknown): unknown[] {
@@ -99,6 +111,10 @@ function reasons(error: unknown): unknown[] {
 }
 
 it.each([false, true])('keeps host and Bot ownership through accepted startup verification when connection fails, cleanup fails=%s', async cleanupFails => {
+  const { paths } = await import('../src/config/paths');
+  const { pendingGroupsFile, readPendingGroups } = await import('../src/project/pending-groups');
+  const { runHostRuntime } = await import('../src/host/bootstrap');
+  expect(process.send).toBeUndefined();
   const file = pendingGroupsFile(paths.projectsFile);
   await mkdir(dirname(file), { recursive: true });
   await writeFile(file, JSON.stringify({ version: 1, groups: [{
