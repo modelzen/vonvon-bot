@@ -1,17 +1,17 @@
 import { paths } from '../config/paths';
 import { acquireMutex, closeMutex } from '../config/data-access';
-import { readHostEndpoint } from './discovery';
 import { observeShutdown, type ShutdownControl } from './lifecycle';
 import { readServiceCodexBin } from '../service/codex-bin';
+import { acquirePidLock, releasePidLock, type PidLockInfo } from '../server/pid-lock';
 
-export async function runHostRuntime(options: { bot?: string; managed: boolean; control?: ShutdownControl }): Promise<void> {
+export async function runHostRuntime(options: { bot?: string; port?: number; managed: boolean; control?: ShutdownControl }): Promise<void> {
   const control = options.control ?? observeShutdown(options.managed);
   let lock: Awaited<ReturnType<typeof acquireMutex>> | undefined;
+  let owner: PidLockInfo | undefined;
   try {
     if (!process.send) {
       lock = await acquireMutex(paths.appDir, 'host');
-      const existing = await readHostEndpoint(paths.appDir, true);
-      if (existing) throw new Error('kind' in existing ? existing.message : `Host ${existing.pid} is already running.`);
+      owner = await acquirePidLock(paths.appDir);
     }
     if (control.requested) return;
     if (options.managed) {
@@ -23,6 +23,7 @@ export async function runHostRuntime(options: { bot?: string; managed: boolean; 
     await runRun(options.bot, { control, managed: options.managed });
   } finally {
     control.dispose();
+    if (owner) await releasePidLock(paths.appDir, owner);
     if (lock) await closeMutex(lock);
   }
 }
