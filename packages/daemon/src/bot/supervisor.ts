@@ -1,6 +1,6 @@
 import { readSingleInstanceHolder } from '../core/single-instance';
 import { botPaths, paths } from '../config/paths';
-import { CHILD_SHUTDOWN_GRACE_MS, observeShutdown, settleOwnedChild, type ShutdownControl } from '../host/lifecycle';
+import { CHILD_SHUTDOWN_GRACE_MS, closeOwnedProviders, observeShutdown, settleOwnedChild, type ShutdownControl } from '../host/lifecycle';
 import type { ChildProcess } from 'node:child_process';
 import { spawnProcess } from '../platform/spawn';
 import { SERVICE_ENV_FLAG } from '../service/win-startup';
@@ -12,6 +12,16 @@ import { createAdminService } from '../admin/service';
 import { installBackendDep, uninstallBackendDep } from '../agent';
 import { performCoreUpdate } from '../service/update';
 import { startApi } from '../server/http';
+import { z } from 'zod';
+
+const ownedWorkSchema = z.object({
+  fcb: z.literal('fcb.owned-work'),
+  pids: z.array(z.number().int().positive()),
+  settled: z.boolean(),
+});
+type OwnedWorkReport = z.infer<typeof ownedWorkSchema>;
+type ChildOwnership = { report?: OwnedWorkReport };
+
 
 const BACKOFF_MIN_MS = 1_000;
 const BACKOFF_MAX_MS = 30_000;
@@ -21,6 +31,7 @@ const HEALTHY_UPTIME_MS = 60_000;
 interface Child {
   bot: BotEntry;
   enabled: boolean;
+  stopping?: Promise<void>;
   proc?: ChildProcess;
   backoffMs: number;
   restartTimer?: NodeJS.Timeout;
@@ -44,6 +55,8 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   delete childEnv[SERVICE_ENV_FLAG];
 
   let shuttingDown = false;
+  const ownership = new WeakMap<ChildProcess, ChildOwnership>();
+  const errors: unknown[] = [];
   let api: Awaited<ReturnType<typeof startApi>> | undefined;
   const children = new Map<string, Child>(bots.map((bot) => [bot.appId, { bot, enabled: true, backoffMs: BACKOFF_MIN_MS, startedAt: 0 } satisfies Child]));
 
@@ -70,7 +83,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   };
 
   const spawnChild = (c: Child): void => {
-    if (shuttingDown || !c.enabled || c.proc) return;
+    if (shuttingDown || !c.enabled || c.proc || c.stopping) return;
     c.restartTimer = undefined;
     c.startedAt = Date.now();
     // 'ipc' 通道：子进程据此识别自己被 supervisor 托管（不自己挂 Web 控制台），
@@ -80,6 +93,8 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
       env: childEnv,
     });
     c.proc = proc;
+    const owned: ChildOwnership = {};
+    ownership.set(proc, owned);
     api?.invalidate();
     const ipc = createAdminIpcCaller((msg) => {
       // connected=false 才算通道关闭；send 返回 false 还可能只是背压（消息仍会
@@ -90,7 +105,10 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     c.ipc = ipc;
     proc.on('message', ipc.onMessage);
     proc.on('message', (message: unknown) => {
-      if (c.proc === proc && message && typeof message === 'object' && 'fcb' in message && message.fcb === 'fcb.connection') api?.invalidate();
+      if (c.proc !== proc) return;
+      const parsed = ownedWorkSchema.safeParse(message);
+      if (parsed.success && !owned.report?.settled) owned.report = parsed.data;
+      if (message && typeof message === 'object' && 'fcb' in message && message.fcb === 'fcb.connection') api?.invalidate();
     });
     log.info('supervisor', 'child-start', { bot: c.bot.name, appId: c.bot.appId, pid: proc.pid ?? null });
     prefixPipe(c.bot.name, proc.stdout, process.stdout);
@@ -102,7 +120,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
       c.ipc = undefined;
       api?.invalidate();
       ipc.rejectAll(`机器人「${c.bot.name}」进程已退出（等待自动重启）`);
-      if (shuttingDown || !c.enabled) return;
+      if (shuttingDown || !c.enabled || c.stopping) return;
       // Reset backoff if it had been healthy a while; otherwise grow it.
       const uptime = Date.now() - c.startedAt;
       if (uptime >= HEALTHY_UPTIME_MS) c.backoffMs = BACKOFF_MIN_MS;
@@ -118,6 +136,29 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
       log.fail('supervisor', err, { bot: c.bot.name, phase: 'spawn' });
       if (proc.pid === undefined && c.proc === proc) { c.proc = undefined; c.ipc = undefined; ipc.rejectAll(err.message); }
     });
+  };
+
+  const stopBot = (child: Child): Promise<void> => {
+    if (child.stopping) return child.stopping;
+    const proc = child.proc;
+    if (!proc) return Promise.resolve();
+    const owned = ownership.get(proc);
+    const stopping = settleOwnedChild(proc, CHILD_SHUTDOWN_GRACE_MS, false, async () => {
+      const graceEnds = Date.now() + CHILD_SHUTDOWN_GRACE_MS;
+      while (proc.exitCode === null && proc.signalCode === null && !owned?.report?.settled) {
+        if (Date.now() >= graceEnds) {
+          log.warn('daemon-shutdown', 'owned_work_unconfirmed', { pid: proc.pid, pids: owned?.report?.pids ?? [] });
+        }
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    });
+    child.stopping = stopping;
+    const finished = (): void => {
+      child.stopping = undefined;
+      if (child.enabled) spawnChild(child);
+    };
+    void stopping.then(finished, finished);
+    return stopping;
   };
 
   try {
@@ -149,9 +190,10 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
           }
           if (!enabled) {
             child.ipc?.rejectAll('Agent 已停用。');
-            if (child.proc) await settleOwnedChild(child.proc, CHILD_SHUTDOWN_GRACE_MS);
+            await stopBot(child);
             return;
           }
+          if (child.stopping) await child.stopping;
           spawnChild(child);
           const deadline = Date.now() + 12_000;
           let lastError: unknown;
@@ -215,16 +257,21 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
 
     console.log('vonvon daemon ready');
     await control.waitForRequest();
-  } finally {
+  } catch (error) { errors.push(error); }
+  finally {
     shuttingDown = true;
     for (const child of children.values()) if (child.restartTimer) clearTimeout(child.restartTimer);
-    const cleanup = await Promise.allSettled([api?.beginDrain()]);
-    const live = [...children.values()].flatMap(child => child.proc ? [settleOwnedChild(child.proc, CHILD_SHUTDOWN_GRACE_MS)] : []);
-    cleanup.push(...await Promise.allSettled(live));
+    const cleanup = await Promise.allSettled([closeOwnedProviders(async () => {
+      const drained = await Promise.allSettled([Promise.resolve().then(() => api?.beginDrain())]);
+      drained.push(...await Promise.allSettled([...children.values()].map(stopBot)));
+      errors.push(...drained.filter(result => result.status === 'rejected').map(result => result.reason));
+    })]);
     cleanup.push(...await Promise.allSettled([control.completeShutdown(() => api?.release() ?? Promise.resolve())]));
     if (!options.control) control.dispose();
     const failures = cleanup.filter(result => result.status === 'rejected');
-    for (const failure of failures) log.fail('daemon-shutdown', failure.reason, { phase: 'cleanup' });
-    if (failures.length) throw new AggregateError(failures.map(failure => failure.reason), 'Supervisor cleanup failed.');
+    errors.push(...failures.map(failure => failure.reason));
+    for (const error of errors) log.fail('daemon-shutdown', error, { phase: 'cleanup' });
+    if (errors.length === 1) throw errors[0];
+    if (errors.length) throw new AggregateError(errors, 'Supervisor cleanup failed.');
   }
 }

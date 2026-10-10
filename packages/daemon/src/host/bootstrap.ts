@@ -1,6 +1,6 @@
 import { paths } from '../config/paths';
 import { acquireMutex, closeMutex } from '../config/data-access';
-import { observeShutdown, type ShutdownControl } from './lifecycle';
+import { listenerCloseUnconfirmed, observeShutdown, type ShutdownControl } from './lifecycle';
 import { recordServicePid, clearServicePid } from '../service/win-startup';
 import { readServiceCodexBin } from '../service/codex-bin';
 import { acquirePidLock, publishPidLock, releasePidLock, type PidLockInfo } from '../server/pid-lock';
@@ -9,6 +9,7 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
   const control = options.control ?? observeShutdown(options.managed);
   let lock: Awaited<ReturnType<typeof acquireMutex>> | undefined;
   let owner: PidLockInfo | undefined;
+  const errors: unknown[] = [];
   try {
     if (!process.send) {
       lock = await acquireMutex(paths.appDir, 'host');
@@ -29,13 +30,21 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
       port: options.port,
       onListening: claimedOwner ? async (listen) => { await publishPidLock(paths.appDir, claimedOwner, listen); } : undefined,
     });
-  } finally {
-    await control.completeShutdown(async () => {});
+  } catch (error) { errors.push(error); }
+  finally {
+    try { await control.completeShutdown(async () => {}); }
+    catch (error) { errors.push(error); }
     control.dispose();
-    if (owner) {
-      clearServicePid();
-      await releasePidLock(paths.appDir, owner);
+    if (!errors.some(listenerCloseUnconfirmed)) {
+      if (owner) {
+        try { clearServicePid(); } catch (error) { errors.push(error); }
+        try { await releasePidLock(paths.appDir, owner); } catch (error) { errors.push(error); }
+      }
+      if (lock) {
+        try { await closeMutex(lock); } catch (error) { errors.push(error); }
+      }
     }
-    if (lock) await closeMutex(lock);
+    if (errors.length === 1) throw errors[0];
+    if (errors.length) throw new AggregateError(errors, 'Host shutdown failed.');
   }
 }
