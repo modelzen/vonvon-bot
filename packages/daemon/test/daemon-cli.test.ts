@@ -43,6 +43,10 @@ it('exposes daemon lifecycle commands while status and logs leave a missing home
     const p = launch(f.home, f.root, args); expect(await p.exited).toBe(0);
     expect(p.output()).not.toMatch(/__daemon-control|__desktop-service|migrate|restart/);
   }
+  const service = launch(f.home, f.root, ['service', '--help']);
+  expect(await service.exited).toBe(0);
+  expect(service.output()).toContain('install');
+  expect(service.output()).toContain('uninstall');
   for (const args of [['start'], ['run'], ['__daemon-control', 'stop'], ['data', 'migrate']]) {
     const p = launch(f.home, f.root, args); expect(await p.exited).toBe(1);
   }
