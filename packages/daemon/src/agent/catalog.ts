@@ -101,18 +101,13 @@ export const BACKEND_CATALOG: readonly BackendCatalogEntry[] = [
     displayName: 'Claude',
     access: 'sdk',
     dep: {
-      // SDK 是桥的硬依赖（随桥内置），isBackendDepInstalled 路径①经 bridge 自身
-      // node_modules 的 require.resolve 恒命中 → 在 picker 里始终判为「已装」可选。
-      kind: 'npm-ondemand',
-      pkg: '@anthropic-ai/claude-agent-sdk',
-      // 实测 SDK + 依赖装到用户目录约 265MB（含自带 Claude Code 运行时）；首次下载较久。
-      approxSizeMB: 265,
-      detectHint: '按需下载 @anthropic-ai/claude-agent-sdk（约 265MB，复用本机 Claude 登录态）',
-      installCmd: '随桥已内置（如缺失：npm i @anthropic-ai/claude-agent-sdk）',
+      kind: 'external-cli',
+      binName: 'claude',
+      detectHint: '未找到 Claude Code；请安装 claude 命令并加入 PATH',
+      installCmd: '安装 Claude Code 后运行 claude 登录；SDK 随 Vonvon Bot 内置',
     },
-    // 必须与 ClaudeAgentBackend.supportedModes 完全一致（单测强制）。
     supportedModes: ['qa', 'write', 'full'],
-    blurb: 'Claude Code（SDK 内置，复用本机登录；qa/write 走 OS 沙箱，能力较 Codex 精简）',
+    blurb: 'Claude Code（SDK 内置，复用本机登录；支持流式回复、追加消息和恢复）',
   },
 ];
 

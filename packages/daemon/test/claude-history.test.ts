@@ -1,71 +1,127 @@
-import { describe, expect, it } from 'vitest';
-import type { SDKSessionInfo, SessionMessage } from '@anthropic-ai/claude-agent-sdk';
-import { foldSessionMessages, mapSessionSummary } from '../src/agent/claude-agent/history';
+import { describe, expect, it, vi } from 'vitest';
+import { createClaudeBackend } from '../src/agent/claude-provider';
+import type { SDKSessionInfo } from '@anthropic-ai/claude-agent-sdk';
+import type { ClaudeProviderDependencies } from '../src/agent/claude-provider';
+import type { AgentClient, AgentSession, AgentStreamEvent, ToolCallDetail } from '../src/agent/paseo/agent-sdk-types';
 
-/**
- * 锁定 /resume 历史卡的纯映射：listSessions → ThreadSummary、getSessionMessages →
- * turns。形状由 spike9 实证（user/assistant 的 message.content[] 块）。
- */
-const sess = (o: Partial<SDKSessionInfo>): SDKSessionInfo =>
-  ({ sessionId: 'x', summary: '', lastModified: 0, ...o }) as SDKSessionInfo;
-const um = (content: unknown): SessionMessage => ({ type: 'user', uuid: 'u', session_id: 's', parent_tool_use_id: null, parent_agent_id: null, message: { role: 'user', content } });
-const am = (content: unknown): SessionMessage => ({ type: 'assistant', uuid: 'a', session_id: 's', parent_tool_use_id: null, parent_agent_id: null, message: { role: 'assistant', content } });
+function historyClient(events: AgentStreamEvent[], info: SDKSessionInfo | undefined = {
+  sessionId: 's1', customTitle: '我的标题', summary: '摘要', firstPrompt: '第一句',
+  createdAt: 2_000_000, lastModified: 5_000_000,
+}) {
+  const session = {
+    async *streamHistory() { yield* events; },
+    close: vi.fn(async () => {}),
+  } as unknown as AgentSession;
+  const resumeSession = vi.fn(async () => session);
+  const listImportableSessions = vi.fn(async () => [{
+    providerHandleId: 's1', cwd: '/repo', title: '我的标题',
+    firstPromptPreview: '第一句', lastPromptPreview: '最后一句',
+    lastActivityAt: new Date(5_000_000),
+  }]);
+  const client = {
+    provider: 'claude', resumeSession, listImportableSessions,
+  } as unknown as AgentClient;
+  const getSessionInfo = vi.fn(async () => info);
+  const titles: NonNullable<ClaudeProviderDependencies['titles']> = {
+    getSessionInfo, renameSession: vi.fn(), query: vi.fn(),
+  };
+  return { backend: createClaudeBackend({ client, titles }), session, resumeSession, listImportableSessions, getSessionInfo };
+}
 
-describe('mapSessionSummary', () => {
-  it('epoch ms → unix 秒；customTitle 优先于 summary/firstPrompt', () => {
-    const r = mapSessionSummary(sess({ sessionId: 's1', summary: '摘要', firstPrompt: '第一句', customTitle: '我的标题', createdAt: 2_000_000, lastModified: 5_000_000 }));
-    expect(r).toEqual({ sessionId: 's1', preview: '我的标题', createdAt: 2000, updatedAt: 5000, name: '我的标题' });
-  });
-  it('无 customTitle → 用 summary；无 summary → firstPrompt；createdAt 缺省回退 lastModified', () => {
-    expect(mapSessionSummary(sess({ summary: 'S', lastModified: 9000 }))).toMatchObject({ preview: 'S', createdAt: 9, updatedAt: 9, name: undefined });
-    expect(mapSessionSummary(sess({ summary: '', firstPrompt: 'FP', lastModified: 1000 })).preview).toBe('FP');
-  });
-});
+function timeline(item: Extract<AgentStreamEvent, { type: 'timeline' }>['item']): AgentStreamEvent {
+  return { type: 'timeline', provider: 'claude', item };
+}
 
-describe('foldSessionMessages', () => {
-  it('user(文本)→assistant(文本+思考) 折成一个 turn', () => {
-    const h = foldSessionMessages([
-      um([{ type: 'text', text: '你好' }]),
-      am([{ type: 'thinking', thinking: '想一下' }, { type: 'text', text: '你也好' }]),
-    ], 10);
-    expect(h.totalTurns).toBe(1);
-    expect(h.turns[0]).toMatchObject({ userText: '你好', assistantText: '你也好', reasoning: '想一下', tools: [] });
-  });
-
-  it('工具：assistant tool_use + 随后 user tool_result 关联到同一工具（输出/失败回填）', () => {
-    const h = foldSessionMessages([
-      um([{ type: 'text', text: '跑个命令' }]),
-      am([{ type: 'tool_use', id: 'tu1', name: 'Bash', input: { command: 'ls' } }]),
-      um([{ type: 'tool_result', tool_use_id: 'tu1', content: '文件列表', is_error: false }]),
-      am([{ type: 'text', text: '完成' }]),
-    ], 10);
-    expect(h.totalTurns).toBe(1);
-    expect(h.turns[0]!.tools).toEqual([{ title: 'ls', output: '文件列表' }]);
-    expect(h.turns[0]!.assistantText).toBe('完成');
+describe('Claude public session history', () => {
+  it('lists native sessions with title precedence and distinct creation and update timestamps', async () => {
+    const { backend, listImportableSessions } = historyClient([]);
+    expect(await backend.listThreads('/repo', 5)).toEqual([{
+      sessionId: 's1', name: '我的标题', preview: '我的标题',
+      createdAt: 2000, updatedAt: 5000,
+    }]);
+    expect(listImportableSessions).toHaveBeenCalledWith({ cwd: '/repo', limit: 5 });
   });
 
-  it('多轮：每个含文本的 user 开新 turn；保留最后 maxTurns 个', () => {
-    const msgs: SessionMessage[] = [];
-    for (let i = 1; i <= 5; i++) { msgs.push(um([{ type: 'text', text: `问题${i}` }]), am([{ type: 'text', text: `答${i}` }])); }
-    const h = foldSessionMessages(msgs, 2);
-    expect(h.totalTurns).toBe(5);
-    expect(h.turns).toHaveLength(2); // 只留最后 2
-    expect(h.turns[0]!.userText).toBe('问题4');
-    expect(h.turns[1]!.userText).toBe('问题5');
+  it.each([
+    [{ sessionId: 's1', summary: 'S', lastModified: 9000 }, 'S', 9],
+    [{ sessionId: 's1', summary: '', firstPrompt: 'FP', lastModified: 1000 }, 'FP', 1],
+  ] satisfies [SDKSessionInfo, string, number][])('preserves summary and first-prompt fallbacks: %j', async (info, preview, timestamp) => {
+    const { backend, getSessionInfo } = historyClient([], info);
+    expect(await backend.listThreads('/repo', 5)).toEqual([{
+      sessionId: 's1', preview, createdAt: timestamp, updatedAt: timestamp,
+    }]);
+    expect(getSessionInfo).toHaveBeenCalledWith('s1', { dir: '/repo' });
   });
 
-  it('跳过环境样板 user 文本（不算一个 turn）', () => {
-    const h = foldSessionMessages([
-      um([{ type: 'text', text: '<environment_context>cwd=...</environment_context>' }]),
-      um([{ type: 'text', text: '真问题' }]),
-      am([{ type: 'text', text: '真答案' }]),
-    ], 10);
-    expect(h.totalTurns).toBe(1);
-    expect(h.turns[0]!.userText).toBe('真问题');
+  it.each([
+    { type: 'read', filePath: '/repo/a', content: 'retained contents' },
+    { type: 'search', query: 'needle', content: 'retained contents' },
+    { type: 'fetch', url: 'https://example.com', result: 'retained contents' },
+    { type: 'plain_text', text: 'retained contents' },
+    { type: 'unknown', input: {}, output: 'retained contents' },
+    { type: 'write', filePath: '/repo/a', content: 'retained contents' },
+    { type: 'sub_agent', log: 'retained contents' },
+    { type: 'plan', text: 'retained contents' },
+  ] satisfies ToolCallDetail[])('retains non-shell output: $type', async (detail) => {
+    const { backend } = historyClient([
+      timeline({ type: 'user_message', text: 'read file' }),
+      timeline({ type: 'tool_call', callId: 'tool-1', name: 'Tool', status: 'completed', error: null, detail }),
+    ]);
+    expect((await backend.readHistory('/repo', 's1', 10)).turns[0]?.tools[0]?.output).toBe('retained contents');
   });
 
-  it('content 为字符串（非数组）也能处理', () => {
-    const h = foldSessionMessages([um('纯文本问题'), am('纯文本答案')], 10);
-    expect(h.turns[0]).toMatchObject({ userText: '纯文本问题', assistantText: '纯文本答案' });
+  it('retains the provider listing if supplemental SDK metadata cannot be read', async () => {
+    const { backend, getSessionInfo } = historyClient([]);
+    getSessionInfo.mockRejectedValueOnce(new Error('session disappeared'));
+    expect(await backend.listThreads('/repo', 5)).toEqual([{
+      sessionId: 's1', name: '我的标题', preview: '我的标题', createdAt: 5000, updatedAt: 5000,
+    }]);
+  });
+
+  it('folds user, answer, reasoning, and completed tool output into a history turn', async () => {
+    const { backend, session, resumeSession } = historyClient([
+      timeline({ type: 'user_message', text: '跑个命令' }),
+      timeline({ type: 'reasoning', text: '想一下' }),
+      timeline({ type: 'tool_call', callId: 'tu1', name: 'Bash', status: 'running', error: null,
+        detail: { type: 'shell', command: 'ls' } }),
+      timeline({ type: 'tool_call', callId: 'tu1', name: 'Bash', status: 'completed', error: null,
+        detail: { type: 'shell', command: 'ls', output: '文件列表' } }),
+      timeline({ type: 'assistant_message', text: '完成' }),
+    ]);
+    expect(await backend.readHistory('/repo', 's1', 10)).toEqual({ totalTurns: 1, turns: [{
+      userText: '跑个命令', assistantText: '完成', reasoning: '想一下',
+      tools: [{ title: 'ls', output: '文件列表' }],
+    }] });
+    expect(resumeSession).toHaveBeenCalledWith(
+      { provider: 'claude', sessionId: 's1', metadata: { cwd: '/repo' } },
+      { provider: 'claude', cwd: '/repo' },
+      { env: { FEISHU_CODEX_BRIDGE: '1', CLAUDE_CODE_ENTRYPOINT: 'feishu-codex-bridge' } },
+      { purpose: 'history' },
+    );
+    expect(session.close).toHaveBeenCalledOnce();
+  });
+
+  it('retains only the last requested turns but reports the full count', async () => {
+    const events: AgentStreamEvent[] = [];
+    for (let i = 1; i <= 5; i++) {
+      events.push(timeline({ type: 'user_message', text: `问题${i}` }));
+      events.push(timeline({ type: 'assistant_message', text: `答${i}` }));
+    }
+    const { backend } = historyClient(events);
+    const history = await backend.readHistory('/repo', 's1', 2);
+    expect(history.totalTurns).toBe(5);
+    expect(history.turns.map((turn) => turn.userText)).toEqual(['问题4', '问题5']);
+  });
+
+  it.each(['<environment_context>', '# AGENTS.md', '<system-reminder>', 'Caveat:'])(
+    'omits leading-whitespace %s boilerplate from the visible history', async (prefix) => {
+    const { backend } = historyClient([
+      timeline({ type: 'user_message', text: ` \n  ${prefix} internal setup` }),
+      timeline({ type: 'user_message', text: '真问题' }),
+      timeline({ type: 'assistant_message', text: '真答案' }),
+    ]);
+    expect(await backend.readHistory('/repo', 's1', 10)).toEqual({ totalTurns: 1, turns: [{
+      userText: '真问题', assistantText: '真答案', reasoning: '', tools: [],
+    }] });
   });
 });

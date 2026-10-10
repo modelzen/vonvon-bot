@@ -129,10 +129,30 @@ describe('Paseo AgentSession to AgentBackend adapter', () => {
     session.emit({ type: 'turn_completed', provider: 'claude', turnId: 'turn-1' });
     expect(await result).toEqual([
       { type: 'turn_started', turnId: 'turn-1' },
-      { type: 'tool_result', itemId: 'read-1', output: 'file contents' },
+      { type: 'tool_result', itemId: 'read-1', output: 'file contents', exitCode: 0 },
       { type: 'tool_result', itemId: 'edit-1', output: 'permission denied', exitCode: 1 },
       { type: 'done', turnId: 'turn-1' },
     ]);
+  });
+
+  it('does not invent a successful exit code for a canceled tool', async () => {
+    const session = new FakeSession();
+    const thread = new SessionBackendThread(session);
+    const run = thread.runStreamed({ text: 'cancel' });
+    const result = collect(run.events);
+    await Promise.resolve();
+    await Promise.resolve();
+    session.emit({ type: 'timeline', provider: 'claude', turnId: 'turn-1', item: {
+      type: 'tool_call', callId: 'canceled-call', name: 'Bash', status: 'canceled', error: null,
+      detail: { type: 'shell', command: 'sleep 30' },
+    } });
+    session.emit({ type: 'turn_completed', provider: 'claude', turnId: 'turn-1' });
+    expect(await result).toEqual([
+      { type: 'turn_started', turnId: 'turn-1' },
+      { type: 'tool_result', itemId: 'canceled-call' },
+      { type: 'done', turnId: 'turn-1' },
+    ]);
+    await thread.close();
   });
 
   it('interrupts only the active turn and closes the stream even if the provider emits no terminal event', async () => {

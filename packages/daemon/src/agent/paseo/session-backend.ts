@@ -60,6 +60,10 @@ function toolOutput(item: Extract<AgentTimelineItem, { type: 'tool_call' }>): st
   if (item.status === 'failed') {
     if (item.error instanceof Error) return item.error.message;
     if (typeof item.error === 'string') return item.error;
+    if (typeof item.error === 'object' && item.error !== null) {
+      if ('content' in item.error && typeof item.error.content === 'string') return item.error.content;
+      if ('message' in item.error && typeof item.error.message === 'string') return item.error.message;
+    }
   }
   switch (detail.type) {
     case 'shell': return detail.output;
@@ -99,8 +103,8 @@ function mapTimeline(item: AgentTimelineItem, textById: Map<string, string>): Ag
       if (item.status === 'running') return [{ type: 'tool_use', itemId: item.callId, title: toolTitle(item), kind: toolKind(item) }];
       const output = toolOutput(item);
       const exitCode = item.detail.type === 'shell' && typeof item.detail.exitCode === 'number'
-        ? item.detail.exitCode : item.status === 'failed' ? 1 : undefined;
-      return [{ type: 'tool_result', itemId: item.callId, ...(output ? { output } : {}), ...(exitCode !== undefined ? { exitCode } : {}) }];
+        ? item.detail.exitCode : item.status === 'failed' ? 1 : item.status === 'completed' ? 0 : undefined;
+      return [{ type: 'tool_result', itemId: item.callId, ...(output ? { output } : {}), ...(exitCode === undefined ? {} : { exitCode }) }];
     }
     case 'compaction': return item.status === 'completed' ? [{ type: 'context_compacted' }] : [];
     case 'error': return [{ type: 'error', message: item.message, willRetry: false }];
@@ -146,18 +150,22 @@ function mapEvent(event: AgentStreamEvent, fallbackTurnId: string, textById: Map
 
 async function promptFromInput(input: AgentInput): Promise<AgentPromptInput> {
   if (!input.images?.length) return input.text ?? '';
-  const blocks: Exclude<AgentPromptInput, string> = [{ type: 'text', text: input.text ?? '' }];
+  const blocks: Exclude<AgentPromptInput, string> = [];
+  if (input.text) blocks.push({ type: 'text', text: input.text });
   for (const file of input.images) {
-    const bytes = await readFile(file);
-    const mimeType = bytes[0] === 0xff && bytes[1] === 0xd8 ? 'image/jpeg'
-      : bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 ? 'image/png'
-      : bytes.toString('ascii', 0, 3) === 'GIF' ? 'image/gif'
-      : bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP' ? 'image/webp'
+    let bytes: Buffer;
+    try { bytes = await readFile(file); }
+    catch { continue; }
+    if (bytes.length === 0 || bytes.length > 20 * 1024 * 1024) continue;
+    const mimeType = bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff ? 'image/jpeg'
+      : bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 ? 'image/png'
+      : bytes.length >= 6 && bytes.toString('ascii', 0, 4) === 'GIF8' ? 'image/gif'
+      : bytes.length >= 12 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP' ? 'image/webp'
       : undefined;
-    if (!mimeType) throw new Error(`不支持的图片格式：${file}`);
+    if (!mimeType) continue;
     blocks.push({ type: 'image', data: bytes.toString('base64'), mimeType });
   }
-  return blocks;
+  return blocks.some((block) => block.type === 'image') ? blocks : input.text ?? '';
 }
 
 /** Wrap a Paseo session without changing the bot-facing AgentBackend contract. */

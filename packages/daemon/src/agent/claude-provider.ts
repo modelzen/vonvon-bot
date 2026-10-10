@@ -7,7 +7,7 @@ import type { Logger } from './paseo/logger';
 import { checkProviderLaunchAvailable, resolveProviderLaunch } from './paseo/provider-launch-config';
 import { SessionBackend, claudeSessionConfigFor } from './paseo/session-backend';
 import type { AgentClient, AgentModelDefinition, AgentSession, AgentTimelineItem } from './paseo/agent-sdk-types';
-import type { AgentBackend, BackendProbe, GenerateSessionTitleOptions, HistoryTurn, ModelInfo, ThreadHistory, ThreadSummary } from './types';
+import type { AgentBackend, BackendProbe, GenerateSessionTitleOptions, HistoryTurn, ModelInfo, ReasoningEffort, ThreadHistory, ThreadSummary } from './types';
 
 type ClaudeSdkTitles = {
   getSessionInfo: typeof getSessionInfo;
@@ -28,7 +28,18 @@ export type ClaudeBackend = SessionBackend & Required<Pick<AgentBackend,
   'readSessionTitle' | 'setSessionTitle' | 'generateSessionTitle'>>;
 
 const sdkTitles: ClaudeSdkTitles = { getSessionInfo, renameSession, query };
-const efforts = ['low', 'medium', 'high', 'xhigh'] as const;
+const effortByThinkingOption = new Map<string, ReasoningEffort>([
+  ['off', 'none'],
+  ['low', 'low'],
+  ['medium', 'medium'],
+  ['high', 'high'],
+  ['xhigh', 'xhigh'],
+  ['max', 'max'],
+  ['ultracode', 'ultra'],
+]);
+const thinkingOptionByEffort = new Map(
+  Array.from(effortByThinkingOption, ([option, effort]) => [effort, option]),
+);
 
 async function resolveClaudeExecutable(): Promise<string> {
   const launch = await resolveProviderLaunch({ defaultBinary: 'claude' });
@@ -77,8 +88,12 @@ function bridgeClient(client: AgentClient): AgentClient {
 }
 
 function mapModel(model: AgentModelDefinition): ModelInfo {
-  const supportedEfforts = efforts.filter((effort) => model.thinkingOptions?.some((option) => option.id === effort));
-  const defaultEffort = supportedEfforts.find((effort) => effort === model.defaultThinkingOptionId)
+  const supportedEfforts = (model.thinkingOptions ?? []).flatMap((option) => {
+    const effort = effortByThinkingOption.get(option.id);
+    return effort ? [effort] : [];
+  });
+  const providerDefault = effortByThinkingOption.get(model.defaultThinkingOptionId ?? '');
+  const defaultEffort = supportedEfforts.find((effort) => effort === providerDefault)
     ?? supportedEfforts.find((effort) => effort === 'high') ?? supportedEfforts[0] ?? 'medium';
   return {
     id: model.id,
@@ -98,6 +113,8 @@ function historyFromItems(items: AgentTimelineItem[], maxTurns: number): ThreadH
   const start = (): HistoryTurn => current ??= { userText: '', assistantText: '', reasoning: '', tools: [] };
   for (const item of items) {
     if (item.type === 'user_message') {
+      const text = item.text.trimStart();
+      if (['<environment_context>', '# AGENTS.md', '<system-reminder>', 'Caveat:'].some((prefix) => text.startsWith(prefix))) continue;
       if (current && (current.userText || current.assistantText || current.tools.length)) turns.push(current);
       current = { userText: item.text, assistantText: '', reasoning: '', tools: [] };
       toolsById = new Map();
@@ -113,7 +130,12 @@ function historyFromItems(items: AgentTimelineItem[], maxTurns: number): ThreadH
         turn.tools.push(tool);
         toolsById.set(item.callId, tool);
       }
-      const output = item.detail.type === 'shell' ? item.detail.output : undefined;
+      const detail = item.detail;
+      const output = 'output' in detail ? detail.output
+        : 'content' in detail ? detail.content
+        : detail.type === 'fetch' ? detail.result
+        : 'text' in detail ? detail.text
+        : 'log' in detail ? detail.log : undefined;
       if (typeof output === 'string') tool.output = output;
       else if (typeof item.error === 'string') tool.output = item.error;
       if (item.status === 'failed') tool.failed = true;
@@ -217,7 +239,7 @@ export function createClaudeBackend(dependencies: ClaudeProviderDependencies = {
           ...(options.model ? { model: options.model } : {}),
           daemonAppendSystemPrompt: BRIDGE_DEVELOPER_INSTRUCTIONS,
         }),
-        thinkingOptionFor: (effort) => effort === 'ultra' ? 'ultracode' : effort,
+        thinkingOptionFor: (effort) => thinkingOptionByEffort.get(effort) ?? effort,
         doctor: async (): Promise<BackendProbe> => {
           try {
             const ok = await client.isAvailable();
@@ -232,12 +254,20 @@ export function createClaudeBackend(dependencies: ClaudeProviderDependencies = {
         listThreads: async (cwd, limit): Promise<ThreadSummary[]> => {
           try {
             const sessions = await client.listImportableSessions?.({ cwd, limit }) ?? [];
-            return sessions.map((session) => ({
-              sessionId: session.providerHandleId,
-              preview: session.firstPromptPreview ?? '',
-              createdAt: Math.floor(session.lastActivityAt.getTime() / 1000),
-              updatedAt: Math.floor(session.lastActivityAt.getTime() / 1000),
-              ...(session.title ? { name: session.title } : {}),
+            return await Promise.all(sessions.map(async (session) => {
+              const info = await titles.getSessionInfo(session.providerHandleId, { dir: cwd }).catch((error: unknown) => {
+                log.fail('agent', error, { backend: 'claude-agent', phase: 'getSessionInfo', sessionId: session.providerHandleId });
+                return undefined;
+              });
+              const updatedAt = info?.lastModified ?? session.lastActivityAt.getTime();
+              const title = info ? info.customTitle : session.title;
+              return {
+                sessionId: session.providerHandleId,
+                preview: title || info?.summary || info?.firstPrompt || session.firstPromptPreview || '',
+                createdAt: Math.floor((info?.createdAt ?? updatedAt) / 1000),
+                updatedAt: Math.floor(updatedAt / 1000),
+                ...(title ? { name: title } : {}),
+              };
             }));
           } catch (error) {
             log.fail('agent', error, { backend: 'claude-agent', phase: 'listImportableSessions' });

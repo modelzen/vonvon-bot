@@ -2,11 +2,21 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Query } from '@anthropic-ai/claude-agent-sdk';
 import { createClaudeBackend } from '../src/agent/claude-provider';
 import { BRIDGE_DEVELOPER_INSTRUCTIONS } from '../src/agent/bridge-instructions';
-import type { AgentClient, AgentSession, AgentSessionConfig, AgentLaunchContext } from '../src/agent/paseo/agent-sdk-types';
+import type { AgentClient, AgentSession, AgentSessionConfig, AgentLaunchContext, AgentModelDefinition, AgentStreamEvent } from '../src/agent/paseo/agent-sdk-types';
 
-function fakeClient() {
+function fakeClient(models?: AgentModelDefinition[]) {
+  const listeners = new Set<(event: AgentStreamEvent) => void>();
   const session = {
     id: 'native-session',
+    subscribe(listener: (event: AgentStreamEvent) => void) {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
+    setThinkingOption: vi.fn(async (_option: string) => {}),
+    startTurn: vi.fn(async (_input: unknown) => {
+      for (const listener of listeners) listener({ type: 'turn_completed', provider: 'claude', turnId: 'turn-1' });
+      return { turnId: 'turn-1' };
+    }),
     async *streamHistory() {
       yield { type: 'timeline', provider: 'claude', item: { type: 'user_message', text: 'first' } };
       yield { type: 'timeline', provider: 'claude', item: { type: 'assistant_message', text: 'answer' } };
@@ -28,7 +38,7 @@ function fakeClient() {
       return session;
     }),
     fetchCatalog: vi.fn(async () => ({
-      models: [
+      models: models ?? [
         { provider: 'claude', id: 'opus', label: 'Opus', description: 'reasoning', isDefault: true,
           thinkingOptions: [{ id: 'low', label: 'Low' }, { id: 'high', label: 'High' }], defaultThinkingOptionId: 'high' },
         { provider: 'claude', id: 'hidden', label: 'Hidden', isSelectable: false },
@@ -43,6 +53,35 @@ function fakeClient() {
 }
 
 describe('Claude provider composition', () => {
+  it.each([
+    { providerDefault: 'max', defaultEffort: 'max' },
+    { providerDefault: 'ultracode', defaultEffort: 'ultra' },
+    { providerDefault: 'off', defaultEffort: 'none' },
+    { providerDefault: 'medium', defaultEffort: 'medium' },
+  ])('preserves provider options and the $providerDefault default through session and turn configuration', async ({ providerDefault, defaultEffort }) => {
+    const providerOptions = ['ultracode', 'max', 'off', 'xhigh', 'high', 'medium', 'low'];
+    const { client, calls, session } = fakeClient([{
+      provider: 'claude', id: 'opus', label: 'Opus',
+      thinkingOptions: [...providerOptions, 'unsupported'].map((id) => ({ id, label: id })),
+      defaultThinkingOptionId: providerDefault,
+    }]);
+    const backend = createClaudeBackend({ client });
+    const models = await backend.listModels();
+    expect(models).toHaveLength(1);
+    const model = models[0]!;
+    expect(model.supportedEfforts).toEqual(['ultra', 'max', 'none', 'xhigh', 'high', 'medium', 'low']);
+    expect(model.defaultEffort).toBe(defaultEffort);
+    for (const [index, effort] of model.supportedEfforts.entries()) {
+      const thread = await backend.startThread({ cwd: '/tmp/project', model: model.id, effort });
+      expect(calls.at(-1)?.config.thinkingOptionId).toBe(providerOptions[index]);
+      const events = [];
+      for await (const event of thread.runStreamed({ text: 'think' }, { effort }).events) events.push(event);
+      expect(events).toEqual([{ type: 'done', turnId: 'turn-1' }]);
+      expect(session.setThinkingOption).toHaveBeenLastCalledWith(providerOptions[index]);
+      await thread.close();
+    }
+  });
+
   it('forwards model, effort, permissions, instructions, and hook marker on create and resume', async () => {
     const { client, calls } = fakeClient();
     const backend = createClaudeBackend({ client });
@@ -74,7 +113,7 @@ describe('Claude provider composition', () => {
       defaultEffort: 'high', isDefault: true, hidden: false,
     }]);
     expect(await backend.listThreads('/tmp/project')).toEqual([{
-      sessionId: 'native-session', preview: 'first', name: 'Named', createdAt: 1767312000, updatedAt: 1767312000,
+      sessionId: 'native-session', preview: 'Named', name: 'Named', createdAt: 1767312000, updatedAt: 1767312000,
     }]);
     expect(await backend.readHistory('/tmp/project', 'native-session', 1)).toEqual({
       turns: [{ userText: 'second', assistantText: 'second answer', reasoning: '', tools: [] }], totalTurns: 2,
