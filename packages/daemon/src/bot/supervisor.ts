@@ -89,6 +89,9 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     });
     c.ipc = ipc;
     proc.on('message', ipc.onMessage);
+    proc.on('message', (message: unknown) => {
+      if (message && typeof message === 'object' && 'fcb' in message && message.fcb === 'fcb.connection') api?.invalidate();
+    });
     log.info('supervisor', 'child-start', { bot: c.bot.name, appId: c.bot.appId, pid: proc.pid ?? null });
     prefixPipe(c.bot.name, proc.stdout, process.stdout);
     prefixPipe(c.bot.name, proc.stderr, process.stderr);
