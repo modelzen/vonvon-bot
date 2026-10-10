@@ -48,7 +48,6 @@ vi.mock('../src/config/paths', async () => {
       projectsFile: join(appDir, 'projects.json'),
       processesFile: join(appDir, 'processes.json'),
       projectsRootDir: join(appDir, 'projects'),
-      webConsoleFile: join(appDir, 'web-console.json'),
     },
   };
 });

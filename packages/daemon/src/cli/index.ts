@@ -42,6 +42,13 @@ daemon.command('logs').description('Read recent daemon logs').option('--tail <li
     if (!Number.isInteger(options.tail) || options.tail < 1) throw new Error('Invalid tail count.');
     await (await import('./commands/daemon')).runLogs(options.tail);
   });
+const service = program.command('service').description('Manage the OS background service');
+service.command('install').description('Install and start the OS service').action(async () => {
+  await (await import('./commands/service')).runServiceCommand('install');
+});
+service.command('uninstall').description('Stop and remove the OS service').action(async () => {
+  await (await import('./commands/service')).runServiceCommand('uninstall');
+});
 program.command('__restart-after-exit <port> <oldPid>', { hidden: true }).action(async (port: string, oldPid: string) => {
   await (await import('../host/restart')).runSamePortRestartHelper({ port: Number(port), oldPid: Number(oldPid) });
 });
