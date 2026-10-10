@@ -57,7 +57,7 @@ Bot 不依赖桌面窗口。关掉窗口或退出桌面端，飞书里的 Bot �
 
 复制的起点是 feishu-codex-bridge 的 `codex/device-handoff` 分支（`446b2a4`）。现在桌面端 vendor 的就是这个分支，它比 bridge `main` 多 49 个提交，包括桌面端要用的接口、咖啡 Hook 设置和 Codex 用量。
 
-复制进来的部分是飞书消息处理（`src/bot`）、卡片（`src/card`）、群和项目（`src/project`）、咖啡 Hook（`src/cli-bridge`）、语音（`src/voice`）、Codex 后端（`src/agent/codex-appserver`）、配置和密钥（`src/config`）、系统服务（`src/service`），以及对应的测试。bridge 的网页控制台（`src/web`）不复制，它的管理接口改写成 daemon 的 RPC。
+V2 先复制 `446b2a4` 的完整 `src/` 和 `test/`，包括 `src/web`，保留能运行、能对比的 bridge 基线。V2 不增加网页功能。V3 把旧网页控制台的管理路由改成 daemon RPC，然后删除 `src/web`。最终架构不依赖 bridge 的网页控制台。
 
 这样做的理由是独立。vendor 构建产物时，每改一处内核都要在 bridge 仓库提交、发版、再 pin 版本。复制源码以后，一个功能在一个分支里就能改完。
 
