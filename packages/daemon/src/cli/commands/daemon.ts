@@ -3,6 +3,7 @@ import { open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { paths } from '../../config/paths';
 import { readRecentLogs } from '../../core/logger';
+import { verifyPidLockOwner } from '../../server/owner-verification';
 import { getPidLockInfo, isPidLockOwnerRunning, readRunningPidLock, type PidLockInfo } from '../../server/pid-lock';
 
 export type DaemonStatus = { running: false } | {
@@ -16,6 +17,7 @@ export type DaemonStatus = { running: false } | {
 export async function daemonStatus(home = paths.appDir): Promise<DaemonStatus> {
   const lock = await readRunningPidLock(home);
   if (!lock?.listen) return { running: false };
+  await verifyPidLockOwner(home, lock);
   return { running: true, pid: lock.pid, listen: lock.listen, ...(lock.version ? { version: lock.version } : {}), startedAt: lock.startedAt };
 }
 
@@ -84,8 +86,9 @@ export async function runStop(home = paths.appDir): Promise<boolean> {
   const lock = await readRunningPidLock(home);
   if (!lock) return false;
   if (lock.pid === process.pid) throw new Error('Refusing to stop the current CLI process.');
+  await verifyPidLockOwner(home, lock);
   const confirmation = await getPidLockInfo(home);
-  if (!sameOwner(confirmation, lock) || !isPidLockOwnerRunning(lock)) return false;
+  if (!sameOwner(confirmation, lock) || confirmation?.listen !== lock.listen || !isPidLockOwnerRunning(lock)) return false;
   process.kill(lock.pid, 'SIGTERM');
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {

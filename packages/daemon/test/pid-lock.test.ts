@@ -20,7 +20,8 @@ it('claims before readiness, publishes the actual address, and releases only its
   expect((await daemonStatus(path)).running).toBe(false);
   await expect(acquirePidLock(path)).rejects.toThrow(/already running/);
   const ready = await publishPidLock(path, owner, '127.0.0.1:49152');
-  expect(await daemonStatus(path)).toMatchObject({ running: true, pid: process.pid, listen: '127.0.0.1:49152' });
+  await expect(daemonStatus(path)).rejects.toThrow('Cannot verify daemon owner');
+  expect(await readRunningPidLock(path)).toEqual(ready);
   await releasePidLock(path, { ...owner, startedAt: new Date(0).toISOString() });
   expect(await readRunningPidLock(path)).toEqual(ready);
   await releasePidLock(path, owner);

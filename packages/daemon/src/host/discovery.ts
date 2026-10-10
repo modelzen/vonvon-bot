@@ -1,5 +1,6 @@
 import { DataRootMigrationError, resolveDataRoot } from '../config/data-root';
 import { DataAccessError } from '../config/data-access';
+import { verifyPidLockOwner } from '../server/owner-verification';
 import { getPidLockInfo, isPidLockOwnerRunning } from '../server/pid-lock';
 
 export type HostRefusal = {
@@ -23,6 +24,7 @@ export async function readHostEndpoint(home: string, explicitRoot = false): Prom
     const match = /^127\.0\.0\.1:(\d{1,5})$/.exec(lock.listen);
     const port = Number(match?.[1]);
     if (!match || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid Host listen address in PID lock.');
+    await verifyPidLockOwner(root.path, lock);
     return { pid: lock.pid, startedAt: lock.startedAt, listen: lock.listen, port };
   } catch (error) { return refusal(error); }
 }
