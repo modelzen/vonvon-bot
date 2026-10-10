@@ -7,6 +7,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      run_macos:
+        description: Run optional hosted macOS verification
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -60,3 +65,30 @@ jobs:
           else
             echo 'full: suite passed.' >> "$GITHUB_STEP_SUMMARY"
           fi
+
+  macos:
+    if: ${{ success() && github.event_name == 'workflow_dispatch' && inputs.run_macos == true }}
+    needs: linux
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run lint
+      - name: Record Mac result
+        if: success()
+        run: |
+          {
+            echo "Head: $GITHUB_SHA"
+            echo "macOS image: $ImageOS $ImageVersion"
+            echo "macOS: $(sw_vers -productVersion)"
+            echo "Node: $(node --version)"
+            echo 'full: suite passed.'
+          } >> "$GITHUB_STEP_SUMMARY"
