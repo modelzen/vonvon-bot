@@ -1,5 +1,6 @@
 import { fakeService, socketClient, startFixture } from './server-fixture';
 import { createServer } from 'node:net';
+import { Server } from 'node:http';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -158,4 +159,65 @@ it('release closes the actual listening port and authenticated drain peers', asy
     expect(connected).toBe(false);
     expect(await getPidLockInfo(fixture.home)).toEqual(owner);
   } finally { await client.close(); await fixture.close(); }
+});
+
+it.each(['{', JSON.stringify({ type: 'request', id: 'unknown', method: 'future', payload: {} }), JSON.stringify({ type: 'request', id: 'invalid', method: 'admin', payload: {} })])('rejects invalid authenticated drain traffic with shutdown closure: %s', async message => {
+  const fixture = await startFixture();
+  await recordOwner(fixture);
+  await fixture.api.beginDrain();
+  const client = await socketClient(fixture.api.port, fixture.credential);
+  try {
+    await client.ready();
+    const closing = closed(client.socket);
+    client.socket.send(message);
+    expect(await closing).toEqual({ code: 1001, reason: 'server_shutdown' });
+    expect(client.frames.filter(frame => frame.type !== 'serverInfo')).toEqual([]);
+  } finally { await client.close(); await fixture.close(); }
+});
+
+it('keeps its captured identity after the lock file changes during drain', async () => {
+  const fixture = await startFixture();
+  const owner = await recordOwner(fixture);
+  await fixture.api.beginDrain();
+  const client = await socketClient(fixture.api.port, fixture.credential);
+  try {
+    await client.ready();
+    const request: Request = { type: 'request', id: 'before', method: 'admin', payload: { type: 'daemonStatus' } };
+    expect(await client.call(request)).toMatchObject({ type: 'response', payload: { status: { running: true, pid: owner.pid } } });
+    await writeFile(join(fixture.home, 'daemon.pid'), JSON.stringify({ ...owner, pid: owner.pid + 1 }));
+    expect(await client.call({ ...request, id: 'after' })).toMatchObject({ type: 'response', payload: { status: { running: true, pid: owner.pid } } });
+  } finally { await client.close(); await fixture.close(); }
+});
+
+it('initiates listener closure synchronously and awaits its actual completion callback', async () => {
+  const fixture = await startFixture();
+  await recordOwner(fixture);
+  await fixture.api.beginDrain();
+  const closedListener = gate();
+  let confirmClosure = (): void => { throw new Error('listener is not closed'); };
+  const original = Server.prototype.close;
+  const close = vi.spyOn(Server.prototype, 'close').mockImplementation(function (this: Server, callback) {
+    return original.call(this, error => {
+      confirmClosure = () => callback?.(error);
+      closedListener.release();
+    });
+  });
+  let releasing: Promise<void> | undefined;
+  try {
+    const settled = vi.fn();
+    releasing = fixture.api.release();
+    void releasing.then(settled, settled);
+    expect(close).toHaveBeenCalledOnce();
+    expect(fixture.api.release()).toBe(releasing);
+    await closedListener.promise;
+    expect(settled).not.toHaveBeenCalled();
+    confirmClosure();
+    await releasing;
+    expect(settled).toHaveBeenCalledOnce();
+  } finally {
+    close.mockRestore();
+    confirmClosure();
+    await releasing;
+    await fixture.close();
+  }
 });
