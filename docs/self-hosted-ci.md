@@ -18,14 +18,14 @@ vonvon-bot 原有的 [Native desktop validation](https://github.com/modelzen/von
 
 现有服务已安装并通过图形会话验证。需要重装时执行以下步骤，注册期间先暂停两个仓库的 Mac job。
 
-1. 在 macOS 系统设置的用户与群组中创建短名称为 `github-ci` 的标准用户。该账户不能属于管理员组，也不配置 sudo、Developer ID、Sparkle 私钥、公证凭据或生产 SSH 授权。不复制日常账户的钥匙串和凭据。
+1. 在 macOS 系统设置的用户与群组中确认或创建短名称为 `github-ci` 的标准用户。该账户不能属于管理员组，也不配置 sudo、Developer ID、Sparkle 私钥、公证凭据或生产 SSH 授权。不复制日常账户的钥匙串和凭据。
 2. 登录该用户的图形会话。AppKit 检查需要该会话，不使用 root 服务。安装工作流需要的 XcodeGen 和 xcbeautify，确认已核验的 Xcode 可用。当前机器为 macOS 26.7 ARM64、Xcode 27.0，Node 22 由工作流安装。
 3. 在 GitHub 组织 Settings → Actions → Runners 中，使用当期官方 ARM64 下载地址、校验值和一次性注册令牌，在 `/Users/github-ci/.local/share/github-actions/modelzen-macos` 中安装。令牌只用于注册，不写入仓库或文档。
 4. 选择 `private-ci` runner group，名称设为 `mac-mini-isolated`，自定义标签为 `modelzen-macos` 和 `modelzen-macos-isolated`，工作目录为 `_work`。每台机器只有一个 runner，一次执行一个 job。
 5. 在 `github-ci` 用户的图形登录会话运行 `./svc.sh install`。启动前删除生成的 LaunchAgent 中的 `SessionCreate` 键，检查 plist 语法，再运行 `./svc.sh start`。保留官方 `runsvc.sh` 入口；本机使用 `caffeinate -i` 包装服务，并设置 `Nice=10`。
 6. 从实际 runner job 检查账户、日常用户目录访问限制和 AppKit 窗口创建。通过后再将仓库变量设为 `true`，手动运行受信任的 `main` 验证完整工作流。
 
-官方服务模板的 `SessionCreate=true` 会新建没有图形权限的安全会话。本机曾因此出现 `NSScreen.screens` 为空。删除该键后，服务继承 `github-ci` 已登录的图形会话；再次安装服务时须重新检查。仅看到 runner 在线或注册成功，不能证明 AppKit 可用。
+官方服务模板的 `SessionCreate=true` 会新建安全会话。本机实测该会话没有图形权限，导致 `NSScreen.screens` 为空。删除该键后，服务继承 `github-ci` 已登录的图形会话；再次安装服务时须重新检查。仅看到 runner 在线或注册成功，不能证明 AppKit 可用。
 
 安装服务后、首次启动前，在 `github-ci` 的终端执行：
 
