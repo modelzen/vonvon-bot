@@ -212,7 +212,8 @@ export function waitForExit(child: ChildProcess, timeoutMs: number): Promise<boo
 
 export const CHILD_SHUTDOWN_GRACE_MS = 8000;
 const FORCE_EXIT_MS = 3000;
-const HOST_SHUTDOWN_GRACE_MS = CHILD_SHUTDOWN_GRACE_MS + FORCE_EXIT_MS + 1000;
+const FORCE_SHUTDOWN_MS = FORCE_EXIT_MS * (process.platform === 'win32' ? 2 : 1);
+const HOST_SHUTDOWN_GRACE_MS = CHILD_SHUTDOWN_GRACE_MS + FORCE_SHUTDOWN_MS + 1000;
 const stops = new WeakMap<ChildProcess, Promise<void>>();
 
 function groupExists(pid: number): boolean {
@@ -272,7 +273,8 @@ async function stop(child: ChildProcess, graceMs: number, ownsProcessGroup: bool
       } else if (ownsProcessGroup) {
         await reapGroup(child.pid);
       } else child.kill('SIGKILL');
-      if (!await waitForExit(child, Math.max(0, forceDeadline - Date.now()))) throw new Error(`Host process ${child.pid} has not exited after forced termination.`);
+      const exitWaitMs = process.platform === 'win32' ? FORCE_EXIT_MS : Math.max(0, forceDeadline - Date.now());
+      if (!await waitForExit(child, exitWaitMs)) throw new Error(`Host process ${child.pid} has not exited after forced termination.`);
     }
   }
   if (ownsProcessGroup && process.platform !== 'win32' && child.pid) forced = await reapGroup(child.pid) || forced;

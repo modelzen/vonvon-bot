@@ -1,6 +1,6 @@
 # 管理自托管 Mac CI
 
-两个仓库当前 `main` 的 Linux 检查保留 GitHub 托管，macOS 检查使用本机自托管 runner。Windows 检查继续使用 GitHub 托管。
+两个仓库当前 `main` 的 Linux 检查保留 GitHub 托管，macOS 检查使用本机自托管 runner。vonvon-bot 的 Windows 检查使用 GitHub 托管 `windows-2025`。
 
 ## 当前状态
 
@@ -12,7 +12,7 @@
 
 2026-10-11 的完整 `main` 检查均已通过，包括 [Notelet 的 XCTest、Universal 构建与启动检查](https://github.com/modelzen/notelet/actions/runs/38071328950) 和 [vonvon-bot 的安装、构建、类型检查、测试与 lint](https://github.com/modelzen/vonvon-bot/actions/runs/38071332092)。两个运行也都通过了托管 Linux 检查。
 
-vonvon-bot 原有的 [Native desktop validation](https://github.com/modelzen/vonvon-bot/actions/workflows/desktop.yml) 位于旧桌面分支的 `.github/workflows/desktop.yml`，包含托管 `windows-2025` 和 `macos-15` 两项。此次没有删除 Windows，也没有迁移这条旧分支工作流。当前 `main` 的新架构只有 `.github/workflows/ci.yml`，上面的成功结果不包含 Windows 原生验证。
+vonvon-bot 原有的 [Native desktop validation](https://github.com/modelzen/vonvon-bot/actions/workflows/desktop.yml) 位于旧桌面分支的 `.github/workflows/desktop.yml`，包含托管 `windows-2025` 和 `macos-15` 两项。此次没有删除 Windows，也没有迁移这条旧分支工作流。当前 `main` 的新架构使用 `.github/workflows/ci.yml`，已补回托管 Windows 检查，与 Linux、专用 Mac 运行同一套 Node 检查。上面的历史成功结果早于 Windows 恢复，不包含 Windows 原生验证。
 
 ## 重装专用账户的 runner
 
@@ -58,9 +58,9 @@ cd /Users/github-ci/.local/share/github-actions/modelzen-macos
 
 ## 检查与计费
 
-PR 改动触发一轮 Linux 检查，合入 main 后不重复执行。文档改动不启动 Mac。手动 `workflow_dispatch` 可补跑完整 Linux 检查；Mac 还需开启上述变量并满足来源与账户要求。
+PR 改动先触发一轮 Linux 检查，完整改动随后运行托管 Windows 和自托管 Mac。Notelet 只运行 Linux 和 Mac。合入 main 后不重复执行，文档改动不启动 Windows 或 Mac。手动 `workflow_dispatch` 可补跑完整 Linux 检查；Mac 还需开启上述变量并满足来源与账户要求。
 
-Linux 和 Windows 仍受组织托管额度和计费状态约束。迁移不退回已消耗的额度。自托管 Mac 不增加云端 Mac 计算费用。
+Linux 和 Windows 仍受组织托管额度和计费状态约束。迁移不退回已消耗的额度。自托管 Mac 不增加云端 Mac 计算费用。单价、分钟取整和触发示例见 [ci-costs.md](ci-costs.md)。
 
 没有新增 GitHub 构建产物上传。runner 的 `_work` 与日常开发 checkout 分开，后续 checkout 清理同一仓库的旧构建输出，不把 runner 目录用作开发目录。现有打包、签名、公证和发布兼容性要求仍执行。
 

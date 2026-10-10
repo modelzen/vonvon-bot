@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, expect, it } from 'vitest';
 import { z } from 'zod';
 const manifestSchema = z.object({ source: z.string(), commit: z.string(), phase: z.enum(['seeding', 'complete']), files: z.array(z.object({ path: z.string(), mode: z.string(), sha256: z.string() })) });
@@ -22,7 +23,8 @@ async function fixture() {
   const code = await readFile(resolve('../../scripts/import-core.mjs'), 'utf8');
   expect(code).toContain(`const pin = '${originalPin}'`);
   await writeFile(script, code.replace(originalPin, pin));
-  const run = (prefix: string[] = []) => new Promise<{ code: number | null; output: string }>((resolve, reject) => {
+  const run = (preload?: string) => new Promise<{ code: number | null; output: string }>((resolve, reject) => {
+    const prefix = preload ? ['--import', pathToFileURL(preload).href] : [];
     const child = spawn(process.execPath, [...prefix, script, source]); let output = '';
     child.stdout.on('data', data => { output += String(data); }); child.stderr.on('data', data => { output += String(data); });
     child.once('error', reject); child.once('close', code => resolve({ code, output }));
@@ -47,7 +49,8 @@ async function expectCompleteSeed(f: Awaited<ReturnType<typeof fixture>>) {
     const bytes = await readFile(join(f.destination, file.path));
     expect(createHash('sha256').update(bytes).digest('hex')).toBe(file.sha256);
     expect(bytes).toEqual(await readFile(join(f.source, file.path === 'LICENSE.bridge' ? 'LICENSE' : file.path)));
-    expect((await lstat(join(f.destination, file.path))).mode & 0o777).toBe(file.mode === '100755' ? 0o755 : 0o644);
+    const modeMask = process.platform === 'win32' ? 0o200 : 0o777;
+    expect((await lstat(join(f.destination, file.path))).mode & modeMask).toBe((file.mode === '100755' ? 0o755 : 0o644) & modeMask);
   }
   expect(await readFile(join(f.destination, 'PROVENANCE.md'), 'utf8')).toContain('A completed import never rewrites, repairs, or restores fork files.');
 }
@@ -120,6 +123,21 @@ it('serializes concurrent imports and rejects an unrelated provenance file', asy
   expect(await readFile(join(f.destination, 'PROVENANCE.md'), 'utf8')).toBe(content);
 });
 
+it('rejects a read-only partial import while retaining its bytes', async () => {
+  const f = await fixture(); expect((await f.run()).code).toBe(0);
+  const manifest = manifestSchema.parse(JSON.parse(await readFile(join(f.destination, 'import-core.json'), 'utf8')));
+  await writeFile(join(f.destination, 'import-core.json'), JSON.stringify({ ...manifest, phase: 'seeding' }));
+  const license = join(f.destination, 'LICENSE.bridge');
+  const bytes = await readFile(license);
+  await chmod(license, 0o444);
+  try {
+    const result = await f.run();
+    expect(result.code, result.output).toBe(1);
+    expect(result.output).toContain('Conflicting partial import: LICENSE.bridge');
+    expect(await readFile(license)).toEqual(bytes);
+  } finally { await chmod(license, 0o644); }
+});
+
 it('recovers an actual killed import while preserving its bounded unknown residue', async () => {
   const f = await fixture(); const source = await readFile(f.script, 'utf8');
   await writeFile(f.script, source.replace('await fs.link(staged, target);', "await fs.link(staged, target); process.kill(process.pid, 'SIGKILL');"));
@@ -138,7 +156,7 @@ it.each(['import-core.json', 'PROVENANCE.md'])('recovers %s publication and pres
   const f = await fixture();
   const preload = join(f.root, 'crash-before-rename.mjs');
   await writeFile(preload, `import { promises as fs } from 'node:fs'; const rename=fs.rename; fs.rename=async(from,to)=>{if(to.endsWith(${JSON.stringify(name)}))process.kill(process.pid,'SIGKILL');return rename(from,to)};`);
-  expect((await f.run(['--import', preload])).code).not.toBe(0);
+  expect((await f.run(preload)).code).not.toBe(0);
   const residue = await scratchSnapshot(f.destination);
   expect(residue).toHaveLength(1);
   expect(residue[0]?.files).toHaveLength(1);
@@ -154,7 +172,7 @@ it('preserves unknown staging after complete publication without rewriting impor
   const f = await fixture();
   const preload = join(f.root, 'crash-after-complete.mjs');
   await writeFile(preload, `import { promises as fs } from 'node:fs'; const rename=fs.rename; fs.rename=async(from,to)=>{const complete=to.endsWith('import-core.json')&&(await fs.readFile(from,'utf8')).includes('"phase": "complete"');await rename(from,to);if(complete)process.kill(process.pid,'SIGKILL')};`);
-  expect((await f.run(['--import', preload])).code).not.toBe(0);
+  expect((await f.run(preload)).code).not.toBe(0);
   expect((await readdir(f.destination)).some(entry => entry.startsWith('.import-'))).toBe(true);
   const residue = await scratchSnapshot(f.destination);
   expect(residue).toHaveLength(1);
@@ -229,7 +247,7 @@ it.each([
   const f = await fixture();
   const preload = join(f.root, 'crash-boundary.mjs');
   await writeFile(preload, `import { promises as fs } from 'node:fs'; ${hook};`);
-  expect((await f.run(['--import', preload])).code).not.toBe(0);
+  expect((await f.run(preload)).code).not.toBe(0);
   const residue = await scratchSnapshot(f.destination);
   expect(residue).toHaveLength(1);
   expect(residue[0]?.files.length).toBeLessThanOrEqual(1);
@@ -260,7 +278,7 @@ it.each(['exclusive collision', 'replaced payload', 'unexpected entry', 'replace
         ? "const create=fs.mkdtemp;fs.mkdtemp=async(...args)=>{const directory=await create(...args);const file=directory+'/foreign';await fs.writeFile(file,'foreign bytes');await fs.writeFile(record,file);return directory}"
         : "fs.rename=async(file)=>{const directory=path.dirname(file);await fs.renameOriginal(directory,directory+'.original');await fs.symlink(outside,directory,'dir');await fs.writeFile(directory+'/foreign','foreign bytes');await fs.writeFile(record,directory+'/foreign');throw new Error('injected directory replacement')}";
   await writeFile(preload, `import { promises as fs } from 'node:fs';import path from 'node:path';const record=${JSON.stringify(record)},outside=${JSON.stringify(outside)};fs.renameOriginal=fs.rename;${hook};`);
-  const result = await f.run(['--import', preload]);
+  const result = await f.run(preload);
   expect(result.code, result.output).toBe(scenario === 'unexpected entry' ? 0 : 1);
   const foreign = await readFile(record, 'utf8');
   expect(await readFile(foreign, 'utf8')).toBe('foreign bytes');
@@ -279,7 +297,7 @@ it.each([
   const f = await fixture();
   const preload = join(f.root, 'error-boundary.mjs');
   await writeFile(preload, `import { promises as fs } from 'node:fs'; ${hook};`);
-  const result = await f.run(['--import', preload]);
+  const result = await f.run(preload);
   expect(result.code).toBe(1);
   expect(result.output).toContain('injected');
   expect(await scratchSnapshot(f.destination)).toEqual([]);

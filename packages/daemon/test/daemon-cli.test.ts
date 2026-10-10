@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
 import { z } from 'zod';
 import { afterAll, beforeAll, expect, it } from 'vitest';
@@ -10,6 +11,7 @@ import { afterAll, beforeAll, expect, it } from 'vitest';
 let buildDir: string;
 let entry: string;
 let storeEntry: string;
+let interruptDriver: string;
 const dirs: string[] = [];
 const children: ChildProcessWithoutNullStreams[] = [];
 beforeAll(async () => {
@@ -17,6 +19,8 @@ beforeAll(async () => {
   buildDir = await mkdtemp(resolve('node_modules/.cache/vonvon-cli-'));
   entry = join(buildDir, 'cli.mjs');
   storeEntry = join(buildDir, 'store.cjs');
+  interruptDriver = join(buildDir, 'interrupt.mjs');
+  await writeFile(interruptDriver, "process.stdin.setEncoding('utf8');process.stdin.on('data',data=>{if(data.trim()==='test:interrupt')process.emit('SIGINT')});process.stdin.resume();");
   await build({ entryPoints: [resolve('src/config/store.ts')], outfile: storeEntry, bundle: true, platform: 'node', format: 'cjs' });
   await build({ entryPoints: [resolve('src/cli/index.ts')], outfile: entry, bundle: true, packages: 'external', platform: 'node', format: 'esm' });
 });
@@ -31,7 +35,9 @@ async function fixture() {
   return { home, root };
 }
 function launch(home: string, root: string, args: string[]) {
-  const child = spawn(process.execPath, [entry, ...args], { env: { ...process.env, HOME: home, USERPROFILE: home, VONVON_HOME: root }, stdio: 'pipe' });
+  const prefix = process.platform === 'win32' && args[0] === 'daemon' && args[1] === 'run'
+    ? ['--import', pathToFileURL(interruptDriver).href] : [];
+  const child = spawn(process.execPath, [...prefix, entry, ...args], { env: { ...process.env, HOME: home, USERPROFILE: home, VONVON_HOME: root }, stdio: 'pipe' });
   children.push(child);
   let output = '';
   child.stdout.on('data', data => { output += String(data); }); child.stderr.on('data', data => { output += String(data); });
@@ -55,7 +61,7 @@ it('exposes daemon lifecycle commands while status and logs leave a missing home
     const p = launch(f.home, f.root, args); expect(await p.exited).toBe(0);
   }
   expect(await readdir(f.home)).toEqual([]); expect(await readdir(f.root)).toEqual([]);
-});
+}, 20_000);
 it('starts without bots, refuses duplicate ownership and releases PID lease on shutdown', async () => {
   const f = await fixture();
   const p = launch(f.home, f.root, ['daemon', 'run']);
@@ -65,7 +71,9 @@ it('starts without bots, refuses duplicate ownership and releases PID lease on s
   const second = launch(f.home, f.root, ['daemon', 'run']);
   expect(await second.exited).toBe(1); expect(second.output()).toMatch(/host is busy|already running/);
   expect((await readdir(f.home)).filter((entry) => entry !== '.codex')).toEqual([]);
-  p.child.kill('SIGTERM'); expect(await p.exited).toBe(0);
+  if (process.platform === 'win32') p.child.stdin.end('test:interrupt\n');
+  else p.child.kill('SIGTERM');
+  expect(await p.exited).toBe(0);
   await expect(readFile(join(f.root, 'daemon.pid'))).rejects.toMatchObject({ code: 'ENOENT' });
   expect(await readdir(join(f.root, '.access'))).toEqual([]);
 }, 20_000);
