@@ -4,6 +4,12 @@ export const environmentToolSchema = z.enum(["codex", "claude", "lark-cli"]);
 export type EnvironmentTool = z.infer<typeof environmentToolSchema>;
 const name = z.string().trim().min(1).max(128).regex(/^[^\x00-\x1f]+$/);
 const operationId = z.string().uuid();
+export const backendInstallItemSchema = z.discriminatedUnion("type", [
+  z.object({type:z.literal("log"),chunk:z.string()}),
+  z.object({type:z.literal("done")}),
+  z.object({type:z.literal("error"),code:z.enum(["install_failed","aborted","unknown"]),message:z.string()}),
+]);
+export type BackendInstallItem = z.infer<typeof backendInstallItemSchema>;
 
 export const environmentRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("scan") }).strict(),
@@ -83,6 +89,7 @@ export const environmentReplySchema = z.discriminatedUnion("kind", [
   z.object({kind:z.literal("operation"), operation:environmentOperationSchema.nullable()}),
   z.object({kind:z.literal("toolInstall"), operation:toolInstallOperationSchema.nullable()}),
   z.object({kind:z.literal("applied"), message:z.string()}),
+  z.object({kind:z.literal("backendInstall"), operationId, id:z.string(), update:z.boolean(), attached:z.boolean(), replay:z.array(backendInstallItemSchema)}),
   z.object({kind:z.literal("refused"), code:z.string(), message:z.string()}),
 ]);
 export type EnvironmentReply = z.infer<typeof environmentReplySchema>;

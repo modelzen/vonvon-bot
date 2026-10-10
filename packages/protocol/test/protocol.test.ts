@@ -5,12 +5,69 @@ import {
   agentViewSchema, bridgeProjectsStoreSchema, commandSchema, helloSchema,
   machineIdSchema, requestSchema, responseSchema, errorEnvelopeSchema,
   desktopSnapshotSchema, eventSchema, watchSnapshots,
+  adminRequestSchema, adminReplySchema, adminStateSchema, directoryRequestSchema, directoryReplySchema,
+  jobSchema, environmentReplySchema,
   type DesktopSnapshot, settingsViewSchema,
 } from "../src/index.js";
 
 const fixture = (name: string): unknown => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
 
 describe("pinned contract extraction", () => {
+  it("parses V3 admin state without dropping legacy fields", () => {
+    const state = {version:"0.7",generatedAt:100,bots:[{
+      name:"bot",appId:"cli_fixture",tenant:"feishu",active:true,current:true,running:true,
+      pid:42,startedAt:10,connection:"connected",completionReminder:{mode:"failures",longTaskMinutes:3},
+      projects:[{name:"p",chatId:"oc_fixture",cwd:"/tmp/p",blank:false,kind:"multi",origin:"joined",
+        noMention:true,autoCompact:false,mode:"full",guestMode:"qa",network:false,backend:"codex-appserver",
+        allowedUsersCount:2,sessionCount:3,createdAt:9}],
+    }]};
+    expect(adminStateSchema.parse(state)).toEqual(state);
+    expect(adminReplySchema.parse({kind:"state",state}).state).toEqual(state);
+    expect(adminStateSchema.parse({...state,bots:[{...state.bots[0],projects:[],projectsError:"corrupt"}]}).bots[0]?.projectsError).toBe("corrupt");
+  });
+  it("parses each V3 request and reply variant", () => {
+    const adminRequests = [
+      {type:"state"},{type:"diagnosis",agentId:"cli_fixture"},{type:"hostDoctor"},
+      {type:"setupStatus",agentId:"cli_fixture"},{type:"daemonStatus"},{type:"codexSetup"},
+      {type:"logs",maxBytes:1024},{type:"followLogs",follow:true},
+      {type:"switchBackend",agentId:"cli_fixture",projectName:"p",backend:"codex-appserver"},
+    ];
+    for (const payload of adminRequests) expect(adminRequestSchema.safeParse(payload).success).toBe(true);
+    for (const payload of [{type:"list"},{type:"list",path:"/tmp"},{type:"choose",path:"/tmp"}]) {
+      expect(directoryRequestSchema.safeParse(payload).success).toBe(true);
+    }
+    expect(directoryReplySchema.parse({kind:"entries",path:"/tmp",parent:null,entries:[{name:"p",path:"/tmp/p",hidden:false}],truncated:false}).kind).toBe("entries");
+    expect(directoryReplySchema.parse({kind:"folderChosen",folder:{token:randomUUID(),displayPath:"/tmp/p"}}).kind).toBe("folderChosen");
+    const backend = {id:"codex",name:"Codex",ok:true,version:"1",isDefault:true};
+    const daemon = {installed:false,running:true,selfHosted:true,version:"1",supported:false};
+    for (const payload of [
+      {kind:"diagnosis",bot:"cli_fixture",backends:[backend],event:{state:"ok"},eventConfigUrl:"https://example.test"},
+      {kind:"hostDoctor",doctor:{node:"24",platform:"darwin",arch:"arm64",osRelease:"1",appDir:"/tmp",logsDir:"/tmp/logs",logBytes:0,version:"1",backends:[backend]}},
+      {kind:"setupStatus",status:{appId:"cli_fixture",tenant:"feishu",credentials:{ok:true},connection:{running:true},event:{state:"ok"},scopes:{grantUrl:"https://example.test"},eventConfigUrl:"https://example.test"}},
+      {kind:"daemonStatus",status:daemon},
+      {kind:"codexSetup",setup:{installation:"installed",authentication:"signedIn",version:"1",executable:"/bin/codex"}},
+      {kind:"logs",text:"x"},{kind:"following",follow:true},{kind:"applied",revision:2},
+    ]) {
+      expect(adminReplySchema.safeParse(payload).success).toBe(true);
+    }
+    expect(requestSchema.safeParse({type:"request",id:"1",method:"snapshot",payload:{type:"get"}}).success).toBe(true);
+    expect(requestSchema.safeParse({type:"request",id:"2",method:"admin",payload:{type:"state"}}).success).toBe(true);
+    expect(requestSchema.safeParse({type:"request",id:"3",method:"directory",payload:{type:"list"}}).success).toBe(true);
+  });
+  it("keeps optional V3 job, install, and event fields", () => {
+    const base = {id:"job",type:"registerAgent"};
+    expect(jobSchema.parse({...base,phase:"qr",image:"data:image/png;base64,a",url:"https://example.test",expiresAt:1,status:"pending"}).status).toBe("pending");
+    expect(jobSchema.parse({...base,phase:"authorizing",userCode:"code",verificationUrl:"https://example.test"}).verificationUrl).toBe("https://example.test");
+    expect(jobSchema.parse({...base,phase:"succeeded",message:"done",agentId:"cli_fixture"}).agentId).toBe("cli_fixture");
+    expect(jobSchema.parse({...base,phase:"failed",message:"failed",code:"network"}).code).toBe("network");
+    const operationId = randomUUID();
+    expect(environmentReplySchema.parse({kind:"backendInstall",operationId,id:"codex",update:false,attached:true,replay:[{type:"log",chunk:"x"},{type:"done"}]}).kind).toBe("backendInstall");
+    for (const value of [
+      {type:"event",event:"log",payload:{lines:"x"}},
+      {type:"event",event:"backendInstall",payload:{operationId,id:"codex",update:false,item:{type:"error",code:"install_failed",message:"failed"}}},
+    ]) expect(eventSchema.safeParse(value).success).toBe(true);
+    expect(helloSchema.parse({type:"hello",protocolVersion:2,clientKind:"cli",credential:"secret"}).credential).toBe("secret");
+  });
   it("parses the agent settings fixture", () => {
     expect(agentViewSchema.parse(fixture("agent-settings.json")).scope.kind).toBe("agent");
   });
