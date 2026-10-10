@@ -79,18 +79,20 @@ export async function startApi(options: { service: AdminService; port?: number; 
   };
   const release = (): Promise<void> => {
     if (released) return released;
-    const work: Promise<void>[] = [];
+    let socketCleanup: Promise<void>;
+    let listenerClosed: Promise<void>;
     released = Promise.resolve().then(async () => {
-      const results = await Promise.allSettled(work);
-      const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
-      if (errors.length) throw new AggregateError(errors, 'API release failed');
+      await listenerClosed;
+      try { await socketCleanup; }
+      catch (error) { throw new ApiCleanupError([error]); }
     });
-    work.push(new Promise<void>(resolve => resolve(acquiredSockets?.close())));
-    work.push(new Promise<void>((resolve, reject) => {
+    socketCleanup = new Promise<void>(resolve => resolve(acquiredSockets?.release()));
+    listenerClosed = new Promise<void>((resolve, reject) => {
       if (!acquiredServer) { resolve(); return; }
       acquiredServer.close(error => { if (error && !('code' in error && error.code === 'ERR_SERVER_NOT_RUNNING')) reject(error); else resolve(); });
-    }));
-    for (const pending of work) void pending.catch(() => undefined);
+    });
+    void socketCleanup.catch(() => undefined);
+    void listenerClosed.catch(() => undefined);
     return released;
   };
   const close = (): Promise<void> => {

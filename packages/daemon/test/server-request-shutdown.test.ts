@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
+import { observeShutdown } from '../src/host/lifecycle';
 
 vi.mock('../src/server/http', async importOriginal => {
   const { paths } = await import('../src/config/paths');
@@ -118,16 +119,23 @@ it('starts service and Jobs cancellation while an accepted Codex setup RPC is he
   }
 });
 
-it('allows an afterReply stop signal to initiate API close without waiting on itself', async () => {
+it('records stop intent and replies before the shutdown observer closes the API', async () => {
   const fixture = await startFixture();
   const client = await socketClient(fixture.api.port, fixture.credential);
-  const signalled = gate();
-  let closing: Promise<void> | undefined;
-  fixture.control.requestStop = () => { closing = fixture.api.close(); void closing.catch(() => undefined); signalled.release(); };
+  const control = observeShutdown();
+  fixture.control.requestStop = control.requestStop;
+  const closing = control.waitForRequest().then(() => fixture.api.close());
+  void closing.catch(() => undefined);
   try {
     await client.ready();
+    expect(control.requested).toBe(false);
     expect(await client.call({ type: 'request', id: 'stop', method: 'machine', payload: { type: 'stopHost' } })).toMatchObject({ type: 'response', id: 'stop', payload: { type: 'done' } });
-    await signalled.promise;
+    expect(control.requested).toBe(true);
     await closing;
-  } finally { await client.close(); await fixture.close(); }
+  } finally {
+    control.requestStop();
+    await Promise.allSettled([closing, client.close()]);
+    control.dispose();
+    await fixture.close();
+  }
 });
