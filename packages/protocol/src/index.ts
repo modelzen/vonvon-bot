@@ -8,3 +8,5 @@ export * from "./store.js";
 export * from "./handshake.js";
 export * from "./rpc.js";
 export * from "./events.js";
+export * from "./admin.js";
+export * from "./directory.js";
