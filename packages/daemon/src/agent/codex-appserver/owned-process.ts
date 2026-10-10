@@ -4,6 +4,14 @@ import { WindowsCodexJob } from './windows-job';
 
 export class CodexProcessCleanupError extends Error {}
 
+export function closeOwnedCodexProcesses(): Promise<void> {
+  throw new Error('Provider registry shutdown is not implemented');
+}
+
+export function unconfirmedCodexPids(): number[] {
+  throw new Error('Provider registry diagnostics are not implemented');
+}
+
 type Exit = { kind: 'exit'; code: number | null; signal: NodeJS.Signals | null } | { kind: 'error'; error: Error };
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 const missing = (error: unknown): boolean => error instanceof Error && 'code' in error && error.code === 'ESRCH';
