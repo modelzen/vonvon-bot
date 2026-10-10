@@ -1,0 +1,4277 @@
+{
+  "source": "https://github.com/modelzen/feishu-codex-bridge",
+  "commit": "446b2a40ca75b5f725d7b0baab777b3a8f18b2e0",
+  "files": [
+    {
+      "path": "LICENSE.bridge",
+      "mode": "100644",
+      "sha256": "7188d5226875b5ab16f560ac5f5d5c5566c60b41a6b32e72ef9054e3dca9c6ae"
+    },
+    {
+      "path": "src/admin/avatar.ts",
+      "mode": "100644",
+      "sha256": "7956a0b2cf921d845db541a1a4b0d03aac3eef57e307c50b4eff4c448e2abd80"
+    },
+    {
+      "path": "src/admin/collaboration.ts",
+      "mode": "100644",
+      "sha256": "fbe8efbc7ead9a66f93cbf655b4e33268143c24a2f765a8ce547ab644be19479"
+    },
+    {
+      "path": "src/admin/groups.ts",
+      "mode": "100644",
+      "sha256": "2cf552a643afd16356cc097fb839289b584351ed2cc072976dfed5e7f27d65ff"
+    },
+    {
+      "path": "src/admin/host-settings.ts",
+      "mode": "100644",
+      "sha256": "d62cc145d1168b5af7c6c0c10057365d2b377af0265524e4a9d91a0c38b4f696"
+    },
+    {
+      "path": "src/admin/host.ts",
+      "mode": "100644",
+      "sha256": "efe9b87adb2930cd696333ef65afe46152400bb6c5c5a87df91ff60d55ca8650"
+    },
+    {
+      "path": "src/admin/ipc.ts",
+      "mode": "100644",
+      "sha256": "0271d4414bfad4717e966b8514395cb1970d86e05c1445277a4206e7054ecf37"
+    },
+    {
+      "path": "src/admin/ops.ts",
+      "mode": "100644",
+      "sha256": "dfe642739357d8d3468b25b04132aeaa0c294df168b47f3eaf17e389611063f0"
+    },
+    {
+      "path": "src/admin/service.ts",
+      "mode": "100644",
+      "sha256": "832366b85bb848486d2bd8c7402c5f1091857d0c3e25054b1011f45c95bb404e"
+    },
+    {
+      "path": "src/admin/settings-parse.ts",
+      "mode": "100644",
+      "sha256": "443eff28ea48ad6acd98f2a7e31eb24bc724a3010bba484f8f3c2c3a4bd68e9d"
+    },
+    {
+      "path": "src/admin/settings-service.ts",
+      "mode": "100644",
+      "sha256": "e5d9477996310c3f134c9eb26b3dd3dac5d766a5923397548802369df40106bf"
+    },
+    {
+      "path": "src/admin/settings-types.ts",
+      "mode": "100644",
+      "sha256": "ec02e6491bfcfb8f21719286c44038e20b693095bd707c973209669558a17d62"
+    },
+    {
+      "path": "src/admin/settings.ts",
+      "mode": "100644",
+      "sha256": "a25f97bb4f9961f4a6d3264dd2398905191e74d3b0053aea2dadce278f0a73e0"
+    },
+    {
+      "path": "src/agent/backend-loader.ts",
+      "mode": "100644",
+      "sha256": "e81ae27c19c693006d7a62e1084c99d56ad3d167bd7cbc8df08c85733ea5d70f"
+    },
+    {
+      "path": "src/agent/bridge-instructions.ts",
+      "mode": "100644",
+      "sha256": "e5ac5fe8c204a67748d8291b373f3600ca9a965ccd8828da2a114b3ae9fdd875"
+    },
+    {
+      "path": "src/agent/catalog.ts",
+      "mode": "100644",
+      "sha256": "a99d2b63c448ece0f632af3264a84a0676cb6c5fdcb8e97c3c10202df3897d89"
+    },
+    {
+      "path": "src/agent/claude-agent/backend.ts",
+      "mode": "100644",
+      "sha256": "d87b8a3b7631c2212a46344c9a3f91f6283fc0c4c1827538f81285336a6542f3"
+    },
+    {
+      "path": "src/agent/claude-agent/event-map.ts",
+      "mode": "100644",
+      "sha256": "9fba42d3a51c90f4bd6d016f86ffdceb815c109f802d9eae792c7c35adcfb819"
+    },
+    {
+      "path": "src/agent/claude-agent/history.ts",
+      "mode": "100644",
+      "sha256": "49c378ed8ef5496aace7682e9e1f19b58fd7df3de033b535b8b81f2fd51ab89d"
+    },
+    {
+      "path": "src/agent/claude-agent/permission.ts",
+      "mode": "100644",
+      "sha256": "42f00035a0856c58a8858d2eb0186d802ec051386d833a51409855f29d705788"
+    },
+    {
+      "path": "src/agent/claude-agent/thread.ts",
+      "mode": "100644",
+      "sha256": "e667862c7802580209811e85b3ef94809ec01cd82cb17809a23726e47cd8cb7f"
+    },
+    {
+      "path": "src/agent/codex-appserver/app-server-client.ts",
+      "mode": "100644",
+      "sha256": "f8df6b2fdfc28e3eb4f8ff52f3f47866a44e9a14edecbe4fd54406e5882bf04a"
+    },
+    {
+      "path": "src/agent/codex-appserver/backend.ts",
+      "mode": "100644",
+      "sha256": "c164e3c38cfe6d7b1d23ec450c36a823fe165b285e636040ea5c2a3c47742bc7"
+    },
+    {
+      "path": "src/agent/codex-appserver/client-pool.ts",
+      "mode": "100644",
+      "sha256": "1cdbc2c8a6fb1d53a609fb934e2274913713862be62b2900ffa86872a861f6a2"
+    },
+    {
+      "path": "src/agent/codex-appserver/codex-install-lock.json",
+      "mode": "100644",
+      "sha256": "dbf50bfdc0dc905f802a5b1a50a7ae5b9e28766c8516a32dc966d08485fe426d"
+    },
+    {
+      "path": "src/agent/codex-appserver/event-map.ts",
+      "mode": "100644",
+      "sha256": "38fe6750dce584f5276662bf0121f0dfef735c8cc2e32604333a625895503ccf"
+    },
+    {
+      "path": "src/agent/codex-appserver/locate.ts",
+      "mode": "100644",
+      "sha256": "2bcb11679ad869d4207cb94f0a0753b36f1ae2b1d33a894f91a67a43fe18f2dd"
+    },
+    {
+      "path": "src/agent/codex-appserver/managed-install.ts",
+      "mode": "100644",
+      "sha256": "8570fae0c578e160e28c0375bf9958637d67f861f3f7958536f29c995f1fec86"
+    },
+    {
+      "path": "src/agent/codex-appserver/managed-tools.ts",
+      "mode": "100644",
+      "sha256": "a307cdc55845de94689a5148a1f1f1c621c82575e1885136e5787b199a69e81b"
+    },
+    {
+      "path": "src/agent/codex-appserver/owned-process.ts",
+      "mode": "100644",
+      "sha256": "006ec16d520c8e445cfd197a6154605fdcab28a027db3850ebfbb128f3df36f5"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/AbsolutePathBuf.ts",
+      "mode": "100644",
+      "sha256": "a79d31d5e8f24c58c8cce2633e5e4fc5b0bb88d1c44c69e7ce7d0dc7c1252272"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/AgentPath.ts",
+      "mode": "100644",
+      "sha256": "cabca56f2e5aaba035115f39b9bf021d8896eb544bb128b7f4a5ec8a8314ebbb"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/ApplyPatchApprovalParams.ts",
+      "mode": "100644",
+      "sha256": "f2b6d28c35a978746992309781d8d137bc974714aafe841b31124af30f378ab6"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/ApplyPatchApprovalResponse.ts",
+      "mode": "100644",
+      "sha256": "31979f138e5a7f20378994fe19129769f3786b4c1f922ceebd9727a3c1027be5"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/AuthMode.ts",
+      "mode": "100644",
+      "sha256": "1dede504cb71c816c0e4f1b897d888833da7321a6111dc1bd5c4cd69f67cd8b3"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/ClientInfo.ts",
+      "mode": "100644",
+      "sha256": "c3f38c70ffff810867af87a536d915dadea9e4b547343611c4e14731bcb7c648"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/ClientNotification.ts",
+      "mode": "100644",
+      "sha256": "96692c191ff9ac32c2688b46a0a04f23d15646937adc352f2adcc8211c6d17a0"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/ClientRequest.ts",
+      "mode": "100644",
+      "sha256": "73ce804d709436cf1292d837955e7f8bd08cf199bdb8094a2652132a758b8071"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/CollaborationMode.ts",
+      "mode": "100644",
+      "sha256": "b45d07e3c94550cff97e3d57d33045bd2d47b26a5f25a918fe2978cb08e0948f"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/ContentItem.ts",
+      "mode": "100644",
+      "sha256": "35e189dcbe5cd5475b2c6664524659ac7bf2c6cf3f4c2e9f59198d87e600ca83"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/ConversationGitInfo.ts",
+      "mode": "100644",
+      "sha256": "5916b6580cd3a589882e8d6449e8b80c049652a8b3e1bf6ead3c5a4b5f3238cd"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/ConversationSummary.ts",
+      "mode": "100644",
+      "sha256": "1b9fb86de74b126bad433437458b9122acd3df1649099bc643084db342143822"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/ExecCommandApprovalParams.ts",
+      "mode": "100644",
+      "sha256": "e1a49f8366b8a70759ee67c917f519bbd25445ee8b6cb7874c8a428b6880afe3"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/ExecCommandApprovalResponse.ts",
+      "mode": "100644",
+      "sha256": "3a0de1366e4bc0184774908f4d2506ad53a7e1ddfc7306a0de2bb3cdaa65ec96"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/ExecPolicyAmendment.ts",
+      "mode": "100644",
+      "sha256": "6c03481f0980691f87b10281f1e926c969e567a76c51d426b3d1161cd4f7eb43"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/FileChange.ts",
+      "mode": "100644",
+      "sha256": "831feada4d69f7049a174ff7abdd49797b4a2a28ba2a2167f44f1aa17b6f3520"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/ForcedLoginMethod.ts",
+      "mode": "100644",
+      "sha256": "d31940427b6bb684eddcf7111e836741da092bab2679a6735ca4dc38b031f030"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/FunctionCallOutputBody.ts",
+      "mode": "100644",
+      "sha256": "29879d8884c7031f104c56b462fdd9d09395d8c2f90eb10f67bfe00ed36b3234"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/FunctionCallOutputContentItem.ts",
+      "mode": "100644",
+      "sha256": "f8989c96855c867f3515fdea0bf131bf16f64f36838890d090451928df3444e0"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/FuzzyFileSearchMatchType.ts",
+      "mode": "100644",
+      "sha256": "804ecff87fb7c1b3bd19398be8ab5e8ac422dff049f461875369fada3d27782f"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/FuzzyFileSearchParams.ts",
+      "mode": "100644",
+      "sha256": "e509e9144bb4c2673f6844548d2325cf3e2d5b2b88ae32f7399247177a1d1d9f"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/FuzzyFileSearchResponse.ts",
+      "mode": "100644",
+      "sha256": "fca23b73c96d1a8210e83244d15d4a59768ed2e9de9c5aac9a6022fe50edf614"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/FuzzyFileSearchResult.ts",
+      "mode": "100644",
+      "sha256": "771d2cd4513d197c9dd894f45b2de1d2075ba81c13e8f997b146e1bfd3fca004"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/FuzzyFileSearchSessionCompletedNotification.ts",
+      "mode": "100644",
+      "sha256": "4670c3dd4046ebb5bc7567c9e78fe577165d538da5cd9342af6ed8caff8364d7"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/FuzzyFileSearchSessionUpdatedNotification.ts",
+      "mode": "100644",
+      "sha256": "bc8ba5c408a0d37bafe4fd221ef39704918845ffb30efc5bb504c308bb9ef835"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/GetAuthStatusParams.ts",
+      "mode": "100644",
+      "sha256": "5dc04ff59a05ceedab54c850899b09a9c81e68ea7934183325b39be6344bb40e"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/GetAuthStatusResponse.ts",
+      "mode": "100644",
+      "sha256": "9aaaa5326b399883165edd426d2b340fe4d58e19d0481c860ca28813a365d853"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/GetConversationSummaryParams.ts",
+      "mode": "100644",
+      "sha256": "1e419864686b73b516ae209cefe0f5efc15cb9055183ea0451fbbaef42afa81f"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/GetConversationSummaryResponse.ts",
+      "mode": "100644",
+      "sha256": "39a163f2e24cc96584de6fd783acfba2676edb2863f87ba9e61285e13644841d"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/GitDiffToRemoteParams.ts",
+      "mode": "100644",
+      "sha256": "4208318686772f2ce21ce98a0abfdcebce560194d946b8b017da1287140287d3"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/GitDiffToRemoteResponse.ts",
+      "mode": "100644",
+      "sha256": "c8b4be6e7a9c522a2865e2df4d8b54e0f0f16172f97c3a6c412997056a6297ab"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/GitSha.ts",
+      "mode": "100644",
+      "sha256": "826b48e6b10984ac6b27ef6ca0becc1aa9d4709e0b693de93ecff750a57a54c8"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/ImageDetail.ts",
+      "mode": "100644",
+      "sha256": "cf2036b2af8a0e42de8934caec9cebe36169d5e86aeb5504a2ebc859596e4414"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/index.ts",
+      "mode": "100644",
+      "sha256": "c91cd4f3948bd47521171bd2884eff7eb0e0ac5dfc4e21a7f6795f3e1be0c7df"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/InitializeCapabilities.ts",
+      "mode": "100644",
+      "sha256": "1bd7ad0eee88cbc19dc63cdd61ca8fdef0da8e746b9254abc20984c8e66e7c50"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/InitializeParams.ts",
+      "mode": "100644",
+      "sha256": "bfc13b4fc9e37f629ee67b42d6e7f342ba38668ff528e738a911de5ebcfd545f"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/InitializeResponse.ts",
+      "mode": "100644",
+      "sha256": "4feabcb66d4bf01869d2780beaec1838d41b30213cdf57de175298aed01f5379"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/InputModality.ts",
+      "mode": "100644",
+      "sha256": "70f9e740959beaff7f66a565218edeac0f40b776f21c74433f2c08af17d38481"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/InternalSessionSource.ts",
+      "mode": "100644",
+      "sha256": "608645caec95753fa56ccbb180ecbefc5e1d7546be62c88fe77f98c12461315e"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/LocalShellAction.ts",
+      "mode": "100644",
+      "sha256": "4cbe0baf839752c8aa69a3f93ce236236c7ffb9b3bcdcb6d1133a5493c5445cf"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/LocalShellExecAction.ts",
+      "mode": "100644",
+      "sha256": "7f579ad71d9ac2ecfc94bea32e05d229b4d653eb0fb5491afc7a53ccaaaf8672"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/LocalShellStatus.ts",
+      "mode": "100644",
+      "sha256": "8b302c2b183668ed0f67a753befb4aaa2c998d316cc5ff7be4ca442cd5a4c741"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/MessagePhase.ts",
+      "mode": "100644",
+      "sha256": "9b9cac40f1eb1d9c9c387b90fd9f87873727e010f46e478230aff17fd3ec460c"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/ModeKind.ts",
+      "mode": "100644",
+      "sha256": "c1ed359d44cf4e71cf2293e18e4ea11a43f833d404d9e643d6f3b3eaac8974f8"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/NetworkPolicyAmendment.ts",
+      "mode": "100644",
+      "sha256": "2219666281d984a6edf51fcdbd93df7b88e4c51f4fe8a306989e68f430ffb2fe"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/NetworkPolicyRuleAction.ts",
+      "mode": "100644",
+      "sha256": "8d6d5aa29ce47bdaec03eedc56543629344b9a424a293258116f44a212b507fc"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/ParsedCommand.ts",
+      "mode": "100644",
+      "sha256": "50403a9434aebd64915a808ecae82c93195ae1b5bae5432518802e6ad84dee92"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/Personality.ts",
+      "mode": "100644",
+      "sha256": "51eee5332b3af52cce2117922688523e90808390eec477434d9a089b36a21163"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/PlanType.ts",
+      "mode": "100644",
+      "sha256": "5a3ed23f3e7445f29a9ec4229bfcfb526bb024385cb85fa012c12c1a81d6ad98"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/RealtimeConversationVersion.ts",
+      "mode": "100644",
+      "sha256": "73de7a636783a6380b9dffa043feec51f49e385ac7da42c497bb461e6445f367"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/RealtimeOutputModality.ts",
+      "mode": "100644",
+      "sha256": "f9027a452a48a6c3c8be9e055c5fb6679bd4afcb0470c1fc1ae6357774171e05"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/RealtimeVoice.ts",
+      "mode": "100644",
+      "sha256": "3d0d02147d7ff8b50f7474684fd594fa606dc4dfe3af9e6c5e4ca598ddfee640"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/RealtimeVoicesList.ts",
+      "mode": "100644",
+      "sha256": "90dab674f89a95b27a1a02029b0e9da1b1311396b207b321a2dea0f2d9ff7bb2"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/ReasoningEffort.ts",
+      "mode": "100644",
+      "sha256": "43f25032fc61a754b26d4f985158304707f7f67e0777f737fd25c0e8f692a489"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/ReasoningItemContent.ts",
+      "mode": "100644",
+      "sha256": "7bb310c4c20b21d199304e7b64ba673c32288eec39a7390ca0f8a10c3f6aa301"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/ReasoningItemReasoningSummary.ts",
+      "mode": "100644",
+      "sha256": "f5f7508ac48eecd43029e87714aa23db8d5f629e0626216aa0ed2239f1aac1ce"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/ReasoningSummary.ts",
+      "mode": "100644",
+      "sha256": "1d56c8b72bf6806438e612e1a14a567ceab91be91a4bcb0ca192f898fe0bf9bc"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/RequestId.ts",
+      "mode": "100644",
+      "sha256": "beeb38dfd0b050b171141bd66d51663786a50a81cbe904ba9b006289a101fd39"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/Resource.ts",
+      "mode": "100644",
+      "sha256": "d5b8c1e68332e96ac9281075a30bc231810ceafea795c0a388d8fe0d54596bf1"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/ResourceContent.ts",
+      "mode": "100644",
+      "sha256": "fea0c6f29fbdbabae62e543234b7a1380507d18d843f771be32a461ed1fbce4c"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/ResourceTemplate.ts",
+      "mode": "100644",
+      "sha256": "f9da8918d1cad3998ee31a01c719f3cecf17ae20eac49910e77b4a7954b472a5"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/ResponseItem.ts",
+      "mode": "100644",
+      "sha256": "7fd84991feb3acda6976978dd16e3ad55d717e795cd5908508ac0e8a7501636e"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/ReviewDecision.ts",
+      "mode": "100644",
+      "sha256": "80f4c7a944d5ed1f7c3b52e01edd1f119f51d6b1b951ea2d629bd5301975fa66"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/serde_json/JsonValue.ts",
+      "mode": "100644",
+      "sha256": "8697aaaa4cbe8f91492fe36dc545cc53a26e53143371c22c08385969d4e3cc61"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/ServerNotification.ts",
+      "mode": "100644",
+      "sha256": "435fd5cddf9d1eb5b1ef4559f1b97b27940cf59d4a54c0bca229314f81be3666"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/ServerRequest.ts",
+      "mode": "100644",
+      "sha256": "6274decabc5c0e9b09f144efb1795ca8fc1fe52d8afa42ee5988de2d890f935e"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/SessionSource.ts",
+      "mode": "100644",
+      "sha256": "b5dd65ef3b7695c8cee80e561857ac731cca6032183e6f0a2fd66410d9908c7c"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/Settings.ts",
+      "mode": "100644",
+      "sha256": "75a444fb4aa9ce8c906871e5eedeaa04f4da1943fe89906725be16f582044066"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/SubAgentSource.ts",
+      "mode": "100644",
+      "sha256": "6fa78b756bd916c4254a9c84655dbbcc45654790f7a9890f6809c4fbf8e45ecb"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/ThreadId.ts",
+      "mode": "100644",
+      "sha256": "13131736dfd006e8f2b3d2f2249737edb7633971452fbbc3c6c50cd51fbaefa2"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/ThreadMemoryMode.ts",
+      "mode": "100644",
+      "sha256": "42857d5f11753a12848a49de94759e4c67e321e81d603bd680cb84976fc3df6b"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/Tool.ts",
+      "mode": "100644",
+      "sha256": "d5e9e622156040df012f8a0769258093132854b64e30b6ec45c8831c11231d92"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/Account.ts",
+      "mode": "100644",
+      "sha256": "834c3a7a95f3cb6fdf169c11b7a1e137d175452811dc20bee0731d42ab09d01c"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/AccountLoginCompletedNotification.ts",
+      "mode": "100644",
+      "sha256": "f2b59323fbe2a5d36b8161d107b6fde4a5fbb4b47537f3514444cc1eaa9542b5"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/AccountRateLimitsUpdatedNotification.ts",
+      "mode": "100644",
+      "sha256": "6a4e8c2297d95bf89eccead5419b4b12cd481832627774d47e31c77f81c6fc54"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/AccountUpdatedNotification.ts",
+      "mode": "100644",
+      "sha256": "6a877a6ff91078dac77fd5935e0edb45c09c97d43e77e06f9a20cd35227ad6af"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ActivePermissionProfile.ts",
+      "mode": "100644",
+      "sha256": "55934739523276e9d91209e0620e450c73b3078f0d6f8312fd96a55fa2bc2e4a"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/AddCreditsNudgeCreditType.ts",
+      "mode": "100644",
+      "sha256": "26671f28e48099aa92081db566ed41a866e1314885cd2c2a851d962e501f2eaf"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/AddCreditsNudgeEmailStatus.ts",
+      "mode": "100644",
+      "sha256": "d99c1fde743d0aba33dff7b5194edeaea74c133cfbefd69486f25aeff5577ef3"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/AdditionalFileSystemPermissions.ts",
+      "mode": "100644",
+      "sha256": "ad6d4a4219ff728502bcc26633c899290f6d9a85dddaf8a96852864dff9805db"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/AdditionalNetworkPermissions.ts",
+      "mode": "100644",
+      "sha256": "7b1a37a73699dfea562f7b4cc1b71cffa8f42371b11248dc7ff7582c0f8e3f94"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/AdditionalPermissionProfile.ts",
+      "mode": "100644",
+      "sha256": "fc0a2e090759c96073369e1bccad3ee5c0e88f508508cb9e406fda17ca4942a2"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/AgentMessageDeltaNotification.ts",
+      "mode": "100644",
+      "sha256": "bb538862f093bd22278bea3b3343037525a9218fbddef534e37e048347c10805"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/AnalyticsConfig.ts",
+      "mode": "100644",
+      "sha256": "3273d6b13fe0a7af66a315c499d0d89393ea7ae440af980004c5382504d5aa4a"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/AppBranding.ts",
+      "mode": "100644",
+      "sha256": "1eb1ff2f491854bfe5cb34299199f3fd83299d923e1eb1e2cb1c7d128ed29877"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/AppInfo.ts",
+      "mode": "100644",
+      "sha256": "b57c713d8a0bb78f7652bbae1e029f4b6d0c2adfe8509492511e91da58cc5d95"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/AppListUpdatedNotification.ts",
+      "mode": "100644",
+      "sha256": "2fd06cf1736ca7dbf8ec31f07d328c2ea9db909abfbbbcd660e73c7caf45eec2"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/AppMetadata.ts",
+      "mode": "100644",
+      "sha256": "4d7e0d33c9ba8437b859a26b22d8c5e0034fc9d752eab251f8e9d319985b1340"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/AppReview.ts",
+      "mode": "100644",
+      "sha256": "767582bf5790544cff44374246f188074b4eaa02b2e252df6d11efae75d9e7ec"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ApprovalsReviewer.ts",
+      "mode": "100644",
+      "sha256": "0ba0d2403a6987128af58e825fb0d0e05d61891ce5a35e7ba1f94afe51a57630"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/AppsConfig.ts",
+      "mode": "100644",
+      "sha256": "0d709a950929fe2977937f47a0883a854fc621832f30572611f77e29fcfc1632"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/AppScreenshot.ts",
+      "mode": "100644",
+      "sha256": "e0e4dc885793fd98f526ccf9df34cddb4fe6311b899026638c390f2efce21031"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/AppsDefaultConfig.ts",
+      "mode": "100644",
+      "sha256": "d568bf128b7adb894ec9e2340d9f9825b67eb966373db2029ae049ed64084193"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/AppsListParams.ts",
+      "mode": "100644",
+      "sha256": "c071b62665a1bd1011656ac45c640cc1194f03fc0023c3082f9bc9fbafcc5c34"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/AppsListResponse.ts",
+      "mode": "100644",
+      "sha256": "9f07d522af5a6534e60b8b4165cc1e541c7506d187cc79d9c90f4033ecfe2e5a"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/AppSummary.ts",
+      "mode": "100644",
+      "sha256": "d1568eb4cc628f549b5ae8738619ed226c3617a4d7b7b6fc1c96d7a94acd9596"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/AppToolApproval.ts",
+      "mode": "100644",
+      "sha256": "07cacf175027a3403ea6b67dc6ff57019ff74c40d5fdeb13de0a259ab54af152"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/AppToolsConfig.ts",
+      "mode": "100644",
+      "sha256": "2669235f12bb74e6b9ba2aae4ad756a2e2e5e3f79d83f6cbaadd029de1d3c165"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/AskForApproval.ts",
+      "mode": "100644",
+      "sha256": "57462663eec1f1439f54efaf3b523861cd3ccae6f1e4515aefd44578a58db51e"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/AttestationGenerateParams.ts",
+      "mode": "100644",
+      "sha256": "0383fa7e61783c6e93f1efe08dcfd2af961d01284b6c4730ad7d2cc8d30eaff1"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/AttestationGenerateResponse.ts",
+      "mode": "100644",
+      "sha256": "a2b1c402473a9a2e469fa06d40b444054fe9fa1ca64c072f95e02710a5c34a7e"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/AutoReviewDecisionSource.ts",
+      "mode": "100644",
+      "sha256": "48c550df663534041f46a789478f539b06ffc66bab5ae19ebcada1a402283193"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ByteRange.ts",
+      "mode": "100644",
+      "sha256": "dd61c4b71554053feaecec39f41015a5db3869b28b19b7c9a85ee73f3502a4e4"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CancelLoginAccountParams.ts",
+      "mode": "100644",
+      "sha256": "35b16be0dd359e37d46ceb113c947efab47f485a85f1dffb06232c38e0d54554"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CancelLoginAccountResponse.ts",
+      "mode": "100644",
+      "sha256": "51ad4cd0696ad9d7b3b90dc5248b63c802e198d5b1b12fa72e26f8188814b541"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CancelLoginAccountStatus.ts",
+      "mode": "100644",
+      "sha256": "4024fdc1f7a09ad82499e6743ba617599612ddbe0f9d2a292555e7faded876b8"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ChatgptAuthTokensRefreshParams.ts",
+      "mode": "100644",
+      "sha256": "7c5e6a8629b8d6484d45ed07709198e010c14089623bb0879dc42198ec9db243"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ChatgptAuthTokensRefreshReason.ts",
+      "mode": "100644",
+      "sha256": "52bd0b02848c809f48ba2bd2fb0babaffb4d9ca2e12974792125fc0f6774545f"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ChatgptAuthTokensRefreshResponse.ts",
+      "mode": "100644",
+      "sha256": "b7744dfdf2e62755d1153bd4c5217bb62283e9fd32143665317e44206bff6790"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CodexErrorInfo.ts",
+      "mode": "100644",
+      "sha256": "0797c3a47605e23168beab3d7affa92036115834af73039f2a1ecb92c7281814"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CollabAgentState.ts",
+      "mode": "100644",
+      "sha256": "ea8bb25942c0ac161368f5fabd1252e4a1dabb496819513333f339e6647f3bd4"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CollabAgentStatus.ts",
+      "mode": "100644",
+      "sha256": "0ec81079c0ca4737c448fc415250fc9c93d1385e7aafbc468226cf9ecabe8630"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CollabAgentTool.ts",
+      "mode": "100644",
+      "sha256": "29b3de2f2d7700804a803c1e377a5ac14094621a86b0e9bc51b1362e7eded68d"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CollabAgentToolCallStatus.ts",
+      "mode": "100644",
+      "sha256": "8a4eaf8e6b217578df0d59e51767ef5203049d26f91e3bebd53582655e1d2adc"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CollaborationModeMask.ts",
+      "mode": "100644",
+      "sha256": "b8e4f0e19b59c074cc9e5c143d4e32cfb15756aa6934a73afa3cbb768903ec4d"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CommandAction.ts",
+      "mode": "100644",
+      "sha256": "4e8c73d84f83ac4f601354aa78ba4fefc750068b509e2fd589c5c30719b81b5a"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CommandExecOutputDeltaNotification.ts",
+      "mode": "100644",
+      "sha256": "b6348fdbb6075062e77a3bf56693aefc49b9fabf044637aeb4db27d5b384a7ce"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CommandExecOutputStream.ts",
+      "mode": "100644",
+      "sha256": "562ffe93ffc83651ca4f6e463df43618827040ac2c8572a2a6d6b16fbe972c99"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CommandExecParams.ts",
+      "mode": "100644",
+      "sha256": "ec187e5234f67f064b63a72bce829b071a11f70c31572459f21e7c1f0f0c43b5"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CommandExecResizeParams.ts",
+      "mode": "100644",
+      "sha256": "50119419c150293c07b43c286011d4157c39a19af3a45ebd26e9ecc6c6439536"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CommandExecResizeResponse.ts",
+      "mode": "100644",
+      "sha256": "e47e23c36ea6a364f3ce4148fa99b4c0703668e9e7b5745fff65fdac60d92ec5"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CommandExecResponse.ts",
+      "mode": "100644",
+      "sha256": "57c4d49f5f2de3b169065500afd1acaab9a3b2e38d50c086b689ea1d136f3fe2"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CommandExecTerminalSize.ts",
+      "mode": "100644",
+      "sha256": "d9dee0048dc4d7308a86e14e218f982b2150155496e515b36222db4c169b2523"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CommandExecTerminateParams.ts",
+      "mode": "100644",
+      "sha256": "01d9a8fdfc2fc07358436c2d0f863614f68d8d2c359e612c73a47657010a31b1"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CommandExecTerminateResponse.ts",
+      "mode": "100644",
+      "sha256": "054ea33d7356159c687508940f4556a748f7cd71f07c25515cc208498664c207"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CommandExecutionApprovalDecision.ts",
+      "mode": "100644",
+      "sha256": "9283d7206bc8df353c4fcc9a14682b5f69f7f288d666f975356762ed49d5bc6b"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CommandExecutionOutputDeltaNotification.ts",
+      "mode": "100644",
+      "sha256": "20e015b65e534534a846bbe6ec74bdbfff7cde1401728d3f0f81127dd20a9f89"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CommandExecutionRequestApprovalParams.ts",
+      "mode": "100644",
+      "sha256": "9c38fbf990b18632098b189ee4e487fcd8fff8b91485ccd46709315e567b03a4"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CommandExecutionRequestApprovalResponse.ts",
+      "mode": "100644",
+      "sha256": "454ceee4decc66a9c070273d4344fa8a0187732cd884b8b60edda3a17766aa95"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CommandExecutionSource.ts",
+      "mode": "100644",
+      "sha256": "f915112d4ef81b80d65ab1c5c106fa7e46f24ee2d7969f752abda1c786e53327"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CommandExecutionStatus.ts",
+      "mode": "100644",
+      "sha256": "8e0e8aa0a3f4caeaa32f2ac2aa62d2e9737004f5ab33f5f37e2dfe114d4e3301"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CommandExecWriteParams.ts",
+      "mode": "100644",
+      "sha256": "e55eed746287b53b6ea3c079b29ddf4a97b6bc3a3f385af8f2d9819bab7d3ed7"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CommandExecWriteResponse.ts",
+      "mode": "100644",
+      "sha256": "006f5fa824c5d7775b5e5ee75150783a69c04aaaa077fd93d36c02164e7a7943"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CommandMigration.ts",
+      "mode": "100644",
+      "sha256": "8214d253d96270ee0f844d76f14f135ca3a24678c62d3e0e4c82cc8a957278d5"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/Config.ts",
+      "mode": "100644",
+      "sha256": "dce546e09cd1e97af33936efc5931f288221569be89daa0776e08f5f19afdcc7"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ConfigBatchWriteParams.ts",
+      "mode": "100644",
+      "sha256": "10cfa46a480bbecece739ebfa6a5066e17dc901be9302ffeac82cadd2cb2d1a5"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ConfigEdit.ts",
+      "mode": "100644",
+      "sha256": "67ee51dde287fc9587981fa1da666fd8ff5eedc5123fc72025807d1812e31543"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ConfigLayer.ts",
+      "mode": "100644",
+      "sha256": "24d1d2c7e0c774e0df55d767bb6d1874f92776daa96f2856f184a296de203161"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ConfigLayerMetadata.ts",
+      "mode": "100644",
+      "sha256": "bc6dac6f3c9ac7fa7d7a40c15abc4114cfe230f4777cabf8e0e130d70b78a515"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ConfigLayerSource.ts",
+      "mode": "100644",
+      "sha256": "ab2bf6b649d29ecc830674a8f1663e4787befe457bdcfd5e1e02641b71522430"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ConfigReadParams.ts",
+      "mode": "100644",
+      "sha256": "b7fbb9ab726eecaab9fb5227d0d78567925da55daaf494bbf119df9e9f722f64"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ConfigReadResponse.ts",
+      "mode": "100644",
+      "sha256": "9efa2d02c6ccb42cf509010727c9d27b4ac3783ac8b47e41f92eb6556848cb15"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ConfigRequirements.ts",
+      "mode": "100644",
+      "sha256": "9fe86509e8e1ac759554767fe9d06aee31333fefaa7462445c9fcaf266a65bad"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ConfigRequirementsReadResponse.ts",
+      "mode": "100644",
+      "sha256": "25f02b2f69b17b4afc2207f19e57abed7dec61deea627abef2f0b969b1655148"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ConfiguredHookHandler.ts",
+      "mode": "100644",
+      "sha256": "cb7c9aae9ce7cff1ec57ead99d612ffaf277f4464bdf168f4833c83d9c10dd42"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ConfiguredHookMatcherGroup.ts",
+      "mode": "100644",
+      "sha256": "9e9dba35de714a0e39c2d4f0b4611475744903f97fe55a3f606b5783acdff501"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ConfigValueWriteParams.ts",
+      "mode": "100644",
+      "sha256": "3149d1f1e7d3902d905920b00ff8d4598d2636543e23a0c3d38d49dcfbec5535"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ConfigWarningNotification.ts",
+      "mode": "100644",
+      "sha256": "1123bc22b10c202f47d17deeb03217426901d9975fd329a5541dab18ea52e25a"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ConfigWriteResponse.ts",
+      "mode": "100644",
+      "sha256": "62c3b082b9ecb53ca8abb9fd65c7e3216b0875cce72db7dec3b1ecfdbfda121c"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ContextCompactedNotification.ts",
+      "mode": "100644",
+      "sha256": "41b2b4b08e4dcd83a242a154750e54900dbad9755e195b1cc6e96e01d3f36dc2"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/CreditsSnapshot.ts",
+      "mode": "100644",
+      "sha256": "e56bf82bc93959ed95748dc7363520d4cf477d9c7ac2b8e40e48c91b03c2575a"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/DeprecationNoticeNotification.ts",
+      "mode": "100644",
+      "sha256": "ed1a7130647f416ff16b10570fb6896b164b38a5ddf337d9c1e44b12497a2610"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/DynamicToolCallOutputContentItem.ts",
+      "mode": "100644",
+      "sha256": "f348f7145ffa8c6b5a64376a41b1ef30b88be62067538a0f4dcbbcfbea645c45"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/DynamicToolCallParams.ts",
+      "mode": "100644",
+      "sha256": "6524a162207514c3a50a1e65f9abed9c59d97f38fb9cf221f740340ef5c5051f"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/DynamicToolCallResponse.ts",
+      "mode": "100644",
+      "sha256": "df53cf5e967d26aa59615db06f4179a7b2330f44df4298a8393eaf9f48f7e115"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/DynamicToolCallStatus.ts",
+      "mode": "100644",
+      "sha256": "b5502e1c25b51fdad7404eed25f9ab40d9eb9b130c61c4da2134cfbdc0c4c0f5"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/DynamicToolSpec.ts",
+      "mode": "100644",
+      "sha256": "eadab390fb6722bf354e05720cc3dde865206218ccdfd789b2c4296a1847e7b6"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ErrorNotification.ts",
+      "mode": "100644",
+      "sha256": "f30701035a45042495c0cbf41d4002f9e1a2c2b8c41bd4762ed6588338c6d5e1"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ExecPolicyAmendment.ts",
+      "mode": "100644",
+      "sha256": "eae3c3f9c81a40ffffe5de29e274b322db8200591ba39306daa27794a2deffa0"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ExperimentalFeature.ts",
+      "mode": "100644",
+      "sha256": "2de02b9c1426f552df38b289f638a4f41bc0395477532fdffe36ea390be078fa"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ExperimentalFeatureEnablementSetParams.ts",
+      "mode": "100644",
+      "sha256": "c8bc1a0c7998e370abd29c2a1c8727f65d32777c2d41fa786a5e807af31317c6"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ExperimentalFeatureEnablementSetResponse.ts",
+      "mode": "100644",
+      "sha256": "fa8b73d47ff237b79b65fce4f82b7753f9727e8982baa56956b5c171615f7f64"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ExperimentalFeatureListParams.ts",
+      "mode": "100644",
+      "sha256": "88c8cf1b5ee3ad111cda4d294591bf25bb746aea4250cf52a9ee0bf1fae3f143"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ExperimentalFeatureListResponse.ts",
+      "mode": "100644",
+      "sha256": "f8bf394784271cbef32b95435bb2af986bb15e5a11e831c090993685ea6ca035"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ExperimentalFeatureStage.ts",
+      "mode": "100644",
+      "sha256": "70de16db64325f2201f5b10b6492b4a13d6acd1c02f65f8d8af1738d2fb751d8"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ExternalAgentConfigDetectParams.ts",
+      "mode": "100644",
+      "sha256": "607407bc297f027d33b731d2b28978cf0ccc45c250e757ba23cf5544ff45eba9"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ExternalAgentConfigDetectResponse.ts",
+      "mode": "100644",
+      "sha256": "345ea41fc5af468552d82e852201c5bba0e53e59440de07ed3623c7c3026c115"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ExternalAgentConfigImportCompletedNotification.ts",
+      "mode": "100644",
+      "sha256": "0fff07246ef4e48bbd4885c6297d3d57d7b402206b9167e4c2468d139a390031"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ExternalAgentConfigImportParams.ts",
+      "mode": "100644",
+      "sha256": "0d14d2aaadbe3c8e3c09b59837743163502fe86a14d4ef238bd454ac3dcd187a"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ExternalAgentConfigImportResponse.ts",
+      "mode": "100644",
+      "sha256": "6ae0c04e22f5eada05b7545f30fb6f5a1cfee0ca53c761fbe8449b6f0401f46a"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ExternalAgentConfigMigrationItem.ts",
+      "mode": "100644",
+      "sha256": "0640d9600963a5a3bbfcdccda1974be9ecd309e0cf3996bceb09365027c45043"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ExternalAgentConfigMigrationItemType.ts",
+      "mode": "100644",
+      "sha256": "2f5482819192e1a41eb1dd69f8178c5bff27dc1bceeae4a180ed61b15bc01906"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FeedbackUploadParams.ts",
+      "mode": "100644",
+      "sha256": "a4b5866d8427235edd6c0eaf8925fc07484b88be0a60f360da50c75741732d23"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FeedbackUploadResponse.ts",
+      "mode": "100644",
+      "sha256": "9034eb7ed8d454e15cd4cb005508fa05312862669058fe6c3f89aa9817741d34"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FileChangeApprovalDecision.ts",
+      "mode": "100644",
+      "sha256": "8a5aa00ea5e9c7b0856da23daa6e799dc1c5f15d16553ce59390ec73b65c8430"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FileChangeOutputDeltaNotification.ts",
+      "mode": "100644",
+      "sha256": "1aafea36ebd0f5299ad6bd9a7c34a5f23a0d3d6d7cc23f15a5ce2b301e11eb18"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FileChangePatchUpdatedNotification.ts",
+      "mode": "100644",
+      "sha256": "c7a287dd5f82dbe8ae6018240d3b284999c5c9e578dc5c6d0772cf6e75103de1"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FileChangeRequestApprovalParams.ts",
+      "mode": "100644",
+      "sha256": "32ec2fef83e1e17db98ea0b9b86baaa5c8bf2e8979988f5ad8fef3a93ab15074"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FileChangeRequestApprovalResponse.ts",
+      "mode": "100644",
+      "sha256": "527a9af90f753e2b7f1852415523443fc9745376bb2c4b0b735f900c8da8fc71"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FileSystemAccessMode.ts",
+      "mode": "100644",
+      "sha256": "347a850f6b971df5606ae5db18273ef913f07b61d934730660af3d1959114c47"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FileSystemPath.ts",
+      "mode": "100644",
+      "sha256": "be52e0069ced13356af66b69c9ab8f549efee695983e12a7d500b35575ea6032"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FileSystemSandboxEntry.ts",
+      "mode": "100644",
+      "sha256": "f27cc590b6aa56f41c8c9168c6012c0e562e952bc2657421e9fa48c108084151"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FileSystemSpecialPath.ts",
+      "mode": "100644",
+      "sha256": "fa0481e347ccd594c6ebd7102c2811bacfae90c320e999f66a416cd1392486a6"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FileUpdateChange.ts",
+      "mode": "100644",
+      "sha256": "71acccec19639609d9a2a7f42de4bc53e540692afcbd29de0735826541dbe5a0"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ForcedChatgptWorkspaceIds.ts",
+      "mode": "100644",
+      "sha256": "5e0000884ad6f6374cd3babdbb54954988668315e55e4b8712174676f05b1cc3"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FsChangedNotification.ts",
+      "mode": "100644",
+      "sha256": "a53746ac384f53afdf0af2d8696cae57ef7ca1c85dce2bb60f54ffe26bfd8441"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FsCopyParams.ts",
+      "mode": "100644",
+      "sha256": "b99a99be143aae88663ea3802952401954f79c907139800ff6a1cdf9b078fcde"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FsCopyResponse.ts",
+      "mode": "100644",
+      "sha256": "4dcdd2bc0acf47015d669456562fe52ccf7d8013f4c7471c43e5b3080a96ff0a"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FsCreateDirectoryParams.ts",
+      "mode": "100644",
+      "sha256": "c7987af631d1cb317a00c51a79b71c9ebac75b937369ac6d74875d36047d14e4"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FsCreateDirectoryResponse.ts",
+      "mode": "100644",
+      "sha256": "1b9ad2e1d8c94176d553561d806269a2513451eda692c4ca89d10974d281b125"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FsGetMetadataParams.ts",
+      "mode": "100644",
+      "sha256": "ab1ae75f7023e829aaec39a49fc292d02c318ac5cfd92602197a2a3f32475514"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FsGetMetadataResponse.ts",
+      "mode": "100644",
+      "sha256": "ac7b8f0a300c0eb94bac4ffa8b056c83e297e2e70af8249c273725df8e916a3b"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FsReadDirectoryEntry.ts",
+      "mode": "100644",
+      "sha256": "519a1226fea5a427ff126a5b3a9025decebccb1e73b213c404fd5a8349b0ba59"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FsReadDirectoryParams.ts",
+      "mode": "100644",
+      "sha256": "ce0d55d7a4993e4625e245aeec58e5b720667e1f86e513397c86cdde05ae534f"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FsReadDirectoryResponse.ts",
+      "mode": "100644",
+      "sha256": "4eb25a94b58838f56d96d136732e559f8336582ff40b4397c68130c93eba97cb"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FsReadFileParams.ts",
+      "mode": "100644",
+      "sha256": "4bc3c1db7ac7eb076f7fe394bf102bbb78efd8732f6d8779238dc63d91644a00"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FsReadFileResponse.ts",
+      "mode": "100644",
+      "sha256": "e59fbce4507a37231e1f3cd592f4614997c376d117389539fe84448a6e0b060f"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FsRemoveParams.ts",
+      "mode": "100644",
+      "sha256": "34c387083c0c1102416d52b57755d28d17575520437e1786771fb31d09d194d0"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FsRemoveResponse.ts",
+      "mode": "100644",
+      "sha256": "4a674ea534501f7e06dcbe20e67f4099e40dbf111aa014574968529c275825de"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FsUnwatchParams.ts",
+      "mode": "100644",
+      "sha256": "300519f8ed05395bf064a7c28ef85d583d78ecba99b3c86f0df12ea3ec01664b"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FsUnwatchResponse.ts",
+      "mode": "100644",
+      "sha256": "d3ab8c8809a40a8d012639567b8b52f5bebfbc46d6908f78d718e455bebfe5d8"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FsWatchParams.ts",
+      "mode": "100644",
+      "sha256": "7f85712f7a4c3be3adea65f8bfeb5ae37687096cd5ece2449577788212714fa6"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FsWatchResponse.ts",
+      "mode": "100644",
+      "sha256": "f41371630dbcdb77132bf01b9834e64dd46c03c8812f9a01f4b592915948df2b"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FsWriteFileParams.ts",
+      "mode": "100644",
+      "sha256": "bcdebb3360d3a42089f32443850f9e02d33d609f7880b8cc8ed9f7beb1e08a06"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/FsWriteFileResponse.ts",
+      "mode": "100644",
+      "sha256": "bbd24eae815fb21e3fc443455d27549d09c3ee4fb4884246a885157c3f7a168c"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/GetAccountParams.ts",
+      "mode": "100644",
+      "sha256": "9fabbe4fd831185c2167f34d721814b1e8e71668b5def7eb6e4d10acd4db0756"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/GetAccountRateLimitsResponse.ts",
+      "mode": "100644",
+      "sha256": "39775137bee4bff962009e79dcb15e5c2427844ecba772ee60e7031598a46ed0"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/GetAccountResponse.ts",
+      "mode": "100644",
+      "sha256": "f16f348c9c37a760bd7b4c75c0b7d86a57d6cbd16bd6a1c4b06dffa39157b6a9"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/GitInfo.ts",
+      "mode": "100644",
+      "sha256": "ae05c1fdc69bba0d6aea22f2f7a8e2f7c5b494330d6827cfac9ec9a9cc290269"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/GrantedPermissionProfile.ts",
+      "mode": "100644",
+      "sha256": "8371f4208b11169274a7b46f2ecc464fc1ec7b153718a5420f64cbec262828cd"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/GuardianApprovalReview.ts",
+      "mode": "100644",
+      "sha256": "b4f724935efcf6cd0a9f0e909ea1596e8dd8796b98cf37b6ab578cb7b9fa4f02"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/GuardianApprovalReviewAction.ts",
+      "mode": "100644",
+      "sha256": "a8ff022d93ac3e6b7c175df2c4fa73bf4cf295887c32b305e29018fc67d9bd42"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/GuardianApprovalReviewStatus.ts",
+      "mode": "100644",
+      "sha256": "ed176cb0601517ff3aa9225f43c5393ff451517dd26f7cc04548083afc535cb8"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/GuardianCommandSource.ts",
+      "mode": "100644",
+      "sha256": "7529b5e63b8a8a210f457359a81a51e868005ca01d5eae4b5293c86f2dda43ea"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/GuardianRiskLevel.ts",
+      "mode": "100644",
+      "sha256": "0da8ac0802b03984034228cb30e306b973eef94eeb9d8fab76d1d540c3747d91"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/GuardianUserAuthorization.ts",
+      "mode": "100644",
+      "sha256": "fa796e3b1473b7ff56348b9f50b6aeb98dd292474edbc3840449e172372fc75a"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/GuardianWarningNotification.ts",
+      "mode": "100644",
+      "sha256": "9cfb33ba9dbb20ae28059abcb694e9b63e712cd63d0d8508be7ba8e6d350b9d6"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/HookCompletedNotification.ts",
+      "mode": "100644",
+      "sha256": "fa6c0c44e380f38c0be9ce191d97a6c5b7d770627c971243ac3c94d856d458da"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/HookErrorInfo.ts",
+      "mode": "100644",
+      "sha256": "0aa3d1689fee72727b029055179b48ecbf6e36c4a4bdf9be44724e03df1643c4"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/HookEventName.ts",
+      "mode": "100644",
+      "sha256": "91e560f4c54e091508178852b824033340b069db0e113f94cba7e62330b713a7"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/HookExecutionMode.ts",
+      "mode": "100644",
+      "sha256": "e8bcb5b57feed919b55542cf80efa7f0b78b3997cad57e44021b038f7346a230"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/HookHandlerType.ts",
+      "mode": "100644",
+      "sha256": "bdacef7921e59b6debc3cd512edb69ed1cbf8eab5a257316075c4e71c1cc317b"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/HookMetadata.ts",
+      "mode": "100644",
+      "sha256": "43d1175ab0a248e6a4069814496e705c95aa286b5c4b05a75cccc8f186a554da"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/HookMigration.ts",
+      "mode": "100644",
+      "sha256": "e847fa7f397d02a4068919f8eec0cf93f3dc684069351c4b42d1f9aa01f24e25"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/HookOutputEntry.ts",
+      "mode": "100644",
+      "sha256": "e4a991c8eb052e88110cb888aa81bd1fb72bec9bc15ffa8d7bee3f4d2bc47ecf"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/HookOutputEntryKind.ts",
+      "mode": "100644",
+      "sha256": "8bc9293bf87538a9c2b47b74649d4f8bc9faaccac23aff7d1d15b09f0456d83d"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/HookPromptFragment.ts",
+      "mode": "100644",
+      "sha256": "391260c67d7fbd0aaf3f641c3764892f655871047085df45048057066db1d0ea"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/HookRunStatus.ts",
+      "mode": "100644",
+      "sha256": "026f4356b110a32c2b2a04d4807284099c9e2ebf42520bb414e2f16a1cbeeaeb"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/HookRunSummary.ts",
+      "mode": "100644",
+      "sha256": "d9a9d552e57596e5d0db67375e3d9581b5473dfaf957bedeba48da671416a7c3"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/HookScope.ts",
+      "mode": "100644",
+      "sha256": "d9d65a4afcd428a6124ccc40b3ca1bfc95430be484030f717100482a78b46ce6"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/HooksListEntry.ts",
+      "mode": "100644",
+      "sha256": "5dc145186592645c0be744d2088b8c8a98feb3d1e1a3eb4bbca76ab61d08252f"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/HooksListParams.ts",
+      "mode": "100644",
+      "sha256": "2218161912153575b710dc5aaa492a75572ec5a22eb9b0b9d43c04cd207b32e9"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/HooksListResponse.ts",
+      "mode": "100644",
+      "sha256": "42483f5a99c62fb1ddcd510f2bab8d2185b32ffaf41a1760a0898df193f47da6"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/HookSource.ts",
+      "mode": "100644",
+      "sha256": "2038d6d75aae9bea8b6ca288abf088c03f958ef166621ba4054487f8849ab305"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/HookStartedNotification.ts",
+      "mode": "100644",
+      "sha256": "ee85efdaba45fbd3987464847838cd080b6822bc1fd1a6f1700424d798338869"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/HookTrustStatus.ts",
+      "mode": "100644",
+      "sha256": "20902e3535b29fb7c961178c05d768333210e79c82a740597f056a3df58baf18"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/index.ts",
+      "mode": "100644",
+      "sha256": "099c48e91538bc1498f2f04fdf3d358a6acb9401446ce4c3fa3d23ebcb9a129a"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ItemCompletedNotification.ts",
+      "mode": "100644",
+      "sha256": "f995b1554728867f7464f6f26154e0a0a947f0e6b7b247bdcd24214484cfa836"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ItemGuardianApprovalReviewCompletedNotification.ts",
+      "mode": "100644",
+      "sha256": "629c52cce2c77594f0c704df36289e6dc4f7f3a4b06b27ec1a8aa2cff72a343f"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ItemGuardianApprovalReviewStartedNotification.ts",
+      "mode": "100644",
+      "sha256": "6c272c27fdb70644a1433b328e84362d38f5fbdfabe7f358a07cece2e075f89d"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ItemStartedNotification.ts",
+      "mode": "100644",
+      "sha256": "99f52740d4e34f5c2b9850953ef8b41aaf3283ff3a733021d04a2dcec3681cce"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ListMcpServerStatusParams.ts",
+      "mode": "100644",
+      "sha256": "a49fa731b71aff82af1fa3621b6c7c103a6b38ae3012a77be779d752195c0bfc"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ListMcpServerStatusResponse.ts",
+      "mode": "100644",
+      "sha256": "30a823dce1d1f7a8d94e03e4716c1a8bf7dab253d222286ee5316f2982c1df27"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/LoginAccountParams.ts",
+      "mode": "100644",
+      "sha256": "2ae9ba7dbcfe302b82141813ce403473779383d6e9aaa58ca7bc52961177ca8d"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/LoginAccountResponse.ts",
+      "mode": "100644",
+      "sha256": "a07ad380a4c3547a2c3aa3a96bfbdc8bd5e66dde2e0f7dec5badc286190f6223"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/LogoutAccountResponse.ts",
+      "mode": "100644",
+      "sha256": "c6ed4a457bb58b0b508530ff2e646552766ec62a498253285543f0b9170d2c29"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ManagedHooksRequirements.ts",
+      "mode": "100644",
+      "sha256": "d6cf1c4afe274d0aa602ed6206456d5f41bc5bbbb47cca1b4e8689b1ff45a6c9"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/MarketplaceAddParams.ts",
+      "mode": "100644",
+      "sha256": "27c5e44a72efa4bcc39973fdffefb85a678bf3370d42ee28c57e4feea72da94f"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/MarketplaceAddResponse.ts",
+      "mode": "100644",
+      "sha256": "0b709325080541805ecf47b98c3928e1ab67c41bcbd51a74f696ebc6b315b539"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/MarketplaceInterface.ts",
+      "mode": "100644",
+      "sha256": "78ae2a328d099b27ea2816b0950c545ddfd484cbf2ced69bafb9ce02d1b6a99e"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/MarketplaceLoadErrorInfo.ts",
+      "mode": "100644",
+      "sha256": "8cdc3a063208916e1131bcc61770d755bcc0956c30498927d2ce2dcd40d7c434"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/MarketplaceRemoveParams.ts",
+      "mode": "100644",
+      "sha256": "1512b3662287ee514efa7699f22db65247ce4036643e3214c7a73f5baa3df2ae"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/MarketplaceRemoveResponse.ts",
+      "mode": "100644",
+      "sha256": "ffbd184b8bccb0c654955d4e191ddf10e1805a55a95bdad5047e8ee1e3c83713"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/MarketplaceUpgradeErrorInfo.ts",
+      "mode": "100644",
+      "sha256": "6369775eb4d13e4c79aeed9e0e8872f3ff954a8650cff59deac40351f0f7cd59"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/MarketplaceUpgradeParams.ts",
+      "mode": "100644",
+      "sha256": "260fc7d7037edca27449d91f6b5ca65b11e1775091d7ead8dc9f8149d8e5544d"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/MarketplaceUpgradeResponse.ts",
+      "mode": "100644",
+      "sha256": "ab119156edbfc384e9cfe30431fb894dac59656ba534363166e62fdc747bb488"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpAuthStatus.ts",
+      "mode": "100644",
+      "sha256": "30edf28396495cba1e584198462f004f691911a107ee06735d10b08da5526c91"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpElicitationArrayType.ts",
+      "mode": "100644",
+      "sha256": "d75b2840d2fedfb2c430551051d085b09c9c9233d6019751b43997424c2a0a48"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpElicitationBooleanSchema.ts",
+      "mode": "100644",
+      "sha256": "79ab6ecacbc22bfb38ff90e56f9660af42fc56555e56c02c8fbc64a6b127f466"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpElicitationBooleanType.ts",
+      "mode": "100644",
+      "sha256": "09f1f230cda7670e33c441339a14228d696e16faf4c3e3c4d4d9fac7535a19de"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpElicitationConstOption.ts",
+      "mode": "100644",
+      "sha256": "341a34201fc1c0b6cc8340b62871660e50d80b4a4db939df5c2b58b48e581711"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpElicitationEnumSchema.ts",
+      "mode": "100644",
+      "sha256": "4a092e4937ebaf4751ad6064aa4fb76f3a575d6d91b538b71f6946a615ab77cc"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpElicitationLegacyTitledEnumSchema.ts",
+      "mode": "100644",
+      "sha256": "f75990233cf05ff3329a9cc03b425921314c0053636386ffec582ec666379d48"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpElicitationMultiSelectEnumSchema.ts",
+      "mode": "100644",
+      "sha256": "3c115d5905989bf67688fb56b3f44cb0d7a829cfa7370e0f4633778ed59bd9a7"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpElicitationNumberSchema.ts",
+      "mode": "100644",
+      "sha256": "5568b048e4951a5f633fca0c77bf47f05ba86f579587c7b90625a7ed4a07787d"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpElicitationNumberType.ts",
+      "mode": "100644",
+      "sha256": "2ade548b2b885762e5a5b2fc978d23d9c6e625625df278ae8aad66c7e5409b73"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpElicitationObjectType.ts",
+      "mode": "100644",
+      "sha256": "3db6db2ea1712dbf00e9d2d4481051e1782e821746adbaabe4bab948d47af1fc"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpElicitationPrimitiveSchema.ts",
+      "mode": "100644",
+      "sha256": "0a8242da457f1a06978b5fbf586b6aa550e153bb715e222e799b40e40c7ab71d"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpElicitationSchema.ts",
+      "mode": "100644",
+      "sha256": "3d91dead8d89f2960fe29aafabf1332fee998cf5ed944b86453c1c765bd9d323"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpElicitationSingleSelectEnumSchema.ts",
+      "mode": "100644",
+      "sha256": "ad1887cb1aa39d0fd06cb50f61963ce7df5ea9a2412826f26dbe522b65b06695"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpElicitationStringFormat.ts",
+      "mode": "100644",
+      "sha256": "14e26733bcbc578a59ba8f45113588b7d6bda43686e638a4508cbf6faa9063a5"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpElicitationStringSchema.ts",
+      "mode": "100644",
+      "sha256": "9f852ffc7737da88673f9d1f38b65fafc8910e7e3ee6e9e2f427e2780aa6b5a9"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpElicitationStringType.ts",
+      "mode": "100644",
+      "sha256": "bc3146f96d49d25e49220ee2faa88bb043229a277fa6e40b32643132051b8ed7"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpElicitationTitledEnumItems.ts",
+      "mode": "100644",
+      "sha256": "167a4c0681007fb91127ff5435fde62370a583d8906652bbd69f95357f8729e0"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpElicitationTitledMultiSelectEnumSchema.ts",
+      "mode": "100644",
+      "sha256": "5db1a25d73d537d4b1b74d879de7108c88790eb83037b4bceccf93108ca02d4b"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpElicitationTitledSingleSelectEnumSchema.ts",
+      "mode": "100644",
+      "sha256": "5f625ff0f2551418330d550a57c4fc92019bcab0bdc09d55f32014435e0529d3"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpElicitationUntitledEnumItems.ts",
+      "mode": "100644",
+      "sha256": "5cefce37509c695b90742a2ae6ce5d1fe6c54e6b465869ac10222496e1f300cb"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpElicitationUntitledMultiSelectEnumSchema.ts",
+      "mode": "100644",
+      "sha256": "e51a340e7b48816dd565801be88b156debae67cb6a33a805c44c526c151ed78a"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpElicitationUntitledSingleSelectEnumSchema.ts",
+      "mode": "100644",
+      "sha256": "efc9177a8c0eda4b63a07a51aaadb22398d928d67a16ccbe2cb3c4479be3762e"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpResourceReadParams.ts",
+      "mode": "100644",
+      "sha256": "63dc9216658a831528d93cda5ae6200ee065e015c91a4ff4bc856a3f71281a4b"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpResourceReadResponse.ts",
+      "mode": "100644",
+      "sha256": "5e829b468dad319b7039fe41ccd875b80dae8e8880fc005906ee2e8af6f4f009"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpServerElicitationAction.ts",
+      "mode": "100644",
+      "sha256": "2f0de09e3c4bf2e4afe28eb1175c73286270f5fdf527f4658bb0a7d43c03a7ab"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpServerElicitationRequestParams.ts",
+      "mode": "100644",
+      "sha256": "f7783eb22d8bfae5aa28e5ae769e6d0c1e42403a706e5f54c53969e13dd8a02b"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpServerElicitationRequestResponse.ts",
+      "mode": "100644",
+      "sha256": "391007144a7dac5cdc57a065de5aaab130d4f7a45b5c9d7fae801c674498a3ee"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpServerMigration.ts",
+      "mode": "100644",
+      "sha256": "a17022850a2baba643143efa12d8e17640c9ee4e4acd9093c93ec4fa8b2ea786"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpServerOauthLoginCompletedNotification.ts",
+      "mode": "100644",
+      "sha256": "42658b1de34aee56bddbc35a2ef36a1c3548497a449943b886af3e0d2c4b296d"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpServerOauthLoginParams.ts",
+      "mode": "100644",
+      "sha256": "e3893bc134483c4435eecfb33ad9d25e771ea77efa13052a2e2da5a9fd17dbd3"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpServerOauthLoginResponse.ts",
+      "mode": "100644",
+      "sha256": "0a0fc60ee64195866fee1b99cc593854975bf8e2472fe24fa08fac23b5286c84"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpServerRefreshResponse.ts",
+      "mode": "100644",
+      "sha256": "df3663d8d0c264ceb0a0cdb33e7f3a8136d02712eb42e017185119e4e5873226"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpServerStartupState.ts",
+      "mode": "100644",
+      "sha256": "23449b2d30c4a64892667f783a41cd4b88fe87f5eff2cb6c69f420c39dfa330f"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpServerStatus.ts",
+      "mode": "100644",
+      "sha256": "f9d7e76bf6d36aa8bf9e20c2bfbe4af5c772cffea485f4543dda2b34960bcb6a"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpServerStatusDetail.ts",
+      "mode": "100644",
+      "sha256": "8faec4faebac7fa38696408b4f1386bbf8b07ae721242ce475a2b6d7a894aee0"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpServerStatusUpdatedNotification.ts",
+      "mode": "100644",
+      "sha256": "b1928bf4408a9b5714a8022d7209e77a135bf44cbd23035613776764684a9815"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpServerToolCallParams.ts",
+      "mode": "100644",
+      "sha256": "bc2c9772b2b5e59a1c91d2b57b259616aae409b56cd04d6acd2394eb2888ddda"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpServerToolCallResponse.ts",
+      "mode": "100644",
+      "sha256": "6846847691a9239c8fab35c8ad094a5f2e2e88a0fbb2884a9fd75a1e89efb195"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpToolCallError.ts",
+      "mode": "100644",
+      "sha256": "639a626f2b8932812fd0c94c027b35aea0dd8fad18bcc720d690ef5f824d2c75"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpToolCallProgressNotification.ts",
+      "mode": "100644",
+      "sha256": "39ff4bfe3cbd0d2b886dbba70e4916182c9e75802217e3ae2a5e4914569c6e16"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpToolCallResult.ts",
+      "mode": "100644",
+      "sha256": "12c5eea02e7f24e3c64114837dc070186e6a807694034e746bac2f8d03d50fbd"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/McpToolCallStatus.ts",
+      "mode": "100644",
+      "sha256": "cd64f4dbfbeccfd1c5a5c5982ccddd803b6ea1a909c8756e0b9274bbf34e515c"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/MemoryCitation.ts",
+      "mode": "100644",
+      "sha256": "1321da58b2371042e969191c90a7cb57d413c44908a82122184b787473860c75"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/MemoryCitationEntry.ts",
+      "mode": "100644",
+      "sha256": "b0a7a2a637e64c04df5da35880065941f0a3d033ebb220d67b1766e72cb4b18c"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/MergeStrategy.ts",
+      "mode": "100644",
+      "sha256": "88a0e2d63b3b3c9d463a5b6f2d72f7480a7be30f34451664173ea6e37a4fabfa"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/MigrationDetails.ts",
+      "mode": "100644",
+      "sha256": "a6fefa426212a2367f98ba20bd43badad33ee4aef433f909349119c16b85841f"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/Model.ts",
+      "mode": "100644",
+      "sha256": "895d12bdd5df4918de4fbb2f23d6e0c56d502dc402e9ab61189c10f35a34aac8"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ModelAvailabilityNux.ts",
+      "mode": "100644",
+      "sha256": "35f13293530e619e27a58f7b655e858083f80ad5dadd5bdc85430dba0f9a6da0"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ModelListParams.ts",
+      "mode": "100644",
+      "sha256": "9749040f93232fee23f044d307fd69eb08fea77eb6c56b1d04593d7533dd7bf4"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ModelListResponse.ts",
+      "mode": "100644",
+      "sha256": "5969afbe718e9a6270fe1e4f58315d7dbffe2e2275973b9c93e5abb2e8daa675"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ModelProviderCapabilitiesReadParams.ts",
+      "mode": "100644",
+      "sha256": "2c71c33298ea8efdf12e2f5bb84592261e5c0efa85b50e5603a7b413417a17bc"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ModelProviderCapabilitiesReadResponse.ts",
+      "mode": "100644",
+      "sha256": "8bb24422033b30c4cf05e88fe36c44873adb02e9fa90587883f37173b26f99e6"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ModelReroutedNotification.ts",
+      "mode": "100644",
+      "sha256": "6beb04909e0acdbe0486fa58d8d823aa964f8e70dd9e2133dc4b43761e22edf6"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ModelRerouteReason.ts",
+      "mode": "100644",
+      "sha256": "a7d637ad4aa97c1695dabbce11cb20d77cae71cae4598f350a27f9ad8c1534f9"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ModelServiceTier.ts",
+      "mode": "100644",
+      "sha256": "c926a88f721864aa8fedf5c46b118d76baf58384aa880221d422d00759bb35a2"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ModelUpgradeInfo.ts",
+      "mode": "100644",
+      "sha256": "c9300260e53975c9777cf52c59114fc6ecc113e750fd4db164597df7a75be0cc"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ModelVerification.ts",
+      "mode": "100644",
+      "sha256": "ad5aaf545bede542d3c69eda3232e9c5a197689d9e69aa5daa9311b6c61845e6"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ModelVerificationNotification.ts",
+      "mode": "100644",
+      "sha256": "e9ad43805e1e3112aff77615a4f6b63a7278ff682021d4b9d3deba85bbdf2eac"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/NetworkAccess.ts",
+      "mode": "100644",
+      "sha256": "3622aa2cccf2a1835cd561d97187db75eba8cc379c03e56b5d1c91ab901da9dc"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/NetworkApprovalContext.ts",
+      "mode": "100644",
+      "sha256": "f5fb2588e2a7caf33d4d25f8f98e03f6abd58e1cfc65d6ae6d918536d417c825"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/NetworkApprovalProtocol.ts",
+      "mode": "100644",
+      "sha256": "50489d7ee01bb75b2ad453e2f976e8b92a3334a973637c0c36ccd1c547a0d894"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/NetworkDomainPermission.ts",
+      "mode": "100644",
+      "sha256": "d05231ccfc807c968b53f2c2071a1931ab666ecca958240e10c31ff1ea3592d6"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/NetworkPolicyAmendment.ts",
+      "mode": "100644",
+      "sha256": "2219666281d984a6edf51fcdbd93df7b88e4c51f4fe8a306989e68f430ffb2fe"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/NetworkPolicyRuleAction.ts",
+      "mode": "100644",
+      "sha256": "8d6d5aa29ce47bdaec03eedc56543629344b9a424a293258116f44a212b507fc"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/NetworkRequirements.ts",
+      "mode": "100644",
+      "sha256": "ddf1e70f8f5ac1e000da43016eae31767c38a79c310ffd215b83dd0bf89cf332"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/NetworkUnixSocketPermission.ts",
+      "mode": "100644",
+      "sha256": "426b2bc19eb363a2d32811b9b386e1916f693cbbb0430b041b97e0bb01aeb1e0"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/NonSteerableTurnKind.ts",
+      "mode": "100644",
+      "sha256": "94d47f993e7c00ca78c5c2b28d71fab767ce59ff8da60c4458bffff08755e863"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/OverriddenMetadata.ts",
+      "mode": "100644",
+      "sha256": "5fd0c4e3191494dd262616335858b44fb635ae9d2a02e39632cdcf02acca0d68"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PatchApplyStatus.ts",
+      "mode": "100644",
+      "sha256": "b2a140e4b5f2de8f051bf5c52ce2cf975987180253b29287d64fd52715bca192"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PatchChangeKind.ts",
+      "mode": "100644",
+      "sha256": "20e95907d698efbef2fa9d9ab00392b10caf127dfc5e0df1ba9878ad6f42531d"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PermissionGrantScope.ts",
+      "mode": "100644",
+      "sha256": "2ea29b4448c98516a2e1e4f5bbc22e95147ad46cbc0fd0c83377c2fa4db37f8d"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PermissionProfile.ts",
+      "mode": "100644",
+      "sha256": "5d9c3454c690ae39f322191d7ce8803d1cd7b7f4acb454edce23aa3bc47fec91"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PermissionProfileFileSystemPermissions.ts",
+      "mode": "100644",
+      "sha256": "fe44278a2067bfd23f833b347cbed59f319ff2f4e3b9bea6c8b1b404988ac084"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PermissionProfileNetworkPermissions.ts",
+      "mode": "100644",
+      "sha256": "6cd0b82c603781ba2ceb92b2ba01346f571646dc1da373774c709e5aca35cdec"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PermissionsRequestApprovalParams.ts",
+      "mode": "100644",
+      "sha256": "f0c3a0a10d273b21d2fcc1dc0a446d4a8d2bf62a758e89f03bcca3323b4010d3"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PermissionsRequestApprovalResponse.ts",
+      "mode": "100644",
+      "sha256": "60259c885b04fe35e3596d74921b3ca8c8cba3cb5bd582305b9d90e14fff9930"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PlanDeltaNotification.ts",
+      "mode": "100644",
+      "sha256": "1327cadca2e857d313aa04c1b9822443104319262d17424b4490e5da9f8298ec"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginAuthPolicy.ts",
+      "mode": "100644",
+      "sha256": "e2244f3226ccad6a23190ab63c2672973a9b407f8208bce8457da84da88a1d11"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginAvailability.ts",
+      "mode": "100644",
+      "sha256": "825fcd7d7564b1a1364a0e1553f70739cd47310578633a71c577ff462f70fc44"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginDetail.ts",
+      "mode": "100644",
+      "sha256": "854bc870e5bbfea0889fa8a7383f8fd49882905b56f8f5189a52bcaa58f2a101"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginHookSummary.ts",
+      "mode": "100644",
+      "sha256": "6401aa6cadd5ab3ed036486265a8010903b573d89096d21256021270499ff7e8"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginInstallParams.ts",
+      "mode": "100644",
+      "sha256": "3bfb999ac35befa10c033eca10a6eb29539fb54ddc1b600955fdadc0b95388c1"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginInstallPolicy.ts",
+      "mode": "100644",
+      "sha256": "60e403b86d0cf6ff509317c28088b75c890817ac2b707ec230d67dff1d265843"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginInstallResponse.ts",
+      "mode": "100644",
+      "sha256": "55cc2b66bbcefec99129f20989b1a900829c568900b78e3cd9c6af9dc7ce6d0c"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginInterface.ts",
+      "mode": "100644",
+      "sha256": "71d807cb4eb9f5adce53e72d39c66b3a0b1ac81dfc9e985f4f941041660111b4"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginListMarketplaceKind.ts",
+      "mode": "100644",
+      "sha256": "3a817f75a321d61be1fc34616751f5fcf37e8d27e2633b0351b3af28f0ec4369"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginListParams.ts",
+      "mode": "100644",
+      "sha256": "c8e5292dfd263da0a3e7451f605ea44aed644898ec5998500690ed19f850da51"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginListResponse.ts",
+      "mode": "100644",
+      "sha256": "e3a9444eef2b8e5504cab343553464d13b5094a663b8f6d30c080fe60d6db425"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginMarketplaceEntry.ts",
+      "mode": "100644",
+      "sha256": "cbb70abc33d3c61debf945e5e816e1aee6e4eb6d2392928cd615952472711e16"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginReadParams.ts",
+      "mode": "100644",
+      "sha256": "fb2061d0d9f32261ea289e8c0aad2e65594f24873b09303b0cdd6cd658a844c0"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginReadResponse.ts",
+      "mode": "100644",
+      "sha256": "8665089557cfcbf3379504f36e6a45bcbb78ef33819b83cd3e79bafc8d542633"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginShareCheckoutParams.ts",
+      "mode": "100644",
+      "sha256": "b6927865dcaebd6328082f690dc84366336d2b0d052033fed624424a6ec61d60"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginShareCheckoutResponse.ts",
+      "mode": "100644",
+      "sha256": "8770d74c8f1a6af6f8ef0075c4b69d7c20b8e43becffbca95fff780160452a04"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginShareContext.ts",
+      "mode": "100644",
+      "sha256": "f8e534cd44cc04df2f8b0dd0d56be8ce1a5b5fb93880285fe0f28eb37b3f09c2"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginShareDeleteParams.ts",
+      "mode": "100644",
+      "sha256": "de9d9d48dcbd081bfb6eab8555e5806c8bb6af0bcffe026244d0ccc091d37e37"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginShareDeleteResponse.ts",
+      "mode": "100644",
+      "sha256": "3b469e11132326c1372c7d7cbe4e5014f43583a495cbbff80f763a42b998540c"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginShareDiscoverability.ts",
+      "mode": "100644",
+      "sha256": "6e3132d259496d189e7589e8b7530a79da44e87c6871f1433646b890dcd93768"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginShareListItem.ts",
+      "mode": "100644",
+      "sha256": "b1adace9ecf52390bbc388cf17bed72df0b2ef78f1b3638ce63cc1a3c0d3d6d1"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginShareListParams.ts",
+      "mode": "100644",
+      "sha256": "16705259614f9fd3599bcfd3ee3f3b8abbc4586db06fb3fae92943f8797b1fd9"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginShareListResponse.ts",
+      "mode": "100644",
+      "sha256": "840085e34d2ce5d281eed0e4b3aeacf013feef0e244d306cbd5bd204c440f9c7"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginSharePrincipal.ts",
+      "mode": "100644",
+      "sha256": "c459b897fb0de8849a83239fb1751a62b44086e7d9b8b683d00c56c0f6cb34b4"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginSharePrincipalRole.ts",
+      "mode": "100644",
+      "sha256": "c29988db4ea5406dbce1e7d5feb9c1e88bb4da5107f29111ed53c01b99f60385"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginSharePrincipalType.ts",
+      "mode": "100644",
+      "sha256": "998d0fc6519f5d1a3c23a887c08b7e045d2795b1c42518e9162fe4b2fb5e478a"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginShareSaveParams.ts",
+      "mode": "100644",
+      "sha256": "a3768d69c67fe7e5cb09b4f185a7bf63664f1e3ee6729adbc3aa55786df08377"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginShareSaveResponse.ts",
+      "mode": "100644",
+      "sha256": "8aa89f269d63597061c963852f01508a042ff0de312d43750d2c6f780501cece"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginShareTarget.ts",
+      "mode": "100644",
+      "sha256": "49df3b2955544a56d069a18688f5ca4afeb24a35a903a2b7beda1cedefba0697"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginShareTargetRole.ts",
+      "mode": "100644",
+      "sha256": "437dc25decd5c93b33c56d306df1c76433b9c3eaa99252dd1f97afc5abc6443a"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginShareUpdateDiscoverability.ts",
+      "mode": "100644",
+      "sha256": "458d9bf840baa5c15232b03e05a776680021035efd9bde75eacf01cd7c7919ec"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginShareUpdateTargetsParams.ts",
+      "mode": "100644",
+      "sha256": "618d17ca82302c46891dfe3be93122078a4d70bddb604e20a1ad3612b1dd7222"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginShareUpdateTargetsResponse.ts",
+      "mode": "100644",
+      "sha256": "ac96c2a46e38fb1096204d0ce9afdd7ff938049b6987d4afa4d564c6f7879dc9"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginSkillReadParams.ts",
+      "mode": "100644",
+      "sha256": "fe5af641ef9fbf6c2c1adec04a5b4ee683ecd5152e45e091264187647d267b5c"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginSkillReadResponse.ts",
+      "mode": "100644",
+      "sha256": "43bf546f233e62b9ca2f3b81896b94709912fb2423188f00f01f4444be436633"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginsMigration.ts",
+      "mode": "100644",
+      "sha256": "ca5d8f4d1ff30cc6d6adc3c3d5ca65b20c24e836489817f89417724d3fed3a06"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginSource.ts",
+      "mode": "100644",
+      "sha256": "ea482bba6544710f38b7797b0a972bd109dca57b8239687ac6da90241be77b65"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginSummary.ts",
+      "mode": "100644",
+      "sha256": "e1881c00163ad5c599024291401d9da867178da35b9f0c940d62daaa6d0a8b68"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginUninstallParams.ts",
+      "mode": "100644",
+      "sha256": "28e98fefd1bc28637fea5dc0e76f4d37f4ccae01297c900d447c4e1e9773c6fa"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/PluginUninstallResponse.ts",
+      "mode": "100644",
+      "sha256": "957989e881752ec65b837a063038efcafc84e07f50fad0854c7e2c6e66b18d57"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ProcessExitedNotification.ts",
+      "mode": "100644",
+      "sha256": "3c703edf527a8d0aadb507661c022801a3aa93c729b33867029a36ed194e4f52"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ProcessOutputDeltaNotification.ts",
+      "mode": "100644",
+      "sha256": "1e4273144cda49b752352762f1bd7a6888ec1bc5b40adffa2e0ff92718555ab7"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ProcessOutputStream.ts",
+      "mode": "100644",
+      "sha256": "86115324ab7087296e12deaa2e20a3b896db55335c56542d56d761e4049d1319"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ProcessTerminalSize.ts",
+      "mode": "100644",
+      "sha256": "35c48b7d9023194370a4e427c5faa7aa553c213cb675b1fc21aa142d8211d4be"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ProfileV2.ts",
+      "mode": "100644",
+      "sha256": "0a7a5d86f733188fb11d35aef95ec098bb6389d0ba5255412fe87b48fd9922a8"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/RateLimitReachedType.ts",
+      "mode": "100644",
+      "sha256": "67ca3e1a5154ac7ea40be29b31ad55be4a786b228ce89fecc566ef00309b5e8c"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/RateLimitSnapshot.ts",
+      "mode": "100644",
+      "sha256": "0e574364a871870d28f10fa878673266fe97e15e774629d8767520a551e3ef21"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/RateLimitWindow.ts",
+      "mode": "100644",
+      "sha256": "d1c57b5226a87ef3c02643835d62fe2c95b78c6c37cd53fd4aeccf68be9a7f1b"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/RawResponseItemCompletedNotification.ts",
+      "mode": "100644",
+      "sha256": "b5b6a62552ff5441a7fe2a1e762fef812b8bdbcad403adc59fdd4a5b90faf0c7"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ReasoningEffortOption.ts",
+      "mode": "100644",
+      "sha256": "5d1f91ca1bff16730604514f5d6a6102c74e5912af7f5c8fa474d6fcf8c90dde"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ReasoningSummaryPartAddedNotification.ts",
+      "mode": "100644",
+      "sha256": "beeae50a6a6f7a3438d7cb6e49e4353228f92c554e5331bf6f288ff7a50b1932"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ReasoningSummaryTextDeltaNotification.ts",
+      "mode": "100644",
+      "sha256": "46edaeb45c009106583d4793419b1a60b621cf93aecba734b7ef103178416261"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ReasoningTextDeltaNotification.ts",
+      "mode": "100644",
+      "sha256": "be86447b21cca238370ec3074d903dbedd6f28f298b482d2938e46f39fd1c2ae"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/RemoteControlConnectionStatus.ts",
+      "mode": "100644",
+      "sha256": "2f1628e07ecb5c0e3bdf5f00b2daf593c5355097054dc3b9cf71958a61abfbed"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/RemoteControlStatusChangedNotification.ts",
+      "mode": "100644",
+      "sha256": "5f58e9f5917974226302300c9e03865b49989efc713091acf69cb58a4f2dae7a"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/RequestPermissionProfile.ts",
+      "mode": "100644",
+      "sha256": "b79d118592a8d3281f00e3defa0eb4abc96da4b42387d6c4ccf0d8a5be60926e"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ResidencyRequirement.ts",
+      "mode": "100644",
+      "sha256": "e854e4f012b0411546853b97687871b3c7f1849f174f777abf7cf02df2abfc7d"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ReviewDelivery.ts",
+      "mode": "100644",
+      "sha256": "b5bd1bc04a73c1e8f954ce2f4f316e3d370f3aba03358e1aef7f3c3bcffd6d19"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ReviewStartParams.ts",
+      "mode": "100644",
+      "sha256": "d041aa94791b825ff519bb495069583006f9acede88978fb67b06d53f25a3f1c"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ReviewStartResponse.ts",
+      "mode": "100644",
+      "sha256": "95e1044df47ccbfc2f4578c1bf466add439334c4e99303d860e556cd28946b83"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ReviewTarget.ts",
+      "mode": "100644",
+      "sha256": "66b157f10a14668e0351dfddcc2aa3ce3defacdefa06631b137b651fb5f32af5"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/SandboxMode.ts",
+      "mode": "100644",
+      "sha256": "8a59381e04efa84f9001e5c24444ee26fccf8f9e10bcfb02d2f6a24e85898843"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/SandboxPolicy.ts",
+      "mode": "100644",
+      "sha256": "f5a4b24c0de4945e77c1573306ae4cb98a29103a6c64ee23264dc9d35a977e85"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/SandboxWorkspaceWrite.ts",
+      "mode": "100644",
+      "sha256": "c89562de861371f0c98a7577f680c0a5067ad2af688992c7d9b0c94c1170a85a"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/SendAddCreditsNudgeEmailParams.ts",
+      "mode": "100644",
+      "sha256": "314709e8b9d16e31d76ce984d931a2b71c90496a0ea988880b44053aab635c1f"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/SendAddCreditsNudgeEmailResponse.ts",
+      "mode": "100644",
+      "sha256": "8ba64fd9a730dd8845700fbc0f1c1cebb5bde95e92c384fdb538ddfe3764d846"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ServerRequestResolvedNotification.ts",
+      "mode": "100644",
+      "sha256": "e428ba289071d7b2e04cedc8b3cd7e6adbe57409dbbc333c38178b316f122ec5"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/SessionMigration.ts",
+      "mode": "100644",
+      "sha256": "8b2b07fe3b29d6ee2e7098f94031b41bb83fe8a9bd2f51136794f5b6abe26756"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/SessionSource.ts",
+      "mode": "100644",
+      "sha256": "9623b5e498a83918d84201cb227c420879ca1b645877f4570141e1cac2038f81"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/SkillDependencies.ts",
+      "mode": "100644",
+      "sha256": "777800a9177c0d26e58cb8d5eda982667719aad36d27a2f0ad8ae2771edcb7a7"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/SkillErrorInfo.ts",
+      "mode": "100644",
+      "sha256": "0d59892e9b1d002a1d7065a49b3951c3d9a8b73bd1746a5b76c3018882296a54"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/SkillInterface.ts",
+      "mode": "100644",
+      "sha256": "f30c64cbaff94b23f4c7d33f877acdc8e5b76bff42ff2bbe9c7e02391c9a9ff8"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/SkillMetadata.ts",
+      "mode": "100644",
+      "sha256": "0eea5c553e945e148ffa06578620663b18a01ff33c2977f6ee9a00ca2d994e90"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/SkillsChangedNotification.ts",
+      "mode": "100644",
+      "sha256": "dc477a4b72f138928f65a366114abdd99523b9e979a3d569818075659eb77235"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/SkillsConfigWriteParams.ts",
+      "mode": "100644",
+      "sha256": "c04eb859b78e968842c6122422dbaefe1a37124d6f212d7b8f2b2f3a37c5a0bd"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/SkillsConfigWriteResponse.ts",
+      "mode": "100644",
+      "sha256": "f451c3c6d608be51b58a7a4e65ed08ca625a27dd3bf174d3130f0f2320469bc0"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/SkillScope.ts",
+      "mode": "100644",
+      "sha256": "cc13d4657511705e351a68c578caaec3112bf8e59284384d994675ec403371a6"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/SkillsListEntry.ts",
+      "mode": "100644",
+      "sha256": "90a88e7e15fdfffa9a4e7e6b04c81e2b04faae4b1fe95717e0d01e80573cce20"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/SkillsListParams.ts",
+      "mode": "100644",
+      "sha256": "c7ba20615ea17d426387c5bd53d2dc0e4ab9a3845e21f07b127d459b6b54aa1d"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/SkillsListResponse.ts",
+      "mode": "100644",
+      "sha256": "149b1dc469d830015f96d4bc31ac1f76daf296ba5d2eff41caf4149f1da5ea97"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/SkillSummary.ts",
+      "mode": "100644",
+      "sha256": "d348466fdeb53b28e0e6c29c6115d7876745f5bce8f5f5d37b93ae1cc7996899"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/SkillToolDependency.ts",
+      "mode": "100644",
+      "sha256": "4e658e9cd6d6bedb73870f1b742cf5cf79d9eb4c8635838e2acc99d328810ab5"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/SortDirection.ts",
+      "mode": "100644",
+      "sha256": "9ad2278213c1d99366e0ac2ecf6cbc069f9cf1090aafd4e71462a3945c14638a"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/SubagentMigration.ts",
+      "mode": "100644",
+      "sha256": "a624af1c074be6c6dc29785723fcd409010134e3c94ed44df6d31e39f034729c"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/TerminalInteractionNotification.ts",
+      "mode": "100644",
+      "sha256": "c22bbace10fb3c79e3ff5f04721ecf6f3fb15919ea29ff3dfd7168a18a97b74f"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/TextElement.ts",
+      "mode": "100644",
+      "sha256": "a6f412c3f9875b39b021d6ad116ed9e887180f9d574720a76f031bfed66c5a93"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/TextPosition.ts",
+      "mode": "100644",
+      "sha256": "dc12349f71f374fb7ebf8672f7d2a3250e9edc84bdf58ccec401ec86db0f9c3b"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/TextRange.ts",
+      "mode": "100644",
+      "sha256": "cc9f2a965791957e7dbb1be248635839a873714c2d2e167d4ffd2568738655d7"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/Thread.ts",
+      "mode": "100644",
+      "sha256": "fb227a53e6532d2ab771a982d7bcfe4f3565a58ec0896ffaad3be33201aefc7d"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadActiveFlag.ts",
+      "mode": "100644",
+      "sha256": "0e17998362c085d594478d3fac2a330e89ab49669f8481e9f4791272932e3cfd"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadApproveGuardianDeniedActionParams.ts",
+      "mode": "100644",
+      "sha256": "b954eb6caaff50c841f7a1a33c97dddc1c9b5eaaaf93001391ebb3033740b338"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadApproveGuardianDeniedActionResponse.ts",
+      "mode": "100644",
+      "sha256": "e40cbb98b338ca5d0493e4b5aeb3e0ffbb0817f83b9f207c14fc91a14276b86a"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadArchivedNotification.ts",
+      "mode": "100644",
+      "sha256": "9b1747973cae28bf84f0e4b0656b03bdc0ed396b53f9f5f5711acd56110271f7"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadArchiveParams.ts",
+      "mode": "100644",
+      "sha256": "63bf71301b897cf74c0a3b48c49ba61823d549de8f66f434e9e2eb705e594db2"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadArchiveResponse.ts",
+      "mode": "100644",
+      "sha256": "d6c8715393f98c0de93e31ee024687f3ac6f766941d656871d977e401eebaf18"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadClosedNotification.ts",
+      "mode": "100644",
+      "sha256": "dbd10ae7871ba82b0b0265761b957bb8942a50e8f40e832a161ff7e7ef0e42e0"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadCompactStartParams.ts",
+      "mode": "100644",
+      "sha256": "cc4e0caf37ed09f92fc8882a5e1cc280ec928313d307431cb85fcaa530f93071"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadCompactStartResponse.ts",
+      "mode": "100644",
+      "sha256": "bf1b80a2e9e4db9537b74245b3d9ff8a568f3292228ff8e69cd93610fec8d181"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadForkParams.ts",
+      "mode": "100644",
+      "sha256": "d5aad034cb00fe207cf94fdbddb3395876c7f5acf9d18697e12da6a43df46ca8"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadForkResponse.ts",
+      "mode": "100644",
+      "sha256": "cd9b144d921fafae251eb495e90c95cdd57b2605a53bef05952beb50171885bf"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadGoal.ts",
+      "mode": "100644",
+      "sha256": "c06ffa09651d4cc7f66dc6c0c2ea8f94551c10c1837aa3f73b7b66def1faaf7c"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadGoalClearedNotification.ts",
+      "mode": "100644",
+      "sha256": "c7b2fae35683f672813077daf88ba9797ff0657f7eeba16655c32c13ac5e595d"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadGoalStatus.ts",
+      "mode": "100644",
+      "sha256": "646ef95057feecfba1a28a00591fba27419929489e85583567820386fccedc79"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadGoalUpdatedNotification.ts",
+      "mode": "100644",
+      "sha256": "a01a94c0dee5c68ae076b6950ecfa9acac1cc8a79718dde1a2a5a7ef26577a6c"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadInjectItemsParams.ts",
+      "mode": "100644",
+      "sha256": "9c663da2e2a569daa4d0cc0b684eb6d67fde98cc980d7d239a98cf2226b67fb8"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadInjectItemsResponse.ts",
+      "mode": "100644",
+      "sha256": "2a9673eb6a45c2d7d822e2474a3523c3a2e9019477379bf6ae2e2c7875d28582"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadItem.ts",
+      "mode": "100644",
+      "sha256": "947268c4910794696e4d6a58416ce6423c51726a43485d888d550620bd316a5b"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadListParams.ts",
+      "mode": "100644",
+      "sha256": "8e7a5c5cf8c54bb4bc44f09f14b696e64bd07d1be705bc711e883cf2d3e94b18"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadListResponse.ts",
+      "mode": "100644",
+      "sha256": "95b7c7db675544a863e241fe073de1e455cc50902c9cf0761c1677412f03d24a"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadLoadedListParams.ts",
+      "mode": "100644",
+      "sha256": "e2866a4b9d686413f62f57567f0f4ae9bcde6805041f955ce057f864d7b5e99e"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadLoadedListResponse.ts",
+      "mode": "100644",
+      "sha256": "7fd42a34e5c85d0e6f81c440b9f6c14bf1f76d2059813ee7719cd6c55940f459"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadMetadataGitInfoUpdateParams.ts",
+      "mode": "100644",
+      "sha256": "95b64c2526a0290e78457a698b8f9fba00dbac702a6707fd6357eca216928e7b"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadMetadataUpdateParams.ts",
+      "mode": "100644",
+      "sha256": "8a2dbdb20db2e48b3c49725c1fe0d1234d8e7599b3a943d4251e6f831185b136"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadMetadataUpdateResponse.ts",
+      "mode": "100644",
+      "sha256": "a1d075637af57491ade0dcf3a6feb61fb38f05efd957d564977b5ca7d8eb1ec2"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadNameUpdatedNotification.ts",
+      "mode": "100644",
+      "sha256": "079c829d8ed4a1aab49f0357354b684d2f5abd0ab63cf93d25355629abed57a7"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadReadParams.ts",
+      "mode": "100644",
+      "sha256": "aca045fd28debcbdce33aafcc3a9e2e97d41d9e7769c270cc7439fd3ffecc5e8"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadReadResponse.ts",
+      "mode": "100644",
+      "sha256": "09d84ab28738dd7f906f7adf4dc741e745d5ee826029653f4d7741c4953a7b42"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadRealtimeAudioChunk.ts",
+      "mode": "100644",
+      "sha256": "bd17d95ef970847308b7875fce875b254cd737ee93d87934a01d2f6b104a1c9e"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadRealtimeClosedNotification.ts",
+      "mode": "100644",
+      "sha256": "96f698f47161d279d86bd3c95db496bfb39d5501bd8f879b9a4e52bb733327c2"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadRealtimeErrorNotification.ts",
+      "mode": "100644",
+      "sha256": "73e74e9c2818597afd19d01793e7e7d4d55fa1d22843a8f54fc9428a2e14c463"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadRealtimeItemAddedNotification.ts",
+      "mode": "100644",
+      "sha256": "6f6f9285beb173b2d3e8c12a07d66873c223a7a44f8c912a80c116b5359c2003"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadRealtimeOutputAudioDeltaNotification.ts",
+      "mode": "100644",
+      "sha256": "21b2ca41d1c4ec971685df39b76e8909de2e956cdcf657e20f09c205746107af"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadRealtimeSdpNotification.ts",
+      "mode": "100644",
+      "sha256": "d0cd47d527495f4d6257627cdd4cf473d0c593641c71c1917e2964cdf5ff8196"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadRealtimeStartedNotification.ts",
+      "mode": "100644",
+      "sha256": "24d42a3f763447eb7f260ccdd5ba24eff81cc744cfe0572fa891d00641c5a295"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadRealtimeStartTransport.ts",
+      "mode": "100644",
+      "sha256": "70cfafdcf7878cf94063e858bf64a146761bd78c97d1a4d353d474ae5e7f2ff6"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadRealtimeTranscriptDeltaNotification.ts",
+      "mode": "100644",
+      "sha256": "9fe0837b12573eacf36384ff25aed63685de51a2b58edf7c6f74ce5b47d80532"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadRealtimeTranscriptDoneNotification.ts",
+      "mode": "100644",
+      "sha256": "fb2e667c004c529028f51558f07e40d5e7f9869081f3b0ad644441cdcb8e6f9f"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadResumeParams.ts",
+      "mode": "100644",
+      "sha256": "acd4203bbb61e0c00ee76dbe9cd9be31e86be0cc05ae72e6aa8178387f01f36e"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadResumeResponse.ts",
+      "mode": "100644",
+      "sha256": "5e65b186bf50e897c79a20f31f4dd36c05ce2df20c673bd3e7fc3992805b1172"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadRollbackParams.ts",
+      "mode": "100644",
+      "sha256": "bbff66dc041f22992efdc5fc7b617e9b6d40f801f261df1c7b0de485e0f4aefe"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadRollbackResponse.ts",
+      "mode": "100644",
+      "sha256": "8c1782df5c86ec47ccf047556c8b613a7e724a844277e15e7a490a18647fd7a6"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadSetNameParams.ts",
+      "mode": "100644",
+      "sha256": "6ebe6eeb613fd65860d822f94808b61e06349479bd8c70d5e4ed51c6ff735cb6"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadSetNameResponse.ts",
+      "mode": "100644",
+      "sha256": "5b8371ac83b80437414d6b243778a1b7e3cba0c5840468e821e57dc124b5dc6f"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadShellCommandParams.ts",
+      "mode": "100644",
+      "sha256": "6fd2cf297c5f29efadf75b6e563d9de6be03c763155f300a339bbd9f98ce8670"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadShellCommandResponse.ts",
+      "mode": "100644",
+      "sha256": "ae71dd4dc21f0d2e91f7deffee92a771b5ca366e95b1b0f0ad6d5f1ae6a689ef"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadSortKey.ts",
+      "mode": "100644",
+      "sha256": "784401881c74e2e309c6b1126e577554f9d7911d5dd8b2aeafb07c08962bb936"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadSource.ts",
+      "mode": "100644",
+      "sha256": "9af69e9dea2b608dad987c0dddc12151b82ded7894c1c6ea05f2283223000978"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadSourceKind.ts",
+      "mode": "100644",
+      "sha256": "0ca0f7faf4ebc35bc89967d666a904329b958167c6ca9d9099ce1aa500de4ac9"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadStartedNotification.ts",
+      "mode": "100644",
+      "sha256": "bc5031158412e7c533afcc0dee1453be2b797de211f7252336c226fa2ed3c532"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadStartParams.ts",
+      "mode": "100644",
+      "sha256": "3a8e4943c6a9a86de42037096cedb86ac6abef491fb7ca424752663116c24fef"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadStartResponse.ts",
+      "mode": "100644",
+      "sha256": "5d015a93816d3aba30f44f8f2fb3837261785af9502ee4b1d36011d89ab3980b"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadStartSource.ts",
+      "mode": "100644",
+      "sha256": "7352677b98e02cd1bd82e764582a818f3f59574842444f13e61656261cfa2ea2"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadStatus.ts",
+      "mode": "100644",
+      "sha256": "374f9ea8a23a06808bda3435d0854aa92303547bc87a92046b6af22b6e962352"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadStatusChangedNotification.ts",
+      "mode": "100644",
+      "sha256": "172bf64d645c387ca07b1a4f6d30048c923b07f81d27b8e2c1a576f1204db4b0"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadTokenUsage.ts",
+      "mode": "100644",
+      "sha256": "27cae6c3e6c44696225e9a0903e0531c6eff126c6de3da2176bc5cdd904def4e"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadTokenUsageUpdatedNotification.ts",
+      "mode": "100644",
+      "sha256": "53ce4421d686b8a7f9a86c5ad54de2a7dceecfb95df74fa5f441947e136f063d"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadUnarchivedNotification.ts",
+      "mode": "100644",
+      "sha256": "2c85d5622b0d5f3ecc48f117388be3f678a3685ca25536a76b66ac8600aafdfc"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadUnarchiveParams.ts",
+      "mode": "100644",
+      "sha256": "50df685c2ddcc5cb002d57c70662d4d5ebc23b14bef71c448e36a3ad65b18ffd"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadUnarchiveResponse.ts",
+      "mode": "100644",
+      "sha256": "fa9f1eda4cb375ce0fb7aac2a7e8c25d5dd5d7a7b0f30f716de1574bff7fe17a"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadUnsubscribeParams.ts",
+      "mode": "100644",
+      "sha256": "5780913f01bac19e8edb8c01c77151efefdae62bf451968270e5bb8e0dda37b2"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadUnsubscribeResponse.ts",
+      "mode": "100644",
+      "sha256": "cc18c7d986480b502fbce152748943c2dece2d6c79cd932c0550ee9a307efae9"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ThreadUnsubscribeStatus.ts",
+      "mode": "100644",
+      "sha256": "0efe48aff131c9c0270d6ad2c5db92e4660e7e89a27d03c05053648ac349382a"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/TokenUsageBreakdown.ts",
+      "mode": "100644",
+      "sha256": "5b28aaf482e581e0c552b3efc60417cf9b1107d3464e1f12849da4f0fadbe7d2"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ToolRequestUserInputAnswer.ts",
+      "mode": "100644",
+      "sha256": "271fbffc377b53570fae244df734bb666cb902bdff633bf27842a5bdd7e3d628"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ToolRequestUserInputOption.ts",
+      "mode": "100644",
+      "sha256": "ec2f4b008b872a96c8460f4a830b8d0c20b60ef0421541970e3db62f329ef485"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ToolRequestUserInputParams.ts",
+      "mode": "100644",
+      "sha256": "8f460bcc0408f291ec9fe2f81ea87cc2072dba95db5d2869fb3b31aa77c01481"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ToolRequestUserInputQuestion.ts",
+      "mode": "100644",
+      "sha256": "d0eaa32baa3b41a8ee3a3b764e84ffd75f7474f385eebeb779fe61f18deb2b24"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ToolRequestUserInputResponse.ts",
+      "mode": "100644",
+      "sha256": "39e4959095a1b31de3f7bf28422a6536d51d651581ad1f50bc5e30c02140498b"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/ToolsV2.ts",
+      "mode": "100644",
+      "sha256": "eeade11748b91fd3f7773f828ca8b1e527cdb2fdce3dc678507bd1cc30830eff"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/Turn.ts",
+      "mode": "100644",
+      "sha256": "a754c127f207e5d5cd3f4c47a1f48e143030a87bfdaeb340242063a4df87c4dc"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/TurnCompletedNotification.ts",
+      "mode": "100644",
+      "sha256": "1f56d73cb06876533fb224cd285634d3e090b21b647009be0e7c622937e40d3e"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/TurnDiffUpdatedNotification.ts",
+      "mode": "100644",
+      "sha256": "fe6d3f22009556852bd6d3fb4c7a557fe7ce182d36f6dd9c741597555c0beef9"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/TurnEnvironmentParams.ts",
+      "mode": "100644",
+      "sha256": "6c1e0dc4d24fc54b52893dd457271a598a37a361f4957f18b342187b892786df"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/TurnError.ts",
+      "mode": "100644",
+      "sha256": "afe278dbea975cc5da56cbdfe02f55064c3085d294c1e61c2a5b6b61f5e77786"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/TurnInterruptParams.ts",
+      "mode": "100644",
+      "sha256": "643034c3d25c23c7700236d4d1ff16286565786d48148e85b0c4761fe46d3804"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/TurnInterruptResponse.ts",
+      "mode": "100644",
+      "sha256": "3994cb114b2c4a2e81ba3a349c3a7d1f13ce1b165776b2162b52c9a114c24bc4"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/TurnItemsView.ts",
+      "mode": "100644",
+      "sha256": "df5e5fd79e6c28ff89e5e201c761535d7988fbaa9caa5fc6bf71f655f353668c"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/TurnPlanStep.ts",
+      "mode": "100644",
+      "sha256": "85759fa22b92588b549c1d637a5270bbb585a17338a666726eacac79819b24b2"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/TurnPlanStepStatus.ts",
+      "mode": "100644",
+      "sha256": "ab9c561f1910a2fd7e624dfa4481eedb0636725643c5925479cd358406202c19"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/TurnPlanUpdatedNotification.ts",
+      "mode": "100644",
+      "sha256": "9f7505555f199125bc2774878d488a3dcbc4d7304a54967993e68053d9915d01"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/TurnStartedNotification.ts",
+      "mode": "100644",
+      "sha256": "95135229129526d7d9e1db077962210ca5b564adc5fe414ff07e9a65ba43adcf"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/TurnStartParams.ts",
+      "mode": "100644",
+      "sha256": "2ff8b26f9fcd9a7185afd15e23a6e3295757778054c91a145cba09931296a4b8"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/TurnStartResponse.ts",
+      "mode": "100644",
+      "sha256": "974c520197188b7399836fda0ef1b11e43df618d25295463d2e229e1efa88ffd"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/TurnStatus.ts",
+      "mode": "100644",
+      "sha256": "c69049363f97e97844e9fc851f0cd4122da057ba1371de003a28c00ab7a6ef1a"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/TurnSteerParams.ts",
+      "mode": "100644",
+      "sha256": "bcb441b8d5bd75c86e694b463960f217f988af2b932c72d05c1093d83735cbfd"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/TurnSteerResponse.ts",
+      "mode": "100644",
+      "sha256": "b77bae04f63621580d71aecab4c19c9dcd8d9147be1c4b07fe809dcaf584212b"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/UserInput.ts",
+      "mode": "100644",
+      "sha256": "a229a23d9102da9046c233a2da1ed321c01c4c1fdc31c920be2566bf5fdcdc4b"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/WarningNotification.ts",
+      "mode": "100644",
+      "sha256": "51857f21a6b49cbdbc0edbb638f03bbf1eac421e26d171873b335db3385b6934"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/WebSearchAction.ts",
+      "mode": "100644",
+      "sha256": "f1dc1197e35b48fd16134a80353ebb606256126a634b4580406a5bffed1b0395"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/WindowsSandboxReadiness.ts",
+      "mode": "100644",
+      "sha256": "5460fd7fa33a90af84c28db2f30454c9b97b8dedeab22215e6c3cf06d0e50342"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/WindowsSandboxReadinessResponse.ts",
+      "mode": "100644",
+      "sha256": "f54f6a8da01a0acac7ee560281f625adc50af54a267a65cb908514b81aec9006"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/WindowsSandboxSetupCompletedNotification.ts",
+      "mode": "100644",
+      "sha256": "01e73e262bf7a74af8241c4f449821030cfa2f450012e59f18308f13e6c3034a"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/WindowsSandboxSetupMode.ts",
+      "mode": "100644",
+      "sha256": "8f3f840d6f5ed486e08d618ccce8cfd69dc981801dd1d5695978a0f9b494f3fc"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/WindowsSandboxSetupStartParams.ts",
+      "mode": "100644",
+      "sha256": "fe38315dc591aacf13e8d3e3d3886f7336e0466eb1d80e8a5e4bdc0879786fa8"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/WindowsSandboxSetupStartResponse.ts",
+      "mode": "100644",
+      "sha256": "d0ee6f968712ec70ab856ef59ffae68f8173c5de74d86e72ed4ef4a877864d3d"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/WindowsWorldWritableWarningNotification.ts",
+      "mode": "100644",
+      "sha256": "e72526faa6bd3e8983c6aec0899cc3f705bb5f0c84c9f3d671901fe5d2cef2c2"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/v2/WriteStatus.ts",
+      "mode": "100644",
+      "sha256": "7b0285ae8fbb239002d76ddd79e5b2249a12544377750ccd0aea32cf53a5f7a3"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/Verbosity.ts",
+      "mode": "100644",
+      "sha256": "013756f9bce2e17c367c9f4f3c0d7098b0cfbe56c5f0ce9e6473d23fb127aed4"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/WebSearchAction.ts",
+      "mode": "100644",
+      "sha256": "dd495f13fb38ec0fb4d5746a2b706e7890c60795e3e768cb1f640109fd0e0b07"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/WebSearchContextSize.ts",
+      "mode": "100644",
+      "sha256": "5e3eeecb101cfcb4b793b2b05b48134377be19c5979b7c61702e73b3716b78c5"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/WebSearchLocation.ts",
+      "mode": "100644",
+      "sha256": "6af6790f04f300cc211343999a764c50a968a900ac7b42c7a7ef19b32a63a4cf"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/WebSearchMode.ts",
+      "mode": "100644",
+      "sha256": "bbd935776c7a260781f01472a1743278830831dfd6668bd1d9fb0d48d80a64ad"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/generated/WebSearchToolConfig.ts",
+      "mode": "100644",
+      "sha256": "d2b4c762845e35220d46511867dac966820ee6e09684b3daa3123161de48e4ce"
+    },
+    {
+      "path": "src/agent/codex-appserver/protocol/index.ts",
+      "mode": "100644",
+      "sha256": "0d0dd1357fb02ec2b48ad4e18272a4d98f1981a9fbb17f11b57d771298395d3f"
+    },
+    {
+      "path": "src/agent/codex-appserver/setup.ts",
+      "mode": "100644",
+      "sha256": "7945f4836fccab464d5c316c9a17e232cb03b1cd2bba940bc490a311576b6c44"
+    },
+    {
+      "path": "src/agent/codex-appserver/usage.ts",
+      "mode": "100644",
+      "sha256": "783fdc3fe15b25fd6aa7cfe3db26bfdcf192805f8c06f6820151861073676279"
+    },
+    {
+      "path": "src/agent/codex-appserver/windows-job.ts",
+      "mode": "100644",
+      "sha256": "bae3c74aabfa52c76a4942e17af3ce9d2bd5fc78965f0eaef2f496864682479f"
+    },
+    {
+      "path": "src/agent/detect.ts",
+      "mode": "100644",
+      "sha256": "9c8dccab312bdcae182df3a9e4b253bac340243212c09c4685a446c172056572"
+    },
+    {
+      "path": "src/agent/index.ts",
+      "mode": "100644",
+      "sha256": "c11108007a122708e37df5ab258a1fae1f1fc425b807ffb9e270ebcd5cf3e193"
+    },
+    {
+      "path": "src/agent/installer.ts",
+      "mode": "100644",
+      "sha256": "30a7f620340adfa970420de7397abe0fe079b7dc2275136132b7e3013a61acd7"
+    },
+    {
+      "path": "src/agent/native-helpers.ts",
+      "mode": "100644",
+      "sha256": "b33e46c9108e8de250c2424308f4c90c990379689f2556a6e00b58a19d972fb4"
+    },
+    {
+      "path": "src/agent/types.ts",
+      "mode": "100644",
+      "sha256": "20b50aa02068d74da667ea66e4acd2137b6f84ca81da9c59c3ddd4761f81f1a4"
+    },
+    {
+      "path": "src/agent/usage.ts",
+      "mode": "100644",
+      "sha256": "53e88af336568b29bf88d9feefb27944fce6528936caea57a67a95af66bc58c0"
+    },
+    {
+      "path": "src/bot/bridge.ts",
+      "mode": "100644",
+      "sha256": "61eaa69dac695ddeb4ddd6c703823a70c7ac39eaf062dd8a9f08acf9376b727b"
+    },
+    {
+      "path": "src/bot/card-content.ts",
+      "mode": "100644",
+      "sha256": "ceb2186a663fa1b0e09685014391b270e463bedbb139c09a7d77f1e2669be14a"
+    },
+    {
+      "path": "src/bot/comments.ts",
+      "mode": "100644",
+      "sha256": "87e243edd9298cf130f7eaea85419ed7fd1036a8c9854ab495ad2208392442e3"
+    },
+    {
+      "path": "src/bot/completion-reminder.ts",
+      "mode": "100644",
+      "sha256": "883b1925fa89107a4d061fce40d45d49bd886889300008e21192cbd1ee1bc7d5"
+    },
+    {
+      "path": "src/bot/context-weave.ts",
+      "mode": "100644",
+      "sha256": "3660b525a4824284dc452527e81e9137422ca29d855c1b64e01cb05658070848"
+    },
+    {
+      "path": "src/bot/dm-console.ts",
+      "mode": "100644",
+      "sha256": "5e83e04eaf52443d1369b49ff27bcdea17cfa5d444b486c6de91d075ce9a9e68"
+    },
+    {
+      "path": "src/bot/handle-message.ts",
+      "mode": "100644",
+      "sha256": "0db74a6f2863edcf7d820f39b9b3240c2a7e02caf87b3459816906986bc16414"
+    },
+    {
+      "path": "src/bot/media.ts",
+      "mode": "100644",
+      "sha256": "e7dbc14e7d92922241aaf0fc2029d7001c5c46b0a9d8c333d0a0289119341a72"
+    },
+    {
+      "path": "src/bot/onboarding.ts",
+      "mode": "100644",
+      "sha256": "e90a780b75a0698e89ff458e6a62b819bac7b877a7d1c1be154e0613ce25f681"
+    },
+    {
+      "path": "src/bot/outbound-files.ts",
+      "mode": "100644",
+      "sha256": "10ca1007aea1624797007f6052502c5435306536dd2461a2d069896e9951226b"
+    },
+    {
+      "path": "src/bot/refresh-bot.ts",
+      "mode": "100644",
+      "sha256": "c20273e3c6c8d52922a6eddbdf6c9c34f913db97776d1d2e6132a8691274564d"
+    },
+    {
+      "path": "src/bot/register-bot.ts",
+      "mode": "100644",
+      "sha256": "3612cfabcd162c592f07db1607aedee788fb6baedfe418f8e4aa3dacfdcd43da"
+    },
+    {
+      "path": "src/bot/session-store.ts",
+      "mode": "100644",
+      "sha256": "2b0f15ac71181e965cb1ad1ef6fa72d55584b679912f342aa3e6630148e1878e"
+    },
+    {
+      "path": "src/bot/session-title-coordinator.ts",
+      "mode": "100644",
+      "sha256": "d1ac70d00470bae5afb4d81776c452f5e0aa925bcc33d14ebbf3a5640d837e40"
+    },
+    {
+      "path": "src/bot/session-title.ts",
+      "mode": "100644",
+      "sha256": "aed9a0c52dc66c070681f1d487dfe25501e704b1b1c917be9ab5ed6bda5fdaf1"
+    },
+    {
+      "path": "src/bot/steer-delivery.ts",
+      "mode": "100644",
+      "sha256": "8bddcb8b8519df867da0aa272d1ac57799df946b342b8025d4cba2b75c90e716"
+    },
+    {
+      "path": "src/bot/supervisor.ts",
+      "mode": "100644",
+      "sha256": "829625d2fb4474e0907328a725c5890c0e6dfb342fb8850f6d3c099bbf0068e2"
+    },
+    {
+      "path": "src/bot/turn-card-events.ts",
+      "mode": "100644",
+      "sha256": "13c632b6cb86326b881b44abb5cfec624256e7b921bb645a182fa692ce75b65f"
+    },
+    {
+      "path": "src/bot/voice-console.ts",
+      "mode": "100644",
+      "sha256": "ad083d1e64499c74d1ee069ee0939700a6881c2d9a65bb7d1986922683b0b309"
+    },
+    {
+      "path": "src/bot/watchdog.ts",
+      "mode": "100644",
+      "sha256": "9b2e9efc0e67d361e83ee80ebaa3aabfac8dd2d0e601f289cd982895fbe49867"
+    },
+    {
+      "path": "src/bot/wizard.ts",
+      "mode": "100644",
+      "sha256": "97a81252789931ace9e5ded396c1e5ca8f4146c8631a462fd25482094a975894"
+    },
+    {
+      "path": "src/card/cards.ts",
+      "mode": "100644",
+      "sha256": "e23e64dfca433955c54c745424f3f521aa151d0da0aa938b59a1dbeea48bae12"
+    },
+    {
+      "path": "src/card/command-cards.ts",
+      "mode": "100644",
+      "sha256": "e54d8368187a7dc0dd6395de08d46e911b1c5a3bc8c43ef6af1649d36a6d5dc0"
+    },
+    {
+      "path": "src/card/completion-reminder.ts",
+      "mode": "100644",
+      "sha256": "31e88cee86812a285d9ee23ac4d4b992f380e6f2eecdbd36d0a94586ceff779e"
+    },
+    {
+      "path": "src/card/context-gauge.ts",
+      "mode": "100644",
+      "sha256": "5a6ade37280aac923e0984ca839df5ebc896c23093118b6905f4c72fbab47361"
+    },
+    {
+      "path": "src/card/dispatcher.ts",
+      "mode": "100644",
+      "sha256": "7544261625e0c7cca83443442809258a9de021d79f51509579819182d927f5be"
+    },
+    {
+      "path": "src/card/dm-cards.ts",
+      "mode": "100644",
+      "sha256": "589a615744475e7f70e2e0e38416cd05edabf1e9a645051a0e3f8edc7f41da1b"
+    },
+    {
+      "path": "src/card/file-refs.ts",
+      "mode": "100644",
+      "sha256": "7a0ee102f0f1453061d72686143a4a5f7762788ddbf37fccdd390e331093811c"
+    },
+    {
+      "path": "src/card/goal-card.ts",
+      "mode": "100644",
+      "sha256": "a9c0ee6c0ee9c109cd159672b75576f8ce865a4afb04aca7732bab05f8a7d570"
+    },
+    {
+      "path": "src/card/history-card.ts",
+      "mode": "100644",
+      "sha256": "de5d50f422b01a65dccb610298aa7f23fd814121118e14992e6d10b2f59564af"
+    },
+    {
+      "path": "src/card/inline-files.ts",
+      "mode": "100644",
+      "sha256": "85a979079d0bb47e70a27b6b636bee664dbc43c9e5bfebc4c79650fcfc8a1468"
+    },
+    {
+      "path": "src/card/managed.ts",
+      "mode": "100644",
+      "sha256": "5cc88198cc7f0a72795d41f51c786a8056eb4a7568d8614d5aa49a1b1d8da885"
+    },
+    {
+      "path": "src/card/markdown-render.ts",
+      "mode": "100644",
+      "sha256": "163d70884ebfce5a4e3239ddd4403b6b53f0f1ef0aea4824c72efc4fddd2b95d"
+    },
+    {
+      "path": "src/card/md-scan.ts",
+      "mode": "100644",
+      "sha256": "312dfd1cdf08e5fdf2bf548567f860ede9789fdb2a533b218e671d601ce5a5e2"
+    },
+    {
+      "path": "src/card/outbound-images.ts",
+      "mode": "100644",
+      "sha256": "da7631ac13fe035301d8e31f71883005776726b3d395937b9689c62e7fc66971"
+    },
+    {
+      "path": "src/card/process-panel.ts",
+      "mode": "100644",
+      "sha256": "77aae4d4bce55c5d96f06e9dc6fa89414429e8c91d2ea3e2220dda8fc929ef94"
+    },
+    {
+      "path": "src/card/report-render.ts",
+      "mode": "100644",
+      "sha256": "bb7a142ea4c208aced1aae1cfd2f985102cc5354f75128e64407c07aceeb9892"
+    },
+    {
+      "path": "src/card/run-card-stream.ts",
+      "mode": "100644",
+      "sha256": "9f26c9bd9ec5680945f787db72fab36f74435306ae302c7c0497861a05a45c8a"
+    },
+    {
+      "path": "src/card/run-card.ts",
+      "mode": "100644",
+      "sha256": "5ef5b1fca18e966aaff85620730021a22a53d24b4afc57a06ef2ce5715e5f0e2"
+    },
+    {
+      "path": "src/card/run-process.ts",
+      "mode": "100644",
+      "sha256": "d1a89e35a6b8ec6de50e1f9ee66f3145b73c85e543f2036c16476864d6260090"
+    },
+    {
+      "path": "src/card/run-render.ts",
+      "mode": "100644",
+      "sha256": "054b35fd71f473b3351e582af96407156244a3ef30e6b9accf78d062c0b763ca"
+    },
+    {
+      "path": "src/card/run-segment.ts",
+      "mode": "100644",
+      "sha256": "280c4a488358341f420951e6a458000b3a817598dbb699413623886bbea79904"
+    },
+    {
+      "path": "src/card/run-state.ts",
+      "mode": "100644",
+      "sha256": "fe56f62156301bc4fde17887994069b71e6cc6b5047ddd85728f2a3defc2d0de"
+    },
+    {
+      "path": "src/card/runtime-card-icons.ts",
+      "mode": "100644",
+      "sha256": "e51b86c64fb7d1a210ea4a82eef0889807cd23126d6e8de23c290427efa35ce3"
+    },
+    {
+      "path": "src/card/tool-presentation.ts",
+      "mode": "100644",
+      "sha256": "78d3dcc7abb11eeb9c2bf4e70a3eea8d3e83be782a913f8c0b3d0cd5088e7f97"
+    },
+    {
+      "path": "src/card/tool-render.ts",
+      "mode": "100644",
+      "sha256": "3eaa9bede9167ba8d3a6521e25c40ed8c3a61fb29b7931fd91b7dcdd718a4828"
+    },
+    {
+      "path": "src/card/usage-cards.ts",
+      "mode": "100644",
+      "sha256": "322a3ca002794b8e7a19f11df01024bc5d9c759c25e50918caf23c94435ac8a2"
+    },
+    {
+      "path": "src/card/voice-reply.ts",
+      "mode": "100644",
+      "sha256": "6980af1098bfd261551fe5e1f3901f2ec050a93f6ba61149e452d2aa57f21e55"
+    },
+    {
+      "path": "src/cli-bridge/cards.ts",
+      "mode": "100644",
+      "sha256": "69ca8f377122f9f86df31608425f12245c88791779c05c1860ec2b8725107eee"
+    },
+    {
+      "path": "src/cli-bridge/hooks.ts",
+      "mode": "100644",
+      "sha256": "f53306e6dbf166507848a438518a97ed1eafdee755cfaf3c52abf1081cc77506"
+    },
+    {
+      "path": "src/cli-bridge/index.ts",
+      "mode": "100644",
+      "sha256": "4384f66e32ed17b9a7e6f0228b468a2f8fa8d1fb48b83f4f466315067034c1bc"
+    },
+    {
+      "path": "src/cli-bridge/ipc.ts",
+      "mode": "100644",
+      "sha256": "b0a3ce499ab7766f226c6ef2a91934c329c0228196a3e64eafde243b3195b47a"
+    },
+    {
+      "path": "src/cli-bridge/keep-awake.ts",
+      "mode": "100644",
+      "sha256": "a8c3ae8e3be579d141398b51d91c405d665e8a7c5414140b4beca29bb3f4d49d"
+    },
+    {
+      "path": "src/cli-bridge/parser.ts",
+      "mode": "100644",
+      "sha256": "1e64a751c82979538108d19d72d8e180ab6bb65306007790dd40e80faf3358ad"
+    },
+    {
+      "path": "src/cli-bridge/presence.ts",
+      "mode": "100644",
+      "sha256": "3a172033f7da7ec00c26f02396c1552b30323d245950d02a39984eefc454f3ed"
+    },
+    {
+      "path": "src/cli-bridge/protocol.ts",
+      "mode": "100644",
+      "sha256": "5bd1dc6ca7455bc3b5262e31644c315ab6c29ecce23b4e2532d03a12f534cd73"
+    },
+    {
+      "path": "src/cli-bridge/route.ts",
+      "mode": "100644",
+      "sha256": "0ade623e52a52d156c698046ced770c11db2518fc5ba8964a4b987c5173dfd2c"
+    },
+    {
+      "path": "src/cli-bridge/service.ts",
+      "mode": "100644",
+      "sha256": "7ded8516911a3b194aeeb82f78da171557502102bdc607aa479cd1f2b86bb262"
+    },
+    {
+      "path": "src/cli-bridge/store.ts",
+      "mode": "100644",
+      "sha256": "e037968441e32279fbcbd7e3d1e930697c7985ca32bee3f2f84ccbf8d8cd4d4d"
+    },
+    {
+      "path": "src/cli-bridge/types.ts",
+      "mode": "100644",
+      "sha256": "f991f60d9cfd99f06d1431ca84952499a50c8c6d4370450e81f7db99e01e6640"
+    },
+    {
+      "path": "src/cli/checkbox.ts",
+      "mode": "100644",
+      "sha256": "a683c6e7f2cc629acf0617c89327b165fb083a761393c398c56fce94dbeb96eb"
+    },
+    {
+      "path": "src/cli/commands/bot.ts",
+      "mode": "100644",
+      "sha256": "53379642dac259f0c6e16b5017bb2a5905da568126a383632b8c589954c96f67"
+    },
+    {
+      "path": "src/cli/commands/daemon-control.ts",
+      "mode": "100644",
+      "sha256": "dc839ccd0cc2da1222219d5a52e805edf272b0581ea8ef0410ae81be03fbd88c"
+    },
+    {
+      "path": "src/cli/commands/daemon.ts",
+      "mode": "100644",
+      "sha256": "87c12ebb1ffa989a1f56f25be3b042c0416e8aee726dbfbf19e6b4972173b0a3"
+    },
+    {
+      "path": "src/cli/commands/doctor.ts",
+      "mode": "100644",
+      "sha256": "1e504e2cb4b63d6916351880e8113ca223d6978e53ed3ef973b1e431a6840cc1"
+    },
+    {
+      "path": "src/cli/commands/run.ts",
+      "mode": "100644",
+      "sha256": "ba9a188e8c025bff77f6f837ea01d891010e8d27b8ed760ada9359f808421948"
+    },
+    {
+      "path": "src/cli/commands/secrets.ts",
+      "mode": "100644",
+      "sha256": "af2927c528ebe8e0da54ba88b406b0461f00e83ca49ef1739d1227c9c6713b1e"
+    },
+    {
+      "path": "src/cli/commands/update.ts",
+      "mode": "100644",
+      "sha256": "af9ca49e73c06aa17788d1bddeb2a8855fbe44e6bccaafe58736fee783b32cba"
+    },
+    {
+      "path": "src/cli/commands/web.ts",
+      "mode": "100644",
+      "sha256": "eed5bc0440be20a41650dbf20f965ee9ad3f22f01ea106e68df7bc5819b0d1d9"
+    },
+    {
+      "path": "src/cli/index.ts",
+      "mode": "100644",
+      "sha256": "4a095c53fa8cc1b18e9fe9cbd5043c6b29039e56bd751cc3954197c1d8e94d86"
+    },
+    {
+      "path": "src/config/bots.ts",
+      "mode": "100644",
+      "sha256": "dc890a3cedea9e850cbdd11b3674ca9f069945ff07e9e6c06961ed3589b49fde"
+    },
+    {
+      "path": "src/config/data-access.ts",
+      "mode": "100644",
+      "sha256": "d72c0a2b3a93071a9f9718142050e2af242ee7dd78da0af6f59d23466c95bf26"
+    },
+    {
+      "path": "src/config/data-compatibility.ts",
+      "mode": "100644",
+      "sha256": "a44338c9e54a1bdeb6bd966b32965bbe60d1137e94bd8d7ec51428466eeb7040"
+    },
+    {
+      "path": "src/config/data-root-migration.ts",
+      "mode": "100644",
+      "sha256": "910428a4a282ddaa077b440d34e34ca8aa2296ac2d911aeb97e1a29156150c70"
+    },
+    {
+      "path": "src/config/data-root.ts",
+      "mode": "100644",
+      "sha256": "3e6efa905640d8920024dd6b13fb1a692503a6f686752d55f9e91376d1e87625"
+    },
+    {
+      "path": "src/config/keystore.ts",
+      "mode": "100644",
+      "sha256": "68469cf680db26b83d0d44934ce68516c5e9c14cd1e30304fc4fe212fad0c06f"
+    },
+    {
+      "path": "src/config/paths.ts",
+      "mode": "100644",
+      "sha256": "faa40f6fae2ff52259289a327ae53ca0fa5fbae7dfd3306ae441155aa3c03a2b"
+    },
+    {
+      "path": "src/config/schema.ts",
+      "mode": "100644",
+      "sha256": "e66e53f089f8ca90af19b88cd6df261128ad6ca531a4c3e26dd3bd203602996f"
+    },
+    {
+      "path": "src/config/scopes.ts",
+      "mode": "100644",
+      "sha256": "0a9793f8b774a2fb7f22c5c964c2160c0b253260239ce7052dec2ebc977e8918"
+    },
+    {
+      "path": "src/config/secret-resolver.ts",
+      "mode": "100644",
+      "sha256": "c6a0c4e6fa20f2830e68e8e3503af57dd8eca19de4e6a0159050e44a2edb9c7d"
+    },
+    {
+      "path": "src/config/store.ts",
+      "mode": "100644",
+      "sha256": "62c1efa8a4f7fdd117c1a3e43cfb5cd1302680b257aa9b57f70fcc9a53729d26"
+    },
+    {
+      "path": "src/core/logger.ts",
+      "mode": "100644",
+      "sha256": "60475be5422c2b8c5ea4016753d65cad83a756603e3fe7674793dd33900255c8"
+    },
+    {
+      "path": "src/core/single-instance.ts",
+      "mode": "100644",
+      "sha256": "d120b68ce03644306b25e82029cc65b45b8eff8721416947e5e7978b29b219c8"
+    },
+    {
+      "path": "src/core/stdin.ts",
+      "mode": "100644",
+      "sha256": "2bb960fc1e33b8fe91a3aee296e442135bc5dbebfbe04da207efbfa8291d5fc7"
+    },
+    {
+      "path": "src/core/version.ts",
+      "mode": "100644",
+      "sha256": "214ea49f041296d1d925bedceaea8de7a43b6c928bfcadfc0c136554943acb79"
+    },
+    {
+      "path": "src/host/bootstrap.ts",
+      "mode": "100644",
+      "sha256": "48c95da4341e76f4654de286986a4595e53c7bf9e6e9ce8692131dfe1e6ce24e"
+    },
+    {
+      "path": "src/host/client.ts",
+      "mode": "100644",
+      "sha256": "26eb17bbc53b41d7e1186bd028e16904e397cfa45668c4ea0466046efdf87382"
+    },
+    {
+      "path": "src/host/discovery.ts",
+      "mode": "100644",
+      "sha256": "cdd9ee32018b5b366da5cad1accd4d37a875669b12a3d05c3f98b80f353ba2fd"
+    },
+    {
+      "path": "src/host/lifecycle.ts",
+      "mode": "100644",
+      "sha256": "3b42928b24c26062f40d3d3ff0b107f6009f5731d01b997793ce19565aade80e"
+    },
+    {
+      "path": "src/host/migration.ts",
+      "mode": "100644",
+      "sha256": "fee9ce432e5338c39ed5a69c600f1819409ced596a99baceb7e76b7e3dab3079"
+    },
+    {
+      "path": "src/host/service.ts",
+      "mode": "100644",
+      "sha256": "86b9b5a261b8c453c948c1567029be16e4bda1d5019c8be9d1ad22bde0b1548c"
+    },
+    {
+      "path": "src/index.ts",
+      "mode": "100644",
+      "sha256": "f2e8227f530aca5b59f40aa5ede965089c008a33292e4bfaa810355da4459dcb"
+    },
+    {
+      "path": "src/platform/spawn.ts",
+      "mode": "100644",
+      "sha256": "a9a997dc4a3c324b745471ef42c026f4067d2168ceb6cd38a12600fad19c7921"
+    },
+    {
+      "path": "src/project/announcement.ts",
+      "mode": "100644",
+      "sha256": "36d7f75b5fd9571bd286b6fcd6d9ef0348457ce6003fb51883f396deaf766f35"
+    },
+    {
+      "path": "src/project/git-info.ts",
+      "mode": "100644",
+      "sha256": "bb832951956654063cc5fdac02253de023c91935b136ea13814a273cd9796f8b"
+    },
+    {
+      "path": "src/project/group-ops.ts",
+      "mode": "100644",
+      "sha256": "465ca11a01aa1e520e0aa3283f901cfc6b586435248b60a6c95fbf1d8ab23ba0"
+    },
+    {
+      "path": "src/project/lifecycle.ts",
+      "mode": "100644",
+      "sha256": "83f9102057e48332b8bf825df0fdb526667359ee7f5cccac3569d1b6d14b39ca"
+    },
+    {
+      "path": "src/project/onboarding.ts",
+      "mode": "100644",
+      "sha256": "41d7bec0bff3aa4e3e8e22109bf1332ee0b0389adad853a2616dcf415de6c0af"
+    },
+    {
+      "path": "src/project/pending-groups.ts",
+      "mode": "100644",
+      "sha256": "f290a9d2cbff089dd3a3cc84e63fd2f0bda702eb53128899c96a91b49f671176"
+    },
+    {
+      "path": "src/project/registry.ts",
+      "mode": "100644",
+      "sha256": "68046eb5a5b1a32409cc48fcbde4002762670e54ed21ec1461e2302d2cb62eec"
+    },
+    {
+      "path": "src/service/adapter.ts",
+      "mode": "100644",
+      "sha256": "16e4ef56e7e89e5463efc2427dc4698070eb1c191442082e2b177d4aa47527a7"
+    },
+    {
+      "path": "src/service/codex-bin.ts",
+      "mode": "100644",
+      "sha256": "a6c84ea189995653f890d8d997174fde7fa8ab3ca35696d76dd962e3bf326f75"
+    },
+    {
+      "path": "src/service/common.ts",
+      "mode": "100644",
+      "sha256": "53788413cef1b4fbfbb061d3b0d2ef5ef11521afd997cf08e34d5d60d9a70222"
+    },
+    {
+      "path": "src/service/control.ts",
+      "mode": "100644",
+      "sha256": "244e39a0d2193fafeb25460a6e60245b062a44f6fce3b71f5228693b8032f263"
+    },
+    {
+      "path": "src/service/desktop-release.ts",
+      "mode": "100644",
+      "sha256": "7400fd3a7dedd816b55a4a4baf778a74c5df266bbd2fa60f873a88941135aaf1"
+    },
+    {
+      "path": "src/service/distribution.ts",
+      "mode": "100644",
+      "sha256": "11066b7c5168f9e63614ef074429e9687b830cc48f7a4395b59436588fbca1cd"
+    },
+    {
+      "path": "src/service/launchd.ts",
+      "mode": "100644",
+      "sha256": "40a33994e708d19b51614436196a43cf055719cc8df07b3f7c96c7fc26897ca4"
+    },
+    {
+      "path": "src/service/systemd.ts",
+      "mode": "100644",
+      "sha256": "050ca42c1d6d7e4866caaa44d1fcb01701aed7cf6d4468ccdbde8e1605067545"
+    },
+    {
+      "path": "src/service/update.ts",
+      "mode": "100644",
+      "sha256": "29d34ac507d676ad6fa6e2661494657ba1a87f99558990a8ec0c9da05776250c"
+    },
+    {
+      "path": "src/service/win-startup.ts",
+      "mode": "100644",
+      "sha256": "dc4639dae0008d9eb2bbd9dbf9fdce0eb3a3bcc536344dd8c064466255c24e73"
+    },
+    {
+      "path": "src/utils/event-diagnosis.ts",
+      "mode": "100644",
+      "sha256": "23223a6fa7bffdf8fe5db9093d2aa4b01e20807379a408c3947a58773f0e40b8"
+    },
+    {
+      "path": "src/utils/feishu-auth.ts",
+      "mode": "100644",
+      "sha256": "193c844d5941315e717706daf0600e957b90c3d683d17b1aabeb4cc4f0c68f1e"
+    },
+    {
+      "path": "src/utils/open-url.ts",
+      "mode": "100644",
+      "sha256": "67532fcd6d12ca0423ec688a9b5d7e72935591a6778a7633022a9224eb267f1b"
+    },
+    {
+      "path": "src/voice/audio.ts",
+      "mode": "100644",
+      "sha256": "df6072d8f9bde80d2cb23ab3fc74f54c10ab1eb98603adcbfada5cc089425da1"
+    },
+    {
+      "path": "src/voice/constants.ts",
+      "mode": "100644",
+      "sha256": "29424e60a9a6e40ffb907d8e4d3080e34c4b89da590ed7f2f3f7abf564c0d38f"
+    },
+    {
+      "path": "src/voice/health.ts",
+      "mode": "100644",
+      "sha256": "c51e06209d8894fade0bbc35c761adea28ef7612f9a017652f63afe521a66a8c"
+    },
+    {
+      "path": "src/voice/inbound.ts",
+      "mode": "100644",
+      "sha256": "7dad5c90406473c3996c26c218e741f61ec6ffdc45634bc2bb1eca5aed7b0422"
+    },
+    {
+      "path": "src/voice/probe.ts",
+      "mode": "100644",
+      "sha256": "d6dfc53c37449306145c461b8bc39448341f0c078ae5faa36aee0e97aabb45f3"
+    },
+    {
+      "path": "src/voice/providers.ts",
+      "mode": "100644",
+      "sha256": "e4d36702e186c22876850feb81b0ac2997fbe62550e2e4f84b7ff87d8b7e36a1"
+    },
+    {
+      "path": "src/voice/service.ts",
+      "mode": "100644",
+      "sha256": "df5812ef4ead51901cd741d4a12ffa45421f4265144deff5a62794b902562f01"
+    },
+    {
+      "path": "src/voice/types.ts",
+      "mode": "100644",
+      "sha256": "7c492bb0dee6ed9b0827ed8690da5ff792f7a85252b2995a3c2efa780764eadc"
+    },
+    {
+      "path": "src/voice/view.ts",
+      "mode": "100644",
+      "sha256": "8b67afb758c49e0e89d7f4bbccd002965a1ace7a5b7a574352d8cfd394d5c850"
+    },
+    {
+      "path": "src/web/discovery.ts",
+      "mode": "100644",
+      "sha256": "4001c1a7ae608145822d9187c78deacad369d3df50eaf92673ed4ee98caa31b5"
+    },
+    {
+      "path": "src/web/mount.ts",
+      "mode": "100644",
+      "sha256": "5674a2aab703be487a528560b587b555fbb706ef2be08647750dbe86971db284"
+    },
+    {
+      "path": "src/web/server.ts",
+      "mode": "100644",
+      "sha256": "8e99f4ed3cb33ebda4b27d994cf1d07a8667f3ebe53a551b21e1608f5c40f8eb"
+    },
+    {
+      "path": "src/web/settings-routes.ts",
+      "mode": "100644",
+      "sha256": "de654b43c3da0dda2922106e5e3ff966155160e4edc550d2f6a55c6498511a67"
+    },
+    {
+      "path": "src/web/ui.ts",
+      "mode": "100644",
+      "sha256": "f8456e4fb59f2dfc5e499be30cb3f5f13951a9ca245994d4b6c9835c8bdab4dc"
+    },
+    {
+      "path": "src/web/vendor-gsap.ts",
+      "mode": "100644",
+      "sha256": "32588ccb32e75b9a08b7d12715a791290a96eec3f3b281826ebb1bc0ea7b8413"
+    },
+    {
+      "path": "src/web/vendor-logo.ts",
+      "mode": "100644",
+      "sha256": "c782a14f31ecf3b652da7a59333e9322a727aa8187a3ce0441f584a72a3e8791"
+    },
+    {
+      "path": "test/admin-avatar.test.ts",
+      "mode": "100644",
+      "sha256": "9988882750eb6fbe4f5637e0832b2216789d7912598a8527fc92bccedaa11c31"
+    },
+    {
+      "path": "test/admin-group-avatar.test.ts",
+      "mode": "100644",
+      "sha256": "1a99a6a49cf61358fa6c333fe784b90e3ec8dae69fff664321a44c376cdb0296"
+    },
+    {
+      "path": "test/admin-groups.test.ts",
+      "mode": "100644",
+      "sha256": "cb0078e90226d245327221448ddf63ad1c0e7374db00285ba6e0104cd4997ab7"
+    },
+    {
+      "path": "test/admin-ipc.test.ts",
+      "mode": "100644",
+      "sha256": "bc6aed71a201ec799b0c10be7913d9b558d1b4f8751228f5715f04259850581b"
+    },
+    {
+      "path": "test/admin-ops.test.ts",
+      "mode": "100644",
+      "sha256": "5f689aeba6ff06ce8c1eea64c98f54954fab2e6871bd581e179b33fd65d9d458"
+    },
+    {
+      "path": "test/app-server-liveness.test.ts",
+      "mode": "100644",
+      "sha256": "6cdd13bd9bec8e7d977c1ee237c9f1af9256ba01ab01263ec7bf75db5e242a91"
+    },
+    {
+      "path": "test/appserver-pool.test.ts",
+      "mode": "100644",
+      "sha256": "ae82a76e7a884fbc25667eb54fd70cfcfbd1ee3b660a70be43cfaed00df8fa68"
+    },
+    {
+      "path": "test/backend-catalog.test.ts",
+      "mode": "100644",
+      "sha256": "db32bc23a6d024b4ccd2ad42671e2206e67f4bf0a2ce9e0f81e12fac28d1bf79"
+    },
+    {
+      "path": "test/backend-detect.test.ts",
+      "mode": "100644",
+      "sha256": "c5287d5315d51bcf56cd606f9b6b77b6376e3a0826755707e239f4c0c628a076"
+    },
+    {
+      "path": "test/backend-install-api.test.ts",
+      "mode": "100644",
+      "sha256": "b47b0a21a69779d8aaf2d066c7845501f6f609cb074f8341cbe9ab2ccfd64845"
+    },
+    {
+      "path": "test/backend-picker.test.ts",
+      "mode": "100644",
+      "sha256": "ce344a093207bbe36ee6cc52b133be353cae967f6df58bc8cd38c80b342fbed6"
+    },
+    {
+      "path": "test/backend-registry.test.ts",
+      "mode": "100644",
+      "sha256": "2f918b8fabfb6345088bc0701975f287ef08d2e25e1a02ec5b4178c52119493b"
+    },
+    {
+      "path": "test/backend-session-title.test.ts",
+      "mode": "100644",
+      "sha256": "082170719baa27d47cd18a36ff869814b3a01015d26cec10effd5111844be6b0"
+    },
+    {
+      "path": "test/card-content.test.ts",
+      "mode": "100644",
+      "sha256": "f67bad999a73d5e17029545cc31d21a9893510b06fe0f4b114911bd1930070ec"
+    },
+    {
+      "path": "test/cardid-retry.test.ts",
+      "mode": "100644",
+      "sha256": "26fdd981f9fb172f05011ddf8d1de3a044974ed68947b42f2911e80eaa8ac503"
+    },
+    {
+      "path": "test/claude-agent.live.test.ts",
+      "mode": "100644",
+      "sha256": "bff407c7375c822383391df57e263185a085eb568b0546a96aced64658ad8d0a"
+    },
+    {
+      "path": "test/claude-api-error.test.ts",
+      "mode": "100644",
+      "sha256": "a3b0d594c925813f2eab00d970b394e5fae32ae3a5d46349d3a7f558181238b3"
+    },
+    {
+      "path": "test/claude-event-map.test.ts",
+      "mode": "100644",
+      "sha256": "1dd4445d4fbf0b335a421a6d8c1a09d1825c87abd74e2f294ac58799af576eec"
+    },
+    {
+      "path": "test/claude-history.test.ts",
+      "mode": "100644",
+      "sha256": "be3541b4752936465cb02c73eaead6a8702a406163989ef7b335946a935c6f1d"
+    },
+    {
+      "path": "test/claude-permission.test.ts",
+      "mode": "100644",
+      "sha256": "b11cebb4e1dcda8f24fdc898f2598b8aebb8141afbbbac28bd940a2b3a495540"
+    },
+    {
+      "path": "test/claude-resume.test.ts",
+      "mode": "100644",
+      "sha256": "3afcc8aff1d15e6cf9c524b7f698fd7dce80ccae0a8c13f7da79efb10c504c67"
+    },
+    {
+      "path": "test/claude-user-message.test.ts",
+      "mode": "100644",
+      "sha256": "cf37e391b570c48154080c2d4e362994646e0b6c058471a9d2e93b3941b6da7e"
+    },
+    {
+      "path": "test/cli-bridge-cards.test.ts",
+      "mode": "100644",
+      "sha256": "789d17fd3dee107393f90051943994d6724e6a737afac5de2e7b3c6a79fa883e"
+    },
+    {
+      "path": "test/cli-bridge-config.test.ts",
+      "mode": "100644",
+      "sha256": "1b2ed7bd47d34e4c42e106f7c5add586b745af1e480b7ebd7ea6b0f2928133aa"
+    },
+    {
+      "path": "test/cli-bridge-global-service.test.ts",
+      "mode": "100644",
+      "sha256": "52dffc9d28a18ff4f70e9614f8dd3b8b9c80f0fdc0332ee4345a774ac11111d7"
+    },
+    {
+      "path": "test/cli-bridge-hook-routing.test.ts",
+      "mode": "100644",
+      "sha256": "a793b6f3c0fefe9a0600e4aed1d15256b6c240ebc4d46215be8b0ae76f75f698"
+    },
+    {
+      "path": "test/cli-bridge-hook-targets.test.ts",
+      "mode": "100644",
+      "sha256": "3250ab9f1b6f5983fe85bb7018ffbc79c18af362f5572105f7bd422a20e166b3"
+    },
+    {
+      "path": "test/cli-bridge-hooks.test.ts",
+      "mode": "100644",
+      "sha256": "486d3de62e811d4f21f54fad005b3e4782950d872ad2e27709bef8e1b05f7305"
+    },
+    {
+      "path": "test/cli-bridge-ipc.test.ts",
+      "mode": "100644",
+      "sha256": "1456fc8727511325584190935d6920267e1c5d7c83f0e8acdd74d7b840e064bf"
+    },
+    {
+      "path": "test/cli-bridge-keepawake.test.ts",
+      "mode": "100644",
+      "sha256": "7b07ca86374159934c722707a901c4f132683d626bea7bc61c72bb8a366ac199"
+    },
+    {
+      "path": "test/cli-bridge-parser.test.ts",
+      "mode": "100644",
+      "sha256": "c8157d03fc4e58d4935360c30b9c5b4cc08fa85094d9cb49e1053ba58df981f8"
+    },
+    {
+      "path": "test/cli-bridge-presence.test.ts",
+      "mode": "100644",
+      "sha256": "6805d24498daf1398e9b4cae4d591242b3cf4baae4aaa4d13af1d9b5b360d260"
+    },
+    {
+      "path": "test/cli-bridge-protocol.test.ts",
+      "mode": "100644",
+      "sha256": "a12cbdfe18990fdc2074f54e56fb3dd9262783e00ef7832e12287301d7bb69f2"
+    },
+    {
+      "path": "test/cli-bridge-route.test.ts",
+      "mode": "100644",
+      "sha256": "86d6e12cc174c2786cd032309ae48d06918b7756e3356e5fc4626f38734860b3"
+    },
+    {
+      "path": "test/cli-bridge-runtime.test.ts",
+      "mode": "100644",
+      "sha256": "c04553ae6ced78768550b4dc78320197521b4247b982d907e91465b400fcaa7d"
+    },
+    {
+      "path": "test/cli-bridge-service.test.ts",
+      "mode": "100644",
+      "sha256": "254fe2f951bef4bb7fab7a946c0e7bc51f48c79634c35a854e4daf516621cf33"
+    },
+    {
+      "path": "test/cli-bridge-store.test.ts",
+      "mode": "100644",
+      "sha256": "1906051d581f576c9c1654d028b8335efedce4b664a6928252f4f42444bc9784"
+    },
+    {
+      "path": "test/codex-managed-install.test.ts",
+      "mode": "100644",
+      "sha256": "56f0445a079bdaddbc142c3c5606b9f858edd389caec7fc6b09c0ce1f843948a"
+    },
+    {
+      "path": "test/codex-process-tree.test.ts",
+      "mode": "100644",
+      "sha256": "33ebcc270efacea1f5f42099bd35e142aed11f95a01ca6ca2d47d778a3e9cd95"
+    },
+    {
+      "path": "test/codex-setup.test.ts",
+      "mode": "100644",
+      "sha256": "1c80388474b5fdc5ae6f9b188ccf874ab3ebd4ed430e0d754bbd32a7fc5e70da"
+    },
+    {
+      "path": "test/codex-usage.test.ts",
+      "mode": "100644",
+      "sha256": "737c69ad4375e64da6ea5321c1268db5babb0784bb934e7b47ec0429a06b568a"
+    },
+    {
+      "path": "test/command-cards.test.ts",
+      "mode": "100644",
+      "sha256": "b622539f9e919f4d5986fea3ba229b158fedf14165ebf3196a474cf0f567e245"
+    },
+    {
+      "path": "test/comment-settings-card.test.ts",
+      "mode": "100644",
+      "sha256": "d84dfcccdaac5d5e8fd80ee12155e3399c2600c8494e3fbdee85f787aa1d6d94"
+    },
+    {
+      "path": "test/comment-settings-runtime.test.ts",
+      "mode": "100644",
+      "sha256": "80d6f917ece195badabd2aa64c2f8cc3fa0740cbca04f39ff622394ce9d7496b"
+    },
+    {
+      "path": "test/comments-config.test.ts",
+      "mode": "100644",
+      "sha256": "23394772a59ea11ea2f049b53bdb430584478e8b679f04e569fe56b54ea9b2d0"
+    },
+    {
+      "path": "test/comments.test.ts",
+      "mode": "100644",
+      "sha256": "df83b6cfea26d526ce2133f8e84a4820da6b61ade2caaf2f65fea372f6108964"
+    },
+    {
+      "path": "test/completion-reminder-settings.test.ts",
+      "mode": "100644",
+      "sha256": "59bb0cdc51016d02614ee57501442c53c93b9bf8fc86912c2b130a8d2b92202c"
+    },
+    {
+      "path": "test/completion-reminder.test.ts",
+      "mode": "100644",
+      "sha256": "d8089ef944578d640c6612ea4e56cde43c6da88e2f6f7c0202fb59807be739c4"
+    },
+    {
+      "path": "test/context-gauge.test.ts",
+      "mode": "100644",
+      "sha256": "e95a8708f77f166f3005046486c009e634f7ef15cd38de50b90d58761b606ca6"
+    },
+    {
+      "path": "test/context-weave.test.ts",
+      "mode": "100644",
+      "sha256": "8539a669a6389d19c50b4c86bea3d0e894a2b74b3c07e52cb9481b412ab1a4dc"
+    },
+    {
+      "path": "test/daemon-control-stop.test.ts",
+      "mode": "100644",
+      "sha256": "a0c15f47b3362f7e4c72ba96cc4f93b5a352be9891b58cf9527cc5e01a05dbed"
+    },
+    {
+      "path": "test/data-access.test.ts",
+      "mode": "100644",
+      "sha256": "13fba9008bdd71c623b6695724df38eb1a7e317c9bb57960ea5263e2281c73dc"
+    },
+    {
+      "path": "test/data-compatibility.test.ts",
+      "mode": "100644",
+      "sha256": "f81b9580ba2b9e0c54c9001c440c69cef95f55b6416e4bc6157f6604466d4c0d"
+    },
+    {
+      "path": "test/data-root-migration.test.ts",
+      "mode": "100644",
+      "sha256": "b513dabae9ed72b9353fc395f4921135d5e55efe1519a28d2fd53c460501e18c"
+    },
+    {
+      "path": "test/data-root.test.ts",
+      "mode": "100644",
+      "sha256": "6eaf1bcfe34f921f81912a821640334f99bbca599ded6a22c10bf426c9d9285a"
+    },
+    {
+      "path": "test/desktop-collaboration.test.ts",
+      "mode": "100644",
+      "sha256": "dc4b0be4c7ae1a282b4a4298ee95eaaabbee3cd8c78d3242a19b8d046d2fd172"
+    },
+    {
+      "path": "test/desktop-release.test.ts",
+      "mode": "100644",
+      "sha256": "29cbc046361a704ab033b7e7fe4887c610b9bdb4efcfad1b4e9be65e1abeac17"
+    },
+    {
+      "path": "test/desktop-service.test.ts",
+      "mode": "100644",
+      "sha256": "06843e978b212353ce4f6b2db2eb45f7c66e686e400da4180b2f5ba1903599b4"
+    },
+    {
+      "path": "test/discoverability.test.ts",
+      "mode": "100644",
+      "sha256": "3e9972b95a723fb444c9caacc7ffe89822fbc6ca7f7d77b9b038b38ce82c1d9a"
+    },
+    {
+      "path": "test/distribution-update.test.ts",
+      "mode": "100644",
+      "sha256": "78747192912a8a9b8d6d5f9fdd6d69ae21aacc563b57fbcf38c0306002d28af8"
+    },
+    {
+      "path": "test/distribution.test.ts",
+      "mode": "100644",
+      "sha256": "e95b43c32fe17206a8ffb9de0d09cf5f639399a3576ac18d4d60db2d13db0cb6"
+    },
+    {
+      "path": "test/doctor-card.test.ts",
+      "mode": "100644",
+      "sha256": "6b9e232913c9bb1ae832e2a3947fb096713431e58ef66f3dfd3cc000d9df2b2d"
+    },
+    {
+      "path": "test/eager-turn-start.test.ts",
+      "mode": "100644",
+      "sha256": "ec48687b5dbe6d1153479db8a480839832c15cfcdda762154795066ae5e737d1"
+    },
+    {
+      "path": "test/event-diagnosis.test.ts",
+      "mode": "100644",
+      "sha256": "34bad8c7edc215b4e135dc776a3aec6ab48ba4ffc9813278ff16e9bc2592378a"
+    },
+    {
+      "path": "test/event-map.test.ts",
+      "mode": "100644",
+      "sha256": "9a5e8b01131518e278e1fcb7cc51df5fd25f45e3520a505ebeef4bbb11bf741e"
+    },
+    {
+      "path": "test/fixtures/offline-service-probes.mjs",
+      "mode": "100644",
+      "sha256": "5153de442261fd22ad04e41f4879f3f4c01038a3fb8517ee64c994217c77435e"
+    },
+    {
+      "path": "test/fixtures/voice-probe.ogg",
+      "mode": "100644",
+      "sha256": "7a1e9ddb631014da85d68c15ffa2861ec392a8659e94d4184f3fa108a1937634"
+    },
+    {
+      "path": "test/goal.test.ts",
+      "mode": "100644",
+      "sha256": "0c4fc18fc4e4aae2f10203d8aa0c75f6c6aa72a3d30093018096aab38602398a"
+    },
+    {
+      "path": "test/help-card-backend-aware.test.ts",
+      "mode": "100644",
+      "sha256": "9054f5fe539f2bb36fdd5b7965676567a0299eb6964d250a37d13e27c4dc1139"
+    },
+    {
+      "path": "test/helpers/codex-selection-fixture.ts",
+      "mode": "100644",
+      "sha256": "f410d72116eaed51959c50fbf6eca096c42ccacade9455513f5fafb378fdef93"
+    },
+    {
+      "path": "test/helpers/node-executable.ts",
+      "mode": "100644",
+      "sha256": "d96ef9eeced671b2e2a641bf8e993dcebcd70f40a3b2161426c13bc4694ac1dc"
+    },
+    {
+      "path": "test/history-card.test.ts",
+      "mode": "100644",
+      "sha256": "1e323b1c632c019a9878f1c39cac949236651bca15e59cbaf5b4809f898b9123"
+    },
+    {
+      "path": "test/host-coffee.test.ts",
+      "mode": "100644",
+      "sha256": "a6892c6a682b8ecd09c30c04e375e38716623621b40a08d9a997ec0dd9793515"
+    },
+    {
+      "path": "test/host-import.test.ts",
+      "mode": "100644",
+      "sha256": "fbd2ff7c555db5d4a8f960bfe2fa1d9fc5bf35d06aab7bfc4644301abc20053c"
+    },
+    {
+      "path": "test/host-journal-inspection.test.ts",
+      "mode": "100644",
+      "sha256": "6a886ba28268b6316ffb9d676d8f1281725d44949c8fd50cd69a1219fdea916b"
+    },
+    {
+      "path": "test/host-lifecycle.test.ts",
+      "mode": "100644",
+      "sha256": "51b465246fe0680f6d50ae1e8937820d398ca9ff90c1ea6cad5cb1d8779492f3"
+    },
+    {
+      "path": "test/host-settings.test.ts",
+      "mode": "100644",
+      "sha256": "f0ed0c8354ec64df02abcfa10804a7e8f3d86c15848eb2bb2ca228300f3997f9"
+    },
+    {
+      "path": "test/inbound-dedup.test.ts",
+      "mode": "100644",
+      "sha256": "de38915716c54cc9a0a09990321fa0442d5309b5a4219af416a0ba059a174085"
+    },
+    {
+      "path": "test/inline-files.test.ts",
+      "mode": "100644",
+      "sha256": "571d65b2f13ce03bb8c006493465e79c113178d58d366a8e2afc3addf6bbe6c6"
+    },
+    {
+      "path": "test/intake-parallel.test.ts",
+      "mode": "100644",
+      "sha256": "2983b6c45de8421d70719b8db390d0d7b927d563433640477db91d09f0925104"
+    },
+    {
+      "path": "test/issue-14-live-images.test.ts",
+      "mode": "100644",
+      "sha256": "e0362807ec3bb498155dfc7cd2597b873236a33b9a5b079997d89d5698f5ab00"
+    },
+    {
+      "path": "test/kill-process-group.test.ts",
+      "mode": "100644",
+      "sha256": "85d7ece424312a8efc0eaf6d66731799610a00f9d79d8c41dde6f9f6f3bf4991"
+    },
+    {
+      "path": "test/locate.test.ts",
+      "mode": "100644",
+      "sha256": "4fe3b4c18d971f1dcd30f4768592d741f746d55a5247eda9f83e17c0bc2d1419"
+    },
+    {
+      "path": "test/logger-test-isolation.test.ts",
+      "mode": "100644",
+      "sha256": "7c2622e0efbc74eeaa030d3498bf6f88409fa53347713ab24b1f4124b98f13e2"
+    },
+    {
+      "path": "test/managed-tools-pointer.test.ts",
+      "mode": "100644",
+      "sha256": "f169eed695f7df5c2873be030bf804fc8e372df9f345f74a02a8e60f7dc32bdb"
+    },
+    {
+      "path": "test/markdown-render.test.ts",
+      "mode": "100644",
+      "sha256": "0a14a2eea482b87e7ae5ef13db63c643c848e3af035308c063f633bde6f18231"
+    },
+    {
+      "path": "test/md-scan.test.ts",
+      "mode": "100644",
+      "sha256": "87c70f13379d589b15f3f7cdedd0ee9f7fc091f8911f13bab0c6c6efaa499cc2"
+    },
+    {
+      "path": "test/media.test.ts",
+      "mode": "100644",
+      "sha256": "55680fa1d25cd49d11bef72aa94f043c46e3ae4ffeb5e34ac9d878dfde693c63"
+    },
+    {
+      "path": "test/message-queue-races.test.ts",
+      "mode": "100644",
+      "sha256": "94d2d7895d9383f7083b19b2ace0bb13fe8f3c828c617a60be50bf3b5ae187a5"
+    },
+    {
+      "path": "test/model-card.test.ts",
+      "mode": "100644",
+      "sha256": "6be3f6d28a838908bc1225e1a36f85ccdefe04d29a3dde4189b2710088aad826"
+    },
+    {
+      "path": "test/model-default.test.ts",
+      "mode": "100644",
+      "sha256": "ab90a9335f02ecc530bdd45d4a3a225ef95a9a558bc8843b17f3c66583271c34"
+    },
+    {
+      "path": "test/models-prewarm.test.ts",
+      "mode": "100644",
+      "sha256": "ca28744d56dd5e829dc2079b8fdc452c0f014d9603f0232962e9888e9a834f98"
+    },
+    {
+      "path": "test/native-helpers.test.ts",
+      "mode": "100644",
+      "sha256": "ad7d5315c4a217df4631385afbb67271e9c7b2daf3ce79f62e1135b30cc6cbd4"
+    },
+    {
+      "path": "test/no-mention-parity.test.ts",
+      "mode": "100644",
+      "sha256": "3768b1af461a5451112a3d757ed32cbffb0312df027334c17fa738e7598f2f09"
+    },
+    {
+      "path": "test/onboarding-events.test.ts",
+      "mode": "100644",
+      "sha256": "2137a3c28f2473e7265d7ab3c5d484fa6cbe2f1f2eb2a1d6a5ae0f362a048378"
+    },
+    {
+      "path": "test/outbound-files.test.ts",
+      "mode": "100644",
+      "sha256": "6d79c604b1aca3436f34e3730bfeba299cdaacd70c5820b300010d14a68499b7"
+    },
+    {
+      "path": "test/outbound-images.test.ts",
+      "mode": "100644",
+      "sha256": "84616d1e22d6c28e22494504923a17875378412e4a475296da59f277c17372af"
+    },
+    {
+      "path": "test/pending-groups.test.ts",
+      "mode": "100644",
+      "sha256": "e3389ad3dcb199b822e961b371b72282cd225149d7a661d10feb40b146aecdc3"
+    },
+    {
+      "path": "test/permissions.test.ts",
+      "mode": "100644",
+      "sha256": "a10de6b5dfea7b5b32a632baf8cfc81b50319207bd9b3316bc25b308db04fb64"
+    },
+    {
+      "path": "test/platform-spawn.test.ts",
+      "mode": "100644",
+      "sha256": "58692387b1c735d4fc6cff496ad51a855275436360f536eb150b3bc37877113a"
+    },
+    {
+      "path": "test/probe-appserver.mjs",
+      "mode": "100644",
+      "sha256": "a93bfef0f38159196d9be8101e046e260eaac58a1209c6b10f4f2aba6868d9c0"
+    },
+    {
+      "path": "test/process-capacity.test.ts",
+      "mode": "100644",
+      "sha256": "52df1aa17bede930976d8523020b81e4b727af9a34d371e5196ee97f3edeb7d1"
+    },
+    {
+      "path": "test/project-backend-selection.test.ts",
+      "mode": "100644",
+      "sha256": "e644d1bbc0611c3f4f15d8861a9235f096ba01803bd2a82f09146dd33b953d39"
+    },
+    {
+      "path": "test/project-list-paging.test.ts",
+      "mode": "100644",
+      "sha256": "4e92f456af659ae718ea8955db25a5b24620ee254b0587206541dbdd549853fb"
+    },
+    {
+      "path": "test/project-root-dir.test.ts",
+      "mode": "100644",
+      "sha256": "d1c8766b431a1447f741d0ee47cab1d3eac7fcbdd2e16b51537f8875601b8830"
+    },
+    {
+      "path": "test/qr-register.test.ts",
+      "mode": "100644",
+      "sha256": "c8784da4a0ff8334252384f28e7c21519aa6c459d29738bdc34676bdfee67bb3"
+    },
+    {
+      "path": "test/queued-card.test.ts",
+      "mode": "100644",
+      "sha256": "5429446477c3bc34560ac29eeb5c0f5435c02ff1ebb37a18c4fb3c51bbd0e2dc"
+    },
+    {
+      "path": "test/register-bot.test.ts",
+      "mode": "100644",
+      "sha256": "e1b7cbf8917554a249e80621321f8e4fbca21119b10bcdeaef7190c3bae06a8f"
+    },
+    {
+      "path": "test/registry.test.ts",
+      "mode": "100644",
+      "sha256": "41994c5bf45b2fac2d7e117c8874fa6b847b67297a031f0dbf55c5ca25ebefa1"
+    },
+    {
+      "path": "test/report-render.test.ts",
+      "mode": "100644",
+      "sha256": "2a82f57a2e93aee374f00c365efa6242878b6dffbe8e853cceb2747756ed4593"
+    },
+    {
+      "path": "test/run-card-stream.test.ts",
+      "mode": "100644",
+      "sha256": "fc2f40e4bfc9dc3cd30ce4d030f0f8f3810233a6ce9b1369f94125c8d45fcc15"
+    },
+    {
+      "path": "test/run-liveness.test.ts",
+      "mode": "100644",
+      "sha256": "551e2c827c136e7477a9769ad66a9804cb17a70f2264f5ffbf275336ab3b7b71"
+    },
+    {
+      "path": "test/run-process.test.ts",
+      "mode": "100644",
+      "sha256": "926e68bc981765b6c99b08a7343a3cbbe6efe1c388e45a51453ecaa738894b83"
+    },
+    {
+      "path": "test/run-render.test.ts",
+      "mode": "100644",
+      "sha256": "f80fc9c1054b1411fe18d3ba1912043be6bd478555c70f5f7ed2cacdfdcae819"
+    },
+    {
+      "path": "test/run-segment.test.ts",
+      "mode": "100644",
+      "sha256": "a1f05aaccd1ad1d4b48f551fb36ea9f14a3813d1b3b4885468c065279d33846e"
+    },
+    {
+      "path": "test/run-supervisor-dispatch.test.ts",
+      "mode": "100644",
+      "sha256": "670f814d08339d18b24f42d4e0b2a7be3afd8c8e5671e257397af766ff164575"
+    },
+    {
+      "path": "test/runtime-card-icons.test.ts",
+      "mode": "100644",
+      "sha256": "6c124d4599caed5c862440393af022a9fcab1eaf61830fb39e6c3fd00c64442d"
+    },
+    {
+      "path": "test/schema.test.ts",
+      "mode": "100644",
+      "sha256": "1374d6b65ad2316f958514c1729920daec1f170575c54cbc72e26877e59c39b7"
+    },
+    {
+      "path": "test/service-codex-bin.test.ts",
+      "mode": "100644",
+      "sha256": "76aad0b649ecc80d31ae11b496ef5b0670d2b06137647ca74167c637164ba46c"
+    },
+    {
+      "path": "test/service-control.test.ts",
+      "mode": "100644",
+      "sha256": "e16553d2b126bc7845ff013e56be81e6b284f1205e8ffa3168f28272b30cd167"
+    },
+    {
+      "path": "test/service-definitions.test.ts",
+      "mode": "100644",
+      "sha256": "e9884c1d9666f951c6dd5c674b4933c0e9c345d6147a0e4a35c354c0b66e0376"
+    },
+    {
+      "path": "test/service-smoke.test.ts",
+      "mode": "100644",
+      "sha256": "35754edf7f912f092cb085ef4c36affc7aaf05df468400f43126efbc13ff6bed"
+    },
+    {
+      "path": "test/session-store.test.ts",
+      "mode": "100644",
+      "sha256": "77ad9dfd7084828c67d8f2594d2f0cf408205d3f2e15d95374b4a11795a1d4d9"
+    },
+    {
+      "path": "test/session-title-config.test.ts",
+      "mode": "100644",
+      "sha256": "a4128304eb5553235e9f61463f2b54468a5497aebae2aad30e6fe50b5392ad7d"
+    },
+    {
+      "path": "test/session-title-coordinator.test.ts",
+      "mode": "100644",
+      "sha256": "13a04c3f82b069d7b36c37210b5c8e20b641489d07a7229c972ad7c3e988980a"
+    },
+    {
+      "path": "test/session-title-settings-card.test.ts",
+      "mode": "100644",
+      "sha256": "0e0229364158219d2da681d99555762732279bf7528282f920fac5792339dcd4"
+    },
+    {
+      "path": "test/session-title.test.ts",
+      "mode": "100644",
+      "sha256": "62415e62232151a84654c6cc288d1c8ceeee4a490c8c46243d3894f59b73f890"
+    },
+    {
+      "path": "test/settings-owner.test.ts",
+      "mode": "100644",
+      "sha256": "aeebfdedd5e4051e708655c5ceda73c25c4bd8a996f718bb3ec0dea4ff6b727c"
+    },
+    {
+      "path": "test/settings-parity-cases.test.ts",
+      "mode": "100644",
+      "sha256": "aadeb47544f5ff2270005467fb8f6c9a9b880c24b29c067621b2c46ab9f97b9a"
+    },
+    {
+      "path": "test/single-instance.test.ts",
+      "mode": "100644",
+      "sha256": "b580ce2c707425d8dd4723f377763a40e32d646c9efeb6fbc54b584af25dff9d"
+    },
+    {
+      "path": "test/single-session-model-display.test.ts",
+      "mode": "100644",
+      "sha256": "8d6a9269d9b122ba2280aaae6fd138f20479de6bd73623cc00791e29d4a67905"
+    },
+    {
+      "path": "test/stop-feedback.test.ts",
+      "mode": "100644",
+      "sha256": "53f8bb0e4ca611888754428995769d82016b3ecd682cffecb0623980f48a368c"
+    },
+    {
+      "path": "test/supervisor-activation.test.ts",
+      "mode": "100644",
+      "sha256": "22c1bce94f26c382a63b9e93622c726c71544424387dfc4a56407cf7d776788f"
+    },
+    {
+      "path": "test/threadid-retry.test.ts",
+      "mode": "100644",
+      "sha256": "720901b02b0e39924529eebabd382134be067f801a944a4e1cd20906dbc63182"
+    },
+    {
+      "path": "test/tool-presentation.test.ts",
+      "mode": "100644",
+      "sha256": "100da276d423ff35ee639525429facbd7fa801db46959ba925f85180b4cdda6a"
+    },
+    {
+      "path": "test/tool-render.test.ts",
+      "mode": "100644",
+      "sha256": "5265a4149d822429059cf262957fb17fdc49e4d14096bfd5b293f9745f83c4ee"
+    },
+    {
+      "path": "test/turn-stream-isolation.test.ts",
+      "mode": "100644",
+      "sha256": "16c8708b0bf7276cef031b8b243a01a668a8a1901b1da5c888df9b5e8563305b"
+    },
+    {
+      "path": "test/update-lock.test.ts",
+      "mode": "100644",
+      "sha256": "dfd42b4ee1263be001e5e7cce6c78406668b131e98f6c3b9ecc373cc18c07835"
+    },
+    {
+      "path": "test/usage-cards.test.ts",
+      "mode": "100644",
+      "sha256": "2e198c0262ca6ec8a9f6afee1960e2e095c237de859f9e434116daa662a1572a"
+    },
+    {
+      "path": "test/voice-console.test.ts",
+      "mode": "100644",
+      "sha256": "9c4ab12e1927cffd6c3f8c8548d24268fd47e1e8423d8b5db08e28fa32a30e72"
+    },
+    {
+      "path": "test/voice-inbound.test.ts",
+      "mode": "100644",
+      "sha256": "2bf46e01696f1dacd65115565ffb956ad5c7edd88678983edf7e9df9301460b9"
+    },
+    {
+      "path": "test/voice-reply.test.ts",
+      "mode": "100644",
+      "sha256": "d7e05be9b73f15bba7e09de000b723c2bffc680cb1ff3483ffb7b747aa089c24"
+    },
+    {
+      "path": "test/voice-ui.test.ts",
+      "mode": "100644",
+      "sha256": "f94c80a868be00768470faac07545625d4e6601840410a0bf71147ad65d8fbd1"
+    },
+    {
+      "path": "test/voice.test.ts",
+      "mode": "100644",
+      "sha256": "d3649ab2e861d6a692582f9cab3abb0ffee2a79b67abf4449ef3f210aa5dad64"
+    },
+    {
+      "path": "test/watchdog.test.ts",
+      "mode": "100644",
+      "sha256": "6a55776a3965e35ab0a541609361b3ef6a819531ba73240f2f2663489db92d5d"
+    },
+    {
+      "path": "test/web-admin-host.test.ts",
+      "mode": "100644",
+      "sha256": "6ca6809b6d70e24a7da1313b02f868bfcaaa7459d23acce9e77e5471bbe2bb24"
+    },
+    {
+      "path": "test/web-admin-service.test.ts",
+      "mode": "100644",
+      "sha256": "c400158d316a5a074b808ee1d18393212aab37bf354c76011110d85df8eace7d"
+    },
+    {
+      "path": "test/web-desktop-capabilities.test.ts",
+      "mode": "100644",
+      "sha256": "b177618dfea7087d10314b2d8ad004308814acd3cfe898e1438329bc743ec1ca"
+    },
+    {
+      "path": "test/web-discovery.test.ts",
+      "mode": "100644",
+      "sha256": "f2b992f7de71f173f06dbaef3bb1a8af51ecf2712efe8bb16094195ec182d8a0"
+    },
+    {
+      "path": "test/web-event-rendering.test.ts",
+      "mode": "100644",
+      "sha256": "7e92315f24de227e6696ce4ffbb46afcea88097aac99f00b4362f32b123e8adb"
+    },
+    {
+      "path": "test/web-host.test.ts",
+      "mode": "100644",
+      "sha256": "0fb3489d9ab869555ef7a16223728cff288858ca5279a4c77c80568cfd5ec4a5"
+    },
+    {
+      "path": "test/web-qr-lifecycle.test.ts",
+      "mode": "100644",
+      "sha256": "5f897897f84cf45c6246f50118ea8d52f70abff92f4a695a04c165553d84c0dd"
+    },
+    {
+      "path": "test/web-server.test.ts",
+      "mode": "100644",
+      "sha256": "8d33338eee0094fafa40f720a75bd9fec31bb9af76e1aeee1f412f66b26d59c3"
+    },
+    {
+      "path": "test/web-ui-pure.test.ts",
+      "mode": "100644",
+      "sha256": "9ca40a08de9ecb16d25fe7dc129b94518c6a6d2df9152e39d92c5b2f3de08485"
+    },
+    {
+      "path": "test/win-codex-bin-settings.test.ts",
+      "mode": "100644",
+      "sha256": "fa4d8e823a8e0ce6d00429ea6fcf58ba6009e5d1d39ce46dbe92aa7b326b8e70"
+    },
+    {
+      "path": "test/win-codex-bin.test.ts",
+      "mode": "100644",
+      "sha256": "441967c2e1d385c02004f120973b67ea165ed5c385e7eac367129caa6d0ed127"
+    },
+    {
+      "path": "test/win-relaunch.test.ts",
+      "mode": "100644",
+      "sha256": "97d08f61fcefc3faff849994222fde9a42bea454e3d32103e5950f4af6097543"
+    },
+    {
+      "path": "test/windows-codex-job.test.ts",
+      "mode": "100644",
+      "sha256": "34ad0faa51596dfb0658adc0ade8873916e21330dca083701aa989e93612839e"
+    }
+  ],
+  "phase": "complete"
+}
