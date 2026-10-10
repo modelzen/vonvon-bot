@@ -36,7 +36,7 @@ export async function startFixture(service = fakeService()) {
   const home = await mkdtemp(join(tmpdir(), 'vonvon-api-'));
   testHome.current = home;
   const { startApi } = await import('../src/server/http');
-  const control: ShutdownControl = { requested: false, waitForRequest: () => new Promise<void>(() => {}), dispose: () => {}, requestStop: vi.fn(), requestRestart: vi.fn() };
+  const control: ShutdownControl = { requested: false, waitForRequest: () => new Promise<void>(() => {}), dispose: () => {}, requestStop: vi.fn(), requestRestart: vi.fn(), completeShutdown: release => release() };
   const api = await startApi({ service, port: 0, control });
   const credential = (await readFile(join(home, 'local-credential'), 'utf8')).trim();
   return { api, home, credential, control, close: async () => { await api.close(); await rm(home, { recursive: true, force: true }); } };
