@@ -828,7 +828,8 @@ V3's surface is the CLI and the WebSocket API, so it keeps the CLI evidence bund
 
 *Shell capabilities.* `F4` freezes, in `client-context.tsx`, one optional object that the UI receives beside the `VonvonClient`. It is a UI-local interface, not an RPC, and it changes no protocol shape.
 
-- `openExternal(url)`, `chooseExecutablePath(): Promise<string | null>`, `setLoginItem(enabled)`, `hideWindow()`, `quit()`, `onQuitRequested(listener)`, `service(action)` for `install`, `start`, `stop`, and `uninstall`, `startHost()`, `repairCli()`, `checkDesktopUpdate()`, and `installDesktopUpdate()`.
+- `openExternal(url)`, `chooseExecutablePath(): Promise<string | null>`, `setLoginItem(enabled)`, `hideWindow()`, `quit()`, `onQuitRequested(listener)`, `service(action)` for `install`, `start`, `stop`, and `uninstall`, `startHost(bot?: string)`, `repairCli()`, `checkDesktopUpdate()`, and `installDesktopUpdate()`.
+- `startHost` takes the same optional `bot` as the frozen `machine` request `{type: 'startHost', bot?: string}` in `packages/protocol/src/machine.ts`, so the old machine pane's start control for the selected Bot keeps working on the desktop. The shell forwards the argument unchanged to its handling of that shell-owned request. No protocol, storage, or daemon service shape changes. The web build still shows the desktop-edition state and `vonvon daemon start`.
 - Each member is optional. The web build passes no object. The UI checks each member it needs, and when one is missing it shows the desktop-edition state from *Browser coverage*. V5's `preload.ts` supplies the members and keeps the same names and signatures. A missing method or a changed signature goes back to Claude Code.
 
 **Build.**
