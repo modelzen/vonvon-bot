@@ -20,6 +20,8 @@
     "dist",
     "bin",
     "LICENSE.bridge",
+    "LICENSE.paseo",
+    "NOTICE",
     "PROVENANCE.md",
     "import-core.json"
   ],
