@@ -1,0 +1,329 @@
+{
+  "scope": {
+    "kind": "agent",
+    "botId": "cli_fixture_engineering"
+  },
+  "sections": {
+    "cards": {
+      "stored": {
+        "showToolCalls": false,
+        "showModel": "always"
+      },
+      "effective": {
+        "showToolCalls": false,
+        "showModel": "always"
+      },
+      "revision": "96b2b9cbece52716d55dcb1cb3c2aa0d08b8d42f56c85714718b7dbd536d4d37",
+      "access": {
+        "kind": "writable"
+      },
+      "apply": [
+        {
+          "fields": [
+            "showToolCalls",
+            "showModel"
+          ],
+          "when": "next-message",
+          "detail": "后续任务卡片输出生效"
+        }
+      ]
+    },
+    "run": {
+      "stored": {
+        "maxConcurrentRuns": 5,
+        "runIdleTimeoutSeconds": 300,
+        "pendingPolicy": "queue"
+      },
+      "effective": {
+        "maxConcurrentRuns": 5,
+        "runIdleTimeoutSeconds": 300,
+        "pendingPolicy": "queue"
+      },
+      "revision": "6081db37aea36351c63afcc7988d3a65c3c0faa2c5c147ab37e2fdce52913a8f",
+      "access": {
+        "kind": "writable"
+      },
+      "apply": [
+        {
+          "fields": [
+            "maxConcurrentRuns"
+          ],
+          "when": "restart",
+          "detail": "已保存的并发上限在 Host 重启后生效"
+        },
+        {
+          "fields": [
+            "pendingPolicy"
+          ],
+          "when": "next-message",
+          "detail": "下一条消息生效"
+        },
+        {
+          "fields": [
+            "runIdleTimeoutSeconds"
+          ],
+          "when": "next-turn",
+          "detail": "下一次超时检测生效"
+        }
+      ]
+    },
+    "completion": {
+      "stored": {
+        "mode": "long",
+        "longTaskMinutes": 7
+      },
+      "effective": {
+        "mode": "long",
+        "longTaskMinutes": 7
+      },
+      "revision": "3559ce026605cb99397bc055c6bb9e9a0febbd3144ac7554d8cead76e3bb021a",
+      "access": {
+        "kind": "writable"
+      },
+      "apply": [
+        {
+          "fields": [
+            "mode",
+            "longTaskMinutes"
+          ],
+          "when": "task-completion",
+          "detail": "任务结束时读取最新策略"
+        }
+      ]
+    },
+    "cliBridge": {
+      "stored": {
+        "agents": {
+          "claude": true,
+          "codex": true
+        },
+        "notifyScope": "all",
+        "keepAwake": {
+          "enabled": true
+        },
+        "approval": {
+          "enabled": true,
+          "timeoutSeconds": 86400
+        },
+        "taskCompletion": {
+          "enabled": true,
+          "replyEnabled": true,
+          "replyTimeoutSeconds": 600
+        },
+        "allowCache": {
+          "enabled": true,
+          "scope": "session"
+        },
+        "presence": {
+          "enabled": true,
+          "platform": "auto",
+          "idleThresholdSeconds": 180
+        }
+      },
+      "effective": {
+        "agents": {
+          "claude": true,
+          "codex": true
+        },
+        "notifyScope": "all",
+        "keepAwake": {
+          "enabled": true
+        },
+        "approval": {
+          "enabled": true,
+          "timeoutSeconds": 86400
+        },
+        "taskCompletion": {
+          "enabled": true,
+          "replyEnabled": true,
+          "replyTimeoutSeconds": 600
+        },
+        "allowCache": {
+          "enabled": true,
+          "scope": "session"
+        },
+        "presence": {
+          "enabled": true,
+          "platform": "auto",
+          "idleThresholdSeconds": 180
+        }
+      },
+      "revision": "458c2a5fe29bd87dd9a939e16a5627dbe3518e5eb04583bfc6227ec0f2ebc693",
+      "access": {
+        "kind": "writable"
+      },
+      "apply": [
+        {
+          "fields": [
+            "agents",
+            "notifyScope",
+            "approval",
+            "taskCompletion",
+            "allowCache",
+            "keepAwake"
+          ],
+          "when": "next-hook",
+          "detail": "下一次适用的 hook 操作生效；已有等待保留原截止时间"
+        },
+        {
+          "fields": [
+            "presence"
+          ],
+          "when": "next-presence-check",
+          "detail": "下一次在场检测生效"
+        }
+      ]
+    },
+    "comments": {
+      "stored": {
+        "backend": "codex-appserver",
+        "selection": {
+          "kind": "default"
+        }
+      },
+      "effective": {
+        "backend": "codex-appserver",
+        "selection": {
+          "kind": "default"
+        }
+      },
+      "revision": "4b566bcffe053a39f7993800c4d983391b32d9d86a207c654846765980aac5ed",
+      "access": {
+        "kind": "writable"
+      },
+      "apply": [
+        {
+          "fields": [
+            "backend",
+            "selection"
+          ],
+          "when": "new-comment",
+          "detail": "下一条评论使用新设置"
+        }
+      ]
+    },
+    "titles": {
+      "stored": {
+        "byBackend": {
+          "codex-appserver": {
+            "enabled": true,
+            "model": "fixture-custom-title-model",
+            "effort": "high"
+          },
+          "claude-agent": {
+            "enabled": false
+          }
+        }
+      },
+      "effective": {
+        "byBackend": {
+          "codex-appserver": {
+            "enabled": true,
+            "model": "fixture-custom-title-model",
+            "effort": "high"
+          },
+          "claude-agent": {
+            "enabled": false
+          }
+        }
+      },
+      "revision": "b1fbfef190039a21b48a54f91bf4f5eb6e920209afdcd235985481d9406f6cb1",
+      "access": {
+        "kind": "writable"
+      },
+      "apply": [
+        {
+          "fields": [
+            "byBackend"
+          ],
+          "when": "new-session",
+          "detail": "仅影响之后由 Bridge 新建的会话"
+        }
+      ]
+    },
+    "paths": {
+      "stored": {
+        "projectsRootDir": null
+      },
+      "effective": {
+        "projectsRootDir": "/tmp/parity-fixture/projects"
+      },
+      "revision": "fe92dd127fb2dfa97186529aeeb716f5223a78a1606a36e404db27b3bcf6df83",
+      "access": {
+        "kind": "writable"
+      },
+      "apply": [
+        {
+          "fields": [
+            "projectsRootDir"
+          ],
+          "when": "new-project",
+          "detail": "仅影响之后新建的空白项目"
+        }
+      ]
+    },
+    "access": {
+      "stored": {
+        "allowedChats": []
+      },
+      "effective": {
+        "allowedChats": []
+      },
+      "revision": "12c23597e013070970953717fbbcc77654d26e44126e0b744419b34b5ac30d0a",
+      "access": {
+        "kind": "writable"
+      },
+      "apply": [
+        {
+          "fields": [
+            "allowedChats"
+          ],
+          "when": "next-message",
+          "detail": "下一条消息使用新权限"
+        }
+      ]
+    }
+  },
+  "ownerOpenId": "ou_fixture_owner",
+  "administrators": {
+    "openIds": [
+      "ou_fixture_admin"
+    ],
+    "revision": "954b84b7cc1a4515289412d46907317885586a372dee770b66361315d4a9bc71"
+  },
+  "voice": {
+    "enabled": true,
+    "feishu": {
+      "state": "testing",
+      "message": "正在检查权限…"
+    },
+    "result": "正在检查权限…",
+    "grantUrl": "https://open.feishu.cn/app/cli_fixture_engineering/auth"
+  },
+  "cliRuntime": {
+    "enabled": false,
+    "running": false,
+    "revision": "056476ee337bbc769c67f1666052a2a0b3fc40f95aa48c1c108c3a81150b399e",
+    "hooks": {
+      "claude": {
+        "agent": "claude",
+        "status": "not_installed",
+        "details": []
+      },
+      "codex": {
+        "agent": "codex",
+        "status": "not_installed",
+        "details": []
+      }
+    },
+    "keepAwakeSupported": true
+  },
+  "commentInstructions": {
+    "content": {
+      "kind": "custom",
+      "text": "请先阅读 {docUrl}，再按原文语言回复。\n"
+    },
+    "revision": "a8194ba01342300be8239026e3098837cedc4595e3d1487519b51d3b3bd0f5e1",
+    "maxEditLength": 30000
+  }
+}
