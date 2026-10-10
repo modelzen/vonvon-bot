@@ -109,10 +109,11 @@ describe('daemon environment operations', () => {
     await writeFile(f.npm, `#!/usr/bin/env node
 const fs=require('node:fs');const path=require('node:path');
 const args=process.argv.slice(2);const prefix=args[args.indexOf('--prefix')+1];
-const packageDir=path.join(prefix,'lib','node_modules','@larksuite','cli');
+const windows=process.platform==='win32';
+const packageDir=path.join(prefix,...(windows?['node_modules']:['lib','node_modules']),'@larksuite','cli');
 fs.mkdirSync(packageDir,{recursive:true});fs.writeFileSync(path.join(packageDir,'package.json'),JSON.stringify({name:'@larksuite/cli',version:'1.2.4'}));
-const bin=path.join(prefix,'bin');fs.mkdirSync(bin,{recursive:true});
-fs.writeFileSync(path.join(bin,'lark-cli'),'#!/usr/bin/env node\\nprocess.stdout.write("lark-cli 1.2.4");\\n',{mode:0o700});
+const bin=windows?prefix:path.join(prefix,'bin');fs.mkdirSync(bin,{recursive:true});
+fs.writeFileSync(path.join(bin,windows?'lark-cli.cmd':'lark-cli'),windows?'@echo off\\r\\necho lark-cli 1.2.4\\r\\n':'#!/usr/bin/env node\\nprocess.stdout.write("lark-cli 1.2.4");\\n',{mode:0o700});
 `, { mode: 0o700 });
     try {
       expect(await f.environment.run({ type: 'install', tool: 'lark-cli' })).toMatchObject({ kind: 'applied' });
