@@ -4,47 +4,66 @@
 
 ## PR 顺序
 
-每个 PR 都是一个可以单独验证的改动。后面的 PR 从它依赖的 PR 分支切出，不用等依赖合并。依赖有新提交时，把依赖分支 merge 进来。依赖合并进 `main` 后，把 PR 的目标改成 `main`，再把 `main` merge 进来。整个过程不 rebase，不 force-push。
+每个 PR 都是一个可以单独验证的改动。合并严格按 V1 到 V11 的顺序。下表的“依赖”是验收和合并的依赖：PR 的实时、性能、原生检查要用到的真实产物和行为来自这些 PR。什么时候能开始写代码另见下一节“开发起点”，通常比验收早。分支有新提交时，把它 merge 进来。被依赖的 PR 合并进 `main` 后，把 PR 的目标改成 `main`，再把 `main` merge 进来。整个过程不 rebase，不 force-push。
 
 | 编号 | 内容 | 依赖 |
 | --- | --- | --- |
-| V1 | 建 monorepo 和 `packages/protocol`。从 `codex/device-handoff` 移植 zod 合同，加握手和机器维度。加托管 CI（V1 当时有 Linux 和 macOS 两个任务，均通过验收；之后按下文 CI 规则使用托管 Linux、托管 Windows 和自托管 Mac） | 无 |
+| V1 | 建 monorepo 和 `packages/protocol`。从 `codex/device-handoff` 移植 zod 合同，加握手和机器维度。加托管 CI（V1 当时有 Linux 和 macOS 两个任务，均通过验收；之后按下文 CI 规则保留托管 Linux，macOS 改为自托管） | 无 |
 | V2 | 建 `packages/daemon`。用脚本从 bridge `446b2a4` 复制完整 `src/` 和 `test/`，暂留 `src/web` 以保持可运行基线；数据目录改成 `~/.vonvon-bot`。`vonvon daemon run` 能在前台跑起 Bot | V1 |
 | V3 | daemon 的 API 服务。WebSocket、本机凭据、pid 锁、RPC 处理、快照请求和快照事件、无损的 `admin` 状态请求、目录浏览 RPC、`vonvon daemon start/stop/status` 和停止、重启的生命周期规则（等已接受的操作做完、确认 Bot、npm 和 Codex 进程都已退出才放锁，重启保持原端口，`vonvon service` 命令在 V5 之前一律拒绝），以及 lane 要用的本机最小 `packages/client`；旧网页管理路由改成 RPC，只读预览和旧网页页面退役，私聊菜单去掉旧控制台按钮，然后删除 `src/web` | V2 |
 | V4 | 补全 `packages/client`，新建 `packages/ui`。移植界面，`window.bridge` 换成注入的客户端，daemon 在本机提供网页 | V3 |
 | V5 | `packages/desktop`。Electron 外壳拉起或连接 daemon，加载界面，托盘，开机自动运行，自动更新。Vonvon 自己的系统服务（服务标识、安装和卸载、原生验收）也在这里第一次提供 | V4 |
 | V6 | Claude Code provider。移植 Paseo 的实现和 `AgentSession` 到 `AgentBackend` 的适配器，删除 bridge 的 Claude 后端 | V3 |
-| V7 | 其他 provider。通用 ACP 和 Copilot、OpenCode、Pi | V6 |
+| V7 | 其他 provider。通用 ACP 和 Copilot、OpenCode、Pi | V6；provider 选择器的验收要 V4 的网页 |
 | V8 | 导入 bridge 数据并关停旧服务。macOS、Linux、Windows 三个平台，界面引导和 `vonvon import feishu-codex-bridge` | V4 |
 | V9 | feishu-codex-bridge 仓库的收尾版本。引导用户安装 Vonvon Bot，发现已迁移标记时拒绝启动 | V8，以及 Mac 发布的安装包 |
-| V10 | 账号和机器登记。`packages/cloud`、飞书和 Lark 登录、`vonvon login`、桌面端登录、机器列表和在线状态 | V4 |
-| V11 | 远程访问。daemon 向云端的出站连接、转发、端到端加密、云端托管网页、桌面端连接其他机器 | V10 |
+| V10 | 账号和机器登记。`packages/cloud`、飞书和 Lark 登录、`vonvon login`、桌面端登录、机器列表和在线状态 | V4；桌面端登录的验收要 V5 |
+| V11 | 远程访问。daemon 向云端的出站连接、转发、端到端加密、云端托管网页、桌面端连接其他机器 | V10；桌面端连接的验收要 V5 |
 
-V6 和 V7 可以和 V4、V5 并行。V10 可以在 V8 之前开始。
+## 开发起点
+
+开发依赖只看代码要用到的接口。接口在上游分支的某个提交上固定（冻结点）后，下游就从那里开分支写代码，不等上游审查通过或合并。冻结点只是接口承诺，不是验收结论；接口之后再变，下游把新提交 merge 进来。验收用的十路实时、性能、原生检查和 Shipping 仍按合并顺序做：PR 排到最早未合并或下一个时才跑正式检查，之前只做单元测试、审查和预演，预演不算证据。
+
+| 编号 | 从哪里开始写 | 部分工作要等 |
+| --- | --- | --- |
+| V4 | V3 的当前 head（`H3`，根代理把最新 `main` merge 进 V3 后记录） | 无 |
+| V5 | V4 冻结点 `F4`（客户端浏览器和 preload 入口、注入客户端接口、`ui/dist` 构建路径、界面功能登记文件） | 系统服务文件和 `login-item.ts` 等 Claude Code 写好 *Service gate* 设计 |
+| V6 | `H3` | 无 |
+| V7 | V6 冻结点 `F6`（`session-backend.ts` 和它的单元测试） | provider 编号和选择器等 V4 合并 |
+| V8 | `H3` 或 V3 合并后的 `main`：导入执行器、旧服务控制、`vonvon import`、`import.ts` | 界面引导等 `F4` |
+| V9 | bridge 仓库 `origin/codex/device-handoff`，只依赖已定的标记文件名 | 下载链接的验收等 Mac 发布的签名安装包 |
+| V10 | `H3` 或 `main`：`packages/cloud`、daemon 云端连接、`vonvon login` | 账号界面等 `F4` |
+| V11 | `main`：端到端加密的移植和测试 | 其余等 V10 冻结点 `F10`，客户端转发和机器切换还要 `F4` |
+
+协议的汇总文件（`index.ts`、`domain.ts`、`rpc.ts`、`events.ts`、`handshake.ts`）、`cli/index.ts` 的命令登记、根目录的 `package.json` 和 lockfile、`NOTICE`、界面功能登记文件都由根代理在集成时改，各 PR 只拥有自己新增的文件。三个长期负责人各管一块：客户端界面（V4、V5、V11 的客户端部分），provider（V6、V7，之后 V9），机器平台（先跑 V3 的正式检查，再做 V8、V10、V11 的云端部分）。具体的分支、文件归属和前两波安排见 [plan.md](plan.md) *Parallel execution* 的 *Dependencies* 到 *Wave 2*。
+
+整条路线最慢的一段是 V4、V5（要服务设计、专门的系统测试用户、Linux systemd 用户会话和签名）、签名安装包、V9、V10、V11。所以测试用户和 systemd 环境在第一波就向用户要，不等 V4 开始。
 
 ## 谁来做
 
 分工按仓库根目录的 `AGENTS.md`。Linux 上的 Claude Code 通常负责这三份文档，不写产品代码。2026-10-10 Claude Code CLI 认证返回 HTTP 401 后，用户明确授权 Codex 直接修订这次 V2 澄清并继续。Mac 上的 Codex 负责全部实现和检查，也负责打包、签名、公证。V9 需要的安装包下载地址来自 Mac 的发布。
 
-V5 和 V8 里有 systemd 检查，Mac 上跑不了。Codex 在 Linux 虚拟机或有用户会话的 Linux 环境里跑这几条，托管 CI 不能顶替。V5 的原生服务检查要用专门的系统测试用户，不在用户自己的账号里跑。按目前的环境报告，Mac 上只有用户自己的账号有图形会话，也没有运行中的、带 systemd 用户会话的 Linux，所以 V5 开始前要请用户提供。
+V5 和 V8 里有 systemd 检查，Mac 上跑不了。Codex 在 Linux 虚拟机或有用户会话的 Linux 环境里跑这几条，托管 CI 不能顶替。V5 的原生服务检查要用专门的系统测试用户，不在用户自己的账号里跑。V8 安装旧 bridge 服务的检查和原 bridge 用同一个服务标识，也要在专门的测试用户里跑，不碰用户账号里在用的 bridge。较早的环境报告只确认了日常用户的 Mac 图形会话，也没有确认可用的 Linux systemd 用户会话。第一波先只读检查现有专用测试环境，只向用户请求缺少的能力；`github-ci` 保留给 CI，不用于系统服务验收。
 
-Codex 可以并行开发，本机同时最多一个根代理加三个工作代理。根代理是唯一的 Git 和 forge 写入者，负责建工作树、集成、提交、推送、开 PR、合并和 Shipping。工作代理各用根代理建的工作树，只改分给自己的文件，各自运行 npm ci，不提交、不推送。每个 PR 先由各工作代理写测试、做组件验证，根代理集成后跑一次完整检查，再做独立审查，冻结 head 后才跑十路实时、性能、原生检查和 Shipping。连着测试 Bot 的检查仍然逐个跑，用独立数据目录的检查可以同时跑。并行不改变 PR 顺序、依赖、架构、数据形状和验证门槛，合并仍按路线顺序。V10 在 V4 合并后就可以开始开发，但按路线顺序要等 V9 合并后才合并，不需要另问用户。merge `main` 之后，patch-id 不变只是审查结论继续有效的必要条件：基线、依赖版本或相关证据变了，就要重跑受影响的检查，并重新拿独立审查结论。具体分工见 [plan.md](plan.md) 的 *Parallel execution*。
+Codex 可以并行开发，本机同时最多一个根代理加三个工作代理。根代理是唯一的 Git 和 forge 写入者，负责建工作树、集成、提交、推送、开 PR、合并和 Shipping。工作代理各用根代理建的工作树，只改分给自己的文件，各自运行 npm ci，不提交、不推送。每个 PR 先由各工作代理写测试、做组件验证，根代理集成后跑一次完整检查，再做独立审查，冻结 head 后才跑十路实时、性能、原生检查和 Shipping。连着测试 Bot 的检查仍然逐个跑，用独立数据目录的检查可以同时跑。并行只提前开发起点（见上文“开发起点”），不改变合并顺序、验收依赖、架构、数据形状和验证门槛。V10 的云端部分可以在 V3 之后就开始开发，但按路线顺序要等 V9 合并后才合并，不需要另问用户。merge `main` 之后，patch-id 不变只是审查结论继续有效的必要条件：基线、依赖版本或相关证据变了，就要重跑受影响的检查，并重新拿独立审查结论。具体分工见 [plan.md](plan.md) 的 *Parallel execution*。
 
 此后实现时发现计划要改架构、数据形状或 PR 顺序，Codex 在 PR 里写明，按 `AGENTS.md` 交给 Claude Code 更新。上述授权只适用于这次 V2 澄清。
 
-用户已授权 V2 及后续版本在全部验证通过后继续合并，无需等待个人界面复核或手动点击合并。截图和视频仍须留存，单元测试、十路实时检查、性能检查、独立审查与准确 head 的 Shipping 判定仍是合并条件。不得 force-push、rebase 已推送分支，也不设置小时审计。
+用户已授权 V2 及后续版本在全部验证通过后继续合并，无需等待个人界面复核或手动点击合并。各版本按用户实际接触的界面留存交互证据：网页、桌面窗口和飞书卡片留真实截图和视频；只有命令行和 API 的 V3 改留 CLI 证据包（伪终端原始录制、每条命令的原始输出和退出码、自动断言、绑定准确 head 和构建哈希的清单，并由另一个代理独立重跑核对），不再要求终端截图和录屏。拿不到规定的证据时这一项保持未完成，授权不能当作通过。单元测试、十路实时检查、性能检查、独立审查与准确 head 的 Shipping 判定仍是合并条件。不得 force-push、rebase 已推送分支，也不设置小时审计。
 
 逐项的步骤和验证标准见 [plan.md](plan.md)。
 
 ## CI
 
-Linux 保留 GitHub 托管的 Ubuntu；macOS 配置为组织共享的 Mac mini 自托管 runner。main 的 Windows 检查使用托管 `windows-2025`，旧桌面分支的 Windows 原生检查也继续托管。两个仓库的 `ENABLE_SELF_HOSTED_MACOS_CI` 均已开启，使用无发布凭据的专用标准账户 `github-ci`。重启后先登录该账户一次，再切回日常用户并保留后台图形会话。每台 Mac 只运行一个 runner，两个仓库排队共享。安装位置、权限和服务管理见 [self-hosted-ci.md](self-hosted-ci.md)。
+Linux 保留 GitHub 托管的 Ubuntu，Windows 用托管的 `windows-2025`；macOS 配置为组织共享的 Mac mini 自托管 runner。完整改动三个平台都跑。原有 Windows 原生检查保留在旧桌面分支的工作流中，桌面打包和原生界面检查不在 main 的检查链里。两个仓库的 `ENABLE_SELF_HOSTED_MACOS_CI` 均已开启，使用无发布凭据的专用标准账户 `github-ci`。重启后先登录该账户一次，再切回日常用户并保留后台图形会话。每台 Mac 只运行一个 runner，两个仓库排队共享。安装位置、权限和服务管理见 [self-hosted-ci.md](self-hosted-ci.md)。
 
 目标为 `main` 的 PR 在 opened、synchronize、reopened 时自动检查，也可手动触发。取消合入 main 后重复跑相同套件的 push 触发，不设置定时任务。同一 PR 的旧运行会被新运行取消。改目标或改基线后没有当前结果时，手动补跑。
 
 范围脚本保留 `docs` 和 `full`，未知或异常差异按 `full` 处理。文档改动只跑范围回归和空白检查，不装依赖，也不启动 Mac。完整改动先在 Linux 跑 Node 22 的安装、构建、类型检查、测试和 lint，再在托管 Windows 和自托管 Mac 的准确 PR head 跑同一套检查。daemon 原先的 lint 与类型检查完全相同，删除重复的 lint 别名，协议 lint 保留。
 
-合入要求当前 Linux 成功，完整改动还要求 Windows 和 Mac 成功。如果再次暂停 Mac CI，完整改动的 Mac 验证保持待办。计费、离线或超时阻塞不能记为通过。Mac CI 已覆盖的常规命令不再手动重复，里程碑要求的实时、性能、原生桌面、launchd、systemd 和独立审查照旧。完整规则见 [plan.md](plan.md) 的 *CI policy*，触发示例和费用计算见 [ci-costs.md](ci-costs.md)。
+合入要求当前 Linux 成功，完整改动还要求 Windows 和 Mac 都成功。如果再次暂停 Mac CI，完整改动的 Mac 验证保持待办。计费、离线或超时阻塞不能记为通过。Mac CI 已覆盖的常规命令不再手动重复，里程碑要求的实时、性能、原生桌面、launchd、systemd 和独立审查照旧。完整规则见 [plan.md](plan.md) 的 *CI policy*，触发示例和费用计算见 [ci-costs.md](ci-costs.md)。
+
+临时豁免（2026-10-10，已撤回）：组织共用的 Actions 分钟数用完时，用户曾授权不等 GitHub 结果就推送和合入，记录写“SKIPPED（用户授权）”，从不记为通过。`main` 的 `48251d9` 恢复了 Linux、托管 Windows 和自托管 Mac 的完整 CI，用户已撤回豁免。所有未合入的 head 按上面的完整规则检查。豁免期间的记录保留 SKIPPED 原文，不改成通过，也不能用于今后合入的任何 head。详见 [plan.md](plan.md) 的 *Temporary CI waiver*。
 
 ## 现有 PR 栈怎么处理
 
