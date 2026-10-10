@@ -5,6 +5,10 @@ import { WebSocket } from 'ws';
 import { eventSchema, helloSchema, PROTOCOL_VERSION, replyEnvelopeSchema, serverInfoSchema } from '@vonvon/protocol';
 import { getPidLockInfo, isPidLockOwnerRunning, PidLockError, type PidLockInfo } from './pid-lock';
 
+export async function stopVerifiedOwner(_home: string, _lock: PidLockInfo): Promise<void> {
+  throw new Error('Verified stop is not implemented.');
+}
+
 export async function verifyPidLockOwner(home: string, lock: PidLockInfo): Promise<void> {
   const failure = (): PidLockError => new PidLockError(`Cannot verify daemon owner (PID ${lock.pid}); leaving its process and lock untouched.`, lock);
   const match = /^127\.0\.0\.1:(\d{1,5})$/.exec(lock.listen ?? '');

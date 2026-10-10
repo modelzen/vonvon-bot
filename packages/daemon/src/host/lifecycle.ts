@@ -1,11 +1,13 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { log } from '../core/logger';
+import type { UpdateStatus } from '../service/update';
 
 export interface ShutdownControl {
   readonly requested: boolean;
   waitForRequest(): Promise<void>;
   requestStop(): void;
-  requestRestart(port: number): void;
+  requestRestart(port: number, update?: UpdateStatus): void;
+  completeShutdown(release: () => Promise<void>): Promise<void>;
   dispose(): void;
 }
 
@@ -42,6 +44,7 @@ export function observeShutdown(parentControl = false): ShutdownControl {
     get requested() { return requested; },
     waitForRequest: () => pending,
     requestStop: request,
+    async completeShutdown(_release) { throw new Error('Lifecycle release is not implemented.'); },
     requestRestart(port) {
       const cliEntry = process.argv[1];
       if (!cliEntry) throw new Error('Cannot locate daemon CLI for restart.');

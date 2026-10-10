@@ -218,7 +218,7 @@ export interface AdminService {
    * 失败：detached helper 的失败否则对网页端完全静默。无记录返回 null。绝不抛错。
    */
   updateStatus(): UpdateStatus | null;
-  applyUpdate(): Promise<void>;
+  applyUpdate(): Promise<UpdateStatus | void>;
   /** 宿主机体检：后端环境（复用 doctorBackends）+ Node/平台/配置目录/日志体量。绝不抛错。 */
   hostDoctor(): Promise<AdminHostDoctor>;
   setBotEnabled(appId: string, enabled: boolean): Promise<BotActivationResult>;
@@ -433,7 +433,7 @@ export interface AdminServiceDeps {
   /** daemon 进程启动时刻（内嵌 web 注入）；只读预览不传 → uptime 缺省。 */
   daemonStartedAt?: number;
   restartDaemon?: () => void;
-  applyUpdate?: () => void | Promise<void>;
+  applyUpdate?: () => UpdateStatus | void | Promise<UpdateStatus | void>;
   startDaemon?: () => void;
   stopDaemon?: () => void;
   /**
@@ -948,10 +948,10 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       return readUpdateStatus();
     },
 
-    async applyUpdate(): Promise<void> {
+    async applyUpdate(): Promise<UpdateStatus | void> {
       if (!deps.applyUpdate) throw new NotWiredYetError('⬆️ 升级');
       if ((await runtimeDistribution()).kind !== 'global-npm') throw new Error('This Core is not owned by the global npm installation. Update its desktop app or source distribution instead.');
-      await deps.applyUpdate();
+      return await deps.applyUpdate();
     },
 
     async hostDoctor(): Promise<AdminHostDoctor> {

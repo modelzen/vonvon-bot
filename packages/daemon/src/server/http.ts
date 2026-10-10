@@ -21,7 +21,19 @@ import { settingsRpc } from './rpc/settings';
 import { readLocalIdentity } from './local-credential';
 import { getRpcErrorCode } from './errors';
 
-export async function startApi(options: { service: AdminService; port?: number; control?: ShutdownControl }): Promise<{ port: number; listen: string; invalidate: () => void; close: () => Promise<void> }> {
+export interface ApiLifetime {
+  beginDrain(): Promise<void>;
+  release(): Promise<void>;
+}
+
+export interface DaemonApi extends ApiLifetime {
+  port: number;
+  listen: string;
+  invalidate(): void;
+  close(): Promise<void>;
+}
+
+export async function startApi(options: { service: AdminService; port?: number; control?: ShutdownControl }): Promise<DaemonApi> {
   let acquiredServer: ReturnType<typeof createServer> | undefined;
   let acquiredJobs: Jobs | undefined;
   let acquiredLogs: LogFollowers | undefined;
@@ -102,7 +114,11 @@ export async function startApi(options: { service: AdminService; port?: number; 
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('API did not bind a TCP port');
     port = address.port;
-    return { port, listen: `127.0.0.1:${port}`, invalidate, close };
+    return {
+      port, listen: `127.0.0.1:${port}`, invalidate, close,
+      async beginDrain() { throw new Error('Drain control is not implemented.'); },
+      async release() { throw new Error('Release control is not implemented.'); },
+    };
   } catch (error) {
     try { await close(); }
     catch (cleanupError) { throw new AggregateError([error, cleanupError], 'API startup and cleanup failed'); }
