@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { paths } from '../config/paths';
 import { getPidLockInfo, isPidLockOwnerRunning } from '../server/pid-lock';
+import { readUpdateStatus, writeUpdateStatus } from '../service/update';
 
 const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -25,4 +26,6 @@ export async function runSamePortRestartHelper(options: { port: number; oldPid: 
     child.once('error', reject);
     child.once('exit', (code) => code === 0 ? resolve() : reject(new Error(`Restart start command exited ${code}.`)));
   });
+  const update = readUpdateStatus();
+  if (update?.phase === 'restarting') writeUpdateStatus({ ...update, phase: 'done', at: Date.now() });
 }

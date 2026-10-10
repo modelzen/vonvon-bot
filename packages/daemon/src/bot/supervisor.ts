@@ -10,6 +10,7 @@ import { createAdminIpcCaller, type AdminIpcCaller } from '../admin/ipc';
 import { AdminWriteError } from '../admin/ops';
 import { createAdminService } from '../admin/service';
 import { installBackendDep, uninstallBackendDep } from '../agent';
+import { performCoreUpdate } from '../service/update';
 import { mountWebConsole } from '../web/mount';
 
 const BACKOFF_MIN_MS = 1_000;
@@ -202,6 +203,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
         // 按需后端安装在 daemon 进程内直跑（owns runtime，装完即能解析加载）。
         installBackend: installBackendDep,
         uninstallBackend: uninstallBackendDep,
+        applyUpdate: performCoreUpdate,
       }),
     );
     if (!webConsole && bots.length === 0) throw new Error('Web 控制台未能启动，无法进入引导。');

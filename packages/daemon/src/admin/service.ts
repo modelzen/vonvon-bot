@@ -65,7 +65,6 @@ import type { AccountUsageBundle, BackendDepState, BackendProbe, PermissionMode 
 import { readRecentLogs } from '../core/logger';
 import {
   checkUpdate as checkUpdateImpl,
-  clearUpdateStatus,
   readUpdateStatus,
   type UpdateCheck,
   type UpdateStatus,
@@ -434,7 +433,7 @@ export interface AdminServiceDeps {
   /** daemon 进程启动时刻（内嵌 web 注入）；只读预览不传 → uptime 缺省。 */
   daemonStartedAt?: number;
   restartDaemon?: () => void;
-  applyUpdate?: () => void;
+  applyUpdate?: () => void | Promise<void>;
   startDaemon?: () => void;
   stopDaemon?: () => void;
   /**
@@ -952,9 +951,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     async applyUpdate(): Promise<void> {
       if (!deps.applyUpdate) throw new NotWiredYetError('⬆️ 升级');
       if ((await runtimeDistribution()).kind !== 'global-npm') throw new Error('This Core is not owned by the global npm installation. Update its desktop app or source distribution instead.');
-      // 清掉上一次的结果，之后 Web 轮询读到的状态才确定属于本次升级（helper 会重写）。
-      clearUpdateStatus();
-      deps.applyUpdate();
+      await deps.applyUpdate();
     },
 
     async hostDoctor(): Promise<AdminHostDoctor> {
