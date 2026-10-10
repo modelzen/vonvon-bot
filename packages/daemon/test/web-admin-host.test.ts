@@ -101,6 +101,16 @@ afterAll(() => {
   rmSync(paths.appDir, { recursive: true, force: true });
 });
 
+describe('V2 foreground status regression', () => {
+  it('reports this foreground process instead of the unrelated legacy service PID', async () => {
+    statusMock.mockResolvedValue({ installed: true, running: true, pid: '424242', platformName: 'launchd' });
+    const d = await createAdminService({ daemonStartedAt: Date.now() - 1000 }).getDaemonStatus();
+    expect(d.pid).toBe(process.pid);
+    expect(d).toMatchObject({ running: true, selfHosted: true, installed: false, supported: false });
+    expect(statusMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('AdminService · getDaemonStatus（聚合 service 状态，mock service 模块）', () => {
   it('daemon 进程内：注入 daemonStartedAt → uptimeMs 有值、supported=true', async () => {
     statusMock.mockResolvedValue({
