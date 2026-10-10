@@ -23,8 +23,8 @@ describe('systemd unit (buildUnit)', () => {
     expect(unit).toContain('WantedBy=default.target');
   });
 
-  it('runs the bridge `run` subcommand and appends to the shared log files', () => {
-    expect(unit).toMatch(/ExecStart=".+" ".+" run/);
+  it('runs the daemon foreground command and appends to the shared log files', () => {
+    expect(unit).toMatch(/ExecStart=".+" ".+" daemon run/);
     expect(unit).toContain('StandardOutput=append:');
     expect(unit).toContain('StandardError=append:');
     expect(unit).toContain('Environment="PATH=');
@@ -85,12 +85,12 @@ describe('launchd plist (buildPlist)', () => {
 describe('Windows hidden launcher (.cmd)', () => {
   const cmd = buildLauncherCmd();
 
-  it('is a CRLF batch script that sets PATH + service flag and runs the bridge', () => {
+  it('is a CRLF batch script that sets PATH + service flag and runs the daemon', () => {
     expect(cmd.startsWith('@echo off')).toBe(true);
     expect(cmd).toContain('\r\n'); // cmd.exe needs CRLF
     expect(cmd).toContain('set "PATH=');
     expect(cmd).toContain('set "FEISHU_CODEX_BRIDGE_SERVICE=1"');
-    expect(cmd).toMatch(/".+" ".+" run /);
+    expect(cmd).toMatch(/".+" ".+" daemon run /);
   });
 
   it('appends stdout and stderr to the log files', () => {

@@ -1,7 +1,11 @@
 import { spawn } from 'node:child_process';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { stopChild, waitForExit } from '../src/host/lifecycle';
-import { endpointRequest } from '../src/host/discovery';
+import { readHostEndpoint } from '../src/host/discovery';
+import { acquirePidLock, publishPidLock, releasePidLock } from '../src/server/pid-lock';
 
 describe('Host child shutdown', () => {
   it('waits for delayed IPC cleanup after the shutdown request', async () => {
@@ -38,10 +42,16 @@ describe('Host child shutdown', () => {
       await expect(stopChild(child, 1000)).rejects.toThrow(process.platform === 'win32' ? /code 1/ : /signal SIGKILL/);
     } finally { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); }
   });
-  it('rejects endpoint escape before any network access', () => {
-    const endpoint = { token: 'private', port: 12345, pid: process.pid, startedAt: 1 };
-    for (const path of ['https://example.com/api/state', '//example.com/api/state', '/api/../other', '/api/\\example.com']) {
-      expect(() => endpointRequest(endpoint, path)).toThrow(/local/);
-    }
+  it('refuses a live lock until its endpoint proves ownership', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'vonvon-host-discovery-'));
+    try {
+      const owner = await acquirePidLock(home);
+      expect(await readHostEndpoint(home, true)).toMatchObject({ kind: 'blocked', reason: 'busy' });
+      await publishPidLock(home, owner, '127.0.0.1:49152');
+      expect(await readHostEndpoint(home, true)).toMatchObject({ kind: 'blocked', reason: 'inspection-failed' });
+      await publishPidLock(home, owner, '0.0.0.0:49152');
+      expect(await readHostEndpoint(home, true)).toMatchObject({ kind: 'blocked', reason: 'inspection-failed' });
+      await releasePidLock(home, owner);
+    } finally { await rm(home, { recursive: true, force: true }); }
   });
 });

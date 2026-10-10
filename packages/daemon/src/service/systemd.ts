@@ -16,14 +16,14 @@ import {
 
 /**
  * Linux background service via a **systemd user unit**. Mirrors launchd: a
- * single user-level service whose body runs `feishu-codex-bridge run`, with
+ * single user-level service whose body runs `vonvon daemon run`, with
  * `Restart=always` (≈ launchd KeepAlive) and `WantedBy=default.target` for
  * login autostart. Modeled on the systemd adapter in feishu-claude-code-bridge.
  *
  * This is also the path WSL hits (WSL reports as `process.platform === 'linux'`).
  * WSL only has a user systemd manager when `[boot] systemd=true` is set in
  * `/etc/wsl.conf`; otherwise `systemctl --user` can't connect — we detect that
- * and raise a friendly error pointing at foreground `run`.
+ * and raise a friendly error pointing at foreground `vonvon daemon run`.
  */
 export const SYSTEMD_UNIT_NAME = systemdUnit;
 
@@ -53,7 +53,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart="${esc(nodePath)}" "${esc(cliBinPath)}" run
+ExecStart="${esc(nodePath)}" "${esc(cliBinPath)}" daemon run
 Restart=always
 RestartSec=5
 StandardOutput=append:${(options.stdoutPath ?? serviceStdoutPath()).replace(/%/g, '%%')}
@@ -107,7 +107,7 @@ function ensureSystemdOrThrow(): void {
   throw new Error(
     '未检测到可用的用户级 systemd。' +
       'WSL 需在 /etc/wsl.conf 写入 `[boot]\\nsystemd=true` 后执行 `wsl --shutdown` 重启；' +
-      '或直接用 `feishu-codex-bridge run` 前台运行（无需后台服务）。',
+      '或直接用 `vonvon daemon run` 前台运行（无需后台服务）。',
   );
 }
 

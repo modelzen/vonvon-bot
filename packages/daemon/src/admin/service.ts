@@ -59,13 +59,13 @@ import {
   latestNpmVersion,
   type BackendCatalogEntry,
   type InstallResult,
+  type UninstallResult,
   type InstallProgress,
 } from '../agent';
 import type { AccountUsageBundle, BackendDepState, BackendProbe, PermissionMode } from '../agent/types';
 import { readRecentLogs } from '../core/logger';
 import {
   checkUpdate as checkUpdateImpl,
-  clearUpdateStatus,
   readUpdateStatus,
   type UpdateCheck,
   type UpdateStatus,
@@ -219,7 +219,7 @@ export interface AdminService {
    * 失败：detached helper 的失败否则对网页端完全静默。无记录返回 null。绝不抛错。
    */
   updateStatus(): UpdateStatus | null;
-  applyUpdate(): Promise<void>;
+  applyUpdate(): Promise<UpdateStatus | void>;
   /** 宿主机体检：后端环境（复用 doctorBackends）+ Node/平台/配置目录/日志体量。绝不抛错。 */
   hostDoctor(): Promise<AdminHostDoctor>;
   setBotEnabled(appId: string, enabled: boolean): Promise<BotActivationResult>;
@@ -434,7 +434,7 @@ export interface AdminServiceDeps {
   /** daemon 进程启动时刻（内嵌 web 注入）；只读预览不传 → uptime 缺省。 */
   daemonStartedAt?: number;
   restartDaemon?: () => void;
-  applyUpdate?: () => void;
+  applyUpdate?: () => UpdateStatus | void | Promise<UpdateStatus | void>;
   startDaemon?: () => void;
   stopDaemon?: () => void;
   /**
@@ -457,7 +457,7 @@ export interface AdminServiceDeps {
   ) => Promise<InstallResult>;
   /** 卸载执行器（rm 用户私装目录里的包 + 清 package.json 条目）。daemon 进程注入
    * {@link uninstallBackendDep}；只读预览不注入 → uninstallBackend 抛 NotWiredYetError。 */
-  uninstallBackend?: (pkg: string) => Promise<boolean>;
+  uninstallBackend?: (pkg: string, opts?: { binName?: string }) => Promise<UninstallResult>;
 }
 
 /**
@@ -891,13 +891,17 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       if (!entry.dep.pkg || !isInstallable(entry)) {
         return { ok: false, message: `「${entry.displayName}」不是可一键管理的按需后端，无法卸载。` };
       }
-      if (!isBackendInstalledInUserDir(entry)) {
+      if (!deps.uninstallBackend) {
+        if (!isBackendInstalledInUserDir(entry)) {
+          return { ok: false, message: `「${entry.displayName}」并未装在用户目录，无需卸载。` };
+        }
+        throw new NotWiredYetError(`🗑️ 卸载「${entry.displayName}」`);
+      }
+      const result = await deps.uninstallBackend(entry.dep.pkg, { binName: entry.dep.binName });
+      if (result === 'not-installed') {
         return { ok: false, message: `「${entry.displayName}」并未装在用户目录，无需卸载。` };
       }
-      // 卸载（rm + 清 package.json 条目）owns runtime → 只读预览无注入 → 501。
-      if (!deps.uninstallBackend) throw new NotWiredYetError(`🗑️ 卸载「${entry.displayName}」`);
-      const ok = await deps.uninstallBackend(entry.dep.pkg);
-      return ok
+      return result === 'uninstalled'
         ? { ok: true, message: `已卸载「${entry.displayName}」。` }
         : { ok: false, message: `卸载「${entry.displayName}」失败（可能仍被占用），可稍后重试。` };
     },
@@ -949,12 +953,10 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       return readUpdateStatus();
     },
 
-    async applyUpdate(): Promise<void> {
+    async applyUpdate(): Promise<UpdateStatus | void> {
       if (!deps.applyUpdate) throw new NotWiredYetError('⬆️ 升级');
       if ((await runtimeDistribution()).kind !== 'global-npm') throw new Error('This Core is not owned by the global npm installation. Update its desktop app or source distribution instead.');
-      // 清掉上一次的结果，之后 Web 轮询读到的状态才确定属于本次升级（helper 会重写）。
-      clearUpdateStatus();
-      deps.applyUpdate();
+      return await deps.applyUpdate();
     },
 
     async hostDoctor(): Promise<AdminHostDoctor> {

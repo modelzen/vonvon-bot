@@ -495,7 +495,7 @@ class CodexThread implements AgentThread {
         const step = await Promise.race([stream.next(), startFailed, timeout]);
         if (step === 'start-failed') throw startError ?? new Error('thread/compact/start 请求失败');
         if (step === 'timeout') {
-          void this.close().catch(() => undefined);
+          void this.close().catch(error => log.fail('agent', error, { phase: 'compact-close' }));
           throw new Error(`压缩超时（codex 未在 ${COMPACT_TIMEOUT_MS / 1000}s 内完成）`);
         }
         if (step.done) break;
@@ -517,8 +517,8 @@ class CodexThread implements AgentThread {
     return !this.client.exited;
   }
 
-  async close(): Promise<void> {
-    await this.client.close();
+  close(): Promise<void> {
+    return this.client.close();
   }
 }
 

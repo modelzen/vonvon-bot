@@ -17,11 +17,6 @@ import { resolveCodexBin } from './locate';
  *    spawn+initialize+ephemeral thread/start（触发 MCP 预热、不落盘）完毕的进程，
  *    新会话直接取走（真正的 thread/start|resume 的 cwd/sandbox/权限都是 thread 级
  *    参数，与进程无关——README 与 research/08 已核）；取走后异步补位。
- *
- * 生命周期：会话客户端取走后归 sessions/orchestrator 管（shutdown 会 close）；
- * 池中待命进程与 utility client 归本模块管——bot 的 shutdown 不知道这里，所以挂
- * 一个 process 'exit' 钩子按 pid 兜底 SIGKILL（run.ts 优雅退出最终 process.exit(0)，
- * 必经此钩子），另导出 {@link shutdownResidentClients} 供测试/未来显式接线。
  */
 
 /** 中性目录：池进程与 utility 进程的 spawn cwd。真实会话的 cwd 是 thread/start
@@ -55,33 +50,27 @@ function withDeadline<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   });
 }
 
-// ── 常驻进程登记 + 退出兜底 ───────────────────────────────────────────
-
 const residents = new Set<AppServerClient>();
-let exitHookInstalled = false;
+let closing: Promise<void> | undefined;
+let accepting = true;
 
 function track(client: AppServerClient): void {
   residents.add(client);
-  if (exitHookInstalled) return;
-  exitHookInstalled = true;
-  // 'exit' 里没有事件循环，close() 的优雅等待跑不完——直接按 pid SIGKILL。
-  // 会话客户端不在 residents 里（orchestrator.shutdown 已优雅 close 它们）。
-  process.once('exit', () => {
-    for (const c of residents) {
-      const pid = c.pid;
-      if (pid === undefined) continue;
-      try {
-        process.kill(pid, 'SIGKILL');
-      } catch {
-        // already dead
-      }
-    }
-    residents.clear();
-  });
 }
 
 function untrack(client: AppServerClient): void {
   residents.delete(client);
+}
+
+function closeDiscarded(client: AppServerClient): void {
+  void client.close().then(
+    () => untrack(client),
+    error => { untrack(client); log.fail('agent', error, { phase: 'resident-close' }); },
+  );
+}
+
+function requireOpen(): void {
+  if (!accepting) throw new Error('Codex client pool is closed');
 }
 
 // ── utility client（懒创建、出错即重建） ──────────────────────────────
@@ -90,25 +79,25 @@ let utility: { client: AppServerClient; bin: string } | null = null;
 let utilityCreating: Promise<unknown> | null = null;
 
 async function acquireUtility(bin: string): Promise<AppServerClient> {
+  requireOpen();
   // 单飞：先等在途的创建落定，再看槽位（绝不并发 spawn 两个 utility）。
   while (utilityCreating) await utilityCreating.catch(() => undefined);
+  requireOpen();
   const cur = utility;
   if (cur && !cur.client.exited && cur.bin === bin) return cur.client;
   if (cur) {
     // 进程死了 / codex 二进制换了位置——重建
     utility = null;
-    untrack(cur.client);
-    void cur.client.close().catch(() => undefined);
+    closeDiscarded(cur.client);
   }
   const create = (async () => {
     const client = new AppServerClient({ bin, cwd: NEUTRAL_CWD, clientName: 'feishu-codex-bridge-utility' });
-    // 先登记再连接：在途的 connect 撞上进程退出时，exit 钩子也能按 pid 兜底。
     track(client);
     try {
       await withDeadline(client.connect(), CONNECT_TIMEOUT_MS, 'utility connect');
+      requireOpen();
     } catch (err) {
-      untrack(client);
-      void client.close().catch(() => undefined);
+      closeDiscarded(client);
       throw err;
     }
     // 没人消费常驻客户端的通知流（它不跑 thread）——永远排空，防 AsyncQueue
@@ -130,8 +119,7 @@ async function acquireUtility(bin: string): Promise<AppServerClient> {
 
 function discardUtility(client: AppServerClient): void {
   if (utility?.client === client) utility = null;
-  untrack(client);
-  void client.close().catch(() => undefined);
+  closeDiscarded(client);
 }
 
 /**
@@ -196,19 +184,20 @@ function binFingerprint(bin: string): string | null {
  * 走冷路径。
  */
 export function takeWarmClient(bin: string): AppServerClient | null {
+  if (!accepting) return null;
   const entry = warm;
   if (!entry) return null;
   warm = null;
-  untrack(entry.client);
-  if (entry.client.exited) return null; // 池中阵亡——冷路径接管
+  if (entry.client.exited) { closeDiscarded(entry.client); return null; }
   if (entry.bin !== bin || entry.fingerprint !== binFingerprint(bin)) {
     // codex 升级/换位：版本错位的待命进程不能再接新会话
     log.info('agent', 'prewarm-stale', { bin });
-    void entry.client.close().catch(() => undefined);
+    closeDiscarded(entry.client);
     return null;
   }
   // 预热期间缓冲的通知（MCP 启动进度、ephemeral thread/started…）属于预热
   // 线程，清空——绝不能漏进真实会话的事件流。
+  untrack(entry.client);
   entry.client.clearNotifications();
   log.info('agent', 'prewarm-hit', { pid: entry.client.pid ?? null });
   return entry.client;
@@ -221,6 +210,7 @@ export function takeWarmClient(bin: string): AppServerClient | null {
  * 返回在途的补位 Promise（永不 reject），调用方通常 fire-and-forget。
  */
 export function refillWarmPool(): Promise<void> {
+  if (!accepting) return Promise.resolve();
   if (warm || warming) return warming ?? Promise.resolve();
   warming = (async () => {
     const bin = resolveCodexBin();
@@ -229,10 +219,10 @@ export function refillWarmPool(): Promise<void> {
     const fingerprint = binFingerprint(bin);
     // clientName 用默认值：这个进程取走后就是真实会话的进程（compliance log 同名）。
     const client = new AppServerClient({ bin, cwd: NEUTRAL_CWD });
-    // 先登记再预热：补位进行中 daemon 退出时，exit 钩子也能按 pid 兜底。
     track(client);
     try {
       await withDeadline(client.connect(), CONNECT_TIMEOUT_MS, 'prewarm connect');
+      requireOpen();
       await withDeadline(
         client.request('thread/start', {
           cwd: NEUTRAL_CWD,
@@ -243,12 +233,12 @@ export function refillWarmPool(): Promise<void> {
         PREWARM_TIMEOUT_MS,
         'prewarm thread/start',
       );
+      requireOpen();
       warm = { client, bin, fingerprint };
       log.info('agent', 'prewarm-ready', { pid: client.pid ?? null });
     } catch (err) {
       log.fail('agent', err, { phase: 'prewarm' });
-      untrack(client);
-      void client.close().catch(() => undefined);
+      closeDiscarded(client);
     }
   })().finally(() => {
     warming = null;
@@ -258,21 +248,18 @@ export function refillWarmPool(): Promise<void> {
 
 // ── 清理 ──────────────────────────────────────────────────────────────
 
-/** 优雅关掉全部常驻进程（utility + 预热槽，含在途补位）。daemon 路径由 process
- * 'exit' 钩子兜底；这个出口给测试与未来的显式接线用。 */
-export async function shutdownResidentClients(): Promise<void> {
-  // 等在途的创建/补位落定，否则它们会在我们清完之后才把进程放进槽位
-  while (utilityCreating) await utilityCreating.catch(() => undefined);
-  if (warming) await warming.catch(() => undefined);
-  const targets: AppServerClient[] = [];
-  if (utility) {
-    targets.push(utility.client);
-    utility = null;
-  }
-  if (warm) {
-    targets.push(warm.client);
-    warm = null;
-  }
-  for (const c of targets) untrack(c);
-  await Promise.allSettled(targets.map((c) => c.close()));
+/** 关闭常驻客户端，并等待已接纳的创建和预热结束。 */
+export function shutdownResidentClients(): Promise<void> {
+  if (closing) return closing;
+  accepting = false;
+  const targets = [...residents];
+  utility = null;
+  warm = null;
+  const closes = targets.map(client => client.close());
+  closing = Promise.allSettled([...closes, utilityCreating, warming]).then(results => {
+    for (const client of targets) untrack(client);
+    const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+    if (errors.length) throw new AggregateError(errors, 'Codex resident cleanup failed');
+  });
+  return closing;
 }

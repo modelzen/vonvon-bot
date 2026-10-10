@@ -111,6 +111,7 @@ export class AppServerClient {
 
   /** spawn + initialize handshake. Throws if spawn/handshake fails. */
   async connect(): Promise<void> {
+    if (this.closed) throw new UnsentRequestError('app-server client closed');
     // Launch via cross-spawn (platform/spawn) so a Windows `.cmd` codex shim
     // runs instead of throwing EINVAL (CVE-2024-27980). With stdio all-piped the
     // streams are non-null, so the cast to *WithoutNullStreams is sound.
@@ -138,7 +139,12 @@ export class AppServerClient {
       this.failAllPending(new Error(`app-server exited (code=${code} signal=${signal})`));
       this.notifications.close();
     });
-    child.on('error', (err) => this.failAllPending(err));
+    child.on('error', (err) => {
+      this.closed = true;
+      this.failAllPending(err);
+      this.notifications.close();
+      void this.close().catch(error => log.fail('agent', error, { phase: 'process-error-close' }));
+    });
     // Writable streams emit their own error in addition to write callbacks.
     child.stdin.on('error', (err) => {
       this.failAllPending(err);

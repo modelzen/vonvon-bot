@@ -9,3 +9,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 Paseo (getpaseo/paseo) is licensed under Apache-2.0 and informed the broader architecture. V1 does not copy Paseo code.
+
+V3 adapts packages/server/src/server/pid-lock.ts and atomic-file.ts from Paseo commit 0009a7e717a9f7ec587f55ca2985cb91b1310bd8 into packages/daemon/src/server/. The adapted files carry Vonvon Bot changes for its daemon lifecycle and file handling.
+
+Copyright (c) 2025-present Mohamed Boudra. The complete upstream Apache License, Version 2.0, including Paseo's copyright statement, is in packages/daemon/LICENSE.paseo. The daemon package carries that license and its own NOTICE.
