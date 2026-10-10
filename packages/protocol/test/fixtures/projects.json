@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "extensionAtRoot": { "keep": true },
+  "projects": [{
+    "name": "产品研发群",
+    "chatId": "oc_fixture_product",
+    "cwd": "/tmp/vonvon-fixture",
+    "kind": "multi",
+    "backend": "codex-appserver",
+    "blank": false,
+    "createdAt": 1,
+    "origin": "joined",
+    "mode": "qa",
+    "guestMode": "qa",
+    "noMention": false,
+    "network": false,
+    "autoCompact": false,
+    "defaultModel": "fixture-saved-model",
+    "defaultEffort": "high",
+    "allowedUsers": ["ou_fixture_member"],
+    "extensionFromOlderVersion": { "keep": true }
+  }]
+}

@@ -1,0 +1,43 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { performance } from "node:perf_hooks";
+import { commandSchema, agentViewSchema } from "../dist/index.js";
+
+const agentId = "cli_fixture";
+const groupId = "oc_fixture";
+const jobId = "job_fixture";
+const membershipId = "membership_fixture";
+const folderToken = randomUUID();
+const samples = [
+  {type:"refresh"},
+  {type:"listPendingGroups",agentId},
+  {type:"openEventSettings",url:"https://open.feishu.cn/app/cli_fixture/event"},
+  {type:"registerAgent"},
+  {type:"refreshAgentCredentials",agentId},
+  {type:"installCodex"},
+  {type:"startCodexLogin"},
+  {type:"restartHost"},
+  {type:"listJoinedGroups",agentId},
+  {type:"bindGroup",agentId,groupId,projectName:"fixture",folderToken,tool:"codex",conversation:"threads"},
+  {type:"setResponse",membershipId,response:"mention"},
+  {type:"setPermission",membershipId,administrator:"full",member:"qa",network:false},
+  {type:"setAgentEnabled",agentId,enabled:true},
+  {type:"deleteAgent",agentId},
+  {type:"cancelJob",jobId},
+  {type:"openJobAuthorization",jobId},
+  {type:"copyJobAuthorization",jobId},
+  {type:"inspectAgent",agentId},
+];
+assert.deepEqual(new Set(samples.map(sample => sample.type)), new Set(commandSchema.optionsMap.keys()));
+for (const sample of samples) commandSchema.parse(sample);
+for (const type of ["quit","hideWindow","setLoginItem","chooseFolder"]) {
+  assert.equal(commandSchema.safeParse({type}).success,false);
+}
+const settings = JSON.parse(await readFile(new URL("../test/fixtures/agent-settings.json", import.meta.url),"utf8"));
+for (let i=0;i<100;i++) agentViewSchema.parse(settings);
+const started = performance.now();
+for (let i=0;i<1000;i++) agentViewSchema.parse(settings);
+const meanMs = (performance.now()-started)/1000;
+console.log(JSON.stringify({commandVariants:samples.length,excluded:4,settingsParseMeanMs:meanMs}));
+if (meanMs >= 2) process.exitCode = 1;
