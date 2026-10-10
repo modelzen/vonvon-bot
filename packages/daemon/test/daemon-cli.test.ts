@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { build } from 'esbuild';
@@ -100,3 +101,32 @@ it('keeps generated secret getters on their captured root outside the parent she
   expect(JSON.parse(output)).toEqual({ values: { fixture: 'dummy-only' }, errors: {} });
   expect(await readdir(outside.root)).toEqual([]);
 });
+
+it('refuses a reused PID without signaling the unrelated process or changing its lock', async () => {
+  const f = await fixture();
+  const sleeper = spawn(process.execPath, ['-e', "process.stdout.write('ready\\n');setInterval(()=>{},1000)"], { stdio: 'pipe' });
+  children.push(sleeper);
+  await new Promise<void>(resolve => sleeper.stdout.once('data', () => resolve()));
+  const listener = createServer();
+  await new Promise<void>(resolve => listener.listen(0, '127.0.0.1', resolve));
+  const address = listener.address();
+  if (!address || typeof address === 'string') throw new Error('Missing fixture port');
+  await new Promise<void>(resolve => listener.close(() => resolve()));
+  const lock = JSON.stringify({ pid: sleeper.pid, startedAt: new Date().toISOString(), listen: `127.0.0.1:${address.port}` });
+  await writeFile(join(f.root, 'daemon.pid'), lock);
+  await writeFile(join(f.root, 'local-credential'), 'aa'.repeat(32));
+  const before = await readdir(f.root);
+  const status = launch(f.home, f.root, ['daemon', 'status', '--json']);
+  const statusExit = await status.exited;
+  expect(await readdir(f.root)).toEqual(before);
+  const stop = launch(f.home, f.root, ['daemon', 'stop']);
+  expect(await stop.exited).toBe(1);
+  expect(sleeper.exitCode).toBeNull();
+  expect(sleeper.signalCode).toBeNull();
+  expect(statusExit).toBe(1);
+  expect(status.output()).toContain('Cannot verify daemon owner');
+  expect(stop.output()).toContain('Cannot verify daemon owner');
+  expect(await readFile(join(f.root, 'daemon.pid'), 'utf8')).toBe(lock);
+  expect((await readdir(f.root)).filter(name => name !== '.access')).toEqual(before);
+  expect(await readdir(f.home)).toEqual([]);
+}, 30_000);

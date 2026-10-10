@@ -37,13 +37,13 @@ describe('Host child shutdown', () => {
       await expect(stopChild(child, 1000)).rejects.toThrow(process.platform === 'win32' ? /code 1/ : /signal SIGKILL/);
     } finally { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); }
   });
-  it('discovers only a ready parent PID with a loopback listen address', async () => {
+  it('refuses a live lock until its endpoint proves ownership', async () => {
     const home = await mkdtemp(join(tmpdir(), 'vonvon-host-discovery-'));
     try {
       const owner = await acquirePidLock(home);
       expect(await readHostEndpoint(home, true)).toMatchObject({ kind: 'blocked', reason: 'busy' });
       await publishPidLock(home, owner, '127.0.0.1:49152');
-      expect(await readHostEndpoint(home, true)).toMatchObject({ pid: process.pid, port: 49152 });
+      expect(await readHostEndpoint(home, true)).toMatchObject({ kind: 'blocked', reason: 'inspection-failed' });
       await publishPidLock(home, owner, '0.0.0.0:49152');
       expect(await readHostEndpoint(home, true)).toMatchObject({ kind: 'blocked', reason: 'inspection-failed' });
       await releasePidLock(home, owner);
