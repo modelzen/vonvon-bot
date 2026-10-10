@@ -4,8 +4,6 @@ on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened]
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -19,14 +17,12 @@ jobs:
   linux:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      scope: ${{ steps.scope.outputs.scope }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
       - name: Test CI scope rules
         run: node --test .github/scripts/ci-scope.test.mjs
       - name: Classify changed paths
@@ -35,6 +31,11 @@ jobs:
       - name: Check documentation whitespace
         if: steps.scope.outputs.scope == 'docs'
         run: git diff --check "${{ steps.scope.outputs.base }}" "${{ steps.scope.outputs.head }}"
+      - uses: actions/setup-node@v4
+        if: steps.scope.outputs.scope == 'full'
+        with:
+          node-version: '22'
+          cache: npm
       - name: Install dependencies
         if: steps.scope.outputs.scope == 'full'
         run: npm ci
@@ -60,3 +61,33 @@ jobs:
           else
             echo 'full: suite passed.' >> "$GITHUB_STEP_SUMMARY"
           fi
+
+  macos:
+    name: macOS checks
+    needs: linux
+    if: needs.linux.outputs.scope == 'full' && vars.ENABLE_SELF_HOSTED_MACOS_CI == 'true'
+    runs-on: [self-hosted, macOS, ARM64, modelzen-macos]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run lint
+      - name: Record tested platform
+        if: always()
+        run: |
+          {
+            echo "Source: $(git rev-parse HEAD)"
+            echo "Runner: $RUNNER_NAME"
+            echo "macOS: $(sw_vers -productVersion), $(uname -m)"
+            echo "Node: $(node --version)"
+          } >> "$GITHUB_STEP_SUMMARY"

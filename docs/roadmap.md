@@ -8,7 +8,7 @@
 
 | 编号 | 内容 | 依赖 |
 | --- | --- | --- |
-| V1 | 建 monorepo 和 `packages/protocol`。从 `codex/device-handoff` 移植 zod 合同，加握手和机器维度。加托管 CI（V1 当时有 Linux 和 macOS 两个任务，均通过验收；之后按下文“托管 CI”自动运行只留 Linux 任务，常规 macOS 检查改在本地 Mac 上跑，不保留手动托管 macOS 任务） | 无 |
+| V1 | 建 monorepo 和 `packages/protocol`。从 `codex/device-handoff` 移植 zod 合同，加握手和机器维度。加托管 CI（V1 当时有 Linux 和 macOS 两个任务，均通过验收；之后按下文 CI 规则保留托管 Linux，macOS 改为自托管并按用户要求暂停） | 无 |
 | V2 | 建 `packages/daemon`。用脚本从 bridge `446b2a4` 复制完整 `src/` 和 `test/`，暂留 `src/web` 以保持可运行基线；数据目录改成 `~/.vonvon-bot`。`vonvon daemon run` 能在前台跑起 Bot | V1 |
 | V3 | daemon 的 API 服务。WebSocket、本机凭据、pid 锁、RPC 处理、快照请求和快照事件、无损的 `admin` 状态请求、目录浏览 RPC、`vonvon daemon start/stop/status`，以及 lane 要用的本机最小 `packages/client`；旧网页管理路由改成 RPC，只读预览和旧网页页面退役，私聊菜单去掉旧控制台按钮，然后删除 `src/web` | V2 |
 | V4 | 补全 `packages/client`，新建 `packages/ui`。移植界面，`window.bridge` 换成注入的客户端，daemon 在本机提供网页 | V3 |
@@ -34,17 +34,15 @@ V5 和 V8 里有 systemd 检查，Mac 上跑不了。Codex 在 Linux CI 或 Linu
 
 逐项的步骤和验证标准见 [plan.md](plan.md)。
 
-## 托管 CI
+## CI
 
-托管 CI 只有一个不带路径过滤的 workflow，只有 GitHub 托管的 Ubuntu 任务。自动或手动运行都不分配 macOS runner。目标为 `main` 的 PR 在 opened、synchronize、reopened 时和 push 到 `main` 时自动运行；功能分支的 push 不触发，也不设定时任务。同一个 PR 有新运行时取消旧的；`main` 和手动运行各用唯一的并发组，不会被取消。改目标到 `main` 不一定触发运行，改目标或 merge `main` 之后当前 head 没有运行时，手动触发无输入参数的 `workflow_dispatch`，它一律跑 Linux 全套。
+Linux 保留 GitHub 托管的 Ubuntu；macOS 配置为组织共享的 Mac mini 自托管 runner。未来 Windows 检查继续托管。用户当前要求不运行 macOS，两个仓库的 `ENABLE_SELF_HOSTED_MACOS_CI` 均为 `false`，runner 服务也已停止；只有用户要求恢复后才开启。每台 Mac 只运行一个 runner，两个仓库排队共享。安装位置、权限和服务管理见 [self-hosted-ci.md](self-hosted-ci.md)。
 
-Linux 任务里一个不依赖 npm 包的脚本判定范围，只有 `docs` 和 `full` 两种。脚本在完整历史上用本地 Git 加 `--no-renames -z` 计算改动路径：PR 取事件里 base 和 head 的 merge-base 到 head，`main` 的 push 取 before 到 after。全部路径都是根目录的 `README.md`、`AGENTS.md`、`CLAUDE.md` 或 `docs/**/*.md` 时是 `docs`；其他路径，包括协议源码和测试，都是 `full`。手动触发，以及空的、异常的、有歧义的、取不到的或超出脚本上限的差异，都是 `full`，脚本不会截断列表后报 `docs`。`docs` 只跑轻量检查（脚本自身的回归测试和 `git diff --check`），不装依赖、不跑产品全套；`full` 用 Node 22 和 npm 缓存，依次跑干净的 `npm ci`、`npm run build`、`npm run typecheck`、`npm test`、`npm run lint`。任务摘要写明是轻量通过还是全套通过。没用 GitHub 原生路径过滤，是因为它只比较前 3000 个改动文件（[官方说明](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#git-diff-comparisons)），被过滤掉的 workflow 还会让必需检查挂起；这里用本地 Git 列路径，没有这个上限。
+目标为 `main` 的 PR 在 opened、synchronize、reopened 时自动检查，也可手动触发。取消合入 main 后重复跑相同套件的 push 触发，不设置定时任务。同一 PR 的旧运行会被新运行取消。改目标或改基线后没有当前结果时，手动补跑。
 
-所有 macOS CI 在本地 Mac 上跑。凡是 `full` 的改动，代码和配置维护以及各里程碑，Codex 都在 Mac 上对准确的 PR head 从干净的 worktree 依次执行 `npm ci`、`npm run build`、`npm run typecheck`、`npm test`、`npm run lint`，在首个失败处停止。把 head SHA、系统和 Node 版本、每条命令的结果和日志写进 PR。纯文档改动记为不适用，不算全套通过。head 改变后重新运行。不配置自托管 runner 服务，Electron 窗口、launchd、十路实时、性能、打包、签名和公证仍按各里程碑的要求在 Mac 上验证。
+范围脚本保留 `docs` 和 `full`，未知或异常差异按 `full` 处理。文档改动只跑范围回归和空白检查，不装依赖，也不启动 Mac。完整改动先在 Linux 跑 Node 22 的安装、构建、类型检查、测试和 lint，再在自托管 Mac 的准确 PR head 跑同一套检查。daemon 原先的 lint 与类型检查完全相同，删除重复的 lint 别名，协议 lint 保留。
 
-合并前要求当前 head 的托管 Linux 成功，`full` 还要求本地 Mac 检查通过。因额度、拿不到 runner 或超时等原因没跑成的托管 Linux 记为受阻，不合并，不能拿本地 Mac 顶替。
-
-CI 配置维护合并前运行 actionlint、范围脚本回归测试、本地 Mac 干净全套、独立审查和实际托管 Linux。检查 workflow 中所有 job 均使用 `ubuntu-latest`，没有手动 Mac 输入或定时触发。各里程碑的实时、性能、原生桌面和服务检查照旧。完整规则见 [plan.md](plan.md) 的 *Hosted CI policy*。
+合入要求当前 Linux 成功，完整改动还要求 Mac 成功。暂停期间完整改动的 Mac 验证保持待办。计费、离线或超时阻塞不能记为通过。Mac CI 已覆盖的常规命令不再手动重复，里程碑要求的实时、性能、原生桌面、launchd、systemd 和独立审查照旧。完整规则见 [plan.md](plan.md) 的 *CI policy*。
 
 ## 现有 PR 栈怎么处理
 
