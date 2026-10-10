@@ -24,9 +24,11 @@ V6 和 V7 可以和 V4、V5 并行。V10 可以在 V8 之前开始。
 
 ## 谁来做
 
-这个计划由 Mac 上的 Codex 实现。Codex 写代码、跑测试、在真实窗口里检查，也负责打包、签名、公证。V9 需要的安装包下载地址来自 Mac 的发布。
+分工按仓库根目录的 `AGENTS.md`。Linux 上的 Claude Code 负责这三份文档，不写产品代码。Mac 上的 Codex 负责全部实现和检查，也负责打包、签名、公证。V9 需要的安装包下载地址来自 Mac 的发布。
 
-只有 Mac 做不了的检查才交给 Linux 服务器上的 Claude Code，比如 V5 和 V8 里的 systemd 检查。需要时在 PR 里写明要 Linux 跑哪一条检查。
+V5 和 V8 里有 systemd 检查，Mac 上跑不了。Codex 在 Linux CI 或 Linux 虚拟机里跑这两条。
+
+实现时发现计划要改架构、数据形状或 PR 顺序，Codex 在 PR 里写明，由 Claude Code 更新这三份文档。
 
 逐项的步骤和验证标准见 [plan.md](plan.md)。
 
