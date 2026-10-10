@@ -3,7 +3,7 @@ import QRCode from 'qrcode';
 import { agentIdSchema, jobIdSchema, type BackendInstallItem, type CommandResult, type EnvironmentReply, type Event, type Job, type JobId } from '@vonvon/protocol';
 import type { AdminService } from '../admin/service';
 import { CodexSetupConflict } from '../agent/codex-appserver/setup';
-import { unsupported } from './errors';
+import { RpcError, unsupported } from './errors';
 import { BackendOutput, backendErrorSuffix } from './backend-output';
 
 export interface JobPeer {
@@ -23,6 +23,7 @@ interface BackendOperation {
   operationId: string;
   id: string;
   update: boolean;
+  abort: AbortController;
   output: BackendOutput;
   peers: Set<JobPeer>;
   done: Promise<void>;
@@ -41,6 +42,7 @@ export class Jobs {
   private readonly backendWork = new Set<BackendOperation>();
   private readonly poll: NodeJS.Timeout;
   private closed = false;
+  private closing: Promise<void> | undefined;
 
   constructor(private readonly options: { service: AdminService; changed: () => void; toolsSettled: () => void }) {
     this.poll = setInterval(() => this.refresh(), 250);
@@ -148,17 +150,18 @@ export class Jobs {
     }
   }
   selectBackend(id: string, update: boolean): BackendAdmission {
+    if (this.closed) throw new RpcError('conflict', 'daemon 正在停止，无法安装后端。');
     const key = JSON.stringify([id, update]);
     const existing = this.backends.get(key);
     if (existing) return { operation: existing, attached: true };
-    const operation: BackendOperation = { operationId: randomUUID(), id, update, output: new BackendOutput(), peers: new Set(), done: Promise.resolve() };
+    const operation: BackendOperation = { operationId: randomUUID(), id, update, abort: new AbortController(), output: new BackendOutput(), peers: new Set(), done: Promise.resolve() };
     this.backends.set(key, operation);
     this.backendWork.add(operation);
     const emit = (item: BackendInstallItem): void => {
       if (item.type !== 'log') { operation.terminal = item; if (this.backends.get(key) === operation) this.backends.delete(key); }
       for (const peer of operation.peers) if (peer.open) peer.event({ type: 'event', event: 'backendInstall', payload: { operationId: operation.operationId, id, update, item } });
     };
-    operation.done = Promise.resolve().then(() => this.options.service.installBackend(id, chunk => operation.output.append(chunk, piece => emit({ type: 'log', chunk: piece })), undefined, { update }))
+    operation.done = Promise.resolve().then(() => this.options.service.installBackend(id, chunk => operation.output.append(chunk, piece => emit({ type: 'log', chunk: piece })), operation.abort.signal, { update }))
       .then(result => { emit(result.ok ? { type: 'done' } : { type: 'error', code: result.aborted ? 'aborted' : 'install_failed', message: backendErrorSuffix(result.tail) }); })
       .catch(error => { emit({ type: 'error', code: 'unknown', message: backendErrorSuffix(error instanceof Error ? error.message : '安装失败。') }); })
       .finally(() => { if (this.backends.get(key) === operation) this.backends.delete(key); this.backendWork.delete(operation); operation.peers.clear(); this.options.toolsSettled(); });
@@ -169,17 +172,26 @@ export class Jobs {
     const { text, omittedBytes } = operation.output.snapshot();
     const replay: BackendInstallItem[] = text ? [{ type: 'log', chunk: text }] : [];
     if (operation.terminal) replay.push(operation.terminal);
-    if (peer.open && !operation.terminal) operation.peers.add(peer);
+    if (!this.closed && peer.open && !operation.terminal) operation.peers.add(peer);
     return { kind: 'backendInstall', operationId: operation.operationId, id: operation.id, update: operation.update, attached, replay, omittedBytes };
   }
   detach(peer: JobPeer): void {
     for (const entry of this.unsettled) if (entry.owner === peer.id) this.cancelRegistration(entry);
     for (const operation of this.backendWork) operation.peers.delete(peer);
   }
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    if (this.closing) return this.closing;
     this.closed = true;
     clearInterval(this.poll);
-    for (const entry of this.unsettled) this.cancelRegistration(entry);
-    await Promise.all([...this.unsettled].map(entry => entry.done));
+    const registrations = [...this.unsettled];
+    const backends = [...this.backendWork];
+    this.closing = Promise.resolve().then(async () => {
+      for (const entry of registrations) this.cancelRegistration(entry);
+      for (const operation of backends) operation.abort.abort();
+      const results = await Promise.allSettled([...registrations, ...backends].map(entry => entry.done));
+      const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+      if (errors.length) throw new AggregateError(errors, 'Jobs shutdown failed');
+    });
+    return this.closing;
   }
 }

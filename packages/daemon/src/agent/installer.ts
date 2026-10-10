@@ -199,15 +199,13 @@ export async function installBackendDep(
       else signal.addEventListener('abort', onAbort, { once: true });
     }
 
-    child.on('error', (e) => {
-      if (signal) signal.removeEventListener('abort', onAbort);
-      resolve({ ok: false, code: null, aborted, tail: (out + e.message).slice(-2000) });
-    });
+    let childError: Error | undefined;
+    child.on('error', (error) => { childError = error; });
     child.on('close', (code) => {
       flushStdout();
       flushStderr();
       if (signal) signal.removeEventListener('abort', onAbort);
-      resolve({ ok: code === 0 && !aborted, code, aborted, tail: out.slice(-2000) });
+      resolve({ ok: code === 0 && !aborted && !childError, code, aborted, tail: (out + (childError?.message ?? '')).slice(-2000) });
     });
   });
 
