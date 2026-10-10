@@ -171,7 +171,6 @@ export async function installBackendDep(
     const capture = (s: string): void => {
       if (!s) return;
       out += s;
-      // 只保留尾部，避免长安装把内存撑大（SSE/卡片只需要最近的进度）。
       if (out.length > 8192) out = out.slice(-8192);
       onProgress?.(s);
     };
