@@ -10,7 +10,8 @@ import {
   type InstallResult,
 } from '../../service/update';
 import { buildDaemonControlCommand, type DaemonControlAction } from '../../admin/host';
-import { readWebConsole } from '../../web/discovery';
+import { paths } from '../../config/paths';
+import { readRunningPidLock } from '../../server/pid-lock';
 import { log } from '../../core/logger';
 
 /**
@@ -126,9 +127,8 @@ const napDefault = (ms: number): Promise<void> => new Promise((resolve) => setTi
 type KillFn = (pid: number, signal: NodeJS.Signals | 0) => void;
 
 export interface StopSelfHostedDeps {
-  /** 读出当前在跑的 daemon 进程 pid（默认 web-console.json 的 pid——内嵌 web 的
-   *  daemon 就是 UI 显示「运行中」的那个，单 bot / supervisor / 引导态都写它）。 */
-  readDaemonPid?: () => number | undefined;
+  /** Read the current parent daemon PID from its validated owner record. */
+  readDaemonPid?: () => Promise<number | undefined> | number | undefined;
   /** 注入 process.kill（测试用，绝不真杀）。 */
   kill?: KillFn;
   sleep?: (ms: number) => Promise<void>;
@@ -148,14 +148,14 @@ export type StopSelfHostedResult = 'no-daemon' | 'stopped' | 'force-killed';
  * 不留孤儿），超时再 SIGKILL 兜底。依赖注入，便于单测，绝不真杀进程。
  */
 export async function stopSelfHostedDaemon(deps: StopSelfHostedDeps = {}): Promise<StopSelfHostedResult> {
-  const readDaemonPid = deps.readDaemonPid ?? ((): number | undefined => readWebConsole()?.pid);
+  const readDaemonPid = deps.readDaemonPid ?? (async (): Promise<number | undefined> => (await readRunningPidLock(paths.appDir))?.pid);
   const kill: KillFn = deps.kill ?? ((p, s) => void process.kill(p, s));
   const nap = deps.sleep ?? napDefault;
   const selfPid = deps.selfPid ?? process.pid;
   const graceMs = deps.graceMs ?? 8_000;
   const pollMs = deps.pollMs ?? 250;
 
-  const pid = readDaemonPid();
+  const pid = await readDaemonPid();
   // 没在跑、发现文件指向本 helper 自己（理论不会）、或那 pid 已死 → 没东西可停。
   if (pid === undefined || pid === selfPid || !pidAlive(pid, kill)) return 'no-daemon';
 

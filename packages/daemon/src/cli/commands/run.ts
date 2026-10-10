@@ -9,6 +9,7 @@ import { AdminWriteError } from '../../admin/ops';
 import { createAdminIpcResponder } from '../../admin/ipc';
 import { createAdminService } from '../../admin/service';
 import { installBackendDep, uninstallBackendDep } from '../../agent';
+import { performCoreUpdate } from '../../service/update';
 import { mountWebConsole, type MountedWebConsole } from '../../web/mount';
 
 export async function runRun(botName?: string, options: { control?: ShutdownControl; managed?: boolean } = {}): Promise<void> {
@@ -124,6 +125,7 @@ async function runSingle(botName: string | undefined, control: ShutdownControl):
         // 按需后端安装在 daemon 进程内直跑（owns runtime，装完即能解析加载）。
         installBackend: installBackendDep,
         uninstallBackend: uninstallBackendDep,
+        applyUpdate: performCoreUpdate,
       }),
     );
     if (webConsole) console.log(`Web console listening on 127.0.0.1:${webConsole.port}`);

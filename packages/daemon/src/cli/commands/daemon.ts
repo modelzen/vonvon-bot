@@ -52,14 +52,18 @@ export async function runStart(port = 0): Promise<DaemonStatus> {
   let spawnError: Error | undefined;
   child.once('error', (error) => { spawnError = error; });
   const deadline = Date.now() + 25_000;
+  let exitedAt: number | undefined;
   while (Date.now() < deadline) {
     if (spawnError) throw spawnError;
-    if (child.exitCode !== null || child.signalCode !== null) throw new Error(`Daemon exited before readiness. Check ${join(paths.appDir, 'daemon.log')}.`);
     const lock = await readRunningPidLock(paths.appDir);
     if (lock && lock.pid === child.pid && lock.listen) return daemonStatus();
     if (lock && lock.pid !== child.pid) {
       const winner = await waitReady(lock.pid);
       if (winner) return winner;
+    }
+    if (child.exitCode !== null || child.signalCode !== null) {
+      exitedAt ??= Date.now();
+      if (Date.now() - exitedAt > 1000) throw new Error(`Daemon exited before readiness. Check ${join(paths.appDir, 'daemon.log')}.`);
     }
     await pause(50);
   }

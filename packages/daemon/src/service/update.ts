@@ -131,6 +131,25 @@ export async function installLatest(opts: { inherit?: boolean } = {}): Promise<I
   });
 }
 
+/** Install in the owning daemon before its RPC reply schedules the normal same-port restart. */
+export async function performCoreUpdate(options: { install?: typeof installLatest } = {}): Promise<void> {
+  const release = acquireUpdateLock();
+  if (!release) throw new Error('A Core update is already in progress.');
+  const from = currentVersion();
+  clearUpdateStatus();
+  writeUpdateStatus({ phase: 'installing', from, at: Date.now() });
+  try {
+    const result = await (options.install ?? installLatest)();
+    if (!result.ok) {
+      writeUpdateStatus({ phase: 'error', ok: false, from, message: result.message.slice(0, 300), at: Date.now() });
+      throw new Error(result.message);
+    }
+    writeUpdateStatus({ phase: 'restarting', ok: true, from, to: currentVersion(), at: Date.now() });
+  } finally {
+    release();
+  }
+}
+
 // ── 更新互斥锁（B）+ 更新结果状态（D）────────────────────────────────────────
 // 都落在 appDir，供跨进程协作：Web「升级」跑在 detached helper 里、私聊「更新」跑在
 // daemon 里，两者可能并发。锁防止两个 `npm i -g` 并发把全局目录装坏；状态文件给
