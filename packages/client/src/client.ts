@@ -1,4 +1,3 @@
-import type WebSocket from "ws";
 import {
   adminReplySchema, collaborationReplySchema, commandResultSchema,
   desktopSnapshotSchema, directoryReplySchema, environmentReplySchema,
@@ -17,6 +16,13 @@ export class RpcError extends Error {
   constructor(readonly code: string, message: string) {
     super(message);
     this.name = "RpcError";
+  }
+}
+
+export class ConnectionError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "ConnectionError";
   }
 }
 
@@ -46,7 +52,16 @@ type Method = keyof typeof replySchemas;
 type Payload<M extends Method> = Extract<z.input<typeof requestSchema>, { method: M }>["payload"];
 type Pending = { method: Method; resolve: (value: unknown) => void; reject: (error: Error) => void };
 
-export function createClient(socket: WebSocket): VonvonClient {
+export interface ClientConnection {
+  isOpen(): boolean;
+  onMessage(listener: (data: string) => void): void;
+  onClose(listener: () => void): void;
+  onError(listener: (error: Error) => void): void;
+  send(data: string, callback: (error?: Error) => void): void;
+  close(): Promise<void>;
+}
+
+export function createClient(socket: ClientConnection): VonvonClient {
   const pending = new Map<string, Pending>();
   const snapshots = new Set<(value: DesktopSnapshot) => void>();
   const logs = new Set<(value: LogEventPayload) => void>();
@@ -54,9 +69,14 @@ export function createClient(socket: WebSocket): VonvonClient {
   const errors = new Set<(error: Error) => void>();
   const undeliveredErrors: Error[] = [];
   let closed = false;
+  let closing: Promise<void> | undefined;
 
-  function retainError(error: unknown): void {
-    undeliveredErrors.push(error instanceof Error ? error : new Error(String(error)));
+  function observerError(error: unknown): Error {
+    if (error instanceof ConnectionError) return new Error(error.message, { cause: error });
+    return error instanceof Error ? error : new Error(String(error));
+  }
+  function retainError(error: Error): void {
+    undeliveredErrors.push(error);
     if (undeliveredErrors.length > 32) undeliveredErrors.shift();
   }
   function emitError(error: Error): void {
@@ -65,25 +85,37 @@ export function createClient(socket: WebSocket): VonvonClient {
       return;
     }
     for (const listener of errors) {
-      try { listener(error); } catch (failure) { retainError(failure); }
+      try { listener(error); } catch (failure) { retainError(observerError(failure)); }
     }
   }
   function deliver<T>(listeners: Set<(value: T) => void>, value: T): void {
     for (const listener of listeners) {
-      try { listener(value); } catch (error) { emitError(error instanceof Error ? error : new Error(String(error))); }
+      try { listener(value); } catch (error) { emitError(observerError(error)); }
     }
   }
-  function failAll(error: Error): void {
-    if (closed) return;
+  function settlePending(error: Error): boolean {
+    if (closed) return false;
     closed = true;
     for (const call of pending.values()) call.reject(error);
     pending.clear();
+    return true;
+  }
+  function close(): Promise<void> {
+    settlePending(new Error("Daemon connection closed"));
+    closing ??= Promise.resolve().then(() => socket.close());
+    return closing;
+  }
+  function failAll(cause: Error): void {
+    const error = new ConnectionError(cause);
+    if (!settlePending(error)) return;
+    void close().catch(failure => emitError(new ConnectionError(failure)));
     emitError(error);
   }
-  socket.on("message", data => {
+  socket.onMessage(data => {
+    if (closed) return;
     let frame: unknown;
-    try { frame = JSON.parse(data.toString()); }
-    catch { failAll(new Error("Invalid daemon frame")); socket.close(); return; }
+    try { frame = JSON.parse(data); }
+    catch { failAll(new Error("Invalid daemon frame")); return; }
     const event = eventSchema.safeParse(frame);
     if (event.success) {
       switch (event.data.event) {
@@ -94,10 +126,10 @@ export function createClient(socket: WebSocket): VonvonClient {
       return;
     }
     if (!frame || typeof frame !== "object" || !("id" in frame) || typeof frame.id !== "string") {
-      failAll(new Error("Invalid daemon frame")); socket.close(); return;
+      failAll(new Error("Invalid daemon frame")); return;
     }
     const call = pending.get(frame.id);
-    if (!call) { failAll(new Error("Unexpected daemon response ID")); socket.close(); return; }
+    if (!call) { failAll(new Error("Unexpected daemon response ID")); return; }
     pending.delete(frame.id);
     const remoteError = errorEnvelopeSchema.safeParse(frame);
     if (remoteError.success) { call.reject(new RpcError(remoteError.data.code, remoteError.data.message)); return; }
@@ -107,11 +139,11 @@ export function createClient(socket: WebSocket): VonvonClient {
     try { call.resolve(frame.payload); }
     catch (error) { call.reject(error instanceof Error ? error : new Error(String(error))); }
   });
-  socket.on("close", () => failAll(new Error("Daemon connection closed")));
-  socket.on("error", error => failAll(error));
+  socket.onClose(() => failAll(new Error("Daemon connection closed")));
+  socket.onError(error => failAll(error));
 
   function send<M extends Method>(method: M, payload: Payload<M>): Promise<z.output<(typeof replySchemas)[M]>> {
-    if (closed || socket.readyState !== socket.OPEN) return Promise.reject(new Error("Daemon connection closed"));
+    if (closed || !socket.isOpen()) return Promise.reject(new Error("Daemon connection closed"));
     const id = globalThis.crypto.randomUUID();
     const frame = requestSchema.parse({type:"request",id,method,payload});
     return new Promise<z.output<(typeof replySchemas)[M]>>((resolve, reject) => {
@@ -132,7 +164,7 @@ export function createClient(socket: WebSocket): VonvonClient {
       };
       snapshots.add(receive);
       void snapshot().then(receive).catch(error => {
-        if (active) emitError(error instanceof Error ? error : new Error(String(error)));
+        if (active && !closed) emitError(observerError(error));
       });
       return () => { active = false; snapshots.delete(receive); };
     },
@@ -148,17 +180,10 @@ export function createClient(socket: WebSocket): VonvonClient {
     onError(listener) {
       errors.add(listener);
       for (const error of undeliveredErrors.splice(0)) {
-        try { listener(error); } catch (failure) { retainError(failure); }
+        try { listener(error); } catch (failure) { retainError(observerError(failure)); }
       }
       return () => { errors.delete(listener); };
     },
-    async close() {
-      if (socket.readyState === socket.CLOSED) return;
-      await new Promise<void>(resolve => {
-        socket.once("close", () => resolve());
-        socket.close();
-        setTimeout(() => { socket.terminate(); resolve(); }, 1000).unref();
-      });
-    },
+    close,
   };
 }

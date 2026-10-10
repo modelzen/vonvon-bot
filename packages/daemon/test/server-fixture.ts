@@ -6,6 +6,7 @@ import { vi } from 'vitest';
 import { eventSchema, replyEnvelopeSchema, serverInfoSchema, type Request, type Event, type ReplyEnvelope, type ServerInfo } from '@vonvon/protocol';
 import type { AdminService } from '../src/admin/service';
 import type { ShutdownControl } from '../src/host/lifecycle';
+import type { EnvironmentServiceOptions } from '../src/environment/service';
 
 const testHome = vi.hoisted(() => ({ current: '' }));
 vi.mock('../src/config/paths', () => ({ paths: { get appDir() { return testHome.current; } } }));
@@ -32,12 +33,12 @@ export function fakeService(overrides: Partial<AdminService> = {}): AdminService
     ...overrides,
   };
 }
-export async function startFixture(service = fakeService()) {
+export async function startFixture(service = fakeService(), environmentOptions?: EnvironmentServiceOptions) {
   const home = await mkdtemp(join(tmpdir(), 'vonvon-api-'));
   testHome.current = home;
   const { startApi } = await import('../src/server/http');
   const control: ShutdownControl = { requested: false, waitForRequest: () => new Promise<void>(() => {}), dispose: () => {}, requestStop: vi.fn(), requestRestart: vi.fn(), completeShutdown: release => release() };
-  const api = await startApi({ service, port: 0, control });
+  const api = await startApi({ service, port: 0, control, environmentOptions });
   const credential = (await readFile(join(home, 'local-credential'), 'utf8')).trim();
   return { api, home, credential, control, close: async () => { await api.close(); await rm(home, { recursive: true, force: true }); } };
 }

@@ -8,7 +8,8 @@
   "workspaces": [
     "packages/protocol",
     "packages/client",
-    "packages/daemon"
+    "packages/daemon",
+    "packages/ui"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",

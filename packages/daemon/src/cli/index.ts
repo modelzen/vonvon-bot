@@ -12,7 +12,7 @@ let control: ShutdownControl | undefined;
 program.hook('preAction', async (_command, action) => {
   if (action.parent?.name() === 'service' || action.name() === '__daemon-control') return;
   if (action.name() === 'run') control = observeShutdown(Boolean(action.opts().parentControl));
-  if (action.name() === 'status' || action.name() === 'logs' || action.name() === '__restart-after-exit' || action.name() === '__win-relaunch') return;
+  if (action.name() === 'open' || action.name() === 'status' || action.name() === 'logs' || action.name() === '__restart-after-exit' || action.name() === '__win-relaunch') return;
   await mkdir(paths.appDir, { recursive: true, mode: 0o700 });
   lease = await enterDataAccess(paths.appDir);
 });
@@ -44,6 +44,9 @@ daemon.command('logs').description('Read recent daemon logs').option('--tail <li
     if (!Number.isInteger(options.tail) || options.tail < 1) throw new Error('Invalid tail count.');
     await (await import('./commands/daemon')).runLogs(options.tail);
   });
+program.command('open').description('Open the local web UI').action(async () => {
+  await (await import('./commands/open')).runOpen();
+});
 const service = program.command('service').description('Manage the OS background service');
 service.command('install').description('Install and start the OS service').action(async () => {
   await (await import('./commands/service')).runServiceCommand('install');

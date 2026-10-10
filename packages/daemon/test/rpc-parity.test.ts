@@ -111,15 +111,12 @@ describe('route inventory parity', () => {
       await client.close();
     } finally { await fixture.close(); }
   });
-  it('refuses V1-only actions outside the route inventory without closing the connection', async () => {
+  it('refuses UI-local and shell-owned actions without closing the connection', async () => {
     const fixture = await startFixture();
     try {
       const client = await socketClient(fixture.api.port, fixture.credential); await client.ready();
       const requests = [
-        { method: 'command', payload: { type: 'refresh' } },
         { method: 'settings', payload: { type: 'chooseExecutable' } },
-        { method: 'environment', payload: { type: 'scan' } },
-        { method: 'machine', payload: { type: 'status' } },
         { method: 'collaboration', payload: { action: 'openGroup', agentId: bot.appId, groupId: project.chatId, projectName: project.name } },
       ];
       for (const [index, value] of requests.entries()) {
