@@ -43,4 +43,14 @@ describe('canonical home directory tokens', () => {
     vi.setSystemTime(Date.now() + 600_000);
     await expect(browser.resolve(rootFolder.token)).rejects.toMatchObject({ code: 'invalid_folder_token' });
   });
+  it('sorts and caps a directory listing at 1000 entries with an explicit truncated flag', async () => {
+    const { home, browser } = await fixture();
+    await Promise.all(Array.from({ length: 1001 }, (_, index) => mkdir(join(home, String(index).padStart(4, '0')))));
+    const result = await browser.list();
+    expect(result.truncated).toBe(true);
+    expect(result.entries).toHaveLength(1000);
+    expect(result.entries[0]?.name).toBe('0000');
+    expect(result.entries[999]?.name).toBe('0999');
+  });
+
 });
