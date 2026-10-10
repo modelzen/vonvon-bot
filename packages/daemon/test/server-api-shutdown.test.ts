@@ -1,5 +1,6 @@
 import { rm } from 'node:fs/promises';
 import { expect, it, vi } from 'vitest';
+import { WebSocket } from 'ws';
 import { Jobs } from '../src/server/jobs';
 import { fakeService, socketClient, startFixture } from './server-fixture';
 import type { InstallResult } from '../src/agent/installer';
@@ -47,7 +48,8 @@ it('starts Jobs close synchronously and drains delayed replies and cleanup despi
     void closing.then(settled, settled);
     expect(closeSpy).toHaveBeenCalledOnce();
     expect(fixture.api.close()).toBe(closing);
-    await vi.waitFor(() => expect(teardown.socketClosed).toBe(true));
+    await vi.waitFor(() => expect(client.socket.readyState).toBe(WebSocket.CLOSED));
+    expect(teardown.socketClosed).toBe(false);
     expect(signal?.aborted).toBe(true);
     expect(settled).not.toHaveBeenCalled();
     cleanup.resolve({ ok: false, code: null, aborted: true, tail: 'cancelled' });
@@ -56,6 +58,7 @@ it('starts Jobs close synchronously and drains delayed replies and cleanup despi
     hold = false;
     rebuild.resolve();
     await expect(closing).rejects.toThrow('API shutdown failed');
+    expect(teardown.socketClosed).toBe(true);
   } finally {
     hold = false;
     rebuild.resolve();
