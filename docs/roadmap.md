@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | V1 | 建 monorepo 和 `packages/protocol`。从 `codex/device-handoff` 移植 zod 合同，加握手和机器维度。加托管 CI（V1 当时有 Linux 和 macOS 两个任务，均通过验收；之后按下文“托管 CI”自动运行只留 Linux 任务，常规 macOS 检查改在本地 Mac 上跑，另留一个只能手动请求的可选托管 macOS 任务） | 无 |
 | V2 | 建 `packages/daemon`。用脚本从 bridge `446b2a4` 复制完整 `src/` 和 `test/`，暂留 `src/web` 以保持可运行基线；数据目录改成 `~/.vonvon-bot`。`vonvon daemon run` 能在前台跑起 Bot | V1 |
-| V3 | daemon 的 API 服务。WebSocket、本机凭据、pid 锁、RPC 处理、快照请求和快照事件、无损的 `admin` 状态请求、目录浏览 RPC、`vonvon daemon start/stop/status` 和停止、重启的生命周期规则（等已接受的操作做完才放锁，重启保持原端口，`vonvon service` 命令在 V5 之前一律拒绝），以及 lane 要用的本机最小 `packages/client`；旧网页管理路由改成 RPC，只读预览和旧网页页面退役，私聊菜单去掉旧控制台按钮，然后删除 `src/web` | V2 |
+| V3 | daemon 的 API 服务。WebSocket、本机凭据、pid 锁、RPC 处理、快照请求和快照事件、无损的 `admin` 状态请求、目录浏览 RPC、`vonvon daemon start/stop/status` 和停止、重启的生命周期规则（等已接受的操作做完、确认 Bot、npm 和 Codex 进程都已退出才放锁，重启保持原端口，`vonvon service` 命令在 V5 之前一律拒绝），以及 lane 要用的本机最小 `packages/client`；旧网页管理路由改成 RPC，只读预览和旧网页页面退役，私聊菜单去掉旧控制台按钮，然后删除 `src/web` | V2 |
 | V4 | 补全 `packages/client`，新建 `packages/ui`。移植界面，`window.bridge` 换成注入的客户端，daemon 在本机提供网页 | V3 |
 | V5 | `packages/desktop`。Electron 外壳拉起或连接 daemon，加载界面，托盘，开机自动运行，自动更新。Vonvon 自己的系统服务（服务标识、安装和卸载、原生验收）也在这里第一次提供 | V4 |
 | V6 | Claude Code provider。移植 Paseo 的实现和 `AgentSession` 到 `AgentBackend` 的适配器，删除 bridge 的 Claude 后端 | V3 |
@@ -46,6 +46,8 @@ Linux 任务里一个不依赖 npm 包的脚本判定范围，只有 `docs` 和 
 
 合并前要求当前 head 的托管 Linux 成功，`full` 还要求本地 Mac 检查通过。PR 一旦请求过托管 macOS，合并的那个 head 也要有一次成功的托管 macOS；head 变了就要重新请求。没请求的 PR 记为“未请求”，不算通过也不算失败。因额度、拿不到 runner、超时等原因没跑成的托管 Linux 或已请求的托管 macOS 记为受阻，不合并；不能撤回请求、换到没请求的 head，或拿本地 Mac 顶替。本地 Mac 只替代原来自动运行的托管 macOS，不能替代托管 Linux，也不能替代已请求的托管 macOS。
 
+2026-10-10 组织共用的 Actions 额度用完，用户授权暂时跳过托管 CI。授权有效期间，head 可以不跑托管 CI 就推送和合并，记录写“托管 Linux：已跳过（用户授权，额度用完）”，不算通过。其他门槛都不变：`full` 改动在准确 head 上的本地 Mac 检查、十路实时检查、生命周期验证、性能检查、截图和视频、独立审查和准确 head 的 Shipping 判定。不改分支保护，也不拿托管 macOS 顶替。用户撤回授权后，所有未合并的 head 重新按完整的合并规则检查。
+
 这项改动是一个分支上的文档、workflow、范围脚本和条件用例维护，不是新的里程碑，不改 PR 顺序、架构和数据形状，不改订阅、计费、分支保护，也不配置 runner 服务。它本身是 `full`，合并前要有 actionlint、有意义的脚本用例、托管 macOS 条件的用例、本地 Mac 干净全套、独立审查和实际跑通的托管 Linux，不跑无关的 Bot 十路实时和性能检查。条件用例直接读 `ci.yml` 里的条件，覆盖 PR 和 push 到 `main` 时跳过、手动 `false` 时跳过、手动 `true` 且 Linux 成功时运行、手动 `true` 但 Linux 失败时跳过。这次改动不为了验证规则去请求托管 macOS，PR 里写明实际的托管 macOS 任务没有跑过，条件只靠用例和 actionlint 验证。各里程碑的十路实时检查、性能检查、原生桌面和 launchd、systemd 检查、独立审查和准确 head 的 Shipping 判定照旧。完整规则见 [plan.md](plan.md) 的 *Hosted CI policy*。
 
 ## 现有 PR 栈怎么处理
@@ -68,4 +70,5 @@ Linux 任务里一个不依赖 npm 包的脚本判定范围，只有 `docs` 和 
 - 云端的部署平台还没定。vonvon-bridge-legacy 有 `deploy/tencent` 可以参考。
 - V3 起后端安装的输出只保留最后 256 KiB，`omittedBytes` 记下丢掉的字节数。从中途接上的客户端看不到更早的输出，失败原因仍由错误尾部给出。V3 不限制 npm 的运行时长。npm 卡住时，它会占着一个进程和对应的安装槽，直到 npm 退出或 daemon 停止。V3 起后端的安装、更新、卸载排队逐个执行，所以卡住的 npm 还会挡住排在后面的所有后端操作。等界面需要取消安装时，再定超时和取消的语义。
 - V2 合并后运行中的 daemon 没有接上停止和重启的回调，旧网页的这两个接口都返回 501（PR #24 和旧测试有记录）。复制来的源码里那段“停止时卸载服务”的辅助代码从没在 daemon 上运行过，不能当作旧版能用的证据。V3 第一次真正提供停止和重启，只针对用 CLI 启动的 daemon。复制来的服务代码仍用 bridge 的服务标识，运行它可能覆盖或删除原 bridge 的注册，所以 V3 的 `vonvon service install` 和 `uninstall` 一律报错退出，什么也不改。V2 时期如果有人用过 `vonvon service install`，留下的注册 V3 不检测也不删除。
+- V3 只在正常停止和重启时确认 Codex 进程组已退出。Bot 子进程或 daemon 异常退出（崩溃、被手动 `kill -9`）时，它启动的 Codex 进程组可能留下来，V3 不接管、不按记录的 pid 发信号，也不对它们做任何保证。Claude 后端的 CLI 子进程由 Claude Agent SDK 启动，daemon 拿不到它的句柄，V3 不确认它退出；V6 换掉这个后端时再说明这些进程怎么纳入同一条规则。私聊菜单的“重启”和“更新”在 V3 仍只发说明卡片，不执行重启或更新。
 - V3 重启时，旧 daemon 放锁之后、新 daemon 拿到锁之前有一小段时间没有进程负责这个数据目录。这时运行 `vonvon daemon stop` 会报“已停止”，新 daemon 仍会起来，再运行一次 `vonvon daemon stop` 即可。放锁之前收到的停止请求一定会取消重启。
