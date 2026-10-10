@@ -19,14 +19,17 @@ function loopbackOrigin(origin: string | undefined): boolean {
 export function createSocketServer(options: { server: Server; credential: string; info: ServerInfo; request: (peer: Peer, request: Request) => Promise<void>; detached: (peer: Peer) => void }) {
   const sockets = new WebSocketServer({ noServer: true, perMessageDeflate: false, maxPayload: 4_000_000 });
   const peers = new Set<Peer>();
+  const accepted = new Set<Promise<void>>();
+  let closing: Promise<void> | undefined;
   options.server.on('upgrade', (request, socket, head) => {
-    if (!loopbackHost(request.headers.host) || !loopbackOrigin(request.headers.origin)) {
+    if (closing || !loopbackHost(request.headers.host) || !loopbackOrigin(request.headers.origin)) {
       socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
       return;
     }
     sockets.handleUpgrade(request, socket, head, ws => sockets.emit('connection', ws));
   });
   sockets.on('connection', socket => {
+    if (closing) { socket.close(1001, 'server_shutdown'); return; }
     let authenticated = false;
     let detached = false;
     const send = (value: Response | ErrorEnvelope | Event | ServerInfo): void => {
@@ -47,6 +50,7 @@ export function createSocketServer(options: { server: Server; credential: string
     socket.on('close', detach);
     socket.on('error', detach);
     socket.on('message', (bytes, binary) => {
+      if (closing || detached) return;
       let raw: unknown;
       try { if (binary) throw new Error('binary'); raw = JSON.parse(bytes.toString()); }
       catch { socket.close(authenticated ? 1007 : 4401, authenticated ? 'invalid_message' : 'unauthorized'); return; }
@@ -70,18 +74,30 @@ export function createSocketServer(options: { server: Server; credential: string
       }
       const parsed = requestSchema.safeParse(raw);
       if (!parsed.success) { peer.send({ type: 'error', id, code: 'invalid_request', message: '请求参数无效。' }); return; }
-      void options.request(peer, parsed.data).catch(error => {
+      const completion = Promise.resolve().then(() => options.request(peer, parsed.data)).catch(error => {
         peer.send({ type: 'error', id, code: getRpcErrorCode(error), message: error instanceof Error ? error.message : '操作失败。' });
       });
+      accepted.add(completion);
+      void completion.then(() => { accepted.delete(completion); }, () => { accepted.delete(completion); });
     });
   });
   return {
     publish(event: Event): void { for (const peer of peers) peer.event(event); },
-    async close(): Promise<void> {
-      for (const socket of sockets.clients) socket.close(1001, 'server_shutdown');
-      await new Promise<void>(resolve => {
-        const deadline = setTimeout(() => { for (const socket of sockets.clients) socket.terminate(); }, 250);
-        sockets.close(() => { clearTimeout(deadline); resolve(); });
+    close(): Promise<void> {
+      return closing ??= Promise.resolve().then(async () => {
+        const errors: unknown[] = [];
+        for (const socket of sockets.clients) {
+          try { socket.close(1001, 'server_shutdown'); }
+          catch (error) { errors.push(error); }
+        }
+        const transport = new Promise<void>((resolve, reject) => {
+          const deadline = setTimeout(() => { for (const socket of sockets.clients) socket.terminate(); }, 250);
+          try { sockets.close(error => { clearTimeout(deadline); if (error) reject(error); else resolve(); }); }
+          catch (error) { clearTimeout(deadline); reject(error); }
+        });
+        const results = await Promise.allSettled([transport, ...accepted]);
+        errors.push(...results.flatMap(result => result.status === 'rejected' ? [result.reason] : []));
+        if (errors.length) throw new AggregateError(errors, 'Socket shutdown failed');
       });
     },
   };
