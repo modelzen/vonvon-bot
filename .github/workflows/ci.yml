@@ -4,14 +4,7 @@ on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened]
-  push:
-    branches: [main]
   workflow_dispatch:
-    inputs:
-      run_macos:
-        description: Run optional hosted macOS verification
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -24,14 +17,12 @@ jobs:
   linux:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      scope: ${{ steps.scope.outputs.scope }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
       - name: Test CI scope rules
         run: node --test .github/scripts/ci-scope.test.mjs
       - name: Classify changed paths
@@ -40,6 +31,11 @@ jobs:
       - name: Check documentation whitespace
         if: steps.scope.outputs.scope == 'docs'
         run: git diff --check "${{ steps.scope.outputs.base }}" "${{ steps.scope.outputs.head }}"
+      - uses: actions/setup-node@v4
+        if: steps.scope.outputs.scope == 'full'
+        with:
+          node-version: '22'
+          cache: npm
       - name: Install dependencies
         if: steps.scope.outputs.scope == 'full'
         run: npm ci
@@ -67,12 +63,31 @@ jobs:
           fi
 
   macos:
-    if: ${{ success() && github.event_name == 'workflow_dispatch' && inputs.run_macos == true }}
+    name: macOS checks
     needs: linux
-    runs-on: macos-latest
-    timeout-minutes: 15
+    if: >-
+      needs.linux.outputs.scope == 'full' &&
+      vars.ENABLE_SELF_HOSTED_MACOS_CI == 'true' &&
+      (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, macOS, ARM64, modelzen-macos, modelzen-macos-isolated]
+    timeout-minutes: 30
     steps:
+      - name: Require dedicated CI account
+        run: |
+          if [ "$(id -un)" != github-ci ]; then
+            echo '::error::Use the dedicated github-ci account before enabling macOS CI.'
+            exit 1
+          fi
+          case " $(id -Gn) " in
+            *' admin '*)
+              echo '::error::The CI account must be a standard user without administrator access.'
+              exit 1
+              ;;
+          esac
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -82,13 +97,12 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run lint
-      - name: Record Mac result
-        if: success()
+      - name: Record tested platform
+        if: always()
         run: |
           {
-            echo "Head: $GITHUB_SHA"
-            echo "macOS image: $ImageOS $ImageVersion"
-            echo "macOS: $(sw_vers -productVersion)"
+            echo "Source: $(git rev-parse HEAD)"
+            echo "Runner: $RUNNER_NAME"
+            echo "macOS: $(sw_vers -productVersion), $(uname -m)"
             echo "Node: $(node --version)"
-            echo 'full: suite passed.'
           } >> "$GITHUB_STEP_SUMMARY"
