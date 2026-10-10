@@ -1,0 +1,2957 @@
+{
+  "pin": "0009a7e717a9f7ec587f55ca2985cb91b1310bd8",
+  "starts": [
+    "packages/server/src/server/agent/agent-sdk-types.ts",
+    "packages/server/src/server/agent/providers/claude/agent.ts"
+  ],
+  "files": [
+    {
+      "source": "packages/plugin/src/server/process-internal/windows-command.ts",
+      "destination": "packages/daemon/src/agent/paseo/plugin/server/process-internal/windows-command.ts",
+      "sha256": "3e0a465f777b63e48f4b6d5d7e8d5e70c1ffe6575c0c7ebcac0712041032ba15",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "3e0a465f777b63e48f4b6d5d7e8d5e70c1ffe6575c0c7ebcac0712041032ba15",
+      "integratedSha256": "3e0a465f777b63e48f4b6d5d7e8d5e70c1ffe6575c0c7ebcac0712041032ba15"
+    },
+    {
+      "source": "packages/plugin/src/server/process.ts",
+      "destination": "packages/daemon/src/agent/paseo/plugin/server/process.ts",
+      "sha256": "04a64423df0aeedd273c2f569623db39b97edfd4f3f1ed0b6c1b1034b02a5c0d",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "04a64423df0aeedd273c2f569623db39b97edfd4f3f1ed0b6c1b1034b02a5c0d",
+      "integratedSha256": "04a64423df0aeedd273c2f569623db39b97edfd4f3f1ed0b6c1b1034b02a5c0d"
+    },
+    {
+      "source": "packages/protocol/src/agent-lifecycle.ts",
+      "destination": "packages/daemon/src/agent/paseo/protocol/agent-lifecycle.ts",
+      "sha256": "f36ea26a5c64c9fa8848fc1ce65cecdb4e29f37480e3c70cc31e5468f1a600c0",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "f36ea26a5c64c9fa8848fc1ce65cecdb4e29f37480e3c70cc31e5468f1a600c0",
+      "integratedSha256": "f36ea26a5c64c9fa8848fc1ce65cecdb4e29f37480e3c70cc31e5468f1a600c0"
+    },
+    {
+      "source": "packages/protocol/src/agent-message-display.ts",
+      "destination": "packages/daemon/src/agent/paseo/protocol/agent-message-display.ts",
+      "sha256": "f5a5d3b26847f2e0b33b86822b262f54c7d6e2ec7a1fd45bc1178e4d19d7b6c8",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "f5a5d3b26847f2e0b33b86822b262f54c7d6e2ec7a1fd45bc1178e4d19d7b6c8",
+      "integratedSha256": "f5a5d3b26847f2e0b33b86822b262f54c7d6e2ec7a1fd45bc1178e4d19d7b6c8"
+    },
+    {
+      "source": "packages/protocol/src/agent-message.ts",
+      "destination": "packages/daemon/src/agent/paseo/protocol/agent-message.ts",
+      "sha256": "a8ac18dc10f240b6f3c2de18520d619df6f554a5da893685757854bfe2c3c53d",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "a8ac18dc10f240b6f3c2de18520d619df6f554a5da893685757854bfe2c3c53d",
+      "integratedSha256": "a8ac18dc10f240b6f3c2de18520d619df6f554a5da893685757854bfe2c3c53d"
+    },
+    {
+      "source": "packages/protocol/src/agent-profile.ts",
+      "destination": "packages/daemon/src/agent/paseo/protocol/agent-profile.ts",
+      "sha256": "170260b1c8bddd7ace62bb8a57e4a6274675d2762e1e7ccc6b123edeaf7d4474",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "170260b1c8bddd7ace62bb8a57e4a6274675d2762e1e7ccc6b123edeaf7d4474",
+      "integratedSha256": "170260b1c8bddd7ace62bb8a57e4a6274675d2762e1e7ccc6b123edeaf7d4474"
+    },
+    {
+      "source": "packages/protocol/src/agent-title-limits.ts",
+      "destination": "packages/daemon/src/agent/paseo/protocol/agent-title-limits.ts",
+      "sha256": "4f892d73b3f3c1f80e1e78711f9cffd792fcf262afb3c0ea40e3e0ce163e5ebc",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "4f892d73b3f3c1f80e1e78711f9cffd792fcf262afb3c0ea40e3e0ce163e5ebc",
+      "integratedSha256": "4f892d73b3f3c1f80e1e78711f9cffd792fcf262afb3c0ea40e3e0ce163e5ebc"
+    },
+    {
+      "source": "packages/protocol/src/agent-types.ts",
+      "destination": "packages/daemon/src/agent/paseo/protocol/agent-types.ts",
+      "sha256": "af716095c62ff2df6a0a9078b8190cf3fe1262a27d4c592ef64c157fe0bec5ab",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "af716095c62ff2df6a0a9078b8190cf3fe1262a27d4c592ef64c157fe0bec5ab",
+      "integratedSha256": "af716095c62ff2df6a0a9078b8190cf3fe1262a27d4c592ef64c157fe0bec5ab"
+    },
+    {
+      "source": "packages/protocol/src/browser-automation/capabilities.ts",
+      "destination": "packages/daemon/src/agent/paseo/protocol/browser-automation/capabilities.ts",
+      "sha256": "e582e842e261cf9d0d5c23953de39ed72ea1c1b75aa9413f1dcd6dd353f3816e",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "e582e842e261cf9d0d5c23953de39ed72ea1c1b75aa9413f1dcd6dd353f3816e",
+      "integratedSha256": "e582e842e261cf9d0d5c23953de39ed72ea1c1b75aa9413f1dcd6dd353f3816e"
+    },
+    {
+      "source": "packages/protocol/src/browser-automation/rpc-schemas.ts",
+      "destination": "packages/daemon/src/agent/paseo/protocol/browser-automation/rpc-schemas.ts",
+      "sha256": "568f56c49ba6b33a95c888a18725205bfcc444a2eda80dd40f716305e9c816d2",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "568f56c49ba6b33a95c888a18725205bfcc444a2eda80dd40f716305e9c816d2",
+      "integratedSha256": "568f56c49ba6b33a95c888a18725205bfcc444a2eda80dd40f716305e9c816d2"
+    },
+    {
+      "source": "packages/protocol/src/chat/rpc-schemas.ts",
+      "destination": "packages/daemon/src/agent/paseo/protocol/chat/rpc-schemas.ts",
+      "sha256": "707814e8de0239d43d0aa62015fa8a84b9daf8454ef7090a07211641776aeb89",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "707814e8de0239d43d0aa62015fa8a84b9daf8454ef7090a07211641776aeb89",
+      "integratedSha256": "707814e8de0239d43d0aa62015fa8a84b9daf8454ef7090a07211641776aeb89"
+    },
+    {
+      "source": "packages/protocol/src/chat/types.ts",
+      "destination": "packages/daemon/src/agent/paseo/protocol/chat/types.ts",
+      "sha256": "0b26af7de456498a215ead6a235560c2a1cb0030cd525f08d1e388cf797b18d2",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "0b26af7de456498a215ead6a235560c2a1cb0030cd525f08d1e388cf797b18d2",
+      "integratedSha256": "0b26af7de456498a215ead6a235560c2a1cb0030cd525f08d1e388cf797b18d2"
+    },
+    {
+      "source": "packages/protocol/src/client-capabilities.ts",
+      "destination": "packages/daemon/src/agent/paseo/protocol/client-capabilities.ts",
+      "sha256": "604fc457cbda981752c934a1e5ce272a09821774b7020799e317063b9a2aac1e",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "604fc457cbda981752c934a1e5ce272a09821774b7020799e317063b9a2aac1e",
+      "integratedSha256": "604fc457cbda981752c934a1e5ce272a09821774b7020799e317063b9a2aac1e"
+    },
+    {
+      "source": "packages/protocol/src/forge-manifest.ts",
+      "destination": "packages/daemon/src/agent/paseo/protocol/forge-manifest.ts",
+      "sha256": "6ad8986198879d1d631611a8bd560a6a9e315622fbedcb9d026ae827be0b3d4e",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "6ad8986198879d1d631611a8bd560a6a9e315622fbedcb9d026ae827be0b3d4e",
+      "integratedSha256": "6ad8986198879d1d631611a8bd560a6a9e315622fbedcb9d026ae827be0b3d4e"
+    },
+    {
+      "source": "packages/protocol/src/loop/rpc-schemas.ts",
+      "destination": "packages/daemon/src/agent/paseo/protocol/loop/rpc-schemas.ts",
+      "sha256": "4c6af50ed1c66f30cbcf672b1add6fd7e6d593544ab6eb8063eef074e8d412f3",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "4c6af50ed1c66f30cbcf672b1add6fd7e6d593544ab6eb8063eef074e8d412f3",
+      "integratedSha256": "4c6af50ed1c66f30cbcf672b1add6fd7e6d593544ab6eb8063eef074e8d412f3"
+    },
+    {
+      "source": "packages/protocol/src/messages.ts",
+      "destination": "packages/daemon/src/agent/paseo/protocol/messages.ts",
+      "sha256": "df0153b69d9ec323871a16502258e05d4d09772a226777616b87e96d5b0bea99",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "df0153b69d9ec323871a16502258e05d4d09772a226777616b87e96d5b0bea99",
+      "integratedSha256": "df0153b69d9ec323871a16502258e05d4d09772a226777616b87e96d5b0bea99"
+    },
+    {
+      "source": "packages/protocol/src/paseo-config-schema.ts",
+      "destination": "packages/daemon/src/agent/paseo/protocol/paseo-config-schema.ts",
+      "sha256": "57aef569ac23d5d19e16eef0e657491f168c32ba25cd15833986b00d2332aa41",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "57aef569ac23d5d19e16eef0e657491f168c32ba25cd15833986b00d2332aa41",
+      "integratedSha256": "57aef569ac23d5d19e16eef0e657491f168c32ba25cd15833986b00d2332aa41"
+    },
+    {
+      "source": "packages/protocol/src/path-utils.ts",
+      "destination": "packages/daemon/src/agent/paseo/protocol/path-utils.ts",
+      "sha256": "962170cb76e80c59d4dd6948f3c2b019a712c3fa726b1ad843e47e32ff8df072",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "962170cb76e80c59d4dd6948f3c2b019a712c3fa726b1ad843e47e32ff8df072",
+      "integratedSha256": "962170cb76e80c59d4dd6948f3c2b019a712c3fa726b1ad843e47e32ff8df072"
+    },
+    {
+      "source": "packages/protocol/src/plugin-config.ts",
+      "destination": "packages/daemon/src/agent/paseo/protocol/plugin-config.ts",
+      "sha256": "e9867400518f3cc32db224a5a5cdcff32287eb6e7298a87c590cb697e37742b3",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "e9867400518f3cc32db224a5a5cdcff32287eb6e7298a87c590cb697e37742b3",
+      "integratedSha256": "e9867400518f3cc32db224a5a5cdcff32287eb6e7298a87c590cb697e37742b3"
+    },
+    {
+      "source": "packages/protocol/src/plugin-registry.ts",
+      "destination": "packages/daemon/src/agent/paseo/protocol/plugin-registry.ts",
+      "sha256": "ec83a9dab37ffa855ffdd76195fe1f214e1c4650954994dc9a76c960d7c6cb0f",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "ec83a9dab37ffa855ffdd76195fe1f214e1c4650954994dc9a76c960d7c6cb0f",
+      "integratedSha256": "ec83a9dab37ffa855ffdd76195fe1f214e1c4650954994dc9a76c960d7c6cb0f"
+    },
+    {
+      "source": "packages/protocol/src/provider-config.ts",
+      "destination": "packages/daemon/src/agent/paseo/protocol/provider-config.ts",
+      "sha256": "15ec7e73cdb9f1129700cca5e77ec0934a364b64849d546185ea950665ef08d4",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "15ec7e73cdb9f1129700cca5e77ec0934a364b64849d546185ea950665ef08d4",
+      "integratedSha256": "15ec7e73cdb9f1129700cca5e77ec0934a364b64849d546185ea950665ef08d4"
+    },
+    {
+      "source": "packages/protocol/src/provider-manifest.ts",
+      "destination": "packages/daemon/src/agent/paseo/protocol/provider-manifest.ts",
+      "sha256": "3e2425daf3ca275cc12de0527f614ac5c649a1f74968010fe951ea1eae4a25b2",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "3e2425daf3ca275cc12de0527f614ac5c649a1f74968010fe951ea1eae4a25b2",
+      "integratedSha256": "3e2425daf3ca275cc12de0527f614ac5c649a1f74968010fe951ea1eae4a25b2"
+    },
+    {
+      "source": "packages/protocol/src/schedule/rpc-schemas.ts",
+      "destination": "packages/daemon/src/agent/paseo/protocol/schedule/rpc-schemas.ts",
+      "sha256": "5df8136d6104e11ad245d78b506e69b34daf52e73199232c56ce5c1d91d029f1",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "5df8136d6104e11ad245d78b506e69b34daf52e73199232c56ce5c1d91d029f1",
+      "integratedSha256": "5df8136d6104e11ad245d78b506e69b34daf52e73199232c56ce5c1d91d029f1"
+    },
+    {
+      "source": "packages/protocol/src/schedule/types.ts",
+      "destination": "packages/daemon/src/agent/paseo/protocol/schedule/types.ts",
+      "sha256": "db60f30edb6711d61c9d8098aa2b6e36982fcb1fe317042af449cefae6bd703e",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "db60f30edb6711d61c9d8098aa2b6e36982fcb1fe317042af449cefae6bd703e",
+      "integratedSha256": "db60f30edb6711d61c9d8098aa2b6e36982fcb1fe317042af449cefae6bd703e"
+    },
+    {
+      "source": "packages/protocol/src/terminal-activity.ts",
+      "destination": "packages/daemon/src/agent/paseo/protocol/terminal-activity.ts",
+      "sha256": "cf2191ad6e2b416bbc87836660076cd75bfdd54a3b012d8532fd27759217457b",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "cf2191ad6e2b416bbc87836660076cd75bfdd54a3b012d8532fd27759217457b",
+      "integratedSha256": "cf2191ad6e2b416bbc87836660076cd75bfdd54a3b012d8532fd27759217457b"
+    },
+    {
+      "source": "packages/protocol/src/terminal-profile.ts",
+      "destination": "packages/daemon/src/agent/paseo/protocol/terminal-profile.ts",
+      "sha256": "d43232d8b680a7ed44708de809136a580d24c07ea75d04f1027547f580fb6bb6",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "d43232d8b680a7ed44708de809136a580d24c07ea75d04f1027547f580fb6bb6",
+      "integratedSha256": "d43232d8b680a7ed44708de809136a580d24c07ea75d04f1027547f580fb6bb6"
+    },
+    {
+      "source": "packages/protocol/src/tool-call-display.ts",
+      "destination": "packages/daemon/src/agent/paseo/protocol/tool-call-display.ts",
+      "sha256": "0ddf139e970e7d10f59fb167f3502dabc786cecaaa59294a132a1f048386ab99",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "0ddf139e970e7d10f59fb167f3502dabc786cecaaa59294a132a1f048386ab99",
+      "integratedSha256": "0ddf139e970e7d10f59fb167f3502dabc786cecaaa59294a132a1f048386ab99"
+    },
+    {
+      "source": "packages/protocol/src/tool-name-normalization.ts",
+      "destination": "packages/daemon/src/agent/paseo/protocol/tool-name-normalization.ts",
+      "sha256": "de3807bc84f887a6dfa8755e1e83bb5080b3eed2a9a6f0358c3c89fca37c20b2",
+      "modificationKind": "adapted",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "de3807bc84f887a6dfa8755e1e83bb5080b3eed2a9a6f0358c3c89fca37c20b2",
+      "integratedSha256": "5eb25fb747ed810c4f189b90de0243cb0c9b1fc691eda131afee1e7c9a42b22b",
+      "reason": "Strict indexed-access guards for token and namespace segments"
+    },
+    {
+      "source": "packages/protocol/src/workspace-labels.ts",
+      "destination": "packages/daemon/src/agent/paseo/protocol/workspace-labels.ts",
+      "sha256": "ec8d8fee223a7cfb8da77846b8a4c1537989037863cc7913f1b5050cfd562875",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "ec8d8fee223a7cfb8da77846b8a4c1537989037863cc7913f1b5050cfd562875",
+      "integratedSha256": "ec8d8fee223a7cfb8da77846b8a4c1537989037863cc7913f1b5050cfd562875"
+    },
+    {
+      "source": "packages/server/src/executable-resolution/executable-resolution.ts",
+      "destination": "packages/daemon/src/agent/paseo/runtime/executable-resolution/executable-resolution.ts",
+      "sha256": "1ae53286b6e72fd33ff605587530ec6291cbdcd54d95a7d26057564785c4f36c",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "1ae53286b6e72fd33ff605587530ec6291cbdcd54d95a7d26057564785c4f36c",
+      "integratedSha256": "1ae53286b6e72fd33ff605587530ec6291cbdcd54d95a7d26057564785c4f36c"
+    },
+    {
+      "source": "packages/server/src/executable-resolution/windows.ts",
+      "destination": "packages/daemon/src/agent/paseo/runtime/executable-resolution/windows.ts",
+      "sha256": "03f89ec0ff430d432b9c87019ed93357c5f1e4d6c0594a2e3079f05558292b45",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "03f89ec0ff430d432b9c87019ed93357c5f1e4d6c0594a2e3079f05558292b45",
+      "integratedSha256": "03f89ec0ff430d432b9c87019ed93357c5f1e4d6c0594a2e3079f05558292b45"
+    },
+    {
+      "source": "packages/server/src/server/agent/agent-sdk-types.ts",
+      "destination": "packages/daemon/src/agent/paseo/agent-sdk-types.ts",
+      "sha256": "adc881a3885c20c45d2a2e9771164064a18017948a1b68ee80090da69fe30cdc",
+      "modificationKind": "adapted",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "82f9836af72cebd23424be7a70d60b49b9287d78c7c6ca023ef3d03523e367ad",
+      "integratedSha256": "4d66a18b7bf2988f13819a29042561a80aff9b9ca1d0351397abcc8c9d67d2be",
+      "reason": "Redirect only the subagent store type expression to verbatim extracted types"
+    },
+    {
+      "source": "packages/server/src/server/agent/prompt-attachments.ts",
+      "destination": "packages/daemon/src/agent/paseo/prompt-attachments.ts",
+      "sha256": "d66b070203a1f969338881a6324a2df8398e0613b3ac13c08d32788c4be22764",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "921cea43bb3c8250cd9196aca68b5f6f41d71e362aca303811dd00365c816eb2",
+      "integratedSha256": "921cea43bb3c8250cd9196aca68b5f6f41d71e362aca303811dd00365c816eb2"
+    },
+    {
+      "source": "packages/server/src/server/agent/provider-history-timestamps.ts",
+      "destination": "packages/daemon/src/agent/paseo/provider-history-timestamps.ts",
+      "sha256": "72e4e59577d6e5f4458386e6bd37100b04485785a0b66a5afe0ff7eb801b530f",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "72e4e59577d6e5f4458386e6bd37100b04485785a0b66a5afe0ff7eb801b530f",
+      "integratedSha256": "72e4e59577d6e5f4458386e6bd37100b04485785a0b66a5afe0ff7eb801b530f"
+    },
+    {
+      "source": "packages/server/src/server/agent/provider-launch-config.ts",
+      "destination": "packages/daemon/src/agent/paseo/provider-launch-config.ts",
+      "sha256": "4e17c67e6340b5a9fe8b7e757e29fffbc105a7e0e0b6b24d7a9e75413353e39d",
+      "modificationKind": "adapted",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "d5cf884da4c211ba7b712f36b1c33124d18a39df5eadcf8fad3bbb62aec09dc3",
+      "integratedSha256": "bf062dc6107e72040ba2f92f49d80be19fcda72c0e04a0162dbe53394be6c0b0",
+      "reason": "Strict indexed-access guard for a validated command argv"
+    },
+    {
+      "source": "packages/server/src/server/agent/provider-notices.ts",
+      "destination": "packages/daemon/src/agent/paseo/provider-notices.ts",
+      "sha256": "f0555c7e39ab296f23ed5fc49edde254baa591a5906af7d7070db005476ebfe3",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "f0555c7e39ab296f23ed5fc49edde254baa591a5906af7d7070db005476ebfe3",
+      "integratedSha256": "f0555c7e39ab296f23ed5fc49edde254baa591a5906af7d7070db005476ebfe3"
+    },
+    {
+      "source": "packages/server/src/server/agent/provider-options.ts",
+      "destination": "packages/daemon/src/agent/paseo/provider-options.ts",
+      "sha256": "5729677f932ea5f71d91c48e69d1d228d0e8aa016bcd6a8fe2fe54c115b42e98",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "837c13141c17f2289e9e53f0fe464926d0f58e32eff52e7db1808828259c4657",
+      "integratedSha256": "837c13141c17f2289e9e53f0fe464926d0f58e32eff52e7db1808828259c4657"
+    },
+    {
+      "source": "packages/server/src/server/agent/provider-refresh-deadline.ts",
+      "destination": "packages/daemon/src/agent/paseo/provider-refresh-deadline.ts",
+      "sha256": "02cade2723c3d1241dc49a999aff88d7ee38b6590e3da02acf47394deaaf0b9c",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "02cade2723c3d1241dc49a999aff88d7ee38b6590e3da02acf47394deaaf0b9c",
+      "integratedSha256": "02cade2723c3d1241dc49a999aff88d7ee38b6590e3da02acf47394deaaf0b9c"
+    },
+    {
+      "source": "packages/server/src/server/agent/provider-session-import.ts",
+      "destination": "packages/daemon/src/agent/paseo/provider-session-import.ts",
+      "sha256": "b0e19950d3b2f283b58ac6ff3aec047afd9cd45bcdbd4097d1d54a738621fd8c",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "b0e19950d3b2f283b58ac6ff3aec047afd9cd45bcdbd4097d1d54a738621fd8c",
+      "integratedSha256": "b0e19950d3b2f283b58ac6ff3aec047afd9cd45bcdbd4097d1d54a738621fd8c"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "destination": "packages/daemon/src/agent/providers/claude/agent.ts",
+      "sha256": "41351a3c995142ae296567637c7611e24305579b4694947d0b685a50f284ef2f",
+      "modificationKind": "adapted",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "61a01950240c1f5f029cd4b9efec99a59bed4094e949be402bbb44e0a63511d1",
+      "integratedSha256": "f1142c6897323c9bdba6a6930a0d8ce441ebcf0a4af172d45cab8a7293efa98a",
+      "reason": "Redirect Pino Logger type to structural logger; guard removed slash-command array item"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/feature-definitions.ts",
+      "destination": "packages/daemon/src/agent/providers/claude/feature-definitions.ts",
+      "sha256": "dd5dca050c328663a15d6dfa4e11f8ca8520aa7011d871b6ce7ea327cfc32e02",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "edd4248ba1e13464a5a4bc5b7b0057ba66742ce62b743c1d5b2343ec8bfd1ff9",
+      "integratedSha256": "edd4248ba1e13464a5a4bc5b7b0057ba66742ce62b743c1d5b2343ec8bfd1ff9"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/model-manifest.ts",
+      "destination": "packages/daemon/src/agent/providers/claude/model-manifest.ts",
+      "sha256": "f866bb49553dfa009cef5dea9d0262f844f9db4c97f746edd11094bfa166584a",
+      "modificationKind": "adapted",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "6f8354a42ad48cc2cb57ecba35cd5c1d637c6dc85b47a07ae2625faeb6348d64",
+      "integratedSha256": "37a268fef867a4d43c2d08caca922f3ffdaf34339f463a782e1a8454cda2a927",
+      "reason": "Strict indexed-access guards for parsed version and model regex matches"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/models.ts",
+      "destination": "packages/daemon/src/agent/providers/claude/models.ts",
+      "sha256": "1a31d7b9a6b8f6e456f2060685a3920067a1ec0144db6dc6dcb05a86b0f83ce5",
+      "modificationKind": "adapted",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "62b84faa9795a0de55d7b81c071e7a68cdfb90eed12149f96048d778c6ad45f6",
+      "integratedSha256": "c8ca088ac9b1e78ee8759bf928a3f48ae2174bbd4204e6806002e6ac8a93c108",
+      "reason": "Redirect Pino Logger type to structural debug logger contract"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/options.ts",
+      "destination": "packages/daemon/src/agent/providers/claude/options.ts",
+      "sha256": "ed6d9ed1facb25d22f6954eb97143e330e1c9e1252eaaa4cb0de0a0ebcd734ff",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "460d06ac96fa97c345b0a0597d5040259a1a2c77da603601f02275bb9b259a0b",
+      "integratedSha256": "460d06ac96fa97c345b0a0597d5040259a1a2c77da603601f02275bb9b259a0b"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/partial-json.ts",
+      "destination": "packages/daemon/src/agent/providers/claude/partial-json.ts",
+      "sha256": "1f9464e9940d0836e3deef790f5ef15eb76d18374a53624cd605e50abc750db4",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "1f9464e9940d0836e3deef790f5ef15eb76d18374a53624cd605e50abc750db4",
+      "integratedSha256": "1f9464e9940d0836e3deef790f5ef15eb76d18374a53624cd605e50abc750db4"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/project-dir.ts",
+      "destination": "packages/daemon/src/agent/providers/claude/project-dir.ts",
+      "sha256": "06ba68639e199e9248f2e99599a0f53d6ecb06e6a0304b48fb933ecd73750843",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "06ba68639e199e9248f2e99599a0f53d6ecb06e6a0304b48fb933ecd73750843",
+      "integratedSha256": "06ba68639e199e9248f2e99599a0f53d6ecb06e6a0304b48fb933ecd73750843"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/query.ts",
+      "destination": "packages/daemon/src/agent/providers/claude/query.ts",
+      "sha256": "a0b9d56eef781291acbb9d9b712bfaf0968832df198dd64a94e47fab1fbff885",
+      "modificationKind": "adapted",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "324a03f6e82a5939091e215a3988f687e8f97d3b24442ead9409e3a6bd88ae58",
+      "integratedSha256": "f5e8ef467d630046d2e567312878bc462d9b29ae94f6fe4cf5e8c84ee768ab59",
+      "reason": "Strict indexed-access guard for a validated command argv"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/rewind.ts",
+      "destination": "packages/daemon/src/agent/providers/claude/rewind.ts",
+      "sha256": "4912bcadf0f86a4e0a415141dc21f08939b262e4b90805c0d45aef88d277c649",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "4912bcadf0f86a4e0a415141dc21f08939b262e4b90805c0d45aef88d277c649",
+      "integratedSha256": "4912bcadf0f86a4e0a415141dc21f08939b262e4b90805c0d45aef88d277c649"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/sidechain-tracker.ts",
+      "destination": "packages/daemon/src/agent/providers/claude/sidechain-tracker.ts",
+      "sha256": "89cdd1e3a363f0af9237acdc1ae219bc3695f8edede4d7744b5931753b16f9eb",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "ac50f498b365b385ecc025c0e306104160907f8874d39891f275d7448ccc4079",
+      "integratedSha256": "ac50f498b365b385ecc025c0e306104160907f8874d39891f275d7448ccc4079"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagent-handback.ts",
+      "destination": "packages/daemon/src/agent/providers/claude/subagent-handback.ts",
+      "sha256": "a6ad4a61edd14e0da1a402016253c075e7583c8d5237f1995bf9c0b44e8b30f0",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "a6ad4a61edd14e0da1a402016253c075e7583c8d5237f1995bf9c0b44e8b30f0",
+      "integratedSha256": "a6ad4a61edd14e0da1a402016253c075e7583c8d5237f1995bf9c0b44e8b30f0"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/live-source.ts",
+      "destination": "packages/daemon/src/agent/providers/claude/subagents/live-source.ts",
+      "sha256": "c361da880a2ee1a9883e0f952407104c1ff11be51cc9891f5641e6663e7c63d8",
+      "modificationKind": "adapted",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "06e617d667fa231ff2a6fcbca2ac3e4d2bcb95cf6f216de25c9c60904833736d",
+      "integratedSha256": "421ca667716f1484014406fbcd8e487cb42da7e5b83b221814816412763c4270",
+      "reason": "Redirect removed subagent store type import to verbatim extracted types"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/observation.ts",
+      "destination": "packages/daemon/src/agent/providers/claude/subagents/observation.ts",
+      "sha256": "9501e30b216e62630febcdcdaf4d72fa62950472d78e48f2c7a00f25958d57c9",
+      "modificationKind": "adapted",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "8f9b4bfa29cfe750b763ddabb12138d709a544c66d2cf2e3dd5e431d028ea8d4",
+      "integratedSha256": "4583ab88e0af46f101703fcb765996ae77d07bfc77f85e2f8696dae57c263e3f",
+      "reason": "Redirect removed subagent store type import to verbatim extracted types"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/presentation.ts",
+      "destination": "packages/daemon/src/agent/providers/claude/subagents/presentation.ts",
+      "sha256": "53b64122a0be437dff831018f560a35347139bfb320f19b4f3dabb9e6fa4e0ef",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "53b64122a0be437dff831018f560a35347139bfb320f19b4f3dabb9e6fa4e0ef",
+      "integratedSha256": "53b64122a0be437dff831018f560a35347139bfb320f19b4f3dabb9e6fa4e0ef"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/replay-source.ts",
+      "destination": "packages/daemon/src/agent/providers/claude/subagents/replay-source.ts",
+      "sha256": "1b2eb6f9df7c257bdd80b1a977f0bf25643862bf0efc32a4e26bff718df9db81",
+      "modificationKind": "adapted",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "26110649584bb35b2a485063512f1bc8a044e1c68a126f68253a7c558342c889",
+      "integratedSha256": "dc6ba1c9479f6bbf62645e30912005f0512b3d63c99e72781cb1f203673b7819",
+      "reason": "Redirect removed subagent store type import to verbatim extracted types"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/workflow-output.ts",
+      "destination": "packages/daemon/src/agent/providers/claude/subagents/workflow-output.ts",
+      "sha256": "e423ea6a4084e3b2ac9d68bab84adfba55b7f550dc792a4a857a2d42ae252626",
+      "modificationKind": "adapted",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "e423ea6a4084e3b2ac9d68bab84adfba55b7f550dc792a4a857a2d42ae252626",
+      "integratedSha256": "90ff7e7a5b5a32205e95550687632dec4d385dfb47745669ef3d1db69b5163f3",
+      "reason": "Strict indexed-access guard for a key obtained from Object.keys"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/workflow-replay-source.ts",
+      "destination": "packages/daemon/src/agent/providers/claude/subagents/workflow-replay-source.ts",
+      "sha256": "097a4a725b9995a4a1dfa914ef031c205b0ab1c87b5867ea984bac5fcc9f10ae",
+      "modificationKind": "adapted",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "a982e35bdb3ee355ee66e2055f3951601f2a4039b9e7a4c6e9c66c7ed9b9a704",
+      "integratedSha256": "05fe983fe1c34f0354990b69d52de710499616e9439f106110a6ab24123cab78",
+      "reason": "Redirect removed subagent store type import to verbatim extracted types"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/task-notification-tool-call.ts",
+      "destination": "packages/daemon/src/agent/providers/claude/task-notification-tool-call.ts",
+      "sha256": "ce16cbda240f2a944c690ca434c140550e34ae7747381166aaf73b6957687171",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "565e5e5062456fc4ec274b0d6ff052570246f1d5500c25aa21a3be1d8bbb4203",
+      "integratedSha256": "565e5e5062456fc4ec274b0d6ff052570246f1d5500c25aa21a3be1d8bbb4203"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/task-state.ts",
+      "destination": "packages/daemon/src/agent/providers/claude/task-state.ts",
+      "sha256": "db68377c0e0946c7b2aca6c80d637ffe3d362ee562b4d9b2337fd664a114ed7a",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "5b529c192eff53bb719dd01d187734142211bbc7accebe03ffcd472d7a970937",
+      "integratedSha256": "5b529c192eff53bb719dd01d187734142211bbc7accebe03ffcd472d7a970937"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/tool-call-detail-parser.ts",
+      "destination": "packages/daemon/src/agent/providers/claude/tool-call-detail-parser.ts",
+      "sha256": "7c1a1d99e48945ab614ecd524b45585b32bb5a7116421db4d1853558afd8db8b",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "ef33b1bf8c262dada2d868c83ae3e310cfba6aaea0bf6a2e5e3fb791cdded78e",
+      "integratedSha256": "ef33b1bf8c262dada2d868c83ae3e310cfba6aaea0bf6a2e5e3fb791cdded78e"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/tool-call-mapper.ts",
+      "destination": "packages/daemon/src/agent/providers/claude/tool-call-mapper.ts",
+      "sha256": "f22fd1cc0fa6660cf153ae00710b2e5f9a81180c8ecf957a26d9260f2aafd7ae",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "5c679d643f46b794e702edfed536e2fa6260035844b7411001caeac5f5ba8c97",
+      "integratedSha256": "5c679d643f46b794e702edfed536e2fa6260035844b7411001caeac5f5ba8c97"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/diagnostic-utils.ts",
+      "destination": "packages/daemon/src/agent/providers/diagnostic-utils.ts",
+      "sha256": "4b86368e71c1a76ff4942c66082cc29468ee148cb7168b7708f2c59a102c4607",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "5823e5f2d140a3e29cc26a348e80a72f627474906f76b84f4b252e63e7b4f5f5",
+      "integratedSha256": "5823e5f2d140a3e29cc26a348e80a72f627474906f76b84f4b252e63e7b4f5f5"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/provider-image-output.ts",
+      "destination": "packages/daemon/src/agent/providers/provider-image-output.ts",
+      "sha256": "5750fd644aad28bff7638fed00b47d6a153d7cb10de5e931f1a822850714021f",
+      "modificationKind": "adapted",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "1c9f9035ca2b5800ab000daeb8d5b308f1123943186fc830a7a9adb9611473d9",
+      "integratedSha256": "ccdeac1e87336b38da0643caa2839830af9301cbdaf7e575b8cfaacd5ccf1f2d",
+      "reason": "Strict indexed-access guards for matched image data groups"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/provider-runner.ts",
+      "destination": "packages/daemon/src/agent/providers/provider-runner.ts",
+      "sha256": "0792f25cd3c70c4318ff67003672f52521bf58a9e5a7ebd27ca20769748fe595",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "2bae1779d68b4bb0bb114e2b2b4738f7c125e464d0f880876f937d9fb9d3290d",
+      "integratedSha256": "2bae1779d68b4bb0bb114e2b2b4738f7c125e464d0f880876f937d9fb9d3290d"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/tool-call-detail-primitives.ts",
+      "destination": "packages/daemon/src/agent/providers/tool-call-detail-primitives.ts",
+      "sha256": "54601bab39e0fc777ded95610cc9c9902fe4f10319fecc0ee82464a668d98179",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "cd74813360b8c7294dc0d0669b245a2a38ef47aade38b7f4e34fc76118cc49b0",
+      "integratedSha256": "cd74813360b8c7294dc0d0669b245a2a38ef47aade38b7f4e34fc76118cc49b0"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/tool-call-mapper-utils.ts",
+      "destination": "packages/daemon/src/agent/providers/tool-call-mapper-utils.ts",
+      "sha256": "0a9afe429a806d338ececc25adcba906f4a89ca6d9db7546297361355151ae77",
+      "modificationKind": "adapted",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "0a9afe429a806d338ececc25adcba906f4a89ca6d9db7546297361355151ae77",
+      "integratedSha256": "5cbde7e57dfe4ca32f418a27290fb5b0a58cfc7198c1535cb82eca346128a4ea",
+      "reason": "Strict indexed-access guards for matched shell output groups"
+    },
+    {
+      "source": "packages/server/src/server/agent/system-prompt.ts",
+      "destination": "packages/daemon/src/agent/paseo/system-prompt.ts",
+      "sha256": "cb93bcd2874adf43ef3ba2cf67e72009a225e74f42b35d6f1fafb72ddad17d0e",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "cb93bcd2874adf43ef3ba2cf67e72009a225e74f42b35d6f1fafb72ddad17d0e",
+      "integratedSha256": "cb93bcd2874adf43ef3ba2cf67e72009a225e74f42b35d6f1fafb72ddad17d0e"
+    },
+    {
+      "source": "packages/server/src/server/agent/tools/types.ts",
+      "destination": "packages/daemon/src/agent/paseo/tools/types.ts",
+      "sha256": "500e9da67534ea647b9fa97fc3439051d064529db890b283de61cd69682a84dc",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "041ac92a02c602a2a3444719009c944cf67c9db21f6ec6118b84183231bdfb3b",
+      "integratedSha256": "041ac92a02c602a2a3444719009c944cf67c9db21f6ec6118b84183231bdfb3b"
+    },
+    {
+      "source": "packages/server/src/server/paseo-env.ts",
+      "destination": "packages/daemon/src/agent/paseo/runtime/server/paseo-env.ts",
+      "sha256": "0e90a3b4f4ed25ab4c5c402048577aed550742867d0afd0b93276c7070906894",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "0e90a3b4f4ed25ab4c5c402048577aed550742867d0afd0b93276c7070906894",
+      "integratedSha256": "0e90a3b4f4ed25ab4c5c402048577aed550742867d0afd0b93276c7070906894"
+    },
+    {
+      "source": "packages/server/src/utils/promise-timeout.ts",
+      "destination": "packages/daemon/src/agent/paseo/runtime/utils/promise-timeout.ts",
+      "sha256": "364e204dc8b3b89318642dbe66f1a0a2e262cafe94c394c5d5ba6d0c7db14c2a",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "364e204dc8b3b89318642dbe66f1a0a2e262cafe94c394c5d5ba6d0c7db14c2a",
+      "integratedSha256": "364e204dc8b3b89318642dbe66f1a0a2e262cafe94c394c5d5ba6d0c7db14c2a"
+    },
+    {
+      "source": "packages/server/src/utils/spawn.ts",
+      "destination": "packages/daemon/src/agent/paseo/runtime/utils/spawn.ts",
+      "sha256": "1effd51690f8f6853b3e133ec4fa6268d6680d63d3eda0d01c454c2b1f423c75",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "e3752bbe57d80c23eb405043bafa54d560d61e2d2cde010e3094bf6e11422bff",
+      "integratedSha256": "e3752bbe57d80c23eb405043bafa54d560d61e2d2cde010e3094bf6e11422bff"
+    },
+    {
+      "source": "packages/server/src/utils/tree-kill.ts",
+      "destination": "packages/daemon/src/agent/paseo/runtime/utils/tree-kill.ts",
+      "sha256": "56e40723beea18f575c24d1f5380555f469ad4ba03beae5b4292c3cf71ae073e",
+      "modificationKind": "specifiers",
+      "state": "authorizedByClaude97330b7",
+      "stagedSha256": "56e40723beea18f575c24d1f5380555f469ad4ba03beae5b4292c3cf71ae073e",
+      "integratedSha256": "56e40723beea18f575c24d1f5380555f469ad4ba03beae5b4292c3cf71ae073e"
+    }
+  ],
+  "edges": [
+    {
+      "source": "packages/plugin/src/server/process-internal/windows-command.ts",
+      "specifier": "node:path",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/plugin/src/server/process.ts",
+      "specifier": "./process-internal/windows-command.js",
+      "target": "packages/plugin/src/server/process-internal/windows-command.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/plugin/src/server/process.ts",
+      "specifier": "node:child_process",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/plugin/src/server/process.ts",
+      "specifier": "node:path",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/plugin/src/server/process.ts",
+      "specifier": "node:util",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/protocol/src/agent-message-display.ts",
+      "specifier": "./agent-message.js",
+      "target": "packages/protocol/src/agent-message.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/agent-message-display.ts",
+      "specifier": "./agent-types.js",
+      "target": "packages/protocol/src/agent-types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/agent-message.ts",
+      "specifier": "zod",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/protocol/src/agent-profile.ts",
+      "specifier": "zod",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/protocol/src/agent-types.ts",
+      "specifier": "./agent-message.js",
+      "target": "packages/protocol/src/agent-message.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/agent-types.ts",
+      "specifier": "./messages.js",
+      "target": "packages/protocol/src/messages.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/browser-automation/capabilities.ts",
+      "specifier": "./rpc-schemas.js",
+      "target": "packages/protocol/src/browser-automation/rpc-schemas.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/browser-automation/capabilities.ts",
+      "specifier": "zod",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/protocol/src/browser-automation/rpc-schemas.ts",
+      "specifier": "zod",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/protocol/src/chat/rpc-schemas.ts",
+      "specifier": "./types.js",
+      "target": "packages/protocol/src/chat/types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/chat/rpc-schemas.ts",
+      "specifier": "zod",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/protocol/src/chat/types.ts",
+      "specifier": "zod",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/protocol/src/loop/rpc-schemas.ts",
+      "specifier": "../provider-manifest.js",
+      "target": "packages/protocol/src/provider-manifest.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/loop/rpc-schemas.ts",
+      "specifier": "zod",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/protocol/src/messages.ts",
+      "specifier": "./agent-lifecycle.js",
+      "target": "packages/protocol/src/agent-lifecycle.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/messages.ts",
+      "specifier": "./agent-message.js",
+      "target": "packages/protocol/src/agent-message.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/messages.ts",
+      "specifier": "./agent-profile.js",
+      "target": "packages/protocol/src/agent-profile.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/messages.ts",
+      "specifier": "./agent-title-limits.js",
+      "target": "packages/protocol/src/agent-title-limits.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/messages.ts",
+      "specifier": "./agent-types.js",
+      "target": "packages/protocol/src/agent-types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/messages.ts",
+      "specifier": "./browser-automation/capabilities.js",
+      "target": "packages/protocol/src/browser-automation/capabilities.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/messages.ts",
+      "specifier": "./browser-automation/rpc-schemas.js",
+      "target": "packages/protocol/src/browser-automation/rpc-schemas.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/messages.ts",
+      "specifier": "./chat/rpc-schemas.js",
+      "target": "packages/protocol/src/chat/rpc-schemas.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/messages.ts",
+      "specifier": "./client-capabilities.js",
+      "target": "packages/protocol/src/client-capabilities.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/messages.ts",
+      "specifier": "./loop/rpc-schemas.js",
+      "target": "packages/protocol/src/loop/rpc-schemas.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/messages.ts",
+      "specifier": "./paseo-config-schema.js",
+      "target": "packages/protocol/src/paseo-config-schema.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/messages.ts",
+      "specifier": "./plugin-config.js",
+      "target": "packages/protocol/src/plugin-config.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/messages.ts",
+      "specifier": "./plugin-registry.js",
+      "target": "packages/protocol/src/plugin-registry.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/messages.ts",
+      "specifier": "./provider-config.js",
+      "target": "packages/protocol/src/provider-config.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/messages.ts",
+      "specifier": "./provider-manifest.js",
+      "target": "packages/protocol/src/provider-manifest.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/messages.ts",
+      "specifier": "./schedule/rpc-schemas.js",
+      "target": "packages/protocol/src/schedule/rpc-schemas.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/messages.ts",
+      "specifier": "./terminal-activity.js",
+      "target": "packages/protocol/src/terminal-activity.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/messages.ts",
+      "specifier": "./terminal-profile.js",
+      "target": "packages/protocol/src/terminal-profile.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/messages.ts",
+      "specifier": "./workspace-labels.js",
+      "target": "packages/protocol/src/workspace-labels.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/messages.ts",
+      "specifier": "zod",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/protocol/src/paseo-config-schema.ts",
+      "specifier": "zod",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/protocol/src/plugin-config.ts",
+      "specifier": "zod",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/protocol/src/plugin-registry.ts",
+      "specifier": "zod",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/protocol/src/provider-config.ts",
+      "specifier": "./agent-types.js",
+      "target": "packages/protocol/src/agent-types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/provider-config.ts",
+      "specifier": "./provider-manifest.js",
+      "target": "packages/protocol/src/provider-manifest.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/provider-config.ts",
+      "specifier": "zod",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/protocol/src/provider-manifest.ts",
+      "specifier": "./agent-types.js",
+      "target": "packages/protocol/src/agent-types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/provider-manifest.ts",
+      "specifier": "zod",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/protocol/src/schedule/rpc-schemas.ts",
+      "specifier": "./types.js",
+      "target": "packages/protocol/src/schedule/types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/schedule/rpc-schemas.ts",
+      "specifier": "zod",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/protocol/src/schedule/types.ts",
+      "specifier": "../provider-manifest.js",
+      "target": "packages/protocol/src/provider-manifest.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/schedule/types.ts",
+      "specifier": "zod",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/protocol/src/terminal-activity.ts",
+      "specifier": "zod",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/protocol/src/terminal-profile.ts",
+      "specifier": "zod",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/protocol/src/tool-call-display.ts",
+      "specifier": "./agent-message-display.js",
+      "target": "packages/protocol/src/agent-message-display.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/tool-call-display.ts",
+      "specifier": "./agent-types.js",
+      "target": "packages/protocol/src/agent-types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/tool-call-display.ts",
+      "specifier": "./path-utils.js",
+      "target": "packages/protocol/src/path-utils.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/protocol/src/tool-call-display.ts",
+      "specifier": "./tool-name-normalization.js",
+      "target": "packages/protocol/src/tool-name-normalization.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/executable-resolution/executable-resolution.ts",
+      "specifier": "../server/paseo-env.js",
+      "target": "packages/server/src/server/paseo-env.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/executable-resolution/executable-resolution.ts",
+      "specifier": "../utils/spawn.js",
+      "target": "packages/server/src/utils/spawn.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/executable-resolution/executable-resolution.ts",
+      "specifier": "./windows.js",
+      "target": "packages/server/src/executable-resolution/windows.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/executable-resolution/executable-resolution.ts",
+      "specifier": "node:fs",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/server/src/executable-resolution/executable-resolution.ts",
+      "specifier": "node:module",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/server/src/executable-resolution/executable-resolution.ts",
+      "specifier": "which",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/server/src/executable-resolution/windows.ts",
+      "specifier": "node:fs",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/server/src/executable-resolution/windows.ts",
+      "specifier": "node:path",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/server/src/server/agent/agent-sdk-types.ts",
+      "specifier": "./provider-subagents/store.js",
+      "target": "packages/server/src/server/agent/provider-subagents/store.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/agent-sdk-types.ts",
+      "specifier": "./tools/types.js",
+      "target": "packages/server/src/server/agent/tools/types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/agent-sdk-types.ts",
+      "specifier": "@getpaseo/protocol/agent-types",
+      "target": "packages/protocol/src/agent-types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/agent-sdk-types.ts",
+      "specifier": "@getpaseo/protocol/messages",
+      "target": "packages/protocol/src/messages.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/prompt-attachments.ts",
+      "specifier": "./agent-sdk-types.js",
+      "target": "packages/server/src/server/agent/agent-sdk-types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/prompt-attachments.ts",
+      "specifier": "@getpaseo/protocol/forge-manifest",
+      "target": "packages/protocol/src/forge-manifest.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/prompt-attachments.ts",
+      "specifier": "@getpaseo/protocol/messages",
+      "target": "packages/protocol/src/messages.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/provider-launch-config.ts",
+      "specifier": "../../executable-resolution/executable-resolution.js",
+      "target": "packages/server/src/executable-resolution/executable-resolution.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/provider-launch-config.ts",
+      "specifier": "../paseo-env.js",
+      "target": "packages/server/src/server/paseo-env.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/provider-launch-config.ts",
+      "specifier": "@getpaseo/protocol/provider-config",
+      "target": "packages/protocol/src/provider-config.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/provider-launch-config.ts",
+      "specifier": "node:path",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/server/src/server/agent/provider-notices.ts",
+      "specifier": "./agent-sdk-types.js",
+      "target": "packages/server/src/server/agent/agent-sdk-types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/provider-options.ts",
+      "specifier": "@getpaseo/protocol/agent-types",
+      "target": "packages/protocol/src/agent-types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/provider-options.ts",
+      "specifier": "zod",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/server/src/server/agent/provider-refresh-deadline.ts",
+      "specifier": "./agent-sdk-types.js",
+      "target": "packages/server/src/server/agent/agent-sdk-types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/provider-session-import.ts",
+      "specifier": "./agent-sdk-types.js",
+      "target": "packages/server/src/server/agent/agent-sdk-types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "../../../../utils/promise-timeout.js",
+      "target": "packages/server/src/utils/promise-timeout.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "../../../../utils/spawn.js",
+      "target": "packages/server/src/utils/spawn.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "../../../../utils/tree-kill.js",
+      "target": "packages/server/src/utils/tree-kill.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "../../agent-sdk-types.js",
+      "target": "packages/server/src/server/agent/agent-sdk-types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "../../prompt-attachments.js",
+      "target": "packages/server/src/server/agent/prompt-attachments.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "../../provider-history-timestamps.js",
+      "target": "packages/server/src/server/agent/provider-history-timestamps.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "../../provider-launch-config.js",
+      "target": "packages/server/src/server/agent/provider-launch-config.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "../../provider-notices.js",
+      "target": "packages/server/src/server/agent/provider-notices.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "../../provider-options.js",
+      "target": "packages/server/src/server/agent/provider-options.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "../../provider-refresh-deadline.js",
+      "target": "packages/server/src/server/agent/provider-refresh-deadline.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "../../provider-session-import.js",
+      "target": "packages/server/src/server/agent/provider-session-import.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "../../system-prompt.js",
+      "target": "packages/server/src/server/agent/system-prompt.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "../diagnostic-utils.js",
+      "target": "packages/server/src/server/agent/providers/diagnostic-utils.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "../provider-image-output.js",
+      "target": "packages/server/src/server/agent/providers/provider-image-output.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "../provider-runner.js",
+      "target": "packages/server/src/server/agent/providers/provider-runner.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "./feature-definitions.js",
+      "target": "packages/server/src/server/agent/providers/claude/feature-definitions.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "./model-manifest.js",
+      "target": "packages/server/src/server/agent/providers/claude/model-manifest.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "./models.js",
+      "target": "packages/server/src/server/agent/providers/claude/models.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "./options.js",
+      "target": "packages/server/src/server/agent/providers/claude/options.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "./partial-json.js",
+      "target": "packages/server/src/server/agent/providers/claude/partial-json.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "./project-dir.js",
+      "target": "packages/server/src/server/agent/providers/claude/project-dir.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "./query.js",
+      "target": "packages/server/src/server/agent/providers/claude/query.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "./rewind.js",
+      "target": "packages/server/src/server/agent/providers/claude/rewind.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "./sidechain-tracker.js",
+      "target": "packages/server/src/server/agent/providers/claude/sidechain-tracker.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "./subagent-handback.js",
+      "target": "packages/server/src/server/agent/providers/claude/subagent-handback.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "./subagents/live-source.js",
+      "target": "packages/server/src/server/agent/providers/claude/subagents/live-source.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "./subagents/observation.js",
+      "target": "packages/server/src/server/agent/providers/claude/subagents/observation.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "./subagents/replay-source.js",
+      "target": "packages/server/src/server/agent/providers/claude/subagents/replay-source.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "./subagents/workflow-output.js",
+      "target": "packages/server/src/server/agent/providers/claude/subagents/workflow-output.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "./subagents/workflow-replay-source.js",
+      "target": "packages/server/src/server/agent/providers/claude/subagents/workflow-replay-source.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "./task-notification-tool-call.js",
+      "target": "packages/server/src/server/agent/providers/claude/task-notification-tool-call.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "./task-state.js",
+      "target": "packages/server/src/server/agent/providers/claude/task-state.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "./tool-call-mapper.js",
+      "target": "packages/server/src/server/agent/providers/claude/tool-call-mapper.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "@anthropic-ai/claude-agent-sdk",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "node:child_process",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "node:crypto",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "node:fs",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "node:path",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+      "specifier": "pino",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/feature-definitions.ts",
+      "specifier": "../../agent-sdk-types.js",
+      "target": "packages/server/src/server/agent/agent-sdk-types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/feature-definitions.ts",
+      "specifier": "./model-manifest.js",
+      "target": "packages/server/src/server/agent/providers/claude/model-manifest.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/model-manifest.ts",
+      "specifier": "../../agent-sdk-types.js",
+      "target": "packages/server/src/server/agent/agent-sdk-types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/models.ts",
+      "specifier": "../../agent-sdk-types.js",
+      "target": "packages/server/src/server/agent/agent-sdk-types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/models.ts",
+      "specifier": "./model-manifest.js",
+      "target": "packages/server/src/server/agent/providers/claude/model-manifest.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/models.ts",
+      "specifier": "node:fs/promises",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/models.ts",
+      "specifier": "node:path",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/models.ts",
+      "specifier": "pino",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/options.ts",
+      "specifier": "@getpaseo/protocol/agent-types",
+      "target": "packages/protocol/src/agent-types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/options.ts",
+      "specifier": "zod",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/project-dir.ts",
+      "specifier": "node:fs",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/project-dir.ts",
+      "specifier": "node:fs/promises",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/project-dir.ts",
+      "specifier": "node:os",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/project-dir.ts",
+      "specifier": "node:path",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/query.ts",
+      "specifier": "../../../../utils/spawn.js",
+      "target": "packages/server/src/utils/spawn.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/query.ts",
+      "specifier": "../../../paseo-env.js",
+      "target": "packages/server/src/server/paseo-env.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/query.ts",
+      "specifier": "../../provider-launch-config.js",
+      "target": "packages/server/src/server/agent/provider-launch-config.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/query.ts",
+      "specifier": "@anthropic-ai/claude-agent-sdk",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/query.ts",
+      "specifier": "node:child_process",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/rewind.ts",
+      "specifier": "@anthropic-ai/claude-agent-sdk",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/sidechain-tracker.ts",
+      "specifier": "../../agent-sdk-types.js",
+      "target": "packages/server/src/server/agent/agent-sdk-types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/sidechain-tracker.ts",
+      "specifier": "./subagent-handback.js",
+      "target": "packages/server/src/server/agent/providers/claude/subagent-handback.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/sidechain-tracker.ts",
+      "specifier": "./tool-call-mapper.js",
+      "target": "packages/server/src/server/agent/providers/claude/tool-call-mapper.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/sidechain-tracker.ts",
+      "specifier": "@anthropic-ai/claude-agent-sdk",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/sidechain-tracker.ts",
+      "specifier": "@getpaseo/protocol/tool-call-display",
+      "target": "packages/protocol/src/tool-call-display.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/live-source.ts",
+      "specifier": "../../../agent-sdk-types.js",
+      "target": "packages/server/src/server/agent/agent-sdk-types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/live-source.ts",
+      "specifier": "../../../provider-subagents/store.js",
+      "target": "packages/server/src/server/agent/provider-subagents/store.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/live-source.ts",
+      "specifier": "../models.js",
+      "target": "packages/server/src/server/agent/providers/claude/models.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/live-source.ts",
+      "specifier": "./observation.js",
+      "target": "packages/server/src/server/agent/providers/claude/subagents/observation.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/live-source.ts",
+      "specifier": "./presentation.js",
+      "target": "packages/server/src/server/agent/providers/claude/subagents/presentation.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/live-source.ts",
+      "specifier": "@anthropic-ai/claude-agent-sdk",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/observation.ts",
+      "specifier": "../../../agent-sdk-types.js",
+      "target": "packages/server/src/server/agent/agent-sdk-types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/observation.ts",
+      "specifier": "../../../provider-subagents/store.js",
+      "target": "packages/server/src/server/agent/provider-subagents/store.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/presentation.ts",
+      "specifier": "../models.js",
+      "target": "packages/server/src/server/agent/providers/claude/models.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/replay-source.ts",
+      "specifier": "../../../agent-sdk-types.js",
+      "target": "packages/server/src/server/agent/agent-sdk-types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/replay-source.ts",
+      "specifier": "../../../provider-history-timestamps.js",
+      "target": "packages/server/src/server/agent/provider-history-timestamps.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/replay-source.ts",
+      "specifier": "../../../provider-subagents/store.js",
+      "target": "packages/server/src/server/agent/provider-subagents/store.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/replay-source.ts",
+      "specifier": "../models.js",
+      "target": "packages/server/src/server/agent/providers/claude/models.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/replay-source.ts",
+      "specifier": "./observation.js",
+      "target": "packages/server/src/server/agent/providers/claude/subagents/observation.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/replay-source.ts",
+      "specifier": "./presentation.js",
+      "target": "packages/server/src/server/agent/providers/claude/subagents/presentation.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/replay-source.ts",
+      "specifier": "zod",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/workflow-output.ts",
+      "specifier": "node:fs",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/workflow-replay-source.ts",
+      "specifier": "../../../agent-sdk-types.js",
+      "target": "packages/server/src/server/agent/agent-sdk-types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/workflow-replay-source.ts",
+      "specifier": "../../../provider-history-timestamps.js",
+      "target": "packages/server/src/server/agent/provider-history-timestamps.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/workflow-replay-source.ts",
+      "specifier": "../../../provider-subagents/store.js",
+      "target": "packages/server/src/server/agent/provider-subagents/store.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/workflow-replay-source.ts",
+      "specifier": "./observation.js",
+      "target": "packages/server/src/server/agent/providers/claude/subagents/observation.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/workflow-replay-source.ts",
+      "specifier": "./presentation.js",
+      "target": "packages/server/src/server/agent/providers/claude/subagents/presentation.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/workflow-replay-source.ts",
+      "specifier": "./replay-source.js",
+      "target": "packages/server/src/server/agent/providers/claude/subagents/replay-source.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/workflow-replay-source.ts",
+      "specifier": "./workflow-output.js",
+      "target": "packages/server/src/server/agent/providers/claude/subagents/workflow-output.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/workflow-replay-source.ts",
+      "specifier": "zod",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/task-notification-tool-call.ts",
+      "specifier": "../../agent-sdk-types.js",
+      "target": "packages/server/src/server/agent/agent-sdk-types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/task-notification-tool-call.ts",
+      "specifier": "node:crypto",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/task-notification-tool-call.ts",
+      "specifier": "zod",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/task-state.ts",
+      "specifier": "../../agent-sdk-types.js",
+      "target": "packages/server/src/server/agent/agent-sdk-types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/tool-call-detail-parser.ts",
+      "specifier": "../../agent-sdk-types.js",
+      "target": "packages/server/src/server/agent/agent-sdk-types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/tool-call-detail-parser.ts",
+      "specifier": "../tool-call-detail-primitives.js",
+      "target": "packages/server/src/server/agent/providers/tool-call-detail-primitives.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/tool-call-detail-parser.ts",
+      "specifier": "zod",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/tool-call-mapper.ts",
+      "specifier": "../../agent-sdk-types.js",
+      "target": "packages/server/src/server/agent/agent-sdk-types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/tool-call-mapper.ts",
+      "specifier": "./tool-call-detail-parser.js",
+      "target": "packages/server/src/server/agent/providers/claude/tool-call-detail-parser.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/tool-call-mapper.ts",
+      "specifier": "@getpaseo/protocol/tool-name-normalization",
+      "target": "packages/protocol/src/tool-name-normalization.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/tool-call-mapper.ts",
+      "specifier": "zod",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/diagnostic-utils.ts",
+      "specifier": "../../../utils/spawn.js",
+      "target": "packages/server/src/utils/spawn.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/diagnostic-utils.ts",
+      "specifier": "../provider-launch-config.js",
+      "target": "packages/server/src/server/agent/provider-launch-config.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/diagnostic-utils.ts",
+      "specifier": "node:fs",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/diagnostic-utils.ts",
+      "specifier": "node:fs/promises",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/diagnostic-utils.ts",
+      "specifier": "node:path",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/provider-image-output.ts",
+      "specifier": "../agent-sdk-types.js",
+      "target": "packages/server/src/server/agent/agent-sdk-types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/provider-image-output.ts",
+      "specifier": "node:crypto",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/provider-image-output.ts",
+      "specifier": "node:fs",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/provider-image-output.ts",
+      "specifier": "node:os",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/provider-image-output.ts",
+      "specifier": "node:path",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/provider-runner.ts",
+      "specifier": "../agent-sdk-types.js",
+      "target": "packages/server/src/server/agent/agent-sdk-types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/tool-call-detail-primitives.ts",
+      "specifier": "../agent-sdk-types.js",
+      "target": "packages/server/src/server/agent/agent-sdk-types.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/tool-call-detail-primitives.ts",
+      "specifier": "./tool-call-mapper-utils.js",
+      "target": "packages/server/src/server/agent/providers/tool-call-mapper-utils.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/tool-call-detail-primitives.ts",
+      "specifier": "zod",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/server/src/server/agent/tools/types.ts",
+      "specifier": "@getpaseo/protocol/provider-config",
+      "target": "packages/protocol/src/provider-config.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/server/agent/tools/types.ts",
+      "specifier": "zod",
+      "target": null,
+      "kind": "npm"
+    },
+    {
+      "source": "packages/server/src/utils/spawn.ts",
+      "specifier": "../server/paseo-env.js",
+      "target": "packages/server/src/server/paseo-env.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/utils/spawn.ts",
+      "specifier": "@getpaseo/plugin/server",
+      "target": "packages/plugin/src/server/process.ts",
+      "kind": "source"
+    },
+    {
+      "source": "packages/server/src/utils/spawn.ts",
+      "specifier": "node:child_process",
+      "target": null,
+      "kind": "builtin"
+    },
+    {
+      "source": "packages/server/src/utils/tree-kill.ts",
+      "specifier": "tree-kill",
+      "target": null,
+      "kind": "npm"
+    }
+  ],
+  "omittedEdges": [
+    {
+      "source": "packages/server/src/server/agent/agent-sdk-types.ts",
+      "specifier": "./provider-subagents/store.js",
+      "target": "packages/server/src/server/agent/provider-subagents/store.ts",
+      "kind": "source",
+      "reason": "Authorized in docs/plan.md at 97330b7: remove Paseo tool catalog or subagent store runtime; retain required type declarations"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/live-source.ts",
+      "specifier": "../../../provider-subagents/store.js",
+      "target": "packages/server/src/server/agent/provider-subagents/store.ts",
+      "kind": "source",
+      "reason": "Authorized in docs/plan.md at 97330b7: remove Paseo tool catalog or subagent store runtime; retain required type declarations"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/observation.ts",
+      "specifier": "../../../provider-subagents/store.js",
+      "target": "packages/server/src/server/agent/provider-subagents/store.ts",
+      "kind": "source",
+      "reason": "Authorized in docs/plan.md at 97330b7: remove Paseo tool catalog or subagent store runtime; retain required type declarations"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/replay-source.ts",
+      "specifier": "../../../provider-subagents/store.js",
+      "target": "packages/server/src/server/agent/provider-subagents/store.ts",
+      "kind": "source",
+      "reason": "Authorized in docs/plan.md at 97330b7: remove Paseo tool catalog or subagent store runtime; retain required type declarations"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/workflow-replay-source.ts",
+      "specifier": "../../../provider-subagents/store.js",
+      "target": "packages/server/src/server/agent/provider-subagents/store.ts",
+      "kind": "source",
+      "reason": "Authorized in docs/plan.md at 97330b7: remove Paseo tool catalog or subagent store runtime; retain required type declarations"
+    }
+  ],
+  "unresolved": [],
+  "dependencies": [
+    {
+      "name": "@anthropic-ai/claude-agent-sdk",
+      "paseoRange": {
+        "package": "server",
+        "section": "dependencies",
+        "range": "0.3.246"
+      },
+      "uses": [
+        {
+          "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+          "specifier": "@anthropic-ai/claude-agent-sdk"
+        },
+        {
+          "source": "packages/server/src/server/agent/providers/claude/query.ts",
+          "specifier": "@anthropic-ai/claude-agent-sdk"
+        },
+        {
+          "source": "packages/server/src/server/agent/providers/claude/rewind.ts",
+          "specifier": "@anthropic-ai/claude-agent-sdk"
+        },
+        {
+          "source": "packages/server/src/server/agent/providers/claude/sidechain-tracker.ts",
+          "specifier": "@anthropic-ai/claude-agent-sdk"
+        },
+        {
+          "source": "packages/server/src/server/agent/providers/claude/subagents/live-source.ts",
+          "specifier": "@anthropic-ai/claude-agent-sdk"
+        }
+      ]
+    },
+    {
+      "name": "pino",
+      "paseoRange": {
+        "package": "server",
+        "section": "dependencies",
+        "range": "^10.2.0"
+      },
+      "uses": [
+        {
+          "source": "packages/server/src/server/agent/providers/claude/agent.ts",
+          "specifier": "pino"
+        },
+        {
+          "source": "packages/server/src/server/agent/providers/claude/models.ts",
+          "specifier": "pino"
+        }
+      ]
+    },
+    {
+      "name": "tree-kill",
+      "paseoRange": {
+        "package": "server",
+        "section": "dependencies",
+        "range": "^1.2.2"
+      },
+      "uses": [
+        {
+          "source": "packages/server/src/utils/tree-kill.ts",
+          "specifier": "tree-kill"
+        }
+      ]
+    },
+    {
+      "name": "which",
+      "paseoRange": {
+        "package": "server",
+        "section": "dependencies",
+        "range": "^5.0.0"
+      },
+      "uses": [
+        {
+          "source": "packages/server/src/executable-resolution/executable-resolution.ts",
+          "specifier": "which"
+        }
+      ]
+    },
+    {
+      "name": "zod",
+      "paseoRange": {
+        "package": "server",
+        "section": "dependencies",
+        "range": "^4.4.3"
+      },
+      "uses": [
+        {
+          "source": "packages/protocol/src/agent-message.ts",
+          "specifier": "zod"
+        },
+        {
+          "source": "packages/protocol/src/agent-profile.ts",
+          "specifier": "zod"
+        },
+        {
+          "source": "packages/protocol/src/browser-automation/capabilities.ts",
+          "specifier": "zod"
+        },
+        {
+          "source": "packages/protocol/src/browser-automation/rpc-schemas.ts",
+          "specifier": "zod"
+        },
+        {
+          "source": "packages/protocol/src/chat/rpc-schemas.ts",
+          "specifier": "zod"
+        },
+        {
+          "source": "packages/protocol/src/chat/types.ts",
+          "specifier": "zod"
+        },
+        {
+          "source": "packages/protocol/src/loop/rpc-schemas.ts",
+          "specifier": "zod"
+        },
+        {
+          "source": "packages/protocol/src/messages.ts",
+          "specifier": "zod"
+        },
+        {
+          "source": "packages/protocol/src/paseo-config-schema.ts",
+          "specifier": "zod"
+        },
+        {
+          "source": "packages/protocol/src/plugin-config.ts",
+          "specifier": "zod"
+        },
+        {
+          "source": "packages/protocol/src/plugin-registry.ts",
+          "specifier": "zod"
+        },
+        {
+          "source": "packages/protocol/src/provider-config.ts",
+          "specifier": "zod"
+        },
+        {
+          "source": "packages/protocol/src/provider-manifest.ts",
+          "specifier": "zod"
+        },
+        {
+          "source": "packages/protocol/src/schedule/rpc-schemas.ts",
+          "specifier": "zod"
+        },
+        {
+          "source": "packages/protocol/src/schedule/types.ts",
+          "specifier": "zod"
+        },
+        {
+          "source": "packages/protocol/src/terminal-activity.ts",
+          "specifier": "zod"
+        },
+        {
+          "source": "packages/protocol/src/terminal-profile.ts",
+          "specifier": "zod"
+        },
+        {
+          "source": "packages/server/src/server/agent/provider-options.ts",
+          "specifier": "zod"
+        },
+        {
+          "source": "packages/server/src/server/agent/providers/claude/options.ts",
+          "specifier": "zod"
+        },
+        {
+          "source": "packages/server/src/server/agent/providers/claude/subagents/replay-source.ts",
+          "specifier": "zod"
+        },
+        {
+          "source": "packages/server/src/server/agent/providers/claude/subagents/workflow-replay-source.ts",
+          "specifier": "zod"
+        },
+        {
+          "source": "packages/server/src/server/agent/providers/claude/task-notification-tool-call.ts",
+          "specifier": "zod"
+        },
+        {
+          "source": "packages/server/src/server/agent/providers/claude/tool-call-detail-parser.ts",
+          "specifier": "zod"
+        },
+        {
+          "source": "packages/server/src/server/agent/providers/claude/tool-call-mapper.ts",
+          "specifier": "zod"
+        },
+        {
+          "source": "packages/server/src/server/agent/providers/tool-call-detail-primitives.ts",
+          "specifier": "zod"
+        },
+        {
+          "source": "packages/server/src/server/agent/tools/types.ts",
+          "specifier": "zod"
+        }
+      ]
+    }
+  ],
+  "tests": [
+    {
+      "source": "packages/plugin/src/server/process-internal/windows-command.test.ts",
+      "sha256": "2f9f2b48fe184c3391137102b0588c429596293a1cbfece71862b5b91d25f160",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/plugin/server/process-internal/windows-command.test.ts",
+      "integratedSha256": "8abbcae5bed7cd96980cc765960839eb4e079adab1ff01787adfae77c43bce2d"
+    },
+    {
+      "source": "packages/plugin/src/server/process.test.ts",
+      "sha256": "4e56a04f8c98ecd8cfd9f723254efeb681913513d44d6667e52f15817927d829",
+      "state": "excluded",
+      "reason": "imports outside closure",
+      "outside": [
+        "packages/plugin/src/server/index.ts"
+      ]
+    },
+    {
+      "source": "packages/protocol/src/browser-automation/rpc-schemas.test.ts",
+      "sha256": "32d56e0b7947e13e9c4cf6dec32d91b254b1ccbbb709cb2345c326199a4f5325",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/browser-automation/rpc-schemas.test.ts",
+      "integratedSha256": "66f2848551728950975655bf169b0640b0ea41875b5860eaf50b164191f38ddc"
+    },
+    {
+      "source": "packages/protocol/src/messages.active-turn-behavior.test.ts",
+      "sha256": "b87f40827950597985cb18ae6ddfe037613c0efcc5fc24ff66f2452dbdb566de",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.active-turn-behavior.test.ts",
+      "integratedSha256": "2e2351a40e5ed18205868d46fa31c056563e49c082648d7ca8d3a7e5c69d64d5"
+    },
+    {
+      "source": "packages/protocol/src/messages.agent-skills.test.ts",
+      "sha256": "3a59f51a0058505be7c57aae861ec3ab5a432ec841d29753ee9bf8cb83bb7e7a",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.agent-skills.test.ts",
+      "integratedSha256": "92426775f9d7a263a37291320fcd4272ef7cf5a8fd6c8a90cd53899a93635274"
+    },
+    {
+      "source": "packages/protocol/src/messages.attachments.test.ts",
+      "sha256": "b46664022a726deeab97396105d05441843adf4287b4594d016c95302238b421",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.attachments.test.ts",
+      "integratedSha256": "1e7472b75faca826a95c18b4aa27d7f515d2f01bcb9572d0ecf607d1bdbc2b0d"
+    },
+    {
+      "source": "packages/protocol/src/messages.browser-automation.test.ts",
+      "sha256": "94718907ba8ff705fc7fe75e52e828b752fdda38f1dd4e5e368dc74c9a675bab",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.browser-automation.test.ts",
+      "integratedSha256": "562834ec611e87423431b8add81efc301629a77c477d9bb352523b9e364c4079"
+    },
+    {
+      "source": "packages/protocol/src/messages.checkout-commit-file-diff.test.ts",
+      "sha256": "a655f85209a265a6aa866b6c82ae4003d840ebf33ef2dbf06da6c56459399688",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.checkout-commit-file-diff.test.ts",
+      "integratedSha256": "9a2ee72d0aae84c05a778948d0bee3c088e03b9ad41619fc1ad2822654a2f826"
+    },
+    {
+      "source": "packages/protocol/src/messages.checkout-commits.test.ts",
+      "sha256": "68bf401b081179af2832d63311bf186190b451438d7250e01f67f6b245bf4ba2",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.checkout-commits.test.ts",
+      "integratedSha256": "9fc6cf112f6d35d77fc05b107e05804e2302ed83b794b3618893cff5c83323fa"
+    },
+    {
+      "source": "packages/protocol/src/messages.checkout-pr-schema.test.ts",
+      "sha256": "b15fea6cb2f199136262af351afdc1b836731bea8bc3fcc4f0225a57b7b072a7",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.checkout-pr-schema.test.ts",
+      "integratedSha256": "a78bcbf7899ac4aeffe1e437509b7abdb34f20da702496c4f19478351319db31"
+    },
+    {
+      "source": "packages/protocol/src/messages.create-agent-client-message-id.test.ts",
+      "sha256": "0b1312afded4e52c116010da51c1aecf6af0b2321709a39dc9135eff6e730d12",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.create-agent-client-message-id.test.ts",
+      "integratedSha256": "718b213e41778e671babc08c507d5a9c382157d0ba76eea3ae4368276a96fc3b"
+    },
+    {
+      "source": "packages/protocol/src/messages.create-agent-internal.test.ts",
+      "sha256": "8b64a303ee03f919ac5751f15b3f582fb12ddb45dceac8eadd295cba316fa2d7",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.create-agent-internal.test.ts",
+      "integratedSha256": "e9e09357907644f6b83e54ba02f67d6d5bff4a0be3aa9373931e001f457484b5"
+    },
+    {
+      "source": "packages/protocol/src/messages.create-agent-worktree-autoarchive.test.ts",
+      "sha256": "e21b880a91458fa735395eebffe89bdbf766cdb9a99b751a644bafe7a62e432c",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.create-agent-worktree-autoarchive.test.ts",
+      "integratedSha256": "f0a345393324348fff7fe8459bebe47d67934b46502ebac6bfb5620348f70bf0"
+    },
+    {
+      "source": "packages/protocol/src/messages.create-terminal-size.test.ts",
+      "sha256": "c04b1a04aaf3fa4d7297978475a5b9f9854dadc1d2af7dbcf5dea605152fe951",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.create-terminal-size.test.ts",
+      "integratedSha256": "dc3c98a1325e18e7dbe91e28bbb1ad446d32841bdc27cefdf30d93967054a9ac"
+    },
+    {
+      "source": "packages/protocol/src/messages.file-context-actions.test.ts",
+      "sha256": "594bd57f6a94840638e107d2cd59d833a70ed0622303c010af064b72443ee217",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.file-context-actions.test.ts",
+      "integratedSha256": "e97e7e1c5f5f124513ba67c0290f67a0ff1ec140b92c22865ebbfc993dbd4c97"
+    },
+    {
+      "source": "packages/protocol/src/messages.file-editing.test.ts",
+      "sha256": "9ea6b3cdf045aebd9d9773b5962f8530333121b1608803be6f9aad3304105988",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.file-editing.test.ts",
+      "integratedSha256": "ca2291de0f095480e74c090061366916736dc4fa69e53163baa9e276c7b933b7"
+    },
+    {
+      "source": "packages/protocol/src/messages.hub.test.ts",
+      "sha256": "727f9c4787af859c9daeb83c3e33a93ab74fe2e95861d14e18bab182ab6f18e1",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.hub.test.ts",
+      "integratedSha256": "86574279ae9a6418e180e793ecb84fe37b9888beb13b2951cb18917646f06647"
+    },
+    {
+      "source": "packages/protocol/src/messages.list-commands.test.ts",
+      "sha256": "475e3d99e605009a330012e44ed107032ffd4e39e001405b42e1cd96602bf3f7",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.list-commands.test.ts",
+      "integratedSha256": "bdae701a1640ba8c8a8f8bf2edf0ac365a331608db6c535ea67bc5edb419d519"
+    },
+    {
+      "source": "packages/protocol/src/messages.plugins.test.ts",
+      "sha256": "c255c72ac503fbeafdf03c6e4e99d03c6f8879268d224255d02c5642fcaa626c",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.plugins.test.ts",
+      "integratedSha256": "a1c85a54d53b45dc7fb3a600fbf8b0c95d8ada8ee1adcb92cb43f925a4aa086e"
+    },
+    {
+      "source": "packages/protocol/src/messages.project-command-center.test.ts",
+      "sha256": "2a685239968c1db7122115a3ff3a9da9f67bbff8d7ce41d3baabd7a9fd85e57c",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.project-command-center.test.ts",
+      "integratedSha256": "47ef690d25f5aaee45d6999e5e41d2330638cb1bf2b06626f08d9aa8eb5e3461"
+    },
+    {
+      "source": "packages/protocol/src/messages.provider-subagents.test.ts",
+      "sha256": "3badadce4f154f4d882958dc4e8c257cb006c02e5a6cea5dc52a44496e14552d",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.provider-subagents.test.ts",
+      "integratedSha256": "5538821a966d0890a7c507bfd568b93507abb8a98675993517fa21c3d1e416f2"
+    },
+    {
+      "source": "packages/protocol/src/messages.providers-snapshot.test.ts",
+      "sha256": "ae87f380fbdb00409242cd673b5a2e98279cff1e6d54028a8c62fa50eaff8fd2",
+      "state": "excluded",
+      "reason": "imports outside closure",
+      "outside": [
+        "packages/protocol/src/validation/ws-outbound.ts"
+      ]
+    },
+    {
+      "source": "packages/protocol/src/messages.pull-request-timeline.test.ts",
+      "sha256": "edf59b7bf8b136fffbbf28ff061dc8614b27d721a9e328b04fc3485f822e283e",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.pull-request-timeline.test.ts",
+      "integratedSha256": "83d23cfbae30c1533c4b24c3f9923b0276b059c7b0ed37e1787b1caff5044bab"
+    },
+    {
+      "source": "packages/protocol/src/messages.rename-entities.test.ts",
+      "sha256": "5106a8b5c953b32e97302e6ec4ba8f8d090c0c1d6fa387e9f9f0998a066b4ab0",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.rename-entities.test.ts",
+      "integratedSha256": "d5f4ea64c2d0cd707baeb3d888343692702fc2c5ed88bb36d6b22eee7cdf68b4"
+    },
+    {
+      "source": "packages/protocol/src/messages.stream-parsing.test.ts",
+      "sha256": "b5b79caf4c69d3bab1b5c9c98731c03a586ecaaf2fc23b09af3d7119009674e4",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.stream-parsing.test.ts",
+      "integratedSha256": "f7bd8973e5ecce6c9114f1ff7eb7d05cb6ded6da764fcbfccf4ee5dacaae5699"
+    },
+    {
+      "source": "packages/protocol/src/messages.terminal-resize.test.ts",
+      "sha256": "61c96cbed2dcb0412d3d4ada2518e5cd78dc9297b5f9bdf533e2ca60455183fc",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.terminal-resize.test.ts",
+      "integratedSha256": "967c734de6de63c63bd844bde740d0dfb1edf677e1b4d80cb761448920b3f851"
+    },
+    {
+      "source": "packages/protocol/src/messages.terminal-restore.test.ts",
+      "sha256": "b0e2442db9e033991aa8a68f5f44ea5e7d07beed4a1ff0a0cf064e5df96ddcb9",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.terminal-restore.test.ts",
+      "integratedSha256": "f2baf2aba5994fa333b6c477b2749da1d7b2975f321e59826e0a844ba153569c"
+    },
+    {
+      "source": "packages/protocol/src/messages.test.ts",
+      "sha256": "6f410fdf8620bfd6f44be146784c0f158e3c70041de712c5c7ab04a03ae0d6be",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.test.ts",
+      "integratedSha256": "07fe4faa35857fcb88c7cea09960c068ede728907317395c9f8bdbe3a7153a7d"
+    },
+    {
+      "source": "packages/protocol/src/messages.tool-call-schema.test.ts",
+      "sha256": "a54b6228d9cbe7207ba5206f7310289c450e84daa46c0613a0fb64064e9ad75d",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.tool-call-schema.test.ts",
+      "integratedSha256": "7f2f0d611058cec229646c1350f3b5708a024e590cb0259e6a5feaa3c975a764"
+    },
+    {
+      "source": "packages/protocol/src/messages.wire-compat.test.ts",
+      "sha256": "5d68ac1d1ae2b5a0e76734b910532a15e0ae40c57e6107cbca8f1d04a68df6a2",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.wire-compat.test.ts",
+      "integratedSha256": "57f6e61b9a06c01730cbd871e19521215f07db696b7e97acad6589d18ccb840c"
+    },
+    {
+      "source": "packages/protocol/src/messages.workspace-labels.test.ts",
+      "sha256": "8144ecb8d4bce0114588c7a43b1b86d0ab73431775b38b5275f80f8c39f98c5f",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.workspace-labels.test.ts",
+      "integratedSha256": "011b0765cd33da75ed13a83ded18d7730399f0672ebf465cee4b1d9f98df98ce"
+    },
+    {
+      "source": "packages/protocol/src/messages.workspace-recovery.test.ts",
+      "sha256": "291f9a39e1c2e198d9c89db9a3b6a181b33bdf6a61b16267a292e2035d48b5a2",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.workspace-recovery.test.ts",
+      "integratedSha256": "536c132b8b7fa4806109e150e992173337901a6fcc8397e9ba7f96fa31d19bda"
+    },
+    {
+      "source": "packages/protocol/src/messages.workspaces.test.ts",
+      "sha256": "9919380b3175710acd45c4012b7cfe4f63a4751868009ded59b7501d74ec60da",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/messages.workspaces.test.ts",
+      "integratedSha256": "5fafd9055a4fd721b26152e4b3219644602ebacb7c90c783236fda4d49014f6c"
+    },
+    {
+      "source": "packages/protocol/src/paseo-config-schema.test.ts",
+      "sha256": "d966f4cb67f0ff44d03ddd6406cfbe91ac118f7660fdfeb9b71e1672e220f181",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/paseo-config-schema.test.ts",
+      "integratedSha256": "c212fecf2bcc4d3ad3b848b6eb69085000ccbb3915d76fd0dcd836d4c034a879"
+    },
+    {
+      "source": "packages/protocol/src/plugin-registry.test.ts",
+      "sha256": "a3147da569b450b4b3ac3cafff702ea007c8cedc3cd944133aaf68415a0f54b9",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/plugin-registry.test.ts",
+      "integratedSha256": "58762c7ce157268de5d60dda982fc6af4601945b75b105d0ffc177d700079698"
+    },
+    {
+      "source": "packages/protocol/src/schedule/rpc-schemas.test.ts",
+      "sha256": "9840884693f47a2d327b94d5a28413f4220116b9e41ba91dd84f860ba7bbbe66",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/schedule/rpc-schemas.test.ts",
+      "integratedSha256": "da53cec3c66fc2a4812df2e4f7ec2046910db783ae65f57082fb647a9fc251da"
+    },
+    {
+      "source": "packages/protocol/src/schedule/types.test.ts",
+      "sha256": "b04a0ab7099cd472b138806d1d28f5d51d15ee9e458b1cc79a2557dca625c640",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/schedule/types.test.ts",
+      "integratedSha256": "22e78777e2eb815270bd44f979459f7e7d2e9caf7ecf0843669ab3fb924c497a"
+    },
+    {
+      "source": "packages/protocol/src/terminal-activity.test.ts",
+      "sha256": "8b0dfb1b58ca62c2e2de79c15cf762b2d62e249ba8fef94f82c2c0d9806943ba",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/terminal-activity.test.ts",
+      "integratedSha256": "0b405eb47cbe09c5f61ec16f28b2bfc0e0946a8c5521915300e7da8d79d4c3b6"
+    },
+    {
+      "source": "packages/protocol/src/terminal-profiles.test.ts",
+      "sha256": "d8c68c23997cfb2389cda427596cd3405bafb886e6b51e3bc26ff15ed036341f",
+      "state": "excluded",
+      "reason": "imports outside closure",
+      "outside": [
+        "packages/protocol/src/terminal-profiles.ts"
+      ]
+    },
+    {
+      "source": "packages/protocol/src/tool-call-display.test.ts",
+      "sha256": "56416caca9f5f85357d98ad57d185d21fbb68689cf593befef85668e4ca30e82",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/protocol/tool-call-display.test.ts",
+      "integratedSha256": "352c3256dbb573694f4c06411f265e734351e9a079bd5f28a474ba03efc432a1"
+    },
+    {
+      "source": "packages/server/src/executable-resolution/executable-resolution.probe.test.ts",
+      "sha256": "e27f1e3acbc2e64d7c242dd709237ca3061772728eb322c4de287b836b4d2bf0",
+      "state": "excluded",
+      "reason": "imports outside closure",
+      "outside": [
+        "packages/server/src/test-utils/platform.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/executable-resolution/executable-resolution.test.ts",
+      "sha256": "2b69ce0868188a11814ab1fedc0b9d810fcaf7655cf0a086273d1f2f698ac54b",
+      "state": "excluded",
+      "reason": "imports outside closure",
+      "outside": [
+        "packages/server/src/test-utils/platform.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/server/agent/prompt-attachments.test.ts",
+      "sha256": "41d3076f83877070888be9652fba2e32e990ac42b7ad2f9e10c819d78209c055",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/prompt-attachments.test.ts",
+      "integratedSha256": "1ef16990228cf78c18a67ad119d984db96e9f53b55081317076cb0540936f519"
+    },
+    {
+      "source": "packages/server/src/server/agent/provider-history-timestamps.test.ts",
+      "sha256": "3af0d062ead050976726aee8c6a61fdcbd14d5c584dc132fa9fc103235bdf273",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/provider-history-timestamps.test.ts",
+      "integratedSha256": "98a67642b522ed91b0eda5a7e26e7623a768aca16873dc52e615af4a2c16685e"
+    },
+    {
+      "source": "packages/server/src/server/agent/provider-launch-config.test.ts",
+      "sha256": "6994999d88a3becf0493fafb61df8b5b3986d780b009140c7073c53c5a493c22",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/provider-launch-config.test.ts",
+      "integratedSha256": "d797eb9e511acd740bcca167865797a5382b2cf0f4cf19b5a29951103b661c83"
+    },
+    {
+      "source": "packages/server/src/server/agent/provider-options.test.ts",
+      "sha256": "1924659bad082fd2dc386f6c7acda884729f5c815c7fb5fdeb25a8b2cd988236",
+      "state": "excluded",
+      "reason": "imports outside closure",
+      "outside": [
+        "packages/server/src/server/agent/agent-manager.ts",
+        "packages/server/src/server/agent/provider-registry.ts",
+        "packages/server/src/server/agent/providers/codex/options.ts",
+        "packages/server/src/server/agent/providers/opencode/options.ts",
+        "packages/server/src/test-utils/test-logger.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent-commands.e2e.test.ts",
+      "sha256": "d5870b94a3b1eb0c08da8a62f3fa7d94ec0ef36d9c4c11ee192ab503a798dfaf",
+      "state": "excluded",
+      "reason": "e2e or live test",
+      "outside": [
+        "packages/server/src/server/test-utils/index.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent-commands.real.e2e.test.ts",
+      "sha256": "be2935015e490420b2665e342819afb2a56e2d407d16bddcc0277d80d983309c",
+      "state": "excluded",
+      "reason": "e2e or live test",
+      "outside": [
+        "packages/server/src/server/daemon-e2e/real-provider-test-config.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.background-subagent.test.ts",
+      "sha256": "77632b198048fca3d26b82b351e121469716c731050204079400025de81a1bdf",
+      "state": "excluded",
+      "reason": "imports outside closure",
+      "outside": [
+        "packages/server/src/server/agent/agent-manager.ts",
+        "packages/server/src/server/agent/providers/test-utils/session-stream-adapter.ts",
+        "packages/server/src/server/agent/timeline-projection.ts",
+        "packages/server/src/test-utils/test-logger.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.env.test.ts",
+      "sha256": "7efe1f4eba4f584070e4b07fe49e620bc746d07f2deed2e2496de772b576f108",
+      "state": "excluded",
+      "reason": "imports outside closure",
+      "outside": [
+        "packages/server/src/test-utils/test-logger.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.event-stream.real.e2e.test.ts",
+      "sha256": "92fa77fca5cd563e28978d09545b0d3e9c17b54c0528503d2bdfb6a10c8b1292",
+      "state": "excluded",
+      "reason": "e2e or live test",
+      "outside": [
+        "packages/server/src/server/daemon-e2e/real-provider-test-config.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.history-load.test.ts",
+      "sha256": "852ad20e5b9fe775731059ab212fd75d9fc43677c1860e109ce9b500a6d745b9",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/providers/claude/agent.history-load.test.ts",
+      "integratedSha256": "f4405d212bba5c17e531b728624ada1d43e3a57a59e4361ea56c493bea0dbf63"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.history.test.ts",
+      "sha256": "195144b652c4bbca1cc5682ee081ef4f57d47db792e4e416c5b1f618a7aececc",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/providers/claude/agent.history.test.ts",
+      "integratedSha256": "8171b5fe5968f732058e6b0d2ccbb757b4fe768c8177995cb2c7ba10ac02ec3c"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.image-rendering.test.ts",
+      "sha256": "4ad55531c8ea7c4aa0545f84ce99d7b6a1ff33e84eb3d9c57e077948a8b637e7",
+      "state": "excluded",
+      "reason": "imports outside closure",
+      "outside": [
+        "packages/server/src/test-utils/test-logger.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.interrupt-restart-regression.test.ts",
+      "sha256": "71c056dd7890136cf7fc61bd67e96de5270da8eed42e149c80730cd70909b1b8",
+      "state": "excluded",
+      "reason": "imports outside closure",
+      "outside": [
+        "packages/server/src/server/agent/providers/test-utils/session-stream-adapter.ts",
+        "packages/server/src/test-utils/test-logger.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.max-effort.real.e2e.test.ts",
+      "sha256": "2dff3b02499a6cea27abab5d9b6799c736a7b18f8ea07ea6745fa7e1d542409f",
+      "state": "excluded",
+      "reason": "e2e or live test",
+      "outside": [
+        "packages/server/src/server/agent/providers/test-utils/session-stream-adapter.ts",
+        "packages/server/src/server/daemon-e2e/real-provider-test-config.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.nested-subagent-ownership.real.e2e.test.ts",
+      "sha256": "309c794d9774dd42f6305565751794dbdf3d0937288a9f11d3df7a157067d1d3",
+      "state": "excluded",
+      "reason": "e2e or live test",
+      "outside": [
+        "packages/server/src/server/agent/providers/test-utils/session-stream-adapter.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.real.e2e.test.ts",
+      "sha256": "86cbb9bd2d9e955452e997f6a9bc20ce96c60fdd6dc3d41bb45f2e59efab3b95",
+      "state": "excluded",
+      "reason": "e2e or live test",
+      "outside": [
+        "packages/server/src/server/agent/providers/test-utils/session-stream-adapter.ts",
+        "packages/server/src/server/daemon-e2e/real-provider-test-config.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.redesign.test.ts",
+      "sha256": "dbdedcc6d0050c19cfaa0222907f7d8caef4e7aefa43bcdb03efe61047d8489b",
+      "state": "excluded",
+      "reason": "imports outside closure",
+      "outside": [
+        "packages/server/src/server/agent/providers/test-utils/session-stream-adapter.ts",
+        "packages/server/src/server/test-utils/class-mocks.ts",
+        "packages/server/src/test-utils/test-logger.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.rewind-anchors.test.ts",
+      "sha256": "81f25bf9419497de41afd5346abb73640ed9b2daa54cc9a9e4ab3f0984bd6e10",
+      "state": "excluded",
+      "reason": "imports outside closure",
+      "outside": [
+        "packages/server/src/server/agent/providers/claude/test-rewind-claude-sdk.ts",
+        "packages/server/src/server/agent/providers/test-utils/session-stream-adapter.ts",
+        "packages/server/src/test-utils/test-logger.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.runtime-exit.test.ts",
+      "sha256": "9c71281f5392e13b31296cb72efd0630cbe2111a1945e3ccb775872b31ada2ab",
+      "state": "excluded",
+      "reason": "imports outside closure",
+      "outside": [
+        "packages/server/src/test-utils/test-logger.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.spawn.test.ts",
+      "sha256": "0c8b1abc6bf42172b7ba893303590d8b7c5625ebf06b42490e911821da753cc9",
+      "state": "excluded",
+      "reason": "imports outside closure",
+      "outside": [
+        "packages/server/src/test-utils/test-logger.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.sub-agent-replay.test.ts",
+      "sha256": "bce58576d3f9da72acb4ba3592af37696dc4b4e3a8bf1fd5459a2103c3f0be22",
+      "state": "excluded",
+      "reason": "imports outside closure",
+      "outside": [
+        "packages/server/src/test-utils/test-logger.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.sub-agent-sidechain.test.ts",
+      "sha256": "637fe00cbf891c7bcb6ab2150c56724fd8c2dfff0569d6a65cf24061faeae953",
+      "state": "excluded",
+      "reason": "imports outside closure",
+      "outside": [
+        "packages/server/src/server/agent/agent-manager.ts",
+        "packages/server/src/server/agent/providers/test-utils/session-stream-adapter.ts",
+        "packages/server/src/server/agent/timeline-projection.ts",
+        "packages/server/src/test-utils/test-logger.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.subagent-handback.real.e2e.test.ts",
+      "sha256": "ea08645adb802a4c9605b015334222de4e3c5628c6a043c0645065701383ff5e",
+      "state": "excluded",
+      "reason": "e2e or live test",
+      "outside": [
+        "packages/server/src/server/agent/providers/test-utils/session-stream-adapter.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.subagent-interrupt.test.ts",
+      "sha256": "71601d900acae344ec60a47bdd9d7dc975f5834cc6b8bed2c5d3fecde99cfbf6",
+      "state": "excluded",
+      "reason": "imports outside closure",
+      "outside": [
+        "packages/server/src/server/agent/provider-subagents/store.ts",
+        "packages/server/src/test-utils/test-logger.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.test.ts",
+      "sha256": "7af5025ec5bb7065097e02edcadd154907ec4a2c252f3aabab695536f477bcee",
+      "state": "excluded",
+      "reason": "imports outside closure",
+      "outside": [
+        "packages/protocol/src/agent-attention-notification.ts",
+        "packages/server/src/server/agent/providers/test-utils/session-stream-adapter.ts",
+        "packages/server/src/test-utils/test-logger.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/agent.voice-history-regression.test.ts",
+      "sha256": "3f45f992e359c60cad6d930e847bfa96eb8ffb1bb74beb15bdccff33cfbfd192",
+      "state": "excluded",
+      "reason": "imports outside closure",
+      "outside": [
+        "packages/server/src/server/agent/providers/test-utils/session-stream-adapter.ts",
+        "packages/server/src/test-utils/test-logger.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/models.test.ts",
+      "sha256": "42710c59f5f9cea0239a04442fab2d9f42516dc418b4d0ff93455d5ba6e76b82",
+      "state": "excluded",
+      "reason": "imports outside closure",
+      "outside": [
+        "packages/server/src/test-utils/test-logger.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/partial-json.test.ts",
+      "sha256": "dc0abe77f2bcfff35fb12adc438a40ce463df41f664e90036961727832ba82c5",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/providers/claude/partial-json.test.ts",
+      "integratedSha256": "dc48841417f520daedaa31e3438d32457a7f7c8ad2ffb4131f1324331fb9c3ba"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/project-dir.test.ts",
+      "sha256": "d0f0ccb36a9198e3c31a11819351ff50c2ffba77517abe81a72299f221e8ce9d",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/providers/claude/project-dir.test.ts",
+      "integratedSha256": "239e6eb99741a483a193296ee37754e5ca508d4a962955b994cb440edeea9c12"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/rewind.test.ts",
+      "sha256": "a28cf67b7ae9ff693ece0a9b6e5d22ed23befef14b39b060353681833bf7030f",
+      "state": "excluded",
+      "reason": "imports outside closure",
+      "outside": [
+        "packages/server/src/server/agent/providers/claude/test-rewind-claude-sdk.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/sidechain-tracker.test.ts",
+      "sha256": "1ee2f63f5cc873a25f5d5da620e600329f3eb2f709680d35ea5ecae69907e213",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/providers/claude/sidechain-tracker.test.ts",
+      "integratedSha256": "1bd137d8891a9e3659fd955620f7c7c87dfeb68119f625a083d82c4c083a9cbe"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/live-source.test.ts",
+      "sha256": "dae2917d3bb1f1b193b28df0d0b58be155831bcb5e88fc21b1965c3151a41e3b",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/providers/claude/subagents/live-source.test.ts",
+      "integratedSha256": "a558c848f181162657310daf993504c4eb512b7f95ca62fcc5573d6b00b28dba"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/observation.test.ts",
+      "sha256": "05ffdcf7fb8232cb022454ab23693d6d8a4ee87ed50993cfc49fb4d12297169d",
+      "state": "excluded",
+      "reason": "imports outside closure",
+      "outside": [
+        "packages/server/src/server/agent/provider-subagents/store.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/presentation.test.ts",
+      "sha256": "7ec63b2de196065a3b81c7acd226cd99fe3b4840ca9db490785149a5375e73d3",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/providers/claude/subagents/presentation.test.ts",
+      "integratedSha256": "485cf87d317cb1628fca1a1622228620d2f987b48ab028e95b282eb1cff786b4"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/replay-source.test.ts",
+      "sha256": "ca3ee4eb1d62d66b5d9e93ad1fdb83c8ea398e21350cbcd09272b945d04a24ab",
+      "state": "excluded",
+      "reason": "imports outside closure",
+      "outside": [
+        "packages/server/src/server/agent/provider-subagents/store.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/workflow-output.test.ts",
+      "sha256": "d10d411b1d6f2f150bef0904cdc6165d63127edbdcdfd4bbff8e7c3d23cc46c8",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/providers/claude/subagents/workflow-output.test.ts",
+      "integratedSha256": "7bfb797b43d6c067039d986b7449a5c0ebc0eb15e41f81066cb8e0b3ecdfb75b"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/subagents/workflow-replay-source.test.ts",
+      "sha256": "73b46f0a6c1d3063be8e3142514784edf6eebfa7c39675f5f695cc6c236e0bbb",
+      "state": "excluded",
+      "reason": "imports outside closure",
+      "outside": [
+        "packages/server/src/server/agent/provider-subagents/store.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/task-notification-tool-call.test.ts",
+      "sha256": "b26acb7a043368fdafe706aea6033966f7995699f0d9847b2b5a5edc9f61fe66",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/providers/claude/task-notification-tool-call.test.ts",
+      "integratedSha256": "b4f01429728dc2e491b2e1b3310e63ee80070674ea8b39f724fa7634d60288b0"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/task-state.test.ts",
+      "sha256": "cee13d786623a53902b5339cd87dd567a58ec4352aa60e9d481e2605a5fe459e",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/providers/claude/task-state.test.ts",
+      "integratedSha256": "6c940b40cdefdf10d96576c924347ac8498e6ee0e5e2081c0cda3ce64d3493e6"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/claude/tool-call-mapper.test.ts",
+      "sha256": "b69644453e9603cf782aae4c848a50f3b0d386dd73619b5a6ffd6c8744f68451",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/providers/claude/tool-call-mapper.test.ts",
+      "integratedSha256": "0441103050798d8c76d4fade02a9800ada5874c107d4cbcaaea46a0bca29ebb0"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/diagnostic-utils.test.ts",
+      "sha256": "98e0d07be309b3faaaf026883a6bac1dc703191308b8546ceab0188134d8efa2",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/providers/diagnostic-utils.test.ts",
+      "integratedSha256": "5490de519871e0af7fff84bef7648f8a31b3765f1d8863c52ed3f11ab43a871c"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/provider-image-output.posix.test.ts",
+      "sha256": "78d37faf0f917288f9c54ebad942c06216f1730271b11f8660df6b0142c9c781",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/providers/provider-image-output.posix.test.ts",
+      "integratedSha256": "a282516a5a9c46658f48e29b5086238467d8d6f52da4eb886e9b82d0f34f370f"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/provider-image-output.test.ts",
+      "sha256": "918feae1178054b4660583b395a0bbb838cddb9f9bb47d44a521c718769b182f",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/providers/provider-image-output.test.ts",
+      "integratedSha256": "46befa2de59100d920814be9fba837f5d5f3ea67f3bffaaa113d25a28bb87ab6"
+    },
+    {
+      "source": "packages/server/src/server/agent/providers/provider-runner.test.ts",
+      "sha256": "18391e1c5d8e41c53a969364a8d883a8c12ba4b50e04d2ed61d5db0561ea16f4",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/providers/provider-runner.test.ts",
+      "integratedSha256": "2b2ae4cd303aed61ea5e01bf3a51d8ebb2c5a47814372e92af7f2e47077895bb"
+    },
+    {
+      "source": "packages/server/src/server/paseo-env.test.ts",
+      "sha256": "facf8b7349546b685947425e03719e250509d77ac1f45cf261630712e74e4908",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/runtime/server/paseo-env.test.ts",
+      "integratedSha256": "6201d440e3267e1ea288f82890a104a1bfe38e15a5c961e09dd11f6277a6d63a"
+    },
+    {
+      "source": "packages/server/src/utils/spawn.launch-regression.test.ts",
+      "sha256": "984801609f7c5169491d3968dabb8d31ba05e26167068fb56f44194bb613357f",
+      "state": "excluded",
+      "reason": "imports outside closure",
+      "outside": [
+        "packages/server/src/test-utils/platform.ts"
+      ]
+    },
+    {
+      "source": "packages/server/src/utils/spawn.percent-escape.test.ts",
+      "sha256": "139ccc873eb1eae76bca89be04aa37c8025cc0337486366bb9cbdd32cc0448a1",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/runtime/utils/spawn.percent-escape.test.ts",
+      "integratedSha256": "84232eea0db321ba5c37c7d0dcc335d6b2559db3f534c76af84ead065b6005b7"
+    },
+    {
+      "source": "packages/server/src/utils/spawn.test.ts",
+      "sha256": "461cdf5ea6ffbbe36502391312bb2ffe0161e381ee89c58f3f1f481ea3d877c8",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/runtime/utils/spawn.test.ts",
+      "integratedSha256": "78ee7cc7db2acf316b6197c23f49f45ba6a08960d9c45052dd9dd36fc1507f87"
+    },
+    {
+      "source": "packages/server/src/utils/tree-kill.test.ts",
+      "sha256": "1146ea92020908e3fb25b1d59f08d0a060faaebec81aef654245af34b72cda0d",
+      "state": "ported",
+      "reason": "Adjacent unit test ported; test-only import, logger fixture, or strict TypeScript narrowing adapted as needed",
+      "outside": [],
+      "destination": "packages/daemon/test/paseo/runtime/utils/tree-kill.test.ts",
+      "integratedSha256": "e5345dd03c4b8d8cfa293f45dac2b9684d3507587f7ed2f268b780e5b5886242"
+    }
+  ],
+  "authorization": "docs/plan.md at 97330b7: V6 Import closure and Permission mapping",
+  "addedFiles": [
+    {
+      "destination": "packages/daemon/src/agent/paseo/provider-subagents/types.ts",
+      "reason": "Verbatim declarations extracted from pinned provider-subagents/store.ts"
+    },
+    {
+      "destination": "packages/daemon/src/agent/paseo/logger.ts",
+      "reason": "Structural logger interface replacing pino type import"
+    },
+    {
+      "destination": "packages/daemon/src/agent/paseo/session-backend.ts",
+      "reason": "Vonvon AgentBackend adapter"
+    }
+  ]
+}

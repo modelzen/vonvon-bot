@@ -13,3 +13,5 @@ Paseo (getpaseo/paseo) is licensed under Apache-2.0 and informed the broader arc
 V3 adapts packages/server/src/server/pid-lock.ts and atomic-file.ts from Paseo commit 0009a7e717a9f7ec587f55ca2985cb91b1310bd8 into packages/daemon/src/server/. The adapted files carry Vonvon Bot changes for its daemon lifecycle and file handling.
 
 Copyright (c) 2025-present Mohamed Boudra. The complete upstream Apache License, Version 2.0, including Paseo's copyright statement, is in packages/daemon/LICENSE.paseo. The daemon package carries that license and its own NOTICE.
+
+V6 imports Paseo's Claude provider, complete AgentClient and AgentSession contracts, and their source and protocol dependency closure from the same pinned commit. The source inventory and modification reasons are in packages/daemon/src/agent/paseo/closure.json. The two plugin process launcher files retain their pinned bytes. Adapted files retain their upstream headers and carry modification notices for import paths, structural logger types, extracted store declarations, and strict TypeScript checks. Vonvon Bot's session-backend adapter is original integration code.
