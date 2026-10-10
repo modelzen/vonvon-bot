@@ -6,7 +6,7 @@ Vonvon Bot becomes an independent product with a per-machine daemon, a web UI an
 
 One box is one unit of work. Every box names the evidence that checks it. A nested box is a sub-step of the box above it. Check a box only when its evidence exists, a file, a log line, a screenshot, a test run, or a SHA. The body is a how-to. The appendices explain and record.
 
-The program runs `skills/poteto-mode/playbooks/autopilot-stack.md` from the installed plugin. Codex on the operator's Mac runs it. Read `skills/poteto-mode/references/codex-tools.md` for the Codex equivalent of each Claude tool, model, and skill this plan names. The repository's `AGENTS.md` overrides one step of the playbook. Nobody force-pushes or rebases a shared branch. A child syncs its parent by merging the parent branch in, and a child whose parent landed retargets to `main` and merges `main` in. The operator lands every PR. Codex owns the code, the real-window checks, and packaging. Claude Code on the Linux server takes a lane only when the operator asks for it, such as the systemd checks in V5 and V8.
+The program runs `skills/poteto-mode/playbooks/autopilot-stack.md` from the installed plugin. Codex on the operator's Mac runs it. Read `skills/poteto-mode/references/codex-tools.md` for the Codex equivalent of each Claude tool, model, and skill this plan names. The repository's `AGENTS.md` overrides one step of the playbook. Nobody force-pushes or rebases a shared branch. A child syncs its parent by merging the parent branch in, and a child whose parent landed retargets to `main` and merges `main` in. The operator lands every PR. Codex owns all code, every check in this plan, and packaging. Claude Code on the Linux server owns this plan and the design docs, and writes no product code. When the plan is wrong or incomplete, Codex says so in the PR. Codex decides a small deviation that leaves the design intact and records why in the PR. A change to the architecture, a data shape, or the PR order goes back to Claude Code, which updates the docs on a `claude/` branch before Codex continues.
 
 Pin every reference source to the commit below. Clone the ones the Mac does not have.
 
@@ -341,7 +341,7 @@ Each live lane runs in its own worktree at the PR head. Drive through the skill 
 - [ ] Lane 3. Start the daemon from the CLI, then launch the shell. Save `attach.png`. Pass when the shell attaches and no second daemon exists.
 - [ ] Lane 4. Close the window. Save `closed.txt`. Pass when the daemon and bots keep running.
 - [ ] Lane 5. Launch the app twice. Save `second.png`. Pass when the existing window comes forward and no second app process remains.
-- [ ] Lane 6. Turn on **Open at login**. Save `login-item.txt`. Pass when `launchctl print gui/$(id -u)/com.vonvon.bot.daemon` shows the job loaded. Ask Claude Code on the Linux server to repeat the lane with `systemctl --user is-enabled vonvon-bot.service`.
+- [ ] Lane 6. Turn on **Open at login**. Save `login-item.txt`. Pass when `launchctl print gui/$(id -u)/com.vonvon.bot.daemon` shows the job loaded. Repeat the lane in a Linux environment, such as the Linux CI job or a VM, where `systemctl --user is-enabled vonvon-bot.service` must report enabled.
 - [ ] Lane 7. Quit from the tray menu with **Open at login** on. Save `quit.txt`. Pass when the app exits and the daemon keeps running.
 - [ ] Lane 8. Start an older daemon build, then launch the shell. Save `mismatch.png`. Pass when the shell shows the version prompt instead of a blank window.
 - [ ] Lane 9. Bind a group from the desktop window. Save `bind.png`. Pass when the group appears and `projects.json` agrees.
@@ -356,7 +356,7 @@ Each live lane runs in its own worktree at the PR head. Drive through the skill 
 
 **Review gate.** The operator reviews before merge.
 
-- [ ] Copy lane 1, 2, and 8 screenshots into `~/vonvon-review/V5-review-<slug>.png`. Include the Linux screenshots if Claude Code ran the systemd lane.
+- [ ] Copy lane 1, 2, and 8 screenshots into `~/vonvon-review/V5-review-<slug>.png`. Include the Linux transcript from lane 6.
 - [ ] Record a 30 to 60 second video of the change in a lane worktree. Save it as `~/vonvon-review/V5-review.mp4`.
 - [ ] Post the screenshots and the video in chat. Stop at merge-ready. Wait for the operator's click.
 
@@ -512,7 +512,7 @@ Each live lane runs in its own worktree at the PR head. Drive through the skill 
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on the configured `swarm workers` model at the PR head, per the boot recipe.
 
-- [ ] Lane 1. Regression lane against trunk. Trunk has no import, so record that. Install bridge `446b2a4` as its LaunchAgent with the test bot, import at head, and message the bot. Save `import-happy.png`. Pass when the reply comes from Vonvon Bot, `launchctl print gui/$(id -u)/ai.feishu-codex-bridge.bot` fails, and `~/Library/LaunchAgents/ai.feishu-codex-bridge.bot.plist` is gone. Ask Claude Code on the Linux server to repeat the lane with the systemd unit.
+- [ ] Lane 1. Regression lane against trunk. Trunk has no import, so record that. Install bridge `446b2a4` as its LaunchAgent with the test bot, import at head, and message the bot. Save `import-happy.png`. Pass when the reply comes from Vonvon Bot, `launchctl print gui/$(id -u)/ai.feishu-codex-bridge.bot` fails, and `~/Library/LaunchAgents/ai.feishu-codex-bridge.bot.plist` is gone. Repeat the lane in a Linux environment with the bridge's systemd user unit.
 - [ ] Lane 2. Run preflight only. Save `preflight.png`. Pass when the bridge keeps running and the source checksum is unchanged.
 - [ ] Lane 3. Use a wrong App Secret in the bridge data. Save `bad-secret.png`. Pass when verify fails and the bridge service is running again.
 - [ ] Lane 4. Kill the daemon during the copy phase and restart it. Save `crash-resume.txt`. Pass when the import resumes or rolls back and the bot answers from exactly one process.
@@ -755,7 +755,7 @@ The facts below were read from source this session, not run.
 - Remote access trusts the cloud to hand out the right daemon key. V11 lane 9 checks a swapped key fails, and a fingerprint check in the local UI is a follow-up.
 - A desktop-bundled daemon and an npm-installed daemon may differ in version. V5 lane 8 watches it.
 - The Claude provider from Paseo is about 6,600 lines tied to Paseo internals. V6's owner watches for pulled-in modules beyond the provider folder.
-- V8 lane 1 runs on macOS. The systemd path needs the Linux server, and the Windows Run-key path stays unverified until a Windows host exists.
+- V5 lane 6 and V8 lane 1 also need Linux for the systemd path. `systemctl --user` needs a user session, which a CI runner may not have. Codex checks that before V5 and falls back to a Linux VM. The Windows Run-key path stays unverified until a Windows host exists.
 - The cloud deploy target is undecided. V10 runs against a local Postgres until the operator picks one.
 
 ## Appendix D. Links and reading list
