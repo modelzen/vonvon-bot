@@ -94,18 +94,48 @@ describe('managed Codex installation', { timeout: 20_000 }, () => {
     expect(stages()).toEqual([]);
   });
 
-  it('retains staging when process-tree cleanup cannot be verified', async () => {
+  it('removes staging after confirmed process-tree cleanup failure', async () => {
     const close = OwnedCodexProcess.prototype.close;
     const failure = vi.spyOn(OwnedCodexProcess.prototype, 'close').mockImplementationOnce(async function (this: OwnedCodexProcess, graceMs) {
       await close.call(this, graceMs);
-      throw new CodexProcessCleanupError('fixture cleanup unknown');
+      throw new CodexProcessCleanupError('fixture cleanup failed after death');
     });
     try {
-      await expect(install()).rejects.toThrow('fixture cleanup unknown');
-      expect(stages()).toHaveLength(1);
-      expect(existsSync(join(home, stages()[0]!, 'install'))).toBe(true);
+      await expect(install()).rejects.toThrow('fixture cleanup failed after death');
+      expect(stages()).toEqual([]);
     } finally {
       failure.mockRestore();
+      for (const stage of stages()) rmSync(join(home, stage), { recursive: true, force: true });
+    }
+  });
+
+  it('retains staging and the prior install while a close is still pending', async () => {
+    const previous = managedCodexBin();
+    const close = OwnedCodexProcess.prototype.close;
+    let entered!: () => void;
+    const closing = new Promise<void>(resolve => { entered = resolve; });
+    let release!: () => void;
+    const permitted = new Promise<void>(resolve => { release = resolve; });
+    const held = vi.spyOn(OwnedCodexProcess.prototype, 'close').mockImplementationOnce(async function (this: OwnedCodexProcess, graceMs) {
+      entered();
+      await permitted;
+      await close.call(this, graceMs);
+      throw new CodexProcessCleanupError('fixture cleanup failed after death');
+    });
+    const result = install().then(() => 'fulfilled', error => error);
+    try {
+      await closing;
+      expect(stages()).toHaveLength(1);
+      expect(existsSync(join(home, stages()[0]!, 'install'))).toBe(true);
+      expect(managedCodexBin()).toBe(previous);
+      release();
+      expect(await result).toBeInstanceOf(CodexProcessCleanupError);
+      expect(managedCodexBin()).toBe(previous);
+      expect(stages()).toEqual([]);
+    } finally {
+      release();
+      await result;
+      held.mockRestore();
       for (const stage of stages()) rmSync(join(home, stage), { recursive: true, force: true });
     }
   });

@@ -2,18 +2,27 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { OwnedCodexProcess } from '../src/agent/codex-appserver/owned-process';
+import { CodexProcessCleanupError, OwnedCodexProcess } from '../src/agent/codex-appserver/owned-process';
 import { AppServerClient } from '../src/agent/codex-appserver/app-server-client';
 import { runSetupChild } from '../src/agent/codex-appserver/managed-install';
 import { writeNodeExecutable } from './helpers/node-executable';
 
 const roots: string[] = [];
-const pids: number[] = [];
+const owners = vi.hoisted(() => new Set<{ close(): Promise<void> }>());
+vi.mock('../src/agent/codex-appserver/owned-process', async original => {
+  const actual = await original<typeof import('../src/agent/codex-appserver/owned-process')>();
+  return { ...actual, OwnedCodexProcess: class extends actual.OwnedCodexProcess {
+    constructor(...args: ConstructorParameters<typeof actual.OwnedCodexProcess>) {
+      super(...args);
+      owners.add(this);
+    }
+  } };
+});
 const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 afterEach(async () => {
-  for (const pid of pids.splice(0)) { try { process.kill(pid, 'SIGKILL'); } catch {} }
-  await delay(50);
+  await Promise.allSettled([...owners].map(owner => owner.close()));
+  owners.clear();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 function fixture(inherit: boolean) {
@@ -30,7 +39,7 @@ function fixture(inherit: boolean) {
 }
 async function descendant(ready: string): Promise<number> {
   await vi.waitFor(() => expect(existsSync(ready)).toBe(true));
-  const pid = Number(readFileSync(ready, 'utf8')); pids.push(pid); return pid;
+  return Number(readFileSync(ready, 'utf8'));
 }
 
 describe('owned Codex process trees', () => {
@@ -38,7 +47,6 @@ describe('owned Codex process trees', () => {
     const f = fixture(false);
     const owned = new OwnedCodexProcess(process.execPath, ['-e', 'setInterval(()=>{},100)'], { cwd: f.root, stdio: 'ignore' });
     const pid = owned.child.pid!;
-    pids.push(pid);
     const kill = process.kill.bind(process);
     let permissionDenied = false;
     const probe = vi.spyOn(process, 'kill').mockImplementation((target, signal) => {
@@ -89,17 +97,15 @@ describe('owned Codex process trees', () => {
     `);
     const client = new AppServerClient({ bin: server.bin, cwd: f.root, initializeTimeoutMs: 10_000 });
     await client.connect();
-    if (client.pid) pids.push(client.pid);
     const pid = await descendant(f.ready);
     const leader = Number(readFileSync(leaderFile, 'utf8'));
-    pids.push(leader);
     if (earlyExit) {
       client.notify('exit');
       await vi.waitFor(() => expect(alive(leader)).toBe(false));
       if (process.platform !== 'win32') expect(client.exited).toBe(true);
     }
-    const result = await Promise.race([client.close(50).then(() => 'closed'), delay(8000).then(() => 'timeout')]);
-    expect(result).toBe('closed');
+    const result = await Promise.race([client.close(50).catch(error => error), delay(8000).then(() => 'timeout')]);
+    expect(result).toBeInstanceOf(CodexProcessCleanupError);
     expect(alive(pid)).toBe(false);
   }, 20_000);
 });
