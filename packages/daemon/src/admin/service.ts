@@ -59,6 +59,7 @@ import {
   latestNpmVersion,
   type BackendCatalogEntry,
   type InstallResult,
+  type UninstallResult,
   type InstallProgress,
 } from '../agent';
 import type { AccountUsageBundle, BackendDepState, BackendProbe, PermissionMode } from '../agent/types';
@@ -456,7 +457,7 @@ export interface AdminServiceDeps {
   ) => Promise<InstallResult>;
   /** 卸载执行器（rm 用户私装目录里的包 + 清 package.json 条目）。daemon 进程注入
    * {@link uninstallBackendDep}；只读预览不注入 → uninstallBackend 抛 NotWiredYetError。 */
-  uninstallBackend?: (pkg: string) => Promise<boolean>;
+  uninstallBackend?: (pkg: string, opts?: { binName?: string }) => Promise<UninstallResult>;
 }
 
 /**
@@ -890,13 +891,17 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       if (!entry.dep.pkg || !isInstallable(entry)) {
         return { ok: false, message: `「${entry.displayName}」不是可一键管理的按需后端，无法卸载。` };
       }
-      if (!isBackendInstalledInUserDir(entry)) {
+      if (!deps.uninstallBackend) {
+        if (!isBackendInstalledInUserDir(entry)) {
+          return { ok: false, message: `「${entry.displayName}」并未装在用户目录，无需卸载。` };
+        }
+        throw new NotWiredYetError(`🗑️ 卸载「${entry.displayName}」`);
+      }
+      const result = await deps.uninstallBackend(entry.dep.pkg, { binName: entry.dep.binName });
+      if (result === 'not-installed') {
         return { ok: false, message: `「${entry.displayName}」并未装在用户目录，无需卸载。` };
       }
-      // 卸载（rm + 清 package.json 条目）owns runtime → 只读预览无注入 → 501。
-      if (!deps.uninstallBackend) throw new NotWiredYetError(`🗑️ 卸载「${entry.displayName}」`);
-      const ok = await deps.uninstallBackend(entry.dep.pkg);
-      return ok
+      return result === 'uninstalled'
         ? { ok: true, message: `已卸载「${entry.displayName}」。` }
         : { ok: false, message: `卸载「${entry.displayName}」失败（可能仍被占用），可稍后重试。` };
     },

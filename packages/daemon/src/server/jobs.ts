@@ -161,7 +161,13 @@ export class Jobs {
       if (item.type !== 'log') { operation.terminal = item; if (this.backends.get(key) === operation) this.backends.delete(key); }
       for (const peer of operation.peers) if (peer.open) peer.event({ type: 'event', event: 'backendInstall', payload: { operationId: operation.operationId, id, update, item } });
     };
-    operation.done = Promise.resolve().then(() => this.options.service.installBackend(id, chunk => operation.output.append(chunk, piece => emit({ type: 'log', chunk: piece })), operation.abort.signal, { update }))
+    let install: ReturnType<AdminService['installBackend']>;
+    try {
+      install = this.options.service.installBackend(id, chunk => operation.output.append(chunk, piece => emit({ type: 'log', chunk: piece })), operation.abort.signal, { update });
+    } catch (error) {
+      install = Promise.reject(error);
+    }
+    operation.done = install
       .then(result => { emit(result.ok ? { type: 'done' } : { type: 'error', code: result.aborted ? 'aborted' : 'install_failed', message: backendErrorSuffix(result.tail) }); })
       .catch(error => { emit({ type: 'error', code: 'unknown', message: backendErrorSuffix(error instanceof Error ? error.message : '安装失败。') }); })
       .finally(() => { if (this.backends.get(key) === operation) this.backends.delete(key); this.backendWork.delete(operation); operation.peers.clear(); this.options.toolsSettled(); });

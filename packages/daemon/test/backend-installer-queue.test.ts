@@ -213,6 +213,33 @@ describe('shared backend prefix mutation ownership', () => {
     await finish(children[1]!); expect((await third).ok).toBe(true);
   });
 
+  it('checks cancellation again after held directory preparation', async () => {
+    const gate = deferred(); releases.push(gate.resolve);
+    controls.prepare = () => gate.promise;
+    const abort = new AbortController();
+    const install = own(installBackendDep('fixture-a', undefined, abort.signal));
+    await eventually(() => expect(controls.preparations).toBe(1));
+    abort.abort(); gate.resolve();
+    expect(await install).toMatchObject({ ok: false, aborted: true });
+    expect(children).toHaveLength(0);
+  });
+
+  it('keeps absent uninstall read-only and preserves the uninjected absent reply', async () => {
+    expect(await own(uninstallBackendDep('fixture-a'))).toBe('not-installed');
+    expect(existsSync(paths.backendsDir)).toBe(false);
+    expect(await createAdminService().uninstallBackend('fixture-a')).toEqual({ ok: false, message: '「fixture-a」并未装在用户目录，无需卸载。' });
+    expect(existsSync(paths.backendsDir)).toBe(false);
+  });
+
+  it('checks bin eligibility and removal with bin metadata', async () => {
+    await packageFiles('fixture-bin');
+    expect(await own(uninstallBackendDep('fixture-bin', { binName: 'fixture-command' }))).toBe('not-installed');
+    expect(existsSync(join(paths.backendsDir, 'node_modules/fixture-bin/package.json'))).toBe(true);
+    await mkdir(join(paths.backendsDir, 'node_modules/.bin'), { recursive: true });
+    await writeFile(join(paths.backendsDir, 'node_modules/.bin/fixture-command'), 'inert surviving shim');
+    expect(await own(uninstallBackendDep('fixture-bin', { binName: 'fixture-command' }))).toBe('failed');
+  });
+
   it('normalizes a synchronous service throw to terminal replay and releases the identical slot', async () => {
     const svc = service(); svc.installBackend = () => { throw new Error('synchronous fixture failure'); };
     const jobs = new Jobs({ service: svc, changed() {}, toolsSettled() {} }); managers.push(jobs);
