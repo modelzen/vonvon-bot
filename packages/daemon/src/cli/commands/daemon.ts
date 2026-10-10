@@ -22,10 +22,20 @@ export async function daemonStatus(home = paths.appDir): Promise<DaemonStatus> {
 const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function runStart(port = 0): Promise<DaemonStatus> {
+  const waitReady = async (pid: number): Promise<DaemonStatus | null> => {
+    const deadline = Date.now() + 25_000;
+    while (Date.now() < deadline) {
+      const owner = await readRunningPidLock(paths.appDir);
+      if (!owner || owner.pid !== pid) return null;
+      if (owner.listen) return daemonStatus();
+      await pause(50);
+    }
+    throw new Error(`Daemon PID ${pid} did not publish readiness.`);
+  };
   const existing = await readRunningPidLock(paths.appDir);
   if (existing) {
-    if (existing.listen) return daemonStatus();
-    throw new Error(`Vonvon daemon PID ${existing.pid} is still starting.`);
+    const ready = await waitReady(existing.pid);
+    if (ready) return ready;
   }
   const cliEntry = process.argv[1];
   if (!cliEntry) throw new Error('Cannot locate the daemon CLI entry.');
@@ -47,7 +57,10 @@ export async function runStart(port = 0): Promise<DaemonStatus> {
     if (child.exitCode !== null || child.signalCode !== null) throw new Error(`Daemon exited before readiness. Check ${join(paths.appDir, 'daemon.log')}.`);
     const lock = await readRunningPidLock(paths.appDir);
     if (lock && lock.pid === child.pid && lock.listen) return daemonStatus();
-    if (lock && lock.pid !== child.pid) throw new Error(`Another Vonvon daemon owns PID lock (PID ${lock.pid}).`);
+    if (lock && lock.pid !== child.pid) {
+      const winner = await waitReady(lock.pid);
+      if (winner) return winner;
+    }
     await pause(50);
   }
   throw new Error(`Daemon readiness timed out. Check ${join(paths.appDir, 'daemon.log')}.`);
@@ -61,7 +74,8 @@ export async function runStop(home = paths.appDir): Promise<boolean> {
   const lock = await readRunningPidLock(home);
   if (!lock) return false;
   if (lock.pid === process.pid) throw new Error('Refusing to stop the current CLI process.');
-  if (!isPidLockOwnerRunning(lock)) return false;
+  const confirmation = await getPidLockInfo(home);
+  if (!sameOwner(confirmation, lock) || !isPidLockOwnerRunning(lock)) return false;
   process.kill(lock.pid, 'SIGTERM');
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {

@@ -116,6 +116,6 @@ export async function publishPidLock(home: string, owner: PidLockInfo, listen: s
 }
 
 export async function releasePidLock(home: string, owner: PidLockInfo): Promise<void> {
-  const current = await getPidLockInfo(home).catch(() => null);
+  const current = await getPidLockInfo(home);
   if (current && sameOwner(current, owner)) await unlink(lockPath(home)).catch((error: unknown) => { if (!isMissing(error)) throw error; });
 }

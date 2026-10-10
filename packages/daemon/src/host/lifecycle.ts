@@ -1,8 +1,11 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { log } from '../core/logger';
 
 export interface ShutdownControl {
   readonly requested: boolean;
   waitForRequest(): Promise<void>;
+  requestStop(): void;
+  requestRestart(port: number): void;
   dispose(): void;
 }
 
@@ -38,6 +41,19 @@ export function observeShutdown(parentControl = false): ShutdownControl {
   return {
     get requested() { return requested; },
     waitForRequest: () => pending,
+    requestStop: request,
+    requestRestart(port) {
+      const cliEntry = process.argv[1];
+      if (!cliEntry) throw new Error('Cannot locate daemon CLI for restart.');
+      const helper = spawn(process.execPath, [cliEntry, '__restart-after-exit', String(port), String(process.pid)], {
+        detached: true,
+        stdio: 'ignore',
+        env: { ...process.env },
+      });
+      helper.once('spawn', request);
+      helper.once('error', (error) => log.fail('daemon-restart', error, { phase: 'helper-spawn' }));
+      helper.unref();
+    },
     dispose() {
       process.off('SIGINT', request); process.off('SIGTERM', request);
       process.off('message', message); process.off('disconnect', request);

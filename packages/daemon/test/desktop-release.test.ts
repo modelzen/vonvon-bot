@@ -83,3 +83,11 @@ describe('V2 update guidance regression', () => {
     expect(text).toContain('V2');
   });
 });
+
+it('keeps the seven DM management actions and version badge without the retired console row', () => {
+  const menu = JSON.stringify(buildDmMenuCard({ version: '0.7.0' }));
+  for (const label of ['新建项目', '项目列表', '设置', '用量', '诊断', '重启', '更新']) expect(menu).toContain(label);
+  expect(menu).toContain('v0.7.0');
+  expect(menu).toContain('"enable_forward":false');
+  expect(menu).not.toContain('网页控制台');
+});
