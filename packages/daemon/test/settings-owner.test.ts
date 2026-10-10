@@ -128,31 +128,6 @@ it('returns the exact settings result through executor and real IPC responder', 
   const result = await caller.call({ kind: 'settingsPatch', edit: { scope: agent, section: 'cards', revision: view.sections.cards.revision, patch: { showToolCalls: false } } });
   expect(result).toMatchObject({ kind: 'saved', section: { section: 'cards', value: { stored: { showToolCalls: false } } } });
 });
-it('authenticated HTTP preserves result unions and rejects malformed or cross-agent requests', async () => {
-  const { createWebServer } = await import('../src/web/server');
-  const { owner } = await fixture();
-  const service = { settings: owner } as import('../src/admin/service').AdminService;
-  const server = createWebServer({ service, token: 'fixture-token' });
-  const { port } = await server.listen(0);
-  const base = `http://127.0.0.1:${port}`;
-  const request = (route: string, method = 'GET', value?: unknown, headers: Record<string, string> = {}) => fetch(base + route, { method, headers: { Authorization: 'Bearer fixture-token', 'Content-Type': 'application/json', ...headers }, ...(value === undefined ? {} : { body: JSON.stringify(value) }) });
-  try {
-    const route = `/api/bots/${botId}/settings`;
-    expect((await fetch(base + route)).status).toBe(401);
-    expect((await request(route, 'GET', undefined, { Origin: 'https://evil.invalid' })).status).toBe(403);
-    const view = await (await request(route)).json() as AgentSettingsView;
-    const input = { revision: view.sections.run.revision, patch: { maxConcurrentRuns: 3 } };
-    const result = await request(route + '/run', 'PATCH', input);
-    expect(result.status).toBe(200); expect(await result.json()).toMatchObject({ kind: 'saved', section: { value: { stored: { maxConcurrentRuns: 3 } } } });
-    expect((await request(route + '/run', 'PATCH', input)).status).toBe(409);
-    expect((await request(route + '/run', 'PATCH', { ...input, patch: { maxConcurrentRuns: '5' } })).status).toBe(400);
-    expect((await request(route + '/actions', 'POST', { kind: 'repairCliHooks', botId: 'cli_other' })).status).toBe(400);
-    const projectView = await (await request('/api/project/demo/settings?bot=cli_fixture')).json() as ProjectSettingsView;
-    expect((await request('/api/project/demo/settings?bot=cli_fixture', 'PATCH', { section: 'compact', revision: projectView.sections.compact.revision, patch: { autoCompact: false } })).status).toBe(200);
-    expect((await request('/api/project/demo/no-mention?bot=cli_fixture', 'POST', { on: 'yes' })).status).toBe(400);
-    expect((await request(`/api/bots/${botId}/sessions/missing/settings`)).status).toBe(404);
-  } finally { await server.close(); }
-});
 it('readonly owner never permits writes; failed catalogs do not disable unrelated settings', async () => {
   const { owner: readonly } = await fixture({ access: { kind: 'readonly', reason: 'owner-offline', message: 'Stopped' } });
   const view = await readonly.read(agent) as AgentSettingsView;

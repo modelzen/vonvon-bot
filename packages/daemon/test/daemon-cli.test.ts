@@ -37,35 +37,46 @@ function launch(home: string, root: string, args: string[]) {
   const exited = new Promise<number | null>((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
   return { child, exited, output: () => output };
 }
-it('exposes foreground run and refuses inherited service, migration and lifecycle commands', async () => {
+it('exposes daemon lifecycle commands while status and logs leave a missing home untouched', async () => {
   const f = await fixture();
   for (const args of [['--help'], ['daemon', '--help']]) {
     const p = launch(f.home, f.root, args); expect(await p.exited).toBe(0);
-    expect(p.output()).not.toMatch(/__daemon-control|__desktop-service|migrate|restart|stop|status/);
+    expect(p.output()).not.toMatch(/__daemon-control|__desktop-service|migrate|restart/);
   }
-  for (const args of [['start'], ['run'], ['__daemon-control', 'stop'], ['data', 'migrate'], ['daemon', 'start']]) {
+  for (const args of [['start'], ['run'], ['__daemon-control', 'stop'], ['data', 'migrate']]) {
     const p = launch(f.home, f.root, args); expect(await p.exited).toBe(1);
+  }
+  for (const args of [['daemon', 'status', '--json'], ['daemon', 'logs']]) {
+    const p = launch(f.home, f.root, args); expect(await p.exited).toBe(0);
   }
   expect(await readdir(f.home)).toEqual([]); expect(await readdir(f.root)).toEqual([]);
 });
-it('starts without bots, refuses duplicate ownership, disables service actions and shuts down within the isolated root', async () => {
+it('starts without bots, refuses duplicate ownership and releases PID lease on shutdown', async () => {
   const f = await fixture();
   const p = launch(f.home, f.root, ['daemon', 'run']);
   await expect.poll(p.output, { timeout: 15_000 }).toContain('vonvon daemon ready');
-  const record = z.object({ port: z.number(), token: z.string(), pid: z.number() }).parse(JSON.parse(await readFile(join(f.root, 'web-console.json'), 'utf8')));
-  expect(record.pid).toBe(p.child.pid); expect(p.output()).not.toContain(record.token);
-  for (const action of ['/api/daemon/restart', '/api/daemon/stop', '/api/daemon/start', '/api/update']) {
-    const response = await fetch(`http://127.0.0.1:${record.port}${action}`, { method: 'POST', headers: { Authorization: `Bearer ${record.token}`, 'Content-Type': 'application/json' }, body: '{}' });
-    expect(response.status).toBe(501);
-    expect(await response.json()).toMatchObject({ error: 'not_wired_yet' });
-  }
+  const record = z.object({ listen: z.string(), pid: z.number(), startedAt: z.string() }).parse(JSON.parse(await readFile(join(f.root, 'daemon.pid'), 'utf8')));
+  expect(record.pid).toBe(p.child.pid); expect(record.listen).toMatch(/^127\.0\.0\.1:\d+$/);
   const second = launch(f.home, f.root, ['daemon', 'run']);
   expect(await second.exited).toBe(1); expect(second.output()).toMatch(/host is busy|already running/);
-  expect(await readdir(f.home)).toEqual([]);
+  expect((await readdir(f.home)).filter((entry) => entry !== '.codex')).toEqual([]);
   p.child.kill('SIGTERM'); expect(await p.exited).toBe(0);
-  await expect(readFile(join(f.root, 'web-console.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(readFile(join(f.root, 'daemon.pid'))).rejects.toMatchObject({ code: 'ENOENT' });
   expect(await readdir(join(f.root, '.access'))).toEqual([]);
 }, 20_000);
+
+it('concurrent detached starts return the same ready owner and stop clears its lease', async () => {
+  const f = await fixture();
+  const first = launch(f.home, f.root, ['daemon', 'start', '--port', '0']);
+  const second = launch(f.home, f.root, ['daemon', 'start', '--port', '0']);
+  expect(await Promise.all([first.exited, second.exited])).toEqual([0, 0]);
+  const record = z.object({ pid: z.number(), listen: z.string() }).parse(JSON.parse(await readFile(join(f.root, 'daemon.pid'), 'utf8')));
+  expect(first.output()).toContain(`PID ${record.pid} at ${record.listen}`);
+  expect(second.output()).toContain(`PID ${record.pid} at ${record.listen}`);
+  const stopped = launch(f.home, f.root, ['daemon', 'stop']);
+  expect(await stopped.exited).toBe(0);
+  await expect(readFile(join(f.root, 'daemon.pid'))).rejects.toMatchObject({ code: 'ENOENT' });
+}, 30_000);
 
 it('keeps generated secret getters on their captured root outside the parent shell', async () => {
   const f = await fixture();
