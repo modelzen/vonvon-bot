@@ -104,3 +104,19 @@ it("delivers log and backend events and rejects an invalid reply payload", async
   expect(chunks).toEqual(["downloading"]);
   await client.close();
 });
+
+it("keeps observer failures inspectable while allowing RPC to complete", async () => {
+  const options = await fixture((socket, frame) => {
+    socket.send(JSON.stringify({type:"event",event:"log",payload:{lines:"hello\n"}}));
+    socket.send(JSON.stringify({type:"response",id:frame.id,method:frame.method,payload:{kind:"state",state}}));
+  });
+  const client = await connectLocal(options);
+  client.onLog(() => { throw new Error("log observer failed"); });
+  const stop = client.onError(() => { throw new Error("error observer failed"); });
+  expect(await client.admin({type:"state"})).toEqual({kind:"state",state});
+  stop();
+  const failures: string[] = [];
+  client.onError(error => failures.push(error.message));
+  expect(failures).toEqual(["error observer failed"]);
+  await client.close();
+});

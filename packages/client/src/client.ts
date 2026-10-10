@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type WebSocket from "ws";
 import {
   adminReplySchema, collaborationReplySchema, commandResultSchema,
@@ -56,14 +55,17 @@ export function createClient(socket: WebSocket): VonvonClient {
   const undeliveredErrors: Error[] = [];
   let closed = false;
 
+  function retainError(error: unknown): void {
+    undeliveredErrors.push(error instanceof Error ? error : new Error(String(error)));
+    if (undeliveredErrors.length > 32) undeliveredErrors.shift();
+  }
   function emitError(error: Error): void {
     if (errors.size === 0) {
-      undeliveredErrors.push(error);
-      if (undeliveredErrors.length > 32) undeliveredErrors.shift();
+      retainError(error);
       return;
     }
     for (const listener of errors) {
-      try { listener(error); } catch { /* observer cannot affect transport */ }
+      try { listener(error); } catch (failure) { retainError(failure); }
     }
   }
   function deliver<T>(listeners: Set<(value: T) => void>, value: T): void {
@@ -110,7 +112,7 @@ export function createClient(socket: WebSocket): VonvonClient {
 
   function send<M extends Method>(method: M, payload: Payload<M>): Promise<z.output<(typeof replySchemas)[M]>> {
     if (closed || socket.readyState !== socket.OPEN) return Promise.reject(new Error("Daemon connection closed"));
-    const id = randomUUID();
+    const id = globalThis.crypto.randomUUID();
     const frame = requestSchema.parse({type:"request",id,method,payload});
     return new Promise<z.output<(typeof replySchemas)[M]>>((resolve, reject) => {
       pending.set(id, {method, resolve: value => resolve(replySchemas[method].parse(value)), reject});
@@ -146,7 +148,7 @@ export function createClient(socket: WebSocket): VonvonClient {
     onError(listener) {
       errors.add(listener);
       for (const error of undeliveredErrors.splice(0)) {
-        try { listener(error); } catch { /* observer cannot affect transport */ }
+        try { listener(error); } catch (failure) { retainError(failure); }
       }
       return () => { errors.delete(listener); };
     },
