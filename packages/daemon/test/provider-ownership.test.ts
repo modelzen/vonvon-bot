@@ -487,6 +487,74 @@ it('real orchestrator shutdown awaits an accepted message continuation before it
   expect(closing.status).toBe('fulfilled');
 });
 
+it.each(['clean', 'failed'] as const)('startup failure waits for the accepted run and %s provider cleanup', async cleanup => {
+  const { owner, fixture } = born();
+  const run = thread();
+  run.t.close.mockImplementation(() => owner.close());
+  fake.backend.resumeThread.mockResolvedValue(run.t);
+  const startupError = new Error('channel connect failed after accepting a run');
+  const accepted = deferred<void>();
+  fake.channel.connect.mockImplementationOnce(async () => {
+    const registration = fake.channel.on.mock.calls.find(call => call[0] === 'message');
+    if (!registration || typeof registration[1] !== 'function') throw new Error('Message handler absent');
+    await registration[1](message('first'));
+    await accepted.promise;
+    throw startupError;
+  });
+  const { startBridge } = await import('../src/bot/bridge');
+  const starting = observe(startBridge({ cfg, appSecret: 'fixture', fallbackCwd: '/test' }));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(run.consumed).toHaveLength(1);
+  expect(transport.spawn).toHaveBeenCalledOnce();
+  expect(fixture.state()).toBe('present');
+  accepted.resolve();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(run.t.close).toHaveBeenCalledOnce();
+  expect(kill).toHaveBeenCalledWith(-fixture.pid!, 'SIGTERM');
+  const providerClosing = observe(owner.close());
+  const registryClosing = observe(ownerModule.closeOwnedCodexProcesses());
+  expect(starting.status).toBe('pending');
+  expect(fake.channel.disconnect).not.toHaveBeenCalled();
+
+  if (cleanup === 'clean') {
+    fixture.die();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(providerClosing.status).toBe('fulfilled');
+    expect(registryClosing.status).toBe('fulfilled');
+    expect(starting.status).toBe('pending');
+    expect(fake.channel.disconnect).not.toHaveBeenCalled();
+    run.turns[0]!.resolve();
+  } else {
+    run.turns[0]!.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fake.final).toHaveBeenCalled();
+    expect(starting.status).toBe('pending');
+    expect(providerClosing.status).toBe('pending');
+    expect(registryClosing.status).toBe('pending');
+    expect(fake.channel.disconnect).not.toHaveBeenCalled();
+    fixture.die(17);
+  }
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(starting.status).toBe('rejected');
+  expect(ownerModule.unconfirmedCodexPids()).toEqual([]);
+  expect(fake.channel.disconnect).toHaveBeenCalledOnce();
+  if (cleanup === 'clean') {
+    expect(starting.error).toBe(startupError);
+  } else {
+    expect(providerClosing.status).toBe('rejected');
+    expect(providerClosing.error).toBeInstanceOf(ownerModule.CodexProcessCleanupError);
+    expect(registryClosing.status).toBe('rejected');
+    if (!(starting.error instanceof AggregateError)) throw new Error('Startup cleanup failure was not aggregated');
+    expect(starting.error.errors).toHaveLength(2);
+    expect(starting.error.errors[0]).toBe(startupError);
+    const cleanupError: unknown = starting.error.errors[1];
+    if (!(cleanupError instanceof AggregateError)) throw new Error('Orchestrator cleanup failure was not retained');
+    expect(cleanupError.errors).toEqual([registryClosing.error, providerClosing.error]);
+    expect(cleanupError.errors[0]).toBe(registryClosing.error);
+    expect(cleanupError.errors[1]).toBe(providerClosing.error);
+  }
+});
+
 
 it('actual backend thread close and resident warm client remain pending past grace and propagate death failure', async () => {
   const warm = shell();
