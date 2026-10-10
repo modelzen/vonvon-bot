@@ -12,7 +12,7 @@ import { paths } from '../src/config/paths';
 
 const spawned = vi.hoisted((): { child?: EventEmitter } => ({}));
 vi.mock('../src/platform/spawn', () => ({ spawnProcess: () => spawned.child }));
-vi.mock('../src/agent/backend-loader', () => ({ isBackendDepInstalled: () => true, isBackendBinInstalled: () => true }));
+vi.mock('../src/agent/backend-loader', () => ({ isBackendPackageInUserDir: () => true }));
 vi.mock('../src/agent/native-helpers', () => ({ fixNativeHelperPerms: async () => {} }));
 vi.mock('../src/core/logger', () => ({ log: { info() {}, warn() {}, fail() {}, debug() {} } }));
 

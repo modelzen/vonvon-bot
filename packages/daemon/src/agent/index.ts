@@ -66,8 +66,8 @@ export {
 export {
   installBackendDep,
   uninstallBackendDep,
+  type UninstallResult,
   latestNpmVersion,
-  ensureBackendsDir,
   buildInstallCommand,
   stripVersion,
   type InstallResult,

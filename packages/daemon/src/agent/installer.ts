@@ -5,7 +5,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { spawnProcess } from '../platform/spawn';
 import { paths } from '../config/paths';
 import { log } from '../core/logger';
-import { isBackendDepInstalled, isBackendBinInstalled } from './backend-loader';
+import { isBackendPackageInUserDir } from './backend-loader';
 import { fixNativeHelperPerms } from './native-helpers';
 
 /**
@@ -18,7 +18,6 @@ import { fixNativeHelperPerms } from './native-helpers';
  *   ② spawn `npm install <pkg> --prefix backendsDir --include=optional`（cross-spawn，
  *      Windows `.cmd` shim 安全；--include=optional 拉平台二进制——实验 F）。
  *      stdout/stderr 逐块流给 onProgress（Web SSE / DM 卡轮询的进度源）。
- *   ③ 装完用 {@link isBackendDepInstalled} 校验真能解析到（半装/损坏 = 失败）。
  *
  * 可取消：传 AbortSignal，abort 时 kill npm 子进程并清半装子目录回滚。
  * 限纯 JS / 自带 prebuild 二进制的包（catalog 的 npm-ondemand 标注保证）——不触发
@@ -26,6 +25,17 @@ import { fixNativeHelperPerms } from './native-helpers';
  */
 
 const NPM = 'npm';
+
+let mutationTail: Promise<void> = Promise.resolve();
+let queuePosition = 0;
+
+function enqueueMutation<T>(kind: 'install' | 'uninstall', pkg: string, run: () => Promise<T>): Promise<T> {
+  const position = ++queuePosition;
+  const result = mutationTail.then(run);
+  mutationTail = result.then(() => undefined, () => undefined);
+  log.info('backend-queue', 'reserved', { kind, pkg, position });
+  return result;
+}
 
 /** 查 npm registry 上某包的最新版本（`npm view <pkg> version`）。用于后端「检查更新」。
  *  绝不抛错：网络/registry 失败或超时 → null。8s 超时（registry 慢也不卡 UI）。 */
@@ -79,7 +89,7 @@ const BACKENDS_PACKAGE_JSON = JSON.stringify(
 );
 
 /** 确保 backendsDir 存在且有最小 package.json（幂等；已存在不覆写，保留 npm 写的锁等）。 */
-export async function ensureBackendsDir(): Promise<void> {
+async function ensureBackendsDir(): Promise<void> {
   await mkdir(paths.backendsDir, { recursive: true });
   const pkgFile = join(paths.backendsDir, 'package.json');
   if (!existsSync(pkgFile)) {
@@ -125,7 +135,7 @@ export function buildInstallCommand(
 
 /**
  * 按需安装一个后端依赖到用户私装目录。绝不抛错——失败落 {@link InstallResult}.ok=false
- * （HTTP/卡片层据 tail 给诊断）。装完用 isBackendDepInstalled 校验；校验不过即视为失败
+ * （HTTP/卡片层据 tail 给诊断）。装完用用户目录的存在性校验；校验不过即视为失败
  * 并回滚半装子目录。可取消（signal.abort → kill npm + 回滚）。
  *
  * @param pkg     npm 包名（catalog 的 installSpec.pkg；可带 @version）
@@ -134,12 +144,22 @@ export function buildInstallCommand(
  * @param opts.binName  bin 类后端的 bin 名。给了 ⇒ 安装后校验走
  *   node_modules/.bin 存在性而非 require.resolve（bin-only 包无 main 入口，resolve 必失败）。
  */
-export async function installBackendDep(
+export function installBackendDep(
   pkg: string,
   onProgress?: InstallProgress,
   signal?: AbortSignal,
   opts?: { binName?: string },
 ): Promise<InstallResult> {
+  return enqueueMutation('install', pkg, () => installInTurn(pkg, onProgress, signal, opts));
+}
+
+async function installInTurn(
+  pkg: string,
+  onProgress?: InstallProgress,
+  signal?: AbortSignal,
+  opts?: { binName?: string },
+): Promise<InstallResult> {
+  if (signal?.aborted) return { ok: false, code: null, aborted: true, tail: '安装已取消' };
   // 包名去掉版本后缀（@scope/name@1.2.3 → @scope/name）用于回滚定位 + 校验。
   const bareName = stripVersion(pkg);
   try {
@@ -216,9 +236,7 @@ export async function installBackendDep(
     return result;
   }
 
-  // npm exit 0 仍要校验（半装、exports 缺失、平台二进制没拉到都可能 exit 0）。bin 类
-  // 查 .bin 存在性，库类查 require.resolve（dispatch 见 backend-loader）。
-  const verifyOk = opts?.binName ? isBackendBinInstalled(opts.binName) : isBackendDepInstalled(bareName);
+  const verifyOk = isBackendPackageInUserDir(bareName, opts?.binName);
   if (!verifyOk) {
     await rollback(bareName);
     log.warn('agent', 'backend-install-unverified', { pkg });
@@ -226,7 +244,7 @@ export async function installBackendDep(
       ok: false,
       code: result.code,
       aborted: false,
-      tail: `${result.tail}\n\n安装后校验失败：「${bareName}」装好了但${opts?.binName ? '.bin 里找不到可执行' : '解析不到'}（可能半装/平台二进制缺失），已回滚。`,
+      tail: `${result.tail}\n\n安装后校验失败：「${bareName}」${opts?.binName ? '.bin 里找不到可执行' : '用户目录里找不到 package.json'}（可能半装/平台二进制缺失），已尝试回滚。`,
     };
   }
 
@@ -239,9 +257,15 @@ export async function installBackendDep(
 }
 
 /** 卸载一个按需后端依赖（省空间 / 重装前清理）。绝不抛错。 */
-export async function uninstallBackendDep(pkg: string): Promise<boolean> {
-  await rollback(stripVersion(pkg));
-  return !isBackendDepInstalled(stripVersion(pkg));
+export type UninstallResult = 'not-installed' | 'uninstalled' | 'failed';
+
+export function uninstallBackendDep(pkg: string, opts?: { binName?: string }): Promise<UninstallResult> {
+  return enqueueMutation('uninstall', pkg, async () => {
+    const bareName = stripVersion(pkg);
+    if (!isBackendPackageInUserDir(bareName, opts?.binName)) return 'not-installed';
+    await rollback(bareName);
+    return isBackendPackageInUserDir(bareName, opts?.binName) ? 'failed' : 'uninstalled';
+  });
 }
 
 /** rm -rf backendsDir/node_modules/<pkg> + 从 package.json 移除条目 + 删 package-lock.json
