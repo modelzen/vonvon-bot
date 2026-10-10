@@ -69,7 +69,9 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
   let api: Awaited<ReturnType<typeof startApi>> | undefined;
   let handle: Awaited<ReturnType<typeof startBridge>>;
   try { handle = await startBridge({ cfg, appSecret: secret, fallbackCwd, onConnectionChange: () => {
-    if (process.send) process.send({ fcb: 'fcb.connection' });
+    if (process.send) {
+      if (process.connected) process.send({ fcb: 'fcb.connection' }, undefined, undefined, (error: Error | null) => { if (error && process.connected) log.fail('run', error, { phase: 'connection-notice' }); });
+    }
     else api?.invalidate();
   } }); }
   catch (error) { releaseLock(); throw error; }
