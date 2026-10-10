@@ -20,6 +20,7 @@ import { machineRpc } from './rpc/machine';
 import { settingsRpc } from './rpc/settings';
 import { readLocalIdentity } from './local-credential';
 import { getRpcErrorCode } from './errors';
+import { getPidLockInfo, type PidLockInfo } from './pid-lock';
 
 export interface ApiLifetime {
   beginDrain(): Promise<void>;
@@ -41,22 +42,24 @@ export async function startApi(options: { service: AdminService; port?: number; 
   let snapshots: SnapshotStore | undefined;
   let port = options.port ?? 0;
   const invalidate = (): void => { void snapshots?.rebuild().catch(() => undefined); };
+  const home = paths.appDir;
+  let owner: Promise<PidLockInfo | null> | undefined;
+  let draining: Promise<void> | undefined;
+  let released: Promise<void> | undefined;
   let closing: Promise<void> | undefined;
-  const close = (): Promise<void> => {
-    if (closing) return closing;
+  const beginDrain = (): Promise<void> => {
+    if (draining) return draining;
     const drains: Promise<void>[] = [];
-    closing = Promise.resolve().then(async () => {
+    draining = Promise.resolve().then(async () => {
       const results = await Promise.allSettled(drains);
       results.push(...await Promise.allSettled([Promise.resolve().then(() => snapshots?.close())]));
-      results.push(...await Promise.allSettled([new Promise<void>((resolve, reject) => {
-        if (!acquiredServer) { resolve(); return; }
-        acquiredServer.close(error => { if (error && !('code' in error && error.code === 'ERR_SERVER_NOT_RUNNING')) reject(error); else resolve(); });
-      })]));
       const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
-      if (errors.length) throw new AggregateError(errors, 'API shutdown failed');
+      if (errors.length) throw new AggregateError(errors, 'API drain failed');
     });
+    owner = getPidLockInfo(home);
+    void owner.catch(() => undefined);
     for (const cleanup of [
-      () => acquiredSockets?.close(),
+      () => acquiredSockets?.beginDrain(),
       () => Promise.resolve().then(() => options.service.close?.()),
       () => acquiredJobs?.close(),
       () => acquiredLogs?.close(),
@@ -65,6 +68,35 @@ export async function startApi(options: { service: AdminService; port?: number; 
       void drain.catch(() => undefined);
       drains.push(drain);
     }
+    return draining;
+  };
+  const release = (): Promise<void> => {
+    if (released) return released;
+    const work: Promise<void>[] = [];
+    released = Promise.resolve().then(async () => {
+      const results = await Promise.allSettled(work);
+      const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+      if (errors.length) throw new AggregateError(errors, 'API release failed');
+    });
+    work.push(new Promise<void>(resolve => resolve(acquiredSockets?.close())));
+    work.push(new Promise<void>((resolve, reject) => {
+      if (!acquiredServer) { resolve(); return; }
+      acquiredServer.close(error => { if (error && !('code' in error && error.code === 'ERR_SERVER_NOT_RUNNING')) reject(error); else resolve(); });
+    }));
+    for (const pending of work) void pending.catch(() => undefined);
+    return released;
+  };
+  const close = (): Promise<void> => {
+    if (closing) return closing;
+    let drain: Promise<void>;
+    closing = Promise.resolve().then(async () => {
+      const results = await Promise.allSettled([drain]);
+      results.push(...await Promise.allSettled([release()]));
+      const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+      if (errors.length) throw new AggregateError(errors, 'API shutdown failed');
+    });
+    drain = beginDrain();
+    void drain.catch(() => undefined);
     return closing;
   };
   try {
@@ -108,7 +140,20 @@ export async function startApi(options: { service: AdminService; port?: number; 
         await snapshots.rebuild(() => peer.send({ type: 'error', id: request.id, code: getRpcErrorCode(error), message: error instanceof Error ? error.message : '操作失败。' }));
       }
     }
-    const sockets = acquiredSockets = createSocketServer({ server, credential, info: { type: 'serverInfo', machineId, version: bridgeVersion(), protocolVersion: PROTOCOL_VERSION }, request, detached: peer => { jobs.detach(peer); logs.detach(peer); } });
+    async function control(peer: Peer, request: Request): Promise<void> {
+      if (request.method === 'machine' && request.payload.type === 'stopHost') {
+        if (!options.control) throw new Error('Host control is unavailable');
+        options.control.requestStop();
+        peer.send({ type: 'response', id: request.id, method: 'machine', payload: { type: 'done', message: 'daemon 正在停止。' } });
+      } else if (request.method === 'admin' && request.payload.type === 'daemonStatus') {
+        const lock = await owner;
+        const own = lock?.pid === process.pid && lock.listen === `127.0.0.1:${port}`;
+        peer.send({ type: 'response', id: request.id, method: 'admin', payload: { kind: 'daemonStatus', status: {
+          installed: false, supported: false, selfHosted: true, running: own, version: bridgeVersion(), ...(own ? { pid: lock.pid } : {}),
+        } } });
+      }
+    }
+    const sockets = acquiredSockets = createSocketServer({ server, credential, info: { type: 'serverInfo', machineId, version: bridgeVersion(), protocolVersion: PROTOCOL_VERSION }, request, control, detached: peer => { jobs.detach(peer); logs.detach(peer); } });
     snapshots = await createSnapshotStore({ service: options.service, jobs: () => jobs.snapshot(), publish: snapshot => sockets.publish({ type: 'event', event: 'snapshot', payload: snapshot }) });
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', () => { server.off('error', reject); resolve(); }); });
     const address = server.address();
@@ -116,8 +161,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
     port = address.port;
     return {
       port, listen: `127.0.0.1:${port}`, invalidate, close,
-      async beginDrain() { throw new Error('Drain control is not implemented.'); },
-      async release() { throw new Error('Release control is not implemented.'); },
+      beginDrain, release,
     };
   } catch (error) {
     try { await close(); }
