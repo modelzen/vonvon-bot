@@ -7,6 +7,7 @@ const protocolVersionSchema = z.number().int().positive();
 export const helloSchema = z.object({
   type: z.literal("hello"), protocolVersion: protocolVersionSchema,
   clientKind: z.enum(["desktop", "web", "cli"]),
+  credential: z.string().optional(),
 }).strict();
 export type Hello = z.infer<typeof helloSchema>;
 export const serverInfoSchema = z.object({

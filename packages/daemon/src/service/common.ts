@@ -73,7 +73,7 @@ export function appendServiceErr(tag: string, line: string, filePath: string = s
 
 /**
  * Absolute path to the installed bin entry. After bundling, this module lives at
- * `<pkg>/dist/...`, so the bin is `<pkg>/bin/feishu-codex-bridge.mjs` — the same
+ * `<pkg>/dist/...`, so the bin is `<pkg>/bin/vonvon.mjs` — the same
  * layout in a global npm install and a local checkout. Used by the Windows/Linux
  * service definitions, which need an absolute ExecStart.
  */

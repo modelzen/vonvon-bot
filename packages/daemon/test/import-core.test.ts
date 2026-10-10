@@ -123,6 +123,48 @@ it('serializes concurrent imports and rejects an unrelated provenance file', asy
   expect(await readFile(join(f.destination, 'PROVENANCE.md'), 'utf8')).toBe(content);
 });
 
+it('uses the platform lock endpoint without requiring a TCP port on Windows', async () => {
+  const f = await fixture();
+  const preload = join(f.root, 'check-lock-endpoint.mjs');
+  await writeFile(preload, `
+    import assert from 'node:assert/strict';
+    import net from 'node:net';
+    const listen = net.Server.prototype.listen;
+    net.Server.prototype.listen = function(options, ...args) {
+      if (process.platform === 'win32') {
+        assert.match(options.path, /^\\\\\\\\\\.\\\\pipe\\\\vonvon-import-core-[a-f0-9]{64}$/);
+        assert.equal(options.port, undefined);
+      } else {
+        assert.equal(options.host, '127.0.0.1');
+        assert.equal(typeof options.port, 'number');
+      }
+      return listen.call(this, options, ...args);
+    };
+  `);
+  const result = await f.run(preload);
+  expect(result.code, result.output).toBe(0);
+  await expectCompleteSeed(f);
+});
+
+it('fails closed when the Windows pipe cannot bind without falling back to TCP or writing a seed', async () => {
+  const f = await fixture();
+  const preload = join(f.root, 'deny-lock-endpoint.mjs');
+  await writeFile(preload, `
+    import assert from 'node:assert/strict';
+    import net from 'node:net';
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    net.Server.prototype.listen = function(options) {
+      assert.match(options.path, /^\\\\\\\\\\.\\\\pipe\\\\vonvon-import-core-[a-f0-9]{64}$/);
+      assert.equal(options.port, undefined);
+      throw Object.assign(new Error('injected pipe permission failure'), { code: 'EACCES' });
+    };
+  `);
+  const result = await f.run(preload);
+  expect(result.code, result.output).toBe(1);
+  expect(result.output).toContain('injected pipe permission failure');
+  expect(await readdir(f.destination)).toEqual([]);
+});
+
 it('rejects a read-only partial import while retaining its bytes', async () => {
   const f = await fixture(); expect((await f.run()).code).toBe(0);
   const manifest = manifestSchema.parse(JSON.parse(await readFile(join(f.destination, 'import-core.json'), 'utf8')));
