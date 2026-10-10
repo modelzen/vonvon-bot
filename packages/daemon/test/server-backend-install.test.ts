@@ -64,7 +64,6 @@ function checkStorage(admission: BackendAdmission, emitted: number): void {
   expect(fields.find(([key]) => key === 'head')?.[1]).toBeLessThan(TAIL);
 }
 
-// A fixed period records S without retaining emitted event objects.
 const pattern = Array.from({ length: 251 }, (_, index) => String.fromCharCode(33 + (index * 47 + Math.floor(index / 7)) % 90)).join('');
 const sourceBlock = pattern.repeat(Math.ceil(MIB / pattern.length)).slice(0, MIB);
 function sourceRange(start: number, length: number): string {
