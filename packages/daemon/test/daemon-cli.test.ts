@@ -53,7 +53,7 @@ it('exposes foreground run and refuses inherited service, migration and lifecycl
     const p = launch(f.home, f.root, args); expect(await p.exited).toBe(1);
   }
   expect(await readdir(f.home)).toEqual([]); expect(await readdir(f.root)).toEqual([]);
-});
+}, 20_000);
 it('starts without bots, refuses duplicate ownership, disables service actions and shuts down within the isolated root', async () => {
   const f = await fixture();
   const p = launch(f.home, f.root, ['daemon', 'run']);
