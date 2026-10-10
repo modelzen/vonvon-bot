@@ -1,16 +1,28 @@
 import { describe, expect, it } from 'vitest';
-import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { join } from 'node:path';
 import { requestSchema, responseSchema } from '@vonvon/protocol';
-import { socketClient, startFixture } from './server-fixture';
+import { fakeService, socketClient, startFixture } from './server-fixture';
+
+const processTestTimeout = process.platform === 'win32' ? 90_000 : 5_000;
+const readinessTimeout = process.platform === 'win32' ? 15_000 : 2_000;
+const requestTimeout = process.platform === 'win32' ? 20_000 : 3_000;
+
+async function writeTool(directory: string, name: string, script: string) {
+  const executable = join(directory, process.platform === 'win32' ? `${name}.cmd` : name);
+  const source = process.platform === 'win32' ? join(directory, `${name}.cjs`) : executable;
+  await writeFile(source, script, { mode: 0o700 });
+  if (process.platform === 'win32') await writeFile(executable, `@echo off\r\n"${process.execPath}" "%~dp0${name}.cjs" %*\r\n`);
+  return executable;
+}
 
 const operationId = '00000000-0000-4000-8000-000000000001';
 
 it('serves browser daemon branches and keeps local URL and shell actions unsupported', async () => {
   const fixture = await startFixture();
   try {
-    const client = await socketClient(fixture.api.port, fixture.credential);
+    const client = await socketClient(fixture.api.port, fixture.credential, 1, requestTimeout);
     await client.ready();
     const daemon = [
       ['command', { type: 'refresh' }],
@@ -57,24 +69,17 @@ it('serves browser daemon branches and keeps local URL and shell actions unsuppo
 
 it('holds the real API drain until a login child exits after stop intent', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'vonvon-browser-drain-'));
-  const originalPath = process.env.PATH;
-  const cli = join(dir, 'lark-cli');
   const release = join(dir, 'release');
   const started = join(dir, 'started');
-  await writeFile(cli, `#!/usr/bin/env node\nconst fs=require('node:fs');fs.writeFileSync(${JSON.stringify(started)},'started');const t=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){clearInterval(t);process.exit(0)}},20);\n`, { mode: 0o700 });
-  await chmod(cli, 0o700);
-  process.env.PATH = `${dir}${delimiter}${originalPath ?? ''}`;
+  await writeTool(dir, 'lark-cli', `#!/usr/bin/env node\nconst fs=require('node:fs');fs.writeFileSync(${JSON.stringify(started)},'started');const t=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){clearInterval(t);process.exit(0)}},20);\n`);
   let fixture: Awaited<ReturnType<typeof startFixture>> | undefined;
   try {
-    fixture = await startFixture();
-    const client = await socketClient(fixture.api.port, fixture.credential);
+    fixture = await startFixture(fakeService(), { home: dir, getDataRoot: () => dir, resolveCodex: () => null, nodePath: process.execPath, path: dir, fetchLatest: async () => null });
+    const client = await socketClient(fixture.api.port, fixture.credential, 1, requestTimeout);
     await client.ready();
     const login = await client.call(requestSchema.parse({ type: 'request', id: 'login', method: 'environment', payload: { type: 'startLogin', tool: 'lark-cli' } }));
     expect(login).toMatchObject({ type: 'response', payload: { kind: 'operation', operation: { kind: 'running' } } });
-    for (let n = 0; n < 100; n++) {
-      if (await import('node:fs/promises').then(fs => fs.access(started).then(() => true, () => false))) break;
-      await new Promise(resolve => setTimeout(resolve, 20));
-    }
+    await expect.poll(() => import('node:fs/promises').then(fs => fs.readFile(started, 'utf8').catch(() => null)), { timeout: readinessTimeout }).toBe('started');
     const stop = await client.call(requestSchema.parse({ type: 'request', id: 'stop', method: 'machine', payload: { type: 'stopHost' } }));
     expect(stop).toMatchObject({ type: 'response', payload: { type: 'done' } });
     let drained = false;
@@ -86,21 +91,16 @@ it('holds the real API drain until a login child exits after stop intent', async
     expect(drained).toBe(true);
     await client.close();
   } finally {
-    process.env.PATH = originalPath;
     await writeFile(release, 'go');
     await fixture?.close();
     await rm(dir, { recursive: true, force: true });
   }
-});
+}, processTestTimeout);
 
 it('sends one valid WebSocket request for every browser protocol union variant', async () => {
   const schemas = await import('@vonvon/protocol');
-  const { fakeService } = await import('./server-fixture');
   const environmentHome = await mkdtemp(join(tmpdir(), 'vonvon-union-environment-'));
-  const cli = join(environmentHome, 'lark-cli');
-  const claude = join(environmentHome, 'claude');
-  const npm = join(environmentHome, 'npm');
-  await writeFile(cli, `#!/usr/bin/env node
+  await writeTool(environmentHome, 'lark-cli', `#!/usr/bin/env node
 const args=process.argv.slice(2);
 if(args[0]==='--version'){process.stdout.write('lark-cli 1.2.3');process.exit(0)}
 if(args[0]==='auth'&&args[1]==='status'){process.stdout.write(JSON.stringify({defaultAs:'user',identities:{user:{available:false},bot:{available:false}}}));process.exit(0)}
@@ -108,9 +108,9 @@ if(args[0]==='auth'&&args[1]==='login'){process.stdout.write('https://accounts.f
 if(args[0]==='profile'&&args[1]==='list'){process.stdout.write('[]');process.exit(0)}
 if(args[0]==='profile'&&args[1]==='add'){process.stdin.resume();process.stdin.on('end',()=>process.exit(0))}
 else process.exit(0);
-`, { mode: 0o700 });
-  await writeFile(claude, '#!/usr/bin/env node\nprocess.stdout.write("claude 1.2.3");\n', { mode: 0o700 });
-  await writeFile(npm, '#!/usr/bin/env node\nprocess.exit(1);\n', { mode: 0o700 });
+`);
+  await writeTool(environmentHome, 'claude', '#!/usr/bin/env node\nprocess.stdout.write("claude 1.2.3");\n');
+  const npm = await writeTool(environmentHome, 'npm', '#!/usr/bin/env node\nprocess.exit(1);\n');
   const environmentOptions = { home: environmentHome, getDataRoot: () => environmentHome, resolveCodex: () => null, nodePath: process.execPath, npmPath: npm, path: environmentHome, fetchLatest: async () => null };
   const agentId = 'cli_fixture';
   const groupId = 'oc_fixture';
@@ -126,7 +126,17 @@ else process.exit(0);
     bindGroup: async () => ({ name: projectName, chatId: groupId, cwd: '/fixture', blank: false, kind: 'multi', origin: 'joined', noMention: false, autoCompact: true, mode: 'qa', guestMode: 'qa', network: false, backend: 'codex-appserver', allowedUsersCount: 0, sessionCount: 0, createdAt: 1 }),
     startCodexJob: () => ({ id: operationId }),
     codexJob: () => ({ id: operationId, type: 'install', state: 'succeeded' }),
-    collaboration: async (_agent, request) => request.action === 'project' ? { kind: 'project', project } : request.action === 'history' ? { kind: 'history', sessions: [], threads: [], backend: 'codex-appserver' } : request.action === 'context' ? { kind: 'context', threadId: request.threadId, usage: null, run: null } : { kind: 'applied' },
+    collaboration: async (_agent, request) => {
+      if (request.action === 'project') return { project };
+      if (request.action === 'history') return { sessions: [], threads: [], backend: 'codex-appserver' };
+      if (request.action === 'context') return { threadId: request.threadId, usage: null, run: null };
+      if (request.action === 'shareUsage') return { messageId: 'om_fixture' };
+      if (request.action === 'createProject' || request.action === 'editProject') return { ok: true, project };
+      if (request.action === 'removeProject') return { ok: true, groupEffect: 'left' };
+      if (request.action === 'resume') return { ok: true, threadId: 'thread' };
+      if (request.action === 'clear' || request.action === 'compact' || request.action === 'startGoal') return { ok: true, threadId: request.threadId };
+      return { ok: true };
+    },
     settings: {
       read: async () => host,
       save: async () => ({ kind: 'rejected', fields: [{ field: 'fixture', message: 'fixture' }] }),
@@ -137,7 +147,7 @@ else process.exit(0);
   let fixture: Awaited<ReturnType<typeof startFixture>> | undefined;
   try {
     fixture = await startFixture(service, environmentOptions);
-    const client = await socketClient(fixture.api.port, fixture.credential);
+    const client = await socketClient(fixture.api.port, fixture.credential, 1, requestTimeout);
     await client.ready();
     const folderReply = await client.call(requestSchema.parse({ type: 'request', id: 'folder-for-union', method: 'directory', payload: { type: 'choose', path: process.env.HOME } }));
     if (folderReply.type !== 'response' || folderReply.method !== 'directory' || folderReply.payload.kind !== 'folderChosen') throw new Error('Folder token missing');
@@ -213,4 +223,4 @@ else process.exit(0);
     await fixture?.close();
     await rm(environmentHome, { recursive: true, force: true });
   }
-});
+}, processTestTimeout);

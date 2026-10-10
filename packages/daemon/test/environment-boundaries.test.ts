@@ -7,14 +7,16 @@ import { join } from 'node:path';
 import type { EnvironmentRequest } from '@vonvon/protocol';
 import { EnvironmentService } from '../src/environment/service';
 
+const processTestTimeout = process.platform === 'win32' ? 30_000 : 5_000;
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map(dir => rm(dir, { recursive: true, force: true }))); });
 
 async function fixture() {
   const dir = await mkdtemp(join(tmpdir(), 'environment-boundaries-'));
   directories.push(dir);
-  const cli = join(dir, 'lark-cli');
-  await writeFile(cli, `#!/usr/bin/env node
+  const cli = join(dir, process.platform === 'win32' ? 'lark-cli.cmd' : 'lark-cli');
+  const script = process.platform === 'win32' ? join(dir, 'lark-cli.cjs') : cli;
+  await writeFile(script, `#!/usr/bin/env node
 const fs = require('node:fs');
 const path = require('node:path');
 const args = process.argv.slice(2);
@@ -27,6 +29,7 @@ if (args[0] === 'profile') {
   }, 10);
 }
 `, { mode: 0o700 });
+  if (process.platform === 'win32') await writeFile(cli, `@echo off\r\n"${process.execPath}" "%~dp0lark-cli.cjs" %*\r\n`);
   const service = new EnvironmentService({ home: dir, getDataRoot: () => dir, resolveCodex: () => null, nodePath: process.execPath, path: dir, fetchLatest: async () => null });
   return { dir, cli, service };
 }
@@ -72,7 +75,7 @@ for (const request of mutations) {
       await pending;
       await service.close();
     }
-  });
+  }, processTestTimeout);
 
   it(`${request.type} releases ownership after resolution failure or a missing tool`, async () => {
     const { service } = await fixture();
@@ -107,7 +110,9 @@ for (const tool of ['claude', 'lark-cli'] as const) {
 }
 
 it('preserves exact executable precedence on Windows', async () => {
-  const { dir, cli, service } = await fixture();
+  const { dir, service } = await fixture();
+  const cli = join(dir, 'lark-cli');
+  await writeFile(cli, 'fake exact executable');
   await writeFile(join(dir, 'lark-cli.cmd'), 'fake Windows shim');
   const descriptor = Object.getOwnPropertyDescriptor(process, 'platform');
   if (!descriptor) throw new Error('Missing platform descriptor');

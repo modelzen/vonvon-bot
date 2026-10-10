@@ -34,7 +34,7 @@ describe('RPC owner admission', () => {
     const pendingGroups = vi.fn(async () => ({ groups: [] }));
     const joinedGroups = vi.fn(async () => ({ groups: [] }));
     const bindGroup = vi.fn(async () => project);
-    const collaboration = vi.fn(async () => ({ kind: 'applied' }));
+    const collaboration = vi.fn(async () => ({ ok: true }));
     const fixture = await startFixture(fakeService({ listBots: async () => [{ ...bot, appId: 'cli_other', current: true }, ...(target ? [target] : [])], pendingGroups, joinedGroups, bindGroup, collaboration }));
     try {
       const client = await socketClient(fixture.api.port, fixture.credential); await client.ready();
@@ -52,7 +52,7 @@ describe('RPC owner admission', () => {
     const pendingGroups = vi.fn(async () => ({ groups: [{ chatId: 'oc_pending', name: 'Pending', addedAt: 1 }] }));
     const joinedGroups = vi.fn(async () => ({ groups: [{ chatId: 'oc_group', name: 'Group', bound: false }], nextCursor: 'next' }));
     const bindGroup = vi.fn(async () => project);
-    const collaboration = vi.fn(async () => ({ kind: 'applied' }));
+    const collaboration = vi.fn(async () => ({ ok: true }));
     const fixture = await startFixture(fakeService({ listBots: async () => [{ ...bot, appId: 'cli_other', current: true }, { ...bot, active }], pendingGroups, joinedGroups, bindGroup, collaboration }));
     try {
       const client = await socketClient(fixture.api.port, fixture.credential); await client.ready();
@@ -81,7 +81,7 @@ describe('RPC owner admission', () => {
 
   it('rejects forged actor fields and keeps the real settings owner check', async () => {
     const writePreferences = vi.fn(async () => ({}));
-    const collaboration = vi.fn(async () => ({ kind: 'applied' }));
+    const collaboration = vi.fn(async () => ({ ok: true }));
     const owner = createSettingsOwner({ cfg: { accounts: { app: { id: bot.appId, tenant: 'feishu', secret: 'fixture' } } }, writePreferences, backendFor: () => { throw new Error('unexpected backend access'); }, evictLiveSessionsForChat: async () => {} });
     const act = vi.fn(owner.act);
     const fixture = await startFixture(fakeService({ listBots: async () => [bot], collaboration, settings: { ...owner, act } }));
