@@ -3,7 +3,7 @@ import { open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { paths } from '../../config/paths';
 import { readRecentLogs } from '../../core/logger';
-import { verifyPidLockOwner } from '../../server/owner-verification';
+import { stopVerifiedOwner, verifyPidLockOwner } from '../../server/owner-verification';
 import { getPidLockInfo, isPidLockOwnerRunning, readRunningPidLock, type PidLockInfo } from '../../server/pid-lock';
 
 export type DaemonStatus = { running: false } | {
@@ -24,12 +24,17 @@ export async function daemonStatus(home = paths.appDir): Promise<DaemonStatus> {
 const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function runStart(port = 0): Promise<DaemonStatus> {
+  const checkedStatus = async (): Promise<DaemonStatus> => {
+    const ready = await daemonStatus();
+    if (ready.running && port !== 0 && ready.listen !== `127.0.0.1:${port}`) throw new Error(`Daemon PID ${ready.pid} already runs at ${ready.listen}, not requested port ${port}.`);
+    return ready;
+  };
   const waitReady = async (pid: number): Promise<DaemonStatus | null> => {
     const deadline = Date.now() + 25_000;
     while (Date.now() < deadline) {
       const owner = await readRunningPidLock(paths.appDir);
       if (!owner || owner.pid !== pid) return null;
-      if (owner.listen) return daemonStatus();
+      if (owner.listen) return checkedStatus();
       await pause(50);
     }
     throw new Error(`Daemon PID ${pid} did not publish readiness.`);
@@ -58,7 +63,7 @@ export async function runStart(port = 0): Promise<DaemonStatus> {
   while (Date.now() < deadline) {
     if (spawnError) throw spawnError;
     const lock = await readRunningPidLock(paths.appDir);
-    if (lock && lock.pid === child.pid && lock.listen) return daemonStatus();
+    if (lock && lock.pid === child.pid && lock.listen) return checkedStatus();
     if (lock && lock.pid !== child.pid) {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill('SIGTERM');
@@ -86,17 +91,20 @@ export async function runStop(home = paths.appDir): Promise<boolean> {
   const lock = await readRunningPidLock(home);
   if (!lock) return false;
   if (lock.pid === process.pid) throw new Error('Refusing to stop the current CLI process.');
-  await verifyPidLockOwner(home, lock);
-  const confirmation = await getPidLockInfo(home);
-  if (!sameOwner(confirmation, lock) || confirmation?.listen !== lock.listen || !isPidLockOwnerRunning(lock)) return false;
-  process.kill(lock.pid, 'SIGTERM');
-  const deadline = Date.now() + 20_000;
-  while (Date.now() < deadline) {
+  await stopVerifiedOwner(home, lock);
+  let progressAt = Date.now() + 5000;
+  for (;;) {
     const current = await getPidLockInfo(home);
+    if (current && !sameOwner(current, lock) && isPidLockOwnerRunning(current)) {
+      throw new Error(`Daemon was replaced by PID ${current.pid} at ${current.listen ?? 'not ready'}.`);
+    }
     if (!isPidLockOwnerRunning(lock) && !sameOwner(current, lock)) return true;
+    if (Date.now() >= progressAt) {
+      process.stderr.write(`Waiting for daemon PID ${lock.pid} at ${lock.listen} to finish stopping…\n`);
+      progressAt = Date.now() + 5000;
+    }
     await pause(100);
   }
-  throw new Error(`Daemon PID ${lock.pid} did not exit and release its lock.`);
 }
 
 export async function runStatus(json = false): Promise<void> {

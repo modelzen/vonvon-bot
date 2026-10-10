@@ -11,12 +11,13 @@ export async function machineRpc(service: AdminService, control: ShutdownControl
     case 'coreUpdateStatus': return { kind: 'read', value: { type: 'coreUpdateStatus', status: service.updateStatus() } };
     case 'stopHost': {
       if (!control) return unsupported();
-      return { kind: 'shutdown', reply: () => ({ type: 'done', message: '正在停止 daemon。' }), afterReply: () => control.requestStop() };
+      control.requestStop();
+      return { kind: 'read', value: { type: 'done', message: '正在停止 daemon。' } };
     }
     case 'applyCoreUpdate': {
       if (!control) return unsupported();
-      await service.applyUpdate();
-      return { kind: 'shutdown', reply: () => ({ type: 'done', message: '正在更新 daemon。' }), afterReply: () => control.requestRestart(port) };
+      const update = await service.applyUpdate();
+      return { kind: 'shutdown', reply: () => ({ type: 'done', message: '正在更新 daemon。' }), afterReply: () => control.requestRestart(port, update ?? undefined) };
     }
     default: return unsupported();
   }

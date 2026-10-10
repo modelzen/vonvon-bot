@@ -4,7 +4,9 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { paths } from '../config/paths';
 import { spawnProcess } from '../platform/spawn';
-import { getServiceAdapter, isServiceRunning } from './adapter';
+import { SERVICE_UNAVAILABLE } from '../host/service';
+import { log } from '../core/logger';
+import { z } from 'zod';
 
 // `npm` via cross-spawn: on Windows it's an `npm.cmd` shim that a bare
 // spawn/execFile would reject with EINVAL (CVE-2024-27980); cross-spawn runs it,
@@ -69,18 +71,20 @@ export async function latestVersion(): Promise<string | null> {
       stdio: ['ignore', 'pipe', 'ignore'],
     });
     let out = '';
+    let failed = false;
     const timer = setTimeout(() => {
+      failed = true;
       child.kill();
-      resolveP(null);
     }, 20000);
     child.stdout?.on('data', (d) => (out += d));
     child.on('error', () => {
       clearTimeout(timer);
-      resolveP(null);
+      failed = true;
+      if (child.pid === undefined) resolveP(null);
     });
     child.on('close', (code) => {
       clearTimeout(timer);
-      resolveP(code === 0 ? out.trim() : null);
+      resolveP(code === 0 && !failed ? out.trim() : null);
     });
   });
   return v && /^\d+\.\d+\.\d+/.test(v) ? v : null;
@@ -123,15 +127,19 @@ export async function installLatest(opts: { inherit?: boolean } = {}): Promise<I
       child.stdout?.on('data', (d) => (out += d));
       child.stderr?.on('data', (d) => (out += d));
     }
-    child.on('error', (e) => resolveP({ ok: false, message: e.message }));
+    let failure: Error | undefined;
+    child.on('error', (error) => {
+      failure = error;
+      if (child.pid === undefined) resolveP({ ok: false, message: error.message });
+    });
     child.on('close', (code) => {
       const tail = out.trim().slice(-600);
-      resolveP({ ok: code === 0, message: opts.inherit ? `退出码 ${code}` : tail || `退出码 ${code}` });
+      resolveP({ ok: code === 0 && !failure, message: failure?.message ?? (opts.inherit ? `退出码 ${code}` : tail || `退出码 ${code}`) });
     });
   });
 }
 
-export async function performCoreUpdate(options: { install?: typeof installLatest } = {}): Promise<void> {
+export async function performCoreUpdate(options: { install?: typeof installLatest } = {}): Promise<UpdateStatus> {
   const release = acquireUpdateLock();
   if (!release) throw new Error('A Core update is already in progress.');
   const from = currentVersion();
@@ -140,7 +148,9 @@ export async function performCoreUpdate(options: { install?: typeof installLates
   try {
     const result = await (options.install ?? installLatest)();
     if (!result.ok) throw new Error(result.message);
-    writeUpdateStatus({ phase: 'restarting', ok: true, from, to: currentVersion(), at: Date.now() });
+    const record = Object.freeze({ phase: 'restarting', ok: true, from, to: currentVersion(), at: Date.now() } satisfies UpdateStatus);
+    writeUpdateStatus(record);
+    return record;
   } catch (error) {
     writeUpdateStatus({ phase: 'error', ok: false, from, message: (error instanceof Error ? error.message : String(error)).slice(0, 300), at: Date.now() });
     throw error;
@@ -153,11 +163,6 @@ export async function performCoreUpdate(options: { install?: typeof installLates
 // 都落在 appDir，供跨进程协作：Web「升级」跑在 detached helper 里、私聊「更新」跑在
 // daemon 里，两者可能并发。锁防止两个 `npm i -g` 并发把全局目录装坏；状态文件给
 // helper 的结果一个 daemon 能读、Web 能轮询的落点（否则 helper 失败对网页端静默）。
-
-// 远超任何合理的 `npm i -g` 时长：超时回收只是「pid 被复用成别的进程」的兜底——持有者
-// 真的死了会被下面的 livePid 立刻回收，不靠这个时钟。设太短会把一个装得慢的**存活**安装
-// 误判成陈旧、抢锁并发跑两个 npm（正是本锁要防的），故取 30min 这种绝不会误伤的大值。
-const UPDATE_LOCK_STALE_MS = 30 * 60 * 1000;
 
 function updateLockFile(): string {
   return join(paths.appDir, 'update.lock');
@@ -178,21 +183,13 @@ function isUpdateLockStale(file: string): boolean {
     const rec = JSON.parse(readFileSync(file, 'utf8')) as { pid?: number; at?: number };
     if (typeof rec.pid !== 'number') return true; // 无 pid → 损坏，可回收
     if (!livePid(rec.pid)) return true; // 持有者已死 → 优先回收（不受时钟影响）
-    // 持有者还活着：只有超时才回收，兜底「pid 被复用成别的进程」这种极少数情形。
-    return typeof rec.at === 'number' && Date.now() - rec.at > UPDATE_LOCK_STALE_MS;
+    return false;
   } catch {
     return true; // 损坏/读不出 → 可回收
   }
 }
 
-/**
- * 跨进程互斥：给 `npm i -g` 上锁，防止 Web「升级」与私聊「更新」（或双击）并发跑两个
- * 全局安装、把同一目录装坏。拿到锁返回 release()；已有**新鲜且存活**的更新在跑则返回
- * null（调用方应提示「更新已在进行」并**不**继续）。陈旧锁（持有者已死 / 超 30min 的
- * 崩溃残留）会被回收。O_EXCL('wx') 原子创建，与单例锁同套路。任何**非**「已存在」的
- * fs 异常也一律返回 null（当作拿不到锁）而**不** throw——否则 fire-and-forget 的调用方
- * 会 unhandled rejection、卡片定格无反馈。需要 appDir 已存在（调用方都在服务目录建好后跑）。
- */
+/** A live update owns the lock until it exits or releases it, without an age limit. */
 export function acquireUpdateLock(): (() => void) | null {
   const file = updateLockFile();
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -204,7 +201,7 @@ export function acquireUpdateLock(): (() => void) | null {
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== 'EEXIST') return null; // EACCES/ENOSPC/… → 当作拿不到锁，绝不 throw
-      if (!isUpdateLockStale(file)) return null; // 活体新鲜持有者 → 更新进行中
+      if (!isUpdateLockStale(file)) return null;
       try {
         rmSync(file, { force: true }); // 回收陈旧锁后重试 wx 创建
       } catch {
@@ -232,16 +229,27 @@ function releaseUpdateLock(file: string): () => void {
   };
 }
 
-export type UpdatePhase = 'installing' | 'restarting' | 'done' | 'error';
+export const updateStatusSchema = z.object({
+  phase: z.enum(['installing', 'restarting', 'done', 'error']),
+  ok: z.boolean().optional(), message: z.string().optional(),
+  from: z.string().optional(), to: z.string().optional(), at: z.number(),
+}).strict();
+export type UpdateStatus = Readonly<z.infer<typeof updateStatusSchema>>;
+export type UpdatePhase = UpdateStatus['phase'];
 
-export interface UpdateStatus {
-  phase: UpdatePhase;
-  ok?: boolean;
-  message?: string;
-  from?: string;
-  to?: string;
-  /** epoch ms；Web 端提交升级前会 clear，故读到的即本次结果。 */
-  at: number;
+export function finishOwnedUpdate(expected: UpdateStatus | undefined, outcome: 'done' | 'error', message?: string): void {
+  if (!expected) return;
+  const release = acquireUpdateLock();
+  if (!release) { log.info('daemon-restart', 'update_record_ownership_lost', { reason: 'lock_busy' }); return; }
+  try {
+    const current = readUpdateStatus();
+    if (!current || current.phase !== expected.phase || current.ok !== expected.ok ||
+      current.message !== expected.message || current.from !== expected.from || current.to !== expected.to || current.at !== expected.at) {
+      log.info('daemon-restart', 'update_record_ownership_lost', { reason: 'record_changed' });
+      return;
+    }
+    writeUpdateStatus({ ...expected, phase: outcome, ok: outcome === 'done', ...(message ? { message } : {}), at: Date.now() });
+  } finally { release(); }
 }
 
 function updateStatusFile(): string {
@@ -262,8 +270,8 @@ export function writeUpdateStatus(status: UpdateStatus): void {
 
 export function readUpdateStatus(): UpdateStatus | null {
   try {
-    const s = JSON.parse(readFileSync(updateStatusFile(), 'utf8')) as UpdateStatus;
-    return s && typeof s.phase === 'string' && typeof s.at === 'number' ? s : null;
+    const result = updateStatusSchema.safeParse(JSON.parse(readFileSync(updateStatusFile(), 'utf8')));
+    return result.success ? result.data : null;
   } catch {
     return null;
   }
@@ -283,7 +291,7 @@ export function clearUpdateStatus(): void {
  * macOS, Task Scheduler on Windows); false on platforms without a service.
  */
 export function daemonRunning(): boolean {
-  return isServiceRunning();
+  return false;
 }
 
 /**
@@ -292,5 +300,5 @@ export function daemonRunning(): boolean {
  * terminates the caller — send any "done" UI before calling it.
  */
 export async function restartDaemon(): Promise<void> {
-  await getServiceAdapter().restart();
+  throw new Error(SERVICE_UNAVAILABLE);
 }

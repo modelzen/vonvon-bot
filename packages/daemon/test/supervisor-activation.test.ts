@@ -5,7 +5,7 @@ import { runSupervisor } from '../src/bot/supervisor';
 
 const captured = vi.hoisted(() => ({ deps: undefined as AdminServiceDeps | undefined, invalidate: vi.fn() }));
 vi.mock('../src/admin/service', () => ({ createAdminService: (deps: AdminServiceDeps) => { captured.deps = deps; return deps; } }));
-vi.mock('../src/server/http', () => ({ startApi: vi.fn(async () => ({ port: 1, listen: '127.0.0.1:1', invalidate: captured.invalidate, close: async () => {} })) }));
+vi.mock('../src/server/http', () => ({ startApi: vi.fn(async () => ({ port: 1, listen: '127.0.0.1:1', invalidate: captured.invalidate, beginDrain: async () => {}, release: async () => {}, close: async () => {} })) }));
 vi.mock('../src/service/win-startup', () => ({ recordServicePid() {}, SERVICE_ENV_FLAG: 'BRIDGE_TEST_SERVICE' }));
 vi.mock('../src/core/logger', () => ({ log: { info() {}, warn() {}, fail() {} } }));
 vi.mock('../src/agent', () => ({ installBackendDep() {}, uninstallBackendDep() {} }));
@@ -49,7 +49,7 @@ async function start(ids: string[]) {
     return child;
   });
   const pending = new Promise<void>((resolve) => { requestShutdown = resolve; });
-  supervisor = runSupervisor(ids.map(bot), { control: { requested: false, waitForRequest: () => pending, requestStop() {}, requestRestart(_port: number) {}, dispose() {} } });
+  supervisor = runSupervisor(ids.map(bot), { control: { requested: false, waitForRequest: () => pending, requestStop() {}, requestRestart(_port: number) {}, completeShutdown: async (release: () => Promise<void>) => release(), dispose() {} } });
   await vi.waitFor(() => expect(captured.deps).toBeDefined());
   const deps = (() : AdminServiceDeps | undefined => captured.deps)();
   if (!deps?.applyBotActivation || !deps.liveStatus || !deps.executeGroups) throw new Error('Runtime activation unavailable');
@@ -127,7 +127,7 @@ it('refreshes the parent snapshot on a child connection notice', async () => {
 it('fails an empty host when its only usable interface cannot start', async () => {
   vi.mocked(startApi).mockRejectedValueOnce(new Error('API unavailable'));
   supervisor = undefined;
-  await expect(runSupervisor([], { control: { requested: false, waitForRequest: () => new Promise(() => {}), requestStop() {}, requestRestart(_port: number) {}, dispose() {} } })).rejects.toThrow('API unavailable');
+  await expect(runSupervisor([], { control: { requested: false, waitForRequest: () => new Promise(() => {}), requestStop() {}, requestRestart(_port: number) {}, completeShutdown: async (release: () => Promise<void>) => release(), dispose() {} } })).rejects.toThrow('API unavailable');
 });
 
 it('reexecutes the foreground CLI and does not expose inherited service callbacks', async () => {

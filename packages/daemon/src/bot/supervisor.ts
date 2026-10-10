@@ -1,6 +1,6 @@
 import { readSingleInstanceHolder } from '../core/single-instance';
 import { botPaths, paths } from '../config/paths';
-import { CHILD_SHUTDOWN_GRACE_MS, observeShutdown, stopChild, type ShutdownControl } from '../host/lifecycle';
+import { CHILD_SHUTDOWN_GRACE_MS, observeShutdown, settleOwnedChild, type ShutdownControl } from '../host/lifecycle';
 import type { ChildProcess } from 'node:child_process';
 import { spawnProcess } from '../platform/spawn';
 import { SERVICE_ENV_FLAG } from '../service/win-startup';
@@ -116,6 +116,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     });
     proc.on('error', (err) => {
       log.fail('supervisor', err, { bot: c.bot.name, phase: 'spawn' });
+      if (proc.pid === undefined && c.proc === proc) { c.proc = undefined; c.ipc = undefined; ipc.rejectAll(err.message); }
     });
   };
 
@@ -148,7 +149,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
           }
           if (!enabled) {
             child.ipc?.rejectAll('Agent 已停用。');
-            if (child.proc) await stopChild(child.proc, CHILD_SHUTDOWN_GRACE_MS);
+            if (child.proc) await settleOwnedChild(child.proc, CHILD_SHUTDOWN_GRACE_MS);
             return;
           }
           spawnChild(child);
@@ -217,10 +218,13 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   } finally {
     shuttingDown = true;
     for (const child of children.values()) if (child.restartTimer) clearTimeout(child.restartTimer);
-    const live = [...children.values()].flatMap((child) => child.proc ? [stopChild(child.proc, CHILD_SHUTDOWN_GRACE_MS)] : []);
-    const cleanup = await Promise.allSettled([api?.close(), ...live]);
-    control.dispose();
-    const failures = cleanup.filter((result) => result.status === 'rejected');
-    if (failures.length) throw new AggregateError(failures.map((failure) => failure.reason), 'Supervisor cleanup failed.');
+    const cleanup = await Promise.allSettled([api?.beginDrain()]);
+    const live = [...children.values()].flatMap(child => child.proc ? [settleOwnedChild(child.proc, CHILD_SHUTDOWN_GRACE_MS)] : []);
+    cleanup.push(...await Promise.allSettled(live));
+    cleanup.push(...await Promise.allSettled([control.completeShutdown(() => api?.release() ?? Promise.resolve())]));
+    if (!options.control) control.dispose();
+    const failures = cleanup.filter(result => result.status === 'rejected');
+    for (const failure of failures) log.fail('daemon-shutdown', failure.reason, { phase: 'cleanup' });
+    if (failures.length) throw new AggregateError(failures.map(failure => failure.reason), 'Supervisor cleanup failed.');
   }
 }

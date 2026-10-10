@@ -25,7 +25,7 @@ afterEach(async () => {
   vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.resetAllMocks();
   await rm(fixture.root, { recursive: true, force: true });
 });
-const run = () => runHostRuntime({ managed: false, control: { requested: false, dispose: vi.fn(), waitForRequest: vi.fn(), requestStop: vi.fn(), requestRestart: vi.fn() } });
+const run = () => runHostRuntime({ managed: false, control: { requested: false, dispose: vi.fn(), waitForRequest: vi.fn(), requestStop: vi.fn(), requestRestart: vi.fn(), completeShutdown: async (release: () => Promise<void>) => release() } });
 
 it('publishes the service owner during runtime and clears it on shutdown', async () => {
   vi.mocked(runRun).mockImplementation(async () => {
