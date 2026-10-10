@@ -11,10 +11,12 @@ const fixture = vi.hoisted(() => ({
 }));
 
 vi.mock('../src/service/win-startup', () => {
-  fixture.adapterLoads();
+  fixture.adapterLoads('win-startup');
   return { runWinRelaunch: fixture.relaunch };
 });
-vi.mock('../src/service/adapter', () => ({ getServiceAdapter: fixture.getAdapter }));
+vi.mock('../src/service/adapter', () => { fixture.adapterLoads('adapter'); return { getServiceAdapter: fixture.getAdapter }; });
+vi.mock('../src/service/launchd', () => { fixture.adapterLoads('launchd'); return {}; });
+vi.mock('../src/service/systemd', () => { fixture.adapterLoads('systemd'); return {}; });
 vi.mock('node:child_process', async (original) => ({
   ...await original<typeof import('node:child_process')>(),
   spawn: fixture.spawn,
@@ -36,7 +38,15 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it('refuses hidden Windows relaunch at the CLI boundary before importing its adapter', async () => {
+it.each(['win32', 'darwin'] satisfies NodeJS.Platform[])('refuses hidden Windows relaunch on %s before importing an adapter', async platform => {
+  vi.resetModules();
+  fixture.adapterLoads.mockClear();
+  fixture.relaunch.mockClear();
+  fixture.getAdapter.mockClear();
+  fixture.spawn.mockClear();
+  fixture.spawnSync.mockClear();
+  fixture.mkdir.mockClear();
+  vi.spyOn(process, 'platform', 'get').mockReturnValue(platform);
   const errors: string[] = [];
   const exit = vi.spyOn(process, 'exit').mockImplementation((code) => {
     process.exitCode = code ?? undefined;
@@ -46,7 +56,7 @@ it('refuses hidden Windows relaunch at the CLI boundary before importing its ada
   process.argv = [process.execPath, '/virtual/vonvon.mjs', '__win-relaunch', '/virtual/unclaimed-request.json'];
   await import('../src/cli/index');
   await vi.waitFor(() => {
-    if (exit.mock.calls.length === 0 && fixture.adapterLoads.mock.calls.length === 0) throw new Error('CLI has not settled');
+    if (exit.mock.calls.length === 0 && fixture.adapterLoads.mock.calls.length === 0 && fixture.relaunch.mock.calls.length === 0) throw new Error('CLI has not settled');
   });
   expect.soft(exit).toHaveBeenCalledWith(1);
   expect.soft(errors.join('\n')).toContain(SERVICE_UNAVAILABLE);

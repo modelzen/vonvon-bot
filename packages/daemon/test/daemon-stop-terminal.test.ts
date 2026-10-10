@@ -33,6 +33,9 @@ beforeEach(() => {
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 it('rejects with cleanup uncertainty once an acknowledged owner dies but retains its lock', async () => {
+  const diagnostics: string[] = [];
+  vi.spyOn(process.stderr, 'write').mockImplementation(chunk => { diagnostics.push(String(chunk)); return true; });
+  const original = JSON.stringify(fixture.lock);
   const result = runStop('/virtual/vonvon-stop');
   const outcome = { rejected: false, error: new Error('pending') };
   void result.then(() => {}, (error: unknown) => {
@@ -44,8 +47,20 @@ it('rejects with cleanup uncertainty once an acknowledged owner dies but retains
   fixture.alive.delete(owner.pid);
   await vi.advanceTimersByTimeAsync(500);
   expect(outcome.rejected).toBe(true);
-  if (outcome.rejected) expect(String(outcome.error)).toMatch(/cleanup|release|lock|unconfirm/i);
-  expect(fixture.lock).toEqual(owner);
+  if (outcome.rejected) expect(outcome.error.message).toBe(`Daemon ${owner.pid} exited without releasing daemon.pid. Cleanup was not confirmed; see vonvon daemon logs.`);
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(diagnostics.filter(line => /Waiting for daemon/.test(line))).toHaveLength(0);
+  expect(JSON.stringify(fixture.lock)).toBe(original);
+  expect(fixture.signals).not.toHaveBeenCalled();
+});
+
+it('succeeds when the acknowledged owner dies and a different dead owner is named by the lock', async () => {
+  const result = runStop('/virtual/vonvon-stop');
+  await vi.advanceTimersByTimeAsync(100);
+  fixture.alive.delete(owner.pid);
+  fixture.lock = replacement;
+  await vi.advanceTimersByTimeAsync(100);
+  await expect(result).resolves.toBe(true);
   expect(fixture.signals).not.toHaveBeenCalled();
 });
 
