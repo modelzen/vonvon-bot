@@ -44,21 +44,50 @@ async function syncDirectory(directory) {
   try { await handle.sync(); } finally { await handle.close(); }
 }
 
-async function atomicWrite(file, bytes) {
-  const temporary = `${file}.${randomUUID()}.tmp`;
+async function sameInode(file, identity) {
   try {
-    const handle = await fs.open(temporary, 'wx', 0o600);
-    try { await handle.writeFile(bytes); await handle.sync(); }
-    finally { await handle.close(); }
-    await fs.rename(temporary, file);
-    await syncDirectory(path.dirname(file));
-  } finally { await fs.rm(temporary, { force: true }); }
+    const current = await fs.lstat(file, { bigint: true });
+    return current.dev === identity.dev && current.ino === identity.ino;
+  } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
 }
 
-async function cleanStaging() {
-  for (const entry of await fs.readdir(destination)) {
-    if (/^\.import-[a-zA-Z0-9]{6}$/.test(entry)) await fs.rm(path.join(destination, entry), { recursive: true, force: true });
+async function createScratch() {
+  const directory = await fs.mkdtemp(path.join(destination, '.import-'));
+  return { directory, identity: await fs.lstat(directory, { bigint: true }), pending: null };
+}
+
+async function stage(scratch, bytes, mode) {
+  const file = path.join(scratch.directory, randomUUID());
+  const handle = await fs.open(file, 'wx', mode);
+  try {
+    scratch.pending = { file, identity: await handle.stat({ bigint: true }) };
+    await handle.writeFile(bytes);
+    await handle.chmod(mode);
+    await handle.sync();
+  } finally { await handle.close(); }
+  return file;
+}
+
+async function releasePayload(scratch) {
+  if (scratch.pending && await sameInode(scratch.directory, scratch.identity)
+    && await sameInode(scratch.pending.file, scratch.pending.identity)) {
+    await fs.unlink(scratch.pending.file);
   }
+  scratch.pending = null;
+}
+
+async function cleanupScratch(scratch) {
+  await releasePayload(scratch);
+  if (!await sameInode(scratch.directory, scratch.identity)) return;
+  try { await fs.rmdir(scratch.directory); }
+  catch (error) { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) throw error; }
+}
+
+async function atomicWrite(scratch, file, bytes) {
+  const temporary = await stage(scratch, bytes, 0o600);
+  await fs.rename(temporary, file);
+  scratch.pending = null;
+  await syncDirectory(path.dirname(file));
 }
 
 async function main() {
@@ -80,16 +109,13 @@ async function main() {
   await fs.mkdir(destination, { recursive: true });
   if (!(await fs.lstat(destination)).isDirectory()) throw new Error('Destination must be a physical directory');
   const owner = await lock(await fs.realpath(destination));
+  let scratch;
   try {
-    const temporaryMetadata = /^(import-core\.json|PROVENANCE\.md)\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.tmp$/;
-    for (const name of await fs.readdir(destination)) {
-      if (temporaryMetadata.test(name)) await fs.unlink(path.join(destination, name));
-    }
     const manifestPath = path.join(destination, 'import-core.json');
     if (await exists(manifestPath)) {
       const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
       if (json({ source: manifest.source, commit: manifest.commit, files: manifest.files }) !== json(identity)) throw new Error('Import manifest identity does not match the pinned source');
-      if (manifest.phase === 'complete') { await cleanStaging(); console.log(`Import already complete at ${pin}; no files written`); return; }
+      if (manifest.phase === 'complete') { console.log(`Import already complete at ${pin}; no files written`); return; }
       if (manifest.phase !== 'seeding') throw new Error('Unknown import phase');
     } else {
       for (const name of ['src', 'test', 'LICENSE.bridge']) {
@@ -99,50 +125,45 @@ async function main() {
         const previous = await fs.readFile(path.join(destination, 'PROVENANCE.md'), 'utf8');
         if (hash(previous) !== originalProvenanceSha256) throw new Error('Refusing unowned provenance');
       }
-      await atomicWrite(manifestPath, json({ ...identity, phase: 'seeding' }));
+      scratch = await createScratch();
+      await atomicWrite(scratch, manifestPath, json({ ...identity, phase: 'seeding' }));
     }
     const provenancePath = path.join(destination, 'PROVENANCE.md');
     if (await exists(provenancePath)) {
       const previous = await fs.readFile(provenancePath, 'utf8');
       if (previous !== provenance && hash(previous) !== originalProvenanceSha256) throw new Error('Conflicting partial import: PROVENANCE.md');
     }
-    await cleanStaging();
-    const staging = await fs.mkdtemp(path.join(destination, '.import-'));
-    try {
-      for (const file of files) {
-        const target = path.join(destination, file.path);
-        let parent = destination;
-        for (const segment of file.path.split('/').slice(0, -1)) {
-          parent = path.join(parent, segment);
-          if (await exists(parent)) {
-            if (!(await fs.lstat(parent)).isDirectory()) throw new Error(`Unsafe destination parent: ${parent}`);
-          } else {
-            await fs.mkdir(parent);
-            await syncDirectory(path.dirname(parent));
-          }
+    scratch ??= await createScratch();
+    for (const file of files) {
+      const target = path.join(destination, file.path);
+      let parent = destination;
+      for (const segment of file.path.split('/').slice(0, -1)) {
+        parent = path.join(parent, segment);
+        if (await exists(parent)) {
+          if (!(await fs.lstat(parent)).isDirectory()) throw new Error(`Unsafe destination parent: ${parent}`);
+        } else {
+          await fs.mkdir(parent);
+          await syncDirectory(path.dirname(parent));
         }
-        if (await exists(target)) {
-          const stat = await fs.lstat(target);
-          if (!stat.isFile() || hash(await fs.readFile(target)) !== file.sha256 || (stat.mode & 0o777) !== (file.mode === '100755' ? 0o755 : 0o644)) throw new Error(`Conflicting partial import: ${file.path}`);
-          continue;
-        }
-        await fs.mkdir(path.dirname(target), { recursive: true });
-        const staged = path.join(staging, randomUUID());
-        const handle = await fs.open(staged, 'wx', file.mode === '100755' ? 0o755 : 0o644);
-        try {
-          await handle.writeFile(file.bytes);
-          await handle.chmod(file.mode === '100755' ? 0o755 : 0o644);
-          await handle.sync();
-        }
-        finally { await handle.close(); }
-        await fs.link(staged, target);
-        await syncDirectory(path.dirname(target));
       }
-      await atomicWrite(path.join(destination, 'PROVENANCE.md'), provenance);
-      await atomicWrite(manifestPath, json({ ...identity, phase: 'complete' }));
-    } finally { await fs.rm(staging, { recursive: true, force: true }); }
+      if (await exists(target)) {
+        const stat = await fs.lstat(target);
+        if (!stat.isFile() || hash(await fs.readFile(target)) !== file.sha256 || (stat.mode & 0o777) !== (file.mode === '100755' ? 0o755 : 0o644)) throw new Error(`Conflicting partial import: ${file.path}`);
+        continue;
+      }
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      const staged = await stage(scratch, file.bytes, file.mode === '100755' ? 0o755 : 0o644);
+      await fs.link(staged, target);
+      await syncDirectory(path.dirname(target));
+      await releasePayload(scratch);
+    }
+    await atomicWrite(scratch, path.join(destination, 'PROVENANCE.md'), provenance);
+    await atomicWrite(scratch, manifestPath, json({ ...identity, phase: 'complete' }));
     console.log(`Imported ${files.length} pinned files from ${pin}`);
-  } finally { await new Promise(resolve => owner.close(resolve)); }
+  } finally {
+    try { if (scratch) await cleanupScratch(scratch); }
+    finally { await new Promise(resolve => owner.close(resolve)); }
+  }
 }
 
 main().catch(error => { console.error(error.message); process.exitCode = 1; });

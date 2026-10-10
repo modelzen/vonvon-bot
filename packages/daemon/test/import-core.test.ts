@@ -29,6 +29,29 @@ async function fixture() {
   });
   return { root, source, destination, script, run, git };
 }
+async function scratchSnapshot(destination: string) {
+  const names = (await readdir(destination)).filter(name => name.startsWith('.import-')).sort();
+  return Promise.all(names.map(async name => ({
+    name,
+    files: await Promise.all((await readdir(join(destination, name))).sort().map(async file => ({
+      name: file, bytes: (await readFile(join(destination, name, file))).toString('hex'),
+    }))),
+  })));
+}
+
+async function expectCompleteSeed(f: Awaited<ReturnType<typeof fixture>>) {
+  const manifest = manifestSchema.parse(JSON.parse(await readFile(join(f.destination, 'import-core.json'), 'utf8')));
+  expect(manifest.phase).toBe('complete');
+  expect(manifest.commit).toBe(f.git('rev-parse', 'HEAD'));
+  for (const file of manifest.files) {
+    const bytes = await readFile(join(f.destination, file.path));
+    expect(createHash('sha256').update(bytes).digest('hex')).toBe(file.sha256);
+    expect(bytes).toEqual(await readFile(join(f.source, file.path === 'LICENSE.bridge' ? 'LICENSE' : file.path)));
+    expect((await lstat(join(f.destination, file.path))).mode & 0o777).toBe(file.mode === '100755' ? 0o755 : 0o644);
+  }
+  expect(await readFile(join(f.destination, 'PROVENANCE.md'), 'utf8')).toContain('A completed import never rewrites, repairs, or restores fork files.');
+}
+
 afterEach(async () => { await Promise.all(fixtures.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 
 it('reads pinned Git blobs even with dirty working files, then preserves adaptations, additions and deletions with zero writes', async () => {
@@ -52,7 +75,7 @@ it('rejects a mismatched HEAD without creating the destination', async () => {
   await expect(readdir(f.destination)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
-it('converges after interruption at each publication and removes abandoned staging directories', async () => {
+it('converges after interruption at each publication and preserves unknown staging directories', async () => {
   const f = await fixture(); expect((await f.run()).code).toBe(0);
   const manifest = manifestSchema.parse(JSON.parse(await readFile(join(f.destination, 'import-core.json'), 'utf8')));
   for (let count = 0; count < manifest.files.length; count++) {
@@ -67,7 +90,9 @@ it('converges after interruption at each publication and removes abandoned stagi
     }
     await mkdir(join(f.destination, '.import-ABC123')); await writeFile(join(f.destination, '.import-ABC123/abandoned'), 'partial');
     expect((await f.run()).code).toBe(0);
-    expect((await readdir(f.destination)).filter(name => name.startsWith('.import-'))).toEqual([]);
+    expect((await readdir(f.destination)).filter(name => name.startsWith('.import-'))).toEqual(['.import-ABC123']);
+    expect(await readFile(join(f.destination, '.import-ABC123/abandoned'), 'utf8')).toBe('partial');
+    await expectCompleteSeed(f);
     expect(manifestSchema.parse(JSON.parse(await readFile(join(f.destination, 'import-core.json'), 'utf8'))).phase).toBe('complete');
   }
 });
@@ -95,38 +120,50 @@ it('serializes concurrent imports and rejects an unrelated provenance file', asy
   expect(await readFile(join(f.destination, 'PROVENANCE.md'), 'utf8')).toBe(content);
 });
 
-it('recovers an actual killed import without untracked staging residue', async () => {
+it('recovers an actual killed import while preserving its bounded unknown residue', async () => {
   const f = await fixture(); const source = await readFile(f.script, 'utf8');
   await writeFile(f.script, source.replace('await fs.link(staged, target);', "await fs.link(staged, target); process.kill(process.pid, 'SIGKILL');"));
   expect((await f.run()).code).not.toBe(0);
   expect((await readdir(f.destination)).some(name => name.startsWith('.import-'))).toBe(true);
+  const residue = await scratchSnapshot(f.destination);
+  expect(residue).toHaveLength(1);
+  expect(residue[0]?.files).toHaveLength(1);
   await writeFile(f.script, source);
   expect((await f.run()).code).toBe(0);
-  expect((await readdir(f.destination)).some(name => name.startsWith('.import-'))).toBe(false);
+  expect(await scratchSnapshot(f.destination)).toEqual(residue);
+  await expectCompleteSeed(f);
 });
 
-it.each(['import-core.json', 'PROVENANCE.md'])('cleans owned %s temporary metadata after a process dies before rename', async name => {
+it.each(['import-core.json', 'PROVENANCE.md'])('recovers %s publication and preserves unknown metadata scratch after a process dies before rename', async name => {
   const f = await fixture();
   const preload = join(f.root, 'crash-before-rename.mjs');
   await writeFile(preload, `import { promises as fs } from 'node:fs'; const rename=fs.rename; fs.rename=async(from,to)=>{if(to.endsWith(${JSON.stringify(name)}))process.kill(process.pid,'SIGKILL');return rename(from,to)};`);
   expect((await f.run(['--import', preload])).code).not.toBe(0);
-  expect((await readdir(f.destination)).some(entry => entry.startsWith(name + '.') && entry.endsWith('.tmp'))).toBe(true);
+  const residue = await scratchSnapshot(f.destination);
+  expect(residue).toHaveLength(1);
+  expect(residue[0]?.files).toHaveLength(1);
   await writeFile(join(f.destination, 'unowned.tmp'), 'keep');
   expect((await f.run()).code).toBe(0);
   expect((await readdir(f.destination)).filter(entry => entry.endsWith('.tmp'))).toEqual(['unowned.tmp']);
   expect(await readFile(join(f.destination, 'unowned.tmp'), 'utf8')).toBe('keep');
+  expect(await scratchSnapshot(f.destination)).toEqual(residue);
+  await expectCompleteSeed(f);
 });
 
-it('cleans staging left after the complete manifest was published without rewriting imported files', async () => {
+it('preserves unknown staging after complete publication without rewriting imported files', async () => {
   const f = await fixture();
   const preload = join(f.root, 'crash-after-complete.mjs');
   await writeFile(preload, `import { promises as fs } from 'node:fs'; const rename=fs.rename; fs.rename=async(from,to)=>{const complete=to.endsWith('import-core.json')&&(await fs.readFile(from,'utf8')).includes('"phase": "complete"');await rename(from,to);if(complete)process.kill(process.pid,'SIGKILL')};`);
   expect((await f.run(['--import', preload])).code).not.toBe(0);
   expect((await readdir(f.destination)).some(entry => entry.startsWith('.import-'))).toBe(true);
+  const residue = await scratchSnapshot(f.destination);
+  expect(residue).toHaveLength(1);
+  expect(residue[0]?.files).toHaveLength(0);
+  await expectCompleteSeed(f);
   await writeFile(join(f.destination, 'src/main.ts'), 'fork after complete');
   expect((await f.run()).code).toBe(0);
   expect(await readFile(join(f.destination, 'src/main.ts'), 'utf8')).toBe('fork after complete');
-  expect((await readdir(f.destination)).some(entry => entry.startsWith('.import-'))).toBe(false);
+  expect(await scratchSnapshot(f.destination)).toEqual(residue);
 });
 
 for (const phase of ['complete', 'seeding', 'rejected']) {
@@ -180,3 +217,73 @@ for (const phase of ['complete', 'seeding', 'rejected']) {
     });
   }
 }
+
+it.each([
+  ['directory creation', "const create=fs.mkdtemp;fs.mkdtemp=async(...args)=>{const result=await create(...args);process.kill(process.pid,'SIGKILL');return result}"],
+  ['exclusive open', "const open=fs.open;fs.open=async(...args)=>{const handle=await open(...args);if(args[1]==='wx')process.kill(process.pid,'SIGKILL');return handle}"],
+  ['partial write', "const open=fs.open;fs.open=async(...args)=>{const handle=await open(...args);if(args[1]==='wx')handle.writeFile=async bytes=>{await handle.write(String(bytes).slice(0,7));process.kill(process.pid,'SIGKILL')};return handle}"],
+  ['seeding rename', "const rename=fs.rename;fs.rename=async(...args)=>{await rename(...args);process.kill(process.pid,'SIGKILL')}"],
+  ['payload release', "const unlink=fs.unlink;fs.unlink=async(...args)=>{await unlink(...args);process.kill(process.pid,'SIGKILL')}"],
+  ['empty directory cleanup', "fs.rmdir=async()=>{process.kill(process.pid,'SIGKILL')}"],
+])('recovers a real SIGKILL at %s without deleting unknown residue', async (_boundary, hook) => {
+  const f = await fixture();
+  const preload = join(f.root, 'crash-boundary.mjs');
+  await writeFile(preload, `import { promises as fs } from 'node:fs'; ${hook};`);
+  expect((await f.run(['--import', preload])).code).not.toBe(0);
+  const residue = await scratchSnapshot(f.destination);
+  expect(residue).toHaveLength(1);
+  expect(residue[0]?.files.length).toBeLessThanOrEqual(1);
+  expect((await f.run()).code).toBe(0);
+  await expectCompleteSeed(f);
+  expect(await scratchSnapshot(f.destination)).toEqual(residue);
+  const manifest = await readFile(join(f.destination, 'import-core.json'));
+  await writeFile(join(f.destination, 'src/main.ts'), 'fork adaptation');
+  await rm(join(f.destination, 'test/main.test.ts'));
+  expect((await f.run()).code).toBe(0);
+  expect(await scratchSnapshot(f.destination)).toEqual(residue);
+  expect(await readFile(join(f.destination, 'import-core.json'))).toEqual(manifest);
+  expect(await readFile(join(f.destination, 'src/main.ts'), 'utf8')).toBe('fork adaptation');
+  expect(await readdir(join(f.destination, 'test'))).toEqual([]);
+});
+
+it.each(['exclusive collision', 'replaced payload', 'unexpected entry', 'replaced directory'])('preserves foreign data during live cleanup after %s', async scenario => {
+  const f = await fixture();
+  const preload = join(f.root, 'foreign-live.mjs');
+  const record = join(f.root, 'foreign-path');
+  const outside = join(f.root, 'outside');
+  await mkdir(outside);
+  const hook = scenario === 'exclusive collision'
+    ? "const open=fs.open;fs.open=async(file,flags,...args)=>{if(flags==='wx'){await fs.writeFile(file,'foreign bytes');await fs.writeFile(record,file)}return open(file,flags,...args)}"
+    : scenario === 'replaced payload'
+      ? "fs.rename=async(file)=>{await fs.renameOriginal(file,file+'.original');await fs.writeFile(file,'foreign bytes');await fs.writeFile(record,file);throw new Error('injected replacement')}"
+      : scenario === 'unexpected entry'
+        ? "const create=fs.mkdtemp;fs.mkdtemp=async(...args)=>{const directory=await create(...args);const file=directory+'/foreign';await fs.writeFile(file,'foreign bytes');await fs.writeFile(record,file);return directory}"
+        : "fs.rename=async(file)=>{const directory=path.dirname(file);await fs.renameOriginal(directory,directory+'.original');await fs.symlink(outside,directory,'dir');await fs.writeFile(directory+'/foreign','foreign bytes');await fs.writeFile(record,directory+'/foreign');throw new Error('injected directory replacement')}";
+  await writeFile(preload, `import { promises as fs } from 'node:fs';import path from 'node:path';const record=${JSON.stringify(record)},outside=${JSON.stringify(outside)};fs.renameOriginal=fs.rename;${hook};`);
+  const result = await f.run(['--import', preload]);
+  expect(result.code, result.output).toBe(scenario === 'unexpected entry' ? 0 : 1);
+  const foreign = await readFile(record, 'utf8');
+  expect(await readFile(foreign, 'utf8')).toBe('foreign bytes');
+  if (scenario === 'replaced directory') {
+    expect((await lstat(resolve(foreign, '..'))).isSymbolicLink()).toBe(true);
+    expect(await readlink(resolve(foreign, '..'))).toBe(outside);
+  }
+  if (scenario === 'unexpected entry') await expectCompleteSeed(f);
+});
+
+it.each([
+  ['payload write', "const open=fs.open;fs.open=async(...args)=>{const handle=await open(...args);if(args[1]==='wx')handle.writeFile=async()=>{throw new Error('injected write failure')};return handle}"],
+  ['payload sync', "const open=fs.open;fs.open=async(...args)=>{const handle=await open(...args);if(args[1]==='wx')handle.sync=async()=>{throw new Error('injected sync failure')};return handle}"],
+  ['source publication', "fs.link=async()=>{throw new Error('injected link failure')}"],
+])('cleans its own scratch after an ordinary %s failure and permits retry', async (_boundary, hook) => {
+  const f = await fixture();
+  const preload = join(f.root, 'error-boundary.mjs');
+  await writeFile(preload, `import { promises as fs } from 'node:fs'; ${hook};`);
+  const result = await f.run(['--import', preload]);
+  expect(result.code).toBe(1);
+  expect(result.output).toContain('injected');
+  expect(await scratchSnapshot(f.destination)).toEqual([]);
+  expect((await f.run()).code).toBe(0);
+  await expectCompleteSeed(f);
+  expect(await scratchSnapshot(f.destination)).toEqual([]);
+});
