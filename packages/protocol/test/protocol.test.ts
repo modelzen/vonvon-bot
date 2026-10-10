@@ -36,6 +36,8 @@ describe("pinned contract extraction", () => {
     expect(parsed.extensionAtRoot).toEqual({keep:true});
     expect(parsed.projects[0]?.extensionFromOlderVersion).toEqual({keep:true});
     expect(bridgeProjectsStoreSchema.parse({projects:[{name:"old",cwd:"/tmp"}]}).projects).toHaveLength(1);
+    const old = {version:"legacy",projects:[{name:"old",cwd:"/tmp",chatId:42,enabled:"legacy"}]};
+    expect(bridgeProjectsStoreSchema.parse(old)).toEqual(old);
   });
   it("round-trips settings views for all four scopes", () => {
     const section = (value: unknown) => ({stored:value,effective:value,revision:"r1",access:{kind:"writable"},apply:[]});
