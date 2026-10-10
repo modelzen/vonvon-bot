@@ -1,4 +1,4 @@
-import { observeShutdown, type ShutdownControl } from '../../host/lifecycle';
+import { closeOwnedProviders, listenerCloseUnconfirmed, observeShutdown, type ShutdownControl } from '../../host/lifecycle';
 import { ensureOnboarded, announceEventsWhenLive } from '../../bot/onboarding';
 import { startBridge } from '../../bot/bridge';
 import { runSupervisor } from '../../bot/supervisor';
@@ -67,18 +67,17 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
   console.log('\n正在启动长连接 bot…');
   console.log('私聊我 `/new <名>` 建项目；在项目群里 @我 干活。Ctrl+C 退出。\n');
   let api: Awaited<ReturnType<typeof startApi>> | undefined;
-  let handle: Awaited<ReturnType<typeof startBridge>>;
-  try { handle = await startBridge({ cfg, appSecret: secret, fallbackCwd, onConnectionChange: () => {
-    if (process.send) {
-      if (process.connected) process.send({ fcb: 'fcb.connection' }, undefined, undefined, (error: Error | null) => { if (error && process.connected) log.fail('run', error, { phase: 'connection-notice' }); });
-    }
-    else api?.invalidate();
-  } }); }
-  catch (error) { releaseLock(); throw error; }
-  // 配置长连接需要 bridge 在线，启动后继续检查用户发布的订阅更新。
-  void announceEventsWhenLive(ready);
-
+  let bridge: Awaited<ReturnType<typeof startBridge>> | undefined;
+  const errors: unknown[] = [];
   try {
+    const handle = bridge = await startBridge({ cfg, appSecret: secret, fallbackCwd, onConnectionChange: () => {
+      if (process.send) {
+        if (process.connected) process.send({ fcb: 'fcb.connection' }, undefined, undefined, (error: Error | null) => { if (error && process.connected) log.fail('run', error, { phase: 'connection-notice' }); });
+      }
+      else api?.invalidate();
+    } });
+    void announceEventsWhenLive(ready);
+
     if (process.send) {
       const respond = createAdminIpcResponder(
         async (op) => {
@@ -142,12 +141,22 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
 
     if (!process.send) console.log('vonvon daemon ready');
     await control.waitForRequest();
-  } finally {
-    const cleanup = await Promise.allSettled([api?.beginDrain()]);
-    cleanup.push(...await Promise.allSettled([handle.shutdown()]));
+  } catch (error) { errors.push(error); }
+  finally {
+    const cleanup = await Promise.allSettled([closeOwnedProviders(async () => {
+      const drained = await Promise.allSettled([Promise.resolve().then(() => api?.beginDrain())]);
+      drained.push(...await Promise.allSettled([Promise.resolve().then(() => bridge?.shutdown())]));
+      errors.push(...drained.filter(result => result.status === 'rejected').map(result => result.reason));
+    })]);
     cleanup.push(...await Promise.allSettled([control.completeShutdown(() => api?.release() ?? Promise.resolve())]));
-    releaseLock();
     const failures = cleanup.filter((result) => result.status === 'rejected');
-    if (failures.length) throw new AggregateError(failures.map((failure) => failure.reason), 'Single Bot cleanup failed.');
+    errors.push(...failures.map(failure => failure.reason));
+    if (!errors.some(listenerCloseUnconfirmed)) {
+      try { releaseLock(); } catch (error) { errors.push(error); }
+    }
+    if (!options.control) control.dispose();
+    for (const error of errors) log.fail('daemon-shutdown', error, { phase: 'cleanup' });
+    if (errors.length === 1) throw errors[0];
+    if (errors.length) throw new AggregateError(errors, 'Single Bot cleanup failed.');
   }
 }

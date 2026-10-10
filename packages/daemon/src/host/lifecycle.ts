@@ -5,6 +5,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { paths } from '../config/paths';
+import { ApiCleanupError } from '../server/http';
+import { closeOwnedCodexProcesses, unconfirmedCodexPids } from '../agent/codex-appserver/owned-process';
 
 export interface ShutdownControl {
   readonly requested: boolean;
@@ -13,6 +15,43 @@ export interface ShutdownControl {
   requestRestart(port: number, update?: UpdateStatus): void;
   completeShutdown(release: () => Promise<void>): Promise<void>;
   dispose(): void;
+}
+
+class ListenerCloseUnconfirmedError extends AggregateError {
+  constructor(error: unknown) {
+    super([error], 'Listener cutoff was not confirmed.');
+  }
+}
+
+export function listenerCloseUnconfirmed(error: unknown): boolean {
+  return error instanceof ListenerCloseUnconfirmedError
+    || (error instanceof AggregateError && error.errors.some(listenerCloseUnconfirmed));
+}
+
+export async function closeOwnedProviders(shutdown: () => Promise<void> = async () => {}): Promise<void> {
+  const report = (settled: boolean): Promise<void> => {
+    const pids = unconfirmedCodexPids();
+    if (!settled && pids.length) log.warn('daemon-shutdown', 'owned_work_unconfirmed', { pid: process.pid, pids });
+    if (!process.send) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      if (!process.connected) { reject(new Error('Owned-work IPC channel is closed.')); return; }
+      process.send?.({ fcb: 'fcb.owned-work', pids, settled }, (error: Error | null) => error ? reject(error) : resolve());
+    });
+  };
+  const pendingReport = (): void => {
+    void report(false).catch(error => log.fail('daemon-shutdown', error, { phase: 'owned-work-report' }));
+  };
+  pendingReport();
+  const timer = setInterval(pendingReport, 1000);
+  const errors: unknown[] = [];
+  try { await shutdown(); }
+  catch (error) { errors.push(error); }
+  try { await closeOwnedCodexProcesses(); }
+  catch (error) { errors.push(error); }
+  finally { clearInterval(timer); }
+  try { await report(true); }
+  catch (error) { log.fail('daemon-shutdown', error, { phase: 'owned-work-report' }); errors.push(error); }
+  if (errors.length) throw new AggregateError(errors, 'Provider cleanup failed.');
 }
 
 type RestartHelper = {
@@ -82,7 +121,15 @@ export function observeShutdown(parentControl = false): ShutdownControl {
       if (intent === 'stop') cancelHelper();
       if (helper?.cancelled && !helper.dead) { await helper.death; continue; }
       committed = true;
-      await release();
+      try { await release(); }
+      catch (error) {
+        if (error instanceof ApiCleanupError) {
+          log.fail('daemon-shutdown', error, { phase: 'listener-cleanup' });
+          throw error;
+        }
+        log.fail('daemon-shutdown', error, { phase: 'listener_close_unconfirmed' });
+        throw new ListenerCloseUnconfirmedError(error);
+      }
       return;
     }
   };
@@ -190,15 +237,15 @@ async function reapGroup(pid: number): Promise<boolean> {
   return true;
 }
 
-export function stopChild(child: ChildProcess, graceMs = HOST_SHUTDOWN_GRACE_MS, ownsProcessGroup = false): Promise<void> {
+export function stopChild(child: ChildProcess, graceMs = HOST_SHUTDOWN_GRACE_MS, ownsProcessGroup = false, beforeEscalation?: () => Promise<void>): Promise<void> {
   const existing = stops.get(child);
   if (existing) return existing;
-  const stopping = stop(child, graceMs, ownsProcessGroup);
+  const stopping = stop(child, graceMs, ownsProcessGroup, beforeEscalation);
   stops.set(child, stopping);
   return stopping;
 }
 
-async function stop(child: ChildProcess, graceMs: number, ownsProcessGroup: boolean): Promise<void> {
+async function stop(child: ChildProcess, graceMs: number, ownsProcessGroup: boolean, beforeEscalation?: () => Promise<void>): Promise<void> {
   let forced = false;
   if (child.exitCode === null && child.signalCode === null) {
     if (!child.pid) throw new Error('Cannot terminate a child without a process identity.');
@@ -208,6 +255,7 @@ async function stop(child: ChildProcess, graceMs: number, ownsProcessGroup: bool
     }
     else if (child.stdin && !child.stdin.destroyed) child.stdin.end('shutdown\n');
     else if (process.platform !== 'win32') child.kill('SIGTERM');
+    await beforeEscalation?.();
     if (!await waitForExit(child, graceMs)) {
       forced = true;
       const forceDeadline = Date.now() + FORCE_EXIT_MS;
@@ -234,13 +282,13 @@ async function stop(child: ChildProcess, graceMs: number, ownsProcessGroup: bool
   }
 }
 
-export async function settleOwnedChild(child: ChildProcess, graceMs = CHILD_SHUTDOWN_GRACE_MS, ownsProcessGroup = false): Promise<void> {
+export async function settleOwnedChild(child: ChildProcess, graceMs = CHILD_SHUTDOWN_GRACE_MS, ownsProcessGroup = false, beforeEscalation?: () => Promise<void>): Promise<void> {
   let observed = child.exitCode !== null || child.signalCode !== null;
   const observe = (): void => { observed = true; };
   child.once('exit', observe);
   child.once('close', observe);
   try {
-    try { await stopChild(child, graceMs, ownsProcessGroup); }
+    try { await stopChild(child, graceMs, ownsProcessGroup, beforeEscalation); }
     catch (error) {
       for (;;) {
         let groupAlive = false;
