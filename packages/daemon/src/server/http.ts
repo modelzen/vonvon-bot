@@ -68,11 +68,13 @@ export async function startApi(options: { service: AdminService; port?: number; 
   const sockets = createSocketServer({ server, credential, info: { type: 'serverInfo', machineId, version: bridgeVersion(), protocolVersion: PROTOCOL_VERSION }, request, detached: peer => { jobs.detach(peer); logs.detach(peer); } });
   let closing: Promise<void> | undefined;
   const close = (): Promise<void> => closing ??= (async () => {
+    const draining = jobs.close();
     logs.close();
-    await sockets.close();
-    await jobs.close();
-    await snapshots?.close();
-    await new Promise<void>((resolve, reject) => server.close(error => { if (error && !('code' in error && error.code === 'ERR_SERVER_NOT_RUNNING')) reject(error); else resolve(); }));
+    const results = await Promise.allSettled([draining, sockets.close()]);
+    results.push(...await Promise.allSettled([snapshots?.close()]));
+    results.push(...await Promise.allSettled([new Promise<void>((resolve, reject) => server.close(error => { if (error && !('code' in error && error.code === 'ERR_SERVER_NOT_RUNNING')) reject(error); else resolve(); }))]));
+    const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+    if (errors.length) throw new AggregateError(errors, 'API shutdown failed');
   })();
   try {
     snapshots = await createSnapshotStore({ service: options.service, jobs: () => jobs.snapshot(), publish: snapshot => sockets.publish({ type: 'event', event: 'snapshot', payload: snapshot }) });
