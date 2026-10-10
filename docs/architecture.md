@@ -51,6 +51,16 @@ daemon 负责这台机器上的一切。它运行 Bot、管理 agent 会话、�
 
 Bot 不依赖桌面窗口。关掉窗口或退出桌面端，飞书里的 Bot 照常回复。开启**开机自动运行**后，daemon 注册为系统服务。代码从 bridge 已有的 launchd、systemd 和 Windows 启动项代码改来，但用 Vonvon 自己的服务标识（`com.vonvon.bot.daemon`、`vonvon-bot.service`），绝不读写 bridge 的服务注册。系统服务从 V5 开始提供，具体设计和原生验收见 [plan.md](plan.md) V5 一节的 *Service gate*。V3 的 `vonvon service install` 和 `uninstall` 一律报错退出，因为复制来的服务代码还在用 bridge 的标识。停止 daemon 不删除系统服务注册，关掉开机自动运行才删除。
 
+V5 的系统服务设计要点如下。
+
+- 每个系统用户最多注册一个 Vonvon 服务。服务定义里写着它的 `VONVON_HOME`，这就是唯一的记录，不新增状态文件。其他数据目录的注册、认不出的定义，一律拒绝改动。
+- 注册了服务的数据目录只由系统服务管理器启动，`vonvon daemon start` 也交给管理器，失败就报错，不自己另起进程。
+- 管理器只在失败时重新拉起。停止退出 0，不会被拉起，注册保留。重启在排空后退出 75，由管理器按原端口拉起。崩溃或其他非零退出在 5 秒后拉起。Windows 没有服务管理器，由启动项运行的 `.cmd` 循环实现同样的规则。
+- Vonvon 从不通过管理器停止正在运行的 daemon，停止只走 `stopHost`。所以排空没有时限，停止优先的规则和 V3 一样。
+- 安装和卸载都是事务，失败时回滚或列出残留，重跑可以收敛。卸载会先停止 daemon 并等它排空。
+
+具体设计和原生验收步骤见 [plan.md](plan.md) V5 一节的 *Service gate*。
+
 V3 的 daemon 都由 CLI 启动，没人会再拉起它。停止和重启都先等已经接受的操作做完，并确认它启动的子进程都已退出，才释放 pid 锁，不为赶时间提前放锁。这些子进程包括 Bot 子进程、npm，以及 Codex app-server 和它的进程组。确认不了子进程退出时宁可一直占着锁。关闭 Codex 进程的调用在确认进程退出之前不会返回，清理出错只在确认退出之后才报告，所以上层缓存或忽略这个错误也不会提前放锁。daemon 排空期间仍接受本机凭据认证的连接，但只回答状态查询和停止请求，所以新开的 CLI 能先核实身份再请求停止，不会按 pid 文件里的数字直接发信号。重启后端口不变：一个没有时限的重启助手等旧进程退出后在原端口拉起新进程。旧 daemon 放锁之前收到的停止请求会取消重启：daemon 立即结束重启助手，确认助手已退出后才放锁。具体规则见 [plan.md](plan.md) V3 一节的 *Lifecycle ownership*。
 
 ### Bot 运行内核是 vonvon-bot 自己的源码
@@ -97,6 +107,8 @@ Paseo 的界面是 Expo 和 React Native Web，搬过来要重写全部界面，
 
 现在的桌面端用 Electron 的原生对话框选项目目录，再把结果包成 `FolderToken`。远程客户端打不开另一台机器上的原生对话框，所以新结构由 daemon 提供目录浏览 RPC，所有客户端用同一个。Paseo 的 `directory_suggestions_request` 是同样的做法。
 
+Codex 可执行文件也一样不用原生对话框的令牌：界面让用户填路径，用现有的主机设置保存 `execution.codexBin`，由 daemon 检查路径。桌面端多提供一个原生文件对话框，选出的路径走同一条保存流程。打开链接和复制链接在客户端里做，因为远程连接时 daemon 打开的窗口会出现在另一台机器上。退出、隐藏窗口、开机自动运行、桌面端更新这些只和桌面应用有关的操作，通过界面里可选的外壳能力对象交给桌面端，网页版不提供它们，只显示说明。
+
 ### Provider 层保留 Codex，Claude Code 按 Paseo 重写，其他 provider 从 Paseo 移植
 
 Bot 层调用 agent 的合同仍是 bridge 的 `AgentBackend`、`AgentThread`、`AgentRun`（`src/agent/types.ts`）。这个接口已经有 `capabilities` 和 `approval_request` 事件，能容纳更多 provider，不需要改 Bot 层。
@@ -108,6 +120,10 @@ Claude Code 后端改用 Paseo 的实现（`packages/server/src/server/agent/pro
 其他 provider 从 Paseo 移植，包括通用 ACP（Copilot 也走 ACP）、OpenCode 和 Pi。
 
 Paseo 的 provider 实现的是它自己的 `AgentClient` 和 `AgentSession` 接口（`agent-sdk-types.ts`）。所以加一层适配器，把 `AgentSession` 包成 `AgentBackend`，所有移植来的 provider 共用这一个适配器。Paseo 自己的工具目录和子 agent 存储不搬，provider 里用到它们的地方删掉。
+
+只复制 `providers/claude/` 编译不过，因为它还引用 Paseo 的其他模块和 `@getpaseo/protocol`。V6 先按 import 关系算出完整的依赖闭包，整文件复制，只改 import 路径。闭包清单写在 `agent/paseo/closure.json`，并由测试检查。`agent-sdk-types.ts` 完整复制，V7 用的是完整合同。
+
+权限沿用 V3 的规则：三种模式都用 `bypassPermissions`，`qa` 和 `write` 再加沙箱，`qa` 还禁止写入。仍然到达的权限请求先记成被动的 `approval_request` 事件，再自动拒绝。飞书里不加交互式审批，协议也不变。
 
 这条决定还没验证。第一个 provider PR 要证明适配器能完整映射事件、权限请求、中断和追加消息。
 
@@ -163,7 +179,7 @@ vonvon-platform 只有约 1170 行，数据存在一个 JSON 文件里，只能�
 
 ### 桌面端只是外壳
 
-桌面端用 Electron。它启动时检查本机 daemon，没在运行就用内置的 daemon 拉起来，方式是用 Electron 自带的 Node 运行（`ELECTRON_RUN_AS_NODE=1`），做法同 Paseo 的 `packages/desktop/src/daemon/node-entrypoint-launcher.ts`。
+桌面端用 Electron。它启动时检查本机 daemon，在运行就直接连上。如果没在运行，而这个数据目录已经注册了系统服务，就交给服务管理器启动；没有注册，才用内置的 daemon 拉起来，方式是用 Electron 自带的 Node 运行（`ELECTRON_RUN_AS_NODE=1`），做法同 Paseo 的 `packages/desktop/src/daemon/node-entrypoint-launcher.ts`。
 
 桌面窗口加载和网页相同的界面。托盘、单实例、自动更新沿用现在 `desktop/main` 的实现。
 
@@ -239,7 +255,7 @@ packages/
   cloud/      账号、机器登记、转发、托管网页
 ```
 
-`vonvon` 命令放在 daemon 包里，`npm i -g vonvon-bot` 就能在服务器上使用。常用命令有 `vonvon daemon start|stop|status`、`vonvon service install|uninstall`（V5 起可用）、`vonvon import feishu-codex-bridge`、`vonvon login`、`vonvon open`。
+`vonvon` 命令放在 daemon 包里，`npm i -g vonvon-bot` 就能在服务器上使用。常用命令有 `vonvon daemon start|stop|status`、`vonvon service install|uninstall|status`（V5 起可用）、`vonvon import feishu-codex-bridge`、`vonvon login`、`vonvon open`。
 
 ## 代码来源和许可证
 

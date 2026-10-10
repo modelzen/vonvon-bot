@@ -42,7 +42,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 - [ ] Follow the dependency table in *Dependencies* under *Parallel execution*. It separates where a branch starts from what its acceptance needs and when it merges. Merges stay in roadmap order, V1 to V11. A branch never rebases. It merges its parent branch in when the parent moves, and merges `main` in after its parent lands.
   - [ ] V1 and V2 are merged. Nothing in this graph rebases, retargets, or reopens them, and open PRs keep their branches.
   - [ ] V9 lives in `modelzen/feishu-codex-bridge`, branched from `origin/codex/device-handoff`.
-- [ ] Hold the file boundaries. V1 touches only the root config, `packages/protocol/**`, `.github/**`, `NOTICE`, and `README.md`. V2 and V3 touch only `packages/daemon/**`, `scripts/import-core.mjs`, `packages/protocol/**`, and necessary root package metadata or lockfile changes for workspace integration. V3 also creates the minimal local client in `packages/client/**` that its lanes drive. V4 extends `packages/client/**` and adds `packages/ui/**`, `.agents/skills/verify/**`, `packages/daemon/src/server/web-ui.ts`, and `packages/daemon/src/cli/commands/open.ts`, and edits `packages/daemon/src/server/http.ts` only to mount `web-ui.ts`. V5 touches `packages/desktop/**` and, for its *Service gate*, the daemon's service files `packages/daemon/src/service/launchd.ts`, `systemd.ts`, `win-startup.ts`, `adapter.ts`, and `common.ts` and `packages/daemon/src/cli/commands/service.ts`. V5 never edits `service/control.ts`, which V8 uses. Any other daemon file the gate needs is named in V5's section before V5 starts. V6 and V7 touch only `packages/daemon/src/agent/**`, provider entries in `packages/protocol/**`, the provider picker in `packages/ui/**`, and `NOTICE`. V8 touches only `packages/daemon/src/import/**`, `packages/daemon/src/cli/commands/import.ts`, `packages/protocol/src/import.ts`, and `packages/ui/src/import/**`. V10 and V11 add `packages/cloud/**` and `packages/daemon/src/cloud/**`. V10 also adds `packages/ui/src/account/**` and `cli/commands/login.ts`, and V11 also adds `packages/client/src/transport-relay.ts`, `packages/client/src/e2ee/**`, and the machine switcher in `packages/ui/src/`. Each PR's edits to the shared integration files under *Shared files* go through the root.
+- [ ] Hold the file boundaries. V1 touches only the root config, `packages/protocol/**`, `.github/**`, `NOTICE`, and `README.md`. V2 and V3 touch only `packages/daemon/**`, `scripts/import-core.mjs`, `packages/protocol/**`, and necessary root package metadata or lockfile changes for workspace integration. V3 also creates the minimal local client in `packages/client/**` that its lanes drive. V4 extends `packages/client/**` and adds `packages/ui/**`, `.agents/skills/verify/**`, `packages/daemon/src/server/web-ui.ts`, and `packages/daemon/src/cli/commands/open.ts`, and edits `packages/daemon/src/server/http.ts` only to mount `web-ui.ts`. V4 also edits `packages/daemon/src/server/rpc/command.ts`, `environment.ts`, `machine.ts`, and `settings.ts` only for the branches its *Browser coverage* assigns to the daemon. It creates `packages/daemon/src/environment/**` and the three daemon tests that V4's Files names. V5 touches `packages/desktop/**` and, for its *Service gate*, the daemon's service files `packages/daemon/src/service/launchd.ts`, `systemd.ts`, `win-startup.ts`, `adapter.ts`, and `common.ts` and `packages/daemon/src/cli/commands/service.ts`. The gate also creates `service/identity.ts` and `service/registration.ts`. It edits `packages/daemon/src/host/service.ts`, `host/lifecycle.ts`, `cli/commands/daemon.ts`, and `cli/commands/run.ts`, each only for the change that *Daemon files* in V5 names, and it creates the test files that section names. V5 never edits `service/control.ts`, which V8 uses, `service/codex-bin.ts`, `service/update.ts`, or `cli/commands/daemon-control.ts`. V6 and V7 touch only `packages/daemon/src/agent/**`, provider entries in `packages/protocol/**`, the provider picker in `packages/ui/**`, and `NOTICE`. They also own their test files under `packages/daemon/test/`, which V6's and V7's sections name. V8 touches only `packages/daemon/src/import/**`, `packages/daemon/src/cli/commands/import.ts`, `packages/protocol/src/import.ts`, and `packages/ui/src/import/**`. V10 and V11 add `packages/cloud/**` and `packages/daemon/src/cloud/**`. V10 also adds `packages/ui/src/account/**` and `cli/commands/login.ts`, and V11 also adds `packages/client/src/transport-relay.ts`, `packages/client/src/e2ee/**`, and the machine switcher in `packages/ui/src/`. Each PR's edits to the shared integration files under *Shared files* go through the root.
 - [ ] Preserve interaction evidence under *Interaction evidence* below, then proceed through independent review and guarded Shipping without waiting for personal review or a manual merge click.
 
 ### Interaction evidence
@@ -62,7 +62,7 @@ The evidence a PR keeps for review follows the surface a user meets in that PR. 
 - Checker. A script reads only the bundle files and writes `assertions.json` with every assertion of the step list and its result. It never reads the PR body. The bundle includes raw PID-lock, process birth and command, host census, and service/home before-and-after receipts. Compare stable process identity fields, not changing CPU or elapsed-time counters. Record the credential length and SHA-256, never its plaintext; check absence by hashing candidate hex strings in decoded PTY output and raw command outputs.
 - Manifest. `manifest.json` records the head SHA, the PR base and merge-base SHAs, that `git status --porcelain` was empty, the macOS, Node, and npm versions, the sha256 of `package-lock.json`, the sha256 of `packages/daemon/bin/vonvon.mjs` and of every file under each workspace's `dist`, and the sha256 of every bundle file except `manifest.json` itself, including the driver, checker, snapshot script, and auxiliary receipts. The PR body records the manifest's own sha256. A changed file, head, or lockfile invalidates the bundle.
 - Independent check, by an audit lane that did not produce the bundle. It verifies every hash in the manifest and that its head, base, and lockfile equal the head under verdict. It reruns the checker. It replays `terminal.typescript` and confirms that the step markers and exit codes equal `steps.jsonl`. It then runs the structured pass itself, from its own fresh worktree, build, and homes at the same head, and gets the same exit code and the same result for every assertion. Values that differ by run, such as a pid, a port, or a time, are compared only through the assertions. It saves its own `manifest.json`. A difference in a source hash or an assertion fails the bundle. A difference in a `dist` hash with equal source and lockfile is a finding that the auditor explains before the verdict.
-- Pass when every assertion holds in both passes and in the independent run, every hash verifies, and both manifests name the frozen head. Anything else fails, including a missing file.
+- Pass when every assertion holds in each pass the PR's step list assigns it to, every structured-pass result is reproduced by the independent run, every hash verifies, and both manifests name the frozen head. At minimum, every assertion holds in the structured pass, and an assertion that the step list marks *both* also holds in the terminal pass. An implementation may check more assertions in both passes than the step list requires. Anything else fails, including a missing file.
 
 ### Parallel execution
 
@@ -126,14 +126,14 @@ This section says how Codex runs work in parallel and where each branch starts. 
 Freeze points. A freeze point is a pushed commit at which the named interface is fixed. It is an interface commitment, not a verdict. The root records its SHA. If the interface changes after it, the owner tells the root, and every branch that started from it merges the new commit in.
 
 - `H3`. The V3 head after the root merges the current `main`, with this plan, into the V3 branch. The root read the V3 product head as `8c0adb4` before that merge, and records `H3` when it creates the branches below. V3 is code-complete. If its Shipping finds a defect, the repair makes a new V3 head, and every branch started from `H3` merges it in.
-- `F4`. The V4 commit that fixes four things: the `packages/client` exports for browser and Electron preload use, added beside the Node-only `connectLocal` without changing any RPC or event shape; the injected-client API of `packages/ui/src/client-context.tsx`; the build script and output path `packages/ui/dist`; and one UI feature registration file, where a later feature adds one entry.
-- `F6`. The V6 commit with `agent/paseo/agent-sdk-types.ts` and `session-backend.ts` in place and `session-backend.test.ts` passing.
+- `F4`. The V4 commit that fixes four things: the `packages/client` exports for browser and Electron preload use, added beside the Node-only `connectLocal` without changing any RPC or event shape; the injected-client API of `packages/ui/src/client-context.tsx`, including the optional shell-capability object from V4's *Shell capabilities*; the build script and output path `packages/ui/dist`; and one UI feature registration file, where a later feature adds one entry.
+- `F6`. The V6 commit with the full `agent/paseo/agent-sdk-types.ts`, copied whole with only its specifiers changed and every type it imports resolved inside the closure, and with `session-backend.ts` in place, typecheck clean, and `session-backend.test.ts` passing. V7 consumes the whole `AgentClient` and `AgentSession` contract, so `F6` never freezes a subset of it.
 - `F10`. The V10 commit with the device enrollment, device credential, and outbound link interfaces in `packages/daemon/src/cloud/` and `packages/cloud/src/devices.ts`, and `devices.test.ts` passing.
 
 | PR | Branch | Development baseline | Waits for, per part | Acceptance inputs | Merges after |
 | --- | --- | --- | --- | --- | --- |
 | V4 | `codex/v4-web-ui` | `H3` | Nothing | A running daemon at V4 head, the old renderer at `fab5237`, Playwright Chromium | V3 |
-| V5 | `codex/v5-desktop` | V4 branch at `F4` | The shell files need `F4`. The service files and `login-item.ts` need the *Service gate* design | Real `packages/ui/dist` in a real Electron window, an older daemon build, the dedicated Mac test user, a Linux systemd user session | V4 |
+| V5 | `codex/v5-desktop` | V4 branch at `F4` | The shell files need `F4`. The *Service gate* design is written, so the service files and `login-item.ts` need nothing more | Real `packages/ui/dist` in a real Electron window, an older daemon build, the dedicated Mac test user with a GUI session, a dedicated Linux user with a systemd user session | V4 |
 | V6 | `codex/v6-claude-provider` | `H3` | Nothing | The Feishu fixture Bot, the real Claude Code CLI, V3 head for lane 1 and perf | V5 |
 | V7 | `codex/v7-providers` | V6 branch at `F6` | The provider IDs and the picker need V4 merged and the root's provider-ID handoff | V4's web UI for lane 7, the installed providers, the Feishu fixture Bot | V6 |
 | V8 | `codex/v8-bridge-import` | `H3`, or `main` once V3 has merged | `packages/ui/src/import/**` needs `F4` | Bridge `446b2a4` installed as a service under the dedicated test user on the Mac and on Linux, the Feishu fixture Bot, V4's web UI | V7 |
@@ -148,8 +148,8 @@ Evidence-grade gates follow the merge order. A PR runs its frozen-head live lane
 *Shared files.* After V3 the root owns these and writes every change to them as a frozen handoff or at integration. Owners own the leaf files they add.
 
 - `packages/protocol/src/index.ts`, `domain.ts`, `rpc.ts`, `events.ts`, and `handshake.ts`. V7's provider IDs go into `domain.ts`, whose `toolSchema` allows only `codex` and `claude` today. V8's owner writes `import.ts`, and the root adds its export and request-group registration. No existing shape changes. A change to an existing shape goes back to Claude Code.
-- `packages/daemon/src/cli/index.ts`. One registration line per command: V4 `open`, V8 `import`, V10 `login` and `logout`, and V5's service registration if its design needs one. Owners own `cli/commands/<name>.ts`.
-- The root `package.json` and `package-lock.json`. A worker returns the dependencies it adds. The root applies them and regenerates the lockfile with `npm install` after each integration or merge that touches it, never by hand. A lockfile change is a context change under the patch-id rule.
+- `packages/daemon/src/cli/index.ts`. One registration line per command: V4 `open`, V8 `import`, V10 `login` and `logout`. V5 needs none, because `service` stays registered from V3. Owners own `cli/commands/<name>.ts`.
+- The root `package.json` and `package-lock.json`. V5 returns the desktop package's dependencies. V6 returns `@anthropic-ai/claude-agent-sdk` at exactly `0.3.246`, moved from `devDependencies` to `dependencies` of `packages/daemon`, plus every external package its closure imports, at Paseo's range. A worker returns the dependencies it adds. The root applies them and regenerates the lockfile with `npm install` after each integration or merge that touches it, never by hand. A lockfile change is a context change under the patch-id rule.
 - `NOTICE`. Each PR appends its section, and the root resolves the merge.
 - The UI feature registration file from `F4`. The root adds one entry each for V8's import flow, V10's account pages, and V11's machine switcher. After `F4`, the client owner implements those feature directories or explicitly hands off the disjoint `ui/src/import/**` or `ui/src/account/**` directory; `client-context.tsx` and the registration file stay reserved.
 - `packages/daemon/src/server/http.ts`, after V4's `web-ui.ts` mount, and `server/snapshot.ts`. V3's tools probe reads the `claude-agent` backend. When V6 deletes `claude-agent/`, the root checks the `createBackend('claude-agent')` lookup at integration and updates it only if the registered backend ID changes; the `tools` rows keep their meaning.
@@ -172,11 +172,11 @@ Evidence-grade gates follow the merge order. A PR runs its frozen-head live lane
 *Wave 1.* Starts when the root has merged this plan and recorded `H3`.
 
 - Root. Merges `main` into the V3 branch to make `H3`, gets the full CI results under *CI policy*, decides which V3 checks the new base requires under the context rule below, integrates, and runs Shipping. Creates `codex/v4-web-ui` and `codex/v6-claude-provider` in their own worktrees at `H3`. Checks the currently available dedicated Mac test user and Linux systemd user session read-only, then asks the operator once only for missing capabilities that V5 and V8 need, and records the result. The `github-ci` account remains reserved for CI and is never used for service acceptance. The answer is not on the path of V4 or V6.
-- Agent 1, machine platform. V3's frozen-head gates at `H3`: the reruns the root names and the CLI evidence bundle. It does not audit its own bundle.
+- Agent 1, machine platform. V3's frozen-head gates at `H3`: the reruns that the root names and the CLI evidence bundle. It does not audit its own bundle.
 - Agent 2, client surfaces. V4 from `H3`, client exports and `client-context.tsx` first, to reach `F4` early. Then the UI port, `web-ui.ts`, `open.ts`, and the `verify` skill.
 - Agent 3, providers. V6 from `H3`, to `F6` first, then the rest of V6.
 - Agents 2 and 3 take V3's independent audit lanes and the bundle's independent check, one each, and pause their own work only for that.
-- Claude Code, outside the slots, writes V5's *Service gate* design on a `claude/` branch.
+- Claude Code, outside the slots, writes V5's *Service gate* design on a `claude/` branch. It is written on `claude/v5-service-design`, together with V4's *Browser coverage* and V6's import closure and permission mapping.
 
 *Wave 2.* Starts when V3 has merged, which frees agent 1.
 
@@ -186,7 +186,7 @@ Evidence-grade gates follow the merge order. A PR runs its frozen-head live lane
 - Agent 3, providers. V6 to code-ready, with unit tests and rehearsals. Its evidence-grade gates wait until V6 is the earliest or next unmerged PR. Then V7's provider code from `F6` on `codex/v7-providers`.
 - The next free slot takes V10 from `main`, then V9 in the bridge repository. V11's `e2ee/**` port is filler for any free slot.
 
-*Critical path.* Merges are linear, so the program ends when the slowest chain of merge inputs ends: V4, then V5, which needs the *Service gate* design, the dedicated test users, a Linux systemd session, and signing, then the published installer for V9, then V10 and V11. Code for V6, V7, V8, V10, and V11 can be ready before its turn. What stays serial per PR is its frozen-head evidence and Shipping.
+*Critical path.* Merges are linear, so the program ends when the slowest chain of merge inputs ends: V4, then V5, which needs the dedicated Mac test user's GUI session, a dedicated Linux user with a systemd user session, and signing, then the published installer for V9, then V10 and V11. Code for V6, V7, V8, V10, and V11 can be ready before its turn. What stays serial per PR is its frozen-head evidence and Shipping.
 
 *After V3.*
 
@@ -399,7 +399,7 @@ The snapshot stays the V1 `DesktopSnapshot` for the future UI. The old administr
   - The V3 plan never required a native service, and V5 already owns **Open at login**.
   - At the V3 source head `b1a664a`, the daemon's service adapters still reuse the bridge identity, `ai.feishu-codex-bridge.bot`, `feishu-codex-bridge.service`, and the `feishu-codex-bridge` Run value, and their `uninstall` calls `stopInstallation`. Any V3 path that ran them could overwrite or remove the protected original bridge's registration.
   - Service semantics would bring install and uninstall transactions, protection against another data root's registration, a manager-driven restart, and a native gate into V3.
-  - That native gate needs a dedicated OS test user, and none is available now. On the Mac the operator's account is the only one with a GUI session. No Linux instance with a systemd user session is running.
+  - That native gate needs a dedicated OS test user, and none was available when V3 was planned. At that time the operator's account was the only one on the Mac with a GUI session, and no Linux instance with a systemd user session was running. The current availability is in *Native acceptance environment* under V5.
 - Service commands fail closed. `vonvon service install` and `vonvon service uninstall` stay registered, so the refusal is explicit. Each prints `Vonvon Bot cannot manage an OS service in this version. Use vonvon daemon start and vonvon daemon stop.` to stderr and exits 1. It refuses before it loads the service adapter. It writes no file, reads or writes no registry value, and runs no `launchctl`, `systemctl`, `schtasks`, or `reg`.
   - The same refusal covers every other daemon path that would reach the adapter's `install`, `restart`, or `uninstall`: `controlDesktopService` in `host/service.ts`, the `__daemon-control` actions in `daemon-control.ts`, and `restartDaemon` in `service/update.ts`. Each one is either removed, when nothing reaches it, or refuses with that message.
   - The hidden `__win-relaunch` entry is one of these paths. It refuses with the same message and exit 1 before it imports any service adapter module, on every platform. It loads no adapter, spawns nothing, and touches no file or registry value.
@@ -801,11 +801,41 @@ V3's surface is the CLI and the WebSocket API, so it keeps the CLI evidence bund
 - [ ] Create `packages/daemon/src/server/web-ui.ts`, and mount it in `server/http.ts`.
 - [ ] Create `packages/daemon/src/cli/commands/open.ts`. The root registers it in `cli/index.ts`.
 - [ ] Create `.agents/skills/verify/` through `/create-verification-skill`.
+- [ ] Edit `packages/daemon/src/server/rpc/command.ts`, `environment.ts`, `machine.ts`, and `settings.ts` only for the branches *Browser coverage* assigns to the daemon. Create `packages/daemon/src/environment/` for the environment logic ported from the old `desktop/main/environment.ts`.
+- [ ] Create `packages/daemon/test/web-rpc-coverage.test.ts`, `environment-rpc.test.ts`, and `settings-executable.test.ts`.
+
+*Browser coverage.* At `H3`, many request variants that the old renderer sent still return `unsupported`. Lane 2 and lane 7 need them to work, and a disabled control does not count as acceptance. No request, reply, or event shape changes. Every variant the old renderer sent gets exactly one of three owners. The old behavior reference is `desktop/main/{index,controller,environment,machine,collaboration}.ts` at `fab5237`.
+
+- Daemon branch, added in V4.
+  - `command.refresh`. Rebuild the snapshot and reply `applied` with the new revision, as the old controller's refresh did.
+  - Every `environment` variant that is still `unsupported`: `scan`, `install`, `update`, `uninstall`, `toolInstallStatus`, `cancelInstall`, `authStatus`, `startLogin`, `loginStatus`, `cancelLogin`, `profileList`, `profileUse`, `profileAdd`, `profileInit`, `profileInitStatus`, and `profileInitCancel`. Port the logic from the old `desktop/main/environment.ts` into `packages/daemon/src/environment/`. It replies with the existing `tools`, `profiles`, `auth`, `operation`, `toolInstall`, `applied`, and `refused` kinds. Installs and logins run as daemon-owned operations under V3's drain rules, the same as the existing backend install job. A stop waits for them, and a stop never abandons them.
+  - `machine.status`. Build the existing `status` reply from `host/service.ts` (at `H3` `installed: false` and `running: false`), the lock owner as `{ownership: 'owned', pid}`, and the CLI path from `resolveCliBinPath()` as `cli.kind: 'ready'`. V5 changes only what `host/service.ts` reports.
+  - `machine.logs`. The `logs` reply, read the same way as `admin` `logs`.
+  - `settings.save` for the host `execution` section, per *Executable path*.
+- UI-local, in `packages/ui`. These old actions only open or copy a URL. In a browser they run in the click handler, so they also work for a remote client after V11, where a daemon-side opener would open a window on the wrong machine. The UI does not send their requests, and the daemon branches stay `unsupported`.
+  - `openEventSettings` opens the URL the request already carries. `openJobAuthorization` opens the job's `url` from the snapshot, which exists in the `qr` phase. `environment.openVerification` opens the operation's `url`. `machine.openReleases` opens the releases URL that the old `machine.ts` used. `collaboration.openGroup` opens the group link the old `collaboration.ts` built.
+  - `copyJobAuthorization` writes the same job `url` through `navigator.clipboard.writeText`. `127.0.0.1` is a secure context.
+  - Every URL first passes the allowlist the old main process applied, ported as a pure function with a unit test. The page opens it with `window.open(url, '_blank', 'noopener')`. The desktop shell routes this to `shell.openExternal`, per *Shell capabilities*.
+  - If the old `openGroup` link, or the old copied text, needs data that no snapshot or reply carries, it is a blocker. Leave only that control gated, write the missing field in the PR, and hand it back to Claude Code. Everything else proceeds.
+- Shell-owned, implemented by V5 through *Shell capabilities*. `settings.chooseExecutable` and `saveExecutable`, `machine.service`, `startHost`, `repairCli`, `checkDesktopUpdate`, and `installDesktopUpdate`, plus the old window-only `setLoginItem`, `hideWindow`, `quit`, and `onQuitRequested`. Each one manages the desktop app, its window, or an OS registration. A browser page cannot reach them, and a daemon cannot install, uninstall, or update the app that runs it. These daemon branches stay `unsupported`, and `machine.service` keeps V3's refusal. In the web build each control in the old pane stays visible. It shows the desktop edition note and the CLI equivalent where one exists: `vonvon daemon start` for `startHost`, and from V5 `vonvon service install` and `uninstall` for the service section. The core-update rows (`checkCoreUpdate`, `applyCoreUpdate`, `coreUpdateStatus`) and `stopHost` already work in the web build.
+
+*Executable path.* The old pane's Codex executable row stays. It shows the host settings' effective `codexBin`, whether it comes from the saved value or the default.
+
+- Change opens a path dialog prefilled with the current value. Save sends the existing `settings save` with scope `host`, section `execution`, the section's `revision`, and patch `{codexBin: <path>}`. **Use default** sends `{codexBin: null}`. A `conflict` reply reloads the section, as the other settings sections do.
+- When the shell capability `chooseExecutablePath` exists, Change opens the native file dialog instead and saves the returned path the same way. Without it, the browser uses the path dialog.
+- `settings-executable.test.ts` first records what the `H3` host save does with a bad path. If it does not already reject one, V4 adds a check in `server/rpc/settings.ts`. The path must be absolute and resolve through `realpath` to a regular file. On macOS and Linux it must be executable, and on Windows it must end in `.exe` or `.cmd`. A path that fails gets the existing `saved` reply with `rejected` and `fields: [{field: 'codexBin', message}]`, and nothing is written. Every case is tested: missing, relative, a directory, not executable, a symlink to an executable, a valid path, and `null`.
+- `chooseExecutable` and `saveExecutable` stay `unsupported`. No client sends them. The old renderer used them only to get an Electron file-dialog token, and the path flow above replaces that token.
+
+*Shell capabilities.* `F4` freezes, in `client-context.tsx`, one optional object that the UI receives beside the `VonvonClient`. It is a UI-local interface, not an RPC, and it changes no protocol shape.
+
+- `openExternal(url)`, `chooseExecutablePath(): Promise<string | null>`, `setLoginItem(enabled)`, `hideWindow()`, `quit()`, `onQuitRequested(listener)`, `service(action)` for `install`, `start`, `stop`, and `uninstall`, `startHost()`, `repairCli()`, `checkDesktopUpdate()`, and `installDesktopUpdate()`.
+- Each member is optional. The web build passes no object. The UI checks each member it needs, and when one is missing it shows the desktop-edition state from *Browser coverage*. V5's `preload.ts` supplies the members and keeps the same names and signatures. A missing method or a changed signature goes back to Claude Code.
 
 **Build.**
 
-- [ ] Replace every `window.bridge` call in `App.tsx`, `SettingsPanel.tsx`, `ProjectPanel.tsx`, `JoinGroupDialog.tsx`, and `pending-groups.ts` with the injected `VonvonClient`.
+- [ ] Replace every `window.bridge` call in `App.tsx`, `SettingsPanel.tsx`, `ProjectPanel.tsx`, `JoinGroupDialog.tsx`, and `pending-groups.ts` with the injected `VonvonClient` or a member of the shell-capability object, per *Browser coverage*.
 - [ ] Replace the folder picker with the directory browser RPC.
+- [ ] Add the daemon branches and the UI-local actions from *Browser coverage*, and the executable path flow from *Executable path*.
 - [ ] Serve the built `packages/ui/dist` from the daemon, with the local credential handed over by `vonvon open`.
 - [ ] Generate the repository `verify` skill for the web UI and the desktop shell.
 
@@ -816,11 +846,13 @@ V3's surface is the CLI and the WebSocket API, so it keeps the CLI evidence bund
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
 - [ ] The ported `tests/collaboration-navigation.test.ts`, `search.test.ts`, and `environment-presentation.test.ts` pass under `packages/ui`. Run `npm test -w packages/ui`.
+- [ ] `packages/daemon/test/web-rpc-coverage.test.ts` sends one valid request for every variant of the `command`, `settings`, `collaboration`, `environment`, and `machine` unions to a daemon with fixture data. It passes when exactly the UI-local and shell-owned variants from *Browser coverage* return `unsupported`, `machine.service` returns V3's refusal, and every other reply parses under the existing reply schema. `environment-rpc.test.ts` covers each new environment branch against fake tool binaries and a fake `lark-cli`, including cancel and a stop that waits for a running operation. `settings-executable.test.ts` covers *Executable path*. Run `npm test -w packages/daemon -- web-rpc-coverage environment-rpc settings-executable`.
+- [ ] A UI unit test covers the URL allowlist, and the executable row with and without `chooseExecutablePath`.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on the configured `swarm workers` model at the PR head, per the boot recipe.
 
 - [ ] Lane 1. Regression lane against trunk. Render the Bot list in the old Electron app at `origin/codex/device-handoff` with the native fixtures, and in the web UI at head with the same data. Save `bot-list.png`. Pass when both show the same bots, names, and enabled states.
-- [ ] Lane 2. Open a Bot's settings pane. Save `bot-settings.png`. Pass when every section from the old pane is present.
+- [ ] Lane 2. Open a Bot's settings pane. Save `bot-settings.png`. Pass when every section from the old pane is present, and every control in it works except the shell-owned controls from *Browser coverage*. Those show the desktop edition note, and V5 exercises them. Change the Codex executable path to a valid path, then to an invalid one, and record that the first saves and the second is rejected with nothing written.
 - [ ] Lane 3. Open a group and change its response mode to `all`. Save `group-response.png`. Pass when the UI shows the new mode and `projects.json` agrees.
 - [ ] Lane 4. Bind a joined group with the directory browser. Save `bind-dialog.png`. Pass when the group appears in the list with the chosen folder.
 - [ ] Lane 5. Open session history for a group and run compact. Save `history.png`. Pass when the session shows the compacted state.
@@ -852,30 +884,96 @@ V3's surface is the CLI and the WebSocket API, so it keeps the CLI evidence bund
 
 ## Wrap the UI in an Electron shell that runs the daemon (V5)
 
-**Depends on.** V4. The shell files start from V4's branch at `F4`. The service files and `login-item.ts` start after the *Service gate* design. Acceptance needs the real `packages/ui/dist`, the dedicated test users, and a Linux systemd user session. V5 merges after V4.
+**Depends on.** V4. The shell files start from V4's branch at `F4`. The *Service gate* design below is complete, so the service files and `login-item.ts` may start from the same base. Acceptance needs the real `packages/ui/dist`, the dedicated test users, and a Linux systemd user session, per *Native acceptance environment*. V5 merges after V4.
 
 **Files.**
 
 - [ ] Create `packages/desktop/src/main.ts`, `daemon-manager.ts`, `tray.ts`, `updates.ts`, and `preload.ts`.
 - [ ] Create `packages/desktop/electron-builder.yml`.
-- [ ] Create `packages/desktop/src/login-item.ts`, which calls the service installer in `packages/daemon/src/service/`.
-- [ ] Edit the daemon service files that the file boundary names, per *Service gate*.
+- [ ] Create `packages/desktop/src/login-item.ts`, which runs `vonvon service install` and `uninstall` per *Service gate*.
+- [ ] Create and edit the daemon files that *Daemon files* names, and no others.
 
-*Service gate.* V3 refuses `vonvon service install` and `uninstall`, and its service adapters still carry the bridge identity. V5 is the first PR that installs a Vonvon service. Before V5's owner writes service code, Claude Code adds V5's service design to this section. V5's service files and `login-item.ts` wait until that design exists. The shell files may be developed before it, but V5 is not code-ready, and its gates do not run, without it. The design must settle at least these points.
+*Service gate.* V3 refuses `vonvon service install` and `uninstall`, and its service adapters still carry the bridge identity. V5 is the first PR that installs a Vonvon service. This design settles every point the gate requires. V3's drain, ownership, cleanup, and stop-wins rules carry over unchanged. Nothing here changes a protocol or wire shape, the pid lock, `status --json`, `update-status.json`, or any existing file under `VONVON_HOME`.
 
-- Identity. The launchd label `com.vonvon.bot.daemon`, the systemd user unit `vonvon-bot.service`, and a Windows value named for Vonvon Bot. No install, status, start, stop, or uninstall reads or writes a bridge label, unit, plist, unit file, or registry value.
-- Install and uninstall as transactions. What a partial failure leaves behind, what refuses while a daemon runs, and how uninstall stops a draining daemon without cutting the drain short.
-- Data-root ownership. How a registration records its `VONVON_HOME`, and how commands on one data root behave against a registration for another.
-- Start, stop, and restart of a service-managed daemon. One launcher per data root and no detached fallback. The same-port rule and the relaunch policy after exit 0, a non-zero exit, and a crash. A drain that no manager stop timeout cuts short. Stop keeps the registration, and turning off **Open at login** removes it, as `architecture.md` states.
-- V3's drain, ownership, cleanup, and stop-wins rules carry over unchanged.
-- Native acceptance. launchd on the Mac and systemd on Linux, never in hosted CI. It runs as a dedicated OS test user with its own uid, home, and `VONVON_HOME`, never in the operator's account. Before and after, record the bridge's registration and file checksums read-only from the operator's account, and fail on any difference. If no dedicated user or Linux systemd user session is available, the box stays unchecked and V5 pauses for the operator. Nothing substitutes for it.
+- Identity. All Vonvon names live in the new `service/identity.ts`. The adapters import their names only from it, and never import `service/control.ts`.
+  - macOS. A launchd agent with label `com.vonvon.bot.daemon` and plist `~/Library/LaunchAgents/com.vonvon.bot.daemon.plist`, in the `gui/<uid>` domain.
+  - Linux. A systemd user unit `vonvon-bot.service` at `${XDG_CONFIG_HOME:-~/.config}/systemd/user/vonvon-bot.service`.
+  - Windows. The value `Vonvon Bot` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. Its launcher files are `vonvon-bot.vbs` and `vonvon-bot.cmd` in `VONVON_HOME\service\`. V5 creates no scheduled task, and it does not use `relaunch.json` or `__win-relaunch`.
+  - No install, status, start, stop, or uninstall reads or writes a bridge label, unit, plist, unit file, Run value, scheduled task, or bridge file. V3's `__win-relaunch` and `__daemon-control` keep refusing as V3 defines them.
+- One registration per OS user. The names above are fixed, so each OS user has at most one Vonvon registration, for one data root.
+- Data-root ownership.
+  - The definition records its data root. The plist's `EnvironmentVariables`, the unit's `Environment=`, and the `.cmd` each set `VONVON_HOME` to the `realpath` of the data root at install, and set `VONVON_SERVICE` to `launchd`, `systemd`, or `windows`. The definition is the only record, and V5 adds no new state file.
+  - `service/registration.ts` reads the definition back through the identity. It reports one of four states: `absent`, `ours` (same `realpath` data root), `other-root` (a different one), and `unrecognized` (the file exists but does not parse as a Vonvon definition).
+  - Every service command and every launch decision for a data root goes through that check. `other-root` and `unrecognized` refuse every change, and V5 never overwrites or removes either one. The refusal names the recorded root, or the unparsed file. A data root without its own registration runs self-hosted, exactly as V3 does.
+- The definition.
+  - Program: the Node executable and CLI entry of the distribution that ran `install`, with `daemon run --port <P>`. The npm install uses its `node` and `bin/vonvon.mjs`. The desktop app uses its Electron binary with `ELECTRON_RUN_AS_NODE=1` and its bundled entry. Install refuses the `development` and `unknown` distributions that `service/distribution.ts` reports.
+  - Port `P` is fixed at install. It is the running daemon's port if one runs, or else `--port` if given, or else a free port chosen at install. A later launch never uses another port.
+  - Environment: `VONVON_HOME`, `VONVON_SERVICE`, and the `PATH` captured at install. V5 drops V3's `CODEX_BIN` passthrough, because the daemon already reads `codexBin` from the host settings.
+  - Logs: `service.log` and `service.err.log` in `VONVON_HOME`, as `common.ts` already names them.
+  - launchd: `RunAtLoad` true, `KeepAlive` set to `{SuccessfulExit: false}`, and `ThrottleInterval` 5. It sets no `ExitTimeOut`, because `launchd.plist` documents 0 as infinite and says not to use it.
+  - systemd: `Type=simple`, `Restart=on-failure`, `RestartSec=5`, `TimeoutStopSec=infinity`, and `WantedBy=default.target`.
+  - Windows: the Run value runs `wscript.exe //B <vbs>`, which starts the `.cmd` hidden. The `.cmd` runs the daemon in a loop. Exit 0 ends the loop. On any other exit, it first checks that the `Vonvon Bot` Run value still exists and ends the loop if not. Otherwise it waits 5 s, by a method that works without a console such as `ping -n 6 127.0.0.1 >nul`, and runs the daemon again.
+- Exit codes. These are why the managers above relaunch only what they should. A daemon that the manager launched, where `VONVON_SERVICE` is set and the registration is `ours`, ends with one of three codes.
+  - 0 after a completed stop. Any `owned_work_unconfirmed`, `ApiCleanupError`, or `listener_close_unconfirmed` that V3 reports is still logged and returned to the stopping caller, but the code stays 0, so no manager relaunches over a stop.
+  - 0 when it finds the data root's lock held by another live owner. This happens when the manager starts it next to a running self-hosted daemon. It exits before it touches anything.
+  - 75 after a completed restart whose intent survived to the release step. If V3 would not launch a replacement after a cleanup error, it exits 0 instead.
+  - Any other code, or a signal, is a failure, and launchd and systemd relaunch it after 5 s. The Windows `.cmd` loop does the same.
+- One launcher per data root. When the registration is `ours`, the OS manager, or the Windows `.cmd` loop, is the only launcher.
+  - `vonvon daemon start` attaches to a running daemon and keeps V3's port-mismatch refusal. If none runs, it starts the manager's job and waits for readiness on port `P`, up to the same 25 s as V3. It runs `launchctl kickstart gui/<uid>/com.vonvon.bot.daemon` (no `-k`), bootstrapping the plist first if `launchctl print` does not find the job. On Linux it runs `systemctl --user start vonvon-bot.service`. On Windows it runs the registered `wscript.exe //B <vbs>`, detached. If that fails, it reports the manager's output and exits 1. It never falls back to a detached `daemon run`. `--port` other than `P` refuses with V3's mismatch message.
+  - A foreground `vonvon daemon run` without `VONVON_SERVICE` refuses while the registration is `ours`, and points to `vonvon daemon start` and `vonvon service uninstall`. A supervisor's Bot child (`daemon run --bot`) is exempt, as V3 defines it.
+  - The desktop `daemon-manager.ts` attaches the same way, and when no daemon runs it calls `vonvon daemon start`. It spawns the bundled daemon itself only when there is no `ours` registration.
+  - A self-hosted daemon that was already running when `install` ran keeps running. Its next launch goes through the manager. Its V3 restart helper runs `daemon start --port P`, which now goes through the manager.
+- Stop. `vonvon daemon stop` is V3's `runStop` unchanged: `stopHost` through the verified owner, then a wait with no deadline. The daemon exits 0 after its drain, so no manager relaunches it. The registration stays. Vonvon never stops a live daemon with `launchctl bootout`, `kill`, or `kickstart -k`, with `systemctl stop`, `restart`, or `kill`, or with `taskkill`. No manager stop timeout can therefore cut a drain. A logout or OS shutdown is outside Vonvon and treats a service-managed daemon the same as a self-hosted one.
+- Restart, same port. `restartHost`, and `applyCoreUpdate` after its install, keep V3's drain and stop-wins rules. A manager-launched daemon does not spawn V3's `__restart-after-exit` helper. Once the release step completes, it exits 75, and launchd, systemd, or the `.cmd` loop starts the same definition on port `P`. Under systemd this also matters because the unit's cgroup is killed when its main process exits, so a helper would not outlive the daemon. A stop that arrives before the release step wins, and the daemon exits 0. A self-hosted daemon keeps V3's helper.
+- Crash. A crash or failure exit relaunches after 5 s on port `P`, through the policy above. The new process takes the stale lock under V3's rules.
+- Install transaction. `vonvon service install [--port <P>]`.
+  1. Preflight, which writes nothing. The platform's manager must be usable: `launchctl print gui/<uid>` succeeds, or `systemctl --user is-system-running` reports `running` or `degraded`, or on Windows `reg query` on the Run key succeeds. The registration must be `absent` or `ours`, and the distribution must be eligible. If the registration is `ours` and the definition it would write is byte-identical, install reports `already installed` and exits 0. If the registration is `ours` with a different definition, and a manager-launched daemon runs, install refuses and asks for `vonvon daemon stop` first.
+  2. Write the definition to a temporary file in the target directory, `fsync` it, and rename it into place. On Windows, write both launcher files this way before setting the Run value. On an update, keep the previous definition until step 4 passes.
+  3. Load. On macOS, run `launchctl bootout` only when `launchctl print` shows the job loaded and with no pid, then run `bootstrap gui/<uid> <plist>`. On Linux, run `systemctl --user daemon-reload` and `enable --now`. On Windows, set the Run value and, if no daemon runs, start it as `daemon start` does. A job launched next to a running self-hosted daemon exits 0, per *Exit codes*.
+  4. Verify. The manager reports the job loaded or enabled, and a daemon owns the data root's lock on port `P`. If none ran before, wait up to 25 s for one.
+  5. If step 2, 3, or 4 fails, roll back what this transaction wrote, in reverse order, and restore the previous definition on an update. A daemon this transaction launched is stopped through `stopHost` and awaited with no deadline before unloading. Nothing is signaled.
+  - Results. `installed` exits 0. `install_refused` means the preflight refused, nothing was written, and the exit is 1. `install_rolled_back` means the system is back to its prior state, the reason is printed, and the exit is 1. `install_incomplete` means rollback could not finish. It prints each leftover item, file, job, or Run value, and exits 1. Running `install` or `uninstall` again from any of these states converges.
+- Uninstall transaction. `vonvon service uninstall`.
+  1. Preflight. `absent` reports `not installed` and exits 0. `other-root` and `unrecognized` refuse.
+  2. If a daemon owns the data root's lock, stop it through V3's `runStop`, with no deadline and stop-wins. Uninstall is a stop.
+  3. Unload when the manager reports no running pid for the job. If a crash relaunch started one, repeat step 2 first. On macOS, run `launchctl bootout gui/<uid>/com.vonvon.bot.daemon` and remove the plist. On Linux, run `systemctl --user disable vonvon-bot.service`, remove the unit, and run `daemon-reload`. On Windows, delete the Run value first, which ends the `.cmd` loop's relaunch, then remove the launcher files after the daemon has stopped.
+  4. Verify that the definition and the job are gone. If a daemon owns the lock again, repeat step 2. The log files stay.
+  - Results. `uninstalled` exits 0. `uninstall_incomplete` prints the leftovers and exits 1, and rerunning converges. A failed uninstall never leaves a daemon force-stopped.
+  - Residual risk. On macOS, a crash relaunch can start between the check in step 3 and `bootout`, and `bootout` would then send that fresh process `SIGTERM`. The uninstall unit test covers the recheck. The native run cannot time this race.
+- **Open at login** and other entry points.
+  - `login-item.ts` runs the same `vonvon service install` and `uninstall` that the CLI runs, from the app's own distribution, and shows their result. Turning it on installs. Turning it off uninstalls, which stops the daemon after its drain. The shell then starts a self-hosted daemon through `daemon-manager.ts` while its window is open.
+  - The snapshot's `application.loginItem` is true exactly when the registration is `ours`.
+  - The snapshot's platform enum has no Linux value and its shape is frozen, so the desktop app offers no login toggle on Linux. Linux users run `vonvon service install`.
+  - The daemon's `machine.service` keeps V3's refusal, because a daemon cannot uninstall the service that runs it. The UI sends service actions through the shell capability `service(action)`, which runs the CLI. The web build shows the CLI commands.
+  - `vonvon service status [--json]` prints the registration state and the manager's view. `--json` uses the existing `serviceStatusSchema` shape.
+  - `host/service.ts` reports `supported`, `installed`, and `running` from the registration and the lock. `machine.status` and `admin` `daemonStatus` read it there, with their shapes unchanged.
+
+*Daemon files.* V5 creates and edits only these daemon files.
+
+- Create `service/identity.ts` (the names) and `service/registration.ts` (reading back and classifying a definition).
+- Edit `service/launchd.ts`, `systemd.ts`, `win-startup.ts`, `adapter.ts`, and `common.ts`: definitions, transactions, and `start`. Remove their imports of `control.ts` and `codex-bin.ts`, and the Windows relauncher.
+- Edit `cli/commands/service.ts`: `install`, `uninstall`, and `status` in place of the refusal.
+- Edit `cli/commands/daemon.ts`: `runStart` routing through the manager. `runStop` is unchanged.
+- Edit `cli/commands/run.ts`: the foreground refusal, and the exit-code mapping in *Exit codes*.
+- Edit `host/lifecycle.ts`: no restart helper for a manager-launched daemon.
+- Edit `host/service.ts`: status from the registration. Its actions keep refusing.
+- Tests. Create `packages/daemon/test/service-identity.test.ts`, `service-definition.test.ts`, `service-transaction.test.ts`, and `service-launch.test.ts`.
+- Root handoffs. None for the daemon side. `service` is already registered in `cli/index.ts`, and the daemon side adds no package dependency. The desktop's own dependencies, such as Electron and electron-builder, go to the root under *Shared files*.
+
+*Native acceptance environment.* Root's read-only preflight, recorded for this design, is the following. On the Mac, the user `manzana` (uid 502) exists but has no `gui/502` domain. `github-ci` is reserved for CI. On Linux, the `ops` user's systemd user manager runs, but no dedicated test user is confirmed.
+
+- Mac. Native acceptance needs a dedicated user with a GUI login session, because the product registers in `gui/<uid>`. `manzana` qualifies once someone logs it in through Fast User Switching or Screen Sharing and leaves the session up for the run. Only the operator can do that, so it is part of the operator's open capability request. `user/<uid>` bootstrapping does not substitute for it.
+- Linux. A dedicated user, for example `vonvon-accept`, with `loginctl enable-linger`. The run uses that user's own `systemctl --user`, with `XDG_RUNTIME_DIR=/run/user/<uid>`. If the root has the privilege, it creates the user. Otherwise this joins the operator request. The `ops` account is never the test user.
+- Windows. No native host is available. The Windows adapter is covered by unit tests with an injected registry and process runner, and by the hosted Windows CI job. No test writes the real Run key. Windows relaunch stays unverified on a real host, as `roadmap.md` records.
+- Only the V5 native box waits for these. All other V5 work proceeds.
 
 **Build.**
 
-- [ ] `daemon-manager.ts` connects to a running daemon or starts the bundled one with `ELECTRON_RUN_AS_NODE=1`, following Paseo `packages/desktop/src/daemon/node-entrypoint-launcher.ts`.
-- [ ] The window loads `packages/ui/dist` and passes the local credential through `preload.ts`.
+- [ ] `daemon-manager.ts` attaches to a running daemon. When none runs, it calls `vonvon daemon start` if the data root's registration is `ours`, and otherwise starts the bundled daemon with `ELECTRON_RUN_AS_NODE=1`, following Paseo `packages/desktop/src/daemon/node-entrypoint-launcher.ts`.
+- [ ] The window loads `packages/ui/dist` and passes the local credential and the shell-capability object from V4's *Shell capabilities* through `preload.ts`. `openExternal` uses `shell.openExternal` after the same URL allowlist, and `window.open` from the page goes there through `setWindowOpenHandler`.
 - [ ] Port the tray, single-instance lock, and auto-update from `desktop/main/index.ts` and `updates.ts` at `origin/codex/device-handoff`. Pick a PNG tray icon on Linux, because `new Tray()` with an `.ico` path hangs there.
-- [ ] **Open at login** installs the daemon as an OS service through `packages/daemon/src/service/`.
+- [ ] **Open at login** installs and uninstalls the daemon as an OS service per *Service gate*.
+- [ ] Implement every daemon change in *Daemon files*.
 
 **You see.**
 
@@ -883,7 +981,11 @@ V3's surface is the CLI and the WebSocket API, so it keeps the CLI evidence bund
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] `packages/desktop/test/daemon-manager.test.ts` covers attach to a running daemon, start when absent, and refusal on a protocol version mismatch. Run `npm test -w packages/desktop`.
+- [ ] `packages/desktop/test/daemon-manager.test.ts` covers attach to a running daemon, start when absent, start through `vonvon daemon start` with no bundled spawn when the registration is `ours`, and refusal on a protocol version mismatch. Run `npm test -w packages/desktop`.
+- [ ] `service-identity.test.ts` reads the adapter sources and fails on any bridge identifier, `feishu-codex-bridge` or `ai.feishu-codex-bridge`, or any import of `control.ts` or `codex-bin.ts`. It also fails on any stop command for a live daemon: `bootout` or `disable` without the no-pid check, `kickstart -k`, `systemctl stop`, `restart`, or `kill`, or `taskkill`.
+- [ ] `service-definition.test.ts` checks the exact plist, unit, `.vbs`, and `.cmd` that each platform renders for a fixture data root, port, and distribution, including `KeepAlive`, `Restart=on-failure`, `TimeoutStopSec=infinity`, and the `.cmd` loop's exit and Run-value checks. It covers all four registration states and the refusal of `development` and `unknown` distributions.
+- [ ] `service-transaction.test.ts` drives install and uninstall against a fake manager, file system, and registry runner. It covers a fresh install, an identical reinstall, an update refused while a daemon runs, `other-root` and `unrecognized` refusals that leave the file byte-identical, a failure injected at each step with the `install_rolled_back` or `install_incomplete` result and its leftover list, an uninstall that waits with no deadline for a held drain, stop-wins during that wait, the crash-relaunch recheck, and convergence on rerun.
+- [ ] `service-launch.test.ts` covers `daemon start` routed through the manager, with no detached fallback when the manager fails, the port mismatch refusal, the foreground `daemon run` refusal and its `--bot` exemption, and the exit code for each case in *Exit codes*. That includes 75 only when the restart intent survives, and 0 under stop-wins. Run `npm test -w packages/daemon -- service-`.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on the configured `swarm workers` model at the PR head, per the boot recipe.
 
@@ -892,12 +994,24 @@ V3's surface is the CLI and the WebSocket API, so it keeps the CLI evidence bund
 - [ ] Lane 3. Start the daemon from the CLI, then launch the shell. Save `attach.png`. Pass when the shell attaches and no second daemon exists.
 - [ ] Lane 4. Close the window. Save `closed.txt`. Pass when the daemon and bots keep running.
 - [ ] Lane 5. Launch the app twice. Save `second.png`. Pass when the existing window comes forward and no second app process remains.
-- [ ] Lane 6. As the *Service gate*'s dedicated test user, turn on **Open at login**. Save `login-item.txt`. Pass when `launchctl print gui/$(id -u)/com.vonvon.bot.daemon` shows the job loaded. Repeat the lane on Linux, in a VM or host with a systemd user session and never in hosted CI, where `systemctl --user is-enabled vonvon-bot.service` must report enabled.
+- [ ] Lane 6. As the *Service gate*'s dedicated test user, turn on **Open at login**. Save `login-item.txt`. Pass when `launchctl print gui/$(id -u)/com.vonvon.bot.daemon` shows the job loaded. Repeat the lane on Linux, in a VM or host with a systemd user session and never in hosted CI. The app offers no login toggle on Linux, per *Service gate*, so there the lane runs `vonvon service install`, and `systemctl --user is-enabled vonvon-bot.service` must report enabled. Then turn **Open at login** off on the Mac and pass when the job is gone, the daemon drained and stopped, and the shell started a self-hosted daemon.
 - [ ] Lane 7. Quit from the tray menu with **Open at login** on. Save `quit.txt`. Pass when the app exits and the daemon keeps running.
 - [ ] Lane 8. Start an older daemon build, then launch the shell. Save `mismatch.png`. Pass when the shell shows the version prompt instead of a blank window.
 - [ ] Lane 9. Bind a group from the desktop window. Save `bind.png`. Pass when the group appears and `projects.json` agrees.
 - [ ] Lane 10. Check for updates against a local feed. Save `update.png`. Pass when the update panel shows the feed version and waits for the user's click.
-- [ ] Native service acceptance per *Service gate*, in addition to the ten lanes and never in place of one. Save `native-launchd.txt` and `native-systemd.txt`.
+- [ ] Native service acceptance per *Service gate*, in addition to the ten lanes and never in place of one. It runs on launchd on the Mac and on systemd on Linux, as the dedicated user from *Native acceptance environment*, with its own uid, home, and a fresh `VONVON_HOME`. It never runs in the operator's account or in hosted CI, and no CI job or mock replaces it. If a dedicated user or a Linux systemd user session is missing, the box stays unchecked and V5 pauses for the operator. Use the packaged build of the frozen head. Save `native-launchd.txt` and `native-systemd.txt`, and in each record every command, its exit code, and the pid, port, and manager state it observed.
+  1. Before anything else, from the operator's account and read-only, record the bridge's registration (`launchctl print gui/<operator uid>/ai.feishu-codex-bridge.bot`, or `systemctl --user cat feishu-codex-bridge.service` and its `is-enabled` and `is-active`), its definition file's checksum, the checksums of the bridge data files that `control.ts`'s `installationPaths` names, and the bridge process ids with their start times.
+  2. `install` with no daemon running. The manager starts one on port `P`, and the manager's pid equals the lock owner's pid. Run `install` again and see `already installed`. Run `install` from a second `VONVON_HOME` and see a refusal, with the definition's checksum unchanged.
+  3. `daemon start` attaches with no second process. `daemon start --port <other>` refuses. A foreground `daemon run` refuses.
+  4. Crash. `kill -9` the daemon. A new pid owns the lock on port `P` within 15 s.
+  5. Restart. Send `restartHost` through the local credential. The old pid exits 75, and a new pid owns port `P`.
+  6. Unlimited drain. Hold the drain fixture from V3's CLI evidence bundle for at least 120 s, longer than launchd's and systemd's default stop timeouts. Run `vonvon daemon stop`. The daemon stays alive, and no `SIGKILL` arrives, until the fixture is released. Then it exits 0 and is not relaunched within 60 s. The registration is still present.
+  7. Stop wins. Hold the fixture, send `restartHost`, then run `daemon stop` before releasing it. After the release the daemon exits 0 and nothing relaunches.
+  8. Start after stop. `daemon start` starts the manager's job on port `P`.
+  9. Login load. With the daemon stopped, unload and load the job the way a login does (`bootout` then `bootstrap`, or `daemon-reload` then `start` of the enabled unit). It starts on port `P`.
+  10. Uninstall while the fixture is held. It waits, then removes the job and the definition. `launchctl print` or `systemctl --user cat` no longer finds it, no daemon runs, and a second `uninstall` reports `not installed`.
+  11. Failure. Make the agent or unit directory unwritable and run `install`. It reports `install_refused` or `install_rolled_back` and leaves nothing behind. Restore the directory.
+  12. Repeat step 1. Pass only when every step held and the bridge records are identical. Any difference fails the box.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
@@ -925,16 +1039,46 @@ V3's surface is the CLI and the WebSocket API, so it keeps the CLI evidence bund
 
 **Files.**
 
-- [ ] Create `packages/daemon/src/agent/paseo/agent-sdk-types.ts` and `session-backend.ts`.
-- [ ] Create `packages/daemon/src/agent/providers/claude/`.
+- [ ] Create `packages/daemon/src/agent/paseo/` with `agent-sdk-types.ts`, `session-backend.ts`, `closure.json`, `logger.ts`, and the import closure below.
+- [ ] Create `packages/daemon/src/agent/providers/` with `claude/` and the shared provider helpers below.
+- [ ] Create `packages/daemon/test/session-backend.test.ts`, `paseo-closure.test.ts`, `claude-permission.test.ts`, and the ported Paseo tests under `packages/daemon/test/paseo/`.
 - [ ] Edit `packages/daemon/src/agent/index.ts`, `agent/catalog.ts`, which the registry treats as authoritative, and `NOTICE`. The root checks the `createBackend('claude-agent')` lookup in `server/snapshot.ts`, per *Shared files*.
 - [ ] Delete `packages/daemon/src/agent/claude-agent/`.
 
+*Import closure.* A copy of `providers/claude/` alone does not compile. `agent.ts` and its helper tree import about 20 other Paseo modules, about 40 type names from `agent-sdk-types.ts`, and several `@getpaseo/protocol` subpaths. The rule is to copy whole modules and change only their import specifiers. The source is Paseo `0009a7e71`, and its paths are relative to `packages/server/src/server/`.
+
+- Compute the closure first. Starting from `agent/agent-sdk-types.ts` and `agent/providers/claude/agent.ts`, follow every static import, every dynamic `import()`, and every `import type` to its file. Stop at npm packages. Write the result to `agent/paseo/closure.json`. Each entry has the source path, the destination path, the source file's SHA-256 at the pin, and its modification kind: `specifiers` or `adapted`, with a reason. Codex's closure count at `H3` (47 files, 26 of them outside `claude/`) is a check on the result, not a substitute for it.
+- Destinations.
+  - `agent/providers/**` goes to `packages/daemon/src/agent/providers/**`, keeping the relative path. This holds `claude/**`, `provider-runner`, `diagnostic-utils`, and `provider-image-output`.
+  - Every other closure file under `agent/` goes to `packages/daemon/src/agent/paseo/`, keeping its path relative to `agent/`. This holds `agent-sdk-types`, `provider-options`, `prompt-attachments`, `provider-history-timestamps`, `provider-notices`, `provider-session-import`, `provider-refresh-deadline`, `provider-launch-config`, `system-prompt`, `tools/types`, and `executable-resolution/**`.
+  - Closure files outside `agent/` go to `agent/paseo/runtime/`, keeping their path relative to `packages/server/src/`. This holds `server/paseo-env` and `utils/{spawn,tree-kill,promise-timeout}`.
+  - Every `@getpaseo/protocol` subpath the closure imports, such as `agent-types`, `messages`, `provider-config`, `forge-manifest`, `tool-name-normalization`, and the tool-call display module, is copied from Paseo's protocol package into `agent/paseo/protocol/`, along with its own closure. It does not go into `packages/protocol`, whose shapes stay unchanged.
+- Removals, recorded in `closure.json` with a reason.
+  - The Paseo tool catalog runtime, meaning `tools/` other than `tools/types.ts`, and the tool policy and serialization modules. An import of these is deleted together with the code that offers Paseo's own tools to Claude. Vonvon has no Paseo tool catalog.
+  - The subagent store runtime, `provider-subagents/store.ts`, and the timeline store it imports. The type declarations the closure needs from it, such as `ProviderSubagentInputEvent` and `ProviderSubagentStatus`, are copied verbatim into `agent/paseo/provider-subagents/types.ts`, together with any type they reference. The `claude/subagents/**` sources stay, because they are part of the provider.
+  - `pino`. Its only use is `import type { Logger }`. The specifier changes to the new `agent/paseo/logger.ts`, which declares the structural `Logger` interface the closure calls. `session-backend.ts` adapts the daemon's logger to it.
+  - No other module is replaced, and nothing is filled in from the old `claude-agent/` or written from scratch. An import that cannot be resolved under these rules is a blocker. Name it in the PR and hand it back to Claude Code, and keep working on everything else.
+- Each copied file keeps its Apache-2.0 header. Each changed file gets a modification notice, and `NOTICE` gets the Paseo section.
+- Dependencies. The root moves `@anthropic-ai/claude-agent-sdk` from `devDependencies` (`^0.3.178`) to `dependencies`, at exactly `0.3.246`, Paseo's pin. It does this in V6 only. The daemon's `zod` `4.6.5` satisfies Paseo's `^4.4.3`. Any other external package the closure imports, such as `tree-kill` or `which`, is added at Paseo's range, from `closure.json`.
+- Tests. Copy every Paseo `*.test.ts` beside a copied file, except e2e and live tests, to the matching path under `packages/daemon/test/paseo/`, and change only their specifiers. A test that imports outside the closure is excluded, and `closure.json` lists it with its reason.
+
+*Permission mapping.* Vonvon keeps V3's Claude permission behavior. It adds no interactive approval in Feishu and changes no wire shape.
+
+- `session-backend.ts` passes each bridge mode to the copied provider as its `modeId` and `providerOptions`. The SDK `Options` the provider builds must equal V3's `claude-agent/permission.ts` table field for field.
+  - `full`: `permissionMode: 'bypassPermissions'` and `allowDangerouslySkipPermissions: true`.
+  - `write`: the same, plus the sandbox `{enabled: true, failIfUnavailable: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false}`.
+  - `qa`: the `write` settings, plus `filesystem.denyWrite: [cwd]` and `disallowedTools` `Write`, `Edit`, and `NotebookEdit`.
+  - Network off: also disallow `WebFetch` and `WebSearch`.
+  - Every field exists in Paseo's `ClaudeProviderOptionsSchema`. If the copied provider cannot produce one of them from `modeId` and `providerOptions` without changing provider logic, that field is a blocker. The lanes that depend on it, lane 4 or 5, stay gated, and Claude Code decides the fix.
+- Any `permission_requested` that still reaches `session-backend.ts`, for example from `AskUserQuestion` or a tool outside the mode's pre-approved set, becomes the existing passive `approval_request` event with the request's id, title, and detail. It is then resolved at once through `AgentSession.respondToPermission` as a denial, with the message that Vonvon Bot does not take interactive approvals in this mode and that Claude should continue without that action. The mode's own rules are already pre-approved through the options above, so denying everything else reproduces V3. `capabilities.approvals` keeps the value V3's `claude-agent` declares.
+- `abort` first denies any request still unresolved, then calls `interrupt`. A prompt arriving with a request pending cannot happen, because every request resolves when it arrives. `close` does the same before closing the session.
+- `steer` maps to `steerActiveTurn`. Resume maps to the client's resume path with the stored provider session id. Models map to `fetchCatalog` without a turn. Compact maps to the session's compaction path, or to `/compact` if that is what V3's `claude-agent` sent. A missing binary maps from the provider's launch error to V3's not-installed error text. These mappings change no `AgentEvent` or `AgentThread` shape.
+
 **Build.**
 
-- [ ] Copy `agent-sdk-types.ts` and `providers/claude/` from Paseo `packages/server/src/server/agent/`, and remove the imports of the Paseo tool catalog and subagent store.
-- [ ] `session-backend.ts` wraps any `AgentClient` as an `AgentBackend`. It maps timeline events to `AgentEvent`, `permission_requested` to `approval_request`, `steerActiveTurn` to `steer`, and `interrupt` to `abort`.
-- [ ] Map the bridge modes `qa`, `write`, and `full` onto Claude permission modes and `canUseTool` rules.
+- [ ] Compute and copy the closure per *Import closure*, writing `closure.json` first.
+- [ ] `session-backend.ts` wraps any `AgentClient` as an `AgentBackend`. It maps timeline events to `AgentEvent`, `permission_requested` to `approval_request` with the resolution in *Permission mapping*, `steerActiveTurn` to `steer`, and `interrupt` to `abort`.
+- [ ] Map the bridge modes `qa`, `write`, and `full` per *Permission mapping*.
 - [ ] Register the provider in `agent/index.ts` and delete `claude-agent/`.
 
 **You see.**
@@ -943,7 +1087,10 @@ V3's surface is the CLI and the WebSocket API, so it keeps the CLI evidence bund
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] `packages/daemon/test/session-backend.test.ts` drives a fake `AgentSession` through text, tool call, permission, steer, interrupt, and error, and asserts the `AgentEvent` sequence. Run `npm test -w packages/daemon -- session-backend`.
+- [ ] `packages/daemon/test/session-backend.test.ts` drives a fake `AgentSession` through text, tool call, permission, steer, interrupt, and error, and asserts the `AgentEvent` sequence. A permission yields `approval_request` and then a denial through `respondToPermission`. An abort with a pending request denies it before `interrupt`. Run `npm test -w packages/daemon -- session-backend`.
+- [ ] `paseo-closure.test.ts` recomputes the import closure from the copied files. It fails on an unresolved import, on a file missing from `closure.json` or listed there but absent, and on any import of the removed tool catalog, the subagent store runtime, `pino`, or `@getpaseo/*`.
+- [ ] `claude-permission.test.ts` captures the SDK `Options` through the provider's injectable `queryFactory` for `qa`, `write`, and `full`, each with network on and off. It asserts them field for field against V3's table.
+- [ ] The ported Paseo tests under `packages/daemon/test/paseo/` pass. Run `npm test -w packages/daemon -- paseo-closure claude-permission paseo/`.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on the configured `swarm workers` model at the PR head, per the boot recipe.
 
@@ -1320,6 +1467,13 @@ The facts below were read from source this session, not run.
 - Treat any `release()` rejection as owned work, or as a reason to retry. The listener belongs to the daemon's own process, so process exit ends it. Waiting would hold the lock forever over a socket error.
 - Keep backend install pairs concurrent and uninstall direct, as V2 did. Concurrent npm runs on one prefix race on `package.json`, `package-lock.json`, and `node_modules`.
 - Defer the log follower bound. The fix is local to a V3 file, changes no shape, and matches the backend-install bound.
+- Keep the bridge's `KeepAlive true` and `Restart=always` in V5, and stop a service-managed daemon through the manager. A manager stop has a timeout that ends in `SIGKILL`, which cuts the unlimited drain, and an always-relaunch policy restarts a daemon the user just stopped. V5 instead relaunches only on failure, maps stop to exit 0 and restart to exit 75, and stops only through `stopHost`.
+- Keep V3's `__restart-after-exit` helper under a manager. systemd kills the unit's cgroup when the main process exits, which would take the helper with it, and launchd would race the helper with its own relaunch. Exit 75 lets the manager do the relaunch.
+- Port the bridge's Windows relauncher, with its scheduled task, `relaunch.json`, and `taskkill /T /F` after a grace period. V5 never kills a daemon, so the relauncher's only remaining job is relaunching, and a `.cmd` loop gated on the Run value does that without a second registration.
+- Record the service registration in a new file under `VONVON_HOME`. That adds a storage shape. The definition already carries `VONVON_HOME` and is the one record the manager acts on.
+- Open URLs from the daemon for V4's open actions. After V11 a remote client would open a window on the daemon's machine. The browser already holds every URL and opens it in the click handler.
+- Implement `chooseExecutable` and `saveExecutable` in the daemon with a server-side file browser. The protocol's token flow exists only to carry an Electron dialog's result. The existing host `settings save` of `execution.codexBin`, with a daemon-side check, covers it without a new picker.
+- Answer Claude permission requests by asking in Feishu. It needs a new card, routing, and wire shapes. V3 already pre-approves each mode's actions and sandboxes the rest, so V6 denies anything else and records it as a passive `approval_request`.
 
 ## Appendix C. Risks
 
@@ -1327,8 +1481,9 @@ The facts below were read from source this session, not run.
 - Ten parallel lanes that each start a daemon, Chromium, or Electron may exhaust the Mac's memory. Run lanes in waves when `vm_stat` shows free pages running low. V5 lanes run one at a time because they share the login item.
 - Remote access trusts the cloud to hand out the right daemon key. V11 lane 9 checks a swapped key fails, and a fingerprint check in the local UI is a follow-up.
 - A desktop-bundled daemon and an npm-installed daemon may differ in version. V5 lane 8 watches it.
-- The Claude provider from Paseo is about 6,600 lines tied to Paseo internals. V6's owner watches for pulled-in modules beyond the provider folder.
-- V5's native service acceptance, V5 lane 6, and V8 lane 1 also need Linux for the systemd path. `systemctl --user` needs a user session, which hosted CI does not provide and never substitutes for. V5's acceptance and V8 lane 1 also need a dedicated OS test user on the Mac and on Linux, because the bridge service that V8 lane 1 installs uses the same label as the original bridge. An earlier environment report found neither: only the operator's Mac GUI session was available, and no Linux systemd user session was running. Recheck current availability read-only before requesting user action; `github-ci` stays reserved for CI. If the operator has to provide them, V5 pauses for that. The Windows Run-key path stays unverified until a Windows host exists.
+- The Claude provider from Paseo is about 6,600 lines tied to Paseo internals. V6's *Import closure* copies every module it pulls in, and `paseo-closure.test.ts` fails on any import outside that closure.
+- A macOS crash relaunch can start between uninstall's no-pid check and `launchctl bootout`, which then sends the new process `SIGTERM`. The uninstall test covers the recheck, but native acceptance cannot time the race.
+- V5's native service acceptance, V5 lane 6, and V8 lane 1 also need Linux for the systemd path. `systemctl --user` needs a user session, which hosted CI does not provide and never substitutes for. V5's acceptance and V8 lane 1 also need a dedicated OS test user on the Mac and on Linux, because the bridge service that V8 lane 1 installs uses the same label as the original bridge. An earlier environment report found neither: only the operator's Mac GUI session was available, and no Linux systemd user session was running. The current preflight and requests are under V5's *Native acceptance environment*. Recheck current availability read-only before requesting user action; `github-ci` stays reserved for CI. If the operator has to provide them, only the native box waits for that. The Windows Run-key path stays unverified until a Windows host exists.
 - V3's stop has a short window after the release step of a restart, when no process answers for the data root. A stop in that window reports `already stopped`, and the replacement still starts. Running `vonvon daemon stop` again stops it.
 - The cloud deploy target is undecided. V10 runs against a local Postgres until the operator picks one.
 
