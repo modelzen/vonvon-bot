@@ -33,6 +33,7 @@ export interface BridgeOptions {
   appSecret: string;
   /** fallback cwd for groups that aren't registered projects. */
   fallbackCwd: string;
+  onConnectionChange?: () => void;
 }
 
 export interface BridgeHandle {
@@ -144,11 +145,12 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     log.fail('ws', err, { phase: 'raw-event-tap' });
   }
   channel.on('reject', (evt) => log.info('intake', 'reject', { reason: evt.reason, msgId: evt.messageId }));
-  channel.on('error', (err) => log.fail('ws', err));
-  channel.on('reconnecting', () => log.info('ws', 'reconnecting'));
-  channel.on('reconnected', () => log.info('ws', 'reconnected'));
+  channel.on('error', (err) => { log.fail('ws', err); opts.onConnectionChange?.(); });
+  channel.on('reconnecting', () => { log.info('ws', 'reconnecting'); opts.onConnectionChange?.(); });
+  channel.on('reconnected', () => { log.info('ws', 'reconnected'); opts.onConnectionChange?.(); });
 
   await channel.connect();
+  opts.onConnectionChange?.();
   // Never let an optional local-agent IPC bind failure (EADDRINUSE/EACCES) tear
   // down an already-connected bot — log and stay up, mirroring shutdown's catch.
   if (shouldStartCliBridge(opts.cfg)) {

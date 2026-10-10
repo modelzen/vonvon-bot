@@ -66,85 +66,88 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
   const fallbackCwd = process.env.FEISHU_CODEX_CWD || process.cwd();
   console.log('\n正在启动长连接 bot…');
   console.log('私聊我 `/new <名>` 建项目；在项目群里 @我 干活。Ctrl+C 退出。\n');
+  let api: Awaited<ReturnType<typeof startApi>> | undefined;
   let handle: Awaited<ReturnType<typeof startBridge>>;
-  try { handle = await startBridge({ cfg, appSecret: secret, fallbackCwd }); }
+  try { handle = await startBridge({ cfg, appSecret: secret, fallbackCwd, onConnectionChange: () => {
+    if (process.send) process.send({ fcb: 'fcb.connection' });
+    else api?.invalidate();
+  } }); }
   catch (error) { releaseLock(); throw error; }
   // 配置长连接需要 bridge 在线，启动后继续检查用户发布的订阅更新。
   void announceEventsWhenLive(ready);
 
-  let api: Awaited<ReturnType<typeof startApi>> | undefined;
   try {
-  if (process.send) {
-    // supervisor 子进程（'ipc' stdio）：控制台由 supervisor 聚合挂载，本进程只
-    // 接写请求——在进程内执行（registry withLock + 共享校验 + 驱逐 LIVE 会话，
-    // 这正是写操作必须 IPC 转发、不能 supervisor 文件直写的原因）。status 请求
-    // 回报真实 WS 连接状态，替代锁文件探测。
-    const respond = createAdminIpcResponder(
-      async (op) => {
-        if (op.kind === 'status') {
-          return { connection: handle.channel.getConnectionStatus?.()?.state ?? 'unknown' };
-        }
-        if (op.kind === 'collaboration') return handle.collaboration(op.request);
-        if (op.kind === 'joinedGroups' || op.kind === 'bindGroup') return handle.adminGroups(op);
-        if (op.kind === 'settingsRead') return handle.settings.read(op.scope);
-        if (op.kind === 'settingsModels') return handle.settings.models(op.query);
-        return handle.adminExecute(op);
-      },
-      (msg) => void process.send?.(msg),
-    );
-    process.on('message', respond);
-  } else {
-    // 独立 daemon（单 bot inline）：进程内挂全局控制台。本 bot 的写/实时状态走
-    // 进程内 orchestrator；其他已注册 bot 仍可只读快照（写需该 bot 进程在跑——
-    // 多 bot 写请用 `bot use` 选多个后由 supervisor 聚合）。
-    const ownAppId = cfg.accounts.app.id;
-    const startedAt = Date.now();
-    api = await startApi({
-      port: options.port,
-      control,
-      service: createAdminService({
-        executeCollaboration: async (botId, request) => {
-          if (botId !== ownAppId) throw new AdminWriteError('机器人不在本进程的活跃集里');
-          return handle.collaboration(request);
-        },
-        executeGroups: async (botId, op) => {
-          if (botId !== ownAppId) throw new AdminWriteError('机器人不在本进程的活跃集里');
-          return handle.adminGroups(op);
-        },
-        executeSettingsRead: async (botId, op) => {
-          if (botId !== ownAppId) throw new AdminWriteError('机器人不在本进程的活跃集里');
-          return op.kind === 'settingsRead' ? handle.settings.read(op.scope) : handle.settings.models(op.query);
-        },
-        executeWrite: async (botId, op) => {
-          if (botId !== ownAppId) {
-            throw new AdminWriteError(
-              '该机器人不归本进程管：当前是单 bot 运行模式，只能改本 bot 的项目。多 bot 请 `bot use` 勾选后重启，由 supervisor 聚合管理。',
-            );
+    if (process.send) {
+      // supervisor 子进程（'ipc' stdio）：控制台由 supervisor 聚合挂载，本进程只
+      // 接写请求——在进程内执行（registry withLock + 共享校验 + 驱逐 LIVE 会话，
+      // 这正是写操作必须 IPC 转发、不能 supervisor 文件直写的原因）。status 请求
+      // 回报真实 WS 连接状态，替代锁文件探测。
+      const respond = createAdminIpcResponder(
+        async (op) => {
+          if (op.kind === 'status') {
+            return { connection: handle.channel.getConnectionStatus?.()?.state ?? 'unknown' };
           }
+          if (op.kind === 'collaboration') return handle.collaboration(op.request);
+          if (op.kind === 'joinedGroups' || op.kind === 'bindGroup') return handle.adminGroups(op);
+          if (op.kind === 'settingsRead') return handle.settings.read(op.scope);
+          if (op.kind === 'settingsModels') return handle.settings.models(op.query);
           return handle.adminExecute(op);
         },
-        liveStatus: async (botId) =>
-          botId === ownAppId
-            ? {
-                running: true,
-                pid: process.pid,
-                startedAt,
-                connection: handle.channel.getConnectionStatus?.()?.state ?? 'unknown',
-              }
-            : undefined,
-        daemonStartedAt: startedAt,
-        // 按需后端安装在 daemon 进程内直跑（owns runtime，装完即能解析加载）。
-        installBackend: installBackendDep,
-        uninstallBackend: uninstallBackendDep,
-        applyUpdate: performCoreUpdate,
-      }),
-    });
-    await options.onListening?.(api.listen);
-    console.log(`Daemon API listening on ${api.listen}`);
-  }
+        (msg) => void process.send?.(msg),
+      );
+      process.on('message', respond);
+    } else {
+      // 独立 daemon（单 bot inline）：进程内挂全局控制台。本 bot 的写/实时状态走
+      // 进程内 orchestrator；其他已注册 bot 仍可只读快照（写需该 bot 进程在跑——
+      // 多 bot 写请用 `bot use` 选多个后由 supervisor 聚合）。
+      const ownAppId = cfg.accounts.app.id;
+      const startedAt = Date.now();
+      api = await startApi({
+        port: options.port,
+        control,
+        service: createAdminService({
+          executeCollaboration: async (botId, request) => {
+            if (botId !== ownAppId) throw new AdminWriteError('机器人不在本进程的活跃集里');
+            return handle.collaboration(request);
+          },
+          executeGroups: async (botId, op) => {
+            if (botId !== ownAppId) throw new AdminWriteError('机器人不在本进程的活跃集里');
+            return handle.adminGroups(op);
+          },
+          executeSettingsRead: async (botId, op) => {
+            if (botId !== ownAppId) throw new AdminWriteError('机器人不在本进程的活跃集里');
+            return op.kind === 'settingsRead' ? handle.settings.read(op.scope) : handle.settings.models(op.query);
+          },
+          executeWrite: async (botId, op) => {
+            if (botId !== ownAppId) {
+              throw new AdminWriteError(
+                '该机器人不归本进程管：当前是单 bot 运行模式，只能改本 bot 的项目。多 bot 请 `bot use` 勾选后重启，由 supervisor 聚合管理。',
+              );
+            }
+            return handle.adminExecute(op);
+          },
+          liveStatus: async (botId) =>
+            botId === ownAppId
+              ? {
+                  running: true,
+                  pid: process.pid,
+                  startedAt,
+                  connection: handle.channel.getConnectionStatus?.()?.state ?? 'unknown',
+                }
+              : undefined,
+          daemonStartedAt: startedAt,
+          // 按需后端安装在 daemon 进程内直跑（owns runtime，装完即能解析加载）。
+          installBackend: installBackendDep,
+          uninstallBackend: uninstallBackendDep,
+          applyUpdate: performCoreUpdate,
+        }),
+      });
+      await options.onListening?.(api.listen);
+      console.log(`Daemon API listening on ${api.listen}`);
+    }
 
-  if (!process.send) console.log('vonvon daemon ready');
-  await control.waitForRequest();
+    if (!process.send) console.log('vonvon daemon ready');
+    await control.waitForRequest();
   } finally {
     const cleanup = await Promise.allSettled([api?.close(), handle.shutdown()]);
     releaseLock();
