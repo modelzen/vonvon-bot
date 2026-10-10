@@ -3083,7 +3083,6 @@ export function createOrchestrator(
       if (!dmAdmin(evt.operator.openId)) return;
       patch(evt, renderForegroundUpdate);
     })
-    // handler 立即返回让 SDK ack，慢活全在 settle 之后。
     .on(DM.usage, ({ evt }) => runUsage(evt, false))
     .on(DM.usageRefresh, ({ evt }) => runUsage(evt, true))
     // 分享：先弹「选择分享内容」表单卡（多选区块，不选=全部），提交后按所选区块
@@ -5574,12 +5573,6 @@ export function createOrchestrator(
         .catch(() => undefined);
       return;
     }
-    // 私聊菜单事件没有可 patch 的源卡，统一「新发一张托管卡」（open_id 投递）。发出去
-    // 的卡都经 sendManagedCard 注册了 byMessageId，卡上按钮的后续 patch/update 回调
-    // 照常工作——从底部菜单进与从首页卡点进完全等价。命中的 key 直达对应卡，其余
-    // （含空 key）回退首页菜单卡。用量是两阶段（先落地 loading 卡，再
-    // 原地更新结果）；探测/取数/IO 可能抛错，统一 try/catch 兜住（bridge 侧 void 调用、
-    // 无上层 catch，否则成 unhandled rejection）。
     const sendDm = (c: object) => sendManagedCard(channel, op, c, undefined, false, 'open_id');
     try {
       switch (evt.eventKey) {

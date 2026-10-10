@@ -208,24 +208,9 @@ export interface AdminService {
   backendVersion(id: string): Promise<{ installed: string | null; latest: string | null; hasUpdate: boolean }>;
 
   // ── Web 专属：daemon 生命周期 / 升级 / 多 bot 管理 / 宿主机体检 ──────────────
-  /** daemon 生命周期快照（service 注册状态 + 运行 pid/版本/启动时长）。绝不抛错。 */
   getDaemonStatus(): Promise<DaemonStatus>;
-  /**
-   * 重启后台 daemon（service stop→start）。不能在 web 进程里直执行（会杀自己），
-   * 走 detached helper（注入 {@link AdminServiceDeps.restartDaemon}）。只读预览
-   * （无 daemon 在跑）抛 {@link NotWiredYetError}（HTTP 501）。
-   */
   restartDaemon(): Promise<void>;
-  /**
-   * 启动后台服务（service install = 注册自启 + 拉起）。给只读预览用——预览态下
-   * daemon 没在跑，注入 {@link AdminServiceDeps.startDaemon}（detached helper）把它
-   * 装起来。未注入（如 daemon 进程自身，本就在跑）抛 {@link NotWiredYetError}（501）。
-   */
   startDaemon(): Promise<void>;
-  /**
-   * 停止后台服务（service uninstall = 停进程 + 移除自启），与 CLI `stop` 同义。走
-   * detached helper（不能在 web 进程里停自己）。只读预览（无 daemon）未注入抛 NotWiredYetError。
-   */
   stopDaemon(): Promise<void>;
   /** 检查 npm 上有无新版（current / latest / hasUpdate / dev）。绝不抛错（latest=null 兜底）。 */
   checkUpdate(): Promise<UpdateCheck>;
@@ -234,10 +219,6 @@ export interface AdminService {
    * 失败：detached helper 的失败否则对网页端完全静默。无记录返回 null。绝不抛错。
    */
   updateStatus(): UpdateStatus | null;
-  /**
-   * 升级到最新版（npm i -g + 重启 daemon）。**默认只检测不自动升级**——只有用户
-   * 点「升级」按钮才走这里。同 restart 走 detached helper。只读预览抛 NotWiredYetError。
-   */
   applyUpdate(): Promise<void>;
   /** 宿主机体检：后端环境（复用 doctorBackends）+ Node/平台/配置目录/日志体量。绝不抛错。 */
   hostDoctor(): Promise<AdminHostDoctor>;
@@ -452,16 +433,9 @@ export interface AdminServiceDeps {
   liveStatus?: (botId: string) => Promise<BotLiveStatus | undefined>;
   /** daemon 进程启动时刻（内嵌 web 注入）；只读预览不传 → uptime 缺省。 */
   daemonStartedAt?: number;
-  /**
-   * 重启 daemon 的真正执行器（detached helper，见 cli/commands/daemon-control）。
-   * 缺省 = 只读预览（无 daemon 在跑），restartDaemon/applyUpdate 抛 NotWiredYetError。
-   */
   restartDaemon?: () => void;
-  /** 升级（npm i -g + 重启）的执行器（detached helper）。缺省同上抛 NotWiredYetError。 */
   applyUpdate?: () => void;
-  /** 启动后台服务的执行器（detached helper，service install）。只读预览注入，缺省抛 NotWiredYetError。 */
   startDaemon?: () => void;
-  /** 停止后台服务的执行器（detached helper，service uninstall）。daemon 进程注入，缺省抛 NotWiredYetError。 */
   stopDaemon?: () => void;
   /**
    * 只读预览标记（仅 {@link createReadonlyAdminService} 置 true）。置 true 时扫码注册机器人
@@ -948,20 +922,16 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     },
 
     async restartDaemon(): Promise<void> {
-      // 不能在 web 进程里直执行（会杀自己）：daemon 内注入 detached helper；只读
-      // 预览无 daemon 在跑 → 引导先起 daemon。
       if (!deps.restartDaemon) throw new NotWiredYetError('🔁 重启 daemon');
       deps.restartDaemon();
     },
 
     async startDaemon(): Promise<void> {
-      // 只读预览注入 spawnDaemonControl('start')；daemon 进程自身在跑、无需「启动」→ 未注入 501。
       if (!deps.startDaemon) throw new NotWiredYetError('▶️ 启动 daemon');
       deps.startDaemon();
     },
 
     async stopDaemon(): Promise<void> {
-      // daemon 进程注入 spawnDaemonControl('stop')（detached，停自己安全）；只读预览无 daemon → 501。
       if (!deps.stopDaemon) throw new NotWiredYetError('⏹ 停止 daemon');
       deps.stopDaemon();
     },

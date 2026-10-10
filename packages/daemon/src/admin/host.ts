@@ -16,30 +16,10 @@ import {
 import type { BackendDepState } from '../agent/types';
 import type { UpdateCheck } from '../service/update';
 
-/**
- * 宿主机 / daemon 维度的只读聚合 + detached helper 命令构建（Web 专属：飞书 DM
- * 卡片够不着这一层——初始化机器人 / daemon 生命周期 / 多 bot 管理 / 体检都是
- * 「全局控制台」的活）。
- *
- * 【为什么 restart / update 走 detached helper 而非进程内直执行】
- *   Web 控制台**内嵌在 daemon 进程里**（run / supervisor）。restart 要 service
- *   stop→start：在 daemon 自己进程里跑 stop 会把自己（含正在响应这条 HTTP 的
- *   事件循环）杀掉，start 永远执行不到 → 服务被卸载、无人复活。所以 restart /
- *   update 一律 detached spawn 一个**脱离本进程**的小 helper（`__daemon-control`
- *   子命令），由它在 daemon 死后继续把 service 拉起来。命令构建是纯函数
- *   {@link buildDaemonControlCommand}，单测只验证「生成的命令正确」，绝不真跑。
- *
- * 【安全/约束】只读聚合绝不抛错（各段独立降级）；体检不 spawn 危险命令；
- *   helper 走 cross-spawn（platform/spawn）detached + unref，绝不在 web 进程里
- *   同步等它（那会把重启阻塞在被杀的进程上）。
- */
-
 /** daemon 生命周期快照（GET /api/daemon）。V2 前台进程的 pid/版本/时长。 */
 export interface DaemonStatus {
   distribution?: Distribution;
-  /** 本平台的服务管理器名（launchd / Task Scheduler / systemd），未支持平台为 undefined。 */
   platformName?: string;
-  /** 服务定义（plist/task/unit）已注册到 OS。 */
   installed: boolean;
   /** 当前内嵌 Web 的 daemon 进程正在运行。 */
   running: boolean;
@@ -47,13 +27,11 @@ export interface DaemonStatus {
   selfHosted: boolean;
   /** 当前前台 daemon 的实际 PID。 */
   pid?: number;
-  /** 上次退出码（诊断用）。 */
   lastExit?: string;
   /** 当前运行的 bridge 版本（package.json）。 */
   version: string;
   /** 本进程（内嵌 web 的 daemon 进程）已运行毫秒数；只读预览进程为 undefined。 */
   uptimeMs?: number;
-  /** 服务定义路径 / stdout / stderr 路径（诊断用）。 */
   servicePath?: string;
   stdoutPath?: string;
   stderrPath?: string;
@@ -67,7 +45,6 @@ export interface HostDoctor {
   platform: string;
   arch: string;
   osRelease: string;
-  /** 配置目录绝对路径（~/.feishu-codex-bridge）。 */
   appDir: string;
   /** 日志目录绝对路径。 */
   logsDir: string;
