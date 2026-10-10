@@ -46,7 +46,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
   - [ ] V5 after V4. V7 after V6. V8 after V4. V10 after V4.
   - [ ] V9 after V8 and after Codex publishes a signed installer. V9 lives in `modelzen/feishu-codex-bridge`, branched from `origin/codex/device-handoff`.
   - [ ] V11 after V10.
-- [ ] Hold the file boundaries. V1 touches only the root config, `packages/protocol/**`, `.github/**`, `NOTICE`, and `README.md`. V2 and V3 touch only `packages/daemon/**`, `scripts/import-core.mjs`, `packages/protocol/**`, and necessary root package metadata or lockfile changes for workspace integration. V4 adds `packages/client/**`, `packages/ui/**`, and `.agents/skills/verify/**`. V5 touches only `packages/desktop/**`. V6 and V7 touch only `packages/daemon/src/agent/**`, provider entries in `packages/protocol/**`, the provider picker in `packages/ui/**`, and `NOTICE`. V8 touches only `packages/daemon/src/import/**`, `packages/protocol/src/import.ts`, and `packages/ui/src/import/**`. V10 and V11 add `packages/cloud/**` and `packages/daemon/src/cloud/**`.
+- [ ] Hold the file boundaries. V1 touches only the root config, `packages/protocol/**`, `.github/**`, `NOTICE`, and `README.md`. V2 and V3 touch only `packages/daemon/**`, `scripts/import-core.mjs`, `packages/protocol/**`, and necessary root package metadata or lockfile changes for workspace integration. V3 also creates the minimal local client in `packages/client/**` that its lanes drive. V4 extends `packages/client/**` and adds `packages/ui/**` and `.agents/skills/verify/**`. V5 touches only `packages/desktop/**`. V6 and V7 touch only `packages/daemon/src/agent/**`, provider entries in `packages/protocol/**`, the provider picker in `packages/ui/**`, and `NOTICE`. V8 touches only `packages/daemon/src/import/**`, `packages/protocol/src/import.ts`, and `packages/ui/src/import/**`. V10 and V11 add `packages/cloud/**` and `packages/daemon/src/cloud/**`.
 - [ ] Preserve interaction evidence. V3 through V11 keep their prescribed screenshots and video, then proceed through independent review and guarded Shipping without waiting for personal review or a manual merge click.
 
 ### PR mechanics, for every PR
@@ -194,20 +194,139 @@ Each live lane runs in its own worktree at the PR head. Drive through the skill 
 
 **Files.**
 
-- [ ] Create `packages/daemon/src/server/http.ts`, `ws.ts`, `local-credential.ts`, `pid-lock.ts`, `atomic-file.ts`, and `directory-browser.ts`.
+- [ ] Create `packages/daemon/src/server/http.ts`, `ws.ts`, `local-credential.ts`, `pid-lock.ts`, `atomic-file.ts`, `directory-browser.ts`, `snapshot.ts`, and `jobs.ts`.
 - [ ] Create `packages/daemon/src/server/rpc/` with one handler file per protocol request group.
-- [ ] Create `packages/client/src/client.ts` and `transport-local.ts`.
+- [ ] Create `packages/protocol/src/admin.ts` and `directory.ts`. Edit `domain.ts`, `environment.ts`, `handshake.ts`, `rpc.ts`, `events.ts`, `index.ts`, and `packages/protocol/test/protocol.test.ts` for the contract below.
+- [ ] Create `packages/client/package.json`, `packages/client/src/client.ts`, and `transport-local.ts`. This is the minimal local client the V3 lanes drive. V4 extends it.
 - [ ] Edit `packages/daemon/src/cli/commands/daemon.ts`.
-- [ ] Delete `packages/daemon/src/web/`.
+- [ ] Edit the `src/web` callers and tests that *Deleting `src/web`* lists: `daemon-control.ts`, `run.ts`, `bot/supervisor.ts`, `bot/dm-console.ts`, `bot/handle-message.ts`, `card/dm-cards.ts`, and the named test files.
+- [ ] Delete `packages/daemon/src/web/` and `packages/daemon/src/cli/commands/web.ts`, the read-only preview entry. The V2 `vonvon` CLI registers no `web` command, so no command disappears.
+
+**Contract.** Codex implements these shapes as written. A change to them goes back to Claude Code. Appendix B records the rejected alternatives.
+
+The snapshot stays the V1 `DesktopSnapshot` for the future UI. The old administrative state gets its own lossless reply, `admin` `state`. Sessions are read separately through the existing `settings` `sessions` request.
+
+*Transport and handshake.*
+
+- The daemon listens on `127.0.0.1` only, on `--port` (0 picks a free port). It refuses an upgrade whose `Host` or `Origin` is not loopback, as the old console did. It does not negotiate permessage-deflate.
+- `$VONVON_HOME/local-credential` holds 32 random bytes in hex, mode 0600. The daemon creates it on first start and keeps it across restarts.
+- The first client frame is `hello`. `hello` gains an optional `credential` string, and the local transport always sends it. If the credential is missing or wrong under a constant-time compare, if another frame comes first, or if no `hello` arrives within 5 s, the daemon closes the socket with code 4401 and reason `unauthorized`. A good `hello` gets `serverInfo`.
+- `vonvon daemon start` spawns a detached `vonvon daemon run --port <n>` and returns once it listens. It installs no OS service, which stays with `vonvon service install`. `stop` sends SIGTERM and waits until the lock is gone. `status --json` prints `{running, pid?, listen?, version?, startedAt?}`, with `listen` as `127.0.0.1:<port>`. The pid lock `$VONVON_HOME/daemon.pid` records `pid`, `startedAt`, and `listen`.
+- `restartHost` and `applyCoreUpdate` restart in place. The daemon spawns a detached helper that waits for the lock to clear and runs `vonvon daemon start` with the same port, then the daemon shuts down.
+
+*Requests.* All use the V1 envelopes: `{type:"request", id, method, payload}`, answered by `{type:"response", id, method, payload}` or `{type:"error", id, code, message}`.
+
+- `snapshot`. Payload `{type:"get"}`. The reply payload is the current `DesktopSnapshot`. The daemon returns its cached snapshot and never probes tools or Feishu inline.
+- `admin`, a new group in `admin.ts`, for old routes that have no V1 home. Each read reply carries the old JSON body unchanged.
+  - `{type:"state"}` replies `{kind:"state", state}`. `state` is the old `GET /api/state` body, `{version, generatedAt, bots}`. Each bot is an `AdminBot` with `projects: AdminProject[]` and an optional `projectsError`. Every field of `AdminBot` and `AdminProject` in `packages/daemon/src/admin/service.ts` gets a zod type, `completionReminder` included. The handler is the moved `handleState`, with its 2,000,000-character avatar budget and its `projectsError` fallback.
+  - `{type:"diagnosis", agentId?}` replies `{kind:"diagnosis", bot?, backends, event?, eventConfigUrl?}`.
+  - `{type:"hostDoctor"}` replies `{kind:"hostDoctor", doctor}`.
+  - `{type:"setupStatus", agentId}` replies `{kind:"setupStatus", status}`.
+  - `{type:"daemonStatus"}` replies `{kind:"daemonStatus", status}`.
+  - `{type:"codexSetup"}` replies `{kind:"codexSetup", setup}`.
+  - `{type:"logs", maxBytes?}` replies `{kind:"logs", text}`. `maxBytes` is clamped to 1 KiB to 256 KiB and defaults to 64 KiB.
+  - `{type:"followLogs", follow}` replies `{kind:"following", follow}`.
+  - `{type:"switchBackend", agentId, projectName, backend}` replies `{kind:"applied", revision}`, where `revision` is the numeric snapshot revision, as in the `command` `applied` result.
+- `directory`, a new group in `directory.ts`.
+  - `{type:"list", path?}` lists the subdirectories of `path`, which defaults to the daemon user's home. It replies `{kind:"entries", path, parent, entries:[{name, path, hidden}], truncated}`, sorted by name and capped at 1000 entries. `parent` is null at home.
+  - `{type:"choose", path}` replies `{kind:"folderChosen", folder}` using the V1 `folderChoiceSchema`. The token is valid only in this daemon process, only for 10 minutes, and only for `bindGroup`, `createProject`, and `editProject`.
+  - The daemon resolves `path` with `realpath` first. A path outside home after resolution gets error code `outside_home`.
+- The five V1 groups keep their shapes, apart from the additive job and backend-install fields below. Their string revisions keep their V1 meaning, as *Snapshot and revision* states. A V1 variant that the route inventory does not use is outside the V3 gate. V3 answers it with error code `unsupported`. The PR whose UI first needs it adds the handler, and a file-boundary conflict goes back to Claude Code.
+- An unknown `method` gets error code `unknown_method`. A payload that fails its schema gets `invalid_request`. Neither closes the socket.
+
+*Events.* `{type:"event", event, payload}`. `events.ts` becomes a union on `event`.
+
+- `snapshot` with a `DesktopSnapshot` goes to every authenticated connection on each revision bump. There is no subscribe step and no unsolicited first event. A client reads `snapshot` `get` once per connection.
+- `log` with `{lines}` goes to connections that turned `followLogs` on. The first event replays the last 16 KiB of today's log without a partial first line, as the old SSE did.
+- `backendInstall` with `{operationId, id, update, item}` goes to connections attached to that install. `item` is `{type:"log", chunk}`, `{type:"done"}`, or `{type:"error", code, message}`.
+
+*Snapshot and revision.*
+
+- `snapshot.ts` builds `agents`, `groups`, `memberships`, and `stale` with `projectState` ported from the pinned `desktop/main/projection.ts`. It applies it to the admin state, not to a `stateSchema` parse. `host` is `{kind:"connected", ownership:"owned", version}`. `application` has the platform mapped to the V1 enum, the daemon version, `loginItem: false` until V5, and `dataPath` set to `VONVON_HOME`. `tools` come from `CodexSetupService.setup()` and the `claude-agent` backend probe, refreshed at start, every 60 s, and when a tool job settles. `jobs` come from `jobs.ts`. `diagnostics` hold the last `inspectAgent` result per agent. `observedAt` is the build time.
+- Besides each write, as below, the daemon rebuilds the snapshot on each Bot process or connection change, on each job phase change, and every 5 s, the old console's poll period.
+- `revision` is a counter per daemon process. It starts at 1 and increases by 1 only when a rebuilt snapshot differs from the previous one, ignoring `revision` and `observedAt`.
+- Every write handler, in any group, rebuilds the snapshot before it replies. When that rebuild bumps the revision, the daemon sends the `snapshot` event on the writer's socket before the reply, and to every other connection.
+- The numeric snapshot revision goes into a reply only through a field already defined as that number. There are two such fields: the `applied` result's `revision` in `commandResultSchema` (`domain.ts`) and `admin` `switchBackend`'s `applied` `revision`. Each carries the revision after its own rebuild.
+- Every other `revision` keeps its V1 meaning and wire shape, and the daemon never derives it from or compares it with the snapshot counter. The string revisions in `settings.ts` are optimistic-concurrency tokens for one section or record, compared against the stored value. They cover section `revision`, `administrators`, `members`, `cliRuntime`, `commentInstructions`, and host `coffee` in the views. They also cover the `revision` that `save`, `saveExecutable`, and the revisioned `act` actions send. A stale token gets the same reply as in V1. The string `revision` of `projectRecordSchema` in `collaboration.ts`, which `editProject` and `removeProject` send back as `expectedRevision`, stays a per-project token. V3 adds no snapshot revision to `settings`, `collaboration`, `environment`, or `machine` replies. A client of those groups reads the new snapshot revision from the event that came before the reply.
+- A client starts a fresh `watchSnapshots` on each new connection, seeded by `snapshot` `get`. A restarted daemon starts again at 1, so a client never carries a revision across connections. Two clients on one daemon see the same revision sequence.
+
+*Jobs.*
+
+- `jobSchema` gains four optional fields: `status` on `qr`, `verificationUrl` on `authorizing`, `agentId` on `succeeded`, and `code` on `failed`.
+- QR registration. `registerAgent` and `refreshAgentCredentials` reply `started {jobId}`, and each creates a `registerAgent` job. The job moves from `running` to `qr`, then ends `succeeded`, `failed`, or `cancelled`. In `qr`, `image` is a PNG data URL of `url`, `expiresAt` is now plus `expireIn` seconds, and `status` is the latest SDK status. `succeeded` carries `agentId`. The other old `done` fields are readable from `admin` `state`, the agent settings view, and `admin` `setupStatus`. `failed` carries `code`. The job belongs to the connection that started it. When that socket closes, the daemon aborts the registration and the job ends `cancelled`, as an SSE disconnect did. A new registration aborts a running one. `cancelJob` from any connection aborts it, as `DELETE /api/bots/register-qr` did. With 32 unsettled registrations the command replies `refused` with code `registration_busy`. V3 may add a QR encoder dependency to `packages/daemon`.
+- Codex install and login. `installCodex` and `startCodexLogin` reply `started {jobId}`. The `CodexSetupService` job maps onto `jobSchema` as `installCodex` or `loginCodex`, and `authorizing` carries `userCode` and `verificationUrl`. A disconnect does not affect these jobs, as the old polling did not. `cancelJob` cancels one. A setup conflict replies `refused` with code `conflict`.
+- Terminal jobs stay in `snapshot.jobs` for 10 minutes, then leave with a revision bump.
+- Backend install. `environment` `backendInstall {id, update}` replies `{kind:"backendInstall", operationId, id, update, attached, replay}`. One job runs per `id` and `update` pair. A request for a running pair attaches to it, sets `attached: true`, and returns every buffered `log` item in `replay`. Attach and reply happen in one tick, so later events on that socket continue exactly after `replay`. A socket close only detaches. npm runs to the end and nothing rolls back. The job settles with `done`, or with `error` whose code is `install_failed`, `aborted`, or `unknown`. The settled job is dropped, so a later request starts a fresh install and `backendCatalog` shows the result.
+- `vonvon daemon stop` aborts running registrations and waits for them, as the old `close()` did.
+
+*Route inventory.* Every old route either moves to the V3 request in this table or is marked retired, before `src/web` is deleted. `rpc-parity.test.ts` iterates the rows that name a V3 request. Retired rows have no RPC and no parity case.
+
+| Old route | V3 request |
+| --- | --- |
+| `GET /api/state` | `admin` `state` |
+| `GET /api/project/:name/sessions?bot=` | `settings` `sessions` |
+| `GET` and `PATCH` on `/api/bots/:id/settings`, `/api/project/:name/settings?bot=`, `/api/bots/:id/sessions/:thread/settings`, `/api/settings/host` | `settings` `read` and `save` |
+| `PATCH /api/bots/:id/settings/:section` | `settings` `save` of that agent section. The old server answers `GET` on this path with 405, so it has no read case |
+| `POST /api/bots/:id/settings/actions`, `POST /api/settings/host/actions` | `settings` `act` |
+| `GET /api/bots/:id/models` | `settings` `models` |
+| `GET /api/bots/:id/voice` | `settings` `read` of the agent scope, field `voice` |
+| `POST /api/bots/:id/voice` | `settings` `act` with `voice` |
+| `POST /api/bots/:id/completion-reminder` | `settings` `save` of agent section `completion` |
+| `POST /api/project/:name/permission` | `command` `setPermission` |
+| `POST /api/project/:name/no-mention` | `command` `setResponse` |
+| `POST /api/project/:name/auto-compact` | `settings` `save` of project section `compact` |
+| `POST /api/project/:name/backend` | `admin` `switchBackend` |
+| `PATCH /api/bots/:id` | `command` `setAgentEnabled` |
+| `DELETE /api/bots/:id` | `command` `deleteAgent` |
+| `POST /api/bots/:id/collaboration` | `collaboration` |
+| `GET /api/account/codex/usage?force=` | `collaboration` `usage` |
+| `GET /api/bots/:id/pending-groups` | `command` `listPendingGroups` |
+| `GET /api/bots/:id/joined-groups` | `command` `listJoinedGroups` |
+| `POST /api/bots/:id/bind-group` | `directory` `choose`, then `command` `bindGroup` |
+| `GET /api/tools/codex/setup` | `admin` `codexSetup` |
+| `POST /api/tools/codex/install`, `POST /api/tools/codex/login` | `command` `installCodex`, `startCodexLogin` |
+| `GET /api/tools/codex/jobs/:id`, `DELETE` on the same path | `snapshot.jobs`, `command` `cancelJob` |
+| `GET /api/bots/register-qr/stream`, `GET /api/bots/:id/refresh-qr/stream` | `command` `registerAgent`, `refreshAgentCredentials` |
+| `GET /api/bots/register-qr?sessionId=`, `DELETE /api/bots/register-qr` | `snapshot.jobs`, `command` `cancelJob` |
+| `GET /api/bots/:id/setup-status` | `admin` `setupStatus` |
+| `GET /api/diagnosis` | `admin` `diagnosis`. `command` `inspectAgent` fills `snapshot.diagnostics` |
+| `GET /api/daemon` | `admin` `daemonStatus` |
+| `POST /api/daemon/restart` | `command` `restartHost` |
+| `POST /api/daemon/stop` | `machine` `stopHost` |
+| `GET /api/update/check`, `GET /api/update/status`, `POST /api/update` | `machine` `checkCoreUpdate`, `coreUpdateStatus`, `applyCoreUpdate` |
+| `GET /api/host-doctor` | `admin` `hostDoctor` |
+| `GET /api/logs`, `GET /api/logs/stream` | `admin` `logs`, `admin` `followLogs` with the `log` event |
+| `GET /api/backends` | `environment` `backendCatalog`. Entries keep every field through `passthrough`, and the old `defaultBackend` is the `isDefault` entry's id |
+| `POST /api/backends/:id/install`, `POST /api/backends/:id/update` | `environment` `backendInstall` with `update` false or true |
+| `GET /api/backends/:id/version`, `DELETE /api/backends/:id` | `environment` `backendVersion`, `backendUninstall` |
+| `POST /api/daemon/start`, `GET /api/console/live` | Retired. They serve the standalone read-only preview in `src/cli/commands/web.ts`, which starts the daemon from the page while no daemon runs, then redirects to it. The daemon's own console answers them with 501 and `{live:false}`. The preview retires with `src/web`. `vonvon daemon start` replaces its start button out of band, and V4's `vonvon open` replaces the page. The preview's `POST /api/update` with no daemon retires too; a running daemon's update is `machine` `applyCoreUpdate` above |
+| `GET /`, `/vendor/gsap.min.js`, `/vendor/logo.png` | Retired. The HTML console page and its assets retire with `src/web`. V4 serves the new UI |
+
+*Deleting `src/web`.* After V3, nothing in `packages/daemon/src` or `packages/daemon/test` imports or mocks `src/web`. The callers at the V2 head migrate as follows.
+
+- `src/bot/supervisor.ts` and `src/cli/commands/run.ts` keep building the same `AdminService` in both process forms, supervisor and single-Bot inline. They hand it to the V3 server in `src/server/` instead of calling `mountWebConsole`.
+- `src/cli/commands/daemon.ts` and `daemon-control.ts` stop calling `readWebConsole()`. They read `pid` and `listen` from the pid lock `$VONVON_HOME/daemon.pid`. The daemon no longer writes `web-console.json`, and `paths.webConsoleFile` may go with its last reader.
+- `src/card/dm-cards.ts` `buildDmMenuCard` drops the `webConsoleUrl` option, the 🌐 网页控制台 row, and the doc comment that describes them. Every other row and button stays: 新建项目, 项目列表, 设置, 用量, 诊断, 重启, 更新. The desktop-release elements, the version badge, and `forward: false` also stay. `src/bot/dm-console.ts` and `renderDmMenuCard` in `src/bot/handle-message.ts` drop the `webConsoleUrl` import and argument. The renderer already omits that row when the URL is absent, so V3's menu card equals the card V2 sends while no console runs. V3 adds no replacement link. A DM link to the new UI may return only after V4 actually serves it. That file is outside V4's listed files, so the change goes back to Claude Code first.
+
+Old tests follow one rule. A test of behavior V3 keeps stays and passes, retargeted to the RPC its route maps to in the inventory or to the moved handler. Importing `src/web` is not a reason to drop it. Only these assertions may be removed: the HTML page and its inline script (`UI_HTML`, `UI_PURE_JS`), the vendor assets, the retired preview and its routes, and the `web-console.json` discovery record. A pid or liveness check that read the discovery record moves to the pid lock. These files touch `src/web` or `web-console.json` at the V2 head and form the starting list.
+
+- Retarget to RPC: `web-server.test.ts`, `web-desktop-capabilities.test.ts`, `web-qr-lifecycle.test.ts`, and `settings-owner.test.ts`.
+- Retarget to the pid lock: `daemon-cli.test.ts` and `daemon-control-stop.test.ts`.
+- Replace the `src/web` mock with the V3 server: `supervisor-activation.test.ts` and `onboarding-events.test.ts`.
+- Removable only for the HTML page, vendor, or retired-preview assertions they hold: `web-ui-pure.test.ts`, `foreground-guidance.test.ts`, `voice-ui.test.ts`, `web-event-rendering.test.ts`, and `web-discovery.test.ts`. A case in one of them that checks kept behavior is retargeted instead.
+- Keep unchanged apart from the `webConsoleFile` stub in their paths mock, which goes if `paths.webConsoleFile` goes: `web-admin-service.test.ts`, `web-admin-host.test.ts`, and `admin-ops.test.ts`.
+
+The PR evidence carries a mapping table. Each row names a changed, moved, or removed test file or case, its new test and RPC or its retired subject, and the reason. V2's raw test-file count is not a V3 invariant. V3 requires the suite to pass with every skip recorded and the mapping table complete.
 
 **Build.**
 
 - [ ] Port `pid-lock.ts` and `atomic-file.ts` from Paseo `packages/server/src/server/` with their notices.
-- [ ] Accept `hello`, check the credential in `$VONVON_HOME/local-credential`, and reply `serverInfo`.
-- [ ] Move each route of the old web console's admin backend into an RPC handler, then delete `src/web`.
-- [ ] Publish revisioned snapshot events, using the revision rule from `watch.ts`.
-- [ ] Add a directory browser RPC rooted at the user's home.
-- [ ] Add `vonvon daemon start`, `stop`, and `status --json`.
+- [ ] Accept `hello`, check the credential in `$VONVON_HOME/local-credential`, and reply `serverInfo`, per the contract.
+- [ ] Move each route that the route inventory maps to a V3 request into an RPC handler. Retire the routes it marks retired, with the read-only preview. Migrate the callers and tests per *Deleting `src/web`*, then delete `src/web` and `src/cli/commands/web.ts`.
+- [ ] Publish revisioned snapshot events per the contract, using the revision rule from `watch.ts`.
+- [ ] Add the `directory` RPC rooted at the user's home.
+- [ ] Add `vonvon daemon start`, `stop`, and `status --json` per the contract.
+- [ ] Add the local client in `packages/client`. It reads `listen` from `vonvon daemon status --json` and the credential from `$VONVON_HOME/local-credential`, sends `hello`, correlates replies by `id`, and delivers events.
 
 **You see.**
 
@@ -216,27 +335,54 @@ Each live lane runs in its own worktree at the PR head. Drive through the skill 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
 - [ ] `packages/daemon/test/server-handshake.test.ts` rejects a bad credential and accepts a good one.
-- [ ] `packages/daemon/test/rpc-parity.test.ts` calls every RPC that replaced a web console route and checks the reply schema. Run `npm test -w packages/daemon -- server rpc`.
+- [ ] `packages/daemon/test/rpc-parity.test.ts` calls every RPC that replaced a web console route and checks the reply schema. It iterates the route inventory rows that name a V3 request and skips the retired rows. It also checks that `admin` `state` equals the moved `handleState` output on a fixture whose `projects.json` is corrupt, so `projectsError` matches.
+- [ ] `packages/daemon/test/server-jobs.test.ts` checks four things. A QR job ends `cancelled` when its owner socket closes, and a second registration preempts the first. A backend install keeps running after detach, and a second request attaches with the full `replay` and then live items, with no gap or duplicate. The revision rises once per changed rebuild and not on an identical one. On the writer's socket the snapshot event comes before the write reply, a `command` `applied` reply's `revision` equals that event's, and a `settings` `save` reply keeps its string section `revision`, not the snapshot number. Run `npm test -w packages/daemon -- server rpc`.
+- [ ] `packages/protocol/test/protocol.test.ts` parses every new request, reply, event, and job field in the contract, and still rejects a `hello` without `protocolVersion`. Run `npm test -w packages/protocol`.
+- [ ] The full suite passes under `npm test -w packages/daemon` with every skip recorded. The test mapping table from *Deleting `src/web`* is in the PR evidence, and `grep -rnE "\.\./(\.\./)*(src/)?web/" packages/daemon/src packages/daemon/test` finds nothing.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on the configured `swarm workers` model at the PR head, per the boot recipe.
 
-- [ ] Lane 1. Regression lane against trunk. At V2 head read state through the old console's `GET /api/state`, and at V3 head read the snapshot RPC, on the same `VONVON_HOME`. Save `state-parity.txt`. Pass when bots, projects, and sessions match field for field.
-- [ ] Lane 2. Connect without a credential. Save `no-cred.txt`. Pass when the socket closes with the auth error code.
+- [ ] Use the V2 Feishu fixture rules. Lanes 1, 5, 6, 8, and 10 and the connected perf probe connect the fixture Bot. They run serially, one at a time, and no V2 process is connected to that Bot while a V3 process is. The other lanes use a copy of the fixture home with every Bot inactive. Each data root has exactly one daemon writing it at a time.
+- [ ] Lane 1. Regression lane against trunk. Prepare fixture home `H` with these contents. The fixture Bot is active and at least one other registered Bot is inactive. The private test group is bound, there are at least two projects, and one project has three or more sessions. Record `sha256sum` of `bots.json` and of every `bots/*/config.json`, `projects.json`, and `sessions.json` under `H`. Send no Feishu message during the lane.
+  - At V2 head, run `vonvon daemon run` on `H` and wait for the connected log line. Read the port and token from `H/web-console.json`. Read `GET /api/state`, then `GET /api/project/<name>/sessions?bot=<appId>` for every Bot and project in it. Stop it with SIGTERM and wait until its lock files are gone.
+  - At V3 head, run `vonvon daemon start --port 0` on `H` and wait for the connected log line. Read `admin` `state`, then `settings` `sessions` for the same Bots and projects, then `snapshot` `get`.
+  - On each side, before the final read, repeat the state read every 5 s until two consecutive reads agree on every `avatarDataUrl`, for up to 60 s. Fail if a side never settles.
+  - Save `state-parity.txt` with both raw documents, the normalized diff, and the checksums. Leave out credentials and tokens.
+  - Pass when every check below holds.
+    - The checksums match before, between, and after the two runs.
+    - `state` equals the HTTP body key for key and value for value, with arrays in order. That covers every Bot field, including `avatarDataUrl`, `connection`, and `completionReminder`. It covers every project field, including `sessionCount`, and whether `projectsError` is present. A key present on one side and absent on the other fails.
+    - Only these values are exempt from the cross-side comparison, and each is checked on its own side instead. `version` equals the daemon package version at that head. `generatedAt` is an integer inside that read's send-to-receive window. For a running Bot, `pid` is a live process in that head's daemon tree, and `startedAt` lies between that daemon's start and the read. For a Bot that is not running, `pid` and `startedAt` are absent on both sides.
+    - For every Bot and project, the `settings` `sessions` array equals the HTTP `sessions` array in order and in every field: `threadId`, `chatId`, `summary`, `backend`, `model`, `createdAt`, and `updatedAt`. Its length equals that project's `sessionCount`.
+    - In the `snapshot` `get` reply, `agents`, `groups`, `memberships`, and `stale` equal the ported `projectState` applied to the settled V3 `state`.
+- [ ] Lane 2. Connect without a credential. Save `no-cred.txt`. Pass when the socket closes with code 4401.
 - [ ] Lane 3. Run `vonvon daemon start` twice. Save `start-twice.txt`. Pass when the second call reports the running instance and no second process exists.
 - [ ] Lane 4. Kill the daemon with SIGKILL and run `vonvon daemon start`. Save `stale-lock.txt`. Pass when the stale lock is replaced and the daemon starts.
 - [ ] Lane 5. Toggle a bot off through the RPC. Save `toggle.txt`. Pass when the snapshot revision increases and the bot child process exits.
 - [ ] Lane 6. Subscribe two clients and change a project setting from one. Save `fanout.txt`. Pass when both receive the new revision.
-- [ ] Lane 7. Browse directories from home down two levels. Save `browse.txt`. Pass when entries are listed and a path outside home is refused.
-- [ ] Lane 8. Bind a group through the RPC with a browsed path. Save `bind-rpc.txt`. Pass when `projects.json` lists the group with that `cwd`.
-- [ ] Lane 9. Send a request with an unknown method. Save `unknown.txt`. Pass when the reply is an RPC error and the socket stays open.
+- [ ] Lane 7. Browse directories from home down two levels. Save `browse.txt`. Pass when entries are listed, and a path outside home and a symlink under home that resolves outside it are both refused with `outside_home`.
+- [ ] Lane 8. Browse to a temp folder under home, take its token from `directory` `choose`, and bind a group with `command` `bindGroup`. Save `bind-rpc.txt`. Pass when `projects.json` lists the group with that `cwd`.
+- [ ] Lane 9. Send a request with an unknown method. Save `unknown.txt`. Pass when the reply is an error envelope with code `unknown_method` and the socket stays open.
 - [ ] Lane 10. Run `vonvon daemon stop`. Save `stop.txt`. Pass when the process exits, the lock file is gone, and bots disconnect.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Metric. Round trip of the snapshot request, p50 and p95 over 200 calls, and the snapshot payload size.
-- [ ] Probe. Interleave 200 `GET /api/state` calls at V2 head with 200 snapshot RPCs at V3 head on the same data.
-- [ ] Baseline. Record the V2 HTTP numbers first.
-- [ ] Rule. Fail if the RPC p95 is more than 20% above the HTTP p95 or the payload is larger.
+- [ ] Metric. Round trip of `admin` `state` and of `snapshot` `get`, each against `GET /api/state`, as p50 and p95 over 200 calls. Also the comparable and wire sizes of `admin` `state` against the HTTP body. `admin` `state` carries the same information as `GET /api/state`. `snapshot` `get` carries different information, so it gets the latency rule and its size is only recorded.
+- [ ] Probe, alternating.
+  - Copy `H` byte for byte to `H2` and `H3`, and set every Bot inactive in both `bots.json` files.
+  - Run V2 head on `H2` and V3 head on `H3` at the same time. Each daemon is the only writer of its own copy, and neither connects to Feishu.
+  - Use one Node script with one keep-alive HTTP agent and one authenticated WebSocket. Discard 20 warm-up calls per path.
+  - Run 200 rounds. Each round makes one HTTP call, one `admin` `state` call, and one `snapshot` `get` call, rotating their order every round.
+  - Time each call from send until the reply is parsed. Take p50 and p95 by nearest rank.
+- [ ] Probe, connected.
+  - On `H` with the fixture Bot active, run ten serial blocks in the order V2, V3, V3, V2, V2, V3, V3, V2, V2, V3. Only one head runs at a time, started and stopped as in lane 1.
+  - Each block waits for the connected line and settled avatars, then discards five calls.
+  - Each V2 block then times 40 HTTP calls. Each V3 block times 40 `admin` `state` calls and 40 `snapshot` `get` calls, alternating. That gives 200 calls per path.
+- [ ] Payload. Comparable bytes are the UTF-8 length of compact `JSON.stringify` of the HTTP body and of the reply's `state`, after `generatedAt` and every `pid` and `startedAt` are set to 0. Wire bytes are the whole WebSocket text frame including the envelope, against the HTTP status line, headers, and body. Measure both uncompressed. Record the `snapshot` `get` frame size.
+- [ ] Baseline. Record the V2 HTTP numbers of each probe first.
+- [ ] Rule. Apply each check to both probes.
+  - Fail if `admin` `state` p95 or `snapshot` `get` p95 is more than 20% above the HTTP p95.
+  - Fail if the comparable bytes of `state` exceed those of the HTTP body.
+  - Fail if the wire bytes of `state` exceed those of the HTTP response.
 
 **Review evidence.** Keep the prescribed captures and independent verdict before guarded Shipping.
 
@@ -748,6 +894,10 @@ The facts below were read from source this session, not run.
 - Require login, as in vonvon-bridge-legacy ADR 0012. The owner chose optional login.
 - Keep the cloud in the vonvon-platform repo. Protocol changes would need two branches in two repos.
 - Copy data while the bridge keeps running. The bridge writes `sessions.json` during a turn, and two clients on one bot split events.
+- Widen V3's `DesktopSnapshot` to carry the old `GET /api/state` bots and projects. Every snapshot event would carry process fields and avatars to every client. Pid and session-count changes would bump the UI revision, and the V4 UI contract would change. V3 instead keeps the snapshot as is and adds the lossless `admin` `state` reply.
+- Compare V3's `DesktopSnapshot` projection with `GET /api/state` in lane 1. The projection drops `tenant`, `current`, `pid`, `startedAt`, `completionReminder`, `blank`, `branch`, `origin`, `autoCompact`, `allowedUsersCount`, `sessionCount`, and `createdAt`, so the regression lane would stop checking them.
+- Keep the read-only preview and its page-driven `POST /api/daemon/start`. It would keep a second HTTP server outside the daemon, with its own token and direct file reads, after V3 moves administration to the daemon's WebSocket. `vonvon daemon start`, V4's `vonvon open`, and V5's shell starting the daemon cover the stopped case.
+- Mirror every old route in one new RPC group. It would duplicate the V1 groups the V4 UI already speaks and leave two write paths for one setting. V3 adds `admin` only for routes with no V1 home.
 
 ## Appendix C. Risks
 
