@@ -98,7 +98,10 @@ export async function runStop(home = paths.appDir): Promise<boolean> {
     if (current && !sameOwner(current, lock) && isPidLockOwnerRunning(current)) {
       throw new Error(`Daemon was replaced by PID ${current.pid} at ${current.listen ?? 'not ready'}.`);
     }
-    if (!isPidLockOwnerRunning(lock) && !sameOwner(current, lock)) return true;
+    if (!isPidLockOwnerRunning(lock)) {
+      if (!sameOwner(current, lock)) return true;
+      throw new Error(`Daemon ${lock.pid} exited without releasing daemon.pid. Cleanup was not confirmed; see vonvon daemon logs.`);
+    }
     if (Date.now() >= progressAt) {
       process.stderr.write(`Waiting for daemon PID ${lock.pid} at ${lock.listen} to finish stopping…\n`);
       progressAt = Date.now() + 5000;
