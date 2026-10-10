@@ -63,7 +63,6 @@ import {
 } from '../agent';
 import type { AccountUsageBundle, BackendDepState, BackendProbe, PermissionMode } from '../agent/types';
 import { readRecentLogs } from '../core/logger';
-import { getServiceAdapter } from '../service/adapter';
 import {
   checkUpdate as checkUpdateImpl,
   clearUpdateStatus,
@@ -939,15 +938,13 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     },
 
     async getDaemonStatus(): Promise<DaemonStatus> {
-      // service manager 状态在「未支持平台」会抛——按 undefined 降级（toDaemonStatus
-      // 据此置 supported=false，UI 把重启按钮置灰引导前台 run）。
-      let status;
-      try {
-        status = await getServiceAdapter().status();
-      } catch {
-        status = undefined;
-      }
-      return {...toDaemonStatus({ status, version: bridgeVersion(), startedAt: deps.daemonStartedAt }), distribution:await runtimeDistribution()};
+      const foreground = deps.daemonStartedAt === undefined
+        ? undefined
+        : { pid: process.pid, startedAt: deps.daemonStartedAt };
+      return {
+        ...toDaemonStatus({ foreground, version: bridgeVersion() }),
+        distribution: await runtimeDistribution(),
+      };
     },
 
     async restartDaemon(): Promise<void> {

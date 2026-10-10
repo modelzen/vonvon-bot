@@ -140,14 +140,13 @@ import {
   buildProjectTopicsCard,
   buildProjectSettingsCard,
   buildReconnectCard,
-  buildRestartConfirmCard,
-  buildRestartingCard,
+  buildForegroundRestartCard,
   buildRmConfirmCard,
   buildCoffeeSettingsCard,
   buildCompletionReminderCustomCard,
   buildSessionTitleSettingsCard,
   buildSettingsCard,
-  buildUpdateCard,
+  buildForegroundUpdateCard,
   buildWatchdogCustomCard,
   DM,
   GS,
@@ -164,12 +163,7 @@ import {
   sendCompletionReminderReply,
   type CompletionReminderReplyInput,
 } from './completion-reminder';
-import {
-  currentVersion,
-  latestVersion,
-  isNewer,
-  isDevSource,
-} from '../service/update';
+import { currentVersion } from '../service/update';
 import { fetchUsageBundle } from '../agent/usage';
 import {
   buildShareConfigCard,
@@ -2488,6 +2482,15 @@ export function createOrchestrator(
   const patch = (evt: CardActionEvent, c: object | (() => object | Promise<object>)): void =>
     settleUpdate(evt.messageId, c, evt.chatId);
 
+  async function renderForegroundUpdate(): Promise<ReturnType<typeof buildForegroundUpdateCard>> {
+    const [desktopRelease, distribution] = await Promise.all([getDesktopRelease(), runtimeDistribution()]);
+    return buildForegroundUpdateCard({
+      current: currentVersion(),
+      distribution: distribution.kind === 'bundled' ? 'bundled' : 'other',
+      desktopRelease,
+    });
+  }
+
   /** open_id→姓名 三级兜底（管理员/白名单卡展示用）：
    *  1) resolveNames：contact.batch（需 contact:user.base:readonly）；
    *  2) 项目群成员名：im:chat:readonly 已开就够，含外部成员，是 contact 没开时的主力；
@@ -3064,29 +3067,23 @@ export function createOrchestrator(
         log.fail('console', err, { cmd: 'reconnect' }),
       );
     })
-    // 重启（第一步）：弹确认卡。重启是破坏性操作（断开所有会话），仿删除项目两步确认；
-    // 顺带展示长连接状态。取代了旧「重连」——真断线时重启才是唯一有效手段。
-    .on(DM.restart, async ({ evt }) => {
-      if (!dmAdmin(evt.operator?.openId)) return;
-      const conn = channel.getConnectionStatus?.()?.state ?? 'unknown';
-      await sendManagedCard(channel, evt.chatId, buildRestartConfirmCard(conn), evt.messageId).catch((err) =>
-        log.fail('console', err, { cmd: 'restart' }),
-      );
+    .on(DM.restart, ({ evt }) => {
+      if (!dmAdmin(evt.operator.openId)) return;
+      patch(evt, buildForegroundRestartCard());
     })
-    .on(DM.restartDo, async ({ evt }) => {
-      if (!dmAdmin(evt.operator?.openId)) return;
-      await updateManagedCard(channel, evt.messageId, buildRestartingCard('foreground'));
+    .on(DM.restartDo, ({ evt }) => {
+      if (!dmAdmin(evt.operator.openId)) return;
+      patch(evt, buildForegroundRestartCard());
     })
-    .on(DM.update, async ({ evt }) => {
-      if (!dmAdmin(evt.operator?.openId)) return;
-      await updateManagedCard(channel, evt.messageId, buildUpdateCard({ phase: 'error', from: currentVersion(), message: 'V2 前台 daemon 不支持服务更新。' }));
+    .on(DM.update, ({ evt }) => {
+      if (!dmAdmin(evt.operator.openId)) return;
+      patch(evt, renderForegroundUpdate);
     })
-    .on(DM.updateDo, async ({ evt }) => {
-      if (!dmAdmin(evt.operator?.openId)) return;
-      await updateManagedCard(channel, evt.messageId, buildUpdateCard({ phase: 'error', from: currentVersion(), message: 'V2 前台 daemon 不支持服务更新。' }));
+    .on(DM.updateDo, ({ evt }) => {
+      if (!dmAdmin(evt.operator.openId)) return;
+      patch(evt, renderForegroundUpdate);
     })
-    // 📊 Codex 用量：loading → 并行拉 wham/usage + wham/profiles/me → 原地更新结果卡。
-    // 同 DM.update 的双阶段模式：handler 立即返回让 SDK ack，慢活全在 settle 之后。
+    // handler 立即返回让 SDK ack，慢活全在 settle 之后。
     .on(DM.usage, ({ evt }) => runUsage(evt, false))
     .on(DM.usageRefresh, ({ evt }) => runUsage(evt, true))
     // 分享：先弹「选择分享内容」表单卡（多选区块，不选=全部），提交后按所选区块
@@ -5580,7 +5577,7 @@ export function createOrchestrator(
     // 私聊菜单事件没有可 patch 的源卡，统一「新发一张托管卡」（open_id 投递）。发出去
     // 的卡都经 sendManagedCard 注册了 byMessageId，卡上按钮的后续 patch/update 回调
     // 照常工作——从底部菜单进与从首页卡点进完全等价。命中的 key 直达对应卡，其余
-    // （含空 key）回退首页菜单卡。用量/更新是两阶段（先落地 loading/checking 卡，再
+    // （含空 key）回退首页菜单卡。用量是两阶段（先落地 loading 卡，再
     // 原地更新结果）；探测/取数/IO 可能抛错，统一 try/catch 兜住（bridge 侧 void 调用、
     // 无上层 catch，否则成 unhandled rejection）。
     const sendDm = (c: object) => sendManagedCard(channel, op, c, undefined, false, 'open_id');
@@ -5602,7 +5599,7 @@ export function createOrchestrator(
           await sendDm(buildReconnectCard(channel.getConnectionStatus?.()?.state ?? 'unknown'));
           break;
         case DM.restart:
-          await sendDm(buildRestartConfirmCard(channel.getConnectionStatus?.()?.state ?? 'unknown'));
+          await sendDm(buildForegroundRestartCard());
           break;
         case DM.usage: {
           // 同 runUsage 语义，但锚在自己刚发的 loading 卡上：取数后原地更新；取数失败按
@@ -5623,23 +5620,9 @@ export function createOrchestrator(
           if (!ok) await sendDm(buildUsageCard(state));
           break;
         }
-        case DM.update: {
-          // 只「检查」最新版、无副作用；真正安装仍需结果卡上的「立即更新」（DM.updateDo）
-          // 二次确认。latestVersion 走异步 execFile（绝不能 spawnSync 冻住 event loop）。
-          const { messageId } = await sendDm(buildUpdateCard({ phase: 'checking' }));
-          const current = currentVersion();
-          const [latest, desktopRelease, distribution] = await Promise.all([
-            latestVersion().catch(() => null), getDesktopRelease(), runtimeDistribution(),
-          ]);
-          const hasUpdate = !!latest && isNewer(latest, current);
-          log.info('console', 'update-check', { current, latest, hasUpdate, via: 'menu' });
-          await updateManagedCard(
-            channel,
-            messageId,
-            buildUpdateCard({ phase: 'checked', current, latest, hasUpdate, dev: isDevSource(), desktopRelease, distribution: distribution.kind === 'bundled' ? 'bundled' : 'other' }),
-          ).catch((e) => log.fail('console', e, { phase: 'update-check', via: 'menu' }));
+        case DM.update:
+          await sendDm(await renderForegroundUpdate());
           break;
-        }
         default:
           await sendDm(await renderDmMenuCard());
       }

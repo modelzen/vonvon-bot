@@ -809,10 +809,6 @@ ${UI_PURE_JS}
   var daemon = null;         // /api/daemon
   var diag = null;           // /api/diagnosis 结果（当前 bot 的探测；切 Tab 必清）
   var catalog = null;        // /api/backends 缓存（后端管理卡 + 项目 picker 复用）
-  var lastUpdate = null;     // /api/update/check 结果缓存：总览 5s 重渲不重查（每次查都 spawn npm view）
-  var updateCheckedAt = 0;   // 上次检查时间戳；拿到结果超 30min、软失败超 ~2min 才随重渲自动复查
-  var updateChecking = false;// in-flight 闸：npm view 可能数秒~20s，期间 5s 重渲不叠发第二个请求
-  var updateInFlight = false; // 「升级并重启」in-flight：禁用按钮防重复点击（并发触发会绕过服务端更新锁的窄窗），并驱动轮询结果
   var drawerProject = null;  // 抽屉里打开的项目名
   var diagBotId = null;      // diag 属于哪个 bot（防串台）
   var bkDetailId = null;     // 后端 Agent 详情视图当前展开的后端 id（null=列表）
@@ -1022,14 +1018,6 @@ ${UI_PURE_JS}
     fetch('/api/daemon').then(function (r) { return r.json(); })
       .then(function (d) {
         daemon = d;
-        // 运行中的实际版本一旦跟版本检查缓存里的 current 对不上（多半是刚更新+重启完成），
-        // 就作废缓存并当场补查一次（若在总览页），把「有新版」立刻翻成「已是最新版」——不等
-        // 下一轮 renderRoute，消除 loadState/loadDaemon 同周期竞态导致的 ~10s 延迟与横幅残留。
-        // 只在版本真变时才查（稳态 d.version===current），既留住更新后的即时反馈，又不回到 5s 空转。
-        if (lastUpdate && d.version && d.version !== lastUpdate.current) {
-          lastUpdate = null; updateCheckedAt = 0;
-          if (parseRoute(location.hash).tab === 'overview') { var ub = $('updateBody'); if (ub) loadUpdate(ub); }
-        }
         if (parseRoute(location.hash).tab === 'overview') { var b = $('daemonBody'); if (b) renderDaemon(b); }
         renderSidebarFoot();
         renderGlobalSummary();
@@ -1306,15 +1294,6 @@ ${UI_PURE_JS}
   // ════════════════════════════════════════════════════════════════════════════
   //  仪表盘（全局总览：KPI 磁贴 + 机器人 + daemon）
   // ════════════════════════════════════════════════════════════════════════════
-  // 服务管理器名 → 人话标签（不暴露 launchd/systemd 这类没人懂的术语，只留「哪个系统 · 开机自启」）。
-  function svcLabel(pn) {
-    if (!pn) return '后台服务';
-    if (pn.indexOf('launchd') >= 0 || pn.indexOf('macOS') >= 0) return 'macOS · 开机自启';
-    if (pn.indexOf('systemd') >= 0 || pn.indexOf('Linux') >= 0) return 'Linux · 开机自启';
-    if (pn.indexOf('Windows') >= 0) return 'Windows · 登录自启';
-    return '后台服务';
-  }
-
   function renderOverviewTab(root) {
     var s = summarizeState(state);
     var daemonOn = !!(daemon && daemon.running);
@@ -1322,7 +1301,7 @@ ${UI_PURE_JS}
     // KPI 磁贴行
     var kpis = el('div', 'kpis');
     kpis.appendChild(kpiTile('server', 'Feishu Bridge', daemonOn ? '运行中' : '未运行',
-      daemonOn && daemon.uptimeMs !== undefined ? '已运行 ' + fmtUptime(daemon.uptimeMs) : svcLabel(daemon && daemon.platformName), daemonOn));
+      daemonOn && daemon.uptimeMs !== undefined ? '已运行 ' + fmtUptime(daemon.uptimeMs) : '前台运行', daemonOn));
     kpis.appendChild(kpiTile('bot', '在线机器人', s.online + ' / ' + s.total, s.active + ' 个在活跃集'));
     kpis.appendChild(kpiTile('folder', '项目总数', String(s.projects), '跨全部机器人'));
     kpis.appendChild(kpiTile('cube', '默认后端', catalog ? backendName(catalog.defaultBackend) : '…', '项目未指定时路由到它'));
@@ -1332,25 +1311,11 @@ ${UI_PURE_JS}
     // 🛰️ Feishu Bridge（放在机器人卡上面：机器人可增删、列表会变长，全局控制放最前位置更稳定）
     var daemonCard = el('div', 'card');
     var dh = el('h2'); dh.appendChild(document.createTextNode('🛰️ Feishu Bridge'));
-    // 生命周期按钮按运行态由 renderDaemon 动态填充（运行中→重启/停止；未运行→启动）。
-    var dright = el('span', 'right'); dright.id = 'daemonActions';
-    dh.appendChild(dright);
     daemonCard.appendChild(dh);
     var daemonBody = el('div', 'note', '加载中…'); daemonBody.id = 'daemonBody';
     daemonCard.appendChild(daemonBody);
-    daemonCard.appendChild(el('hr', 'hr'));
-    var updateBody = el('div', 'note', '版本检查中…'); updateBody.id = 'updateBody';
-    daemonCard.appendChild(updateBody);
     root.appendChild(daemonCard);
     renderDaemon(daemonBody);
-    // 版本检查会在服务端 spawn「npm view」，不能跟着 5s 重渲每次都跑：有缓存就直接渲，
-    // 只在首次或缓存过期（30min）时才真查一次。手动「检查更新」按钮仍强制刷新。
-    if (lastUpdate) {
-      renderUpdate(updateBody, lastUpdate);
-      if (Date.now() - updateCheckedAt > 30 * 60 * 1000) loadUpdate(updateBody);
-    } else {
-      loadUpdate(updateBody);
-    }
 
     // 🤖 机器人（在 Feishu Bridge 卡下面，各自占满宽度）
     var botsCard = el('div', 'card');
@@ -1664,36 +1629,12 @@ ${UI_PURE_JS}
 
   function renderDaemon(box) {
     box.textContent = '';
-    // actions 容器在同卡片内（box 的父节点 = daemonCard）。用相对查找而非 document.getElementById：
-    // 仪表盘初次构建时整张卡片还没 append 进文档，getElementById 会扑空 → 生命周期按钮不画（曾导致
-    // 「启动/停止」按钮整体消失）。沿 box.parentNode 找即便脱离文档也命中。
-    var acts = (box && box.parentNode && box.parentNode.querySelector)
-      ? box.parentNode.querySelector('#daemonActions') : $('daemonActions');
-    if (acts) acts.textContent = '';
     var d = daemon;
     if (!d) { box.textContent = '加载中…'; return; }
-    if (!d.supported) {
-      box.appendChild(el('div', null, '⚠️ 本平台不支持后台服务'));
-      box.appendChild(el('div', 'note', '用 feishu-codex-bridge run 前台运行；重启请在终端 Ctrl+C 后重跑。'));
-      return;
-    }
-    // 生命周期按钮（运行中 → 重启 + 停止；未运行 → 启动）。「更新并重启」在下方版本区按需出现。
-    if (acts) {
-      if (d.running) {
-        var rb = el('button', 'btn sm', '🔁 重启'); rb.onclick = askRestart; acts.appendChild(rb);
-        var sb = el('button', 'btn sm danger', '⏹ 停止'); sb.style.marginLeft = '6px'; sb.onclick = askStop; acts.appendChild(sb);
-      } else {
-        var pb = el('button', 'btn sm primary', '▶️ 启动'); pb.onclick = askStart; acts.appendChild(pb);
-      }
-      // 检查更新入口：始终在（不管跑没跑）。没启动时能做的就是「启动」+「更新」。
-      var ub = el('button', 'btn sm', '🔄 检查更新'); ub.style.marginLeft = '6px';
-      ub.onclick = function () { var bx = $('updateBody'); if (bx) { bx.textContent = '版本检查中…'; loadUpdate(bx); } toast('🔄 正在检查更新…'); };
-      acts.appendChild(ub);
-    }
     var line = el('div', 'statline');
     if (d.running) line.appendChild(el('span', 'tag green', '✅ 运行中' + (d.pid ? ' · pid ' + d.pid : '')));
-    else line.appendChild(el('span', 'tag orange', d.installed ? '🟠 已安装但未在运行' : '🟠 未后台启动'));
-    line.appendChild(el('span', 'tag', svcLabel(d.platformName)));
+    else line.appendChild(el('span', 'tag orange', '🟠 前台 daemon 未运行'));
+    line.appendChild(el('span', 'tag', '前台运行'));
     box.appendChild(line);
     // 版本要醒目：大号数字独占一行（取代原来 statline 里那枚小 tag）。
     var ver = el('div'); ver.style.cssText = 'margin-top:12px;display:flex;align-items:baseline;gap:9px';
@@ -1704,147 +1645,8 @@ ${UI_PURE_JS}
     ver.appendChild(vlab);
     box.appendChild(ver);
     if (d.uptimeMs !== undefined && d.running) box.appendChild(el('div', 'note', '已运行 ' + fmtUptime(d.uptimeMs)));
-    if (d.selfHosted) box.appendChild(el('div', 'note', '⚠️ 手动运行，未注册为开机自启 —— 关机/登出后不会自动拉起。运行 feishu-codex-bridge install 注册为后台服务。'));
-    if (d.lastExit !== undefined && d.lastExit !== '0') box.appendChild(el('div', 'note', '上次退出码：' + d.lastExit));
-  }
-
-  function loadUpdate(box) {
-    if (updateChecking) return;          // 在途就不叠发：慢检查（npm view 最长 20s）期间 5s 重渲不重复 spawn
-    updateChecking = true;
-    updateCheckedAt = Date.now();        // 乐观占位：in-flight 期间 30min 边界不再被反复判真
-    fetch('/api/update/check').then(function (r) { return r.json(); })
-      .then(function (u) {
-        lastUpdate = u;
-        // 软失败：非 dev 却没拿到 latest（多半 registry 不可达/超时，服务端仍回 200），只缓存 ~2min
-        // 便自动复查，别把「查询失败」钉住 30min；拿到 latest 或 dev 模式才按完整 30min TTL。
-        updateCheckedAt = (u && (u.dev || u.latest)) ? Date.now() : Date.now() - 28 * 60 * 1000;
-        renderUpdate(box, u);
-      })
-      .catch(function () { box.textContent = '⚠️ 版本检查失败（网络或 npm registry）'; })
-      .then(function () { updateChecking = false; });  // finally：无论成败都松闸
-  }
-  function renderUpdate(box, u) {
-    box.textContent = '';
-    if (u.dev) {
-      box.appendChild(el('div', null, '🧩 源码开发模式（仓库内有 .git）'));
-      box.appendChild(el('div', 'note', '当前 v' + u.current + '；升级请用 git pull && npm i（不走全局安装）。'));
-      return;
-    }
-    if (u.hasUpdate && u.latest) {
-      box.appendChild(el('div', null, '🆕 有新版 v' + u.latest + '（当前 v' + u.current + '）'));
-      var row = el('div', 'statline');
-      // updateInFlight 期间显示禁用的「更新中…」——即使卡片每 5s 重渲，按钮也保持禁用，
-      // 挡住重复提交（重复触发是并发绕过服务端更新锁的入口）。
-      var up = el('button', 'btn primary', updateInFlight ? '⏳ 更新中…' : ('⬆️ 更新并重启 · v' + u.latest));
-      if (updateInFlight) { up.disabled = true; }
-      else { up.onclick = function () { askUpdate(u.latest); }; }
-      row.appendChild(up);
-      row.appendChild(el('span', 'note', updateInFlight ? '安装中，完成后会自动重启…' : '默认只检测不自动升级；点上方按钮装最新版并自动重启。'));
-      box.appendChild(row);
-    } else {
-      box.appendChild(el('div', 'note', '✅ 已是最新版 v' + u.current + (u.latest ? '' : '（最新版查询失败，可稍后重试）')));
-    }
-  }
-  function askRestart() {
-    confirmDialog({
-      title: '🔁 重启 Feishu Bridge？',
-      lines: [
-        '重启期间所有群短暂无响应（通常数秒）。',
-        '正在进行的 codex 会话会被优雅关闭并在重启后可继续。',
-        '本机服务管理器会在旧实例退出后自动拉起新实例。',
-      ],
-      confirmLabel: '确认重启',
-      onConfirm: function () { postAction('/api/daemon/restart', '重启'); },
-    });
-  }
-  function askStart() {
-    confirmDialog({
-      title: '▶️ 启动 Feishu Bridge？',
-      lines: [
-        '将把 Feishu Bridge 注册为后台服务并拉起（开机自启、崩溃自动拉起）。',
-        '起来后本页会自动把你带进可写控制台 —— 端口在哪、要不要重开都不用你操心。',
-      ],
-      confirmLabel: '确认启动',
-      onConfirm: function () { postAction('/api/daemon/start', '启动'); },
-    });
-  }
-  function askStop() {
-    confirmDialog({
-      title: '⏹ 停止 Feishu Bridge？',
-      danger: true,
-      lines: [
-        '将停止 Feishu Bridge 并移除开机自启（与 CLI stop 一致）。',
-        '所有群将无响应，直到你重新「启动」或运行 feishu-codex-bridge start。',
-        '本控制台由 Feishu Bridge 提供 —— 停止后会断开连接（属正常，不是出错）。',
-      ],
-      confirmLabel: '确认停止',
-      onConfirm: function () { postAction('/api/daemon/stop', '停止'); },
-    });
-  }
-  function askUpdate(latest) {
-    confirmDialog({
-      title: '⬆️ 更新并重启到 v' + latest + '？',
-      lines: [
-        '将执行 npm i -g 安装最新版，完成后自动重启 Feishu Bridge 加载新代码。',
-        '重启期间所有群短暂无响应；正在进行的会话会被优雅关闭。',
-      ],
-      confirmLabel: '确认更新',
-      onConfirm: function () { postUpdate(latest); },
-    });
-  }
-  // 升级：POST 后轮询 /api/update/status，失败会明确报出来（否则 detached helper 的失败对
-  // 网页端完全静默、用户只看到「已发起」）；成功会重启 daemon → 连接短暂断开，由版本变更流
-  // 接管显示「已是最新版」。updateInFlight 兼作按钮 in-flight 闸，挡住重复点击。
-  function postUpdate(latest) {
-    if (updateInFlight) { toast('⏳ 升级已在进行中…'); return; }
-    updateInFlight = true;
-    var box = $('updateBody'); if (box && lastUpdate) renderUpdate(box, lastUpdate); // 立刻把按钮切成禁用的「更新中…」
-    fetch('/api/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-      .then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); })
-      .then(function (resp) {
-        if (resp.status !== 202) {
-          updateInFlight = false;
-          toast((resp.status === 501 ? '⏳ ' : '❌ ') + (resp.body.message || ('HTTP ' + resp.status)));
-          var b = $('updateBody'); if (b) loadUpdate(b);
-          return;
-        }
-        toast('✅ ' + (resp.body.message || '升级已发起'));
-        pollUpdateStatus(0, latest);
-      })
-      .catch(function () { updateInFlight = false; toast('❌ 请求失败'); });
-  }
-  function pollUpdateStatus(tries, latest) {
-    if (tries > 60) { updateInFlight = false; toast('⏳ 安装仍在后台进行，稍后刷新页面查看'); return; } // ~90s 兜底：别无限轮询
-    fetch('/api/update/status').then(function (r) { return r.json(); })
-      .then(function (s) {
-        if (!s || s.phase === 'installing' || s.phase === 'restarting') {
-          setTimeout(function () { pollUpdateStatus(tries + 1, latest); }, 1500);
-          return;
-        }
-        updateInFlight = false;
-        if (s.phase === 'error') {
-          toast('❌ 升级失败：' + (s.message || '未知错误'));
-          var box = $('updateBody'); if (box) loadUpdate(box); // 恢复可点的更新卡供重试
-        } else if (s.phase === 'done') {
-          toast('✅ 已更新到 v' + (s.to || latest || '') + '，正在重启…');
-          lastUpdate = null; updateCheckedAt = 0; // 作废缓存：重启后版本变更流会翻成「已是最新版」
-        }
-      })
-      .catch(function () {
-        // 拿不到状态：多半 daemon 正在重启（成功路径）→ 交给重连/版本变更流收尾。
-        updateInFlight = false;
-      });
-  }
-  // 202 = 已发起（detached helper 接管）；501 = 只读预览（无 daemon）。
-  function postAction(path, label) {
-    fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-      .then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); })
-      .then(function (resp) {
-        if (resp.status === 202) toast('✅ ' + (resp.body.message || (label + '已发起')));
-        else if (resp.status === 501) toast('⏳ ' + (resp.body.message || (label + '需要 Feishu Bridge 在跑（当前为只读预览）')));
-        else toast('❌ ' + (resp.body.message || ('HTTP ' + resp.status)));
-      })
-      .catch(function () { toast('❌ 请求失败'); });
+    box.appendChild(el('div', 'note', 'V2 不支持在此启动、停止、重启或更新服务。请在启动终端里 Ctrl+C 停止，再运行 vonvon daemon run。'));
+    box.appendChild(el('div', 'note', '更新请通过部署此运行时的来源获取新版本；随桌面应用提供的运行时请在桌面应用中更新。'));
   }
 
   // ── 多机器人聚合（总览：全局总览 + enabled 快速开关 + ➕；删除主入口在 bot Tab 头部）──
@@ -1886,7 +1688,7 @@ ${UI_PURE_JS}
       // 已启用 ≠ 已上线：加进活跃集了，但 Feishu Bridge 没在跑就不会真正连上。明确提示别误会。
       if (b.active && daemon && !daemon.running) {
         var warn = el('span', 'tag orange', '⚠️ Feishu Bridge 未运行');
-        warn.title = '已加入活跃集，但 Feishu Bridge 没在跑 —— 去仪表盘「启动」后这个机器人才真正上线。';
+        warn.title = '已加入活跃集。请在终端运行 vonvon daemon run 后查看机器人连接状态。';
         warn.style.marginRight = '8px';
         row.appendChild(warn);
       }
@@ -1911,21 +1713,8 @@ ${UI_PURE_JS}
         if (resp.status === 200) {
           toast('✅ ' + (resp.body.message || '已保存'));
           loadState();
-          // 改活跃集要重启 Feishu Bridge 才生效。daemon 在跑 → 弹窗确认，确认就帮用户
-          // 自动重启（postAction → /api/daemon/restart，detached helper 拉新实例），省去
-          // 终端 restart。daemon 没在跑（只读预览）就不弹——那种情况要 start 不是重启，
-          // 现有 toast 已引导。（注意：本文件整体在模板字符串里，注释/代码都禁用反引号。）
-          if (daemon && daemon.running) {
-            var who = '「' + (b.botName || b.name) + '」';
-            confirmDialog({
-              title: '🔄 立即重启 Feishu Bridge 让改动生效？',
-              lines: [
-                who + (enabling ? ' 已加入活跃集，重启后会被拉起上线。' : ' 已移出活跃集，重启后会停止运行。'),
-                '重启约数秒，期间所有在线机器人的长连接会短暂断开并自动重连。',
-              ],
-              confirmLabel: '立即重启',
-              onConfirm: function () { postAction('/api/daemon/restart', '重启'); },
-            });
+          if (resp.body.activation === 'restartRequired') {
+            toast('请在启动终端里 Ctrl+C 后重新运行 vonvon daemon run，让改动生效。');
           }
         } else toast('❌ ' + (resp.body.message || ('HTTP ' + resp.status)));
       })
@@ -2501,26 +2290,17 @@ ${UI_PURE_JS}
   var wizQrSessionId = null;
   var wizCountdown = null;  // 二维码过期倒计时
   var wizAutoEnabled = false;    // 新 bot 是否已自动加入活跃集（一次性）
-  var wizRestartPrompted = false; // 完成步是否已弹过「重启拉起」确认（一次性）
 
   // 添加机器人是写操作：Feishu Bridge 没在跑时控制台为只读，不能加（与「没启动只读」一致）。
   // 没在跑就引导先启动，而不是打开向导让用户扫码后再被 501 挡回。
   function tryAddBot() {
     if (daemon && daemon.running) { openWizard(); return; }
-    confirmDialog({
-      title: '需要先启动 Feishu Bridge',
-      lines: [
-        'Feishu Bridge 未在运行时控制台为只读，无法添加机器人。',
-        '先启动 Feishu Bridge，再回来添加。',
-      ],
-      confirmLabel: '立即启动',
-      onConfirm: function () { postAction('/api/daemon/start', '启动'); },
-    });
+    toast('请先在终端运行 vonvon daemon run，再添加机器人。');
   }
 
   function openWizard() {
     wizStep = 1; wizBotId = null; wizSetup = null;
-    wizAutoEnabled = false; wizRestartPrompted = false;
+    wizAutoEnabled = false;
     stopWizPoll(); stopWizQr();
     $('wizMask').classList.add('open');
     renderWizard();
@@ -2739,8 +2519,6 @@ ${UI_PURE_JS}
         w.appendChild(checkItem('⚠️', '缺 ' + miss.length + ' 项必需权限', miss.join('、'), grant));
       }
     }
-    // 「加入活跃集 + 拉起上线」全程静默：新 bot 已在 pollWizSetup 自动加入活跃集，真正拉起
-    // 靠最后一步「完成」弹窗确认重启——这里不再显示「待拉起上线」之类的中间态项。
     appendEventDiagnosis(w, s.event, s.eventConfigUrl);
     w.appendChild(wizChecklistActions());
   }
@@ -2778,22 +2556,15 @@ ${UI_PURE_JS}
     w.appendChild(el('h3', null, '🎉 接入完成'));
     w.appendChild(wizStepBar(3));
     var who = (wizSetup && wizSetup.botName) || wizBotId || '';
-    // 到这一步只剩一件事：重启 Feishu Bridge 让新 bot 上线。不再堆「新建项目/拉群/@」那套
-    // 引导（那会让人以为得先做完才能继续）。重启入口**只此一处**：主按钮「重启使其上线」；
-    // 想晚点再说就点「稍后再重启」。
-    w.appendChild(el('div', 'note', '机器人「' + who + '」已加入活跃集。最后一步：重启 Feishu Bridge 让它上线（约数秒，其它在线机器人会短暂断连后自动重连）。'));
+    w.appendChild(el('div', 'note', '机器人「' + who + '」已完成配置。请到管理页查看连接状态；若提示需要重启，请在启动终端里 Ctrl+C 后重新运行 vonvon daemon run。'));
     var openRow = el('div'); openRow.style.margin = '4px 0 12px';
     openRow.appendChild(openBotBtn(wizBotId, wizSetup && wizSetup.tenant, '🔗 在飞书中打开机器人'));
     w.appendChild(openRow);
     var gotoBot = function () { var id = wizBotId; closeWizard(); if (id) go({ tab: 'bot', botId: id }); };
     var actions = el('div', 'actions');
-    var later = el('button', 'btn', '稍后再重启');
-    later.onclick = gotoBot;
-    actions.appendChild(later);
-    actions.appendChild(el('div', 'grow'));
-    var restart = el('button', 'btn primary', '🔁 重启使其上线');
-    restart.onclick = function () { postAction('/api/daemon/restart', '重启'); gotoBot(); };
-    actions.appendChild(restart);
+    var manage = el('button', 'btn primary', '查看机器人状态');
+    manage.onclick = gotoBot;
+    actions.appendChild(manage);
     w.appendChild(actions);
   }
 

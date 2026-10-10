@@ -111,8 +111,8 @@ describe('V2 foreground status regression', () => {
   });
 });
 
-describe('AdminService · getDaemonStatus（聚合 service 状态，mock service 模块）', () => {
-  it('daemon 进程内：注入 daemonStartedAt → uptimeMs 有值、supported=true', async () => {
+describe('AdminService · getDaemonStatus（前台进程状态，不查询旧 service 模块）', () => {
+  it('daemon 进程内：注入 daemonStartedAt → uptimeMs 有值、supported=false', async () => {
     statusMock.mockResolvedValue({
       platformName: 'launchd (macOS)',
       installed: true,
@@ -126,10 +126,11 @@ describe('AdminService · getDaemonStatus（聚合 service 状态，mock service
     });
     const svc = createAdminService({ daemonStartedAt: Date.now() - 5000 });
     const d = await svc.getDaemonStatus();
-    expect(d.installed).toBe(true);
+    expect(d.installed).toBe(false);
     expect(d.running).toBe(true);
-    expect(d.pid).toBe(999);
-    expect(d.supported).toBe(true);
+    expect(d.pid).toBe(process.pid);
+    expect(statusMock).not.toHaveBeenCalled();
+    expect(d.supported).toBe(false);
     expect(d.uptimeMs).toBeGreaterThanOrEqual(5000);
   });
 

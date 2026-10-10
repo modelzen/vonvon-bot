@@ -222,126 +222,25 @@ export function buildDmMenuCard(opts: { webConsoleUrl?: string; version?: string
   );
 }
 
-/** State for the version-update card across its phases (check → install → done). */
-export interface UpdateCardState {
-  phase: 'checking' | 'checked' | 'updating' | 'done' | 'error';
-  current?: string;
-  latest?: string | null;
-  /** checked phase: handler-computed `isNewer(latest, current)` */
-  hasUpdate?: boolean;
-  /** checked phase: running from a git checkout — steer to git pull, not npm */
-  dev?: boolean;
-  /** Bundled Core updates through its owning desktop app. */
-  distribution?: 'bundled' | 'other';
-  /** done/updating/error phase: version we updated from */
-  from?: string;
-  /** done phase: version we updated to */
-  to?: string;
-  /** done phase: whether the background daemon will be restarted now */
-  willRestart?: boolean;
-  /** error phase: tail of npm output */
-  message?: string;
-  desktopRelease?: DesktopRelease | null;
-}
-
 const backToMenu = () => actions([button('⬅️ 菜单', { a: DM.menu })]);
 
-/**
- * Version-update console card. A single builder renders every phase so the same
- * card updates in place: 查询中 → 查询结果(有/无更新/源码态) → 更新中 → 完成/失败.
- * The 「立即更新」button (checked + hasUpdate) carries DM.updateDo.
- */
-export function buildUpdateCard(state: UpdateCardState): CardObject {
-  switch (state.phase) {
-    case 'checking':
-      return card([md('⏳ 正在查询最新版本…'), note('从 npm registry 拉取版本信息，请稍候。')], {
-        header: { title: '⬆️ 版本更新', template: 'turquoise' },
-      });
-
-    case 'checked': {
-      const cur = state.current ?? '?';
-      if (state.distribution === 'bundled') {
-        return card(
-          [md(`当前版本：**v${cur}**`), note('此 Bridge 随 Vonvon Bridge 桌面应用提供，请在桌面应用中更新。'), ...desktopReleaseElements(state.desktopRelease), backToMenu()],
-          { header: { title: '⬆️ 版本更新', template: 'blue' } },
-        );
-      }
-      if (!state.latest) {
-        return card(
-          [
-            md(`当前版本：**v${cur}**`),
-            md('⚠️ 查不到最新版本（网络或 npm registry 问题）。'),
-            ...desktopReleaseElements(state.desktopRelease),
-            actions([button('🔄 重试', { a: DM.update }), button('⬅️ 菜单', { a: DM.menu })]),
-          ],
-          { header: { title: '⬆️ 版本更新', template: 'red' } },
-        );
-      }
-      if (!state.hasUpdate) {
-        return card(
-          [md(`✅ 已是最新版本：**v${cur}**`), ...desktopReleaseElements(state.desktopRelease), backToMenu()],
-          { header: { title: '⬆️ 版本更新', template: 'green' } },
-        );
-      }
-      const head = [
-        md(`发现新版本 🎉`),
-        note(`当前 v${cur}  →  最新 v${state.latest}`),
-      ];
-      if (state.dev) {
-        return card(
-          [
-            ...head,
-            md('检测到**源码开发模式**（仓库内有 .git）。请在终端用 `git pull && npm i` 更新，而不是全局安装。'),
-            ...desktopReleaseElements(state.desktopRelease),
-            backToMenu(),
-          ],
-          { header: { title: '⬆️ 版本更新', template: 'orange' } },
-        );
-      }
-      return card(
-        [
-          ...head,
-          note('点「立即更新」会执行 `npm i -g` 并自动重启后台服务（约数十秒）。'),
-          ...desktopReleaseElements(state.desktopRelease),
-          actions([
-            button('⬆️ 立即更新', { a: DM.updateDo }, 'primary'),
-            button('⬅️ 菜单', { a: DM.menu }),
-          ]),
-        ],
-        { header: { title: '⬆️ 版本更新', template: 'blue' } },
-      );
-    }
-
-    case 'updating':
-      return card(
-        [
-          md(`⏳ 正在更新到最新版…`),
-          note(`从 v${state.from ?? '?'} 升级中，下载安装约数十秒，请勿重复点击。`),
-        ],
-        { header: { title: '⬆️ 版本更新', template: 'turquoise' } },
-      );
-
-    case 'done': {
-      const tail = state.willRestart
-        ? note('正在重启后台服务以生效 —— 重启期间本卡片停止更新；稍后发我任意消息可重开管理台。')
-        : note('前台模式：请在终端手动重启 `run` 进程使新版本生效。');
-      return card(
-        [md(`✅ 已更新 **v${state.from ?? '?'} → v${state.to ?? '?'}**`), tail, ...desktopReleaseElements(state.desktopRelease)],
-        { header: { title: '⬆️ 版本更新', template: 'green' } },
-      );
-    }
-
-    case 'error':
-      return card(
-        [
-          md('❌ **更新失败**'),
-          state.message ? note(state.message) : note('npm 安装未成功。'),
-          md('可在终端手动执行：`npm i -g ' + '@modelzen/feishu-codex-bridge@latest`（必要时加 sudo）。'),
-          actions([button('🔄 重试', { a: DM.update }), button('⬅️ 菜单', { a: DM.menu })]),
-        ],
-        { header: { title: '⬆️ 版本更新', template: 'red' } },
-      );
-  }
+export function buildForegroundUpdateCard(info: {
+  current: string;
+  distribution?: 'bundled' | 'other';
+  desktopRelease?: DesktopRelease | null;
+}): CardObject {
+  return card(
+    [
+      md(`当前版本：**v${info.current}**`),
+      note('V2 前台 daemon 不支持在此更新。'),
+      note(info.distribution === 'bundled'
+        ? '此运行时随桌面应用提供，请在桌面应用中更新。'
+        : '请通过部署此运行时的来源获取新版本，再在启动终端停止旧进程并运行 `vonvon daemon run`。'),
+      ...desktopReleaseElements(info.desktopRelease),
+      backToMenu(),
+    ],
+    { header: { title: '⬆️ 更新说明', template: 'blue' } },
+  );
 }
 
 /**
@@ -354,51 +253,21 @@ export function buildReconnectCard(conn: string): CardObject {
   return card(
     [
       md(`长连接状态：**${conn}**`),
-      note('SDK 会自动重连；若长期断开，请在终端重跑 `feishu-codex-bridge run`（前台）或 `feishu-codex-bridge restart`（后台守护）。'),
+      note('SDK 会自动重连；若长期断开，请在启动终端里 Ctrl+C 后重新运行 `vonvon daemon run`。'),
       backToMenu(),
     ],
     { header: { title: '🔄 长连接', template } },
   );
 }
 
-/**
- * 重启确认卡（🔁 重启）：重启后台服务会断开所有会话、重新拉起进程（约数秒），是破坏性
- * 操作，故仿「删除项目」走两步确认。顺带展示当前长连接状态供判断——真断线时重启才是唯一
- * 有效手段（SDK 自动重连之外无可靠 force-reconnect），比旧的只读「重连」卡更有用。
- */
-export function buildRestartConfirmCard(conn: string): CardObject {
+export function buildForegroundRestartCard(): CardObject {
   return card(
     [
-      md(`长连接状态：**${conn}**`),
-      note('重启会**断开当前所有会话**并重新拉起后台服务（约数秒，其间机器人短暂离线），完成后自动恢复。仅在长期断连或异常时才需要。'),
-      actions([
-        button('🔁 确认重启', { a: DM.restartDo }, 'danger'),
-        button('取消', { a: DM.menu }),
-      ]),
+      md('当前为**前台运行**。'),
+      note('V2 不支持在此重启。请在启动终端里 Ctrl+C 后重新运行 `vonvon daemon run`。重启期间机器人会离线。'),
+      backToMenu(),
     ],
-    { header: { title: '🔁 重启后台服务', template: 'orange' } },
-  );
-}
-
-/**
- * 「正在重启 / 前台运行」提示卡。restartDaemon 会替换掉当前 daemon（回调就跑在它里面），
- * 之后没有进程再更新这张卡，所以先把它落地再触发替换。`foreground`＝没有后台守护服务
- * 可重启（典型：前台 `run`），改为引导去终端，不做无效的 service.restart。
- */
-export function buildRestartingCard(mode: 'restarting' | 'foreground' = 'restarting'): CardObject {
-  if (mode === 'foreground') {
-    return card(
-      [
-        md('ℹ️ 当前为**前台运行**（非后台守护服务）。'),
-        note('V2 不支持服务重启。请在启动终端里 Ctrl+C 后重新运行 `vonvon daemon run`。'),
-        backToMenu(),
-      ],
-      { header: { title: '🔁 重启后台服务', template: 'orange' } },
-    );
-  }
-  return card(
-    [md('🔁 正在重启后台服务…'), note('机器人将短暂离线数秒后自动恢复；本卡不再更新。')],
-    { header: { title: '🔁 重启后台服务', template: 'orange' } },
+    { header: { title: '🔁 重启说明', template: 'orange' } },
   );
 }
 
