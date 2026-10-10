@@ -35,7 +35,9 @@ describe('OS service foreground entry', () => {
     const unit = buildUnit({ cliBinPath: bin });
     const line = unit.match(/^ExecStart=(.*)$/m)?.[1];
     expect(line).toBeDefined();
-    const args = [...line!.matchAll(/"([^"]+)"|\b(daemon|run)\b/g)].map((match) => match[1] ?? match[2]!);
+    const args = [...line!.matchAll(/"((?:\\.|[^"\\])*)"|\b(daemon|run)\b/g)].map((match) =>
+      match[1]?.replace(/\\([\\"])/g, '$1').replace(/%%/g, '%') ?? match[2]!,
+    );
     assertPackagedCommand(args);
   });
 

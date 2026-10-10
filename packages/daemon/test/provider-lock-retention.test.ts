@@ -6,13 +6,14 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { setTimeout as settleIO } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import type { AgentEvent, AgentInput, AgentThread } from '../src/agent/types';
 import type { AppConfig } from '../src/config/schema';
 
 const fixture = vi.hoisted(() => ({
   spawn: vi.fn(), exit: vi.fn(), ready: false,
+  job: { identity: Symbol('owned-job'), proof: undefined as symbol | undefined, stop: vi.fn(), dispose: vi.fn() },
   on: vi.fn((..._args: unknown[]) => {}),
   connect: vi.fn(async () => {}), disconnect: vi.fn(async () => {}),
   send: vi.fn(async (..._args: unknown[]) => ({})),
@@ -35,6 +36,13 @@ vi.mock('../src/platform/spawn', async original => ({
   ...await original<object>(), spawnProcess: fixture.spawn,
   spawnProcessSync: () => { throw new Error('Synchronous spawn forbidden in provider retention fixture'); },
 }));
+vi.mock('../src/agent/codex-appserver/windows-job', () => ({ WindowsCodexJob: class {
+  executable = '/fixture/no-powershell';
+  launch() { return []; }
+  requestStop() { fixture.job.stop(); }
+  get verifiedEmpty() { return fixture.job.proof === fixture.job.identity; }
+  dispose() { fixture.job.dispose(); }
+} }));
 vi.mock('../src/core/logger', () => ({ log: fixture.log, withTrace: (_context: unknown, action: () => unknown) => action() }));
 vi.mock('../src/agent', async original => ({ ...await original<object>(), createBackend: () => fixture.backend }));
 vi.mock('../src/agent/codex-appserver/locate', () => ({ resolveCodexBin: () => '/fixture/no-provider' }));
@@ -124,11 +132,11 @@ async function until(predicate: () => boolean, description: string) {
   throw new Error(`Fixture did not reach ${description}`);
 }
 
-function observeExit() {
+function observeExit(code = 0) {
   if (directExited) return;
   directExited = true;
-  child.emit('exit', 0, null);
-  child.emit('close', 0, null);
+  child.emit('exit', code, null);
+  child.emit('close', code, null);
 }
 
 async function mutexState() {
@@ -146,18 +154,24 @@ async function snapshot(label: string) {
   const state = {
     label, botLock: existsSync(paths.processesFile), daemonPid: existsSync(join(paths.appDir, 'daemon.pid')),
     hostMutex: await mutexState(), cliExits: fixture.exit.mock.calls.map(([code]) => code),
-    apiCalls: [...fixture.apiCalls], group, directExited,
+    apiCalls: [...fixture.apiCalls], group, directExited, jobProof: fixture.job.proof === fixture.job.identity,
     unconfirmedReports: fixture.log.warn.mock.calls.filter(([scope, event]) => scope === 'daemon-shutdown' && event === 'owned_work_unconfirmed').length,
   };
   appendFileSync(join(auditDir, 'observations.jsonl'), JSON.stringify({ root, ...state }) + '\n');
   return state;
 }
 
+describe.each([
+  { platform: 'darwin', model: 'POSIX forced process-group cleanup', exitCode: 0 },
+  { platform: 'win32', model: 'Windows unexpected supervisor exit', exitCode: 17 },
+] as const)('$model', ({ platform, exitCode }) => {
 beforeEach(async () => {
   vi.resetModules();
   vi.clearAllMocks();
   vi.useFakeTimers();
   fixture.ready = false;
+  fixture.job.identity = Symbol('owned-job');
+  fixture.job.proof = undefined;
   fixture.apiCalls.length = 0;
   group = 'present'; directExited = false; signals = []; turn = gate();
   root = realpathSync(mkdtempSync(join(tmpdir(), 'vonvon-provider-lock-')));
@@ -172,6 +186,7 @@ beforeEach(async () => {
   appProcess = new EventEmitter();
   const runtimeProcess = Object.create(nativeProcess);
   Object.defineProperties(runtimeProcess, {
+    platform: { value: platform },
     send: { value: undefined },
     argv: { value: [nativeProcess.execPath, '/fixture/vonvon', 'daemon', 'run', '--bot', 'provider-lock-fixture', '--port', '0'] },
     exit: { value: fixture.exit },
@@ -197,7 +212,7 @@ beforeEach(async () => {
     pid: { value: shellPid },
     stdin: { value: new PassThrough() }, stdout: { value: new PassThrough() }, stderr: { value: new PassThrough() },
   });
-  child.kill = vi.fn(() => { throw new Error('Direct child signal is not the POSIX ownership boundary'); });
+  child.kill = vi.fn(() => { throw new Error('Direct child signal is not the process-tree ownership boundary'); });
   fixture.spawn.mockReset().mockReturnValueOnce(child).mockImplementation(() => { throw new Error('Unexpected provider birth'); });
   ({ paths } = await import('../src/config/paths'));
   dataAccess = await import('../src/config/data-access');
@@ -221,7 +236,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  group = 'missing'; observeExit(); turn.release();
+  group = 'missing'; fixture.job.proof = fixture.job.identity; observeExit(); turn.release();
   appProcess.emit('SIGTERM');
   await vi.advanceTimersByTimeAsync(2000);
   if (fixture.ready) await until(() => fixture.exit.mock.calls.length > 0, 'CLI completion during cleanup');
@@ -231,7 +246,7 @@ afterEach(async () => {
   vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs();
 });
 
-it('retains all three real locks until provider group and direct exit are confirmed, then reaches the real CLI exit-1 consumer', async () => {
+it('retains all three real locks until tree death and direct exit are confirmed, then reaches the real CLI exit-1 consumer', async () => {
   expect(process.send).toBeUndefined();
   await import('../src/cli/index');
   await until(() => fixture.ready || fixture.exit.mock.calls.length > 0, 'inline daemon readiness');
@@ -265,17 +280,31 @@ it('retains all three real locks until provider group and direct exit are confir
   const at120 = await snapshot('uncertain-at-120s');
   expect.soft(at120).toMatchObject({ botLock: true, daemonPid: true, hostMutex: 'held', cliExits: [], apiCalls: ['drain'] });
   expect.soft(fixture.log.warn).toHaveBeenCalledWith('daemon-shutdown', 'owned_work_unconfirmed', { pid: process.pid, pids: [shellPid] });
-  expect.soft(signals.some(({ pid, signal }) => pid === -shellPid && signal === 'SIGKILL')).toBe(true);
+  if (platform === 'win32') {
+    expect(fixture.job.stop.mock.calls.length).toBeGreaterThanOrEqual(115);
+    expect(fixture.job.dispose).not.toHaveBeenCalled();
+    expect(signals.every(({ pid, signal }) => pid === nativeProcess.pid && signal === 0)).toBe(true);
+    fixture.job.proof = Symbol('unrelated-job');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await snapshot('unrelated-job-proof')).toMatchObject({ botLock: true, daemonPid: true, hostMutex: 'held', cliExits: [], jobProof: false });
+    fixture.job.proof = fixture.job.identity;
+  } else {
+    expect.soft(signals.some(({ pid, signal }) => pid === -shellPid && signal === 'SIGKILL')).toBe(true);
+  }
 
   group = 'missing';
   await vi.advanceTimersByTimeAsync(1000);
   await settleIO(30);
-  expect.soft(await snapshot('group-gone-direct-exit-unobserved')).toMatchObject({ botLock: true, daemonPid: true, hostMutex: 'held', cliExits: [] });
-  observeExit();
+  expect.soft(await snapshot('tree-death-proven-direct-exit-unobserved')).toMatchObject({ botLock: true, daemonPid: true, hostMutex: 'held', cliExits: [] });
+  observeExit(exitCode);
   await vi.advanceTimersByTimeAsync(1000);
   await until(() => fixture.exit.mock.calls.length > 0, 'actual CLI exit consumer');
   expect.soft(await snapshot('confirmed-death')).toMatchObject({ botLock: false, daemonPid: false, hostMutex: 'released', cliExits: [1], apiCalls: ['drain', 'release'] });
+  if (platform === 'win32') expect(fixture.job.dispose).toHaveBeenCalledOnce();
+  else expect(fixture.job.stop).not.toHaveBeenCalled();
   expect(fixture.disconnect).toHaveBeenCalledOnce();
   expect(fixture.spawn).toHaveBeenCalledOnce();
   expect(signals.every(({ pid, signal }) => pid === -shellPid || (pid === nativeProcess.pid && signal === 0))).toBe(true);
+});
+
 });

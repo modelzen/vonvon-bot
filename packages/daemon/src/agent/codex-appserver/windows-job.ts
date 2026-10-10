@@ -39,7 +39,7 @@ public static class CodexJob {
   [DllImport("kernel32.dll")] static extern uint ResumeThread(IntPtr thread);
   [DllImport("kernel32.dll")] static extern uint WaitForSingleObject(IntPtr handle,uint ms);
   [DllImport("kernel32.dll")] static extern bool GetExitCodeProcess(IntPtr process,out uint code);
-  [DllImport("kernel32.dll")] static extern bool TerminateProcess(IntPtr process,uint code);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool TerminateProcess(IntPtr process,uint code);
   [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
   [DllImport("kernel32.dll")] static extern IntPtr GetStdHandle(int id);
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool SetHandleInformation(IntPtr handle,uint mask,uint flags);
@@ -55,7 +55,7 @@ public static class CodexJob {
   public static int Run(string name,string executable,string command,string proof) {
     IntPtr job=IntPtr.Zero; ProcessInfo child=new ProcessInfo();
     try {
-      if(File.Exists(proof+".stop")) { File.WriteAllText(proof,name); return 1; }
+      if(File.Exists(proof+".stop")) { File.WriteAllText(proof,name); return 0; }
       job=CreateJobObject(IntPtr.Zero,name); Check(job!=IntPtr.Zero);
       var limits=new Extended(); limits.basic.flags=0x2000;
       Check(SetInformationJobObject(job,9,ref limits,(uint)Marshal.SizeOf(typeof(Extended))));
@@ -65,12 +65,30 @@ public static class CodexJob {
       Check(CreateProcess(executable,new StringBuilder(command),IntPtr.Zero,IntPtr.Zero,true,4,IntPtr.Zero,null,ref startup,out child));
       Check(AssignProcessToJobObject(job,child.process));
       Check(ResumeThread(child.thread)!=0xffffffff);
+      uint code;
       while(!Empty(job)) {
-        if(File.Exists(proof+".stop")) { Check(TerminateJobObject(job,1)); Drain(job); break; }
+        if(File.Exists(proof+".stop")) {
+          const uint stopMarker=0xe0560001;
+          bool terminated=TerminateProcess(child.process,stopMarker);
+          if(!terminated) {
+            int error=Marshal.GetLastWin32Error();
+            if(error!=5 || WaitForSingleObject(child.process,0)!=0) throw new Win32Exception(error);
+          }
+          // Observe the wrapper before Job termination can replace its exit code.
+          Check(WaitForSingleObject(child.process,1000)==0);
+          Check(GetExitCodeProcess(child.process,out code));
+          if(terminated) {
+            if(code!=stopMarker) throw new Exception("Unexpected terminated wrapper exit code");
+            code=0;
+          } else if(code==0 && !Empty(job)) code=252;
+          Check(TerminateJobObject(job,1)); Drain(job);
+          File.WriteAllText(proof,name);
+          return unchecked((int)code);
+        }
         Thread.Sleep(10);
       }
       Check(WaitForSingleObject(child.process,1000)==0);
-      uint code; Check(GetExitCodeProcess(child.process,out code));
+      Check(GetExitCodeProcess(child.process,out code));
       File.WriteAllText(proof,name);
       return unchecked((int)code);
     } catch {

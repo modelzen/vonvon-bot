@@ -12,7 +12,7 @@ describe('local WebSocket handshake', () => {
       await client.ready();
       expect(client.frames).toHaveLength(1);
       expect(client.socket.extensions).toBe('');
-      expect((await stat(join(fixture.home, 'local-credential'))).mode & 0o777).toBe(0o600);
+      if (process.platform !== 'win32') expect((await stat(join(fixture.home, 'local-credential'))).mode & 0o777).toBe(0o600);
       expect((await readFile(join(fixture.home, 'local-credential'), 'utf8')).trim()).toHaveLength(64);
       await client.close();
     } finally { await fixture.close(); }

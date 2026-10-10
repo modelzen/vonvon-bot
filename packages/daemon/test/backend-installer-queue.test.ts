@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAdminService } from '../src/admin/service';
 import { paths } from '../src/config/paths';
@@ -27,11 +27,11 @@ vi.mock('node:fs/promises', async importOriginal => {
   const fs = await importOriginal<typeof import('node:fs/promises')>();
   return { ...fs,
     mkdir: async (...args: Parameters<typeof fs.mkdir>) => {
-      if (String(args[0]).endsWith('/prefix')) { controls.preparations++; await controls.prepare?.(); }
+      if (String(args[0]).endsWith(`${sep}prefix`)) { controls.preparations++; await controls.prepare?.(); }
       return fs.mkdir(...args);
     },
     rm: async (...args: Parameters<typeof fs.rm>) => {
-      if (String(args[0]).includes('/node_modules/')) await controls.rollback?.();
+      if (String(args[0]).includes(`${sep}node_modules${sep}`)) await controls.rollback?.();
       return fs.rm(...args);
     },
   };
