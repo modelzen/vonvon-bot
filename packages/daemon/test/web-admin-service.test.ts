@@ -45,7 +45,6 @@ vi.mock('../src/config/paths', async () => {
       appDir,
       cacheDir: appDir,
       botsFile: join(appDir, 'bots.json'),
-      webConsoleFile: join(appDir, 'web-console.json'),
       get configFile(): string {
         return join(currentBotDir, 'config.json');
       },

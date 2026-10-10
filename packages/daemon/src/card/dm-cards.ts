@@ -29,7 +29,7 @@ import { catalogById } from '../agent/catalog';
 import type { SessionRecord } from '../bot/session-store';
 import { labelScope } from '../config/scopes';
 import { summarizeEventDiagnosis, type EventDiagnosis } from '../utils/event-diagnosis';
-import { actions, actionsFixed, button, card, form, hr, input, linkButton, md, note, selectMenu, splitRow, submitButton, type CardElement, type CardObject, type SelectOption } from './cards';
+import { actions, actionsFixed, button, card, form, hr, input, linkButton, md, note, selectMenu, submitButton, type CardElement, type CardObject, type SelectOption } from './cards';
 import { reasoningEffortLabel, relativeTime } from './command-cards';
 import type { DesktopRelease } from '../service/desktop-release';
 
@@ -161,22 +161,14 @@ function desktopReleaseElements(release?: DesktopRelease | null): CardElement[] 
 /**
  * The top-level management menu.
  *
- * @param opts.webConsoleUrl loopback URL of the running daemon's Web console
- *   (from {@link webConsoleUrl} in web/discovery), or undefined when the console
- *   isn't up — in which case the 🌐 网页控制台 row is omitted. The button just
- *   opens this 127.0.0.1 URL on any device; it only actually loads on the machine
- *   running bridge (the caption says so) — Feishu can't tell whether the clicking
- *   device is that host, so we don't try to. The URL embeds a token but only ever
- *   points at 127.0.0.1, is shown to an already-admin-gated operator on a
- *   non-forwardable card, matching the console's same-trust-domain model.
  * @param opts.version the bridge's own version (from bridgeVersion()); shown as a
  *   small badge in the header. Omitted → no badge.
  *
  * dm-cards stays a pure renderer — all IO (discovery file / version) lives in
  * the caller.
  */
-export function buildDmMenuCard(opts: { webConsoleUrl?: string; version?: string; desktopRelease?: DesktopRelease | null } = {}): CardObject {
-  const { webConsoleUrl, version, desktopRelease } = opts;
+export function buildDmMenuCard(opts: { version?: string; desktopRelease?: DesktopRelease | null } = {}): CardObject {
+  const { version, desktopRelease } = opts;
   return card(
     [
       ...desktopReleaseElements(desktopRelease),
@@ -194,19 +186,6 @@ export function buildDmMenuCard(opts: { webConsoleUrl?: string; version?: string
         button('🔁 重启', { a: DM.restart }),
         button('⬆️ 更新', { a: DM.update }),
       ], MENU_BTN_W_BOT),
-      // 🌐 网页控制台：刻意低调——小号按钮靠左 + 右侧灰字说明；仅在 daemon 本机控制台
-      // 在跑（webConsoleUrl 有值）时出现。按钮直接开 127.0.0.1 控制台——只有运行 bridge
-      // 的这台机器打得开；其它电脑/手机点了会打不开（本机回环地址，飞书也分不出点击设备
-      // 是不是本机），右侧文字已说明，按用户决定不另做处理。
-      ...(webConsoleUrl
-        ? [
-            hr(),
-            splitRow(
-              linkButton('🌐 网页控制台', webConsoleUrl, 'default', 'small'),
-              note('仅在**运行 bridge 的这台电脑**上能打开（本机地址）。'),
-            ),
-          ]
-        : []),
     ],
     {
       header: {
@@ -214,9 +193,6 @@ export function buildDmMenuCard(opts: { webConsoleUrl?: string; version?: string
         template: 'blue',
         textTags: version ? [{ text: `v${version}`, color: 'green' }] : undefined,
       },
-      // 这张卡可能内嵌带 token 的本机控制台直达链接（pc_url），且按钮全是管理员专属的
-      // dm.* 回调——转发出去既无意义、又会把 token 链接一并带走。loopback 已使转发副本
-      // 在他人设备上不可用，这里再加一道：禁止转发。
       forward: false,
     },
   );

@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -43,37 +44,52 @@ function launch(home: string, root: string, args: string[]) {
   const exited = new Promise<number | null>((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
   return { child, exited, output: () => output };
 }
-it('exposes foreground run and refuses inherited service, migration and lifecycle commands', async () => {
+it('exposes daemon lifecycle commands while status and logs leave a missing home untouched', async () => {
   const f = await fixture();
   for (const args of [['--help'], ['daemon', '--help']]) {
     const p = launch(f.home, f.root, args); expect(await p.exited).toBe(0);
-    expect(p.output()).not.toMatch(/__daemon-control|__desktop-service|migrate|restart|stop|status/);
+    expect(p.output()).not.toMatch(/__daemon-control|__desktop-service|migrate|restart/);
   }
-  for (const args of [['start'], ['run'], ['__daemon-control', 'stop'], ['data', 'migrate'], ['daemon', 'start']]) {
+  const service = launch(f.home, f.root, ['service', '--help']);
+  expect(await service.exited).toBe(0);
+  expect(service.output()).toContain('install');
+  expect(service.output()).toContain('uninstall');
+  for (const args of [['start'], ['run'], ['__daemon-control', 'stop'], ['data', 'migrate']]) {
     const p = launch(f.home, f.root, args); expect(await p.exited).toBe(1);
+  }
+  for (const args of [['daemon', 'status', '--json'], ['daemon', 'logs']]) {
+    const p = launch(f.home, f.root, args); expect(await p.exited).toBe(0);
   }
   expect(await readdir(f.home)).toEqual([]); expect(await readdir(f.root)).toEqual([]);
 }, 20_000);
-it('starts without bots, refuses duplicate ownership, disables service actions and shuts down within the isolated root', async () => {
+it('starts without bots, refuses duplicate ownership and releases PID lease on shutdown', async () => {
   const f = await fixture();
   const p = launch(f.home, f.root, ['daemon', 'run']);
   await expect.poll(p.output, { timeout: 15_000 }).toContain('vonvon daemon ready');
-  const record = z.object({ port: z.number(), token: z.string(), pid: z.number() }).parse(JSON.parse(await readFile(join(f.root, 'web-console.json'), 'utf8')));
-  expect(record.pid).toBe(p.child.pid); expect(p.output()).not.toContain(record.token);
-  for (const action of ['/api/daemon/restart', '/api/daemon/stop', '/api/daemon/start', '/api/update']) {
-    const response = await fetch(`http://127.0.0.1:${record.port}${action}`, { method: 'POST', headers: { Authorization: `Bearer ${record.token}`, 'Content-Type': 'application/json' }, body: '{}' });
-    expect(response.status).toBe(501);
-    expect(await response.json()).toMatchObject({ error: 'not_wired_yet' });
-  }
+  const record = z.object({ listen: z.string(), pid: z.number(), startedAt: z.string() }).parse(JSON.parse(await readFile(join(f.root, 'daemon.pid'), 'utf8')));
+  expect(record.pid).toBe(p.child.pid); expect(record.listen).toMatch(/^127\.0\.0\.1:\d+$/);
   const second = launch(f.home, f.root, ['daemon', 'run']);
   expect(await second.exited).toBe(1); expect(second.output()).toMatch(/host is busy|already running/);
-  expect(await readdir(f.home)).toEqual([]);
+  expect((await readdir(f.home)).filter((entry) => entry !== '.codex')).toEqual([]);
   if (process.platform === 'win32') p.child.stdin.end('test:interrupt\n');
   else p.child.kill('SIGTERM');
   expect(await p.exited).toBe(0);
-  await expect(readFile(join(f.root, 'web-console.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(readFile(join(f.root, 'daemon.pid'))).rejects.toMatchObject({ code: 'ENOENT' });
   expect(await readdir(join(f.root, '.access'))).toEqual([]);
 }, 20_000);
+
+it('concurrent detached starts return the same ready owner and stop clears its lease', async () => {
+  const f = await fixture();
+  const first = launch(f.home, f.root, ['daemon', 'start', '--port', '0']);
+  const second = launch(f.home, f.root, ['daemon', 'start', '--port', '0']);
+  expect(await Promise.all([first.exited, second.exited])).toEqual([0, 0]);
+  const record = z.object({ pid: z.number(), listen: z.string() }).parse(JSON.parse(await readFile(join(f.root, 'daemon.pid'), 'utf8')));
+  expect(first.output()).toContain(`PID ${record.pid} at ${record.listen}`);
+  expect(second.output()).toContain(`PID ${record.pid} at ${record.listen}`);
+  const stopped = launch(f.home, f.root, ['daemon', 'stop']);
+  expect(await stopped.exited).toBe(0);
+  await expect(readFile(join(f.root, 'daemon.pid'))).rejects.toMatchObject({ code: 'ENOENT' });
+}, 30_000);
 
 it('keeps generated secret getters on their captured root outside the parent shell', async () => {
   const f = await fixture();
@@ -93,3 +109,49 @@ it('keeps generated secret getters on their captured root outside the parent she
   expect(JSON.parse(output)).toEqual({ values: { fixture: 'dummy-only' }, errors: {} });
   expect(await readdir(outside.root)).toEqual([]);
 });
+
+it('refuses a reused PID without signaling the unrelated process or changing its lock', async () => {
+  const f = await fixture();
+  const sleeper = spawn(process.execPath, ['-e', "process.stdout.write('ready\\n');setInterval(()=>{},1000)"], { stdio: 'pipe' });
+  children.push(sleeper);
+  await new Promise<void>(resolve => sleeper.stdout.once('data', () => resolve()));
+  const listener = createServer();
+  await new Promise<void>(resolve => listener.listen(0, '127.0.0.1', resolve));
+  const address = listener.address();
+  if (!address || typeof address === 'string') throw new Error('Missing fixture port');
+  await new Promise<void>(resolve => listener.close(() => resolve()));
+  const lock = JSON.stringify({ pid: sleeper.pid, startedAt: new Date().toISOString(), listen: `127.0.0.1:${address.port}` });
+  await writeFile(join(f.root, 'daemon.pid'), lock);
+  await writeFile(join(f.root, 'local-credential'), 'aa'.repeat(32));
+  const before = await readdir(f.root);
+  const status = launch(f.home, f.root, ['daemon', 'status', '--json']);
+  const statusExit = await status.exited;
+  expect(await readdir(f.root)).toEqual(before);
+  const stop = launch(f.home, f.root, ['daemon', 'stop']);
+  expect(await stop.exited).toBe(1);
+  expect(sleeper.exitCode).toBeNull();
+  expect(sleeper.signalCode).toBeNull();
+  expect(statusExit).toBe(1);
+  expect(status.output()).toContain('Cannot verify daemon owner');
+  expect(stop.output()).toContain('Cannot verify daemon owner');
+  expect(await readFile(join(f.root, 'daemon.pid'), 'utf8')).toBe(lock);
+  expect((await readdir(f.root)).filter(name => name !== '.access')).toEqual(before);
+  expect(await readdir(f.home)).toEqual([]);
+}, 30_000);
+
+it('service refusal leaves an absent data home untouched for public and hidden commands', async () => {
+  const f = await fixture();
+  await rm(f.root, { recursive: true });
+  const refusal = 'Vonvon Bot cannot manage an OS service in this version. Use vonvon daemon start and vonvon daemon stop.';
+  for (const args of [
+    ['service', 'install'], ['service', 'uninstall'],
+    ['__daemon-control', 'start'], ['__daemon-control', 'stop'],
+    ['__daemon-control', 'restart'], ['__daemon-control', 'update'],
+  ]) {
+    const attempt = launch(f.home, f.root, args);
+    expect(await attempt.exited).toBe(1);
+    expect(attempt.output()).toContain(refusal);
+    await expect(readdir(f.root)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readdir(f.home)).toEqual([]);
+  }
+}, process.platform === 'win32' ? 20_000 : 5_000);

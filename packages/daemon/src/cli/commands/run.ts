@@ -1,4 +1,4 @@
-import { observeShutdown, type ShutdownControl } from '../../host/lifecycle';
+import { closeOwnedProviders, listenerCloseUnconfirmed, observeShutdown, type ShutdownControl } from '../../host/lifecycle';
 import { ensureOnboarded, announceEventsWhenLive } from '../../bot/onboarding';
 import { startBridge } from '../../bot/bridge';
 import { runSupervisor } from '../../bot/supervisor';
@@ -9,15 +9,23 @@ import { AdminWriteError } from '../../admin/ops';
 import { createAdminIpcResponder } from '../../admin/ipc';
 import { createAdminService } from '../../admin/service';
 import { installBackendDep, uninstallBackendDep } from '../../agent';
-import { mountWebConsole, type MountedWebConsole } from '../../web/mount';
+import { performCoreUpdate } from '../../service/update';
+import { startApi } from '../../server/http';
 
-export async function runRun(botName?: string, options: { control?: ShutdownControl; managed?: boolean } = {}): Promise<void> {
+interface RunOptions {
+  control?: ShutdownControl;
+  managed?: boolean;
+  port?: number;
+  onListening?: (listen: string) => Promise<void>;
+}
+
+export async function runRun(botName?: string, options: RunOptions = {}): Promise<void> {
   const control = options.control ?? observeShutdown();
   const managed = Boolean(options.managed);
   // Explicit selector always runs exactly that one bot inline (this is also how
   // the supervisor launches each child: `run --bot <appId>`).
   if (botName) {
-    await runSingle(botName, control);
+    await runSingle(botName, control, options);
     return;
   }
 
@@ -27,12 +35,12 @@ export async function runRun(botName?: string, options: { control?: ShutdownCont
     if (!ready) { process.exitCode = 1; return; }
     registry = await ensureRegistry();
   }
-  await runSupervisor(activeBots(registry), { control, managed });
+  await runSupervisor(activeBots(registry), { control, managed, port: options.port, onListening: options.onListening });
 }
 
 /** Run a single bot inline in this process. `botName` undefined → the implicit
  *  current/default bot (with first-run onboarding allowed). */
-async function runSingle(botName: string | undefined, control: ShutdownControl): Promise<void> {
+async function runSingle(botName: string | undefined, control: ShutdownControl, options: RunOptions): Promise<void> {
   const ready = await ensureOnboarded({ allowCreate: !botName, bot: botName });
   if (!ready) {
     process.exitCode = 1;
@@ -58,81 +66,97 @@ async function runSingle(botName: string | undefined, control: ShutdownControl):
   const fallbackCwd = process.env.FEISHU_CODEX_CWD || process.cwd();
   console.log('\n正在启动长连接 bot…');
   console.log('私聊我 `/new <名>` 建项目；在项目群里 @我 干活。Ctrl+C 退出。\n');
-  const handle = await startBridge({ cfg, appSecret: secret, fallbackCwd });
-  // 配置长连接需要 bridge 在线，启动后继续检查用户发布的订阅更新。
-  void announceEventsWhenLive(ready);
+  let api: Awaited<ReturnType<typeof startApi>> | undefined;
+  let bridge: Awaited<ReturnType<typeof startBridge>> | undefined;
+  const errors: unknown[] = [];
+  try {
+    const handle = bridge = await startBridge({ cfg, appSecret: secret, fallbackCwd, onConnectionChange: () => {
+      if (process.send) {
+        if (process.connected) process.send({ fcb: 'fcb.connection' }, undefined, undefined, (error: Error | null) => { if (error && process.connected) log.fail('run', error, { phase: 'connection-notice' }); });
+      }
+      else api?.invalidate();
+    } });
+    void announceEventsWhenLive(ready);
 
-  // ── Web 控制台 / supervisor IPC（按进程形态二选一）────────────────────────
-  let webConsole: MountedWebConsole | undefined;
-  if (process.send) {
-    // supervisor 子进程（'ipc' stdio）：控制台由 supervisor 聚合挂载，本进程只
-    // 接写请求——在进程内执行（registry withLock + 共享校验 + 驱逐 LIVE 会话，
-    // 这正是写操作必须 IPC 转发、不能 supervisor 文件直写的原因）。status 请求
-    // 回报真实 WS 连接状态，替代锁文件探测。
-    const respond = createAdminIpcResponder(
-      async (op) => {
-        if (op.kind === 'status') {
-          return { connection: handle.channel.getConnectionStatus?.()?.state ?? 'unknown' };
-        }
-        if (op.kind === 'collaboration') return handle.collaboration(op.request);
-        if (op.kind === 'joinedGroups' || op.kind === 'bindGroup') return handle.adminGroups(op);
-        if (op.kind === 'settingsRead') return handle.settings.read(op.scope);
-        if (op.kind === 'settingsModels') return handle.settings.models(op.query);
-        return handle.adminExecute(op);
-      },
-      (msg) => void process.send?.(msg),
-    );
-    process.on('message', respond);
-  } else {
-    // 独立 daemon（单 bot inline）：进程内挂全局控制台。本 bot 的写/实时状态走
-    // 进程内 orchestrator；其他已注册 bot 仍可只读快照（写需该 bot 进程在跑——
-    // 多 bot 写请用 `bot use` 选多个后由 supervisor 聚合）。
-    const ownAppId = cfg.accounts.app.id;
-    const startedAt = Date.now();
-    webConsole = await mountWebConsole(
-      createAdminService({
-        executeCollaboration: async (botId, request) => {
-          if (botId !== ownAppId) throw new AdminWriteError('机器人不在本进程的活跃集里');
-          return handle.collaboration(request);
-        },
-        executeGroups: async (botId, op) => {
-          if (botId !== ownAppId) throw new AdminWriteError('机器人不在本进程的活跃集里');
-          return handle.adminGroups(op);
-        },
-        executeSettingsRead: async (botId, op) => {
-          if (botId !== ownAppId) throw new AdminWriteError('机器人不在本进程的活跃集里');
-          return op.kind === 'settingsRead' ? handle.settings.read(op.scope) : handle.settings.models(op.query);
-        },
-        executeWrite: async (botId, op) => {
-          if (botId !== ownAppId) {
-            throw new AdminWriteError(
-              '该机器人不归本进程管：当前是单 bot 运行模式，只能改本 bot 的项目。多 bot 请 `bot use` 勾选后重启，由 supervisor 聚合管理。',
-            );
+    if (process.send) {
+      const respond = createAdminIpcResponder(
+        async (op) => {
+          if (op.kind === 'status') {
+            return { connection: handle.channel.getConnectionStatus?.()?.state ?? 'unknown' };
           }
+          if (op.kind === 'collaboration') return handle.collaboration(op.request);
+          if (op.kind === 'joinedGroups' || op.kind === 'bindGroup') return handle.adminGroups(op);
+          if (op.kind === 'settingsRead') return handle.settings.read(op.scope);
+          if (op.kind === 'settingsModels') return handle.settings.models(op.query);
           return handle.adminExecute(op);
         },
-        liveStatus: async (botId) =>
-          botId === ownAppId
-            ? {
-                running: true,
-                pid: process.pid,
-                startedAt,
-                connection: handle.channel.getConnectionStatus?.()?.state ?? 'unknown',
-              }
-            : undefined,
-        daemonStartedAt: startedAt,
-        // 按需后端安装在 daemon 进程内直跑（owns runtime，装完即能解析加载）。
-        installBackend: installBackendDep,
-        uninstallBackend: uninstallBackendDep,
-      }),
-    );
-    if (webConsole) console.log(`Web console listening on 127.0.0.1:${webConsole.port}`);
-  }
+        (msg) => void process.send?.(msg),
+      );
+      process.on('message', respond);
+    } else {
+      const ownAppId = cfg.accounts.app.id;
+      const startedAt = Date.now();
+      api = await startApi({
+        port: options.port,
+        control,
+        service: createAdminService({
+          executeCollaboration: async (botId, request) => {
+            if (botId !== ownAppId) throw new AdminWriteError('机器人不在本进程的活跃集里');
+            return handle.collaboration(request);
+          },
+          executeGroups: async (botId, op) => {
+            if (botId !== ownAppId) throw new AdminWriteError('机器人不在本进程的活跃集里');
+            return handle.adminGroups(op);
+          },
+          executeSettingsRead: async (botId, op) => {
+            if (botId !== ownAppId) throw new AdminWriteError('机器人不在本进程的活跃集里');
+            return op.kind === 'settingsRead' ? handle.settings.read(op.scope) : handle.settings.models(op.query);
+          },
+          executeWrite: async (botId, op) => {
+            if (botId !== ownAppId) {
+              throw new AdminWriteError(
+                '该机器人不归本进程管：当前是单 bot 运行模式，只能改本 bot 的项目。多 bot 请 `bot use` 勾选后重启，由 supervisor 聚合管理。',
+              );
+            }
+            return handle.adminExecute(op);
+          },
+          liveStatus: async (botId) =>
+            botId === ownAppId
+              ? {
+                  running: true,
+                  pid: process.pid,
+                  startedAt,
+                  connection: handle.channel.getConnectionStatus?.()?.state ?? 'unknown',
+                }
+              : undefined,
+          daemonStartedAt: startedAt,
+          installBackend: installBackendDep,
+          uninstallBackend: uninstallBackendDep,
+          applyUpdate: performCoreUpdate,
+        }),
+      });
+      await options.onListening?.(api.listen);
+      console.log(`Daemon API listening on ${api.listen}`);
+    }
 
-  if (!process.send) console.log('vonvon daemon ready');
-  await control.waitForRequest();
-  try {
-    await webConsole?.close();
-    await handle.shutdown();
-  } finally { releaseLock(); }
+    if (!process.send) console.log('vonvon daemon ready');
+    await control.waitForRequest();
+  } catch (error) { errors.push(error); }
+  finally {
+    const cleanup = await Promise.allSettled([closeOwnedProviders(async () => {
+      const drained = await Promise.allSettled([Promise.resolve().then(() => api?.beginDrain())]);
+      drained.push(...await Promise.allSettled([Promise.resolve().then(() => bridge?.shutdown())]));
+      errors.push(...drained.filter(result => result.status === 'rejected').map(result => result.reason));
+    })]);
+    cleanup.push(...await Promise.allSettled([control.completeShutdown(() => api?.release() ?? Promise.resolve())]));
+    const failures = cleanup.filter((result) => result.status === 'rejected');
+    errors.push(...failures.map(failure => failure.reason));
+    if (!errors.some(listenerCloseUnconfirmed)) {
+      try { releaseLock(); } catch (error) { errors.push(error); }
+    }
+    if (!options.control) control.dispose();
+    for (const error of errors) log.fail('daemon-shutdown', error, { phase: 'cleanup' });
+    if (errors.length === 1) throw errors[0];
+    if (errors.length) throw new AggregateError(errors, 'Single Bot cleanup failed.');
+  }
 }

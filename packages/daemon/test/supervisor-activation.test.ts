@@ -3,9 +3,10 @@ import { afterEach, expect, it, vi } from 'vitest';
 import type { AdminServiceDeps } from '../src/admin/service';
 import { runSupervisor } from '../src/bot/supervisor';
 
-const captured = vi.hoisted(() => ({ deps: undefined as AdminServiceDeps | undefined }));
+const captured = vi.hoisted(() => ({ deps: undefined as AdminServiceDeps | undefined, invalidate: vi.fn() }));
+vi.mock('../src/agent/codex-appserver/owned-process', () => ({ closeOwnedCodexProcesses: async () => {}, unconfirmedCodexPids: () => [] }));
 vi.mock('../src/admin/service', () => ({ createAdminService: (deps: AdminServiceDeps) => { captured.deps = deps; return deps; } }));
-vi.mock('../src/web/mount', () => ({ mountWebConsole: vi.fn(async () => ({ port: 1, close: async () => {} })) }));
+vi.mock('../src/server/http', async original => ({ ...await original<typeof import('../src/server/http')>(), startApi: vi.fn(async () => ({ port: 1, listen: '127.0.0.1:1', invalidate: captured.invalidate, beginDrain: async () => {}, release: async () => {}, close: async () => {} })) }));
 vi.mock('../src/service/win-startup', () => ({ recordServicePid() {}, SERVICE_ENV_FLAG: 'BRIDGE_TEST_SERVICE' }));
 vi.mock('../src/core/logger', () => ({ log: { info() {}, warn() {}, fail() {} } }));
 vi.mock('../src/agent', () => ({ installBackendDep() {}, uninstallBackendDep() {} }));
@@ -19,7 +20,7 @@ import { readSingleInstanceHolder } from '../src/core/single-instance';
 
 vi.mock('../src/platform/spawn', () => ({ spawnProcess: vi.fn() }));
 import { spawnProcess } from '../src/platform/spawn';
-import { mountWebConsole } from '../src/web/mount';
+import { startApi } from '../src/server/http';
 
 const processes: ChildProcess[] = [];
 let requestShutdown = () => {};
@@ -36,6 +37,7 @@ const fixture = `
   process.on('SIGTERM', stop);
   process.on('message', message => {
     if (message.type === 'bridge:shutdown') stop();
+    else if (message.fcb === 'simulate.connection') process.send({ fcb: 'fcb.connection' });
     else if (message.fcb === 'fcb.admin.req') process.send({ fcb: 'fcb.admin.res', id: message.id, ok: true, result: { connection: 'connected' } });
   });
 `;
@@ -48,7 +50,7 @@ async function start(ids: string[]) {
     return child;
   });
   const pending = new Promise<void>((resolve) => { requestShutdown = resolve; });
-  supervisor = runSupervisor(ids.map(bot), { control: { requested: false, waitForRequest: () => pending, dispose() {} } });
+  supervisor = runSupervisor(ids.map(bot), { control: { requested: false, waitForRequest: () => pending, requestStop() {}, requestRestart(_port: number) {}, completeShutdown: async (release: () => Promise<void>) => release(), dispose() {} } });
   await vi.waitFor(() => expect(captured.deps).toBeDefined());
   const deps = (() : AdminServiceDeps | undefined => captured.deps)();
   if (!deps?.applyBotActivation || !deps.liveStatus || !deps.executeGroups) throw new Error('Runtime activation unavailable');
@@ -114,16 +116,25 @@ it('does not claim to stop a bot running in an independent process', async () =>
   vi.mocked(readSingleInstanceHolder).mockReturnValue(undefined);
 });
 
+it('refreshes the parent snapshot on a child connection notice', async () => {
+  await start(['a']);
+  const child = processes[0];
+  if (!child) throw new Error('Missing child');
+  const before = captured.invalidate.mock.calls.length;
+  child.send({ fcb: 'simulate.connection' });
+  await vi.waitFor(() => expect(captured.invalidate.mock.calls.length).toBeGreaterThan(before));
+});
+
 it('fails an empty host when its only usable interface cannot start', async () => {
-  vi.mocked(mountWebConsole).mockResolvedValueOnce(undefined);
+  vi.mocked(startApi).mockRejectedValueOnce(new Error('API unavailable'));
   supervisor = undefined;
-  await expect(runSupervisor([], { control: { requested: false, waitForRequest: () => new Promise(() => {}), dispose() {} } })).rejects.toThrow('无法进入引导');
+  await expect(runSupervisor([], { control: { requested: false, waitForRequest: () => new Promise(() => {}), requestStop() {}, requestRestart(_port: number) {}, completeShutdown: async (release: () => Promise<void>) => release(), dispose() {} } })).rejects.toThrow('API unavailable');
 });
 
 it('reexecutes the foreground CLI and does not expose inherited service callbacks', async () => {
   await start(['a']);
   expect(vi.mocked(spawnProcess).mock.calls[0]?.[1]).toEqual([process.argv[1], 'daemon', 'run', '--bot', 'a']);
   expect(captured.deps?.restartDaemon).toBeUndefined();
-  expect(captured.deps?.applyUpdate).toBeUndefined();
+  expect(captured.deps?.applyUpdate).toBeTypeOf('function');
   expect(captured.deps?.stopDaemon).toBeUndefined();
 });

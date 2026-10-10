@@ -33,10 +33,10 @@ const RELAUNCH_TASK_NAME = relaunchTaskName;
  * for an npm-installed CLI. Instead we use the per-user mechanisms that need no
  * admin:
  *   - **Autostart at logon**: an `HKCU\…\Run` registry value pointing at a
- *     hidden launcher (`wscript` → `.vbs` → `.cmd` → `node … run`). HKCU is
+ *     hidden launcher (`wscript` → `.vbs` → `.cmd` → `node … daemon run`). HKCU is
  *     user-writable, so `reg add` needs no elevation; the `.vbs` runs the
  *     console hidden so logon doesn't flash a window.
- *   - **Start now**: a detached, window-hidden `node … run` child.
+ *   - **Start now**: a detached, window-hidden `node … daemon run` child.
  *   - **status/stop**: a PID file the bridge writes when launched as the service
  *     (`FEISHU_CODEX_BRIDGE_SERVICE=1`). PID-based liveness is locale-independent
  *     — unlike parsing `schtasks` output, which is localized (中文 Windows prints
@@ -82,7 +82,7 @@ export function buildLauncherCmd(options: ServiceDefinitionOptions = {}): string
     `set "PATH=${literal(options.envPath ?? process.env.PATH ?? '')}"`,
     ...(codexBin === undefined ? [] : [`set "CODEX_BIN=${literal(codexBin ?? '')}"`]),
     `set "${SERVICE_ENV_FLAG}=1"`,
-    `"${literal(process.execPath)}" "${literal(options.cliBinPath ?? resolveCliBinPath())}" run >> "${literal(options.stdoutPath ?? serviceStdoutPath())}" 2>> "${literal(options.stderrPath ?? serviceStderrPath())}"`,
+    `"${literal(process.execPath)}" "${literal(options.cliBinPath ?? resolveCliBinPath())}" daemon run >> "${literal(options.stdoutPath ?? serviceStdoutPath())}" 2>> "${literal(options.stderrPath ?? serviceStderrPath())}"`,
     '',
   ].join('\r\n');
 }
@@ -142,7 +142,7 @@ function startNow(opts: StartOptions = {}): void {
   // An own undefined entry tells mergeProcessEnv to remove all case variants,
   // so a managed clear cannot inherit a foreign CODEX_BIN from WMI/taskeng.
   if (codexBin !== undefined) overrides.CODEX_BIN = codexBin ?? undefined;
-  const child = spawn(process.execPath, [resolveCliBinPath(), 'run'], {
+  const child = spawn(process.execPath, [resolveCliBinPath(), 'daemon', 'run'], {
     detached: true,
     windowsHide: true,
     stdio: ['ignore', out, err],

@@ -68,6 +68,7 @@ export async function loadBackendDep<T = unknown>(pkg: string): Promise<T> {
   let resolved: string;
   try {
     resolved = createRequire(userAnchor()).resolve(pkg);
+    if (!existsSync(resolved)) throw new BackendNotInstalledError(pkg);
   } catch {
     throw new BackendNotInstalledError(pkg);
   }
@@ -83,15 +84,14 @@ export async function loadBackendDep<T = unknown>(pkg: string): Promise<T> {
 export function isBackendDepInstalled(pkg: string): boolean {
   // ① bridge 自身。
   try {
-    createRequire(import.meta.url).resolve(pkg);
-    return true;
+    const resolved = createRequire(import.meta.url).resolve(pkg);
+    if (existsSync(resolved)) return true;
   } catch {
     /* fall through to user dir */
   }
   // ② 用户私装目录。
   try {
-    createRequire(userAnchor()).resolve(pkg);
-    return true;
+    return existsSync(createRequire(userAnchor()).resolve(pkg));
   } catch {
     return false;
   }
@@ -130,22 +130,15 @@ export function isBackendEntryInstalled(entry: BackendCatalogEntry): boolean {
   return pkg ? isBackendDepInstalled(pkg) : false;
 }
 
-/**
- * 一个后端是否装在**用户私装目录**（而非 bridge 自身 node_modules / dev devDep）。
- * 「卸载」只对用户私装目录里的包有意义（uninstallBackendDep 只 rm backendsDir），所以
- * canUninstall 用它判定，避免在 dev/worktree 下让用户「卸载」一个其实在仓库 node_modules
- * 里、点了也删不掉的包。bin 类查 .bin（本就 user-dir-only），库类查 userAnchor resolve。
- */
 export function isBackendInstalledInUserDir(entry: BackendCatalogEntry): boolean {
   const { binName, pkg } = entry.dep;
   if (binName) return isBackendBinInstalled(binName);
   if (!pkg) return false;
-  try {
-    createRequire(userAnchor()).resolve(pkg);
-    return true;
-  } catch {
-    return false;
-  }
+  return isBackendPackageInUserDir(pkg);
+}
+
+export function isBackendPackageInUserDir(pkg: string, binName?: string): boolean {
+  return binName ? isBackendBinInstalled(binName) : existsSync(join(paths.backendsDir, 'node_modules', pkg, 'package.json'));
 }
 
 /**

@@ -1,17 +1,23 @@
-import { UnsentRequestError } from '../src/agent/types';
-import { AppServerClient } from '../src/agent/codex-appserver/app-server-client';
+let UnsentRequestError: typeof import('../src/agent/types').UnsentRequestError;
+let AppServerClient: typeof import('../src/agent/codex-appserver/app-server-client').AppServerClient;
 import { appendFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CodexAppServerBackend } from '../src/agent/codex-appserver/backend';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+let CodexAppServerBackend: typeof import('../src/agent/codex-appserver/backend').CodexAppServerBackend;
 import { writeNodeExecutable } from './helpers/node-executable';
-import {
-  refillWarmPool,
-  shutdownResidentClients,
-  takeWarmClient,
-  utilityRequest,
-} from '../src/agent/codex-appserver/client-pool';
+let refillWarmPool: typeof import('../src/agent/codex-appserver/client-pool').refillWarmPool;
+let shutdownResidentClients: typeof import('../src/agent/codex-appserver/client-pool').shutdownResidentClients;
+let takeWarmClient: typeof import('../src/agent/codex-appserver/client-pool').takeWarmClient;
+let utilityRequest: typeof import('../src/agent/codex-appserver/client-pool').utilityRequest;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ UnsentRequestError } = await import('../src/agent/types'));
+  ({ AppServerClient } = await import('../src/agent/codex-appserver/app-server-client'));
+  ({ CodexAppServerBackend } = await import('../src/agent/codex-appserver/backend'));
+  ({ refillWarmPool, shutdownResidentClients, takeWarmClient, utilityRequest } = await import('../src/agent/codex-appserver/client-pool'));
+});
 
 // M-2（research/08 probe 思路的单测化）：utility client 复用/出错即重建 + 容量 1
 // 预热池（取走异步补位、bin 指纹防升级错位、预热通知不漏进会话流）。真机基准

@@ -3,11 +3,11 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { homedir, userInfo } from 'node:os';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dirname } from 'node:path';
 import { normalizeServiceCodexBin, saveServiceCodexBin, selectInstallCodexBin } from './codex-bin';
 import {
   ensureLogFiles,
+  resolveCliBinPath,
   serviceStderrPath,
   serviceStdoutPath,
   type ServiceDefinitionOptions,
@@ -25,11 +25,6 @@ interface LaunchctlResult {
 
 export function launchAgentPlistPath(): string {
   return installationPaths(homedir()).launchd;
-}
-
-function resolveCliBinPath(): string {
-  const distDir = dirname(fileURLToPath(import.meta.url));
-  return resolve(distDir, '..', 'bin', 'feishu-codex-bridge.mjs');
 }
 
 function escapeXml(value: string): string {
@@ -56,6 +51,7 @@ export function buildPlist(options: ServiceDefinitionOptions & { label?: string 
   <array>
     <string>${escapeXml(nodePath)}</string>
     <string>${escapeXml(cliBinPath)}</string>
+    <string>daemon</string>
     <string>run</string>
   </array>
   <key>RunAtLoad</key>

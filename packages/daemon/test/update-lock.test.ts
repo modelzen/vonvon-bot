@@ -1,6 +1,6 @@
 import { existsSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
 // 只需 appDir：更新锁 / 更新状态文件都落在这里。指到临时目录，绝不碰真 home。
 vi.mock('../src/config/paths', async () => {
@@ -15,6 +15,7 @@ import { paths } from '../src/config/paths';
 import { acquireUpdateLock, clearUpdateStatus, readUpdateStatus, writeUpdateStatus } from '../src/service/update';
 
 const lockFile = (): string => join(paths.appDir, 'update.lock');
+afterAll(() => rmSync(paths.appDir, { recursive: true, force: true }));
 
 afterEach(() => {
   rmSync(lockFile(), { force: true });
@@ -48,12 +49,10 @@ describe('acquireUpdateLock（跨进程更新互斥）', () => {
     r!();
   });
 
-  it('陈旧锁（存活但超 30min 的旧时间戳，pid 复用兜底）被回收', () => {
-    // pid 是自己（活着），但时间太旧 → 走「存活+超时」的 pid 复用兜底分支回收。
+  it('存活持有者的锁不因超过 30min 而被回收', () => {
     writeFileSync(lockFile(), JSON.stringify({ pid: process.pid, at: Date.now() - 31 * 60 * 1000 }), 'utf8');
     const r = acquireUpdateLock();
-    expect(typeof r).toBe('function');
-    r!();
+    try { expect(r).toBeNull(); } finally { r?.(); }
   });
 
   it('release 只删属于自己的锁：文件被换成别的 pid 时不误删', () => {

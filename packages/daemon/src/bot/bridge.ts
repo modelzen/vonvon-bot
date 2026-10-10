@@ -33,6 +33,7 @@ export interface BridgeOptions {
   appSecret: string;
   /** fallback cwd for groups that aren't registered projects. */
   fallbackCwd: string;
+  onConnectionChange?: () => void;
 }
 
 export interface BridgeHandle {
@@ -89,80 +90,97 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     isBoundProject: cwdIsBoundProject,
   });
   const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd, cliBridge);
-  channel.on('message', orchestrator.onMessage);
-  channel.on('cardAction', orchestrator.dispatcher.handle);
-  // Cloud-doc comments: @bot in a doc comment (drive.notice.comment_add_v1) →
-  // reply in the same comment thread.
-  channel.on('comment', orchestrator.onComment);
-  // A human added the bot to a group → DM the (admin) adder a bind card to
-  // register it as a `joined` project.
-  channel.on('botAdded', orchestrator.onBotAddedToChat);
-  // Inbound reactions (im.message.reaction.created_v1, SDK-normalized + deduped):
-  // 终态 run 卡 👍 = 续轮，运行中 run/排队卡 OK/DONE = ⏹ 终止（M-6）。Without the
-  // im:message.reactions:read scope the event is simply never pushed — silent off.
-  channel.on('reaction', orchestrator.onReaction);
-  // The SDK exposes no named event for bot-*removed* (im.chat.member.bot.deleted_v1)
-  // nor for bot-menu clicks (application.bot.menu_v6), so tap its private raw
-  // EventDispatcher: register() merges by event key, so this adds our handlers
-  // without clobbering the SDK's built-ins. Guarded + best-effort — if the SDK's
-  // internals change on a bump we log and degrade (manual unbind via the console's
-  // 删除项目 still works; the DM console still opens by messaging the bot).
-  try {
-    const tap = (
-      channel as unknown as {
-        dispatcher?: { register?: (h: Record<string, (raw: unknown) => void>) => unknown };
-      }
-    ).dispatcher;
-    if (tap?.register) {
-      tap.register({
-        'im.chat.member.bot.deleted_v1': (raw: unknown) => {
-          const ev = raw as { chat_id?: string; event?: { chat_id?: string } };
-          const chatId = ev?.chat_id ?? ev?.event?.chat_id;
-          if (chatId) void orchestrator.onBotRemovedFromChat(chatId);
-        },
-        // Bot-menu click → DM console menu card. The payload may carry fields at
-        // the top level or under `event` depending on schema version — read both.
-        'application.bot.menu_v6': (raw: unknown) => {
-          const ev = raw as {
-            event_id?: string;
-            event_key?: string;
-            operator?: { operator_id?: { open_id?: string } };
-            event?: { event_key?: string; operator?: { operator_id?: { open_id?: string } } };
-          };
-          void orchestrator.onBotMenu({
-            openId: ev?.operator?.operator_id?.open_id ?? ev?.event?.operator?.operator_id?.open_id,
-            eventKey: ev?.event_key ?? ev?.event?.event_key,
-            eventId: ev?.event_id,
-          });
-        },
-      });
-      log.info('ws', 'raw-event-tap', { events: ['im.chat.member.bot.deleted_v1', 'application.bot.menu_v6'] });
-    } else {
-      log.info('ws', 'raw-event-tap-unavailable');
-    }
-  } catch (err) {
-    log.fail('ws', err, { phase: 'raw-event-tap' });
-  }
-  channel.on('reject', (evt) => log.info('intake', 'reject', { reason: evt.reason, msgId: evt.messageId }));
-  channel.on('error', (err) => log.fail('ws', err));
-  channel.on('reconnecting', () => log.info('ws', 'reconnecting'));
-  channel.on('reconnected', () => log.info('ws', 'reconnected'));
-
-  await channel.connect();
-  // Never let an optional local-agent IPC bind failure (EADDRINUSE/EACCES) tear
-  // down an already-connected bot — log and stay up, mirroring shutdown's catch.
-  if (shouldStartCliBridge(opts.cfg)) {
-    await cliBridge.start().catch((err) => log.fail('cli-bridge', err, { phase: 'start' }));
-  }
-  log.info('ws', 'connected', { appId: app.id, fallbackCwd: opts.fallbackCwd });
-
-  let closed = false;
-  const shutdown = async (): Promise<void> => {
-    if (closed) return;
-    closed = true;
-    await orchestrator.shutdown();
-    await cliBridge.shutdown().catch((err) => log.fail('cli-bridge', err, { phase: 'shutdown' }));
-    await channel.disconnect().catch((err) => log.fail('ws', err, { phase: 'disconnect' }));
+  const groupTasks = new Set<Promise<JoinedGroups | Project>>();
+  let closing: Promise<void> | undefined;
+  const shutdown = (): Promise<void> => {
+    if (closing) return closing;
+    const groupsClosing = Promise.allSettled([...groupTasks]);
+    const orchestratorClosing = orchestrator.shutdown();
+    closing = (async () => {
+      const errors: unknown[] = [];
+      try { await orchestratorClosing; }
+      catch (error) { errors.push(error); }
+      const groups = await groupsClosing;
+      for (const result of groups) if (result.status === 'rejected') errors.push(result.reason);
+      try { await cliBridge.shutdown(); }
+      catch (error) { log.fail('cli-bridge', error, { phase: 'shutdown' }); errors.push(error); }
+      try { await channel.disconnect(); }
+      catch (error) { log.fail('ws', error, { phase: 'disconnect' }); errors.push(error); }
+      if (errors.length) throw new AggregateError(errors, 'Bridge cleanup failed');
+    })();
+    return closing;
   };
-  return { channel, collaboration: orchestrator.collaboration, adminGroups: createGroupExecutor(channel), adminExecute: orchestrator.adminExecute, settings: orchestrator.settings, shutdown };
+  try {
+    channel.on('message', orchestrator.onMessage);
+    channel.on('cardAction', orchestrator.dispatcher.handle);
+    channel.on('comment', orchestrator.onComment);
+    channel.on('botAdded', orchestrator.onBotAddedToChat);
+    channel.on('reaction', orchestrator.onReaction);
+    // The SDK exposes no named event for bot-*removed* (im.chat.member.bot.deleted_v1)
+    // nor for bot-menu clicks (application.bot.menu_v6), so tap its private raw
+    // EventDispatcher: register() merges by event key, so this adds our handlers
+    // without clobbering the SDK's built-ins.
+    try {
+      const tap = (
+        channel as unknown as {
+          dispatcher?: { register?: (h: Record<string, (raw: unknown) => void>) => unknown };
+        }
+      ).dispatcher;
+      if (tap?.register) {
+        tap.register({
+          'im.chat.member.bot.deleted_v1': (raw: unknown) => {
+            const ev = raw as { chat_id?: string; event?: { chat_id?: string } };
+            const chatId = ev?.chat_id ?? ev?.event?.chat_id;
+            if (chatId) void orchestrator.onBotRemovedFromChat(chatId);
+          },
+          'application.bot.menu_v6': (raw: unknown) => {
+            const ev = raw as {
+              event_id?: string;
+              event_key?: string;
+              operator?: { operator_id?: { open_id?: string } };
+              event?: { event_key?: string; operator?: { operator_id?: { open_id?: string } } };
+            };
+            void orchestrator.onBotMenu({
+              openId: ev?.operator?.operator_id?.open_id ?? ev?.event?.operator?.operator_id?.open_id,
+              eventKey: ev?.event_key ?? ev?.event?.event_key,
+              eventId: ev?.event_id,
+            });
+          },
+        });
+        log.info('ws', 'raw-event-tap', { events: ['im.chat.member.bot.deleted_v1', 'application.bot.menu_v6'] });
+      } else {
+        log.info('ws', 'raw-event-tap-unavailable');
+      }
+    } catch (err) {
+      log.fail('ws', err, { phase: 'raw-event-tap' });
+    }
+    channel.on('reject', (evt) => log.info('intake', 'reject', { reason: evt.reason, msgId: evt.messageId }));
+    channel.on('error', (err) => { log.fail('ws', err); opts.onConnectionChange?.(); });
+    channel.on('reconnecting', () => { log.info('ws', 'reconnecting'); opts.onConnectionChange?.(); });
+    channel.on('reconnected', () => { log.info('ws', 'reconnected'); opts.onConnectionChange?.(); });
+
+    await channel.connect();
+    opts.onConnectionChange?.();
+    if (shouldStartCliBridge(opts.cfg)) {
+      await cliBridge.start().catch((err) => log.fail('cli-bridge', err, { phase: 'start' }));
+    }
+    log.info('ws', 'connected', { appId: app.id, fallbackCwd: opts.fallbackCwd });
+
+    const executeGroup = createGroupExecutor(channel);
+    const adminGroups: BridgeHandle['adminGroups'] = op => {
+      if (closing) return Promise.reject(new Error('Bridge is shutting down'));
+      const task = executeGroup(op);
+      groupTasks.add(task);
+      void task.then(() => groupTasks.delete(task), () => groupTasks.delete(task));
+      return task;
+    };
+    return { channel, collaboration: orchestrator.collaboration, adminGroups, adminExecute: orchestrator.adminExecute, settings: orchestrator.settings, shutdown };
+  } catch (error) {
+    try { await shutdown(); }
+    catch (cleanupError) {
+      const cleanupErrors: unknown[] = cleanupError instanceof AggregateError ? cleanupError.errors : [cleanupError];
+      throw new AggregateError([error, ...cleanupErrors], 'Bridge startup and cleanup failed');
+    }
+    throw error;
+  }
 }
