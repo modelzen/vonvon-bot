@@ -98,3 +98,63 @@ it('holds PID and mutex through usage then Codex cleanup despite a rejecting Job
     jobsClose.mockRestore();
   }
 });
+
+it('retains acquired PID and mutex until a detached uninstall and its snapshot finish', async () => {
+  const entered = gate();
+  const uninstall = gate();
+  const finishing = gate();
+  const snapshot = gate();
+  const closingStarted = gate();
+  let finishStarted = false;
+  let finished = false;
+  const fixture = await startFixture(fakeService({
+    uninstallBackend: async () => { entered.release(); await uninstall.promise; finishStarted = true; return { ok: true, message: 'removed' }; },
+    listBots: async () => { if (finishStarted) { finishing.release(); await snapshot.promise; finished = true; } return []; },
+  }));
+  let client: Awaited<ReturnType<typeof socketClient>> | undefined;
+  let host: Promise<unknown> | undefined;
+  let settled = false;
+  async function ownsMutex(): Promise<boolean> {
+    return acquireMutex(fixture.home, 'host', 0).then(async mutex => { await closeMutex(mutex); return false; }, () => true);
+  }
+  try {
+    execution.run = async options => {
+      await options.onListening?.(fixture.api.listen);
+      expect(JSON.parse(await readFile(join(fixture.home, 'daemon.pid'), 'utf8'))).toMatchObject({ pid: process.pid, listen: fixture.api.listen });
+      expect(await ownsMutex()).toBe(true);
+      client = await socketClient(fixture.api.port, fixture.credential);
+      await client.ready();
+      client.socket.send(JSON.stringify({ type: 'request', id: 'uninstall', method: 'environment', payload: { type: 'backendUninstall', id: 'fake' } }));
+      await entered.promise;
+      await client.close();
+      const closing = fixture.api.close();
+      closingStarted.release();
+      await closing;
+    };
+    vi.stubGlobal('process', Object.defineProperty(Object.create(process), 'send', { value: undefined }));
+    const { runHostRuntime } = await import('../src/host/bootstrap');
+    host = runHostRuntime({ managed: false, control: { requested: false, waitForRequest: async () => {}, requestStop() {}, requestRestart() {}, dispose() {} } }).catch(error => error);
+    void host.then(() => { settled = true; });
+    await Promise.race([closingStarted.promise, host.then(error => { throw error; })]);
+    await tick(); await tick();
+    expect(settled).toBe(false);
+    expect(JSON.parse(await readFile(join(fixture.home, 'daemon.pid'), 'utf8'))).toMatchObject({ pid: process.pid, listen: fixture.api.listen });
+    expect(await ownsMutex()).toBe(true);
+    uninstall.release();
+    await Promise.race([finishing.promise, host.then(() => { throw new Error('Host released ownership before uninstall snapshot finish'); })]);
+    await tick();
+    expect(settled).toBe(false);
+    expect(JSON.parse(await readFile(join(fixture.home, 'daemon.pid'), 'utf8'))).toMatchObject({ pid: process.pid, listen: fixture.api.listen });
+    expect(await ownsMutex()).toBe(true);
+    snapshot.release();
+    expect(await host).toBeUndefined();
+    expect(finished).toBe(true);
+    await expect(readFile(join(fixture.home, 'daemon.pid'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await ownsMutex()).toBe(false);
+  } finally {
+    uninstall.release(); snapshot.release();
+    await host;
+    await client?.close();
+    await fixture.close();
+  }
+});
