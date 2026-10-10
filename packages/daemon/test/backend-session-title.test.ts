@@ -19,10 +19,10 @@ import type { ServerNotification } from '../src/agent/codex-appserver/protocol';
 function asyncQuery(
   messages: SDKMessage[],
   models: ClaudeSdkModelInfo[] = [],
-): Query & { close: ReturnType<typeof vi.fn>; supportedModels: ReturnType<typeof vi.fn> } {
+): Query & { close: ReturnType<typeof vi.fn<() => void>>; supportedModels: ReturnType<typeof vi.fn<() => Promise<ClaudeSdkModelInfo[]>>> } {
   const generator = (async function* () {
     for (const message of messages) yield message;
-  })() as Query & { close: ReturnType<typeof vi.fn>; supportedModels: ReturnType<typeof vi.fn> };
+  })() as Query & { close: ReturnType<typeof vi.fn<() => void>>; supportedModels: ReturnType<typeof vi.fn<() => Promise<ClaudeSdkModelInfo[]>>> };
   generator.close = vi.fn();
   generator.supportedModels = vi.fn(async () => models);
   return generator;

@@ -79,7 +79,7 @@ export function appendServiceErr(tag: string, line: string, filePath: string = s
  */
 export function resolveCliBinPath(): string {
   const distDir = dirname(fileURLToPath(import.meta.url));
-  return resolve(distDir, '..', 'bin', 'feishu-codex-bridge.mjs');
+  return resolve(distDir, '..', 'bin', 'vonvon.mjs');
 }
 
 /**

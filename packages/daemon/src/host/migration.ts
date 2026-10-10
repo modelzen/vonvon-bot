@@ -1,7 +1,8 @@
+import { resolveLegacyDataRoot as resolveDataRoot } from '../config/legacy-data-root';
 import { lstatSync } from 'node:fs';
 import { join } from 'node:path';
 import { acquireMutex, assertNoDataLeases, closeMutex } from '../config/data-access';
-import { DataRootMigrationError, migrationJournalName, resolveDataRoot } from '../config/data-root';
+import { DataRootMigrationError, migrationJournalName } from '../config/data-root';
 import { relocateOfflineDataRoot } from '../config/data-root-migration';
 import { preflightCompatibility, repairLinkedCompatibility, type BridgeRuntime } from '../config/data-compatibility';
 import { assertKnownOwnersStopped, existingDataRoots, inspectInstallation } from '../service/control';

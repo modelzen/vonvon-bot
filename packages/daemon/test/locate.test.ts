@@ -100,11 +100,11 @@ describe('codexVersionAsync 真实子进程', () => {
 });
 
 describe('desktop and Agent executable selection', () => {
-  it('uses the legacy physical root, managed copy and generation pointer with explicit override priority', async () => {
-    const { mkdirSync, existsSync } = await import('node:fs');
+  it('uses the daemon physical root, managed copy and generation pointer with explicit override priority', async () => {
+    const { mkdirSync, existsSync, realpathSync } = await import('node:fs');
     const { resolveDataRoot } = await import('../src/config/data-root');
-    const home = join(dir, 'legacy-home');
-    const root = join(home, '.feishu-codex-bridge');
+    const home = join(realpathSync(dir), 'legacy-home');
+    const root = join(home, '.vonvon-bot');
     const generation = '12345678-1234-1234-1234-123456789012';
     const generationDir = join(root, 'codex-cli', 'releases', generation, 'node_modules', '.bin');
     mkdirSync(generationDir, { recursive: true });

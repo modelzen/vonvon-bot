@@ -1,4 +1,4 @@
-import { bridgePipeName } from './data-compatibility';
+import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { resolveDataRoot } from './data-root';
@@ -95,11 +95,12 @@ export const paths = {
    */
   get cliBridgeSocket(): string {
     if (process.platform === 'win32') {
-      return bridgePipeName(homedir(), appDir, currentBotDir);
+      return `\\\\.\\pipe\\vonvon-bot-${createHash('sha256').update(currentBotDir).digest('hex').slice(0, 32)}`;
     }
     return join(currentBotDir, 'cli-bridge.sock');
   },
   secretsFile: join(appDir, 'secrets.enc'),
+  masterKeyFile: join(appDir, 'master.key'),
   keystoreSaltFile: join(appDir, '.keystore.salt'),
   npmCacheDir: join(appDir, 'npm-cache'),
   /**

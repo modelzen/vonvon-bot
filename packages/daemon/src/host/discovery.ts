@@ -15,9 +15,9 @@ export function refusal(error: unknown): HostRefusal {
   return { kind: 'blocked', reason: error instanceof DataRootMigrationError ? 'migration-pending' : error instanceof DataAccessError ? 'busy' : 'inspection-failed', message: error instanceof Error ? error.message : String(error) };
 }
 
-export async function readHostEndpoint(home: string): Promise<HostEndpoint | HostRefusal | undefined> {
+export async function readHostEndpoint(home: string, explicitRoot = false): Promise<HostEndpoint | HostRefusal | undefined> {
   try {
-    const root = resolveDataRoot(home);
+    const root = explicitRoot ? { path: home } : resolveDataRoot(home);
     let record: unknown;
     try { record = JSON.parse(readFileSync(join(root.path, 'web-console.json'), 'utf8')); }
     catch (error) {

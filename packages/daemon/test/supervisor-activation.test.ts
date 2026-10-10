@@ -119,3 +119,11 @@ it('fails an empty host when its only usable interface cannot start', async () =
   supervisor = undefined;
   await expect(runSupervisor([], { control: { requested: false, waitForRequest: () => new Promise(() => {}), dispose() {} } })).rejects.toThrow('无法进入引导');
 });
+
+it('reexecutes the foreground CLI and does not expose inherited service callbacks', async () => {
+  await start(['a']);
+  expect(vi.mocked(spawnProcess).mock.calls[0]?.[1]).toEqual([process.argv[1], 'daemon', 'run', '--bot', 'a']);
+  expect(captured.deps?.restartDaemon).toBeUndefined();
+  expect(captured.deps?.applyUpdate).toBeUndefined();
+  expect(captured.deps?.stopDaemon).toBeUndefined();
+});

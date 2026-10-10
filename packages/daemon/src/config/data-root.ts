@@ -1,5 +1,5 @@
-import { lstatSync, realpathSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { lstatSync, realpathSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
 export type DataRoot = {
   path: string;
@@ -16,53 +16,27 @@ export class DataRootMigrationError extends Error {
   }
 }
 
-function refusePendingMetadata(path: string): void {
-  try {
-    lstatSync(path);
-  } catch (error) {
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return;
-    throw new DataRootMigrationError(`Cannot inspect migration metadata ${path}.`, { cause: error });
-  }
-  throw new DataRootMigrationError(`Pending or orphaned migration metadata at ${path}.`);
-}
-
-function inspectRoot(path: string): string | null {
-  try {
-    lstatSync(path);
-  } catch (error) {
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null;
-    throw new Error(`Cannot inspect bridge data directory ${path}: ${String(error)}`, { cause: error });
-  }
-
-  try {
-    const realPath = realpathSync(path);
-    if (!statSync(path).isDirectory()) {
-      throw new Error('path is not a directory');
-    }
-    return realPath;
-  } catch (error) {
-    throw new Error(`Invalid bridge data directory ${path}: ${String(error)}`, { cause: error });
-  }
-}
-
 export function resolveDataRoot(home: string): DataRoot {
-  const canonicalPath = join(home, '.vonvon-bridge');
-  const legacyPath = join(home, '.feishu-codex-bridge');
-  refusePendingMetadata(join(home, migrationJournalName));
-  const canonical = inspectRoot(canonicalPath);
-  const legacy = inspectRoot(legacyPath);
-  if (canonical) refusePendingMetadata(join(canonicalPath, migrationWitnessName));
-  if (legacy) refusePendingMetadata(join(legacyPath, migrationWitnessName));
-
-  if (canonical && legacy) {
-    if (canonical !== legacy) {
-      throw new Error(
-        `Bridge data directories ${canonicalPath} and ${legacyPath} contain different stores. Resolve the conflict before starting Bridge.`,
-      );
-    }
-    return { path: canonicalPath, kind: 'canonical' };
+  const override = process.env.VONVON_HOME;
+  if (override !== undefined && (!override.trim() || !isAbsolute(override))) {
+    throw new Error('VONVON_HOME must be a nonempty absolute directory path.');
   }
-  if (canonical) return { path: canonicalPath, kind: 'canonical' };
-  if (legacy) return { path: legacyPath, kind: 'legacy' };
-  return { path: canonicalPath, kind: 'fresh' };
+  const selected = resolve(override ?? join(home, '.vonvon-bot'));
+  try {
+    const stat = lstatSync(selected);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Daemon root must be a physical directory.');
+    return { path: realpathSync(selected), kind: 'canonical' };
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+  }
+  let ancestor = dirname(selected);
+  const suffix = [basename(selected)];
+  for (;;) {
+    try { return { path: join(realpathSync(ancestor), ...suffix), kind: 'fresh' }; }
+    catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+      suffix.unshift(basename(ancestor));
+      ancestor = dirname(ancestor);
+    }
+  }
 }
