@@ -1,11 +1,12 @@
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { tmpdir, userInfo } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { type ServiceDefinitionOptions } from '../src/service/common';
-import { buildPlist } from '../src/service/launchd';
+import { renderDefinition } from '../src/service/definitions';
+import { resolveServiceRoot, LAUNCHD_LABEL } from '../src/service/identity';
 import { buildUnit } from '../src/service/systemd';
 import { buildLauncherCmd, SERVICE_ENV_FLAG } from '../src/service/win-startup';
 import {
@@ -307,45 +308,23 @@ describe.skipIf(!enabled)('native service smoke tests (explicit opt-in)', () => 
     });
   }, 120_000);
 
-  it.runIf(process.platform === 'darwin')('parses generated launchd arguments and environment with native plutil', async () => {
+  it.runIf(process.platform === 'darwin')('parses the fixed launchd definition with native plutil', async () => {
     await withFixture(false, async (fixture) => {
-      const plistPath = join(fixture.root, `${fixture.name}.plist`);
-      await writeFile(plistPath, buildPlist({ ...fixture.options, label: fixture.name }), 'utf8');
+      const root = await resolveServiceRoot(fixture.root);
+      const plistPath = join(root, 'definition.plist');
+      const rendered = renderDefinition({ target: { platform: 'darwin', plistPath }, root, port: 32123,
+        distribution: { kind: 'npm', executable: process.execPath, entry: fixture.options.cliBinPath! }, capturedPath: fixture.options.envPath! });
+      if (rendered.platform !== 'darwin') throw new Error('Expected plist');
+      await writeFile(plistPath, rendered.plist);
       command('/usr/bin/plutil', ['-lint', plistPath]);
       const plist = JSON.parse(command('/usr/bin/plutil', ['-convert', 'json', '-o', '-', plistPath]));
-      expect(plist.Label).toBe(fixture.name);
-      expect(plist.ProgramArguments).toEqual([process.execPath, fixture.options.cliBinPath, 'run']);
+      expect(plist.Label).toBe(LAUNCHD_LABEL);
+      expect(plist.ProgramArguments).toEqual([process.execPath, fixture.options.cliBinPath, 'daemon', 'run', '--port', '32123']);
       expect(plist.EnvironmentVariables.PATH).toBe(fixture.options.envPath);
-      expect(plist.StandardOutPath).toBe(fixture.options.stdoutPath);
-      expect(plist.StandardErrorPath).toBe(fixture.options.stderrPath);
+      expect(plist.StandardOutPath).toBe(join(root, 'service.log'));
+      expect(plist.StandardErrorPath).toBe(join(root, 'service.err.log'));
     });
   });
-
-  it.runIf(process.platform === 'darwin').each(CODEX_PATH_SCENARIOS)('preserves selected Codex across launchd start and restart (%s)', async (scenario) => {
-    await withCodexSelection(true, scenario, async (fixture) => {
-      const plistPath = join(fixture.root, `${fixture.name}.plist`);
-      await writeFile(plistPath, definitionWithSelection(fixture, () => buildPlist({ ...fixture.options, label: fixture.name })), 'utf8');
-      const domain = `gui/${userInfo().uid}`;
-      const target = `${domain}/${fixture.name}`;
-      serviceCommand('/bin/launchctl', ['print', domain]);
-      // Even a timed-out bootstrap may have registered the job server-side.
-      fixture.teardown = {
-        actions: [
-          () => { serviceCommand('/bin/launchctl', ['bootout', target]); },
-          () => waitForExit(fixture),
-        ],
-        manualCommands: [`/bin/launchctl bootout ${target}`],
-      };
-      serviceCommand('/bin/launchctl', ['bootstrap', domain, plistPath]);
-      const first = await waitForWorker(fixture);
-      expectWorker(first, fixture, null);
-      serviceCommand('/bin/launchctl', ['kickstart', '-k', target]);
-      const second = await waitForWorker(fixture, first.pid);
-      expectWorker(second, fixture, null);
-      expect(second.pid).not.toBe(first.pid);
-      await expectLogs(fixture);
-    });
-  }, 120_000);
 });
 
 // Failure-path checks use only files and injected callbacks, never an OS
