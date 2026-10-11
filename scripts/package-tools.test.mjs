@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { allowlist, fileEntries, validateManifest, validateTree } from './package-tools.mjs';
+import { allowlist, fileEntries, validateInstalledManifest, validateManifest, validateTree } from './package-tools.mjs';
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'vonvon-package-test-'));
@@ -15,6 +15,73 @@ async function fixture() {
   await writeFile(join(root, 'package.json'), JSON.stringify(metadata));
   const manifest = { schema: 1, package: 'vonvon-bot', version: '0.7.0', sourceHead: 'abc', lockfileSha256: 'a'.repeat(64), node: 'v22.22.0', npm: '10.9.4', esbuild: '0.25.9', files: await fileEntries(root) };
   return { root, manifest };
+}
+
+async function installedFixture(t) {
+  const { root, manifest } = await fixture();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  for (const [directory, name, bin] of [
+    ['node_modules/qrcode', 'qrcode', { qrcode: 'bin/qrcode' }],
+    ['node_modules/parent/node_modules/@scope/tool', '@scope/tool', 'bin/tool'],
+  ]) {
+    await mkdir(join(root, directory, 'bin'), { recursive: true });
+    await writeFile(join(root, directory, 'package.json'), JSON.stringify({ name, version: '1.0.0', bin }));
+    await writeFile(join(root, directory, typeof bin === 'string' ? bin : bin.qrcode), 'executable');
+  }
+  manifest.files = await fileEntries(root);
+  const links = [
+    ['node_modules/.bin/qrcode', '../qrcode/bin/qrcode'],
+    ['node_modules/parent/node_modules/.bin/tool', '../@scope/tool/bin/tool'],
+  ];
+  for (const [path, target] of links) {
+    await mkdir(join(root, path, '..'), { recursive: true });
+    await symlink(target, join(root, path));
+  }
+  return { root, manifest, links };
+}
+
+test('installed manifest accepts exact dependency bin links while packed tree remains strict', async t => {
+  const { root, manifest } = await installedFixture(t);
+  await validateInstalledManifest(root, manifest, 'abc');
+  await assert.rejects(validateManifest(root, manifest, 'abc'), /symlink refused/);
+  await assert.rejects(validateTree(root), /symlink refused/);
+  await assert.rejects(fileEntries(root), /symlink refused/);
+});
+
+for (const [path, target] of [
+  ['node_modules/.bin/undeclared', '../qrcode/bin/qrcode'],
+  ['bin/qrcode', '../node_modules/qrcode/bin/qrcode'],
+  ['node_modules/.bin/qrcode', '../qrcode/package.json'],
+  ['node_modules/.bin/qrcode', '../qrcode/bin/missing'],
+  ['node_modules/.bin/qrcode', '/tmp/outside'],
+  ['node_modules/.bin/qrcode', '../../../outside'],
+  ['node_modules/.bin/qrcode', '../qrcode/bin/../bin/qrcode'],
+  ['node_modules/.bin/qrcode', '../parent/node_modules/@scope/tool/bin/tool'],
+]) {
+  test(`installed manifest refuses unauthorized link ${path} to ${target}`, async t => {
+    const { root, manifest } = await installedFixture(t);
+    await rm(join(root, path), { force: true });
+    await symlink(target, join(root, path));
+    await assert.rejects(validateInstalledManifest(root, manifest, 'abc'), /installed symlink refused/);
+  });
+}
+
+for (const variant of ['extra file', 'bin file', 'content', 'mode', 'metadata', 'missing target', 'linked target']) {
+  test(`installed manifest still refuses ${variant}`, async t => {
+    const { root, manifest } = await installedFixture(t);
+    const target = join(root, 'node_modules/qrcode/bin/qrcode');
+    if (variant === 'extra file') await writeFile(join(root, 'extra'), 'extra');
+    if (variant === 'bin file') await writeFile(join(root, 'node_modules/.bin/extra'), 'extra');
+    if (variant === 'content') await writeFile(target, 'changed');
+    if (variant === 'mode') {
+      const original = manifest.files.find(file => file.path === 'node_modules/qrcode/bin/qrcode');
+      await chmod(target, parseInt(original.mode, 8) ^ 0o100);
+    }
+    if (variant === 'metadata') await writeFile(join(root, 'node_modules/qrcode/package.json'), JSON.stringify({ name: 'qrcode', version: '1.0.0', bin: { qrcode: 'package.json' } }));
+    if (variant === 'missing target' || variant === 'linked target') await rm(target);
+    if (variant === 'linked target') await symlink('../package.json', target);
+    await assert.rejects(validateInstalledManifest(root, manifest, 'abc'), /manifest file hash, mode, or inventory mismatch/);
+  });
 }
 
 test('manifest is deterministic and detects missing, extra, modified, native files and wrong head', async t => {

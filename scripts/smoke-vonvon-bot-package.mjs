@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { validateManifest } from './package-tools.mjs';
+import { validateInstalledManifest } from './package-tools.mjs';
 
 const args = process.argv.slice(2);
 function argument(name) {
@@ -14,7 +14,7 @@ const installed = resolve(argument('--installed'));
 const port = Number(argument('--port'));
 const manifest = JSON.parse(await readFile(argument('--manifest'), 'utf8'));
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('invalid port');
-await validateManifest(installed, manifest, manifest.sourceHead);
+await validateInstalledManifest(installed, manifest, manifest.sourceHead);
 const home = await mkdtemp(join(tmpdir(), 'vonvon-smoke-'));
 const environment = { ...process.env, VONVON_HOME: home, HOME: home };
 const cli = join(installed, 'bin/vonvon.mjs');
