@@ -1,17 +1,27 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { EnvironmentService } from '../src/environment/service';
+import { executableRoots } from './environment-executable-fixture';
+
+vi.mock('node:fs/promises', async importOriginal => {
+  const { fixtureFilesystem } = await import('./environment-executable-fixture');
+  return fixtureFilesystem(await importOriginal<typeof import('node:fs/promises')>());
+});
 
 const processTestTimeout = process.platform === 'win32' ? 60_000 : 5_000;
 const readinessTimeout = process.platform === 'win32' ? 15_000 : 2_000;
 const dirs: string[] = [];
-afterEach(async () => { await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true }))); });
+afterEach(async () => {
+  try { await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true }))); }
+  finally { executableRoots.clear(); }
+});
 
-async function fixture() {
+async function fixture(foreignPath?: string) {
   const dir = await mkdtemp(join(tmpdir(), 'vonvon-environment-'));
   dirs.push(dir);
+  executableRoots.add(await realpath(dir));
   const bin = join(dir, 'bin');
   await import('node:fs/promises').then(fs => fs.mkdir(bin));
   const cli = join(bin, process.platform === 'win32' ? 'lark-cli.cjs' : 'lark-cli');
@@ -34,7 +44,7 @@ if (args[0] === 'config' && args[1] === 'init') process.exit(0);
   if (process.platform === 'win32') {
     for (const name of ['lark-cli', 'npm']) await writeFile(join(bin, `${name}.cmd`), `@echo off\r\n"${process.execPath}" "%~dp0${name}.cjs" %*\r\n`);
   }
-  const environment = new EnvironmentService({ home: dir, getDataRoot: () => dir, resolveCodex: () => null, nodePath: process.execPath, path: bin, fetchLatest: async () => null, npmPath: npm });
+  const environment = new EnvironmentService({ home: dir, getDataRoot: () => dir, resolveCodex: () => null, nodePath: process.execPath, path: foreignPath ? [foreignPath, bin].join(delimiter) : bin, fetchLatest: async () => null, npmPath: npm });
   return { dir, npmScript, environment };
 }
 
@@ -44,6 +54,25 @@ async function waitUntil(check: () => Promise<boolean>) {
 }
 
 describe('daemon environment operations', () => {
+  it('excludes foreign Claude and lark executables before launching scan children', async () => {
+    const foreign = await mkdtemp(join(tmpdir(), 'vonvon-foreign-tools-'));
+    dirs.push(foreign);
+    const marker = join(foreign, 'executed');
+    for (const name of ['claude', 'lark-cli']) {
+      const script = join(foreign, process.platform === 'win32' ? `${name}.cjs` : name);
+      await writeFile(script, `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(marker)}, 'executed');\nprocess.stdout.write('9.9.9');\n`, { mode: 0o700 });
+      if (process.platform === 'win32') await writeFile(join(foreign, `${name}.cmd`), `@echo off\r\n"${process.execPath}" "%~dp0${name}.cjs" %*\r\n`);
+    }
+    const f = await fixture(foreign);
+    try {
+      expect(await f.environment.run({ type: 'scan' })).toMatchObject({ kind: 'tools', tools: expect.arrayContaining([
+        expect.objectContaining({ tool: 'claude', installation: 'missing' }),
+        expect.objectContaining({ tool: 'lark-cli', installation: 'external', version: '1.2.3' }),
+      ]) });
+      expect(await readFile(marker, 'utf8').catch(() => null)).toBeNull();
+    } finally { await f.environment.close(); }
+  }, processTestTimeout);
+
   it('scans, reads auth, and handles lark profiles with fake local tool', async () => {
     const f = await fixture();
     try {
