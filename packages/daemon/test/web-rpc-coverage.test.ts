@@ -1,9 +1,17 @@
-import { describe, expect, it } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { requestSchema, responseSchema } from '@vonvon/protocol';
 import { fakeService, socketClient, startFixture } from './server-fixture';
+import { executableRoots } from './environment-executable-fixture';
+
+vi.mock('node:fs/promises', async importOriginal => {
+  const { fixtureFilesystem } = await import('./environment-executable-fixture');
+  return fixtureFilesystem(await importOriginal<typeof import('node:fs/promises')>());
+});
+
+afterEach(() => { executableRoots.clear(); });
 
 const processTestTimeout = process.platform === 'win32' ? 90_000 : 5_000;
 const readinessTimeout = process.platform === 'win32' ? 15_000 : 2_000;
@@ -69,6 +77,7 @@ it('serves browser daemon branches and keeps local URL and shell actions unsuppo
 
 it('holds the real API drain until a login child exits after stop intent', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'vonvon-browser-drain-'));
+  executableRoots.add(await realpath(dir));
   const release = join(dir, 'release');
   const started = join(dir, 'started');
   await writeTool(dir, 'lark-cli', `#!/usr/bin/env node\nconst fs=require('node:fs');fs.writeFileSync(${JSON.stringify(started)},'started');const t=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){clearInterval(t);process.exit(0)}},20);\n`);
@@ -100,6 +109,7 @@ it('holds the real API drain until a login child exits after stop intent', async
 it('sends one valid WebSocket request for every browser protocol union variant', async () => {
   const schemas = await import('@vonvon/protocol');
   const environmentHome = await mkdtemp(join(tmpdir(), 'vonvon-union-environment-'));
+  executableRoots.add(await realpath(environmentHome));
   await writeTool(environmentHome, 'lark-cli', `#!/usr/bin/env node
 const args=process.argv.slice(2);
 if(args[0]==='--version'){process.stdout.write('lark-cli 1.2.3');process.exit(0)}

@@ -1,19 +1,29 @@
-import { afterEach, expect, it } from 'vitest';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { afterEach, expect, it, vi } from 'vitest';
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { watch } from 'node:fs';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { EnvironmentRequest } from '@vonvon/protocol';
 import { EnvironmentService } from '../src/environment/service';
+import { executableRoots } from './environment-executable-fixture';
+
+vi.mock('node:fs/promises', async importOriginal => {
+  const { fixtureFilesystem } = await import('./environment-executable-fixture');
+  return fixtureFilesystem(await importOriginal<typeof import('node:fs/promises')>());
+});
 
 const processTestTimeout = process.platform === 'win32' ? 30_000 : 5_000;
 const directories: string[] = [];
-afterEach(async () => { await Promise.all(directories.splice(0).map(dir => rm(dir, { recursive: true, force: true }))); });
+afterEach(async () => {
+  try { await Promise.all(directories.splice(0).map(dir => rm(dir, { recursive: true, force: true }))); }
+  finally { executableRoots.clear(); }
+});
 
 async function fixture() {
   const dir = await mkdtemp(join(tmpdir(), 'environment-boundaries-'));
   directories.push(dir);
+  executableRoots.add(await realpath(dir));
   const cli = join(dir, process.platform === 'win32' ? 'lark-cli.cmd' : 'lark-cli');
   const script = process.platform === 'win32' ? join(dir, 'lark-cli.cjs') : cli;
   await writeFile(script, `#!/usr/bin/env node
