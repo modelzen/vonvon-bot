@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ChildProcess, spawn } from 'node:child_process';
-import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { PROTOCOL_VERSION } from '@vonvon/protocol';
@@ -23,7 +23,7 @@ const owner = { pid: 12345, startedAt: '2026-10-11T00:00:00.000Z', listen: '127.
 const dependencies = () => createDaemonDependencies({ root: '/owned/data', home: '/owned/home', resources: '/owned/resources', executable: '/owned/Electron', packaged: false });
 
 async function packagedDependencies() {
-  const root = await mkdtemp(join(tmpdir(), 'desktop-launch-'));
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'desktop-launch-')));
   roots.push(root);
   const resources = join(root, 'resources');
   const files: Array<[string, string]> = [
@@ -48,7 +48,7 @@ afterEach(async () => {
 
 describe('desktop daemon dependencies', () => {
   it('creates a fresh private root and refuses a symlink root', async () => {
-    const parent = await mkdtemp(join(tmpdir(), 'desktop-root-'));
+    const parent = await realpath(await mkdtemp(join(tmpdir(), 'desktop-root-')));
     roots.push(parent);
     const path = join(parent, 'data');
     expect(await prepareDesktopRoot({ kind: 'fresh', path })).toBe(path);

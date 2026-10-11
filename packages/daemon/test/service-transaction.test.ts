@@ -3,8 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { mkdtemp, open, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { expect, it } from 'vitest';
+import { join, posix } from 'node:path';
+import { afterEach, expect, it, vi } from 'vitest';
 import { machineIdSchema, PROTOCOL_VERSION } from '@vonvon/protocol';
 import { createSocketServer, type Peer } from '../src/server/ws';
 import type { PidLockInfo } from '../src/server/pid-lock';
@@ -15,6 +15,16 @@ import { createLaunchdService } from '../src/service/launchd';
 import { renderDefinition } from '../src/service/definitions';
 import { resolveServiceRoot, LAUNCHD_LABEL } from '../src/service/identity';
 import { readRegistration } from '../src/service/registration';
+import { clearPosixFixtures, logicalFixturePath, registerPosixFixture } from './service-posix-fixture';
+
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const { mappedServiceFs } = await import('./service-posix-fixture');
+  return mappedServiceFs(actual);
+});
+
+
+afterEach(clearPosixFixtures);
 
 type Observation =
   | { kind: 'lock'; value: PidLockInfo | null }
@@ -356,8 +366,8 @@ it.each([install, all])('real O4 sends exactly one stopHost and treats a lost do
 type LaunchdFixture = Awaited<ReturnType<typeof launchdFixture>>;
 async function launchdFixture() {
   const directory = await mkdtemp(join(tmpdir(), 'launchd-transaction-'));
-  const root = await resolveServiceRoot(directory);
-  const plistPath = join(root, 'Library/LaunchAgents', `${LAUNCHD_LABEL}.plist`);
+  const root = await resolveServiceRoot(registerPosixFixture(await resolveServiceRoot(directory)));
+  const plistPath = posix.join(root, 'Library/LaunchAgents', `${LAUNCHD_LABEL}.plist`);
   const target = { platform: 'darwin' as const, plistPath };
   const calls: string[] = [];
   const fileCalls: string[] = [];
@@ -377,11 +387,11 @@ async function launchdFixture() {
   } = { fileFault: null, cleanupFails: false, plistUnlinkFails: false, logFault: null, child: null, prematureBootouts: 0, ownerWork: 0, loaded: false, owner: null, pid: null, clock: 0, bootstrap: 'success', verifyFails: false,
     queryFailure: false, queryTimeout: false, queryOutput: null, bootout: 'success', stopFails: false, beforeCommand: null, beforeUnlink: null, afterUnlink: null, onPause: null, renameFails: false, delayStop: false, pidText: null };
   const content = (port = 49101) => {
-    const result = renderDefinition({ target, root, port, distribution: { kind: 'npm', executable: process.execPath, entry: '/package/bin/vonvon.mjs' }, capturedPath: '/captured/bin' });
+    const result = renderDefinition({ target, root, port, distribution: { kind: 'npm', executable: '/fixture/bin/node', entry: '/package/bin/vonvon.mjs' }, capturedPath: '/captured/bin' });
     if (result.platform !== 'darwin') throw new Error('Expected plist');
     return Buffer.from(result.plist);
   };
-  const seed = async (port = 49101) => { await mkdir(join(root, 'Library/LaunchAgents'), { recursive: true }); await writeFile(plistPath, content(port)); state.loaded = true; };
+  const seed = async (port = 49101) => { await mkdir(posix.join(root, 'Library/LaunchAgents'), { recursive: true }); await writeFile(plistPath, content(port)); state.loaded = true; };
   const launchChild = () => {
     expect(state.child).toBeNull();
     state.child = { phase: 'checking', pid: first.pid, locks: 0, work: 0, exitCode: null, signals: 0 };
@@ -411,9 +421,9 @@ async function launchdFixture() {
     fileCalls.push(operation);
     if (state.fileFault === operation) { state.fileFault = null; throw new Error(`${operation} failed`); }
   };
-  const temporaryFiles = async () => (await readdir(dirname(plistPath))).filter(name => name.endsWith('.tmp')).map(name => join(dirname(plistPath), name));
+  const temporaryFiles = async () => (await readdir(posix.dirname(plistPath))).filter(name => name.endsWith('.tmp')).map(name => posix.join(posix.dirname(plistPath), name));
   const service = createLaunchdService({ root }, {
-    home: root, uid: 501, capturedPath: '/captured/bin',
+    home: root, uid: 501, executable: '/fixture/bin/node', capturedPath: '/captured/bin',
     distribution: async () => ({ kind: 'global-npm', cliPath: '/package/bin/vonvon.mjs' }),
     readOwner: async () => state.owner,
     verifyOwner: async (_root, owner) => { if (state.verifyFails || state.owner !== owner) throw new Error('Owner not authenticated'); },
@@ -431,7 +441,7 @@ async function launchdFixture() {
     },
     open: async (path, flags, mode) => {
       const temporary = String(path).endsWith('.tmp');
-      const logFault = state.logFault?.name === String(path) ? state.logFault : null;
+      const logFault = state.logFault?.name === logicalFixturePath(String(path)) ? state.logFault : null;
       if (temporary) failFile('open');
       if (logFault?.operation === 'open') throw new Error('log open failed');
       const file = await open(path, flags, mode);
@@ -508,7 +518,7 @@ it('launchd installs canonical bytes and root-local logs, and loaded stopped rei
   await withLaunchd(async f => {
     expect((await f.service.install()).kind).toBe('installed');
     expect(await readFile(f.plistPath)).toEqual(f.content());
-    expect(await readFile(join(f.root, 'service.log'), 'utf8')).toBe('');
+    expect(await readFile(posix.join(f.root, 'service.log'), 'utf8')).toBe('');
     f.state.owner = null; f.state.pid = null; f.calls.length = 0;
     expect((await f.service.install()).kind).toBe('already-installed');
     expect(f.calls.some(call => /bootstrap|kickstart|withdraw|stop /.test(call))).toBe(false);
@@ -912,7 +922,7 @@ it.each((['fresh', 'replacement'] as const).flatMap(mode =>
 )('launchd $mode $name $operation failure rolls back without bootstrap', async ({ mode, name, operation }) => {
   await withLaunchd(async f => {
     if (mode === 'replacement') await f.seed(49102);
-    f.state.logFault = { name: join(f.root, name), operation };
+    f.state.logFault = { name: posix.join(f.root, name), operation };
     const result = await f.service.install();
     expect(result.kind).toBe('install_rolled_back'); expect(result.detail).toContain(`log ${operation} failed`);
     expect(result.retained).toBeNull(); expect(f.state.owner).toBeNull(); expect(f.state.loaded).toBe(false);

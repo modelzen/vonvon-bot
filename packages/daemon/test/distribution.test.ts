@@ -1,4 +1,4 @@
-import {mkdtempSync,mkdirSync,writeFileSync,rmSync,symlinkSync,unlinkSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,writeFileSync,realpathSync,rmSync,symlinkSync,unlinkSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {it,expect} from 'vitest';
@@ -13,7 +13,7 @@ function fixture(root:string,name:string,bin='bin/vonvon.mjs'):void {
 }
 
 it('classifies only exact global and bundled layouts and returns canonical CLI paths',()=>{
-  const dir=mkdtempSync(join(tmpdir(),'vonvon-distribution-'));
+  const dir=realpathSync(mkdtempSync(join(tmpdir(),'vonvon-distribution-')));
   try {
     const globalRoot=join(dir,'node_modules');
     const globalPackage=join(globalRoot,'vonvon-bot');
@@ -43,7 +43,7 @@ it('classifies only exact global and bundled layouts and returns canonical CLI p
 });
 
 it('keeps a global package layout below a checkout in development',()=>{
-  const dir=mkdtempSync(join(tmpdir(),'vonvon-global-checkout-'));
+  const dir=realpathSync(mkdtempSync(join(tmpdir(),'vonvon-global-checkout-')));
   try {
     writeFileSync(join(dir,'.git'),'gitdir: elsewhere');
     const globalRoot=join(dir,'node_modules');
@@ -54,7 +54,7 @@ it('keeps a global package layout below a checkout in development',()=>{
 });
 
 it('recognizes packaged artifacts built inside a source checkout',()=>{
-  const dir=mkdtempSync(join(tmpdir(),'vonvon-packaged-checkout-'));
+  const dir=realpathSync(mkdtempSync(join(tmpdir(),'vonvon-packaged-checkout-')));
   try {
     writeFileSync(join(dir,'.git'),'gitdir: elsewhere');
     const resources=join(dir,'dist','App','resources');
@@ -68,7 +68,7 @@ it('recognizes packaged artifacts built inside a source checkout',()=>{
 });
 
 it('rejects malformed, missing, bridge and marker-only installations',()=>{
-  const dir=mkdtempSync(join(tmpdir(),'vonvon-distribution-'));
+  const dir=realpathSync(mkdtempSync(join(tmpdir(),'vonvon-distribution-')));
   try {
     const globalRoot=join(dir,'node_modules');
     const root=join(globalRoot,'vonvon-bot');
@@ -98,7 +98,7 @@ it('rejects malformed, missing, bridge and marker-only installations',()=>{
 });
 
 it('keeps source checkouts and symlinked installs in development',()=>{
-  const dir=mkdtempSync(join(tmpdir(),'vonvon-distribution-'));
+  const dir=realpathSync(mkdtempSync(join(tmpdir(),'vonvon-distribution-')));
   try {
     for (const marker of ['file','directory']) {
       const repo=join(dir,marker);

@@ -1,18 +1,23 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { acquireMutex, closeMutex } from '../src/config/data-access';
 import { renderDefinition } from '../src/service/definitions';
 import { resolveServiceRoot, serviceTarget } from '../src/service/identity';
 
+vi.mock('../src/service/identity', async importOriginal => {
+  const actual = await importOriginal<typeof import('../src/service/identity')>();
+  return { ...actual, resolveServiceRoot: (path: string) => path === '/fixture/root' ? Promise.resolve(path) : actual.resolveServiceRoot(path) };
+});
+
 const bin = resolve(import.meta.dirname, '../bin/vonvon.mjs');
 
 function serviceFixture() {
-  const root = mkdtempSync(join(tmpdir(), 'vonvon-prelock-cli-'));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'vonvon-prelock-cli-')));
   const home = join(root, 'home');
   const data = join(root, 'data');
   const xdgConfigHome = join(root, 'config');
@@ -137,27 +142,29 @@ function assertPackagedCommand(args: string[], port?: number): void {
 
 describe('OS service foreground entry', () => {
   it('launchd calls the packaged daemon command', async () => {
-    const root = await resolveServiceRoot(tmpdir());
-    const rendered = renderDefinition({ target: { platform: 'darwin', plistPath: '/unused.plist' }, root, port: 32123, distribution: { kind: 'npm', executable: process.execPath, entry: bin }, capturedPath: '/usr/bin' });
+    const root = await resolveServiceRoot('/fixture/root');
+    const rendered = renderDefinition({ target: { platform: 'darwin', plistPath: '/unused.plist' }, root, port: 32123, distribution: { kind: 'npm', executable: '/fixture/bin/node', entry: '/fixture/bin/vonvon.mjs' }, capturedPath: '/usr/bin' });
     if (rendered.platform !== 'darwin') throw new Error('Expected plist');
     const plist = Buffer.from(rendered.plist).toString();
     const argumentsXml = plist.match(/<key>ProgramArguments<\/key>\s*<array>(.*?)<\/array>/s)?.[1];
     expect(argumentsXml).toBeDefined();
     const args = [...argumentsXml!.matchAll(/<string>(.*?)<\/string>/g)].map((match) => match[1]!);
-    assertPackagedCommand(args, 32123);
+    expect(args).toEqual(['/fixture/bin/node', '/fixture/bin/vonvon.mjs', 'daemon', 'run', '--port', '32123']);
+    assertPackagedCommand([process.execPath, bin, ...args.slice(2)], 32123);
   });
 
   it('systemd calls the packaged daemon command', async () => {
-    const root = await resolveServiceRoot(tmpdir());
+    const root = await resolveServiceRoot('/fixture/root');
     const rendered = renderDefinition({ target: { platform: 'linux', unitPath: '/unused.service' }, root, port: 32123,
-      distribution: { kind: 'npm', executable: process.execPath, entry: bin }, capturedPath: '/usr/bin' });
+      distribution: { kind: 'npm', executable: '/fixture/bin/node', entry: '/fixture/bin/vonvon.mjs' }, capturedPath: '/usr/bin' });
     if (rendered.platform !== 'linux') throw new Error('Expected unit');
     const line = Buffer.from(rendered.unit).toString().match(/^ExecStart=(.*)$/m)?.[1];
     expect(line).toBeDefined();
     const args = [...line!.matchAll(/"((?:\\.|[^"\\])*)"|(\S+)/g)].map(match =>
       match[1]?.replace(/\\([\\"])/g, '$1').replace(/%%/g, '%').replace(/\$\$/g, '$') ?? match[2]!,
     );
-    assertPackagedCommand(args, 32123);
+    expect(args).toEqual(['/fixture/bin/node', '/fixture/bin/vonvon.mjs', 'daemon', 'run', '--port', '32123']);
+    assertPackagedCommand([process.execPath, bin, ...args.slice(2)], 32123);
   });
 
 
@@ -215,7 +222,7 @@ describe.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')('
 
 describe('Windows relaunch helper entry', () => {
   it('refuses relaunch without touching the request or taking a data lease and stays hidden', () => {
-    const root = mkdtempSync(join(tmpdir(), 'vonvon-relaunch-cli-'));
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'vonvon-relaunch-cli-')));
     try {
       const data = join(root, 'data');
       const requestDir = join(root, 'request');
