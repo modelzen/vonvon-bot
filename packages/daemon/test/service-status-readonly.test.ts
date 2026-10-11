@@ -3,7 +3,7 @@ import { serviceStatusSchema } from '@vonvon/protocol';
 import { homedir } from 'node:os';
 import { getServiceAdapter } from '../src/service/adapter';
 import { controlDesktopService } from '../src/host/service';
-import { runServiceStatus } from '../src/cli/commands/service';
+import { runServiceCommand, runServiceStatus } from '../src/cli/commands/service';
 import { serviceTarget } from '../src/service/identity';
 
 const observation = vi.hoisted(() => ({
@@ -12,12 +12,24 @@ const observation = vi.hoisted(() => ({
   launchdCreate: vi.fn(),
   systemdCreate: vi.fn(),
   windowsStatus: vi.fn(),
+  windowsRun: vi.fn(),
+  windowsRegistration: vi.fn(),
+  owner: vi.fn(),
+  verifyOwner: vi.fn(),
 }));
 vi.mock('../src/config/paths', () => ({ paths: { appDir: '/tmp/vonvon-status-root' } }));
+vi.mock('../src/service/identity', async importOriginal => ({
+  ...await importOriginal(),
+  resolveServiceRoot: vi.fn(async (path: string) => path === '/tmp/vonvon-status-root' ? 'C:\\Vonvon' : path),
+}));
+vi.mock('../src/service/registration', () => ({ readRegistration: observation.windowsRegistration }));
+vi.mock('../src/server/pid-lock', () => ({ readRunningPidLock: observation.owner }));
+vi.mock('../src/server/owner-verification', () => ({ verifyPidLockOwner: observation.verifyOwner }));
 vi.mock('../src/service/launchd', () => ({ createLaunchdService: (...args: unknown[]) => { observation.launchdCreate(...args); return { status: observation.launchd }; } }));
 vi.mock('../src/service/systemd', () => ({ createSystemdService: (...args: unknown[]) => { observation.systemdCreate(...args); return { status: observation.systemd }; } }));
 vi.mock('../src/service/win-startup', () => ({
   installWinStartup: vi.fn(), uninstallWinStartup: vi.fn(), restartWinStartup: vi.fn(), winStartupRunning: vi.fn(), statusWinStartup: observation.windowsStatus,
+  readVonvonRunValue: observation.windowsRun,
 }));
 
 afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); vi.unstubAllEnvs(); });
@@ -80,10 +92,89 @@ it.each([true, false])('CLI propagates adapter uncertainty without emitting a su
   expect(output).not.toHaveBeenCalled();
 });
 
-it('Windows status never calls the legacy startup reader', async () => {
+it.each([
+  ['absent', { kind: 'absent' }, false, false],
+  ['ours stopped', { kind: 'ours' }, true, false],
+  ['ours running', { kind: 'ours' }, true, true],
+] as const)('Windows %s uses the Run registration and verified lock', async (_scenario, state, installed, running) => {
   vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
-  await expect(getServiceAdapter().status()).rejects.toThrow('Run registration reader');
+  const windowsRun = installed ? { kind: 'value', type: 'REG_SZ', value: 'wscript.exe //B \"C:\\Vonvon\\service\\vonvon-bot.vbs\"' } : { kind: 'absent' };
+  observation.windowsRun.mockReturnValue(windowsRun);
+  observation.windowsRegistration.mockResolvedValue(state);
+  observation.owner.mockResolvedValue(running ? { pid: 42, startedAt: 'now', listen: '127.0.0.1:43121' } : null);
+  const result = await getServiceAdapter().status();
+  expect(result).toMatchObject({ installed, running, servicePath: 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Vonvon Bot' });
+  expect(result.pid).toBe(running ? '42' : undefined);
+  expect(observation.windowsRegistration).toHaveBeenCalledWith(expect.objectContaining({ requestedRoot: 'C:\\Vonvon', windowsRun }));
+  expect(observation.verifyOwner).toHaveBeenCalledTimes(running ? 1 : 0);
   expect(observation.windowsStatus).not.toHaveBeenCalled();
+});
+
+it.each([
+  ['other-root', { kind: 'other-root', recordedRoot: 'D:\\Other' }, 'D:\\Other'],
+  ['unrecognized', { kind: 'unrecognized', location: 'C:\\bad.vbs', reason: 'bad definition' }, 'bad definition'],
+])('Windows %s refuses uncertain registration', async (_scenario, state, detail) => {
+  vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+  observation.windowsRun.mockReturnValue({ kind: 'value', type: 'REG_SZ', value: 'locator' });
+  observation.windowsRegistration.mockResolvedValue(state);
+  await expect(getServiceAdapter().status()).rejects.toThrow(detail);
+  expect(observation.owner).not.toHaveBeenCalled();
+});
+
+it('Windows never reports a lock as a running service without registration and owner verification', async () => {
+  vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+  observation.windowsRun.mockReturnValue({ kind: 'absent' });
+  observation.owner.mockResolvedValue({ pid: 42, startedAt: 'now', listen: '127.0.0.1:43121' });
+  observation.windowsRegistration.mockResolvedValue({ kind: 'absent' });
+  await expect(getServiceAdapter().status()).resolves.toMatchObject({ installed: false, running: false });
+  expect(observation.verifyOwner).not.toHaveBeenCalled();
+  observation.windowsRun.mockReturnValue({ kind: 'value', type: 'REG_SZ', value: 'wscript.exe //B \"C:\\Vonvon\\service\\vonvon-bot.vbs\"' });
+  observation.windowsRegistration.mockResolvedValue({ kind: 'ours' });
+  observation.verifyOwner.mockRejectedValue(new Error('Cannot verify daemon owner'));
+  await expect(getServiceAdapter().status()).rejects.toThrow('Cannot verify daemon owner');
+});
+
+it('Windows query failure reaches the existing CLI and host error channel without success output', async () => {
+  vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+  observation.windowsRun.mockReturnValue({ kind: 'unavailable', reason: 'permission denied' });
+  observation.windowsRegistration.mockResolvedValue({ kind: 'unrecognized', location: 'HKCU', reason: 'Windows Run observation unavailable: permission denied' });
+  const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+  await expect(runServiceStatus(true)).rejects.toThrow('permission denied');
+  await expect(controlDesktopService('status')).rejects.toThrow('permission denied');
+  expect(output).not.toHaveBeenCalled();
+});
+
+it('Windows CLI human and JSON and host use the same read-only adapter', async () => {
+  vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+  observation.windowsRun.mockReturnValue({ kind: 'absent' });
+  observation.windowsRegistration.mockResolvedValue({ kind: 'absent' });
+  observation.owner.mockResolvedValue(null);
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  vi.spyOn(process.stdout, 'write').mockImplementation(chunk => { stdout.push(String(chunk)); return true; });
+  vi.spyOn(process.stderr, 'write').mockImplementation(chunk => { stderr.push(String(chunk)); return true; });
+  await runServiceStatus(false);
+  expect(stdout.join('')).toContain('not registered, not running');
+  expect(stderr.join('')).toContain('No Vonvon service registration');
+  expect(await controlDesktopService('status')).toMatchObject({ supported: true, installed: false, running: false });
+  stdout.length = 0;
+  await runServiceStatus(true);
+  const wire = JSON.parse(stdout.join(''));
+  expect(wire).toEqual(serviceStatusSchema.parse(wire));
+  expect(wire).not.toHaveProperty('raw');
+});
+
+it('Windows CLI and host mutations refuse before invoking a manager adapter', async () => {
+  vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+  const install = vi.fn();
+  const uninstall = vi.fn();
+  await expect(runServiceCommand('install', { install, uninstall })).rejects.toThrow('cannot manage an OS service');
+  await expect(runServiceCommand('uninstall', { install, uninstall })).rejects.toThrow('cannot manage an OS service');
+  await expect(controlDesktopService('install')).rejects.toThrow('cannot manage an OS service');
+  await expect(controlDesktopService('uninstall')).rejects.toThrow('cannot manage an OS service');
+  expect(install).not.toHaveBeenCalled();
+  expect(uninstall).not.toHaveBeenCalled();
+  expect(observation.windowsRun).not.toHaveBeenCalled();
 });
 
 for (const phrase of ['query failed', 'unexpected unit path', 'Unrecognized Vonvon service registration', 'registration belongs to elsewhere']) {
