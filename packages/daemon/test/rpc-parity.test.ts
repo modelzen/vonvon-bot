@@ -71,7 +71,7 @@ describe('route inventory parity', () => {
     let active = false;
     const service = fakeService({ listBots: async () => [{ ...bot, active }], listProjects: async () => [project], setBotEnabled: async (_id, enabled) => { active = enabled; return { ok: true, activation: 'applied', message: '' }; },
       pendingGroups: async () => ({ groups: [] }), joinedGroups: async () => ({ groups: [] }), bindGroup: async () => project,
-      collaboration: async () => ({ kind: 'project', project: { name: project.name, chatId: project.chatId, cwd: project.cwd, kind: project.kind, backend: project.backend, enabled: true, revision: 'project-token' } }),
+      collaboration: async () => ({ project: { name: project.name, chatId: project.chatId, cwd: project.cwd, kind: project.kind, backend: project.backend, enabled: true, revision: 'project-token' } }),
       startCodexJob: () => ({ id: 'fixture-job' }), codexJob: () => ({ id: 'fixture-job', type: 'install', state: 'succeeded' }),
       settings: { read: async () => host, save: async () => ({ kind: 'saved', section: { scope: { kind: 'host' }, section: 'execution', value: host.sections.execution }, effects: [] }), act: async () => ({ kind: 'saved', view: host, effects: [], warnings: [] }), models: async query => ({ backend: query.backend, models: [], state: 'unavailable', source: 'backend-provided', observedAt: new Date().toISOString(), titleEfforts: [] }) },
     });

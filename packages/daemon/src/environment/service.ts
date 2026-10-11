@@ -3,7 +3,7 @@ import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { access, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { basename, delimiter, dirname, isAbsolute, join, relative } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, relative, win32 } from "node:path";
 import { spawnProcess } from "../platform/spawn";
 import { WindowsCodexJob } from "../agent/codex-appserver/windows-job";
 import {
@@ -496,7 +496,12 @@ export class EnvironmentService {
   }
 
   private environment(): NodeJS.ProcessEnv {
-    return { HOME: this.home, USERPROFILE: this.home, PATH: [dirname(this.nodePath), this.searchPath, "/usr/bin", "/bin"].join(delimiter), LANG: "en_US.UTF-8", LARKSUITE_CLI_NO_SKILLS_NOTIFIER: "1", LARKSUITE_CLI_NO_UPDATE_NOTIFIER: "1" };
+    return {
+      ...(process.platform === "win32" ? { ComSpec: process.env.ComSpec ?? win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe") } : {}),
+      HOME: this.home, USERPROFILE: this.home,
+      PATH: [dirname(this.nodePath), this.searchPath, "/usr/bin", "/bin"].join(delimiter),
+      LANG: "en_US.UTF-8", LARKSUITE_CLI_NO_SKILLS_NOTIFIER: "1", LARKSUITE_CLI_NO_UPDATE_NOTIFIER: "1",
+    };
   }
 
   private command(executablePath: string, args: string[], timeoutMs: number, secret?: string, signal?: AbortSignal): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
