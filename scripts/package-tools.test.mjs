@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -75,7 +75,7 @@ for (const variant of ['extra file', 'bin file', 'content', 'mode', 'metadata', 
     if (variant === 'content') await writeFile(target, 'changed');
     if (variant === 'mode') {
       const original = manifest.files.find(file => file.path === 'node_modules/qrcode/bin/qrcode');
-      await chmod(target, parseInt(original.mode, 8) ^ 0o100);
+      original.mode = (parseInt(original.mode, 8) ^ 0o100).toString(8).padStart(3, '0');
     }
     if (variant === 'metadata') await writeFile(join(root, 'node_modules/qrcode/package.json'), JSON.stringify({ name: 'qrcode', version: '1.0.0', bin: { qrcode: 'package.json' } }));
     if (variant === 'missing target' || variant === 'linked target') await rm(target);
