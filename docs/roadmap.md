@@ -27,7 +27,7 @@
 | 编号 | 从哪里开始写 | 部分工作要等 |
 | --- | --- | --- |
 | V4 | V3 的当前 head（`H3`，根代理把最新 `main` merge 进 V3 后记录） | 无 |
-| V5 | V4 冻结点 `F4`（客户端浏览器和 preload 入口、注入客户端接口和可选的外壳能力对象、`ui/dist` 构建路径、界面功能登记文件）；外壳的本机认证连接单元只依赖 `F4`，和 Gate L、Gate M 无关 | 系统服务文件和 `login-item.ts`（包括 `service/drain.ts`、Gate L 和 Gate M，设计已定）也从 `F4` 开始；`install` 和 `uninstall` 在事务、拿锁前检查、两道 Gate 和它们的测试全部集成之前一直拒绝；只有原生验收等专门的测试用户 |
+| V5 | V4 冻结点 `F4`（客户端浏览器和 preload 入口、注入客户端接口和可选的外壳能力对象、`ui/dist` 构建路径、界面功能登记文件）；外壳的本机认证连接单元只依赖 `F4`，和 Gate L、Gate M 无关 | 系统服务文件和 `login-item.ts`（包括 `service/drain.ts`、Gate L 和 Gate M，设计已定）也从 `F4` 开始；`install` 和 `uninstall` 在事务、拿锁前检查、两道 Gate 和它们的测试全部集成之前一直拒绝；只有原生验收等测试账号（Mac 上按用户 2026-10-11 的授权可用 `clay`，Linux 仍要专门用户） |
 | V6 | `H3` | 无。包装代码的修复不依赖 V5 |
 | V7 | V6 冻结点 `F6`（完整复制的 `agent-sdk-types.ts`、`session-backend.ts` 和它的单元测试），不等 V6 写完；三个机械叶子（`jsonl-frame-decoder`、`jsonl-rpc-process`、ACP 选项）可以先做，但不算 provider 验收 | provider 编号和选择器等 V4 合并 |
 | V8 | `H3` 或 V3 合并后的 `main`：导入执行器、旧服务控制、`vonvon import`、`import.ts` | 界面引导等 `F4` |
@@ -39,13 +39,15 @@
 
 协议的汇总文件（`index.ts`、`domain.ts`、`rpc.ts`、`events.ts`、`handshake.ts`）、`cli/index.ts` 的命令登记、根目录的 `package.json` 和 lockfile、`NOTICE`、界面功能登记文件都由根代理在集成时改，各 PR 只拥有自己新增的文件。三个长期负责人各管一块：客户端界面（V4、V5、V11 的客户端部分），provider（V6、V7，之后 V9），机器平台（先跑 V3 的正式检查，再做 V8、V10、V11 的云端部分）。具体的分支、文件归属和前两波安排见 [plan.md](plan.md) *Parallel execution* 的 *Dependencies* 到 *Wave 2*。
 
-整条路线最慢的一段是 V4、V5（要 Gate L 和 Gate M 的原生验收、专门的系统测试用户、Linux systemd 用户会话和签名）、签名安装包、V9、V10、V11。所以测试用户和 systemd 环境在第一波就向用户要，不等 V4 开始。
+整条路线最慢的一段是 V4、V5（要 Gate L 和 Gate M 的原生验收、Mac 图形会话（按用户授权可用 `clay`）、Linux 专门测试用户和 systemd 用户会话、签名）、签名安装包、V9、V10、V11。所以测试用户和 systemd 环境在第一波就向用户要，不等 V4 开始。
 
 ## 谁来做
 
 分工按仓库根目录的 `AGENTS.md`。Linux 上的 Claude Code 通常负责这三份文档，不写产品代码。2026-10-10 Claude Code CLI 认证返回 HTTP 401 后，用户明确授权 Codex 直接修订这次 V2 澄清并继续。Mac 上的 Codex 负责全部实现和检查，也负责打包、签名、公证。V9 需要的安装包下载地址来自 Mac 的发布。
 
-V5 和 V8 里有 systemd 检查，Mac 上跑不了。Codex 在 Linux 虚拟机或有用户会话的 Linux 环境里跑这几条，托管 CI 不能顶替。V5 的原生服务检查要用专门的系统测试用户，不在用户自己的账号里跑。V8 安装旧 bridge 服务的检查和原 bridge 用同一个服务标识，也要在专门的测试用户里跑，不碰用户账号里在用的 bridge。较早的环境报告只确认了日常用户的 Mac 图形会话，也没有确认可用的 Linux systemd 用户会话。第一波先只读检查现有专用测试环境，只向用户请求缺少的能力；`ci-user` 保留给 CI，不用于系统服务验收。第一波的只读检查结果：Mac 上有用户 `test-user`（uid 502），但它没有图形会话（`gui/502` 不存在）；Linux 上 `operator` 的 systemd 用户会话在运行，但还没有专门的测试用户。所以要有人用快速切换用户或屏幕共享把 `test-user` 登录进图形会话，并在验收期间保持登录；Linux 要一个开启 linger 的专门用户。根代理有权限就自己建，没有就并入向用户提的那一个请求。只有 V5 的原生验收等这两样，V4、V6 和 V5 的其他工作不等。
+V5 和 V8 里有 systemd 检查，Mac 上跑不了。Codex 在 Linux 虚拟机或有用户会话的 Linux 环境里跑这几条，托管 CI 不能顶替。V5 的原生服务检查通常用专门的系统测试用户，Mac 上可按下文的用户授权在 `clay` 中使用隔离的数据和 Vonvon 服务标识。V8 安装旧 bridge 服务的检查和原 bridge 用同一个服务标识，也要在专门的测试用户里跑，不碰用户账号里在用的 bridge。较早的环境报告只确认了日常用户的 Mac 图形会话，也没有确认可用的 Linux systemd 用户会话。第一波先只读检查现有专用测试环境，只向用户请求缺少的能力；`ci-user` 保留给 CI，不用于系统服务验收。第一波的只读检查结果：Mac 上有用户 `test-user`（uid 502），但它没有图形会话（`gui/502` 不存在）；Linux 上 `operator` 的 systemd 用户会话在运行，但还没有专门的测试用户。所以要有人用快速切换用户或屏幕共享把 `test-user` 登录进图形会话，并在验收期间保持登录；Linux 要一个开启 linger 的专门用户。根代理有权限就自己建，没有就并入向用户提的那一个请求。只有 V5 的原生验收等这两样，V4、V6 和 V5 的其他工作不等。
+
+2026-10-11 用户回答 V5/V8 的测试账号问题，直接授权在 `clay` 中测试。V5 的 macOS 系统服务测试（原生 launchd 检查和第 6 路的 Mac 部分）因此不再等 `test-user`。条件是：只用这次运行自建的临时 `VONVON_HOME`；产品服务标识 `com.vonvon.bot.daemon` 不改名，开跑前只读确认 `clay` 里没有这个任务和 plist，运行结束用 `uninstall` 删掉；不碰 `ai.feishu-codex-bridge.bot`、bridge 数据和其他 LaunchAgent，不改 `~/Library/LaunchAgents` 的权限，不用 `ci-user`；开跑前和结束后记录在用 bridge（根代理记录为 PID 2253）的 pid、启动时间和 TCP 监听，有任何变化就停止并判失败，不重启 bridge。V8 同样已获 `clay` 测试授权，但 Mac 上安装旧 bridge 服务的检查和在用 bridge 标识冲突，仍需隔离的执行环境。这是操作约束，不是缺少用户授权；不能触碰或重启在用 bridge。Linux 账号的授权另算，尚未确认。细则见 [plan.md](plan.md) V5 的 *Native acceptance environment*。
 
 Codex 可以并行开发，本机同时最多一个根代理加三个工作代理。根代理是唯一的 Git 和 forge 写入者，负责建工作树、集成、提交、推送、开 PR、合并和 Shipping。工作代理各用根代理建的工作树，只改分给自己的文件，各自运行 npm ci，不提交、不推送。每个 PR 先由各工作代理写测试、做组件验证，根代理集成后跑一次完整检查，再做独立审查，冻结 head 后才跑十路实时、性能、原生检查和 Shipping。连着测试 Bot 的检查仍然逐个跑，用独立数据目录的检查可以同时跑。并行只提前开发起点（见上文“开发起点”），不改变合并顺序、验收依赖、架构、数据形状和验证门槛。V10 的云端部分可以在 V3 之后就开始开发，但按路线顺序要等 V9 合并后才合并，不需要另问用户。merge `main` 之后，patch-id 不变只是审查结论继续有效的必要条件：基线、依赖版本或相关证据变了，就要重跑受影响的检查，并重新拿独立审查结论。具体分工见 [plan.md](plan.md) 的 *Parallel execution*。
 
@@ -77,7 +79,7 @@ Linux 保留 GitHub 托管的 Ubuntu，Windows 用托管的 `windows-2025`；mac
 
 - 飞书长连接模式下，同一个 Bot 的两个客户端只有一个收到事件。在 V8 里用两个进程连同一个测试 Bot 验证，结果决定导入时是否必须先暂停 bridge。
 - `AgentSession` 到 `AgentBackend` 的适配器能完整映射文本流、工具调用、权限请求、中断和追加消息。在 V6 里用真实的 Claude Code 跑一遍飞书卡片的完整流程。
-- launchd 和 systemd 在 daemon 正常停止、异常退出、崩溃或 `kill -9` 后是否重新拉起。V3 不装系统服务。V5 的服务设计已经定下策略：只在失败时拉起（launchd `KeepAlive` 设为 `SuccessfulExit: false`，systemd `Restart=on-failure`），停止退出 0，重启退出 75、由系统服务管理器在原端口拉起；Core 更新另由 V3 的重启助手完成那条更新记录，Linux 上确认助手进了单独的 scope 并已启动后才放锁（Gate L）。macOS 只在“撤下定义、排空”之后才 `bootout`（Gate M）。卸载先撤下服务定义，再停止并卸载服务。Vonvon 自己从不通过管理器停止正在运行的 daemon。这套策略要用专门的系统测试用户在 Mac 和 Linux 上实测。实测之前，所有和系统服务有关的结论都只来自源码和文档。Windows 没有可用主机，它的启动项循环只做单元测试，真实机器上的拉起行为未经验证。
+- launchd 和 systemd 在 daemon 正常停止、异常退出、崩溃或 `kill -9` 后是否重新拉起。V3 不装系统服务。V5 的服务设计已经定下策略：只在失败时拉起（launchd `KeepAlive` 设为 `SuccessfulExit: false`，systemd `Restart=on-failure`），停止退出 0，重启退出 75、由系统服务管理器在原端口拉起；Core 更新另由 V3 的重启助手完成那条更新记录，Linux 上确认助手进了单独的 scope 并已启动后才放锁（Gate L）。macOS 只在“撤下定义、排空”之后才 `bootout`（Gate M）。卸载先撤下服务定义，再停止并卸载服务。Vonvon 自己从不通过管理器停止正在运行的 daemon。这套策略要在 Mac 和 Linux 上实测：Linux 用专门的系统测试用户，Mac 按用户 2026-10-11 的授权可在 `clay` 里按上文条件跑。实测之前，所有和系统服务有关的结论都只来自源码和文档。Windows 没有可用主机，它的启动项循环只做单元测试，真实机器上的拉起行为未经验证。
 - bridge `446b2a4` 的已测基线为 153 个测试文件，其中 152 个通过、1 个有意跳过；1683 个用例通过、15 个有意跳过。搬进 `packages/daemon` 后，V2 要核对通过数和跳过数。跳过的 provider 实时测试不算作运行验收。V3 删除 `src/web` 后不再要求这个文件数，改为全部测试通过，并在 PR 里附上旧测试到 RPC 测试的映射表。
 
 ## 已知风险
