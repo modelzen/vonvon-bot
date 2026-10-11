@@ -1,9 +1,15 @@
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const uiRoot = resolve(fileURLToPath(new URL('../../ui/dist/', import.meta.url)));
+export function resolveWebUiRoot(moduleUrl: string, exists: (path: string) => boolean = existsSync): string {
+  const local = resolve(fileURLToPath(new URL('../ui/dist/', moduleUrl)));
+  return exists(join(local, 'index.html')) ? local : resolve(fileURLToPath(new URL('../../ui/dist/', moduleUrl)));
+}
+
+const uiRoot = resolveWebUiRoot(import.meta.url);
 const assetName = /^\/assets\/[A-Za-z0-9_.-]+$/;
 const publicAssetName = /^\/agent-icons\/[A-Za-z0-9_.-]+$/;
 const publicRootName = /^\/vonvon-(?:logo\.png|tray\.(?:png|ico))$/;

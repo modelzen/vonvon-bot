@@ -42,6 +42,17 @@ it('classifies only exact global and bundled layouts and returns canonical CLI p
   } finally {rmSync(dir,{recursive:true,force:true});}
 });
 
+it('keeps a global package layout below a checkout in development',()=>{
+  const dir=mkdtempSync(join(tmpdir(),'vonvon-global-checkout-'));
+  try {
+    writeFileSync(join(dir,'.git'),'gitdir: elsewhere');
+    const globalRoot=join(dir,'node_modules');
+    const root=join(globalRoot,'vonvon-bot');
+    fixture(root,'vonvon-bot');
+    expect(classifyDistribution(root,globalRoot)).toEqual({kind:'development',cliPath:join(root,'bin','vonvon.mjs')});
+  } finally {rmSync(dir,{recursive:true,force:true});}
+});
+
 it('recognizes packaged artifacts built inside a source checkout',()=>{
   const dir=mkdtempSync(join(tmpdir(),'vonvon-packaged-checkout-'));
   try {

@@ -1,0 +1,14 @@
+[
+  {
+    "name": "protobufjs",
+    "version": "7.6.6",
+    "integrity": "sha512-dYDWdjSl5RNb7SgPxGQcRU+GtvP7s2fpkrY0r432PcOIaZ0/rBcxEZnQN67iJhFuQiVw754JDoPruPCNdGsbjg==",
+    "lifecycle": "postinstall",
+    "script": "node scripts/postinstall",
+    "files": {
+      "scripts/postinstall.js": "5af8463b97ee8e309b4a2111f9479bacdf0c180de0ca0155527679b1fc6d9e6c"
+    },
+    "reason": "Only prints a version-range warning; it writes no file and makes no network request.",
+    "lockPath": "node_modules/protobufjs"
+  }
+]
