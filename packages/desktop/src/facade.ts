@@ -212,6 +212,8 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
       }),
     startHost: bot => transport.invoke(desktopChannels.startHost, { type: 'startHost', ...(bot === undefined ? {} : { bot }) })
       .then(value => readResult(value, value => machineReplySchema.parse(value))),
+    repairCli: () => transport.invoke(desktopChannels.repairCli)
+      .then(value => readResult(value, value => machineReplySchema.parse(value))),
     checkDesktopUpdate: () => transport.invoke(desktopChannels.checkDesktopUpdate)
       .then(value => readResult(value, value => desktopUpdateSchema.parse(value))),
     installDesktopUpdate: () => transport.invoke(desktopChannels.installDesktopUpdate)

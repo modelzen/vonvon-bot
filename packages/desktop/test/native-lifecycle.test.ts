@@ -14,6 +14,8 @@ const fake = vi.hoisted(() => ({
   attach: vi.fn(),
   ready: vi.fn(async (): Promise<VerifiedDaemon> => ({ pid: 42, startedAt: 'initial', listen: '127.0.0.1:42345' })),
   install: vi.fn(),
+  cliRegister: vi.fn(async () => ({ kind: 'ready' as const, bin: '/tmp/vonvon', message: 'installed' })),
+  cliObserve: vi.fn(async () => ({ kind: 'error' as const, message: 'absent' })),
   tray: { destroy: vi.fn() },
   openExternal: vi.fn(async () => {}),
   updateConfiguration: vi.fn(async () => ({ signed: true, manifestURL: 'https://updates.example.test/manifest.json' })),
@@ -79,6 +81,11 @@ vi.mock('../src/daemon-dependencies.js', () => ({
   prepareDesktopRoot: vi.fn(async () => fake.root),
   createDaemonDependencies: vi.fn(),
 }));
+vi.mock('../src/cli-registration.js', () => ({
+  desktopCliOptions: vi.fn((options: unknown) => options),
+  registerCli: fake.cliRegister,
+  observeCli: fake.cliObserve,
+}));
 vi.mock('../src/daemon-manager.js', async importOriginal => ({
   ...await importOriginal<typeof import('../src/daemon-manager.js')>(),
   createDaemonManager: vi.fn(() => ({ ensureReady: fake.ready })),
@@ -134,6 +141,8 @@ beforeEach(async () => {
   fake.tray.destroy.mockClear();
   fake.attach.mockReset().mockResolvedValue(fake.owner);
   fake.ready.mockClear();
+  fake.cliRegister.mockClear();
+  fake.cliObserve.mockClear();
   fake.install.mockReset().mockReturnValue(fake.bridge);
   fake.openExternal.mockClear();
   await startDesktop();
@@ -157,6 +166,12 @@ async function downloadUpdate(): Promise<void> {
 }
 
 describe('updater final install lifecycle', () => {
+  it('exposes CLI repair and observation without changing the daemon owner', async () => {
+    await expect(actions.observeCli()).resolves.toMatchObject({ kind: 'error', message: 'absent' });
+    await expect(actions.repairCli()).resolves.toEqual({ type: 'done', message: 'installed' });
+    expect(fake.cliRegister).toHaveBeenCalledOnce();
+    expect(fake.bridge.replaceOwner).not.toHaveBeenCalled();
+  });
   it('waits for daemon readiness before final authenticated attachment', () => {
     expect(fake.ready).toHaveBeenCalledExactlyOnceWith(0);
     expect(fake.attach).toHaveBeenCalledExactlyOnceWith(fake.root);

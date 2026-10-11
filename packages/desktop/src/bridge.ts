@@ -128,7 +128,11 @@ export function installBridge(
           request.type === 'checkDesktopUpdate' || request.type === 'installDesktopUpdate')
         throw new Error('Shell-owned machine action');
       return request;
-    }, value => client().machine(value));
+    }, async value => {
+      const reply = await client().machine(value);
+      return value.type === 'status' && reply.type === 'status'
+        ? { ...reply, cli: await actions.observeCli() } : reply;
+    });
     register(desktopChannels.admin, 1, value => adminRequestSchema.parse(value), value => client().admin(value));
     register(desktopChannels.directory, 1, value => directoryRequestSchema.parse(value), value => client().directory(value));
     register(desktopChannels.close, 0, noArg, () => activeOwner?.dispose() ?? Promise.resolve());
@@ -139,6 +143,8 @@ export function installBridge(
       return request;
     },
       value => actions.startHost(value.bot).then(reply => machineReplySchema.parse(reply)));
+    register(desktopChannels.repairCli, 0, noArg,
+      () => actions.repairCli().then(reply => machineReplySchema.parse(reply)));
     register(desktopChannels.chooseExecutablePath, 0, noArg, () => actions.chooseExecutablePath());
     register(desktopChannels.checkDesktopUpdate, 0, noArg, () => actions.checkDesktopUpdate());
     register(desktopChannels.installDesktopUpdate, 0, noArg, () => actions.installDesktopUpdate());

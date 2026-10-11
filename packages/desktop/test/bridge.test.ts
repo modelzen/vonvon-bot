@@ -58,6 +58,8 @@ function harness() {
   const paths: DesktopResources = { uiIndex, preload: '/unused', trayPng: '/unused' };
   const actions = {
     startHost: vi.fn(async (_bot?: string) => ({ type: 'done' as const, message: 'started' })),
+    repairCli: vi.fn(async () => ({ type: 'done' as const, message: 'installed' })),
+    observeCli: vi.fn(async () => ({ kind: 'error' as const, message: 'not registered' })),
     chooseExecutablePath: vi.fn(async (): Promise<string | null> => '/usr/local/bin/codex'),
     checkDesktopUpdate: vi.fn(async () => ({ state: 'available' as const, current: '1.0.0', latest: '1.1.0', message: 'ready' })),
     installDesktopUpdate: vi.fn(async () => ({ state: 'downloaded' as const, current: '1.0.0', latest: '1.1.0', message: 'ready' })),
@@ -76,6 +78,28 @@ function harness() {
 beforeEach(() => { handlers.clear(); openExternal.mockClear(); failRegistration.channel = ''; });
 
 describe('desktop IPC boundary', () => {
+  it('authorizes zero-argument CLI repair and overlays readonly CLI status', async () => {
+    const h = harness();
+    const wrongFrame = { ...h.event, senderFrame: { url: h.frame.url } } as IpcMainInvokeEvent;
+    const wrongSender = { ...h.event, sender: {} } as IpcMainInvokeEvent;
+    expect(await handlers.get(desktopChannels.repairCli)?.(wrongFrame)).toMatchObject({ ok: false });
+    expect(await handlers.get(desktopChannels.repairCli)?.(wrongSender)).toMatchObject({ ok: false });
+    h.frame.url = 'https://example.invalid';
+    expect(await h.invoke(desktopChannels.repairCli)).toMatchObject({ ok: false });
+    h.frame.url = pathToFileURL(realpathSync(uiIndex)).href;
+    expect(await h.invoke(desktopChannels.repairCli, { type: 'repairCli' })).toMatchObject({ ok: false });
+    expect(h.actions.repairCli).not.toHaveBeenCalled();
+    expect(await h.invoke(desktopChannels.repairCli)).toEqual({ ok: true, value: { type: 'done', message: 'installed' } });
+    h.actions.repairCli.mockResolvedValueOnce({ type: 'invalid', message: 'bad' } as never);
+    expect(await h.invoke(desktopChannels.repairCli)).toMatchObject({ ok: false });
+    expect(await h.invoke(desktopChannels.machine, { type: 'repairCli' })).toMatchObject({ ok: false });
+    expect(h.machine).not.toHaveBeenCalled();
+    h.machine.mockResolvedValueOnce({ type: 'status', service: { platformName: 'macos', installed: false, running: false, servicePath: '', stdoutPath: '', stderrPath: '' }, host: null,
+      cli: { kind: 'ready', bin: '/wrong', message: 'internal' } });
+    expect(await h.invoke(desktopChannels.machine, { type: 'status' })).toMatchObject({ ok: true, value: { cli: { kind: 'error', message: 'not registered' } } });
+    expect(h.actions.observeCli).toHaveBeenCalledOnce();
+    await h.bridge.dispose();
+  });
   it('authorizes and validates the shell start request before forwarding the selected Bot', async () => {
     const h = harness();
     const wrong = { ...h.event, senderFrame: { url: h.frame.url } } as IpcMainInvokeEvent;
