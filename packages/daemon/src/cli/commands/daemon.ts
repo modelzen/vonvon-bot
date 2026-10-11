@@ -5,6 +5,7 @@ import { paths } from '../../config/paths';
 import { readRecentLogs } from '../../core/logger';
 import { stopVerifiedOwner, verifyPidLockOwner } from '../../server/owner-verification';
 import { getPidLockInfo, isPidLockOwnerRunning, readRunningPidLock, type PidLockInfo } from '../../server/pid-lock';
+import { readStartupRegistration, startRegisteredDaemon } from '../../service/startup';
 
 export type DaemonStatus = { running: false } | {
   running: true;
@@ -24,6 +25,9 @@ export async function daemonStatus(home = paths.appDir): Promise<DaemonStatus> {
 const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function runStart(port = 0): Promise<DaemonStatus> {
+  if (process.platform === 'win32' && process.env.VONVON_SERVICE) {
+    throw new Error('Windows service startup is unavailable.');
+  }
   const checkedStatus = async (): Promise<DaemonStatus> => {
     const ready = await daemonStatus();
     if (ready.running && port !== 0 && ready.listen !== `127.0.0.1:${port}`) throw new Error(`Daemon PID ${ready.pid} already runs at ${ready.listen}, not requested port ${port}.`);
@@ -43,6 +47,25 @@ export async function runStart(port = 0): Promise<DaemonStatus> {
   if (existing) {
     const ready = await waitReady(existing.pid);
     if (ready) return ready;
+  }
+  if (process.platform !== 'win32') {
+    const registration = await readStartupRegistration(paths.appDir);
+    switch (registration.kind) {
+      case 'ours': {
+        const endpoint = await startRegisteredDaemon(paths.appDir, port);
+        return { running: true, pid: endpoint.pid, listen: endpoint.listen, startedAt: endpoint.startedAt };
+      }
+      case 'other-root':
+        throw new Error(`Service registration belongs to ${registration.recordedRoot}.`);
+      case 'unrecognized':
+        throw new Error(`Unrecognized service registration ${registration.location}: ${registration.reason}`);
+      case 'absent':
+        break;
+      default: {
+        const exhaustive: never = registration;
+        throw new Error(`Invalid service registration: ${exhaustive}`);
+      }
+    }
   }
   const cliEntry = process.argv[1];
   if (!cliEntry) throw new Error('Cannot locate the daemon CLI entry.');

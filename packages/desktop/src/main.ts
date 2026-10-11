@@ -10,6 +10,8 @@ import type { AttachedDaemon, DesktopBridge, DesktopResources } from './ipc-cont
 import { createDesktopTray } from './tray.js';
 import { DesktopUpdater } from './updates.js';
 import { desktopUpdateConfiguration } from './update-configuration.js';
+import { createDaemonManager } from './daemon-manager.js';
+import { createDaemonDependencies, prepareDesktopRoot } from './daemon-dependencies.js';
 
 export function desktopResources(appPath: string, packaged: boolean): DesktopResources {
   return packaged ? {
@@ -25,6 +27,7 @@ export function desktopResources(appPath: string, packaged: boolean): DesktopRes
 
 function startupMessage(error: unknown): string {
   if (error instanceof AttachError) return `${error.message} Start the daemon and reopen Vonvon Bot.`;
+  if (error instanceof Error) return error.message;
   return 'Vonvon Bot could not open its desktop window. Check the daemon and reopen the app.';
 }
 
@@ -125,8 +128,7 @@ export async function startDesktop(): Promise<void> {
     const uiUrl = pathToFileURL(realpathSync(paths.uiIndex)).href;
     const preload = realpathSync(paths.preload);
     const icon = realpathSync(paths.trayPng);
-    const root = resolveDataRoot(homedir());
-    if (root.kind !== 'canonical') throw new AttachError('root');
+    const root = await prepareDesktopRoot(resolveDataRoot(homedir()));
     const updateConfiguration = await desktopUpdateConfiguration({ appPath: app.getAppPath(), isPackaged: app.isPackaged });
     const updater = new DesktopUpdater({
       current: app.getVersion(), ...updateConfiguration, driver: autoUpdater,
@@ -137,7 +139,11 @@ export async function startDesktop(): Promise<void> {
         quitting = true;
       },
     });
-    owner = await attachExisting(root.path);
+    await createDaemonManager(createDaemonDependencies({
+      root, home: homedir(), executable: process.execPath,
+      resources: process.resourcesPath, packaged: app.isPackaged,
+    })).ensureReady(0);
+    owner = await attachExisting(root);
     if (terminating) {
       await owner.dispose();
       owner = null;
