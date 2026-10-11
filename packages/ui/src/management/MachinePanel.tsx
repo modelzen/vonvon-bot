@@ -7,26 +7,37 @@ import '../settings/settings.css';
 import {settingAnchor, type SearchReveal} from '../search';
 import {useShellCapabilities} from '../client-context';
 
+type MachineStatus = Extract<MachineReply, {type: 'status'}>;
+
+export async function runMachineRequest(request: MachineRequestHandler, operation: MachineRequest, update: (status: MachineStatus | undefined) => void): Promise<MachineReply> {
+  try {
+    const reply = await request(operation);
+    const status = operation.type === 'status' ? reply : await request({type: 'status'});
+    if (status.type !== 'status') throw new Error('无法读取 daemon 状态');
+    update(status);
+    return reply;
+  } catch (error) {
+    update(undefined);
+    throw error;
+  }
+}
+
 export function MachinePanel({request, agents, reveal}: {request: MachineRequestHandler; agents: ReadonlyArray<{id: string; name: string}>; reveal?: SearchReveal}) {
   const shell = useShellCapabilities();
   const advanced = useRef<HTMLDetailsElement>(null);
   useEffect(() => {if (reveal === 'machine-advanced' && advanced.current) advanced.current.open = true;}, [reveal]);
-  const [status, setStatus] = useState<Extract<MachineReply, {type: 'status'}>>();
+  const [status, setStatus] = useState<MachineStatus>();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [bot, setBot] = useState('');
   const [confirm, setConfirm] = useState<MachineRequest>();
-  const refresh = async () => {
-    const reply = await request({type: 'status'});
-    if (reply.type === 'status') setStatus(reply);
-  };
+  const refresh = () => runMachineRequest(request, {type: 'status'}, setStatus);
   useEffect(() => { void refresh().catch(error => setMessage(String(error))); }, [request]);
   const run = async (operation: MachineRequest) => {
     setBusy(true);
     try {
-      const reply = await request(operation);
+      const reply = await runMachineRequest(request, operation, setStatus);
       if (reply.type === 'done') setMessage(reply.message);
-      await refresh();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '操作失败');
     } finally {
@@ -59,7 +70,7 @@ export function MachinePanel({request, agents, reveal}: {request: MachineRequest
     <SettingsGroup id={settingAnchor('daemon 运行')} label="daemon 运行" action={<Button size="sm" disabled={busy} onClick={() => void run({type: 'status'})}>刷新状态</Button>}>
       <SettingsRow title="运行方式"
         description={status?.host?.ownership === 'attached' ? '当前由外部服务管理。' : 'daemon 负责接收飞书消息并运行 Bot。'}
-        value={!status ? '正在读取…' : status.host ? (status.host.ownership === 'owned' ? '桌面管理' : '外部服务') : '已停止'} />
+        value={!status ? '状态未知' : status.host ? (status.host.ownership === 'owned' ? '桌面管理' : '外部服务') : '已停止'} />
       <SettingsRow title="daemon 服务" description={!shell?.startHost ? '启动功能由桌面版提供；命令行：vonvon daemon start。停止服务可能中断正在进行的 Bot 任务。' : '停止服务可能中断正在进行的 Bot 任务。'}
         trailing={<span className="settings-inline-actions">
           <Button size="sm" disabled={busy || !!status?.host || !shell?.startHost} onClick={() => {if (shell?.startHost) void runShell(shell.startHost);}}>启动 daemon</Button>

@@ -33,6 +33,35 @@ describe('synchronous desktop facade', () => {
     await expect(shell.installDesktopUpdate()).rejects.toThrow();
     expect(h.calls.slice(-2)).toEqual([desktopChannels.checkDesktopUpdate, desktopChannels.installDesktopUpdate]);
   });
+  it('forwards the optional selected Bot unchanged and validates the machine reply', async () => {
+    const h = harness();
+    const requests: unknown[][] = [];
+    const invoke = h.transport.invoke;
+    h.transport.invoke = (channel, ...args) => {
+      if (channel === desktopChannels.startHost) requests.push(args);
+      return invoke(channel, ...args);
+    };
+    const { shell } = createDesktopFacades(h.transport);
+    h.replies.set(desktopChannels.startHost, async () => ({ ok: true, value: { type: 'done', message: 'started' } }));
+    await expect(shell.startHost()).resolves.toEqual({ type: 'done', message: 'started' });
+    await expect(shell.startHost('cli_exact_Bot_ID')).resolves.toEqual({ type: 'done', message: 'started' });
+    expect(requests).toEqual([[{ type: 'startHost' }], [{ type: 'startHost', bot: 'cli_exact_Bot_ID' }]]);
+    h.replies.set(desktopChannels.startHost, async () => ({ ok: true, value: { type: 'unexpected' } }));
+    await expect(shell.startHost()).rejects.toThrow();
+  });
+
+  it('delivers a lower revision after authenticated reattachment', async () => {
+    const h = harness();
+    h.replies.set(desktopChannels.snapshot, async () => ({ ok: true, value: snapshot(10) }));
+    const { client } = createDesktopFacades(h.transport);
+    const seen: number[] = [];
+    client.watchSnapshots(value => seen.push(value.revision));
+    await Promise.resolve();
+    await Promise.resolve();
+    h.event({ type: 'reattached' });
+    h.event({ type: 'snapshot', value: snapshot(1) });
+    expect(seen).toEqual([10, 1]);
+  });
   it('exposes the executable chooser and validates its path-or-cancel response', async () => {
     const h = harness();
     const { shell } = createDesktopFacades(h.transport);

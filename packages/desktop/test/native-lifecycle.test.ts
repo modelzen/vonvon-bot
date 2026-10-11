@@ -4,14 +4,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ShellActions } from '../src/ipc-contract.js';
+import type { VerifiedDaemon } from '../src/daemon-manager.js';
 
 const fake = vi.hoisted(() => ({
   app: undefined as unknown,
   window: undefined as unknown,
-  bridge: { requestQuit: vi.fn(), dispose: vi.fn(async () => {}) },
+  bridge: { requestQuit: vi.fn(), replaceOwner: vi.fn(async () => {}), dispose: vi.fn(async () => {}) },
   owner: { dispose: vi.fn(async () => {}) },
   attach: vi.fn(),
-  ready: vi.fn(async () => {}),
+  ready: vi.fn(async (): Promise<VerifiedDaemon> => ({ pid: 42, startedAt: 'initial', listen: '127.0.0.1:42345' })),
   install: vi.fn(),
   tray: { destroy: vi.fn() },
   openExternal: vi.fn(async () => {}),
@@ -78,7 +79,10 @@ vi.mock('../src/daemon-dependencies.js', () => ({
   prepareDesktopRoot: vi.fn(async () => fake.root),
   createDaemonDependencies: vi.fn(),
 }));
-vi.mock('../src/daemon-manager.js', () => ({ createDaemonManager: vi.fn(() => ({ ensureReady: fake.ready })) }));
+vi.mock('../src/daemon-manager.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../src/daemon-manager.js')>(),
+  createDaemonManager: vi.fn(() => ({ ensureReady: fake.ready })),
+}));
 vi.mock('../../daemon/src/config/data-root.js', () => ({ resolveDataRoot: vi.fn(() => ({ kind: 'canonical', path: fake.root })) }));
 
 import { startDesktop, desktopResources } from '../src/main.js';
@@ -125,6 +129,7 @@ beforeEach(async () => {
   app.quit.mockClear();
   fake.bridge.requestQuit.mockClear();
   fake.bridge.dispose.mockClear().mockResolvedValue(undefined);
+  fake.bridge.replaceOwner.mockClear().mockResolvedValue(undefined);
   fake.owner.dispose.mockClear();
   fake.tray.destroy.mockClear();
   fake.attach.mockReset().mockResolvedValue(fake.owner);
@@ -211,6 +216,40 @@ describe('updater final install lifecycle', () => {
 });
 
 describe('native window lifecycle', () => {
+  it('reattaches an authenticated daemon to the same window after shell start', async () => {
+    const identity = { pid: 42, startedAt: 'new', listen: '127.0.0.1:42345' };
+    const next = { identity, dispose: vi.fn(async () => {}) };
+    fake.ready.mockResolvedValueOnce(identity);
+    fake.attach.mockResolvedValueOnce(next);
+    await expect(actions.startHost('cli_exact_Bot_ID')).resolves.toEqual({ type: 'done', message: 'Selected Bot started.' });
+    expect(fake.ready).toHaveBeenLastCalledWith(0, 'cli_exact_Bot_ID');
+    expect(fake.attach).toHaveBeenCalledTimes(2);
+    expect(fake.bridge.replaceOwner).toHaveBeenCalledExactlyOnceWith(next);
+    expect(window.destroyed).toBe(false);
+  });
+
+  it('does not bind a changed daemon identity and closes the rejected connection', async () => {
+    const next = { identity: { pid: 43, startedAt: 'changed', listen: '127.0.0.1:42345' }, dispose: vi.fn(async () => {}) };
+    fake.ready.mockResolvedValueOnce({ pid: 42, startedAt: 'expected', listen: '127.0.0.1:42345' });
+    fake.attach.mockResolvedValueOnce(next);
+    await expect(actions.startHost()).rejects.toThrow('could not start and reconnect');
+    expect(next.dispose).toHaveBeenCalledOnce();
+    expect(fake.bridge.replaceOwner).not.toHaveBeenCalled();
+  });
+
+  it('rejects concurrent starts before another owner can launch', async () => {
+    let release!: (value: VerifiedDaemon) => void;
+    fake.ready.mockImplementationOnce(() => new Promise<VerifiedDaemon>(resolve => { release = resolve; }));
+    const first = actions.startHost();
+    await expect(actions.startHost('cli_exact_Bot_ID')).rejects.toThrow('startup is unavailable');
+    const identity = { pid: 42, startedAt: 'new', listen: '127.0.0.1:42345' };
+    fake.attach.mockResolvedValueOnce({ identity, dispose: vi.fn(async () => {}) });
+    release(identity);
+    await expect(first).resolves.toMatchObject({ type: 'done' });
+    expect(fake.ready).toHaveBeenCalledTimes(2);
+    expect(fake.bridge.replaceOwner).toHaveBeenCalledOnce();
+  });
+
   it('loads only after attach and installs the bridge before the page', () => {
     expect(fake.attach).toHaveBeenCalledOnce();
     expect(fake.install).toHaveBeenCalledOnce();

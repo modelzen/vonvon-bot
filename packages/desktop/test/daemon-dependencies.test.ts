@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm, stat, symlink } from 'node:fs/promises';
+import { ChildProcess, spawn } from 'node:child_process';
+import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { PROTOCOL_VERSION } from '@vonvon/protocol';
 import { createDaemonDependencies, parseWindowsRunQuery, prepareDesktopRoot } from '../src/daemon-dependencies.js';
 import { readRunningPidLock } from '../../daemon/src/server/pid-lock.js';
@@ -9,6 +10,10 @@ import { verifyPidLockOwner } from '../../daemon/src/server/owner-verification.j
 
 const attach = vi.hoisted(() => vi.fn());
 
+vi.mock('node:child_process', async importOriginal => ({
+  ...await importOriginal<typeof import('node:child_process')>(),
+  spawn: vi.fn(),
+}));
 vi.mock('../../daemon/src/server/pid-lock.js', () => ({ readRunningPidLock: vi.fn() }));
 vi.mock('../../daemon/src/server/owner-verification.js', () => ({ verifyPidLockOwner: vi.fn() }));
 vi.mock('../src/attach.js', () => ({ attachExisting: attach }));
@@ -16,6 +21,25 @@ vi.mock('../src/attach.js', () => ({ attachExisting: attach }));
 const roots: string[] = [];
 const owner = { pid: 12345, startedAt: '2026-10-11T00:00:00.000Z', listen: '127.0.0.1:54321' };
 const dependencies = () => createDaemonDependencies({ root: '/owned/data', home: '/owned/home', resources: '/owned/resources', executable: '/owned/Electron', packaged: false });
+
+async function packagedDependencies() {
+  const root = await mkdtemp(join(tmpdir(), 'desktop-launch-'));
+  roots.push(root);
+  const resources = join(root, 'resources');
+  const files: Array<[string, string]> = [
+    ['daemon/package.json', JSON.stringify({ name: '@vonvon/daemon', bin: { vonvon: 'bin/vonvon.mjs' } })],
+    ['daemon/bin/vonvon.mjs', ''],
+    ['daemon/dist/cli.js', ''],
+    ['app.asar/package.json', JSON.stringify({ name: 'vonvon-bot-desktop', main: 'desktop/main.cjs' })],
+    ['app.asar/desktop/main.cjs', ''],
+  ];
+  for (const [file, content] of files) {
+    const path = join(resources, file);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, content);
+  }
+  return { resources, dependencies: createDaemonDependencies({ root, home: root, resources, executable: '/owned/Electron', packaged: true }) };
+}
 
 afterEach(async () => {
   vi.resetAllMocks();
@@ -56,6 +80,42 @@ describe('desktop daemon dependencies', () => {
 
   it('refuses a development runtime instead of spawning a global CLI', async () => {
     await expect(dependencies().startBundled(0)).rejects.toThrow('packaged Vonvon daemon is unavailable');
+  });
+
+  it('returns the selected child PID and forwards the exact Bot as one argument', async () => {
+    const { resources, dependencies } = await packagedDependencies();
+    const child = new ChildProcess();
+    Object.defineProperty(child, 'pid', { value: 9876 });
+    vi.mocked(spawn).mockImplementation(() => {
+      queueMicrotask(() => child.emit('spawn'));
+      return child;
+    });
+    await expect(dependencies.startSelectedBot(0, 'exact Bot; ID')).resolves.toBe(9876);
+    expect(spawn).toHaveBeenCalledExactlyOnceWith('/owned/Electron', [
+      join(resources, 'daemon', 'bin', 'vonvon.mjs'), 'daemon', 'run', '--port', '0', '--bot', 'exact Bot; ID',
+    ], expect.objectContaining({ detached: true }));
+  });
+
+  it('does not confirm a selected launch when the spawn event has no child PID', async () => {
+    const { dependencies } = await packagedDependencies();
+    vi.mocked(spawn).mockImplementation(() => {
+      const child = new ChildProcess();
+      queueMicrotask(() => child.emit('spawn'));
+      return child;
+    });
+    await expect(dependencies.startSelectedBot(0, 'cli_selected')).rejects.toThrow('did not provide a process ID');
+    expect(spawn).toHaveBeenCalledOnce();
+  });
+
+  it('preserves selected launch errors without reporting a PID', async () => {
+    const { dependencies } = await packagedDependencies();
+    vi.mocked(spawn).mockImplementation(() => {
+      const child = new ChildProcess();
+      queueMicrotask(() => child.emit('error', new Error('spawn denied')));
+      return child;
+    });
+    await expect(dependencies.startSelectedBot(0, 'cli_selected')).rejects.toThrow('spawn denied');
+    expect(spawn).toHaveBeenCalledOnce();
   });
 
   it('requires an observed registry key before reporting absence', () => {

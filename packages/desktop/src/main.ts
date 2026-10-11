@@ -10,8 +10,9 @@ import type { AttachedDaemon, DesktopBridge, DesktopResources } from './ipc-cont
 import { createDesktopTray } from './tray.js';
 import { DesktopUpdater } from './updates.js';
 import { desktopUpdateConfiguration } from './update-configuration.js';
-import { createDaemonManager } from './daemon-manager.js';
+import { createDaemonManager, StartHostRefusal } from './daemon-manager.js';
 import { createDaemonDependencies, prepareDesktopRoot } from './daemon-dependencies.js';
+import type { MachineReply } from '@vonvon/protocol';
 
 export function desktopResources(appPath: string, packaged: boolean): DesktopResources {
   return packaged ? {
@@ -48,6 +49,7 @@ export async function startDesktop(): Promise<void> {
   let cleanupPromise: Promise<void> | undefined;
   let confirmation: Promise<void> | undefined;
   let connectionFailureShown = false;
+  let starting: Promise<MachineReply> | undefined;
 
   const show = (): void => {
     if (!window || window.isDestroyed()) {
@@ -72,6 +74,7 @@ export async function startDesktop(): Promise<void> {
   const cleanup = (): Promise<void> => cleanupPromise ??= (async () => {
     let closeFailure: unknown;
     try {
+      if (starting) await starting.catch(() => {});
       if (bridge) await bridge.dispose();
       else if (owner) await owner.dispose();
     } catch (error) {
@@ -139,10 +142,11 @@ export async function startDesktop(): Promise<void> {
         quitting = true;
       },
     });
-    await createDaemonManager(createDaemonDependencies({
+    const manager = createDaemonManager(createDaemonDependencies({
       root, home: homedir(), executable: process.execPath,
       resources: process.resourcesPath, packaged: app.isPackaged,
-    })).ensureReady(0);
+    }));
+    await manager.ensureReady(0);
     owner = await attachExisting(root);
     if (terminating) {
       await owner.dispose();
@@ -195,6 +199,30 @@ export async function startDesktop(): Promise<void> {
       if (!terminating) show();
     });
     bridge = installBridge(owner, current, paths, {
+      startHost: async bot => {
+        if (starting || terminating || cleanupPromise) throw new StartHostRefusal('Desktop startup is unavailable.');
+        starting = (async (): Promise<MachineReply> => {
+          try {
+            const ready = await manager.ensureReady(0, bot);
+            const next = await attachExisting(root);
+            if (next.identity.pid !== ready.pid || next.identity.startedAt !== ready.startedAt || next.identity.listen !== ready.listen) {
+              await next.dispose();
+              throw new Error('The daemon owner changed during desktop restart.');
+            }
+            if (terminating || !bridge) {
+              await next.dispose();
+              throw new Error('Desktop startup is unavailable.');
+            }
+            await bridge.replaceOwner(next);
+            connectionFailureShown = false;
+            return { type: 'done', message: bot === undefined ? 'Daemon started.' : 'Selected Bot started.' };
+          } catch (error) {
+            if (error instanceof StartHostRefusal) throw error;
+            throw new StartHostRefusal('The daemon could not start and reconnect. Check daemon.log and try again.');
+          }
+        })().finally(() => { starting = undefined; });
+        return starting;
+      },
       chooseExecutablePath: async () => {
         const result = await dialog.showOpenDialog(current, {
           title: 'Choose Codex executable',
@@ -223,7 +251,7 @@ export async function startDesktop(): Promise<void> {
         dialog.showMessageBoxSync(current, {
           type: 'error',
           title: 'Vonvon Bot connection lost',
-          message: 'The daemon connection was lost. Check the daemon, then reopen Vonvon Bot.',
+          message: 'The daemon connection was lost. Check the daemon, then start it again in Vonvon Bot.',
           buttons: ['OK'],
         });
       },

@@ -1,5 +1,5 @@
 import type { VonvonClient } from '@vonvon/client/browser';
-import type { BackendInstallEventPayload, DesktopSnapshot, DesktopUpdate, LogEventPayload } from '@vonvon/protocol';
+import type { BackendInstallEventPayload, DesktopSnapshot, DesktopUpdate, LogEventPayload, MachineReply } from '@vonvon/protocol';
 import type { ShellCapabilities } from '../../ui/src/client-context.js';
 
 export const desktopChannels = {
@@ -15,6 +15,7 @@ export const desktopChannels = {
   subscribe: 'desktop:subscribe',
   external: 'desktop:shell:external',
   chooseExecutablePath: 'desktop:shell:chooseExecutablePath',
+  startHost: 'desktop:shell:startHost',
   checkDesktopUpdate: 'desktop:shell:checkDesktopUpdate',
   installDesktopUpdate: 'desktop:shell:installDesktopUpdate',
   hide: 'desktop:shell:hide',
@@ -31,6 +32,7 @@ export type SafeFailure = {
 export type IpcResult<T> = { ok: true; value: T } | { ok: false; error: SafeFailure };
 
 export type DesktopEvent =
+  | { type: 'reattached' }
   | { type: 'snapshot'; value: DesktopSnapshot }
   | { type: 'log'; value: LogEventPayload }
   | { type: 'backendInstall'; value: BackendInstallEventPayload }
@@ -39,7 +41,7 @@ export type DesktopEvent =
 
 export type DesktopShell = Required<Pick<ShellCapabilities,
   'openExternal' | 'chooseExecutablePath' | 'checkDesktopUpdate' | 'installDesktopUpdate' |
-  'hideWindow' | 'quit' | 'onQuitRequested'>>;
+  'hideWindow' | 'quit' | 'onQuitRequested' | 'startHost'>>;
 
 export interface DesktopResources {
   uiIndex: string;
@@ -55,11 +57,13 @@ export interface AttachedDaemon {
 
 export interface DesktopBridge {
   requestQuit(): void;
+  replaceOwner(owner: AttachedDaemon): Promise<void>;
   dispose(): Promise<void>;
 }
 
 export interface ShellActions {
   chooseExecutablePath(): Promise<string | null>;
+  startHost(bot?: string): Promise<MachineReply>;
   checkDesktopUpdate(): Promise<DesktopUpdate>;
   installDesktopUpdate(): Promise<DesktopUpdate>;
   hide(): void;
