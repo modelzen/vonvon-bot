@@ -20,6 +20,8 @@ export const jobIdSchema = z
   .regex(/^[A-Za-z0-9_-]+$/)
   .brand<"JobId">();
 export const folderTokenSchema = z.string().uuid().brand<"FolderToken">();
+export const accountIdSchema = z.string().uuid().brand<"AccountId">();
+export const deviceIdSchema = z.string().uuid().brand<"DeviceId">();
 export const permissionSchema = z.enum(["qa", "write", "full"]);
 export const toolSchema = z.enum(["codex", "claude"]);
 export const conversationSchema = z.enum(["threads", "shared"]);
@@ -28,6 +30,8 @@ export type GroupId = z.infer<typeof groupIdSchema>;
 export type MembershipId = z.infer<typeof membershipIdSchema>;
 export type JobId = z.infer<typeof jobIdSchema>;
 export type FolderToken = z.infer<typeof folderTokenSchema>;
+export type AccountId = z.infer<typeof accountIdSchema>;
+export type DeviceId = z.infer<typeof deviceIdSchema>;
 export type Permission = z.infer<typeof permissionSchema>;
 export type Tool = z.infer<typeof toolSchema>;
 

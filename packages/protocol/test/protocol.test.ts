@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   agentViewSchema, bridgeProjectsStoreSchema, commandSchema, helloSchema,
-  machineIdSchema, requestSchema, responseSchema, errorEnvelopeSchema,
+  accountIdSchema, deviceIdSchema, machineIdSchema, requestSchema, responseSchema, errorEnvelopeSchema,
   desktopSnapshotSchema, eventSchema, watchSnapshots,
   adminRequestSchema, adminReplySchema, adminStateSchema, directoryRequestSchema, directoryReplySchema,
   jobSchema, environmentReplySchema,
@@ -95,6 +95,16 @@ describe("pinned contract extraction", () => {
     expect(bridgeProjectsStoreSchema.parse({projects:[{name:"old",cwd:"/tmp"}]}).projects).toHaveLength(1);
     const old = {version:"legacy",projects:[{name:"old",cwd:"/tmp",chatId:42,enabled:"legacy"}]};
     expect(bridgeProjectsStoreSchema.parse(old)).toEqual(old);
+  });
+  it("accepts UUID account and device IDs and rejects malformed IDs", () => {
+    const accountId = randomUUID();
+    const deviceId = randomUUID();
+    expect(accountIdSchema.parse(accountId)).toBe(accountId);
+    expect(deviceIdSchema.parse(deviceId)).toBe(deviceId);
+    for (const malformed of ["", "not-a-uuid", "00000000-0000-0000-0000-00000000000g"]) {
+      expect(accountIdSchema.safeParse(malformed).success).toBe(false);
+      expect(deviceIdSchema.safeParse(malformed).success).toBe(false);
+    }
   });
   it("round-trips settings views for all four scopes", () => {
     const section = (value: unknown) => ({stored:value,effective:value,revision:"r1",access:{kind:"writable"},apply:[]});
