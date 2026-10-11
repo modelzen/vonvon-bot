@@ -1,0 +1,9 @@
+Vonvon Bot client includes complete files from getpaseo/paseo commit 0009a7e717a9f7ec587f55ca2985cb91b1310bd8.
+
+packages/relay/src/crypto.ts, e2ee.ts, encrypted-channel.ts and base64.ts are copied into src/e2ee/ with their original basenames.
+
+Copyright (c) 2025-present Mohamed Boudra. Paseo is licensed under the Apache License, Version 2.0. The complete upstream license and copyright statement are included in LICENSE.paseo.
+
+The target-owned e2ee test uses Paseo's in-memory transport-pair idea with microtask delivery, explicit event observation and deterministic teardown. It adds ciphertext-tamper and substituted-key checks.
+
+`packages/client/src/e2ee/encrypted-channel.ts` differs from the pinned file by two non-null assertions on line 576, added so the file type-checks under this repository's `noUncheckedIndexedAccess`; they are erased at compile time, so the executable JavaScript is unchanged, and the only possible emitted difference is the file's modification-notice comment at the top of the file, which states the change; `packages/client/src/e2ee/closure.json` records the two assertions and the notice with both hashes.

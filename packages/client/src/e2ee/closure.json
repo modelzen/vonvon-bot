@@ -1,0 +1,78 @@
+{
+  "source": {
+    "repository": "getpaseo/paseo",
+    "commit": "0009a7e717a9f7ec587f55ca2985cb91b1310bd8",
+    "directory": "packages/relay/src"
+  },
+  "files": [
+    {
+      "path": "base64.ts",
+      "kind": "pinned",
+      "pinnedSha256": "74d69461af9727aa3fb70b37ee50ae54e467e1eebf26fb0356453557094137e7",
+      "integratedSha256": "74d69461af9727aa3fb70b37ee50ae54e467e1eebf26fb0356453557094137e7"
+    },
+    {
+      "path": "crypto.ts",
+      "kind": "pinned",
+      "pinnedSha256": "309d5cb94ceb236ced93a188d0a0bc3b42a0e347815b4dbe6679374d810db845",
+      "integratedSha256": "309d5cb94ceb236ced93a188d0a0bc3b42a0e347815b4dbe6679374d810db845"
+    },
+    {
+      "path": "e2ee.ts",
+      "kind": "pinned",
+      "pinnedSha256": "434a162cdba9cd93097e7a93eeabb68a91c457e2cff9d5de5bc6c17f8fc79001",
+      "integratedSha256": "434a162cdba9cd93097e7a93eeabb68a91c457e2cff9d5de5bc6c17f8fc79001"
+    },
+    {
+      "path": "encrypted-channel.ts",
+      "kind": "type-only",
+      "pinnedSha256": "2b0d31520917d24993644fc30f065be4d46d3517475f8821388a2263ced3e6a6",
+      "preTypeEditSha256": "2b0d31520917d24993644fc30f065be4d46d3517475f8821388a2263ced3e6a6",
+      "integratedSha256": "bde83af7a699cb91e7069a2e2eec63c46b6d3ac93826cf70908c64da22e365d4",
+      "modificationNotice": {
+        "start": 0,
+        "end": 0,
+        "line": 1,
+        "column": 1,
+        "form": "N",
+        "replacedText": "",
+        "insertedText": "// Modified from Paseo: type-only edits erased at compile time.\n// Recorded in packages/client/src/e2ee/closure.json.\n",
+        "diagnostics": []
+      },
+      "typeOnlyEdits": [
+        {
+          "start": 18451,
+          "end": 18451,
+          "line": 576,
+          "column": 23,
+          "form": "E1",
+          "replacedText": "",
+          "insertedText": "!",
+          "diagnostics": [
+            {
+              "code": 2532,
+              "line": 576,
+              "column": 19
+            }
+          ]
+        },
+        {
+          "start": 18458,
+          "end": 18458,
+          "line": 576,
+          "column": 30,
+          "form": "E1",
+          "replacedText": "",
+          "insertedText": "!",
+          "diagnostics": [
+            {
+              "code": 2532,
+              "line": 576,
+              "column": 26
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -13,3 +13,7 @@ Paseo (getpaseo/paseo) is licensed under Apache-2.0 and informed the broader arc
 V3 adapts packages/server/src/server/pid-lock.ts and atomic-file.ts from Paseo commit 0009a7e717a9f7ec587f55ca2985cb91b1310bd8 into packages/daemon/src/server/. The adapted files carry Vonvon Bot changes for its daemon lifecycle and file handling.
 
 Copyright (c) 2025-present Mohamed Boudra. The complete upstream Apache License, Version 2.0, including Paseo's copyright statement, is in packages/daemon/LICENSE.paseo. The daemon package carries that license and its own NOTICE.
+
+V11 copies complete packages/relay/src/crypto.ts, e2ee.ts, encrypted-channel.ts and base64.ts from Paseo commit 0009a7e717a9f7ec587f55ca2985cb91b1310bd8 into packages/client/src/e2ee/. The client package includes LICENSE.paseo and NOTICE with the upstream copyright and Apache-2.0 license. Its target-owned tests adapt the in-memory transport-pair idea and add tamper and substituted-key checks.
+
+`packages/client/src/e2ee/encrypted-channel.ts` differs from the pinned file by two non-null assertions on line 576, added so the file type-checks under this repository's `noUncheckedIndexedAccess`; they are erased at compile time, so the executable JavaScript is unchanged, and the only possible emitted difference is the file's modification-notice comment at the top of the file, which states the change; `packages/client/src/e2ee/closure.json` records the two assertions and the notice with both hashes.
