@@ -1,5 +1,5 @@
 import { type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
-import type { Logger } from "pino";
+import type { Logger } from "../paseo/logger.js";
 
 import { spawnProcess } from "../paseo/runtime/utils/spawn.js";
 import { terminateWithTreeKill } from "../paseo/runtime/utils/tree-kill.js";

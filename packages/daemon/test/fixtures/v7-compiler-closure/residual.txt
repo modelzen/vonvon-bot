@@ -1,0 +1,228 @@
+
+> @vonvon/daemon@0.7.0 typecheck
+> tsc --noEmit
+
+src/agent/providers/generic-acp-agent.ts(196,17): error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+src/agent/providers/generic-acp-agent.ts(199,21): error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+src/agent/providers/generic-acp-agent.ts(204,10): error TS18048: 'arg' is possibly 'undefined'.
+src/agent/providers/opencode/http-error.ts(2,12): error TS4114: This member must have an 'override' modifier because it overrides a member in the base class 'Error'.
+src/agent/providers/opencode/v2/runtime.ts(226,29): error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type 'string | Error'.
+  Type 'undefined' is not assignable to type 'string | Error'.
+src/agent/providers/pi/cli-runtime.ts(63,7): error TS2322: Type 'string | undefined' is not assignable to type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+src/agent/providers/pi/session-descriptor.ts(358,35): error TS2532: Object is possibly 'undefined'.
+test/paseo/providers/acp-agent.test.ts(18,3): error TS1484: 'PermissionOption' is a type and must be imported using a type-only import when 'verbatimModuleSyntax' is enabled.
+test/paseo/providers/acp-agent.test.ts(19,3): error TS1484: 'PromptResponse' is a type and must be imported using a type-only import when 'verbatimModuleSyntax' is enabled.
+test/paseo/providers/acp-agent.test.ts(20,3): error TS1484: 'RequestPermissionRequest' is a type and must be imported using a type-only import when 'verbatimModuleSyntax' is enabled.
+test/paseo/providers/acp-agent.test.ts(21,3): error TS1484: 'SessionConfigOption' is a type and must be imported using a type-only import when 'verbatimModuleSyntax' is enabled.
+test/paseo/providers/acp-agent.test.ts(22,3): error TS1484: 'SessionUpdate' is a type and must be imported using a type-only import when 'verbatimModuleSyntax' is enabled.
+test/paseo/providers/acp-agent.test.ts(414,45): error TS2345: Argument of type 'Logger<never, boolean>' is not assignable to parameter of type 'Logger<string, boolean>'.
+  Type 'Logger<never, boolean>' is not assignable to type 'LoggerExtras<string, boolean>'.
+    Types of property 'on' are incompatible.
+      Type '(event: "level-change", listener: LevelChangeEventListener<never, boolean>) => Logger<never, boolean>' is not assignable to type '(event: "level-change", listener: LevelChangeEventListener<string, boolean>) => LoggerExtras<string, boolean>'.
+        Types of parameters 'listener' and 'listener' are incompatible.
+          Types of parameters 'logger' and 'logger' are incompatible.
+            Type 'Logger<never, boolean>' is not assignable to type 'Logger<string, boolean>'.
+              Type 'Logger<never, boolean>' is not assignable to type '{ [x: string]: LogFn; }'.
+                Index signature for type 'string' is missing in type 'BaseLogger & LoggerExtras<never, boolean> & { customLevels: {}; useOnlyCustomLevels: boolean; } & { info: LogFn; warn: LogFn; error: LogFn; debug: LogFn; fatal: LogFn; trace: LogFn; } & {}'.
+test/paseo/providers/acp-agent.test.ts(952,13): error TS2322: Type '{ group: string; options: { value: string; name: string; description: string; }[]; }' is not assignable to type 'SessionConfigSelectOption | SessionConfigSelectGroup'.
+  Property 'name' is missing in type '{ group: string; options: { value: string; name: string; description: string; }[]; }' but required in type 'SessionConfigSelectGroup'.
+test/paseo/providers/acp-agent.test.ts(1017,47): error TS2345: Argument of type 'Logger<never, boolean>' is not assignable to parameter of type 'Logger<string, boolean>'.
+  Type 'Logger<never, boolean>' is not assignable to type 'LoggerExtras<string, boolean>'.
+    Types of property 'on' are incompatible.
+      Type '(event: "level-change", listener: LevelChangeEventListener<never, boolean>) => Logger<never, boolean>' is not assignable to type '(event: "level-change", listener: LevelChangeEventListener<string, boolean>) => LoggerExtras<string, boolean>'.
+        Types of parameters 'listener' and 'listener' are incompatible.
+          Types of parameters 'logger' and 'logger' are incompatible.
+            Type 'Logger<never, boolean>' is not assignable to type 'Logger<string, boolean>'.
+              Type 'Logger<never, boolean>' is not assignable to type '{ [x: string]: LogFn; }'.
+                Index signature for type 'string' is missing in type 'BaseLogger & LoggerExtras<never, boolean> & { customLevels: {}; useOnlyCustomLevels: boolean; } & { info: LogFn; warn: LogFn; error: LogFn; debug: LogFn; fatal: LogFn; trace: LogFn; } & {}'.
+test/paseo/providers/acp-agent.test.ts(1064,47): error TS2345: Argument of type 'Logger<never, boolean>' is not assignable to parameter of type 'Logger<string, boolean>'.
+  Type 'Logger<never, boolean>' is not assignable to type 'LoggerExtras<string, boolean>'.
+    Types of property 'on' are incompatible.
+      Type '(event: "level-change", listener: LevelChangeEventListener<never, boolean>) => Logger<never, boolean>' is not assignable to type '(event: "level-change", listener: LevelChangeEventListener<string, boolean>) => LoggerExtras<string, boolean>'.
+        Types of parameters 'listener' and 'listener' are incompatible.
+          Types of parameters 'logger' and 'logger' are incompatible.
+            Type 'Logger<never, boolean>' is not assignable to type 'Logger<string, boolean>'.
+              Type 'Logger<never, boolean>' is not assignable to type '{ [x: string]: LogFn; }'.
+                Index signature for type 'string' is missing in type 'BaseLogger & LoggerExtras<never, boolean> & { customLevels: {}; useOnlyCustomLevels: boolean; } & { info: LogFn; warn: LogFn; error: LogFn; debug: LogFn; fatal: LogFn; trace: LogFn; } & {}'.
+test/paseo/providers/acp-agent.test.ts(1513,5): error TS2741: Property 'prompt' is missing in type '{}' but required in type '{ prompt: (...args: unknown[]) => Promise<PromptResponse>; }'.
+test/paseo/providers/acp-agent.test.ts(1878,16): error TS2352: Conversion of type '{ child: { kill: Mock<Procedure>; exitCode: number; signalCode: null; once: Mock<Procedure>; }; connection: { newSession: Mock<Procedure>; }; initialize: { ...; }; }' to type 'SpawnedACPProcess' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Types of property 'child' are incompatible.
+    Type '{ kill: Mock<Procedure>; exitCode: number; signalCode: null; once: Mock<Procedure>; }' is missing the following properties from type 'ChildProcessWithoutNullStreams': stdin, stdout, stderr, stdio, and 23 more.
+test/paseo/providers/acp-agent.test.ts(2105,16): error TS2352: Conversion of type '{ child: { kill: Mock<Procedure>; exitCode: number; signalCode: null; once: Mock<Procedure>; }; connection: { newSession: Mock<Procedure>; }; initialize: { ...; }; }' to type 'SpawnedACPProcess' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Types of property 'child' are incompatible.
+    Type '{ kill: Mock<Procedure>; exitCode: number; signalCode: null; once: Mock<Procedure>; }' is missing the following properties from type 'ChildProcessWithoutNullStreams': stdin, stdout, stderr, stdio, and 23 more.
+test/paseo/providers/acp-agent.test.ts(2164,14): error TS2352: Conversion of type '{ child: { kill: Mock<Procedure>; exitCode: number; signalCode: null; once: Mock<Procedure>; }; connection: { newSession: Mock<Procedure>; }; initialize: { ...; }; }' to type 'SpawnedACPProcess' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Types of property 'child' are incompatible.
+    Type '{ kill: Mock<Procedure>; exitCode: number; signalCode: null; once: Mock<Procedure>; }' is missing the following properties from type 'ChildProcessWithoutNullStreams': stdin, stdout, stderr, stdio, and 23 more.
+test/paseo/providers/acp-agent.test.ts(2212,16): error TS2352: Conversion of type '{ child: { kill: Mock<Procedure>; exitCode: number; signalCode: null; once: Mock<Procedure>; }; connection: { newSession: Mock<Procedure>; }; initialize: { ...; }; }' to type 'SpawnedACPProcess' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Types of property 'child' are incompatible.
+    Type '{ kill: Mock<Procedure>; exitCode: number; signalCode: null; once: Mock<Procedure>; }' is missing the following properties from type 'ChildProcessWithoutNullStreams': stdin, stdout, stderr, stdio, and 23 more.
+test/paseo/providers/acp-agent.test.ts(2240,16): error TS2352: Conversion of type '{ child: { kill: Mock<Procedure>; exitCode: number; signalCode: null; once: Mock<Procedure>; }; connection: { newSession: Mock<Procedure>; }; initialize: { ...; }; }' to type 'SpawnedACPProcess' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Types of property 'child' are incompatible.
+    Type '{ kill: Mock<Procedure>; exitCode: number; signalCode: null; once: Mock<Procedure>; }' is missing the following properties from type 'ChildProcessWithoutNullStreams': stdin, stdout, stderr, stdio, and 23 more.
+test/paseo/providers/acp-agent.test.ts(2746,12): error TS2532: Object is possibly 'undefined'.
+test/paseo/providers/acp-agent.test.ts(2747,12): error TS2532: Object is possibly 'undefined'.
+test/paseo/providers/acp-agent.test.ts(2747,49): error TS2532: Object is possibly 'undefined'.
+test/paseo/providers/acp-agent.test.ts(2748,12): error TS2532: Object is possibly 'undefined'.
+test/paseo/providers/acp-agent.test.ts(2749,12): error TS2532: Object is possibly 'undefined'.
+test/paseo/providers/acp-agent.test.ts(2749,53): error TS2532: Object is possibly 'undefined'.
+test/paseo/providers/acp-agent.test.ts(2829,62): error TS2322: Type 'Mock<() => Promise<unknown>>' is not assignable to type '(...args: unknown[]) => Promise<PromptResponse>'.
+  Type 'Promise<unknown>' is not assignable to type 'Promise<PromptResponse>'.
+    Type 'unknown' is not assignable to type 'PromptResponse'.
+test/paseo/providers/acp-agent.test.ts(2844,45): error TS2739: Type '{ outputTokens: number; }' is missing the following properties from type 'Usage': inputTokens, totalTokens
+test/paseo/providers/acp-agent.test.ts(3189,62): error TS2322: Type 'Mock<() => Promise<unknown>>' is not assignable to type '(...args: unknown[]) => Promise<PromptResponse>'.
+  Type 'Promise<unknown>' is not assignable to type 'Promise<PromptResponse>'.
+    Type 'unknown' is not assignable to type 'PromptResponse'.
+test/paseo/providers/acp-agent.test.ts(3314,5): error TS2322: Type 'ClientSideConnection' is not assignable to type '{ prompt: (...args: unknown[]) => Promise<PromptResponse>; }'.
+  Types of property 'prompt' are incompatible.
+    Type '(params: PromptRequest) => Promise<PromptResponse>' is not assignable to type '(...args: unknown[]) => Promise<PromptResponse>'.
+      Types of parameters 'params' and 'args' are incompatible.
+        Type 'unknown' is not assignable to type 'PromptRequest'.
+test/paseo/providers/acp-agent.test.ts(3506,9): error TS2739: Type '{ supportsStreaming: true; supportsSessionPersistence: true; }' is missing the following properties from type 'AgentCapabilityFlags': supportsDynamicModes, supportsMcpServers, supportsReasoningStream, supportsToolInvocations
+test/paseo/providers/acp-agent.test.ts(3527,11): error TS2415: Class 'FailingNewSession' incorrectly extends base class 'ACPAgentSession'.
+  Property 'spawnProcess' is private in type 'ACPAgentSession' but not in type 'FailingNewSession'.
+test/paseo/providers/acp-agent.test.ts(3534,11): error TS2741: Property 'protocolVersion' is missing in type '{ agentCapabilities: {}; }' but required in type 'InitializeResponse'.
+test/paseo/providers/acp-agent.test.ts(3546,9): error TS2739: Type '{ supportsStreaming: true; supportsSessionPersistence: true; }' is missing the following properties from type 'AgentCapabilityFlags': supportsDynamicModes, supportsMcpServers, supportsReasoningStream, supportsToolInvocations
+test/paseo/providers/acp-agent.test.ts(3563,11): error TS2415: Class 'FailingLoadSession' incorrectly extends base class 'ACPAgentSession'.
+  Property 'spawnProcess' is private in type 'ACPAgentSession' but not in type 'FailingLoadSession'.
+test/paseo/providers/acp-agent.test.ts(3570,11): error TS2741: Property 'protocolVersion' is missing in type '{ agentCapabilities: { loadSession: true; }; }' but required in type 'InitializeResponse'.
+test/paseo/providers/acp-agent.test.ts(3582,9): error TS2739: Type '{ supportsStreaming: true; supportsSessionPersistence: true; }' is missing the following properties from type 'AgentCapabilityFlags': supportsDynamicModes, supportsMcpServers, supportsReasoningStream, supportsToolInvocations
+test/paseo/providers/acp-agent.test.ts(3608,16): error TS2352: Conversion of type '{ child: ChildProcessWithoutNullStreams; connection: { newSession: Mock<Procedure>; }; initialize: { agentCapabilities: {}; }; }' to type 'SpawnedACPProcess' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Types of property 'connection' are incompatible.
+    Type '{ newSession: Mock<Procedure>; }' is missing the following properties from type 'ClientSideConnection': #private, initialize, loadSession, unstable_forkSession, and 14 more.
+test/paseo/providers/acp-agent.test.ts(3908,11): error TS2415: Class 'TestSession' incorrectly extends base class 'ACPAgentSession'.
+  Property 'spawnProcess' is private in type 'ACPAgentSession' but not in type 'TestSession'.
+test/paseo/providers/acp-agent.test.ts(3948,7): error TS2739: Type '{ loadSession: true; supportsMcpServers: true; }' is missing the following properties from type 'AgentCapabilityFlags': supportsStreaming, supportsSessionPersistence, supportsDynamicModes, supportsReasoningStream, supportsToolInvocations
+test/paseo/providers/acp-agent.test.ts(3979,8): error TS2322: Type 'TestSession' is not assignable to type 'ACPAgentSession'.
+  Property 'spawnProcess' is private in type 'ACPAgentSession' but not in type 'TestSession'.
+test/paseo/providers/acp-agent.test.ts(3980,7): error TS2740: Type '{ loadSession: true; }' is missing the following properties from type 'AgentCapabilityFlags': supportsStreaming, supportsSessionPersistence, supportsDynamicModes, supportsMcpServers, and 2 more.
+test/paseo/providers/acp-agent.test.ts(3982,7): error TS2322: Type '() => Promise<{ sessionId: string; modes: null; models: null; configOptions: never[]; }>' is not assignable to type 'Mock<Procedure | Constructable> | undefined'.
+  Type '() => Promise<{ sessionId: string; modes: null; models: null; configOptions: never[]; }>' is not assignable to type 'MockInstance<Procedure | Constructable> & { (...args: any[]): any; new (...args: any[]): any; } & {}'.
+    Type '() => Promise<{ sessionId: string; modes: null; models: null; configOptions: never[]; }>' is not assignable to type 'MockInstance<Procedure | Constructable>'.
+test/paseo/providers/acp-agent.test.ts(4036,8): error TS2322: Type 'TestSession' is not assignable to type 'ACPAgentSession'.
+  Property 'spawnProcess' is private in type 'ACPAgentSession' but not in type 'TestSession'.
+test/paseo/providers/acp-agent.test.ts(4037,7): error TS2740: Type '{ loadSession: true; }' is missing the following properties from type 'AgentCapabilityFlags': supportsStreaming, supportsSessionPersistence, supportsDynamicModes, supportsMcpServers, and 2 more.
+test/paseo/providers/acp-agent.test.ts(4039,7): error TS2322: Type '() => Promise<{ sessionId: string; modes: null; models: null; configOptions: never[]; }>' is not assignable to type 'Mock<Procedure | Constructable> | undefined'.
+  Type '() => Promise<{ sessionId: string; modes: null; models: null; configOptions: never[]; }>' is not assignable to type 'MockInstance<Procedure | Constructable> & { (...args: any[]): any; new (...args: any[]): any; } & {}'.
+    Type '() => Promise<{ sessionId: string; modes: null; models: null; configOptions: never[]; }>' is not assignable to type 'MockInstance<Procedure | Constructable>'.
+test/paseo/providers/acp-agent.test.ts(4099,8): error TS2322: Type 'TestSession' is not assignable to type 'ACPAgentSession'.
+  Property 'spawnProcess' is private in type 'ACPAgentSession' but not in type 'TestSession'.
+test/paseo/providers/acp-agent.test.ts(4100,7): error TS2740: Type '{ loadSession: true; }' is missing the following properties from type 'AgentCapabilityFlags': supportsStreaming, supportsSessionPersistence, supportsDynamicModes, supportsMcpServers, and 2 more.
+test/paseo/providers/acp-agent.test.ts(4102,7): error TS2322: Type '() => Promise<{ sessionId: string; modes: null; models: null; configOptions: never[]; }>' is not assignable to type 'Mock<Procedure | Constructable> | undefined'.
+  Type '() => Promise<{ sessionId: string; modes: null; models: null; configOptions: never[]; }>' is not assignable to type 'MockInstance<Procedure | Constructable> & { (...args: any[]): any; new (...args: any[]): any; } & {}'.
+    Type '() => Promise<{ sessionId: string; modes: null; models: null; configOptions: never[]; }>' is not assignable to type 'MockInstance<Procedure | Constructable>'.
+test/paseo/providers/acp-agent.test.ts(4114,12): error TS2532: Object is possibly 'undefined'.
+test/paseo/providers/acp-agent.test.ts(4115,12): error TS2532: Object is possibly 'undefined'.
+test/paseo/providers/acp-agent.test.ts(4115,49): error TS2532: Object is possibly 'undefined'.
+test/paseo/providers/acp-agent.test.ts(4116,12): error TS2532: Object is possibly 'undefined'.
+test/paseo/providers/acp-agent.test.ts(4117,12): error TS2532: Object is possibly 'undefined'.
+test/paseo/providers/acp-agent.test.ts(4117,53): error TS2532: Object is possibly 'undefined'.
+test/paseo/providers/acp-agent.test.ts(4122,7): error TS2739: Type '{ loadSession: true; supportsMcpServers: false; }' is missing the following properties from type 'AgentCapabilityFlags': supportsStreaming, supportsSessionPersistence, supportsDynamicModes, supportsReasoningStream, supportsToolInvocations
+test/paseo/providers/acp-agent.test.ts(4138,23): error TS2322: Type '{ resume: {}; }' is not assignable to type 'boolean | undefined'.
+test/paseo/providers/opencode/bridge.test.ts(109,14): error TS18048: 'context.tools.paseo_structured_output' is possibly 'undefined'.
+test/paseo/providers/opencode/test-utils/v2-harness.ts(66,3): error TS2322: Type '(input: SessionPromptInput) => Promise<void>' is not assignable to type '(input: SessionPromptInput, requestOptions?: RequestOptions | undefined) => Promise<SessionInboxUser>'.
+  Type 'Promise<void>' is not assignable to type 'Promise<SessionInboxUser>'.
+    Type 'void' is not assignable to type 'SessionInboxUser'.
+test/paseo/providers/opencode/test-utils/v2-harness.ts(152,7): error TS2322: Type '(input: SessionPromptInput, options: RequestOptions | undefined) => Promise<void>' is not assignable to type '(input: SessionPromptInput, requestOptions?: RequestOptions | undefined) => Promise<SessionInboxUser>'.
+  Type 'Promise<void>' is not assignable to type 'Promise<SessionInboxUser>'.
+    Type 'void' is not assignable to type 'SessionInboxUser'.
+test/paseo/providers/opencode/test-utils/v2-harness.ts(187,30): error TS2353: Object literal may only specify known properties, and 'created' does not exist in type 'V2EventServerConnected'.
+test/paseo/providers/opencode/v2/agent.test.ts(22,5): error TS2322: Type '(input: SessionPromptInput) => Promise<void>' is not assignable to type '(input: SessionPromptInput, requestOptions?: RequestOptions | undefined) => Promise<SessionInboxUser>'.
+  Type 'Promise<void>' is not assignable to type 'Promise<SessionInboxUser>'.
+    Type 'void' is not assignable to type 'SessionInboxUser'.
+test/paseo/providers/opencode/v2/agent.test.ts(69,43): error TS2353: Object literal may only specify known properties, and 'created' does not exist in type 'V2EventServerConnected'.
+test/paseo/providers/opencode/v2/agent.test.ts(84,7): error TS2322: Type 'Promise<void>' is not assignable to type 'Promise<SessionInboxUser>'.
+  Type 'void' is not assignable to type 'SessionInboxUser'.
+test/paseo/providers/opencode/v2/agent.test.ts(97,39): error TS2353: Object literal may only specify known properties, and 'created' does not exist in type 'V2EventServerConnected'.
+test/paseo/providers/opencode/v2/agent.test.ts(126,39): error TS2353: Object literal may only specify known properties, and 'created' does not exist in type 'V2EventServerConnected'.
+test/paseo/providers/opencode/v2/agent.test.ts(202,39): error TS2353: Object literal may only specify known properties, and 'created' does not exist in type 'V2EventServerConnected'.
+test/paseo/providers/opencode/v2/agent.test.ts(247,20): error TS2345: Argument of type '{ id: string; created: number; type: "form.created"; data: { form: FormInfo; }; }' is not assignable to parameter of type 'V2Event'.
+  Type at position 0 in source is not compatible with type at position 0 in target.
+    The types of 'data.form.fields' are incompatible between these types.
+      Type 'FormField' is not assignable to type 'FormField1'.
+        Type 'FormNumberField' is not assignable to type 'FormField1'.
+          Type 'FormNumberField' is not assignable to type 'FormNumberField1'.
+            Types of property 'minimum' are incompatible.
+              Type 'number | "Infinity" | "-Infinity" | "NaN" | undefined' is not assignable to type 'number | undefined'.
+                Type 'string' is not assignable to type 'number'.
+test/paseo/providers/opencode/v2/agent.test.ts(368,39): error TS2353: Object literal may only specify known properties, and 'created' does not exist in type 'V2EventServerConnected'.
+test/paseo/providers/opencode/v2/agent.test.ts(405,39): error TS2353: Object literal may only specify known properties, and 'created' does not exist in type 'V2EventServerConnected'.
+test/paseo/providers/opencode/v2/agent.test.ts(419,9): error TS2353: Object literal may only specify known properties, and 'created' does not exist in type 'V2EventServerConnected'.
+test/paseo/providers/opencode/v2/agent.test.ts(505,16): error TS2531: Object is possibly 'null'.
+test/paseo/providers/opencode/v2/agent.test.ts(518,16): error TS2531: Object is possibly 'null'.
+test/paseo/providers/opencode/v2/agent.test.ts(574,36): error TS2532: Object is possibly 'undefined'.
+test/paseo/providers/opencode/v2/agent.test.ts(576,38): error TS2532: Object is possibly 'undefined'.
+test/paseo/providers/opencode/v2/agent.test.ts(595,45): error TS2353: Object literal may only specify known properties, and 'created' does not exist in type 'V2EventServerConnected'.
+test/paseo/providers/opencode/v2/agent.test.ts(596,47): error TS2353: Object literal may only specify known properties, and 'created' does not exist in type 'V2EventServerConnected'.
+test/paseo/providers/opencode/v2/agent.test.ts(606,30): error TS2532: Object is possibly 'undefined'.
+test/paseo/providers/opencode/v2/agent.test.ts(606,30): error TS2345: Argument of type 'AgentPersistenceHandle | null' is not assignable to parameter of type 'AgentPersistenceHandle'.
+  Type 'null' is not assignable to type 'AgentPersistenceHandle'.
+test/paseo/providers/opencode/v2/agent.test.ts(638,5): error TS2322: Type '(input: SessionPromptInput) => Promise<void>' is not assignable to type '(input: SessionPromptInput, requestOptions?: RequestOptions | undefined) => Promise<SessionInboxUser>'.
+  Type 'Promise<void>' is not assignable to type 'Promise<SessionInboxUser>'.
+    Type 'void' is not assignable to type 'SessionInboxUser'.
+test/paseo/providers/opencode/v2/agent.test.ts(691,5): error TS2322: Type '(input: SessionPromptInput) => Promise<void>' is not assignable to type '(input: SessionPromptInput, requestOptions?: RequestOptions | undefined) => Promise<SessionInboxUser>'.
+  Type 'Promise<void>' is not assignable to type 'Promise<SessionInboxUser>'.
+    Type 'void' is not assignable to type 'SessionInboxUser'.
+test/paseo/providers/opencode/v2/agent.test.ts(837,41): error TS2353: Object literal may only specify known properties, and 'created' does not exist in type 'V2EventServerConnected'.
+test/paseo/providers/opencode/v2/agent.test.ts(839,7): error TS2532: Object is possibly 'undefined'.
+test/paseo/providers/opencode/v2/agent.test.ts(840,41): error TS2353: Object literal may only specify known properties, and 'created' does not exist in type 'V2EventServerConnected'.
+test/paseo/providers/opencode/v2/agent.test.ts(879,39): error TS2353: Object literal may only specify known properties, and 'created' does not exist in type 'V2EventServerConnected'.
+test/paseo/providers/opencode/v2/agent.test.ts(894,7): error TS2322: Type 'Promise<void>' is not assignable to type 'Promise<SessionInboxUser>'.
+  Type 'void' is not assignable to type 'SessionInboxUser'.
+test/paseo/providers/opencode/v2/agent.test.ts(924,5): error TS2322: Type '(input: SessionPromptInput) => Promise<void>' is not assignable to type '(input: SessionPromptInput, requestOptions?: RequestOptions | undefined) => Promise<SessionInboxUser>'.
+  Type 'Promise<void>' is not assignable to type 'Promise<SessionInboxUser>'.
+    Type 'void' is not assignable to type 'SessionInboxUser'.
+test/paseo/providers/opencode/v2/configuration.test.ts(12,37): error TS2741: Property 'kind' is missing in type '{ server: string; tool: string; }' but required in type 'McpToolRef'.
+test/paseo/providers/opencode/v2/permissions.test.ts(103,14): error TS18048: 'request' is possibly 'undefined'.
+test/paseo/providers/opencode/v2/streaming.test.ts(46,20): error TS2345: Argument of type '{ id: string; created: number; type: "session.reasoning.started"; data: { sessionID: string; assistantMessageID: string; ordinal: number; }; }' is not assignable to parameter of type 'V2Event'.
+  Property 'durable' is missing in type '{ id: string; created: number; type: "session.reasoning.started"; data: { sessionID: string; assistantMessageID: string; ordinal: number; }; }' but required in type 'SessionReasoningStarted'.
+test/paseo/providers/opencode/v2/streaming.test.ts(58,20): error TS2345: Argument of type '{ id: string; created: number; type: "session.text.started"; data: { sessionID: string; assistantMessageID: string; ordinal: number; }; }' is not assignable to parameter of type 'V2Event'.
+  Property 'durable' is missing in type '{ id: string; created: number; type: "session.text.started"; data: { sessionID: string; assistantMessageID: string; ordinal: number; }; }' but required in type 'SessionTextStarted'.
+test/paseo/providers/opencode/v2/streaming.test.ts(146,20): error TS2345: Argument of type '{ id: string; created: number; type: "session.text.started"; data: { sessionID: string; assistantMessageID: string; ordinal: number; }; }' is not assignable to parameter of type 'V2Event'.
+  Property 'durable' is missing in type '{ id: string; created: number; type: "session.text.started"; data: { sessionID: string; assistantMessageID: string; ordinal: number; }; }' but required in type 'SessionTextStarted'.
+test/paseo/providers/opencode/v2/streaming.test.ts(165,20): error TS2345: Argument of type '{ id: string; created: number; type: "session.reasoning.started"; data: { sessionID: string; assistantMessageID: string; ordinal: number; }; }' is not assignable to parameter of type 'V2Event'.
+  Property 'durable' is missing in type '{ id: string; created: number; type: "session.reasoning.started"; data: { sessionID: string; assistantMessageID: string; ordinal: number; }; }' but required in type 'SessionReasoningStarted'.
+test/paseo/providers/opencode/v2/usage.test.ts(54,5): error TS2322: Type '(input: ModelListInput | undefined) => Promise<{ location: { directory: string | undefined; }; data: ModelInfo[]; }>' is not assignable to type '(input?: ModelListInput | undefined, requestOptions?: RequestOptions | undefined) => Promise<ModelListOutput>'.
+  Type 'Promise<{ location: { directory: string | undefined; }; data: ModelInfo[]; }>' is not assignable to type 'Promise<ModelListOutput>'.
+    Type '{ location: { directory: string | undefined; }; data: ModelInfo[]; }' is not assignable to type 'ModelListOutput'.
+      The types of 'location.directory' are incompatible between these types.
+        Type 'string | undefined' is not assignable to type 'string'.
+          Type 'undefined' is not assignable to type 'string'.
+test/paseo/providers/opencode/v2/usage.test.ts(57,32): error TS18048: 'input' is possibly 'undefined'.
+test/paseo/providers/opencode/v2/usage.test.ts(57,32): error TS18048: 'input.location' is possibly 'undefined'.
+test/paseo/providers/pi/agent.test.ts(315,13): error TS18048: 'waiter' is possibly 'undefined'.
+test/paseo/providers/pi/agent.test.ts(318,11): error TS18048: 'waiter' is possibly 'undefined'.
+test/paseo/providers/pi/agent.test.ts(334,32): error TS2345: Argument of type '(this: undefined, event: AgentStreamEvent) => { type: "timeline"; item: AgentTimelineItem; }[] | { type: "turn_completed"; }[]' is not assignable to parameter of type '(this: undefined, value: AgentStreamEvent, index: number, array: AgentStreamEvent[]) => { type: "timeline"; item: AgentTimelineItem; } | readonly { ...; }[]'.
+  Type '{ type: "timeline"; item: AgentTimelineItem; }[] | { type: "turn_completed"; }[]' is not assignable to type '{ type: "timeline"; item: AgentTimelineItem; } | readonly { type: "timeline"; item: AgentTimelineItem; }[]'.
+    Type '{ type: "turn_completed"; }[]' is not assignable to type '{ type: "timeline"; item: AgentTimelineItem; } | readonly { type: "timeline"; item: AgentTimelineItem; }[]'.
+      Type '{ type: "turn_completed"; }[]' is not assignable to type 'readonly { type: "timeline"; item: AgentTimelineItem; }[]'.
+        Property 'item' is missing in type '{ type: "turn_completed"; }' but required in type '{ type: "timeline"; item: AgentTimelineItem; }'.
+test/paseo/providers/pi/agent.test.ts(1518,7): error TS18048: 'actualLaunch.extensionPaths' is possibly 'undefined'.
+test/paseo/providers/pi/agent.test.ts(1633,27): error TS2532: Object is possibly 'undefined'.
+test/paseo/providers/pi/agent.test.ts(1679,57): error TS2532: Object is possibly 'undefined'.
+test/paseo/providers/pi/agent.test.ts(1737,7): error TS18048: 'actualLaunch.extensionPaths' is possibly 'undefined'.
+test/paseo/providers/pi/agent.test.ts(1741,39): error TS18048: 'actualLaunch.extensionPaths' is possibly 'undefined'.
+test/paseo/providers/pi/agent.test.ts(1784,7): error TS18048: 'actualLaunch.extensionPaths' is possibly 'undefined'.
+test/paseo/providers/pi/agent.test.ts(1787,39): error TS18048: 'actualLaunch.extensionPaths' is possibly 'undefined'.
+test/paseo/providers/pi/agent.test.ts(2666,7): error TS18048: 'actualLaunch.extensionPaths' is possibly 'undefined'.
+test/paseo/providers/pi/agent.test.ts(3159,7): error TS18048: 'actualLaunch.extensionPaths' is possibly 'undefined'.
+test/paseo/providers/pi/agent.test.ts(3238,27): error TS18048: 'actualLaunch.extensionPaths' is possibly 'undefined'.
+test/paseo/providers/pi/agent.test.ts(3270,43): error TS18048: 'actualLaunch.extensionPaths' is possibly 'undefined'.
+test/paseo/providers/pi/agent.test.ts(3293,43): error TS18048: 'actualLaunch.extensionPaths' is possibly 'undefined'.
+test/paseo/providers/pi/agent.test.ts(3333,7): error TS18048: 'actualLaunch.extensionPaths' is possibly 'undefined'.
+test/paseo/providers/pi/cli-runtime.test.ts(18,17): error TS2352: Conversion of type 'EventEmitter<DefaultEventMap> & { stdin: PassThrough; stdout: PassThrough; stderr: PassThrough; exitCode: null; signalCode: null; killedSignals: never[]; }' to type 'PiChild' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type 'EventEmitter<DefaultEventMap> & { stdin: PassThrough; stdout: PassThrough; stderr: PassThrough; exitCode: null; signalCode: null; killedSignals: never[]; }' is missing the following properties from type 'ChildProcessWithoutNullStreams': stdio, killed, connected, spawnargs, and 7 more.
+test/paseo/providers/pi/extensions/index.test.ts(128,9): error TS2345: Argument of type '{ id: string; provider: string; kind: "question"; title: string; input: { questions: never[]; }; }' is not assignable to parameter of type 'AgentPermissionRequest'.
+  Property 'name' is missing in type '{ id: string; provider: string; kind: "question"; title: string; input: { questions: never[]; }; }' but required in type 'AgentPermissionRequest'.
+test/paseo/providers/pi/history-mapper.test.ts(35,40): error TS2339: Property 'item' does not exist on type 'AgentStreamEvent'.
+  Property 'item' does not exist on type '{ type: "thread_started"; sessionId: string; provider: string; }'.
+npm error Lifecycle script `typecheck` failed with error:
+npm error code 2
+npm error path /Users/clay/develop/src/github.com/ClayCheung/vonvon-bot-worktrees/v7-providers/packages/daemon
+npm error workspace @vonvon/daemon@0.7.0
+npm error location /Users/clay/develop/src/github.com/ClayCheung/vonvon-bot-worktrees/v7-providers/packages/daemon
+npm error command failed
+npm error command sh -c tsc --noEmit

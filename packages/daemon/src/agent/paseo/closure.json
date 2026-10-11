@@ -2952,6 +2952,4920 @@
     {
       "destination": "packages/daemon/src/agent/paseo/session-backend.ts",
       "reason": "Vonvon AgentBackend adapter"
+    },
+    {
+      "destination": "packages/daemon/src/agent/paseo/runtime/server/paseo-home.ts",
+      "reason": "Vonvon-owned resolvePaseoHome adapter for the V7 OpenCode data root; pinned Paseo server/paseo-home.ts is intentionally not copied"
+    },
+    {
+      "destination": "packages/daemon/src/agent/providers/acp-options.ts",
+      "reason": "Earlier V7 mechanical leaf copied from pinned Paseo; byte-identical source, outside the later 76-file copy checkpoint"
+    },
+    {
+      "destination": "packages/daemon/src/agent/providers/jsonl-frame-decoder.ts",
+      "reason": "Earlier V7 mechanical leaf copied from pinned Paseo; byte-identical source, outside the later 76-file copy checkpoint"
+    },
+    {
+      "destination": "packages/daemon/src/agent/providers/jsonl-rpc-process.ts",
+      "reason": "Earlier V7 mechanical leaf copied from pinned Paseo with specifier and structural Logger type retargets, outside the later 76-file copy checkpoint"
     }
-  ]
+  ],
+  "v7": {
+    "files": [
+      {
+        "source": "packages/server/src/server/agent/providers/acp-agent.ts",
+        "destination": "packages/daemon/src/agent/providers/acp-agent.ts",
+        "pinnedSha256": "105b9b5c72a3e34833ea1402ee4e2be1d8b4d64fff638a82a43afa7981f6b672",
+        "integratedSha256": "e32c45aff2452683133281813db4b1f1ed1d1ddc17f52b58a6580f1b0062cc99",
+        "modificationKind": "type-only",
+        "changes": [
+          {
+            "from": "../../../utils/tree-kill.js",
+            "to": "../paseo/runtime/utils/tree-kill.js"
+          },
+          {
+            "from": "../../../utils/tree-kill.js",
+            "to": "../paseo/runtime/utils/tree-kill.js"
+          },
+          {
+            "from": "pino",
+            "to": "../paseo/logger.js"
+          },
+          {
+            "from": "../agent-sdk-types.js",
+            "to": "../paseo/agent-sdk-types.js"
+          },
+          {
+            "from": "../provider-refresh-deadline.js",
+            "to": "../paseo/provider-refresh-deadline.js"
+          },
+          {
+            "from": "../create-agent-mode.js",
+            "to": "../paseo/create-agent-mode.js"
+          },
+          {
+            "from": "../provider-session-import.js",
+            "to": "../paseo/provider-session-import.js"
+          },
+          {
+            "from": "../provider-launch-config.js",
+            "to": "../paseo/provider-launch-config.js"
+          },
+          {
+            "from": "../prompt-attachments.js",
+            "to": "../paseo/prompt-attachments.js"
+          },
+          {
+            "from": "../../../utils/string-command-shell.js",
+            "to": "../paseo/runtime/utils/string-command-shell.js"
+          },
+          {
+            "from": "../../../utils/spawn.js",
+            "to": "../paseo/runtime/utils/spawn.js"
+          },
+          {
+            "from": "../../../utils/promise-timeout.js",
+            "to": "../paseo/runtime/utils/promise-timeout.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "./acp-options.js",
+          "node:child_process",
+          "node:crypto",
+          "node:fs/promises",
+          "node:os",
+          "node:path",
+          "node:stream",
+          "../../../utils/tree-kill.js",
+          "../../../utils/tree-kill.js",
+          "node:stream/web",
+          "@agentclientprotocol/sdk",
+          "pino",
+          "../agent-sdk-types.js",
+          "../provider-refresh-deadline.js",
+          "../create-agent-mode.js",
+          "../provider-session-import.js",
+          "../provider-launch-config.js",
+          "../prompt-attachments.js",
+          "./provider-runner.js",
+          "../../../utils/string-command-shell.js",
+          "../../../utils/spawn.js",
+          "./diagnostic-utils.js",
+          "../../../utils/promise-timeout.js"
+        ],
+        "integratedImports": [
+          "./acp-options.js",
+          "node:child_process",
+          "node:crypto",
+          "node:fs/promises",
+          "node:os",
+          "node:path",
+          "node:stream",
+          "../paseo/runtime/utils/tree-kill.js",
+          "../paseo/runtime/utils/tree-kill.js",
+          "node:stream/web",
+          "@agentclientprotocol/sdk",
+          "../paseo/logger.js",
+          "../paseo/agent-sdk-types.js",
+          "../paseo/provider-refresh-deadline.js",
+          "../paseo/create-agent-mode.js",
+          "../paseo/provider-session-import.js",
+          "../paseo/provider-launch-config.js",
+          "../paseo/prompt-attachments.js",
+          "./provider-runner.js",
+          "../paseo/runtime/utils/string-command-shell.js",
+          "../paseo/runtime/utils/spawn.js",
+          "./diagnostic-utils.js",
+          "../paseo/runtime/utils/promise-timeout.js"
+        ],
+        "preTypeEditSha256": "bf964bd9272ef7ec8626e43c5d190792ac58dbdfb7a3615c7459f32528e51577",
+        "typeOnlyEdits": [
+          {
+            "start": 93947,
+            "end": 93954,
+            "line": 2816,
+            "column": 3,
+            "form": "E5",
+            "replacedText": "private",
+            "insertedText": "protected",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 3527,
+                "column": 11,
+                "code": "TS2415",
+                "message": "Class 'FailingNewSession' incorrectly extends base class 'ACPAgentSession'."
+              },
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 3563,
+                "column": 11,
+                "code": "TS2415",
+                "message": "Class 'FailingLoadSession' incorrectly extends base class 'ACPAgentSession'."
+              },
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 3908,
+                "column": 11,
+                "code": "TS2415",
+                "message": "Class 'TestSession' incorrectly extends base class 'ACPAgentSession'."
+              },
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 3979,
+                "column": 8,
+                "code": "TS2322",
+                "message": "Type 'TestSession' is not assignable to type 'ACPAgentSession'."
+              },
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 4036,
+                "column": 8,
+                "code": "TS2322",
+                "message": "Type 'TestSession' is not assignable to type 'ACPAgentSession'."
+              },
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 4099,
+                "column": 8,
+                "code": "TS2322",
+                "message": "Type 'TestSession' is not assignable to type 'ACPAgentSession'."
+              }
+            ],
+            "reason": ""
+          }
+        ],
+        "modificationNotice": {
+          "start": 0,
+          "end": 0,
+          "line": 1,
+          "column": 1,
+          "form": "N",
+          "replacedText": "",
+          "insertedText": "// Modified from Paseo: type-only edits erased at compile time; see packages/daemon/src/agent/paseo/closure.json.\n"
+        }
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/generic-acp-agent.ts",
+        "destination": "packages/daemon/src/agent/providers/generic-acp-agent.ts",
+        "pinnedSha256": "da0aba53d2d7368036fce3b942d2397173781df0bce43dac75f2e8e5a2449630",
+        "integratedSha256": "faefde1449a2c2cf74080500fc4690f38f04bcdcc563639f8fea5b3f617f383c",
+        "modificationKind": "type-only",
+        "changes": [
+          {
+            "from": "pino",
+            "to": "../paseo/logger.js"
+          },
+          {
+            "from": "../provider-launch-config.js",
+            "to": "../paseo/provider-launch-config.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "pino",
+          "../provider-launch-config.js",
+          "./acp-agent.js",
+          "./diagnostic-utils.js"
+        ],
+        "integratedImports": [
+          "../paseo/logger.js",
+          "../paseo/provider-launch-config.js",
+          "./acp-agent.js",
+          "./diagnostic-utils.js"
+        ],
+        "preTypeEditSha256": "1a9175319bf2869e4124cb7c1d425b6fb383cbf2083b8d7d86ab95dd5b6e29ab",
+        "typeOnlyEdits": [
+          {
+            "start": 5819,
+            "end": 5819,
+            "line": 195,
+            "column": 28,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/src/agent/providers/generic-acp-agent.ts",
+                "line": 196,
+                "column": 17,
+                "code": "TS2345",
+                "message": "Argument of type 'string | undefined' is not assignable to parameter of type 'string'."
+              },
+              {
+                "file": "packages/daemon/src/agent/providers/generic-acp-agent.ts",
+                "line": 204,
+                "column": 10,
+                "code": "TS18048",
+                "message": "'arg' is possibly 'undefined'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 5954,
+            "end": 5954,
+            "line": 199,
+            "column": 36,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/src/agent/providers/generic-acp-agent.ts",
+                "line": 199,
+                "column": 21,
+                "code": "TS2345",
+                "message": "Argument of type 'string | undefined' is not assignable to parameter of type 'string'."
+              }
+            ],
+            "reason": ""
+          }
+        ],
+        "modificationNotice": {
+          "start": 0,
+          "end": 0,
+          "line": 1,
+          "column": 1,
+          "form": "N",
+          "replacedText": "",
+          "insertedText": "// Modified from Paseo: type-only edits erased at compile time; see packages/daemon/src/agent/paseo/closure.json.\n"
+        }
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/copilot-acp-agent.ts",
+        "destination": "packages/daemon/src/agent/providers/copilot-acp-agent.ts",
+        "pinnedSha256": "54143fc2cab79be7ba57e0d35e589a6eace100bbbfae7b1fbd0144f2accb2487",
+        "integratedSha256": "a9d74d8281f26ddea93232fa52534e4b5be243ce23d300fbdf14cf945b7c82c3",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "pino",
+            "to": "../paseo/logger.js"
+          },
+          {
+            "from": "../agent-sdk-types.js",
+            "to": "../paseo/agent-sdk-types.js"
+          },
+          {
+            "from": "../provider-launch-config.js",
+            "to": "../paseo/provider-launch-config.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "pino",
+          "@agentclientprotocol/sdk",
+          "../agent-sdk-types.js",
+          "../provider-launch-config.js",
+          "./acp-agent.js",
+          "./diagnostic-utils.js"
+        ],
+        "integratedImports": [
+          "../paseo/logger.js",
+          "@agentclientprotocol/sdk",
+          "../paseo/agent-sdk-types.js",
+          "../paseo/provider-launch-config.js",
+          "./acp-agent.js",
+          "./diagnostic-utils.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/v2/agent.ts",
+        "destination": "packages/daemon/src/agent/providers/opencode/v2/agent.ts",
+        "pinnedSha256": "7a9f696a0e568b4695ef9b30592f8d86a3e82fd2c92e948b4115ed82751ed21e",
+        "integratedSha256": "c093e711876c4e0c1bc65dc831e2e53cb9d5ff0281a2a3e2af0eb0629f796dbe",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "pino",
+            "to": "../../../paseo/logger.js"
+          },
+          {
+            "from": "../../../agent-sdk-types.js",
+            "to": "../../../paseo/agent-sdk-types.js"
+          },
+          {
+            "from": "../../../provider-launch-config.js",
+            "to": "../../../paseo/provider-launch-config.js"
+          },
+          {
+            "from": "../../../../managed-processes/managed-processes.js",
+            "to": "../../../paseo/runtime/server/managed-processes/managed-processes.js"
+          },
+          {
+            "from": "../../../provider-session-import.js",
+            "to": "../../../paseo/provider-session-import.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "./session.js",
+          "./capabilities.js",
+          "./configuration.js",
+          "./commands.js",
+          "./readiness.js",
+          "@opencode/client",
+          "pino",
+          "../../../agent-sdk-types.js",
+          "../../../provider-launch-config.js",
+          "../../../../managed-processes/managed-processes.js",
+          "../../../provider-session-import.js",
+          "../bridge.js",
+          "../paths.js",
+          "./runtime.js",
+          "./mapping.js"
+        ],
+        "integratedImports": [
+          "./session.js",
+          "./capabilities.js",
+          "./configuration.js",
+          "./commands.js",
+          "./readiness.js",
+          "@opencode/client",
+          "../../../paseo/logger.js",
+          "../../../paseo/agent-sdk-types.js",
+          "../../../paseo/provider-launch-config.js",
+          "../../../paseo/runtime/server/managed-processes/managed-processes.js",
+          "../../../paseo/provider-session-import.js",
+          "../bridge.js",
+          "../paths.js",
+          "./runtime.js",
+          "./mapping.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/v2/api.ts",
+        "destination": "packages/daemon/src/agent/providers/opencode/v2/api.ts",
+        "pinnedSha256": "e92e59f79221e5c6cfe7da01eb645c013839228671a01e798cb601c02dec653f",
+        "integratedSha256": "e92e59f79221e5c6cfe7da01eb645c013839228671a01e798cb601c02dec653f",
+        "modificationKind": "specifiers",
+        "changes": [],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "@opencode/client"
+        ],
+        "integratedImports": [
+          "@opencode/client"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/v2/capabilities.ts",
+        "destination": "packages/daemon/src/agent/providers/opencode/v2/capabilities.ts",
+        "pinnedSha256": "775099ddb814881eb14279a3a069545d4469a5adbe767de08ec184707ea00e61",
+        "integratedSha256": "e5cd5e96d93e7a6d5cc5fe8ead728640e5774a18c73050b56db3fc553661c5ea",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "../../../agent-sdk-types.js",
+            "to": "../../../paseo/agent-sdk-types.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "../../../agent-sdk-types.js"
+        ],
+        "integratedImports": [
+          "../../../paseo/agent-sdk-types.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/v2/children.ts",
+        "destination": "packages/daemon/src/agent/providers/opencode/v2/children.ts",
+        "pinnedSha256": "79a570dd9600bd9adf7c33489c26452f58504e35aec3905d42b9318ac5d83e30",
+        "integratedSha256": "db77536cad1f91dbecc1a45813cd5b07f5b8c4c3fb850c38d08ab70e56e5e1bc",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "../../../agent-sdk-types.js",
+            "to": "../../../paseo/agent-sdk-types.js"
+          },
+          {
+            "from": "../../../provider-subagents/store.js",
+            "to": "../../../paseo/provider-subagents/types.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "./timeline.js",
+          "@opencode/client",
+          "../../../agent-sdk-types.js",
+          "../../../provider-subagents/store.js",
+          "./history.js",
+          "./api.js",
+          "@opencode/client"
+        ],
+        "integratedImports": [
+          "./timeline.js",
+          "@opencode/client",
+          "../../../paseo/agent-sdk-types.js",
+          "../../../paseo/provider-subagents/types.js",
+          "./history.js",
+          "./api.js",
+          "@opencode/client"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/v2/commands.ts",
+        "destination": "packages/daemon/src/agent/providers/opencode/v2/commands.ts",
+        "pinnedSha256": "5d2192aa7bb38e89277f090581d99f75dff12f728f68d1bd4fbbc200368287ee",
+        "integratedSha256": "c8ab92cb4cc00a4fafe3b4bffb984d9cf0796a4dea96baacb63b620d485fa7fa",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "../../../agent-sdk-types.js",
+            "to": "../../../paseo/agent-sdk-types.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "./readiness.js",
+          "./api.js",
+          "../../../agent-sdk-types.js"
+        ],
+        "integratedImports": [
+          "./readiness.js",
+          "./api.js",
+          "../../../paseo/agent-sdk-types.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/v2/configuration.ts",
+        "destination": "packages/daemon/src/agent/providers/opencode/v2/configuration.ts",
+        "pinnedSha256": "92d6a02ecedcf327285a1f99c5f2d3fb931e11c4fa0107f8c277fbe1323c7643",
+        "integratedSha256": "aaba435a13995e2528bb15c68a12e4c189074fbf9ee0ddabe777d0da3226172c",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "../../../agent-sdk-types.js",
+            "to": "../../../paseo/agent-sdk-types.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "@opencode/client",
+          "./api.js",
+          "../../../agent-sdk-types.js",
+          "../options.js",
+          "./mapping.js"
+        ],
+        "integratedImports": [
+          "@opencode/client",
+          "./api.js",
+          "../../../paseo/agent-sdk-types.js",
+          "../options.js",
+          "./mapping.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/v2/history.ts",
+        "destination": "packages/daemon/src/agent/providers/opencode/v2/history.ts",
+        "pinnedSha256": "35a9bc95193a9890e34c3a2280dde16b199d7b1ec062da6c77fde61c13c6be9b",
+        "integratedSha256": "35a9bc95193a9890e34c3a2280dde16b199d7b1ec062da6c77fde61c13c6be9b",
+        "modificationKind": "specifiers",
+        "changes": [],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "@opencode/client",
+          "./api.js"
+        ],
+        "integratedImports": [
+          "@opencode/client",
+          "./api.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/v2/mapping.ts",
+        "destination": "packages/daemon/src/agent/providers/opencode/v2/mapping.ts",
+        "pinnedSha256": "edddea89315cc81b9a1e682f4aeeafe96dc181d70daf6e8dbf735ef8401952d7",
+        "integratedSha256": "1664365e954b1bafd9f1c34e38d529535433f7a3456c1669ac27bdcaad4dabb3",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "../../../agent-sdk-types.js",
+            "to": "../../../paseo/agent-sdk-types.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "@opencode/client",
+          "../../../agent-sdk-types.js"
+        ],
+        "integratedImports": [
+          "@opencode/client",
+          "../../../paseo/agent-sdk-types.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/v2/permissions.ts",
+        "destination": "packages/daemon/src/agent/providers/opencode/v2/permissions.ts",
+        "pinnedSha256": "781632e378dba5464ab4e8a878344a66e31c3154b0b9f4ae0473c2eafc11f953",
+        "integratedSha256": "a27aa17dc3f15e5f30fefed34ebbec1aa0ccc3a9cf3729bb6e8aeb68a7cf50f4",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "../../../agent-sdk-types.js",
+            "to": "../../../paseo/agent-sdk-types.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "@opencode/client",
+          "./api.js",
+          "../../../agent-sdk-types.js",
+          "@opencode/client"
+        ],
+        "integratedImports": [
+          "@opencode/client",
+          "./api.js",
+          "../../../paseo/agent-sdk-types.js",
+          "@opencode/client"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/v2/readiness.ts",
+        "destination": "packages/daemon/src/agent/providers/opencode/v2/readiness.ts",
+        "pinnedSha256": "5c0eeb88c4f71522a8a249e3227940728137d0f2903198c2af6143fa53cf94ed",
+        "integratedSha256": "707fb9189d63bfda057c770dd58d077c25a7519d607302cd03cac8e879d21dbd",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "../../../provider-refresh-deadline.js",
+            "to": "../../../paseo/provider-refresh-deadline.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "node:timers/promises",
+          "../../../provider-refresh-deadline.js",
+          "./api.js"
+        ],
+        "integratedImports": [
+          "node:timers/promises",
+          "../../../paseo/provider-refresh-deadline.js",
+          "./api.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/v2/runtime.ts",
+        "destination": "packages/daemon/src/agent/providers/opencode/v2/runtime.ts",
+        "pinnedSha256": "797a2b74a8df3ae0403bf8c7e45f4731669080bca06722c12ce85505bfbfd52a",
+        "integratedSha256": "d25054a7709f84195087db4d8927805e21f7982e90c9f1f5d612e47f4a5049a4",
+        "modificationKind": "type-only",
+        "changes": [
+          {
+            "from": "../../../../paseo-home.js",
+            "to": "../../../paseo/runtime/server/paseo-home.js"
+          },
+          {
+            "from": "pino",
+            "to": "../../../paseo/logger.js"
+          },
+          {
+            "from": "../../../../../utils/spawn.js",
+            "to": "../../../paseo/runtime/utils/spawn.js"
+          },
+          {
+            "from": "../../../../../utils/tree-kill.js",
+            "to": "../../../paseo/runtime/utils/tree-kill.js"
+          },
+          {
+            "from": "../../../provider-launch-config.js",
+            "to": "../../../paseo/provider-launch-config.js"
+          },
+          {
+            "from": "../../../../managed-processes/managed-processes.js",
+            "to": "../../../paseo/runtime/server/managed-processes/managed-processes.js"
+          },
+          {
+            "from": "../../../provider-refresh-deadline.js",
+            "to": "../../../paseo/provider-refresh-deadline.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "../bridge.js",
+          "../../../../paseo-home.js",
+          "@opencode/client",
+          "./api.js",
+          "node:crypto",
+          "node:fs/promises",
+          "pino",
+          "../../../../../utils/spawn.js",
+          "../../../../../utils/tree-kill.js",
+          "../../../provider-launch-config.js",
+          "../../../../managed-processes/managed-processes.js",
+          "../paths.js",
+          "../http-error.js",
+          "../../../provider-refresh-deadline.js"
+        ],
+        "integratedImports": [
+          "../bridge.js",
+          "../../../paseo/runtime/server/paseo-home.js",
+          "@opencode/client",
+          "./api.js",
+          "node:crypto",
+          "node:fs/promises",
+          "../../../paseo/logger.js",
+          "../../../paseo/runtime/utils/spawn.js",
+          "../../../paseo/runtime/utils/tree-kill.js",
+          "../../../paseo/provider-launch-config.js",
+          "../../../paseo/runtime/server/managed-processes/managed-processes.js",
+          "../paths.js",
+          "../http-error.js",
+          "../../../paseo/provider-refresh-deadline.js"
+        ],
+        "preTypeEditSha256": "1b05cc7ac143e4da301b859528d650802c40891045a161668ec2538e98a397a4",
+        "typeOnlyEdits": [
+          {
+            "start": 8213,
+            "end": 8213,
+            "line": 226,
+            "column": 37,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/src/agent/providers/opencode/v2/runtime.ts",
+                "line": 226,
+                "column": 29,
+                "code": "TS2345",
+                "message": "Argument of type 'string | undefined' is not assignable to parameter of type 'string | Error'."
+              }
+            ],
+            "reason": ""
+          }
+        ],
+        "modificationNotice": {
+          "start": 0,
+          "end": 0,
+          "line": 1,
+          "column": 1,
+          "form": "N",
+          "replacedText": "",
+          "insertedText": "// Modified from Paseo: type-only edits erased at compile time; see packages/daemon/src/agent/paseo/closure.json.\n"
+        }
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/v2/session.ts",
+        "destination": "packages/daemon/src/agent/providers/opencode/v2/session.ts",
+        "pinnedSha256": "644b52e5554fc2d29443cbbae189d203124dd0b6d2f10d0f4c220041859577e3",
+        "integratedSha256": "6b979c109474a241aad55d7c36e89ba5c5e766cb9823d5f7d3336662e896d759",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "pino",
+            "to": "../../../paseo/logger.js"
+          },
+          {
+            "from": "../../../agent-sdk-types.js",
+            "to": "../../../paseo/agent-sdk-types.js"
+          },
+          {
+            "from": "../../../system-prompt.js",
+            "to": "../../../paseo/system-prompt.js"
+          },
+          {
+            "from": "../../../provider-refresh-deadline.js",
+            "to": "../../../paseo/provider-refresh-deadline.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "./children.js",
+          "./turns.js",
+          "./timeline.js",
+          "./readiness.js",
+          "@opencode/client",
+          "node:timers/promises",
+          "pino",
+          "../../../agent-sdk-types.js",
+          "../../diagnostic-utils.js",
+          "../../provider-runner.js",
+          "../../../system-prompt.js",
+          "../../../provider-refresh-deadline.js",
+          "./runtime.js",
+          "./mapping.js",
+          "./capabilities.js",
+          "./configuration.js",
+          "./commands.js",
+          "./history.js",
+          "./permissions.js",
+          "./usage.js",
+          "@opencode/client"
+        ],
+        "integratedImports": [
+          "./children.js",
+          "./turns.js",
+          "./timeline.js",
+          "./readiness.js",
+          "@opencode/client",
+          "node:timers/promises",
+          "../../../paseo/logger.js",
+          "../../../paseo/agent-sdk-types.js",
+          "../../diagnostic-utils.js",
+          "../../provider-runner.js",
+          "../../../paseo/system-prompt.js",
+          "../../../paseo/provider-refresh-deadline.js",
+          "./runtime.js",
+          "./mapping.js",
+          "./capabilities.js",
+          "./configuration.js",
+          "./commands.js",
+          "./history.js",
+          "./permissions.js",
+          "./usage.js",
+          "@opencode/client"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/v2/structured-output.ts",
+        "destination": "packages/daemon/src/agent/providers/opencode/v2/structured-output.ts",
+        "pinnedSha256": "e9e34ecc97793b83ff6a17efe9e3f4af03fcb50ca6b47faef9cf706fd67fa21d",
+        "integratedSha256": "e9e34ecc97793b83ff6a17efe9e3f4af03fcb50ca6b47faef9cf706fd67fa21d",
+        "modificationKind": "specifiers",
+        "changes": [],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "ajv",
+          "zod",
+          "@opencode/client"
+        ],
+        "integratedImports": [
+          "ajv",
+          "zod",
+          "@opencode/client"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/v2/timeline.ts",
+        "destination": "packages/daemon/src/agent/providers/opencode/v2/timeline.ts",
+        "pinnedSha256": "9c4c2396e9b7d7b7da288577d0c2fdabf7b9cb7c93f5716fbcb584d63d80fcd1",
+        "integratedSha256": "05368a3e3e55544b2cdc6be4841639e96664a8eef7b8bfe3102e1acadcb3ca30",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "../../../agent-sdk-types.js",
+            "to": "../../../paseo/agent-sdk-types.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "../tool-call-mapper.js",
+          "../../provider-image-output.js",
+          "@opencode/client",
+          "./structured-output.js",
+          "@opencode/client",
+          "../../../agent-sdk-types.js"
+        ],
+        "integratedImports": [
+          "../tool-call-mapper.js",
+          "../../provider-image-output.js",
+          "@opencode/client",
+          "./structured-output.js",
+          "@opencode/client",
+          "../../../paseo/agent-sdk-types.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/v2/turns.ts",
+        "destination": "packages/daemon/src/agent/providers/opencode/v2/turns.ts",
+        "pinnedSha256": "5007a787366f876ec6304eb8f6f9e3a80f56d37b9d1753a06533127d7fa53db7",
+        "integratedSha256": "605964943b93370112ad3aab7480ebdeab027ea4e2d5429479e5f1ddd8a06103",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "../../../agent-sdk-types.js",
+            "to": "../../../paseo/agent-sdk-types.js"
+          },
+          {
+            "from": "../../../prompt-attachments.js",
+            "to": "../../../paseo/prompt-attachments.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "./structured-output.js",
+          "@opencode/client",
+          "node:crypto",
+          "../../../agent-sdk-types.js",
+          "../../diagnostic-utils.js",
+          "../../../prompt-attachments.js",
+          "./mapping.js",
+          "./commands.js",
+          "./api.js"
+        ],
+        "integratedImports": [
+          "./structured-output.js",
+          "@opencode/client",
+          "node:crypto",
+          "../../../paseo/agent-sdk-types.js",
+          "../../diagnostic-utils.js",
+          "../../../paseo/prompt-attachments.js",
+          "./mapping.js",
+          "./commands.js",
+          "./api.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/v2/usage.ts",
+        "destination": "packages/daemon/src/agent/providers/opencode/v2/usage.ts",
+        "pinnedSha256": "916707722e8f3b273c1017aea81b80d7a8feef884956a13965e3d593da4b677b",
+        "integratedSha256": "b4883c159570cd613c1bb65c32f4710d9f6f716dc2fae378a050577dcd9f2f79",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "../../../agent-sdk-types.js",
+            "to": "../../../paseo/agent-sdk-types.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "@opencode/client",
+          "../../../agent-sdk-types.js",
+          "./api.js",
+          "./mapping.js"
+        ],
+        "integratedImports": [
+          "@opencode/client",
+          "../../../paseo/agent-sdk-types.js",
+          "./api.js",
+          "./mapping.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/v2/bridge-plugin.mjs",
+        "destination": "packages/daemon/src/agent/providers/opencode/v2/bridge-plugin.mjs",
+        "pinnedSha256": "37be4d3196c5c9b17ec8c403db3346e751c2fc420ef07a59955d3e7dabd72da4",
+        "integratedSha256": "37be4d3196c5c9b17ec8c403db3346e751c2fc420ef07a59955d3e7dabd72da4",
+        "modificationKind": "specifiers",
+        "changes": [],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "./structured-output-plugin.mjs"
+        ],
+        "integratedImports": [
+          "./structured-output-plugin.mjs"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/v2/structured-output-plugin.mjs",
+        "destination": "packages/daemon/src/agent/providers/opencode/v2/structured-output-plugin.mjs",
+        "pinnedSha256": "396c3545e93c93e4523c8eb4bab8328dda1288d29a94d5828392d5b03082240a",
+        "integratedSha256": "396c3545e93c93e4523c8eb4bab8328dda1288d29a94d5828392d5b03082240a",
+        "modificationKind": "specifiers",
+        "changes": [],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "ajv"
+        ],
+        "integratedImports": [
+          "ajv"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/bridge.ts",
+        "destination": "packages/daemon/src/agent/providers/opencode/bridge.ts",
+        "pinnedSha256": "08a0eb4525a25932a8bd14f7899301a3bfcc9d743ea57e39e30baa9cd8737b03",
+        "integratedSha256": "1cdf929220cadf1144edb2e7408c2024a0aeea94f93080ed61d41d33d82680b3",
+        "modificationKind": "adapted",
+        "changes": [
+          {
+            "from": "../../../atomic-file.js",
+            "to": "../../paseo/runtime/server/atomic-file.js"
+          }
+        ],
+        "adaptation": "OpenCodeBridge class to type-only interface",
+        "role": "provider source or asset",
+        "sourceImports": [
+          "node:crypto",
+          "node:fs/promises",
+          "node:http",
+          "node:path",
+          "node:url",
+          "pino",
+          "../../../atomic-file.js",
+          "../../tools/paseo-tool-serialization.js",
+          "../../tools/types.js",
+          "esbuild"
+        ],
+        "integratedImports": [
+          "node:crypto",
+          "node:fs/promises",
+          "node:path",
+          "node:url",
+          "../../paseo/runtime/server/atomic-file.js",
+          "../../paseo/tools/types.js",
+          "esbuild"
+        ],
+        "adaptationPatch": ".audit/v7-provider-copy-closure/adapt-opencode-bridge.ts.patch"
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/paths.ts",
+        "destination": "packages/daemon/src/agent/providers/opencode/paths.ts",
+        "pinnedSha256": "e29faea31a19519385159c7a6e9de0d9345a9c62b14ee350adc70ea8ef3ba2b1",
+        "integratedSha256": "bb7f3b37d9c24b3a08f4c194b454c42fa6436d8f6b4dc693a183197066d414c5",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "../../../paseo-home.js",
+            "to": "../../paseo/runtime/server/paseo-home.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "node:path",
+          "../../../paseo-home.js"
+        ],
+        "integratedImports": [
+          "node:path",
+          "../../paseo/runtime/server/paseo-home.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/options.ts",
+        "destination": "packages/daemon/src/agent/providers/opencode/options.ts",
+        "pinnedSha256": "c59bc1f5ba8cc2857aed65a6b8f7058472424935b344a6a413ff1b7356818dd4",
+        "integratedSha256": "462b0dc57f33307698b9dd64ac3ef59d0eaa0b3fdcae1621178f3f07414b107d",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "@getpaseo/protocol/agent-types",
+            "to": "../../paseo/protocol/agent-types.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "@getpaseo/protocol/agent-types",
+          "zod"
+        ],
+        "integratedImports": [
+          "../../paseo/protocol/agent-types.js",
+          "zod"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/http-error.ts",
+        "destination": "packages/daemon/src/agent/providers/opencode/http-error.ts",
+        "pinnedSha256": "f9610eb6dc27e3a752484894652c2c286d9972f0b0f784fd2102451fc83a1b56",
+        "integratedSha256": "24b7c66fd70a025f67fe379c9b0eee100a253e9075be5040451a8f5714e1aae8",
+        "modificationKind": "type-only",
+        "changes": [],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [],
+        "integratedImports": [],
+        "preTypeEditSha256": "f9610eb6dc27e3a752484894652c2c286d9972f0b0f784fd2102451fc83a1b56",
+        "typeOnlyEdits": [
+          {
+            "start": 49,
+            "end": 49,
+            "line": 2,
+            "column": 3,
+            "form": "E2",
+            "replacedText": "",
+            "insertedText": "override ",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/src/agent/providers/opencode/http-error.ts",
+                "line": 2,
+                "column": 12,
+                "code": "TS4114",
+                "message": "This member must have an 'override' modifier because it overrides a member in the base class 'Error'."
+              }
+            ],
+            "reason": ""
+          }
+        ],
+        "modificationNotice": {
+          "start": 0,
+          "end": 0,
+          "line": 1,
+          "column": 1,
+          "form": "N",
+          "replacedText": "",
+          "insertedText": "// Modified from Paseo: type-only edits erased at compile time; see packages/daemon/src/agent/paseo/closure.json.\n"
+        }
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/tool-call-mapper.ts",
+        "destination": "packages/daemon/src/agent/providers/opencode/tool-call-mapper.ts",
+        "pinnedSha256": "d4f50c42a39309c433365a51a4a7a3b41481c325ccb54a3cf38844bba63563e3",
+        "integratedSha256": "d5fa62e4e61e49d48683275753e5ece1afd9b429dcc6315e07b290a14353624b",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "../../agent-sdk-types.js",
+            "to": "../../paseo/agent-sdk-types.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "zod",
+          "../../agent-sdk-types.js",
+          "../tool-call-mapper-utils.js",
+          "./tool-call-detail-parser.js"
+        ],
+        "integratedImports": [
+          "zod",
+          "../../paseo/agent-sdk-types.js",
+          "../tool-call-mapper-utils.js",
+          "./tool-call-detail-parser.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/tool-call-detail-parser.ts",
+        "destination": "packages/daemon/src/agent/providers/opencode/tool-call-detail-parser.ts",
+        "pinnedSha256": "5b4cffff64b905acd1573922f060c65af5d7cdda0cc72f0dbd79f20011a10a8a",
+        "integratedSha256": "7f92690314a53e8604d43b5b5e16d294baeb56c4246f6680d656ff72a47f416f",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "../../agent-sdk-types.js",
+            "to": "../../paseo/agent-sdk-types.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "zod",
+          "../../agent-sdk-types.js",
+          "../tool-call-mapper-utils.js",
+          "../tool-call-detail-primitives.js"
+        ],
+        "integratedImports": [
+          "zod",
+          "../../paseo/agent-sdk-types.js",
+          "../tool-call-mapper-utils.js",
+          "../tool-call-detail-primitives.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/pi/agent.ts",
+        "destination": "packages/daemon/src/agent/providers/pi/agent.ts",
+        "pinnedSha256": "4a6c057ece5d2530f1d152cdfdb333592ed3a314a6027b5851d0798de7c43cfe",
+        "integratedSha256": "48703668970d8f1fec4da9d7cded32ab837b3828718eb132ce40b8a7a20de9c5",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "pino",
+            "to": "../../paseo/logger.js"
+          },
+          {
+            "from": "../../agent-sdk-types.js",
+            "to": "../../paseo/agent-sdk-types.js"
+          },
+          {
+            "from": "../../provider-session-import.js",
+            "to": "../../paseo/provider-session-import.js"
+          },
+          {
+            "from": "../../provider-refresh-deadline.js",
+            "to": "../../paseo/provider-refresh-deadline.js"
+          },
+          {
+            "from": "../../provider-launch-config.js",
+            "to": "../../paseo/provider-launch-config.js"
+          },
+          {
+            "from": "../../prompt-attachments.js",
+            "to": "../../paseo/prompt-attachments.js"
+          },
+          {
+            "from": "../../system-prompt.js",
+            "to": "../../paseo/system-prompt.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "../custom-message.js",
+          "node:crypto",
+          "node:fs",
+          "node:os",
+          "node:path",
+          "pino",
+          "strip-ansi",
+          "zod",
+          "../../agent-sdk-types.js",
+          "../../provider-session-import.js",
+          "../../provider-refresh-deadline.js",
+          "../provider-runner.js",
+          "../../provider-launch-config.js",
+          "../../prompt-attachments.js",
+          "../../system-prompt.js",
+          "../diagnostic-utils.js",
+          "./history-mapper.js",
+          "../provider-image-output.js",
+          "./cli-runtime.js",
+          "./extensions/index.js",
+          "./rewind.js",
+          "./session-descriptor.js",
+          "./runtime.js",
+          "./rpc-types.js",
+          "./usage-poller.js",
+          "./tool-call-mapper.js"
+        ],
+        "integratedImports": [
+          "../custom-message.js",
+          "node:crypto",
+          "node:fs",
+          "node:os",
+          "node:path",
+          "../../paseo/logger.js",
+          "strip-ansi",
+          "zod",
+          "../../paseo/agent-sdk-types.js",
+          "../../paseo/provider-session-import.js",
+          "../../paseo/provider-refresh-deadline.js",
+          "../provider-runner.js",
+          "../../paseo/provider-launch-config.js",
+          "../../paseo/prompt-attachments.js",
+          "../../paseo/system-prompt.js",
+          "../diagnostic-utils.js",
+          "./history-mapper.js",
+          "../provider-image-output.js",
+          "./cli-runtime.js",
+          "./extensions/index.js",
+          "./rewind.js",
+          "./session-descriptor.js",
+          "./runtime.js",
+          "./rpc-types.js",
+          "./usage-poller.js",
+          "./tool-call-mapper.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/pi/cli-runtime.ts",
+        "destination": "packages/daemon/src/agent/providers/pi/cli-runtime.ts",
+        "pinnedSha256": "dbddc1a917531107ba1dcc7f3480356713bef9e13ab67bf0a43203fa81c9c165",
+        "integratedSha256": "d4ba624004eeeb4928a2cbdca219b280607c1db0670fb87ece75d0b92875312e",
+        "modificationKind": "type-only",
+        "changes": [
+          {
+            "from": "../../../paseo-env.js",
+            "to": "../../paseo/runtime/server/paseo-env.js"
+          },
+          {
+            "from": "pino",
+            "to": "../../paseo/logger.js"
+          },
+          {
+            "from": "../../provider-launch-config.js",
+            "to": "../../paseo/provider-launch-config.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "../../../paseo-env.js",
+          "node:child_process",
+          "pino",
+          "../../provider-launch-config.js",
+          "../jsonl-rpc-process.js",
+          "./runtime.js",
+          "./rpc-types.js"
+        ],
+        "integratedImports": [
+          "../../paseo/runtime/server/paseo-env.js",
+          "node:child_process",
+          "../../paseo/logger.js",
+          "../../paseo/provider-launch-config.js",
+          "../jsonl-rpc-process.js",
+          "./runtime.js",
+          "./rpc-types.js"
+        ],
+        "preTypeEditSha256": "4d345b5d1a4b77a60562db5e59f49ec456c4ee9b3ec4c08a4995df516605e57c",
+        "typeOnlyEdits": [
+          {
+            "start": 2071,
+            "end": 2078,
+            "line": 63,
+            "column": 7,
+            "form": "E1s",
+            "replacedText": "command",
+            "insertedText": "command: command!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/src/agent/providers/pi/cli-runtime.ts",
+                "line": 63,
+                "column": 7,
+                "code": "TS2322",
+                "message": "Type 'string | undefined' is not assignable to type 'string'."
+              }
+            ],
+            "reason": ""
+          }
+        ],
+        "modificationNotice": {
+          "start": 0,
+          "end": 0,
+          "line": 1,
+          "column": 1,
+          "form": "N",
+          "replacedText": "",
+          "insertedText": "// Modified from Paseo: type-only edits erased at compile time; see packages/daemon/src/agent/paseo/closure.json.\n"
+        }
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/pi/history-mapper.ts",
+        "destination": "packages/daemon/src/agent/providers/pi/history-mapper.ts",
+        "pinnedSha256": "a3160fc4b9f1cd6a57db4bc80ac7350358a25d392df1268e2dc84c458ba54396",
+        "integratedSha256": "e4173550c98e2e711657f89ea8ca7cef4d09d61ec77d51d020427971d3aa1c09",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "../../agent-sdk-types.js",
+            "to": "../../paseo/agent-sdk-types.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "../custom-message.js",
+          "../../agent-sdk-types.js",
+          "./extensions/index.js",
+          "./rpc-types.js",
+          "./tool-call-mapper.js"
+        ],
+        "integratedImports": [
+          "../custom-message.js",
+          "../../paseo/agent-sdk-types.js",
+          "./extensions/index.js",
+          "./rpc-types.js",
+          "./tool-call-mapper.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/pi/rewind.ts",
+        "destination": "packages/daemon/src/agent/providers/pi/rewind.ts",
+        "pinnedSha256": "f476d592a87ac7f16e4b5a68660935e9b65149fd95a04f36920e1e6e0509844b",
+        "integratedSha256": "f476d592a87ac7f16e4b5a68660935e9b65149fd95a04f36920e1e6e0509844b",
+        "modificationKind": "specifiers",
+        "changes": [],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [],
+        "integratedImports": []
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/pi/rpc-types.ts",
+        "destination": "packages/daemon/src/agent/providers/pi/rpc-types.ts",
+        "pinnedSha256": "d92143049ba09d5a2e9d27f0b2420b7bd59d2ce83ce5e1c324634d7cc9ded648",
+        "integratedSha256": "d92143049ba09d5a2e9d27f0b2420b7bd59d2ce83ce5e1c324634d7cc9ded648",
+        "modificationKind": "specifiers",
+        "changes": [],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [],
+        "integratedImports": []
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/pi/runtime.ts",
+        "destination": "packages/daemon/src/agent/providers/pi/runtime.ts",
+        "pinnedSha256": "6025c9db0879907f4c892634feff0d09b131c72925f1f4a6d5089fbce448bb10",
+        "integratedSha256": "69c44ede97e694227a28cae9fe634b63e988b59bfd097adb096857568e002edf",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "../../provider-launch-config.js",
+            "to": "../../paseo/provider-launch-config.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "./rpc-types.js",
+          "../../provider-launch-config.js"
+        ],
+        "integratedImports": [
+          "./rpc-types.js",
+          "../../paseo/provider-launch-config.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/pi/session-descriptor.ts",
+        "destination": "packages/daemon/src/agent/providers/pi/session-descriptor.ts",
+        "pinnedSha256": "f25045d67ddf9608d5d322263c95a35364eb0d5c015ed56ae9b681f90203e253",
+        "integratedSha256": "e47ecd1d39141a522063bb35e8219506c895e1cbcda8e2a60ac59b0249b639ca",
+        "modificationKind": "type-only",
+        "changes": [
+          {
+            "from": "../../agent-sdk-types.js",
+            "to": "../../paseo/agent-sdk-types.js"
+          },
+          {
+            "from": "../../provider-launch-config.js",
+            "to": "../../paseo/provider-launch-config.js"
+          },
+          {
+            "from": "../../../../utils/path.js",
+            "to": "../../paseo/runtime/utils/path.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "node:fs",
+          "node:fs/promises",
+          "node:os",
+          "node:path",
+          "../../agent-sdk-types.js",
+          "../../provider-launch-config.js",
+          "../../../../utils/path.js"
+        ],
+        "integratedImports": [
+          "node:fs",
+          "node:fs/promises",
+          "node:os",
+          "node:path",
+          "../../paseo/agent-sdk-types.js",
+          "../../paseo/provider-launch-config.js",
+          "../../paseo/runtime/utils/path.js"
+        ],
+        "preTypeEditSha256": "846cb51599b38b82ebc466066151a9ee2fd55df6a54fd98d33e986880ed24e78",
+        "typeOnlyEdits": [
+          {
+            "start": 11709,
+            "end": 11709,
+            "line": 358,
+            "column": 47,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/src/agent/providers/pi/session-descriptor.ts",
+                "line": 358,
+                "column": 35,
+                "code": "TS2532",
+                "message": "Object is possibly 'undefined'."
+              }
+            ],
+            "reason": ""
+          }
+        ],
+        "modificationNotice": {
+          "start": 0,
+          "end": 0,
+          "line": 1,
+          "column": 1,
+          "form": "N",
+          "replacedText": "",
+          "insertedText": "// Modified from Paseo: type-only edits erased at compile time; see packages/daemon/src/agent/paseo/closure.json.\n"
+        }
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/pi/tool-call-mapper.ts",
+        "destination": "packages/daemon/src/agent/providers/pi/tool-call-mapper.ts",
+        "pinnedSha256": "28874bf7fa097bc3faa9b0435472ac65e2d89a01ffc7f46615540522220ee968",
+        "integratedSha256": "a21b3cb51571e1d28cf25baa701af1b0b74935e76b14a40dcf6792e128240fb0",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "../../agent-sdk-types.js",
+            "to": "../../paseo/agent-sdk-types.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "zod",
+          "../../agent-sdk-types.js"
+        ],
+        "integratedImports": [
+          "zod",
+          "../../paseo/agent-sdk-types.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/pi/usage-poller.ts",
+        "destination": "packages/daemon/src/agent/providers/pi/usage-poller.ts",
+        "pinnedSha256": "152180fc0eff7a821ab046679301fcafca2a36be0864b0acdd2672e6ed772c66",
+        "integratedSha256": "53532d994041aa618c3d161f661967a9306e57792c96b13ce5c68f8a83006aa2",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "../../agent-sdk-types.js",
+            "to": "../../paseo/agent-sdk-types.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "../../agent-sdk-types.js",
+          "./rpc-types.js"
+        ],
+        "integratedImports": [
+          "../../paseo/agent-sdk-types.js",
+          "./rpc-types.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/pi/extensions/index.ts",
+        "destination": "packages/daemon/src/agent/providers/pi/extensions/index.ts",
+        "pinnedSha256": "d56dd2a9374939b1ba073d273043e02abad67341a308cd00c5bfd2dada069b6e",
+        "integratedSha256": "39bb078b4feaa9011ae2db1ca5d421983d5bb292be257e74a3f9de6a04b456e6",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "pino",
+            "to": "../../../paseo/logger.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "./host.js",
+          "./registry.js",
+          "pino",
+          "./contract.js",
+          "./host.js",
+          "./host.js"
+        ],
+        "integratedImports": [
+          "./host.js",
+          "./registry.js",
+          "../../../paseo/logger.js",
+          "./contract.js",
+          "./host.js",
+          "./host.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/pi/extensions/host.ts",
+        "destination": "packages/daemon/src/agent/providers/pi/extensions/host.ts",
+        "pinnedSha256": "381b57b26971cf95b0f56c8d4960a27b76eb4b1b27df4e8752867cb46adfa422",
+        "integratedSha256": "1e65113ee72e00425c85de50fafe9fb75ab0bb6a6e7290491fdd9ef8309b3c08",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "pino",
+            "to": "../../../paseo/logger.js"
+          },
+          {
+            "from": "../../../agent-sdk-types.js",
+            "to": "../../../paseo/agent-sdk-types.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "pino",
+          "../../../agent-sdk-types.js",
+          "../rpc-types.js",
+          "./child-session.js",
+          "./contract.js"
+        ],
+        "integratedImports": [
+          "../../../paseo/logger.js",
+          "../../../paseo/agent-sdk-types.js",
+          "../rpc-types.js",
+          "./child-session.js",
+          "./contract.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/pi/extensions/contract.ts",
+        "destination": "packages/daemon/src/agent/providers/pi/extensions/contract.ts",
+        "pinnedSha256": "624061226832d144318b7ec3b27b2c7fd70880abc444fa729dbd9ff80181f887",
+        "integratedSha256": "6de97029037979f812819a4cda1337b0921f148d66a5d93ce7f373919738444f",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "../../../agent-sdk-types.js",
+            "to": "../../../paseo/agent-sdk-types.js"
+          },
+          {
+            "from": "../../../provider-subagents/store.js",
+            "to": "../../../paseo/provider-subagents/types.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "../../../agent-sdk-types.js",
+          "../rpc-types.js",
+          "../tool-call-mapper.js",
+          "../../../provider-subagents/store.js",
+          "../rpc-types.js"
+        ],
+        "integratedImports": [
+          "../../../paseo/agent-sdk-types.js",
+          "../rpc-types.js",
+          "../tool-call-mapper.js",
+          "../../../paseo/provider-subagents/types.js",
+          "../rpc-types.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/pi/extensions/child-session.ts",
+        "destination": "packages/daemon/src/agent/providers/pi/extensions/child-session.ts",
+        "pinnedSha256": "87517933d79bbb8dd2d7991683fb9bd2fe84b556cf1a3c68324ebeb40d623adb",
+        "integratedSha256": "441a09cc3bfe3950b14471007cd5e8318100fefc86bc0a74fe1a8893b0dbae44",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "../../../agent-timeline-content.js",
+            "to": "../../../paseo/agent-timeline-content.js"
+          },
+          {
+            "from": "../../../provider-subagents/store.js",
+            "to": "../../../paseo/provider-subagents/types.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "node:fs/promises",
+          "../../../agent-timeline-content.js",
+          "../../../provider-subagents/store.js",
+          "../history-mapper.js",
+          "../rpc-types.js",
+          "../tool-call-mapper.js"
+        ],
+        "integratedImports": [
+          "node:fs/promises",
+          "../../../paseo/agent-timeline-content.js",
+          "../../../paseo/provider-subagents/types.js",
+          "../history-mapper.js",
+          "../rpc-types.js",
+          "../tool-call-mapper.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/pi/extensions/registry.ts",
+        "destination": "packages/daemon/src/agent/providers/pi/extensions/registry.ts",
+        "pinnedSha256": "f9c277f8a8d1e264501c3d2b7f4263162dae40143fe64d04dda1a1870ba0b2be",
+        "integratedSha256": "76814c2bb342206d2344fccbd50d0af1423ee95785d27e3068634e909f135f03",
+        "modificationKind": "adapted",
+        "changes": [],
+        "adaptation": "empty Pi extension registry",
+        "role": "provider source or asset",
+        "sourceImports": [
+          "./pi-ask-user/index.js",
+          "./pi-subagents/index.js",
+          "./pi-mcp-adapter/index.js",
+          "./rpiv-todo/index.js",
+          "./pi-example-todo/index.js",
+          "./pi-goal-x/index.js",
+          "./tintinweb-pi-subagents/index.js",
+          "./gotgenes-pi-subagents/index.js",
+          "./rpiv-ask-user-question/index.js"
+        ],
+        "integratedImports": [
+          "./contract.js"
+        ],
+        "adaptationPatch": ".audit/v7-provider-copy-closure/adapt-pi-extensions-registry.ts.patch"
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/custom-message.ts",
+        "destination": "packages/daemon/src/agent/providers/custom-message.ts",
+        "pinnedSha256": "c326fdb89d48d927a2c041c28f8c68e594c6132e5d403bb7b172691838c27eea",
+        "integratedSha256": "8399f15eeae22f2e90e0683aef6c7a363b9dc8ef991b9e1c7fdb0e555c9c7c46",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "../agent-sdk-types.js",
+            "to": "../paseo/agent-sdk-types.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "../agent-sdk-types.js"
+        ],
+        "integratedImports": [
+          "../paseo/agent-sdk-types.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/atomic-file.ts",
+        "destination": "packages/daemon/src/agent/paseo/runtime/server/atomic-file.ts",
+        "pinnedSha256": "c2e725f9fb70d85eccb7f7fe2feca9b6af7278aedaa565bfedb797610e767d5e",
+        "integratedSha256": "c2e725f9fb70d85eccb7f7fe2feca9b6af7278aedaa565bfedb797610e767d5e",
+        "modificationKind": "specifiers",
+        "changes": [],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "node:crypto",
+          "node:fs",
+          "node:path"
+        ],
+        "integratedImports": [
+          "node:crypto",
+          "node:fs",
+          "node:path"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/managed-processes/managed-processes.ts",
+        "destination": "packages/daemon/src/agent/paseo/runtime/server/managed-processes/managed-processes.ts",
+        "pinnedSha256": "5064c21c56f1f11210377f15f097f7aaaa6064b170c36c41ebe6e4153868ef4c",
+        "integratedSha256": "f1da2b8faa0dec26114a52dbed7c18ec205e7acd95023dae5b117525353ba35d",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "pino",
+            "to": "../../../logger.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "node:crypto",
+          "node:fs",
+          "node:path",
+          "pino",
+          "zod",
+          "../atomic-file.js",
+          "../../utils/spawn.js",
+          "../../utils/tree-kill.js"
+        ],
+        "integratedImports": [
+          "node:crypto",
+          "node:fs",
+          "node:path",
+          "../../../logger.js",
+          "zod",
+          "../atomic-file.js",
+          "../../utils/spawn.js",
+          "../../utils/tree-kill.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/agent-timeline-content.ts",
+        "destination": "packages/daemon/src/agent/paseo/agent-timeline-content.ts",
+        "pinnedSha256": "632a0f341ba47e8dac8e410fc5ca1c0d937da153fccbb4a73e12d801457e368b",
+        "integratedSha256": "30710d91dddce45bd43aa4b98240b1fffa736ad16aa97cf96bcce36acc038f41",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "@getpaseo/protocol/agent-types",
+            "to": "./protocol/agent-types.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "./agent-sdk-types.js",
+          "@getpaseo/protocol/agent-types"
+        ],
+        "integratedImports": [
+          "./agent-sdk-types.js",
+          "./protocol/agent-types.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/create-agent-mode.ts",
+        "destination": "packages/daemon/src/agent/paseo/create-agent-mode.ts",
+        "pinnedSha256": "7e63467a9764e9c4e60b5c997b5e0065bedeec3edae44ec87af29bde8ae78e87",
+        "integratedSha256": "7e63467a9764e9c4e60b5c997b5e0065bedeec3edae44ec87af29bde8ae78e87",
+        "modificationKind": "specifiers",
+        "changes": [],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "./agent-sdk-types.js"
+        ],
+        "integratedImports": [
+          "./agent-sdk-types.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/utils/path.ts",
+        "destination": "packages/daemon/src/agent/paseo/runtime/utils/path.ts",
+        "pinnedSha256": "cb508bfbd38d948f41cb34114c9be594e56a4a8fb5d278e9fd1d585914df5f57",
+        "integratedSha256": "cb508bfbd38d948f41cb34114c9be594e56a4a8fb5d278e9fd1d585914df5f57",
+        "modificationKind": "specifiers",
+        "changes": [],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [
+          "node:os",
+          "node:fs",
+          "node:path"
+        ],
+        "integratedImports": [
+          "node:os",
+          "node:fs",
+          "node:path"
+        ]
+      },
+      {
+        "source": "packages/server/src/utils/string-command-shell.ts",
+        "destination": "packages/daemon/src/agent/paseo/runtime/utils/string-command-shell.ts",
+        "pinnedSha256": "27de2a6523ed1daf9fc98c3ef2c5f2c6bfdbdfef37dad19be8e8857a3e2ba79c",
+        "integratedSha256": "27de2a6523ed1daf9fc98c3ef2c5f2c6bfdbdfef37dad19be8e8857a3e2ba79c",
+        "modificationKind": "specifiers",
+        "changes": [],
+        "adaptation": null,
+        "role": "provider source or asset",
+        "sourceImports": [],
+        "integratedImports": []
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/acp-agent.test.ts",
+        "destination": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+        "pinnedSha256": "5dbf64e1a312c09e3346a40e02c5da7c974dd3e06e924bcac63e3590d6814a6d",
+        "integratedSha256": "441b4891961b371c24560b1297117cf1799337a5bc15ba740b5688c78b6f89ac",
+        "modificationKind": "ported-test-case-exclusions",
+        "changes": [
+          {
+            "from": "./acp-agent.js",
+            "to": "../../../src/agent/providers/acp-agent.js"
+          },
+          {
+            "from": "../../../utils/tree-kill.js",
+            "to": "../../../src/agent/paseo/runtime/utils/tree-kill.js"
+          },
+          {
+            "from": "./copilot-acp-agent.js",
+            "to": "../../../src/agent/providers/copilot-acp-agent.js"
+          },
+          {
+            "from": "./generic-acp-agent.js",
+            "to": "../../../src/agent/providers/generic-acp-agent.js"
+          },
+          {
+            "from": "./pi/agent.js",
+            "to": "../../../src/agent/providers/pi/agent.js"
+          },
+          {
+            "from": "../agent-sdk-types.js",
+            "to": "../../../src/agent/paseo/agent-sdk-types.js"
+          },
+          {
+            "from": "../agent-sdk-types.js",
+            "to": "../../../src/agent/paseo/agent-sdk-types.js"
+          },
+          {
+            "from": "../../../utils/string-command-shell.js",
+            "to": "../../../src/agent/paseo/runtime/utils/string-command-shell.js"
+          },
+          {
+            "from": "../../../utils/spawn.js",
+            "to": "../../../src/agent/paseo/runtime/utils/spawn.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "ported unit test",
+        "excludedCases": [
+          {
+            "case": "maps the Kiro _kiro.dev/commands/available notification into slash commands and skills",
+            "reason": "excluded kiro-acp-agent parser"
+          },
+          {
+            "case": "ignores Kiro _kiro.dev/commands/available for a different session",
+            "reason": "excluded kiro-acp-agent parser"
+          },
+          {
+            "case": "settles listCommands() immediately on an empty Kiro commands batch",
+            "reason": "excluded kiro-acp-agent parser"
+          },
+          {
+            "case": "runs on a model added through additionalModels that the agent does not advertise",
+            "reason": "excluded provider-registry"
+          },
+          {
+            "case": "runs on a model from a replacement models list that the agent does not advertise",
+            "reason": "excluded provider-registry"
+          },
+          {
+            "case": "runs on a model from additionalModels when the agent advertises no models",
+            "reason": "excluded provider-registry"
+          },
+          {
+            "case": "resumes on a model added through additionalModels that the agent does not advertise",
+            "reason": "excluded provider-registry"
+          },
+          {
+            "case": "keeps the agent's model when the requested model is neither advertised nor configured",
+            "reason": "excluded provider-registry"
+          }
+        ],
+        "sourceImports": [
+          "node:child_process",
+          "node:events",
+          "node:fs/promises",
+          "node:module",
+          "node:os",
+          "node:path",
+          "node:url",
+          "vitest",
+          "@agentclientprotocol/sdk",
+          "./acp-agent.js",
+          "../../../utils/tree-kill.js",
+          "./copilot-acp-agent.js",
+          "./generic-acp-agent.js",
+          "./kiro-acp-agent.js",
+          "./pi/agent.js",
+          "../agent-sdk-types.js",
+          "../agent-sdk-types.js",
+          "../provider-registry.js",
+          "../../../test-utils/test-logger.js",
+          "../../../utils/string-command-shell.js",
+          "../../test-utils/class-mocks.js",
+          "../../../utils/spawn.js",
+          ",\n                    title: ",
+          ",\n          title: ",
+          "node:fs",
+          "node:stream",
+          "node:stream"
+        ],
+        "integratedImports": [
+          "node:child_process",
+          "node:events",
+          "node:fs/promises",
+          "node:module",
+          "node:os",
+          "node:path",
+          "node:url",
+          "vitest",
+          "@agentclientprotocol/sdk",
+          "../../../src/agent/providers/acp-agent.js",
+          "../../../src/agent/paseo/runtime/utils/tree-kill.js",
+          "../../../src/agent/providers/copilot-acp-agent.js",
+          "../../../src/agent/providers/generic-acp-agent.js",
+          "../../../src/agent/providers/pi/agent.js",
+          "../../../src/agent/paseo/agent-sdk-types.js",
+          "../../../src/agent/paseo/agent-sdk-types.js",
+          "../test-utils/test-logger.js",
+          "../../../src/agent/paseo/runtime/utils/string-command-shell.js",
+          "../test-utils/class-mocks.js",
+          "../../../src/agent/paseo/runtime/utils/spawn.js",
+          ",\n                    title: ",
+          ",\n          title: ",
+          "node:fs",
+          "node:stream"
+        ],
+        "preTypeEditSha256": "fdda167db3e5746efb79a46cc5091e74a52f4353ba12dfdcd9d708b1075f6242",
+        "typeOnlyEdits": [
+          {
+            "start": 676,
+            "end": 676,
+            "line": 18,
+            "column": 3,
+            "form": "E3",
+            "replacedText": "",
+            "insertedText": "type ",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 18,
+                "column": 3,
+                "code": "TS1484",
+                "message": "'PermissionOption' is a type and must be imported using a type-only import when 'verbatimModuleSyntax' is enabled."
+              }
+            ]
+          },
+          {
+            "start": 696,
+            "end": 696,
+            "line": 19,
+            "column": 3,
+            "form": "E3",
+            "replacedText": "",
+            "insertedText": "type ",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 19,
+                "column": 3,
+                "code": "TS1484",
+                "message": "'PromptResponse' is a type and must be imported using a type-only import when 'verbatimModuleSyntax' is enabled."
+              }
+            ]
+          },
+          {
+            "start": 714,
+            "end": 714,
+            "line": 20,
+            "column": 3,
+            "form": "E3",
+            "replacedText": "",
+            "insertedText": "type ",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 20,
+                "column": 3,
+                "code": "TS1484",
+                "message": "'RequestPermissionRequest' is a type and must be imported using a type-only import when 'verbatimModuleSyntax' is enabled."
+              }
+            ]
+          },
+          {
+            "start": 742,
+            "end": 742,
+            "line": 21,
+            "column": 3,
+            "form": "E3",
+            "replacedText": "",
+            "insertedText": "type ",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 21,
+                "column": 3,
+                "code": "TS1484",
+                "message": "'SessionConfigOption' is a type and must be imported using a type-only import when 'verbatimModuleSyntax' is enabled."
+              }
+            ]
+          },
+          {
+            "start": 765,
+            "end": 765,
+            "line": 22,
+            "column": 3,
+            "form": "E3",
+            "replacedText": "",
+            "insertedText": "type ",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 22,
+                "column": 3,
+                "code": "TS1484",
+                "message": "'SessionUpdate' is a type and must be imported using a type-only import when 'verbatimModuleSyntax' is enabled."
+              }
+            ]
+          },
+          {
+            "start": 12821,
+            "end": 12836,
+            "line": 414,
+            "column": 56,
+            "form": "E4",
+            "replacedText": "<typeof logger>",
+            "insertedText": "<ReturnType<typeof logger.child>>",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 414,
+                "column": 45,
+                "code": "TS2345",
+                "message": "Argument of type 'Logger<never, boolean>' is not assignable to parameter of type 'Logger<string, boolean>'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 29625,
+            "end": 29625,
+            "line": 955,
+            "column": 14,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as Extract<Extract<SessionConfigOption, { type: \"select\" }>[\"options\"][number], { group: string }>",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 952,
+                "column": 13,
+                "code": "TS2322",
+                "message": "Type '{ group: string; options: { value: string; name: string; description: string; }[]; }' is not assignable to type 'SessionConfigSelectOption | SessionConfigSelectGroup'."
+              }
+            ]
+          },
+          {
+            "start": 31635,
+            "end": 31650,
+            "line": 1017,
+            "column": 58,
+            "form": "E4",
+            "replacedText": "<typeof logger>",
+            "insertedText": "<ReturnType<typeof logger.child>>",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 1017,
+                "column": 47,
+                "code": "TS2345",
+                "message": "Argument of type 'Logger<never, boolean>' is not assignable to parameter of type 'Logger<string, boolean>'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 33655,
+            "end": 33670,
+            "line": 1064,
+            "column": 58,
+            "form": "E4",
+            "replacedText": "<typeof logger>",
+            "insertedText": "<ReturnType<typeof logger.child>>",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 1064,
+                "column": 47,
+                "code": "TS2345",
+                "message": "Argument of type 'Logger<never, boolean>' is not assignable to parameter of type 'Logger<string, boolean>'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 49507,
+            "end": 49507,
+            "line": 1513,
+            "column": 30,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as ACPSessionInternals[\"connection\"]",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 1513,
+                "column": 5,
+                "code": "TS2741",
+                "message": "Property 'prompt' is missing in type '{}' but required in type '{ prompt: (...args: unknown[]) => Promise<PromptResponse>; }'."
+              }
+            ]
+          },
+          {
+            "start": 62312,
+            "end": 62312,
+            "line": 1896,
+            "column": 10,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as unknown",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 1878,
+                "column": 16,
+                "code": "TS2352",
+                "message": "Conversion of type '{ child: { kill: Mock<Procedure>; exitCode: number; signalCode: null; once: Mock<Procedure>; }; connection: { newSession: Mock<Procedure>; }; initialize: { ...; }; }' to type 'SpawnedACPProcess' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first."
+              }
+            ],
+            "ts2352Evidence": "packages/daemon/test/fixtures/v7-compiler-closure/residual.txt"
+          },
+          {
+            "start": 69047,
+            "end": 69047,
+            "line": 2114,
+            "column": 10,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as unknown",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 2105,
+                "column": 16,
+                "code": "TS2352",
+                "message": "Conversion of type '{ child: { kill: Mock<Procedure>; exitCode: number; signalCode: null; once: Mock<Procedure>; }; connection: { newSession: Mock<Procedure>; }; initialize: { ...; }; }' to type 'SpawnedACPProcess' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first."
+              }
+            ],
+            "ts2352Evidence": "packages/daemon/test/fixtures/v7-compiler-closure/residual.txt"
+          },
+          {
+            "start": 70687,
+            "end": 70687,
+            "line": 2170,
+            "column": 8,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as unknown",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 2164,
+                "column": 14,
+                "code": "TS2352",
+                "message": "Conversion of type '{ child: { kill: Mock<Procedure>; exitCode: number; signalCode: null; once: Mock<Procedure>; }; connection: { newSession: Mock<Procedure>; }; initialize: { ...; }; }' to type 'SpawnedACPProcess' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first."
+              }
+            ],
+            "ts2352Evidence": "packages/daemon/test/fixtures/v7-compiler-closure/residual.txt"
+          },
+          {
+            "start": 72144,
+            "end": 72144,
+            "line": 2216,
+            "column": 10,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as unknown",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 2212,
+                "column": 16,
+                "code": "TS2352",
+                "message": "Conversion of type '{ child: { kill: Mock<Procedure>; exitCode: number; signalCode: null; once: Mock<Procedure>; }; connection: { newSession: Mock<Procedure>; }; initialize: { ...; }; }' to type 'SpawnedACPProcess' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first."
+              }
+            ],
+            "ts2352Evidence": "packages/daemon/test/fixtures/v7-compiler-closure/residual.txt"
+          },
+          {
+            "start": 73655,
+            "end": 73655,
+            "line": 2262,
+            "column": 10,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as unknown",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 2240,
+                "column": 16,
+                "code": "TS2352",
+                "message": "Conversion of type '{ child: { kill: Mock<Procedure>; exitCode: number; signalCode: null; once: Mock<Procedure>; }; connection: { newSession: Mock<Procedure>; }; initialize: { ...; }; }' to type 'SpawnedACPProcess' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first."
+              }
+            ],
+            "ts2352Evidence": "packages/daemon/test/fixtures/v7-compiler-closure/residual.txt"
+          },
+          {
+            "start": 88627,
+            "end": 88627,
+            "line": 2746,
+            "column": 32,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 2746,
+                "column": 12,
+                "code": "TS2532",
+                "message": "Object is possibly 'undefined'."
+              }
+            ]
+          },
+          {
+            "start": 88699,
+            "end": 88699,
+            "line": 2747,
+            "column": 32,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 2747,
+                "column": 12,
+                "code": "TS2532",
+                "message": "Object is possibly 'undefined'."
+              }
+            ]
+          },
+          {
+            "start": 88736,
+            "end": 88736,
+            "line": 2747,
+            "column": 69,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 2747,
+                "column": 49,
+                "code": "TS2532",
+                "message": "Object is possibly 'undefined'."
+              }
+            ]
+          },
+          {
+            "start": 88780,
+            "end": 88780,
+            "line": 2748,
+            "column": 32,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 2748,
+                "column": 12,
+                "code": "TS2532",
+                "message": "Object is possibly 'undefined'."
+              }
+            ]
+          },
+          {
+            "start": 88852,
+            "end": 88852,
+            "line": 2749,
+            "column": 32,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 2749,
+                "column": 12,
+                "code": "TS2532",
+                "message": "Object is possibly 'undefined'."
+              }
+            ]
+          },
+          {
+            "start": 88893,
+            "end": 88893,
+            "line": 2749,
+            "column": 73,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 2749,
+                "column": 53,
+                "code": "TS2532",
+                "message": "Object is possibly 'undefined'."
+              }
+            ]
+          },
+          {
+            "start": 91067,
+            "end": 91067,
+            "line": 2823,
+            "column": 20,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": "<PromptResponse>",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 2829,
+                "column": 62,
+                "code": "TS2322",
+                "message": "Type 'Mock<() => Promise<unknown>>' is not assignable to type '(...args: unknown[]) => Promise<PromptResponse>'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 91783,
+            "end": 91783,
+            "line": 2844,
+            "column": 71,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as NonNullable<PromptResponse[\"usage\"]>",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 2844,
+                "column": 45,
+                "code": "TS2739",
+                "message": "Type '{ outputTokens: number; }' is missing the following properties from type 'Usage': inputTokens, totalTokens"
+              }
+            ]
+          },
+          {
+            "start": 102240,
+            "end": 102240,
+            "line": 3183,
+            "column": 20,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": "<PromptResponse>",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 3189,
+                "column": 62,
+                "code": "TS2322",
+                "message": "Type 'Mock<() => Promise<unknown>>' is not assignable to type '(...args: unknown[]) => Promise<PromptResponse>'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 106610,
+            "end": 106610,
+            "line": 3314,
+            "column": 70,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as ACPSessionInternals[\"connection\"]",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 3314,
+                "column": 5,
+                "code": "TS2322",
+                "message": "Type 'ClientSideConnection' is not assignable to type '{ prompt: (...args: unknown[]) => Promise<PromptResponse>; }'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 113420,
+            "end": 113420,
+            "line": 3509,
+            "column": 10,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as AgentCapabilityFlags",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 3506,
+                "column": 9,
+                "code": "TS2739",
+                "message": "Type '{ supportsStreaming: true; supportsSessionPersistence: true; }' is missing the following properties from type 'AgentCapabilityFlags': supportsDynamicModes, supportsMcpServers, supportsReasoningStream, supportsToolInvocations"
+              }
+            ]
+          },
+          {
+            "start": 114319,
+            "end": 114319,
+            "line": 3534,
+            "column": 48,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as SpawnedACPProcess[\"initialize\"]",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 3534,
+                "column": 11,
+                "code": "TS2741",
+                "message": "Property 'protocolVersion' is missing in type '{ agentCapabilities: {}; }' but required in type 'InitializeResponse'."
+              }
+            ]
+          },
+          {
+            "start": 114706,
+            "end": 114706,
+            "line": 3549,
+            "column": 10,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as AgentCapabilityFlags",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 3546,
+                "column": 9,
+                "code": "TS2739",
+                "message": "Type '{ supportsStreaming: true; supportsSessionPersistence: true; }' is missing the following properties from type 'AgentCapabilityFlags': supportsDynamicModes, supportsMcpServers, supportsReasoningStream, supportsToolInvocations"
+              }
+            ]
+          },
+          {
+            "start": 115473,
+            "end": 115473,
+            "line": 3570,
+            "column": 67,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as SpawnedACPProcess[\"initialize\"]",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 3570,
+                "column": 11,
+                "code": "TS2741",
+                "message": "Property 'protocolVersion' is missing in type '{ agentCapabilities: { loadSession: true; }; }' but required in type 'InitializeResponse'."
+              }
+            ]
+          },
+          {
+            "start": 115862,
+            "end": 115862,
+            "line": 3585,
+            "column": 10,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as AgentCapabilityFlags",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 3582,
+                "column": 9,
+                "code": "TS2739",
+                "message": "Type '{ supportsStreaming: true; supportsSessionPersistence: true; }' is missing the following properties from type 'AgentCapabilityFlags': supportsDynamicModes, supportsMcpServers, supportsReasoningStream, supportsToolInvocations"
+              }
+            ]
+          },
+          {
+            "start": 116834,
+            "end": 116834,
+            "line": 3618,
+            "column": 10,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as unknown",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 3608,
+                "column": 16,
+                "code": "TS2352",
+                "message": "Conversion of type '{ child: ChildProcessWithoutNullStreams; connection: { newSession: Mock<Procedure>; }; initialize: { agentCapabilities: {}; }; }' to type 'SpawnedACPProcess' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first."
+              }
+            ],
+            "ts2352Evidence": "packages/daemon/test/fixtures/v7-compiler-closure/residual.txt"
+          },
+          {
+            "start": 126011,
+            "end": 126037,
+            "line": 3888,
+            "column": 17,
+            "form": "E4",
+            "replacedText": ": ReturnType<typeof vi.fn>",
+            "insertedText": ": ClientSideConnection[\"loadSession\"]",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 3982,
+                "column": 7,
+                "code": "TS2322",
+                "message": "Type '() => Promise<{ sessionId: string; modes: null; models: null; configOptions: never[]; }>' is not assignable to type 'Mock<Procedure | Constructable> | undefined'."
+              },
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 4039,
+                "column": 7,
+                "code": "TS2322",
+                "message": "Type '() => Promise<{ sessionId: string; modes: null; models: null; configOptions: never[]; }>' is not assignable to type 'Mock<Procedure | Constructable> | undefined'."
+              },
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 4102,
+                "column": 7,
+                "code": "TS2322",
+                "message": "Type '() => Promise<{ sessionId: string; modes: null; models: null; configOptions: never[]; }>' is not assignable to type 'Mock<Procedure | Constructable> | undefined'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 127979,
+            "end": 127979,
+            "line": 3948,
+            "column": 68,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as unknown as AgentCapabilityFlags",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 3948,
+                "column": 7,
+                "code": "TS2739",
+                "message": "Type '{ loadSession: true; supportsMcpServers: true; }' is missing the following properties from type 'AgentCapabilityFlags': supportsStreaming, supportsSessionPersistence, supportsDynamicModes, supportsReasoningStream, supportsToolInvocations"
+              }
+            ],
+            "ts2352Evidence": "packages/daemon/test/fixtures/v7-compiler-closure/typecheck-01.txt"
+          },
+          {
+            "start": 128889,
+            "end": 128889,
+            "line": 3980,
+            "column": 42,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as unknown as AgentCapabilityFlags",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 3980,
+                "column": 7,
+                "code": "TS2740",
+                "message": "Type '{ loadSession: true; }' is missing the following properties from type 'AgentCapabilityFlags': supportsStreaming, supportsSessionPersistence, supportsDynamicModes, supportsMcpServers, and 2 more."
+              }
+            ],
+            "ts2352Evidence": "packages/daemon/test/fixtures/v7-compiler-closure/typecheck-01.txt"
+          },
+          {
+            "start": 130543,
+            "end": 130543,
+            "line": 4037,
+            "column": 42,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as unknown as AgentCapabilityFlags",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 4037,
+                "column": 7,
+                "code": "TS2740",
+                "message": "Type '{ loadSession: true; }' is missing the following properties from type 'AgentCapabilityFlags': supportsStreaming, supportsSessionPersistence, supportsDynamicModes, supportsMcpServers, and 2 more."
+              }
+            ],
+            "ts2352Evidence": "packages/daemon/test/fixtures/v7-compiler-closure/typecheck-01.txt"
+          },
+          {
+            "start": 132363,
+            "end": 132363,
+            "line": 4100,
+            "column": 42,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as unknown as AgentCapabilityFlags",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 4100,
+                "column": 7,
+                "code": "TS2740",
+                "message": "Type '{ loadSession: true; }' is missing the following properties from type 'AgentCapabilityFlags': supportsStreaming, supportsSessionPersistence, supportsDynamicModes, supportsMcpServers, and 2 more."
+              }
+            ],
+            "ts2352Evidence": "packages/daemon/test/fixtures/v7-compiler-closure/typecheck-01.txt"
+          },
+          {
+            "start": 132861,
+            "end": 132861,
+            "line": 4114,
+            "column": 32,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 4114,
+                "column": 12,
+                "code": "TS2532",
+                "message": "Object is possibly 'undefined'."
+              }
+            ]
+          },
+          {
+            "start": 132933,
+            "end": 132933,
+            "line": 4115,
+            "column": 32,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 4115,
+                "column": 12,
+                "code": "TS2532",
+                "message": "Object is possibly 'undefined'."
+              }
+            ]
+          },
+          {
+            "start": 132970,
+            "end": 132970,
+            "line": 4115,
+            "column": 69,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 4115,
+                "column": 49,
+                "code": "TS2532",
+                "message": "Object is possibly 'undefined'."
+              }
+            ]
+          },
+          {
+            "start": 133014,
+            "end": 133014,
+            "line": 4116,
+            "column": 32,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 4116,
+                "column": 12,
+                "code": "TS2532",
+                "message": "Object is possibly 'undefined'."
+              }
+            ]
+          },
+          {
+            "start": 133086,
+            "end": 133086,
+            "line": 4117,
+            "column": 32,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 4117,
+                "column": 12,
+                "code": "TS2532",
+                "message": "Object is possibly 'undefined'."
+              }
+            ]
+          },
+          {
+            "start": 133127,
+            "end": 133127,
+            "line": 4117,
+            "column": 73,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 4117,
+                "column": 53,
+                "code": "TS2532",
+                "message": "Object is possibly 'undefined'."
+              }
+            ]
+          },
+          {
+            "start": 133377,
+            "end": 133377,
+            "line": 4122,
+            "column": 69,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as unknown as AgentCapabilityFlags",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 4122,
+                "column": 7,
+                "code": "TS2739",
+                "message": "Type '{ loadSession: true; supportsMcpServers: false; }' is missing the following properties from type 'AgentCapabilityFlags': supportsStreaming, supportsSessionPersistence, supportsDynamicModes, supportsReasoningStream, supportsToolInvocations"
+              }
+            ],
+            "ts2352Evidence": "packages/daemon/test/fixtures/v7-compiler-closure/typecheck-01.txt"
+          },
+          {
+            "start": 133952,
+            "end": 133952,
+            "line": 4138,
+            "column": 60,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as unknown as AgentCapabilityFlags",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/acp-agent.test.ts",
+                "line": 4138,
+                "column": 23,
+                "code": "TS2322",
+                "message": "Type '{ resume: {}; }' is not assignable to type 'boolean | undefined'."
+              }
+            ],
+            "ts2352Evidence": "packages/daemon/test/fixtures/v7-compiler-closure/typecheck-02.txt"
+          }
+        ],
+        "modificationNotice": {
+          "start": 89,
+          "end": 89,
+          "line": 2,
+          "column": 1,
+          "form": "N",
+          "replacedText": "",
+          "insertedText": "// Modified from Paseo: type-only edits erased at compile time; see packages/daemon/src/agent/paseo/closure.json.\n"
+        }
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/generic-acp-agent.test.ts",
+        "destination": "packages/daemon/test/paseo/providers/generic-acp-agent.test.ts",
+        "pinnedSha256": "3b4f8bef52f5a34af2c308138a2614e5ab3e900d48670750291993053abd3530",
+        "integratedSha256": "f4aa662885b230fe9e16baebdbba8ed34d66b5bf52dc217e49814a46d10a7254",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "../../../test-utils/test-logger.js",
+            "to": "../test-utils/test-logger.js"
+          },
+          {
+            "from": "./generic-acp-agent.js",
+            "to": "../../../src/agent/providers/generic-acp-agent.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "ported unit test",
+        "sourceImports": [
+          "vitest",
+          "../../../test-utils/test-logger.js",
+          "./generic-acp-agent.js"
+        ],
+        "integratedImports": [
+          "vitest",
+          "../test-utils/test-logger.js",
+          "../../../src/agent/providers/generic-acp-agent.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/generic-acp-agent.archived-history.test.ts",
+        "destination": "packages/daemon/test/paseo/providers/generic-acp-agent.archived-history.test.ts",
+        "pinnedSha256": "41eebe1c35021fda06345e8a704803953a394eb9b0ac034c2392c275f1d6ca08",
+        "integratedSha256": "5f49c2c9a898c0a7edf0919391eaeca6c2336ea36fe25fa071cc1e57fad1a256",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "../../../test-utils/test-logger.js",
+            "to": "../test-utils/test-logger.js"
+          },
+          {
+            "from": "../agent-sdk-types.js",
+            "to": "../../../src/agent/paseo/agent-sdk-types.js"
+          },
+          {
+            "from": "./generic-acp-agent.js",
+            "to": "../../../src/agent/providers/generic-acp-agent.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "ported unit test",
+        "sourceImports": [
+          "node:fs/promises",
+          "node:os",
+          "node:path",
+          "vitest",
+          "../../../test-utils/test-logger.js",
+          "../agent-sdk-types.js",
+          "./generic-acp-agent.js"
+        ],
+        "integratedImports": [
+          "node:fs/promises",
+          "node:os",
+          "node:path",
+          "vitest",
+          "../test-utils/test-logger.js",
+          "../../../src/agent/paseo/agent-sdk-types.js",
+          "../../../src/agent/providers/generic-acp-agent.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/generic-acp-agent.commands.test.ts",
+        "destination": "packages/daemon/test/paseo/providers/generic-acp-agent.commands.test.ts",
+        "pinnedSha256": "ed8ede384d1d1d21938c749d2fec7fad3948139e52c18846bddca1223b422d32",
+        "integratedSha256": "d172097634c0869e510f0649f59838abb8ab245b8fa537ff51ade16e30df7e09",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "../../../test-utils/test-logger.js",
+            "to": "../test-utils/test-logger.js"
+          },
+          {
+            "from": "./generic-acp-agent.js",
+            "to": "../../../src/agent/providers/generic-acp-agent.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "ported unit test",
+        "sourceImports": [
+          "node:fs/promises",
+          "node:os",
+          "node:path",
+          "vitest",
+          "../../../test-utils/test-logger.js",
+          "./generic-acp-agent.js"
+        ],
+        "integratedImports": [
+          "node:fs/promises",
+          "node:os",
+          "node:path",
+          "vitest",
+          "../test-utils/test-logger.js",
+          "../../../src/agent/providers/generic-acp-agent.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/generic-acp-agent.diagnostic.test.ts",
+        "destination": "packages/daemon/test/paseo/providers/generic-acp-agent.diagnostic.test.ts",
+        "pinnedSha256": "80786f138ae2fa1bad50408520bc578ea85052b634b58979b6804b780bc39030",
+        "integratedSha256": "b7b341f898c468f1c1aba6e018403c9e755be126d638089ed8a2877d6f782598",
+        "modificationKind": "ported-test-case-exclusions",
+        "changes": [
+          {
+            "from": "../provider-refresh-deadline.js",
+            "to": "../../../src/agent/paseo/provider-refresh-deadline.js"
+          },
+          {
+            "from": "./generic-acp-agent.js",
+            "to": "../../../src/agent/providers/generic-acp-agent.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "ported unit test",
+        "excludedCases": [
+          {
+            "case": "sends configured client capabilities in catalog and live session initialization",
+            "reason": "excluded provider-registry"
+          }
+        ],
+        "sourceImports": [
+          "../provider-registry.js",
+          "node:fs/promises",
+          "node:os",
+          "node:path",
+          "vitest",
+          "../../../test-utils/test-logger.js",
+          "../provider-refresh-deadline.js",
+          "./generic-acp-agent.js"
+        ],
+        "integratedImports": [
+          "node:fs/promises",
+          "node:os",
+          "node:path",
+          "vitest",
+          "../test-utils/test-logger.js",
+          "../../../src/agent/paseo/provider-refresh-deadline.js",
+          "../../../src/agent/providers/generic-acp-agent.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/generic-acp-agent.permission-turn-failure.test.ts",
+        "destination": "packages/daemon/test/paseo/providers/generic-acp-agent.permission-turn-failure.test.ts",
+        "pinnedSha256": "1fcc89e867b0d682b39709f56b87ae43868278227422f212130c6a4b731b7506",
+        "integratedSha256": "0214b923cba70c55cf13b583c209242a1cc7c35363cd8c6c9ca0cee0e1e2bed9",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "../../../test-utils/test-logger.js",
+            "to": "../test-utils/test-logger.js"
+          },
+          {
+            "from": "../agent-sdk-types.js",
+            "to": "../../../src/agent/paseo/agent-sdk-types.js"
+          },
+          {
+            "from": "./generic-acp-agent.js",
+            "to": "../../../src/agent/providers/generic-acp-agent.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "ported unit test",
+        "sourceImports": [
+          "node:fs/promises",
+          "node:os",
+          "node:path",
+          "vitest",
+          "../../../test-utils/test-logger.js",
+          "../agent-sdk-types.js",
+          "./generic-acp-agent.js"
+        ],
+        "integratedImports": [
+          "node:fs/promises",
+          "node:os",
+          "node:path",
+          "vitest",
+          "../test-utils/test-logger.js",
+          "../../../src/agent/paseo/agent-sdk-types.js",
+          "../../../src/agent/providers/generic-acp-agent.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/generic-acp-agent.request-errors.test.ts",
+        "destination": "packages/daemon/test/paseo/providers/generic-acp-agent.request-errors.test.ts",
+        "pinnedSha256": "d8eeebe6ce635d021c08cca6f962ef8e1aaae2b8f9181f180489f870026d6daa",
+        "integratedSha256": "2b9f72d0085fb77a9326336c0e494bb9e31b09f2541b247f107cecaf0f20b469",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "../../../test-utils/test-logger.js",
+            "to": "../test-utils/test-logger.js"
+          },
+          {
+            "from": "./generic-acp-agent.js",
+            "to": "../../../src/agent/providers/generic-acp-agent.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "ported unit test",
+        "sourceImports": [
+          "node:fs/promises",
+          "node:os",
+          "node:path",
+          "vitest",
+          "../../../test-utils/test-logger.js",
+          "./generic-acp-agent.js"
+        ],
+        "integratedImports": [
+          "node:fs/promises",
+          "node:os",
+          "node:path",
+          "vitest",
+          "../test-utils/test-logger.js",
+          "../../../src/agent/providers/generic-acp-agent.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/tool-call-mapper.test.ts",
+        "destination": "packages/daemon/test/paseo/providers/opencode/tool-call-mapper.test.ts",
+        "pinnedSha256": "a4870754c12146955e2248bc888bf0d06b1da0e42f49fcde935bc04d8e3e4cbf",
+        "integratedSha256": "298b0103283af9090c8600da8ba07d55ca5c8fa8fb552f62c21f622dc3ccbd88",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "./tool-call-mapper.js",
+            "to": "../../../../src/agent/providers/opencode/tool-call-mapper.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "ported unit test",
+        "sourceImports": [
+          "vitest",
+          "./tool-call-mapper.js"
+        ],
+        "integratedImports": [
+          "vitest",
+          "../../../../src/agent/providers/opencode/tool-call-mapper.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/v2/agent.test.ts",
+        "destination": "packages/daemon/test/paseo/providers/opencode/v2/agent.test.ts",
+        "pinnedSha256": "607ef33ef9273039625b5231553f2a1cb462b2fca3fe6328fe6b1b8bd96db31f",
+        "integratedSha256": "38fee07a262dfabd3be75907c4de6042b20a0fa68dac533d47444cdf6f94c3db",
+        "modificationKind": "type-only",
+        "changes": [
+          {
+            "from": "../../../../../test-utils/test-logger.js",
+            "to": "../../../test-utils/test-logger.js"
+          },
+          {
+            "from": "../../../agent-sdk-types.js",
+            "to": "../../../../../src/agent/paseo/agent-sdk-types.js"
+          },
+          {
+            "from": "./agent.js",
+            "to": "../../../../../src/agent/providers/opencode/v2/agent.js"
+          },
+          {
+            "from": "./api.js",
+            "to": "../../../../../src/agent/providers/opencode/v2/api.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "ported unit test",
+        "sourceImports": [
+          "@opencode/client",
+          "vitest",
+          "../../../../../test-utils/test-logger.js",
+          "../../../agent-sdk-types.js",
+          "./agent.js",
+          "../test-utils/v2-harness.js",
+          "./api.js"
+        ],
+        "integratedImports": [
+          "@opencode/client",
+          "vitest",
+          "../../../test-utils/test-logger.js",
+          "../../../../../src/agent/paseo/agent-sdk-types.js",
+          "../../../../../src/agent/providers/opencode/v2/agent.js",
+          "../test-utils/v2-harness.js",
+          "../../../../../src/agent/providers/opencode/v2/api.js"
+        ],
+        "preTypeEditSha256": "44b852f9b777b1a1ea70b3e5b336293bf83d378c6d75ac27be5095111514e7f9",
+        "typeOnlyEdits": [
+          {
+            "start": 3068,
+            "end": 3068,
+            "line": 69,
+            "column": 91,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as Parameters<V2Harness[\"push\"]>[0]",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/agent.test.ts",
+                "line": 69,
+                "column": 43,
+                "code": "TS2353",
+                "message": "Object literal may only specify known properties, and 'created' does not exist in type 'V2EventServerConnected'."
+              }
+            ]
+          },
+          {
+            "start": 4125,
+            "end": 4125,
+            "line": 97,
+            "column": 87,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as Parameters<V2Harness[\"push\"]>[0]",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/agent.test.ts",
+                "line": 97,
+                "column": 39,
+                "code": "TS2353",
+                "message": "Object literal may only specify known properties, and 'created' does not exist in type 'V2EventServerConnected'."
+              }
+            ]
+          },
+          {
+            "start": 5329,
+            "end": 5329,
+            "line": 126,
+            "column": 87,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as Parameters<V2Harness[\"push\"]>[0]",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/agent.test.ts",
+                "line": 126,
+                "column": 39,
+                "code": "TS2353",
+                "message": "Object literal may only specify known properties, and 'created' does not exist in type 'V2EventServerConnected'."
+              }
+            ]
+          },
+          {
+            "start": 8202,
+            "end": 8202,
+            "line": 202,
+            "column": 87,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as Parameters<V2Harness[\"push\"]>[0]",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/agent.test.ts",
+                "line": 202,
+                "column": 39,
+                "code": "TS2353",
+                "message": "Object literal may only specify known properties, and 'created' does not exist in type 'V2EventServerConnected'."
+              }
+            ]
+          },
+          {
+            "start": 10068,
+            "end": 10068,
+            "line": 252,
+            "column": 8,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as Parameters<V2Harness[\"push\"]>[0]",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/agent.test.ts",
+                "line": 247,
+                "column": 20,
+                "code": "TS2345",
+                "message": "Argument of type '{ id: string; created: number; type: \"form.created\"; data: { form: FormInfo; }; }' is not assignable to parameter of type 'V2Event'."
+              }
+            ]
+          },
+          {
+            "start": 14661,
+            "end": 14661,
+            "line": 368,
+            "column": 87,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as Parameters<V2Harness[\"push\"]>[0]",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/agent.test.ts",
+                "line": 368,
+                "column": 39,
+                "code": "TS2353",
+                "message": "Object literal may only specify known properties, and 'created' does not exist in type 'V2EventServerConnected'."
+              }
+            ]
+          },
+          {
+            "start": 16206,
+            "end": 16206,
+            "line": 405,
+            "column": 87,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as Parameters<V2Harness[\"push\"]>[0]",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/agent.test.ts",
+                "line": 405,
+                "column": 39,
+                "code": "TS2353",
+                "message": "Object literal may only specify known properties, and 'created' does not exist in type 'V2EventServerConnected'."
+              }
+            ]
+          },
+          {
+            "start": 16761,
+            "end": 16761,
+            "line": 422,
+            "column": 8,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as Parameters<V2Harness[\"push\"]>[0]",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/agent.test.ts",
+                "line": 419,
+                "column": 9,
+                "code": "TS2353",
+                "message": "Object literal may only specify known properties, and 'created' does not exist in type 'V2EventServerConnected'."
+              }
+            ]
+          },
+          {
+            "start": 19996,
+            "end": 19996,
+            "line": 505,
+            "column": 45,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/agent.test.ts",
+                "line": 505,
+                "column": 16,
+                "code": "TS2531",
+                "message": "Object is possibly 'null'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 20582,
+            "end": 20582,
+            "line": 518,
+            "column": 45,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/agent.test.ts",
+                "line": 518,
+                "column": 16,
+                "code": "TS2531",
+                "message": "Object is possibly 'null'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 22858,
+            "end": 22858,
+            "line": 574,
+            "column": 58,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/agent.test.ts",
+                "line": 574,
+                "column": 36,
+                "code": "TS2532",
+                "message": "Object is possibly 'undefined'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 22969,
+            "end": 22969,
+            "line": 576,
+            "column": 53,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/agent.test.ts",
+                "line": 576,
+                "column": 38,
+                "code": "TS2532",
+                "message": "Object is possibly 'undefined'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 23602,
+            "end": 23602,
+            "line": 595,
+            "column": 93,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as Parameters<V2Harness[\"push\"]>[0]",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/agent.test.ts",
+                "line": 595,
+                "column": 45,
+                "code": "TS2353",
+                "message": "Object literal may only specify known properties, and 'created' does not exist in type 'V2EventServerConnected'."
+              }
+            ]
+          },
+          {
+            "start": 23699,
+            "end": 23699,
+            "line": 596,
+            "column": 95,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as Parameters<V2Harness[\"push\"]>[0]",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/agent.test.ts",
+                "line": 596,
+                "column": 47,
+                "code": "TS2353",
+                "message": "Object literal may only specify known properties, and 'created' does not exist in type 'V2EventServerConnected'."
+              }
+            ]
+          },
+          {
+            "start": 24045,
+            "end": 24045,
+            "line": 606,
+            "column": 41,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/agent.test.ts",
+                "line": 606,
+                "column": 30,
+                "code": "TS2532",
+                "message": "Object is possibly 'undefined'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 24067,
+            "end": 24067,
+            "line": 606,
+            "column": 63,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/agent.test.ts",
+                "line": 606,
+                "column": 30,
+                "code": "TS2345",
+                "message": "Argument of type 'AgentPersistenceHandle | null' is not assignable to parameter of type 'AgentPersistenceHandle'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 32031,
+            "end": 32031,
+            "line": 837,
+            "column": 89,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as Parameters<V2Harness[\"push\"]>[0]",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/agent.test.ts",
+                "line": 837,
+                "column": 41,
+                "code": "TS2353",
+                "message": "Object literal may only specify known properties, and 'created' does not exist in type 'V2EventServerConnected'."
+              }
+            ]
+          },
+          {
+            "start": 32112,
+            "end": 32112,
+            "line": 839,
+            "column": 24,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/agent.test.ts",
+                "line": 839,
+                "column": 7,
+                "code": "TS2532",
+                "message": "Object is possibly 'undefined'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 32216,
+            "end": 32216,
+            "line": 840,
+            "column": 89,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as Parameters<V2Harness[\"push\"]>[0]",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/agent.test.ts",
+                "line": 840,
+                "column": 41,
+                "code": "TS2353",
+                "message": "Object literal may only specify known properties, and 'created' does not exist in type 'V2EventServerConnected'."
+              }
+            ]
+          },
+          {
+            "start": 33736,
+            "end": 33736,
+            "line": 879,
+            "column": 87,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as Parameters<V2Harness[\"push\"]>[0]",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/agent.test.ts",
+                "line": 879,
+                "column": 39,
+                "code": "TS2353",
+                "message": "Object literal may only specify known properties, and 'created' does not exist in type 'V2EventServerConnected'."
+              }
+            ]
+          }
+        ],
+        "modificationNotice": {
+          "start": 0,
+          "end": 0,
+          "line": 1,
+          "column": 1,
+          "form": "N",
+          "replacedText": "",
+          "insertedText": "// Modified from Paseo: type-only edits erased at compile time; see packages/daemon/src/agent/paseo/closure.json.\n"
+        }
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/v2/configuration.test.ts",
+        "destination": "packages/daemon/test/paseo/providers/opencode/v2/configuration.test.ts",
+        "pinnedSha256": "46c66dc08733ebe3ee9d7c251656f3a430b7de52b40ed752d4136dfe7a22c764",
+        "integratedSha256": "61e35c4ecf35540e8f79c59a7f93b85fe5b731d7c2980f3981ccef1799092b75",
+        "modificationKind": "type-only",
+        "changes": [
+          {
+            "from": "./configuration.js",
+            "to": "../../../../../src/agent/providers/opencode/v2/configuration.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "ported unit test",
+        "sourceImports": [
+          "vitest",
+          "./configuration.js"
+        ],
+        "integratedImports": [
+          "vitest",
+          "../../../../../src/agent/providers/opencode/v2/configuration.js"
+        ],
+        "preTypeEditSha256": "6bf82c46026b1d7564192e81fae7aaa552f092fb5f290b253f3e2de605982692",
+        "typeOnlyEdits": [
+          {
+            "start": 573,
+            "end": 573,
+            "line": 12,
+            "column": 80,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as NonNullable<NonNullable<Parameters<typeof permissionRules>[0][\"toolPolicy\"]>[\"preapproved\"]>[number]",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/configuration.test.ts",
+                "line": 12,
+                "column": 37,
+                "code": "TS2741",
+                "message": "Property 'kind' is missing in type '{ server: string; tool: string; }' but required in type 'McpToolRef'."
+              }
+            ]
+          }
+        ],
+        "modificationNotice": {
+          "start": 0,
+          "end": 0,
+          "line": 1,
+          "column": 1,
+          "form": "N",
+          "replacedText": "",
+          "insertedText": "// Modified from Paseo: type-only edits erased at compile time; see packages/daemon/src/agent/paseo/closure.json.\n"
+        }
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/v2/mapping.test.ts",
+        "destination": "packages/daemon/test/paseo/providers/opencode/v2/mapping.test.ts",
+        "pinnedSha256": "6a6edbba927c154c8d9c24d1260eac14ccbf05d42e2f9b01ade9f85198f5f19a",
+        "integratedSha256": "b3f430bd74f30dce91eb5fbf586f1118c6accb1e83de22e5ed9b5b449ebf1d9e",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "./mapping.js",
+            "to": "../../../../../src/agent/providers/opencode/v2/mapping.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "ported unit test",
+        "sourceImports": [
+          "@opencode/client",
+          "vitest",
+          "./mapping.js"
+        ],
+        "integratedImports": [
+          "@opencode/client",
+          "vitest",
+          "../../../../../src/agent/providers/opencode/v2/mapping.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/v2/permissions.test.ts",
+        "destination": "packages/daemon/test/paseo/providers/opencode/v2/permissions.test.ts",
+        "pinnedSha256": "de7c57ffa751741bec180b70540afb5f2ffc090ef11f3814fefe2c762d812e4c",
+        "integratedSha256": "b4dbf968aad4057fce04afb65ea939a164d1e5efd3f95d31d6f5ae019384ab24",
+        "modificationKind": "type-only",
+        "changes": [
+          {
+            "from": "../../../../../test-utils/test-logger.js",
+            "to": "../../../test-utils/test-logger.js"
+          },
+          {
+            "from": "./api.js",
+            "to": "../../../../../src/agent/providers/opencode/v2/api.js"
+          },
+          {
+            "from": "./agent.js",
+            "to": "../../../../../src/agent/providers/opencode/v2/agent.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "ported unit test",
+        "sourceImports": [
+          "vitest",
+          "../../../../../test-utils/test-logger.js",
+          "./api.js",
+          "./agent.js",
+          "../test-utils/v2-harness.js"
+        ],
+        "integratedImports": [
+          "vitest",
+          "../../../test-utils/test-logger.js",
+          "../../../../../src/agent/providers/opencode/v2/api.js",
+          "../../../../../src/agent/providers/opencode/v2/agent.js",
+          "../test-utils/v2-harness.js"
+        ],
+        "preTypeEditSha256": "8335a00e9d6a765945231442168dc93a02e30c91596446713c00b8b23909b195",
+        "typeOnlyEdits": [
+          {
+            "start": 3422,
+            "end": 3422,
+            "line": 103,
+            "column": 21,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/permissions.test.ts",
+                "line": 103,
+                "column": 14,
+                "code": "TS18048",
+                "message": "'request' is possibly 'undefined'."
+              }
+            ],
+            "reason": ""
+          }
+        ],
+        "modificationNotice": {
+          "start": 0,
+          "end": 0,
+          "line": 1,
+          "column": 1,
+          "form": "N",
+          "replacedText": "",
+          "insertedText": "// Modified from Paseo: type-only edits erased at compile time; see packages/daemon/src/agent/paseo/closure.json.\n"
+        }
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/v2/readiness.test.ts",
+        "destination": "packages/daemon/test/paseo/providers/opencode/v2/readiness.test.ts",
+        "pinnedSha256": "a5604cab4cb2887da6648d2f4faaa366c92bd8238d06701bb9457f1ad18c1268",
+        "integratedSha256": "f14733c7610f67bf7182819814f414ac9a4641b15bc41cd9adb6839da4b957a0",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "./readiness.js",
+            "to": "../../../../../src/agent/providers/opencode/v2/readiness.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "ported unit test",
+        "sourceImports": [
+          "vitest",
+          "./readiness.js"
+        ],
+        "integratedImports": [
+          "vitest",
+          "../../../../../src/agent/providers/opencode/v2/readiness.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/v2/streaming.test.ts",
+        "destination": "packages/daemon/test/paseo/providers/opencode/v2/streaming.test.ts",
+        "pinnedSha256": "f48926f8594d72767674b4eda26494b2b70c86c223e87792d19f25ab12e634fd",
+        "integratedSha256": "d7dab8312d86838dcb8ba26f7b9d42fdf0e9abad53fdff071b4d492ca9b91d37",
+        "modificationKind": "type-only",
+        "changes": [
+          {
+            "from": "./timeline.js",
+            "to": "../../../../../src/agent/providers/opencode/v2/timeline.js"
+          },
+          {
+            "from": "./agent.js",
+            "to": "../../../../../src/agent/providers/opencode/v2/agent.js"
+          },
+          {
+            "from": "../../../../../test-utils/test-logger.js",
+            "to": "../../../test-utils/test-logger.js"
+          },
+          {
+            "from": "../../../agent-sdk-types.js",
+            "to": "../../../../../src/agent/paseo/agent-sdk-types.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "ported unit test",
+        "sourceImports": [
+          "./timeline.js",
+          "@opencode/client",
+          "vitest",
+          "./agent.js",
+          "../test-utils/v2-harness.js",
+          "../../../../../test-utils/test-logger.js",
+          "../../../agent-sdk-types.js"
+        ],
+        "integratedImports": [
+          "../../../../../src/agent/providers/opencode/v2/timeline.js",
+          "@opencode/client",
+          "vitest",
+          "../../../../../src/agent/providers/opencode/v2/agent.js",
+          "../test-utils/v2-harness.js",
+          "../../../test-utils/test-logger.js",
+          "../../../../../src/agent/paseo/agent-sdk-types.js"
+        ],
+        "preTypeEditSha256": "a0332bc5d845566834e2d091623903db4e07273a73d07ffadca4462d39038d7a",
+        "typeOnlyEdits": [
+          {
+            "start": 1905,
+            "end": 1905,
+            "line": 51,
+            "column": 8,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as Parameters<V2Harness[\"push\"]>[0]",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/streaming.test.ts",
+                "line": 46,
+                "column": 20,
+                "code": "TS2345",
+                "message": "Argument of type '{ id: string; created: number; type: \"session.reasoning.started\"; data: { sessionID: string; assistantMessageID: string; ordinal: number; }; }' is not assignable to parameter of type 'V2Event'."
+              }
+            ]
+          },
+          {
+            "start": 2302,
+            "end": 2302,
+            "line": 63,
+            "column": 8,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as Parameters<V2Harness[\"push\"]>[0]",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/streaming.test.ts",
+                "line": 58,
+                "column": 20,
+                "code": "TS2345",
+                "message": "Argument of type '{ id: string; created: number; type: \"session.text.started\"; data: { sessionID: string; assistantMessageID: string; ordinal: number; }; }' is not assignable to parameter of type 'V2Event'."
+              }
+            ]
+          },
+          {
+            "start": 5895,
+            "end": 5895,
+            "line": 151,
+            "column": 8,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as Parameters<V2Harness[\"push\"]>[0]",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/streaming.test.ts",
+                "line": 146,
+                "column": 20,
+                "code": "TS2345",
+                "message": "Argument of type '{ id: string; created: number; type: \"session.text.started\"; data: { sessionID: string; assistantMessageID: string; ordinal: number; }; }' is not assignable to parameter of type 'V2Event'."
+              }
+            ]
+          },
+          {
+            "start": 6505,
+            "end": 6505,
+            "line": 170,
+            "column": 8,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as Parameters<V2Harness[\"push\"]>[0]",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/streaming.test.ts",
+                "line": 165,
+                "column": 20,
+                "code": "TS2345",
+                "message": "Argument of type '{ id: string; created: number; type: \"session.reasoning.started\"; data: { sessionID: string; assistantMessageID: string; ordinal: number; }; }' is not assignable to parameter of type 'V2Event'."
+              }
+            ]
+          }
+        ],
+        "modificationNotice": {
+          "start": 0,
+          "end": 0,
+          "line": 1,
+          "column": 1,
+          "form": "N",
+          "replacedText": "",
+          "insertedText": "// Modified from Paseo: type-only edits erased at compile time; see packages/daemon/src/agent/paseo/closure.json.\n"
+        }
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/v2/timeline.test.ts",
+        "destination": "packages/daemon/test/paseo/providers/opencode/v2/timeline.test.ts",
+        "pinnedSha256": "3c94ef514bfcb90d016f0c8ad6df7e0c41a99fd79217b65bff88bf86b08c7537",
+        "integratedSha256": "a60751e88e60b022e73fa2d026d6b08615c11b556e027f855a7a4424f21004dd",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "./timeline.js",
+            "to": "../../../../../src/agent/providers/opencode/v2/timeline.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "ported unit test",
+        "sourceImports": [
+          "@opencode/client",
+          "vitest",
+          "./timeline.js"
+        ],
+        "integratedImports": [
+          "@opencode/client",
+          "vitest",
+          "../../../../../src/agent/providers/opencode/v2/timeline.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/v2/usage.test.ts",
+        "destination": "packages/daemon/test/paseo/providers/opencode/v2/usage.test.ts",
+        "pinnedSha256": "6dbbb4b1ab4ee1c15cd14902379ed9bd2f8590d6872ade8a5decf8c4b4b59f2e",
+        "integratedSha256": "b0059bfdbd354e1f70ca9d91ea79b316808ed27488659634adab37e026cc0ca6",
+        "modificationKind": "type-only",
+        "changes": [
+          {
+            "from": "./agent.js",
+            "to": "../../../../../src/agent/providers/opencode/v2/agent.js"
+          },
+          {
+            "from": "../../../../../test-utils/test-logger.js",
+            "to": "../../../test-utils/test-logger.js"
+          },
+          {
+            "from": "../../../agent-sdk-types.js",
+            "to": "../../../../../src/agent/paseo/agent-sdk-types.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "ported unit test",
+        "sourceImports": [
+          "@opencode/client",
+          "vitest",
+          "./agent.js",
+          "../test-utils/v2-harness.js",
+          "../../../../../test-utils/test-logger.js",
+          "../../../agent-sdk-types.js"
+        ],
+        "integratedImports": [
+          "@opencode/client",
+          "vitest",
+          "../../../../../src/agent/providers/opencode/v2/agent.js",
+          "../test-utils/v2-harness.js",
+          "../../../test-utils/test-logger.js",
+          "../../../../../src/agent/paseo/agent-sdk-types.js"
+        ],
+        "preTypeEditSha256": "d59bf78e29c2e03688f8b9dca35edee2134aed1b0ff0621814d6c10504ce2b54",
+        "typeOnlyEdits": [
+          {
+            "start": 1888,
+            "end": 1888,
+            "line": 57,
+            "column": 37,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/usage.test.ts",
+                "line": 57,
+                "column": 32,
+                "code": "TS18048",
+                "message": "'input' is possibly 'undefined'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 1897,
+            "end": 1897,
+            "line": 57,
+            "column": 46,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/usage.test.ts",
+                "line": 57,
+                "column": 32,
+                "code": "TS18048",
+                "message": "'input.location' is possibly 'undefined'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 1907,
+            "end": 1907,
+            "line": 57,
+            "column": 56,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/usage.test.ts",
+                "line": 54,
+                "column": 5,
+                "code": "TS2322",
+                "message": "Type '(input: ModelListInput | undefined) => Promise<{ location: { directory: string | undefined; }; data: ModelInfo[]; }>' is not assignable to type '(input?: ModelListInput | undefined, requestOptions?: RequestOptions | undefined) => Promise<ModelListOutput>'."
+              }
+            ],
+            "reason": ""
+          }
+        ],
+        "modificationNotice": {
+          "start": 0,
+          "end": 0,
+          "line": 1,
+          "column": 1,
+          "form": "N",
+          "replacedText": "",
+          "insertedText": "// Modified from Paseo: type-only edits erased at compile time; see packages/daemon/src/agent/paseo/closure.json.\n"
+        }
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/pi/agent.test.ts",
+        "destination": "packages/daemon/test/paseo/providers/pi/agent.test.ts",
+        "pinnedSha256": "1384e543dda5f282b85ab549b44292be38e8f130ec812095eceaf1166b88d94e",
+        "integratedSha256": "1422fe09180e5858a51ff35cb28ca035700d6cc9879a93e4ce289277e48ad5cd",
+        "modificationKind": "ported-test-case-exclusions",
+        "changes": [
+          {
+            "from": "../../agent-sdk-types.js",
+            "to": "../../../../src/agent/paseo/agent-sdk-types.js"
+          },
+          {
+            "from": "./agent.js",
+            "to": "../../../../src/agent/providers/pi/agent.js"
+          },
+          {
+            "from": "./extensions/index.js",
+            "to": "../../../../src/agent/providers/pi/extensions/index.js"
+          },
+          {
+            "from": "./extensions/host.js",
+            "to": "../../../../src/agent/providers/pi/extensions/host.js"
+          },
+          {
+            "from": "./rpc-types.js",
+            "to": "../../../../src/agent/providers/pi/rpc-types.js"
+          },
+          {
+            "from": "./usage-poller.js",
+            "to": "../../../../src/agent/providers/pi/usage-poller.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "ported unit test",
+        "sourceImports": [
+          "node:fs",
+          "node:os",
+          "node:path",
+          "pino",
+          "node:timers/promises",
+          "node:url",
+          "vitest",
+          "../../agent-sdk-types.js",
+          "./agent.js",
+          "./test-utils/fake-pi.js",
+          "./extensions/index.js",
+          "./extensions/host.js",
+          "./rpc-types.js",
+          "./usage-poller.js"
+        ],
+        "integratedImports": [
+          "node:fs",
+          "node:os",
+          "node:path",
+          "pino",
+          "node:timers/promises",
+          "node:url",
+          "vitest",
+          "../../../../src/agent/paseo/agent-sdk-types.js",
+          "../../../../src/agent/providers/pi/agent.js",
+          "./test-utils/fake-pi.js",
+          "../../../../src/agent/providers/pi/extensions/index.js",
+          "../../../../src/agent/providers/pi/extensions/host.js",
+          "../../../../src/agent/providers/pi/rpc-types.js",
+          "../../../../src/agent/providers/pi/usage-poller.js"
+        ],
+        "excludedCases": [
+          {
+            "case": "combines Pi ask_user select and optional comment into one permission",
+            "reason": "removed Pi ask_user extension"
+          }
+        ],
+        "preTypeEditSha256": "1b049b1866a7f575606dcceb47bfd6cf0d631acef35295cf85ca56220ba5f853",
+        "typeOnlyEdits": [
+          {
+            "start": 9940,
+            "end": 9940,
+            "line": 314,
+            "column": 43,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/pi/agent.test.ts",
+                "line": 315,
+                "column": 13,
+                "code": "TS18048",
+                "message": "'waiter' is possibly 'undefined'."
+              },
+              {
+                "file": "packages/daemon/test/paseo/providers/pi/agent.test.ts",
+                "line": 318,
+                "column": 11,
+                "code": "TS18048",
+                "message": "'waiter' is possibly 'undefined'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 10392,
+            "end": 10392,
+            "line": 334,
+            "column": 31,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": "<Pick<Extract<AgentStreamEvent, { type: \"timeline\" }>, \"type\" | \"item\"> | Pick<Extract<AgentStreamEvent, { type: \"turn_completed\" }>, \"type\">>",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/pi/agent.test.ts",
+                "line": 334,
+                "column": 32,
+                "code": "TS2345",
+                "message": "Argument of type '(this: undefined, event: AgentStreamEvent) => { type: \"timeline\"; item: AgentTimelineItem; }[] | { type: \"turn_completed\"; }[]' is not assignable to parameter of type '(this: undefined, value: AgentStreamEvent, index: number, array: AgentStreamEvent[]) => { type: \"timeline\"; item: AgentTimelineItem; } | readonly { ...; }[]'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 48370,
+            "end": 48370,
+            "line": 1518,
+            "column": 34,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/pi/agent.test.ts",
+                "line": 1518,
+                "column": 7,
+                "code": "TS18048",
+                "message": "'actualLaunch.extensionPaths' is possibly 'undefined'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 52963,
+            "end": 52963,
+            "line": 1633,
+            "column": 65,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/pi/agent.test.ts",
+                "line": 1633,
+                "column": 27,
+                "code": "TS2532",
+                "message": "Object is possibly 'undefined'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 54548,
+            "end": 54548,
+            "line": 1679,
+            "column": 95,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/pi/agent.test.ts",
+                "line": 1679,
+                "column": 57,
+                "code": "TS2532",
+                "message": "Object is possibly 'undefined'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 56543,
+            "end": 56543,
+            "line": 1737,
+            "column": 34,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/pi/agent.test.ts",
+                "line": 1737,
+                "column": 7,
+                "code": "TS18048",
+                "message": "'actualLaunch.extensionPaths' is possibly 'undefined'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 56640,
+            "end": 56640,
+            "line": 1741,
+            "column": 66,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/pi/agent.test.ts",
+                "line": 1741,
+                "column": 39,
+                "code": "TS18048",
+                "message": "'actualLaunch.extensionPaths' is possibly 'undefined'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 57839,
+            "end": 57839,
+            "line": 1784,
+            "column": 34,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/pi/agent.test.ts",
+                "line": 1784,
+                "column": 7,
+                "code": "TS18048",
+                "message": "'actualLaunch.extensionPaths' is possibly 'undefined'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 57935,
+            "end": 57935,
+            "line": 1787,
+            "column": 66,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/pi/agent.test.ts",
+                "line": 1787,
+                "column": 39,
+                "code": "TS18048",
+                "message": "'actualLaunch.extensionPaths' is possibly 'undefined'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 89686,
+            "end": 89686,
+            "line": 2666,
+            "column": 34,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/pi/agent.test.ts",
+                "line": 2666,
+                "column": 7,
+                "code": "TS18048",
+                "message": "'actualLaunch.extensionPaths' is possibly 'undefined'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 106356,
+            "end": 106356,
+            "line": 3159,
+            "column": 34,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/pi/agent.test.ts",
+                "line": 3159,
+                "column": 7,
+                "code": "TS18048",
+                "message": "'actualLaunch.extensionPaths' is possibly 'undefined'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 109036,
+            "end": 109036,
+            "line": 3238,
+            "column": 54,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/pi/agent.test.ts",
+                "line": 3238,
+                "column": 27,
+                "code": "TS18048",
+                "message": "'actualLaunch.extensionPaths' is possibly 'undefined'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 110392,
+            "end": 110392,
+            "line": 3270,
+            "column": 70,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/pi/agent.test.ts",
+                "line": 3270,
+                "column": 43,
+                "code": "TS18048",
+                "message": "'actualLaunch.extensionPaths' is possibly 'undefined'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 111424,
+            "end": 111424,
+            "line": 3293,
+            "column": 70,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/pi/agent.test.ts",
+                "line": 3293,
+                "column": 43,
+                "code": "TS18048",
+                "message": "'actualLaunch.extensionPaths' is possibly 'undefined'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 112780,
+            "end": 112780,
+            "line": 3333,
+            "column": 34,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/pi/agent.test.ts",
+                "line": 3333,
+                "column": 7,
+                "code": "TS18048",
+                "message": "'actualLaunch.extensionPaths' is possibly 'undefined'."
+              }
+            ],
+            "reason": ""
+          }
+        ],
+        "modificationNotice": {
+          "start": 88,
+          "end": 88,
+          "line": 2,
+          "column": 1,
+          "form": "N",
+          "replacedText": "",
+          "insertedText": "// Modified from Paseo: type-only edits erased at compile time; see packages/daemon/src/agent/paseo/closure.json.\n"
+        }
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/pi/cli-runtime.test.ts",
+        "destination": "packages/daemon/test/paseo/providers/pi/cli-runtime.test.ts",
+        "pinnedSha256": "da50e97afc2e0853a2b21fc342e012fc85edf38a3ad4395a4cdc4331a11d37f9",
+        "integratedSha256": "d9be7cd70847e517b557cd17ace74b3379dc687aaaeefd93e14597ad780cd575",
+        "modificationKind": "type-only",
+        "changes": [
+          {
+            "from": "./cli-runtime.js",
+            "to": "../../../../src/agent/providers/pi/cli-runtime.js"
+          },
+          {
+            "from": "./runtime.js",
+            "to": "../../../../src/agent/providers/pi/runtime.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "ported unit test",
+        "sourceImports": [
+          "node:child_process",
+          "node:events",
+          "node:stream",
+          "pino",
+          "vitest",
+          "./cli-runtime.js",
+          "./runtime.js"
+        ],
+        "integratedImports": [
+          "node:child_process",
+          "node:events",
+          "node:stream",
+          "pino",
+          "vitest",
+          "../../../../src/agent/providers/pi/cli-runtime.js",
+          "../../../../src/agent/providers/pi/runtime.js"
+        ],
+        "preTypeEditSha256": "c92a33a0a2f6ba7e5b5ad50fbd056c99b0710b07a9efbbbf24ee7324ac8b478f",
+        "typeOnlyEdits": [
+          {
+            "start": 841,
+            "end": 841,
+            "line": 25,
+            "column": 5,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as unknown",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/pi/cli-runtime.test.ts",
+                "line": 18,
+                "column": 17,
+                "code": "TS2352",
+                "message": "Conversion of type 'EventEmitter<DefaultEventMap> & { stdin: PassThrough; stdout: PassThrough; stderr: PassThrough; exitCode: null; signalCode: null; killedSignals: never[]; }' to type 'PiChild' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first."
+              }
+            ],
+            "ts2352Evidence": "packages/daemon/test/fixtures/v7-compiler-closure/residual.txt"
+          }
+        ],
+        "modificationNotice": {
+          "start": 0,
+          "end": 0,
+          "line": 1,
+          "column": 1,
+          "form": "N",
+          "replacedText": "",
+          "insertedText": "// Modified from Paseo: type-only edits erased at compile time; see packages/daemon/src/agent/paseo/closure.json.\n"
+        }
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/pi/history-mapper.test.ts",
+        "destination": "packages/daemon/test/paseo/providers/pi/history-mapper.test.ts",
+        "pinnedSha256": "5b184856b250da833999d2ece45610b0a02d5bae62b3d5b30508d3cd661cbc36",
+        "integratedSha256": "5e5e9f9207708f9a488042a9de45f65deeff4c648ada40aa72daaec0f60156aa",
+        "modificationKind": "type-only",
+        "changes": [
+          {
+            "from": "../../agent-sdk-types.js",
+            "to": "../../../../src/agent/paseo/agent-sdk-types.js"
+          },
+          {
+            "from": "./history-mapper.js",
+            "to": "../../../../src/agent/providers/pi/history-mapper.js"
+          },
+          {
+            "from": "./rpc-types.js",
+            "to": "../../../../src/agent/providers/pi/rpc-types.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "ported unit test",
+        "sourceImports": [
+          "vitest",
+          "../../agent-sdk-types.js",
+          "./history-mapper.js",
+          "./rpc-types.js"
+        ],
+        "integratedImports": [
+          "vitest",
+          "../../../../src/agent/paseo/agent-sdk-types.js",
+          "../../../../src/agent/providers/pi/history-mapper.js",
+          "../../../../src/agent/providers/pi/rpc-types.js"
+        ],
+        "preTypeEditSha256": "1bd611be0d213d43539d037bb3ee305e32c33796ed63bb7c9d426e22a08d1d4b",
+        "typeOnlyEdits": [
+          {
+            "start": 1221,
+            "end": 1221,
+            "line": 34,
+            "column": 7,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as Extract<AgentStreamEvent, { type: \"timeline\" }>[]",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/pi/history-mapper.test.ts",
+                "line": 35,
+                "column": 40,
+                "code": "TS2339",
+                "message": "Property 'item' does not exist on type 'AgentStreamEvent'."
+              }
+            ]
+          }
+        ],
+        "modificationNotice": {
+          "start": 0,
+          "end": 0,
+          "line": 1,
+          "column": 1,
+          "form": "N",
+          "replacedText": "",
+          "insertedText": "// Modified from Paseo: type-only edits erased at compile time; see packages/daemon/src/agent/paseo/closure.json.\n"
+        }
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/pi/session-descriptor.test.ts",
+        "destination": "packages/daemon/test/paseo/providers/pi/session-descriptor.test.ts",
+        "pinnedSha256": "1d52d1bd4885bcec6460a114f00006ea8046e66fbd00379b578340d9ffa8841f",
+        "integratedSha256": "71127237088af3f8cf3be5d5b4d2bc445fc73d4a83f9e1ae8305ccac30bef8be",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "./session-descriptor.js",
+            "to": "../../../../src/agent/providers/pi/session-descriptor.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "ported unit test",
+        "sourceImports": [
+          "node:fs/promises",
+          "node:os",
+          "node:path",
+          "vitest",
+          "./session-descriptor.js"
+        ],
+        "integratedImports": [
+          "node:fs/promises",
+          "node:os",
+          "node:path",
+          "vitest",
+          "../../../../src/agent/providers/pi/session-descriptor.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/pi/tool-call-mapper.test.ts",
+        "destination": "packages/daemon/test/paseo/providers/pi/tool-call-mapper.test.ts",
+        "pinnedSha256": "163270efb6f26e25f7698892b4aa69d792cadfa0fee9ee25da1de1949c70358b",
+        "integratedSha256": "9587b461c526cf5f3ed112b6cc11976bc686557eb1fcae0a5eaf5f790fc9953f",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "./tool-call-mapper.js",
+            "to": "../../../../src/agent/providers/pi/tool-call-mapper.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "ported unit test",
+        "sourceImports": [
+          "vitest",
+          "./tool-call-mapper.js"
+        ],
+        "integratedImports": [
+          "vitest",
+          "../../../../src/agent/providers/pi/tool-call-mapper.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/pi/usage-poller.test.ts",
+        "destination": "packages/daemon/test/paseo/providers/pi/usage-poller.test.ts",
+        "pinnedSha256": "aef19ced72e1b8244c9354b0bd4b1a7e637b18d4c4d2b5b379d4dd09c4cdd35d",
+        "integratedSha256": "c9459ebc4d355cf7ede31993f8d18e3e27f1fb3eac16db41254a5c7b18206ffd",
+        "modificationKind": "specifiers",
+        "changes": [
+          {
+            "from": "../../agent-sdk-types.js",
+            "to": "../../../../src/agent/paseo/agent-sdk-types.js"
+          },
+          {
+            "from": "./rpc-types.js",
+            "to": "../../../../src/agent/providers/pi/rpc-types.js"
+          },
+          {
+            "from": "./usage-poller.js",
+            "to": "../../../../src/agent/providers/pi/usage-poller.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "ported unit test",
+        "sourceImports": [
+          "node:timers/promises",
+          "vitest",
+          "../../agent-sdk-types.js",
+          "./rpc-types.js",
+          "./usage-poller.js"
+        ],
+        "integratedImports": [
+          "node:timers/promises",
+          "vitest",
+          "../../../../src/agent/paseo/agent-sdk-types.js",
+          "../../../../src/agent/providers/pi/rpc-types.js",
+          "../../../../src/agent/providers/pi/usage-poller.js"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/bridge.test.ts",
+        "destination": "packages/daemon/test/paseo/providers/opencode/bridge.test.ts",
+        "pinnedSha256": "e28f6116cfea85b1cbae0f92eef8ed279d0a1e5f8cc0da93db9598e8a457e7f1",
+        "integratedSha256": "78c2e470997763d1092cfebd2fc415799b6eecb7d837bc3a765c8156833f993d",
+        "modificationKind": "ported-test-case-exclusions",
+        "changes": [
+          {
+            "from": "../../tools/types.js",
+            "to": "../../../../src/agent/paseo/tools/types.js"
+          },
+          {
+            "from": "./bridge.js",
+            "to": "../../../../src/agent/providers/opencode/bridge.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "ported unit test",
+        "excludedCases": [
+          {
+            "case": "serves authenticated session context and caller-scoped tools",
+            "reason": "removed OpenCodeBridge route server"
+          },
+          {
+            "case": "v2 plugin filters caller tools and inherits child session bindings",
+            "reason": "removed OpenCodeBridge route server"
+          },
+          {
+            "case": "v2 plugin returns a tool image as OpenCode file content",
+            "reason": "removed OpenCodeBridge route server"
+          },
+          {
+            "case": "packages the v2 bridge as a directory with a server entry point",
+            "reason": "removed OpenCodeBridge class"
+          },
+          {
+            "case": "preserves user OpenCode config while installing one content-addressed plugin",
+            "reason": "removed OpenCodeBridge class"
+          }
+        ],
+        "sourceImports": [
+          "@opencode/client",
+          "node:fs/promises",
+          "node:os",
+          "node:path",
+          "node:url",
+          "zod",
+          "vitest",
+          "../../../../test-utils/test-logger.js",
+          "../../tools/types.js",
+          "./bridge.js"
+        ],
+        "integratedImports": [
+          "@opencode/client",
+          "node:fs/promises",
+          "node:os",
+          "node:path",
+          "node:url",
+          "vitest",
+          "../../../../src/agent/providers/opencode/bridge.js"
+        ],
+        "preTypeEditSha256": "04af1cc532f6a5ef39e05c7bcfb1caccc51ee9becd24ee03e4a147c552d8a760",
+        "typeOnlyEdits": [
+          {
+            "start": 4034,
+            "end": 4034,
+            "line": 109,
+            "column": 51,
+            "form": "E1",
+            "replacedText": "",
+            "insertedText": "!",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/bridge.test.ts",
+                "line": 109,
+                "column": 14,
+                "code": "TS18048",
+                "message": "'context.tools.paseo_structured_output' is possibly 'undefined'."
+              }
+            ],
+            "reason": ""
+          }
+        ],
+        "modificationNotice": {
+          "start": 102,
+          "end": 102,
+          "line": 2,
+          "column": 1,
+          "form": "N",
+          "replacedText": "",
+          "insertedText": "// Modified from Paseo: type-only edits erased at compile time; see packages/daemon/src/agent/paseo/closure.json.\n"
+        }
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/pi/extensions/index.test.ts",
+        "destination": "packages/daemon/test/paseo/providers/pi/extensions/index.test.ts",
+        "pinnedSha256": "0b1f66d4e5c90a92a7cc65692ede070535b005f0babb5301b8fcaef8cbfdb9ec",
+        "integratedSha256": "b99fc75a222b4dbfc69fcaf2a482d9eb30f25b796b8b48148af5d912eec30079",
+        "modificationKind": "ported-test-case-exclusions",
+        "changes": [
+          {
+            "from": "./index.js",
+            "to": "../../../../../src/agent/providers/pi/extensions/index.js"
+          },
+          {
+            "from": "../history-mapper.js",
+            "to": "../../../../../src/agent/providers/pi/history-mapper.js"
+          },
+          {
+            "from": "../tool-call-mapper.js",
+            "to": "../../../../../src/agent/providers/pi/tool-call-mapper.js"
+          },
+          {
+            "from": "./contract.js",
+            "to": "../../../../../src/agent/providers/pi/extensions/contract.js"
+          },
+          {
+            "from": "./host.js",
+            "to": "../../../../../src/agent/providers/pi/extensions/host.js"
+          }
+        ],
+        "adaptation": null,
+        "role": "ported unit test",
+        "excludedCases": [
+          {
+            "case": "claims a tool, declines an unrelated one, and maps history like live events",
+            "reason": "removed Pi subagent extension"
+          }
+        ],
+        "sourceImports": [
+          "vitest",
+          "node:fs/promises",
+          "node:os",
+          "node:path",
+          "./index.js",
+          "../history-mapper.js",
+          "../tool-call-mapper.js",
+          "./contract.js",
+          "./host.js"
+        ],
+        "integratedImports": [
+          "vitest",
+          "node:fs/promises",
+          "node:os",
+          "node:path",
+          "../../../../../src/agent/providers/pi/extensions/index.js",
+          "../../../../../src/agent/providers/pi/history-mapper.js",
+          "../../../../../src/agent/providers/pi/extensions/contract.js",
+          "../../../../../src/agent/providers/pi/extensions/host.js"
+        ],
+        "preTypeEditSha256": "65ac9a5ee6ac7a10251d8baf898319d2e9ea30736090936fd54cdf9a02c929e0",
+        "typeOnlyEdits": [
+          {
+            "start": 4334,
+            "end": 4334,
+            "line": 128,
+            "column": 98,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as unknown as Parameters<typeof host.respondToPermission>[0]",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/pi/extensions/index.test.ts",
+                "line": 128,
+                "column": 9,
+                "code": "TS2345",
+                "message": "Argument of type '{ id: string; provider: string; kind: \"question\"; title: string; input: { questions: never[]; }; }' is not assignable to parameter of type 'AgentPermissionRequest'."
+              }
+            ],
+            "ts2352Evidence": "packages/daemon/test/fixtures/v7-compiler-closure/typecheck-02.txt"
+          }
+        ],
+        "modificationNotice": {
+          "start": 83,
+          "end": 83,
+          "line": 2,
+          "column": 1,
+          "form": "N",
+          "replacedText": "",
+          "insertedText": "// Modified from Paseo: type-only edits erased at compile time; see packages/daemon/src/agent/paseo/closure.json.\n"
+        }
+      },
+      {
+        "source": "packages/server/src/test-utils/test-logger.ts",
+        "destination": "packages/daemon/test/paseo/test-utils/test-logger.ts",
+        "pinnedSha256": "023b20d3af1a0f6f37553323cf62b6faf9d22a2f7f2dfc59895086f40b02045e",
+        "integratedSha256": "023b20d3af1a0f6f37553323cf62b6faf9d22a2f7f2dfc59895086f40b02045e",
+        "modificationKind": "specifiers",
+        "role": "test-only fixture",
+        "changes": [],
+        "sourceImports": [
+          "pino"
+        ],
+        "integratedImports": [
+          "pino"
+        ]
+      },
+      {
+        "source": "packages/server/src/server/test-utils/class-mocks.ts",
+        "destination": "packages/daemon/test/paseo/test-utils/class-mocks.ts",
+        "pinnedSha256": "32c17877062db7960d38a42cdb4dad78d570d608151ce0f830c37ae91902fb60",
+        "integratedSha256": "32c17877062db7960d38a42cdb4dad78d570d608151ce0f830c37ae91902fb60",
+        "modificationKind": "specifiers",
+        "role": "test-only fixture",
+        "changes": [],
+        "sourceImports": [],
+        "integratedImports": []
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/test-utils/v2-harness.ts",
+        "destination": "packages/daemon/test/paseo/providers/opencode/test-utils/v2-harness.ts",
+        "pinnedSha256": "166747cfc9f3bf2bdf8e0fae47f96f9a12c107b29215dfd0997d920ae873a3ff",
+        "integratedSha256": "352bfb2319b4e45ea5adb4e8cac02fead527639ae9408662c83171bb4806016f",
+        "modificationKind": "type-only",
+        "role": "test-only fixture",
+        "changes": [
+          {
+            "from": "../v2/api.js",
+            "to": "../../../../../src/agent/providers/opencode/v2/api.js"
+          },
+          {
+            "from": "../v2/runtime.js",
+            "to": "../../../../../src/agent/providers/opencode/v2/runtime.js"
+          }
+        ],
+        "sourceImports": [
+          "@opencode/client",
+          "../v2/api.js",
+          "../v2/runtime.js"
+        ],
+        "integratedImports": [
+          "@opencode/client",
+          "../../../../../src/agent/providers/opencode/v2/api.js",
+          "../../../../../src/agent/providers/opencode/v2/runtime.js"
+        ],
+        "preTypeEditSha256": "71d9796788dbf9708260fab71258de7a8dcd6d28c0623f2752d557356422177c",
+        "typeOnlyEdits": [
+          {
+            "start": 2134,
+            "end": 2162,
+            "line": 66,
+            "column": 9,
+            "form": "E4",
+            "replacedText": ": V2Api[\"session\"][\"prompt\"]",
+            "insertedText": ": (...args: Parameters<V2Api[\"session\"][\"prompt\"]>) => Promise<void>",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/test-utils/v2-harness.ts",
+                "line": 66,
+                "column": 3,
+                "code": "TS2322",
+                "message": "Type '(input: SessionPromptInput) => Promise<void>' is not assignable to type '(input: SessionPromptInput, requestOptions?: RequestOptions | undefined) => Promise<SessionInboxUser>'."
+              },
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/agent.test.ts",
+                "line": 22,
+                "column": 5,
+                "code": "TS2322",
+                "message": "Type '(input: SessionPromptInput) => Promise<void>' is not assignable to type '(input: SessionPromptInput, requestOptions?: RequestOptions | undefined) => Promise<SessionInboxUser>'."
+              },
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/agent.test.ts",
+                "line": 84,
+                "column": 7,
+                "code": "TS2322",
+                "message": "Type 'Promise<void>' is not assignable to type 'Promise<SessionInboxUser>'."
+              },
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/agent.test.ts",
+                "line": 638,
+                "column": 5,
+                "code": "TS2322",
+                "message": "Type '(input: SessionPromptInput) => Promise<void>' is not assignable to type '(input: SessionPromptInput, requestOptions?: RequestOptions | undefined) => Promise<SessionInboxUser>'."
+              },
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/agent.test.ts",
+                "line": 691,
+                "column": 5,
+                "code": "TS2322",
+                "message": "Type '(input: SessionPromptInput) => Promise<void>' is not assignable to type '(input: SessionPromptInput, requestOptions?: RequestOptions | undefined) => Promise<SessionInboxUser>'."
+              },
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/agent.test.ts",
+                "line": 894,
+                "column": 7,
+                "code": "TS2322",
+                "message": "Type 'Promise<void>' is not assignable to type 'Promise<SessionInboxUser>'."
+              },
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/v2/agent.test.ts",
+                "line": 924,
+                "column": 5,
+                "code": "TS2322",
+                "message": "Type '(input: SessionPromptInput) => Promise<void>' is not assignable to type '(input: SessionPromptInput, requestOptions?: RequestOptions | undefined) => Promise<SessionInboxUser>'."
+              }
+            ],
+            "reason": ""
+          },
+          {
+            "start": 5594,
+            "end": 5594,
+            "line": 167,
+            "column": 6,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as Omit<V2Api[\"session\"], \"prompt\"> & Pick<V2Harness, \"prompt\"> as unknown as V2Api[\"session\"]",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/test-utils/v2-harness.ts",
+                "line": 152,
+                "column": 7,
+                "code": "TS2322",
+                "message": "Type '(input: SessionPromptInput, options: RequestOptions | undefined) => Promise<void>' is not assignable to type '(input: SessionPromptInput, requestOptions?: RequestOptions | undefined) => Promise<SessionInboxUser>'."
+              }
+            ],
+            "ts2352Evidence": "packages/daemon/test/fixtures/v7-compiler-closure/typecheck-04.txt"
+          },
+          {
+            "start": 6303,
+            "end": 6303,
+            "line": 187,
+            "column": 78,
+            "form": "E4",
+            "replacedText": "",
+            "insertedText": " as OpenCodeEvent",
+            "diagnostics": [
+              {
+                "file": "packages/daemon/test/paseo/providers/opencode/test-utils/v2-harness.ts",
+                "line": 187,
+                "column": 30,
+                "code": "TS2353",
+                "message": "Object literal may only specify known properties, and 'created' does not exist in type 'V2EventServerConnected'."
+              }
+            ]
+          }
+        ],
+        "modificationNotice": {
+          "start": 0,
+          "end": 0,
+          "line": 1,
+          "column": 1,
+          "form": "N",
+          "replacedText": "",
+          "insertedText": "// Modified from Paseo: type-only edits erased at compile time; see packages/daemon/src/agent/paseo/closure.json.\n"
+        }
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/pi/test-utils/fake-pi.ts",
+        "destination": "packages/daemon/test/paseo/providers/pi/test-utils/fake-pi.ts",
+        "pinnedSha256": "05c9fc23105771fa6a846d7314974da6b7ee12ed7b8fdc4fbea1d889653364ee",
+        "integratedSha256": "c07ffe9094c81b93974fd9f6411361b95afa3b5ebb960a668800cf3fcf2b096f",
+        "modificationKind": "specifiers",
+        "role": "test-only fixture",
+        "changes": [
+          {
+            "from": "../runtime.js",
+            "to": "../../../../../src/agent/providers/pi/runtime.js"
+          },
+          {
+            "from": "../rpc-types.js",
+            "to": "../../../../../src/agent/providers/pi/rpc-types.js"
+          },
+          {
+            "from": "../runtime.js",
+            "to": "../../../../../src/agent/providers/pi/runtime.js"
+          }
+        ],
+        "sourceImports": [
+          "../runtime.js",
+          "../rpc-types.js",
+          "../runtime.js"
+        ],
+        "integratedImports": [
+          "../../../../../src/agent/providers/pi/runtime.js",
+          "../../../../../src/agent/providers/pi/rpc-types.js",
+          "../../../../../src/agent/providers/pi/runtime.js"
+        ]
+      }
+    ],
+    "testCaseExclusions": [
+      {
+        "source": "packages/server/src/server/agent/providers/acp-agent.test.ts",
+        "case": "maps the Kiro _kiro.dev/commands/available notification into slash commands and skills",
+        "reason": "excluded kiro-acp-agent parser"
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/acp-agent.test.ts",
+        "case": "ignores Kiro _kiro.dev/commands/available for a different session",
+        "reason": "excluded kiro-acp-agent parser"
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/acp-agent.test.ts",
+        "case": "settles listCommands() immediately on an empty Kiro commands batch",
+        "reason": "excluded kiro-acp-agent parser"
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/acp-agent.test.ts",
+        "case": "runs on a model added through additionalModels that the agent does not advertise",
+        "reason": "excluded provider-registry"
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/acp-agent.test.ts",
+        "case": "runs on a model from a replacement models list that the agent does not advertise",
+        "reason": "excluded provider-registry"
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/acp-agent.test.ts",
+        "case": "runs on a model from additionalModels when the agent advertises no models",
+        "reason": "excluded provider-registry"
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/acp-agent.test.ts",
+        "case": "resumes on a model added through additionalModels that the agent does not advertise",
+        "reason": "excluded provider-registry"
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/acp-agent.test.ts",
+        "case": "keeps the agent's model when the requested model is neither advertised nor configured",
+        "reason": "excluded provider-registry"
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/generic-acp-agent.diagnostic.test.ts",
+        "case": "sends configured client capabilities in catalog and live session initialization",
+        "reason": "excluded provider-registry"
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/bridge.test.ts",
+        "case": "serves authenticated session context and caller-scoped tools",
+        "reason": "removed OpenCodeBridge route server"
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/bridge.test.ts",
+        "case": "v2 plugin filters caller tools and inherits child session bindings",
+        "reason": "removed OpenCodeBridge route server"
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/bridge.test.ts",
+        "case": "v2 plugin returns a tool image as OpenCode file content",
+        "reason": "removed OpenCodeBridge route server"
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/bridge.test.ts",
+        "case": "packages the v2 bridge as a directory with a server entry point",
+        "reason": "removed OpenCodeBridge class"
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/opencode/bridge.test.ts",
+        "case": "preserves user OpenCode config while installing one content-addressed plugin",
+        "reason": "removed OpenCodeBridge class"
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/pi/extensions/index.test.ts",
+        "case": "claims a tool, declines an unrelated one, and maps history like live events",
+        "reason": "removed Pi subagent extension"
+      },
+      {
+        "source": "packages/server/src/server/agent/providers/pi/agent.test.ts",
+        "case": "combines Pi ask_user select and optional comment into one permission",
+        "reason": "removed Pi ask_user extension"
+      }
+    ]
+  }
 }

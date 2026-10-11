@@ -1,0 +1,42 @@
+Owned test root: /private/tmp/vonvon-root-b1.rtOqOd
+
+> @vonvon/daemon@0.7.0 typecheck
+> tsc --noEmit
+
+src/agent/providers/pi/cli-runtime.ts(63,7): error TS2322: Type 'string | undefined' is not assignable to type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+test/paseo/providers/acp-agent.test.ts(952,13): error TS2322: Type '{ group: string; options: { value: string; name: string; description: string; }[]; }' is not assignable to type 'SessionConfigSelectOption | SessionConfigSelectGroup'.
+  Property 'name' is missing in type '{ group: string; options: { value: string; name: string; description: string; }[]; }' but required in type 'SessionConfigSelectGroup'.
+test/paseo/providers/acp-agent.test.ts(1513,5): error TS2741: Property 'prompt' is missing in type '{}' but required in type '{ prompt: (...args: unknown[]) => Promise<PromptResponse>; }'.
+test/paseo/providers/acp-agent.test.ts(2844,19): error TS2345: Argument of type 'Usage' is not assignable to parameter of type 'PromptResponse'.
+  Property 'stopReason' is missing in type 'Usage' but required in type 'PromptResponse'.
+test/paseo/providers/acp-agent.test.ts(2844,19): error TS2352: Conversion of type '{ stopReason: string; usage: { outputTokens: number; }; }' to type 'Usage' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type '{ stopReason: string; usage: { outputTokens: number; }; }' is missing the following properties from type 'Usage': inputTokens, outputTokens, totalTokens
+test/paseo/providers/acp-agent.test.ts(3314,5): error TS2322: Type 'ClientSideConnection' is not assignable to type '{ prompt: (...args: unknown[]) => Promise<PromptResponse>; }'.
+  Types of property 'prompt' are incompatible.
+    Type '(params: PromptRequest) => Promise<PromptResponse>' is not assignable to type '(...args: unknown[]) => Promise<PromptResponse>'.
+      Types of parameters 'params' and 'args' are incompatible.
+        Type 'unknown' is not assignable to type 'PromptRequest'.
+test/paseo/providers/acp-agent.test.ts(3948,21): error TS2352: Conversion of type '{ loadSession: true; supportsMcpServers: true; }' to type 'AgentCapabilityFlags' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type '{ loadSession: true; supportsMcpServers: true; }' is missing the following properties from type 'AgentCapabilityFlags': supportsStreaming, supportsSessionPersistence, supportsDynamicModes, supportsReasoningStream, supportsToolInvocations
+test/paseo/providers/acp-agent.test.ts(3980,21): error TS2352: Conversion of type '{ loadSession: true; }' to type 'AgentCapabilityFlags' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type '{ loadSession: true; }' is missing the following properties from type 'AgentCapabilityFlags': supportsStreaming, supportsSessionPersistence, supportsDynamicModes, supportsMcpServers, and 2 more.
+test/paseo/providers/acp-agent.test.ts(4037,21): error TS2352: Conversion of type '{ loadSession: true; }' to type 'AgentCapabilityFlags' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type '{ loadSession: true; }' is missing the following properties from type 'AgentCapabilityFlags': supportsStreaming, supportsSessionPersistence, supportsDynamicModes, supportsMcpServers, and 2 more.
+test/paseo/providers/acp-agent.test.ts(4100,21): error TS2352: Conversion of type '{ loadSession: true; }' to type 'AgentCapabilityFlags' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type '{ loadSession: true; }' is missing the following properties from type 'AgentCapabilityFlags': supportsStreaming, supportsSessionPersistence, supportsDynamicModes, supportsMcpServers, and 2 more.
+test/paseo/providers/acp-agent.test.ts(4122,21): error TS2352: Conversion of type '{ loadSession: true; supportsMcpServers: false; }' to type 'AgentCapabilityFlags' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type '{ loadSession: true; supportsMcpServers: false; }' is missing the following properties from type 'AgentCapabilityFlags': supportsStreaming, supportsSessionPersistence, supportsDynamicModes, supportsReasoningStream, supportsToolInvocations
+test/paseo/providers/acp-agent.test.ts(4138,23): error TS2322: Type '{ resume: {}; }' is not assignable to type 'boolean | undefined'.
+test/paseo/providers/opencode/test-utils/v2-harness.ts(152,7): error TS2322: Type '(input: SessionPromptInput, options: RequestOptions | undefined) => Promise<void>' is not assignable to type '(input: SessionPromptInput, requestOptions?: RequestOptions | undefined) => Promise<SessionInboxUser>'.
+  Type 'Promise<void>' is not assignable to type 'Promise<SessionInboxUser>'.
+    Type 'void' is not assignable to type 'SessionInboxUser'.
+test/paseo/providers/opencode/v2/configuration.test.ts(12,37): error TS2741: Property 'kind' is missing in type '{ server: string; tool: string; }' but required in type 'McpToolRef'.
+test/paseo/providers/pi/extensions/index.test.ts(128,125): error TS2339: Property 'requestPermission' does not exist on type 'PiExtensionHost'.
+npm error Lifecycle script `typecheck` failed with error:
+npm error code 2
+npm error path /Users/clay/develop/src/github.com/ClayCheung/vonvon-bot-worktrees/v7-providers/packages/daemon
+npm error workspace @vonvon/daemon@0.7.0
+npm error location /Users/clay/develop/src/github.com/ClayCheung/vonvon-bot-worktrees/v7-providers/packages/daemon
+npm error command failed
+npm error command sh -c tsc --noEmit

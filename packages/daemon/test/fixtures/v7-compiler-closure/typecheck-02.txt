@@ -1,0 +1,26 @@
+Owned test root: /private/tmp/vonvon-root-b1.M95NIF
+{"files":17,"edits":99}
+
+> @vonvon/daemon@0.7.0 typecheck
+> tsc --noEmit
+
+src/agent/providers/pi/cli-runtime.ts(63,7): error TS2322: Type 'string | undefined' is not assignable to type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+test/paseo/providers/acp-agent.test.ts(951,11): error TS2322: Type '(SessionConfigSelectOption | SessionConfigSelectGroup)[]' is not assignable to type 'SessionConfigSelectOptions'.
+  Type '(SessionConfigSelectOption | SessionConfigSelectGroup)[]' is not assignable to type 'SessionConfigSelectOption[]'.
+    Type 'SessionConfigSelectOption | SessionConfigSelectGroup' is not assignable to type 'SessionConfigSelectOption'.
+      Property 'value' is missing in type 'SessionConfigSelectGroup' but required in type 'SessionConfigSelectOption'.
+test/paseo/providers/acp-agent.test.ts(4138,21): error TS2352: Conversion of type '{ sessionCapabilities: { resume: {}; }; }' to type 'AgentCapabilityFlags' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type '{ sessionCapabilities: { resume: {}; }; }' is missing the following properties from type 'AgentCapabilityFlags': supportsStreaming, supportsSessionPersistence, supportsDynamicModes, supportsMcpServers, and 2 more.
+test/paseo/providers/opencode/test-utils/v2-harness.ts(152,15): error TS2352: Conversion of type '(input: SessionPromptInput, options: RequestOptions | undefined) => Promise<void>' to type '(input: SessionPromptInput, requestOptions?: RequestOptions | undefined) => Promise<SessionInboxUser>' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type 'Promise<void>' is not comparable to type 'Promise<SessionInboxUser>'.
+    Type 'void' is not comparable to type 'SessionInboxUser'.
+test/paseo/providers/pi/extensions/index.test.ts(128,9): error TS2352: Conversion of type '{ id: string; provider: string; kind: "question"; title: string; input: { questions: never[]; }; }' to type 'AgentPermissionRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Property 'name' is missing in type '{ id: string; provider: string; kind: "question"; title: string; input: { questions: never[]; }; }' but required in type 'AgentPermissionRequest'.
+npm error Lifecycle script `typecheck` failed with error:
+npm error code 2
+npm error path /Users/clay/develop/src/github.com/ClayCheung/vonvon-bot-worktrees/v7-providers/packages/daemon
+npm error workspace @vonvon/daemon@0.7.0
+npm error location /Users/clay/develop/src/github.com/ClayCheung/vonvon-bot-worktrees/v7-providers/packages/daemon
+npm error command failed
+npm error command sh -c tsc --noEmit

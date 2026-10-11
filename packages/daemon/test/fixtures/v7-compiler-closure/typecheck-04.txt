@@ -1,0 +1,20 @@
+Owned test root: /private/tmp/vonvon-root-b1.1ebSWu
+{"files":17,"edits":101}
+
+> @vonvon/daemon@0.7.0 typecheck
+> tsc --noEmit
+
+src/agent/providers/pi/cli-runtime.ts(63,7): error TS2322: Type 'string | undefined' is not assignable to type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+test/paseo/providers/opencode/test-utils/v2-harness.ts(133,14): error TS2352: Conversion of type '{ form: { list: () => Promise<never[]>; reply: () => never; cancel: () => never; }; create: (input?: SessionCreateInput | undefined) => Promise<SessionInfo>; ... 13 more ...; log: (input: SessionLogInput) => AsyncGenerator<...>; }' to type 'Pick<{ list: (input?: SessionListInput | undefined, requestOptions?: RequestOptions | undefined) => Promise<SessionsResponse>; ... 31 more ...; view: (input: SessionViewInput, requestOptions?: RequestOptions | undefined) => Promise<...>; }, "command" | ... 13 more ... | "revert"> & { ...; }' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type '{ form: { list: () => Promise<never[]>; reply: () => never; cancel: () => never; }; create: (input?: SessionCreateInput | undefined) => Promise<SessionInfo>; ... 13 more ...; log: (input: SessionLogInput) => AsyncGenerator<...>; }' is not comparable to type 'Pick<{ list: (input?: SessionListInput | undefined, requestOptions?: RequestOptions | undefined) => Promise<SessionsResponse>; ... 31 more ...; view: (input: SessionViewInput, requestOptions?: RequestOptions | undefined) => Promise<...>; }, "command" | ... 13 more ... | "revert">'.
+    The types returned by 'prompt(...)' are incompatible between these types.
+      Type 'Promise<void>' is not comparable to type 'Promise<SessionInboxUser>'.
+        Type 'void' is not comparable to type 'SessionInboxUser'.
+npm error Lifecycle script `typecheck` failed with error:
+npm error code 2
+npm error path /Users/clay/develop/src/github.com/ClayCheung/vonvon-bot-worktrees/v7-providers/packages/daemon
+npm error workspace @vonvon/daemon@0.7.0
+npm error location /Users/clay/develop/src/github.com/ClayCheung/vonvon-bot-worktrees/v7-providers/packages/daemon
+npm error command failed
+npm error command sh -c tsc --noEmit
