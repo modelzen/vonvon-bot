@@ -364,10 +364,33 @@
       "destination": "packages/daemon/src/agent/providers/claude/agent.ts",
       "sha256": "41351a3c995142ae296567637c7611e24305579b4694947d0b685a50f284ef2f",
       "modificationKind": "adapted",
-      "state": "authorizedByClaude97330b7",
+      "state": "authorizedByClaude793d5bc",
       "stagedSha256": "61a01950240c1f5f029cd4b9efec99a59bed4094e949be402bbb44e0a63511d1",
-      "integratedSha256": "f1142c6897323c9bdba6a6930a0d8ce441ebcf0a4af172d45cab8a7293efa98a",
-      "reason": "Redirect Pino Logger type to structural logger; guard removed slash-command array item"
+      "integratedSha256": "785535a0d269da1bbcb8f807310c88a93b15ca154ef35f3fc6bc14d225fd4b08",
+      "reason": "Retarget local imports and structural Logger type; sole approved runtime adaptation removes local from CLAUDE_SETTING_SOURCES. Restore pinned unconditional slash push with erased non-null assertion required by noUncheckedIndexedAccess; emitted-JavaScript identity proved in .audit/v6-wrapper-implementation/slash-parity.log.",
+      "logicAdaptations": [
+        {
+          "symbol": "CLAUDE_SETTING_SOURCES",
+          "before": [
+            "user",
+            "project",
+            "local"
+          ],
+          "after": [
+            "user",
+            "project"
+          ],
+          "authority": "docs/plan.md at793d5bc V6 Copied-source exceptions"
+        }
+      ],
+      "typeOnlyAdaptations": [
+        {
+          "symbol": "slash-command reorder",
+          "integrated": "content.push(slashCommand!);",
+          "pinnedRuntime": "content.push(slashCommand);",
+          "proof": "TypeScript5.8.3 emitted JavaScript byte-identical for all runtime values; audit slash-parity.cjs/log"
+        }
+      ]
     },
     {
       "source": "packages/server/src/server/agent/providers/claude/feature-definitions.ts",
@@ -2939,7 +2962,7 @@
       "integratedSha256": "e5345dd03c4b8d8cfa293f45dac2b9684d3507587f7ed2f268b780e5b5886242"
     }
   ],
-  "authorization": "docs/plan.md at 97330b7: V6 Import closure and Permission mapping",
+  "authorization": "docs/plan.md at 97330b7: V6 Import closure and Permission mapping; docs/plan.md at793d5bc: sole settings-source runtime adaptation and restore pinned slash runtime",
   "addedFiles": [
     {
       "destination": "packages/daemon/src/agent/paseo/provider-subagents/types.ts",

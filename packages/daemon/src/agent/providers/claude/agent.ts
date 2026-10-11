@@ -1,4 +1,4 @@
-// Modified for Vonvon Bot: local imports, structural logger type, and strict slash-command item guard.
+// Modified for Vonvon Bot: local imports, structural logger type, user/project settings, and an erased slash-command type assertion.
 import { validateProviderOptions } from "../../paseo/provider-options.js";
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -153,7 +153,6 @@ const fsPromises = promises;
 const CLAUDE_SETTING_SOURCES: NonNullable<ClaudeOptions["settingSources"]> = [
   "user",
   "project",
-  "local",
 ];
 
 function readNonEmptyString(value: unknown): string | null {
@@ -3521,7 +3520,7 @@ class ClaudeAgentSession implements AgentSession {
     }
     if (typedSlashCommandIndex >= 0 && typedSlashCommandIndex < content.length - 1) {
       const [slashCommand] = content.splice(typedSlashCommandIndex, 1);
-      if (slashCommand) content.push(slashCommand);
+      content.push(slashCommand!);
     }
 
     const messageId = randomUUID();

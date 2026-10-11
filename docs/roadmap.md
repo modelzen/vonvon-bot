@@ -14,7 +14,7 @@
 | V4 | 补全 `packages/client`，新建 `packages/ui`。移植界面，`window.bridge` 换成注入的客户端，daemon 在本机提供网页。旧界面用到、`H3` 还返回 `unsupported` 的请求逐个定归属：环境页、刷新、机器状态和日志由 daemon 补上；打开和复制链接在浏览器里做；只和桌面应用有关的操作交给 V5 的外壳能力。Codex 可执行文件路径改用现有的主机设置保存 | V3 |
 | V5 | `packages/desktop`。Electron 外壳拉起或连接 daemon，加载界面，托盘，开机自动运行，自动更新。Vonvon 自己的系统服务（服务标识、安装和卸载、原生验收）也在这里第一次提供 | V4 |
 | V6 | Claude Code provider。移植 Paseo 的实现和 `AgentSession` 到 `AgentBackend` 的适配器，删除 bridge 的 Claude 后端 | V3 |
-| V7 | 其他 provider。通用 ACP 和 Copilot、OpenCode、Pi | V6；provider 选择器的验收要 V4 的网页 |
+| V7 | 其他 provider。通用 ACP 和 Copilot、OpenCode（只移植 V2 客户端，要求 2.0.10 及以上）、Pi | V6；provider 选择器的验收要 V4 的网页 |
 | V8 | 导入 bridge 数据并关停旧服务。macOS、Linux、Windows 三个平台，界面引导和 `vonvon import feishu-codex-bridge` | V4 |
 | V9 | feishu-codex-bridge 仓库的收尾版本。引导用户安装 Vonvon Bot，发现已迁移标记时拒绝启动 | V8，以及 Mac 发布的安装包 |
 | V10 | 账号和机器登记。`packages/cloud`、飞书和 Lark 登录、`vonvon login`、桌面端登录、机器列表和在线状态 | V4；桌面端登录的验收要 V5 |
@@ -27,23 +27,27 @@
 | 编号 | 从哪里开始写 | 部分工作要等 |
 | --- | --- | --- |
 | V4 | V3 的当前 head（`H3`，根代理把最新 `main` merge 进 V3 后记录） | 无 |
-| V5 | V4 冻结点 `F4`（客户端浏览器和 preload 入口、注入客户端接口和可选的外壳能力对象、`ui/dist` 构建路径、界面功能登记文件） | 系统服务文件和 `login-item.ts` 也从 `F4` 开始，只有 Gate L 和 Gate M 两条路径要等 Claude Code 补设计。V5 的验收和合并等这两处补完，原生验收还要等专门的测试用户 |
-| V6 | `H3` | 无 |
-| V7 | V6 冻结点 `F6`（完整复制的 `agent-sdk-types.ts`、`session-backend.ts` 和它的单元测试） | provider 编号和选择器等 V4 合并 |
+| V5 | V4 冻结点 `F4`（客户端浏览器和 preload 入口、注入客户端接口和可选的外壳能力对象、`ui/dist` 构建路径、界面功能登记文件）；外壳的本机认证连接单元只依赖 `F4`，和 Gate L、Gate M 无关 | 系统服务文件和 `login-item.ts`（包括 `service/drain.ts`、Gate L 和 Gate M，设计已定）也从 `F4` 开始；`install` 和 `uninstall` 在事务、拿锁前检查、两道 Gate 和它们的测试全部集成之前一直拒绝；只有原生验收等测试账号（Mac 上按用户 2026-10-11 的授权可用 `clay`，Linux 仍要专门用户） |
+| V6 | `H3` | 无。包装代码的修复不依赖 V5 |
+| V7 | V6 冻结点 `F6`（完整复制的 `agent-sdk-types.ts`、`session-backend.ts` 和它的单元测试），不等 V6 写完；三个机械叶子（`jsonl-frame-decoder`、`jsonl-rpc-process`、ACP 选项）可以先做，但不算 provider 验收 | provider 编号和选择器等 V4 合并 |
 | V8 | `H3` 或 V3 合并后的 `main`：导入执行器、旧服务控制、`vonvon import`、`import.ts` | 界面引导等 `F4` |
 | V9 | bridge 仓库 `origin/codex/device-handoff`，只依赖已定的标记文件名 | 下载链接的验收等 Mac 发布的签名安装包 |
-| V10 | `H3` 或 `main`：`packages/cloud`、daemon 云端连接、`vonvon login` | 账号界面等 `F4` |
-| V11 | `main`：端到端加密的移植和测试 | 其余等 V10 冻结点 `F10`，客户端转发和机器切换还要 `F4` |
+| V10 | `H3` 或 `main`：`packages/cloud`、设备仓库接口及其 Postgres 和内存实现、daemon 云端连接、`vonvon login` | 账号界面等 `F4` |
+| V11 | `main`：端到端加密的移植（含 `base64.ts`）和测试 | 其余等 V10 冻结点 `F10`，客户端转发和机器切换还要 `F4` |
+
+上表里不等上游验收就能先做的叶子：V5 外壳的认证连接单元，V5 的服务标识、定义编解码、读回和排空（纯逻辑，管理器查询注入），V6 的包装修复，V7 的三个机械叶子，V10 的设备仓库，V11 的加密移植。先做只是开发，不满足任何验收项，也不改变合并顺序。
 
 协议的汇总文件（`index.ts`、`domain.ts`、`rpc.ts`、`events.ts`、`handshake.ts`）、`cli/index.ts` 的命令登记、根目录的 `package.json` 和 lockfile、`NOTICE`、界面功能登记文件都由根代理在集成时改，各 PR 只拥有自己新增的文件。三个长期负责人各管一块：客户端界面（V4、V5、V11 的客户端部分），provider（V6、V7，之后 V9），机器平台（先跑 V3 的正式检查，再做 V8、V10、V11 的云端部分）。具体的分支、文件归属和前两波安排见 [plan.md](plan.md) *Parallel execution* 的 *Dependencies* 到 *Wave 2*。
 
-整条路线最慢的一段是 V4、V5（要专门的系统测试用户、Linux systemd 用户会话和签名）、签名安装包、V9、V10、V11。所以测试用户和 systemd 环境在第一波就向用户要，不等 V4 开始。
+整条路线最慢的一段是 V4、V5（要 Gate L 和 Gate M 的原生验收、Mac 图形会话（按用户授权可用 `clay`）、Linux 专门测试用户和 systemd 用户会话、签名）、签名安装包、V9、V10、V11。所以测试用户和 systemd 环境在第一波就向用户要，不等 V4 开始。
 
 ## 谁来做
 
 分工按仓库根目录的 `AGENTS.md`。Linux 上的 Claude Code 通常负责这三份文档，不写产品代码。2026-10-10 Claude Code CLI 认证返回 HTTP 401 后，用户明确授权 Codex 直接修订这次 V2 澄清并继续。Mac 上的 Codex 负责全部实现和检查，也负责打包、签名、公证。V9 需要的安装包下载地址来自 Mac 的发布。
 
-V5 和 V8 里有 systemd 检查，Mac 上跑不了。Codex 在 Linux 虚拟机或有用户会话的 Linux 环境里跑这几条，托管 CI 不能顶替。V5 的原生服务检查要用专门的系统测试用户，不在用户自己的账号里跑。V8 安装旧 bridge 服务的检查和原 bridge 用同一个服务标识，也要在专门的测试用户里跑，不碰用户账号里在用的 bridge。较早的环境报告只确认了日常用户的 Mac 图形会话，也没有确认可用的 Linux systemd 用户会话。第一波先只读检查现有专用测试环境，只向用户请求缺少的能力；`ci-user` 保留给 CI，不用于系统服务验收。第一波的只读检查结果：Mac 上有用户 `test-user`（uid 502），但它没有图形会话（`gui/502` 不存在）；Linux 上 `operator` 的 systemd 用户会话在运行，但还没有专门的测试用户。所以要有人用快速切换用户或屏幕共享把 `test-user` 登录进图形会话，并在验收期间保持登录；Linux 要一个开启 linger 的专门用户。根代理有权限就自己建，没有就并入向用户提的那一个请求。只有 V5 的原生验收等这两样，V4、V6 和 V5 的其他工作不等。
+V5 和 V8 里有 systemd 检查，Mac 上跑不了。Codex 在 Linux 虚拟机或有用户会话的 Linux 环境里跑这几条，托管 CI 不能顶替。V5 的原生服务检查通常用专门的系统测试用户，Mac 上可按下文的用户授权在 `clay` 中使用隔离的数据和 Vonvon 服务标识。V8 安装旧 bridge 服务的检查和原 bridge 用同一个服务标识，也要在专门的测试用户里跑，不碰用户账号里在用的 bridge。较早的环境报告只确认了日常用户的 Mac 图形会话，也没有确认可用的 Linux systemd 用户会话。第一波先只读检查现有专用测试环境，只向用户请求缺少的能力；`ci-user` 保留给 CI，不用于系统服务验收。第一波的只读检查结果：Mac 上有用户 `test-user`（uid 502），但它没有图形会话（`gui/502` 不存在）；Linux 上 `operator` 的 systemd 用户会话在运行，但还没有专门的测试用户。所以要有人用快速切换用户或屏幕共享把 `test-user` 登录进图形会话，并在验收期间保持登录；Linux 要一个开启 linger 的专门用户。根代理有权限就自己建，没有就并入向用户提的那一个请求。只有 V5 的原生验收等这两样，V4、V6 和 V5 的其他工作不等。
+
+2026-10-11 用户回答 V5/V8 的测试账号问题，直接授权在 `clay` 中测试。V5 的 macOS 系统服务测试（原生 launchd 检查和第 6 路的 Mac 部分）因此不再等 `test-user`。条件是：只用这次运行自建的临时 `VONVON_HOME`；产品服务标识 `com.vonvon.bot.daemon` 不改名，开跑前只读确认 `clay` 里没有这个任务和 plist，运行结束用 `uninstall` 删掉；不碰 `ai.feishu-codex-bridge.bot`、bridge 数据和其他 LaunchAgent，不改 `~/Library/LaunchAgents` 的权限，不用 `ci-user`；开跑前和结束后记录在用 bridge（根代理记录为 PID 2253）的 pid、启动时间和 TCP 监听，有任何变化就停止并判失败，不重启 bridge。V8 同样已获 `clay` 测试授权，但 Mac 上安装旧 bridge 服务的检查和在用 bridge 标识冲突，仍需隔离的执行环境。这是操作约束，不是缺少用户授权；不能触碰或重启在用 bridge。Linux 账号的授权另算，尚未确认。细则见 [plan.md](plan.md) V5 的 *Native acceptance environment*。
 
 Codex 可以并行开发，本机同时最多一个根代理加三个工作代理。根代理是唯一的 Git 和 forge 写入者，负责建工作树、集成、提交、推送、开 PR、合并和 Shipping。工作代理各用根代理建的工作树，只改分给自己的文件，各自运行 npm ci，不提交、不推送。每个 PR 先由各工作代理写测试、做组件验证，根代理集成后跑一次完整检查，再做独立审查，冻结 head 后才跑十路实时、性能、原生检查和 Shipping。连着测试 Bot 的检查仍然逐个跑，用独立数据目录的检查可以同时跑。并行只提前开发起点（见上文“开发起点”），不改变合并顺序、验收依赖、架构、数据形状和验证门槛。V10 的云端部分可以在 V3 之后就开始开发，但按路线顺序要等 V9 合并后才合并，不需要另问用户。merge `main` 之后，patch-id 不变只是审查结论继续有效的必要条件：基线、依赖版本或相关证据变了，就要重跑受影响的检查，并重新拿独立审查结论。具体分工见 [plan.md](plan.md) 的 *Parallel execution*。
 
@@ -75,15 +79,15 @@ Linux 保留 GitHub 托管的 Ubuntu，Windows 用托管的 `windows-2025`；mac
 
 - 飞书长连接模式下，同一个 Bot 的两个客户端只有一个收到事件。在 V8 里用两个进程连同一个测试 Bot 验证，结果决定导入时是否必须先暂停 bridge。
 - `AgentSession` 到 `AgentBackend` 的适配器能完整映射文本流、工具调用、权限请求、中断和追加消息。在 V6 里用真实的 Claude Code 跑一遍飞书卡片的完整流程。
-- launchd 和 systemd 在 daemon 正常停止、异常退出、崩溃或 `kill -9` 后是否重新拉起。V3 不装系统服务。V5 的服务设计已经定下策略：只在失败时拉起（launchd `KeepAlive` 设为 `SuccessfulExit: false`，systemd `Restart=on-failure`），停止退出 0，重启退出 75、由系统服务管理器在原端口拉起；Core 更新另由 V3 的重启助手完成那条更新记录，Linux 上这条路径等 Gate L。卸载先撤下服务定义，再停止并卸载服务。Vonvon 自己从不通过管理器停止正在运行的 daemon。这套策略要用专门的系统测试用户在 Mac 和 Linux 上实测。实测之前，所有和系统服务有关的结论都只来自源码和文档。Windows 没有可用主机，它的启动项循环只做单元测试，真实机器上的拉起行为未经验证。
+- launchd 和 systemd 在 daemon 正常停止、异常退出、崩溃或 `kill -9` 后是否重新拉起。V3 不装系统服务。V5 的服务设计已经定下策略：只在失败时拉起（launchd `KeepAlive` 设为 `SuccessfulExit: false`，systemd `Restart=on-failure`），停止退出 0，重启退出 75、由系统服务管理器在原端口拉起；Core 更新另由 V3 的重启助手完成那条更新记录，Linux 上确认助手进了单独的 scope 并已启动后才放锁（Gate L）。macOS 只在“撤下定义、排空”之后才 `bootout`（Gate M）。卸载先撤下服务定义，再停止并卸载服务。Vonvon 自己从不通过管理器停止正在运行的 daemon。这套策略要在 Mac 和 Linux 上实测：Linux 用专门的系统测试用户，Mac 按用户 2026-10-11 的授权可在 `clay` 里按上文条件跑。实测之前，所有和系统服务有关的结论都只来自源码和文档。Windows 没有可用主机，它的启动项循环只做单元测试，真实机器上的拉起行为未经验证。
 - bridge `446b2a4` 的已测基线为 153 个测试文件，其中 152 个通过、1 个有意跳过；1683 个用例通过、15 个有意跳过。搬进 `packages/daemon` 后，V2 要核对通过数和跳过数。跳过的 provider 实时测试不算作运行验收。V3 删除 `src/web` 后不再要求这个文件数，改为全部测试通过，并在 PR 里附上旧测试到 RPC 测试的映射表。
 
 ## 已知风险
 
-- 远程访问信任云端分发的 daemon 公钥。云端被攻破时可能被中间人攻击。V11 可以加一个可选的指纹核对，在 daemon 本机界面和远程客户端上显示同一串指纹。
+- 远程访问信任云端分发的 daemon 公钥。V11 保留 Paseo 的握手，`e2ee_ready` 是明文、没有认证。公钥被换成另一把有效公钥、而 daemon 一端是真的时，第一帧密文解不开，客户端断开并报错，不交换任何数据。云端被攻破、同时换公钥并冒充 daemon 一端时，可能被中间人攻击，V11 接受这个风险。以后可以加一个可选的指纹核对，在 daemon 本机界面和远程客户端上显示同一串指纹，那需要另行设计。
 - 桌面端内置的 daemon 和 npm 全局安装的 daemon 版本可能不同。V5 要处理协议版本不兼容时的提示和重启。
 - 每个系统用户只能注册一个 Vonvon 服务，对应一个数据目录。用别的 `VONVON_HOME` 安装会被拒绝，那个目录的 daemon 只能用 CLI 启动。快照的平台枚举里没有 Linux，形状又已冻结，所以 Linux 桌面端不提供开机自动运行开关，Linux 用户用 `vonvon service install`。
-- V5 还有两处服务设计没完成：Linux 上托管 Core 更新时重启助手的就绪确认（Gate L），以及 macOS 安装时加载、替换任务和回滚卸载的安全做法（Gate M）。这两处由 Claude Code 之后补上，在那之前 Codex 不实现这两条路径，V5 不能验收和合并。V4、V6 和 V5 的其他部分不受影响。macOS 上另起进程组的助手不会被 launchd 回收，这一点有 `launchd.plist(5)` 的文档支持，但仍要原生验收。
+- V5 的两处服务设计（Gate L、Gate M）已经补上，但依据只有源码和文档。Linux 的就绪确认读 `/proc` 里的 cgroup 和命令行，前提是统一的 cgroup 层级，并且服务退出时不会波及单独的 scope，这两点要在 Linux 测试用户上实测助手能活过 exit 75。macOS 安装回滚后，旧任务不会加载，要等 `vonvon daemon start` 或下次登录，这一点也要原生验收。macOS 上另起进程组的助手不会被 launchd 回收，这一点有 `launchd.plist(5)` 的文档支持，同样要原生验收。安装回滚和续做的卸载只停止经过四步证明的任务子进程，这个证明依赖两条假设：管理器查到的 pid 是准的（要原生验收确认），以及 `(pid, startedAt)` 只对应一个进程。后者沿用 V3 锁文件的格式，只有系统时钟恰好倒退一个进程寿命时才会失效，失效时最多停掉这个数据目录里、用本目录凭据应答的 Vonvon daemon。停止请求如果失败，包括已被接受、只是回复丢了的情况，一律记为“停止未确认”：不再发停止，不卸载，不写回定义，注册保持撤下，结果报未完成并给出 pid，之后再跑一次 `vonvon service uninstall` 收尾。
 - 云端的部署平台还没定。vonvon-bridge-legacy 有 `deploy/tencent` 可以参考。
 - V3 起后端安装的输出只保留最后 256 KiB，`omittedBytes` 记下丢掉的字节数。从中途接上的客户端看不到更早的输出，失败原因仍由错误尾部给出。V3 不限制 npm 的运行时长。npm 卡住时，它会占着一个进程和对应的安装槽，直到 npm 退出或 daemon 停止。V3 起后端的安装、更新、卸载排队逐个执行，所以卡住的 npm 还会挡住排在后面的所有后端操作。等界面需要取消安装时，再定超时和取消的语义。查询后端最新版本的 `npm view` 也一样：8 秒时只发一次 SIGTERM，请求要等 npm 真正退出才回复；npm 不理 SIGTERM 时，这个请求和停止前的排空会一直等着，日志里有一条带 pid 的记录。
 - V2 合并后运行中的 daemon 没有接上停止和重启的回调，旧网页的这两个接口都返回 501（PR #24 和旧测试有记录）。复制来的源码里那段“停止时卸载服务”的辅助代码从没在 daemon 上运行过，不能当作旧版能用的证据。V3 第一次真正提供停止和重启，只针对用 CLI 启动的 daemon。复制来的服务代码仍用 bridge 的服务标识，运行它可能覆盖或删除原 bridge 的注册，所以 V3 的 `vonvon service install` 和 `uninstall` 一律报错退出，什么也不改。V2 时期如果有人用过 `vonvon service install`，留下的注册 V3 不检测也不删除。

@@ -1,0 +1,162 @@
+import { describe, expect, it, vi } from 'vitest';
+import type { Query } from '@anthropic-ai/claude-agent-sdk';
+import { createClaudeBackend } from '../src/agent/claude-provider';
+import { BRIDGE_DEVELOPER_INSTRUCTIONS } from '../src/agent/bridge-instructions';
+import type { AgentClient, AgentSession, AgentSessionConfig, AgentLaunchContext, AgentModelDefinition, AgentStreamEvent } from '../src/agent/paseo/agent-sdk-types';
+
+function fakeClient(models?: AgentModelDefinition[]) {
+  const listeners = new Set<(event: AgentStreamEvent) => void>();
+  const session = {
+    id: 'native-session',
+    subscribe(listener: (event: AgentStreamEvent) => void) {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
+    setThinkingOption: vi.fn(async (_option: string) => {}),
+    startTurn: vi.fn(async (_input: unknown) => {
+      for (const listener of listeners) listener({ type: 'turn_completed', provider: 'claude', turnId: 'turn-1' });
+      return { turnId: 'turn-1' };
+    }),
+    async *streamHistory() {
+      yield { type: 'timeline', provider: 'claude', item: { type: 'user_message', text: 'first' } };
+      yield { type: 'timeline', provider: 'claude', item: { type: 'assistant_message', text: 'answer' } };
+      yield { type: 'timeline', provider: 'claude', item: { type: 'user_message', text: 'second' } };
+      yield { type: 'timeline', provider: 'claude', item: { type: 'assistant_message', text: 'second answer' } };
+    },
+    close: vi.fn(async () => {}),
+  } as unknown as AgentSession;
+  const calls: { kind: string; config: AgentSessionConfig; context?: AgentLaunchContext; purpose?: string }[] = [];
+  const client = {
+    provider: 'claude',
+    isAvailable: vi.fn(async () => true),
+    createSession: vi.fn(async (config: AgentSessionConfig, context?: AgentLaunchContext) => {
+      calls.push({ kind: 'create', config, context });
+      return session;
+    }),
+    resumeSession: vi.fn(async (_handle: unknown, config: AgentSessionConfig, context?: AgentLaunchContext, options?: { purpose?: string }) => {
+      calls.push({ kind: 'resume', config, context, purpose: options?.purpose });
+      return session;
+    }),
+    fetchCatalog: vi.fn(async () => ({
+      models: models ?? [
+        { provider: 'claude', id: 'opus', label: 'Opus', description: 'reasoning', isDefault: true,
+          thinkingOptions: [{ id: 'low', label: 'Low' }, { id: 'high', label: 'High' }], defaultThinkingOptionId: 'high' },
+        { provider: 'claude', id: 'hidden', label: 'Hidden', isSelectable: false },
+      ], modes: [],
+    })),
+    listImportableSessions: vi.fn(async () => [{
+      providerHandleId: 'native-session', cwd: '/tmp/project', title: 'Named', firstPromptPreview: 'first',
+      lastPromptPreview: 'second', lastActivityAt: new Date('2026-01-02T00:00:00Z'),
+    }]),
+  } as unknown as AgentClient;
+  return { client, calls, session };
+}
+
+describe('Claude provider composition', () => {
+  it.each([
+    { providerDefault: 'max', defaultEffort: 'max' },
+    { providerDefault: 'ultracode', defaultEffort: 'ultra' },
+    { providerDefault: 'off', defaultEffort: 'none' },
+    { providerDefault: 'medium', defaultEffort: 'medium' },
+  ])('preserves provider options and the $providerDefault default through session and turn configuration', async ({ providerDefault, defaultEffort }) => {
+    const providerOptions = ['ultracode', 'max', 'off', 'xhigh', 'high', 'medium', 'low'];
+    const { client, calls, session } = fakeClient([{
+      provider: 'claude', id: 'opus', label: 'Opus',
+      thinkingOptions: [...providerOptions, 'unsupported'].map((id) => ({ id, label: id })),
+      defaultThinkingOptionId: providerDefault,
+    }]);
+    const backend = createClaudeBackend({ client });
+    const models = await backend.listModels();
+    expect(models).toHaveLength(1);
+    const model = models[0]!;
+    expect(model.supportedEfforts).toEqual(['ultra', 'max', 'none', 'xhigh', 'high', 'medium', 'low']);
+    expect(model.defaultEffort).toBe(defaultEffort);
+    for (const [index, effort] of model.supportedEfforts.entries()) {
+      const thread = await backend.startThread({ cwd: '/tmp/project', model: model.id, effort });
+      expect(calls.at(-1)?.config.thinkingOptionId).toBe(providerOptions[index]);
+      const events = [];
+      for await (const event of thread.runStreamed({ text: 'think' }, { effort }).events) events.push(event);
+      expect(events).toEqual([{ type: 'done', turnId: 'turn-1' }]);
+      expect(session.setThinkingOption).toHaveBeenLastCalledWith(providerOptions[index]);
+      await thread.close();
+    }
+  });
+
+  it('forwards model, effort, permissions, instructions, and hook marker on create and resume', async () => {
+    const { client, calls } = fakeClient();
+    const backend = createClaudeBackend({ client });
+    expect(backend.id).toBe('claude-agent');
+    expect(backend.displayName).toBe('Claude');
+    expect(backend.capabilities).toEqual({ goal: true, steer: true, compact: true, resume: true, approvals: false });
+    expect(backend.supportedModes).toEqual(['qa', 'write', 'full']);
+
+    await backend.startThread({ cwd: '/tmp/project', model: 'opus', effort: 'high', mode: 'qa', network: false });
+    await backend.resumeThread({ cwd: '/tmp/project', sessionId: 'native-session', model: 'opus', effort: 'ultra', mode: 'write' });
+    expect(calls.map((call) => call.kind)).toEqual(['create', 'resume']);
+    expect(calls[0]?.config).toMatchObject({
+      provider: 'claude', cwd: '/tmp/project', model: 'opus', thinkingOptionId: 'high',
+      modeId: 'bypassPermissions', daemonAppendSystemPrompt: BRIDGE_DEVELOPER_INSTRUCTIONS,
+      providerOptions: { sandbox: { enabled: true, filesystem: { denyWrite: ['/tmp/project'] } },
+        disallowedTools: ['Write', 'Edit', 'NotebookEdit', 'WebFetch', 'WebSearch'] },
+    });
+    expect(calls[1]?.config.thinkingOptionId).toBe('ultracode');
+    for (const call of calls) {
+      expect(call.context?.env).toMatchObject({ FEISHU_CODEX_BRIDGE: '1', CLAUDE_CODE_ENTRYPOINT: 'feishu-codex-bridge' });
+    }
+  });
+
+  it('uses the provider catalog and raw SDK session history without a turn', async () => {
+    const { client, calls, session } = fakeClient();
+    const listSessions = vi.fn(async () => [{
+      sessionId: 'native-session', customTitle: 'Named', summary: 'Summary', firstPrompt: 'first',
+      createdAt: 1767312000000, lastModified: 1767312000000, fileSize: 0,
+    }]);
+    const getSessionMessages = vi.fn(async () => [
+      { type: 'user', uuid: '1', session_id: 'native-session', parent_tool_use_id: null, parent_agent_id: null, message: { content: 'first' } },
+      { type: 'assistant', uuid: '2', session_id: 'native-session', parent_tool_use_id: null, parent_agent_id: null, message: { content: 'answer' } },
+      { type: 'user', uuid: '3', session_id: 'native-session', parent_tool_use_id: null, parent_agent_id: null, message: { content: 'second' } },
+      { type: 'assistant', uuid: '4', session_id: 'native-session', parent_tool_use_id: null, parent_agent_id: null, message: { content: 'second answer' } },
+    ] satisfies import('@anthropic-ai/claude-agent-sdk').SessionMessage[]);
+    const backend = createClaudeBackend({ client, history: { listSessions, getSessionMessages } });
+    expect(await backend.listModels()).toEqual([{
+      id: 'opus', displayName: 'Opus', description: 'reasoning', supportedEfforts: ['low', 'high'],
+      defaultEffort: 'high', isDefault: true, hidden: false,
+    }]);
+    expect(await backend.listThreads('/tmp/project')).toEqual([{
+      sessionId: 'native-session', preview: 'Named', name: 'Named', createdAt: 1767312000, updatedAt: 1767312000,
+    }]);
+    expect(await backend.readHistory('/tmp/project', 'native-session', 1)).toEqual({
+      turns: [{ userText: 'second', assistantText: 'second answer', reasoning: '', tools: [] }], totalTurns: 2,
+    });
+    expect(listSessions).toHaveBeenCalledWith({ dir: '/tmp/project', limit: 15 });
+    expect(getSessionMessages).toHaveBeenCalledWith('native-session', { dir: '/tmp/project' });
+    expect(calls).toHaveLength(0);
+    expect(session.startTurn).not.toHaveBeenCalled();
+    expect(session.close).not.toHaveBeenCalled();
+  });
+
+  it('keeps native titles readable, writable, and generated with the chosen model', async () => {
+    const { client } = fakeClient();
+    const getSessionInfo = vi.fn(async () => ({ customTitle: ' Named ' }));
+    const renameSession = vi.fn(async () => {});
+    const query = vi.fn((_input: unknown) => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: 'result', subtype: 'success', structured_output: { title: 'Generated' }, result: '' };
+      },
+      close: vi.fn(),
+    } as unknown as Query));
+    const backend = createClaudeBackend({ client, titles: {
+      getSessionInfo: getSessionInfo as unknown as typeof import('@anthropic-ai/claude-agent-sdk').getSessionInfo,
+      renameSession: renameSession as unknown as typeof import('@anthropic-ai/claude-agent-sdk').renameSession,
+      query: query as unknown as typeof import('@anthropic-ai/claude-agent-sdk').query,
+    } });
+    expect(await backend.readSessionTitle('/tmp/project', 'native-session')).toBe('Named');
+    await backend.setSessionTitle('/tmp/project', 'native-session', ' New ');
+    expect(renameSession).toHaveBeenCalledWith('native-session', 'New', { dir: '/tmp/project' });
+    expect(await backend.generateSessionTitle({ cwd: '/tmp/project', prompt: 'name it', model: 'opus', effort: 'high' })).toBe('Generated');
+    expect(query.mock.calls[0]?.[0]).toMatchObject({ prompt: 'name it', options: {
+      cwd: '/tmp/project', model: 'opus', effort: 'high', persistSession: false, maxTurns: 1,
+      tools: [], skills: [], settingSources: [],
+    } });
+  });
+});

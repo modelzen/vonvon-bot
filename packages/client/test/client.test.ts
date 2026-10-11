@@ -120,3 +120,29 @@ it("keeps observer failures inspectable while allowing RPC to complete", async (
   expect(failures).toEqual(["error observer failed"]);
   await client.close();
 });
+
+it("connects through the browser WebSocket API with the web hello", async () => {
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0, perMessageDeflate: false });
+  await new Promise<void>(resolve => server.once("listening", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("No loopback address");
+  const credential = "b".repeat(64);
+  server.on("connection", socket => {
+    let authenticated = false;
+    socket.on("message", data => {
+      const frame = JSON.parse(data.toString());
+      if (!authenticated) {
+        expect(frame).toEqual({ type: "hello", protocolVersion: PROTOCOL_VERSION, clientKind: "web", credential });
+        authenticated = true;
+        socket.send(JSON.stringify({ type: "serverInfo", machineId: randomUUID(), version: "1", protocolVersion: PROTOCOL_VERSION }));
+        return;
+      }
+      if (frame.method === "admin") socket.send(JSON.stringify({ type: "response", id: frame.id, method: "admin", payload: { kind: "state", state } }));
+    });
+  });
+  cleanup.push(async () => { for (const socket of server.clients) socket.terminate(); await new Promise<void>(resolve => server.close(() => resolve())); });
+  const { connectBrowser } = await import("../src/browser.js");
+  const client = await connectBrowser({ url: `ws://127.0.0.1:${address.port}`, credential });
+  expect(await client.admin({ type: "state" })).toEqual({ kind: "state", state });
+  await client.close();
+});

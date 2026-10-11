@@ -1,5 +1,5 @@
 import type { Options, SandboxSettings } from '@anthropic-ai/claude-agent-sdk';
-import type { PermissionMode } from '../types';
+import type { PermissionMode } from '../../src/agent/types';
 
 /**
  * Map a bridge permission tier (qa / write / full) to the Claude Agent SDK

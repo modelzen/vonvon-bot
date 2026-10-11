@@ -57,10 +57,13 @@ V5 的系统服务设计要点如下。
 - 注册了服务的数据目录只由系统服务管理器启动，`vonvon daemon start` 也交给管理器，失败就报错，不自己另起进程。
 - 管理器只在失败时重新拉起。停止退出 0，不会被拉起，注册保留。重启在排空后退出 75，由管理器按原端口拉起。崩溃或其他非零退出在 5 秒后拉起。Windows 没有服务管理器，由启动项运行的 `.cmd` 循环实现同样的规则。
 - Vonvon 从不通过管理器停止正在运行的 daemon，停止只走 `stopHost`。所以排空没有时限，停止优先的规则和 V3 一样。
-- Core 更新后的重启仍由 V3 的重启助手确认新进程，并只完成它自己持有的那条更新记录。在 macOS 和 Windows 上，助手和 V3 一样另起进程组；macOS 的 `launchd.plist(5)` 文档支持这样做，但还要原生验收。Linux 上助手怎样在放锁之前确认已经离开服务的 cgroup，还没有设计（Gate L）。
-- macOS 安装时的加载、替换已加载的任务、回滚时卸载任务，这几步的安全做法也还没有设计（Gate M）。这两处设计补上之前，Codex 不实现这两条路径，V5 也不能验收和合并。普通的托管重启和其他路径照常推进。
+- Core 更新后的重启仍由 V3 的重启助手确认新进程，并只完成它自己持有的那条更新记录。在 macOS 和 Windows 上，助手和 V3 一样另起进程组；macOS 的 `launchd.plist(5)` 文档支持这样做，但还要原生验收。Linux 上助手用 `systemd-run --user --scope` 放进单独的 scope。systemd 源码说明这一步不换 pid，但不会通知就绪，所以 daemon 自己查同一个 pid：它已经在这个 scope 里，命令行也已经换成助手，才提交并放锁（Gate L）。在这之前助手失败、超时或收到停止，都按 V3 的规则变成停止，那条更新记录写成 `error`。
+- macOS 上，`launchctl bootout` 只出现在一处“卸载屏障”里，也就是卸载时的“撤下定义、排空、再卸载”。安装时替换已加载的任务、回滚时卸载本次加载的任务，都走这道屏障。任务没加载时只做 `bootstrap`。回滚后旧任务留在磁盘上但不加载，等 `vonvon daemon start` 或下次登录（Gate M）。`bootout` 发出后失败、超时，或之后查询仍找到任务，就把状态当作未知：不写回定义，注册保持撤下，不再发第二次，报告未完成。
+- 每次卸载、安装替换和回滚在开始时定下排空范围，一直用到结束。从 `ours` 开始的卸载和安装替换停止数据目录的任何 daemon。安装回滚和从 `absent` 续做的卸载只停止能证明是本次任务子进程的 daemon，其他锁主人保留：不停止、不发信号、不等待，也不阻止卸载完成。证明按顺序做四次观察：读锁、查管理器的 pid、再读锁、经认证向那个端点核实 pid 后才发 `stopHost`。前三步对不上就保留这个主人，此时没有发过停止；同一个主人连续两次在前三步证明不了就报告未完成。证明依赖两条假设：管理器报告的 pid 是准的，`(pid, startedAt)` 只对应一个进程。前者要原生验收确认。Windows 查不到任务的 pid，所以这类事务在 Windows 上从不停止 daemon。
+- 管理器拉起的进程在拿 host 互斥锁和 pid 锁之前就检查注册和锁的主人（在 `host/bootstrap.ts` 里）：注册不属于自己，或者已经有别的 daemon 在运行，就直接退出 0。Bot 子进程不做这项检查。
 - 安装和卸载都是事务，失败时回滚或列出残留，重跑可以收敛。服务定义文件还在、但管理器里已经没有这个任务时，不算已安装。已安装但被手动停止的服务，再次安装时保持停止。
-- 卸载先撤下服务定义，再停止 daemon 并等它排空，最后才卸载服务。管理器启动的进程第一件事就是检查注册，发现不属于自己就在拿锁之前退出 0。所以卸载期间即使发生重新拉起，也不会有已接受的工作被打断。这一点依赖管理器查到的 pid 是准的：查询出错一律当作“有进程”，不卸载，并回滚。
+- 卸载先撤下服务定义，再停止 daemon 并等它排空，最后才卸载服务。管理器启动的进程第一件事就是检查注册，发现不属于自己就在拿锁之前退出 0。所以卸载期间即使发生重新拉起，也不会有已接受的工作被打断。这一点依赖管理器查到的 pid 是准的。卸载命令发出之前，查询出错一律当作“有进程”，不卸载，并写回本次撤下的定义。macOS 上 `bootout` 发出之后出错，按上面的“未知”处理，不写回。Linux 和 Windows 的卸载命令不发信号，失败时照 *Outcomes* 写回本次撤下的定义；安装回滚成功卸载后，也照表写回安装前的定义。
+- 停止请求沿用 V3 的 `stopVerifiedOwner`，接口不变。它只在收到 `done` 回复后才算成功；超时、连接出错或断开时，`stopHost` 可能已经发出并被接受，调用方分不清。所以任何一次停止请求失败都当作“停止未确认”：立即结束排空，不再发停止，不卸载，不写回定义，注册保持撤下，报告未完成并写明这个 pid。这样不会在可能正在排空的 daemon 之上卸载任务或恢复能重新拉起它的注册；它若已接受停止，就按没有时限的排空自行退出 0。每种失败对应的结果、注册状态和保留的主人列在 plan.md 的 *Outcomes* 表里。
 
 具体设计和原生验收步骤见 [plan.md](plan.md) V5 一节的 *Service gate*。
 
@@ -128,7 +131,7 @@ Paseo 的 provider 实现的是它自己的 `AgentClient` 和 `AgentSession` 接
 
 进程启动代码来自 Paseo plugin 包里的两个文件，整文件复制，保留 Windows 的引号处理。
 
-权限沿用 V3 的规则：三种模式都用 `bypassPermissions`，`qa` 和 `write` 再加沙箱，`qa` 还禁止写入。网络关闭或未设置时，`qa` 和 `write` 去掉联网工具，`full` 不受网络设置影响。Paseo 子 agent 面板专用的事件由适配器忽略。仍然到达的权限请求先记成被动的 `approval_request` 事件，再自动拒绝。飞书里不加交互式审批，协议也不变。
+权限沿用 V3 的规则：三种模式都用 `bypassPermissions`，`qa` 和 `write` 再加沙箱，`qa` 还禁止写入。网络关闭或未设置时，`qa` 和 `write` 去掉联网工具，`full` 不受网络设置影响。Claude 读取的设置来源和 V3 一样，只有 user 和 project。为此复制来的 `agent.ts` 只从 `CLAUDE_SETTING_SOURCES` 常量里删掉 `local`，新会话和恢复的会话都用这个常量，并记录原始哈希和改后哈希。这是复制代码里唯一的逻辑改动。V3 还有几项行为复制来的 provider 不提供：助手消息带 API 错误、随后是空的成功结果时报错，Bash 的描述，缓存 token 和上下文窗口的算法，以及原始工具历史。它们由 Vonvon 自己的包装代码从 SDK 原始消息和会话文件恢复，不改复制来的字节。V7 只另外允许两处改动：Pi 的 `pi/extensions/registry.ts` 删掉九个扩展的引用，`piExtensions` 改成空数组；OpenCode 的 `opencode/bridge.ts` 把 Paseo 内部路由服务 `OpenCodeBridge` 类换成同名接口，生成 V2 插件的函数不动。除这两处逻辑改动外，V7 只允许不改变生成 JavaScript 的类型层改动，让复制来的代码通过 daemon 现有的严格类型检查：`tsconfig` 的 `lib` 加上 `ES2023.Array` 和 `ES2024.Promise`，其他编译选项不变；`jsonl-rpc-process.ts` 的 `Logger` 类型改从 V6 的 `logger.ts` 引入，产品代码不再引用 `pino`；其余只限非空断言（含把 `pi/cli-runtime.ts` 第 63 行的简写属性 `command` 展开成 `command: command!` 的一处）、`override`、`type` 导入，测试里按 plan.md 列出的类型表达式语法写的类型断言，以及把 `ACPAgentSession.spawnProcess` 从 `private` 改成 `protected`。每处改动逐条记录，并用 esbuild 证明改前改后输出相同，细则见 [plan.md](plan.md) V7 的 *Compiler contract*。OpenCode 的入口是 `opencode/v2/agent.ts` 的 `OpenCodeV2AgentClient`，不传 bridge，由 Vonvon 的包装代码检查版本，要求 2.0.10 及以上。旧的 `opencode-agent.ts` 虽然引用了 `@opencode-ai/sdk/v2/client`，却是 1.x 用的旧客户端，它和选择新旧客户端的 `runtime-client.ts` 都不移植，OpenCode 1.x 不支持。Paseo 子 agent 面板专用的事件由适配器忽略。仍然到达的权限请求先记成被动的 `approval_request` 事件，再自动拒绝。飞书里不加交互式审批，协议也不变。
 
 这条决定还没验证。第一个 provider PR 要证明适配器能完整映射事件、权限请求、中断和追加消息。
 
@@ -162,7 +165,7 @@ Paseo 的 provider 实现的是它自己的 `AgentClient` 和 `AgentSession` 接
 
 登录用飞书或 Lark 的网页 SSO，实现参考 vonvon-platform 的 `src/oauth.ts`。桌面端打开浏览器登录，然后轮询结果。没有桌面的服务器运行 `vonvon login`，它打印一个链接和验证码，你在任意浏览器里打开链接确认。
 
-机器加入账号时，daemon 生成自己的设备凭据，和用户的登录会话分开。用户退出登录不会让机器掉线。从账号里移除机器时，云端吊销设备凭据。这个做法来自 vonvon-bridge-legacy 的 `packages/account-service`。
+机器加入账号时，daemon 生成自己的设备凭据，和用户的登录会话分开。用户退出登录不会让机器掉线。从账号里移除机器时，云端吊销设备凭据。凭据和登录会话分开的做法来自 vonvon-bridge-legacy 的 `packages/account-service`，但不照搬它和登录绑定的会话、设备和快照记录。云端私有存储的形状见下面的“核心数据形状”。
 
 vonvon-bridge-legacy 的 ADR 0012 规定必须登录、暂不做多设备。这份架构推翻了这条决定。
 
@@ -170,9 +173,9 @@ vonvon-bridge-legacy 的 ADR 0012 规定必须登录、暂不做多设备。这�
 
 云端存账号和机器记录，机器记录包括名称、系统、版本、公钥和最后在线时间。云端不存设置，也读不到转发的内容。
 
-daemon 加入账号时生成 X25519 密钥对，把公钥登记到云端。远程客户端从云端拿到公钥，和 daemon 协商出会话密钥，之后每一帧都用 XSalsa20-Poly1305 加密。实现用 Paseo 的 `packages/relay`（`crypto.ts`、`e2ee.ts`、`encrypted-channel.ts`）。
+daemon 加入账号时生成 X25519 密钥对，把公钥登记到云端。远程客户端从云端拿到公钥，和 daemon 协商出会话密钥，之后每一帧都用 XSalsa20-Poly1305 加密。实现用 Paseo 的 `packages/relay`（`crypto.ts`、`e2ee.ts`、`encrypted-channel.ts`，以及它们引用的 `base64.ts`），依赖 `tweetnacl` 和 `base64-js`。这四个文件按 V7 的类型层规则移植：只在 `encrypted-channel.ts` 第 576 行加两个非空断言，并在文件开头加一段注明改动的注释，编译后可执行的 JavaScript 不变，哈希和证明记在 `packages/client/src/e2ee/closure.json`，细则见 [plan.md](plan.md) V11 的 *Compiler contract*。
 
-这个方案信任云端分发的公钥。如果云端被攻破、换掉了公钥，攻击者可以做中间人。Paseo 用二维码在线下传公钥来避免这一点，代价是每台客户端都要扫码。Vonvon Bot 选择账号登录的便利，这个风险记在 roadmap 里。
+这个方案信任云端分发的公钥。Paseo 的握手里，daemon 回的 `e2ee_ready` 是明文，没有经过认证。客户端拿到的若是另一把长度正确的公钥，照样会收到 `e2ee_ready`，直到第一帧密文解不开才失败。长度不对的公钥更早就失败，是另一种情况。所以客户端只在 daemon 的第一帧密文解开、并且是 `serverInfo` 回复之后才算连上，之前不发请求、不显示状态。如果云端被攻破，同时换掉公钥并冒充 daemon 一端，攻击者可以做中间人。V11 保留 Paseo 的握手，不加新的密码学，接受这个风险。Paseo 用二维码在线下传公钥来避免这一点，代价是每台客户端都要扫码。Vonvon Bot 选择账号登录的便利，这个风险记在 roadmap 里。
 
 同一个 Bot 只能在一台机器上运行，否则飞书事件会分到两台机器。云端不存 Bot 列表，所以由客户端检查。客户端同时连着多台机器时，如果发现同一个 `appId` 在两台在线机器上都启用了，就提示用户。
 
@@ -229,7 +232,7 @@ type SettingsScope =
 
 `AppId`（`cli_` 开头）、`ChatId`（`oc_` 开头）、`MachineId` 都是 branded 类型。客户端用 `(machineId, appId, chatId)` 定位一个群。
 
-云端只有两种记录。
+云端对外只有两种记录。
 
 ```ts
 type Account = { accountId: AccountId; provider: 'feishu' | 'lark'; subject: string; name: string };
@@ -245,6 +248,32 @@ type Device = {
 	lastSeenAt: string;
 };
 ```
+
+### 云端私有存储
+
+上面两种是对外的记录。云端另有两张私有表，不出现在任何 API 回复里，也不存设置。`Account` 按 `(provider, subject)` 唯一。同一账号下，同一个 `machineId` 最多一台未吊销的设备。
+
+```ts
+type DeviceCredential = {
+	deviceId: DeviceId;
+	secretHash: string;       // daemon 本地生成的 32 字节密钥的 SHA-256，十六进制
+	createdAt: string;
+	revokedAt: string | null;
+};
+
+type DevicePresence = {
+	deviceId: DeviceId;
+	linkState: 'open' | 'closed';
+	heartbeatAt: string;
+};
+```
+
+- 校验。daemon 每次建立出站连接时带上 `deviceId` 和密钥原文用于认证，这是密钥离开 daemon 的唯一场合。云端对收到的密钥算哈希，与存的哈希做常量时间比较，然后丢弃原文，不存储也不写日志；云端存储里只有 `secretHash`。吊销或未知的设备被拒绝。登录会话从不用来认证这条连接。不另加挑战应答协议。
+- 重新加入。同一账号、同一 `machineId` 再次加入时原地轮换：`deviceId` 不变，换新的哈希和公钥，旧凭据立即失效。别的账号的设备不读也不改。
+- 吊销。设置 `revokedAt`，关掉这台设备的连接并回 `device_revoked`，daemon 收到后删除本地凭据。吊销后再加入会得到新的 `deviceId`。
+- 在线状态。连接每 15 秒发一次心跳。连接打开、且最近一次心跳不超过 45 秒时算在线，否则离线。对外的 `lastSeenAt` 由这张表推出。云端重启时所有连接记为关闭。
+- 存储。一个仓库接口，Postgres 和内存两种实现，用同一套合同测试。
+- daemon 本地。`cloud/device.json`，权限 0600，存云端地址、`accountId`、`deviceId`、密钥和 X25519 私钥，其中密钥和私钥用 `master.key` 加密。X25519 私钥从不离开本机。密钥只在上面的连接认证时临时发给云端，云端只保存它的哈希。
 
 ## 包结构
 

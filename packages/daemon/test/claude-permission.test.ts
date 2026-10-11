@@ -1,6 +1,6 @@
 import type { Options, Query } from '@anthropic-ai/claude-agent-sdk';
 import { describe, expect, it, vi } from 'vitest';
-import { permissionOptions } from '../src/agent/claude-agent/permission';
+import { permissionOptions } from './fixtures/claude-permission-v3';
 import { claudeSessionConfigFor } from '../src/agent/paseo/session-backend';
 import type { Logger } from '../src/agent/paseo/logger';
 import { ClaudeAgentClient } from '../src/agent/providers/claude/agent';

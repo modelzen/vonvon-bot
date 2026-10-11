@@ -129,10 +129,30 @@ describe('Paseo AgentSession to AgentBackend adapter', () => {
     session.emit({ type: 'turn_completed', provider: 'claude', turnId: 'turn-1' });
     expect(await result).toEqual([
       { type: 'turn_started', turnId: 'turn-1' },
-      { type: 'tool_result', itemId: 'read-1', output: 'file contents' },
+      { type: 'tool_result', itemId: 'read-1', output: 'file contents', exitCode: 0 },
       { type: 'tool_result', itemId: 'edit-1', output: 'permission denied', exitCode: 1 },
       { type: 'done', turnId: 'turn-1' },
     ]);
+  });
+
+  it('does not invent a successful exit code for a canceled tool', async () => {
+    const session = new FakeSession();
+    const thread = new SessionBackendThread(session);
+    const run = thread.runStreamed({ text: 'cancel' });
+    const result = collect(run.events);
+    await Promise.resolve();
+    await Promise.resolve();
+    session.emit({ type: 'timeline', provider: 'claude', turnId: 'turn-1', item: {
+      type: 'tool_call', callId: 'canceled-call', name: 'Bash', status: 'canceled', error: null,
+      detail: { type: 'shell', command: 'sleep 30' },
+    } });
+    session.emit({ type: 'turn_completed', provider: 'claude', turnId: 'turn-1' });
+    expect(await result).toEqual([
+      { type: 'turn_started', turnId: 'turn-1' },
+      { type: 'tool_result', itemId: 'canceled-call' },
+      { type: 'done', turnId: 'turn-1' },
+    ]);
+    await thread.close();
   });
 
   it('interrupts only the active turn and closes the stream even if the provider emits no terminal event', async () => {
@@ -350,4 +370,75 @@ describe('Paseo AgentSession to AgentBackend adapter', () => {
     expect(second.turnId()).toBe('turn-2');
     expect(session.sent).toEqual(['one', 'two']);
   });
+});
+
+
+it('keeps a goal active through retry feedback and clears the owned observer once at completion', async () => {
+  const session = new FakeSession();
+  let emit: ((event: AgentEvent) => void) | undefined;
+  let ended = 0;
+  const thread = new SessionBackendThread(session, undefined, {
+    beginTurn(sink) { emit = sink; },
+    repair(_event, mapped) { return mapped; },
+    endTurn() { ended++; },
+  });
+  const run = thread.runGoal('retry then finish');
+  const result = collect(run.events);
+  await Promise.resolve();
+  await Promise.resolve();
+  emit?.({ type: 'error', message: 'retrying', willRetry: true });
+  session.emit({ type: 'turn_completed', provider: 'claude', turnId: 'turn-1' });
+  emit?.({ type: 'error', message: 'stale callback', willRetry: false });
+  const events = await result;
+  expect(events.filter((event) => event.type === 'goal_update').map((event) => event.status)).toEqual(['active', 'complete']);
+  expect(events.filter((event) => event.type === 'error')).toEqual([{ type: 'error', message: 'retrying', willRetry: true }]);
+  expect(ended).toBe(1);
+  await thread.close();
+  expect(ended).toBe(1);
+});
+
+
+it.each([
+  { error: 'ordinary failure', status: 'blocked' },
+  { error: 'error_max_budget_usd', status: 'budgetLimited' },
+])('retains unadapted backend goal classification for $error', async ({ error, status }) => {
+  const session = new FakeSession();
+  const run = new SessionBackendThread(session).runGoal('existing backend');
+  const result = collect(run.events);
+  await Promise.resolve();
+  await Promise.resolve();
+  session.emit({ type: 'turn_failed', provider: 'codex', turnId: 'turn-1', error });
+  const events = await result;
+  expect(events.filter((event) => event.type === 'goal_update').map((event) => event.status)).toEqual(['active', status]);
+  expect(events.filter((event) => event.type === 'error')).toEqual([{ type: 'error', message: error, willRetry: false }]);
+  expect(events.some((event) => event.type === 'done')).toBe(false);
+});
+
+it('captures typed goal status per run through cleanup and rejects stale observer updates', async () => {
+  const session = new FakeSession();
+  let setStatus: ((status: 'blocked' | 'budgetLimited') => void) | undefined;
+  let ended = 0;
+  const thread = new SessionBackendThread(session, undefined, {
+    beginTurn(_emit, sink) { setStatus = sink; sink?.('blocked'); },
+    repair(_event, mapped) { return mapped; },
+    endTurn() { ended++; },
+  });
+  const first = thread.runGoal('budget');
+  await Promise.resolve();
+  await Promise.resolve();
+  const staleStatus = setStatus;
+  setStatus?.('budgetLimited');
+  session.emit({ type: 'turn_failed', provider: 'codex', turnId: 'turn-1', error: '预算已耗尽' });
+  expect(ended).toBe(1);
+  staleStatus?.('blocked');
+  const second = thread.runGoal('ordinary');
+  await Promise.resolve();
+  await Promise.resolve();
+  staleStatus?.('budgetLimited');
+  session.emit({ type: 'turn_failed', provider: 'codex', turnId: 'turn-1', error: 'error_max_budget_usd is only text' });
+  expect(ended).toBe(2);
+  expect((await collect(first.events)).filter((event) => event.type === 'goal_update').map((event) => event.status)).toEqual(['active', 'budgetLimited']);
+  expect((await collect(second.events)).filter((event) => event.type === 'goal_update').map((event) => event.status)).toEqual(['active', 'blocked']);
+  await thread.close();
+  expect(ended).toBe(2);
 });

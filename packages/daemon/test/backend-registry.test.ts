@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_BACKEND_ID, backendIds, createBackend } from '../src/agent';
 import { CodexAppServerBackend } from '../src/agent/codex-appserver/backend';
-import { ClaudeAgentBackend } from '../src/agent/claude-agent/backend';
+import { SessionBackend } from '../src/agent/paseo/session-backend';
 
 describe('agent backend registry', () => {
   it('defaults to the codex app-server backend (zero-arg call = legacy path)', () => {
@@ -26,16 +26,14 @@ describe('agent backend registry', () => {
 
   it('resolves an explicit claude-agent id to the Claude Agent SDK backend', () => {
     const be = createBackend('claude-agent');
-    expect(be).toBeInstanceOf(ClaudeAgentBackend);
+    expect(be).toBeInstanceOf(SessionBackend);
     expect(be.id).toBe('claude-agent');
   });
 
-  it('claude-agent declares an explicit capabilities object（steer off；goal/compact/resume on）', () => {
+  it('claude-agent declares goal, steer, compact and resume support', () => {
     const caps = createBackend('claude-agent').capabilities;
     expect(caps).toBeDefined();
-    // goal:true（goal-like 自主轮）；compact:true（原生 /compact）；resume:true（~/.claude/projects 同源）；
-    // steer:false（飞行中引导不支持 → 自动排队成下一轮）。
-    expect(caps).toMatchObject({ goal: true, steer: false, compact: true, resume: true });
+    expect(caps).toMatchObject({ goal: true, steer: true, compact: true, resume: true, approvals: false });
   });
 
   it('backendIds lists every registered backend（codex + claude-agent）', () => {

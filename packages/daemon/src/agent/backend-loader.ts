@@ -5,6 +5,10 @@ import { pathToFileURL } from 'node:url';
 import { paths } from '../config/paths';
 import type { BackendCatalogEntry } from './catalog';
 
+const which = createRequire(import.meta.url)('which') as {
+  sync(command: string, options: { nothrow: true }): string | null;
+};
+
 /**
  * 按需后端依赖的加载器（npm-ondemand 包，库类 / bin 类；通用基础设施，当前内置后端未用）。
  *
@@ -120,12 +124,12 @@ export function isBackendBinInstalled(binName: string): boolean {
  * 一条 npm 管理的后端是否已装（catalog/doctor/detect 的统一判定，按 dep 形态分派）：
  *   bin 类（dep.binName）—— 查 node_modules/.bin（被 spawn 的可执行）。
  *   库类（仅 dep.pkg）—— 查 require.resolve（被 import 的库）。
- *   external-cli（codex）—— 不归此判（走 PATH，由 doctor/locate 负责）→ false。
+ *   external-cli 的 binName 通过 PATH 检测；无 binName 的默认 Codex 由 doctor/locate 负责。
  * 绝不抛错。
  */
 export function isBackendEntryInstalled(entry: BackendCatalogEntry): boolean {
   const { kind, binName, pkg } = entry.dep;
-  if (kind === 'external-cli') return false;
+  if (kind === 'external-cli') return binName ? which.sync(binName, { nothrow: true }) !== null : false;
   if (binName) return isBackendBinInstalled(binName);
   return pkg ? isBackendDepInstalled(pkg) : false;
 }
