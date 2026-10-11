@@ -43,7 +43,7 @@ function harness() {
   const event = { sender: webContents, senderFrame: frame } as unknown as IpcMainInvokeEvent;
   let onError: (error: Error) => void = () => {};
   const snapshot = vi.fn(async () => ({ revision: 1 }));
-  const machine = vi.fn(async () => ({ type: 'done', message: 'ok' }));
+  const machine = vi.fn(async (): ReturnType<VonvonClient['machine']> => ({ type: 'done', message: 'ok' }));
   const dispose = vi.fn(async () => {});
   const client = {
     snapshot, machine,
