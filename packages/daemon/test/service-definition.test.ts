@@ -236,7 +236,7 @@ describe.skipIf(process.platform !== 'win32')('Windows native filesystem registr
     }
   }
 
-  it('follows the supplied Run locator to another root and inspects withdrawn local leftovers', async () => {
+  it('follows the supplied Run locator and ignores withdrawn local leftovers', async () => {
     const { root } = await fixture();
     const other = await fixture();
     const target = serviceTarget({ platform: 'win32', root });
@@ -252,9 +252,11 @@ describe.skipIf(process.platform !== 'win32')('Windows native filesystem registr
     await writeFile(otherTarget.vbsPath, bytes.vbs);
     expect((await readRegistration({ ...input, windowsRun: { kind: 'value', type: 'REG_SZ', value: bytes.runValue } })).kind).toBe('other-root');
     expect((await readRegistration({ ...input, windowsRun: { kind: 'value', type: 'REG_EXPAND_SZ', value: bytes.runValue } })).kind).toBe('unrecognized');
-    expect((await readRegistration({ target: otherTarget, requestedRoot: other.root, windowsRun: { kind: 'absent' } })).kind).toBe('ours');
+    expect((await readRegistration({ target: otherTarget, requestedRoot: other.root, windowsRun: { kind: 'value', type: 'REG_SZ', value: bytes.runValue } })).kind).toBe('ours');
+    expect((await readRegistration({ target: otherTarget, requestedRoot: other.root, windowsRun: { kind: 'absent' } })).kind).toBe('absent');
     await rm(otherTarget.cmdPath);
-    expect((await readRegistration({ target: otherTarget, requestedRoot: other.root, windowsRun: { kind: 'absent' } })).kind).toBe('unrecognized');
+    expect((await readRegistration({ target: otherTarget, requestedRoot: other.root, windowsRun: { kind: 'absent' } })).kind).toBe('absent');
+    expect((await readRegistration({ target: otherTarget, requestedRoot: other.root, windowsRun: { kind: 'value', type: 'REG_SZ', value: bytes.runValue } })).kind).toBe('unrecognized');
   });
 });
 
