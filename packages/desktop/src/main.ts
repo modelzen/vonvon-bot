@@ -177,6 +177,13 @@ export async function startDesktop(): Promise<void> {
       if (!terminating) show();
     });
     bridge = installBridge(owner, current, paths, {
+      chooseExecutablePath: async () => {
+        const result = await dialog.showOpenDialog(current, {
+          title: 'Choose Codex executable',
+          properties: ['openFile'],
+        });
+        return result.canceled ? null : result.filePaths[0] ?? null;
+      },
       hide: () => current.hide(),
       confirmQuit,
       connectionLost: () => {

@@ -56,7 +56,10 @@ function harness() {
     client, identity: { pid: 1, startedAt: 'now', listen: '127.0.0.1:4000' }, dispose,
   };
   const paths: DesktopResources = { uiIndex, preload: '/unused', trayPng: '/unused' };
-  const actions = { hide: vi.fn(), confirmQuit: vi.fn(async () => {}), connectionLost: vi.fn() };
+  const actions = {
+    chooseExecutablePath: vi.fn(async (): Promise<string | null> => '/usr/local/bin/codex'),
+    hide: vi.fn(), confirmQuit: vi.fn(async () => {}), connectionLost: vi.fn(),
+  };
   const bridge = installBridge(owner, window, paths, actions);
   const invoke = (channel: string, ...args: unknown[]) => {
     const handler = handlers.get(channel);
@@ -70,6 +73,22 @@ function harness() {
 beforeEach(() => { handlers.clear(); openExternal.mockClear(); failRegistration.channel = ''; });
 
 describe('desktop IPC boundary', () => {
+  it('returns a selected path or cancellation only to the authorized document', async () => {
+    const h = harness();
+    const wrong = { ...h.event, senderFrame: { url: h.frame.url } } as IpcMainInvokeEvent;
+    expect(await handlers.get(desktopChannels.chooseExecutablePath)?.(wrong)).toMatchObject({ ok: false });
+    expect(await h.invoke(desktopChannels.chooseExecutablePath, 'extra')).toMatchObject({ ok: false });
+    expect(h.actions.chooseExecutablePath).not.toHaveBeenCalled();
+    expect(await h.invoke(desktopChannels.chooseExecutablePath)).toEqual({ ok: true, value: '/usr/local/bin/codex' });
+    h.actions.chooseExecutablePath.mockResolvedValueOnce(null);
+    expect(await h.invoke(desktopChannels.chooseExecutablePath)).toEqual({ ok: true, value: null });
+    expect(h.actions.chooseExecutablePath).toHaveBeenCalledTimes(2);
+    h.frame.url += '#fragment';
+    expect(await h.invoke(desktopChannels.chooseExecutablePath)).toMatchObject({ ok: false });
+    expect(h.actions.chooseExecutablePath).toHaveBeenCalledTimes(2);
+    await h.bridge.dispose();
+  });
+
   it('checks sender, main frame and exact document before parsing or invoking', async () => {
     const h = harness();
     const wrong = { ...h.event, senderFrame: { url: h.frame.url } } as IpcMainInvokeEvent;

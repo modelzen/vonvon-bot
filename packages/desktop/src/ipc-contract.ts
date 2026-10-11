@@ -14,6 +14,7 @@ export const desktopChannels = {
   close: 'desktop:client:close',
   subscribe: 'desktop:subscribe',
   external: 'desktop:shell:external',
+  chooseExecutablePath: 'desktop:shell:chooseExecutablePath',
   hide: 'desktop:shell:hide',
   quit: 'desktop:shell:quit',
   event: 'desktop:event',
@@ -35,7 +36,7 @@ export type DesktopEvent =
   | { type: 'quitRequested' };
 
 export type DesktopShell = Required<Pick<ShellCapabilities,
-  'openExternal' | 'hideWindow' | 'quit' | 'onQuitRequested'>>;
+  'openExternal' | 'chooseExecutablePath' | 'hideWindow' | 'quit' | 'onQuitRequested'>>;
 
 export interface DesktopResources {
   uiIndex: string;
@@ -55,6 +56,7 @@ export interface DesktopBridge {
 }
 
 export interface ShellActions {
+  chooseExecutablePath(): Promise<string | null>;
   hide(): void;
   confirmQuit(): Promise<void>;
   connectionLost(): void;

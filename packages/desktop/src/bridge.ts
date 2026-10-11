@@ -119,6 +119,7 @@ export function installBridge(
     register(desktopChannels.directory, 1, value => directoryRequestSchema.parse(value), value => owner.client.directory(value));
     register(desktopChannels.close, 0, noArg, () => owner.dispose());
     register(desktopChannels.external, 1, value => value, openAllowedExternal);
+    register(desktopChannels.chooseExecutablePath, 0, noArg, () => actions.chooseExecutablePath());
     register(desktopChannels.hide, 0, noArg, async () => { actions.hide(); });
     register(desktopChannels.quit, 0, noArg, () => actions.confirmQuit());
     ipcMain.handle(desktopChannels.subscribe, async (event, ...args): Promise<IpcResult<void>> => {
