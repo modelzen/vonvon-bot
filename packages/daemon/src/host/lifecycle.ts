@@ -158,6 +158,7 @@ export function observeShutdown(parentControl = false, options: ShutdownOptions 
       if (helper?.cancelled && !helper.dead) { await helper.death; continue; }
       if (helper && !helper.dead && helper.readiness.kind === 'pending') { await helper.settled; continue; }
       committed = true;
+      if (serviceManaged && intent !== 'running') process.exitCode = 0;
       try { await release(); }
       catch (error) {
         if (error instanceof ApiCleanupError) {
@@ -167,6 +168,7 @@ export function observeShutdown(parentControl = false, options: ShutdownOptions 
         log.fail('daemon-shutdown', error, { phase: 'listener_close_unconfirmed' });
         throw new ListenerCloseUnconfirmedError(error);
       }
+      if (serviceManaged && intent === 'restart') process.exitCode = 75;
       return;
     }
   };

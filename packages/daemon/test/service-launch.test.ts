@@ -53,7 +53,7 @@ beforeEach(() => {
   vi.setSystemTime(0);
   vi.clearAllMocks();
   vi.stubEnv('VONVON_SERVICE', '');
-  vi.stubGlobal('process', Object.assign(Object.create(process), { send: undefined }));
+  vi.stubGlobal('process', Object.assign(Object.create(process), { send: undefined, exitCode: undefined }));
   child = new ChildProcess();
   Object.defineProperty(child, 'pid', { value: 54321, configurable: true });
   vi.spyOn(child, 'kill').mockReturnValue(true);
@@ -121,6 +121,7 @@ it('keeps an empty drain pending until scope and exec proofs agree in one poll',
   await completion;
   expect(release).toHaveBeenCalledOnce();
   expect(awakened).toHaveBeenCalledOnce();
+  expect(process.exitCode).toBe(75);
   expect(vi.getTimerCount()).toBe(0);
   expect(readUpdateStatus()).toEqual(record);
   owner.requestStop();
@@ -153,6 +154,7 @@ it.each(['before spawn', 'pending', 'ready'] as const)('stop %s waits for observ
   await vi.advanceTimersByTimeAsync(100_000); expect(release).not.toHaveBeenCalled();
   expect(readUpdateStatus()).toMatchObject({ phase: 'error', message: '重启已被停止取消', from: record.from, to: record.to });
   died(); await completion;
+  expect(process.exitCode).toBe(0);
   expect(release).toHaveBeenCalledOnce(); expect(vi.getTimerCount()).toBe(0);
 });
 
@@ -166,6 +168,7 @@ it('expires at the spawn deadline before accepting a late proof and waits withou
   await vi.advanceTimersByTimeAsync(5000); expect(child.kill).toHaveBeenCalledWith('SIGKILL');
   await vi.advanceTimersByTimeAsync(100_000); expect(release).not.toHaveBeenCalled();
   died(); await completion;
+  expect(process.exitCode).toBe(0);
   expect(release).toHaveBeenCalledOnce(); expect(vi.getTimerCount()).toBe(0);
 });
 
@@ -178,6 +181,7 @@ it.each(['spawn failure', 'scope death', 'synchronous spawn failure'] as const)(
   if (failure === 'scope death') { child.emit('spawn'); died(); }
   await completion;
   expect(readUpdateStatus()).toMatchObject({ phase: 'error', message: 'helper_lost' });
+  expect(process.exitCode).toBe(0);
   expect(release).toHaveBeenCalledOnce(); expect(child.kill).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
 });
 
@@ -188,6 +192,7 @@ it('managed plain restart needs no owner file or child and leaves a stale record
   const release = vi.fn(async () => {}); await owner.completeShutdown(release);
   expect(fixture.spawn).not.toHaveBeenCalled(); expect(readProc).not.toHaveBeenCalled();
   expect(readFileSync(join(paths.appDir, 'update-status.json'), 'utf8')).toBe(before);
+  expect(process.exitCode).toBe(75);
   expect(release).toHaveBeenCalledOnce();
 });
 it('rejects an update restart while a helper-free restart is already pending', () => {
@@ -204,6 +209,7 @@ it.each(['self-hosted', 'darwin', 'win32', 'bot child'] as const)('%s retains th
   child.emit('spawn'); await owner.waitForRequest();
   const release = vi.fn(async () => {}); await owner.completeShutdown(release);
   expect(release).toHaveBeenCalledOnce(); expect(readProc).not.toHaveBeenCalled();
+  expect(process.exitCode).toBe(mode === 'darwin' || mode === 'win32' ? 75 : undefined);
 });
 
 it.each(['changed record', 'live lock'] as const)('does not overwrite update ownership after %s', async mode => {
@@ -267,5 +273,41 @@ it('keeps a pending complete call blocked when stop cancels readiness', async ()
   expect(release).not.toHaveBeenCalled();
   expect(vi.getTimerCount()).toBe(1);
   died(); await completion;
+  expect(process.exitCode).toBe(0);
   expect(release).toHaveBeenCalledOnce(); expect(vi.getTimerCount()).toBe(0);
+});
+
+
+it('does not arm restart until the listener release resolves', async () => {
+  const owner = control();
+  owner.requestRestart(1234);
+  let released: () => void = () => {};
+  const completion = owner.completeShutdown(() => new Promise<void>(resolve => { released = resolve; }));
+  expect(process.exitCode).not.toBe(75);
+  released();
+  await completion;
+  expect(process.exitCode).toBe(75);
+});
+
+it.each(['plain restart', 'stop'] as const)('%s exits zero when listener release fails', async intent => {
+  const owner = control();
+  owner.requestRestart(1234);
+  if (intent === 'stop') owner.requestStop();
+  await expect(owner.completeShutdown(async () => { throw new Error('release failed'); })).rejects.toThrow('Listener cutoff');
+  expect(process.exitCode).toBe(0);
+});
+
+it('stop before commit cancels a helper-free restart', async () => {
+  const owner = control();
+  owner.requestRestart(1234);
+  owner.requestStop();
+  await owner.completeShutdown(async () => {});
+  expect(process.exitCode).toBe(0);
+  expect(fixture.spawn).not.toHaveBeenCalled();
+});
+
+it('does not assign a shutdown result to an unrelated startup failure', async () => {
+  const owner = control();
+  await owner.completeShutdown(async () => {});
+  expect(process.exitCode).toBeUndefined();
 });

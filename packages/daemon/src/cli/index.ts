@@ -54,6 +54,11 @@ service.command('install').description('Install and start the OS service').actio
 service.command('uninstall').description('Stop and remove the OS service').action(async () => {
   await (await import('./commands/service')).runServiceCommand('uninstall');
 });
+service.command('status').description('Show OS service registration and process status')
+  .option('--json', 'Print JSON')
+  .action(async (options: { json?: boolean }) => {
+    await (await import('./commands/service')).runServiceStatus(Boolean(options.json));
+  });
 program.command('__win-relaunch <requestPath>', { hidden: true }).action(() => {
   throw new Error(SERVICE_UNAVAILABLE);
 });
@@ -107,5 +112,5 @@ program.parseAsync(process.argv).then(() => {
   if (control) process.exit(process.exitCode ?? 0);
 }).catch((err) => {
   console.error(err instanceof Error ? err.message : String(err));
-  process.exit(1);
+  process.exit(control && process.env.VONVON_SERVICE && !process.send && (process.exitCode === 0 || process.exitCode === 75) ? 0 : 1);
 });

@@ -123,3 +123,30 @@ it('refuses service-managed Windows before any registration or lock action', asy
   await expect(runHostRuntime({ managed: false, control })).rejects.toThrow('Windows service startup is unavailable');
   untouched(); expect(fixture.registration).not.toHaveBeenCalled();
 });
+
+it.each(['stop', 'restart'] as const)('preserves %s exit zero while reporting a late PID release failure', async intent => {
+  const { observeShutdown } = await import('../src/host/lifecycle');
+  const shutdown = observeShutdown();
+  const failure = new Error('PID release failed');
+  fixture.acquirePidLock.mockResolvedValue({ ...owner, pid: process.pid });
+  fixture.releasePidLock.mockRejectedValueOnce(failure);
+  fixture.run.mockImplementationOnce(async () => {
+    if (intent === 'restart') shutdown.requestRestart(1234);
+    else shutdown.requestStop();
+    await shutdown.completeShutdown(async () => {});
+  });
+  await expect(runHostRuntime({ managed: false, control: shutdown })).rejects.toBe(failure);
+  expect(process.exitCode).toBe(0);
+});
+
+it('cancels a requested restart when the runner rejects before completing shutdown', async () => {
+  const { observeShutdown } = await import('../src/host/lifecycle');
+  const shutdown = observeShutdown();
+  const failure = new Error('runner failed during drain');
+  fixture.run.mockImplementationOnce(async () => {
+    shutdown.requestRestart(1234);
+    throw failure;
+  });
+  await expect(runHostRuntime({ managed: false, control: shutdown })).rejects.toBe(failure);
+  expect(process.exitCode).toBe(0);
+});
