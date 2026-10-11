@@ -1,8 +1,8 @@
 import { build } from 'esbuild';
-import { access, cp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
-import { dirname, join, basename } from 'node:path';
-import { createRequire } from 'node:module';
+import { access, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { stageDaemon } from '../../scripts/stage-daemon.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const dist = join(root, 'dist');
@@ -63,53 +63,8 @@ await writeFile(join(stage, 'package.json'), JSON.stringify({
   author: 'modelzen',
 }, null, 2) + '\n');
 
-await mkdir(join(daemonStage, 'dist'), { recursive: true });
-await build({
-  absWorkingDir: daemonSource,
-  entryPoints: ['src/cli/index.ts'],
-  outfile: join(daemonStage, 'dist/cli.js'),
-  bundle: true,
-  packages: 'external',
-  platform: 'node',
-  target: 'node22',
-  format: 'esm',
-});
-await cp(join(daemonSource, 'bin'), join(daemonStage, 'bin'), { recursive: true });
 const daemonMetadata = JSON.parse(await readFile(join(daemonSource, 'package.json'), 'utf8'));
-await writeFile(join(daemonStage, 'package.json'), JSON.stringify({
+await stageDaemon(daemonStage, {
   name: daemonMetadata.name, version: daemonMetadata.version, type: 'module', bin: daemonMetadata.bin,
   dependencies: daemonMetadata.dependencies,
-}, null, 2) + '\n');
-for (const file of ['LICENSE.bridge', 'LICENSE.paseo', 'NOTICE', 'PROVENANCE.md', 'import-core.json']) {
-  await cp(join(daemonSource, file), join(daemonStage, file));
-}
-
-async function packageRoot(name, from) {
-  const require = createRequire(join(from, 'package.json'));
-  for (const search of require.resolve.paths(name) ?? []) {
-    const candidate = join(search, name);
-    try { await access(join(candidate, 'package.json')); return await realpath(candidate); }
-    catch (error) { if (error.code !== 'ENOENT') throw error; }
-  }
-  throw new Error(`Cannot stage daemon dependency ${name} from ${from}. Run npm ci in this worktree.`);
-}
-
-async function stageDependencies(source, destination, ancestors = new Map()) {
-  const metadata = JSON.parse(await readFile(join(source, 'package.json'), 'utf8'));
-  const dependencies = { ...metadata.dependencies, ...metadata.optionalDependencies };
-  for (const name of Object.keys(dependencies)) {
-    let dependency;
-    try { dependency = await packageRoot(name, source); }
-    catch (error) { if (name in (metadata.optionalDependencies ?? {})) continue; throw error; }
-    if (ancestors.get(name) === dependency) continue;
-    const target = join(destination, 'node_modules', name);
-    await mkdir(dirname(target), { recursive: true });
-    await cp(dependency, target, {
-      recursive: true, dereference: true,
-      filter: path => !['node_modules', '.git'].includes(basename(path)),
-    });
-    const next = new Map(ancestors).set(name, dependency);
-    await stageDependencies(dependency, target, next);
-  }
-}
-await stageDependencies(daemonSource, daemonStage);
+});
