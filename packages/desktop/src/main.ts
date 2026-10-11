@@ -12,6 +12,7 @@ import { DesktopUpdater } from './updates.js';
 import { desktopUpdateConfiguration } from './update-configuration.js';
 import { createDaemonManager, StartHostRefusal } from './daemon-manager.js';
 import { createDaemonDependencies, prepareDesktopRoot } from './daemon-dependencies.js';
+import { desktopCliOptions, observeCli, registerCli } from './cli-registration.js';
 import type { MachineReply } from '@vonvon/protocol';
 
 export function desktopResources(appPath: string, packaged: boolean): DesktopResources {
@@ -146,6 +147,9 @@ export async function startDesktop(): Promise<void> {
       root, home: homedir(), executable: process.execPath,
       resources: process.resourcesPath, packaged: app.isPackaged,
     }));
+    const cliOptions = desktopCliOptions({ platform: process.platform, executable: process.execPath,
+      resources: process.resourcesPath, packaged: app.isPackaged });
+    if (app.isPackaged && !process.env.VONVON_DESKTOP_TEST_HOME) await registerCli(cliOptions);
     await manager.ensureReady(0);
     owner = await attachExisting(root);
     if (terminating) {
@@ -199,6 +203,12 @@ export async function startDesktop(): Promise<void> {
       if (!terminating) show();
     });
     bridge = installBridge(owner, current, paths, {
+      observeCli: () => observeCli(cliOptions),
+      repairCli: async () => {
+        const result = await registerCli(cliOptions);
+        if (result.kind === 'error') throw new StartHostRefusal(result.message);
+        return { type: 'done', message: result.message };
+      },
       startHost: async bot => {
         if (starting || terminating || cleanupPromise) throw new StartHostRefusal('Desktop startup is unavailable.');
         starting = (async (): Promise<MachineReply> => {

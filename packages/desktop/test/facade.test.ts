@@ -23,6 +23,21 @@ function harness() {
 }
 
 describe('synchronous desktop facade', () => {
+  it('exposes the zero-argument CLI repair call and validates its reply', async () => {
+    const h = harness();
+    const args: unknown[][] = [];
+    const invoke = h.transport.invoke;
+    h.transport.invoke = (channel, ...values) => {
+      if (channel === desktopChannels.repairCli) args.push(values);
+      return invoke(channel, ...values);
+    };
+    const { shell } = createDesktopFacades(h.transport);
+    h.replies.set(desktopChannels.repairCli, async () => ({ ok: true, value: { type: 'done', message: 'installed' } }));
+    await expect(shell.repairCli()).resolves.toEqual({ type: 'done', message: 'installed' });
+    expect(args).toEqual([[]]);
+    h.replies.set(desktopChannels.repairCli, async () => ({ ok: true, value: { type: 'unexpected' } }));
+    await expect(shell.repairCli()).rejects.toThrow();
+  });
   it('validates native updater results at the preload boundary', async () => {
     const h = harness();
     const { shell } = createDesktopFacades(h.transport);

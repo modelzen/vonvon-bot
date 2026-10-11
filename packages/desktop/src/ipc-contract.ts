@@ -16,6 +16,7 @@ export const desktopChannels = {
   external: 'desktop:shell:external',
   chooseExecutablePath: 'desktop:shell:chooseExecutablePath',
   startHost: 'desktop:shell:startHost',
+  repairCli: 'desktop:shell:repairCli',
   checkDesktopUpdate: 'desktop:shell:checkDesktopUpdate',
   installDesktopUpdate: 'desktop:shell:installDesktopUpdate',
   hide: 'desktop:shell:hide',
@@ -41,7 +42,7 @@ export type DesktopEvent =
 
 export type DesktopShell = Required<Pick<ShellCapabilities,
   'openExternal' | 'chooseExecutablePath' | 'checkDesktopUpdate' | 'installDesktopUpdate' |
-  'hideWindow' | 'quit' | 'onQuitRequested' | 'startHost'>>;
+  'hideWindow' | 'quit' | 'onQuitRequested' | 'startHost' | 'repairCli'>>;
 
 export interface DesktopResources {
   uiIndex: string;
@@ -64,6 +65,8 @@ export interface DesktopBridge {
 export interface ShellActions {
   chooseExecutablePath(): Promise<string | null>;
   startHost(bot?: string): Promise<MachineReply>;
+  repairCli(): Promise<MachineReply>;
+  observeCli(): Promise<Extract<MachineReply, { type: 'status' }>['cli']>;
   checkDesktopUpdate(): Promise<DesktopUpdate>;
   installDesktopUpdate(): Promise<DesktopUpdate>;
   hide(): void;
