@@ -1,0 +1,228 @@
+.settings-edit-actions,
+.settings-inline-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+}
+.settings-inline-actions {
+  padding: 0;
+}
+.settings-row-switch .ui-toggle__copy {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.settings-disclosure {
+  border-top: 1px solid var(--color-border, rgba(0, 0, 0, .12));
+}
+.settings-disclosure > summary {
+  padding: 12px 14px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-weight: 500;
+}
+.settings-disclosure > .ss-row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 14px;
+  left: 14px;
+  border-top: 1px solid var(--color-border, rgba(0, 0, 0, .12));
+}
+.settings-disclosure .ss-row__value {
+  white-space: normal;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.settings-operation-message {
+  margin: 0;
+  padding: 10px 14px;
+  overflow-wrap: anywhere;
+  color: var(--color-text-secondary);
+}
+.settings-field {
+  width: min(280px, 100%);
+  box-sizing: border-box;
+}
+.settings-number {
+  width: 86px;
+  box-sizing: border-box;
+}
+.settings-instructions {
+  box-sizing: border-box;
+  display: block;
+  width: calc(100% - 28px);
+  min-height: 180px;
+  margin: 14px;
+  resize: vertical;
+  font: inherit;
+  padding: 8px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--settings-control-radius);
+  background: var(--color-surface);
+  line-height: 1.5;
+}
+.settings-advanced-toggle {
+  display: block;
+  width: 100%;
+  padding: 12px 14px;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+}
+.settings-advanced-toggle:hover {
+  text-decoration: underline;
+}
+.desktop-job {
+  width: 100%;
+  box-sizing: border-box;
+}
+.desktop-job .desktop-registration-url {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  align-self: stretch;
+}
+.desktop-job .desktop-registration-url input {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  user-select: text;
+}
+
+.ss-row:has(select) > .ss-row__trailing {
+  min-width: 0;
+  max-width: 60%;
+  flex: 0 1 auto;
+}
+.ss-row__trailing select {
+  min-width: 0;
+  max-width: 100%;
+  text-overflow: ellipsis;
+}
+
+.collaboration-window .page-stack {
+  grid-template-columns: minmax(0, 1fr);
+}
+.collaboration-window .ss-section {
+  min-width: 0;
+}
+
+.collaboration-window .agent-settings-page {
+  display: grid;
+  width: min(100%, 580px);
+  gap: 16px;
+  justify-self: center;
+  min-width: 0;
+}
+.collaboration-window .agent-settings-page > .ss-section,
+.collaboration-window .agent-settings-page .agent-card-cluster > .ss-section,
+.collaboration-window .agent-settings-disclosure .ss-section {
+  margin-top: 0;
+}
+.collaboration-window .agent-settings-page .settings-scope-bar {
+  margin: 0;
+}
+.collaboration-window .agent-settings-page .agent-activation .ss-row {
+  min-height: 58px;
+}
+.collaboration-window .agent-card-section {
+  display: grid;
+  gap: 10px;
+}
+.collaboration-window .agent-card-section h3 {
+  margin: 0 10px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 620;
+}
+.collaboration-window .agent-card-cluster {
+  display: grid;
+  gap: 8px;
+}
+.collaboration-window .agent-card-cluster h4 {
+  margin: 0 10px;
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+  font-weight: 560;
+}
+.collaboration-window .agent-card-display .ss-section__header {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.collaboration-window .agent-settings-disclosure {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-separator);
+  border-radius: 12px;
+  background: var(--color-surface);
+}
+.collaboration-window .agent-settings-disclosure > summary {
+  display: flex;
+  min-height: 54px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 16px;
+  box-sizing: border-box;
+  cursor: pointer;
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 600;
+  list-style: none;
+}
+.collaboration-window .agent-settings-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+.collaboration-window .agent-settings-disclosure > summary::after {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-right: 1.5px solid var(--color-text-tertiary);
+  border-bottom: 1.5px solid var(--color-text-tertiary);
+  content: "";
+  transform: rotate(45deg);
+}
+.collaboration-window .agent-settings-disclosure[open] > summary::after {
+  transform: rotate(225deg);
+}
+.collaboration-window .agent-settings-disclosure > summary small {
+  display: block;
+  margin-top: 3px;
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+  font-weight: 400;
+}
+.collaboration-window .agent-settings-disclosure > summary:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -3px;
+}
+.collaboration-window .agent-settings-disclosure[open] > .ss-section,
+.collaboration-window .agent-settings-disclosure[open] > .agent-card-section {
+  margin: 0 12px 12px;
+}
+.collaboration-window .agent-settings-disclosure[open] > .ss-section + .ss-section {
+  margin-top: 12px;
+}
+@media (max-width: 640px) {
+  .collaboration-window .agent-settings-page {
+    width: 100%;
+  }
+}

@@ -1,0 +1,148 @@
+:root {
+  color-scheme: light;
+
+  --font-family-system: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-family-mono: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  --font-size-2xs: 0.625rem;
+  --font-size-xs: 0.6875rem;
+  --font-size-sm: 0.75rem;
+  --font-size-md: 0.8125rem;
+  --font-size-lg: 0.9375rem;
+  --font-size-xl: 1.0625rem;
+  --font-size-2xl: 1.3125rem;
+  --font-size-3xl: 1.75rem;
+  --font-size-4xl: 2rem;
+  --font-weight-regular: 400;
+  --font-weight-medium: 510;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 650;
+  --line-height-tight: 1.18;
+  --line-height-body: 1.55;
+  --line-height-relaxed: 1.7;
+  --tracking-tight: -0.025em;
+  --tracking-caps: 0.12em;
+
+  --space-0-5: 0.125rem;
+  --space-1: 0.25rem;
+  --space-1-5: 0.375rem;
+  --space-2: 0.5rem;
+  --space-2-5: 0.625rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-7: 1.75rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+
+  --settings-sidebar-width: 223px;
+  --settings-toolbar-height: 48px;
+  --settings-content-width: 560px;
+  --settings-section-gap: 20px;
+  --settings-group-radius: 12px;
+  --settings-row-height: 48px;
+  --settings-row-described-height: 60px;
+  --settings-row-padding: 8px 12px;
+  --settings-control-height: 28px;
+  --settings-control-radius: 6px;
+  --settings-toggle-width: 30px;
+  --settings-toggle-height: 18px;
+  --settings-segmented-height: 28px;
+
+  --radius-xs: 0.375rem;
+  --radius-sm: 0.5rem;
+  --radius-md: 0.625rem;
+  --radius-lg: 0.875rem;
+  --radius-xl: 1.125rem;
+  --radius-2xl: 1.5rem;
+  --radius-pill: 999px;
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-sm: 0 8px 24px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 18px 48px rgba(0, 0, 0, 0.09), 0 2px 8px rgba(0, 0, 0, 0.05);
+  --shadow-lg: 0 32px 90px rgba(0, 0, 0, 0.3);
+  --focus-ring: 0 0 0 3px rgba(0, 122, 255, 0.2);
+
+  --duration-instant: 80ms;
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-slow: 320ms;
+  --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-emphasized: cubic-bezier(0.16, 1, 0.3, 1);
+
+  --material-blur-sm: 12px;
+  --material-blur-md: 22px;
+  --material-saturation: 160%;
+
+  --color-canvas: #f5f5f7;
+  --color-canvas-raised: #fafafa;
+  --color-surface: #ffffff;
+  --color-surface-translucent: rgba(255, 255, 255, 0.78);
+  --color-surface-elevated: rgba(255, 255, 255, 0.94);
+  --color-surface-muted: #efeff1;
+  --color-surface-hover: #f5f5f7;
+  --color-text: #1d1d1f;
+  --color-text-secondary: #6e6e73;
+  --color-text-tertiary: #747478;
+  --color-text-disabled: #b0b0b5;
+  --color-border: rgba(0, 0, 0, 0.1);
+  --color-border-strong: rgba(0, 0, 0, 0.17);
+  --color-separator: rgba(0, 0, 0, 0.08);
+  --color-overlay: rgba(0, 0, 0, 0.5);
+
+  --color-accent: #007aff;
+  --color-accent-hover: #006ee6;
+  --color-accent-active: #005ec4;
+  --color-accent-subtle: #eaf4ff;
+  --color-accent-muted: #cfe4ff;
+  --color-on-accent: #ffffff;
+
+  --color-sidebar: rgba(235, 235, 237, 0.86);
+  --color-sidebar-elevated: rgba(255, 255, 255, 0.58);
+  --color-sidebar-text: #1d1d1f;
+  --color-sidebar-secondary: #5f5f64;
+  --color-sidebar-muted: #68686d;
+  --color-sidebar-hover: rgba(0, 0, 0, 0.045);
+  --color-sidebar-selected: rgba(0, 122, 255, 0.12);
+  --color-sidebar-border: rgba(0, 0, 0, 0.08);
+
+  --color-status-neutral: #6e6e73;
+  --color-status-neutral-bg: #f2f2f7;
+  --color-status-neutral-border: #d1d1d6;
+  --color-status-info: #0066cc;
+  --color-status-info-bg: #edf6ff;
+  --color-status-info-border: #b9ddff;
+  --color-status-success: #248a3d;
+  --color-status-success-bg: #edf8f0;
+  --color-status-success-border: #b9dec3;
+  --color-status-warning: #9a6700;
+  --color-status-warning-bg: #fff8e6;
+  --color-status-warning-border: #f2d28b;
+  --color-status-danger: #d70015;
+  --color-status-danger-bg: #fff0f1;
+  --color-status-danger-border: #ffc2c7;
+
+  --color-qr-background: #ffffff;
+  --color-qr-foreground: #1d1d1f;
+
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-instant: 0.01ms;
+    --duration-fast: 0.01ms;
+    --duration-base: 0.01ms;
+    --duration-slow: 0.01ms;
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --color-border: color-mix(in srgb, currentColor 36%, transparent);
+    --color-border-strong: color-mix(in srgb, currentColor 58%, transparent);
+    --color-separator: color-mix(in srgb, currentColor 28%, transparent);
+    --focus-ring: 0 0 0 4px color-mix(in srgb, var(--color-accent) 48%, transparent);
+  }
+}

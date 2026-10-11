@@ -1,3 +1,4 @@
+import { AdminWriteError } from '../src/admin/ops';
 import { homedir } from 'node:os';
 import { describe, expect, it, vi } from 'vitest';
 import { agentIdSchema, groupIdSchema } from '@vonvon/protocol';
@@ -29,13 +30,13 @@ describe('desktop companion RPC capabilities', () => {
     } finally { await fixture.close(); }
   });
 
-  it('routes collaboration through the selected Bot owner and exposes a service refusal', async () => {
-    const collaboration = vi.fn(async () => ({ kind: 'refused' as const, code: 'busy', message: 'session is busy' }));
+  it('routes collaboration through the selected Bot owner and preserves the service conflict error', async () => {
+    const collaboration = vi.fn(async () => { throw new AdminWriteError('session is busy'); });
     const fixture = await startFixture(fakeService({ listBots: async () => [bot], collaboration }));
     try {
       const client = await socketClient(fixture.api.port, fixture.credential); await client.ready();
       const result = await client.call({ type: 'request', id: 'collab', method: 'collaboration', payload: { action: 'compact', agentId, groupId, projectName: project.name, threadId: 'omt_topic' } });
-      expect(result).toMatchObject({ type: 'response', payload: { kind: 'refused', message: 'session is busy' } });
+      expect(result).toMatchObject({ type: 'error', code: 'conflict', message: 'session is busy' });
       expect(collaboration).toHaveBeenCalledWith(bot.appId, { action: 'compact', chatId: project.chatId, projectName: project.name, threadId: 'omt_topic' });
       await client.close();
     } finally { await fixture.close(); }
