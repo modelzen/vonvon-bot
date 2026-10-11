@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { PROTOCOL_VERSION, type Request, type Response } from '@vonvon/protocol';
 import type { AdminService } from '../admin/service';
 import type { ShutdownControl } from '../host/lifecycle';
@@ -20,7 +21,10 @@ import { machineRpc } from './rpc/machine';
 import { settingsRpc } from './rpc/settings';
 import { readLocalIdentity } from './local-credential';
 import { getRpcErrorCode } from './errors';
+import { serveWebUi } from './web-ui';
 import { getPidLockInfo, type PidLockInfo } from './pid-lock';
+import { EnvironmentService, type EnvironmentServiceOptions } from '../environment/service';
+import { resolveCodexBin } from '../agent/codex-appserver/locate';
 
 export interface ApiLifetime {
   beginDrain(): Promise<void>;
@@ -41,10 +45,11 @@ export interface DaemonApi extends ApiLifetime {
   close(): Promise<void>;
 }
 
-export async function startApi(options: { service: AdminService; port?: number; control?: ShutdownControl }): Promise<DaemonApi> {
+export async function startApi(options: { service: AdminService; port?: number; control?: ShutdownControl; environmentOptions?: EnvironmentServiceOptions }): Promise<DaemonApi> {
   let acquiredServer: ReturnType<typeof createServer> | undefined;
   let acquiredJobs: Jobs | undefined;
   let acquiredLogs: LogFollowers | undefined;
+  let acquiredEnvironment: EnvironmentService | undefined;
   let acquiredSockets: ReturnType<typeof createSocketServer> | undefined;
   let snapshots: SnapshotStore | undefined;
   let port = options.port ?? 0;
@@ -69,6 +74,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
       () => acquiredSockets?.beginDrain(),
       () => Promise.resolve().then(() => options.service.close?.()),
       () => acquiredJobs?.close(),
+      () => acquiredEnvironment?.close(),
       () => acquiredLogs?.close(),
     ]) {
       const drain = new Promise<void>(resolve => resolve(cleanup()));
@@ -110,9 +116,20 @@ export async function startApi(options: { service: AdminService; port?: number; 
   };
   try {
     await mkdir(paths.appDir, { recursive: true });
+    const environment = acquiredEnvironment = new EnvironmentService(options.environmentOptions ?? {
+      home: homedir(), getDataRoot: () => paths.appDir,
+      resolveCodex: () => resolveCodexBin({ force: true }), nodePath: process.execPath,
+    });
     const { credential, machineId } = await readLocalIdentity(paths.appDir);
     const directory = await createDirectoryBrowser();
-    const server = acquiredServer = createServer((_request, response) => { response.writeHead(404); response.end(); });
+    const server = acquiredServer = createServer((request, response) => {
+      void serveWebUi(request, response).then(served => {
+        if (!served) { response.writeHead(404); response.end(); }
+      }).catch(() => {
+        if (!response.headersSent) response.writeHead(500);
+        response.end();
+      });
+    });
     const jobs = acquiredJobs = new Jobs({ service: options.service, changed: invalidate, toolsSettled: () => { void snapshots?.refreshTools().catch(() => undefined); } });
     const logs = acquiredLogs = new LogFollowers(join(paths.appDir, 'logs'));
     async function finish<T>(peer: Peer, outcome: RpcOutcome<T>, envelope: (value: T) => Response): Promise<void> {
@@ -131,7 +148,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
         case 'admin': return finish(peer, await adminRpc(options.service, follow => logs.follow(peer, follow), request.payload), payload => ({ type: 'response', id, method: 'admin', payload }));
         case 'settings': return finish(peer, await settingsRpc(options.service, request.payload), payload => ({ type: 'response', id, method: 'settings', payload }));
         case 'collaboration': return finish(peer, await collaborationRpc(options.service, directory, request.payload), payload => ({ type: 'response', id, method: 'collaboration', payload }));
-        case 'environment': return finish(peer, await environmentRpc(options.service, jobs, peer, request.payload), payload => ({ type: 'response', id, method: 'environment', payload }));
+        case 'environment': return finish(peer, await environmentRpc(options.service, jobs, peer, request.payload, environment), payload => ({ type: 'response', id, method: 'environment', payload }));
         case 'machine': return finish(peer, await machineRpc(options.service, options.control, port, request.payload), payload => ({ type: 'response', id, method: 'machine', payload }));
         case 'command': return finish(peer, await commandRpc({ service: options.service, jobs, peer, directory, snapshots, control: options.control, port }, request.payload), payload => ({ type: 'response', id, method: 'command', payload }));
         case 'directory': {

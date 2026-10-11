@@ -1,0 +1,12 @@
+.pending-group-toasts {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 100;
+  width: min(440px, calc(100vw - 48px));
+  display: grid;
+  gap: 12px;
+  border-radius: 12px;
+  background: var(--surface, #fff);
+  box-shadow: 0 8px 32px #0003;
+}

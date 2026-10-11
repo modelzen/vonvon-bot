@@ -13,6 +13,7 @@ export async function commandRpc(options: { service: AdminService; jobs: Jobs; p
   const { service, jobs, peer, directory, snapshots, control, port } = options;
   const applied: RpcOutcome<CommandResult> = { kind: 'mutation', reply: snapshot => ({ kind: 'applied', revision: snapshot.revision }) };
   switch (request.type) {
+    case 'refresh': return applied;
     case 'registerAgent': case 'refreshAgentCredentials': {
       const value = jobs.startRegistration(peer, request.type === 'refreshAgentCredentials' ? request.agentId : undefined);
       return { kind: 'mutation', reply: () => value };
