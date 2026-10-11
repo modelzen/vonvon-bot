@@ -3,7 +3,9 @@ import { acquireMutex, closeMutex } from '../config/data-access';
 import { listenerCloseUnconfirmed, observeShutdown, type ShutdownControl } from './lifecycle';
 import { recordServicePid, clearServicePid } from '../service/win-startup';
 import { readServiceCodexBin } from '../service/codex-bin';
-import { acquirePidLock, publishPidLock, releasePidLock, type PidLockInfo } from '../server/pid-lock';
+import { acquirePidLock, publishPidLock, readRunningPidLock, releasePidLock, type PidLockInfo } from '../server/pid-lock';
+import { readStartupRegistration } from '../service/startup';
+import { log } from '../core/logger';
 
 export async function runHostRuntime(options: { bot?: string; port?: number; managed: boolean; control?: ShutdownControl }): Promise<void> {
   const control = options.control ?? observeShutdown(options.managed);
@@ -12,8 +14,38 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
   const errors: unknown[] = [];
   try {
     if (!process.send) {
-      lock = await acquireMutex(paths.appDir, 'host');
-      owner = await acquirePidLock(paths.appDir);
+      const serviceManaged = Boolean(process.env.VONVON_SERVICE);
+      if (process.platform === 'win32' && serviceManaged) throw new Error('Windows service startup is unavailable.');
+      const registration = process.platform === 'win32' ? null : await readStartupRegistration(paths.appDir).catch(error => {
+        if (!serviceManaged) throw error;
+        return null;
+      });
+      if (serviceManaged && registration?.kind !== 'ours') {
+        log.info('daemon-startup', 'registration_absent');
+        process.exitCode = 0;
+        return;
+      }
+      if (serviceManaged) {
+        const existing = await readRunningPidLock(paths.appDir);
+        if (existing) {
+          log.info('daemon-startup', 'owner_present', { pid: existing.pid });
+          process.exitCode = 0;
+          return;
+        }
+      } else if (registration?.kind === 'ours') {
+        process.exitCode = 1;
+        throw new Error('Daemon is registered as a service. Use vonvon daemon start or vonvon service uninstall.');
+      }
+      try {
+        lock = await acquireMutex(paths.appDir, 'host');
+        owner = await acquirePidLock(paths.appDir);
+      } catch (error) {
+        const existing = serviceManaged ? await readRunningPidLock(paths.appDir) : null;
+        if (!existing || existing.pid === process.pid) throw error;
+        log.info('daemon-startup', 'owner_present', { pid: existing.pid });
+        process.exitCode = 0;
+        return;
+      }
     }
     if (control.requested) return;
     if (owner) recordServicePid();

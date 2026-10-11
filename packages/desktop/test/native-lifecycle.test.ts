@@ -11,6 +11,7 @@ const fake = vi.hoisted(() => ({
   bridge: { requestQuit: vi.fn(), dispose: vi.fn(async () => {}) },
   owner: { dispose: vi.fn(async () => {}) },
   attach: vi.fn(),
+  ready: vi.fn(async () => {}),
   install: vi.fn(),
   tray: { destroy: vi.fn() },
   openExternal: vi.fn(async () => {}),
@@ -73,6 +74,11 @@ vi.mock('../src/attach.js', () => ({ attachExisting: fake.attach, AttachError: c
 vi.mock('../src/bridge.js', () => ({ installBridge: fake.install, openAllowedExternal: fake.openExternal }));
 vi.mock('../src/tray.js', () => ({ createDesktopTray: vi.fn(() => fake.tray) }));
 vi.mock('../src/update-configuration.js', () => ({ desktopUpdateConfiguration: fake.updateConfiguration }));
+vi.mock('../src/daemon-dependencies.js', () => ({
+  prepareDesktopRoot: vi.fn(async () => fake.root),
+  createDaemonDependencies: vi.fn(),
+}));
+vi.mock('../src/daemon-manager.js', () => ({ createDaemonManager: vi.fn(() => ({ ensureReady: fake.ready })) }));
 vi.mock('../../daemon/src/config/data-root.js', () => ({ resolveDataRoot: vi.fn(() => ({ kind: 'canonical', path: fake.root })) }));
 
 import { startDesktop, desktopResources } from '../src/main.js';
@@ -122,6 +128,7 @@ beforeEach(async () => {
   fake.owner.dispose.mockClear();
   fake.tray.destroy.mockClear();
   fake.attach.mockReset().mockResolvedValue(fake.owner);
+  fake.ready.mockClear();
   fake.install.mockReset().mockReturnValue(fake.bridge);
   fake.openExternal.mockClear();
   await startDesktop();
@@ -145,6 +152,11 @@ async function downloadUpdate(): Promise<void> {
 }
 
 describe('updater final install lifecycle', () => {
+  it('waits for daemon readiness before final authenticated attachment', () => {
+    expect(fake.ready).toHaveBeenCalledExactlyOnceWith(0);
+    expect(fake.attach).toHaveBeenCalledExactlyOnceWith(fake.root);
+    expect(fake.ready.mock.invocationCallOrder[0]).toBeLessThan(fake.attach.mock.invocationCallOrder[0] ?? 0);
+  });
   it.each(['cleanup rejection', 'state-path write failure', 'native install throw'] as const)(
     'shows a native error and permits owned-app exit after %s', async failure => {
       await downloadUpdate();
