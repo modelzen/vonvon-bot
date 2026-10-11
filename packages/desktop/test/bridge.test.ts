@@ -58,6 +58,8 @@ function harness() {
   const paths: DesktopResources = { uiIndex, preload: '/unused', trayPng: '/unused' };
   const actions = {
     chooseExecutablePath: vi.fn(async (): Promise<string | null> => '/usr/local/bin/codex'),
+    checkDesktopUpdate: vi.fn(async () => ({ state: 'available' as const, current: '1.0.0', latest: '1.1.0', message: 'ready' })),
+    installDesktopUpdate: vi.fn(async () => ({ state: 'downloaded' as const, current: '1.0.0', latest: '1.1.0', message: 'ready' })),
     hide: vi.fn(), confirmQuit: vi.fn(async () => {}), connectionLost: vi.fn(),
   };
   const bridge = installBridge(owner, window, paths, actions);
@@ -73,6 +75,18 @@ function harness() {
 beforeEach(() => { handlers.clear(); openExternal.mockClear(); failRegistration.channel = ''; });
 
 describe('desktop IPC boundary', () => {
+  it('exposes updater only to the authorized top-level document', async () => {
+    const h = harness();
+    const wrong = { ...h.event, senderFrame: { url: h.frame.url } } as IpcMainInvokeEvent;
+    expect(await handlers.get(desktopChannels.checkDesktopUpdate)?.(wrong)).toMatchObject({ ok: false });
+    expect(await h.invoke(desktopChannels.installDesktopUpdate, 'extra')).toMatchObject({ ok: false });
+    expect(h.actions.checkDesktopUpdate).not.toHaveBeenCalled();
+    expect(h.actions.installDesktopUpdate).not.toHaveBeenCalled();
+    expect(await h.invoke(desktopChannels.checkDesktopUpdate)).toMatchObject({ ok: true, value: { state: 'available' } });
+    expect(await h.invoke(desktopChannels.installDesktopUpdate)).toMatchObject({ ok: true, value: { state: 'downloaded' } });
+    expect(h.machine).not.toHaveBeenCalled();
+    await h.bridge.dispose();
+  });
   it('returns a selected path or cancellation only to the authorized document', async () => {
     const h = harness();
     const wrong = { ...h.event, senderFrame: { url: h.frame.url } } as IpcMainInvokeEvent;

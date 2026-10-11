@@ -23,6 +23,16 @@ function harness() {
 }
 
 describe('synchronous desktop facade', () => {
+  it('validates native updater results at the preload boundary', async () => {
+    const h = harness();
+    const { shell } = createDesktopFacades(h.transport);
+    const update = { state: 'available', current: '1.0.0', latest: '1.1.0', message: 'ready' };
+    h.replies.set(desktopChannels.checkDesktopUpdate, async () => ({ ok: true, value: update }));
+    await expect(shell.checkDesktopUpdate()).resolves.toEqual(update);
+    h.replies.set(desktopChannels.installDesktopUpdate, async () => ({ ok: true, value: { ...update, state: 'invalid' } }));
+    await expect(shell.installDesktopUpdate()).rejects.toThrow();
+    expect(h.calls.slice(-2)).toEqual([desktopChannels.checkDesktopUpdate, desktopChannels.installDesktopUpdate]);
+  });
   it('exposes the executable chooser and validates its path-or-cancel response', async () => {
     const h = harness();
     const { shell } = createDesktopFacades(h.transport);

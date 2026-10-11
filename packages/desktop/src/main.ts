@@ -2,12 +2,14 @@ import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { app, BrowserWindow, dialog, Menu, type Tray } from 'electron';
+import { app, autoUpdater, BrowserWindow, dialog, Menu, type Tray } from 'electron';
 import { resolveDataRoot } from '../../daemon/src/config/data-root.js';
 import { attachExisting, AttachError } from './attach.js';
 import { installBridge, openAllowedExternal } from './bridge.js';
 import type { AttachedDaemon, DesktopBridge, DesktopResources } from './ipc-contract.js';
 import { createDesktopTray } from './tray.js';
+import { DesktopUpdater } from './updates.js';
+import { desktopUpdateConfiguration } from './update-configuration.js';
 
 export function desktopResources(appPath: string, packaged: boolean): DesktopResources {
   return packaged ? {
@@ -125,6 +127,16 @@ export async function startDesktop(): Promise<void> {
     const icon = realpathSync(paths.trayPng);
     const root = resolveDataRoot(homedir());
     if (root.kind !== 'canonical') throw new AttachError('root');
+    const updateConfiguration = await desktopUpdateConfiguration({ appPath: app.getAppPath(), isPackaged: app.isPackaged });
+    const updater = new DesktopUpdater({
+      current: app.getVersion(), ...updateConfiguration, driver: autoUpdater,
+      statePath: join(app.getPath('userData'), 'desktop-update-expected-version'),
+      beforeInstall: async () => {
+        await cleanup();
+        terminating = true;
+        quitting = true;
+      },
+    });
     owner = await attachExisting(root.path);
     if (terminating) {
       await owner.dispose();
@@ -183,6 +195,19 @@ export async function startDesktop(): Promise<void> {
           properties: ['openFile'],
         });
         return result.canceled ? null : result.filePaths[0] ?? null;
+      },
+      checkDesktopUpdate: () => updater.check(),
+      installDesktopUpdate: async () => {
+        try { return await updater.install(); }
+        catch (error) {
+          if (cleanupPromise) {
+            terminating = true;
+            dialog.showErrorBox('Vonvon Bot', 'The desktop update failed. Reopen Vonvon Bot to try again.');
+            quitting = true;
+            app.quit();
+          }
+          throw error;
+        }
       },
       hide: () => current.hide(),
       confirmQuit,

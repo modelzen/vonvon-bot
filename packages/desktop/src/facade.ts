@@ -2,7 +2,7 @@ import type { VonvonClient } from '@vonvon/client/browser';
 import {
   adminReplySchema, backendInstallEventPayloadSchema, collaborationReplySchema,
   commandResultSchema, desktopSnapshotSchema, directoryReplySchema,
-  environmentReplySchema, logEventPayloadSchema, machineReplySchema,
+  environmentReplySchema, logEventPayloadSchema, machineReplySchema, desktopUpdateSchema,
   settingsReplySchema,
   type BackendInstallEventPayload, type DesktopSnapshot, type LogEventPayload,
 } from '@vonvon/protocol';
@@ -200,6 +200,10 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
       .then(value => readResult(value, parseExecutablePath), error => {
         throw error instanceof Error ? new Error(error.message) : new Error('Desktop request failed');
       }),
+    checkDesktopUpdate: () => transport.invoke(desktopChannels.checkDesktopUpdate)
+      .then(value => readResult(value, value => desktopUpdateSchema.parse(value))),
+    installDesktopUpdate: () => transport.invoke(desktopChannels.installDesktopUpdate)
+      .then(value => readResult(value, value => desktopUpdateSchema.parse(value))),
     hideWindow: () => callShell(desktopChannels.hide),
     quit: () => callShell(desktopChannels.quit),
     onQuitRequested(listener) {
