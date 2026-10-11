@@ -7,13 +7,6 @@ import {
   uninstallWinStartup,
   winStartupRunning,
 } from './win-startup';
-import {
-  installSystemd,
-  restartSystemd,
-  statusSystemd,
-  systemdActive,
-  uninstallSystemd,
-} from './systemd';
 import { tailServiceLogs } from './common';
 
 export type { ServiceStatus };
@@ -43,13 +36,8 @@ export function getServiceAdapter(): ServiceAdapter {
   }
 
   if (process.platform === 'linux') {
-    return {
-      install: installSystemd,
-      uninstall: uninstallSystemd,
-      status: async () => statusSystemd(),
-      restart: restartSystemd,
-      logs: tailServiceLogs,
-    };
+    const refused = async (): Promise<never> => { throw new Error(SERVICE_UNAVAILABLE); };
+    return { install: refused, uninstall: refused, status: refused, restart: refused, logs: tailServiceLogs };
   }
 
   throw new Error(
@@ -67,7 +55,7 @@ export function isServiceRunning(): boolean {
   try {
     if (process.platform === 'darwin') return false;
     if (process.platform === 'win32') return winStartupRunning();
-    if (process.platform === 'linux') return systemdActive();
+    if (process.platform === 'linux') return false;
   } catch {
     /* service manager unavailable → treat as not running */
   }

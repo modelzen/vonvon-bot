@@ -1,65 +1,35 @@
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { renderDefinition } from '../src/service/definitions';
-import { resolveServiceRoot, LAUNCHD_LABEL } from '../src/service/identity';
-import { buildUnit, SYSTEMD_UNIT_NAME } from '../src/service/systemd';
+import { resolveServiceRoot, LAUNCHD_LABEL, SYSTEMD_UNIT_NAME } from '../src/service/identity';
 import { buildLauncherCmd, buildLauncherVbs } from '../src/service/win-startup';
 
 // These tests cover serialization and configuration semantics. Native execution
 // and executable-selection evidence live in service-smoke.test.ts.
 
 const nativeCodexPath = join(tmpdir(), 'codex tools', 'codex');
-const systemdString = (value: string): string => value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%');
-
-describe('systemd unit (buildUnit)', () => {
-  const unit = buildUnit();
-
-  it('is a well-formed user service with crash-restart + login autostart', () => {
-    expect(unit).toContain('[Service]');
+describe('systemd definition', () => {
+  it('fixes the identity, root, port, restart policy, logs and PATH', async () => {
+    const root = await resolveServiceRoot(tmpdir());
+    const rendered = renderDefinition({ target: { platform: 'linux', unitPath: '/unused.service' }, root, port: 32123,
+      distribution: { kind: 'desktop', executable: process.execPath, entry: '/package/tools %n/$entry.mjs' }, capturedPath: '/captured/"tools":/bin' });
+    if (rendered.platform !== 'linux') throw new Error('Expected unit');
+    const unit = Buffer.from(rendered.unit).toString();
+    expect(SYSTEMD_UNIT_NAME).toBe('vonvon-bot.service');
     expect(unit).toContain('Type=simple');
-    expect(unit).toContain('Restart=always');
+    expect(unit).toContain('Restart=on-failure');
     expect(unit).toContain('RestartSec=5');
-    expect(unit).toContain('[Install]');
+    expect(unit).toContain('TimeoutStopSec=infinity');
     expect(unit).toContain('WantedBy=default.target');
-  });
-
-  it('runs the daemon foreground command and appends to the shared log files', () => {
-    expect(unit).toMatch(/ExecStart=".+" ".+" daemon run/);
-    expect(unit).toContain('StandardOutput=append:');
-    expect(unit).toContain('StandardError=append:');
-    expect(unit).toContain('Environment="PATH=');
-  });
-
-  it('unit name is a .service', () => {
-    expect(SYSTEMD_UNIT_NAME).toMatch(/\.service$/);
-  });
-
-  it('preserves an explicit CODEX_BIN override for the background service', () => {
-    withCodexBin(nativeCodexPath, () => {
-      expect(buildUnit()).toContain(`Environment="CODEX_BIN=${systemdString(nativeCodexPath)}"`);
-    });
-  });
-
-  it('escapes a literal percent specifier instead of allowing systemd to expand it', () => {
-    withCodexBin(join(tmpdir(), 'codex%n!', 'codex'), () => {
-      expect(buildUnit()).toContain('codex%%n!');
-    });
-  });
-
-  it('normalizes a relative CODEX_BIN before persisting it', () => {
-    withCodexBin(join('relative tools', 'codex'), () => {
-      expect(buildUnit()).toContain(`Environment="CODEX_BIN=${systemdString(resolve('relative tools', 'codex'))}"`);
-    });
-  });
-
-  it('omits an unset override and serializes an explicit clear', () => {
-    withCodexBin(undefined, () => expect(buildUnit()).not.toContain('CODEX_BIN='));
-    withCodexBin('', () => expect(buildUnit()).toContain('Environment="CODEX_BIN="'));
-    withCodexBin(nativeCodexPath, () => {
-      expect(buildUnit({ codexBin: null })).toContain('Environment="CODEX_BIN="');
-      expect(buildUnit({ codexBin: null })).not.toContain(systemdString(nativeCodexPath));
-    });
+    expect(unit).toContain('"/package/tools %%n/$$entry.mjs" daemon run --port 32123');
+    expect(unit).toContain(`Environment="VONVON_HOME=${root}"`);
+    expect(unit).toContain('Environment="VONVON_SERVICE=systemd"');
+    expect(unit).toContain('Environment="ELECTRON_RUN_AS_NODE=1"');
+    expect(unit).toContain('Environment="PATH=/captured/\\"tools\\":/bin"');
+    expect(unit).toContain(`StandardOutput=append:${root}/service.log`);
+    expect(unit).toContain(`StandardError=append:${root}/service.err.log`);
+    expect(unit).not.toContain('CODEX_BIN');
   });
 });
 

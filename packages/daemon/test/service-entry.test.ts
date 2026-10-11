@@ -5,7 +5,6 @@ import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { renderDefinition } from '../src/service/definitions';
 import { resolveServiceRoot } from '../src/service/identity';
-import { buildUnit } from '../src/service/systemd';
 import { buildLauncherCmd } from '../src/service/win-startup';
 
 const bin = resolve(import.meta.dirname, '../bin/vonvon.mjs');
@@ -35,14 +34,17 @@ describe('OS service foreground entry', () => {
     assertPackagedCommand(args, 32123);
   });
 
-  it('systemd calls the packaged daemon command', () => {
-    const unit = buildUnit({ cliBinPath: bin });
-    const line = unit.match(/^ExecStart=(.*)$/m)?.[1];
+  it('systemd calls the packaged daemon command', async () => {
+    const root = await resolveServiceRoot(tmpdir());
+    const rendered = renderDefinition({ target: { platform: 'linux', unitPath: '/unused.service' }, root, port: 32123,
+      distribution: { kind: 'npm', executable: process.execPath, entry: bin }, capturedPath: '/usr/bin' });
+    if (rendered.platform !== 'linux') throw new Error('Expected unit');
+    const line = Buffer.from(rendered.unit).toString().match(/^ExecStart=(.*)$/m)?.[1];
     expect(line).toBeDefined();
-    const args = [...line!.matchAll(/"((?:\\.|[^"\\])*)"|\b(daemon|run)\b/g)].map((match) =>
-      match[1]?.replace(/\\([\\"])/g, '$1').replace(/%%/g, '%') ?? match[2]!,
+    const args = [...line!.matchAll(/"((?:\\.|[^"\\])*)"|(\S+)/g)].map(match =>
+      match[1]?.replace(/\\([\\"])/g, '$1').replace(/%%/g, '%').replace(/\$\$/g, '$') ?? match[2]!,
     );
-    assertPackagedCommand(args);
+    assertPackagedCommand(args, 32123);
   });
 
   it('Windows login launcher calls the packaged daemon command', () => {
