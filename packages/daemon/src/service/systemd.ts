@@ -276,7 +276,6 @@ export function createSystemdService(options: { root: string }, overrides: Parti
           const match = /^127\.0\.0\.1:(\d+)$/.exec(owner.listen ?? '');
           if (!match) throw new Error('Running owner has no published port');
           port = Number(match[1]);
-          if (input.port !== undefined && input.port !== port) throw new Error(`Daemon already runs at port ${port}, not requested port ${input.port}.`);
         } else port = input.port ?? await d.freePort();
         desired = bytes(s, { root: s.root, port, distribution: { kind: distribution.kind === 'bundled' ? 'desktop' : 'npm', executable: d.executable, entry: distribution.cliPath }, capturedPath: d.capturedPath });
         const unit = await observeUnit();

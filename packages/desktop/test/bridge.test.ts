@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow, IpcMainInvokeEvent } from 'electron';
 import type { VonvonClient } from '@vonvon/client/browser';
+import { ConnectionError } from '@vonvon/client/browser';
 import { desktopChannels, type AttachedDaemon, type DesktopResources } from '../src/ipc-contract.js';
 
 const { handlers, openExternal, failRegistration } = vi.hoisted(() => ({
@@ -42,12 +43,13 @@ function harness() {
   const window = { isDestroyed: () => false, webContents } as unknown as BrowserWindow;
   const event = { sender: webContents, senderFrame: frame } as unknown as IpcMainInvokeEvent;
   let onError: (error: Error) => void = () => {};
-  const snapshot = vi.fn(async () => ({ revision: 1 }));
+  let onSnapshot: (value: unknown) => void = () => {};
+  const snapshot = vi.fn(async () => ({ revision: 1, application: { platform: 'macos', version: '1', loginItem: false, dataPath: fixtureRoot } }));
   const machine = vi.fn(async (): ReturnType<VonvonClient['machine']> => ({ type: 'done', message: 'ok' }));
   const dispose = vi.fn(async () => {});
   const client = {
     snapshot, machine,
-    watchSnapshots: () => () => {},
+    watchSnapshots: (listener: (value: unknown) => void) => { onSnapshot = listener; return () => { onSnapshot = () => {}; }; },
     onLog: () => () => {},
     onBackendInstall: () => () => {},
     onError(listener: (error: Error) => void) { onError = listener; return () => {}; },
@@ -58,6 +60,10 @@ function harness() {
   const paths: DesktopResources = { uiIndex, preload: '/unused', trayPng: '/unused' };
   const actions = {
     startHost: vi.fn(async (_bot?: string) => ({ type: 'done' as const, message: 'started' })),
+    service: vi.fn(async (_action: 'install' | 'start' | 'stop' | 'uninstall') => ({ type: 'done' as const, message: 'service updated' })),
+    setLoginItem: vi.fn(async (_enabled: boolean) => {}),
+    readLoginItem: vi.fn(async () => true),
+    isExpectedDisconnect: vi.fn(() => false),
     repairCli: vi.fn(async () => ({ type: 'done' as const, message: 'installed' })),
     observeCli: vi.fn(async () => ({ kind: 'error' as const, message: 'not registered' })),
     chooseExecutablePath: vi.fn(async (): Promise<string | null> => '/usr/local/bin/codex'),
@@ -72,12 +78,64 @@ function harness() {
     return handler(event, ...args);
   };
   return { bridge, event, frame, webContents, window, paths, invoke, snapshot, machine, dispose, actions,
+    emitSnapshot: (value: unknown) => onSnapshot(value),
     emitError: (error: Error) => onError(error) };
 }
 
 beforeEach(() => { handlers.clear(); openExternal.mockClear(); failRegistration.channel = ''; });
 
 describe('desktop IPC boundary', () => {
+  it('keeps service operations shell-owned and validates authorized arguments', async () => {
+    const h = harness();
+    const wrong = { ...h.event, senderFrame: { url: h.frame.url } } as IpcMainInvokeEvent;
+    expect(await handlers.get(desktopChannels.service)?.(wrong, { type: 'service', action: 'install' })).toMatchObject({ ok: false });
+    expect(await h.invoke(desktopChannels.service, { type: 'service', action: 'invalid' })).toMatchObject({ ok: false });
+    expect(await h.invoke(desktopChannels.service, { type: 'service', action: 'install' }, 'extra')).toMatchObject({ ok: false });
+    expect(await h.invoke(desktopChannels.setLoginItem, 'true')).toMatchObject({ ok: false });
+    expect(await h.invoke(desktopChannels.setLoginItem, true, false)).toMatchObject({ ok: false });
+    expect(h.actions.service).not.toHaveBeenCalled();
+    expect(h.actions.setLoginItem).not.toHaveBeenCalled();
+    expect(await h.invoke(desktopChannels.service, { type: 'service', action: 'install' })).toEqual({ ok: true, value: { type: 'done', message: 'service updated' } });
+    expect(await h.invoke(desktopChannels.setLoginItem, true)).toEqual({ ok: true, value: undefined });
+    expect(h.actions.service).toHaveBeenCalledWith('install');
+    expect(h.actions.setLoginItem).toHaveBeenCalledWith(true);
+    expect(await h.invoke(desktopChannels.machine, { type: 'service', action: 'install' })).toMatchObject({ ok: false });
+    expect(h.machine).not.toHaveBeenCalled();
+    await h.bridge.dispose();
+  });
+
+  it('reports the desktop registration in its snapshot', async () => {
+    const h = harness();
+    expect(await h.invoke(desktopChannels.snapshot)).toMatchObject({ ok: true, value: { application: { loginItem: true } } });
+    expect(h.actions.readLoginItem).toHaveBeenCalledOnce();
+    await h.bridge.dispose();
+  });
+
+  it('coalesces registration reads and emits only the newest snapshot', async () => {
+    const h = harness();
+    await h.invoke(desktopChannels.subscribe);
+    let release!: (enabled: boolean) => void;
+    h.actions.readLoginItem.mockImplementationOnce(() => new Promise<boolean>(resolve => { release = resolve; }));
+    h.emitSnapshot({ revision: 2, application: { platform: 'macos', version: '1', loginItem: false, dataPath: fixtureRoot } });
+    h.emitSnapshot({ revision: 3, application: { platform: 'macos', version: '1', loginItem: false, dataPath: fixtureRoot } });
+    expect(h.actions.readLoginItem).toHaveBeenCalledOnce();
+    release(false);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.webContents.send).toHaveBeenCalledTimes(1);
+    expect(h.webContents.send).toHaveBeenCalledWith(desktopChannels.event, { type: 'snapshot', value: expect.objectContaining({ revision: 3, application: expect.objectContaining({ loginItem: true }) }) });
+    await h.bridge.dispose();
+  });
+
+  it('does not report an expected service drain as a lost connection', async () => {
+    const h = harness();
+    await h.invoke(desktopChannels.subscribe);
+    h.actions.isExpectedDisconnect.mockReturnValue(true);
+    h.emitError(new ConnectionError('controlled stop'));
+    expect(h.actions.connectionLost).not.toHaveBeenCalled();
+    expect(h.webContents.send).not.toHaveBeenCalled();
+    await h.bridge.dispose();
+  });
   it('authorizes zero-argument CLI repair and overlays readonly CLI status', async () => {
     const h = harness();
     const wrongFrame = { ...h.event, senderFrame: { url: h.frame.url } } as IpcMainInvokeEvent;
@@ -148,8 +206,9 @@ describe('desktop IPC boundary', () => {
     h.webContents.send.mockClear();
     emitOld?.({ revision: 10 });
     emitNext?.(nextSnapshot);
-    expect(h.webContents.send).toHaveBeenCalledExactlyOnceWith(desktopChannels.event, { type: 'snapshot', value: nextSnapshot });
-    expect(await h.invoke(desktopChannels.snapshot)).toEqual({ ok: true, value: nextSnapshot });
+    await Promise.resolve();
+    expect(h.webContents.send).toHaveBeenCalledExactlyOnceWith(desktopChannels.event, { type: 'snapshot', value: { revision: 1, application: { loginItem: true } } });
+    expect(await h.invoke(desktopChannels.snapshot)).toEqual({ ok: true, value: { revision: 1, application: { loginItem: true } } });
     await h.bridge.dispose();
     expect(next.dispose).toHaveBeenCalledOnce();
   });
@@ -157,7 +216,7 @@ describe('desktop IPC boundary', () => {
   it('leaves no stale owner when the new connection cannot provide a snapshot', async () => {
     const h = harness();
     const next = {
-      client: { snapshot: vi.fn(async () => { throw new Error('snapshot failed'); }) },
+      client: { snapshot: vi.fn(async () => { throw new Error('snapshot failed'); }), watchSnapshots: () => () => {}, onLog: () => () => {}, onBackendInstall: () => () => {}, onError: () => () => {} },
       identity: { pid: 4, startedAt: 'new', listen: '127.0.0.1:4003' },
       dispose: vi.fn(async () => {}),
     } as unknown as AttachedDaemon;
@@ -167,6 +226,20 @@ describe('desktop IPC boundary', () => {
     expect(await h.invoke(desktopChannels.snapshot)).toMatchObject({ ok: false });
     await h.bridge.dispose();
     expect(h.dispose).toHaveBeenCalledOnce();
+  });
+  it('rejects replacement before reattached when registration cannot be read', async () => {
+    const h = harness();
+    await h.invoke(desktopChannels.subscribe);
+    h.actions.readLoginItem.mockRejectedValueOnce(new Error('registration unavailable'));
+    const next = {
+      client: { snapshot: vi.fn(async () => ({ revision: 1 })), watchSnapshots: () => () => {}, onLog: () => () => {}, onBackendInstall: () => () => {}, onError: () => () => {} },
+      identity: { pid: 4, startedAt: 'new', listen: '127.0.0.1:4003' },
+      dispose: vi.fn(async () => {}),
+    } as unknown as AttachedDaemon;
+    await expect(h.bridge.replaceOwner(next)).rejects.toThrow('registration unavailable');
+    expect(next.dispose).toHaveBeenCalledOnce();
+    expect(h.webContents.send).not.toHaveBeenCalled();
+    await h.bridge.dispose();
   });
   it('exposes updater only to the authorized top-level document', async () => {
     const h = harness();
@@ -247,4 +320,66 @@ describe('desktop IPC boundary', () => {
     expect(() => harness()).toThrow('registration failed');
     expect(handlers.size).toBe(0);
   });
+});
+
+it('serves installed/stopped status after stop closes RPC, then uses the reattached owner', async () => {
+  const h = harness();
+  const status = { type: 'status' as const, host: { ownership: 'owned' as const, pid: 1 },
+    service: { platformName: 'macos', installed: true, running: true, pid: '1', servicePath: '', stdoutPath: '', stderrPath: '' },
+    cli: { kind: 'ready' as const, bin: '/bin/vonvon', message: 'ready' } };
+  h.machine.mockResolvedValue(status);
+  h.actions.service.mockImplementation(async () => {
+    h.machine.mockRejectedValue(new ConnectionError('stopped'));
+    return { type: 'done', message: 'stopped' };
+  });
+  expect(await h.invoke(desktopChannels.service, { type: 'service', action: 'stop' })).toMatchObject({ ok: true });
+  expect(await h.invoke(desktopChannels.machine, { type: 'status' })).toMatchObject({ ok: true, value: { host: null, service: { installed: true, running: false } } });
+  expect(h.machine).toHaveBeenCalledTimes(1);
+  const next = { client: { snapshot: async () => ({ revision: 1 }), machine: async () => ({ ...status, host: { ownership: 'owned', pid: 2 } }),
+    watchSnapshots: () => () => {}, onLog: () => () => {}, onBackendInstall: () => () => {}, onError: () => () => {} },
+    identity: { pid: 2, startedAt: 'next', listen: '127.0.0.1:4000' }, dispose: async () => {} } as unknown as AttachedDaemon;
+  await h.bridge.replaceOwner(next);
+  expect(await h.invoke(desktopChannels.machine, { type: 'status' })).toMatchObject({ ok: true, value: { host: { pid: 2 }, service: { running: true } } });
+  await h.bridge.dispose();
+});
+
+it('cleans partial bindings without announcing a failed reattachment', async () => {
+  const h = harness();
+  await h.invoke(desktopChannels.subscribe);
+  const off = vi.fn();
+  const next = { client: { watchSnapshots: () => off, onLog: () => { throw new Error('bind failed'); } },
+    dispose: vi.fn(async () => {}) } as unknown as AttachedDaemon;
+  await expect(h.bridge.replaceOwner(next)).rejects.toThrow('bind failed');
+  expect(off).toHaveBeenCalledOnce();
+  expect(h.webContents.send).not.toHaveBeenCalled();
+  expect(next.dispose).toHaveBeenCalledOnce();
+  await h.bridge.dispose();
+});
+
+it.each(['synchronous', 'pending'] as const)('preserves a newer %s watch snapshot during reattachment', async timing => {
+  const h = harness();
+  await h.invoke(desktopChannels.subscribe);
+  let emit: (value: unknown) => void = () => {};
+  const next = { client: {
+    snapshot: async () => { if (timing === 'pending') { await Promise.resolve(); emit({ revision: 5 }); } return { revision: 1 }; },
+    watchSnapshots: (listener: typeof emit) => { emit = listener; if (timing === 'synchronous') emit({ revision: 5 }); return () => {}; },
+    onLog: () => () => {}, onBackendInstall: () => () => {}, onError: () => () => {},
+  }, dispose: async () => {} } as unknown as AttachedDaemon;
+  await h.bridge.replaceOwner(next);
+  expect(h.webContents.send.mock.calls.map(call => call[1])).toEqual([
+    { type: 'reattached' }, { type: 'snapshot', value: { revision: 5, application: { loginItem: true } } },
+  ]);
+  await h.bridge.dispose();
+});
+
+it('publishes actual registration after install and uninstall without daemon pushes', async () => {
+  const h = harness();
+  await h.invoke(desktopChannels.subscribe);
+  let installed = false;
+  h.actions.readLoginItem.mockImplementation(async () => installed);
+  h.actions.service.mockImplementation(async action => { installed = action === 'install'; return { type: 'done', message: 'updated' }; });
+  await h.invoke(desktopChannels.service, { type: 'service', action: 'install' });
+  await h.invoke(desktopChannels.service, { type: 'service', action: 'uninstall' });
+  expect(h.webContents.send.mock.calls.map(call => call[1].value.application.loginItem)).toEqual([true, false]);
+  await h.bridge.dispose();
 });

@@ -1,9 +1,33 @@
 import type { ServiceAdapter } from '../../service/adapter';
-import { SERVICE_UNAVAILABLE } from '../../host/service';
 import { serviceStatusSchema } from '@vonvon/protocol';
 
-export async function runServiceCommand(_action: 'install' | 'uninstall', _adapter?: Pick<ServiceAdapter, 'install' | 'uninstall'>): Promise<void> {
-  throw new Error(SERVICE_UNAVAILABLE);
+export async function runServiceCommand(action: 'install' | 'uninstall', adapter?: Pick<ServiceAdapter, 'install' | 'uninstall'>, options: { port?: number } = {}): Promise<void> {
+  const service = adapter ?? (await import('../../service/adapter')).getServiceAdapter();
+  const result = action === 'install' ? await service.install(options) : await service.uninstall();
+  const diagnostics = [`${result.kind}: ${result.detail}`];
+  if (result.retained !== null) diagnostics.push(`Retained PID ${result.retained.pid} (startedAt ${result.retained.startedAt}).`);
+  for (const leftover of result.leftovers) diagnostics.push(`Leftover: ${leftover}`);
+  const kind = result.kind;
+  switch (kind) {
+    case 'installed':
+    case 'already-installed':
+    case 'uninstalled':
+    case 'not-installed':
+      process.stdout.write(`${diagnostics.join('\n')}\n`);
+      return;
+    case 'install_refused':
+    case 'install_rolled_back':
+    case 'install_incomplete':
+    case 'uninstall_refused':
+    case 'uninstall_rolled_back':
+    case 'uninstall_incomplete':
+      if (result.detail.includes('stop_unconfirmed')) diagnostics.push('Next step: vonvon service uninstall');
+      throw new Error(diagnostics.join('\n'));
+    default: {
+      const exhaustive: never = kind;
+      throw new Error(`Unknown service result: ${exhaustive}`);
+    }
+  }
 }
 
 export async function runServiceStatus(json: boolean, adapter?: Pick<ServiceAdapter, 'status'>): Promise<void> {

@@ -21,7 +21,7 @@ it('returns an explicit error when the frozen machine status cannot describe ano
   adapter.status.mockRejectedValue(new Error('Vonvon service registration belongs to /tmp/another-root.'));
   await expect(controlDesktopService('status', adapter)).rejects.toThrow('/tmp/another-root');
 });
-it.each(['install', 'start', 'stop', 'uninstall', 'restart; rm'])('refuses desktop service %s without adapter or inspection calls', async action => {
+it.each(['install', 'start', 'stop', 'uninstall', 'restart', 'restart; rm'])('refuses desktop service %s without adapter or inspection calls', async action => {
   const inspect = vi.fn();
   await expect(controlDesktopService(action, adapter, inspect)).rejects.toThrow(SERVICE_UNAVAILABLE);
   expect(inspect).not.toHaveBeenCalled();

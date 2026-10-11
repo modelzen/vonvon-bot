@@ -406,11 +406,23 @@ it('bundled install uses the captured executable and desktop Node mode with root
   expect(unit).toContain('Environment="ELECTRON_RUN_AS_NODE=1"'); expect(unit).toContain(`StandardOutput=append:${f.root}/service.log`); expect(unit).not.toContain('CODEX_BIN');
   expect(await readFile(posix.join(f.root, 'service.log'))).toEqual(Buffer.alloc(0)); expect(await readFile(posix.join(f.root, 'service.err.log'))).toEqual(Buffer.alloc(0));
 });
-it('authenticated self-hosted owner fixes the install port and stays running', async () => {
+it('authenticated self-hosted owner overrides the explicit install port and stays running', async () => {
   const f = await fixture(); f.state.owner = { pid: 42000, startedAt: 'self-hosted', listen: '127.0.0.1:32124' };
   let verified = 0; const service = f.service({ verifyOwner: async () => { verified++; } });
-  expect((await service.install({ port: 32123 })).kind).toBe('install_refused'); expect(f.mutations()).toEqual([]);
-  expect((await service.install()).kind).toBe('installed'); expect((await f.bytes()).toString()).toContain('daemon run --port 32124'); expect(f.state.owner.pid).toBe(42000); expect(verified).toBe(3);
+  expect((await service.install({ port: 32123 })).kind).toBe('installed');
+  expect((await f.bytes()).toString()).toContain('daemon run --port 32124'); expect(f.state.owner.pid).toBe(42000); expect(verified).toBe(2);
+  expect(f.calls.filter(command => command.startsWith('stop:'))).toEqual([]);
+});
+it('honors the explicit install port when no owner runs', async () => {
+  const f = await fixture();
+  f.state.onCommand = async command => {
+    if (command === `enable --now ${SYSTEMD_UNIT_NAME}`) {
+      f.state.pid = 41001;
+      f.state.owner = { pid: 41001, startedAt: '2026-10-12T00:00:00Z', listen: '127.0.0.1:32124' };
+    }
+  };
+  expect((await f.service().install({ port: 32124 })).kind).toBe('installed');
+  expect((await f.bytes()).toString()).toContain('daemon run --port 32124');
 });
 it.each(['open', 'write', 'sync', 'close', 'rename'])('restoration %s failure never reports rolled back', async boundary => {
   const f = await fixture(); await f.seed(); f.state.pidReply = failed();

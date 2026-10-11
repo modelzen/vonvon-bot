@@ -324,15 +324,21 @@ describe('CLI ownership', () => {
   });
 });
 
-describe('V3 service refusal', () => {
+describe('service command boundaries', () => {
   const refusal = 'Vonvon Bot cannot manage an OS service in this version. Use vonvon daemon start and vonvon daemon stop.';
-  it.each(['install', 'uninstall'] as const)('service %s refuses before loading an adapter or mutating files', async (action) => {
+  it.each(['install', 'uninstall'] as const)('service %s delegates only to its transaction', async (action) => {
     const before = readdirSync(paths.appDir);
+    const adapter = {
+      install: vi.fn(async () => ({ kind: 'installed', detail: 'Installed', retained: null, leftovers: [] })),
+      uninstall: vi.fn(async () => ({ kind: 'uninstalled', detail: 'Uninstalled', retained: null, leftovers: [] })),
+    };
+    fixture.getAdapter.mockReturnValue(adapter);
+    vi.spyOn(process.stdout, 'write').mockReturnValue(true);
     const result = observed(runServiceCommand(action)); await result.settled;
-    expect.soft(String(result.error())).toContain(refusal);
-    expect.soft(fixture.getAdapter).not.toHaveBeenCalled();
-    expect.soft(fixture.adapter.install).not.toHaveBeenCalled();
-    expect.soft(fixture.adapter.uninstall).not.toHaveBeenCalled();
+    expect.soft(result.state()).toBe('fulfilled');
+    expect.soft(fixture.getAdapter).toHaveBeenCalledOnce();
+    expect.soft(adapter[action]).toHaveBeenCalledOnce();
+    expect.soft(adapter[action === 'install' ? 'uninstall' : 'install']).not.toHaveBeenCalled();
     expect.soft(fixture.spawn).not.toHaveBeenCalled();
     expect.soft(fixture.spawnSync).not.toHaveBeenCalled();
     expect(readdirSync(paths.appDir)).toEqual(before);

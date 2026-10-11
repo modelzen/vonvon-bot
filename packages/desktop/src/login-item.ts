@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { classifyDistribution, type Distribution } from '../../daemon/src/service/distribution.js';
 import type { Registration } from './daemon-manager.js';
 
-interface LoginItemRuntime {
+export interface LoginItemRuntime {
   platform: NodeJS.Platform;
   packaged: boolean;
   resources: string;
@@ -81,4 +81,16 @@ export async function setLoginItem(
   }
   if (!enabled) await dependencies.reattachAfterUninstall();
   return result;
+}
+
+export async function stopRegisteredDaemon(runtime: LoginItemRuntime): Promise<void> {
+  if (!runtime.packaged) throw new Error('Service control requires the packaged desktop application.');
+  const distribution = classifyDistribution(join(runtime.resources, 'daemon'));
+  if (distribution.kind !== 'bundled') throw new Error('The bundled Vonvon daemon is unavailable.');
+  const env: NodeJS.ProcessEnv = { ...runtime.env, ELECTRON_RUN_AS_NODE: '1', VONVON_HOME: runtime.root };
+  delete env.VONVON_SERVICE;
+  const result = await runCommand(runtime.executable, [distribution.cliPath, 'daemon', 'stop'], env);
+  if (result.code !== 0) {
+    throw new Error(`Vonvon daemon stop exited ${result.code}: ${result.stderr || result.stdout || 'No output.'}`);
+  }
 }

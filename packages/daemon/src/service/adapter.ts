@@ -8,12 +8,14 @@ import { readRegistration, type Registration } from './registration';
 import { serviceStderrPath, serviceStdoutPath, tailServiceLogs, type ServiceStatus } from './common';
 import { resolveServiceRoot, serviceTarget, WINDOWS_RUN_KEY, WINDOWS_RUN_VALUE } from './identity';
 import { readVonvonRunValue } from './win-startup';
+import type { createLaunchdService } from './launchd';
 
 export type { ServiceStatus };
+export type ServiceTransactionOutcome = Awaited<ReturnType<ReturnType<typeof createLaunchdService>['install']>>;
 
 export interface ServiceAdapter {
-  install(): Promise<ServiceStatus>;
-  uninstall(): Promise<void>;
+  install(options?: { port?: number }): Promise<ServiceTransactionOutcome>;
+  uninstall(): Promise<ServiceTransactionOutcome>;
   status(): Promise<ServiceStatus>;
   restart(): Promise<ServiceStatus>;
   logs(follow: boolean): Promise<void>;
@@ -58,7 +60,15 @@ export function getServiceAdapter(): ServiceAdapter {
   const refused = async (): Promise<never> => { throw new Error(SERVICE_UNAVAILABLE); };
   if (process.platform === 'darwin') {
     return {
-      install: refused, uninstall: refused, restart: refused, logs: tailServiceLogs,
+      async install(options) {
+        const { createLaunchdService } = await import('./launchd');
+        return createLaunchdService({ root: paths.appDir }).install(options);
+      },
+      async uninstall() {
+        const { createLaunchdService } = await import('./launchd');
+        return createLaunchdService({ root: paths.appDir }).uninstall();
+      },
+      restart: refused, logs: tailServiceLogs,
       async status() {
         const { createLaunchdService } = await import('./launchd');
         const result = await createLaunchdService({ root: paths.appDir }).status();
@@ -74,8 +84,14 @@ export function getServiceAdapter(): ServiceAdapter {
   }
   if (process.platform === 'win32') {
     return {
-      install: refused,
-      uninstall: refused,
+      async install(options) {
+        const { createWindowsService } = await import('./windows');
+        return createWindowsService({ root: paths.appDir }).install(options);
+      },
+      async uninstall() {
+        const { createWindowsService } = await import('./windows');
+        return createWindowsService({ root: paths.appDir }).uninstall();
+      },
       async status() {
         const root = await resolveServiceRoot(paths.appDir);
         const target = serviceTarget({ platform: 'win32', root });
@@ -99,7 +115,15 @@ export function getServiceAdapter(): ServiceAdapter {
   }
   if (process.platform === 'linux') {
     return {
-      install: refused, uninstall: refused, restart: refused, logs: tailServiceLogs,
+      async install(options) {
+        const { createSystemdService } = await import('./systemd');
+        return createSystemdService({ root: paths.appDir }).install(options);
+      },
+      async uninstall() {
+        const { createSystemdService } = await import('./systemd');
+        return createSystemdService({ root: paths.appDir }).uninstall();
+      },
+      restart: refused, logs: tailServiceLogs,
       async status() {
         const { createSystemdService } = await import('./systemd');
         const result = await createSystemdService({ root: paths.appDir }).status();
