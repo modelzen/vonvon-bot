@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { constants } from 'node:fs';
+import { constants, readFileSync } from 'node:fs';
 import { access, stat } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { paths } from '../config/paths';
@@ -9,28 +9,40 @@ import { getCliBridgePreferences, isComplete, resolveOwner } from '../config/sch
 import { cliBridgeRouteRevision, readCliBridgeRoute, saveCliBridgeRoute, selectCliBridgeHookBot } from '../cli-bridge/route';
 import { inspectCliBridgeHooks, inspectCliBridgeHookTargets, installCliBridgeHooks, resolveBridgeHookCommand } from '../cli-bridge/hooks';
 import { readServiceCodexBin, saveServiceCodexBin } from '../service/codex-bin';
+import { customAcpCommand, parseCustomAcpCommand, resolveCustomAcpCommand, saveCustomAcpCommand, type CustomAcpCommandState } from '../agent/custom-acp-command';
 import type { ApplyEffect, HostSettings, HostSettingsView, SettingsActionResult, SettingsSave, SettingsSectionView } from './settings-types';
 
 export function createHostSettings(options: {
   appDir?: string;
   readonly?: boolean;
   runningCodexBin?: string | null;
+  runningCustomAcpState?: CustomAcpCommandState;
 } = {}): Pick<HostSettings, 'read' | 'save' | 'act'> {
   const appDir = options.appDir ?? paths.appDir;
   const runningCodexBin = options.runningCodexBin === undefined
     ? process.env.CODEX_BIN || null
     : options.runningCodexBin;
+  const runningCustomAcpState = options.runningCustomAcpState ?? customAcpCommand();
   let writes: Promise<unknown> = Promise.resolve();
-  const effect: ApplyEffect = { fields: ['codexBin'], when: 'restart', detail: '已保存，下次启动 Bridge 时使用；当前会话保持原来的执行程序。' };
+  const effect: ApplyEffect = { fields: ['codexBin', 'customAcpCommand'], when: 'restart', detail: '已保存，重启后使用新的执行设置。' };
+  function storedCustomAcp() {
+    const state = resolveCustomAcpCommand(appDir);
+    if (state.kind !== 'invalid') return { state, fingerprint: state };
+    let sha256: string;
+    try { sha256 = createHash('sha256').update(readFileSync(state.file)).digest('hex'); }
+    catch { sha256 = 'unreadable'; }
+    return { state, fingerprint: { configured: 'invalid', sha256 } };
+  }
   function view(): HostSettingsView {
     const stored = readServiceCodexBin(appDir);
+    const customAcp = storedCustomAcp();
     return {
       scope: { kind: 'host' },
       sections: {
         execution: {
-          stored: { codexBin: stored ?? null },
-          effective: { codexBin: runningCodexBin },
-          revision: createHash('sha256').update(JSON.stringify({ configured: stored !== undefined, codexBin: stored ?? null })).digest('hex'),
+          stored: { codexBin: stored ?? null, customAcpCommand: customAcp.state.kind === 'set' ? customAcp.state.command : null },
+          effective: { codexBin: runningCodexBin, customAcpCommand: runningCustomAcpState.kind === 'set' ? runningCustomAcpState.command : null },
+          revision: createHash('sha256').update(JSON.stringify({ configured: stored !== undefined, codexBin: stored ?? null, customAcpCommand: customAcp.fingerprint })).digest('hex'),
           access: options.readonly
             ? { kind: 'readonly', reason: 'preview', message: '只读预览不能更改执行程序，请先启动 Bridge。' }
             : { kind: 'writable' },
@@ -129,10 +141,18 @@ export function createHostSettings(options: {
         let current = view();
         if (current.sections.execution.access.kind === 'readonly') return { kind: 'unavailable', reason: current.sections.execution.access };
         const value = edit.patch.codexBin;
-        if (value === undefined) return { kind: 'rejected', fields: [{ field: 'codexBin', message: '请选择执行程序或恢复自动查找。' }] };
-        if (readServiceCodexBin(appDir) === value) return { kind: 'saved', section: section(current), effects: [] };
+        const command = edit.patch.customAcpCommand;
+        if (value === undefined && command === undefined) return { kind: 'rejected', fields: [{ field: 'execution', message: '请选择要修改的执行设置。' }] };
+        const sameCodex = value === undefined || readServiceCodexBin(appDir) === value;
+        const savedCommand = storedCustomAcp().state;
+        const sameCommand = command === undefined || savedCommand.kind !== 'invalid' && JSON.stringify(savedCommand.kind === 'set' ? savedCommand.command : null) === JSON.stringify(command);
+        if (sameCodex && sameCommand) return { kind: 'saved', section: section(current), effects: [] };
         if (current.sections.execution.revision !== edit.revision) return { kind: 'conflict', current: section(current) };
-        if (value !== null) {
+        if (command !== undefined) {
+          try { parseCustomAcpCommand(command); }
+          catch { return { kind: 'rejected', fields: [{ field: 'customAcpCommand', message: '命令必须包含 1 到 64 个有效参数，程序需为绝对路径或命令名。' }] }; }
+        }
+        if (value !== undefined && value !== null) {
           if (!isAbsolute(value) || /[\r\n\0]/.test(value)) return { kind: 'rejected', fields: [{ field: 'codexBin', message: '执行程序必须是有效的绝对文件路径。' }] };
           try {
             if (!(await stat(value)).isFile()) throw new Error('not a file');
@@ -143,7 +163,8 @@ export function createHostSettings(options: {
         }
         current = view();
         if (current.sections.execution.revision !== edit.revision) return { kind: 'conflict', current: section(current) };
-        saveServiceCodexBin(value, appDir);
+        if (!sameCodex) saveServiceCodexBin(value, appDir);
+        if (!sameCommand) saveCustomAcpCommand(command, appDir);
         return { kind: 'saved', section: section(view()), effects: [effect] };
       });
       writes = run.catch(() => undefined);

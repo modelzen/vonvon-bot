@@ -117,7 +117,7 @@ else process.exit(0);
   const projectName = 'fixture';
   const project = { name: projectName, chatId: groupId, cwd: '/fixture', kind: 'multi' as const, backend: 'codex-appserver', enabled: true, revision: 'token' };
   const bot = { appId: agentId, name: 'fixture', tenant: 'feishu' as const, active: true, current: true, running: true, completionReminder: { mode: 'always' as const, longTaskMinutes: 7 } };
-  const host = { scope: { kind: 'host' as const }, sections: { execution: { stored: { codexBin: null }, effective: { codexBin: null }, revision: 'token', access: { kind: 'writable' as const }, apply: [] } }, runtime: { codexBin: null, fallbackCwd: '/fixture', platform: 'darwin' } };
+  const host = { scope: { kind: 'host' as const }, sections: { execution: { stored: { codexBin: null, customAcpCommand: null }, effective: { codexBin: null, customAcpCommand: null }, revision: 'token', access: { kind: 'writable' as const }, apply: [] } }, runtime: { codexBin: null, fallbackCwd: '/fixture', platform: 'darwin' } };
   const service = fakeService({
     listBots: async () => [bot],
     listProjects: async () => [{ name: projectName, chatId: groupId, cwd: '/fixture', blank: false, kind: 'multi', origin: 'joined', noMention: false, autoCompact: true, mode: 'qa', guestMode: 'qa', network: false, backend: 'codex-appserver', allowedUsersCount: 0, sessionCount: 0, createdAt: 1 }],

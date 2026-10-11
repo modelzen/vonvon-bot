@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('../src/agent/custom-acp-command', async importOriginal => ({
+  ...await importOriginal<typeof import('../src/agent/custom-acp-command')>(),
+  customAcpCommand: (): { kind: 'unset' } => ({ kind: 'unset' }),
+}));
+
 // 隔离 registerBotByQr 的**编排**：mock SDK registerApp（推 onQr/onStatus + resolve/
 // reject）与共享写盘 registerBotFromCredentials（spy 验入参），不碰真网络/keystore。
 // startRegistration 的 reject-code 解析（registrationErrorCode）走真实实现。

@@ -4,6 +4,7 @@ import { listenerCloseUnconfirmed, observeShutdown, type ShutdownControl } from 
 import { recordServicePid, clearServicePid } from '../service/win-startup';
 import { readServiceCodexBin } from '../service/codex-bin';
 import { acquirePidLock, publishPidLock, releasePidLock, type PidLockInfo } from '../server/pid-lock';
+import { initCustomAcpCommand } from '../agent/custom-acp-command';
 
 export async function runHostRuntime(options: { bot?: string; port?: number; managed: boolean; control?: ShutdownControl }): Promise<void> {
   const control = options.control ?? observeShutdown(options.managed);
@@ -16,6 +17,7 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
       owner = await acquirePidLock(paths.appDir);
     }
     if (control.requested) return;
+    await initCustomAcpCommand();
     if (owner) recordServicePid();
     if (options.managed) {
       const codexBin = readServiceCodexBin();

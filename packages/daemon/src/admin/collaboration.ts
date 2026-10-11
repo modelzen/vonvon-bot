@@ -1,12 +1,13 @@
 import { isAbsolute } from 'node:path';
 import { createHash } from 'node:crypto';
+import { backendIdSchema, type BackendId } from '@vonvon/protocol';
 import type { Project } from '../project/registry';
 import { InvalidGroupInput } from './groups';
 import { SHARE_SECTIONS, type ShareSectionKey } from '../card/usage-cards';
 
 export type ProjectTarget = { projectName: string; chatId: string };
 export type CollaborationRequest =
-  | { action: 'createProject'; requestId: string; name: string; directory?: string; kind: 'single' | 'multi'; backend: 'codex-appserver' | 'claude-agent' }
+  | { action: 'createProject'; requestId: string; name: string; directory?: string; kind: 'single' | 'multi'; backend: BackendId }
   | ({ [K in 'project' | 'history']: { action: K } & ProjectTarget }['project' | 'history'])
   | ({ action: 'shareUsage'; sections?: ShareSectionKey[] } & ProjectTarget)
   | ({ action: 'editProject'; expectedRevision: string; directory?: string; kind?: 'single' | 'multi'; enabled?: boolean } & ProjectTarget)
@@ -46,6 +47,6 @@ export function parseCollaborationRequest(raw: Record<string, unknown>): Collabo
   if (raw.directory !== undefined && !isAbsolute(raw.directory as string)) throw new InvalidGroupInput('文件夹必须为绝对路径');
   if (raw.kind !== undefined && raw.kind !== 'single' && raw.kind !== 'multi') throw new InvalidGroupInput('会话类型无效');
   if (raw.sections !== undefined && (!Array.isArray(raw.sections) || raw.sections.length > SHARE_SECTIONS.length || raw.sections.some(section => typeof section !== 'string' || !SHARE_SECTIONS.some(option => option.key === section)))) throw new InvalidGroupInput('分享区块无效');
-  if (action === 'createProject' && (raw.kind === undefined || !['codex-appserver','claude-agent'].includes(raw.backend as string) || !/^[\w-]{16,80}$/.test(raw.requestId as string) || (!str('name',200) || /[\\/]/.test(raw.name as string) || ['.','..'].includes((raw.name as string).trim())))) throw new InvalidGroupInput('新项目参数无效');
+  if (action === 'createProject' && (raw.kind === undefined || !backendIdSchema.safeParse(raw.backend).success || !/^[\w-]{16,80}$/.test(raw.requestId as string) || (!str('name',200) || /[\\/]/.test(raw.name as string) || ['.','..'].includes((raw.name as string).trim())))) throw new InvalidGroupInput('新项目参数无效');
   return raw as CollaborationRequest;
 }

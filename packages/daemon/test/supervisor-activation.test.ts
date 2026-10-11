@@ -1,7 +1,9 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { afterEach, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { AdminServiceDeps } from '../src/admin/service';
-import { runSupervisor } from '../src/bot/supervisor';
 
 const captured = vi.hoisted(() => ({ deps: undefined as AdminServiceDeps | undefined, invalidate: vi.fn() }));
 vi.mock('../src/agent/codex-appserver/owned-process', () => ({ closeOwnedCodexProcesses: async () => {}, unconfirmedCodexPids: () => [] }));
@@ -25,6 +27,24 @@ import { startApi } from '../src/server/http';
 const processes: ChildProcess[] = [];
 let requestShutdown = () => {};
 let supervisor: Promise<void> | undefined;
+let runSupervisor: typeof import('../src/bot/supervisor').runSupervisor;
+let authority: typeof import('../src/agent/custom-acp-command');
+let appDir: string;
+let restorePath = () => {};
+const originalSend = Object.getOwnPropertyDescriptor(process, 'send');
+beforeEach(async () => {
+  vi.resetModules();
+  Object.defineProperty(process, 'send', { configurable: true, value: undefined });
+  appDir = mkdtempSync(join(tmpdir(), 'supervisor-acp-'));
+  const { paths } = await import('../src/config/paths');
+  const previous = paths.appDir;
+  paths.appDir = appDir;
+  restorePath = () => { paths.appDir = previous; };
+  authority = await import('../src/agent/custom-acp-command');
+  authority.saveCustomAcpCommand(['agent-A']);
+  await authority.initCustomAcpCommand();
+  ({ runSupervisor } = await import('../src/bot/supervisor'));
+});
 const bot = (appId: string) => ({ appId, name: appId, tenant: 'feishu' as const, createdAt: 0 });
 const fixture = `
   const keepAlive = setInterval(() => {}, 1000);
@@ -38,6 +58,8 @@ const fixture = `
   process.on('message', message => {
     if (message.type === 'bridge:shutdown') stop();
     else if (message.fcb === 'simulate.connection') process.send({ fcb: 'fcb.connection' });
+    else if (message.fcb === 'simulate.acp-request') process.send({ fcb: 'fcb.custom-acp.req' });
+    else if (message.fcb === 'fcb.custom-acp') process.send({ fcb: 'fcb.test.custom-acp.receipt', state: message.state });
     else if (message.fcb === 'fcb.admin.req') process.send({ fcb: 'fcb.admin.res', id: message.id, ok: true, result: { connection: 'connected' } });
   });
 `;
@@ -65,6 +87,10 @@ afterEach(async () => {
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
   }
   vi.clearAllMocks();
+  restorePath();
+  rmSync(appDir, { recursive: true, force: true });
+  if (originalSend) Object.defineProperty(process, 'send', originalSend);
+  else Reflect.deleteProperty(process, 'send');
 });
 
 it('stops only the disabled bot before acknowledging and refuses writes during stopping', async () => {
@@ -123,6 +149,33 @@ it('refreshes the parent snapshot on a child connection notice', async () => {
   const before = captured.invalidate.mock.calls.length;
   child.send({ fcb: 'simulate.connection' });
   await vi.waitFor(() => expect(captured.invalidate.mock.calls.length).toBeGreaterThan(before));
+});
+
+it('replies with the same captured ACP state after a supervised child respawns', async () => {
+  await start(['a']);
+  async function reply(child: ChildProcess) {
+    const response = new Promise<unknown>(resolve => {
+      const receive = (message: unknown) => {
+        if (message && typeof message === 'object' && 'fcb' in message && message.fcb === 'fcb.test.custom-acp.receipt') {
+          child.off('message', receive);
+          resolve(message);
+        }
+      };
+      child.on('message', receive);
+    });
+    child.send({ fcb: 'simulate.acp-request' });
+    return response;
+  }
+  const first = processes[0];
+  if (!first) throw new Error('Missing child');
+  expect(await reply(first)).toEqual({ fcb: 'fcb.test.custom-acp.receipt', state: { kind: 'set', command: ['agent-A'] } });
+  authority.saveCustomAcpCommand(['agent-B']);
+  expect(authority.readCustomAcpCommand()).toEqual(['agent-B']);
+  first.kill('SIGKILL');
+  await vi.waitFor(() => expect(processes).toHaveLength(2), { timeout: 5_000 });
+  const second = processes[1];
+  if (!second) throw new Error('Missing respawned child');
+  expect(await reply(second)).toEqual({ fcb: 'fcb.test.custom-acp.receipt', state: { kind: 'set', command: ['agent-A'] } });
 });
 
 it('fails an empty host when its only usable interface cannot start', async () => {

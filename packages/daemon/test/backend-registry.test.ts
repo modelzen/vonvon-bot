@@ -36,7 +36,7 @@ describe('agent backend registry', () => {
     expect(caps).toMatchObject({ goal: true, steer: true, compact: true, resume: true, approvals: false });
   });
 
-  it('backendIds lists every registered backend（codex + claude-agent）', () => {
-    expect(backendIds()).toEqual(['codex-appserver', 'claude-agent']);
+  it('lists all six registered providers', () => {
+    expect(backendIds()).toEqual(['codex-appserver', 'claude-agent', 'copilot-acp', 'opencode-server', 'pi-rpc', 'custom-acp']);
   });
 });

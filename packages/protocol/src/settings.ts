@@ -81,7 +81,10 @@ export const projectSectionSchemas = {
 };
 export const sessionSectionSchemas = { model: z.object({ selection }) };
 export const hostSectionSchemas = {
-  execution: z.object({ codexBin: z.string().nullable() }),
+  execution: z.object({
+    codexBin: z.string().nullable(),
+    customAcpCommand: z.array(z.string().min(1).max(4096)).min(1).max(64).nullable(),
+  }),
 };
 
 const scope = z.discriminatedUnion("kind", [

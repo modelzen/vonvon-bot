@@ -5,6 +5,11 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('../src/agent/custom-acp-command', async importOriginal => ({
+  ...await importOriginal<typeof import('../src/agent/custom-acp-command')>(),
+  customAcpCommand: (): { kind: 'unset' } => ({ kind: 'unset' }),
+}));
 import { createAdminService } from '../src/admin/service';
 import { paths } from '../src/config/paths';
 import { installBackendDep, uninstallBackendDep } from '../src/agent/installer';

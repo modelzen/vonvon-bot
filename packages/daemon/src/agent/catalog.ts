@@ -14,7 +14,7 @@ import { DEFAULT_BACKEND_ID, type PermissionMode } from './types';
 export type AgentFamily = 'codex' | 'claude' | (string & {});
 
 /** 后端进程的接入方式（仅描述/分组用，不参与运行路由）。 */
-export type BackendAccess = 'app-server' | 'sdk' | 'acp';
+export type BackendAccess = 'app-server' | 'sdk' | 'acp' | 'server' | 'rpc';
 
 /**
  * 依赖类型 —— 决定「装哪 / 怎么检测 / 能不能一键按需装」。
@@ -25,7 +25,7 @@ export type BackendAccess = 'app-server' | 'sdk' | 'acp';
  *                   当前内置后端均非此类（codex 是 external-cli），保留以备将来挂新后端。
  *   'npm-external'  外部 npm 包，用户自管（当前内置后端无此类，保留给未来不便按需装的包）。
  */
-export type DepKind = 'external-cli' | 'npm-ondemand' | 'npm-external';
+export type DepKind = 'external-cli' | 'npm-ondemand' | 'npm-external' | 'host-command';
 
 export interface BackendDep {
   kind: DepKind;
@@ -108,6 +108,26 @@ export const BACKEND_CATALOG: readonly BackendCatalogEntry[] = [
     },
     supportedModes: ['qa', 'write', 'full'],
     blurb: 'Claude Code（SDK 内置，复用本机登录；支持流式回复、追加消息和恢复）',
+  },
+  {
+    id: 'copilot-acp', agentFamily: 'copilot', displayName: 'Copilot', access: 'acp',
+    dep: { kind: 'external-cli', binName: 'copilot', detectHint: '请安装并登录 Copilot CLI，将 copilot 加入 PATH' },
+    supportedModes: ['full'],
+  },
+  {
+    id: 'opencode-server', agentFamily: 'opencode', displayName: 'OpenCode', access: 'server',
+    dep: { kind: 'external-cli', binName: 'opencode', detectHint: '请安装 OpenCode 2.0.10 或更新版本，将 opencode 加入 PATH' },
+    supportedModes: ['full'],
+  },
+  {
+    id: 'pi-rpc', agentFamily: 'pi', displayName: 'Pi', access: 'rpc',
+    dep: { kind: 'external-cli', binName: 'pi', detectHint: '请安装并配置 Pi，将 pi 加入 PATH' },
+    supportedModes: ['full'],
+  },
+  {
+    id: 'custom-acp', agentFamily: 'acp', displayName: '自定义 ACP', access: 'acp',
+    dep: { kind: 'host-command', detectHint: '未配置自定义 ACP 命令（主机设置 › 执行）' },
+    supportedModes: ['full'],
   },
 ];
 

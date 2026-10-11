@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SessionBackend, SessionBackendThread } from '../src/agent/paseo/session-backend';
+import { SessionBackend, SessionBackendThread, providerHistoryReaders } from '../src/agent/paseo/session-backend';
 import type { AgentClient, AgentPromptInput, AgentSession, AgentStreamEvent } from '../src/agent/paseo/agent-sdk-types';
 import type { AgentEvent } from '../src/agent/types';
 
@@ -62,6 +62,37 @@ async function collect(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
   for await (const event of events) result.push(event);
   return result;
 }
+
+it.each([false, true])('closes a history session exactly once after a stream failure (close rejects: %s)', async (closeRejects) => {
+  const session = new FakeSession();
+  let closes = 0;
+  session.streamHistory = async function* () {
+    yield { type: 'timeline', provider: 'claude', timestamp: '2026-01-01T00:00:00.000Z',
+      item: { type: 'user_message', text: 'before failure' } };
+    throw new Error('history failed');
+  };
+  session.close = async () => { closes++; if (closeRejects) throw new Error('close failed'); };
+  const client = { provider: 'claude', resumeSession: async () => session } as unknown as AgentClient;
+  const backend = new SessionBackend(client, {
+    id: 'fixture', displayName: 'Fixture', supportedModes: ['full'],
+    capabilities: { goal: false, steer: false, compact: false, resume: true, approvals: false },
+    configFor: ({ cwd }) => ({ provider: 'claude', cwd }),
+    ...providerHistoryReaders(client, ({ cwd }) => ({ provider: 'claude', cwd })),
+  });
+  expect(await backend.readHistory('/project', 'native-id', 10)).toEqual({ turns: [], totalTurns: 0 });
+  expect(closes).toBe(1);
+});
+
+it('runs an out-of-band compact command and reports only a completed timeline', async () => {
+  const fakeSession = new FakeSession();
+  const session: AgentSession = fakeSession;
+  session.tryHandleOutOfBand = () => ({ run: async ({ emit }) => {
+    emit({ type: 'timeline', provider: 'pi', item: { type: 'compaction', status: 'completed', trigger: 'manual' } });
+  } });
+  const thread = new SessionBackendThread(session);
+  expect(await thread.compact()).toEqual({ compacted: true, usage: null });
+  expect(fakeSession.sent).toEqual([]);
+});
 
 describe('Paseo AgentSession to AgentBackend adapter', () => {
   it('maps text, tool, permission and terminal events, and forwards steer', async () => {
@@ -131,6 +162,28 @@ describe('Paseo AgentSession to AgentBackend adapter', () => {
       { type: 'turn_started', turnId: 'turn-1' },
       { type: 'tool_result', itemId: 'read-1', output: 'file contents', exitCode: 0 },
       { type: 'tool_result', itemId: 'edit-1', output: 'permission denied', exitCode: 1 },
+      { type: 'done', turnId: 'turn-1' },
+    ]);
+  });
+
+  it.each([
+    { detailOutput: 'No such file', expectedOutput: 'No such file' },
+    { detailOutput: '', expectedOutput: '' },
+    { detailOutput: undefined, expectedOutput: 'Command failed' },
+  ])('preserves failed tool output $detailOutput with error fallback', async ({ detailOutput, expectedOutput }) => {
+    const session = new FakeSession();
+    const run = new SessionBackendThread(session).runStreamed({ text: 'inspect' });
+    const result = collect(run.events);
+    await Promise.resolve();
+    await Promise.resolve();
+    session.emit({ type: 'timeline', provider: 'claude', turnId: 'turn-1', item: {
+      type: 'tool_call', callId: 'shell-1', name: 'Bash', status: 'failed', error: 'Command failed',
+      detail: { type: 'shell', command: 'cat missing', ...(detailOutput === undefined ? {} : { output: detailOutput }), exitCode: 1 },
+    } });
+    session.emit({ type: 'turn_completed', provider: 'claude', turnId: 'turn-1' });
+    expect(await result).toEqual([
+      { type: 'turn_started', turnId: 'turn-1' },
+      { type: 'tool_result', itemId: 'shell-1', output: expectedOutput, exitCode: 1 },
       { type: 'done', turnId: 'turn-1' },
     ]);
   });

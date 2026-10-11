@@ -83,6 +83,7 @@ export interface SessionSections {
 export interface HostSections {
   execution: {
     codexBin: string | null;
+    customAcpCommand: string[] | null;
   };
 }
 export type SettingsAccess = {

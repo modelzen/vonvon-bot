@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import type { AgentBackend, AgentCapabilities, AgentEvent, AgentInput, AgentRun, AgentThread, BackendProbe, CompactResult, ModelInfo, PermissionMode, ReasoningEffort, ResumeThreadOptions, StartThreadOptions, ThreadHistory, ThreadSummary, TurnOptions } from '../types';
+import type { AgentBackend, AgentCapabilities, AgentEvent, AgentInput, AgentRun, AgentThread, BackendProbe, CompactResult, HistoryTurn, ModelInfo, PermissionMode, ReasoningEffort, ResumeThreadOptions, StartThreadOptions, ThreadHistory, ThreadSummary, TurnOptions } from '../types';
 import { getAgentStreamEventTurnId, type AgentClient, type AgentPromptInput, type AgentSession, type AgentSessionConfig, type AgentStreamEvent, type AgentTimelineItem } from './agent-sdk-types';
 
 class EventQueue<T> implements AsyncIterable<T> {
@@ -55,16 +55,8 @@ function toolKind(item: Extract<AgentTimelineItem, { type: 'tool_call' }>): 'com
   }
 }
 
-function toolOutput(item: Extract<AgentTimelineItem, { type: 'tool_call' }>): string | undefined {
+function toolDetailOutput(item: Extract<AgentTimelineItem, { type: 'tool_call' }>): string | undefined {
   const detail = item.detail;
-  if (item.status === 'failed') {
-    if (item.error instanceof Error) return item.error.message;
-    if (typeof item.error === 'string') return item.error;
-    if (typeof item.error === 'object' && item.error !== null) {
-      if ('content' in item.error && typeof item.error.content === 'string') return item.error.content;
-      if ('message' in item.error && typeof item.error.message === 'string') return item.error.message;
-    }
-  }
   switch (detail.type) {
     case 'shell': return detail.output;
     case 'read': return detail.content;
@@ -78,6 +70,20 @@ function toolOutput(item: Extract<AgentTimelineItem, { type: 'tool_call' }>): st
     case 'edit':
     case 'write': return undefined;
   }
+}
+
+function toolOutput(item: Extract<AgentTimelineItem, { type: 'tool_call' }>): string | undefined {
+  const output = toolDetailOutput(item);
+  if (output !== undefined) return output;
+  if (item.status === 'failed') {
+    if (item.error instanceof Error) return item.error.message;
+    if (typeof item.error === 'string') return item.error;
+    if (typeof item.error === 'object' && item.error !== null) {
+      if ('content' in item.error && typeof item.error.content === 'string') return item.error.content;
+      if ('message' in item.error && typeof item.error.message === 'string') return item.error.message;
+    }
+  }
+  return undefined;
 }
 
 function appendOrReplace(current: string, next: string): string {
@@ -104,7 +110,7 @@ function mapTimeline(item: AgentTimelineItem, textById: Map<string, string>): Ag
       const output = toolOutput(item);
       const exitCode = item.detail.type === 'shell' && typeof item.detail.exitCode === 'number'
         ? item.detail.exitCode : item.status === 'failed' ? 1 : item.status === 'completed' ? 0 : undefined;
-      return [{ type: 'tool_result', itemId: item.callId, ...(output ? { output } : {}), ...(exitCode === undefined ? {} : { exitCode }) }];
+      return [{ type: 'tool_result', itemId: item.callId, ...(output === undefined ? {} : { output }), ...(exitCode === undefined ? {} : { exitCode }) }];
     }
     case 'compaction': return item.status === 'completed' ? [{ type: 'context_compacted' }] : [];
     case 'error': return [{ type: 'error', message: item.message, willRetry: false }];
@@ -311,7 +317,7 @@ export class SessionBackendThread implements AgentThread {
   async steer(input: AgentInput, expectedTurnId: string): Promise<void> {
     const prompt = await promptFromInput(input);
     const result = await this.session.steerActiveTurn?.(prompt, { expectedTurnId, clearPendingPermissions: true });
-    if (result?.status !== 'accepted') throw new Error('当前 Claude 回合无法追加消息');
+    if (result?.status !== 'accepted') throw new Error('当前回合无法追加消息');
   }
 
   async abort(turnId: string): Promise<void> {
@@ -325,6 +331,24 @@ export class SessionBackendThread implements AgentThread {
   }
 
   async compact(): Promise<CompactResult> {
+    const command = this.session.tryHandleOutOfBand?.('/compact');
+    if (command) {
+      let compacted = false;
+      let error: Error | undefined;
+      const observe = (event: AgentStreamEvent): void => {
+        if (event.type !== 'timeline') return;
+        if (event.item.type === 'compaction' && event.item.status === 'completed') compacted = true;
+        if (event.item.type === 'assistant_message' && event.item.text.startsWith('[Error] ')) {
+          error = new Error(event.item.text);
+        }
+      };
+      const unsubscribe = this.session.subscribe(observe);
+      try {
+        await command.run({ emit: observe });
+        if (error) throw error;
+        return { compacted, usage: null };
+      } finally { unsubscribe(); }
+    }
     const events = this.runStreamed({ text: '/compact' }).events;
     let compacted = false;
     for await (const event of events) {
@@ -343,6 +367,65 @@ export class SessionBackendThread implements AgentThread {
     }
     finally { this.activeRun?.stop(); }
   }
+}
+
+/** Read a copied provider's native transcript without retaining a live session. */
+export function providerHistoryReaders(client: AgentClient, configFor: (options: StartThreadOptions) => AgentSessionConfig):
+  Pick<SessionBackendOptions, 'listThreads' | 'readHistory'> {
+  return {
+    listThreads: async (cwd, limit) => {
+      const sessions = await client.listImportableSessions?.({ cwd, limit });
+      return (sessions ?? []).map((session) => ({
+        sessionId: session.providerHandleId,
+        preview: session.firstPromptPreview ?? '',
+        createdAt: Math.floor(session.lastActivityAt.getTime() / 1000),
+        updatedAt: Math.floor(session.lastActivityAt.getTime() / 1000),
+        ...(session.title ? { name: session.title } : {}),
+      }));
+    },
+    readHistory: async (cwd, sessionId, maxTurns) => {
+      const config = configFor({ cwd, mode: 'full' });
+      const session = await client.resumeSession({
+        provider: client.provider, sessionId, nativeHandle: sessionId,
+        metadata: { ...config, provider: client.provider, cwd },
+      }, config);
+      try {
+        const turns: HistoryTurn[] = [];
+        const toolIndexes = new Map<string, number>();
+        for await (const event of session.streamHistory()) {
+          if (event.type !== 'timeline') continue;
+          const item = event.item;
+          if (item.type === 'user_message') {
+            toolIndexes.clear();
+            const startedAt = event.timestamp ? Date.parse(event.timestamp) / 1000 : NaN;
+            turns.push({ userText: item.text, assistantText: '', reasoning: '', tools: [],
+              ...(Number.isFinite(startedAt) ? { startedAt } : {}) });
+            continue;
+          }
+          const turn = turns.at(-1);
+          if (!turn) continue;
+          if (item.type === 'assistant_message') turn.assistantText += item.text;
+          else if (item.type === 'reasoning') turn.reasoning += item.text;
+          else if (item.type === 'tool_call') {
+            const index = toolIndexes.get(item.callId);
+            if (index !== undefined && item.status === 'running') continue;
+            const output = toolOutput(item);
+            const exitCode = item.detail.type === 'shell' && typeof item.detail.exitCode === 'number'
+              ? item.detail.exitCode : undefined;
+            const tool = { title: toolTitle(item), ...(output === undefined ? {} : { output }),
+              ...(exitCode === undefined ? {} : { exitCode }),
+              ...(item.status === 'failed' ? { failed: true } : {}) };
+            if (index === undefined) {
+              toolIndexes.set(item.callId, turn.tools.length);
+              turn.tools.push(tool);
+            } else turn.tools[index] = tool;
+          }
+        }
+        const populated = turns.filter((turn) => turn.userText || turn.assistantText || turn.reasoning || turn.tools.length);
+        return { turns: maxTurns > 0 ? populated.slice(-maxTurns) : [], totalTurns: populated.length };
+      } finally { await session.close().catch(() => undefined); }
+    },
+  };
 }
 
 /** Convert V3's permission matrix to the pinned provider's strict options shape. */

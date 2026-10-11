@@ -13,6 +13,9 @@ import { installBackendDep, uninstallBackendDep } from '../agent';
 import { performCoreUpdate } from '../service/update';
 import { startApi } from '../server/http';
 import { z } from 'zod';
+import { customAcpCommand } from '../agent/custom-acp-command';
+
+const customAcpRequestSchema = z.object({ fcb: z.literal('fcb.custom-acp.req') }).strict();
 
 const ownedWorkSchema = z.object({
   fcb: z.literal('fcb.owned-work'),
@@ -106,6 +109,13 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     proc.on('message', ipc.onMessage);
     proc.on('message', (message: unknown) => {
       if (c.proc !== proc) return;
+      if (customAcpRequestSchema.safeParse(message).success) {
+        if (proc.connected) {
+          try { proc.send({ fcb: 'fcb.custom-acp', state: customAcpCommand() }); }
+          catch { /* Child timeout handles a closed channel. */ }
+        }
+        return;
+      }
       const parsed = ownedWorkSchema.safeParse(message);
       if (parsed.success && !owned.report?.settled) owned.report = parsed.data;
       if (message && typeof message === 'object' && 'fcb' in message && message.fcb === 'fcb.connection') api?.invalidate();

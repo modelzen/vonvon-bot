@@ -1,7 +1,7 @@
 import {useClient} from './client-context';
 import {useDirectoryPicker} from './directory-picker';
 import {useEffect, useRef, useState} from 'react';
-import type {Agent, CommandResult, FolderChoice, PendingGroup} from '@vonvon/protocol';
+import type {Agent, CommandResult, FolderChoice, PendingGroup, Tool, ToolState} from '@vonvon/protocol';
 import {conversationSchema, toolSchema} from '@vonvon/protocol';
 import {Button, FormField, InlineNotice} from './reference/components/ui';
 import {Dialog} from './reference/components/ui/Dialog';
@@ -10,8 +10,11 @@ import {useDraft, useDraftGuard} from './settings/DraftGuard';
 import type {PendingAgentGroups} from './pending-groups';
 
 type Mode = {kind: 'create'} | {kind: 'existing'} | {kind: 'bind'; group: PendingGroup};
-type Props = {agent: Agent; pending?: PendingAgentGroups; initialGroup?: PendingGroup; onClose: () => void; onChanged: () => Promise<void>};
-export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChanged}: Props) {
+type Props = {agent: Agent; tools: ToolState[]; pending?: PendingAgentGroups; initialGroup?: PendingGroup; onClose: () => void; onChanged: () => Promise<void>};
+const toolNames: Record<Tool, string> = {codex: 'Codex', claude: 'Claude', copilot: 'Copilot', opencode: 'OpenCode', pi: 'Pi', acp: '自定义 ACP'};
+export const availableJoinTools = (tools: readonly ToolState[]): Tool[] =>
+  toolSchema.options.filter(value => value === 'codex' || tools.some(state => state.tool === value && state.installation === 'installed'));
+export function JoinGroupDialog({agent, tools, pending, initialGroup, onClose, onChanged}: Props) {
   const {navigate} = useDraftGuard();
   const client = useClient();
   const pickDirectory = useDirectoryPicker();
@@ -19,7 +22,8 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
   const [name, setName] = useState(initialGroup?.name ?? '');
   const [folder, setFolder] = useState<FolderChoice>();
   const [existingDirectory, setExistingDirectory] = useState(false);
-  const [tool, setTool] = useState<'codex' | 'claude'>('codex');
+  const [tool, setTool] = useState<Tool>('codex');
+  const availableTools = availableJoinTools(tools);
   const [conversation, setConversation] = useState<'threads' | 'shared'>('threads');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -88,7 +92,7 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
         <SettingsGroup>
           {mode.kind === 'create' && <SettingsRow title="工作目录来源" trailing={<select aria-label="目录来源" disabled={busy} value={existingDirectory ? 'existing' : 'default'} onChange={event => {setExistingDirectory(event.target.value === 'existing'); setFolder(undefined);}}><option value="default">新建空白目录</option><option value="existing">使用现有目录</option></select>} />}
           <SettingsRow title="工作目录" value={mode.kind === 'create' && !existingDirectory ? '在 Bot 的默认项目目录中创建空白目录' : folder?.displayPath ?? '未选择'} trailing={(mode.kind === 'bind' || existingDirectory) && <Button disabled={busy} onClick={() => void chooseFolder()}>选择文件夹</Button>} />
-          <SettingsRow title="执行工具" trailing={<select aria-label="执行工具" disabled={busy} value={tool} onChange={event => setTool(toolSchema.parse(event.target.value))}><option value="codex">Codex</option><option value="claude">Claude</option></select>} />
+          <SettingsRow title="执行工具" trailing={<select aria-label="执行工具" disabled={busy} value={tool} onChange={event => setTool(toolSchema.parse(event.target.value))}>{availableTools.map(value => <option key={value} value={value}>{toolNames[value]}</option>)}</select>} />
           <SettingsRow title="会话方式" trailing={<select aria-label="会话方式" disabled={busy} value={conversation} onChange={event => setConversation(conversationSchema.parse(event.target.value))}><option value="threads">按话题独立会话</option><option value="shared">整群连续会话</option></select>} />
         </SettingsGroup>
         <Button variant="primary" loading={busy} disabled={!name.trim() || ((mode.kind === 'bind' || existingDirectory) && !folder)} onClick={() => void save()}>{mode.kind === 'create' ? '创建飞书群并加入' : '绑定工作目录并发送欢迎卡片'}</Button>

@@ -121,6 +121,9 @@ describe('desktop group commands in the owning bot', () => {
 
   it('parses the exact supported binding shape', () => {
     expect(parseBindGroupInput({ ...input(paths.appDir), projectName: ' Trim ' }).projectName).toBe('Trim');
+    for (const backend of ['codex-appserver', 'claude-agent', 'copilot-acp', 'opencode-server', 'pi-rpc', 'custom-acp']) {
+      expect(parseBindGroupInput({ ...input(paths.appDir), backend }).backend).toBe(backend);
+    }
     for (const patch of [{ backend: 'unknown' }, { directory: 'relative' }, { kind: 'new' }, { chatId: '../escape' }, { extra: true }]) expect(() => parseBindGroupInput({ ...input(paths.appDir), ...patch })).toThrow();
   });
 });

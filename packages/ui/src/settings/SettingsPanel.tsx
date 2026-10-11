@@ -2154,6 +2154,7 @@ export function HostPanel({
     await savePath(null);
   }
   return (
+    <>
     <SettingsGroup
       label="Codex 可执行文件"
         id={settingAnchor("Codex 可执行文件")}
@@ -2206,7 +2207,33 @@ export function HostPanel({
         <FormField label="绝对路径"><input aria-label="Codex 可执行文件绝对路径" value={pathDraft ?? ""} onChange={event => setPathDraft(event.target.value)} /></FormField>
       </Dialog>
     </SettingsGroup>
+    <Editor
+      title="自定义 ACP 命令"
+      section={execution}
+      save={(patch, revision) => client.settings({
+        type: 'save',
+        edit: { scope: view.scope, section: 'execution', revision, patch },
+      })}
+      render={(draft, change, disabled) => <>
+        <SettingsRow title="自定义 ACP 命令" description={`每行一个参数；当前运行：${execution.effective.customAcpCommand?.join(' · ') ?? '未配置'}。保存后重启 Host 生效。`}
+          trailing={<textarea
+            aria-label="自定义 ACP 命令"
+            className="settings-field"
+            rows={4}
+            disabled={disabled}
+            value={formatAcpCommandDraft(draft.customAcpCommand)}
+            onChange={event => change({...draft, customAcpCommand: parseAcpCommandDraft(event.target.value)})}
+          />} />
+      </>}
+    />
+    </>
   );
+}
+export function formatAcpCommandDraft(command: string[] | null): string {
+  return command?.join('\n') ?? '';
+}
+export function parseAcpCommandDraft(text: string): string[] | null {
+  return text === '' ? null : text.split(/\r?\n/);
 }
 export function SettingsPanel(props: PanelProps) {
   const {target} = props;

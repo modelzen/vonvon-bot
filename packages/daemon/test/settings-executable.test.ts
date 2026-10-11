@@ -26,7 +26,7 @@ async function fixture() {
   await writeFile(executable, '', { mode: 0o700 });
   await writeFile(nonExecutable, '', { mode: 0o600 });
   await symlink(executable, link);
-  const settings = createHostSettings({ appDir: dir, runningCodexBin: executable });
+  const settings = createHostSettings({ appDir: dir, runningCodexBin: executable, runningCustomAcpState: { kind: 'unset' } });
   const service = fakeService({ settings: { ...settings, models: async () => { throw new Error('unused'); } } });
   const save = async (codexBin: string | null) => {
     const view = await settings.read({ kind: 'host' });
@@ -41,7 +41,7 @@ async function fixture() {
 describe('host executable RPC', () => {
   it('records H3 bad path behavior before V4 validation', async () => {
     const f = await fixture();
-    const settings = createHostSettings({ appDir: f.dir });
+    const settings = createHostSettings({ appDir: f.dir, runningCustomAcpState: { kind: 'unset' } });
     const view = await settings.read({ kind: 'host' });
     if (!('runtime' in view)) throw new Error('Host view missing');
     const result = await settings.save({ scope: { kind: 'host' }, section: 'execution', revision: view.sections.execution.revision, patch: { codexBin: join(f.dir, 'missing') } });

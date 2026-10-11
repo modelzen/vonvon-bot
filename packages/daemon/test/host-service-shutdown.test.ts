@@ -2,6 +2,11 @@ import { fakeService, socketClient, startFixture } from './server-fixture';
 import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+
+vi.mock('../src/agent/custom-acp-command', async importOriginal => ({
+  ...await importOriginal<typeof import('../src/agent/custom-acp-command')>(),
+  customAcpCommand: (): { kind: 'unset' } => ({ kind: 'unset' }),
+}));
 import { tmpdir } from 'node:os';
 import { WebSocket } from 'ws';
 import { CodexSetupService } from '../src/agent/codex-appserver/setup';

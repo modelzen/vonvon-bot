@@ -1,5 +1,6 @@
 import { isAbsolute } from 'node:path';
 import { REASONING_EFFORTS } from '../agent/types';
+import { parseCustomAcpCommand } from '../agent/custom-acp-command';
 import type { SettingsAction, SettingsEdit, SettingsScope, ModelQuery } from './settings-types';
 export class SettingsInputError extends Error {
 }
@@ -11,6 +12,10 @@ const integer = (min: number, max: number): Rule => value => typeof value === 'n
 const identifier = (prefix: string): Rule => value => typeof value === 'string' && new RegExp(`^${prefix}_[A-Za-z0-9_-]{1,200}$`).test(value);
 const array = (rule: Rule): Rule => value => Array.isArray(value) && value.length <= 1000 && value.every(rule);
 const path: Rule = value => value === null || typeof value === 'string' && value.length <= 4096 && !/[\r\n\0]/.test(value) && (isAbsolute(value) || value === '~' || value.startsWith('~/'));
+const customAcpCommand: Rule = value => {
+  try { parseCustomAcpCommand(value); return true; }
+  catch { return false; }
+};
 export function settingsObject(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value))
     throw new SettingsInputError('设置请求必须是对象');
@@ -121,8 +126,9 @@ const schemas: Record<string, Record<string, Rule>> = {
   },
   host: {
     execution: shape({
-      codexBin: path
-    })
+      codexBin: path,
+      customAcpCommand
+    }, true)
   },
 };
 export function parseSettingsScope(input: unknown): SettingsScope {

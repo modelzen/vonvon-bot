@@ -9,7 +9,6 @@ const target = { agentId: agentIdSchema, projectName, groupId: groupIdSchema };
 export const usageShareSectionSchema = z.enum(["stats", "heatmap", "insights", "limits", "plan"]);
 export type UsageShareSection = z.infer<typeof usageShareSectionSchema>;
 const sessionTarget = { ...target, threadId };
-const backend = z.enum(["codex-appserver", "claude-agent"]);
 const conversation = z.enum(["shared", "threads"]);
 const folder = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("default") }).strict(),

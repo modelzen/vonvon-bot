@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('../src/agent/custom-acp-command', async importOriginal => ({
+  ...await importOriginal<typeof import('../src/agent/custom-acp-command')>(),
+  customAcpCommand: (): { kind: 'unset' } => ({ kind: 'unset' }),
+}));
 import type { BackendProbe } from '../src/agent/types';
 
 // 隔离 listBackendCatalog（状态聚合）与 installBackend（installer 委托 + 501 预览态）。

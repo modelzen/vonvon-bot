@@ -7,6 +7,7 @@ import {
   desktopSnapshotSchema, eventSchema, watchSnapshots,
   adminRequestSchema, adminReplySchema, adminStateSchema, directoryRequestSchema, directoryReplySchema,
   jobSchema, environmentReplySchema,
+  backendByTool, backendIdSchema, toolSchema, hostSectionSchemas,
   type DesktopSnapshot, settingsViewSchema,
 } from "../src/index.js";
 
@@ -74,6 +75,19 @@ describe("pinned contract extraction", () => {
   it("rejects a bindGroup project name with a slash", () => {
     expect(commandSchema.safeParse({type:"bindGroup",agentId:"cli_fixture",groupId:"oc_fixture",projectName:"a/b",folderToken:randomUUID(),tool:"codex",conversation:"threads"}).success).toBe(false);
   });
+  it("maps all six tools to accepted backend ids", () => {
+    expect(toolSchema.options).toEqual(["codex", "claude", "copilot", "opencode", "pi", "acp"]);
+    for (const tool of toolSchema.options) expect(backendIdSchema.parse(backendByTool[tool])).toBeTruthy();
+    expect(backendByTool).toEqual({
+      codex: "codex-appserver", claude: "claude-agent", copilot: "copilot-acp",
+      opencode: "opencode-server", pi: "pi-rpc", acp: "custom-acp",
+    });
+  });
+  it("accepts a bounded custom ACP argv in host execution settings", () => {
+    expect(hostSectionSchemas.execution.parse({ codexBin: null, customAcpCommand: ["agent", "--stdio"] }).customAcpCommand).toEqual(["agent", "--stdio"]);
+    expect(hostSectionSchemas.execution.safeParse({ codexBin: null, customAcpCommand: [] }).success).toBe(false);
+    expect(hostSectionSchemas.execution.safeParse({ codexBin: null, customAcpCommand: ["a".repeat(4097)] }).success).toBe(false);
+  });
   it("omits only the four desktop commands", () => {
     for (const type of ["quit", "hideWindow", "setLoginItem", "chooseFolder"]) {
       expect(commandSchema.safeParse({type}).success).toBe(false);
@@ -106,7 +120,7 @@ describe("pinned contract extraction", () => {
         response:section({noMention:false}),compact:section({autoCompact:true}),model:section({selection}),
       },identity:{chatId:"oc_fixture",backend:"codex-appserver",cwd:"/tmp",kind:"multi"},members:{openIds:[],revision:"r1"}},
       {scope:{kind:"session",botId:"cli_fixture",threadId:"thread"},sections:{model:section({selection})},identity:{backend:"codex-appserver",sessionId:"session",chatId:"oc_fixture",projectName:"fixture"}},
-      {scope:{kind:"host"},sections:{execution:section({codexBin:null})},runtime:{codexBin:null,fallbackCwd:"/tmp",platform:"macos"}},
+      {scope:{kind:"host"},sections:{execution:section({codexBin:null,customAcpCommand:null})},runtime:{codexBin:null,fallbackCwd:"/tmp",platform:"macos"}},
     ];
     for (const view of views) {
       const parsed = settingsViewSchema.parse(view);

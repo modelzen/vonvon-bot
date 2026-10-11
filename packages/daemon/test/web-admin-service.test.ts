@@ -1,6 +1,11 @@
 import { createPendingGroups, pendingGroupsFile } from '../src/project/pending-groups';
 import { rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+
+vi.mock('../src/agent/custom-acp-command', async importOriginal => ({
+  ...await importOriginal<typeof import('../src/agent/custom-acp-command')>(),
+  customAcpCommand: (): { kind: 'unset' } => ({ kind: 'unset' }),
+}));
 import { paths, botPaths, useBotDir } from '../src/config/paths';
 import { saveBots } from '../src/config/bots';
 import { addProject } from '../src/project/registry';

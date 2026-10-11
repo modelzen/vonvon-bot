@@ -37,7 +37,7 @@ afterEach(async () => {
 it('zero-Agent status is read-only and per-tool repair is available without a bot', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'host-coffee-'));
   dirs.push(dir);
-  const settings = createHostSettings({appDir: dir});
+  const settings = createHostSettings({appDir: dir, runningCustomAcpState: {kind: 'unset'}});
   const view = await settings.read({kind: 'host'});
   if (!('runtime' in view)) throw new Error('Wrong scope');
   expect(view.runtime.coffee?.route).toBe('legacy');
@@ -52,7 +52,7 @@ it('existing settings resolve immediately and repair preserves the installed tar
   const dir = await mkdtemp(join(tmpdir(), 'host-coffee-'));
   dirs.push(dir);
   mocks.bots = [{name: 'B', appId: 'cli_b', tenant: 'feishu', createdAt: 1, active: true}];
-  const settings = createHostSettings({appDir: dir});
+  const settings = createHostSettings({appDir: dir, runningCustomAcpState: {kind: 'unset'}});
   const before = await settings.read({kind: 'host'});
   if (!('runtime' in before) || !before.runtime.coffee) throw new Error('Missing route');
   expect(before.runtime.coffee.botId).toBe('cli_b');
@@ -72,7 +72,7 @@ it('stopping delivery keeps a readable dormant editor and does not silently sele
   const dir = await mkdtemp(join(tmpdir(), 'host-coffee-'));
   dirs.push(dir);
   mocks.bots = ['a', 'b'].map(name => ({name, appId: `cli_${name}`, tenant: 'feishu', createdAt: 1, active: true}));
-  const settings = createHostSettings({appDir: dir});
+  const settings = createHostSettings({appDir: dir, runningCustomAcpState: {kind: 'unset'}});
   const initial = await settings.read({kind: 'host'});
   if (!('runtime' in initial) || !initial.runtime.coffee) throw new Error('Missing coffee');
   await settings.act({kind: 'setHostCliRoute', botId: null, revision: initial.runtime.coffee.revision});
@@ -86,7 +86,7 @@ it('conflicting installed pins remain visible and are not overwritten by repair'
   dirs.push(dir);
   mocks.bots = ['a', 'b'].map(name => ({name, appId: `cli_${name}`, tenant: 'feishu', createdAt: 1, active: true}));
   mocks.targets.codex = ['cli_a', 'cli_b'];
-  const settings = createHostSettings({appDir: dir});
+  const settings = createHostSettings({appDir: dir, runningCustomAcpState: {kind: 'unset'}});
   const result = await settings.act({kind: 'repairHostCliHooks', agents: ['codex']});
   expect(mocks.install).not.toHaveBeenCalled();
   if (result.kind !== 'saved') throw new Error('Unexpected result');

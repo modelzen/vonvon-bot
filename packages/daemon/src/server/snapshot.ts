@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
-import type { DesktopSnapshot, Diagnostic, Job, ToolState } from '@vonvon/protocol';
+import { backendByTool, type DesktopSnapshot, type Diagnostic, type Job, type ToolState } from '@vonvon/protocol';
 import { createBackend } from '../agent';
 import type { AdminService } from '../admin/service';
 import { paths } from '../config/paths';
@@ -34,13 +34,19 @@ export async function createSnapshotStore(options: {
   let refreshing: Promise<void> | undefined;
   let closed = false;
   const readTools = options.readTools ?? (async (): Promise<ToolState[]> => {
-    const [codex, claude] = await Promise.all([
-      options.service.codexSetup?.().catch(() => undefined),
-      createBackend('claude-agent').doctor({ force: true }).catch(() => undefined),
+    const additional = ['copilot', 'opencode', 'pi', 'acp'] as const;
+    const [codex, claude, others] = await Promise.all([
+      Promise.resolve().then(() => options.service.codexSetup?.()).catch(() => undefined),
+      Promise.resolve().then(() => createBackend('claude-agent').doctor({ force: true })).catch(() => undefined),
+      Promise.all(additional.map(tool => Promise.resolve().then(() => createBackend(backendByTool[tool]).doctor({ force: true })).catch(() => undefined))),
     ]);
     return [
       { tool: 'codex', installation: codex?.installation ?? 'unknown', authentication: codex?.authentication ?? 'unknown', version: codex?.version ?? null, ...(codex?.message ? { message: codex.message } : {}) },
       { tool: 'claude', installation: claude ? (claude.ok ? 'installed' : claude.depState === 'not-installed' || claude.depState === 'external-missing' ? 'missing' : 'unknown') : 'unknown', authentication: claude?.ok ? 'notRequired' : 'unknown', version: claude?.version ?? null, ...(claude?.hint ? { message: claude.hint } : {}) },
+      ...additional.map((tool, index): ToolState => {
+        const result = others[index];
+        return { tool, installation: result ? (result.ok ? 'installed' : result.depState === 'not-installed' || result.depState === 'external-missing' ? 'missing' : 'unknown') : 'unknown', authentication: result?.ok ? 'notRequired' : 'unknown', version: result?.version ?? null, ...(result?.hint ? { message: result.hint } : {}) };
+      }),
     ];
   });
   async function build(committed?: (snapshot: DesktopSnapshot) => void): Promise<void> {

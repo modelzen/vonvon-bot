@@ -65,12 +65,11 @@ type Modal =
   | { kind: "deleteAgent"; agentId: AgentId; name: string }
   | null;
 
-const backendName = (backend: string) =>
-  backend === "codex-appserver"
-    ? "Codex"
-    : backend === "claude-agent"
-      ? "Claude"
-      : `${backend}（暂不支持修改）`;
+const backendNames: Record<string, string> = {
+  'codex-appserver': 'Codex', 'claude-agent': 'Claude', 'copilot-acp': 'Copilot',
+  'opencode-server': 'OpenCode', 'pi-rpc': 'Pi', 'custom-acp': '自定义 ACP',
+};
+const backendName = (backend: string) => backendNames[backend] ?? `${backend}（暂不支持修改）`;
 const connectedLabel = (connection: string) =>
   connection === "connected"
     ? "已连接"
@@ -956,7 +955,7 @@ function DesktopApp() {
       <PendingGroupToasts pages={pendingGroups} agents={snapshot.agents} hidden={modal !== null} onContinue={(owner, group) => openJoin(owner.id, group)} />
       {modal?.kind === 'join' && (() => {
         const owner = snapshot.agents.find(item => item.id === modal.agentId);
-        return owner ? <JoinGroupDialog key={`${owner.id}:${modal.group?.chatId ?? 'new'}`} agent={owner} initialGroup={modal.group} pending={pendingGroups.find(item => item.agentId === owner.id)} onClose={() => setModal(null)} onChanged={async () => {await run({type: 'refresh'});}} /> : null;
+        return owner ? <JoinGroupDialog key={`${owner.id}:${modal.group?.chatId ?? 'new'}`} agent={owner} tools={snapshot.tools} initialGroup={modal.group} pending={pendingGroups.find(item => item.agentId === owner.id)} onClose={() => setModal(null)} onChanged={async () => {await run({type: 'refresh'});}} /> : null;
       })()}
       <Dialog
         open={modal !== null && modal.kind !== "deleteAgent" && modal.kind !== "join"}

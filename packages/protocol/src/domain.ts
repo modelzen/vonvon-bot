@@ -21,7 +21,8 @@ export const jobIdSchema = z
   .brand<"JobId">();
 export const folderTokenSchema = z.string().uuid().brand<"FolderToken">();
 export const permissionSchema = z.enum(["qa", "write", "full"]);
-export const toolSchema = z.enum(["codex", "claude"]);
+export const toolSchema = z.enum(["codex", "claude", "copilot", "opencode", "pi", "acp"]);
+export const backendIdSchema = z.enum(["codex-appserver", "claude-agent", "copilot-acp", "opencode-server", "pi-rpc", "custom-acp"]);
 export const conversationSchema = z.enum(["threads", "shared"]);
 export type AgentId = z.infer<typeof agentIdSchema>;
 export type GroupId = z.infer<typeof groupIdSchema>;
@@ -30,6 +31,15 @@ export type JobId = z.infer<typeof jobIdSchema>;
 export type FolderToken = z.infer<typeof folderTokenSchema>;
 export type Permission = z.infer<typeof permissionSchema>;
 export type Tool = z.infer<typeof toolSchema>;
+export type BackendId = z.infer<typeof backendIdSchema>;
+export const backendByTool = {
+  codex: "codex-appserver",
+  claude: "claude-agent",
+  copilot: "copilot-acp",
+  opencode: "opencode-server",
+  pi: "pi-rpc",
+  acp: "custom-acp",
+} as const satisfies Record<Tool, BackendId>;
 
 const empty = <T extends string>(type: T) =>
   z.object({ type: z.literal(type) }).strict();

@@ -26,6 +26,20 @@ import { paths } from '../src/config/paths';
  */
 
 describe('catalog ↔ REGISTRY 配对（防漏注册）', () => {
+  const originalSend = Object.getOwnPropertyDescriptor(process, 'send');
+  const originalAppDir = paths.appDir;
+  let appDir: string;
+  beforeEach(() => {
+    Object.defineProperty(process, 'send', { configurable: true, value: undefined });
+    appDir = mkdtempSync(join(tmpdir(), 'catalog-host-'));
+    paths.appDir = appDir;
+  });
+  afterEach(() => {
+    if (originalSend) Object.defineProperty(process, 'send', originalSend);
+    else Reflect.deleteProperty(process, 'send');
+    paths.appDir = originalAppDir;
+    rmSync(appDir, { recursive: true, force: true });
+  });
   it('catalogBackendIds == backendIds（两处都注册才不红）', () => {
     expect([...catalogBackendIds()].sort()).toEqual([...backendIds()].sort());
   });
@@ -72,7 +86,7 @@ describe('projectCreatableBackends —— 飞书新建/绑定卡的「可选后�
 
   it('任意权限档：codex 恒在；claude-agent 仅在「已装」时出现（按下载态过滤）', () => {
     for (const mode of ['qa', 'write', 'full'] as const) {
-      expect(ids(mode, () => true)).toEqual(['codex-appserver', 'claude-agent']);
+      expect(ids(mode, () => true)).toEqual(mode === 'full' ? ['codex-appserver', 'claude-agent', 'copilot-acp', 'opencode-server', 'pi-rpc', 'custom-acp'] : ['codex-appserver', 'claude-agent']);
       expect(ids(mode, () => false)).toEqual(['codex-appserver']);
     }
   });
@@ -80,11 +94,11 @@ describe('projectCreatableBackends —— 飞书新建/绑定卡的「可选后�
 
 describe('可见 catalog 与注册派生（codex + claude-agent）', () => {
   it('visibleCatalog() 含 codex 与 claude-agent（Web 后端页 / 体检页 / picker 数据源）', () => {
-    expect(visibleCatalog().map((e) => e.id)).toEqual(['codex-appserver', 'claude-agent']);
+    expect(visibleCatalog().map((e) => e.id)).toEqual(['codex-appserver', 'claude-agent', 'copilot-acp', 'opencode-server', 'pi-rpc', 'custom-acp']);
   });
 
   it('catalogBackendIds 与 REGISTRY 配对不破（两条）', () => {
-    expect([...catalogBackendIds()].sort()).toEqual(['claude-agent', 'codex-appserver']);
+    expect([...catalogBackendIds()].sort()).toEqual(['codex-appserver', 'claude-agent', 'copilot-acp', 'opencode-server', 'pi-rpc', 'custom-acp'].sort());
     // 工厂存在：两个 id 都能构造出实例。
     expect(createBackend('codex-appserver').id).toBe('codex-appserver');
     expect(createBackend('claude-agent').id).toBe('claude-agent');

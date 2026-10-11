@@ -2,6 +2,11 @@ import { ChildProcess } from 'node:child_process';
 import { PassThrough } from 'node:stream';
 import { afterEach, expect, it, vi } from 'vitest';
 
+vi.mock('../src/agent/custom-acp-command', async importOriginal => ({
+  ...await importOriginal<typeof import('../src/agent/custom-acp-command')>(),
+  customAcpCommand: (): { kind: 'unset' } => ({ kind: 'unset' }),
+}));
+
 const processControl = vi.hoisted(() => ({ spawn: vi.fn() }));
 const logger = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), fail: vi.fn() }));
 vi.mock('../src/platform/spawn', () => ({ spawnProcess: processControl.spawn }));

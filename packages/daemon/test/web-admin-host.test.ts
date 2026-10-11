@@ -1,6 +1,11 @@
 import {runtimeDistribution} from '../src/service/distribution';
 import { rmSync, existsSync } from 'node:fs';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('../src/agent/custom-acp-command', async importOriginal => ({
+  ...await importOriginal<typeof import('../src/agent/custom-acp-command')>(),
+  customAcpCommand: (): { kind: 'unset' } => ({ kind: 'unset' }),
+}));
 import { paths, botDir, useBotDir } from '../src/config/paths';
 import { loadBots, saveBots } from '../src/config/bots';
 import { addProject } from '../src/project/registry';

@@ -1,9 +1,10 @@
 import { createRequire } from 'node:module';
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { paths } from '../config/paths';
 import type { BackendCatalogEntry } from './catalog';
+import { customAcpCommand } from './custom-acp-command';
 
 const which = createRequire(import.meta.url)('which') as {
   sync(command: string, options: { nothrow: true }): string | null;
@@ -129,6 +130,16 @@ export function isBackendBinInstalled(binName: string): boolean {
  */
 export function isBackendEntryInstalled(entry: BackendCatalogEntry): boolean {
   const { kind, binName, pkg } = entry.dep;
+  if (kind === 'host-command') {
+    try {
+      const state = customAcpCommand();
+      if (state.kind !== 'set') return false;
+      const binary = state.command[0];
+      return isAbsolute(binary) ? existsSync(binary) : which.sync(binary, { nothrow: true }) !== null;
+    } catch {
+      return false;
+    }
+  }
   if (kind === 'external-cli') return binName ? which.sync(binName, { nothrow: true }) !== null : false;
   if (binName) return isBackendBinInstalled(binName);
   return pkg ? isBackendDepInstalled(pkg) : false;
