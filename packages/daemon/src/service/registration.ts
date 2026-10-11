@@ -56,24 +56,17 @@ export async function readRegistration(input: ReadInput): Promise<Registration> 
       if (!('windowsRun' in input)) throw new Error('Windows Run observation is required');
       const observation = input.windowsRun;
       if (observation.kind === 'unavailable') throw new Error(`Windows Run observation unavailable: ${observation.reason}`);
-      let runValue: string;
-      if (observation.kind === 'value') {
-        if (observation.type !== 'REG_SZ') throw new Error('Windows Run value must be REG_SZ');
-        const match = /^wscript\.exe \/\/B "([^"\r\n]+)"$/.exec(observation.value);
-        const vbsPath = match?.[1];
-        if (!vbsPath || !win32.isAbsolute(vbsPath) || win32.basename(vbsPath) !== WINDOWS_VBS_NAME) throw new Error('Unrecognized Windows Run locator');
-        target = { platform: 'win32', vbsPath, cmdPath: win32.join(win32.dirname(vbsPath), WINDOWS_CMD_NAME) };
-        runValue = observation.value;
-      } else {
-        const service = win32.join(requestedRoot, 'service');
-        if (target.cmdPath !== win32.join(service, WINDOWS_CMD_NAME) || target.vbsPath !== win32.join(service, WINDOWS_VBS_NAME)) throw new Error('Local Windows target does not match requested root');
-        runValue = `wscript.exe //B "${target.vbsPath}"`;
-      }
+      if (observation.kind === 'absent') return { kind: 'absent' };
+      if (observation.type !== 'REG_SZ') throw new Error('Windows Run value must be REG_SZ');
+      const match = /^wscript\.exe \/\/B "([^"\r\n]+)"$/.exec(observation.value);
+      const vbsPath = match?.[1];
+      if (!vbsPath || !win32.isAbsolute(vbsPath) || win32.basename(vbsPath) !== WINDOWS_VBS_NAME) throw new Error('Unrecognized Windows Run locator');
+      target = { platform: 'win32', vbsPath, cmdPath: win32.join(win32.dirname(vbsPath), WINDOWS_CMD_NAME) };
+      const runValue = observation.value;
       location = target.vbsPath;
       const vbs = await readFile(target.vbsPath);
       location = target.cmdPath;
       const cmd = await readFile(target.cmdPath);
-      if (vbs === null && cmd === null && observation.kind === 'absent') return { kind: 'absent' };
       if (vbs === null || cmd === null) {
         location = vbs === null ? target.vbsPath : target.cmdPath;
         throw new Error('Incomplete Windows launcher pair');
