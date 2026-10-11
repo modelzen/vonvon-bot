@@ -1,5 +1,5 @@
 import type { VonvonClient } from '@vonvon/client/browser';
-import type { BackendInstallEventPayload, DesktopSnapshot, LogEventPayload } from '@vonvon/protocol';
+import type { BackendInstallEventPayload, DesktopSnapshot, DesktopUpdate, LogEventPayload } from '@vonvon/protocol';
 import type { ShellCapabilities } from '../../ui/src/client-context.js';
 
 export const desktopChannels = {
@@ -15,6 +15,8 @@ export const desktopChannels = {
   subscribe: 'desktop:subscribe',
   external: 'desktop:shell:external',
   chooseExecutablePath: 'desktop:shell:chooseExecutablePath',
+  checkDesktopUpdate: 'desktop:shell:checkDesktopUpdate',
+  installDesktopUpdate: 'desktop:shell:installDesktopUpdate',
   hide: 'desktop:shell:hide',
   quit: 'desktop:shell:quit',
   event: 'desktop:event',
@@ -36,7 +38,8 @@ export type DesktopEvent =
   | { type: 'quitRequested' };
 
 export type DesktopShell = Required<Pick<ShellCapabilities,
-  'openExternal' | 'chooseExecutablePath' | 'hideWindow' | 'quit' | 'onQuitRequested'>>;
+  'openExternal' | 'chooseExecutablePath' | 'checkDesktopUpdate' | 'installDesktopUpdate' |
+  'hideWindow' | 'quit' | 'onQuitRequested'>>;
 
 export interface DesktopResources {
   uiIndex: string;
@@ -57,6 +60,8 @@ export interface DesktopBridge {
 
 export interface ShellActions {
   chooseExecutablePath(): Promise<string | null>;
+  checkDesktopUpdate(): Promise<DesktopUpdate>;
+  installDesktopUpdate(): Promise<DesktopUpdate>;
   hide(): void;
   confirmQuit(): Promise<void>;
   connectionLost(): void;
