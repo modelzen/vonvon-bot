@@ -1,4 +1,4 @@
-import { getSessionInfo, query, renameSession, type EffortLevel, type Query } from '@anthropic-ai/claude-agent-sdk';
+import { getSessionInfo, getSessionMessages, listSessions, query, renameSession, type EffortLevel, type Query } from '@anthropic-ai/claude-agent-sdk';
 import { log } from '../core/logger';
 import { BRIDGE_DEVELOPER_INSTRUCTIONS } from './bridge-instructions';
 import { ClaudeAgentClient } from './providers/claude/agent';
@@ -6,8 +6,9 @@ import type { ClaudeQueryFactory } from './providers/claude/query';
 import type { Logger } from './paseo/logger';
 import { checkProviderLaunchAvailable, resolveProviderLaunch } from './paseo/provider-launch-config';
 import { SessionBackend, claudeSessionConfigFor } from './paseo/session-backend';
-import type { AgentClient, AgentModelDefinition, AgentSession, AgentTimelineItem } from './paseo/agent-sdk-types';
-import type { AgentBackend, BackendProbe, GenerateSessionTitleOptions, HistoryTurn, ModelInfo, ReasoningEffort, ThreadHistory, ThreadSummary } from './types';
+import { createClaudeSessionObservation, listClaudeThreads, readClaudeHistory, type ClaudeSessionStore } from './paseo-claude-wrapper';
+import type { AgentClient, AgentModelDefinition } from './paseo/agent-sdk-types';
+import type { AgentBackend, BackendProbe, GenerateSessionTitleOptions, ModelInfo, ReasoningEffort } from './types';
 
 type ClaudeSdkTitles = {
   getSessionInfo: typeof getSessionInfo;
@@ -22,6 +23,7 @@ export interface ClaudeProviderDependencies {
   resolveBinary?: () => Promise<string>;
   resolveVersion?: (signal?: AbortSignal) => Promise<string>;
   titles?: ClaudeSdkTitles;
+  history?: ClaudeSessionStore;
 }
 
 export type ClaudeBackend = SessionBackend & Required<Pick<AgentBackend,
@@ -106,67 +108,6 @@ function mapModel(model: AgentModelDefinition): ModelInfo {
   };
 }
 
-function historyFromItems(items: AgentTimelineItem[], maxTurns: number): ThreadHistory {
-  const turns: HistoryTurn[] = [];
-  let current: HistoryTurn | undefined;
-  let toolsById = new Map<string, HistoryTurn['tools'][number]>();
-  const start = (): HistoryTurn => current ??= { userText: '', assistantText: '', reasoning: '', tools: [] };
-  for (const item of items) {
-    if (item.type === 'user_message') {
-      const text = item.text.trimStart();
-      if (['<environment_context>', '# AGENTS.md', '<system-reminder>', 'Caveat:'].some((prefix) => text.startsWith(prefix))) continue;
-      if (current && (current.userText || current.assistantText || current.tools.length)) turns.push(current);
-      current = { userText: item.text, assistantText: '', reasoning: '', tools: [] };
-      toolsById = new Map();
-    } else if (item.type === 'assistant_message') {
-      start().assistantText += item.text;
-    } else if (item.type === 'reasoning') {
-      start().reasoning += item.text;
-    } else if (item.type === 'tool_call') {
-      const turn = start();
-      let tool = toolsById.get(item.callId);
-      if (!tool) {
-        tool = { title: item.detail.type === 'shell' && typeof item.detail.command === 'string' ? item.detail.command : item.name };
-        turn.tools.push(tool);
-        toolsById.set(item.callId, tool);
-      }
-      const detail = item.detail;
-      const output = 'output' in detail ? detail.output
-        : 'content' in detail ? detail.content
-        : detail.type === 'fetch' ? detail.result
-        : 'text' in detail ? detail.text
-        : 'log' in detail ? detail.log : undefined;
-      if (typeof output === 'string') tool.output = output;
-      else if (typeof item.error === 'string') tool.output = item.error;
-      if (item.status === 'failed') tool.failed = true;
-      if (item.detail.type === 'shell' && typeof item.detail.exitCode === 'number') tool.exitCode = item.detail.exitCode;
-    }
-  }
-  if (current && (current.userText || current.assistantText || current.tools.length)) turns.push(current);
-  return { turns: turns.slice(-maxTurns), totalTurns: turns.length };
-}
-
-async function readProviderHistory(client: AgentClient, cwd: string, sessionId: string, maxTurns: number): Promise<ThreadHistory> {
-  let session: AgentSession | undefined;
-  try {
-    session = await client.resumeSession(
-      { provider: 'claude', sessionId, metadata: { cwd } },
-      { provider: 'claude', cwd },
-      undefined,
-      { purpose: 'history' },
-    );
-    const items: AgentTimelineItem[] = [];
-    for await (const event of session.streamHistory()) if (event.type === 'timeline') items.push(event.item);
-    return historyFromItems(items, maxTurns);
-  } catch (error) {
-    log.fail('agent', error, { backend: 'claude-agent', phase: 'streamHistory', sessionId });
-    return { turns: [], totalTurns: 0 };
-  } finally {
-    try { await session?.close(); }
-    catch (error) { log.fail('agent', error, { backend: 'claude-agent', phase: 'closeHistorySession', sessionId }); }
-  }
-}
-
 async function generateTitle(sdk: ClaudeSdkTitles, options: GenerateSessionTitleOptions): Promise<string | undefined> {
   if (!['low', 'medium', 'high', 'xhigh', 'max'].includes(options.effort)) {
     throw new Error(`Claude SDK does not support title effort ${options.effort}`);
@@ -221,17 +162,22 @@ async function consumeTitle(titleQuery: Query): Promise<string | undefined> {
 }
 
 export function createClaudeBackend(dependencies: ClaudeProviderDependencies = {}): ClaudeBackend {
-  const client = bridgeClient(dependencies.client ?? new ClaudeAgentClient({
-    logger: dependencies.logger ?? daemonLogger(),
-    queryFactory: dependencies.queryFactory,
+  const makeClient = (queryFactory?: ClaudeQueryFactory): AgentClient => bridgeClient(new ClaudeAgentClient({
+    logger: dependencies.logger ?? daemonLogger(), queryFactory,
     resolveBinary: dependencies.resolveBinary ?? resolveClaudeExecutable,
     resolveVersion: dependencies.resolveVersion,
   }));
+  const client = dependencies.client ? bridgeClient(dependencies.client) : makeClient();
+  const history = dependencies.history ?? { listSessions, getSessionMessages };
   const titles = dependencies.titles ?? sdkTitles;
   return new class extends SessionBackend {
     constructor() {
       super(client, {
         id: 'claude-agent', displayName: 'Claude',
+        ...(!dependencies.client ? { createThreadContext: () => {
+          const repair = createClaudeSessionObservation(dependencies.queryFactory);
+          return { client: makeClient(repair.queryFactory), repair };
+        } } : {}),
         capabilities: { goal: true, steer: true, compact: true, resume: true, approvals: false },
         supportedModes: ['qa', 'write', 'full'],
         configFor: (options) => ({
@@ -251,30 +197,8 @@ export function createClaudeBackend(dependencies: ClaudeProviderDependencies = {
         },
         models: async () => (await client.fetchCatalog({ scope: 'global', force: false })).models
           .filter((model) => model.isSelectable !== false).map(mapModel),
-        listThreads: async (cwd, limit): Promise<ThreadSummary[]> => {
-          try {
-            const sessions = await client.listImportableSessions?.({ cwd, limit }) ?? [];
-            return await Promise.all(sessions.map(async (session) => {
-              const info = await titles.getSessionInfo(session.providerHandleId, { dir: cwd }).catch((error: unknown) => {
-                log.fail('agent', error, { backend: 'claude-agent', phase: 'getSessionInfo', sessionId: session.providerHandleId });
-                return undefined;
-              });
-              const updatedAt = info?.lastModified ?? session.lastActivityAt.getTime();
-              const title = info ? info.customTitle : session.title;
-              return {
-                sessionId: session.providerHandleId,
-                preview: title || info?.summary || info?.firstPrompt || session.firstPromptPreview || '',
-                createdAt: Math.floor((info?.createdAt ?? updatedAt) / 1000),
-                updatedAt: Math.floor(updatedAt / 1000),
-                ...(title ? { name: title } : {}),
-              };
-            }));
-          } catch (error) {
-            log.fail('agent', error, { backend: 'claude-agent', phase: 'listImportableSessions' });
-            return [];
-          }
-        },
-        readHistory: (cwd, sessionId, maxTurns) => readProviderHistory(client, cwd, sessionId, maxTurns),
+        listThreads: (cwd, limit) => listClaudeThreads(history, cwd, limit),
+        readHistory: (cwd, sessionId, maxTurns) => readClaudeHistory(history, cwd, sessionId, maxTurns),
       });
     }
 

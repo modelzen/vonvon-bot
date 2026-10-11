@@ -168,6 +168,19 @@ async function promptFromInput(input: AgentInput): Promise<AgentPromptInput> {
   return blocks.some((block) => block.type === 'image') ? blocks : input.text ?? '';
 }
 
+export type GoalFailureStatus = 'blocked' | 'budgetLimited';
+
+export interface SessionEventRepair {
+  beginTurn(emit: (event: AgentEvent) => void, setGoalFailureStatus?: (status: GoalFailureStatus) => void): void;
+  repair(event: AgentStreamEvent, mapped: readonly AgentEvent[]): readonly AgentEvent[];
+  endTurn(): void;
+}
+
+export interface SessionThreadContext {
+  client: AgentClient;
+  repair?: SessionEventRepair;
+}
+
 /** Wrap a Paseo session without changing the bot-facing AgentBackend contract. */
 export class SessionBackendThread implements AgentThread {
   readonly sessionId: string;
@@ -179,12 +192,16 @@ export class SessionBackendThread implements AgentThread {
   private activeRun: { queue: EventQueue<AgentEvent>; stop: () => void } | undefined;
   private readonly pendingPermissions = new Map<string, Promise<unknown>>();
 
-  constructor(private readonly session: AgentSession, private readonly thinkingOptionFor: (effort: ReasoningEffort) => string = (effort) => effort) {
+  constructor(private readonly session: AgentSession, private readonly thinkingOptionFor: (effort: ReasoningEffort) => string = (effort) => effort, private readonly repair?: SessionEventRepair) {
     this.sessionId = session.id ?? session.describePersistence()?.sessionId ?? randomUUID();
     this.supportsSteer = typeof session.steerActiveTurn === 'function';
   }
 
   runStreamed(input: AgentInput, turn?: TurnOptions): AgentRun {
+    return this.startRun(input, turn);
+  }
+
+  private startRun(input: AgentInput, turn?: TurnOptions, setGoalFailureStatus?: (status: GoalFailureStatus) => void): AgentRun {
     if (!this.alive) throw new Error('Agent 会话已关闭');
     if (this.activeRun) throw new Error('Agent 回合仍在运行');
     this.activeTurnId = undefined;
@@ -197,6 +214,7 @@ export class SessionBackendThread implements AgentThread {
     const stop = (): void => {
       if (terminal) return;
       terminal = true;
+      this.repair?.endTurn();
       queue.close();
       unsubscribe();
       if (this.activeRun?.queue === queue) this.activeRun = undefined;
@@ -205,7 +223,8 @@ export class SessionBackendThread implements AgentThread {
       if (terminal) return;
       const eventTurnId = getAgentStreamEventTurnId(event);
       if (eventTurnId && this.activeTurnId && eventTurnId !== this.activeTurnId) return;
-      for (const mapped of mapEvent(event, this.activeTurnId ?? '', textById)) queue.push(mapped);
+      const mapped = mapEvent(event, this.activeTurnId ?? '', textById);
+      for (const output of this.repair?.repair(event, mapped) ?? mapped) queue.push(output);
       if (event.type === 'permission_requested') {
         const requestId = event.request.id;
         const denial = this.session.respondToPermission(requestId, {
@@ -227,6 +246,10 @@ export class SessionBackendThread implements AgentThread {
       else forward(event);
     });
     this.activeRun = { queue, stop };
+    this.repair?.beginTurn(
+      (event) => { if (!terminal) queue.push(event); },
+      (status) => { if (!terminal) setGoalFailureStatus?.(status); },
+    );
     void (async () => {
       try {
         if (turn?.model) {
@@ -259,7 +282,8 @@ export class SessionBackendThread implements AgentThread {
       '',
       `目标：${objective}`,
     ].join('\n');
-    const run = this.runStreamed({ text: prompt });
+    let goalFailureStatus: GoalFailureStatus | undefined;
+    const run = this.startRun({ text: prompt }, undefined, (status) => { goalFailureStatus = status; });
     const startedAt = Date.now();
     const self = this;
     const events = async function* (): AsyncGenerator<AgentEvent> {
@@ -270,8 +294,8 @@ export class SessionBackendThread implements AgentThread {
         if (event.type === 'done' && !self.goalStopped) {
           yield { type: 'goal_update', status: 'complete', objective, tokensUsed, timeUsedSeconds: (Date.now() - startedAt) / 1000, tokenBudget: null };
         }
-        if (event.type === 'error') {
-          const status = event.message.includes('error_max_budget_usd') ? 'budgetLimited' : 'blocked';
+        if (event.type === 'error' && !event.willRetry) {
+          const status = goalFailureStatus ?? (event.message.includes('error_max_budget_usd') ? 'budgetLimited' : 'blocked');
           yield { type: 'goal_update', status, objective, tokensUsed, timeUsedSeconds: (Date.now() - startedAt) / 1000, tokenBudget: null };
         }
         yield event;
@@ -349,6 +373,7 @@ export interface SessionBackendOptions {
   supportedModes: readonly PermissionMode[];
   configFor: (options: StartThreadOptions) => Parameters<AgentClient['createSession']>[0];
   thinkingOptionFor?: (effort: ReasoningEffort) => string;
+  createThreadContext?: () => SessionThreadContext;
   doctor?: () => Promise<BackendProbe>;
   models?: () => Promise<ModelInfo[]>;
   listThreads?: (cwd: string, limit: number) => Promise<ThreadSummary[]>;
@@ -422,14 +447,16 @@ export class SessionBackend implements AgentBackend {
 
   async startThread(options: StartThreadOptions): Promise<SessionBackendThread> {
     this.assertMode(options.mode);
-    return new SessionBackendThread(await this.client.createSession(this.configFor(options)), this.options.thinkingOptionFor);
+    const context = this.options.createThreadContext?.() ?? { client: this.client };
+    return new SessionBackendThread(await context.client.createSession(this.configFor(options)), this.options.thinkingOptionFor, context.repair);
   }
 
   async resumeThread(options: ResumeThreadOptions): Promise<SessionBackendThread> {
     this.assertMode(options.mode);
     const config = this.configFor(options);
-    const handle = { provider: this.client.provider, sessionId: options.sessionId, metadata: { cwd: options.cwd } };
-    return new SessionBackendThread(await this.client.resumeSession(handle, config), this.options.thinkingOptionFor);
+    const context = this.options.createThreadContext?.() ?? { client: this.client };
+    const handle = { provider: context.client.provider, sessionId: options.sessionId, metadata: { cwd: options.cwd } };
+    return new SessionBackendThread(await context.client.resumeSession(handle, config), this.options.thinkingOptionFor, context.repair);
   }
 
   private assertMode(mode: PermissionMode | undefined): void {

@@ -105,9 +105,19 @@ describe('Claude provider composition', () => {
     }
   });
 
-  it('uses the provider catalog and native session history without a turn', async () => {
+  it('uses the provider catalog and raw SDK session history without a turn', async () => {
     const { client, calls, session } = fakeClient();
-    const backend = createClaudeBackend({ client });
+    const listSessions = vi.fn(async () => [{
+      sessionId: 'native-session', customTitle: 'Named', summary: 'Summary', firstPrompt: 'first',
+      createdAt: 1767312000000, lastModified: 1767312000000, fileSize: 0,
+    }]);
+    const getSessionMessages = vi.fn(async () => [
+      { type: 'user', uuid: '1', session_id: 'native-session', parent_tool_use_id: null, parent_agent_id: null, message: { content: 'first' } },
+      { type: 'assistant', uuid: '2', session_id: 'native-session', parent_tool_use_id: null, parent_agent_id: null, message: { content: 'answer' } },
+      { type: 'user', uuid: '3', session_id: 'native-session', parent_tool_use_id: null, parent_agent_id: null, message: { content: 'second' } },
+      { type: 'assistant', uuid: '4', session_id: 'native-session', parent_tool_use_id: null, parent_agent_id: null, message: { content: 'second answer' } },
+    ] satisfies import('@anthropic-ai/claude-agent-sdk').SessionMessage[]);
+    const backend = createClaudeBackend({ client, history: { listSessions, getSessionMessages } });
     expect(await backend.listModels()).toEqual([{
       id: 'opus', displayName: 'Opus', description: 'reasoning', supportedEfforts: ['low', 'high'],
       defaultEffort: 'high', isDefault: true, hidden: false,
@@ -118,9 +128,11 @@ describe('Claude provider composition', () => {
     expect(await backend.readHistory('/tmp/project', 'native-session', 1)).toEqual({
       turns: [{ userText: 'second', assistantText: 'second answer', reasoning: '', tools: [] }], totalTurns: 2,
     });
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.purpose).toBe('history');
-    expect(session.close).toHaveBeenCalledOnce();
+    expect(listSessions).toHaveBeenCalledWith({ dir: '/tmp/project', limit: 15 });
+    expect(getSessionMessages).toHaveBeenCalledWith('native-session', { dir: '/tmp/project' });
+    expect(calls).toHaveLength(0);
+    expect(session.startTurn).not.toHaveBeenCalled();
+    expect(session.close).not.toHaveBeenCalled();
   });
 
   it('keeps native titles readable, writable, and generated with the chosen model', async () => {

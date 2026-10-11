@@ -102,7 +102,7 @@ it('keeps the real environment backendVersion RPC pending with its npm view chil
   const service = createAdminService();
   const jobs = new Jobs({ service, changed() {}, toolsSettled() {} });
   let settled = false;
-  const request = environmentRpc(service, jobs, { id: 'version', open: true, event() {} }, { type: 'backendVersion', id: 'claude-agent' }).then(reply => {
+  const request = environmentRpc(service, jobs, { id: 'version', open: true, event() {} }, { type: 'backendVersion', id: 'codex-appserver' }).then(reply => {
     settled = true;
     return reply;
   });
@@ -111,13 +111,25 @@ it('keeps the real environment backendVersion RPC pending with its npm view chil
     expect(processControl.spawn).toHaveBeenCalledOnce();
     expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
     expect(settled).toBe(false);
-    expect(logger.info).toHaveBeenCalledExactlyOnceWith('backend-version', 'term_sent', { pkg: '@anthropic-ai/claude-agent-sdk', pid: 76547 });
+    expect(logger.info).toHaveBeenCalledExactlyOnceWith('backend-version', 'term_sent', { pkg: 'codex', pid: 76547 });
     expect(logger.info).not.toHaveBeenCalledWith('backend-queue', 'reserved', expect.anything());
   } finally {
     child.emit('close', 0, null);
     await jobs.close();
   }
-  expect(await request).toMatchObject({ kind: 'read', value: { kind: 'backendVersion', id: 'claude-agent', latest: null, hasUpdate: false } });
+  expect(await request).toMatchObject({ kind: 'read', value: { kind: 'backendVersion', id: 'codex-appserver', latest: null, hasUpdate: false } });
+});
+
+it('returns no npm versions for the external Claude CLI without spawning npm', async () => {
+  const service = createAdminService();
+  const jobs = new Jobs({ service, changed() {}, toolsSettled() {} });
+  try {
+    const reply = await environmentRpc(service, jobs, { id: 'version', open: true, event() {} }, { type: 'backendVersion', id: 'claude-agent' });
+    expect(reply).toEqual({ kind: 'read', value: { kind: 'backendVersion', id: 'claude-agent', installed: null, latest: null, hasUpdate: false } });
+    expect(processControl.spawn).not.toHaveBeenCalled();
+  } finally {
+    await jobs.close();
+  }
 });
 
 it('returns the parsed version after a successful close', async () => {
