@@ -1,4 +1,4 @@
-import { appendFileSync, createReadStream, statSync } from 'node:fs';
+import { createReadStream, statSync } from 'node:fs';
 import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,18 +27,6 @@ export interface ServiceStatus {
   raw: string;
 }
 
-/** Pure definition-builder inputs; defaults still target the installed bridge.
- * Native smoke tests supply an isolated worker and temporary log files without
- * registering or starting the user's bridge service. */
-export interface ServiceDefinitionOptions {
-  cliBinPath?: string;
-  stdoutPath?: string;
-  stderrPath?: string;
-  envPath?: string;
-  /** undefined uses the installer environment; null explicitly clears an override. */
-  codexBin?: string | null;
-}
-
 /** Service log files live under the app dir, identical across platforms. */
 export function serviceStdoutPath(): string {
   return join(paths.appDir, 'service.log');
@@ -53,22 +41,6 @@ export async function ensureLogFiles(): Promise<void> {
   await mkdir(paths.appDir, { recursive: true });
   await appendFile(serviceStdoutPath(), '');
   await appendFile(serviceStderrPath(), '');
-}
-
-/**
- * Append a timestamped diagnostic line to service.err.log (sync, best-effort,
- * never throws). The update/restart flow and the Windows tree-free relauncher
- * both write here so the built-in `logs` command surfaces "what happened" — the
- * relauncher runs detached with no console, and these events otherwise only land
- * in the daily JSON log, which users don't think to check. Sync because callers
- * include a short-lived relauncher that may exit before an async write flushes.
- */
-export function appendServiceErr(tag: string, line: string, filePath: string = serviceStderrPath()): void {
-  try {
-    appendFileSync(filePath, `[${new Date().toISOString()}] [${tag}] ${line}\n`);
-  } catch {
-    /* best-effort — diagnostics must never crash the caller */
-  }
 }
 
 /**

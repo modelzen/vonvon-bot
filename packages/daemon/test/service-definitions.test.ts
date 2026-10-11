@@ -3,7 +3,6 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { renderDefinition } from '../src/service/definitions';
 import { resolveServiceRoot, LAUNCHD_LABEL, SYSTEMD_UNIT_NAME } from '../src/service/identity';
-import { buildLauncherCmd, buildLauncherVbs } from '../src/service/win-startup';
 
 // These tests cover serialization and configuration semantics. Native execution
 // and executable-selection evidence live in service-smoke.test.ts.
@@ -48,65 +47,3 @@ describe('launchd definition', () => {
     expect(plist).not.toContain('CODEX_BIN');
   });
 });
-
-describe('Windows hidden launcher (.cmd)', () => {
-  const cmd = buildLauncherCmd();
-
-  it('is a CRLF batch script that sets PATH + service flag and runs the daemon', () => {
-    expect(cmd.startsWith('@echo off')).toBe(true);
-    expect(cmd).toContain('\r\n'); // cmd.exe needs CRLF
-    expect(cmd).toContain('set "PATH=');
-    expect(cmd).toContain('set "FEISHU_CODEX_BRIDGE_SERVICE=1"');
-    expect(cmd).toMatch(/".+" ".+" daemon run /);
-  });
-
-  it('appends stdout and stderr to the log files', () => {
-    expect(cmd).toContain('>> "');
-    expect(cmd).toContain('2>> "');
-  });
-
-  it('preserves an explicit CODEX_BIN override for the background service', () => {
-    withCodexBin(nativeCodexPath, () => {
-      expect(buildLauncherCmd()).toContain(`set "CODEX_BIN=${nativeCodexPath}"`);
-    });
-  });
-
-  it('protects literal percent/bang characters and uses UTF-8 for Unicode paths', () => {
-    withCodexBin(join(tmpdir(), 'codex 中文 %USERNAME% !', 'codex.exe'), () => {
-      const launcher = buildLauncherCmd();
-      expect(launcher).toContain('setlocal DisableDelayedExpansion');
-      expect(launcher).toContain('65001');
-      expect(launcher).toContain('codex 中文 %%USERNAME%% !');
-    });
-  });
-
-  it('omits an unset override and serializes an explicit clear', () => {
-    withCodexBin(undefined, () => expect(buildLauncherCmd()).not.toContain('set "CODEX_BIN='));
-    withCodexBin('', () => expect(buildLauncherCmd()).toContain('set "CODEX_BIN="'));
-    withCodexBin(nativeCodexPath, () => {
-      expect(buildLauncherCmd({ codexBin: null })).toContain('set "CODEX_BIN="');
-      expect(buildLauncherCmd({ codexBin: null })).not.toContain(nativeCodexPath);
-    });
-  });
-});
-
-describe('Windows hidden launcher (.vbs)', () => {
-  const vbs = buildLauncherVbs();
-
-  it('runs the .cmd hidden (window style 0) and does not wait', () => {
-    expect(vbs).toContain('WScript.Shell');
-    expect(vbs).toMatch(/sh\.Run "cmd \/c "".+\.cmd""", 0, False/);
-  });
-});
-
-function withCodexBin(value: string | undefined, fn: () => void): void {
-  const prev = process.env.CODEX_BIN;
-  if (value === undefined) delete process.env.CODEX_BIN;
-  else process.env.CODEX_BIN = value;
-  try {
-    fn();
-  } finally {
-    if (prev === undefined) delete process.env.CODEX_BIN;
-    else process.env.CODEX_BIN = prev;
-  }
-}

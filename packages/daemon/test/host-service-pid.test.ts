@@ -7,58 +7,71 @@ const fixture = vi.hoisted(() => ({ root: '' }));
 vi.mock('../src/config/paths', () => ({ paths: { get appDir() { return fixture.root; } } }));
 vi.mock('../src/config/data-access', () => ({ acquireMutex: vi.fn(), closeMutex: vi.fn() }));
 vi.mock('../src/server/pid-lock', () => ({ acquirePidLock: vi.fn(), publishPidLock: vi.fn(), releasePidLock: vi.fn() }));
+vi.mock('../src/service/startup', () => ({ readStartupRegistration: vi.fn(async () => ({ kind: 'absent' })) }));
 vi.mock('../src/cli/commands/run', () => ({ runRun: vi.fn() }));
 import { acquireMutex } from '../src/config/data-access';
 import { acquirePidLock } from '../src/server/pid-lock';
 import { runRun } from '../src/cli/commands/run';
 import { runHostRuntime } from '../src/host/bootstrap';
-import { clearServicePid, SERVICE_ENV_FLAG } from '../src/service/win-startup';
 
 beforeEach(async () => {
+  vi.stubEnv('FEISHU_CODEX_BRIDGE_SERVICE', '1');
+  vi.stubEnv('VONVON_SERVICE', undefined);
   fixture.root = await mkdtemp(join(tmpdir(), 'vonvon-service-pid-'));
   vi.stubGlobal('process', Object.defineProperties(Object.create(process), { platform: { value: 'win32' }, send: { value: undefined, writable: true } }));
-  vi.stubEnv(SERVICE_ENV_FLAG, '1');
   vi.mocked(acquirePidLock).mockResolvedValue({ pid: process.pid, startedAt: 'fixture', listen: '' });
 });
 afterEach(async () => {
-  process.removeListener('exit', clearServicePid);
   vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.resetAllMocks();
   await rm(fixture.root, { recursive: true, force: true });
 });
 const run = () => runHostRuntime({ managed: false, control: { requested: false, dispose: vi.fn(), waitForRequest: vi.fn(), requestStop: vi.fn(), requestRestart: vi.fn(), completeShutdown: async (release: () => Promise<void>) => release() } });
 
-it('publishes the service owner during runtime and clears it on shutdown', async () => {
+it('leaves an unrelated legacy service.pid byte-for-byte intact', async () => {
+  const pidPath = join(fixture.root, 'service.pid');
+  const legacyBytes = 'foreign owner\r\n';
+  await writeFile(pidPath, legacyBytes);
   vi.mocked(runRun).mockImplementation(async () => {
-    expect(await readFile(join(fixture.root, 'service.pid'), 'utf8')).toBe(String(process.pid));
+    expect(await readFile(pidPath, 'utf8')).toBe(legacyBytes);
   });
   await run();
-  await expect(readFile(join(fixture.root, 'service.pid'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(await readFile(pidPath, 'utf8')).toBe(legacyBytes);
 });
-it('clears the service owner when runtime startup fails', async () => {
-  vi.mocked(runRun).mockImplementation(async () => {
-    expect(await readFile(join(fixture.root, 'service.pid'), 'utf8')).toBe(String(process.pid));
-    throw new Error('startup failed');
-  });
+
+it('leaves an unrelated legacy service.pid intact when startup fails', async () => {
+  const pidPath = join(fixture.root, 'service.pid');
+  const legacyBytes = 'foreign owner\r\n';
+  await writeFile(pidPath, legacyBytes);
+  vi.mocked(runRun).mockImplementation(async () => { throw new Error('startup failed'); });
   await expect(run()).rejects.toThrow('startup failed');
-  await expect(readFile(join(fixture.root, 'service.pid'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(await readFile(pidPath, 'utf8')).toBe(legacyBytes);
 });
-it('preserves a replacement owner during cleanup', async () => {
-  vi.mocked(runRun).mockImplementation(async () => { await writeFile(join(fixture.root, 'service.pid'), '123'); });
+
+it('preserves a replacement owner written during runtime', async () => {
+  const pidPath = join(fixture.root, 'service.pid');
+  await writeFile(pidPath, 'foreign owner\r\n');
+  vi.mocked(runRun).mockImplementation(async () => { await writeFile(pidPath, 'replacement owner\r\n'); });
   await run();
-  expect(await readFile(join(fixture.root, 'service.pid'), 'utf8')).toBe('123');
+  expect(await readFile(pidPath, 'utf8')).toBe('replacement owner\r\n');
 });
-it.each(['duplicate', 'foreground', 'ipc child', 'non-Windows'])('does not claim or clear service ownership for %s', async (kind) => {
-  await writeFile(join(fixture.root, 'service.pid'), '123');
+
+it.each(['duplicate', 'foreground', 'ipc child', 'non-Windows'])('preserves legacy PID bytes for %s', async kind => {
+  const pidPath = join(fixture.root, 'service.pid');
+  const legacyBytes = 'foreign owner\r\n';
+  await writeFile(pidPath, legacyBytes);
   if (kind === 'duplicate') vi.mocked(acquireMutex).mockRejectedValue(new Error('busy'));
-  if (kind === 'non-Windows') vi.stubGlobal('process', Object.defineProperty(Object.create(process), 'platform', { value: 'darwin' }));
-  if (kind === 'foreground') vi.stubEnv(SERVICE_ENV_FLAG, '');
+  if (kind === 'foreground') vi.stubEnv('FEISHU_CODEX_BRIDGE_SERVICE', '');
   if (kind === 'ipc child') vi.stubGlobal('process', Object.assign(Object.create(process), { send: vi.fn() }));
+  if (kind === 'non-Windows') vi.stubGlobal('process', Object.defineProperty(Object.create(process), 'platform', { value: 'darwin' }));
   vi.mocked(runRun).mockImplementation(async () => {
-    expect(await readFile(join(fixture.root, 'service.pid'), 'utf8')).toBe('123');
+    expect(await readFile(pidPath, 'utf8')).toBe(legacyBytes);
   });
-  try {
-    if (kind === 'duplicate') await expect(run()).rejects.toThrow('busy');
-    else await run();
-    expect(await readFile(join(fixture.root, 'service.pid'), 'utf8')).toBe('123');
-  } finally { vi.unstubAllGlobals(); }
+  if (kind === 'duplicate') await expect(run()).rejects.toThrow('busy');
+  else await run();
+  expect(await readFile(pidPath, 'utf8')).toBe(legacyBytes);
+  if (kind === 'duplicate') expect(runRun).not.toHaveBeenCalled();
+  if (kind === 'ipc child') {
+    expect(acquireMutex).not.toHaveBeenCalled();
+    expect(acquirePidLock).not.toHaveBeenCalled();
+  }
 });

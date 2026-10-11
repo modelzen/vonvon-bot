@@ -8,7 +8,6 @@ import { describe, expect, it } from 'vitest';
 import { acquireMutex, closeMutex } from '../src/config/data-access';
 import { renderDefinition } from '../src/service/definitions';
 import { resolveServiceRoot, serviceTarget } from '../src/service/identity';
-import { buildLauncherCmd } from '../src/service/win-startup';
 
 const bin = resolve(import.meta.dirname, '../bin/vonvon.mjs');
 
@@ -161,13 +160,7 @@ describe('OS service foreground entry', () => {
     assertPackagedCommand(args, 32123);
   });
 
-  it('Windows login launcher calls the packaged daemon command', () => {
-    const cmd = buildLauncherCmd({ cliBinPath: bin });
-    const line = cmd.split('\r\n').find((part) => part.includes(`"${bin}" daemon`));
-    expect(line).toBeDefined();
-    const args = [...line!.matchAll(/"([^"]+)"|\b(daemon|run)\b/g)].slice(0, 4).map((match) => match[1] ?? match[2]!);
-    assertPackagedCommand(args);
-  });
+
 });
 
 describe.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')('built CLI Pre-lock guard', () => {
