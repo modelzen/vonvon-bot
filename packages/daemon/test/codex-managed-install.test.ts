@@ -82,12 +82,22 @@ describe('managed Codex installation', { timeout: 20_000 }, () => {
     vi.stubEnv('FIXTURE_NPM_MODE', 'hold');
     rmSync(trace, { force: true });
     const abort = new AbortController();
+    const state: { outcome: { kind: 'fulfilled' } | { kind: 'rejected'; error: unknown } | null } = { outcome: null };
     const running = installManagedCodex(abort.signal);
-    const outcome = running.catch(error => error);
-    await vi.waitFor(() => expect(existsSync(trace)).toBe(true));
-    const record = traceValue();
-    abort.abort();
-    await outcome;
+    const outcome = running.then(
+      () => { state.outcome = { kind: 'fulfilled' }; },
+      (error: unknown) => { state.outcome = { kind: 'rejected', error }; },
+    );
+    let record: ReturnType<typeof traceValue>;
+    try {
+      await vi.waitUntil(() => state.outcome !== null || existsSync(trace), { timeout: 10_000 });
+      if (state.outcome?.kind === 'rejected') throw new Error('Managed npm failed before cancellation readiness', { cause: state.outcome.error });
+      if (state.outcome?.kind === 'fulfilled') throw new Error('Persistent npm unexpectedly completed before cancellation');
+      record = traceValue();
+    } finally {
+      abort.abort();
+      await outcome;
+    }
     expect(() => process.kill(record.pid, 0)).toThrow();
     expect(existsSync(record.prefix)).toBe(false);
     expect(managedCodexBin()).toBe(previous);

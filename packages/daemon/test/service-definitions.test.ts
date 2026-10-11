@@ -1,18 +1,19 @@
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { renderDefinition } from '../src/service/definitions';
 import { resolveServiceRoot, LAUNCHD_LABEL, SYSTEMD_UNIT_NAME } from '../src/service/identity';
 
 // These tests cover serialization and configuration semantics. Native execution
 // and executable-selection evidence live in service-smoke.test.ts.
 
-const nativeCodexPath = join(tmpdir(), 'codex tools', 'codex');
+vi.mock('../src/service/identity', async importOriginal => ({
+  ...await importOriginal<typeof import('../src/service/identity')>(),
+  resolveServiceRoot: vi.fn(async () => '/fixture/root'),
+}));
 describe('systemd definition', () => {
   it('fixes the identity, root, port, restart policy, logs and PATH', async () => {
-    const root = await resolveServiceRoot(tmpdir());
+    const root = await resolveServiceRoot('/fixture/root');
     const rendered = renderDefinition({ target: { platform: 'linux', unitPath: '/unused.service' }, root, port: 32123,
-      distribution: { kind: 'desktop', executable: process.execPath, entry: '/package/tools %n/$entry.mjs' }, capturedPath: '/captured/"tools":/bin' });
+      distribution: { kind: 'desktop', executable: '/fixture/bin/node', entry: '/package/tools %n/$entry.mjs' }, capturedPath: '/captured/"tools":/bin' });
     if (rendered.platform !== 'linux') throw new Error('Expected unit');
     const unit = Buffer.from(rendered.unit).toString();
     expect(SYSTEMD_UNIT_NAME).toBe('vonvon-bot.service');
@@ -34,9 +35,9 @@ describe('systemd definition', () => {
 
 describe('launchd definition', () => {
   it('fixes the identity, root, port and PATH without CODEX_BIN passthrough', async () => {
-    const root = await resolveServiceRoot(tmpdir());
+    const root = await resolveServiceRoot('/fixture/root');
     const rendered = renderDefinition({ target: { platform: 'darwin', plistPath: '/unused.plist' }, root, port: 32123,
-      distribution: { kind: 'npm', executable: process.execPath, entry: '/package/bin/vonvon.mjs' }, capturedPath: '/captured/bin' });
+      distribution: { kind: 'npm', executable: '/fixture/bin/node', entry: '/package/bin/vonvon.mjs' }, capturedPath: '/captured/bin' });
     if (rendered.platform !== 'darwin') throw new Error('Expected plist');
     const plist = Buffer.from(rendered.plist).toString();
     expect(plist).toContain(`<key>Label</key><string>${LAUNCHD_LABEL}</string>`);

@@ -129,7 +129,8 @@ export async function startDesktop(): Promise<void> {
     await app.whenReady();
     if (terminating) return;
     const paths = desktopResources(app.getAppPath(), app.isPackaged);
-    const uiUrl = pathToFileURL(realpathSync(paths.uiIndex)).href;
+    const uiIndex = realpathSync(paths.uiIndex);
+    const uiUrl = pathToFileURL(uiIndex).href;
     const preload = realpathSync(paths.preload);
     const icon = realpathSync(paths.trayPng);
     const root = await prepareDesktopRoot(resolveDataRoot(homedir()));
@@ -273,7 +274,7 @@ export async function startDesktop(): Promise<void> {
         { label: 'Quit Vonvon Bot', click: requestQuit },
       ] },
     ]));
-    await current.loadFile(paths.uiIndex);
+    await current.loadFile(uiIndex);
     if (focusWhenReady) show();
     if (quitWhenReady) requestQuit();
   } catch (error) {

@@ -19,7 +19,7 @@ afterEach(async () => {
 });
 
 async function fixture(foreignPath?: string) {
-  const dir = await mkdtemp(join(tmpdir(), 'vonvon-environment-'));
+  const dir = await realpath(await mkdtemp(join(tmpdir(), 'vonvon-environment-')));
   dirs.push(dir);
   executableRoots.add(await realpath(dir));
   const bin = join(dir, 'bin');

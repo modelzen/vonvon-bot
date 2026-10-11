@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -28,7 +28,7 @@ let close: ReturnType<typeof vi.fn>;
 let admin: ReturnType<typeof vi.fn>;
 
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), 'vonvon-attach-'));
+  root = await realpath(await mkdtemp(join(tmpdir(), 'vonvon-attach-')));
   await writeFile(join(root, 'local-credential'), `${credential}\n`);
   close = vi.fn(async () => {});
   admin = vi.fn(async () => ({ kind: 'daemonStatus', status: { running: true, pid: identity.pid } }));

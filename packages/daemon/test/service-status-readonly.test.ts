@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { serviceStatusSchema } from '@vonvon/protocol';
 import { homedir } from 'node:os';
 import { getServiceAdapter } from '../src/service/adapter';
@@ -18,6 +18,10 @@ const observation = vi.hoisted(() => ({
   verifyOwner: vi.fn(),
 }));
 vi.mock('../src/config/paths', () => ({ paths: { appDir: '/tmp/vonvon-status-root' } }));
+vi.mock('node:os', async original => {
+  const actual = await original<typeof import('node:os')>();
+  return { ...actual, homedir: vi.fn(actual.homedir) };
+});
 vi.mock('../src/service/identity', async importOriginal => ({
   ...await importOriginal(),
   resolveServiceRoot: vi.fn(async (path: string) => path === '/tmp/vonvon-status-root' ? 'C:\\Vonvon' : path),
@@ -31,7 +35,11 @@ vi.mock('../src/service/win-startup', () => ({
   readVonvonRunValue: observation.windowsRun,
 }));
 
-afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); vi.unstubAllEnvs(); });
+beforeEach(() => {
+  vi.mocked(homedir).mockReturnValue('/home/vonvon-fixture');
+  vi.stubEnv('XDG_CONFIG_HOME', '/home/vonvon-fixture/.config');
+});
+afterEach(() => { vi.mocked(homedir).mockReset(); vi.restoreAllMocks(); vi.clearAllMocks(); vi.unstubAllEnvs(); });
 
 function registration(kind: 'absent' | 'ours' | 'other-root' | 'unrecognized') {
   if (kind === 'ours') return { kind, definition: { root: '/tmp/vonvon-status-root' } };

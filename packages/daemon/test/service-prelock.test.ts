@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { homedir } from 'node:os';
 import type { Registration } from '../src/service/registration';
 
 const fixture = vi.hoisted(() => ({
@@ -6,6 +7,10 @@ const fixture = vi.hoisted(() => ({
   closeMutex: vi.fn(), releasePidLock: vi.fn(), run: vi.fn(), info: vi.fn(), importedRun: vi.fn(),
 }));
 vi.mock('../src/config/paths', () => ({ paths: { appDir: '/owned/root' } }));
+vi.mock('node:os', async original => {
+  const actual = await original<typeof import('node:os')>();
+  return { ...actual, homedir: vi.fn(actual.homedir) };
+});
 vi.mock('../src/config/data-access', () => ({ acquireMutex: fixture.acquireMutex, closeMutex: fixture.closeMutex }));
 vi.mock('../src/server/pid-lock', () => ({ readRunningPidLock: fixture.owner, acquirePidLock: fixture.acquirePidLock, releasePidLock: fixture.releasePidLock, publishPidLock: vi.fn() }));
 vi.mock('../src/service/registration', () => ({ readRegistration: fixture.registration }));
@@ -26,6 +31,8 @@ const control: ShutdownControl = {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  vi.mocked(homedir).mockReturnValue('/home/vonvon-fixture');
+  vi.stubEnv('XDG_CONFIG_HOME', '/home/vonvon-fixture/.config');
   fixture.registration.mockReset(); fixture.owner.mockReset(); fixture.acquireMutex.mockReset(); fixture.acquirePidLock.mockReset();
   vi.stubGlobal('process', Object.defineProperties(Object.create(process), {
     platform: { value: 'darwin' }, send: { value: undefined }, exitCode: { value: undefined, writable: true },
@@ -34,7 +41,7 @@ beforeEach(async () => {
   fixture.registration.mockResolvedValue({ kind: 'ours', definition: { root: await resolveServiceRoot('/owned/root'), port: 1234, capturedPath: '/bin', distribution: { kind: 'npm', executable: '/node', entry: '/cli' } } });
   fixture.owner.mockResolvedValue(null);
 });
-afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
+afterEach(() => { vi.mocked(homedir).mockReset(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
 function untouched(): void {
   expect(fixture.acquireMutex).not.toHaveBeenCalled(); expect(fixture.acquirePidLock).not.toHaveBeenCalled();

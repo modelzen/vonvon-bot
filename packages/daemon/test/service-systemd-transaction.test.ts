@@ -1,12 +1,19 @@
 import { mkdir, mkdtemp, open, readFile, readdir, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterEach, expect, it } from 'vitest';
+import { join, posix } from 'node:path';
+import { afterEach, expect, it, vi } from 'vitest';
 import { createSystemdService } from '../src/service/systemd';
 import { renderDefinition } from '../src/service/definitions';
 import { resolveServiceRoot, SYSTEMD_UNIT_NAME } from '../src/service/identity';
-import { readRegistration } from '../src/service/registration';
 import type { PidLockInfo } from '../src/server/pid-lock';
+import { readRegistration } from '../src/service/registration';
+import { clearPosixFixtures, registerPosixFixture } from './service-posix-fixture';
+
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const { mappedServiceFs } = await import('./service-posix-fixture');
+  return mappedServiceFs(actual);
+});
 
 type Overrides = NonNullable<Parameters<typeof createSystemdService>[1]>;
 type Command = { ok: boolean; stdout: string; stderr: string; status: number | null };
@@ -16,14 +23,15 @@ const roots: string[] = [];
 const commandTraces: string[][] = [];
 afterEach(async () => {
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+  clearPosixFixtures();
   for (const calls of commandTraces.splice(0)) expect(calls.filter(command => /^(stop|restart|kill) /.test(command) || /^disable .*--now/.test(command))).toEqual([]);
 });
 
 async function fixture() {
   const folder = await mkdtemp(join(tmpdir(), 'vonvon-systemd-'));
   roots.push(folder);
-  const root = await resolveServiceRoot(folder);
-  const unitPath = join(root, '.config/systemd/user', SYSTEMD_UNIT_NAME);
+  const root = await resolveServiceRoot(registerPosixFixture(await resolveServiceRoot(folder)));
+  const unitPath = posix.join(root, '.config/systemd/user', SYSTEMD_UNIT_NAME);
   const target = { platform: 'linux' as const, unitPath };
   const calls: string[] = [];
   commandTraces.push(calls);
@@ -36,13 +44,13 @@ async function fixture() {
     onCommand: async (_command: string): Promise<void> => {},
     onPause: async (): Promise<void> => {},
   };
-  const definition = { root, port: 32123, distribution: { kind: 'npm' as const, executable: process.execPath, entry: '/installed/bin/vonvon.mjs' }, capturedPath: '/captured/tools:/usr/bin' };
+  const definition = { root, port: 32123, distribution: { kind: 'npm' as const, executable: '/fixture/bin/node', entry: '/installed/bin/vonvon.mjs' }, capturedPath: '/captured/tools:/usr/bin' };
   const rendered = renderDefinition({ target, ...definition });
   if (rendered.platform !== 'linux') throw new Error('Expected Linux unit');
   const desired = Buffer.from(rendered.unit);
-  async function seed(content: Uint8Array = desired) { await mkdir(join(root, '.config/systemd/user'), { recursive: true }); await writeFile(unitPath, content); state.loaded = true; state.enabled = true; }
+  async function seed(content: Uint8Array = desired) { await mkdir(posix.join(root, '.config/systemd/user'), { recursive: true }); await writeFile(unitPath, content); state.loaded = true; state.enabled = true; }
   const dependencies: Overrides = {
-    home: root, xdgConfigHome: undefined, executable: process.execPath, capturedPath: definition.capturedPath,
+    home: root, xdgConfigHome: undefined, executable: '/fixture/bin/node', capturedPath: definition.capturedPath,
     distribution: async () => ({ kind: 'global-npm', cliPath: definition.distribution.entry }),
     freePort: async () => 32123, now: () => state.clock,
     pause: async ms => { state.clock += ms; await state.onPause(); if (state.clock > 900_000) throw new Error('Fixture exceeded virtual drain budget'); },
@@ -316,7 +324,7 @@ it.each(['open', 'write', 'sync', 'close', 'rename'])('atomic %s failure preserv
     rename: async (...args) => { effects.push('rename'); if (boundary === 'rename') throw new Error('rename rejected'); await rename(...args); },
   }).install();
   expect(result.kind).toBe('install_incomplete'); expect(await f.bytes()).toEqual(f.desired); expect(f.mutations()).toEqual([]);
-  expect(await readdir(join(f.root, '.config/systemd/user'))).toEqual([SYSTEMD_UNIT_NAME]);
+  expect(await readdir(posix.join(f.root, '.config/systemd/user'))).toEqual([SYSTEMD_UNIT_NAME]);
   expect(effects).toEqual(boundary === 'open' ? ['open'] : boundary === 'write' ? ['open', 'write', 'close'] : boundary === 'sync' || boundary === 'close' ? ['open', 'write', 'sync', 'close'] : ['open', 'write', 'sync', 'close', 'rename']);
 });
 it('successful publication orders write, fsync, close and rename before loading', async () => {
@@ -338,7 +346,7 @@ it('concurrent change during fsync prevents rename and preserves the external by
     const sync = file.sync.bind(file); file.sync = async () => { await sync(); await writeFile(f.unitPath, 'external bytes'); }; return file;
   } }).install();
   expect(result.kind).toBe('install_incomplete'); expect((await f.bytes()).toString()).toBe('external bytes'); expect(f.mutations()).toEqual([]);
-  expect(await readdir(join(f.root, '.config/systemd/user'))).toEqual([SYSTEMD_UNIT_NAME]);
+  expect(await readdir(posix.join(f.root, '.config/systemd/user'))).toEqual([SYSTEMD_UNIT_NAME]);
 });
 it('restoration atomic write failure reports actual absent registration', async () => {
   const f = await fixture(); await f.seed(); f.state.pidReply = failed();
@@ -352,7 +360,7 @@ it('owned temporary unlink failure reports incomplete and names the leftover fil
   const result = await f.service({ rename: async () => { throw new Error('rename rejected'); }, unlink: async () => { throw new Error('cleanup rejected'); } }).install();
   expect(result.kind).toBe('install_incomplete'); expect(result.leftovers.some(item => item.includes('.tmp'))).toBe(true);
   expect((await f.registration()).kind).toBe('absent'); expect(f.mutations()).toEqual([]);
-  expect((await readdir(join(f.root, '.config/systemd/user'))).filter(name => name.endsWith('.tmp'))).toHaveLength(1);
+  expect((await readdir(posix.join(f.root, '.config/systemd/user'))).filter(name => name.endsWith('.tmp'))).toHaveLength(1);
 });
 it.each([false, true])('unpublished write failure with manager absent and previous bytes=%s preserves bytes without withdrawing', async previous => {
   const f = await fixture(); if (previous) await f.seed(); f.state.loaded = false;
@@ -396,7 +404,7 @@ it('bundled install uses the captured executable and desktop Node mode with root
   expect((await f.service({ distribution: async () => ({ kind: 'bundled', cliPath: '/bundle/daemon/bin/vonvon.mjs' }), executable: '/bundle/Electron' }).install()).kind).toBe('installed');
   const unit = (await f.bytes()).toString(); expect(unit).toContain('ExecStart="/bundle/Electron" "/bundle/daemon/bin/vonvon.mjs" daemon run --port 32123');
   expect(unit).toContain('Environment="ELECTRON_RUN_AS_NODE=1"'); expect(unit).toContain(`StandardOutput=append:${f.root}/service.log`); expect(unit).not.toContain('CODEX_BIN');
-  expect(await readFile(join(f.root, 'service.log'))).toEqual(Buffer.alloc(0)); expect(await readFile(join(f.root, 'service.err.log'))).toEqual(Buffer.alloc(0));
+  expect(await readFile(posix.join(f.root, 'service.log'))).toEqual(Buffer.alloc(0)); expect(await readFile(posix.join(f.root, 'service.err.log'))).toEqual(Buffer.alloc(0));
 });
 it('authenticated self-hosted owner fixes the install port and stays running', async () => {
   const f = await fixture(); f.state.owner = { pid: 42000, startedAt: 'self-hosted', listen: '127.0.0.1:32124' };
@@ -418,7 +426,7 @@ it.each(['open', 'write', 'sync', 'close', 'rename'])('restoration %s failure ne
     rename: async (...args) => { if (boundary === 'rename') throw new Error('restore rename failed'); await rename(...args); },
   }).uninstall();
   expect(result.kind).toBe('uninstall_incomplete'); expect(result.detail).toContain('restore failed'); expect((await f.registration()).kind).toBe('absent'); expect(f.mutations()).toEqual([`disable ${SYSTEMD_UNIT_NAME}`]);
-  expect(await readdir(join(f.root, '.config/systemd/user'))).toEqual([]);
+  expect(await readdir(posix.join(f.root, '.config/systemd/user'))).toEqual([]);
 });
 it.each(['disable', 'unlink'])('install rollback withdrawal %s failure cannot drain or restore', async boundary => {
   const f = await fixture(); f.state.fail = `enable --now ${SYSTEMD_UNIT_NAME}`;
@@ -444,7 +452,15 @@ it('a foreign canonical root registration is never replaced or removed', async (
   expect(await f.bytes()).toEqual(Buffer.from(rendered.unit)); expect(f.mutations()).toEqual([]);
 });
 it('symlink registration is never followed for mutation', async () => {
-  const f = await fixture(); await f.seed(); const destination = join(f.root, 'external.unit'); await writeFile(destination, f.desired); await unlink(f.unitPath); await symlink(destination, f.unitPath);
+  const f = await fixture(); await f.seed();
+  const external = posix.join(f.root, 'external');
+  await mkdir(external);
+  const destination = posix.join(external, 'external.unit');
+  await writeFile(destination, f.desired); await unlink(f.unitPath);
+  // A directory junction exercises the same non-regular-file refusal on Windows
+  // without requiring the privilege needed to create a file symlink.
+  await symlink(process.platform === 'win32' ? external : destination, f.unitPath, process.platform === 'win32' ? 'junction' : 'file');
+  expect(await f.registration()).toMatchObject({ kind: 'unrecognized', reason: expect.stringContaining('regular file') });
   expect((await f.service().install()).kind).toBe('install_refused'); expect((await f.service().uninstall()).kind).toBe('uninstall_refused');
   expect(await readFile(destination)).toEqual(f.desired); expect(f.mutations()).toEqual([]);
 });

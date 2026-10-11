@@ -1,5 +1,6 @@
 import { ChildProcess, spawn } from 'node:child_process';
 import { PassThrough } from 'node:stream';
+import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Distribution } from '../../daemon/src/service/distribution.js';
 import type { Registration } from '../src/daemon-manager.js';
@@ -11,16 +12,23 @@ vi.mock('node:child_process', async importOriginal => ({
   execFile: vi.fn(() => { throw new Error('Tests must not execute a real child process.'); }),
 }));
 
+const appRoot = resolve('fixture-app');
+const resources = join(appRoot, 'resources');
+const executable = join(appRoot, 'Vonvon Bot');
+const root = resolve('selected', 'root');
+const daemon = join(resources, 'daemon');
+const cliPath = join(daemon, 'bin', 'vonvon.mjs');
+
 function setup() {
   const runtime = {
     platform: 'darwin' as NodeJS.Platform,
     packaged: true,
-    resources: '/app/resources',
-    executable: '/app/Vonvon Bot',
-    root: '/selected/root',
+    resources,
+    executable,
+    root,
     env: { PATH: '/untrusted/bin', VONVON_HOME: '/wrong/root', VONVON_SERVICE: '1' },
   };
-  const classifyDistribution = vi.fn((_root: string): Distribution => ({ kind: 'bundled', cliPath: '/app/resources/daemon/bin/vonvon.mjs' }));
+  const classifyDistribution = vi.fn((_root: string): Distribution => ({ kind: 'bundled', cliPath }));
   const runCommand = vi.fn(async () => ({ code: 0, stdout: 'completed', stderr: '' }));
   const readRegistration = vi.fn(async (): Promise<Registration> => ({ kind: 'ours' }));
   const reattachAfterUninstall = vi.fn(async () => {});
@@ -32,10 +40,10 @@ describe('unexposed desktop login item helper', () => {
   it('installs through the packaged CLI and verifies our registration', async () => {
     const fixture = setup();
     await expect(setLoginItem(true, fixture.runtime, fixture.dependencies)).resolves.toEqual({ code: 0, stdout: 'completed', stderr: '' });
-    expect(fixture.classifyDistribution).toHaveBeenCalledExactlyOnceWith('/app/resources/daemon');
+    expect(fixture.classifyDistribution).toHaveBeenCalledExactlyOnceWith(daemon);
     expect(fixture.runCommand).toHaveBeenCalledExactlyOnceWith(
-      '/app/Vonvon Bot', ['/app/resources/daemon/bin/vonvon.mjs', 'service', 'install'],
-      { PATH: '/untrusted/bin', ELECTRON_RUN_AS_NODE: '1', VONVON_HOME: '/selected/root' },
+      executable, [cliPath, 'service', 'install'],
+      { PATH: '/untrusted/bin', ELECTRON_RUN_AS_NODE: '1', VONVON_HOME: root },
     );
     expect(fixture.readRegistration).toHaveBeenCalledOnce();
     expect(fixture.reattachAfterUninstall).not.toHaveBeenCalled();
@@ -50,7 +58,7 @@ describe('unexposed desktop login item helper', () => {
     fixture.reattachAfterUninstall.mockImplementation(async () => { order.push('resume'); });
 
     await expect(setLoginItem(false, fixture.runtime, fixture.dependencies)).resolves.toMatchObject({ stdout: 'uninstalled' });
-    expect(fixture.runCommand).toHaveBeenCalledWith('/app/Vonvon Bot', ['/app/resources/daemon/bin/vonvon.mjs', 'service', 'uninstall'], expect.any(Object));
+    expect(fixture.runCommand).toHaveBeenCalledWith(executable, [cliPath, 'service', 'uninstall'], expect.any(Object));
     expect(order).toEqual(['command', 'readback', 'resume']);
     expect(fixture.reattachAfterUninstall).toHaveBeenCalledOnce();
   });
@@ -140,8 +148,8 @@ describe('default login item process runner', () => {
     const fixture = setupProcess();
     fixture.runtime.platform = platform;
     const request = setLoginItem(true, fixture.runtime, fixture.dependencies);
-    expect(spawn).toHaveBeenCalledExactlyOnceWith('/app/Vonvon Bot', ['/app/resources/daemon/bin/vonvon.mjs', 'service', 'install'], {
-      env: { PATH: '/untrusted/bin', ELECTRON_RUN_AS_NODE: '1', VONVON_HOME: '/selected/root' },
+    expect(spawn).toHaveBeenCalledExactlyOnceWith(executable, [cliPath, 'service', 'install'], {
+      env: { PATH: '/untrusted/bin', ELECTRON_RUN_AS_NODE: '1', VONVON_HOME: root },
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });

@@ -1,7 +1,8 @@
 import { EventEmitter } from 'node:events';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ShellActions } from '../src/ipc-contract.js';
 import type { VerifiedDaemon } from '../src/daemon-manager.js';
@@ -24,6 +25,7 @@ const fake = vi.hoisted(() => ({
 
 vi.mock('electron', async () => {
   const { EventEmitter } = await import('node:events');
+  const { pathToFileURL } = await import('node:url');
   class MockWebContents extends EventEmitter {
     mainFrame = { url: '' };
     session = { setPermissionRequestHandler: vi.fn(), setPermissionCheckHandler: vi.fn() };
@@ -43,7 +45,7 @@ vi.mock('electron', async () => {
     isDestroyed = () => this.destroyed;
     destroy = vi.fn(() => { this.destroyed = true; });
     loadFile = vi.fn(async (path: string) => {
-      this.webContents.mainFrame.url = new URL(`file://${path}`).href;
+      this.webContents.mainFrame.url = pathToFileURL(path).href;
       this.emit('ready-to-show');
     });
     constructor(readonly options: unknown) { super(); fake.window = this; }
@@ -122,7 +124,11 @@ beforeEach(async () => {
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
     version: '0.2.0', feedURL: 'https://updates.example.test/feed',
   }))));
-  appPath = join(temp, 'desktop');
+  const resources = join(await realpath(temp), 'resources');
+  await mkdir(resources);
+  const alias = join(temp, 'resources-alias');
+  await symlink(resources, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  appPath = join(alias, 'desktop');
   await mkdir(join(appPath, '..', 'ui', 'dist'), { recursive: true });
   await mkdir(join(appPath, 'dist'), { recursive: true });
   await mkdir(join(appPath, 'assets'), { recursive: true });
@@ -302,14 +308,21 @@ describe('native window lifecycle', () => {
     expect(app.quit).toHaveBeenCalledOnce();
   });
 
-  it('denies every popup and delegates only from the exact main document', async () => {
+  it('delegates links from the loaded document under an aliased app root and refuses lookalike documents', async () => {
     const handler = window.webContents.windowOpenHandler;
+    const uiIndex = join(appPath, '..', 'ui', 'dist', 'index.html');
+    const canonicalUrl = pathToFileURL(await realpath(uiIndex)).href;
+    const aliasUrl = pathToFileURL(uiIndex).href;
+    expect(aliasUrl).not.toBe(canonicalUrl);
+    expect(window.webContents.mainFrame.url).toBe(canonicalUrl);
     expect(handler).toBeDefined();
     expect(handler?.({ url: 'https://github.com/modelzen/vonvon-bot/releases' })).toEqual({ action: 'deny' });
-    expect(fake.openExternal).toHaveBeenCalledOnce();
-    window.webContents.mainFrame.url = 'file:///other/index.html';
-    handler?.({ url: 'https://github.com/modelzen/vonvon-bot/releases' });
-    expect(fake.openExternal).toHaveBeenCalledOnce();
+    expect(fake.openExternal).toHaveBeenCalledExactlyOnceWith('https://github.com/modelzen/vonvon-bot/releases');
+    for (const lookalike of [aliasUrl, `${canonicalUrl}?other`, `${canonicalUrl}#other`, `${canonicalUrl}.other`, 'file:///other/index.html']) {
+      window.webContents.mainFrame.url = lookalike;
+      expect(handler?.({ url: 'https://github.com/modelzen/vonvon-bot/releases' })).toEqual({ action: 'deny' });
+      expect(fake.openExternal).toHaveBeenCalledOnce();
+    }
   });
 
   it('destroys the window and closes the connection after a renderer crash', async () => {

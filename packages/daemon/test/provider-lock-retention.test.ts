@@ -46,6 +46,7 @@ vi.mock('../src/agent/codex-appserver/windows-job', () => ({ WindowsCodexJob: cl
 vi.mock('../src/core/logger', () => ({ log: fixture.log, withTrace: (_context: unknown, action: () => unknown) => action() }));
 vi.mock('../src/agent', async original => ({ ...await original<object>(), createBackend: () => fixture.backend }));
 vi.mock('../src/agent/codex-appserver/locate', () => ({ resolveCodexBin: () => '/fixture/no-provider' }));
+vi.mock('../src/service/startup', () => ({ readStartupRegistration: async () => ({ kind: 'absent' }) }));
 vi.mock('../src/project/registry', async original => ({
   ...await original<object>(), getProjectByChatId: async () => ({ name: 'fixture', chatId: 'chat', cwd: process.env.HOME, groupMode: 'single' }),
 }));
@@ -182,6 +183,7 @@ beforeEach(async () => {
   vi.stubEnv('CODEX_HOME', join(root, 'codex'));
   vi.stubEnv('CODEX_BIN', join(root, 'unavailable-codex'));
   vi.stubEnv('FEISHU_CODEX_PREWARM', '0');
+  vi.stubEnv('VONVON_SERVICE', '');
   appProcess = new EventEmitter();
   const runtimeProcess = Object.create(nativeProcess);
   Object.defineProperties(runtimeProcess, {

@@ -1,4 +1,5 @@
 import { ChildProcess } from 'node:child_process';
+import { homedir } from 'node:os';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Registration } from '../src/service/registration';
 
@@ -7,6 +8,10 @@ const fixture = vi.hoisted(() => ({
   launchdStart: vi.fn(), systemdStart: vi.fn(), spawn: vi.fn(), close: vi.fn(), open: vi.fn(),
 }));
 vi.mock('../src/config/paths', () => ({ paths: { appDir: '/owned/root' } }));
+vi.mock('node:os', async original => {
+  const actual = await original<typeof import('node:os')>();
+  return { ...actual, homedir: vi.fn(actual.homedir) };
+});
 vi.mock('../src/core/logger', () => ({ readRecentLogs: vi.fn() }));
 vi.mock('../src/service/registration', () => ({ readRegistration: fixture.registration }));
 vi.mock('../src/server/pid-lock', () => ({ readRunningPidLock: fixture.owner }));
@@ -23,6 +28,8 @@ const owner = { pid: 4242, startedAt: '2026-10-11T00:00:00.000Z', listen: '127.0
 
 beforeEach(async () => {
   vi.resetAllMocks();
+  vi.mocked(homedir).mockReturnValue('/home/vonvon-fixture');
+  vi.stubEnv('XDG_CONFIG_HOME', '/home/vonvon-fixture/.config');
   vi.stubGlobal('process', Object.defineProperties(Object.create(process), {
     platform: { value: 'darwin' }, send: { value: undefined }, exitCode: { value: undefined, writable: true },
   }));
@@ -32,7 +39,7 @@ beforeEach(async () => {
   fixture.systemdStart.mockResolvedValue({ ...owner, port: 1234 });
   fixture.open.mockResolvedValue({ fd: 123, close: fixture.close });
 });
-afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { vi.mocked(homedir).mockReset(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 it.each(['darwin', 'linux'] as const)('routes %s to its manager and maps zero to the registered port', async platform => {
   vi.stubGlobal('process', Object.defineProperty(Object.create(process), 'platform', { value: platform }));
