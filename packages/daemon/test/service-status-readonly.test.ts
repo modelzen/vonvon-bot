@@ -28,7 +28,6 @@ vi.mock('../src/server/owner-verification', () => ({ verifyPidLockOwner: observa
 vi.mock('../src/service/launchd', () => ({ createLaunchdService: (...args: unknown[]) => { observation.launchdCreate(...args); return { status: observation.launchd }; } }));
 vi.mock('../src/service/systemd', () => ({ createSystemdService: (...args: unknown[]) => { observation.systemdCreate(...args); return { status: observation.systemd }; } }));
 vi.mock('../src/service/win-startup', () => ({
-  installWinStartup: vi.fn(), uninstallWinStartup: vi.fn(), restartWinStartup: vi.fn(), winStartupRunning: vi.fn(), statusWinStartup: observation.windowsStatus,
   readVonvonRunValue: observation.windowsRun,
 }));
 

@@ -94,7 +94,6 @@ vi.mock('../src/config/data-access', async original => ({
   },
   closeMutex: async () => { fixture.mutexHeld = false; },
 }));
-vi.mock('../src/service/win-startup', () => ({ SERVICE_ENV_FLAG: 'VONVON_TEST_SERVICE', recordServicePid() {}, clearServicePid() {} }));
 vi.mock('../src/server/http', () => ({
   ApiCleanupError: class ApiCleanupError extends AggregateError {
     constructor(errors: Iterable<unknown>) { super(errors, 'API cleanup failed after listener cutoff'); }

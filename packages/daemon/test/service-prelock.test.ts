@@ -10,7 +10,6 @@ vi.mock('../src/config/data-access', () => ({ acquireMutex: fixture.acquireMutex
 vi.mock('../src/server/pid-lock', () => ({ readRunningPidLock: fixture.owner, acquirePidLock: fixture.acquirePidLock, releasePidLock: fixture.releasePidLock, publishPidLock: vi.fn() }));
 vi.mock('../src/service/registration', () => ({ readRegistration: fixture.registration }));
 vi.mock('../src/core/logger', () => ({ log: { info: fixture.info } }));
-vi.mock('../src/service/win-startup', () => ({ recordServicePid: vi.fn(), clearServicePid: vi.fn() }));
 vi.mock('../src/service/codex-bin', () => ({ readServiceCodexBin: vi.fn() }));
 vi.mock('../src/cli/commands/run', () => { fixture.importedRun(); return { runRun: fixture.run }; });
 vi.mock('node:fs/promises', async original => ({ ...await original<typeof import('node:fs/promises')>(), realpath: vi.fn(async () => '/owned/root'), stat: vi.fn(async () => ({ isDirectory: () => true })) }));

@@ -7,7 +7,7 @@ import { verifyPidLockOwner } from '../server/owner-verification';
 import { readRegistration, type Registration } from './registration';
 import { serviceStderrPath, serviceStdoutPath, tailServiceLogs, type ServiceStatus } from './common';
 import { resolveServiceRoot, serviceTarget, WINDOWS_RUN_KEY, WINDOWS_RUN_VALUE } from './identity';
-import { installWinStartup, readVonvonRunValue, restartWinStartup, uninstallWinStartup, winStartupRunning } from './win-startup';
+import { readVonvonRunValue } from './win-startup';
 
 export type { ServiceStatus };
 
@@ -74,8 +74,8 @@ export function getServiceAdapter(): ServiceAdapter {
   }
   if (process.platform === 'win32') {
     return {
-      install: installWinStartup,
-      uninstall: uninstallWinStartup,
+      install: refused,
+      uninstall: refused,
       async status() {
         const root = await resolveServiceRoot(paths.appDir);
         const target = serviceTarget({ platform: 'win32', root });
@@ -93,7 +93,7 @@ export function getServiceAdapter(): ServiceAdapter {
         const diagnostic = `${verified === null ? 'No verified data-root owner.' : `Verified data-root owner PID ${verified}.`} ${leftovers}`;
         return statusFields('Windows login startup (HKCU Run)', `${WINDOWS_RUN_KEY}\\${WINDOWS_RUN_VALUE}`, registration, verified, verified, diagnostic);
       },
-      restart: restartWinStartup,
+      restart: refused,
       logs: tailServiceLogs,
     };
   }
@@ -121,11 +121,4 @@ export function getServiceAdapter(): ServiceAdapter {
     };
   }
   throw new Error(`service: unsupported platform ${process.platform}.`);
-}
-
-export function isServiceRunning(): boolean {
-  try {
-    if (process.platform === 'win32') return winStartupRunning();
-  } catch {}
-  return false;
 }
