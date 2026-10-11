@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, 
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { acquireMutex, closeMutex } from '../src/config/data-access';
 import { renderDefinition } from '../src/service/definitions';
@@ -21,6 +22,36 @@ function serviceFixture() {
   const xdgDataHome = join(root, 'xdg-data');
   const xdgStateHome = join(root, 'state');
   const temp = join(root, 'tmp');
+  const logCapture = join(root, 'startup-emissions.jsonl');
+  const synchronousLogCaptureModule = join(root, 'observe-logs.mjs');
+  writeFileSync(synchronousLogCaptureModule, `
+import fs from 'node:fs';
+import { basename, dirname } from 'node:path';
+import { syncBuiltinESMExports } from 'node:module';
+const createWriteStream = fs.createWriteStream;
+fs.createWriteStream = function (...args) {
+  const stream = createWriteStream.apply(this, args);
+  const path = args[0];
+  if (typeof path === 'string' && dirname(path) === ${JSON.stringify(join(data, 'logs'))}
+      && /^\\d{4}-\\d{2}-\\d{2}\\.log$/.test(basename(path))) {
+    const write = stream.write;
+    stream.write = function (...writeArgs) {
+      const fd = fs.openSync(${JSON.stringify(logCapture)}, 'a', 0o600);
+      try {
+        const chunk = writeArgs[0];
+        if (typeof chunk === 'string') {
+          fs.writeSync(fd, chunk, undefined, typeof writeArgs[1] === 'string' ? writeArgs[1] : 'utf8');
+        } else {
+          fs.writeSync(fd, chunk);
+        }
+      } finally { fs.closeSync(fd); }
+      return write.apply(this, writeArgs);
+    };
+  }
+  return stream;
+};
+syncBuiltinESMExports();
+`);
   for (const path of [home, data, xdgConfigHome, xdgRuntimeDir, xdgCacheHome, xdgDataHome, xdgStateHome, temp]) mkdirSync(path);
   const platform = process.platform === 'darwin' ? 'darwin' : 'linux';
   const target = platform === 'darwin'
@@ -42,7 +73,7 @@ function serviceFixture() {
     VITEST: '',
     VONVON_SERVICE: platform === 'darwin' ? 'launchd' : 'systemd',
   };
-  return { root, data, target, env };
+  return { root, data, target, env, logCapture, synchronousLogCaptureModule };
 }
 
 async function freePort(): Promise<number> {
@@ -57,9 +88,9 @@ async function freePort(): Promise<number> {
   return address.port;
 }
 
-async function runManagedCli(env: NodeJS.ProcessEnv, port: number): Promise<{ code: number | null; stderr: string; timedOut: boolean }> {
-  const child = spawn(process.execPath, [bin, 'daemon', 'run', '--port', String(port)], {
-    env,
+async function runManagedCli(fixture: ReturnType<typeof serviceFixture>, port: number): Promise<{ code: number | null; stderr: string; timedOut: boolean }> {
+  const child = spawn(process.execPath, ['--import', pathToFileURL(fixture.synchronousLogCaptureModule).href, bin, 'daemon', 'run', '--port', String(port)], {
+    env: fixture.env,
     detached: true,
     stdio: ['ignore', 'ignore', 'pipe'],
   });
@@ -88,11 +119,8 @@ async function runManagedCli(env: NodeJS.ProcessEnv, port: number): Promise<{ co
   }
 }
 
-function startupLogs(data: string): unknown[] {
-  const logs = join(data, 'logs');
-  return readdirSync(logs)
-    .filter(name => /^\d{4}-\d{2}-\d{2}\.log$/.test(name))
-    .flatMap(name => readFileSync(join(logs, name), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)));
+function startupLogs(logCapture: string): unknown[] {
+  return readFileSync(logCapture, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line));
 }
 
 function assertPackagedCommand(args: string[], port?: number): void {
@@ -148,10 +176,10 @@ describe.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')('
     try {
       const hostMutex = await acquireMutex(fixture.data, 'host');
       try {
-        const result = await runManagedCli(fixture.env, await freePort());
+        const result = await runManagedCli(fixture, await freePort());
         expect(result.timedOut, result.stderr).toBe(false);
         expect(result.code, result.stderr).toBe(0);
-        expect(startupLogs(fixture.data)).toContainEqual(expect.objectContaining({
+        expect(startupLogs(fixture.logCapture)).toContainEqual(expect.objectContaining({
           phase: 'daemon-startup', event: 'registration_absent',
         }));
         expect(existsSync(join(fixture.data, 'daemon.pid'))).toBe(false);
@@ -175,10 +203,10 @@ describe.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')('
       const lockPath = join(fixture.data, 'daemon.pid');
       const original = Buffer.from(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), listen: null }));
       writeFileSync(lockPath, original);
-      const result = await runManagedCli(fixture.env, port);
+      const result = await runManagedCli(fixture, port);
       expect(result.timedOut, result.stderr).toBe(false);
       expect(result.code, result.stderr).toBe(0);
-      const logs = startupLogs(fixture.data);
+      const logs = startupLogs(fixture.logCapture);
       expect(logs).toContainEqual(expect.objectContaining({
         phase: 'daemon-startup', event: 'owner_present', pid: process.pid,
       }));
