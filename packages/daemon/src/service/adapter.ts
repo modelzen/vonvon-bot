@@ -1,10 +1,13 @@
 import { homedir } from 'node:os';
+import { lstat } from 'node:fs/promises';
 import { paths } from '../config/paths';
 import { SERVICE_UNAVAILABLE } from '../host/service';
-import type { Registration } from './registration';
+import { readRunningPidLock } from '../server/pid-lock';
+import { verifyPidLockOwner } from '../server/owner-verification';
+import { readRegistration, type Registration } from './registration';
 import { serviceStderrPath, serviceStdoutPath, tailServiceLogs, type ServiceStatus } from './common';
-import { serviceTarget } from './identity';
-import { installWinStartup, restartWinStartup, uninstallWinStartup, winStartupRunning } from './win-startup';
+import { resolveServiceRoot, serviceTarget, WINDOWS_RUN_KEY, WINDOWS_RUN_VALUE } from './identity';
+import { installWinStartup, readVonvonRunValue, restartWinStartup, uninstallWinStartup, winStartupRunning } from './win-startup';
 
 export type { ServiceStatus };
 
@@ -39,6 +42,18 @@ function statusFields(platformName: string, servicePath: string, registration: R
   };
 }
 
+async function launcherLeftovers(files: string[]): Promise<string> {
+  const present: string[] = [];
+  for (const path of files) {
+    try { await lstat(path); present.push(path); }
+    catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') continue;
+      throw error;
+    }
+  }
+  return present.length ? `Leftover launcher files: ${present.join(', ')}.` : 'No leftover launcher files.';
+}
+
 export function getServiceAdapter(): ServiceAdapter {
   const refused = async (): Promise<never> => { throw new Error(SERVICE_UNAVAILABLE); };
   if (process.platform === 'darwin') {
@@ -61,7 +76,23 @@ export function getServiceAdapter(): ServiceAdapter {
     return {
       install: installWinStartup,
       uninstall: uninstallWinStartup,
-      status: async () => { throw new Error('Vonvon Windows service status is unavailable until the Run registration reader is integrated.'); },
+      async status() {
+        const root = await resolveServiceRoot(paths.appDir);
+        const target = serviceTarget({ platform: 'win32', root });
+        if (target.platform !== 'win32') throw new Error('Invalid Windows service target');
+        const windowsRun = readVonvonRunValue();
+        const registration = await readRegistration({ target, requestedRoot: root, windowsRun });
+        if (registration.kind === 'other-root' || registration.kind === 'unrecognized') throw new Error(registrationDetail(registration));
+        const owner = await readRunningPidLock(root);
+        let verified: number | null = null;
+        if (registration.kind === 'ours' && owner?.listen) {
+          await verifyPidLockOwner(root, owner);
+          verified = owner.pid;
+        }
+        const leftovers = registration.kind === 'absent' ? await launcherLeftovers([target.vbsPath, target.cmdPath]) : '';
+        const diagnostic = `${verified === null ? 'No verified data-root owner.' : `Verified data-root owner PID ${verified}.`} ${leftovers}`;
+        return statusFields('Windows login startup (HKCU Run)', `${WINDOWS_RUN_KEY}\\${WINDOWS_RUN_VALUE}`, registration, verified, verified, diagnostic);
+      },
       restart: restartWinStartup,
       logs: tailServiceLogs,
     };

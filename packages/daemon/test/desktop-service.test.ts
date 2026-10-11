@@ -9,10 +9,12 @@ it('reports observed macOS service status through the existing machine fields', 
   expect(await controlDesktopService('status', adapter)).toMatchObject({ supported: true, installed: true, running: true, pid: '123' });
   expect(adapter.status).toHaveBeenCalledOnce();
 });
-it('leaves Windows status unsupported without calling the legacy startup adapter', async () => {
+it('reports Windows status through the adapter using the existing machine fields', async () => {
   vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
-  expect(await controlDesktopService('status', adapter)).toEqual({ supported: false, installed: false, running: false });
-  expect(adapter.status).not.toHaveBeenCalled();
+  const status = { platformName: 'Windows login startup (HKCU Run)', installed: true, running: true, servicePath: 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Vonvon Bot', stdoutPath: 'C:\\Vonvon\\service.log', stderrPath: 'C:\\Vonvon\\service.err.log', pid: '42', raw: 'registered' };
+  adapter.status.mockResolvedValue(status);
+  expect(await controlDesktopService('status', adapter)).toEqual({ supported: true, ...status });
+  expect(adapter.status).toHaveBeenCalledOnce();
 });
 it('returns an explicit error when the frozen machine status cannot describe another registration root', async () => {
   vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
