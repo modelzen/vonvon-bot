@@ -3,14 +3,15 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { buildPlist } from '../src/service/launchd';
+import { renderDefinition } from '../src/service/definitions';
+import { resolveServiceRoot } from '../src/service/identity';
 import { buildUnit } from '../src/service/systemd';
 import { buildLauncherCmd } from '../src/service/win-startup';
 
 const bin = resolve(import.meta.dirname, '../bin/vonvon.mjs');
 
-function assertPackagedCommand(args: string[]): void {
-  expect(args).toEqual([process.execPath, bin, 'daemon', 'run']);
+function assertPackagedCommand(args: string[], port?: number): void {
+  expect(args).toEqual([process.execPath, bin, 'daemon', 'run', ...(port ? ['--port', String(port)] : [])]);
   expect(existsSync(bin)).toBe(true);
   const result = spawnSync(args[0]!, [...args.slice(1), '--help'], {
     encoding: 'utf8',
@@ -23,12 +24,15 @@ function assertPackagedCommand(args: string[]): void {
 }
 
 describe('OS service foreground entry', () => {
-  it('launchd calls the packaged daemon command', () => {
-    const plist = buildPlist({ cliBinPath: bin });
+  it('launchd calls the packaged daemon command', async () => {
+    const root = await resolveServiceRoot(tmpdir());
+    const rendered = renderDefinition({ target: { platform: 'darwin', plistPath: '/unused.plist' }, root, port: 32123, distribution: { kind: 'npm', executable: process.execPath, entry: bin }, capturedPath: '/usr/bin' });
+    if (rendered.platform !== 'darwin') throw new Error('Expected plist');
+    const plist = Buffer.from(rendered.plist).toString();
     const argumentsXml = plist.match(/<key>ProgramArguments<\/key>\s*<array>(.*?)<\/array>/s)?.[1];
     expect(argumentsXml).toBeDefined();
     const args = [...argumentsXml!.matchAll(/<string>(.*?)<\/string>/g)].map((match) => match[1]!);
-    assertPackagedCommand(args);
+    assertPackagedCommand(args, 32123);
   });
 
   it('systemd calls the packaged daemon command', () => {

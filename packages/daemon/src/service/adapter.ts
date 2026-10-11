@@ -1,12 +1,5 @@
 import type { ServiceStatus } from './common';
-import {
-  installLaunchd,
-  isLoaded as launchdLoaded,
-  restartLaunchd,
-  statusLaunchd,
-  tailLaunchdLogs,
-  uninstallLaunchd,
-} from './launchd';
+import { SERVICE_UNAVAILABLE } from '../host/service';
 import {
   installWinStartup,
   restartWinStartup,
@@ -33,21 +26,10 @@ export interface ServiceAdapter {
   logs(follow: boolean): Promise<void>;
 }
 
-/**
- * The background-service adapter for the current platform: launchd on macOS,
- * Task Scheduler on Windows, systemd (user units) on Linux/WSL. Throws a
- * friendly error on any other platform — the foreground `run` command works
- * everywhere and is the supported fallback there.
- */
 export function getServiceAdapter(): ServiceAdapter {
   if (process.platform === 'darwin') {
-    return {
-      install: installLaunchd,
-      uninstall: uninstallLaunchd,
-      status: async () => statusLaunchd(),
-      restart: restartLaunchd,
-      logs: tailLaunchdLogs,
-    };
+    const refused = async (): Promise<never> => { throw new Error(SERVICE_UNAVAILABLE); };
+    return { install: refused, uninstall: refused, status: refused, restart: refused, logs: tailServiceLogs };
   }
 
   if (process.platform === 'win32') {
@@ -83,7 +65,7 @@ export function getServiceAdapter(): ServiceAdapter {
  */
 export function isServiceRunning(): boolean {
   try {
-    if (process.platform === 'darwin') return launchdLoaded();
+    if (process.platform === 'darwin') return false;
     if (process.platform === 'win32') return winStartupRunning();
     if (process.platform === 'linux') return systemdActive();
   } catch {

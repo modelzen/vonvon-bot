@@ -1,7 +1,8 @@
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { buildPlist } from '../src/service/launchd';
+import { renderDefinition } from '../src/service/definitions';
+import { resolveServiceRoot, LAUNCHD_LABEL } from '../src/service/identity';
 import { buildUnit, SYSTEMD_UNIT_NAME } from '../src/service/systemd';
 import { buildLauncherCmd, buildLauncherVbs } from '../src/service/win-startup';
 
@@ -62,23 +63,19 @@ describe('systemd unit (buildUnit)', () => {
   });
 });
 
-describe('launchd plist (buildPlist)', () => {
-  it('preserves an explicit CODEX_BIN override for the background service', () => {
-    const path = join(tmpdir(), 'Codex & Friends', 'codex');
-    withCodexBin(path, () => {
-      const plist = buildPlist();
-      expect(plist).toContain('<key>CODEX_BIN</key>');
-      expect(plist).toContain(path.replace(/&/g, '&amp;'));
-    });
-  });
-
-  it('omits an unset override and serializes an explicit clear', () => {
-    withCodexBin(undefined, () => expect(buildPlist()).not.toContain('<key>CODEX_BIN</key>'));
-    withCodexBin('', () => expect(buildPlist()).toMatch(/<key>CODEX_BIN<\/key>\s*<string><\/string>/));
-    withCodexBin(nativeCodexPath, () => {
-      expect(buildPlist({ codexBin: null })).toMatch(/<key>CODEX_BIN<\/key>\s*<string><\/string>/);
-      expect(buildPlist({ codexBin: null })).not.toContain(nativeCodexPath);
-    });
+describe('launchd definition', () => {
+  it('fixes the identity, root, port and PATH without CODEX_BIN passthrough', async () => {
+    const root = await resolveServiceRoot(tmpdir());
+    const rendered = renderDefinition({ target: { platform: 'darwin', plistPath: '/unused.plist' }, root, port: 32123,
+      distribution: { kind: 'npm', executable: process.execPath, entry: '/package/bin/vonvon.mjs' }, capturedPath: '/captured/bin' });
+    if (rendered.platform !== 'darwin') throw new Error('Expected plist');
+    const plist = Buffer.from(rendered.plist).toString();
+    expect(plist).toContain(`<key>Label</key><string>${LAUNCHD_LABEL}</string>`);
+    expect(plist).toContain('<string>--port</string><string>32123</string>');
+    expect(plist).toContain('<key>PATH</key><string>/captured/bin</string>');
+    expect(plist).toContain(`<string>${root}/service.log</string>`);
+    expect(plist).toContain('<key>SuccessfulExit</key><false/>');
+    expect(plist).not.toContain('CODEX_BIN');
   });
 });
 
