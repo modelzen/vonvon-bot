@@ -13,10 +13,11 @@ function setup(statuses: Array<VerifiedDaemon | null>, registration: DaemonManag
   const readRegistration = vi.fn(registration);
   const startManaged = vi.fn(async (_requestedPort = 0) => {});
   const startBundled = vi.fn(async (_requestedPort = 0) => {});
+  const startSelectedBot = vi.fn(async (_requestedPort: number, _bot: string) => running.pid);
   const checkProtocol = vi.fn(async () => PROTOCOL_VERSION);
   const pause = vi.fn(async () => {});
-  const dependencies: DaemonManagerDependencies = { readVerifiedDaemon, readRegistration, startManaged, startBundled, checkProtocol, pause };
-  return { manager: createDaemonManager(dependencies, { maxAttempts: 3 }), readVerifiedDaemon, readRegistration, startManaged, startBundled, checkProtocol, pause };
+  const dependencies: DaemonManagerDependencies = { readVerifiedDaemon, readRegistration, startManaged, startBundled, startSelectedBot, checkProtocol, pause };
+  return { manager: createDaemonManager(dependencies, { maxAttempts: 3 }), readVerifiedDaemon, readRegistration, startManaged, startBundled, startSelectedBot, checkProtocol, pause };
 }
 
 describe('daemon manager', () => {
@@ -44,6 +45,52 @@ describe('daemon manager', () => {
     expect(fixture.startManaged).toHaveBeenCalledOnce();
     expect(fixture.startManaged).toHaveBeenCalledWith(0);
     expect(fixture.startBundled).not.toHaveBeenCalled();
+  });
+
+  it('passes the selected Bot unchanged to the single-Bot run path', async () => {
+    const fixture = setup([null, running]);
+    await expect(fixture.manager.ensureReady(0, 'cli_exact_Bot_ID')).resolves.toEqual(running);
+    expect(fixture.startSelectedBot).toHaveBeenCalledExactlyOnceWith(0, 'cli_exact_Bot_ID');
+    expect(fixture.startBundled).not.toHaveBeenCalled();
+    expect(fixture.startManaged).not.toHaveBeenCalled();
+    expect(fixture.checkProtocol).toHaveBeenCalledExactlyOnceWith(running);
+  });
+
+  it('refuses a different authenticated owner that wins the lock during selected Bot launch', async () => {
+    const otherOwner = { ...running, pid: running.pid + 1 };
+    const fixture = setup([null, otherOwner]);
+    await expect(fixture.manager.ensureReady(0, 'cli_exact_Bot_ID')).rejects.toThrow(`Another daemon (PID ${otherOwner.pid}) became the owner`);
+    expect(fixture.startSelectedBot).toHaveBeenCalledExactlyOnceWith(0, 'cli_exact_Bot_ID');
+    expect(fixture.startBundled).not.toHaveBeenCalled();
+    expect(fixture.startManaged).not.toHaveBeenCalled();
+    expect(fixture.checkProtocol).not.toHaveBeenCalled();
+    expect(fixture.readVerifiedDaemon).toHaveBeenCalledTimes(2);
+    expect(fixture.pause).not.toHaveBeenCalled();
+  });
+
+  it('propagates selected Bot launch failure without accepting another owner or falling back', async () => {
+    const fixture = setup([null, running]);
+    fixture.startSelectedBot.mockRejectedValue(new Error('selected launch failed'));
+    await expect(fixture.manager.ensureReady(0, 'cli_exact_Bot_ID')).rejects.toThrow('selected launch failed');
+    expect(fixture.startBundled).not.toHaveBeenCalled();
+    expect(fixture.startManaged).not.toHaveBeenCalled();
+    expect(fixture.readVerifiedDaemon).toHaveBeenCalledOnce();
+    expect(fixture.checkProtocol).not.toHaveBeenCalled();
+    expect(fixture.pause).not.toHaveBeenCalled();
+  });
+
+  it('refuses a selected Bot under a registered service without launching another owner', async () => {
+    const fixture = setup([null], async () => ({ kind: 'ours' }));
+    await expect(fixture.manager.ensureReady(0, 'cli_exact_Bot_ID')).rejects.toThrow('Uninstall the registered service');
+    expect(fixture.startSelectedBot).not.toHaveBeenCalled();
+    expect(fixture.startBundled).not.toHaveBeenCalled();
+    expect(fixture.startManaged).not.toHaveBeenCalled();
+  });
+
+  it('does not accept a running default daemon as a selected Bot start', async () => {
+    const fixture = setup([running]);
+    await expect(fixture.manager.ensureReady(0, 'cli_exact_Bot_ID')).rejects.toThrow('Stop the running daemon');
+    expect(fixture.startSelectedBot).not.toHaveBeenCalled();
   });
 
   it.each(['absent', 'ours'] as const)('passes the explicit port to the %s launch and accepts its ready owner', async (kind) => {
