@@ -35,6 +35,11 @@ function parseVoid(value: unknown): void {
   if (value !== undefined) throw new Error('Invalid desktop response');
 }
 
+function parseExecutablePath(value: unknown): string | null {
+  if (value === null || typeof value === 'string') return value;
+  throw new Error('Invalid desktop response');
+}
+
 export function createDesktopFacades(transport: FacadeTransport): { client: VonvonClient; shell: DesktopShell } {
   const snapshots = new Set<(value: DesktopSnapshot) => void>();
   const logs = new Set<(value: LogEventPayload) => void>();
@@ -191,6 +196,10 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
 
   const shell: DesktopShell = {
     openExternal: url => callShell(desktopChannels.external, url),
+    chooseExecutablePath: () => transport.invoke(desktopChannels.chooseExecutablePath)
+      .then(value => readResult(value, parseExecutablePath), error => {
+        throw error instanceof Error ? new Error(error.message) : new Error('Desktop request failed');
+      }),
     hideWindow: () => callShell(desktopChannels.hide),
     quit: () => callShell(desktopChannels.quit),
     onQuitRequested(listener) {

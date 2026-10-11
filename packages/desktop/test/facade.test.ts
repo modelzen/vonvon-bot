@@ -23,6 +23,18 @@ function harness() {
 }
 
 describe('synchronous desktop facade', () => {
+  it('exposes the executable chooser and validates its path-or-cancel response', async () => {
+    const h = harness();
+    const { shell } = createDesktopFacades(h.transport);
+    h.replies.set(desktopChannels.chooseExecutablePath, async () => ({ ok: true, value: '/usr/local/bin/codex' }));
+    await expect(shell.chooseExecutablePath()).resolves.toBe('/usr/local/bin/codex');
+    h.replies.set(desktopChannels.chooseExecutablePath, async () => ({ ok: true, value: null }));
+    await expect(shell.chooseExecutablePath()).resolves.toBeNull();
+    h.replies.set(desktopChannels.chooseExecutablePath, async () => ({ ok: true, value: 123 }));
+    await expect(shell.chooseExecutablePath()).rejects.toThrow('Invalid desktop response');
+    expect(h.calls.filter(value => value === desktopChannels.chooseExecutablePath)).toHaveLength(3);
+  });
+
   it('registers its receiver before subscribing and delivers the newest snapshot once', async () => {
     const h = harness();
     let resolveSeed!: (value: unknown) => void;
