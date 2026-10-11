@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { log } from '../core/logger';
 import { finishOwnedUpdate, type UpdateStatus } from '../service/update';
@@ -62,9 +63,42 @@ type RestartHelper = {
   death: Promise<void>;
   cancelled: boolean;
   escalation?: NodeJS.Timeout;
+  readiness:
+    | { kind: 'immediate' }
+    | { kind: 'pending'; scope: string; helperArgs: string[]; deadlineAt: number }
+    | { kind: 'ready' };
+  settled: Promise<void>;
+  poll?: NodeJS.Timeout;
 };
 
-export function observeShutdown(parentControl = false): ShutdownControl {
+interface ShutdownOptions {
+  serviceManaged?: boolean;
+  platform?: NodeJS.Platform;
+  now?: () => number;
+  setTimeout?: typeof setTimeout;
+  clearTimeout?: typeof clearTimeout;
+  readProc?: (pid: number, file: 'cgroup' | 'cmdline') => string;
+}
+
+export function linuxHelperReady(cgroup: string, cmdline: string[], scope: string, helperArgs: string[]): boolean {
+  const unified = cgroup.split('\n').filter(line => line.startsWith('0::'));
+  if (unified.length !== 1) return false;
+  const path = unified[0]?.slice(3);
+  if (!path?.startsWith('/') || path.includes('\0')) return false;
+  const components = path.slice(1).split('/');
+  if (components.some(part => !part || part === '.' || part === '..' || part === 'vonvon-bot.service')) return false;
+  return components.at(-1) === scope && cmdline.length === helperArgs.length + 1
+    && helperArgs.every((arg, index) => cmdline[index + 1] === arg);
+}
+
+export function observeShutdown(parentControl = false, options: ShutdownOptions = {}): ShutdownControl {
+  const serviceManaged = (options.serviceManaged ?? Boolean(process.env.VONVON_SERVICE)) && !process.send;
+  const platform = options.platform ?? process.platform;
+  const now = options.now ?? Date.now;
+  const schedule = options.setTimeout ?? setTimeout;
+  const unschedule = options.clearTimeout ?? clearTimeout;
+  const readProc = options.readProc ?? ((pid, file) => readFileSync(`/proc/${pid}/${file}`, 'utf8'));
+  let settleHelper: () => void = () => {};
   let intent: 'running' | 'restart' | 'stop' = 'running';
   let committed = false;
   let helper: RestartHelper | undefined;
@@ -72,15 +106,17 @@ export function observeShutdown(parentControl = false): ShutdownControl {
   let wake: () => void = () => {};
   const pending = new Promise<void>(resolve => { wake = resolve; });
   const isStopping = (): boolean => intent === 'stop';
-  const cancelHelper = (): void => {
+  const cancelHelper = (reason = '重启已被停止取消'): void => {
     if (!helper || helper.cancelled) return;
     const owned = helper;
     owned.cancelled = true;
     log.info('daemon-restart', 'cancelled', { pid: process.pid, helperPid: owned.child.pid });
-    finishOwnedUpdate(owned.update, 'error', '重启已被停止取消');
+    finishOwnedUpdate(owned.update, 'error', reason);
+    unschedule(owned.poll);
+    settleHelper();
     if (owned.dead) return;
     try { owned.child.kill('SIGTERM'); } catch (error) { log.fail('daemon-restart', error, { phase: 'cancel-term' }); }
-    owned.escalation = setTimeout(() => {
+    owned.escalation = schedule(() => {
       if (!owned.dead) {
         try { owned.child.kill('SIGKILL'); } catch (error) { log.fail('daemon-restart', error, { phase: 'cancel-kill' }); }
       }
@@ -120,6 +156,7 @@ export function observeShutdown(parentControl = false): ShutdownControl {
     for (;;) {
       if (intent === 'stop') cancelHelper();
       if (helper?.cancelled && !helper.dead) { await helper.death; continue; }
+      if (helper && !helper.dead && helper.readiness.kind === 'pending') { await helper.settled; continue; }
       committed = true;
       try { await release(); }
       catch (error) {
@@ -140,8 +177,9 @@ export function observeShutdown(parentControl = false): ShutdownControl {
     completeShutdown(release) { return completion ??= complete(release); },
     requestRestart(port, update) {
       if (intent === 'stop' || committed) { finishOwnedUpdate(update, 'error', '重启已被停止取消'); return; }
-      if (helper) { finishOwnedUpdate(update, 'error', '已有重启正在进行'); return; }
+      if (intent === 'restart') { finishOwnedUpdate(update, 'error', '已有重启正在进行'); return; }
       intent = 'restart';
+      if (serviceManaged && !update) { setImmediate(wake); return; }
       try {
         const cliEntry = process.argv[1];
         if (!cliEntry) throw new Error('Cannot locate daemon CLI for restart.');
@@ -150,15 +188,25 @@ export function observeShutdown(parentControl = false): ShutdownControl {
         if (identity.pid !== process.pid) throw new Error('Cannot restart a different daemon owner.');
         const args = [cliEntry, '__restart-after-exit', String(port), String(identity.pid), identity.startedAt];
         if (update) args.push(JSON.stringify(update));
-        const child = spawn(process.execPath, args, { detached: true, stdio: 'ignore', env: { ...process.env } });
+        const scope = serviceManaged && platform === 'linux'
+          ? `vonvon-bot-update-${randomBytes(8).toString('hex')}.scope` : undefined;
+        const child = spawn(scope ? 'systemd-run' : process.execPath,
+          scope ? ['--user', '--scope', '--quiet', `--unit=${scope}`, process.execPath, ...args] : args,
+          { detached: true, stdio: 'ignore', env: { ...process.env } });
         let markDead: () => void = () => {};
         const death = new Promise<void>(resolve => { markDead = resolve; });
-        const owned: RestartHelper = { child, update, born: child.pid !== undefined, dead: false, death, cancelled: false };
+        const settled = scope ? new Promise<void>(resolve => { settleHelper = resolve; }) : Promise.resolve();
+        const owned: RestartHelper = {
+          child, update, born: child.pid !== undefined, dead: false, death, cancelled: false, settled,
+          readiness: scope ? { kind: 'pending', scope, helperArgs: args, deadlineAt: Infinity } : { kind: 'immediate' },
+        };
         helper = owned;
         const died = (): void => {
           if (owned.dead) return;
           owned.dead = true;
-          clearTimeout(owned.escalation);
+          unschedule(owned.escalation);
+          unschedule(owned.poll);
+          settleHelper();
           markDead();
           if (!committed && !owned.cancelled) {
             intent = 'stop';
@@ -167,10 +215,38 @@ export function observeShutdown(parentControl = false): ShutdownControl {
             wake();
           }
         };
+        const poll = (): void => {
+          if (owned.dead || owned.cancelled || owned.readiness.kind !== 'pending') return;
+          if (now() >= owned.readiness.deadlineAt) {
+            intent = 'stop';
+            cancelHelper('helper_lost');
+            wake();
+            return;
+          }
+          let ready = false;
+          try {
+            if (child.pid !== undefined) {
+              const cgroup = readProc(child.pid, 'cgroup');
+              const cmdline = readProc(child.pid, 'cmdline').split('\0');
+              if (cmdline.at(-1) === '') cmdline.pop();
+              ready = linuxHelperReady(cgroup, cmdline, owned.readiness.scope, owned.readiness.helperArgs);
+            }
+          } catch { /* A proc read failure cannot prove readiness or death. */ }
+          if (ready) {
+            owned.readiness = { kind: 'ready' };
+            unschedule(owned.poll);
+            settleHelper();
+            wake();
+          } else owned.poll = schedule(poll, 50);
+        };
         child.once('spawn', () => {
           owned.born = true;
           if (owned.cancelled && !owned.dead) child.kill('SIGTERM');
-          wake();
+          if (owned.dead || owned.cancelled) return;
+          if (owned.readiness.kind === 'pending') {
+            owned.readiness.deadlineAt = now() + 25_000;
+            owned.poll = schedule(poll, 50);
+          } else wake();
         });
         child.on('error', error => {
           log.fail('daemon-restart', error, { phase: 'helper-spawn' });
