@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ShellActions } from '../src/ipc-contract.js';
-import type { VerifiedDaemon } from '../src/daemon-manager.js';
+import type { Registration, VerifiedDaemon } from '../src/daemon-manager.js';
 
 const fake = vi.hoisted(() => ({
   app: undefined as unknown,
@@ -17,6 +17,11 @@ const fake = vi.hoisted(() => ({
   install: vi.fn(),
   cliRegister: vi.fn(async () => ({ kind: 'ready' as const, bin: '/tmp/vonvon', message: 'installed' })),
   cliObserve: vi.fn(async () => ({ kind: 'error' as const, message: 'absent' })),
+  readRegistration: vi.fn(async (): Promise<Registration> => ({ kind: 'absent' })),
+  loginChange: vi.fn(async (_enabled: boolean, _runtime: unknown, dependencies: { reattachAfterUninstall(): Promise<void> }) => {
+    if (!_enabled) await dependencies.reattachAfterUninstall();
+  }),
+  daemonStop: vi.fn(async () => {}),
   tray: { destroy: vi.fn() },
   openExternal: vi.fn(async () => {}),
   updateConfiguration: vi.fn(async () => ({ signed: true, manifestURL: 'https://updates.example.test/manifest.json' })),
@@ -81,8 +86,9 @@ vi.mock('../src/tray.js', () => ({ createDesktopTray: vi.fn(() => fake.tray) }))
 vi.mock('../src/update-configuration.js', () => ({ desktopUpdateConfiguration: fake.updateConfiguration }));
 vi.mock('../src/daemon-dependencies.js', () => ({
   prepareDesktopRoot: vi.fn(async () => fake.root),
-  createDaemonDependencies: vi.fn(),
+  createDaemonDependencies: vi.fn(() => ({ readRegistration: fake.readRegistration })),
 }));
+vi.mock('../src/login-item.js', () => ({ setLoginItem: fake.loginChange, stopRegisteredDaemon: fake.daemonStop }));
 vi.mock('../src/cli-registration.js', () => ({
   desktopCliOptions: vi.fn((options: unknown) => options),
   registerCli: fake.cliRegister,
@@ -149,6 +155,9 @@ beforeEach(async () => {
   fake.ready.mockClear();
   fake.cliRegister.mockClear();
   fake.cliObserve.mockClear();
+  fake.readRegistration.mockClear().mockResolvedValue({ kind: 'absent' });
+  fake.loginChange.mockClear();
+  fake.daemonStop.mockClear();
   fake.install.mockReset().mockReturnValue(fake.bridge);
   fake.openExternal.mockClear();
   await startDesktop();
@@ -237,6 +246,45 @@ describe('updater final install lifecycle', () => {
 });
 
 describe('native window lifecycle', () => {
+  it('uninstalls Open at login, then reconnects a self-hosted owner', async () => {
+    const identity = { pid: 52, startedAt: 'self-hosted', listen: '127.0.0.1:42345' };
+    const next = { identity, dispose: vi.fn(async () => {}) };
+    fake.ready.mockResolvedValueOnce(identity);
+    fake.attach.mockResolvedValueOnce(next);
+    await expect(actions.setLoginItem(false)).resolves.toBeUndefined();
+    expect(fake.loginChange).toHaveBeenCalledWith(false, expect.objectContaining({ root: fake.root }), expect.any(Object));
+    expect(fake.ready).toHaveBeenLastCalledWith(0, undefined);
+    expect(fake.bridge.replaceOwner).toHaveBeenCalledExactlyOnceWith(next);
+    expect(actions.isExpectedDisconnect()).toBe(false);
+  });
+
+  it('starts a registered service through the manager and blocks a concurrent start', async () => {
+    fake.readRegistration.mockResolvedValue({ kind: 'ours' });
+    let release!: (value: VerifiedDaemon) => void;
+    fake.ready.mockImplementationOnce(() => new Promise<VerifiedDaemon>(resolve => { release = resolve; }));
+    const first = actions.service('start');
+    await Promise.resolve();
+    await expect(actions.startHost()).rejects.toThrow('startup is unavailable');
+    const identity = { pid: 53, startedAt: 'managed', listen: '127.0.0.1:42345' };
+    const next = { identity, dispose: vi.fn(async () => {}) };
+    fake.attach.mockResolvedValueOnce(next);
+    release(identity);
+    await expect(first).resolves.toEqual({ type: 'done', message: 'Background service started.' });
+    expect(fake.bridge.replaceOwner).toHaveBeenCalledExactlyOnceWith(next);
+  });
+
+  it('stops the registered service using the bundled CLI and marks its disconnect expected', async () => {
+    fake.readRegistration.mockResolvedValue({ kind: 'ours' });
+    let release!: () => void;
+    fake.daemonStop.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
+    const stopping = actions.service('stop');
+    await Promise.resolve();
+    expect(actions.isExpectedDisconnect()).toBe(true);
+    await expect(actions.service('uninstall')).rejects.toThrow('operation is unavailable');
+    release();
+    await expect(stopping).resolves.toEqual({ type: 'done', message: 'Background service stopped.' });
+    expect(fake.daemonStop).toHaveBeenCalledOnce();
+  });
   it('reattaches an authenticated daemon to the same window after shell start', async () => {
     const identity = { pid: 42, startedAt: 'new', listen: '127.0.0.1:42345' };
     const next = { identity, dispose: vi.fn(async () => {}) };

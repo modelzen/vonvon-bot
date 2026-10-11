@@ -14,10 +14,11 @@ vi.mock('node:os', async original => {
 vi.mock('../src/config/data-access', () => ({ acquireMutex: fixture.acquireMutex, closeMutex: fixture.closeMutex }));
 vi.mock('../src/server/pid-lock', () => ({ readRunningPidLock: fixture.owner, acquirePidLock: fixture.acquirePidLock, releasePidLock: fixture.releasePidLock, publishPidLock: vi.fn() }));
 vi.mock('../src/service/registration', () => ({ readRegistration: fixture.registration }));
+vi.mock('../src/service/win-startup', () => ({ readVonvonRunValue: () => ({ kind: 'absent' }) }));
 vi.mock('../src/core/logger', () => ({ log: { info: fixture.info } }));
 vi.mock('../src/service/codex-bin', () => ({ readServiceCodexBin: vi.fn() }));
 vi.mock('../src/cli/commands/run', () => { fixture.importedRun(); return { runRun: fixture.run }; });
-vi.mock('node:fs/promises', async original => ({ ...await original<typeof import('node:fs/promises')>(), realpath: vi.fn(async () => '/owned/root'), stat: vi.fn(async () => ({ isDirectory: () => true })) }));
+vi.mock('node:fs/promises', async original => ({ ...await original<typeof import('node:fs/promises')>(), realpath: vi.fn(async () => process.platform === 'win32' ? 'C:\\owned\\root' : '/owned/root'), stat: vi.fn(async () => ({ isDirectory: () => true })) }));
 
 import { runHostRuntime } from '../src/host/bootstrap';
 import { resolveServiceRoot } from '../src/service/identity';
@@ -124,10 +125,24 @@ it.each(['darwin', 'win32'] as const)('retains ordinary foreground startup when 
   expect(fixture.closeMutex).toHaveBeenCalledWith(mutex);
 });
 
-it('refuses service-managed Windows before any registration or lock action', async () => {
+it('checks Windows registration before locks and exits zero when withdrawn', async () => {
   vi.stubGlobal('process', Object.defineProperty(Object.create(process), 'platform', { value: 'win32' }));
-  await expect(runHostRuntime({ managed: false, control })).rejects.toThrow('Windows service startup is unavailable');
-  untouched(); expect(fixture.registration).not.toHaveBeenCalled();
+  vi.stubEnv('VONVON_SERVICE', 'windows');
+  fixture.registration.mockResolvedValue({ kind: 'absent' });
+  await runHostRuntime({ managed: false, control });
+  untouched(); expect(fixture.registration).toHaveBeenCalledOnce();
+  expect(process.exitCode).toBe(0);
+});
+
+it('keeps Windows managed launches off an existing owner and foreground launches off registration', async () => {
+  vi.stubGlobal('process', Object.defineProperty(Object.create(process), 'platform', { value: 'win32' }));
+  vi.stubEnv('VONVON_SERVICE', 'windows');
+  fixture.owner.mockResolvedValue(owner);
+  await runHostRuntime({ managed: false, control });
+  untouched(); expect(process.exitCode).toBe(0);
+  vi.stubEnv('VONVON_SERVICE', '');
+  await expect(runHostRuntime({ managed: false, control })).rejects.toThrow('Use vonvon daemon start');
+  untouched(); expect(process.exitCode).toBe(1);
 });
 
 it.each(['stop', 'restart'] as const)('preserves %s exit zero while reporting a late PID release failure', async intent => {

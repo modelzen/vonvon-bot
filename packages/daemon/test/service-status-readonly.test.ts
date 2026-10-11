@@ -3,7 +3,7 @@ import { serviceStatusSchema } from '@vonvon/protocol';
 import { homedir } from 'node:os';
 import { getServiceAdapter } from '../src/service/adapter';
 import { controlDesktopService } from '../src/host/service';
-import { runServiceCommand, runServiceStatus } from '../src/cli/commands/service';
+import { runServiceStatus } from '../src/cli/commands/service';
 import { serviceTarget } from '../src/service/identity';
 
 const observation = vi.hoisted(() => ({
@@ -171,16 +171,10 @@ it('Windows CLI human and JSON and host use the same read-only adapter', async (
   expect(wire).not.toHaveProperty('raw');
 });
 
-it('Windows CLI and host mutations refuse before invoking a manager adapter', async () => {
+it('Windows host mutations refuse before invoking a manager adapter', async () => {
   vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
-  const install = vi.fn();
-  const uninstall = vi.fn();
-  await expect(runServiceCommand('install', { install, uninstall })).rejects.toThrow('cannot manage an OS service');
-  await expect(runServiceCommand('uninstall', { install, uninstall })).rejects.toThrow('cannot manage an OS service');
   await expect(controlDesktopService('install')).rejects.toThrow('cannot manage an OS service');
   await expect(controlDesktopService('uninstall')).rejects.toThrow('cannot manage an OS service');
-  expect(install).not.toHaveBeenCalled();
-  expect(uninstall).not.toHaveBeenCalled();
   expect(observation.windowsRun).not.toHaveBeenCalled();
 });
 

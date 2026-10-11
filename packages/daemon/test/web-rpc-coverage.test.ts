@@ -11,6 +11,15 @@ vi.mock('node:fs/promises', async importOriginal => {
   return fixtureFilesystem(await importOriginal<typeof import('node:fs/promises')>());
 });
 
+vi.mock('../src/service/adapter', () => ({
+  getServiceAdapter: () => ({
+    status: async () => ({
+      platformName: 'fixture', installed: false, running: false,
+      servicePath: '', stdoutPath: '', stderrPath: '', raw: 'No fixture service registration.',
+    }),
+  }),
+}));
+
 afterEach(() => { executableRoots.clear(); });
 
 const processTestTimeout = process.platform === 'win32' ? 90_000 : 5_000;
@@ -219,7 +228,9 @@ else process.exit(0);
       for (const payload of variants) {
         const variant = 'type' in payload ? payload.type : payload.action;
         const key = `${method}.${variant}`;
-        const frame = await client.call(requestSchema.parse({ type: 'request', id: `union-${key}`, method, payload }));
+        const frame = await client.call(requestSchema.parse({ type: 'request', id: `union-${key}`, method, payload })).catch(error => {
+          throw new Error(`No reply for ${key}`, { cause: error });
+        });
         if (unsupported.has(key)) expect(frame, key).toMatchObject({ type: 'error', code: 'unsupported' });
         else {
           expect(frame.type, key).toBe('response');

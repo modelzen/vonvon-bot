@@ -5,7 +5,7 @@ import type { Registration } from '../src/service/registration';
 
 const fixture = vi.hoisted(() => ({
   registration: vi.fn<() => Promise<Registration>>(), owner: vi.fn(), verify: vi.fn(),
-  launchdStart: vi.fn(), systemdStart: vi.fn(), spawn: vi.fn(), close: vi.fn(), open: vi.fn(),
+  launchdStart: vi.fn(), systemdStart: vi.fn(), windowsStart: vi.fn(), spawn: vi.fn(), close: vi.fn(), open: vi.fn(),
 }));
 vi.mock('../src/config/paths', () => ({ paths: { appDir: '/owned/root' } }));
 vi.mock('node:os', async original => {
@@ -18,8 +18,10 @@ vi.mock('../src/server/pid-lock', () => ({ readRunningPidLock: fixture.owner }))
 vi.mock('../src/server/owner-verification', () => ({ verifyPidLockOwner: fixture.verify }));
 vi.mock('../src/service/launchd', () => ({ createLaunchdService: () => ({ start: fixture.launchdStart }) }));
 vi.mock('../src/service/systemd', () => ({ createSystemdService: () => ({ start: fixture.systemdStart }) }));
+vi.mock('../src/service/windows', () => ({ createWindowsService: () => ({ start: fixture.windowsStart }) }));
+vi.mock('../src/service/win-startup', () => ({ readVonvonRunValue: () => ({ kind: 'absent' }) }));
 vi.mock('node:child_process', async original => ({ ...await original<typeof import('node:child_process')>(), spawn: fixture.spawn }));
-vi.mock('node:fs/promises', async original => ({ ...await original<typeof import('node:fs/promises')>(), open: fixture.open, realpath: vi.fn(async () => '/owned/root'), stat: vi.fn(async () => ({ isDirectory: () => true })) }));
+vi.mock('node:fs/promises', async original => ({ ...await original<typeof import('node:fs/promises')>(), open: fixture.open, realpath: vi.fn(async () => process.platform === 'win32' ? 'C:\\owned\\root' : '/owned/root'), stat: vi.fn(async () => ({ isDirectory: () => true })) }));
 
 import { runStart } from '../src/cli/commands/daemon';
 import { resolveServiceRoot } from '../src/service/identity';
@@ -37,6 +39,7 @@ beforeEach(async () => {
   fixture.owner.mockResolvedValue(null);
   fixture.launchdStart.mockResolvedValue({ ...owner, port: 1234 });
   fixture.systemdStart.mockResolvedValue({ ...owner, port: 1234 });
+  fixture.windowsStart.mockResolvedValue({ ...owner, port: 1234 });
   fixture.open.mockResolvedValue({ fd: 123, close: fixture.close });
 });
 afterEach(() => { vi.mocked(homedir).mockReset(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
@@ -101,9 +104,18 @@ it.each(['darwin', 'win32'] as const)('retains V3 detached startup for absent re
   expect(fixture.launchdStart).not.toHaveBeenCalled();
   expect(fixture.close).toHaveBeenCalledOnce();
 });
-it('keeps managed Windows startup refused pending the authored integration contract', async () => {
-  vi.stubEnv('VONVON_SERVICE', 'win32');
+it('routes Windows managed startup through the registered launcher without detached fallback', async () => {
+  vi.stubEnv('VONVON_SERVICE', 'windows');
   vi.stubGlobal('process', Object.defineProperty(Object.create(process), 'platform', { value: 'win32' }));
-  await expect(runStart()).rejects.toThrow('Windows service startup is unavailable');
+  await expect(runStart()).resolves.toEqual({ running: true, ...owner });
+  expect(fixture.windowsStart).toHaveBeenCalledWith({});
+  expect(fixture.registration).toHaveBeenCalled();
+  expect(fixture.spawn).not.toHaveBeenCalled();
+});
+it('propagates Windows launcher failure without a detached fallback', async () => {
+  vi.stubGlobal('process', Object.defineProperty(Object.create(process), 'platform', { value: 'win32' }));
+  fixture.windowsStart.mockRejectedValue(new Error('wscript denied'));
+  await expect(runStart(1234)).rejects.toThrow('wscript denied');
+  expect(fixture.windowsStart).toHaveBeenCalledWith({ port: 1234 });
   expect(fixture.spawn).not.toHaveBeenCalled();
 });

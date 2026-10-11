@@ -23,6 +23,27 @@ function harness() {
 }
 
 describe('synchronous desktop facade', () => {
+  it('forwards service and login actions through dedicated shell IPC', async () => {
+    const h = harness();
+    const requests: Array<{ channel: string; args: unknown[] }> = [];
+    const invoke = h.transport.invoke;
+    h.transport.invoke = (channel, ...args) => {
+      if (channel === desktopChannels.service || channel === desktopChannels.setLoginItem) requests.push({ channel, args });
+      return invoke(channel, ...args);
+    };
+    const { shell } = createDesktopFacades(h.transport);
+    h.replies.set(desktopChannels.service, async () => ({ ok: true, value: { type: 'done', message: 'installed' } }));
+    await expect(shell.service('install')).resolves.toEqual({ type: 'done', message: 'installed' });
+    await expect(shell.setLoginItem(true)).resolves.toBeUndefined();
+    expect(requests).toEqual([
+      { channel: desktopChannels.service, args: [{ type: 'service', action: 'install' }] },
+      { channel: desktopChannels.setLoginItem, args: [true] },
+    ]);
+    h.replies.set(desktopChannels.service, async () => ({ ok: true, value: { type: 'invalid' } }));
+    await expect(shell.service('stop')).rejects.toThrow();
+    h.replies.set(desktopChannels.setLoginItem, async () => ({ ok: true, value: 'invalid' }));
+    await expect(shell.setLoginItem(false)).rejects.toThrow('Invalid desktop response');
+  });
   it('exposes the zero-argument CLI repair call and validates its reply', async () => {
     const h = harness();
     const args: unknown[][] = [];
@@ -238,4 +259,22 @@ describe('synchronous desktop facade', () => {
     await client.close();
     expect(seen).toEqual(['first']);
   });
+});
+
+it('updates login registration at the same daemon revision without accepting stale seeds or older events', async () => {
+  const h = harness();
+  let seed!: (value: unknown) => void;
+  h.replies.set(desktopChannels.snapshot, () => new Promise(resolve => { seed = resolve; }));
+  const { client } = createDesktopFacades(h.transport);
+  const seen: boolean[] = [];
+  client.watchSnapshots(value => seen.push(value.application.loginItem));
+  const value = snapshot(3);
+  h.event({ type: 'snapshot', value });
+  h.event({ type: 'snapshot', value: { ...value, application: { ...value.application, loginItem: true } } });
+  seed({ ok: true, value });
+  await Promise.resolve(); await Promise.resolve();
+  h.event({ type: 'snapshot', value: snapshot(2) });
+  expect(seen).toEqual([false, true]);
+  h.event({ type: 'snapshot', value });
+  expect(seen).toEqual([false, true, false]);
 });

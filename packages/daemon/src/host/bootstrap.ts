@@ -14,8 +14,7 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
   try {
     if (!process.send) {
       const serviceManaged = Boolean(process.env.VONVON_SERVICE);
-      if (process.platform === 'win32' && serviceManaged) throw new Error('Windows service startup is unavailable.');
-      const registration = process.platform === 'win32' ? null : await readStartupRegistration(paths.appDir).catch(error => {
+      const registration = await readStartupRegistration(paths.appDir).catch(error => {
         if (!serviceManaged) throw error;
         return null;
       });

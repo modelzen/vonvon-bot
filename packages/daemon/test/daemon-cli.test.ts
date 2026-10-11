@@ -139,7 +139,7 @@ it('refuses a reused PID without signaling the unrelated process or changing its
   expect(await readdir(f.home)).toEqual([]);
 }, 30_000);
 
-it('service refusal leaves an absent data home untouched for public and hidden commands', async () => {
+it('service preflight and hidden-command refusal leave an absent data home untouched', async () => {
   const f = await fixture();
   await rm(f.root, { recursive: true });
   const refusal = 'Vonvon Bot cannot manage an OS service in this version. Use vonvon daemon start and vonvon daemon stop.';
@@ -150,7 +150,8 @@ it('service refusal leaves an absent data home untouched for public and hidden c
   ]) {
     const attempt = launch(f.home, f.root, args);
     expect(await attempt.exited).toBe(1);
-    expect(attempt.output()).toContain(refusal);
+    if (args[0] === 'service') expect(attempt.output()).toMatch(/ENOENT|install_refused|uninstall_refused/);
+    else expect(attempt.output()).toContain(refusal);
     await expect(readdir(f.root)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readdir(f.home)).toEqual([]);
   }

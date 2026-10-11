@@ -87,7 +87,7 @@ export function MachinePanel({request, agents, reveal}: {request: MachineRequest
       <SettingsRow title="服务运行" description="已安装的服务可单独启动或停止。"
         trailing={<span className="settings-inline-actions">
           <Button size="sm" disabled={busy || !shell?.service || serviceDisabled('start')} onClick={() => setConfirm({type: 'service', action: 'start'})}>启动已安装服务</Button>
-          <Button size="sm" disabled={busy || !shell?.service || serviceDisabled('stop')} onClick={() => setConfirm({type: 'service', action: 'stop'})}>停止后台服务并关闭自启</Button>
+          <Button size="sm" disabled={busy || !shell?.service || serviceDisabled('stop')} onClick={() => setConfirm({type: 'service', action: 'stop'})}>停止后台服务</Button>
         </span>} />
       <SettingsRow title="卸载后台服务" description="移除系统服务及其自动启动设置。"
         trailing={<Button size="sm" disabled={busy || !shell?.service || serviceDisabled('uninstall')} onClick={() => setConfirm({type: 'service', action: 'uninstall'})}>卸载后台服务</Button>} />

@@ -5,7 +5,7 @@ import { ConnectionError, RpcError } from '@vonvon/client/browser';
 import {
   adminRequestSchema, collaborationRequestSchema, commandSchema,
   directoryRequestSchema, environmentRequestSchema, machineRequestSchema,
-  settingsRequestSchema, machineReplySchema,
+  settingsRequestSchema, machineReplySchema, type MachineReply,
 } from '@vonvon/protocol';
 import { allowedExternalUrl, type ExternalUrlKind } from '../../ui/src/url-actions.js';
 import { StartHostRefusal } from './daemon-manager.js';
@@ -52,6 +52,7 @@ export function installBridge(
   let connectionLost = false;
   let activeOwner: AttachedDaemon | null = owner;
   let replacing: Promise<void> | undefined;
+  let stoppedStatus: Extract<MachineReply, { type: 'status' }> | undefined;
   const retainedErrors: SafeFailure[] = [];
 
   function currentDocument(): boolean {
@@ -78,6 +79,7 @@ export function installBridge(
 
   function onError(error: Error): void {
     if (disposed) return;
+    if (error instanceof ConnectionError && actions.isExpectedDisconnect()) return;
     const safe = safeFailure(error);
     if (!subscribed || !currentDocument()) retain(safe);
     else send({ type: 'error', value: safe });
@@ -92,15 +94,63 @@ export function installBridge(
     return activeOwner.client;
   }
 
-  function bind(current: AttachedDaemon): () => void {
-    const offSnapshot = current.client.watchSnapshots(value => { if (activeOwner === current) send({ type: 'snapshot', value }); });
-    const offLog = current.client.onLog(value => { if (activeOwner === current) send({ type: 'log', value }); });
-    const offInstall = current.client.onBackendInstall(value => { if (activeOwner === current) send({ type: 'backendInstall', value }); });
-    const offError = current.client.onError(error => { if (activeOwner === current) onError(error); });
-    return () => { offSnapshot(); offLog(); offInstall(); offError(); };
+  async function desktopSnapshot() {
+    const snapshot = await client().snapshot();
+    return { ...snapshot, application: { ...snapshot.application, loginItem: await actions.readLoginItem() } };
   }
 
-  let unbind = bind(owner);
+  async function publishRegistration(): Promise<void> {
+    const current = activeOwner;
+    const value = await desktopSnapshot();
+    if (current === activeOwner) send({ type: 'snapshot', value });
+  }
+
+  function bind(current: AttachedDaemon, paused = false) {
+    let latest: Awaited<ReturnType<AttachedDaemon['client']['snapshot']>> | undefined;
+    let revision = -1;
+    let reading = false;
+    let bound = true;
+    async function flushSnapshots(): Promise<void> {
+      if (reading || paused) return;
+      reading = true;
+      try {
+        while (latest && bound && activeOwner === current) {
+          const value = latest;
+          latest = undefined;
+          const loginItem = await actions.readLoginItem();
+          if (!latest && bound && activeOwner === current) {
+            send({ type: 'snapshot', value: { ...value, application: { ...value.application, loginItem } } });
+          }
+        }
+      } catch (error) { onError(error instanceof Error ? error : new Error('Cannot read service registration')); }
+      finally { reading = false; if (latest && bound && activeOwner === current) void flushSnapshots(); }
+    }
+    const removers: (() => void)[] = [];
+    const dispose = () => { if (!bound) return; bound = false; latest = undefined; for (const off of removers) off(); };
+    try {
+      removers.push(current.client.watchSnapshots(value => {
+        if (!bound || value.revision < revision) return;
+        revision = value.revision;
+        if (!latest || value.revision >= latest.revision) latest = value;
+        void flushSnapshots();
+      }));
+      removers.push(current.client.onLog(value => { if (!paused && activeOwner === current) send({ type: 'log', value }); }));
+      removers.push(current.client.onBackendInstall(value => { if (!paused && activeOwner === current) send({ type: 'backendInstall', value }); }));
+      removers.push(current.client.onError(error => { if (!paused && activeOwner === current) onError(error); }));
+    } catch (error) { dispose(); throw error; }
+    return {
+      dispose,
+      activate(initial: Awaited<ReturnType<AttachedDaemon['client']['snapshot']>>, loginItem: boolean) {
+        const value = latest && latest.revision >= initial.revision ? latest : initial;
+        latest = undefined;
+        revision = value.revision;
+        paused = false;
+        send({ type: 'snapshot', value: { ...value, application: { ...value.application, loginItem } } });
+      },
+    };
+  }
+
+  let binding = bind(owner);
   const registeredChannels: string[] = [];
 
   function register<T>(channel: string, arity: number, parse: (value: unknown) => T,
@@ -117,7 +167,7 @@ export function installBridge(
   const noArg = (_: unknown): undefined => undefined;
   const onNavigation = (): void => { subscribed = false; };
   try {
-    register(desktopChannels.snapshot, 0, noArg, () => client().snapshot());
+    register(desktopChannels.snapshot, 0, noArg, desktopSnapshot);
     register(desktopChannels.run, 1, value => commandSchema.parse(value), value => client().run(value));
     register(desktopChannels.settings, 1, value => settingsRequestSchema.parse(value), value => client().settings(value));
     register(desktopChannels.collaboration, 1, value => collaborationRequestSchema.parse(value), value => client().collaboration(value));
@@ -129,7 +179,7 @@ export function installBridge(
         throw new Error('Shell-owned machine action');
       return request;
     }, async value => {
-      const reply = await client().machine(value);
+      const reply = value.type === 'status' && stoppedStatus ? stoppedStatus : await client().machine(value);
       return value.type === 'status' && reply.type === 'status'
         ? { ...reply, cli: await actions.observeCli() } : reply;
     });
@@ -143,6 +193,24 @@ export function installBridge(
       return request;
     },
       value => actions.startHost(value.bot).then(reply => machineReplySchema.parse(reply)));
+    register(desktopChannels.service, 1, value => {
+      const request = machineRequestSchema.parse(value);
+      if (request.type !== 'service') throw new Error('Invalid service request');
+      return request.action;
+    }, async value => {
+      const before = value === 'stop' ? stoppedStatus ?? await client().machine({ type: 'status' }) : undefined;
+      if (before && before.type !== 'status') throw new Error('Cannot read service status');
+      const reply = machineReplySchema.parse(await actions.service(value));
+      if (value === 'stop' && before?.type === 'status') {
+        stoppedStatus = { ...before, host: null, service: { ...before.service, running: false, pid: undefined } };
+      }
+      if (value === 'install' || value === 'uninstall') await publishRegistration();
+      return reply;
+    });
+    register(desktopChannels.setLoginItem, 1, value => {
+      if (typeof value !== 'boolean') throw new Error('Invalid login item request');
+      return value;
+    }, async value => { await actions.setLoginItem(value); await publishRegistration(); });
     register(desktopChannels.repairCli, 0, noArg,
       () => actions.repairCli().then(reply => machineReplySchema.parse(reply)));
     register(desktopChannels.chooseExecutablePath, 0, noArg, () => actions.chooseExecutablePath());
@@ -163,7 +231,7 @@ export function installBridge(
   } catch (error) {
     window.webContents.removeListener('did-start-navigation', onNavigation);
     for (const channel of registeredChannels) ipcMain.removeHandler(channel);
-    unbind();
+    binding.dispose();
     throw error;
   }
 
@@ -171,25 +239,29 @@ export function installBridge(
     replaceOwner(next) {
       if (disposed || replacing) return Promise.reject(new Error('Desktop connection is unavailable'));
       replacing = (async () => {
-        unbind();
+        binding.dispose();
         const previous = activeOwner;
         activeOwner = null;
         try { await previous?.dispose(); }
         catch (error) { await next.dispose(); throw error; }
         if (disposed) { await next.dispose(); throw new Error('Desktop connection is unavailable'); }
         let initial: Awaited<ReturnType<AttachedDaemon['client']['snapshot']>>;
-        try { initial = await next.client.snapshot(); }
-        catch (error) { await next.dispose(); throw error; }
-        send({ type: 'reattached' });
-        activeOwner = next;
-        connectionLost = false;
-        try { unbind = bind(next); }
-        catch (error) {
-          activeOwner = null;
+        let loginItem: boolean;
+        try {
+          binding = bind(next, true);
+          initial = await next.client.snapshot();
+          loginItem = await actions.readLoginItem();
+          if (disposed) throw new Error('Desktop connection is unavailable');
+        } catch (error) {
+          binding.dispose();
           await next.dispose();
           throw error;
         }
-        send({ type: 'snapshot', value: initial });
+        activeOwner = next;
+        stoppedStatus = undefined;
+        connectionLost = false;
+        send({ type: 'reattached' });
+        binding.activate(initial, loginItem);
       })().finally(() => { replacing = undefined; });
       return replacing;
     },
@@ -205,7 +277,7 @@ export function installBridge(
         window.webContents.removeListener('did-start-navigation', onNavigation);
         for (const channel of registeredChannels) ipcMain.removeHandler(channel);
         if (replacing) await replacing.catch(() => {});
-        unbind();
+        binding.dispose();
         await activeOwner?.dispose();
         activeOwner = null;
       })();

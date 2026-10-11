@@ -16,6 +16,8 @@ export const desktopChannels = {
   external: 'desktop:shell:external',
   chooseExecutablePath: 'desktop:shell:chooseExecutablePath',
   startHost: 'desktop:shell:startHost',
+  service: 'desktop:shell:service',
+  setLoginItem: 'desktop:shell:setLoginItem',
   repairCli: 'desktop:shell:repairCli',
   checkDesktopUpdate: 'desktop:shell:checkDesktopUpdate',
   installDesktopUpdate: 'desktop:shell:installDesktopUpdate',
@@ -42,7 +44,7 @@ export type DesktopEvent =
 
 export type DesktopShell = Required<Pick<ShellCapabilities,
   'openExternal' | 'chooseExecutablePath' | 'checkDesktopUpdate' | 'installDesktopUpdate' |
-  'hideWindow' | 'quit' | 'onQuitRequested' | 'startHost' | 'repairCli'>>;
+  'hideWindow' | 'quit' | 'onQuitRequested' | 'startHost' | 'repairCli' | 'service' | 'setLoginItem'>>;
 
 export interface DesktopResources {
   uiIndex: string;
@@ -65,6 +67,10 @@ export interface DesktopBridge {
 export interface ShellActions {
   chooseExecutablePath(): Promise<string | null>;
   startHost(bot?: string): Promise<MachineReply>;
+  service(action: 'install' | 'start' | 'stop' | 'uninstall'): Promise<MachineReply>;
+  setLoginItem(enabled: boolean): Promise<void>;
+  readLoginItem(): Promise<boolean>;
+  isExpectedDisconnect(): boolean;
   repairCli(): Promise<MachineReply>;
   observeCli(): Promise<Extract<MachineReply, { type: 'status' }>['cli']>;
   checkDesktopUpdate(): Promise<DesktopUpdate>;

@@ -1,7 +1,8 @@
 import { homedir } from 'node:os';
-import { serviceTarget } from './identity';
+import { resolveServiceRoot, serviceTarget } from './identity';
 import { readRegistration, type Registration } from './registration';
 import type { HostEndpoint } from '../host/discovery';
+import { readVonvonRunValue } from './win-startup';
 
 export async function readStartupRegistration(root: string): Promise<Registration> {
   const home = homedir();
@@ -16,6 +17,11 @@ export async function readStartupRegistration(root: string): Promise<Registratio
       if (target.platform !== 'linux') throw new Error('Invalid systemd target');
       return readRegistration({ target, requestedRoot: root });
     }
+    case 'win32': {
+      const target = serviceTarget({ platform: 'win32', root: await resolveServiceRoot(root) });
+      if (target.platform !== 'win32') throw new Error('Invalid Windows target');
+      return readRegistration({ target, requestedRoot: root, windowsRun: readVonvonRunValue() });
+    }
     default:
       throw new Error(`Service startup registration is unavailable on ${process.platform}.`);
   }
@@ -28,6 +34,8 @@ export async function startRegisteredDaemon(root: string, port: number): Promise
       return (await import('./launchd')).createLaunchdService({ root }).start(input);
     case 'linux':
       return (await import('./systemd')).createSystemdService({ root }).start(input);
+    case 'win32':
+      return (await import('./windows')).createWindowsService({ root }).start(input);
     default:
       throw new Error(`Service startup is unavailable on ${process.platform}.`);
   }

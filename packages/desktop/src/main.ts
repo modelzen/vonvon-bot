@@ -13,6 +13,7 @@ import { desktopUpdateConfiguration } from './update-configuration.js';
 import { createDaemonManager, StartHostRefusal } from './daemon-manager.js';
 import { createDaemonDependencies, prepareDesktopRoot } from './daemon-dependencies.js';
 import { desktopCliOptions, observeCli, registerCli } from './cli-registration.js';
+import { setLoginItem, stopRegisteredDaemon, type LoginItemRuntime } from './login-item.js';
 import type { MachineReply } from '@vonvon/protocol';
 
 export function desktopResources(appPath: string, packaged: boolean): DesktopResources {
@@ -50,6 +51,7 @@ export async function startDesktop(): Promise<void> {
   let cleanupPromise: Promise<void> | undefined;
   let confirmation: Promise<void> | undefined;
   let connectionFailureShown = false;
+  let controlledDisconnect = false;
   let starting: Promise<MachineReply> | undefined;
 
   const show = (): void => {
@@ -144,10 +146,15 @@ export async function startDesktop(): Promise<void> {
         quitting = true;
       },
     });
-    const manager = createDaemonManager(createDaemonDependencies({
+    const managerDependencies = createDaemonDependencies({
       root, home: homedir(), executable: process.execPath,
       resources: process.resourcesPath, packaged: app.isPackaged,
-    }));
+    });
+    const manager = createDaemonManager(managerDependencies);
+    const loginRuntime: LoginItemRuntime = {
+      root, platform: process.platform, packaged: app.isPackaged,
+      resources: process.resourcesPath, executable: process.execPath, env: process.env,
+    };
     const cliOptions = desktopCliOptions({ platform: process.platform, executable: process.execPath,
       resources: process.resourcesPath, packaged: app.isPackaged });
     if (app.isPackaged && !process.env.VONVON_DESKTOP_TEST_HOME) await registerCli(cliOptions);
@@ -203,6 +210,42 @@ export async function startDesktop(): Promise<void> {
     current.once('ready-to-show', () => {
       if (!terminating) show();
     });
+    async function reattachReady(bot?: string): Promise<void> {
+      const ready = await manager.ensureReady(0, bot);
+      const next = await attachExisting(root);
+      if (next.identity.pid !== ready.pid || next.identity.startedAt !== ready.startedAt || next.identity.listen !== ready.listen) {
+        await next.dispose();
+        throw new Error('The daemon owner changed during desktop restart.');
+      }
+      if (terminating || !bridge) {
+        await next.dispose();
+        throw new Error('Desktop startup is unavailable.');
+      }
+      await bridge.replaceOwner(next);
+      connectionFailureShown = false;
+      controlledDisconnect = false;
+    }
+
+    async function guardedService(operation: () => Promise<MachineReply>): Promise<MachineReply> {
+      if (starting || terminating || cleanupPromise) throw new StartHostRefusal('Desktop service operation is unavailable.');
+      starting = operation().finally(() => { starting = undefined; });
+      return starting;
+    }
+
+    const loginDependencies = {
+      readRegistration: () => managerDependencies.readRegistration(),
+      reattachAfterUninstall: () => reattachReady(),
+    };
+
+    async function changeLoginItem(enabled: boolean): Promise<void> {
+      if (!enabled) controlledDisconnect = true;
+      try {
+        await setLoginItem(enabled, loginRuntime, loginDependencies);
+        if (enabled) controlledDisconnect = false;
+      }
+      catch (error) { controlledDisconnect = false; throw error; }
+    }
+
     bridge = installBridge(owner, current, paths, {
       observeCli: () => observeCli(cliOptions),
       repairCli: async () => {
@@ -214,18 +257,7 @@ export async function startDesktop(): Promise<void> {
         if (starting || terminating || cleanupPromise) throw new StartHostRefusal('Desktop startup is unavailable.');
         starting = (async (): Promise<MachineReply> => {
           try {
-            const ready = await manager.ensureReady(0, bot);
-            const next = await attachExisting(root);
-            if (next.identity.pid !== ready.pid || next.identity.startedAt !== ready.startedAt || next.identity.listen !== ready.listen) {
-              await next.dispose();
-              throw new Error('The daemon owner changed during desktop restart.');
-            }
-            if (terminating || !bridge) {
-              await next.dispose();
-              throw new Error('Desktop startup is unavailable.');
-            }
-            await bridge.replaceOwner(next);
-            connectionFailureShown = false;
+            await reattachReady(bot);
             return { type: 'done', message: bot === undefined ? 'Daemon started.' : 'Selected Bot started.' };
           } catch (error) {
             if (error instanceof StartHostRefusal) throw error;
@@ -234,6 +266,33 @@ export async function startDesktop(): Promise<void> {
         })().finally(() => { starting = undefined; });
         return starting;
       },
+      readLoginItem: async () => (await managerDependencies.readRegistration()).kind === 'ours',
+      isExpectedDisconnect: () => controlledDisconnect,
+      setLoginItem: async enabled => {
+        await guardedService(async () => {
+          await changeLoginItem(enabled);
+          return { type: 'done', message: enabled ? 'Open at login enabled.' : 'Open at login disabled.' };
+        });
+      },
+      service: action => guardedService(async () => {
+        switch (action) {
+          case 'install':
+          case 'uninstall': {
+            await changeLoginItem(action === 'install');
+            return { type: 'done', message: action === 'install' ? 'Background service installed.' : 'Background service uninstalled.' };
+          }
+          case 'start':
+            if ((await managerDependencies.readRegistration()).kind !== 'ours') throw new StartHostRefusal('Install the background service first.');
+            await reattachReady();
+            return { type: 'done', message: 'Background service started.' };
+          case 'stop':
+            if ((await managerDependencies.readRegistration()).kind !== 'ours') throw new StartHostRefusal('Install the background service first.');
+            controlledDisconnect = true;
+            try { await stopRegisteredDaemon(loginRuntime); }
+            catch (error) { controlledDisconnect = false; throw error; }
+            return { type: 'done', message: 'Background service stopped.' };
+        }
+      }),
       chooseExecutablePath: async () => {
         const result = await dialog.showOpenDialog(current, {
           title: 'Choose Codex executable',

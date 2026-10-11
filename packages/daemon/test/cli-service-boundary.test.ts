@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { SERVICE_UNAVAILABLE } from '../src/host/service';
+import type { ServiceTransactionOutcome } from '../src/service/adapter';
 
 const fixture = vi.hoisted(() => ({
   adapterLoads: vi.fn(),
@@ -13,6 +14,57 @@ const fixture = vi.hoisted(() => ({
 vi.mock('../src/service/win-startup', () => {
   fixture.adapterLoads('win-startup');
   return { runWinRelaunch: fixture.relaunch };
+});
+
+it.each([
+  { args: [], expected: {} },
+  { args: ['--port', '0'], expected: {} },
+  { args: ['--port', '23456'], expected: { port: 23456 } },
+])('service install forwards parsed $args without taking a data lease', async ({ args, expected }) => {
+  vi.resetModules();
+  vi.clearAllMocks();
+  const outcome: ServiceTransactionOutcome = { kind: 'installed', detail: 'Installed', retained: null, leftovers: [] };
+  const install = vi.fn(async () => outcome);
+  fixture.getAdapter.mockReturnValue({ install });
+  const stdout = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+  process.argv = [process.execPath, '/virtual/vonvon.mjs', 'service', 'install', ...args];
+  await import('../src/cli/index');
+  await vi.waitFor(() => expect(stdout).toHaveBeenCalledWith('installed: Installed\n'));
+  expect(install).toHaveBeenCalledWith(expected);
+  expect(fixture.mkdir).not.toHaveBeenCalled();
+  expect(fixture.spawn).not.toHaveBeenCalled();
+  expect(fixture.spawnSync).not.toHaveBeenCalled();
+});
+
+it.each(['abc', '-1', '65536', '1.5'])('service install rejects invalid port %s before loading an adapter', async port => {
+  vi.resetModules();
+  vi.clearAllMocks();
+  const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const exit = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+  process.argv = [process.execPath, '/virtual/vonvon.mjs', 'service', 'install', '--port', port];
+  await import('../src/cli/index');
+  await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(1));
+  expect(errors).toHaveBeenCalledWith('Invalid port.');
+  expect(fixture.getAdapter).not.toHaveBeenCalled();
+  expect(fixture.mkdir).not.toHaveBeenCalled();
+});
+
+it.each([
+  ['install', 'install_refused'], ['install', 'install_rolled_back'], ['install', 'install_incomplete'],
+  ['uninstall', 'uninstall_refused'], ['uninstall', 'uninstall_rolled_back'], ['uninstall', 'uninstall_incomplete'],
+] as const)('service %s exits 1 for %s and prints retained owner and leftovers', async (action, kind) => {
+  vi.resetModules();
+  vi.clearAllMocks();
+  const outcome: ServiceTransactionOutcome = { kind, detail: 'transaction diagnostic', retained: { pid: 42, startedAt: 'retained' }, leftovers: ['file /fixture/service', 'job loaded'] };
+  fixture.getAdapter.mockReturnValue({ [action]: vi.fn(async () => outcome) });
+  const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const stdout = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+  const exit = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+  process.argv = [process.execPath, '/virtual/vonvon.mjs', 'service', action];
+  await import('../src/cli/index');
+  await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(1));
+  expect(errors).toHaveBeenCalledWith(`${kind}: transaction diagnostic\nRetained PID 42 (startedAt retained).\nLeftover: file /fixture/service\nLeftover: job loaded`);
+  expect(stdout).not.toHaveBeenCalled();
 });
 vi.mock('../src/service/adapter', () => { fixture.adapterLoads('adapter'); return { getServiceAdapter: fixture.getAdapter }; });
 vi.mock('../src/service/launchd', () => { fixture.adapterLoads('launchd'); return {}; });

@@ -25,9 +25,6 @@ export async function daemonStatus(home = paths.appDir): Promise<DaemonStatus> {
 const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function runStart(port = 0): Promise<DaemonStatus> {
-  if (process.platform === 'win32' && process.env.VONVON_SERVICE) {
-    throw new Error('Windows service startup is unavailable.');
-  }
   const checkedStatus = async (): Promise<DaemonStatus> => {
     const ready = await daemonStatus();
     if (ready.running && port !== 0 && ready.listen !== `127.0.0.1:${port}`) throw new Error(`Daemon PID ${ready.pid} already runs at ${ready.listen}, not requested port ${port}.`);
@@ -48,7 +45,7 @@ export async function runStart(port = 0): Promise<DaemonStatus> {
     const ready = await waitReady(existing.pid);
     if (ready) return ready;
   }
-  if (process.platform !== 'win32') {
+  {
     const registration = await readStartupRegistration(paths.appDir);
     switch (registration.kind) {
       case 'ours': {

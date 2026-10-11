@@ -147,21 +147,24 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
       if (clientClosed) return () => {};
       let active = true;
       let revision = -1;
+      let loginItem: boolean | undefined;
       let observedEpoch = connectionEpoch;
-      const receive = (value: DesktopSnapshot): void => {
+      const receive = (value: DesktopSnapshot, allowLoginChange = true): void => {
         if (observedEpoch !== connectionEpoch) {
           revision = -1;
           observedEpoch = connectionEpoch;
         }
-        if (active && !clientClosed && value.revision > revision) {
+        if (active && !clientClosed && (value.revision > revision ||
+            (allowLoginChange && value.revision === revision && value.application.loginItem !== loginItem))) {
           revision = value.revision;
+          loginItem = value.application.loginItem;
           try { listener(value); }
           catch (failure) { emitError(failure instanceof Error ? failure : new Error(String(failure))); }
         }
       };
       snapshots.add(receive);
       const seedEpoch = connectionEpoch;
-      void client.snapshot().then(value => { if (seedEpoch === connectionEpoch) receive(value); }).catch(error => {
+      void client.snapshot().then(value => { if (seedEpoch === connectionEpoch) receive(value, false); }).catch(error => {
         if (active && !clientClosed && seedEpoch === connectionEpoch) emitError(error instanceof Error ? error : new Error('Snapshot failed'));
       });
       return () => { active = false; snapshots.delete(receive); };
@@ -212,6 +215,9 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
       }),
     startHost: bot => transport.invoke(desktopChannels.startHost, { type: 'startHost', ...(bot === undefined ? {} : { bot }) })
       .then(value => readResult(value, value => machineReplySchema.parse(value))),
+    service: action => transport.invoke(desktopChannels.service, { type: 'service', action })
+      .then(value => readResult(value, value => machineReplySchema.parse(value))),
+    setLoginItem: enabled => callShell(desktopChannels.setLoginItem, enabled),
     repairCli: () => transport.invoke(desktopChannels.repairCli)
       .then(value => readResult(value, value => machineReplySchema.parse(value))),
     checkDesktopUpdate: () => transport.invoke(desktopChannels.checkDesktopUpdate)

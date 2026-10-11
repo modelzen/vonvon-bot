@@ -891,7 +891,7 @@ function DesktopApp() {
                     </Button>
                   }
                 />
-                <SettingsRow title="登录电脑时启动" value={!shell?.setLoginItem ? '桌面版提供' : undefined} trailing={<Toggle className="settings-row-switch" aria-label="登录电脑时启动" label="登录电脑时启动" checked={snapshot.application.loginItem} disabled={busy || !shell?.setLoginItem} onChange={event => { const enabled = event.target.checked; const setLoginItem = shell?.setLoginItem; if (setLoginItem) void runShell(async () => { await setLoginItem(enabled); setSnapshot(current => current ? {...current, application: {...current.application, loginItem: enabled}} : current); }); }} />} />
+                {snapshot.application.platform !== 'unsupported' && <SettingsRow title="登录电脑时启动" value={!shell?.setLoginItem ? '桌面版提供' : undefined} trailing={<Toggle className="settings-row-switch" aria-label="登录电脑时启动" label="登录电脑时启动" checked={snapshot.application.loginItem} disabled={busy || !shell?.setLoginItem} onChange={event => { const enabled = event.target.checked; const setLoginItem = shell?.setLoginItem; if (setLoginItem) void runShell(async () => { await setLoginItem(enabled); }); }} />} />}
               </SettingsGroup>
               <MachinePanel reveal={searchTarget?.reveal} request={client.machine} agents={snapshot.agents}/>
               <UpdatePanel request={client.machine} attached={host.kind === 'connected' && host.ownership === 'attached'}/>
