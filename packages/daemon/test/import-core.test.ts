@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -7,29 +7,75 @@ import { pathToFileURL } from 'node:url';
 import { afterEach, expect, it } from 'vitest';
 import { z } from 'zod';
 const manifestSchema = z.object({ source: z.string(), commit: z.string(), phase: z.enum(['seeding', 'complete']), files: z.array(z.object({ path: z.string(), mode: z.string(), sha256: z.string() })) });
-const fixtures: string[] = [];
+const fixtures: Array<() => Promise<void>> = [];
+type FixtureLifetime = { signal: AbortSignal; roots: string[]; children: Promise<void>[] };
 const originalPin = '446b2a40ca75b5f725d7b0baab777b3a8f18b2e0';
-async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), 'vonvon-import-')); fixtures.push(root);
+async function fixture(lifetime: FixtureLifetime) {
+  const checkActive = () => lifetime.signal.throwIfAborted();
+  checkActive();
+  const root = await mkdtemp(join(tmpdir(), 'vonvon-import-')); lifetime.roots.push(root);
+  checkActive();
   const source = join(root, 'source'); const destination = join(root, 'packages/daemon');
   await mkdir(join(source, 'src'), { recursive: true }); await mkdir(join(source, 'test'));
   await writeFile(join(source, 'LICENSE'), 'MIT fixture\n');
   await writeFile(join(source, 'src/main.ts'), 'original source\n');
   await writeFile(join(source, 'test/main.test.ts'), 'original test\n');
-  const git = (...args: string[]) => execFileSync('git', ['-C', source, ...args], { encoding: 'utf8' }).trim();
+  const git = (...args: string[]) => {
+    checkActive();
+    return execFileSync('git', ['-C', source, ...args], { encoding: 'utf8' }).trim();
+  };
   git('init', '-q'); git('add', '.'); git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-qm', 'fixture');
   const pin = git('rev-parse', 'HEAD');
   const script = join(root, 'scripts/import-core.mjs'); await mkdir(join(root, 'scripts'));
   const code = await readFile(resolve('../../scripts/import-core.mjs'), 'utf8');
   expect(code).toContain(`const pin = '${originalPin}'`);
   await writeFile(script, code.replace(originalPin, pin));
-  const run = (preload?: string) => new Promise<{ code: number | null; output: string }>((resolve, reject) => {
+  const run = async (preload?: string, onSpawn?: (child: ChildProcessWithoutNullStreams) => void) => {
+    checkActive();
     const prefix = preload ? ['--import', pathToFileURL(preload).href] : [];
-    const child = spawn(process.execPath, [...prefix, script, source]); let output = '';
-    child.stdout.on('data', data => { output += String(data); }); child.stderr.on('data', data => { output += String(data); });
-    child.once('error', reject); child.once('close', code => resolve({ code, output }));
+    const child = spawn(process.execPath, [...prefix, script, source]);
+    const closed = new Promise<{ code: number | null; output: string }>((resolve, reject) => {
+      let output = ''; let spawnError: Error | undefined;
+      child.stdout.on('data', data => { output += String(data); }); child.stderr.on('data', data => { output += String(data); });
+      child.once('error', error => { spawnError = error; });
+      child.once('close', code => {
+        if (spawnError) reject(spawnError);
+        else resolve({ code, output });
+      });
+    });
+    lifetime.children.push(closed.then(() => {}, () => {}));
+    onSpawn?.(child);
+    const result = await closed;
+    checkActive();
+    return result;
+  };
+  return { root, source, destination, script, run, git, checkActive };
+}
+
+function startFixture(signal: AbortSignal, body: (f: Awaited<ReturnType<typeof fixture>>) => Promise<void>) {
+  const closing = new AbortController();
+  const lifetime: FixtureLifetime = { signal: AbortSignal.any([signal, closing.signal]), roots: [], children: [] };
+  const result = Promise.resolve().then(async () => {
+    const f = await fixture(lifetime);
+    f.checkActive();
+    await body(f);
   });
-  return { root, source, destination, script, run, git };
+  const settled = result.then(() => {}, () => {});
+  let cleanup: Promise<void> | undefined;
+  const close = () => {
+    closing.abort(new Error('Import fixture is closing'));
+    return cleanup ??= (async () => {
+      await settled;
+      await Promise.all(lifetime.children);
+      await Promise.all(lifetime.roots.map(root => rm(root, { recursive: true, force: true })));
+    })();
+  };
+  fixtures.push(close);
+  return { result, close };
+}
+
+function withFixture(signal: AbortSignal, body: (f: Awaited<ReturnType<typeof fixture>>) => Promise<void>) {
+  return startFixture(signal, body).result;
 }
 async function scratchSnapshot(destination: string) {
   const names = (await readdir(destination)).filter(name => name.startsWith('.import-')).sort();
@@ -55,10 +101,93 @@ async function expectCompleteSeed(f: Awaited<ReturnType<typeof fixture>>) {
   expect(await readFile(join(f.destination, 'PROVENANCE.md'), 'utf8')).toContain('A completed import never rewrites, repairs, or restores fork files.');
 }
 
-afterEach(async () => { await Promise.all(fixtures.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
+afterEach(async () => { await Promise.all(fixtures.splice(0).map(close => close())); });
 
-it('reads pinned Git blobs even with dirty working files, then preserves adaptations, additions and deletions with zero writes', async () => {
-  const f = await fixture(); await writeFile(join(f.source, 'src/main.ts'), 'dirty checkout');
+function deferred<T>() {
+  let resolve: (value: T) => void = () => {};
+  const promise = new Promise<T>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
+it.for(['pending body', 'failed body'])('fixture cleanup joins a live child and %s before removal', async (scenario, { signal }) => {
+  const interrupted = new AbortController();
+  const interruption = new Error('injected test interruption');
+  const bodyFailure = new Error('injected body failure');
+  const ready = deferred<Awaited<ReturnType<typeof fixture>>>();
+  const childClosed = deferred<number | null>();
+  const bodyPaused = deferred<void>();
+  const finishBody = deferred<void>();
+  let releaseChild = () => {};
+  let nextRoundStarted = false;
+  const releaseGates = () => { releaseChild(); finishBody.resolve(); };
+  signal.addEventListener('abort', releaseGates, { once: true });
+  const owned = startFixture(AbortSignal.any([signal, interrupted.signal]), async f => {
+    await writeFile(f.script, `
+      import { writeFileSync } from 'node:fs';
+      process.stdout.write('ready');
+      await new Promise(resolve => process.stdin.once('data', resolve));
+      process.stdin.destroy();
+      writeFileSync(new URL('../child-finished', import.meta.url), 'child wrote before close');
+    `);
+    const running = f.run(undefined, child => {
+      releaseChild = () => { if (!child.stdin.destroyed && !child.stdin.writableEnded) child.stdin.end('continue'); };
+      child.stdout.once('data', () => ready.resolve(f));
+      child.once('close', code => childClosed.resolve(code));
+      if (signal.aborted) releaseGates();
+    });
+    if (scenario === 'failed body') {
+      void running.catch(() => {});
+      await Promise.race([ready.promise, running]);
+      throw bodyFailure;
+    }
+    try {
+      await running;
+      nextRoundStarted = true;
+      await writeFile(join(f.root, 'unexpected-next-round'), 'must not be written');
+    } finally {
+      bodyPaused.resolve();
+      await finishBody.promise;
+      await writeFile(join(f.root, 'body-finished'), 'body wrote before removal');
+    }
+  });
+  try {
+    const f = await Promise.race([
+      ready.promise,
+      owned.result.then(() => { throw new Error('Fixture finished before child readiness'); }),
+    ]);
+    if (scenario === 'failed body') await expect(owned.result).rejects.toBe(bodyFailure);
+    interrupted.abort(interruption);
+    const cleanup = owned.close();
+    // Keep cleanup failures observed even when an earlier assertion fails.
+    void cleanup.catch(() => {});
+    expect((await lstat(f.root)).isDirectory()).toBe(true);
+    let unexpectedSpawn = false;
+    await expect(f.run(undefined, child => {
+      unexpectedSpawn = true;
+      child.stdin.end('continue');
+    })).rejects.toBe(interruption);
+    expect(unexpectedSpawn).toBe(false);
+    releaseChild();
+    expect(await childClosed.promise).toBe(0);
+    if (scenario === 'pending body') {
+      await bodyPaused.promise;
+      expect(await readFile(join(f.root, 'child-finished'), 'utf8')).toBe('child wrote before close');
+      expect(nextRoundStarted).toBe(false);
+      finishBody.resolve();
+      await expect(owned.result).rejects.toBe(interruption);
+    }
+    await cleanup;
+    await expect(lstat(f.root)).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    interrupted.abort(interruption);
+    releaseGates();
+    try { await owned.close(); }
+    finally { signal.removeEventListener('abort', releaseGates); }
+  }
+});
+
+it('reads pinned Git blobs even with dirty working files, then preserves adaptations, additions and deletions with zero writes', ({ signal }) => withFixture(signal, async f => {
+  await writeFile(join(f.source, 'src/main.ts'), 'dirty checkout');
   expect((await f.run()).code).toBe(0);
   expect(await readFile(join(f.destination, 'src/main.ts'), 'utf8')).toBe('original source\n');
   await writeFile(join(f.destination, 'src/main.ts'), 'fork adaptation');
@@ -70,18 +199,19 @@ it('reads pinned Git blobs even with dirty working files, then preserves adaptat
   expect(await readFile(join(f.destination, 'src/new.ts'), 'utf8')).toBe('fork addition');
   expect(await readdir(join(f.destination, 'test'))).toEqual([]);
   expect(await readFile(join(f.destination, 'import-core.json'))).toEqual(manifest);
-});
+}));
 
-it('rejects a mismatched HEAD without creating the destination', async () => {
-  const f = await fixture(); await writeFile(join(f.source, 'next'), 'next'); f.git('add', '.'); f.git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-qm', 'next');
+it('rejects a mismatched HEAD without creating the destination', ({ signal }) => withFixture(signal, async f => {
+  await writeFile(join(f.source, 'next'), 'next'); f.git('add', '.'); f.git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-qm', 'next');
   expect((await f.run()).code).toBe(1);
   await expect(readdir(f.destination)).rejects.toMatchObject({ code: 'ENOENT' });
-});
+}));
 
-it('converges after interruption at each publication and preserves unknown staging directories', async () => {
-  const f = await fixture(); expect((await f.run()).code).toBe(0);
+it('converges after interruption at each publication and preserves unknown staging directories', ({ signal }) => withFixture(signal, async f => {
+  expect((await f.run()).code).toBe(0);
   const manifest = manifestSchema.parse(JSON.parse(await readFile(join(f.destination, 'import-core.json'), 'utf8')));
   for (let count = 0; count < manifest.files.length; count++) {
+    f.checkActive();
     await rm(f.destination, { recursive: true }); await mkdir(f.destination);
     await writeFile(join(f.destination, 'import-core.json'), JSON.stringify({ ...manifest, phase: 'seeding' }));
     for (const file of manifest.files.slice(0, count)) {
@@ -98,10 +228,10 @@ it('converges after interruption at each publication and preserves unknown stagi
     await expectCompleteSeed(f);
     expect(manifestSchema.parse(JSON.parse(await readFile(join(f.destination, 'import-core.json'), 'utf8'))).phase).toBe('complete');
   }
-});
+}));
 
-it('refuses divergent seeding and parent symlinks without modifying external files', async () => {
-  const f = await fixture(); await f.run();
+it('refuses divergent seeding and parent symlinks without modifying external files', ({ signal }) => withFixture(signal, async f => {
+  await f.run();
   const manifest = manifestSchema.parse(JSON.parse(await readFile(join(f.destination, 'import-core.json'), 'utf8')));
   await writeFile(join(f.destination, 'import-core.json'), JSON.stringify({ ...manifest, phase: 'seeding' }));
   await writeFile(join(f.destination, 'src/main.ts'), 'user edit');
@@ -111,20 +241,18 @@ it('refuses divergent seeding and parent symlinks without modifying external fil
   const outside = join(f.root, 'outside'); await mkdir(outside);
   await symlink(outside, join(f.destination, 'src'), process.platform === 'win32' ? 'junction' : 'dir');
   expect((await f.run()).code).toBe(1); expect(await readdir(outside)).toEqual([]);
-});
+}));
 
-it('serializes concurrent imports and rejects an unrelated provenance file', async () => {
-  const f = await fixture();
+it('serializes concurrent imports and rejects an unrelated provenance file', ({ signal }) => withFixture(signal, async f => {
   expect((await Promise.all([f.run(), f.run(), f.run()])).every(value => value.code === 0)).toBe(true);
   await rm(f.destination, { recursive: true }); await mkdir(f.destination);
   const content = '# Daemon source provenance and V2 import blocker\nuser-owned content';
   await writeFile(join(f.destination, 'PROVENANCE.md'), content);
   expect((await f.run()).code).toBe(1);
   expect(await readFile(join(f.destination, 'PROVENANCE.md'), 'utf8')).toBe(content);
-});
+}));
 
-it('uses the platform lock endpoint without requiring a TCP port on Windows', async () => {
-  const f = await fixture();
+it('uses the platform lock endpoint without requiring a TCP port on Windows', ({ signal }) => withFixture(signal, async f => {
   const preload = join(f.root, 'check-lock-endpoint.mjs');
   await writeFile(preload, `
     import assert from 'node:assert/strict';
@@ -144,10 +272,9 @@ it('uses the platform lock endpoint without requiring a TCP port on Windows', as
   const result = await f.run(preload);
   expect(result.code, result.output).toBe(0);
   await expectCompleteSeed(f);
-});
+}));
 
-it('fails closed when the Windows pipe cannot bind without falling back to TCP or writing a seed', async () => {
-  const f = await fixture();
+it('fails closed when the Windows pipe cannot bind without falling back to TCP or writing a seed', ({ signal }) => withFixture(signal, async f => {
   const preload = join(f.root, 'deny-lock-endpoint.mjs');
   await writeFile(preload, `
     import assert from 'node:assert/strict';
@@ -163,10 +290,10 @@ it('fails closed when the Windows pipe cannot bind without falling back to TCP o
   expect(result.code, result.output).toBe(1);
   expect(result.output).toContain('injected pipe permission failure');
   expect(await readdir(f.destination)).toEqual([]);
-});
+}));
 
-it('rejects a read-only partial import while retaining its bytes', async () => {
-  const f = await fixture(); expect((await f.run()).code).toBe(0);
+it('rejects a read-only partial import while retaining its bytes', ({ signal }) => withFixture(signal, async f => {
+  expect((await f.run()).code).toBe(0);
   const manifest = manifestSchema.parse(JSON.parse(await readFile(join(f.destination, 'import-core.json'), 'utf8')));
   await writeFile(join(f.destination, 'import-core.json'), JSON.stringify({ ...manifest, phase: 'seeding' }));
   const license = join(f.destination, 'LICENSE.bridge');
@@ -178,10 +305,10 @@ it('rejects a read-only partial import while retaining its bytes', async () => {
     expect(result.output).toContain('Conflicting partial import: LICENSE.bridge');
     expect(await readFile(license)).toEqual(bytes);
   } finally { await chmod(license, 0o644); }
-});
+}));
 
-it('recovers an actual killed import while preserving its bounded unknown residue', async () => {
-  const f = await fixture(); const source = await readFile(f.script, 'utf8');
+it('recovers an actual killed import while preserving its bounded unknown residue', ({ signal }) => withFixture(signal, async f => {
+  const source = await readFile(f.script, 'utf8');
   await writeFile(f.script, source.replace('await fs.link(staged, target);', "await fs.link(staged, target); process.kill(process.pid, 'SIGKILL');"));
   expect((await f.run()).code).not.toBe(0);
   expect((await readdir(f.destination)).some(name => name.startsWith('.import-'))).toBe(true);
@@ -192,10 +319,9 @@ it('recovers an actual killed import while preserving its bounded unknown residu
   expect((await f.run()).code).toBe(0);
   expect(await scratchSnapshot(f.destination)).toEqual(residue);
   await expectCompleteSeed(f);
-});
+}));
 
-it.each(['import-core.json', 'PROVENANCE.md'])('recovers %s publication and preserves unknown metadata scratch after a process dies before rename', async name => {
-  const f = await fixture();
+it.for(['import-core.json', 'PROVENANCE.md'])('recovers %s publication and preserves unknown metadata scratch after a process dies before rename', (name, { signal }) => withFixture(signal, async f => {
   const preload = join(f.root, 'crash-before-rename.mjs');
   await writeFile(preload, `import { promises as fs } from 'node:fs'; const rename=fs.rename; fs.rename=async(from,to)=>{if(to.endsWith(${JSON.stringify(name)}))process.kill(process.pid,'SIGKILL');return rename(from,to)};`);
   expect((await f.run(preload)).code).not.toBe(0);
@@ -208,10 +334,9 @@ it.each(['import-core.json', 'PROVENANCE.md'])('recovers %s publication and pres
   expect(await readFile(join(f.destination, 'unowned.tmp'), 'utf8')).toBe('keep');
   expect(await scratchSnapshot(f.destination)).toEqual(residue);
   await expectCompleteSeed(f);
-});
+}));
 
-it('preserves unknown staging after complete publication without rewriting imported files', async () => {
-  const f = await fixture();
+it('preserves unknown staging after complete publication without rewriting imported files', ({ signal }) => withFixture(signal, async f => {
   const preload = join(f.root, 'crash-after-complete.mjs');
   await writeFile(preload, `import { promises as fs } from 'node:fs'; const rename=fs.rename; fs.rename=async(from,to)=>{const complete=to.endsWith('import-core.json')&&(await fs.readFile(from,'utf8')).includes('"phase": "complete"');await rename(from,to);if(complete)process.kill(process.pid,'SIGKILL')};`);
   expect((await f.run(preload)).code).not.toBe(0);
@@ -224,16 +349,15 @@ it('preserves unknown staging after complete publication without rewriting impor
   expect((await f.run()).code).toBe(0);
   expect(await readFile(join(f.destination, 'src/main.ts'), 'utf8')).toBe('fork after complete');
   expect(await scratchSnapshot(f.destination)).toEqual(residue);
-});
+}));
 
 for (const phase of ['complete', 'seeding', 'rejected']) {
   for (const kind of ['file', 'directory', 'symlink']) {
-    it.each([
+    it.for([
       '.import-ABC123',
       'import-core.json.12345678-1234-4234-8234-123456789abc.tmp',
       'PROVENANCE.md.12345678-1234-4234-8234-123456789abc.tmp',
-    ])(`preserves foreign ${kind} %s during ${phase} import`, async name => {
-      const f = await fixture();
+    ])(`preserves foreign ${kind} %s during ${phase} import`, (name, { signal }) => withFixture(signal, async f => {
       expect((await f.run()).code).toBe(0);
       if (phase !== 'complete') {
         const manifest = manifestSchema.parse(JSON.parse(await readFile(join(f.destination, 'import-core.json'), 'utf8')));
@@ -274,19 +398,18 @@ for (const phase of ['complete', 'seeding', 'rejected']) {
         expect(manifestSchema.parse(JSON.parse(await readFile(join(f.destination, 'import-core.json'), 'utf8'))).phase).toBe('complete');
         expect(await readFile(join(f.destination, 'src/main.ts'), 'utf8')).toBe('original source\n');
       }
-    });
+    }));
   }
 }
 
-it.each([
+it.for([
   ['directory creation', "const create=fs.mkdtemp;fs.mkdtemp=async(...args)=>{const result=await create(...args);process.kill(process.pid,'SIGKILL');return result}"],
   ['exclusive open', "const open=fs.open;fs.open=async(...args)=>{const handle=await open(...args);if(args[1]==='wx')process.kill(process.pid,'SIGKILL');return handle}"],
   ['partial write', "const open=fs.open;fs.open=async(...args)=>{const handle=await open(...args);if(args[1]==='wx')handle.writeFile=async bytes=>{await handle.write(String(bytes).slice(0,7));process.kill(process.pid,'SIGKILL')};return handle}"],
   ['seeding rename', "const rename=fs.rename;fs.rename=async(...args)=>{await rename(...args);process.kill(process.pid,'SIGKILL')}"],
   ['payload release', "const unlink=fs.unlink;fs.unlink=async(...args)=>{await unlink(...args);process.kill(process.pid,'SIGKILL')}"],
   ['empty directory cleanup', "fs.rmdir=async()=>{process.kill(process.pid,'SIGKILL')}"],
-])('recovers a real SIGKILL at %s without deleting unknown residue', async (_boundary, hook) => {
-  const f = await fixture();
+])('recovers a real SIGKILL at %s without deleting unknown residue', ([_boundary, hook], { signal }) => withFixture(signal, async f => {
   const preload = join(f.root, 'crash-boundary.mjs');
   await writeFile(preload, `import { promises as fs } from 'node:fs'; ${hook};`);
   expect((await f.run(preload)).code).not.toBe(0);
@@ -304,10 +427,9 @@ it.each([
   expect(await readFile(join(f.destination, 'import-core.json'))).toEqual(manifest);
   expect(await readFile(join(f.destination, 'src/main.ts'), 'utf8')).toBe('fork adaptation');
   expect(await readdir(join(f.destination, 'test'))).toEqual([]);
-});
+}));
 
-it.each(['exclusive collision', 'replaced payload', 'unexpected entry', 'replaced directory'])('preserves foreign data during live cleanup after %s', async scenario => {
-  const f = await fixture();
+it.for(['exclusive collision', 'replaced payload', 'unexpected entry', 'replaced directory'])('preserves foreign data during live cleanup after %s', (scenario, { signal }) => withFixture(signal, async f => {
   const preload = join(f.root, 'foreign-live.mjs');
   const record = join(f.root, 'foreign-path');
   const outside = join(f.root, 'outside');
@@ -329,14 +451,13 @@ it.each(['exclusive collision', 'replaced payload', 'unexpected entry', 'replace
     expect(await readlink(resolve(foreign, '..'))).toBe(outside);
   }
   if (scenario === 'unexpected entry') await expectCompleteSeed(f);
-});
+}));
 
-it.each([
+it.for([
   ['payload write', "const open=fs.open;fs.open=async(...args)=>{const handle=await open(...args);if(args[1]==='wx')handle.writeFile=async()=>{throw new Error('injected write failure')};return handle}"],
   ['payload sync', "const open=fs.open;fs.open=async(...args)=>{const handle=await open(...args);if(args[1]==='wx')handle.sync=async()=>{throw new Error('injected sync failure')};return handle}"],
   ['source publication', "fs.link=async()=>{throw new Error('injected link failure')}"],
-])('cleans its own scratch after an ordinary %s failure and permits retry', async (_boundary, hook) => {
-  const f = await fixture();
+])('cleans its own scratch after an ordinary %s failure and permits retry', ([_boundary, hook], { signal }) => withFixture(signal, async f => {
   const preload = join(f.root, 'error-boundary.mjs');
   await writeFile(preload, `import { promises as fs } from 'node:fs'; ${hook};`);
   const result = await f.run(preload);
@@ -346,4 +467,4 @@ it.each([
   expect((await f.run()).code).toBe(0);
   await expectCompleteSeed(f);
   expect(await scratchSnapshot(f.destination)).toEqual([]);
-});
+}));
