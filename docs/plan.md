@@ -1,6 +1,6 @@
 # Vonvon Bot v2 plan
 
-Vonvon Bot becomes an independent product with a per-machine daemon, a web UI and an Electron desktop shell as clients, and an optional Vonvon account that lists every machine for remote management. It stops vendoring feishu-codex-bridge, imports a bridge user's data, and then shuts the bridge service down. The rule the program enforces is that the daemon is the only writer of machine data and the cloud never stores settings. The design and its reasons live in `docs/architecture.md` and `docs/roadmap.md` next to this file in `modelzen/vonvon-bot`. The provider layer's design is in `docs/providers.md`. The PRs in order are V1, V2, V3, V4, V5, V6a, V6b, V6c, V6d, V7a, V7b, V7c, V8, V9, V10, V11.
+Vonvon Bot becomes an independent product with a per-machine daemon, a web UI and an Electron desktop shell as clients, and an optional Vonvon account that lists every machine for remote management. It stops vendoring feishu-codex-bridge, imports a bridge user's data, and then shuts the bridge service down. The rule the program enforces is that the daemon is the only writer of machine data and the cloud never stores settings. The design and its reasons live in `docs/architecture.md` and `docs/roadmap.md` next to this file in `modelzen/vonvon-bot`. The provider layer's design is in `docs/providers.md`. The planned PRs are V1, V2, V3, V4, V5, V6a, V6b, V6c, V6d, V7a, V7b, V7c, V8, V9, V10, and V11; their merge order follows the dependency graph below.
 
 ## How to read this
 
@@ -27,7 +27,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 ### Arm the program
 
 - [ ] State the protocol and this plan to the operator, then stop. Start execution only on the operator's explicit go.
-- [ ] On the operator's go, record in standing orders and the todolist that V1 to V11 follow roadmap order. Tests alone do not verify a PR. Codex merges only after unit, all live, perf, independent audit, and exact-head Shipping checks pass. No force-push or rebase of pushed branches. The program ends when V11 is verified and earlier PRs have landed or been parked with a reason.
+- [ ] On the operator's go, record in standing orders and the todolist that merges follow the merge graph under *Dependencies*, and that the GitHub issues under *Program tracking* carry each version's state. Tests alone do not verify a PR. Codex merges only after unit, all live, perf, independent audit, and exact-head Shipping checks pass. No force-push or rebase of pushed branches. The program ends when V11 is verified and earlier PRs have landed or been parked with a reason.
 - [ ] Read these from the installed plugin at program start. Re-read them at every tick.
   - [ ] `skills/poteto-mode/playbooks/autopilot-stack.md`
   - [ ] `skills/swarm/SKILL.md`
@@ -39,7 +39,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 ### Spawn owners
 
 - [ ] Spawn one owner per PR with the full lifecycle the execution playbook names. Owners use branch prefix `codex/`.
-- [ ] Follow the dependency table in *Dependencies* under *Parallel execution*. It separates where a branch starts from what its acceptance needs and when it merges. Merges stay in roadmap order, V1 to V11. A branch never rebases. It merges its parent branch in when the parent moves, and merges `main` in after its parent lands.
+- [ ] Follow the dependency table in *Dependencies* under *Parallel execution*. It separates where a branch starts from what its acceptance needs and when it merges. Merges follow the merge graph under *Dependencies*: a PR merges once its merge predecessors have merged, in whatever order the chains finish. A branch never rebases. It merges its parent branch in when the parent moves, and merges `main` in after its parent lands.
   - [ ] V1 and V2 are merged. Nothing in this graph rebases, retargets, or reopens them, and open PRs keep their branches.
   - [ ] V9 lives in `modelzen/feishu-codex-bridge`, branched from `origin/codex/device-handoff`.
 - [ ] Hold the file boundaries. V1 touches only the root config, `packages/protocol/**`, `.github/**`, `NOTICE`, and `README.md`. V2 and V3 touch only `packages/daemon/**`, `scripts/import-core.mjs`, `packages/protocol/**`, and necessary root package metadata or lockfile changes for workspace integration. V3 also creates the minimal local client in `packages/client/**` that its lanes drive. V4 extends `packages/client/**` and adds `packages/ui/**`, `.agents/skills/verify/**`, `packages/daemon/src/server/web-ui.ts`, and `packages/daemon/src/cli/commands/open.ts`, and edits `packages/daemon/src/server/http.ts` only to mount `web-ui.ts`. V4 also edits `packages/daemon/src/server/rpc/command.ts`, `environment.ts`, `machine.ts`, and `settings.ts` only for the branches its *Browser coverage* assigns to the daemon. It creates `packages/daemon/src/environment/**` and the three daemon tests that V4's Files names. V5 touches `packages/desktop/**` and, for its *Service gate*, the daemon's service files `packages/daemon/src/service/launchd.ts`, `systemd.ts`, `win-startup.ts`, `adapter.ts`, and `common.ts` and `packages/daemon/src/cli/commands/service.ts`. The gate also creates `service/identity.ts`, `service/definition.ts`, `service/registration.ts`, and `service/drain.ts`, and edits `service/distribution.ts`. For the `global-npm` package, V5 also edits `packages/daemon/src/server/web-ui.ts` only for its UI root resolution, and creates `scripts/stage-daemon.mjs`, `scripts/pack-vonvon-bot.mjs`, `scripts/check-vonvon-bot-package.mjs`, `scripts/smoke-vonvon-bot-package.mjs`, `scripts/vonvon-bot-install-scripts.json`, and `scripts/package-tools.test.mjs`, per *Package* in V5. It edits `packages/daemon/src/host/service.ts`, `host/lifecycle.ts`, `host/bootstrap.ts`, `cli/commands/daemon.ts`, and `cli/commands/run.ts`, each only for the change that *Daemon files* in V5 names, and it creates the test files that section names. V5 never edits `service/control.ts`, which V8 uses, `service/codex-bin.ts`, `service/update.ts`, or `cli/commands/daemon-control.ts`. V6a to V6d and V7a to V7c touch `packages/daemon/src/provider/**`, `packages/daemon/src/outbound/**`, the `card/` and `bot/` consumer files and the `admin/`, `host/`, `project/`, `server/`, `cli/`, and `config/` files that V6b's *Files* names, the provider ids and `readScope` in `packages/protocol/src/domain.ts` and `settings.ts` through the root, the provider picker in `packages/ui/**`, `scripts/prove-enforcement.mjs`, `scripts/record-fixture.mjs`, and `docs/proofs.md`. They delete `packages/daemon/src/agent/**`. They own their tests under `packages/daemon/test/provider/`. They touch no `NOTICE` section and no `tsconfig`, because nothing is copied from Paseo. V8 touches only `packages/daemon/src/import/**`, `packages/daemon/src/cli/commands/import.ts`, `packages/protocol/src/import.ts`, and `packages/ui/src/import/**`. V10 and V11 add `packages/cloud/**` and `packages/daemon/src/cloud/**`. V10 also adds `packages/ui/src/account/**` and `cli/commands/login.ts`, and V11 also adds `packages/client/src/transport-relay.ts`, `packages/client/src/e2ee/**`, and the machine switcher in `packages/ui/src/`. Each PR's edits to the shared integration files under *Shared files* go through the root.
@@ -66,7 +66,7 @@ The evidence a PR keeps for review follows the surface a user meets in that PR. 
 
 ### Parallel execution
 
-This section says how Codex runs work in parallel and where each branch starts. It changes no merge order, architecture, wire or storage shape, or evidence gate. The local runtime supports the root plus three active Codex agents.
+This section says how Codex runs work in parallel and where each branch starts. It changes no architecture, wire or storage shape, or evidence gate. On 2026-10-12 the linear V1 to V11 merge order was replaced by the merge graph under *Dependencies*. The local runtime supports the root plus three active Codex agents.
 
 *Roles.*
 
@@ -121,7 +121,7 @@ This section says how Codex runs work in parallel and where each branch starts. 
 
 - Development baseline. The code a branch needs to compile and test its own files. A branch starts from its parent branch's pushed head once the interface it consumes is frozen, without waiting for the parent's verdict or merge.
 - Acceptance input. A real artifact or behavior that a live, perf, or native check needs: a built UI, a real Electron shell, a signed and published installer, the Feishu fixture Bot, a dedicated OS test user, or a Linux systemd user session. The PR's evidence-grade gates wait for it. A worker may rehearse earlier, and a rehearsal is never evidence.
-- Merge order. V1 to V11 in roadmap order, unchanged. A verified PR waits until every earlier PR has merged.
+- Merge graph. A PR merges after its merge predecessors in the table's *Merges after* column, and after nothing else. The predecessors are real dependencies, not the roadmap numbering. The client and cloud chain is V5, V10, V11. The provider chain is V6a, V6b, then three independent successors V6c, V6d, and V7a; V7b follows V7a, and V7c follows V7b. The import chain is V8, V9. V6a and V5 both follow V4 and land in whichever order they finish. V7c is a leaf and blocks nothing. Shared files under *Shared files* are root-written, so a cross-chain merge conflict is confined to them and is handled by the patch-id rule.
 
 Freeze points. A freeze point is a pushed commit at which the named interface is fixed. It is an interface commitment, not a verdict. The root records its SHA. If the interface changes after it, the owner tells the root, and every branch that started from it merges the new commit in.
 
@@ -134,16 +134,16 @@ Freeze points. A freeze point is a pushed commit at which the named interface is
 | --- | --- | --- | --- | --- | --- |
 | V4 | `codex/v4-web-ui` | `H3` | Nothing | A running daemon at V4 head, the old renderer at `fab5237`, Playwright Chromium | V3 |
 | V5 | `codex/v5-desktop` | V4 branch at `F4` | The shell files, including the native authenticated attach unit, need only `F4` and are independent of Gates L and M. The service files and `login-item.ts` start now, including `service/drain.ts`, Gate L, and Gate M under *Service gate contracts*, whose designs are closed. `install` and `uninstall` stay refused on every head until the transactions, the *Pre-lock guard*, both gates, and their tests are all integrated | Real `packages/ui/dist` in a real Electron window, an older daemon build, a Mac GUI session, which is the operator's account `clay` under the user's override in *Native acceptance environment*, a dedicated Linux user with a systemd user session | V4 |
-| V6a | `codex/v6a-provider-core` | `H3`, or `main` once V3 has merged | Nothing | The Mac and the Linux host for the process tests, the Feishu fixture Bot for the uploader lanes | V5 |
+| V6a | `codex/v6a-provider-core` | `H3`, or `main` once V3 has merged | Nothing | The Mac and the Linux host for the process tests, the Feishu fixture Bot for the uploader lanes | V4 |
 | V6b | `codex/v6b-provider-runtime` | V6a branch at `F6` | The engines and the runtime start at `F6`. The consumer cut-over needs V6a code-ready. `readScope` in `domain.ts` is a root handoff | The Feishu fixture Bot, the managed Codex, the real Claude Code CLI, the Linux host for lane 6 | V6a |
 | V6c | `codex/v6c-run-card` | V6b branch at code-ready | Nothing | The Feishu fixture Bot, Codex, Claude | V6b |
-| V6d | `codex/v6d-claude-confinement` | V6b branch at code-ready | Nothing. Disjoint from V6c | The real Claude Code CLI on the Mac, the Linux host with `bwrap` | V6c |
-| V7a | `codex/v7a-acp` | `F6` for the client and translation, V6b code-ready for the engine | The provider ids and the picker need V4 merged and the root's `domain.ts` and `settings.ts` handoff | `cursor-agent` and `grok` on the Mac with user-supplied accounts, V4's web UI for lane 9, the Feishu fixture Bot | V6d |
+| V6d | `codex/v6d-claude-confinement` | V6b branch at code-ready | Nothing. Disjoint from V6c | The real Claude Code CLI on the Mac, the Linux host with `bwrap` | V6b. Either order with V6c |
+| V7a | `codex/v7a-acp` | `F6` for the client and translation, V6b code-ready for the engine | The provider ids and the picker need V4 merged and the root's `domain.ts` and `settings.ts` handoff | `cursor-agent` and `grok` on the Mac with user-supplied accounts, V4's web UI for lane 9, the Feishu fixture Bot | V6b |
 | V7b | `codex/v7b-pi` | V6b branch at code-ready | Disjoint from V7a. The `pi` id in `toolSchema` is a root handoff | `pi` on the Mac or the Linux host, the Feishu fixture Bot | V7a |
-| V7c | `codex/v7c-proofs` | V7b branch at code-ready | Nothing | A Windows host with Codex and Claude Code, the Linux host | V7b |
-| V8 | `codex/v8-bridge-import` | `H3`, or `main` once V3 has merged | `packages/ui/src/import/**` needs `F4` | Bridge `446b2a4` installed as a service under the dedicated test user on the Mac and on Linux, the Feishu fixture Bot, V4's web UI | V7c |
+| V7c | `codex/v7c-proofs` | V7b branch at code-ready | Nothing | A Windows host with Codex and Claude Code, the Linux host | V7b. A leaf: parked while no Windows host exists, blocks nothing |
+| V8 | `codex/v8-bridge-import` | `H3`, or `main` once V3 has merged | `packages/ui/src/import/**` needs `F4` | Bridge `446b2a4` installed as a service under the dedicated test user on the Mac and on Linux, the Feishu fixture Bot, V4's web UI | V4 |
 | V9 | `codex/v9-owner-notice` in `modelzen/feishu-codex-bridge` | `origin/codex/device-handoff` | Nothing. The marker name `migrated-to-vonvon-bot.json` is fixed in `architecture.md` | The signed installer URL published from V5's release, V8 merged | V8 |
-| V10 | `codex/v10-accounts` | `H3`, or `main` once V3 has merged | The device repository interface, its memory and Postgres implementations, and their shared contract tests need nothing. `packages/ui/src/account/**` needs `F4` | Two daemons, a local cloud with Postgres and dev auth, the V5 shell for lane 8 | V9 |
+| V10 | `codex/v10-accounts` | `H3`, or `main` once V3 has merged | The device repository interface, its memory and Postgres implementations, and their shared contract tests need nothing. `packages/ui/src/account/**` needs `F4` | Two daemons, a local cloud with Postgres and dev auth, the V5 shell for lane 8 | V5, for its shell. V5a if V5 splits |
 | V11 | `codex/v11-relay` | `main` | `packages/client/src/e2ee/**`, its copied `base64.ts`, and its test need nothing. Everything else needs `F10`, and `transport-relay.ts` and the switcher need `F4` | V10's cloud, the V5 shell for lane 7 | V10 |
 
 Early leaves. These may be implemented before their predecessors are accepted, because they consume only a frozen interface or nothing: V5's shell attach unit from `F4`; V5's pure service identity, codec, readback, and `service/drain.ts`, on the V5 branch now; V6a's pure core, which depends on nothing; V7a's ACP client and translation and V7b's Pi translation from `F6`; V10's device repository; V11's `e2ee/**` port. Early work is development only. None of it satisfies an acceptance box, and none of it changes the merge order.
@@ -152,7 +152,7 @@ Status reported by the root for this revision, recorded here and not established
 
 A branch whose development baseline is not its merge predecessor merges each predecessor in when it needs that code, and `main` once it lands. It opens its PR ready at code-ready against the newest unmerged branch it contains, or `main`, and retargets as those land, as *Spawn owners* says.
 
-Evidence-grade gates follow the merge order. A PR runs its frozen-head live lanes, perf, native checks, and swarm when it is the earliest unmerged PR or the next one. Earlier gates would mostly be rerun after the earlier merges change its base or lockfile. Its unit tests, typecheck, lint, rehearsals, and audits of its own diff may run at any time.
+Evidence-grade gates follow the merge graph. A PR is gate-ready when every merge predecessor has merged or is itself at a frozen head. A gate-ready PR runs its frozen-head live lanes, perf, native checks, and swarm. When two PRs are gate-ready, the one with more unmerged dependents in the graph goes first, and roadmap order breaks a tie. Gates run earlier would mostly be rerun after a predecessor's merge changes the base or lockfile. Its unit tests, typecheck, lint, rehearsals, and audits of its own diff may run at any time.
 
 *Shared files.* After V3 the root owns these and writes every change to them as a frozen handoff or at integration. Owners own the leaf files they add.
 
@@ -172,9 +172,9 @@ Evidence-grade gates follow the merge order. A PR runs its frozen-head live lane
 
 *Slots.* The root plus three agents.
 
-- The earliest unmerged PR gets gate and audit capacity first. Its two or more audit lanes come from agents that did not write it. An owner pauses its implementation for such an audit, which only reads.
+- The gate-ready PR with the most unmerged dependents gets gate and audit capacity first. Its two or more audit lanes come from agents that did not write it. An owner pauses its implementation for such an audit, which only reads.
 - Implementation fills the other slots.
-- A slot moves from gates or audits to implementation when the PR it served has no work left that needs an agent, so every swarm lane has returned and only root items remain: CI, Shipping, and merge. It moves back when the earliest or next unmerged PR freezes.
+- A slot moves from gates or audits to implementation when the PR it served has no work left that needs an agent, so every swarm lane has returned and only root items remain: CI, Shipping, and merge. It moves back when a gate-ready PR freezes.
 - While a perf probe runs, no other slot builds, tests, or runs a daemon on the Mac. Those slots may edit and read.
 - Bot-connected lanes are serial across the whole program, not only within a PR: one connection to the fixture Bot at a time, from any PR. Native service acceptance is serial too.
 
@@ -192,22 +192,30 @@ Evidence-grade gates follow the merge order. A PR runs its frozen-head live lane
 - Root. Merges `main` into the V4 and V6a branches and retargets them to `main`. Freezes the protocol registration for V8's `import.ts`.
 - Agent 1, machine platform. V8's daemon side from `main`: `import/bridge/**`, `service-control/**`, `legacy-keystore.ts`, `hooks.ts`, `cli/commands/import.ts`, `protocol/src/import.ts`, and `import-bridge.test.ts`. The UI import flow waits for `F4`. When V4 is code-ready, it gives V4 one audit lane.
 - Agent 2, client surfaces. V4 to code-ready and its evidence-grade gates, since V4 is now the earliest unmerged PR. Agents 1 and 3 run V4's audits and help with its lanes. After V4 is verified, V5's shell from `F4`.
-- Agent 3, providers. V6a to code-ready, with unit tests and rehearsals, then V6b from `F6`. Their evidence-grade gates wait until each is the earliest or next unmerged PR. V7a's ACP client and V7b's Pi translation may start from `F6`, per the table. Agent 3 takes them after V6b code-ready only because it is one agent; another free slot may take them at `F6`.
+- Agent 3, providers. V6a to code-ready, with unit tests and rehearsals, then V6b from `F6`. Their evidence-grade gates wait until each is gate-ready. V7a's ACP client and V7b's Pi translation may start from `F6`, per the table. Agent 3 takes them after V6b code-ready only because it is one agent; another free slot may take them at `F6`.
 - The next free slot takes V10 from `main`, then V9 in the bridge repository. V11's `e2ee/**` port is filler for any free slot.
 
-*Critical path.* Merges are linear, so the program ends when the slowest chain of merge inputs ends: V4, then V5, which needs Gate L and Gate M native acceptance, a Mac GUI session for its service tests, now `clay` under the user's override, a dedicated Linux user with a systemd user session, and signing, then the published installer for V9, then V10 and V11. Code for V6a to V7c, V8, V10, and V11 can be ready before its turn. What stays serial per PR is its frozen-head evidence and Shipping.
+*Critical path.* The merge graph has three independent chains after V4; the program finishes when the slowest chain passes its own acceptance and Shipping gates. V5 needs Gate L and Gate M native acceptance, a Mac GUI session for its service tests, now `clay` under the user's override, and a dedicated Linux user with a systemd user session. V10 follows the V5 shell, then V11 follows V10. V9 follows V8 and needs the published signed installer from V5, but V10 does not wait for V9. Provider work follows V6b into V6c, V6d, and V7a independently; V7a waits for neither V6c nor V6d. Each PR runs its frozen-head evidence and Shipping gates before merging.
 
 *After V3.*
 
-- A verified PR waits until every earlier PR in this repository has merged. When an earlier merge moves its base, the root merges `main` in. An unchanged stable patch-id is necessary for the verdict to stand, but it is not sufficient. The root also confirms the new base, the dependency versions in the lockfile, and that the evidence relevant to the PR still applies in the new context. If that context changed, the root reruns the affected checks and gets a fresh independent verdict, even when the patch-id matches. If the patch-id changed, the PR gets a fresh swarm. All of this applies on top of `playbooks/shipping.md`, never in place of it. Disjoint file ownership keeps patch-ids stable, but it does not keep context unchanged.
+- A verified PR waits until its merge predecessors have merged. When any merge moves its base, the root merges `main` in. An unchanged stable patch-id is necessary for the verdict to stand, but it is not sufficient. The root also confirms the new base, the dependency versions in the lockfile, and that the evidence relevant to the PR still applies in the new context. If that context changed, the root reruns the affected checks and gets a fresh independent verdict, even when the patch-id matches. If the patch-id changed, the PR gets a fresh swarm. All of this applies on top of `playbooks/shipping.md`, never in place of it. Disjoint file ownership keeps patch-ids stable, but it does not keep context unchanged.
 - Known overlaps.
   - V8 and V10 both add commands, and the root writes each registration in `packages/daemon/src/cli/index.ts` as one additive line under *Shared files*. A merge conflict there changes the patch and needs a fresh swarm.
   - V7a edits the provider picker in `packages/ui/src/`, which exists only after V4. V7a's UI part therefore waits until V4 has landed and V7a has merged `main` in.
   - V5 edits the daemon's service files, and V8 uses `service/control.ts` beside them. V5 never edits `control.ts`.
 - Operator action for V5 and V8, requested in wave 1 so it stays off the critical path. V5's native acceptance and V8's service lanes need the Linux test user `vonvon-accept` on the Tencent host, which the root prepares under the user's root SSH grant per [native-acceptance-hosts.md](native-acceptance-hosts.md). V8's Mac lanes also need `manzana` in a GUI session on `clay`. On the Mac, V5's service tests may instead run in `clay` under the user's override in *Native acceptance environment*. V8's Mac lanes run as `manzana` in `gui/502`, because the protected daily bridge occupies the bridge's exact label in `clay`'s domain. Logging `manzana` into a GUI session is the only user action here. V5's service design from Claude Code is also a precondition for V5's service files, per *Service gate*.
-- V10 and V9. V10 merges only after V9 has landed, following the existing V1 to V11 roadmap order, even though V9 merges in `modelzen/feishu-codex-bridge`. This needs no operator question and changes no PR order.
+- V10 and V9. V10 merges after V5's shell and does not wait for V9, which merges in `modelzen/feishu-codex-bridge` after V8 and the published installer. V8 does not wait for the provider chain: the importer writes the bridge's provider ids unchanged, and V6b's load-time `migrateProviderId` handles them whether V8 lands before or after V6b.
 - Ready work under the revision of 2026-10-11.
   - V11, now, from `main`. The two assertions, the in-file modification notice, `closure.json`, `e2ee-closure.test.ts`, `scripts/type-only-identity.mjs`, and the root's `NOTICE` sentence, per V11's *Compiler contract*.
+
+*Program tracking.* From 2026-10-12 the program's state lives in GitHub issues of this repository, generated from `docs/program-graph.json` by `scripts/program-graph-sync.mjs`.
+
+- Structure. The pinned board issue #122 is the parent of one issue per version, #124 V5 to #135 V11 and #123 tooling, and of the operator issues #205 to #209. Each version issue is the parent of its task issues, one per file-disjoint partition, gate, or root handoff, and of its defect issues. `blocked by` relations carry the merge graph between versions and the dependencies between tasks. The GitHub project "Vonvon Bot v2" holds every issue.
+- Board and web page. The board body holds the version merge graph, a progress table, and the task dependency graph as Mermaid, regenerated by `node scripts/program-graph-sync.mjs board`. `node scripts/program-graph-sync.mjs html <dir>` writes the same content as a standalone page. Codex adds the workflow as TOOL-1 (#203): every 2 hours by schedule, on issue events, and on dispatch, it rewrites the board and deploys the page to GitHub Pages. TOOL-1 lands before any implementation task is taken. Until it lands, the root runs `board` after each state change.
+- State. A task issue is open or closed. The root adds `state:in-progress` when a worker takes a task and closes the issue when the partition is integrated and its tests pass. A version issue carries at most one of `state:code-ready`, `state:frozen`, and `state:verified`, and closes when the PR merges. The root changes these labels at the four transitions. A defect found mid-task gets a new issue under its version and the `version:<id>` label.
+- Changing the graph. A new partition, a changed dependency, or a split such as V5a and V5b is an edit to `docs/program-graph.json` followed by `node scripts/program-graph-sync.mjs sync`. The sync is idempotent: it creates missing issues, updates titles and bodies, adds links and labels, and deletes nothing. Codex may add tasks and task dependencies that change no architecture, data shape, or merge edge. A change to a merge edge goes back to Claude Code with the plan.
+- Wave 3, the assignment at this revision. Agent 2, client surfaces: V5 to a frozen head, where V5-T1, T3, T4, T5, and T6 are open and T8 and T9 are the serial native acceptance, then V10-T4 and V10-T2. Agent 3, providers: V6a to `F6` (V6a-T1) and code-ready, then V6b-T1 to T4 from `F6`. Agent 1, machine platform: V8-T2 and V8-T4 now, V10-T1 beside them, and the audit lanes for V5 and V6a. Root: V5-T7, V6b-T7, the `frozen` labels and CI dispatches, and the board. Operator items OP-1 to OP-5 are off the agents' path. OP-1, the Actions billing, blocks every merge until it is done.
 
 ### PR mechanics, for every PR
 
@@ -221,18 +229,18 @@ Evidence-grade gates follow the merge order. A PR runs its frozen-head live lane
 
 ### Verdict and merge, for every PR
 
-- [ ] At the code-ready head SHA and at each later push that changes the patch, apply the merge-front scheduling rule under *Dependencies*: component tests and independent diff audits run immediately, and the full evidence-grade swarm runs when the PR is earliest or next unmerged. Run that swarm per `skills/swarm/SKILL.md`. One gates lane. The ten live lanes from the PR's **Verify, live** block. The perf lane from its **Verify, perf** block. Two or more audit lanes, each with its own focus, that read the diff and the receipts and distrust the PR body. The root audits the receipts in the merge-ready report before the verdict.
+- [ ] At the code-ready head SHA and at each later push that changes the patch, apply the merge-front scheduling rule under *Dependencies*: component tests and independent diff audits run immediately, and the full evidence-grade swarm runs when the PR is gate-ready under *Dependencies*. Run that swarm per `skills/swarm/SKILL.md`. One gates lane. The ten live lanes from the PR's **Verify, live** block. The perf lane from its **Verify, perf** block. Two or more audit lanes, each with its own focus, that read the diff and the receipts and distrust the PR body. The root audits the receipts in the merge-ready report before the verdict.
 - [ ] Clean only when every lane is `PASS`. Findings go back to the owner, including a defect that a lane filed as a note. A new head gets a fresh swarm and a fresh verdict, except for results that stay valid under the patch-id rule in `playbooks/shipping.md`.
-- [ ] A clean verdict appends the PR to the linear stack in roadmap order. Codex runs guarded Shipping on the contiguous verified stack from the root, bottom-up. A verdict stays valid across a merge-sync only when the stable patch-id of base to head is unchanged under the patch-id rule in `playbooks/shipping.md`, and the new base, dependency versions, and relevant evidence are confirmed unchanged in effect. If that context changed, the affected checks rerun and a fresh independent verdict is required.
+- [ ] A clean verdict marks the PR verified, with the `state:verified` label on its issue under *Program tracking*. Codex runs guarded Shipping on every verified PR whose merge predecessors have landed, predecessors first within a chain. A verdict stays valid across a merge-sync only when the stable patch-id of base to head is unchanged under the patch-id rule in `playbooks/shipping.md`, and the new base, dependency versions, and relevant evidence are confirmed unchanged in effect. If that context changed, the affected checks rerun and a fresh independent verdict is required.
 - [ ] Merge only when the GitHub-hosted Linux job succeeded at the exact head being merged, and for a `full` change the hosted Windows job and the self-hosted Mac job succeeded at that head, per *CI policy*. A docs-only run is recorded as lightweight, never as a full-suite pass.
 
 ### CI policy
 
-CI maintenance does not change the V1 to V11 order, product architecture, unit, live, perf, native, independent audit, or Shipping requirements. CI does not replace a real desktop, launchd, or systemd acceptance check.
+CI maintenance does not change the merge graph, product architecture, unit, live, perf, native, independent audit, or Shipping requirements. CI does not replace a real desktop, launchd, or systemd acceptance check.
 
 *Runners.* The `linux` job uses GitHub-hosted `ubuntu-latest`. The `windows` job uses GitHub-hosted `windows-2025`. The `macos` job uses the shared organization runner labelled `self-hosted`, `macOS`, `ARM64`, `modelzen-macos`, and `modelzen-macos-isolated`. Full changes run all three platforms. Notelet is a macOS app and keeps Linux repository checks plus its self-hosted Mac build. The original Windows native job remains in the legacy desktop branch workflow; its desktop packaging and native UI checks are separate from this main-workflow chain. The organization runner group permits only `modelzen/vonvon-bot` and `modelzen/notelet`. One Mac runner runs one job at a time. Setup and service commands are in [self-hosted-ci.md](self-hosted-ci.md). Pricing and trigger examples are in [ci-costs.md](ci-costs.md).
 
-*Triggers.* `.github/workflows/ci.yml` runs for PRs targeting `main`, on `opened`, `synchronize`, and `reopened`, and by `workflow_dispatch`. It has no path filter, branch-push trigger, or schedule. PR checks validate the proposed merge; repeating the same suite after that merge adds no platform coverage. Use a manual full run for an exceptional direct commit, a retargeted PR, or a changed base when no current run exists. A newer PR run cancels the old one. Manual runs retain separate records.
+*Triggers.* From the revision of 2026-10-12, the full three-platform run happens once per frozen head, not once per push. `.github/workflows/ci.yml` runs for PRs targeting `main` on `opened`, `synchronize`, `reopened`, and `labeled`, and by `workflow_dispatch`. Every PR event runs the classifier and the `docs` checks. The `full` Linux, Windows, and Mac chain runs only when the PR carries the `frozen` label, or on `workflow_dispatch`. The root adds `frozen` when it freezes a head, removes it before pushing a patch that changes the head, and adds it again at the next freeze. Before the freeze, workers run targeted tests locally, the root runs the clean chain at integration, and a Linux chain may run on the JP-VPS over SSH; none of those is a GitHub check. Codex implements the workflow change as TOOL-2 (#204). Until it lands, the root may skip pushes between freezes but must not merge without the frozen head's run. The workflow has no path filter, branch-push trigger, or schedule. PR checks validate the proposed merge; repeating the same suite after that merge adds no platform coverage. Use a manual full run for an exceptional direct commit, a retargeted PR, or a changed base when no current run exists. A newer PR run cancels the old one. Manual runs retain separate records.
 
 *Scope.* `.github/scripts/ci-scope.mjs` is the only classifier. It uses full Git history and `git diff --name-only --no-renames -z`. A PR compares the merge-base of the event base and head with the head. It reports `docs` only when every path is root `README.md`, `AGENTS.md`, `CLAUDE.md`, or `docs/**/*.md`. Everything else is `full`. Manual dispatch, unknown events, missing SHAs, empty, malformed, oversized or ambiguous differences select `full`. Git collection failure cannot authorize a lightweight pass.
 
@@ -903,6 +911,8 @@ V3's surface is the CLI and the WebSocket API, so it keeps the CLI evidence bund
 
 **Depends on.** V4. The shell files start from V4's branch at `F4`, and the shell's native authenticated attach unit proceeds under `F4` independently of Gates L and M. The service files and `login-item.ts` may start from the same base, including Gate L and Gate M under *Service gate contracts*, whose designs are closed. `install` and `uninstall` keep V3's refusal on every head until the rule in *Daemon files* is met. Gate L and Gate M still need their native acceptance before V5 is accepted. Acceptance needs the real `packages/ui/dist`, a Mac GUI session, which may be `clay` under the user's override, a dedicated Linux test user, and a Linux systemd user session, per *Native acceptance environment*. V5 merges after V4.
 
+*Split.* V5 may land as two PRs when its two halves reach acceptance at different times. V5a, the shell: `packages/desktop/**` except `login-item.ts`, the *Package* files, and the root handoffs; `service install` and `uninstall` keep V3's refusal, which this plan already requires on every head before the gates are integrated, and lanes 6 and 7 stay unchecked. V5b, the service: the *Daemon files*, `login-item.ts`, Gate L, Gate M, and the native acceptance. V5b merges after V5a. V10 and V11 need only V5a. The installer that V9 links comes from a release that includes V5b. Codex decides whether to split from the branch state and records it in the PR. The split changes no design, data shape, or gate.
+
 **Files.**
 
 - [ ] Create `packages/desktop/src/main.ts`, `daemon-manager.ts`, `tray.ts`, `updates.ts`, and `preload.ts`.
@@ -1294,7 +1304,7 @@ V3's surface is the CLI and the WebSocket API, so it keeps the CLI evidence bund
 
 The provider layer is redesigned on 2026-10-12. The design, its data types, the native capability matrix, the enforcement matrix, and the card layout are in [providers.md](providers.md). V6a to V6d and V7a to V7c deliver it. The earlier V6 and V7, which copied Paseo's provider closure, are withdrawn, and the branches `codex/v6-claude-provider` and `codex/v7-providers` are reference only. Nothing is copied from them or from Paseo. Paths below are relative to `packages/daemon/src/` unless they start with `packages/`, `scripts/`, or `docs/`. Tests live under `packages/daemon/test/provider/`, fixtures under `packages/daemon/test/provider/fixtures/<provider>/*.jsonl`.
 
-**Depends on.** V3. Development starts from `H3` or `main`. No acceptance input beyond the Mac and the Linux host for the process tests. V6a merges after V5, in roadmap order. V6a publishes the freeze point `F6`.
+**Depends on.** V3. Development starts from `H3` or `main`. No acceptance input beyond the Mac and the Linux host for the process tests. V6a merges after V4, which has landed, so it merges when verified, before or after V5. V6a publishes the freeze point `F6`.
 
 **Files.**
 
@@ -1524,7 +1534,7 @@ The provider layer is redesigned on 2026-10-12. The design, its data types, the 
 
 ## Claude confinement (V6d)
 
-**Depends on.** V6b. Can be developed beside V6c; the files do not overlap. Acceptance needs the real Claude Code CLI on the Mac and on the Linux host, with `bwrap` present on Linux. V6d merges after V6c.
+**Depends on.** V6b. Can be developed beside V6c; the files do not overlap. Acceptance needs the real Claude Code CLI on the Mac and on the Linux host, with `bwrap` present on Linux. V6d merges after V6b, before or after V6c.
 
 **Files.**
 
@@ -1586,7 +1596,7 @@ The provider layer is redesigned on 2026-10-12. The design, its data types, the 
 
 ## ACP engine with Cursor, Grok, and custom ACP (V7a)
 
-**Depends on.** V6b for the runtime. The ACP client and translation may start at `F6`. The provider ids and the picker need V4 merged and the root's `domain.ts` handoff. Acceptance needs `cursor-agent` and `grok` installed on the Mac with user-supplied accounts, and V4's web UI for the picker lane. V7a merges after V6d.
+**Depends on.** V6b for the runtime. The ACP client and translation may start at `F6`. The provider ids and the picker need V4 merged and the root's `domain.ts` handoff. Acceptance needs `cursor-agent` and `grok` installed on the Mac with user-supplied accounts, and V4's web UI for the picker lane. V7a merges after V6b.
 
 **Files.**
 
@@ -1713,7 +1723,7 @@ The provider layer is redesigned on 2026-10-12. The design, its data types, the 
 
 ## Cross-OS proofs and Windows acceptance (V7c)
 
-**Depends on.** V7b. Acceptance needs a Windows host with Codex and Claude Code, and the Linux host. V7c merges after V7b.
+**Depends on.** V7b. Acceptance needs a Windows host with Codex and Claude Code, and the Linux host. V7c merges after V7b. It is a leaf in the merge graph and blocks nothing. While no Windows host exists it is parked, with its Windows lanes unchecked.
 
 **Files.**
 
@@ -1771,7 +1781,7 @@ The provider layer is redesigned on 2026-10-12. The design, its data types, the 
 
 ## Import bridge data and shut the bridge down (V8)
 
-**Depends on.** V4 for the UI import flow and acceptance. The daemon side, `import/**`, `cli/commands/import.ts`, and `protocol/src/import.ts`, starts from `H3` or `main`, and `packages/ui/src/import/**` waits for `F4`. V8 merges after V7c.
+**Depends on.** V4 for the UI import flow and acceptance. The daemon side, `import/**`, `cli/commands/import.ts`, and `protocol/src/import.ts`, starts from `H3` or `main`, and `packages/ui/src/import/**` waits for `F4`. V8 merges after V4, which has landed, so it merges when verified. It does not wait for the provider chain; see *After V3* on provider ids.
 
 **Files.**
 
@@ -1891,7 +1901,7 @@ The provider layer is redesigned on 2026-10-12. The design, its data types, the 
 
 ## Add accounts and the machine list (V10)
 
-**Depends on.** V4 for `packages/ui/src/account/**`, which waits for `F4`. `packages/cloud/**`, `packages/daemon/src/cloud/**`, and the login commands start from `H3` or `main`. Lane 8 needs the V5 shell. V10 merges after V9. V10 publishes the freeze point `F10`.
+**Depends on.** V4 for `packages/ui/src/account/**`, which waits for `F4`. `packages/cloud/**`, `packages/daemon/src/cloud/**`, and the login commands start from `H3` or `main`. Lane 8 needs the V5 shell. V10 merges after V5's shell, or V5a if V5 splits. It does not wait for V9. V10 publishes the freeze point `F10`.
 
 **Files.**
 

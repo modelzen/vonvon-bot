@@ -4,7 +4,7 @@
 
 ## PR 顺序
 
-每个 PR 都是一个可以单独验证的改动。合并严格按 V1 到 V11 的顺序。下表的“依赖”是验收和合并的依赖：PR 的实时、性能、原生检查要用到的真实产物和行为来自这些 PR。什么时候能开始写代码另见下一节“开发起点”，通常比验收早。分支有新提交时，把它 merge 进来。被依赖的 PR 合并进 `main` 后，把 PR 的目标改成 `main`，再把 `main` merge 进来。整个过程不 rebase，不 force-push。
+每个 PR 都是一个可以单独验证的改动。2026-10-12 起合并不再按 V1 到 V11 的编号排队，而按下文“合并图”：一个 PR 的合并前提都已合入，它验证通过就可以合。下表的“依赖”是验收和合并的依赖：PR 的实时、性能、原生检查要用到的真实产物和行为来自这些 PR。什么时候能开始写代码另见下一节“开发起点”，通常比验收早。分支有新提交时，把它 merge 进来。被依赖的 PR 合并进 `main` 后，把 PR 的目标改成 `main`，再把 `main` merge 进来。整个过程不 rebase，不 force-push。
 
 | 编号 | 内容 | 依赖 |
 | --- | --- | --- |
@@ -16,14 +16,24 @@
 | V6a | provider 层核心。`provider/` 的类型合同、纯函数的回合状态机、子 agent 和 todo 账本、带证据的权限表、所有 provider 共用的进程托管和传输层，以及修复 #114 的出站路径门。设计见 [providers.md](providers.md) | V3 |
 | V6b | 运行时、Codex 引擎、Claude Code 引擎（只开完全访问）、39 个源文件调用方和 72 个测试切到新合同，删除 `agent/`。可靠的停止。没有原生插话时的消息队列。会话标题服务。存量数据迁移，旧 provider 编号改写，已有项目的 `readScope` 记为不限读取 | V6a |
 | V6c | 运行卡片的五项基线能力：子 agent 区和单个停止按钮、进度行、图片、结果说明。可靠的停止已在 V6b 落地 | V6b |
-| V6d | Claude Code 的 `qa` 和 `write` 档：工具白名单、PreToolUse 路径门、Bash 沙箱，macOS 和 Linux 实测后才开格 | V6b；合并在 V6c 之后 |
-| V7a | ACP 引擎和 Cursor、Grok、自定义 ACP 三个方言；provider 编号和选择器 | V6b；选择器的验收要 V4 的网页；Cursor 和 Grok 的实测要用户提供账号 |
+| V6d | Claude Code 的 `qa` 和 `write` 档：工具白名单、PreToolUse 路径门、Bash 沙箱，macOS 和 Linux 实测后才开格 | V6b；和 V6c 文件不重叠，先后无关 |
+| V7a | ACP 引擎和 Cursor、Grok、自定义 ACP 三个方言；provider 编号和选择器 | V6b；选择器的验收要 V4 的网页；Cursor 和 Grok 的实测要用户提供账号；合并前提只有 V6b |
 | V7b | Pi 引擎 | V6b；合并在 V7a 之后 |
-| V7c | Windows 和 Linux 的权限实测，把对应的格从拒绝翻成已验证 | V7b；要一台 Windows 主机 |
+| V7c | Windows 和 Linux 的权限实测，把对应的格从拒绝翻成已验证 | V7b；要一台 Windows 主机。没有主机时停放，它是叶子，不挡任何版本 |
 | V8 | 导入 bridge 数据并关停旧服务。macOS、Linux、Windows 三个平台，界面引导和 `vonvon import feishu-codex-bridge` | V4 |
 | V9 | feishu-codex-bridge 仓库的收尾版本。引导用户安装 Vonvon Bot，发现已迁移标记时拒绝启动 | V8，以及 Mac 发布的安装包 |
-| V10 | 账号和机器登记。`packages/cloud`、飞书和 Lark 登录、`vonvon login`、桌面端登录、机器列表和在线状态 | V4；桌面端登录的验收要 V5 |
+| V10 | 账号和机器登记。`packages/cloud`、飞书和 Lark 登录、`vonvon login`、桌面端登录、机器列表和在线状态 | V4；桌面端登录的验收要 V5 的外壳；合并前提是 V5 的外壳（拆分时为 V5a），不等 V9 |
 | V11 | 远程访问。daemon 向云端的出站连接、转发、端到端加密、云端托管网页、桌面端连接其他机器 | V10；桌面端连接的验收要 V5 |
+
+### 合并图
+
+合并前提只看真实依赖，形成三条链，各自推进，谁先验完谁先合。
+
+- 客户端与云端：V5 → V10 → V11。V10 只要 V5 的外壳；V11 等 V10。
+- provider：V6a → V6b；从 V6b 分出 V6c、V6d、V7a，三者互不作为合并前提；V7a → V7b → V7c。V6a 和 V5 都只等已合入的 V4。V7c 是叶子，没有 Windows 主机时停放，不挡任何版本。
+- 导入：V8 → V9。V8 只等已合入的 V4；导入写入 bridge 原有的 provider 编号，由 V6b 的加载时迁移处理，所以和 V6b 先后无关。V9 另要 V5 发布的签名安装包。
+
+V5 可以按验收条件拆成 V5a 外壳和 V5b 服务两个 PR，V5b 排在 V5a 之后，`service install` 和 `uninstall` 在 V5b 之前保持拒绝。是否拆由 Codex 按分支状态决定并写进 PR。协议汇总文件、`cli/index.ts`、根 `package.json`、`NOTICE` 和界面登记文件仍由根代理写，跨链合并的冲突只会落在这些文件上，按 patch-id 规则重新 swarm。正式检查的排队也按这张图：前提都已合入或已冻结的 PR 才排进十路实时、性能和 Shipping，两个都能跑时先跑未合入下游更多的那个。细则见 [plan.md](plan.md) *Parallel execution* 的 *Dependencies*。
 
 ### 推后的 provider
 
@@ -31,7 +41,7 @@
 
 ## 开发起点
 
-开发依赖只看代码要用到的接口。接口在上游分支的某个提交上固定（冻结点）后，下游就从那里开分支写代码，不等上游审查通过或合并。冻结点只是接口承诺，不是验收结论；接口之后再变，下游把新提交 merge 进来。验收用的十路实时、性能、原生检查和 Shipping 仍按合并顺序做：PR 排到最早未合并或下一个时才跑正式检查，之前只做单元测试、审查和预演，预演不算证据。
+开发依赖只看代码要用到的接口。接口在上游分支的某个提交上固定（冻结点）后，下游就从那里开分支写代码，不等上游审查通过或合并。冻结点只是接口承诺，不是验收结论；接口之后再变，下游把新提交 merge 进来。验收用的十路实时、性能、原生检查和 Shipping 按合并图排队：PR 的合并前提都已合入或已冻结时才跑正式检查，之前只做单元测试、审查和预演，预演不算证据。
 
 | 编号 | 从哪里开始写 | 部分工作要等 |
 | --- | --- | --- |
@@ -52,7 +62,7 @@
 
 协议的汇总文件（`index.ts`、`domain.ts`、`rpc.ts`、`events.ts`、`handshake.ts`）、`cli/index.ts` 的命令登记、根目录的 `package.json` 和 lockfile、`NOTICE`、界面功能登记文件都由根代理在集成时改，各 PR 只拥有自己新增的文件。三个长期负责人各管一块：客户端界面（V4、V5、V11 的客户端部分），provider（V6a 到 V7c，之后 V9），机器平台（先跑 V3 的正式检查，再做 V8、V10、V11 的云端部分）。具体的分支、文件归属和前两波安排见 [plan.md](plan.md) *Parallel execution* 的 *Dependencies* 到 *Wave 2*。
 
-整条路线最慢的一段是 V4、V5（要 Gate L 和 Gate M 的原生验收、Mac 图形会话（按用户授权可用 `clay`）、Linux 专门测试用户和 systemd 用户会话、签名）、签名安装包、V9、V10、V11。所以测试用户和 systemd 环境在第一波就向用户要，不等 V4 开始。
+各链分别推进。客户端和云端链是 V4、V5 外壳、V10、V11；V5 的服务验收需要 Gate L、Gate M、Mac 图形会话（按用户授权可用 `clay`）和 Linux 专门测试用户的 systemd 用户会话。导入链是 V8、V9；V9 的发布还需要 V5 签名安装包。V10 不等 V9。测试用户和 systemd 环境在第一波就准备，不等 V4 开始。
 
 ## 谁来做
 
@@ -62,7 +72,7 @@ V5 和 V8 里有 systemd 检查，Mac 上跑不了。Codex 在 Linux 虚拟机�
 
 2026-10-11 用户回答 V5/V8 的测试账号问题，直接授权在 `clay` 中测试。V5 的 macOS 系统服务测试（原生 launchd 检查和第 6 路的 Mac 部分）因此不再等 `manzana`。条件是：只用这次运行自建的临时 `VONVON_HOME`；产品服务标识 `com.vonvon.bot.daemon` 不改名，开跑前只读确认 `clay` 里没有这个任务和 plist，运行结束用 `uninstall` 删掉；不碰 `ai.feishu-codex-bridge.bot`、bridge 数据和其他 LaunchAgent，不改 `~/Library/LaunchAgents` 的权限，不用 `github-ci`；开跑前和结束后记录在用 bridge（根代理记录为 PID 2253）的 pid、启动时间和 TCP 监听，有任何变化就停止并判失败，不重启 bridge。V8 同样已获 `clay` 测试授权，但导入会找到并暂停调用用户自己的 bridge 服务，在 `clay` 里会碰到在用 bridge。所以 V8 的各路检查都在 `manzana`（`gui/502`）和 Linux 的 `vonvon-accept` 里跑，不在 `clay` 里跑。把 `manzana` 登录进图形会话是用户操作。这是操作约束，不是缺少用户授权；不能触碰或重启在用 bridge。Linux 由用户授权的腾讯云 root SSH 准备，细则见 [native-acceptance-hosts.md](native-acceptance-hosts.md)。细则见 [plan.md](plan.md) V5 的 *Native acceptance environment*。
 
-Codex 可以并行开发，本机同时最多一个根代理加三个工作代理。根代理是唯一的 Git 和 forge 写入者，负责建工作树、集成、提交、推送、开 PR、合并和 Shipping。工作代理各用根代理建的工作树，只改分给自己的文件，各自运行 npm ci，不提交、不推送。每个 PR 先由各工作代理写测试、做组件验证，根代理集成后跑一次完整检查，再做独立审查，冻结 head 后才跑十路实时、性能、原生检查和 Shipping。连着测试 Bot 的检查仍然逐个跑，用独立数据目录的检查可以同时跑。并行只提前开发起点（见上文“开发起点”），不改变合并顺序、验收依赖、架构、数据形状和验证门槛。V10 的云端部分可以在 V3 之后就开始开发，但按路线顺序要等 V9 合并后才合并，不需要另问用户。merge `main` 之后，patch-id 不变只是审查结论继续有效的必要条件：基线、依赖版本或相关证据变了，就要重跑受影响的检查，并重新拿独立审查结论。具体分工见 [plan.md](plan.md) 的 *Parallel execution*。
+Codex 可以并行开发，本机同时最多一个根代理加三个工作代理。根代理是唯一的 Git 和 forge 写入者，负责建工作树、集成、提交、推送、开 PR、合并和 Shipping。工作代理各用根代理建的工作树，只改分给自己的文件，各自运行 npm ci，不提交、不推送。每个 PR 先由各工作代理写测试、做组件验证，根代理集成后跑一次完整检查，再做独立审查，冻结 head 后才跑十路实时、性能、原生检查和 Shipping。连着测试 Bot 的检查仍然逐个跑，用独立数据目录的检查可以同时跑。并行只提前开发起点（见上文“开发起点”），不改变合并图、验收依赖、架构、数据形状和验证门槛。V10 的云端部分可以在 V3 之后开始开发，V5 外壳合并并通过自身验证后即可合并 V10，无须等待 V9。merge `main` 之后，patch-id 不变只是审查结论继续有效的必要条件：基线、依赖版本或相关证据变了，就要重跑受影响的检查，并重新拿独立审查结论。具体分工见 [plan.md](plan.md) 的 *Parallel execution*。
 
 此后实现时发现计划要改架构、数据形状或 PR 顺序，Codex 在 PR 里写明，按 `AGENTS.md` 交给 Claude Code 更新。上述授权只适用于这次 V2 澄清。
 
@@ -70,11 +80,21 @@ Codex 可以并行开发，本机同时最多一个根代理加三个工作代�
 
 逐项的步骤和验证标准见 [plan.md](plan.md)。
 
+## 进度跟踪
+
+2026-10-12 起，程序的进度放在本仓库的 GitHub issue 里，由 `docs/program-graph.json` 经 `scripts/program-graph-sync.mjs` 生成和维护。
+
+- 看板是置顶的 [issue #122](https://github.com/modelzen/vonvon-bot/issues/122)。正文有版本合并图、进度表和任务依赖图，三者由 `node scripts/program-graph-sync.mjs board` 从 issue 的实际状态重新生成。颜色：绿已完成，黄进行中，白可开始，灰被挡，虚线停放，蓝已冻结或已验证。
+- 每个版本一个父 issue（#123 工具，#124 V5 到 #135 V11），子 issue 是按文件不重叠切出的任务分区、证据门、根代理交接和该版本的缺陷。版本之间的合并前提和任务之间的依赖都用 GitHub 的 blocked by 关系表示。只有用户能做的事是 #205 到 #209，指派给用户。GitHub 项目 “Vonvon Bot v2” 收录全部 issue，可在那里按状态和版本看板视图。
+- 状态由根代理维护：任务开始时加 `state:in-progress`，分区集成且测试通过后关闭；版本在四个节点换标签，`state:code-ready`、`state:frozen`、`state:verified`，PR 合入后关闭。实现中发现的缺陷新开 issue 挂到对应版本并打 `version:<编号>` 标签。
+- 改任务图（新增分区、改任务依赖、V5 拆分）先改 `docs/program-graph.json` 再运行 `node scripts/program-graph-sync.mjs sync`。同步是幂等的：补建缺的 issue、更新标题和正文、补链接和标签，不删除任何东西。Codex 可以增减不影响架构、数据形状和合并边的任务；要改合并边的交回 Claude Code 改计划。
+- 进度网页：`node scripts/program-graph-sync.mjs html <目录>` 生成和看板同内容的独立网页。Codex 的任务 #203 先于一切实现任务落地：工作流每 2 小时、以及 issue 有变化时刷新看板并把网页发布到 GitHub Pages，网页地址写在 PR 里。另一项工具任务 #204 把 CI 改成冻结 head 触发。
+
 ## CI
 
 Linux 保留 GitHub 托管的 Ubuntu，Windows 用托管的 `windows-2025`；macOS 配置为组织共享的 Mac mini 自托管 runner。完整改动三个平台都跑。原有 Windows 原生检查保留在旧桌面分支的工作流中，桌面打包和原生界面检查不在 main 的检查链里。两个仓库的 `ENABLE_SELF_HOSTED_MACOS_CI` 均已开启，使用无发布凭据的专用标准账户 `github-ci`。重启后先登录该账户一次，再切回日常用户并保留后台图形会话。每台 Mac 只运行一个 runner，两个仓库排队共享。安装位置、权限和服务管理见 [self-hosted-ci.md](self-hosted-ci.md)。
 
-目标为 `main` 的 PR 在 opened、synchronize、reopened 时自动检查，也可手动触发。取消合入 main 后重复跑相同套件的 push 触发，不设置定时任务。同一 PR 的旧运行会被新运行取消。改目标或改基线后没有当前结果时，手动补跑。
+2026-10-12 起完整的三平台运行只在冻结 head 跑一次，不再每次 push 都跑。目标为 `main` 的 PR 每次事件只跑范围分类和文档检查；完整运行只在 PR 带 `frozen` 标签时或手动触发时跑。根代理冻结 head 时打标签，patch 变了先摘标签、下次冻结再打。冻结之前工作代理在本机跑针对性测试，根代理集成时跑完整链，Linux 的完整链也可以通过 SSH 在 JP-VPS 上跑，这些都不算 GitHub 检查。取消合入 main 后重复跑相同套件的 push 触发，不设置定时任务。同一 PR 的旧运行会被新运行取消。改目标或改基线后没有当前结果时，手动补跑。工作流的修改是 Codex 的任务 #204；落地之前，合并仍要求冻结 head 有完整运行。
 
 范围脚本保留 `docs` 和 `full`，未知或异常差异按 `full` 处理。文档改动只跑范围回归和空白检查，不装依赖，也不启动 Mac。完整改动先在 Linux 跑 Node 22 的安装、构建、类型检查、测试和 lint，再在托管 Windows 和自托管 Mac 的准确 PR head 跑同一套检查。daemon 原先的 lint 与类型检查完全相同，删除重复的 lint 别名，协议 lint 保留。
 
