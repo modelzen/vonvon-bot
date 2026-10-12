@@ -22,7 +22,24 @@ beforeAll(async () => {
   interruptDriver = join(buildDir, 'interrupt.mjs');
   await writeFile(interruptDriver, "process.stdin.setEncoding('utf8');process.stdin.on('data',data=>{if(data.trim()==='test:interrupt')process.emit('SIGINT')});process.stdin.resume();");
   await build({ entryPoints: [resolve('src/config/store.ts')], outfile: storeEntry, bundle: true, platform: 'node', format: 'cjs' });
-  await build({ entryPoints: [resolve('src/cli/index.ts')], outfile: entry, bundle: true, packages: 'external', platform: 'node', format: 'esm' });
+  let startupFixtureLoaded = false;
+  await build({
+    entryPoints: [resolve('src/cli/index.ts')], outfile: entry, bundle: true, packages: 'external', platform: 'node', format: 'esm',
+    plugins: [{
+      name: 'unregistered-windows-user',
+      setup(plugin) {
+        // These fixtures model an unregistered user; USERPROFILE does not isolate HKCU.
+        plugin.onLoad({ filter: /[\\/]src[\\/]service[\\/]win-startup\.ts$/ }, () => {
+          startupFixtureLoaded = true;
+          return {
+            contents: "export function readVonvonRunValue() { return { kind: 'absent' }; }",
+            loader: 'js',
+          };
+        });
+      },
+    }],
+  });
+  expect(startupFixtureLoaded).toBe(true);
 });
 afterAll(async () => {
   for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');

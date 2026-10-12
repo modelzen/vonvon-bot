@@ -61,6 +61,7 @@ vi.mock('../src/server/pid-lock', async (original) => {
 });
 vi.mock('../src/server/owner-verification', () => ({ verifyPidLockOwner: fixture.verify, stopVerifiedOwner: fixture.stopVerified }));
 vi.mock('../src/service/adapter', () => ({ getServiceAdapter: fixture.getAdapter, isServiceRunning: () => false }));
+vi.mock('../src/service/win-startup', () => ({ readVonvonRunValue: () => ({ kind: 'absent' }) }));
 
 vi.mock('../src/agent/codex-appserver/owned-process', () => ({
   closeOwnedCodexProcesses: fixture.registryClose,
