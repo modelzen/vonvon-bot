@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
-import { determineScope, parseChangedPaths } from './ci-scope.mjs';
+import { determineScope, isFullRunEligible, parseChangedPaths } from './ci-scope.mjs';
 
 function fixture(run) {
   const dir = mkdtempSync(join(tmpdir(), 'ci-scope-'));
@@ -29,6 +29,90 @@ function fixture(run) {
 }
 
 const pr = (base, head) => ({ pull_request: { base: { sha: base }, head: { sha: head } } });
+
+test('only frozen PR events and explicit dispatch permit the full suite', () => {
+  const plain = pr('a'.repeat(40), 'b'.repeat(40));
+  const frozen = { pull_request: { ...plain.pull_request, labels: [{ name: 'other' }, { name: 'frozen' }] } };
+  for (const eventName of ['opened', 'synchronize', 'reopened', 'labeled']) {
+    assert.equal(isFullRunEligible('pull_request', { ...plain, action: eventName }), false, eventName);
+    assert.equal(isFullRunEligible('pull_request', { ...frozen, action: eventName, label: { name: 'frozen' } }), true, eventName);
+  }
+  assert.equal(isFullRunEligible('pull_request', { ...frozen, action: 'labeled', label: { name: 'other' } }), false);
+  assert.equal(isFullRunEligible('pull_request', { pull_request: { labels: [{ name: 'frozen-old' }] } }), false);
+  assert.equal(isFullRunEligible('pull_request', { pull_request: { labels: 'frozen' } }), false);
+  assert.equal(isFullRunEligible('pull_request', null), false);
+  assert.equal(isFullRunEligible('workflow_dispatch', {}), true);
+  assert.equal(isFullRunEligible('push', frozen), false);
+  assert.equal(isFullRunEligible('issues', frozen), false);
+});
+
+test('event JSON drives full, deferred, docs, and unknown-path decisions', () => fixture(({ dir, put, commit, base }) => {
+  const invoke = (eventName, event) => {
+    const eventPath = join(dir, '.git', 'event.json');
+    const outputPath = join(dir, '.git', 'output.txt');
+    writeFileSync(eventPath, JSON.stringify(event));
+    writeFileSync(outputPath, '');
+    const stdout = execFileSync(process.execPath, [new URL('./ci-scope.mjs', import.meta.url).pathname], {
+      cwd: dir,
+      encoding: 'utf8',
+      env: { ...process.env, GITHUB_EVENT_NAME: eventName, GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outputPath },
+    });
+    return { result: JSON.parse(stdout), output: readFileSync(outputPath, 'utf8') };
+  };
+  put('unknown-extension.asset');
+  const head = commit();
+  const event = pr(base, head);
+  const deferred = invoke('pull_request', event);
+  assert.equal(deferred.result.scope, 'full');
+  assert.equal(deferred.result.full, false);
+  assert.match(deferred.output, /full=false\n/);
+  const frozen = invoke('pull_request', { pull_request: { ...event.pull_request, labels: [{ name: 'frozen' }] } });
+  assert.equal(frozen.result.full, true);
+  assert.match(frozen.output, /full=true\n/);
+  const manual = invoke('workflow_dispatch', {});
+  assert.equal(manual.result.full, true);
+  put('docs/guide.md');
+  const docsHead = commit();
+  const docs = invoke('pull_request', { pull_request: { ...pr(head, docsHead).pull_request, labels: [{ name: 'frozen' }] } });
+  assert.equal(docs.result.scope, 'docs');
+  assert.equal(docs.result.full, false);
+  assert.throws(() => invoke('pull_request', { pull_request: { ...pr('bad', docsHead).pull_request, labels: [{ name: 'frozen' }] } }),
+    /CI scope collection failed/);
+  const eventPath = join(dir, '.git', 'event.json');
+  writeFileSync(eventPath, '{');
+  assert.throws(() => execFileSync(process.execPath, [new URL('./ci-scope.mjs', import.meta.url).pathname], {
+    cwd: dir,
+    encoding: 'utf8',
+    env: { ...process.env, GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_EVENT_PATH: eventPath },
+  }), /CI scope collection failed/);
+}));
+
+test('workflow gates every expensive step and platform on the frozen full decision', () => {
+  const workflow = readFileSync(new URL('../workflows/ci.yml', import.meta.url), 'utf8');
+  const linux = workflow.split(/^  linux:\n/m)[1]?.split(/^  windows:\n/m)[0];
+  const windows = workflow.split(/^  windows:\n/m)[1]?.split(/^  macos:\n/m)[0];
+  const macos = workflow.split(/^  macos:\n/m)[1];
+  assert.ok(linux && windows && macos);
+  assert.match(workflow, /types: \[opened, synchronize, reopened, labeled\]/);
+  assert.doesNotMatch(workflow, /^  (?:push|schedule):/m);
+  for (const name of ['Install dependencies', 'Build', 'Typecheck', 'Test', 'Lint']) {
+    assert.match(linux, new RegExp(`      - name: ${name}\\n        if: steps\\.scope\\.outputs\\.full == 'true'\\n`), name);
+  }
+  assert.match(linux, /- uses: actions\/setup-node@v4\n        if: steps\.scope\.outputs\.full == 'true'/);
+  assert.match(linux, /- name: Require frozen head for full scope\n        if: steps\.scope\.outputs\.scope == 'full' && steps\.scope\.outputs\.full != 'true'/);
+  assert.match(windows, /    if: needs\.linux\.outputs\.full == 'true'/);
+  assert.match(macos, /needs\.linux\.outputs\.full == 'true' &&/);
+  for (const [platform, job] of Object.entries({ linux, windows, macos })) {
+    assert.match(job, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}/, platform);
+    assert.match(job, /- name: Verify tested source/, platform);
+    assert.match(job, /SOURCE_SHA: \$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}/, platform);
+    if (platform === 'windows') {
+      assert.match(job, /git rev-parse HEAD\) -ne \$env:SOURCE_SHA/, platform);
+    } else {
+      assert.match(job, /run: test "\$\(git rev-parse HEAD\)" = "\$SOURCE_SHA"/, platform);
+    }
+  }
+});
 
 test('root and nested Markdown documentation is lightweight', () => fixture(({ dir, put, commit, base }) => {
   put('README.md', 'changed\n');
