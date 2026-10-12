@@ -267,7 +267,7 @@ export function createWindowsService(options: { root: string }, overrides: Parti
         try {
           await restore(s, result.kind === 'drain-failed' ? desired : previousFiles, result.kind === 'drain-failed' ? desired.runValue : previousRun);
         } catch (failure) { return outcome(s, 'install_incomplete', `${detail}; restore failed: ${detailOf(failure)}`); }
-        const report = await outcome(s, result.kind === 'unloaded' && s.temporaryLeftovers.length === 0 ? 'install_rolled_back' : 'install_incomplete', detail);
+        const report = await outcome(s, result.kind === 'unloaded' && s.temporaryLeftovers.length === 0 ? 'install_rolled_back' : 'install_incomplete', `${detail}${result.kind === 'drain-failed' ? '; previous definition was not restored' : ''}`);
         if (!sameOwner(before, report.retained)) report.kind = 'install_incomplete';
         return report;
       }
