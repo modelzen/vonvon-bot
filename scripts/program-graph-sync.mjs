@@ -46,6 +46,10 @@ for (const o of spec.operator) nodes.set(o.id, { ...o, kind: 'operator' });
 nodes.set('TOOLING', { id: 'TOOLING', kind: 'version', title: '工具、CI 与进度板', owner: 'root', mergeAfter: [] });
 for (const t of spec.tooling) nodes.set(t.id, { ...t, kind: 'task', parent: 'TOOLING' });
 
+function tasksOf(versionId) {
+  return [...spec.tasks, ...spec.tooling].map((t) => nodes.get(t.id)).filter((t) => t.parent === versionId);
+}
+
 function labelsFor(node) {
   const labels = ['program-graph'];
   if (node.kind === 'version') labels.push('version', `version:${node.id}`);
@@ -79,7 +83,7 @@ function bodyFor(node) {
     if (node.plan) lines.push(`**计划章节** ${node.plan}。`);
     if (node.body) lines.push(node.body);
     if (node.root) lines.push('', '这是根代理在集成时写的共享文件交接，工作代理不改这些文件。');
-    if (node.gate) lines.push('', '证据门只在冻结 head 上跑一次。前提都已合入的 PR 才排进正式检查，两个都能跑时先跑未合入下游更多的那个。');
+    if (node.gate) lines.push('', '证据门只在冻结 head 上跑一次。合并前提都已合入或已冻结的 PR 才排进正式检查，两个都能跑时先跑未合入下游更多的那个。PR 合入仍须等待合并前提全部合入。');
     if (node.parked) lines.push('', '停放中：缺少验收输入，不挡其他任务。');
   } else if (node.kind === 'operator') {
     lines.push(node.body, '', `**挡住的任务** ${node.blocks?.length ? node.blocks.join('、') : '无'}。`);
@@ -297,7 +301,7 @@ function mermaid(issues, byNumber = new Map(), { links = false } = {}) {
   };
   for (const m of spec.merged) versionLines.push(`  ${mermaidId(m)}["${m} 已合入"]`), styles.push(`  style ${mermaidId(m)} ${STYLE.done}`);
   for (const v of spec.versions) {
-    const tasks = spec.tasks.filter((t) => t.parent === v.id);
+    const tasks = tasksOf(v.id);
     const done = tasks.filter((t) => issues.get(t.id)?.state === 'CLOSED').length;
     versionLines.push(`  ${label(v, ` ${done}/${tasks.length}`)}`);
     styles.push(`  style ${mermaidId(v.id)} ${STYLE[stateOf(v, issues)]}`);
@@ -310,7 +314,7 @@ function mermaid(issues, byNumber = new Map(), { links = false } = {}) {
     taskStyles.push(`  style ${mermaidId(o.id)} ${STYLE[stateOf(o, issues)]}`);
   }
   for (const v of [...spec.versions, nodes.get('TOOLING')]) {
-    const tasks = [...spec.tasks, ...spec.tooling].filter((t) => t.parent === v.id);
+    const tasks = tasksOf(v.id);
     taskLines.push(`  subgraph ${mermaidId(v.id)}_g["${v.id}"]`);
     for (const t of tasks) taskLines.push(`    ${label(t)}`), taskStyles.push(`  style ${mermaidId(t.id)} ${STYLE[stateOf(t, issues)]}`);
     taskLines.push('  end');
@@ -337,12 +341,12 @@ function mermaid(issues, byNumber = new Map(), { links = false } = {}) {
 
 function progressRows(issues, byNumber) {
   const rows = [];
-  for (const v of spec.versions) {
-    const tasks = spec.tasks.filter((t) => t.parent === v.id);
+  for (const v of [...spec.versions, nodes.get('TOOLING')]) {
+    const tasks = tasksOf(v.id);
     const done = tasks.filter((t) => issues.get(t.id)?.state === 'CLOSED').length;
     const ready = tasks.filter((t) => stateOf(t, issues) === 'ready').map((t) => t.id);
     const active = tasks.filter((t) => stateOf(t, issues) === 'in-progress').map((t) => t.id);
-    const defects = (spec.existingIssues[v.id] ?? []).filter((n) => (byNumber.get(n)?.state ?? 'OPEN') === 'OPEN').length;
+    const defects = defectsOf(v.id, byNumber).filter((i) => i.state === 'OPEN').length;
     const issue = issues.get(v.id);
     rows.push(`| ${v.id} | #${issue.number} | ${v.pr ? `#${v.pr}` : '未开'} | ${stateOf(v, issues)} | ${done}/${tasks.length} | ${defects} | ${active.join('、') || '无'} | ${ready.join('、') || '无'} |`);
   }

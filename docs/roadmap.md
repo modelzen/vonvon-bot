@@ -29,8 +29,8 @@
 
 合并前提只看真实依赖，形成三条链，各自推进，谁先验完谁先合。
 
-- 客户端与云端：V5 → V10 → V11。V10 和 V11 只要 V5 的外壳。
-- provider：V6a → V6b → V6c 和 V6d（先后无关）→ V7a → V7b → V7c。V6a 和 V5 都只等已合入的 V4。V7c 是叶子，没有 Windows 主机时停放，不挡任何版本。
+- 客户端与云端：V5 → V10 → V11。V10 只要 V5 的外壳；V11 等 V10。
+- provider：V6a → V6b；从 V6b 分出 V6c、V6d、V7a，三者互不作为合并前提；V7a → V7b → V7c。V6a 和 V5 都只等已合入的 V4。V7c 是叶子，没有 Windows 主机时停放，不挡任何版本。
 - 导入：V8 → V9。V8 只等已合入的 V4；导入写入 bridge 原有的 provider 编号，由 V6b 的加载时迁移处理，所以和 V6b 先后无关。V9 另要 V5 发布的签名安装包。
 
 V5 可以按验收条件拆成 V5a 外壳和 V5b 服务两个 PR，V5b 排在 V5a 之后，`service install` 和 `uninstall` 在 V5b 之前保持拒绝。是否拆由 Codex 按分支状态决定并写进 PR。协议汇总文件、`cli/index.ts`、根 `package.json`、`NOTICE` 和界面登记文件仍由根代理写，跨链合并的冲突只会落在这些文件上，按 patch-id 规则重新 swarm。正式检查的排队也按这张图：前提都已合入或已冻结的 PR 才排进十路实时、性能和 Shipping，两个都能跑时先跑未合入下游更多的那个。细则见 [plan.md](plan.md) *Parallel execution* 的 *Dependencies*。
@@ -62,7 +62,7 @@ V5 可以按验收条件拆成 V5a 外壳和 V5b 服务两个 PR，V5b 排在 V5
 
 协议的汇总文件（`index.ts`、`domain.ts`、`rpc.ts`、`events.ts`、`handshake.ts`）、`cli/index.ts` 的命令登记、根目录的 `package.json` 和 lockfile、`NOTICE`、界面功能登记文件都由根代理在集成时改，各 PR 只拥有自己新增的文件。三个长期负责人各管一块：客户端界面（V4、V5、V11 的客户端部分），provider（V6a 到 V7c，之后 V9），机器平台（先跑 V3 的正式检查，再做 V8、V10、V11 的云端部分）。具体的分支、文件归属和前两波安排见 [plan.md](plan.md) *Parallel execution* 的 *Dependencies* 到 *Wave 2*。
 
-整条路线最慢的一段是 V4、V5（要 Gate L 和 Gate M 的原生验收、Mac 图形会话（按用户授权可用 `clay`）、Linux 专门测试用户和 systemd 用户会话、签名）、签名安装包、V9、V10、V11。所以测试用户和 systemd 环境在第一波就向用户要，不等 V4 开始。
+各链分别推进。客户端和云端链是 V4、V5 外壳、V10、V11；V5 的服务验收需要 Gate L、Gate M、Mac 图形会话（按用户授权可用 `clay`）和 Linux 专门测试用户的 systemd 用户会话。导入链是 V8、V9；V9 的发布还需要 V5 签名安装包。V10 不等 V9。测试用户和 systemd 环境在第一波就准备，不等 V4 开始。
 
 ## 谁来做
 
@@ -72,7 +72,7 @@ V5 和 V8 里有 systemd 检查，Mac 上跑不了。Codex 在 Linux 虚拟机�
 
 2026-10-11 用户回答 V5/V8 的测试账号问题，直接授权在 `clay` 中测试。V5 的 macOS 系统服务测试（原生 launchd 检查和第 6 路的 Mac 部分）因此不再等 `manzana`。条件是：只用这次运行自建的临时 `VONVON_HOME`；产品服务标识 `com.vonvon.bot.daemon` 不改名，开跑前只读确认 `clay` 里没有这个任务和 plist，运行结束用 `uninstall` 删掉；不碰 `ai.feishu-codex-bridge.bot`、bridge 数据和其他 LaunchAgent，不改 `~/Library/LaunchAgents` 的权限，不用 `github-ci`；开跑前和结束后记录在用 bridge（根代理记录为 PID 2253）的 pid、启动时间和 TCP 监听，有任何变化就停止并判失败，不重启 bridge。V8 同样已获 `clay` 测试授权，但导入会找到并暂停调用用户自己的 bridge 服务，在 `clay` 里会碰到在用 bridge。所以 V8 的各路检查都在 `manzana`（`gui/502`）和 Linux 的 `vonvon-accept` 里跑，不在 `clay` 里跑。把 `manzana` 登录进图形会话是用户操作。这是操作约束，不是缺少用户授权；不能触碰或重启在用 bridge。Linux 由用户授权的腾讯云 root SSH 准备，细则见 [native-acceptance-hosts.md](native-acceptance-hosts.md)。细则见 [plan.md](plan.md) V5 的 *Native acceptance environment*。
 
-Codex 可以并行开发，本机同时最多一个根代理加三个工作代理。根代理是唯一的 Git 和 forge 写入者，负责建工作树、集成、提交、推送、开 PR、合并和 Shipping。工作代理各用根代理建的工作树，只改分给自己的文件，各自运行 npm ci，不提交、不推送。每个 PR 先由各工作代理写测试、做组件验证，根代理集成后跑一次完整检查，再做独立审查，冻结 head 后才跑十路实时、性能、原生检查和 Shipping。连着测试 Bot 的检查仍然逐个跑，用独立数据目录的检查可以同时跑。并行只提前开发起点（见上文“开发起点”），不改变合并图、验收依赖、架构、数据形状和验证门槛。V10 的云端部分可以在 V3 之后就开始开发，但按路线顺序要等 V9 合并后才合并，不需要另问用户。merge `main` 之后，patch-id 不变只是审查结论继续有效的必要条件：基线、依赖版本或相关证据变了，就要重跑受影响的检查，并重新拿独立审查结论。具体分工见 [plan.md](plan.md) 的 *Parallel execution*。
+Codex 可以并行开发，本机同时最多一个根代理加三个工作代理。根代理是唯一的 Git 和 forge 写入者，负责建工作树、集成、提交、推送、开 PR、合并和 Shipping。工作代理各用根代理建的工作树，只改分给自己的文件，各自运行 npm ci，不提交、不推送。每个 PR 先由各工作代理写测试、做组件验证，根代理集成后跑一次完整检查，再做独立审查，冻结 head 后才跑十路实时、性能、原生检查和 Shipping。连着测试 Bot 的检查仍然逐个跑，用独立数据目录的检查可以同时跑。并行只提前开发起点（见上文“开发起点”），不改变合并图、验收依赖、架构、数据形状和验证门槛。V10 的云端部分可以在 V3 之后开始开发，V5 外壳合并并通过自身验证后即可合并 V10，无须等待 V9。merge `main` 之后，patch-id 不变只是审查结论继续有效的必要条件：基线、依赖版本或相关证据变了，就要重跑受影响的检查，并重新拿独立审查结论。具体分工见 [plan.md](plan.md) 的 *Parallel execution*。
 
 此后实现时发现计划要改架构、数据形状或 PR 顺序，Codex 在 PR 里写明，按 `AGENTS.md` 交给 Claude Code 更新。上述授权只适用于这次 V2 澄清。
 
