@@ -99,6 +99,9 @@ export function getServiceAdapter() {
       const name = String(path) === cmdPath ? 'cmd' : String(path) === vbsPath ? 'vbs' : 'unknown';
       if (name === 'unknown') throw new Error('Unexpected Windows fixture unlink');
       const state = update(s => { s.calls.push(`unlink:${name}`); });
+      if (state.scenario === 'rollback_unlink_persistent' && name === 'cmd') {
+        throw Object.assign(new Error('EACCES: fixture cmd unlink denied'), { code: 'EACCES' });
+      }
       if ((state.scenario === 'unload_failed' || state.scenario === 'rollback_unload_failed')
         && state.calls.filter(call => call === 'unlink:cmd').length === 1) throw new Error('fixture launcher unlink failed');
       update(s => {
@@ -130,6 +133,9 @@ export function getServiceAdapter() {
         s.newVbsBase64 = s.files[vbsPath] ?? null;
         s.newRunValue = s.runValue;
       });
+      if (state.scenario === 'rollback_unlink_persistent') {
+        update(s => { s.owner = owner; s.work = ['new-job-work']; });
+      }
       if (state.scenario.startsWith('rollback_') || state.scenario === 'install_launch_failed') {
         throw new Error('fixture launcher failed');
       }
