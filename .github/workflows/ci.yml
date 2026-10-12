@@ -10,11 +10,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('{0}-{1}', github.event_name, github.run_id) }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('{0}-{1}', github.event_name, github.run_id) }}${{ github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name != 'frozen' && '-informational' || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   linux:
+    name: ${{ github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name != 'frozen' && 'informational linux' || 'linux' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
@@ -75,13 +76,13 @@ jobs:
             echo 'full: Linux suite passed; Windows and macOS results are separate jobs.' >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Require frozen head for full scope
-        if: steps.scope.outputs.scope == 'full' && steps.scope.outputs.full != 'true'
+        if: steps.scope.outputs.scope == 'full' && steps.scope.outputs.full != 'true' && !(github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name != 'frozen')
         run: |
           echo '::error::Full-scope PR checks are deferred. Add the frozen label at the final head or dispatch a full run.'
           exit 1
 
   windows:
-    name: Windows checks
+    name: ${{ github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name != 'frozen' && 'informational Windows checks' || 'Windows checks' }}
     needs: linux
     if: needs.linux.outputs.full == 'true'
     runs-on: windows-2025
@@ -116,7 +117,7 @@ jobs:
           "Node: $(node --version)" >> $env:GITHUB_STEP_SUMMARY
 
   macos:
-    name: macOS checks
+    name: ${{ github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name != 'frozen' && 'informational macOS checks' || 'macOS checks' }}
     needs: linux
     if: >-
       needs.linux.outputs.full == 'true' &&

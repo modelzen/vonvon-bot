@@ -88,7 +88,7 @@ Codex 可以并行开发，本机同时最多一个根代理加三个工作代�
 - 每个版本一个父 issue（#123 工具，#124 V5 到 #135 V11），子 issue 是按文件不重叠切出的任务分区、证据门、根代理交接和该版本的缺陷。版本之间的合并前提和任务之间的依赖都用 GitHub 的 blocked by 关系表示。只有用户能做的事是 #205 到 #209，指派给用户。GitHub 项目 “Vonvon Bot v2” 收录全部 issue，可在那里按状态和版本看板视图。
 - 状态由根代理维护：任务开始时加 `state:in-progress`，分区集成且测试通过后关闭；版本在四个节点换标签，`state:code-ready`、`state:frozen`、`state:verified`，PR 合入后关闭。实现中发现的缺陷新开 issue 挂到对应版本并打 `version:<编号>` 标签。
 - 改任务图（新增分区、改任务依赖、V5 拆分）先改 `docs/program-graph.json` 再运行 `node scripts/program-graph-sync.mjs sync`。同步是幂等的：补建缺的 issue、更新标题和正文、补链接和标签，不删除任何东西。Codex 可以增减不影响架构、数据形状和合并边的任务；要改合并边的交回 Claude Code 改计划。
-- 本地进度网页 #203：交付自包含、无 CDN 的 `/Users/clay/vonvon-progress/index.html`。`refresh.mjs` 只读抓取默认分支的 `docs/program-graph.json` 和 GitHub issues、PR，再原子刷新本地产物。一张统一可折叠图展示 Version → 父 issue → 子 issue → 关联 PR，以及版本合入依赖和 task 前置关系；突出已可开工但未标记 `state:in-progress` 的任务，缺少证据时把未开始原因标为未知。指定本地产物负责人沿用 Paseo schedule `aa01bd1d`，按 `0 * * * *`、`Asia/Shanghai` 每小时刷新；当前暂停，待本地验收后恢复。#203 在本地验收前保持打开，不阻塞其他产品任务。根代理继续维护 issue #122 看板。工具任务 #204 把 CI 改成冻结 head 触发。
+- 本地进度网页 #203：交付自包含、无 CDN 的 `/Users/clay/vonvon-progress/index.html`。`refresh.mjs` 只读抓取默认分支的 `docs/program-graph.json` 和 GitHub issues、PR，再原子刷新本地产物。一张统一可折叠图展示 Version → 父 issue → 子 issue → 关联 PR，以及版本合入依赖和 task 前置关系；突出已可开工但未标记 `state:in-progress` 的任务，缺少证据时把未开始原因标为未知。指定本地产物负责人沿用 Paseo schedule `aa01bd1d`，按 `0 * * * *`、`Asia/Shanghai` 每小时刷新；已恢复 active，首次 run `e897a54d-faa6-41d9-ada5-8ed043fc91e4` 于 `2026-10-12T13:09:11.336Z` 成功刷新104750字节 HTML，内嵌 JSON 与 snapshot 一致，指定负责人已验证。独立只读数据/源码审查通过；完整 GUI 交互与最终截图未验收，file URL 被拒绝后已停止浏览器尝试。#203 保持打开记录该限制，不阻塞其他产品任务。根代理继续维护 issue #122 看板。工具任务 #204 把 CI 改成冻结 head 触发。
 
 ## CI
 
