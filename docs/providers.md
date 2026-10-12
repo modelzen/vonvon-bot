@@ -447,41 +447,54 @@ Replaces `agent/claude-agent/`. The engine spawns the CLI through `spawnClaudeCo
 
 One `ProcessHost` for every engine, re-homed from `agent/codex-appserver/owned-process.ts` and `windows-job.ts`.
 
-- `spawn()` starts a detached process group on POSIX or a Job Object on Windows and writes `{pid, startedAtMs, daemonBootId, providerId, sessionId}` to `<dataDir>/owned-pids.json` before returning.
-- `adopt(child)` wraps the Claude SDK child so it is in the same ledger.
-- `terminateTree(ms)` then `killTree()` are the two kill effects of the turn machine.
-- `sweepOrphans()` runs at daemon boot. A record whose `daemonBootId` differs, whose pid is alive, and whose start time matches is an orphan of a dead daemon and its tree is killed. A pid with a different start time is left alone.
+- `spawn()` starts the provider under its owner helper, which gives it its own process group on POSIX or Job Object on Windows. It writes `{pid, startedAtMs, daemonBootId, providerId, sessionId}` for the helper to `<dataDir>/process-owners.json` before returning.
+- `adopt()` is the Claude SDK spawn hook routed through the same helper.
+- `terminateTree(ms)` then `killTree()` are the two kill effects of the turn machine. Both are control-pipe commands to the helper.
+- `sweepOrphans()` runs at daemon boot and sends no signal. See *Process identity and signals*.
 - `owesWork()` answers `host/lifecycle` before a restart, replacing `unconfirmedCodexPids()`.
 
 #### Process identity and signals
 
-This section is the contract for every signal `ProcessHost` sends to a recorded process. It adds no ledger field and keeps the topology: on POSIX the ledger `pid` is the group leader and the group id equals it; on Windows the ledger `pid` is the job helper that holds the Job Object handle. A case this section does not prove ends as `unverified`. It is never signalled.
+This section is the contract for every signal sent to a provider process tree. Revised after the PR #121 review. Two rules carry it. No signal is ever sent to a numeric pid or group id unless the sender holds that pid allocated. The daemon itself never sends a numeric signal to a recorded process.
 
-*Identity.* `birthOf(pid)` reads the OS birth time. Linux uses `/proc/<pid>/stat` field 22 plus `btime` from `/proc/stat`. macOS uses `proc_pidinfo(PROC_PIDTBSDINFO)` `pbi_start_tvsec` and `pbi_start_tvusec`. Windows uses `GetProcessTimes` on an open process handle. An internal native reader is allowed when only the birth value crosses into TypeScript and nothing it prints is persisted. `spawn()` and `adopt()` write `startedAtMs` from the same reader, not from `Date.now()`. A record matches when `birthOf(pid)` equals `startedAtMs` at the reader's resolution. Records written before this rule do not match and end as `unverified`.
+*Owner helper.* Every provider process starts under a small owner helper, one per spawned tree. This is a topology change from the V6a draft and is part of this contract. The helper is a native binary shipped with the daemon (V6a *Native helper build*). The daemon talks to it only through a control pipe, so no command depends on a pid. `adopt()` is not a separate path. The Claude SDK's `spawnClaudeCodeProcess` hook starts the CLI through the helper like any other spawn.
 
-*POSIX group signal.* `signalGroup(record, signal)` pins the leader before it touches the group, so the check and the group signal cannot race.
+- POSIX. The helper forks the provider child. The child calls `setpgid(0, 0)`, resets signal dispositions to default, and execs, so its pid `P` is also its group id. The helper is the child's parent and observes its exit with `waitid(P_PID, P, WEXITED | WNOWAIT)`, which does not reap it. Until the helper reaps `P`, pid `P` stays allocated, as a zombie after exit. No other process can then have pid `P`, and only a process whose pid is `P` can create a group with id `P` (`setpgid`, `setsid`). So every `kill(-P, sig)` the helper sends before it reaps `P` reaches only the group the child created, or members that joined it. This holds whatever happens to the child, including `SIGCONT`, `SIGSTOP`, or an outside `SIGKILL`. No `SIGSTOP` pinning is used. The helper reaps `P` only after the group is empty (below).
+- Windows. The helper creates an unnamed Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` and without `JOB_OBJECT_LIMIT_BREAKAWAY_OK` or `JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK`. It creates the child suspended, assigns it, and then resumes it, as `main` does (`windows-job.ts:7`, `:62`, `:72`). Every descendant is in the job and cannot break away. The helper signals only through its own job handle (`TerminateJobObject`). Kill-on-close is a backstop only. Another process with `PROCESS_DUP_HANDLE` on the helper could duplicate the job handle, so the helper's death proves nothing about the job.
 
-1. Linux. `pidfd_open(pid)`, then check identity, then `pidfd_send_signal(pidfd, SIGSTOP)`. The pidfd refers to the checked process, so a reused pid cannot be stopped.
-2. macOS. Check identity, `kill(pid, SIGSTOP)`, then check identity again. On a mismatch, send `SIGCONT` to that pid and return `unverified`.
-3. A verified leader that is stopped cannot exit by itself, so group `pid` is not empty. The kernel does not hand a pid to a new process while a process group with that id still exists (POSIX process group lifetime). `kill(-pid, signal)` therefore reaches only the recorded group. For `SIGTERM` the host then sends `kill(-pid, SIGCONT)` so stopped members handle it. `SIGKILL` needs no continue.
-4. Residual risk, stated here and not hidden. On macOS, a full wrap of the pid space between the first check and `SIGSTOP` would stop and then continue a foreign process for an instant. No `SIGTERM` or `SIGKILL` can reach a foreign group. Linux has no such case. An outside `SIGKILL` of the stopped leader is the only way to reopen the window.
+*Ladder inside the helper.* The daemon's `terminateTree` and `killTree` write `term` or `kill` on the control pipe. A closed pipe means the daemon is gone and counts as `term`.
 
-*POSIX leader gone.* Without a live verified leader nothing can be pinned, so the group is never signalled by id.
+1. On `term`, POSIX sends `kill(-P, SIGTERM)` and then `kill(-P, SIGCONT)`, so stopped members can act on it. Windows has no soft step and goes to step 2.
+2. On `kill`, or `TERM_WAIT_MS` after `term`, POSIX repeats `kill(-P, SIGKILL)` every 50 ms. Windows calls `TerminateJobObject`. A leader that exits during the ladder changes nothing, because `P` stays unreaped and the group can still be addressed.
+3. The group is empty when no process other than the zombie `P` has group id `P`. Linux checks this by scanning `/proc`, macOS with `proc_listpids(PROC_PGRP_ONLY, P)`. On Windows it is empty when `JobObjectBasicAccountingInformation.ActiveProcesses` is 0 on the helper's own handle, the check `main` already uses (`windows-job.ts:47-53`). Only an empty group counts as proof.
+4. Once the group is empty, the helper reaps `P` and writes the drained marker. It then reports `drained` on the pipe if the daemon is there, and exits 0.
+5. If the group is not empty after `KILL_DRAIN_MS` (10 s), the helper reports `stuck` with the remaining pids and keeps holding `P` unreaped. It keeps sending `SIGKILL` and does not exit. The card and `vonvon doctor` show 有进程无法结束，Vonvon 仍在持有并重试.
+
+A child that exits by itself, outside any ladder, runs steps 2 to 4 at once, so descendants left in its group are killed under the same pin. A descendant that leaves the group with `setsid` or `setpgid` on POSIX is outside the tree. The old `kill(-pid)` path had the same limit. This contract does not claim to cover it. On Windows such a descendant is still in the job.
+
+*Ledger and drained marker.*
+
+- The ledger moves to a new file, `<dataDir>/process-owners.json`. It keeps the same five fields `{pid, startedAtMs, daemonBootId, providerId, sessionId}`. `pid` is the helper's pid. `startedAtMs` is the helper's OS birth time from the native reader, written before `spawn()` returns: Linux `/proc/<pid>/stat` field 22 plus `btime`, macOS `proc_pidinfo(PROC_PIDTBSDINFO)` `pbi_start_tvsec` and `pbi_start_tvusec`, and Windows `GetProcessTimes`. The source of a record is told apart by its file, not by its values. Only this contract's writer writes `process-owners.json`.
+- The drained marker is `<dataDir>/process-drained/<daemonBootId>-<pid>-<startedAtMs>`. The helper creates it atomically after step 4's empty check, with the five values it was launched with. The daemon removes the record and the marker together. This is a derived path, not a ledger field. Same-user processes can forge it. That is the same trust boundary as the ledger itself.
+
+*Boot sweep.* `sweepOrphans()` sends no signal and opens no handle for killing. For each record in `process-owners.json` from another `daemonBootId`, it checks the following in order.
 
 | Observation | Result |
 |---|---|
-| `pid` alive with a different birth | The recorded group has ended, because the pid could not be reused while it existed. `gone`, record removed. |
-| `pid` absent and `kill(-pid, 0)` returns `ESRCH` | `gone`, record removed. |
-| `pid` absent and group `pid` still has members | `unverified`. Not signalled. The record stays and is checked again at each sweep. `sweepOrphans` reports it and `vonvon doctor` lists the group with the hint 有残留进程组 <pgid>，无法证明归属，未自动结束，请手动检查. |
+| Marker present | `drained`. Record and marker removed. |
+| Helper alive and its birth matches `startedAtMs` | Wait up to `TERM_WAIT_MS + KILL_DRAIN_MS` for the marker, because the closed pipe already started the ladder. Marker appears: `drained`. Helper still alive: `stuck`, record kept and listed by `vonvon doctor`. |
+| No marker, and the helper is absent or has another birth | `lost`. The helper died without proving the tree empty. Not signalled. Record kept, listed by `vonvon doctor` with 托管进程异常退出，无法确认其子进程已结束，请手动检查（provider、会话、启动时间）. Removed after the host reboots, meaning the OS boot time is later than `startedAtMs`. |
 
-During a daemon's life the same rules apply. `terminateTree` and `killTree` pin a live leader. When a leader exits by itself, the host checks `kill(-pid, 0)`. It reports `unverified` for any members still in the group and does not signal them.
+*Legacy records.* Records in `owned-pids.json`, written by pre-contract V6a builds, are legacy, along with any persisted record of `main`'s named-job helper. Their source is the file, so no value comparison is needed. Legacy records are never signalled and never matched against a birth time, because their `startedAtMs` may come from `Date.now()`. A missing pid does not prove that the tree is gone, so a legacy record stays listed as `legacy` by `vonvon doctor` until the host reboots, meaning the OS boot time is later than `startedAtMs`. It is then removed. The file is deleted when it becomes empty.
 
-*Windows.* The helper creates an unnamed Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, the flag `main` already sets (`windows-job.ts:62`). Its handle is not inheritable and the helper is its only holder. Recovery never looks the job up by name or by a proof path.
+*Not proven by this contract.*
 
-1. While the daemon lives, the helper watches the daemon pid and exits within 5 s of its death. Its exit closes the last handle, and the kernel kills every process in the job.
-2. At boot, `sweepOrphans` opens the helper pid with `OpenProcess` and compares `GetProcessTimes` to `startedAtMs` on that handle. On a match, it calls `TerminateProcess` on the same handle, which cannot hit a reused pid. The job then closes and its tree is killed. The handle wait confirms the helper is gone, and the result is `killed`.
-3. If the helper pid is absent or has a different birth, the helper has exited. Its handle closed with it, so the job was killed by the kernel. The result is `gone`.
-4. A record from the older named-job helper follows the same three steps. If that helper is still alive, ending it closes the job. Nothing else holds the old name, because the helper never shared its handle.
+- A helper killed by `SIGKILL` on POSIX, or by `TerminateProcess` on Windows, leaves its tree unproven. That is the `lost` row. On POSIX the zombie `P` is then reparented and reaped by init, and the pin ends.
+- On Windows, kill-on-close may still end the tree. It is not counted, because a duplicated handle can keep the job open.
+- Descendants that leave the POSIX group are outside the tree.
+- A process stuck in an uninterruptible state stays `stuck`.
+
+These are reported and never signalled. The kernel facts used here are cited in the plan's V6a *Native helper build*. Lanes 8, 10, 10b, and the Windows lanes are the live evidence.
 
 ### Outbound
 
