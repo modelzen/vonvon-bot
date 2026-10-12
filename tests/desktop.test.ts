@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, mkdir, realpath } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import QRCode from "qrcode";
@@ -12,6 +12,7 @@ import {
 } from "../desktop/shared/bridge";
 import {
   FolderCapabilities,
+  ExecutableCapabilities,
   authorizationUrl,
   registrationUrl,
   trustedSender,
@@ -23,6 +24,7 @@ import {
 } from "../desktop/main/host";
 import { DesktopController } from "../desktop/main/controller";
 import { projectState, stateSchema } from "../desktop/main/projection";
+import {settingsRequestSchema} from "../desktop/shared/settings";
 
 const agentId = agentIdSchema.parse("cli_test");
 const registrationSession = "12345678-1234-4234-8234-123456789012";
@@ -181,6 +183,430 @@ test("IPC denies foreign documents, subframes, arbitrary capabilities and malfor
     { type: "openJobAuthorization", jobId: "job_valid", url: "https://auth.openai.com/codex/device" },
   ])
     assert.equal(commandSchema.safeParse(command).success, false);
+});
+test("settings IPC rejects raw config access and oversized or malformed section edits", () => {
+  const scope = { kind: "agent", botId: agentId };
+  for (const request of [
+    { type: "read", scope: { kind: "agent", botId: "../../config.json" } },
+    {
+      type: "save",
+      edit: {
+        scope,
+        section: "config",
+        revision: "r1",
+        patch: { secret: "x" },
+      },
+    },
+    {
+      type: "save",
+      edit: {
+        scope,
+        section: "run",
+        revision: "r1",
+        patch: { maxConcurrentRuns: "50" },
+      },
+    },
+    {
+      type: "save",
+      edit: {
+        scope,
+        section: "cards",
+        revision: "r1",
+        patch: { showModel: "running", secret: "x" },
+      },
+    },
+    {
+      type: "act",
+      action: {
+        kind: "commentInstructions",
+        botId: agentId,
+        revision: "r1",
+        content: { kind: "custom", text: "x".repeat(30001) },
+      },
+    },
+    { type: "saveExecutable", token: "/usr/bin/codex", revision: "r1" },
+  ])
+    assert.equal(settingsRequestSchema.safeParse(request).success, false);
+  assert.equal(
+    settingsRequestSchema.safeParse({
+      type: "act",
+      action: {
+        kind: "commentInstructions",
+        botId: agentId,
+        revision: "r1",
+        content: { kind: "custom", text: "x".repeat(30000) },
+      },
+    }).success,
+    true,
+  );
+  assert.equal(agentIdSchema.safeParse(`cli_${"a".repeat(200)}`).success, true);
+  assert.equal(
+    agentIdSchema.safeParse(`cli_${"a".repeat(201)}`).success,
+    false,
+  );
+});
+test("settings reads stay scoped and section saves carry core revisions", async () => {
+  const f = fixture();
+  const hostView = {
+    scope: { kind: "host" },
+    sections: {
+      execution: {
+        stored: { codexBin: null },
+        effective: { codexBin: null },
+        revision: "host-r1",
+        access: { kind: "writable" },
+        apply: [],
+      },
+    },
+    runtime: { codexBin: null, fallbackCwd: "/tmp", platform: "darwin" },
+  };
+  f.setIntercept((path, init) => {
+    if (path === "/api/settings/host" && init?.method === "PATCH")
+      return Promise.resolve(
+        Response.json({
+          kind: "saved",
+          section: {
+            scope: { kind: "host" },
+            section: "execution",
+            value: {
+              ...hostView.sections.execution,
+              revision: "host-r2",
+              stored: { codexBin: null },
+            },
+          },
+          effects: [
+            { fields: ["codexBin"], when: "restart", detail: "下次启动生效" },
+          ],
+        }),
+      );
+    if (path === "/api/settings/host")
+      return Promise.resolve(Response.json(hostView));
+    if (
+      path ===
+      "/api/bots/cli_test/models?backend=codex-appserver&purpose=project"
+    )
+      return Promise.resolve(
+        Response.json({
+          backend: "codex-appserver",
+          models: [],
+          state: "unavailable",
+          source: "backend-provided",
+          observedAt: "2026-09-25T00:00:00Z",
+          error: "backend offline",
+          titleEfforts: [],
+        }),
+      );
+    return undefined;
+  });
+  await f.controller.start();
+  try {
+    const read = await f.controller.settings(
+      settingsRequestSchema.parse({ type: "read", scope: { kind: "host" } }),
+    );
+    assert.equal(read.kind, "view");
+    const models = await f.controller.settings(
+      settingsRequestSchema.parse({
+        type: "models",
+        query: {
+          botId: agentId,
+          backend: "codex-appserver",
+          purpose: "project",
+        },
+      }),
+    );
+    assert.equal(models.kind, "models");
+    const saved = await f.controller.settings(
+      settingsRequestSchema.parse({
+        type: "save",
+        edit: {
+          scope: { kind: "host" },
+          section: "execution",
+          revision: "host-r1",
+          patch: { codexBin: null },
+        },
+      }),
+    );
+    assert.equal(saved.kind, "saved");
+    const write = f.requests.find(
+      (item) =>
+        item.path === "/api/settings/host" && item.init?.method === "PATCH",
+    );
+    assert.deepEqual(JSON.parse(String(write?.init?.body)), {
+      section: "execution",
+      revision: "host-r1",
+      patch: { codexBin: null },
+    });
+  } finally {
+    await f.controller.quit();
+  }
+});
+test("old Host returns an explicit unsupported result", async () => {
+  const f = fixture();
+  f.setIntercept((path) =>
+    path === "/api/bots/cli_test/settings"
+      ? Promise.resolve(Response.json({ message: "missing" }, { status: 404 }))
+      : undefined,
+  );
+  await f.controller.start();
+  try {
+    const result = await f.controller.settings(
+      settingsRequestSchema.parse({
+        type: "read",
+        scope: { kind: "agent", botId: agentId },
+      }),
+    );
+    assert.deepEqual(result, {
+      kind: "refused",
+      code: "unsupported-host",
+      message: "当前 Bridge 版本不支持桌面设置，请更新后重试。",
+    });
+  } finally {
+    await f.controller.quit();
+  }
+});
+test("settings save rejects mismatched returned scope", async () => {
+  const f = fixture();
+  f.setIntercept((path, init) =>
+    path === "/api/settings/host" && init?.method === "PATCH"
+      ? Promise.resolve(
+          Response.json({
+            kind: "saved",
+            section: {
+              scope: { kind: "agent", botId: agentId },
+              section: "execution",
+              value: {
+                stored: { codexBin: null },
+                effective: { codexBin: null },
+                revision: "r2",
+                access: { kind: "writable" },
+                apply: [],
+              },
+            },
+            effects: [],
+          }),
+        )
+      : undefined,
+  );
+  await f.controller.start();
+  try {
+    const result = await f.controller.settings(
+      settingsRequestSchema.parse({
+        type: "save",
+        edit: {
+          scope: { kind: "host" },
+          section: "execution",
+          revision: "r1",
+          patch: { codexBin: null },
+        },
+      }),
+    );
+    assert.equal(result.kind, "refused");
+    if (result.kind === "refused") assert.equal(result.code, "scope-mismatch");
+  } finally {
+    await f.controller.quit();
+  }
+});
+test("section conflict preserves the authoritative current revision", async () => {
+  const f = fixture();
+  f.setIntercept((path, init) =>
+    path === "/api/settings/host" && init?.method === "PATCH"
+      ? Promise.resolve(
+          Response.json(
+            {
+              kind: "conflict",
+              current: {
+                scope: { kind: "host" },
+                section: "execution",
+                value: {
+                  stored: { codexBin: "/new/codex" },
+                  effective: { codexBin: "/old/codex" },
+                  revision: "new-r2",
+                  access: { kind: "writable" },
+                  apply: [],
+                },
+              },
+            },
+            { status: 409 },
+          ),
+        )
+      : undefined,
+  );
+  await f.controller.start();
+  try {
+    const result = await f.controller.settings(
+      settingsRequestSchema.parse({
+        type: "save",
+        edit: {
+          scope: { kind: "host" },
+          section: "execution",
+          revision: "old-r1",
+          patch: { codexBin: null },
+        },
+      }),
+    );
+    assert.equal(result.kind, "saved");
+    if (result.kind === "saved") {
+      assert.equal(result.result.kind, "conflict");
+      if (result.result.kind === "conflict")
+        assert.equal(result.result.current.value.revision, "new-r2");
+    }
+  } finally {
+    await f.controller.quit();
+  }
+});
+test("Codex executable file tokens stay within the requesting window", async () => {
+  const home = await mkdtemp(join(tmpdir(), "vonvon-executable-"));
+  const path = join(home, "codex");
+  await writeFile(path, "binary");
+  try {
+    const caps = new ExecutableCapabilities();
+    const choice = await caps.grant(path, 10);
+    assert.equal(await caps.resolve(choice.token, 10), await realpath(path));
+    await assert.rejects(caps.resolve(choice.token, 11));
+    caps.clear();
+    await assert.rejects(caps.resolve(choice.token, 10));
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+test("generic IPC cannot save a Codex path while a granted file can", async () => {
+  const home = await mkdtemp(join(tmpdir(), "vonvon-codex-picker-"));
+  const path = join(home, "codex");
+  await writeFile(path, "binary");
+  const f = fixture();
+  f.setIntercept((route, init) =>
+    route === "/api/settings/host" && init?.method === "PATCH"
+      ? Promise.resolve(
+          Response.json({
+            kind: "saved",
+            section: {
+              scope: { kind: "host" },
+              section: "execution",
+              value: {
+                stored: { codexBin: path },
+                effective: { codexBin: null },
+                revision: "r2",
+                access: { kind: "writable" },
+                apply: [],
+              },
+            },
+            effects: [],
+          }),
+        )
+      : undefined,
+  );
+  await f.controller.start();
+  try {
+    const direct = await f.controller.settings(
+      settingsRequestSchema.parse({
+        type: "save",
+        edit: {
+          scope: { kind: "host" },
+          section: "execution",
+          revision: "r1",
+          patch: { codexBin: path },
+        },
+      }),
+    );
+    assert.equal(direct.kind, "refused");
+    if (direct.kind === "refused")
+      assert.equal(direct.code, "file-picker-required");
+    assert.equal(
+      f.requests.some(
+        (item) =>
+          item.path === "/api/settings/host" && item.init?.method === "PATCH",
+      ),
+      false,
+    );
+    const caps = new ExecutableCapabilities();
+    const chosen = await caps.grant(path, 12);
+    const resolved = await caps.resolve(chosen.token, 12);
+    const saved = await f.controller.saveExecutable(resolved, "r1");
+    assert.equal(saved.kind, "saved");
+    const write = f.requests.find(
+      (item) =>
+        item.path === "/api/settings/host" && item.init?.method === "PATCH",
+    );
+    assert.deepEqual(JSON.parse(String(write?.init?.body)), {
+      section: "execution",
+      revision: "r1",
+      patch: { codexBin: await realpath(path) },
+    });
+  } finally {
+    await f.controller.quit();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+test("Agent removal rechecks stopped state before using the delete route", async () => {
+  const f = fixture();
+  await f.controller.start();
+  try {
+    const blocked = await f.controller.run(
+      { type: "deleteAgent", agentId },
+      async () => "/tmp",
+    );
+    assert.equal(blocked.kind, "refused");
+    assert.equal(
+      f.requests.some((item) => item.init?.method === "DELETE"),
+      false,
+    );
+    f.setState({
+      ...coreState(),
+      bots: coreState().bots.map((bot) => ({
+        ...bot,
+        active: false,
+        running: false,
+        connection: "disconnected",
+      })),
+    });
+    const removed = await f.controller.run(
+      { type: "deleteAgent", agentId },
+      async () => "/tmp",
+    );
+    assert.equal(removed.kind, "applied");
+    assert.equal(
+      f.requests.some(
+        (item) =>
+          item.path === "/api/bots/cli_test" && item.init?.method === "DELETE",
+      ),
+      true,
+    );
+  } finally {
+    await f.controller.quit();
+  }
+});
+test("Agent removal preserves its list entry when core rejects deletion", async () => {
+  const f = fixture();
+  f.setState({
+    ...coreState(),
+    bots: coreState().bots.map((bot) => ({
+      ...bot,
+      active: false,
+      running: false,
+      connection: "disconnected",
+    })),
+  });
+  f.setIntercept((path, init) =>
+    path === "/api/bots/cli_test" && init?.method === "DELETE"
+      ? Promise.resolve(
+          Response.json({ message: "Agent 仍有运行中会话" }, { status: 409 }),
+        )
+      : undefined,
+  );
+  await f.controller.start();
+  try {
+    const result = await f.controller.run(
+      { type: "deleteAgent", agentId },
+      async () => "/tmp",
+    );
+    assert.equal(result.kind, "refused");
+    assert.equal(
+      f.controller.current().agents.some((agent) => agent.id === agentId),
+      true,
+    );
+  } finally {
+    await f.controller.quit();
+  }
 });
 test("authorization browser capability only permits exact official HTTPS host", () => {
   assert.equal(

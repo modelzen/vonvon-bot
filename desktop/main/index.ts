@@ -5,7 +5,8 @@ import {pathToFileURL} from 'node:url';
 import {stat} from 'node:fs/promises';
 import {z} from 'zod';
 import {commandSchema,type CommandReply,type CommandResult} from '../shared/bridge';
-import {FolderCapabilities,trustedSender} from './capabilities';
+import {settingsRequestSchema,type SettingsReply} from '../shared/settings';
+import {ExecutableCapabilities,FolderCapabilities,trustedSender} from './capabilities';
 import {DesktopController} from './controller';
 import {messageOf} from './projection';
 import type {HostModule} from './host';
@@ -21,6 +22,7 @@ let controller:DesktopController|undefined;
 let allowQuit=false;
 let quitPending=false;
 const folders=new FolderCapabilities();
+const executables=new ExecutableCapabilities();
 const documentPath=join(__dirname,'renderer','index.html');
 const documentUrl=pathToFileURL(documentPath).href;
 const lock=app.requestSingleInstanceLock();
@@ -52,7 +54,7 @@ async function start():Promise<void> {
   currentWindow.webContents.session.setPermissionRequestHandler((_contents,_permission,callback)=>callback(false));
   currentWindow.webContents.session.setPermissionCheckHandler(()=>false);
   currentWindow.on('close',event=>{if(!allowQuit){event.preventDefault();currentWindow.hide();}});
-  currentWindow.webContents.on('render-process-gone',()=>{folders.clear();void Promise.all(controller?.current().jobs.filter(job=>job.type!=='installCodex').map(job=>controller?.cancel(job.id))??[]);});
+  currentWindow.webContents.on('render-process-gone',()=>{folders.clear();executables.clear();void Promise.all(controller?.current().jobs.filter(job=>job.type!=='installCodex').map(job=>controller?.cancel(job.id))??[]);});
   ipcMain.handle('bridge:watch',event=>{validateSender(event);return controller?.current();});
   ipcMain.handle('bridge:run',async(event,value:unknown):Promise<CommandReply>=>{
     validateSender(event);
@@ -80,6 +82,63 @@ async function start():Promise<void> {
     } catch(error){result={kind:'refused',code:'operation-failed',message:messageOf(error)};}
     return {command:command.type,result};
   });
+  ipcMain.handle(
+    "bridge:settings",
+    async (event, value: unknown): Promise<SettingsReply> => {
+      validateSender(event);
+      if (JSON.stringify(value).length > 256_000)
+        return {
+          kind: "refused",
+          code: "request-too-large",
+          message: "设置内容超过支持的大小。",
+        };
+      const parsed = settingsRequestSchema.safeParse(value);
+      if (!parsed.success)
+        return {
+          kind: "refused",
+          code: "invalid-request",
+          message: "设置请求无效，请检查输入。",
+        };
+      if (!controller)
+        return {
+          kind: "refused",
+          code: "not-ready",
+          message: "Bridge 正在启动。",
+        };
+      try {
+        if (parsed.data.type === "chooseExecutable") {
+          const chosen = await dialog.showOpenDialog(currentWindow, {
+            title: "选择 Codex 可执行文件",
+            properties: ["openFile"],
+          });
+          const path = chosen.filePaths[0];
+          return chosen.canceled || !path
+            ? { kind: "cancelled" }
+            : {
+                kind: "fileChosen",
+                file: await executables.grant(
+                  path,
+                  currentWindow.webContents.id,
+                ),
+              };
+        }
+        if (parsed.data.type === "saveExecutable") {
+          const path = await executables.resolve(
+            parsed.data.token,
+            currentWindow.webContents.id,
+          );
+          return controller.saveExecutable(path, parsed.data.revision);
+        }
+        return controller.settings(parsed.data);
+      } catch (error) {
+        return {
+          kind: "refused",
+          code: "settings-failed",
+          message: messageOf(error),
+        };
+      }
+    },
+  );
   const icon=nativeImage.createFromPath(join(__dirname,'renderer','vonvon-logo.png')).resize({width:18,height:18});
   icon.setTemplateImage(process.platform==='darwin');
   tray=new Tray(icon);
