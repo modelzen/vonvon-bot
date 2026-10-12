@@ -158,7 +158,7 @@ ACP 客户端是 Vonvon 自己的一层薄封装，不用 SDK 的 `ClientSideCon
 
 实现参考 vonvon-bridge-legacy 的 `packages/runtime/src/cli-migration-*.ts` 和 `legacy-cli-control.ts`。legacy 只处理了 macOS 的 launchd，Linux 的 systemd 和 Windows 的启动项要新写。
 
-服务控制、执行器、journal 和 `import` 请求组的具体类型、持久化形状和平台规则见 [bridge-import.md](bridge-import.md)。几条硬规则：探测失败只能报“未知”，不能当作“不存在”；任何写操作之前先比对预检时的服务身份，外部换过的定义不动；暂停做到一半是一个返回值，恢复必须从这个状态收敛；进程归属靠固定路径和完整身份字段，不靠命令行子串；快照字节只在内存里，journal 只存哈希和备份路径。界面和 CLI 都走 daemon 里的同一个执行器，没有第二条语义不同的路径。
+服务控制、执行器、ledger 和 `import` 请求组的具体类型、持久化形状和平台规则见 [bridge-import.md](bridge-import.md)。几条硬规则：探测失败只能报“未知”，不能当作“不存在”；任何写操作之前先把当前状态和原始快照或本次事务自己做过的步骤推出的状态比对，两者都不是就拒绝，外部换过的定义不动；每个副作用先写意图再做再写结果，暂停做到一半是一条记录，恢复必须从这个状态收敛；回滚先停掉并移走本次导入启动的 Bot，确认都退出了才恢复旧服务；进程归属靠固定路径和完整身份字段，不靠命令行子串，Windows 上只通过持有的进程句柄终止，拿不到句柄就在改任何东西之前拒绝；launchd 里无法原样恢复的状态在预检就拒绝导入；快照字节只在内存和事务目录的备份里，ledger 只存哈希和备份路径；所有目标路径都经 `VONVON_HOME` 解析。界面和 CLI 都走 daemon 里的同一个执行器，没有第二条语义不同的路径。
 
 ### 账号不是使用前提
 
