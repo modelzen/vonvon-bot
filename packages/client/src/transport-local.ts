@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import WebSocket from "ws";
 import { helloSchema, PROTOCOL_VERSION, serverInfoSchema } from "@vonvon/protocol";
 import { z } from "zod";
-import { createClient, type VonvonClient } from "./client.js";
+import { createClient, type ClientConnection, type VonvonClient } from "./client.js";
 
 const run = promisify(execFile);
 const statusSchema = z.object({
@@ -41,7 +41,23 @@ export async function connectLocal(options: { home: string; cliEntry: string }):
         } catch (error) { fail(error instanceof Error ? error : new Error(String(error))); }
       });
     });
-    return createClient(socket);
+    const connection: ClientConnection = {
+      isOpen: () => socket.readyState === WebSocket.OPEN,
+      onMessage: listener => { socket.on("message", data => listener(data.toString())); },
+      onClose: listener => { socket.on("close", listener); },
+      onError: listener => { socket.on("error", listener); },
+      send: (data, callback) => socket.send(data, callback),
+      close: async () => {
+        if (socket.readyState === WebSocket.CLOSED) return;
+        await new Promise<void>(resolve => {
+          const timer = setTimeout(() => socket.terminate(), 1000);
+          timer.unref();
+          socket.once("close", () => { clearTimeout(timer); resolve(); });
+          socket.close();
+        });
+      },
+    };
+    return createClient(connection);
   } catch (error) {
     socket.terminate();
     throw error;
