@@ -1,3 +1,5 @@
+import { ChildProcess, spawn } from 'node:child_process';
+import { PassThrough } from 'node:stream';
 import { EventEmitter } from 'node:events';
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -6,13 +8,17 @@ import { pathToFileURL } from 'node:url';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow, IpcMainInvokeEvent } from 'electron';
 import type { VonvonClient } from '@vonvon/client/browser';
-import { ConnectionError } from '@vonvon/client/browser';
+import { ConnectionError, RpcError } from '@vonvon/client/browser';
 import { desktopChannels, type AttachedDaemon, type DesktopResources } from '../src/ipc-contract.js';
 
 const { handlers, openExternal, failRegistration } = vi.hoisted(() => ({
   handlers: new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => Promise<unknown>>(),
   openExternal: vi.fn(async (_url: string) => {}),
   failRegistration: { channel: '' },
+}));
+vi.mock('node:child_process', async importOriginal => ({
+  ...await importOriginal<typeof import('node:child_process')>(),
+  spawn: vi.fn(),
 }));
 vi.mock('electron', () => ({
   ipcMain: {
@@ -26,6 +32,8 @@ vi.mock('electron', () => ({
 }));
 
 import { installBridge, openAllowedExternal } from '../src/bridge.js';
+import { setLoginItem } from '../src/login-item.js';
+import { createDesktopFacades } from '../src/facade.js';
 
 const fixtureRoot = mkdtempSync(join(tmpdir(), 'vonvon-bridge-test-'));
 const uiIndex = join(fixtureRoot, 'index.html');
@@ -101,6 +109,171 @@ describe('desktop IPC boundary', () => {
     expect(h.actions.setLoginItem).toHaveBeenCalledWith(true);
     expect(await h.invoke(desktopChannels.machine, { type: 'service', action: 'install' })).toMatchObject({ ok: false });
     expect(h.machine).not.toHaveBeenCalled();
+    await h.bridge.dispose();
+  });
+
+  it('preserves a safe uninstall transaction result through the real helper, IPC and facade', async () => {
+    const h = harness();
+    h.actions.setLoginItem.mockImplementation(async enabled => {
+      await setLoginItem(enabled, {
+        platform: 'darwin', packaged: true, resources: '/private/app', executable: '/private/app/Vonvon',
+        root: '/private/secret-root', env: {},
+      }, {
+        classifyDistribution: () => ({ kind: 'bundled', cliPath: '/private/app/cli' }),
+        runCommand: async () => ({ code: 1, stdout: '', stderr: 'uninstall_incomplete: stop_unconfirmed: SECRET_TOKEN\nRetained PID 987654 (startedAt private).\nLeftover: /private/secret-root\nNext step: vonvon service uninstall\n' }),
+        readRegistration: async () => ({ kind: 'ours' }),
+        reattachAfterUninstall: async () => {},
+      });
+    });
+    const expected = 'uninstall_incomplete: Service removal is incomplete. The daemon may still be running. Retry service uninstall.';
+    const result = await h.invoke(desktopChannels.setLoginItem, false);
+    expect(result).toEqual({ ok: false, error: { kind: 'validation', message: expected } });
+    expect(JSON.stringify(result)).not.toMatch(/SECRET_TOKEN|987654|secret-root|stop_unconfirmed/);
+    const { shell } = createDesktopFacades({ invoke: h.invoke, receive: () => () => {} });
+    await expect(shell.setLoginItem(false)).rejects.toThrow(expected);
+    await h.bridge.dispose();
+  });
+
+  it.each([
+    ['exact full buffer', `uninstall_incomplete: ${'界'.repeat(21838)}`, false],
+    ['truncated at a UTF-8 boundary', `uninstall_incomplete: ${'界'.repeat(30000)}SECRET_SUFFIX`, false],
+    ['truncated inside UTF-8', `uninstall_incomplete: x${'界'.repeat(30000)}SECRET_SUFFIX`, true],
+  ] as const)('rejects a multibyte capture ceiling through runner, IPC and facade: %s', async (_name, output, splitCharacter) => {
+    const bytes = Buffer.from(output);
+    const captured = bytes.subarray(0, 65536).toString('utf8');
+    expect(bytes.length).toBeGreaterThanOrEqual(65536);
+    expect(captured.length).toBeLessThan(65536);
+    expect(captured.endsWith('\uFFFD')).toBe(splitCharacter);
+    const h = harness();
+    const child = new ChildProcess();
+    const stderr = new PassThrough();
+    child.stdout = new PassThrough();
+    child.stderr = stderr;
+    vi.mocked(spawn).mockReturnValueOnce(child);
+    const readRegistration = vi.fn(async () => ({ kind: 'ours' as const }));
+    const reattachAfterUninstall = vi.fn(async () => {});
+    h.actions.setLoginItem.mockImplementation(async enabled => {
+      await setLoginItem(enabled, {
+        platform: 'darwin', packaged: true, resources: '/private/app', executable: '/private/app/Vonvon',
+        root: '/private/secret-root', env: {},
+      }, {
+        classifyDistribution: () => ({ kind: 'bundled', cliPath: '/private/app/cli' }),
+        readRegistration, reattachAfterUninstall,
+      });
+    });
+    let reply: unknown;
+    const { shell } = createDesktopFacades({
+      invoke: async (channel, ...args) => {
+        const result = await h.invoke(channel, ...args);
+        if (channel === desktopChannels.setLoginItem) reply = result;
+        return result;
+      },
+      receive: () => () => {},
+    });
+    try {
+      const rejected = expect(shell.setLoginItem(false)).rejects.toThrow('Desktop request failed');
+      stderr.write(bytes);
+      child.emit('close', 1, null);
+      await rejected;
+      expect(reply).toEqual({ ok: false, error: { kind: 'validation', message: 'Desktop request failed' } });
+      expect(JSON.stringify(reply)).not.toMatch(/SECRET_SUFFIX|界|secret-root|uninstall_incomplete/);
+      expect(readRegistration).not.toHaveBeenCalled();
+      expect(reattachAfterUninstall).not.toHaveBeenCalled();
+    } finally { await h.bridge.dispose(); }
+  });
+
+  it.each([
+    [true, 'install_refused', 'Service installation was refused. Check the service registration before retrying.'],
+    [true, 'install_rolled_back', 'Service installation failed and was rolled back. Check service status before retrying.'],
+    [true, 'install_incomplete', 'Service installation is incomplete. Check service status and retry service install or uninstall.'],
+    [false, 'uninstall_refused', 'Service removal was refused. Check the service registration before retrying.'],
+    [false, 'uninstall_rolled_back', 'Service removal failed and was rolled back. Check service status before retrying.'],
+    [false, 'uninstall_incomplete', 'Service removal is incomplete. The daemon may still be running. Retry service uninstall.'],
+  ] as const)('preserves only the allowlisted %s %s result', async (enabled, outcome, explanation) => {
+    const h = harness();
+    const readRegistration = vi.fn(async () => ({ kind: 'ours' as const }));
+    const reattachAfterUninstall = vi.fn(async () => {});
+    h.actions.setLoginItem.mockImplementation(async value => {
+      await setLoginItem(value, {
+        platform: 'darwin', packaged: true, resources: '/private/app', executable: '/private/app/Vonvon', root: '/private/secret-root', env: {},
+      }, {
+        classifyDistribution: () => ({ kind: 'bundled', cliPath: '/private/app/cli' }),
+        runCommand: async () => ({ code: 1, stdout: '', stderr: `${outcome}: SECRET_TOKEN\nLeftover: /private/secret-root\n` }),
+        readRegistration, reattachAfterUninstall,
+      });
+    });
+    const result = await h.invoke(desktopChannels.setLoginItem, enabled);
+    expect(result).toEqual({ ok: false, error: { kind: 'validation', message: `${outcome}: ${explanation}` } });
+    expect(JSON.stringify(result)).not.toMatch(/SECRET_TOKEN|secret-root|cause|stack/);
+    expect(readRegistration).not.toHaveBeenCalled();
+    expect(reattachAfterUninstall).not.toHaveBeenCalled();
+    await h.bridge.dispose();
+  });
+
+  it.each([
+    ['prefix', 1, '', 'SECRET_TOKEN uninstall_incomplete: detail'],
+    ['token suffix', 1, '', 'uninstall_incomplete_SECRET_TOKEN: detail'],
+    ['multiline prefix', 1, '', 'SECRET_TOKEN\nuninstall_incomplete: detail'],
+    ['truncated at capture limit', 1, '', 'uninstall_incomplete: '.padEnd(65536, 'x')],
+    ['overlong', 1, '', `uninstall_incomplete: ${'x'.repeat(65536)}SECRET_TOKEN`],
+    ['unknown', 1, '', 'unknown_result: SECRET_TOKEN'],
+    ['wrong action', 1, '', 'install_incomplete: SECRET_TOKEN'],
+    ['wrong exit', 7, '', 'uninstall_incomplete: SECRET_TOKEN'],
+    ['stdout only', 1, 'uninstall_incomplete: SECRET_TOKEN', ''],
+    ['mixed streams', 1, 'SECRET_TOKEN', 'uninstall_incomplete: detail'],
+    ['missing delimiter', 1, '', 'uninstall_incomplete\n'],
+  ] as const)('sanitizes untrusted command output %s', async (_name, code, stdout, stderr) => {
+    const h = harness();
+    h.actions.setLoginItem.mockImplementation(async enabled => {
+      await setLoginItem(enabled, {
+        platform: 'darwin', packaged: true, resources: '/private/app', executable: '/private/app/Vonvon', root: '/private/secret-root', env: {},
+      }, {
+        classifyDistribution: () => ({ kind: 'bundled', cliPath: '/private/app/cli' }),
+        runCommand: async () => ({ code, stdout, stderr }),
+        readRegistration: async () => ({ kind: 'ours' }), reattachAfterUninstall: async () => {},
+      });
+    });
+    const result = await h.invoke(desktopChannels.setLoginItem, false);
+    expect(result).toEqual({ ok: false, error: { kind: 'validation', message: 'Desktop request failed' } });
+    expect(JSON.stringify(result)).not.toContain('SECRET_TOKEN');
+    await h.bridge.dispose();
+  });
+
+  it('keeps arbitrary errors and RPC diagnostics sanitized', async () => {
+    const h = harness();
+    h.actions.setLoginItem.mockRejectedValueOnce(new Error('uninstall_incomplete: SECRET_TOKEN'));
+    expect(await h.invoke(desktopChannels.setLoginItem, false)).toEqual({ ok: false, error: { kind: 'validation', message: 'Desktop request failed' } });
+    h.machine.mockRejectedValueOnce(new RpcError('safe_code', 'SECRET_TOKEN'));
+    expect(await h.invoke(desktopChannels.machine, { type: 'status' })).toEqual({ ok: false, error: { kind: 'rpc', code: 'safe_code', message: 'Daemon request failed' } });
+    await h.bridge.dispose();
+  });
+
+  it.each([
+    ['unsupported', 'Open at login is unavailable on this platform. Start the application manually.'],
+    ['unpackaged', 'Open at login requires the packaged desktop application.'],
+    ['distribution', 'The bundled Vonvon daemon is unavailable. Reinstall the desktop application.'],
+    ['readback', 'The service registration could not be verified. Check service status before retrying.'],
+    ['mismatch', 'The service registration does not match the requested setting. Check service status before retrying.'],
+    ['reattach', 'The service was removed, but the desktop could not reconnect. Reopen the desktop application.'],
+  ] as const)('exposes a bounded local service failure for %s', async (stage, message) => {
+    const h = harness();
+    h.actions.setLoginItem.mockImplementation(async enabled => {
+      await setLoginItem(enabled, {
+        platform: stage === 'unsupported' ? 'linux' : 'darwin', packaged: stage !== 'unpackaged',
+        resources: '/SECRET_TOKEN', executable: '/SECRET_TOKEN/Vonvon', root: '/SECRET_TOKEN/root', env: {},
+      }, {
+        classifyDistribution: () => ({ kind: stage === 'distribution' ? 'unknown' : 'bundled', cliPath: '/SECRET_TOKEN/cli' }),
+        runCommand: async () => ({ code: 0, stdout: '', stderr: '' }),
+        readRegistration: async () => {
+          if (stage === 'readback') throw new Error('SECRET_TOKEN');
+          return { kind: stage === 'mismatch' ? 'ours' : 'absent' };
+        },
+        reattachAfterUninstall: async () => { if (stage === 'reattach') throw new Error('SECRET_TOKEN'); },
+      });
+    });
+    const result = await h.invoke(desktopChannels.setLoginItem, false);
+    expect(result).toEqual({ ok: false, error: { kind: 'validation', message } });
+    expect(JSON.stringify(result)).not.toContain('SECRET_TOKEN');
     await h.bridge.dispose();
   });
 

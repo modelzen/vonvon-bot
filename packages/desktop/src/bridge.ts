@@ -8,6 +8,7 @@ import {
   settingsRequestSchema, machineReplySchema, type MachineReply,
 } from '@vonvon/protocol';
 import { allowedExternalUrl, type ExternalUrlKind } from '../../ui/src/url-actions.js';
+import { ServiceActionError } from './service-error.js';
 import { StartHostRefusal } from './daemon-manager.js';
 import {
   desktopChannels, type AttachedDaemon, type DesktopBridge, type DesktopEvent,
@@ -33,6 +34,7 @@ function safeFailure(error: unknown): SafeFailure {
     };
   }
   if (error instanceof ConnectionError) return { kind: 'connection', message: 'Daemon connection lost' };
+  if (error instanceof ServiceActionError) return { kind: 'validation', message: error.safeMessage };
   if (error instanceof StartHostRefusal) return { kind: 'validation', message: error.message };
   return { kind: 'validation', message: 'Desktop request failed' };
 }

@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { classifyDistribution, type Distribution } from '../../daemon/src/service/distribution.js';
+import { ServiceActionError } from './service-error.js';
 import type { Registration } from './daemon-manager.js';
 
 export interface LoginItemRuntime {
@@ -60,26 +61,43 @@ export async function setLoginItem(
   dependencies: LoginItemDependencies,
 ): Promise<CommandResult> {
   if (runtime.platform !== 'darwin' && runtime.platform !== 'win32') {
-    throw new Error(`Open at login is unavailable on ${runtime.platform}.`);
+    throw new ServiceActionError('unsupported');
   }
-  if (!runtime.packaged) throw new Error('Open at login requires the packaged desktop application.');
+  if (!runtime.packaged) throw new ServiceActionError('unpackaged');
   const distribution = (dependencies.classifyDistribution ?? classifyDistribution)(join(runtime.resources, 'daemon'));
-  if (distribution.kind !== 'bundled') throw new Error('The bundled Vonvon daemon is unavailable.');
+  if (distribution.kind !== 'bundled') throw new ServiceActionError('distribution');
 
   const env: NodeJS.ProcessEnv = { ...runtime.env, ELECTRON_RUN_AS_NODE: '1', VONVON_HOME: runtime.root };
   delete env.VONVON_SERVICE;
   const action = enabled ? 'install' : 'uninstall';
   const result = await (dependencies.runCommand ?? runCommand)(runtime.executable, [distribution.cliPath, 'service', action], env);
   if (result.code !== 0) {
+    const separator = result.stderr.indexOf(': ');
+    const outcome = separator < 0 ? '' : result.stderr.slice(0, separator);
+    if (result.code === 1 && result.stdout === '' && Buffer.byteLength(result.stderr, 'utf8') < outputLimit && outcome.startsWith(`${action}_`)) {
+      switch (outcome) {
+        case 'install_refused':
+        case 'install_rolled_back':
+        case 'install_incomplete':
+        case 'uninstall_refused':
+        case 'uninstall_rolled_back':
+        case 'uninstall_incomplete':
+          throw new ServiceActionError(outcome);
+      }
+    }
     throw new Error(`Vonvon service ${action} exited ${result.code}: ${result.stderr || result.stdout || 'No output.'}`);
   }
 
-  const registration = await dependencies.readRegistration();
+  const registration = await dependencies.readRegistration().catch(() => {
+    throw new ServiceActionError('readback');
+  });
   const expected = enabled ? 'ours' : 'absent';
   if (registration.kind !== expected) {
-    throw new Error(`Vonvon service ${action} exited 0, but registration is ${registration.kind}; expected ${expected}.`);
+    throw new ServiceActionError('mismatch');
   }
-  if (!enabled) await dependencies.reattachAfterUninstall();
+  if (!enabled) await dependencies.reattachAfterUninstall().catch(() => {
+    throw new ServiceActionError('reattach');
+  });
   return result;
 }
 

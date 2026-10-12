@@ -87,14 +87,14 @@ describe('unexposed desktop login item helper', () => {
   ] satisfies Array<[boolean, Registration]>)('refuses contradictory readback: enabled=%s, state=%j', async (enabled, registration) => {
     const fixture = setup();
     fixture.readRegistration.mockImplementation(async () => registration);
-    await expect(setLoginItem(enabled, fixture.runtime, fixture.dependencies)).rejects.toThrow(`registration is ${registration.kind}`);
+    await expect(setLoginItem(enabled, fixture.runtime, fixture.dependencies)).rejects.toThrow('The service registration does not match the requested setting. Check service status before retrying.');
     expect(fixture.reattachAfterUninstall).not.toHaveBeenCalled();
   });
 
   it.each(['linux', 'freebsd'] as const)('refuses %s before classification or child execution', async platform => {
     const fixture = setup();
     fixture.runtime.platform = platform;
-    await expect(setLoginItem(true, fixture.runtime, fixture.dependencies)).rejects.toThrow('unavailable');
+    await expect(setLoginItem(true, fixture.runtime, fixture.dependencies)).rejects.toThrow('Open at login is unavailable on this platform. Start the application manually.');
     expect(fixture.classifyDistribution).not.toHaveBeenCalled();
     expect(fixture.runCommand).not.toHaveBeenCalled();
   });
