@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { lstat, mkdtemp, readFile, readdir, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { validateInstalledManifest } from './package-tools.mjs';
 
 const args = process.argv.slice(2);
@@ -15,7 +15,19 @@ const port = Number(argument('--port'));
 const manifest = JSON.parse(await readFile(argument('--manifest'), 'utf8'));
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('invalid port');
 await validateInstalledManifest(installed, manifest, manifest.sourceHead);
-const home = await mkdtemp(join(tmpdir(), 'vonvon-smoke-'));
+const homeIndex = args.indexOf('--home');
+let home;
+if (homeIndex < 0) {
+  home = await mkdtemp(join(tmpdir(), 'vonvon-smoke-'));
+} else {
+  home = args[homeIndex + 1];
+  if (!home || home.startsWith('--') || !isAbsolute(home)) throw new Error('invalid --home: expected an absolute path');
+  const entry = await lstat(home);
+  if (!entry.isDirectory() || entry.uid !== process.getuid() || await realpath(home) !== home || (await readdir(home)).length !== 0) {
+    throw new Error('invalid --home: expected an empty, caller-owned canonical directory');
+  }
+}
+process.stdout.write(JSON.stringify({ smokeHome: home }) + '\n');
 const environment = { ...process.env, VONVON_HOME: home, HOME: home };
 const cli = join(installed, 'bin/vonvon.mjs');
 function run(command) {
@@ -64,7 +76,7 @@ try {
     if (!sameOwner(current, owner)) throw new Error('daemon owner changed or exited before stop; smoke failed');
     await run(['stop']);
     await assertStopped(owner);
-    await rm(home, { recursive: true, force: true });
+    if (errors.length === 0) await rm(home, { recursive: true, force: true });
   } catch (error) {
     errors.push(new Error(`Smoke home preserved at ${home}: ${error.message}`, { cause: error }));
   }
