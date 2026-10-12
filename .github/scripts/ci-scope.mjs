@@ -60,23 +60,40 @@ export function determineScope(eventName, event, cwd) {
   }
 }
 
+export function isFullRunEligible(eventName, event) {
+  if (eventName === 'workflow_dispatch') return true;
+  if (event?.action === 'labeled' && event?.label?.name !== 'frozen') return false;
+  const labels = event?.pull_request?.labels;
+  return eventName === 'pull_request' &&
+    Array.isArray(labels) && labels.some(label => label?.name === 'frozen');
+}
+
 function main() {
   let event;
+  let parsed = false;
   try {
     event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
+    parsed = event !== null && typeof event === 'object' && !Array.isArray(event);
   } catch {
     event = null;
   }
   const result = determineScope(process.env.GITHUB_EVENT_NAME, event, process.cwd());
-  console.log(JSON.stringify(result));
+  const eligible = isFullRunEligible(process.env.GITHUB_EVENT_NAME, event);
+  const validCollection = parsed && (process.env.GITHUB_EVENT_NAME === 'workflow_dispatch' || !result.reason);
+  const full = result.scope === 'full' && eligible && validCollection;
+  console.log(JSON.stringify({ ...result, eligible, full }));
   if (process.env.GITHUB_OUTPUT) {
     const { scope, base = '', head = '' } = result;
-    appendFileSync(process.env.GITHUB_OUTPUT, `scope=${scope}\nbase=${base}\nhead=${head}\n`);
+    appendFileSync(process.env.GITHUB_OUTPUT, `scope=${scope}\nbase=${base}\nhead=${head}\nfull=${full}\n`);
   }
   if (process.env.GITHUB_STEP_SUMMARY) {
     const escaped = JSON.stringify(result.paths, null, 2).replaceAll('&', '&amp;').replaceAll('<', '&lt;');
     appendFileSync(process.env.GITHUB_STEP_SUMMARY,
-      `Scope: **${result.scope}**. Collected paths: ${result.paths.length}. ${result.reason}\n\n<pre>${escaped}</pre>\n\n`);
+      `Scope: **${result.scope}**. Full suite: **${!validCollection ? 'blocked by event or diff collection' : full ? 'requested' : result.scope === 'docs' ? 'not applicable' : 'deferred'}**. Collected paths: ${result.paths.length}. ${result.reason}\n\n<pre>${escaped}</pre>\n\n`);
+  }
+  if (!validCollection) {
+    console.error('CI scope collection failed; this run cannot supply merge evidence.');
+    process.exitCode = 1;
   }
 }
 
