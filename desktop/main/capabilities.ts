@@ -26,6 +26,26 @@ export function authorizationUrl(value:string):string {
   if(url.protocol!=='https:'||url.hostname!=='auth.openai.com'||url.username||url.password||url.port) throw new CoreError('untrusted-url','授权地址不是受支持的官方地址。');
   return url.href;
 }
+export function registrationUrl(value: string): string {
+  const url = new URL(value);
+  const hosts = new Set([
+    'accounts.feishu.cn',
+    'accounts.larksuite.com',
+    'open.feishu.cn',
+    'open.larksuite.com',
+  ]);
+  const authority = /^https:\/\/([^/?#]+)/i.exec(value)?.[1];
+  if (
+    url.protocol !== 'https:' ||
+    !hosts.has(url.hostname) ||
+    url.username ||
+    url.password ||
+    url.port ||
+    authority?.toLowerCase() !== url.hostname
+  )
+    throw new CoreError('untrusted-url', '注册链接不是受支持的飞书或 Lark HTTPS 地址。');
+  return url.href;
+}
 export function trustedSender(sender:{id:number;url:string;isMainFrame:boolean},expected:{id:number;url:string}):boolean {
   return sender.id===expected.id&&sender.isMainFrame&&sender.url===expected.url;
 }
