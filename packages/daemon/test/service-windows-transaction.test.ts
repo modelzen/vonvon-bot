@@ -197,7 +197,10 @@ it('never stops a lock owner when resuming absent registration with leftover fil
   files.bytes.set(cmdPath, Buffer.from(f.rendered.cmd));
   files.bytes.set(vbsPath, Buffer.from(f.rendered.vbs));
   const result = await f.service.uninstall();
-  expect(result.kind).toBe('uninstalled'); expect(result.retained?.pid).toBe(originalOwner.pid);
+  expect(result.kind).toBe('uninstalled');
+  expect(result.retained).toEqual({ pid: originalOwner.pid, startedAt: originalOwner.startedAt });
+  expect(await f.readOwner()).toBe(originalOwner);
+  expect(files.events).toEqual([`unlink:${cmdPath}`, `unlink:${vbsPath}`]);
   expect(f.stopOwner).not.toHaveBeenCalled(); expect(f.run).not.toHaveBeenCalled();
   expect(files.bytes.size).toBe(0);
 });
@@ -209,16 +212,25 @@ it('leaves registration withdrawn and files intact after an unconfirmed stop', a
   expect(result.kind).toBe('uninstall_incomplete'); expect(result.detail).toContain('stop_unconfirmed');
   expect(f.getRun()).toBeNull(); expect(files.bytes.size).toBe(2);
   expect(f.stopOwner).toHaveBeenCalledOnce(); expect(files.events).toEqual(['reg:delete']);
+  expect(result.retained).toEqual({ pid: originalOwner.pid, startedAt: originalOwner.startedAt });
+  expect(await f.readOwner()).toBe(originalOwner);
+  expect(files.bytes.get(cmdPath)).toEqual(Buffer.from(f.rendered.cmd));
+  expect(files.bytes.get(vbsPath)).toEqual(Buffer.from(f.rendered.vbs));
+  expect(f.launch).not.toHaveBeenCalled();
 });
 
 it('restores launcher bytes and Run value after unload failure without relaunching', async () => {
   const f = await setup({ installed: true, owner: originalOwner });
   files.failUnlink = vbsPath;
-  expect((await f.service.uninstall()).kind).toBe('uninstall_rolled_back');
+  const result = await f.service.uninstall();
+  expect(result.kind).toBe('uninstall_rolled_back');
+  expect(result.retained).toBeNull();
   expect(f.getRun()).toBe(f.rendered.runValue);
   expect(files.bytes.get(cmdPath)).toEqual(Buffer.from(f.rendered.cmd));
   expect(files.bytes.get(vbsPath)).toEqual(Buffer.from(f.rendered.vbs));
   expect(f.launch).not.toHaveBeenCalled();
+  expect(await f.readOwner()).toBeNull();
+  expect(files.events.filter(event => /^(reg:|stop$|unlink:|rename:|launch$)/.test(event))).toEqual(['reg:delete', 'stop', `unlink:${cmdPath}`, `unlink:${vbsPath}`, `rename:${cmdPath}`, 'reg:add']);
 });
 
 it('does not launch on registered port mismatch or after launcher failure', async () => {
@@ -262,10 +274,14 @@ it('rolls back a readiness timeout without starting or stopping any owner', asyn
 it('restores the kept registration after an uninstall drain read failure', async () => {
   const f = await setup({ installed: true });
   f.readOwner.mockRejectedValueOnce(new Error('lock read failed'));
-  expect((await f.service.uninstall()).kind).toBe('uninstall_rolled_back');
+  const result = await f.service.uninstall();
+  expect(result.kind).toBe('uninstall_rolled_back');
+  expect(result.retained).toBeNull();
   expect(f.getRun()).toBe(f.rendered.runValue);
   expect(files.bytes.get(cmdPath)).toEqual(Buffer.from(f.rendered.cmd));
   expect(f.stopOwner).not.toHaveBeenCalled(); expect(f.launch).not.toHaveBeenCalled();
+  expect(files.bytes.get(vbsPath)).toEqual(Buffer.from(f.rendered.vbs));
+  expect(files.events).toEqual(['reg:delete', 'reg:add']);
 });
 
 it('restores the new definition after install rollback drain fails and reports incomplete', async () => {
@@ -277,6 +293,9 @@ it('restores the new definition after install rollback drain fails and reports i
   expect(f.getRun()).toBe(f.rendered.runValue);
   expect(files.bytes.get(cmdPath)).toEqual(Buffer.from(f.rendered.cmd));
   expect(f.stopOwner).not.toHaveBeenCalled();
+  expect(result.retained).toBeNull();
+  expect(files.bytes.get(vbsPath)).toEqual(Buffer.from(f.rendered.vbs));
+  expect(files.events.filter(event => /^(reg:|stop$|unlink:|rename:|launch$)/.test(event))).toEqual(['reg:query', `rename:${cmdPath}`, `rename:${vbsPath}`, 'reg:add', 'reg:delete', 'reg:add']);
 });
 
 it('restores previous definition after install rollback unload fails and reports incomplete', async () => {
@@ -289,19 +308,30 @@ it('restores previous definition after install rollback unload fails and reports
   expect(f.getRun()).toBe(f.rendered.runValue);
   expect(files.bytes.get(cmdPath)).toEqual(Buffer.from(f.rendered.cmd));
   expect(f.stopOwner).not.toHaveBeenCalled();
+  expect(result.retained).toBeNull();
+  expect(files.bytes.get(vbsPath)).toEqual(Buffer.from(f.rendered.vbs));
+  expect(files.events.filter(event => /^(reg:|stop$|unlink:|rename:|launch$)/.test(event))).toEqual(['reg:query', `rename:${cmdPath}`, 'reg:delete', `unlink:${cmdPath}`, `unlink:${vbsPath}`, `rename:${cmdPath}`, 'reg:add']);
 });
 
-it('keeps absent resumed uninstall incomplete on read or unlink failure, then converges', async () => {
+it.each(['read', 'unlink'] as const)('resumed Windows %s failure retains the owner and converges without stop', async boundary => {
   const f = await setup({ owner: originalOwner });
   files.bytes.set(cmdPath, Buffer.from(f.rendered.cmd));
-  f.readOwner.mockRejectedValueOnce(new Error('lock read failed'));
-  expect((await f.service.uninstall()).kind).toBe('uninstall_incomplete');
-  expect(files.bytes.has(cmdPath)).toBe(true);
-  files.failUnlink = cmdPath;
-  expect((await f.service.uninstall()).kind).toBe('uninstall_incomplete');
-  expect((await f.service.uninstall()).kind).toBe('uninstalled');
+  if (boundary === 'read') f.readOwner.mockRejectedValueOnce(new Error('lock read failed'));
+  else files.failUnlink = cmdPath;
+  const result = await f.service.uninstall();
+  expect(result.kind).toBe('uninstall_incomplete');
+  expect(result.detail).toContain(boundary === 'read' ? 'query_failed' : 'unlink failed');
+  expect(result.retained).toEqual({ pid: originalOwner.pid, startedAt: originalOwner.startedAt });
+  expect(await f.readOwner()).toBe(originalOwner);
+  expect(f.getRun()).toBeNull(); expect(files.bytes.get(cmdPath)).toEqual(Buffer.from(f.rendered.cmd));
+  expect(files.bytes.has(vbsPath)).toBe(false);
+  expect(files.events).toEqual(boundary === 'read' ? [] : [`unlink:${cmdPath}`]);
+  files.events.length = 0;
+  const resumed = await f.service.uninstall();
+  expect(resumed.kind).toBe('uninstalled'); expect(resumed.retained).toEqual(result.retained);
+  expect(files.events).toEqual([`unlink:${cmdPath}`]); expect(files.bytes.size).toBe(0);
   expect((await f.service.uninstall()).kind).toBe('not-installed');
-  expect(f.stopOwner).not.toHaveBeenCalled(); expect(f.run).not.toHaveBeenCalled();
+  expect(f.stopOwner).not.toHaveBeenCalled(); expect(f.run).not.toHaveBeenCalled(); expect(f.launch).not.toHaveBeenCalled();
 });
 
 it('waits for an acknowledged all-owners drain without removing launchers early', async () => {
@@ -313,4 +343,28 @@ it('waits for an acknowledged all-owners drain without removing launchers early'
   expect(f.getRun()).toBeNull(); expect(files.bytes.size).toBe(2);
   f.setOwner(null); acknowledge?.();
   expect((await result).kind).toBe('uninstalled');
+});
+
+it('late step 5 stop_unconfirmed keeps launchers absent and retains the late owner', async () => {
+  const f = await setup({ installed: true });
+  f.readOwner.mockImplementation(async () => {
+    if (files.bytes.size !== 0) return null;
+    f.setOwner(originalOwner);
+    return originalOwner;
+  });
+  f.stopOwner.mockImplementation(async () => {
+    files.events.push('stop-unconfirmed');
+    expect(f.getRun()).toBeNull(); expect(files.bytes.size).toBe(0);
+    throw new Error('stop acknowledgment lost');
+  });
+  const result = await f.service.uninstall();
+  expect(result.kind).toBe('uninstall_incomplete'); expect(result.detail).toContain('stop_unconfirmed');
+  expect(result.detail).toContain(String(originalOwner.pid));
+  expect(result.retained).toEqual({ pid: originalOwner.pid, startedAt: originalOwner.startedAt });
+  expect(await f.readOwner()).toBe(originalOwner);
+  expect(f.getRun()).toBeNull(); expect(files.bytes.size).toBe(0);
+  expect(files.events).toEqual(['reg:delete', `unlink:${cmdPath}`, `unlink:${vbsPath}`, 'stop-unconfirmed']);
+  expect(f.stopOwner).toHaveBeenCalledExactlyOnceWith(rootPath, originalOwner);
+  expect(f.launch).not.toHaveBeenCalled();
+  expect(f.run.mock.calls.map(([args]) => args[0])).toEqual(['delete']);
 });

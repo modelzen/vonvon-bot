@@ -364,7 +364,7 @@ it.each([install, all])('real O4 sends exactly one stopHost and treats a lost do
 
 
 type LaunchdFixture = Awaited<ReturnType<typeof launchdFixture>>;
-async function launchdFixture() {
+async function launchdFixture(overrides: NonNullable<Parameters<typeof createLaunchdService>[1]> = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'launchd-transaction-'));
   const root = await resolveServiceRoot(registerPosixFixture(await resolveServiceRoot(directory)));
   const plistPath = posix.join(root, 'Library/LaunchAgents', `${LAUNCHD_LABEL}.plist`);
@@ -487,7 +487,11 @@ async function launchdFixture() {
         expect((await readRegistration({ target, requestedRoot: root })).kind).toBe('ours');
         state.loaded = true;
         if (state.bootstrap !== 'success') return { ok: false, stdout: '', stderr: state.bootstrap };
-        if (!state.owner && !state.verifyFails) { state.owner = { ...first }; state.pid = first.pid; }
+        if (!state.owner && !state.verifyFails) {
+          const current = await readRegistration({ target, requestedRoot: root });
+          if (current.kind !== 'ours') throw new Error('Missing bootstrap registration');
+          state.owner = { ...first, listen: `127.0.0.1:${current.definition.port}` }; state.pid = first.pid;
+        }
         return { ok: true, stdout: '', stderr: '' };
       }
       if (command === 'bootout') {
@@ -505,11 +509,12 @@ async function launchdFixture() {
       if (command === 'kickstart') { state.owner = { ...first }; state.pid = first.pid; return { ok: true, stdout: '', stderr: '' }; }
       throw new Error(`Unexpected command ${command}`);
     },
+    ...overrides,
   });
   return { root, target, plistPath, calls, fileCalls, temporaryFiles, state, content, seed, service, launchChild, checkChildRegistration, exitChild, cleanup: () => rm(root, { recursive: true, force: true }) };
 }
-async function withLaunchd(run: (fixture: LaunchdFixture) => Promise<void>) {
-  const fixture = await launchdFixture();
+async function withLaunchd(run: (fixture: LaunchdFixture) => Promise<void>, overrides: NonNullable<Parameters<typeof createLaunchdService>[1]> = {}) {
+  const fixture = await launchdFixture(overrides);
   try { await run(fixture); } finally { await fixture.cleanup(); }
 }
 const bootouts = (fixture: LaunchdFixture) => fixture.calls.filter(call => call.startsWith('bootout '));
@@ -546,7 +551,7 @@ it.each(['error', 'timeout'] as const)('launchd partial bootstrap %s never grant
 it('launchd successful replacement and failed verification each run their own withdrawal barrier', async () => {
   await withLaunchd(async f => {
     await f.seed(49102); f.state.verifyFails = true;
-    const result = await f.service.install();
+    const result = await f.service.install({ port: 49101 });
     expect(result.kind).toBe('install_rolled_back'); expect(result.retained).toBeNull();
     expect(f.state.owner).toBeNull();
     expect(await readFile(f.plistPath)).toEqual(f.content(49102));
@@ -577,7 +582,7 @@ it.each(['uninstall', 'replacement', 'rollback'] as const)('launchd %s query fai
     if (mode === 'rollback') f.state.verifyFails = true;
     let removals = 0;
     f.state.afterUnlink = async () => { if (++removals === (mode === 'rollback' ? 2 : 1)) f.state.queryFailure = true; };
-    const result = mode === 'uninstall' ? await f.service.uninstall() : await f.service.install();
+    const result = mode === 'uninstall' ? await f.service.uninstall() : await f.service.install({ port: 49101 });
     expect(result.kind).toBe(mode === 'uninstall' ? 'uninstall_rolled_back' : mode === 'replacement' ? 'install_rolled_back' : 'install_incomplete');
     expect(await readFile(f.plistPath)).toEqual(f.content(mode === 'rollback' ? 49101 : 49102));
     expect(bootouts(f)).toHaveLength(mode === 'rollback' ? 1 : 0);
@@ -596,7 +601,7 @@ it.each(['uninstall', 'replacement', 'rollback'] as const)('launchd %s lost stop
     f.state.beforeUnlink = async () => {
       if (++removals === (mode === 'rollback' ? 2 : 1)) { f.state.owner = { ...first }; f.state.pid = first.pid; }
     };
-    const result = mode === 'uninstall' ? await f.service.uninstall() : await f.service.install();
+    const result = mode === 'uninstall' ? await f.service.uninstall() : await f.service.install({ port: 49101 });
     expect(result.kind).toBe(mode === 'uninstall' ? 'uninstall_incomplete' : 'install_incomplete');
     expect(result.detail).toContain('stop_unconfirmed'); expect(f.calls.filter(call => call.startsWith('stop '))).toHaveLength(1);
     expect(bootouts(f)).toHaveLength(mode === 'rollback' ? 1 : 0);
@@ -630,7 +635,7 @@ it.each((['replacement', 'rollback'] as const).flatMap(mode =>
       expect(f.state.pid).toBe(first.pid);
       expect(f.state.owner).toBeNull();
     };
-    const result = await f.service.install();
+    const result = await f.service.install({ port: 49101 });
     expect(result.kind).toBe(mode === 'replacement' ? 'installed' : 'install_rolled_back');
     expect(f.state.child).toMatchObject({ phase: 'exited', exitCode: 0, work: 0, signals: 0, locks: race === 'before-withdraw' ? 1 : 0 });
     expect(f.state.prematureBootouts).toBe(0);
@@ -754,7 +759,7 @@ it.each(['replacement', 'rollback'] as const)('launchd %s unload-unknown never r
     f.state.beforeCommand = async command => {
       if (command === 'bootout' && ++unloads === (mode === 'rollback' ? 2 : 1)) f.state.bootout = 'timeout';
     };
-    const result = await f.service.install();
+    const result = await f.service.install({ port: 49101 });
     expect(result.kind).toBe('install_incomplete'); expect(result.leftovers).toContain('jobPresent=false');
     expect(result.retained).toBeNull(); expect(f.state.owner).toBeNull(); expect(f.state.loaded).toBe(false);
     await expect(readFile(f.plistPath)).rejects.toMatchObject({ code: 'ENOENT' });
@@ -811,7 +816,7 @@ it.each((['replacement', 'rollback'] as const).flatMap(mode => invalidJobOutputs
         f.state.owner = { ...first }; f.state.pid = first.pid;
         f.state.queryOutput = sample.raw;
       };
-      const result = await f.service.install();
+      const result = await f.service.install({ port: 49101 });
       expect(result.detail, sample.label).toContain('query_failed');
       expect(result.kind, sample.label).toBe('install_incomplete');
       expect(f.calls.filter(call => call.startsWith('stop ')), sample.label).toEqual([]);
@@ -826,7 +831,7 @@ it.each(['uninstall', 'replacement', 'rollback'] as const)('launchd %s B2 timeou
     await f.seed(49102); f.state.verifyFails = mode === 'rollback';
     let removals = 0;
     f.state.afterUnlink = async () => { if (++removals === (mode === 'rollback' ? 2 : 1)) f.state.queryTimeout = true; };
-    const result = mode === 'uninstall' ? await f.service.uninstall() : await f.service.install();
+    const result = mode === 'uninstall' ? await f.service.uninstall() : await f.service.install({ port: 49101 });
     expect(result.detail).toContain('query_failed');
     expect(result.detail).toContain('timed out');
     expect(result.kind).toBe(mode === 'uninstall' ? 'uninstall_rolled_back' : mode === 'replacement' ? 'install_rolled_back' : 'install_incomplete');
@@ -851,7 +856,7 @@ it.each((['fresh', 'replacement'] as const).flatMap(mode =>
   await withLaunchd(async f => {
     if (mode === 'replacement') await f.seed(49102);
     f.state.fileFault = fault;
-    const result = await f.service.install();
+    const result = await f.service.install({ port: 49101 });
     expect(result.kind).toBe('install_rolled_back');
     expect(result.detail).toContain(`${fault} failed`);
     expect(result.retained).toBeNull();
@@ -876,7 +881,7 @@ it.each((['fresh', 'replacement'] as const).flatMap(mode =>
   await withLaunchd(async f => {
     if (mode === 'replacement') await f.seed(49102);
     f.state.fileFault = fault; f.state.cleanupFails = true;
-    const result = await f.service.install();
+    const result = await f.service.install({ port: 49101 });
     const temporary = await f.temporaryFiles();
     expect(temporary).toHaveLength(1);
     const remaining = temporary[0];
@@ -893,7 +898,7 @@ it.each((['fresh', 'replacement'] as const).flatMap(mode =>
       ? ['print gui/501', printJob, 'withdraw', printJob, bootoutJob, printJob, printJob]
       : ['print gui/501', printJob, printJob]);
     f.state.cleanupFails = false;
-    const nextResult = await f.service.install();
+    const nextResult = await f.service.install({ port: 49101 });
     expect(nextResult.kind).toBe('installed');
     expect(nextResult.leftovers).not.toContain(`temporary file ${remaining}`);
     expect(await f.temporaryFiles()).toEqual(temporary);
@@ -904,7 +909,7 @@ it.each(['uninstall', 'replacement'] as const)('launchd %s B1 unlink failure pre
     await f.seed(49102);
     f.state.plistUnlinkFails = true;
     f.state.beforeUnlink = async () => { f.launchChild(); await f.checkChildRegistration(); };
-    const result = mode === 'uninstall' ? await f.service.uninstall() : await f.service.install();
+    const result = mode === 'uninstall' ? await f.service.uninstall() : await f.service.install({ port: 49101 });
     expect(result.kind).toBe(mode === 'uninstall' ? 'uninstall_incomplete' : 'install_incomplete');
     expect(result.detail).toContain('plist unlink failed');
     expect(result.retained).toEqual({ pid: first.pid, startedAt: first.startedAt });
@@ -923,7 +928,7 @@ it.each((['fresh', 'replacement'] as const).flatMap(mode =>
   await withLaunchd(async f => {
     if (mode === 'replacement') await f.seed(49102);
     f.state.logFault = { name: posix.join(f.root, name), operation };
-    const result = await f.service.install();
+    const result = await f.service.install({ port: 49101 });
     expect(result.kind).toBe('install_rolled_back'); expect(result.detail).toContain(`log ${operation} failed`);
     expect(result.retained).toBeNull(); expect(f.state.owner).toBeNull(); expect(f.state.loaded).toBe(false);
     expect(await f.temporaryFiles()).toEqual([]);
@@ -994,4 +999,59 @@ it.each(['query_failed', 'stop_unconfirmed'] as const)('launchd resumed uninstal
     await expect(readFile(f.plistPath)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(f.calls).toEqual([printJob, printJob, ...(failure === 'stop_unconfirmed' ? [`stop ${first.pid}`] : [])]);
   });
+});
+
+it('launchd preserves the stopped registered port when the next free port differs', async () => {
+  const freePort = vi.fn(async () => 32124);
+  await withLaunchd(async f => {
+    await f.seed(32123);
+    const before = await readFile(f.plistPath);
+    const result = await f.service.install();
+    expect(result.kind).toBe('already-installed');
+    expect(await readFile(f.plistPath)).toEqual(before);
+    expect(f.calls).toEqual(['print gui/501', printJob]);
+    expect(f.fileCalls).toEqual([]);
+    expect(f.state.owner).toBeNull(); expect(f.state.pid).toBeNull();
+    expect(freePort).not.toHaveBeenCalled();
+  }, { freePort });
+});
+
+it.each(['explicit replacement', 'lost manager state'] as const)('launchd handles %s without choosing a free port', async mode => {
+  const freePort = vi.fn(async () => 32124);
+  await withLaunchd(async f => {
+    await f.seed(32123);
+    if (mode === 'lost manager state') f.state.loaded = false;
+    const port = mode === 'explicit replacement' ? 32125 : 32123;
+    const result = await f.service.install(mode === 'explicit replacement' ? { port } : {});
+    expect(result.kind).toBe('installed');
+    expect(await readFile(f.plistPath)).toEqual(f.content(port));
+    expect(f.state.owner?.listen).toBe(`127.0.0.1:${port}`);
+    expect(f.state.loaded).toBe(true); expect(freePort).not.toHaveBeenCalled();
+    expect(f.calls.filter(call => !call.startsWith('print '))).toEqual([
+      ...(mode === 'explicit replacement' ? ['withdraw', bootoutJob] : []),
+      `bootstrap gui/501 ${f.plistPath}`,
+    ]);
+    if (mode === 'lost manager state') expect(f.fileCalls).toEqual([]);
+  }, { freePort });
+});
+
+it.each(['absent', 'identity', 'listen'] as const)('launchd resumed owner_unproven after O3 %s retains identity and work without unloading or restoring', async change => {
+  const changed = change === 'absent' ? null : change === 'identity' ? { ...first, startedAt: 'different-incarnation' } : { ...first, listen: '127.0.0.1:32124' };
+  const readOwner = vi.fn(async (): Promise<PidLockInfo | null> => first)
+    .mockResolvedValueOnce(first).mockResolvedValueOnce(changed)
+    .mockResolvedValueOnce(first).mockResolvedValueOnce(changed);
+  await withLaunchd(async f => {
+    f.state.loaded = true; f.state.pid = first.pid; f.state.owner = first; f.state.ownerWork = 3;
+    const result = await f.service.uninstall();
+    expect(result.kind).toBe('uninstall_incomplete'); expect(result.detail).toContain('owner_unproven');
+    expect(result.detail).toContain(String(first.pid));
+    expect(result.retained).toEqual({ pid: first.pid, startedAt: first.startedAt });
+    expect(f.state.owner).toBe(first); expect(f.state.ownerWork).toBe(3);
+    expect(f.state.loaded).toBe(true); expect(f.state.pid).toBe(first.pid);
+    expect(f.calls).toEqual([printJob, printJob, printJob]);
+    expect(f.state.clock).toBe(250); expect(readOwner).toHaveBeenCalledTimes(5);
+    expect(f.fileCalls).toEqual([]);
+    await expect(readFile(f.plistPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await readRegistration({ target: f.target, requestedRoot: f.root })).kind).toBe('absent');
+  }, { readOwner });
 });
