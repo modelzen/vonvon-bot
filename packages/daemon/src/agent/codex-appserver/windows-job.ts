@@ -36,7 +36,7 @@ public static class CodexJob {
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool AssignProcessToJobObject(IntPtr job,IntPtr process);
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool TerminateJobObject(IntPtr job,uint code);
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool CreateProcess(string app,StringBuilder args,IntPtr pa,IntPtr ta,bool inherit,uint flags,IntPtr env,string cwd,ref Startup startup,out ProcessInfo process);
-  [DllImport("kernel32.dll")] static extern uint ResumeThread(IntPtr thread);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern uint ResumeThread(IntPtr thread);
   [DllImport("kernel32.dll")] static extern uint WaitForSingleObject(IntPtr handle,uint ms);
   [DllImport("kernel32.dll")] static extern bool GetExitCodeProcess(IntPtr process,out uint code);
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool TerminateProcess(IntPtr process,uint code);
@@ -54,17 +54,25 @@ public static class CodexJob {
   }
   public static int Run(string name,string executable,string command,string proof) {
     IntPtr job=IntPtr.Zero; ProcessInfo child=new ProcessInfo();
+    string stage="stop-check";
     try {
       if(File.Exists(proof+".stop")) { File.WriteAllText(proof,name); return 0; }
+      stage="create-job";
       job=CreateJobObject(IntPtr.Zero,name); Check(job!=IntPtr.Zero);
       var limits=new Extended(); limits.basic.flags=0x2000;
+      stage="configure-job";
       Check(SetInformationJobObject(job,9,ref limits,(uint)Marshal.SizeOf(typeof(Extended))));
       var startup=new Startup(); startup.size=(uint)Marshal.SizeOf(typeof(Startup)); startup.flags=0x100;
       startup.input=GetStdHandle(-10); startup.output=GetStdHandle(-11); startup.error=GetStdHandle(-12);
+      stage="inherit-handles";
       Check(SetHandleInformation(startup.input,1,1)); Check(SetHandleInformation(startup.output,1,1)); Check(SetHandleInformation(startup.error,1,1));
+      stage="create-process";
       Check(CreateProcess(executable,new StringBuilder(command),IntPtr.Zero,IntPtr.Zero,true,4,IntPtr.Zero,null,ref startup,out child));
+      stage="assign-job";
       Check(AssignProcessToJobObject(job,child.process));
+      stage="resume-thread";
       Check(ResumeThread(child.thread)!=0xffffffff);
+      stage="observe-job";
       uint code;
       while(!Empty(job)) {
         if(File.Exists(proof+".stop")) {
@@ -90,12 +98,19 @@ public static class CodexJob {
       Check(GetExitCodeProcess(child.process,out code));
       File.WriteAllText(proof,name);
       return unchecked((int)code);
-    } catch {
+    } catch(Exception error) {
+      try { Console.Error.WriteLine("vonvon-job stage="+stage+" type="+error.GetType().Name+" win32="+(error is Win32Exception ? ((Win32Exception)error).NativeErrorCode.ToString() : "none")); } catch {}
       try {
+        stage="cleanup-process";
         if(child.process!=IntPtr.Zero) { TerminateProcess(child.process,1); Check(WaitForSingleObject(child.process,1000)==0); }
+        stage="cleanup-job";
         if(job!=IntPtr.Zero) { Check(TerminateJobObject(job,1)); Drain(job); }
+        stage="cleanup-proof";
         File.WriteAllText(proof,name);
-      } catch { return 253; }
+      } catch(Exception cleanupError) {
+        try { Console.Error.WriteLine("vonvon-job stage="+stage+" type="+cleanupError.GetType().Name+" win32="+(cleanupError is Win32Exception ? ((Win32Exception)cleanupError).NativeErrorCode.ToString() : "none")); } catch {}
+        return 253;
+      }
       return 254;
     } finally {
       if(child.thread!=IntPtr.Zero) CloseHandle(child.thread);
@@ -106,7 +121,7 @@ public static class CodexJob {
 }`;
 const encoded = (value: string): string => Buffer.from(value, 'utf16le').toString('base64');
 const literal = (value: string): string => `'${value.replaceAll("'", "''")}'`;
-const source = `$ErrorActionPreference='Stop'; Add-Type -TypeDefinition ${literal(jobSource)}; `;
+const source = `$ErrorActionPreference='Stop'; Microsoft.PowerShell.Utility\\Add-Type -TypeDefinition ${literal(jobSource)}; `;
 const args = (script: string): string[] => ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded(source + script)];
 
 export class WindowsCodexJob {
