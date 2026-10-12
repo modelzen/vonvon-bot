@@ -158,6 +158,8 @@ ACP 客户端是 Vonvon 自己的一层薄封装，不用 SDK 的 `ClientSideCon
 
 实现参考 vonvon-bridge-legacy 的 `packages/runtime/src/cli-migration-*.ts` 和 `legacy-cli-control.ts`。legacy 只处理了 macOS 的 launchd，Linux 的 systemd 和 Windows 的启动项要新写。
 
+服务控制、执行器、journal 和 `import` 请求组的具体类型、持久化形状和平台规则见 [bridge-import.md](bridge-import.md)。几条硬规则：探测失败只能报“未知”，不能当作“不存在”；任何写操作之前先比对预检时的服务身份，外部换过的定义不动；暂停做到一半是一个返回值，恢复必须从这个状态收敛；进程归属靠固定路径和完整身份字段，不靠命令行子串；快照字节只在内存里，journal 只存哈希和备份路径。界面和 CLI 都走 daemon 里的同一个执行器，没有第二条语义不同的路径。
+
 ### 账号不是使用前提
 
 不登录也能完整使用本机的 Vonvon Bot，包括导入 bridge 数据。登录只用来把这台机器加到账号下，之后就能在网页或其他设备上管理它。

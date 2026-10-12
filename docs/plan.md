@@ -156,7 +156,7 @@ Evidence-grade gates follow the merge graph. A PR is gate-ready when every merge
 
 *Shared files.* After V3 the root owns these and writes every change to them as a frozen handoff or at integration. Owners own the leaf files they add.
 
-- `packages/protocol/src/index.ts`, `domain.ts`, `rpc.ts`, `events.ts`, and `handshake.ts`. This plan approves exactly these changes to existing shapes. V6b adds `readScope` to `domain.ts` `setPermission` and to `membershipSchema.permission`. V7a adds `cursor`, `grok`, and `custom-acp` to `domain.ts` `toolSchema`, which allows only `codex` and `claude` today, and `execution.customAcpCommand` to `settings.ts`. V7b adds `pi` to `toolSchema`. V8's owner writes `import.ts`, and the root adds its export and request-group registration. Any other change to an existing shape goes back to Claude Code.
+- `packages/protocol/src/index.ts`, `domain.ts`, `rpc.ts`, `events.ts`, and `handshake.ts`. This plan approves exactly these changes to existing shapes. V6b adds `readScope` to `domain.ts` `setPermission` and to `membershipSchema.permission`. V7a adds `cursor`, `grok`, and `custom-acp` to `domain.ts` `toolSchema`, which allows only `codex` and `claude` today, and `execution.customAcpCommand` to `settings.ts`. V7b adds `pi` to `toolSchema`. V8's owner writes `import.ts`, and the root adds its export and the `import` request-group registration in `rpc.ts` per [bridge-import.md](bridge-import.md) section 5; V8 adds nothing to `events.ts`. Any other change to an existing shape goes back to Claude Code.
 - `packages/daemon/src/cli/index.ts`. One registration line per command: V4 `open`, V8 `import`, V10 `login` and `logout`. V5 adds no command, because `service` stays registered from V3, but V3's registration declares neither `install --port <P>` nor `status --json`. The root adds exactly those two options to the existing `service` registration as a V5 handoff, and changes nothing else there. Owners own `cli/commands/<name>.ts`.
 - The root `package.json` and `package-lock.json`. V5 returns the desktop package's dependencies. V6b returns `@anthropic-ai/claude-agent-sdk` at exactly `0.3.246`, moved from `devDependencies` to `dependencies` of `packages/daemon`. V7a returns `@agentclientprotocol/sdk` `^0.17.1` as a `devDependency` for its types only. A worker returns the dependencies it adds. The root applies them and regenerates the lockfile with `npm install` after each integration or merge that touches it, never by hand. A lockfile change is a context change under the patch-id rule.
 - `NOTICE`. Each PR appends its section, and the root resolves the merge.
@@ -1785,18 +1785,19 @@ The provider layer is redesigned on 2026-10-12. The design, its data types, the 
 
 **Files.**
 
-- [ ] Create `packages/daemon/src/import/bridge/preflight.ts`, `journal.ts`, `execute.ts`, `legacy-keystore.ts`, and `hooks.ts`.
-- [ ] Create `packages/daemon/src/import/bridge/service-control/launchd.ts`, `systemd.ts`, and `windows.ts`.
+- [ ] Create `packages/daemon/src/import/bridge/preflight.ts`, `journal.ts`, `execute.ts`, `rpc.ts`, `legacy-keystore.ts`, and `hooks.ts`.
+- [ ] Create `packages/daemon/src/import/bridge/service-control/types.ts`, `launchd.ts`, `systemd.ts`, and `windows.ts`.
 - [ ] Create `packages/protocol/src/import.ts`.
-- [ ] Create `packages/ui/src/import/`.
+- [ ] Create `packages/ui/src/import/`, including the props-less `ImportFlow.tsx` container that the feature registration points at.
 - [ ] Create `packages/daemon/src/cli/commands/import.ts` for `vonvon import feishu-codex-bridge`. The root registers it in `cli/index.ts`.
+- [ ] Every callable, persisted, and wire shape above follows [bridge-import.md](bridge-import.md). Its section 6 lists the root-written shared edits (`http.ts` one case, `host/bootstrap.ts` one recovery call, `client.ts` one method, `features.ts` one entry, `App.tsx` one first-run render) and section 9 the PR disclosure.
 
 **Build.**
 
 - [ ] Port preflight, journal, and receipts from vonvon-bridge-legacy `packages/runtime/src/cli-migration-preflight.ts`, `cli-migration-transaction.ts`, and `cli-migration-service.ts`.
 - [ ] Read `secrets.enc` with the bridge key derivation in `legacy-keystore.ts` and re-encrypt under `master.key`.
-- [ ] Detect and stop the bridge on all three platforms. Port launchd from legacy `legacy-cli-control.ts`, and write systemd and Windows Run key control from the bridge's own `src/service/`.
-- [ ] Run the phases pause, copy, hooks, start, verify connected, disable autostart, write marker. Restore the bridge on any failure.
+- [ ] Detect and stop the bridge on all three platforms. Port launchd from legacy `legacy-cli-control.ts`, and write systemd and Windows Run key control from the bridge's own `src/service/`. The adapters implement the `ServiceControl` contract in [bridge-import.md](bridge-import.md) section 2 and the platform rules in section 3: unknown is never absent, identity is compared before the first mutation, a partial pause is a returned value that `restore` converges from, and no substring is ownership.
+- [ ] Run the phases pause, copy, hooks, start, verify connected, disable autostart, write marker. Restore the bridge on any failure. The executor, journal, receipt, recovery, and cancel semantics are [bridge-import.md](bridge-import.md) section 4; the CLI and the UI both go through the daemon executor over the `import` request group in section 5.
 - [ ] Add the import step to first-run onboarding in the UI.
 
 **You see.**
@@ -1806,6 +1807,7 @@ The provider layer is redesigned on 2026-10-12. The design, its data types, the 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
 - [ ] `packages/daemon/test/import-bridge.test.ts` crashes the executor after each phase and checks that a rerun converges to the same end state, and that a failure before verify restores the bridge files. Run `npm test -w packages/daemon -- import-bridge`.
+- [ ] `packages/daemon/test/import-bridge-service-control.test.ts` holds every failure row of [bridge-import.md](bridge-import.md) section 7 on fake commands and in-memory files, asserting end state and command trace, not error strings. Run `npm test -w packages/daemon -- import-bridge-service-control`.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on the configured `swarm workers` model at the PR head, per the boot recipe.
 
