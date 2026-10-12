@@ -130,7 +130,7 @@ Bot 层只看一个对象 `ProviderRuntime`。它为一个项目和一个群打�
 
 ACP 客户端是 Vonvon 自己的一层薄封装，不用 SDK 的 `ClientSideConnection`，因为后者用 zod 校验每条 `session/update`，Grok 的 `subagent_spawned` 会被拒掉。不认识的更新类型、`_meta` 和非标准方法都交给方言处理。Cursor、Grok、自定义 ACP 各一个方言，加一个 provider 只需一条注册和一个方言。Copilot 和 OpenCode 推后。
 
-进程托管沿用 Codex 的 `owned-process.ts` 和 `windows-job.ts`，改成所有 provider 共用。Claude 的 CLI 子进程通过 SDK 的 `spawnClaudeCodeProcess` 接管，和其他进程一样记进 `owned-pids.json`，daemon 启动时按 pid 加启动时间清理上一个 daemon 留下的孤儿进程。
+进程托管沿用 Codex 的 `owned-process.ts` 和 `windows-job.ts`，改成所有 provider 共用。Claude 的 CLI 子进程通过 SDK 的 `spawnClaudeCodeProcess` 接管，和其他进程一样由一个原生托管进程（owner helper）启动。托管进程持有子进程不回收，只对自己钉住的进程组或自己的 Job 发信号；daemon 只通过控制管道下命令，从不按数字 pid 发信号。daemon 异常退出时管道关闭，托管进程自行结束整棵树并写下已清空标记。记录在 `process-owners.json`，启动清理只读标记、不发信号，证明不了的记为 `lost` 并在 `vonvon doctor` 里列出。细则见 [providers.md](providers.md) *Process identity and signals*。
 
 出站路径只有一处判断。Claude 的钩子和飞书上传图片、发文件共用 `judgePath`，按真实路径判断是否在项目内，这修掉 #114 里符号链接绕过的问题；远程图片只在项目开了联网时才取，`full` 也一样，联网开关在每一档都由 Vonvon 自己检查，且永远拒绝回环、内网和链路本地地址。
 
