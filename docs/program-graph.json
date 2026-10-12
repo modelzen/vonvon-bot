@@ -1311,8 +1311,8 @@
   "tooling": [
     {
       "id": "TOOL-1",
-      "title": "进度网页与看板的定时刷新：GitHub Pages 加 issue 事件和 schedule",
-      "body": "新建 `.github/workflows/progress.yml`。触发：`schedule` 每 2 小时一次（`0 */2 * * *`），issues 的 opened、closed、reopened、labeled、unlabeled 事件，以及 workflow_dispatch。步骤：在 ubuntu-latest 上用 GITHUB_TOKEN 运行 `node scripts/program-graph-sync.mjs board` 重写看板 issue #122，再运行 `node scripts/program-graph-sync.mjs html site` 生成 `site/index.html`，用 actions/upload-pages-artifact 和 actions/deploy-pages 发布到 GitHub Pages。仓库 Settings 里把 Pages 的 Source 设为 GitHub Actions，并在 PR 里写下网页地址。不装 npm 依赖，预计每次不到 1 分钟，每月约 360 分钟 Linux。注意：私有仓库的 Pages 在 Team 套餐下对知道地址的人公开，网页只含任务标题和编号；如果用户不接受，改为在 JP-VPS 上用 cron 生成并通过 Tailscale 提供静态页，不发布到 Pages。完成标准：网页能打开并渲染两张图和进度表；关闭一个 issue 后，下一次定时运行或事件运行把它变绿；工作流在 TOOL-2 之前落地，不算入 CI 完整运行。",
+      "title": "本地进度网页：统一任务图与每小时只读刷新",
+      "body": "交付 `/Users/clay/vonvon-progress/index.html`，网页自包含且无 CDN 依赖。`refresh.mjs` 只读抓取仓库默认分支的 `docs/program-graph.json` 和 GitHub issues、PR，原子刷新本地产物。网页用一张统一可折叠图展示 Version → 父 issue → 子 issue → 关联 PR，同时显示版本合入依赖和 task 前置关系；突出已可开工且未标记进行中的任务。未开始原因没有证据时明确显示未知，不编造。沿用 Paseo schedule `aa01bd1d`，按 `0 * * * *`、`Asia/Shanghai` 每小时在 `/Users/clay/vonvon-progress` 运行本地刷新命令；该 schedule 当前暂停，由指定本地产物负责人在验收后恢复，根代理不新建或修改 schedule。验收时实际打开本地 HTML，核对折叠、层级、依赖语义、任务进度、可开工高亮、未知原因及无 CDN 依赖；验证只读抓取、原子替换和数据与默认分支 graph、issues、PR 一致，并在验收后记录现有 schedule 的每小时刷新证据。#203 在本地验收前保持打开，不阻塞其他产品实现。根代理继续维护 issue #122 看板。历史 PR #214 已合入，旧 Pages workflow_dispatch 曾完成两次；历史部署不作为当前完成标准。",
       "blockedBy": []
     },
     {

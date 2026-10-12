@@ -2,17 +2,21 @@
 
 ## 何时运行
 
-两个仓库的主线 CI 都由目标为 `main` 的 PR 创建、更新提交或重新打开触发，也可在 Actions 页面手动运行。vonvon-bot 从 2026-10-12 起改为：PR 的每次事件只跑范围分类和文档检查，完整三平台运行只在 PR 带 `frozen` 标签时或手动触发时跑，也就是每个冻结 head 一次（工作流改动见 issue #204）。不为普通分支 push 或合入后的 main push 重复运行，不设置定时任务。同一 PR 的新运行取消旧运行，已执行的云端时间仍计入使用量。
+两个仓库的主线 CI 都由目标为 `main` 的 PR 创建、更新提交或重新打开触发，也可在 Actions 页面手动运行。vonvon-bot 还在 PR 添加标签时触发。每次 PR 事件都在 Linux 上运行范围分类、分类回归测试和改动空白检查。`full` 范围只有在 PR 带 `frozen` 标签或手动触发时才运行完整平台链；未冻结时 Linux 报告完整检查待运行并使必需检查失败，防止轻量运行被视为完整通过。纯文档 PR 即使带 `frozen` 标签也只运行轻量检查。没有普通分支 push、合入后的 main push 或定时 CI。同一 PR 的新运行取消旧运行，已执行的云端时间仍计入使用量。
+
+给已冻结的 `full` PR 添加其他标签时，CI 仍运行轻量检查，Linux 必需检查随后失败，但不重复完整平台链。添加 `frozen` 标签、带该标签的 PR 创建、更新提交或重新打开时，`full` 范围运行完整平台链。
 
 | 改动或操作 | Notelet | vonvon-bot |
 | --- | --- | --- |
-| 纯文档 PR | Linux 范围与空白检查 | Linux 范围与空白检查 |
+| 纯文档 PR，包括带 `frozen` 标签 | Linux 范围与空白检查 | Linux 范围、分类回归与空白检查；Windows 和 Mac 跳过 |
 | 纯静态网站 PR | Linux 范围、空白与部署语法检查 | 不适用 |
-| 产品代码、依赖、CI 或未知路径 | 完整 Linux，成功后运行专用 Mac | 带 `frozen` 标签或手动触发：完整 Linux，成功后运行托管 Windows 与专用 Mac。其他事件只跑范围分类与空白检查 |
+| 产品代码、依赖、CI 或未知路径 | 完整 Linux，成功后运行专用 Mac | 带 `frozen` 标签或手动触发：完整 Linux，成功后运行托管 Windows 与专用 Mac。未冻结 PR 只运行分类回归、范围与空白检查，Linux 必需检查失败并报告完整检查待运行 |
 | 手动运行 main CI | 完整 Linux 与专用 Mac | 完整 Linux、Windows 与专用 Mac |
-| fork PR | Linux；自托管 Mac 跳过 | Linux 与 Windows；自托管 Mac 跳过 |
+| fork PR | Linux；自托管 Mac 跳过 | 未冻结时只运行 Linux 轻量检查；冻结且为 `full` 范围时运行完整 Linux 与 Windows，自托管 Mac 跳过 |
 
-手动运行前确认 ref 受信任。自托管 Mac 还要求 `ENABLE_SELF_HOSTED_MACOS_CI=true`，`github-ci` 保持图形登录且 runner 在线。云端 Linux 失败时，后续 Windows 和 Mac 不启动。Mac 离线时对应 job 排队等待，不能把它记为通过。
+手动运行前确认 ref 受信任。三个平台检出的源提交都须与事件的 PR head SHA 或手动运行 SHA 一致。自托管 Mac 还要求 `ENABLE_SELF_HOSTED_MACOS_CI=true`，`github-ci` 保持图形登录且 runner 在线。云端 Linux 失败时，后续 Windows 和 Mac 不启动。Mac 离线时对应 job 排队等待，不能把它记为通过。
+
+未冻结的 `full` PR 会完成轻量检查，但 Linux 必需检查随后失败，直到冻结 head 或手动运行产生完整证据。事件 JSON 无效、提交信息缺失或差异收集失败也使 Linux 检查失败，不会产生可用于合入的通过结果。
 
 这里描述当前 main 的 `ci.yml`。旧桌面分支的 `desktop.yml` 是另一条工作流，仍有 Windows 原生检查和打包；其迁移记录见 [issue 58](https://github.com/modelzen/vonvon-bot/issues/58)。主线 Node 检查不能替代原生安装、交互与服务验收。
 
