@@ -247,16 +247,25 @@ export type ProviderAnswer =
 export interface TitleControl { read(providerSessionId: string): Promise<string | undefined>; set?(providerSessionId: string, title: string): Promise<void> }
 export type AcpStopReason = string;                      // raw ACP stopReason; an unknown value maps to failed{provider-error}
 
+/** Why a goal ended. The engine reports terminal and failed; the runtime produces cleared and timeout. Behavior in *Goals*. */
+export type GoalEnd =
+  | { kind: 'terminal'; status: string }     // the provider's own terminal goal status
+  | { kind: 'failed'; failure: Failure }      // goal setup or the goal itself failed, with or without a live turn
+  | { kind: 'cleared' }                       // GoalRun.end, or GoalRun.stop with by 'user' or 'daemon'
+  | { kind: 'timeout' };                      // the goal idle bound, GoalRun.stop('watchdog')
+
 /** On Conversation iff features.goal !== 'none'. Behavior in *Goals*. */
 export interface GoalControl {
   /** Throws ConversationBusy while a run or a goal is live. */
   start(objective: string, opts?: TurnOptions): GoalRun;
 }
 export interface GoalRun {
-  /** One Run per provider turn, in order. Each Run ends with its own outcome. Ends after the engine's GoalSink.ended. */
+  /** One Run per provider turn, in order. Each Run ends with its own outcome. Ends when the goal ends, possibly with no Run at all. */
   readonly runs: AsyncIterable<Run>;
   /** The latest goal event, undefined before the first. Keeps its last value after runs ends. */
   status(): Extract<RunEvent, { type: 'goal' }> | undefined;
+  /** Why the goal ended. Settles once, before runs reports done. Never rejects. The terminal card reads it. */
+  result(): Promise<GoalEnd>;
   /** Clear the goal and let the live run finish on its own. runs ends after that run's outcome. The 🎯 结束目标 button. */
   end(): Promise<void>;
   /** Clear the goal and stop the live run through the ladder. Resolves with that run's outcome, undefined when none is live. The ⏹ 终止 button. */
@@ -300,16 +309,18 @@ export interface EngineGoal {
   /**
    * Resolves once the provider accepted the goal. The provider starts and continues turns on its own.
    * At each turn start the engine calls sink.turn() and routes that turn's frames to the returned SignalSink,
-   * ending it with a verdict. sink.goal() carries every goal status change. sink.ended() fires once, last.
+   * ending it with a verdict. sink.goal() carries every goal status change. sink.ended() reports the provider's own
+   * end of the goal, at most once; the runtime decides the goal's end (see *Goals*) and may end it first.
    */
   set(objective: string, opts: TurnOptions, sink: GoalSink): Promise<void>;
   /** Idempotent. After it resolves the provider starts no further turn. */
   clear(): Promise<void>;
 }
 export interface GoalSink {
-  turn(): SignalSink;
+  frame(): void;                        // every inbound frame on the goal outside a turn; feeds the goal idle bound
+  turn(): SignalSink;                   // throws once the goal has ended
   goal(event: Extract<RunEvent, { type: 'goal' }>): void;
-  ended(end: { kind: 'terminal'; status: string } | { kind: 'cleared' } | { kind: 'failed'; failure: Failure }): void;
+  ended(end: Extract<GoalEnd, { kind: 'terminal' | 'failed' }>): void;
 }
 
 /** The registry key is the provider id; an engine does not carry one. */
@@ -421,16 +432,19 @@ export interface Run {
 
 ### Goals
 
-A goal is native only (today Codex, `thread/goal/*`). It is a sequence of `Run`s, one per provider turn, on the same run channel and turn machine as `send`, so the stop ladder, the watchdog, and the one-`outcome` rule apply to each turn unchanged. The goal itself adds one status stream and two controls, `GoalRun.end` and `GoalRun.stop`. The engine's `EngineGoal.set` gets a `GoalSink`; at every turn start the engine calls `sink.turn()`, which opens a new `Run` on `GoalRun.runs`, and routes that turn's frames and its verdict to the returned `SignalSink`. `sink.goal()` forwards each `goal` status change, which the runtime records for `GoalRun.status()` and also emits on the live `Run` when one is open. `sink.ended()` closes `runs` after the live run's `outcome`.
+A goal is native only (today Codex, `thread/goal/*`). It is a sequence of `Run`s, one per provider turn, on the same run channel and turn machine as `send`, so the stop ladder and the one-`outcome` rule apply to each turn unchanged. The goal itself adds one status stream, one result, and two controls, `GoalRun.end` and `GoalRun.stop`. The engine's `EngineGoal.set` gets a `GoalSink`; at every turn start the engine calls `sink.turn()`, which opens a new `Run` on `GoalRun.runs`, and routes that turn's frames and its verdict to the returned `SignalSink`. `sink.goal()` forwards each `goal` status change, which the runtime records for `GoalRun.status()` and also emits on the live `Run` when one is open. `sink.ended()` reports the provider's own end of the goal: its terminal status, or a failure such as a rejected `thread/goal/set`.
 
-- Busy. From `GoalControl.start` until `runs` ends, `Conversation.send` throws `ConversationBusy` and `steer` returns `rejected`. The bot keeps `main`'s behavior of answering a message during a goal with the goal-busy reply (`main:bot/handle-message.ts:1403-1413`) instead of queueing it.
-- Per-turn stop. `Run.stop(by)` on a goal's run interrupts that turn only. The goal stays set and the provider starts the next turn. This is the difference from `GoalRun.stop`.
-- `GoalRun.stop(by)`. The runtime calls `EngineGoal.clear()` first, then runs the normal ladder on the live run (`stop-subagents`, `interrupt`, `term-tree`, `kill-tree`), whose `outcome` is `interrupted{by}`; `runs` then ends. With no live run it resolves `undefined` after `clear()`.
-- `GoalRun.end()`. `clear()`, then the live run reaches its own `outcome`, then `runs` ends. With no live run `runs` ends at once.
-- Process exit. The live run settles `failed{process-exit}` (or `interrupted` when a stop was in flight, per the ladder), `runs` ends, and `status()` keeps its last value.
-- Idle. A goal's run uses the goal idle bound, 30 minutes as `GOAL_IDLE_MS` on `main`, instead of the ordinary turn bound. Whether the caller passes it to `start` or the runtime watchdog carries a per-goal profile is Codex's call, recorded in the PR.
+The runtime owns the end of the goal. A goal ends for exactly one reason, the first of these to happen: the engine's `sink.ended()`, `GoalRun.end()`, `GoalRun.stop(by)`, the goal idle bound, or a process exit. That reason is the `GoalEnd` that `GoalRun.result()` settles with. Once the end is decided, the runtime has called `EngineGoal.clear()` (except after a process exit, when there is nothing to clear), the live run, if any, reaches its own `outcome`, and then `runs` reports done. `result()` is settled before `runs` reports done, so a consumer that awaits the end of `runs` can read it at once, and it never rejects. A later `sink.ended()` or `sink.goal()` is ignored, and a later `sink.turn()` throws, because `clear()` has resolved and the engine promised no further turn. A goal can end with no `Run` at all: `runs` then reports done with zero items, `status()` is `undefined` unless a `goal` event arrived, and `result()` still carries the reason. The bot never reads the last `outcome` of `runs` to learn why a goal ended; each `outcome` belongs to its own run card.
+
+- Busy. From `GoalControl.start` until `runs` ends, `Conversation.send` throws `ConversationBusy` and `steer` returns `rejected`. The bot keeps `main`'s behavior of answering a message during a goal with the goal-busy reply (`main:bot/handle-message.ts:1403-1413`) instead of queueing it. Every end below ends `runs`, so no end leaves the conversation busy.
+- Per-turn stop. `Run.stop(by)` on a goal's run interrupts that turn only. The goal stays set and the provider starts the next turn. This is the difference from `GoalRun.stop`. Nothing in the runtime or the bot calls it on a goal's run; the idle bound and the ⏹ 终止 button both go through `GoalRun.stop`.
+- `GoalRun.stop(by)`. The runtime calls `EngineGoal.clear()` first, then runs the normal ladder on the live run (`stop-subagents`, `interrupt`, `term-tree`, `kill-tree`), whose `outcome` is `interrupted{by}`; `runs` then ends. With no live run it resolves `undefined` after `clear()`. `result()` is `timeout` when `by` is `watchdog` and `cleared` otherwise. `ProviderRuntime.closeAll()` calls `GoalRun.stop('daemon')` on a live goal rather than `Run.stop` on its run, so a daemon restart clears the goal the way `main`'s post-loop `clearGoal()` does (`main:bot/handle-message.ts:5172-5178`).
+- `GoalRun.end()`. `clear()`, then the live run reaches its own `outcome`, then `runs` ends. With no live run `runs` ends at once. `result()` is `cleared`, also when the provider's terminal status arrives while the live run drains, as `main` posts no summary card once 结束目标 was tapped.
+- Provider end. `sink.ended({ kind: 'terminal' })` follows the provider's own terminal goal status: the runtime calls `clear()`, the live run reaches its own `outcome`, `runs` ends, and `result()` is that `terminal`. `sink.ended({ kind: 'failed' })` is a goal-level failure: `thread/goal/set` rejected before any turn, which `main:agent/codex-appserver/backend.ts:379-405` surfaces as an error event and `main:bot/handle-message.ts:5142-5144` keeps with no turn in flight, or a failure between turns. The runtime calls `clear()`, the live run if any reaches its own `outcome`, `runs` ends, and `result()` is that `failed`. The engine never opens a turn to carry a goal failure, so `runs` may end with zero items and the last `outcome`, when one exists, may be `completed`.
+- Process exit. The live run settles `failed{process-exit}` (or `interrupted` when a stop was in flight, per the ladder), `runs` ends, and `status()` keeps its last value. `result()` is `failed` with that `process-exit`, whether or not a run was live, because the runtime watches the `OwnedProcess` for the whole goal and not only during a turn.
+- Idle. One idle bound covers the whole goal, 30 minutes as `GOAL_IDLE_MS` on `main`, in place of the ordinary turn bound on a goal's runs. This is `main`'s `withIdleTimeout(run.events, GOAL_IDLE_MS, ...)` over the whole goal stream (`main:bot/handle-message.ts:5089-5096`, `main:bot/watchdog.ts:35-53`). It is armed by `GoalControl.start` and runs before the first turn, between turns, and during a turn alike. Activity is every inbound frame on the goal: `set` resolving, each `sink.goal()`, each `sink.turn()`, each `GoalSink.frame()` outside a turn, and each `SignalSink.frame()` inside one, with the turn watchdog's running-subagent rule. When it fires, the runtime performs `GoalRun.stop('watchdog')`: `clear()` first, so the provider starts no next turn, then the ladder on the live run, whose `outcome` is `interrupted{watchdog}` and whose run card shows the ⏱ note; `runs` ends and `result()` is `timeout`. With no live run `clear()` alone, then `runs` ends with `timeout`. There is no total wall-clock cap; a goal may run for days while frames keep arriving. Whether the timer lives in `provider/runtime/watchdog.ts` or the caller passes the bound to `start` is Codex's call, recorded in the PR; the behavior above is the contract either way.
 - After `runs` ends, the bot calls `Conversation.close()` to release the process, as `main:bot/handle-message.ts:5208` does. A `thread/goal/cleared` notification that follows `clear()` is dropped by translation.
-- The goal card. `goal` events reach the goal card, never the run card (see *Feishu run card*), and `foldRun` ignores a `goal` event that arrives on a run outside a goal. The terminal card is built from `GoalRun.status()` and the last `outcome` of `runs`: `ended.kind === 'terminal'` with `isGoalSuccess(status)` is 目标已完成, `ended.kind === 'failed'` is the error card, a watchdog `interrupted` is the timeout card, and `cleared` posts no terminal card, as `main:bot/handle-message.ts:5180-5188`. `timeUsedSeconds` on the `goal` event is the provider's own figure (Codex `ThreadGoal.timeUsedSeconds`); the bot does not time the goal itself, so the figure matches the provider's.
+- The goal card. `goal` events reach the goal card, never the run card (see *Feishu run card*), and `foldRun` ignores a `goal` event that arrives on a run outside a goal. The terminal card is built from `GoalRun.result()` and `GoalRun.status()`, which replace the flags `main:bot/handle-message.ts:5180-5188` reads: `terminal` with `isGoalSuccess(status)` is 目标已完成; `terminal` otherwise is 目标已中止 with the status reason, as today; `failed` is 目标已中止 with the failure's outcome note as the 原因 line, the same text a failed run's card shows (see *Feishu run card*); `timeout` is 目标已中止 with 运行超过时长上限被中止; `cleared` posts no terminal card. Tokens and seconds on the card come from `status()`, and are zero when it is `undefined`, as `main`'s initial values. `timeUsedSeconds` on the `goal` event is the provider's own figure (Codex `ThreadGoal.timeUsedSeconds`); the bot does not time the goal itself, so the figure matches the provider's.
 
 ### History
 
