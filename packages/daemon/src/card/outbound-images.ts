@@ -1,8 +1,9 @@
-import { readFile, realpath, stat } from 'node:fs/promises';
-import { extname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { readFile, stat } from 'node:fs/promises';
+import { extname, resolve } from 'node:path';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { log } from '../core/logger';
 import type { PermissionMode } from '../agent/types';
+import { checkUploadPath, uploadPlan } from '../provider/outbound/policy';
 import { imageSources } from './md-scan';
 
 /**
@@ -110,30 +111,6 @@ async function loadSource(src: string, cwd: string, mode: PermissionMode): Promi
   return loadLocal(src, cwd, mode);
 }
 
-/** True when `abs` is `cwdAbs` itself or lives under it. Deliberately a
- * relative-path test rather than a string prefix: with the service's fallback
- * cwd of `/` (or any path ending in a separator) `cwdAbs + sep` becomes `//` and
- * matches nothing, which silently rejected every image ref; `..` segments can
- * likewise never fake a match here. */
-function lexicallyInside(cwdAbs: string, abs: string): boolean {
-  if (abs === cwdAbs) return true;
-  const rel = relative(cwdAbs, abs);
-  return rel !== '' && !rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel);
-}
-
-/** {@link lexicallyInside}, then once more on the symlink-resolved paths so a
- * project reachable through two names (macOS `/tmp` → `/private/tmp`, a
- * symlinked home) doesn't false-reject a genuine in-workspace file. Best-effort:
- * a missing path just fails the retry. */
-async function insideWorkspace(cwdAbs: string, abs: string): Promise<boolean> {
-  if (lexicallyInside(cwdAbs, abs)) return true;
-  try {
-    return lexicallyInside(await realpath(cwdAbs), await realpath(abs));
-  } catch {
-    return false;
-  }
-}
-
 async function loadLocal(
   src: string,
   cwd: string,
@@ -145,12 +122,15 @@ async function loadLocal(
   // hand us that cwd (see the run-cwd plumbing in ../bot/handle-message); a
   // wrong one turns every `![](video_frames/x.png)` into a bogus
   // image-outside-cwd rejection.
-  const abs = isAbsolute(src) ? resolve(src) : resolve(cwdAbs, src);
-  // Security: qa/write only reach inside the run cwd subtree — never an arbitrary
-  // path the agent names (so it can't exfiltrate local images via the bot). A
-  // `full` project already has unrestricted local read in its shell, so its
-  // agent may reference any local image.
-  if (mode !== 'full' && !(await insideWorkspace(cwdAbs, abs))) {
+  const abs = resolve(cwdAbs, src);
+  let canonical: string | undefined;
+  try {
+    canonical = await checkUploadPath(await uploadPlan({ cwd, mode, network: false }), abs);
+  } catch {
+    log.warn('outbound', 'image-missing', { src: src.slice(0, 80) });
+    return { cacheKey: `local:${abs}` };
+  }
+  if (!canonical) {
     log.warn('outbound', 'image-outside-cwd', { src: src.slice(0, 80), cwd: cwdAbs, mode });
     return { cacheKey: `local:${abs}` };
   }
@@ -162,20 +142,20 @@ async function loadLocal(
   let size: number;
   let mtimeMs: number;
   try {
-    const st = await stat(abs);
+    const st = await stat(canonical);
     if (!st.isFile()) throw new Error('not a file');
     size = st.size;
     mtimeMs = st.mtimeMs;
   } catch {
     log.warn('outbound', 'image-missing', { src: src.slice(0, 80) });
-    return { cacheKey: `local:${abs}` };
+    return { cacheKey: `local:${canonical}` };
   }
   if (size === 0 || size > MAX_BYTES) {
     log.warn('outbound', 'image-size', { size, src: src.slice(0, 80) });
-    return { cacheKey: `local:${abs}:${size}` };
+    return { cacheKey: `local:${canonical}:${size}` };
   }
-  const buffer = await readFile(abs);
-  return { buffer, cacheKey: `local:${abs}:${mtimeMs}:${size}` };
+  const buffer = await readFile(canonical);
+  return { buffer, cacheKey: `local:${canonical}:${mtimeMs}:${size}` };
 }
 
 async function loadRemote(url: string): Promise<{ buffer?: Buffer; cacheKey: string }> {
