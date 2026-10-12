@@ -32,7 +32,8 @@ desktop (Electron)      web UI          vonvon CLI
           +---------------+----------------+
    Feishu long conn   agent providers   local data
    (1 child per bot)  Codex, Claude,    ~/.vonvon-bot
-                      ACP, OpenCode, Pi
+                      Cursor, Grok, Pi,
+                      custom ACP
 ```
 
 daemon 负责这台机器上的一切。它运行 Bot、管理 agent 会话、保存设置，并通过 WebSocket 提供 API。
@@ -115,25 +116,23 @@ Paseo 的界面是 Expo 和 React Native Web，搬过来要重写全部界面，
 
 Codex 可执行文件也一样不用原生对话框的令牌：界面让用户填路径，用现有的主机设置保存 `execution.codexBin`，由 daemon 检查路径。桌面端多提供一个原生文件对话框，选出的路径走同一条保存流程。打开链接和复制链接在客户端里做，因为远程连接时 daemon 打开的窗口会出现在另一台机器上。退出、隐藏窗口、开机自动运行、桌面端更新这些只和桌面应用有关的操作，通过界面里可选的外壳能力对象交给桌面端，网页版不提供它们，只显示说明。
 
-### Provider 层保留 Codex，Claude Code 按 Paseo 重写，其他 provider 从 Paseo 移植
+### Provider 层只接原生能力，权限按格验证
 
-Bot 层调用 agent 的合同仍是 bridge 的 `AgentBackend`、`AgentThread`、`AgentRun`（`src/agent/types.ts`）。这个接口已经有 `capabilities` 和 `approval_request` 事件，能容纳更多 provider，不需要改 Bot 层。
+设计全文在 [providers.md](providers.md)，这里只说决定和理由。2026-10-12 的重设计取代了原来复制 Paseo provider 闭包的方案。
 
-Codex 后端原样保留。它通过 `codex app-server` 的 JSON-RPC 工作，有进程预热池，按模式设置沙箱。
+Bot 层只看一个对象 `ProviderRuntime`。它为一个项目和一个群打开 `Conversation`，发送用户输入，得到一个 `Run`，`Run` 是 `RunEvent` 的异步流。卡片用纯函数把事件折成 `RunView` 再渲染。`provider/` 以外的代码不出现 provider 编号、工具名和协议字段。原来的 `AgentBackend`、`AgentThread`、`AgentRun`（`packages/daemon/src/agent/types.ts`）和它的两个后端在 V6b 删除，39 个源文件调用方和 72 个测试切到新合同。没有原生插话的 provider，运行中收到的新消息进 `QueuedTurn` 队列，本轮结束后按顺序发出。
 
-Claude Code 后端改用 Paseo 的实现（`packages/server/src/server/agent/providers/claude/agent.ts`，基于 Claude Agent SDK）。bridge 现在的 Claude 后端有几处缺陷。它所有模式都用 `bypassPermissions`，不支持中途追加消息（`backend.ts` 里 `steer: false`），中断卡住时要杀进程。Paseo 的实现用 `canUseTool` 处理权限，把追加消息推进 SDK 的输入流，中断时先撤回排队的消息再调用 `query.interrupt()`。
+每个 provider 是一个小的 `Engine`。它只做两件事：把协议帧翻译成 `RunEvent`（纯函数 `translate`，用录下的 `.jsonl` 固定样本测试），以及把权限计划变成启动参数。回合状态机、停止梯、子 agent 和 todo 账本、图片落盘、进程托管都在运行时里，每个 provider 共用一份。停止在每个引擎上都有时间上限：先发原生中断，超时后 SIGTERM，再超时 SIGKILL，Codex 最长 11.5 秒。
 
-其他 provider 从 Paseo 移植，包括通用 ACP（Copilot 也走 ACP）、OpenCode 和 Pi。
+能力只接原生的，一项不模拟。`ProviderFeatures` 是类型化的数据，每格是 `native`、`partial` 或 `none`，审计里标“未知”的格按 `none` 发布，并记下要跑的实测。五项基线（子 agent、todo、图片输出、回合结果和原因、可靠中断）也按这个规则：provider 没有原生信号，卡片就不显示那一块。Paseo 聊天模式是从原生信号显示内容的下限，Vonvon 另外接上 Paseo 没接的原生能力：Claude 的 `stopTask` 和 Grok 的 `_x.ai/subagent/cancel` 单独停一个子 agent，Cursor 的 `cursor/task`、`cursor/update_todos`、`cursor/generate_image`，Grok 的子 agent 和结束原因，Codex 的 `account/rateLimits`。ACP 的 `refusal`、`max_tokens`、`max_turn_requests` 是三种不同的失败，不再并成完成。agent 自己声明的斜杠命令算原生能力，所以 Claude 通过 `supportedCommands()` 里的 `/compact` 原生压缩，Grok 的压缩按同一规则，等实测确认。现有 Claude 后端用提示词循环模拟 goal，这一处删掉不搬。Cursor 的 `cursor/task` 是子 agent 完成信号，只能显示已完成的子 agent。会话标题是 Vonvon 自己的功能，不是 provider 能力，也不算模拟。daemon 的 `TitleService` 在第一轮开始后跑一次不带工具的单次调用，先用项目自己的 provider，再用已安装的 Codex 或 Claude，都不行就截取第一条消息的前 36 个字，限时 30 秒，有原生标题就写回 provider，否则写进会话记录。停止时先逐个停能单独停的子 agent，再走主回合的中断梯，到结束时还在跑的子 agent 记为已中断。
 
-Paseo 的 provider 实现的是它自己的 `AgentClient` 和 `AgentSession` 接口（`agent-sdk-types.ts`）。所以加一层适配器，把 `AgentSession` 包成 `AgentBackend`，所有移植来的 provider 共用这一个适配器。Paseo 自己的工具目录和子 agent 存储不搬，provider 里用到它们的地方删掉。
+权限只有 `qa`、`write`、`full` 三档，没有审批卡。读取范围是项目级设置，“仅项目目录”或“不限读取”。每个 provider、每档、每种读取范围、每个操作系统是权限表里的一格。一格只有带证据（在那个系统上对已安装版本跑过实测并提交了记录）才算“已验证”，否则是“拒绝”，拒绝时不启动进程，在群里发中文说明。构建时的测试检查每个已验证的格都有证据。Codex 用 `feishu` 权限 profile 和沙箱策略，macOS 的 Seatbelt 能限读，Linux 的 Landlock 不能，所以 Codex 在 Linux 上的“仅项目目录”拒绝。Claude Code 的沙箱只管 Bash，所以 `Read`、`Grep`、`Glob`、`Edit`、`Write` 由 daemon 的 PreToolUse 钩子按真实路径放行或拒绝。`qa` 和 `write` 用 `permissionMode: 'default'`，沙箱通过 SDK 的 `Options.sandbox` 传入，`full` 用 `bypassPermissions`。没有 Seatbelt 或 bwrap 的机器上，`qa` 和 `write` 照常运行但关掉 Bash，并在群里发中文说明，文件工具仍由钩子限制。`qa` 和 `write` 不加载 MCP 服务器（`strictMcpConfig`），同样发中文说明。ACP agent 和 Pi 没有沙箱，默认只支持完全访问，Grok 的只读档要等实测证明它在改文件前会先问。provider 的每个请求（审批、向用户提问、计划模式）都由 daemon 按计划立刻自动应答，卡片从不等待。
 
-只复制 `providers/claude/` 编译不过，因为它还引用 Paseo 的其他模块和 `@getpaseo/protocol`。V6 先按 import 关系算出完整的依赖闭包，整文件复制，只改 import 路径。闭包清单写在 `agent/paseo/closure.json`，并由测试检查。`agent-sdk-types.ts` 完整复制，V7 用的是完整合同。
+ACP 客户端是 Vonvon 自己的一层薄封装，不用 SDK 的 `ClientSideConnection`，因为后者用 zod 校验每条 `session/update`，Grok 的 `subagent_spawned` 会被拒掉。不认识的更新类型、`_meta` 和非标准方法都交给方言处理。Cursor、Grok、自定义 ACP 各一个方言，加一个 provider 只需一条注册和一个方言。Copilot 和 OpenCode 推后。
 
-进程启动代码来自 Paseo plugin 包里的两个文件，整文件复制，保留 Windows 的引号处理。
+进程托管沿用 Codex 的 `owned-process.ts` 和 `windows-job.ts`，改成所有 provider 共用。Claude 的 CLI 子进程通过 SDK 的 `spawnClaudeCodeProcess` 接管，和其他进程一样记进 `owned-pids.json`，daemon 启动时按 pid 加启动时间清理上一个 daemon 留下的孤儿进程。
 
-权限沿用 V3 的规则：三种模式都用 `bypassPermissions`，`qa` 和 `write` 再加沙箱，`qa` 还禁止写入。网络关闭或未设置时，`qa` 和 `write` 去掉联网工具，`full` 不受网络设置影响。Claude 读取的设置来源和 V3 一样，只有 user 和 project。为此复制来的 `agent.ts` 只从 `CLAUDE_SETTING_SOURCES` 常量里删掉 `local`，新会话和恢复的会话都用这个常量，并记录原始哈希和改后哈希。这是复制代码里唯一的逻辑改动。V3 还有几项行为复制来的 provider 不提供：助手消息带 API 错误、随后是空的成功结果时报错，Bash 的描述，缓存 token 和上下文窗口的算法，以及原始工具历史。它们由 Vonvon 自己的包装代码从 SDK 原始消息和会话文件恢复，不改复制来的字节。V7 只另外允许两处改动：Pi 的 `pi/extensions/registry.ts` 删掉九个扩展的引用，`piExtensions` 改成空数组；OpenCode 的 `opencode/bridge.ts` 把 Paseo 内部路由服务 `OpenCodeBridge` 类换成同名接口，生成 V2 插件的函数不动。除这两处逻辑改动外，V7 只允许不改变生成 JavaScript 的类型层改动，让复制来的代码通过 daemon 现有的严格类型检查：`tsconfig` 的 `lib` 加上 `ES2023.Array` 和 `ES2024.Promise`，其他编译选项不变；`jsonl-rpc-process.ts` 的 `Logger` 类型改从 V6 的 `logger.ts` 引入，产品代码不再引用 `pino`；其余只限非空断言（含把 `pi/cli-runtime.ts` 第 63 行的简写属性 `command` 展开成 `command: command!` 的一处）、`override`、`type` 导入，测试里按 plan.md 列出的类型表达式语法写的类型断言，以及把 `ACPAgentSession.spawnProcess` 从 `private` 改成 `protected`。每处改动逐条记录，并用 esbuild 证明改前改后输出相同，细则见 [plan.md](plan.md) V7 的 *Compiler contract*。OpenCode 的入口是 `opencode/v2/agent.ts` 的 `OpenCodeV2AgentClient`，不传 bridge，由 Vonvon 的包装代码检查版本，要求 2.0.10 及以上。旧的 `opencode-agent.ts` 虽然引用了 `@opencode-ai/sdk/v2/client`，却是 1.x 用的旧客户端，它和选择新旧客户端的 `runtime-client.ts` 都不移植，OpenCode 1.x 不支持。Paseo 子 agent 面板专用的事件由适配器忽略。仍然到达的权限请求先记成被动的 `approval_request` 事件，再自动拒绝。飞书里不加交互式审批，协议也不变。
-
-这条决定还没验证。第一个 provider PR 要证明适配器能完整映射事件、权限请求、中断和追加消息。
+出站路径只有一处判断。Claude 的钩子和飞书上传图片、发文件共用 `judgePath`，按真实路径判断是否在项目内，这修掉 #114 里符号链接绕过的问题；远程图片只在项目开了联网时才取，`full` 也一样，联网开关在每一档都由 Vonvon 自己检查，且永远拒绝回环、内网和链路本地地址。
 
 ### 数据目录是 `~/.vonvon-bot`
 
@@ -173,7 +172,7 @@ vonvon-bridge-legacy 的 ADR 0012 规定必须登录、暂不做多设备。这�
 
 云端存账号和机器记录，机器记录包括名称、系统、版本、公钥和最后在线时间。云端不存设置，也读不到转发的内容。
 
-daemon 加入账号时生成 X25519 密钥对，把公钥登记到云端。远程客户端从云端拿到公钥，和 daemon 协商出会话密钥，之后每一帧都用 XSalsa20-Poly1305 加密。实现用 Paseo 的 `packages/relay`（`crypto.ts`、`e2ee.ts`、`encrypted-channel.ts`，以及它们引用的 `base64.ts`），依赖 `tweetnacl` 和 `base64-js`。这四个文件按 V7 的类型层规则移植：只在 `encrypted-channel.ts` 第 576 行加两个非空断言，并在文件开头加一段注明改动的注释，编译后可执行的 JavaScript 不变，哈希和证明记在 `packages/client/src/e2ee/closure.json`，细则见 [plan.md](plan.md) V11 的 *Compiler contract*。
+daemon 加入账号时生成 X25519 密钥对，把公钥登记到云端。远程客户端从云端拿到公钥，和 daemon 协商出会话密钥，之后每一帧都用 XSalsa20-Poly1305 加密。实现用 Paseo 的 `packages/relay`（`crypto.ts`、`e2ee.ts`、`encrypted-channel.ts`，以及它们引用的 `base64.ts`），依赖 `tweetnacl` 和 `base64-js`。这四个文件按 V11 自己的 *Compiler contract* 移植：只在 `encrypted-channel.ts` 第 576 行加两个非空断言，并在文件开头加一段注明改动的注释，编译后可执行的 JavaScript 不变，哈希和证明记在 `packages/client/src/e2ee/closure.json`，细则见 [plan.md](plan.md) V11 的 *Compiler contract*。
 
 这个方案信任云端分发的公钥。Paseo 的握手里，daemon 回的 `e2ee_ready` 是明文，没有经过认证。客户端拿到的若是另一把长度正确的公钥，照样会收到 `e2ee_ready`，直到第一帧密文解不开才失败。长度不对的公钥更早就失败，是另一种情况。所以客户端只在 daemon 的第一帧密文解开、并且是 `serverInfo` 回复之后才算连上，之前不发请求、不显示状态。如果云端被攻破，同时换掉公钥并冒充 daemon 一端，攻击者可以做中间人。V11 保留 Paseo 的握手，不加新的密码学，接受这个风险。Paseo 用二维码在线下传公钥来避免这一点，代价是每台客户端都要扫码。Vonvon Bot 选择账号登录的便利，这个风险记在 roadmap 里。
 
@@ -209,6 +208,8 @@ type Project = {
 	cwd: string;
 	provider: ProviderId;
 	mode: 'qa' | 'write' | 'full';
+	readScope: 'project' | 'unrestricted';
+	network: boolean;
 	response: 'mention' | 'all';
 	sessions: 'threads' | 'shared';
 };
@@ -230,7 +231,9 @@ type SettingsScope =
 	| { kind: 'session'; appId: AppId; threadId: ThreadId };
 ```
 
-`AppId`（`cli_` 开头）、`ChatId`（`oc_` 开头）、`MachineId` 都是 branded 类型。客户端用 `(machineId, appId, chatId)` 定位一个群。
+`AppId`（`cli_` 开头）、`ChatId`（`oc_` 开头）、`MachineId` 都是 branded 类型。
+
+上面是逻辑形状。存储里 `Project` 的字段仍叫 `backend`，会话记录仍叫 `backend` 和 `sessionId`，不改名。V6b 在加载时迁移旧编号，`codex-appserver` 变成 `codex`，`claude-agent` 变成 `claude`。没有 `readScope` 的已有项目加载为 `unrestricted`，新建项目写入 `project`，这是显式的加载迁移，不是 zod 默认值。管理员在私聊的项目设置卡片和网页的项目设置里修改读取范围。客户端用 `(machineId, appId, chatId)` 定位一个群。
 
 云端对外只有两种记录。
 
@@ -296,7 +299,7 @@ packages/
 | 来源 | 许可证 | 搬进来的部分 |
 | --- | --- | --- |
 | feishu-codex-bridge `codex/device-handoff` `446b2a4` | MIT | Bot 运行内核、Codex 后端、系统服务 |
-| Paseo `getpaseo/paseo` `0009a7e71` | Apache-2.0 | provider、pid 锁、原子写文件、端到端加密、daemon 拉起方式 |
+| Paseo `getpaseo/paseo` `0009a7e71` | Apache-2.0 | pid 锁、原子写文件、端到端加密、daemon 拉起方式。provider 层不再复制 Paseo 代码，只把它的聊天模式当作显示下限的参照 |
 | vonvon-bridge-legacy `3a16853` | 自有 | 导入流程、旧服务控制、账号服务的设备凭据做法 |
 | vonvon-platform `3427634` | 自有 | 飞书和 Lark 网页登录 |
 | vonvon-bot PR 栈 `codex/device-handoff` `fab5237` | 自有 | 界面、UI 组件、zod 合同 |
