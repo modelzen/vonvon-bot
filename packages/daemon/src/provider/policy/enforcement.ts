@@ -50,16 +50,42 @@ function isCompleteProof(proof: Proof | undefined): proof is Proof {
     && typeof proof.provenFor === 'string' && PLAIN_VERSION.test(proof.provenFor);
 }
 
-function isProofAllowed(cell: Extract<Cell, { mode: 'enforced' }>): boolean {
+function isUnrestricted(native: NativeSettings): boolean {
+  const keys = Object.keys(native);
+  switch (native.family) {
+    case 'codex':
+      return native.sandbox === 'danger-full-access'
+        && keys.every(key => key === 'family' || key === 'sandbox');
+    case 'claude':
+      return native.mode === 'bypass' && native.permissionMode === 'bypassPermissions'
+        && native.allowDangerouslySkipPermissions === true
+        && keys.every(key => ['family', 'mode', 'permissionMode', 'allowDangerouslySkipPermissions'].includes(key));
+    case 'acp':
+      return native.bypass === true && keys.every(key => key === 'family' || key === 'bypass');
+    case 'pi':
+      return keys.every(key => key === 'family');
+  }
+}
+
+function isProofAllowed(key: CellKey, cell: Extract<Cell, { mode: 'enforced' }>): boolean {
   if (!isCompleteProof(cell.proof)) return false;
-  return cell.proof.kind === 'live';
+  const [, tier, scope] = key.split(':');
+  if (tier === 'full') {
+    return scope === '-' && cell.mechanisms.length === 0 && isUnrestricted(cell.native);
+  }
+  if (cell.proof.kind === 'live') return true;
+  return (tier === 'qa' || tier === 'write') && scope === 'unrestricted'
+    && cell.mechanisms.length === 1 && cell.mechanisms[0] === 'launch-args'
+    && cell.native.family === 'pi' && cell.native.tools !== undefined && cell.native.tools.length > 0
+    && cell.native.tools.every(tool => ['read', 'grep', 'find', 'ls'].includes(tool))
+    && Object.keys(cell.native).every(key => key === 'family' || key === 'tools');
 }
 
 export function auditTable(table: EnforcementTable): CellKey[] {
   const failures: CellKey[] = [];
   for (const key of Object.keys(table).sort()) {
     const cell = table[key as CellKey];
-    if (cell?.mode === 'enforced' && !isProofAllowed(cell)) failures.push(key as CellKey);
+    if (cell?.mode === 'enforced' && !isProofAllowed(key as CellKey, cell)) failures.push(key as CellKey);
   }
   return failures;
 }
@@ -138,7 +164,7 @@ export function planEnforcement(
   const cell = table[key];
   if (!cell) return refuse('unverified-combination', '未登记权限单元');
   if (cell.mode === 'refuse') return refuse(cell.reason);
-  if (!isProofAllowed(cell)) return refuse('unverified-combination', '权限单元缺少有效证明');
+  if (!isProofAllowed(key, cell)) return refuse('unverified-combination', '权限单元缺少有效证明');
   if (!sameNativeFamily(provider, cell.native)) return refuse('unverified-combination', '权限单元与提供方不匹配');
 
   const install = host.installed[provider];
