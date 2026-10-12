@@ -27,7 +27,8 @@ const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 export async function runStart(port = 0): Promise<DaemonStatus> {
   const checkedStatus = async (): Promise<DaemonStatus> => {
     const ready = await daemonStatus();
-    if (ready.running && port !== 0 && ready.listen !== `127.0.0.1:${port}`) throw new Error(`Daemon PID ${ready.pid} already runs at ${ready.listen}, not requested port ${port}.`);
+    if (!ready.running) throw new Error('Daemon lost readiness before startup completed.');
+    if (port !== 0 && ready.listen !== `127.0.0.1:${port}`) throw new Error(`Daemon PID ${ready.pid} already runs at ${ready.listen}, not requested port ${port}.`);
     return ready;
   };
   const waitReady = async (pid: number): Promise<DaemonStatus | null> => {
