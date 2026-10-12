@@ -514,8 +514,8 @@ Owned sets:
 
 The entries added at stage L and P:
 
-- The linger entry `/var/lib/systemd/linger/vonvon-accept`.
-- LP, the linger parent row, only when B0f had no linger parent. Its type, owner, group, and mode are frozen at the first stage-L record.
+- The linger entry row `/var/lib/systemd/linger/vonvon-accept`, with its type and owner frozen at the first stage-L record.
+- LP, the linger parent row, only when B0f had no linger parent. Its type must be `d`, and its type, owner, group, and mode are frozen at the first stage-L record.
 - The logind row for `<U>`.
 - Exactly one listing row for each unit, with these exact columns:
 
