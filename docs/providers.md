@@ -136,7 +136,7 @@ export type RunEvent =
   | { type: 'image'; image: ImageRef }
   | { type: 'context'; used: number; window: number | null }
   | { type: 'compaction'; phase: 'start' | 'end'; trigger: 'auto' | 'manual' }
-  | { type: 'goal'; status: string; objective: string; tokensUsed: number; tokenBudget: number | null }
+  | { type: 'goal'; status: string; objective: string; tokensUsed: number; timeUsedSeconds: number; tokenBudget: number | null }
   | { type: 'notice'; kind: 'retry' | 'bash-off' | 'mcp-off' | 'question-declined' | 'resume-failed' | 'image-cap' | 'other'; text: string }
   | { type: 'provider-message'; level: 'info' | 'warn'; text: string }
   | { type: 'outcome'; outcome: Outcome; usage?: { input?: number; output?: number; cached?: number } }; // last, once
@@ -231,7 +231,7 @@ export function auditTable(table: EnforcementTable): CellKey[];
 These complete the listings. The ones written out are contract. The ones in the list after them are free for Codex to shape, provided no provider id, tool name, or wire field leaves `provider/` through them and no listed contract gains a field.
 
 ```ts
-export class ConversationBusy extends Error {}           // send() while a run is live; the bot never triggers it
+export class ConversationBusy extends Error {}           // send() or GoalControl.start() while a run or a goal is live; the bot never triggers it
 export interface HostFacts {
   os: Os; commandSandbox: 'seatbelt' | 'bwrap' | 'none'; windowsSandboxReady?: boolean;
   installed: Partial<Record<ProviderId, InstallProbe>>;
@@ -246,9 +246,36 @@ export type ProviderAnswer =
   | { kind: 'error'; code: number; message: string; notice?: Extract<RunEvent, { type: 'notice' }> };
 export interface TitleControl { read(providerSessionId: string): Promise<string | undefined>; set?(providerSessionId: string, title: string): Promise<void> }
 export type AcpStopReason = string;                      // raw ACP stopReason; an unknown value maps to failed{provider-error}
+
+/** On Conversation iff features.goal !== 'none'. Behavior in *Goals*. */
+export interface GoalControl {
+  /** Throws ConversationBusy while a run or a goal is live. */
+  start(objective: string, opts?: TurnOptions): GoalRun;
+}
+export interface GoalRun {
+  /** One Run per provider turn, in order. Each Run ends with its own outcome. Ends after the engine's GoalSink.ended. */
+  readonly runs: AsyncIterable<Run>;
+  /** The latest goal event, undefined before the first. Keeps its last value after runs ends. */
+  status(): Extract<RunEvent, { type: 'goal' }> | undefined;
+  /** Clear the goal and let the live run finish on its own. runs ends after that run's outcome. The 🎯 结束目标 button. */
+  end(): Promise<void>;
+  /** Clear the goal and stop the live run through the ladder. Resolves with that run's outcome, undefined when none is live. The ⏹ 终止 button. */
+  stop(by: StopBy): Promise<Outcome | undefined>;
+}
+/** On Engine and ProviderRuntime iff features.history !== 'none'. Range rule in *History*. Neither method starts a turn or holds a process. */
+export interface HistoryControl {
+  /** Sessions whose cwd is this project, newest first. Never throws; [] on failure. Default limit 15. */
+  list(cwd: string, limit?: number): Promise<ThreadSummary[]>;
+  /** A transcript summary of one session. Never throws; an empty transcript on failure. Default maxTurns 10. */
+  read(cwd: string, providerSessionId: string, maxTurns?: number): Promise<ThreadHistory>;
+}
 ```
 
-Free for Codex to shape: `OpenSpec`, `ProcessHost` and `OwnedProcess` (behavior in *Process host*), `GoalControl`, `HistoryControl`, `AccountUsage`, `ModelInfo`, `AcpCommand`, `HostSettings`, `DialectState`, `RunView` and `emptyRunView` (the fold target of the card).
+Free for Codex to shape: `OpenSpec`, `ProcessHost` and `OwnedProcess` (behavior in *Process host*), `AccountUsage`, `ModelInfo`, `ThreadSummary`, `ThreadHistory`, `GoalStatus` with `isGoalTerminal` and `isGoalSuccess`, `AcpCommand`, `HostSettings`, `DialectState`, `RunView` and `emptyRunView` (the fold target of the card). Three of them carry an existing wire shape and keep it, so the desktop and the Feishu cards change nothing.
+
+- `ModelInfo` has the same fields as a `modelCatalogSchema.models` element in `packages/protocol/src/settings.ts` (`id`, `displayName`, `description`, `supportedEfforts`, `defaultEffort`, `isDefault`, `hidden`), and `supportedEfforts` and `defaultEffort` use the closed `ReasoningEffort` enum of `settings.ts`, eight values. A unit test asserts both equalities, the way `toolSchema` is checked against `REGISTRY` (see *Registry*). `hidden` means listable, never selectable, never auto-selected; a stored hidden id falls back to the default, which is `isDefault && !hidden`, then the first `!hidden`, then the first entry, as `main:bot/handle-message.ts:362-372` does. An engine whose provider has no native default flag marks the first model `isDefault`. `TurnOptions.effort` stays `string`: the bot narrows it with `supportedEfforts` before `send`, the engine passes it through.
+- `AccountUsage` is `main`'s `AccountUsageBundle` (`main:agent/types.ts:300-357`): `profile` with the cumulative stats and `dailyBuckets`, and `usage` with `planType`, `main`, `extras[]`, `fetchedAt` in ms, where each `RateWindow` is `usedPercent` as an integer 0 to 100, `windowSeconds` in seconds, `resetAt` in unix seconds. `UsageError` and `UsageErrorKind` move with it. The usage card's heat map and the stats block read the same fields as today.
+- `ThreadSummary` and `ThreadHistory`, with `HistoryTurn` and `HistoryTool`, are `main:agent/types.ts:55-110` unchanged. `ThreadSummary.sessionId` is the wire name of `resumableThread.sessionId` in `server/rpc/collaboration.ts`, and `createdAt` and `updatedAt` stay unix seconds.
 
 ### Engine and runtime
 
@@ -266,6 +293,23 @@ export interface SignalSink {
   frame(): void;                        // every inbound frame, event or not; feeds the watchdog
   emit(event: Exclude<RunEvent, { type: 'outcome' }>): void;
   verdict(v: TurnVerdict): void;        // the engine's view of how the turn ended
+}
+
+/** iff features.goal !== 'none'. Codex: thread/goal/set and thread/goal/clear. Behavior in *Goals*. */
+export interface EngineGoal {
+  /**
+   * Resolves once the provider accepted the goal. The provider starts and continues turns on its own.
+   * At each turn start the engine calls sink.turn() and routes that turn's frames to the returned SignalSink,
+   * ending it with a verdict. sink.goal() carries every goal status change. sink.ended() fires once, last.
+   */
+  set(objective: string, opts: TurnOptions, sink: GoalSink): Promise<void>;
+  /** Idempotent. After it resolves the provider starts no further turn. */
+  clear(): Promise<void>;
+}
+export interface GoalSink {
+  turn(): SignalSink;
+  goal(event: Extract<RunEvent, { type: 'goal' }>): void;
+  ended(end: { kind: 'terminal'; status: string } | { kind: 'cleared' } | { kind: 'failed'; failure: Failure }): void;
 }
 
 /** The registry key is the provider id; an engine does not carry one. */
@@ -291,7 +335,7 @@ export interface EngineSession {
   interrupt(turnId: TurnId | undefined): Promise<void>;
   steer?(input: UserInput): Promise<'accepted' | 'rejected'>;
   compact?(): Promise<void>;
-  goal?: GoalControl;
+  goal?: EngineGoal;                                          // iff features.goal !== 'none'
   stopSubagent?(id: SubagentId): Promise<void>;
   answerAutomatic(request: ProviderRequest): ProviderAnswer;  // pure; see Auto-answered requests
   close(): Promise<void>;
@@ -346,6 +390,10 @@ export interface ProviderRuntime<Id extends string = ProviderId> {
   /** Tool-less one-shot for Vonvon-owned work. Tries `preferred`, then every installed engine with `oneShot`, in registry order. */
   oneShot(preferred: Id, prompt: string, timeoutMs: number): Promise<string | undefined>;
   titles(provider: Id): TitleControl | undefined;          // the engine's native title read and set, when it has one
+  /** The engine's native catalog. [] when features.models is 'none' or the engine is not installed. */
+  models(provider: Id): Promise<ModelInfo[]>;
+  history(provider: Id): HistoryControl | undefined;       // iff features.history !== 'none'
+  usage(provider: Id): (() => Promise<AccountUsage>) | undefined; // iff features.usage !== 'none'
   closeAll(): Promise<void>;                               // stop('daemon') on every live run, then close
   owesWork(): boolean;                                     // any live run or one-shot; host/lifecycle asks before restart
 }
@@ -354,7 +402,7 @@ export interface Conversation {
   send(input: UserInput, opts?: TurnOptions): Run;   // throws ConversationBusy while a run is live
   steer?(input: UserInput): Promise<'accepted' | 'rejected'>;   // 'rejected' also when no run is live
   compact?(): Promise<void>;
-  goal?: GoalControl;
+  goal?: GoalControl;                                 // iff features.goal !== 'none'; see *Goals*
   close(): Promise<void>;
 }
 export interface Run {
@@ -368,6 +416,25 @@ export interface Run {
   todo(): TodoItem[] | null;
 }
 ```
+
+`models`, `history`, and `usage` are the only paths by which the model card, the history browser, and the usage card reach an engine, through `provider/index.ts`, following the `titles(provider)` precedent. The runtime never exposes an `Engine`, because `open`, `table`, and `probe` would leak to the bot. A provider whose `features.models` is `none` gives `[]`, and the wire `modelCatalogSchema.state` is `unavailable`; the bot keeps the stored selection or `default`. A provider whose `features.usage` is `none` has no `usage` accessor, and the usage card says 该 provider 不提供用量 (see *Decisions and open questions*).
+
+### Goals
+
+A goal is native only (today Codex, `thread/goal/*`). It is a sequence of `Run`s, one per provider turn, on the same run channel and turn machine as `send`, so the stop ladder, the watchdog, and the one-`outcome` rule apply to each turn unchanged. The goal itself adds one status stream and two controls, `GoalRun.end` and `GoalRun.stop`. The engine's `EngineGoal.set` gets a `GoalSink`; at every turn start the engine calls `sink.turn()`, which opens a new `Run` on `GoalRun.runs`, and routes that turn's frames and its verdict to the returned `SignalSink`. `sink.goal()` forwards each `goal` status change, which the runtime records for `GoalRun.status()` and also emits on the live `Run` when one is open. `sink.ended()` closes `runs` after the live run's `outcome`.
+
+- Busy. From `GoalControl.start` until `runs` ends, `Conversation.send` throws `ConversationBusy` and `steer` returns `rejected`. The bot keeps `main`'s behavior of answering a message during a goal with the goal-busy reply (`main:bot/handle-message.ts:1403-1413`) instead of queueing it.
+- Per-turn stop. `Run.stop(by)` on a goal's run interrupts that turn only. The goal stays set and the provider starts the next turn. This is the difference from `GoalRun.stop`.
+- `GoalRun.stop(by)`. The runtime calls `EngineGoal.clear()` first, then runs the normal ladder on the live run (`stop-subagents`, `interrupt`, `term-tree`, `kill-tree`), whose `outcome` is `interrupted{by}`; `runs` then ends. With no live run it resolves `undefined` after `clear()`.
+- `GoalRun.end()`. `clear()`, then the live run reaches its own `outcome`, then `runs` ends. With no live run `runs` ends at once.
+- Process exit. The live run settles `failed{process-exit}` (or `interrupted` when a stop was in flight, per the ladder), `runs` ends, and `status()` keeps its last value.
+- Idle. A goal's run uses the goal idle bound, 30 minutes as `GOAL_IDLE_MS` on `main`, instead of the ordinary turn bound. Whether the caller passes it to `start` or the runtime watchdog carries a per-goal profile is Codex's call, recorded in the PR.
+- After `runs` ends, the bot calls `Conversation.close()` to release the process, as `main:bot/handle-message.ts:5208` does. A `thread/goal/cleared` notification that follows `clear()` is dropped by translation.
+- The goal card. `goal` events reach the goal card, never the run card (see *Feishu run card*), and `foldRun` ignores a `goal` event that arrives on a run outside a goal. The terminal card is built from `GoalRun.status()` and the last `outcome` of `runs`: `ended.kind === 'terminal'` with `isGoalSuccess(status)` is 目标已完成, `ended.kind === 'failed'` is the error card, a watchdog `interrupted` is the timeout card, and `cleared` posts no terminal card, as `main:bot/handle-message.ts:5180-5188`. `timeUsedSeconds` on the `goal` event is the provider's own figure (Codex `ThreadGoal.timeUsedSeconds`); the bot does not time the goal itself, so the figure matches the provider's.
+
+### History
+
+`HistoryControl.list(cwd)` and `read(cwd, providerSessionId)` serve the Feishu `/resume` picker and history card and the desktop `history` and `resume` actions, with the shapes `main` already sends on the wire. The project range is a Vonvon rule, not a provider guarantee: `read` is called only with an id that `list(cwd)` returned for the same project, and the desktop `resume` action lists first and refuses an id that is not in the list with 历史会话不属于当前项目, as `main:bot/handle-message.ts:3962-3963` does. Codex `thread/read` ignores `cwd` and Claude `getSessionMessages` filters by directory, so the rule holds for both only when the bot keeps the list-then-read order. Codex decides whether the check lives in the runtime accessor or in the bot, and records it in the PR. A provider whose `history` cell is `partial` (Cursor, Pi, custom ACP) returns `[]` from `list` or an empty transcript from `read`, and the history card already renders an empty history (`main:card/history-card.ts:53-61`).
 
 ### Follow-ups during a run
 
@@ -433,7 +500,7 @@ Custom ACP dialect. Base translation only. `features` are derived at `initialize
 
 ### Codex engine
 
-Re-homed from `agent/codex-appserver/`. `turn/start` with `approvalPolicy: 'never'` and the sandbox from the plan. `ThreadItem` kinds map to `StepDetail` by type (CX `v2/ThreadItem.ts:26-101`). `turn/plan/updated` becomes `todo` (CX `v2/TurnPlanUpdatedNotification.ts`). `imageGeneration`, `imageView`, MCP image results, and `dynamicToolCall` `inputImage` become `image` (audit row 16). Child threads are subagents. `collabAgentToolCall` with `spawnAgent` opens a roster entry, every `item/*` notification carrying a child `threadId` is a subagent-lane step, and `Thread.source.thread_spawn` identifies the parent (CX `v2/ThreadItem.ts:64-101`, `v2/SubAgentSource.ts`). `stopSubagent` sends `turn/interrupt` to the child thread's active turn, the way Orca does, and the cell is `partial` because there is no dedicated method (audit row 14). `thread/tokenUsage/updated` feeds `context`. `thread/compacted` and the `contextCompaction` item feed `compaction`. `thread/goal/*` is experimental and needs `experimentalApi: true` at `initialize` (`app-server-client.ts:155-161`); `goal` ships `native` as today. `error.willRetry` becomes `notice{retry}` (CX `v2/ErrorNotification.ts`). `account/rateLimits/read` replaces the direct ChatGPT `wham` request for the usage card. `thread/name/set` and `Thread.name` are titles (audit row 27). `oneShot` is `native`: the ephemeral read-only utility thread with `outputSchema` that `main` uses for titles (VB:163-194), now serving `TitleService`. The warm pool, the managed install at 0.156.1, and `codex-install-lock.json` move unchanged.
+Re-homed from `agent/codex-appserver/`. `turn/start` with `approvalPolicy: 'never'` and the sandbox from the plan. `ThreadItem` kinds map to `StepDetail` by type (CX `v2/ThreadItem.ts:26-101`). `turn/plan/updated` becomes `todo` (CX `v2/TurnPlanUpdatedNotification.ts`). `imageGeneration`, `imageView`, MCP image results, and `dynamicToolCall` `inputImage` become `image` (audit row 16). Child threads are subagents. `collabAgentToolCall` with `spawnAgent` opens a roster entry, every `item/*` notification carrying a child `threadId` is a subagent-lane step, and `Thread.source.thread_spawn` identifies the parent (CX `v2/ThreadItem.ts:64-101`, `v2/SubAgentSource.ts`). `stopSubagent` sends `turn/interrupt` to the child thread's active turn, the way Orca does, and the cell is `partial` because there is no dedicated method (audit row 14). `thread/tokenUsage/updated` feeds `context`. `thread/compacted` and the `contextCompaction` item feed `compaction`. `thread/goal/*` is experimental and needs `experimentalApi: true` at `initialize` (`app-server-client.ts:155-161`); `goal` ships `native` as today. `error.willRetry` becomes `notice{retry}` (CX `v2/ErrorNotification.ts`). `thread/goal/set` and `thread/goal/clear` are `EngineGoal`; `thread/goal/updated` is the `goal` event with `ThreadGoal.timeUsedSeconds`, and every goal turn is its own `Run` (see *Goals*). `account/rateLimits/read` replaces the direct ChatGPT `/wham/usage` request for the rate-limit half of the usage card only: `rateLimits.primary` and `secondary` become `main.primary` and `main.secondary`, `windowDurationMins * 60` becomes `windowSeconds`, `resetsAt` becomes `resetAt`, each non-main entry of `rateLimitsByLimitId` becomes an `extras[]` bucket named by `limitName`, and `planType` carries over. The unit of `resetsAt` is not stated by the generated protocol; the ported `codex-usage.test.ts` asserts `resetAt` against a fixed value from a recorded `account/rateLimits/read` response, and the engine converts to unix seconds from whatever the recording shows, never from a guess. The profile statistics (cumulative tokens, streak, the heat map's `dailyBuckets`) have no app-server method, so the engine's `usage()` keeps requesting `/wham/profiles/me` as `main:agent/codex-appserver/usage.ts:356` does, moved into `provider/engines/codex/usage.ts` with no behavior change. The usage card keeps its heat map and its stats block. `thread/name/set` and `Thread.name` are titles (audit row 27). `oneShot` is `native`: the ephemeral read-only utility thread with `outputSchema` that `main` uses for titles (VB:163-194), now serving `TitleService`. The warm pool, the managed install at 0.156.1, and `codex-install-lock.json` move unchanged.
 
 ### Claude engine
 
