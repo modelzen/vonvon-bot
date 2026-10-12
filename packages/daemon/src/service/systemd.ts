@@ -193,7 +193,10 @@ export function createSystemdService(options: { root: string }, overrides: Parti
     if (result.kind === 'drain-failed') return result;
     try {
       await command(['daemon-reload']);
-      await command(['reset-failed', SYSTEMD_UNIT_NAME]);
+      const reset = await d.run(['reset-failed', SYSTEMD_UNIT_NAME], 30_000);
+      if (!(reset.ok && reset.status === 0) && !(!reset.ok && reset.status === 1)) {
+        throw new Error(`systemctl reset-failed ${SYSTEMD_UNIT_NAME}: ${reset.stderr || reset.stdout || 'failed'}`);
+      }
       await checkExpected(s);
       const observed = await observeUnit();
       if (observed.kind !== 'absent') throw new Error(observed.kind === 'unknown' ? observed.detail : 'Unit remains loaded');
