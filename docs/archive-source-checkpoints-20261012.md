@@ -58,3 +58,16 @@ V6a 阶段状态见 [V6a WIP 恢复交接](v6a-resume-checkpoint.md)。本轮仅
 本机逐文件 SHA-256、原始补丁、源码副本和 push 记录位于根仓库 `.audit/continuation-20261012/new-provider-plan/mac-execution-resume/final-git-persistence-20261012/archive-checkpoints/`。详细本机材料不随 Git 分发。新 clone 可直接通过上表分支与 SHA 找回源码，不依赖原会话。
 
 当前状态是停止。只有用户明确重新开始后，才核对相关分支与资源归属，安排相应验证。
+
+## JP-VPS 远端保全摘要
+
+以下是总控转交的 JP-VPS 已完成回报，本 Mac 会话未重新查询远端。远端已盘点全部 14 棵 worktree，并停止执行。
+
+| 远端分支 | 准确提交 SHA | 保存范围与 push | 工作树状态 |
+| --- | --- | --- | --- |
+| `claude/v5-service-design` | `92518ee8ab0073f2f0b3e54ffb11cf615dfb8496` | 3 份 docs；原远端分支已删除，本次普通 push 重新创建 | 干净 |
+| `archive/design-ownership-20261012` | `bdc0c13cef63134433802b19ab0978f56a3e04bd` | `AGENTS.md` 与 3 份 docs；从 detached `817452a` 保全；普通 push；不用于合并 | 干净 |
+
+其余 11 棵历史树与当前 `claude/process-identity` 树均据远端回报为干净。后者 head 为 `bf1c39e`，对应未批准 PR121，不构成采用许可。
+
+未入库目录 `/home/operator/vonvon/provider-redesign/` 据远端回报只有 #116 过程调研资料，定稿已合入 docs，没有未保存设计稿。远端提交仅保全未验证或未采用内容，未合入 main，未合入 PR121。原会话和逐树绝对路径未在本摘要提供，不能据此编造。
