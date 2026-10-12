@@ -4,7 +4,7 @@
 
 ## Git 与恢复入口
 
-功能分支为 `codex/v6a-provider-core`，PR117 保持未合入。`953eabdd51f5f0eb1a4ac351f5a1c421aa72717c` 已保存 outbound/PID 修正；`0acceb90f2fc634e95f9736a8a3f76d2e8290c5f` 保存独立 ProcessHost 的 12 文件 WIP 阶段。本交接所在提交另保存 Import fixture 修改。
+功能分支为 `codex/v6a-provider-core`，PR117 保持未合入。`953eabdd51f5f0eb1a4ac351f5a1c421aa72717c` 已保存 outbound/PID 修正；`0acceb90f2fc634e95f9736a8a3f76d2e8290c5f` 保存独立 ProcessHost 的 12 文件 WIP 阶段。`9ff6a8e1ebeaddf4e7ef8fd7bc015650ac85e435` 另保存 Import fixture 修改。
 
 全新 clone 后切换该分支，先阅读本文与 `docs/plan.md`、`docs/providers.md`，再按 AGENTS.md 安装本机依赖。不要复制其他机器的 node_modules 或构建产物。只有用户明确重新开始后才执行后续开发与验证。
 
@@ -27,3 +27,7 @@ PR121 的 `bf1c39ebfe20fea0e8de64f92fd0efbaf91a2e92` 仍有技术阻断且未批
 原 Mac 仓库为 `/Users/clay/develop/src/github.com/ClayCheung/vonvon-bot`。本地 `.audit/STOP-current.md` 与 `.audit/continuation-20261012/new-provider-plan/mac-execution-resume/` 保存停止收据、准确冻结快照、原始失败和检查日志。主要子目录为 `processhost-pipe-obligation-attempt1`、`processhost-pipe-typecheck-followup1`、`macos-identity-reader-attempt1`、`bounded-stop-20261012`。这些详细本地证据未随 Git 分发；没有原据时，不声称已完成新机器或新 head 的验证。
 
 保留日常 Bridge、用户文件、原 QUARANTINED 证据及旧租约。重新开始时先核对 Git/源码归属和运行资源，再选择所需最小差异检查。Import 仍需测试与独立审查；任何架构、数据形状或验收变更按 AGENTS.md 交回原设计方及用户。
+
+## 全部历史 worktree 的源码保全
+
+归档前另盘点了全部 64 棵本项目 Mac worktree。19 棵历史树的 78 个源码、脚本和测试文件已分别 WIP 提交并普通 push，没有混入 V6a。逐树原路径、原分支、保存分支、准确 SHA 和剩余非源码 dirty 见 [历史源码归档检查点](archive-source-checkpoints-20261012.md)。本轮仅保存，不代表这些历史差异通过验收。
