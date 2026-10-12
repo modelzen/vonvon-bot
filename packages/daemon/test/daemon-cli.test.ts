@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -7,13 +7,35 @@ import { pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
 import { z } from 'zod';
 import { afterAll, beforeAll, expect, it } from 'vitest';
+import { getPidLockInfo, isPidLockOwnerRunning } from '../src/server/pid-lock';
 
 let buildDir: string;
 let entry: string;
 let storeEntry: string;
 let interruptDriver: string;
 const dirs: string[] = [];
-const children: ChildProcessWithoutNullStreams[] = [];
+const children: { child: ChildProcessWithoutNullStreams; closed: Promise<number | null> }[] = [];
+const retainedDirs = new Set<string>();
+function trackChild(child: ChildProcessWithoutNullStreams) {
+  const closed = new Promise<number | null>(resolve => child.once('close', resolve));
+  children.push({ child, closed });
+  return closed;
+}
+async function waitForClose(closed: Promise<number | null>, timeout: number) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      closed,
+      new Promise<'timeout'>(resolve => { timer = setTimeout(() => resolve('timeout'), timeout); }),
+    ]);
+  } finally { clearTimeout(timer); }
+}
+async function closeChild({ child, closed }: typeof children[number]) {
+  try {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+  } catch { /* Closure still needs proof if signaling fails. */ }
+  return await waitForClose(closed, 1000) !== 'timeout';
+}
 beforeAll(async () => {
   await mkdir(resolve('node_modules/.cache'), { recursive: true });
   buildDir = await mkdtemp(resolve('node_modules/.cache/vonvon-cli-'));
@@ -42,25 +64,46 @@ beforeAll(async () => {
   expect(startupFixtureLoaded).toBe(true);
 });
 afterAll(async () => {
-  for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-  await Promise.all([buildDir, ...dirs].map(dir => rm(dir, { recursive: true, force: true })));
+  const closed = await Promise.all(children.map(closeChild));
+  if (closed.includes(false)) {
+    throw new Error('Fixture cleanup failed: child closure unconfirmed; all fixture and build directories retained');
+  }
+  await Promise.all([...(retainedDirs.size ? [] : [buildDir]), ...dirs.filter(dir => !retainedDirs.has(dir))]
+    .map(dir => rm(dir, { recursive: true, force: true }))).catch(() => {
+      throw new Error('Fixture directory removal failed');
+    });
 });
 async function fixture() {
   const dir = await mkdtemp(join(tmpdir(), 'vonvon-cli-')); dirs.push(dir);
   const home = join(dir, 'home'); const root = join(dir, 'daemon');
   await mkdir(home); await mkdir(root);
-  return { home, root };
+  return { dir, home, root };
 }
 function launch(home: string, root: string, args: string[]) {
   const prefix = process.platform === 'win32' && args[0] === 'daemon' && args[1] === 'run'
     ? ['--import', pathToFileURL(interruptDriver).href] : [];
   const child = spawn(process.execPath, [...prefix, entry, ...args], { env: { ...process.env, HOME: home, USERPROFILE: home, VONVON_HOME: root }, stdio: 'pipe' });
-  children.push(child);
-  let output = '';
-  child.stdout.on('data', data => { output += String(data); }); child.stderr.on('data', data => { output += String(data); });
-  const exited = new Promise<number | null>((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
-  return { child, exited, output: () => output };
+  const exited = trackChild(child);
+  let output = ''; let stdoutBytes = 0; let stderrBytes = 0; let spawnFailed = false;
+  child.stdout.on('data', data => { stdoutBytes += Buffer.byteLength(data); output = (output + String(data)).slice(-16384); });
+  child.stderr.on('data', data => { stderrBytes += Buffer.byteLength(data); output = (output + String(data)).slice(-16384); });
+  child.on('error', () => { spawnFailed = true; });
+  return { child, exited, output: () => output,
+    close: () => closeChild({ child, closed: exited }),
+    diagnostics: () => ({ code: child.exitCode, signal: child.signalCode, stdoutBytes, stderrBytes, spawnFailed }) };
 }
+async function fixtureDiagnostics(root: string) {
+  const daemonLogBytes = await stat(join(root, 'daemon.log')).then(file => file.size, () => null);
+  try {
+    const lock = await getPidLockInfo(root);
+    return { daemonLogBytes, lock: lock && {
+      pid: lock.pid,
+      startedAtMs: Date.parse(lock.startedAt),
+      listenPort: lock.listen && /^127\.0\.0\.1:\d{1,5}$/.test(lock.listen) ? Number(lock.listen.split(':')[1]) : null,
+    } };
+  } catch { return { daemonLogBytes, lock: 'unreadable or invalid lock' }; }
+}
+
 it('exposes daemon lifecycle commands while status and logs leave a missing home untouched', async () => {
   const f = await fixture();
   for (const args of [['--help'], ['daemon', '--help']]) {
@@ -96,16 +139,81 @@ it('starts without bots, refuses duplicate ownership and releases PID lease on s
 }, 20_000);
 
 it('concurrent detached starts return the same ready owner and stop clears its lease', async () => {
-  const f = await fixture();
-  const first = launch(f.home, f.root, ['daemon', 'start', '--port', '0']);
-  const second = launch(f.home, f.root, ['daemon', 'start', '--port', '0']);
-  expect(await Promise.all([first.exited, second.exited])).toEqual([0, 0]);
-  const record = z.object({ pid: z.number(), listen: z.string() }).parse(JSON.parse(await readFile(join(f.root, 'daemon.pid'), 'utf8')));
-  expect(first.output()).toContain(`PID ${record.pid} at ${record.listen}`);
-  expect(second.output()).toContain(`PID ${record.pid} at ${record.listen}`);
-  const stopped = launch(f.home, f.root, ['daemon', 'stop']);
-  expect(await stopped.exited).toBe(0);
-  await expect(readFile(join(f.root, 'daemon.pid'))).rejects.toMatchObject({ code: 'ENOENT' });
+  const f = await fixture().catch(() => { throw new Error('Concurrent fixture creation failed'); });
+  const attempts: ReturnType<typeof launch>[] = [];
+  retainedDirs.add(f.dir);
+  const startedAt = Date.now();
+  let stage = 'start CLI launch';
+  let failed = false;
+  let owner: Awaited<ReturnType<typeof getPidLockInfo>> = null;
+  try {
+    const first = launch(f.home, f.root, ['daemon', 'start', '--port', '0']);
+    attempts.push(first);
+    const second = launch(f.home, f.root, ['daemon', 'start', '--port', '0']);
+    attempts.push(second);
+    stage = 'start CLI closure';
+    // Reserve 7 seconds for child closure and authenticated owner cleanup within the 30 second test.
+    expect(await Promise.all(attempts.map(attempt => waitForClose(attempt.exited, 10_000)))).toEqual([0, 0]);
+    stage = 'ready owner';
+    owner = await getPidLockInfo(f.root);
+    if (!owner || !owner.listen) throw new Error('Ready owner unavailable');
+    expect(first.output().includes(`PID ${owner.pid} at ${owner.listen}`)).toBe(true);
+    expect(second.output().includes(`PID ${owner.pid} at ${owner.listen}`)).toBe(true);
+    stage = 'normal stop CLI launch';
+    const stopped = launch(f.home, f.root, ['daemon', 'stop']);
+    attempts.push(stopped);
+    stage = 'normal stop CLI closure';
+    expect(await waitForClose(stopped.exited, 5000)).toBe(0);
+    stage = 'lease absence';
+    const lease = await readFile(join(f.root, 'daemon.pid')).then(
+      () => 'present',
+      (error: unknown) => error instanceof Error && 'code' in error && error.code === 'ENOENT' ? 'absent' : 'unreadable',
+    );
+    expect(lease).toBe('absent');
+  } catch {
+    failed = true;
+    console.error('Detached start failure diagnostics', JSON.stringify({
+      stage, elapsedMs: Date.now() - startedAt,
+      cli: attempts.map(attempt => attempt.diagnostics()), ...await fixtureDiagnostics(f.root),
+    }));
+    // Never forward an arbitrary error or its cause to Vitest's formatter.
+    throw new Error(`Detached start failed during ${stage}`);
+  } finally {
+    let cleanupStage = 'start CLI closure';
+    try {
+      const cliClosed = !(await Promise.all(attempts.map(attempt => attempt.close()))).includes(false);
+      cleanupStage = 'owner lock read';
+      const current = await getPidLockInfo(f.root);
+      if (current) {
+        owner = current;
+        // The CLI authenticates this fixture owner and waits for its exit and lease removal.
+        cleanupStage = 'authenticated owner stop';
+        const cleanup = launch(f.home, f.root, ['daemon', 'stop']);
+        attempts.push(cleanup);
+        try {
+          const code = await waitForClose(cleanup.exited, 5000);
+          if (code !== 0) throw new Error('Fixture stop failed or timed out');
+        } finally {
+          if (!await cleanup.close()) {
+            cleanupStage = 'stop CLI closure';
+            throw new Error('Fixture stop CLI closure unconfirmed');
+          }
+        }
+      }
+      cleanupStage = 'owner closure verification';
+      if (!owner || isPidLockOwnerRunning(owner) || await getPidLockInfo(f.root)) {
+        throw new Error('Fixture owner closure is unconfirmed');
+      }
+      cleanupStage = 'start CLI closure';
+      if (!cliClosed) throw new Error('Fixture start CLI closure unconfirmed');
+      retainedDirs.delete(f.dir);
+    } catch {
+      console.error('Fixture cleanup failed; fixture and build retained', cleanupStage,
+        JSON.stringify({ elapsedMs: Date.now() - startedAt,
+          cli: attempts.map(attempt => attempt.diagnostics()), ...await fixtureDiagnostics(f.root) }));
+      if (!failed) throw new Error(`Fixture cleanup failed during ${cleanupStage}; fixture and build retained`);
+    }
+  }
 }, 30_000);
 
 it('keeps generated secret getters on their captured root outside the parent shell', async () => {
@@ -113,13 +221,13 @@ it('keeps generated secret getters on their captured root outside the parent she
   const setter = launch(f.home, f.root, ['secrets', 'set', 'fixture']); setter.child.stdin.end('dummy-only');
   expect(await setter.exited).toBe(0);
   const generator = spawn(process.execPath, ['-e', `process.argv[1]=${JSON.stringify(entry)};require(${JSON.stringify(storeEntry)}).buildEncryptedAccountConfig('fixture','feishu').then(config=>console.log(JSON.stringify(config.secrets.providers.bridge))).catch(e=>{console.error(e.message);process.exitCode=1})`], { env: { ...process.env, HOME: f.home, VONVON_HOME: f.root }, stdio: 'pipe' });
-  children.push(generator);
+  trackChild(generator);
   let providerOutput = ''; generator.stdout.on('data', data => { providerOutput += String(data); });
   expect(await new Promise<number | null>(resolve => generator.once('close', resolve))).toBe(0);
   const outside = await fixture();
   const provider = z.object({ command: z.string(), args: z.array(z.string()), env: z.record(z.string(), z.string()).optional() }).parse(JSON.parse(providerOutput));
   const getter = spawn(provider.command, provider.args, { env: { ...process.env, HOME: outside.home, VONVON_HOME: outside.root, ...provider.env }, stdio: 'pipe' });
-  children.push(getter);
+  trackChild(getter);
   let output = ''; getter.stdout.on('data', data => { output += String(data); });
   getter.stdin.end(JSON.stringify({ ids: ['fixture'] }));
   expect(await new Promise<number | null>(resolve => getter.once('close', resolve))).toBe(0);
@@ -130,7 +238,7 @@ it('keeps generated secret getters on their captured root outside the parent she
 it('refuses a reused PID without signaling the unrelated process or changing its lock', async () => {
   const f = await fixture();
   const sleeper = spawn(process.execPath, ['-e', "process.stdout.write('ready\\n');setInterval(()=>{},1000)"], { stdio: 'pipe' });
-  children.push(sleeper);
+  trackChild(sleeper);
   await new Promise<void>(resolve => sleeper.stdout.once('data', () => resolve()));
   const listener = createServer();
   await new Promise<void>(resolve => listener.listen(0, '127.0.0.1', resolve));
