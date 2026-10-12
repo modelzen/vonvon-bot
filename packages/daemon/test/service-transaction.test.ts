@@ -1,9 +1,9 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, open, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
 import { machineIdSchema, PROTOCOL_VERSION } from '@vonvon/protocol';
 import { createSocketServer, type Peer } from '../src/server/ws';
@@ -360,9 +360,13 @@ async function launchdFixture() {
   const plistPath = join(root, 'Library/LaunchAgents', `${LAUNCHD_LABEL}.plist`);
   const target = { platform: 'darwin' as const, plistPath };
   const calls: string[] = [];
+  const fileCalls: string[] = [];
   const state: {
+    fileFault: 'open' | 'write' | 'sync' | 'close' | 'rename' | null;
+    cleanupFails: boolean; plistUnlinkFails: boolean;
+    logFault: { name: string; operation: 'open' | 'close' } | null;
     child: { phase: 'checking' | 'owner' | 'guard-rejected' | 'exited'; pid: number; locks: number; work: number; exitCode: number | null; signals: number } | null;
-    prematureBootouts: number;
+    prematureBootouts: number; ownerWork: number;
     loaded: boolean; owner: PidLockInfo | null; pid: number | null; clock: number;
     bootstrap: 'success' | 'error' | 'timeout'; verifyFails: boolean;
     queryFailure: boolean; queryTimeout: boolean; queryOutput: string | null; bootout: 'success' | 'error' | 'timeout' | 'retained'; stopFails: boolean;
@@ -370,7 +374,7 @@ async function launchdFixture() {
     beforeUnlink: (() => Promise<void>) | null;
     afterUnlink: (() => Promise<void>) | null;
     onPause: (() => void | Promise<void>) | null; renameFails: boolean; delayStop: boolean; pidText: string | null;
-  } = { child: null, prematureBootouts: 0, loaded: false, owner: null, pid: null, clock: 0, bootstrap: 'success', verifyFails: false,
+  } = { fileFault: null, cleanupFails: false, plistUnlinkFails: false, logFault: null, child: null, prematureBootouts: 0, ownerWork: 0, loaded: false, owner: null, pid: null, clock: 0, bootstrap: 'success', verifyFails: false,
     queryFailure: false, queryTimeout: false, queryOutput: null, bootout: 'success', stopFails: false, beforeCommand: null, beforeUnlink: null, afterUnlink: null, onPause: null, renameFails: false, delayStop: false, pidText: null };
   const content = (port = 49101) => {
     const result = renderDefinition({ target, root, port, distribution: { kind: 'npm', executable: process.execPath, entry: '/package/bin/vonvon.mjs' }, capturedPath: '/captured/bin' });
@@ -403,6 +407,11 @@ async function launchdFixture() {
     child.phase = 'exited'; child.exitCode = 0; state.pid = null;
     calls.push('child exited 0');
   };
+  const failFile = (operation: NonNullable<typeof state.fileFault>) => {
+    fileCalls.push(operation);
+    if (state.fileFault === operation) { state.fileFault = null; throw new Error(`${operation} failed`); }
+  };
+  const temporaryFiles = async () => (await readdir(dirname(plistPath))).filter(name => name.endsWith('.tmp')).map(name => join(dirname(plistPath), name));
   const service = createLaunchdService({ root }, {
     home: root, uid: 501, capturedPath: '/captured/bin',
     distribution: async () => ({ kind: 'global-npm', cliPath: '/package/bin/vonvon.mjs' }),
@@ -413,17 +422,38 @@ async function launchdFixture() {
       expect(state.owner).toBe(owner);
       if (state.stopFails) throw new Error('Stop reply lost');
       if (state.delayStop) return;
-      state.owner = null;
+      state.owner = null; state.ownerWork = 0;
       if (state.pid === owner.pid) state.pid = null;
       if (state.child?.phase === 'owner' && state.child.pid === owner.pid) {
         state.child.phase = 'exited'; state.child.exitCode = 0; state.child.work = 0;
         calls.push('child drained 0');
       }
     },
-    rename: async (from, to) => { if (state.renameFails) throw new Error('rename failed'); await rename(from, to); },
+    open: async (path, flags, mode) => {
+      const temporary = String(path).endsWith('.tmp');
+      const logFault = state.logFault?.name === String(path) ? state.logFault : null;
+      if (temporary) failFile('open');
+      if (logFault?.operation === 'open') throw new Error('log open failed');
+      const file = await open(path, flags, mode);
+      const write = file.writeFile.bind(file);
+      const sync = file.sync.bind(file);
+      const close = file.close.bind(file);
+      if (temporary) {
+        file.writeFile = async (...args) => { failFile('write'); await write(...args); };
+        file.sync = async () => { failFile('sync'); await sync(); };
+      }
+      file.close = async () => {
+        await close();
+        if (temporary) failFile('close');
+        if (logFault?.operation === 'close') throw new Error('log close failed');
+      };
+      return file;
+    },
+    rename: async (from, to) => { failFile('rename'); if (state.renameFails) throw new Error('rename failed'); await rename(from, to); },
     unlink: async path => {
-      if (String(path) !== plistPath) { await unlink(path); return; }
+      if (String(path) !== plistPath) { fileCalls.push('cleanup'); if (state.cleanupFails) throw new Error('cleanup failed'); await unlink(path); return; }
       await state.beforeUnlink?.();
+      if (state.plistUnlinkFails) throw new Error('plist unlink failed');
       await unlink(path);
       calls.push('withdraw');
       await state.afterUnlink?.();
@@ -466,7 +496,7 @@ async function launchdFixture() {
       throw new Error(`Unexpected command ${command}`);
     },
   });
-  return { root, target, plistPath, calls, state, content, seed, service, launchChild, checkChildRegistration, exitChild, cleanup: () => rm(root, { recursive: true, force: true }) };
+  return { root, target, plistPath, calls, fileCalls, temporaryFiles, state, content, seed, service, launchChild, checkChildRegistration, exitChild, cleanup: () => rm(root, { recursive: true, force: true }) };
 }
 async function withLaunchd(run: (fixture: LaunchdFixture) => Promise<void>) {
   const fixture = await launchdFixture();
@@ -492,7 +522,11 @@ it.each(['error', 'timeout'] as const)('launchd partial bootstrap %s never grant
   await withLaunchd(async f => {
     f.state.owner = { ...first }; f.state.bootstrap = bootstrap;
     const result = await f.service.install();
-    expect(result.kind).toBe('install_incomplete'); expect(result.retained?.pid).toBe(first.pid);
+    expect(result.kind).toBe('install_incomplete'); expect(result.retained).toEqual({ pid: first.pid, startedAt: first.startedAt });
+    expect(f.state.owner).toEqual(first); expect(f.state.loaded).toBe(true);
+    expect(result.leftovers).toContain(`job gui/501/${LAUNCHD_LABEL}: loaded`);
+    await expect(readFile(f.plistPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(f.calls).toEqual(['print gui/501', printJob, `bootstrap gui/501 ${f.plistPath}`, 'withdraw', printJob]);
     expect(bootouts(f)).toEqual([]); expect(f.calls.filter(call => call.startsWith('stop '))).toEqual([]);
     expect((await readRegistration({ target: f.target, requestedRoot: f.root })).kind).toBe('absent');
     expect((await f.service.uninstall()).kind).toBe('uninstalled');
@@ -502,8 +536,11 @@ it.each(['error', 'timeout'] as const)('launchd partial bootstrap %s never grant
 it('launchd successful replacement and failed verification each run their own withdrawal barrier', async () => {
   await withLaunchd(async f => {
     await f.seed(49102); f.state.verifyFails = true;
-    expect((await f.service.install()).kind).toBe('install_rolled_back');
+    const result = await f.service.install();
+    expect(result.kind).toBe('install_rolled_back'); expect(result.retained).toBeNull();
+    expect(f.state.owner).toBeNull();
     expect(await readFile(f.plistPath)).toEqual(f.content(49102));
+    expect((await readRegistration({ target: f.target, requestedRoot: f.root })).kind).toBe('ours');
     expect(bootouts(f)).toHaveLength(2);
     expect(f.calls.filter(call => call === 'withdraw')).toHaveLength(2);
     expect(f.calls.filter(call => call.startsWith('bootstrap '))).toHaveLength(1);
@@ -514,7 +551,10 @@ it.each(['error', 'timeout', 'retained'] as const)('launchd bootout %s leaves ab
   await withLaunchd(async f => {
     await f.seed(); f.state.bootout = bootout;
     const result = await f.service.uninstall();
-    expect(result.kind).toBe('uninstall_incomplete'); expect(result.detail).toContain('jobPresent=');
+    expect(result.kind).toBe('uninstall_incomplete'); expect(result.detail).toContain(`jobPresent=${bootout !== 'timeout'}`);
+    expect(result.retained).toBeNull(); expect(f.state.owner).toBeNull(); expect(f.state.loaded).toBe(bootout !== 'timeout');
+    await expect(readFile(f.plistPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(f.calls).toEqual([printJob, 'withdraw', printJob, bootoutJob, printJob]);
     expect(bootouts(f)).toHaveLength(1);
     const index = f.calls.findIndex(call => call.startsWith('bootout '));
     expect(f.calls.slice(index + 1)).toEqual([`print gui/501/${LAUNCHD_LABEL}`]);
@@ -531,6 +571,11 @@ it.each(['uninstall', 'replacement', 'rollback'] as const)('launchd %s query fai
     expect(result.kind).toBe(mode === 'uninstall' ? 'uninstall_rolled_back' : mode === 'replacement' ? 'install_rolled_back' : 'install_incomplete');
     expect(await readFile(f.plistPath)).toEqual(f.content(mode === 'rollback' ? 49101 : 49102));
     expect(bootouts(f)).toHaveLength(mode === 'rollback' ? 1 : 0);
+    expect(result.retained).toBeNull(); expect(f.state.owner).toBeNull(); expect(f.state.loaded).toBe(true);
+    expect((await readRegistration({ target: f.target, requestedRoot: f.root })).kind).toBe('ours');
+    expect(f.calls.slice(f.calls.lastIndexOf('withdraw') + 1)).toEqual([printJob]);
+    expect(f.calls.filter(call => call.startsWith('stop '))).toEqual([]);
+    expect(f.calls.filter(call => call.startsWith('bootstrap '))).toHaveLength(mode === 'rollback' ? 1 : 0);
   });
 });
 it.each(['uninstall', 'replacement', 'rollback'] as const)('launchd %s lost stop reply restores nothing and never unloads that job', async mode => {
@@ -546,7 +591,11 @@ it.each(['uninstall', 'replacement', 'rollback'] as const)('launchd %s lost stop
     expect(result.detail).toContain('stop_unconfirmed'); expect(f.calls.filter(call => call.startsWith('stop '))).toHaveLength(1);
     expect(bootouts(f)).toHaveLength(mode === 'rollback' ? 1 : 0);
     expect((await readRegistration({ target: f.target, requestedRoot: f.root })).kind).toBe('absent');
-    expect(f.state.owner?.pid).toBe(first.pid);
+    expect(result.retained).toEqual({ pid: first.pid, startedAt: first.startedAt });
+    expect(f.state.owner).toEqual(first); expect(f.state.loaded).toBe(true);
+    await expect(readFile(f.plistPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    const lastWithdraw = f.calls.lastIndexOf('withdraw');
+    expect(f.calls.slice(lastWithdraw + 1)).toEqual([printJob, `stop ${first.pid}`]);
   });
 });
 it.each((['replacement', 'rollback'] as const).flatMap(mode =>
@@ -600,7 +649,10 @@ it('launchd resumed uninstall refuses a foreign job pid without touching the ret
     f.state.loaded = true; f.state.pid = next.pid; f.state.owner = { ...first };
     const result = await f.service.uninstall();
     expect(result.kind).toBe('uninstall_incomplete'); expect(result.detail).toContain('foreign_job_pid');
-    expect(result.retained?.pid).toBe(first.pid); expect(bootouts(f)).toEqual([]);
+    expect(result.retained).toEqual({ pid: first.pid, startedAt: first.startedAt }); expect(bootouts(f)).toEqual([]);
+    expect(f.state.owner).toEqual(first); expect(f.state.loaded).toBe(true);
+    expect(f.calls).toEqual([printJob, printJob]);
+    expect((await readRegistration({ target: f.target, requestedRoot: f.root })).kind).toBe('absent');
   });
 });
 it('launchd start uses fixed port and kickstart without kill, and status requires an owner', async () => {
@@ -656,6 +708,7 @@ it('launchd failed atomic rename removes its temporary file and never loads a jo
     f.state.renameFails = true;
     expect((await f.service.install()).kind).toBe('install_rolled_back');
     expect((await readRegistration({ target: f.target, requestedRoot: f.root })).kind).toBe('absent');
+    expect(await f.temporaryFiles()).toEqual([]);
     expect(f.calls.some(call => call.startsWith('bootstrap '))).toBe(false);
   });
 });
@@ -669,7 +722,7 @@ it.each(['0x10', '1e3', '-1', '1.5', '9007199254740993'])('launchd status classi
 });
 it('launchd proven-loaded rollback retains the pre-existing self-hosted owner and its identity', async () => {
   await withLaunchd(async f => {
-    const owner = { ...first }; f.state.owner = owner;
+    const owner = { ...first }; f.state.owner = owner; f.state.ownerWork = 3;
     let bootstrapped = false; let prints = 0;
     f.state.beforeCommand = async command => {
       if (command === 'bootstrap') bootstrapped = true;
@@ -677,7 +730,9 @@ it('launchd proven-loaded rollback retains the pre-existing self-hosted owner an
     };
     const result = await f.service.install();
     expect(result.kind).toBe('install_rolled_back'); expect(result.retained).toEqual({ pid: owner.pid, startedAt: owner.startedAt });
-    expect(f.state.owner).toBe(owner); expect(f.calls.filter(call => call.startsWith('stop '))).toEqual([]);
+    expect(f.state.owner).toBe(owner); expect(f.state.ownerWork).toBe(3); expect(f.state.loaded).toBe(false);
+    expect(f.calls.filter(call => call.startsWith('stop '))).toEqual([]);
+    await expect(readFile(f.plistPath)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(bootouts(f)).toHaveLength(1);
     expect((await readRegistration({ target: f.target, requestedRoot: f.root })).kind).toBe('absent');
   });
@@ -689,7 +744,12 @@ it.each(['replacement', 'rollback'] as const)('launchd %s unload-unknown never r
     f.state.beforeCommand = async command => {
       if (command === 'bootout' && ++unloads === (mode === 'rollback' ? 2 : 1)) f.state.bootout = 'timeout';
     };
-    expect((await f.service.install()).kind).toBe('install_incomplete');
+    const result = await f.service.install();
+    expect(result.kind).toBe('install_incomplete'); expect(result.leftovers).toContain('jobPresent=false');
+    expect(result.retained).toBeNull(); expect(f.state.owner).toBeNull(); expect(f.state.loaded).toBe(false);
+    await expect(readFile(f.plistPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(f.calls.slice(f.calls.lastIndexOf(bootoutJob) + 1)).toEqual([printJob]);
+    expect(f.calls.filter(call => call.startsWith('stop '))).toEqual([]);
     expect(bootouts(f)).toHaveLength(mode === 'rollback' ? 2 : 1);
     expect((await readRegistration({ target: f.target, requestedRoot: f.root })).kind).toBe('absent');
     expect(f.calls.filter(call => call.startsWith('bootstrap '))).toHaveLength(mode === 'rollback' ? 1 : 0);
@@ -770,5 +830,158 @@ it('launchd reads only own state and pid beside native-shaped nested state field
     await f.seed();
     f.state.queryOutput = `${jobHeader}\n\tstate = running\n\tresource coalition = {\n\t\tstate = active\n\t}\n\tpid = ${first.pid}\n}\n`;
     expect((await f.service.status()).manager).toMatchObject({ kind: 'loaded', pid: first.pid });
+  });
+});
+
+const printJob = `print gui/501/${LAUNCHD_LABEL}`;
+const bootoutJob = `bootout gui/501/${LAUNCHD_LABEL}`;
+it.each((['fresh', 'replacement'] as const).flatMap(mode =>
+  (['open', 'write', 'sync', 'close', 'rename'] as const).map(fault => ({ mode, fault })),
+))('launchd $mode atomic $fault failure restores exact bytes and cleans its temporary', async ({ mode, fault }) => {
+  await withLaunchd(async f => {
+    if (mode === 'replacement') await f.seed(49102);
+    f.state.fileFault = fault;
+    const result = await f.service.install();
+    expect(result.kind).toBe('install_rolled_back');
+    expect(result.detail).toContain(`${fault} failed`);
+    expect(result.retained).toBeNull();
+    expect(f.state.owner).toBeNull(); expect(f.state.loaded).toBe(false);
+    expect(await f.temporaryFiles()).toEqual([]);
+    expect((await readRegistration({ target: f.target, requestedRoot: f.root })).kind).toBe(mode === 'replacement' ? 'ours' : 'absent');
+    if (mode === 'replacement') expect(await readFile(f.plistPath)).toEqual(f.content(49102));
+    else await expect(readFile(f.plistPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(f.calls).toEqual(mode === 'replacement'
+      ? ['print gui/501', printJob, 'withdraw', printJob, bootoutJob, printJob, printJob]
+      : ['print gui/501', printJob, printJob]);
+    const steps = ['open', 'write', 'sync', 'close', 'rename'];
+    const failedSteps = steps.slice(0, steps.indexOf(fault) + 1);
+    if (fault === 'write' || fault === 'sync') failedSteps.push('close');
+    if (fault !== 'open') failedSteps.push('cleanup');
+    expect(f.fileCalls).toEqual(mode === 'replacement' ? [...failedSteps, ...steps] : failedSteps);
+  });
+});
+it.each((['fresh', 'replacement'] as const).flatMap(mode =>
+  (['write', 'sync', 'close', 'rename'] as const).map(fault => ({ mode, fault })),
+))('launchd $mode cleanup failure after $fault reports the actual remaining temporary as incomplete', async ({ mode, fault }) => {
+  await withLaunchd(async f => {
+    if (mode === 'replacement') await f.seed(49102);
+    f.state.fileFault = fault; f.state.cleanupFails = true;
+    const result = await f.service.install();
+    const temporary = await f.temporaryFiles();
+    expect(temporary).toHaveLength(1);
+    const remaining = temporary[0];
+    if (!remaining) throw new Error('Expected temporary file');
+    expect(await readFile(remaining)).toEqual(fault === 'write' ? Buffer.alloc(0) : f.content());
+    expect(result.kind).toBe('install_incomplete');
+    expect(result.leftovers).toContain(`temporary file ${temporary[0]}`);
+    expect(result.detail).toContain('cleanup failed');
+    expect(result.retained).toBeNull(); expect(f.state.owner).toBeNull(); expect(f.state.loaded).toBe(false);
+    expect((await readRegistration({ target: f.target, requestedRoot: f.root })).kind).toBe(mode === 'replacement' ? 'ours' : 'absent');
+    if (mode === 'replacement') expect(await readFile(f.plistPath)).toEqual(f.content(49102));
+    else await expect(readFile(f.plistPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(f.calls).toEqual(mode === 'replacement'
+      ? ['print gui/501', printJob, 'withdraw', printJob, bootoutJob, printJob, printJob]
+      : ['print gui/501', printJob, printJob]);
+    f.state.cleanupFails = false;
+    const nextResult = await f.service.install();
+    expect(nextResult.kind).toBe('installed');
+    expect(nextResult.leftovers).not.toContain(`temporary file ${remaining}`);
+    expect(await f.temporaryFiles()).toEqual(temporary);
+  });
+});
+it.each(['uninstall', 'replacement'] as const)('launchd %s B1 unlink failure preserves bytes and the live owner without drain', async mode => {
+  await withLaunchd(async f => {
+    await f.seed(49102);
+    f.state.plistUnlinkFails = true;
+    f.state.beforeUnlink = async () => { f.launchChild(); await f.checkChildRegistration(); };
+    const result = mode === 'uninstall' ? await f.service.uninstall() : await f.service.install();
+    expect(result.kind).toBe(mode === 'uninstall' ? 'uninstall_incomplete' : 'install_incomplete');
+    expect(result.detail).toContain('plist unlink failed');
+    expect(result.retained).toEqual({ pid: first.pid, startedAt: first.startedAt });
+    expect(f.state.owner).toEqual(first);
+    expect(f.state.child).toMatchObject({ phase: 'owner', pid: first.pid, work: 1, locks: 1, signals: 0, exitCode: null });
+    expect(f.state.loaded).toBe(true); expect(f.state.pid).toBe(first.pid);
+    expect(await readFile(f.plistPath)).toEqual(f.content(49102));
+    expect((await readRegistration({ target: f.target, requestedRoot: f.root })).kind).toBe('ours');
+    expect(f.calls).toEqual([...(mode === 'replacement' ? ['print gui/501'] : []), printJob, 'child born', 'child registration ours']);
+  });
+});
+it.each((['fresh', 'replacement'] as const).flatMap(mode =>
+  (['service.log', 'service.err.log'] as const).flatMap(name =>
+    (['open', 'close'] as const).map(operation => ({ mode, name, operation })))),
+)('launchd $mode $name $operation failure rolls back without bootstrap', async ({ mode, name, operation }) => {
+  await withLaunchd(async f => {
+    if (mode === 'replacement') await f.seed(49102);
+    f.state.logFault = { name: join(f.root, name), operation };
+    const result = await f.service.install();
+    expect(result.kind).toBe('install_rolled_back'); expect(result.detail).toContain(`log ${operation} failed`);
+    expect(result.retained).toBeNull(); expect(f.state.owner).toBeNull(); expect(f.state.loaded).toBe(false);
+    expect(await f.temporaryFiles()).toEqual([]);
+    expect((await readRegistration({ target: f.target, requestedRoot: f.root })).kind).toBe(mode === 'replacement' ? 'ours' : 'absent');
+    if (mode === 'replacement') expect(await readFile(f.plistPath)).toEqual(f.content(49102));
+    else await expect(readFile(f.plistPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(f.calls).toEqual(mode === 'replacement'
+      ? ['print gui/501', printJob, 'withdraw', printJob, bootoutJob, printJob, printJob]
+      : ['print gui/501', printJob, 'withdraw', printJob]);
+  });
+});
+it('launchd successful uninstall from ours drains accepted work and removes registration', async () => {
+  await withLaunchd(async f => {
+    await f.seed(); f.launchChild(); await f.checkChildRegistration(); f.calls.length = 0;
+    const result = await f.service.uninstall();
+    expect(result).toEqual({ kind: 'uninstalled', detail: 'Uninstalled', retained: null, leftovers: [] });
+    expect(f.state.owner).toBeNull(); expect(f.state.loaded).toBe(false); expect(f.state.pid).toBeNull();
+    expect(f.state.child).toMatchObject({ phase: 'exited', work: 0, signals: 0, exitCode: 0, locks: 1 });
+    expect((await readRegistration({ target: f.target, requestedRoot: f.root })).kind).toBe('absent');
+    await expect(readFile(f.plistPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(f.calls).toEqual([printJob, 'child visible owner', 'withdraw', printJob, 'child visible owner', `stop ${first.pid}`, 'child drained 0', printJob, bootoutJob, printJob]);
+  });
+});
+it.each(['success', 'error', 'timeout', 'retained', 'unknown'] as const)('launchd resumed uninstall %s retains self-hosted identity and accepted work', async outcome => {
+  await withLaunchd(async f => {
+    f.state.loaded = true; f.state.owner = { ...first }; f.state.ownerWork = 3;
+    const owner = f.state.owner;
+    f.calls.length = 0;
+    if (outcome === 'unknown') f.state.beforeCommand = async command => { if (command === 'bootout') f.state.queryFailure = true; };
+    else f.state.bootout = outcome;
+    const result = await f.service.uninstall();
+    expect(result.kind).toBe(outcome === 'success' ? 'uninstalled' : 'uninstall_incomplete');
+    expect(result.retained).toEqual({ pid: first.pid, startedAt: first.startedAt });
+    expect(f.state.owner).toBe(owner); expect(f.state.ownerWork).toBe(3);
+    expect(f.state.loaded).toBe(outcome === 'error' || outcome === 'retained');
+    if (outcome !== 'success') expect(result.leftovers).toContain(`jobPresent=${outcome === 'unknown' ? 'unknown' : outcome === 'error' || outcome === 'retained'}`);
+    expect((await readRegistration({ target: f.target, requestedRoot: f.root })).kind).toBe('absent');
+    await expect(readFile(f.plistPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(f.calls).toEqual([printJob, printJob, bootoutJob, printJob]);
+  });
+});
+
+it('launchd failed deletion during unproven rollback reports exact remaining new bytes', async () => {
+  await withLaunchd(async f => {
+    f.state.bootstrap = 'error'; f.state.plistUnlinkFails = true;
+    const result = await f.service.install();
+    expect(result.kind).toBe('install_incomplete'); expect(result.detail).toContain('restore failed: plist unlink failed');
+    expect(result.retained).toBeNull(); expect(f.state.owner).toBeNull(); expect(f.state.loaded).toBe(true);
+    expect(await readFile(f.plistPath)).toEqual(f.content());
+    expect((await readRegistration({ target: f.target, requestedRoot: f.root })).kind).toBe('ours');
+    expect(result.leftovers).toContain(`plist ${f.plistPath}: ours`);
+    expect(f.calls).toEqual(['print gui/501', printJob, `bootstrap gui/501 ${f.plistPath}`]);
+    expect(await f.temporaryFiles()).toEqual([]);
+  });
+});
+it.each(['query_failed', 'stop_unconfirmed'] as const)('launchd resumed uninstall %s keeps absent bytes and never unloads', async failure => {
+  await withLaunchd(async f => {
+    f.state.loaded = true; f.state.owner = { ...first }; f.state.pid = first.pid; f.state.ownerWork = 2;
+    const owner = f.state.owner;
+    let prints = 0;
+    f.state.beforeCommand = async command => { if (command === 'print' && ++prints === 2) f.state.queryFailure = failure === 'query_failed'; };
+    f.state.stopFails = failure === 'stop_unconfirmed';
+    const result = await f.service.uninstall();
+    expect(result.kind).toBe('uninstall_incomplete'); expect(result.detail).toContain(failure);
+    expect(result.retained).toEqual({ pid: first.pid, startedAt: first.startedAt });
+    expect(f.state.owner).toBe(owner); expect(f.state.ownerWork).toBe(2); expect(f.state.loaded).toBe(true); expect(f.state.pid).toBe(first.pid);
+    expect((await readRegistration({ target: f.target, requestedRoot: f.root })).kind).toBe('absent');
+    await expect(readFile(f.plistPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(f.calls).toEqual([printJob, printJob, ...(failure === 'stop_unconfirmed' ? [`stop ${first.pid}`] : [])]);
   });
 });

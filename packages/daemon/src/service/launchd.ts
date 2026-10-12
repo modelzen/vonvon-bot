@@ -31,6 +31,7 @@ type Snapshot = {
   target: { platform: 'darwin'; plistPath: string };
   expected: Uint8Array | null;
   kept: Uint8Array | null;
+  temporaryLeftovers: string[];
 };
 export type LaunchdTransactionOutcome = {
   kind: 'installed' | 'already-installed' | 'uninstalled' | 'not-installed'
@@ -114,7 +115,7 @@ export function createLaunchdService(options: { root: string }, overrides: Parti
     const root = await d.resolveRoot(options.root);
     const target = serviceTarget({ platform: 'darwin', home: d.home });
     if (target.platform !== 'darwin') throw new Error('Invalid launchd target');
-    return { root, target, expected: null, kept: null };
+    return { root, target, expected: null, kept: null, temporaryLeftovers: [] };
   }
   const registration = (s: Snapshot): Promise<Registration> => d.registration({ target: s.target, requestedRoot: s.root });
   function bytes(s: Snapshot, definition: Definition): Uint8Array {
@@ -180,7 +181,10 @@ export function createLaunchdService(options: { root: string }, overrides: Parti
       await d.rename(temporary, s.target.plistPath);
     } catch (error) {
       try { await d.unlink(temporary); }
-      catch (cleanupError) { throw new Error(`${detailOf(error)}; temporary file cleanup failed at ${temporary}: ${detailOf(cleanupError)}`); }
+      catch (cleanupError) {
+        s.temporaryLeftovers.push(temporary);
+        throw new Error(`${detailOf(error)}; temporary file cleanup failed at ${temporary}: ${detailOf(cleanupError)}`);
+      }
       throw error;
     }
   }
@@ -211,7 +215,7 @@ export function createLaunchdService(options: { root: string }, overrides: Parti
   }
   async function outcome(s: Snapshot, kind: LaunchdTransactionOutcome['kind'], detail: string): Promise<LaunchdTransactionOutcome> {
     let retained: OwnerIdentity | null = null;
-    const leftovers: string[] = [];
+    const leftovers = s.temporaryLeftovers.map(path => `temporary file ${path}`);
     try { retained = identity(await d.readOwner(s.root)); }
     catch (error) { leftovers.push(`owner unknown: ${detailOf(error)}`); }
     if (retained) leftovers.push(`retained pid ${retained.pid}`);
@@ -227,7 +231,7 @@ export function createLaunchdService(options: { root: string }, overrides: Parti
   }
   async function rollbackResult(s: Snapshot, before: OwnerIdentity | null, reason: string): Promise<LaunchdTransactionOutcome> {
     const result = await outcome(s, 'install_incomplete', reason);
-    if (sameOwner(before, result.retained) && !result.leftovers.some(item => item.startsWith('owner unknown'))) result.kind = 'install_rolled_back';
+    if (s.temporaryLeftovers.length === 0 && sameOwner(before, result.retained) && !result.leftovers.some(item => item.startsWith('owner unknown'))) result.kind = 'install_rolled_back';
     return result;
   }
   async function barrierFailure(s: Snapshot, result: Exclude<BarrierResult, { kind: 'unloaded' }>, mode: 'uninstall' | 'replacement' | 'rollback', before: OwnerIdentity | null): Promise<LaunchdTransactionOutcome> {
