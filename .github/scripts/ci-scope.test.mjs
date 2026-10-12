@@ -226,7 +226,6 @@ test('Git whitespace check rejects actual documentation violations', () => fixtu
 }));
 
 
-// These fixtures evaluate the workflow's expression text, not a second routing implementation.
 const workflow = readFileSync(new URL('../workflows/ci.yml', import.meta.url), 'utf8');
 const jobs = Object.fromEntries(['linux', 'windows', 'macos'].map(name =>
   [name, workflow.split(new RegExp(`^  ${name}:\n`, 'm'))[1]?.split(/^  \w+:\n/m)[0]]));
