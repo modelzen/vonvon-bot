@@ -14,11 +14,19 @@
 | V4 | 补全 `packages/client`，新建 `packages/ui`。移植界面，`window.bridge` 换成注入的客户端，daemon 在本机提供网页。旧界面用到、`H3` 还返回 `unsupported` 的请求逐个定归属：环境页、刷新、机器状态和日志由 daemon 补上；打开和复制链接在浏览器里做；只和桌面应用有关的操作交给 V5 的外壳能力。Codex 可执行文件路径改用现有的主机设置保存 | V3 |
 | V5 | `packages/desktop`。Electron 外壳拉起或连接 daemon，加载界面，托盘，开机自动运行，自动更新。Vonvon 自己的系统服务（服务标识、安装和卸载、原生验收）也在这里第一次提供 | V4 |
 | V6 | Claude Code provider。移植 Paseo 的实现和 `AgentSession` 到 `AgentBackend` 的适配器，删除 bridge 的 Claude 后端 | V3 |
-| V7 | 其他 provider。通用 ACP 和 Copilot、OpenCode（只移植 V2 客户端，要求 2.0.10 及以上）、Pi | V6；provider 选择器的验收要 V4 的网页 |
+| V7 | 其他 provider：Cursor（`cursor-agent acp`）、Grok（`grok agent stdio`）、Pi 和自定义 ACP 命令。Copilot 和 OpenCode 推后，见下文“推后的 provider” | V6；provider 选择器的验收要 V4 的网页；Cursor 和 Grok 的实时验收要用户提供的账号 |
 | V8 | 导入 bridge 数据并关停旧服务。macOS、Linux、Windows 三个平台，界面引导和 `vonvon import feishu-codex-bridge` | V4 |
 | V9 | feishu-codex-bridge 仓库的收尾版本。引导用户安装 Vonvon Bot，发现已迁移标记时拒绝启动 | V8，以及 Mac 发布的安装包 |
 | V10 | 账号和机器登记。`packages/cloud`、飞书和 Lark 登录、`vonvon login`、桌面端登录、机器列表和在线状态 | V4；桌面端登录的验收要 V5 |
 | V11 | 远程访问。daemon 向云端的出站连接、转发、端到端加密、云端托管网页、桌面端连接其他机器 | V10；桌面端连接的验收要 V5 |
+
+## 推后的 provider
+
+2026-10-12 用户按自己的用户群定了 V7 的范围。用户本机原本就装着 Codex、Claude Code、Cursor 或 Grok，也有人通过别的工具用 DeepSeek；Pi 由用户指定保留。
+
+- Copilot 和 OpenCode 推后，不是取消。它们在 `e0f6f56` 时的设计（OpenCode V2 入口、2.0.10 版本门槛、`bridge.ts` 改动、插件打包、Paseo 数据目录）留在 git 历史里，`codex/v7-providers` 的 `1104142` 保存了当时的实现，以后单开一个版本再接。
+- DeepSeek 是模型，不是 agent，不单独做 provider。用户通过 Claude Code 接 DeepSeek 的 Anthropic 兼容接口。V6 的 Claude provider 会读取 `~/.claude/settings.json`，写在那里的 `env` 不用额外开发就能生效。Kimi、GLM、Qwen 同理。只在 shell 里 `export` 的变量，作为系统服务启动的 daemon 拿不到。
+- 想让官方 Claude 和 DeepSeek 同时出现在选择器里，需要 Paseo 那样的“Claude 配置档”（`extends: "claude"` 加环境变量）。这是新的数据形状，和 Copilot、OpenCode 一起推后。
 
 ## 开发起点
 
