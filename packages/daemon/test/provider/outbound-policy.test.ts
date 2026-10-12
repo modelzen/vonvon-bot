@@ -1,8 +1,10 @@
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { getEventListeners } from 'node:events';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { checkUploadPath, judgePath, uploadPlan, type OutboundPlan } from '../../src/provider/outbound/policy';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { checkUploadPath, fetchRemoteImage, judgePath, requestPinned, uploadPlan, type OutboundPlan, type RemoteImageDeps } from '../../src/provider/outbound/policy';
 
 describe('outbound path policy', () => {
   let temporary: string;
@@ -181,6 +183,176 @@ describe('outbound path policy', () => {
     if (process.platform !== 'win32') {
       expect(await judgePath(plan, 'glob', 'directory\\')).toEqual({ allowed: false, reason: 'unsafe-glob' });
       expect(await judgePath(plan, 'glob', 'directory\\/*.txt')).toEqual({ allowed: false, reason: 'unsafe-glob' });
+    }
+  });
+});
+
+describe('outbound remote image policy', () => {
+  const image = Buffer.from('image');
+  const plan = (network: boolean, tier: 'qa' | 'write' | 'full'): OutboundPlan => ({
+    grant: tier === 'full' ? { tier, root: '/project', network } : { tier, root: '/project', readScope: 'project', network },
+    readableRoots: tier === 'full' ? 'unrestricted' : ['/project'],
+    writableRoots: tier === 'full' ? 'unrestricted' : tier === 'qa' ? [] : ['/project'],
+  });
+  const deps = (addresses: { address: string; family: 4 | 6 }[] = [{ address: '8.8.8.8', family: 4 }]): RemoteImageDeps => ({
+    resolve: vi.fn(async () => addresses),
+    request: vi.fn(async () => ({ status: 200, headers: { contentType: 'image/png' }, body: image })),
+  });
+
+  describe('shared download deadline', () => {
+    let deadline: AbortSignal;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.spyOn(AbortSignal, 'timeout').mockImplementation(milliseconds => {
+        const controller = new AbortController();
+        deadline = controller.signal;
+        setTimeout(() => controller.abort(new DOMException('Download timed out', 'TimeoutError')), milliseconds);
+        return deadline;
+      });
+    });
+
+    afterEach(() => {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    it('settles at the deadline when DNS never settles', async () => {
+      const io = deps();
+      io.resolve = vi.fn<RemoteImageDeps['resolve']>(() => new Promise(() => {}));
+      let settled = false;
+      let failure: unknown;
+      void fetchRemoteImage('https://example.com/a.png', plan(true, 'write'), io).then(
+        () => { settled = true; },
+        error => { settled = true; failure = error; },
+      );
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(true);
+      expect(failure).toBe(deadline.reason);
+      expect(io.request).not.toHaveBeenCalled();
+      expect(getEventListeners(deadline, 'abort')).toHaveLength(0);
+    });
+
+    it.each(['resolve', 'reject'] as const)('ignores DNS that completes late with %s', async completion => {
+      const io = deps();
+      io.resolve = vi.fn<RemoteImageDeps['resolve']>(() => new Promise((resolve, reject) => {
+        setTimeout(() => completion === 'resolve'
+          ? resolve([{ address: '8.8.8.8', family: 4 }])
+          : reject(new Error('Late DNS failure')), 11_000);
+      }));
+      let failure: unknown;
+      const result = fetchRemoteImage('https://example.com/a.png', plan(true, 'write'), io)
+        .catch(error => { failure = error; });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(failure).toBe(deadline.reason);
+      expect(getEventListeners(deadline, 'abort')).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await result;
+      expect(io.request).not.toHaveBeenCalled();
+    });
+
+    it.each(['resolve', 'reject', 'throw'] as const)('cleans up after DNS %s before the deadline', async completion => {
+      const io = deps();
+      const error = new Error('DNS failed');
+      if (completion === 'reject') io.resolve = vi.fn(async () => { throw error; });
+      if (completion === 'throw') io.resolve = vi.fn(() => { throw error; });
+      const result = fetchRemoteImage('https://example.com/a.png', plan(true, 'write'), io);
+      if (completion === 'resolve') await expect(result).resolves.toEqual(image);
+      else await expect(result).rejects.toBe(error);
+      expect(getEventListeners(deadline, 'abort')).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(io.request).toHaveBeenCalledTimes(completion === 'resolve' ? 1 : 0);
+    });
+
+    it('uses the remaining total deadline for redirect DNS', async () => {
+      const io = deps();
+      io.resolve = vi.fn<RemoteImageDeps['resolve']>(() => new Promise(resolve => {
+        setTimeout(() => resolve([{ address: '8.8.8.8', family: 4 }]), 6_000);
+      }));
+      io.request = vi.fn(async () => ({ status: 302, headers: { location: 'https://redirect.test/b.png' }, body: Buffer.alloc(0) }));
+      let failure: unknown;
+      const result = fetchRemoteImage('https://example.com/a.png', plan(true, 'write'), io)
+        .catch(error => { failure = error; });
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(io.resolve).toHaveBeenCalledTimes(2);
+      expect(io.request).toHaveBeenCalledTimes(1);
+      expect(getEventListeners(deadline, 'abort')).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(3_999);
+      expect(failure).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(failure).toBe(deadline.reason);
+      expect(getEventListeners(deadline, 'abort')).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await result;
+      expect(io.request).toHaveBeenCalledTimes(1);
+      expect(AbortSignal.timeout).toHaveBeenCalledExactlyOnceWith(10_000);
+    });
+  });
+
+  it.each(['qa', 'write', 'full'] as const)('returns before DNS with network off in %s', async tier => {
+    const io = deps();
+    expect(await fetchRemoteImage('https://example.com/a.png', plan(false, tier), io)).toBeUndefined();
+    expect(io.resolve).not.toHaveBeenCalled();
+    expect(io.request).not.toHaveBeenCalled();
+  });
+
+  it.each(['127.0.0.1', '::1', '10.0.0.5', '172.16.0.1', '192.168.1.1',
+    '169.254.169.254', 'fe80::1', '100.64.0.1', '0.0.0.0', '::ffff:127.0.0.1'])
+  ('rejects blocked DNS result %s before request', async address => {
+    const io = deps([{ address, family: address.includes(':') ? 6 : 4 }]);
+    expect(await fetchRemoteImage('https://example.com/a.png', plan(true, 'write'), io)).toBeUndefined();
+    expect(io.request).not.toHaveBeenCalled();
+  });
+
+  it('rejects a mixed public and private DNS answer and pins a safe connection', async () => {
+    const mixed = deps([{ address: '8.8.8.8', family: 4 }, { address: '127.0.0.1', family: 4 }]);
+    expect(await fetchRemoteImage('https://example.com/a.png', plan(true, 'write'), mixed)).toBeUndefined();
+    expect(mixed.request).not.toHaveBeenCalled();
+
+    const safe = deps();
+    expect(await fetchRemoteImage('https://example.com/a.png', plan(true, 'write'), safe)).toEqual(image);
+    expect(safe.request).toHaveBeenCalledWith(expect.objectContaining({ hostname: 'example.com' }), '8.8.8.8', expect.any(AbortSignal));
+  });
+
+  it('checks a redirect destination before connecting and limits the chain to three', async () => {
+    const blocked = deps();
+    blocked.resolve = vi.fn(async (hostname: string) => [{ address: hostname === 'blocked.test' ? '127.0.0.1' : '8.8.8.8', family: 4 as const }]);
+    blocked.request = vi.fn(async () => ({ status: 302, headers: { location: 'http://blocked.test/a.png' }, body: Buffer.alloc(0) }));
+    expect(await fetchRemoteImage('https://example.com/a.png', plan(true, 'full'), blocked)).toBeUndefined();
+    expect(blocked.request).toHaveBeenCalledTimes(1);
+
+    const looping = deps();
+    looping.request = vi.fn(async () => ({ status: 302, headers: { location: '/again.png' }, body: Buffer.alloc(0) }));
+    expect(await fetchRemoteImage('https://example.com/a.png', plan(true, 'write'), looping)).toBeUndefined();
+    expect(looping.request).toHaveBeenCalledTimes(4);
+  });
+
+  it('rejects an HTML response', async () => {
+    const io = deps();
+    io.request = vi.fn(async () => ({ status: 200, headers: { contentType: 'text/html' }, body: image }));
+    expect(await fetchRemoteImage('https://example.com/a.png', plan(true, 'write'), io)).toBeUndefined();
+  });
+
+  it('connects to the checked address while keeping the original HTTP host', async () => {
+    let seenHost: string | undefined;
+    const server = createServer((request, response) => {
+      seenHost = request.headers.host;
+      response.setHeader('content-type', 'image/png');
+      response.end(image);
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Missing test server port');
+      const url = new URL(`http://example.test:${address.port}/a.png`);
+      const response = await requestPinned(url, '127.0.0.1', AbortSignal.timeout(1000));
+      expect(response.body).toEqual(image);
+      expect(seenHost).toBe(`example.test:${address.port}`);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     }
   });
 });
