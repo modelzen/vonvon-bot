@@ -453,6 +453,36 @@ One `ProcessHost` for every engine, re-homed from `agent/codex-appserver/owned-p
 - `sweepOrphans()` runs at daemon boot. A record whose `daemonBootId` differs, whose pid is alive, and whose start time matches is an orphan of a dead daemon and its tree is killed. A pid with a different start time is left alone.
 - `owesWork()` answers `host/lifecycle` before a restart, replacing `unconfirmedCodexPids()`.
 
+#### Process identity and signals
+
+This section is the contract for every signal `ProcessHost` sends to a recorded process. It adds no ledger field and keeps the topology: on POSIX the ledger `pid` is the group leader and the group id equals it; on Windows the ledger `pid` is the job helper that holds the Job Object handle. A case this section does not prove ends as `unverified`. It is never signalled.
+
+*Identity.* `birthOf(pid)` reads the OS birth time. Linux uses `/proc/<pid>/stat` field 22 plus `btime` from `/proc/stat`. macOS uses `proc_pidinfo(PROC_PIDTBSDINFO)` `pbi_start_tvsec` and `pbi_start_tvusec`. Windows uses `GetProcessTimes` on an open process handle. An internal native reader is allowed when only the birth value crosses into TypeScript and nothing it prints is persisted. `spawn()` and `adopt()` write `startedAtMs` from the same reader, not from `Date.now()`. A record matches when `birthOf(pid)` equals `startedAtMs` at the reader's resolution. Records written before this rule do not match and end as `unverified`.
+
+*POSIX group signal.* `signalGroup(record, signal)` pins the leader before it touches the group, so the check and the group signal cannot race.
+
+1. Linux. `pidfd_open(pid)`, then check identity, then `pidfd_send_signal(pidfd, SIGSTOP)`. The pidfd refers to the checked process, so a reused pid cannot be stopped.
+2. macOS. Check identity, `kill(pid, SIGSTOP)`, then check identity again. On a mismatch, send `SIGCONT` to that pid and return `unverified`.
+3. A verified leader that is stopped cannot exit by itself, so group `pid` is not empty. The kernel does not hand a pid to a new process while a process group with that id still exists (POSIX process group lifetime). `kill(-pid, signal)` therefore reaches only the recorded group. For `SIGTERM` the host then sends `kill(-pid, SIGCONT)` so stopped members handle it. `SIGKILL` needs no continue.
+4. Residual risk, stated here and not hidden. On macOS, a full wrap of the pid space between the first check and `SIGSTOP` would stop and then continue a foreign process for an instant. No `SIGTERM` or `SIGKILL` can reach a foreign group. Linux has no such case. An outside `SIGKILL` of the stopped leader is the only way to reopen the window.
+
+*POSIX leader gone.* Without a live verified leader nothing can be pinned, so the group is never signalled by id.
+
+| Observation | Result |
+|---|---|
+| `pid` alive with a different birth | The recorded group has ended, because the pid could not be reused while it existed. `gone`, record removed. |
+| `pid` absent and `kill(-pid, 0)` returns `ESRCH` | `gone`, record removed. |
+| `pid` absent and group `pid` still has members | `unverified`. Not signalled. The record stays and is checked again at each sweep. `sweepOrphans` reports it and `vonvon doctor` lists the group with the hint 有残留进程组 <pgid>，无法证明归属，未自动结束，请手动检查. |
+
+During a daemon's life the same rules apply. `terminateTree` and `killTree` pin a live leader. When a leader exits by itself, the host checks `kill(-pid, 0)`. It reports `unverified` for any members still in the group and does not signal them.
+
+*Windows.* The helper creates an unnamed Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, the flag `main` already sets (`windows-job.ts:62`). Its handle is not inheritable and the helper is its only holder. Recovery never looks the job up by name or by a proof path.
+
+1. While the daemon lives, the helper watches the daemon pid and exits within 5 s of its death. Its exit closes the last handle, and the kernel kills every process in the job.
+2. At boot, `sweepOrphans` opens the helper pid with `OpenProcess` and compares `GetProcessTimes` to `startedAtMs` on that handle. On a match, it calls `TerminateProcess` on the same handle, which cannot hit a reused pid. The job then closes and its tree is killed. The handle wait confirms the helper is gone, and the result is `killed`.
+3. If the helper pid is absent or has a different birth, the helper has exited. Its handle closed with it, so the job was killed by the kernel. The result is `gone`.
+4. A record from the older named-job helper follows the same three steps. If that helper is still alive, ending it closes the job. Nothing else holds the old name, because the helper never shared its handle.
+
 ### Outbound
 
 `outbound/policy.ts` is the single path decision shared by the Claude PreToolUse gate and the image and file uploaders. `judgePath(plan, op, path)` realpaths the path and requires containment in `readableRoots` or `writableRoots`. A symlink that leaves the root is denied. `Glob` patterns beginning with `/` or `~` or containing `..` are denied under `project`. `fetchRemoteImage(url, plan)` runs only when `plan.grant.network` is true, in every tier, `full` included. It resolves the host first, refuses loopback, private, link-local, `0.0.0.0`, `::ffff:` mapped, and `100.64/10` addresses, re-checks each redirect hop, and allows at most 3 redirects. This closes issue #114. `bot/outbound-files.ts:105-106` already does the realpath form and moves to the same function.
