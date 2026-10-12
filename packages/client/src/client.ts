@@ -63,7 +63,7 @@ export function createClient(socket: WebSocket): VonvonClient {
       return;
     }
     for (const listener of errors) {
-      try { listener(error); } catch { /* observer cannot affect transport */ }
+      try { listener(error); } catch {}
     }
   }
   function deliver<T>(listeners: Set<(value: T) => void>, value: T): void {
@@ -146,7 +146,7 @@ export function createClient(socket: WebSocket): VonvonClient {
     onError(listener) {
       errors.add(listener);
       for (const error of undeliveredErrors.splice(0)) {
-        try { listener(error); } catch { /* observer cannot affect transport */ }
+        try { listener(error); } catch {}
       }
       return () => { errors.delete(listener); };
     },
