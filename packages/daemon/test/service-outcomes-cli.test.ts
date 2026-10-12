@@ -99,6 +99,8 @@ it('distinguishes the absent no-row result from Outcomes row 6', async () => {
   expect(result.after).toBeNull();
   expect(result.state.calls).toEqual([show, show, enabled]);
   expect(result.state.stops).toEqual([]);
+  expect(result.state.owner).toBeNull();
+  expect(result.state.work).toEqual([]);
 });
 
 it('row 1 uninstalls ours through the actual CLI without restarting', async () => {
@@ -112,6 +114,7 @@ it('row 1 uninstalls ours through the actual CLI without restarting', async () =
   expect(result.state.owner).toBeNull();
   expect(result.state.stops).toEqual([]);
   expect(result.state.calls).toEqual([show, `disable ${SYSTEMD_UNIT_NAME}`, pid, 'daemon-reload', `reset-failed ${SYSTEMD_UNIT_NAME}`, show, show, enabled]);
+  expect(result.state.work).toEqual([]);
 });
 
 it('row 2 restores kept bytes after a failed drain and exits 1', async () => {
@@ -124,6 +127,8 @@ it('row 2 restores kept bytes after a failed drain and exits 1', async () => {
   expect(result.state.loaded).toBe(true);
   expect(result.state.stops).toEqual([]);
   expect(result.state.calls).toEqual([show, `disable ${SYSTEMD_UNIT_NAME}`, pid, `enable ${SYSTEMD_UNIT_NAME}`, enabled, show, enabled]);
+  expect(result.state.owner).toBeNull();
+  expect(result.state.work).toEqual([]);
 });
 
 it('row 3 step 3 stop_unconfirmed leaves registration absent and exits 1', async () => {
@@ -151,6 +156,7 @@ it('row 3 step 5 stop_unconfirmed cannot restore an already unloaded unit', asyn
   expect(result.state.work).toEqual(['new-job-work']);
   expect(result.state.stops).toEqual([41001]);
   expect(result.state.calls).toEqual([show, `disable ${SYSTEMD_UNIT_NAME}`, pid, 'daemon-reload', `reset-failed ${SYSTEMD_UNIT_NAME}`, show, show, enabled]);
+  expect(result.child.stderr).toContain('PID 41001');
 });
 
 it('row 6 resumed uninstall retains an unrelated owner and its work', async () => {
@@ -175,6 +181,7 @@ it('row 4 restores only kept bytes when Linux unload fails', async () => {
   expect(result.state.owner).toBeNull();
   expect(result.state.stops).toEqual([]);
   expect(result.state.calls).toEqual([show, `disable ${SYSTEMD_UNIT_NAME}`, pid, 'daemon-reload', `reset-failed ${SYSTEMD_UNIT_NAME}`, `enable ${SYSTEMD_UNIT_NAME}`, enabled, show, enabled]);
+  expect(result.state.work).toEqual([]);
 });
 
 it('row 7 resumed foreign job PID leaves its owner untouched', async () => {
@@ -224,6 +231,7 @@ it('row 7 resumed stop_unconfirmed leaves the same owner and no registration', a
   expect(result.state.work).toEqual(['owned-work']);
   expect(result.state.stops).toEqual([41001]);
   expect(result.state.calls).toEqual([show, pid, show, enabled]);
+  expect(result.child.stderr).toContain('PID 41001');
 });
 
 it('row 13 failed Linux install removes only its new definition', async () => {
@@ -235,6 +243,7 @@ it('row 13 failed Linux install removes only its new definition', async () => {
   expect(result.state.enabled).toBe(false);
   expect(result.state.stops).toEqual([]);
   expect(result.state.calls).toEqual(['is-system-running', show, enabled, 'daemon-reload', `enable --now ${SYSTEMD_UNIT_NAME}`, `disable ${SYSTEMD_UNIT_NAME}`, pid, 'daemon-reload', `reset-failed ${SYSTEMD_UNIT_NAME}`, show, show, enabled]);
+  expect(result.state.work).toEqual([]);
 });
 
 it('row 13 restores exact previous bytes without starting the old unit', async () => {
@@ -247,6 +256,7 @@ it('row 13 restores exact previous bytes without starting the old unit', async (
   expect(result.state.enabled).toBe(true);
   expect(result.state.stops).toEqual([]);
   expect(result.state.calls).toEqual(['is-system-running', show, enabled, 'daemon-reload', `enable --now ${SYSTEMD_UNIT_NAME}`, `disable ${SYSTEMD_UNIT_NAME}`, pid, 'daemon-reload', `reset-failed ${SYSTEMD_UNIT_NAME}`, show, `enable ${SYSTEMD_UNIT_NAME}`, enabled, show, enabled]);
+  expect(result.state.work).toEqual([]);
 });
 
 it('row 14 rollback drain failure retains the newly written Linux definition', async () => {
@@ -269,6 +279,7 @@ it('row 14 rollback drain failure retains the newly written Linux definition', a
   expect(result.state.owner).toBeNull();
   expect(result.state.stops).toEqual([]);
   expect(result.state.calls).toEqual(['is-system-running', show, enabled, 'daemon-reload', `enable --now ${SYSTEMD_UNIT_NAME}`, `disable ${SYSTEMD_UNIT_NAME}`, pid, `enable ${SYSTEMD_UNIT_NAME}`, enabled, show, enabled]);
+  expect(result.state.work).toEqual([]);
 });
 
 it('row 15 rollback stop_unconfirmed restores neither Linux definition', async () => {
@@ -293,6 +304,8 @@ it('row 16 failed Linux rollback unload leaves previous bytes absent', async () 
   expect(result.after).toBeNull();
   expect(result.state.stops).toEqual([]);
   expect(result.state.calls).toEqual(['is-system-running', show, enabled, 'daemon-reload', `enable --now ${SYSTEMD_UNIT_NAME}`, `disable ${SYSTEMD_UNIT_NAME}`, pid, 'daemon-reload', `reset-failed ${SYSTEMD_UNIT_NAME}`, show, enabled]);
+  expect(result.state.owner).toBeNull();
+  expect(result.state.work).toEqual([]);
 });
 
 it('row 16 restores exact previous bytes after Linux rollback unload failure', async () => {
@@ -305,6 +318,8 @@ it('row 16 restores exact previous bytes after Linux rollback unload failure', a
   expect(result.state.enabled).toBe(true);
   expect(result.state.stops).toEqual([]);
   expect(result.state.calls).toEqual(['is-system-running', show, enabled, 'daemon-reload', `enable --now ${SYSTEMD_UNIT_NAME}`, `disable ${SYSTEMD_UNIT_NAME}`, pid, 'daemon-reload', `reset-failed ${SYSTEMD_UNIT_NAME}`, `enable ${SYSTEMD_UNIT_NAME}`, enabled, show, enabled]);
+  expect(result.state.owner).toBeNull();
+  expect(result.state.work).toEqual([]);
 });
 
 type MacState = {
@@ -376,6 +391,7 @@ it('macOS row 1 uninstalls ours with one bootout', async () => {
   expect(r.state.stops).toEqual([]);
   expect(r.state.bootouts).toBe(1);
   expect(r.state.calls).toEqual([macPrint, macPrint, macBootout, macPrint]);
+  expect(r.state.work).toEqual([]);
 });
 
 it('macOS row 2 restores exact kept plist when drain query fails', async () => {
@@ -388,6 +404,8 @@ it('macOS row 2 restores exact kept plist when drain query fails', async () => {
   expect(r.state.bootouts).toBe(0);
   expect(r.state.stops).toEqual([]);
   expect(r.state.calls).toEqual([macPrint, macPrint]);
+  expect(r.state.owner).toBeNull();
+  expect(r.state.work).toEqual([]);
 });
 
 it('macOS row 3 step 3 stop_unconfirmed leaves no plist', async () => {
@@ -395,12 +413,13 @@ it('macOS row 3 step 3 stop_unconfirmed leaves no plist', async () => {
   expect(r.child.status).toBe(1);
   expect(r.child.stderr).toContain('uninstall_incomplete:');
   expect(r.child.stderr).toContain('stop_unconfirmed');
-  expect(r.child.stderr).toContain('41001');
+  expect(r.child.stderr).toContain('PID 41001');
   expect(r.after).toBeNull();
   expect(r.state.owner).toEqual(owner);
   expect(r.state.stops).toEqual([41001]);
   expect(r.state.bootouts).toBe(0);
   expect(r.state.calls).toEqual([macPrint, macPrint]);
+  expect(r.state.work).toEqual(['new-job-work']);
 });
 
 it('macOS row 5 sends exactly one bootout and never restores on unknown unload', async () => {
@@ -413,6 +432,8 @@ it('macOS row 5 sends exactly one bootout and never restores on unknown unload',
   expect(r.state.bootouts).toBe(1);
   expect(r.state.stops).toEqual([]);
   expect(r.state.calls).toEqual([macPrint, macPrint, macBootout, macPrint]);
+  expect(r.state.owner).toBeNull();
+  expect(r.state.work).toEqual([]);
 });
 
 it('macOS row 5 records jobPresent=false after a failed bootout that removed the job', async () => {
@@ -425,6 +446,8 @@ it('macOS row 5 records jobPresent=false after a failed bootout that removed the
   expect(r.state.bootouts).toBe(1);
   expect(r.state.stops).toEqual([]);
   expect(r.state.calls).toEqual([macPrint, macPrint, macBootout, macPrint]);
+  expect(r.state.owner).toBeNull();
+  expect(r.state.work).toEqual([]);
 });
 
 it('macOS row 5 records jobPresent=unknown after the post-bootout print errors', async () => {
@@ -437,6 +460,8 @@ it('macOS row 5 records jobPresent=unknown after the post-bootout print errors',
   expect(r.state.bootouts).toBe(1);
   expect(r.state.stops).toEqual([]);
   expect(r.state.calls).toEqual([macPrint, macPrint, macBootout, macPrint]);
+  expect(r.state.owner).toBeNull();
+  expect(r.state.work).toEqual([]);
 });
 
 it('macOS row 6 resumed uninstall retains unrelated owner and work', async () => {
@@ -449,6 +474,7 @@ it('macOS row 6 resumed uninstall retains unrelated owner and work', async () =>
   expect(r.state.stops).toEqual([]);
   expect(r.state.bootouts).toBe(1);
   expect(r.state.calls).toEqual([macPrint, macPrint, macBootout, macPrint]);
+  expect(r.child.stdout).toContain('uninstalled:');
 });
 
 it('macOS resumed absent with no leftovers returns the non-row not-installed result', async () => {
@@ -459,6 +485,8 @@ it('macOS resumed absent with no leftovers returns the non-row not-installed res
   expect(r.state.bootouts).toBe(0);
   expect(r.state.stops).toEqual([]);
   expect(r.state.calls).toEqual([macPrint]);
+  expect(r.state.owner).toBeNull();
+  expect(r.state.work).toEqual([]);
 });
 
 it('macOS row 7 resumed foreign job PID does not unload or signal', async () => {
@@ -471,6 +499,7 @@ it('macOS row 7 resumed foreign job PID does not unload or signal', async () => 
   expect(r.state.stops).toEqual([]);
   expect(r.state.bootouts).toBe(0);
   expect(r.state.calls).toEqual([macPrint, macPrint]);
+  expect(r.child.stderr).toContain('uninstall_incomplete:');
 });
 
 it('macOS row 7 resumed print failure cannot unload or stop the owner', async () => {
@@ -496,6 +525,7 @@ it('macOS row 9 resumed unknown unload retains owner after one bootout', async (
   expect(r.state.stops).toEqual([]);
   expect(r.state.bootouts).toBe(1);
   expect(r.state.calls).toEqual([macPrint, macPrint, macBootout, macPrint]);
+  expect(r.child.stderr).toContain('uninstall_incomplete:');
 });
 
 it('macOS row 10 replacement drain failure restores exact previous plist', async () => {
@@ -509,6 +539,8 @@ it('macOS row 10 replacement drain failure restores exact previous plist', async
   expect(r.state.bootouts).toBe(0);
   expect(r.state.bootstraps).toBe(0);
   expect(r.state.calls).toEqual(['print gui/501', macPrint, macPrint]);
+  expect(r.state.owner).toBeNull();
+  expect(r.state.work).toEqual([]);
 });
 
 it('macOS row 11 replacement stop_unconfirmed restores neither plist', async () => {
@@ -519,6 +551,7 @@ it('macOS row 11 replacement stop_unconfirmed restores neither plist', async () 
   expect(r.child.stderr).toContain('stop_unconfirmed');
   expect(r.child.stderr).toContain('PID 41001');
   expect(r.child.stderr).toContain('fixture stop reply lost');
+  expect(r.child.stderr).toContain('previous definition was not restored');
   expect(r.after).toBeNull();
   expect(r.before).not.toBeNull();
   expect(r.state.work).toEqual(['new-job-work']);
@@ -540,6 +573,8 @@ it('macOS row 12 replacement unknown unload never writes the new plist', async (
   expect(r.state.bootouts).toBe(1);
   expect(r.state.bootstraps).toBe(0);
   expect(r.state.calls).toEqual(['print gui/501', macPrint, macPrint, macBootout, macPrint]);
+  expect(r.state.owner).toBeNull();
+  expect(r.state.work).toEqual([]);
 });
 
 it('macOS row 18 failed bootstrap finds job but never bootouts', async () => {
@@ -547,6 +582,9 @@ it('macOS row 18 failed bootstrap finds job but never bootouts', async () => {
     scenario: 'bootstrap_failed_found' });
   expect(r.child.status).toBe(1);
   expect(r.child.stderr).toContain('install_incomplete:');
+  expect(r.child.stderr).toContain('job gui/501/com.vonvon.bot.daemon: loaded');
+  expect(r.state.owner).toBeNull();
+  expect(r.state.work).toEqual([]);
   expect(r.after).toBeNull();
   expect(r.state.loaded).toBe(true);
   expect(r.state.bootouts).toBe(0);
@@ -559,6 +597,9 @@ it('macOS row 18 restores exact previous plist when failed bootstrap finds a job
     scenario: 'bootstrap_failed_found' });
   expect(r.child.status).toBe(1);
   expect(r.child.stderr).toContain('install_incomplete:');
+  expect(r.child.stderr).toContain('job gui/501/com.vonvon.bot.daemon: loaded');
+  expect(r.state.owner).toBeNull();
+  expect(r.state.work).toEqual([]);
   expect(r.after).toEqual(r.before);
   expect(r.after?.toString()).toContain('32123');
   expect(r.state.loaded).toBe(true);
@@ -572,7 +613,7 @@ it('macOS row 3 step 5 stop_unconfirmed follows unload without restoring plist',
   expect(r.child.status).toBe(1);
   expect(r.child.stderr).toContain('uninstall_incomplete:');
   expect(r.child.stderr).toContain('stop_unconfirmed');
-  expect(r.child.stderr).toContain('41001');
+  expect(r.child.stderr).toContain('PID 41001');
   expect(r.after).toBeNull();
   expect(r.state.loaded).toBe(false);
   expect(r.state.owner).toEqual(owner);
@@ -593,6 +634,7 @@ it('macOS row 7 resumed owner_unproven retains owner without bootout', async () 
   expect(r.state.stops).toEqual([]);
   expect(r.state.bootouts).toBe(0);
   expect(r.state.calls).toEqual([macPrint, macPrint, macPrint]);
+  expect(r.child.stderr).toContain('uninstall_incomplete:');
 });
 
 it('macOS row 7 resumed stop_unconfirmed retains owner without bootout', async () => {
@@ -606,6 +648,8 @@ it('macOS row 7 resumed stop_unconfirmed retains owner without bootout', async (
   expect(r.state.stops).toEqual([41001]);
   expect(r.state.bootouts).toBe(0);
   expect(r.state.calls).toEqual([macPrint, macPrint]);
+  expect(r.child.stderr).toContain('uninstall_incomplete:');
+  expect(r.child.stderr).toContain('PID 41001');
 });
 
 it('macOS row 13 rollback removes new plist and leaves previous absent', async () => {
@@ -621,6 +665,7 @@ it('macOS row 13 rollback removes new plist and leaves previous absent', async (
   expect(r.state.bootstraps).toBe(1);
   expect(r.state.calls).toEqual(['print gui/501', macPrint, `bootstrap gui/501 ${r.plistPath}`,
     macPrint, macPrint, macBootout, macPrint]);
+  expect(r.state.work).toEqual([]);
 });
 
 it('macOS row 13 restores exact previous plist without loading it', async () => {
@@ -637,6 +682,7 @@ it('macOS row 13 restores exact previous plist without loading it', async () => 
   expect(r.state.bootstraps).toBe(1);
   expect(r.state.calls).toEqual(['print gui/501', macPrint, `bootstrap gui/501 ${r.plistPath}`,
     macPrint, macPrint, macBootout, macPrint]);
+  expect(r.state.work).toEqual([]);
 });
 
 it('macOS row 14 rollback drain failure restores exact new plist, not previous', async () => {
@@ -659,6 +705,7 @@ it('macOS row 14 rollback drain failure restores exact new plist, not previous',
   expect(r.state.bootouts).toBe(0);
   expect(r.state.calls).toEqual(['print gui/501', macPrint, `bootstrap gui/501 ${r.plistPath}`,
     macPrint, macPrint]);
+  expect(r.state.work).toEqual([]);
 });
 
 it('macOS row 15 rollback stop_unconfirmed restores neither plist', async () => {
@@ -695,6 +742,8 @@ it('macOS row 17 rollback unknown unload restores no plist', async () => {
   expect(r.state.stops).toEqual([]);
   expect(r.state.calls).toEqual(['print gui/501', macPrint, `bootstrap gui/501 ${r.plistPath}`,
     macPrint, macPrint, macBootout, macPrint]);
+  expect(r.state.owner).toBeNull();
+  expect(r.state.work).toEqual([]);
 });
 
 type WindowsState = {
@@ -740,17 +789,25 @@ async function runWindowsCase(options: {
   await writeFile(statePath, JSON.stringify({ root, runValue, files, owner: options.owner ?? null,
     work: options.owner ? ['owned-work'] : [], scenario: options.scenario, calls: [], stops: [],
     newCmdBase64: null, newVbsBase64: null, newRunValue: null } satisfies WindowsState));
-  const child = spawnSync(process.execPath, [entries.win32, 'service', options.action ?? 'uninstall',
-    ...(options.port ? ['--port', String(options.port)] : [])], {
-    cwd: folder, env: { ...process.env, NODE_OPTIONS: '', PATH: join(folder, 'no-manager-bin'),
-      HOME: folder, VONVON_HOME: dataHome, VONVON_OUTCOMES_STATE: statePath }, encoding: 'utf8', timeout: 10_000,
-  });
-  expect(child.error).toBeUndefined();
-  expect(child.signal).toBeNull();
-  const state: WindowsState = JSON.parse(await readFile(statePath, 'utf8'));
-  const after = { cmd: state.files[cmdPath] ?? null, vbs: state.files[vbsPath] ?? null,
-    runValue: state.runValue };
-  return { child, state, before, after, cmdPath, vbsPath, root };
+  const invoke = async (action: 'install' | 'uninstall', port?: number) => {
+    const child = spawnSync(process.execPath, [entries.win32, 'service', action,
+      ...(port ? ['--port', String(port)] : [])], {
+      cwd: folder, env: { ...process.env, NODE_OPTIONS: '', PATH: join(folder, 'no-manager-bin'),
+        HOME: folder, VONVON_HOME: dataHome, VONVON_OUTCOMES_STATE: statePath }, encoding: 'utf8', timeout: 10_000,
+    });
+    expect(child.error).toBeUndefined();
+    expect(child.signal).toBeNull();
+    const state: WindowsState = JSON.parse(await readFile(statePath, 'utf8'));
+    const after = { cmd: state.files[cmdPath] ?? null, vbs: state.files[vbsPath] ?? null,
+      runValue: state.runValue };
+    return { child, state, after };
+  };
+  const rerun = async (action: 'install' | 'uninstall', scenario: string, port?: number) => {
+    const state: WindowsState = JSON.parse(await readFile(statePath, 'utf8'));
+    await writeFile(statePath, JSON.stringify({ ...state, scenario }));
+    return invoke(action, port);
+  };
+  return { ...await invoke(options.action ?? 'uninstall', options.port), before, cmdPath, vbsPath, root, rerun };
 }
 
 it('Windows row 1 uninstalls ours without restarting', async () => {
@@ -761,6 +818,7 @@ it('Windows row 1 uninstalls ours without restarting', async () => {
   expect(r.state.owner).toBeNull();
   expect(r.state.stops).toEqual([]);
   expect(r.state.calls).toEqual(['reg:delete', 'unlink:cmd', 'unlink:vbs']);
+  expect(r.state.work).toEqual([]);
 });
 
 it('Windows absent with no leftovers returns the non-row not-installed result', async () => {
@@ -771,6 +829,7 @@ it('Windows absent with no leftovers returns the non-row not-installed result', 
   expect(r.state.owner).toBeNull();
   expect(r.state.stops).toEqual([]);
   expect(r.state.calls).toEqual([]);
+  expect(r.state.work).toEqual([]);
 });
 
 it('Windows row 2 restores kept Run value and exact launcher bytes on drain failure', async () => {
@@ -781,6 +840,8 @@ it('Windows row 2 restores kept Run value and exact launcher bytes on drain fail
   expect(r.after).toEqual(r.before);
   expect(r.state.stops).toEqual([]);
   expect(r.state.calls).toEqual(['reg:delete', 'reg:add']);
+  expect(r.state.owner).toBeNull();
+  expect(r.state.work).toEqual([]);
 });
 
 it('Windows row 3 step 3 stop_unconfirmed retains launchers but withdraws Run value', async () => {
@@ -788,7 +849,7 @@ it('Windows row 3 step 3 stop_unconfirmed retains launchers but withdraws Run va
   expect(r.child.status).toBe(1);
   expect(r.child.stderr).toContain('uninstall_incomplete:');
   expect(r.child.stderr).toContain('stop_unconfirmed');
-  expect(r.child.stderr).toContain('41001');
+  expect(r.child.stderr).toContain('PID 41001');
   expect(r.after).toEqual({ ...r.before, runValue: null });
   expect(r.state.owner).toEqual(owner);
   expect(r.state.work).toEqual(['owned-work']);
@@ -806,6 +867,7 @@ it('Windows row 3 step 5 stop_unconfirmed restores no launcher', async () => {
   expect(r.state.work).toEqual(['new-job-work']);
   expect(r.state.stops).toEqual([41001]);
   expect(r.state.calls).toEqual(['reg:delete', 'unlink:cmd', 'unlink:vbs']);
+  expect(r.child.stderr).toContain('PID 41001');
 });
 
 it('Windows row 4 unload failure restores Run value and exact kept files', async () => {
@@ -816,6 +878,8 @@ it('Windows row 4 unload failure restores Run value and exact kept files', async
   expect(r.after).toEqual(r.before);
   expect(r.state.stops).toEqual([]);
   expect(r.state.calls).toEqual(['reg:delete', 'unlink:cmd', 'reg:add']);
+  expect(r.state.owner).toBeNull();
+  expect(r.state.work).toEqual([]);
 });
 
 it('Windows row 6 resumed uninstall removes leftovers and retains owner', async () => {
@@ -827,6 +891,7 @@ it('Windows row 6 resumed uninstall removes leftovers and retains owner', async 
   expect(r.state.work).toEqual(['owned-work']);
   expect(r.state.stops).toEqual([]);
   expect(r.state.calls).toEqual(['unlink:cmd', 'unlink:vbs']);
+  expect(r.child.stdout).toContain('uninstalled:');
 });
 
 it('Windows row 7 resumed owner read failure cannot stop or unload', async () => {
@@ -862,6 +927,7 @@ it('Windows row 13 failed install rolls back its new launcher pair', async () =>
   expect(r.state.stops).toEqual([]);
   expect(r.state.calls).toEqual(['reg:query', 'rename:cmd', 'rename:vbs', 'reg:add', 'launch',
     'reg:delete', 'unlink:cmd', 'unlink:vbs']);
+  expect(r.state.work).toEqual([]);
 });
 
 it('Windows row 13 restores exact previous pair and Run without relaunch', async () => {
@@ -874,6 +940,7 @@ it('Windows row 13 restores exact previous pair and Run without relaunch', async
   expect(r.state.stops).toEqual([]);
   expect(r.state.calls).toEqual(['reg:query', 'rename:cmd', 'launch', 'reg:delete', 'unlink:cmd', 'unlink:vbs',
     'rename:cmd', 'rename:vbs', 'reg:add']);
+  expect(r.state.work).toEqual([]);
 });
 
 it('Windows row 14 rollback read failure keeps exact new pair and Run', async () => {
@@ -913,6 +980,7 @@ it('Windows row 16 rollback unload failure restores exact previous pair', async 
   expect(r.state.stops).toEqual([]);
   expect(r.state.calls).toEqual(['reg:query', 'rename:cmd', 'launch',
     'reg:delete', 'unlink:cmd', 'rename:cmd', 'reg:add']);
+  expect(r.state.work).toEqual([]);
 });
 
 it('Windows row 16 rollback unload failure with no previous pair leaves registration absent', async () => {
@@ -926,4 +994,75 @@ it('Windows row 16 rollback unload failure with no previous pair leaves registra
   expect(r.state.stops).toEqual([]);
   expect(r.state.calls).toEqual(['reg:query', 'rename:cmd', 'rename:vbs', 'reg:add', 'launch',
     'reg:delete', 'unlink:cmd', 'unlink:cmd', 'unlink:vbs']);
+  expect(r.state.work).toEqual([]);
+});
+
+
+it('Windows row 16 persistent cmd EACCES restores exact previous pair and retains owner work', async () => {
+  const r = await runWindowsCase({ action: 'install', port: 32124, installed: true,
+    scenario: 'rollback_unlink_persistent' });
+  expect(r.child.status).toBe(1);
+  expect(r.child.stderr).toContain('install_incomplete:');
+  expect(r.child.stderr).toContain('fixture launcher failed');
+  expect(r.child.stderr).toContain('EACCES: fixture cmd unlink denied');
+  expect(r.child.stderr).toContain('Retained PID 41001');
+  expect(r.child.stderr).toContain('Leftover: Run value Vonvon Bot');
+  expect(r.child.stderr).toContain(`Leftover: launcher ${r.cmdPath}`);
+  expect(r.child.stderr).toContain(`Leftover: launcher ${r.vbsPath}`);
+  expect(r.after).toEqual(r.before);
+  expect(r.after.cmd).not.toBe(r.state.newCmdBase64);
+  expect(r.state.owner).toEqual(owner);
+  expect(r.state.work).toEqual(['new-job-work']);
+  expect(r.state.stops).toEqual([]);
+  expect(r.state.calls).toEqual(['reg:query', 'rename:cmd', 'launch', 'reg:delete', 'unlink:cmd', 'rename:cmd', 'reg:add']);
+  const retry = await r.rerun('install', 'none', 32124);
+  expect(retry.child.status).toBe(0);
+  expect(retry.child.stdout).toContain('already-installed:');
+  expect(retry.child.stdout).toContain('Retained PID 41001');
+  expect(retry.after).toEqual(r.before);
+  expect(retry.state.owner).toEqual(owner);
+  expect(retry.state.work).toEqual(['new-job-work']);
+  expect(retry.state.stops).toEqual([]);
+  expect(retry.state.calls).toEqual([...r.state.calls, 'reg:query']);
+});
+
+it('Windows row 16 persistent cmd EACCES reports new leftovers without previous pair and converges after fault clears', async () => {
+  const r = await runWindowsCase({ action: 'install', port: 32124, installed: false,
+    scenario: 'rollback_unlink_persistent' });
+  expect(r.child.status).toBe(1);
+  expect(r.child.stderr).toContain('install_incomplete:');
+  expect(r.child.stderr).toContain('fixture launcher failed');
+  expect(r.child.stderr).toContain('restore failed: EACCES: fixture cmd unlink denied');
+  expect(r.child.stderr).toContain('Retained PID 41001');
+  expect(r.child.stderr).toContain(`Leftover: launcher ${r.cmdPath}`);
+  expect(r.child.stderr).toContain(`Leftover: launcher ${r.vbsPath}`);
+  expect(r.child.stderr).not.toContain('Leftover: Run value');
+  expect(r.before).toEqual({ cmd: null, vbs: null, runValue: null });
+  expect(r.state.newCmdBase64).not.toBeNull();
+  expect(r.state.newVbsBase64).not.toBeNull();
+  expect(r.after).toEqual({ cmd: r.state.newCmdBase64, vbs: r.state.newVbsBase64, runValue: null });
+  expect(r.state.owner).toEqual(owner);
+  expect(r.state.work).toEqual(['new-job-work']);
+  expect(r.state.stops).toEqual([]);
+  expect(r.state.calls).toEqual(['reg:query', 'rename:cmd', 'rename:vbs', 'reg:add', 'launch',
+    'reg:delete', 'unlink:cmd', 'unlink:cmd']);
+  const blocked = await r.rerun('uninstall', 'rollback_unlink_persistent');
+  expect(blocked.child.status).toBe(1);
+  expect(blocked.child.stderr).toContain('uninstall_incomplete:');
+  expect(blocked.child.stderr).toContain('EACCES: fixture cmd unlink denied');
+  expect(blocked.child.stderr).toContain('Retained PID 41001');
+  expect(blocked.after).toEqual(r.after);
+  expect(blocked.state.owner).toEqual(owner);
+  expect(blocked.state.work).toEqual(['new-job-work']);
+  expect(blocked.state.stops).toEqual([]);
+  expect(blocked.state.calls).toEqual([...r.state.calls, 'unlink:cmd']);
+  const retry = await r.rerun('uninstall', 'none');
+  expect(retry.child.status).toBe(0);
+  expect(retry.child.stdout).toContain('uninstalled:');
+  expect(retry.child.stdout).toContain('Retained PID 41001');
+  expect(retry.after).toEqual({ cmd: null, vbs: null, runValue: null });
+  expect(retry.state.owner).toEqual(owner);
+  expect(retry.state.work).toEqual(['new-job-work']);
+  expect(retry.state.stops).toEqual([]);
+  expect(retry.state.calls).toEqual([...blocked.state.calls, 'unlink:cmd', 'unlink:vbs']);
 });
