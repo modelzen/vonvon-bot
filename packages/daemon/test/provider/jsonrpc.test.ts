@@ -7,6 +7,30 @@ import { AppServerClient, JsonRpcError, JsonRpcPeer } from '../../src/provider/t
 import type { JsonRpcFrame } from '../../src/provider/transport/jsonrpc';
 import { writeNodeExecutable } from '../helpers/node-executable';
 
+vi.mock('../../src/agent/codex-appserver/owned-process', async original => {
+  const actual = await original<typeof import('../../src/agent/codex-appserver/owned-process')>();
+  const { PassThrough } = await import('node:stream');
+  const { createInterface } = await import('node:readline');
+  return { ...actual, OwnedCodexProcess: class extends actual.OwnedCodexProcess {
+    constructor(...args: ConstructorParameters<typeof actual.OwnedCodexProcess>) {
+      super(...args);
+      const stdout = this.child.stdout;
+      const stderr = this.child.stderr;
+      if (!stdout || !stderr) throw new Error('Fixture requires piped output');
+      const input = new PassThrough();
+      stdout.pipe(input);
+      // Windows wrappers retain pipe writers, so control only the client's readable.
+      Object.defineProperty(this.child, 'stdout', { value: input });
+      createInterface({ input: stderr }).on('line', line => {
+        if (line !== 'fixture-request-received') return;
+        console.info('[jsonrpc-input-close] request received; ending readable');
+        stdout.unpipe(input);
+        input.end();
+      });
+    }
+  } };
+});
+
 function fixture() {
   const input = new PassThrough();
   const output = new PassThrough();
@@ -152,25 +176,29 @@ describe('JsonRpcPeer', () => {
 
 
 describe('AppServerClient input closure', () => {
-  it('rejects pending work and tears down a child that closes stdout but stays alive', async () => {
+  it('rejects pending work and reclaims the owned child when readable transport ends while the child lives', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'jsonrpc-input-close-'));
-    const { bin } = writeNodeExecutable(dir, 'closed-stdout', `
+    const { bin } = writeNodeExecutable(dir, 'ended-readable', `
       require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
         const message = JSON.parse(line);
         if (message.method === 'initialize') {
           process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + '\\n');
-        } else if (message.method === 'close-stdout') {
-          process.stdout.end();
+        } else if (message.method === 'end-readable') {
+          process.stderr.write('fixture-request-received\\n');
         }
       });
       setInterval(() => {}, 1000);
     `);
     const client = new AppServerClient({ bin, cwd: dir, quietOutput: true });
     try {
+      console.info('[jsonrpc-input-close] connecting');
       await client.connect();
+      console.info('[jsonrpc-input-close] connected');
       const pid = client.pid;
       if (pid === undefined) throw new Error('Fixture child did not start');
-      await expect(client.request('close-stdout')).rejects.toThrow('JSON-RPC input ended');
+      expect(() => process.kill(pid, 0)).not.toThrow();
+      await expect(client.request('end-readable')).rejects.toThrow('JSON-RPC input ended');
+      console.info('[jsonrpc-input-close] pending request rejected on EOF');
       await expect(client.request('late')).rejects.toThrow('app-server client closed');
       await vi.waitFor(() => {
         let probeError: unknown;
@@ -178,7 +206,10 @@ describe('AppServerClient input closure', () => {
         catch (error) { probeError = error; }
         expect(probeError).toMatchObject({ code: 'ESRCH' });
       });
-      await expect(client.close()).resolves.toBeUndefined();
+      console.info('[jsonrpc-input-close] owned child reclaimed');
+      const closed = client.close();
+      expect(client.close()).toBe(closed);
+      await expect(closed).resolves.toBeUndefined();
       expect(client.exited).toBe(true);
     } finally {
       try { await client.close(); }
