@@ -241,7 +241,8 @@ export function createLaunchdService(options: { root: string }, overrides: Parti
       return { ...failed, leftovers: [...failed.leftovers, `jobPresent=${result.jobPresent}`] };
     }
     const reason = `${result.reason}: ${result.detail}; job ${job} was not unloaded`;
-    if (result.reason === 'stop_unconfirmed' || s.kept === null) return outcome(s, kind, reason);
+    if (result.reason === 'stop_unconfirmed') return outcome(s, kind, `${reason}${mode === 'rollback' ? '; neither the new nor the previous definition was restored' : ''}`);
+    if (s.kept === null) return outcome(s, kind, reason);
     try { await restore(s, s.kept); }
     catch (error) { return outcome(s, kind, `${reason}; restore failed: ${detailOf(error)}`); }
     if (mode === 'replacement') return rollbackResult(s, before, reason);

@@ -517,9 +517,14 @@ it('macOS row 11 replacement stop_unconfirmed restores neither plist', async () 
   expect(r.child.status).toBe(1);
   expect(r.child.stderr).toContain('install_incomplete:');
   expect(r.child.stderr).toContain('stop_unconfirmed');
+  expect(r.child.stderr).toContain('PID 41001');
+  expect(r.child.stderr).toContain('fixture stop reply lost');
   expect(r.after).toBeNull();
+  expect(r.before).not.toBeNull();
+  expect(r.state.work).toEqual(['new-job-work']);
   expect(r.state.owner).toEqual(owner);
   expect(r.state.stops).toEqual([41001]);
+  expect(r.state.loaded).toBe(true);
   expect(r.state.bootouts).toBe(0);
   expect(r.state.bootstraps).toBe(0);
   expect(r.state.calls).toEqual(['print gui/501', macPrint, macPrint]);
@@ -662,13 +667,16 @@ it('macOS row 15 rollback stop_unconfirmed restores neither plist', async () => 
   expect(r.child.status).toBe(1);
   expect(r.child.stderr).toContain('install_incomplete:');
   expect(r.child.stderr).toContain('stop_unconfirmed');
-  expect(r.child.stderr).toContain('41001');
+  expect(r.child.stderr).toContain('PID 41001');
+  expect(r.child.stderr).toContain('fixture stop reply lost');
   expect(r.child.stderr).toContain('was not unloaded');
+  expect(r.child.stderr).toContain('neither the new nor the previous definition was restored');
   expect(r.after).toBeNull();
   expect(r.before).not.toBeNull();
   expect(r.state.owner).toEqual(owner);
   expect(r.state.work).toEqual(['new-job-work']);
   expect(r.state.stops).toEqual([41001]);
+  expect(r.state.loaded).toBe(true);
   expect(r.state.bootouts).toBe(0);
   expect(r.state.calls).toEqual(['print gui/501', macPrint, `bootstrap gui/501 ${r.plistPath}`,
     macPrint, macPrint]);
@@ -874,6 +882,8 @@ it('Windows row 14 rollback read failure keeps exact new pair and Run', async ()
   expect(r.child.status).toBe(1);
   expect(r.child.stderr).toContain('install_incomplete:');
   expect(r.child.stderr).toContain('fixture lock read failed');
+  expect(r.child.stderr).toContain('fixture launcher failed');
+  expect(r.child.stderr).toContain('previous definition was not restored');
   expect(r.state.newCmdBase64).not.toBeNull();
   expect(r.state.newVbsBase64).not.toBeNull();
   expect(r.state.newRunValue).not.toBeNull();
@@ -887,6 +897,7 @@ it('Windows row 14 rollback read failure keeps exact new pair and Run', async ()
   expect(decoded.root).toBe(r.root);
   expect(decoded.port).toBe(32124);
   expect(r.state.owner).toBeNull();
+  expect(r.state.work).toEqual([]);
   expect(r.state.stops).toEqual([]);
   expect(r.state.calls).toEqual(['reg:query', 'rename:cmd', 'launch', 'reg:delete', 'reg:add']);
 });
