@@ -59,7 +59,7 @@ async function observeWindowsRun(): Promise<WindowsRunObservation> {
 export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonManagerDependencies {
   const pause = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
-  async function launch(command: 'start' | 'run', port: number): Promise<void> {
+  async function launch(command: 'start' | 'run', port: number, bot?: string): Promise<number | undefined> {
     const distribution = classifyDistribution(join(runtime.resources, 'daemon'));
     if (!runtime.packaged || distribution.kind !== 'bundled') {
       throw new Error('The packaged Vonvon daemon is unavailable. Build and open the desktop application.');
@@ -68,15 +68,17 @@ export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonM
     delete env.VONVON_SERVICE;
     const log = await open(join(runtime.root, 'daemon.log'), 'a', 0o600);
     try {
-      await new Promise<void>((resolve, reject) => {
+      return await new Promise<number | undefined>((resolve, reject) => {
         const detached = command === 'run';
-        const child = spawn(runtime.executable, [distribution.cliPath, 'daemon', command, '--port', String(port)], {
+        const args = [distribution.cliPath, 'daemon', command, '--port', String(port)];
+        if (bot !== undefined) args.push('--bot', bot);
+        const child = spawn(runtime.executable, args, {
           env, detached, windowsHide: true, stdio: ['ignore', log.fd, log.fd],
         });
         child.once('error', reject);
-        if (detached) child.once('spawn', () => { child.unref(); resolve(); });
+        if (detached) child.once('spawn', () => { child.unref(); resolve(child.pid); });
         else child.once('exit', (code, signal) => {
-          if (code === 0) resolve();
+          if (code === 0) resolve(undefined);
           else reject(new Error(`The registered daemon could not start (${signal ?? code}). Check ${join(runtime.root, 'daemon.log')}.`));
         });
       });
@@ -115,8 +117,15 @@ export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonM
         case 'unrecognized': return { kind: 'unrecognized', file: registration.location };
       }
     },
-    startManaged: port => launch('start', port),
-    startBundled: port => launch('run', port),
+    async startManaged(port) { await launch('start', port); },
+    async startBundled(port) { await launch('run', port); },
+    async startSelectedBot(port, bot) {
+      const pid = await launch('run', port, bot);
+      if (pid === undefined || !Number.isInteger(pid) || pid < 1) {
+        throw new Error('The selected Bot daemon did not provide a process ID. Its startup cannot be confirmed.');
+      }
+      return pid;
+    },
     async checkProtocol(expected) {
       const attached = await attachExisting(runtime.root);
       try {

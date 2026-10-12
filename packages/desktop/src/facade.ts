@@ -49,6 +49,7 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
   const retainedErrors: Error[] = [];
   const pending = new Set<(error: Error) => void>();
   let pendingQuit = false;
+  let connectionEpoch = 0;
   let clientClosed = false;
   let closing: Promise<void> | undefined;
 
@@ -83,6 +84,9 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
       }
       if (clientClosed) return;
       switch (raw.type) {
+        case 'reattached':
+          connectionEpoch++;
+          break;
         case 'snapshot':
           if (!('value' in raw)) throw new Error('Invalid desktop event');
           deliver(snapshots, desktopSnapshotSchema.parse(raw.value));
@@ -143,7 +147,12 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
       if (clientClosed) return () => {};
       let active = true;
       let revision = -1;
+      let observedEpoch = connectionEpoch;
       const receive = (value: DesktopSnapshot): void => {
+        if (observedEpoch !== connectionEpoch) {
+          revision = -1;
+          observedEpoch = connectionEpoch;
+        }
         if (active && !clientClosed && value.revision > revision) {
           revision = value.revision;
           try { listener(value); }
@@ -151,8 +160,9 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
         }
       };
       snapshots.add(receive);
-      void client.snapshot().then(receive).catch(error => {
-        if (active && !clientClosed) emitError(error instanceof Error ? error : new Error('Snapshot failed'));
+      const seedEpoch = connectionEpoch;
+      void client.snapshot().then(value => { if (seedEpoch === connectionEpoch) receive(value); }).catch(error => {
+        if (active && !clientClosed && seedEpoch === connectionEpoch) emitError(error instanceof Error ? error : new Error('Snapshot failed'));
       });
       return () => { active = false; snapshots.delete(receive); };
     },
@@ -200,6 +210,8 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
       .then(value => readResult(value, parseExecutablePath), error => {
         throw error instanceof Error ? new Error(error.message) : new Error('Desktop request failed');
       }),
+    startHost: bot => transport.invoke(desktopChannels.startHost, { type: 'startHost', ...(bot === undefined ? {} : { bot }) })
+      .then(value => readResult(value, value => machineReplySchema.parse(value))),
     checkDesktopUpdate: () => transport.invoke(desktopChannels.checkDesktopUpdate)
       .then(value => readResult(value, value => desktopUpdateSchema.parse(value))),
     installDesktopUpdate: () => transport.invoke(desktopChannels.installDesktopUpdate)

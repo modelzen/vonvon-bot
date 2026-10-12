@@ -1,5 +1,7 @@
 import { PROTOCOL_VERSION } from '@vonvon/protocol';
 
+export class StartHostRefusal extends Error {}
+
 export interface VerifiedDaemon {
   pid: number;
   listen: string;
@@ -21,6 +23,7 @@ export interface DaemonManagerDependencies {
   startManaged(requestedPort: number): Promise<void>;
   /** Launches the bundled entry with Electron's Node mode. */
   startBundled(requestedPort: number): Promise<void>;
+  startSelectedBot(requestedPort: number, bot: string): Promise<number>;
   /** Authenticated handshake; returns the server's protocol version. */
   checkProtocol(daemon: VerifiedDaemon): Promise<number>;
   pause(ms: number): Promise<void>;
@@ -61,20 +64,26 @@ export function createDaemonManager(dependencies: DaemonManagerDependencies, opt
   }
 
   return {
-    async ensureReady(requestedPort = 0): Promise<VerifiedDaemon> {
+    async ensureReady(requestedPort = 0, bot?: string): Promise<VerifiedDaemon> {
       if (!Number.isInteger(requestedPort) || requestedPort < 0 || requestedPort > 65535) {
         throw new Error(`Invalid requested daemon port: ${requestedPort}.`);
       }
       const existing = await dependencies.readVerifiedDaemon();
-      if (existing) return checked(existing, requestedPort);
+      if (existing) {
+        if (bot !== undefined) throw new StartHostRefusal('Stop the running daemon before starting a selected Bot.');
+        return checked(existing, requestedPort);
+      }
 
       const registration = await dependencies.readRegistration();
+      let selectedPid: number | undefined;
       switch (registration.kind) {
         case 'ours':
+          if (bot !== undefined) throw new StartHostRefusal('Uninstall the registered service before starting a selected Bot.');
           await dependencies.startManaged(requestedPort);
           break;
         case 'absent':
-          await dependencies.startBundled(requestedPort);
+          if (bot === undefined) await dependencies.startBundled(requestedPort);
+          else selectedPid = await dependencies.startSelectedBot(requestedPort, bot);
           break;
         case 'other-root':
           throw new Error(`Vonvon service belongs to another data root: ${registration.root}.`);
@@ -88,7 +97,12 @@ export function createDaemonManager(dependencies: DaemonManagerDependencies, opt
 
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
         const ready = await dependencies.readVerifiedDaemon();
-        if (ready) return checked(ready, requestedPort);
+        if (ready) {
+          if (selectedPid !== undefined && ready.pid !== selectedPid) {
+            throw new StartHostRefusal(`Another daemon (PID ${ready.pid}) became the owner while starting the selected Bot (PID ${selectedPid}). Leave it running and stop it before trying again.`);
+          }
+          return checked(ready, requestedPort);
+        }
         if (attempt + 1 < maxAttempts) await dependencies.pause(intervalMs);
       }
       throw new Error('Daemon did not become ready within the startup wait.');

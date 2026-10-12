@@ -57,6 +57,7 @@ function harness() {
   };
   const paths: DesktopResources = { uiIndex, preload: '/unused', trayPng: '/unused' };
   const actions = {
+    startHost: vi.fn(async (_bot?: string) => ({ type: 'done' as const, message: 'started' })),
     chooseExecutablePath: vi.fn(async (): Promise<string | null> => '/usr/local/bin/codex'),
     checkDesktopUpdate: vi.fn(async () => ({ state: 'available' as const, current: '1.0.0', latest: '1.1.0', message: 'ready' })),
     installDesktopUpdate: vi.fn(async () => ({ state: 'downloaded' as const, current: '1.0.0', latest: '1.1.0', message: 'ready' })),
@@ -68,13 +69,81 @@ function harness() {
     if (!handler) throw new Error(`Missing handler ${channel}`);
     return handler(event, ...args);
   };
-  return { bridge, event, frame, webContents, invoke, snapshot, machine, dispose, actions,
+  return { bridge, event, frame, webContents, window, paths, invoke, snapshot, machine, dispose, actions,
     emitError: (error: Error) => onError(error) };
 }
 
 beforeEach(() => { handlers.clear(); openExternal.mockClear(); failRegistration.channel = ''; });
 
 describe('desktop IPC boundary', () => {
+  it('authorizes and validates the shell start request before forwarding the selected Bot', async () => {
+    const h = harness();
+    const wrong = { ...h.event, senderFrame: { url: h.frame.url } } as IpcMainInvokeEvent;
+    expect(await handlers.get(desktopChannels.startHost)?.(wrong, { type: 'startHost' })).toMatchObject({ ok: false });
+    expect(await h.invoke(desktopChannels.startHost, { type: 'startHost', bot: 42 })).toMatchObject({ ok: false });
+    expect(await h.invoke(desktopChannels.startHost, { type: 'startHost', bot: '' })).toMatchObject({ ok: false });
+    expect(await h.invoke(desktopChannels.startHost, { type: 'startHost' }, 'extra')).toMatchObject({ ok: false });
+    expect(h.actions.startHost).not.toHaveBeenCalled();
+    expect(await h.invoke(desktopChannels.startHost, { type: 'startHost' })).toEqual({ ok: true, value: { type: 'done', message: 'started' } });
+    expect(await h.invoke(desktopChannels.startHost, { type: 'startHost', bot: 'cli_exact_Bot_ID' })).toMatchObject({ ok: true });
+    expect(h.actions.startHost.mock.calls).toEqual([[undefined], ['cli_exact_Bot_ID']]);
+    expect(h.machine).not.toHaveBeenCalled();
+    await h.bridge.dispose();
+  });
+
+  it('moves requests and events to the new owner and disposes the old connection', async () => {
+    const h = harness();
+    await h.invoke(desktopChannels.subscribe);
+    const nextSnapshot = { revision: 1 };
+    let emitOld: ((value: unknown) => void) | undefined;
+    let emitNext: ((value: unknown) => void) | undefined;
+    const offOld = vi.fn();
+    const old = {
+      client: {
+        snapshot: vi.fn(async () => ({ revision: 9 })),
+        watchSnapshots: (listener: (value: unknown) => void) => { emitOld = listener; return offOld; },
+        onLog: () => () => {}, onBackendInstall: () => () => {}, onError: () => () => {},
+      },
+      identity: { pid: 2, startedAt: 'old', listen: '127.0.0.1:4001' },
+      dispose: vi.fn(async () => {}),
+    } as unknown as AttachedDaemon;
+    await h.bridge.replaceOwner(old);
+    const next = {
+      client: {
+        snapshot: vi.fn(async () => nextSnapshot),
+        watchSnapshots: (listener: (value: unknown) => void) => { emitNext = listener; return () => {}; },
+        onLog: () => () => {}, onBackendInstall: () => () => {}, onError: () => () => {},
+      },
+      identity: { pid: 3, startedAt: 'new', listen: '127.0.0.1:4002' },
+      dispose: vi.fn(async () => {}),
+    } as unknown as AttachedDaemon;
+    await h.bridge.replaceOwner(next);
+    expect(h.dispose).toHaveBeenCalledOnce();
+    expect(old.dispose).toHaveBeenCalledOnce();
+    expect(offOld).toHaveBeenCalledOnce();
+    h.webContents.send.mockClear();
+    emitOld?.({ revision: 10 });
+    emitNext?.(nextSnapshot);
+    expect(h.webContents.send).toHaveBeenCalledExactlyOnceWith(desktopChannels.event, { type: 'snapshot', value: nextSnapshot });
+    expect(await h.invoke(desktopChannels.snapshot)).toEqual({ ok: true, value: nextSnapshot });
+    await h.bridge.dispose();
+    expect(next.dispose).toHaveBeenCalledOnce();
+  });
+
+  it('leaves no stale owner when the new connection cannot provide a snapshot', async () => {
+    const h = harness();
+    const next = {
+      client: { snapshot: vi.fn(async () => { throw new Error('snapshot failed'); }) },
+      identity: { pid: 4, startedAt: 'new', listen: '127.0.0.1:4003' },
+      dispose: vi.fn(async () => {}),
+    } as unknown as AttachedDaemon;
+    await expect(h.bridge.replaceOwner(next)).rejects.toThrow('snapshot failed');
+    expect(h.dispose).toHaveBeenCalledOnce();
+    expect(next.dispose).toHaveBeenCalledOnce();
+    expect(await h.invoke(desktopChannels.snapshot)).toMatchObject({ ok: false });
+    await h.bridge.dispose();
+    expect(h.dispose).toHaveBeenCalledOnce();
+  });
   it('exposes updater only to the authorized top-level document', async () => {
     const h = harness();
     const wrong = { ...h.event, senderFrame: { url: h.frame.url } } as IpcMainInvokeEvent;
