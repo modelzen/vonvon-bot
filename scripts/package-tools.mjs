@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { lstat, readFile, readdir, readlink } from 'node:fs/promises';
-import { join, posix } from 'node:path';
+import { join, posix, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const requiredFiles = ['package.json', 'bin/vonvon.mjs', 'dist/cli.js', 'ui/dist/index.html', 'LICENSE.bridge', 'LICENSE.paseo', 'NOTICE', 'PROVENANCE.md', 'import-core.json'];
@@ -118,7 +118,7 @@ export async function validateInstalledManifest(root, manifest, head) {
     }
   }
   for (const [path, target] of links) {
-    if (!allowedLinks.get(path)?.has(target)) throw new Error(`installed symlink refused: ${path}`);
+    if (!allowedLinks.get(path)?.has(target.split(sep).join('/'))) throw new Error(`installed symlink refused: ${path}`);
   }
   return result;
 }

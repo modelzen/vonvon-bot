@@ -48,6 +48,16 @@ test('installed manifest accepts exact dependency bin links while packed tree re
   await assert.rejects(fileEntries(root), /symlink refused/);
 });
 
+test('installed manifest treats backslashes as separators only on Windows', async t => {
+  const { root, manifest, links } = await installedFixture(t);
+  for (const [path, target] of links) {
+    await rm(join(root, path));
+    await symlink(target.replaceAll('/', '\\'), join(root, path));
+  }
+  if (process.platform === 'win32') await validateInstalledManifest(root, manifest, 'abc');
+  else await assert.rejects(validateInstalledManifest(root, manifest, 'abc'), /installed symlink refused/);
+});
+
 for (const [path, target] of [
   ['node_modules/.bin/undeclared', '../qrcode/bin/qrcode'],
   ['bin/qrcode', '../node_modules/qrcode/bin/qrcode'],
@@ -56,6 +66,8 @@ for (const [path, target] of [
   ['node_modules/.bin/qrcode', '/tmp/outside'],
   ['node_modules/.bin/qrcode', '../../../outside'],
   ['node_modules/.bin/qrcode', '../qrcode/bin/../bin/qrcode'],
+  ['node_modules/.bin/qrcode', '..\\..\\..\\outside'],
+  ['node_modules/.bin/qrcode', '..\\qrcode\\bin\\..\\bin\\qrcode'],
   ['node_modules/.bin/qrcode', '../parent/node_modules/@scope/tool/bin/tool'],
 ]) {
   test(`installed manifest refuses unauthorized link ${path} to ${target}`, async t => {
