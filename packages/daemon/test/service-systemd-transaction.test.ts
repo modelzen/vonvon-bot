@@ -70,7 +70,9 @@ async function fixture() {
       if (command.startsWith('enable ') || command.startsWith('start ')) {
         state.enabled = true;
         if (state.autoStart && (command.includes('--now') || command.startsWith('start ')) && !state.owner) {
-          state.pid = 41001; state.owner = { pid: state.pid, startedAt: '2026-10-11T00:00:00Z', listen: '127.0.0.1:32123' };
+          const current = await readRegistration({ target, requestedRoot: root });
+          if (current.kind !== 'ours') throw new Error('Missing start registration');
+          state.pid = 41001; state.owner = { pid: state.pid, startedAt: '2026-10-11T00:00:00Z', listen: `127.0.0.1:${current.definition.port}` };
         }
         return ok();
       }
@@ -595,4 +597,55 @@ it('install rollback accepts reset-failed exit 1 after confirmed absence', async
   expect(result.kind).toBe('install_rolled_back'); expect(result.leftovers).toEqual([]); expect(result.retained).toBeNull();
   expect((await f.registration()).kind).toBe('absent'); expect(f.state.enabled).toBe(false);
   expect(f.mutations()).toEqual(['daemon-reload', `enable --now ${SYSTEMD_UNIT_NAME}`, `disable ${SYSTEMD_UNIT_NAME}`, 'daemon-reload', `reset-failed ${SYSTEMD_UNIT_NAME}`]);
+});
+
+it('systemd preserves the stopped registered port when the next free port differs', async () => {
+  const f = await fixture(); await f.seed();
+  const freePort = vi.fn(async () => 32124);
+  const before = await f.bytes();
+  const result = await f.service({ freePort }).install();
+  expect(result.kind).toBe('already-installed');
+  expect(await f.bytes()).toEqual(before);
+  expect(f.mutations()).toEqual([]);
+  expect(f.state.owner).toBeNull(); expect(f.state.pid).toBe(0);
+  expect(freePort).not.toHaveBeenCalled();
+});
+
+it.each(['explicit replacement', 'lost manager state'] as const)('systemd handles %s without choosing a free port', async mode => {
+  const f = await fixture(); await f.seed();
+  const freePort = vi.fn(async () => 32124);
+  if (mode === 'lost manager state') { f.state.loaded = false; f.state.enabled = false; }
+  const port = mode === 'explicit replacement' ? 32125 : 32123;
+  const result = await f.service({ freePort }).install(mode === 'explicit replacement' ? { port } : {});
+  expect(result.kind).toBe('installed');
+  const expected = renderDefinition({ target: f.target, ...f.definition, port });
+  if (expected.platform !== 'linux') throw new Error('Expected Linux unit');
+  expect(await f.bytes()).toEqual(Buffer.from(expected.unit));
+  expect(f.state.owner?.listen).toBe(`127.0.0.1:${port}`);
+  expect(f.state.loaded).toBe(true); expect(f.state.enabled).toBe(true);
+  expect(freePort).not.toHaveBeenCalled();
+  expect(f.mutations()).toEqual(['daemon-reload', `enable --now ${SYSTEMD_UNIT_NAME}`]);
+});
+
+it.each(['absent', 'identity', 'listen'] as const)('systemd resumed owner_unproven after O3 %s retains identity without unloading or restoring', async change => {
+  const f = await fixture();
+  const owner = { pid: 41001, startedAt: 'retained', listen: '127.0.0.1:32123' };
+  const changed = change === 'absent' ? null : change === 'identity' ? { ...owner, startedAt: 'different-incarnation' } : { ...owner, listen: '127.0.0.1:32124' };
+  f.state.loaded = true; f.state.pid = owner.pid; f.state.owner = owner;
+  const readOwner = vi.fn(async (): Promise<PidLockInfo | null> => owner)
+    .mockResolvedValueOnce(owner).mockResolvedValueOnce(changed)
+    .mockResolvedValueOnce(owner).mockResolvedValueOnce(changed);
+  const result = await f.service({ readOwner }).uninstall();
+  expect(result.kind).toBe('uninstall_incomplete'); expect(result.detail).toContain('owner_unproven');
+  expect(result.detail).toContain(String(owner.pid));
+  expect(result.retained).toEqual({ pid: owner.pid, startedAt: owner.startedAt });
+  expect(f.state.owner).toBe(owner); expect(f.state.pid).toBe(owner.pid); expect(f.state.loaded).toBe(true);
+  expect(f.state.clock).toBe(250); expect(readOwner).toHaveBeenCalledTimes(5);
+  expect(f.calls).toEqual([
+    `show -p LoadState -p FragmentPath -p MainPID ${SYSTEMD_UNIT_NAME}`,
+    `show -p MainPID --value ${SYSTEMD_UNIT_NAME}`, `show -p MainPID --value ${SYSTEMD_UNIT_NAME}`,
+    `show -p LoadState -p FragmentPath -p MainPID ${SYSTEMD_UNIT_NAME}`, `is-enabled ${SYSTEMD_UNIT_NAME}`,
+  ]);
+  expect(f.mutations()).toEqual([]); expect((await f.registration()).kind).toBe('absent');
+  await expect(f.bytes()).rejects.toMatchObject({ code: 'ENOENT' });
 });
