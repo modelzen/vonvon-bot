@@ -218,6 +218,7 @@ it('ambiguous disable completion reports observed disabled state without compens
 });
 it.each(['daemon-reload', `reset-failed ${SYSTEMD_UNIT_NAME}`])('uninstall unload failure restores kept bytes and enable only: %s', async command => {
   const f = await fixture(); await f.seed(); f.state.fail = command;
+  f.state.onCommand = async current => { if (current.startsWith('reset-failed')) f.state.loaded = true; };
   const result = await f.service().uninstall(); expect(result.kind).toBe('uninstall_rolled_back'); expect(await f.bytes()).toEqual(f.desired); expect(f.state.enabled).toBe(true);
   expect(f.mutations().at(-1)).toBe(`enable ${SYSTEMD_UNIT_NAME}`); expect(f.calls.filter(c => c === 'daemon-reload')).toHaveLength(1);
 });
@@ -258,7 +259,10 @@ it('rollback query failure restores withdrawn new bytes, never previous bytes', 
 });
 it('rollback unload failure restores previous bytes but remains incomplete', async () => {
   const f = await fixture(); await f.seed(); f.state.fail = `enable --now ${SYSTEMD_UNIT_NAME}`;
-  f.state.onCommand = async command => { if (command.startsWith('disable ')) f.state.fail = `reset-failed ${SYSTEMD_UNIT_NAME}`; };
+  f.state.onCommand = async command => {
+    if (command.startsWith('disable ')) f.state.fail = `reset-failed ${SYSTEMD_UNIT_NAME}`;
+    if (command.startsWith('reset-failed')) f.state.loaded = true;
+  };
   const result = await f.service({ capturedPath: '/replacement/tools' }).install();
   expect(result.kind).toBe('install_incomplete'); expect(await f.bytes()).toEqual(f.desired); expect(f.state.enabled).toBe(true);
 });
@@ -539,4 +543,56 @@ it.each([
 ])('inconsistent is-enabled exit/output is unknown and refuses writes: %j', async reply => {
   const f = await fixture(); await f.seed(); f.state.enabledReply = reply;
   const result = await f.service().install(); expect(result.kind).toBe('install_refused'); expect(await f.bytes()).toEqual(f.desired); expect(f.mutations()).toEqual([]);
+});
+
+
+it.each(['Unit vonvon-bot.service not loaded.', 'untranslated manager diagnostic'])('uninstall accepts reset-failed exit 1 only after structured absence: %s', async diagnostic => {
+  const f = await fixture(); await f.seed();
+  const run = f.dependencies.run; if (!run) throw new Error('Missing fake manager');
+  const service = f.service({ run: async (args, timeout) => {
+    const response = await run(args, timeout);
+    return args[0] === 'reset-failed' ? failed(diagnostic) : response;
+  } });
+  expect(await service.uninstall()).toEqual({ kind: 'uninstalled', detail: 'Uninstalled', retained: null, leftovers: [] });
+  expect((await f.registration()).kind).toBe('absent'); expect(f.state.enabled).toBe(false);
+  expect(f.mutations()).toEqual([`disable ${SYSTEMD_UNIT_NAME}`, 'daemon-reload', `reset-failed ${SYSTEMD_UNIT_NAME}`]);
+  const resetIndex = f.calls.indexOf(`reset-failed ${SYSTEMD_UNIT_NAME}`);
+  expect(f.calls.slice(resetIndex + 1)).toContain(`show -p LoadState -p FragmentPath -p MainPID ${SYSTEMD_UNIT_NAME}`);
+  f.calls.length = 0;
+  expect((await service.uninstall()).kind).toBe('not-installed'); expect(f.mutations()).toEqual([]);
+});
+it.each([
+  failed('manager unavailable'),
+  ok('LoadState=not-found\nFragmentPath=/unexpected/unit\nMainPID=0'),
+  ok('LoadState=not-found\nFragmentPath=\nMainPID=42000'),
+  ok('LoadState=not-found\nFragmentPath='),
+])('reset-failed exit 1 cannot replace a valid absence observation: %j', async reply => {
+  const f = await fixture(); await f.seed(); f.state.fail = `reset-failed ${SYSTEMD_UNIT_NAME}`;
+  f.state.onCommand = async command => { if (command.startsWith('reset-failed')) f.state.showReply = reply; };
+  const result = await f.service().uninstall();
+  expect(result.kind).toBe('uninstall_incomplete'); expect(await f.bytes()).toEqual(f.desired); expect(f.state.enabled).toBe(true);
+  expect(f.mutations()).toEqual([`disable ${SYSTEMD_UNIT_NAME}`, 'daemon-reload', `reset-failed ${SYSTEMD_UNIT_NAME}`, `enable ${SYSTEMD_UNIT_NAME}`]);
+});
+it.each([
+  { ...failed('client timed out'), status: null },
+  { ...failed('unexpected exit'), status: 2 },
+  { ...ok(), status: 1 },
+  { ...failed('inconsistent success'), status: 0 },
+])('uninstall preserves reset-failed transport and inconsistent response failures: %j', async reply => {
+  const f = await fixture(); await f.seed();
+  const run = f.dependencies.run; if (!run) throw new Error('Missing fake manager');
+  const result = await f.service({ run: async (args, timeout) => {
+    const response = await run(args, timeout);
+    return args[0] === 'reset-failed' ? reply : response;
+  } }).uninstall();
+  expect(result.kind).toBe('uninstall_rolled_back'); expect(await f.bytes()).toEqual(f.desired); expect(f.state.enabled).toBe(true);
+  expect(f.mutations()).toEqual([`disable ${SYSTEMD_UNIT_NAME}`, 'daemon-reload', `reset-failed ${SYSTEMD_UNIT_NAME}`, `enable ${SYSTEMD_UNIT_NAME}`]);
+});
+it('install rollback accepts reset-failed exit 1 after confirmed absence', async () => {
+  const f = await fixture(); f.state.fail = `enable --now ${SYSTEMD_UNIT_NAME}`;
+  f.state.onCommand = async command => { if (command.startsWith('disable ')) f.state.fail = `reset-failed ${SYSTEMD_UNIT_NAME}`; };
+  const result = await f.service().install();
+  expect(result.kind).toBe('install_rolled_back'); expect(result.leftovers).toEqual([]); expect(result.retained).toBeNull();
+  expect((await f.registration()).kind).toBe('absent'); expect(f.state.enabled).toBe(false);
+  expect(f.mutations()).toEqual(['daemon-reload', `enable --now ${SYSTEMD_UNIT_NAME}`, `disable ${SYSTEMD_UNIT_NAME}`, 'daemon-reload', `reset-failed ${SYSTEMD_UNIT_NAME}`]);
 });
