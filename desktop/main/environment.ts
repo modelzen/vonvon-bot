@@ -382,6 +382,11 @@ export class EnvironmentService {
     if (this.toolInstall?.kind !== "running" || this.toolInstall.id !== id || !this.installAbort || !this.installCompletion) return refused("not-running", "安装操作已结束。");
     this.installAbort.abort();
     await this.installCompletion;
+    if (this.children.size > 0) {
+      const message = "无法确认安装进程已退出，原工具未切换。";
+      this.toolInstall = { kind: "failed", id, message };
+      return refused("cancel-incomplete", message);
+    }
     return { kind: "toolInstall", operation: this.toolInstall };
   }
 
