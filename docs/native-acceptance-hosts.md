@@ -6,6 +6,7 @@ This document defines how Codex prepares and uses the dedicated Linux acceptance
 
 - The user granted root SSH to the Tencent host `203.0.113.10` for independent use, and testing in `clay`. No further user permission is needed for anything in this document. The work waits only for the accepted design, its independent review, and the root's assignment.
 - The protected services on the Tencent host are the bridge website, the notelet site and its automatic update path, the account service, and every other service that runs there. On `clay`, the protected service is the daily bridge.
+- The owned fallback VM F on the Mac mini, under *Fallback VM F*, carries V5's Linux half when the Tencent host is not eligible. It runs no production service. Its method has passed source review only, and its gates keep it ineligible until they close.
 - A real user action remains only where no agent can act: logging `test-user` into a macOS GUI session, and a provider credential that does not exist yet.
 
 ## Linux host facts and limits
@@ -64,7 +65,7 @@ Record B contains R and also the following.
 - The sha256 of every file under `/etc/nginx`.
 - Cron and timer coverage: `systemctl list-timers --all --no-legend`, and the sha256 of `/etc/crontab`, of each file under `/etc/cron.d`, `/etc/cron.hourly`, `/etc/cron.daily`, `/etc/cron.weekly`, `/etc/cron.monthly`, and `/var/spool/cron`, and of the BT panel's cron directory `/www/server/cron` when it exists.
 - User unit coverage: `ls /var/lib/systemd/linger`, and the path and sha256 of every file that `find / -xdev -path '*/systemd/user/*' -type f` lists outside `/usr`, `/etc`, and `/home/accept-user`. Teardown T checks the test user's own units.
-- `/etc/passwd` and `/etc/group` sha256, computed without the `accept-user` lines.
+- Account files AF, under *Account files*. On a host labelled `AF unavailable`, the sha256 of `/etc/passwd` and of `/etc/group`, computed without the `accept-user` lines.
 - `readlink -f` of `/var/www/vonvon-site/current`, `/var/www/notelet-site/current`, `/var/www/vonvon-account/current`, and `/opt/vonvon-account/current`.
 - `journalctl --disk-usage`.
 - Production port set Π, under *Run listeners*.
@@ -87,12 +88,12 @@ Owned additions. Preparation creates the following host state. It belongs to the
 | `user@<U>.service` and `user-runtime-dir@<U>.service` | step 4 | running unit set |
 | `/var/lib/systemd/linger/accept-user` | step 4 | user unit coverage |
 | `user-<U>.slice` and `/etc/systemd/system.control/user-<U>.slice.d/` | step 3 | not compared |
-| The `accept-user` lines in `/etc/passwd` and `/etc/group`, and `/home/accept-user` | step 2 | already excluded |
+| The `accept-user` lines in `/etc/passwd`, `/etc/shadow`, `/etc/group`, and `/etc/gshadow`, the four `-` backups, `/etc/.pwd.lock` when absent before, and `/home/accept-user` | step 2 | AF under *Account files*. The home is already excluded. |
 
 Comparison rules.
 
 - Every R and the final B are compared with B0. In each record, first remove the owned additions that exist at that point. The remaining running unit set must equal B0's set without its owned additions. The identity fields of every unit running at B0, excluding owned additions, must equal B0. The listener list and the availability codes must also equal B0. During the run only, the listener list may also contain the listeners that *Run listeners* allows. The final B allows none of them.
-- In the final B, the definition hashes, the cron and timer coverage, the user unit coverage without the owned linger entry, and the `passwd` and `group` hashes must also equal B0.
+- In the final B, the definition hashes, the cron and timer coverage, and the user unit coverage without the owned linger entry must also equal B0, and AF must pass under *Account files*. On a host labelled `AF unavailable`, the `passwd` and `group` hashes must equal B0 instead.
 - In every T and in the final B, inventory I is compared under *Outside-home inventory*.
 - Only the table names owned additions. An added unit, linger entry, user, or listener that is not in the table is a difference.
 - The `readlink -f` targets and `journalctl --disk-usage` are observations, not pass conditions. A production publisher may change a `current` target legitimately. The test user cannot write those paths, and check W below proves it.
@@ -166,16 +167,70 @@ A valid inventory proves only that, at that moment, no such entry exists outside
 
 Hosts prepared under this text take I0 at step 7. On the current Tencent host, no inventory was taken before user workload, and I0 is recorded as `I0 unavailable`. Nothing that depends on I0 is claimed for that host.
 
+### Account files
+
+Account files AF is the observation of every account database file that `groupadd`, `useradd`, and `userdel` can write. It applies to a host whose fresh B0 recorded AF. The Tencent host recorded only the two hashes of `/etc/passwd` and `/etc/group` before preparation. It keeps that two-hash comparison and is labelled `AF unavailable`, in the same way as `I0 unavailable`. No AF claim is made for it.
+
+AF covers 13 paths in `/etc`. These are the 12 database paths `passwd`, `passwd-`, `shadow`, `shadow-`, `group`, `group-`, `gshadow`, `gshadow-`, `subuid`, `subuid-`, `subgid`, and `subgid-`, plus `.pwd.lock`. Root takes two read-only observations. Each must exit 0 with an empty stderr.
+
+    find /etc -mindepth 1 -maxdepth 1 \( -name passwd -o -name passwd- -o -name shadow -o -name shadow- -o -name group -o -name group- -o -name gshadow -o -name gshadow- -o -name subuid -o -name subuid- -o -name subgid -o -name subgid- -o -name .pwd.lock \) -printf '%y %n %U %G %m %s %i %p\n'
+    find /etc -mindepth 1 -maxdepth 1 -type f \( -name passwd -o -name passwd- -o -name shadow -o -name shadow- -o -name group -o -name group- -o -name gshadow -o -name gshadow- -o -name subuid -o -name subuid- -o -name subgid -o -name subgid- \) -printf '%p %i %s\n' -exec base64 -w0 -- {} \; -printf '\n'
+
+Root takes AF in every B, in the R after step 2 (called R2), and in the R after step 4. The content of `shadow` and `gshadow` is private evidence, and public summaries show only hashes.
+
+Type gate at the fresh B0. The host is not eligible, and no account is created, unless every existing AF path has link count 1 and the following holds. Any other type, including a symlink, a directory, a FIFO, a socket, or a device, fails the gate.
+
+| Path | Allowed at the fresh B0 |
+| --- | --- |
+| `passwd`, `shadow`, `group`, `gshadow` | exists, type `f` |
+| `passwd-`, `shadow-`, `group-`, `gshadow-` | absent, or type `f` with the owner, group, and mode of its own primary |
+| `subuid`, `subgid`, `subuid-`, `subgid-` | absent, or type `f` |
+| `.pwd.lock` | absent, or type `f` with size 0 |
+
+Correspondence. Each AF observation is malformed, and its gate stops, when any of the following is true:
+
+- One of the 13 paths has more than one metadata row.
+- A metadata row names a path outside the 13.
+- A database path whose metadata row says `f` does not have exactly one content pair.
+- A content pair exists for an absent path, for a path whose type is not `f`, or for `.pwd.lock`.
+- A content pair's inode or size differs from its metadata row.
+- The base64 is not strict and canonical.
+- The decoded length differs from the size.
+
+A difference between the two commands means a write happened between them. The observation is then inconclusive.
+
+Owned lines. Each primary file is an ordered list of lines.
+
+| File | Owned lines from step 2 until retirement |
+| --- | --- |
+| `passwd` | exactly `accept-user:x:<U>:<G>:vonvon native acceptance:/home/accept-user:/bin/bash` |
+| `group` | exactly `accept-user:x:<G>:` |
+| `shadow` | exactly one line whose first field is `accept-user` and whose password field is `!` or `!*`. Every field is frozen at R2. Field 3 must be the UTC day of step 2. |
+| `gshadow` | exactly `accept-user:!::` |
+| `subuid`, `subgid` | none |
+
+Transitions. `X` is one of `passwd`, `shadow`, `group`, and `gshadow`, and `X-` is its backup. "Meta" means type, link count, owner, group, and mode.
+
+| Point | `X` | `X-` | `subuid`, `subgid`, and their backups | `.pwd.lock` |
+| --- | --- | --- | --- | --- |
+| R2, the only account write in preparation | The fresh B0's `X` with exactly its owned line added and every other line in order. Meta as at the fresh B0. Any inode. | Exists as type `f`. Bytes equal the fresh B0's `X`. Meta of the fresh B0's `X`, link count 1. Any inode. | Bytes and every metadata field as at the fresh B0. Absent stays absent. | As at the fresh B0. If it was absent there, it may now be present as residue PL: type `f`, size 0, link count 1, owner 0, group 0, mode 600, any inode. |
+| From R2 until the retirement commands | Every field of all 13 paths equals the R2 observation (FAF) exactly. That includes the R after step 4, every later-run B0, and every final B. | Equal to FAF | Equal to FAF | Equal to FAF |
+| Retirement B, the only other write | Bytes and meta equal the fresh B0's `X`. Any inode. | Residue BK. Exists as type `f`. Bytes equal FAF's `X`. Meta of the fresh B0's `X`, link count 1. Any inode. | As at the fresh B0 | As at the fresh B0, or PL equal to its FAF row |
+
+Any other change is a difference. That includes a type, link count, owner, group, or mode change, a size or inode change outside R2 and retirement, and a path that appears or disappears. A backup that still equals the fresh B0's backup at R2, because no write happened, is a difference. BK and PL are recorded at retirement as named residues and are never deleted.
+
+Source qualification. These predictions rest on source claims about shadow-utils. S1: `-K SUB_UID_COUNT=0 -K SUB_GID_COUNT=0` stops subordinate-range allocation, because `main()` reads the counts after `process_flags()` applies `-K`. S2: `-l` skips the faillog, lastlog, and tallylog resets. S3: `-g` with an existing group and no `-G` writes no group entry. These three were read in upstream tag 4.13 `src/useradd.c`. S4: backups are written only when a database changes, and `lckpwdf()` may create `.pwd.lock`. S5: `groupadd` writes `group` and `gshadow`, and `userdel -r` removes the user's lines and its same-named primary group. S4 and S5 are inferred, not read. None of them has been checked against the installed version or Ubuntu's patches. That check is gate P-src. Before step 2, root records `dpkg-query -W -f='${Version}' passwd` and `useradd --help`, and the source of exactly that version must confirm S1 to S5. If a claim is wrong, a comparison above fails and the run stops.
+
 ## Sequence
 
 The protective baseline B0 comes before every write to the host. All steps run strictly in this order. A failed gate stops the sequence at that step.
 
-1. B0. Take record B. Gates: `systemctl --version` reports systemd 255, `stat -fc %T /sys/fs/cgroup` prints `cgroup2fs`, `cgroup.subtree_control` contains `memory`, `cpu`, and `pids`, and every start condition in the monitor table holds. If the cgroup mode is not `cgroup2fs`, the host is not eligible, and the work moves to the fallback VM. Root also builds Π under *Run listeners*. If any source is `unresolved`, the host is not eligible for the run, and the work moves to the fallback VM. For a host that has no `accept-user` user yet, root picks a numeric `<U>` and `<G>` that are absent from `/etc/passwd` and `/etc/group`, records them, and takes inventory I with them. That inventory must be valid and empty.
-2. Create the user. Then take R.
+1. B0. Take record B. Gates: `systemctl --version` reports systemd 255, `stat -fc %T /sys/fs/cgroup` prints `cgroup2fs`, `cgroup.subtree_control` contains `memory`, `cpu`, and `pids`, and every start condition in the monitor table holds. If the cgroup mode is not `cgroup2fs`, the host is not eligible, and the work moves to the fallback VM under *Fallback VM F*. Root also builds Π under *Run listeners*. If any source is `unresolved`, the host is not eligible for the run, and the work moves to the fallback VM. For a host that has no `accept-user` user yet, root picks a numeric `<U>` and `<G>` that are absent from complete `getent passwd` and `getent group` enumerations, records them, and takes inventory I with them. That inventory must be valid and empty. Root also takes AF, which must pass the type gate under *Account files*, and records `dpkg-query -W -f='${Version}' passwd` and `useradd --help` for P-src.
+2. Create the user. `-l` keeps `useradd` from writing login records, and the two `-K` values keep it from allocating subordinate ID ranges, under the source claims in *Account files*. Then take R, which includes AF (R2).
 
    ```
    groupadd -g <G> accept-user
-   useradd -u <U> -g <G> --create-home --shell /bin/bash --comment "vonvon native acceptance" accept-user
+   useradd -l -K SUB_UID_COUNT=0 -K SUB_GID_COUNT=0 -u <U> -g <G> --create-home --shell /bin/bash --comment "vonvon native acceptance" accept-user
    id accept-user                      # must print uid=<U> gid=<G>
    ```
 
@@ -189,7 +244,7 @@ The protective baseline B0 comes before every write to the host. All steps run s
 
    Check V1 passes when `LoadState=loaded`, `MemoryMax` prints the byte value of the cap, `MemorySwapMax=0`, `CPUQuotaPerSecUSec=2s`, and `TasksMax=512`. No process of the user exists yet. If `set-property` or V1 fails, the sequence stops here.
 
-4. Enable linger. This starts `user@<U>.service`, the user's systemd manager, inside the capped slice. The kernel creates the slice's cgroup only when its first process starts, so the kernel files can be read only after this step. The manager is the only process of the user until step 5 passes. Then take R.
+4. Enable linger. The R after this step includes AF. This starts `user@<U>.service`, the user's systemd manager, inside the capped slice. The kernel creates the slice's cgroup only when its first process starts, so the kernel files can be read only after this step. The manager is the only process of the user until step 5 passes. Then take R.
 
    ```
    loginctl enable-linger accept-user
@@ -226,11 +281,11 @@ The protective baseline B0 comes before every write to the host. All steps run s
 
 Steps 2 to 7 run once per host. Step 5, W, and B0 run again before each later run, and B0 is then taken again for that run before its first state change.
 
-Writes that preparation makes as root, and nothing else: the user and its home, its group, `/etc/systemd/system.control/user-<U>.slice.d/`, the linger file under `/var/lib/systemd/linger/`, and the user's `authorized_keys`. Preparation adds no sudoers rule, no package, no firewall rule, no nginx change, no `sshd_config` change, and no `daemon-reload`.
+Writes that preparation makes as root, and nothing else: the user and its home, its group, `/etc/shadow`, `/etc/gshadow`, the `-` backups of `passwd`, `shadow`, `group`, and `gshadow`, `/etc/.pwd.lock` when it was absent before, `/etc/systemd/system.control/user-<U>.slice.d/`, the linger file under `/var/lib/systemd/linger/`, and the user's `authorized_keys`. Preparation adds no sudoers rule, no package, no firewall rule, no nginx change, no `sshd_config` change, and no `daemon-reload`.
 
 ## Running as the test user
 
-- All user work enters through `ssh accept-user@203.0.113.10`. The root agent never starts user work with `su`, `runuser`, `sudo -u`, `machinectl shell`, or `systemd-run` from root. Those commands can place processes outside `user-<U>.slice`.
+- All user work enters through `ssh accept-user@203.0.113.10`, or on F through ordinary SSH on port 22 to F. The root agent never starts user work with `su`, `runuser`, `sudo -u`, `machinectl shell`, or `systemd-run` from root. Those commands can place processes outside `user-<U>.slice`.
 - Each SSH session first prints `cat /proc/self/cgroup`. The path must begin with `0::/user.slice/user-<U>.slice/`.
 - Environment for every session:
 
@@ -344,8 +399,287 @@ The run that created Q failed. Its T stays open with the reason `quarantined res
 
 Removing Q needs a separately reviewed deletion protocol, and this document authorizes none.
 
-Retirement. When the program no longer needs the Linux host, the root runs teardown T, then `loginctl disable-linger accept-user`, `systemctl revert user-<U>.slice`, and `userdel -r accept-user`. It then takes record B and compares it with the B0 taken before preparation step 2, with no owned additions allowed.
+Retirement. When the program no longer needs the Linux host, the root runs teardown T, then `loginctl disable-linger accept-user`, `systemctl revert user-<U>.slice`, and `userdel -r accept-user`. It then takes record B and compares it with the B0 taken before preparation step 2. No owned addition is allowed except the named residues LP, BK, and PL where they apply, each compared under its frozen fields, *Account files*, and *Census on F*.
 
 ## Exclusive test bot
 
 Two processes on the same Bot split its events. Before any run that connects the test bot, the run ledger in the evidence bundle must show a passed teardown for the previous run in every context. Step 6 of T must also pass in both dedicated contexts at that moment. The test bot's App ID must differ from the daily bridge's App ID. The daily App ID is read once, read-only, from `clay`.
+
+## Fallback VM F
+
+This section defines F, the owned fallback VM, and the parts of this document that it replaces for F. Independent source reviews gave it a METHOD PASS. No F exists. Nothing here is native evidence, and the gates at the end keep F ineligible.
+
+### Scope
+
+- F is a new, owned OrbStack machine on the Mac mini. It runs no production service. What it protects is F's own operating system, root's SSH access, and the Mac that hosts it, including the daily bridge in `clay`.
+- Every rule in this document applies to F, except where this section names a replacement. That covers B, R, I, M, T, the caps, the monitors, PAM, SSH, and the rule that root sends no signal.
+- The earlier fallback machine is not eligible for any V5 run. Nothing restarts, stops, signals, reconfigures, or deletes it. Its records stay as failed or unresolved evidence, and they never qualify F.
+- Nothing here changes the Tencent host. If a Tencent source is `unresolved`, that host stays ineligible. Q and the old T keep their status.
+
+### Construction
+
+Root constructs F only after the docs that define it are merged. The candidate command has not been run:
+
+    orb create --isolated --isolate-network --arch arm64 --user v5-admin --cpus 4 --memory 6G --disk 32G ubuntu:24.04 <new unique name>
+
+- `--isolated` means no Mac mount and no Mac integration exists before B0. OrbStack documents that `--isolate-network` blocks other machines and host IPs and keeps internet access, which `npm ci` and the Node download need.
+- The sizes follow the containment table. Four CPUs leave two outside `CPUQuota=200%`. The `MemoryMax` bound and the start rule need at least 3584 MiB, and 6 GiB leaves room for calibration. The start rule needs 20 GiB free, and 32 GiB covers the OS, two clones, and that free space.
+- If OrbStack's global CPU or memory limit cannot hold these values, F is not eligible. No global setting changes.
+
+Between creation and the fresh B0, root may make only these writes, and it records each command and its output:
+
+1. Through `orb` or `v5-admin`, once: root's `authorized_keys`, and `openssh-server`, `git`, and `ca-certificates` from the Ubuntu archive if the image lacks them. The package list is recorded before and after.
+2. The dispatch masks under *Cron and timers on F*.
+
+After step 1, all root work uses ordinary SSH on port 22. Nobody logs in as `v5-admin` again.
+
+### Identity and durability
+
+The fresh B0 records each of the following, and every R, final B, and retirement B compares it:
+
+- Identity tuple: `/etc/machine-id`, `/proc/sys/kernel/random/boot_id`, `readlink /proc/1/ns/mnt`, and F's OrbStack name and ID, read on the Mac. Any change stops the run, and no earlier record of F then qualifies anything.
+- The mount table, under *Mount table on F*. No row may be of type `virtiofs`, `9p`, `nfs*`, `cifs`, or `fuse*`. No target or source may lie under `/mnt/mac`, `/Users`, `/Volumes`, or `/private`.
+- F's OrbStack configuration, read only on the Mac: isolated and network-isolated true, 4 CPUs, 6G memory, 32G disk.
+- Mac listeners. Each R reads `lsof -nP -iTCP -sTCP:LISTEN` on the Mac with no port filter. `P` and the nine declared mutex ports must not appear. This detects a forwarded listener but does not prevent one. See G-fwd.
+- Effective memory is the smaller of `MemTotal` and the machine's root-cgroup `memory.max` when that is a number. The `MemoryMax` bound and the start rule use it.
+- The Mac must have at least 40 GiB free at B0, and each R samples it. Below that, the run stops. The Mac's daily processes are only observed.
+
+All OrbStack machines share one kernel. The pressure files measure the shared VM. Their stop rules still apply.
+
+### Baselines on F
+
+- B0f is the fresh B0 of *Sequence* step 1, taken once per host before step 2. Its attempt holds preparation and the first run.
+- B0p(k) is the B0 of each later attempt k. It is taken after V and W run again and before the run's first state change. It needs the retained preparation receipt on the same host.
+
+Each record X is compared with Y, the B0 of its attempt. Retirement is the exception, and it is compared with B0f. The comparison passes only when all three of the following hold.
+
+1. The owned part of X equals exactly O(stage of X).
+2. The owned part of Y equals exactly O(stage of Y).
+3. The rest of X equals the rest of Y in every compared field.
+
+O(stage) is defined under *Census on F* and *Account files*.
+
+| Point | Stage | Compared with |
+| --- | --- | --- |
+| B0f | F | itself. Gates: the name, U, and G absent from complete `getent passwd` and `getent group`, the AF type gate passed, an empty valid I, and Π complete. |
+| Step 2, then R2 | A | B0f |
+| Step 3, then R | A | B0f |
+| Step 4 and every later preparation record, including I0 | L | B0f |
+| First run: every R, monitor, T step, and final B | L | B0f |
+| Before later run k: V, W, and the R after W | L | the previous attempt's B0 |
+| B0p(k) | P | its own gates: same identity tuple as B0f, mount main list equal to B0f's, census without O(L) equal to B0f's, owned part exactly O(L) proven against the preparation receipt, AF equal to FAF. Its unit, listener, and HTTP content become run k's baseline. |
+| Run k: every R, monitor, T step, and final B | L | B0p(k) |
+| Retirement B | Ret | B0f |
+
+### Mount table on F
+
+On F, this replaces the rule that the mount table never changes.
+
+Each table is the ordered list of `(target, fstype, source, options)` rows from `findmnt -rn -o TARGET,SOURCE,FSTYPE,OPTIONS`. Root keeps the raw output. Runtime rows are rows whose target is exactly `/run/user/<n>`. Every other row, including a row below `/run/user/<n>/`, belongs to the main list.
+
+- The main list must equal the baseline's main list exactly, in order and with repeats. A reordered row, a lost stacked row, a repeated row or target added or removed, a changed field, or an unknown row fails.
+- Runtime rows are compared per UID as multisets of complete rows. Their position is not compared.
+  - For UID 0, the rows equal the baseline's rows.
+  - For U, there are no rows before step 4. From step 4 until retirement, there is exactly one row, `R_U`: fstype and source `tmpfs`, with options containing `uid=<U>`, `gid=<G>`, and `mode=700`. Its full options are frozen at the first record after step 4. After retirement, there are no rows.
+  - For any other UID, the rows equal the baseline's rows.
+  - More than one row where one is required fails.
+- Inside one inventory I, the raw before and after tables must still be byte-identical.
+
+The position exemption exists because logind mounts and unmounts `/run/user/<n>` as sessions and linger come and go. Root's own sessions can end between records. This rationale is source reasoning, and it is gate G-runtime-order.
+
+### Census on F
+
+Root takes these read-only observations at B0f, B0p(k), every R, T6, T9, every final B, and the retirement B, always from a root SSH session:
+
+| Name | Command |
+| --- | --- |
+| accounts | `getent passwd` |
+| groups | `getent group` |
+| linger | `find /var/lib/systemd -mindepth 1 -maxdepth 2 -path '/var/lib/systemd/linger*' -printf '%y %U %G %m %p\n'` |
+| logind | `loginctl list-users --no-legend` |
+| units | `systemctl list-units --all --full --no-legend --no-pager`, filtered to `user@*.service` and `user-runtime-dir@*.service` |
+| runtime dirs | `find /run -mindepth 1 -maxdepth 2 -path '/run/user*' -printf '%y %U %G %m %p\n'` |
+| managers | `ps -eo pid,uid,lstart,args`, filtered to `systemd --user` |
+
+On F, the linger observation replaces the `ls /var/lib/systemd/linger` of *Records*. It splits into the parent state, `absent` or the parent row, and the entry rows at depth 2.
+
+Owned sets:
+
+| Stage | Owned census entries |
+| --- | --- |
+| F | none |
+| A | the `passwd` and `group` owned lines under *Account files* |
+| L and P | those of A, plus every entry in the next list |
+| Ret | LP only, when B0f had no linger parent and LP's frozen fields are unchanged |
+
+The entries added at stage L and P:
+
+- The linger entry row `/var/lib/systemd/linger/accept-user`, with its type and owner frozen at the first stage-L record.
+- LP, the linger parent row, only when B0f had no linger parent. Its type must be `d`, and its type, owner, group, and mode are frozen at the first stage-L record.
+- The logind row for `<U>`.
+- Exactly one listing row for each unit, with these exact columns:
+
+  | Unit | LOAD | ACTIVE | SUB |
+  | --- | --- | --- | --- |
+  | `user-runtime-dir@<U>.service` | `loaded` | `active` | `exited` |
+  | `user@<U>.service` | `loaded` | `active` | `running` |
+
+- `/run/user/<U>`, type `d`, owner `<U>`, group `<G>`, mode 700.
+- Exactly one `systemd --user` process with UID `<U>`.
+- `R_U` under *Mount table on F*.
+
+`user-runtime-dir@.service` is `Type=oneshot` with `RemainAfterExit=yes`, so a completed start stays `active` and `exited`. That comes from the retained unit text and the v255 source. Any other state, a missing row, or a duplicate row is a difference.
+
+Root's own entries belong to the baseline. Those are `user@0.service`, `user-runtime-dir@0.service`, `/run/user/0`, its logind row, and one UID-0 manager.
+
+A manager's pid and start time may change between records. Their count and UID may not.
+
+The retirement commands do not remove the linger parent, and nothing removes it. LP is therefore a named, permanent residue.
+
+### User managers on F
+
+On F, this defines "every user manager" in Π's unit-file source.
+
+- Live contexts. Before step 4 only root's manager may run, and only from root's own SSH login. From step 4, `accept-user`'s manager may also run. Any other live manager, or any linger entry other than `accept-user`, makes F ineligible. Nobody stops, impersonates, or connects to it.
+- Each live context is listed only by its own account, over that account's own SSH session:
+  - `systemctl --user list-unit-files --full --no-legend --no-pager`;
+  - `busctl --user --auto-start=no --allow-interactive-authorization=no call org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.DBus.Properties Get ss org.freedesktop.systemd1.Manager UnitPath`;
+  - the same call for `Environment`.
+
+  The path set is `UnitPath` in order. Root walks those directories with `lstat` and `readlink`. The walk must find the same names as the listing. Any difference, or any EACCES or ENOTDIR, makes the context `unresolved`. Snapshots are never merged.
+- Closure for each listed name, in every state:
+
+  | Case | Rule |
+  | --- | --- |
+  | Masked | A link to `/dev/null` or an empty file is `masked`. Its content is not read. |
+  | Alias | Follow the link chain to its target. A dangling link or a loop is `unresolved`. |
+  | Template | Expand each instance from the listing or from `.wants`, `.requires`, or `.upholds` links. A template with no instance and a `%i` or `%I` in a port-bearing field gives no ports. |
+  | Drop-ins | Read `<name>.d/`, the template's `.d/` for an instance, `<type>.d/`, and each dash-prefix directory in every `UnitPath` directory. Apply them in systemd's documented order. An empty assignment resets the field. |
+  | Environment files | A missing file with the `-` prefix is recorded as absent. A missing file without it, or an unreadable file, is `unresolved`. |
+  | Expansion | `%h`, `%u`, `%U`, and `%t` come from the account and its runtime directory. Variables come from `Environment`, from `EnvironmentFile`, and from the manager's `Environment`. Anything unknown in a port-bearing token is `unresolved`. Nothing is executed. |
+
+- Offline accounts are every other `passwd` account, including system accounts and `v5-admin`. They are not evaluated, and the record says so. In return, they may have no linger entry and no live manager at B0f. The census in every record must equal the baseline's apart from O(stage). An offline account can listen only through a manager, and a new manager stops the run. This guard applies only on F, where no production exists.
+
+### nginx and BT on F
+
+A source row is `absent, ports ∅` only when all of the following hold. A missing `PATH` entry proves nothing.
+
+1. `dpkg-query -W -f='${Package}\t${Status}\n'` lists no package whose name contains `nginx`, `openresty`, or `angie`.
+2. No listing on F names a unit matching `*nginx*` or `bt*.service`.
+3. One root `find` over `/`, pruning only `/proc` and `/sys`, without `-xdev`, and bracketed by identical mount tables, prints nothing for `-name nginx`, `-name nginx.conf`, `-path /www`, `-path /etc/init.d/bt`, or `-path /etc/nginx`.
+4. B0f's `ss -ltnupeH` shows no `nginx` process and no executable under `/www`.
+5. No cron file, timer, or unit fragment contains `nginx` or `/www/`.
+
+Any hit means the software is present, and its row is resolved under *Run listeners* or stays `unresolved`.
+
+### Cron and timers on F
+
+On F, schedulers are disabled at construction instead of tracing every scheduled program. Root runs `systemctl mask` on these units before B0f:
+
+- `cron.service`, `anacron.service`, `anacron.timer`, `atd.service`, `cronie.service`, `crond.service`, and `systemd-cron*`;
+- every `*.timer` in the system manager's listing.
+
+Root also runs `systemctl --global mask` on every `*.timer` in root's user-scope listing.
+
+B0f, every R, and every final B must then show all of the following. Π's cron and timer row then reads `no dispatcher, ports ∅`:
+
+- every one of those units `masked` and inactive;
+- an empty `systemctl list-timers --all --no-legend` in the system manager and in each live context;
+- no `cron`, `anacron`, `atd`, or `crond` process, and no `run-parts` of a cron directory;
+- no other scheduler package, or that package's unit masked as above.
+
+The cron files and timer commands are still hashed in B. Any unmasked scheduler or timer, scheduler process, listed timer, transient timer, or change in unit-file state makes the row `unresolved`, and F is ineligible. There is no exemption for stock Ubuntu tasks.
+
+### Command outcomes on F
+
+- Reader observations are read-only commands that root collects. They must exit 0 with an empty stderr. An absence is derived from a complete zero-exit listing, never from a command that is expected to fail. Any other outcome is a collection failure. It sets the collector's failure latch and leaves the record incomplete. Retries are not allowed.
+
+  On F, this requires replacing several commands:
+  - `dpkg -S` is not used;
+  - the linger and runtime listings use the `find` forms above;
+  - `systemctl` listings take no name pattern or type filter;
+  - the Mac `lsof` takes no port filter.
+- Assertion actions are actions whose result is under test. They run as recorded actions over SSH, and the collector never runs them. Each one names its exact expected exit codes and stderr rule.
+
+  Check W on F:
+  - Each `test -w <path>` as `accept-user` must exit exactly 1 with an empty stderr.
+  - Before W, one Reader observation records which W paths exist: `find / -maxdepth 4 \( -path /proc -o -path /sys \) -prune -o \( -path /var/www -o -path /var/www/vonvon-site/current -o -path /var/www/notelet-site/current -o -path /opt/vonvon-account -o -path /etc/nginx -o -path /etc/systemd/system -o -path /www/server \) -printf '%y %U %G %m %p\n'`.
+  - For a path that exists, exit 1 is recorded as `protected`. For an absent path, it is recorded as `absent, not applicable`, which is not evidence of protection.
+  - The native negative actions keep the outcomes that the native assertions define.
+
+### Gates for F
+
+F is not eligible while any gate below is OPEN. A METHOD PASS closes none of them.
+
+| Gate | State |
+| --- | --- |
+| G-fwd | OPEN. OrbStack documents that servers in a machine are reachable on the Mac's `localhost`. It does not say whether isolation disables that. The method therefore assumes F's `P` and the nine mutex ports may be forwarded. The gate closes only by one of two routes. The first is OrbStack documentation or a read-only configuration readback for F proving no forwarding. The second is a Mac port set Π_mac, built read-only and as complete as Π, that covers the Mac's listeners and the configured ports of the daily bridge and of every LaunchAgent and LaunchDaemon, with `P` and the nine ports outside it and no `unresolved` source. An operator preference does not close it. |
+| G-mask | OPEN. F's own records must show that the masks leave the schedulers inactive and the timer list empty. |
+| G-noact | OPEN. That the `busctl` `Get` route loads and activates nothing on the installed v255 is a source claim. |
+| G-runtime-order | OPEN. The runtime-row position exemption relies on logind's mount lifecycle, which is source reasoning. |
+| G-W-F | OPEN. On F, most W paths are absent. Their W results are not evidence of protection. |
+| G-loginacct | OPEN, not decided. SSH logins can update `/var/log/lastlog`, `wtmp`, `btmp`, and the auth logs. No comparison observes those. `useradd -l` does not cover them. |
+| P-src | OPEN. The installed shadow version and its patched source must confirm S1 to S5 under *Account files*. |
+| P-nat | OPEN. Only F's own records can show any rule here holding. |
+| Formal CPU and window accounting, gap of at most 8 | OPEN |
+| Capability pilot on the old machine only | Separate. It qualifies nothing on F. |
+
+## Appendix: Linux harness contract
+
+The Linux acceptance harness has a local contract, `selected-contract.md`. It is audit material and not tracked. Its sha256 is `3821aee188c1e260ea2c69c6dfa0b83e0ad867209550244f9fe8b8b5da3e1c18`. This appendix is the tracked statement of the changes that contract needs so that it matches this document. Where the two disagree, this document governs. The line numbers below refer to that hash.
+
+### Changes to the local contract
+
+| Contract location | Change |
+| --- | --- |
+| Line 42, fresh B0 | Add: AF taken, and the AF type gate under *Account files* passed. |
+| Line 44, CREATE_ACCOUNT | The command in *Sequence* step 2. AF in the after-R matches the R2 transition table, and that observation becomes FAF. Exact owned lines in `passwd`, `shadow`, `group`, and `gshadow`. `subuid` and `subgid` unchanged. |
+| Line 57, "No stage allows a mount change" | On F, replaced by *Mount table on F*. Section 6 of the contract still applies to the main list. |
+| Line 88, row `passwd, group` | Replaced by an `account_files` row: every B, R2, and the R after step 4. The 13 metadata rows and 12 content pairs, the type gate, the correspondence rules, the R2 and retirement transitions, and FAF equality in between. No absent or error variant, except per-path absence where the type gate allows it. A host labelled `AF unavailable` keeps the two-hash form. |
+| Line 93, additional evidence | Add the P-src version and help observations, and the AF metadata and content receipts. |
+| Line 99, owned additions | Add the AF owned lines, the backups, PL and BK, and on F, LP and the census owned set under *Census on F*. |
+| Line 101, full-B comparison | Replace "excluded passwd/group hashes" with "AF under *Account files*, or the two-hash form only where `AF unavailable` applies". |
+
+### Command receipts wire
+
+The collector records every command it runs in one top-level history:
+
+    "command_receipts": {
+      "schema": "linux-r3-command-history/1",
+      "reader": "<the reader's fresh identity>",
+      "complete": true | false,
+      "abort": null | "<reason>",
+      "entries": [ {"seq": 0, "receipt": <linux-r3-command-receipt/1>}, ... ]
+    }
+
+- `entries` holds every receipt the reader appended, in append order. `seq` runs from 0 to n-1 with no gap.
+- `complete` is true only when the record finished normally. Then the reader's final count equals n and `abort` is null. An aborted record still emits its full prefix.
+- Every record field that comes from a command carries `"receipt_refs": [seq, ...]`, in the order of its commands. Every `seq` is referenced exactly once. The exception is an `"unbound": [{"seq": k, "reason": "..."}]` entry, which is allowed only when `complete` is false and the receipt was appended after the last observation began. A missing `seq`, a double reference, an unreferenced `seq`, or a reference out of order is a finding.
+
+Legal receipt states. Any other combination is the finding `illegal_receipt_state`. The decoder keeps it and never repairs it.
+
+| `state` | `returncode` | `stdout` / `stderr` | `failure` | `cleanup_failures` | `output_complete` | `output_truncated` |
+| --- | --- | --- | --- | --- | --- | --- |
+| `blocked` | null | null / null | non-null | `[]` | false | false |
+| `launch_failed` | null | null / null | non-null | `[]` | false | false |
+| `started`, completed-zero | 0 | bytes / empty bytes | null | `[]` | true | false |
+| `started`, other | an integer, or null only when `failure` is non-null | each bytes, or null only when `failure` is non-null | any | any list of strings | true only when both streams are bytes and `output_truncated` is false | true only when `output_complete` is false and `failure` is non-null |
+
+Receipts and captures fail for different reasons:
+
+- A receipt's completion is a property of the reader's process record. A completed-zero receipt says only that the process ran and finished. It does not say that the observation is valid.
+- A capture is `{receipt, failure}`. Its `failure` records the observer's checks: exactly one new receipt, an unchanged history, matching argv, no stale equal receipt, returned bytes equal to stdout, and text decoding where text is needed.
+- If a capture's `failure` is null, its receipt is completed-zero. If a receipt is not completed-zero, its capture's `failure` is non-null. A completed-zero receipt with a non-null capture failure is legal wire and is reported as `capture_failed`. Nothing clears a capture failure.
+
+Inventory projection:
+
+- `inventory.command_receipts` stays the three captures, in the order before, listing, after, and `inventory.receipt_refs` holds their three `seq` values.
+- Each capture's `receipt` must equal its referenced entry's `receipt` field by field. Byte wrappers compare by `base64`, `sha256`, and `bytes`.
+- Capture failures stay on the observation that owns them and never enter the global history.
+
+Other rules:
+
+- In each entry, `ended_monotonic_ns` is at least `started_monotonic_ns`, and `started_monotonic_ns` is at least 0. Across entries, `started_monotonic_ns` never decreases.
+- Byte streams use strict, canonical base64, with a matching count and sha256.
+- A record with `complete: false`, any finding, or any `unbound` entry cannot close command coverage.
+- A valid shape grants no acceptance.
