@@ -67,12 +67,14 @@ Record B contains R and also the following.
 - `/etc/passwd` and `/etc/group` sha256, computed without the `vonvon-accept` lines.
 - `readlink -f` of `/var/www/vonvon-site/current`, `/var/www/notelet-site/current`, `/var/www/vonvon-account/current`, and `/opt/vonvon-account/current`.
 - `journalctl --disk-usage`.
+- Production port set Π, under *Run listeners*.
+- Outside-home inventory I, under *Outside-home inventory*.
 
 Record R contains the following.
 
 - For each unit running at B0: `systemctl show -p Id -p ActiveState -p SubState -p MainPID -p ExecMainStartTimestamp -p NRestarts`.
 - `systemctl list-units --type=service --state=running --no-legend` as a sorted list of unit names.
-- `ss -ltnH | awk '{print $4}' | sort`.
+- `ss -ltnupeH`, taken once. Its sorted local-address column is the compared listener list. Its owner columns are the input to *Run listeners*. No other `ss` call is used in the record.
 - Availability: `curl -sS -o /dev/null -w '%{http_code}\n' --resolve <name>:443:127.0.0.1 https://<name>/` for `bridge.vonvon.cc` and `notelet.vonvon.cc`. This is one read-only GET each, and it sends no test traffic to the account service.
 - The monitors from the table above: `/proc/meminfo` `MemAvailable`, `df -B1 --output=avail /`, the `du` of the test home, and the two pressure files.
 - After the slice exists: `memory.current`, `memory.peak` when it exists, `memory.events`, `cpu.stat`, and `pids.current` of the slice.
@@ -89,22 +91,92 @@ Owned additions. Preparation creates the following host state. It belongs to the
 
 Comparison rules.
 
-- Every R and the final B are compared with B0. In each record, first remove the owned additions that exist at that point. The remaining running unit set must equal B0's set without its owned additions. The identity fields of every unit running at B0, excluding owned additions, must equal B0. The listener list and the availability codes must also equal B0. During the run only, the listener list may also contain the run's own `127.0.0.1:<P>`.
+- Every R and the final B are compared with B0. In each record, first remove the owned additions that exist at that point. The remaining running unit set must equal B0's set without its owned additions. The identity fields of every unit running at B0, excluding owned additions, must equal B0. The listener list and the availability codes must also equal B0. During the run only, the listener list may also contain the listeners that *Run listeners* allows. The final B allows none of them.
 - In the final B, the definition hashes, the cron and timer coverage, the user unit coverage without the owned linger entry, and the `passwd` and `group` hashes must also equal B0.
+- In every T and in the final B, inventory I is compared under *Outside-home inventory*.
 - Only the table names owned additions. An added unit, linger entry, user, or listener that is not in the table is a difference.
 - The `readlink -f` targets and `journalctl --disk-usage` are observations, not pass conditions. A production publisher may change a `current` target legitimately. The test user cannot write those paths, and check W below proves it.
 - Any difference in a compared field stops the run. The box stays unchecked, and every record is kept. The record classifies the difference as test-attributable, production-scheduled with its evidence, or unknown. A production-scheduled difference still fails the run. That run is repeated later, and the failed run is never counted as a pass. No production unit is repaired, restarted, or reloaded by the run.
+
+### Run listeners
+
+The product holds three mutexes for each data root, with the roles `host`, `admission`, and `keystore`. Each mutex is a TCP listener on `127.0.0.1`. Its port is `20000 + (the first four bytes of sha256("vonvon-bot-v2:<role>:<realpath of VONVON_HOME>"), read as a big-endian UInt32) mod 30000`, as `config/data-access.ts` computes it. On Windows the mutexes are named pipes.
+
+Production port set Π. Before each run, root reads the sources below read-only and records, for each source, either the ports it found or `unresolved`.
+
+- The listeners at B0, from `ss -ltnuH`.
+- Every unit file from `systemctl list-unit-files`, in the system manager and in every user manager. Read its `ListenStream`, its `ListenDatagram`, and every port that appears in `ExecStart*`, in `Environment`, and in the files that `EnvironmentFile` names.
+- The `listen` directives in `nginx -T`.
+- The BT panel's own port, and the port of each piece of software under `/www/server`, read from that software's configuration.
+- Every cron and timer command that the record already hashes, when that command starts a listener.
+- The fixed ports 22, 25, 80, 443, 8787, and 8888.
+
+If any source is `unresolved`, the Tencent host is not eligible for the run, and the box runs on the fallback VM. Π covers configuration as it was at preflight. A change made to production during the run is detected under the comparison rules, and nothing prevents it.
+
+Declared homes. Before preflight, the run ledger names exactly three data roots: `H_run`, which is the run's `VONVON_HOME`; `H_neg`, used in *Packaged build* step 7; and `H_smoke`, used in step 6. For each one, the test user creates the directory with `mkdir`, and `realpath` must print the same path. Root then computes the three role ports of each home. The resulting nine ports must be pairwise distinct, must all differ from `P`, and must all lie outside Π. If a home fails this check, the run picks a new name for it. `P` must lie outside `20000-49999` and outside Π. Every `vonvon service install` in the run passes `--port <P>`.
+
+R records are taken only at quiescent points: between steps, after every command that the step launched has exited. At a quiescent point, a listener that is not in B0 is allowed only when it is one of the following.
+
+1. `127.0.0.1:<P>`, held by the daemon of `H_run`.
+2. The port of (`H_run`, host), held by the daemon of `H_run`. Its `/proc/<pid>/cmdline` is the installed `bin/vonvon.mjs` running `daemon run`. When `H_run/daemon.pid` exists, it names this pid. If `P` is present in the record and its owner's `VONVON_HOME` is `H_run`, then `P` also has this pid.
+3. The port of (`H_run`, keystore), held by that daemon or by one of its Bot children, during a step that registers, refreshes, or onboards a bot, or removes a secret. A Bot child runs `daemon run --bot` and has that daemon's pid as its `PPid`.
+
+The `admission` role of any home, and every role of `H_neg` and `H_smoke`, are never allowed at a quiescent point.
+
+The proof for a listener has four ordered parts:
+
+1. Read field 22 of `/proc/<pid>/stat` as `b1`.
+2. Read `status` (Uid, PPid), `cgroup`, `exe`, `cmdline`, `environ`, and `readlink fd/<fd>`.
+3. Read field 22 again as `b2`.
+4. Read `readlink fd/<fd>` again.
+
+The proof holds only when all of the following are true:
+
+- Every read succeeded.
+- `b1 = b2`.
+- Both readlinks equal `socket:[<inode>]`, where the inode is the one `ss` reported.
+- The real and effective UID are `<U>`.
+- `exe` is `/home/vonvon-accept/.local/node/bin/node`.
+- `VONVON_HOME` in `environ` is the declared home.
+- The port is that home's port for the expected role.
+- The cmdline matches the listener's row above.
+- The cgroup is the caller's own: `app.slice/vonvon-bot.service` for the service daemon, the session's `session-<n>.scope` for a daemon started from SSH, or `app.slice/vonvon-bot-update-<hex>.scope` for a restart replacement. All three lie under `/user.slice/user-<U>.slice/`. A cgroup match never passes a proof alone.
+
+A failed read, a changed birth, or a changed fd makes the proof inconclusive. An inconclusive proof stops the run as a difference does, even when a legitimate holder has just exited. A listener that matches no row stops the run. No listener is allowed because of its UID, its process, or its port range alone. Production listeners are compared by address only. Records are snapshots, and they do not show what happened between two records.
+
+Root records `(pid, b1)` for every holder of the `H_run` host role.
+
+### Outside-home inventory
+
+Inventory I is taken by root. Record `findmnt -rn -o TARGET,FSTYPE,SOURCE,OPTIONS` before and after it. Then run:
+
+    find / \( -path /proc -o -path /sys -o -path /home/vonvon-accept \) -prune -o \( -uid <U> -o -gid <G> \) -printf '%y %i %n %U %G %m %s %T@ %p\n'
+
+The command does not use `-xdev`. The inventory is valid only when both mount tables are identical, `find` exits 0, and its stderr is empty. Otherwise it is inconclusive, and the gate stops.
+
+Each entry of I must be one of the following, shown by positive evidence:
+
+- An account artifact. An example is the mail spool, when `/etc/default/useradd` or `/etc/login.defs` shows that `useradd` creates it.
+- An entry under `/run/user/<U>`. That mount must be tmpfs with `uid=<U>`. Each socket under it must have an owner in `ss -xlpH` that is the user manager or one of its units.
+- The quarantined residue Q, matched exactly.
+
+Any other entry keeps T open.
+
+A valid inventory proves only that, at that moment, no such entry exists outside these classes. It does not prove that no write happened outside the home and was later removed.
+
+Hosts prepared under this text take I0 at step 7. On the current Tencent host, no inventory was taken before user workload, and I0 is recorded as `I0 unavailable`. Nothing that depends on I0 is claimed for that host.
 
 ## Sequence
 
 The protective baseline B0 comes before every write to the host. All steps run strictly in this order. A failed gate stops the sequence at that step.
 
-1. B0. Take record B. Gates: `systemctl --version` reports systemd 255, `stat -fc %T /sys/fs/cgroup` prints `cgroup2fs`, `cgroup.subtree_control` contains `memory`, `cpu`, and `pids`, and every start condition in the monitor table holds. If the cgroup mode is not `cgroup2fs`, the host is not eligible, and the work moves to the fallback VM.
+1. B0. Take record B. Gates: `systemctl --version` reports systemd 255, `stat -fc %T /sys/fs/cgroup` prints `cgroup2fs`, `cgroup.subtree_control` contains `memory`, `cpu`, and `pids`, and every start condition in the monitor table holds. If the cgroup mode is not `cgroup2fs`, the host is not eligible, and the work moves to the fallback VM. Root also builds Π under *Run listeners*. If any source is `unresolved`, the host is not eligible for the run, and the work moves to the fallback VM. For a host that has no `vonvon-accept` user yet, root picks a numeric `<U>` and `<G>` that are absent from `/etc/passwd` and `/etc/group`, records them, and takes inventory I with them. That inventory must be valid and empty.
 2. Create the user. Then take R.
 
    ```
-   useradd --create-home --shell /bin/bash --comment "vonvon native acceptance" vonvon-accept
-   id vonvon-accept
+   groupadd -g <G> vonvon-accept
+   useradd -u <U> -g <G> --create-home --shell /bin/bash --comment "vonvon native acceptance" vonvon-accept
+   id vonvon-accept                      # must print uid=<U> gid=<G>
    ```
 
 3. Apply the caps before any process of the user exists. `systemctl set-property` applies the values to the running manager and stores them under `/etc/systemd/system.control/`. It needs no `daemon-reload`. Then check V1 and take R.
@@ -142,9 +214,13 @@ The protective baseline B0 comes before every write to the host. All steps run s
    KEY
    ```
 
-7. Check W, as `vonvon-accept`. Each of these must fail: `test -w` on `/var/www`, `/var/www/vonvon-site/current`, `/var/www/notelet-site/current`, `/opt/vonvon-account`, `/etc/nginx`, `/etc/systemd/system`, and `/www/server` when it exists. Then take R.
+7. Check W, as `vonvon-accept`. Each of these must fail: `test -w` on `/var/www`, `/var/www/vonvon-site/current`, `/var/www/notelet-site/current`, `/opt/vonvon-account`, `/etc/nginx`, `/etc/systemd/system`, and `/www/server` when it exists. Then take R. Then root takes inventory I0. It must be valid, and each entry must be classified under *Outside-home inventory*.
 8. User-level setup over SSH as `vonvon-accept`. Take R after each line that changes state: the Node install, the clone, `npm ci`, `npm run build`, the pack, and the global install.
 9. The acceptance run, with R before and after each native step or lane.
+   - Before the first step, the test user saves `systemctl --user show-environment` as E0, decoded into a sorted map. E0 states whether `TMPDIR` is absent, present and empty, or present with a value. If the command fails or its output cannot be decoded, the run has no valid E0. The run then stops before its first native action, and the next item does not run.
+   - With a valid E0, the test user runs `systemctl --user set-environment TMPDIR=/home/vonvon-accept/tmp`, then reads and decodes `show-environment` again. The new map must equal E0 except that `TMPDIR` is `/home/vonvon-accept/tmp`. Only then does the ledger record `setup=done`, and only `setup=done` permits native actions. If the command fails, the readback fails, or the map differs in any other way, the run stops and goes to T. Step 8 of T restores the environment whatever the command did.
+   - After each daemon start, the first R reads `/proc/<pid>/environ` of the daemon and of every process in a `vonvon-bot-update-*.scope`. Each one must contain that `TMPDIR`.
+   - The service gets the manager's environment when it starts. A restart helper inherits the daemon's environment (`host/lifecycle.ts`), not the manager's.
 10. Owned teardown T.
 11. The final record B, compared with B0.
 
@@ -174,8 +250,8 @@ Writes that preparation makes as root, and nothing else: the user and its home, 
   ```
 
   Pass when every path begins with `/user.slice/user-<U>.slice/`. While a daemon, bridge, provider, build, or pack runs, its pid must be in the list.
-- The daemon listens only on `127.0.0.1:<P>`. `P` is absent from the B0 listener list and is never 22, 25, 80, 443, 8787, or 8888.
-- The run writes only under `/home/vonvon-accept`. At the end, `find /tmp /var/tmp -xdev -user vonvon-accept` must print nothing.
+- The daemon listens only on `127.0.0.1:<P>` and on the mutex ports that *Run listeners* allows. `P` lies outside Π and outside `20000-49999`.
+- The run writes only under `/home/vonvon-accept`. SSH sessions export `TMPDIR` under the home before any setup work. Manager-launched processes get it from Sequence step 9. A process that clears its environment can still write to `/tmp`. The check is therefore inventory I, and `TMPDIR` is not the check.
 - Node 22 is a user-local tarball from nodejs.org. It is pinned to the exact `22.x.y` that the Mac evidence manifest of the same head records, and its sha256 is checked against that release's `SHASUMS256.txt`. `/usr/bin/node` is never used or replaced.
 - No self-hosted GitHub runner is registered on the host. No workflow file references the host, and GitHub stores no credential for it.
 
@@ -198,8 +274,8 @@ The Linux half of a native box uses the `global-npm` distribution. The plan requ
    ```
 
    The install must succeed with no network fetch, which proves that the tarball carries every runtime dependency.
-6. Run `node scripts/smoke-vonvon-bot-package.mjs --installed "$(npm root -g)/vonvon-bot" --port <P> --manifest ~/artifacts/a/vonvon-bot-<version>.tgz.manifest.json` from clone A. It must exit 0.
-7. Negative control. With a throwaway `VONVON_HOME`, `node ~/src/vonvon-bot/packages/daemon/bin/vonvon.mjs service install --port <P>` from clone A must report `install_refused` and write nothing. The checkout is `development`.
+6. Run `node scripts/smoke-vonvon-bot-package.mjs --installed "$(npm root -g)/vonvon-bot" --port <P> --manifest ~/artifacts/a/vonvon-bot-<version>.tgz.manifest.json --home <H_smoke>` from clone A. It must exit 0, and its first stdout line must name `<H_smoke>`. Until the script accepts `--home`, this step stays blocked on a shared host.
+7. Negative control. With `VONVON_HOME=<H_neg>`, `node ~/src/vonvon-bot/packages/daemon/bin/vonvon.mjs service install --port <P>` from clone A must report `install_refused` and write nothing. The checkout is `development`.
 8. The native box runs `vonvon` from the global install only. Its install step must not refuse the distribution. The unit it writes must name the canonical Node executable and `<npm root -g>/vonvon-bot/bin/vonvon.mjs`, and its `Environment="PATH=..."` must contain `$HOME/.local/node/bin`.
 9. `native-systemd.txt` records the frozen head, the lockfile sha256, the Node and npm versions, the sha256 values from steps 2 and 4, the checker and smoke outputs, the install outputs, and the sha256 of the tarball's `build-manifest.json`.
 
@@ -222,7 +298,14 @@ Dedicated branch, after steps 1 to 4:
 6. No owned process remains.
    - Linux. Under `/sys/fs/cgroup/user.slice/user-<U>.slice/user@<U>.service`, every `cgroup.procs` file outside `init.scope` is empty. No session scope of the user other than the current SSH session has a process.
    - Mac. `pgrep -U manzana -lf 'vonvon|feishu-codex-bridge|node|codex|claude'` prints nothing.
-7. Only after steps 1 to 6 pass, delete the run's `VONVON_HOME`, the test user's `~/.feishu-codex-bridge`, the bridge clone, and the product clone. Before each deletion, the canonical path must begin with `/home/vonvon-accept/` or `/Users/manzana/`. On Linux, after the last run of a frozen head, also run `npm uninstall -g vonvon-bot` and delete `~/artifacts`.
+7. Linux. No port of any declared home is in `ss -ltnupeH`. If one is present, record its proof under *Run listeners*, stop with `teardown-blocked`, and send no signal. Every `(pid, b1)` that held the `H_run` host role matches a daemon start named in the run transcript, and none of them still runs.
+8. Linux. Restore the manager environment. If the run has no valid E0, this step changes nothing and passes, because Sequence step 9 then never changed the environment. Otherwise the test user reads and decodes `systemctl --user show-environment`, and compares it with E0.
+   - If the map equals E0, nothing is changed.
+   - If it differs from E0 only in `TMPDIR`, restore that key. If E0 had `TMPDIR`, run `systemctl --user set-environment TMPDIR=<E0 value>`. The value may be empty. If E0 had no `TMPDIR`, run `systemctl --user unset-environment TMPDIR`. Then read and decode again. The map must equal E0.
+   - If any other key differs, or a read, a decode, or the restore command fails, change nothing more and stop with `teardown-blocked`.
+   - This step does not depend on `setup=done`. It acts only on a difference in `TMPDIR` from a valid E0, so running it again converges.
+9. Linux. Root takes inventory I. It must be valid, and every entry must be classified under *Outside-home inventory*.
+10. Only after steps 1 to 9 pass, delete the run's `VONVON_HOME`, the test user's `~/.feishu-codex-bridge`, the bridge clone, and the product clone. Before each deletion, the canonical path must begin with `/home/vonvon-accept/` or `/Users/manzana/`. On Linux, after the last run of a frozen head, also run `npm uninstall -g vonvon-bot` and delete `~/artifacts`.
 
 `clay` branch, after steps 1 to 4:
 
@@ -239,6 +322,27 @@ Dedicated branch, after steps 1 to 4:
 8. Only after steps 1 to 7 pass, delete the run's `VONVON_HOME` and nothing else. The canonical path must be the run-owned temporary directory recorded at preflight. The branch never deletes or edits `~/.feishu-codex-bridge`, `~/.vonvon-bridge`, `~/.vonvon-bot`, any LaunchAgent other than the run's own Vonvon plist that `uninstall` removed, or any bridge clone.
 
 When any step fails, teardown stops there. It deletes nothing, signals no process, and records `teardown-blocked` with the failing output. The run's `VONVON_HOME` and every lock in it stay in place, and the test bot stays held for the blocked run. In `clay`, a difference in the bridge record also fails the box under the plan's existing rule, and the bridge is never restarted to repair it. No run that uses the test bot starts in any context until a later teardown of the blocked run passes. A product command that cannot reach its own owner is a product finding returned through the PR.
+
+Quarantined residue Q. One residue on the Tencent host is quarantined. It is not deleted.
+
+- `C` is `/tmp/node-compile-cache/v22.22.0-x64-9de703df-1002`.
+- `D` is `/tmp/node-compile-cache`.
+
+Q is recorded once, by root, read-only. It contains:
+
+- `stat -c '%F %u %g %a %i %d %h'` of `/tmp`, `D`, and `C`;
+- `find "$D" -maxdepth 1 -printf '%y %i %U %G %m %p\n'`;
+- `find "$C" -printf '%y %i %n %U %G %m %s %T@ %D %p\n'`;
+- the sha256 of each regular file under `C` only;
+- the stderr and exit status of each command.
+
+Nothing in `C` or `D` is copied, moved, renamed, re-permissioned, or opened for writing.
+
+Every later inventory must show `C` identical to Q in inode, link count, owner, mode, size, mtime, and hash. Any change is a difference.
+
+The run that created Q failed. Its T stays open with the reason `quarantined residue Q`, and it is never recorded as passed. "No service runs and the final B matches B0" does not mean T passed.
+
+Removing Q needs a separately reviewed deletion protocol, and this document authorizes none.
 
 Retirement. When the program no longer needs the Linux host, the root runs teardown T, then `loginctl disable-linger vonvon-accept`, `systemctl revert user-<U>.slice`, and `userdel -r vonvon-accept`. It then takes record B and compares it with the B0 taken before preparation step 2, with no owned additions allowed.
 
