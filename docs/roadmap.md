@@ -88,7 +88,7 @@ Codex 可以并行开发，本机同时最多一个根代理加三个工作代�
 - 每个版本一个父 issue（#123 工具，#124 V5 到 #135 V11），子 issue 是按文件不重叠切出的任务分区、证据门、根代理交接和该版本的缺陷。版本之间的合并前提和任务之间的依赖都用 GitHub 的 blocked by 关系表示。只有用户能做的事是 #205 到 #209，指派给用户。GitHub 项目 “Vonvon Bot v2” 收录全部 issue，可在那里按状态和版本看板视图。
 - 状态由根代理维护：任务开始时加 `state:in-progress`，分区集成且测试通过后关闭；版本在四个节点换标签，`state:code-ready`、`state:frozen`、`state:verified`，PR 合入后关闭。实现中发现的缺陷新开 issue 挂到对应版本并打 `version:<编号>` 标签。
 - 改任务图（新增分区、改任务依赖、V5 拆分）先改 `docs/program-graph.json` 再运行 `node scripts/program-graph-sync.mjs sync`。同步是幂等的：补建缺的 issue、更新标题和正文、补链接和标签，不删除任何东西。Codex 可以增减不影响架构、数据形状和合并边的任务；要改合并边的交回 Claude Code 改计划。
-- Codex 的两项工具任务：#203 用 issue 事件触发看板刷新的工作流，#204 把 CI 改成冻结 head 触发。
+- 进度网页：`node scripts/program-graph-sync.mjs html <目录>` 生成和看板同内容的独立网页。Codex 的任务 #203 先于一切实现任务落地：工作流每 2 小时、以及 issue 有变化时刷新看板并把网页发布到 GitHub Pages，网页地址写在 PR 里。另一项工具任务 #204 把 CI 改成冻结 head 触发。
 
 ## CI
 

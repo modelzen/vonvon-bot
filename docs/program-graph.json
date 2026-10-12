@@ -2,7 +2,12 @@
   "repo": "modelzen/vonvon-bot",
   "project": "Vonvon Bot v2",
   "operatorLogin": "ClayCheung",
-  "merged": ["V1", "V2", "V3", "V4"],
+  "merged": [
+    "V1",
+    "V2",
+    "V3",
+    "V4"
+  ],
   "versions": [
     {
       "id": "V5",
@@ -10,7 +15,9 @@
       "branch": "codex/v5-desktop",
       "pr": 110,
       "owner": "client",
-      "mergeAfter": ["V4"],
+      "mergeAfter": [
+        "V4"
+      ],
       "acceptance": "真实 Electron 窗口、旧版 daemon 构建、Mac 图形会话（clay）、Linux 专用用户 vonvon-accept 的 systemd 用户会话",
       "plan": "Wrap the UI in an Electron shell that runs the daemon (V5)",
       "note": "计划允许 V5 按验收条件拆成两个 PR：V5a 外壳（T1、T6、T7 和外壳相关 lane）先落地，`service install` 和 `uninstall` 保持 V3 的拒绝；V5b 服务（T3、T4、T5、T8、T9）随后。是否拆分由 Codex 按分支状态决定并在 PR 里写明。V10 只等外壳部分。"
@@ -21,7 +28,9 @@
       "branch": "codex/v6a-provider-core",
       "pr": 117,
       "owner": "providers",
-      "mergeAfter": ["V4"],
+      "mergeAfter": [
+        "V4"
+      ],
       "acceptance": "Mac 和 Linux 主机跑进程测试，飞书测试 Bot 跑上传 lane",
       "plan": "Provider core, process host, and outbound gate (V6a)",
       "note": "和 V5 谁先验完谁先合。发布冻结点 F6。"
@@ -31,7 +40,9 @@
       "title": "V6b 运行时、Codex 与 Claude 引擎、调用方切换",
       "branch": "codex/v6b-provider-runtime",
       "owner": "providers",
-      "mergeAfter": ["V6a"],
+      "mergeAfter": [
+        "V6a"
+      ],
       "acceptance": "飞书测试 Bot、托管 Codex、真实 Claude Code CLI、Linux 主机跑第 6 路",
       "plan": "Runtime, Codex and Claude engines, and the consumer cut-over (V6b)"
     },
@@ -40,7 +51,9 @@
       "title": "V6c 运行卡片的基线能力",
       "branch": "codex/v6c-run-card",
       "owner": "providers",
-      "mergeAfter": ["V6b"],
+      "mergeAfter": [
+        "V6b"
+      ],
       "acceptance": "飞书测试 Bot、Codex、Claude",
       "plan": "Baseline capabilities on the run card (V6c)",
       "note": "和 V6d 文件不重叠，先后无关。"
@@ -50,7 +63,9 @@
       "title": "V6d Claude Code 的 qa 与 write 档",
       "branch": "codex/v6d-claude-confinement",
       "owner": "providers",
-      "mergeAfter": ["V6b"],
+      "mergeAfter": [
+        "V6b"
+      ],
       "acceptance": "Mac 和 Linux 上的真实 Claude Code CLI，Linux 有 bwrap",
       "plan": "Claude confinement (V6d)",
       "note": "和 V6c 文件不重叠，先后无关。"
@@ -60,7 +75,9 @@
       "title": "V7a ACP 引擎：Cursor、Grok、自定义 ACP",
       "branch": "codex/v7a-acp",
       "owner": "providers",
-      "mergeAfter": ["V6b"],
+      "mergeAfter": [
+        "V6b"
+      ],
       "acceptance": "Mac 上安装并登录的 cursor-agent 和 grok（用户账号），网页选择器 lane，飞书测试 Bot",
       "plan": "ACP engine with Cursor, Grok, and custom ACP (V7a)"
     },
@@ -69,7 +86,9 @@
       "title": "V7b Pi 引擎",
       "branch": "codex/v7b-pi",
       "owner": "providers",
-      "mergeAfter": ["V7a"],
+      "mergeAfter": [
+        "V7a"
+      ],
       "acceptance": "Mac 或 Linux 主机上安装的 pi，飞书测试 Bot",
       "plan": "Pi engine (V7b)"
     },
@@ -78,7 +97,9 @@
       "title": "V7c 跨系统证明与 Windows 验收",
       "branch": "codex/v7c-proofs",
       "owner": "providers",
-      "mergeAfter": ["V7b"],
+      "mergeAfter": [
+        "V7b"
+      ],
       "parked": "没有 Windows 主机。V7c 是叶子，不挡任何版本。",
       "acceptance": "装有 Codex 和 Claude Code 的 Windows 主机，Linux 主机",
       "plan": "Cross-OS proofs and Windows acceptance (V7c)"
@@ -88,7 +109,9 @@
       "title": "V8 导入 bridge 数据并关停旧服务",
       "branch": "codex/v8-bridge-import",
       "owner": "platform",
-      "mergeAfter": ["V4"],
+      "mergeAfter": [
+        "V4"
+      ],
       "acceptance": "Mac 上 manzana 的图形会话（gui/502），Linux 上 vonvon-accept，各自装有 bridge 446b2a4，飞书测试 Bot",
       "plan": "Import bridge data and shut the bridge down (V8)",
       "note": "导入写入 bridge 原有的 provider 编号，由 V6b 的加载时迁移处理，所以和 V6b 先后无关。"
@@ -98,7 +121,9 @@
       "title": "V9 bridge 收尾版本（仓库 modelzen/feishu-codex-bridge）",
       "branch": "codex/v9-owner-notice",
       "owner": "providers",
-      "mergeAfter": ["V8"],
+      "mergeAfter": [
+        "V8"
+      ],
       "acceptance": "V5 发布的签名安装包公开地址",
       "plan": "Ship the bridge release that points users to Vonvon Bot (V9)",
       "note": "PR 在 modelzen/feishu-codex-bridge。"
@@ -108,7 +133,9 @@
       "title": "V10 账号与机器列表",
       "branch": "codex/v10-accounts",
       "owner": "platform",
-      "mergeAfter": ["V5"],
+      "mergeAfter": [
+        "V5"
+      ],
       "acceptance": "两个 daemon、本地云端（Postgres 和开发登录）、第 8 路要 V5 外壳",
       "plan": "Add accounts and the machine list (V10)",
       "note": "发布冻结点 F10。只等 V5 的外壳部分。"
@@ -118,110 +145,1228 @@
       "title": "V11 加密中继远程管理",
       "branch": "codex/v11-relay",
       "owner": "platform",
-      "mergeAfter": ["V10"],
+      "mergeAfter": [
+        "V10"
+      ],
       "acceptance": "V10 的云端，第 7 路要 V5 外壳",
       "plan": "Manage any machine remotely through an encrypted relay (V11)"
     }
   ],
   "tasks": [
-    { "id": "V5-T1", "parent": "V5", "title": "外壳：main、daemon-manager、preload、tray、updates 与 electron-builder", "scope": ["packages/desktop/src/main.ts", "daemon-manager.ts", "tray.ts", "updates.ts", "preload.ts", "packages/desktop/electron-builder.yml", "packages/desktop/test/daemon-manager.test.ts"], "blockedBy": [], "done": "附着运行中的 daemon、无 daemon 时拉起、注册为 ours 时走 `vonvon daemon start`、协议版本不匹配提示，四个单元用例通过；真实窗口显示 Bot 列表。", "plan": "V5 *Build* 前三条与 *Verify, unit* 第一条" },
-    { "id": "V5-T2", "parent": "V5", "title": "服务标识、定义编解码与读回分类（纯逻辑）", "scope": ["packages/daemon/src/service/identity.ts", "service/definition.ts", "service/registration.ts", "test/service-identity.test.ts", "test/service-definition.test.ts"], "blockedBy": [], "status": "done", "done": "计划记录已在 51f5d1e 审查并推送。", "plan": "V5 *Daemon files*" },
-    { "id": "V5-T3", "parent": "V5", "title": "服务事务：launchd、systemd、Windows 的 install/uninstall、drain 与 Gate M", "scope": ["service/launchd.ts", "systemd.ts", "win-startup.ts", "adapter.ts", "common.ts", "service/drain.ts", "service/distribution.ts", "cli/commands/service.ts", "test/service-transaction.test.ts"], "blockedBy": ["V5-T2"], "done": "*Outcomes* 每一行在适用平台各有一个用例；Gate M 的确定性测试通过；在全部集成前 `install` 和 `uninstall` 保持拒绝。", "plan": "V5 *Install transaction*、*Uninstall transaction*、*Service gate contracts* Gate M" },
-    { "id": "V5-T4", "parent": "V5", "title": "daemon 启动路径：Pre-lock guard、Gate L、runStart 经管理器、状态读回", "scope": ["host/bootstrap.ts", "host/lifecycle.ts", "host/service.ts", "cli/commands/daemon.ts", "cli/commands/run.ts（仅退出码映射）", "test/service-launch.test.ts"], "blockedBy": ["V5-T2"], "done": "guard 的真实调用链用例、子进程用例、托管核心更新用例、Linux Gate L 的确定性测试通过。", "plan": "V5 *Exit codes*、*Pre-lock guard*、*Service gate contracts* Gate L" },
-    { "id": "V5-T5", "parent": "V5", "title": "开机自动运行：login-item.ts 与托盘开关", "scope": ["packages/desktop/src/login-item.ts", "tray 菜单项"], "blockedBy": ["V5-T1", "V5-T3"], "done": "开关调用 `vonvon service install` 和 `uninstall`；lane 6 和 lane 7 可演练。", "plan": "V5 *Build* 第四条" },
-    { "id": "V5-T6", "parent": "V5", "title": "global-npm 包：stage、pack、check、smoke 脚本与 UI 根路径解析", "scope": ["scripts/stage-daemon.mjs", "scripts/pack-vonvon-bot.mjs", "scripts/check-vonvon-bot-package.mjs", "scripts/smoke-vonvon-bot-package.mjs", "scripts/vonvon-bot-install-scripts.json", "scripts/package-tools.test.mjs", "server/web-ui.ts（仅根路径）", "test/web-ui-root.test.ts"], "blockedBy": [], "done": "打出的 tgz 能被 systemd 那一半的原生验收安装；包测试通过。", "plan": "V5 *Package*" },
-    { "id": "V5-T7", "parent": "V5", "title": "根代理交接：cli/index.ts 的 service 选项、桌面依赖与 pack 脚本", "scope": ["packages/daemon/src/cli/index.ts（`install --port <P>`、`status --json`）", "根 package.json 与 lockfile", "`pack:vonvon-bot` 脚本"], "blockedBy": [], "root": true, "done": "两个选项加入现有 service 登记，lockfile 用 `npm install` 重生成。", "plan": "V5 *Daemon files* Root handoffs、*Shared files*" },
-    { "id": "V5-T8", "parent": "V5", "title": "Linux 原生验收：vonvon-accept 上的 systemd、Gate L、安装回滚与卸载", "scope": ["腾讯云主机 101.34.213.231 的 vonvon-accept 用户"], "blockedBy": ["V5-T3", "V5-T4", "V5-T6"], "acceptance": "每次运行前 B0 核对 systemd 255 和 cgroup2 统一层级", "done": "助手活过 exit 75；回滚与卸载的每个 Outcome 在真实 systemd 上复现；证据绑定准确 head。", "plan": "V5 *Native acceptance environment*、native-acceptance-hosts.md" },
-    { "id": "V5-T9", "parent": "V5", "title": "Mac 原生验收：clay 中的 launchd、Gate M、Open at login 与 lane 6、7", "scope": ["用户账号 clay，运行自建的临时 VONVON_HOME"], "blockedBy": ["V5-T3", "V5-T4", "V5-T5"], "acceptance": "开跑前确认 clay 没有 com.vonvon.bot.daemon；记录在用 bridge 的 pid、启动时间和监听，任何变化即判失败", "done": "Gate M 的卸载屏障、回滚、pid 复用迹在真实 launchd 上复现；lane 6 和 lane 7 通过。", "plan": "V5 *Native acceptance environment*" },
-    { "id": "V5-T10", "parent": "V5", "title": "冻结 head 门：十路实时、性能、独立审查、评审视频与 Shipping", "scope": ["十路 lane、perf 探测、两条审查 lane、V5-review.mp4"], "blockedBy": ["V5-T1", "V5-T3", "V5-T4", "V5-T5", "V5-T6", "V5-T7", "V5-T8", "V5-T9"], "gate": true, "done": "准确 head 的 Linux、Windows、Mac CI 成功；全部 lane PASS；独立 Shipping 判定干净。", "plan": "V5 *Verify, live*、*Verify, perf*、*Merge*" },
-    { "id": "V5-T11", "parent": "V5", "title": "发布：签名、公证的桌面安装包与公开下载页", "scope": ["electron-builder 产物、签名与公证、发布页"], "blockedBy": ["V5-T10"], "done": "公开可访问的安装包地址，供 V9 的 lane 10 使用。", "plan": "V9 *Depends on*" },
-
-    { "id": "V6a-T1", "parent": "V6a", "title": "合同文件与 F6：model.ts、engine.ts、registry.ts 的 Registration、enforcement.ts", "scope": ["provider/model.ts", "provider/engines/engine.ts", "provider/registry.ts（仅 Registration 类型）", "provider/policy/enforcement.ts", "test/provider/turn-machine.test.ts", "enforcement.test.ts"], "blockedBy": [], "status": "in-progress", "freeze": "F6", "done": "四个文件与 providers.md 的列表一致，typecheck 干净，两组测试通过；根代理记录 F6 的 SHA。", "plan": "V6a *Files*、*Contracts*、Parallel execution 的 F6" },
-    { "id": "V6a-T2", "parent": "V6a", "title": "纯运行时单元：turn-machine、run-channel、subagent-ledger、todo-tracker、image-sink", "scope": ["provider/runtime/turn-machine.ts", "run-channel.ts", "subagent-ledger.ts", "todo-tracker.ts", "image-sink.ts", "对应测试"], "blockedBy": ["V6a-T1"], "status": "in-progress", "done": "停止阶梯、唯一 outcome、账本容量 64/5/200/600、图片先落盘的测试全部通过。", "plan": "V6a *Stop ladder*、*Verify, unit*" },
-    { "id": "V6a-T3", "parent": "V6a", "title": "传输层：jsonrpc.ts（迁自 app-server-client）与 jsonl.ts", "scope": ["provider/transport/jsonrpc.ts", "provider/transport/jsonl.ts", "旧入口的兼容转出", "jsonrpc.test.ts", "jsonl.test.ts"], "blockedBy": [], "status": "in-progress", "done": "拆帧、合帧、服务端请求、逐请求超时、EOF 终态的用例通过；现有 Codex 调用方行为不变。", "plan": "V6a *Files*" },
-    { "id": "V6a-T4", "parent": "V6a", "title": "进程托管：process-host、ledger、sweep、helper-client 与原生 owner helper（POSIX、Windows）", "scope": ["provider/process/process-host.ts", "process/ledger.ts", "process/sweep.ts", "process/helper-client.ts", "packages/daemon/native/owner-helper/", "test/provider/fixtures/fake-child.mjs", "process-host.test.ts", "process-sweep.test.ts"], "blockedBy": ["V6a-T1"], "docs": "合同在 PR #121（claude/process-identity）定义，合并后按其执行", "done": "忽略 SIGTERM 的子进程在 TERM_WAIT 后被 SIGKILL；启动扫描零信号；drained 标记；legacy 记录只列不动。", "plan": "V6a *Files*、providers.md *Process identity*" },
-    { "id": "V6a-T5", "parent": "V6a", "title": "原生 helper 的五平台构建与签名流水线", "scope": ["native/bin/<platform>-<arch>/ 的构建脚本", "darwin 签名与公证"], "blockedBy": ["V6a-T4"], "done": "五个目标产物随 daemon 包发布，Mac 产物签名通过 spctl 检查。", "plan": "V6a *Native helper build*" },
-    { "id": "V6a-T6", "parent": "V6a", "title": "出站门：outbound/policy.ts、address.ts 与两个上传器的接线（修复 #114）", "scope": ["outbound/policy.ts", "outbound/address.ts", "card/outbound-images.ts", "bot/outbound-files.ts", "outbound-policy.test.ts", "outbound-address.test.ts"], "blockedBy": [], "status": "in-progress", "done": "符号链接越界被拒；网络关闭时远程抓取在 DNS 之前返回；HTTP 抓取经过地址判定与固定连接。本地路径门已完成，远程 HTTP 门未完成。", "plan": "V6a *Files*、issue #114" },
-    { "id": "V6a-T7", "parent": "V6a", "title": "主机探测与证明登记：host-probe、proofs.ts、messages", "scope": ["provider/policy/host-probe.ts", "policy/proofs.ts", "policy/messages.ts", "真实命令执行器与 doctor 接线"], "blockedBy": ["V6a-T1"], "status": "in-progress", "done": "启动探测缓存、串行刷新、真实执行器注入；`vonvon doctor` 显示各 provider 的档位。", "plan": "V6a *Files*" },
-    { "id": "V6a-T8", "parent": "V6a", "title": "冻结 head 门：十路实时（含 10 和 10b）、性能、独立审查与 Shipping", "scope": ["lane 1 到 10b、perf 探测、审查 lane"], "blockedBy": ["V6a-T1", "V6a-T2", "V6a-T3", "V6a-T4", "V6a-T5", "V6a-T6", "V6a-T7"], "gate": true, "done": "准确 head 三平台 CI 成功；全部 lane PASS；上传与首 token 不慢于 main 5%。", "plan": "V6a *Verify, live*、*Verify, perf*" },
-
-    { "id": "V6b-T1", "parent": "V6b", "title": "ProviderRuntime、provider/index.ts、watchdog 与 REGISTRY", "scope": ["provider/runtime/provider-runtime.ts", "provider/index.ts", "provider/runtime/watchdog.ts", "provider/registry.ts 的 REGISTRY", "provider-runtime.test.ts", "registry.test.ts"], "blockedBy": ["V6a-T1"], "done": "可编程假引擎下的停止、忙碌、队列、关闭用例通过；额外假 id 无需改动即出现在选择器。", "plan": "V6b *Files*" },
-    { "id": "V6b-T2", "parent": "V6b", "title": "Codex 引擎：engine、translate、sandbox、pool、usage、install、table 与录制夹具", "scope": ["provider/engines/codex/*.ts", "迁入的 managed-install 等文件", "codex-translate.test.ts", "codex-sandbox.test.ts", "scripts/record-fixture.mjs --provider codex"], "blockedBy": ["V6a-T1", "V6a-T3"], "done": "全部夹具回放通过；每个 Codex 行与系统的 NativeSettings 快照一致，full 与 main 字节相同。", "plan": "V6b *Codex mapping*" },
-    { "id": "V6b-T3", "parent": "V6b", "title": "Claude 引擎（只开 full）：engine、translate、options、gate、history、table", "scope": ["provider/engines/claude/*.ts", "claude-translate.test.ts", "claude-options.test.ts", "claude-gate.test.ts（基础）"], "blockedBy": ["V6a-T1", "V6a-T4"], "done": "`spawnClaudeCodeProcess` 经 ProcessHost.adopt；full 的 options 快照；夹具回放通过。", "plan": "V6b *Claude mapping*" },
-    { "id": "V6b-T4", "parent": "V6b", "title": "卡片层：run-view、outcome-note、messages.zh 与 run-card 改造", "scope": ["card/run-view.ts", "card/outcome-note.ts", "card/messages.zh.ts", "card/run-card.ts", "card/run-process.ts", "card/tool-render.ts", "card/history-card.ts", "run-view.test.ts"], "blockedBy": ["V6a-T1"], "done": "每种 StepDetail 和每种结果说明的飞书 JSON 快照通过；卡片不出现 provider 编号。", "plan": "V6b *Files*" },
-    { "id": "V6b-T5", "parent": "V6b", "title": "调用方切换：39 个源文件、删除 agent/、72 个测试映射、TitleService、存量数据迁移", "scope": ["bot/、card/、admin/、host/、project/、server/、cli/、config/ 的调用方", "删除 agent/**", "title-service.test.ts", "stored-data.test.ts", "message-queue-races.test.ts"], "blockedBy": ["V6b-T1", "V6b-T2", "V6b-T3", "V6b-T4", "V6b-T7", "V6a-T2", "V6a-T6", "V6a-T7"], "done": "`git grep \"from '.*agent/\"` 在 provider/ 之外为空；测试映射表附在 PR；main 时期数据加载后结果相同。", "plan": "V6b *Files*、*Stored data*、*Test mapping*" },
-    { "id": "V6b-T6", "parent": "V6b", "title": "prove-enforcement.mjs 与 Codex 探针（Mac、Linux）", "scope": ["scripts/prove-enforcement.mjs", "docs/proofs.md", "policy/proofs.ts 的 Codex 条目"], "blockedBy": ["V6b-T2"], "done": "四个 darwin 探针和 Linux 探针录入，对应格翻为 enforced，auditTable 为绿。", "plan": "V6b *Verify, unit* 最后一条" },
-    { "id": "V6b-T7", "parent": "V6b", "title": "根代理交接：domain.ts 的 readScope、SDK 依赖移到 dependencies、snapshot.ts 查找改写", "scope": ["packages/protocol/src/domain.ts", "packages/daemon/package.json（claude-agent-sdk 0.3.246）", "server/snapshot.ts"], "blockedBy": [], "root": true, "done": "readScope 加入 setPermission 与 membershipSchema.permission；lockfile 重生成。", "plan": "V6b *Dependencies*、*Shared files*" },
-    { "id": "V6b-T8", "parent": "V6b", "title": "冻结 head 门：十二路实时、性能、独立审查与 Shipping", "scope": ["lane 1 到 12、perf 探测、审查 lane"], "blockedBy": ["V6b-T1", "V6b-T2", "V6b-T3", "V6b-T4", "V6b-T5", "V6b-T6", "V6b-T7"], "gate": true, "done": "首 token 不慢于 V6a 5%，停止不超 11.5 s，渲染不超 50 ms；升级 lane 通过。", "plan": "V6b *Verify, live*、*Verify, perf*" },
-
-    { "id": "V6c-T1", "parent": "V6c", "title": "卡片区域：subagent-area、todo-line、image-rows、完整过程卡片与预算", "scope": ["card/subagent-area.ts", "card/todo-line.ts", "card/image-rows.ts", "card/subagent-history-card.ts", "card/card-budget.ts", "card/run-card.ts 组合", "四组测试与 fixtures/card/*.json"], "blockedBy": ["V6b-T1", "V6b-T4"], "done": "分配合计 170 组件、28000 字节；最坏夹具在两道上限内；各区域溢出规则有用例。", "plan": "V6c *Layout*、*Verify, unit*" },
-    { "id": "V6c-T2", "parent": "V6c", "title": "按钮路由：查看完整过程与单个子 agent 停止", "scope": ["bot/handle-message.ts 的两个按钮分支"], "blockedBy": ["V6c-T1", "V6b-T5"], "done": "停止按钮只在 `features.subagentStop !== 'none'` 时存在；路由到 Run.stopSubagent 与 history。", "plan": "V6c *Files* 第二条" },
-    { "id": "V6c-T3", "parent": "V6c", "title": "冻结 head 门：十路实时、性能、独立审查与 Shipping", "scope": ["lane、perf、审查"], "blockedBy": ["V6c-T1", "V6c-T2"], "gate": true, "done": "最坏渲染不超 80 ms；更新频率不超现有节流。", "plan": "V6c *Verify, live*、*Verify, perf*" },
-
-    { "id": "V6d-T1", "parent": "V6d", "title": "Claude qa 与 write 档：options、gate、table、锁校验与测试", "scope": ["provider/engines/claude/options.ts", "gate.ts", "table.ts", "claude-gate.test.ts（扩展）", "claude-table.test.ts", "claude-locks.test.ts"], "blockedBy": ["V6b-T3"], "done": "每个受限格 permissionMode 为 default；路径门用例全部通过；缺锁时拒绝启动。", "plan": "V6d *Gate*、*Bash*、*Verify, unit*" },
-    { "id": "V6d-T2", "parent": "V6d", "title": "Claude 探针：Mac 与 Linux（bwrap）九个探针录入并翻格", "scope": ["scripts/prove-enforcement.mjs claude", "docs/proofs.md", "policy/proofs.ts"], "blockedBy": ["V6d-T1"], "acceptance": "Mac 与 Linux 主机上的真实 Claude Code，Linux 有 bwrap", "done": "九个探针通过，darwin 与 linux 格翻为 enforced，win32 保持 refuse。", "plan": "V6d *Verify, unit* 最后一条" },
-    { "id": "V6d-T3", "parent": "V6d", "title": "冻结 head 门：十路实时、性能、独立审查与 Shipping", "scope": ["lane、perf、审查"], "blockedBy": ["V6d-T1", "V6d-T2"], "gate": true, "done": "钩子延迟与 qa 首 token 在规则内。", "plan": "V6d *Verify, live*、*Verify, perf*" },
-
-    { "id": "V7a-T1", "parent": "V7a", "title": "ACP 客户端与帧翻译、fake-acp 夹具", "scope": ["provider/engines/acp/client.ts", "translate.ts", "test/provider/fixtures/fake-acp.mjs", "acp-client.test.ts", "acp-translate.test.ts", "devDependency @agentclientprotocol/sdk ^0.17.1（类型）"], "blockedBy": ["V6a-T1", "V6a-T3"], "done": "未知 session/update 到方言；initialize 不宣告 fs 和 terminal；权限请求同步答复。", "plan": "V7a *Client*" },
-    { "id": "V7a-T2", "parent": "V7a", "title": "录制 Cursor 与 Grok 原始帧（需要用户账号）", "scope": ["scripts/record-fixture.mjs --provider cursor|grok", "探针 cursor.initialize、cursor.full-turn、grok.three-turns 等"], "blockedBy": ["OP-3"], "done": "原始 JSON 行保存为夹具，PR 记录 provider 版本。录到之前相关格按“没有”处理。", "plan": "V7a *Files* 第四条、roadmap *要验证的事*" },
-    { "id": "V7a-T3", "parent": "V7a", "title": "方言：cursor、grok、custom 与 tables", "scope": ["provider/engines/acp/dialect.ts", "dialects/cursor.ts", "grok.ts", "custom.ts", "tables.ts", "grok-dialect.test.ts", "cursor-dialect.test.ts", "custom-acp.test.ts", "acp-tables.test.ts"], "blockedBy": ["V7a-T1", "V7a-T2"], "done": "回放新录制通过；自定义命令缺失或无效时中文拒绝；表与 providers.md 一致。", "plan": "V7a *Dialects*" },
-    { "id": "V7a-T4", "parent": "V7a", "title": "引擎接入：provider 编号、REGISTRY 登记、toolSchema 与 customAcpCommand 交接、网页选择器", "scope": ["provider/engines/acp/engine.ts", "provider/model.ts 的 ProviderId", "provider/registry.ts", "packages/protocol/src/domain.ts 与 settings.ts（根代理）", "packages/ui 选择器"], "blockedBy": ["V7a-T1", "V6b-T1", "V6b-T5"], "done": "full 组绑定 Cursor、Grok 或自定义 ACP 能回答并在 5.5 s 内停止；未登录显示中文提示。", "plan": "V7a *Files* 第三条、*Shared files*" },
-    { "id": "V7a-T5", "parent": "V7a", "title": "冻结 head 门：十路实时、性能、独立审查与 Shipping", "scope": ["lane、perf、审查"], "blockedBy": ["V7a-T3", "V7a-T4"], "gate": true, "done": "Codex 首 token 两 head 一致；Grok 与 Cursor 首 token 记录。", "plan": "V7a *Verify, live*、*Verify, perf*" },
-
-    { "id": "V7b-T1", "parent": "V7b", "title": "Pi 引擎：engine、translate、table 与 fake-pi 夹具", "scope": ["provider/engines/pi/engine.ts", "translate.ts", "table.ts", "test/provider/fixtures/fake-pi.mjs", "pi-translate.test.ts", "pi-engine.test.ts", "pi-table.test.ts"], "blockedBy": ["V6a-T1", "V6a-T3"], "done": "steer 与 compact 原生；abort 不答复时 3.5 s 树杀；qa project 与 write 中文拒绝。", "plan": "V7b *Mapping*" },
-    { "id": "V7b-T2", "parent": "V7b", "title": "pi.no-tools-title 探针与 oneShot 决定", "scope": ["scripts/record-fixture.mjs --provider pi"], "blockedBy": ["V7b-T1"], "acceptance": "Mac 或 Linux 主机安装 pi", "done": "无工具调用返回文本则 oneShot 翻为 native，否则保持。", "plan": "V7b *Files* 第二条" },
-    { "id": "V7b-T3", "parent": "V7b", "title": "接入：pi 编号、REGISTRY 登记与 toolSchema 交接", "scope": ["provider/model.ts", "provider/registry.ts", "packages/protocol/src/domain.ts（根代理加 pi）"], "blockedBy": ["V7b-T1", "V6b-T1", "V6b-T5", "V7a-T4"], "done": "安装了 pi 时出现在选择器，只提供 full 与 qa unrestricted。", "plan": "V7b *Build*" },
-    { "id": "V7b-T4", "parent": "V7b", "title": "冻结 head 门：十路实时、性能、独立审查与 Shipping", "scope": ["lane、perf、审查"], "blockedBy": ["V7b-T2", "V7b-T3"], "gate": true, "done": "full Pi 组回答并在 3.5 s 内停止。", "plan": "V7b *Verify, live*、*Verify, perf*" },
-
-    { "id": "V7c-T1", "parent": "V7c", "title": "Windows 探针与 process-host 的 Job Object 测试（需要 Windows 主机）", "scope": ["Windows 上的 codex.* 与 claude.* 探针", "process-host.test.ts Windows 用例"], "blockedBy": ["OP-4", "V6d-T1", "V7a-T3", "V7b-T1"], "parked": true, "done": "每个探针通过或失败有记录；breakaway 失败；killTree 以 ActiveProcesses 0 结束。", "plan": "V7c *Probes*、*Verify, unit*" },
-    { "id": "V7c-T2", "parent": "V7c", "title": "Linux 复检：lane 7、8 在此 head 重跑 V6b 到 V7b 未跑的探针", "scope": ["Linux 主机上的探针"], "blockedBy": ["V6d-T2", "V7a-T3", "V7b-T1"], "done": "所有 enforced 格有 live 或合格 doc 证明。", "plan": "V7c *Build*" },
-    { "id": "V7c-T3", "parent": "V7c", "title": "格翻转：proofs.ts、各引擎 table 与 docs/proofs.md", "scope": ["policy/proofs.ts", "engines/*/table.ts", "docs/proofs.md", "enforcement.test.ts 的对应断言"], "blockedBy": ["V7c-T1", "V7c-T2"], "done": "docs/proofs.md 每格在 proofs.ts 有匹配 Proof。", "plan": "V7c *Files*" },
-    { "id": "V7c-T4", "parent": "V7c", "title": "冻结 head 门：十路实时（2 到 6 在 Windows）、性能、独立审查与 Shipping", "scope": ["lane、perf、审查"], "blockedBy": ["V7c-T3"], "gate": true, "done": "Windows lane 标注系统；boot 时间在规则内。", "plan": "V7c *Verify, live*、*Verify, perf*" },
-
-    { "id": "V8-T1", "parent": "V8", "title": "导入执行器：preflight、journal、execute、legacy-keystore、hooks 与崩溃收敛测试", "scope": ["packages/daemon/src/import/bridge/preflight.ts", "journal.ts", "execute.ts", "legacy-keystore.ts", "hooks.ts", "test/import-bridge.test.ts"], "blockedBy": [], "status": "in-progress", "done": "每个阶段后崩溃再跑收敛到同一终态；verify 之前失败恢复 bridge 文件；secrets.enc 重加密到 master.key。", "plan": "V8 *Build* 前两条与第四条、issue #105" },
-    { "id": "V8-T2", "parent": "V8", "title": "旧服务控制：launchd、systemd、Windows Run key 的发现、暂停与恢复", "scope": ["import/bridge/service-control/launchd.ts", "systemd.ts", "windows.ts"], "blockedBy": [], "done": "三平台都能发现并暂停 bridge 服务，失败时恢复；不碰 Vonvon 自己的注册。", "plan": "V8 *Build* 第三条" },
-    { "id": "V8-T3", "parent": "V8", "title": "协议与命令：protocol/src/import.ts、cli/commands/import.ts 与根代理登记", "scope": ["packages/protocol/src/import.ts", "packages/daemon/src/cli/commands/import.ts", "cli/index.ts 一行登记与协议导出（根代理）"], "blockedBy": ["V8-T1"], "done": "`vonvon import feishu-codex-bridge` 可用；请求组登记完成。", "plan": "V8 *Files*、*Shared files*" },
-    { "id": "V8-T4", "parent": "V8", "title": "界面导入引导：packages/ui/src/import 与首次运行步骤", "scope": ["packages/ui/src/import/**", "界面功能登记一行（根代理）"], "blockedBy": [], "done": "导入页列出 bot、群和会话，确认后显示每个 bot 已连接。", "plan": "V8 *Build* 第五条" },
-    { "id": "V8-T5", "parent": "V8", "title": "Mac 原生 lane：manzana（gui/502）中安装 bridge 446b2a4 并导入", "scope": ["lane 1、2、3 的 Mac 部分"], "blockedBy": ["V8-T1", "V8-T2", "V8-T3", "V8-T4", "OP-2"], "acceptance": "manzana 已登录图形会话；clay 的在用 bridge 前后对比无变化", "done": "回复来自 Vonvon Bot，bridge 任务与 plist 消失；坏密钥时 bridge 恢复运行。", "plan": "V8 *Verify, live* Lane context" },
-    { "id": "V8-T6", "parent": "V8", "title": "Linux 原生 lane：vonvon-accept 中安装 bridge 用户单元并导入", "scope": ["lane 1、3 的 Linux 部分，lane 4 到 10 任一环境"], "blockedBy": ["V8-T1", "V8-T2", "V8-T3", "V8-T4"], "done": "LoadState 为 not-found，单元文件消失，标记文件存在。", "plan": "V8 *Verify, live*" },
-    { "id": "V8-T7", "parent": "V8", "title": "冻结 head 门：十路实时、性能、独立审查与 Shipping", "scope": ["lane、perf（3 bot、10 项目、230 会话的停机时长）、审查"], "blockedBy": ["V8-T5", "V8-T6"], "gate": true, "done": "gui/502 不存在则 Mac lane 保持未检查且不合并。", "plan": "V8 *Verify, perf*、*Merge*" },
-
-    { "id": "V9-T1", "parent": "V9", "title": "owner-notice、CLI 提示与标记文件拒绝启动（bridge 仓库）", "scope": ["src/bot/owner-notice.ts", "src/cli/commands/{daemon,update,run}.ts", "src/cli/index.ts", "src/card/dm-cards.ts", "src/web/ui.ts", "test/owner-notice.test.ts"], "blockedBy": [], "status": "in-progress", "done": "已推送 05e2635；只发一次 DM，重启不重发，有标记时 run 拒绝。", "plan": "V9 *Build*、issue #77" },
-    { "id": "V9-T2", "parent": "V9", "title": "发布提示链接指向已发布的安装包页", "scope": ["src/service/desktop-release.ts"], "blockedBy": ["V5-T11"], "done": "lane 10 打开已发布的安装包页。占位、staging 或未发布地址都不算。", "plan": "V9 *Depends on*" },
-    { "id": "V9-T3", "parent": "V9", "title": "冻结 head 门：十路实时、性能、独立审查、Shipping 与 npm 发布", "scope": ["lane、perf、审查、npm 发布"], "blockedBy": ["V9-T1", "V9-T2"], "gate": true, "done": "V8 已合入后合并；发布检查与外部门满足后发 npm。", "plan": "V9 *Merge*" },
-
-    { "id": "V10-T1", "parent": "V10", "title": "packages/cloud：server、oauth、accounts、devices、仓库接口与 Postgres、内存实现", "scope": ["packages/cloud/src/server.ts", "oauth.ts", "accounts.ts", "devices.ts", "store/repository.ts", "store/postgres.ts", "store/memory.ts", "test/devices.test.ts", "test/repository-contract.test.ts"], "blockedBy": [], "status": "in-progress", "done": "注册、改名、撤销、拒绝已撤销凭据、原地轮换、跨账号隔离的用例通过；issue 75 的私有存储形状。", "plan": "V10 *Device contract*、issue #75、#89、#94" },
-    { "id": "V10-T2", "parent": "V10", "title": "daemon 云端连接：enroll、link、credential 与在线状态", "scope": ["packages/daemon/src/cloud/enroll.ts", "link.ts", "credential.ts"], "blockedBy": ["V10-T1"], "freeze": "F10", "done": "设备凭据在 link 处单独校验；在线状态来自出站连接；与 V10-T1 一起发布 F10。", "plan": "V10 *Build*" },
-    { "id": "V10-T3", "parent": "V10", "title": "vonvon login 与 logout 命令及根代理登记", "scope": ["packages/daemon/src/cli/commands/login.ts", "cli/index.ts 两行登记（根代理）"], "blockedBy": ["V10-T2"], "done": "两台机器 login 后同一账号下列出两台。", "plan": "V10 *Files*" },
-    { "id": "V10-T4", "parent": "V10", "title": "界面：账号页与机器列表", "scope": ["packages/ui/src/account/**", "界面功能登记一行（根代理）"], "blockedBy": [], "done": "未登录时不弹登录；离线机器只显示离线。", "plan": "V10 *Build* 最后一条" },
-    { "id": "V10-T5", "parent": "V10", "title": "本地云端环境：Postgres 与开发登录，供 lane 使用", "scope": ["本地 Postgres、dev auth 启动脚本"], "blockedBy": ["V10-T1"], "done": "两个 daemon 可对同一本地云端注册。", "plan": "V10 *Depends on*" },
-    { "id": "V10-T6", "parent": "V10", "title": "冻结 head 门：十路实时（第 8 路要 V5 外壳）、性能、独立审查与 Shipping", "scope": ["lane、perf、审查"], "blockedBy": ["V10-T2", "V10-T3", "V10-T4", "V10-T5"], "gate": true, "done": "上线与离线时延在规则内；桌面登录经浏览器交接后出现机器列表。", "plan": "V10 *Verify, live*、*Verify, perf*" },
-
-    { "id": "V11-T1", "parent": "V11", "title": "端到端加密移植：e2ee/**、base64.ts、编译合同与 closure 测试", "scope": ["packages/client/src/e2ee/**", "e2ee.test.ts", "e2ee-closure.test.ts", "scripts/type-only-identity.mjs", "closure.json", "NOTICE 一句（根代理）"], "blockedBy": [], "status": "in-progress", "done": "篡改帧被拒；换公钥时首帧解密失败并断开；issue 90 的严格编译冲突按 *Compiler contract* 解决。", "plan": "V11 *Handshake*、*Compiler contract*、issue #90" },
-    { "id": "V11-T2", "parent": "V11", "title": "云端中继：packages/cloud/src/relay 与托管 ui/dist", "scope": ["packages/cloud/src/relay/**", "云端托管 packages/ui/dist"], "blockedBy": ["V10-T1"], "done": "云端只转发密文；托管网页可打开。", "plan": "V11 *Build*" },
-    { "id": "V11-T3", "parent": "V11", "title": "daemon 中继传输与机器密钥", "scope": ["packages/daemon/src/cloud/relay-transport.ts", "machine-key.ts"], "blockedBy": ["V10-T2", "V11-T1"], "done": "注册时登记 X25519 公钥，保持一条出站中继连接。", "plan": "V11 *Build*" },
-    { "id": "V11-T4", "parent": "V11", "title": "客户端中继传输与界面机器切换器", "scope": ["packages/client/src/transport-relay.ts", "packages/ui/src 的机器切换器", "界面功能登记一行（根代理）", "tweetnacl ^1.0.3（根代理）"], "blockedBy": ["V11-T1", "V10-T2"], "done": "同一 appId 在两台在线机器上启用时界面警告；远程改群设置落到对方 projects.json。", "plan": "V11 *Build*" },
-    { "id": "V11-T5", "parent": "V11", "title": "冻结 head 门：十路实时（第 7 路要 V5 外壳）、性能、独立审查与 Shipping", "scope": ["lane、perf（本地与中继的快照往返 p50、p95）、审查"], "blockedBy": ["V11-T2", "V11-T3", "V11-T4"], "gate": true, "done": "程序在 V11 验证通过后结束。", "plan": "V11 *Verify, live*、*Verify, perf*、Close the program" }
+    {
+      "id": "V5-T1",
+      "parent": "V5",
+      "title": "外壳：main、daemon-manager、preload、tray、updates 与 electron-builder",
+      "scope": [
+        "packages/desktop/src/main.ts",
+        "daemon-manager.ts",
+        "tray.ts",
+        "updates.ts",
+        "preload.ts",
+        "packages/desktop/electron-builder.yml",
+        "packages/desktop/test/daemon-manager.test.ts"
+      ],
+      "blockedBy": [],
+      "done": "附着运行中的 daemon、无 daemon 时拉起、注册为 ours 时走 `vonvon daemon start`、协议版本不匹配提示，四个单元用例通过；真实窗口显示 Bot 列表。",
+      "plan": "V5 *Build* 前三条与 *Verify, unit* 第一条"
+    },
+    {
+      "id": "V5-T2",
+      "parent": "V5",
+      "title": "服务标识、定义编解码与读回分类（纯逻辑）",
+      "scope": [
+        "packages/daemon/src/service/identity.ts",
+        "service/definition.ts",
+        "service/registration.ts",
+        "test/service-identity.test.ts",
+        "test/service-definition.test.ts"
+      ],
+      "blockedBy": [],
+      "status": "done",
+      "done": "计划记录已在 51f5d1e 审查并推送。",
+      "plan": "V5 *Daemon files*"
+    },
+    {
+      "id": "V5-T3",
+      "parent": "V5",
+      "title": "服务事务：launchd、systemd、Windows 的 install/uninstall、drain 与 Gate M",
+      "scope": [
+        "service/launchd.ts",
+        "systemd.ts",
+        "win-startup.ts",
+        "adapter.ts",
+        "common.ts",
+        "service/drain.ts",
+        "service/distribution.ts",
+        "cli/commands/service.ts",
+        "test/service-transaction.test.ts"
+      ],
+      "blockedBy": [
+        "V5-T2"
+      ],
+      "done": "*Outcomes* 每一行在适用平台各有一个用例；Gate M 的确定性测试通过；在全部集成前 `install` 和 `uninstall` 保持拒绝。",
+      "plan": "V5 *Install transaction*、*Uninstall transaction*、*Service gate contracts* Gate M"
+    },
+    {
+      "id": "V5-T4",
+      "parent": "V5",
+      "title": "daemon 启动路径：Pre-lock guard、Gate L、runStart 经管理器、状态读回",
+      "scope": [
+        "host/bootstrap.ts",
+        "host/lifecycle.ts",
+        "host/service.ts",
+        "cli/commands/daemon.ts",
+        "cli/commands/run.ts（仅退出码映射）",
+        "test/service-launch.test.ts"
+      ],
+      "blockedBy": [
+        "V5-T2"
+      ],
+      "done": "guard 的真实调用链用例、子进程用例、托管核心更新用例、Linux Gate L 的确定性测试通过。",
+      "plan": "V5 *Exit codes*、*Pre-lock guard*、*Service gate contracts* Gate L"
+    },
+    {
+      "id": "V5-T5",
+      "parent": "V5",
+      "title": "开机自动运行：login-item.ts 与托盘开关",
+      "scope": [
+        "packages/desktop/src/login-item.ts",
+        "tray 菜单项"
+      ],
+      "blockedBy": [
+        "V5-T1",
+        "V5-T3"
+      ],
+      "done": "开关调用 `vonvon service install` 和 `uninstall`；lane 6 和 lane 7 可演练。",
+      "plan": "V5 *Build* 第四条"
+    },
+    {
+      "id": "V5-T6",
+      "parent": "V5",
+      "title": "global-npm 包：stage、pack、check、smoke 脚本与 UI 根路径解析",
+      "scope": [
+        "scripts/stage-daemon.mjs",
+        "scripts/pack-vonvon-bot.mjs",
+        "scripts/check-vonvon-bot-package.mjs",
+        "scripts/smoke-vonvon-bot-package.mjs",
+        "scripts/vonvon-bot-install-scripts.json",
+        "scripts/package-tools.test.mjs",
+        "server/web-ui.ts（仅根路径）",
+        "test/web-ui-root.test.ts"
+      ],
+      "blockedBy": [],
+      "done": "打出的 tgz 能被 systemd 那一半的原生验收安装；包测试通过。",
+      "plan": "V5 *Package*"
+    },
+    {
+      "id": "V5-T7",
+      "parent": "V5",
+      "title": "根代理交接：cli/index.ts 的 service 选项、桌面依赖与 pack 脚本",
+      "scope": [
+        "packages/daemon/src/cli/index.ts（`install --port <P>`、`status --json`）",
+        "根 package.json 与 lockfile",
+        "`pack:vonvon-bot` 脚本"
+      ],
+      "blockedBy": [],
+      "root": true,
+      "done": "两个选项加入现有 service 登记，lockfile 用 `npm install` 重生成。",
+      "plan": "V5 *Daemon files* Root handoffs、*Shared files*"
+    },
+    {
+      "id": "V5-T8",
+      "parent": "V5",
+      "title": "Linux 原生验收：vonvon-accept 上的 systemd、Gate L、安装回滚与卸载",
+      "scope": [
+        "腾讯云主机 101.34.213.231 的 vonvon-accept 用户"
+      ],
+      "blockedBy": [
+        "V5-T3",
+        "V5-T4",
+        "V5-T6"
+      ],
+      "acceptance": "每次运行前 B0 核对 systemd 255 和 cgroup2 统一层级",
+      "done": "助手活过 exit 75；回滚与卸载的每个 Outcome 在真实 systemd 上复现；证据绑定准确 head。",
+      "plan": "V5 *Native acceptance environment*、native-acceptance-hosts.md"
+    },
+    {
+      "id": "V5-T9",
+      "parent": "V5",
+      "title": "Mac 原生验收：clay 中的 launchd、Gate M、Open at login 与 lane 6、7",
+      "scope": [
+        "用户账号 clay，运行自建的临时 VONVON_HOME"
+      ],
+      "blockedBy": [
+        "V5-T3",
+        "V5-T4",
+        "V5-T5"
+      ],
+      "acceptance": "开跑前确认 clay 没有 com.vonvon.bot.daemon；记录在用 bridge 的 pid、启动时间和监听，任何变化即判失败",
+      "done": "Gate M 的卸载屏障、回滚、pid 复用迹在真实 launchd 上复现；lane 6 和 lane 7 通过。",
+      "plan": "V5 *Native acceptance environment*"
+    },
+    {
+      "id": "V5-T10",
+      "parent": "V5",
+      "title": "冻结 head 门：十路实时、性能、独立审查、评审视频与 Shipping",
+      "scope": [
+        "十路 lane、perf 探测、两条审查 lane、V5-review.mp4"
+      ],
+      "blockedBy": [
+        "V5-T1",
+        "V5-T3",
+        "V5-T4",
+        "V5-T5",
+        "V5-T6",
+        "V5-T7",
+        "V5-T8",
+        "V5-T9"
+      ],
+      "gate": true,
+      "done": "准确 head 的 Linux、Windows、Mac CI 成功；全部 lane PASS；独立 Shipping 判定干净。",
+      "plan": "V5 *Verify, live*、*Verify, perf*、*Merge*"
+    },
+    {
+      "id": "V5-T11",
+      "parent": "V5",
+      "title": "发布：签名、公证的桌面安装包与公开下载页",
+      "scope": [
+        "electron-builder 产物、签名与公证、发布页"
+      ],
+      "blockedBy": [
+        "V5-T10"
+      ],
+      "done": "公开可访问的安装包地址，供 V9 的 lane 10 使用。",
+      "plan": "V9 *Depends on*"
+    },
+    {
+      "id": "V6a-T1",
+      "parent": "V6a",
+      "title": "合同文件与 F6：model.ts、engine.ts、registry.ts 的 Registration、enforcement.ts",
+      "scope": [
+        "provider/model.ts",
+        "provider/engines/engine.ts",
+        "provider/registry.ts（仅 Registration 类型）",
+        "provider/policy/enforcement.ts",
+        "test/provider/turn-machine.test.ts",
+        "enforcement.test.ts"
+      ],
+      "blockedBy": [],
+      "status": "in-progress",
+      "freeze": "F6",
+      "done": "四个文件与 providers.md 的列表一致，typecheck 干净，两组测试通过；根代理记录 F6 的 SHA。",
+      "plan": "V6a *Files*、*Contracts*、Parallel execution 的 F6"
+    },
+    {
+      "id": "V6a-T2",
+      "parent": "V6a",
+      "title": "纯运行时单元：turn-machine、run-channel、subagent-ledger、todo-tracker、image-sink",
+      "scope": [
+        "provider/runtime/turn-machine.ts",
+        "run-channel.ts",
+        "subagent-ledger.ts",
+        "todo-tracker.ts",
+        "image-sink.ts",
+        "对应测试"
+      ],
+      "blockedBy": [
+        "V6a-T1"
+      ],
+      "status": "in-progress",
+      "done": "停止阶梯、唯一 outcome、账本容量 64/5/200/600、图片先落盘的测试全部通过。",
+      "plan": "V6a *Stop ladder*、*Verify, unit*"
+    },
+    {
+      "id": "V6a-T3",
+      "parent": "V6a",
+      "title": "传输层：jsonrpc.ts（迁自 app-server-client）与 jsonl.ts",
+      "scope": [
+        "provider/transport/jsonrpc.ts",
+        "provider/transport/jsonl.ts",
+        "旧入口的兼容转出",
+        "jsonrpc.test.ts",
+        "jsonl.test.ts"
+      ],
+      "blockedBy": [],
+      "status": "in-progress",
+      "done": "拆帧、合帧、服务端请求、逐请求超时、EOF 终态的用例通过；现有 Codex 调用方行为不变。",
+      "plan": "V6a *Files*"
+    },
+    {
+      "id": "V6a-T4",
+      "parent": "V6a",
+      "title": "进程托管：process-host、ledger、sweep、helper-client 与原生 owner helper（POSIX、Windows）",
+      "scope": [
+        "provider/process/process-host.ts",
+        "process/ledger.ts",
+        "process/sweep.ts",
+        "process/helper-client.ts",
+        "packages/daemon/native/owner-helper/",
+        "test/provider/fixtures/fake-child.mjs",
+        "process-host.test.ts",
+        "process-sweep.test.ts"
+      ],
+      "blockedBy": [
+        "V6a-T1"
+      ],
+      "docs": "合同在 PR #121（claude/process-identity）定义，合并后按其执行",
+      "done": "忽略 SIGTERM 的子进程在 TERM_WAIT 后被 SIGKILL；启动扫描零信号；drained 标记；legacy 记录只列不动。",
+      "plan": "V6a *Files*、providers.md *Process identity*"
+    },
+    {
+      "id": "V6a-T5",
+      "parent": "V6a",
+      "title": "原生 helper 的五平台构建与签名流水线",
+      "scope": [
+        "native/bin/<platform>-<arch>/ 的构建脚本",
+        "darwin 签名与公证"
+      ],
+      "blockedBy": [
+        "V6a-T4"
+      ],
+      "done": "五个目标产物随 daemon 包发布，Mac 产物签名通过 spctl 检查。",
+      "plan": "V6a *Native helper build*"
+    },
+    {
+      "id": "V6a-T6",
+      "parent": "V6a",
+      "title": "出站门：outbound/policy.ts、address.ts 与两个上传器的接线（修复 #114）",
+      "scope": [
+        "outbound/policy.ts",
+        "outbound/address.ts",
+        "card/outbound-images.ts",
+        "bot/outbound-files.ts",
+        "outbound-policy.test.ts",
+        "outbound-address.test.ts"
+      ],
+      "blockedBy": [],
+      "status": "in-progress",
+      "done": "符号链接越界被拒；网络关闭时远程抓取在 DNS 之前返回；HTTP 抓取经过地址判定与固定连接。本地路径门已完成，远程 HTTP 门未完成。",
+      "plan": "V6a *Files*、issue #114"
+    },
+    {
+      "id": "V6a-T7",
+      "parent": "V6a",
+      "title": "主机探测与证明登记：host-probe、proofs.ts、messages",
+      "scope": [
+        "provider/policy/host-probe.ts",
+        "policy/proofs.ts",
+        "policy/messages.ts",
+        "真实命令执行器与 doctor 接线"
+      ],
+      "blockedBy": [
+        "V6a-T1"
+      ],
+      "status": "in-progress",
+      "done": "启动探测缓存、串行刷新、真实执行器注入；`vonvon doctor` 显示各 provider 的档位。",
+      "plan": "V6a *Files*"
+    },
+    {
+      "id": "V6a-T8",
+      "parent": "V6a",
+      "title": "冻结 head 门：十路实时（含 10 和 10b）、性能、独立审查与 Shipping",
+      "scope": [
+        "lane 1 到 10b、perf 探测、审查 lane"
+      ],
+      "blockedBy": [
+        "V6a-T1",
+        "V6a-T2",
+        "V6a-T3",
+        "V6a-T4",
+        "V6a-T5",
+        "V6a-T6",
+        "V6a-T7"
+      ],
+      "gate": true,
+      "done": "准确 head 三平台 CI 成功；全部 lane PASS；上传与首 token 不慢于 main 5%。",
+      "plan": "V6a *Verify, live*、*Verify, perf*"
+    },
+    {
+      "id": "V6b-T1",
+      "parent": "V6b",
+      "title": "ProviderRuntime、provider/index.ts、watchdog 与 REGISTRY",
+      "scope": [
+        "provider/runtime/provider-runtime.ts",
+        "provider/index.ts",
+        "provider/runtime/watchdog.ts",
+        "provider/registry.ts 的 REGISTRY",
+        "provider-runtime.test.ts",
+        "registry.test.ts"
+      ],
+      "blockedBy": [
+        "V6a-T1"
+      ],
+      "done": "可编程假引擎下的停止、忙碌、队列、关闭用例通过；额外假 id 无需改动即出现在选择器。",
+      "plan": "V6b *Files*"
+    },
+    {
+      "id": "V6b-T2",
+      "parent": "V6b",
+      "title": "Codex 引擎：engine、translate、sandbox、pool、usage、install、table 与录制夹具",
+      "scope": [
+        "provider/engines/codex/*.ts",
+        "迁入的 managed-install 等文件",
+        "codex-translate.test.ts",
+        "codex-sandbox.test.ts",
+        "scripts/record-fixture.mjs --provider codex"
+      ],
+      "blockedBy": [
+        "V6a-T1",
+        "V6a-T3"
+      ],
+      "done": "全部夹具回放通过；每个 Codex 行与系统的 NativeSettings 快照一致，full 与 main 字节相同。",
+      "plan": "V6b *Codex mapping*"
+    },
+    {
+      "id": "V6b-T3",
+      "parent": "V6b",
+      "title": "Claude 引擎（只开 full）：engine、translate、options、gate、history、table",
+      "scope": [
+        "provider/engines/claude/*.ts",
+        "claude-translate.test.ts",
+        "claude-options.test.ts",
+        "claude-gate.test.ts（基础）"
+      ],
+      "blockedBy": [
+        "V6a-T1",
+        "V6a-T4"
+      ],
+      "done": "`spawnClaudeCodeProcess` 经 ProcessHost.adopt；full 的 options 快照；夹具回放通过。",
+      "plan": "V6b *Claude mapping*"
+    },
+    {
+      "id": "V6b-T4",
+      "parent": "V6b",
+      "title": "卡片层：run-view、outcome-note、messages.zh 与 run-card 改造",
+      "scope": [
+        "card/run-view.ts",
+        "card/outcome-note.ts",
+        "card/messages.zh.ts",
+        "card/run-card.ts",
+        "card/run-process.ts",
+        "card/tool-render.ts",
+        "card/history-card.ts",
+        "run-view.test.ts"
+      ],
+      "blockedBy": [
+        "V6a-T1"
+      ],
+      "done": "每种 StepDetail 和每种结果说明的飞书 JSON 快照通过；卡片不出现 provider 编号。",
+      "plan": "V6b *Files*"
+    },
+    {
+      "id": "V6b-T5",
+      "parent": "V6b",
+      "title": "调用方切换：39 个源文件、删除 agent/、72 个测试映射、TitleService、存量数据迁移",
+      "scope": [
+        "bot/、card/、admin/、host/、project/、server/、cli/、config/ 的调用方",
+        "删除 agent/**",
+        "title-service.test.ts",
+        "stored-data.test.ts",
+        "message-queue-races.test.ts"
+      ],
+      "blockedBy": [
+        "V6b-T1",
+        "V6b-T2",
+        "V6b-T3",
+        "V6b-T4",
+        "V6b-T7",
+        "V6a-T2",
+        "V6a-T6",
+        "V6a-T7"
+      ],
+      "done": "`git grep \"from '.*agent/\"` 在 provider/ 之外为空；测试映射表附在 PR；main 时期数据加载后结果相同。",
+      "plan": "V6b *Files*、*Stored data*、*Test mapping*"
+    },
+    {
+      "id": "V6b-T6",
+      "parent": "V6b",
+      "title": "prove-enforcement.mjs 与 Codex 探针（Mac、Linux）",
+      "scope": [
+        "scripts/prove-enforcement.mjs",
+        "docs/proofs.md",
+        "policy/proofs.ts 的 Codex 条目"
+      ],
+      "blockedBy": [
+        "V6b-T2"
+      ],
+      "done": "四个 darwin 探针和 Linux 探针录入，对应格翻为 enforced，auditTable 为绿。",
+      "plan": "V6b *Verify, unit* 最后一条"
+    },
+    {
+      "id": "V6b-T7",
+      "parent": "V6b",
+      "title": "根代理交接：domain.ts 的 readScope、SDK 依赖移到 dependencies、snapshot.ts 查找改写",
+      "scope": [
+        "packages/protocol/src/domain.ts",
+        "packages/daemon/package.json（claude-agent-sdk 0.3.246）",
+        "server/snapshot.ts"
+      ],
+      "blockedBy": [],
+      "root": true,
+      "done": "readScope 加入 setPermission 与 membershipSchema.permission；lockfile 重生成。",
+      "plan": "V6b *Dependencies*、*Shared files*"
+    },
+    {
+      "id": "V6b-T8",
+      "parent": "V6b",
+      "title": "冻结 head 门：十二路实时、性能、独立审查与 Shipping",
+      "scope": [
+        "lane 1 到 12、perf 探测、审查 lane"
+      ],
+      "blockedBy": [
+        "V6b-T1",
+        "V6b-T2",
+        "V6b-T3",
+        "V6b-T4",
+        "V6b-T5",
+        "V6b-T6",
+        "V6b-T7"
+      ],
+      "gate": true,
+      "done": "首 token 不慢于 V6a 5%，停止不超 11.5 s，渲染不超 50 ms；升级 lane 通过。",
+      "plan": "V6b *Verify, live*、*Verify, perf*"
+    },
+    {
+      "id": "V6c-T1",
+      "parent": "V6c",
+      "title": "卡片区域：subagent-area、todo-line、image-rows、完整过程卡片与预算",
+      "scope": [
+        "card/subagent-area.ts",
+        "card/todo-line.ts",
+        "card/image-rows.ts",
+        "card/subagent-history-card.ts",
+        "card/card-budget.ts",
+        "card/run-card.ts 组合",
+        "四组测试与 fixtures/card/*.json"
+      ],
+      "blockedBy": [
+        "V6b-T1",
+        "V6b-T4"
+      ],
+      "done": "分配合计 170 组件、28000 字节；最坏夹具在两道上限内；各区域溢出规则有用例。",
+      "plan": "V6c *Layout*、*Verify, unit*"
+    },
+    {
+      "id": "V6c-T2",
+      "parent": "V6c",
+      "title": "按钮路由：查看完整过程与单个子 agent 停止",
+      "scope": [
+        "bot/handle-message.ts 的两个按钮分支"
+      ],
+      "blockedBy": [
+        "V6c-T1",
+        "V6b-T5"
+      ],
+      "done": "停止按钮只在 `features.subagentStop !== 'none'` 时存在；路由到 Run.stopSubagent 与 history。",
+      "plan": "V6c *Files* 第二条"
+    },
+    {
+      "id": "V6c-T3",
+      "parent": "V6c",
+      "title": "冻结 head 门：十路实时、性能、独立审查与 Shipping",
+      "scope": [
+        "lane、perf、审查"
+      ],
+      "blockedBy": [
+        "V6c-T1",
+        "V6c-T2"
+      ],
+      "gate": true,
+      "done": "最坏渲染不超 80 ms；更新频率不超现有节流。",
+      "plan": "V6c *Verify, live*、*Verify, perf*"
+    },
+    {
+      "id": "V6d-T1",
+      "parent": "V6d",
+      "title": "Claude qa 与 write 档：options、gate、table、锁校验与测试",
+      "scope": [
+        "provider/engines/claude/options.ts",
+        "gate.ts",
+        "table.ts",
+        "claude-gate.test.ts（扩展）",
+        "claude-table.test.ts",
+        "claude-locks.test.ts"
+      ],
+      "blockedBy": [
+        "V6b-T3"
+      ],
+      "done": "每个受限格 permissionMode 为 default；路径门用例全部通过；缺锁时拒绝启动。",
+      "plan": "V6d *Gate*、*Bash*、*Verify, unit*"
+    },
+    {
+      "id": "V6d-T2",
+      "parent": "V6d",
+      "title": "Claude 探针：Mac 与 Linux（bwrap）九个探针录入并翻格",
+      "scope": [
+        "scripts/prove-enforcement.mjs claude",
+        "docs/proofs.md",
+        "policy/proofs.ts"
+      ],
+      "blockedBy": [
+        "V6d-T1"
+      ],
+      "acceptance": "Mac 与 Linux 主机上的真实 Claude Code，Linux 有 bwrap",
+      "done": "九个探针通过，darwin 与 linux 格翻为 enforced，win32 保持 refuse。",
+      "plan": "V6d *Verify, unit* 最后一条"
+    },
+    {
+      "id": "V6d-T3",
+      "parent": "V6d",
+      "title": "冻结 head 门：十路实时、性能、独立审查与 Shipping",
+      "scope": [
+        "lane、perf、审查"
+      ],
+      "blockedBy": [
+        "V6d-T1",
+        "V6d-T2"
+      ],
+      "gate": true,
+      "done": "钩子延迟与 qa 首 token 在规则内。",
+      "plan": "V6d *Verify, live*、*Verify, perf*"
+    },
+    {
+      "id": "V7a-T1",
+      "parent": "V7a",
+      "title": "ACP 客户端与帧翻译、fake-acp 夹具",
+      "scope": [
+        "provider/engines/acp/client.ts",
+        "translate.ts",
+        "test/provider/fixtures/fake-acp.mjs",
+        "acp-client.test.ts",
+        "acp-translate.test.ts",
+        "devDependency @agentclientprotocol/sdk ^0.17.1（类型）"
+      ],
+      "blockedBy": [
+        "V6a-T1",
+        "V6a-T3"
+      ],
+      "done": "未知 session/update 到方言；initialize 不宣告 fs 和 terminal；权限请求同步答复。",
+      "plan": "V7a *Client*"
+    },
+    {
+      "id": "V7a-T2",
+      "parent": "V7a",
+      "title": "录制 Cursor 与 Grok 原始帧（需要用户账号）",
+      "scope": [
+        "scripts/record-fixture.mjs --provider cursor|grok",
+        "探针 cursor.initialize、cursor.full-turn、grok.three-turns 等"
+      ],
+      "blockedBy": [
+        "OP-3"
+      ],
+      "done": "原始 JSON 行保存为夹具，PR 记录 provider 版本。录到之前相关格按“没有”处理。",
+      "plan": "V7a *Files* 第四条、roadmap *要验证的事*"
+    },
+    {
+      "id": "V7a-T3",
+      "parent": "V7a",
+      "title": "方言：cursor、grok、custom 与 tables",
+      "scope": [
+        "provider/engines/acp/dialect.ts",
+        "dialects/cursor.ts",
+        "grok.ts",
+        "custom.ts",
+        "tables.ts",
+        "grok-dialect.test.ts",
+        "cursor-dialect.test.ts",
+        "custom-acp.test.ts",
+        "acp-tables.test.ts"
+      ],
+      "blockedBy": [
+        "V7a-T1",
+        "V7a-T2"
+      ],
+      "done": "回放新录制通过；自定义命令缺失或无效时中文拒绝；表与 providers.md 一致。",
+      "plan": "V7a *Dialects*"
+    },
+    {
+      "id": "V7a-T4",
+      "parent": "V7a",
+      "title": "引擎接入：provider 编号、REGISTRY 登记、toolSchema 与 customAcpCommand 交接、网页选择器",
+      "scope": [
+        "provider/engines/acp/engine.ts",
+        "provider/model.ts 的 ProviderId",
+        "provider/registry.ts",
+        "packages/protocol/src/domain.ts 与 settings.ts（根代理）",
+        "packages/ui 选择器"
+      ],
+      "blockedBy": [
+        "V7a-T1",
+        "V6b-T1",
+        "V6b-T5"
+      ],
+      "done": "full 组绑定 Cursor、Grok 或自定义 ACP 能回答并在 5.5 s 内停止；未登录显示中文提示。",
+      "plan": "V7a *Files* 第三条、*Shared files*"
+    },
+    {
+      "id": "V7a-T5",
+      "parent": "V7a",
+      "title": "冻结 head 门：十路实时、性能、独立审查与 Shipping",
+      "scope": [
+        "lane、perf、审查"
+      ],
+      "blockedBy": [
+        "V7a-T3",
+        "V7a-T4"
+      ],
+      "gate": true,
+      "done": "Codex 首 token 两 head 一致；Grok 与 Cursor 首 token 记录。",
+      "plan": "V7a *Verify, live*、*Verify, perf*"
+    },
+    {
+      "id": "V7b-T1",
+      "parent": "V7b",
+      "title": "Pi 引擎：engine、translate、table 与 fake-pi 夹具",
+      "scope": [
+        "provider/engines/pi/engine.ts",
+        "translate.ts",
+        "table.ts",
+        "test/provider/fixtures/fake-pi.mjs",
+        "pi-translate.test.ts",
+        "pi-engine.test.ts",
+        "pi-table.test.ts"
+      ],
+      "blockedBy": [
+        "V6a-T1",
+        "V6a-T3"
+      ],
+      "done": "steer 与 compact 原生；abort 不答复时 3.5 s 树杀；qa project 与 write 中文拒绝。",
+      "plan": "V7b *Mapping*"
+    },
+    {
+      "id": "V7b-T2",
+      "parent": "V7b",
+      "title": "pi.no-tools-title 探针与 oneShot 决定",
+      "scope": [
+        "scripts/record-fixture.mjs --provider pi"
+      ],
+      "blockedBy": [
+        "V7b-T1"
+      ],
+      "acceptance": "Mac 或 Linux 主机安装 pi",
+      "done": "无工具调用返回文本则 oneShot 翻为 native，否则保持。",
+      "plan": "V7b *Files* 第二条"
+    },
+    {
+      "id": "V7b-T3",
+      "parent": "V7b",
+      "title": "接入：pi 编号、REGISTRY 登记与 toolSchema 交接",
+      "scope": [
+        "provider/model.ts",
+        "provider/registry.ts",
+        "packages/protocol/src/domain.ts（根代理加 pi）"
+      ],
+      "blockedBy": [
+        "V7b-T1",
+        "V6b-T1",
+        "V6b-T5",
+        "V7a-T4"
+      ],
+      "done": "安装了 pi 时出现在选择器，只提供 full 与 qa unrestricted。",
+      "plan": "V7b *Build*"
+    },
+    {
+      "id": "V7b-T4",
+      "parent": "V7b",
+      "title": "冻结 head 门：十路实时、性能、独立审查与 Shipping",
+      "scope": [
+        "lane、perf、审查"
+      ],
+      "blockedBy": [
+        "V7b-T2",
+        "V7b-T3"
+      ],
+      "gate": true,
+      "done": "full Pi 组回答并在 3.5 s 内停止。",
+      "plan": "V7b *Verify, live*、*Verify, perf*"
+    },
+    {
+      "id": "V7c-T1",
+      "parent": "V7c",
+      "title": "Windows 探针与 process-host 的 Job Object 测试（需要 Windows 主机）",
+      "scope": [
+        "Windows 上的 codex.* 与 claude.* 探针",
+        "process-host.test.ts Windows 用例"
+      ],
+      "blockedBy": [
+        "OP-4",
+        "V6d-T1",
+        "V7a-T3",
+        "V7b-T1"
+      ],
+      "parked": true,
+      "done": "每个探针通过或失败有记录；breakaway 失败；killTree 以 ActiveProcesses 0 结束。",
+      "plan": "V7c *Probes*、*Verify, unit*"
+    },
+    {
+      "id": "V7c-T2",
+      "parent": "V7c",
+      "title": "Linux 复检：lane 7、8 在此 head 重跑 V6b 到 V7b 未跑的探针",
+      "scope": [
+        "Linux 主机上的探针"
+      ],
+      "blockedBy": [
+        "V6d-T2",
+        "V7a-T3",
+        "V7b-T1"
+      ],
+      "done": "所有 enforced 格有 live 或合格 doc 证明。",
+      "plan": "V7c *Build*"
+    },
+    {
+      "id": "V7c-T3",
+      "parent": "V7c",
+      "title": "格翻转：proofs.ts、各引擎 table 与 docs/proofs.md",
+      "scope": [
+        "policy/proofs.ts",
+        "engines/*/table.ts",
+        "docs/proofs.md",
+        "enforcement.test.ts 的对应断言"
+      ],
+      "blockedBy": [
+        "V7c-T1",
+        "V7c-T2"
+      ],
+      "done": "docs/proofs.md 每格在 proofs.ts 有匹配 Proof。",
+      "plan": "V7c *Files*"
+    },
+    {
+      "id": "V7c-T4",
+      "parent": "V7c",
+      "title": "冻结 head 门：十路实时（2 到 6 在 Windows）、性能、独立审查与 Shipping",
+      "scope": [
+        "lane、perf、审查"
+      ],
+      "blockedBy": [
+        "V7c-T3"
+      ],
+      "gate": true,
+      "done": "Windows lane 标注系统；boot 时间在规则内。",
+      "plan": "V7c *Verify, live*、*Verify, perf*"
+    },
+    {
+      "id": "V8-T1",
+      "parent": "V8",
+      "title": "导入执行器：preflight、journal、execute、legacy-keystore、hooks 与崩溃收敛测试",
+      "scope": [
+        "packages/daemon/src/import/bridge/preflight.ts",
+        "journal.ts",
+        "execute.ts",
+        "legacy-keystore.ts",
+        "hooks.ts",
+        "test/import-bridge.test.ts"
+      ],
+      "blockedBy": [],
+      "status": "in-progress",
+      "done": "每个阶段后崩溃再跑收敛到同一终态；verify 之前失败恢复 bridge 文件；secrets.enc 重加密到 master.key。",
+      "plan": "V8 *Build* 前两条与第四条、issue #105"
+    },
+    {
+      "id": "V8-T2",
+      "parent": "V8",
+      "title": "旧服务控制：launchd、systemd、Windows Run key 的发现、暂停与恢复",
+      "scope": [
+        "import/bridge/service-control/launchd.ts",
+        "systemd.ts",
+        "windows.ts"
+      ],
+      "blockedBy": [],
+      "done": "三平台都能发现并暂停 bridge 服务，失败时恢复；不碰 Vonvon 自己的注册。",
+      "plan": "V8 *Build* 第三条"
+    },
+    {
+      "id": "V8-T3",
+      "parent": "V8",
+      "title": "协议与命令：protocol/src/import.ts、cli/commands/import.ts 与根代理登记",
+      "scope": [
+        "packages/protocol/src/import.ts",
+        "packages/daemon/src/cli/commands/import.ts",
+        "cli/index.ts 一行登记与协议导出（根代理）"
+      ],
+      "blockedBy": [
+        "V8-T1"
+      ],
+      "done": "`vonvon import feishu-codex-bridge` 可用；请求组登记完成。",
+      "plan": "V8 *Files*、*Shared files*"
+    },
+    {
+      "id": "V8-T4",
+      "parent": "V8",
+      "title": "界面导入引导：packages/ui/src/import 与首次运行步骤",
+      "scope": [
+        "packages/ui/src/import/**",
+        "界面功能登记一行（根代理）"
+      ],
+      "blockedBy": [],
+      "done": "导入页列出 bot、群和会话，确认后显示每个 bot 已连接。",
+      "plan": "V8 *Build* 第五条"
+    },
+    {
+      "id": "V8-T5",
+      "parent": "V8",
+      "title": "Mac 原生 lane：manzana（gui/502）中安装 bridge 446b2a4 并导入",
+      "scope": [
+        "lane 1、2、3 的 Mac 部分"
+      ],
+      "blockedBy": [
+        "V8-T1",
+        "V8-T2",
+        "V8-T3",
+        "V8-T4",
+        "OP-2"
+      ],
+      "acceptance": "manzana 已登录图形会话；clay 的在用 bridge 前后对比无变化",
+      "done": "回复来自 Vonvon Bot，bridge 任务与 plist 消失；坏密钥时 bridge 恢复运行。",
+      "plan": "V8 *Verify, live* Lane context"
+    },
+    {
+      "id": "V8-T6",
+      "parent": "V8",
+      "title": "Linux 原生 lane：vonvon-accept 中安装 bridge 用户单元并导入",
+      "scope": [
+        "lane 1、3 的 Linux 部分，lane 4 到 10 任一环境"
+      ],
+      "blockedBy": [
+        "V8-T1",
+        "V8-T2",
+        "V8-T3",
+        "V8-T4"
+      ],
+      "done": "LoadState 为 not-found，单元文件消失，标记文件存在。",
+      "plan": "V8 *Verify, live*"
+    },
+    {
+      "id": "V8-T7",
+      "parent": "V8",
+      "title": "冻结 head 门：十路实时、性能、独立审查与 Shipping",
+      "scope": [
+        "lane、perf（3 bot、10 项目、230 会话的停机时长）、审查"
+      ],
+      "blockedBy": [
+        "V8-T5",
+        "V8-T6"
+      ],
+      "gate": true,
+      "done": "gui/502 不存在则 Mac lane 保持未检查且不合并。",
+      "plan": "V8 *Verify, perf*、*Merge*"
+    },
+    {
+      "id": "V9-T1",
+      "parent": "V9",
+      "title": "owner-notice、CLI 提示与标记文件拒绝启动（bridge 仓库）",
+      "scope": [
+        "src/bot/owner-notice.ts",
+        "src/cli/commands/{daemon,update,run}.ts",
+        "src/cli/index.ts",
+        "src/card/dm-cards.ts",
+        "src/web/ui.ts",
+        "test/owner-notice.test.ts"
+      ],
+      "blockedBy": [],
+      "status": "in-progress",
+      "done": "已推送 05e2635；只发一次 DM，重启不重发，有标记时 run 拒绝。",
+      "plan": "V9 *Build*、issue #77"
+    },
+    {
+      "id": "V9-T2",
+      "parent": "V9",
+      "title": "发布提示链接指向已发布的安装包页",
+      "scope": [
+        "src/service/desktop-release.ts"
+      ],
+      "blockedBy": [
+        "V5-T11"
+      ],
+      "done": "lane 10 打开已发布的安装包页。占位、staging 或未发布地址都不算。",
+      "plan": "V9 *Depends on*"
+    },
+    {
+      "id": "V9-T3",
+      "parent": "V9",
+      "title": "冻结 head 门：十路实时、性能、独立审查、Shipping 与 npm 发布",
+      "scope": [
+        "lane、perf、审查、npm 发布"
+      ],
+      "blockedBy": [
+        "V9-T1",
+        "V9-T2"
+      ],
+      "gate": true,
+      "done": "V8 已合入后合并；发布检查与外部门满足后发 npm。",
+      "plan": "V9 *Merge*"
+    },
+    {
+      "id": "V10-T1",
+      "parent": "V10",
+      "title": "packages/cloud：server、oauth、accounts、devices、仓库接口与 Postgres、内存实现",
+      "scope": [
+        "packages/cloud/src/server.ts",
+        "oauth.ts",
+        "accounts.ts",
+        "devices.ts",
+        "store/repository.ts",
+        "store/postgres.ts",
+        "store/memory.ts",
+        "test/devices.test.ts",
+        "test/repository-contract.test.ts"
+      ],
+      "blockedBy": [],
+      "status": "in-progress",
+      "done": "注册、改名、撤销、拒绝已撤销凭据、原地轮换、跨账号隔离的用例通过；issue 75 的私有存储形状。",
+      "plan": "V10 *Device contract*、issue #75、#89、#94"
+    },
+    {
+      "id": "V10-T2",
+      "parent": "V10",
+      "title": "daemon 云端连接：enroll、link、credential 与在线状态",
+      "scope": [
+        "packages/daemon/src/cloud/enroll.ts",
+        "link.ts",
+        "credential.ts"
+      ],
+      "blockedBy": [
+        "V10-T1"
+      ],
+      "freeze": "F10",
+      "done": "设备凭据在 link 处单独校验；在线状态来自出站连接；与 V10-T1 一起发布 F10。",
+      "plan": "V10 *Build*"
+    },
+    {
+      "id": "V10-T3",
+      "parent": "V10",
+      "title": "vonvon login 与 logout 命令及根代理登记",
+      "scope": [
+        "packages/daemon/src/cli/commands/login.ts",
+        "cli/index.ts 两行登记（根代理）"
+      ],
+      "blockedBy": [
+        "V10-T2"
+      ],
+      "done": "两台机器 login 后同一账号下列出两台。",
+      "plan": "V10 *Files*"
+    },
+    {
+      "id": "V10-T4",
+      "parent": "V10",
+      "title": "界面：账号页与机器列表",
+      "scope": [
+        "packages/ui/src/account/**",
+        "界面功能登记一行（根代理）"
+      ],
+      "blockedBy": [],
+      "done": "未登录时不弹登录；离线机器只显示离线。",
+      "plan": "V10 *Build* 最后一条"
+    },
+    {
+      "id": "V10-T5",
+      "parent": "V10",
+      "title": "本地云端环境：Postgres 与开发登录，供 lane 使用",
+      "scope": [
+        "本地 Postgres、dev auth 启动脚本"
+      ],
+      "blockedBy": [
+        "V10-T1"
+      ],
+      "done": "两个 daemon 可对同一本地云端注册。",
+      "plan": "V10 *Depends on*"
+    },
+    {
+      "id": "V10-T6",
+      "parent": "V10",
+      "title": "冻结 head 门：十路实时（第 8 路要 V5 外壳）、性能、独立审查与 Shipping",
+      "scope": [
+        "lane、perf、审查"
+      ],
+      "blockedBy": [
+        "V10-T2",
+        "V10-T3",
+        "V10-T4",
+        "V10-T5"
+      ],
+      "gate": true,
+      "done": "上线与离线时延在规则内；桌面登录经浏览器交接后出现机器列表。",
+      "plan": "V10 *Verify, live*、*Verify, perf*"
+    },
+    {
+      "id": "V11-T1",
+      "parent": "V11",
+      "title": "端到端加密移植：e2ee/**、base64.ts、编译合同与 closure 测试",
+      "scope": [
+        "packages/client/src/e2ee/**",
+        "e2ee.test.ts",
+        "e2ee-closure.test.ts",
+        "scripts/type-only-identity.mjs",
+        "closure.json",
+        "NOTICE 一句（根代理）"
+      ],
+      "blockedBy": [],
+      "status": "in-progress",
+      "done": "篡改帧被拒；换公钥时首帧解密失败并断开；issue 90 的严格编译冲突按 *Compiler contract* 解决。",
+      "plan": "V11 *Handshake*、*Compiler contract*、issue #90"
+    },
+    {
+      "id": "V11-T2",
+      "parent": "V11",
+      "title": "云端中继：packages/cloud/src/relay 与托管 ui/dist",
+      "scope": [
+        "packages/cloud/src/relay/**",
+        "云端托管 packages/ui/dist"
+      ],
+      "blockedBy": [
+        "V10-T1"
+      ],
+      "done": "云端只转发密文；托管网页可打开。",
+      "plan": "V11 *Build*"
+    },
+    {
+      "id": "V11-T3",
+      "parent": "V11",
+      "title": "daemon 中继传输与机器密钥",
+      "scope": [
+        "packages/daemon/src/cloud/relay-transport.ts",
+        "machine-key.ts"
+      ],
+      "blockedBy": [
+        "V10-T2",
+        "V11-T1"
+      ],
+      "done": "注册时登记 X25519 公钥，保持一条出站中继连接。",
+      "plan": "V11 *Build*"
+    },
+    {
+      "id": "V11-T4",
+      "parent": "V11",
+      "title": "客户端中继传输与界面机器切换器",
+      "scope": [
+        "packages/client/src/transport-relay.ts",
+        "packages/ui/src 的机器切换器",
+        "界面功能登记一行（根代理）",
+        "tweetnacl ^1.0.3（根代理）"
+      ],
+      "blockedBy": [
+        "V11-T1",
+        "V10-T2"
+      ],
+      "done": "同一 appId 在两台在线机器上启用时界面警告；远程改群设置落到对方 projects.json。",
+      "plan": "V11 *Build*"
+    },
+    {
+      "id": "V11-T5",
+      "parent": "V11",
+      "title": "冻结 head 门：十路实时（第 7 路要 V5 外壳）、性能、独立审查与 Shipping",
+      "scope": [
+        "lane、perf（本地与中继的快照往返 p50、p95）、审查"
+      ],
+      "blockedBy": [
+        "V11-T2",
+        "V11-T3",
+        "V11-T4"
+      ],
+      "gate": true,
+      "done": "程序在 V11 验证通过后结束。",
+      "plan": "V11 *Verify, live*、*Verify, perf*、Close the program"
+    }
   ],
   "operator": [
-    { "id": "OP-1", "title": "GitHub Actions：修复付款方式并设置 spending limit", "body": "2026-10-12 09:00Z 起所有运行在 job 启动前失败，注释为 “recent account payments have failed or your spending limit needs to be increased”。先在组织 Billing 页面检查付款方式，再设每月上限。预算估算见 docs/ci-costs.md。合并规则要求准确 head 的 Linux CI 成功，所以这件事挡住所有合并。", "blocks": ["V5-T10", "V6a-T8"] },
-    { "id": "OP-2", "title": "Mac：把 manzana 登录进图形会话并在 V8 验收期间保持登录", "body": "V8 的 Mac lane 要在 manzana（uid 502）的 gui/502 域里装 bridge 446b2a4，因为 clay 里有在用的 bridge。用快速切换用户或屏幕共享登录。这是用户操作，不是授权问题。", "blocks": ["V8-T5"] },
-    { "id": "OP-3", "title": "提供 Cursor 和 Grok 的测试账号（V7a 录制与实测）", "body": "V7a 要在 Mac 上用真实账号录下 cursor-agent 和 grok 的原始 JSON 行再写方言。录到之前相关格按“没有”处理。", "blocks": ["V7a-T2"] },
-    { "id": "OP-4", "title": "决定是否提供 Windows 主机（V7c）", "body": "V7c 的 Windows 探针、Job Object 测试和 lane 2 到 6 需要装有 Codex 和 Claude Code 的 Windows 主机。没有主机时 V7c 停放，它是叶子，不挡任何版本。也可以决定长期不做，Windows 格保持 refuse。", "blocks": ["V7c-T1"] },
-    { "id": "OP-5", "title": "决定云端部署平台（V10、V11 发布用）", "body": "roadmap 已知风险：云端的部署平台还没定，vonvon-bridge-legacy 的 deploy/tencent 可参考。V10 和 V11 的 lane 用本地云端，不等这个决定；发布要。", "blocks": [] }
+    {
+      "id": "OP-1",
+      "title": "GitHub Actions：修复付款方式并设置 spending limit",
+      "body": "2026-10-12 09:00Z 起所有运行在 job 启动前失败，注释为 “recent account payments have failed or your spending limit needs to be increased”。先在组织 Billing 页面检查付款方式，再设每月上限。预算估算见 docs/ci-costs.md。合并规则要求准确 head 的 Linux CI 成功，所以这件事挡住所有合并。",
+      "blocks": [
+        "V5-T10",
+        "V6a-T8"
+      ]
+    },
+    {
+      "id": "OP-2",
+      "title": "Mac：把 manzana 登录进图形会话并在 V8 验收期间保持登录",
+      "body": "V8 的 Mac lane 要在 manzana（uid 502）的 gui/502 域里装 bridge 446b2a4，因为 clay 里有在用的 bridge。用快速切换用户或屏幕共享登录。这是用户操作，不是授权问题。",
+      "blocks": [
+        "V8-T5"
+      ]
+    },
+    {
+      "id": "OP-3",
+      "title": "提供 Cursor 和 Grok 的测试账号（V7a 录制与实测）",
+      "body": "V7a 要在 Mac 上用真实账号录下 cursor-agent 和 grok 的原始 JSON 行再写方言。录到之前相关格按“没有”处理。",
+      "blocks": [
+        "V7a-T2"
+      ]
+    },
+    {
+      "id": "OP-4",
+      "title": "决定是否提供 Windows 主机（V7c）",
+      "body": "V7c 的 Windows 探针、Job Object 测试和 lane 2 到 6 需要装有 Codex 和 Claude Code 的 Windows 主机。没有主机时 V7c 停放，它是叶子，不挡任何版本。也可以决定长期不做，Windows 格保持 refuse。",
+      "blocks": [
+        "V7c-T1"
+      ]
+    },
+    {
+      "id": "OP-5",
+      "title": "决定云端部署平台（V10、V11 发布用）",
+      "body": "roadmap 已知风险：云端的部署平台还没定，vonvon-bridge-legacy 的 deploy/tencent 可参考。V10 和 V11 的 lane 用本地云端，不等这个决定；发布要。",
+      "blocks": []
+    }
   ],
   "tooling": [
-    { "id": "TOOL-1", "title": "进度板自动刷新：issue 事件触发 `program-graph-sync.mjs board`", "body": "新建 `.github/workflows/progress.yml`，在 issues 的 opened、closed、reopened、labeled、unlabeled 事件和 workflow_dispatch 上运行 `node scripts/program-graph-sync.mjs board`，用 GITHUB_TOKEN 重写程序看板 issue 正文里标记之间的 Mermaid 图和进度表。只用 ubuntu-latest，不装依赖，预计每次不到 1 分钟。", "blockedBy": [] },
-    { "id": "TOOL-2", "title": "CI 改为冻结 head 触发", "body": "按 docs/plan.md *CI policy* 的新规则改 `.github/workflows/ci.yml`：PR 的 synchronize 只跑 docs 范围检查；完整三平台运行只在 PR 带 `frozen` 标签时的 synchronize/labeled 事件或 workflow_dispatch 上跑。根代理在冻结 head 时打标签，patch 变了先摘标签再打。更新 docs/ci-costs.md 的触发表。", "blockedBy": [] }
+    {
+      "id": "TOOL-1",
+      "title": "进度网页与看板的定时刷新：GitHub Pages 加 issue 事件和 schedule",
+      "body": "新建 `.github/workflows/progress.yml`。触发：`schedule` 每 2 小时一次（`0 */2 * * *`），issues 的 opened、closed、reopened、labeled、unlabeled 事件，以及 workflow_dispatch。步骤：在 ubuntu-latest 上用 GITHUB_TOKEN 运行 `node scripts/program-graph-sync.mjs board` 重写看板 issue #122，再运行 `node scripts/program-graph-sync.mjs html site` 生成 `site/index.html`，用 actions/upload-pages-artifact 和 actions/deploy-pages 发布到 GitHub Pages。仓库 Settings 里把 Pages 的 Source 设为 GitHub Actions，并在 PR 里写下网页地址。不装 npm 依赖，预计每次不到 1 分钟，每月约 360 分钟 Linux。注意：私有仓库的 Pages 在 Team 套餐下对知道地址的人公开，网页只含任务标题和编号；如果用户不接受，改为在 JP-VPS 上用 cron 生成并通过 Tailscale 提供静态页，不发布到 Pages。完成标准：网页能打开并渲染两张图和进度表；关闭一个 issue 后，下一次定时运行或事件运行把它变绿；工作流在 TOOL-2 之前落地，不算入 CI 完整运行。",
+      "blockedBy": []
+    },
+    {
+      "id": "TOOL-2",
+      "title": "CI 改为冻结 head 触发",
+      "body": "按 docs/plan.md *CI policy* 的新规则改 `.github/workflows/ci.yml`：PR 的 synchronize 只跑 docs 范围检查；完整三平台运行只在 PR 带 `frozen` 标签时的 synchronize/labeled 事件或 workflow_dispatch 上跑。根代理在冻结 head 时打标签，patch 变了先摘标签再打。更新 docs/ci-costs.md 的触发表。",
+      "blockedBy": []
+    }
   ],
   "existingIssues": {
-    "V5": [83, 84, 85, 86, 87, 92, 93, 95, 96, 98, 99, 101, 104, 106, 111, 112],
-    "V6a": [114],
-    "V7a": [74],
-    "V8": [76, 97, 105],
-    "V9": [77],
-    "V10": [75, 88, 89, 94],
-    "V11": [90],
-    "TOOLING": [102, 103]
+    "V5": [
+      83,
+      84,
+      85,
+      86,
+      87,
+      92,
+      93,
+      95,
+      96,
+      98,
+      99,
+      101,
+      104,
+      106,
+      111,
+      112
+    ],
+    "V6a": [
+      114
+    ],
+    "V7a": [
+      74
+    ],
+    "V8": [
+      76,
+      97,
+      105
+    ],
+    "V9": [
+      77
+    ],
+    "V10": [
+      75,
+      88,
+      89,
+      94
+    ],
+    "V11": [
+      90
+    ],
+    "TOOLING": [
+      102,
+      103
+    ]
   }
 }

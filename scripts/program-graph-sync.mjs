@@ -4,11 +4,12 @@
 //   node scripts/program-graph-sync.mjs sync     labels, issues, sub-issues, blocked-by, project items
 //   node scripts/program-graph-sync.mjs board    rewrite the board issue body from live issue state
 //   node scripts/program-graph-sync.mjs mermaid  print the Mermaid graphs only
+//   node scripts/program-graph-sync.mjs html <out-dir>   write a standalone index.html for GitHub Pages
 //
 // Needs `gh` authenticated with repo scope; `sync` also needs project scope.
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -266,6 +267,7 @@ function stateOf(raw, issues) {
 
 const STYLE = {
   done: 'fill:#c2e0c6,stroke:#2da44e,color:#000',
+  defect: 'fill:#ffebe9,stroke:#cf222e,color:#000',
   verified: 'fill:#0052cc,stroke:#0052cc,color:#fff',
   frozen: 'fill:#bfd4f2,stroke:#0969da,color:#000',
   'code-ready': 'fill:#dbe9ff,stroke:#0969da,color:#000',
@@ -276,7 +278,16 @@ const STYLE = {
   missing: 'fill:#ffdce0,stroke:#cf222e,color:#000',
 };
 
-function mermaid(issues) {
+function defectsOf(versionId, byNumber) {
+  const generated = new Set([...issues_marked(byNumber)]);
+  return [...byNumber.values()].filter((i) => !generated.has(i.number) && (i.labels ?? []).some((l) => l.name === `version:${versionId}`));
+}
+
+function issues_marked(byNumber) {
+  return [...byNumber.values()].filter((i) => /<!-- program-graph: /.test(i.body ?? '')).map((i) => i.number);
+}
+
+function mermaid(issues, byNumber = new Map(), { links = false } = {}) {
   const versionLines = ['flowchart LR'];
   const styles = [];
   const label = (node, extra = '') => {
@@ -292,8 +303,6 @@ function mermaid(issues) {
     styles.push(`  style ${mermaidId(v.id)} ${STYLE[stateOf(v, issues)]}`);
     for (const m of v.mergeAfter ?? []) versionLines.push(`  ${mermaidId(m)} --> ${mermaidId(v.id)}`);
   }
-  const versionGraph = [...versionLines, ...styles].join('\n');
-
   const taskLines = ['flowchart LR'];
   const taskStyles = [];
   for (const o of spec.operator) {
@@ -308,12 +317,25 @@ function mermaid(issues) {
   }
   for (const t of [...spec.tasks, ...spec.tooling]) for (const b of t.blockedBy ?? []) taskLines.push(`  ${mermaidId(b)} --> ${mermaidId(t.id)}`);
   for (const o of spec.operator) for (const target of o.blocks ?? []) taskLines.push(`  ${mermaidId(o.id)} -.-> ${mermaidId(target)}`);
+  for (const v of [...spec.versions, nodes.get('TOOLING')]) {
+    const gate = spec.tasks.find((t) => t.parent === v.id && t.gate);
+    for (const d of defectsOf(v.id, byNumber)) {
+      const id = `D${d.number}`;
+      taskLines.push(`  ${id}["#${d.number} ${short(d.title, 30)}"]`);
+      taskStyles.push(`  style ${id} ${d.state === 'CLOSED' ? STYLE.done : STYLE.defect}`);
+      if (gate) taskLines.push(`  ${id} -.-> ${mermaidId(gate.id)}`);
+      if (links) taskLines.push(`  click ${id} "${d.url}"`);
+    }
+  }
+  if (links) {
+    for (const [id, issue] of issues) if (id !== BOARD_ID) taskLines.push(`  click ${mermaidId(id)} "${issue.url}"`), versionLines.push(`  click ${mermaidId(id)} "${issue.url}"`);
+  }
   const taskGraph = [...taskLines, ...taskStyles].join('\n');
+  const versionGraph = [...versionLines, ...styles].join('\n');
   return { versionGraph, taskGraph };
 }
 
-function board_(issues, byNumber) {
-  const { versionGraph, taskGraph } = mermaid(issues);
+function progressRows(issues, byNumber) {
   const rows = [];
   for (const v of spec.versions) {
     const tasks = spec.tasks.filter((t) => t.parent === v.id);
@@ -324,7 +346,15 @@ function board_(issues, byNumber) {
     const issue = issues.get(v.id);
     rows.push(`| ${v.id} | #${issue.number} | ${v.pr ? `#${v.pr}` : '未开'} | ${stateOf(v, issues)} | ${done}/${tasks.length} | ${defects} | ${active.join('、') || '无'} | ${ready.join('、') || '无'} |`);
   }
-  const legend = '颜色：绿 已完成 · 黄 进行中 · 白 可开始 · 灰 被挡 · 虚线 停放 · 蓝 版本已冻结或已验证。';
+  return rows;
+}
+
+const TABLE_HEAD = ['| 版本 | issue | PR | 状态 | 任务 | 未关缺陷 | 进行中 | 现在可开始 |', '| --- | --- | --- | --- | --- | --- | --- | --- |'];
+
+function board_(issues, byNumber) {
+  const { versionGraph, taskGraph } = mermaid(issues, byNumber);
+  const rows = progressRows(issues, byNumber);
+  const legend = '颜色：绿 已完成 · 黄 进行中 · 白 可开始 · 灰 被挡 · 虚线 停放 · 红 未关缺陷 · 蓝 版本已冻结或已验证。缺陷用虚线指向所属版本的证据门。';
   const body = [
     `更新时间 ${new Date().toISOString()}。`,
     '',
@@ -336,8 +366,7 @@ function board_(issues, byNumber) {
     versionGraph,
     '```',
     '',
-    '| 版本 | issue | PR | 状态 | 任务 | 未关缺陷 | 进行中 | 现在可开始 |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- |',
+    ...TABLE_HEAD,
     ...rows,
     '',
     '## 任务依赖图',
@@ -366,14 +395,47 @@ function loadIssues() {
   return { issues, byNumber: new Map(all.map((i) => [i.number, i])) };
 }
 
+function html(issues, byNumber, outDir) {
+  const { versionGraph, taskGraph } = mermaid(issues, byNumber, { links: true });
+  const rows = progressRows(issues, byNumber);
+  const esc = (t) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const issueLink = (cell) => cell.replace(/#(\d+)/g, (_, n) => `<a href="https://github.com/${spec.repo}/issues/${n}">#${n}</a>`);
+  const tableRows = rows.map((r) => `<tr>${r.split('|').slice(1, -1).map((c) => `<td>${issueLink(esc(c.trim()))}</td>`).join('')}</tr>`).join('\n');
+  const head = TABLE_HEAD[0].split('|').slice(1, -1).map((c) => `<th>${c.trim()}</th>`).join('');
+  const page = `<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>Vonvon Bot v2 进度</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>body{font:14px/1.5 -apple-system,system-ui,sans-serif;margin:24px;color:#1f2328}h1,h2{font-weight:600}table{border-collapse:collapse}td,th{border:1px solid #d0d7de;padding:4px 8px;text-align:left}pre.mermaid{background:transparent}.legend{color:#57606a}a{color:#0969da;text-decoration:none}</style>
+<script type="module">import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';mermaid.initialize({startOnLoad:true,securityLevel:'loose',flowchart:{useMaxWidth:true}});</script>
+</head><body>
+<h1>Vonvon Bot v2 进度</h1>
+<p class="legend">更新时间 ${new Date().toISOString()}。看板 <a href="https://github.com/${spec.repo}/issues/${issues.get(BOARD_ID)?.number ?? ''}">issue #${issues.get(BOARD_ID)?.number ?? ''}</a>。颜色：绿 已完成 · 黄 进行中 · 白 可开始 · 灰 被挡 · 虚线 停放 · 红 未关缺陷 · 蓝 版本已冻结或已验证。缺陷用虚线指向所属版本的证据门。</p>
+<h2>版本合并图</h2>
+<pre class="mermaid">${esc(versionGraph)}</pre>
+<h2>进度</h2>
+<table><thead><tr>${head}</tr></thead><tbody>
+${tableRows}
+</tbody></table>
+<h2>任务依赖图</h2>
+<pre class="mermaid">${esc(taskGraph)}</pre>
+</body></html>
+`;
+  mkdirSync(outDir, { recursive: true });
+  writeFileSync(join(outDir, 'index.html'), page);
+  console.log(`wrote ${join(outDir, 'index.html')}`);
+}
+
 const mode = process.argv[2] ?? 'board';
 if (mode === 'sync') sync();
 else if (mode === 'board') {
   const { issues, byNumber } = loadIssues();
   board_(issues, byNumber);
+} else if (mode === 'html') {
+  const { issues, byNumber } = loadIssues();
+  html(issues, byNumber, process.argv[3] ?? 'board-site');
 } else if (mode === 'mermaid') {
-  const { issues } = loadIssues();
-  const { versionGraph, taskGraph } = mermaid(issues);
+  const { issues, byNumber } = loadIssues();
+  const { versionGraph, taskGraph } = mermaid(issues, byNumber);
   console.log(versionGraph, '\n\n', taskGraph);
 } else {
   console.error(`unknown mode ${mode}`);
