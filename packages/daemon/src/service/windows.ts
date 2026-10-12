@@ -17,7 +17,7 @@ import { readVonvonRunValue } from './win-startup';
 type WindowsBytes = Extract<SerializedDefinition, { platform: 'win32' }>;
 type WindowsTarget = { platform: 'win32'; vbsPath: string; cmdPath: string };
 type Files = { cmd: Uint8Array | null; vbs: Uint8Array | null };
-type Snapshot = { root: CanonicalRoot; target: WindowsTarget; files: Files; runValue: string | null; temporaryLeftovers: string[] };
+type Snapshot = { root: CanonicalRoot; target: WindowsTarget; files: Files; runValue: string | null; temporaryLeftovers: string[]; blocked: string | null; runUnknown: string | null };
 type Removal = { kind: 'unloaded' } | DrainFailure | { kind: 'withdrawal-failed' | 'unload-failed'; detail: string };
 type CommandResult = { status: number | null; stdout: string; stderr: string; error?: Error };
 type Dependencies = {
@@ -114,7 +114,7 @@ export function createWindowsService(options: { root: string }, overrides: Parti
     const root = await d.resolveRoot(options.root);
     const target = serviceTarget({ platform: 'win32', root });
     if (target.platform !== 'win32') throw new Error('Invalid Windows target');
-    return { root, target, files: { cmd: null, vbs: null }, runValue: null, temporaryLeftovers: [] };
+    return { root, target, files: { cmd: null, vbs: null }, runValue: null, temporaryLeftovers: [], blocked: null, runUnknown: null };
   }
   const registration = (s: Snapshot): Promise<Registration> => d.registration({ target: s.target, requestedRoot: s.root, windowsRun: d.readRun() });
   function bytes(s: Snapshot, definition: Definition): WindowsBytes {
@@ -127,9 +127,25 @@ export function createWindowsService(options: { root: string }, overrides: Parti
     s.files = { cmd: await fileBytes(s.target.cmdPath), vbs: await fileBytes(s.target.vbsPath) };
   }
   async function checkExpected(s: Snapshot): Promise<void> {
-    if (runValue() !== s.runValue) throw new Error('Windows Run registration changed before mutation');
-    for (const name of ['cmd', 'vbs'] as const) {
-      if (!sameBytes(await fileBytes(s.target[`${name}Path`]), s.files[name])) throw new Error(`Launcher changed before mutation: ${s.target[`${name}Path`]}`);
+    if (s.blocked !== null) throw new Error(s.blocked);
+    try {
+      let observedRun: string | null;
+      try { observedRun = runValue(); }
+      catch (error) {
+        s.runUnknown = `Run value unknown: ${detailOf(error)}`;
+        throw new Error(s.runUnknown);
+      }
+      if (observedRun !== s.runValue) throw new Error('Windows Run registration changed before mutation');
+      for (const name of ['cmd', 'vbs'] as const) {
+        const path = s.target[`${name}Path`];
+        let observed: Uint8Array | null;
+        try { observed = await fileBytes(path); }
+        catch (error) { throw new Error(`Launcher unknown ${path}: ${detailOf(error)}`); }
+        if (!sameBytes(observed, s.files[name])) throw new Error(`Launcher changed before mutation: ${path}`);
+      }
+    } catch (error) {
+      s.blocked = detailOf(error);
+      throw error;
     }
   }
   function command(args: string[]): void {
@@ -141,15 +157,22 @@ export function createWindowsService(options: { root: string }, overrides: Parti
     if (value === s.runValue) return;
     const previous = s.runValue;
     try {
-      if (value === null) command(['delete', WINDOWS_RUN_KEY, '/v', WINDOWS_RUN_VALUE, '/f']);
-      else command(['add', WINDOWS_RUN_KEY, '/v', WINDOWS_RUN_VALUE, '/t', 'REG_SZ', '/d', value, '/f']);
-    } finally {
-      const observed = runValue();
-      if (observed !== previous && observed !== value) throw new Error('Windows Run registration changed during mutation');
-      s.runValue = observed;
+      try {
+        if (value === null) command(['delete', WINDOWS_RUN_KEY, '/v', WINDOWS_RUN_VALUE, '/f']);
+        else command(['add', WINDOWS_RUN_KEY, '/v', WINDOWS_RUN_VALUE, '/t', 'REG_SZ', '/d', value, '/f']);
+      } finally {
+        const observed = runValue();
+        if (observed !== previous && observed !== value) throw new Error('Windows Run registration changed during mutation');
+        s.runValue = observed;
+      }
+      if (s.runValue !== value) throw new Error('Windows Run mutation was not confirmed');
+    } catch (error) {
+      s.runUnknown = `Run value unknown: ${detailOf(error)}`;
+      s.blocked = s.runUnknown;
+      throw new Error(s.runUnknown);
     }
-    if (s.runValue !== value) throw new Error('Windows Run mutation was not confirmed');
   }
+
   async function write(s: Snapshot, name: 'cmd' | 'vbs', content: Uint8Array | null): Promise<void> {
     await checkExpected(s);
     if (sameBytes(s.files[name], content)) return;
@@ -170,20 +193,32 @@ export function createWindowsService(options: { root: string }, overrides: Parti
       throw error;
     }
   }
+  async function writePaths(s: Snapshot, files: Partial<Files>): Promise<void> {
+    const errors: string[] = [];
+    for (const name of ['cmd', 'vbs'] as const) {
+      const content = files[name];
+      if (content === undefined) continue;
+      try { await write(s, name, content); }
+      catch (error) { errors.push(`${s.target[`${name}Path`]}: ${detailOf(error)}`); }
+    }
+    if (errors.length) throw new Error(errors.join('; '));
+  }
   async function restore(s: Snapshot, files: Files, value: string | null): Promise<void> {
-    await write(s, 'cmd', files.cmd);
-    await write(s, 'vbs', files.vbs);
+    await writePaths(s, files);
+    await checkExpected(s);
+    if (!sameBytes(s.files.cmd, files.cmd) || !sameBytes(s.files.vbs, files.vbs)) throw new Error('Previous launchers were not restored');
     await setRun(s, value);
     await checkExpected(s);
   }
-  async function remove(s: Snapshot, scope: DrainScope): Promise<Removal> {
+  async function remove(s: Snapshot, scope: DrainScope, written: readonly ('cmd' | 'vbs')[] = ['cmd', 'vbs']): Promise<Removal> {
     try { await setRun(s, null); }
     catch (error) { return { kind: 'withdrawal-failed', detail: detailOf(error) }; }
     const result = await drain({ home: s.root, scope, queryJobPid: async () => null });
     if (result.kind === 'drain-failed') return result;
     try {
-      await write(s, 'cmd', null);
-      await write(s, 'vbs', null);
+      const removed: Partial<Files> = {};
+      for (const name of written) removed[name] = null;
+      await writePaths(s, removed);
       await checkExpected(s);
       return { kind: 'unloaded' };
     } catch (error) { return { kind: 'unload-failed', detail: detailOf(error) }; }
@@ -195,7 +230,10 @@ export function createWindowsService(options: { root: string }, overrides: Parti
     try { retained = identity(await d.readOwner(s.root)); }
     catch (error) { unknown = true; leftovers.push(`owner unknown: ${detailOf(error)}`); }
     if (retained) leftovers.push(`retained pid ${retained.pid}`);
-    try { if (runValue() !== null) leftovers.push(`Run value ${WINDOWS_RUN_VALUE}`); }
+    try {
+      if (s.runUnknown !== null) { unknown = true; leftovers.push(s.runUnknown); }
+      else if (runValue() !== null) leftovers.push(`Run value ${WINDOWS_RUN_VALUE}`);
+    }
     catch (error) { unknown = true; leftovers.push(`Run value unknown: ${detailOf(error)}`); }
     for (const path of [s.target.cmdPath, s.target.vbsPath]) {
       try { if (await fileBytes(path) !== null) leftovers.push(`launcher ${path}`); }
@@ -250,9 +288,13 @@ export function createWindowsService(options: { root: string }, overrides: Parti
         if (identical) return outcome(s, 'already-installed', 'Already installed');
         if (current.kind === 'ours' && owner !== null) throw new Error('Run vonvon daemon stop before replacing the service');
       } catch (error) { return outcome(s, 'install_refused', detailOf(error)); }
+      const written: ('cmd' | 'vbs')[] = [];
       try {
-        await write(s, 'cmd', desired.cmd);
-        await write(s, 'vbs', desired.vbs);
+        for (const name of ['cmd', 'vbs'] as const) {
+          const changed = !sameBytes(s.files[name], desired[name]);
+          await write(s, name, desired[name]);
+          if (changed) written.push(name);
+        }
         await setRun(s, desired.runValue);
         if (before === null) await d.launch(s.target.vbsPath);
         await ready(s, port, before === null);
@@ -260,15 +302,20 @@ export function createWindowsService(options: { root: string }, overrides: Parti
         return outcome(s, 'installed', 'Installed');
       } catch (error) {
         const reason = detailOf(error);
-        const result = await remove(s, { kind: 'job-only', context: 'install-rollback' });
+        const result = await remove(s, { kind: 'job-only', context: 'install-rollback' }, written);
         if (result.kind === 'withdrawal-failed') return outcome(s, 'install_incomplete', `${reason}; ${result.detail}`);
         if (result.kind === 'drain-failed' && result.reason === 'stop_unconfirmed') return outcome(s, 'install_incomplete', `${reason}; ${result.detail}; nothing restored`);
         const detail = `${reason}; ${result.kind === 'unloaded' ? 'transaction launchers removed' : result.detail}`;
         try {
           await restore(s, result.kind === 'drain-failed' ? desired : previousFiles, result.kind === 'drain-failed' ? desired.runValue : previousRun);
         } catch (failure) { return outcome(s, 'install_incomplete', `${detail}; restore failed: ${detailOf(failure)}`); }
-        const report = await outcome(s, result.kind === 'unloaded' && s.temporaryLeftovers.length === 0 ? 'install_rolled_back' : 'install_incomplete', `${detail}${result.kind === 'drain-failed' ? '; previous definition was not restored' : ''}`);
-        if (!sameOwner(before, report.retained)) report.kind = 'install_incomplete';
+        const report = await outcome(s, result.kind !== 'drain-failed' && s.temporaryLeftovers.length === 0 ? 'install_rolled_back' : 'install_incomplete', `${detail}${result.kind === 'drain-failed' ? '; previous definition was not restored' : ''}`);
+        try { await checkExpected(s); }
+        catch (error) { report.kind = 'install_incomplete'; report.detail += `; final verification failed: ${detailOf(error)}`; }
+        if (!sameOwner(before, report.retained)) {
+          report.kind = 'install_incomplete';
+          report.detail += '; owner changed since preflight';
+        }
         return report;
       }
     },
@@ -295,7 +342,10 @@ export function createWindowsService(options: { root: string }, overrides: Parti
       if (result.kind === 'withdrawal-failed' || (result.kind === 'drain-failed' && result.reason === 'stop_unconfirmed') || keptRun === null) return outcome(s, 'uninstall_incomplete', `${result.kind === 'drain-failed' ? `${result.reason}: ` : ''}${result.detail}`);
       try { await restore(s, keptFiles, keptRun); }
       catch (error) { return outcome(s, 'uninstall_incomplete', `${result.detail}; restore failed: ${detailOf(error)}`); }
-      return outcome(s, 'uninstall_rolled_back', result.detail);
+      const report = await outcome(s, s.temporaryLeftovers.length === 0 ? 'uninstall_rolled_back' : 'uninstall_incomplete', result.detail);
+      try { await checkExpected(s); }
+      catch (error) { report.kind = 'uninstall_incomplete'; report.detail += `; final verification failed: ${detailOf(error)}`; }
+      return report;
     },
     async start(input: { port?: number } = {}): Promise<HostEndpoint> {
       const s = await snapshot();

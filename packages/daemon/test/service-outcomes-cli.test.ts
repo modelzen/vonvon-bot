@@ -877,7 +877,7 @@ it('Windows row 4 unload failure restores Run value and exact kept files', async
   expect(r.child.stderr).toContain('fixture launcher unlink failed');
   expect(r.after).toEqual(r.before);
   expect(r.state.stops).toEqual([]);
-  expect(r.state.calls).toEqual(['reg:delete', 'unlink:cmd', 'reg:add']);
+  expect(r.state.calls).toEqual(['reg:delete', 'unlink:cmd', 'unlink:vbs', 'reg:add']);
   expect(r.state.owner).toBeNull();
   expect(r.state.work).toEqual([]);
 });
@@ -915,7 +915,7 @@ it('Windows row 8 resumed unload failure writes nothing back', async () => {
   expect(r.state.owner).toEqual(owner);
   expect(r.state.work).toEqual(['owned-work']);
   expect(r.state.stops).toEqual([]);
-  expect(r.state.calls).toEqual(['unlink:cmd']);
+  expect(r.state.calls).toEqual(['unlink:cmd', 'unlink:vbs']);
 });
 
 it('Windows row 13 failed install rolls back its new launcher pair', async () => {
@@ -938,8 +938,8 @@ it('Windows row 13 restores exact previous pair and Run without relaunch', async
   expect(r.after).toEqual(r.before);
   expect(r.state.owner).toBeNull();
   expect(r.state.stops).toEqual([]);
-  expect(r.state.calls).toEqual(['reg:query', 'rename:cmd', 'launch', 'reg:delete', 'unlink:cmd', 'unlink:vbs',
-    'rename:cmd', 'rename:vbs', 'reg:add']);
+  expect(r.state.calls).toEqual(['reg:query', 'rename:cmd', 'launch', 'reg:delete', 'unlink:cmd',
+    'rename:cmd', 'reg:add']);
   expect(r.state.work).toEqual([]);
 });
 
@@ -973,7 +973,7 @@ it('Windows row 16 rollback unload failure restores exact previous pair', async 
   const r = await runWindowsCase({ action: 'install', port: 32124, installed: true,
     scenario: 'rollback_unload_failed' });
   expect(r.child.status).toBe(1);
-  expect(r.child.stderr).toContain('install_incomplete:');
+  expect(r.child.stderr).toContain('install_rolled_back:');
   expect(r.child.stderr).toContain('fixture launcher unlink failed');
   expect(r.after).toEqual(r.before);
   expect(r.state.owner).toBeNull();
@@ -987,13 +987,16 @@ it('Windows row 16 rollback unload failure with no previous pair leaves registra
   const r = await runWindowsCase({ action: 'install', installed: false,
     scenario: 'rollback_unload_failed' });
   expect(r.child.status).toBe(1);
-  expect(r.child.stderr).toContain('install_incomplete:');
+  expect(r.child.stderr).toContain('install_rolled_back:');
   expect(r.child.stderr).toContain('fixture launcher unlink failed');
+  expect(r.child.stderr).toContain(`${r.cmdPath}: fixture launcher unlink failed`);
+  expect(r.child.stderr).toContain(`${r.vbsPath}: fixture launcher unlink failed`);
+  expect(r.child.stderr).not.toContain('Leftover:');
   expect(r.after).toEqual({ cmd: null, vbs: null, runValue: null });
   expect(r.state.owner).toBeNull();
   expect(r.state.stops).toEqual([]);
   expect(r.state.calls).toEqual(['reg:query', 'rename:cmd', 'rename:vbs', 'reg:add', 'launch',
-    'reg:delete', 'unlink:cmd', 'unlink:cmd', 'unlink:vbs']);
+    'reg:delete', 'unlink:cmd', 'unlink:vbs', 'unlink:cmd', 'unlink:vbs']);
   expect(r.state.work).toEqual([]);
 });
 
@@ -1032,20 +1035,20 @@ it('Windows row 16 persistent cmd EACCES reports new leftovers without previous 
   expect(r.child.status).toBe(1);
   expect(r.child.stderr).toContain('install_incomplete:');
   expect(r.child.stderr).toContain('fixture launcher failed');
-  expect(r.child.stderr).toContain('restore failed: EACCES: fixture cmd unlink denied');
+  expect(r.child.stderr).toContain(`restore failed: ${r.cmdPath}: EACCES: fixture cmd unlink denied`);
   expect(r.child.stderr).toContain('Retained PID 41001');
   expect(r.child.stderr).toContain(`Leftover: launcher ${r.cmdPath}`);
-  expect(r.child.stderr).toContain(`Leftover: launcher ${r.vbsPath}`);
+  expect(r.child.stderr).not.toContain(`Leftover: launcher ${r.vbsPath}`);
   expect(r.child.stderr).not.toContain('Leftover: Run value');
   expect(r.before).toEqual({ cmd: null, vbs: null, runValue: null });
   expect(r.state.newCmdBase64).not.toBeNull();
   expect(r.state.newVbsBase64).not.toBeNull();
-  expect(r.after).toEqual({ cmd: r.state.newCmdBase64, vbs: r.state.newVbsBase64, runValue: null });
+  expect(r.after).toEqual({ cmd: r.state.newCmdBase64, vbs: null, runValue: null });
   expect(r.state.owner).toEqual(owner);
   expect(r.state.work).toEqual(['new-job-work']);
   expect(r.state.stops).toEqual([]);
   expect(r.state.calls).toEqual(['reg:query', 'rename:cmd', 'rename:vbs', 'reg:add', 'launch',
-    'reg:delete', 'unlink:cmd', 'unlink:cmd']);
+    'reg:delete', 'unlink:cmd', 'unlink:vbs', 'unlink:cmd']);
   const blocked = await r.rerun('uninstall', 'rollback_unlink_persistent');
   expect(blocked.child.status).toBe(1);
   expect(blocked.child.stderr).toContain('uninstall_incomplete:');
@@ -1064,5 +1067,5 @@ it('Windows row 16 persistent cmd EACCES reports new leftovers without previous 
   expect(retry.state.owner).toEqual(owner);
   expect(retry.state.work).toEqual(['new-job-work']);
   expect(retry.state.stops).toEqual([]);
-  expect(retry.state.calls).toEqual([...blocked.state.calls, 'unlink:cmd', 'unlink:vbs']);
+  expect(retry.state.calls).toEqual([...blocked.state.calls, 'unlink:cmd']);
 });
