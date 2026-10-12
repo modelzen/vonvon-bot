@@ -1,390 +1,398 @@
 # Bridge import: service ledger, executor ledger, and wire contract (V8)
 
-Status: proposal for independent review. Nothing here is approved or frozen until the root records the review verdict. This revision answers the exact-head review of `87638cdaba3ed631d8e5c1bdab11dba832b99371` (R1 to R16). It settles V8-T2 (#183, #225), V8-T3 (#184), and V8-T4 (#185). The phase order, data boundary, and marker name in [architecture.md](architecture.md) stay. Source anchors below are at that head unless a revision is named. Bridge fixture facts (package name, launcher chain) are the review's reads of `feishu-codex-bridge` at `446b2a40ca75b5f725d7b0baab777b3a8f18b2e0` and `6698118352d7eca87887d3ee1b58736caca204bc`; this worktree does not contain that repository, so Codex re-reads them when it builds the fixture.
+Status: proposal for independent review at a new checkpoint after `bad75db8a6eafd9bc58a99bb3d4e40cd6fc5fa74`. Nothing here is approved or frozen until the root records the review verdict. This revision answers B1 to B10 of the exact-head review of that commit and keeps the clarifications that review accepted (scoped Windows package name, VBS plus CMD chain, task-present refusal, survivor no-launch, sessions rows, required receipt, `paths.appDir` roots, XDG path, managed-versus-foreign inventory, stop-before-restore order, commit point). It settles V8-T2 (#183, #225), V8-T3 (#184), and V8-T4 (#185). Bridge fixture facts are the review's reads of `feishu-codex-bridge` at `446b2a40ca75b5f725d7b0baab777b3a8f18b2e0` and `6698118352d7eca87887d3ee1b58736caca204bc`; this worktree does not contain that repository. Source anchors are at the commit above.
+
+The premise the earlier revisions shared was that compare, then rename or delete, plus a backup, is as good as an identity-bound destructive operation, and that an intent and outcome ledger reconciles every crash prefix by itself. Both are false. This revision therefore changes what the importer does, not how firmly it says it:
+
+- **Pause never touches a file.** It uses the service manager's own name-bound operations, which are the only identity-bound operations these platforms offer: `launchctl disable` and `bootout` by service target, `systemctl --user disable --now` by unit name. The definition file stays where it is during the whole import. Restore is `enable` plus `bootstrap` or `start`, again by name.
+- **The only file removal happens after the commit point**, as the last cleanup, and its narrower guarantee is stated in section 2.6 together with the one escalation it implies for lane 1.
+- **Hooks are rewritten through the inode**, not by rename over a path the user may have replaced.
+- **Every effect records what it saw before acting and what it expects after**, and recovery classifies the current state as before, after, or neither. "Neither" never becomes "foreign" by default; it becomes `manual-recovery` with the evidence named.
+- **Windows executes nothing in this version.** Preflight is read-only there, `execute` refuses with `platform-unsupported`, and the Windows design in section 3.3 is the specification for a later enablement task that needs native proof and root acceptance before it runs.
 
 Codex implements against these shapes. A deviation that changes a type, a persisted file, a wire field, or a shared-file edit returns here first.
 
-Four models carry the design. Model A is the service ledger: what the old service was, what the transaction did to it, and what the adapter may touch. Model B is the per-platform identity and termination policy. Model C is the executor ledger: every side effect as a durable intent and outcome with one commit point. Model D is the wire. Section 7 maps R1 to R16 to rules and traces.
-
 ## 1. Rules
 
-1. **Absent is proven, unknown is reported.** A probe yields `absent` only on exit 0 plus the adapter's own sentinel for "not there". launchd's `launchctl print` of a missing service is the one documented nonzero sentinel (section 3.1). Everything else is `unknown`, and `unknown` refuses before mutation.
-2. **Identity is positive, fixed, and complete.** Names and paths come from `service/control.ts` (`launchdLabel`, `systemdUnit`, `runKeyPath`, `runKeyName`, `relaunchTaskName`, `installationPaths`). A process is the bridge only when every field of the platform's identity table (section 3) matches. No substring, no regex over a whole command line.
-3. **Compare against origin or projection, refuse on foreign change.** Every mutating call compares the current observation with the origin snapshot and with the state the transaction's own completed steps project (section 2.4). An observation equal to neither is `foreign-change`, returned before any write.
-4. **A partial step is a value with evidence.** Pause, restore, and disable return per-step outcomes; the executor persists them. Restore converges from any transaction-created state and never requires a fresh capture to equal the origin.
-5. **Destructive actions need a binding mechanism or they do not happen.** Where the platform offers no mechanism that binds a termination or a removal to the identified object (section 3.3 Windows), the adapter returns `blocked` before mutation and the import ends in `blocked` or `manual-recovery` with the evidence preserved. No residual-risk acceptance exists in this document.
-6. **Exact restoration or no restoration.** A state the adapter cannot reproduce exactly (launchd `loaded-idle` with autostart keys, section 3.1) is detected at capture and refuses `execute` before any mutation.
-7. **Stop what we started before we restart what we stopped.** Rollback stops and removes this transaction's imported runtimes with confirmed termination before the old service is restored (section 4.5).
-8. **Snapshots in memory, hashes and backups on disk.** Bytes of definitions and launchers live in the transaction directory as backup files; the ledger stores path, hash, mode, size, and backup name (section 2.2).
-9. **No foreign target is ever signaled.** Occupancy by a foreign owner refuses the import; it never kills the occupant.
-10. **Order holds.** Pause, verify inventory, copy, hooks, start, verify connected, disable autostart, marker, receipt. Original bridge payload data is never modified; the sole write under `~/.feishu-codex-bridge` is the marker, as `architecture.md` authorizes.
-11. **Every destination path resolves through `paths.appDir`.** `config/paths.ts:6` resolves `VONVON_HOME`; the importer never spells `~/.vonvon-bot`.
+1. **Absent is proven, unknown is reported.** `absent` requires exit 0 plus the adapter's own sentinel. launchd's `launchctl print` of a missing service is the one documented nonzero sentinel (section 3.1). Anything else is `unknown`, and `unknown` refuses before mutation.
+2. **Identity is positive, fixed, and complete.** Names and paths come from `service/control.ts`. A process is the bridge only when every field of the platform's identity table matches. No substring, no regex over a whole command line.
+3. **Mutations are name-bound or inode-bound or they do not happen.** Section 2.6 lists each destructive action with the primitive that binds it and the one action whose binding is incomplete.
+4. **Before, after, or neither.** Every effect records `before` and `expectedAfter`. Recovery observes the current state and classifies it. Only `before` and `expectedAfter` are automatic; `neither` is `manual-recovery` with evidence (section 4.4).
+5. **Refuse before mutation when exact restoration is not provable.** Section 3 defines the supported definition and state for each platform. Outside it, preflight reports the reason and `execute` refuses.
+6. **Stop what we started before we restart what we stopped.** Rollback stops this transaction's imported runtimes with confirmed exit before the old service is restored. Unconfirmed exit ends in `manual-recovery` with the old service untouched and the imported bots quarantined (section 4.6).
+7. **No foreign target is ever signaled or moved.** Occupancy refuses; the inventory distinguishes the managed service from foreign owners by pid correlation (section 3.4).
+8. **Order holds.** Pause, verify inventory, copy, bots, hooks, start, verify connected, disable autostart (commit point), remove definition, marker, receipt. Original bridge payload data is never modified. The sole writes under the bridge data root are the marker and nothing else; the definition file lives under `~/Library/LaunchAgents` or `$XDG_CONFIG_HOME/systemd/user`, not under the data root.
+9. **Destination paths resolve through `paths.appDir`** (`config/paths.ts:6`). The transaction directory lives under it.
+10. **Source exclusivity comes from a held capability or the import refuses.** The importer holds the bridge's own admission mutex for the whole run (section 3.5), which stops any new bridge process from entering its data, and requires every existing bridge lease to be dead after pause. Only then is the confirmed byte snapshot a consistent one. A bridge revision without that protocol has no fence; the default is to refuse `execute` with `fence-unavailable`. Accepting a snapshot-only import for such installs is a separate root decision, not this contract's default.
+11. **No lane is redefined to claim a pass.** Where this contract declines to perform an action a lane asserts, the lane stays open and the decision is listed in section 9.
 
 ## 2. Model A: service ledger
 
-Files: `packages/daemon/src/import/bridge/service-control/types.ts`, `ledger.ts`, `files.ts`, `launchd.ts`, `systemd.ts`, `windows.ts`. The existing uncommitted candidate adapters are revised to this contract, not recreated.
+Files: `packages/daemon/src/import/bridge/service-control/types.ts`, `launchd.ts`, `systemd.ts`, `windows.ts`, `inventory.ts`, `files.ts`. The existing uncommitted candidate adapters are revised to this contract.
 
-### 2.1 In-memory origin
+### 2.1 Origin
 
 ```ts
 export type Sha256Hex = string & { readonly __brand: 'Sha256Hex' };
-
-export interface FileSnapshot {
-  readonly path: string; readonly bytes: Uint8Array; readonly sha256: Sha256Hex; readonly mode: number; readonly size: number;
-  readonly dev: number; readonly ino: number;        // POSIX identity of the inspected file; 0 on Windows
-}
+export interface FileSnapshot { readonly path: string; readonly bytes: Uint8Array; readonly sha256: Sha256Hex; readonly mode: number; readonly size: number; readonly dev: number; readonly ino: number; }
 export type Definition = { readonly kind: 'absent' } | { readonly kind: 'present'; readonly file: FileSnapshot };
+export type Observation<T> = { readonly kind: 'observed'; readonly value: T } | { readonly kind: 'unknown'; readonly probe: ProbeCode; readonly exit: number | null };
 
-export type Observation<T> =
-  | { readonly kind: 'observed'; readonly value: T }
-  | { readonly kind: 'unknown'; readonly probe: ProbeCode; readonly exit: number | null };   // no stderr text crosses this boundary
+export type LaunchdJob = { readonly state: 'not-loaded' } | { readonly state: 'loaded-idle' } | { readonly state: 'loaded-running'; readonly pid: number };
 
 export type ServiceOrigin =
-  | {
-      readonly platform: 'launchd';
-      readonly label: 'ai.feishu-codex-bridge.bot'; readonly domain: `gui/${number}`;
-      readonly definition: Definition;
-      readonly loadedPath: string | null;                          // `path =` from launchctl print; must equal definition path when loaded
-      readonly job: { readonly state: 'not-loaded' } | { readonly state: 'loaded-idle' } | { readonly state: 'loaded-running'; readonly pid: number };
-      readonly autostart: { readonly runAtLoad: boolean; readonly keepAlive: boolean };    // parsed read-only from the plist
-      readonly disabledOverride: boolean;
-      readonly restorable: boolean;                                // false when job is loaded-idle and either autostart key is true
-    }
-  | {
-      readonly platform: 'systemd';
-      readonly unit: 'feishu-codex-bridge.service'; readonly unitPath: string;   // XDG_CONFIG_HOME || ~/.config, control.ts:27
-      readonly definition: Definition;
-      readonly fragmentPath: string | null;                        // must realpath-equal unitPath when LoadState=loaded
-      readonly unitFileState: 'enabled' | 'disabled' | 'not-found';
-      readonly activeState: 'active' | 'inactive' | 'failed';
-      readonly mainPid: number | null;
-    }
-  | {
-      readonly platform: 'windows-run';
-      readonly runValue: { readonly kind: 'absent' } | { readonly kind: 'present'; readonly command: string };
-      readonly chain: WindowsLaunchChain | { readonly kind: 'absent' };
-      readonly relaunchTask: 'absent' | 'present';                 // present refuses execute (section 3.3)
-      readonly process: { readonly kind: 'absent' } | { readonly kind: 'running'; readonly identity: WindowsProcessIdentity };
-      readonly children: readonly WindowsProcessIdentity[];        // pids from processes.json that pass the identity table
-    };
+  | { readonly platform: 'launchd'; readonly label: 'ai.feishu-codex-bridge.bot'; readonly domain: `gui/${number}`;
+      readonly definition: Definition; readonly template: LaunchdTemplate;          // parsed, validated plist (section 3.1)
+      readonly loaded: { readonly kind: 'not-loaded' } | { readonly kind: 'loaded'; readonly path: string; readonly program: readonly string[] };   // launchctl print path = and arguments
+      readonly job: LaunchdJob; readonly disabledOverride: boolean; }
+  | { readonly platform: 'systemd'; readonly unit: 'feishu-codex-bridge.service'; readonly unitPath: string;
+      readonly definition: Definition; readonly template: SystemdTemplate;
+      readonly loaded: { readonly kind: 'not-found' } | { readonly kind: 'loaded'; readonly fragmentPath: string; readonly execStart: string; readonly dropIns: readonly string[] };
+      readonly unitFileState: 'enabled' | 'disabled'; readonly activeState: 'active' | 'inactive'; readonly mainPid: number | null; }
+  | { readonly platform: 'windows-run'; readonly runValue: { readonly kind: 'absent' } | { readonly kind: 'present'; readonly command: string };
+      readonly chain: WindowsLaunchChain | { readonly kind: 'absent' }; readonly relaunchTask: 'absent' | 'present';
+      readonly process: { readonly kind: 'absent' } | { readonly kind: 'running'; readonly identity: WindowsProcessIdentity }; readonly children: readonly WindowsProcessIdentity[]; };
 
-export interface WindowsLaunchChain {                              // every executable definition restore depends on
-  readonly kind: 'chain';
-  readonly vbs: FileSnapshot;            // <bridgeDataRoot>\service-launcher.vbs, the Run value target
-  readonly cmd: FileSnapshot;            // path parsed from the vbs `sh.Run "cmd /c ""<cmd>"""` line
-  readonly nodePath: string;             // first quoted token of the run line in cmd
-  readonly scriptPath: string;           // second quoted token; must be <installRoot>\bin\feishu-codex-bridge.mjs
-  readonly installRoot: string;
-  readonly packageName: '@modelzen/feishu-codex-bridge';
-  readonly command: 'run';
-}
-export interface WindowsProcessIdentity {
-  readonly pid: number; readonly startTime: string;               // Process.StartTime via the held handle, ISO string
-  readonly executablePath: string; readonly scriptPath: string; readonly installRoot: string;
-}
+export interface LaunchdTemplate { readonly program: readonly string[]; readonly runAtLoad: boolean; readonly keepAlive: boolean; readonly stdout: string; readonly stderr: string; readonly env: Readonly<Record<string, string>>; }
+export interface SystemdTemplate { readonly execStart: string; readonly restart: string; readonly wantedBy: string; readonly env: readonly string[]; }
 ```
 
-### 2.2 Persisted origin record
+`activeState: 'failed'` and `unitFileState: 'not-found'` with a present file are not in the type. Capture returns `unsupported-state` for them (section 3.2), so `execute` refuses before mutation. The Windows types are kept for preflight display and for the later enablement task; `WindowsLaunchChain` and `WindowsProcessIdentity` are unchanged from the previous revision.
 
-A discriminated union with one tag. Each definition becomes a `FileRecord`. Conversion back to `ServiceOrigin` reads the backup, recomputes the hash, and fails with `backup-mismatch` on any difference.
+### 2.2 Persisted record
 
 ```ts
 export interface FileRecord { readonly path: string; readonly sha256: Sha256Hex; readonly mode: number; readonly size: number; readonly dev: number; readonly ino: number; readonly backup: string; }
 export type DefinitionRecord = { readonly kind: 'absent' } | { readonly kind: 'present'; readonly file: FileRecord };
 
 export type ServiceOriginRecord =
-  | { readonly platform: 'launchd'; readonly label: string; readonly domain: string; readonly definition: DefinitionRecord; readonly loadedPath: string | null;
-      readonly job: ServiceOrigin extends infer O ? Extract<O, { platform: 'launchd' }>['job'] : never;
-      readonly autostart: { readonly runAtLoad: boolean; readonly keepAlive: boolean }; readonly disabledOverride: boolean; readonly restorable: boolean }
-  | { readonly platform: 'systemd'; readonly unit: string; readonly unitPath: string; readonly definition: DefinitionRecord; readonly fragmentPath: string | null;
-      readonly unitFileState: 'enabled' | 'disabled' | 'not-found'; readonly activeState: 'active' | 'inactive' | 'failed'; readonly mainPid: number | null }
+  | { readonly platform: 'launchd'; readonly label: string; readonly domain: string; readonly definition: DefinitionRecord; readonly template: LaunchdTemplate;
+      readonly loaded: { readonly kind: 'not-loaded' } | { readonly kind: 'loaded'; readonly path: string; readonly program: readonly string[] };
+      readonly job: LaunchdJob; readonly disabledOverride: boolean }
+  | { readonly platform: 'systemd'; readonly unit: string; readonly unitPath: string; readonly definition: DefinitionRecord; readonly template: SystemdTemplate;
+      readonly loaded: { readonly kind: 'not-found' } | { readonly kind: 'loaded'; readonly fragmentPath: string; readonly execStart: string; readonly dropIns: readonly string[] };
+      readonly unitFileState: 'enabled' | 'disabled'; readonly activeState: 'active' | 'inactive'; readonly mainPid: number | null }
   | { readonly platform: 'windows-run'; readonly runValue: { readonly kind: 'absent' } | { readonly kind: 'present'; readonly command: string };
       readonly chain: { readonly kind: 'absent' } | { readonly kind: 'chain'; readonly vbs: FileRecord; readonly cmd: FileRecord; readonly nodePath: string; readonly scriptPath: string; readonly installRoot: string; readonly packageName: string; readonly command: string };
-      readonly relaunchTask: 'absent' | 'present';
-      readonly process: { readonly kind: 'absent' } | { readonly kind: 'running'; readonly identity: WindowsProcessIdentity };
-      readonly children: readonly WindowsProcessIdentity[] };
+      readonly relaunchTask: 'absent' | 'present'; readonly process: { readonly kind: 'absent' } | { readonly kind: 'running'; readonly identity: WindowsProcessIdentity }; readonly children: readonly WindowsProcessIdentity[] };
 ```
 
-The `job` field is written out explicitly in code as the three-variant union; the conditional type above is notation for "the same union", not an instruction to use `Omit` or `Extract` across the outer union. Codex adds a round-trip test for every variant: `toRecord(origin)` then `fromRecord(record, backupDir)` equals `origin` with bytes compared, and a mutated backup yields `backup-mismatch`.
+`fromRecord` parses with zod, narrows `label`, `domain`, `unit`, `packageName`, and `command` back to their literals, reads each backup, recomputes the hash, and returns `backup-mismatch` on any difference. The backup is written and fsynced, and its directory synced, before the ledger header that references it is written (section 4.3). Round-trip tests cover every variant.
 
-### 2.3 Transaction and steps
+### 2.3 Steps as effects
 
-```ts
-export type ServiceStep =
-  | 'launchd.retire-plist' | 'launchd.bootout' | 'launchd.await-exit' | 'launchd.publish-plist' | 'launchd.bootstrap'
-  | 'systemd.disable' | 'systemd.stop' | 'systemd.await-exit' | 'systemd.retire-unit' | 'systemd.daemon-reload' | 'systemd.publish-unit' | 'systemd.enable' | 'systemd.start'
-  | 'windows.acquire-handles' | 'windows.delete-run-value' | 'windows.kill-main' | 'windows.kill-child' | 'windows.await-exit' | 'windows.write-run-value' | 'windows.launch';
+Service steps are effects in the executor ledger (section 4.2), not a separate step sink. Each has a typed `before` and `expectedAfter`.
 
-export interface StepRecord {
-  readonly step: ServiceStep; readonly seq: number;
-  readonly intent: { readonly at: number; readonly observed: unknown };          // what the adapter saw immediately before acting; platform-typed in code
-  readonly outcome?: { readonly at: number; readonly state: 'done' | 'failed' | 'skipped' | 'blocked'; readonly observed: unknown; readonly code?: ProbeCode };
-}
-export interface ServiceTransaction { readonly txnId: string; readonly origin: ServiceOriginRecord; readonly steps: readonly StepRecord[]; }
-```
+| Step | Platform | Primitive | Binding | `before` → `expectedAfter` |
+| --- | --- | --- | --- | --- |
+| `launchd.disable-override` | launchd | `launchctl disable gui/<uid>/<label>` | label | `disabledOverride:false` → `true` (skipped when already true) |
+| `launchd.bootout` | launchd | `launchctl bootout gui/<uid>/<label>` | service target | `loaded` → `not-loaded` |
+| `launchd.await-exit` | launchd | poll `print` and managed pids | read-only | managed pids alive → all dead |
+| `launchd.enable-override` | launchd | `launchctl enable gui/<uid>/<label>` | label | restore of `disable-override`; skipped when origin was `true` |
+| `launchd.bootstrap` | launchd | `launchctl bootstrap gui/<uid> <plist>` | label plus unchanged file | `not-loaded` → origin `job` kind (section 3.1) |
+| `systemd.disable-now` | systemd | `systemctl --user disable --now <unit>` | unit name | `enabled/active` → `disabled/inactive`; the unit file is untouched |
+| `systemd.await-exit` | systemd | poll `ActiveState`, `MainPID`, managed pids | read-only | → all dead |
+| `systemd.enable` | systemd | `systemctl --user enable <unit>` | unit name | restore when origin `enabled` |
+| `systemd.start` | systemd | `systemctl --user start <unit>` | unit name | restore when origin `active` |
+| `fence.acquire` | both | bind the bridge's admission mutex address (section 3.5) | the bridge's own protocol | not held → held; `EADDRINUSE` is `source-occupied` |
+| `fence.release` | both | close the listener | | after terminal state |
 
-The executor owns the ledger file (section 4.2). The adapter receives a `StepSink` with `begin(step, observed): Promise<seq>` and `end(seq, outcome): Promise<void>`; both resolve only after the ledger write and fsync. The adapter acts only between `begin` and `end`.
+There is no `retire`, `publish-plist`, `publish-unit`, or `definition.remove`. No definition file is written, moved, or unlinked by the importer at any point.
 
-### 2.4 Projection and the comparison table
+### 2.4 Comparison
 
-`projected(origin, steps)` is a pure function that applies every `done` step to the origin and returns the expected current state. Each mutating operation compares the fresh observation `now` against the two legal states.
+`projected(origin, effects)` applies every service effect whose outcome is `done`. For an effect whose outcome is missing or `failed`, recovery first runs the classification of section 4.4 against that effect's `before` and `expectedAfter`, records the result, and only then compares. A fresh observation that equals `projected` continues; one that equals `origin` on a restore path is `already-restored`; anything else is `manual-recovery`, never an automatic `foreign-change` label that hides a state the transaction may have produced.
 
-| Operation | Legal `now` | Action | Anything else |
-| --- | --- | --- | --- |
-| `pause(txn)` | equals `origin` | run the remaining pause steps | `foreign-change`, no write |
-| `pause(txn)` retry | equals `projected` after a prefix of pause steps | continue from the first step not `done` | `foreign-change` |
-| `restore(txn)` | equals `projected` (any prefix of pause steps done), or equals `origin` | undo done steps in reverse; `origin` means `already-restored` | `foreign-change`, no write |
-| `disable(txn)` | equals `projected` after full pause | remove what pause left (section 3) and record | `foreign-change` |
-| `disable(txn)` retry | equals `projected` after full pause plus done disable steps | continue; fully done means `already-disabled` | `foreign-change` |
+Equality is on `template`, `definition.file.sha256`, `definition.file.ino` and `dev`, `loaded.program` or `loaded.execStart`, `disabledOverride`, `unitFileState`, `activeState`, and `job.state`. Pids and start times are excluded. Because no definition file is ever written, moved, or removed, there is no published-inode case to special-case.
 
-Equality is field-wise on the identity fields of section 3 with pids and start times excluded, exactly as section 2.1 types them. There is no `already-disabled` exception based on guesswork: the transaction's own step records are the only source of "we did this".
-
-### 2.5 File primitives (`files.ts`)
-
-- `publishNoClobber(target, bytes, mode)`: write `<txnDir>/publish-<seq>` with `wx`, fsync, then `link(temp, target)`. `EEXIST` means a file appeared and is `foreign-change`; the temp is unlinked and the target is not read or touched. On success unlink the temp and fsync the directory. On Windows, where `link` across the Run value is meaningless and files are only the launcher chain, publication uses `open(target, 'wx')` plus write plus fsync; `EEXIST` is `foreign-change`.
-- `retire(target, expected)`: `rename(target, <txnDir>/retired-<seq>)`, then `lstat` and hash the moved file. Equal to `expected` means done, with the bytes preserved as evidence. Not equal means `link(retired, target)` to put it back without clobbering, and `foreign-change` with the retired copy kept. Nothing is ever unlinked in place. On Windows the launcher chain is never retired or deleted by import; only the Run value is.
-- Registry value removal (Windows) has no atomic compare-and-delete. The adapter reads the value, compares it to `origin.runValue.command`, records that read as the step intent, deletes, and re-reads to confirm absence. The window between read and delete is stated in the step record. A mismatch at the read refuses. This is the narrower guarantee; nothing claims it never clobbers.
-
-## 3. Model B: platform identity and termination
-
-### 3.1 launchd
-
-- Probes: `/bin/launchctl print gui/<uid>/<label>` parsed for `pid =`, `state =`, and `path =`; `/bin/launchctl print-disabled gui/<uid>`; `lstat` and bounded read of the plist; `/usr/bin/plutil -convert json -o - <plist>` for `RunAtLoad` and `KeepAlive` (any truthy `KeepAlive` dictionary counts as true). Sentinel for `not-loaded`: `print` exit 113, or the literal `Could not find service` on stderr with nothing else. Other failures are `unknown`.
-- `loadedPath` must equal the definition path when loaded; otherwise `unknown` with `foreign-fragment`.
-- Managed set: the job's pid and the pids in `processes.json` under the bridge data root whose command is `<node> <installRoot>/bin/feishu-codex-bridge.mjs run --bot <id>` by argv (read through `ps -o pid=,command= -p`), where the Vonvon daemon's pid is excluded. Everything `assertKnownOwnersStopped` would flag that is not in the managed set is foreign (section 3.4).
-- `restorable` is false for `loaded-idle` with `runAtLoad` or `keepAlive` true. Preflight shows `registered-idle-unrestorable`; `execute` refuses with `refused: unrestorable-service`. A `loaded-idle` job without autostart keys is restorable by `bootstrap` and must show no pid for 5 s; a pid is `manual-recovery`. `loaded-running` requires a pid within 10 s or `manual-recovery`. `not-loaded` publishes the plist and does not bootstrap.
-- Pause steps: `retire-plist` (section 2.5), `bootout` when loaded, `await-exit` until `print` says `not-loaded` and the managed set is dead (10 s). A managed pid that survives is `partial` at `await-exit`; a foreign pid that appears is `foreign-change`.
-- Restore steps in reverse: `publish-plist` from backup bytes with hash check, `bootstrap` per `restorable` rules. `disabledOverride` is compared before and after; a difference is `manual-recovery`. Repeated `restore` with everything already in place is `already-restored`.
-- Disable: `retire-plist` is already done by pause; `disable` records `launchd.bootout` as `skipped` when `not-loaded` and completes. The override is never written.
-
-### 3.2 systemd
-
-- Unit path per `control.ts:27`. One `systemctl --user show -p FragmentPath,LoadState,UnitFileState,ActiveState,SubState,MainPID <unit>` plus `is-system-running`. `LoadState=not-found` is the sentinel. `masked`, `static`, `linked`, `activating`, `deactivating`, `reloading` are `unknown`. `FragmentPath` must realpath-equal `unitPath` when loaded.
-- Managed set: `MainPID` and `processes.json` pids with the argv identity above. Pause requires the foreign set empty (section 3.4), not the managed set empty.
-- Pause: `disable`, `stop`, `await-exit` (ActiveState `inactive` or `failed` and managed set dead, 10 s), `retire-unit`, `daemon-reload`.
-- Restore in reverse: `publish-unit` with hash check, `daemon-reload` unconditionally, `enable` if `unitFileState` was `enabled`, `start` if `activeState` was `active`, verify both. A `daemon-reload` that failed once and the file already present on retry continues at `daemon-reload` because the step record says `publish-unit` is `done`.
-- Disable: compares `projected` after pause (unit absent, `not-found`); nothing further to remove; completes.
-
-### 3.3 Windows Run key
-
-Supported installation identity table. Any row that does not match makes `chain` `unknown` with `unsupported-installation`, and import refuses before mutation. Windows import is `supported-pending-native-proof`; no receipt or lane claims Windows acceptance until a Windows host runs the native tests, and the status view carries `platformProof: 'none'` on Windows until then.
-
-| Element | Required value |
-| --- | --- |
-| Run value `feishu-codex-bridge` | exactly `wscript.exe "<bridgeDataRoot>\service-launcher.vbs"` |
-| VBS | lines equal to the bridge's `buildLauncherVbs()` output with `<bridgeDataRoot>\service-launcher.cmd` as the only variable; mirrored by current `service/win-startup.ts:95-103` |
-| CMD | parsed run line `"<nodePath>" "<scriptPath>" run >> ...`; `scriptPath` ends with `\bin\feishu-codex-bridge.mjs`; `installRoot` is its grandparent; mirrored by current `win-startup.ts:85` |
-| `installRoot\package.json` | bounded read, `name` equals `@modelzen/feishu-codex-bridge` |
-| Process | `ExecutablePath` equals `nodePath` after case-insensitive normalization; parsed command line is `"<nodePath>" "<scriptPath>" run` with no other tokens before `run` |
-| Relaunch task `feishu-codex-bridge-relaunch` | must be `absent`; `present` refuses execute with `refused: relaunch-task-present` and an instruction code to remove it with the bridge's own service command first |
-
-Termination policy. The only termination mechanism is a process handle held for the whole verify-then-kill sequence in a single PowerShell invocation: `$p = Get-Process -Id <pid>`; `$null = $p.Handle` to open and cache the handle; read `$p.StartTime` and `$p.Path` through that handle; compare with the snapshot's `startTime` and `executablePath`; `$p.Kill()`, which .NET performs on the cached handle. The script prints a sentinel per stage. Codex verifies in the Windows native lane that the kill is performed on the held handle and records the .NET version; until that record exists the mechanism is a design requirement, not a proven fact. If `Get-Process` fails, `Handle` is denied, or the comparison fails, the step ends `blocked` and nothing has been deleted yet, because `acquire-handles` precedes `delete-run-value`. Children in `processes.json` are handled the same way, each with its own handle and identity. A live child that fails the identity table is foreign and refuses the import. `taskkill /T` is not used.
-
-- Pause: `acquire-handles` for the main process and each child (blocked on any failure), `delete-run-value` (section 2.5), `kill-main`, `kill-child` each, `await-exit` by `HasExited` on the held handles and a re-read of `processes.json`.
-- Restore in reverse: `write-run-value` with `New-ItemProperty` when absent; verify both launcher files' hashes (never rewritten by import; a mismatch is `foreign-change`); `launch` only when all of: origin had a running process, no process matching the identity table exists now, no foreign owner exists, and the handle for the original reports `HasExited`. A surviving original means registration is restored and zero launches happen. Repeated restore is `already-restored`.
-- Disable: compares `projected` after pause (Run value absent, process absent); completes. The launcher files stay on disk; the receipt notes them.
-
-### 3.4 Ownership inventory
+### 2.5 Inventory (`inventory.ts`)
 
 ```ts
 export interface OwnershipInventory {
-  readonly managed: readonly { pid: number; role: 'service-main' | 'bot-child'; identity: string }[];
+  readonly managed: readonly { pid: number; startedAt: number | null; role: 'service-main' | 'bot-child'; evidence: 'manager-pid' | 'processes-json' | 'service-pid' }[];
   readonly foreign: readonly Occupant[];
   readonly unknown: readonly { probe: ProbeCode; exit: number | null }[];
 }
 export type Occupant =
-  | { kind: 'pending-operation'; file: string }         // update.lock, relaunch-request.*, win-relaunch.json, as control.ts:63-67
-  | { kind: 'source-lease'; file: string; pid: number }  // <sourceRoot>/.vonvon-bridge-access/*.json with a live pid, bridge 446b2a4 lease format
-  | { kind: 'data-in-use'; file: string; pid: number }   // processes.json, service.pid, web-console.json pid alive and not in managed
-  | { kind: 'unmanaged-process'; pid: number }           // bridge argv identity but not in managed
-  | { kind: 'other-data-root'; root: string };           // existingDataRoots returns more than one
+  | { kind: 'pending-operation'; file: string }                          // update.lock, relaunch-request.*, win-relaunch.json; control.ts:63-67
+  | { kind: 'source-lease'; file: string; pid: number }                   // realpath(sourceHome)/.vonvon-bridge-access/*.json, fixture 446b2a4 enterDataAccess(homedir())
+  | { kind: 'data-in-use'; file: string; pid: number }                    // processes.json, service.pid, web-console.json pid alive and not managed
+  | { kind: 'unmanaged-process'; pid: number }                            // bridge argv identity, not managed
+  | { kind: 'other-data-root'; root: string };
 ```
 
-`inventory(sourceHome, sourceRoot, origin)` is read-only and replaces the direct use of `assertKnownOwnersStopped`, which throws on the managed service itself (`control.ts:76-83`). Pause requires `foreign` and `unknown` empty. After pause, `managed` must be empty too. The inventory runs at preflight, before pause, after pause, after copy, and before restore starts anything.
+Managed set: the manager's pid (`launchctl print` pid, `MainPID`) and the pids in `<sourceRoot>/bots/<appId>/processes.json` and `<sourceRoot>/processes.json` whose argv is `<node> <installRoot>/bin/feishu-codex-bridge.mjs run --bot <id>` or `... run`, read with `ps -o pid=,lstart=,command= -p <pid>`. The Vonvon daemon's own pid and its children are excluded by pid. A lease file whose pid is in the managed set is managed, not foreign; the ordinary running service holds one. A lease whose pid is dead is stale and ignored. Pause requires `foreign` and `unknown` empty; after pause, `managed` must be empty too.
+
+### 2.6 Destructive actions and their binding
+
+| Action | When | Binding | What happens on the unbound part |
+| --- | --- | --- | --- |
+| stop the service | pause | manager, by name | none unbound |
+| disable autostart | pause (launchd override), commit (both) | manager, by name | none unbound |
+| kill a process | never on launchd or systemd; the manager stops its job and the managed children exit with it, verified by `await-exit` | | a managed child that survives `await-exit` is `partial`; the importer does not signal it; restore proceeds by name and the run ends `manual-recovery` |
+| remove the definition file | never, by the importer | none exists. POSIX has no unlink-by-descriptor and no compare-and-unlink; Node exposes neither. Rename-then-verify was rejected because the verify runs on an object already moved. | the file stays. Autostart is already removed by the persistent launchd override and by `systemctl disable`, so the file is inert. The receipt records `definitionRemoved: false` with warning `definition-left-in-place` and instruction `remove-definition-manually` naming the path. Two routes remove it with bound identity: the user runs the bridge's own `service uninstall`, which deletes the file its installer wrote, or the V9 bridge release deletes it on start when it finds the marker. Lane 1's "plist is gone", "unit file is gone", and `LoadState` `not-found` assertions therefore stay open until the root disposes (section 9). |
+| write hooks | hooks phase | inode plus immediate content check on the same descriptor: `open(path, O_RDWR\|O_NOFOLLOW)`, `fstat` equals the backup's `dev` and `ino`, read through the fd, hash equals the backup hash taken moments before, convert, write through the same fd, `fsync`, re-read through the same fd and compare | this binds the inode and the content read immediately before the write, but POSIX offers no compare-and-swap on file content and Node has no advisory lock in core, so a writer that writes in place between our read and our write can interleave. No mechanism available to this daemon closes that window. The default is therefore: write only when the same-descriptor hash equals the backup; otherwise reconvert from the new content and retry, three times, then `manual-recovery` with `inspect-hook-file`. A rename-save by an editor replaces the inode and our write becomes harmless. The alternative that needs no user-file write is legacy cooperation: the V9 bridge release makes `feishu-codex-bridge hook` forward to `vonvon hook` when the marker exists. That alternative changes lane 6's assertion and is listed in section 9 for the root. |
+| manager operations by label or unit name | pause, restore | the manager's own name-bound primitives | a name binds the registration, not a process. The importer reads the loaded definition's program arguments and pid immediately before `bootout` or `disable --now`, and after it verifies that exactly the recorded managed pids exited and no process with bridge argv appeared. A foreign job that registers under the bridge's fixed label in the window between that read and the command would be stopped by the command; the manager offers no pid-bound stop, and this contract reserves the label for the bridge, so the stated guarantee is label-level and the trace records the before and after pids as evidence. |
+| marker | after commit | `open(path, 'wx')` then write and fsync | `EEXIST` with our `txnId` inside is done; with another content it is `manual-recovery` |
+| registry entries, bot directories, secrets | section 4.5 | process mutex plus exclusive create or rename onto a non-existent name | none unbound inside the daemon, which is the only writer of its data root by architecture |
+| Windows Run value and process | not executed by this candidate | Win32 has no compare-and-delete for a registry value; `RegDeleteValue` and `Remove-ItemProperty` are unconditional. Process termination through a held .NET handle is unproven. | `execute` refuses on `win32`. This is a non-delivery of V8's "all three platforms" build item, not an acceptance (section 3.3 and section 9). |
+
+## 3. Model B: platforms
+
+### 3.1 launchd
+
+- Probes: `/bin/launchctl print gui/<uid>/<label>` for `pid =`, `state =`, `path =`, and the `program`/`arguments` block; `/bin/launchctl print-disabled gui/<uid>`; `lstat` and bounded read of the plist; `/usr/bin/plutil -convert json -o - <plist>`. Sentinel for `not-loaded`: exit 113, or `Could not find service` alone on stderr.
+- Supported definition: the parsed plist has exactly the keys the bridge's installer writes (`Label`, `ProgramArguments`, `RunAtLoad`, `KeepAlive`, `StandardOutPath`, `StandardErrorPath`, `EnvironmentVariables`; mirrored by current `service/launchd.ts:44-72`), `Label` equals the fixed label, `ProgramArguments` is `<node> <installRoot>/bin/feishu-codex-bridge.mjs run` or the fixture's equivalent that Codex records from `446b2a4`, `KeepAlive` is a boolean, and no other key. Any other key or shape is `unsupported-definition`.
+- Supported state: `loaded.program` equals `template.program` when loaded (the manager runs the definition we see), and `loaded.path` equals the definition path. Otherwise `unsupported-state` (a different definition is loaded under the same label).
+- Restorable job states: `not-loaded`; `loaded-running` when `template.runAtLoad` or `template.keepAlive` is true (bootstrap starts it, as the origin was); `loaded-idle` only when both are false (bootstrap loads without starting). `loaded-idle` with either key true is `unrestorable-state`. `loaded-running` with both keys false is `unsupported-state`, because bootstrap would not start it.
+- Pause: `disable-override` (skipped when already true), `bootout` when loaded, `await-exit` 10 s. The plist is not touched. Immediately before `bootout` the adapter re-reads `launchctl print` and requires `program` equal to `template.program` and the pid equal to the recorded managed pid; a difference is `unsupported-state` before the command. The label-level guarantee of section 2.6 applies to the window after that read. An origin with `disabledOverride: true` and a loaded job is `unsupported-state`, because `bootstrap` cannot reproduce it.
+- Restore in reverse: `bootstrap` when the origin was loaded, verify the job kind within 10 s for `loaded-running` and no pid for 5 s for `loaded-idle`; `enable-override` only when the origin had it false, so a user's preexisting disabled override is never cleared. A pid where none is expected, or none where one is expected, is `manual-recovery`. The override is compared before and after.
+- Commit: autostart is removed by the persistent override and the bootout. The plist stays on disk (section 2.6). Lane 1's `launchctl print` failing is satisfied by the bootout; its "plist is gone" assertion is open for the root's disposition.
+
+### 3.2 systemd
+
+- Probes: `systemctl --user show -p FragmentPath,DropInPaths,ExecStart,LoadState,UnitFileState,ActiveState,SubState,MainPID <unit>` and `is-system-running`. `LoadState=not-found` is the sentinel. Transitional states are `unknown`.
+- Supported definition: the unit file parses to exactly `[Unit]`, `[Service]`, `[Install]` with the keys the bridge's installer writes (mirrored by current `service/systemd.ts:49-65`), `ExecStart` matches the bridge argv form. `DropInPaths` must be empty and `ExecStart` from the manager must equal the file's; otherwise `unsupported-state`.
+- Supported states: `unitFileState` in `enabled`, `disabled`; `activeState` in `active`, `inactive`. `failed`, `masked`, `static`, `linked`, `indirect`, and a present file with `LoadState=not-found` are `unsupported-state`, because `disable --now` and `start` do not reproduce them.
+- Pause: `disable-now` (one command; `before` is the pair `enabled/active`, `expectedAfter` is `disabled/inactive`), `await-exit`. Immediately before it the adapter re-reads `ExecStart` and `MainPID` and requires them equal to the recorded values; the label-level guarantee of section 2.6 applies after that read. The unit file is untouched; `FragmentPath` stays valid, so `daemon-reload` is not needed.
+- Restore in reverse: `enable` when the origin was `enabled`, `start` when the origin was `active`; verify both. Repeating is `already-restored`.
+- Commit: `disable-now` already removed autostart (the manager deletes the wants symlink it owns). The unit file stays (section 2.6), so `LoadState` stays `loaded` and `UnitFileState` `disabled`. Lane 1's `not-found` and "unit file is gone" assertions are open for the root's disposition.
+
+### 3.3 Windows
+
+This candidate does not deliver V8's Windows stop and disable. `execute` on `win32` returns `refused: platform-unsupported` before any mutation; preflight is read-only and classifies the installation. The plan's build item "detect and stop the bridge on all three platforms" is therefore not met for Windows, and this document does not present the refusal as meeting it. The root records the gap in section 9; the Windows follow-up task below is the proposed route, not an accepted scope change.
+
+Why refused, stated as the facts a later task must change: the Run value has no compare-and-delete primitive anywhere in Win32 (`RegDeleteValue`, and therefore `Remove-ItemProperty`, is unconditional; a native helper holding the key handle still races another writer with its own handle), so Run-value removal is a legacy-cooperation or manual step, the same as the POSIX definition file; process termination through a .NET `Process` handle is the only candidate for a bound kill and is unproven; a single PowerShell invocation that holds handles across the executor's ledger writes needs an acknowledgement protocol and a crash story that reacquisition by pid cannot provide; and a helper that dies loses `HasExited` for the original. The enablement task must deliver: a native proof artifact that the kill went through the held handle on a named Windows and .NET version; a helper protocol with per-stage acknowledgements and explicit failure ownership; a Run-value policy that either finds a bound primitive or declares the value's removal a manual step; and root acceptance. Until then the identity table (scoped package `@modelzen/feishu-codex-bridge`, Run value `wscript.exe "<dataRoot>\service-launcher.vbs"`, VBS and CMD templates equal to the bridge's `buildLauncherVbs` and `buildLauncherCmd` output modulo paths, `installRoot\bin\feishu-codex-bridge.mjs run`) is a preflight classifier only. `platformProof` on the wire is a display of this state; the refusal is the enforcement.
+
+### 3.4 Managed versus foreign
+
+The inventory of section 2.5 is the only occupancy check. `assertKnownOwnersStopped` (`service/control.ts:61-95`) is not used, because it rejects the managed service's own `service.pid` and lease. Managed means pid-correlated to the manager's job or to a `processes.json` holder with bridge argv; everything else alive is foreign and refuses.
+
+### 3.5 Source fence through the bridge's own admission protocol
+
+The bridge at fixture `446b2a4` enters its data through `enterDataAccess(homedir())` (`src/cli/index.ts:16-22`), which first acquires an admission mutex and then writes a lease under `realpath(home)/.vonvon-bridge-access` (`src/config/data-access.ts:18-23,53,81-105`). The mutex is a loopback listener whose address is derived from `vonvon-bridge-v1:admission:<normalized realpath(home)>`, exactly as the daemon's own `coordinationAddress` does for its namespace (`config/data-access.ts:17-22`). A bridge process that cannot bind it within its timeout fails to enter. That is a real exclusion primitive, and it belongs to the bridge's protocol, not to this importer's invention.
+
+- `fence.acquire`: the importer computes the bridge's address from the fixture's constants, which Codex binds verbatim from `446b2a4` and records in the PR, and binds it with the same exclusive listener. `EADDRINUSE` means a bridge process is inside admission right now: `source-occupied`, refuse. Held for the whole transaction and released at terminal state. Recovery re-acquires it before any effect.
+- With the fence held: no new bridge process can enter its data for the rest of the run. Existing ones are visible as leases with live pids. After pause, every lease pid must be dead (managed ones exit with the service; a foreign live one refused earlier). From that point until release, the source has no writer, so the byte verification of section 4.7 verifies a consistent snapshot, not merely a repeated hash. A bridge `hook` or CLI invocation during the run fails its own admission and reports that to the user; it does not corrupt the import.
+- Applicability: the protocol exists from the bridge revision that introduced `data-access.ts`; the review found that file absent at `6698118`. Preflight reads the installed bridge's `package.json` version and compares it to the first version carrying the protocol, which Codex determines from the bridge repository history and records as a constant. Older installs report `fence: unavailable` and `execute` refuses with `fence-unavailable` and instruction `upgrade-bridge-first`. Accepting a snapshot-only import for them is a root decision listed in section 9, not this contract's default.
+- What the fence does not do: it does not stop a non-bridge program from editing `~/.feishu-codex-bridge`, and it does not bind the service manager's label operations to a process (section 2.6). Both are stated, not hidden.
 
 ## 4. Model C: executor ledger
 
-File: `packages/daemon/src/import/bridge/execute.ts`, plus `ledger.ts` for the persisted ledger, `inventory.ts` for the confirmed source inventory, and `runtime-port.ts` for the binding to the daemon.
+Files: `packages/daemon/src/import/bridge/execute.ts`, `ledger.ts`, `inventory.ts` (confirmed source inventory), `runtime-port.ts`, `recover.ts`.
 
-### 4.1 Roots and inputs
+### 4.1 Roots
 
 ```ts
 export interface ImportRoots {
-  readonly sourceHome: string;      // os.homedir() of the daemon user; service identities and ~/.feishu-codex-bridge derive from it
-  readonly sourceRoot: string;      // the single element of existingDataRoots(sourceHome); two elements refuse (other-data-root)
-  readonly destRoot: string;        // paths.appDir, VONVON_HOME-resolved; ledger, staging, backups live under destRoot/import/bridge/
-  readonly hookFiles: readonly string[];  // sourceHome/.claude/settings.json, sourceHome/.codex/hooks.json
+  readonly sourceHome: string;                       // os.homedir(); leases, hooks, and service identities derive from it
+  readonly sourceRoot: string;                       // single element of existingDataRoots(sourceHome); realpath, dev, ino recorded
+  readonly destRoot: string;                         // paths.appDir
+  readonly txnDir: string;                           // destRoot/import/bridge/<txnId>
+  readonly hookFiles: readonly string[];             // sourceHome/.claude/settings.json, sourceHome/.codex/hooks.json
 }
 ```
 
 ### 4.2 Ledger
 
-One file `destRoot/import/bridge/ledger.json`, written as temp plus rename, fsync of file then directory, before and after every effect. The transaction directory `destRoot/import/bridge/<txnId>/` holds backups, retired definitions, and staging.
-
 ```ts
 export type Effect =
   | { kind: 'service'; step: ServiceStep }
-  | { kind: 'source.verify-inventory' }
-  | { kind: 'stage.copy'; rel: string }
-  | { kind: 'bot.reserve'; appId: string } | { kind: 'bot.secret'; appId: string } | { kind: 'bot.config'; appId: string }
-  | { kind: 'bot.files'; appId: string } | { kind: 'bot.register'; appId: string } | { kind: 'bot.enable'; appIds: readonly string[] }
+  | { kind: 'source.verify-inventory' } | { kind: 'stage.copy'; rel: string }
+  | { kind: 'wrapper.ensure' }
+  | { kind: 'bot.prepare'; appId: string } | { kind: 'bot.secret'; appId: string } | { kind: 'bot.place'; appId: string }
+  | { kind: 'bot.register'; appId: string } | { kind: 'bot.enable'; appIds: readonly string[] }
   | { kind: 'hooks.backup'; path: string } | { kind: 'hooks.write'; path: string }
   | { kind: 'bot.activate'; appId: string } | { kind: 'bot.connected'; appId: string }
   | { kind: 'marker.write' } | { kind: 'receipt.write' }
-  | { kind: 'rollback.bot.stop'; appId: string } | { kind: 'rollback.bot.remove'; appId: string }
+  | { kind: 'rollback.bot.stop'; appId: string } | { kind: 'rollback.bot.unregister'; appId: string }
+  | { kind: 'rollback.bot.secret-remove'; appId: string } | { kind: 'rollback.bot.quarantine-dir'; appId: string }
   | { kind: 'rollback.hooks.restore'; path: string } | { kind: 'rollback.stage.discard' };
 
-export interface EffectRecord { readonly seq: number; readonly effect: Effect; readonly intent: { at: number; before: unknown }; readonly outcome?: { at: number; state: 'done' | 'failed' | 'skipped' | 'blocked'; after: unknown; code?: ImportFailureCode } }
-
+export interface EffectRecord<B = unknown, A = unknown> {
+  readonly seq: number; readonly effect: Effect;
+  readonly intent: { readonly at: number; readonly before: B; readonly expectedAfter: A };
+  readonly outcome?: { readonly at: number; readonly state: 'done' | 'failed' | 'skipped' | 'blocked'; readonly observed: A | B | unknown; readonly code?: ImportFailureCode };
+  readonly reconciled?: { readonly at: number; readonly classified: 'before' | 'after' | 'neither' };
+}
 export interface ImportLedger {
   readonly version: 1; readonly txnId: string; readonly preflightId: string;
   readonly roots: ImportRoots; readonly inventory: ConfirmedInventory; readonly service: ServiceOriginRecord;
   readonly effects: readonly EffectRecord[];
   readonly verify?: { at: number; outcome: 'passed' | 'failed'; code?: ImportFailureCode };
-  readonly commitPoint?: number;                  // set when verify passed and the service disable steps are all done
+  readonly commitPoint?: number;
   readonly cancelRequested?: number;
-  readonly terminal?: { at: number; state: 'succeeded' | 'rolled-back' | 'manual-recovery' | 'blocked'; code?: ImportFailureCode; instructions?: readonly InstructionCode[] };
+  readonly terminal?: { at: number; state: 'succeeded' | 'rolled-back' | 'manual-recovery' | 'blocked' | 'refused'; code?: ImportFailureCode; instructions?: readonly InstructionCode[]; evidence?: readonly ImportDetail[] };
 }
 ```
 
-Phase is derived from the effects, never stored separately. `receipt.json` next to the ledger is written only as the last effect and is the lane 5 existing-receipt source.
+`before` and `expectedAfter` are typed per effect kind in code (a `Record<Effect['kind'], { before: ...; after: ... }>` map), not `unknown`; the generic here is notation.
 
-### 4.3 Effects in order, with recovery rule per effect
+### 4.3 Durability
 
-| Effect | Does | Before/after recorded | Recovery when intent has no outcome |
+- The ledger is written as `ledger.json.tmp-<uuid>` with `wx`, `fsync`, `rename`, directory `fsync`. On Windows directory `fsync` is unavailable (`config/keystore.ts:25-29`); Windows does not execute, so this does not arise in V8.
+- Every file the ledger references (backups, staging files, the removed definition) is written, fsynced, and its directory synced before the ledger record that references it is written. `syncPath(file)` in `files.ts` opens and fsyncs the file and its parent.
+- Every daemon helper the importer calls that writes without fsync is followed by `syncPath` on the file it wrote before the outcome is recorded: `saveBots` (`config/bots.ts:52-57`), `saveConfig` (`config/store.ts:74-82`), `ensureSecretsGetterWrapper` (`store.ts:53-67`). The keystore syncs its own writes (`keystore.ts:69-74`). The outcome record of an effect is therefore never durable before the effect's data.
+
+### 4.4 Reconciliation
+
+For every effect, recovery or retry observes the current state of the effect's target and classifies it:
+
+- equals `before`: the action did not take effect. Redo it (idempotent actions) or, on rollback, nothing to undo.
+- equals `expectedAfter`: the action took effect. Record `outcome: done` and continue.
+- neither: record `reconciled: neither`, stop automatic processing, terminal `manual-recovery` with the effect, both expected states, and the observed state as evidence. The old service is not restored from this state unless its own classification is `before` or `after`, because restoring by name is safe when the manager state is one of the two known states and unsafe to reason about otherwise.
+
+A `failed` outcome is classified the same way before anything else runs, because a command that returned nonzero may have changed state. Rollback effects have `before` and `expectedAfter` too and are classified on retry.
+
+Per-effect targets and states:
+
+| Effect | `before` | `expectedAfter` | Notes |
 | --- | --- | --- | --- |
-| `service.*` pause steps | section 3 | adapter observation | adapter compares against `projected` and continues or refuses (section 2.4) |
-| `source.verify-inventory` | inventory shows `managed`, `foreign`, `unknown` all empty; each file in `ConfirmedInventory.files` opened `O_NOFOLLOW`, bounded read, hash equals; no file added or removed | per-file hashes | rerun; pure read |
-| `stage.copy rel` | write the exact bytes read in the previous effect to `<txnDir>/staging/<rel>` | hash | rerun from staged or re-read; staging is disposable |
-| `bot.reserve appId` | registry has no such appId (`loadBots`); `mkdir(botDir(appId))` with exclusive semantics and write `botDir/.import-owned` containing `txnId` with `wx` | registry snapshot | if dir exists with our `.import-owned`, done; if exists without it, `conflict` and refuse |
-| `bot.secret appId` | decrypt legacy envelope with `legacy-keystore.ts`, `setSecret(secretKeyForApp(appId), plaintext)` (`config/keystore.ts:107`), zero plaintext | none | rerun; `setSecret` overwrites our own key |
-| `bot.config appId` | `buildEncryptedAccountConfig(appId, tenant, preferences)` with preferences copied unchanged from source, then `saveConfig` to `botPaths(appId).configFile`; no owner or admin injection | hash | rerun |
-| `bot.files appId` | rename staged `projects.json`, `sessions.json`, `comment-instructions.md` into `botDir` | hashes | compare dest hashes to staging; rerun missing |
-| `bot.register appId` | `addBot(entry)` only while `.import-owned` is ours and the registry still lacks the appId | registry before/after | registry contains entry → done |
-| `bot.enable appIds` | `setActiveBots(existingActive ∪ importedEnabled)` where `importedEnabled` is the source `enabled` set | both sets | idempotent rerun |
-| `hooks.backup path` | copy current hook file bytes to `<txnDir>/backup/` | hash | rerun |
-| `hooks.write path` | `convertBridgeHooks` then `publishNoClobber` to a temp and `rename` over the hook file (hooks are user files that may legitimately exist; here rename-over is correct and the backup is the evidence) | before/after hash | current hash equals after → done; equals before → rerun; neither → `foreign-change`, leave it, note for manual recovery |
-| `bot.activate appId` | `port.activate(appId)` (section 4.4) must return `applied` | result | query running state; running → done; not running → rerun once |
-| `bot.connected appId` | `port.connection(appId)` reports connected within the 60 s shared budget | observation | rerun observation |
-| verify decision | all `bot.connected` done, inventory after copy still clean, service still `projected` paused | | derived |
-| `service.*` disable steps | section 3 | | adapter rule |
-| commit point | written when verify passed and disable steps done | | |
-| `marker.write` | `publishNoClobber(sourceRoot/migrated-to-vonvon-bot.json, {version:1, txnId, completedAt, vonvonHome: destRoot})` | | exists with our txnId → done; exists with another → `manual-recovery` |
-| `receipt.write` | `receipt.json` | | rerun |
+| `service.fence.acquire` | not held | listener bound | `EADDRINUSE` is `source-occupied`; recovery re-acquires first |
+| `service.*` | section 2.3 | section 2.3 | |
+| `source.verify-inventory` | fence held, every lease pid dead, root `dev,ino` unchanged | per-file hashes equal | read-only; rerun |
+| `stage.copy rel` | staging absent | staging file hash equals confirmed | on rerun the staged or re-read bytes must equal the confirmed hash or the run is `stale-source` |
+| `wrapper.ensure` | wrapper hash or absent | wrapper hash | daemon-owned idempotent file rewritten by every registration (`store.ts:53-67`); not rolled back |
+| `bot.prepare appId` | `<txnDir>/bots/<appId>` absent | directory with `.import-owned` (txnId), `config.json`, `projects.json`, `sessions.json`, `comment-instructions.md` as applicable | entirely inside `txnDir`; a crash leaves a partial directory that is discarded and redone |
+| `bot.secret appId` | `getSecret(key)` undefined | `getSecret(key)` defined | a defined `before` is `conflict: orphan-secret` and refuses before writing |
+| `bot.place appId` | `destRoot/bots/<appId>` absent (lstat ENOENT) | directory present with our `.import-owned` | one `rename(txnDir/bots/<appId>, destRoot/bots/<appId>)` under the registry mutex (section 4.5); `ENOTEMPTY` or `EEXIST` is `conflict`; present with our marker is `after`; present without our marker is `neither` |
+| `bot.register appId` | registry lacks appId | registry has our entry (deep-equal) | under the registry mutex; `addBot` (`bots.ts:132-139`) |
+| `bot.enable appIds` | current active set | current active set ∪ imported enabled | under the registry mutex; computed from the current set at the time of the write, so a user's concurrent decision about another bot is kept |
+| `hooks.backup path` | current file `dev,ino,sha256` or absent | backup file present | |
+| `hooks.write path` | backup `dev,ino,sha256`, re-checked on the same descriptor immediately before writing | same inode, converted hash, re-read on the same descriptor | section 2.6; a hash change before the write reconverts from the new content; after three changes `manual-recovery` |
+| `bot.activate appId` | not running | running (supervisor child present) | trusted capability, section 4.5 |
+| `bot.connected appId` | pending | connected | observation only |
+| `marker.write` | absent | present with our txnId | `wx` |
+| `receipt.write` | absent | present | |
+| `rollback.bot.stop appId` | running | holder absent and child exited | trusted capability; `unconfirmed` stops rollback |
+| `rollback.bot.unregister appId` | registry has our entry | registry lacks appId | under mutex; a different entry is `neither` |
+| `rollback.bot.secret-remove appId` | defined and `bot.secret.before` was undefined | undefined | skipped when `bot.secret` recorded a prior value, which cannot happen because that refuses |
+| `rollback.bot.quarantine-dir appId` | present with our marker | `destRoot/bots/<appId>` absent, directory under `<txnDir>/quarantine/` | `rename`, never `rm -rf` on the live path |
+| `rollback.hooks.restore path` | converted hash on the backup inode | backup hash on the same inode | inode write; a different inode or hash is `neither` |
 
-Crash matrix: Codex injects a crash before and after every effect's action, for every effect, and asserts the recovery end state in section 4.6.
+### 4.5 Destination ownership and the runtime port
 
-### 4.4 Runtime port binding
+The daemon is the only writer of `destRoot` by architecture, so destination contention is intra-process and a process mutex is sufficient. `config/bots.ts` gains `withRegistry<T>(fn)` (an async mutex) and a reservation set `reserveAppId(appId, owner)`, `releaseAppId(appId, owner)`. `addBot`, `removeBot`, `setActiveBots`, and `setCurrent` run inside `withRegistry` and throw `RegistryReservedError` for a reserved appId unless the caller passes the owner token. `bot/register-bot.ts` checks the reservation under `withRegistry` after credential validation and before `setSecret` (`register-bot.ts:97-103`), so a QR registration for a reserved appId fails before it writes a secret or a config into a directory the import prepared. `admin/service.ts` needs no entry-point gate; its writes go through these helpers. Both files are root-written shared edits (section 6).
 
 ```ts
 export interface ImportRuntimePort {
-  registryHas(appId: string): Promise<boolean>;                       // loadBots
-  activate(appId: string): Promise<'applied' | 'restart-required' | 'failed'>;   // AdminService.setBotEnabled(appId, true), admin/service.ts:980-991
-  connection(appId: string): Promise<'connected' | 'pending' | 'failed'>;        // AdminService.listBots() running + connection, backed by supervisor liveStatus
-  stop(appId: string): Promise<'stopped' | 'unconfirmed'>;             // setBotEnabled(appId, false), then runState(appId).running === false and readSingleInstanceHolder(...) === null, 15 s
-  remove(appId: string): Promise<void>;                                // removeBot + removeSecret + rm botDir, only when botDir/.import-owned holds our txnId
-  gateMutations(txnId: string | null): void;                           // admin/service.ts: registerBotByQr, setBotEnabled, deleteBot for a reserved appId return conflict while set
-  invalidateSnapshot(): void;                                          // DaemonApi.invalidate, server/http.ts:52,59
+  activate(appId: string): Promise<'running' | 'failed'>;               // supervisor applyBotActivation capability, bot/supervisor.ts:172-211, passed directly, not via AdminService
+  connection(appId: string): Promise<'connected' | 'pending' | 'failed'>;  // supervisor liveStatus, supervisor.ts:235-246; exact literal bound by Codex and recorded in the PR
+  stop(appId: string): Promise<'stopped' | 'unconfirmed'>;             // supervisor stopBot(child) awaited, then readSingleInstanceHolder(appId, botPaths(appId).processesFile) === undefined, 15 s
+  invalidateSnapshot(): void;                                          // DaemonApi.invalidate
 }
 ```
 
-- The importer runs only in supervisor mode. `activate` returning `restart-required` (no `applyBotActivation`, `admin/service.ts:981`) is `bot-start-failed`. Inline `run --bot` mode never constructs an importer; the RPC returns `refused: unsupported-runtime`.
-- `connection` maps the bot status IPC's connection string to the three values. Codex binds the exact literal the bot child reports for a live long connection and records it in the PR; `unknown` maps to `pending`.
-- `remove` is the only deletion path and it is ownership-checked by the `.import-owned` marker, so a crash between `bot.register` intent and outcome can never delete a bot the transaction did not create.
-- `gateMutations` is the destination serialization. While a transaction is active, admin mutations on any appId in the reservation set return `conflict`; mutations on other appIds proceed. This is a disclosed edit to `admin/service.ts` (section 6).
-- Source fencing: the bridge's lease namespace (`vonvon-bridge-v1`, `.vonvon-bridge-access`, review's read of fixture `446b2a4`) differs from the daemon's (`config/data-access.ts:17-22`). The importer does not acquire the bridge mutex. The achievable guarantee is: inventory clean before pause, after pause, and after copy, plus exact-byte verification of the confirmed inventory after quiescence. A bridge writer that appears in any of those windows makes the run `stale-source` and rolls back. No exclusive fence on the source is claimed.
+The importer is constructed in `runSupervisor` with these capabilities closed over the supervisor's `children` map, so it is not subject to the reservation gate and does not pass through `AdminService.setBotEnabled` or `activationQueue`. `activate` returns `failed` when the supervisor is shutting down; the importer treats that as a rollback trigger (section 4.6).
 
-### 4.5 Rollback and roll-forward
+Enabled semantics, decided: imported bots keep their source `enabled` flag. `bot.activate` and `bot.connected` run only for enabled ones. Disabled ones are registered and listed in the receipt as `registered-disabled`. Verify requires every enabled imported bot connected. The plan's "every bot connected" is read as every bot the source had enabled; the preflight shows the flag per bot so the user sees which will start.
 
-Before the commit point, failure, cancel, drain, or crash rolls back in this order, each step an effect with its own record.
+Credentials, per variant of `accounts.app.secret` in the source config (`preflight.ts:20-23`):
 
-1. `rollback.bot.stop` for every `bot.activate` done or intended. `unconfirmed` stops the rollback here: terminal `manual-recovery` with instruction codes, service untouched, old bridge not started.
-2. `rollback.bot.remove` for every `bot.reserve` done, through `remove`.
-3. `rollback.hooks.restore` for every `hooks.write` done, only when the current hash equals our written hash; otherwise leave and record `foreign-change`.
-4. `rollback.stage.discard`.
-5. `service.*` restore steps per section 2.4. `foreign-change` or `manual-recovery` from the adapter ends terminal `manual-recovery`.
+| Source form | Transformation | `credentials` |
+| --- | --- | --- |
+| inline string | `setSecret(secretKeyForApp(appId), value)`; config secret becomes `{ source: 'exec', provider: 'bridge', id }` | `decryptable` |
+| `{ source: 'exec', provider: 'bridge', id }` with an envelope in staged `secrets.enc` | decrypt with the staged `.keystore.salt` and `legacy-keystore.ts`, then as above | `decryptable`, or `missing-key` / `invalid-key` |
+| `{ source: 'env' \| 'file', ... }` | copied unchanged; no keystore write | `external-reference`, receipt warning |
+| any other `exec` reference | refuse `credential: unsupported-reference` | `unsupported-reference` |
 
-After the commit point, recovery completes `marker.write` and `receipt.write` and never touches bots or the service. A failed `service.*` disable step after verify passed is before the commit point and rolls back.
+The config written by `bot.prepare` is the source config object with `accounts.app.secret` replaced as above and `secrets.providers.bridge` set to the daemon's provider spec (the object `buildEncryptedAccountConfig` emits, `store.ts:38-45`), every other field preserved byte-for-byte as JSON. `buildEncryptedAccountConfig` itself is not called, so no owner, admin, or network field is invented; the one side effect it would have had is the explicit `wrapper.ensure` effect.
 
-### 4.6 Lifecycle binding
+### 4.6 Lifecycle and recovery
 
-- `recoverBridgeImport(roots)` runs in `cli/commands/run.ts runRun` after `ensureRegistry()` and before `runSupervisor` (`run.ts:32-38`), so before any child spawns. It needs files, the service adapters, the registry, and the keystore; it never needs the supervisor. Its outcomes: nothing to do; rolled back (owned registrations removed before the supervisor reads the registry); rolled forward; `manual-recovery` or `blocked` left in the ledger for the UI and CLI to show.
-- `createBridgeImporter(deps)` is built inside `runSupervisor` beside `createAdminService` (`bot/supervisor.ts:166`) and passed to `startApi` as `importer`. `startApi` adds `() => importer.drain()` first in its drain list (`server/http.ts:73-79`). `drain()` sets `cancelRequested`, waits for the current effect to end, rolls back if before the commit point or finishes if after, with a 60 s bound per effect; past the bound it leaves the ledger consistent for the next start and resolves.
-- `execute` returns `started` after the ledger header and service origin are durable. The importer owns the background promise; a client disconnect changes nothing. `invalidateSnapshot` is called after every `bot.register`, `bot.enable`, `bot.activate`, and rollback effect.
-- `cancel` before the commit point sets `cancelRequested`; rollback begins at the next effect boundary. After the commit point it returns `past-point-of-no-return`.
+- **Construction.** `createBridgeImporter(deps)` is built in `runSupervisor` before `startApi` and passed as `importer` to `startApi`, which passes it to `importRpc`. `startApi`'s drain list is not changed; the importer is shut down by the supervisor, below.
+- **Shutdown order.** In the supervisor's `finally` (`supervisor.ts:261-269`) the first awaited statement becomes `await importer.shutdown()`, before `shuttingDown = true`, before `api.beginDrain`, and before the children are stopped. `shutdown()` sets `cancelRequested`, waits for the current effect to settle (effects are bounded: file operations carry timeouts, manager commands 10 s, activation 12 s, stop 15 s), then rolls back if before the commit point or finishes marker and receipt if after. There is no abandon-after-timeout branch; the importer joins its effect. If the host's own shutdown grace expires first, the process exits at an effect boundary at worst mid-effect, and recovery classifies at next start. `drain` on the API therefore sees no running import.
+- **Recovery before the supervisor.** `recoverBridgeImport(roots)` runs in `runRun` after `ensureRegistry()` and before `runSupervisor`; `runRun` re-reads the registry after recovery and passes the fresh one to `runSupervisor` (`run.ts:32-38` currently reuses the pre-recovery object; this is a named shared edit). Recovery needs files, the service adapters, the registry mutex, and the keystore. It never needs the supervisor.
+- **Crash orphans.** For every `bot.activate` with intent, recovery reads `readSingleInstanceHolder(appId, botPaths(appId).processesFile)` (`core/single-instance.ts:93-108`, pid plus start time with reuse check). A live holder is a running imported bot that this daemon no longer owns a handle for. Recovery does not signal it. It quarantines: `setActiveBots(current minus those appIds)` under the mutex so the supervisor will not spawn a second instance, leaves the registry entries and directories in place, records terminal `manual-recovery` with instruction `stop-orphaned-bot` and the pids, and leaves the old service untouched. A dead holder lets rollback continue.
+- **Roll-forward after the commit point.** Recovery re-acquires the fence, completes `marker.write` and `receipt.write`, releases the fence, and never touches bots or definition files.
+- **Admission.** `execute` while a transaction exists returns `already-running`. `importRpc` is total: every exception inside it becomes a reply with code `internal` and a server-side log line; nothing reaches the generic `Error.message` paths in `server/http.ts:163-166`.
 
-### 4.7 Confirmed inventory and stale confirmation
+### 4.7 Confirmed inventory
 
 ```ts
 export interface ConfirmedInventory {
-  readonly preflightId: string; readonly issuedAt: number; readonly sourceRoot: string;
-  readonly files: readonly { rel: string; size: number; sha256: Sha256Hex }[];   // exact copy list
-  readonly fingerprint: Sha256Hex;        // sha256 over the sorted files tuples
-  readonly serviceFingerprint: Sha256Hex; // sha256 over the identity fields of ServiceOriginRecord
+  readonly preflightId: string; readonly issuedAt: number;
+  readonly sourceRoot: { path: string; dev: number; ino: number };
+  readonly layout: 'multi-bot-v1' | 'legacy-flat';
+  readonly files: readonly { rel: string; size: number; sha256: Sha256Hex }[];
+  readonly fingerprint: Sha256Hex; readonly serviceFingerprint: Sha256Hex;
 }
 ```
 
-The copy list is exactly: `bots.json` (multi-bot) or `config.json` (flat), `.keystore.salt`, `secrets.enc` when present, and per bot `bots/<appId>/config.json`, `projects.json`, `sessions.json`, `comment-instructions.md` when present. Excluded: `service.pid`, `processes.json`, `web-console.json`, `relaunch-request.*`, `win-relaunch.json`, `update.lock`, logs, `.vonvon-bridge-access/`, the marker, and anything else. External secret references (`source: env|file|exec` in `config.json`) are copied as references; `credentials` reports `external-reference` and the receipt warns.
+Copy list. `multi-bot-v1`: `bots.json`, `.keystore.salt`, `secrets.enc`, and per bot `bots/<appId>/config.json`, `projects.json`, `sessions.json`, `comment-instructions.md`. `legacy-flat`: `config.json`, `projects.json`, `sessions.json`, `comment-instructions.md`, `.keystore.salt`, `secrets.enc` (`preflight.ts:234-246` reads these at the root for flat). Optional files are listed when present; presence is part of the fingerprint, so an added or removed optional file is a change. Excluded: `service.pid`, `processes.json`, `web-console.json`, `relaunch-request.*`, `win-relaunch.json`, `update.lock`, logs, the marker, and everything else.
 
-The daemon holds issued inventories in memory for 15 minutes. `execute` requires the `preflightId` to be held, the request's `fingerprint` to equal the held one, and a fresh capture to equal the held `serviceFingerprint`. Then pause, then `source.verify-inventory` re-reads every file and compares. Any difference rolls back and returns `stale-confirmation` with a fresh preflight. The staged bytes are the bytes that passed verification, not a reopen.
+Verification after pause: `lstat(sourceRoot)` must match `dev,ino`; each path's components are re-checked for symlinks as preflight does (`preflight.ts:146-169`); each file is opened `O_NOFOLLOW`, read bounded, hashed, and must equal. The bytes that passed are the bytes staged. Decryption reads `secrets.enc` and `.keystore.salt` from staging, hooks conversion reads the hook file through its fd (section 2.6), never a reopened source path. Any mismatch rolls back and returns `stale-confirmation` with a fresh preflight. The daemon holds issued inventories for 15 minutes.
 
-## 5. Model D: wire contract
+The guarantee this gives, with the section 3.5 fence held and every lease dead after pause, is a consistent snapshot of the source as of pause, verified byte for byte against what the user confirmed. Without the fence the import does not run.
 
-File: `packages/protocol/src/import.ts`. The root exports it from `index.ts` and registers method `import` in `rpc.ts`. No `events.ts` change; the UI polls `status` once per second while `running`.
+## 5. Model D: wire
 
-Projection boundary: no probe output, command string, hook content, exception message, or credential text crosses the wire. Every human-readable message is rendered by the UI from a code. Paths and pids appear only in typed `detail` fields.
+File: `packages/protocol/src/import.ts`. Root exports it from `index.ts` and registers method `import` in `rpc.ts`. No `events.ts` or `domain.ts` change.
+
+Code-only boundary. Every string that could carry probe output, a command, a path the user did not already know, an exception, or credential text is replaced by a member of one of these enums. Paths and pids travel only in `ImportDetail`.
 
 ```ts
+export const importFailureCodes = ['service-unknown','service-occupied','stale-source','credential-missing-key','credential-invalid-key','credential-unsupported-reference',
+  'copy-failed','hooks-refused','hooks-inode-changed','bot-conflict','orphan-secret','bot-start-failed','bot-not-connected','disable-failed','fence-unavailable','source-occupied',
+  'marker-conflict','unrestorable-state','unsupported-definition','unsupported-state','relaunch-task-present','platform-unsupported','unsupported-runtime','orphaned-bot','internal'] as const;
+export const instructionCodes = ['stop-orphaned-bot','restore-definition-manually','remove-definition-manually','inspect-hook-file','rerun-preflight','remove-relaunch-task','upgrade-bridge-first'] as const;
+export const sourceProblems = ['source-path','unsafe-path','missing-file','unsafe-file','too-large','invalid-encoding','invalid-json','invalid-schema','timed-out'] as const;   // preflight.ts:127
 export const importDetailSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('path'), value: z.string() }), z.object({ kind: z.literal('pid'), value: z.number().int() }),
   z.object({ kind: z.literal('appId'), value: z.string() }), z.object({ kind: z.literal('file'), value: z.string() }),
+  z.object({ kind: z.literal('effect'), value: z.string() }),
 ]);
 export const importRequestSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('preflight') }).strict(),
   z.object({ type: z.literal('execute'), preflightId: z.string().uuid(), fingerprint: z.string().length(64) }).strict(),
   z.object({ type: z.literal('status') }).strict(),
   z.object({ type: z.literal('cancel'), txnId: z.string().uuid() }).strict(),
+  z.object({ type: z.literal('acknowledge'), txnId: z.string().uuid() }).strict(),     // hides a terminal transaction from first-run; ledger keeps it
 ]);
 export const importSessionViewSchema = z.object({ threadId: z.string(), chatId: z.string(), backend: z.string() });
 export const importBotViewSchema = z.object({
   appId: z.string(), name: z.string(), tenant: z.enum(['feishu', 'lark']), enabled: z.boolean(),
   groups: z.array(z.object({ name: z.string(), chatId: z.string(), sessionCount: z.number().int() })),
   sessions: z.array(importSessionViewSchema).max(200), sessionCount: z.number().int(), settingCount: z.number().int(),
+  credentials: z.enum(['decryptable', 'missing-key', 'invalid-key', 'external-reference', 'unsupported-reference', 'not-checked']),
 });
 export const importServiceViewSchema = z.object({
   platform: z.enum(['launchd', 'systemd', 'windows-run', 'unsupported']),
-  state: z.enum(['absent', 'registered-stopped', 'registered-running', 'registered-idle-unrestorable', 'unsupported-installation', 'relaunch-task-present', 'unknown']),
+  state: z.enum(['absent', 'registered-stopped', 'registered-running', 'unrestorable-state', 'unsupported-definition', 'unsupported-state', 'relaunch-task-present', 'platform-unsupported', 'unknown']),
   platformProof: z.enum(['native-lanes', 'none']),
+  fence: z.enum(['available', 'unavailable', 'occupied']),
 });
+const botCurrent = z.object({ appId: z.string(), name: z.string(), enabled: z.boolean(), connection: z.enum(['connected', 'pending', 'failed', 'absent']) });
 export const importReceiptViewSchema = z.object({
-  txnId: z.string().uuid(), completedAt: z.number(), bots: z.array(z.object({ appId: z.string(), name: z.string(), connectedAt: z.number() })),
-  serviceAutostartRemoved: z.literal(true), markerPath: z.string(), warnings: z.array(z.enum(['launcher-files-left', 'external-secret-reference', 'windows-unproven'])),
+  txnId: z.string().uuid(), completedAt: z.number(),
+  bots: z.array(z.object({ appId: z.string(), name: z.string(), outcome: z.enum(['connected', 'registered-disabled']), connectedAt: z.number().optional() })),
+  serviceAutostartRemoved: z.literal(true), definitionRemoved: z.literal(false), definitionPath: z.string(), markerPath: z.string(),
+  warnings: z.array(z.enum(['external-secret-reference', 'definition-left-in-place'])),
 });
 export const importPreflightViewSchema = z.object({
   preflightId: z.string().uuid(), takenAt: z.number(), sourceRoot: z.string(), fingerprint: z.string().length(64),
   source: z.discriminatedUnion('kind', [
     z.object({ kind: z.literal('not-found') }),
-    z.object({ kind: z.literal('invalid'), problem: z.string(), file: z.string() }),
+    z.object({ kind: z.literal('invalid'), problem: z.enum(sourceProblems), file: z.string() }),
     z.object({ kind: z.literal('multiple-roots'), roots: z.array(z.string()) }),
     z.object({ kind: z.literal('ready'), format: z.enum(['multi-bot-v1', 'legacy-flat']), bots: z.array(importBotViewSchema),
       counts: z.object({ bots: z.number().int(), groups: z.number().int(), sessions: z.number().int(), settings: z.number().int() }) }),
   ]),
   service: importServiceViewSchema,
-  credentials: z.enum(['decryptable', 'missing-key', 'invalid-key', 'external-reference', 'not-checked']),
-  conflicts: z.array(z.object({ appId: z.string(), reason: z.enum(['bot-exists']) })),
+  conflicts: z.array(z.object({ appId: z.string(), reason: z.enum(['bot-exists', 'orphan-secret']) })),
   occupants: z.array(z.object({ kind: z.enum(['pending-operation', 'source-lease', 'data-in-use', 'unmanaged-process', 'other-data-root']), detail: importDetailSchema })),
-  existingReceipt: z.object({ receipt: importReceiptViewSchema, currentBots: z.array(z.object({ appId: z.string(), connection: z.enum(['connected', 'pending', 'failed', 'absent']) })) }).optional(),
+  existingReceipt: z.object({ receipt: importReceiptViewSchema, current: z.array(botCurrent) }).optional(),
   oldBridgeObserved: z.boolean(),
-  canExecute: z.boolean(),
+  canExecute: z.boolean(), refusal: z.enum(importFailureCodes).optional(),
 });
-const botProgress = z.object({ appId: z.string(), name: z.string(), connection: z.enum(['pending', 'connected', 'failed']) });
-const phase = z.enum(['pause', 'verify-source', 'copy', 'hooks', 'start', 'verify', 'disable', 'marker', 'rollback']);
+const phase = z.enum(['pause', 'verify-source', 'copy', 'bots', 'hooks', 'start', 'verify', 'disable', 'cleanup', 'rollback']);
+const common = { txnId: z.string().uuid(), startedAt: z.number(), updatedAt: z.number(), oldBridgeObserved: z.boolean() };
 export const importStatusViewSchema = z.discriminatedUnion('state', [
-  z.object({ state: z.literal('running'), txnId: z.string().uuid(), startedAt: z.number(), updatedAt: z.number(), phase, bots: z.array(botProgress), cancelRequested: z.boolean() }),
-  z.object({ state: z.literal('succeeded'), txnId: z.string().uuid(), startedAt: z.number(), updatedAt: z.number(), receipt: importReceiptViewSchema, oldBridgeObserved: z.boolean() }),
-  z.object({ state: z.literal('rolled-back'), txnId: z.string().uuid(), startedAt: z.number(), updatedAt: z.number(), cause: z.enum(['failed', 'cancelled', 'drained', 'crashed']), code: z.string(), detail: importDetailSchema.optional() }),
-  z.object({ state: z.literal('manual-recovery'), txnId: z.string().uuid(), startedAt: z.number(), updatedAt: z.number(), phase, code: z.string(), instructions: z.array(z.string()), details: z.array(importDetailSchema) }),
-  z.object({ state: z.literal('blocked'), txnId: z.string().uuid(), startedAt: z.number(), updatedAt: z.number(), code: z.string(), details: z.array(importDetailSchema) }),
+  z.object({ state: z.literal('running'), ...common, phase, bots: z.array(botCurrent), cancelRequested: z.boolean() }),
+  z.object({ state: z.literal('succeeded'), ...common, receipt: importReceiptViewSchema, current: z.array(botCurrent) }),
+  z.object({ state: z.literal('rolled-back'), ...common, cause: z.enum(['failed', 'cancelled', 'shutdown', 'crashed']), code: z.enum(importFailureCodes), details: z.array(importDetailSchema) }),
+  z.object({ state: z.literal('manual-recovery'), ...common, phase, code: z.enum(importFailureCodes), instructions: z.array(z.enum(instructionCodes)), details: z.array(importDetailSchema) }),
+  z.object({ state: z.literal('blocked'), ...common, code: z.enum(importFailureCodes), details: z.array(importDetailSchema) }),
 ]);
 export const importReplySchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('preflight'), preflight: importPreflightViewSchema }),
@@ -392,66 +400,64 @@ export const importReplySchema = z.discriminatedUnion('type', [
     z.object({ kind: z.literal('started'), status: importStatusViewSchema }),
     z.object({ kind: z.literal('stale-confirmation'), preflight: importPreflightViewSchema }),
     z.object({ kind: z.literal('already-running'), status: importStatusViewSchema }),
-    z.object({ kind: z.literal('existing-receipt'), receipt: importReceiptViewSchema }),
-    z.object({ kind: z.literal('refused'), reason: z.enum(['not-ready', 'service-unknown', 'occupied', 'conflict', 'credential', 'unrestorable-service', 'unsupported-installation', 'relaunch-task-present', 'unsupported-runtime']), details: z.array(importDetailSchema) }),
+    z.object({ kind: z.literal('existing-receipt'), receipt: importReceiptViewSchema, current: z.array(botCurrent) }),
+    z.object({ kind: z.literal('refused'), code: z.enum(importFailureCodes), details: z.array(importDetailSchema) }),
   ]) }),
   z.object({ type: z.literal('status'), status: importStatusViewSchema.nullable() }),
   z.object({ type: z.literal('cancel'), outcome: z.enum(['cancelling', 'not-running', 'past-point-of-no-return']) }),
+  z.object({ type: z.literal('acknowledge'), outcome: z.enum(['acknowledged', 'not-terminal']) }),
 ]);
 ```
 
-`instructions` and `code` are members of the daemon's `InstructionCode` and `ImportFailureCode` string enums, defined in `import.ts` as zod enums, so the UI maps them to text and never prints a raw string. `succeeded` carries no bot list with a non-connected member because the receipt type admits only connected bots with `connectedAt`. `oldBridgeObserved` is computed read-only on every `status` and `preflight` by the inventory's process scan, which is the lane 7 warning after terminal status.
+Semantics the schema now encodes: `succeeded` carries the historical `receipt` and a separately observed `current`; the UI shows "imported" from the receipt and "all connected" only when every enabled `current` entry is `connected`, so a daemon restart after success shows "reconnecting", not a false live success. `oldBridgeObserved` is on every status and preflight reply and is computed read-only by the inventory's process scan. `acknowledge` lets the first-run step hide a terminal transaction without deleting the ledger.
 
-Authentication is the existing hello credential (`server/ws.ts:68-77`). `preflight` and `status` are `RpcOutcome` `read`; `execute` and `cancel` are `mutation`.
+Lifetimes: the UI polls `status` once per second while `running`, every 10 s while the import page or first-run step is mounted and the last state is terminal and unacknowledged, and stops after `acknowledge`. The first-run step is rendered by `App.tsx` unconditionally at the top of the main view and renders nothing when `status` is null and preflight is `not-found` or acknowledged; it is not tied to the empty-bot branch, so `bot.register` invalidating the snapshot does not unmount it. Lane 7's warning is the `oldBridgeObserved` flag on the import page and on the first-run step while either is mounted.
 
-## 6. Routing, client, CLI, UI, and shared edits
+Authentication is the existing hello credential (`server/ws.ts:68-77`). `preflight` and `status` are `RpcOutcome` `read`; `execute`, `cancel`, and `acknowledge` are `mutation`.
 
-- `packages/daemon/src/import/bridge/rpc.ts` (V8) exports `importRpc(importer, payload)`. Root adds `case 'import'` in `server/http.ts` dispatch (`http.ts:143-160`) and `importer` to `startApi` options, plus `() => importer.drain()` in the drain list.
-- Root adds the importer construction in `bot/supervisor.ts` beside `createAdminService`, the `recoverBridgeImport` call in `cli/commands/run.ts` before `runSupervisor`, and the `gateMutations` check in `admin/service.ts` at `registerBotByQr`, `setBotEnabled`, and `deleteBot`. These three files are outside V8's original boundary and are disclosed as required shared edits.
+## 6. Routing, client, CLI, UI, shared edits
+
+- `packages/daemon/src/import/bridge/rpc.ts` (V8) exports `importRpc(importer, payload)`; root adds `case 'import'` in `server/http.ts` dispatch and `importer` to `startApi` options. No drain-list change.
+- Root edits `bot/supervisor.ts` (construct the importer with the three capabilities before `startApi`; `await importer.shutdown()` first in `finally`), `cli/commands/run.ts` (call `recoverBridgeImport` after `ensureRegistry`, re-read the registry before `runSupervisor`), `config/bots.ts` (`withRegistry`, reservations, `syncPath` after `saveBots`), `bot/register-bot.ts` (reservation check under `withRegistry` before `setSecret`). `admin/service.ts` is not edited.
 - `packages/client/src/client.ts` (root): `bridgeImport(request)` and the `import` entry in `replySchemas`.
 - `packages/daemon/src/cli/commands/import.ts` (V8): `vonvon import feishu-codex-bridge [--yes] [--json]` through the local transport; no in-process executor. Root adds the `cli/index.ts` line.
-- `packages/ui/src/import/ImportFlow.tsx` (V8-T4): props-less container mapping `ImportReply` to the existing `ImportView`, reusing `ImportPage.tsx`, `import.css`, the test, and `ImportFirstRunStep`. States to map: preflight variants, `stale-confirmation` (re-render list, require new click), `occupied` and `refused` reasons, `running` with cancel, `rolled-back`, `manual-recovery` with instruction codes, `blocked`, reconnect (poll `status` on mount), `existingReceipt` with current connections, and `oldBridgeObserved` warning. Completion shows only on `state: 'succeeded'`.
-- `features.ts` and `App.tsx` (root): one feature entry and one first-run render in the empty-bot branch. #185 stays partial until this wiring exists and is verified.
+- `packages/ui/src/import/ImportFlow.tsx` and `ImportFirstRunStep` container logic (V8-T4): map every reply variant above; completion requires `succeeded` plus all enabled `current` connected. The existing `ImportPage.tsx`, `import.css`, and tests are reused.
+- `features.ts` and `App.tsx` (root): one feature entry; one unconditional render of the first-run step at the top of the main view.
 
-## 7. R1 to R16 and F1 to F7: rule, trace, anchor
+## 7. B1 to B10 disposition, with traces
 
-| Finding | Rule | Required trace (fake commands, in-memory files, step sink captured) |
+| Finding | Design change | Required trace (fakes, in-memory files, effect records captured) |
 | --- | --- | --- |
-| R1 origin vs paused comparison | 2.4 projection table | capture, pause, verify, `disable(txn)`: observation equals `projected`, disable completes; same sequence with the unit replaced after pause: `foreign-change`, trace read-only. `pause` twice: second returns continuing from step records, no duplicate mutation. |
-| R2 persisted union | 2.2 | round-trip every variant; narrowing to `windows-run` exposes `runValue`, `chain`, `children`; mutated backup yields `backup-mismatch`. |
-| R3 rollback order | 4.5 | two bots, A connected, B fails: trace shows `rollback.bot.stop A` done, `rollback.bot.remove A`, then `service.*` restore; `stop A` `unconfirmed`: terminal `manual-recovery`, zero service restore steps. |
-| R4 within-phase crash | 4.2, 4.3 | crash between `bot.files` rename and outcome: recovery compares dest hashes to staging and completes or removes via `.import-owned`; crash between `bot.register` intent and `addBot`: recovery removes only directories with our marker; crash after verify passed before `commitPoint`: rollback; after `commitPoint`: marker and receipt written, bots untouched; fsync order asserted by a fake fs that records fsync calls. |
-| R5 runtime port | 4.4 | `activate` returns `restart-required`: `bot-start-failed`, rollback; `connection` stays `pending` 60 s: `bot-not-connected`; config preserves source preferences byte-for-byte except the secret reference; QR registration for a reserved appId during import returns `conflict`. |
-| R6 managed vs foreign | 3.4 | running systemd bridge with `service.pid` and children in `processes.json`: inventory `managed` non-empty, `foreign` empty, pause proceeds; one extra bridge process not in the managed set: `occupied`, read-only trace. |
-| R7 roots and fencing | 1.11, 4.1, 4.4 | `VONVON_HOME` set: ledger path under it; two source roots: `other-data-root` refuses; live `.vonvon-bridge-access` lease: `source-lease` occupant; bridge write between pause and `source.verify-inventory`: `stale-confirmation` and rollback. |
-| R8 Windows identity | 3.3 table | fixture chain with `@modelzen/feishu-codex-bridge`: `chain` recognized; package name `feishu-codex-bridge`: `unsupported-installation`; CMD altered after capture: restore `foreign-change`, no launch. |
-| R9 duplicate launch | 3.3 restore | kill `blocked` or `failed` with original alive (handle `HasExited` false): restore writes Run value, zero `launch` steps, `restored`; second restore: `already-restored`. |
-| R10 relaunch task | 3.3 table | task `present`: preflight `relaunch-task-present`, `canExecute` false, execute `refused`. |
-| R11 PID race | 1.5, 3.3 termination | handle acquisition fails: pause ends `blocked` at `acquire-handles` with the Run value still present; identity via handle mismatches: `blocked`; no `taskkill` anywhere in the trace. |
-| R12 loaded-idle | 3.1 restorable | `loaded-idle` with `KeepAlive`: preflight `registered-idle-unrestorable`, execute refused before mutation; `loaded-idle` without autostart keys: bootstrap, no pid for 5 s, `restored`; pid appears: `manual-recovery`. |
-| R13 no-clobber | 2.5 | plist appears between observation and `publish`: `link` EEXIST, `foreign-change`, new file untouched; `retire` moves a replaced unit: hash mismatch, linked back, `foreign-change`, retired copy kept. |
-| R14 confirmed inventory | 4.7 | sessions.json changes after pause: verify fails, rollback, `stale-confirmation`; symlink swapped in: `O_NOFOLLOW` open fails, same outcome; staged bytes equal verified bytes. |
-| R15 lifecycle | 4.6 | drain during `copy`: rollback completes before drain resolves; drain after `commitPoint`: marker and receipt written; recovery runs before `runSupervisor` and removes owned registrations so no imported child spawns. |
-| R16 projection | 5 | status fixtures: `succeeded` without receipt fails schema; probe stderr containing a secret never appears in any reply field; sessions list capped at 200 with `sessionCount` total; `existingReceipt.currentBots` reflects current connections. |
-| F1 | 3.3 pause and restore, 4.5 | as R9 and R11. |
-| F2 | 1.1, 3.3 probes | access-denied on every probe: `unknown`, no mutation. |
-| F3 | 3.3 table, 1.2 | python argument containing `feishu-codex-bridge run`: `unknown` process identity, refuse. |
-| F4 | 3.4 | as R6. |
-| F5 | 3.1 | as R12 plus override difference → `manual-recovery`. |
-| F6 | 3.2 | `XDG_CONFIG_HOME` non-default: unit path and `FragmentPath` compare there. |
-| F7 | 2.4, 2.5 | as R1 and R13. |
+| B1 destructive compare-then-mutate | Pause and commit use manager name-bound operations only. No definition file is written, moved, or removed by the importer, ever. Hooks are written through the inode with a same-descriptor content check immediately before the write; the content-CAS impossibility and the V9 cooperation alternative are stated. Windows registry deletion does not execute. | Whole-run trace on launchd and systemd contains no `rename`, `unlink`, or `link` on a definition path. Hook content changed between backup and the pre-write check: no write, reconvert, retry; three changes end `manual-recovery`. Hook replaced by rename-save: write lands on the old inode, same-descriptor re-read still matches, path re-stat shows a new inode, step retries on the new file. |
+| B2 unfinished or failed actions | Section 4.4 before/after/neither classification for every effect, including `failed` outcomes and rollback effects; projection applies classification first. No republished inode case exists. | `systemd.disable-now` done, crash before outcome: recovery observes `disabled/inactive`, classifies `after`, continues. `hooks.write` done, crash before outcome, then rollback: classified `after`, `rollback.hooks.restore` runs. `bot.place` rename done, crash before outcome: directory present with our marker, classified `after`. Observed state matching neither: `manual-recovery`, no further automatic effect. |
+| B3 ownership and durability | `bot.prepare` builds the whole directory inside `txnDir`; `bot.place` is one rename onto a non-existent name under the mutex. `bot.secret` refuses on a defined prior value. `wrapper.ensure` is an explicit effect. Rollback is four effects, each classified. `syncPath` after every helper write. | Crash between `mkdir` and marker inside `txnDir`: discarded and redone, destination untouched. Existing orphan secret: `conflict: orphan-secret`, no write. Fake fs records fsync calls: every referenced file and its directory synced before the ledger record; `saveBots`, `saveConfig`, wrapper followed by `syncPath`. Crash after `rollback.bot.unregister`, before `secret-remove`: retry classifies unregister `after`, continues. |
+| B4 gate versus port, registry races, enabled semantics, credentials | Importer uses supervisor capabilities directly; reservations live in `config/bots.ts` and are enforced in the helpers and in `register-bot.ts` before `setSecret`; whole-registry writes serialize under `withRegistry`; `bot.enable` computes from the current set; disabled bots are registered not activated; four credential variants. | QR registration for a reserved appId: fails under the mutex before `setSecret`. Concurrent `setActiveBots` for another bot during `bot.enable`: both writes serialized, the other bot's decision preserved. Source bot `enabled:false`: registered, not activated, receipt `registered-disabled`, verify passes without it. `env` secret reference copied unchanged with warning; unknown `exec` provider refused. |
+| B5 lease path and quiescence | Leases read from `realpath(sourceHome)/.vonvon-bridge-access`, pid-correlated to the managed set. The bridge's admission mutex is held for the whole run (section 3.5), so no new bridge writer can enter; after pause every lease must be dead. Older bridges without the protocol refuse by default. | Running managed systemd bridge with its lease, `service.pid`, and children: `managed` populated, `foreign` empty, fence bound, pause proceeds, leases dead after pause. Fake bridge process attempting `enterDataAccess` while the fence is held: its bind fails, source bytes unchanged, verification passes. Fence address already bound: `source-occupied`, no effect. Bridge version below the protocol version: `fence-unavailable`, refuse. |
+| B6 recovery and drain | Importer shut down by the supervisor before `shuttingDown`; no timeout abandon; recovery quarantines live orphans and refuses to restore; `runRun` re-reads the registry. | Shutdown during `copy`: `shutdown()` joins the effect, rolls back with the children still stoppable, then `shuttingDown` is set. Crash during `start` with a live holder: recovery deactivates those appIds, leaves entries and directories, terminal `manual-recovery` with `stop-orphaned-bot` and pids, service effects untouched, supervisor spawns none of them. Same with a dead holder: rollback completes. |
+| B7 Windows | `execute` refuses on `win32`; the refusal is recorded as a non-delivery of the three-platform build item, not an acceptance; Run-value removal has no bound primitive in Win32 and is a cooperation or manual step. | `execute` on `win32`: `refused: platform-unsupported`, no effect recorded. Preflight classifies the fixture chain and a wrong package name. |
+| C1 manager TOCTOU | Re-read of loaded program and pid immediately before `bootout` or `disable --now`; label-level guarantee stated in section 2.6; before and after pids recorded. | Loaded program differs from template at the pre-command read: `unsupported-state`, no command. After `bootout`, a pid outside the recorded set still alive with bridge argv: `partial`, no signal, restore by name, `manual-recovery`. |
+| C2 override preservation | `enable-override` only when origin was false; origin `true` with a loaded job is `unsupported-state`. | Origin override true, job not loaded: pause skips disable, restore never enables, commit leaves it true. |
+| C3 definition removal | Not performed; receipt `definitionRemoved: false`; lane 1 file assertions open. | Whole-run trace has no file operation on the definition path; receipt and instruction present. |
+| C4 crash prefixes | Section 4.4 before, after, or neither for every effect including `fence.acquire` and rollback effects. | Crash after `disable-now`, before outcome: classified `after`. Crash after fence bound, before record: recovery binds again, idempotent. |
+| B8 supported-state boundary | Templates for launchd and systemd; loaded program or `ExecStart` must equal the file's; `DropInPaths` empty; `failed`, `masked`, `static`, `linked` refused; `loaded-idle` with autostart keys refused before mutation. | Plist with an extra `StartInterval` key: `unsupported-definition`. Loaded job whose `arguments` differ from the file: `unsupported-state`. systemd `failed`: `unsupported-state`. All refusals leave an empty effect list. |
+| B9 inventory coverage | Flat layout list complete; root `dev,ino` revalidated; staged bytes are the verified bytes; decryption from staging; `stage.copy` rerun must match the confirmed hash. | Flat fixture: `projects.json`, `sessions.json`, `comment-instructions.md` in the inventory. Source root replaced by a different directory at the same path: `dev,ino` mismatch, `stale-source`. Staging lost after crash, source changed: re-read hash differs, `stale-source`, rollback. |
+| B10 wire coherence | Enums defined in the protocol; `problem` from preflight's union; `succeeded` separates `receipt` and `current`; `importRpc` total; `acknowledge`; polling and first-run lifetimes specified. | Fixture status with `succeeded` and a `current` entry `pending`: UI shows imported, not all connected. Any `Error` thrown inside `importRpc`: reply `refused: internal`, never an error envelope with a message. First-run step stays mounted across a snapshot change that adds bots. `oldBridgeObserved` true after a manual bridge start while the page is mounted. |
+
+Earlier rows R1 to R16 and F1 to F7 keep their traces from the previous revision where this revision did not change the mechanism; where it did (R1, R4, R9, R11, R12, R13, F1, F5, F7), the rows above supersede them.
 
 ## 8. Implementation order and gates
 
-1. V8-T2: `types.ts`, `ledger.ts` step sink, `files.ts`, and the three adapters to sections 2 and 3, with every section 7 trace as a test. Checkpoint: `npm test -w packages/daemon -- import-bridge-service-control` green with trace assertions.
-2. V8-T1: `execute.ts`, `ledger.ts`, `inventory.ts`, `runtime-port.ts`, `recoverBridgeImport`, crash matrix before and after every effect. Checkpoint: `npm test -w packages/daemon -- import-bridge`.
-3. V8-T3: `protocol/src/import.ts`, `import/bridge/rpc.ts`, `cli/commands/import.ts`. Root applies section 6 shared edits. Checkpoint: typecheck across protocol, client, daemon; CLI preflight against a daemon without bridge data prints `not-found`.
-4. V8-T4: `ImportFlow.tsx`; root adds the feature entry and first-run render. Checkpoint: `npm run test -w packages/ui -- import-bridge` plus container tests for every status variant.
-5. Gates, none marked passed here: fresh independent review of this exact head before implementation starts; after implementation the ten live lanes in `test-user` `gui/502` and `accept-user` only; perf from ledger `intent.at` timestamps; independent review; exact-head Shipping. Windows has no acceptance and the receipt says so.
+1. V8-T2: `types.ts`, `inventory.ts`, `files.ts`, `launchd.ts`, `systemd.ts` to sections 2 and 3, with every section 7 trace that touches them. `windows.ts` is preflight-only. Checkpoint: `npm test -w packages/daemon -- import-bridge-service-control`.
+2. V8-T1: `execute.ts`, `ledger.ts`, `recover.ts`, `runtime-port.ts`, crash matrix before and after every effect including rollback effects. Checkpoint: `npm test -w packages/daemon -- import-bridge`.
+3. V8-T3: `protocol/src/import.ts`, `import/bridge/rpc.ts`, `cli/commands/import.ts`; root applies section 6 shared edits. Checkpoint: typecheck across protocol, client, daemon; CLI preflight on a daemon without bridge data prints `not-found`.
+4. V8-T4: `ImportFlow.tsx` and first-run container; root adds the feature entry and render. Checkpoint: `npm run test -w packages/ui -- import-bridge` plus a test per status variant.
+5. Gates, none passed here: fresh independent review of this exact head before implementation; then the ten live lanes in `test-user` `gui/502` and `accept-user` only, perf from ledger `intent.at` timestamps, independent review, exact-head Shipping. Windows is refused and has no acceptance.
 
 ## 9. Disclosure for the root PR
 
-- Additive `import` request group in `rpc.ts`; export in `index.ts`; client method `bridgeImport`. No existing shape changes. No `events.ts` change.
-- New persisted files under `destRoot/import/bridge/`: `ledger.json`, `receipt.json`, `<txnId>/` backups, retired definitions, staging. New `botDir/.import-owned` marker inside imported bot directories. Marker file content in section 4.3.
-- Shared edits beyond V8's original boundary: `server/http.ts` (case, option, drain entry), `bot/supervisor.ts` (importer construction), `cli/commands/run.ts` (recovery call), `admin/service.ts` (`gateMutations` check at three mutation entries), `client.ts`, `cli/index.ts`, `features.ts`, `App.tsx`.
+- Additive `import` request group in `rpc.ts`; export in `index.ts`; client method `bridgeImport`. No existing shape changes. No `events.ts` or `domain.ts` change.
+- New persisted files under `destRoot/import/bridge/`: `ledger.json`, `receipt.json`, `<txnId>/` with `backup/`, `staging/`, `bots/`, `quarantine/`, `removed-definition`. New `.import-owned` marker inside imported bot directories. Marker content `{ version: 1, txnId, completedAt, vonvonHome }`.
+- Shared edits: `server/http.ts` (case and option), `bot/supervisor.ts` (importer construction and shutdown order), `cli/commands/run.ts` (recovery call and registry re-read), `config/bots.ts` (`withRegistry`, reservations, `syncPath`), `bot/register-bot.ts` (reservation check), `client.ts`, `cli/index.ts`, `features.ts`, `App.tsx`. `admin/service.ts` is no longer edited.
+- Decisions the root must record, each a proposal with the original gate kept open until disposed: (1) the importer never removes the definition file, so lane 1's "plist is gone", "unit file is gone", and `LoadState` `not-found` assertions cannot pass as written; the routes are the bridge's own `service uninstall`, the V9 release removing it on start, or a root-disposed lane change. (2) Older bridges without the admission protocol refuse by default; a snapshot-only import for them would be a root-accepted exception. (3) Hooks are written in place with inode plus same-descriptor content check; the content-CAS window is stated; the alternative is V9 forwarding `feishu-codex-bridge hook` to `vonvon hook`, which changes lane 6. (4) Windows stop and disable are not delivered by this candidate; the three-platform build item stays open. (5) Enabled-bot semantics of section 4.5.
+- `architecture.md` and `plan.md` now say that failure before the commit point restores the bridge and failure after it rolls forward.
 - No merge-edge or graph change. V8 still merges after V4 only.
