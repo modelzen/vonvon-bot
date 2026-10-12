@@ -166,7 +166,12 @@ export interface ProviderFeatures {
 }
 ```
 
-The enforcement table is typed data too. A cell is `enforced` only with a `Proof`. A `live` proof names a probe that ran on that OS against the installed provider version. A `doc` proof is allowed only for a `launch-args` cell, where the mechanism is a narrower tool list and nothing else.
+The enforcement table is typed data too. A cell is `enforced` only with a `Proof`. A `live` proof names a probe that ran on that OS against the installed provider version. A `doc` proof is allowed for exactly two kinds of cell, and `auditTable` rejects it anywhere else.
+
+- **Unrestricted.** The key's tier is `full`, `mechanisms` is `[]`, and `native` is that family's unrestricted setting and nothing narrower: Codex `sandbox: 'danger-full-access'`, Claude `mode: 'bypass'`, ACP `bypass: true`, Pi with `tools` absent. `ref` names the provider document for that setting. The cell claims only that Vonvon confines nothing, so no probe has a confinement to observe. A wrong reading of the document can only leave the provider narrower than `full`: it asks, which the daemon answers at once (*Auto-answered requests*); it denies a tool; or it rejects the setting and the turn fails visibly. None of these grants more than `full`, which is already the widest grant. So the proof needs no OS or version check, and one cell serves every OS. The install and login refusals still apply at run time.
+- **Launch-args.** The key's tier is `qa` or `write`, and `mechanisms` is exactly `['launch-args']`: the confinement is a narrower tool list passed at launch and nothing else.
+
+Every other `enforced` cell needs a `live` proof. That covers every cell whose confinement is an OS sandbox, a tool gate, or a provider gate, and every `qa` and `write` cell that names one of them beside `launch-args`.
 
 ```ts
 export type Mechanism = 'os-sandbox' | 'tool-gate' | 'launch-args' | 'provider-gate';
@@ -211,7 +216,11 @@ export type PlanResult = { ok: true; plan: EnforcementPlan } | { ok: false; refu
 
 /** Pure. Never spawns. A missing key is a refusal with 'unverified-combination'. */
 export function planEnforcement(table: EnforcementTable, provider: ProviderId, grant: Grant, os: Os, host: HostFacts): PlanResult;
-/** Build-time test. Returns every 'enforced' cell without a Proof, and every 'doc' proof on a non-launch-args cell. */
+/**
+ * Build-time test. Returns every 'enforced' cell without a Proof; every 'full' cell whose mechanisms are not []
+ * or whose native is not its family's unrestricted setting; and every 'doc' proof on a cell that is neither
+ * unrestricted (tier 'full') nor launch-args (tier 'qa' or 'write' with mechanisms exactly ['launch-args']).
+ */
 export function auditTable(table: EnforcementTable): CellKey[];
 ```
 
@@ -551,7 +560,7 @@ Rules that apply to every cell.
 
 1. `full` has no read scope and reads anywhere. `qa` and `write` carry a read scope. A new project defaults to `project`. A project stored before V6b loads as `unrestricted`, by the user's decision of 2026-10-12, through the load-time migration in `plan.md` V6b *Stored data*.
 2. `project` means no reads of user data outside `root`. System paths needed to run commands stay readable. This is the line Codex `:minimal` draws.
-3. A cell is `enforced` only with a `Proof`. Unproven cells ship `refuse` and flip by one commit when the probe lands. `auditTable` fails the build otherwise. Nothing in this document was live-verified on the design host; `codex`, `cursor-agent`, `grok`, `bwrap`, and `sandbox-exec` are absent there.
+3. A cell is `enforced` only with a `Proof`, under the two `doc` cases of *Data types*: an unrestricted `full` cell, and a `launch-args` cell. Every other enforced cell needs a `live` proof. Unproven cells ship `refuse` and flip by one commit when the probe lands. `auditTable` fails the build otherwise. Nothing in this document was live-verified on the design host; `codex`, `cursor-agent`, `grok`, `bwrap`, and `sandbox-exec` are absent there.
 4. A refusal spawns nothing. The bot posts the Chinese message in the group. The hint that names the setting goes to admins only.
 5. The engine checks what it can observe and refuses with `sandbox-not-confirmed` otherwise. Codex. The generated 0.156.1 `ThreadStartResponse` has no `activePermissionProfile` field; its fields are `model`, `modelProvider`, `serviceTier`, `cwd`, `instructionSources`, `approvalPolicy`, `approvalsReviewer`, `sandbox`, and `reasoningEffort`, and only a doc comment names `activePermissionProfile` (CX `v2/ThreadStartResponse.ts`). For profile cells the engine parses the raw `thread/start` response at the boundary, under `experimentalApi: true`, requires `activePermissionProfile.id === 'feishu'`, and kills the process and refuses when the field is absent or differs. Claude. Before spawn, the engine calls `resolveSettings` with the same options it will pass to `query` (SDK:2774-2795). It refuses when a required lock of *Claude Code* is missing from `effective`, or when `sources` shows a policy tier Vonvon did not supply, because such a tier drops `managedSettings` by default (SDK:2005-2027). `resolveSettings` reports the settings cascade without spawning the CLI; it does not show that the sandbox took effect. The sandbox is held by `failIfUnavailable: true`, which errors the turn instead of running unsandboxed, and by the live probes of each cell.
 6. Guests are clamped to the project's guest tier and cannot change read scope or network.
@@ -562,7 +571,7 @@ The `feishu` permission profile is `permissions.feishu.filesystem {':minimal': '
 
 | tier | reads | macOS | Linux | Windows |
 |---|---|---|---|---|
-| full | - | `danger-full-access`. doc proof | same | same |
+| full | - | `danger-full-access`, no mechanism. unrestricted doc proof (CX `v2/SandboxMode.ts`) | same | same |
 | qa | project | profile `feishu`, root `read`. live `codex.profile.read-denied` | refuse `read-scope-unenforceable` | profile as macOS plus `windowsSandbox/readiness` `ready`. live `codex.profile.read-denied` on win32, else refuse `unverified-combination` |
 | qa | unrestricted | thread `sandbox: 'read-only'`, turn `sandboxPolicy {type:'readOnly', networkAccess: network}`. live `codex.readonly.write-denied` | same. live on linux in V6b | same plus readiness. live on win32 |
 | write | project | profile `feishu`, root `write`, `network.enabled` = network. live `codex.profile.write-scope` | refuse `read-scope-unenforceable` | profile plus readiness. live on win32 |
@@ -584,7 +593,7 @@ Locks. `managedSettings` carries only restrictive keys, which survive its restri
 
 | tier | reads | macOS | Linux | Windows |
 |---|---|---|---|---|
-| full | - | `bypassPermissions`. doc proof | same | same |
+| full | - | `bypassPermissions`, no mechanism. unrestricted doc proof (SDK:1822) | same | same |
 | qa | project | allowlist, gate, Bash under Seatbelt with `denyWrite` and the read deny set. live `claude.qa.project` | same with bwrap, else Bash off with notice. live `claude.qa.project` on linux | allowlist, gate, Bash off with notice. live on win32 |
 | qa | unrestricted | allowlist, gate for writes only, Bash under Seatbelt `denyWrite`. live `claude.qa.unrestricted` | bwrap, else Bash off | Bash off |
 | write | project | qa set plus write tools, gate on both roots, Bash `allowWrite: [root]` plus read deny set. live `claude.write.project` | bwrap, else Bash off | Bash off |
@@ -598,14 +607,14 @@ ACP agents and Pi have no sandbox. The daemon answers `session/request_permissio
 
 | provider | tier | reads | all OS |
 |---|---|---|---|
-| grok | full | - | `--always-approve`. doc proof |
+| grok | full | - | `--always-approve`, `bypass: true`, no mechanism. unrestricted doc proof (Orca `acp-launch-specs.ts:100-103`) |
 | grok | qa | unrestricted | no `--always-approve`; gate rejects edit, delete, move, execute, other. refuse `tier-unenforceable` until live `grok.qa-gate` |
 | grok | qa, write | project, and write any | refuse `read-scope-unenforceable`, `tier-unenforceable` |
-| cursor | full | - | `cursor-agent acp`, answer allow. doc proof |
+| cursor | full | - | `cursor-agent acp`, answer allow, `bypass: true`, no mechanism. unrestricted doc proof (ACP `session/request_permission`) |
 | cursor | qa, write | any | refuse `tier-unenforceable` until live `cursor.acp-permissions` records what the agent asks for |
-| custom-acp | full | - | answer allow. doc proof |
+| custom-acp | full | - | answer allow, `bypass: true`, no mechanism. unrestricted doc proof (ACP `session/request_permission`) |
 | custom-acp | qa, write | any | refuse `tier-unenforceable` |
-| pi | full | - | default tools. doc proof |
+| pi | full | - | default tools, `tools` absent, no mechanism. unrestricted doc proof (`pi --help`) |
 | pi | qa | unrestricted | `--tools read,grep,find,ls --no-extensions` (`pi --help`). doc proof, launch-args |
 | pi | qa | project | refuse `read-scope-unenforceable` |
 | pi | write | any | refuse `tier-unenforceable` |
@@ -698,7 +707,7 @@ Base. Candidate D (the Opus base). Its runtime-owned turn machine, `Grant`, `Run
 
 Grafts, by source.
 
-- From A (Sonnet). The typed `EnforcementTable` whose `enforced` cells carry a `Proof`, with `auditTable` as a build test and `doc` proofs allowed only for `launch-args` cells. This replaces D's string `VERIFIED` record. A single path gate shared by the Claude hook and the outbound uploader. The orphan sweep at daemon boot keyed on pid plus start time. A's own tolerant ACP client idea, written here as a thin client over `JsonRpcPeer`.
+- From A (Sonnet). The typed `EnforcementTable` whose `enforced` cells carry a `Proof`, with `auditTable` as a build test. `doc` proofs are allowed only for `launch-args` cells and, since issue #119, for unrestricted `full` cells, which claim no confinement. This replaces D's string `VERIFIED` record. A single path gate shared by the Claude hook and the outbound uploader. The orphan sweep at daemon boot keyed on pid plus start time. A's own tolerant ACP client idea, written here as a thin client over `JsonRpcPeer`.
 - From B (Fable). Time-bounded stop ladder with the bound stated per engine. `SubagentLedger` caps (64 agents, 5 recent, 200 history, 600-char result) and the worst-case card budget test. `as const satisfies Record<ProviderId, Registration>` on the registry. `partial` as a third support value and the `pending` probe record for unknown cells.
 - From C (Haiku). Pure `translate(state, frame)` per engine tested against recorded fixtures, and `stepTurn` as the unit-test target with a fake clock. The `channel` field folding reasoning into `text`.
 
