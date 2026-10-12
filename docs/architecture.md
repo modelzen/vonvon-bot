@@ -32,7 +32,7 @@ desktop (Electron)      web UI          vonvon CLI
           +---------------+----------------+
    Feishu long conn   agent providers   local data
    (1 child per bot)  Codex, Claude,    ~/.vonvon-bot
-                      ACP, OpenCode, Pi
+                      Cursor, Grok, Pi, ACP
 ```
 
 daemon 负责这台机器上的一切。它运行 Bot、管理 agent 会话、保存设置，并通过 WebSocket 提供 API。
@@ -123,7 +123,7 @@ Codex 后端原样保留。它通过 `codex app-server` 的 JSON-RPC 工作，�
 
 Claude Code 后端改用 Paseo 的实现（`packages/server/src/server/agent/providers/claude/agent.ts`，基于 Claude Agent SDK）。bridge 现在的 Claude 后端有几处缺陷。它所有模式都用 `bypassPermissions`，不支持中途追加消息（`backend.ts` 里 `steer: false`），中断卡住时要杀进程。Paseo 的实现用 `canUseTool` 处理权限，把追加消息推进 SDK 的输入流，中断时先撤回排队的消息再调用 `query.interrupt()`。
 
-其他 provider 从 Paseo 移植，包括通用 ACP（Copilot 也走 ACP）、OpenCode 和 Pi。
+其他 provider 从 Paseo 移植。V7 做 Cursor、Grok、Pi 和用户自定义命令的通用 ACP。Cursor 和 Grok 都走 ACP：Cursor 用 Paseo 的 `CursorACPAgentClient`，Grok 用通用 ACP 客户端加固定命令。Copilot 和 OpenCode 推后，DeepSeek 等模型通过 Claude Code 的设置接入，见 [roadmap.md](roadmap.md) 的“推后的 provider”。
 
 Paseo 的 provider 实现的是它自己的 `AgentClient` 和 `AgentSession` 接口（`agent-sdk-types.ts`）。所以加一层适配器，把 `AgentSession` 包成 `AgentBackend`，所有移植来的 provider 共用这一个适配器。Paseo 自己的工具目录和子 agent 存储不搬，provider 里用到它们的地方删掉。
 
@@ -131,7 +131,7 @@ Paseo 的 provider 实现的是它自己的 `AgentClient` 和 `AgentSession` 接
 
 进程启动代码来自 Paseo plugin 包里的两个文件，整文件复制，保留 Windows 的引号处理。
 
-权限沿用 V3 的规则：三种模式都用 `bypassPermissions`，`qa` 和 `write` 再加沙箱，`qa` 还禁止写入。网络关闭或未设置时，`qa` 和 `write` 去掉联网工具，`full` 不受网络设置影响。Claude 读取的设置来源和 V3 一样，只有 user 和 project。为此复制来的 `agent.ts` 只从 `CLAUDE_SETTING_SOURCES` 常量里删掉 `local`，新会话和恢复的会话都用这个常量，并记录原始哈希和改后哈希。这是复制代码里唯一的逻辑改动。V3 还有几项行为复制来的 provider 不提供：助手消息带 API 错误、随后是空的成功结果时报错，Bash 的描述，缓存 token 和上下文窗口的算法，以及原始工具历史。它们由 Vonvon 自己的包装代码从 SDK 原始消息和会话文件恢复，不改复制来的字节。V7 只另外允许两处改动：Pi 的 `pi/extensions/registry.ts` 删掉九个扩展的引用，`piExtensions` 改成空数组；OpenCode 的 `opencode/bridge.ts` 把 Paseo 内部路由服务 `OpenCodeBridge` 类换成同名接口，生成 V2 插件的函数不动。除这两处逻辑改动外，V7 只允许不改变生成 JavaScript 的类型层改动，让复制来的代码通过 daemon 现有的严格类型检查：`tsconfig` 的 `lib` 加上 `ES2023.Array` 和 `ES2024.Promise`，其他编译选项不变；`jsonl-rpc-process.ts` 的 `Logger` 类型改从 V6 的 `logger.ts` 引入，产品代码不再引用 `pino`；其余只限非空断言（含把 `pi/cli-runtime.ts` 第 63 行的简写属性 `command` 展开成 `command: command!` 的一处）、`override`、`type` 导入，测试里按 plan.md 列出的类型表达式语法写的类型断言，以及把 `ACPAgentSession.spawnProcess` 从 `private` 改成 `protected`。每处改动逐条记录，并用 esbuild 证明改前改后输出相同，细则见 [plan.md](plan.md) V7 的 *Compiler contract*。OpenCode 的入口是 `opencode/v2/agent.ts` 的 `OpenCodeV2AgentClient`，不传 bridge，由 Vonvon 的包装代码检查版本，要求 2.0.10 及以上。旧的 `opencode-agent.ts` 虽然引用了 `@opencode-ai/sdk/v2/client`，却是 1.x 用的旧客户端，它和选择新旧客户端的 `runtime-client.ts` 都不移植，OpenCode 1.x 不支持。Paseo 子 agent 面板专用的事件由适配器忽略。仍然到达的权限请求先记成被动的 `approval_request` 事件，再自动拒绝。飞书里不加交互式审批，协议也不变。
+权限沿用 V3 的规则：三种模式都用 `bypassPermissions`，`qa` 和 `write` 再加沙箱，`qa` 还禁止写入。网络关闭或未设置时，`qa` 和 `write` 去掉联网工具，`full` 不受网络设置影响。Claude 读取的设置来源和 V3 一样，只有 user 和 project。为此复制来的 `agent.ts` 只从 `CLAUDE_SETTING_SOURCES` 常量里删掉 `local`，新会话和恢复的会话都用这个常量，并记录原始哈希和改后哈希。这是复制代码里唯一的逻辑改动。V3 还有几项行为复制来的 provider 不提供：助手消息带 API 错误、随后是空的成功结果时报错，Bash 的描述，缓存 token 和上下文窗口的算法，以及原始工具历史。它们由 Vonvon 自己的包装代码从 SDK 原始消息和会话文件恢复，不改复制来的字节。V7 只另外允许一处改动：Pi 的 `pi/extensions/registry.ts` 删掉九个扩展的引用，`piExtensions` 改成空数组。除这处逻辑改动外，V7 只允许不改变生成 JavaScript 的类型层改动，让复制来的代码通过 daemon 现有的严格类型检查：`tsconfig` 的 `lib` 加上 `ES2023.Array` 和 `ES2024.Promise`，其他编译选项不变；`jsonl-rpc-process.ts` 的 `Logger` 类型改从 V6 的 `logger.ts` 引入，产品代码不再引用 `pino`；其余只限非空断言（含把 `pi/cli-runtime.ts` 第 63 行的简写属性 `command` 展开成 `command: command!` 的一处）、`override`、`type` 导入，测试里按 plan.md 列出的类型表达式语法写的类型断言，以及把 `ACPAgentSession.spawnProcess` 从 `private` 改成 `protected`。每处改动逐条记录，并用 esbuild 证明改前改后输出相同，细则见 [plan.md](plan.md) V7 的 *Compiler contract*。Paseo 子 agent 面板专用的事件由适配器忽略。仍然到达的权限请求先记成被动的 `approval_request` 事件，再自动拒绝。飞书里不加交互式审批，协议也不变。
 
 这条决定还没验证。第一个 provider PR 要证明适配器能完整映射事件、权限请求、中断和追加消息。
 
