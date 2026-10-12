@@ -13,13 +13,70 @@ import { WindowsCodexJob } from '../src/agent/codex-appserver/windows-job';
 const roots: string[] = [];
 const cleanups: Array<() => Promise<void>> = [];
 const expectedCleanupErrors = new Set<unknown>();
+type StartEvent =
+  | { event: 'fixture-start' | 'owner-entry' | 'abort-before' | 'abort-after' | 'close-entry' | 'afterEach-entry' }
+  | { event: 'owner-return' | 'spawn'; pid: number | null }
+  | { event: 'exit' | 'child-close'; code: number | null }
+  | { event: 'error' | 'close-settled' | 'running-settled' | 'requestStop' | 'afterEach-settled'; result: 'fulfilled' | 'rejected' }
+  | { event: 'verifiedEmpty'; result: 'empty' | 'not-empty' };
+type StartTrace = {
+  record(event: StartEvent): void;
+  emit(stage: 'pending' | 'cleanup'): void;
+  timer: ReturnType<typeof setTimeout>;
+};
+const startDiagnostics = vi.hoisted((): { active: StartTrace | undefined } => ({ active: undefined }));
 const owners = vi.hoisted(() => new Set<{ close(): Promise<void> }>());
 vi.mock('../src/agent/codex-appserver/owned-process', async original => {
   const actual = await original<typeof import('../src/agent/codex-appserver/owned-process')>();
   return { ...actual, OwnedCodexProcess: class extends actual.OwnedCodexProcess {
+    private readonly trace: StartTrace | undefined;
     constructor(...args: ConstructorParameters<typeof actual.OwnedCodexProcess>) {
+      const trace = startDiagnostics.active;
+      trace?.record({ event: 'owner-entry' });
       super(...args);
+      this.trace = trace;
       owners.add(this);
+      trace?.record({ event: 'owner-return', pid: this.child.pid ?? null });
+      if (trace) {
+        this.child.once('spawn', () => trace.record({ event: 'spawn', pid: this.child.pid ?? null }));
+        this.child.once('error', () => trace.record({ event: 'error', result: 'rejected' }));
+        this.child.once('exit', code => trace.record({ event: 'exit', code }));
+        this.child.once('close', code => trace.record({ event: 'child-close', code }));
+      }
+    }
+    override close(...args: Parameters<InstanceType<typeof actual.OwnedCodexProcess>['close']>): Promise<void> {
+      const trace = this.trace;
+      trace?.record({ event: 'close-entry' });
+      const closing = super.close(...args);
+      if (trace) void closing.then(
+        () => trace.record({ event: 'close-settled', result: 'fulfilled' }),
+        () => trace.record({ event: 'close-settled', result: 'rejected' }),
+      );
+      return closing;
+    }
+  } };
+});
+vi.mock('../src/agent/codex-appserver/windows-job', async original => {
+  const actual = await original<typeof import('../src/agent/codex-appserver/windows-job')>();
+  return { ...actual, WindowsCodexJob: class extends actual.WindowsCodexJob {
+    private readonly trace = startDiagnostics.active;
+    private lastEmpty: boolean | undefined;
+    override requestStop(): void {
+      try {
+        super.requestStop();
+        this.trace?.record({ event: 'requestStop', result: 'fulfilled' });
+      } catch (error) {
+        this.trace?.record({ event: 'requestStop', result: 'rejected' });
+        throw error;
+      }
+    }
+    override get verifiedEmpty(): boolean {
+      const empty = super.verifiedEmpty;
+      if (this.trace && empty !== this.lastEmpty) {
+        this.trace.record({ event: 'verifiedEmpty', result: empty ? 'empty' : 'not-empty' });
+        this.lastEmpty = empty;
+      }
+      return empty;
     }
   } };
 });
@@ -55,6 +112,8 @@ function originalAlive(target: FixtureProcess): boolean {
   return process.platform !== 'win32' || windowsStartTime(target.pid) === target.started;
 }
 afterEach(async () => {
+  const trace = startDiagnostics.active;
+  trace?.record({ event: 'afterEach-entry' });
   const results = await Promise.allSettled([...cleanups.splice(0).map(cleanup => cleanup()), ...[...owners].map(owner => owner.close())]);
   owners.clear();
   const failures: unknown[] = [];
@@ -64,6 +123,12 @@ afterEach(async () => {
   expectedCleanupErrors.clear();
   for (const root of roots.splice(0)) {
     try { rmSync(root, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+  }
+  if (trace) {
+    trace.record({ event: 'afterEach-settled', result: failures.length ? 'rejected' : 'fulfilled' });
+    clearTimeout(trace.timer);
+    trace.emit('cleanup');
+    startDiagnostics.active = undefined;
   }
   if (failures.length) throw new AggregateError(failures, 'Fixture cleanup failed');
 });
@@ -108,10 +173,31 @@ describe('owned Codex process trees', () => {
   });
 
   it('cancels immediately while the process owner is starting', async () => {
+    const started = performance.now();
+    const events: Array<StartEvent & { elapsedMs: number }> = [];
+    let dropped = 0;
+    const trace: StartTrace = {
+      record(event) {
+        if (events.length === 96) { events.splice(64, 1); dropped++; }
+        events.push({ ...event, elapsedMs: performance.now() - started });
+      },
+      emit(stage) {
+        process.stderr.write(`[codex-start-diagnostic] ${JSON.stringify({ stage, elapsedMs: performance.now() - started, dropped, events })}\n`);
+      },
+      timer: setTimeout(() => trace.emit('pending'), 8000),
+    };
+    startDiagnostics.active = trace;
+    trace.record({ event: 'fixture-start' });
     const f = fixture(false);
     const abort = new AbortController();
     const running = runSetupChild(process.execPath, ['-e', 'setInterval(()=>{},100)'], { cwd: f.root, signal: abort.signal });
+    trace.record({ event: 'abort-before' });
     abort.abort();
+    trace.record({ event: 'abort-after' });
+    void running.then(
+      () => trace.record({ event: 'running-settled', result: 'fulfilled' }),
+      () => trace.record({ event: 'running-settled', result: 'rejected' }),
+    );
     await expect(running).rejects.toThrow();
   }, 10_000);
 
