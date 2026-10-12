@@ -219,6 +219,27 @@ describe('click-to-get local files', () => {
     expect(upload).not.toHaveBeenCalled();
   });
 
+  it('prepares an inside alias but uploads the canonical in-project file after click', async () => {
+    await symlink(join(cwd, '测试 报告.xlsx'), join(cwd, 'alias.xlsx'));
+    const payload = values((await service.prepare('[alias](alias.xlsx)', context)).links)[0]!;
+    expect(payload).toBeDefined();
+
+    await service.deliver(channel, evt, payload, allow);
+    expect(upload).toHaveBeenCalledOnce();
+    expect(upload.mock.calls[0]![0].data).toMatchObject({ file_name: 'alias.xlsx', file: Buffer.from('spreadsheet bytes') });
+  });
+
+  it('sends an outside file when both original and current permissions are full', async () => {
+    const outside = join(root, 'approved.txt');
+    await writeFile(outside, 'approved bytes');
+    const payload = values((await service.prepare(`[file](${outside})`, { ...context, mode: 'full' })).links)[0]!;
+    expect(payload).toBeDefined();
+
+    await service.deliver(channel, evt, payload, async () => 'full');
+    expect(upload).toHaveBeenCalledOnce();
+    expect(upload.mock.calls[0]![0].data).toMatchObject({ file_name: 'approved.txt', file: Buffer.from('approved bytes') });
+  });
+
   it('rejects a replaced, deleted, or changed file with visible feedback', async () => {
     const payload = values((await prepare()).links)[0]!;
     await writeFile(join(cwd, '测试 报告.xlsx'), 'different bytes');
