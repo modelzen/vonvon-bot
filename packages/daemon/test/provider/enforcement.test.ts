@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Grant, HostFacts, Os, ProviderId } from '../../src/provider/model';
-import { auditTable, planEnforcement, type Cell, type CellKey, type EnforcementTable, type NativeSettings } from '../../src/provider/policy/enforcement';
+import { auditTable, planEnforcement, type Cell, type CellKey, type EnforcementTable, type Mechanism, type NativeSettings, type Proof } from '../../src/provider/policy/enforcement';
 import { BASH_OFF_NOTICE, MCP_OFF_NOTICE } from '../../src/provider/policy/messages.zh';
 import { PROOFS } from '../../src/provider/policy/proofs';
 
@@ -24,7 +24,9 @@ function key(provider: ProviderId, grant: Grant, os: Os = 'darwin'): CellKey {
 }
 
 function live(native: NativeSettings, os: Os = 'darwin'): Cell {
-  return { mode: 'enforced', mechanisms: ['os-sandbox'], native,
+  const full = (native.family === 'codex' && native.sandbox === 'danger-full-access')
+    || (native.family === 'claude' && native.mode === 'bypass');
+  return { mode: 'enforced', mechanisms: full ? [] : ['os-sandbox'], native,
     proof: { kind: 'live', probe: 'test.canary', os, provenFor: '1.2.3' } };
 }
 
@@ -178,6 +180,115 @@ describe('pure enforcement plans', () => {
 
 describe('proof audit', () => {
   it('starts with no registered proofs', () => expect(PROOFS).toEqual({}));
+
+  it.each(['darwin', 'linux', 'win32'] as const)('accepts unrestricted documentary full cells on %s without an installed version', os => {
+    for (const [provider, native] of [['codex', codex.full], ['claude', claudeFull]] as const) {
+      const cell = { mode: 'enforced', mechanisms: [], native, proof: { kind: 'doc', ref: 'fixture.unrestricted-setting' } } satisfies Cell;
+      const cells = table(provider, grants.full, cell, os);
+      const facts = host(os, provider, { installed: { [provider]: { installed: true, auth: 'ok' } } });
+      expect(auditTable(cells)).toEqual([]);
+      expect(planEnforcement(cells, provider, grants.full, os, facts)).toEqual({ ok: true, plan: {
+        provider, grant: grants.full, readableRoots: 'unrestricted', writableRoots: 'unrestricted', native, notices: [],
+      } });
+      for (const [installed, auth, reason] of [
+        [false, 'ok', 'provider-not-installed'], [true, 'logged-out', 'not-logged-in'], [true, 'unknown', 'unverified-combination'],
+      ] as const) {
+        expect(planEnforcement(cells, provider, grants.full, os, host(os, provider, {
+          installed: { [provider]: { installed, auth } },
+        }))).toMatchObject({ ok: false, refusal: { reason } });
+      }
+    }
+  });
+
+  it('rejects full mechanisms and narrower native settings with documentary or live proof', () => {
+    const proofs: Proof[] = [{ kind: 'doc', ref: 'fixture' }, { kind: 'live', probe: 'test.canary', os: 'darwin', provenFor: '1.2.3' }];
+    const mechanisms: Mechanism[] = ['os-sandbox', 'tool-gate', 'provider-gate', 'launch-args'];
+    for (const proof of proofs) {
+      for (const [provider, unrestricted, restricted] of [
+        ['codex', codex.full, [codex.profileRead, codex.profileWrite, codex.readOnly, codex.workspace]],
+        ['claude', claudeFull, [claudeGated]],
+      ] as const) {
+        const invalid: Cell[] = [
+          ...mechanisms.map(mechanism => ({ mode: 'enforced' as const, mechanisms: [mechanism], native: unrestricted, proof })),
+          ...restricted.map(native => ({ mode: 'enforced' as const, mechanisms: [], native, proof })),
+        ];
+        for (const cell of invalid) {
+          const cells = table(provider, grants.full, cell);
+          expect(auditTable(cells)).toEqual([key(provider, grants.full)]);
+          expect(planEnforcement(cells, provider, grants.full, 'darwin', host('darwin', provider)))
+            .toMatchObject({ ok: false, refusal: { reason: 'unverified-combination' } });
+        }
+      }
+    }
+  });
+
+  it('rejects narrower fields attached to unrestricted discriminators and incomplete proofs', () => {
+    const invalidNatives = [
+      { ...codex.full, sandboxPolicy: { type: 'readOnly', networkAccess: false } },
+      { ...claudeFull, tools: ['Read'] },
+      { ...claudeFull, permissionMode: 'default' },
+      { ...claudeFull, allowDangerouslySkipPermissions: false },
+      { ...claudeFull, managedSettings: { permissions: { deny: ['Write'] } } },
+    ];
+    for (const native of invalidNatives) {
+      for (const proof of [{ kind: 'doc', ref: 'fixture' }, { kind: 'live', probe: 'test.canary', os: 'darwin', provenFor: '1.2.3' }]) {
+        const cells = table(native.family, grants.full, { mode: 'enforced', mechanisms: [], native, proof } as unknown as Cell);
+        expect(auditTable(cells)).toEqual([key(native.family, grants.full)]);
+        expect(planEnforcement(cells, native.family, grants.full, 'darwin', host('darwin', native.family)))
+          .toMatchObject({ ok: false, refusal: { reason: 'unverified-combination' } });
+      }
+    }
+    for (const proof of [undefined, { kind: 'doc', ref: '' }, { kind: 'doc', ref: '  ' },
+      { kind: 'live', probe: '', os: 'darwin', provenFor: '1.2.3' },
+      { kind: 'live', probe: 'fixture', os: 'darwin' },
+    ]) {
+      const cells = table('codex', grants.full, { mode: 'enforced', mechanisms: [], native: codex.full, proof } as unknown as Cell);
+      expect(auditTable(cells)).toEqual(['codex:full:-:darwin']);
+      expect(planEnforcement(cells, 'codex', grants.full, 'darwin', host()))
+        .toMatchObject({ ok: false, refusal: { reason: 'unverified-combination' } });
+    }
+  });
+
+  it('keeps every restricted current native variant ineligible for documentary launch-args proof', () => {
+    for (const [provider, grant, native] of [
+      ['codex', grants.qaProject, codex.profileRead], ['codex', grants.writeProject, codex.profileWrite],
+      ['codex', grants.qaUnrestricted, codex.readOnly], ['codex', grants.writeUnrestricted, codex.workspace],
+      ['claude', grants.qaProject, claudeGated], ['claude', grants.writeUnrestricted, claudeGated],
+    ] as const) {
+      for (const mechanisms of [['launch-args'], ['launch-args', 'os-sandbox'], ['launch-args', 'tool-gate'], ['launch-args', 'provider-gate']] satisfies Mechanism[][]) {
+        const cells = table(provider, grant, { mode: 'enforced', mechanisms, native, proof: { kind: 'doc', ref: 'fixture' } });
+        expect(auditTable(cells)).toEqual([key(provider, grant)]);
+        expect(planEnforcement(cells, provider, grant, 'darwin', host('darwin', provider)))
+          .toMatchObject({ ok: false, refusal: { reason: 'unverified-combination' } });
+      }
+    }
+  });
+
+  it('rejects a documentary full native family mismatch', () => {
+    const cells = table('codex', grants.full, { mode: 'enforced', mechanisms: [], native: claudeFull, proof: { kind: 'doc', ref: 'fixture' } });
+    expect(planEnforcement(cells, 'codex', grants.full, 'darwin', host()))
+      .toMatchObject({ ok: false, refusal: { reason: 'unverified-combination' } });
+  });
+
+  it('detaches documentary full plans from their input and later plans', () => {
+    const grant = { ...grants.full };
+    const native = { ...claudeFull };
+    const cells = table('claude', grant, { mode: 'enforced', mechanisms: [], native, proof: { kind: 'doc', ref: 'fixture' } });
+    const first = planEnforcement(cells, 'claude', grant, 'darwin', host('darwin', 'claude'));
+    if (!first.ok) throw new Error('missing full plan');
+    first.plan.grant.root = '/changed-plan';
+    expect(native).toEqual(claudeFull);
+    expect(grant).toEqual(grants.full);
+    const second = planEnforcement(cells, 'claude', grant, 'darwin', host('darwin', 'claude'));
+    expect(second).toEqual({ ok: true, plan: { provider: 'claude', grant: grants.full,
+      readableRoots: 'unrestricted', writableRoots: 'unrestricted', native: claudeFull, notices: [] } });
+    grant.root = '/changed-input';
+    expect(first.plan.grant.root).toBe('/changed-plan');
+    expect(first.plan.native).not.toBe(native);
+    if (!second.ok) throw new Error('missing second full plan');
+    expect(second.plan.grant.root).toBe(root);
+    expect(second.plan.native).not.toBe(first.plan.native);
+  });
 
   it('reports missing, incomplete, or document proofs on every non-launch-args cell', () => {
     const invalid = {
