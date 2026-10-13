@@ -19,11 +19,18 @@ async function readLinux(pid: number): Promise<StartRead> {
   return ticks && /^\d+$/.test(ticks) && bootId ? startToken(`linux:${bootId}:${ticks}`) : 'unreadable';
 }
 
-async function readDarwin(pid: number): Promise<StartRead> {
+/** One-second resolution: two processes may share a token, so only `absent` or a different token proves anything. */
+export async function readDarwin(pid: number): Promise<StartRead> {
   const result = await run('ps', ['-o', 'lstart=', '-p', String(pid)], { ...process.env, LC_ALL: 'C' });
-  if (result.code === 1 && result.stdout.trim() === '') return 'absent';
   const lstart = result.stdout.trim();
-  return result.code === 0 && lstart ? startToken(`darwin:${lstart}`) : 'unreadable';
+  if (result.code === 0 && lstart && result.stderr.trim() === '') return startToken(`darwin:${lstart}`);
+  // ps exits 1 both for "no such pid" and for its own failures, so absence is confirmed by the kernel, not by ps.
+  return result.code !== 0 && signalProbe(pid) === 'ESRCH' ? 'absent' : 'unreadable';
+}
+
+function signalProbe(pid: number): unknown {
+  try { process.kill(pid, 0); return 'alive'; }
+  catch (error) { return errnoOf(error); }
 }
 
 async function readWin32(pid: number): Promise<StartRead> {
@@ -38,7 +45,7 @@ const READERS: Partial<Record<NodeJS.Platform, (pid: number) => Promise<StartRea
   linux: readLinux, darwin: readDarwin, win32: readWin32,
 };
 
-/** Equality of two tokens from this reader on this host means the same process. Never rejects. */
+/** A different token, or `absent`, for a recorded pid proves the recorded process is gone; an equal token proves nothing more. Never rejects. */
 export function readStartToken(pid: number): Promise<StartRead> {
   const reader = READERS[process.platform];
   if (!reader || !Number.isSafeInteger(pid) || pid <= 0) return Promise.resolve('unreadable');
@@ -53,11 +60,11 @@ export function startTokenFromFileTime(decimal: string): StartToken {
 
 export const hostBootMs = (): number => Date.now() - uptime() * 1000;
 
-function run(file: string, args: string[], env: NodeJS.ProcessEnv): Promise<{ code: number | null; stdout: string }> {
+function run(file: string, args: string[], env: NodeJS.ProcessEnv): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    execFile(file, args, { env, timeout: 10_000, windowsHide: true }, (error, stdout) => {
-      if (!error) return resolve({ code: 0, stdout });
-      if (typeof error.code === 'number') return resolve({ code: error.code, stdout });
+    execFile(file, args, { env, timeout: 10_000, windowsHide: true }, (error, stdout, stderr) => {
+      if (!error) return resolve({ code: 0, stdout, stderr });
+      if (typeof error.code === 'number') return resolve({ code: error.code, stdout, stderr });
       reject(error);
     });
   });
