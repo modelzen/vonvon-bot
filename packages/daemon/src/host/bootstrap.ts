@@ -26,6 +26,7 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
       ...(process.platform === 'win32' ? { platform: 'win32' } : { platform: 'posix', holderPath: defaultHolderPath() }),
     });
     log.info('process-host', 'boot-sweep', { ...await host.sweepOrphans() });
+    log.info('process-host', 'boot-admission', { admission: host.admission()?.reason ?? 'allowed' });
     // Lane 10 hook: the value is a fake-child.mjs path; the real `vonvon daemon run` has no other seam a lane can reach.
     if (process.env.VONVON_TEST_SPAWN_FAKE_CHILD) {
       await host.spawn('codex', 'lane-10', { file: process.execPath, args: [process.env.VONVON_TEST_SPAWN_FAKE_CHILD, '--ignore-term', '--grandchildren', '1'], env: { PATH: process.env.PATH ?? '' } });
