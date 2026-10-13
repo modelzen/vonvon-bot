@@ -27,6 +27,7 @@ for (let i = 0; i < grandchildren; i++) {
 if (flag('--exit-on-cue')) {
   createInterface({ input: process.stdin }).on('line', line => { if (line.trim() === 'exit') process.exit(0); });
 }
+if (flag('--exit-on-eof')) process.stdin.on('end', () => process.exit(0)).resume();
 const frames = value('--frames', 0);
 const frameMs = value('--frame-ms', 200);
 for (let i = 0; i < frames; i++) setTimeout(() => void out(`frame ${i}`), frameMs * (i + 1));

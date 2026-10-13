@@ -3,12 +3,14 @@ import { accessSync, constants, mkdirSync, rmSync, writeFileSync } from 'node:fs
 import { release } from 'node:os';
 import { join } from 'node:path';
 import type { Readable, Writable } from 'node:stream';
+import type { SpawnOptions } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'node:url';
 import { log } from '../../core/logger';
 import { KILL_CONFIRM_MS, TERM_WAIT_MS, type ExitFact, type OwnedProcess, type ProcessFact, type SignalResult } from '../engines/engine';
 import type { ProviderId, UnconfirmedReason } from '../model';
 import type { Refusal } from '../policy/enforcement';
 import { ownedWorkUnverified } from '../policy/messages.zh';
+import { HolderProcess, HolderProcessError, specOf } from './holder-process';
 import { EXIT_HOLD_START, stepExitHold, type ExitHoldInput, type ExitHoldState } from './exit-hold';
 import { spawnPosixHolder, type HolderChannel } from './holder-channel';
 import { newNonce, validateSignalReceipt, type CommandName, type Nonce, type ReceiptLine, type Rung } from './holder-protocol';
@@ -89,6 +91,7 @@ interface RecordState {
   ready: Deferred<void>;
   retired: Deferred<void>;
   exitObserved: Deferred<void>;
+  holderLost: Deferred<void>;
   hold: ExitHoldState;
   holdTimer?: NodeJS.Timeout;
   facts: ProcessFact[];
@@ -98,7 +101,7 @@ interface RecordState {
 function newState(record: LedgerRecord): RecordState {
   return {
     record, identity: 'lost', phase: 'signalling', sealed: false, noProvider: false, refused: false, endRequested: false, killDue: false,
-    issued: new Map(), probing: false, ready: deferred(), retired: deferred(), exitObserved: deferred(),
+    issued: new Map(), probing: false, ready: deferred(), retired: deferred(), exitObserved: deferred(), holderLost: deferred(),
     hold: EXIT_HOLD_START, facts: [], watchers: new Set(),
   };
 }
@@ -130,6 +133,7 @@ export function defaultHolderPath(): string {
 export class Reservation {
   constructor(private readonly host: ProcessHost, readonly id: ReservationId) {}
   spawn(spec: SpawnSpec): HostedProcess { return this.host.launch(this.id, spec); }
+  adopt(options: SpawnOptions): HolderProcess { return new HolderProcess(this.spawn(specOf(options)), options.signal); }
   release(): Promise<void> { return this.host.end(this.id); }
 }
 
@@ -137,15 +141,18 @@ export class HostedProcess implements OwnedProcess {
   readonly stdin: Writable;
   readonly stdout: Readable;
   readonly stderr: Readable;
-  /** Rejects with `launch-failed`, `cancelled`, `holder-lost`, or `holder-not-ready`. */
+  /** Rejects with a `HolderProcessError`: `launch-failed`, `cancelled`, `holder-lost`, or `holder-not-ready`. */
   readonly ready: Promise<void>;
-  constructor(private readonly host: ProcessHost, readonly id: ReservationId, channel: HolderChannel, ready: Promise<void>) {
-    this.stdin = channel.stdin; this.stdout = channel.stdout; this.stderr = channel.stderr; this.ready = ready;
+  /** Resolves when the holder exits before an exit fact and with a provider launched. */
+  readonly holderLost: Promise<void>;
+  constructor(private readonly host: ProcessHost, readonly id: ReservationId, channel: HolderChannel, ready: Promise<void>, holderLost: Promise<void>) {
+    this.stdin = channel.stdin; this.stdout = channel.stdout; this.stderr = channel.stderr; this.ready = ready; this.holderLost = holderLost;
   }
   term(): Promise<SignalResult> { return this.host.signal(this.id, 'term', TERM_WAIT_MS); }
   kill(): Promise<SignalResult> { return this.host.signal(this.id, 'kill', KILL_CONFIRM_MS); }
   watch(listener: (fact: ProcessFact) => void): () => void { return this.host.watch(this.id, listener); }
   end(): Promise<void> { return this.host.end(this.id); }
+  request(rung: Rung): boolean { return this.host.request(this.id, rung); }
 }
 
 export class ProcessHost {
@@ -240,9 +247,9 @@ export class ProcessHost {
     const args = this.platform === 'win32' ? [windowsCommandLine(spec.file, spec.args, { shim: spec.shim === true })] : spec.args;
     s.channel.send({ command: 'launch', nonce, file: spec.file, args, env: spec.env, cwd: spec.cwd });
     log.info('process-host', 'launch', { id, file: spec.file });
-    s.spawnTimer = setTimeout(() => { if (!s.ready.settled) s.ready.reject(new Error('holder-not-ready')); }, this.spawnDeadlineMs);
+    s.spawnTimer = setTimeout(() => { if (!s.ready.settled) s.ready.reject(new HolderProcessError('holder-not-ready')); }, this.spawnDeadlineMs);
     s.spawnTimer.unref();
-    return new HostedProcess(this, id, s.channel, s.ready.promise);
+    return new HostedProcess(this, id, s.channel, s.ready.promise, s.holderLost.promise);
   }
 
   signal(id: ReservationId, rung: Rung, deadlineMs: number): Promise<SignalResult> {
@@ -250,20 +257,34 @@ export class ProcessHost {
     if (!s?.channel) return Promise.resolve('unknown');
     s.endRequested = true;
     if (rung === 'kill') s.killDue = true;
-    const result = this.issue(s, rung, deadlineMs);
+    const { result } = this.issue(s, rung, deadlineMs);
     if (rung === 'kill') s.ending ??= this.continueEnd(s);
     return result;
   }
 
-  private issue(s: RecordState, rung: Rung, deadlineMs: number): Promise<SignalResult> {
-    return new Promise<SignalResult>(resolve => {
+  /** Queues `rung` and joins `end`. False once the record is retired or the channel is closed. */
+  request(id: ReservationId, rung: Rung): boolean {
+    const s = this.states.get(id);
+    if (!s?.channel || s.retired.settled) return false;
+    s.endRequested = true;
+    if (rung === 'kill') s.killDue = true;
+    const { queued } = this.issue(s, rung, rung === 'kill' ? KILL_CONFIRM_MS : TERM_WAIT_MS);
+    s.ending ??= rung === 'kill' ? this.continueEnd(s) : this.afterTerm(s);
+    return queued;
+  }
+
+  private issue(s: RecordState, rung: Rung, deadlineMs: number): { queued: boolean; result: Promise<SignalResult> } {
+    let queued = false;
+    const result = new Promise<SignalResult>(resolve => {
       const nonce = newNonce();
       const timer = setTimeout(() => { resolve('unknown'); s.issued.set(nonce, { command: rung }); }, deadlineMs);
       timer.unref();
       s.issued.set(nonce, { command: rung, resolve: result => { clearTimeout(timer); resolve(result); } });
       if (rung === 'kill') s.pending = nonce;
-      if (!s.channel?.send({ command: rung, nonce })) { clearTimeout(timer); resolve('unknown'); }
+      queued = s.channel?.send({ command: rung, nonce }) ?? false;
+      if (!queued) { clearTimeout(timer); resolve('unknown'); }
     });
+    return { queued, result };
   }
 
   watch(id: ReservationId, listener: (fact: ProcessFact) => void): () => void {
@@ -290,6 +311,10 @@ export class ProcessHost {
       return;
     }
     void this.issue(s, 'term', TERM_WAIT_MS);
+    await this.afterTerm(s);
+  }
+
+  private async afterTerm(s: RecordState): Promise<void> {
     await Promise.race([sleep(TERM_WAIT_MS), s.retired.promise, s.exitObserved.promise]);
     if (s.retired.settled) return;
     await this.continueEnd(s);
@@ -424,7 +449,7 @@ export class ProcessHost {
     this.states.delete(s.record.id);
     this.write();
     s.retired.resolve();
-    if (!s.ready.settled) s.ready.reject(new Error(s.noProvider ? 'launch-failed' : 'holder-lost'));
+    if (!s.ready.settled) s.ready.reject(new HolderProcessError(s.noProvider ? 'launch-failed' : 'holder-lost'));
     log.info('process-host', 'retired', { id: s.record.id, stage: s.record.stage, ownership });
   }
 
@@ -454,9 +479,10 @@ export class ProcessHost {
     s.pending = undefined;
     if (code === 10 || code === 11) s.noProvider = true;
     log.info('process-host', 'holder-exit', { id: s.record.id, code, stage: s.record.stage });
-    if (!s.ready.settled) s.ready.reject(new Error(s.noProvider ? 'launch-failed' : 'holder-lost'));
+    if (!s.ready.settled) s.ready.reject(new HolderProcessError(s.noProvider ? 'launch-failed' : 'holder-lost'));
     if (s.noProvider || !('provider' in s.record)) this.settle(s);
     else void this.probeByDaemon(s);
+    if (!s.exit && !s.noProvider) s.holderLost.resolve();
   }
 
   private onReceipt(s: RecordState, line: ReceiptLine): void {
@@ -492,7 +518,7 @@ export class ProcessHost {
       }
       case 'cancelled': case 'launch-failed': case 'job-collision':
         s.noProvider = true;
-        if (!s.ready.settled) s.ready.reject(new Error(line.kind === 'cancelled' ? 'cancelled' : 'launch-failed'));
+        if (!s.ready.settled) s.ready.reject(new HolderProcessError(line.kind === 'cancelled' ? 'cancelled' : 'launch-failed'));
         this.settle(s);
         return;
       case 'sent': case 'accepted': case 'refused': {
