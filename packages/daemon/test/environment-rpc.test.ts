@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fixtureNode } from './fixture-node';
 import { EnvironmentService } from '../src/environment/service';
 
 const processTestTimeout = process.platform === 'win32' ? 60_000 : 5_000;
@@ -14,6 +15,7 @@ async function fixture() {
   dirs.push(dir);
   const bin = join(dir, 'bin');
   await import('node:fs/promises').then(fs => fs.mkdir(bin));
+  const nodePath = await fixtureNode(bin);
   const cli = join(bin, process.platform === 'win32' ? 'lark-cli.cjs' : 'lark-cli');
   const npmScript = join(bin, process.platform === 'win32' ? 'npm.cjs' : 'npm');
   const npm = process.platform === 'win32' ? join(bin, 'npm.cmd') : npmScript;
@@ -31,10 +33,11 @@ if (args[0] === 'auth' && args[1] === 'login') { process.stdout.write('https://a
 if (args[0] === 'config' && args[1] === 'init') process.exit(0);
 `;
   await writeFile(cli, script, { mode: 0o700 });
+  await writeFile(join(bin, process.platform === 'win32' ? 'claude.cjs' : 'claude'), '#!/usr/bin/env node\nprocess.stdout.write("claude 1.2.3");\n', { mode: 0o700 });
   if (process.platform === 'win32') {
-    for (const name of ['lark-cli', 'npm']) await writeFile(join(bin, `${name}.cmd`), `@echo off\r\n"${process.execPath}" "%~dp0${name}.cjs" %*\r\n`);
+    for (const name of ['lark-cli', 'npm', 'claude']) await writeFile(join(bin, `${name}.cmd`), `@echo off\r\n"${process.execPath}" "%~dp0${name}.cjs" %*\r\n`);
   }
-  const environment = new EnvironmentService({ home: dir, getDataRoot: () => dir, resolveCodex: () => null, nodePath: process.execPath, path: bin, fetchLatest: async () => null, npmPath: npm });
+  const environment = new EnvironmentService({ home: dir, getDataRoot: () => dir, resolveCodex: () => null, nodePath, path: bin, fetchLatest: async () => null, npmPath: npm });
   return { dir, npmScript, environment };
 }
 

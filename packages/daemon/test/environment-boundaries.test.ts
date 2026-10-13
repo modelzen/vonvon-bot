@@ -4,6 +4,7 @@ import { watch } from 'node:fs';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fixtureNode } from './fixture-node';
 import type { EnvironmentRequest } from '@vonvon/protocol';
 import { EnvironmentService } from '../src/environment/service';
 
@@ -14,6 +15,7 @@ afterEach(async () => { await Promise.all(directories.splice(0).map(dir => rm(di
 async function fixture() {
   const dir = await mkdtemp(join(tmpdir(), 'environment-boundaries-'));
   directories.push(dir);
+  const nodePath = await fixtureNode(dir);
   const cli = join(dir, process.platform === 'win32' ? 'lark-cli.cmd' : 'lark-cli');
   const script = process.platform === 'win32' ? join(dir, 'lark-cli.cjs') : cli;
   await writeFile(script, `#!/usr/bin/env node
@@ -30,7 +32,7 @@ if (args[0] === 'profile') {
 }
 `, { mode: 0o700 });
   if (process.platform === 'win32') await writeFile(cli, `@echo off\r\n"${process.execPath}" "%~dp0lark-cli.cjs" %*\r\n`);
-  const service = new EnvironmentService({ home: dir, getDataRoot: () => dir, resolveCodex: () => null, nodePath: process.execPath, path: dir, fetchLatest: async () => null });
+  const service = new EnvironmentService({ home: dir, getDataRoot: () => dir, resolveCodex: () => null, nodePath, path: dir, fetchLatest: async () => null });
   return { dir, cli, service };
 }
 
