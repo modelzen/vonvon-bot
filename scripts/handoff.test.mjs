@@ -9,7 +9,7 @@ import { currentHandoff, handoffLine, notifyAction } from './handoff.mjs';
 
 const script = join(dirname(fileURLToPath(import.meta.url)), 'handoff.mjs');
 
-function fixture({ labels, sessions, comments = [], dirty = false, behind = false, paseoFails = false, waitFails = false }) {
+function fixture({ labels, sessions, comments = [], dirty = false, behind = false, paseoFails = false, wait = { stdout: '{"status":"idle"}' } }) {
   const dir = mkdtempSync(join(tmpdir(), 'handoff-test-'));
   const repo = join(dir, 'repo');
   const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
@@ -38,7 +38,7 @@ function fixture({ labels, sessions, comments = [], dirty = false, behind = fals
 esac`);
   stub('paseo', `case "$*" in
   *" ls "*) cat ${JSON.stringify(join(dir, 'sessions.json'))} ;;
-  *" wait "*) ${waitFails ? 'exit 1' : 'true'} ;;
+  *" wait "*) printf '%s\\n' ${JSON.stringify(wait.stdout ?? '')}; exit ${wait.exit ?? 0} ;;
   *) ${paseoFails ? 'exit 1' : 'true'} ;;
 esac`);
 
@@ -169,24 +169,46 @@ test('--notify-only --dry-run reports the notice and sends nothing', () => {
   } finally { f.cleanup(); }
 });
 
-test('a busy session is waited on before the send, and a failed wait fails the run with nothing sent', () => {
+const timeout = { stdout: '{"agentId":"abc","status":"timeout","message":"Agent did not finish within 300 seconds."}' };
+
+test('a busy session is sent the notice only after paseo wait reports it idle', () => {
   const f = fixture({ labels: ['owner:claude'], sessions: busy });
   try {
     const result = f.handoff();
     assert.equal(result.status, 0, result.stderr);
     const calls = f.calls();
-    const wait = calls.findIndex((c) => c.startsWith('paseo --host 100.127.134.58:6767 wait abc --timeout'));
+    const wait = calls.findIndex((c) => c.startsWith('paseo --host 100.127.134.58:6767 wait abc --timeout 300 --json'));
     const send = calls.findIndex((c) => c.includes(' send abc '));
     assert.ok(wait >= 0 && wait < send, calls.join(' | '));
   } finally { f.cleanup(); }
+});
 
-  const g = fixture({ labels: ['owner:claude'], sessions: busy, waitFails: true });
+test('a wait that does not report idle fails the run with nothing sent, even when paseo exits 0', () => {
+  for (const [name, wait, status] of [
+    ['timeout', timeout, /ended with timeout/],
+    ['unknown agent', { stdout: '{"agentId":"abc","status":"error","message":"Agent not found: abc"}' }, /ended with error/],
+    ['unparseable', { stdout: 'Agent is idle.' }, /ended with failed/],
+    ['nonzero exit', { stdout: '', exit: 1 }, /ended with failed/],
+  ]) {
+    const f = fixture({ labels: ['owner:claude'], sessions: busy, wait });
+    try {
+      const result = f.handoff();
+      assert.equal(result.status, 1, name);
+      assert.match(result.stderr, status, name);
+      assert.match(result.stderr, /nothing was sent\nrerun with --notify-only/, name);
+      assert.ok(!f.calls().some((c) => c.includes(' send ')), `${name}: nothing sent`);
+    } finally { f.cleanup(); }
+  }
+});
+
+test('--notify-only to a busy session also refuses to send on a timed-out wait', () => {
+  const f = fixture({ labels: ['owner:codex'], sessions: busy, comments: handedToCodex, wait: timeout });
   try {
-    const result = g.handoff();
+    const result = f.handoff('--notify-only');
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /did not become idle .*nothing was sent\nrerun with --notify-only/s);
-    assert.ok(!g.calls().some((c) => c.includes(' send ')), 'nothing sent');
-  } finally { g.cleanup(); }
+    assert.match(result.stderr, /ended with timeout, so nothing was sent\nrerun with --notify-only/);
+    assert.ok(!f.calls().some((c) => c.includes(' send ')), f.calls().join(' | '));
+  } finally { f.cleanup(); }
 });
 
 test('a rerun after an interrupted handoff reuses the posted comment and finishes the labels', () => {

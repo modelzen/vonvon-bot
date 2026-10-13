@@ -97,11 +97,14 @@ function sendNotice(pr, to, { kind, id, notice }) {
     return;
   }
   if (kind === 'send-when-idle') {
+    // `paseo wait` exits 0 on idle, timeout, and unknown agents alike; only the reported status tells them apart.
+    let status;
     try {
-      run('paseo', [...paseo, 'wait', id, '--timeout', String(WAIT_SECONDS)]);
-    } catch {
-      throw new Error(`session ${id} did not become idle within ${WAIT_SECONDS}s, so nothing was sent`);
+      status = JSON.parse(run('paseo', [...paseo, 'wait', id, '--timeout', String(WAIT_SECONDS), '--json'])).status;
+    } catch (error) {
+      status = `failed (${error.message.split('\n')[0]})`;
     }
+    if (status !== 'idle') throw new Error(`waiting ${WAIT_SECONDS}s for session ${id} to be idle ended with ${status}, so nothing was sent`);
   }
   run('paseo', [...paseo, 'send', id, '--no-wait', notice]);
 }
@@ -128,7 +131,11 @@ function main(argv) {
       console.log(JSON.stringify({ pr, from, to, head: pull.head.sha, comment: handoff.html_url, notify: action }, null, 2));
       return;
     }
-    sendNotice(pr, to, plan);
+    try {
+      sendNotice(pr, to, plan);
+    } catch (error) {
+      throw new Error(`${error.message}\nrerun with --notify-only`);
+    }
     console.log(`PR #${pr} → ${to}: notice ${describe(plan)} for ${handoff.html_url}`);
     return;
   }
