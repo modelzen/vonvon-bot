@@ -2,9 +2,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { renderDefinition } from '../src/service/definitions';
 import { resolveServiceRoot, LAUNCHD_LABEL, SYSTEMD_UNIT_NAME } from '../src/service/identity';
 
-// These tests cover serialization and configuration semantics. Native execution
-// and executable-selection evidence live in service-smoke.test.ts.
-
 vi.mock('../src/service/identity', async importOriginal => ({
   ...await importOriginal<typeof import('../src/service/identity')>(),
   resolveServiceRoot: vi.fn(async () => '/fixture/root'),

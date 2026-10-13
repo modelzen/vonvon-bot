@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { renderDefinition } from '../src/service/definitions';
 import { resolveServiceRoot, LAUNCHD_LABEL, SYSTEMD_UNIT_NAME } from '../src/service/identity';
-// Native parsers read the rendered definitions offline. Nothing here registers or starts a service.
 const timeoutMs = 15_000;
 
 interface WorkerEvent {
@@ -49,7 +48,6 @@ async function cleanup(actions: Array<() => void | Promise<void>>): Promise<void
 
 async function withFixture(keepAlive: boolean, body: (fixture: Fixture) => Promise<void>): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), 'feishu-bridge-smoke-'));
-  // Keep worker/log paths plain so special-path scenarios isolate CODEX_BIN.
   const folder = join(root, 'worker');
   await mkdir(folder);
   const eventPath = join(root, 'events.jsonl');
@@ -57,8 +55,6 @@ async function withFixture(keepAlive: boolean, body: (fixture: Fixture) => Promi
     cliBinPath: join(folder, 'fake-cli.mjs'),
     stdoutPath: join(folder, 'stdout.log'),
     stderrPath: join(folder, 'stderr.log'),
-    // An intentionally unique PATH that neither the test runner nor the OS
-    // service manager has: only the generated definition can restore it.
     envPath: join(folder, 'tools'),
   };
   await writeFile(options.cliBinPath, `
