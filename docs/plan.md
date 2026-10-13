@@ -907,7 +907,7 @@ V3's surface is the CLI and the WebSocket API, so it keeps the CLI evidence bund
 - One registration per OS user. The names above are fixed, so each OS user has at most one Vonvon registration, for one data root.
 - Data-root ownership.
   - The definition records its data root. The plist's `EnvironmentVariables`, the unit's `Environment=`, and the `.cmd` each set `VONVON_HOME` to the `realpath` of the data root at install, and set `VONVON_SERVICE` to `launchd`, `systemd`, or `windows`. The definition is the only record, and V5 adds no new state file.
-  - `service/definition.ts` is the pure codec. It renders the plist, the unit, the `.vbs`, and the `.cmd` from `{dataRoot, port, distribution, path}`, and parses each back to the same fields or to `unrecognized`. It does no I/O. `identity.ts` holds only names and paths, and `registration.ts` holds only the reads and the classification.
+  - `service/definitions.ts` is the pure codec. It renders the plist, the unit, the `.vbs`, and the `.cmd` from `{dataRoot, port, distribution, path}`, and parses each back to the same fields or to `unrecognized`. It does no I/O. `identity.ts` holds only names and paths, and `registration.ts` holds only the reads and the classification.
   - `service/registration.ts` reads the definition back through the identity and the codec. It reports one of four states: `absent`, `ours` (same `realpath` data root), `other-root` (a different one), and `unrecognized` (the file exists but does not parse as a Vonvon definition).
   - Locators. macOS and Linux have one fixed definition path per OS user, so the path is the locator. On Windows the locator is the one global `Vonvon Bot` Run value. Registration follows it to the `.vbs` it runs, and from there to the `.cmd`, whose `VONVON_HOME` decides `ours` or `other-root`. No Run value means `absent` for every data root, and launcher files never make a root `ours`.
   - Leftover Windows launcher files. A data root's own `VONVON_HOME\service\vonvon-bot.{vbs,cmd}` that the Run value does not name are leftovers of an interrupted install or uninstall of that root. They are not a registration and no launch decision reads them. `service status` lists them, `install` for that root overwrites them in step 2, and `uninstall` for that root removes them as the resumed path below. A root never looks for leftovers under any other root, and V5 keeps no index of data roots.
@@ -1140,10 +1140,10 @@ V3's surface is the CLI and the WebSocket API, so it keeps the CLI evidence bund
 
 *Daemon files.* V5 creates and edits only these daemon files.
 
-- Create `service/identity.ts` (the names), `service/definition.ts` (the pure codec), `service/registration.ts` (reading back and classifying a definition), and `service/drain.ts` (drain rounds and the *Manager-owner proof*).
+- Create `service/identity.ts` (the names), `service/definitions.ts` (the pure codec), `service/registration.ts` (reading back and classifying a definition), and `service/drain.ts` (drain rounds and the *Manager-owner proof*).
 - Edit `service/distribution.ts`: resolution only, per *Program*.
 - Edit `server/web-ui.ts`: the UI root resolution only, per *Package*.
-- Edit `service/launchd.ts`, `systemd.ts`, `win-startup.ts`, `adapter.ts`, and `common.ts`: transactions and `start`, rendering through `definition.ts`. Remove their imports of `control.ts` and `codex-bin.ts`, and the Windows relauncher.
+- Edit `service/launchd.ts`, `systemd.ts`, `win-startup.ts`, `adapter.ts`, and `common.ts`: transactions and `start`, rendering through `definitions.ts`. Remove their imports of `control.ts` and `codex-bin.ts`, and the Windows relauncher.
 - Edit `cli/commands/service.ts`: `install`, `uninstall`, and `status` in place of the refusal. `status --json` is read-only and may land on any earlier head. `install` and `uninstall` keep V3's refusal on every head until that head has the transactions, the *Pre-lock guard*, Gate L, Gate M, and their deterministic tests. No intermediate head calls a bridge-derived mutating adapter.
 - Edit `cli/commands/daemon.ts`: `runStart` routing through the manager. `runStop` is unchanged.
 - Edit `host/bootstrap.ts`: the *Pre-lock guard*, meaning the registration check, the live-owner exit 0, and the foreground refusal, before `acquireMutex` and `acquirePidLock`, plus the managed lock-collision exit 0.
