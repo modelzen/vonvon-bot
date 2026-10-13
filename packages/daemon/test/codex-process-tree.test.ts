@@ -138,7 +138,9 @@ function fixture(inherit: boolean) {
   const grandchild = join(root, 'grandchild.cjs');
   writeFileSync(grandchild, `
     process.on('SIGTERM',()=>{});
-    require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid));
+    const fs = require('node:fs');
+    fs.writeFileSync(${JSON.stringify(`${ready}.tmp`)}, String(process.pid));
+    fs.renameSync(${JSON.stringify(`${ready}.tmp`)}, ${JSON.stringify(ready)});
     setInterval(()=>{},100);
   `);
   // Windows libuv kills non-detached children when their parent exits. A detached
@@ -337,8 +339,10 @@ describe.skipIf(process.platform !== 'win32')('Windows Job shutdown outcomes', (
     const exitFile = join(f.root, 'exit');
     const running = launchJob(process.execPath, ['-e', `
       const fs=require('node:fs');
-      fs.writeFileSync(${JSON.stringify(pidFile)},String(process.pid));
-      fs.writeFileSync(${JSON.stringify(wrapperFile)},String(process.ppid));
+      fs.writeFileSync(${JSON.stringify(`${pidFile}.tmp`)},String(process.pid));
+      fs.renameSync(${JSON.stringify(`${pidFile}.tmp`)},${JSON.stringify(pidFile)});
+      fs.writeFileSync(${JSON.stringify(`${wrapperFile}.tmp`)},String(process.ppid));
+      fs.renameSync(${JSON.stringify(`${wrapperFile}.tmp`)},${JSON.stringify(wrapperFile)});
       ${descendants ? f.start : ''}
       setInterval(()=>{if(fs.existsSync(${JSON.stringify(exitFile)}))process.exit(${code});},10);
     `]);
