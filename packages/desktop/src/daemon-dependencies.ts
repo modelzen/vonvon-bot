@@ -34,7 +34,7 @@ export function parseWindowsRunQuery(output: string): WindowsRunObservation {
     return { kind: 'unavailable', reason: 'Unrecognized registry query output.' };
   }
   for (const line of lines.slice(1)) {
-    const match = /^(.*?)\s{2,}(REG_\w+)\s{2,}(.*)$/.exec(line);
+    const match = /^(.*?)\s{2,}(REG_\w+)(?:\s{2,}(.*))?$/.exec(line);
     if (!match) return { kind: 'unavailable', reason: 'Unrecognized registry value.' };
     if (match[1] !== WINDOWS_RUN_VALUE) continue;
     if (match[2] !== 'REG_SZ' && match[2] !== 'REG_EXPAND_SZ') return { kind: 'unavailable', reason: 'Unsupported registry value type.' };
