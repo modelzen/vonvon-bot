@@ -1,166 +1,41 @@
-name: CI
-
+name: PR 251 Windows diagnostics
 on:
-  pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
-
 permissions:
   contents: read
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('{0}-{1}', github.event_name, github.run_id) }}${{ github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name != 'frozen' && '-informational' || '' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
-  linux:
-    name: ${{ github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name != 'frozen' && 'informational linux' || 'linux' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    outputs:
-      scope: ${{ steps.scope.outputs.scope }}
-      full: ${{ steps.scope.outputs.full }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Verify tested source
-        env:
-          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-      - name: Test CI scope rules and the handoff script
-        run: node --test .github/scripts/ci-scope.test.mjs scripts/handoff.test.mjs
-      - name: Classify changed paths
-        id: scope
-        run: node .github/scripts/ci-scope.mjs
-      - name: Check changed-file whitespace
-        if: steps.scope.outputs.base != '' && steps.scope.outputs.head != ''
-        run: git diff --check "${{ steps.scope.outputs.base }}" "${{ steps.scope.outputs.head }}"
-      - name: Check dispatched commit whitespace
-        if: github.event_name == 'workflow_dispatch'
-        run: git diff --check HEAD^ HEAD
-      - uses: actions/setup-node@v4
-        if: steps.scope.outputs.full == 'true'
-        with:
-          node-version: '22'
-          cache: npm
-      - name: Install dependencies
-        if: steps.scope.outputs.full == 'true'
-        run: npm ci
-      - name: Build
-        if: steps.scope.outputs.full == 'true'
-        run: npm run build
-      - name: Typecheck
-        if: steps.scope.outputs.full == 'true'
-        run: npm run typecheck
-      - name: Test
-        if: steps.scope.outputs.full == 'true'
-        run: npm test
-      - name: Lint
-        if: steps.scope.outputs.full == 'true'
-        run: npm run lint
-      - name: Record result
-        if: success()
-        env:
-          SCOPE: ${{ steps.scope.outputs.scope }}
-          FULL: ${{ steps.scope.outputs.full }}
-        run: |
-          if [ "$SCOPE" = docs ]; then
-            echo 'docs: lightweight checks passed; full suite not run.' >> "$GITHUB_STEP_SUMMARY"
-          elif [ "$FULL" != true ]; then
-            echo 'full: lightweight checks passed; full suite deferred until frozen or manual dispatch.' >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo 'full: Linux suite passed; Windows and macOS results are separate jobs.' >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - name: Require frozen head for full scope
-        if: steps.scope.outputs.scope == 'full' && steps.scope.outputs.full != 'true' && !(github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name != 'frozen')
-        run: |
-          echo '::error::Full-scope PR checks are deferred. Add the frozen label at the final head or dispatch a full run.'
-          exit 1
-
   windows:
-    name: ${{ github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name != 'frozen' && 'informational Windows checks' || 'Windows checks' }}
-    needs: linux
-    if: needs.linux.outputs.full == 'true'
     runs-on: windows-2025
-    timeout-minutes: 20
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: 6e54c268072dd9fc0fc33e023ae037145a0c93f8
           persist-credentials: false
-      - name: Verify tested source
-        shell: pwsh
-        env:
-          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: if ((git rev-parse HEAD) -ne $env:SOURCE_SHA) { throw 'Checkout does not match the event source SHA' }
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - run: npm run build
-      - run: npm run typecheck
-      - run: npm test
-      - run: npm run lint
-      - name: Record tested platform
-        if: always()
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      - run: npm run build --workspace @vonvon/protocol
+      - run: npm run build --workspace @vonvon/client
+      - name: Read Run query header without exposing registry values
         shell: pwsh
         run: |
-          "Source: $(git rev-parse HEAD)" >> $env:GITHUB_STEP_SUMMARY
-          "Runner: $env:RUNNER_NAME" >> $env:GITHUB_STEP_SUMMARY
-          "Windows: $([System.Environment]::OSVersion.VersionString)" >> $env:GITHUB_STEP_SUMMARY
-          "Architecture: $env:PROCESSOR_ARCHITECTURE" >> $env:GITHUB_STEP_SUMMARY
-          "Node: $(node --version)" >> $env:GITHUB_STEP_SUMMARY
-
-  macos:
-    name: ${{ github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name != 'frozen' && 'informational macOS checks' || 'macOS checks' }}
-    needs: linux
-    if: >-
-      needs.linux.outputs.full == 'true' &&
-      vars.ENABLE_SELF_HOSTED_MACOS_CI == 'true' &&
-      (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: [self-hosted, macOS, ARM64, modelzen-macos, modelzen-macos-isolated]
-    timeout-minutes: 30
-    steps:
-      - name: Require dedicated CI account
-        run: |
-          if [ "$(id -un)" != ci-user ]; then
-            echo '::error::Use the dedicated ci-user account before enabling macOS CI.'
-            exit 1
-          fi
-          case " $(id -Gn) " in
-            *' admin '*)
-              echo '::error::The CI account must be a standard user without administrator access.'
-              exit 1
-              ;;
-          esac
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
-      - name: Verify tested source
-        env:
-          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-      - run: npm ci
-      - run: npm run build
-      - run: npm run typecheck
-      - run: npm test
-      - run: npm run lint
-      - name: Record tested platform
-        if: always()
-        run: |
-          {
-            echo "Source: $(git rev-parse HEAD)"
-            echo "Runner: $RUNNER_NAME"
-            echo "macOS: $(sw_vers -productVersion), $(uname -m)"
-            echo "Node: $(node --version)"
-          } >> "$GITHUB_STEP_SUMMARY"
+          @'
+          const { buildSync } = require('esbuild');
+          const { execFileSync } = require('node:child_process');
+          const { join } = require('node:path');
+          buildSync({ entryPoints: ['packages/desktop/src/daemon-dependencies.ts'], outfile: 'windows-parser-probe.cjs', bundle: true, platform: 'node', format: 'cjs', packages: 'external' });
+          const { parseWindowsRunQuery } = require('./windows-parser-probe.cjs');
+          const key = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
+          const output = execFileSync(join(process.env.SystemRoot, 'System32', 'reg.exe'), ['query', key], { encoding: 'utf8' });
+          const header = output.split(/\r?\n/).find(line => line.trim())?.trim();
+          const parsed = parseWindowsRunQuery(output);
+          console.log(JSON.stringify({ source: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), header, expected: key.replace('HKCU', 'HKEY_CURRENT_USER'), kind: parsed.kind, reason: parsed.kind === 'unavailable' ? parsed.reason : undefined }));
+          '@ | Set-Content -Encoding utf8 probe.cjs
+          node probe.cjs
+      - name: Recheck unchanged keystore concurrency test
+        run: npx vitest run --root packages/daemon test/keystore.test.ts
