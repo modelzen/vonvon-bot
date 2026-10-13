@@ -45,8 +45,8 @@ export interface Project {
    * guest turns run on SEPARATE codex threads (see {@link turnTier}). Read via
    * {@link effectiveGuestMode}. */
   guestMode?: PermissionMode;
-  /** allow the sandboxed agent's shell to reach the network (only meaningful for
-   * 'qa'/'write'; 'full' is always networked). Default false. */
+  /** allow the agent's shell to reach the network in 'qa'/'write' ('full' always can), and Vonvon to
+   * fetch remote images in every tier. Default false. */
   network?: boolean;
   /** let codex auto-compact this project's threads when context fills (codex's
    * own built-in, on by default). Read as `autoCompact ?? true`; when false the

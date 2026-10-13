@@ -1656,6 +1656,7 @@ export function createOrchestrator(
           // ref was resolved against `/` and rejected as image-outside-cwd.
           cwd: project?.cwd ?? prior?.cwd ?? fallbackCwd,
           mode: perm.mode,
+          network: perm.network,
           summary: stripFileTokens(summaryText ?? text).slice(0, 80) || '(本轮任务)',
           requesterOpenId: msg.senderId,
           requestedAt: msg.createTime || tIntake,
@@ -1863,6 +1864,7 @@ export function createOrchestrator(
         effort,
         cwd,
         mode: perm.mode,
+        network: perm.network,
         summary: stripFileTokens(text).slice(0, 80) || '(空)',
         requesterOpenId: msg.senderId,
         requestedAt: msg.createTime || tIntake,
@@ -4047,7 +4049,7 @@ export function createOrchestrator(
       }
       const root = await channel.send(project.chatId, { markdown: `桌面端启动目标：${request.objective}` }, replyTo ? { replyTo, replyInThread: true } : undefined);
       launched = true;
-      void trackRun(launchGoalRun({ chatId: project.chatId, replyTo: root.messageId, thread, firstText: request.objective, knownThreadId: key, cwd: project.cwd, mode: perm.mode, model: record.model, effort: record.effort, flat: project.kind === 'single', roleSuffix: perm.roleSuffix, backendId: sessionBackend.id, requesterOpenId: owner, titleSource: { text: request.objective, rawContentType: 'text' } })).catch(error => log.fail('desktop', error));
+      void trackRun(launchGoalRun({ chatId: project.chatId, replyTo: root.messageId, thread, firstText: request.objective, knownThreadId: key, cwd: project.cwd, mode: perm.mode, network: perm.network, model: record.model, effort: record.effort, flat: project.kind === 'single', roleSuffix: perm.roleSuffix, backendId: sessionBackend.id, requesterOpenId: owner, titleSource: { text: request.objective, rawContentType: 'text' } })).catch(error => log.fail('desktop', error));
       return { ok: true, threadId: key };
     } finally {
       if (!launched && active.get(key) === reserved) active.delete(key);
@@ -4080,6 +4082,8 @@ export function createOrchestrator(
     /** The turn's permission mode; a `full` project may reference images outside
      * {@link cwd} (see ../card/outbound-images). */
     mode?: PermissionMode;
+    /** Remote image refs are fetched only when this is on, in every tier. */
+    network?: boolean;
     summary?: string;
     /** who triggered this run (for ⏹/⚙️ ownership gating) */
     requesterOpenId?: string;
@@ -4415,7 +4419,7 @@ export function createOrchestrator(
           stream,
           rc,
           channel,
-          upload: (sources) => uploadOutboundImages(channel, sources, runCwd, opts.mode ?? DEFAULT_PERMISSION_MODE),
+          upload: (sources) => uploadOutboundImages(channel, sources, runCwd, opts.mode ?? DEFAULT_PERMISSION_MODE, opts.network ?? false),
         });
         const tCreate = Date.now();
         try {
@@ -4513,7 +4517,7 @@ export function createOrchestrator(
           runStreams.set(nextId, stream);
           registerReminder(nextId, rc, stream);
           attachRunImages({ stream, rc, channel,
-            upload: sources => uploadOutboundImages(channel, sources, runCwd, opts.mode ?? DEFAULT_PERMISSION_MODE) });
+            upload: sources => uploadOutboundImages(channel, sources, runCwd, opts.mode ?? DEFAULT_PERMISSION_MODE, opts.network ?? false) });
           stream.streamCoalesced(channel, buildRunCard(rc), ANSWER_EID);
           try {
             await previousStream.drain();
@@ -5019,7 +5023,7 @@ export function createOrchestrator(
         stream,
         rc: ctx.rc,
         channel,
-        upload: (sources) => uploadOutboundImages(channel, sources, runCwd, opts.mode ?? DEFAULT_PERMISSION_MODE),
+        upload: (sources) => uploadOutboundImages(channel, sources, runCwd, opts.mode ?? DEFAULT_PERMISSION_MODE, opts.network ?? false),
       });
       const cardMsgId = await stream.create(channel, opts.chatId, buildRunCard(ctx.rc), { replyTo, replyInThread });
       ctx.rc.cardKey = cardMsgId;

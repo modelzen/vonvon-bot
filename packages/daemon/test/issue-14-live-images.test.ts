@@ -102,7 +102,7 @@ describe('issue #14 — relative image ref resolves against the RUN cwd', () => 
     const { channel, state } = fakeChannel();
     const src = relative(root, join(project, 'a.png')); // e.g. var/folders/…/a.png
 
-    const map = await uploadOutboundImages(channel, [src], root, 'write');
+    const map = await uploadOutboundImages(channel, [src], root, 'write', false);
     expect(map.get(src)).toMatch(/^img_key_/);
     expect(state.uploads).toBe(1);
   });
@@ -113,7 +113,7 @@ describe('issue #14 — relative image ref resolves against the RUN cwd', () => 
     await writeFile(join(outside, 'secret.png'), PNG);
     const { channel, state } = fakeChannel();
 
-    const map = await uploadOutboundImages(channel, [join(outside, 'secret.png')], project, 'write');
+    const map = await uploadOutboundImages(channel, [join(outside, 'secret.png')], project, 'write', false);
     expect(map.size).toBe(0);
     expect(state.uploads).toBe(0);
   });
@@ -124,7 +124,7 @@ describe('issue #14 — relative image ref resolves against the RUN cwd', () => 
     await writeFile(join(outside, 'shot.png'), PNG);
     const { channel, state } = fakeChannel();
 
-    const map = await uploadOutboundImages(channel, [join(outside, 'shot.png')], project, 'full');
+    const map = await uploadOutboundImages(channel, [join(outside, 'shot.png')], project, 'full', false);
     expect(map.get(join(outside, 'shot.png'))).toMatch(/^img_key_/);
     expect(state.uploads).toBe(1);
   });
@@ -145,7 +145,7 @@ describe('issue #14 — the running card shows the image, never raw markdown', (
     const stream = new RunCardStream();
     await stream.create(channel, 'oc_1', buildRunCard(rc as never), {});
     const worker = new StreamingImages(
-      (sources) => uploadOutboundImages(channel, sources, project, 'write'),
+      (sources) => uploadOutboundImages(channel, sources, project, 'write', false),
       () => {
         rc.images = worker.images;
         void stream.updateLiveCard(channel, buildRunCard(rc as never)).catch(() => undefined);
@@ -176,7 +176,7 @@ describe('issue #14 — the running card shows the image, never raw markdown', (
     const stream = new RunCardStream();
     await stream.create(channel, 'oc_1', buildRunCard(rc as never), {});
     const worker = new StreamingImages(
-      (sources) => uploadOutboundImages(channel, sources, project, 'write'),
+      (sources) => uploadOutboundImages(channel, sources, project, 'write', false),
       () => {
         rc.images = worker.images;
         void stream.updateLiveCard(channel, buildRunCard(rc as never)).catch(() => undefined);
