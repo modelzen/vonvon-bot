@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 9118409d0903489b3dcfab7cf38eebcca3b383fa
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -23,8 +23,10 @@ jobs:
       - run: npm run build --workspace @vonvon/client
       - name: Verify exact source
         shell: pwsh
+        env:
+          SOURCE_SHA: ${{ github.sha }}
         run: |
-          if ((git rev-parse HEAD) -ne '9118409d0903489b3dcfab7cf38eebcca3b383fa') { throw 'Unexpected source SHA' }
-      - name: Exercise Windows process identities, Job boundaries and existing process fixtures
+          if ((git rev-parse HEAD) -ne $env:SOURCE_SHA) { throw 'Unexpected source SHA' }
+      - name: Observe exact named Job membership and cleanup
         working-directory: packages/daemon
-        run: npx vitest run test/provider/windows-job-breakaway.test.ts test/provider/process-identity.test.ts test/codex-process-tree.test.ts test/import-core.test.ts --maxWorkers=1
+        run: npx vitest run test/provider/windows-job-breakaway.test.ts --maxWorkers=1

@@ -16,11 +16,35 @@ public static class Breakaway {
   }
   [StructLayout(LayoutKind.Sequential)] struct ProcessInfo { public IntPtr process,thread; public uint pid,tid; }
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool CreateProcess(string app,StringBuilder args,IntPtr pa,IntPtr ta,bool inherit,uint flags,IntPtr env,string cwd,ref Startup startup,out ProcessInfo process);
-  public static string Try(string app,string line) {
-    var startup=new Startup(); startup.size=(uint)Marshal.SizeOf(typeof(Startup)); ProcessInfo child;
-    const uint CREATE_BREAKAWAY_FROM_JOB=0x01000000, CREATE_NO_WINDOW=0x08000000;
-    if(CreateProcess(app,new StringBuilder(line),IntPtr.Zero,IntPtr.Zero,false,CREATE_BREAKAWAY_FROM_JOB|CREATE_NO_WINDOW,IntPtr.Zero,null,ref startup,out child)) return "created "+child.pid;
-    return "error "+Marshal.GetLastWin32Error();
+  [DllImport("kernel32.dll", EntryPoint="OpenJobObjectW", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)] static extern IntPtr OpenJobObject(uint access,bool inherit,string name);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool IsProcessInJob(IntPtr process,IntPtr job,out bool member);
+  [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+  static string Membership(IntPtr process,IntPtr job,int openError) {
+    if(job==IntPtr.Zero) return "open-error-"+openError;
+    bool member;
+    if(!IsProcessInJob(process,job,out member)) return "query-error-"+Marshal.GetLastWin32Error();
+    return member ? "true" : "false";
+  }
+  public static string Try(string app,string line,string name) {
+    const uint JOB_OBJECT_QUERY=0x0004;
+    IntPtr job=OpenJobObject(JOB_OBJECT_QUERY,false,name);
+    int openError=job==IntPtr.Zero ? Marshal.GetLastWin32Error() : 0;
+    var child=new ProcessInfo();
+    try {
+      string caller=Membership(GetCurrentProcess(),job,openError);
+      var startup=new Startup(); startup.size=(uint)Marshal.SizeOf(typeof(Startup));
+      const uint CREATE_BREAKAWAY_FROM_JOB=0x01000000, CREATE_NO_WINDOW=0x08000000;
+      if(CreateProcess(app,new StringBuilder(line),IntPtr.Zero,IntPtr.Zero,false,CREATE_BREAKAWAY_FROM_JOB|CREATE_NO_WINDOW,IntPtr.Zero,null,ref startup,out child)) {
+        return "created "+child.pid+";callerInNamedJob="+caller+";childInNamedJob="+Membership(child.process,job,openError);
+      }
+      int createError=Marshal.GetLastWin32Error();
+      return "error "+createError+";callerInNamedJob="+caller+";childInNamedJob=not-created";
+    } finally {
+      if(child.thread!=IntPtr.Zero) CloseHandle(child.thread);
+      if(child.process!=IntPtr.Zero) CloseHandle(child.process);
+      if(job!=IntPtr.Zero) CloseHandle(job);
+    }
   }
 }`;
 const literal = (value: string): string => `'${value.replaceAll("'", "''")}'`;
@@ -30,14 +54,14 @@ describe.skipIf(process.platform !== 'win32')('today\'s WindowsCodexJob', () => 
     const dir = mkdtempSync(join(tmpdir(), 'vonvon-breakaway-'));
     const result = join(dir, 'result');
     const job = new WindowsCodexJob();
-    let escaped: number | undefined;
+    let createdPid: number | undefined;
     let exited: Promise<unknown> | undefined;
     try {
       const sleeper = `"${process.execPath}" -e "setInterval(()=>{},1000)"`;
       const script = [
         "$ErrorActionPreference='Stop'",
         `Add-Type -TypeDefinition ${literal(breakawaySource)}`,
-        `[IO.File]::WriteAllText(${literal(result + '.tmp')}, [Breakaway]::Try(${literal(process.execPath)}, ${literal(sleeper)}))`,
+        `[IO.File]::WriteAllText(${literal(result + '.tmp')}, [Breakaway]::Try(${literal(process.execPath)}, ${literal(sleeper)}, ${literal(job.name)}))`,
         `[IO.File]::Move(${literal(result + '.tmp')}, ${literal(result)})`,
         'Start-Sleep -Seconds 600',
       ].join('\n');
@@ -51,16 +75,30 @@ describe.skipIf(process.platform !== 'win32')('today\'s WindowsCodexJob', () => 
 
       await vi.waitFor(() => expect(existsSync(result), stderr).toBe(true), { timeout: 45_000, interval: 100 });
       const outcome = readFileSync(result, 'utf8');
-      if (outcome.startsWith('created ')) escaped = Number(outcome.slice('created '.length));
-      expect(outcome, 'CREATE_BREAKAWAY_FROM_JOB must fail with ERROR_ACCESS_DENIED').toBe('error 5');
+      const created = /^created ([1-9]\d*);/.exec(outcome);
+      if (created) createdPid = Number(created[1]);
+      console.info('breakaway-membership', outcome.slice(0, 512));
+      expect(outcome.split(';')[0], 'CREATE_BREAKAWAY_FROM_JOB must fail with ERROR_ACCESS_DENIED').toBe('error 5');
 
       job.requestStop();
       await exited;
       expect(job.verifiedEmpty, stderr).toBe(true);
     } finally {
-      if (escaped !== undefined) try { process.kill(escaped); } catch {}
       job.requestStop();
       await exited?.catch(() => undefined);
+      let childAliveAfterStop: boolean | string = 'not-created';
+      if (createdPid !== undefined) {
+        try {
+          process.kill(createdPid, 0);
+          childAliveAfterStop = true;
+        } catch (error) {
+          childAliveAfterStop = error instanceof Error && 'code' in error && error.code === 'ESRCH'
+            ? false
+            : 'probe-error';
+        }
+      }
+      console.info('breakaway-after-stop', { verifiedEmpty: job.verifiedEmpty, childPid: createdPid, childAliveAfterStop });
+      if (createdPid !== undefined) try { process.kill(createdPid); } catch {}
       job.dispose();
       rmSync(dir, { recursive: true, force: true });
     }
