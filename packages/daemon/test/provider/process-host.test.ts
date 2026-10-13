@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -36,8 +36,8 @@ function dataDir(): string {
   dirs.push(dir);
   return dir;
 }
-function newHost(dir: string): ProcessHost {
-  const host = new ProcessHost({ dataDir: dir, daemonBootId: randomUUID(), spawnDeadlineMs: 20_000, ...(binary ? { platform: 'posix', holderPath: binary.path } : { platform: 'win32' }) });
+function newHost(dir: string, spawnDeadlineMs = 20_000): ProcessHost {
+  const host = new ProcessHost({ dataDir: dir, daemonBootId: randomUUID(), spawnDeadlineMs, ...(binary ? { platform: 'posix', holderPath: binary.path } : { platform: 'win32' }) });
   hosts.push(host);
   return host;
 }
@@ -118,6 +118,24 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost on POSIX', () => {
     expect(alive(grandchildren[0] as number)).toBe(false);
     expect(groupEmpty(pid)).toBe(true);
     expect(facts).toEqual([{ kind: 'exit', exit: { observed: 'parent', code: null, signal: 'SIGKILL' } }]);
+  }, 30_000);
+
+  it('end() on a TERM-honouring child waits out TERM_WAIT_MS: the exit is the child\'s own, not a kill', async () => {
+    const host = newHost(dataDir());
+    const { hosted, pid, facts } = await spawnFake(host, ['--term-exit-ms', '300']);
+    await hosted.end();
+    expect(facts).toEqual([{ kind: 'exit', exit: { observed: 'parent', code: 0, signal: null } }]);
+    expect(alive(pid)).toBe(false);
+    expect(host.snapshot()).toEqual([]);
+  }, 30_000);
+
+  it('spawn() ends the record itself when ready misses the spawn deadline, so nothing stays bound without a handle', async () => {
+    const dir = dataDir();
+    const host = newHost(dir, 0);
+    await expect(host.spawn('codex', undefined, { file: NODE, args: [FAKE, '--ignore-term'], env: { PATH: process.env.PATH ?? '' } })).rejects.toThrow('holder-not-ready');
+    expect(host.snapshot()).toEqual([]);
+    expect(ledgerOf(dir).kind).toBe('missing');
+    expect(host.owesWork()).toBe(false);
   }, 30_000);
 
   it('watch() reports transport-lost after the hold when stdout closes with no exit, and the exit still follows', async () => {
@@ -227,6 +245,14 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost on POSIX', () => {
     expect(host.snapshot()).toEqual([]);
     expect(() => (reservation as Reservation).spawn({ file: NODE, args: [], env: {} })).toThrow(/not an unused reservation/);
   }, 20_000);
+
+  it('release() then spawn() is refused: the reservation is single-use', async () => {
+    const host = newHost(dataDir());
+    const reservation = await host.reserve('codex') as Reservation;
+    const released = reservation.release();
+    expect(() => reservation.spawn({ file: NODE, args: [], env: {} })).toThrow(/not an unused reservation/);
+    await released;
+  }, 20_000);
 });
 
 describe.skipIf(PLATFORM !== 'win32')('ProcessHost on Windows', () => {
@@ -241,5 +267,19 @@ describe.skipIf(PLATFORM !== 'win32')('ProcessHost on Windows', () => {
     await until(() => host.snapshot().length === 0, 'record gone after kill', 20_000);
     expect(alive(pid)).toBe(false);
     expect(facts[0]).toMatchObject({ kind: 'exit', exit: { observed: 'parent' } });
+  }, 120_000);
+
+  it('recovers an attempting record from an earlier boot through its Job name and session: a sealed supervisor with no Job is gone', async () => {
+    const dir = dataDir();
+    const session = await new Promise<number>((resolve, reject) => execFile('powershell.exe', ['-NoProfile', '-Command', '[Diagnostics.Process]::GetCurrentProcess().SessionId'], (error, stdout) => error ? reject(error) : resolve(Number(stdout.trim()))));
+    const dead = spawn(NODE, ['-e', '0'], { stdio: 'ignore' });
+    await new Promise(resolve => dead.once('exit', resolve));
+    const id = randomUUID();
+    const record = { id, daemonBootId: 'earlier-boot', providerId: 'codex', stage: 'attempting', holder: { pid: dead.pid, start: 'win32:1' }, control: { pipe: `\\\\.\\pipe\\vonvon-${id}`, jobName: `Local\\vonvon-${id}`, osSession: session } };
+    writeFileSync(join(dir, 'process-owners.json'), JSON.stringify({ version: 1, records: [record] }));
+    const host = newHost(dir);
+    expect(host.snapshot()[0]?.ownership).toBe('unknown');
+    expect(await host.sweepOrphans()).toEqual({ gone: 1, unknown: 0, inert: 0, legacy: 0 });
+    expect(ledgerOf(dir).kind).toBe('missing');
   }, 120_000);
 });

@@ -78,6 +78,8 @@ interface RecordState {
   refused: boolean;
   unconfirmed?: UnconfirmedReason;
   endRequested: boolean;
+  /** Set after the term wait or by the facade's kill(): only then may the signalling step send kill. */
+  killDue: boolean;
   issued: Map<Nonce, Issued>;
   pending?: Nonce;
   probing: boolean;
@@ -95,7 +97,7 @@ interface RecordState {
 
 function newState(record: LedgerRecord): RecordState {
   return {
-    record, identity: 'lost', phase: 'signalling', sealed: false, noProvider: false, refused: false, endRequested: false,
+    record, identity: 'lost', phase: 'signalling', sealed: false, noProvider: false, refused: false, endRequested: false, killDue: false,
     issued: new Map(), probing: false, ready: deferred(), retired: deferred(), exitObserved: deferred(),
     hold: EXIT_HOLD_START, facts: [], watchers: new Set(),
   };
@@ -194,7 +196,7 @@ export class ProcessHost {
     try {
       channel = this.options.platform === 'win32'
         ? await spawnWindowsSupervisor({ jobName: (control as { jobName: string }).jobName, pipeName: control?.pipe, logPath: this.holderLogPath(id), spawnDeadlineMs: this.spawnDeadlineMs })
-        : await spawnPosixHolder(this.options.holderPath, { helloTimeoutMs: this.spawnDeadlineMs });
+        : await spawnPosixHolder(this.options.holderPath);
     } catch (error) {
       this.states.delete(id);
       this.write();
@@ -209,9 +211,8 @@ export class ProcessHost {
     s.record = advance(intent, born, this.platform);
     this.write();
     channel.onReceipt(line => this.onReceipt(s, line));
-    channel.stderr.on('data', (chunk: Buffer) => log.info('process-host', 'holder-log', { id, text: chunk.toString().trimEnd() }));
     channel.stdout.once('end', () => this.feedHold(s, { kind: 'eof' }));
-    void channel.exited.then(exit => this.onHolderExit(s, exit.code));
+    void Promise.all([channel.exited, channel.closed]).then(([exit]) => this.onHolderExit(s, exit.code));
     return new Reservation(this, id);
   }
 
@@ -219,13 +220,14 @@ export class ProcessHost {
     const reservation = await this.reserve(providerId, sessionId);
     if (!(reservation instanceof Reservation)) throw new AdmissionRefused(reservation);
     const hosted = reservation.spawn(spec);
-    await hosted.ready;
+    try { await hosted.ready; }
+    catch (error) { await this.end(reservation.id); throw error; }
     return hosted;
   }
 
   launch(id: ReservationId, spec: SpawnSpec): HostedProcess {
     const s = this.states.get(id);
-    if (!s || !s.channel || s.record.stage !== 'born') throw new Error(`reservation ${id} is not an unused reservation`);
+    if (!s || !s.channel || s.record.stage !== 'born' || s.endRequested) throw new Error(`reservation ${id} is not an unused reservation`);
     const refusal = this.admission();
     if (refusal) {
       void this.end(id);
@@ -247,6 +249,7 @@ export class ProcessHost {
     const s = this.states.get(id);
     if (!s?.channel) return Promise.resolve('unknown');
     s.endRequested = true;
+    if (rung === 'kill') s.killDue = true;
     const result = this.issue(s, rung, deadlineMs);
     if (rung === 'kill') s.ending ??= this.continueEnd(s);
     return result;
@@ -255,7 +258,7 @@ export class ProcessHost {
   private issue(s: RecordState, rung: Rung, deadlineMs: number): Promise<SignalResult> {
     return new Promise<SignalResult>(resolve => {
       const nonce = newNonce();
-      const timer = setTimeout(() => resolve('unknown'), deadlineMs);
+      const timer = setTimeout(() => { resolve('unknown'); s.issued.set(nonce, { command: rung }); }, deadlineMs);
       timer.unref();
       s.issued.set(nonce, { command: rung, resolve: result => { clearTimeout(timer); resolve(result); } });
       if (rung === 'kill') s.pending = nonce;
@@ -283,7 +286,7 @@ export class ProcessHost {
     if (!s.channel) { this.startTail(s); return; }
     if (s.record.stage === 'born') {
       this.sendPlain(s, 'abandon');
-      await Promise.race([s.retired.promise, s.channel.exited]);
+      await Promise.race([s.retired.promise, s.channel.exited, sleep(KILL_CONFIRM_MS)]);
       return;
     }
     void this.issue(s, 'term', TERM_WAIT_MS);
@@ -294,6 +297,7 @@ export class ProcessHost {
 
   private async continueEnd(s: RecordState): Promise<void> {
     if (s.retired.settled) return;
+    s.killDue = true;
     this.drive(s);
     await Promise.race([s.retired.promise, sleep(KILL_CONFIRM_MS)]);
     if (s.retired.settled) return;
@@ -330,7 +334,8 @@ export class ProcessHost {
       if (s.retired.settled) { report.gone += 1; continue; }
       const ownership = this.ownership(s);
       if (ownership === 'inert') report.inert += 1;
-      else { report.unknown += 1; this.startTail(s); }
+      else report.unknown += 1;
+      this.startTail(s);
     }
     log.info('process-host', 'sweep', { ...report });
     return report;
@@ -338,9 +343,11 @@ export class ProcessHost {
 
   private ownership(s: RecordState): Ownership { return ownershipOf(s.record, evidenceOf(s), this.platform); }
 
+  /** Mirrors the records to disk. A failure is logged and leaves the file as it was; admission reads the in-memory states. */
   private write(): void {
-    if (this.unreadable !== undefined) throw new Error(`process-owners.json is unreadable and is never rewritten: ${this.ledgerPath}`);
-    writeLedger(this.ledgerPath, [...this.states.values()].map(s => s.record));
+    if (this.unreadable !== undefined) { log.warn('process-host', 'ledger-not-rewritten', { path: this.ledgerPath }); return; }
+    try { writeLedger(this.ledgerPath, [...this.states.values()].map(s => s.record)); }
+    catch (error) { log.fail('process-host', error, { path: this.ledgerPath }); }
   }
 
   private holderLogPath(id: ReservationId): string {
@@ -369,7 +376,7 @@ export class ProcessHost {
     if (s.pending !== undefined || s.retired.settled || !(s.endRequested || s.identity === 'reaped')) return;
     const step = nextStep(s);
     if (!('send' in step)) return;
-    if (step.send === 'kill') void this.issue(s, 'kill', KILL_CONFIRM_MS);
+    if (step.send === 'kill') { if (s.killDue) void this.issue(s, 'kill', KILL_CONFIRM_MS); }
     else s.pending = this.sendPlain(s, step.send);
   }
 
@@ -454,6 +461,7 @@ export class ProcessHost {
 
   private onReceipt(s: RecordState, line: ReceiptLine): void {
     if (line.kind === 'malformed') { log.warn('process-host', 'malformed-receipt', { id: s.record.id, line: line.line }); return; }
+    if (s.identity === 'lost') return;
     if (line.kind === 'provider-exit') {
       this.observeExit(s, { observed: 'parent', code: line.code, signal: line.signal });
       if (this.settle(s)) this.drive(s);
@@ -462,6 +470,7 @@ export class ProcessHost {
     if (line.kind === 'hello') return;
     const issued = s.issued.get(line.nonce);
     if (!issued) { log.warn('process-host', 'unmatched-receipt', { id: s.record.id, line }); return; }
+    if (line.kind !== 'created') s.issued.delete(line.nonce);
     const r = s.record;
     switch (line.kind) {
       case 'created':
