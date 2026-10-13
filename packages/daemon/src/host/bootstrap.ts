@@ -29,7 +29,7 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
     log.info('process-host', 'boot-admission', { admission: host.admission()?.reason ?? 'allowed' });
     // Lane 10 hook: the value is a fake-child.mjs path; the real `vonvon daemon run` has no other seam a lane can reach.
     if (process.env.VONVON_TEST_SPAWN_FAKE_CHILD) {
-      await host.spawn('codex', 'lane-10', { file: process.execPath, args: [process.env.VONVON_TEST_SPAWN_FAKE_CHILD, '--ignore-term', '--grandchildren', '1'], env: { PATH: process.env.PATH ?? '' } });
+      await host.spawn('codex', 'lane-10', { file: process.execPath, args: [process.env.VONVON_TEST_SPAWN_FAKE_CHILD, '--ignore-term', '--grandchildren', '1'], env: Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === 'string')) });
     }
     if (options.managed) {
       const codexBin = readServiceCodexBin();

@@ -1,13 +1,15 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { ProcessFact } from '../../src/provider/engines/engine';
+import { readStartToken } from '../../src/provider/process/identity';
 import { readLedger, type HostPlatform } from '../../src/provider/process/ledger';
+import { probeWindowsJob } from '../../src/provider/process/windows-job-probe';
 import { nextStep, ProcessHost, Reservation, type HostedProcess, type Identity, type Phase, type Step } from '../../src/provider/process/process-host';
 import { alive, until } from './channel-recorder';
 import { compileHolder, type HolderBinary } from './native/holder-driver';
@@ -42,14 +44,26 @@ function newHost(dir: string, spawnDeadlineMs = 20_000): ProcessHost {
   return host;
 }
 const ledgerOf = (dir: string) => readLedger(join(dir, 'process-owners.json'));
+/** The provider's environment: the whole string environment, as the Windows supervisor tests pass it. node.exe needs more than PATH. */
+const ENV = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
 
-async function spawnFake(host: ProcessHost, args: string[]): Promise<{ hosted: HostedProcess; pid: number; grandchildren: number[]; facts: ProcessFact[] }> {
-  const hosted = await host.spawn('codex', 'session-1', { file: NODE, args: [FAKE, ...args], env: { PATH: process.env.PATH ?? '' } });
+/** Everything a failed real-process case must show: provider stdio and exit facts, the supervisor log, and the ledger. */
+function evidence(dir: string, host: ProcessHost, text: string, errors: string, facts: ProcessFact[]): string {
+  const logs = existsSync(join(dir, 'holder-logs')) ? readdirSync(join(dir, 'holder-logs')).map(name => `${name}: ${readFileSync(join(dir, 'holder-logs', name), 'utf8')}`) : [];
+  const ledger = existsSync(join(dir, 'process-owners.json')) ? readFileSync(join(dir, 'process-owners.json'), 'utf8') : 'absent';
+  return JSON.stringify({ stdout: text, stderr: errors, facts, snapshot: host.snapshot(), ledger, holderLogs: logs }, null, 1);
+}
+
+async function spawnFake(host: ProcessHost, args: string[], dir?: string): Promise<{ hosted: HostedProcess; pid: number; grandchildren: number[]; facts: ProcessFact[] }> {
+  const hosted = await host.spawn('codex', 'session-1', { file: NODE, args: [FAKE, ...args], env: ENV });
   const facts: ProcessFact[] = [];
   hosted.watch(fact => facts.push(fact));
   let text = '';
+  let errors = '';
   hosted.stdout.on('data', (chunk: Buffer) => { text += chunk.toString(); });
-  await until(() => text.includes('armed\n'), 'fake child armed');
+  hosted.stderr.on('data', (chunk: Buffer) => { errors += chunk.toString(); });
+  try { await until(() => text.includes('armed\n'), 'fake child armed'); }
+  catch (error) { throw new Error(`${(error as Error).message}; evidence ${evidence(dir ?? '', host, text, errors, facts)}`); }
   const pid = Number(/pid (\d+)/.exec(text)?.[1]);
   groups.push(pid);
   const grandchildren = [...text.matchAll(/gc (\d+)/g)].map(match => Number(match[1]));
@@ -132,7 +146,7 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost on POSIX', () => {
   it('spawn() ends the record itself when ready misses the spawn deadline, so nothing stays bound without a handle', async () => {
     const dir = dataDir();
     const host = newHost(dir, 0);
-    await expect(host.spawn('codex', undefined, { file: NODE, args: [FAKE, '--ignore-term'], env: { PATH: process.env.PATH ?? '' } })).rejects.toThrow('holder-not-ready');
+    await expect(host.spawn('codex', undefined, { file: NODE, args: [FAKE, '--ignore-term'], env: ENV })).rejects.toThrow('holder-not-ready');
     expect(host.snapshot()).toEqual([]);
     expect(ledgerOf(dir).kind).toBe('missing');
     expect(host.owesWork()).toBe(false);
@@ -281,7 +295,7 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost durability on POSIX', () => {
     const reservation = await host.reserve('codex') as Reservation;
     const holderPid = host.snapshot()[0]?.holderPid as number;
     const clear = obstruct(dir);
-    const hosted = reservation.spawn({ file: NODE, args: [FAKE], env: { PATH: process.env.PATH ?? '' } });
+    const hosted = reservation.spawn({ file: NODE, args: [FAKE], env: ENV });
     let output = '';
     hosted.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); });
     await expect(hosted.ready).rejects.toThrow(/EISDIR/);
@@ -298,7 +312,7 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost durability on POSIX', () => {
     const host = newHost(dir);
     const reservation = await host.reserve('codex') as Reservation;
     const holderPid = host.snapshot()[0]?.holderPid as number;
-    const hosted = reservation.spawn({ file: NODE, args: [FAKE], env: { PATH: process.env.PATH ?? '' } });
+    const hosted = reservation.spawn({ file: NODE, args: [FAKE], env: ENV });
     const clear = obstruct(dir);
     let output = '';
     hosted.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); });
@@ -324,11 +338,25 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost durability on POSIX', () => {
 });
 
 describe.skipIf(PLATFORM !== 'win32')('ProcessHost on Windows', () => {
+  /** Runs node.exe directly with the given environment and reports what happened; the evidence for the PATH-only suspicion. */
+  const runNode = (env: Record<string, string>) => new Promise<string>(resolve => {
+    execFile(NODE, ['-e', 'process.stdout.write("ok")'], { env, timeout: 15_000, windowsHide: true }, (error, stdout, stderr) =>
+      resolve(JSON.stringify({ code: error ? error.code : 0, stdout, stderr: stderr.trim(), keys: Object.keys(env) })));
+  });
+
+  it('reports whether node.exe starts with a PATH-only environment, and starts with the whole one', async () => {
+    const pathOnly = await runNode({ PATH: process.env.PATH ?? '' });
+    const whole = await runNode(ENV);
+    console.log(`[process-host evidence] node.exe with PATH only: ${pathOnly}`);
+    console.log(`[process-host evidence] node.exe with the whole environment: ${whole}`);
+    expect(JSON.parse(whole)).toMatchObject({ code: 0, stdout: 'ok' });
+  }, 60_000);
+
   it('spawns through the supervisor, records running with the Job name, and kill retires the record', async () => {
     const dir = dataDir();
     const host = newHost(dir);
     expect(host.available()).toBe(true);
-    const { hosted, pid, facts } = await spawnFake(host, []);
+    const { hosted, pid, facts } = await spawnFake(host, [], dir);
     expect(ledgerOf(dir)).toMatchObject({ kind: 'ok', records: [{ stage: 'running', provider: { pid }, control: { jobName: expect.stringMatching(/^Local\\vonvon-/) } }] });
     expect(await hosted.term()).toBe('accepted');
     expect(await hosted.kill()).toBe('sent');
@@ -345,6 +373,11 @@ describe.skipIf(PLATFORM !== 'win32')('ProcessHost on Windows', () => {
     const id = randomUUID();
     const record = { id, daemonBootId: 'earlier-boot', providerId: 'codex', stage: 'attempting', holder: { pid: dead.pid, start: 'win32:1' }, control: { pipe: `\\\\.\\pipe\\vonvon-${id}`, jobName: `Local\\vonvon-${id}`, osSession: session } };
     writeFileSync(join(dir, 'process-owners.json'), JSON.stringify({ version: 1, records: [record] }));
+    const read = await readStartToken(dead.pid as number);
+    const probe = await probeWindowsJob({ ...record.control, osSession: session });
+    console.log(`[process-host evidence] session ${session}; dead holder ${dead.pid} reads ${JSON.stringify(read)}; probe ${JSON.stringify(probe)}`);
+    expect(read, 'a dead pid must read absent for the holder to be sealed').toBe('absent');
+    expect(probe, 'OpenJobObjectW on a name nobody holds must fail with ERROR_FILE_NOT_FOUND').toMatchObject({ probe: 'empty', lastError: 2 });
     const host = newHost(dir);
     expect(host.snapshot()[0]?.ownership).toBe('unknown');
     expect(await host.sweepOrphans()).toEqual({ gone: 1, unknown: 0, inert: 0, legacy: 0 });

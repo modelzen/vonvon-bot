@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { fileURLToPath } from 'node:url';
 
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(name);
@@ -16,7 +17,7 @@ setInterval(() => {}, 1000);
 await out(`pid ${process.pid}`);
 const grandchildren = value('--grandchildren', 0);
 for (let i = 0; i < grandchildren; i++) {
-  const child = spawn(process.execPath, [new URL(import.meta.url).pathname, '--ignore-term'], { stdio: ['ignore', 'pipe', 'ignore'] });
+  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), '--ignore-term'], { stdio: ['ignore', 'pipe', 'ignore'] });
   await new Promise(resolve => {
     let text = '';
     child.stdout.on('data', chunk => { text += chunk; if (text.includes('armed')) { child.stdout.destroy(); resolve(); } });

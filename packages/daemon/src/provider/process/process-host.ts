@@ -438,7 +438,13 @@ export class ProcessHost {
     const r = s.record;
     s.probing = true;
     try {
-      if (this.platform === 'win32') { if (r.control?.osSession !== undefined) s.probe = await probeWindowsJob({ ...r.control, osSession: r.control.osSession }); }
+      if (this.platform === 'win32') {
+        if (r.control?.osSession !== undefined) {
+          const result = await probeWindowsJob({ ...r.control, osSession: r.control.osSession });
+          s.probe = result.probe;
+          if (result.probe === 'unknown') log.warn('process-host', 'job-probe-unknown', { id: r.id, jobName: r.control.jobName, ...result });
+        } else log.warn('process-host', 'job-probe-skipped', { id: r.id, reason: 'no osSession' });
+      }
       else if ('provider' in r) s.probe = posixGroupProbe(r.provider.pid);
     } finally { s.probing = false; }
     if (s.probe === 'empty') {
@@ -455,7 +461,7 @@ export class ProcessHost {
     if (!s.sealed) {
       const read = await readStartToken(r.holder.pid);
       s.sealed = read === 'absent' || (read !== 'unreadable' && r.holder.start !== undefined && read !== r.holder.start);
-      if (!s.sealed && r.stage === 'born') log.info('process-host', 'inert-holder', { id: r.id, pid: r.holder.pid, start: read });
+      log.info('process-host', 'recover-identity', { id: r.id, stage: r.stage, pid: r.holder.pid, recorded: r.holder.start, read, sealed: s.sealed });
     }
     if (s.sealed && r.stage !== 'born') await this.probeByDaemon(s);
     else this.settle(s);
