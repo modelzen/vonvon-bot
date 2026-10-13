@@ -1,0 +1,100 @@
+import { lstat, readFile, realpath } from 'node:fs/promises';
+import { resolve, join } from 'node:path';
+import { connectBrowser } from '@vonvon/client/browser';
+import { getPidLockInfo, isPidLockOwnerRunning, readRunningPidLock } from '../../daemon/src/server/pid-lock.js';
+import { verifyPidLockOwner } from '../../daemon/src/server/owner-verification.js';
+import type { AttachedDaemon } from './ipc-contract.js';
+
+export class AttachError extends Error {
+  constructor(readonly reason: 'root' | 'owner' | 'credential' | 'connection' | 'identity' | 'close', cause?: unknown) {
+    super({
+      root: 'The Vonvon data folder is unavailable.',
+      owner: 'No verified Vonvon daemon is running.',
+      credential: 'The local daemon credential is unavailable.',
+      connection: 'The running Vonvon daemon cannot accept this desktop connection.',
+      identity: 'The daemon owner changed during desktop attachment.',
+      close: 'The desktop connection did not close cleanly.',
+    }[reason], { cause });
+    this.name = 'AttachError';
+  }
+}
+
+const localListen = /^127\.0\.0\.1:(\d{1,5})$/;
+
+async function statusWithinDeadline(client: AttachedDaemon['client']): ReturnType<AttachedDaemon['client']['admin']> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      client.admin({ type: 'daemonStatus' }),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('Daemon status timed out')), 5_000);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+export async function attachExisting(root: string): Promise<AttachedDaemon> {
+  let canonicalRoot: string;
+  try {
+    const selected = resolve(root);
+    const info = await lstat(selected);
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('Invalid root');
+    canonicalRoot = await realpath(selected);
+    if (selected !== canonicalRoot || root !== selected) throw new Error('Root is not canonical');
+  } catch (cause) {
+    throw new AttachError('root', cause);
+  }
+
+  let lock;
+  let listen: string;
+  try {
+    lock = await readRunningPidLock(canonicalRoot);
+    const candidate = lock?.listen;
+    const match = localListen.exec(candidate ?? '');
+    const port = Number(match?.[1]);
+    if (!lock || !candidate || !match || port < 1 || port > 65535) throw new Error('Owner is not ready');
+    listen = candidate;
+    await verifyPidLockOwner(canonicalRoot, lock);
+  } catch (cause) {
+    throw new AttachError('owner', cause);
+  }
+
+  let credential: string;
+  try {
+    credential = (await readFile(join(canonicalRoot, 'local-credential'), 'utf8')).trim();
+    if (!/^[a-f0-9]{64}$/i.test(credential)) throw new Error('Invalid credential');
+  } catch (cause) {
+    throw new AttachError('credential', cause);
+  }
+
+  let client;
+  try {
+    client = await connectBrowser({ url: `ws://${listen}`, credential, clientKind: 'desktop' });
+  } catch (cause) {
+    throw new AttachError('connection', cause);
+  }
+
+  try {
+    const reply = await statusWithinDeadline(client);
+    const current = await getPidLockInfo(canonicalRoot);
+    if (reply.kind !== 'daemonStatus' || !reply.status.running || reply.status.pid !== lock.pid ||
+        !current || current.pid !== lock.pid || current.startedAt !== lock.startedAt ||
+        current.listen !== listen || !isPidLockOwnerRunning(current)) {
+      throw new AttachError('identity');
+    }
+  } catch (cause) {
+    const rejection = cause instanceof AttachError ? cause : new AttachError('identity', cause);
+    try { await client.close(); }
+    catch (closeFailure) { throw new AggregateError([rejection, closeFailure], 'Daemon attachment failed and the desktop connection did not close cleanly.'); }
+    throw rejection;
+  }
+
+  let closing: Promise<void> | undefined;
+  return {
+    client,
+    identity: { pid: lock.pid, startedAt: lock.startedAt, listen },
+    dispose() { return closing ??= client.close(); },
+  };
+}
