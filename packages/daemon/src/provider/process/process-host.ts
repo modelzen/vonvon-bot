@@ -10,7 +10,7 @@ import { KILL_CONFIRM_MS, TERM_WAIT_MS, type ExitFact, type OwnedProcess, type P
 import type { ProviderId, UnconfirmedReason } from '../model';
 import type { Refusal } from '../policy/enforcement';
 import { ownedWorkUnverified } from '../policy/messages.zh';
-import { HolderProcess, HolderProcessError, specOf } from './holder-process';
+import { HolderProcess, HolderProcessError, specOf, type AdoptExtras } from './holder-process';
 import { EXIT_HOLD_START, stepExitHold, type ExitHoldInput, type ExitHoldState } from './exit-hold';
 import { spawnPosixHolder, type HolderChannel } from './holder-channel';
 import { newNonce, validateSignalReceipt, type CommandName, type Nonce, type ReceiptLine, type Rung } from './holder-protocol';
@@ -137,7 +137,11 @@ export function defaultHolderPath(): string {
 export class Reservation {
   constructor(private readonly host: ProcessHost, readonly id: ReservationId) {}
   spawn(spec: SpawnSpec): HostedProcess { return this.host.launch(this.id, spec); }
-  adopt(options: SpawnOptions): HolderProcess { return new HolderProcess(this.spawn(specOf(options)), options.signal); }
+  /** An already-aborted signal never launches: the reservation is released and the facade raises `cancelled`. */
+  adopt(options: SpawnOptions, extras?: AdoptExtras): HolderProcess {
+    if (options.signal.aborted) return new HolderProcess(this.host.cancel(this.id), undefined, extras);
+    return new HolderProcess(this.spawn(specOf(options)), options.signal, extras);
+  }
   release(): Promise<void> { return this.host.end(this.id); }
 }
 
@@ -290,6 +294,15 @@ export class ProcessHost {
     return new HostedProcess(this, id, s.channel, s.ready.promise, s.holderLost.promise);
   }
 
+  /** Releases an unused reservation in place of a launch; the handle's `ready` rejects `cancelled`. */
+  cancel(id: ReservationId): HostedProcess {
+    const s = this.states.get(id);
+    if (!s || !s.channel || s.record.stage !== 'born' || s.endRequested) throw new Error(`reservation ${id} is not an unused reservation`);
+    s.ready.reject(new HolderProcessError('cancelled'));
+    void this.end(id);
+    return new HostedProcess(this, id, s.channel, s.ready.promise, s.holderLost.promise);
+  }
+
   signal(id: ReservationId, rung: Rung, deadlineMs: number): Promise<SignalResult> {
     const s = this.states.get(id);
     if (!s?.channel) return Promise.resolve('unknown');
@@ -303,7 +316,7 @@ export class ProcessHost {
   /** Queues `rung` and joins `end`. False once the record is retired or the channel is closed. */
   request(id: ReservationId, rung: Rung): boolean {
     const s = this.states.get(id);
-    if (!s?.channel) return false;
+    if (!s?.channel || s.record.stage === 'intent' || s.record.stage === 'born') return false;
     s.endRequested = true;
     if (rung === 'kill') s.killDue = true;
     const { queued } = this.issue(s, rung, rung === 'kill' ? KILL_CONFIRM_MS : TERM_WAIT_MS);
@@ -543,7 +556,7 @@ export class ProcessHost {
     if (!s.ready.settled) s.ready.reject(new HolderProcessError(s.noProvider ? 'launch-failed' : 'holder-lost'));
     if (s.noProvider || !('provider' in s.record)) this.settle(s);
     else void this.probeByDaemon(s);
-    if (!s.exit && !s.noProvider) s.holderLost.resolve();
+    if (!s.exit && !s.noProvider && 'provider' in s.record) s.holderLost.resolve();
   }
 
   private onReceipt(s: RecordState, line: ReceiptLine): void {

@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(name);
 const value = (name, fallback) => { const at = argv.indexOf(name); return at === -1 ? fallback : Number(argv[at + 1]); };
+
+const marker = argv.indexOf('--marker');
+if (marker !== -1) writeFileSync(argv[marker + 1], 'ran');
 
 const out = (line) => new Promise(resolve => process.stdout.write(`${line}\n`, resolve));
 
@@ -36,3 +40,5 @@ for (let i = 0; i < frames; i++) setTimeout(() => void out(`frame ${i}`), frameM
 const closeStdoutMs = value('--close-stdout-ms', 0);
 if (closeStdoutMs > 0) setTimeout(() => process.stdout.end(), closeStdoutMs);
 await out('armed');
+const stderrBytes = value('--stderr-bytes', 0);
+if (stderrBytes > 0) process.stderr.write(Buffer.alloc(stderrBytes, 120), () => void out('DONE').then(() => process.exit(0)));

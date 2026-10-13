@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { constants } from 'node:os';
+import { StringDecoder } from 'node:string_decoder';
 import type { Readable, Writable } from 'node:stream';
 import type { SpawnedProcess, SpawnOptions } from '@anthropic-ai/claude-agent-sdk';
 import type { ExitFact, ProcessFact } from '../engines/engine';
@@ -16,6 +17,11 @@ export class HolderProcessError extends Error {
 
 type Raised = { ready: []; exit: [code: number | null, signal: NodeJS.Signals | null]; error: [error: HolderProcessError] };
 type RaisedEvent = keyof Raised;
+
+export interface AdoptExtras {
+  /** Decoded provider stderr. Never logged by the host, since it can carry tokens; dropped when absent. */
+  onStderr?: (chunk: string) => void;
+}
 
 export function specOf(options: SpawnOptions): SpawnSpec {
   const env = Object.fromEntries(Object.entries(options.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
@@ -36,8 +42,12 @@ export class HolderProcess extends EventEmitter implements SpawnedProcess {
 
   private readonly onAbort = () => { this.kill('SIGTERM'); };
 
-  constructor(private readonly hosted: HostedProcess, private readonly signal?: AbortSignal) {
+  constructor(private readonly hosted: HostedProcess, private readonly signal?: AbortSignal, extras: AdoptExtras = {}) {
     super();
+    // The SDK's SpawnedProcess has no stderr, so an undrained pipe would block a provider that writes more than its capacity.
+    const decoder = new StringDecoder('utf8');
+    hosted.stderr.on('data', (chunk: Buffer) => extras.onStderr?.(decoder.write(chunk)));
+    hosted.stderr.on('end', () => { const rest = decoder.end(); if (rest) extras.onStderr?.(rest); });
     // Covers on, once, addListener, and the prepend variants alike; the listener is not yet registered here.
     this.on('newListener', (event: string | symbol, listener: (...args: unknown[]) => void) => this.replay(event, listener));
     this.stdin = hosted.stdin;
@@ -54,8 +64,7 @@ export class HolderProcess extends EventEmitter implements SpawnedProcess {
     );
     void hosted.holderLost.then(() => this.raiseOnce('error', new HolderProcessError('holder-lost')));
     hosted.watch(fact => this.onFact(fact));
-    if (signal?.aborted) this.kill('SIGTERM');
-    else signal?.addEventListener('abort', this.onAbort, { once: true });
+    signal?.addEventListener('abort', this.onAbort, { once: true });
   }
 
   get killed(): boolean { return this.queued; }
