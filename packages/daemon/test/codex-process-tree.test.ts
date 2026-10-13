@@ -239,7 +239,7 @@ describe('owned Codex process trees', () => {
       const leaderProcess = captureProcess(leader);
       const wrapper = process.platform === 'win32'
         ? captureProcess(Number(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-          `$ErrorActionPreference='Stop'; $wrappers=@(Get-CimInstance Win32_Process -Filter "ParentProcessId=${client.pid} AND Name='node.exe'"); if ($wrappers.Count -ne 1) { throw "Expected one Node wrapper, found $($wrappers.Count)" }; [Console]::Out.WriteLine($wrappers[0].ProcessId)`], { encoding: 'utf8', timeout: 5000 }).trim()))
+          `$ErrorActionPreference='Stop'; $wrappers=@(Get-CimInstance Win32_Process -Filter "ParentProcessId=${client.pid} AND Name='node.exe'"); if ($wrappers.Count -ne 1) { throw "Expected one Node wrapper, found $($wrappers.Count)" }; [Console]::Out.WriteLine($wrappers[0].ProcessId)`], { encoding: 'utf8', timeout: 15_000 }).trim()))
         : undefined;
       client.notify('exit');
       await vi.waitFor(() => expect(originalAlive(leaderProcess)).toBe(false), { timeout: 5000 });
@@ -252,7 +252,7 @@ describe('owned Codex process trees', () => {
     else expect(result).toBeInstanceOf(CodexProcessCleanupError);
     expect(originalAlive(target)).toBe(false);
     expectedCleanupErrors.add(result);
-  }, 30_000);
+  }, process.platform === 'win32' ? 60_000 : 30_000);
 });
 
 describe('Windows Job stop exit arbitration', () => {

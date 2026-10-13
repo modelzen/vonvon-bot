@@ -26,7 +26,6 @@ vi.mock('../src/config/data-access', async original => {
     return server;
   } };
 });
-vi.mock('../src/service/win-startup', () => ({ SERVICE_ENV_FLAG: 'VONVON_TEST_SERVICE', recordServicePid() {}, clearServicePid() {} }));
 vi.mock('../src/admin/service', () => ({ createAdminService: () => ({ listBots: async () => [], listProjects: async () => [] }) }));
 vi.mock('../src/agent', () => ({
   installBackendDep: vi.fn(), uninstallBackendDep: vi.fn(),

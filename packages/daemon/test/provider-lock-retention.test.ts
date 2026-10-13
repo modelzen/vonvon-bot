@@ -94,7 +94,6 @@ vi.mock('../src/bot/onboarding', () => ({
   },
   announceEventsWhenLive: async () => {},
 }));
-vi.mock('../src/service/win-startup', () => ({ SERVICE_ENV_FLAG: 'VONVON_TEST_SERVICE', recordServicePid() {}, clearServicePid() {} }));
 vi.mock('../src/admin/service', () => ({ createAdminService: () => ({}) }));
 vi.mock('../src/server/http', async original => ({
   ...await original<object>(), startApi: async () => ({

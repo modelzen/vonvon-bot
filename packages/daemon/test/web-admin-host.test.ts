@@ -63,7 +63,6 @@ vi.mock('../src/config/paths', async () => {
 const statusMock = vi.fn();
 vi.mock('../src/service/adapter', () => ({
   getServiceAdapter: () => ({ status: statusMock }),
-  isServiceRunning: () => false,
 }));
 
 // 升级检测：固定 mock（绝不打真 npm registry）。
