@@ -65,6 +65,8 @@ export type Failure =
 export type StopBy = 'user' | 'watchdog' | 'daemon';
 /** What a stop did to the owned process tree, as far as the turn machine knows. Rules in providers.md *Engine and runtime*. */
 export type TreeFate = 'live' | 'signalled' | 'exited' | 'unconfirmed';
+/** Why the host has not confirmed an ending: a diagnostic on its snapshot for doctor and the log; admission never reads it. */
+export type UnconfirmedReason = 'signal-refused' | 'no-exit' | 'children-alive' | 'tree-unknown';
 export type Outcome =
   | { state: 'completed' }
   | { state: 'failed'; failure: Failure }
