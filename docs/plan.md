@@ -66,13 +66,14 @@ The evidence a PR keeps for review follows the surface a user meets in that PR. 
 
 ### Parallel execution
 
-This section says how Codex runs work in parallel and where each branch starts. It changes no architecture, wire or storage shape, or evidence gate. On 2026-10-12 the linear V1 to V11 merge order was replaced by the merge graph under *Dependencies*. The local runtime supports the root plus three active Codex agents.
+This section says where each branch starts and how the two machines share the work. It changes no architecture, wire or storage shape, or evidence gate. On 2026-10-12 the linear V1 to V11 merge order was replaced by the merge graph under *Dependencies*. On 2026-10-13 the root-plus-workers model was retired; `AGENTS.md` is the rule.
 
-*Roles.*
+*Roles, from 2026-10-13.*
 
-- The root is the only Git and forge writer. It creates every branch and worktree, integrates worker patches, commits, pushes, opens, dispatches CI, merges, and runs guarded Shipping.
-- A worker gets one root-created worktree at the integration base and an explicit list of files it owns. It edits only those files and runs `npm ci` in its own worktree. It never commits, pushes, rebases, stashes, or touches a forge. It returns its uncommitted diff and its test transcripts to the root. Nobody copies `node_modules`, `dist`, `build`, or `release` between worktrees.
-- Two workers never own the same file. If one worker needs a change in another worker's file, that change becomes a handoff point, which the root writes and freezes before the workers start.
+- Claude Code on the Linux host designs and implements. One `claude/<task>` branch per task partition, implemented and checked on Linux, then handed to Codex through the PR's `owner:` label.
+- Codex on the Mac reviews, verifies on macOS and Windows, runs native and real-window acceptance, freezes the head, dispatches the full CI run, runs Shipping, merges, and maintains the board. Codex fixes platform-only breakage inside the verification scope and records it in the PR. Anything else goes back to Claude as a PR comment with a reproduction.
+- At most two product PRs are in flight. One session per in-flight PR on each machine. Only the `owner:` side pushes. Each machine keeps one worktree per branch and deletes it at merge.
+- The partition tables below keep their file ownership. Where they name a root or a worker, read Claude for the writing and Codex for the integration checks.
 
 *Runtime isolation.*
 
@@ -84,11 +85,10 @@ This section says how Codex runs work in parallel and where each branch starts. 
 
 *Validation order, for every PR.* The expensive gates run once, on a frozen head.
 
-1. Interface freeze. The root commits the handoff stubs and shared fakes that the partitions need.
-2. Test-first components. Each worker first writes its unit tests, then makes them pass, then runs its targeted tests and lint and typecheck. A worker may rehearse a live proof on its own build. That run is rehearsal, not evidence.
-3. Integration. The root merges the partitions in the stated order and runs targeted tests after each one. It then runs the clean chain once: `npm ci`, `npm run build`, `npm run typecheck`, `npm test`, `npm run lint`.
-4. Review before freeze. At least two independent audit lanes read the integrated diff and the component evidence. Findings go back to the owning worker, and the root repeats steps 3 and 4.
-5. Freeze. The root pushes the head. The CI results under *CI policy*, the ten live lanes, the lifecycle proofs, perf, native checks where the PR names them, the interaction evidence, and the exact-head swarm and Shipping verdict all run on that head. Any patch change makes a new head, which needs a fresh swarm, except for results that stay valid under the patch-id rule together with the context check in *After V3*.
+1. Design in the PR. Claude writes or updates the plan section the PR implements, in the same PR.
+2. Test-first implementation on Linux. Claude writes the unit tests, makes them pass, and runs the clean chain once: `npm ci`, `npm run build`, `npm run typecheck`, `npm test`, `npm run lint`. The PR description lists the commands, their results, and the Mac checks still needed.
+3. Review and platform verification. Codex reads the diff independently, runs the same chain on macOS, and runs the real-window and native checks the PR names. Findings go back through the PR as comments or as in-scope fixes.
+4. Freeze. Codex labels the head `frozen`. The CI results under *CI policy*, the live lanes, the lifecycle proofs, perf, native checks where the PR names them, the interaction evidence, and the exact-head Shipping verdict all run on that head. Any patch change makes a new head, which needs a fresh verdict, except for results that stay valid under the patch-id rule together with the context check in *After V3*.
 
 *V3 repair partitions.* What remains for V3 is the repair of issues 44 to 48 under *Lifecycle ownership*, *Jobs*, and *Events*, and of issue 50 under *Provider processes* in *Lifecycle ownership*. All six are in scope. With the service commands failing closed, the service half of issue 44 is a small refusal, and the drain control is the new transport work. They split into three disjoint workers.
 
@@ -170,30 +170,7 @@ Evidence-grade gates follow the merge graph. A PR is gate-ready when every merge
 - Providers: `packages/daemon/src/provider/**` and `outbound/**`. V6a to V6d, then V7a to V7c. After V7c, V9 in the bridge repository.
 - Machine platform: V3's frozen-head gates first, then `packages/daemon/src/import/**` for V8, then `packages/cloud/**` and `packages/daemon/src/cloud/**` for V10 and V11.
 
-*Slots.* The root plus three agents.
-
-- The gate-ready PR with the most unmerged dependents gets gate and audit capacity first. Its two or more audit lanes come from agents that did not write it. An owner pauses its implementation for such an audit, which only reads.
-- Implementation fills the other slots.
-- A slot moves from gates or audits to implementation when the PR it served has no work left that needs an agent, so every swarm lane has returned and only root items remain: CI, Shipping, and merge. It moves back when a gate-ready PR freezes.
-- While a perf probe runs, no other slot builds, tests, or runs a daemon on the Mac. Those slots may edit and read.
-- Bot-connected lanes are serial across the whole program, not only within a PR: one connection to the fixture Bot at a time, from any PR. Native service acceptance is serial too.
-
-*Wave 1.* Starts when the root has merged this plan and recorded `H3`.
-
-- Root. Merges `main` into the V3 branch to make `H3`, gets the full CI results under *CI policy*, decides which V3 checks the new base requires under the context rule below, integrates, and runs Shipping. Creates `codex/v4-web-ui` and `codex/v6a-provider-core` in their own worktrees at `H3`. Checks the currently available dedicated Mac test user and Linux systemd user session read-only, then asks the operator once only for missing capabilities that V5 and V8 need, and records the result. The user has since authorized `clay` for V5 and V8 on the Mac. V5 uses the owned-label rules in *Native acceptance environment*. V8 still needs operational isolation because its exact label collides with the protected daily bridge; this is not missing user authorization. On Linux, the user granted root SSH to the Tencent host `101.34.213.231`, and the root prepares the Linux test user there under [native-acceptance-hosts.md](native-acceptance-hosts.md). The `github-ci` account remains reserved for CI and is never used for service acceptance. The answer is not on the path of V4 or V6a.
-- Agent 1, machine platform. V3's frozen-head gates at `H3`: the reruns that the root names and the CLI evidence bundle. It does not audit its own bundle.
-- Agent 2, client surfaces. V4 from `H3`, client exports and `client-context.tsx` first, to reach `F4` early. Then the UI port, `web-ui.ts`, `open.ts`, and the `verify` skill.
-- Agent 3, providers. V6a from `H3`, to `F6` first, then the rest of V6a.
-- Agents 2 and 3 take V3's independent audit lanes and the bundle's independent check, one each, and pause their own work only for that.
-- Claude Code, outside the slots, writes V5's *Service gate* design on a `claude/` branch. It is written on `claude/v5-service-design`, together with V4's *Browser coverage*. The provider redesign of 2026-10-12 is written on `claude/provider-redesign` as `providers.md` and V6a to V7c.
-
-*Wave 2.* Starts when V3 has merged, which frees agent 1.
-
-- Root. Merges `main` into the V4 and V6a branches and retargets them to `main`. Freezes the protocol registration for V8's `import.ts`.
-- Agent 1, machine platform. V8's daemon side from `main`: `import/bridge/**`, `service-control/**`, `legacy-keystore.ts`, `hooks.ts`, `cli/commands/import.ts`, `protocol/src/import.ts`, and `import-bridge.test.ts`. The UI import flow waits for `F4`. When V4 is code-ready, it gives V4 one audit lane.
-- Agent 2, client surfaces. V4 to code-ready and its evidence-grade gates, since V4 is now the earliest unmerged PR. Agents 1 and 3 run V4's audits and help with its lanes. After V4 is verified, V5's shell from `F4`.
-- Agent 3, providers. V6a to code-ready, with unit tests and rehearsals, then V6b from `F6`. Their evidence-grade gates wait until each is gate-ready. V7a's ACP client and V7b's Pi translation may start from `F6`, per the table. Agent 3 takes them after V6b code-ready only because it is one agent; another free slot may take them at `F6`.
-- The next free slot takes V10 from `main`, then V9 in the bridge repository. V11's `e2ee/**` port is filler for any free slot.
+*Dispatch.* The slot and wave assignments of 2026-10-11 and 2026-10-12 are retired. The order of work is the merge graph under *Dependencies* and the ready tasks on the board. Claude takes the ready task whose version is nearest the front of its chain, one PR at a time, and starts a second PR only while Codex holds the first. Bot-connected lanes stay serial across the program, and so does native service acceptance.
 
 *Critical path.* The merge graph has three independent chains after V4; the program finishes when the slowest chain passes its own acceptance and Shipping gates. V5 needs Gate L and Gate M native acceptance, a Mac GUI session for its service tests, now `clay` under the user's override, and a dedicated Linux user with a systemd user session. V10 follows the V5 shell, then V11 follows V10. V9 follows V8 and needs the published signed installer from V5, but V10 does not wait for V9. Provider work follows V6b into V6c, V6d, and V7a independently; V7a waits for neither V6c nor V6d. Each PR runs its frozen-head evidence and Shipping gates before merging.
 
@@ -212,10 +189,10 @@ Evidence-grade gates follow the merge graph. A PR is gate-ready when every merge
 *Program tracking.* From 2026-10-12 the program's state lives in GitHub issues of this repository, generated from `docs/program-graph.json` by `scripts/program-graph-sync.mjs`.
 
 - Structure. The pinned board issue #122 is the parent of one issue per version, #124 V5 to #135 V11 and #123 tooling, and of the operator issues #205 to #209. Each version issue is the parent of its task issues, one per file-disjoint partition, gate, or root handoff, and of its defect issues. `blocked by` relations carry the merge graph between versions and the dependencies between tasks. The GitHub project "Vonvon Bot v2" holds every issue.
-- Board and local web page. The root maintains pinned issue #122 with `node scripts/program-graph-sync.mjs board`; its body holds the version merge graph, a progress table, and the task dependency graph. TOOL-1 (#203) delivers `/Users/clay/vonvon-progress/index.html` as a self-contained page with no CDN. Its `refresh.mjs` reads the default branch's `docs/program-graph.json` and GitHub issues and PRs without writing to GitHub, then atomically refreshes the local page. One collapsible graph shows Version → parent issue → child issue → linked PR, with version merge and task prerequisite edges. It highlights tasks that are ready to start but lack `state:in-progress`, and labels an unproven reason for not starting as unknown. The designated local artifact owner controls the existing Paseo schedule `aa01bd1d`, hourly at `0 * * * *` in `Asia/Shanghai`; it is active. The designated owner verified first run `e897a54d-faa6-41d9-ada5-8ed043fc91e4` at `2026-10-12T13:09:11.336Z`, with a 104750-byte HTML whose embedded JSON matches its snapshot. Independent read-only data/source review passed. Full GUI interaction and final screenshot remain unverified; browser attempts stopped after a file URL refusal. Keep #203 open with that limitation recorded; static review is not full GUI acceptance. Product implementation may proceed while #203 is open.
-- State. A task issue is open or closed. The root adds `state:in-progress` when a worker takes a task and closes the issue when the partition is integrated and its tests pass. A version issue carries at most one of `state:code-ready`, `state:frozen`, and `state:verified`, and closes when the PR merges. The root changes these labels at the four transitions. A defect found mid-task gets a new issue under its version and the `version:<id>` label.
+- Board. Codex maintains pinned issue #122 with `node scripts/program-graph-sync.mjs board`; its body holds the version merge graph, a progress table, and the task dependency graph. The local progress page TOOL-1 (#203) and its refresh schedule stopped on 2026-10-13; Codex closes #203 with that reason. No other tracking surface exists.
+- State. A task issue is open or closed. Codex adds `state:in-progress` when a worker takes a task and closes the issue when the partition is integrated and its tests pass. A version issue carries at most one of `state:code-ready`, `state:frozen`, and `state:verified`, and closes when the PR merges. Codex changes these labels at the four transitions. A defect found mid-task gets a new issue under its version and the `version:<id>` label.
 - Changing the graph. A new partition, a changed dependency, or a split such as V5a and V5b is an edit to `docs/program-graph.json` followed by `node scripts/program-graph-sync.mjs sync`. The sync is idempotent: it creates missing issues, updates titles and bodies, adds links and labels, and deletes nothing. Codex may add tasks and task dependencies that change no architecture, data shape, or merge edge. A change to a merge edge goes back to Claude Code with the plan.
-- Wave 3, the assignment at this revision. Agent 2, client surfaces: V5 to a frozen head, where V5-T1, T3, T4, T5, and T6 are open and T8 and T9 are the serial native acceptance, then V10-T4 and V10-T2. Agent 3, providers: V6a to `F6` (V6a-T1) and code-ready, then V6b-T1 to T4 from `F6`. Agent 1, machine platform: V8-T2 and V8-T4 now, V10-T1 beside them, and the audit lanes for V5 and V6a. Root: V5-T7, V6b-T7, the `frozen` labels and CI dispatches, and the board. Operator items OP-1 to OP-5 are off the agents' path. OP-1, the Actions billing, blocks every merge until it is done.
+- Assignment at this revision, 2026-10-13. Claude takes over `codex/v6a-provider-core` (#117) as the first in-flight PR and drives it to handoff, folding the open design notes of #121 and #223 into it or closing them. The second slot is the V5 split: `codex/v5-desktop` (#110) is cut into task-partition PRs that each fit the size limit, starting with the partition that unblocks V10. Codex verifies #117 while Claude cuts V5. Operator items OP-2 to OP-5 stay off the critical path.
 
 ### PR mechanics, for every PR
 
