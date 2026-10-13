@@ -27,6 +27,7 @@
   ],
   "scripts": {
     "build": "tsup",
+    "build:holder": "node scripts/build-holder.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "start": "node bin/vonvon.mjs daemon run"
