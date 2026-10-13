@@ -6,11 +6,15 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "lint": "tsc -p tsconfig.json --noEmit"
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "build": "node build.mjs",
+    "start": "electron .",
+    "package:dir": "electron-builder --config electron-builder.yml --dir"
   },
   "dependencies": {
     "@vonvon/client": "0.1.0",
     "@vonvon/protocol": "0.1.0",
     "zod": "3.25.76"
-  }
+  },
+  "main": "dist/main.cjs"
 }

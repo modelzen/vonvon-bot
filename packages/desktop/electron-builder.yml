@@ -1,0 +1,40 @@
+appId: com.vonvon.bot.desktop
+productName: Vonvon Bot
+electronVersion: 44.4.5
+electronDist: ../../node_modules/electron/dist
+directories:
+  app: stage
+  output: dist/package
+files:
+  - desktop/**
+  - dist/update-config.json
+  - ui/**
+  - assets/**
+  - package.json
+  - "!node_modules/**"
+asar: true
+extraResources:
+  - from: stage/daemon
+    to: daemon
+    filter:
+      - "**/*"
+  - from: stage/ui
+    to: ui/dist
+    filter:
+      - "**/*"
+  - from: stage/daemon/node_modules
+    to: daemon/node_modules
+    filter:
+      - "**/*"
+npmRebuild: false
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - dmg
+    - zip
+linux:
+  target:
+    - AppImage
+win:
+  target:
+    - nsis
