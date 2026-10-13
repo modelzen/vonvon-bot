@@ -182,6 +182,7 @@ describe('HolderProcess on both platforms', () => {
     const closing = host.closeAll();
     expect(() => reservation.adopt({ command: NODE, args: [FAKE], env: ENV, signal: new AbortController().signal })).toThrow(/process host is closing/);
     await closing;
+    await until(() => host.snapshot().length === 0, 'unused reservation retired', WAIT);
     expect(host.snapshot()).toEqual([]);
   }, LIMIT);
 
