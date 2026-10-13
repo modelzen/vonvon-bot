@@ -2,6 +2,7 @@ import { lstat, realpath, stat } from 'node:fs/promises';
 import { lookup } from 'node:dns/promises';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
+import { checkServerIdentity, type PeerCertificate } from 'node:tls';
 import { isIP } from 'node:net';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path';
 import type { Tier } from '../model';
@@ -137,13 +138,17 @@ const remoteDeps: RemoteImageDeps = {
 export function requestPinned(url: URL, address: string, signal: AbortSignal): Promise<RemoteResponse> {
   return new Promise((resolveResponse, reject) => {
     const secure = url.protocol === 'https:';
+    const hostname = url.hostname.replace(/^\[|\]$/g, '');
+    const tls = isIP(hostname)
+      ? { servername: '', checkServerIdentity: (_: string, cert: PeerCertificate) => checkServerIdentity(hostname, cert) }
+      : { servername: hostname };
     const request = (secure ? httpsRequest : httpRequest)({
       hostname: address,
       port: url.port || (secure ? 443 : 80),
       path: `${url.pathname}${url.search}`,
       method: 'GET',
       headers: { host: url.host },
-      ...(secure ? { servername: url.hostname } : {}),
+      ...(secure ? tls : {}),
       agent: false,
       signal,
     }, response => {
