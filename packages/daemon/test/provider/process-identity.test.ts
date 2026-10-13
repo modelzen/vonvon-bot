@@ -33,6 +33,22 @@ describe('readStartToken against real processes', () => {
     expect(await readStartToken(child.pid)).toBe(token);
   }, 30_000);
 
+  it.skipIf(process.platform !== 'darwin')('keeps the same token when the daemon timezone changes', async () => {
+    const child = await sleeper();
+    const timezone = process.env.TZ;
+    try {
+      process.env.TZ = 'UTC';
+      const token = await readStartToken(child.pid);
+      expect(token).not.toBe('absent');
+      expect(token).not.toBe('unreadable');
+      process.env.TZ = 'America/Los_Angeles';
+      expect(await readStartToken(child.pid)).toBe(token);
+    } finally {
+      if (timezone === undefined) delete process.env.TZ;
+      else process.env.TZ = timezone;
+    }
+  });
+
   // Tokens are start marks with a clock resolution (Linux 10 ms ticks, macOS one second), so siblings born
   // inside one step may share a token; the contract compares tokens only for the same pid.
   it('tells apart a child born one resolution step later', async () => {
