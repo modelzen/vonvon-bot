@@ -2,6 +2,7 @@
 // Hands a PR from Claude to Codex or back, per AGENTS.md.
 //
 //   node scripts/handoff.mjs <pr> --to codex|claude --comment-file <path> [--dry-run]
+//   node scripts/handoff.mjs <pr> --to codex|claude --notify-only     resend the notice after a failed one
 //
 // State lives only on GitHub: the comment and the owner: label. Paseo only carries a notice
 // that names the PR and the comment, so a lost or repeated notice changes nothing.
@@ -40,17 +41,18 @@ export function notifyAction(sessions, pr) {
 }
 
 function parseArgs(argv) {
-  const args = { dryRun: false };
+  const args = { dryRun: false, notifyOnly: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--to') args.to = argv[++i];
     else if (arg === '--comment-file') args.commentFile = argv[++i];
     else if (arg === '--dry-run') args.dryRun = true;
+    else if (arg === '--notify-only') args.notifyOnly = true;
     else if (/^\d+$/.test(arg)) args.pr = Number(arg);
     else throw new Error(`unknown argument: ${arg}`);
   }
-  if (!args.pr || !SIDES[args.to] || !args.commentFile) {
-    throw new Error('usage: node scripts/handoff.mjs <pr> --to codex|claude --comment-file <path> [--dry-run]');
+  if (!args.pr || !SIDES[args.to] || (!args.commentFile && !args.notifyOnly)) {
+    throw new Error('usage: node scripts/handoff.mjs <pr> --to codex|claude (--comment-file <path> [--dry-run] | --notify-only)');
   }
   return args;
 }
@@ -66,26 +68,51 @@ function checkLocal(head) {
   if (local !== head.sha) throw new Error(`local HEAD ${local.slice(0, 7)} is not the PR head ${head.sha.slice(0, 7)}; push first`);
 }
 
-function main(argv) {
-  const { pr, to, commentFile, dryRun } = parseArgs(argv);
-  const from = to === 'codex' ? 'claude' : 'codex';
+function notify(pr, to, url) {
   const target = SIDES[to];
+  const paseo = ['--host', target.host];
+  const action = notifyAction(JSON.parse(run('paseo', [...paseo, 'ls', '--json'])), pr);
+  if (action.kind === 'ambiguous') throw new Error(`more than one session titled "${sessionTitle(pr)}": ${action.ids.join(', ')}`);
+  const notice = `PR #${pr} 已交给你（owner:${to}），见 ${url}。按仓库 AGENTS.md 处理，交接内容以 PR 评论为准。`;
+  if (action.kind === 'create') {
+    run('paseo', [...paseo, 'run', '-d', ...target.run, '--title', sessionTitle(pr), '--cwd', target.cwd,
+      '--new-workspace', 'worktree', '--worktree-mode', 'checkout-pr', '--pr-number', String(pr),
+      `先进入 pstack:poteto-mode。${notice}`]);
+  } else if (action.kind === 'send') {
+    run('paseo', [...paseo, 'send', action.id, '--no-wait', notice]);
+  } else {
+    const waiter = spawn('sh', ['-c', 'paseo "$@" wait "$ID" && paseo "$@" send "$ID" --no-wait "$NOTICE"', 'handoff', ...paseo], {
+      detached: true, stdio: 'ignore', env: { ...process.env, ID: action.id, NOTICE: notice },
+    });
+    waiter.unref();
+  }
+  return action;
+}
+
+function main(argv) {
+  const { pr, to, commentFile, dryRun, notifyOnly } = parseArgs(argv);
+  const from = to === 'codex' ? 'claude' : 'codex';
 
   const pull = JSON.parse(gh([`repos/${REPO}/pulls/${pr}`]));
   if (pull.state !== 'open') throw new Error(`PR #${pr} is ${pull.state}`);
   const labels = pull.labels.map((l) => l.name);
+
+  if (notifyOnly) {
+    if (!labels.includes(`owner:${to}`)) throw new Error(`PR #${pr} is not owned by ${to}; hand it over first`);
+    const action = notify(pr, to, pull.html_url);
+    console.log(`PR #${pr} → ${to}: notice ${action.kind}${action.id ? ` ${action.id}` : ''}`);
+    return;
+  }
+
   if (!labels.includes(`owner:${from}`)) {
     throw new Error(`PR #${pr} is not owned by ${from} (labels: ${labels.join(', ') || 'none'})`);
   }
   checkLocal(pull.head);
 
   const body = `${readFileSync(commentFile, 'utf8').trimEnd()}\n\n交接：${from} → ${to}，head \`${pull.head.sha.slice(0, 7)}\`。`;
-  const sessions = JSON.parse(run('paseo', ['--host', target.host, 'ls', '--json']));
-  const action = notifyAction(sessions, pr);
-  if (action.kind === 'ambiguous') throw new Error(`more than one session titled "${sessionTitle(pr)}": ${action.ids.join(', ')}`);
-
   if (dryRun) {
-    console.log(JSON.stringify({ pr, from, to, head: pull.head.sha, notify: action, comment: body }, null, 2));
+    const sessions = JSON.parse(run('paseo', ['--host', SIDES[to].host, 'ls', '--json']));
+    console.log(JSON.stringify({ pr, from, to, head: pull.head.sha, notify: notifyAction(sessions, pr), comment: body }, null, 2));
     return;
   }
 
@@ -97,20 +124,12 @@ function main(argv) {
   gh(['-X', 'POST', `repos/${REPO}/issues/${pr}/labels`, '-f', `labels[]=owner:${to}`]);
   gh(['-X', 'DELETE', `repos/${REPO}/issues/${pr}/labels/owner:${from}`]);
 
-  const notice = `PR #${pr} 已交给你（owner:${to}），见 ${comment.html_url}。按仓库 AGENTS.md 处理，交接内容以 PR 评论为准。`;
-  const paseo = ['--host', target.host];
-  if (action.kind === 'create') {
-    run('paseo', [...paseo, 'run', '-d', ...target.run, '--title', sessionTitle(pr), '--cwd', target.cwd,
-      '--worktree-mode', 'checkout-pr', '--pr-number', String(pr), `先进入 pstack:poteto-mode。${notice}`]);
-  } else if (action.kind === 'send') {
-    run('paseo', [...paseo, 'send', action.id, '--no-wait', notice]);
-  } else {
-    const waiter = spawn('sh', ['-c', 'paseo "$@" wait "$ID" && paseo "$@" send "$ID" --no-wait "$NOTICE"', 'handoff', ...paseo], {
-      detached: true, stdio: 'ignore', env: { ...process.env, ID: action.id, NOTICE: notice },
-    });
-    waiter.unref();
+  try {
+    const action = notify(pr, to, comment.html_url);
+    console.log(`PR #${pr} → ${to}: ${comment.html_url} (notice: ${action.kind}${action.id ? ` ${action.id}` : ''})`);
+  } catch (error) {
+    throw new Error(`handed over (${comment.html_url}) but the notice failed: ${error.message}\nrerun with --notify-only`);
   }
-  console.log(`PR #${pr} → ${to}: ${comment.html_url} (notice: ${action.kind}${action.id ? ` ${action.id}` : ''})`);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {

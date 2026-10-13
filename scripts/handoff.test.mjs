@@ -9,7 +9,7 @@ import { notifyAction } from './handoff.mjs';
 
 const script = join(dirname(fileURLToPath(import.meta.url)), 'handoff.mjs');
 
-function fixture({ labels, sessions, dirty = false, behind = false }) {
+function fixture({ labels, sessions, dirty = false, behind = false, paseoFails = false }) {
   const dir = mkdtempSync(join(tmpdir(), 'handoff-test-'));
   const repo = join(dir, 'repo');
   const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
@@ -20,7 +20,7 @@ function fixture({ labels, sessions, dirty = false, behind = false }) {
   if (dirty) writeFileSync(join(repo, 'new.txt'), 'x');
 
   const log = join(dir, 'calls.log');
-  const pull = { state: 'open', labels: labels.map((name) => ({ name })), head: { ref: 'claude/x', sha } };
+  const pull = { state: 'open', html_url: 'https://example/pr7', labels: labels.map((name) => ({ name })), head: { ref: 'claude/x', sha } };
   writeFileSync(join(dir, 'pull.json'), JSON.stringify(pull));
   writeFileSync(join(dir, 'sessions.json'), JSON.stringify(sessions));
   const stub = (name, body) => {
@@ -33,11 +33,11 @@ function fixture({ labels, sessions, dirty = false, behind = false }) {
   *"/pulls/"*) cat ${JSON.stringify(join(dir, 'pull.json'))} ;;
   *) echo '[]' ;;
 esac`);
-  stub('paseo', `case "$*" in *" ls "*) cat ${JSON.stringify(join(dir, 'sessions.json'))} ;; esac`);
+  stub('paseo', `case "$*" in *" ls "*) cat ${JSON.stringify(join(dir, 'sessions.json'))} ;; *) ${paseoFails ? 'exit 1' : 'true'} ;; esac`);
 
   const comment = join(dir, 'comment.md');
   writeFileSync(comment, 'Linux 证据与验收要点。\n');
-  const handoff = (...extra) => spawnSync('node', [script, '7', '--to', 'codex', '--comment-file', comment, ...extra], {
+  const handoff = (...extra) => spawnSync('node', [script, '7', '--to', 'codex', ...(extra.includes('--notify-only') ? [] : ['--comment-file', comment]), ...extra], {
     cwd: repo, encoding: 'utf8', env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
   });
   const calls = () => { try { return readFileSync(log, 'utf8').trim().split('\n'); } catch { return []; } };
@@ -73,7 +73,7 @@ test('with no session for the PR, a handoff creates one titled after it on the r
     assert.equal(result.status, 0, result.stderr);
     const create = f.calls().find((c) => c.startsWith('paseo') && c.includes(' run '));
     assert.ok(create, 'a session is created');
-    assert.match(create, /--provider codex\/gpt-6\.1-sol .*--title PR #7 .*--worktree-mode checkout-pr --pr-number 7/);
+    assert.match(create, /--provider codex\/gpt-6\.1-sol .*--title PR #7 .*--new-workspace worktree --worktree-mode checkout-pr --pr-number 7/);
   } finally { f.cleanup(); }
 });
 
@@ -102,4 +102,22 @@ test('--dry-run reads and reports but writes nothing', () => {
     assert.equal(JSON.parse(result.stdout).notify.kind, 'create');
     assert.ok(!f.calls().some((c) => c.includes('-X') || c.includes(' run ') || c.includes(' send ')));
   } finally { f.cleanup(); }
+});
+
+test('a failed notice leaves the handoff done and points to --notify-only, which resends without writing', () => {
+  const f = fixture({ labels: ['owner:claude'], sessions: [{ name: 'PR #7', status: 'idle', shortId: 'abc' }], paseoFails: true });
+  try {
+    const result = f.handoff();
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /handed over .*\nrerun with --notify-only/s);
+    assert.ok(f.calls().some((c) => c.includes('labels[]=owner:codex')), 'the label still moved');
+  } finally { f.cleanup(); }
+
+  const g = fixture({ labels: ['owner:codex'], sessions: [{ name: 'PR #7', status: 'idle', shortId: 'abc' }] });
+  try {
+    const result = g.handoff('--notify-only');
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(g.calls().some((c) => c.startsWith('paseo --host 100.127.134.58:6767 send abc --no-wait PR #7 已交给你')));
+    assert.ok(!g.calls().some((c) => c.includes('-X')), 'no GitHub write');
+  } finally { g.cleanup(); }
 });
