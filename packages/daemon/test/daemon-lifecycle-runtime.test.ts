@@ -39,7 +39,6 @@ let stopGate: ReturnType<typeof gate>;
 let started: ReturnType<typeof gate>;
 let settled: boolean;
 beforeEach(() => {
-  vi.useFakeTimers();
   f.root = realpathSync(mkdtempSync(join(tmpdir(), 'vonvon-lifecycle-runtime-')));
   f.calls = [];
   closeGate = gate(); stopGate = gate(); started = gate(); settled = false;
@@ -66,7 +65,7 @@ beforeEach(() => {
 afterEach(async () => {
   Object.defineProperty(owned, 'exitCode', { value: 0, configurable: true }); owned.emit('exit', 0, null);
   stopGate.release(); closeGate.release();
-  await vi.advanceTimersByTimeAsync(1000);
+  if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(1000);
   await running;
   owned.removeAllListeners();
   vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks();
@@ -74,14 +73,19 @@ afterEach(async () => {
   rmSync(f.root, { recursive: true, force: true });
 });
 
-it('retains real PID and host mutex after cleanup rejection until child death and listener closure', async () => {
+it.each([false, true])('retains real PID and host mutex after cleanup rejection until child death and listener closure, transient contention=%s', async contention => {
   const owner: ShutdownControl = {
     requested: false, waitForRequest: () => { started.release(); return stopGate.promise; },
     requestStop: stopGate.release, requestRestart() {}, dispose() {},
     completeShutdown: async release => release(),
   };
+  if (contention) {
+    const contender = await acquireMutex(f.root, 'host', 0);
+    void settleIO(100).then(() => closeMutex(contender));
+  }
   running = runHostRuntime({ managed: false, control: owner }).then(() => { settled = true; }, error => { settled = true; return error; });
   await Promise.race([started.promise, running.then(error => { throw error ?? new Error('Host ended before readiness'); })]);
+  vi.useFakeTimers();
   expect(existsSync(join(f.root, 'daemon.pid'))).toBe(true);
   owned.emit('message', { fcb: 'fcb.owned-work', pids: [], settled: true });
   stopGate.release();
