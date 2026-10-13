@@ -24,6 +24,7 @@ jobs:
       - name: Verify exact source
         run: git rev-parse HEAD
       - name: Seed an owned prior Run value for restoration coverage
+        id: seed
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -36,7 +37,7 @@ jobs:
         working-directory: packages/desktop
         run: npx vitest run test/windows-native.test.ts
       - name: Verify exact prior value restoration and remove only the owned value
-        if: always()
+        if: always() && steps.seed.outcome == 'success'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
