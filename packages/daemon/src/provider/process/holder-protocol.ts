@@ -26,14 +26,21 @@ export type HolderReceipt =
 export type ReceiptLine = HolderReceipt | { kind: 'malformed'; line: string };
 
 const NONCE = /^[A-Za-z0-9-]{1,32}$/;
-const DECIMAL = /^\d+$/;
+const DECIMAL = /^\d{1,10}$/;
+const U32 = 0xffff_ffff;
 const COMMANDS: readonly string[] = ['launch', 'go', 'abandon', 'term', 'kill', 'reap', 'probe', 'exit'];
 const REFUSALS: readonly string[] = ['reaped', 'not-launched', 'already-created', 'already-sent', 'cancelled'] satisfies RefusalReason[];
 
 export const newNonce = (): Nonce => randomUUID().replaceAll('-', '');
 
 const isNonce = (value: string | undefined): value is Nonce => value !== undefined && NONCE.test(value);
-const decimal = (value: string | undefined): number | undefined => value !== undefined && DECIMAL.test(value) ? Number(value) : undefined;
+/** Pids, exit codes, and errnos are DWORD-sized on Windows, so every field fits in [min, U32]. */
+function decimal(value: string | undefined, min = 0, max = U32): number | undefined {
+  if (value === undefined || !DECIMAL.test(value)) return undefined;
+  const parsed = Number(value);
+  return parsed >= min && parsed <= max ? parsed : undefined;
+}
+const pidOf = (value: string | undefined): number | undefined => decimal(value, 1);
 const isRung = (value: string | undefined): value is Rung => value === 'term' || value === 'kill';
 const isRefusal = (value: string): value is Exclude<RefusalReason, number> => REFUSALS.includes(value);
 const isCommand = (value: string | undefined): value is CommandName => value !== undefined && COMMANDS.includes(value);
@@ -44,17 +51,17 @@ function nonceOnly<K extends 'cancelled' | 'job-collision' | 'reaped' | 'not-rea
 
 const PARSERS: Record<string, (fields: string[]) => HolderReceipt | undefined> = {
   hello: ([name, version, ...rest]) => {
-    const parsed = decimal(version);
+    const parsed = decimal(version, 1, 0xffff);
     return name === 'vonvon-holder' && parsed !== undefined && rest.length === 0 ? { kind: 'hello', version: parsed } : undefined;
   },
   created: ([nonce, pid, ...rest]) => {
-    const parsed = decimal(pid);
+    const parsed = pidOf(pid);
     return isNonce(nonce) && parsed !== undefined && rest.length === 0 ? { kind: 'created', nonce, pid: parsed } : undefined;
   },
   ready: ([nonce, pid, ...rest]) => {
     if (!isNonce(nonce) || rest.length > 0) return undefined;
     if (pid === undefined) return { kind: 'ready', nonce };
-    const parsed = decimal(pid);
+    const parsed = pidOf(pid);
     return parsed === undefined ? undefined : { kind: 'ready', nonce, pid: parsed };
   },
   'launch-failed': fields => {
@@ -135,16 +142,16 @@ export function encodeCommand(command: HolderCommand): Buffer {
   ]);
 }
 
-/** The signal truth for an issued term or kill. undefined means drop the receipt: it answers some other command. */
+/** Which receipt kinds may answer each rung: the Windows supervisor answers `term` only with `accepted`, POSIX never does. */
+const SIGNAL_RECEIPTS: Record<HostPlatform, Record<Rung, ReadonlySet<'sent' | 'refused' | 'accepted'>>> = {
+  posix: { term: new Set(['sent', 'refused']), kill: new Set(['sent', 'refused']) },
+  win32: { term: new Set(['accepted']), kill: new Set(['sent', 'refused']) },
+};
+
+/** The signal truth for an issued term or kill. undefined means drop the receipt: it answers some other command or breaks the platform's grammar. */
 export function validateSignalReceipt(issued: { command: Rung; nonce: Nonce }, receipt: ReceiptLine, platform: HostPlatform): SignalResult | undefined {
-  switch (receipt.kind) {
-    case 'sent':
-      return receipt.rung === issued.command && receipt.nonce === issued.nonce ? 'sent' : undefined;
-    case 'refused':
-      return receipt.command === issued.command && receipt.nonce === issued.nonce ? 'refused' : undefined;
-    case 'accepted':
-      return platform === 'win32' && receipt.rung === 'term' && issued.command === 'term' && receipt.nonce === issued.nonce ? 'accepted' : undefined;
-    default:
-      return undefined;
-  }
+  if (receipt.kind !== 'sent' && receipt.kind !== 'refused' && receipt.kind !== 'accepted') return undefined;
+  const rung = receipt.kind === 'refused' ? receipt.command : receipt.rung;
+  if (rung !== issued.command || receipt.nonce !== issued.nonce || !SIGNAL_RECEIPTS[platform][issued.command].has(receipt.kind)) return undefined;
+  return receipt.kind;
 }

@@ -1,10 +1,10 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import { hostBootMs, readStartToken, startTokenFromFileTime } from '../../src/provider/process/identity';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { hostBootMs, readDarwin, readStartToken, startTokenFromFileTime } from '../../src/provider/process/identity';
 
 const children: ChildProcess[] = [];
 afterEach(async () => {
@@ -25,14 +25,20 @@ async function sleeper(): Promise<ChildProcess & { pid: number }> {
 }
 
 describe('readStartToken against real processes', () => {
-  it('reads a live child the same way twice and tells a second child apart', async () => {
-    const first = await sleeper();
-    const token = await readStartToken(first.pid);
+  it('reads a live child the same way twice', async () => {
+    const child = await sleeper();
+    const token = await readStartToken(child.pid);
     expect(token).not.toBe('absent');
     expect(token).not.toBe('unreadable');
-    expect(await readStartToken(first.pid)).toBe(token);
-    // A token is a start mark (Linux clock ticks, macOS seconds), so the second child must be born later.
-    await new Promise(resolve => setTimeout(resolve, 1100));
+    expect(await readStartToken(child.pid)).toBe(token);
+  }, 30_000);
+
+  // Tokens are start marks with a clock resolution (Linux 10 ms ticks, macOS one second), so siblings born
+  // inside one step may share a token; the contract compares tokens only for the same pid.
+  it('tells apart a child born one resolution step later', async () => {
+    const first = await sleeper();
+    const token = await readStartToken(first.pid);
+    await new Promise(resolve => setTimeout(resolve, process.platform === 'darwin' ? 1100 : 50));
     const second = await sleeper();
     expect(await readStartToken(second.pid)).not.toBe(token);
   }, 30_000);
@@ -71,6 +77,42 @@ describe('readStartToken against real processes', () => {
     }
     expect(await readStartToken(child.pid!)).toBe(startTokenFromFileTime(printed.trim()));
   }, 60_000);
+});
+
+describe.skipIf(process.platform === 'win32')('the macOS reader against a scripted ps', () => {
+  let dir: string;
+  let path: string | undefined;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'vonvon-ps-')); path = process.env.PATH; });
+  afterEach(() => { process.env.PATH = path; rmSync(dir, { recursive: true, force: true }); });
+  function fakePs(script: string): void {
+    writeFileSync(join(dir, 'ps'), `#!/bin/sh\n${script}\n`);
+    chmodSync(join(dir, 'ps'), 0o755);
+    process.env.PATH = `${dir}:${path}`;
+  }
+
+  it('reads a ps failure on a live pid as unreadable, never absent', async () => {
+    const child = await sleeper();
+    fakePs("echo 'simulated ps operational failure' >&2; exit 1");
+    expect(await readDarwin(child.pid)).toBe('unreadable');
+    fakePs('exit 1');
+    expect(await readDarwin(child.pid)).toBe('unreadable');
+  });
+
+  it('reads absent only when the kernel has no such pid', async () => {
+    const child = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
+    children.push(child);
+    await once(child, 'exit');
+    fakePs('exit 1');
+    expect(await readDarwin(child.pid!)).toBe('absent');
+  });
+
+  it('turns lstart output into a token and output on stderr into unreadable', async () => {
+    const child = await sleeper();
+    fakePs("echo 'Tue Oct 13 20:26:47 2026'");
+    expect(await readDarwin(child.pid)).toBe('darwin:Tue Oct 13 20:26:47 2026');
+    fakePs("echo 'Tue Oct 13 20:26:47 2026'; echo warning >&2");
+    expect(await readDarwin(child.pid)).toBe('unreadable');
+  });
 });
 
 describe('host boot time', () => {

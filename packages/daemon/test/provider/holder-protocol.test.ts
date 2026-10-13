@@ -58,6 +58,8 @@ describe('ReceiptParser', () => {
     ['probe-unknown n 1', { kind: 'probe-unknown', nonce: 'n', errno: 1 }],
     ['provider-exit 3 -', { kind: 'provider-exit', code: 3, signal: null }],
     ['empty n', { kind: 'empty', nonce: 'n' }],
+    ['created n 4294967295', { kind: 'created', nonce: 'n', pid: 4294967295 }],
+    ['provider-exit 3221225477 -', { kind: 'provider-exit', code: 3221225477, signal: null }],
   ])('parses %j', (line, receipt) => {
     expect(parseReceipt(line)).toEqual(receipt);
   });
@@ -66,6 +68,8 @@ describe('ReceiptParser', () => {
     'bogus n', '', 'sent term', 'sent hup n', 'sent term n extra', 'sent  term n', 'created n -4',
     'refused term n maybe', 'refused fork n 1', 'provider-exit 1', 'provider-exit x -', 'provider-exit - kill',
     'reaped ' + 'x'.repeat(33), 'live n\r', 'empty né', 'hello other 1', 'launch-failed n a b 1', 'toString n',
+    'created n 0', 'created n ' + '9'.repeat(400), 'created n 4294967296', 'ready n 0', 'hello vonvon-holder 0',
+    'hello vonvon-holder 65536', 'provider-exit 4294967296 -', 'probe-unknown n 4294967296', 'refused kill n 99999999999',
   ])('reports %j as malformed', line => {
     expect(parseReceipt(line)).toEqual({ kind: 'malformed', line });
   });
@@ -75,22 +79,25 @@ describe('validateSignalReceipt', () => {
   const term = { command: 'term' as const, nonce: 't1' };
   const kill = { command: 'kill' as const, nonce: 'k1' };
 
-  it('maps sent and refused only for the issued command and nonce', () => {
-    for (const platform of ['posix', 'win32'] as const) {
-      expect(validateSignalReceipt(kill, parseReceipt('sent kill k1'), platform)).toBe('sent');
-      expect(validateSignalReceipt(kill, parseReceipt('refused kill k1 1'), platform)).toBe('refused');
-      expect(validateSignalReceipt(term, parseReceipt('refused term t1 reaped'), platform)).toBe('refused');
-      expect(validateSignalReceipt(kill, parseReceipt('sent kill t1'), platform)).toBeUndefined();
-      expect(validateSignalReceipt(kill, parseReceipt('sent term k1'), platform)).toBeUndefined();
-      expect(validateSignalReceipt(kill, parseReceipt('refused term k1 1'), platform)).toBeUndefined();
-    }
+  it('maps sent and refused on POSIX only for the issued rung and nonce', () => {
+    expect(validateSignalReceipt(kill, parseReceipt('sent kill k1'), 'posix')).toBe('sent');
+    expect(validateSignalReceipt(kill, parseReceipt('refused kill k1 1'), 'posix')).toBe('refused');
+    expect(validateSignalReceipt(term, parseReceipt('sent term t1'), 'posix')).toBe('sent');
+    expect(validateSignalReceipt(term, parseReceipt('refused term t1 reaped'), 'posix')).toBe('refused');
+    expect(validateSignalReceipt(kill, parseReceipt('sent kill t1'), 'posix')).toBeUndefined();
+    expect(validateSignalReceipt(kill, parseReceipt('sent term k1'), 'posix')).toBeUndefined();
+    expect(validateSignalReceipt(kill, parseReceipt('refused term k1 1'), 'posix')).toBeUndefined();
+    expect(validateSignalReceipt(term, parseReceipt('accepted term t1'), 'posix')).toBeUndefined();
   });
 
-  it('accepts accepted only for term on Windows', () => {
+  it('on Windows answers term only with accepted and kill only with sent or refused', () => {
     expect(validateSignalReceipt(term, parseReceipt('accepted term t1'), 'win32')).toBe('accepted');
-    expect(validateSignalReceipt(term, parseReceipt('accepted term t1'), 'posix')).toBeUndefined();
-    expect(validateSignalReceipt(kill, parseReceipt('accepted kill k1'), 'win32')).toBeUndefined();
+    expect(validateSignalReceipt(term, parseReceipt('sent term t1'), 'win32')).toBeUndefined();
+    expect(validateSignalReceipt(term, parseReceipt('refused term t1 5'), 'win32')).toBeUndefined();
     expect(validateSignalReceipt(term, parseReceipt('accepted term other'), 'win32')).toBeUndefined();
+    expect(validateSignalReceipt(kill, parseReceipt('sent kill k1'), 'win32')).toBe('sent');
+    expect(validateSignalReceipt(kill, parseReceipt('refused kill k1 5'), 'win32')).toBe('refused');
+    expect(validateSignalReceipt(kill, parseReceipt('accepted kill k1'), 'win32')).toBeUndefined();
   });
 
   it('drops unrelated and malformed receipts', () => {

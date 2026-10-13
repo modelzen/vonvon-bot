@@ -16,7 +16,12 @@ export const EXIT_HOLD_START: ExitHoldState = { phase: 'open' };
 
 export function stepExitHold(state: ExitHoldState, input: ExitHoldInput, now: number): ExitHoldStep {
   if (state.phase === 'exited') return { state, facts: [] };
-  if (input.kind === 'exit') return { state: { phase: 'exited' }, facts: [{ kind: 'exit', exit: input.exit }] };
+  if (input.kind === 'exit') {
+    const exit: ProcessFact = { kind: 'exit', exit: input.exit };
+    // The timer may fire after a late exit is already queued; the hold is judged by `now`, not by tick order.
+    const lost = state.phase === 'held' && now >= state.until;
+    return { state: { phase: 'exited' }, facts: lost ? [{ kind: 'transport-lost' }, exit] : [exit] };
+  }
   switch (state.phase) {
     case 'open': {
       if (input.kind === 'tick') return { state, facts: [] };

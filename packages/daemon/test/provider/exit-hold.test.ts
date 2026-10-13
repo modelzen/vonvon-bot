@@ -37,6 +37,12 @@ describe('exit-report hold', () => {
       .toEqual([{ kind: 'transport-lost' }, { kind: 'exit', exit: crash }]);
   });
 
+  it('reports transport-lost before a late exit that arrives ahead of the overdue tick', () => {
+    const held = stepExitHold(EXIT_HOLD_START, eof, 0);
+    expect(stepExitHold(held.state, exit(), EXIT_REPORT_HOLD_MS + 1).facts).toEqual([{ kind: 'transport-lost' }, { kind: 'exit', exit: crash }]);
+    expect(stepExitHold(held.state, exit(), EXIT_REPORT_HOLD_MS - 1).facts).toEqual([{ kind: 'exit', exit: crash }]);
+  });
+
   it('does not report transport-lost a moment before the hold ends', () => {
     const held = stepExitHold(EXIT_HOLD_START, eof, 0);
     expect(held.deadline).toBe(EXIT_REPORT_HOLD_MS);
