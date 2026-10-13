@@ -25,15 +25,15 @@
     {
       "id": "V6a",
       "title": "V6a provider 核心、进程托管与出站门",
-      "branch": "claude/v6a-windows-supervisor",
-      "pr": 262,
+      "branch": "claude/v6a-process-host-wire",
+      "pr": 266,
       "owner": "providers",
       "mergeAfter": [
         "V4"
       ],
       "acceptance": "Mac 和 Linux 主机跑进程测试，飞书测试 Bot 跑上传 lane",
       "plan": "Provider core, process host, and outbound gate (V6a)",
-      "note": "按 plan.md V6a 的 Split 段拆成八个 PR（第 6 块再拆为 6a、6b、6c），依次开、依次合，本节点指向当前在飞的一个（6b Windows 监管进程；1/6 #237、2/6 #241、3/6 #244、4/6 #249、5/6 #255、6a #259 已合入）。拆分来源 #117。和 V5 谁先验完谁先合。6c 合入时发布冻结点 F6。"
+      "note": "按 plan.md V6a 的 Split 段拆成九个 PR（第 6 块再拆为 6a、6b、6c、6d），依次开、依次合，本节点指向当前在飞的一个（6c ProcessHost；1/6 #237、2/6 #241、3/6 #244、4/6 #249、5/6 #255、6a #259、6b #262 已合入）。拆分来源 #117。和 V5 谁先验完谁先合。6d 合入时发布冻结点 F6。"
     },
     {
       "id": "V6b",

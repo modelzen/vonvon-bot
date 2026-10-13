@@ -24,7 +24,7 @@ beforeEach(async () => {
 // （spawn/init/thread-start 计时、interrupt 终态）见 test/probe-appserver.mjs。
 // 假 codex app-server 在所有平台通过真实可执行入口运行。
 const FAKE_SERVER = `#!/usr/bin/env node
-require('fs').appendFileSync(__filename + '.count', 'run\\n');
+require('fs').appendFileSync(__filename + '.count', process.pid + '\\n');
 let buf = '';
 const send = (obj) => process.stdout.write(JSON.stringify(obj) + '\\n');
 process.stdin.on('data', (d) => {
@@ -55,7 +55,7 @@ process.stdin.on('data', (d) => {
       m === 'model/list' ? { data: [{ id: 'pool-model', isDefault: true }] } :
       m === 'thread/list' ? { data: [{ id: 't1', preview: 'hi', createdAt: 1, updatedAt: 2 }] } :
       m === 'thread/read' ? { thread: { turns: [] } } :
-      m === 'thread/start' ? { thread: { id: 'th_real' } } :
+      m === 'thread/start' ? { thread: { id: 'th_' + process.pid } } :
       {};
     send({ jsonrpc: '2.0', id: msg.id, result });
   }
@@ -67,20 +67,20 @@ const dirs: string[] = [];
 let prevEnv: string | undefined;
 
 /** 建一个假 codex，并把 CODEX_BIN 指过去；afterEach 统一关进程、删目录、还原 env。 */
-function makeFakeCodex(): { bin: string; runs: () => number } {
+function makeFakeCodex(): { bin: string; runs: () => number; pids: () => number[] } {
   const dir = mkdtempSync(join(tmpdir(), 'appserver-pool-'));
   dirs.push(dir);
   const { bin, script } = writeNodeExecutable(dir, 'codex', FAKE_SERVER);
   prevEnv = process.env.CODEX_BIN;
   process.env.CODEX_BIN = bin;
-  const runs = (): number => {
+  const pids = (): number[] => {
     try {
-      return readFileSync(`${script}.count`, 'utf8').trim().split('\n').filter(Boolean).length;
+      return readFileSync(`${script}.count`, 'utf8').trim().split('\n').filter(Boolean).map(Number);
     } catch {
-      return 0;
+      return [];
     }
   };
-  return { bin, runs };
+  return { bin, runs: () => pids().length, pids };
 }
 
 afterEach(async () => {
@@ -153,7 +153,7 @@ describe('utility client 复用与出错即重建（M-2）', () => {
 
 describe('容量 1 预热池（M-2）', () => {
   it('补位→取走命中；池清空后再取扑空', async () => {
-    const { bin, runs } = makeFakeCodex();
+    const { bin, runs, pids } = makeFakeCodex();
     await refillWarmPool();
     expect(runs()).toBe(1);
 
@@ -163,7 +163,7 @@ describe('容量 1 预热池（M-2）', () => {
 
     // 取走的热进程功能完好：真实 thread/start 直接可用
     const res = await client!.request<{ thread: { id: string } }>('thread/start', { cwd: '/p' });
-    expect(res.thread.id).toBe('th_real');
+    expect(res.thread.id).toBe(`th_${pids()[0]}`);
     expect(runs()).toBe(1); // 全程同一个进程
     await client!.close();
   });
@@ -191,25 +191,30 @@ describe('容量 1 预热池（M-2）', () => {
   });
 
   it('backend.startThread：冷路径触发补位，下一个会话复用热进程', async () => {
-    const { bin, runs } = makeFakeCodex();
+    const { bin, runs, pids } = makeFakeCodex();
     const cwd = join(bin, '..'); // 真实存在的目录（冷路径 spawn 的 cwd 必须存在）
     const backend = new CodexAppServerBackend();
 
     const t1 = await backend.startThread({ cwd });
-    expect(t1.sessionId).toBe('th_real');
-    // 冷 spawn(1) + 异步补位(2)
-    await vi.waitFor(() => expect(runs()).toBe(2));
+    let t2: typeof t1 | undefined;
+    try {
+      // 先观察 backend 已发起补位，再等待这个在飞的预热完成。
+      await vi.waitFor(() => expect(runs()).toBe(2), { timeout: 5000 });
+      await refillWarmPool();
+      const coldPid = Number(t1.sessionId.slice('th_'.length));
+      expect(pids()).toContain(coldPid);
+      const warmPids = pids().filter((pid) => pid !== coldPid);
+      expect(warmPids).toHaveLength(1);
 
-    const t2 = await backend.startThread({ cwd });
-    expect(t2.sessionId).toBe('th_real');
-    // 第二个会话取走热进程（不新 spawn），随后补位把总数推到 3——且只到 3：
-    // 若它走了冷路径，这里会出现第 4 个进程
-    await vi.waitFor(() => expect(runs()).toBe(3));
-    await new Promise((r) => setTimeout(r, 150));
-    expect(runs()).toBe(3);
-
-    await Promise.allSettled([t1.close(), t2.close()]);
-  });
+      t2 = await backend.startThread({ cwd });
+      expect(t2.sessionId).toBe(`th_${warmPids[0]}`);
+      await vi.waitFor(() => expect(runs()).toBe(3), { timeout: 5000 });
+      await refillWarmPool();
+      expect(runs()).toBe(3);
+    } finally {
+      await Promise.allSettled([t1.close(), t2?.close()]);
+    }
+  }, 30_000);
 });
 
 it('bounds a missing RPC response without killing unrelated requests', async () => {
