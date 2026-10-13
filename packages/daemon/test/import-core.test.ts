@@ -87,26 +87,25 @@ it('rejects a mismatched HEAD without creating the destination', async () => {
   await expect(readdir(f.destination)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
-it('converges after interruption at each publication and preserves unknown staging directories', { timeout: process.platform === 'win32' ? 20_000 : 5_000 }, async () => {
+it.each([0, 1, 2])('converges after interruption at publication %i and preserves unknown staging directories', { timeout: process.platform === 'win32' ? 20_000 : 5_000 }, async count => {
   const f = await fixture(); expect((await f.run()).code).toBe(0);
   const manifest = manifestSchema.parse(JSON.parse(await readFile(join(f.destination, 'import-core.json'), 'utf8')));
-  for (let count = 0; count < manifest.files.length; count++) {
-    await rm(f.destination, { recursive: true }); await mkdir(f.destination);
-    await writeFile(join(f.destination, 'import-core.json'), JSON.stringify({ ...manifest, phase: 'seeding' }));
-    for (const file of manifest.files.slice(0, count)) {
-      const sourcePath = file.path === 'LICENSE.bridge' ? 'LICENSE' : file.path;
-      const content = await readFile(join(f.source, sourcePath));
-      expect(createHash('sha256').update(content).digest('hex')).toBe(file.sha256);
-      await mkdir(join(f.destination, sourcePath === 'LICENSE' ? '.' : sourcePath.split('/')[0] ?? '.'), { recursive: true });
-      await writeFile(join(f.destination, file.path), content); await chmod(join(f.destination, file.path), 0o644);
-    }
-    await mkdir(join(f.destination, '.import-ABC123')); await writeFile(join(f.destination, '.import-ABC123/abandoned'), 'partial');
-    expect((await f.run()).code).toBe(0);
-    expect((await readdir(f.destination)).filter(name => name.startsWith('.import-'))).toEqual(['.import-ABC123']);
-    expect(await readFile(join(f.destination, '.import-ABC123/abandoned'), 'utf8')).toBe('partial');
-    await expectCompleteSeed(f);
-    expect(manifestSchema.parse(JSON.parse(await readFile(join(f.destination, 'import-core.json'), 'utf8'))).phase).toBe('complete');
+  expect(manifest.files).toHaveLength(3);
+  await rm(f.destination, { recursive: true }); await mkdir(f.destination);
+  await writeFile(join(f.destination, 'import-core.json'), JSON.stringify({ ...manifest, phase: 'seeding' }));
+  for (const file of manifest.files.slice(0, count)) {
+    const sourcePath = file.path === 'LICENSE.bridge' ? 'LICENSE' : file.path;
+    const content = await readFile(join(f.source, sourcePath));
+    expect(createHash('sha256').update(content).digest('hex')).toBe(file.sha256);
+    await mkdir(join(f.destination, sourcePath === 'LICENSE' ? '.' : sourcePath.split('/')[0] ?? '.'), { recursive: true });
+    await writeFile(join(f.destination, file.path), content); await chmod(join(f.destination, file.path), 0o644);
   }
+  await mkdir(join(f.destination, '.import-ABC123')); await writeFile(join(f.destination, '.import-ABC123/abandoned'), 'partial');
+  expect((await f.run()).code).toBe(0);
+  expect((await readdir(f.destination)).filter(name => name.startsWith('.import-'))).toEqual(['.import-ABC123']);
+  expect(await readFile(join(f.destination, '.import-ABC123/abandoned'), 'utf8')).toBe('partial');
+  await expectCompleteSeed(f);
+  expect(manifestSchema.parse(JSON.parse(await readFile(join(f.destination, 'import-core.json'), 'utf8'))).phase).toBe('complete');
 });
 
 it('refuses divergent seeding and parent symlinks without modifying external files', async () => {
