@@ -373,12 +373,14 @@ describe.skipIf(PLATFORM !== 'win32')('ProcessHost on Windows', () => {
     const host = newHost(dir);
     expect(host.available()).toBe(true);
     const { hosted, pid, facts } = await spawnFake(host, [], dir);
+    const holderPid = host.snapshot()[0]?.holderPid;
     expect(ledgerOf(dir)).toMatchObject({ kind: 'ok', records: [{ stage: 'running', provider: { pid }, control: { jobName: expect.stringMatching(/^Local\\vonvon-/) } }] });
     expect(await hosted.term()).toBe('accepted');
     expect(await hosted.kill()).toBe('sent');
     await until(() => host.snapshot().length === 0, 'record gone after kill', 20_000);
     expect(alive(pid)).toBe(false);
     expect(facts[0]).toMatchObject({ kind: 'exit', exit: { observed: 'parent' } });
+    await until(() => holderPid !== undefined && !alive(holderPid), 'supervisor exit after kill');
   }, 120_000);
 
   it('recovers an attempting record from an earlier boot through its Job name and session: a sealed supervisor with no Job is gone', async () => {

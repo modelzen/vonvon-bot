@@ -1,12 +1,5 @@
 import type { ServiceStatus } from './common';
 import {
-  installLaunchd,
-  restartLaunchd,
-  statusLaunchd,
-  tailLaunchdLogs,
-  uninstallLaunchd,
-} from './launchd';
-import {
   installSystemd,
   restartSystemd,
   statusSystemd,
@@ -25,21 +18,11 @@ export interface ServiceAdapter {
 }
 
 /**
- * The background-service adapter for the current platform: launchd on macOS,
- * systemd (user units) on Linux/WSL. Throws on any other platform, Windows
- * included, until the Vonvon Windows service lands.
+ * The background-service adapter for the current platform: systemd (user
+ * units) on Linux/WSL. Throws on every other platform until the Vonvon
+ * launchd and Windows services land.
  */
 export function getServiceAdapter(): ServiceAdapter {
-  if (process.platform === 'darwin') {
-    return {
-      install: installLaunchd,
-      uninstall: uninstallLaunchd,
-      status: async () => statusLaunchd(),
-      restart: restartLaunchd,
-      logs: tailLaunchdLogs,
-    };
-  }
-
   if (process.platform === 'linux') {
     return {
       install: installSystemd,
@@ -51,7 +34,7 @@ export function getServiceAdapter(): ServiceAdapter {
   }
 
   throw new Error(
-    'service：当前平台暂不支持后台服务（仅 macOS launchd / Linux systemd）。' +
+    'service：当前平台暂不支持后台服务（仅 Linux systemd）。' +
       '请用 `vonvon daemon start` 和 `vonvon daemon stop`。',
   );
 }
