@@ -69,7 +69,12 @@ export class RunChannel {
     if (this.state.phase === 'settled') return;
     const { state, effects } = stepTurn(this.state, input, this.options.profile, Date.now());
     this.state = state;
-    for (const effect of effects) this.execute(effect);
+    // An effect may call back synchronously into this channel. Once that moves the state on, the newer input has
+    // run its own effects and outcome, so this transition's remaining effects are stale. rearm() reads this.state.
+    for (const effect of effects) {
+      if (this.state !== state) return;
+      this.execute(effect);
+    }
     if (state.phase === 'settled') this.finish(state.outcome);
     else this.rearm();
   }
@@ -144,6 +149,15 @@ export class RunChannel {
       case 'step': {
         if (event.lane.kind === 'main') { this.append(event); return; }
         const agent = this.ledger.recordStep(event.lane.id, event.step);
+        if (agent) this.append({ type: 'subagent', agent });
+        return;
+      }
+      case 'text':
+      case 'text-final': {
+        if (event.lane.kind === 'main') { this.append(event); return; }
+        if (event.channel === 'reasoning') return;
+        const final = event.type === 'text-final';
+        const agent = this.ledger.recordAnswer(event.lane.id, event.itemId, final ? event.text : event.delta, final);
         if (agent) this.append({ type: 'subagent', agent });
         return;
       }

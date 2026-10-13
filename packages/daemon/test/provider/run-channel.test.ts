@@ -119,6 +119,37 @@ describe('RunChannel: the stop ladder against the process port', () => {
     expect(await stopped).toEqual({ state: 'interrupted', by: 'user', tree: 'unconfirmed' });
   });
 
+  it.each(['stopSubagent', 'interrupt'] as const)('runs no stale effect, timer, or second outcome after a synchronous %s settles the run', async settles => {
+    const process = fakeProcess();
+    const interrupts: (TurnId | undefined)[] = [];
+    const run: RunChannel = new RunChannel({ id: 'run-1', providerSessionId: 'session-1', profile: claude, session: {
+      process,
+      interrupt: async id => { interrupts.push(id); if (settles === 'interrupt') run.sink.verdict({ kind: 'completed' }); },
+      stopSubagent: async () => { if (settles === 'stopSubagent') run.sink.verdict({ kind: 'completed' }); },
+    } });
+    run.sink.emit({ type: 'subagent', agent: child() });
+    run.sink.emit({ type: 'started', turnId });
+    expect(await run.stop('user')).toEqual({ state: 'completed' });
+    expect(interrupts, 'an interrupt queued behind the settling callback is not sent').toEqual(settles === 'interrupt' ? [turnId] : []);
+    expect(types(await drain(run))).toEqual(['session', 'subagent', 'started', 'subagent', 'outcome']);
+    expect(vi.getTimerCount(), 'no timer armed after settlement').toBe(0);
+  });
+
+  it.each([[false, ['term', 'kill']], [true, ['term']]] as const)('replays overdue rungs on a late tick, stopping once a synchronous exit settles (%s)', async (exitOnTerm, calls) => {
+    const process = fakeProcess({ term: 'silent', kill: 'silent' });
+    const term = () => {
+      if (exitOnTerm) process.publish({ kind: 'exit', exit: { observed: 'parent', code: null, signal: 'SIGTERM' } });
+      return process.term();
+    };
+    const run = new RunChannel({ id: 'run-1', providerSessionId: 'session-1', profile: claude, session: fakeSession({ ...process, term }) });
+    run.sink.emit({ type: 'started', turnId });
+    void run.stop('user');
+    vi.setSystemTime(Date.now() + 2000);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(process.calls).toEqual(calls);
+    if (exitOnTerm) expect(await run.outcome).toEqual({ state: 'interrupted', by: 'user', tree: 'exited' });
+  });
+
   it.each([true, false])('stops each running subagent iff the engine can (%s)', async subagentStop => {
     const { run, session } = channel({}, { subagentStop });
     run.sink.emit({ type: 'subagent', agent: child() });
@@ -163,6 +194,32 @@ describe('RunChannel: events and ledgers', () => {
     expect(events.at(-2)).toMatchObject({ type: 'subagent', agent: { id: childId, status: 'interrupted', stepCount: 1 } });
     expect(run.subagents().history(childId)?.steps.map(step => step.title)).toEqual(['Read']);
     expect(run.todo()).toEqual([{ text: 'write answer', status: 'in_progress' }]);
+  });
+
+  it('folds subagent answer text into its row result, drops its reasoning, and keeps both out of the answer', async () => {
+    const { run } = channel();
+    const lane = { kind: 'subagent', id: childId } as const;
+    const main = { type: 'text', lane: { kind: 'main' }, itemId: 'answer' as ItemId, channel: 'answer', delta: 'main answer' } as const;
+    run.sink.emit({ type: 'subagent', agent: child() });
+    run.sink.emit({ type: 'text', lane, itemId: 'c1' as ItemId, channel: 'answer', delta: 'CHILD-' });
+    run.sink.emit({ type: 'text', lane, itemId: 'c1' as ItemId, channel: 'reasoning', delta: 'THINKING' });
+    run.sink.emit({ type: 'text', lane, itemId: 'c1' as ItemId, channel: 'answer', delta: 'ONLY' });
+    run.sink.emit({ type: 'text', lane: { kind: 'subagent', id: 'ghost' as SubagentId }, itemId: 'g' as ItemId, channel: 'answer', delta: 'GHOST' });
+    run.sink.emit(main);
+    expect(run.subagents().list()[0]?.result).toBe('CHILD-ONLY');
+    run.sink.emit({ type: 'subagent', agent: { ...child(), status: 'completed' } });
+    expect(run.subagents().list()[0]?.result, 'a roster update without a result keeps the folded text').toBe('CHILD-ONLY');
+    run.sink.emit({ type: 'text', lane, itemId: 'c2' as ItemId, channel: 'answer', delta: 'final ' });
+    expect(run.subagents().list()[0]?.result, 'a new answer item starts over').toBe('final ');
+    run.sink.emit({ type: 'text-final', lane, itemId: 'c2' as ItemId, channel: 'answer', text: 'final report' });
+    run.sink.verdict({ kind: 'completed' });
+    run.sink.emit({ type: 'text', lane, itemId: 'c2' as ItemId, channel: 'answer', delta: ' late' });
+    const events = await drain(run);
+    expect(events.filter(event => event.type === 'text' || event.type === 'text-final')).toEqual([main]);
+    expect(JSON.stringify(events)).not.toMatch(/THINKING|GHOST/);
+    expect(events.at(-2)).toMatchObject({ type: 'subagent', agent: { status: 'completed', result: 'final report' } });
+    expect(run.subagents().list()[0]?.result).toBe('final report');
+    expect(run.droppedAfterEnd).toBe(1);
   });
 
   it('detaches queued events from the engine payload', async () => {

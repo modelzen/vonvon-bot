@@ -1,4 +1,4 @@
-import type { Step, SubagentId, SubagentState } from '../model';
+import type { ItemId, Step, SubagentId, SubagentState } from '../model';
 
 const MAX_AGENTS = 64;
 const MAX_RECENT_STEPS = 5;
@@ -12,6 +12,7 @@ interface Entry {
   truncated: boolean;
   observedStepCount: number;
   nativeStepCount: number;
+  answerItem?: ItemId;
 }
 
 export class SubagentLedger {
@@ -33,14 +34,15 @@ export class SubagentLedger {
         truncated = true;
       }
     }
+    const result = agent.result ?? entry?.state.result;
     const state: SubagentState = {
       ...structuredClone(agent),
       task: agent.task.slice(0, MAX_TASK_CHARS),
       stepCount: Math.max(observedStepCount, nativeStepCount),
       recentSteps: structuredClone(steps.slice(-MAX_RECENT_STEPS)),
-      ...(agent.result === undefined ? {} : { result: agent.result.slice(0, MAX_RESULT_CHARS) }),
+      ...(result === undefined ? {} : { result: result.slice(0, MAX_RESULT_CHARS) }),
     };
-    this.entries.set(agent.id, { state, steps, truncated, observedStepCount, nativeStepCount });
+    this.entries.set(agent.id, { state, steps, truncated, observedStepCount, nativeStepCount, answerItem: entry?.answerItem });
     return structuredClone(state);
   }
 
@@ -55,6 +57,16 @@ export class SubagentLedger {
       entry.truncated = true;
     }
     entry.state.recentSteps = structuredClone(entry.steps.slice(-MAX_RECENT_STEPS));
+    return structuredClone(entry.state);
+  }
+
+  /** The row's result is the subagent's latest answer item: its deltas append, its final text replaces. */
+  recordAnswer(id: SubagentId, itemId: ItemId, text: string, final: boolean): SubagentState | undefined {
+    const entry = this.entries.get(id);
+    if (!entry) return undefined;
+    const before = entry.answerItem === itemId && !final ? entry.state.result ?? '' : '';
+    entry.answerItem = itemId;
+    entry.state.result = (before + text).slice(0, MAX_RESULT_CHARS);
     return structuredClone(entry.state);
   }
 

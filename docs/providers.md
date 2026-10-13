@@ -125,12 +125,7 @@ export type Outcome =
   | { state: 'completed' }
   | { state: 'failed'; failure: Failure }
   | { state: 'interrupted'; by: StopBy | 'agent'; tree: TreeFate };    // what the stop did to the process tree
-/**
- * live: settled by a verdict, no `sent` receipt. signalled: settled by a verdict after a `sent` receipt (a dispatch fact,
- * never death). exited: an exit fact of *Process host* arrived. unconfirmed: the confirm deadline after kill-tree passed
- * with neither; ProcessHost keeps the tree. No value is derived from emitting an effect. Rules in *Engine and runtime*.
- */
-export type TreeFate = 'live' | 'signalled' | 'exited' | 'unconfirmed';
+export type TreeFate = 'live' | 'signalled' | 'exited' | 'unconfirmed';   // read at settlement; see *Engine and runtime*
 
 export type RunEvent =
   | { type: 'session'; providerSessionId: string }                       // first, once
@@ -149,7 +144,7 @@ export type RunEvent =
   | { type: 'outcome'; outcome: Outcome; usage?: { input?: number; output?: number; cached?: number } }; // last, once
 ```
 
-Rules the runtime enforces, not the engines. `outcome` is emitted exactly once and last, including after a kill or a crash. A `step` whose lane is a subagent never appears in `Run.events`; it is folded into that subagent's row. A todo tool call never produces a `step`. `text` for a subagent lane is folded into that subagent's row, never into the answer. An `image` whose payload arrived as base64 is on disk before the event exists.
+Rules the runtime enforces, not the engines. `outcome` is emitted exactly once and last, including after a kill or a crash. A `step` whose lane is a subagent never appears in `Run.events`; it is folded into that subagent's row. A todo tool call never produces a `step`. `text` for a subagent lane is folded into that subagent's row, never into the answer: the row's `result` is its latest answer item, deltas append and `text-final` replaces, reasoning is dropped, and text for an unknown subagent or after the outcome is dropped. An `image` whose payload arrived as base64 is on disk before the event exists.
 
 The capability record is typed data. A cell is `native` when the provider emits the signal and the engine maps it, `partial` when the provider emits it in some situations and the engine maps it when present, `none` when the provider never emits it. A cell the audit marks unknown ships `none` and names its probe in `pending`.
 
@@ -254,29 +249,14 @@ export type ProviderAnswer =
 export interface TitleControl { read(providerSessionId: string): Promise<string | undefined>; set?(providerSessionId: string, title: string): Promise<void> }
 export type AcpStopReason = string;                      // raw ACP stopReason; an unknown value maps to failed{provider-error}
 
-/** Why a goal ended. Chosen once by the first trigger; nothing afterwards changes it. Behavior in *Goals*. */
-export type GoalEnd =
-  | { kind: 'terminal'; status: string }   // the provider's own terminal goal status
-  | { kind: 'failed'; failure: Failure }    // goal-level failure, or the session's process fact (process-exit, transport-lost)
-  | { kind: 'cleared' }                     // GoalRun.end(), or GoalRun.stop('user' | 'daemon')
-  | { kind: 'timeout' };                    // GoalRun.stop('watchdog'), which the goal idle bound calls
-
-/** On Conversation iff features.goal !== 'none'. Behavior in *Goals*. */
-export interface GoalControl {
-  /** Throws ConversationBusy while a run or a goal is live. */
-  start(objective: string, opts?: TurnOptions): GoalRun;
-}
+// Goals, behavior in *Goals*. GoalEnd is in model.ts. start() throws ConversationBusy while a run or a goal is live.
+export interface GoalControl { start(objective: string, opts?: TurnOptions): GoalRun }
 export interface GoalRun {
-  /** One Run per provider turn, in order, each with its own outcome. Ends when the goal has ended, possibly with no Run. */
-  readonly runs: AsyncIterable<Run>;
-  /** The latest goal event, undefined before the first. Keeps its last value after runs ends. */
-  status(): Extract<RunEvent, { type: 'goal' }> | undefined;
-  /** Why the goal ended. Settles the moment the end is chosen, before runs ends. Never rejects. The terminal card reads it. */
-  result(): Promise<GoalEnd>;
-  /** Choose cleared and let the ending run finish on its own. Resolves when runs has ended. Never rejects. The 🎯 结束目标 button. */
-  end(): Promise<void>;
-  /** Chooses the reason, then runs the ladder on the ending run once clear settled. Every call resolves with the ending run's outcome, or `undefined` with none. The ⏹ 终止 button. */
-  stop(by: StopBy): Promise<Outcome | undefined>;
+  readonly runs: AsyncIterable<Run>;                           // one Run per provider turn; may end with none
+  status(): Extract<RunEvent, { type: 'goal' }> | undefined;   // the latest goal event; kept after runs ends
+  result(): Promise<GoalEnd>;                                  // settles when the end is chosen; the terminal card reads it
+  end(): Promise<void>;                                        // 🎯 结束目标
+  stop(by: StopBy): Promise<Outcome | undefined>;              // ⏹ 终止
 }
 ```
 
@@ -300,30 +280,8 @@ export interface SignalSink {
   verdict(v: TurnVerdict): void;
 }
 
-/** sent: the group call returned success, never death. refused: it returned an error. accepted: a pre-call acknowledgement, only the Windows term rung. unknown: no receipt. */
-export type SignalResult = 'sent' | 'refused' | 'accepted' | 'unknown';
-/** parent: the retaining parent's own wait. containment: the sealed group or Job was proven empty, so no code is known. */
-export type ExitFact = { observed: 'parent'; code: number | null; signal: string | null } | { observed: 'containment' };
-/** At most one of each. transport-lost may precede an exit; an exit is never followed by transport-lost. */
-export type ProcessFact = { kind: 'exit'; exit: ExitFact } | { kind: 'transport-lost' };
-
-export interface OwnedProcess {
-  term(): Promise<SignalResult>;                            // the term-tree effect; never rejects
-  kill(): Promise<SignalResult>;                            // the kill-tree effect; never rejects
-  watch(listener: (fact: ProcessFact) => void): () => void;  // replays past facts synchronously; returns unsubscribe
-}
-
-/** iff features.goal !== 'none'. Codex: thread/goal/set and thread/goal/clear. Behavior in *Goals*. */
-export interface EngineGoal {
-  set(objective: string, opts: TurnOptions, sink: GoalSink): Promise<void>;   // resolves once the provider accepted the goal
-  clear(): Promise<void>;                                                     // idempotent, also while set is pending
-}
-export interface GoalSink {
-  frame(): void;                        // goal traffic outside a turn; feeds the goal idle bound while the goal is open
-  turn(): SignalSink | undefined;       // at each turn start; undefined once the end is chosen, and that turn is an orphan
-  goal(event: Extract<RunEvent, { type: 'goal' }>): void;
-  ended(end: Extract<GoalEnd, { kind: 'terminal' | 'failed' }>): void;   // ignored once the end is chosen
-}
+// The process port (OwnedProcess, SignalResult, ExitFact, ProcessFact) and the goal port (EngineGoal, GoalSink) are
+// written out with their contract comments in packages/daemon/src/provider/engines/engine.ts.
 
 /** The registry key is the provider id; an engine does not carry one. */
 export interface Engine {
@@ -359,24 +317,15 @@ Every engine's frame handling is a pure function `translate(state, frame) -> { s
 The turn machine is pure as well.
 
 ```ts
-export type Rung = 'await-turn' | 'interrupt' | 'term' | 'kill';   // the stage the machine has issued; a receipt never moves it
-export type TurnState =
-  | { phase: 'opening' }
-  | { phase: 'running'; turnId: TurnId }
-  | { phase: 'stopping'; turnId?: TurnId; by: StopBy; rung: Rung; deadline: number; signalled: boolean }   // deadline is absolute
-  | { phase: 'settled'; turnId?: TurnId; outcome: Outcome };
-export type TurnInput =
-  | { kind: 'started'; turnId: TurnId } | { kind: 'verdict'; verdict: TurnVerdict } | { kind: 'stop'; by: StopBy } | { kind: 'tick' }
-  | { kind: 'signal'; rung: 'term' | 'kill'; result: SignalResult }   // the receipt of a term() or kill() call
-  | { kind: 'exit'; exit: ExitFact } | { kind: 'transport-lost' };     // facts from OwnedProcess.watch
-export type Effect = { kind: 'stop-subagents' } | { kind: 'interrupt'; turnId?: TurnId } | { kind: 'term-tree' } | { kind: 'kill-tree' };
+// Rung, TurnState (opening, running, stopping{by, rung, deadline, signalled}, settled{outcome}), TurnInput, and Effect
+// are written out in packages/daemon/src/provider/runtime/turn-machine.ts.
 
 export function stepTurn(state: TurnState, input: TurnInput, profile: StopProfile, now: number): { state: TurnState; effects: Effect[] };
 export function deadlineOf(state: TurnState): number | undefined;   // the one timer; undefined outside stopping
 export function stopBoundMs(profile: StopProfile): number;          // the bound column below
 ```
 
-The machine has no timer effect and no outcome effect. `RunChannel` keeps one timer at `deadlineOf(state)` and appends the outcome the first time the state is `settled`. It executes the effects: `stop-subagents` calls `EngineSession.stopSubagent` for every running roster entry when the engine has it, without awaiting; `interrupt` calls `EngineSession.interrupt`, and a failure is logged; `term-tree` and `kill-tree` call `OwnedProcess.term()` and `kill()` and feed each receipt back as `signal`. Exit facts and `transport-lost` from `watch()` become the `exit` and `transport-lost` inputs.
+The machine has no timer effect and no outcome effect. `RunChannel` keeps one timer at `deadlineOf(state)` and appends the outcome the first time the state is `settled`. It executes the effects: `stop-subagents` calls `EngineSession.stopSubagent` for every running roster entry when the engine has it, without awaiting; `interrupt` calls `EngineSession.interrupt`, and a failure is logged; `term-tree` and `kill-tree` call `OwnedProcess.term()` and `kill()` and feed each receipt back as `signal`. Exit facts and `transport-lost` from `watch()` become the `exit` and `transport-lost` inputs. An effect may call back into the channel synchronously; once that moves the state on, the remaining effects of the older transition are not run.
 
 | input | `opening` | `running` | `stopping` |
 |---|---|---|---|
@@ -384,18 +333,11 @@ The machine has no timer effect and no outcome effect. `RunChannel` keeps one ti
 | `stop` | `stop-subagents`. With `needsTurnId`: rung `await-turn`, deadline now + `openWaitMs`. Otherwise: `interrupt`, rung `interrupt`, deadline now + `graceMs` | `stop-subagents`, `interrupt` with the id, rung `interrupt`, deadline now + `graceMs` | ignored; the first `by` stays |
 | `tick` | ignored | ignored | every passed ladder row, in order |
 | `verdict` | the outcome table | the outcome table | `completed` and `failed` keep their outcome. `cancelled` is `interrupted{by, tree}` |
-| `signal` | ignored | ignored | `sent` for an issued rung sets `signalled`. Anything else is logged |
+| `signal` | ignored | ignored | `sent` for an issued rung sets `signalled`. A receipt other than `sent` is logged; a `sent` for an unissued rung is ignored |
 | `exit` | `failed{process-exit}` | `failed{process-exit}` | `interrupted{by, tree: 'exited'}` |
 | `transport-lost` | `failed{transport-lost}` | `failed{transport-lost}` | ignored and logged |
 
-| rung | deadline | when it passes |
-|---|---|---|
-| `await-turn` | stop + `openWaitMs` | `term-tree`; rung `term`; deadline + `TERM_WAIT_MS` |
-| `interrupt` | interrupt sent + `graceMs` | `term-tree`; rung `term`; deadline + `TERM_WAIT_MS` |
-| `term` | previous deadline + `TERM_WAIT_MS` | `kill-tree`; rung `kill`; deadline + `KILL_CONFIRM_MS` |
-| `kill` | previous deadline + `KILL_CONFIRM_MS` | settles `interrupted{by, tree: 'unconfirmed'}` |
-
-Every deadline is absolute. Each is the previous deadline plus its wait, so one late `tick` emits every overdue effect in order and can settle in the same step. Only the grace deadline is anchored where `interrupt` was sent, because that is the provider's time to answer it. The bound is `openWaitMs + graceMs + TERM_WAIT_MS + KILL_CONFIRM_MS` of scheduled time, and the machine reaches it with no input from the host. Host facts can only settle earlier. Settled ignores every input, so there is one outcome.
+The ladder rows: when the `await-turn` or `interrupt` deadline passes, `term-tree`, rung `term`, deadline + `TERM_WAIT_MS`; when the `term` deadline passes, `kill-tree`, rung `kill`, deadline + `KILL_CONFIRM_MS`; when the `kill` deadline passes, the run settles `interrupted{by, tree: 'unconfirmed'}`. Every deadline is absolute. Each is the previous deadline plus its wait, so one late `tick` emits every overdue effect in order and can settle in the same step. Only the grace deadline is anchored where `interrupt` was sent, because that is the provider's time to answer it. The bound, the column of the table below, is `openWaitMs + graceMs + TERM_WAIT_MS + KILL_CONFIRM_MS` of scheduled time, with `openWaitMs` counted only before `started` (a Codex stop after `started` settles within 8.5 s), and the machine reaches it with no input from the host. Host facts can only settle earlier. Settled ignores every input, so there is one outcome.
 
 `tree` is read from the state at settlement. A verdict gives `signalled` when a `sent` receipt for an issued rung was recorded, and `live` otherwise, including after `refused`, `accepted`, `unknown`, or no receipt. An exit fact gives `exited` whatever came before. The kill row gives `unconfirmed`. The run is settled locally, `ProcessHost` keeps the record, and `owesWork()` stays true for it. Emitting `term-tree` or `kill-tree` records nothing. `transport-lost` while stopping changes nothing, because only the ladder and an exit fact can say what happened to the tree. After `failed{process-exit}`, `failed{transport-lost}`, or `tree: 'unconfirmed'`, the runtime closes the conversation, and the next message opens a new one with `resume`. `by` is the first stop's `by` in every case. `by: 'daemon'` comes only from `closeAll()`.
 
@@ -407,8 +349,6 @@ Subagents and the outcome. When `outcome` is emitted, every roster entry still `
 | claude | false | 0 | 3000 | 6.5 s | `Query.interrupt()` (SDK:2425) |
 | cursor, grok, custom-acp | false | 0 | 4000 | 7.5 s | `session/cancel` (ACP index.d.ts:6) |
 | pi | false | 0 | 2000 | 5.5 s | `abort` (PIR:32) |
-
-The bound column is `openWaitMs + graceMs + TERM_WAIT_MS + KILL_CONFIRM_MS` with `openWaitMs` counted only when `started` has not arrived; a stop after `started` on Codex settles within 8.5 s.
 
 The runtime also owns these ledgers, with caps so the card budget has a worst case.
 
@@ -455,9 +395,7 @@ export interface Run {
 
 ### Goals
 
-A goal is native only, today Codex `thread/goal/*`. It is a sequence of `Run`s, one per provider turn, each a `RunChannel` with the same ladder and the same one-outcome rule. `EngineGoal.set` gets a `GoalSink`. At each turn start the engine calls `sink.turn()`, which opens the next `Run` on `GoalRun.runs` and returns its `SignalSink`. `sink.goal()` carries each status change, which `status()` keeps and the live `Run` also carries. `sink.ended()` reports the provider's own end.
-
-A goal is `open`, then `ending`, then `ended`. The first trigger chooses the reason, settles `result()` at that moment, and moves the goal to `ending`. Nothing afterwards changes the reason.
+A goal is native only, today Codex `thread/goal/*`. It is a sequence of `Run`s, one per provider turn, each a `RunChannel` with the same ladder and the same one-outcome rule. `EngineGoal.set` gets a `GoalSink`. At each turn start the engine calls `sink.turn()`, which opens the next `Run` on `GoalRun.runs` and returns its `SignalSink`. `sink.goal()` carries each status change, which `status()` keeps and the live `Run` also carries. `sink.ended()` reports the provider's own end. A goal is `open`, then `ending`, then `ended`. The first trigger chooses the reason, settles `result()` at that moment, and moves the goal to `ending`. Nothing afterwards changes the reason.
 
 | first trigger | `result()` | clear | ending run |
 |---|---|---|---|
@@ -467,15 +405,9 @@ A goal is `open`, then `ending`, then `ended`. The first trigger chooses the rea
 | an exit fact from `OwnedProcess.watch` | `failed{process-exit}` | skipped | settles from the same fact |
 | `transport-lost` from `OwnedProcess.watch` | `failed{transport-lost}` | skipped | settles from the same fact |
 
-The goal watches `OwnedProcess` from `start` until `runs` ends, so a process fact ends it before the first turn, between turns, or inside a turn. A peer that closes between turns does not wait for the idle bound.
+The goal watches `OwnedProcess` from `start` until `runs` ends, so a process fact ends it before the first turn, between turns, or inside a turn. A peer that closes between turns does not wait for the idle bound. Entering `ending` closes the gate at once. `sink.turn()` returns `undefined`, so a turn the provider starts afterwards is an orphan. The engine interrupts it without waiting and drops its frames, and the runtime counts it. `sink.ended()`, a late `set` result, and `GoalSink.frame()` are ignored. The run live at that moment, if any, is the ending run, the last item of `runs`.
 
-Entering `ending` closes the gate at once. `sink.turn()` returns `undefined`, so a turn the provider starts afterwards is an orphan. The engine interrupts it without waiting and drops its frames, and the runtime counts it. `sink.ended()`, a late `set` result, and `GoalSink.frame()` are ignored. The run live at that moment, if any, is the ending run, the last item of `runs`.
-
-Clear starts at once, also while `set` is pending, bounded by `GOAL_CLEAR_MS` (5 s, a policy). A failure is logged with its cause (`timeout`, `rejected`, `transport`) and the JSON-RPC code, never the provider's message. A goal stop sends `stop` to the ending run only after clear settled, so the provider is not asked to stop a turn while it may still start the next one. The first `by` is held across that wait. A verdict or process fact that settles the ending run during the wait stands. The goal never writes an outcome.
-
-When the ending run has settled, or at once without one, and clear has settled, the goal keeps the process only if clear resolved within its bound, no orphan was counted, no process fact arrived, and no outcome of the goal has `tree` `signalled`, `exited`, or `unconfirmed`. Otherwise it closes the conversation, which hands the process to `ProcessHost` for termination of that record. Nothing in the goal waits on the tree. `runs` then ends. An orphan counted after `runs` ended closes the conversation if it is still open.
-
-Order is fixed: `result()`, then the ending run's `outcome`, then `runs` ends, then every pending `end()` and `stop()` resolves. Every `stop()` resolves with the ending run's outcome, or `undefined` without one. `end()` resolves with nothing. Neither rejects. Busy, stop, idle, bound, and card rules are in plan.md V6b.
+Clear starts at once, also while `set` is pending, bounded by `GOAL_CLEAR_MS` (5 s, a policy). A failure is logged with its cause (`timeout`, `rejected`, `transport`) and the JSON-RPC code, never the provider's message. A goal stop sends `stop` to the ending run only after clear settled, so the provider is not asked to stop a turn while it may still start the next one. The first `by` is held across that wait. A verdict or process fact that settles the ending run during the wait stands. The goal never writes an outcome. When the ending run has settled, or at once without one, and clear has settled, the goal keeps the process only if clear resolved within its bound, no orphan was counted, no process fact arrived, and no outcome of the goal has `tree` `signalled`, `exited`, or `unconfirmed`. Otherwise it closes the conversation, which hands the process to `ProcessHost` for termination of that record. Nothing in the goal waits on the tree. `runs` then ends. An orphan counted after `runs` ended closes the conversation if it is still open. Order is fixed: `result()`, then the ending run's `outcome`, then `runs` ends, then every pending `end()` and `stop()` resolves. Every `stop()` resolves with the ending run's outcome, or `undefined` without one. `end()` resolves with nothing. Neither rejects. Busy, stop, idle, bound, and card rules are in plan.md V6b.
 
 ### Follow-ups during a run
 
@@ -794,13 +726,10 @@ Outcome notes.
 | outcome | note |
 |---|---|
 | interrupted user, tree live | ⏹ 已停止 |
-| interrupted user, tree signalled | ⏹ 已强制停止（agent 未响应，已向其进程组发出结束信号） |
-| interrupted user, tree exited | ⏹ 已强制停止（agent 未响应，其进程已退出） |
-| interrupted user, tree unconfirmed | ⏹ 已强制停止（agent 未响应，进程尚未确认退出，Vonvon 会继续清理） |
+| interrupted user, tree not live | ⏹ 已强制停止（agent 未响应，{tree}） |
 | interrupted watchdog, tree live | ⏱ 超过 N 分钟没有任何进展，已自动停止 |
-| interrupted watchdog, tree signalled | ⏱ 超过 N 分钟没有任何进展，已自动停止（agent 未响应，已向其进程组发出结束信号） |
-| interrupted watchdog, tree exited | ⏱ 超过 N 分钟没有任何进展，已自动停止（agent 未响应，其进程已退出） |
-| interrupted watchdog, tree unconfirmed | ⏱ 超过 N 分钟没有任何进展，已自动停止（agent 未响应，进程尚未确认退出，Vonvon 会继续清理） |
+| interrupted watchdog, tree not live | ⏱ 超过 N 分钟没有任何进展，已自动停止（agent 未响应，{tree}） |
+| {tree} | signalled 已向其进程组发出结束信号，exited 其进程已退出，unconfirmed 进程尚未确认退出，Vonvon 会继续清理 |
 | interrupted daemon | ⏹ Vonvon 正在停止或重启，本轮已中断 |
 | interrupted agent | ⏹ agent 自行中断了本轮 |
 | failed transport-lost | ⚠ 与 agent 进程的连接中断，本轮未完成。下一条消息会自动恢复会话 |

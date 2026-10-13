@@ -23,7 +23,8 @@ function step(id: number, status: Step['status'] = 'running'): Step {
   };
 }
 
-function changeNestedInput(value: unknown, next: number): void {
+function changeNestedInput(detail: Step['detail'] | undefined, next: number): void {
+  const value = detail?.type === 'other' ? detail.input : undefined;
   if (typeof value !== 'object' || value === null || !('nested' in value)) throw new Error('missing nested input');
   const nested = value.nested;
   if (typeof nested !== 'object' || nested === null || !('value' in nested) || typeof nested.value !== 'number') {
@@ -132,21 +133,11 @@ describe('SubagentLedger', () => {
   it('returns detached state and history including nested step detail', () => {
     const ledger = new SubagentLedger();
     const incoming = agent(1, { recentSteps: [step(1)] });
-    const returned = ledger.upsert(incoming);
-    const returnedDetail = returned?.recentSteps[0]?.detail;
-    if (returnedDetail?.type !== 'other') throw new Error('expected other step detail');
-    const incomingDetail = incoming.recentSteps[0]?.detail;
-    if (incomingDetail?.type !== 'other') throw new Error('expected other step detail');
-    changeNestedInput(incomingDetail.input, -1);
-    changeNestedInput(returnedDetail.input, -2);
-    const listed = ledger.list();
-    const listedDetail = listed[0]?.recentSteps[0]?.detail;
-    if (listedDetail?.type !== 'other') throw new Error('expected other step detail');
-    changeNestedInput(listedDetail.input, -3);
-    const historical = ledger.history(incoming.id);
-    const historyDetail = historical?.steps[0]?.detail;
-    if (historyDetail?.type !== 'other') throw new Error('expected other step detail');
-    changeNestedInput(historyDetail.input, -4);
+    changeNestedInput(ledger.upsert(incoming)?.recentSteps[0]?.detail, -2);
+    changeNestedInput(incoming.recentSteps[0]?.detail, -1);
+    changeNestedInput(ledger.list()[0]?.recentSteps[0]?.detail, -3);
+    changeNestedInput(ledger.history(incoming.id)?.steps[0]?.detail, -4);
+    expect(ledger.list()[0]?.recentSteps[0]?.detail).toEqual(step(1).detail);
     expect(ledger.history(incoming.id)?.steps[0]?.detail).toEqual(step(1).detail);
   });
 

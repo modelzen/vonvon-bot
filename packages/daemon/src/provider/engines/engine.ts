@@ -24,15 +24,10 @@ export interface SignalSink {
 
 /** sent: the group call returned success, never death. refused: it returned an error. accepted: a pre-call acknowledgement, only the Windows term rung. unknown: no receipt. */
 export type SignalResult = 'sent' | 'refused' | 'accepted' | 'unknown';
-
 /** parent: the retaining parent's own wait. containment: the sealed group or Job was proven empty, so no code is known. */
-export type ExitFact =
-  | { observed: 'parent'; code: number | null; signal: string | null }
-  | { observed: 'containment' };
-
+export type ExitFact = { observed: 'parent'; code: number | null; signal: string | null } | { observed: 'containment' };
 /** At most one of each. transport-lost may precede an exit; an exit is never followed by transport-lost. */
 export type ProcessFact = { kind: 'exit'; exit: ExitFact } | { kind: 'transport-lost' };
-
 /** The runtime's whole view of the provider process a session owns. The exit-report hold behind watch() is the host's rule. */
 export interface OwnedProcess {
   term(): Promise<SignalResult>;                            // the term-tree effect; 'unknown' when no receipt comes; never rejects
@@ -48,7 +43,6 @@ export interface EngineGoal {
   set(objective: string, opts: TurnOptions, sink: GoalSink): Promise<void>;   // resolves once the provider accepted the goal
   clear(): Promise<void>;                                                     // idempotent, also while set is pending
 }
-
 export interface GoalSink {
   frame(): void;                        // goal traffic outside a turn; feeds the goal idle bound while the goal is open
   /** The sink for a turn the provider just started, or undefined once the goal's end is chosen: that turn is an orphan. */
