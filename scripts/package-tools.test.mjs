@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -77,6 +77,12 @@ for (const [path, target] of [
     await assert.rejects(validateInstalledManifest(root, manifest, 'abc'), /installed symlink refused/);
   });
 }
+
+test('installed manifest ignores group and other bits that a umask changes', { skip: process.platform === 'win32' }, async t => {
+  const { root, manifest } = await installedFixture(t);
+  for (const file of manifest.files) await chmod(join(root, file.path), parseInt(file.mode, 8) ^ 0o066);
+  await validateInstalledManifest(root, manifest, 'abc');
+});
 
 for (const variant of ['extra file', 'bin file', 'content', 'mode', 'metadata', 'missing target', 'linked target']) {
   test(`installed manifest still refuses ${variant}`, async t => {

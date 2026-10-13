@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, cp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, cp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -45,6 +45,7 @@ try {
   const selected = new Set(preview[0].files.map(file => file.path));
   for (const entry of await fileEntries(stage)) {
     if (!selected.has(entry.path)) await rm(join(stage, entry.path));
+    else await chmod(join(stage, entry.path), parseInt(entry.mode, 8));
   }
   await validateTree(stage, lock);
   const manifest = {

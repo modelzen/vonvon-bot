@@ -32,11 +32,14 @@ export async function fileEntries(root) {
   return entriesForFiles(root, await listFiles(root));
 }
 
+// npm keeps only the owner's execute bit meaningful, and every umask on the way rewrites the others.
+const canonicalMode = mode => (mode & 0o100 ? 0o755 : 0o644);
+
 async function entriesForFiles(root, files) {
   return Promise.all(files.filter(path => path !== 'build-manifest.json').map(async path => ({
     path,
     sha256: sha256(await readFile(join(root, path))),
-    mode: ((await lstat(join(root, path))).mode & 0o777).toString(8).padStart(3, '0'),
+    mode: canonicalMode((await lstat(join(root, path))).mode).toString(8),
   })));
 }
 
