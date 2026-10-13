@@ -73,6 +73,7 @@ vi.mock('electron', async () => {
     BrowserWindow: MockWindow,
     dialog: { showErrorBox: vi.fn(), showMessageBoxSync: vi.fn() },
     Menu: { buildFromTemplate: vi.fn((items: unknown) => items), setApplicationMenu: vi.fn() },
+    net: { fetch: vi.fn() },
   };
 });
 
@@ -96,7 +97,7 @@ vi.mock('../src/daemon-manager.js', async importOriginal => ({
 vi.mock('../../daemon/src/config/data-root.js', () => ({ resolveDataRoot: vi.fn(() => ({ kind: 'canonical', path: fake.root })) }));
 
 import { startDesktop, desktopResources } from '../src/main.js';
-import { autoUpdater, dialog } from 'electron';
+import { autoUpdater, dialog, net } from 'electron';
 
 type MockApp = EventEmitter & { requestSingleInstanceLock: ReturnType<typeof vi.fn>; quit: ReturnType<typeof vi.fn>; getAppPath: ReturnType<typeof vi.fn> };
 type MockWindow = EventEmitter & {
@@ -122,9 +123,10 @@ beforeEach(async () => {
   vi.mocked(autoUpdater.quitAndInstall).mockReset();
   autoUpdater.removeAllListeners();
   vi.mocked(dialog.showErrorBox).mockClear();
-  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+  vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('the update check must use Electron net'); }));
+  vi.mocked(net.fetch).mockReset().mockImplementation(async () => new Response(JSON.stringify({
     version: '0.2.0', feedURL: 'https://updates.example.test/feed',
-  }))));
+  })));
   const resources = join(await realpath(temp), 'resources');
   await mkdir(resources);
   const alias = join(temp, 'resources-alias');
@@ -165,6 +167,7 @@ afterEach(async () => {
 
 async function downloadUpdate(): Promise<void> {
   await expect(actions.checkDesktopUpdate()).resolves.toMatchObject({ state: 'available' });
+  expect(net.fetch).toHaveBeenLastCalledWith('https://updates.example.test/manifest.json', expect.objectContaining({ redirect: 'error' }));
   const downloading = actions.installDesktopUpdate();
   expect(autoUpdater.checkForUpdates).toHaveBeenCalledOnce();
   autoUpdater.emit('update-downloaded');
@@ -224,7 +227,7 @@ describe('updater final install lifecycle', () => {
   });
 
   it('keeps the renderer available for check and download errors', async () => {
-    vi.mocked(fetch).mockRejectedValueOnce(new Error('check failed'));
+    vi.mocked(net.fetch).mockRejectedValueOnce(new Error('check failed'));
     await expect(actions.checkDesktopUpdate()).rejects.toThrow('check failed');
     await expect(actions.checkDesktopUpdate()).resolves.toMatchObject({ state: 'available' });
     const downloading = actions.installDesktopUpdate();

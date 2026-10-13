@@ -2,7 +2,7 @@ import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { app, autoUpdater, BrowserWindow, dialog, Menu, type Tray } from 'electron';
+import { app, autoUpdater, BrowserWindow, dialog, Menu, net, type Tray } from 'electron';
 import { resolveDataRoot } from '../../daemon/src/config/data-root.js';
 import { attachExisting, AttachError } from './attach.js';
 import { installBridge, openAllowedExternal } from './bridge.js';
@@ -140,6 +140,8 @@ export async function startDesktop(): Promise<void> {
     const updateConfiguration = await desktopUpdateConfiguration({ appPath: app.getAppPath(), isPackaged: app.isPackaged });
     const updater = new DesktopUpdater({
       current: app.getVersion(), ...updateConfiguration, driver: autoUpdater,
+      // Chromium's stack follows the system proxy and the macOS keychain's certificate trust.
+      fetch: (url, init) => net.fetch(url, init),
       statePath: join(app.getPath('userData'), 'desktop-update-expected-version'),
       beforeInstall: async () => {
         await cleanup();

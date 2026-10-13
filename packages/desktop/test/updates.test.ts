@@ -19,7 +19,7 @@ afterEach(() => {
 
 function fixture() {
   const driver = new Driver();
-  const fetch = vi.fn(async () => new Response(JSON.stringify({
+  const fetch = vi.fn(async (_url: string, _init: RequestInit) => new Response(JSON.stringify({
     version: '1.1.0', feedURL: 'https://updates.example.test/feed',
   })));
   const beforeInstall = vi.fn(async () => {});
@@ -48,6 +48,7 @@ describe('desktop update port', () => {
   it('downloads only after check and first install click, then installs after second click', async () => {
     const h = fixture();
     await expect(h.updater.check()).resolves.toMatchObject({ state: 'available', latest: '1.1.0' });
+    expect(h.fetch).toHaveBeenCalledWith('https://updates.example.test/manifest.json', expect.objectContaining({ redirect: 'error' }));
     expect(h.driver.checkForUpdates).not.toHaveBeenCalled();
     const download = h.updater.install();
     expect(h.driver.setFeedURL).toHaveBeenCalledWith({ url: 'https://updates.example.test/feed' });

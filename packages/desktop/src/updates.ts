@@ -15,7 +15,7 @@ export interface DesktopUpdateOptions {
   manifestURL?:string;
   signed:boolean;
   driver:NativeUpdateDriver;
-  fetch?:typeof fetch;
+  fetch?:(url:string,init:RequestInit)=>Promise<Response>;
   beforeInstall?:()=>Promise<void>;
   statePath?:string;
 }
@@ -46,7 +46,7 @@ export class DesktopUpdater {
     if (!this.options.signed || !this.options.manifestURL) return this.result('unavailable','此预览版没有配置签名更新源。桌面版本和内置 Core 保持不变。');
     const source = new URL(this.options.manifestURL);
     if (source.protocol !== 'https:') throw new Error('桌面更新源必须使用 HTTPS');
-    const response = await (this.options.fetch ?? fetch)(source,{signal:AbortSignal.timeout(15000),redirect:'error'});
+    const response = await (this.options.fetch ?? fetch)(source.href,{signal:AbortSignal.timeout(15000),redirect:'error'});
     if (!response.ok) throw new Error(`桌面更新检查失败 (${response.status})`);
     const body = await response.text();
     if (body.length > 16384) throw new Error('更新清单过大');

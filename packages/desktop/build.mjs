@@ -10,7 +10,7 @@ const stage = join(root, 'stage');
 const ui = join(root, '../ui/dist');
 const daemonSource = join(root, '../daemon');
 const daemonStage = join(stage, 'daemon');
-const updateConfig = JSON.parse(await readFile(join(root, 'desktop-update.json'), 'utf8'));
+const updateConfig = JSON.parse(await readFile(process.env.VONVON_DESKTOP_UPDATE_CONFIG || join(root, 'desktop-update.json'), 'utf8'));
 const keys = updateConfig !== null && typeof updateConfig === 'object' && !Array.isArray(updateConfig)
   ? Object.keys(updateConfig)
   : null;
