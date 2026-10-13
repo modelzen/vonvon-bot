@@ -5,7 +5,7 @@
 ## 分工
 
 - 没有桌面的 Linux 服务器（JP-VPS）上的 Claude Code 负责设计和实现。它写 `docs/` 下的架构、数据形状和计划，按计划写产品代码和测试，在 Linux 上跑构建、typecheck、lint 和改动相关的定向测试，push 到功能分支并开 PR。JP-VPS 内存小，不跑全量测试、live 和性能。
-- 有桌面的 Mac 上的 Codex 负责完整测试、独立审查和验收。它拉取 PR，在 macOS 和 Windows 跑全量测试，在真实窗口、真实系统服务、真实 provider 和飞书里验收，需要时跑 live 和性能，验收方法由 Codex 定，做独立代码审查，打 `frozen` 标签并触发完整 CI，做准确 head 的 Shipping 检查并受控合入。打包、签名、公证、发布和 issue #122 看板由 Codex 负责。
+- 有桌面的 Mac 上的 Codex 负责完整测试、独立审查和验收。它拉取 PR，在 macOS 跑全量测试，在真实窗口、真实系统服务、真实 provider 和飞书里验收，需要时跑 live 和性能，验收方法由 Codex 定，做独立代码审查，打 `frozen` 标签并触发完整 CI，做准确 head 的 Shipping 检查并受控合入。打包、签名、公证、发布和 issue #122 看板由 Codex 负责。
 - Codex 可以直接修复验证范围内的问题：只在 macOS 或 Windows 上出现的平台差异、Electron 窗口和原生服务的接线、测试夹具和构建配置。改动写进 PR 并说明理由。涉及设计、数据形状、协议或跨平台逻辑的问题交回 Claude，不自行改写。
 - Claude 看不到 Mac。PR 描述必须列出 Claude 在 Linux 上跑过的命令和结果，以及验收要确认的结果和已知缺口，例如只用假对象测过、没在真实系统上跑过的代码。这一节写验收什么，不写跑哪些命令。没有这一节 Codex 不接。
 
@@ -25,7 +25,8 @@
 - 在飞 PR 的设计不另开文档 PR 修改。缺口在该 PR 的评论里提出，Claude 在同一 PR 里同时改代码和 `docs/` 里的计划。设计文档只为尚未开始的版本写，最多领先实现一个版本。
 - 进度只看 issue #122 看板和 PR 状态。不做本地进度页、会话映射文件或定时刷新。Codex 在交接和合入时更新看板。
 - 每台机器一个在飞 PR 一个会话。并行在会话内部用子代理，不开根会话加多个工作会话。
-- 完整三平台 CI 只在 `frozen` head 跑一次。冻结前 Claude 在 Linux 上只跑构建、typecheck、lint 和定向测试。全量测试、macOS 和 Windows 检查、真实环境验收、live 和性能由 Codex 在 Mac 上做。
+- 完整三平台 CI 只在 `frozen` head 跑一次。冻结前 Claude 在 Linux 上只跑构建、typecheck、lint 和定向测试。全量测试、macOS 检查、真实环境验收、live 和性能由 Codex 在 Mac 上做。
+- 没有 Windows 原生环境。每个 PR 的 Windows 验证只看 `frozen` head 完整 CI 的 Windows 任务，不等人工验收。只在 Windows 上出现的行为，例如进程树回收和服务注册，由 Claude 写成能在 CI Windows 任务里运行的真实进程或真实注册表测试。必须有 Windows 桌面才能验的项，例如登录后自启、Electron 窗口和托盘，在 PR 里记为 Windows 未验，不阻塞合入，等有 Windows 环境时集中验收。
 
 ## 工具和同步
 
