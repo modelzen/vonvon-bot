@@ -1283,6 +1283,8 @@ The provider layer is redesigned on 2026-10-12. The design, its data types, the 
 
 **Depends on.** V3. Development starts from `H3` or `main`. No acceptance input beyond the Mac and the Linux host for the process tests. V6a merges after V4, which has landed, so it merges when verified, before or after V5. V6a publishes the freeze point `F6`.
 
+*Split.* V6a lands as six PRs from `main`, in this order, because one PR exceeds the 1500-line cap. Each opens after the previous one merges. 1, `claude/v6a-model-policy`: `model.ts` and `policy/**` with their tests. 2, `claude/v6a-runtime`: `engines/engine.ts`, `registry.ts`, and `runtime/**`, with the F6 runtime contract revised in the same PR. 3, `claude/v6a-transport`: `transport/**` and the re-export at the old client path. 4, `claude/v6a-outbound`: `outbound/**` and the two uploaders. 5, `claude/v6a-process-identity`, and 6, `claude/v6a-process-host`: `process/**` and `fake-child.mjs`, against the process contract revised in PR 5. Each PR carries the unit boxes for its own files. Lane 1 and the Codex first-token metric go with PR 3, lanes 2 to 7 and the upload metric with PR 4, lanes 8 to 10 with PR 6. PRs 1 and 2 have no consumer, so they carry unit evidence only. The program graph keeps one V6a node that points at the open piece. `F6` is published when PR 6 merges.
+
 **Files.**
 
 - [ ] Create `provider/model.ts` with the types of *Data types* and *Supporting types* in `providers.md`: `ProviderId` as `'codex' | 'claude'`, `Tier`, `ReadScope`, `Grant`, `Lane`, `StepDetail`, `Step`, `TodoItem`, `ImageRef`, `SubagentState`, `Failure`, `StopBy`, `Outcome`, `RunEvent`, `Support`, `ProviderFeatures`, and the written-out supporting types.
