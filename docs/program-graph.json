@@ -12,15 +12,15 @@
     {
       "id": "V5",
       "title": "V5 Electron 外壳与 Vonvon 系统服务",
-      "branch": "codex/v5-desktop",
-      "pr": 110,
+      "branch": "claude/v5-service-codec",
+      "pr": 246,
       "owner": "client",
       "mergeAfter": [
         "V4"
       ],
       "acceptance": "真实 Electron 窗口、旧版 daemon 构建、Mac 图形会话（clay）、Linux 专用用户 accept-user 的 systemd 用户会话",
       "plan": "Wrap the UI in an Electron shell that runs the daemon (V5)",
-      "note": "计划允许 V5 按验收条件拆成两个 PR：V5a 外壳（T1、T6、T7 和外壳相关 lane）先落地，`service install` 和 `uninstall` 保持 V3 的拒绝；V5b 服务（T3、T4、T5、T8、T9）随后。是否拆分由 Codex 按分支状态决定并在 PR 里写明。V10 只等外壳部分。"
+      "note": "#110 按其拆分表拆成 15 个串行 PR（V5a 1–5 外壳，V5b 6–15 服务），本节点指向当前在飞的一个（1/15）。拆分来源 #110。V10 只等外壳部分。"
     },
     {
       "id": "V6a",
