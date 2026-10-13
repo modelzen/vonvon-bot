@@ -36,6 +36,10 @@ public static class VonvonSupervisor {
     public uint size; public string reserved,desktop,title; public uint x,y,xsize,ysize,xchars,ychars,fill,flags;
     public ushort show,reservedSize; public IntPtr reservedData,input,output,error;
   }
+  [StructLayout(LayoutKind.Sequential)] struct RawStartup {
+    public uint size; public IntPtr reserved,desktop,title; public uint x,y,xsize,ysize,xchars,ychars,fill,flags;
+    public ushort show,reservedSize; public IntPtr reservedData,input,output,error;
+  }
   [StructLayout(LayoutKind.Sequential)] struct StartupEx { public Startup startup; public IntPtr attributes; }
   [StructLayout(LayoutKind.Sequential)] struct ProcessInfo { public IntPtr process,thread; public uint pid,tid; }
 
@@ -48,12 +52,12 @@ public static class VonvonSupervisor {
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool UpdateProcThreadAttribute(IntPtr list,uint flags,IntPtr attribute,IntPtr value,IntPtr size,IntPtr previous,IntPtr returned);
   [DllImport("kernel32.dll")] static extern void DeleteProcThreadAttributeList(IntPtr list);
   [DllImport("kernel32.dll", EntryPoint="CreateFileW", CharSet=CharSet.Unicode, ExactSpelling=true, SetLastError=true)] static extern IntPtr CreateFile(string name,uint access,uint share,IntPtr security,uint disposition,uint flags,IntPtr template);
-  [DllImport("kernel32.dll", SetLastError=true)] static extern IntPtr GetStdHandle(int id);
-  [DllImport("kernel32.dll", SetLastError=true)] static extern bool SetStdHandle(int id,IntPtr handle);
+  [DllImport("kernel32.dll", EntryPoint="GetStartupInfoW")] static extern void GetStartupInfo(ref RawStartup info);
+  [DllImport("kernel32.dll")] static extern uint GetFileType(IntPtr handle);
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool SetHandleInformation(IntPtr handle,uint mask,uint flags);
   [DllImport("kernel32.dll")] static extern uint WaitForSingleObject(IntPtr handle,uint ms);
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetExitCodeProcess(IntPtr process,out uint code);
-  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool CloseHandle(IntPtr handle);
   [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetProcessTimes(IntPtr process,out long creation,out long exit,out long kernel,out long user);
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool ProcessIdToSessionId(uint pid,out uint session);
@@ -70,6 +74,7 @@ public static class VonvonSupervisor {
   static readonly object gate=new object();
   static Stream pipe; static StreamWriter log;
   static IntPtr job=IntPtr.Zero, provider=IntPtr.Zero;
+  static IntPtr[] slots;
   static bool created, cancelled, exitObserved, reaped;
 
   sealed class ByteReader {
@@ -140,6 +145,24 @@ public static class VonvonSupervisor {
     return list;
   }
 
+  // The provider's stdin, stdout, and stderr arrive as CRT descriptors 3, 4, and 5 in the lpReserved2 block libuv builds
+  // (int count, count flag bytes, count handles, unaligned). Descriptors 0 to 2 belong to the PowerShell host and the CLR.
+  static IntPtr[] ProviderSlots() {
+    var info=new RawStartup(); info.size=(uint)Marshal.SizeOf(typeof(RawStartup));
+    GetStartupInfo(ref info);
+    if(info.reservedData==IntPtr.Zero || info.reservedSize<4) return null;
+    int count=Marshal.ReadInt32(info.reservedData);
+    if(count<6 || count>256 || info.reservedSize<4+count*(1+IntPtr.Size)) return null;
+    var found=new IntPtr[3];
+    for(int i=0;i<3;i++) {
+      byte flags=Marshal.ReadByte(info.reservedData,4+3+i);
+      IntPtr h=Marshal.ReadIntPtr(info.reservedData,4+count+(3+i)*IntPtr.Size);
+      if((flags&1)==0 || h==IntPtr.Zero || h==new IntPtr(-1)) return null;
+      found[i]=h;
+    }
+    return found;
+  }
+
   public static int Run(string pipeName,string jobName,string logPath) {
     log=new StreamWriter(new FileStream(logPath,FileMode.Append,FileAccess.Write,FileShare.ReadWrite)); log.AutoFlush=true;
     try { return Serve(pipeName,jobName); }
@@ -150,6 +173,9 @@ public static class VonvonSupervisor {
     string token=Environment.GetEnvironmentVariable("VONVON_CONTROL_TOKEN");
     Environment.SetEnvironmentVariable("VONVON_CONTROL_TOKEN",null);
     if(string.IsNullOrEmpty(token)) { Log("no control token"); Finish(CODE_NEVER_LAUNCHED); }
+    slots=ProviderSlots();
+    if(slots==null) { Log("no provider stdio on descriptors 3 to 5"); Finish(CODE_NEVER_LAUNCHED); }
+    Log("provider stdio file types "+GetFileType(slots[0])+" "+GetFileType(slots[1])+" "+GetFileType(slots[2]));
     IntPtr handle=CreateFile(pipeName,0x80000000|0x40000000,0,IntPtr.Zero,3,FILE_FLAG_OVERLAPPED,IntPtr.Zero);
     if(handle==IntPtr.Zero || handle==new IntPtr(-1)) { Log("pipe open failed: "+Marshal.GetLastWin32Error()); Finish(CODE_NEVER_LAUNCHED); }
     pipe=new NamedPipeClientStream(PipeDirection.InOut,true,true,new SafePipeHandle(handle,true));
@@ -198,7 +224,7 @@ public static class VonvonSupervisor {
     var limits=new Extended(); limits.basic.flags=KILL_ON_JOB_CLOSE;
     if(!SetInformationJobObject(job,9,ref limits,(uint)Marshal.SizeOf(typeof(Extended)))) LaunchFailed(nonce,Marshal.GetLastWin32Error());
 
-    IntPtr[] std=new IntPtr[] { GetStdHandle(-10),GetStdHandle(-11),GetStdHandle(-12) };
+    IntPtr[] std=slots;
     foreach(IntPtr h in std) if(!SetHandleInformation(h,1,1)) LaunchFailed(nonce,Marshal.GetLastWin32Error());
     IntPtr size=IntPtr.Zero;
     InitializeProcThreadAttributeList(IntPtr.Zero,2,0,ref size);
@@ -231,9 +257,7 @@ public static class VonvonSupervisor {
     CloseHandle(child.thread);
     lock(gate) { provider=child.process; }
     Emit("ready "+nonce+" "+child.pid);
-    // The provider now owns the daemon's pipes; closing our copies makes stdout EOF mean what it means on POSIX.
-    int[] ids=new int[] { -10,-11,-12 };
-    for(int i=0;i<3;i++) { SetStdHandle(ids[i],IntPtr.Zero); CloseHandle(std[i]); }
+    for(int i=0;i<3;i++) if(!CloseHandle(std[i])) Log("close of provider descriptor "+(3+i)+" failed: "+Marshal.GetLastWin32Error());
     var waiter=new Thread(WaitProvider); waiter.IsBackground=true; waiter.Start();
   }
 
@@ -337,16 +361,18 @@ export async function spawnWindowsSupervisor(options: WindowsSupervisorOptions):
   const server = createServer();
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(pipeName, resolve); });
   const child = spawn(POWERSHELL, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', files.loader, pipeName, options.jobName, options.logPath], {
-    env: { ...process.env, VONVON_CONTROL_TOKEN: token }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+    env: { ...process.env, VONVON_CONTROL_TOKEN: token }, stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe', 'pipe'], windowsHide: true,
   });
-  (child.stdin as Writable).on('error', () => { /* the provider's end may close first */ });
+  const stdio = child.stdio as unknown as ReadonlyArray<Readable | Writable | null>;
+  const [stdin, stdout, stderr] = [stdio[3] as Writable, stdio[4] as Readable, stdio[5] as Readable];
+  stdin.on('error', () => { /* the provider's end may close first */ });
   try {
     await spawned(child, `windows supervisor ${POWERSHELL}`);
     const { socket, hello, rest } = await authenticate(server, child, token, options.spawnDeadlineMs ?? DEFAULT_SPAWN_DEADLINE_MS);
     socket.write('ok\n');
     return channelOver({
       platform: 'win32', child, commands: socket, receipts: socket, initial: rest, close: () => socket.destroy(),
-      stdio: { stdin: child.stdin as Writable, stdout: child.stdout as Readable, stderr: child.stderr as Readable },
+      stdio: { stdin, stdout, stderr },
       start: startTokenFromFileTime(hello.start), osSession: hello.session,
     });
   } finally {
