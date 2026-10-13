@@ -3,7 +3,7 @@ import { extname, resolve } from 'node:path';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { log } from '../core/logger';
 import type { PermissionMode } from '../agent/types';
-import { checkUploadPath, uploadPlan } from '../provider/outbound/policy';
+import { checkUploadPath, fetchRemoteImage, uploadPlan } from '../provider/outbound/policy';
 import { imageSources } from './md-scan';
 
 /**
@@ -19,7 +19,8 @@ import { imageSources } from './md-scan';
  * Sources are either a LOCAL file (relative to the run cwd, or an absolute path
  * INSIDE that cwd subtree — outside is refused for qa/write so the agent can't
  * make the bot upload `~/.ssh/…`; a `full`-permission project may read any local
- * image, matching what its shell can already print) or an `http(s)` URL.
+ * image, matching what its shell can already print) or an `http(s)` URL,
+ * fetched only when the project's network switch is on, in every tier.
  * Everything is best-effort: a rejected path, a missing file, an oversized image
  * or a failed upload is logged and skipped — never throwing.
  */
@@ -35,8 +36,6 @@ export const MAX_IMAGES = 30;
 const UPLOAD_CONCURRENCY = 4;
 /** Feishu rejects uploads over 10MB (and 0-byte files). */
 const MAX_BYTES = 10 * 1024 * 1024;
-/** Abort a remote fetch that stalls — a hung URL must not hold up the reply. */
-const DOWNLOAD_TIMEOUT_MS = 10_000;
 /** Abort an upload that stalls. The SDK's axios client has NO request timeout, so
  * without this a single wedged `image.create` hangs its caller forever — and the
  * terminal card frame is sequenced behind it, leaving the card stuck on
@@ -69,6 +68,7 @@ export async function uploadOutboundImages(
   sources: string[],
   cwd: string,
   mode: PermissionMode,
+  network: boolean,
 ): Promise<Map<string, string>> {
   const picked = sources.slice(0, MAX_IMAGES);
   if (sources.length > picked.length) {
@@ -76,7 +76,7 @@ export async function uploadOutboundImages(
   }
   const results = await mapPool(picked, UPLOAD_CONCURRENCY, async (src) => {
     try {
-      return [src, await resolveAndUpload(channel, src, cwd, mode)] as const;
+      return [src, await resolveAndUpload(channel, src, cwd, mode, network)] as const;
     } catch (err) {
       log.warn('outbound', 'image-failed', { src: src.slice(0, 80), err: String(err) });
       return [src, undefined] as const;
@@ -93,8 +93,9 @@ async function resolveAndUpload(
   src: string,
   cwd: string,
   mode: PermissionMode,
+  network: boolean,
 ): Promise<string | undefined> {
-  const { buffer, cacheKey } = await loadSource(src, cwd, mode);
+  const { buffer, cacheKey } = await loadSource(src, cwd, mode, network);
   if (!buffer) return undefined;
   const hit = cache.get(cacheKey);
   if (hit) return hit;
@@ -106,8 +107,12 @@ async function resolveAndUpload(
 /** Load a source's bytes + a stable cache key. `buffer` undefined ⇒ rejected
  * (out of cwd / bad ext / missing / oversized / fetch failed); the cache key is
  * still returned but never populated, so it's harmless. */
-async function loadSource(src: string, cwd: string, mode: PermissionMode): Promise<{ buffer?: Buffer; cacheKey: string }> {
-  if (/^https?:\/\//i.test(src)) return loadRemote(src);
+async function loadSource(src: string, cwd: string, mode: PermissionMode, network: boolean): Promise<{ buffer?: Buffer; cacheKey: string }> {
+  if (/^https?:\/\//i.test(src)) {
+    const buffer = await fetchRemoteImage(src, await uploadPlan({ cwd, mode, network }));
+    if (!buffer) log.warn('outbound', 'image-remote-refused', { url: src.slice(0, 80), network });
+    return { buffer, cacheKey: `url:${src}` };
+  }
   return loadLocal(src, cwd, mode);
 }
 
@@ -156,40 +161,6 @@ async function loadLocal(
   }
   const buffer = await readFile(canonical);
   return { buffer, cacheKey: `local:${canonical}:${mtimeMs}:${size}` };
-}
-
-async function loadRemote(url: string): Promise<{ buffer?: Buffer; cacheKey: string }> {
-  const cacheKey = `url:${url}`;
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), DOWNLOAD_TIMEOUT_MS);
-  try {
-    const res = await fetch(url, { signal: ctrl.signal, redirect: 'follow' });
-    if (!res.ok) {
-      log.warn('outbound', 'image-http', { url: url.slice(0, 80), status: res.status });
-      return { cacheKey };
-    }
-    const ct = (res.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase();
-    if (ct && !ct.startsWith('image/')) {
-      log.warn('outbound', 'image-ctype', { ct, url: url.slice(0, 80) });
-      return { cacheKey };
-    }
-    const declared = Number(res.headers.get('content-length') ?? 0);
-    if (declared > MAX_BYTES) {
-      log.warn('outbound', 'image-size', { declared, url: url.slice(0, 80) });
-      return { cacheKey };
-    }
-    const ab = await res.arrayBuffer();
-    if (ab.byteLength === 0 || ab.byteLength > MAX_BYTES) {
-      log.warn('outbound', 'image-size', { size: ab.byteLength, url: url.slice(0, 80) });
-      return { cacheKey };
-    }
-    return { buffer: Buffer.from(ab), cacheKey };
-  } catch (err) {
-    log.warn('outbound', 'image-fetch', { url: url.slice(0, 80), err: String(err) });
-    return { cacheKey };
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 async function uploadBuffer(channel: LarkChannel, buffer: Buffer): Promise<string | undefined> {
