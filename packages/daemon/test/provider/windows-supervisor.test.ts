@@ -110,7 +110,7 @@ describe.skipIf(process.platform !== 'win32')('the Windows supervisor', () => {
     const argv = ['has space', 'say "hi"', 'back\\"slash', 'trailing\\', '', '& | < > ^ % !', 'C:\\dir\\'];
     s.channel.send({ command: 'probe', nonce: 'p0' });
     expect(await s.take('refused')).toEqual({ kind: 'refused', command: 'probe', nonce: 'p0', reason: 'not-launched' });
-    s.channel.send(launchNode(`process.stdout.write(JSON.stringify(process.argv.slice(2)))`, ...argv));
+    s.channel.send(launchNode(`process.stdout.write(JSON.stringify(process.argv.slice(1)))`, ...argv));
     const ready = await s.take('ready');
     expect(ready).toMatchObject({ nonce: 'l1' });
     expect(ready.pid).toBeGreaterThan(0);

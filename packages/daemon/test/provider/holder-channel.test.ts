@@ -14,8 +14,8 @@ let binary: HolderBinary;
 const channels: HolderChannel[] = [];
 const dirs: string[] = [];
 
-beforeAll(() => { binary = compileHolder(); });
-afterAll(() => binary.dispose());
+beforeAll(() => { if (process.platform !== 'win32') binary = compileHolder(); });
+afterAll(() => { if (process.platform !== 'win32') binary.dispose(); });
 afterEach(async () => {
   for (const channel of channels.splice(0)) {
     try { process.kill(channel.holderPid, 'SIGKILL'); } catch { /* already gone */ }
