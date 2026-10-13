@@ -1,9 +1,10 @@
+import { X509Certificate } from 'node:crypto';
 import { lstat, realpath, stat } from 'node:fs/promises';
 import { lookup } from 'node:dns/promises';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
-import { checkServerIdentity, type PeerCertificate } from 'node:tls';
 import { isIP } from 'node:net';
+import type { PeerCertificate } from 'node:tls';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path';
 import type { Tier } from '../model';
 import type { EnforcementPlan } from '../policy/enforcement';
@@ -135,12 +136,19 @@ const remoteDeps: RemoteImageDeps = {
   request: requestPinned,
 };
 
+// tls.checkServerIdentity on Node 22.23 runs domainToASCII before isIP, which turns every IPv6 literal into '' and rejects it.
+function checkIpIdentity(ip: string, cert: PeerCertificate): Error | undefined {
+  if (new X509Certificate(cert.raw).checkIP(ip)) return undefined;
+  const reason = `IP: ${ip} is not in the cert's list: ${cert.subjectaltname ?? ''}`;
+  return Object.assign(new Error(`Hostname/IP does not match certificate's altnames: ${reason}`), { code: 'ERR_TLS_CERT_ALTNAME_INVALID', reason, host: ip, cert });
+}
+
 export function requestPinned(url: URL, address: string, signal: AbortSignal): Promise<RemoteResponse> {
   return new Promise((resolveResponse, reject) => {
     const secure = url.protocol === 'https:';
     const hostname = url.hostname.replace(/^\[|\]$/g, '');
     const tls = isIP(hostname)
-      ? { servername: '', checkServerIdentity: (_: string, cert: PeerCertificate) => checkServerIdentity(hostname, cert) }
+      ? { servername: '', checkServerIdentity: (_: string, cert: PeerCertificate) => checkIpIdentity(hostname, cert) }
       : { servername: hostname };
     const request = (secure ? httpsRequest : httpRequest)({
       hostname: address,
