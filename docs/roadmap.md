@@ -33,7 +33,7 @@
 - provider：V6a → V6b；从 V6b 分出 V6c、V6d、V7a，三者互不作为合并前提；V7a → V7b → V7c。V6a 和 V5 都只等已合入的 V4。V7c 是叶子，没有 Windows 主机时停放，不挡任何版本。
 - 导入：V8 → V9。V8 只等已合入的 V4；导入写入 bridge 原有的 provider 编号，由 V6b 的加载时迁移处理，所以和 V6b 先后无关。V9 另要 V5 发布的签名安装包。
 
-V5 可以按验收条件拆成 V5a 外壳和 V5b 服务两个 PR，V5b 排在 V5a 之后，`service install` 和 `uninstall` 在 V5b 之前保持拒绝。是否拆由 Codex 按分支状态决定并写进 PR。协议汇总文件、`cli/index.ts`、根 `package.json`、`NOTICE` 和界面登记文件仍由根代理写，跨链合并的冲突只会落在这些文件上，按 patch-id 规则重新 swarm。正式检查的排队也按这张图：前提都已合入或已冻结的 PR 才排进十路实时、性能和 Shipping，两个都能跑时先跑未合入下游更多的那个。细则见 [plan.md](plan.md) *Parallel execution* 的 *Dependencies*。
+V5 可以按验收条件拆成 V5a 外壳和 V5b 服务两个 PR，V5b 排在 V5a 之后，`service install` 和 `uninstall` 在 V5b 之前保持拒绝。2026-10-13 起由 Claude 按 `AGENTS.md` 的 PR 大小上限拆分并写进 PR。协议汇总文件、`cli/index.ts`、根 `package.json`、`NOTICE` 和界面登记文件仍由根代理写，跨链合并的冲突只会落在这些文件上，按 patch-id 规则重新 swarm。正式检查的排队也按这张图：前提都已合入或已冻结的 PR 才排进十路实时、性能和 Shipping，两个都能跑时先跑未合入下游更多的那个。细则见 [plan.md](plan.md) *Parallel execution* 的 *Dependencies*。
 
 ### 推后的 provider
 
@@ -60,21 +60,21 @@ V5 可以按验收条件拆成 V5a 外壳和 V5b 服务两个 PR，V5b 排在 V5
 
 上表里不等上游验收就能先做的叶子：V5 外壳的认证连接单元，V5 的服务标识、定义编解码、读回和排空（纯逻辑，管理器查询注入），V6a 的纯核心（不依赖任何东西），V7a 的 ACP 客户端和帧翻译以及 V7b 的 Pi 帧翻译（从 `F6` 开始），V10 的设备仓库，V11 的加密移植。先做只是开发，不满足任何验收项，也不改变合并顺序。
 
-协议的汇总文件（`index.ts`、`domain.ts`、`rpc.ts`、`events.ts`、`handshake.ts`）、`cli/index.ts` 的命令登记、根目录的 `package.json` 和 lockfile、`NOTICE`、界面功能登记文件都由根代理在集成时改，各 PR 只拥有自己新增的文件。三个长期负责人各管一块：客户端界面（V4、V5、V11 的客户端部分），provider（V6a 到 V7c，之后 V9），机器平台（先跑 V3 的正式检查，再做 V8、V10、V11 的云端部分）。具体的分支、文件归属和前两波安排见 [plan.md](plan.md) *Parallel execution* 的 *Dependencies* 到 *Wave 2*。
+协议的汇总文件（`index.ts`、`domain.ts`、`rpc.ts`、`events.ts`、`handshake.ts`）、`cli/index.ts` 的命令登记、根目录的 `package.json` 和 lockfile、`NOTICE`、界面功能登记文件是共享文件。在飞 PR 最多两个，后合入的 PR 在 merge `main` 后解决这些文件的冲突。分支起点和文件归属见 [plan.md](plan.md) *Parallel execution* 的 *Dependencies*。
 
 各链分别推进。客户端和云端链是 V4、V5 外壳、V10、V11；V5 的服务验收需要 Gate L、Gate M、Mac 图形会话（按用户授权可用 `clay`）和 Linux 专门测试用户的 systemd 用户会话。导入链是 V8、V9；V9 的发布还需要 V5 签名安装包。V10 不等 V9。测试用户和 systemd 环境在第一波就准备，不等 V4 开始。
 
 ## 谁来做
 
-分工按仓库根目录的 `AGENTS.md`。Linux 上的 Claude Code 通常负责这三份文档，不写产品代码。2026-10-10 Claude Code CLI 认证返回 HTTP 401 后，用户明确授权 Codex 直接修订这次 V2 澄清并继续。Mac 上的 Codex 负责全部实现和检查，也负责打包、签名、公证。V9 需要的安装包下载地址来自 Mac 的发布。
+分工按仓库根目录 `AGENTS.md` 的 2026-10-13 版。JP-VPS 上的 Claude 设计并实现，在 Linux 上跑完检查后交接。Mac 上的 Codex 做独立审查、在 macOS 和 Windows 验证、真实窗口和原生服务验收、冻结、Shipping 和合入，也负责打包、签名、公证和发布。V9 需要的安装包下载地址来自 Mac 的发布。2026-10-10 到 2026-10-12 的根代理加工作代理模式已停用。
 
 V5 和 V8 里有 systemd 检查，Mac 上跑不了。Codex 在 Linux 虚拟机或有用户会话的 Linux 环境里跑这几条，托管 CI 不能顶替。V5 的原生服务检查通常用专门的系统测试用户，Mac 上可按下文的用户授权在 `clay` 中使用隔离的数据和 Vonvon 服务标识。V8 安装旧 bridge 服务的检查和原 bridge 用同一个服务标识，也要在专门的测试用户里跑，不碰用户账号里在用的 bridge。较早的环境报告只确认了日常用户的 Mac 图形会话，也没有确认可用的 Linux systemd 用户会话。第一波先只读检查现有专用测试环境，只向用户请求缺少的能力；`github-ci` 保留给 CI，不用于系统服务验收。第一波的只读检查结果：Mac 上有用户 `manzana`（uid 502），但它没有图形会话（`gui/502` 不存在）；Linux 上 `ops` 的 systemd 用户会话在运行，但还没有专门的测试用户。所以要有人用快速切换用户或屏幕共享把 `manzana` 登录进图形会话，并在验收期间保持登录；Linux 用腾讯云主机 101.34.213.231 上的专门用户 `vonvon-accept`。用户已授权 root SSH，根代理按 [native-acceptance-hosts.md](native-acceptance-hosts.md) 准备，不再另向用户要许可。只有 V5 的原生验收等这两样，V4、V6a 和 V5 的其他工作不等。
 
 2026-10-11 用户回答 V5/V8 的测试账号问题，直接授权在 `clay` 中测试。V5 的 macOS 系统服务测试（原生 launchd 检查和第 6 路的 Mac 部分）因此不再等 `manzana`。条件是：只用这次运行自建的临时 `VONVON_HOME`；产品服务标识 `com.vonvon.bot.daemon` 不改名，开跑前只读确认 `clay` 里没有这个任务和 plist，运行结束用 `uninstall` 删掉；不碰 `ai.feishu-codex-bridge.bot`、bridge 数据和其他 LaunchAgent，不改 `~/Library/LaunchAgents` 的权限，不用 `github-ci`；开跑前和结束后记录在用 bridge（根代理记录为 PID 2253）的 pid、启动时间和 TCP 监听，有任何变化就停止并判失败，不重启 bridge。V8 同样已获 `clay` 测试授权，但导入会找到并暂停调用用户自己的 bridge 服务，在 `clay` 里会碰到在用 bridge。所以 V8 的各路检查都在 `manzana`（`gui/502`）和 Linux 的 `vonvon-accept` 里跑，不在 `clay` 里跑。把 `manzana` 登录进图形会话是用户操作。这是操作约束，不是缺少用户授权；不能触碰或重启在用 bridge。Linux 由用户授权的腾讯云 root SSH 准备，细则见 [native-acceptance-hosts.md](native-acceptance-hosts.md)。细则见 [plan.md](plan.md) V5 的 *Native acceptance environment*。
 
-Codex 可以并行开发，本机同时最多一个根代理加三个工作代理。根代理是唯一的 Git 和 forge 写入者，负责建工作树、集成、提交、推送、开 PR、合并和 Shipping。工作代理各用根代理建的工作树，只改分给自己的文件，各自运行 npm ci，不提交、不推送。每个 PR 先由各工作代理写测试、做组件验证，根代理集成后跑一次完整检查，再做独立审查，冻结 head 后才跑十路实时、性能、原生检查和 Shipping。连着测试 Bot 的检查仍然逐个跑，用独立数据目录的检查可以同时跑。并行只提前开发起点（见上文“开发起点”），不改变合并图、验收依赖、架构、数据形状和验证门槛。V10 的云端部分可以在 V3 之后开始开发，V5 外壳合并并通过自身验证后即可合并 V10，无须等待 V9。merge `main` 之后，patch-id 不变只是审查结论继续有效的必要条件：基线、依赖版本或相关证据变了，就要重跑受影响的检查，并重新拿独立审查结论。具体分工见 [plan.md](plan.md) 的 *Parallel execution*。
+每台机器一个在飞 PR 一个会话，在飞产品 PR 最多两个，一个 PR 一个任务分区。Claude 开发第二个 PR 时 Codex 验证第一个，并行只有这两级。并行只提前开发起点（见上文“开发起点”），不改变合并图、验收依赖、架构、数据形状和验证门槛。V10 的云端部分可以在 V3 之后开始开发，V5 外壳合并并通过自身验证后即可合并 V10，无须等待 V9。merge `main` 之后，patch-id 不变只是审查结论继续有效的必要条件：基线、依赖版本或相关证据变了，就要重跑受影响的检查，并重新拿独立审查结论。
 
-此后实现时发现计划要改架构、数据形状或 PR 顺序，Codex 在 PR 里写明，按 `AGENTS.md` 交给 Claude Code 更新。上述授权只适用于这次 V2 澄清。
+实现中发现的设计缺口在同一 PR 的评论里提出，Claude 在该 PR 里同时改代码和计划，不另开文档 PR。
 
 用户已授权 V2 及后续版本在全部验证通过后继续合并，无需等待个人界面复核或手动点击合并。各版本按用户实际接触的界面留存交互证据：网页、桌面窗口和飞书卡片留真实截图和视频；只有命令行和 API 的 V3 改留 CLI 证据包（伪终端原始录制、每条命令的原始输出和退出码、自动断言、绑定准确 head 和构建哈希的清单，并由另一个代理独立重跑核对），不再要求终端截图和录屏。拿不到规定的证据时这一项保持未完成，授权不能当作通过。单元测试、十路实时检查、性能检查、独立审查与准确 head 的 Shipping 判定仍是合并条件。不得 force-push、rebase 已推送分支，也不设置小时审计。
 
@@ -85,16 +85,16 @@ Codex 可以并行开发，本机同时最多一个根代理加三个工作代�
 2026-10-12 起，程序的进度放在本仓库的 GitHub issue 里，由 `docs/program-graph.json` 经 `scripts/program-graph-sync.mjs` 生成和维护。
 
 - 看板是置顶的 [issue #122](https://github.com/modelzen/vonvon-bot/issues/122)。正文有版本合并图、进度表和任务依赖图，三者由 `node scripts/program-graph-sync.mjs board` 从 issue 的实际状态重新生成。颜色：绿已完成，黄进行中，白可开始，灰被挡，虚线停放，蓝已冻结或已验证。
-- 每个版本一个父 issue（#123 工具，#124 V5 到 #135 V11），子 issue 是按文件不重叠切出的任务分区、证据门、根代理交接和该版本的缺陷。版本之间的合并前提和任务之间的依赖都用 GitHub 的 blocked by 关系表示。只有用户能做的事是 #205 到 #209，指派给用户。GitHub 项目 “Vonvon Bot v2” 收录全部 issue，可在那里按状态和版本看板视图。
-- 状态由根代理维护：任务开始时加 `state:in-progress`，分区集成且测试通过后关闭；版本在四个节点换标签，`state:code-ready`、`state:frozen`、`state:verified`，PR 合入后关闭。实现中发现的缺陷新开 issue 挂到对应版本并打 `version:<编号>` 标签。
+- 每个版本一个父 issue（#123 工具，#124 V5 到 #135 V11），子 issue 是按文件不重叠切出的任务分区、证据门、集成交接和该版本的缺陷。版本之间的合并前提和任务之间的依赖都用 GitHub 的 blocked by 关系表示。只有用户能做的事是 #205 到 #209，指派给用户。GitHub 项目 “Vonvon Bot v2” 收录全部 issue，可在那里按状态和版本看板视图。
+- 状态由 Codex 维护：任务开始时加 `state:in-progress`，分区集成且测试通过后关闭；版本在四个节点换标签，`state:code-ready`、`state:frozen`、`state:verified`，PR 合入后关闭。实现中发现的缺陷新开 issue 挂到对应版本并打 `version:<编号>` 标签。
 - 改任务图（新增分区、改任务依赖、V5 拆分）先改 `docs/program-graph.json` 再运行 `node scripts/program-graph-sync.mjs sync`。同步是幂等的：补建缺的 issue、更新标题和正文、补链接和标签，不删除任何东西。Codex 可以增减不影响架构、数据形状和合并边的任务；要改合并边的交回 Claude Code 改计划。
-- 本地进度网页 #203：交付自包含、无 CDN 的 `/Users/clay/vonvon-progress/index.html`。`refresh.mjs` 只读抓取默认分支的 `docs/program-graph.json` 和 GitHub issues、PR，再原子刷新本地产物。一张统一可折叠图展示 Version → 父 issue → 子 issue → 关联 PR，以及版本合入依赖和 task 前置关系；突出已可开工但未标记 `state:in-progress` 的任务，缺少证据时把未开始原因标为未知。指定本地产物负责人沿用 Paseo schedule `aa01bd1d`，按 `0 * * * *`、`Asia/Shanghai` 每小时刷新；已恢复 active，首次 run `e897a54d-faa6-41d9-ada5-8ed043fc91e4` 于 `2026-10-12T13:09:11.336Z` 成功刷新104750字节 HTML，内嵌 JSON 与 snapshot 一致，指定负责人已验证。独立只读数据/源码审查通过；完整 GUI 交互与最终截图未验收，file URL 被拒绝后已停止浏览器尝试。#203 保持打开记录该限制，不阻塞其他产品任务。根代理继续维护 issue #122 看板。工具任务 #204 把 CI 改成冻结 head 触发。
+- 本地进度网页 #203 于 2026-10-13 停止，Codex 关闭该 issue 并记录原因。#122 看板和 PR 状态是唯一进度来源，Codex 在交接和合入时更新。
 
 ## CI
 
 Linux 保留 GitHub 托管的 Ubuntu，Windows 用托管的 `windows-2025`；macOS 配置为组织共享的 Mac mini 自托管 runner。完整改动三个平台都跑。原有 Windows 原生检查保留在旧桌面分支的工作流中，桌面打包和原生界面检查不在 main 的检查链里。两个仓库的 `ENABLE_SELF_HOSTED_MACOS_CI` 均已开启，使用无发布凭据的专用标准账户 `github-ci`。重启后先登录该账户一次，再切回日常用户并保留后台图形会话。每台 Mac 只运行一个 runner，两个仓库排队共享。安装位置、权限和服务管理见 [self-hosted-ci.md](self-hosted-ci.md)。
 
-2026-10-12 起完整的三平台运行只在冻结 head 跑一次，不再每次 push 都跑。目标为 `main` 的 PR 每次事件只跑范围分类和文档检查；完整运行只在 PR 带 `frozen` 标签时或手动触发时跑。根代理冻结 head 时打标签，patch 变了先摘标签、下次冻结再打。冻结之前工作代理在本机跑针对性测试，根代理集成时跑完整链，Linux 的完整链也可以通过 SSH 在 JP-VPS 上跑，这些都不算 GitHub 检查。取消合入 main 后重复跑相同套件的 push 触发，不设置定时任务。同一 PR 的旧运行会被新运行取消。改目标或改基线后没有当前结果时，手动补跑。工作流的修改是 Codex 的任务 #204；落地之前，合并仍要求冻结 head 有完整运行。
+2026-10-12 起完整的三平台运行只在冻结 head 跑一次，不再每次 push 都跑。目标为 `main` 的 PR 每次事件只跑范围分类和文档检查；完整运行只在 PR 带 `frozen` 标签时或手动触发时跑。Codex 冻结 head 时打标签，patch 变了先摘标签、下次冻结再打。冻结之前 Claude 在 JP-VPS 跑 Linux 完整链，Codex 在 Mac 跑 macOS 链，这些都不算 GitHub 检查。取消合入 main 后重复跑相同套件的 push 触发，不设置定时任务。同一 PR 的旧运行会被新运行取消。改目标或改基线后没有当前结果时，手动补跑。工作流已在 #217 落地。
 
 范围脚本保留 `docs` 和 `full`，未知或异常差异按 `full` 处理。文档改动只跑范围回归和空白检查，不装依赖，也不启动 Mac。完整改动先在 Linux 跑 Node 22 的安装、构建、类型检查、测试和 lint，再在托管 Windows 和自托管 Mac 的准确 PR head 跑同一套检查。daemon 原先的 lint 与类型检查完全相同，删除重复的 lint 别名，协议 lint 保留。
 
