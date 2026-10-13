@@ -543,6 +543,7 @@ describe('provider runner ownership', () => {
     const { owner, running } = await startInline();
     try {
       owner.requestStop();
+      await vi.waitFor(() => expect(fixture.registryClose).toHaveBeenCalledOnce());
       await vi.advanceTimersByTimeAsync(121_000);
       expect.soft(running.state()).toBe('pending');
       await assertLocksHeld();
