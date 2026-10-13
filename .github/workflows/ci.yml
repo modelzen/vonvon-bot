@@ -23,6 +23,28 @@ jobs:
       - run: npm run build --workspace @vonvon/client
       - name: Verify exact source
         run: git rev-parse HEAD
+      - name: Seed an owned prior Run value for restoration coverage
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Software\Microsoft\Windows\CurrentVersion\Run')
+          try {
+            if ($key.GetValueNames() -contains 'Vonvon Bot') { throw 'Unexpected existing Run value; refusing to overwrite it' }
+            $key.SetValue('Vonvon Bot', '  %USERPROFILE%\先前启动  ', [Microsoft.Win32.RegistryValueKind]::ExpandString)
+          } finally { $key.Dispose() }
       - name: Exercise all four native Windows tests
         working-directory: packages/desktop
         run: npx vitest run test/windows-native.test.ts
+      - name: Verify exact prior value restoration and remove only the owned value
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Microsoft\Windows\CurrentVersion\Run', $true)
+          if ($null -eq $key) { throw 'Owned prior Run value disappeared' }
+          try {
+            $value = $key.GetValue('Vonvon Bot', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            if ($key.GetValueKind('Vonvon Bot') -ne [Microsoft.Win32.RegistryValueKind]::ExpandString -or $value -cne '  %USERPROFILE%\先前启动  ') { throw 'Prior Run type or data changed; leaving it untouched' }
+            $key.DeleteValue('Vonvon Bot')
+            'Exact prior type, whitespace, Unicode and unexpanded text restored'
+          } finally { $key.Dispose() }
