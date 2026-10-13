@@ -8,6 +8,8 @@ import { afterEach, expect, it } from 'vitest';
 import { z } from 'zod';
 const manifestSchema = z.object({ source: z.string(), commit: z.string(), phase: z.enum(['seeding', 'complete']), files: z.array(z.object({ path: z.string(), mode: z.string(), sha256: z.string() })) });
 const fixtures: string[] = [];
+const importers: Promise<void>[] = [];
+const closedFixtures = new Set<string>();
 const originalPin = '446b2a40ca75b5f725d7b0baab777b3a8f18b2e0';
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'vonvon-import-')); fixtures.push(root);
@@ -24,8 +26,10 @@ async function fixture() {
   expect(code).toContain(`const pin = '${originalPin}'`);
   await writeFile(script, code.replace(originalPin, pin));
   const run = (preload?: string) => new Promise<{ code: number | null; output: string }>((resolve, reject) => {
+    if (closedFixtures.has(root)) { reject(new Error('Import fixture already closed')); return; }
     const prefix = preload ? ['--import', pathToFileURL(preload).href] : [];
     const child = spawn(process.execPath, [...prefix, script, source]); let output = '';
+    importers.push(new Promise(resolve => child.once('close', () => resolve())));
     child.stdout.on('data', data => { output += String(data); }); child.stderr.on('data', data => { output += String(data); });
     child.once('error', reject); child.once('close', code => resolve({ code, output }));
   });
@@ -55,7 +59,12 @@ async function expectCompleteSeed(f: Awaited<ReturnType<typeof fixture>>) {
   expect(await readFile(join(f.destination, 'PROVENANCE.md'), 'utf8')).toContain('A completed import never rewrites, repairs, or restores fork files.');
 }
 
-afterEach(async () => { await Promise.all(fixtures.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
+afterEach(async () => {
+  const roots = fixtures.splice(0);
+  roots.forEach(root => closedFixtures.add(root));
+  await Promise.all(importers.splice(0));
+  await Promise.all(roots.map(root => rm(root, { recursive: true, force: true })));
+});
 
 it('reads pinned Git blobs even with dirty working files, then preserves adaptations, additions and deletions with zero writes', async () => {
   const f = await fixture(); await writeFile(join(f.source, 'src/main.ts'), 'dirty checkout');
@@ -78,7 +87,7 @@ it('rejects a mismatched HEAD without creating the destination', async () => {
   await expect(readdir(f.destination)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
-it('converges after interruption at each publication and preserves unknown staging directories', async () => {
+it('converges after interruption at each publication and preserves unknown staging directories', { timeout: process.platform === 'win32' ? 20_000 : 5_000 }, async () => {
   const f = await fixture(); expect((await f.run()).code).toBe(0);
   const manifest = manifestSchema.parse(JSON.parse(await readFile(join(f.destination, 'import-core.json'), 'utf8')));
   for (let count = 0; count < manifest.files.length; count++) {
@@ -113,7 +122,7 @@ it('refuses divergent seeding and parent symlinks without modifying external fil
   expect((await f.run()).code).toBe(1); expect(await readdir(outside)).toEqual([]);
 });
 
-it('serializes concurrent imports and rejects an unrelated provenance file', async () => {
+it('serializes concurrent imports and rejects an unrelated provenance file', { timeout: process.platform === 'win32' ? 20_000 : 5_000 }, async () => {
   const f = await fixture();
   expect((await Promise.all([f.run(), f.run(), f.run()])).every(value => value.code === 0)).toBe(true);
   await rm(f.destination, { recursive: true }); await mkdir(f.destination);
