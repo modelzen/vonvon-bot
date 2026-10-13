@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -67,6 +67,40 @@ describe('uploadOutboundImages', () => {
     const map = await uploadOutboundImages(channel, [join(outside, 'secret.png'), '../escape.png'], cwd, 'write');
     expect(map.size).toBe(0);
     expect(state.calls).toBe(0);
+  });
+
+  it('rejects an inside alias to an outside image before upload', async () => {
+    const cwd = await tmpDir();
+    const outside = await tmpDir();
+    await writeFile(join(outside, 'secret.png'), PNG);
+    await symlink(join(outside, 'secret.png'), join(cwd, 'alias.png'));
+    const { channel, state } = fakeChannel();
+
+    const map = await uploadOutboundImages(channel, ['alias.png'], cwd, 'write');
+    expect(map.has('alias.png')).toBe(false);
+    expect(state.calls).toBe(0);
+  });
+
+  it('uploads an inside alias using the canonical in-project file', async () => {
+    const cwd = await tmpDir();
+    await writeFile(join(cwd, 'target.png'), PNG);
+    await symlink(join(cwd, 'target.png'), join(cwd, 'alias.png'));
+    const { channel, state } = fakeChannel();
+
+    const map = await uploadOutboundImages(channel, ['alias.png'], cwd, 'write');
+    expect(map.get('alias.png')).toMatch(/^img_key_/);
+    expect(state.calls).toBe(1);
+  });
+
+  it('allows an outside image in full mode', async () => {
+    const cwd = await tmpDir();
+    const outside = await tmpDir();
+    await writeFile(join(outside, 'allowed.png'), PNG);
+    const { channel, state } = fakeChannel();
+
+    const map = await uploadOutboundImages(channel, [join(outside, 'allowed.png')], cwd, 'full');
+    expect(map.get(join(outside, 'allowed.png'))).toMatch(/^img_key_/);
+    expect(state.calls).toBe(1);
   });
 
   it('skips a disallowed extension', async () => {
