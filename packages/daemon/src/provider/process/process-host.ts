@@ -265,7 +265,7 @@ export class ProcessHost {
   /** Queues `rung` and joins `end`. False once the record is retired or the channel is closed. */
   request(id: ReservationId, rung: Rung): boolean {
     const s = this.states.get(id);
-    if (!s?.channel || s.retired.settled) return false;
+    if (!s?.channel) return false;
     s.endRequested = true;
     if (rung === 'kill') s.killDue = true;
     const { queued } = this.issue(s, rung, rung === 'kill' ? KILL_CONFIRM_MS : TERM_WAIT_MS);
@@ -315,7 +315,9 @@ export class ProcessHost {
   }
 
   private async afterTerm(s: RecordState): Promise<void> {
-    await Promise.race([sleep(TERM_WAIT_MS), s.retired.promise, s.exitObserved.promise]);
+    // An exit observed before the end was asked for says nothing about the survivors, which still get the term wait.
+    const waits = [sleep(TERM_WAIT_MS), s.retired.promise];
+    await Promise.race(s.exitObserved.settled ? waits : [...waits, s.exitObserved.promise]);
     if (s.retired.settled) return;
     await this.continueEnd(s);
   }

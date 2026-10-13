@@ -9,6 +9,7 @@ const value = (name, fallback) => { const at = argv.indexOf(name); return at ===
 const out = (line) => new Promise(resolve => process.stdout.write(`${line}\n`, resolve));
 
 if (flag('--ignore-term')) process.on('SIGTERM', () => {});
+if (flag('--log-term')) process.on('SIGTERM', () => void out('term'));
 const termExitMs = value('--term-exit-ms', 0);
 if (termExitMs > 0) process.on('SIGTERM', () => setTimeout(() => process.exit(0), termExitMs));
 setInterval(() => {}, 1000);

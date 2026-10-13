@@ -35,7 +35,7 @@ function newHost(spawnDeadlineMs = 20_000): ProcessHost {
   return host;
 }
 
-type Seen = { exits: Array<[number | null, string | null]>; errors: HolderProcessError[] };
+type Seen = { exits: Array<[number | null, string | null]>; errors: HolderProcessError[]; order: string[] };
 
 /** Attaches `exit` and `error` at once, as the SDK's ProcessTransport does. */
 async function adoptFake(host: ProcessHost, args: string[], options: { signal?: AbortSignal; command?: string; listen?: boolean; armed?: boolean } = {}) {
@@ -45,10 +45,10 @@ async function adoptFake(host: ProcessHost, args: string[], options: { signal?: 
     command: options.command ?? NODE, args: [FAKE, ...args],
     env: { PATH: process.env.PATH ?? '', VONVON_UNSET: undefined }, signal: options.signal ?? new AbortController().signal,
   });
-  const seen: Seen = { exits: [], errors: [] };
+  const seen: Seen = { exits: [], errors: [], order: [] };
   if (options.listen !== false) {
-    proc.on('exit', (code: number | null, signal: string | null) => seen.exits.push([code, signal]));
-    proc.on('error', (error: HolderProcessError) => seen.errors.push(error));
+    proc.on('exit', (code: number | null, signal: string | null) => { seen.exits.push([code, signal]); seen.order.push('exit'); });
+    proc.on('error', (error: HolderProcessError) => { seen.errors.push(error); seen.order.push(error.code); });
   }
   let text = '';
   proc.stdout.on('data', (chunk: Buffer) => { text += chunk.toString(); });
@@ -58,7 +58,7 @@ async function adoptFake(host: ProcessHost, args: string[], options: { signal?: 
     pid = Number(/pid (\d+)/.exec(text)?.[1]);
     groups.push(pid);
   }
-  return { proc, seen, pid };
+  return { proc, seen, pid, text: () => text };
 }
 
 describe('specOf', () => {
@@ -73,7 +73,8 @@ describe.skipIf(process.platform === 'win32')('HolderProcess on POSIX', () => {
 
   it('SDK close on a child that exits at stdin EOF: exit fires once with its code, and the delayed SIGTERM and SIGKILL do nothing, even with a replacement running', async () => {
     const host = newHost();
-    const { proc, seen, pid } = await adoptFake(host, ['--exit-on-eof']);
+    const { proc, seen, pid, text } = await adoptFake(host, ['--exit-on-eof', '--grandchildren', '1']);
+    const grandchild = Number(/gc (\d+)/.exec(text())?.[1]);
     expect(proc.exitCode).toBeNull();
     expect(proc.killed).toBe(false);
     expect('pid' in proc).toBe(false);
@@ -83,6 +84,8 @@ describe.skipIf(process.platform === 'win32')('HolderProcess on POSIX', () => {
     expect(proc.exitCode).toBe(0);
     expect(proc.signalCode).toBeNull();
     expect(alive(pid)).toBe(false);
+    expect(alive(grandchild)).toBe(false);
+    expect(groupEmpty(pid)).toBe(true);
 
     const replacement = await adoptFake(host, ['--ignore-term']);
     expect(proc.kill('SIGTERM')).toBe(false);
@@ -91,23 +94,23 @@ describe.skipIf(process.platform === 'win32')('HolderProcess on POSIX', () => {
     await sleep(300);
     expect(alive(replacement.pid)).toBe(true);
     expect(replacement.seen.exits).toEqual([]);
-    expect(seen).toEqual({ exits: [[0, null]], errors: [] });
+    expect(seen).toMatchObject({ exits: [[0, null]], errors: [] });
     expect(replacement.proc.kill('SIGKILL')).toBe(true);
     await until(() => replacement.seen.exits.length === 1, 'replacement exit');
   }, 30_000);
 
   it('SDK close on a child that ignores EOF and SIGTERM: SIGTERM queues term, SIGKILL ends the group, and a SIGKILL after settlement returns false', async () => {
     const host = newHost();
-    const { proc, seen, pid } = await adoptFake(host, ['--ignore-term', '--grandchildren', '1']);
+    const { proc, seen, pid, text } = await adoptFake(host, ['--log-term', '--grandchildren', '1']);
     proc.stdin.end();
     expect(proc.kill('SIGTERM')).toBe(true);
     expect(proc.killed).toBe(true);
-    await sleep(300);
+    await until(() => text().includes('term\n'), 'the child received SIGTERM');
     expect(alive(pid)).toBe(true);
     expect(proc.exitCode).toBeNull();
     expect(proc.kill('SIGKILL')).toBe(true);
     await until(() => host.snapshot().length === 0, 'record settled after SIGKILL');
-    expect(seen).toEqual({ exits: [[null, 'SIGKILL']], errors: [] });
+    expect(seen).toMatchObject({ exits: [[null, 'SIGKILL']], errors: [] });
     expect(proc.signalCode).toBe('SIGKILL');
     expect(groupEmpty(pid)).toBe(true);
     expect(proc.kill('SIGKILL')).toBe(false);
@@ -126,7 +129,7 @@ describe.skipIf(process.platform === 'win32')('HolderProcess on POSIX', () => {
     const { proc, seen } = await adoptFake(host, ['--term-exit-ms', '100']);
     expect(proc.kill('SIGINT')).toBe(true);
     await until(() => seen.exits.length === 1, 'exit after term');
-    expect(seen).toEqual({ exits: [[0, null]], errors: [] });
+    expect(seen).toMatchObject({ exits: [[0, null]], errors: [] });
   }, 30_000);
 
   it('stdout EOF with no exit fact raises transport-lost once after the hold, with no fabricated exit, and the real exit still follows', async () => {
@@ -170,6 +173,22 @@ describe.skipIf(process.platform === 'win32')('HolderProcess on POSIX', () => {
     expect(await host.sweepOrphans()).toMatchObject({ gone: 1 });
   }, 30_000);
 
+  it('a containment exit raises holder-lost before exit(null, null), so the SDK never reads it as a clean exit', async () => {
+    const host = newHost();
+    const { seen, pid } = await adoptFake(host, ['--ignore-term']);
+    const holderPid = host.snapshot()[0]?.holderPid as number;
+    process.kill(holderPid, 'SIGSTOP');
+    process.kill(-pid, 'SIGKILL');
+    process.kill(holderPid, 'SIGKILL');
+    // Blocks the loop until init reaps the provider, so the host's probe at the holder's exit finds the group empty.
+    const deadline = Date.now() + 5000;
+    while (!groupEmpty(pid) && Date.now() < deadline) { }
+    expect(groupEmpty(pid)).toBe(true);
+    await until(() => seen.exits.length === 1, 'containment exit');
+    expect(seen.order).toEqual(['holder-lost', 'exit']);
+    expect(seen.exits).toEqual([[null, null]]);
+  }, 30_000);
+
   it('exit, error, and ready raised before any listener are replayed once, on the first on or once', async () => {
     const host = newHost();
     const exited = await adoptFake(host, ['--exit-on-eof'], { listen: false });
@@ -187,7 +206,7 @@ describe.skipIf(process.platform === 'win32')('HolderProcess on POSIX', () => {
     const failed = await adoptFake(host, [], { command: '/nonexistent/vonvon-claude', listen: false, armed: false });
     await expect(failed.proc.ready).rejects.toBeInstanceOf(HolderProcessError);
     const errors: HolderProcessError[] = [];
-    failed.proc.on('error', (error: HolderProcessError) => errors.push(error));
+    failed.proc.addListener('error', (error: HolderProcessError) => errors.push(error));
     expect(errors.map(error => error.code)).toEqual(['launch-failed']);
   }, 30_000);
 
@@ -198,7 +217,7 @@ describe.skipIf(process.platform === 'win32')('HolderProcess on POSIX', () => {
     controller.abort();
     expect(proc.killed).toBe(true);
     await until(() => seen.exits.length === 1 && host.snapshot().length === 0, 'exit after abort');
-    expect(seen).toEqual({ exits: [[0, null]], errors: [] });
+    expect(seen).toMatchObject({ exits: [[0, null]], errors: [] });
   }, 30_000);
 
   it('a signal already aborted at adopt never lets the provider run', async () => {
@@ -209,6 +228,6 @@ describe.skipIf(process.platform === 'win32')('HolderProcess on POSIX', () => {
     expect(proc.killed).toBe(true);
     await until(() => host.snapshot().length === 0, 'record retired');
     await expect(proc.ready).rejects.toMatchObject({ code: 'cancelled' });
-    expect(seen).toEqual({ exits: [], errors: [expect.objectContaining({ code: 'cancelled' })] });
+    expect(seen).toMatchObject({ exits: [], errors: [{ code: 'cancelled' }] });
   }, 30_000);
 });

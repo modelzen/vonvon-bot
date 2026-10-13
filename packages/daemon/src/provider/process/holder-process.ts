@@ -34,19 +34,27 @@ export class HolderProcess extends EventEmitter implements SpawnedProcess {
   private readonly raised = new Set<RaisedEvent>();
   private readonly awaitingListener = new Map<RaisedEvent, unknown[]>();
 
-  constructor(private readonly hosted: HostedProcess, signal?: AbortSignal) {
+  private readonly onAbort = () => { this.kill('SIGTERM'); };
+
+  constructor(private readonly hosted: HostedProcess, private readonly signal?: AbortSignal) {
     super();
+    // Covers on, once, addListener, and the prepend variants alike; the listener is not yet registered here.
+    this.on('newListener', (event: string | symbol, listener: (...args: unknown[]) => void) => this.replay(event, listener));
     this.stdin = hosted.stdin;
     this.stdout = hosted.stdout;
     this.ready = hosted.ready;
     hosted.ready.then(
       () => this.raiseOnce('ready'),
-      (error: unknown) => this.raiseOnce('error', error instanceof HolderProcessError ? error : new HolderProcessError('holder-lost')),
+      (error: unknown) => {
+        const failure = error instanceof HolderProcessError ? error : new HolderProcessError('holder-lost');
+        if (failure.code === 'launch-failed' || failure.code === 'cancelled') this.detach();
+        this.raiseOnce('error', failure);
+      },
     );
     void hosted.holderLost.then(() => this.raiseOnce('error', new HolderProcessError('holder-lost')));
     hosted.watch(fact => this.onFact(fact));
     if (signal?.aborted) this.kill('SIGTERM');
-    else signal?.addEventListener('abort', () => this.kill('SIGTERM'), { once: true });
+    else signal?.addEventListener('abort', this.onAbort, { once: true });
   }
 
   get killed(): boolean { return this.queued; }
@@ -62,21 +70,12 @@ export class HolderProcess extends EventEmitter implements SpawnedProcess {
     return queued;
   }
 
-  override on(event: string | symbol, listener: (...args: any[]) => void): this {
-    super.on(event, listener);
-    this.replay(event);
-    return this;
-  }
-
-  override once(event: string | symbol, listener: (...args: any[]) => void): this {
-    super.once(event, listener);
-    this.replay(event);
-    return this;
-  }
-
   private onFact(fact: ProcessFact): void {
     if (fact.kind === 'transport-lost') { this.raiseOnce('error', new HolderProcessError('transport-lost')); return; }
     this.exit = fact.exit;
+    this.detach();
+    // A containment exit, or a signal Node cannot name, would read as exit(null, null), which the SDK takes for a clean exit.
+    if (this.exitCode === null && this.signalCode === null) this.raiseOnce('error', new HolderProcessError('holder-lost'));
     this.raiseOnce('exit', this.exitCode, this.signalCode);
     // The SDK sends nothing after an exit, so end the record here to reap the group's survivors and settle the proof.
     void this.hosted.end();
@@ -89,10 +88,12 @@ export class HolderProcess extends EventEmitter implements SpawnedProcess {
     else this.awaitingListener.set(event, args);
   }
 
-  private replay(event: string | symbol): void {
+  private replay(event: string | symbol, listener: (...args: unknown[]) => void): void {
     const args = this.awaitingListener.get(event as RaisedEvent);
     if (!args) return;
     this.awaitingListener.delete(event as RaisedEvent);
-    this.emit(event, ...args);
+    listener.apply(this, args);
   }
+
+  private detach(): void { this.signal?.removeEventListener('abort', this.onAbort); }
 }
