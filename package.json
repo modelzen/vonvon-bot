@@ -14,13 +14,16 @@
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present",
-    "lint": "npm run lint --workspaces --if-present"
+    "test": "npm run test --workspaces --if-present && node --test scripts/package-tools.test.mjs",
+    "lint": "npm run lint --workspaces --if-present",
+    "check:daemon-package": "node scripts/check-vonvon-bot-package.mjs",
+    "pack:vonvon-bot": "node scripts/pack-vonvon-bot.mjs"
   },
   "devDependencies": {
     "typescript": "5.8.3",
     "vitest": "5.0.3",
-    "@types/node": "24.3.0"
+    "@types/node": "24.3.0",
+    "esbuild": "^0.28.1"
   },
   "overrides": {
     "esbuild": "^0.28.1"
