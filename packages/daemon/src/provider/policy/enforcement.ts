@@ -9,7 +9,8 @@ export type Proof =
 export type RefuseReason =
   | 'read-scope-unenforceable' | 'tier-unenforceable' | 'sandbox-dependency-missing'
   | 'unverified-combination' | 'windows-sandbox-not-ready' | 'sandbox-not-confirmed'
-  | 'provider-not-installed' | 'not-logged-in' | 'custom-command-unset' | 'custom-command-invalid';
+  | 'provider-not-installed' | 'not-logged-in' | 'custom-command-unset' | 'custom-command-invalid'
+  | 'owned-work-unverified';
 
 export type NativeSettings =
   | { family: 'codex'; sandbox: 'danger-full-access' }

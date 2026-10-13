@@ -2,6 +2,7 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
+    maxWorkers: process.platform === 'win32' && process.env.CI === 'true' ? 1 : undefined,
     // Only our own unit tests. Without this, vitest also scans the vendored
     // reference project under docs/references/** (yepanywhere etc.), which has
     // its own deps/runtime and fails to collect.

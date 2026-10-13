@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Grant, HostFacts, Os, ProviderId } from '../../src/provider/model';
 import { auditTable, planEnforcement, type Cell, type CellKey, type EnforcementTable, type Mechanism, type NativeSettings, type Proof } from '../../src/provider/policy/enforcement';
-import { BASH_OFF_NOTICE, MCP_OFF_NOTICE } from '../../src/provider/policy/messages.zh';
+import { BASH_OFF_NOTICE, MCP_OFF_NOTICE, refusalMessage } from '../../src/provider/policy/messages.zh';
 import { PROOFS } from '../../src/provider/policy/proofs';
 
 const root = '/work/project';
@@ -313,4 +313,9 @@ describe('proof audit', () => {
     expect(planEnforcement(invalid, 'codex', grants.qaUnrestricted, 'darwin', host()))
       .toMatchObject({ ok: false, refusal: { reason: 'unverified-combination' } });
   });
+});
+
+it('refuses with the documented message while owned work is unverified', () => {
+  expect(refusalMessage('owned-work-unverified', { provider: 'codex', os: 'linux', tier: 'full' }).message)
+    .toBe('上次运行留下的 agent 进程尚未确认退出，暂不能启动新的 agent。请运行 doctor 查看。');
 });
