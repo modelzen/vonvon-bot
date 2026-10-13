@@ -15,7 +15,6 @@ vi.mock('../src/config/paths', async original => ({
   ...await original<typeof import('../src/config/paths')>(), paths: { get appDir() { return f.root; } },
 }));
 vi.mock('../src/platform/spawn', () => ({ spawnProcess: f.spawn }));
-vi.mock('../src/service/win-startup', () => ({ SERVICE_ENV_FLAG: 'VONVON_TEST_SERVICE', recordServicePid() {}, clearServicePid() {} }));
 vi.mock('../src/admin/service', () => ({ createAdminService: vi.fn() }));
 vi.mock('../src/agent', () => ({ installBackendDep: vi.fn(), uninstallBackendDep: vi.fn() }));
 vi.mock('../src/server/http', async original => ({ ...await original<typeof import('../src/server/http')>(), startApi: f.api }));

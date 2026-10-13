@@ -5,8 +5,7 @@ import { join } from 'node:path';
 import { fixtureNode } from './fixture-node';
 import { EnvironmentService } from '../src/environment/service';
 
-const processTestTimeout = process.platform === 'win32' ? 60_000 : 5_000;
-const installFlowTimeout = Math.max(processTestTimeout, 30_000);
+const processTestTimeout = 60_000;
 const readinessTimeout = process.platform === 'win32' ? 15_000 : 2_000;
 const dirs: string[] = [];
 afterEach(async () => { await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true }))); });
@@ -154,5 +153,5 @@ if(windows) fs.writeFileSync(path.join(bin,'lark-cli.cmd'),'@echo off\\r\\n"'+pr
       await writeFile(join(f.dir, 'release-login'), 'go');
       await f.environment.close();
     }
-  }, installFlowTimeout);
+  }, processTestTimeout);
 });

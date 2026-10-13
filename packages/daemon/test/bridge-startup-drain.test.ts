@@ -60,7 +60,6 @@ vi.mock('../src/core/logger', () => ({
   log: { info() {}, warn() {}, fail: fixture.logFail },
   withTrace: (_context: unknown, operation: () => unknown) => operation(),
 }));
-vi.mock('../src/service/win-startup', () => ({ recordServicePid() {}, clearServicePid() {} }));
 
 import type { ShutdownControl } from '../src/host/lifecycle';
 

@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { paths } from '../config/paths';
 import { acquireMutex, closeMutex } from '../config/data-access';
 import { listenerCloseUnconfirmed, observeShutdown, type ShutdownControl } from './lifecycle';
-import { recordServicePid, clearServicePid } from '../service/win-startup';
 import { readServiceCodexBin } from '../service/codex-bin';
 import { acquirePidLock, publishPidLock, releasePidLock, type PidLockInfo } from '../server/pid-lock';
 import { log } from '../core/logger';
@@ -20,7 +19,6 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
       owner = await acquirePidLock(paths.appDir);
     }
     if (control.requested) return;
-    if (owner) recordServicePid();
     host = new ProcessHost({
       dataDir: paths.appDir, daemonBootId: randomUUID(),
       ...(process.platform === 'win32' ? { platform: 'win32' } : { platform: 'posix', holderPath: defaultHolderPath() }),
@@ -52,7 +50,6 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
     control.dispose();
     if (!errors.some(listenerCloseUnconfirmed)) {
       if (owner) {
-        try { clearServicePid(); } catch (error) { errors.push(error); }
         try { await releasePidLock(paths.appDir, owner); } catch (error) { errors.push(error); }
       }
       if (lock) {
