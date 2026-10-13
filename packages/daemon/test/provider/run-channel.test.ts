@@ -159,7 +159,7 @@ describe('RunChannel: events and ledgers', () => {
     run.sink.emit({ type: 'todo', items: [{ text: 'write answer', status: 'in_progress' }] });
     run.sink.verdict({ kind: 'completed' });
     const events = await drain(run);
-    expect(types(events), 'a todo is never a step; the roster upsert precedes its step').toEqual(['session', 'subagent', 'subagent', 'step', 'text', 'todo', 'subagent', 'outcome']);
+    expect(types(events), 'a subagent step folds into its row and a todo is never a step').toEqual(['session', 'subagent', 'subagent', 'text', 'todo', 'subagent', 'outcome']);
     expect(events.at(-2)).toMatchObject({ type: 'subagent', agent: { id: childId, status: 'interrupted', stepCount: 1 } });
     expect(run.subagents().history(childId)?.steps.map(step => step.title)).toEqual(['Read']);
     expect(run.todo()).toEqual([{ text: 'write answer', status: 'in_progress' }]);

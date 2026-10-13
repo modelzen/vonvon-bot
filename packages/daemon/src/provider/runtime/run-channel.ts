@@ -142,9 +142,9 @@ export class RunChannel {
         return;
       }
       case 'step': {
-        const agent = event.lane.kind === 'subagent' ? this.ledger.recordStep(event.lane.id, event.step) : undefined;
+        if (event.lane.kind === 'main') { this.append(event); return; }
+        const agent = this.ledger.recordStep(event.lane.id, event.step);
         if (agent) this.append({ type: 'subagent', agent });
-        this.append(event);
         return;
       }
       case 'todo':

@@ -149,7 +149,7 @@ export type RunEvent =
   | { type: 'outcome'; outcome: Outcome; usage?: { input?: number; output?: number; cached?: number } }; // last, once
 ```
 
-Rules the runtime enforces, not the engines. `outcome` is emitted exactly once and last, including after a kill or a crash. A `step` whose lane is a subagent never reaches the main timeline. A todo tool call never produces a `step`. `text` for a subagent lane is folded into that subagent's row, never into the answer. An `image` whose payload arrived as base64 is on disk before the event exists.
+Rules the runtime enforces, not the engines. `outcome` is emitted exactly once and last, including after a kill or a crash. A `step` whose lane is a subagent never appears in `Run.events`; it is folded into that subagent's row. A todo tool call never produces a `step`. `text` for a subagent lane is folded into that subagent's row, never into the answer. An `image` whose payload arrived as base64 is on disk before the event exists.
 
 The capability record is typed data. A cell is `native` when the provider emits the signal and the engine maps it, `partial` when the provider emits it in some situations and the engine maps it when present, `none` when the provider never emits it. A cell the audit marks unknown ships `none` and names its probe in `pending`.
 
@@ -646,13 +646,13 @@ Every provider verdict maps to one `Outcome`. ACP `refusal`, `max_tokens`, and `
 | Claude `error_max_turns` | failed limit{max-turns} |
 | Claude `terminal_reason` prompt_too_long | failed limit{context-window} |
 | Claude `terminal_reason` blocking_limit | failed limit{context-window}. Inferred from the name, not verified; a recording that shows otherwise changes this row |
-| Claude `terminal_reason` aborted_streaming or aborted_tools after our `interrupt()` | interrupted{stopRequested.by} |
+| Claude `terminal_reason` aborted_streaming or aborted_tools after our `interrupt()` | interrupted{by} |
 | Claude any other `terminal_reason` with `is_error` | failed provider-error{the raw value} |
 | Claude `stop_reason` refusal | failed refused |
 | Claude other `is_error` | failed provider-error{message} |
 | ACP `end_turn` (ACP:3216) | completed |
 | ACP `refusal`, `max_tokens`, `max_turn_requests` | failed refused, limit{max-tokens}, limit{max-turns} |
-| ACP `cancelled` after our `session/cancel` | interrupted{stopRequested.by} |
+| ACP `cancelled` after our `session/cancel` | interrupted{by} |
 | ACP `stopReason` not named in this table | failed provider-error{the raw value} |
 | ACP `cancelled` without our request | interrupted{agent} |
 | ACP JSON-RPC error on `session/prompt`, `-32000` | failed provider-error, failed auth |
@@ -660,9 +660,9 @@ Every provider verdict maps to one `Outcome`. ACP `refusal`, `max_tokens`, and `
 | Pi `StopReason` stop, toolUse (PIA:311) | completed |
 | Pi `length`, `error`, `aborted` | failed limit{max-tokens}, failed provider-error, interrupted |
 | Pi `agent_end.willRetry: true` | not terminal; `notice{retry}` |
-| Any provider exit before a verdict, as an exit fact of *Process host* | failed process-exit, or interrupted{stopRequested.by, tree: exited} when a stop was in flight |
+| Any provider exit before a verdict, as an exit fact of *Process host* | failed process-exit, or interrupted{by, tree: exited} when a stop was in flight |
 | Provider stream closed with no exit fact (`transport-lost`) | in opening or running, failed transport-lost; in stopping, nothing, the ladder continues |
-| No verdict and no exit fact when the `kill` rung's deadline passes | interrupted{stopRequested.by, tree: unconfirmed}; ProcessHost keeps the tree |
+| No verdict and no exit fact when the `kill` rung's deadline passes | interrupted{by, tree: unconfirmed}; ProcessHost keeps the tree |
 
 ## Permission enforcement matrix
 
