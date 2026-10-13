@@ -1,18 +1,13 @@
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { getEventListeners } from 'node:events';
-import { createServer, type Server } from 'node:http';
-import { createServer as createHttpsServer } from 'node:https';
+import { execFile } from 'node:child_process';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
-import { getCACertificates, setDefaultCACertificates, type TLSSocket } from 'node:tls';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { promisify } from 'node:util';
+import { build } from 'esbuild';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { checkUploadPath, fetchRemoteImage, judgePath, requestPinned, uploadPlan, type OutboundPlan, type RemoteImageDeps } from '../../src/provider/outbound/policy';
-
-// Node 22.19 and 24.5 added these; the pinned @types/node predates them.
-declare module 'node:tls' {
-  function setDefaultCACertificates(certs: string[]): void;
-  interface TLSSocket { servername?: string | false }
-}
 
 describe('outbound path policy', () => {
   let temporary: string;
@@ -367,62 +362,56 @@ describe('outbound remote image policy', () => {
 
 describe('pinned TLS identity', () => {
   const fixtures = join(__dirname, 'fixtures', 'outbound-tls');
-  const image = Buffer.from('image');
-  let server: Server;
-  let port: number;
-  let seen: { host?: string; servername?: string | false };
-  let systemCertificates: string[];
+  const execute = promisify(execFile);
+  let temporary: string;
+  let executable: string;
 
-  beforeEach(async () => {
-    const cert = await readFile(join(fixtures, 'cert.pem'), 'utf8');
-    seen = {};
-    server = createHttpsServer({ key: await readFile(join(fixtures, 'key.pem')), cert }, (request, response) => {
-      seen = { host: request.headers.host, servername: (request.socket as TLSSocket).servername };
-      response.setHeader('content-type', 'image/png');
-      response.end(image);
+  beforeAll(async () => {
+    temporary = await mkdtemp(join(tmpdir(), 'outbound-tls-'));
+    executable = join(temporary, 'assert-scenario.cjs');
+    await build({
+      entryPoints: [join(fixtures, 'assert-scenario.ts')],
+      outfile: executable,
+      bundle: true,
+      platform: 'node',
+      format: 'cjs',
+      target: 'node22',
     });
-    await new Promise<void>(resolve => server.listen(0, '::', resolve));
-    const address = server.address();
-    if (!address || typeof address === 'string') throw new Error('Missing test server port');
-    port = address.port;
-    systemCertificates = getCACertificates('default');
-    setDefaultCACertificates([...systemCertificates, cert]);
   });
 
-  afterEach(async () => {
-    setDefaultCACertificates(systemCertificates);
-    server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  afterAll(async () => {
+    if (temporary) await rm(temporary, { recursive: true, force: true });
   });
+
+  async function assertTlsScenario(scenario: 'ipv6' | 'ipv4' | 'dns' | 'mismatch' | 'untrusted'): Promise<void> {
+    const env: NodeJS.ProcessEnv = { ...process.env, NODE_TLS_REJECT_UNAUTHORIZED: '1' };
+    delete env.NODE_EXTRA_CA_CERTS;
+    if (scenario !== 'untrusted') env.NODE_EXTRA_CA_CERTS = join(fixtures, 'cert.pem');
+    await execute(process.execPath, [executable, scenario, fixtures], {
+      env,
+      timeout: 10_000,
+      killSignal: 'SIGKILL',
+      maxBuffer: 1024 * 1024,
+    });
+  }
 
   it('verifies an IPv6 literal against the certificate IP SAN without sending SNI', async () => {
-    const response = await requestPinned(new URL(`https://[::1]:${port}/a.png`), '::1', AbortSignal.timeout(3000));
-    expect(response.body).toEqual(image);
-    expect(seen).toEqual({ host: `[::1]:${port}`, servername: false });
-  });
+    await assertTlsScenario('ipv6');
+  }, 15_000);
 
   it('verifies an IPv4 literal against the certificate IP SAN without sending SNI', async () => {
-    const response = await requestPinned(new URL(`https://127.0.0.1:${port}/a.png`), '127.0.0.1', AbortSignal.timeout(3000));
-    expect(response.body).toEqual(image);
-    expect(seen).toEqual({ host: `127.0.0.1:${port}`, servername: false });
-  });
+    await assertTlsScenario('ipv4');
+  }, 15_000);
 
   it('sends the DNS name as SNI and verifies it while connecting to the pinned address', async () => {
-    const response = await requestPinned(new URL(`https://example.test:${port}/a.png`), '127.0.0.1', AbortSignal.timeout(3000));
-    expect(response.body).toEqual(image);
-    expect(seen).toEqual({ host: `example.test:${port}`, servername: 'example.test' });
-  });
+    await assertTlsScenario('dns');
+  }, 15_000);
 
   it('rejects a certificate that does not name the requested host', async () => {
-    await expect(requestPinned(new URL(`https://other.test:${port}/a.png`), '127.0.0.1', AbortSignal.timeout(3000)))
-      .rejects.toMatchObject({ code: 'ERR_TLS_CERT_ALTNAME_INVALID' });
-    await expect(requestPinned(new URL(`https://[::2]:${port}/a.png`), '::1', AbortSignal.timeout(3000)))
-      .rejects.toMatchObject({ code: 'ERR_TLS_CERT_ALTNAME_INVALID' });
-  });
+    await assertTlsScenario('mismatch');
+  }, 15_000);
 
   it('rejects an untrusted certificate', async () => {
-    setDefaultCACertificates(systemCertificates);
-    await expect(requestPinned(new URL(`https://[::1]:${port}/a.png`), '::1', AbortSignal.timeout(3000)))
-      .rejects.toMatchObject({ code: 'DEPTH_ZERO_SELF_SIGNED_CERT' });
-  });
+    await assertTlsScenario('untrusted');
+  }, 15_000);
 });
