@@ -219,6 +219,18 @@ export const log = {
   },
 };
 
+/** Ends the daily log stream so its queued lines reach disk before a `process.exit`. */
+export function flushLogs(): Promise<void> {
+  const current = stream;
+  stream = null;
+  currentDate = '';
+  if (!current) return Promise.resolve();
+  return new Promise(resolve => {
+    setTimeout(resolve, 1000).unref();
+    current.end(() => resolve());
+  });
+}
+
 /** Run `fn` inside a logging context; all `log.*` inside pick up the fields. */
 export function withTrace<T>(ctx: LogContext, fn: () => Promise<T>): Promise<T> {
   const traceId = ctx.traceId ?? newTraceId();

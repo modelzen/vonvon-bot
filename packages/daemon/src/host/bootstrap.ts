@@ -3,7 +3,8 @@ import { paths } from '../config/paths';
 import { acquireMutex, closeMutex } from '../config/data-access';
 import { listenerCloseUnconfirmed, observeShutdown, type ShutdownControl } from './lifecycle';
 import { readServiceCodexBin } from '../service/codex-bin';
-import { acquirePidLock, publishPidLock, releasePidLock, type PidLockInfo } from '../server/pid-lock';
+import { acquirePidLock, publishPidLock, readRunningPidLock, releasePidLock, type PidLockInfo } from '../server/pid-lock';
+import { readStartupRegistration } from '../service/startup';
 import { log } from '../core/logger';
 import { defaultHolderPath, ProcessHost } from '../provider/process/process-host';
 
@@ -15,8 +16,37 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
   const errors: unknown[] = [];
   try {
     if (!process.send) {
-      lock = await acquireMutex(paths.appDir, 'host');
-      owner = await acquirePidLock(paths.appDir);
+      const serviceManaged = Boolean(process.env.VONVON_SERVICE);
+      const liveOtherOwner = async () => {
+        const existing = await readRunningPidLock(paths.appDir);
+        return existing && existing.pid !== process.pid ? existing : null;
+      };
+      const registration = await readStartupRegistration(paths.appDir);
+      if (serviceManaged) {
+        if (registration.kind !== 'ours') {
+          log.info('daemon-startup', 'registration_absent', registration.kind === 'other-root' ? { kind: registration.kind, recordedRoot: registration.recordedRoot } : registration);
+          process.exitCode = 0;
+          return;
+        }
+        const existing = await liveOtherOwner();
+        if (existing) {
+          log.info('daemon-startup', 'owner_present', { pid: existing.pid });
+          process.exitCode = 0;
+          return;
+        }
+      } else if (registration.kind === 'ours') {
+        throw new Error('Daemon is registered as a service. Use vonvon daemon start or vonvon service uninstall.');
+      }
+      try {
+        lock = await acquireMutex(paths.appDir, 'host');
+        owner = await acquirePidLock(paths.appDir);
+      } catch (error) {
+        const existing = serviceManaged ? await liveOtherOwner() : null;
+        if (!existing) throw error;
+        log.info('daemon-startup', 'owner_present', { pid: existing.pid });
+        process.exitCode = 0;
+        return;
+      }
     }
     if (control.requested) return;
     host = new ProcessHost({
