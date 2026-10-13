@@ -35,8 +35,8 @@ export interface OwnedProcess {
   watch(listener: (fact: ProcessFact) => void): () => void;  // replays past facts synchronously; returns unsubscribe
 }
 
-/** PR 5 replaces this with the host in `provider/process/process-host.ts`. */
-export interface ProcessHost { owesWork(): boolean }
+import type { ProcessHost } from '../process/process-host';
+export type { ProcessHost };
 
 /** iff features.goal !== 'none'. Codex: thread/goal/set and thread/goal/clear. Behavior in providers.md *Goals*. */
 export interface EngineGoal {

@@ -41,10 +41,15 @@ export function refusalMessage(
     case 'custom-command-invalid':
       return { reason, message: `自定义 ACP 命令无法执行：${detail}。`, hint: '检查主机设置中的自定义 ACP 命令、路径和执行权限。' };
     case 'owned-work-unverified':
-      return { reason, message: '上次运行留下的 agent 进程尚未确认退出，暂不能启动新的 agent。请运行 doctor 查看。', hint: '运行 doctor 查看未确认退出的进程记录，确认这些进程已结束后重试。' };
+      return ownedWorkUnverified();
     default: {
       const exhaustive: never = reason;
       return exhaustive;
     }
   }
+}
+
+/** The process host's admission refusal; it reads no provider, OS, or tier. */
+export function ownedWorkUnverified(): Refusal {
+  return { reason: 'owned-work-unverified', message: '上次运行留下的 agent 进程尚未确认退出，暂不能启动新的 agent。请运行 doctor 查看。', hint: '运行 doctor 查看未确认退出的进程记录，确认这些进程已结束后重试。' };
 }
