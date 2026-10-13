@@ -30,13 +30,13 @@ interface DesktopDaemonRuntime {
 
 export function parseWindowsRunQuery(output: string): WindowsRunObservation {
   const lines = output.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  if (lines.length === 0 || lines[0] !== WINDOWS_RUN_KEY.replace('HKCU', 'HKEY_CURRENT_USER')) {
+  if (lines.length === 0 || lines[0]?.toLowerCase() !== WINDOWS_RUN_KEY.replace('HKCU', 'HKEY_CURRENT_USER').toLowerCase()) {
     return { kind: 'unavailable', reason: 'Unrecognized registry query output.' };
   }
   for (const line of lines.slice(1)) {
     const match = /^(.*?)\s{2,}(REG_\w+)(?:\s{2,}(.*))?$/.exec(line);
     if (!match) return { kind: 'unavailable', reason: 'Unrecognized registry value.' };
-    if (match[1] !== WINDOWS_RUN_VALUE) continue;
+    if (match[1]?.toLowerCase() !== WINDOWS_RUN_VALUE.toLowerCase()) continue;
     if (match[2] !== 'REG_SZ' && match[2] !== 'REG_EXPAND_SZ') return { kind: 'unavailable', reason: 'Unsupported registry value type.' };
     return { kind: 'value', type: match[2], value: match[3] ?? '' };
   }
@@ -44,16 +44,23 @@ export function parseWindowsRunQuery(output: string): WindowsRunObservation {
 }
 
 async function observeWindowsRun(): Promise<WindowsRunObservation> {
+  const systemRoot = process.env.SystemRoot;
+  if (!systemRoot) return { kind: 'unavailable', reason: 'SystemRoot is unavailable.' };
   try {
-    const systemRoot = process.env.SystemRoot;
-    if (!systemRoot) return { kind: 'unavailable', reason: 'SystemRoot is unavailable.' };
     const result = await promisify(execFile)(join(systemRoot, 'System32', 'reg.exe'), ['query', WINDOWS_RUN_KEY], {
       encoding: 'utf8', windowsHide: true, timeout: 5_000, maxBuffer: 1024 * 1024,
     });
-    return parseWindowsRunQuery(result.stdout);
-  } catch {
-    return { kind: 'unavailable', reason: 'The Windows Run key could not be read.' };
-  }
+    const observation = parseWindowsRunQuery(result.stdout);
+    if (observation.kind !== 'unavailable') return observation;
+  } catch {}
+  try {
+    const script = `$ErrorActionPreference = 'Stop'; $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${WINDOWS_RUN_KEY.slice('HKCU\\'.length)}'); try { if ($null -eq $key -or $key.GetValueNames() -notcontains '${WINDOWS_RUN_VALUE}') { 'absent' } else { 'present' } } finally { if ($null -ne $key) { $key.Dispose() } }`;
+    const result = await promisify(execFile)(join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+      ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+      { encoding: 'utf8', windowsHide: true, timeout: 5_000, maxBuffer: 1024 });
+    if (result.stdout.trim() === 'absent') return { kind: 'absent' };
+  } catch {}
+  return { kind: 'unavailable', reason: 'The Windows Run key could not be read.' };
 }
 
 export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonManagerDependencies {

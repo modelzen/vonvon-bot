@@ -122,7 +122,14 @@ describe('desktop daemon dependencies', () => {
     const key = 'HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
     expect(parseWindowsRunQuery('')).toMatchObject({ kind: 'unavailable' });
     expect(parseWindowsRunQuery(key)).toEqual({ kind: 'absent' });
+    expect(parseWindowsRunQuery(key.replace('Software', 'SOFTWARE'))).toEqual({ kind: 'absent' });
+    expect(parseWindowsRunQuery(key.toLowerCase())).toEqual({ kind: 'absent' });
+    expect(parseWindowsRunQuery(key.replace('HKEY_CURRENT_USER', 'HKEY_LOCAL_MACHINE'))).toMatchObject({ kind: 'unavailable' });
+    expect(parseWindowsRunQuery(`${key}Backup`)).toMatchObject({ kind: 'unavailable' });
     expect(parseWindowsRunQuery(`${key}\r\n    Other    REG_SZ    unrelated`)).toEqual({ kind: 'absent' });
+    expect(parseWindowsRunQuery(`${key}\r\n    VONVON BOT    REG_SZ    owned`)).toEqual({ kind: 'value', type: 'REG_SZ', value: 'owned' });
+    expect(parseWindowsRunQuery(`${key}\r\n    vonvon bot    REG_SZ    owned`)).toEqual({ kind: 'value', type: 'REG_SZ', value: 'owned' });
+    expect(parseWindowsRunQuery(`${key}\r\n    Vonvon Bot Backup    REG_SZ    foreign`)).toEqual({ kind: 'absent' });
     expect(parseWindowsRunQuery(`${key}\r\n    Empty    REG_SZ    \r\n    Vonvon Bot    REG_SZ    `)).toEqual({ kind: 'value', type: 'REG_SZ', value: '' });
     expect(parseWindowsRunQuery(`${key}\r\n    Vonvon Bot    REG_SZ    wscript.exe //B "C:\\data\\service\\vonvon-bot.vbs"`)).toEqual({
       kind: 'value', type: 'REG_SZ', value: 'wscript.exe //B "C:\\data\\service\\vonvon-bot.vbs"',
