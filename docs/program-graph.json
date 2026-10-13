@@ -25,15 +25,15 @@
     {
       "id": "V6a",
       "title": "V6a provider 核心、进程托管与出站门",
-      "branch": "codex/v6a-provider-core",
-      "pr": 117,
+      "branch": "claude/v6a-model-policy",
+      "pr": 237,
       "owner": "providers",
       "mergeAfter": [
         "V4"
       ],
       "acceptance": "Mac 和 Linux 主机跑进程测试，飞书测试 Bot 跑上传 lane",
       "plan": "Provider core, process host, and outbound gate (V6a)",
-      "note": "和 V5 谁先验完谁先合。发布冻结点 F6。"
+      "note": "按 plan.md V6a 的 Split 段拆成六个 PR，依次开、依次合，本节点指向当前在飞的一个（1/6 #237）。拆分来源 #117。和 V5 谁先验完谁先合。第 6 个合入时发布冻结点 F6。"
     },
     {
       "id": "V6b",
