@@ -1,8 +1,11 @@
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer, connect, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { spawnPosixHolder, type HolderChannel } from '../../src/provider/process/holder-channel';
+import { channelOver, exitOf, spawnPosixHolder, type HolderChannel } from '../../src/provider/process/holder-channel';
 import { validateSignalReceipt } from '../../src/provider/process/holder-protocol';
 import { recordReceipts, until } from './channel-recorder';
 import { compileHolder, type HolderBinary } from './native/holder-driver';
@@ -80,5 +83,46 @@ describe.skipIf(process.platform === 'win32')('spawnPosixHolder', () => {
     await expect(spawnPosixHolder(silent)).rejects.toThrow(/no hello \(eof\)/);
     const mute = fakeHolder('exec sleep 30');
     await expect(spawnPosixHolder(mute, { helloTimeoutMs: 300 })).rejects.toThrow(/no hello \(timeout\)/);
+  });
+});
+
+describe('holder process lifecycle on every platform', () => {
+  const missing = join(tmpdir(), 'vonvon-definitely-missing-holder', 'vonvon-holder');
+
+  it.skipIf(process.platform === 'win32')('rejects a missing holder binary instead of crashing the daemon with an unhandled error', async () => {
+    await expect(spawnPosixHolder(missing)).rejects.toThrow(/ENOENT/);
+  });
+
+  it('exitOf settles with no code when the spawn itself failed, so no caller waits forever', async () => {
+    const child = spawn(missing, [], { stdio: 'ignore' });
+    const result = await Promise.race([exitOf(child), new Promise(resolve => setTimeout(() => resolve('timeout'), 2000))]);
+    expect(result).toEqual({ code: null, signal: null });
+  });
+
+  it('reports closed and refuses sends after close() destroys a real duplex socket, which emits close but never end', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vonvon-channel-sock-'));
+    dirs.push(dir);
+    const path = process.platform === 'win32' ? `\\\\.\\pipe\\vonvon-channel-${process.pid}-${Date.now()}` : join(dir, 'sock');
+    const server = createServer();
+    const accepted = once(server, 'connection') as Promise<[Socket]>;
+    await new Promise<void>(resolve => server.listen(path, resolve));
+    const socket = connect(path);
+    await once(socket, 'connect');
+    const [peer] = await accepted;
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: ['pipe', 'pipe', 'pipe'] });
+    try {
+      const channel = channelOver({
+        platform: 'win32', child, commands: socket, receipts: socket, close: () => socket.destroy(),
+        stdio: { stdin: child.stdin!, stdout: child.stdout!, stderr: child.stderr! },
+      });
+      channel.close();
+      const result = await Promise.race([channel.closed.then(() => 'closed'), new Promise(resolve => setTimeout(() => resolve('timeout'), 2000))]);
+      expect(result).toBe('closed');
+      expect(channel.send({ command: 'probe', nonce: 'p1' })).toBe(false);
+    } finally {
+      child.kill('SIGKILL');
+      peer.destroy();
+      server.close();
+    }
   });
 });

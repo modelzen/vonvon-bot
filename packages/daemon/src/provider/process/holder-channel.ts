@@ -26,7 +26,7 @@ export interface HolderChannel {
   onReceipt(listener: (line: ReceiptLine) => void): () => void;
   /** Ends the daemon's side of the command channel: EOF for the holder, which runs its daemon-death path. */
   close(): void;
-  /** The receipt stream reached EOF: the holder closed its end or died. */
+  /** The receipt stream ended, closed, or failed: the holder closed its end or died, or `close()` destroyed the socket. */
   readonly closed: Promise<void>;
   readonly exited: Promise<HolderExit>;
 }
@@ -54,8 +54,13 @@ export function channelOver(parts: ChannelParts): HolderChannel {
   const feed = (chunk: Buffer) => { for (const line of parser.push(chunk)) for (const listener of listeners) listener(line); };
   parts.receipts.on('data', feed);
   if (parts.initial?.length) queueMicrotask(() => feed(parts.initial as Buffer));
-  const closed = new Promise<void>(resolve => parts.receipts.once('end', resolve)).then(() => { open = false; });
-  parts.receipts.once('close', () => { open = false; });
+  // The receipt stream may end, close without an end (a destroyed socket), or fail; each one closes the channel, once.
+  const closed = new Promise<void>(resolve => {
+    const done = () => { open = false; resolve(); };
+    parts.receipts.once('end', done);
+    parts.receipts.once('close', done);
+    parts.receipts.on('error', done);
+  });
   parts.commands.on('error', () => { open = false; });
   return {
     platform: parts.platform,
@@ -75,9 +80,26 @@ export function channelOver(parts: ChannelParts): HolderChannel {
   };
 }
 
+/** Resolves at the child's exit, or at once with no code when the spawn itself failed and no process ever existed. */
 export function exitOf(child: ChildProcess): Promise<HolderExit> {
   if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve({ code: child.exitCode, signal: child.signalCode });
-  return new Promise(resolve => child.once('exit', (code, signal) => resolve({ code, signal })));
+  return new Promise(resolve => {
+    child.once('exit', (code, signal) => resolve({ code, signal }));
+    child.on('error', () => { if (child.pid === undefined) resolve({ code: null, signal: null }); });
+  });
+}
+
+/**
+ * Resolves once the OS created the process and rejects when it could not. Until a listener exists, a failed spawn's
+ * `error` event is unhandled and ends the daemon, so every spawn here goes through this first.
+ */
+export function spawned(child: ChildProcess, what: string): Promise<void> {
+  child.on('error', () => { /* later errors (a failed kill) are reported through exit and the channel, not thrown */ });
+  if (child.pid !== undefined) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    child.once('spawn', resolve);
+    child.once('error', error => reject(new Error(`${what}: ${error.message}`)));
+  });
 }
 
 /** The first receipt line on a fresh channel, or `eof` when the holder closes first, or `timeout`. */
@@ -102,6 +124,7 @@ export async function killAndReject(child: ChildProcess, message: string): Promi
  */
 export async function spawnPosixHolder(binaryPath: string, options: { helloTimeoutMs?: number } = {}): Promise<HolderChannel> {
   const child = spawn(binaryPath, [], { stdio: ['pipe', 'pipe', 'pipe', 'pipe', 'pipe', 'pipe'], detached: true });
+  await spawned(child, `vonvon-holder ${binaryPath}`);
   const commands = child.stdin as Writable;
   const receipts = child.stdout as Readable;
   commands.on('error', () => { /* a command written after the holder exited is `unknown`, not a crash */ });

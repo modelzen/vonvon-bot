@@ -5,7 +5,7 @@ import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Readable, Writable } from 'node:stream';
-import { channelOver, exitOf, killAndReject, type HolderChannel } from './holder-channel';
+import { channelOver, exitOf, killAndReject, spawned, type HolderChannel } from './holder-channel';
 import { startTokenFromFileTime } from './identity';
 
 /**
@@ -64,7 +64,7 @@ public static class VonvonSupervisor {
   const int PROC_THREAD_ATTRIBUTE_HANDLE_LIST=0x20002, PROC_THREAD_ATTRIBUTE_JOB_LIST=0x2000D;
   const int MAX_FIELD=16*1024*1024, MAX_COUNT=65536;
 
-  // Every receipt and every state change goes through this one lock; the reader (main) thread and the wait thread share it.
+  // Guards every receipt and log write and the state both threads touch (provider, exitObserved); created, cancelled, and reaped are reader-thread only.
   static readonly object gate=new object();
   static Stream pipe; static StreamWriter log;
   static IntPtr job=IntPtr.Zero, provider=IntPtr.Zero;
@@ -339,6 +339,7 @@ export async function spawnWindowsSupervisor(options: WindowsSupervisorOptions):
   });
   (child.stdin as Writable).on('error', () => { /* the provider's end may close first */ });
   try {
+    await spawned(child, `windows supervisor ${POWERSHELL}`);
     const { socket, hello, rest } = await authenticate(server, child, token, options.spawnDeadlineMs ?? DEFAULT_SPAWN_DEADLINE_MS);
     socket.write('ok\n');
     return channelOver({
