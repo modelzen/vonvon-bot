@@ -1,6 +1,7 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -11,8 +12,33 @@ const fixtures: string[] = [];
 const importers: Promise<void>[] = [];
 const closedFixtures = new Set<string>();
 const originalPin = '446b2a40ca75b5f725d7b0baab777b3a8f18b2e0';
+async function fixtureRoot() {
+  for (let attempt = 0; attempt < 32; attempt++) {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'vonvon-import-')));
+    if (process.platform !== 'darwin') return root;
+    let accepted = false;
+    try {
+      const destination = join(root, 'packages/daemon');
+      const port = 20000 + Number.parseInt(createHash('sha256').update(destination).digest('hex').slice(0, 8), 16) % 40000;
+      // macOS allocates ephemeral ports from 49152, overlapping the importer's lock range.
+      if (port >= 49152) continue;
+      const probe = createServer();
+      const available = await new Promise<boolean>((resolve, reject) => {
+        probe.once('error', (error: NodeJS.ErrnoException) => error.code === 'EADDRINUSE' ? resolve(false) : reject(error));
+        probe.listen({ host: '127.0.0.1', port, exclusive: true }, () => resolve(true));
+      });
+      if (!available) continue;
+      await new Promise<void>((resolve, reject) => probe.close(error => error ? reject(error) : resolve()));
+      accepted = true;
+      return root;
+    } finally {
+      if (!accepted) await rm(root, { recursive: true, force: true });
+    }
+  }
+  throw new Error('Unable to allocate an import fixture with an available non-ephemeral lock port');
+}
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), 'vonvon-import-')); fixtures.push(root);
+  const root = await fixtureRoot(); fixtures.push(root);
   const source = join(root, 'source'); const destination = join(root, 'packages/daemon');
   await mkdir(join(source, 'src'), { recursive: true }); await mkdir(join(source, 'test'));
   await writeFile(join(source, 'LICENSE'), 'MIT fixture\n');

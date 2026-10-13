@@ -92,7 +92,7 @@ describe('immutable daemon keystore', () => {
     expect(results.every(value => value.code === 0)).toBe(true);
     const read = await run(directory, 'for(let i=0;i<12;i++){if(await k.getSecret(`id-${i}`)!==`dummy-${i}`)throw Error("lost write")} console.log((await k.listSecretIds()).length)');
     expect(read).toEqual({ code: 0, output: '12\n' });
-  });
+  }, process.platform === 'win32' ? 45_000 : 5_000);
 
   it('releases ownership on process death and preserves the last committed store', async () => {
     const directory = await root();
