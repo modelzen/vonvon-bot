@@ -1,24 +1,15 @@
 import type { ServiceStatus } from './common';
 import {
   installLaunchd,
-  isLoaded as launchdLoaded,
   restartLaunchd,
   statusLaunchd,
   tailLaunchdLogs,
   uninstallLaunchd,
 } from './launchd';
 import {
-  installWinStartup,
-  restartWinStartup,
-  statusWinStartup,
-  uninstallWinStartup,
-  winStartupRunning,
-} from './win-startup';
-import {
   installSystemd,
   restartSystemd,
   statusSystemd,
-  systemdActive,
   uninstallSystemd,
 } from './systemd';
 import { tailServiceLogs } from './common';
@@ -35,9 +26,8 @@ export interface ServiceAdapter {
 
 /**
  * The background-service adapter for the current platform: launchd on macOS,
- * Task Scheduler on Windows, systemd (user units) on Linux/WSL. Throws a
- * friendly error on any other platform — the foreground `run` command works
- * everywhere and is the supported fallback there.
+ * systemd (user units) on Linux/WSL. Throws on any other platform, Windows
+ * included, until the Vonvon Windows service lands.
  */
 export function getServiceAdapter(): ServiceAdapter {
   if (process.platform === 'darwin') {
@@ -47,16 +37,6 @@ export function getServiceAdapter(): ServiceAdapter {
       status: async () => statusLaunchd(),
       restart: restartLaunchd,
       logs: tailLaunchdLogs,
-    };
-  }
-
-  if (process.platform === 'win32') {
-    return {
-      install: installWinStartup,
-      uninstall: uninstallWinStartup,
-      status: async () => statusWinStartup(),
-      restart: restartWinStartup,
-      logs: tailServiceLogs,
     };
   }
 
@@ -71,23 +51,7 @@ export function getServiceAdapter(): ServiceAdapter {
   }
 
   throw new Error(
-    'service：当前平台暂不支持后台服务（仅 macOS launchd / Windows 计划任务 / Linux systemd）。' +
-      '请用 `feishu-codex-bridge run` 前台运行。',
+    'service：当前平台暂不支持后台服务（仅 macOS launchd / Linux systemd）。' +
+      '请用 `vonvon daemon start` 和 `vonvon daemon stop`。',
   );
-}
-
-/**
- * Sync check: is the OS background service currently running? Used by the update
- * flow to decide whether to restart the daemon. Returns false on platforms
- * without a service implementation (where there's nothing to restart).
- */
-export function isServiceRunning(): boolean {
-  try {
-    if (process.platform === 'darwin') return launchdLoaded();
-    if (process.platform === 'win32') return winStartupRunning();
-    if (process.platform === 'linux') return systemdActive();
-  } catch {
-    /* service manager unavailable → treat as not running */
-  }
-  return false;
 }
