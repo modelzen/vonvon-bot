@@ -5,11 +5,11 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { notifyAction } from './handoff.mjs';
+import { currentHandoff, handoffLine, notifyAction } from './handoff.mjs';
 
 const script = join(dirname(fileURLToPath(import.meta.url)), 'handoff.mjs');
 
-function fixture({ labels, sessions, dirty = false, behind = false, paseoFails = false }) {
+function fixture({ labels, sessions, comments = [], dirty = false, behind = false, paseoFails = false, waitFails = false }) {
   const dir = mkdtempSync(join(tmpdir(), 'handoff-test-'));
   const repo = join(dir, 'repo');
   const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
@@ -23,17 +23,24 @@ function fixture({ labels, sessions, dirty = false, behind = false, paseoFails =
   const pull = { state: 'open', html_url: 'https://example/pr7', labels: labels.map((name) => ({ name })), head: { ref: 'claude/x', sha } };
   writeFileSync(join(dir, 'pull.json'), JSON.stringify(pull));
   writeFileSync(join(dir, 'sessions.json'), JSON.stringify(sessions));
+  const commentLines = (typeof comments === 'function' ? comments(sha) : comments).map((c) => JSON.stringify(c)).join('\n');
+  writeFileSync(join(dir, 'comments.ndjson'), commentLines ? `${commentLines}\n` : '');
   const stub = (name, body) => {
     const file = join(dir, name);
     writeFileSync(file, `#!/bin/sh\nprintf '%s\\n' "${name} $*" >> ${JSON.stringify(log)}\n${body}\n`);
     chmodSync(file, 0o755);
   };
   stub('gh', `case "$*" in
-  *"/comments"*) echo '{"html_url":"https://example/c1"}' ;;
+  *"-X POST"*"/comments"*) echo '{"html_url":"https://example/c1"}' ;;
+  *"/comments"*) cat ${JSON.stringify(join(dir, 'comments.ndjson'))} ;;
   *"/pulls/"*) cat ${JSON.stringify(join(dir, 'pull.json'))} ;;
   *) echo '[]' ;;
 esac`);
-  stub('paseo', `case "$*" in *" ls "*) cat ${JSON.stringify(join(dir, 'sessions.json'))} ;; *) ${paseoFails ? 'exit 1' : 'true'} ;; esac`);
+  stub('paseo', `case "$*" in
+  *" ls "*) cat ${JSON.stringify(join(dir, 'sessions.json'))} ;;
+  *" wait "*) ${waitFails ? 'exit 1' : 'true'} ;;
+  *) ${paseoFails ? 'exit 1' : 'true'} ;;
+esac`);
 
   const comment = join(dir, 'comment.md');
   writeFileSync(comment, 'Linux 证据与验收要点。\n');
@@ -104,20 +111,92 @@ test('--dry-run reads and reports but writes nothing', () => {
   } finally { f.cleanup(); }
 });
 
-test('a failed notice leaves the handoff done and points to --notify-only, which resends without writing', () => {
-  const f = fixture({ labels: ['owner:claude'], sessions: [{ name: 'PR #7', status: 'idle', shortId: 'abc' }], paseoFails: true });
+const handedToCodex = (sha) => [{ html_url: 'https://example/c0', body: `证据\n\n${handoffLine('claude', 'codex', sha)}` }];
+const idle = [{ name: 'PR #7', status: 'idle', shortId: 'abc' }];
+const busy = [{ name: 'PR #7', status: 'running', shortId: 'abc' }];
+
+test('currentHandoff takes the latest handoff comment only when it hands this head in this direction', () => {
+  const sha = 'abcdef0123';
+  const to = { html_url: 'a', body: `x\n\n${handoffLine('claude', 'codex', sha)}` };
+  const back = { html_url: 'b', body: `y\n\n${handoffLine('codex', 'claude', sha)}` };
+  const chat = { html_url: 'c', body: 'a review note' };
+  assert.equal(currentHandoff([to, chat], 'claude', 'codex', sha), to);
+  assert.equal(currentHandoff([to, back], 'claude', 'codex', sha), undefined);
+  assert.equal(currentHandoff([to], 'claude', 'codex', '1234567890'), undefined);
+});
+
+test('a failed notice leaves the handoff done and points to --notify-only', () => {
+  const f = fixture({ labels: ['owner:claude'], sessions: idle, paseoFails: true });
   try {
     const result = f.handoff();
     assert.equal(result.status, 1);
     assert.match(result.stderr, /handed over .*\nrerun with --notify-only/s);
     assert.ok(f.calls().some((c) => c.includes('labels[]=owner:codex')), 'the label still moved');
   } finally { f.cleanup(); }
+});
 
-  const g = fixture({ labels: ['owner:codex'], sessions: [{ name: 'PR #7', status: 'idle', shortId: 'abc' }] });
+test('--notify-only resends a link to the handoff comment for the current head, without writing to GitHub', () => {
+  const f = fixture({ labels: ['owner:codex'], sessions: idle, comments: handedToCodex });
   try {
-    const result = g.handoff('--notify-only');
+    const result = f.handoff('--notify-only');
     assert.equal(result.status, 0, result.stderr);
-    assert.ok(g.calls().some((c) => c.startsWith('paseo --host 100.127.134.58:6767 send abc --no-wait PR #7 已交给你')));
-    assert.ok(!g.calls().some((c) => c.includes('-X')), 'no GitHub write');
+    const send = f.calls().find((c) => c.includes(' send '));
+    assert.ok(send?.startsWith('paseo --host 100.127.134.58:6767 send abc --no-wait PR #7 已交给你'), f.calls().join(' | '));
+    assert.match(send, /见 https:\/\/example\/c0。/);
+    assert.ok(!f.calls().some((c) => c.includes('-X')), 'no GitHub write');
+  } finally { f.cleanup(); }
+});
+
+test('--notify-only refuses when no handoff comment hands the current head to the receiver', () => {
+  const f = fixture({ labels: ['owner:codex'], sessions: idle, comments: handedToCodex('0000000000') });
+  try {
+    const result = f.handoff('--notify-only');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /does not hand head/);
+    assert.ok(!f.calls().some((c) => c.includes(' send ')), 'nothing sent');
+  } finally { f.cleanup(); }
+});
+
+test('--notify-only --dry-run reports the notice and sends nothing', () => {
+  const f = fixture({ labels: ['owner:codex'], sessions: idle, comments: handedToCodex });
+  try {
+    const result = f.handoff('--notify-only', '--dry-run');
+    assert.equal(result.status, 0, result.stderr);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.comment, 'https://example/c0');
+    assert.deepEqual(report.notify, { kind: 'send', id: 'abc' });
+    assert.ok(!f.calls().some((c) => c.includes('-X') || c.includes(' run ') || c.includes(' send ')), f.calls().join(' | '));
+  } finally { f.cleanup(); }
+});
+
+test('a busy session is waited on before the send, and a failed wait fails the run with nothing sent', () => {
+  const f = fixture({ labels: ['owner:claude'], sessions: busy });
+  try {
+    const result = f.handoff();
+    assert.equal(result.status, 0, result.stderr);
+    const calls = f.calls();
+    const wait = calls.findIndex((c) => c.startsWith('paseo --host 100.127.134.58:6767 wait abc --timeout'));
+    const send = calls.findIndex((c) => c.includes(' send abc '));
+    assert.ok(wait >= 0 && wait < send, calls.join(' | '));
+  } finally { f.cleanup(); }
+
+  const g = fixture({ labels: ['owner:claude'], sessions: busy, waitFails: true });
+  try {
+    const result = g.handoff();
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /did not become idle .*nothing was sent\nrerun with --notify-only/s);
+    assert.ok(!g.calls().some((c) => c.includes(' send ')), 'nothing sent');
   } finally { g.cleanup(); }
+});
+
+test('a rerun after an interrupted handoff reuses the posted comment and finishes the labels', () => {
+  const f = fixture({ labels: ['owner:claude', 'owner:codex'], sessions: idle, comments: handedToCodex });
+  try {
+    const result = f.handoff();
+    assert.equal(result.status, 0, result.stderr);
+    const calls = f.calls();
+    assert.ok(!calls.some((c) => c.includes('-X POST') && c.includes('/comments')), 'no second comment');
+    assert.ok(calls.some((c) => c.includes('DELETE') && c.includes('labels/owner:claude')), calls.join(' | '));
+    assert.match(calls.find((c) => c.includes(' send ')), /见 https:\/\/example\/c0。/);
+  } finally { f.cleanup(); }
 });
