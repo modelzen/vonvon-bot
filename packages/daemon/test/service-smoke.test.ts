@@ -1,25 +1,12 @@
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { tmpdir, userInfo } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { type ServiceDefinitionOptions } from '../src/service/common';
-import { buildPlist } from '../src/service/launchd';
-import { buildUnit } from '../src/service/systemd';
-import { buildLauncherCmd, SERVICE_ENV_FLAG } from '../src/service/win-startup';
-import {
-  CODEX_PATH_SCENARIOS,
-  NEW_CODEX_VERSION,
-  OLD_CODEX_VERSION,
-  prepareCodexSelection,
-  type CodexPathScenario,
-  type CodexSelectionFixture,
-} from './helpers/codex-selection-fixture';
-
-// Deliberately opt-in: ordinary `npm test` must not register even a temporary
-// service. These tests never call the bridge's install/start/restart functions.
-const enabled = process.env.FEISHU_BRIDGE_NATIVE_SERVICE_TEST === '1';
+import { renderDefinition } from '../src/service/definitions';
+import { resolveServiceRoot, LAUNCHD_LABEL, SYSTEMD_UNIT_NAME } from '../src/service/identity';
+// Native parsers read the rendered definitions offline. Nothing here registers or starts a service.
 const timeoutMs = 15_000;
 
 interface WorkerEvent {
@@ -27,17 +14,13 @@ interface WorkerEvent {
   argv: string[];
   path: string;
   serviceFlag: string | null;
-  codexBin?: string | null;
-  selected?: string | null;
-  version?: string | null;
 }
 
 interface Fixture {
   root: string;
   name: string;
-  options: Required<Pick<ServiceDefinitionOptions, 'cliBinPath' | 'stdoutPath' | 'stderrPath' | 'envPath'>>;
+  options: { cliBinPath: string; stdoutPath: string; stderrPath: string; envPath: string };
   events: () => Promise<WorkerEvent[]>;
-  selection?: CodexSelectionFixture;
   teardown?: {
     actions: Array<() => void | Promise<void>>;
     manualCommands: string[];
@@ -50,16 +33,6 @@ function command(executable: string, args: string[], env?: NodeJS.ProcessEnv): s
     throw new Error(`${executable} ${args.join(' ')} failed: ${result.error?.message ?? result.status}\n${result.stdout ?? ''}\n${result.stderr ?? ''}`);
   }
   return result.stdout;
-}
-
-async function until<T>(description: string, check: () => Promise<T | undefined>): Promise<T> {
-  const deadline = Date.now() + timeoutMs;
-  do {
-    const result = await check();
-    if (result !== undefined) return result;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  } while (Date.now() < deadline);
-  throw new Error(`Timed out waiting for ${description}`);
 }
 
 async function cleanup(actions: Array<() => void | Promise<void>>): Promise<void> {
@@ -96,7 +69,7 @@ appendFileSync(${JSON.stringify(eventPath)}, JSON.stringify({
   pid: process.pid,
   argv: process.argv.slice(2),
   path: process.env.PATH,
-  serviceFlag: process.env.${SERVICE_ENV_FLAG} ?? null,
+  serviceFlag: process.env.VONVON_SERVICE ?? null,
 }) + '\\n');
 ${keepAlive ? 'setInterval(() => {}, 1000);' : ''}
 `, 'utf8');
@@ -151,201 +124,43 @@ ${keepAlive ? 'setInterval(() => {}, 1000);' : ''}
   if (failures.length > 1) throw new AggregateError(failures, `Native service test and cleanup failed; fixture: ${root}`);
 }
 
-function expectWorker(event: WorkerEvent, fixture: Fixture, serviceFlag: string | null): void {
-  expect(event.pid).toBeGreaterThan(0);
-  expect(event.argv).toEqual(['run']);
-  expect(event.path).toBe(fixture.options.envPath);
-  expect(event.serviceFlag).toBe(serviceFlag);
-  if (fixture.selection) {
-    console.info('CODEX_BIN background readback:', JSON.stringify(event));
-    expect(event.selected).toBe(fixture.selection.newBin);
-    expect(event.version).toBe(NEW_CODEX_VERSION);
-    expect(event.codexBin).toBe(fixture.selection.newBin);
-  }
-}
-
-async function withCodexSelection(
-  keepAlive: boolean,
-  scenario: CodexPathScenario,
-  body: (fixture: Fixture) => Promise<void>,
-): Promise<void> {
-  await withFixture(keepAlive, async (fixture) => {
-    const selection = await prepareCodexSelection(fixture.root, fixture.options.cliBinPath, keepAlive, scenario);
-    fixture.selection = selection;
-    fixture.options.envPath = selection.path;
-    const foreground = (env: NodeJS.ProcessEnv): WorkerEvent => JSON.parse(command(
-      process.execPath, [fixture.options.cliBinPath, 'foreground'], env,
-    ));
-    const old = foreground(selection.environment);
-    console.info(`CODEX_BIN ${scenario}, PATH-only foreground:`, JSON.stringify(old));
-    expect(old.selected).toBe(selection.oldBin);
-    expect(old.version).toBe(OLD_CODEX_VERSION);
-    const selected = foreground({ ...selection.environment, CODEX_BIN: selection.newBin });
-    console.info(`CODEX_BIN ${scenario}, explicit foreground:`, JSON.stringify(selected));
-    expect(selected.selected).toBe(selection.newBin);
-    expect(selected.version).toBe(NEW_CODEX_VERSION);
-    await body(fixture);
+it.runIf(process.platform === 'darwin')('parses the fixed launchd definition with native plutil', async () => {
+  await withFixture(false, async (fixture) => {
+    const root = await resolveServiceRoot(fixture.root);
+    const plistPath = join(root, 'definition.plist');
+    const rendered = renderDefinition({ target: { platform: 'darwin', plistPath }, root, port: 32123,
+      distribution: { kind: 'npm', executable: process.execPath, entry: fixture.options.cliBinPath! }, capturedPath: fixture.options.envPath! });
+    if (rendered.platform !== 'darwin') throw new Error('Expected plist');
+    await writeFile(plistPath, rendered.plist);
+    command('/usr/bin/plutil', ['-lint', plistPath]);
+    const plist = JSON.parse(command('/usr/bin/plutil', ['-convert', 'json', '-o', '-', plistPath]));
+    expect(plist.Label).toBe(LAUNCHD_LABEL);
+    expect(plist.ProgramArguments).toEqual([process.execPath, fixture.options.cliBinPath, 'daemon', 'run', '--port', '32123']);
+    expect(plist.EnvironmentVariables.PATH).toBe(fixture.options.envPath);
+    expect(plist.StandardOutPath).toBe(join(root, 'service.log'));
+    expect(plist.StandardErrorPath).toBe(join(root, 'service.err.log'));
   });
-}
+});
 
-function definitionWithSelection(fixture: Fixture, build: () => string): string {
-  // Installation sees the user's override, but it is restored before any
-  // service starts. No asynchronous work can leak this temporary setting.
-  const previous = process.env.CODEX_BIN;
-  try {
-    process.env.CODEX_BIN = fixture.selection!.newBin;
-    return build();
-  } finally {
-    if (previous === undefined) delete process.env.CODEX_BIN;
-    else process.env.CODEX_BIN = previous;
-  }
-}
-
-function serviceCommand(executable: string, args: string[]): string {
-  const env = { ...process.env };
-  for (const key of Object.keys(env)) {
-    if (key.toUpperCase() === 'CODEX_BIN') delete env[key];
-  }
-  return command(executable, args, env);
-}
-
-async function waitForWorker(fixture: Fixture, previousPid?: number): Promise<WorkerEvent> {
-  return until('worker readback', async () => {
-    const events = await fixture.events();
-    return events.find((event) => event.pid !== previousPid);
+it.runIf(process.platform === 'linux')('parses the fixed Linux definition offline with systemd-analyze', async ({ skip }) => {
+  const available = spawnSync('systemd-analyze', ['--version'], { encoding: 'utf8', timeout: timeoutMs });
+  if (available.error && 'code' in available.error && available.error.code === 'ENOENT') skip('systemd-analyze is unavailable');
+  expect(available.status, available.stderr).toBe(0);
+  await withFixture(false, async fixture => {
+    const root = await resolveServiceRoot(fixture.root);
+    const unitPath = join(root, SYSTEMD_UNIT_NAME);
+    const rendered = renderDefinition({ target: { platform: 'linux', unitPath }, root, port: 32123,
+      distribution: { kind: 'npm', executable: process.execPath, entry: fixture.options.cliBinPath }, capturedPath: fixture.options.envPath });
+    if (rendered.platform !== 'linux') throw new Error('Expected unit');
+    await writeFile(unitPath, rendered.unit);
+    command('systemd-analyze', ['verify', unitPath]);
+    const unit = Buffer.from(rendered.unit).toString();
+    expect(unit).toContain('daemon run --port 32123');
+    expect(unit).toContain(`Environment="PATH=${fixture.options.envPath}"`);
+    expect(unit).toContain(`StandardOutput=append:${root}/service.log`);
+    expect(unit).toContain(`StandardError=append:${root}/service.err.log`);
+    expect(unit).not.toContain('CODEX_BIN');
   });
-}
-
-async function expectLogs(fixture: Fixture): Promise<void> {
-  expect(await readFile(fixture.options.stdoutPath, 'utf8')).toContain('smoke stdout');
-  expect(await readFile(fixture.options.stderrPath, 'utf8')).toContain('smoke stderr');
-}
-
-async function waitForExit(fixture: Fixture): Promise<void> {
-  const pids = (await fixture.events()).map((event) => event.pid);
-  await until('isolated service processes to exit', async () => {
-    const alive = pids.some((pid) => {
-      try {
-        process.kill(pid, 0);
-        return true;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
-        return false;
-      }
-    });
-    return alive ? undefined : true;
-  });
-}
-
-describe.skipIf(!enabled)('native service smoke tests (explicit opt-in)', () => {
-  it.runIf(process.platform === 'win32').each(CODEX_PATH_SCENARIOS)('preserves selected Codex across fresh cmd launches (%s)', async (scenario) => {
-    await withCodexSelection(false, scenario, async (fixture) => {
-      const launcher = join(fixture.root, 'launcher with spaces.cmd');
-      await writeFile(launcher, definitionWithSelection(fixture, () => buildLauncherCmd(fixture.options)), 'utf8');
-      const systemRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT;
-      if (!systemRoot) throw new Error('SystemRoot is required for the native Windows test');
-      const cmdExe = join(systemRoot, 'System32', 'cmd.exe');
-      // No inherited PATH, service flag, account tokens, or bridge configuration.
-      const cleanEnv = {
-        ...fixture.selection!.environment,
-        PATH: join(fixture.root, 'empty-parent-path'),
-      };
-      for (let attempt = 1; attempt <= 2; attempt += 1) {
-        const result = spawnSync(cmdExe, ['/d', '/v:on', '/s', '/c', `""${launcher}""`], {
-          env: cleanEnv,
-          encoding: 'utf8',
-          windowsVerbatimArguments: true,
-          timeout: timeoutMs,
-        });
-        if (result.error || result.status !== 0) {
-          throw new Error(`cmd.exe failed: ${result.error?.message ?? result.status}\n${result.stdout}\n${result.stderr}`);
-        }
-        const events = await fixture.events();
-        expect(events).toHaveLength(attempt);
-        expectWorker(events[attempt - 1]!, fixture, '1');
-      }
-      // A second invocation must append both streams, rather than truncate logs.
-      expect((await readFile(fixture.options.stdoutPath, 'utf8')).match(/smoke stdout/g)).toHaveLength(2);
-      expect((await readFile(fixture.options.stderrPath, 'utf8')).match(/smoke stderr/g)).toHaveLength(2);
-    });
-  }, 60_000);
-
-  it.runIf(process.platform === 'linux').each(CODEX_PATH_SCENARIOS)('preserves selected Codex across systemd start and restart (%s)', async (scenario) => {
-    await withCodexSelection(true, scenario, async (fixture) => {
-      const unitName = `${fixture.name}.service`;
-      const unitPath = join(fixture.root, unitName);
-      await writeFile(unitPath, definitionWithSelection(fixture, () => buildUnit(fixture.options)), 'utf8');
-      command('systemd-analyze', ['--user', 'verify', unitPath]);
-      // Missing user bus is a CI configuration failure, never a silent skip.
-      serviceCommand('systemctl', ['--user', 'show-environment']);
-      // Register teardown before the first mutation: even a timed-out link may
-      // have registered the unit. The owner retains files if cleanup is unsure.
-      fixture.teardown = {
-        actions: [
-          () => { serviceCommand('systemctl', ['--user', 'stop', unitName]); },
-          () => { serviceCommand('systemctl', ['--user', 'disable', '--runtime', '--now', unitName]); },
-          () => { serviceCommand('systemctl', ['--user', 'daemon-reload']); },
-          () => waitForExit(fixture),
-        ],
-        manualCommands: [
-          `systemctl --user stop ${unitName}`,
-          `systemctl --user disable --runtime --now ${unitName}`,
-          'systemctl --user daemon-reload',
-        ],
-      };
-      serviceCommand('systemctl', ['--user', 'link', '--runtime', unitPath]);
-      serviceCommand('systemctl', ['--user', 'daemon-reload']);
-      serviceCommand('systemctl', ['--user', 'start', unitName]);
-      const first = await waitForWorker(fixture);
-      expectWorker(first, fixture, null);
-      serviceCommand('systemctl', ['--user', 'restart', unitName]);
-      const second = await waitForWorker(fixture, first.pid);
-      expectWorker(second, fixture, null);
-      expect(second.pid).not.toBe(first.pid);
-      expect(serviceCommand('systemctl', ['--user', 'is-active', unitName]).trim()).toBe('active');
-      await expectLogs(fixture);
-    });
-  }, 120_000);
-
-  it.runIf(process.platform === 'darwin')('parses generated launchd arguments and environment with native plutil', async () => {
-    await withFixture(false, async (fixture) => {
-      const plistPath = join(fixture.root, `${fixture.name}.plist`);
-      await writeFile(plistPath, buildPlist({ ...fixture.options, label: fixture.name }), 'utf8');
-      command('/usr/bin/plutil', ['-lint', plistPath]);
-      const plist = JSON.parse(command('/usr/bin/plutil', ['-convert', 'json', '-o', '-', plistPath]));
-      expect(plist.Label).toBe(fixture.name);
-      expect(plist.ProgramArguments).toEqual([process.execPath, fixture.options.cliBinPath, 'run']);
-      expect(plist.EnvironmentVariables.PATH).toBe(fixture.options.envPath);
-      expect(plist.StandardOutPath).toBe(fixture.options.stdoutPath);
-      expect(plist.StandardErrorPath).toBe(fixture.options.stderrPath);
-    });
-  });
-
-  it.runIf(process.platform === 'darwin').each(CODEX_PATH_SCENARIOS)('preserves selected Codex across launchd start and restart (%s)', async (scenario) => {
-    await withCodexSelection(true, scenario, async (fixture) => {
-      const plistPath = join(fixture.root, `${fixture.name}.plist`);
-      await writeFile(plistPath, definitionWithSelection(fixture, () => buildPlist({ ...fixture.options, label: fixture.name })), 'utf8');
-      const domain = `gui/${userInfo().uid}`;
-      const target = `${domain}/${fixture.name}`;
-      serviceCommand('/bin/launchctl', ['print', domain]);
-      // Even a timed-out bootstrap may have registered the job server-side.
-      fixture.teardown = {
-        actions: [
-          () => { serviceCommand('/bin/launchctl', ['bootout', target]); },
-          () => waitForExit(fixture),
-        ],
-        manualCommands: [`/bin/launchctl bootout ${target}`],
-      };
-      serviceCommand('/bin/launchctl', ['bootstrap', domain, plistPath]);
-      const first = await waitForWorker(fixture);
-      expectWorker(first, fixture, null);
-      serviceCommand('/bin/launchctl', ['kickstart', '-k', target]);
-      const second = await waitForWorker(fixture, first.pid);
-      expectWorker(second, fixture, null);
-      expect(second.pid).not.toBe(first.pid);
-      await expectLogs(fixture);
-    });
-  }, 120_000);
 });
 
 // Failure-path checks use only files and injected callbacks, never an OS
