@@ -31,8 +31,8 @@ jobs:
         env:
           SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-      - name: Test CI scope rules
-        run: node --test .github/scripts/ci-scope.test.mjs
+      - name: Test CI scope rules and the handoff script
+        run: node --test .github/scripts/ci-scope.test.mjs scripts/handoff.test.mjs
       - name: Classify changed paths
         id: scope
         run: node .github/scripts/ci-scope.mjs

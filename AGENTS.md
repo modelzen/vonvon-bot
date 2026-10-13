@@ -11,9 +11,9 @@
 
 ## 一个 PR 的流程
 
-1. Claude 从 `main` 开 `claude/<任务>` 分支，开 PR 并打 `owner:claude`。实现、Linux 验证、push，PR 描述写清改动、Linux 证据和验收要点，然后换成 `owner:codex`。
-2. Codex pull，审查和验证。通过则打 `frozen`、跑完整 CI、做 Shipping 检查、合入。发现问题，在验证范围内就修并记录；超出范围就在 PR 评论里写复现命令、输出和平台，换回 `owner:claude`。
-3. Claude 修复后只回答该评论，push，换回 `owner:codex`。Codex 只重验改动涉及的项，冻结时再跑一次完整链。
+1. Claude 从 `main` 开 `claude/<任务>` 分支，开 PR 并打 `owner:claude`。实现、Linux 验证、push，PR 描述写清改动、Linux 证据和验收要点，然后用 `node scripts/handoff.mjs <PR> --to codex --comment-file <文件>` 交接。
+2. Codex pull，审查和验证。通过则打 `frozen`、跑完整 CI、做 Shipping 检查、合入。发现问题，在验证范围内就修并记录；超出范围就把复现命令、输出和平台写进评论文件，用 `scripts/handoff.mjs --to claude` 交回。
+3. Claude 修复后只回答该评论，push，用 `scripts/handoff.mjs --to codex` 交回。Codex 只重验改动涉及的项，冻结时再跑一次完整链。
 4. 合入后两台机器各自删除该分支的 worktree。
 
 ## 硬限制
@@ -24,12 +24,14 @@
 - 每个功能分支在每台机器上只有一棵 worktree。合入即删。
 - 在飞 PR 的设计不另开文档 PR 修改。缺口在该 PR 的评论里提出，Claude 在同一 PR 里同时改代码和 `docs/` 里的计划。设计文档只为尚未开始的版本写，最多领先实现一个版本。
 - 进度只看 issue #122 看板和 PR 状态。不做本地进度页、会话映射文件或定时刷新。Codex 在交接和合入时更新看板。
-- 每台机器一个在飞 PR 一个会话。并行在会话内部用子代理，不开根会话加多个工作会话。
+- 每台机器一个在飞 PR 一个会话，会话标题为 `PR #<号>`。并行在会话内部用子代理，不开根会话加多个工作会话。
 - 完整三平台 CI 只在 `frozen` head 跑一次。冻结前 Claude 在 Linux 上只跑构建、typecheck、lint 和定向测试。全量测试、macOS 检查、真实环境验收、live 和性能由 Codex 在 Mac 上做。
 - 没有 Windows 原生环境。每个 PR 的 Windows 验证只看 `frozen` head 完整 CI 的 Windows 任务，不等人工验收。只在 Windows 上出现的行为，例如进程树回收和服务注册，由 Claude 写成能在 CI Windows 任务里运行的真实进程或真实注册表测试。必须有 Windows 桌面才能验的项，例如登录后自启、Electron 窗口和托盘，在 PR 里记为 Windows 未验，不阻塞合入，等有 Windows 环境时集中验收。
 
 ## 工具和同步
 
-- 调用 JP-VPS 上的 Claude 通过 Paseo CLI 创建和管理会话。daemon 为 `10.0.0.10:6767`，项目为 `/home/operator/vonvon/vonvon-bot`，provider 为 `claude`。不通过 SSH 执行 `claude -p`。
+- 两台机器的 Paseo daemon 通过 Tailscale 互通。JP-VPS 为 `10.0.0.10:6767`，provider `claude`，项目 `/home/operator/vonvon/vonvon-bot`。Mac 为 `10.0.0.11:6767`，provider `codex`。不通过 SSH 执行 `claude -p`。
+- 交接只用 `scripts/handoff.mjs`。它检查 PR 标签归自己、工作区干净且已 push，写交接评论，先加对方的 owner 标签再去掉自己的，最后经对方的 Paseo daemon 通知对方。状态只在 PR 里，Paseo 消息只含 PR 号和评论链接，丢失或重复都不影响。
+- 会话按标题 `PR #<号>` 查找，不维护映射。对方机器上没有该会话时，脚本按对方的模型表新建一个（Codex 用 Sol，Claude 用 Opus、effort medium），这是唯一允许跨机创建会话的情况。对方会话正在运行时，脚本等它空闲后再发，因为 `paseo send` 默认会打断对方当前的回合。
 - 各台机器只通过 Git 同步，各自运行 npm ci，不拷贝 node_modules、dist、build、release。
 - 用户已授权连续执行后续版本。每个 PR 通过验证、独立审查和准确 head 的 Shipping 检查后，Codex 受控合入并继续，不在版本边界等用户确认。只有需要用户决策、补充信息或用户操作时才暂停并说明原因。
