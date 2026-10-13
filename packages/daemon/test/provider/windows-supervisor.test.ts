@@ -87,6 +87,7 @@ describe.skipIf(process.platform !== 'win32')('the Windows supervisor', () => {
     expect(s.channel.holderPid).toBeGreaterThan(0);
     expect(s.channel.osSession).toBeTypeOf('number');
     expect(s.channel.start).toMatch(/^win32:\d+$/);
+    expect(/hello [0-9a-f]{64}/.test(readFileSync(s.logPath, 'utf8'))).toBe(false);
     const refused = await new Promise<string>(resolve => {
       const late = connect(pipeName);
       late.once('error', error => resolve((error as NodeJS.ErrnoException).code ?? 'error'));
@@ -115,6 +116,8 @@ describe.skipIf(process.platform !== 'win32')('the Windows supervisor', () => {
     expect(ready).toMatchObject({ nonce: 'l1' });
     expect(ready.pid).toBeGreaterThan(0);
     expect(await s.take('provider-exit')).toEqual({ kind: 'provider-exit', code: 0, signal: null });
+    expect(readFileSync(s.logPath, 'utf8')).toContain('provider stdio file types 3 3 3');
+    expect(readFileSync(s.logPath, 'utf8')).not.toContain('close of provider descriptor');
     await until(s.outEnded, 'provider stdout EOF');
     expect(JSON.parse(s.out())).toEqual(argv);
     s.channel.send({ command: 'reap', nonce: 'r1' });
@@ -126,7 +129,7 @@ describe.skipIf(process.platform !== 'win32')('the Windows supervisor', () => {
 
   it('reports the provider\'s own exit code', async () => {
     const s = await start();
-    s.channel.send(launchNode('process.exit(7)'));
+    s.channel.send(launchNode('setTimeout(() => process.exit(7), 200)'));
     await s.take('ready');
     expect(await s.take('provider-exit')).toEqual({ kind: 'provider-exit', code: 7, signal: null });
   }, 120_000);
@@ -225,7 +228,7 @@ describe.skipIf(process.platform !== 'win32')('the Windows supervisor', () => {
 
   it('reports launch-failed with the Win32 error and exits 11 when the executable does not exist', async () => {
     const s = await start();
-    const missing = 'C:\\vonvon-missing\\nope.exe';
+    const missing = join(tempDir(), 'nope.exe');
     s.channel.send(launch(missing, []));
     expect(await s.take('launch-failed')).toEqual({ kind: 'launch-failed', nonce: 'l1', errno: 2 });
     expect(await s.channel.exited).toEqual({ code: 11, signal: null });
