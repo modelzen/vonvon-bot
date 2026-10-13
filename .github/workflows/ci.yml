@@ -1,4 +1,4 @@
-name: PR 251 Windows diagnostics
+name: PR 251 Windows native probe
 on:
   workflow_dispatch:
 permissions:
@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 6e54c268072dd9fc0fc33e023ae037145a0c93f8
+          ref: e056168b52b0219c907a104b93a685db8e9b866f
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -21,68 +21,8 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
       - run: npm run build --workspace @vonvon/protocol
       - run: npm run build --workspace @vonvon/client
-      - name: Read Run query header without exposing registry values
-        shell: pwsh
-        run: |
-          @'
-          import { buildSync } from 'esbuild';
-          import { execFileSync, spawnSync } from 'node:child_process';
-          import { randomUUID } from 'node:crypto';
-          import { join } from 'node:path';
-          buildSync({ entryPoints: ['packages/desktop/src/daemon-dependencies.ts'], outfile: 'windows-parser-probe.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external' });
-          const { parseWindowsRunQuery } = await import('./windows-parser-probe.mjs');
-          const key = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
-          const reg = join(process.env.SystemRoot, 'System32', 'reg.exe');
-          console.log(JSON.stringify({ source: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() }));
-          function observe(label, query) {
-            const result = spawnSync(reg, ['query', query], { encoding: 'utf8' });
-            const lines = result.stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-            const expected = query.replace('HKCU', 'HKEY_CURRENT_USER');
-            const sameKey = lines[0]?.toLowerCase() === expected.toLowerCase();
-            console.log(JSON.stringify({ label, exit: result.status, nonEmptyLines: lines.length, header: sameKey ? lines[0] : undefined, exactHeader: lines[0] === expected, kind: parseWindowsRunQuery(result.stdout).kind }));
-          }
-          observe('existing-run-key', key);
-          const isolated = 'HKCU\\Software\\Vonvon diagnostic ' + randomUUID();
-          execFileSync(reg, ['add', isolated, '/f']);
-          try { observe('owned-empty-key', isolated); }
-          finally { execFileSync(reg, ['delete', isolated, '/f']); }
-          '@ | Set-Content -Encoding utf8 probe.mjs
-          node probe.mjs
-      - name: Recheck unchanged keystore concurrency test
-        if: always()
-        working-directory: packages/daemon
-        run: npx vitest run test/keystore.test.ts
-      - name: Trace twelve isolated keystore transactions
-        if: always()
-        shell: pwsh
-        run: |
-          @'
-          import { buildSync } from 'esbuild';
-          import { spawn } from 'node:child_process';
-          import { mkdtemp, rm } from 'node:fs/promises';
-          import { tmpdir } from 'node:os';
-          import { join } from 'node:path';
-          const root = await mkdtemp(join(tmpdir(), 'pr251-keystore-probe-'));
-          const entry = join(root, 'keystore.cjs');
-          buildSync({ entryPoints: ['packages/daemon/src/config/keystore.ts'], outfile: entry, platform: 'node', format: 'cjs', bundle: true });
-          const started = performance.now();
-          const children = new Set();
-          async function run(index, source) {
-            const child = spawn(process.execPath, ['-e', `const k=require(${JSON.stringify(entry)});(async()=>{${source}})().catch(()=>process.exitCode=1)`], { env: { ...process.env, VONVON_HOME: root }, stdio: 'ignore' });
-            children.add(child);
-            console.log(JSON.stringify({ event: 'spawn', index, pid: child.pid, ms: performance.now() - started }));
-            return await new Promise((resolve, reject) => {
-              child.once('error', reject);
-              child.once('close', code => { children.delete(child); console.log(JSON.stringify({ event: 'close', index, code, ms: performance.now() - started })); resolve(code); });
-            });
-          }
-          const deadline = setTimeout(() => { for (const child of children) child.kill(); }, 30000);
-          try {
-            const codes = await Promise.all(Array.from({ length: 12 }, (_, index) => run(index, `await k.setSecret("id-${index}","dummy-${index}")`)));
-            if (codes.some(code => code !== 0)) throw new Error('transaction child failed');
-            const read = await run('read', 'for(let i=0;i<12;i++){if(await k.getSecret(`id-${i}`)!==`dummy-${i}`)throw Error("lost write")}if((await k.listSecretIds()).length!==12)throw Error("wrong count")');
-            if (read !== 0) throw new Error('keystore verification failed');
-            console.log(JSON.stringify({ verifiedTransactions: 12, ms: performance.now() - started }));
-          } finally { clearTimeout(deadline); await rm(root, { recursive: true, force: true }); }
-          '@ | Set-Content -Encoding utf8 keystore-probe.mjs
-          node keystore-probe.mjs
+      - name: Verify exact source
+        run: git rev-parse HEAD
+      - name: Exercise all four native Windows tests
+        working-directory: packages/desktop
+        run: npx vitest run test/windows-native.test.ts
