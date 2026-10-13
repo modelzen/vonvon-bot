@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ProcessFact } from '../../src/provider/engines/engine';
 import { readStartToken } from '../../src/provider/process/identity';
 import { readLedger, type HostPlatform } from '../../src/provider/process/ledger';
@@ -145,11 +145,27 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost on POSIX', () => {
 
   it('spawn() ends the record itself when ready misses the spawn deadline, so nothing stays bound without a handle', async () => {
     const dir = dataDir();
-    const host = newHost(dir, 0);
-    await expect(host.spawn('codex', undefined, { file: NODE, args: [FAKE, '--ignore-term'], env: ENV })).rejects.toThrow('holder-not-ready');
+    const deadlineMs = 20_000;
+    const host = newHost(dir, deadlineMs);
+    const reservation = await host.reserve('codex');
+    const holderPid = host.snapshot()[0]?.holderPid;
+    const reserve = vi.spyOn(host, 'reserve').mockResolvedValueOnce(reservation);
+    let rejected: Promise<void>;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      rejected = expect(host.spawn('codex', undefined, { file: NODE, args: [FAKE, '--ignore-term'], env: ENV })).rejects.toThrow('holder-not-ready');
+      await Promise.resolve();
+      expect(host.snapshot()[0]?.stage).toBe('attempting');
+      vi.advanceTimersByTime(deadlineMs);
+    } finally {
+      vi.useRealTimers();
+      reserve.mockRestore();
+    }
+    await rejected;
     expect(host.snapshot()).toEqual([]);
     expect(ledgerOf(dir).kind).toBe('missing');
     expect(host.owesWork()).toBe(false);
+    await until(() => holderPid !== undefined && !alive(holderPid), 'timed-out holder exit');
   }, 30_000);
 
   it('watch() reports transport-lost after the hold when stdout closes with no exit, and the exit still follows', async () => {
