@@ -1,0 +1,139 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ChildProcess, spawn } from 'node:child_process';
+import { mkdir, mkdtemp, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { PROTOCOL_VERSION } from '@vonvon/protocol';
+import { createDaemonDependencies, parseWindowsRunQuery, prepareDesktopRoot } from '../src/daemon-dependencies.js';
+import { readRunningPidLock } from '../../daemon/src/server/pid-lock.js';
+import { verifyPidLockOwner } from '../../daemon/src/server/owner-verification.js';
+
+const attach = vi.hoisted(() => vi.fn());
+
+vi.mock('node:child_process', async importOriginal => ({
+  ...await importOriginal<typeof import('node:child_process')>(),
+  spawn: vi.fn(),
+}));
+vi.mock('../../daemon/src/server/pid-lock.js', () => ({ readRunningPidLock: vi.fn() }));
+vi.mock('../../daemon/src/server/owner-verification.js', () => ({ verifyPidLockOwner: vi.fn() }));
+vi.mock('../src/attach.js', () => ({ attachExisting: attach }));
+
+const roots: string[] = [];
+const owner = { pid: 12345, startedAt: '2026-10-11T00:00:00.000Z', listen: '127.0.0.1:54321' };
+const dependencies = () => createDaemonDependencies({ root: '/owned/data', home: '/owned/home', resources: '/owned/resources', executable: '/owned/Electron', packaged: false });
+
+async function packagedDependencies() {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'desktop-launch-')));
+  roots.push(root);
+  const resources = join(root, 'resources');
+  const files: Array<[string, string]> = [
+    ['daemon/package.json', JSON.stringify({ name: '@vonvon/daemon', bin: { vonvon: 'bin/vonvon.mjs' } })],
+    ['daemon/bin/vonvon.mjs', ''],
+    ['daemon/dist/cli.js', ''],
+    ['app.asar/package.json', JSON.stringify({ name: 'vonvon-bot-desktop', main: 'desktop/main.cjs' })],
+    ['app.asar/desktop/main.cjs', ''],
+  ];
+  for (const [file, content] of files) {
+    const path = join(resources, file);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, content);
+  }
+  return { resources, dependencies: createDaemonDependencies({ root, home: root, resources, executable: '/owned/Electron', packaged: true }) };
+}
+
+afterEach(async () => {
+  vi.resetAllMocks();
+  await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
+});
+
+describe('desktop daemon dependencies', () => {
+  it('creates a fresh private root and refuses a symlink root', async () => {
+    const parent = await realpath(await mkdtemp(join(tmpdir(), 'desktop-root-')));
+    roots.push(parent);
+    const path = join(parent, 'data');
+    expect(await prepareDesktopRoot({ kind: 'fresh', path })).toBe(path);
+    if (process.platform !== 'win32') expect((await stat(path)).mode & 0o777).toBe(0o700);
+    const alias = join(parent, 'alias');
+    await symlink(path, alias, 'dir');
+    await expect(prepareDesktopRoot({ kind: 'canonical', path: alias })).rejects.toThrow('physical directory');
+  });
+
+  it('never turns failed owner authentication into an absent owner', async () => {
+    vi.mocked(readRunningPidLock).mockResolvedValue(owner);
+    vi.mocked(verifyPidLockOwner).mockRejectedValue(new Error('protocol mismatch'));
+    await expect(dependencies().readVerifiedDaemon()).rejects.toThrow('Leave it running');
+  });
+
+  it('authenticates a published lock before returning it', async () => {
+    vi.mocked(readRunningPidLock).mockResolvedValue(owner);
+    await expect(dependencies().readVerifiedDaemon()).resolves.toEqual(owner);
+    expect(verifyPidLockOwner).toHaveBeenCalledExactlyOnceWith('/owned/data', owner);
+  });
+
+  it('checks the attached identity and closes the probe', async () => {
+    const dispose = vi.fn(async () => {});
+    attach.mockResolvedValue({ identity: owner, dispose });
+    await expect(dependencies().checkProtocol(owner)).resolves.toBe(PROTOCOL_VERSION);
+    await expect(dependencies().checkProtocol({ ...owner, pid: owner.pid + 1 })).rejects.toThrow('owner changed');
+    expect(dispose).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses a development runtime instead of spawning a global CLI', async () => {
+    await expect(dependencies().startBundled(0)).rejects.toThrow('packaged Vonvon daemon is unavailable');
+  });
+
+  it('returns the selected child PID and forwards the exact Bot as one argument', async () => {
+    const { resources, dependencies } = await packagedDependencies();
+    const child = new ChildProcess();
+    Object.defineProperty(child, 'pid', { value: 9876 });
+    vi.mocked(spawn).mockImplementation(() => {
+      queueMicrotask(() => child.emit('spawn'));
+      return child;
+    });
+    await expect(dependencies.startSelectedBot(0, 'exact Bot; ID')).resolves.toBe(9876);
+    expect(spawn).toHaveBeenCalledExactlyOnceWith('/owned/Electron', [
+      join(resources, 'daemon', 'bin', 'vonvon.mjs'), 'daemon', 'run', '--port', '0', '--bot', 'exact Bot; ID',
+    ], expect.objectContaining({ detached: true }));
+  });
+
+  it('does not confirm a selected launch when the spawn event has no child PID', async () => {
+    const { dependencies } = await packagedDependencies();
+    vi.mocked(spawn).mockImplementation(() => {
+      const child = new ChildProcess();
+      queueMicrotask(() => child.emit('spawn'));
+      return child;
+    });
+    await expect(dependencies.startSelectedBot(0, 'cli_selected')).rejects.toThrow('did not provide a process ID');
+    expect(spawn).toHaveBeenCalledOnce();
+  });
+
+  it('preserves selected launch errors without reporting a PID', async () => {
+    const { dependencies } = await packagedDependencies();
+    vi.mocked(spawn).mockImplementation(() => {
+      const child = new ChildProcess();
+      queueMicrotask(() => child.emit('error', new Error('spawn denied')));
+      return child;
+    });
+    await expect(dependencies.startSelectedBot(0, 'cli_selected')).rejects.toThrow('spawn denied');
+    expect(spawn).toHaveBeenCalledOnce();
+  });
+
+  it('requires an observed registry key before reporting absence', () => {
+    const key = 'HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
+    expect(parseWindowsRunQuery('')).toMatchObject({ kind: 'unavailable' });
+    expect(parseWindowsRunQuery(key)).toEqual({ kind: 'absent' });
+    expect(parseWindowsRunQuery(key.replace('Software', 'SOFTWARE'))).toEqual({ kind: 'absent' });
+    expect(parseWindowsRunQuery(key.toLowerCase())).toEqual({ kind: 'absent' });
+    expect(parseWindowsRunQuery(key.replace('HKEY_CURRENT_USER', 'HKEY_LOCAL_MACHINE'))).toMatchObject({ kind: 'unavailable' });
+    expect(parseWindowsRunQuery(`${key}Backup`)).toMatchObject({ kind: 'unavailable' });
+    expect(parseWindowsRunQuery(`${key}\r\n    Other    REG_SZ    unrelated`)).toEqual({ kind: 'absent' });
+    expect(parseWindowsRunQuery(`${key}\r\n    VONVON BOT    REG_SZ    owned`)).toEqual({ kind: 'value', type: 'REG_SZ', value: 'owned' });
+    expect(parseWindowsRunQuery(`${key}\r\n    vonvon bot    REG_SZ    owned`)).toEqual({ kind: 'value', type: 'REG_SZ', value: 'owned' });
+    expect(parseWindowsRunQuery(`${key}\r\n    Vonvon Bot Backup    REG_SZ    foreign`)).toEqual({ kind: 'absent' });
+    expect(parseWindowsRunQuery(`${key}\r\n    Empty    REG_SZ    \r\n    Vonvon Bot    REG_SZ    `)).toEqual({ kind: 'value', type: 'REG_SZ', value: '' });
+    expect(parseWindowsRunQuery(`${key}\r\n    Vonvon Bot    REG_SZ    wscript.exe //B "C:\\data\\service\\vonvon-bot.vbs"`)).toEqual({
+      kind: 'value', type: 'REG_SZ', value: 'wscript.exe //B "C:\\data\\service\\vonvon-bot.vbs"',
+    });
+    expect(parseWindowsRunQuery(`${key}\r\n    Vonvon Bot    REG_BINARY    0102`)).toMatchObject({ kind: 'unavailable' });
+  });
+});
