@@ -69,10 +69,9 @@ export class RunChannel {
     if (this.state.phase === 'settled') return;
     const { state, effects } = stepTurn(this.state, input, this.options.profile, Date.now());
     this.state = state;
-    // An effect may call back synchronously into this channel. Once that moves the state on, the newer input has
-    // run its own effects and outcome, so this transition's remaining effects are stale. rearm() reads this.state.
+    // A synchronous callback that settles the run makes the remaining calls stale; one recording a turn id does not.
     for (const effect of effects) {
-      if (this.state !== state) return;
+      if (this.state.phase === 'settled' && this.state !== state) return;
       this.execute(effect);
     }
     if (state.phase === 'settled') this.finish(state.outcome);
@@ -85,6 +84,7 @@ export class RunChannel {
       case 'stop-subagents':
         if (!session.stopSubagent) return;
         for (const agent of this.ledger.list()) {
+          if (this.state.phase === 'settled') return;
           if (agent.status !== 'running') continue;
           session.stopSubagent(agent.id).catch(error => log.warn('provider', 'stop-subagent-failed', { run: this.id, error: String(error) }));
         }

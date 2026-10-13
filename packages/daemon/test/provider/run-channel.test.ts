@@ -119,35 +119,38 @@ describe('RunChannel: the stop ladder against the process port', () => {
     expect(await stopped).toEqual({ state: 'interrupted', by: 'user', tree: 'unconfirmed' });
   });
 
-  it.each(['stopSubagent', 'interrupt'] as const)('runs no stale effect, timer, or second outcome after a synchronous %s settles the run', async settles => {
-    const process = fakeProcess();
-    const interrupts: (TurnId | undefined)[] = [];
-    const run: RunChannel = new RunChannel({ id: 'run-1', providerSessionId: 'session-1', profile: claude, session: {
-      process,
-      interrupt: async id => { interrupts.push(id); if (settles === 'interrupt') run.sink.verdict({ kind: 'completed' }); },
-      stopSubagent: async () => { if (settles === 'stopSubagent') run.sink.verdict({ kind: 'completed' }); },
-    } });
-    run.sink.emit({ type: 'subagent', agent: child() });
-    run.sink.emit({ type: 'started', turnId });
-    expect(await run.stop('user')).toEqual({ state: 'completed' });
-    expect(interrupts, 'an interrupt queued behind the settling callback is not sent').toEqual(settles === 'interrupt' ? [turnId] : []);
-    expect(types(await drain(run))).toEqual(['session', 'subagent', 'started', 'subagent', 'outcome']);
-    expect(vi.getTimerCount(), 'no timer armed after settlement').toBe(0);
-  });
-
-  it.each([[false, ['term', 'kill']], [true, ['term']]] as const)('replays overdue rungs on a late tick, stopping once a synchronous exit settles (%s)', async (exitOnTerm, calls) => {
+  it.each([
+    ['stopSubagent', 'verdict', 4500, ['stop-a', 'unwatch']],
+    ['stopSubagent', 'started', 4500, ['stop-a', 'stop-b', 'interrupt', 'term', 'kill']],
+    ['interrupt', 'verdict', 4500, ['stop-a', 'stop-b', 'interrupt', 'unwatch']],
+    ['term', 'nothing', 4500, ['stop-a', 'stop-b', 'interrupt', 'term', 'kill']],
+    ['term', 'started', 4500, ['stop-a', 'stop-b', 'interrupt', 'term', 'kill']],
+    ['term', 'exit', 4500, ['stop-a', 'stop-b', 'interrupt', 'term', 'unwatch']],
+    ['term', 'nothing', 99_999, ['stop-a', 'stop-b', 'interrupt', 'term', 'kill', 'unwatch']],
+  ] as const)('a synchronous %s callback reporting %s at a tick at %i stops only the calls a settlement made stale', async (site, report, tickAt, expected) => {
+    const calls: string[] = [];
     const process = fakeProcess({ term: 'silent', kill: 'silent' });
-    const term = () => {
-      if (exitOnTerm) process.publish({ kind: 'exit', exit: { observed: 'parent', code: null, signal: 'SIGTERM' } });
-      return process.term();
+    const callback = (at: typeof site) => {
+      if (at !== site) return;
+      if (report === 'verdict') run.sink.verdict({ kind: 'completed' });
+      if (report === 'started') run.sink.emit({ type: 'started', turnId });
+      if (report === 'exit') process.publish({ kind: 'exit', exit: { observed: 'parent', code: null, signal: 'SIGTERM' } });
     };
-    const run = new RunChannel({ id: 'run-1', providerSessionId: 'session-1', profile: claude, session: fakeSession({ ...process, term }) });
-    run.sink.emit({ type: 'started', turnId });
+    const run: RunChannel = new RunChannel({ id: 'run-1', providerSessionId: 'session-1', profile: claude, session: {
+      process: {
+        watch: listener => { const off = process.watch(listener); return () => { calls.push('unwatch'); off(); }; },
+        term: () => { calls.push('term'); callback('term'); return process.term(); },
+        kill: () => { calls.push('kill'); return process.kill(); },
+      },
+      interrupt: async () => { calls.push('interrupt'); callback('interrupt'); },
+      stopSubagent: async id => { calls.push(`stop-${id}`); if (id === 'a') callback('stopSubagent'); },
+    } });
+    for (const id of ['a', 'b']) run.sink.emit({ type: 'subagent', agent: { ...child(), id: id as SubagentId } });
     void run.stop('user');
-    vi.setSystemTime(Date.now() + 2000);
+    vi.setSystemTime(Date.now() + tickAt - 3000);
     await vi.advanceTimersByTimeAsync(3000);
-    expect(process.calls).toEqual(calls);
-    if (exitOnTerm) expect(await run.outcome).toEqual({ state: 'interrupted', by: 'user', tree: 'exited' });
+    expect(calls, 'a late tick owes every passed rung').toEqual(expected);
+    expect(vi.getTimerCount(), 'a settled run arms nothing').toBe(expected.at(-1) === 'unwatch' ? 0 : 1);
   });
 
   it.each([true, false])('stops each running subagent iff the engine can (%s)', async subagentStop => {
