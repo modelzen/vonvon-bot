@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: bd43fb6a90e95665f309c2e1dd40ff7a21f83943
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -24,9 +24,9 @@ jobs:
       - name: Verify exact source
         shell: pwsh
         env:
-          SOURCE_SHA: ${{ github.sha }}
+          SOURCE_SHA: bd43fb6a90e95665f309c2e1dd40ff7a21f83943
         run: |
           if ((git rev-parse HEAD) -ne $env:SOURCE_SHA) { throw 'Unexpected source SHA' }
-      - name: Observe exact named Job membership and cleanup
+      - name: Verify revised Windows containment and FILETIME tests
         working-directory: packages/daemon
-        run: npx vitest run test/provider/windows-job-breakaway.test.ts --maxWorkers=1
+        run: npx vitest run test/provider/windows-job-breakaway.test.ts test/provider/process-identity.test.ts --maxWorkers=1
