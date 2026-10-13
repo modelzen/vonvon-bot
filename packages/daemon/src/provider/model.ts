@@ -58,13 +58,17 @@ export type Failure =
   | { kind: 'auth'; hint: string }
   | { kind: 'limit'; limit: 'max-tokens' | 'max-turns' | 'context-window' | 'rate-limit' | 'usage-limit' }
   | { kind: 'provider-error'; message: string }
-  | { kind: 'process-exit'; code: number | null; signal: string | null };
+  | { kind: 'process-exit'; code: number | null; signal: string | null }
+  /** The provider's stream closed and no exit fact followed. Reported by OwnedProcess.watch, never by an engine. */
+  | { kind: 'transport-lost' };
 
 export type StopBy = 'user' | 'watchdog' | 'daemon';
+/** What a stop did to the owned process tree, as far as the turn machine knows. Rules in providers.md *Engine and runtime*. */
+export type TreeFate = 'live' | 'signalled' | 'exited' | 'unconfirmed';
 export type Outcome =
   | { state: 'completed' }
   | { state: 'failed'; failure: Failure }
-  | { state: 'interrupted'; by: StopBy | 'agent'; forced: boolean };
+  | { state: 'interrupted'; by: StopBy | 'agent'; tree: TreeFate };
 
 export type RunEvent =
   | { type: 'session'; providerSessionId: string }
@@ -77,10 +81,17 @@ export type RunEvent =
   | { type: 'image'; image: ImageRef }
   | { type: 'context'; used: number; window: number | null }
   | { type: 'compaction'; phase: 'start' | 'end'; trigger: 'auto' | 'manual' }
-  | { type: 'goal'; status: string; objective: string; tokensUsed: number; tokenBudget: number | null }
+  | { type: 'goal'; status: string; objective: string; tokensUsed: number; timeUsedSeconds: number; tokenBudget: number | null }
   | { type: 'notice'; kind: 'retry' | 'bash-off' | 'mcp-off' | 'question-declined' | 'resume-failed' | 'image-cap' | 'other'; text: string }
   | { type: 'provider-message'; level: 'info' | 'warn'; text: string }
   | { type: 'outcome'; outcome: Outcome; usage?: { input?: number; output?: number; cached?: number } };
+
+/** Why a goal ended. Chosen once by the first trigger; nothing afterwards changes it. Behavior in providers.md *Goals*. */
+export type GoalEnd =
+  | { kind: 'terminal'; status: string }
+  | { kind: 'failed'; failure: Failure }
+  | { kind: 'cleared' }
+  | { kind: 'timeout' };
 
 export type Support = 'native' | 'partial' | 'none';
 export type ProbeId = string;
