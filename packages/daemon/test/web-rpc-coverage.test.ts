@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fixtureNode } from './fixture-node';
 import { requestSchema, responseSchema } from '@vonvon/protocol';
 import { fakeService, socketClient, startFixture } from './server-fixture';
 
@@ -69,12 +70,13 @@ it('serves browser daemon branches and keeps local URL and shell actions unsuppo
 
 it('holds the real API drain until a login child exits after stop intent', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'vonvon-browser-drain-'));
+  const nodePath = await fixtureNode(dir);
   const release = join(dir, 'release');
   const started = join(dir, 'started');
   await writeTool(dir, 'lark-cli', `#!/usr/bin/env node\nconst fs=require('node:fs');fs.writeFileSync(${JSON.stringify(started)},'started');const t=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){clearInterval(t);process.exit(0)}},20);\n`);
   let fixture: Awaited<ReturnType<typeof startFixture>> | undefined;
   try {
-    fixture = await startFixture(fakeService(), { home: dir, getDataRoot: () => dir, resolveCodex: () => null, nodePath: process.execPath, path: dir, fetchLatest: async () => null });
+    fixture = await startFixture(fakeService(), { home: dir, getDataRoot: () => dir, resolveCodex: () => null, nodePath, path: dir, fetchLatest: async () => null });
     const client = await socketClient(fixture.api.port, fixture.credential, 1, requestTimeout);
     await client.ready();
     const login = await client.call(requestSchema.parse({ type: 'request', id: 'login', method: 'environment', payload: { type: 'startLogin', tool: 'lark-cli' } }));
@@ -100,6 +102,7 @@ it('holds the real API drain until a login child exits after stop intent', async
 it('sends one valid WebSocket request for every browser protocol union variant', async () => {
   const schemas = await import('@vonvon/protocol');
   const environmentHome = await mkdtemp(join(tmpdir(), 'vonvon-union-environment-'));
+  const nodePath = await fixtureNode(environmentHome);
   await writeTool(environmentHome, 'lark-cli', `#!/usr/bin/env node
 const args=process.argv.slice(2);
 if(args[0]==='--version'){process.stdout.write('lark-cli 1.2.3');process.exit(0)}
@@ -111,7 +114,7 @@ else process.exit(0);
 `);
   await writeTool(environmentHome, 'claude', '#!/usr/bin/env node\nprocess.stdout.write("claude 1.2.3");\n');
   const npm = await writeTool(environmentHome, 'npm', '#!/usr/bin/env node\nprocess.exit(1);\n');
-  const environmentOptions = { home: environmentHome, getDataRoot: () => environmentHome, resolveCodex: () => null, nodePath: process.execPath, npmPath: npm, path: environmentHome, fetchLatest: async () => null };
+  const environmentOptions = { home: environmentHome, getDataRoot: () => environmentHome, resolveCodex: () => null, nodePath, npmPath: npm, path: environmentHome, fetchLatest: async () => null };
   const agentId = 'cli_fixture';
   const groupId = 'oc_fixture';
   const projectName = 'fixture';
