@@ -1,7 +1,7 @@
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { basename, join } from 'node:path';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { acquireMutex, assertNoDataLeases, closeMutex, enterDataAccess } from '../src/config/data-access';
 import { migrateHostDataOffline } from '../src/host/migration';
 import { getterContents } from '../src/config/data-compatibility';
@@ -15,7 +15,13 @@ vi.mock('../src/service/control', async (original) => ({
 const homes: string[] = [];
 const home = (): string => { const path = mkdtempSync(join(tmpdir(), 'bridge-admission-')); homes.push(path); return path; };
 afterEach(() => { for (const path of homes.splice(0)) rmSync(path, { recursive: true, force: true }); vi.clearAllMocks(); });
-const runtime = { nodePath: process.execPath, cliPath: import.meta.filename };
+const runtimeDir = mkdtempSync(join(tmpdir(), 'bridge-admission-runtime-'));
+const runtime = { nodePath: join(runtimeDir, basename(process.execPath)), cliPath: join(runtimeDir, 'cli.ts') };
+beforeAll(() => {
+  copyFileSync(process.execPath, runtime.nodePath);
+  copyFileSync(import.meta.filename, runtime.cliPath);
+});
+afterAll(() => rmSync(runtimeDir, { recursive: true, force: true }));
 
 describe('offline access admission', () => {
   it('blocks relocation while a data user owns a lifetime lease', async () => {
@@ -66,7 +72,7 @@ it.each(['.feishu-codex-bridge', '.vonvon-bridge'])('refreshes runtime paths for
   const result = await migrateHostDataOffline(dir, runtime);
   expect(result.kind).toBe(name === '.vonvon-bridge' ? 'unchanged' : 'linked');
   expect(readFileSync(join(dir, '.vonvon-bridge', 'secrets-getter'), 'utf8')).toBe(getterContents(runtime));
-  const runtimeB = { ...runtime, cliPath: process.execPath };
+  const runtimeB = { ...runtime, cliPath: runtime.nodePath };
   expect((await migrateHostDataOffline(dir, runtimeB)).kind).toBe('unchanged');
   expect(readFileSync(join(dir, '.vonvon-bridge', 'secrets-getter'), 'utf8')).toBe(getterContents(runtimeB));
 });
