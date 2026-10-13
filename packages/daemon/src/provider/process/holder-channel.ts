@@ -24,6 +24,8 @@ export interface HolderChannel {
   send(command: HolderCommand): boolean;
   /** Every parsed receipt line, malformed ones included so the host can log them. Returns the unsubscribe. */
   onReceipt(listener: (line: ReceiptLine) => void): () => void;
+  /** Ends the daemon's side of the command channel: EOF for the holder, which runs its daemon-death path. */
+  close(): void;
   /** The receipt stream reached EOF: the holder closed its end or died. */
   readonly closed: Promise<void>;
   readonly exited: Promise<HolderExit>;
@@ -34,6 +36,9 @@ interface ChannelParts {
   child: ChildProcess;
   commands: Writable;
   receipts: Readable;
+  /** Bytes read from the receipt stream before the channel existed, after the hello line. */
+  initial?: Buffer;
+  close(): void;
   stdio: { stdin: Writable; stdout: Readable; stderr: Readable };
   start?: StartToken;
   osSession?: number;
@@ -46,9 +51,9 @@ export function channelOver(parts: ChannelParts): HolderChannel {
   const listeners = new Set<(line: ReceiptLine) => void>();
   const parser = new ReceiptParser();
   let open = true;
-  parts.receipts.on('data', (chunk: Buffer) => {
-    for (const line of parser.push(chunk)) for (const listener of listeners) listener(line);
-  });
+  const feed = (chunk: Buffer) => { for (const line of parser.push(chunk)) for (const listener of listeners) listener(line); };
+  parts.receipts.on('data', feed);
+  if (parts.initial?.length) queueMicrotask(() => feed(parts.initial as Buffer));
   const closed = new Promise<void>(resolve => parts.receipts.once('end', resolve)).then(() => { open = false; });
   parts.receipts.once('close', () => { open = false; });
   parts.commands.on('error', () => { open = false; });
@@ -64,6 +69,7 @@ export function channelOver(parts: ChannelParts): HolderChannel {
       return true;
     },
     onReceipt: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    close: parts.close,
     closed,
     exited: exitOf(parts.child),
   };
@@ -102,7 +108,7 @@ export async function spawnPosixHolder(binaryPath: string, options: { helloTimeo
   const stdio = child.stdio as unknown as ReadonlyArray<Readable | Writable | null>;
   const [stdin, stdout, stderr] = [stdio[3] as Writable, stdio[4] as Readable, stdio[5] as Readable];
   const read = child.pid === undefined ? 'unreadable' : readStartToken(child.pid);
-  const channel = channelOver({ platform: 'posix', child, commands, receipts, stdio: { stdin, stdout, stderr } });
+  const channel = channelOver({ platform: 'posix', child, commands, receipts, stdio: { stdin, stdout, stderr }, close: () => commands.end() });
   const hello = await firstReceipt(channel, options.helloTimeoutMs ?? DEFAULT_HELLO_MS);
   if (hello === 'eof' || hello === 'timeout') return killAndReject(child, `vonvon-holder ${binaryPath}: no hello (${hello})`);
   if (hello.kind !== 'hello' || hello.version !== POSIX_HOLDER_HELLO_VERSION) {
