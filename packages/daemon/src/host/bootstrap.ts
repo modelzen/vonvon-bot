@@ -1,7 +1,6 @@
 import { paths } from '../config/paths';
 import { acquireMutex, closeMutex } from '../config/data-access';
 import { listenerCloseUnconfirmed, observeShutdown, type ShutdownControl } from './lifecycle';
-import { recordServicePid, clearServicePid } from '../service/win-startup';
 import { readServiceCodexBin } from '../service/codex-bin';
 import { acquirePidLock, publishPidLock, releasePidLock, type PidLockInfo } from '../server/pid-lock';
 
@@ -16,7 +15,6 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
       owner = await acquirePidLock(paths.appDir);
     }
     if (control.requested) return;
-    if (owner) recordServicePid();
     if (options.managed) {
       const codexBin = readServiceCodexBin();
       if (codexBin === null) delete process.env.CODEX_BIN;
@@ -37,7 +35,6 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
     control.dispose();
     if (!errors.some(listenerCloseUnconfirmed)) {
       if (owner) {
-        try { clearServicePid(); } catch (error) { errors.push(error); }
         try { await releasePidLock(paths.appDir, owner); } catch (error) { errors.push(error); }
       }
       if (lock) {
