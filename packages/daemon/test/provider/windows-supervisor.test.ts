@@ -116,6 +116,8 @@ describe.skipIf(process.platform !== 'win32')('the Windows supervisor', () => {
     expect(ready).toMatchObject({ nonce: 'l1' });
     expect(ready.pid).toBeGreaterThan(0);
     expect(await s.take('provider-exit')).toEqual({ kind: 'provider-exit', code: 0, signal: null });
+    expect(readFileSync(s.logPath, 'utf8')).toContain('provider stdio file types 3 3 3');
+    expect(readFileSync(s.logPath, 'utf8')).not.toContain('close of provider descriptor');
     await until(s.outEnded, 'provider stdout EOF');
     expect(JSON.parse(s.out())).toEqual(argv);
     s.channel.send({ command: 'reap', nonce: 'r1' });
