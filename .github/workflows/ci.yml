@@ -50,4 +50,39 @@ jobs:
           node probe.mjs
       - name: Recheck unchanged keystore concurrency test
         if: always()
-        run: npx vitest run --root packages/daemon test/keystore.test.ts
+        working-directory: packages/daemon
+        run: npx vitest run test/keystore.test.ts
+      - name: Trace twelve isolated keystore transactions
+        if: always()
+        shell: pwsh
+        run: |
+          @'
+          import { buildSync } from 'esbuild';
+          import { spawn } from 'node:child_process';
+          import { mkdtemp, rm } from 'node:fs/promises';
+          import { tmpdir } from 'node:os';
+          import { join } from 'node:path';
+          const root = await mkdtemp(join(tmpdir(), 'pr251-keystore-probe-'));
+          const entry = join(root, 'keystore.cjs');
+          buildSync({ entryPoints: ['packages/daemon/src/config/keystore.ts'], outfile: entry, platform: 'node', format: 'cjs', bundle: true });
+          const started = performance.now();
+          const children = new Set();
+          async function run(index, source) {
+            const child = spawn(process.execPath, ['-e', `const k=require(${JSON.stringify(entry)});(async()=>{${source}})().catch(()=>process.exitCode=1)`], { env: { ...process.env, VONVON_HOME: root }, stdio: 'ignore' });
+            children.add(child);
+            console.log(JSON.stringify({ event: 'spawn', index, pid: child.pid, ms: performance.now() - started }));
+            return await new Promise((resolve, reject) => {
+              child.once('error', reject);
+              child.once('close', code => { children.delete(child); console.log(JSON.stringify({ event: 'close', index, code, ms: performance.now() - started })); resolve(code); });
+            });
+          }
+          const deadline = setTimeout(() => { for (const child of children) child.kill(); }, 30000);
+          try {
+            const codes = await Promise.all(Array.from({ length: 12 }, (_, index) => run(index, `await k.setSecret("id-${index}","dummy-${index}")`)));
+            if (codes.some(code => code !== 0)) throw new Error('transaction child failed');
+            const read = await run('read', 'for(let i=0;i<12;i++){if(await k.getSecret(`id-${i}`)!==`dummy-${i}`)throw Error("lost write")}if((await k.listSecretIds()).length!==12)throw Error("wrong count")');
+            if (read !== 0) throw new Error('keystore verification failed');
+            console.log(JSON.stringify({ verifiedTransactions: 12, ms: performance.now() - started }));
+          } finally { clearTimeout(deadline); await rm(root, { recursive: true, force: true }); }
+          '@ | Set-Content -Encoding utf8 keystore-probe.mjs
+          node keystore-probe.mjs
