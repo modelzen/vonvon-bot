@@ -185,7 +185,7 @@ describe('HolderProcess on both platforms', () => {
     expect(host.snapshot()).toEqual([]);
   }, LIMIT);
 
-  it('the spawn deadline raises holder-not-ready', async () => {
+  it.skipIf(!POSIX)('the POSIX zero spawn deadline raises holder-not-ready after reservation', async () => {
     const host = newHost(0);
     const { proc, seen } = await adoptFake(host, ['--ignore-term'], { armed: false });
     await expect(proc.ready).rejects.toMatchObject({ code: 'holder-not-ready' });
