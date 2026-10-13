@@ -40,6 +40,8 @@ export function refusalMessage(
       return { reason, message: '还没有设置自定义 ACP 命令。请在主机设置的「执行」里填写命令。', hint: '在主机设置的「执行」里填写自定义 ACP 命令。' };
     case 'custom-command-invalid':
       return { reason, message: `自定义 ACP 命令无法执行：${detail}。`, hint: '检查主机设置中的自定义 ACP 命令、路径和执行权限。' };
+    case 'owned-work-unverified':
+      return { reason, message: '上次运行留下的 agent 进程尚未确认退出，暂不能启动新的 agent。请运行 doctor 查看。', hint: '运行 doctor 查看未确认退出的进程记录，确认这些进程已结束后重试。' };
     default: {
       const exhaustive: never = reason;
       return exhaustive;
