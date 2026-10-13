@@ -57,6 +57,7 @@ try {
     files: await fileEntries(stage),
   };
   await writeFile(join(stage, 'build-manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
+  await chmod(join(stage, 'build-manifest.json'), 0o644);
   await mkdir(out, { recursive: true });
   const output = execFileSync('npm', ['pack', '--ignore-scripts', '--pack-destination', out], { cwd: stage, encoding: 'utf8' }).trim().split('\n').at(-1);
   const tarball = join(out, output);
