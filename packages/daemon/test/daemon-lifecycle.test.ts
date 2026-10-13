@@ -60,7 +60,7 @@ vi.mock('../src/server/pid-lock', async (original) => {
   };
 });
 vi.mock('../src/server/owner-verification', () => ({ verifyPidLockOwner: fixture.verify, stopVerifiedOwner: fixture.stopVerified }));
-vi.mock('../src/service/adapter', () => ({ getServiceAdapter: fixture.getAdapter, isServiceRunning: () => false }));
+vi.mock('../src/service/adapter', () => ({ getServiceAdapter: fixture.getAdapter }));
 
 vi.mock('../src/agent/codex-appserver/owned-process', () => ({
   closeOwnedCodexProcesses: fixture.registryClose,
@@ -94,7 +94,6 @@ vi.mock('../src/config/data-access', async original => ({
   },
   closeMutex: async () => { fixture.mutexHeld = false; },
 }));
-vi.mock('../src/service/win-startup', () => ({ SERVICE_ENV_FLAG: 'VONVON_TEST_SERVICE', recordServicePid() {}, clearServicePid() {} }));
 vi.mock('../src/server/http', () => ({
   ApiCleanupError: class ApiCleanupError extends AggregateError {
     constructor(errors: Iterable<unknown>) { super(errors, 'API cleanup failed after listener cutoff'); }
@@ -544,6 +543,7 @@ describe('provider runner ownership', () => {
     const { owner, running } = await startInline();
     try {
       owner.requestStop();
+      await vi.waitFor(() => expect(fixture.registryClose).toHaveBeenCalledOnce());
       await vi.advanceTimersByTimeAsync(121_000);
       expect.soft(running.state()).toBe('pending');
       await assertLocksHeld();

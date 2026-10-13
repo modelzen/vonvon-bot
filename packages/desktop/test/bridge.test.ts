@@ -48,8 +48,9 @@ function harness() {
   const snapshot = vi.fn(async () => ({ revision: 1, application: { platform: 'macos', version: '1', loginItem: false, dataPath: fixtureRoot } }));
   const machine = vi.fn(async (): ReturnType<VonvonClient['machine']> => ({ type: 'done', message: 'ok' }));
   const dispose = vi.fn(async () => {});
+  const run = vi.fn(async (): ReturnType<VonvonClient['run']> => ({ kind: 'applied', revision: 2 }));
   const client = {
-    snapshot, machine,
+    snapshot, machine, run,
     watchSnapshots: (listener: (value: unknown) => void) => { onSnapshot = listener; return () => { onSnapshot = () => {}; }; },
     onLog: () => () => {},
     onBackendInstall: () => () => {},
@@ -61,6 +62,7 @@ function harness() {
   const paths: DesktopResources = { uiIndex, preload: '/unused', trayPng: '/unused' };
   const actions = {
     startHost: vi.fn(async (_bot?: string) => ({ type: 'done' as const, message: 'started' })),
+    restartHost: vi.fn(async (_previous: AttachedDaemon['identity'], send: () => ReturnType<VonvonClient['run']>) => send()),
     service: vi.fn(async (_action: 'install' | 'start' | 'stop' | 'uninstall') => ({ type: 'done' as const, message: 'service updated' })),
     setLoginItem: vi.fn(async (_enabled: boolean) => {}),
     readLoginItem: vi.fn(async () => true),
@@ -78,7 +80,7 @@ function harness() {
     if (!handler) throw new Error(`Missing handler ${channel}`);
     return handler(event, ...args);
   };
-  return { bridge, event, frame, webContents, window, paths, invoke, snapshot, machine, dispose, actions,
+  return { bridge, event, frame, webContents, window, paths, invoke, snapshot, machine, run, dispose, actions,
     emitSnapshot: (value: unknown) => onSnapshot(value),
     emitError: (error: Error) => onError(error) };
 }
@@ -86,6 +88,16 @@ function harness() {
 beforeEach(() => { handlers.clear(); openExternal.mockClear(); failRegistration.channel = ''; });
 
 describe('desktop IPC boundary', () => {
+  it('hands a daemon restart to the shell with the attached owner and forwards other commands', async () => {
+    const h = harness();
+    expect(await h.invoke(desktopChannels.run, { type: 'restartHost' })).toEqual({ ok: true, value: { kind: 'applied', revision: 2 } });
+    expect(h.actions.restartHost).toHaveBeenCalledExactlyOnceWith({ pid: 1, startedAt: 'now', listen: '127.0.0.1:4000' }, expect.any(Function));
+    expect(h.run).toHaveBeenCalledExactlyOnceWith({ type: 'restartHost' });
+    expect(await h.invoke(desktopChannels.run, { type: 'refresh' })).toEqual({ ok: true, value: { kind: 'applied', revision: 2 } });
+    expect(h.actions.restartHost).toHaveBeenCalledOnce();
+    expect(h.run).toHaveBeenLastCalledWith({ type: 'refresh' });
+  });
+
   it('keeps service operations shell-owned and validates authorized arguments', async () => {
     const h = harness();
     const wrong = { ...h.event, senderFrame: { url: h.frame.url } } as IpcMainInvokeEvent;
@@ -351,6 +363,54 @@ it('serves installed/stopped status after stop closes RPC, then uses the reattac
   await h.bridge.replaceOwner(next);
   expect(await h.invoke(desktopChannels.machine, { type: 'status' })).toMatchObject({ ok: true, value: { host: { pid: 2 }, service: { running: true } } });
   await h.bridge.dispose();
+});
+
+function candidate(snapshot: () => Promise<unknown>) {
+  let close: () => void = () => {};
+  const closed = new Promise<never>((_resolve, reject) => { close = () => reject(new Error('connection closed')); });
+  closed.catch(() => {});
+  const dispose = vi.fn(async () => { close(); });
+  const owner = { client: {
+    snapshot: vi.fn(() => Promise.race([snapshot(), closed])),
+    watchSnapshots: () => () => {}, onLog: () => () => {}, onBackendInstall: () => () => {}, onError: () => () => {},
+  }, identity: { pid: 2, startedAt: 'next', listen: '127.0.0.1:4001' }, dispose } as unknown as AttachedDaemon;
+  return { owner, dispose };
+}
+
+it('closes a replacement candidate whose first snapshot is pending when the bridge is disposed', async () => {
+  const h = harness();
+  await h.invoke(desktopChannels.subscribe);
+  const next = candidate(() => new Promise(() => {}));
+  const replacing = expect(h.bridge.replaceOwner(next.owner)).rejects.toThrow();
+  await vi.waitFor(() => expect(next.owner.client.snapshot).toHaveBeenCalled());
+  await h.bridge.dispose();
+  await replacing;
+  expect(next.dispose).toHaveBeenCalled();
+  expect(h.webContents.send).not.toHaveBeenCalledWith(desktopChannels.event, { type: 'reattached' });
+});
+
+it('closes a replacement candidate whose login-item read is pending and never activates it', async () => {
+  const h = harness();
+  await h.invoke(desktopChannels.subscribe);
+  let release: () => void = () => {};
+  h.actions.readLoginItem.mockImplementationOnce(() => new Promise<boolean>(resolve => { release = () => resolve(true); }));
+  const next = candidate(async () => ({ revision: 3 }));
+  const replacing = expect(h.bridge.replaceOwner(next.owner)).rejects.toThrow('Desktop connection is unavailable');
+  await vi.waitFor(() => expect(h.actions.readLoginItem).toHaveBeenCalled());
+  const disposing = h.bridge.dispose();
+  await vi.waitFor(() => expect(next.dispose).toHaveBeenCalled());
+  release();
+  await disposing;
+  await replacing;
+  expect(h.webContents.send).not.toHaveBeenCalledWith(desktopChannels.event, { type: 'reattached' });
+});
+
+it('closes an owner handed over after disposal', async () => {
+  const h = harness();
+  await h.bridge.dispose();
+  const next = candidate(async () => ({ revision: 3 }));
+  await expect(h.bridge.replaceOwner(next.owner)).rejects.toThrow('Desktop connection is unavailable');
+  expect(next.dispose).toHaveBeenCalledOnce();
 });
 
 it('cleans partial bindings without announcing a failed reattachment', async () => {

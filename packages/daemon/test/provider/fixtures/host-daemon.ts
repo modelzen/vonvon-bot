@@ -3,7 +3,7 @@ import { ProcessHost } from '../../../src/provider/process/process-host';
 // A stand-in daemon for the daemon-death case: hosts one fake-child tree, prints the pids, and waits to be killed.
 const env = process.env as Record<string, string>;
 const host = new ProcessHost({ dataDir: env.DATA_DIR as string, daemonBootId: 'first-boot', platform: 'posix', holderPath: env.HOLDER as string });
-const hosted = await host.spawn('codex', 'daemon-death', { file: process.execPath, args: [env.FAKE as string, '--ignore-term', '--grandchildren', '1'], env: { PATH: env.PATH ?? '' } });
+const hosted = await host.spawn('codex', 'daemon-death', { file: process.execPath, args: [env.FAKE as string, '--ignore-term', '--grandchildren', '1'], env });
 let text = '';
 hosted.stdout.on('data', (chunk: Buffer) => {
   text += chunk.toString();

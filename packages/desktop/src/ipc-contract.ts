@@ -1,5 +1,5 @@
 import type { VonvonClient } from '@vonvon/client/browser';
-import type { BackendInstallEventPayload, DesktopSnapshot, DesktopUpdate, LogEventPayload, MachineReply } from '@vonvon/protocol';
+import type { BackendInstallEventPayload, CommandResult, DesktopSnapshot, DesktopUpdate, LogEventPayload, MachineReply } from '@vonvon/protocol';
 import type { ShellCapabilities } from '../../ui/src/client-context.js';
 
 export const desktopChannels = {
@@ -60,6 +60,7 @@ export interface AttachedDaemon {
 
 export interface DesktopBridge {
   requestQuit(): void;
+  /** Takes ownership of `owner`, closing it on failure and when the bridge is disposed mid-replacement. */
   replaceOwner(owner: AttachedDaemon): Promise<void>;
   dispose(): Promise<void>;
 }
@@ -67,6 +68,7 @@ export interface DesktopBridge {
 export interface ShellActions {
   chooseExecutablePath(): Promise<string | null>;
   startHost(bot?: string): Promise<MachineReply>;
+  restartHost(previous: AttachedDaemon['identity'], send: () => Promise<CommandResult>): Promise<CommandResult>;
   service(action: 'install' | 'start' | 'stop' | 'uninstall'): Promise<MachineReply>;
   setLoginItem(enabled: boolean): Promise<void>;
   readLoginItem(): Promise<boolean>;

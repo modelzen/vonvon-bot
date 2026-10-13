@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { paths } from '../config/paths';
 import { acquireMutex, closeMutex } from '../config/data-access';
 import { listenerCloseUnconfirmed, observeShutdown, type ShutdownControl } from './lifecycle';
-import { recordServicePid, clearServicePid } from '../service/win-startup';
 import { readServiceCodexBin } from '../service/codex-bin';
 import { acquirePidLock, publishPidLock, releasePidLock, type PidLockInfo } from '../server/pid-lock';
 import { log } from '../core/logger';
@@ -20,7 +19,6 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
       owner = await acquirePidLock(paths.appDir);
     }
     if (control.requested) return;
-    if (owner) recordServicePid();
     host = new ProcessHost({
       dataDir: paths.appDir, daemonBootId: randomUUID(),
       ...(process.platform === 'win32' ? { platform: 'win32' } : { platform: 'posix', holderPath: defaultHolderPath() }),
@@ -29,7 +27,7 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
     log.info('process-host', 'boot-admission', { admission: host.admission()?.reason ?? 'allowed' });
     // Lane 10 hook: the value is a fake-child.mjs path; the real `vonvon daemon run` has no other seam a lane can reach.
     if (process.env.VONVON_TEST_SPAWN_FAKE_CHILD) {
-      await host.spawn('codex', 'lane-10', { file: process.execPath, args: [process.env.VONVON_TEST_SPAWN_FAKE_CHILD, '--ignore-term', '--grandchildren', '1'], env: { PATH: process.env.PATH ?? '' } });
+      await host.spawn('codex', 'lane-10', { file: process.execPath, args: [process.env.VONVON_TEST_SPAWN_FAKE_CHILD, '--ignore-term', '--grandchildren', '1'], env: Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === 'string')) });
     }
     if (options.managed) {
       const codexBin = readServiceCodexBin();
@@ -52,7 +50,6 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
     control.dispose();
     if (!errors.some(listenerCloseUnconfirmed)) {
       if (owner) {
-        try { clearServicePid(); } catch (error) { errors.push(error); }
         try { await releasePidLock(paths.appDir, owner); } catch (error) { errors.push(error); }
       }
       if (lock) {

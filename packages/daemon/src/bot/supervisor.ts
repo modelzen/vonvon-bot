@@ -3,7 +3,6 @@ import { botPaths, paths } from '../config/paths';
 import { CHILD_SHUTDOWN_GRACE_MS, closeOwnedProviders, observeShutdown, settleOwnedChild, type ShutdownControl } from '../host/lifecycle';
 import type { ChildProcess } from 'node:child_process';
 import { spawnProcess } from '../platform/spawn';
-import { SERVICE_ENV_FLAG } from '../service/win-startup';
 import { log } from '../core/logger';
 import { loadBots, type BotEntry } from '../config/bots';
 import { createAdminIpcCaller, type AdminIpcCaller } from '../admin/ipc';
@@ -52,7 +51,6 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   if (!cliEntry) throw new Error('supervisor: 无法解析 CLI 入口（process.argv[1] 为空）');
 
   const childEnv: NodeJS.ProcessEnv = { ...process.env, VONVON_HOME: paths.appDir };
-  delete childEnv[SERVICE_ENV_FLAG];
 
   let shuttingDown = false;
   const ownership = new WeakMap<ChildProcess, ChildOwnership>();
