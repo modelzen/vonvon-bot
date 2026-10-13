@@ -26,16 +26,28 @@ jobs:
         run: |
           @'
           import { buildSync } from 'esbuild';
-          import { execFileSync } from 'node:child_process';
+          import { execFileSync, spawnSync } from 'node:child_process';
+          import { randomUUID } from 'node:crypto';
           import { join } from 'node:path';
           buildSync({ entryPoints: ['packages/desktop/src/daemon-dependencies.ts'], outfile: 'windows-parser-probe.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external' });
           const { parseWindowsRunQuery } = await import('./windows-parser-probe.mjs');
           const key = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
-          const output = execFileSync(join(process.env.SystemRoot, 'System32', 'reg.exe'), ['query', key], { encoding: 'utf8' });
-          const header = output.split(/\r?\n/).find(line => line.trim())?.trim();
-          const parsed = parseWindowsRunQuery(output);
-          console.log(JSON.stringify({ source: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), header, expected: key.replace('HKCU', 'HKEY_CURRENT_USER'), kind: parsed.kind, reason: parsed.kind === 'unavailable' ? parsed.reason : undefined }));
+          const reg = join(process.env.SystemRoot, 'System32', 'reg.exe');
+          console.log(JSON.stringify({ source: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() }));
+          function observe(label, query) {
+            const result = spawnSync(reg, ['query', query], { encoding: 'utf8' });
+            const lines = result.stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+            const expected = query.replace('HKCU', 'HKEY_CURRENT_USER');
+            const sameKey = lines[0]?.toLowerCase() === expected.toLowerCase();
+            console.log(JSON.stringify({ label, exit: result.status, nonEmptyLines: lines.length, header: sameKey ? lines[0] : undefined, exactHeader: lines[0] === expected, kind: parseWindowsRunQuery(result.stdout).kind }));
+          }
+          observe('existing-run-key', key);
+          const isolated = 'HKCU\\Software\\Vonvon diagnostic ' + randomUUID();
+          execFileSync(reg, ['add', isolated, '/f']);
+          try { observe('owned-empty-key', isolated); }
+          finally { execFileSync(reg, ['delete', isolated, '/f']); }
           '@ | Set-Content -Encoding utf8 probe.mjs
           node probe.mjs
       - name: Recheck unchanged keystore concurrency test
+        if: always()
         run: npx vitest run --root packages/daemon test/keystore.test.ts
