@@ -1,10 +1,18 @@
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { getEventListeners } from 'node:events';
-import { createServer } from 'node:http';
+import { createServer, type Server } from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
+import { getCACertificates, setDefaultCACertificates, type TLSSocket } from 'node:tls';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { checkUploadPath, fetchRemoteImage, judgePath, requestPinned, uploadPlan, type OutboundPlan, type RemoteImageDeps } from '../../src/provider/outbound/policy';
+
+// Node 22.19 and 24.5 added these; the pinned @types/node predates them.
+declare module 'node:tls' {
+  function setDefaultCACertificates(certs: string[]): void;
+  interface TLSSocket { servername?: string | false }
+}
 
 describe('outbound path policy', () => {
   let temporary: string;
@@ -354,5 +362,67 @@ describe('outbound remote image policy', () => {
     } finally {
       await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     }
+  });
+});
+
+describe('pinned TLS identity', () => {
+  const fixtures = join(__dirname, 'fixtures', 'outbound-tls');
+  const image = Buffer.from('image');
+  let server: Server;
+  let port: number;
+  let seen: { host?: string; servername?: string | false };
+  let systemCertificates: string[];
+
+  beforeEach(async () => {
+    const cert = await readFile(join(fixtures, 'cert.pem'), 'utf8');
+    seen = {};
+    server = createHttpsServer({ key: await readFile(join(fixtures, 'key.pem')), cert }, (request, response) => {
+      seen = { host: request.headers.host, servername: (request.socket as TLSSocket).servername };
+      response.setHeader('content-type', 'image/png');
+      response.end(image);
+    });
+    await new Promise<void>(resolve => server.listen(0, '::', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Missing test server port');
+    port = address.port;
+    systemCertificates = getCACertificates('default');
+    setDefaultCACertificates([...systemCertificates, cert]);
+  });
+
+  afterEach(async () => {
+    setDefaultCACertificates(systemCertificates);
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  });
+
+  it('verifies an IPv6 literal against the certificate IP SAN without sending SNI', async () => {
+    const response = await requestPinned(new URL(`https://[::1]:${port}/a.png`), '::1', AbortSignal.timeout(3000));
+    expect(response.body).toEqual(image);
+    expect(seen).toEqual({ host: `[::1]:${port}`, servername: false });
+  });
+
+  it('verifies an IPv4 literal against the certificate IP SAN without sending SNI', async () => {
+    const response = await requestPinned(new URL(`https://127.0.0.1:${port}/a.png`), '127.0.0.1', AbortSignal.timeout(3000));
+    expect(response.body).toEqual(image);
+    expect(seen).toEqual({ host: `127.0.0.1:${port}`, servername: false });
+  });
+
+  it('sends the DNS name as SNI and verifies it while connecting to the pinned address', async () => {
+    const response = await requestPinned(new URL(`https://example.test:${port}/a.png`), '127.0.0.1', AbortSignal.timeout(3000));
+    expect(response.body).toEqual(image);
+    expect(seen).toEqual({ host: `example.test:${port}`, servername: 'example.test' });
+  });
+
+  it('rejects a certificate that does not name the requested host', async () => {
+    await expect(requestPinned(new URL(`https://other.test:${port}/a.png`), '127.0.0.1', AbortSignal.timeout(3000)))
+      .rejects.toMatchObject({ code: 'ERR_TLS_CERT_ALTNAME_INVALID' });
+    await expect(requestPinned(new URL(`https://[::2]:${port}/a.png`), '::1', AbortSignal.timeout(3000)))
+      .rejects.toMatchObject({ code: 'ERR_TLS_CERT_ALTNAME_INVALID' });
+  });
+
+  it('rejects an untrusted certificate', async () => {
+    setDefaultCACertificates(systemCertificates);
+    await expect(requestPinned(new URL(`https://[::1]:${port}/a.png`), '::1', AbortSignal.timeout(3000)))
+      .rejects.toMatchObject({ code: 'DEPTH_ZERO_SELF_SIGNED_CERT' });
   });
 });
