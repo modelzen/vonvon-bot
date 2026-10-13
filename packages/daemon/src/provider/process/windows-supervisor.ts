@@ -18,6 +18,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -61,6 +62,7 @@ public static class VonvonSupervisor {
   const int CODE_OK=0, CODE_INTERNAL=1, CODE_NEVER_LAUNCHED=10, CODE_LAUNCH_FAILED=11;
   const uint ERROR_ALREADY_EXISTS=183, KILL_ON_JOB_CLOSE=0x2000, STARTF_USESTDHANDLES=0x100;
   const uint CREATE_UNICODE_ENVIRONMENT=0x400, EXTENDED_STARTUPINFO_PRESENT=0x80000, CREATE_NO_WINDOW=0x8000000;
+  const uint FILE_FLAG_OVERLAPPED=0x40000000;
   const int PROC_THREAD_ATTRIBUTE_HANDLE_LIST=0x20002, PROC_THREAD_ATTRIBUTE_JOB_LIST=0x2000D;
   const int MAX_FIELD=16*1024*1024, MAX_COUNT=65536;
 
@@ -101,7 +103,7 @@ public static class VonvonSupervisor {
   static void Log(string text) { lock(gate) { try { log.WriteLine(DateTime.UtcNow.ToString("o")+" "+text); } catch(Exception) {} } }
   static void Emit(string line) {
     lock(gate) {
-      Log("> "+line);
+      Log("> "+(line.StartsWith("hello ") ? "hello [redacted]" : line));
       try { byte[] bytes=Encoding.ASCII.GetBytes(line+"\n"); pipe.Write(bytes,0,bytes.Length); pipe.Flush(); }
       catch(Exception error) { Log("receipt write failed: "+error.Message); }
     }
@@ -148,9 +150,9 @@ public static class VonvonSupervisor {
     string token=Environment.GetEnvironmentVariable("VONVON_CONTROL_TOKEN");
     Environment.SetEnvironmentVariable("VONVON_CONTROL_TOKEN",null);
     if(string.IsNullOrEmpty(token)) { Log("no control token"); Finish(CODE_NEVER_LAUNCHED); }
-    IntPtr handle=CreateFile(pipeName,0x80000000|0x40000000,0,IntPtr.Zero,3,0,IntPtr.Zero);
+    IntPtr handle=CreateFile(pipeName,0x80000000|0x40000000,0,IntPtr.Zero,3,FILE_FLAG_OVERLAPPED,IntPtr.Zero);
     if(handle==IntPtr.Zero || handle==new IntPtr(-1)) { Log("pipe open failed: "+Marshal.GetLastWin32Error()); Finish(CODE_NEVER_LAUNCHED); }
-    pipe=new FileStream(new SafeFileHandle(handle,true),FileAccess.ReadWrite,1,false);
+    pipe=new NamedPipeClientStream(PipeDirection.InOut,true,true,new SafePipeHandle(handle,true));
     var reader=new ByteReader(pipe);
     long creation,exitTime,kernel,user; uint session;
     if(!GetProcessTimes(GetCurrentProcess(),out creation,out exitTime,out kernel,out user)) { Log("GetProcessTimes failed"); Finish(CODE_INTERNAL); }
@@ -288,7 +290,7 @@ public static class VonvonSupervisor {
 export const SUPERVISOR_LOADER = [
   'param([string]$Pipe, [string]$Job, [string]$Log)',
   "$ErrorActionPreference = 'Stop'",
-  "Add-Type -Path (Join-Path $PSScriptRoot 'supervisor.cs')",
+  "Add-Type -Path (Join-Path $PSScriptRoot 'supervisor.cs') -ReferencedAssemblies 'System.Core.dll'",
   'exit [VonvonSupervisor]::Run($Pipe, $Job, $Log)',
   '',
 ].join('\r\n');
