@@ -67,7 +67,7 @@ public static class VonvonSupervisor {
   // Every receipt and every state change goes through this one lock; the reader (main) thread and the wait thread share it.
   static readonly object gate=new object();
   static Stream pipe; static StreamWriter log;
-  static IntPtr job=IntPtr.Zero, provider=IntPtr.Zero; static uint providerPid;
+  static IntPtr job=IntPtr.Zero, provider=IntPtr.Zero;
   static bool created, cancelled, exitObserved, reaped;
 
   sealed class ByteReader {
@@ -227,7 +227,7 @@ public static class VonvonSupervisor {
     Marshal.FreeHGlobal(list); Marshal.FreeHGlobal(handles); Marshal.FreeHGlobal(jobs); Marshal.FreeHGlobal(envBlock);
     if(!ok) LaunchFailed(nonce,error);
     CloseHandle(child.thread);
-    lock(gate) { provider=child.process; providerPid=child.pid; }
+    lock(gate) { provider=child.process; }
     Emit("ready "+nonce+" "+child.pid);
     // The provider now owns the daemon's pipes; closing our copies makes stdout EOF mean what it means on POSIX.
     int[] ids=new int[] { -10,-11,-12 };
