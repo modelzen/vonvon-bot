@@ -123,6 +123,7 @@ describe('desktop daemon dependencies', () => {
     expect(parseWindowsRunQuery('')).toMatchObject({ kind: 'unavailable' });
     expect(parseWindowsRunQuery(key)).toEqual({ kind: 'absent' });
     expect(parseWindowsRunQuery(`${key}\r\n    Other    REG_SZ    unrelated`)).toEqual({ kind: 'absent' });
+    expect(parseWindowsRunQuery(`${key}\r\n    Empty    REG_SZ    \r\n    Vonvon Bot    REG_SZ    `)).toEqual({ kind: 'value', type: 'REG_SZ', value: '' });
     expect(parseWindowsRunQuery(`${key}\r\n    Vonvon Bot    REG_SZ    wscript.exe //B "C:\\data\\service\\vonvon-bot.vbs"`)).toEqual({
       kind: 'value', type: 'REG_SZ', value: 'wscript.exe //B "C:\\data\\service\\vonvon-bot.vbs"',
     });

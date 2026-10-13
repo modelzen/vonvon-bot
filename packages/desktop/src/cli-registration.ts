@@ -86,8 +86,8 @@ async function validateDistribution(options: CliRegistrationOptions, cli: string
   if (!(await stat(options.executable)).isFile() || !(await stat(cli)).isFile()) throw new Error('桌面命令行程序不是普通文件。');
 }
 
-async function registryPath(): Promise<WindowsPath> {
-  const script = `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $k=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment'); if ($null -eq $k -or $k.GetValueNames() -notcontains 'Path') { '{"exists":false}' } else { $v=$k.GetValue('Path',$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); $kind=$k.GetValueKind('Path').ToString(); [pscustomobject]@{exists=$true;value=$v;kind=$kind} | ConvertTo-Json -Compress }`;
+async function registryPath(subkey: string): Promise<WindowsPath> {
+  const script = `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $k=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${subkey.replaceAll("'", "''")}'); if ($null -eq $k -or $k.GetValueNames() -notcontains 'Path') { '{"exists":false}' } else { $v=$k.GetValue('Path',$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); $kind=$k.GetValueKind('Path').ToString(); [pscustomobject]@{exists=$true;value=$v;kind=$kind} | ConvertTo-Json -Compress }`;
   const { stdout } = await exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true });
   const value: unknown = JSON.parse(stdout);
   if (!value || typeof value !== 'object' || !('exists' in value)) throw new Error('无法读取用户 PATH。');
@@ -98,12 +98,15 @@ async function registryPath(): Promise<WindowsPath> {
   return { value: value.value, type: value.kind === 'String' ? 'REG_SZ' : 'REG_EXPAND_SZ' };
 }
 
-async function writeRegistryPath(value: string, type: WindowsPath['type']): Promise<void> {
-  await exec('reg.exe', ['add', 'HKCU\\Environment', '/v', 'Path', '/t', type, '/d', value, '/f'], { windowsHide: true });
+async function writeRegistryPath(subkey: string, value: string, type: WindowsPath['type']): Promise<void> {
+  await exec('reg.exe', ['add', `HKCU\\${subkey}`, '/v', 'Path', '/t', type, '/d', value, '/f'], { windowsHide: true });
   const broadcast = `Add-Type -Namespace Win32 -Name Environment -MemberDefinition '[DllImport("user32.dll", CharSet=CharSet.Auto, SetLastError=true)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, int msg, IntPtr wParam, string lParam, int flags, int timeout, out IntPtr result);'; $r=[IntPtr]::Zero; [void][Win32.Environment]::SendMessageTimeout([IntPtr]0xffff,0x1a,[IntPtr]::Zero,'Environment',2,5000,[ref]$r)`;
   await exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', broadcast], { windowsHide: true });
 }
-const nativeWindowsPath: WindowsPathStore = { read: registryPath, write: writeRegistryPath };
+export function windowsPathStore(subkey: string): WindowsPathStore {
+  return { read: () => registryPath(subkey), write: (value, type) => writeRegistryPath(subkey, value, type) };
+}
+const nativeWindowsPath = windowsPathStore('Environment');
 
 export async function observeCli(options: CliRegistrationOptions): Promise<CliRegistration> {
   try {
