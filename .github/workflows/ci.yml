@@ -1,4 +1,4 @@
-name: PR 251 Windows native probe
+name: PR 251 Windows fixture verification
 on:
   workflow_dispatch:
 permissions:
@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: e056168b52b0219c907a104b93a685db8e9b866f
+          ref: b2687603fb2c940177ad644a75fc10845265efae
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -23,29 +23,6 @@ jobs:
       - run: npm run build --workspace @vonvon/client
       - name: Verify exact source
         run: git rev-parse HEAD
-      - name: Seed an owned prior Run value for restoration coverage
-        id: seed
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Software\Microsoft\Windows\CurrentVersion\Run')
-          try {
-            if ($key.GetValueNames() -contains 'Vonvon Bot') { throw 'Unexpected existing Run value; refusing to overwrite it' }
-            $key.SetValue('Vonvon Bot', '  %USERPROFILE%\先前启动  ', [Microsoft.Win32.RegistryValueKind]::ExpandString)
-          } finally { $key.Dispose() }
-      - name: Exercise all four native Windows tests
-        working-directory: packages/desktop
-        run: npx vitest run test/windows-native.test.ts
-      - name: Verify exact prior value restoration and remove only the owned value
-        if: always() && steps.seed.outcome == 'success'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Microsoft\Windows\CurrentVersion\Run', $true)
-          if ($null -eq $key) { throw 'Owned prior Run value disappeared' }
-          try {
-            $value = $key.GetValue('Vonvon Bot', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
-            if ($key.GetValueKind('Vonvon Bot') -ne [Microsoft.Win32.RegistryValueKind]::ExpandString -or $value -cne '  %USERPROFILE%\先前启动  ') { throw 'Prior Run type or data changed; leaving it untouched' }
-            $key.DeleteValue('Vonvon Bot')
-            'Exact prior type, whitespace, Unicode and unexpanded text restored'
-          } finally { $key.Dispose() }
+      - name: Exercise real npm cancellation and importer lifecycle fixtures
+        working-directory: packages/daemon
+        run: npx vitest run test/codex-managed-install.test.ts test/import-core.test.ts
