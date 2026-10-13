@@ -108,8 +108,7 @@ describe.skipIf(process.platform !== 'win32')('Windows native CLI registration',
 
 describe.skipIf(process.platform !== 'win32')('Windows native Run registration', () => {
   it('classifies the real Run value through the desktop registration reader', async () => {
-    const saved = await reg(['query', WINDOWS_RUN_KEY, '/v', WINDOWS_RUN_VALUE])
-      .then(({ stdout }) => parseWindowsRunQuery(stdout), () => ({ kind: 'absent' as const }));
+    const saved = parseWindowsRunQuery((await reg(['query', WINDOWS_RUN_KEY])).stdout);
     if (saved.kind === 'unavailable') throw new Error(`Cannot save the existing Run value: ${saved.reason}`);
     const setRun = (type: 'REG_SZ' | 'REG_EXPAND_SZ', value: string) =>
       reg(['add', WINDOWS_RUN_KEY, '/v', WINDOWS_RUN_VALUE, '/t', type, '/d', value, '/f']);
