@@ -21,7 +21,7 @@ async function readLinux(pid: number): Promise<StartRead> {
 
 /** One-second resolution: two processes may share a token, so only `absent` or a different token proves anything. */
 export async function readDarwin(pid: number): Promise<StartRead> {
-  const result = await run('ps', ['-o', 'lstart=', '-p', String(pid)], { ...process.env, LC_ALL: 'C' });
+  const result = await run('ps', ['-o', 'lstart=', '-p', String(pid)], { ...process.env, LC_ALL: 'C', TZ: 'UTC' });
   const lstart = result.stdout.trim();
   if (result.code === 0 && lstart && result.stderr.trim() === '') return startToken(`darwin:${lstart}`);
   // ps exits 1 both for "no such pid" and for its own failures, so absence is confirmed by the kernel, not by ps.
