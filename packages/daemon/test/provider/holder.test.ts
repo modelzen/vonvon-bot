@@ -1,10 +1,10 @@
-import { spawn } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { HolderCommand } from '../../src/provider/process/holder-protocol';
-import { compileHolder, HolderDriver, type HolderBinary } from './native/holder-driver';
+import { CC_FLAGS, compileHolder, HolderDriver, type HolderBinary } from './native/holder-driver';
 
 const NODE = process.execPath;
 // `ready` only says execve succeeded; a node provider installs its handlers tens of milliseconds later, so each
@@ -17,7 +17,6 @@ const SCRIPTS = {
   treeThenExit: `const armed = () => process.exit(0); ${SPAWN_GRANDCHILD}`,
   treeStay: `const armed = () => {}; process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); ${SPAWN_GRANDCHILD}`,
   stopSelf: `process.on('SIGTERM', () => { process.stdout.write('got-term', () => process.exit(3)); }); setInterval(() => {}, 1000); process.stdout.write('stopping', () => process.kill(process.pid, 'SIGSTOP'))`,
-  fds: `const fs = require('fs'); const pipes = []; for (let fd = 0; fd < 256; fd++) { try { const st = fs.fstatSync(fd); if (st.isFIFO() || st.isSocket()) pipes.push(fd); } catch {} } process.stdout.write(JSON.stringify(pipes))`,
   args: `process.stdout.write(JSON.stringify({ argv: process.argv.slice(-2), a: process.env.A, b: process.env.B }))`,
 };
 
@@ -330,18 +329,31 @@ describe.skipIf(process.platform === 'win32')('vonvon-holder', () => {
     expect(alive(grandchild)).toBe(false);
   }, 20_000);
 
-  it('leaks no holder descriptor into the provider: the same pipe count as a direct spawn, with 0, 1, 2 on the slot pipes', async () => {
-    const direct = spawn(NODE, ['-e', SCRIPTS.fds], { stdio: ['pipe', 'pipe', 'pipe'] });
-    const baseline: number[] = await new Promise(resolve => {
-      const chunks: Buffer[] = [];
-      direct.stdout.on('data', chunk => chunks.push(chunk));
-      direct.on('exit', () => resolve(JSON.parse(Buffer.concat(chunks).toString()) as number[]));
-    });
+  it('leaves exactly descriptors 0, 1, 2 in an execed libc-only provider', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vonvon-fds-'));
+    tempDirs.push(dir);
+    const source = join(dir, 'fds.c');
+    const probe = join(dir, 'fds');
+    writeFileSync(source, `#include <fcntl.h>
+#include <stdio.h>
+#include <unistd.h>
+int main(void) {
+  long limit = sysconf(_SC_OPEN_MAX);
+  int comma = 0;
+  printf("[");
+  for (int fd = 0; fd < limit; fd++) {
+    if (fcntl(fd, F_GETFD) < 0) continue;
+    printf("%s%d", comma ? "," : "", fd);
+    comma = 1;
+  }
+  puts("]");
+  return 0;
+}
+`);
+    execFileSync('cc', [...CC_FLAGS, source, '-o', probe]);
     const holder = start();
-    await running(holder, nodeLaunch(SCRIPTS.fds));
-    const viaHolder = JSON.parse(await holder.providerStdout(text => text.endsWith(']'))) as number[];
-    expect(viaHolder.slice(0, 3)).toEqual([0, 1, 2]);
-    expect(viaHolder.length).toBe(baseline.length);
+    await running(holder, { command: 'launch', nonce: 'l1', file: probe, args: [], env: {} });
+    expect(await holder.providerStdout(text => text.endsWith(']\n'))).toBe('[0,1,2]\n');
   });
 
   it('logs and ignores a malformed command line without disturbing the next command', async () => {
