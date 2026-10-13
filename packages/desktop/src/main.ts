@@ -255,7 +255,7 @@ export async function startDesktop(): Promise<void> {
             let next: AttachedDaemon;
             try { next = await unlessCancelled(attaching); }
             catch (error) {
-              if (cancelled()) void attaching.then(late => late.dispose(), () => {});
+              if (cancelled()) void attaching.then(late => late.dispose()).catch(() => {});
               throw error;
             }
             if (cancelled() || !bridge) { await next.dispose(); throw refusal(); }

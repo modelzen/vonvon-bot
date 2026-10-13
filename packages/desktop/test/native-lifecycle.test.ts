@@ -350,9 +350,11 @@ describe('daemon restart from the window', () => {
     });
   }
 
-  it('closes a successor connection that arrives after a quit', async () => {
+  it.each([false, true])('handles a successor arriving after quit when close rejects=%s', async closeRejects => {
     const successor = { pid: 48, startedAt: 'late', listen: '127.0.0.1:42345' };
-    const late = { identity: successor, dispose: vi.fn(async () => {}) };
+    const late = { identity: successor, dispose: vi.fn(async () => {
+      if (closeRejects) throw new Error('Daemon WebSocket close timed out; physical closure was not observed');
+    }) };
     let deliver!: () => void;
     fake.verified.mockResolvedValue(successor);
     fake.attach.mockImplementationOnce(() => new Promise(resolve => { deliver = () => resolve(late); }));
