@@ -22,6 +22,10 @@ vi.mock('../../src/agent/codex-appserver/owned-process', async original => {
       // Windows wrappers retain pipe writers, so control only the client's readable.
       Object.defineProperty(this.child, 'stdout', { value: input });
       createInterface({ input: stderr }).on('line', line => {
+        if (line === 'fixture-close-stdin') {
+          this.child.stdin?.destroy();
+          return;
+        }
         if (line !== 'fixture-request-received') return;
         console.info('[jsonrpc-input-close] request received; ending readable');
         stdout.unpipe(input);
@@ -165,6 +169,17 @@ describe('JsonRpcPeer', () => {
     await expect(peer.request('late')).rejects.toThrow('JSON-RPC peer closed');
   });
 
+  it('rejects pending requests and resolves closed once when output closes without an error', async () => {
+    const { input, output, peer } = fixture();
+    const pending = peer.request('held');
+    output.destroy();
+    await expect(pending).rejects.toThrow('JSON-RPC output closed');
+    await expect(peer.closed).resolves.toBeUndefined();
+    expect({ pending: peer.pendingCount, inputDestroyed: input.destroyed }).toEqual({ pending: 0, inputDestroyed: false });
+    expect(() => peer.close()).not.toThrow();
+    await expect(peer.request('late')).rejects.toThrow('JSON-RPC peer closed');
+  });
+
   it('ignores malformed external frames without aborting a valid following frame', () => {
     const { input, peer } = fixture();
     const methods: string[] = [];
@@ -210,6 +225,39 @@ describe('AppServerClient input closure', () => {
       const closed = client.close();
       expect(client.close()).toBe(closed);
       await expect(closed).resolves.toBeUndefined();
+      expect(client.exited).toBe(true);
+    } finally {
+      try { await client.close(); }
+      finally { rmSync(dir, { recursive: true, force: true }); }
+    }
+  });
+
+  it('rejects pending work and reclaims the owned child when its stdin closes while the child and stdout live', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jsonrpc-output-close-'));
+    const { bin } = writeNodeExecutable(dir, 'closed-stdin', `
+      require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
+        const message = JSON.parse(line);
+        if (message.method === 'initialize') {
+          process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + '\\n');
+        } else if (message.method === 'close-stdin') {
+          process.stderr.write('fixture-close-stdin\\n');
+        }
+      });
+      setInterval(() => {}, 1000);
+    `);
+    const client = new AppServerClient({ bin, cwd: dir, quietOutput: true });
+    try {
+      await client.connect();
+      const pid = client.pid;
+      if (pid === undefined) throw new Error('Fixture child did not start');
+      await expect(client.request('close-stdin')).rejects.toThrow('JSON-RPC output closed');
+      await expect(client.request('late')).rejects.toThrow('app-server client closed');
+      await vi.waitFor(() => {
+        let probeError: unknown;
+        try { process.kill(pid, 0); }
+        catch (error) { probeError = error; }
+        expect(probeError).toMatchObject({ code: 'ESRCH' });
+      });
       expect(client.exited).toBe(true);
     } finally {
       try { await client.close(); }
