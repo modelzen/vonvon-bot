@@ -13,8 +13,9 @@ import { desktopUpdateConfiguration } from './update-configuration.js';
 import { createDaemonManager, StartHostRefusal } from './daemon-manager.js';
 import { createDaemonDependencies, prepareDesktopRoot } from './daemon-dependencies.js';
 import { desktopCliOptions, observeCli, registerCli } from './cli-registration.js';
-import type { MachineReply } from '@vonvon/protocol';
+import type { CommandResult, MachineReply } from '@vonvon/protocol';
 
+const restartDeadlineMs = 60_000;
 const serviceUnavailable = 'Vonvon Bot cannot manage an OS service in this version. Use vonvon daemon start and vonvon daemon stop.';
 
 export function desktopResources(appPath: string, packaged: boolean): DesktopResources {
@@ -53,7 +54,7 @@ export async function startDesktop(): Promise<void> {
   let confirmation: Promise<void> | undefined;
   let connectionFailureShown = false;
   let controlledDisconnect = false;
-  let starting: Promise<MachineReply> | undefined;
+  let starting: Promise<unknown> | undefined;
 
   const show = (): void => {
     if (!window || window.isDestroyed()) {
@@ -225,10 +226,45 @@ export async function startDesktop(): Promise<void> {
       controlledDisconnect = false;
     }
 
+    // The daemon restarts itself through its own helper; the shell only waits for that successor and never starts one.
+    // The old owner may drain for as long as it needs; the deadline only runs while the data root has no owner.
+    async function restartHost(previous: AttachedDaemon['identity'], send: () => Promise<CommandResult>): Promise<CommandResult> {
+      if (starting || terminating || cleanupPromise) throw new StartHostRefusal('Desktop restart is unavailable.');
+      const restart = (async (): Promise<CommandResult> => {
+        controlledDisconnect = true;
+        let result: CommandResult;
+        try { result = await send(); }
+        catch (error) { controlledDisconnect = false; throw error; }
+        if (result.kind !== 'applied') { controlledDisconnect = false; return result; }
+        let ownerlessSince: number | undefined;
+        for (;;) {
+          if (terminating || cleanupPromise || !bridge) throw new StartHostRefusal('Desktop restart was cancelled.');
+          const ready = await managerDependencies.readVerifiedDaemon().catch(() => null);
+          if (ready && (ready.pid !== previous.pid || ready.startedAt !== previous.startedAt)) {
+            const next = await attachExisting(root);
+            if (next.identity.pid !== ready.pid || next.identity.startedAt !== ready.startedAt || terminating || !bridge) {
+              await next.dispose();
+              throw new StartHostRefusal('The daemon owner changed during desktop restart.');
+            }
+            await bridge.replaceOwner(next);
+            connectionFailureShown = false;
+            controlledDisconnect = false;
+            return result;
+          }
+          ownerlessSince = ready ? undefined : ownerlessSince ?? Date.now();
+          if (ownerlessSince !== undefined && Date.now() - ownerlessSince >= restartDeadlineMs) throw new StartHostRefusal('The daemon did not come back after restart. Check daemon.log, then start it from Vonvon Bot.');
+          await new Promise(resolve => setTimeout(resolve, 250));
+        }
+      })().finally(() => { starting = undefined; });
+      starting = restart;
+      return restart;
+    }
+
     async function guardedService(operation: () => Promise<MachineReply>): Promise<MachineReply> {
       if (starting || terminating || cleanupPromise) throw new StartHostRefusal('Desktop service operation is unavailable.');
-      starting = operation().finally(() => { starting = undefined; });
-      return starting;
+      const run = operation().finally(() => { starting = undefined; });
+      starting = run;
+      return run;
     }
 
     bridge = installBridge(owner, current, paths, {
@@ -238,9 +274,10 @@ export async function startDesktop(): Promise<void> {
         if (result.kind === 'error') throw new StartHostRefusal(result.message);
         return { type: 'done', message: result.message };
       },
+      restartHost,
       startHost: async bot => {
         if (starting || terminating || cleanupPromise) throw new StartHostRefusal('Desktop startup is unavailable.');
-        starting = (async (): Promise<MachineReply> => {
+        const run = (async (): Promise<MachineReply> => {
           try {
             await reattachReady(bot);
             return { type: 'done', message: bot === undefined ? 'Daemon started.' : 'Selected Bot started.' };
@@ -249,7 +286,8 @@ export async function startDesktop(): Promise<void> {
             throw new StartHostRefusal('The daemon could not start and reconnect. Check daemon.log and try again.');
           }
         })().finally(() => { starting = undefined; });
-        return starting;
+        starting = run;
+        return run;
       },
       readLoginItem: async () => (await managerDependencies.readRegistration()).kind === 'ours',
       isExpectedDisconnect: () => controlledDisconnect,

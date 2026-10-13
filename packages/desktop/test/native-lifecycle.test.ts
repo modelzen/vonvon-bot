@@ -18,6 +18,7 @@ const fake = vi.hoisted(() => ({
   cliRegister: vi.fn(async () => ({ kind: 'ready' as const, bin: '/tmp/vonvon', message: 'installed' })),
   cliObserve: vi.fn(async () => ({ kind: 'error' as const, message: 'absent' })),
   readRegistration: vi.fn(async (): Promise<Registration> => ({ kind: 'absent' })),
+  verified: vi.fn(async (): Promise<VerifiedDaemon | null> => null),
   tray: { destroy: vi.fn() },
   openExternal: vi.fn(async () => {}),
   updateConfiguration: vi.fn(async () => ({ signed: true, manifestURL: 'https://updates.example.test/manifest.json' })),
@@ -83,7 +84,7 @@ vi.mock('../src/tray.js', () => ({ createDesktopTray: vi.fn(() => fake.tray) }))
 vi.mock('../src/update-configuration.js', () => ({ desktopUpdateConfiguration: fake.updateConfiguration }));
 vi.mock('../src/daemon-dependencies.js', () => ({
   prepareDesktopRoot: vi.fn(async () => fake.root),
-  createDaemonDependencies: vi.fn(() => ({ readRegistration: fake.readRegistration })),
+  createDaemonDependencies: vi.fn(() => ({ readRegistration: fake.readRegistration, readVerifiedDaemon: fake.verified })),
 }));
 vi.mock('../src/cli-registration.js', () => ({
   desktopCliOptions: vi.fn((options: unknown) => options),
@@ -153,6 +154,7 @@ beforeEach(async () => {
   fake.cliRegister.mockClear();
   fake.cliObserve.mockClear();
   fake.readRegistration.mockClear().mockResolvedValue({ kind: 'absent' });
+  fake.verified.mockReset().mockResolvedValue(null);
   fake.install.mockReset().mockReturnValue(fake.bridge);
   fake.openExternal.mockClear();
   await startDesktop();
@@ -238,6 +240,78 @@ describe('updater final install lifecycle', () => {
     expect(fake.bridge.dispose).not.toHaveBeenCalled();
     expect(dialog.showErrorBox).not.toHaveBeenCalled();
     expect(app.quit).not.toHaveBeenCalled();
+  });
+});
+
+describe('daemon restart from the window', () => {
+  const previous = { pid: 42, startedAt: 'initial', listen: '127.0.0.1:42345' };
+  const applied = async () => ({ kind: 'applied' as const, revision: 7 });
+
+  it('waits for the daemon\'s own successor, reattaches it, and starts nothing', async () => {
+    const successor = { pid: 43, startedAt: 'successor', listen: '127.0.0.1:42345' };
+    const next = { identity: successor, dispose: vi.fn(async () => {}) };
+    fake.verified.mockResolvedValueOnce(previous).mockResolvedValueOnce(null).mockResolvedValue(successor);
+    fake.attach.mockResolvedValueOnce(next);
+    const send = vi.fn(async () => {
+      expect(actions.isExpectedDisconnect()).toBe(true);
+      return applied();
+    });
+    await expect(actions.restartHost(previous, send)).resolves.toEqual({ kind: 'applied', revision: 7 });
+    expect(fake.bridge.replaceOwner).toHaveBeenCalledExactlyOnceWith(next);
+    expect(fake.ready).toHaveBeenCalledTimes(1);
+    expect(actions.isExpectedDisconnect()).toBe(false);
+  });
+
+  it('returns a refused restart unchanged and keeps later disconnects unexpected', async () => {
+    const refused = { kind: 'refused' as const, code: 'unsupported', message: 'no control' };
+    await expect(actions.restartHost(previous, async () => refused)).resolves.toEqual(refused);
+    expect(fake.verified).not.toHaveBeenCalled();
+    expect(actions.isExpectedDisconnect()).toBe(false);
+  });
+
+  it('keeps waiting while the old owner drains past the ownerless deadline', async () => {
+    const successor = { pid: 44, startedAt: 'late', listen: '127.0.0.1:42345' };
+    const next = { identity: successor, dispose: vi.fn(async () => {}) };
+    let draining = true;
+    fake.verified.mockImplementation(async () => draining ? previous : successor);
+    fake.attach.mockResolvedValueOnce(next);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+    try {
+      const restarting = actions.restartHost(previous, applied);
+      await vi.advanceTimersByTimeAsync(120_000);
+      draining = false;
+      await vi.advanceTimersByTimeAsync(500);
+      await expect(restarting).resolves.toEqual({ kind: 'applied', revision: 7 });
+    } finally { vi.useRealTimers(); }
+    expect(fake.bridge.replaceOwner).toHaveBeenCalledExactlyOnceWith(next);
+  });
+
+  it('keeps the window and reports when no successor appears', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+    try {
+      fake.verified.mockResolvedValue(null);
+      const settled = expect(actions.restartHost(previous, applied)).rejects.toThrow('did not come back after restart');
+      await vi.advanceTimersByTimeAsync(61_000);
+      await settled;
+    } finally { vi.useRealTimers(); }
+    expect(fake.bridge.replaceOwner).not.toHaveBeenCalled();
+    expect(actions.isExpectedDisconnect()).toBe(true);
+    expect(window.destroyed).toBe(false);
+    expect(app.quit).not.toHaveBeenCalled();
+  });
+
+  it('lets a quit win over a pending restart', async () => {
+    let release!: () => void;
+    fake.verified.mockImplementation(() => new Promise<VerifiedDaemon>(resolve => { release = () => resolve(previous); }));
+    const restarting = actions.restartHost(previous, applied);
+    await vi.waitFor(() => expect(fake.verified).toHaveBeenCalled());
+    const quitting = actions.confirmQuit();
+    release();
+    await expect(restarting).rejects.toThrow('Desktop restart was cancelled.');
+    await quitting;
+    expect(fake.attach).toHaveBeenCalledTimes(1);
+    expect(fake.bridge.replaceOwner).not.toHaveBeenCalled();
+    expect(app.quit).toHaveBeenCalledOnce();
   });
 });
 

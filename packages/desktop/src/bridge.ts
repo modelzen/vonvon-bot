@@ -170,7 +170,10 @@ export function installBridge(
   const onNavigation = (): void => { subscribed = false; };
   try {
     register(desktopChannels.snapshot, 0, noArg, desktopSnapshot);
-    register(desktopChannels.run, 1, value => commandSchema.parse(value), value => client().run(value));
+    register(desktopChannels.run, 1, value => commandSchema.parse(value), value => {
+      if (value.type !== 'restartHost' || !activeOwner) return client().run(value);
+      return actions.restartHost(activeOwner.identity, () => client().run(value));
+    });
     register(desktopChannels.settings, 1, value => settingsRequestSchema.parse(value), value => client().settings(value));
     register(desktopChannels.collaboration, 1, value => collaborationRequestSchema.parse(value), value => client().collaboration(value));
     register(desktopChannels.environment, 1, value => environmentRequestSchema.parse(value), value => client().environment(value));
