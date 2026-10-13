@@ -4,13 +4,9 @@ import { POWERSHELL } from './windows-supervisor';
 
 const JOB_NAME = /^Local\\vonvon-[A-Za-z0-9-]{1,64}$/;
 
-/**
- * The read-only Windows recovery probe of providers.md *Empty-group proof and sealing*: opens the Job by name with
- * `JOB_OBJECT_QUERY` and reads its active-process count. Only meaningful after the supervisor is sealed, which the caller
- * establishes; in another Windows session, or without `osSession`, the answer is `unknown` because `Local\` names are per session.
- */
-export function probeWindowsJob(control: WindowsControl): Promise<Probe> {
-  if (control.osSession === undefined || !JOB_NAME.test(control.jobName)) return Promise.resolve('unknown');
+/** `Local\` Job names are per Windows session, so a record is probed only from the session that created it; the caller has sealed the supervisor first. */
+export function probeWindowsJob(control: WindowsControl & { osSession: number }): Promise<Probe> {
+  if (!JOB_NAME.test(control.jobName)) return Promise.resolve('unknown');
   const script = `
 $sig = @'
 [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern IntPtr OpenJobObjectW(uint access, bool inherit, string name);

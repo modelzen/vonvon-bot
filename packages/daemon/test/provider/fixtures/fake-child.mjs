@@ -1,11 +1,4 @@
 #!/usr/bin/env node
-// A scriptable provider stand-in for process-host.test.ts and Lane 10. Flags:
-//   --ignore-term            install a SIGTERM handler that does nothing
-//   --grandchildren N        spawn N copies (each --ignore-term, in this group) and print `gc <pid>` once each is armed
-//   --exit-on-cue            exit 0 when a line `exit` arrives on stdin, leaving any grandchild alive
-//   --frames N --frame-ms M  write N `frame <i>` lines, one every M ms
-//   --close-stdout-ms M      close stdout after M ms and keep running
-// It prints `pid <pid>` first and `armed` once every handler is in place.
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 

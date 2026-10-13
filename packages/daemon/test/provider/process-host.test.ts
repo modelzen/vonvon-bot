@@ -1,9 +1,10 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { ProcessFact } from '../../src/provider/engines/engine';
 import { readLedger, type HostPlatform } from '../../src/provider/process/ledger';
@@ -13,6 +14,7 @@ import { compileHolder, type HolderBinary } from './native/holder-driver';
 
 const NODE = process.execPath;
 const FAKE = fileURLToPath(new URL('./fixtures/fake-child.mjs', import.meta.url));
+const HOST_DAEMON = fileURLToPath(new URL('./fixtures/host-daemon.ts', import.meta.url));
 const PLATFORM: HostPlatform = process.platform === 'win32' ? 'win32' : 'posix';
 const groupEmpty = (pid: number): boolean => { try { process.kill(-pid, 0); return false; } catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; } };
 
@@ -25,7 +27,7 @@ beforeAll(() => { if (PLATFORM === 'posix') binary = compileHolder(); });
 afterAll(() => binary?.dispose());
 afterEach(async () => {
   await Promise.all(hosts.splice(0).map(host => host.closeAll()));
-  for (const pid of groups.splice(0)) { try { process.kill(PLATFORM === 'posix' ? -pid : pid, 'SIGKILL'); } catch { /* already empty */ } }
+  for (const pid of groups.splice(0)) { try { process.kill(PLATFORM === 'posix' ? -pid : pid, 'SIGKILL'); } catch { } }
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -35,13 +37,12 @@ function dataDir(): string {
   return dir;
 }
 function newHost(dir: string): ProcessHost {
-  const host = new ProcessHost({ dataDir: dir, daemonBootId: randomUUID(), platform: PLATFORM, holderPath: binary?.path, spawnDeadlineMs: 20_000 });
+  const host = new ProcessHost({ dataDir: dir, daemonBootId: randomUUID(), spawnDeadlineMs: 20_000, ...(binary ? { platform: 'posix', holderPath: binary.path } : { platform: 'win32' }) });
   hosts.push(host);
   return host;
 }
 const ledgerOf = (dir: string) => readLedger(join(dir, 'process-owners.json'));
 
-/** Spawns the fixture through the host and waits until it is armed; returns the provider pid and any grandchild pids. */
 async function spawnFake(host: ProcessHost, args: string[]): Promise<{ hosted: HostedProcess; pid: number; grandchildren: number[]; facts: ProcessFact[] }> {
   const hosted = await host.spawn('codex', 'session-1', { file: NODE, args: [FAKE, ...args], env: { PATH: process.env.PATH ?? '' } });
   const facts: ProcessFact[] = [];
@@ -59,11 +60,11 @@ describe('nextStep', () => {
   const rows: Array<[Identity, Phase, Step]> = [
     ['retained', 'signalling', { send: 'kill' }],
     ['retained', 'receipted', { wait: true }],
-    ['retained', 'observed', { send: 'reap' }],
+    ['retained', 'reapable', { send: 'reap' }],
     ['retained', 'reaped', { send: 'probe' }],
     ['retained', 'probed', { done: 'gone' }],
     ['reaped', 'signalling', { send: 'probe' }],
-    ['reaped', 'observed', { send: 'probe' }],
+    ['reaped', 'reapable', { send: 'probe' }],
     ['reaped', 'reaped', { send: 'probe' }],
     ['reaped', 'probed', { done: 'gone' }],
     ['lost', 'signalling', { probe: 'daemon' }],
@@ -75,7 +76,7 @@ describe('nextStep', () => {
   });
   it('never signals once the identity is reaped or lost', () => {
     for (const identity of ['reaped', 'lost'] as const) {
-      for (const phase of ['signalling', 'receipted', 'observed', 'reaped', 'probed'] as const) {
+      for (const phase of ['signalling', 'receipted', 'reapable', 'reaped', 'probed'] as const) {
         const step = nextStep({ identity, phase });
         expect('send' in step && (step.send === 'kill' || step.send === 'reap')).toBe(false);
       }
@@ -128,12 +129,17 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost on POSIX', () => {
     expect(facts).toEqual([{ kind: 'transport-lost' }, { kind: 'exit', exit: { observed: 'parent', code: null, signal: 'SIGKILL' } }]);
   }, 30_000);
 
-  it('after daemon death the holder ends the tree itself and the next host sweeps the record as gone: 1', async () => {
+  it('after the daemon is killed -9, the holder ends the tree itself and the next host sweeps the record as gone: 1', async () => {
     const dir = dataDir();
-    const first = newHost(dir);
-    const { pid, grandchildren } = await spawnFake(first, ['--ignore-term', '--grandchildren', '1']);
-    const holderPid = first.snapshot()[0]?.holderPid as number;
-    first.simulateDaemonDeath();
+    const bundle = join(dir, 'host-daemon.mjs');
+    await build({ entryPoints: [HOST_DAEMON], bundle: true, platform: 'node', format: 'esm', outfile: bundle, logLevel: 'silent' });
+    const daemon: ChildProcess = spawn(NODE, [bundle], { env: { ...process.env, DATA_DIR: dir, HOLDER: binary?.path as string, FAKE }, stdio: ['ignore', 'pipe', 'inherit'] });
+    let text = '';
+    daemon.stdout?.on('data', (chunk: Buffer) => { text += chunk.toString(); });
+    await until(() => text.includes('\n'), 'first daemon hosting a tree', 20_000);
+    const { pid, grandchildren, holderPid } = JSON.parse(text) as { pid: number; grandchildren: number[]; holderPid: number };
+    groups.push(pid);
+    daemon.kill('SIGKILL');
     await until(() => !alive(holderPid), 'holder exit after daemon death', 20_000);
     expect(ledgerOf(dir).kind).toBe('ok');
     const second = newHost(dir);
