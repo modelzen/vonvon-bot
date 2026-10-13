@@ -55,6 +55,7 @@ export async function startDesktop(): Promise<void> {
   let connectionFailureShown = false;
   let controlledDisconnect = false;
   let starting: Promise<unknown> | undefined;
+  let restartCancel: AbortController | undefined;
 
   const show = (): void => {
     if (!window || window.isDestroyed()) {
@@ -78,6 +79,7 @@ export async function startDesktop(): Promise<void> {
 
   const cleanup = (): Promise<void> => cleanupPromise ??= (async () => {
     let closeFailure: unknown;
+    restartCancel?.abort();
     try {
       if (starting) await starting.catch(() => {});
       if (bridge) await bridge.dispose();
@@ -226,23 +228,32 @@ export async function startDesktop(): Promise<void> {
       controlledDisconnect = false;
     }
 
-    // The daemon restarts itself through its own helper; the shell only waits for that successor and never starts one.
-    // The old owner may drain for as long as it needs; the deadline only runs while the data root has no owner.
     async function restartHost(previous: AttachedDaemon['identity'], send: () => Promise<CommandResult>): Promise<CommandResult> {
       if (starting || terminating || cleanupPromise) throw new StartHostRefusal('Desktop restart is unavailable.');
+      const cancel = new AbortController();
+      const cancelled = (): boolean => cancel.signal.aborted || terminating || cleanupPromise !== undefined || !bridge;
+      const refusal = (): StartHostRefusal => new StartHostRefusal('Desktop restart was cancelled.');
+      const unlessCancelled = <T>(pending: Promise<T>): Promise<T> => new Promise<T>((resolve, reject) => {
+        const stop = (): void => reject(refusal());
+        if (cancel.signal.aborted) { stop(); return; }
+        cancel.signal.addEventListener('abort', stop, { once: true });
+        pending.then(resolve, reject).finally(() => cancel.signal.removeEventListener('abort', stop));
+      });
       const restart = (async (): Promise<CommandResult> => {
         controlledDisconnect = true;
         let result: CommandResult;
-        try { result = await send(); }
-        catch (error) { controlledDisconnect = false; throw error; }
+        try { result = await unlessCancelled(send()); }
+        catch (error) { if (!cancelled()) controlledDisconnect = false; throw error; }
         if (result.kind !== 'applied') { controlledDisconnect = false; return result; }
         let ownerlessSince: number | undefined;
         for (;;) {
-          if (terminating || cleanupPromise || !bridge) throw new StartHostRefusal('Desktop restart was cancelled.');
-          const ready = await managerDependencies.readVerifiedDaemon().catch(() => null);
+          if (cancelled()) throw refusal();
+          const ready = await unlessCancelled(managerDependencies.readVerifiedDaemon().catch(() => null));
+          if (cancelled()) throw refusal();
           if (ready && (ready.pid !== previous.pid || ready.startedAt !== previous.startedAt)) {
             const next = await attachExisting(root);
-            if (next.identity.pid !== ready.pid || next.identity.startedAt !== ready.startedAt || terminating || !bridge) {
+            if (cancelled() || !bridge) { await next.dispose(); throw refusal(); }
+            if (next.identity.pid !== ready.pid || next.identity.startedAt !== ready.startedAt) {
               await next.dispose();
               throw new StartHostRefusal('The daemon owner changed during desktop restart.');
             }
@@ -253,9 +264,13 @@ export async function startDesktop(): Promise<void> {
           }
           ownerlessSince = ready ? undefined : ownerlessSince ?? Date.now();
           if (ownerlessSince !== undefined && Date.now() - ownerlessSince >= restartDeadlineMs) throw new StartHostRefusal('The daemon did not come back after restart. Check daemon.log, then start it from Vonvon Bot.');
-          await new Promise(resolve => setTimeout(resolve, 250));
+          await unlessCancelled(new Promise(resolve => setTimeout(resolve, 250)));
         }
-      })().finally(() => { starting = undefined; });
+      })().finally(() => {
+        starting = undefined;
+        if (restartCancel === cancel) restartCancel = undefined;
+      });
+      restartCancel = cancel;
       starting = restart;
       return restart;
     }

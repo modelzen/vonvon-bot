@@ -300,18 +300,53 @@ describe('daemon restart from the window', () => {
     expect(app.quit).not.toHaveBeenCalled();
   });
 
-  it('lets a quit win over a pending restart', async () => {
+  it('lets a quit cancel a restart whose reply is still pending, and ignores the late reply', async () => {
+    let reply!: (result: { kind: 'applied'; revision: number }) => void;
+    const restarting = actions.restartHost(previous, () => new Promise(resolve => { reply = resolve; }));
+    const cancelled = expect(restarting).rejects.toThrow('Desktop restart was cancelled.');
+    await actions.confirmQuit();
+    await cancelled;
+    expect(fake.bridge.dispose).toHaveBeenCalledOnce();
+    expect(app.quit).toHaveBeenCalledOnce();
+    reply({ kind: 'applied', revision: 7 });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(fake.verified).not.toHaveBeenCalled();
+    expect(fake.attach).toHaveBeenCalledTimes(1);
+  });
+
+  for (const answer of ['old owner', 'successor'] as const) {
+    it(`lets a quit win while the owner read is pending and then returns the ${answer}`, async () => {
+      const successor = { pid: 45, startedAt: 'after-quit', listen: '127.0.0.1:42345' };
+      let release!: () => void;
+      fake.verified.mockImplementation(() => new Promise<VerifiedDaemon>(resolve => { release = () => resolve(answer === 'successor' ? successor : previous); }));
+      fake.attach.mockResolvedValue({ identity: successor, dispose: vi.fn(async () => {}) });
+      const restarting = actions.restartHost(previous, applied);
+      await vi.waitFor(() => expect(fake.verified).toHaveBeenCalled());
+      const quitting = actions.confirmQuit();
+      release();
+      await expect(restarting).rejects.toThrow('Desktop restart was cancelled.');
+      await quitting;
+      expect(fake.attach).toHaveBeenCalledTimes(1);
+      expect(fake.bridge.replaceOwner).not.toHaveBeenCalled();
+      expect(app.quit).toHaveBeenCalledOnce();
+    });
+  }
+
+  it('lets the desktop update cleanup cancel a restart before it attaches the successor', async () => {
+    const successor = { pid: 46, startedAt: 'after-update', listen: '127.0.0.1:42345' };
+    await downloadUpdate();
     let release!: () => void;
-    fake.verified.mockImplementation(() => new Promise<VerifiedDaemon>(resolve => { release = () => resolve(previous); }));
+    fake.verified.mockImplementation(() => new Promise<VerifiedDaemon>(resolve => { release = () => resolve(successor); }));
+    fake.attach.mockResolvedValue({ identity: successor, dispose: vi.fn(async () => {}) });
     const restarting = actions.restartHost(previous, applied);
     await vi.waitFor(() => expect(fake.verified).toHaveBeenCalled());
-    const quitting = actions.confirmQuit();
+    const installing = actions.installDesktopUpdate();
     release();
     await expect(restarting).rejects.toThrow('Desktop restart was cancelled.');
-    await quitting;
+    await installing;
     expect(fake.attach).toHaveBeenCalledTimes(1);
     expect(fake.bridge.replaceOwner).not.toHaveBeenCalled();
-    expect(app.quit).toHaveBeenCalledOnce();
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledOnce();
   });
 });
 
