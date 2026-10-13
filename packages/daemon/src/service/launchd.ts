@@ -364,7 +364,7 @@ export function createLaunchdService(options: { root: string }, overrides: Parti
       const manager = await observeJob();
       if (manager.kind === 'unknown') throw new Error(manager.detail);
       const command = await d.run(manager.kind === 'absent' ? ['bootstrap', domain, s.target.plistPath] : ['kickstart', job], 30_000);
-      if (!command.ok) throw new Error(command.stderr || 'Service start failed');
+      if (!command.ok && (manager.kind !== 'absent' || (await observeJob()).kind !== 'loaded')) throw new Error(command.stderr || 'Service start failed');
       return ready(s, port, true);
     },
     async status() {

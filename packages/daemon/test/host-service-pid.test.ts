@@ -7,6 +7,7 @@ const fixture = vi.hoisted(() => ({ root: '' }));
 vi.mock('../src/config/paths', () => ({ paths: { get appDir() { return fixture.root; } } }));
 vi.mock('../src/config/data-access', () => ({ acquireMutex: vi.fn(), closeMutex: vi.fn() }));
 vi.mock('../src/server/pid-lock', () => ({ acquirePidLock: vi.fn(), publishPidLock: vi.fn(), releasePidLock: vi.fn() }));
+vi.mock('../src/service/startup', () => ({ readStartupRegistration: vi.fn(async () => ({ kind: 'absent' })) }));
 vi.mock('../src/cli/commands/run', () => ({ runRun: vi.fn() }));
 import { acquireMutex } from '../src/config/data-access';
 import { acquirePidLock } from '../src/server/pid-lock';

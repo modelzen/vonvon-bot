@@ -103,9 +103,12 @@ program
     await runHookCommand(options.agent, options.bot);
   });
 
-program.parseAsync(process.argv).then(() => {
-  if (control) process.exit(process.exitCode ?? 0);
-}).catch((err) => {
+program.parseAsync(process.argv).then(async () => {
+  if (!control) return;
+  await (await import('../core/logger')).flushLogs();
+  process.exit(process.exitCode ?? 0);
+}).catch(async (err) => {
   console.error(err instanceof Error ? err.message : String(err));
+  await (await import('../core/logger')).flushLogs();
   process.exit(control && process.env.VONVON_SERVICE && !process.send && (process.exitCode === 0 || process.exitCode === 75) ? 0 : 1);
 });

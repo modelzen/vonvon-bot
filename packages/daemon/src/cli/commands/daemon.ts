@@ -5,6 +5,7 @@ import { paths } from '../../config/paths';
 import { readRecentLogs } from '../../core/logger';
 import { stopVerifiedOwner, verifyPidLockOwner } from '../../server/owner-verification';
 import { getPidLockInfo, isPidLockOwnerRunning, readRunningPidLock, type PidLockInfo } from '../../server/pid-lock';
+import { readStartupRegistration, startRegisteredDaemon } from '../../service/startup';
 
 export type DaemonStatus = { running: false } | {
   running: true;
@@ -26,7 +27,8 @@ const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 export async function runStart(port = 0): Promise<DaemonStatus> {
   const checkedStatus = async (): Promise<DaemonStatus> => {
     const ready = await daemonStatus();
-    if (ready.running && port !== 0 && ready.listen !== `127.0.0.1:${port}`) throw new Error(`Daemon PID ${ready.pid} already runs at ${ready.listen}, not requested port ${port}.`);
+    if (!ready.running) throw new Error('Daemon lost readiness before startup completed.');
+    if (port !== 0 && ready.listen !== `127.0.0.1:${port}`) throw new Error(`Daemon PID ${ready.pid} already runs at ${ready.listen}, not requested port ${port}.`);
     return ready;
   };
   const waitReady = async (pid: number): Promise<DaemonStatus | null> => {
@@ -44,15 +46,35 @@ export async function runStart(port = 0): Promise<DaemonStatus> {
     const ready = await waitReady(existing.pid);
     if (ready) return ready;
   }
+  {
+    const registration = await readStartupRegistration(paths.appDir);
+    switch (registration.kind) {
+      case 'ours': {
+        const endpoint = await startRegisteredDaemon(paths.appDir, port);
+        return { running: true, pid: endpoint.pid, listen: endpoint.listen, startedAt: endpoint.startedAt };
+      }
+      case 'unrecognized':
+        throw new Error(`Unrecognized service registration ${registration.location}: ${registration.reason}`);
+      case 'absent':
+      case 'other-root':
+        break;
+      default: {
+        const exhaustive: never = registration;
+        throw new Error(`Invalid service registration: ${exhaustive}`);
+      }
+    }
+  }
   const cliEntry = process.argv[1];
   if (!cliEntry) throw new Error('Cannot locate the daemon CLI entry.');
   const log = await open(join(paths.appDir, 'daemon.log'), 'a', 0o600);
+  const env: NodeJS.ProcessEnv = { ...process.env, VONVON_HOME: paths.appDir };
+  delete env.VONVON_SERVICE;
   let child;
   try {
     child = spawn(process.execPath, [cliEntry, 'daemon', 'run', '--port', String(port)], {
       detached: true,
       stdio: ['ignore', log.fd, log.fd],
-      env: { ...process.env, VONVON_HOME: paths.appDir },
+      env,
     });
   } finally { await log.close(); }
   child.unref();
