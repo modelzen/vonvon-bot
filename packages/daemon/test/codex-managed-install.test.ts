@@ -84,10 +84,13 @@ describe('managed Codex installation', { timeout: 20_000 }, () => {
     const abort = new AbortController();
     const running = installManagedCodex(abort.signal);
     const outcome = running.catch(error => error);
-    await vi.waitFor(() => expect(existsSync(trace)).toBe(true));
+    try {
+      await vi.waitFor(() => expect(existsSync(trace)).toBe(true), { timeout: process.platform === 'win32' ? 5_000 : 1_000 });
+    } finally {
+      abort.abort();
+      await outcome;
+    }
     const record = traceValue();
-    abort.abort();
-    await outcome;
     expect(() => process.kill(record.pid, 0)).toThrow();
     expect(existsSync(record.prefix)).toBe(false);
     expect(managedCodexBin()).toBe(previous);
