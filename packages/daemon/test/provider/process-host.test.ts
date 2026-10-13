@@ -1,6 +1,6 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -253,6 +253,74 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost on POSIX', () => {
     expect(() => reservation.spawn({ file: NODE, args: [], env: {} })).toThrow(/not an unused reservation/);
     await released;
   }, 20_000);
+});
+
+describe.skipIf(PLATFORM !== 'posix')('ProcessHost durability on POSIX', () => {
+  /** A directory at the ledger's temporary path makes the next write-and-rename fail with EISDIR, as in Codex's reproduction. */
+  const obstruct = (dir: string) => { const path = join(dir, `process-owners.json.${process.pid}.tmp`); mkdirSync(path); return () => rmSync(path, { recursive: true }); };
+  const everyPid = (): number[] => hosts.flatMap(host => host.snapshot().flatMap(s => [s.holderPid, s.providerPid].filter((pid): pid is number => pid !== undefined)));
+
+  it('a born write that fails abandons the holder and rejects: no authority survives', async () => {
+    const dir = dataDir();
+    const host = newHost(dir);
+    const reserving = host.reserve('codex');
+    const clear = obstruct(dir);
+    await expect(reserving).rejects.toThrow(/EISDIR/);
+    expect(host.snapshot()).toEqual([]);
+    expect(everyPid()).toEqual([]);
+    clear();
+    expect(ledgerOf(dir).kind).toBe('missing');
+    const fresh = newHost(dir);
+    expect(await fresh.sweepOrphans()).toEqual({ gone: 0, unknown: 0, inert: 0, legacy: 0 });
+    expect(fresh.admission()).toBeUndefined();
+  }, 30_000);
+
+  it('an attempting write that fails sends no launch: ready rejects, the holder exits, and nothing executed', async () => {
+    const dir = dataDir();
+    const host = newHost(dir);
+    const reservation = await host.reserve('codex') as Reservation;
+    const holderPid = host.snapshot()[0]?.holderPid as number;
+    const clear = obstruct(dir);
+    const hosted = reservation.spawn({ file: NODE, args: [FAKE], env: { PATH: process.env.PATH ?? '' } });
+    let output = '';
+    hosted.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+    await expect(hosted.ready).rejects.toThrow(/EISDIR/);
+    await until(() => !alive(holderPid), 'holder exit after abandon');
+    expect(output).toBe('');
+    expect(host.snapshot()).toEqual([]);
+    clear();
+    expect(ledgerOf(dir).kind).toBe('missing');
+    expect(await newHost(dir).sweepOrphans()).toEqual({ gone: 0, unknown: 0, inert: 0, legacy: 0 });
+  }, 30_000);
+
+  it('a launched write that fails sends no GO: the child cancels, ready rejects cancelled, and nothing executed', async () => {
+    const dir = dataDir();
+    const host = newHost(dir);
+    const reservation = await host.reserve('codex') as Reservation;
+    const holderPid = host.snapshot()[0]?.holderPid as number;
+    const hosted = reservation.spawn({ file: NODE, args: [FAKE], env: { PATH: process.env.PATH ?? '' } });
+    const clear = obstruct(dir);
+    let output = '';
+    hosted.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+    await expect(hosted.ready).rejects.toThrow(/cancelled|launch-failed/);
+    await until(() => !alive(holderPid), 'holder exit after cancel');
+    expect(output).toBe('');
+    expect(everyPid()).toEqual([]);
+    clear();
+    expect(ledgerOf(dir).kind).toBe('missing');
+    expect(await newHost(dir).sweepOrphans()).toEqual({ gone: 0, unknown: 0, inert: 0, legacy: 0 });
+  }, 30_000);
+
+  it('closeAll during an in-flight reserve ends that holder: the reserve rejects and nothing stays alive', async () => {
+    const dir = dataDir();
+    const host = newHost(dir);
+    const reserving = host.reserve('codex');
+    await host.closeAll();
+    await expect(reserving).rejects.toThrow(/closing/);
+    expect(host.snapshot()).toEqual([]);
+    expect(ledgerOf(dir).kind).toBe('missing');
+    await expect(host.reserve('codex')).rejects.toThrow(/closing/);
+  }, 30_000);
 });
 
 describe.skipIf(PLATFORM !== 'win32')('ProcessHost on Windows', () => {

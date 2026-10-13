@@ -8,8 +8,8 @@ import type { HostedProcess, SpawnSpec } from './process-host';
 export type HolderProcessErrorCode = 'transport-lost' | 'holder-lost' | 'launch-failed' | 'holder-not-ready' | 'cancelled';
 
 export class HolderProcessError extends Error {
-  constructor(readonly code: HolderProcessErrorCode) {
-    super(code);
+  constructor(readonly code: HolderProcessErrorCode, options?: ErrorOptions) {
+    super(code, options);
     this.name = 'HolderProcessError';
   }
 }
@@ -46,7 +46,8 @@ export class HolderProcess extends EventEmitter implements SpawnedProcess {
     hosted.ready.then(
       () => this.raiseOnce('ready'),
       (error: unknown) => {
-        const failure = error instanceof HolderProcessError ? error : new HolderProcessError('holder-lost');
+        // Any other rejection is the ledger refusing `attempting`, so nothing was launched.
+        const failure = error instanceof HolderProcessError ? error : new HolderProcessError('launch-failed', { cause: error });
         if (failure.code === 'launch-failed' || failure.code === 'cancelled') this.detach();
         this.raiseOnce('error', failure);
       },

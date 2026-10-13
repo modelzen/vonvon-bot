@@ -80,6 +80,10 @@ interface RecordState {
   refused: boolean;
   unconfirmed?: UnconfirmedReason;
   endRequested: boolean;
+  /** Resolves once `reserve` has a channel or has given up; `end` during setup waits for it. */
+  setup?: Deferred<void>;
+  /** A stage reached in memory that the ledger never recorded; ownership is then no better than unknown. */
+  undurable: boolean;
   /** Set after the term wait or by the facade's kill(): only then may the signalling step send kill. */
   killDue: boolean;
   issued: Map<Nonce, Issued>;
@@ -100,7 +104,7 @@ interface RecordState {
 
 function newState(record: LedgerRecord): RecordState {
   return {
-    record, identity: 'lost', phase: 'signalling', sealed: false, noProvider: false, refused: false, endRequested: false, killDue: false,
+    record, identity: 'lost', phase: 'signalling', sealed: false, noProvider: false, refused: false, endRequested: false, killDue: false, undurable: false,
     issued: new Map(), probing: false, ready: deferred(), retired: deferred(), exitObserved: deferred(), holderLost: deferred(),
     hold: EXIT_HOLD_START, facts: [], watchers: new Set(),
   };
@@ -141,7 +145,7 @@ export class HostedProcess implements OwnedProcess {
   readonly stdin: Writable;
   readonly stdout: Readable;
   readonly stderr: Readable;
-  /** Rejects with a `HolderProcessError`: `launch-failed`, `cancelled`, `holder-lost`, or `holder-not-ready`. */
+  /** Rejects with a `HolderProcessError` (`launch-failed`, `cancelled`, `holder-lost`, `holder-not-ready`), or with the ledger error when `attempting` was not made durable. */
   readonly ready: Promise<void>;
   /** Resolves when the holder exits before an exit fact and with a provider launched. */
   readonly holderLost: Promise<void>;
@@ -161,6 +165,7 @@ export class ProcessHost {
   private readonly legacyPath: string;
   private readonly unreadable: unknown;
   private closing = false;
+  private readonly inflight = new Set<Promise<unknown>>();
   private readonly platform: HostPlatform;
   private readonly spawnDeadlineMs: number;
 
@@ -186,19 +191,31 @@ export class ProcessHost {
   }
 
   admission(): Refusal | undefined {
-    const blocked = this.unreadable !== undefined || this.closing || [...this.states.values()].some(s => this.ownership(s) === 'unknown');
+    const blocked = this.unreadable !== undefined || [...this.states.values()].some(s => this.ownership(s) === 'unknown');
     return blocked ? ownedWorkUnverified() : undefined;
   }
 
+  /** Rejects once `closeAll` has started, and when the `intent` record cannot be made durable; nothing is spawned in either case. */
   async reserve(providerId: ProviderId, sessionId?: string): Promise<Reservation | Refusal> {
+    if (this.closing) throw new Error('process host is closing');
     const refusal = this.admission();
     if (refusal) return refusal;
     const id = randomUUID();
     const control = this.platform === 'win32' ? { pipe: newPipeName(), jobName: `Local\\vonvon-${id}` } : undefined;
     const intent: LedgerRecord = { id, daemonBootId: this.options.daemonBootId, providerId, sessionId, stage: 'intent', control };
     const s = newState(intent);
+    s.setup = deferred();
     this.states.set(id, s);
-    this.write();
+    try { this.persist(); }
+    catch (error) { this.states.delete(id); s.setup.resolve(); throw error; }
+    const setup = this.setUp(s, control);
+    this.inflight.add(setup);
+    try { return await setup; }
+    finally { this.inflight.delete(setup); s.setup.resolve(); }
+  }
+
+  private async setUp(s: RecordState, control: { pipe: string; jobName: string } | undefined): Promise<Reservation> {
+    const id = s.record.id;
     let channel: HolderChannel;
     try {
       channel = this.options.platform === 'win32'
@@ -206,21 +223,35 @@ export class ProcessHost {
         : await spawnPosixHolder(this.options.holderPath);
     } catch (error) {
       this.states.delete(id);
-      this.write();
+      this.persistOrLog();
       throw error;
     }
     s.channel = channel;
     s.identity = 'retained';
-    const born: LedgerRecord = {
-      ...intent, stage: 'born', holder: { pid: channel.holderPid, start: channel.start },
-      control: control && { ...control, osSession: channel.osSession },
-    };
-    s.record = advance(intent, born, this.platform);
-    this.write();
     channel.onReceipt(line => this.onReceipt(s, line));
     channel.stdout.once('end', () => this.feedHold(s, { kind: 'eof' }));
     void Promise.all([channel.exited, channel.closed]).then(([exit]) => this.onHolderExit(s, exit.code));
+    if (this.closing || s.endRequested) {
+      await this.abandon(s);
+      throw new Error('process host is closing');
+    }
+    const born: LedgerRecord = {
+      ...s.record, stage: 'born', holder: { pid: channel.holderPid, start: channel.start },
+      control: control && { ...control, osSession: channel.osSession },
+    };
+    try { this.persistAdvance(s, born); }
+    catch (error) {
+      await this.abandon(s);
+      throw error;
+    }
     return new Reservation(this, id);
+  }
+
+  /** Ends an inert holder: `abandon`, then its exit, which retires the record. Bounded, so a wedged holder cannot hang the caller. */
+  private async abandon(s: RecordState): Promise<void> {
+    s.endRequested = true;
+    this.sendPlain(s, 'abandon');
+    await Promise.race([s.retired.promise, s.channel?.exited, sleep(KILL_CONFIRM_MS)]);
   }
 
   async spawn(providerId: ProviderId, sessionId: string | undefined, spec: SpawnSpec): Promise<HostedProcess> {
@@ -235,13 +266,20 @@ export class ProcessHost {
   launch(id: ReservationId, spec: SpawnSpec): HostedProcess {
     const s = this.states.get(id);
     if (!s || !s.channel || s.record.stage !== 'born' || s.endRequested) throw new Error(`reservation ${id} is not an unused reservation`);
+    if (this.closing) { void this.end(id); throw new Error('process host is closing'); }
     const refusal = this.admission();
     if (refusal) {
       void this.end(id);
       throw new AdmissionRefused(refusal);
     }
-    s.record = advance(s.record, { ...s.record, stage: 'attempting' }, this.platform);
-    this.write();
+    try { this.persistAdvance(s, { ...s.record, stage: 'attempting' }); }
+    catch (error) {
+      // No launch without a durable `attempting`: the holder is abandoned and the facade's ready carries the reason.
+      log.fail('process-host', error, { id, stage: 'attempting' });
+      s.ready.reject(error instanceof Error ? error : new Error(String(error)));
+      void this.end(id);
+      return new HostedProcess(this, id, s.channel, s.ready.promise, s.holderLost.promise);
+    }
     const nonce = newNonce();
     s.issued.set(nonce, { command: 'launch' });
     const args = this.platform === 'win32' ? [windowsCommandLine(spec.file, spec.args, { shim: spec.shim === true })] : spec.args;
@@ -304,12 +342,10 @@ export class ProcessHost {
   }
 
   private async runEnd(s: RecordState): Promise<void> {
+    await s.setup?.promise;
+    if (s.retired.settled) return;
     if (!s.channel) { this.startTail(s); return; }
-    if (s.record.stage === 'born') {
-      this.sendPlain(s, 'abandon');
-      await Promise.race([s.retired.promise, s.channel.exited, sleep(KILL_CONFIRM_MS)]);
-      return;
-    }
+    if (s.record.stage === 'born' || s.record.stage === 'intent') { await this.abandon(s); return; }
     void this.issue(s, 'term', TERM_WAIT_MS);
     await this.afterTerm(s);
   }
@@ -337,8 +373,10 @@ export class ProcessHost {
     return [...this.states.values()].some(s => { const o = this.ownership(s); return o === 'bound' || o === 'unknown'; });
   }
 
+  /** Latches closing, waits for reservations still setting up, then ends every record. */
   async closeAll(): Promise<void> {
     this.closing = true;
+    await Promise.allSettled([...this.inflight]);
     await Promise.all([...this.states.keys()].map(id => this.end(id)));
   }
 
@@ -368,12 +406,27 @@ export class ProcessHost {
     return report;
   }
 
-  private ownership(s: RecordState): Ownership { return ownershipOf(s.record, evidenceOf(s), this.platform); }
+  private ownership(s: RecordState): Ownership {
+    const ownership = ownershipOf(s.record, evidenceOf(s), this.platform);
+    return s.undurable && ownership === 'bound' ? 'unknown' : ownership;
+  }
 
-  /** Mirrors the records to disk. A failure is logged and leaves the file as it was; admission reads the in-memory states. */
-  private write(): void {
-    if (this.unreadable !== undefined) { log.warn('process-host', 'ledger-not-rewritten', { path: this.ledgerPath }); return; }
-    try { writeLedger(this.ledgerPath, [...this.states.values()].map(s => s.record)); }
+  /** Writes every record, with `next` in place of its record when given. Throws when the disk did not take it. */
+  private persist(next?: LedgerRecord): void {
+    if (this.unreadable !== undefined) throw new Error(`process-owners.json is unreadable and is never rewritten: ${this.ledgerPath}`);
+    writeLedger(this.ledgerPath, [...this.states.values()].map(s => (next && s.record.id === next.id ? next : s.record)));
+  }
+
+  /** A stage is reached in memory only after the disk holds it, so no operation ever runs ahead of the durable record. */
+  private persistAdvance(s: RecordState, next: LedgerRecord): void {
+    const advanced = advance(s.record, next, this.platform);
+    this.persist(advanced);
+    s.record = advanced;
+  }
+
+  /** For removals: a failure leaves an older record on disk, which recovery reads conservatively, so it is logged. */
+  private persistOrLog(): void {
+    try { this.persist(); }
     catch (error) { log.fail('process-host', error, { path: this.ledgerPath }); }
   }
 
@@ -449,7 +502,7 @@ export class ProcessHost {
     for (const timer of [s.tail, s.spawnTimer, s.holdTimer]) clearTimeout(timer);
     if (ownership === 'gone' && !s.noProvider && s.identity !== 'lost') this.sendPlain(s, 'exit');
     this.states.delete(s.record.id);
-    this.write();
+    this.persistOrLog();
     s.retired.resolve();
     if (!s.ready.settled) s.ready.reject(new HolderProcessError(s.noProvider ? 'launch-failed' : 'holder-lost'));
     log.info('process-host', 'retired', { id: s.record.id, stage: s.record.stage, ownership });
@@ -503,16 +556,27 @@ export class ProcessHost {
     switch (line.kind) {
       case 'created':
         if (this.platform === 'posix' && r.stage === 'attempting') {
-          s.record = advance(r, { ...r, stage: 'launched', provider: { pid: line.pid } }, this.platform);
-          this.write();
+          try { this.persistAdvance(s, { ...r, stage: 'launched', provider: { pid: line.pid } }); }
+          catch (error) {
+            // No GO without a durable `launched`: abandon closes the go pipe unwritten, so the child cancels.
+            log.fail('process-host', error, { id: r.id, stage: 'launched' });
+            void this.abandon(s);
+            return;
+          }
           if (!s.endRequested) this.sendPlain(s, 'go');
         }
         return;
       case 'ready': {
         const pid = this.platform === 'win32' ? line.pid : 'provider' in r ? r.provider.pid : undefined;
         if (pid === undefined || (r.stage !== 'launched' && r.stage !== 'attempting')) return;
-        s.record = advance(r, { ...r, stage: 'running', holder: r.holder, provider: { pid } }, this.platform);
-        this.write();
+        const running: LedgerRecord = { ...r, stage: 'running', holder: r.holder, provider: { pid } };
+        try { this.persistAdvance(s, running); }
+        catch (error) {
+          // The provider already runs. The disk keeps the earlier stage, which recovery reads conservatively; in memory the record is unknown until it ends.
+          s.record = advance(r, running, this.platform);
+          s.undurable = true;
+          log.fail('process-host', error, { id: r.id, stage: 'running' });
+        }
         clearTimeout(s.spawnTimer);
         s.ready.resolve();
         if (this.settle(s)) this.drive(s);

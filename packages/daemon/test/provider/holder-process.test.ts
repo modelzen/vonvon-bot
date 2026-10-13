@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -153,6 +153,29 @@ describe.skipIf(process.platform === 'win32')('HolderProcess on POSIX', () => {
     expect(seen.errors.map(error => error.code)).toEqual(['launch-failed']);
     expect(seen.exits).toEqual([]);
     expect(proc.kill('SIGKILL')).toBe(false);
+  }, 30_000);
+
+  it('an attempting write the ledger refuses raises launch-failed carrying the write error, and nothing runs', async () => {
+    const host = newHost();
+    const obstruction = join(dirs[dirs.length - 1] as string, `process-owners.json.${process.pid}.tmp`);
+    const reservation = await host.reserve('claude') as Reservation;
+    mkdirSync(obstruction);
+    const proc = reservation.adopt({ command: NODE, args: [FAKE], env: {}, signal: new AbortController().signal });
+    const errors: HolderProcessError[] = [];
+    proc.on('error', (error: HolderProcessError) => errors.push(error));
+    await expect(proc.ready).rejects.toThrow(/EISDIR/);
+    await until(() => errors.length === 1 && host.snapshot().length === 0, 'launch-failed settled');
+    expect(errors[0]).toMatchObject({ code: 'launch-failed', cause: expect.objectContaining({ code: 'EISDIR' }) });
+    rmSync(obstruction, { recursive: true });
+  }, 30_000);
+
+  it('adopt once closeAll has started throws instead of returning a process that never settles', async () => {
+    const host = newHost();
+    const reservation = await host.reserve('claude') as Reservation;
+    const closing = host.closeAll();
+    expect(() => reservation.adopt({ command: NODE, args: [FAKE], env: {}, signal: new AbortController().signal })).toThrow(/process host is closing/);
+    await closing;
+    expect(host.snapshot()).toEqual([]);
   }, 30_000);
 
   it('the spawn deadline raises holder-not-ready', async () => {
