@@ -41,7 +41,6 @@
 #define PROBE_INTERVAL_MS 100
 #define EXIT_FLUSH_MS 2000
 #define RECEIPT_MAX 96
-#define QUEUE_CAP 256
 #define FIELD_MAX (1u << 20)
 #define COUNT_MAX (1u << 16)
 #define NONCE_MAX 32
@@ -79,8 +78,9 @@ struct status_parser {
   unsigned err;
 };
 
-struct receipt { char text[RECEIPT_MAX]; size_t len, written; bool keep; };
-struct receipt_queue { struct receipt items[QUEUE_CAP]; size_t head, count; };
+struct receipt { char text[RECEIPT_MAX]; size_t len, written; };
+/* A ring that grows: no receipt is ever dropped, and commands are always read so their EOF is always seen. */
+struct receipt_queue { struct receipt *items; size_t head, count, cap; };
 
 struct holder {
   enum phase phase;
@@ -149,28 +149,23 @@ static void on_sigchld(int sig) {
 
 /* ---- receipts ------------------------------------------------------------ */
 
-static bool is_diagnostic(const char *text) {
-  return strncmp(text, "hello ", 6) == 0 || strncmp(text, "not-ready ", 10) == 0;
-}
+static _Noreturn void finish(struct holder *h, int code);
 
-static void queue_drop_diagnostic(struct receipt_queue *q) {
-  for (size_t i = 0; i < q->count; i++) {
-    size_t at = (q->head + i) % QUEUE_CAP;
-    if (q->items[at].keep) continue;
-    for (size_t j = i; j + 1 < q->count; j++) {
-      q->items[(q->head + j) % QUEUE_CAP] = q->items[(q->head + j + 1) % QUEUE_CAP];
-    }
-    q->count--;
-    return;
-  }
-  logmsg("receipt queue full of retained receipts; dropping the oldest");
-  q->head = (q->head + 1) % QUEUE_CAP;
-  q->count--;
+static bool queue_grow(struct receipt_queue *q) {
+  size_t cap = q->cap ? q->cap * 2 : 64;
+  struct receipt *items = malloc(cap * sizeof *items);
+  if (!items) return false;
+  for (size_t i = 0; i < q->count; i++) items[i] = q->items[(q->head + i) % q->cap];
+  free(q->items);
+  q->items = items;
+  q->head = 0;
+  q->cap = cap;
+  return true;
 }
 
 static void emit(struct holder *h, const char *fmt, ...) {
   if (h->receipt_fd < 0) return;
-  struct receipt r = { .len = 0, .written = 0, .keep = true };
+  struct receipt r = { .len = 0, .written = 0 };
   va_list ap;
   va_start(ap, fmt);
   int n = vsnprintf(r.text, sizeof r.text - 1, fmt, ap);
@@ -178,10 +173,9 @@ static void emit(struct holder *h, const char *fmt, ...) {
   if (n < 0 || n >= (int)sizeof r.text - 1) { logmsg("receipt too long: %.20s", r.text); return; }
   r.text[n++] = '\n';
   r.len = (size_t)n;
-  r.keep = !is_diagnostic(r.text);
   struct receipt_queue *q = &h->out;
-  if (q->count == QUEUE_CAP) queue_drop_diagnostic(q);
-  q->items[(q->head + q->count) % QUEUE_CAP] = r;
+  if (q->count == q->cap && !queue_grow(q)) { logmsg("out of memory for receipts"); finish(h, CODE_INTERNAL); }
+  q->items[(q->head + q->count) % q->cap] = r;
   q->count++;
 }
 
@@ -200,7 +194,7 @@ static void flush_receipts(struct holder *h) {
       return;
     }
     r->written += (size_t)n;
-    if (r->written == r->len) { q->head = (q->head + 1) % QUEUE_CAP; q->count--; }
+    if (r->written == r->len) { q->head = (q->head + 1) % q->cap; q->count--; }
   }
 }
 
@@ -251,6 +245,7 @@ static const char *env_path(char *const *envp) {
 static int exec_resolved(const char *file, char *const *argv, char *const *envp) {
   if (strchr(file, '/')) { execve(file, argv, envp); return errno; }
   const char *path = env_path(envp);
+  if (path && *path == '\0') return ENOENT;
   char fallback[4096];
   if (!path) {
 #ifdef __APPLE__
@@ -399,6 +394,8 @@ static void on_reap(struct holder *h, const char *nonce) {
 
 static void on_probe(struct holder *h, const char *nonce) {
   if (h->identity == ID_NONE) { emit(h, "refused probe %s not-launched", nonce); return; }
+  /* Before the reap the zombie answers for its group on Linux and with EPERM on macOS; neither is a proof. */
+  if (h->identity == ID_RETAINED) { emit(h, "not-ready %s", nonce); return; }
   int err = signal_group(h, 0);
   if (err == 0) emit(h, "live %s", nonce);
   else if (err == ESRCH) emit(h, "empty %s", nonce);
@@ -709,7 +706,7 @@ int main(void) {
   for (;;) {
     struct pollfd fds[4];
     int cmd_i = -1, self_i = -1, status_i = -1, receipt_i = -1, n = 0;
-    if (h.cmd_fd >= 0 && h.out.count + 2 <= QUEUE_CAP) { cmd_i = n; fds[n++] = (struct pollfd){ .fd = h.cmd_fd, .events = POLLIN }; }
+    if (h.cmd_fd >= 0) { cmd_i = n; fds[n++] = (struct pollfd){ .fd = h.cmd_fd, .events = POLLIN }; }
     self_i = n;
     fds[n++] = (struct pollfd){ .fd = h.self_r, .events = POLLIN };
     if (h.status.fd >= 0) { status_i = n; fds[n++] = (struct pollfd){ .fd = h.status.fd, .events = POLLIN }; }

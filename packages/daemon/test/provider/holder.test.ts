@@ -147,7 +147,7 @@ describe.skipIf(process.platform === 'win32')('vonvon-holder', () => {
     expect(await holder.take('refused')).toEqual({ kind: 'refused', command: 'kill', nonce: 'k2', reason: 'reaped' });
   });
 
-  it('a retained zombie still answers for its group: kill after exit is sent, not refused, and a probe before reap says live', async () => {
+  it('treats nothing before the reap as proof: probe says not-ready, the final kill is reported as the call returned, and only the probe after the reap is empty', async () => {
     const holder = start();
     await holder.take('hello');
     holder.send({ command: 'probe', nonce: 'p0' });
@@ -158,9 +158,17 @@ describe.skipIf(process.platform === 'win32')('vonvon-holder', () => {
     await holder.take('ready');
     expect(await holder.take('provider-exit')).toEqual({ kind: 'provider-exit', code: 5, signal: null });
     holder.send({ command: 'probe', nonce: 'p1' });
-    expect(await holder.take('live')).toMatchObject({ nonce: 'p1' });
+    expect(await holder.take('not-ready')).toEqual({ kind: 'not-ready', nonce: 'p1' });
     holder.send({ command: 'kill', nonce: 'k1' });
-    expect(await holder.take('sent')).toEqual({ kind: 'sent', rung: 'kill', nonce: 'k1' });
+    // A group whose only member is the retained zombie: Linux answers 0, macOS answers EPERM.
+    const final = await Promise.race([holder.take('sent'), holder.take('refused')]);
+    expect(final).toEqual(process.platform === 'darwin'
+      ? { kind: 'refused', command: 'kill', nonce: 'k1', reason: 1 }
+      : { kind: 'sent', rung: 'kill', nonce: 'k1' });
+    holder.send({ command: 'reap', nonce: 'r1' });
+    await holder.take('reaped');
+    holder.send({ command: 'probe', nonce: 'p2' });
+    expect(await holder.take('empty')).toEqual({ kind: 'empty', nonce: 'p2' });
   });
 
   for (const path of ['abandon', 'eof', 'term'] as const) {
@@ -236,6 +244,48 @@ describe.skipIf(process.platform === 'win32')('vonvon-holder', () => {
       expect(holder.peek('provider-exit')).toEqual([]);
     });
   }
+
+  it('finds no candidate on an empty PATH even when the cwd holds an executable of that name', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vonvon-emptypath-'));
+    tempDirs.push(dir);
+    writeFileSync(join(dir, 'foo'), '#!/bin/sh\necho works\n');
+    chmodSync(join(dir, 'foo'), 0o755);
+    const holder = start();
+    await holder.take('hello');
+    holder.send({ command: 'launch', nonce: 'l1', file: 'foo', args: [], env: { PATH: '' }, cwd: dir });
+    groups.push((await holder.take('created')).pid);
+    holder.send({ command: 'go', nonce: 'g1' });
+    expect(await holder.take('launch-failed')).toEqual({ kind: 'launch-failed', nonce: 'l1', step: 'exec', errno: 2 });
+    expect(Buffer.concat(holder.providerOut).toString()).toBe('');
+  });
+
+  it('keeps every receipt while the daemon is not reading: thousands of answers arrive complete and in order', async () => {
+    const holder = start();
+    await holder.take('hello');
+    const receipts = holder.child.stdout!;
+    receipts.pause();
+    const count = 5000;
+    for (let i = 0; i < count; i++) holder.send({ command: 'probe', nonce: `p${i}` });
+    await sleep(500);
+    receipts.resume();
+    for (let i = 0; i < count; i++) {
+      expect(await holder.take('refused')).toEqual({ kind: 'refused', command: 'probe', nonce: `p${i}`, reason: 'not-launched' });
+    }
+  }, 30_000);
+
+  it('sees command EOF while the receipt reader is stalled, and still ends the tree and exits', async () => {
+    const holder = start();
+    const pid = await running(holder, nodeLaunch(SCRIPTS.treeStay));
+    const grandchild = Number(/gc (\d+)/.exec(await holder.providerStdout(text => /gc \d+\n/.test(text)))?.[1]);
+    holder.child.stdout!.pause();
+    // Enough answers to overrun the receipt socket's buffer, so the holder holds a backlog when EOF comes.
+    for (let i = 0; i < 50_000; i++) holder.send({ command: 'probe', nonce: `p${i}` });
+    holder.closeCommands();
+    const exit = await Promise.race([holder.exit, sleep(10_000).then(() => 'still running')]);
+    expect(exit).toEqual({ code: 0, signal: null });
+    expect(groupEmpty(pid)).toBe(true);
+    expect(alive(grandchild)).toBe(false);
+  }, 20_000);
 
   it('fails ENOEXEC on an executable file without a valid header instead of running it through a shell', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'vonvon-noexec-'));
