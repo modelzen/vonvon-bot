@@ -1,0 +1,239 @@
+import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import type { ProcessFact } from '../../src/provider/engines/engine';
+import { readLedger, type HostPlatform } from '../../src/provider/process/ledger';
+import { nextStep, ProcessHost, Reservation, type HostedProcess, type Identity, type Phase, type Step } from '../../src/provider/process/process-host';
+import { alive, until } from './channel-recorder';
+import { compileHolder, type HolderBinary } from './native/holder-driver';
+
+const NODE = process.execPath;
+const FAKE = fileURLToPath(new URL('./fixtures/fake-child.mjs', import.meta.url));
+const PLATFORM: HostPlatform = process.platform === 'win32' ? 'win32' : 'posix';
+const groupEmpty = (pid: number): boolean => { try { process.kill(-pid, 0); return false; } catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; } };
+
+let binary: HolderBinary | undefined;
+const hosts: ProcessHost[] = [];
+const dirs: string[] = [];
+const groups: number[] = [];
+
+beforeAll(() => { if (PLATFORM === 'posix') binary = compileHolder(); });
+afterAll(() => binary?.dispose());
+afterEach(async () => {
+  await Promise.all(hosts.splice(0).map(host => host.closeAll()));
+  for (const pid of groups.splice(0)) { try { process.kill(PLATFORM === 'posix' ? -pid : pid, 'SIGKILL'); } catch { /* already empty */ } }
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+function dataDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'vonvon-process-host-'));
+  dirs.push(dir);
+  return dir;
+}
+function newHost(dir: string): ProcessHost {
+  const host = new ProcessHost({ dataDir: dir, daemonBootId: randomUUID(), platform: PLATFORM, holderPath: binary?.path, spawnDeadlineMs: 20_000 });
+  hosts.push(host);
+  return host;
+}
+const ledgerOf = (dir: string) => readLedger(join(dir, 'process-owners.json'));
+
+/** Spawns the fixture through the host and waits until it is armed; returns the provider pid and any grandchild pids. */
+async function spawnFake(host: ProcessHost, args: string[]): Promise<{ hosted: HostedProcess; pid: number; grandchildren: number[]; facts: ProcessFact[] }> {
+  const hosted = await host.spawn('codex', 'session-1', { file: NODE, args: [FAKE, ...args], env: { PATH: process.env.PATH ?? '' } });
+  const facts: ProcessFact[] = [];
+  hosted.watch(fact => facts.push(fact));
+  let text = '';
+  hosted.stdout.on('data', (chunk: Buffer) => { text += chunk.toString(); });
+  await until(() => text.includes('armed\n'), 'fake child armed');
+  const pid = Number(/pid (\d+)/.exec(text)?.[1]);
+  groups.push(pid);
+  const grandchildren = [...text.matchAll(/gc (\d+)/g)].map(match => Number(match[1]));
+  return { hosted, pid, grandchildren, facts };
+}
+
+describe('nextStep', () => {
+  const rows: Array<[Identity, Phase, Step]> = [
+    ['retained', 'signalling', { send: 'kill' }],
+    ['retained', 'receipted', { wait: true }],
+    ['retained', 'observed', { send: 'reap' }],
+    ['retained', 'reaped', { send: 'probe' }],
+    ['retained', 'probed', { done: 'gone' }],
+    ['reaped', 'signalling', { send: 'probe' }],
+    ['reaped', 'observed', { send: 'probe' }],
+    ['reaped', 'reaped', { send: 'probe' }],
+    ['reaped', 'probed', { done: 'gone' }],
+    ['lost', 'signalling', { probe: 'daemon' }],
+    ['lost', 'reaped', { probe: 'daemon' }],
+    ['lost', 'probed', { done: 'gone' }],
+  ];
+  it.each(rows)('%s + %s -> %j', (identity, phase, step) => {
+    expect(nextStep({ identity, phase })).toEqual(step);
+  });
+  it('never signals once the identity is reaped or lost', () => {
+    for (const identity of ['reaped', 'lost'] as const) {
+      for (const phase of ['signalling', 'receipted', 'observed', 'reaped', 'probed'] as const) {
+        const step = nextStep({ identity, phase });
+        expect('send' in step && (step.send === 'kill' || step.send === 'reap')).toBe(false);
+      }
+    }
+  });
+});
+
+describe.skipIf(PLATFORM !== 'posix')('ProcessHost on POSIX', () => {
+  it('spawn writes process-owners.json at stage running before it resolves, and end retires the record', async () => {
+    const dir = dataDir();
+    const host = newHost(dir);
+    expect(host.available()).toBe(true);
+    const { hosted, pid } = await spawnFake(host, []);
+    const holderPid = host.snapshot()[0]?.holderPid as number;
+    const read = ledgerOf(dir);
+    expect(read.kind).toBe('ok');
+    const record = read.kind === 'ok' ? read.records[0] : undefined;
+    expect(record?.stage).toBe('running');
+    expect(record && 'provider' in record ? record.provider.pid : undefined).toBe(pid);
+    expect(record?.sessionId).toBe('session-1');
+    expect(host.owesWork()).toBe(true);
+    await hosted.end();
+    expect(ledgerOf(dir).kind).toBe('missing');
+    expect(host.snapshot()).toEqual([]);
+    expect(host.owesWork()).toBe(false);
+    expect(alive(pid)).toBe(false);
+    await until(() => !alive(holderPid), 'holder exit after the exit command');
+  }, 30_000);
+
+  it('terminateTree on a TERM-ignoring tree returns sent, then killTree removes every pid in the group and watch() reports the exit without transport-lost', async () => {
+    const host = newHost(dataDir());
+    const { hosted, pid, grandchildren, facts } = await spawnFake(host, ['--ignore-term', '--grandchildren', '1']);
+    expect(grandchildren).toHaveLength(1);
+    expect(await hosted.term()).toBe('sent');
+    expect(alive(pid)).toBe(true);
+    expect(await hosted.kill()).toBe('sent');
+    await until(() => host.snapshot().length === 0, 'record gone after kill');
+    expect(alive(pid)).toBe(false);
+    expect(alive(grandchildren[0] as number)).toBe(false);
+    expect(groupEmpty(pid)).toBe(true);
+    expect(facts).toEqual([{ kind: 'exit', exit: { observed: 'parent', code: null, signal: 'SIGKILL' } }]);
+  }, 30_000);
+
+  it('watch() reports transport-lost after the hold when stdout closes with no exit, and the exit still follows', async () => {
+    const host = newHost(dataDir());
+    const { hosted, facts } = await spawnFake(host, ['--ignore-term', '--close-stdout-ms', '100']);
+    await until(() => facts.length > 0, 'transport-lost', 5000);
+    expect(facts).toEqual([{ kind: 'transport-lost' }]);
+    await hosted.end();
+    expect(facts).toEqual([{ kind: 'transport-lost' }, { kind: 'exit', exit: { observed: 'parent', code: null, signal: 'SIGKILL' } }]);
+  }, 30_000);
+
+  it('after daemon death the holder ends the tree itself and the next host sweeps the record as gone: 1', async () => {
+    const dir = dataDir();
+    const first = newHost(dir);
+    const { pid, grandchildren } = await spawnFake(first, ['--ignore-term', '--grandchildren', '1']);
+    const holderPid = first.snapshot()[0]?.holderPid as number;
+    first.simulateDaemonDeath();
+    await until(() => !alive(holderPid), 'holder exit after daemon death', 20_000);
+    expect(ledgerOf(dir).kind).toBe('ok');
+    const second = newHost(dir);
+    expect(second.snapshot()[0]?.ownership).toBe('unknown');
+    expect(await second.sweepOrphans()).toEqual({ gone: 1, unknown: 0, inert: 0, legacy: 0 });
+    expect(ledgerOf(dir).kind).toBe('missing');
+    expect(groupEmpty(pid)).toBe(true);
+    expect(alive(grandchildren[0] as number)).toBe(false);
+  }, 40_000);
+
+  it('a record whose holder pid carries another start token is sealed but stays unknown until its probe is empty', async () => {
+    const dir = dataDir();
+    const leader = spawn(NODE, ['-e', 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
+    const standIn = spawn(NODE, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+    groups.push(leader.pid as number, standIn.pid as number);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const record = { id: randomUUID(), daemonBootId: 'earlier-boot', providerId: 'codex', stage: 'running', holder: { pid: standIn.pid, start: 'linux:deadbeef:1' }, provider: { pid: leader.pid } };
+    writeFileSync(join(dir, 'process-owners.json'), JSON.stringify({ version: 1, records: [record] }));
+    const host = newHost(dir);
+    expect(await host.sweepOrphans()).toEqual({ gone: 0, unknown: 1, inert: 0, legacy: 0 });
+    const refusal = await host.reserve('codex');
+    expect(refusal).toMatchObject({ reason: 'owned-work-unverified' });
+    expect(ledgerOf(dir)).toMatchObject({ kind: 'ok', records: [{ id: record.id }] });
+    process.kill(-(leader.pid as number), 'SIGKILL');
+    await until(() => groupEmpty(leader.pid as number), 'leader group empty');
+    expect(await host.sweepOrphans()).toEqual({ gone: 1, unknown: 0, inert: 0, legacy: 0 });
+    const reservation = await host.reserve('codex');
+    expect(reservation).toBeInstanceOf(Reservation);
+    await (reservation as Reservation).release();
+    standIn.kill('SIGKILL');
+  }, 30_000);
+
+  it('a holder killed first leaves an unknown record that refuses admission until its members die, then a sweep retires it', async () => {
+    const dir = dataDir();
+    const host = newHost(dir);
+    const { pid, grandchildren } = await spawnFake(host, ['--ignore-term', '--grandchildren', '1']);
+    process.kill(host.snapshot()[0]?.holderPid as number, 'SIGKILL');
+    await until(() => host.snapshot()[0]?.ownership === 'unknown', 'record unknown after the holder died');
+    expect(await host.reserve('codex')).toMatchObject({ reason: 'owned-work-unverified' });
+    expect(alive(pid)).toBe(true);
+    expect(host.owesWork()).toBe(true);
+    process.kill(-pid, 'SIGKILL');
+    await until(() => groupEmpty(pid) && !alive(grandchildren[0] as number), 'members gone');
+    expect(await host.sweepOrphans()).toEqual({ gone: 1, unknown: 0, inert: 0, legacy: 0 });
+    expect(ledgerOf(dir).kind).toBe('missing');
+    const reservation = await host.reserve('codex');
+    expect(reservation).toBeInstanceOf(Reservation);
+    await (reservation as Reservation).release();
+  }, 30_000);
+
+  it('an unreadable ledger refuses admission and is never rewritten', async () => {
+    const dir = dataDir();
+    const path = join(dir, 'process-owners.json');
+    writeFileSync(path, '{"version":1,"records":[{"stage":"nonsense"}]}');
+    const before = readFileSync(path);
+    const host = newHost(dir);
+    expect(await host.reserve('codex')).toMatchObject({ reason: 'owned-work-unverified' });
+    expect(await host.sweepOrphans()).toEqual({ gone: 0, unknown: 0, inert: 0, legacy: 0 });
+    expect(readFileSync(path).equals(before)).toBe(true);
+  });
+
+  it('lists legacy owned-pids.json records until the host boot time passes their start, then removes them', async () => {
+    const dir = dataDir();
+    const path = join(dir, 'owned-pids.json');
+    const base = { daemonBootId: 'old', providerId: 'codex', sessionId: 's' };
+    writeFileSync(path, JSON.stringify([{ pid: 1, startedAtMs: Date.now() + 3_600_000, ...base }, { pid: 2, startedAtMs: 1, ...base }]));
+    expect(await newHost(dir).sweepOrphans()).toMatchObject({ legacy: 1 });
+    expect(JSON.parse(readFileSync(path, 'utf8'))).toMatchObject([{ pid: 1 }]);
+    writeFileSync(path, JSON.stringify([{ pid: 2, startedAtMs: 1, ...base }]));
+    expect(await newHost(dir).sweepOrphans()).toMatchObject({ legacy: 0 });
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it('closeAll releases an unused reservation: the holder exits and the born record is retired', async () => {
+    const dir = dataDir();
+    const host = newHost(dir);
+    const reservation = await host.reserve('codex');
+    expect(reservation).toBeInstanceOf(Reservation);
+    expect(ledgerOf(dir)).toMatchObject({ kind: 'ok', records: [{ stage: 'born' }] });
+    const holderPid = host.snapshot()[0]?.holderPid as number;
+    expect(host.owesWork()).toBe(false);
+    await host.closeAll();
+    expect(alive(holderPid)).toBe(false);
+    expect(ledgerOf(dir).kind).toBe('missing');
+    expect(host.snapshot()).toEqual([]);
+    expect(() => (reservation as Reservation).spawn({ file: NODE, args: [], env: {} })).toThrow(/not an unused reservation/);
+  }, 20_000);
+});
+
+describe.skipIf(PLATFORM !== 'win32')('ProcessHost on Windows', () => {
+  it('spawns through the supervisor, records running with the Job name, and kill retires the record', async () => {
+    const dir = dataDir();
+    const host = newHost(dir);
+    expect(host.available()).toBe(true);
+    const { hosted, pid, facts } = await spawnFake(host, []);
+    expect(ledgerOf(dir)).toMatchObject({ kind: 'ok', records: [{ stage: 'running', provider: { pid }, control: { jobName: expect.stringMatching(/^Local\\vonvon-/) } }] });
+    expect(await hosted.term()).toBe('accepted');
+    expect(await hosted.kill()).toBe('sent');
+    await until(() => host.snapshot().length === 0, 'record gone after kill', 20_000);
+    expect(alive(pid)).toBe(false);
+    expect(facts[0]).toMatchObject({ kind: 'exit', exit: { observed: 'parent' } });
+  }, 120_000);
+});
