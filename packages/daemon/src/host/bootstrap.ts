@@ -6,7 +6,7 @@ import { recordServicePid, clearServicePid } from '../service/win-startup';
 import { readServiceCodexBin } from '../service/codex-bin';
 import { acquirePidLock, publishPidLock, releasePidLock, type PidLockInfo } from '../server/pid-lock';
 import { log } from '../core/logger';
-import { ProcessHost } from '../provider/process/process-host';
+import { defaultHolderPath, ProcessHost } from '../provider/process/process-host';
 
 export async function runHostRuntime(options: { bot?: string; port?: number; managed: boolean; control?: ShutdownControl }): Promise<void> {
   const control = options.control ?? observeShutdown(options.managed);
@@ -21,9 +21,12 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
     }
     if (control.requested) return;
     if (owner) recordServicePid();
-    host = new ProcessHost({ dataDir: paths.appDir, daemonBootId: randomUUID(), platform: process.platform === 'win32' ? 'win32' : 'posix' });
+    host = new ProcessHost({
+      dataDir: paths.appDir, daemonBootId: randomUUID(),
+      ...(process.platform === 'win32' ? { platform: 'win32' } : { platform: 'posix', holderPath: defaultHolderPath() }),
+    });
     log.info('process-host', 'boot-sweep', { ...await host.sweepOrphans() });
-    // Lane 10 hook: the variable names a fake-child.mjs path, spawned as a TERM-ignoring tree so a kill -9 of the daemon leaves orphans to sweep.
+    // Lane 10 hook: the value is a fake-child.mjs path; the real `vonvon daemon run` has no other seam a lane can reach.
     if (process.env.VONVON_TEST_SPAWN_FAKE_CHILD) {
       await host.spawn('codex', 'lane-10', { file: process.execPath, args: [process.env.VONVON_TEST_SPAWN_FAKE_CHILD, '--ignore-term', '--grandchildren', '1'], env: { PATH: process.env.PATH ?? '' } });
     }
