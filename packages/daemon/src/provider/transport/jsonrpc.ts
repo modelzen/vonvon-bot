@@ -100,6 +100,7 @@ export class JsonRpcPeer {
     input.on('end', () => inputClosed(new Error('JSON-RPC input ended')));
     input.on('error', error => this.close(error));
     input.on('close', () => inputClosed(new Error('JSON-RPC input closed')));
+    output.on('close', () => this.close(new Error('JSON-RPC output closed')));
     output.on('error', error => this.close(error));
   }
 
@@ -302,11 +303,13 @@ export class AppServerClient {
       this.notifications.close();
       void this.close().catch(error => log.fail('agent', error, { phase: 'process-error-close' }));
     });
-    child.stdin.on('error', (err) => {
+    const outputClosed = (err: Error) => {
       peer.close(err);
       this.notifications.close();
-      void this.close().catch(error => log.fail('agent', error));
-    });
+      if (!this.hasExited) void this.close().catch(error => log.fail('agent', error));
+    };
+    child.stdin.on('error', outputClosed);
+    child.stdin.on('close', () => outputClosed(new Error('app-server stdin closed')));
 
     await this.request('initialize', {
       clientInfo: { name: this.opts.clientName ?? 'feishu-codex-bridge', version: '0.0.1' },
@@ -329,7 +332,7 @@ export class AppServerClient {
     this.peer?.notify(method, params);
   }
 
-  /** async-iterate server notifications (closes when the process exits). */
+  /** async-iterate server notifications (closes when the transport or process ends). */
   stream(): AsyncIterable<ServerNotification> {
     return this.notifications;
   }
