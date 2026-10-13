@@ -25,17 +25,17 @@ jobs:
         shell: pwsh
         run: |
           @'
-          const { buildSync } = require('esbuild');
-          const { execFileSync } = require('node:child_process');
-          const { join } = require('node:path');
-          buildSync({ entryPoints: ['packages/desktop/src/daemon-dependencies.ts'], outfile: 'windows-parser-probe.cjs', bundle: true, platform: 'node', format: 'cjs', packages: 'external' });
-          const { parseWindowsRunQuery } = require('./windows-parser-probe.cjs');
+          import { buildSync } from 'esbuild';
+          import { execFileSync } from 'node:child_process';
+          import { join } from 'node:path';
+          buildSync({ entryPoints: ['packages/desktop/src/daemon-dependencies.ts'], outfile: 'windows-parser-probe.mjs', bundle: true, platform: 'node', format: 'esm', packages: 'external' });
+          const { parseWindowsRunQuery } = await import('./windows-parser-probe.mjs');
           const key = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
           const output = execFileSync(join(process.env.SystemRoot, 'System32', 'reg.exe'), ['query', key], { encoding: 'utf8' });
           const header = output.split(/\r?\n/).find(line => line.trim())?.trim();
           const parsed = parseWindowsRunQuery(output);
           console.log(JSON.stringify({ source: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), header, expected: key.replace('HKCU', 'HKEY_CURRENT_USER'), kind: parsed.kind, reason: parsed.kind === 'unavailable' ? parsed.reason : undefined }));
-          '@ | Set-Content -Encoding utf8 probe.cjs
-          node probe.cjs
+          '@ | Set-Content -Encoding utf8 probe.mjs
+          node probe.mjs
       - name: Recheck unchanged keystore concurrency test
         run: npx vitest run --root packages/daemon test/keystore.test.ts
