@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -41,8 +41,9 @@ describe.skipIf(process.platform !== 'win32')('today\'s WindowsCodexJob', () => 
         `[IO.File]::Move(${literal(result + '.tmp')}, ${literal(result)})`,
         'Start-Sleep -Seconds 600',
       ].join('\n');
-      const encoded = Buffer.from(script, 'utf16le').toString('base64');
-      const child = spawn(job.executable, job.launch(job.executable, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded]), { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      const scriptFile = join(dir, 'breakaway.ps1');
+      writeFileSync(scriptFile, script, 'utf8');
+      const child = spawn(job.executable, job.launch(job.executable, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptFile]), { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
       let stderr = '';
       child.stderr.on('data', data => { stderr += String(data); });
       child.stdout.resume();
