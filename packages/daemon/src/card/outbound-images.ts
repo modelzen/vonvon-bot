@@ -1,8 +1,9 @@
-import { readFile, realpath, stat } from 'node:fs/promises';
-import { extname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { readFile, stat } from 'node:fs/promises';
+import { extname, resolve } from 'node:path';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { log } from '../core/logger';
 import type { PermissionMode } from '../agent/types';
+import { checkUploadPath, fetchRemoteImage, uploadPlan } from '../provider/outbound/policy';
 import { imageSources } from './md-scan';
 
 /**
@@ -18,7 +19,8 @@ import { imageSources } from './md-scan';
  * Sources are either a LOCAL file (relative to the run cwd, or an absolute path
  * INSIDE that cwd subtree — outside is refused for qa/write so the agent can't
  * make the bot upload `~/.ssh/…`; a `full`-permission project may read any local
- * image, matching what its shell can already print) or an `http(s)` URL.
+ * image, matching what its shell can already print) or an `http(s)` URL,
+ * fetched only when the project's network switch is on, in every tier.
  * Everything is best-effort: a rejected path, a missing file, an oversized image
  * or a failed upload is logged and skipped — never throwing.
  */
@@ -34,8 +36,6 @@ export const MAX_IMAGES = 30;
 const UPLOAD_CONCURRENCY = 4;
 /** Feishu rejects uploads over 10MB (and 0-byte files). */
 const MAX_BYTES = 10 * 1024 * 1024;
-/** Abort a remote fetch that stalls — a hung URL must not hold up the reply. */
-const DOWNLOAD_TIMEOUT_MS = 10_000;
 /** Abort an upload that stalls. The SDK's axios client has NO request timeout, so
  * without this a single wedged `image.create` hangs its caller forever — and the
  * terminal card frame is sequenced behind it, leaving the card stuck on
@@ -68,6 +68,7 @@ export async function uploadOutboundImages(
   sources: string[],
   cwd: string,
   mode: PermissionMode,
+  network: boolean,
 ): Promise<Map<string, string>> {
   const picked = sources.slice(0, MAX_IMAGES);
   if (sources.length > picked.length) {
@@ -75,7 +76,7 @@ export async function uploadOutboundImages(
   }
   const results = await mapPool(picked, UPLOAD_CONCURRENCY, async (src) => {
     try {
-      return [src, await resolveAndUpload(channel, src, cwd, mode)] as const;
+      return [src, await resolveAndUpload(channel, src, cwd, mode, network)] as const;
     } catch (err) {
       log.warn('outbound', 'image-failed', { src: src.slice(0, 80), err: String(err) });
       return [src, undefined] as const;
@@ -92,8 +93,9 @@ async function resolveAndUpload(
   src: string,
   cwd: string,
   mode: PermissionMode,
+  network: boolean,
 ): Promise<string | undefined> {
-  const { buffer, cacheKey } = await loadSource(src, cwd, mode);
+  const { buffer, cacheKey } = await loadSource(src, cwd, mode, network);
   if (!buffer) return undefined;
   const hit = cache.get(cacheKey);
   if (hit) return hit;
@@ -105,33 +107,13 @@ async function resolveAndUpload(
 /** Load a source's bytes + a stable cache key. `buffer` undefined ⇒ rejected
  * (out of cwd / bad ext / missing / oversized / fetch failed); the cache key is
  * still returned but never populated, so it's harmless. */
-async function loadSource(src: string, cwd: string, mode: PermissionMode): Promise<{ buffer?: Buffer; cacheKey: string }> {
-  if (/^https?:\/\//i.test(src)) return loadRemote(src);
-  return loadLocal(src, cwd, mode);
-}
-
-/** True when `abs` is `cwdAbs` itself or lives under it. Deliberately a
- * relative-path test rather than a string prefix: with the service's fallback
- * cwd of `/` (or any path ending in a separator) `cwdAbs + sep` becomes `//` and
- * matches nothing, which silently rejected every image ref; `..` segments can
- * likewise never fake a match here. */
-function lexicallyInside(cwdAbs: string, abs: string): boolean {
-  if (abs === cwdAbs) return true;
-  const rel = relative(cwdAbs, abs);
-  return rel !== '' && !rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel);
-}
-
-/** {@link lexicallyInside}, then once more on the symlink-resolved paths so a
- * project reachable through two names (macOS `/tmp` → `/private/tmp`, a
- * symlinked home) doesn't false-reject a genuine in-workspace file. Best-effort:
- * a missing path just fails the retry. */
-async function insideWorkspace(cwdAbs: string, abs: string): Promise<boolean> {
-  if (lexicallyInside(cwdAbs, abs)) return true;
-  try {
-    return lexicallyInside(await realpath(cwdAbs), await realpath(abs));
-  } catch {
-    return false;
+async function loadSource(src: string, cwd: string, mode: PermissionMode, network: boolean): Promise<{ buffer?: Buffer; cacheKey: string }> {
+  if (/^https?:\/\//i.test(src)) {
+    const buffer = await fetchRemoteImage(src, await uploadPlan({ cwd, mode, network }));
+    if (!buffer) log.warn('outbound', 'image-remote-refused', { url: src.slice(0, 80), network });
+    return { buffer, cacheKey: `url:${src}` };
   }
+  return loadLocal(src, cwd, mode);
 }
 
 async function loadLocal(
@@ -145,12 +127,15 @@ async function loadLocal(
   // hand us that cwd (see the run-cwd plumbing in ../bot/handle-message); a
   // wrong one turns every `![](video_frames/x.png)` into a bogus
   // image-outside-cwd rejection.
-  const abs = isAbsolute(src) ? resolve(src) : resolve(cwdAbs, src);
-  // Security: qa/write only reach inside the run cwd subtree — never an arbitrary
-  // path the agent names (so it can't exfiltrate local images via the bot). A
-  // `full` project already has unrestricted local read in its shell, so its
-  // agent may reference any local image.
-  if (mode !== 'full' && !(await insideWorkspace(cwdAbs, abs))) {
+  const abs = resolve(cwdAbs, src);
+  let canonical: string | undefined;
+  try {
+    canonical = await checkUploadPath(await uploadPlan({ cwd, mode, network: false }), abs);
+  } catch {
+    log.warn('outbound', 'image-missing', { src: src.slice(0, 80) });
+    return { cacheKey: `local:${abs}` };
+  }
+  if (!canonical) {
     log.warn('outbound', 'image-outside-cwd', { src: src.slice(0, 80), cwd: cwdAbs, mode });
     return { cacheKey: `local:${abs}` };
   }
@@ -162,54 +147,20 @@ async function loadLocal(
   let size: number;
   let mtimeMs: number;
   try {
-    const st = await stat(abs);
+    const st = await stat(canonical);
     if (!st.isFile()) throw new Error('not a file');
     size = st.size;
     mtimeMs = st.mtimeMs;
   } catch {
     log.warn('outbound', 'image-missing', { src: src.slice(0, 80) });
-    return { cacheKey: `local:${abs}` };
+    return { cacheKey: `local:${canonical}` };
   }
   if (size === 0 || size > MAX_BYTES) {
     log.warn('outbound', 'image-size', { size, src: src.slice(0, 80) });
-    return { cacheKey: `local:${abs}:${size}` };
+    return { cacheKey: `local:${canonical}:${size}` };
   }
-  const buffer = await readFile(abs);
-  return { buffer, cacheKey: `local:${abs}:${mtimeMs}:${size}` };
-}
-
-async function loadRemote(url: string): Promise<{ buffer?: Buffer; cacheKey: string }> {
-  const cacheKey = `url:${url}`;
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), DOWNLOAD_TIMEOUT_MS);
-  try {
-    const res = await fetch(url, { signal: ctrl.signal, redirect: 'follow' });
-    if (!res.ok) {
-      log.warn('outbound', 'image-http', { url: url.slice(0, 80), status: res.status });
-      return { cacheKey };
-    }
-    const ct = (res.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase();
-    if (ct && !ct.startsWith('image/')) {
-      log.warn('outbound', 'image-ctype', { ct, url: url.slice(0, 80) });
-      return { cacheKey };
-    }
-    const declared = Number(res.headers.get('content-length') ?? 0);
-    if (declared > MAX_BYTES) {
-      log.warn('outbound', 'image-size', { declared, url: url.slice(0, 80) });
-      return { cacheKey };
-    }
-    const ab = await res.arrayBuffer();
-    if (ab.byteLength === 0 || ab.byteLength > MAX_BYTES) {
-      log.warn('outbound', 'image-size', { size: ab.byteLength, url: url.slice(0, 80) });
-      return { cacheKey };
-    }
-    return { buffer: Buffer.from(ab), cacheKey };
-  } catch (err) {
-    log.warn('outbound', 'image-fetch', { url: url.slice(0, 80), err: String(err) });
-    return { cacheKey };
-  } finally {
-    clearTimeout(timer);
-  }
+  const buffer = await readFile(canonical);
+  return { buffer, cacheKey: `local:${canonical}:${mtimeMs}:${size}` };
 }
 
 async function uploadBuffer(channel: LarkChannel, buffer: Buffer): Promise<string | undefined> {

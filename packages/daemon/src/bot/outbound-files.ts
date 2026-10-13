@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { mkdir, open, readFile, readdir, realpath, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import type { PermissionMode } from '../agent/types';
@@ -11,6 +11,7 @@ import type { CardElement } from '../card/cards';
 import { fileComponentCount, renderFileAnswer, type InlineFiles } from '../card/inline-files';
 import type { CardDispatcher } from '../card/dispatcher';
 import { log } from '../core/logger';
+import { checkUploadPath, uploadPlan } from '../provider/outbound/policy';
 
 export const FILE_GET = 'file.get';
 export const MAX_FILE_BYTES = 30 * 1024 * 1024;
@@ -86,11 +87,6 @@ function fileText(id: string, index: number, file: FileEntry, chatId: string,
   };
 }
 
-function inside(root: string, path: string): boolean {
-  const rel = relative(root, path);
-  return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`));
-}
-
 function sourcePath(src: string, cwd: string): string {
   let path = src;
   if (/^file:\/\//i.test(path)) path = fileURLToPath(path);
@@ -102,8 +98,8 @@ function sourcePath(src: string, cwd: string): string {
 }
 
 async function inspect(path: string, cwd: string, mode: PermissionMode): Promise<FileSnapshot> {
-  const canonical = await realpath(path);
-  if (mode !== 'full' && !inside(await realpath(cwd), canonical)) throw new Error('文件超出项目可访问范围');
+  const canonical = await checkUploadPath(await uploadPlan({ cwd, mode, network: false }), path);
+  if (!canonical) throw new Error('文件超出项目可访问范围');
   const info = await stat(canonical);
   if (!info.isFile()) throw new Error('仅支持获取普通文件');
   if (info.size === 0) throw new Error('飞书不支持发送空文件');

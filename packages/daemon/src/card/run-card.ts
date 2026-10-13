@@ -174,7 +174,7 @@ export function attachRunImages(opts: {
   rc: RunCardState;
   channel: LarkChannel;
   /** `src[] → image_key`. Injected so this wiring is testable without a network;
-   * production passes `(s) => uploadOutboundImages(channel, s, runCwd, mode)`
+   * production passes `(s) => uploadOutboundImages(channel, s, runCwd, mode, network)`
    * (see {@link ./outbound-images}). */
   upload: (sources: string[]) => Promise<Map<string, string>>;
 }): StreamingImages {
