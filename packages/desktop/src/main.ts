@@ -251,13 +251,19 @@ export async function startDesktop(): Promise<void> {
           const ready = await unlessCancelled(managerDependencies.readVerifiedDaemon().catch(() => null));
           if (cancelled()) throw refusal();
           if (ready && (ready.pid !== previous.pid || ready.startedAt !== previous.startedAt)) {
-            const next = await attachExisting(root);
+            const attaching = attachExisting(root);
+            let next: AttachedDaemon;
+            try { next = await unlessCancelled(attaching); }
+            catch (error) {
+              if (cancelled()) void attaching.then(late => late.dispose(), () => {});
+              throw error;
+            }
             if (cancelled() || !bridge) { await next.dispose(); throw refusal(); }
             if (next.identity.pid !== ready.pid || next.identity.startedAt !== ready.startedAt) {
               await next.dispose();
               throw new StartHostRefusal('The daemon owner changed during desktop restart.');
             }
-            await bridge.replaceOwner(next);
+            await unlessCancelled(bridge.replaceOwner(next));
             connectionFailureShown = false;
             controlledDisconnect = false;
             return result;

@@ -54,6 +54,7 @@ export function installBridge(
   let connectionLost = false;
   let activeOwner: AttachedDaemon | null = owner;
   let replacing: Promise<void> | undefined;
+  let candidate: AttachedDaemon | null = null;
   let stoppedStatus: Extract<MachineReply, { type: 'status' }> | undefined;
   const retainedErrors: SafeFailure[] = [];
 
@@ -242,7 +243,11 @@ export function installBridge(
 
   return {
     replaceOwner(next) {
-      if (disposed || replacing) return Promise.reject(new Error('Desktop connection is unavailable'));
+      if (disposed || replacing) {
+        void next.dispose().catch(() => {});
+        return Promise.reject(new Error('Desktop connection is unavailable'));
+      }
+      candidate = next;
       replacing = (async () => {
         binding.dispose();
         const previous = activeOwner;
@@ -267,7 +272,7 @@ export function installBridge(
         connectionLost = false;
         send({ type: 'reattached' });
         binding.activate(initial, loginItem);
-      })().finally(() => { replacing = undefined; });
+      })().finally(() => { replacing = undefined; candidate = null; });
       return replacing;
     },
     requestQuit() {
@@ -281,6 +286,7 @@ export function installBridge(
         subscribed = false;
         window.webContents.removeListener('did-start-navigation', onNavigation);
         for (const channel of registeredChannels) ipcMain.removeHandler(channel);
+        await candidate?.dispose().catch(() => {});
         if (replacing) await replacing.catch(() => {});
         binding.dispose();
         await activeOwner?.dispose();

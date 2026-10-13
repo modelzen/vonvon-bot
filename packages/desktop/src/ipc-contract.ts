@@ -60,6 +60,7 @@ export interface AttachedDaemon {
 
 export interface DesktopBridge {
   requestQuit(): void;
+  /** Takes ownership of `owner`, closing it on failure and when the bridge is disposed mid-replacement. */
   replaceOwner(owner: AttachedDaemon): Promise<void>;
   dispose(): Promise<void>;
 }

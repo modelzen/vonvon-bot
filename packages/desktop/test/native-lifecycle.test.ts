@@ -332,6 +332,40 @@ describe('daemon restart from the window', () => {
     });
   }
 
+  for (const stop of ['quit', 'update cleanup'] as const) {
+    it(`lets ${stop} cancel a restart while the successor replacement is pending`, async () => {
+      const successor = { pid: 47, startedAt: 'replacing', listen: '127.0.0.1:42345' };
+      if (stop === 'update cleanup') await downloadUpdate();
+      fake.verified.mockResolvedValue(successor);
+      fake.attach.mockResolvedValue({ identity: successor, dispose: vi.fn(async () => {}) });
+      fake.bridge.replaceOwner.mockImplementationOnce(() => new Promise<void>(() => {}));
+      const restarting = actions.restartHost(previous, applied);
+      const cancelled = expect(restarting).rejects.toThrow('Desktop restart was cancelled.');
+      await vi.waitFor(() => expect(fake.bridge.replaceOwner).toHaveBeenCalled());
+      await (stop === 'quit' ? actions.confirmQuit() : actions.installDesktopUpdate());
+      await cancelled;
+      expect(fake.bridge.dispose).toHaveBeenCalledOnce();
+      if (stop === 'quit') expect(app.quit).toHaveBeenCalledOnce();
+      else expect(autoUpdater.quitAndInstall).toHaveBeenCalledOnce();
+    });
+  }
+
+  it('closes a successor connection that arrives after a quit', async () => {
+    const successor = { pid: 48, startedAt: 'late', listen: '127.0.0.1:42345' };
+    const late = { identity: successor, dispose: vi.fn(async () => {}) };
+    let deliver!: () => void;
+    fake.verified.mockResolvedValue(successor);
+    fake.attach.mockImplementationOnce(() => new Promise(resolve => { deliver = () => resolve(late); }));
+    const restarting = actions.restartHost(previous, applied);
+    const cancelled = expect(restarting).rejects.toThrow('Desktop restart was cancelled.');
+    await vi.waitFor(() => expect(fake.attach).toHaveBeenCalledTimes(2));
+    await actions.confirmQuit();
+    await cancelled;
+    deliver();
+    await vi.waitFor(() => expect(late.dispose).toHaveBeenCalledOnce());
+    expect(fake.bridge.replaceOwner).not.toHaveBeenCalled();
+  });
+
   it('lets the desktop update cleanup cancel a restart before it attaches the successor', async () => {
     const successor = { pid: 46, startedAt: 'after-update', listen: '127.0.0.1:42345' };
     await downloadUpdate();

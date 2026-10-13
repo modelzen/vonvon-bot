@@ -365,6 +365,54 @@ it('serves installed/stopped status after stop closes RPC, then uses the reattac
   await h.bridge.dispose();
 });
 
+function candidate(snapshot: () => Promise<unknown>) {
+  let close: () => void = () => {};
+  const closed = new Promise<never>((_resolve, reject) => { close = () => reject(new Error('connection closed')); });
+  closed.catch(() => {});
+  const dispose = vi.fn(async () => { close(); });
+  const owner = { client: {
+    snapshot: vi.fn(() => Promise.race([snapshot(), closed])),
+    watchSnapshots: () => () => {}, onLog: () => () => {}, onBackendInstall: () => () => {}, onError: () => () => {},
+  }, identity: { pid: 2, startedAt: 'next', listen: '127.0.0.1:4001' }, dispose } as unknown as AttachedDaemon;
+  return { owner, dispose };
+}
+
+it('closes a replacement candidate whose first snapshot is pending when the bridge is disposed', async () => {
+  const h = harness();
+  await h.invoke(desktopChannels.subscribe);
+  const next = candidate(() => new Promise(() => {}));
+  const replacing = expect(h.bridge.replaceOwner(next.owner)).rejects.toThrow();
+  await vi.waitFor(() => expect(next.owner.client.snapshot).toHaveBeenCalled());
+  await h.bridge.dispose();
+  await replacing;
+  expect(next.dispose).toHaveBeenCalled();
+  expect(h.webContents.send).not.toHaveBeenCalledWith(desktopChannels.event, { type: 'reattached' });
+});
+
+it('closes a replacement candidate whose login-item read is pending and never activates it', async () => {
+  const h = harness();
+  await h.invoke(desktopChannels.subscribe);
+  let release: () => void = () => {};
+  h.actions.readLoginItem.mockImplementationOnce(() => new Promise<boolean>(resolve => { release = () => resolve(true); }));
+  const next = candidate(async () => ({ revision: 3 }));
+  const replacing = expect(h.bridge.replaceOwner(next.owner)).rejects.toThrow('Desktop connection is unavailable');
+  await vi.waitFor(() => expect(h.actions.readLoginItem).toHaveBeenCalled());
+  const disposing = h.bridge.dispose();
+  await vi.waitFor(() => expect(next.dispose).toHaveBeenCalled());
+  release();
+  await disposing;
+  await replacing;
+  expect(h.webContents.send).not.toHaveBeenCalledWith(desktopChannels.event, { type: 'reattached' });
+});
+
+it('closes an owner handed over after disposal', async () => {
+  const h = harness();
+  await h.bridge.dispose();
+  const next = candidate(async () => ({ revision: 3 }));
+  await expect(h.bridge.replaceOwner(next.owner)).rejects.toThrow('Desktop connection is unavailable');
+  expect(next.dispose).toHaveBeenCalledOnce();
+});
+
 it('cleans partial bindings without announcing a failed reattachment', async () => {
   const h = harness();
   await h.invoke(desktopChannels.subscribe);
