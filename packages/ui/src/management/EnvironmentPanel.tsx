@@ -14,6 +14,8 @@ import {settingAnchor, type SearchReveal} from '../search';
 import {useShellCapabilities} from '../client-context';
 import {openExternalUrl} from '../url-actions';
 
+type BackendLogin = Extract<EnvironmentReply, { kind: "backendLogin" }>;
+
 type Props = { request: (request: EnvironmentRequest) => Promise<EnvironmentReply>; onCodexLogin: () => Promise<void>; codexJobs: ReactNode; codexBusy: boolean; reveal?: SearchReveal };
 type Intent = { kind: "install" | "update" | "disable"; tool: EnvironmentTool };
 const order: EnvironmentTool[] = ["codex", "claude", "lark-cli"];
@@ -24,6 +26,7 @@ export function EnvironmentPanel({ request, onCodexLogin, codexJobs, codexBusy, 
   const [profiles, setProfiles] = useState<EnvironmentProfile[]>([]);
   const [backends, setBackends] = useState<BackendEntry[]>([]);
   const [auth, setAuth] = useState<Partial<Record<EnvironmentTool, Extract<EnvironmentReply, { kind: "auth" }>>>>({});
+  const [logins, setLogins] = useState<Record<string, BackendLogin>>({});
   const [operation, setOperation] = useState<EnvironmentOperation | null>(null);
   const [toolInstall, setToolInstall] = useState<ToolInstallOperation | null>(null);
   const [progressOpen, setProgressOpen] = useState(false);
@@ -116,6 +119,15 @@ export function EnvironmentPanel({ request, onCodexLogin, codexJobs, codexBusy, 
     });
     return () => { live = false; };
   }, [tools, request]);
+  const checkLogin = useCallback(async (id: string, refresh: boolean) => {
+    try {
+      const reply = await request({ type: "backendLogin", id, refresh });
+      if (reply.kind === "backendLogin") setLogins((current) => ({ ...current, [id]: reply }));
+    } catch { setLogins((current) => ({ ...current, [id]: { kind: "backendLogin", id, state: "unknown", message: "暂时无法检查登录，请重新检测。" } })); }
+  }, [request]);
+  useEffect(() => {
+    for (const backend of backends) if (backend.id === "claude-agent" && backend.depState === "installed") void checkLogin(backend.id, false);
+  }, [backends, checkLogin]);
   useEffect(() => {
     if (operation?.kind !== "running" || !operation.url) { setQr(""); return; }
     let live = true;
@@ -202,7 +214,7 @@ export function EnvironmentPanel({ request, onCodexLogin, codexJobs, codexBusy, 
     <div className="environment-groups">
       <DependencyGroup title="Bot" description="Codex 或 Claude 至少需要一个可用。">
         {order.slice(0, 2).map((kind) => tools.find((item) => item.tool === kind)).filter((item): item is EnvironmentToolState => Boolean(item)).map((tool) => <ToolRow key={tool.tool} reveal={reveal === `${tool.tool}-tool`} tool={tool} auth={auth[tool.tool]} hostBackend={tool.tool === "codex" ? codexHost : undefined} backendActions={backendActions} profiles={profiles} busy={busy || Boolean(running) || (tool.tool === "codex" && codexBusy)} running={running?.tool === tool.tool} onIntent={setIntent} onCheckAuth={checkAuth} onLogin={() => { if (tool.tool === "codex") void onCodexLogin(); else void act({ type: "startLogin", tool: tool.tool }); }} onProgress={() => setProgressOpen(true)} />)}
-        {otherBackends.map((backend) => <BackendRow key={backend.id} backend={backend} actions={backendActions} />)}
+        {otherBackends.map((backend) => <BackendRow key={backend.id} backend={backend} actions={backendActions} login={logins[backend.id]} onCheckLogin={() => void checkLogin(backend.id, true)} />)}
       </DependencyGroup>
       {codexJobs}
       <DependencyGroup title="飞书 CLI" description="用于云文档与群聊任务；在这里管理登录身份。">
@@ -267,17 +279,25 @@ function BackendActions({ backend, actions }: { backend: BackendEntry; actions: 
   </div>;
 }
 
-function BackendRow({ backend, actions }: { backend: BackendEntry; actions: BackendActionsProps }) {
+const loginLabels: Record<BackendLogin["state"], string> = { signedIn: "已登录", signedOut: "未登录", unknown: "无法确认" };
+const loginTones: Record<BackendLogin["state"], "success" | "warning" | "neutral"> = { signedIn: "success", signedOut: "warning", unknown: "neutral" };
+
+function BackendRow({ backend, actions, login, onCheckLogin }: { backend: BackendEntry; actions: BackendActionsProps; login?: BackendLogin; onCheckLogin: () => void }) {
   const sdk = backend.id === "claude-agent" && backend.depKind === "npm-ondemand";
   const state = backendStateLabel(backend.depState);
+  const checksLogin = sdk && backend.depState === "installed";
   return <article className="environment-backend" aria-label={`${sdk ? "Claude Agent SDK" : backend.displayName} 执行后端`}>
     <div>
       <strong>{sdk ? "Claude Agent SDK" : backend.displayName}</strong>
       <span>{state}{state === "状态未知" ? `（${backend.depState}）` : ""} · {backend.installedVersion ?? backend.version ?? "版本未知"}</span>
       {sdk && <small>Bot 任务执行依赖，与 Claude Code CLI 分开管理。</small>}
-      {backend.hint && <small>{backend.hint}</small>}
+      {checksLogin && <small className="environment-backend-login">Claude 登录：{login ? <><StatusBadge tone={loginTones[login.state]}>{loginLabels[login.state]}</StatusBadge> {login.message}</> : "正在检查…"}</small>}
+      {backend.hint && login?.state !== "signedIn" && <small>{backend.hint}</small>}
     </div>
-    <BackendActions backend={backend} actions={actions} />
+    <div className="environment-actions">
+      {checksLogin && <Button size="sm" disabled={actions.busy} onClick={onCheckLogin}>检查登录</Button>}
+      <BackendActions backend={backend} actions={actions} />
+    </div>
   </article>;
 }
 
@@ -324,7 +344,7 @@ function ToolRow({ tool, auth, hostBackend, backendActions, profiles, busy, runn
       </div>
     </div>
     <div className="environment-details" id={detailsId} hidden={!expanded}>
-      <dl><div><dt>安装来源</dt><dd>{tool.installation === "managed" ? "Vonvon 托管" : tool.installation === "external" ? "现有安装" : "未安装"}</dd></div><div><dt>安装位置</dt><dd>{tool.executable ? <code>{tool.executable}</code> : "暂无"}</dd></div><div><dt>当前版本</dt><dd>{tool.version ?? "未知"}</dd></div><div><dt>托管版本</dt><dd>{tool.managedVersion ?? "无"}</dd></div><div><dt>最新版本</dt><dd>{tool.latestVersion ?? "未取得"}</dd></div><div><dt>授权状态</dt><dd>{auth?.message ?? "尚未确认"}</dd></div>{tool.tool === "lark-cli" && <div><dt>当前 Profile</dt><dd>{profile ? `${profile.name}${profile.effectiveSource ? ` · ${profileSourceLabel(profile.effectiveSource)}` : ""}` : "尚未确认"}</dd></div>}{hostBackend && <><div><dt>Host 状态</dt><dd>{backendStateLabel(hostBackend.depState)}{backendStateLabel(hostBackend.depState) === "状态未知" ? `（${hostBackend.depState}）` : ""}</dd></div><div><dt>Host 版本</dt><dd>{hostBackend.installedVersion ?? hostBackend.version ?? "未知"}</dd></div>{hostBackend.hint && <div className="environment-host-detail"><dt>Host 说明</dt><dd>{hostBackend.hint}</dd></div>}</>}</dl>
+      <dl><div><dt>安装来源</dt><dd>{tool.installation === "managed" ? "Vonvon 托管" : tool.installation === "external" ? "现有安装" : "未安装"}</dd></div><div><dt>安装位置</dt><dd>{tool.executable ? <code>{tool.executable}</code> : "暂无"}</dd></div><div><dt>当前版本</dt><dd>{tool.version ?? "未知"}</dd></div><div><dt>托管版本</dt><dd>{tool.managedVersion ?? "无"}</dd></div><div><dt>最新版本</dt><dd>{tool.latestVersion ?? "未取得"}</dd></div>{tool.compatibility && <><div><dt>最低版本</dt><dd>{tool.compatibility.minimum}</dd></div><div><dt>验证过的版本</dt><dd>{tool.compatibility.verified}</dd></div></>}<div><dt>授权状态</dt><dd>{auth?.message ?? "尚未确认"}</dd></div>{tool.tool === "lark-cli" && <div><dt>当前 Profile</dt><dd>{profile ? `${profile.name}${profile.effectiveSource ? ` · ${profileSourceLabel(profile.effectiveSource)}` : ""}` : "尚未确认"}</dd></div>}{hostBackend && <><div><dt>Host 状态</dt><dd>{backendStateLabel(hostBackend.depState)}{backendStateLabel(hostBackend.depState) === "状态未知" ? `（${hostBackend.depState}）` : ""}</dd></div><div><dt>Host 版本</dt><dd>{hostBackend.installedVersion ?? hostBackend.version ?? "未知"}</dd></div>{hostBackend.hint && <div className="environment-host-detail"><dt>Host 说明</dt><dd>{hostBackend.hint}</dd></div>}</>}</dl>
       <div className="environment-secondary"><Button size="sm" disabled={busy || tool.installation === "missing"} onClick={() => onCheckAuth(tool.tool)}>检查授权</Button>{tool.installation !== "missing" && presentation.action !== "login" && <Button size="sm" disabled={busy} onClick={onLogin}>重新登录</Button>}{tool.installation === "external" && <Button size="sm" disabled={busy} onClick={() => onIntent({ kind: "update", tool: tool.tool })}>安装托管副本</Button>}{tool.installation === "managed" && presentation.action !== "update" && <Button size="sm" disabled={busy} onClick={() => onIntent({ kind: "update", tool: tool.tool })}>重新安装最新版</Button>}{tool.canUninstall && <Button size="sm" disabled={busy} onClick={() => onIntent({ kind: "disable", tool: tool.tool })}>停用托管副本</Button>}</div>
       {hostBackend && backendActions && <BackendActions backend={hostBackend} actions={backendActions} />}
     </div>

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { homedir } from 'node:os';
 import type {
   EffortLevel,
   ModelInfo as ClaudeModelInfo,
@@ -10,6 +11,7 @@ import type {
   AgentBackend,
   AgentCapabilities,
   AgentThread,
+  BackendLogin,
   BackendProbe,
   GenerateSessionTitleOptions,
   ModelInfo,
@@ -21,18 +23,20 @@ import type {
   ThreadSummary,
 } from '../types';
 import { BRIDGE_DEVELOPER_INSTRUCTIONS } from '../bridge-instructions';
-import { isBackendDepInstalled, installedBackendVersion, loadBackendDep } from '../backend-loader';
+import { BackendNotInstalledError, isBackendDepInstalled, installedBackendVersion, loadBackendDep } from '../backend-loader';
 import { permissionOptions } from './permission';
 import { foldSessionMessages, mapSessionSummary } from './history';
 import { ClaudeAgentThread } from './thread';
+import { loginFromAccount, loginFromEnv, readClaudeLogin } from './login';
 
 /** The on-demand npm package backing this backend. */
 const SDK_PKG = '@anthropic-ai/claude-agent-sdk';
 
 /**
  * Make every bridge-started claude session behave like Claude Code in its cwd:
- * load project + user `CLAUDE.md`, skills, and `.claude/settings.json`. The SDK
- * default is `[]` (load nothing), which is why a project's CLAUDE.md / the user's
+ * load project + user `CLAUDE.md`, skills, and `.claude/settings.json`. Without
+ * `settingSources` the SDK loads every source; helper queries pass `[]` to load none.
+ * Turns once passed nothing here, which is why a project's CLAUDE.md / the user's
  * lark-* skills were previously ignored. The programmatic permission tier
  * (permission.ts: bypassPermissions + sandbox) still takes precedence, so a
  * loaded settings.json cannot weaken the sandbox.
@@ -95,6 +99,7 @@ function loadSdk(): Promise<ClaudeSdkFacade> {
 }
 
 const TITLE_GENERATION_TIMEOUT_MS = 30_000;
+const LOGIN_PROBE_TIMEOUT_MS = 15_000;
 const TITLE_OUTPUT_SCHEMA = {
   type: 'object',
   properties: { title: { type: 'string', maxLength: 36 } },
@@ -181,7 +186,8 @@ async function* idleClaudeInput(signal: AbortSignal): AsyncGenerator<never, void
  *
  * Auth: the SDK's bundled CLI reuses the host's Claude login (verified: a query
  * runs with apiKeySource=none when the machine is logged in), else
- * ANTHROPIC_API_KEY. No separate login step in the bridge.
+ * ANTHROPIC_API_KEY. No separate login step in the bridge; {@link loginStatus}
+ * reads the state for the environment page and the desktop snapshot.
  */
 export class ClaudeAgentBackend implements AgentBackend {
   readonly id = 'claude-agent';
@@ -218,8 +224,8 @@ export class ClaudeAgentBackend implements AgentBackend {
 
   async doctor(): Promise<BackendProbe> {
     // "available" = the on-demand SDK is installed (bridge/global/user dir). When
-    // not, report installable so the Web shows a「下载」button. Auth is verified
-    // lazily at first turn (a missing login surfaces as a friendly run error).
+    // not, report installable so the Web shows a「下载」button. Login is read by
+    // loginStatus(), not here: it spawns the CLI and callers race doctor() against 3 s.
     if (!isBackendDepInstalled(SDK_PKG)) {
       return {
         ok: false,
@@ -236,6 +242,48 @@ export class ClaudeAgentBackend implements AgentBackend {
       depState: 'installed',
       hint: '复用本机 Claude 登录态（未登录请先 `claude` 登录，或设置 ANTHROPIC_API_KEY）',
     };
+  }
+
+  loginStatus(opts?: { refresh?: boolean }): Promise<BackendLogin> {
+    return readClaudeLogin(() => this.probeLogin(), opts);
+  }
+
+  /** Reads the account the SDK's CLI reports at initialize, with no turn and no
+   * tokens. The CLI is the same binary turns use and gets the same env and user
+   * settings (an apiKeyHelper or `env` key there counts), but no hooks, MCP servers
+   * or claude.ai connectors. If it cannot start, `claude auth status` from a
+   * separate CLI would not say whether turns can run, so only the env is checked. */
+  private async probeLogin(): Promise<BackendLogin> {
+    let query: Query | undefined;
+    const abortController = new AbortController();
+    try {
+      const sdk = await this.sdkLoader();
+      query = sdk.query({
+        prompt: idleClaudeInput(abortController.signal),
+        options: {
+          abortController,
+          cwd: homedir(),
+          env: { ...bridgeClaudeEnv(), ENABLE_CLAUDEAI_MCP_SERVERS: 'false' },
+          persistSession: false,
+          maxTurns: 1,
+          tools: [],
+          skills: [],
+          mcpServers: {},
+          strictMcpConfig: true,
+          settingSources: ['user'],
+          settings: { disableAllHooks: true },
+        },
+      });
+      const init = await withAbortDeadline(query.initializationResult(), abortController, LOGIN_PROBE_TIMEOUT_MS);
+      return loginFromAccount(init.account) ?? loginFromEnv(process.env, 'Claude 没有报告账号信息。');
+    } catch (err) {
+      if (err instanceof BackendNotInstalledError) return { state: 'unknown', message: '还没下载 Claude Agent SDK。' };
+      log.fail('agent', err, { backend: 'claude-agent', phase: 'loginStatus' });
+      return loginFromEnv(process.env, 'Claude 起不来，看不到登录状态。');
+    } finally {
+      abortController.abort();
+      query?.close();
+    }
   }
 
   async listModels(): Promise<ModelInfo[]> {

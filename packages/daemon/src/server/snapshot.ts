@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { DesktopSnapshot, Diagnostic, Job, ToolState } from '@vonvon/protocol';
 import { createBackend } from '../agent';
+import { cachedClaudeLogin } from '../agent/claude-agent/login';
 import type { AdminService } from '../admin/service';
 import { paths } from '../config/paths';
 import { bridgeVersion } from '../core/version';
@@ -34,13 +35,21 @@ export async function createSnapshotStore(options: {
   let refreshing: Promise<void> | undefined;
   let closed = false;
   const readTools = options.readTools ?? (async (): Promise<ToolState[]> => {
+    const claudeBackend = createBackend('claude-agent');
     const [codex, claude] = await Promise.all([
       options.service.codexSetup?.().catch(() => undefined),
-      createBackend('claude-agent').doctor({ force: true }).catch(() => undefined),
+      claudeBackend.doctor({ force: true }).catch(() => undefined),
     ]);
+    // The login probe starts the Claude CLI, so the snapshot shows the last answer
+    // and refreshes itself once a new one differs.
+    const login = claude?.ok ? cachedClaudeLogin() : undefined;
+    if (claude?.ok) void claudeBackend.loginStatus?.().then(next => {
+      if (next.state !== login?.state || next.message !== login?.message) void refreshTools().catch(() => undefined);
+    }).catch(() => undefined);
+    const claudeMessage = login?.message ?? claude?.hint;
     return [
       { tool: 'codex', installation: codex?.installation ?? 'unknown', authentication: codex?.authentication ?? 'unknown', version: codex?.version ?? null, ...(codex?.message ? { message: codex.message } : {}) },
-      { tool: 'claude', installation: claude ? (claude.ok ? 'installed' : claude.depState === 'not-installed' || claude.depState === 'external-missing' ? 'missing' : 'unknown') : 'unknown', authentication: claude?.ok ? 'notRequired' : 'unknown', version: claude?.version ?? null, ...(claude?.hint ? { message: claude.hint } : {}) },
+      { tool: 'claude', installation: claude ? (claude.ok ? 'installed' : claude.depState === 'not-installed' || claude.depState === 'external-missing' ? 'missing' : 'unknown') : 'unknown', authentication: login?.state ?? 'unknown', version: claude?.version ?? null, ...(claudeMessage ? { message: claudeMessage } : {}) },
     ];
   });
   async function build(committed?: (snapshot: DesktopSnapshot) => void): Promise<void> {

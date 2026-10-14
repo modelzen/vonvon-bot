@@ -7,6 +7,7 @@ import { mergeProcessEnv } from '../../platform/spawn';
 import { log } from '../../core/logger';
 import type { ServerNotification } from '../../agent/codex-appserver/protocol';
 import { OwnedCodexProcess } from '../../agent/codex-appserver/owned-process';
+import { codexChildEnv } from '../../agent/codex-appserver/locate';
 
 class AsyncQueue<T> {
   private items: T[] = [];
@@ -255,7 +256,7 @@ export class AppServerClient {
     // streams are non-null, so the cast to *WithoutNullStreams is sound.
     const owned = new OwnedCodexProcess(this.opts.bin, ['app-server', '--listen', 'stdio://'], {
       cwd: this.opts.cwd,
-      env: mergeProcessEnv(process.env, { ...this.opts.env, FEISHU_CODEX_BRIDGE: '1' }),
+      env: mergeProcessEnv(codexChildEnv(this.opts.bin), { ...this.opts.env, FEISHU_CODEX_BRIDGE: '1' }),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     const child = owned.child as ChildProcessWithoutNullStreams;
