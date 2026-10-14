@@ -28,7 +28,7 @@ vi.mock('../src/agent', async original => ({
   ...await original<object>(),
   createBackend: () => ({ id: 'codex', capabilities: {}, listModels: async () => [] }),
 }));
-vi.mock('../src/agent/codex-appserver/owned-process', async original => ({
+vi.mock('../src/platform/owned-process', async original => ({
   ...await original<object>(),
   closeOwnedCodexProcesses: fixture.registryClose,
   unconfirmedCodexPids: () => [],

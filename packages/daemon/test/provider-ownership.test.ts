@@ -10,7 +10,7 @@ const transport = vi.hoisted(() => ({
 }));
 vi.mock('../src/platform/spawn', async original => ({ ...await original<object>(), spawnProcess: transport.spawn }));
 vi.mock('../src/agent/codex-appserver/locate', () => ({ resolveCodexBin: () => '/fixture/no-provider' }));
-vi.mock('../src/agent/codex-appserver/windows-job', () => ({ WindowsCodexJob: class {
+vi.mock('../src/platform/windows-job', () => ({ WindowsCodexJob: class {
   executable = '/fixture/no-powershell';
   private readonly job = { identity: Symbol('job'), proof: undefined as symbol | undefined, stop: vi.fn(), dispose: vi.fn() };
   constructor() { transport.jobs.push(this.job); }
@@ -135,7 +135,7 @@ interface Shell {
 }
 const shells: Shell[] = [];
 const endings: Promise<unknown>[] = [];
-let ownerModule: typeof import('../src/agent/codex-appserver/owned-process');
+let ownerModule: typeof import('../src/platform/owned-process');
 let kill: MockInstance<typeof process.kill>;
 let nextPid = 987654321;
 const nativePlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
@@ -204,7 +204,7 @@ beforeEach(async () => {
     if (fixture.state() === 'permission-denied' && signal === 0) throw Object.assign(new Error('denied'), { code: 'EPERM' });
     return true;
   });
-  ownerModule = await import('../src/agent/codex-appserver/owned-process');
+  ownerModule = await import('../src/platform/owned-process');
   ({ createOrchestrator } = await import('../src/bot/handle-message'));
 });
 afterEach(async () => {

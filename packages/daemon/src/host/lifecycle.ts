@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { paths } from '../config/paths';
 import { ApiCleanupError } from '../server/http';
-import { closeOwnedCodexProcesses, unconfirmedCodexPids } from '../agent/codex-appserver/owned-process';
+import { closeOwnedCodexProcesses, unconfirmedCodexPids } from '../platform/owned-process';
 
 export interface ShutdownControl {
   readonly requested: boolean;

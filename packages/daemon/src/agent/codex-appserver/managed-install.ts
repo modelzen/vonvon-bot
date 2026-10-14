@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { paths } from '../../config/paths';
 import { mergeProcessEnv } from '../../platform/spawn';
 import lock from './codex-install-lock.json';
-import { OwnedCodexProcess } from './owned-process';
+import { OwnedCodexProcess } from '../../platform/owned-process';
 
 export const CODEX_INSTALL_VERSION = '0.156.1';
 export const privateCodexBin = (prefix: string): string => join(prefix, 'node_modules', '.bin', process.platform === 'win32' ? 'codex.cmd' : 'codex');

@@ -79,7 +79,7 @@ import {
   type SessionTitleBackendConfig,
 } from '../config/schema';
 import { CardDispatcher, type CardActionHandler } from '../card/dispatcher';
-import { closeOwnedCodexProcesses } from '../agent/codex-appserver/owned-process';
+import { closeOwnedCodexProcesses } from '../platform/owned-process';
 import { shutdownResidentClients } from '../agent/codex-appserver/client-pool';
 import { sendManagedCard, updateManagedCard } from '../card/managed';
 import { RunRender } from '../card/run-render';

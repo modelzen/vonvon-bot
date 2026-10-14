@@ -13,7 +13,7 @@ describe.skipIf(process.platform === 'win32')('POSIX setup child lifecycle', () 
   let groupPresent: boolean;
   let signalFailure: Error | undefined;
   let runSetupChild: typeof import('../src/agent/codex-appserver/managed-install').runSetupChild;
-  let ownerModule: typeof import('../src/agent/codex-appserver/owned-process');
+  let ownerModule: typeof import('../src/platform/owned-process');
   const endings: Promise<void>[] = [];
 
   type Outcome = { kind: 'pending' } | { kind: 'fulfilled'; value: string } | { kind: 'rejected'; error: unknown };
@@ -55,7 +55,7 @@ describe.skipIf(process.platform === 'win32')('POSIX setup child lifecycle', () 
       return true;
     });
     transport.spawn.mockReset().mockReturnValueOnce(child).mockImplementation(() => { throw new Error('Unexpected fixture spawn'); });
-    ownerModule = await import('../src/agent/codex-appserver/owned-process');
+    ownerModule = await import('../src/platform/owned-process');
     ({ runSetupChild } = await import('../src/agent/codex-appserver/managed-install'));
   });
   afterEach(async () => {

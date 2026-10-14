@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { installManagedCodex, managedCodexBin, runSetupChild } from '../src/agent/codex-appserver/managed-install';
 import { resolveCodexBin } from '../src/agent/codex-appserver/locate';
 import { paths } from '../src/config/paths';
-import { CodexProcessCleanupError, OwnedCodexProcess } from '../src/agent/codex-appserver/owned-process';
+import { CodexProcessCleanupError, OwnedCodexProcess } from '../src/platform/owned-process';
 
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync, mkdirSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');

@@ -62,7 +62,7 @@ vi.mock('../src/server/pid-lock', async (original) => {
 vi.mock('../src/server/owner-verification', () => ({ verifyPidLockOwner: fixture.verify, stopVerifiedOwner: fixture.stopVerified }));
 vi.mock('../src/service/adapter', () => ({ getServiceAdapter: fixture.getAdapter }));
 
-vi.mock('../src/agent/codex-appserver/owned-process', () => ({
+vi.mock('../src/platform/owned-process', () => ({
   closeOwnedCodexProcesses: fixture.registryClose,
   unconfirmedCodexPids: fixture.registryPids,
 }));

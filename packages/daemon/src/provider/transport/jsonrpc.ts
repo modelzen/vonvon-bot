@@ -6,7 +6,7 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mergeProcessEnv } from '../../platform/spawn';
 import { log } from '../../core/logger';
 import type { ServerNotification } from '../../agent/codex-appserver/protocol';
-import { OwnedCodexProcess } from '../../agent/codex-appserver/owned-process';
+import { OwnedCodexProcess } from '../../platform/owned-process';
 
 class AsyncQueue<T> {
   private items: T[] = [];

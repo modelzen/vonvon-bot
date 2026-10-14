@@ -5,7 +5,7 @@ import { constants } from "node:fs";
 import { access, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { basename, delimiter, dirname, isAbsolute, join, relative, win32 } from "node:path";
 import { spawnProcess } from "../platform/spawn";
-import { WindowsCodexJob } from "../agent/codex-appserver/windows-job";
+import { WindowsCodexJob } from "../platform/windows-job";
 import {
   environmentProfileSchema,
   type EnvironmentOperation,

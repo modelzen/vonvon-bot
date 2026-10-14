@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { WindowsCodexJob } from '../src/agent/codex-appserver/windows-job';
+import { WindowsCodexJob } from '../src/platform/windows-job';
 
 it('uses exactly one Win32 job namespace separator in the runtime name', () => {
   const job = new WindowsCodexJob();

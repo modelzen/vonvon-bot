@@ -4,11 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CodexProcessCleanupError, OwnedCodexProcess } from '../src/agent/codex-appserver/owned-process';
+import { CodexProcessCleanupError, OwnedCodexProcess } from '../src/platform/owned-process';
 import { AppServerClient } from '../src/agent/codex-appserver/app-server-client';
 import { runSetupChild } from '../src/agent/codex-appserver/managed-install';
 import { writeNodeExecutable } from './helpers/node-executable';
-import { WindowsCodexJob } from '../src/agent/codex-appserver/windows-job';
+import { WindowsCodexJob } from '../src/platform/windows-job';
 
 const roots: string[] = [];
 const cleanups: Array<() => Promise<void>> = [];
@@ -26,8 +26,8 @@ type StartTrace = {
 };
 const startDiagnostics = vi.hoisted((): { active: StartTrace | undefined } => ({ active: undefined }));
 const owners = vi.hoisted(() => new Set<{ close(): Promise<void> }>());
-vi.mock('../src/agent/codex-appserver/owned-process', async original => {
-  const actual = await original<typeof import('../src/agent/codex-appserver/owned-process')>();
+vi.mock('../src/platform/owned-process', async original => {
+  const actual = await original<typeof import('../src/platform/owned-process')>();
   return { ...actual, OwnedCodexProcess: class extends actual.OwnedCodexProcess {
     private readonly trace: StartTrace | undefined;
     constructor(...args: ConstructorParameters<typeof actual.OwnedCodexProcess>) {
@@ -56,8 +56,8 @@ vi.mock('../src/agent/codex-appserver/owned-process', async original => {
     }
   } };
 });
-vi.mock('../src/agent/codex-appserver/windows-job', async original => {
-  const actual = await original<typeof import('../src/agent/codex-appserver/windows-job')>();
+vi.mock('../src/platform/windows-job', async original => {
+  const actual = await original<typeof import('../src/platform/windows-job')>();
   return { ...actual, WindowsCodexJob: class extends actual.WindowsCodexJob {
     private readonly trace = startDiagnostics.active;
     private lastEmpty: boolean | undefined;
