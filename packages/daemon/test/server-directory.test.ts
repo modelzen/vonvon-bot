@@ -51,6 +51,6 @@ describe('canonical home directory tokens', () => {
     expect(result.entries).toHaveLength(1000);
     expect(result.entries[0]?.name).toBe('0000');
     expect(result.entries[999]?.name).toBe('0999');
-  }, process.platform === 'win32' ? 20_000 : 5_000);
+  });
 
 });

@@ -8,7 +8,6 @@ import { fixtureNode } from './fixture-node';
 import type { EnvironmentRequest } from '@vonvon/protocol';
 import { EnvironmentService } from '../src/environment/service';
 
-const processTestTimeout = process.platform === 'win32' ? 30_000 : 5_000;
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map(dir => rm(dir, { recursive: true, force: true }))); });
 
@@ -77,7 +76,7 @@ for (const request of mutations) {
       await pending;
       await service.close();
     }
-  }, processTestTimeout);
+  });
 
   it(`${request.type} releases ownership after resolution failure or a missing tool`, async () => {
     const { service } = await fixture();

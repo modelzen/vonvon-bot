@@ -61,7 +61,7 @@ it('exposes daemon lifecycle commands while status and logs leave a missing home
     const p = launch(f.home, f.root, args); expect(await p.exited).toBe(0);
   }
   expect(await readdir(f.home)).toEqual([]); expect(await readdir(f.root)).toEqual([]);
-}, 20_000);
+});
 it('starts without bots, refuses duplicate ownership and releases PID lease on shutdown', async () => {
   const f = await fixture();
   const p = launch(f.home, f.root, ['daemon', 'run']);
@@ -76,7 +76,7 @@ it('starts without bots, refuses duplicate ownership and releases PID lease on s
   expect(await p.exited).toBe(0);
   await expect(readFile(join(f.root, 'daemon.pid'))).rejects.toMatchObject({ code: 'ENOENT' });
   expect(await readdir(join(f.root, '.access'))).toEqual([]);
-}, 20_000);
+});
 
 it('concurrent detached starts return the same ready owner and stop clears its lease', async () => {
   const f = await fixture();
@@ -154,4 +154,4 @@ it('service refusal leaves an absent data home untouched for public and hidden c
     await expect(readdir(f.root)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readdir(f.home)).toEqual([]);
   }
-}, process.platform === 'win32' ? 20_000 : 5_000);
+});

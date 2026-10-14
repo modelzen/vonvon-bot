@@ -174,4 +174,4 @@ it('probe cleanup failure remains visible to later Host close', async () => {
     expect(() => value.setup()).toThrow('清理未确认');
     await expect(value.close()).rejects.toThrow('清理未确认');
   } finally { failure.mockRestore(); }
-}, 20_000);
+});

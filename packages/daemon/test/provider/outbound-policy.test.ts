@@ -397,21 +397,21 @@ describe('pinned TLS identity', () => {
 
   it('verifies an IPv6 literal against the certificate IP SAN without sending SNI', async () => {
     await assertTlsScenario('ipv6');
-  }, 15_000);
+  });
 
   it('verifies an IPv4 literal against the certificate IP SAN without sending SNI', async () => {
     await assertTlsScenario('ipv4');
-  }, 15_000);
+  });
 
   it('sends the DNS name as SNI and verifies it while connecting to the pinned address', async () => {
     await assertTlsScenario('dns');
-  }, 15_000);
+  });
 
   it('rejects a certificate that does not name the requested host', async () => {
     await assertTlsScenario('mismatch');
-  }, 15_000);
+  });
 
   it('rejects an untrusted certificate', async () => {
     await assertTlsScenario('untrusted');
-  }, 15_000);
+  });
 });
