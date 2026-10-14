@@ -8,7 +8,7 @@
 
 1. 两个都有，都是专门做判断的模型：输入一段文字（Decisions API 还能带图），问几个事先定好的问题，返回选项和概率，不生成文字。
 2. 两个都要单独的 API key，按量付费。Codex 和 Claude 的订阅应该都用不上：推断，两家文档都只给了 API key 的写法，没提订阅。
-3. 用在 vonvon-bot 上很便宜。一次判断按 2,000 个输入 token 算，1,000 次约 0.2 美元（Decisions API）或 0.08 美元（Jev）。推断，按下面的单价算出来的，没算 OpenAI 的区域处理加价；2,000 个 token 也不会触发超长上下文的倍率。
+3. 用在 vonvon-bot 上很便宜。一次判断按 2,000 个输入 token 算，1,000 次约 0.2 美元（Decisions API）或 0.08 美元（Jev）。推断，按下面的单价算出来的，没算 OpenAI 的区域处理加价。OpenAI 超长上下文倍率的门槛文档没给，2,000 个 token 应该碰不到（推断）。Jev 的 0.08 美元按 TypeSafe 直连价算，经 OpenRouter 的价格以它的模型页为准。
 4. 所以第一版的做法是：默认用订阅里的小模型做判断，关掉思考；用户在设置里填了 OpenAI、TypeSafe 或 OpenRouter 的 key，就改用 Decisions API 或 Jev。这是主人 2026-10-14 的回答。OpenRouter 一个 key 就能用 Jev，对用户最省事。
 
 ## OpenAI Decisions API
@@ -42,7 +42,7 @@
 | 速度 | 官方说端到端 70 到 500 毫秒；服务在美国西海岸，官方测速也是在西海岸测的 |
 | 价格 | 输入每百万 token 0.042 美元，输出不收费 |
 | 认证 | TypeSafe 账号的 API key，放在 `Authorization: Bearer` 里 |
-| 经 OpenRouter 用 | OpenRouter 也提供 Jev（`typesafe/jev-1.13`，别名 `~typesafe/jev-latest`），只要一个 OpenRouter 的 API key，官方写明不用排队，也不用另开 TypeSafe 账号。有两个入口：`POST https://openrouter.ai/api/alpha/decisions`（还在 alpha）和 `POST https://openrouter.ai/api/v1/systemone`，后者只要把 TypeSafe SDK 的地址改过去。价格看 OpenRouter 的模型页 |
+| 经 OpenRouter 用 | OpenRouter 也提供 Jev（`typesafe/jev-1.13`，别名 `~typesafe/jev-latest`），只要一个 OpenRouter 的 API key，官方写明不用排队，也不用另开 TypeSafe 账号。有两个入口：`POST https://openrouter.ai/api/alpha/decisions`（路径带 alpha）和 `POST https://openrouter.ai/api/v1/systemone`，后者只要把 TypeSafe SDK 的地址改过去。价格看 OpenRouter 的模型页 |
 
 来源：[TypeSafe 发布文章](https://typesafe.ai/blog/introducing-system-one-models-and-jev)、[TypeSafe 文档](https://docs.typesafe.ai/introduction)、[TypeSafe API 参考](https://docs.typesafe.ai/api)、[OpenRouter 的 Jev 说明](https://openrouter.ai/docs/guides/community/jev)、[MarkTechPost](https://www.marktechpost.com/2026/09/19/typesafe-ai-releases-jev/)、[Medium（排队取消）](https://medium.com/@iniyarajan/typesafe-ai-and-jev-the-model-that-answers-questions-instead-of-writing-essays-4b58788d554e)。
 
