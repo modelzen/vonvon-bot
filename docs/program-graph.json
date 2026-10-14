@@ -38,13 +38,15 @@
     {
       "id": "V6b",
       "title": "V6b 运行时、Codex 与 Claude 引擎、调用方切换",
-      "branch": "codex/v6b-provider-runtime",
+      "branch": "claude/v6b-process-cutover",
+      "pr": 281,
       "owner": "providers",
       "mergeAfter": [
         "V6a"
       ],
       "acceptance": "飞书测试 Bot、托管 Codex、真实 Claude Code CLI、Linux 主机跑第 6 路",
-      "plan": "Runtime, Codex and Claude engines, and the consumer cut-over (V6b)"
+      "plan": "Runtime, Codex and Claude engines, and the consumer cut-over (V6b)",
+      "note": "按 plan.md V6b 的 Split 段拆成十四个 PR 加删除阶段，依次开、依次合，本节点指向当前在飞的一个（1/14 进程切换）。旧分支 #234 仅作参考。"
     },
     {
       "id": "V6c",
