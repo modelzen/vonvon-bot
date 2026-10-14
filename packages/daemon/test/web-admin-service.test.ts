@@ -14,6 +14,7 @@ import {
 import { AdminWriteError, type AdminWriteOp } from '../src/admin/ops';
 import type { CodexSetupService } from '../src/agent/codex-appserver/setup';
 import * as clientPool from '../src/agent/codex-appserver/client-pool';
+import { REQUIRED_SCOPES } from '../src/config/scopes';
 
 // 把整个 ~/.feishu-codex-bridge 指到临时目录，绝不碰真实用户数据。fixture 通过
 // bots/registry/session-store 模块的导出写入（useBotDir 切目录后写）——服务层读
@@ -396,6 +397,7 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
           'im:message.group_at_msg:readonly',
           'im:message.group_msg',
           'im:message.p2p_msg:readonly',
+          'im:message:readonly',
           'im:message:send_as_bot',
           'im:message.pins:write_only',
           'im:message.reactions:write_only',
@@ -433,6 +435,15 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
     expect((s.scopes.missingRequired ?? []).length).toBeGreaterThan(0);
     expect(s.scopes.missingRequired).toContain('im:message:send_as_bot');
     expect(s.event.state).toBe('unpublished');
+  });
+
+  it('迁移来的 bot 没开 im:message:readonly：missingRequired 只列出这一项', async () => {
+    writeCompleteConfig();
+    const grantedScopes = REQUIRED_SCOPES.filter((scope) => scope !== 'im:message:readonly');
+    vi.stubGlobal('fetch', stubFetch({ grantedScopes, eventEvents: ['im.message.receive_v1'] }));
+    const s = await createReadonlyAdminService().getSetupStatus(SETUP_BOT);
+    expect(s.scopes.missingRequired).toEqual(['im:message:readonly']);
+    expect(decodeURIComponent(s.scopes.grantUrl)).toContain('im:message:readonly');
   });
 
   it('配置缺失（未写 config.json）→ credentials.ok=false + event unchecked，绝不抛错', async () => {

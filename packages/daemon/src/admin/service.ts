@@ -246,7 +246,7 @@ export class NotWiredYetError extends Error {
   constructor(action: string) {
     super(
       `「${action}」需要 daemon 在跑：当前是只读预览（直读本机文件）。` +
-        '请先 `feishu-codex-bridge run`（或 `start`）启动，再运行 `web` 自动跳到 daemon 的控制台执行写操作。',
+        '请先运行 `vonvon daemon start` 启动 daemon，再用 `vonvon open` 打开控制台执行写操作。',
     );
     this.name = 'NotWiredYetError';
   }

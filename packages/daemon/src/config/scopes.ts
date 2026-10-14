@@ -23,6 +23,7 @@ export const REQUIRED_SCOPES = [
   'im:message.group_at_msg:readonly', // @bot messages in project groups
   'im:message.group_msg', // ALL group messages (高敏感) — required for 免@ (respond without @)
   'im:message.p2p_msg:readonly', // DM console messages
+  'im:message:readonly', // pull chat history with the app identity: 话题上文, quoted messages; recall events need it too (product §3.5, §3.11)
   'im:message:send_as_bot', // reply_in_thread / send cards
   'im:message.pins:write_only', // Pin the welcome/command card to the group's Pins tab (im.v1.pin.create) — NOTE: plural `pins`
   'im:message.reactions:write_only', // ⏳/🫳 run-status emoji reactions (best-effort) — NOTE: plural `reactions`
@@ -116,6 +117,23 @@ export const DISCOVERY_SCOPES = [
   'im:message.reactions:read',
 ] as const;
 
+/**
+ * Optional scopes added for v1 (docs/product.md §3.11):
+ *   - `im:message.group_at_msg.include_bot:readonly` — receive group messages in
+ *     which ANOTHER bot @-mentions this one (bot-to-bot hand-offs in 智能模式);
+ *   - `application:application:self_manage` — read the app's owner / admins /
+ *     developers (who may manage this bot, product §6).
+ * Like the other opt-in groups, deliberately NOT in {@link REQUIRED_SCOPES}:
+ * without them those features stay off and everything else still works.
+ * `im:message.group_msg.include_bot:read` (every message from other bots) is
+ * intentionally NOT requested — it multiplies event volume and makes bot loops
+ * harder to contain.
+ */
+export const V1_OPTIONAL_SCOPES = [
+  'im:message.group_at_msg.include_bot:readonly',
+  'application:application:self_manage',
+] as const;
+
 /** Everything the one-click grant URL pre-selects: required + opt-in extras. */
 export const GRANT_SCOPES = [
   ...REQUIRED_SCOPES,
@@ -124,6 +142,7 @@ export const GRANT_SCOPES = [
   ...CONTACT_SCOPES,
   ...APP_VERSION_SCOPES,
   ...DISCOVERY_SCOPES,
+  ...V1_OPTIONAL_SCOPES,
 ] as const;
 
 /**
@@ -136,6 +155,7 @@ export const SCOPE_LABELS: Record<string, string> = {
   'im:message.group_at_msg:readonly': '接收群里 @机器人 的消息',
   'im:message.group_msg': '接收群内所有消息（免@）',
   'im:message.p2p_msg:readonly': '接收私聊消息（管理台）',
+  'im:message:readonly': '读取群消息（话题上文、引用消息）',
   'im:message:send_as_bot': '发送消息 / 卡片',
   'im:message.pins:write_only': '置顶消息到群 Pin',
   'im:message.reactions:write_only': '消息表情回复（运行状态）',
@@ -157,6 +177,8 @@ export const SCOPE_LABELS: Record<string, string> = {
   'application:application.app_version:readonly': '读取应用版本信息（自动诊断事件订阅）',
   'im:chat.menu_tree:write_only': '添加群菜单（群内常驻命令入口）',
   'im:message.reactions:read': '接收表情回复事件（终态卡 👍 续轮 / 运行卡 OK 终止）',
+  'im:message.group_at_msg.include_bot:readonly': '接收其他机器人 @我 的群消息',
+  'application:application:self_manage': '读取应用的所有者和协作者（飞书里的管理员也能管 bot）',
 };
 
 /** `<中文说明>（<token>）` for a known scope, else the raw token. */

@@ -27,7 +27,7 @@ describe('buildHookStdout', () => {
     expect(JSON.parse(buildHookStdout(msg('claude'), { decision: 'deny', interrupt: true }))).toEqual({
       hookSpecificOutput: {
         hookEventName: 'PermissionRequest',
-        decision: { behavior: 'deny', message: 'Denied by feishu-codex-bridge.', interrupt: true },
+        decision: { behavior: 'deny', message: 'Denied by Vonvon Bot.', interrupt: true },
       },
     });
     // The denial reason must reach the model via `message`, not be dropped.
@@ -44,6 +44,20 @@ describe('buildHookStdout', () => {
         decision: { behavior: 'deny', message: 'no' },
       },
     });
+  });
+
+  it('falls back to the Vonvon Bot denial reason for Codex when none is given', () => {
+    const permissionDeny = buildHookStdout(msg('codex'), { decision: 'deny' });
+    expect(JSON.parse(permissionDeny).hookSpecificOutput.decision).toEqual({
+      behavior: 'deny',
+      message: 'Denied by Vonvon Bot.',
+    });
+    expect(JSON.parse(buildHookStdout(msg('codex', 'PreToolUse'), { decision: 'deny' })).hookSpecificOutput).toEqual({
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: 'Denied by Vonvon Bot.',
+    });
+    expect(permissionDeny).not.toContain('feishu-codex-bridge');
   });
 
   it('returns empty stdout for fallback_local', () => {

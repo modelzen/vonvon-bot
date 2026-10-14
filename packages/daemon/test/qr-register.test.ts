@@ -172,3 +172,12 @@ it('refresh passes the selected app to the SDK with creation disabled', async ()
   await startRegistration({ appId: 'cli_existing123', onQr: vi.fn() });
   expect(registerAppMock).toHaveBeenCalledWith(expect.objectContaining({ appId: 'cli_existing123', createOnly: false }));
 });
+
+it('prefills the Feishu create page with the Vonvon Bot name, not the old bridge name', async () => {
+  registerAppMock.mockResolvedValue({ client_id: 'cli_preset12345', client_secret: 'ephemeral', user_info: { open_id: 'ou_owner', tenant_brand: 'feishu' } });
+  await startRegistration({ onQr: vi.fn() });
+  const opts = registerAppMock.mock.calls[0]?.[0] as { appPreset?: { name?: string; desc?: string } };
+  expect(opts.appPreset?.name).toBe('Vonvon Bot');
+  expect(opts.appPreset?.desc).toContain('{user}');
+  expect(JSON.stringify(opts.appPreset)).not.toMatch(/Codex Bridge|feishu-codex-bridge/);
+});

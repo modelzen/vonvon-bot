@@ -57,8 +57,8 @@ export interface StartRegistrationOptions {
  * QR 预填仅支持 avatar/name/desc——scope 与事件没有任何预填通道（见 config/scopes.ts），
  * avatar 需公网图床 URL，这里不带。命令行与 Web 共用同一预填，文案不漂移。 */
 const APP_PRESET = {
-  name: 'Codex Bridge',
-  desc: '{user} 的 Codex 助手：群里 @我，就在绑定的项目目录里干活（feishu-codex-bridge）',
+  name: 'Vonvon Bot',
+  desc: '{user} 的 Vonvon Bot：在群里 @我，我用本机的 Codex 或 Claude 帮你干活',
 } as const;
 
 /**
