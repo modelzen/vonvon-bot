@@ -38,8 +38,8 @@ function dataDir(): string {
   dirs.push(dir);
   return dir;
 }
-function newHost(dir: string, spawnDeadlineMs = 20_000): ProcessHost {
-  const host = new ProcessHost({ dataDir: dir, daemonBootId: randomUUID(), spawnDeadlineMs, ...(binary ? { platform: 'posix', holderPath: binary.path } : { platform: 'win32' }) });
+function newHost(dir: string, spawnDeadlineMs?: number): ProcessHost {
+  const host = new ProcessHost({ dataDir: dir, daemonBootId: randomUUID(), ...(spawnDeadlineMs === undefined ? {} : { spawnDeadlineMs }), ...(binary ? { platform: 'posix', holderPath: binary.path } : { platform: 'win32' }) });
   hosts.push(host);
   return host;
 }
