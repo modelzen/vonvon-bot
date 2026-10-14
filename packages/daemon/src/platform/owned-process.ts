@@ -1,5 +1,5 @@
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
-import { spawnProcess } from '../../platform/spawn';
+import { spawnProcess } from './spawn';
 import { WindowsCodexJob } from './windows-job';
 
 export class CodexProcessCleanupError extends Error {}

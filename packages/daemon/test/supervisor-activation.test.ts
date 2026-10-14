@@ -4,7 +4,7 @@ import type { AdminServiceDeps } from '../src/admin/service';
 import { runSupervisor } from '../src/bot/supervisor';
 
 const captured = vi.hoisted(() => ({ deps: undefined as AdminServiceDeps | undefined, invalidate: vi.fn() }));
-vi.mock('../src/agent/codex-appserver/owned-process', () => ({ closeOwnedCodexProcesses: async () => {}, unconfirmedCodexPids: () => [] }));
+vi.mock('../src/platform/owned-process', () => ({ closeOwnedCodexProcesses: async () => {}, unconfirmedCodexPids: () => [] }));
 vi.mock('../src/admin/service', () => ({ createAdminService: (deps: AdminServiceDeps) => { captured.deps = deps; return deps; } }));
 vi.mock('../src/server/http', async original => ({ ...await original<typeof import('../src/server/http')>(), startApi: vi.fn(async () => ({ port: 1, listen: '127.0.0.1:1', invalidate: captured.invalidate, beginDrain: async () => {}, release: async () => {}, close: async () => {} })) }));
 vi.mock('../src/core/logger', () => ({ log: { info() {}, warn() {}, fail() {} } }));

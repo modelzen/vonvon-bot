@@ -7,8 +7,8 @@ import { AppServerClient, JsonRpcError, JsonRpcPeer } from '../../src/provider/t
 import type { JsonRpcFrame } from '../../src/provider/transport/jsonrpc';
 import { writeNodeExecutable } from '../helpers/node-executable';
 
-vi.mock('../../src/agent/codex-appserver/owned-process', async original => {
-  const actual = await original<typeof import('../../src/agent/codex-appserver/owned-process')>();
+vi.mock('../../src/platform/owned-process', async original => {
+  const actual = await original<typeof import('../../src/platform/owned-process')>();
   const { PassThrough } = await import('node:stream');
   const { createInterface } = await import('node:readline');
   return { ...actual, OwnedCodexProcess: class extends actual.OwnedCodexProcess {

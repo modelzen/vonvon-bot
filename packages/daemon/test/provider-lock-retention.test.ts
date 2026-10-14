@@ -36,7 +36,7 @@ vi.mock('../src/platform/spawn', async original => ({
   ...await original<object>(), spawnProcess: fixture.spawn,
   spawnProcessSync: () => { throw new Error('Synchronous spawn forbidden in provider retention fixture'); },
 }));
-vi.mock('../src/agent/codex-appserver/windows-job', () => ({ WindowsCodexJob: class {
+vi.mock('../src/platform/windows-job', () => ({ WindowsCodexJob: class {
   executable = '/fixture/no-powershell';
   launch() { return []; }
   requestStop() { fixture.job.stop(); }
@@ -215,7 +215,7 @@ beforeEach(async () => {
   fixture.spawn.mockReset().mockReturnValueOnce(child).mockImplementation(() => { throw new Error('Unexpected provider birth'); });
   ({ paths } = await import('../src/config/paths'));
   dataAccess = await import('../src/config/data-access');
-  const { OwnedCodexProcess } = await import('../src/agent/codex-appserver/owned-process');
+  const { OwnedCodexProcess } = await import('../src/platform/owned-process');
   const owner = new OwnedCodexProcess('/fixture/no-provider', [], {});
   const thread: AgentThread = {
     sessionId: 'host', isAlive: () => !directExited,

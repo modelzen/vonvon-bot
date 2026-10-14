@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 import { AppServerClient } from '../src/agent/codex-appserver/app-server-client';
 import { CodexAppServerBackend } from '../src/agent/codex-appserver/backend';
 import { shutdownResidentClients } from '../src/agent/codex-appserver/client-pool';
-import { CodexProcessCleanupError } from '../src/agent/codex-appserver/owned-process';
+import { CodexProcessCleanupError } from '../src/platform/owned-process';
 import { writeNodeExecutable } from './helpers/node-executable';
 
 // 一个最小的假 codex app-server：应答 initialize / thread/start，收到 turn/start

@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { AppServerClient } from './app-server-client';
 import { resolveCodexBin } from './locate';
 import { installManagedCodex, runSetupChild } from './managed-install';
-import { CodexProcessCleanupError } from './owned-process';
+import { CodexProcessCleanupError } from '../../platform/owned-process';
 
 export interface CodexSetup {
   installation: 'missing' | 'installed' | 'unknown';

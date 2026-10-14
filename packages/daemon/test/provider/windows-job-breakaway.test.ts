@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { WindowsCodexJob } from '../../src/agent/codex-appserver/windows-job';
+import { WindowsCodexJob } from '../../src/platform/windows-job';
 
 const breakawaySource = String.raw`
 using System;
