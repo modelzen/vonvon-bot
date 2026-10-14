@@ -104,9 +104,8 @@ export function hostFixture(prefix: string): HostFixture {
 
 const pids = (holders: HolderIdentity[]): string => holders.map(holder => holder.pid).join(', ');
 
-/** Absent pid, or a pid now carrying another start token (reused), means the recorded holder is gone. */
-async function gone(holder: HolderIdentity): Promise<boolean> {
-  if (!alive(holder.pid)) return true;
+/** A pid now carrying another start token was reused, so the recorded holder is gone. Read once: a token read can exec. */
+async function reused(holder: HolderIdentity): Promise<boolean> {
   if (holder.start === undefined) return false;
   const read = await readStartToken(holder.pid);
   return read === 'absent' || (read !== 'unreadable' && read !== holder.start);
@@ -116,7 +115,8 @@ async function gone(holder: HolderIdentity): Promise<boolean> {
 async function survivors(candidates: HolderIdentity[], timeoutMs: number): Promise<HolderIdentity[]> {
   const deadline = Date.now() + timeoutMs;
   const left = await Promise.all(candidates.map(async holder => {
-    while (!(await gone(holder))) {
+    if (!alive(holder.pid) || await reused(holder)) return undefined;
+    while (alive(holder.pid)) {
       if (Date.now() > deadline) return holder;
       await sleep(20);
     }
