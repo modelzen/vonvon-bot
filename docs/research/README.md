@@ -79,6 +79,16 @@ process-ci、draft 和 final 里的流程说法，凡和 `AGENTS.md` 不一致�
 |---|---|---|
 | [roles](2026-10-14-feishu-app-roles/roles.md) | 获取应用信息和获取应用协作者列表两个接口：返回什么、要什么权限、频率限制，以及用在 vonvon-bot 上要注意的地方 | 企业租户里这个权限要不要审核，还没有实测 |
 
+## 2026-10-14 会话对应、授权和后台服务
+
+`2026-10-14-session-approval-service/`，基于 `main` 的 `2c60ea0`。#293（第一版产品定义）合入后，owner 又提了三点：飞书的群和话题怎么对应 agent 的会话、哪些存进上下文；确认卡、选项卡、授权卡要和 agent 自己的授权一致，能设成完全访问；后台服务不依赖 Electron，Linux 上只装 daemon。每份报告末尾有另一个代理的核实记录。结论写进了 `docs/product.md` 3.5、3.8、3.10（#294），两者冲突时以 `docs/product.md` 为准。
+
+| 报告 | 内容 | 说明 |
+|---|---|---|
+| [session-map](2026-10-14-session-approval-service/session-map.md) | 群主区、话题、私聊各对应哪条会话，主区和话题的上下文关系，哪些存进会话历史；今天代码的做法和五处毛病；一个群的时间线 | "别的 bot 的最终回答能进记录块"还没有可行性证据，要实测拉历史时能不能拿到卡片正文 |
+| [approval-ux](2026-10-14-session-approval-service/approval-ux.md) | Codex 和 Claude 自己的审批模型，v2 今天为什么从不问，权限档怎么换成两家的设置，授权卡、选项卡、确认卡的样子和谁能点 | 换算表的根基没核实：Codex 用 `on-request` 加 vonvon 自定义的沙箱设置时，会不会真的发审批请求 |
+| [service](2026-10-14-session-approval-service/service.md) | 不依赖 Electron 的后台服务：main 上已有的 launchd 和 systemd 代码，崩溃重启和连环崩溃，Linux 只装 daemon，#285 和 #110 怎么处理 | 崩溃私聊依赖"机器人能直接给主人发私聊"，没核实 |
+
 ## 补充
 
 codex-desktop 报告写完以后，对照 openai/codex 源码又核实了一次。`codex mcp list` 里的 `cua_repl` 来自内置插件 `unified-computer-use@openai-bundled`，就是原生 Computer Use；显示为 disabled 的 `computer-use` 是旧通道。经 Paseo 调用时，Mac 锁屏会失败（getpaseo/paseo#3346），`full-access` 模式会自动批准打开应用。process 报告里的相关说法和这里一致。
