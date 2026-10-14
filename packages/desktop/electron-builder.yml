@@ -26,6 +26,14 @@ extraResources:
     to: daemon/node_modules
     filter:
       - "**/*"
+  - from: stage/npm
+    to: npm
+    filter:
+      - "**/*"
+  - from: stage/npm/node_modules
+    to: npm/node_modules
+    filter:
+      - "**/*"
 npmRebuild: false
 mac:
   category: public.app-category.developer-tools

@@ -45,7 +45,7 @@
     "zod": "4.6.5"
   },
   "devDependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.178",
+    "@anthropic-ai/claude-agent-sdk": "0.3.296",
     "@types/cross-spawn": "^6.0.6",
     "@types/node": "24.3.0",
     "@types/qrcode-terminal": "^0.12.2",

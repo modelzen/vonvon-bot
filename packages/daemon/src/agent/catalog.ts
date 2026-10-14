@@ -27,6 +27,9 @@ export type BackendAccess = 'app-server' | 'sdk' | 'acp';
  */
 export type DepKind = 'external-cli' | 'npm-ondemand' | 'npm-external';
 
+/** Vonvon Bot 验证过的 Claude Agent SDK 版本（product.md 3.11）。下载和「更新」都装这个版本，devDependency 也锁它。 */
+export const CLAUDE_AGENT_SDK_VERSION = '0.3.296';
+
 export interface BackendDep {
   kind: DepKind;
   /** npm 包名（npm-ondemand / npm-external 时）。 */
@@ -38,7 +41,7 @@ export interface BackendDep {
    * 无此字段 ⇒ 库类后端：走 import() + require.resolve。
    */
   binName?: string;
-  /** pin 版本（npm-ondemand，避免漂移）；undefined ⇒ latest。 */
+  /** pin 版本（npm-ondemand，避免漂移）：下载和「更新」都装它；undefined ⇒ 下载不带版本，更新装 latest。 */
   version?: string;
   /** 体积提示 MB（Web 下载确认用，给用户预期）。 */
   approxSizeMB?: number;
@@ -101,14 +104,15 @@ export const BACKEND_CATALOG: readonly BackendCatalogEntry[] = [
     displayName: 'Claude',
     access: 'sdk',
     dep: {
-      // SDK 是桥的硬依赖（随桥内置），isBackendDepInstalled 路径①经 bridge 自身
-      // node_modules 的 require.resolve 恒命中 → 在 picker 里始终判为「已装」可选。
+      // 打包版不带 SDK，按需下载到用户目录。开发时仓库的 devDependency（锁同一个版本）
+      // 经 require.resolve 也能找到，所以 dev 下始终判为「已装」。
       kind: 'npm-ondemand',
       pkg: '@anthropic-ai/claude-agent-sdk',
+      version: CLAUDE_AGENT_SDK_VERSION,
       // 实测 SDK + 依赖装到用户目录约 265MB（含自带 Claude Code 运行时）；首次下载较久。
       approxSizeMB: 265,
       detectHint: '按需下载 @anthropic-ai/claude-agent-sdk（约 265MB，复用本机 Claude 登录态）',
-      installCmd: '随桥已内置（如缺失：npm i @anthropic-ai/claude-agent-sdk）',
+      installCmd: `npm i @anthropic-ai/claude-agent-sdk@${CLAUDE_AGENT_SDK_VERSION}`,
     },
     // 必须与 ClaudeAgentBackend.supportedModes 完全一致（单测强制）。
     supportedModes: ['qa', 'write', 'full'],

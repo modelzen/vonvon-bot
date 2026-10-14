@@ -7,6 +7,7 @@ import type { DataRoot } from '../../daemon/src/config/data-root.js';
 import { readRunningPidLock } from '../../daemon/src/server/pid-lock.js';
 import { verifyPidLockOwner } from '../../daemon/src/server/owner-verification.js';
 import { classifyDistribution } from '../../daemon/src/service/distribution.js';
+import { withToolDirectories } from '../../daemon/src/platform/tool-path.js';
 import { resolveServiceRoot, serviceTarget, WINDOWS_RUN_KEY, WINDOWS_RUN_VALUE } from '../../daemon/src/service/identity.js';
 import { readRegistration, type WindowsRunObservation } from '../../daemon/src/service/registration.js';
 import { attachExisting } from './attach.js';
@@ -71,7 +72,8 @@ export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonM
     if (!runtime.packaged || distribution.kind !== 'bundled') {
       throw new Error('The packaged Vonvon daemon is unavailable. Build and open the desktop application.');
     }
-    const env: NodeJS.ProcessEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1', VONVON_HOME: runtime.root };
+    // Opened from Finder, the app's PATH lacks Homebrew, so the daemon would not find Codex.
+    const env: NodeJS.ProcessEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1', VONVON_HOME: runtime.root, PATH: withToolDirectories(process.env.PATH, runtime.home) };
     delete env.VONVON_SERVICE;
     const log = await open(join(runtime.root, 'daemon.log'), 'a', 0o600);
     try {

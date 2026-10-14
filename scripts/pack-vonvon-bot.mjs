@@ -7,6 +7,10 @@ import { stageDaemon } from './stage-daemon.mjs';
 import { fileEntries, sha256, validateTree } from './package-tools.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+// The lockfile pins npm (the desktop app ships it), and `npm run` puts it first on PATH.
+// Use that copy explicitly, so the tarball and its manifest do not depend on how this script starts.
+const npmCli = join(root, 'node_modules/npm/bin/npm-cli.js');
+const npm = (npmArgs, options) => execFileSync(process.execPath, [npmCli, ...npmArgs], options);
 const args = process.argv.slice(2);
 if (args.length !== 2 || args[0] !== '--out') throw new Error('usage: pack-vonvon-bot.mjs --out <dir>');
 const out = resolve(args[1]);
@@ -36,7 +40,7 @@ try {
   });
   await mkdir(join(stage, 'ui'), { recursive: true });
   await cp(join(root, 'packages/ui/dist'), join(stage, 'ui/dist'), { recursive: true });
-  const preview = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
+  const preview = JSON.parse(npm(['pack', '--dry-run', '--json', '--ignore-scripts'], {
     cwd: stage, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
   }));
   if (!Array.isArray(preview) || preview.length !== 1 || !Array.isArray(preview[0].files)) {
@@ -52,14 +56,14 @@ try {
     schema: 1, package: 'vonvon-bot', version: daemon.version, sourceHead,
     lockfileSha256: sha256(lockBytes),
     node: process.version,
-    npm: execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim(),
+    npm: npm(['--version'], { encoding: 'utf8' }).trim(),
     esbuild: JSON.parse(await readFile(join(root, 'node_modules/esbuild/package.json'), 'utf8')).version,
     files: await fileEntries(stage),
   };
   await writeFile(join(stage, 'build-manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
   await chmod(join(stage, 'build-manifest.json'), 0o644);
   await mkdir(out, { recursive: true });
-  const output = execFileSync('npm', ['pack', '--ignore-scripts', '--pack-destination', out], { cwd: stage, encoding: 'utf8' }).trim().split('\n').at(-1);
+  const output = npm(['pack', '--ignore-scripts', '--pack-destination', out], { cwd: stage, encoding: 'utf8' }).trim().split('\n').at(-1);
   const tarball = join(out, output);
   await writeFile(`${tarball}.manifest.json`, JSON.stringify({ ...manifest, tarballSha256: sha256(await readFile(tarball)) }, null, 2) + '\n');
   process.stdout.write(`${tarball}\n`);

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -7,6 +7,7 @@ import {
   catalogBackendIds,
   catalogById,
   catalogByFamily,
+  CLAUDE_AGENT_SDK_VERSION,
   isInstallable,
   projectCreatableBackends,
   visibleCatalog,
@@ -83,6 +84,12 @@ describe('可见 catalog 与注册派生（codex + claude-agent）', () => {
     expect(visibleCatalog().map((e) => e.id)).toEqual(['codex-appserver', 'claude-agent']);
   });
 
+  it('Claude Agent SDK 锁一个版本，开发依赖锁同一个（3.11）', () => {
+    expect(catalogById('claude-agent')?.dep.version).toBe(CLAUDE_AGENT_SDK_VERSION);
+    const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { devDependencies: Record<string, string> };
+    expect(manifest.devDependencies['@anthropic-ai/claude-agent-sdk']).toBe(CLAUDE_AGENT_SDK_VERSION);
+  });
+
   it('catalogBackendIds 与 REGISTRY 配对不破（两条）', () => {
     expect([...catalogBackendIds()].sort()).toEqual(['claude-agent', 'codex-appserver']);
     // 工厂存在：两个 id 都能构造出实例。
@@ -157,6 +164,16 @@ describe('installer：命令构建（不真跑 npm）', () => {
     expect(args[i + 1]).toBe('/u/backends');
     const c = args.indexOf('--cache');
     expect(args[c + 1]).toBe('/u/npm-cache');
+  });
+
+  it('buildInstallCommand：可信的 npm-cli.js 由本进程的 Node 以 Node 模式执行', () => {
+    const { command, args, env } = buildInstallCommand('some-pkg@1.0.0', {
+      prefix: '/u/backends', cacheDir: '/u/npm-cache',
+      npm: { command: process.execPath, args: ['/r/npm/bin/npm-cli.js'], env: { ELECTRON_RUN_AS_NODE: '1' } },
+    });
+    expect(command).toBe(process.execPath);
+    expect(args.slice(0, 3)).toEqual(['/r/npm/bin/npm-cli.js', 'install', 'some-pkg@1.0.0']);
+    expect(env).toEqual({ ELECTRON_RUN_AS_NODE: '1' });
   });
 
   it('buildInstallCommand 默认用 paths.backendsDir / npmCacheDir', () => {

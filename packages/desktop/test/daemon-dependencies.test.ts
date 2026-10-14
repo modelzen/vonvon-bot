@@ -2,11 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ChildProcess, spawn } from 'node:child_process';
 import { mkdir, mkdtemp, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { PROTOCOL_VERSION } from '@vonvon/protocol';
 import { createDaemonDependencies, parseWindowsRunQuery, prepareDesktopRoot } from '../src/daemon-dependencies.js';
 import { readRunningPidLock } from '../../daemon/src/server/pid-lock.js';
 import { verifyPidLockOwner } from '../../daemon/src/server/owner-verification.js';
+import { toolDirectories } from '../../daemon/src/platform/tool-path.js';
 
 const attach = vi.hoisted(() => vi.fn());
 
@@ -43,6 +44,7 @@ async function packagedDependencies() {
 
 afterEach(async () => {
   vi.resetAllMocks();
+  vi.unstubAllEnvs();
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
 });
 
@@ -94,6 +96,21 @@ describe('desktop daemon dependencies', () => {
     expect(spawn).toHaveBeenCalledExactlyOnceWith('/owned/Electron', [
       join(resources, 'daemon', 'bin', 'vonvon.mjs'), 'daemon', 'run', '--port', '0', '--bot', 'exact Bot; ID',
     ], expect.objectContaining({ detached: true }));
+  });
+
+  it('gives the daemon the tool directories a Finder launch lacks, in Node mode', async () => {
+    vi.stubEnv('PATH', ['/usr/bin', '/bin'].join(delimiter));
+    const { resources, dependencies } = await packagedDependencies();
+    const child = new ChildProcess();
+    Object.defineProperty(child, 'pid', { value: 9876 });
+    vi.mocked(spawn).mockImplementation(() => {
+      queueMicrotask(() => child.emit('spawn'));
+      return child;
+    });
+    await dependencies.startSelectedBot(0, 'Bot');
+    const env = vi.mocked(spawn).mock.calls[0]?.[2]?.env;
+    expect(env?.PATH).toBe(['/usr/bin', '/bin', ...toolDirectories(dirname(resources))].join(delimiter));
+    expect(env?.ELECTRON_RUN_AS_NODE).toBe('1');
   });
 
   it('does not confirm a selected launch when the spawn event has no child PID', async () => {

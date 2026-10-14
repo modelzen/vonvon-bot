@@ -57,7 +57,7 @@ export function classifyDistribution(root:string, globalRoot?:string):Distributi
   return unknown;
 }
 
-function nearestPackageRoot(modulePath:string):string {
+export function nearestPackageRoot(modulePath:string):string {
   for (let dir=dirname(modulePath);;dir=dirname(dir)) {
     if (existsSync(join(dir,'package.json'))) return dir;
     if (dir===parse(dir).root) return dir;

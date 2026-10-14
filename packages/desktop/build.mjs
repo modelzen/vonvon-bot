@@ -1,5 +1,6 @@
 import { build } from 'esbuild';
 import { access, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stageDaemon } from '../../scripts/stage-daemon.mjs';
@@ -62,6 +63,13 @@ await writeFile(join(stage, 'package.json'), JSON.stringify({
   description: 'Vonvon Bot desktop',
   author: 'modelzen',
 }, null, 2) + '\n');
+
+// The daemon runs Resources/npm/bin/npm-cli.js with Electron in Node mode, so a Mac without Node can still install.
+const pinnedNpm = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).devDependencies.npm;
+const npmSource = dirname(createRequire(join(root, 'package.json')).resolve('npm/package.json'));
+const npmVersion = JSON.parse(await readFile(join(npmSource, 'package.json'), 'utf8')).version;
+if (npmVersion !== pinnedNpm) throw new Error(`Installed npm ${npmVersion} is not the pinned ${pinnedNpm}. Run npm ci.`);
+await cp(npmSource, join(stage, 'npm'), { recursive: true, dereference: true });
 
 const daemonMetadata = JSON.parse(await readFile(join(daemonSource, 'package.json'), 'utf8'));
 await stageDaemon(daemonStage, {
