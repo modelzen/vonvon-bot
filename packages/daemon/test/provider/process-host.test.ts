@@ -1,52 +1,25 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ProcessFact } from '../../src/provider/engines/engine';
 import { readStartToken } from '../../src/provider/process/identity';
-import { readLedger, type HostPlatform } from '../../src/provider/process/ledger';
+import { readLedger } from '../../src/provider/process/ledger';
 import { probeWindowsJob } from '../../src/provider/process/windows-job-probe';
 import { nextStep, ProcessHost, Reservation, type HostedProcess, type Identity, type Phase, type Step } from '../../src/provider/process/process-host';
 import { alive, until } from './channel-recorder';
-import { compileHolder, type HolderBinary } from './native/holder-driver';
+import { hostFixture, PLATFORM } from './host-fixture';
 
 const NODE = process.execPath;
 const FAKE = fileURLToPath(new URL('./fixtures/fake-child.mjs', import.meta.url));
 const HOST_DAEMON = fileURLToPath(new URL('./fixtures/host-daemon.ts', import.meta.url));
-const PLATFORM: HostPlatform = process.platform === 'win32' ? 'win32' : 'posix';
 const groupEmpty = (pid: number): boolean => { try { process.kill(-pid, 0); return false; } catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; } };
 
-let binary: HolderBinary | undefined;
-const hosts: ProcessHost[] = [];
-const dirs: string[] = [];
-const groups: number[] = [];
-const holders: number[] = [];
-const recordHolders = (host: ProcessHost) => holders.push(...host.snapshot().flatMap(s => s.holderPid ?? []));
-
-beforeAll(() => { if (PLATFORM === 'posix') binary = compileHolder(); });
-afterAll(() => binary?.dispose());
-afterEach(async () => {
-  hosts.forEach(recordHolders);
-  await Promise.all(hosts.splice(0).map(host => host.closeAll()));
-  for (const pid of groups.splice(0)) { try { process.kill(PLATFORM === 'posix' ? -pid : pid, 'SIGKILL'); } catch { } }
-  for (const pid of holders.splice(0)) await until(() => !alive(pid), `holder ${pid} exit before cleanup`);
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
-function dataDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'vonvon-process-host-'));
-  dirs.push(dir);
-  return dir;
-}
-function newHost(dir: string, spawnDeadlineMs = 20_000): ProcessHost {
-  const host = new ProcessHost({ dataDir: dir, daemonBootId: randomUUID(), spawnDeadlineMs, ...(binary ? { platform: 'posix', holderPath: binary.path } : { platform: 'win32' }) });
-  hosts.push(host);
-  return host;
-}
+const fx = hostFixture('vonvon-process-host-');
+const { dataDir, newHost, groups } = fx;
 const ledgerOf = (dir: string) => readLedger(join(dir, 'process-owners.json'));
 /** The provider's environment: the whole string environment, as the Windows supervisor tests pass it. node.exe needs more than PATH. */
 const ENV = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
@@ -60,7 +33,6 @@ function evidence(dir: string, host: ProcessHost, text: string, errors: string, 
 
 async function spawnFake(host: ProcessHost, args: string[], dir?: string): Promise<{ hosted: HostedProcess; pid: number; grandchildren: number[]; facts: ProcessFact[] }> {
   const hosted = await host.spawn('codex', 'session-1', { file: NODE, args: [FAKE, ...args], env: ENV });
-  recordHolders(host);
   const facts: ProcessFact[] = [];
   hosted.watch(fact => facts.push(fact));
   let text = '';
@@ -106,7 +78,7 @@ describe('nextStep', () => {
 describe.skipIf(PLATFORM !== 'posix')('ProcessHost on POSIX', () => {
   it('spawn writes process-owners.json at stage running before it resolves, and end retires the record', async () => {
     const dir = dataDir();
-    const host = newHost(dir);
+    const host = newHost({ dir });
     expect(host.available()).toBe(true);
     const { hosted, pid } = await spawnFake(host, []);
     const holderPid = host.snapshot()[0]?.holderPid as number;
@@ -126,7 +98,7 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost on POSIX', () => {
   }, 30_000);
 
   it('terminateTree on a TERM-ignoring tree returns sent, then killTree removes every pid in the group and watch() reports the exit without transport-lost', async () => {
-    const host = newHost(dataDir());
+    const host = newHost();
     const { hosted, pid, grandchildren, facts } = await spawnFake(host, ['--ignore-term', '--grandchildren', '1']);
     expect(grandchildren).toHaveLength(1);
     expect(await hosted.term()).toBe('sent');
@@ -140,7 +112,7 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost on POSIX', () => {
   }, 30_000);
 
   it('end() on a TERM-honouring child waits out TERM_WAIT_MS: the exit is the child\'s own, not a kill', async () => {
-    const host = newHost(dataDir());
+    const host = newHost();
     const { hosted, pid, facts } = await spawnFake(host, ['--term-exit-ms', '300']);
     await hosted.end();
     expect(facts).toEqual([{ kind: 'exit', exit: { observed: 'parent', code: 0, signal: null } }]);
@@ -151,7 +123,7 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost on POSIX', () => {
   it('spawn() ends the record itself when ready misses the spawn deadline, so nothing stays bound without a handle', async () => {
     const dir = dataDir();
     const deadlineMs = 20_000;
-    const host = newHost(dir, deadlineMs);
+    const host = newHost({ dir, spawnDeadlineMs: deadlineMs });
     const reservation = await host.reserve('codex');
     const holderPid = host.snapshot()[0]?.holderPid;
     const reserve = vi.spyOn(host, 'reserve').mockResolvedValueOnce(reservation);
@@ -174,7 +146,7 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost on POSIX', () => {
   }, 30_000);
 
   it('watch() reports transport-lost after the hold when stdout closes with no exit, and the exit still follows', async () => {
-    const host = newHost(dataDir());
+    const host = newHost();
     const { hosted, facts } = await spawnFake(host, ['--ignore-term', '--close-stdout-ms', '100']);
     await until(() => facts.length > 0, 'transport-lost', 5000);
     expect(facts).toEqual([{ kind: 'transport-lost' }]);
@@ -186,7 +158,7 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost on POSIX', () => {
     const dir = dataDir();
     const bundle = join(dir, 'host-daemon.mjs');
     await build({ entryPoints: [HOST_DAEMON], bundle: true, platform: 'node', format: 'esm', outfile: bundle, logLevel: 'silent' });
-    const daemon: ChildProcess = spawn(NODE, [bundle], { env: { ...process.env, DATA_DIR: dir, HOLDER: binary?.path as string, FAKE }, stdio: ['ignore', 'pipe', 'inherit'] });
+    const daemon: ChildProcess = spawn(NODE, [bundle], { env: { ...process.env, DATA_DIR: dir, HOLDER: fx.holderPath() as string, FAKE }, stdio: ['ignore', 'pipe', 'inherit'] });
     let text = '';
     daemon.stdout?.on('data', (chunk: Buffer) => { text += chunk.toString(); });
     await until(() => text.includes('\n'), 'first daemon hosting a tree', 20_000);
@@ -195,7 +167,7 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost on POSIX', () => {
     daemon.kill('SIGKILL');
     await until(() => !alive(holderPid), 'holder exit after daemon death', 20_000);
     expect(ledgerOf(dir).kind).toBe('ok');
-    const second = newHost(dir);
+    const second = newHost({ dir });
     expect(second.snapshot()[0]?.ownership).toBe('unknown');
     expect(await second.sweepOrphans()).toEqual({ gone: 1, unknown: 0, inert: 0, legacy: 0 });
     expect(ledgerOf(dir).kind).toBe('missing');
@@ -211,7 +183,7 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost on POSIX', () => {
     await new Promise(resolve => setTimeout(resolve, 100));
     const record = { id: randomUUID(), daemonBootId: 'earlier-boot', providerId: 'codex', stage: 'running', holder: { pid: standIn.pid, start: 'linux:deadbeef:1' }, provider: { pid: leader.pid } };
     writeFileSync(join(dir, 'process-owners.json'), JSON.stringify({ version: 1, records: [record] }));
-    const host = newHost(dir);
+    const host = newHost({ dir });
     expect(await host.sweepOrphans()).toEqual({ gone: 0, unknown: 1, inert: 0, legacy: 0 });
     const refusal = await host.reserve('codex');
     expect(refusal).toMatchObject({ reason: 'owned-work-unverified' });
@@ -227,7 +199,7 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost on POSIX', () => {
 
   it('a holder killed first leaves an unknown record that refuses admission until its members die, then a sweep retires it', async () => {
     const dir = dataDir();
-    const host = newHost(dir);
+    const host = newHost({ dir });
     const { pid, grandchildren } = await spawnFake(host, ['--ignore-term', '--grandchildren', '1']);
     process.kill(host.snapshot()[0]?.holderPid as number, 'SIGKILL');
     await until(() => host.snapshot()[0]?.ownership === 'unknown', 'record unknown after the holder died');
@@ -248,7 +220,7 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost on POSIX', () => {
     const path = join(dir, 'process-owners.json');
     writeFileSync(path, '{"version":1,"records":[{"stage":"nonsense"}]}');
     const before = readFileSync(path);
-    const host = newHost(dir);
+    const host = newHost({ dir });
     expect(await host.reserve('codex')).toMatchObject({ reason: 'owned-work-unverified' });
     expect(await host.sweepOrphans()).toEqual({ gone: 0, unknown: 0, inert: 0, legacy: 0 });
     expect(readFileSync(path).equals(before)).toBe(true);
@@ -259,16 +231,16 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost on POSIX', () => {
     const path = join(dir, 'owned-pids.json');
     const base = { daemonBootId: 'old', providerId: 'codex', sessionId: 's' };
     writeFileSync(path, JSON.stringify([{ pid: 1, startedAtMs: Date.now() + 3_600_000, ...base }, { pid: 2, startedAtMs: 1, ...base }]));
-    expect(await newHost(dir).sweepOrphans()).toMatchObject({ legacy: 1 });
+    expect(await newHost({ dir }).sweepOrphans()).toMatchObject({ legacy: 1 });
     expect(JSON.parse(readFileSync(path, 'utf8'))).toMatchObject([{ pid: 1 }]);
     writeFileSync(path, JSON.stringify([{ pid: 2, startedAtMs: 1, ...base }]));
-    expect(await newHost(dir).sweepOrphans()).toMatchObject({ legacy: 0 });
+    expect(await newHost({ dir }).sweepOrphans()).toMatchObject({ legacy: 0 });
     expect(existsSync(path)).toBe(false);
   });
 
   it('closeAll releases an unused reservation: the holder exits and the born record is retired', async () => {
     const dir = dataDir();
-    const host = newHost(dir);
+    const host = newHost({ dir });
     const reservation = await host.reserve('codex');
     expect(reservation).toBeInstanceOf(Reservation);
     expect(ledgerOf(dir)).toMatchObject({ kind: 'ok', records: [{ stage: 'born' }] });
@@ -282,7 +254,7 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost on POSIX', () => {
   });
 
   it('release() then spawn() is refused: the reservation is single-use', async () => {
-    const host = newHost(dataDir());
+    const host = newHost();
     const reservation = await host.reserve('codex') as Reservation;
     const released = reservation.release();
     expect(() => reservation.spawn({ file: NODE, args: [], env: {} })).toThrow(/not an unused reservation/);
@@ -293,11 +265,11 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost on POSIX', () => {
 describe.skipIf(PLATFORM !== 'posix')('ProcessHost durability on POSIX', () => {
   /** A directory at the ledger's temporary path makes the next write-and-rename fail with EISDIR, as in Codex's reproduction. */
   const obstruct = (dir: string) => { const path = join(dir, `process-owners.json.${process.pid}.tmp`); mkdirSync(path); return () => rmSync(path, { recursive: true }); };
-  const everyPid = (): number[] => hosts.flatMap(host => host.snapshot().flatMap(s => [s.holderPid, s.providerPid].filter((pid): pid is number => pid !== undefined)));
+  const everyPid = (): number[] => fx.hosts.flatMap(host => host.snapshot().flatMap(s => [s.holderPid, s.providerPid].filter((pid): pid is number => pid !== undefined)));
 
   it('a born write that fails abandons the holder and rejects: no authority survives', async () => {
     const dir = dataDir();
-    const host = newHost(dir);
+    const host = newHost({ dir });
     const reserving = host.reserve('codex');
     const clear = obstruct(dir);
     await expect(reserving).rejects.toThrow(/EISDIR/);
@@ -305,14 +277,14 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost durability on POSIX', () => {
     expect(everyPid()).toEqual([]);
     clear();
     expect(ledgerOf(dir).kind).toBe('missing');
-    const fresh = newHost(dir);
+    const fresh = newHost({ dir });
     expect(await fresh.sweepOrphans()).toEqual({ gone: 0, unknown: 0, inert: 0, legacy: 0 });
     expect(fresh.admission()).toBeUndefined();
   }, 30_000);
 
   it('an attempting write that fails sends no launch: ready rejects, the holder exits, and nothing executed', async () => {
     const dir = dataDir();
-    const host = newHost(dir);
+    const host = newHost({ dir });
     const reservation = await host.reserve('codex') as Reservation;
     const holderPid = host.snapshot()[0]?.holderPid as number;
     const clear = obstruct(dir);
@@ -325,12 +297,12 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost durability on POSIX', () => {
     expect(host.snapshot()).toEqual([]);
     clear();
     expect(ledgerOf(dir).kind).toBe('missing');
-    expect(await newHost(dir).sweepOrphans()).toEqual({ gone: 0, unknown: 0, inert: 0, legacy: 0 });
+    expect(await newHost({ dir }).sweepOrphans()).toEqual({ gone: 0, unknown: 0, inert: 0, legacy: 0 });
   }, 30_000);
 
   it('a launched write that fails sends no GO: the child cancels, ready rejects cancelled, and nothing executed', async () => {
     const dir = dataDir();
-    const host = newHost(dir);
+    const host = newHost({ dir });
     const reservation = await host.reserve('codex') as Reservation;
     const holderPid = host.snapshot()[0]?.holderPid as number;
     const hosted = reservation.spawn({ file: NODE, args: [FAKE], env: ENV });
@@ -343,12 +315,12 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost durability on POSIX', () => {
     expect(everyPid()).toEqual([]);
     clear();
     expect(ledgerOf(dir).kind).toBe('missing');
-    expect(await newHost(dir).sweepOrphans()).toEqual({ gone: 0, unknown: 0, inert: 0, legacy: 0 });
+    expect(await newHost({ dir }).sweepOrphans()).toEqual({ gone: 0, unknown: 0, inert: 0, legacy: 0 });
   }, 30_000);
 
   it('closeAll during an in-flight reserve ends that holder: the reserve rejects and nothing stays alive', async () => {
     const dir = dataDir();
-    const host = newHost(dir);
+    const host = newHost({ dir });
     const reserving = host.reserve('codex');
     await host.closeAll();
     await expect(reserving).rejects.toThrow(/closing/);
@@ -375,7 +347,7 @@ describe.skipIf(PLATFORM !== 'win32')('ProcessHost on Windows', () => {
 
   it('spawns through the supervisor, records running with the Job name, and kill retires the record', async () => {
     const dir = dataDir();
-    const host = newHost(dir);
+    const host = newHost({ dir });
     expect(host.available()).toBe(true);
     const { hosted, pid, facts } = await spawnFake(host, [], dir);
     const holderPid = host.snapshot()[0]?.holderPid;
@@ -401,7 +373,7 @@ describe.skipIf(PLATFORM !== 'win32')('ProcessHost on Windows', () => {
     console.log(`[process-host evidence] session ${session}; dead holder ${dead.pid} reads ${JSON.stringify(read)}; probe ${JSON.stringify(probe)}`);
     expect(read, 'a dead pid must read absent for the holder to be sealed').toBe('absent');
     expect(probe, 'OpenJobObjectW on a name nobody holds must fail with ERROR_FILE_NOT_FOUND').toMatchObject({ probe: 'empty', lastError: 2 });
-    const host = newHost(dir);
+    const host = newHost({ dir });
     expect(host.snapshot()[0]?.ownership).toBe('unknown');
     expect(await host.sweepOrphans()).toEqual({ gone: 1, unknown: 0, inert: 0, legacy: 0 });
     expect(ledgerOf(dir).kind).toBe('missing');
