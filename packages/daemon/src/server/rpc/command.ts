@@ -40,7 +40,7 @@ export async function commandRpc(options: { service: AdminService; jobs: Jobs; p
     case 'bindGroup': {
       await requireRunningAgent(service, request.agentId);
       if (!service.bindGroup) return unsupported();
-      await service.bindGroup(request.agentId, { chatId: request.groupId, projectName: request.projectName, directory: await directory.resolve(request.folderToken), backend: request.tool === 'codex' ? 'codex-appserver' : 'claude-agent', kind: request.conversation === 'threads' ? 'multi' : 'single' });
+      await service.bindGroup(request.agentId, { chatId: request.groupId, projectName: request.projectName, directory: await directory.resolve(request.folderToken), backend: request.tool, kind: request.conversation === 'threads' ? 'multi' : 'single' });
       return applied;
     }
     case 'setPermission': case 'setResponse': {

@@ -6,7 +6,7 @@ import type { BackendProbe } from '../src/agent/types';
 // 避免真机探测（codex 是否装会让断言飘）。installBackendDep 这里不用（service 走
 // 注入的 deps.installBackend），但 index 仍需导出它（service import 了）。
 //
-// 现实只有 codex-appserver 一个真实后端（external-cli，非 installable）。为保住「安装
+// 现实只有 codex 一个真实后端（external-cli，非 installable）。为保住「安装
 // API 通用机制」（版本 pin 拼包名、库类/ bin 类 binName 透传、501 预览态）的覆盖，本
 // mock 额外塞两条**纯合成的假后端**（fake-lib / fake-bin，npm-ondemand），走 installable
 // 分支验证委托逻辑——它们不对应任何真实后端，只是 catalog 派生机制的最小夹具。
@@ -14,13 +14,13 @@ import type { BackendProbe } from '../src/agent/types';
 // vi.mock 会被 hoist 到文件顶部 → 共享常量也得 hoist（vi.hoisted）才能被工厂引用。
 const { CATALOG, doctorResults } = vi.hoisted(() => {
   const doctorResults: Record<string, BackendProbe> = {
-    'codex-appserver': { ok: true, version: '1.2.3' },
+    'codex': { ok: true, version: '1.2.3' },
     'fake-lib': { ok: false, version: null, hint: '未安装，点下载', depState: 'not-installed', installable: true },
     'fake-bin': { ok: false, version: null, hint: '未安装，点下载', depState: 'not-installed', installable: true },
   };
   const CATALOG = [
     {
-      id: 'codex-appserver',
+      id: 'codex',
       agentFamily: 'codex',
       displayName: 'Codex',
       access: 'app-server',
@@ -66,7 +66,7 @@ const { CATALOG, doctorResults } = vi.hoisted(() => {
 });
 
 vi.mock('../src/agent', () => ({
-  DEFAULT_BACKEND_ID: 'codex-appserver',
+  DEFAULT_BACKEND_ID: 'codex',
   BACKEND_CATALOG: CATALOG,
   // 镜像真实 visibleCatalog：滤掉 hidden（本 mock 三条均不 hidden → 全列，验证聚合机制本身）。
   visibleCatalog: () => CATALOG.filter((e) => !(e as { hidden?: boolean }).hidden),
@@ -78,7 +78,7 @@ vi.mock('../src/agent', () => ({
   }),
   catalogById: (id: string) => CATALOG.find((e) => e.id === id),
   isInstallable: (entry: { dep: { kind: string } }) => entry.dep.kind === 'npm-ondemand',
-  effectiveDefaultBackend: async () => 'codex-appserver',
+  effectiveDefaultBackend: async () => 'codex',
   installBackendDep: vi.fn(),
   isBackendInstalledInUserDir: () => false,
   installedBackendVersion: () => null,
@@ -93,10 +93,10 @@ describe('listBackendCatalog · 状态聚合', () => {
   it('聚合 catalog + 三态 depState/installable/version/approxSize + 默认标记', async () => {
     const svc = createAdminService();
     const out = await svc.listBackendCatalog();
-    expect(out.defaultBackend).toBe('codex-appserver');
-    expect(out.entries.map((e) => e.id)).toEqual(['codex-appserver', 'fake-lib', 'fake-bin']);
+    expect(out.defaultBackend).toBe('codex');
+    expect(out.entries.map((e) => e.id)).toEqual(['codex', 'fake-lib', 'fake-bin']);
 
-    const codex = out.entries.find((e) => e.id === 'codex-appserver')!;
+    const codex = out.entries.find((e) => e.id === 'codex')!;
     expect(codex).toMatchObject({
       depKind: 'external-cli',
       depState: 'installed',
@@ -160,7 +160,7 @@ describe('installBackend · installer 委托 + 守门', () => {
   it('非 installable 后端（external-cli codex）→ {ok:false} 给手动装法，不调 installer', async () => {
     const installer = vi.fn();
     const svc = createAdminService({ installBackend: installer });
-    const r = await svc.installBackend('codex-appserver');
+    const r = await svc.installBackend('codex');
     expect(r.ok).toBe(false);
     expect(r.tail).toContain('不支持一键下载');
     expect(installer).not.toHaveBeenCalled();

@@ -60,10 +60,10 @@ describe('probeBackends（并行 doctor + 单个超时兜底）', () => {
 describe('buildProjectSettingsCard 的 🧠 后端区块', () => {
   const base = { name: 'P', cwd: '/x', kind: 'multi' as const, origin: 'created' as const };
 
-  it('只读显示当前后端（缺省 = codex-appserver）+ 创建时锁定，不再有切换按钮', () => {
+  it('只读显示当前后端（缺省 = codex）+ 创建时锁定，不再有切换按钮', () => {
     const json = JSON.stringify(buildProjectSettingsCard(base));
     expect(json).toContain('🧠 后端');
-    expect(json).toContain('codex-appserver'); // 缺省回退到默认 id
+    expect(json).toContain('codex'); // 缺省回退到默认 id
     expect(json).toContain('新建项目时选定'); // 锁定文案
     // 去切换：后端区块不再有「打开后端选择卡」的按钮（旧 dm.proj.backend 入口已删）
     expect(json).not.toContain('dm.proj.backend');
@@ -71,7 +71,7 @@ describe('buildProjectSettingsCard 的 🧠 后端区块', () => {
 
   it('调用方传入展示名时优先用展示名', () => {
     const json = JSON.stringify(
-      buildProjectSettingsCard({ ...base, backend: 'codex-appserver' }, 'Codex (app-server)'),
+      buildProjectSettingsCard({ ...base, backend: 'codex' }, 'Codex (app-server)'),
     );
     expect(json).toContain('Codex (app-server)');
   });
@@ -86,7 +86,7 @@ describe('buildProjectSettingsCard 的 🧠 后端区块', () => {
 
 describe('buildNewProjectFormCard 的后端选择（创建时选定）', () => {
   // codex-only 现实：「可选后端」只有 codex 一个。下面单后端用例即默认主路径。
-  const codexOnly = [{ label: 'Codex App Server', value: 'codex-appserver' }];
+  const codexOnly = [{ label: 'Codex App Server', value: 'codex' }];
 
   it('仅一个可选后端（codex）→ 不出下拉，改静态文案显示默认后端名（默认主路径）', () => {
     const json = JSON.stringify(buildNewProjectFormCard({ backends: codexOnly }));
@@ -102,7 +102,7 @@ describe('buildNewProjectFormCard 的后端选择（创建时选定）', () => {
     expect(json).toContain('other-backend');
     expect(json).toContain('固定不可切换');
     // 预选第一个（codex）
-    expect(json).toContain('"initial_option":"codex-appserver"');
+    expect(json).toContain('"initial_option":"codex"');
   });
 
   it('未传 backends → 不渲染后端选择块（向后兼容）', () => {
@@ -113,29 +113,29 @@ describe('buildNewProjectFormCard 的后端选择（创建时选定）', () => {
 
   it('完成卡显示选定后端（按 id 解析展示名；缺省回退默认 codex 名）', () => {
     const done = JSON.stringify(
-      buildNewProjectDoneCard({ name: 'P', cwd: '/x', kind: 'multi', origin: 'created', backend: 'codex-appserver' } as never),
+      buildNewProjectDoneCard({ name: 'P', cwd: '/x', kind: 'multi', origin: 'created', backend: 'codex' } as never),
     );
     expect(done).toContain('🧠');
-    expect(done).toContain('Codex'); // codex-appserver 的展示名 = Codex
+    expect(done).toContain('Codex'); // codex 的展示名 = Codex
   });
 });
 
 describe('validateBackendSwitch（切换校验的纯函数）', () => {
   const ok: BackendProbe = { ok: true, version: '1.0' };
   // 纯函数：registered/supportedModes 都是入参，不读真注册表。codex-only 现实下真注册表
-  // 只有 codex-appserver；这里额外塞一个泛化 'full-only' 占位 id 以保住「仅支持 full」分支的覆盖
+  // 只有 codex；这里额外塞一个泛化 'full-only' 占位 id 以保住「仅支持 full」分支的覆盖
   // （不引用任何已删后端）。
-  const registered = ['codex-appserver', 'full-only'];
+  const registered = ['codex', 'full-only'];
 
   it('注册表里没有的 id 拒绝，并列出可用后端', () => {
     const reason = validateBackendSwitch({ target: 'no-such', registered, project: {}, probe: ok });
     expect(reason).toContain('未知后端');
-    expect(reason).toContain('codex-appserver');
+    expect(reason).toContain('codex');
   });
 
   it('doctor 探测不通过拒绝，并把 hint（装法/登录提示）带给用户', () => {
     const reason = validateBackendSwitch({
-      target: 'codex-appserver',
+      target: 'codex',
       registered,
       project: {},
       probe: { ok: false, version: null, hint: '未找到 codex CLI' },
@@ -145,7 +145,7 @@ describe('validateBackendSwitch（切换校验的纯函数）', () => {
   });
 
   it('探测没跑成（probe undefined）按不可用拒绝，绝不放行', () => {
-    expect(validateBackendSwitch({ target: 'codex-appserver', registered, project: {} })).toContain('不可用');
+    expect(validateBackendSwitch({ target: 'codex', registered, project: {} })).toContain('不可用');
   });
 
   it('目标后端仅支持 full 时：项目任一档不是 full 都拒绝并说明（含 guestMode 分档）', () => {
@@ -181,7 +181,7 @@ describe('validateBackendSwitch（切换校验的纯函数）', () => {
   it('supportedModes 未声明（codex）⇒ 任意档位放行', () => {
     expect(
       validateBackendSwitch({
-        target: 'codex-appserver',
+        target: 'codex',
         registered,
         project: { mode: 'qa', guestMode: 'write' },
         probe: ok,
@@ -189,7 +189,7 @@ describe('validateBackendSwitch（切换校验的纯函数）', () => {
     ).toBeNull();
   });
 
-  it('codex-appserver 后端实例 supportedModes 未声明（全档）—— 切换 UI 提前拦截与硬守卫同源', () => {
-    expect(createBackend('codex-appserver').supportedModes).toBeUndefined();
+  it('codex 后端实例 supportedModes 未声明（全档）—— 切换 UI 提前拦截与硬守卫同源', () => {
+    expect(createBackend('codex').supportedModes).toBeUndefined();
   });
 });

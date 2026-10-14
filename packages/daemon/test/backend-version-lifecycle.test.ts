@@ -102,7 +102,7 @@ it('keeps the real environment backendVersion RPC pending with its npm view chil
   const service = createAdminService();
   const jobs = new Jobs({ service, changed() {}, toolsSettled() {} });
   let settled = false;
-  const request = environmentRpc(service, jobs, { id: 'version', open: true, event() {} }, { type: 'backendVersion', id: 'claude-agent' }).then(reply => {
+  const request = environmentRpc(service, jobs, { id: 'version', open: true, event() {} }, { type: 'backendVersion', id: 'claude' }).then(reply => {
     settled = true;
     return reply;
   });
@@ -117,7 +117,7 @@ it('keeps the real environment backendVersion RPC pending with its npm view chil
     child.emit('close', 0, null);
     await jobs.close();
   }
-  expect(await request).toMatchObject({ kind: 'read', value: { kind: 'backendVersion', id: 'claude-agent', latest: null, hasUpdate: false } });
+  expect(await request).toMatchObject({ kind: 'read', value: { kind: 'backendVersion', id: 'claude', latest: null, hasUpdate: false } });
 });
 
 it('returns the parsed version after a successful close', async () => {

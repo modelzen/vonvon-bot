@@ -13,7 +13,7 @@ vi.mock('../src/config/paths', async () => {
   return { paths: { appDir, sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), commentInstructionsFile: join(appDir, 'instructions.md'), commentsRootDir: join(appDir, 'comments'), projectsRootDir: join(appDir, 'projects') } };
 });
 const fixture = vi.hoisted(() => ({ backends: new Map<string, unknown>(), replies: 0 }));
-vi.mock('../src/agent', async original => ({ ...await original<object>(), createBackend: (id = 'codex-appserver') => fixture.backends.get(id) }));
+vi.mock('../src/agent', async original => ({ ...await original<object>(), createBackend: (id = 'codex') => fixture.backends.get(id) }));
 vi.mock('../src/core/logger', () => ({ log: { info() {}, warn() {}, fail() {} }, withTrace: (_context: unknown, callback: () => unknown) => callback() }));
 vi.mock('../src/bot/comments', async original => ({
   ...await original<object>(),
@@ -37,23 +37,23 @@ function backend(id: string) {
 }
 afterAll(() => rm(paths.appDir, { recursive: true, force: true }));
 it('the next comment applies model changes to the same native session and backend changes to a new session', async () => {
-  const codex = backend('codex-appserver'); const claude = backend('claude-agent');
-  const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, comments: { backend: 'codex-appserver', model: 'one', effort: 'low' } } };
+  const codex = backend('codex'); const claude = backend('claude');
+  const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, comments: { backend: 'codex', model: 'one', effort: 'low' } } };
   const orchestrator = createOrchestrator({} as never, cfg, paths.appDir, idleHost);
   const event = (replyId: string) => ({ fileType: 'docx', fileToken: 'fixture-doc', commentId: 'comment', replyId, mentionedBot: true, operator: { openId: 'ou_owner' } });
   try {
     await orchestrator.onComment(event('one') as never);
     const original = await getSession('doc:fixture-doc:comment');
-    expect(original).toMatchObject({ backend: 'codex-appserver', model: 'one', effort: 'low' });
-    cfg.preferences!.comments = { backend: 'codex-appserver', model: 'two', effort: 'high' };
+    expect(original).toMatchObject({ backend: 'codex', model: 'one', effort: 'low' });
+    cfg.preferences!.comments = { backend: 'codex', model: 'two', effort: 'high' };
     await orchestrator.onComment(event('two') as never);
     expect(codex.threads[0]!.close).toHaveBeenCalledOnce();
     expect(codex.resumeThread).toHaveBeenCalledWith(expect.objectContaining({ sessionId: original!.sessionId, model: 'two', effort: 'high' }));
     expect(await getSession('doc:fixture-doc:comment')).toMatchObject({ sessionId: original!.sessionId, model: 'two', effort: 'high' });
-    cfg.preferences!.comments = { backend: 'claude-agent', model: 'one', effort: 'low' };
+    cfg.preferences!.comments = { backend: 'claude', model: 'one', effort: 'low' };
     await orchestrator.onComment(event('three') as never);
     expect(claude.startThread).toHaveBeenCalledOnce();
-    expect(await getSession('doc:fixture-doc:comment')).toMatchObject({ backend: 'claude-agent', model: 'one' });
+    expect(await getSession('doc:fixture-doc:comment')).toMatchObject({ backend: 'claude', model: 'one' });
     expect(fixture.replies).toBe(3);
   } finally { await orchestrator.shutdown(); }
 });

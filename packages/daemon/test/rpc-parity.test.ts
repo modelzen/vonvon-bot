@@ -7,7 +7,7 @@ import { readAdminState } from '../src/server/state';
 import { fakeService, socketClient, startFixture } from './server-fixture';
 
 const bot: AdminBot = { appId: 'cli_fixture', name: 'fixture', tenant: 'feishu', active: false, current: true, running: true, pid: 42, startedAt: 12, completionReminder: { mode: 'always', longTaskMinutes: 7 } };
-const project: AdminProject = { name: 'project', chatId: 'oc_fixture', cwd: '/fixture', blank: false, kind: 'multi', origin: 'joined', noMention: false, autoCompact: true, mode: 'qa', guestMode: 'qa', network: false, backend: 'codex-appserver', allowedUsersCount: 0, sessionCount: 2, createdAt: 1 };
+const project: AdminProject = { name: 'project', chatId: 'oc_fixture', cwd: '/fixture', blank: false, kind: 'multi', origin: 'joined', noMention: false, autoCompact: true, mode: 'qa', guestMode: 'qa', network: false, backend: 'codex', allowedUsersCount: 0, sessionCount: 2, createdAt: 1 };
 const host: HostSettingsView = { scope: { kind: 'host' }, sections: { execution: { stored: { codexBin: null }, effective: { codexBin: null }, revision: 'section-token', access: { kind: 'writable' }, apply: [] } }, runtime: { codexBin: null, fallbackCwd: '/fixture', platform: 'darwin' } };
 const agentScope = { kind: 'agent', botId: bot.appId };
 const projectScope = { kind: 'project', botId: bot.appId, projectName: project.name };
@@ -25,14 +25,14 @@ function inventory(folderToken: string) {
     ['PATCH host settings', 'settings', { type: 'save', edit: { scope: { kind: 'host' }, section: 'execution', revision: 'old', patch: { codexBin: null } } }],
     ['POST agent settings/actions', 'settings', { type: 'act', action: { kind: 'voice', botId: bot.appId, action: { action: 'disable' } } }],
     ['POST host settings/actions', 'settings', { type: 'act', action: { kind: 'repairHostCliHooks', agents: ['codex'] } }],
-    ['GET models', 'settings', { type: 'models', query: { botId: bot.appId, backend: 'codex-appserver', purpose: 'session' } }],
+    ['GET models', 'settings', { type: 'models', query: { botId: bot.appId, backend: 'codex', purpose: 'session' } }],
     ['GET voice', 'settings', { type: 'read', scope: agentScope }],
     ['POST voice', 'settings', { type: 'act', action: { kind: 'voice', botId: bot.appId, action: { action: 'disable' } } }],
     ['POST completion-reminder', 'settings', { type: 'save', edit: { scope: agentScope, section: 'completion', revision: 'old', patch: { mode: 'always' } } }],
     ['POST permission', 'command', { type: 'setPermission', membershipId, administrator: 'write', member: 'qa', network: true }],
     ['POST no-mention', 'command', { type: 'setResponse', membershipId, response: 'all' }],
     ['POST auto-compact', 'settings', { type: 'save', edit: { scope: projectScope, section: 'compact', revision: 'old', patch: { autoCompact: false } } }],
-    ['POST backend', 'admin', { type: 'switchBackend', agentId: bot.appId, projectName: project.name, backend: 'claude-agent' }],
+    ['POST backend', 'admin', { type: 'switchBackend', agentId: bot.appId, projectName: project.name, backend: 'claude' }],
     ['PATCH bot', 'command', { type: 'setAgentEnabled', agentId: bot.appId, enabled: true }],
     ['DELETE bot', 'command', { type: 'deleteAgent', agentId: bot.appId }],
     ['POST collaboration', 'collaboration', { action: 'project', agentId: bot.appId, groupId: project.chatId, projectName: project.name }],
@@ -59,10 +59,10 @@ function inventory(folderToken: string) {
     ['GET logs', 'admin', { type: 'logs' }],
     ['GET logs/stream', 'admin', { type: 'followLogs', follow: true }],
     ['GET backends', 'environment', { type: 'backendCatalog' }],
-    ['POST backend/install', 'environment', { type: 'backendInstall', id: 'claude-agent', update: false }],
-    ['POST backend/update', 'environment', { type: 'backendInstall', id: 'claude-agent', update: true }],
-    ['GET backend/version', 'environment', { type: 'backendVersion', id: 'claude-agent' }],
-    ['DELETE backend', 'environment', { type: 'backendUninstall', id: 'claude-agent' }],
+    ['POST backend/install', 'environment', { type: 'backendInstall', id: 'claude', update: false }],
+    ['POST backend/update', 'environment', { type: 'backendInstall', id: 'claude', update: true }],
+    ['GET backend/version', 'environment', { type: 'backendVersion', id: 'claude' }],
+    ['DELETE backend', 'environment', { type: 'backendUninstall', id: 'claude' }],
   ];
 }
 

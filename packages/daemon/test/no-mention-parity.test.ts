@@ -35,7 +35,7 @@ vi.mock('../src/project/registry', async original => ({
 }));
 vi.mock('../src/agent', async original => ({
   ...await original<object>(),
-  createBackend: () => ({ id: 'codex-appserver', listModels: async () => [], startThread: fake.startThread }),
+  createBackend: () => ({ id: 'codex', listModels: async () => [], startThread: fake.startThread }),
 }));
 vi.mock('../src/bot/session-store', async original => ({
   ...await original<object>(),

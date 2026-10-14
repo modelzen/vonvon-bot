@@ -13,7 +13,7 @@ export class UnsentRequestError extends Error {}
  * SessionRecord 缺省)——the historical codex app-server path, which must stay
  * behavior-identical. Declared here (not index.ts) so pure-type consumers like
  * session-store can backfill old records without importing the registry. */
-export const DEFAULT_BACKEND_ID = 'codex-appserver';
+export const DEFAULT_BACKEND_ID = 'codex';
 
 export const REASONING_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
 

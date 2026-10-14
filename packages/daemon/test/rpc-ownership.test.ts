@@ -13,7 +13,7 @@ import { createSettingsOwner } from '../src/admin/settings';
 import { fakeService, socketClient, startFixture } from './server-fixture';
 
 const bot: AdminBot = { name: 'Owner', appId: 'cli_owner', tenant: 'feishu', active: true, current: false, running: true, completionReminder: { mode: 'failures', longTaskMinutes: 3 } };
-const project: AdminProject = { name: 'Project', chatId: 'oc_group', cwd: '/', blank: false, kind: 'multi', origin: 'joined', noMention: false, autoCompact: true, mode: 'qa', guestMode: 'qa', network: false, backend: 'codex-appserver', allowedUsersCount: 0, sessionCount: 0, createdAt: 1 };
+const project: AdminProject = { name: 'Project', chatId: 'oc_group', cwd: '/', blank: false, kind: 'multi', origin: 'joined', noMention: false, autoCompact: true, mode: 'qa', guestMode: 'qa', network: false, backend: 'codex', allowedUsersCount: 0, sessionCount: 0, createdAt: 1 };
 
 function requests(agentId: string, folderToken = '00000000-0000-4000-8000-000000000000') {
   return [
@@ -67,9 +67,9 @@ describe('RPC owner admission', () => {
       }
       expect(pendingGroups).toHaveBeenCalledWith(bot.appId);
       expect(joinedGroups).toHaveBeenCalledWith(bot.appId, 'opaque');
-      expect(bindGroup).toHaveBeenCalledWith(bot.appId, { chatId: 'oc_group', projectName: 'Project', directory: await realpath(homedir()), backend: 'codex-appserver', kind: 'multi' });
+      expect(bindGroup).toHaveBeenCalledWith(bot.appId, { chatId: 'oc_group', projectName: 'Project', directory: await realpath(homedir()), backend: 'codex', kind: 'multi' });
       expect(collaboration).toHaveBeenNthCalledWith(1, bot.appId, { action: 'compact', chatId: 'oc_group', projectName: 'Project', threadId: 'omt_thread' });
-      expect(collaboration).toHaveBeenNthCalledWith(2, bot.appId, expect.objectContaining({ action: 'createProject', name: 'Project', directory: await realpath(homedir()), kind: 'multi', backend: 'codex-appserver' }));
+      expect(collaboration).toHaveBeenNthCalledWith(2, bot.appId, expect.objectContaining({ action: 'createProject', name: 'Project', directory: await realpath(homedir()), kind: 'multi', backend: 'codex' }));
       active = false;
       for (const [index, operation] of operations.entries()) {
         expect(await client.call(requestSchema.parse({ type: 'request', id: `after-stop-${index}`, ...operation }))).toMatchObject({ type: 'error', code: 'conflict' });

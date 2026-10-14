@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { permissionOptions } from '../src/agent/claude-agent/permission';
 
 /**
- * 锁定 claude-agent 三档权限 → SDK 选项的映射（安全关键，纯函数无网络）。
+ * 锁定 claude 三档权限 → SDK 选项的映射（安全关键，纯函数无网络）。
  * 这些不变量经 spike4/5/6 在 macOS 实证（写限 cwd / qa 只读 / 堵禁沙箱逃逸）。
  */
 const CWD = '/Users/x/proj';

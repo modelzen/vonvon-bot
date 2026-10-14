@@ -7,12 +7,13 @@ import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { bindModeFor, joinExistingGroup } from '../project/lifecycle';
 import { getProjectByChatId, getProjectByName, listProjects, type Project } from '../project/registry';
 import { AdminWriteError } from './ops';
+import type { ProviderId } from '../provider/model';
 
 export interface BindGroupInput {
   chatId: string;
   projectName: string;
   directory: string;
-  backend: 'codex-appserver' | 'claude-agent';
+  backend: ProviderId;
   kind: 'multi' | 'single';
 }
 export type AdminGroupOp = { kind: 'joinedGroups'; cursor?: string } | { kind: 'bindGroup'; input: BindGroupInput };
@@ -31,7 +32,7 @@ export function parseBindGroupInput(raw: Record<string, unknown>): BindGroupInpu
       typeof chatId !== 'string' || !/^oc_[\w-]{1,200}$/.test(chatId) ||
       typeof projectName !== 'string' || !projectName.trim() || projectName.length > 200 || /[\x00-\x1f]/.test(projectName) ||
       typeof directory !== 'string' || !isAbsolute(directory) || directory.length > 4096 || /[\x00-\x1f]/.test(directory) ||
-      (backend !== 'codex-appserver' && backend !== 'claude-agent') || (kind !== 'multi' && kind !== 'single')) {
+      (backend !== 'codex' && backend !== 'claude') || (kind !== 'multi' && kind !== 'single')) {
     throw new InvalidGroupInput('群绑定参数无效');
   }
   return { chatId, projectName: projectName.trim(), directory, backend, kind };

@@ -16,7 +16,7 @@ export const toolNames: Record<EnvironmentTool, string> = {
 
 export function groupAgentBackends(tools: EnvironmentToolState[], backends: BackendEntry[]): { codexHost?: BackendEntry; otherBackends: BackendEntry[] } {
   if (!tools.some((tool) => tool.tool === "codex")) return { otherBackends: backends };
-  const index = backends.findIndex((backend) => backend.id === "codex-appserver" && backend.depKind === "external-cli");
+  const index = backends.findIndex((backend) => backend.id === "codex" && backend.depKind === "external-cli");
   if (index < 0) return { otherBackends: backends };
   return { codexHost: backends[index], otherBackends: backends.filter((_, position) => position !== index) };
 }

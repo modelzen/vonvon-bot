@@ -18,7 +18,7 @@ describe("pinned contract extraction", () => {
       name:"bot",appId:"cli_fixture",tenant:"feishu",active:true,current:true,running:true,
       pid:42,startedAt:10,connection:"connected",completionReminder:{mode:"failures",longTaskMinutes:3},
       projects:[{name:"p",chatId:"oc_fixture",cwd:"/tmp/p",blank:false,kind:"multi",origin:"joined",
-        noMention:true,autoCompact:false,mode:"full",guestMode:"qa",network:false,backend:"codex-appserver",
+        noMention:true,autoCompact:false,mode:"full",guestMode:"qa",network:false,backend:"codex",
         allowedUsersCount:2,sessionCount:3,createdAt:9}],
     }]};
     expect(adminStateSchema.parse(state)).toEqual(state);
@@ -30,7 +30,7 @@ describe("pinned contract extraction", () => {
       {type:"state"},{type:"diagnosis",agentId:"cli_fixture"},{type:"hostDoctor"},
       {type:"setupStatus",agentId:"cli_fixture"},{type:"daemonStatus"},{type:"codexSetup"},
       {type:"logs",maxBytes:1024},{type:"followLogs",follow:true},
-      {type:"switchBackend",agentId:"cli_fixture",projectName:"p",backend:"codex-appserver"},
+      {type:"switchBackend",agentId:"cli_fixture",projectName:"p",backend:"codex"},
     ];
     for (const payload of adminRequests) expect(adminRequestSchema.safeParse(payload).success).toBe(true);
     for (const payload of [{type:"list"},{type:"list",path:"/tmp"},{type:"choose",path:"/tmp"}]) {
@@ -104,8 +104,8 @@ describe("pinned contract extraction", () => {
       {scope:{kind:"project",botId:"cli_fixture",projectName:"fixture"},sections:{
         permission:section({mode:"qa",guestMode:"qa",network:false}),
         response:section({noMention:false}),compact:section({autoCompact:true}),model:section({selection}),
-      },identity:{chatId:"oc_fixture",backend:"codex-appserver",cwd:"/tmp",kind:"multi"},members:{openIds:[],revision:"r1"}},
-      {scope:{kind:"session",botId:"cli_fixture",threadId:"thread"},sections:{model:section({selection})},identity:{backend:"codex-appserver",sessionId:"session",chatId:"oc_fixture",projectName:"fixture"}},
+      },identity:{chatId:"oc_fixture",backend:"codex",cwd:"/tmp",kind:"multi"},members:{openIds:[],revision:"r1"}},
+      {scope:{kind:"session",botId:"cli_fixture",threadId:"thread"},sections:{model:section({selection})},identity:{backend:"codex",sessionId:"session",chatId:"oc_fixture",projectName:"fixture"}},
       {scope:{kind:"host"},sections:{execution:section({codexBin:null})},runtime:{codexBin:null,fallbackCwd:"/tmp",platform:"macos"}},
     ];
     for (const view of views) {
@@ -140,7 +140,7 @@ describe("pinned contract extraction", () => {
 });
 
 it("accepts optional omittedBytes and rejects negative or fractional counts", () => {
-  const reply = {kind:"backendInstall",operationId:randomUUID(),id:"claude-agent",update:false,attached:false,replay:[]};
+  const reply = {kind:"backendInstall",operationId:randomUUID(),id:"claude",update:false,attached:false,replay:[]};
   expect(environmentReplySchema.parse(reply)).toEqual(reply);
   expect(environmentReplySchema.parse({...reply,omittedBytes:123})).toEqual({...reply,omittedBytes:123});
   expect(environmentReplySchema.safeParse({...reply,omittedBytes:-1}).success).toBe(false);

@@ -36,7 +36,7 @@ export async function createSnapshotStore(options: {
   const readTools = options.readTools ?? (async (): Promise<ToolState[]> => {
     const [codex, claude] = await Promise.all([
       options.service.codexSetup?.().catch(() => undefined),
-      createBackend('claude-agent').doctor({ force: true }).catch(() => undefined),
+      createBackend('claude').doctor({ force: true }).catch(() => undefined),
     ]);
     return [
       { tool: 'codex', installation: codex?.installation ?? 'unknown', authentication: codex?.authentication ?? 'unknown', version: codex?.version ?? null, ...(codex?.message ? { message: codex.message } : {}) },

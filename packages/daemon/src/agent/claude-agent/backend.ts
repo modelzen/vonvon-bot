@@ -182,7 +182,7 @@ async function* idleClaudeInput(signal: AbortSignal): AsyncGenerator<never, void
  * ANTHROPIC_API_KEY. No separate login step in the bridge.
  */
 export class ClaudeAgentBackend implements AgentBackend {
-  readonly id = 'claude-agent';
+  readonly id = 'claude';
   readonly displayName = 'Claude';
   /** Successful SDK discovery is stable for this backend process and avoids
    * spawning an auxiliary Claude CLI on every topic start/settings render.
@@ -262,7 +262,7 @@ export class ClaudeAgentBackend implements AgentBackend {
       this.modelCache = discovered.map(mapClaudeModel);
       return this.modelCache;
     } catch (err) {
-      log.fail('agent', err, { backend: 'claude-agent', phase: 'supportedModels' });
+      log.fail('agent', err, { backend: 'claude', phase: 'supportedModels' });
       return STATIC_MODELS;
     } finally {
       abortController.abort();
@@ -280,7 +280,7 @@ export class ClaudeAgentBackend implements AgentBackend {
         .map(mapSessionSummary)
         .sort((a, b) => b.updatedAt - a.updatedAt);
     } catch (err) {
-      log.fail('agent', err, { backend: 'claude-agent', phase: 'listSessions' });
+      log.fail('agent', err, { backend: 'claude', phase: 'listSessions' });
       return [];
     }
   }
@@ -293,7 +293,7 @@ export class ClaudeAgentBackend implements AgentBackend {
       const messages = await sdk.getSessionMessages(sessionId, { dir: cwd });
       return foldSessionMessages(messages, maxTurns, cwd);
     } catch (err) {
-      log.fail('agent', err, { backend: 'claude-agent', phase: 'getSessionMessages', sessionId });
+      log.fail('agent', err, { backend: 'claude', phase: 'getSessionMessages', sessionId });
       return { turns: [], totalTurns: 0 };
     }
   }

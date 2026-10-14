@@ -94,8 +94,8 @@ describe('buildClearedCard', () => {
     const threads: ThreadSummary[] = [
       { sessionId: 'c1', preview: 'x', createdAt: NOW - 60, updatedAt: NOW - 60 },
     ];
-    const withBackend = buildResumeCard({ ...state(threads), backend: 'codex-appserver' });
-    expect(buttons(withBackend)[0].behaviors[0].value).toMatchObject({ t: 'c1', b: 'codex-appserver' });
+    const withBackend = buildResumeCard({ ...state(threads), backend: 'codex' });
+    expect(buttons(withBackend)[0].behaviors[0].value).toMatchObject({ t: 'c1', b: 'codex' });
     // 旧 state（无 backend）→ 不带 b，handler 落回默认后端
     const legacy = buildResumeCard(state(threads));
     expect(buttons(legacy)[0].behaviors[0].value.b).toBeUndefined();

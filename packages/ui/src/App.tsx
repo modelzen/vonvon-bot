@@ -66,9 +66,9 @@ type Modal =
   | null;
 
 const backendName = (backend: string) =>
-  backend === "codex-appserver"
+  backend === "codex"
     ? "Codex"
-    : backend === "claude-agent"
+    : backend === "claude"
       ? "Claude"
       : `${backend}（暂不支持修改）`;
 const connectedLabel = (connection: string) =>

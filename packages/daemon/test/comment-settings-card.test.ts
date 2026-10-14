@@ -30,8 +30,8 @@ const claudeModels = [
 ]; // 2 models, no effort tiers
 
 const TWO_BACKENDS = [
-  { id: 'codex-appserver', label: 'Codex' },
-  { id: 'claude-agent', label: 'Claude' },
+  { id: 'codex', label: 'Codex' },
+  { id: 'claude', label: 'Claude' },
 ];
 
 function cfg(comments?: NonNullable<AppConfig['preferences']>['comments']): AppConfig {
@@ -91,27 +91,27 @@ describe('buildCommentSettingsCard', () => {
   });
 
   it('omits backend buttons when only one backend is installed', () => {
-    const j = json(cfg(), [{ id: 'codex-appserver', label: 'Codex' }], codexModels);
+    const j = json(cfg(), [{ id: 'codex', label: 'Codex' }], codexModels);
     expect(j).not.toContain('dm.comment.setBackend');
   });
 
   it('preselects the configured model/effort', () => {
-    const j = json(cfg({ backend: 'codex-appserver', model: 'gpt-5-codex', effort: 'high' }), TWO_BACKENDS, codexModels);
+    const j = json(cfg({ backend: 'codex', model: 'gpt-5-codex', effort: 'high' }), TWO_BACKENDS, codexModels);
     expect(j).toContain('"initial_option":"gpt-5-codex"');
     expect(j).toContain('"initial_option":"high"');
   });
 
   it('previews another Agent without carrying the saved backend model into it', () => {
     const j = json(
-      cfg({ backend: 'codex-appserver', model: 'gpt-5-codex', effort: 'high' }),
+      cfg({ backend: 'codex', model: 'gpt-5-codex', effort: 'high' }),
       TWO_BACKENDS,
       claudeModels,
       undefined,
-      'claude-agent',
+      'claude',
     );
     expect(j).toContain('这里只预览可选配置');
     expect(j).toContain('待保存配置');
-    expect(j).toContain('"a":"dm.comment.submit","b":"claude-agent"');
+    expect(j).toContain('"a":"dm.comment.submit","b":"claude"');
     expect(j).toContain('"initial_option":"opus"');
     expect(j).not.toContain('gpt-5-codex');
   });

@@ -6,7 +6,7 @@ import type { AdminBot, AdminProject } from '../src/admin/service';
 import { fakeService, socketClient, startFixture } from './server-fixture';
 
 const bot: AdminBot = { appId: 'cli_a', name: 'Bot', tenant: 'feishu', active: true, current: true, running: true, completionReminder: { mode: 'failures', longTaskMinutes: 3 } };
-const project: AdminProject = { name: 'Project', chatId: 'oc_chat', cwd: '/tmp', blank: false, kind: 'multi', origin: 'joined', noMention: false, autoCompact: true, mode: 'qa', guestMode: 'qa', network: false, backend: 'codex-appserver', allowedUsersCount: 0, sessionCount: 0, createdAt: 1 };
+const project: AdminProject = { name: 'Project', chatId: 'oc_chat', cwd: '/tmp', blank: false, kind: 'multi', origin: 'joined', noMention: false, autoCompact: true, mode: 'qa', guestMode: 'qa', network: false, backend: 'codex', allowedUsersCount: 0, sessionCount: 0, createdAt: 1 };
 const agentId = agentIdSchema.parse(bot.appId);
 const groupId = groupIdSchema.parse(project.chatId);
 
@@ -25,7 +25,7 @@ describe('desktop companion RPC capabilities', () => {
       const chosen = await client.call({ type: 'request', id: 'folder', method: 'directory', payload: { type: 'choose', path: homedir() } });
       if (chosen.type !== 'response' || chosen.method !== 'directory' || chosen.payload.kind !== 'folderChosen') throw new Error('folder token missing');
       expect(await client.call({ type: 'request', id: 'bind', method: 'command', payload: { type: 'bindGroup', agentId, groupId, projectName: project.name, folderToken: chosen.payload.folder.token, tool: 'codex', conversation: 'threads' } })).toMatchObject({ type: 'response', payload: { kind: 'applied' } });
-      expect(bindGroup).toHaveBeenCalledWith(bot.appId, { chatId: project.chatId, projectName: project.name, directory: homedir(), backend: 'codex-appserver', kind: 'multi' });
+      expect(bindGroup).toHaveBeenCalledWith(bot.appId, { chatId: project.chatId, projectName: project.name, directory: homedir(), backend: 'codex', kind: 'multi' });
       await client.close();
     } finally { await fixture.close(); }
   });

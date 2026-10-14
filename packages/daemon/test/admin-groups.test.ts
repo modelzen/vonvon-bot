@@ -26,7 +26,7 @@ function channelFixture() {
   const channel = { rawClient: { im: { v1: { message: { create: message }, chatMembers: { isInChat: membership }, chat: { list } } } } } as unknown as LarkChannel;
   return { channel, message, membership, list };
 }
-const input = (directory: string): BindGroupInput => ({ chatId: 'oc_a', projectName: 'First', directory, backend: 'codex-appserver', kind: 'multi' });
+const input = (directory: string): BindGroupInput => ({ chatId: 'oc_a', projectName: 'First', directory, backend: 'codex', kind: 'multi' });
 
 describe('desktop group commands in the owning bot', () => {
   it('commits once through IPC, sends one welcome, and retries identical bindings', async () => {

@@ -118,20 +118,20 @@ else process.exit(0);
   const agentId = 'cli_fixture';
   const groupId = 'oc_fixture';
   const projectName = 'fixture';
-  const project = { name: projectName, chatId: groupId, cwd: '/fixture', kind: 'multi' as const, backend: 'codex-appserver', enabled: true, revision: 'token' };
+  const project = { name: projectName, chatId: groupId, cwd: '/fixture', kind: 'multi' as const, backend: 'codex', enabled: true, revision: 'token' };
   const bot = { appId: agentId, name: 'fixture', tenant: 'feishu' as const, active: true, current: true, running: true, completionReminder: { mode: 'always' as const, longTaskMinutes: 7 } };
   const host = { scope: { kind: 'host' as const }, sections: { execution: { stored: { codexBin: null }, effective: { codexBin: null }, revision: 'token', access: { kind: 'writable' as const }, apply: [] } }, runtime: { codexBin: null, fallbackCwd: '/fixture', platform: 'darwin' } };
   const service = fakeService({
     listBots: async () => [bot],
-    listProjects: async () => [{ name: projectName, chatId: groupId, cwd: '/fixture', blank: false, kind: 'multi', origin: 'joined', noMention: false, autoCompact: true, mode: 'qa', guestMode: 'qa', network: false, backend: 'codex-appserver', allowedUsersCount: 0, sessionCount: 0, createdAt: 1 }],
+    listProjects: async () => [{ name: projectName, chatId: groupId, cwd: '/fixture', blank: false, kind: 'multi', origin: 'joined', noMention: false, autoCompact: true, mode: 'qa', guestMode: 'qa', network: false, backend: 'codex', allowedUsersCount: 0, sessionCount: 0, createdAt: 1 }],
     pendingGroups: async () => ({ groups: [] }),
     joinedGroups: async () => ({ groups: [] }),
-    bindGroup: async () => ({ name: projectName, chatId: groupId, cwd: '/fixture', blank: false, kind: 'multi', origin: 'joined', noMention: false, autoCompact: true, mode: 'qa', guestMode: 'qa', network: false, backend: 'codex-appserver', allowedUsersCount: 0, sessionCount: 0, createdAt: 1 }),
+    bindGroup: async () => ({ name: projectName, chatId: groupId, cwd: '/fixture', blank: false, kind: 'multi', origin: 'joined', noMention: false, autoCompact: true, mode: 'qa', guestMode: 'qa', network: false, backend: 'codex', allowedUsersCount: 0, sessionCount: 0, createdAt: 1 }),
     startCodexJob: () => ({ id: operationId }),
     codexJob: () => ({ id: operationId, type: 'install', state: 'succeeded' }),
     collaboration: async (_agent, request) => {
       if (request.action === 'project') return { project };
-      if (request.action === 'history') return { sessions: [], threads: [], backend: 'codex-appserver' };
+      if (request.action === 'history') return { sessions: [], threads: [], backend: 'codex' };
       if (request.action === 'context') return { threadId: request.threadId, usage: null, run: null };
       if (request.action === 'shareUsage') return { messageId: 'om_fixture' };
       if (request.action === 'createProject' || request.action === 'editProject') return { ok: true, project };
@@ -171,19 +171,19 @@ else process.exit(0);
         { type: 'read', scope: { kind: 'host' } },
         { type: 'save', edit: { scope: { kind: 'host' }, section: 'execution', revision: 'token', patch: { codexBin: null } } },
         { type: 'act', action: { kind: 'repairHostCliHooks', agents: ['codex'] } },
-        { type: 'models', query: { botId: agentId, backend: 'codex-appserver', purpose: 'session' } },
+        { type: 'models', query: { botId: agentId, backend: 'codex', purpose: 'session' } },
         { type: 'sessions', botId: agentId, projectName }, { type: 'chooseExecutable' }, { type: 'saveExecutable', token: operationId, revision: 'token' },
       ],
       collaboration: [
         { action: 'createProject', agentId, name: projectName, folder: { kind: 'default' }, tool: 'codex', conversation: 'threads' },
         { action: 'project', ...target }, { action: 'editProject', ...target, expectedRevision: 'token' }, { action: 'removeProject', ...target, expectedRevision: 'token' },
         { action: 'history', ...target }, { action: 'context', ...session }, { action: 'clear', ...session }, { action: 'compact', ...session },
-        { action: 'resume', ...target, sessionId: 'session', backend: 'codex-appserver' }, { action: 'startGoal', ...session, objective: 'fixture' },
+        { action: 'resume', ...target, sessionId: 'session', backend: 'codex' }, { action: 'startGoal', ...session, objective: 'fixture' },
         { action: 'stop', ...session, runId: 'run' }, { action: 'endGoal', ...session, runId: 'run' }, { action: 'reminder', ...session, runId: 'run', requested: true },
         { action: 'usage', force: false }, { action: 'shareUsage', ...target, sections: ['stats'] }, { action: 'openGroup', ...target },
       ],
       environment: [
-        { type: 'scan' }, { type: 'backendCatalog' }, { type: 'backendVersion', id: 'claude-agent' }, { type: 'backendInstall', id: 'claude-agent', update: false }, { type: 'backendUninstall', id: 'claude-agent' },
+        { type: 'scan' }, { type: 'backendCatalog' }, { type: 'backendVersion', id: 'claude' }, { type: 'backendInstall', id: 'claude', update: false }, { type: 'backendUninstall', id: 'claude' },
         { type: 'install', tool: 'lark-cli' }, { type: 'update', tool: 'lark-cli' }, { type: 'toolInstallStatus' }, { type: 'cancelInstall', operationId }, { type: 'uninstall', tool: 'lark-cli' },
         { type: 'authStatus', tool: 'lark-cli' }, { type: 'startLogin', tool: 'lark-cli' }, { type: 'loginStatus' }, { type: 'openVerification', operationId }, { type: 'cancelLogin', operationId },
         { type: 'profileList' }, { type: 'profileUse', name: 'test' }, { type: 'profileAdd', name: 'test', appId: 'cli_test', appSecret: 'fake-secret', brand: 'feishu', use: false },

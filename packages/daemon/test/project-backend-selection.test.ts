@@ -10,9 +10,9 @@ import { assertBackendUsable } from '../src/project/lifecycle';
 
 describe('safeBackendId —— 飞书表单 backend 值的防伪收口', () => {
   it('合法注册 id 原样放行（字符串 / 数组 / {value} 三形态都收）', () => {
-    expect(safeBackendId({ backend: 'codex-appserver' })).toBe('codex-appserver');
-    expect(safeBackendId({ backend: ['codex-appserver'] })).toBe('codex-appserver');
-    expect(safeBackendId({ backend: { value: 'codex-appserver' } })).toBe('codex-appserver');
+    expect(safeBackendId({ backend: 'codex' })).toBe('codex');
+    expect(safeBackendId({ backend: ['codex'] })).toBe('codex');
+    expect(safeBackendId({ backend: { value: 'codex' } })).toBe('codex');
   });
 
   it('未选 / 空 → undefined（落回默认 codex）', () => {
@@ -23,15 +23,15 @@ describe('safeBackendId —— 飞书表单 backend 值的防伪收口', () => {
 
   it('伪造 / 未注册 id → 丢弃为 undefined（防表单篡改注入任意后端）', () => {
     expect(safeBackendId({ backend: 'gpt-9' })).toBeUndefined();
-    expect(safeBackendId({ backend: 'codex-appserver; rm -rf' })).toBeUndefined();
+    expect(safeBackendId({ backend: 'codex; rm -rf' })).toBeUndefined();
     expect(safeBackendId({ backend: '../../etc' })).toBeUndefined();
   });
 });
 
 describe('bindModeFor —— 绑定『已有群』按所选后端定档（外部群仍默认 qa）', () => {
   it('codex / 未选 → undefined（沿用 joinExistingGroup 的 qa 只读默认，外部群安全不变）', () => {
-    // codex-appserver 的 supportedModes=undefined ⇒ 全档放行，不强推 full，落回 qa 默认。
-    expect(bindModeFor('codex-appserver')).toBeUndefined();
+    // codex 的 supportedModes=undefined ⇒ 全档放行，不强推 full，落回 qa 默认。
+    expect(bindModeFor('codex')).toBeUndefined();
     expect(bindModeFor(undefined)).toBeUndefined();
   });
 
@@ -46,8 +46,8 @@ describe('assertBackendUsable —— 落地前校验「已下载 + 支持该档�
   });
 
   it('codex 基线（external-cli）→ 恒可用，任意档放行（不参与已下载判定）', () => {
-    expect(() => assertBackendUsable('codex-appserver', 'full')).not.toThrow();
-    expect(() => assertBackendUsable('codex-appserver', 'qa')).not.toThrow();
+    expect(() => assertBackendUsable('codex', 'full')).not.toThrow();
+    expect(() => assertBackendUsable('codex', 'qa')).not.toThrow();
   });
 
   it('未注册 / 不在 projectCreatableBackends 的后端 id → 抛「当前不可用」（picker 不提供的后端落地时兜底拒绝）', () => {

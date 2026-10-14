@@ -86,7 +86,7 @@ beforeAll(async () => {
     createdAt: 100,
     kind: 'multi',
     mode: 'write',
-    backend: 'codex-appserver',
+    backend: 'codex',
     allowedUsers: ['ou_1'],
   });
   // 每 bot 的完成提醒来自各自 config.json；A 自定义，B 缺省走 failures / 3。
@@ -105,7 +105,7 @@ beforeAll(async () => {
       chatId,
       cwd: '/tmp/proj-a',
       sessionId: `sess-${threadId}`,
-      backend: 'codex-appserver',
+      backend: 'codex',
       summary: `话题 ${threadId}`,
       createdAt: 10,
       updatedAt: threadId === 't1' ? 30 : 20,
@@ -164,7 +164,7 @@ describe('createReadonlyAdminService · 只读方法（显式路径，不碰全�
     expect(p.noMention).toBe(true); // created+multi 默认免@ 开
     expect(p.autoCompact).toBe(true);
     expect(p.network).toBe(false);
-    expect(p.backend).toBe('codex-appserver'); // 显式设的后端原样透传
+    expect(p.backend).toBe('codex'); // 显式设的后端原样透传
     expect(p.allowedUsersCount).toBe(1);
     expect(p.sessionCount).toBe(2); // oc_other 的 t3 不算
   });
@@ -174,7 +174,7 @@ describe('createReadonlyAdminService · 只读方法（显式路径，不碰全�
     expect(projects).toHaveLength(1);
     expect(projects[0]!.name).toBe('proj-b');
     expect(projects[0]!.mode).toBe('full'); // 老数据无 mode → full
-    expect(projects[0]!.backend).toBe('codex-appserver'); // 缺省 → 默认后端
+    expect(projects[0]!.backend).toBe('codex'); // 缺省 → 默认后端
     expect(projects[0]!.sessionCount).toBe(0);
   });
 
@@ -253,7 +253,7 @@ it('Host 退出等待在途用量读取，再清理 Codex 常驻客户端，并�
 
 describe('createReadonlyAdminService · 写方法（只读预览占位）', () => {
   it('五个写方法一律抛 NotWiredYetError', async () => {
-    await expect(service.switchBackend(BOT_A, 'proj-a', 'codex-appserver')).rejects.toBeInstanceOf(NotWiredYetError);
+    await expect(service.switchBackend(BOT_A, 'proj-a', 'codex')).rejects.toBeInstanceOf(NotWiredYetError);
     await expect(service.setPermissionMode(BOT_A, 'proj-a', { mode: 'qa' })).rejects.toBeInstanceOf(NotWiredYetError);
     await expect(service.setNoMention(BOT_A, 'proj-a', true)).rejects.toBeInstanceOf(NotWiredYetError);
     await expect(service.setAutoCompact(BOT_A, 'proj-a', false)).rejects.toBeInstanceOf(NotWiredYetError);
@@ -277,13 +277,13 @@ describe('createAdminService · daemon 进程内（executeWrite + liveStatus 注
     const daemon = createAdminService({
       executeWrite: async (botId, op) => void calls.push({ botId, op }),
     });
-    await daemon.switchBackend(BOT_A, 'proj-a', 'codex-appserver');
+    await daemon.switchBackend(BOT_A, 'proj-a', 'codex');
     await daemon.setPermissionMode(BOT_A, 'proj-a', { mode: 'qa', guestMode: 'write', network: true });
     await daemon.setNoMention(BOT_A, 'proj-a', false);
     await daemon.setAutoCompact(BOT_A, 'proj-a', true);
     await daemon.setCompletionReminder(BOT_A, { mode: 'long', longTaskMinutes: 8 });
     expect(calls).toEqual([
-      { botId: BOT_A, op: { kind: 'switchBackend', project: 'proj-a', backend: 'codex-appserver' } },
+      { botId: BOT_A, op: { kind: 'switchBackend', project: 'proj-a', backend: 'codex' } },
       {
         botId: BOT_A,
         op: { kind: 'setPermissionMode', project: 'proj-a', mode: 'qa', guestMode: 'write', network: true },

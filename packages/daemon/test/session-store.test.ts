@@ -41,7 +41,7 @@ function rec(threadId: string, sessionId: string): SessionRecord {
     chatId: 'oc_chat',
     cwd: '/tmp/proj',
     sessionId,
-    backend: 'codex-appserver',
+    backend: 'codex',
     summary: `s-${threadId}`,
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -51,8 +51,8 @@ function rec(threadId: string, sessionId: string): SessionRecord {
 function titleJob(sessionId = 'cx-title'): SessionTitleJob {
   const now = Date.now();
   return {
-    key: sessionTitleJobKey('codex-appserver', sessionId),
-    backend: 'codex-appserver',
+    key: sessionTitleJobKey('codex', sessionId),
+    backend: 'codex',
     sessionId,
     cwd: '/tmp/proj',
     phase: 'pending',
@@ -114,13 +114,13 @@ describe('session-store', () => {
     await writeFile(paths.sessionsFile, JSON.stringify(legacy), 'utf8');
     const got = await getSession('old-topic');
     expect(got?.sessionId).toBe('cx-legacy');
-    expect(got?.backend).toBe('codex-appserver');
+    expect(got?.backend).toBe('codex');
     // 写回（patch 任意字段）后落盘的是新字段名 + 回填的 backend + 新文件版本
     await patchSession('old-topic', { model: 'gpt-5.5' });
     const onDisk = JSON.parse(await readFile(paths.sessionsFile, 'utf8'));
     expect(onDisk.version).toBe(3);
     expect(onDisk.sessions[0].sessionId).toBe('cx-legacy');
-    expect(onDisk.sessions[0].backend).toBe('codex-appserver');
+    expect(onDisk.sessions[0].backend).toBe('codex');
     expect(onDisk.titleJobs).toEqual([]);
   });
 
@@ -253,10 +253,10 @@ describe('session-store', () => {
   });
 
   it('clears a consumed binding marker only when the key still matches', async () => {
-    const marker = sessionTitleJobKey('codex-appserver', 'cx-marker');
+    const marker = sessionTitleJobKey('codex', 'cx-marker');
     await upsertSession({ ...rec('t-marker', 'cx-marker'), titleJobKey: marker });
 
-    await clearSessionTitleJobKey('t-marker', 'codex-appserver:stale');
+    await clearSessionTitleJobKey('t-marker', 'codex:stale');
     expect((await getSession('t-marker'))?.titleJobKey).toBe(marker);
 
     await clearSessionTitleJobKey('t-marker', marker);

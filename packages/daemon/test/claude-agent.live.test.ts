@@ -23,9 +23,9 @@ async function drain(events: AsyncIterable<AgentEvent>): Promise<{ state: RunSta
   return { state, types };
 }
 
-describe.runIf(LIVE)('claude-agent 后端 LIVE 集成', () => {
+describe.runIf(LIVE)('claude 后端 LIVE 集成', () => {
   it('full 档：一轮问答 → 流式文本 + done，reduce 出终态', { timeout: 120_000 }, async () => {
-    const be = createBackend('claude-agent');
+    const be = createBackend('claude');
     const thread = await be.startThread({ cwd: process.cwd(), mode: 'full' });
     expect(thread.sessionId).toMatch(/[0-9a-f-]{36}/);
 
@@ -46,7 +46,7 @@ describe.runIf(LIVE)('claude-agent 后端 LIVE 集成', () => {
   });
 
   it('/compact：调用不抛错，返回合法 CompactResult（短会话 compacted=false）', { timeout: 120_000 }, async () => {
-    const be = createBackend('claude-agent');
+    const be = createBackend('claude');
     const thread = await be.startThread({ cwd: process.cwd(), mode: 'full' });
     await drain(thread.runStreamed({ text: '说一句话。' }).events);
     const res = await thread.compact();
@@ -58,7 +58,7 @@ describe.runIf(LIVE)('claude-agent 后端 LIVE 集成', () => {
   });
 
   it('多轮：同一常驻 query 记得上一轮（无需 resume）', { timeout: 240_000 }, async () => {
-    const be = createBackend('claude-agent');
+    const be = createBackend('claude');
     const thread = await be.startThread({ cwd: process.cwd(), mode: 'full' });
 
     await drain(thread.runStreamed({ text: '请记住暗号：菠萝蜜。只回复「好的」。' }).events);
@@ -69,7 +69,7 @@ describe.runIf(LIVE)('claude-agent 后端 LIVE 集成', () => {
   });
 
   it('⏹ 中断：abort 后该轮收尾为 done，且线程仍可续用下一轮', { timeout: 240_000 }, async () => {
-    const be = createBackend('claude-agent');
+    const be = createBackend('claude');
     const thread = await be.startThread({ cwd: process.cwd(), mode: 'full' });
 
     const run = thread.runStreamed({ text: '从 1 慢慢数到 50，每个数字单独一行。' });
@@ -96,7 +96,7 @@ describe.runIf(LIVE)('claude-agent 后端 LIVE 集成', () => {
   it('qa 档：只读 —— 想尽办法写盘（含禁用沙箱）也写不进', { timeout: 180_000 }, async () => {
     const probe = join(process.cwd(), '_qa_probe_live.txt');
     rmSync(probe, { force: true });
-    const be = createBackend('claude-agent');
+    const be = createBackend('claude');
     const thread = await be.startThread({ cwd: process.cwd(), mode: 'qa', network: false });
     const { state, types } = await drain(
       thread.runStreamed({
@@ -113,7 +113,7 @@ describe.runIf(LIVE)('claude-agent 后端 LIVE 集成', () => {
 
   it('⏹ 工具执行中途：interrupt 卡住 → 升级硬 abort，有界停止 + 可 resume 续聊', { timeout: 90_000 }, async () => {
     const dir = mkdtempSync(join(tmpdir(), 'cc-stoptool-'));
-    const be = createBackend('claude-agent');
+    const be = createBackend('claude');
     const thread = await be.startThread({ cwd: dir, mode: 'full' });
     const sid = thread.sessionId;
     const run = thread.runStreamed({ text: '用 Bash 运行 `sleep 30 && echo done`，完成后告诉我结果。' });
@@ -145,7 +145,7 @@ describe.runIf(LIVE)('claude-agent 后端 LIVE 集成', () => {
   it('/goal：自主跑完一个多步目标 → goal_update active→complete + done', { timeout: 180_000 }, async () => {
     const dir = mkdtempSync(join(tmpdir(), 'cc-goal-'));
     const probe = join(dir, 'goal_ok.txt');
-    const be = createBackend('claude-agent');
+    const be = createBackend('claude');
     const thread = await be.startThread({ cwd: dir, mode: 'full' });
     const run = thread.runGoal(`创建文件 ${probe} 写入一行 ok，然后用 Bash 确认它存在。`);
     const statuses: string[] = [];
@@ -167,7 +167,7 @@ describe.runIf(LIVE)('claude-agent 后端 LIVE 集成', () => {
 
   it('/goal 终止：跑到一半 clearGoal 硬停 → 线程死，会话可 resume 续聊', { timeout: 180_000 }, async () => {
     const dir = mkdtempSync(join(tmpdir(), 'cc-goalstop-'));
-    const be = createBackend('claude-agent');
+    const be = createBackend('claude');
     const thread = await be.startThread({ cwd: dir, mode: 'full' });
     const sid = thread.sessionId;
     const run = thread.runGoal('逐个用单独 Bash 命令创建 z1.txt 到 z8.txt，一个一个慢慢来，每步之间确认。');

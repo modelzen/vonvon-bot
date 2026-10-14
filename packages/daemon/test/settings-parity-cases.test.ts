@@ -23,7 +23,7 @@ const botId = 'cli_fixture';
 const agent = { kind: 'agent' as const, botId };
 const project = { kind: 'project' as const, botId, projectName: 'demo' };
 const session = { kind: 'session' as const, botId, threadId: 'omt_fixture' };
-const backend = { id: 'codex-appserver', doctor: async () => ({ ok: true }), supportedModes: ['qa', 'write', 'full'], listModels: async () => [{ id: 'fixture-model', displayName: 'Fixture', description: '', defaultEffort: 'high', supportedEfforts: ['medium', 'high'], isDefault: true, hidden: false }] } as unknown as AgentBackend;
+const backend = { id: 'codex', doctor: async () => ({ ok: true }), supportedModes: ['qa', 'write', 'full'], listModels: async () => [{ id: 'fixture-model', displayName: 'Fixture', description: '', defaultEffort: 'high', supportedEfforts: ['medium', 'high'], isDefault: true, hidden: false }] } as unknown as AgentBackend;
 const hooks = { inspect: async () => ({ claude: { agent: 'claude' as const, status: 'installed' as const, details: [] }, codex: { agent: 'codex' as const, status: 'installed' as const, details: [] } }), install: vi.fn(async () => {}) };
 let cfg: AppConfig;
 
@@ -38,7 +38,7 @@ beforeEach(async () => {
   await saveConfig(cfg);
   await addProject({ name: 'demo', chatId: 'oc_demo', cwd: '/tmp/demo', createdAt: 1, blank: false });
   await addProject({ name: 'other', chatId: 'oc_other', cwd: '/tmp/other', createdAt: 2, blank: false, noMention: false, mode: 'qa', guestMode: 'qa', network: false });
-  await upsertSession({ threadId: session.threadId, chatId: 'oc_demo', sessionId: 'native-one', backend: 'codex-appserver', cwd: '/tmp/demo', model: 'fixture-model', effort: 'high', createdAt: 1, updatedAt: 1, summary: '' });
+  await upsertSession({ threadId: session.threadId, chatId: 'oc_demo', sessionId: 'native-one', backend: 'codex', cwd: '/tmp/demo', model: 'fixture-model', effort: 'high', createdAt: 1, updatedAt: 1, summary: '' });
 });
 afterAll(() => rm(paths.appDir, { recursive: true, force: true }));
 
@@ -214,17 +214,17 @@ it('CARD-027 CARD-028 dispatches voice actions, starts CLI once, repairs both ho
 it('CARD-036 CARD-038 CARD-040 keeps comment, title and current-session model choices separate', async () => {
   const settings = await owner();
   let a = await settings.read(agent) as AgentSettingsView;
-  expect((await settings.save({ scope: agent, section: 'comments', revision: a.sections.comments.revision, patch: { backend: 'codex-appserver', selection: { kind: 'explicit', model: 'fixture-model', effort: 'medium' } } })).kind).toBe('saved');
+  expect((await settings.save({ scope: agent, section: 'comments', revision: a.sections.comments.revision, patch: { backend: 'codex', selection: { kind: 'explicit', model: 'fixture-model', effort: 'medium' } } })).kind).toBe('saved');
   a = await settings.read(agent) as AgentSettingsView;
-  expect((await settings.save({ scope: agent, section: 'titles', revision: a.sections.titles.revision, patch: { byBackend: { 'codex-appserver': { enabled: true, model: 'title-custom', effort: 'medium' } } } })).kind).toBe('saved');
+  expect((await settings.save({ scope: agent, section: 'titles', revision: a.sections.titles.revision, patch: { byBackend: { 'codex': { enabled: true, model: 'title-custom', effort: 'medium' } } } })).kind).toBe('saved');
   let s = await settings.read(session) as SessionSettingsView;
   expect((await settings.save({ scope: session, section: 'model', revision: s.sections.model.revision, patch: { selection: { kind: 'explicit', model: 'fixture-model', effort: 'medium' } } })).kind).toBe('saved');
   s = await settings.read(session) as SessionSettingsView;
   expect(s.sections.model.stored.selection).toEqual({ kind: 'explicit', model: 'fixture-model', effort: 'medium' });
   expect(await getSession(session.threadId)).toMatchObject({ model: 'fixture-model', effort: 'medium' });
   const disk = await loadConfig();
-  expect(disk.preferences?.comments).toMatchObject({ backend: 'codex-appserver', model: 'fixture-model', effort: 'medium', future: 'retain' });
-  expect(disk.preferences?.sessionTitles?.byBackend?.['codex-appserver']).toMatchObject({ enabled: true, model: 'title-custom', effort: 'medium' });
+  expect(disk.preferences?.comments).toMatchObject({ backend: 'codex', model: 'fixture-model', effort: 'medium', future: 'retain' });
+  expect(disk.preferences?.sessionTitles?.byBackend?.['codex']).toMatchObject({ enabled: true, model: 'title-custom', effort: 'medium' });
   expect((await getProjectByName('demo'))?.defaultModel).toBeUndefined();
 });
 

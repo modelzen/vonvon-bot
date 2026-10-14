@@ -21,7 +21,7 @@ const botId = 'cli_fixture';
 const agent = { kind: 'agent' as const, botId };
 const project = { kind: 'project' as const, botId, projectName: 'demo' };
 const session = { kind: 'session' as const, botId, threadId: 'omt_fixture' };
-const backend = { id: 'codex-appserver', doctor: async () => ({ ok: true }), supportedModes: ['qa', 'write', 'full'], listModels: async () => [{ id: 'fixture-model', displayName: 'Fixture', description: '', defaultEffort: 'high', supportedEfforts: ['low', 'high'], isDefault: true, hidden: false }] } as unknown as AgentBackend;
+const backend = { id: 'codex', doctor: async () => ({ ok: true }), supportedModes: ['qa', 'write', 'full'], listModels: async () => [{ id: 'fixture-model', displayName: 'Fixture', description: '', defaultEffort: 'high', supportedEfforts: ['low', 'high'], isDefault: true, hidden: false }] } as unknown as AgentBackend;
 const hooks = { inspect: async () => ({ claude: { agent: 'claude' as const, status: 'installed' as const, details: [] }, codex: { agent: 'codex' as const, status: 'installed' as const, details: [] } }), install: vi.fn(async () => {}) };
 let cfg: AppConfig;
 async function fixture(overrides: Partial<SettingsOwnerDeps> = {}) {
@@ -30,10 +30,10 @@ async function fixture(overrides: Partial<SettingsOwnerDeps> = {}) {
 }
 beforeEach(async () => {
   await rm(paths.appDir, { recursive: true, force: true }); await mkdir(paths.appDir, { recursive: true });
-  cfg = JSON.parse(JSON.stringify({ accounts: { app: { id: botId, tenant: 'feishu', secret: { source: 'exec', id: 'fixture-secret' } } }, secrets: { providers: { sentinel: { source: 'env', allowlist: ['SECRET'] } } }, futureRoot: 17, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_admin'], unknownAccess: 'preserve' }, completionReminder: { mode: 'long', longTaskMinutes: 3, future: true }, cliBridge: { enabled: false, presence: { future: 8 } }, sessionTitles: { future: 'keep', byBackend: { 'codex-appserver': { enabled: true, model: 'custom-title', effort: 'high', future: 3 } } }, futurePreference: true } }));
+  cfg = JSON.parse(JSON.stringify({ accounts: { app: { id: botId, tenant: 'feishu', secret: { source: 'exec', id: 'fixture-secret' } } }, secrets: { providers: { sentinel: { source: 'env', allowlist: ['SECRET'] } } }, futureRoot: 17, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_admin'], unknownAccess: 'preserve' }, completionReminder: { mode: 'long', longTaskMinutes: 3, future: true }, cliBridge: { enabled: false, presence: { future: 8 } }, sessionTitles: { future: 'keep', byBackend: { 'codex': { enabled: true, model: 'custom-title', effort: 'high', future: 3 } } }, futurePreference: true } }));
   await saveConfig(cfg);
   await addProject({ name: 'demo', chatId: 'oc_demo', cwd: '/tmp/demo', createdAt: 1, blank: false });
-  await upsertSession({ threadId: session.threadId, chatId: 'oc_demo', sessionId: 'native-one', backend: 'codex-appserver', cwd: '/tmp/demo', model: 'fixture-model', effort: 'high', createdAt: 1, updatedAt: 1, summary: '' });
+  await upsertSession({ threadId: session.threadId, chatId: 'oc_demo', sessionId: 'native-one', backend: 'codex', cwd: '/tmp/demo', model: 'fixture-model', effort: 'high', createdAt: 1, updatedAt: 1, summary: '' });
 });
 afterAll(() => rm(paths.appDir, { recursive: true, force: true }));
 describe('strict boundaries', () => {
@@ -53,12 +53,12 @@ it('serializes card and HTTP preference edits, preserves unknown nested keys and
   expect(fresh.sections.cards.effective.showToolCalls).toBe(false);
   await owner.save({ scope: agent, section: 'completion', revision: fresh.sections.completion.revision, patch: { mode: 'always' } });
   await owner.save({ scope: agent, section: 'cliBridge', revision: fresh.sections.cliBridge.revision, patch: { presence: { enabled: true, platform: 'auto', idleThresholdSeconds: 77 } } });
-  await owner.save({ scope: agent, section: 'titles', revision: fresh.sections.titles.revision, patch: { byBackend: { 'codex-appserver': { enabled: false } } } });
+  await owner.save({ scope: agent, section: 'titles', revision: fresh.sections.titles.revision, patch: { byBackend: { 'codex': { enabled: false } } } });
   const disk = await loadConfig() as AppConfig & { futureRoot: number };
   expect(disk.accounts).toEqual(cfg.accounts); expect(disk.secrets).toEqual(cfg.secrets); expect(disk.futureRoot).toBe(17);
   expect(disk.preferences?.completionReminder).toMatchObject({ future: true, mode: 'always' });
   expect(disk.preferences?.cliBridge?.presence).toMatchObject({ future: 8, idleThresholdSeconds: 77 });
-  expect(disk.preferences?.sessionTitles?.byBackend?.['codex-appserver']).toMatchObject({ model: 'custom-title', future: 3, enabled: false });
+  expect(disk.preferences?.sessionTitles?.byBackend?.['codex']).toMatchObject({ model: 'custom-title', future: 3, enabled: false });
   expect(JSON.stringify(fresh)).not.toMatch(/fixture-secret|SECRET|futurePreference|futureRoot/);
 });
 it('checks same-section revision inside owner queue', async () => {
@@ -88,7 +88,7 @@ it('validates models, allows custom title ids, resets actual project and session
   await owner.save({ scope: session, section: 'model', revision: s.sections.model.revision, patch: { selection: { kind: 'default' } } });
   expect(await getSession(session.threadId)).not.toHaveProperty('model'); expect(await getSession(session.threadId)).not.toHaveProperty('effort');
   const a = await owner.read(agent) as AgentSettingsView;
-  expect((await owner.save({ scope: agent, section: 'titles', revision: a.sections.titles.revision, patch: { byBackend: { 'codex-appserver': { enabled: true, model: 'third-party-custom', effort: 'ultra' } } } })).kind).toBe('saved');
+  expect((await owner.save({ scope: agent, section: 'titles', revision: a.sections.titles.revision, patch: { byBackend: { 'codex': { enabled: true, model: 'third-party-custom', effort: 'ultra' } } } })).kind).toBe('saved');
 });
 it('stale resume identity conflicts and cannot change the replacement session', async () => {
   const { owner } = await fixture(); const old = await owner.read(session) as SessionSettingsView;
@@ -136,7 +136,7 @@ it('readonly owner never permits writes; failed catalogs do not disable unrelate
   const p = await owner.read(project) as ProjectSettingsView;
   expect((await owner.save({ scope: project, section: 'model', revision: p.sections.model.revision, patch: { selection: { kind: 'explicit', model: 'fixture-model', effort: 'high' } } })).kind).toBe('rejected');
   expect((await owner.save({ scope: agent, section: 'cards', revision: view.sections.cards.revision, patch: { showToolCalls: false } })).kind).toBe('saved');
-  expect(JSON.stringify(await owner.models({ botId, backend: 'codex-appserver', purpose: 'project' }))).not.toContain('private diagnostics');
+  expect(JSON.stringify(await owner.models({ botId, backend: 'codex', purpose: 'project' }))).not.toContain('private diagnostics');
 });
 it('CLI desired-state retries start once and repair hooks reports each failed backend', async () => {
   const start = vi.fn(async () => {}); const shutdown = vi.fn(async () => {});

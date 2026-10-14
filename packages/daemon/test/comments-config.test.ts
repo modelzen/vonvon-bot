@@ -18,8 +18,8 @@ describe('getCommentsConfig', () => {
   });
 
   it('passes through the configured backend/model/effort verbatim', () => {
-    const c = getCommentsConfig(cfg({ comments: { backend: 'claude-agent', model: 'claude-opus-4-8', effort: 'high' } }));
-    expect(c.backend).toBe('claude-agent');
+    const c = getCommentsConfig(cfg({ comments: { backend: 'claude', model: 'claude-opus-4-8', effort: 'high' } }));
+    expect(c.backend).toBe('claude');
     expect(c.model).toBe('claude-opus-4-8');
     expect(c.effort).toBe('high');
   });

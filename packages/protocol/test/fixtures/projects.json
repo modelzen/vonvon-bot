@@ -6,7 +6,7 @@
     "chatId": "oc_fixture_product",
     "cwd": "/tmp/vonvon-fixture",
     "kind": "multi",
-    "backend": "codex-appserver",
+    "backend": "codex",
     "blank": false,
     "createdAt": 1,
     "origin": "joined",

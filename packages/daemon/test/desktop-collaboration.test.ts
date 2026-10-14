@@ -33,7 +33,7 @@ const target = { projectName: 'demo', chatId: 'oc_demo' };
 const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' } } };
 function backend() {
   const thread = { sessionId: 'fresh', isAlive: () => true, close: vi.fn(async () => {}), compact: vi.fn(async () => ({ usage: { usedTokens: 20, contextWindow: 100 } })) };
-  const backend = { id: 'codex-appserver', displayName: 'Codex', listModels: async () => [], startThread: vi.fn(async () => thread), resumeThread: vi.fn(async () => thread), listThreads: vi.fn(async () => [{ sessionId: 'past', preview: 'historic', createdAt: 1, updatedAt: 2 }]), readHistory: vi.fn(async () => ({ name: 'historic', preview: '', turns: [], totalTurns: 0 })) };
+  const backend = { id: 'codex', displayName: 'Codex', listModels: async () => [], startThread: vi.fn(async () => thread), resumeThread: vi.fn(async () => thread), listThreads: vi.fn(async () => [{ sessionId: 'past', preview: 'historic', createdAt: 1, updatedAt: 2 }]), readHistory: vi.fn(async () => ({ name: 'historic', preview: '', turns: [], totalTurns: 0 })) };
   fixture.backend = backend;
   return { ...backend, thread };
 }
@@ -43,8 +43,8 @@ beforeEach(async () => {
   await rm(paths.projectsFile, { force: true }); await rm(paths.sessionsFile, { force: true });
   fixture.failProjectsWrite = false;
   fixture.leave.mockReset(); fixture.send.mockClear();
-  await addProject({ name: 'demo', chatId: 'oc_demo', cwd: paths.appDir, kind: 'single', blank: false, origin: 'joined', createdAt: 1, backend: 'codex-appserver' });
-  await upsertSession({ threadId: 'oc_demo', chatId: 'oc_demo', cwd: paths.appDir, sessionId: 'old', backend: 'codex-appserver', summary: 'old', createdAt: 1, updatedAt: 1 });
+  await addProject({ name: 'demo', chatId: 'oc_demo', cwd: paths.appDir, kind: 'single', blank: false, origin: 'joined', createdAt: 1, backend: 'codex' });
+  await upsertSession({ threadId: 'oc_demo', chatId: 'oc_demo', cwd: paths.appDir, sessionId: 'old', backend: 'codex', summary: 'old', createdAt: 1, updatedAt: 1 });
 });
 afterAll(() => rm(paths.appDir, { recursive: true, force: true }));
 it('rejects untrusted identity, extra fields and relative paths at the HTTP boundary', () => {
@@ -86,9 +86,9 @@ it('clears a flat binding with its model settings and keeps old backend history 
     await app.collaboration({ action: 'clear', ...target, threadId: 'oc_demo' });
     expect(await getSession('oc_demo')).toMatchObject({ sessionId: 'fresh' });
     expect(be.startThread).toHaveBeenCalledWith(expect.objectContaining({ cwd: paths.appDir }));
-    await app.collaboration({ action: 'resume', ...target, sessionId: 'past', backend: 'codex-appserver' });
+    await app.collaboration({ action: 'resume', ...target, sessionId: 'past', backend: 'codex' });
     expect(await getSession('oc_demo')).toMatchObject({ sessionId: 'past' });
-    await expect(app.collaboration({ action: 'resume', ...target, sessionId: 'foreign', backend: 'codex-appserver' })).rejects.toThrow('不属于');
+    await expect(app.collaboration({ action: 'resume', ...target, sessionId: 'foreign', backend: 'codex' })).rejects.toThrow('不属于');
   } finally { await app.shutdown(); }
 });
 it('reserves a compacting session against clear and rejects stale run controls', async () => {
@@ -140,7 +140,7 @@ it('creates under the configured root once and preserves idempotency across owne
   const create = vi.fn(async () => ({ code: 0, data: { chat_id: 'oc_created' } }));
   const channel = { send: fixture.send, rawClient: { im: { v1: { chat: { create }, chatManagers: { addManagers: vi.fn(async () => ({ code: 0 })) } } } } };
   let app = orchestrator(channel);
-  const request = { action: 'createProject' as const, requestId: 'c848d29f-69db-4f53-849d-577453388ac7', name: 'created', kind: 'single' as const, backend: 'codex-appserver' as const };
+  const request = { action: 'createProject' as const, requestId: 'c848d29f-69db-4f53-849d-577453388ac7', name: 'created', kind: 'single' as const, backend: 'codex' as const };
   try {
     const replies = await Promise.all([app.collaboration(request), app.collaboration(request)]);
     expect(replies[0]).toEqual(replies[1]);
@@ -155,7 +155,7 @@ it('creates under the configured root once and preserves idempotency across owne
 });
 it('preserves role-separated guest context and refuses unsupported goal before posting to Feishu', async () => {
   const be = backend(); fixture.backend = { ...be, capabilities: { goal: false, compact: true, resume: true } };
-  await upsertSession({ threadId: 'oc_demo#guest', chatId: 'oc_demo', cwd: paths.appDir, sessionId: 'guest-native', backend: 'codex-appserver', summary: 'guest', createdAt: 1, updatedAt: 1 });
+  await upsertSession({ threadId: 'oc_demo#guest', chatId: 'oc_demo', cwd: paths.appDir, sessionId: 'guest-native', backend: 'codex', summary: 'guest', createdAt: 1, updatedAt: 1 });
   const app = orchestrator();
   try {
     await expect(app.collaboration({ action: 'compact', ...target, threadId: 'oc_demo#guest' })).rejects.toThrow('管理员会话');

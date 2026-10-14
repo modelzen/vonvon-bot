@@ -13,7 +13,7 @@ const snapshot: DesktopSnapshot = {
   host: {kind: 'connected', ownership: 'owned', version: '0.7.0'},
   agents: [agentId, anotherAgentId].map((id, index) => ({id, name: `Agent ${index}`, enabled: true, running: true, connection: 'connected' as const, activation: 'active' as const})),
   groups: [{id: groupId, name: '研发群'}],
-  memberships: [memberId, anotherMemberId].map((id, index) => ({id, agentId: index ? anotherAgentId : agentId, groupId, name: `项目 ${index}`, directory: '/tmp/research', backend: 'codex-appserver', conversation: 'threads' as const, response: 'mention' as const, permission: {administrator: 'full' as const, member: 'qa' as const, network: false}, stale: false})),
+  memberships: [memberId, anotherMemberId].map((id, index) => ({id, agentId: index ? anotherAgentId : agentId, groupId, name: `项目 ${index}`, directory: '/tmp/research', backend: 'codex', conversation: 'threads' as const, response: 'mention' as const, permission: {administrator: 'full' as const, member: 'qa' as const, network: false}, stale: false})),
   tools: [], jobs: [], diagnostics: [],
   application: {platform: 'macos', version: '0.7.0', loginItem: false, dataPath: '/tmp/test'},
 };

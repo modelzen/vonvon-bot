@@ -10,8 +10,8 @@ import {
 import type { AppConfig } from '../src/config/schema';
 
 const BACKENDS = [
-  { id: 'codex-appserver', label: 'Codex' },
-  { id: 'claude-agent', label: 'Claude' },
+  { id: 'codex', label: 'Codex' },
+  { id: 'claude', label: 'Claude' },
 ];
 
 const model = (over: Partial<ModelInfo> & Pick<ModelInfo, 'id' | 'displayName'>): ModelInfo => ({
@@ -57,7 +57,7 @@ describe('session-title settings cards', () => {
   it('shows model and Effort only for backends using AI title refinement', () => {
     const rendered = JSON.stringify(buildSettingsCard(cfg({
       byBackend: {
-        'codex-appserver': { enabled: true, model: 'openrouter/acme-title', effort: 'xhigh' },
+        'codex': { enabled: true, model: 'openrouter/acme-title', effort: 'xhigh' },
       },
     })));
     expect(rendered).toContain('Codex：AI 精炼 · openrouter/acme-title · 极高');
@@ -65,7 +65,7 @@ describe('session-title settings cards', () => {
   });
 
   it('renders live third-party models without a provider whitelist and hides hidden models', () => {
-    const rendered = json(cfg(), BACKENDS, 'codex-appserver', liveModels);
+    const rendered = json(cfg(), BACKENDS, 'codex', liveModels);
     expect(rendered).toContain('Acme Title V3');
     expect(rendered).toContain('openrouter/acme-title-v3');
     expect(rendered).not.toContain('Hidden Provider Model');
@@ -74,7 +74,7 @@ describe('session-title settings cards', () => {
   });
 
   it('requires both model and Effort before AI can be enabled', () => {
-    const rendered = json(cfg(), BACKENDS, 'codex-appserver', liveModels);
+    const rendered = json(cfg(), BACKENDS, 'codex', liveModels);
     expect(rendered).toContain('"name":"model"');
     expect(rendered).toContain('"name":"effort"');
     expect(rendered.match(/"required":true/g)?.length).toBeGreaterThanOrEqual(2);
@@ -99,7 +99,7 @@ describe('session-title settings cards', () => {
   });
 
   it('shows Claude protocol Effort values, including max but not Codex-only none/minimal', () => {
-    const rendered = json(cfg(), BACKENDS, 'claude-agent', liveModels);
+    const rendered = json(cfg(), BACKENDS, 'claude', liveModels);
     expect(rendered).toContain('"value":"max"');
     expect(rendered).not.toContain('"value":"none"');
     expect(rendered).not.toContain('"value":"minimal"');
@@ -122,12 +122,12 @@ describe('session-title settings cards', () => {
   it('shows and preselects each backend configuration independently', () => {
     const config = cfg({
       byBackend: {
-        'codex-appserver': { enabled: true, model: 'openrouter/acme-title-v3', effort: 'high' },
-        'claude-agent': { enabled: true, model: 'vendor/claude-title', effort: 'low' },
+        'codex': { enabled: true, model: 'openrouter/acme-title-v3', effort: 'high' },
+        'claude': { enabled: true, model: 'vendor/claude-title', effort: 'low' },
       },
     });
-    const codex = json(config, BACKENDS, 'codex-appserver', liveModels);
-    const claude = json(config, BACKENDS, 'claude-agent', [
+    const codex = json(config, BACKENDS, 'codex', liveModels);
+    const claude = json(config, BACKENDS, 'claude', [
       model({ id: 'vendor/claude-title', displayName: 'Vendor Claude Title' }),
     ]);
     expect(codex).toContain('AI 精炼 · openrouter/acme-title-v3 · 高');
@@ -139,10 +139,10 @@ describe('session-title settings cards', () => {
   it('falls back to custom-id mode when the configured third-party model is absent from live discovery', () => {
     const config = cfg({
       byBackend: {
-        'codex-appserver': { enabled: true, model: 'offline-provider/title-model', effort: 'medium' },
+        'codex': { enabled: true, model: 'offline-provider/title-model', effort: 'medium' },
       },
     });
-    const rendered = json(config, BACKENDS, 'codex-appserver', []);
+    const rendered = json(config, BACKENDS, 'codex', []);
     expect(rendered).toContain(`"initial_option":"${SESSION_TITLE_CUSTOM_MODEL_OPTION}"`);
     expect(rendered).toContain('"default_value":"offline-provider/title-model"');
   });

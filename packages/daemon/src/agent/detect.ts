@@ -8,7 +8,7 @@ import { resolveCodexBin, codexVersionAsync } from '../provider/engines/codex/lo
  * 每个后端的可用性，并据此算「有效默认后端」。后端只是 agent 的「接入方式」——本机
  * 能力面按 agent 组织，与运行时工厂表（REGISTRY）解耦，便于将来再挂新 agent。
  *
- * 智能默认：有 codex → codex-appserver；否则回退 codex-appserver 占位（doctor 会报
+ * 智能默认：有 codex → codex；否则回退 codex 占位（doctor 会报
  * 需安装）。
  */
 
@@ -39,7 +39,7 @@ export interface AgentRuntime {
 
 /** 探 codex agent（复用 resolveCodexBin + codexVersionAsync）。 */
 async function probeCodexAgent(): Promise<AgentRuntime> {
-  const entry = BACKEND_CATALOG.find((e) => e.id === 'codex-appserver')!;
+  const entry = BACKEND_CATALOG.find((e) => e.id === 'codex')!;
   const bin = resolveCodexBin({ force: true });
   const version = bin ? await codexVersionAsync(bin, { force: true }) : null;
   const installed = !!bin && !!version;
@@ -51,7 +51,7 @@ async function probeCodexAgent(): Promise<AgentRuntime> {
     installHint: installed ? undefined : entry.dep.detectHint,
     backends: [
       {
-        backendId: 'codex-appserver',
+        backendId: 'codex',
         available: installed,
         reason: !bin ? entry.dep.detectHint : !version ? 'codex --version 失败' : undefined,
         version,
@@ -72,7 +72,7 @@ export function pickDefaultBackend(agents: AgentRuntime[]): string {
   const find = (id: string): BackendAvailability | undefined =>
     agents.flatMap((a) => a.backends).find((b) => b.backendId === id);
   const pickable = (id: string) => !catalogById(id)?.hidden && find(id)?.available;
-  if (pickable('codex-appserver')) return 'codex-appserver';
+  if (pickable('codex')) return 'codex';
   return DEFAULT_BACKEND_ID; // 无 codex → codex 占位（doctor 会报需安装）
 }
 

@@ -40,7 +40,7 @@ function memoryStore(): SessionTitleStore & { jobs: Map<string, SessionTitleJob>
 
 function titleBackend(overrides: Partial<AgentBackend> = {}): AgentBackend {
   return {
-    id: 'codex-appserver',
+    id: 'codex',
     displayName: 'Codex',
     readSessionTitle: vi.fn(async () => undefined),
     setSessionTitle: vi.fn(async () => undefined),
@@ -287,7 +287,7 @@ describe('SessionTitleCoordinator', () => {
     const store = memoryStore();
     const backend = titleBackend();
     const subject = coordinator(store, backend);
-    expect(await subject.attachSource('codex-appserver:manual-resume-id', titleSource('不要给手动恢复的会话改名'))).toBe(false);
+    expect(await subject.attachSource('codex:manual-resume-id', titleSource('不要给手动恢复的会话改名'))).toBe(false);
     expect(store.jobs.size).toBe(0);
 
     const key = await subject.register({

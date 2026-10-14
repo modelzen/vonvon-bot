@@ -45,16 +45,16 @@ describe('catalog ↔ REGISTRY 配对（防漏注册）', () => {
   });
 
   it('唯一内置后端 codex 是 external-cli（bridge 不负责装，doctor 探 PATH）', () => {
-    expect(catalogById('codex-appserver')?.dep.kind).toBe('external-cli');
+    expect(catalogById('codex')?.dep.kind).toBe('external-cli');
   });
 
   it('external-cli（codex）不可一键下载（isInstallable=false）', () => {
-    expect(isInstallable(catalogById('codex-appserver')!)).toBe(false);
+    expect(isInstallable(catalogById('codex')!)).toBe(false);
   });
 
   it('catalogByFamily 分组：codex 组 / claude 组各 1 条', () => {
-    expect(catalogByFamily('codex').map((e) => e.id)).toEqual(['codex-appserver']);
-    expect(catalogByFamily('claude').map((e) => e.id)).toEqual(['claude-agent']);
+    expect(catalogByFamily('codex').map((e) => e.id)).toEqual(['codex']);
+    expect(catalogByFamily('claude').map((e) => e.id)).toEqual(['claude']);
   });
 });
 
@@ -62,37 +62,37 @@ describe('projectCreatableBackends —— 飞书新建/绑定卡的「可选后�
   const ids = (mode: 'qa' | 'write' | 'full', inst: (e: { id: string }) => boolean) =>
     projectCreatableBackends(mode, inst).map((e) => e.id);
 
-  it('codex 是默认基线 → 即便都「未下载」也始终可选；claude-agent 未装则不出现', () => {
-    expect(ids('full', () => false)).toEqual(['codex-appserver']);
+  it('codex 是默认基线 → 即便都「未下载」也始终可选；claude 未装则不出现', () => {
+    expect(ids('full', () => false)).toEqual(['codex']);
   });
 
-  it('qa 档（外部群）→ codex + 已装的 claude-agent 都可选（两者都支持 qa 档）', () => {
-    expect(ids('qa', () => true)).toEqual(['codex-appserver', 'claude-agent']);
+  it('qa 档（外部群）→ codex + 已装的 claude 都可选（两者都支持 qa 档）', () => {
+    expect(ids('qa', () => true)).toEqual(['codex', 'claude']);
   });
 
-  it('任意权限档：codex 恒在；claude-agent 仅在「已装」时出现（按下载态过滤）', () => {
+  it('任意权限档：codex 恒在；claude 仅在「已装」时出现（按下载态过滤）', () => {
     for (const mode of ['qa', 'write', 'full'] as const) {
-      expect(ids(mode, () => true)).toEqual(['codex-appserver', 'claude-agent']);
-      expect(ids(mode, () => false)).toEqual(['codex-appserver']);
+      expect(ids(mode, () => true)).toEqual(['codex', 'claude']);
+      expect(ids(mode, () => false)).toEqual(['codex']);
     }
   });
 });
 
-describe('可见 catalog 与注册派生（codex + claude-agent）', () => {
-  it('visibleCatalog() 含 codex 与 claude-agent（Web 后端页 / 体检页 / picker 数据源）', () => {
-    expect(visibleCatalog().map((e) => e.id)).toEqual(['codex-appserver', 'claude-agent']);
+describe('可见 catalog 与注册派生（codex + claude）', () => {
+  it('visibleCatalog() 含 codex 与 claude（Web 后端页 / 体检页 / picker 数据源）', () => {
+    expect(visibleCatalog().map((e) => e.id)).toEqual(['codex', 'claude']);
   });
 
   it('catalogBackendIds 与 REGISTRY 配对不破（两条）', () => {
-    expect([...catalogBackendIds()].sort()).toEqual(['claude-agent', 'codex-appserver']);
+    expect([...catalogBackendIds()].sort()).toEqual(['claude', 'codex']);
     // 工厂存在：两个 id 都能构造出实例。
-    expect(createBackend('codex-appserver').id).toBe('codex-appserver');
-    expect(createBackend('claude-agent').id).toBe('claude-agent');
+    expect(createBackend('codex').id).toBe('codex');
+    expect(createBackend('claude').id).toBe('claude');
   });
 
-  it('createBackend 未注册 id 仍抛错（错误信息含 codex-appserver）', () => {
+  it('createBackend 未注册 id 仍抛错（错误信息含 codex）', () => {
     expect(() => createBackend('no-such-backend')).toThrow(/未知 agent 后端/);
-    expect(() => createBackend('no-such-backend')).toThrow(/codex-appserver/);
+    expect(() => createBackend('no-such-backend')).toThrow(/可用：codex、claude/);
   });
 });
 

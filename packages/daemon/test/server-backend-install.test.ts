@@ -91,7 +91,7 @@ function cursorPeer(id: string, start = 0) {
 describe('bounded backend output', () => {
   it.each([1, 65_536, MIB])('streams 64 MiB in %i-byte callbacks with bounded retained storage', async width => {
     const run = producer();
-    const admission = run.jobs.selectBackend('claude-agent', false);
+    const admission = run.jobs.selectBackend('claude', false);
     const first = cursorPeer('initial');
     expect(run.jobs.attachBackend(admission, first.peer)).toMatchObject({ attached: false, replay: [], omittedBytes: 0 });
     await Promise.resolve();
@@ -103,7 +103,7 @@ describe('bounded backend output', () => {
       emitted += width;
       if (emitted === MIB || emitted === MIB + width || emitted === 32 * MIB || emitted === TOTAL) {
         const next = cursorPeer(`at-${emitted}`, emitted);
-        const reply = run.jobs.attachBackend(run.jobs.selectBackend('claude-agent', false), next.peer);
+        const reply = run.jobs.attachBackend(run.jobs.selectBackend('claude', false), next.peer);
         expect(reply.attached).toBe(true);
         expect(reply.omittedBytes).toBe(emitted - TAIL);
         expect(reply.replay).toEqual([{ type: 'log', chunk: sourceRange(emitted - TAIL, TAIL) }]);
@@ -122,7 +122,7 @@ describe('bounded backend output', () => {
 
   it.each([10_240, MIB])('replays %i pre-attach bytes and continues once', async bytes => {
     const run = producer();
-    const admission = run.jobs.selectBackend('claude-agent', false);
+    const admission = run.jobs.selectBackend('claude', false);
     await Promise.resolve();
     const live = cursorPeer('creator', bytes);
     run.emit(sourceRange(0, bytes));
@@ -138,8 +138,8 @@ describe('bounded backend output', () => {
 
   it('keeps two selected admissions through settlement and frees the slot for held fresh work', async () => {
     const run = producer();
-    const first = run.jobs.selectBackend('claude-agent', false);
-    const second = run.jobs.selectBackend('claude-agent', false);
+    const first = run.jobs.selectBackend('claude', false);
+    const second = run.jobs.selectBackend('claude', false);
     await Promise.resolve();
     run.emit(sourceRange(0, 10_240));
     run.finish();
@@ -154,7 +154,7 @@ describe('bounded backend output', () => {
     const held = deferred<InstallResult>();
     let releaseOutput: (text: string) => void = () => {};
     run.service.installBackend = (_id, callback) => { releaseOutput = callback ?? releaseOutput; return held.promise; };
-    const fresh = run.jobs.selectBackend('claude-agent', false);
+    const fresh = run.jobs.selectBackend('claude', false);
     expect(fresh.operation.operationId).not.toBe(first.operation.operationId);
     const live = cursorPeer('fresh');
     expect(run.jobs.attachBackend(fresh, live.peer)).toMatchObject({ attached: false, replay: [], omittedBytes: 0 });
@@ -169,7 +169,7 @@ describe('bounded backend output', () => {
   it.each(['中', '😀'])('aligns every cut offset for %s and preserves large live pieces', async character => {
     for (let offset = 0; offset < Buffer.byteLength(character); offset++) {
       const run = producer();
-      const admission = run.jobs.selectBackend('claude-agent', false);
+      const admission = run.jobs.selectBackend('claude', false);
       await Promise.resolve();
       const source = character.repeat(TAIL) + 'x'.repeat(offset);
       let live = '';
@@ -183,7 +183,7 @@ describe('bounded backend output', () => {
       run.jobs.attachBackend(admission, peer);
       run.emit(source);
       expect(live).toBe(source);
-      checkReplay(run.jobs.attachBackend(run.jobs.selectBackend('claude-agent', false), observer('replay')), source);
+      checkReplay(run.jobs.attachBackend(run.jobs.selectBackend('claude', false), observer('replay')), source);
       run.finish();
       await admission.operation.done;
     }
@@ -191,7 +191,7 @@ describe('bounded backend output', () => {
 
   it('keeps mixed multibyte output through wrapped writes and single-byte evictions', async () => {
     const run = producer();
-    const admission = run.jobs.selectBackend('claude-agent', false);
+    const admission = run.jobs.selectBackend('claude', false);
     await Promise.resolve();
     const mixed = 'ab中😀文🚀'.repeat(20_000);
     let source = '';
@@ -208,7 +208,7 @@ describe('bounded backend output', () => {
 
   it('continues 64 MiB after the only peer detaches and replays to a later peer', async () => {
     const run = producer();
-    const admission = run.jobs.selectBackend('claude-agent', false);
+    const admission = run.jobs.selectBackend('claude', false);
     const first = cursorPeer('gone');
     run.jobs.attachBackend(admission, first.peer);
     await Promise.resolve();
@@ -218,7 +218,7 @@ describe('bounded backend output', () => {
     expect(first.cursor).toBe(MIB);
     expect(admission.operation.terminal).toBeUndefined();
     const later = cursorPeer('later', TOTAL);
-    const reply = run.jobs.attachBackend(run.jobs.selectBackend('claude-agent', false), later.peer);
+    const reply = run.jobs.attachBackend(run.jobs.selectBackend('claude', false), later.peer);
     expect(reply.omittedBytes).toBe(TOTAL - TAIL);
     expect(reply.replay).toEqual([{ type: 'log', chunk: sourceRange(TOTAL - TAIL, TAIL) }]);
     checkStorage(admission, TOTAL);
@@ -240,7 +240,7 @@ describe('bounded backend output', () => {
       let maxFrameBytes = 0;
       client.socket.on('message', bytes => { maxFrameBytes = Math.max(maxFrameBytes, Buffer.byteLength(bytes.toString())); });
       hold = true;
-      const response = client.call({ type: 'request', id: 'install', method: 'environment', payload: { type: 'backendInstall', id: 'claude-agent', update: false } });
+      const response = client.call({ type: 'request', id: 'install', method: 'environment', payload: { type: 'backendInstall', id: 'claude', update: false } });
       await vi.waitFor(() => expect(rebuilding).toBe(true));
       run.emit('\x01'.repeat(MIB));
       hold = false;
@@ -271,7 +271,7 @@ const errors = [
 it.each(errors)('bounds $name to an unchanged well-formed suffix', async ({ source, thrown, expected }) => {
   const run = producer();
   if (thrown) run.service.installBackend = async () => { throw new Error(source); };
-  const admission = run.jobs.selectBackend('claude-agent', false);
+  const admission = run.jobs.selectBackend('claude', false);
   run.finish({ ok: false, code: 1, aborted: false, tail: source });
   await admission.operation.done;
   const item = run.jobs.attachBackend(admission, observer('error')).replay.at(-1);

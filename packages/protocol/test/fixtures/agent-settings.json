@@ -176,13 +176,13 @@
     },
     "comments": {
       "stored": {
-        "backend": "codex-appserver",
+        "backend": "codex",
         "selection": {
           "kind": "default"
         }
       },
       "effective": {
-        "backend": "codex-appserver",
+        "backend": "codex",
         "selection": {
           "kind": "default"
         }
@@ -205,24 +205,24 @@
     "titles": {
       "stored": {
         "byBackend": {
-          "codex-appserver": {
+          "codex": {
             "enabled": true,
             "model": "fixture-custom-title-model",
             "effort": "high"
           },
-          "claude-agent": {
+          "claude": {
             "enabled": false
           }
         }
       },
       "effective": {
         "byBackend": {
-          "codex-appserver": {
+          "codex": {
             "enabled": true,
             "model": "fixture-custom-title-model",
             "effort": "high"
           },
-          "claude-agent": {
+          "claude": {
             "enabled": false
           }
         }

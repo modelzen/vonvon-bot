@@ -266,7 +266,7 @@ function BackendActions({ backend, actions }: { backend: BackendEntry; actions: 
 }
 
 function BackendRow({ backend, actions }: { backend: BackendEntry; actions: BackendActionsProps }) {
-  const sdk = backend.id === "claude-agent" && backend.depKind === "npm-ondemand";
+  const sdk = backend.id === "claude" && backend.depKind === "npm-ondemand";
   const state = backendStateLabel(backend.depState);
   return <article className="environment-backend" aria-label={`${sdk ? "Claude Agent SDK" : backend.displayName} 执行后端`}>
     <div>

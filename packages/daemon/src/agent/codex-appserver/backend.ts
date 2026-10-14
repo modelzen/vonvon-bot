@@ -519,7 +519,7 @@ class CodexThread implements AgentThread {
 }
 
 export class CodexAppServerBackend implements AgentBackend {
-  readonly id = 'codex-appserver';
+  readonly id = 'codex';
   readonly displayName = 'Codex (app-server)';
   private modelCache: ModelInfo[] | null = null;
 

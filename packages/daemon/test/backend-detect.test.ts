@@ -23,40 +23,40 @@ beforeEach(() => {
 afterEach(() => vi.clearAllMocks());
 
 describe('智能默认 effectiveDefaultBackend（detect 推导）', () => {
-  it('有 codex → codex-appserver', async () => {
+  it('有 codex → codex', async () => {
     detectState.codexBin = '/usr/bin/codex';
     detectState.codexVersion = 'codex 9.9';
-    expect(await effectiveDefaultBackend({ force: true })).toBe('codex-appserver');
+    expect(await effectiveDefaultBackend({ force: true })).toBe('codex');
   });
 
-  it('都无 → 回退 codex-appserver 占位（doctor 会报需安装）', async () => {
+  it('都无 → 回退 codex 占位（doctor 会报需安装）', async () => {
     detectState.codexBin = null;
     detectState.codexVersion = null;
-    expect(await effectiveDefaultBackend({ force: true })).toBe('codex-appserver');
+    expect(await effectiveDefaultBackend({ force: true })).toBe('codex');
   });
 });
 
 describe('backendForProject：显式优先（须为已注册后端），否则有效默认', () => {
-  it('项目显式选了已注册后端 codex-appserver → 用它（不探测）', async () => {
+  it('项目显式选了已注册后端 codex → 用它（不探测）', async () => {
     detectState.codexBin = null; // 即便探不到 codex，显式值也优先
-    expect(await backendForProject({ backend: 'codex-appserver' })).toBe('codex-appserver');
+    expect(await backendForProject({ backend: 'codex' })).toBe('codex');
   });
 
-  it('项目指向已移除后端（旧 claude-sdk 配置）→ 回退有效默认 codex-appserver（避免 createBackend 抛未知后端）', async () => {
+  it('项目指向已移除后端（旧 claude-sdk 配置）→ 回退有效默认 codex（避免 createBackend 抛未知后端）', async () => {
     detectState.codexBin = '/usr/bin/codex';
     detectState.codexVersion = 'codex 9.9';
-    expect(await backendForProject({ backend: 'claude-sdk' }, { force: true })).toBe('codex-appserver');
+    expect(await backendForProject({ backend: 'claude-sdk' }, { force: true })).toBe('codex');
   });
 
   it('项目没选 → 落有效默认', async () => {
     detectState.codexBin = '/usr/bin/codex';
     detectState.codexVersion = 'codex 9.9';
-    expect(await backendForProject({}, { force: true })).toBe('codex-appserver');
+    expect(await backendForProject({}, { force: true })).toBe('codex');
   });
 });
 
 describe('detectAgents：按 agent 维度分组（仅 codex）', () => {
-  it('codex 装了 → 单个 agent installed，其 codex-appserver 后端 available', async () => {
+  it('codex 装了 → 单个 agent installed，其 codex 后端 available', async () => {
     detectState.codexBin = '/usr/bin/codex';
     detectState.codexVersion = 'codex 9.9';
     const agents = await detectAgents();
@@ -64,7 +64,7 @@ describe('detectAgents：按 agent 维度分组（仅 codex）', () => {
     const codex = agents.find((a) => a.id === 'codex')!;
     expect(codex.installed).toBe(true);
     expect(codex.backends).toHaveLength(1);
-    expect(codex.backends[0]!.backendId).toBe('codex-appserver');
+    expect(codex.backends[0]!.backendId).toBe('codex');
     expect(codex.backends[0]!.available).toBe(true);
     // external-cli 基线，绝不出「一键下载」信号
     expect(codex.backends[0]!.installable).toBe(false);

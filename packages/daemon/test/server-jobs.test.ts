@@ -65,13 +65,13 @@ describe('backend admission commit boundary', () => {
       const client = await socketClient(fixture.api.port, fixture.credential);
       await client.ready();
       hold = true;
-      const reply = client.call({ type: 'request', id: 'install', method: 'environment', payload: { type: 'backendInstall', id: 'claude-agent', update: false } });
+      const reply = client.call({ type: 'request', id: 'install', method: 'environment', payload: { type: 'backendInstall', id: 'claude', update: false } });
       await vi.waitFor(() => expect(rebuilding).toBe(true));
       gate.resolve();
       expect(await reply).toMatchObject({ type: 'response', payload: { attached: false, replay: [{ type: 'log', chunk: 'sync' }, { type: 'done' }] } });
       expect(client.frames.filter(frame => frame.type === 'event' && frame.event === 'backendInstall')).toEqual([]);
       hold = false;
-      await client.call({ type: 'request', id: 'again', method: 'environment', payload: { type: 'backendInstall', id: 'claude-agent', update: false } });
+      await client.call({ type: 'request', id: 'again', method: 'environment', payload: { type: 'backendInstall', id: 'claude', update: false } });
       expect(installs).toBe(2);
       await client.close();
     } finally { await fixture.close(); }
@@ -82,9 +82,9 @@ describe('backend admission commit boundary', () => {
     let progress: (chunk: string) => void = () => {};
     let installs = 0;
     const jobs = manager(fakeService({ installBackend: (_id, callback) => { installs++; progress = callback ?? (() => {}); progress('first'); return complete.promise; } }));
-    const first = jobs.selectBackend('claude-agent', false);
+    const first = jobs.selectBackend('claude', false);
     await Promise.resolve();
-    const second = jobs.selectBackend('claude-agent', false);
+    const second = jobs.selectBackend('claude', false);
     const a = peer('a'); const b = peer('b');
     expect(jobs.attachBackend(first, a.value)).toMatchObject({ attached: false, replay: [{ type: 'log', chunk: 'first' }] });
     expect(jobs.attachBackend(second, b.value)).toMatchObject({ attached: true, replay: [{ type: 'log', chunk: 'first' }] });
@@ -100,7 +100,7 @@ describe('backend admission commit boundary', () => {
   it('does not attach a peer that disconnects during the rebuild await', async () => {
     const complete = deferred<Awaited<ReturnType<AdminService['installBackend']>>>();
     const jobs = manager(fakeService({ installBackend: () => complete.promise }));
-    const admission = jobs.selectBackend('claude-agent', false);
+    const admission = jobs.selectBackend('claude', false);
     const events: Event[] = [];
     const disconnected: JobPeer = { id: 'gone', open: false, event: event => events.push(event) };
     jobs.attachBackend(admission, disconnected);

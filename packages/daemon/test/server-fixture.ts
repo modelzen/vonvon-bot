@@ -20,7 +20,7 @@ export function fakeService(overrides: Partial<AdminService> = {}): AdminService
     codexSetup: async () => ({ installation: 'missing', authentication: 'unknown', version: null, executable: null }),
     getSetupStatus: async appId => ({ appId, tenant: 'feishu', credentials: { ok: false }, connection: { running: false }, event: { state: 'unchecked' }, scopes: { grantUrl: 'https://example.test' }, eventConfigUrl: 'https://example.test' }),
     registerBotByQr: async () => ({ ok: false, code: 'abort', reason: 'cancelled' }), refreshBotByQr: async () => ({ ok: false, code: 'abort', reason: 'cancelled' }),
-    listBackendCatalog: async () => ({ defaultBackend: 'codex-appserver', entries: [] }),
+    listBackendCatalog: async () => ({ defaultBackend: 'codex', entries: [] }),
     installBackend: async () => ({ ok: true, code: 0, aborted: false, tail: '' }),
     uninstallBackend: async () => ({ ok: true, message: 'removed' }), backendVersion: async () => ({ installed: null, latest: null, hasUpdate: false }),
     getDaemonStatus: async () => ({ installed: false, running: true, selfHosted: true, version: 'test', supported: true }),

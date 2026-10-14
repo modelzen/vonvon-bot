@@ -55,7 +55,7 @@ vi.mock('../src/config/paths', async () => {
 // performSetPermissionMode 的「后端档位兼容守门」直接从 catalog 读 supportedModes
 // （非 backendFor 注入），故用 mock 给真实 catalog 追加一个泛化的「仅 full」后端条目
 // 'fake-fullonly'，以保留该守卫的通用覆盖——而不绑定任何具体后端名。其余 catalog
-// 行为（codex-appserver 全档、catalogBackendIds 等）走 importActual 原样保留。
+// 行为（codex 全档、catalogBackendIds 等）走 importActual 原样保留。
 vi.mock('../src/agent/catalog', async () => {
   const actual = await vi.importActual<typeof import('../src/agent/catalog')>('../src/agent/catalog');
   const fakeFullOnly = {
@@ -81,7 +81,7 @@ afterAll(() => {
 /** 可用的假后端（doctor ok、全档支持，除非显式收窄）。 */
 function fakeBackend(over: Partial<AgentBackend> = {}): AgentBackend {
   return {
-    id: 'codex-appserver',
+    id: 'codex',
     displayName: 'Codex',
     doctor: async () => ({ ok: true, version: '1.0.0' }),
     ...over,
@@ -319,7 +319,7 @@ describe('performSetPermissionMode', () => {
   });
 
   it('codex 后端（supportedModes 全档）→ 任意权限档放行', async () => {
-    await addProject({ name: 'cx', chatId: 'oc_cx', cwd: '/tmp/cx', blank: false, createdAt: 1, mode: 'full', backend: 'codex-appserver' });
+    await addProject({ name: 'cx', chatId: 'oc_cx', cwd: '/tmp/cx', blank: false, createdAt: 1, mode: 'full', backend: 'codex' });
     const r = await performSetPermissionMode({ projectName: 'cx', mode: 'qa', evictLiveSessionsForChat: async () => undefined });
     expect(r.ok).toBe(true);
     expect((await getProjectByName('cx'))?.mode).toBe('qa');
@@ -329,7 +329,7 @@ describe('performSetPermissionMode', () => {
 
 describe('performBackendSwitch（注册表 → doctor 探活 → 档位支持面，全过才写盘）', () => {
   it('项目不存在 → 拒绝（防御式 IPC/HTTP 入口的脏请求）', async () => {
-    const r = await performBackendSwitch({ projectName: 'ghost', target: 'codex-appserver', backendFor: () => fakeBackend() });
+    const r = await performBackendSwitch({ projectName: 'ghost', target: 'codex', backendFor: () => fakeBackend() });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain('不存在');
   });
@@ -343,7 +343,7 @@ describe('performBackendSwitch（注册表 → doctor 探活 → 档位支持面
 
   it('doctor 探活失败 → 拒绝（切过去才报错是事故，这里提前拦）', async () => {
     const be = fakeBackend({ doctor: async () => ({ ok: false, hint: '未登录' }) } as Partial<AgentBackend>);
-    const r = await performBackendSwitch({ projectName: 'demo', target: 'codex-appserver', backendFor: () => be });
+    const r = await performBackendSwitch({ projectName: 'demo', target: 'codex', backendFor: () => be });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain('不可用');
   });
@@ -355,34 +355,34 @@ describe('performBackendSwitch（注册表 → doctor 探活 → 档位支持面
       evictLiveSessionsForChat: async () => undefined,
     });
     const be = fakeBackend({ supportedModes: ['full'] } as Partial<AgentBackend>);
-    const r = await performBackendSwitch({ projectName: 'demo', target: 'codex-appserver', backendFor: () => be });
+    const r = await performBackendSwitch({ projectName: 'demo', target: 'codex', backendFor: () => be });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain('权限档');
   });
 
   it('全过 → 写盘 + 写后回读（legacy：backend 未设时一次性落地）', async () => {
-    const r = await performBackendSwitch({ projectName: 'demo', target: 'codex-appserver', backendFor: () => fakeBackend() });
+    const r = await performBackendSwitch({ projectName: 'demo', target: 'codex', backendFor: () => fakeBackend() });
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.project.backend).toBe('codex-appserver');
-    expect((await getProjectByName('demo'))?.backend).toBe('codex-appserver');
+    if (r.ok) expect(r.project.backend).toBe('codex');
+    expect((await getProjectByName('demo'))?.backend).toBe('codex');
   });
 
   it('已设后端再切到异值 → 防御式拒绝「创建时选定，不支持切换」且不写盘', async () => {
     // 模拟「创建时已选定 codex」的项目：先落地一个后端，再尝试切到别的（异值）。
     // 防御拦截在注册表/doctor 校验之前，故目标取任意异值（不必是已注册 id）即可触发。
-    await performBackendSwitch({ projectName: 'demo', target: 'codex-appserver', backendFor: () => fakeBackend() });
+    await performBackendSwitch({ projectName: 'demo', target: 'codex', backendFor: () => fakeBackend() });
     const r = await performBackendSwitch({ projectName: 'demo', target: 'gpt-9', backendFor: () => fakeBackend() });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain('不支持切换');
     // 写盘未变：仍是创建时选定的 codex（防御拦截在 doctor/校验之前）。
-    expect((await getProjectByName('demo'))?.backend).toBe('codex-appserver');
+    expect((await getProjectByName('demo'))?.backend).toBe('codex');
   });
 
   it('已设后端切到同值 → no-op 放行（幂等，不算切换）', async () => {
-    await performBackendSwitch({ projectName: 'demo', target: 'codex-appserver', backendFor: () => fakeBackend() });
-    const r = await performBackendSwitch({ projectName: 'demo', target: 'codex-appserver', backendFor: () => fakeBackend() });
+    await performBackendSwitch({ projectName: 'demo', target: 'codex', backendFor: () => fakeBackend() });
+    const r = await performBackendSwitch({ projectName: 'demo', target: 'codex', backendFor: () => fakeBackend() });
     expect(r.ok).toBe(true);
-    expect((await getProjectByName('demo'))?.backend).toBe('codex-appserver');
+    expect((await getProjectByName('demo'))?.backend).toBe('codex');
   });
 });
 

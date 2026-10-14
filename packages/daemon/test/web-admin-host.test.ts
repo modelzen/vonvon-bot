@@ -296,7 +296,7 @@ describe('AdminService · deleteBot（删除 + 保护分支）', () => {
     await addProject({ name: 'p-b', chatId: 'oc_b', cwd: '/tmp/p-b', blank: false, createdAt: 1 });
     await upsertSession({
       threadId: 't1', chatId: 'oc_b', cwd: '/tmp/p-b', sessionId: 's1',
-      backend: 'codex-appserver', summary: '进行中', createdAt: 1, updatedAt: 2,
+      backend: 'codex', summary: '进行中', createdAt: 1, updatedAt: 2,
     });
     const svc = createAdminService({
       liveStatus: async (id) => (id === BOT_B ? { running: true, pid: 123 } : undefined),

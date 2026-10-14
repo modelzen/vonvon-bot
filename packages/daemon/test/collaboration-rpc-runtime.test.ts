@@ -6,8 +6,8 @@ import { fakeService, socketClient, startFixture } from './server-fixture';
 
 const bot: AdminBot = { appId: 'cli_owner', name: 'Owner', tenant: 'feishu', active: true, current: true, running: true, completionReminder: { mode: 'failures', longTaskMinutes: 3 } };
 const target = { agentId: bot.appId, projectName: 'demo', groupId: 'oc_demo' };
-const project = { name: 'demo', chatId: 'oc_demo', cwd: '/fixture', kind: 'single', backend: 'codex-appserver', enabled: true, revision: 'revision' };
-const history = { sessions: [{ threadId: 'oc_demo', chatId: 'oc_demo', sessionId: 'old', summary: 'previous', backend: 'codex-appserver', cwd: '/fixture', createdAt: 1, updatedAt: 2, detached: true }], threads: [{ sessionId: 'past', preview: 'history', name: 'Past', createdAt: 1, updatedAt: 2 }], backend: 'codex-appserver', threadsError: 'history unavailable' };
+const project = { name: 'demo', chatId: 'oc_demo', cwd: '/fixture', kind: 'single', backend: 'codex', enabled: true, revision: 'revision' };
+const history = { sessions: [{ threadId: 'oc_demo', chatId: 'oc_demo', sessionId: 'old', summary: 'previous', backend: 'codex', cwd: '/fixture', createdAt: 1, updatedAt: 2, detached: true }], threads: [{ sessionId: 'past', preview: 'history', name: 'Past', createdAt: 1, updatedAt: 2 }], backend: 'codex', threadsError: 'history unavailable' };
 const context = { threadId: 'oc_demo', usage: { used: 20, window: 100 }, run: { id: 'run', goal: false, canStop: true, canEndGoal: false, canRemind: true, reminderRequested: false } };
 const cases = [
   { request: { action: 'project', ...target }, raw: { project }, reply: { kind: 'project', project } },
@@ -18,7 +18,7 @@ const cases = [
   { request: { action: 'editProject', ...target, expectedRevision: 'revision', enabled: false }, raw: { ok: true, project }, reply: { kind: 'applied', project } },
   { request: { action: 'removeProject', ...target, expectedRevision: 'revision' }, raw: { ok: true, groupEffect: 'failed', warning: 'permission denied', message: 'unbound' }, reply: { kind: 'applied', groupEffect: 'failed', warning: 'permission denied', message: 'unbound' } },
   ...['clear', 'compact', 'startGoal', 'stop', 'endGoal', 'reminder', 'resume'].map(action => ({
-    request: { action, ...target, ...(action === 'resume' ? { sessionId: 'past', backend: 'codex-appserver' } : { threadId: 'oc_demo' }), ...(action === 'startGoal' ? { objective: 'Finish' } : {}), ...(['stop', 'endGoal', 'reminder'].includes(action) ? { runId: 'run' } : {}), ...(action === 'reminder' ? { requested: true } : {}) },
+    request: { action, ...target, ...(action === 'resume' ? { sessionId: 'past', backend: 'codex' } : { threadId: 'oc_demo' }), ...(action === 'startGoal' ? { objective: 'Finish' } : {}), ...(['stop', 'endGoal', 'reminder'].includes(action) ? { runId: 'run' } : {}), ...(action === 'reminder' ? { requested: true } : {}) },
     raw: { ok: true, threadId: 'oc_demo' }, reply: { kind: 'applied', threadId: 'oc_demo' },
   })),
 ];

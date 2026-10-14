@@ -53,11 +53,11 @@ test("expired Feishu credentials take action priority over an available update",
 });
 
 test("only the matching Codex Host is folded into a present CLI row", () => {
-  const codexHost: BackendEntry = { id: "codex-appserver", displayName: "Codex", depKind: "external-cli", depState: "error", installable: false, version: null, installedVersion: null, canUninstall: false, hint: "连接失败" };
-  const sdk: BackendEntry = { id: "claude-agent", displayName: "Claude", depKind: "npm-ondemand", depState: "ready", installable: false, version: "1.0", installedVersion: "1.0", canUninstall: true };
+  const codexHost: BackendEntry = { id: "codex", displayName: "Codex", depKind: "external-cli", depState: "error", installable: false, version: null, installedVersion: null, canUninstall: false, hint: "连接失败" };
+  const sdk: BackendEntry = { id: "claude", displayName: "Claude", depKind: "npm-ondemand", depState: "ready", installable: false, version: "1.0", installedVersion: "1.0", canUninstall: true };
   const future: BackendEntry = { id: "future", displayName: "Future", depKind: "other", depState: "new-state", installable: true, version: null, installedVersion: null, canUninstall: false };
   const entries = [codexHost, sdk, future];
   assert.deepEqual(groupAgentBackends([installed], entries), { codexHost, otherBackends: [sdk, future] });
   assert.deepEqual(groupAgentBackends([], entries), { otherBackends: entries });
-  assert.deepEqual(groupAgentBackends([installed], [{ ...codexHost, depKind: "other" }, sdk]).otherBackends.map((entry) => entry.id), ["codex-appserver", "claude-agent"]);
+  assert.deepEqual(groupAgentBackends([installed], [{ ...codexHost, depKind: "other" }, sdk]).otherBackends.map((entry) => entry.id), ["codex", "claude"]);
 });

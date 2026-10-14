@@ -602,7 +602,7 @@ function AgentPanel({
   ]);
   const [advanced, setAdvanced] = useState(false);
   useEffect(() => {if (reveal === 'cli-advanced') setAdvanced(true);}, [reveal]);
-  const [titleBackend, setTitleBackend] = useState("codex-appserver");
+  const [titleBackend, setTitleBackend] = useState("codex");
   const [commentBackend, setCommentBackend] = useState(
     view.sections.comments.stored.backend,
   );
@@ -1226,8 +1226,8 @@ function AgentPanel({
                         value={titleBackend}
                         disabled={disabled}
                         choices={[
-                          { value: "codex-appserver", label: "Codex" },
-                          { value: "claude-agent", label: "Claude" },
+                          { value: "codex", label: "Codex" },
+                          { value: "claude", label: "Claude" },
                         ]}
                         onChange={setTitleBackend}
                       />
@@ -1319,8 +1319,8 @@ function AgentPanel({
                       value={draft.backend}
                       disabled={disabled}
                       choices={[
-                        { value: "codex-appserver", label: "Codex" },
-                        { value: "claude-agent", label: "Claude" },
+                        { value: "codex", label: "Codex" },
+                        { value: "claude", label: "Claude" },
                       ]}
                       onChange={(value) => {
                         setCommentBackend(value);
@@ -1645,7 +1645,7 @@ function ProjectPanel({
           />
         )}
       </Catalog>
-      <SettingsGroup label="执行后端"><SettingsRow title="执行工具" value={view.identity.backend === "codex-appserver" ? "Codex" : view.identity.backend === "claude-agent" ? "Claude" : view.identity.backend} /></SettingsGroup>
+      <SettingsGroup label="执行后端"><SettingsRow title="执行工具" value={view.identity.backend === "codex" ? "Codex" : view.identity.backend === "claude" ? "Claude" : view.identity.backend} /></SettingsGroup>
       <Editor
         title="工作目录权限"
         section={permission}

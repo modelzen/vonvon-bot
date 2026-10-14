@@ -149,7 +149,7 @@ export interface SessionTitlesConfig {
  * This constrains the transport, not the model id: third-party/custom models
  * remain unrestricted. Unknown future backends receive the full bridge ladder. */
 export function getSessionTitleEfforts(backendId: string): readonly ReasoningEffort[] {
-  if (backendId === 'claude-agent') return ['low', 'medium', 'high', 'xhigh', 'max'];
+  if (backendId === 'claude') return ['low', 'medium', 'high', 'xhigh', 'max'];
   return REASONING_EFFORTS;
 }
 
@@ -164,7 +164,7 @@ export type ResolvedSessionTitleBackendConfig =
  * 用磁盘上的 `comment-instructions.md`，让用户像编辑 AGENTS.md 一样直接改。
  */
 export interface CommentsConfig {
-  /** 评论流新会话用的后端 id（如 'codex-appserver' / 'claude-agent'）。缺省 → DEFAULT_BACKEND_ID。 */
+  /** 评论流新会话用的后端 id（如 'codex' / 'claude'）。缺省 → DEFAULT_BACKEND_ID。 */
   backend?: string;
   /** 评论流新会话的默认模型 id。缺省 → 后端默认模型。 */
   model?: string;
@@ -557,7 +557,7 @@ export function summarizeSessionTitles(
       : '截断首句';
   };
   return [
-    `- Codex：${strategy('codex-appserver')}`,
-    `- Claude Code：${strategy('claude-agent')}`,
+    `- Codex：${strategy('codex')}`,
+    `- Claude Code：${strategy('claude')}`,
   ].join('\n');
 }

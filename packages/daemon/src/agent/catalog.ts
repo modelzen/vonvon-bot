@@ -82,7 +82,7 @@ export function isInstallable(entry: BackendCatalogEntry): boolean {
 
 export const BACKEND_CATALOG: readonly BackendCatalogEntry[] = [
   {
-    id: 'codex-appserver',
+    id: 'codex',
     agentFamily: 'codex',
     displayName: 'Codex',
     access: 'app-server',
@@ -96,7 +96,7 @@ export const BACKEND_CATALOG: readonly BackendCatalogEntry[] = [
     blurb: '能力最全（goal/steer/compact/resume + 真沙箱只读档）',
   },
   {
-    id: 'claude-agent',
+    id: 'claude',
     agentFamily: 'claude',
     displayName: 'Claude',
     access: 'sdk',

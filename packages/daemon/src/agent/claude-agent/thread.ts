@@ -150,18 +150,18 @@ async function toImageBlock(path: string): Promise<UserContentBlock | undefined>
   try {
     bytes = await readFile(path);
   } catch (err) {
-    log.warn('agent', 'image-read-failed', { backend: 'claude-agent', err: String(err) });
+    log.warn('agent', 'image-read-failed', { backend: 'claude', err: String(err) });
     return undefined;
   }
   if (bytes.byteLength === 0 || bytes.byteLength > MAX_IMAGE_BYTES) {
-    log.warn('agent', 'image-skip-size', { backend: 'claude-agent', bytes: bytes.byteLength });
+    log.warn('agent', 'image-skip-size', { backend: 'claude', bytes: bytes.byteLength });
     return undefined;
   }
   const mediaType = sniffImageType(bytes);
   if (!mediaType) {
     // heic/bmp/tiff or unrecognized bytes — see sniffImageType; log the header so a
     // surprising type is diagnosable, then skip (best-effort).
-    log.info('agent', 'image-skip-unsupported', { backend: 'claude-agent', head: bytes.toString('hex', 0, 4) });
+    log.info('agent', 'image-skip-unsupported', { backend: 'claude', head: bytes.toString('hex', 0, 4) });
     return undefined;
   }
   return { type: 'image', source: { type: 'base64', media_type: mediaType, data: bytes.toString('base64') } };
@@ -193,7 +193,7 @@ export async function toUserMessage(input: AgentInput): Promise<SDKUserMessage> 
   }
   const imageCount = blocks.filter((b) => b.type === 'image').length;
   if (imageCount === 0) return textUserMessage(text); // every image dropped → plain text
-  log.info('agent', 'images-attached', { backend: 'claude-agent', count: imageCount, of: paths.length });
+  log.info('agent', 'images-attached', { backend: 'claude', count: imageCount, of: paths.length });
   return { type: 'user', message: { role: 'user', content: blocks }, parent_tool_use_id: null } as SDKUserMessage;
 }
 
@@ -274,7 +274,7 @@ export class ClaudeAgentThread implements AgentThread {
       stderr: (d: string) => {
         const s = String(d).trim();
         // file-only (not in stdout allowlist) — handy for diagnosing auth/sandbox.
-        if (s) log.info('agent', 'sdk-stderr', { backend: 'claude-agent', line: s.slice(0, 300) });
+        if (s) log.info('agent', 'sdk-stderr', { backend: 'claude', line: s.slice(0, 300) });
       },
     };
 
@@ -293,7 +293,7 @@ export class ClaudeAgentThread implements AgentThread {
       this.sink?.({ kind: 'end' });
     } catch (err) {
       this.dead = true;
-      log.fail('agent', err, { backend: 'claude-agent', phase: 'pump' });
+      log.fail('agent', err, { backend: 'claude', phase: 'pump' });
       this.sink?.({ kind: 'error', err });
     }
   }
@@ -327,7 +327,7 @@ export class ClaudeAgentThread implements AgentThread {
     void toUserMessage(input).then(
       (m) => this.input.push(m),
       (err) => {
-        log.fail('agent', err, { backend: 'claude-agent', phase: 'build-user-message' });
+        log.fail('agent', err, { backend: 'claude', phase: 'build-user-message' });
         this.input.push(textUserMessage(input.text ?? ''));
       },
     );
@@ -376,7 +376,7 @@ export class ClaudeAgentThread implements AgentThread {
                   yield { type: 'context_usage', usedTokens: cu.totalTokens, contextWindow: cu.maxTokens };
                 }
               } catch (err) {
-                log.fail('agent', err, { backend: 'claude-agent', phase: 'getContextUsage' });
+                log.fail('agent', err, { backend: 'claude', phase: 'getContextUsage' });
               }
               yield { type: 'done', turnId };
             } else {
@@ -534,7 +534,7 @@ export class ClaudeAgentThread implements AgentThread {
   readonly supportsSteer = false;
   async steer(): Promise<void> {
     // capabilities.steer=false → orchestrator queues the steer as the next turn.
-    throw new Error('claude-agent 后端暂不支持飞行中引导（steer），将自动改为下一轮发送');
+    throw new Error('claude 后端暂不支持飞行中引导（steer），将自动改为下一轮发送');
   }
   /**
    * Manual /compact. Claude Code's `/compact` IS a real slash command (verified:
@@ -590,7 +590,7 @@ export class ClaudeAgentThread implements AgentThread {
     try {
       await this.query.interrupt();
     } catch (err) {
-      log.fail('agent', err, { backend: 'claude-agent', phase: 'interrupt' });
+      log.fail('agent', err, { backend: 'claude', phase: 'interrupt' });
     }
     // interrupt() ends a streaming turn cleanly (keeps the warm process), but HANGS
     // when a blocking tool is mid-execution — so escalate to a hard abort if the
@@ -599,7 +599,7 @@ export class ClaudeAgentThread implements AgentThread {
     this.escalateTimer = setTimeout(() => {
       this.escalateTimer = undefined;
       if (this.dead || !this.turnInFlight) return; // interrupt already ended it
-      log.info('agent', 'interrupt-escalate', { backend: 'claude-agent' });
+      log.info('agent', 'interrupt-escalate', { backend: 'claude' });
       this.dead = true; // hard abort → resolveThread evicts + resumes next message
       try {
         this.abortController.abort();
