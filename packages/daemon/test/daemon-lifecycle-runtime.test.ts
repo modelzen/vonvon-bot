@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { setTimeout as settleIO } from 'node:timers/promises';
 import { acquireMutex, closeMutex } from '../src/config/data-access';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { ShutdownControl } from '../src/host/lifecycle';
+import { closeOwnedProviders, type OwnedProviders, type ShutdownControl } from '../src/host/lifecycle';
 import { createApiLifetimeFake } from './helpers/api-lifetime';
 
 const f = vi.hoisted(() => ({ root: '', spawn: vi.fn(), api: vi.fn(), calls: [] as string[] }));
@@ -25,6 +25,7 @@ vi.mock('../src/cli/commands/run', async () => {
   ], options) };
 });
 import { runHostRuntime } from '../src/host/bootstrap';
+import { ProcessHost } from '../src/provider/process/process-host';
 
 function gate() {
   let release: () => void = () => {};
@@ -111,4 +112,57 @@ it.each([false, true])('retains real PID and host mutex after cleanup rejection 
   expect(result).toBeInstanceOf(Error);
   expect(f.calls).toContain('closed');
   expect(existsSync(join(f.root, 'daemon.pid'))).toBe(false);
+});
+
+it('keeps the PID lock, host mutex, and listener while the process host still owes work, and releases them once it does not', async () => {
+  let owing = true;
+  vi.spyOn(ProcessHost.prototype, 'owesWork').mockImplementation(() => owing);
+  const owner: ShutdownControl = {
+    requested: false, waitForRequest: () => { started.release(); return stopGate.promise; },
+    requestStop: stopGate.release, requestRestart() {}, dispose() {},
+    completeShutdown: async release => release(),
+  };
+  closeGate.release();
+  running = runHostRuntime({ managed: false, control: owner }).then(() => { settled = true; }, error => { settled = true; return error; });
+  await Promise.race([started.promise, running.then(error => { throw error ?? new Error('Host ended before readiness'); })]);
+  vi.useFakeTimers();
+  owned.emit('message', { fcb: 'fcb.owned-work', pids: [], settled: true });
+  Object.defineProperty(owned, 'exitCode', { value: 0, configurable: true }); owned.emit('exit', 0, null);
+  stopGate.release();
+  await vi.advanceTimersByTimeAsync(120_000);
+  await settleIO(30);
+  expect.soft(settled).toBe(false);
+  expect.soft(existsSync(join(f.root, 'daemon.pid'))).toBe(true);
+  const contender = await acquireMutex(f.root, 'host', 0).then(async lock => { await closeMutex(lock); return 'acquired'; }, () => 'held');
+  expect.soft(contender).toBe('held');
+  expect.soft(f.calls).not.toContain('release');
+  owing = false;
+  await vi.advanceTimersByTimeAsync(1000);
+  await settleIO(30);
+  await running;
+  expect(settled).toBe(true);
+  expect(f.calls).toContain('release');
+  expect(existsSync(join(f.root, 'daemon.pid'))).toBe(false);
+});
+
+it('a bot process stays in closeOwnedProviders, reporting unsettled about once a second, until its host owes nothing', async () => {
+  const reports: Array<{ settled: boolean; pids: number[] }> = [];
+  vi.stubGlobal('process', Object.defineProperties(Object.create(process), {
+    connected: { value: true },
+    send: { value: (message: { settled: boolean; pids: number[] }, done: (error: Error | null) => void) => { reports.push(message); done(null); return true; } },
+  }));
+  vi.useFakeTimers();
+  let owing = true;
+  const host = { owesWork: () => owing, closeAll: vi.fn(async () => {}), snapshot: () => [{ ownership: 'unknown' as const, providerPid: 777 }] } as unknown as OwnedProviders;
+  let done = false;
+  const closing = closeOwnedProviders(host).then(() => { done = true; });
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(done).toBe(false);
+  expect(reports.length).toBeGreaterThanOrEqual(10);
+  expect(reports.every(r => !r.settled && r.pids.includes(777))).toBe(true);
+  owing = false;
+  await vi.advanceTimersByTimeAsync(1000);
+  await closing;
+  expect(reports.at(-1)?.settled).toBe(true);
+  expect(host.closeAll).toHaveBeenCalledOnce();
 });

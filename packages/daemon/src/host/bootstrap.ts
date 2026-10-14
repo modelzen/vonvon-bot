@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { botDir, paths } from '../config/paths';
+import { ensureRegistry, findBot } from '../config/bots';
 import { acquireMutex, closeMutex } from '../config/data-access';
-import { listenerCloseUnconfirmed, observeShutdown, type ShutdownControl } from './lifecycle';
+import { listenerCloseUnconfirmed, settleOwedWork, observeShutdown, type ShutdownControl } from './lifecycle';
 import { readServiceCodexBin } from '../service/codex-bin';
 import { acquirePidLock, publishPidLock, releasePidLock, type PidLockInfo } from '../server/pid-lock';
 import { log } from '../core/logger';
@@ -20,7 +21,7 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
       owner = await acquirePidLock(paths.appDir);
     }
     if (control.requested) return;
-    const dataDir = options.bot ? botDir(options.bot) : paths.appDir;
+    const dataDir = options.bot ? botDir(findBot(await ensureRegistry(), options.bot)?.appId ?? options.bot) : paths.appDir;
     mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     host = new ProcessHost({
       dataDir, daemonBootId: randomUUID(),
@@ -48,7 +49,7 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
     });
   } catch (error) { errors.push(error); }
   finally {
-    try { await host?.closeAll(); } catch (error) { errors.push(error); }
+    try { if (host) await settleOwedWork(host); } catch (error) { errors.push(error); }
     try { await control.completeShutdown(async () => {}); }
     catch (error) { errors.push(error); }
     control.dispose();
