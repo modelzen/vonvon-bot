@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { CodexAppServerBackend } from '../src/agent/codex-appserver/backend';
-import { shutdownResidentClients } from '../src/agent/codex-appserver/client-pool';
+import { shutdownResidentClients } from '../src/provider/engines/codex/client-pool';
 import { writeNodeExecutable } from './helpers/node-executable';
 import type { AgentEvent, AgentRun, AgentThread } from '../src/agent/types';
 

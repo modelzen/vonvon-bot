@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { mapNotification } from '../src/agent/codex-appserver/event-map';
-import type { ServerNotification, ThreadItem } from '../src/agent/codex-appserver/protocol';
+import type { ServerNotification, ThreadItem } from '../src/provider/engines/codex/protocol';
 
 function notification(method: string, params: unknown): ServerNotification {
   return { method, params } as ServerNotification;

@@ -4,7 +4,7 @@ import type { Readable, Writable } from 'node:stream';
 import { z } from 'zod';
 import { mergeProcessEnv } from '../../platform/spawn';
 import { log } from '../../core/logger';
-import type { ServerNotification } from '../../agent/codex-appserver/protocol';
+import type { ServerNotification } from '../engines/codex/protocol';
 import type { HostedProcess, ProcessHost } from '../process/process-host';
 
 class AsyncQueue<T> {

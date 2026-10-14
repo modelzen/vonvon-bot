@@ -6,7 +6,7 @@ import * as directoryModule from '../src/server/directory-browser';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { tmpdir } from 'node:os';
 import { WebSocket } from 'ws';
-import { CodexSetupService } from '../src/agent/codex-appserver/setup';
+import { CodexSetupService } from '../src/provider/engines/codex/setup';
 import type { startApi as startApiType } from '../src/server/http';
 import * as snapshotModule from '../src/server/snapshot';
 

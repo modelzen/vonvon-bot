@@ -6,7 +6,7 @@ import { runInNewContext } from 'node:vm';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { CodexProcessCleanupError, OwnedCodexProcess } from '../src/platform/owned-process';
 import { AppServerClient } from '../src/agent/codex-appserver/app-server-client';
-import { runSetupChild } from '../src/agent/codex-appserver/managed-install';
+import { runSetupChild } from '../src/provider/engines/codex/managed-install';
 import { writeNodeExecutable } from './helpers/node-executable';
 import { WindowsCodexJob } from '../src/platform/windows-job';
 import { processHosts } from './helpers/process-hosts';

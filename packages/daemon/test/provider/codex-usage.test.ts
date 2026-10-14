@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { UsageError } from '../src/agent/types';
+import { UsageError } from '../../src/agent/types';
 import {
   chatgptBaseUrl,
   fetchUsageBundle,
@@ -11,7 +11,7 @@ import {
   mapUsageResponse,
   readCodexAuth,
   resolveCodexHome,
-} from '../src/agent/codex-appserver/usage';
+} from '../../src/provider/engines/codex/usage';
 
 // ── fixtures：来自 wham 端点的真机捕获结构（数值脱敏）──────────────────
 

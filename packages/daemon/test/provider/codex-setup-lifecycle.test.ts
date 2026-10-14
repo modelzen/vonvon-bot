@@ -3,7 +3,7 @@ import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const transport = vi.hoisted(() => ({ spawn: vi.fn() }));
-vi.mock('../src/platform/spawn', async original => ({ ...await original<object>(), spawnProcess: transport.spawn }));
+vi.mock('../../src/platform/spawn', async original => ({ ...await original<object>(), spawnProcess: transport.spawn }));
 
 describe.skipIf(process.platform === 'win32')('POSIX setup child lifecycle', () => {
   const pid = 987654329;
@@ -12,8 +12,8 @@ describe.skipIf(process.platform === 'win32')('POSIX setup child lifecycle', () 
   let stderr: PassThrough;
   let groupPresent: boolean;
   let signalFailure: Error | undefined;
-  let runSetupChild: typeof import('../src/agent/codex-appserver/managed-install').runSetupChild;
-  let ownerModule: typeof import('../src/platform/owned-process');
+  let runSetupChild: typeof import('../../src/provider/engines/codex/managed-install').runSetupChild;
+  let ownerModule: typeof import('../../src/platform/owned-process');
   const endings: Promise<void>[] = [];
 
   type Outcome = { kind: 'pending' } | { kind: 'fulfilled'; value: string } | { kind: 'rejected'; error: unknown };
@@ -55,8 +55,8 @@ describe.skipIf(process.platform === 'win32')('POSIX setup child lifecycle', () 
       return true;
     });
     transport.spawn.mockReset().mockReturnValueOnce(child).mockImplementation(() => { throw new Error('Unexpected fixture spawn'); });
-    ownerModule = await import('../src/platform/owned-process');
-    ({ runSetupChild } = await import('../src/agent/codex-appserver/managed-install'));
+    ownerModule = await import('../../src/platform/owned-process');
+    ({ runSetupChild } = await import('../../src/provider/engines/codex/managed-install'));
   });
   afterEach(async () => {
     die();

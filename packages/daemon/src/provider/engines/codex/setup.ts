@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
-import { AppServerClient } from './app-server-client';
+import { AppServerClient } from '../../../agent/codex-appserver/app-server-client';
 import { codexHost } from './client-pool';
 import { resolveCodexBin } from './locate';
 import { installManagedCodex, runSetupChild } from './managed-install';
-import { CodexProcessCleanupError } from '../../platform/owned-process';
+import { CodexProcessCleanupError } from '../../../platform/owned-process';
 
 export interface CodexSetup {
   installation: 'missing' | 'installed' | 'unknown';

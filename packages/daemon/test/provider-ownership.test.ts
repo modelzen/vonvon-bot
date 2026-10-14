@@ -11,7 +11,7 @@ const transport = vi.hoisted(() => ({
   jobs: [] as Array<{ identity: symbol; proof: symbol | undefined; stop: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn> }>,
 }));
 vi.mock('../src/platform/spawn', async original => ({ ...await original<object>(), spawnProcess: transport.spawn }));
-vi.mock('../src/agent/codex-appserver/locate', () => ({ resolveCodexBin: () => '/fixture/no-provider' }));
+vi.mock('../src/provider/engines/codex/locate', () => ({ resolveCodexBin: () => '/fixture/no-provider' }));
 vi.mock('../src/platform/windows-job', () => ({ WindowsCodexJob: class {
   executable = '/fixture/no-powershell';
   private readonly job = { identity: Symbol('job'), proof: undefined as symbol | undefined, stop: vi.fn(), dispose: vi.fn() };
@@ -391,7 +391,7 @@ it.each(['utility', 'warm'] as const)('shutdown closes in-flight %s creation bef
   fixture.held.add('initialize');
   hostedShells.push(fixture);
   const { host, spawn } = providerHost();
-  const pool = await import('../src/agent/codex-appserver/client-pool');
+  const pool = await import('../src/provider/engines/codex/client-pool');
   pool.bindCodexHost(host);
   const creating = kind === 'utility' ? pool.utilityRequest('model/list') : pool.refillWarmPool();
   observe(creating);
@@ -630,7 +630,7 @@ it('actual backend thread close and resident warm client stay pending until the 
   hostedShells.push(warm, session);
   const { host } = providerHost();
   const { CodexAppServerBackend } = await import('../src/agent/codex-appserver/backend');
-  const pool = await import('../src/agent/codex-appserver/client-pool');
+  const pool = await import('../src/provider/engines/codex/client-pool');
   pool.bindCodexHost(host);
   const pendingThread = new CodexAppServerBackend().resumeThread({ cwd: '/test', sessionId: 'host' });
   await vi.advanceTimersByTimeAsync(0);

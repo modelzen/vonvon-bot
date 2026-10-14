@@ -11,7 +11,7 @@ import { createAdminService } from '../../admin/service';
 import { installBackendDep, uninstallBackendDep } from '../../agent';
 import { performCoreUpdate } from '../../service/update';
 import { startApi } from '../../server/http';
-import { bindCodexHost } from '../../agent/codex-appserver/client-pool';
+import { bindCodexHost } from '../../provider/engines/codex/client-pool';
 import type { ProcessHost } from '../../provider/process/process-host';
 
 interface RunOptions {

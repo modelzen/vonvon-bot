@@ -45,7 +45,7 @@ vi.mock('../src/platform/windows-job', () => ({ WindowsCodexJob: class {
 } }));
 vi.mock('../src/core/logger', () => ({ log: fixture.log, withTrace: (_context: unknown, action: () => unknown) => action() }));
 vi.mock('../src/agent', async original => ({ ...await original<object>(), createBackend: () => fixture.backend }));
-vi.mock('../src/agent/codex-appserver/locate', () => ({ resolveCodexBin: () => '/fixture/no-provider' }));
+vi.mock('../src/provider/engines/codex/locate', () => ({ resolveCodexBin: () => '/fixture/no-provider' }));
 vi.mock('../src/project/registry', async original => ({
   ...await original<object>(), getProjectByChatId: async () => ({ name: 'fixture', chatId: 'chat', cwd: process.env.HOME, groupMode: 'single' }),
 }));

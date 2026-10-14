@@ -1,7 +1,7 @@
 import type { BackendProbe, PermissionMode } from './types';
 import { DEFAULT_BACKEND_ID } from './types';
 import { BACKEND_CATALOG, catalogById, type AgentFamily } from './catalog';
-import { resolveCodexBin, codexVersionAsync } from './codex-appserver/locate';
+import { resolveCodexBin, codexVersionAsync } from '../provider/engines/codex/locate';
 
 /**
  * 按 agent 维度检测（backend-detection.md §1）：探底层 agent（当前仅 codex）→ 推导

@@ -10,9 +10,9 @@ import { stopChild } from './lifecycle';
 export type { HostInspection, HostRefusal } from './discovery';
 export { migrateHostDataOffline, type HostMigration } from './migration';
 export { resolveDataRoot } from '../config/data-root';
-export type { CodexResolutionOptions } from '../agent/codex-appserver/locate';
-export async function resolveCodexBin(options: import('../agent/codex-appserver/locate').CodexResolutionOptions = {}): Promise<string | null> {
-  const resolver = await import('../agent/codex-appserver/locate');
+export type { CodexResolutionOptions } from '../provider/engines/codex/locate';
+export async function resolveCodexBin(options: import('../provider/engines/codex/locate').CodexResolutionOptions = {}): Promise<string | null> {
+  const resolver = await import('../provider/engines/codex/locate');
   return resolver.resolveCodexBin(options);
 }
 

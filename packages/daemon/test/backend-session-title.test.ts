@@ -14,7 +14,7 @@ import {
   type CodexTitleBackendDeps,
   type CodexTitleClient,
 } from '../src/agent/codex-appserver/backend';
-import type { ServerNotification } from '../src/agent/codex-appserver/protocol';
+import type { ServerNotification } from '../src/provider/engines/codex/protocol';
 
 function asyncQuery(
   messages: SDKMessage[],

@@ -7,7 +7,7 @@ import { AdminWriteError } from '../src/admin/ops';
 import { NotWiredYetError } from '../src/admin/service';
 import { GroupUpstreamError, InvalidGroupInput } from '../src/admin/groups';
 import { SettingsInputError } from '../src/admin/settings-parse';
-import { CodexSetupConflict } from '../src/agent/codex-appserver/setup';
+import { CodexSetupConflict } from '../src/provider/engines/codex/setup';
 import { getRpcErrorCode, RpcError } from '../src/server/errors';
 import { createSettingsOwner } from '../src/admin/settings';
 import { fakeService, socketClient, startFixture } from './server-fixture';

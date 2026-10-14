@@ -1,8 +1,8 @@
 import { statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { log } from '../../core/logger';
-import type { ProcessHost } from '../../provider/process/process-host';
-import { AppServerClient, JsonRpcError } from './app-server-client';
+import { log } from '../../../core/logger';
+import type { ProcessHost } from '../../process/process-host';
+import { AppServerClient, JsonRpcError } from '../../../agent/codex-appserver/app-server-client';
 import { resolveCodexBin } from './locate';
 
 let host: ProcessHost | undefined;

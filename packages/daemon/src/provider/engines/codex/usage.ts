@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { log } from '../../core/logger';
+import { log } from '../../../core/logger';
 import type {
   AccountProfileStats,
   AccountUsageBundle,
@@ -9,8 +9,8 @@ import type {
   DailyBucket,
   RateBucket,
   RateWindow,
-} from '../types';
-import { UsageError } from '../types';
+} from '../../../agent/types';
+import { UsageError } from '../../../agent/types';
 import { utilityRequest } from './client-pool';
 import { resolveCodexBin } from './locate';
 

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { tmpdir } from 'node:os';
 import { WebSocket } from 'ws';
-import { CodexSetupService } from '../src/agent/codex-appserver/setup';
+import { CodexSetupService } from '../src/provider/engines/codex/setup';
 import { createAdminService } from '../src/admin/service';
 import { acquireMutex, closeMutex } from '../src/config/data-access';
 import { Jobs } from '../src/server/jobs';

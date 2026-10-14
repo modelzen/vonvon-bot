@@ -2,8 +2,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
-import { codexVersion, codexVersionAsync, resolveCodexBin } from '../src/agent/codex-appserver/locate';
-import { writeNodeExecutable } from './helpers/node-executable';
+import { codexVersion, codexVersionAsync, resolveCodexBin } from '../../src/provider/engines/codex/locate';
+import { writeNodeExecutable } from '../helpers/node-executable';
 
 // locate 模块级缓存（QW-9）：bin/版本只在成功时缓存、force 强制重探、同步与
 // 异步版本探测共享一份缓存。版本 fixture 在各平台运行真实子进程。
@@ -105,7 +105,7 @@ describe('desktop and Agent executable selection', () => {
   it('uses the daemon physical root, managed copy and generation pointer with explicit override priority', async () => {
     vi.stubEnv('VONVON_HOME', undefined);
     const { mkdirSync, existsSync, realpathSync } = await import('node:fs');
-    const { resolveDataRoot } = await import('../src/config/data-root');
+    const { resolveDataRoot } = await import('../../src/config/data-root');
     const home = join(realpathSync(dir), 'legacy-home');
     const root = join(home, '.vonvon-bot');
     const generation = '12345678-1234-1234-1234-123456789012';

@@ -24,7 +24,7 @@ import { getRpcErrorCode } from './errors';
 import { serveWebUi } from './web-ui';
 import { getPidLockInfo, type PidLockInfo } from './pid-lock';
 import { EnvironmentService, type EnvironmentServiceOptions } from '../environment/service';
-import { resolveCodexBin } from '../agent/codex-appserver/locate';
+import { resolveCodexBin } from '../provider/engines/codex/locate';
 
 export interface ApiLifetime {
   beginDrain(): Promise<void>;

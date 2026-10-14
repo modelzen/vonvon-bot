@@ -2,7 +2,7 @@ import { AdminWriteError } from '../admin/ops';
 import { NotWiredYetError } from '../admin/service';
 import { GroupUpstreamError, InvalidGroupInput } from '../admin/groups';
 import { SettingsInputError } from '../admin/settings-parse';
-import { CodexSetupConflict } from '../agent/codex-appserver/setup';
+import { CodexSetupConflict } from '../provider/engines/codex/setup';
 
 export class RpcError extends Error {
   constructor(readonly code: string, message: string) { super(message); }

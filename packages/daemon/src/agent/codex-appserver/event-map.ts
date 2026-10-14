@@ -1,5 +1,5 @@
 import type { AgentEvent } from '../types';
-import type { FileUpdateChange, ServerNotification, ThreadItem } from './protocol';
+import type { FileUpdateChange, ServerNotification, ThreadItem } from '../../provider/engines/codex/protocol';
 
 /** Files named in a fileChange title before collapsing to `等 N 个文件`. */
 const TITLE_FILES_MAX = 2;

@@ -12,8 +12,8 @@ import {
   type AdminService,
 } from '../src/admin/service';
 import { AdminWriteError, type AdminWriteOp } from '../src/admin/ops';
-import type { CodexSetupService } from '../src/agent/codex-appserver/setup';
-import * as clientPool from '../src/agent/codex-appserver/client-pool';
+import type { CodexSetupService } from '../src/provider/engines/codex/setup';
+import * as clientPool from '../src/provider/engines/codex/client-pool';
 
 // 把整个 ~/.feishu-codex-bridge 指到临时目录，绝不碰真实用户数据。fixture 通过
 // bots/registry/session-store 模块的导出写入（useBotDir 切目录后写）——服务层读

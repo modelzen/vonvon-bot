@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import QRCode from 'qrcode';
 import { agentIdSchema, jobIdSchema, type BackendInstallItem, type CommandResult, type EnvironmentReply, type Event, type Job, type JobId } from '@vonvon/protocol';
 import type { AdminService } from '../admin/service';
-import { CodexSetupConflict } from '../agent/codex-appserver/setup';
+import { CodexSetupConflict } from '../provider/engines/codex/setup';
 import { RpcError, unsupported } from './errors';
 import { BackendOutput, backendErrorSuffix } from './backend-output';
 

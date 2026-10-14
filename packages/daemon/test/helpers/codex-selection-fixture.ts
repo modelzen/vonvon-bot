@@ -69,7 +69,7 @@ export async function prepareCodexSelection(
   const bundleDir = join(root, 'locator');
   const { build } = await import('tsup');
   await build({
-    entry: { locate: fileURLToPath(new URL('../../src/agent/codex-appserver/locate.ts', import.meta.url)) },
+    entry: { locate: fileURLToPath(new URL('../../src/provider/engines/codex/locate.ts', import.meta.url)) },
     outDir: bundleDir,
     format: ['cjs'],
     outExtension: () => ({ js: '.cjs' }),

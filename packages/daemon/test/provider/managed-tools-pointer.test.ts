@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
-import { managedToolExecutable, managedToolSelection } from '../src/agent/codex-appserver/managed-tools';
-import { resolveCodexBin } from '../src/agent/codex-appserver/locate';
+import { managedToolExecutable, managedToolSelection } from '../../src/provider/engines/codex/managed-tools';
+import { resolveCodexBin } from '../../src/provider/engines/codex/locate';
 
 describe('desktop managed tool pointer', () => {
   it('selects only the published complete release and keeps explicit CODEX_BIN first', () => {

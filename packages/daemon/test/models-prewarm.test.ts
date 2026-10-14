@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CodexAppServerBackend } from '../src/agent/codex-appserver/backend';
-import { shutdownResidentClients } from '../src/agent/codex-appserver/client-pool';
+import { shutdownResidentClients } from '../src/provider/engines/codex/client-pool';
 import { writeNodeExecutable } from './helpers/node-executable';
 
 // 启动预热（createOrchestrator 末尾的 void backend.listModels()）的安全前提：

@@ -3,12 +3,12 @@ import { rename } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { installManagedCodex, managedCodexBin, runSetupChild } from '../src/agent/codex-appserver/managed-install';
-import { resolveCodexBin } from '../src/agent/codex-appserver/locate';
-import { paths } from '../src/config/paths';
-import { CodexProcessCleanupError, OwnedCodexProcess } from '../src/platform/owned-process';
+import { installManagedCodex, managedCodexBin, runSetupChild } from '../../src/provider/engines/codex/managed-install';
+import { resolveCodexBin } from '../../src/provider/engines/codex/locate';
+import { paths } from '../../src/config/paths';
+import { CodexProcessCleanupError, OwnedCodexProcess } from '../../src/platform/owned-process';
 
-vi.mock('../src/config/paths', async () => {
+vi.mock('../../src/config/paths', async () => {
   const { mkdtempSync, mkdirSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
   const home = mkdtempSync(join(tmpdir(), 'managed-install-home-')); const appDir = join(home, '.vonvon-bridge'); mkdirSync(appDir);
   return { paths: { appDir, codexCliDir: join(appDir, 'codex-cli'), codexCliBinDir: join(appDir, 'codex-cli/node_modules/.bin') } };

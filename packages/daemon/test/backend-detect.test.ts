@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // ── 受控的 codex 探测（detectAgents 据它推导默认）────────────────────────
 const detectState = { codexBin: null as string | null, codexVersion: null as string | null };
 
-vi.mock('../src/agent/codex-appserver/locate', () => ({
+vi.mock('../src/provider/engines/codex/locate', () => ({
   resolveCodexBin: vi.fn(() => detectState.codexBin),
   codexVersionAsync: vi.fn(async () => detectState.codexVersion),
 }));

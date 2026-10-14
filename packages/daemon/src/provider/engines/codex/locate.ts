@@ -3,8 +3,8 @@ import { managedToolSelection } from './managed-tools';
 import { existsSync, readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { extname, isAbsolute, join, relative, sep } from 'node:path';
-import { paths } from '../../config/paths';
-import { spawnProcess, spawnProcessSync } from '../../platform/spawn';
+import { paths } from '../../../config/paths';
+import { spawnProcess, spawnProcessSync } from '../../../platform/spawn';
 
 const IS_WIN = process.platform === 'win32';
 

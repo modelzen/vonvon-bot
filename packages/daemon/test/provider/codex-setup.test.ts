@@ -2,12 +2,12 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { CodexProcessCleanupError, OwnedCodexProcess } from '../src/platform/owned-process';
-import { CodexSetupService } from '../src/agent/codex-appserver/setup';
-import { resolveCodexBin } from '../src/agent/codex-appserver/locate';
-import { bindCodexHost } from '../src/agent/codex-appserver/client-pool';
-import { writeNodeExecutable } from './helpers/node-executable';
-import { processHosts } from './helpers/process-hosts';
+import { CodexProcessCleanupError, OwnedCodexProcess } from '../../src/platform/owned-process';
+import { CodexSetupService } from '../../src/provider/engines/codex/setup';
+import { resolveCodexBin } from '../../src/provider/engines/codex/locate';
+import { bindCodexHost } from '../../src/provider/engines/codex/client-pool';
+import { writeNodeExecutable } from '../helpers/node-executable';
+import { processHosts } from '../helpers/process-hosts';
 
 const home = mkdtempSync(join(tmpdir(), 'codex-setup-home-'));
 const log = join(home, 'calls.jsonl');

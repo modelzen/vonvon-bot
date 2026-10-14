@@ -80,7 +80,7 @@ import {
 } from '../config/schema';
 import { CardDispatcher, type CardActionHandler } from '../card/dispatcher';
 import { AdmissionRefused, type ProcessHost } from '../provider/process/process-host';
-import { shutdownResidentClients } from '../agent/codex-appserver/client-pool';
+import { shutdownResidentClients } from '../provider/engines/codex/client-pool';
 import { sendManagedCard, updateManagedCard } from '../card/managed';
 import { RunRender } from '../card/run-render';
 import { finalMessageText, initialState, reduce, type RunState } from '../card/run-state';

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { CodexAppServerBackend } from '../src/agent/codex-appserver/backend';
-import { shutdownResidentClients } from '../src/agent/codex-appserver/client-pool';
+import { shutdownResidentClients } from '../src/provider/engines/codex/client-pool';
 import { writeNodeExecutable } from './helpers/node-executable';
 
 // 一个最小的假 codex app-server：收到 turn/start 先落一个标记文件（证明请求

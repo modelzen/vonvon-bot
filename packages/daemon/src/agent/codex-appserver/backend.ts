@@ -22,10 +22,10 @@ import type {
 import { isGoalTerminal } from '../types';
 import { BRIDGE_DEVELOPER_INSTRUCTIONS } from '../bridge-instructions';
 import { AppServerClient } from './app-server-client';
-import { codexHost, refillWarmPool, takeWarmClient, utilityRequest } from './client-pool';
+import { codexHost, refillWarmPool, takeWarmClient, utilityRequest } from '../../provider/engines/codex/client-pool';
 import { mapNotification } from './event-map';
-import { codexVersionAsync, resolveCodexBin } from './locate';
-import type { ServerNotification, Thread, ThreadItem, Turn, TurnStartResponse } from './protocol';
+import { codexVersionAsync, resolveCodexBin } from '../../provider/engines/codex/locate';
+import type { ServerNotification, Thread, ThreadItem, Turn, TurnStartResponse } from '../../provider/engines/codex/protocol';
 
 const APPROVAL_POLICY = 'never';
 

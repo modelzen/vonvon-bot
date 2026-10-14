@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppServerClient } from '../src/agent/codex-appserver/app-server-client';
 import { CodexAppServerBackend } from '../src/agent/codex-appserver/backend';
-import { bindCodexHost, shutdownResidentClients } from '../src/agent/codex-appserver/client-pool';
+import { bindCodexHost, shutdownResidentClients } from '../src/provider/engines/codex/client-pool';
 import type { ProcessHost } from '../src/provider/process/process-host';
 import { writeNodeExecutable } from './helpers/node-executable';
 import { processHosts } from './helpers/process-hosts';
