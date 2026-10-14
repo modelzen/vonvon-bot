@@ -295,7 +295,7 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 |---|---|---|---|---|---|---|---|
 | [ ] | s29 | 提问的事件和卡片 | 用 ask 事件换掉占位的 approval_request；三种卡一个版面，写清后果；咖啡一下的卡超时后改卡，空提交提示"至少选一项"（3.8"卡片"） | 640 | — | 并发、错误路径 | 无（渲染在 s31 的 Mac 检查里看） |
 | [ ] | s30 | 卡片的发送、谁能点、等待和超时 | 同一条会话同时一张卡；单独发一条并 @ 能回答的人；daemon 按点击人判断谁能点；15 分钟超时；等卡时看门狗暂停；普通回合、`/goal`、云文档评论三处都接上（3.8） | 900 | s29、s11、e09 | 并发、关闭清理、错误路径 | 无（真实卡片在 s31 一起看） |
-| [ ] | s31 | Claude 的权限档换算，提问接上 | 只读用 default、读写用 acceptEdits、完全访问照旧；加 canUseTool：提问出卡，越权拒绝并说明，完全访问下 Claude 自己要问的出卡（3.8 换算表） | 400 | s30、e02、e03 | 子进程、并发、关闭清理、错误路径 | 真实 Claude 三档各跑一遍：越权被拒带原因，关网 curl 被拒、开网 WebFetch 能用，选项卡能答、能超时，等卡时能停止 |
+| [ ] | s31 | Claude 的权限档换算，提问接上 | 只读用 default、读写用 acceptEdits、完全访问照旧；加 canUseTool：提问出卡，越权拒绝并说明，完全访问下 Claude 自己要问的出卡（3.8 换算表） | 440 | s30、e02、e03 | 子进程、并发、关闭清理、错误路径 | 真实 Claude 三档各跑一遍：越权被拒带原因，关网 curl 被拒、开网 WebFetch 能用，选项卡能答、能超时，等卡时能停止 |
 | [ ] | s32 | Codex 发来的请求不再报错 | 服务端请求进同一个通知队列；提问变选项卡，审批回 decline，不认识的方法仍回 -32601（3.8） | 320 | s30 | 子进程、并发、错误路径 | 真实 Codex：普通回合不发请求，审批请求回 decline 后这一轮不卡 |
 | [ ] | s33 | 打字回答、旧卡自愈、敏感问题去私聊 | 有卡在等时，能回答的人发的消息就是答案；点到失效的卡改成"已失效（后台服务重启过）"；要填密码的题去私聊答（3.8"等待和超时"） | 520 | s30 | 并发、关闭清理、错误路径 | 无 |
 | [ ] | s34 | 子 agent 的事件 | 加子 agent 事件；Codex 收子线程的通知并刷新看门狗，Claude 子 agent 的步骤不再混进主过程；能单独停一个（3.9） | 650 | — | 并发、错误路径 | 真实 Codex 跑带子 agent 的任务：子线程通知送到，父线程不被看门狗杀，单停有效 |
@@ -303,9 +303,13 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 
 开工要点：
 - s30：要不要另发一条带 @ 的文字，按 e09 的结果定；结果出来前默认另发。
-- s31：按 e02、e03 的结果决定要不要抬高 SDK 的版本，同时改掉 `permission.ts` 顶部那段注释。
+- s31：e02 用到的字段，s02 锁定的 SDK 0.3.296 里都有，e02 这边不用抬版本；e03 的结果还可能要抬。同时改掉 `permission.ts` 顶部那段注释。
+- s31：按 e02 的结果做：所有会话启动时都带 `allowDangerouslySkipPermissions: true`，中途升到完全访问才不用重开会话；resume 时明确传档，档不从记录里恢复；拒绝时不用 `interrupt`，不然原因会丢、这一轮按出错结束；提问的答案放进 `updatedInput.answers`。启动时带上这个参数后，升档只能走两条路：daemon 调 `setPermissionMode`，或者回调返回带 `setMode` 的 `updatedPermissions`。两处都只按权限档的设置来，回调不照搬 `suggestions` 里的 `setMode`。回调拿不到"这是在联网"的标记，关网时 Bash 联网靠沙箱挡，看 e03。
+- s31：开工前用【需要你决定】问 owner：bot 的会话要不要关掉 claude.ai 连接器，和推送、远程触发、定时任务这类 Claude Code 自己的工具（e02 第 7 节）。建议用内置工具白名单，连接器默认关。
+- s31：e02 没测完的两件，开工时补测：完全访问下，Claude 设置里的 ask 规则、删除关键目录会不会走到回调；vonvon 真实的 `['user', 'project']` 下，用户层的权限规则会不会改变哪些调用走回调。e02 用的是空的 `settingSources`。
+- s31：顺手修会话标题的读法：`readSessionTitle` 只认记录里 `custom-title` 的条目，不用 `customTitle` 字段，因为它会退回 CLI 自动起的标题（e02 第 8 节）。放在这一片，是因为 s31 本来就要改 `D/agent/claude-agent/` 下的后端代码；约 40 行，算进这一片的行数。
 - s32：vonvon 不开计划模式，Codex 的提问实际上不会来。这一片主要是不再回报错，不让回合卡住。
-- s35：e01 证明变量不生效时改做备选：主回答发出后卡片保持打开，写"已回复，还有 N 个在跑"，Claude 接着跑的那一轮写进同一张卡。备选另加约 250 行。
+- s35：e01 测过，变量有效，不做备选，前提是开工时补测的 ⏹ 没问题。运行卡在这一轮唯一的 result 到达时收尾，子 agent 区用 task_* 消息和 `parent_tool_use_id`（e02 第 4 节）。开工时补测两件事：前台子 agent 跑着时按 ⏹ 多久能停下；设了变量后 Monitor 还能不能用。
 
 ### M7 个性、记忆和多工作区
 
@@ -338,8 +342,10 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 
 开工要点：
 - s44：`~/.codex/AGENTS.md` 能不能按会话不加载，看 e05。关不掉的话，按本文 4.2 第 3 条用【需要你决定】问 owner，比如接受"带上但在指令里声明 bot 的规矩优先"。
+- s44：Claude 一侧按 e02 第 6 节：新建的 bot 用 `claudeMdExcludes`（经 `options.settings` 传）或只给 `settingSources: ['project']`，导入的 bot 照旧。
 - s46：变量名避开 TOKEN、KEY、SECRET，Codex 默认会滤掉含这些词的变量。e04 证明连不上时，按 product.md 第 9 节第 2 项的退路，把同一组命令做成 vonvon 自己的 MCP 工具，这一片照那个做。
 - s48：飞书 skill 的 SKILL.md 随 daemon 包发，每个会话都装。
+- s48：读 Claude 的会话时，把那条会话记下的 cwd 作为 `dir` 传给 `getSessionMessages`，自己滤掉工具步骤、思考块和合成的通知条目；子 agent 的消息不在里面（e02 第 5 节）。
 
 ### M9 私聊
 
@@ -403,8 +409,8 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 
 | 状态 | 编号 | 测什么 | 在哪做 | 怎么测 | 挡住 | 最晚在 |
 |---|---|---|---|---|---|---|
-| [ ] | e01 | 第 1 项：`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` 经 Agent SDK 能不能让主回合等子 agent | JP-VPS | 用 SDK 0.3.296 和已有的 Claude 登录，带和不带这个变量各跑一次：并行起两个 Task 子 agent 加一个后台 Bash，看 result 是不是等子 agent 都结束才来，后台 Bash 是不是被关掉 | s35 | s35 之前 |
-| [ ] | e02 | 第 11、12 项里不要沙箱的部分，第 18 项的 Claude 一半，加上 claudeMdExcludes | JP-VPS | 用记录每次调用的 canUseTool 看哪些请求走到回调；今天 AskUserQuestion 是否被拒；运行中 setPermissionMode 和重开 resume 的差别；agentID 等字段从哪个 SDK 版本有；getSessionMessages 能否读别的 cwd 下的会话；claudeMdExcludes 能否排除 `~/.claude/CLAUDE.md`（不改这个文件） | s31、s44、s48 | s31 之前 |
+| [x] | e01 | 第 1 项：`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` 经 Agent SDK 能不能让主回合等子 agent | JP-VPS | 用 SDK 0.3.296 和已有的 Claude 登录，带和不带这个变量各跑一次：并行起两个 Task 子 agent 加一个后台 Bash，看 result 是不是等子 agent 都结束才来，后台 Bash 是不是被关掉 | s35 | s35 之前 |
+| [x] | e02 | 第 11、12 项里不要沙箱的部分，第 18 项的 Claude 一半，加上 claudeMdExcludes | JP-VPS | 用记录每次调用的 canUseTool 看哪些请求走到回调；今天 AskUserQuestion 是否被拒；运行中 setPermissionMode 和重开 resume 的差别；agentID 等字段从哪个 SDK 版本有；getSessionMessages 能否读别的 cwd 下的会话；claudeMdExcludes 能否排除 `~/.claude/CLAUDE.md`（不改这个文件） | s31、s44、s48 | s31 之前 |
 | [ ] | e03 | 第 11、12 项里要 macOS 沙箱的部分 | Mac | 只读用 default、读写用 acceptEdits，加今天的 Seatbelt 沙箱和记录回调的 canUseTool，看 cwd 外的读写、不在名单里的主机、WebFetch 哪些走到回调；今天的 bypassPermissions 下关网能否 curl 出去、能否写到 /tmp。Mac 上没有 Claude 登录时回"卡住了" | s31、s39 | s31 之前 |
 | [ ] | e04 | 第 2、4 项：沙箱里调 vonvon 命令行，`.git` 只读 | Mac | Codex 只读、读写、关网三种设置下和 Claude 的沙箱里，从 agent 的 shell 连 127.0.0.1 上的测试服务（TCP 和 Unix socket 各一个），看能否连上、能否从环境变量读到令牌；workspace-write 下在 git 目录里 `git commit` 会不会失败 | s37、s39、s46 | s37 之前 |
 | [ ] | e05 | 第 3 项：Codex 会话级配置 | Mac | 用 s03 定的最低版本和当前 Codex.app 各测一次：会话级 mcp_servers、runtimeWorkspaceRoots、skills/extraRoots/set 能不能用，resume 后还在不在，中途能否换 skill 列表；memories 的两个键能否在会话层关掉；`~/.codex/AGENTS.md` 能否按会话不加载。结果决定 Codex 的最低版本，在 s39 写回 s03 的常量 | s37、s39、s44 | s37 之前 |
@@ -418,7 +424,9 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 | [ ] | e13 | 第 7 项：企业租户的权限审核 | — | 不单独做，现在没有企业租户。清单里写一句"企业租户里新权限可能要管理员审核"；M11 时 owner 手里有企业租户，就顺手看一次 | — | — |
 | [ ] | e14 | 第 8 项和第 17 项前半 | Mac | 在 M3 的预览版会话里看：Codex 应用和 `claude --resume` 打开 bot 的群会话，看到的和 bot 是否一样，两边同时写会怎样；手动 `/compact` 后摘要里引用行还在不在。只影响说明文字和"最近 5 个活跃话题"那张表 | — | M3 验收时 |
 
-Mac 上按最晚期限排：e06、e10、e12、e09、e03、e04、e05、e11、e08，一次一个。JP-VPS 上先做 e01、e02，e07 在 M10 之前做。
+e01、e02 已做完，结果在 `docs/research/2026-10-14-v1-spikes/`。e02 没测完的两件写进了 s31 的开工要点。
+
+Mac 上按最晚期限排：e06、e10、e12、e09、e03、e04、e05、e11、e08，一次一个。JP-VPS 上的 e07 在 M10 之前做。
 
 ### 4.2 实验结果和 product.md 不一致时
 
