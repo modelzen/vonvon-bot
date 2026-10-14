@@ -26,7 +26,7 @@ describe('Host child shutdown', () => {
       if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
       expect(await waitForExit(child, 3000)).toBe(true);
     }
-  }, 15_000);
+  });
   it('retains a child cleanup failure across repeated stop attempts', async () => {
     const child = spawn(process.execPath, ['-e', `process.on('SIGTERM',()=>{}); process.on('message',()=>process.exit(1)); process.send('ready');`], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
     try {

@@ -341,7 +341,7 @@ it('real O4 refuses an O3-to-O4 lock incarnation change without sending stopHost
     expect(f.child.exitCode).toBeNull();
     expect(f.child.signalCode).toBeNull();
   } finally { await f.close(); }
-}, 10_000);
+});
 
 it.each([install, all])('real O4 sends exactly one stopHost and treats a lost done reply as terminal under $kind', async scope => {
   const f = await realOwner('lost-done');
@@ -361,7 +361,7 @@ it.each([install, all])('real O4 sends exactly one stopHost and treats a lost do
     expect(f.child.exitCode).toBeNull();
     expect(f.child.signalCode).toBeNull();
   } finally { await f.close(); }
-}, 10_000);
+});
 
 
 type LaunchdFixture = Awaited<ReturnType<typeof launchdFixture>>;

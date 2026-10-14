@@ -73,5 +73,5 @@ describe('listModels 预热不钉死 fallback（QW-2）', () => {
     const again = await backend.listModels();
     expect(again).toBe(live);
     expect(readFileSync(`${script}.count`, 'utf8').trim().split('\n')).toHaveLength(1);
-  }, 20_000);
+  });
 });

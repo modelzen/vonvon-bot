@@ -201,7 +201,7 @@ describe('owned Codex process trees', () => {
       () => trace.record({ event: 'running-settled', result: 'rejected' }),
     );
     await expect(running).rejects.toThrow();
-  });
+  }, 10_000);
 
   it('cancellation awaits an ignored-stdio descendant that ignores TERM', async () => {
     const f = fixture(false);
@@ -217,7 +217,7 @@ describe('owned Codex process trees', () => {
     else expect(result).toBeInstanceOf(CodexProcessCleanupError);
     expect(originalAlive(target)).toBe(false);
     expectedCleanupErrors.add(result);
-  }, 20_000);
+  });
 
   it.each([false, true])('close reaps inherited pipes after leader already exited=%s', async earlyExit => {
     const f = fixture(true);
@@ -367,7 +367,7 @@ describe.skipIf(process.platform !== 'win32')('Windows Job shutdown outcomes', (
       expect(job.verifiedEmpty).toBe(true);
       expect(other.verifiedEmpty).toBe(false);
     } finally { job.dispose(); other.dispose(); }
-  }, 20_000);
+  });
 
   it.each([0, 7, 254])('preserves natural exit %s after death and a late stop', async code => {
     const running = await controlledJob(code);
@@ -385,7 +385,7 @@ describe.skipIf(process.platform !== 'win32')('Windows Job shutdown outcomes', (
     expect(await running.exited, running.stderr()).toBe(1);
     expect(running.job.verifiedEmpty).toBe(true);
     expect(alive(running.child.pid!)).toBe(false);
-  }, 20_000);
+  });
 
   it.each([7, 254])('rejects owner close for observed natural exit %s', async code => {
     const f = fixture(false);
@@ -399,7 +399,7 @@ describe.skipIf(process.platform !== 'win32')('Windows Job shutdown outcomes', (
     expect(result.cause.errors).toContainEqual(new Error(`Codex child exited with code ${code}`));
     expect(alive(owned.child.pid!)).toBe(false);
     expectedCleanupErrors.add(result);
-  }, 20_000);
+  });
 
   it.each([0, 7, 254])('preserves wrapper exit %s while forcibly draining descendants', async code => {
     const running = await controlledJob(code, true);

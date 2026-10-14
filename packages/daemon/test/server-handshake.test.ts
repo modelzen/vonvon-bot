@@ -60,6 +60,6 @@ describe('local WebSocket handshake', () => {
       const code = await new Promise<number>(resolve => socket.once('close', code => resolve(code)));
       expect(code).toBe(4401);
     } finally { await fixture.close(); }
-  }, 10_000);
+  });
 
 });

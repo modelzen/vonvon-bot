@@ -45,7 +45,7 @@ const traceValue = (): { prefix: string; cache: string; args: string[]; pid: num
 const install = () => installManagedCodex(new AbortController().signal);
 const stages = () => readdirSync(home).filter(name => name.startsWith('.vonvon-codex-stage-'));
 
-describe('managed Codex installation', { timeout: 20_000 }, () => {
+describe('managed Codex installation', () => {
   it('stages locked npm work outside live data and commits a verified private executable', async () => {
     await install();
     const record = traceValue();

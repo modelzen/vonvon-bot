@@ -279,7 +279,7 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost on POSIX', () => {
     expect(ledgerOf(dir).kind).toBe('missing');
     expect(host.snapshot()).toEqual([]);
     expect(() => (reservation as Reservation).spawn({ file: NODE, args: [], env: {} })).toThrow(/not an unused reservation/);
-  }, 20_000);
+  });
 
   it('release() then spawn() is refused: the reservation is single-use', async () => {
     const host = newHost(dataDir());
@@ -287,7 +287,7 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost on POSIX', () => {
     const released = reservation.release();
     expect(() => reservation.spawn({ file: NODE, args: [], env: {} })).toThrow(/not an unused reservation/);
     await released;
-  }, 20_000);
+  });
 });
 
 describe.skipIf(PLATFORM !== 'posix')('ProcessHost durability on POSIX', () => {
