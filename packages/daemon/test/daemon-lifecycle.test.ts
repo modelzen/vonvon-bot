@@ -72,7 +72,7 @@ vi.mock('../src/bot/onboarding', () => ({
   ensureOnboarded: async () => ({ cfg: { accounts: { app: { id: 'runner-bot' } } }, secret: 'fixture' }),
   announceEventsWhenLive() {},
 }));
-vi.mock('../src/config/bots', () => ({ ensureRegistry: async () => ({ bots: [] }), activeBots: () => [], loadBots: async () => ({ bots: [] }) }));
+vi.mock('../src/config/bots', () => ({ ensureRegistry: async () => ({ bots: [] }), findBot: () => undefined, activeBots: () => [], loadBots: async () => ({ bots: [] }) }));
 vi.mock('../src/platform/spawn', () => ({ spawnProcess: fixture.spawn, spawnProcessSync: fixture.spawnSync }));
 vi.mock('../src/admin/service', () => ({ createAdminService: (deps: AdminServiceDeps) => { fixture.admin = deps; return deps; } }));
 vi.mock('../src/core/logger', () => ({ log: { info() {}, warn: fixture.logWarn, fail: fixture.logFail } }));

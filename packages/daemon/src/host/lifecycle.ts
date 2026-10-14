@@ -31,6 +31,12 @@ export function listenerCloseUnconfirmed(error: unknown): boolean {
     || (error instanceof AggregateError && error.errors.some(listenerCloseUnconfirmed));
 }
 
+/** Resolves only once nothing is owed, so no caller releases its locks or starts a replacement before then; the host's retry tail keeps ending what remains. */
+export async function settleOwedWork(host: Pick<ProcessHost, 'owesWork' | 'closeAll'>): Promise<void> {
+  try { await host.closeAll(); }
+  finally { while (host.owesWork()) await new Promise(resolve => setTimeout(resolve, 1000)); }
+}
+
 export async function closeOwnedProviders(host: OwnedProviders, shutdown: () => Promise<void> = async () => {}): Promise<void> {
   const report = (settled: boolean): Promise<void> => {
     const owed = host.snapshot().flatMap(r => {
@@ -53,10 +59,10 @@ export async function closeOwnedProviders(host: OwnedProviders, shutdown: () => 
   const errors: unknown[] = [];
   try { await shutdown(); }
   catch (error) { errors.push(error); }
-  const closed = await Promise.allSettled([closeOwnedCodexProcesses(), host.closeAll()]);
+  const closed = await Promise.allSettled([closeOwnedCodexProcesses(), settleOwedWork(host)]);
   clearInterval(timer);
   errors.push(...closed.flatMap(result => result.status === 'rejected' ? [result.reason] : []));
-  try { await report(!host.owesWork()); }
+  try { await report(true); }
   catch (error) { log.fail('daemon-shutdown', error, { phase: 'owned-work-report' }); errors.push(error); }
   if (errors.length) throw new AggregateError(errors, 'Provider cleanup failed.');
 }
