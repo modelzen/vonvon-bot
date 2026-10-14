@@ -6,6 +6,8 @@
 
 ## 结论
 
+> 后注：owner 没要第 3、4 条推荐的"超出权限时：问我"开关和授权卡，设置类授权卡也去掉了（第 23、24、29 题），见 `docs/product.md` 3.7、3.8。下文保留调研时的原样。
+
 1. owner 要的东西，两个 agent 都已经有现成的模型：Codex 有"审批策略 + 沙箱"两件套，界面上合成三个预设（只读、默认、完全访问）；Claude Code 有一组权限模式（手动、自动接受编辑、计划、自动、跳过权限）和 `canUseTool` 回调。两边的"完全访问"都是"从不问"。所以 vonvon 不用自己发明一套规则：用户选一个档，vonvon 把它换算成两个 agent 的原生设置，agent 自己决定什么时候问，vonvon 只负责把"问"变成飞书卡片，再把点击送回去。
 2. 今天 v2 两边都不问。Codex 写死了 `approvalPolicy: 'never'`（`D/agent/codex-appserver/backend.ts:30`），Claude 三档都用 `bypassPermissions`（`D/agent/claude-agent/permission.ts:56`、`:73`），代码里没有任何 `canUseTool`。Codex 发来的服务端请求一律回报错（`D/provider/transport/jsonrpc.ts:197-206`），所以连 Codex 在计划模式下的提问也收不到。`docs/product.md` 3.8 写的"agent 自己的工具调用不弹审批"要按 owner 这次的话改掉。
 3. 推荐的设置：一个权限档（只读 / 读写 / 完全访问）加一个开关"超出权限时：问我 / 直接拒绝"。完全访问时这个开关隐藏，含义就是"从不问"。新 bot 默认"读写 · 问我"，和 Codex 默认预设、Claude 的"自动接受编辑"对应。bridge 迁来的群换算成"直接拒绝"，行为和今天一样。
