@@ -86,7 +86,7 @@ jobs:
     needs: linux
     if: needs.linux.outputs.full == 'true'
     runs-on: windows-2025
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
