@@ -318,7 +318,7 @@ owner 说这一块很关键：飞书里的位置怎么对应 agent 的会话，�
 - skill 的来源：内置、本机文件夹、从 `~/.agents/skills`、`~/.codex/skills`、`~/.claude/skills` 导入。格式按 Agent Skills 标准（agentskills.io/specification）。
 - MCP 的来源：从本机 Codex、Claude 的配置导入，或在桌面端填命令或网址。
 - 都不从 git 地址装，不自动更新。
-- 只有主人和管理员能装和启用。含脚本的 skill 和所有 MCP 都会在主人的 Mac 上跑程序。在聊天里装，只能在私聊里，而且私聊的"聊天改设置"开着，见 3.7。
+- 只有主人和管理员能装和启用。含脚本的 skill 和所有 MCP 都会在主人的 Mac 上跑程序。在聊天里装，只能在私聊里，而且私聊的"聊天改设置"开着，见 3.7。Claude 的会话今天还会自带主人账号在 claude.ai 的连接器，留不留见第 9 节第 19 项。
 - 内置两个 vonvon skill。飞书 skill 每个会话都预装（3.5）；设置 skill 只在私聊里装，"聊天改设置"关掉后私聊里也不装（3.7）。
 
 **怎么交给 Codex 和 Claude。** 两家都有会话级的参数，不改用户的全局配置，不换 `CODEX_HOME` 和 `CLAUDE_CONFIG_DIR`（换了要重新登录，旧会话也续不上）。
@@ -370,7 +370,7 @@ owner 的话："确认卡、选项卡、授权卡这些需要用户交互、用�
 
 调研见 `docs/research/2026-10-14-session-approval-service/approval-ux.md`。调研推荐过一个"超出权限时：问我 / 直接拒绝"的开关，owner 没要。
 
-今天两边都不问。Codex 写死了 `approvalPolicy: 'never'`（`D/agent/codex-appserver/backend.ts:30`），Codex 发来的请求一律回报错（`D/provider/transport/jsonrpc.ts:197-206`），连它在计划模式下的提问都收不到。Claude 三档都用 `bypassPermissions`，没有 `canUseTool`（`D/agent/claude-agent/permission.ts:56`、`:73`），没有 `canUseTool` 时 CLI 把 AskUserQuestion 和计划模式的两个工具都去掉了，所以今天 Claude 的会话里根本没有提问这个工具，Claude 只能用文字问（实测，`docs/research/2026-10-14-v1-spikes/e02-claude-permissions-sessions.md` 第 1 节）。第一版要把提问接上。
+今天两边都不问。Codex 写死了 `approvalPolicy: 'never'`（`D/agent/codex-appserver/backend.ts:30`），Codex 发来的请求一律回报错（`D/provider/transport/jsonrpc.ts:197-206`），连它在计划模式下的提问都收不到。Claude 三档都用 `bypassPermissions`，没有 `canUseTool`（`D/agent/claude-agent/permission.ts:56`、`:73`），今天只读、读写两档的会话里根本没有提问这个工具，计划模式的两个工具也没有，Claude 只能用文字问（实测，`docs/research/2026-10-14-v1-spikes/e02-claude-permissions-sessions.md` 第 1 节）。推断原因是没有 `canUseTool` 时 SDK 不给 CLI 留提问的通道，完全访问档也一样。第一版要把提问接上。
 
 换成两家的设置（Claude 一列不带沙箱的部分在 JP-VPS 上实测过，见 `docs/research/2026-10-14-v1-spikes/e02-claude-permissions-sessions.md`；沙箱的部分和 Codex 一列还是推断，要实测，第 9 节）：
 
@@ -380,12 +380,12 @@ owner 的话："确认卡、选项卡、授权卡这些需要用户交互、用�
 | 读写 | `never` + 今天的读写沙箱，就是今天的行为 | `acceptEdits` + 今天的读写沙箱，`canUseTool` 同上 |
 | 完全访问 | `never` + `danger-full-access`，就是今天的行为 | `bypassPermissions`，就是今天的行为。`canUseTool` 只处理提问和 Claude 自己仍要问的几类，见下 |
 
-- Claude 的只读、读写两档不再用 `bypassPermissions`。今天用它，推断有两个缺口：关网时 Bash 可能仍能连外网，Edit 和 Write 可能写到工作区以外（`approval-ux.md` 3.3）。不带沙箱时这两个缺口都在：今天的只读档下 Bash 能写工作区内外的文件、能 curl 出去，`bypassPermissions` 下工作区以外的 Write 也直接放行；带上今天的沙箱还在不在，第 9 节第 12 项在 Mac 上测。换成上表以后，写文件的 Bash、联网的 Bash、工作区以外的读写都先到 `canUseTool`，vonvon 能逐个拒绝（实测，e02 第 1 节）。代价是今天这两档下能用的 WebFetch、往工作区以外写文件会被拒；开网时给 WebFetch、WebSearch 加允许规则。
+- Claude 的只读、读写两档不再用 `bypassPermissions`。今天用它，推断有两个缺口：关网时 Bash 可能仍能连外网，Edit 和 Write 可能写到工作区以外（`approval-ux.md` 3.3）。不带沙箱时这两个缺口都在：今天的只读档下 Bash 能写工作区内外的文件、能 curl 出去，`bypassPermissions` 下工作区以外的 Write 也直接放行；带上今天的沙箱还在不在，第 9 节第 12 项在 Mac 上测。换成上表以后，写文件的 Bash、联网的 Bash、工作区以外的读写都会先到 `canUseTool`（实测，e02 第 1 节）。只读档可以对这些一律拒绝；读写档关网时，回调分不出哪条 Bash 在联网，要看命令文字或者靠沙箱，在 Mac 上测（e03）。代价是今天这两档下能用的 WebFetch、往工作区以外写文件会被拒；开网时给 WebFetch、WebSearch 加允许规则。
 - Codex 三档都保留 `never`：模型知道不能申请，就不会白白尝试。`never` 下没有标成只读的 MCP 工具会被拒（`approval-ux.md` 1.5），vonvon 自己的 MCP 要配 `approve`（第 9 节第 2 项）。
-- 中途改档不用重开会话：Codex 每一轮的 `turn/start` 能带新的设置，Claude 运行中能 `setPermissionMode`，升档降档都是下一轮生效（实测，e02 第 3 节）。升到完全访问要求会话启动时带 `allowDangerouslySkipPermissions`，所以每条会话启动时都带上；resume 不恢复上次的档，每次都明确传。Codex 一半还是推断。
+- 中途改档不用重开会话：Codex 每一轮的 `turn/start` 能带新的设置，Claude 运行中能 `setPermissionMode`，升档降档都是下一轮生效（实测，e02 第 3 节）。升到完全访问要求会话启动时带 `allowDangerouslySkipPermissions`，所以每条会话启动时都带上；resume 不恢复上次的档（`settingSources` 为空时测的），每次都明确传。Codex 一半还是推断。
 - Linux 上 Codex 的只读、读写档今天直接拒绝启动（`D/agent/codex-appserver/backend.ts:78-82`），所以 Linux 上的 Codex 只能用完全访问，界面写明。被拉进的已有群默认只读，在 Linux 上用 Codex 时起不来：bot 回一句说明，等主人在设置里明确改成完全访问，不自动放开。
 
-**完全访问下还会问什么。** 不问权限。Claude 自己在任何模式下都会停下来问的少数几类，照样发卡问，和 Claude 自己的行为一致，比如用户在自己的 Claude 设置里写了"这类操作必须问"、删除关键目录（`approval-ux.md` 2.2）。这种卡只有主人和管理员能点，15 分钟没人点按拒绝。只读、读写两档下，这几类直接拒绝。实测里 `bypassPermissions` 下只有 AskUserQuestion 走到回调，写 `.claude/` 下的文件也直接放行；ask 规则和删除关键目录还没测（e02 第 1 节，第 9 节第 11 项）。
+**完全访问下还会问什么。** 不问权限。Claude 自己在任何模式下都会停下来问的少数几类，照样发卡问，和 Claude 自己的行为一致，比如用户在自己的 Claude 设置里写了"这类操作必须问"、删除关键目录（`approval-ux.md` 2.2）。这种卡只有主人和管理员能点，15 分钟没人点按拒绝。只读、读写两档下，这几类直接拒绝。实测里 `bypassPermissions` 下只有 AskUserQuestion 走到回调，写 `.claude/` 下的文件也直接放行；ask 规则和删除关键目录还没测，测试时 `settingSources` 为空，用户层的 ask 规则也没测到（e02 第 1 节，第 9 节第 11 项）。测出来走不到回调的几类，按 `docs/v1-plan.md` 4.2 第 3 条问 owner。
 
 **卡片。** 所有要人点的卡片一个样：同样的版面、同样的状态、同样的"谁能点"规则。所有会话默认就有，不只在私聊。
 - **运行卡**：流式输出、⏹ 停止、工具折叠、上下文仪表、子 agent 区（见 3.9）。等人回答时显示"⏸ 等 张三 回答（见下方卡片）"。
@@ -426,7 +426,7 @@ owner 的话："确认卡、选项卡、授权卡这些需要用户交互、用�
 - 子 agent 显示在父运行卡的"子 agent 区"，一行一个：状态、名字、在做什么、几步、用了多久，嵌套的缩进。点开看最近 5 步和结果。每行有"停止"，运行卡的 ⏹ 全停。不给每个子 agent 发一张卡：飞书对群里所有 bot 有每秒 5 条的共用限额。
 - **一张运行卡包含这一轮的所有子 agent，子 agent 都跑完了，这张卡才算结束。**
   - Codex：本来就是这样。文档原文是"Codex waits until all requested results are available, then returns a consolidated response"（learn.chatgpt.com/docs/agent-configuration/subagents）。
-  - Claude：不一样。Claude Code 的子 agent 默认在后台跑，经 Agent SDK 用时也是；主回合可以先结束，子 agent 跑完再通知 Claude 起新的一轮（code.claude.com/docs/en/sub-agents）。实测里一条消息出了 4 到 6 个结果。设置 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` 后，子 agent 一律在前台跑，主回合等它们都结束，一条消息只有一个结果，几个子 agent 之间仍然并行（实测，`docs/research/2026-10-14-v1-spikes/e01-background-tasks.md`）。代价是它同时关掉后台 Bash 等所有后台任务，比如 bot 不能在后台起一个开发服务器再结束这一轮；模型要在后台跑命令时会先报错一次，再改成前台跑。第一版在 bot 的 Claude 会话里打开这个开关，两家行为就一致了。这是 Claude 的决定。
+  - Claude：不一样。Claude Code 的子 agent 默认在后台跑，经 Agent SDK 用时也是；主回合可以先结束，子 agent 跑完再通知 Claude 起新的一轮（code.claude.com/docs/en/sub-agents）。实测里一条消息出了 4 到 6 个结果。设置 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` 后，子 agent 一律在前台跑，主回合等它们都结束，一条消息只有一个结果，几个子 agent 之间仍然并行（实测，`docs/research/2026-10-14-v1-spikes/e01-background-tasks.md`）。代价是它同时关掉后台 Bash 等所有后台任务，比如 bot 不能在后台起一个开发服务器再结束这一轮；模型要在后台跑命令时会先报错一次，再改成前台跑。第一版在 bot 的 Claude 会话里打开这个开关，两家行为就一致了。这是 Claude 的决定。前台子 agent 跑着时按 ⏹ 多久能停下还没测，s35 开工时补测（e01）。
 - 子 agent 跑的时候，群里的新消息按今天的规则插话或排队，只给父 agent。第一版不能直接跟某个子 agent 说话。
 - 今天 Codex 的子线程事件全丢了，Claude 子 agent 的步骤混进了主过程（`D/agent/codex-appserver/backend.ts:333-337`；`D/agent/claude-agent/event-map.ts:92-123`），第一版要修。
 
@@ -663,7 +663,7 @@ bot 的个性、记忆、skill 导入后为空，行为和今天一样。
 2. 崩溃自动重启；10 分钟内崩溃 3 次就进入暂停，等主人恢复；重启后在桌面端和私聊里说明原因（3.10）。
 3. （作废）后台服务先试 Electron 的 `agentService`。owner 在第 4 组否掉了，改成 daemon 自己装服务（3.10）。
 4. 飞书 skill 放进第一版（3.5）。
-5. 在 Claude 的会话里打开 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`，等实测（3.9）。
+5. 在 Claude 的会话里打开 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`（3.9）。已实测有效（e01）。
 6. 开发者算管理员；桌面端可以另加管理员，迁来的 bridge 管理员名单放在这里（第 6 节）。
 7. 工作区目录按 bot、按群分子目录（3.3）。
 8. （已改）设置只在私聊里改，改某个群的设置要说清是哪个群；谁能改由 daemon 按触发这一轮的人判断（3.7）。#293 时群里能改本群，owner 第 29 题之后的补充改成只在私聊。
