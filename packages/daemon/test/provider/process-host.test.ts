@@ -120,6 +120,20 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost on POSIX', () => {
     await until(() => !alive(holderPid), 'holder exit after the exit command');
   }, 30_000);
 
+  it('admit() waits out an end already in flight: a message right after a stop is admitted where admission() refuses', async () => {
+    const host = newHost(dataDir());
+    const { hosted } = await spawnFake(host, []);
+    const ended = hosted.end();
+    while (host.snapshot()[0]?.ownership !== 'unknown') {
+      if (host.snapshot().length === 0) throw new Error('record retired before its reaped window was observed');
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    expect(host.admission()).toMatchObject({ reason: 'owned-work-unverified' });
+    expect(await host.admit()).toBeUndefined();
+    expect(host.snapshot()).toEqual([]);
+    await ended;
+  }, 30_000);
+
   it('terminateTree on a TERM-ignoring tree returns sent, then killTree removes every pid in the group and watch() reports the exit without transport-lost', async () => {
     const host = newHost(dataDir());
     const { hosted, pid, grandchildren, facts } = await spawnFake(host, ['--ignore-term', '--grandchildren', '1']);
@@ -208,6 +222,9 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost on POSIX', () => {
     writeFileSync(join(dir, 'process-owners.json'), JSON.stringify({ version: 1, records: [record] }));
     const host = newHost(dir);
     expect(await host.sweepOrphans()).toEqual({ gone: 0, unknown: 1, inert: 0, legacy: 0 });
+    const asked = Date.now();
+    expect(await host.admit()).toMatchObject({ reason: 'owned-work-unverified' });
+    expect(Date.now() - asked).toBeLessThan(200);
     const refusal = await host.reserve('codex');
     expect(refusal).toMatchObject({ reason: 'owned-work-unverified' });
     expect(ledgerOf(dir)).toMatchObject({ kind: 'ok', records: [{ id: record.id }] });
@@ -226,6 +243,9 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost on POSIX', () => {
     const { pid, grandchildren } = await spawnFake(host, ['--ignore-term', '--grandchildren', '1']);
     process.kill(host.snapshot()[0]?.holderPid as number, 'SIGKILL');
     await until(() => host.snapshot()[0]?.ownership === 'unknown', 'record unknown after the holder died');
+    const asked = Date.now();
+    expect(await host.admit()).toMatchObject({ reason: 'owned-work-unverified' });
+    expect(Date.now() - asked).toBeLessThan(200);
     expect(await host.reserve('codex')).toMatchObject({ reason: 'owned-work-unverified' });
     expect(alive(pid)).toBe(true);
     expect(host.owesWork()).toBe(true);
