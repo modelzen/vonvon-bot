@@ -473,6 +473,13 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 3. 打好的 .app 装进 /Applications，通知 owner 验收。
 4. 具体命令以仓库脚本为准。第一次出预览版时由预览版会话核对，再补进这一节。
 
+#296 的 Mac 检查碰到的几件事，预览版会话照这样做：
+- auto 模式的沙箱里看不到钥匙串的签名身份，`npm run package:dir` 会跳过签名（`0 valid identities found`）。这条命令要申请在沙箱外跑。验签也在沙箱外做，沙箱里的 `codesign --verify` 会报 invalid signature。
+- Mac 上 `npm ci` 之后 Electron 的二进制也不在，打包前先跑 `node node_modules/electron/install.js`。
+- 联网（`npm ci`、`gh`）、沙箱外的命令、打开 app、用 Computer Use 操作 app，在 auto 模式下每次都要申请。#296 的检查里由 Claude 经 `paseo permit` 按检查范围逐条批准，范围外的不批。
+- 模拟从 Finder 打开时，`open --env` 会带上终端的长 PATH，要显式加 `--env PATH=/usr/bin:/bin:/usr/sbin:/sbin`。
+- 退出桌面端不停 daemon（product.md 3.10），测完用包里的命令行 `daemon stop` 停掉隔离 HOME 里的 daemon。
+
 测 Claude 后端时，用 owner 本机的 Claude 登录跑少量回合。这是测产品，不是在 Mac 上开 Claude 的开发会话。
 
 ## 8. owner 要提前准备的事
@@ -495,7 +502,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 - 写网页和桌面端界面时用 frontend-design。
 - 网页界面在 JP-VPS 上用 playwright 无头打开，截各种状态看。
 - 新 worktree 跑 typecheck 前，先 build `@vonvon/protocol` 和 `@vonvon/client`，不然找不到它们的 dist。
-- JP-VPS 上的 npm 11.19 默认不跑依赖的安装脚本，`npm ci` 后 electron 的二进制不在。要在 JP-VPS 上打 Linux 目录包（`electron-builder --dir --linux`）验证打包结果时，先跑 `node node_modules/electron/install.js`。
+- JP-VPS 上的 npm 11.19 默认不跑依赖的安装脚本，`npm ci` 后 electron 的二进制不在。要在 JP-VPS 上打 Linux 目录包（`electron-builder --dir --linux`）验证打包结果时，先跑 `node node_modules/electron/install.js`。Mac 上也一样，见第 7 节。
 - 行数可能超过 1500 的片（s05、s06、s51a 到 s51c、s59），开工后先用 `git diff --stat` 量。
 
 ## 10. 记录
