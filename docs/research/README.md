@@ -39,7 +39,7 @@
 
 `2026-10-14-v1-definition/`，基于 `main` 的 `be17859`。用户决定第一版做 macOS 桌面端，每个 bot 有自己的工作区、仓库、skill、记忆和性格，并且在不同的群里可以各不相同。这一轮调研就是为了定义第一版。
 
-这批报告没有核实记录，用之前自己核对关键事实。critique 是另一个代理对 draft 的评审，final 已按它改过。final 是给主人确认的定稿候选，里面的 8 个决策问题还没有答，主人的回答写进 `docs/product.md`。
+这批报告没有核实记录，用之前自己核对关键事实。critique 是另一个代理对 draft 的评审，final 已按它改过。final 是给主人确认的定稿候选。它的决策问题在 2026-10-14 的三组问答里答完了，结论和对 final 的改动见 `docs/product.md` 第 11 节，两者冲突时以 `docs/product.md` 为准。
 
 process-ci、draft 和 final 里的流程说法，凡和 `AGENTS.md` 不一致的，以 `AGENTS.md` 为准（#290 流程 PR）。已知的有三处：
 
@@ -70,6 +70,14 @@ process-ci、draft 和 final 里的流程说法，凡和 `AGENTS.md` 不一致�
 | 报告 | 内容 | 说明 |
 |---|---|---|
 | [decision-models](2026-10-14-decision-models/decision-models.md) | 两个判断模型的接口、价格、速度、认证，以及用在 vonvon-bot 上要注意的地方 | 更正 v1-definition 里 group-response、draft 和 final"没找到 Jev"的说法 |
+
+## 2026-10-14 飞书应用的主人和管理员
+
+`2026-10-14-feishu-app-roles/`。主人在问答里定了：bot 的主人和管理员沿用飞书应用自己的角色。这里查的是飞书开放平台上怎么读到这些角色。
+
+| 报告 | 内容 | 说明 |
+|---|---|---|
+| [roles](2026-10-14-feishu-app-roles/roles.md) | 获取应用信息和获取应用协作者列表两个接口：返回什么、要什么权限、频率限制，以及用在 vonvon-bot 上要注意的地方 | 企业租户里这个权限要不要审核，还没有实测 |
 
 ## 补充
 
