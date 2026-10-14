@@ -36,7 +36,7 @@
 
 - `claude/*` 分支平时只有 Claude push。Claude 发起 Mac 检查后，到 Codex 回复之前，Claude 不 push 这个分支；Codex 回复后，Claude 先 pull 再改。检查会话超过一小时没有回复，Claude 通知 owner，等 owner 确认会话已停下，再 pull 并恢复 push。任何人都不 force-push，不 rebase 已 push 的分支。
 - 除了 `frozen`，不给 PR 加别的标签。每次加标签都会按 PR 当时的标签重跑 CI，PR 已带 `frozen` 时会再跑一遍完整平台链。
-- 产品 PR 同时在飞最多两个，第三个要等一个合入。计数方法：开放、非 draft、head 分支以 `claude/` 开头、不带 `owner:` 标签、改动里有文档以外文件的 PR。纯文档 PR、dependabot PR 和 Codex 的 `codex/fix-*` 修复 PR 不计；修复 PR 由 Claude 优先审查和合入。2026-10-14 之前开的 PR 都带 `owner:` 标签或在 `codex/` 分支上（例如 #281 V6b 的 Codex 子进程迁移、#285 V5 的启动路由、#110 V5 的桌面外壳），全部暂停，不计入。它们的去留在 `docs/product.md` 定稿时由 owner 决定。
+- 产品 PR 同时在飞最多两个，第三个要等一个合入。计数方法：开放、非 draft、head 分支以 `claude/` 开头、改动里有 `.github/`、`scripts/`、`AGENTS.md`、`docs/` 和其他 Markdown 以外文件的 PR，再去掉暂停的 #281 和 #285。所以纯文档 PR 和只改 CI、脚本、规则的流程 PR 不计；dependabot PR 和 Codex 的 `codex/fix-*` 修复 PR 不在 `claude/` 分支上，也不计。修复 PR 由 Claude 优先审查和合入。本规则生效前开的 PR 全部暂停：#281（V6b 的 Codex 子进程迁移）、#285（V5 的启动路由），以及 `codex/` 分支上的 #110（V5 的桌面外壳）等。它们的去留在 `docs/product.md` 定稿时由 owner 决定。
 - 一个 PR 对应一个切片，大小以一个审查子代理能读完整个 diff 为准。不含 lockfile 和生成文件时，以 1500 行改动为上限，超过就先拆。
 - 每个功能分支在每台机器上只有一棵 worktree，合入即删。GitHub 在合入时自动删除远端分支。Mac 上为检查或预览版建的 worktree，用完就删；`codex/fix-*` 的 Mac worktree 在 PR 合入或关闭后，由 Claude 经 Paseo 让对应会话删除并归档。
 - 进度看 `docs/v1-plan.md` 里的清单、PR 状态，以及 Claude 会话里的里程碑消息。issue #122 看板和 `docs/program-graph.json` 停止更新。不做本地进度页、会话映射文件或定时刷新。
@@ -55,7 +55,7 @@
   - 模式用 `auto`，不用 `full-access`；
   - 隔离的 `HOME`、`VONVON_HOME`、userData 和 `VONVON_DESKTOP_TEST_HOME` 只写在启动被测应用或测试的那一条命令前面，例如 `HOME=<临时目录> VONVON_HOME=<临时目录>/vonvon npm test`，不 export。git、gh 和签名命令不带这些变量，用 Mac 上的正常账号和钥匙串。不碰 owner 在用的 bridge 和数据；
   - `auto` 模式拦住了 push、签名或打开应用时，Codex 停下并在回复里写明，不改成 `full-access`；
-  - Mac 锁屏时 Computer Use 会失败（getpaseo/paseo#3346）。遇到就停下通知 owner，不重试；
+  - Mac 锁屏时 Computer Use 会失败（getpaseo/paseo#3346）。遇到就停下，不重试，回复第一行写"卡住了："，由 Claude 通知 owner；
   - Codex 用文字回复结果，Claude 把结论贴进 PR。做完删除 worktree，归档会话。
 - 对方会话正在运行时不发 `paseo send`，因为它默认会打断对方当前的回合。
 - 各台机器只通过 Git 同步，各自运行 npm ci，不拷贝 node_modules、dist、build、release。预览版在 Mac 本机构建、本机安装，不跨机器拷贝。
