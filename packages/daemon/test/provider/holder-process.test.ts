@@ -28,12 +28,15 @@ let binary: HolderBinary | undefined;
 const hosts: ProcessHost[] = [];
 const dirOf = new Map<ProcessHost, string>();
 const groups: number[] = [];
+const holderPids = new Set<number>();
 
 beforeAll(() => { if (POSIX) binary = compileHolder(); });
 afterAll(() => binary?.dispose());
 afterEach(async () => {
   await Promise.all(hosts.splice(0).map(host => host.closeAll()));
   for (const pid of groups.splice(0)) { try { process.kill(POSIX ? -pid : pid, 'SIGKILL'); } catch { } }
+  await Promise.all([...holderPids].map(pid => until(() => !alive(pid), 'fixture holder exited before deleting logs', WAIT)));
+  holderPids.clear();
   for (const dir of dirOf.values()) rmSync(dir, { recursive: true, force: true });
   dirOf.clear();
 });
@@ -60,6 +63,7 @@ function evidence(host: ProcessHost, stdout: string, seen: Seen): string {
 /** Attaches `exit` and `error` at once, as the SDK's ProcessTransport does. */
 async function adoptFake(host: ProcessHost, args: string[], options: { signal?: AbortSignal; command?: string; listen?: boolean; armed?: boolean; onStderr?: (chunk: string) => void } = {}) {
   const reservation = await host.reserve('claude', 'session-1');
+  for (const { holderPid } of host.snapshot()) if (holderPid !== undefined) holderPids.add(holderPid);
   if (!(reservation instanceof Reservation)) throw new Error('reservation refused');
   const proc: HolderProcess = reservation.adopt({
     command: options.command ?? NODE, args: [FAKE, ...args],
@@ -179,6 +183,7 @@ describe('HolderProcess on both platforms', () => {
   it('adopt once closeAll has started throws instead of returning a process that never settles', async () => {
     const host = newHost();
     const reservation = await host.reserve('claude') as Reservation;
+    for (const { holderPid } of host.snapshot()) if (holderPid !== undefined) holderPids.add(holderPid);
     const closing = host.closeAll();
     expect(() => reservation.adopt({ command: NODE, args: [FAKE], env: ENV, signal: new AbortController().signal })).toThrow(/process host is closing/);
     await closing;
@@ -296,6 +301,7 @@ describe.skipIf(!POSIX)('HolderProcess on POSIX', () => {
     const host = newHost();
     const obstruction = join(dirOf.get(host) as string, `process-owners.json.${process.pid}.tmp`);
     const reservation = await host.reserve('claude') as Reservation;
+    for (const { holderPid } of host.snapshot()) if (holderPid !== undefined) holderPids.add(holderPid);
     mkdirSync(obstruction);
     const proc = reservation.adopt({ command: NODE, args: [FAKE], env: ENV, signal: new AbortController().signal });
     const errors: HolderProcessError[] = [];
