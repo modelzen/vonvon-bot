@@ -299,7 +299,7 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 开工要点：
 - s30：要不要另发一条带 @ 的文字，按 e09 的结果定；结果出来前默认另发。
 - s31：e02 用到的字段，s02 锁定的 SDK 0.3.296 里都有，e02 这边不用抬版本；e03 的结果还可能要抬。同时改掉 `permission.ts` 顶部那段注释。
-- s31：按 e02 的结果做：所有会话启动时都带 `allowDangerouslySkipPermissions: true`，中途升到完全访问才不用重开会话；resume 时明确传档，档不从记录里恢复；拒绝时不用 `interrupt`，不然原因会丢、这一轮按出错结束；提问的答案放进 `updatedInput.answers`。回调拿不到"这是在联网"的标记，关网时 Bash 联网靠沙箱挡，看 e03。
+- s31：按 e02 的结果做：所有会话启动时都带 `allowDangerouslySkipPermissions: true`，中途升到完全访问才不用重开会话；resume 时明确传档，档不从记录里恢复；拒绝时不用 `interrupt`，不然原因会丢、这一轮按出错结束；提问的答案放进 `updatedInput.answers`。启动时带上这个参数后，升档只能走两条路：daemon 调 `setPermissionMode`，或者回调返回带 `setMode` 的 `updatedPermissions`。两处都只按权限档的设置来，回调不照搬 `suggestions` 里的 `setMode`。回调拿不到"这是在联网"的标记，关网时 Bash 联网靠沙箱挡，看 e03。
 - s31：开工前用【需要你决定】问 owner：bot 的会话要不要关掉 claude.ai 连接器，和推送、远程触发、定时任务这类 Claude Code 自己的工具（e02 第 7 节）。建议用内置工具白名单，连接器默认关。
 - s31：e02 没测完的两件，开工时补测：完全访问下，Claude 设置里的 ask 规则、删除关键目录会不会走到回调；vonvon 真实的 `['user', 'project']` 下，用户层的权限规则会不会改变哪些调用走回调。e02 用的是空的 `settingSources`。
 - s31：顺手修会话标题的读法：`readSessionTitle` 只认记录里 `custom-title` 的条目，不用 `customTitle` 字段，因为它会退回 CLI 自动起的标题（e02 第 8 节）。放在这一片，是因为 s31 本来就要改 `D/agent/claude-agent/` 下的后端代码；约 40 行，算进这一片的行数。
@@ -421,7 +421,7 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 
 e01、e02 已做完，结果在 `docs/research/2026-10-14-v1-spikes/`。e02 没测完的两件写进了 s31 的开工要点。
 
-Mac 上按最晚期限排：e06、e10、e12、e09、e03、e04、e05、e11、e08，一次一个。JP-VPS 上先做 e01、e02，e07 在 M10 之前做。
+Mac 上按最晚期限排：e06、e10、e12、e09、e03、e04、e05、e11、e08，一次一个。JP-VPS 上的 e07 在 M10 之前做。
 
 ### 4.2 实验结果和 product.md 不一致时
 

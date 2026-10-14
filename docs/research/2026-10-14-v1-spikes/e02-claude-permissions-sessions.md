@@ -11,7 +11,7 @@
 5. `bypassPermissions` 加 canUseTool 时，只有 AskUserQuestion 走到回调，其余一律放行。
 6. 会话运行中 `setPermissionMode` 能升档也能降档，下一轮生效，不用重开会话。升到 `bypassPermissions` 要求会话启动时带了 `allowDangerouslySkipPermissions: true`。resume 不恢复上次的档，以启动时传的为准。
 7. 回调拒绝时，模型拿到的就是 vonvon 写的原因，这一轮接着做。带 `interrupt: true` 时，原因被换成通用文字，这一轮以 `error_during_execution` 结束。
-8. 子 agent 有一个固定的 id，task_* 消息、子 agent 的消息、hook 和 canUseTool 里都是同一个值。消息上的 `agent_id` 字段 0.3.291 以后才有，s02 锁定的 0.3.296 有。
+8. 子 agent 有一个固定的 id，task_* 消息、子 agent 的消息、hook 和 canUseTool 里都是同一个值。消息上的 `agent_id` 字段是 0.3.291 到 0.3.296 之间才加上的，s02 锁定的 0.3.296 有。
 9. `getSessionMessages` 能读别的工作目录下的会话：`dir` 不传（扫所有项目，约 120 毫秒），或者传那条会话原来的 cwd（约 5 毫秒）。读出来的包含工具步骤，没有"只要用户消息和最终回答"的选项，要自己过滤。子 agent 的消息不在里面。
 10. `claudeMdExcludes` 能排除 `~/.claude/CLAUDE.md`，它 @ 引入的文件也一起排除。它是设置项，经 `options.settings` 传。只给 `settingSources: ['project']` 也不会加载个人的 CLAUDE.md。
 11. 新发现：bot 的 Claude 会话的工具列表里有主人账号在 claude.ai 的连接器，还有推送通知、远程触发、定时任务、工作流这些 Claude Code 自己的工具，和 `settingSources` 无关。今天的 vonvon 没有关掉它们。这些工具这次没有实际调用过。见第 7 节。
@@ -148,7 +148,7 @@
 
 ## 核实记录
 
-另一个代理（Sonnet）读了脚本和原始日志，逐条核对，没有重跑。第 7、8 节是之后补测的，没有经过这一轮核对；合入前的独立审查读过它们的脚本和输出，第 8 节的取值顺序在 `sdk.mjs` 里核对过。
+另一个代理（Sonnet）读了脚本和原始日志，逐条核对，没有重跑。第 7、8 节是之后补测的，没有经过这一轮核对；#297 的独立审查读过它们的脚本和输出（见 #297 的审查评论），第 8 节的取值顺序在 `sdk.mjs` 里核对过。
 
 | 结论 | 判定 | 说明 |
 |---|---|---|

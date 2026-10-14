@@ -35,7 +35,7 @@
 
 - 两个子 agent 都在前台跑（`task_started` 的 `is_backgrounded` 为 false），彼此并行，tool_result 是普通的结果。只有一个 result，约在第 45 秒，也就是最慢的子 agent 结束之后。没有 CLI 自己起的轮次，也没有 `background_tasks_changed`。
 - 子 agent 的进度消息照样有：`task_started`、`task_progress`、`task_updated`、`task_notification`，`tool_use_id` 指回 Agent 调用；子 agent 自己的消息带 `parent_tool_use_id`。长的 Agent 或 Bash 调用每 30 秒有一条 `tool_progress` 心跳。3.9 的子 agent 区靠这些就够了。
-- `run_in_background` 参数从 Agent 和 Bash 的工具定义里去掉了。CLI 代码里按这个变量把参数 omit 掉；工具列表本身不变，带不带变量都是同样 31 个名字。
+- 推断 `run_in_background` 参数从 Agent 和 Bash 的工具定义里去掉了：CLI 代码里按这个变量把参数 omit 掉，下面的表现也对得上；实际发给模型的工具定义没有导出来看。工具列表本身不变，带不带变量都是同样 31 个名字。
 - 模型硬要带这个参数时：Agent 忽略它，照样在前台跑；Bash 报 `InputValidationError: Bash failed due to the following issue: An unexpected parameter run_in_background was provided`，命令不执行。让模型去掉参数重试，命令在前台跑满 45 秒，这一轮跟着等。
 - 不设变量时，CLI 拦住前台的 `sleep 25 && echo …`，提示改用后台或 Monitor；设了变量就不拦了。
 - SDK 的 `query.backgroundTasks()` 这时报"Background tasks are disabled in this session."，不设变量时返回 false。可以用它确认变量生效了。
