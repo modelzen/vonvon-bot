@@ -515,7 +515,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 - 网页界面在 JP-VPS 上用 playwright 无头打开，截各种状态看。
 - 新 worktree 跑 typecheck 前，先 build `@vonvon/protocol` 和 `@vonvon/client`，不然找不到它们的 dist。
 - JP-VPS 上的 npm 11.19 默认不跑依赖的安装脚本，`npm ci` 后 electron 的二进制不在。要在 JP-VPS 上打 Linux 目录包（`electron-builder --dir --linux`）验证打包结果时，先跑 `node node_modules/electron/install.js`。Mac 上打包也缺过这个二进制，原因没查，见第 7 节。
-- 行数可能超过 1500 的片（s05、s06、s51a 到 s51c、s59），开工后先用 `git diff --stat` 量。
+- 行数可能超过 1500 的片（s06、s51a 到 s51c、s59），开工后先用 `git diff --stat` 量。
 
 ## 10. 记录
 
