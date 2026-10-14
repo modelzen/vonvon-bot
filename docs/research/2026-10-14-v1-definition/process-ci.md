@@ -348,7 +348,7 @@ jobs:
 
 - 规则集里 `require_extra_approval_for_unattributed_changes: true` 的含义。
 - 在 Paseo 驱动的 Claude 会话里，PushNotification 工具能不能送达。
-- Paseo 手机 app 能不能按会话静音；推送订阅是不是打开 app 就自动续期（现在这个订阅 2026-10-15 09:43Z 到期）。
+- Paseo 手机 app 能不能按会话静音；推送订阅是不是打开 app 就自动续期（现在这个订阅一天后到期，具体时间已略去）。
 - 未打包的 `packages/desktop` 能不能直接被 `_electron.launch` 启动并拉起 daemon；`package:dir` 在 runner 上要跑多久。
 - Mac mini 的 CPU 和内存；runner、Codex、预览版、日常 bridge 同时运行时会不会互相拖慢。
 - Paseo terminal 在 Mac 上跑构建脚本是否可行（没试过），owner 是否允许。
