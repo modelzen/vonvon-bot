@@ -7,7 +7,8 @@ export async function fixtureNode(directory: string): Promise<string> {
     await link(process.execPath, nodePath);
   } catch (error) {
     // EPERM: Linux with fs.protected_hardlinks refuses to link a root-owned node such as /usr/bin/node.
-    if (!(error instanceof Error) || !('code' in error) || (error.code !== 'EXDEV' && error.code !== 'EPERM')) throw error;
+    const copyable = error instanceof Error && 'code' in error && (error.code === 'EXDEV' || (error.code === 'EPERM' && process.platform === 'linux'));
+    if (!copyable) throw error;
     await copyFile(process.execPath, nodePath);
   }
   return nodePath;
