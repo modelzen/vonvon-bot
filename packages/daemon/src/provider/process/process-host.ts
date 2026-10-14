@@ -312,7 +312,7 @@ export class ProcessHost {
       await this.abandon(s);
       throw error;
     }
-    // A record can reach its reaped window while the holder was spawning; `launch` rechecks admission synchronously, so the wait happens here.
+    // An older record can enter its reaped window while this holder spawns, and launch's own admission check does not wait.
     const refusal = await this.admit();
     if (refusal) {
       await this.abandon(s);

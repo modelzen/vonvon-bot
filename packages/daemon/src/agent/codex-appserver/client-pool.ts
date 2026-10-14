@@ -74,7 +74,7 @@ function untrack(client: AppServerClient): void {
   residents.delete(client);
 }
 
-/** A discarded process's ending, bounded so a wedged close cannot hold up its replacement. Call sites that spawn a replacement await it (#282). */
+/** Bounded so a wedged close cannot hold up the replacement. */
 const DISCARD_WAIT_MS = 2000;
 
 function closeDiscarded(client: AppServerClient): Promise<void> {
@@ -101,8 +101,7 @@ async function acquireUtility(bin: string): Promise<AppServerClient> {
   requireOpen();
   const cur = utility;
   if (cur && !cur.client.exited && cur.bin === bin) return cur.client;
-  // 槽位清空和等旧进程收尾都放在单飞的 create 里：await 之前就占住 utilityCreating，
-  // 并发调用方只会等这一个重建。
+  // 等旧进程收尾也在单飞内，否则并发调用方会在这段 await 里各自重建（#283）。
   const create = (async () => {
     if (cur) {
       utility = null;
