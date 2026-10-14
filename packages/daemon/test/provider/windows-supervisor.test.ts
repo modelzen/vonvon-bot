@@ -27,8 +27,13 @@ afterEach(async () => {
     channel.close();
     const ended = await Promise.race([channel.exited, new Promise(resolve => setTimeout(resolve, 15_000, 'stuck'))]);
     if (ended === 'stuck') { try { process.kill(channel.holderPid); } catch { /* gone */ } }
+    await until(() => !alive(channel.holderPid), `supervisor ${channel.holderPid} exit before cleanup`);
   }
-  for (const helper of helpers.splice(0)) { try { helper.kill(); } catch { /* gone */ } }
+  for (const helper of helpers.splice(0)) {
+    try { helper.kill(); } catch { /* gone */ }
+    const { pid } = helper;
+    if (pid !== undefined) await until(() => !alive(pid), `helper ${pid} exit before cleanup`);
+  }
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 

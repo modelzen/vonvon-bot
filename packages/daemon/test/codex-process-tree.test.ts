@@ -97,7 +97,7 @@ function windowsStartTime(pid: number): string | undefined {
       if (-not $target.HasExited) { [Console]::Out.WriteLine($started.ToString()) }
     } finally { $target.Dispose() }
   `;
-  const value = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', timeout: 5000 }).trim();
+  const value = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', timeout: 15_000 }).trim();
   if (value && !/^\d+$/.test(value)) throw new Error('Invalid Windows fixture process creation time');
   return value || undefined;
 }
@@ -201,7 +201,7 @@ describe('owned Codex process trees', () => {
       () => trace.record({ event: 'running-settled', result: 'rejected' }),
     );
     await expect(running).rejects.toThrow();
-  }, 10_000);
+  });
 
   it('cancellation awaits an ignored-stdio descendant that ignores TERM', async () => {
     const f = fixture(false);

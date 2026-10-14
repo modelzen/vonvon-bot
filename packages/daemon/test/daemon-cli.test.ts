@@ -154,4 +154,4 @@ it('service refusal leaves an absent data home untouched for public and hidden c
     await expect(readdir(f.root)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readdir(f.home)).toEqual([]);
   }
-}, process.platform === 'win32' ? 20_000 : 5_000);
+});

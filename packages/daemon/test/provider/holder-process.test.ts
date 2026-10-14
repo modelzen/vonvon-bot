@@ -28,12 +28,16 @@ let binary: HolderBinary | undefined;
 const hosts: ProcessHost[] = [];
 const dirOf = new Map<ProcessHost, string>();
 const groups: number[] = [];
+const holders: number[] = [];
+const recordHolders = (host: ProcessHost) => holders.push(...host.snapshot().flatMap(s => s.holderPid ?? []));
 
 beforeAll(() => { if (POSIX) binary = compileHolder(); });
 afterAll(() => binary?.dispose());
 afterEach(async () => {
+  hosts.forEach(recordHolders);
   await Promise.all(hosts.splice(0).map(host => host.closeAll()));
   for (const pid of groups.splice(0)) { try { process.kill(POSIX ? -pid : pid, 'SIGKILL'); } catch { } }
+  for (const pid of holders.splice(0)) await until(() => !alive(pid), `holder ${pid} exit before cleanup`);
   for (const dir of dirOf.values()) rmSync(dir, { recursive: true, force: true });
   dirOf.clear();
 });
@@ -61,6 +65,7 @@ function evidence(host: ProcessHost, stdout: string, seen: Seen): string {
 async function adoptFake(host: ProcessHost, args: string[], options: { signal?: AbortSignal; command?: string; listen?: boolean; armed?: boolean; onStderr?: (chunk: string) => void } = {}) {
   const reservation = await host.reserve('claude', 'session-1');
   if (!(reservation instanceof Reservation)) throw new Error('reservation refused');
+  recordHolders(host);
   const proc: HolderProcess = reservation.adopt({
     command: options.command ?? NODE, args: [FAKE, ...args],
     env: { ...ENV, VONVON_UNSET: undefined }, signal: options.signal ?? new AbortController().signal,

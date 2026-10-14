@@ -24,12 +24,16 @@ let binary: HolderBinary | undefined;
 const hosts: ProcessHost[] = [];
 const dirs: string[] = [];
 const groups: number[] = [];
+const holders: number[] = [];
+const recordHolders = (host: ProcessHost) => holders.push(...host.snapshot().flatMap(s => s.holderPid ?? []));
 
 beforeAll(() => { if (PLATFORM === 'posix') binary = compileHolder(); });
 afterAll(() => binary?.dispose());
 afterEach(async () => {
+  hosts.forEach(recordHolders);
   await Promise.all(hosts.splice(0).map(host => host.closeAll()));
   for (const pid of groups.splice(0)) { try { process.kill(PLATFORM === 'posix' ? -pid : pid, 'SIGKILL'); } catch { } }
+  for (const pid of holders.splice(0)) await until(() => !alive(pid), `holder ${pid} exit before cleanup`);
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -56,6 +60,7 @@ function evidence(dir: string, host: ProcessHost, text: string, errors: string, 
 
 async function spawnFake(host: ProcessHost, args: string[], dir?: string): Promise<{ hosted: HostedProcess; pid: number; grandchildren: number[]; facts: ProcessFact[] }> {
   const hosted = await host.spawn('codex', 'session-1', { file: NODE, args: [FAKE, ...args], env: ENV });
+  recordHolders(host);
   const facts: ProcessFact[] = [];
   hosted.watch(fact => facts.push(fact));
   let text = '';
