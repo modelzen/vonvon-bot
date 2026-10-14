@@ -264,7 +264,7 @@ owner 说这一块很关键：飞书里的位置怎么对应 agent 的会话，�
 群里有几个 bot 时，每个 bot 各有自己的一套会话、水位和引用行。A 开的话题，B 的主区会话也会看到一行"A（bot）开了话题"；B 只有在这个话题里被 @，才建自己的话题会话，开场里 A 的发言只放最终回答。
 
 **查飞书上下文。** 每个会话预装一个 vonvon 飞书 skill，背后是 `vonvon` 命令行（见 3.7）。bot 用它查自己能看到的飞书内容：主区要看某个话题里说了什么，话题里要看主区更早的消息，都通过它查；它也能列出本群的话题。
-- 按会话 id 读另一条会话：返回那条会话里用户的消息和 bot 的最终回答，不含工具步骤。背后是 Codex 的 `thread/read`（`D/agent/codex-appserver/protocol/generated/v2/ThreadReadParams.ts`）和 Claude Agent SDK 的 `getSessionMessages`（0.3.296 的 `sdk.d.ts:906`）。Claude 一半实测过：能读别的工作目录下的会话，要传那条会话原来的工作目录；读出来含工具步骤，vonvon 自己滤掉（e02 第 5 节）。Codex 一半要实测。
+- 按会话 id 读另一条会话：返回那条会话里用户的消息和 bot 的最终回答，不含工具步骤。背后是 Codex 的 `thread/read`（`D/agent/codex-appserver/protocol/generated/v2/ThreadReadParams.ts`）和 Claude Agent SDK 的 `getSessionMessages`（0.3.296 的 `sdk.d.ts:906`）。Claude 一半实测过：能读别的工作目录下的会话。传那条会话原来的工作目录最快；不传也能读，但要扫所有项目；传错了读到 0 条，不报错。读出来含工具步骤，vonvon 自己滤掉（e02 第 5 节）。Codex 一半要实测。
 - 只能读同一个 bot、同一个群里的会话。访客档的会话读不到管理员档的会话。私聊的会话在群里读不到。owner 说过这个 skill 可以以后再做；Claude 把它放进了第一版，因为主区只留话题的引用，没有它就查不到话题里说了什么。
 - 用机器人身份查，只能查这个 bot 所在的群；在群里只能查当前这个群。卡片上显示"查了本群 9:00 到 10:00 的 40 条"。
 - 不把用户身份的 lark-cli 交给 agent：它能读到主人所在的所有群，包括机器人不在的群（实测，`docs/research/2026-10-14-v1-definition/context-feishu-products.md` 2.3）。
@@ -318,7 +318,7 @@ owner 说这一块很关键：飞书里的位置怎么对应 agent 的会话，�
 - skill 的来源：内置、本机文件夹、从 `~/.agents/skills`、`~/.codex/skills`、`~/.claude/skills` 导入。格式按 Agent Skills 标准（agentskills.io/specification）。
 - MCP 的来源：从本机 Codex、Claude 的配置导入，或在桌面端填命令或网址。
 - 都不从 git 地址装，不自动更新。
-- 只有主人和管理员能装和启用。含脚本的 skill 和所有 MCP 都会在主人的 Mac 上跑程序。在聊天里装，只能在私聊里，而且私聊的"聊天改设置"开着，见 3.7。Claude 的会话今天还会自带主人账号在 claude.ai 的连接器，留不留见第 9 节第 19 项。
+- 只有主人和管理员能装和启用。含脚本的 skill 和所有 MCP 都会在主人的 Mac 上跑程序。在聊天里装，只能在私聊里，而且私聊的"聊天改设置"开着，见 3.7。Claude 的会话今天的工具列表里还有主人账号在 claude.ai 的连接器，留不留见第 9 节第 19 项。
 - 内置两个 vonvon skill。飞书 skill 每个会话都预装（3.5）；设置 skill 只在私聊里装，"聊天改设置"关掉后私聊里也不装（3.7）。
 
 **怎么交给 Codex 和 Claude。** 两家都有会话级的参数，不改用户的全局配置，不换 `CODEX_HOME` 和 `CLAUDE_CONFIG_DIR`（换了要重新登录，旧会话也续不上）。
@@ -380,7 +380,7 @@ owner 的话："确认卡、选项卡、授权卡这些需要用户交互、用�
 | 读写 | `never` + 今天的读写沙箱，就是今天的行为 | `acceptEdits` + 今天的读写沙箱，`canUseTool` 同上 |
 | 完全访问 | `never` + `danger-full-access`，就是今天的行为 | `bypassPermissions`，就是今天的行为。`canUseTool` 只处理提问和 Claude 自己仍要问的几类，见下 |
 
-- Claude 的只读、读写两档不再用 `bypassPermissions`。今天用它，推断有两个缺口：关网时 Bash 可能仍能连外网，Edit 和 Write 可能写到工作区以外（`approval-ux.md` 3.3）。不带沙箱时这两个缺口都在：今天的只读档下 Bash 能写工作区内外的文件、能 curl 出去，`bypassPermissions` 下工作区以外的 Write 也直接放行；带上今天的沙箱还在不在，第 9 节第 12 项在 Mac 上测。换成上表以后，写文件的 Bash、联网的 Bash、工作区以外的读写都会先到 `canUseTool`（实测，e02 第 1 节）。只读档可以对这些一律拒绝；读写档关网时，回调分不出哪条 Bash 在联网，要看命令文字或者靠沙箱，在 Mac 上测（e03）。代价是今天这两档下能用的 WebFetch、往工作区以外写文件会被拒；开网时给 WebFetch、WebSearch 加允许规则。
+- Claude 的只读、读写两档不再用 `bypassPermissions`。今天用它，推断有两个缺口：关网时 Bash 可能仍能连外网，Edit 和 Write 可能写到工作区以外（`approval-ux.md` 3.3）。不带沙箱时这两个缺口都在：今天的只读档下 Bash 能写工作区内外的文件、能 curl 出去，`bypassPermissions` 下工作区以外的 Write 也直接放行；带上今天的沙箱还在不在，第 9 节第 12 项在 Mac 上测。换成上表以后，只读档下写文件的 Bash、联网的 Bash、工作区以外的读写都会先到 `canUseTool`；读写档下工作区里的写直接放行，其余同样先到回调（实测，e02 第 1 节）。只读档可以对这些一律拒绝；读写档关网时，回调分不出哪条 Bash 在联网，要看命令文字或者靠沙箱，在 Mac 上测（e03）。代价是今天这两档下能用的 WebFetch、往工作区以外写文件会被拒；开网时给 WebFetch、WebSearch 加允许规则。
 - Codex 三档都保留 `never`：模型知道不能申请，就不会白白尝试。`never` 下没有标成只读的 MCP 工具会被拒（`approval-ux.md` 1.5），vonvon 自己的 MCP 要配 `approve`（第 9 节第 2 项）。
 - 中途改档不用重开会话：Codex 每一轮的 `turn/start` 能带新的设置，Claude 运行中能 `setPermissionMode`，升档降档都是下一轮生效（实测，e02 第 3 节）。升到完全访问要求会话启动时带 `allowDangerouslySkipPermissions`，所以每条会话启动时都带上；resume 不恢复上次的档（`settingSources` 为空时测的），每次都明确传。Codex 一半还是推断。
 - Linux 上 Codex 的只读、读写档今天直接拒绝启动（`D/agent/codex-appserver/backend.ts:78-82`），所以 Linux 上的 Codex 只能用完全访问，界面写明。被拉进的已有群默认只读，在 Linux 上用 Codex 时起不来：bot 回一句说明，等主人在设置里明确改成完全访问，不自动放开。
@@ -426,7 +426,7 @@ owner 的话："确认卡、选项卡、授权卡这些需要用户交互、用�
 - 子 agent 显示在父运行卡的"子 agent 区"，一行一个：状态、名字、在做什么、几步、用了多久，嵌套的缩进。点开看最近 5 步和结果。每行有"停止"，运行卡的 ⏹ 全停。不给每个子 agent 发一张卡：飞书对群里所有 bot 有每秒 5 条的共用限额。
 - **一张运行卡包含这一轮的所有子 agent，子 agent 都跑完了，这张卡才算结束。**
   - Codex：本来就是这样。文档原文是"Codex waits until all requested results are available, then returns a consolidated response"（learn.chatgpt.com/docs/agent-configuration/subagents）。
-  - Claude：不一样。Claude Code 的子 agent 默认在后台跑，经 Agent SDK 用时也是；主回合可以先结束，子 agent 跑完再通知 Claude 起新的一轮（code.claude.com/docs/en/sub-agents）。实测里一条消息出了 4 到 6 个结果。设置 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` 后，子 agent 一律在前台跑，主回合等它们都结束，一条消息只有一个结果，几个子 agent 之间仍然并行（实测，`docs/research/2026-10-14-v1-spikes/e01-background-tasks.md`）。代价是它同时关掉后台 Bash 等所有后台任务，比如 bot 不能在后台起一个开发服务器再结束这一轮；模型要在后台跑命令时会先报错一次，再改成前台跑。第一版在 bot 的 Claude 会话里打开这个开关，两家行为就一致了。这是 Claude 的决定。前台子 agent 跑着时按 ⏹ 多久能停下还没测，s35 开工时补测（e01）。
+  - Claude：不一样。Claude Code 的子 agent 默认在后台跑，经 Agent SDK 用时也是；主回合可以先结束，子 agent 跑完再通知 Claude 起新的一轮（code.claude.com/docs/en/sub-agents）。实测里一条消息出了 4 到 6 个结果。设置 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` 后，子 agent 一律在前台跑，主回合等它们都结束，一条消息只有一个结果，几个子 agent 之间仍然并行（实测，`docs/research/2026-10-14-v1-spikes/e01-background-tasks.md`）。代价是它同时关掉后台 Bash 等所有后台任务，比如 bot 不能在后台起一个开发服务器再结束这一轮；模型要在后台跑命令时会先报错一次，再改成前台跑。第一版在 bot 的 Claude 会话里打开这个开关，两家行为就一致了。这是 Claude 的决定。前台子 agent 跑着时按 ⏹ 多久能停下还没测，s35 开工时补测（e01）；停不下来的话，回头再定。
 - 子 agent 跑的时候，群里的新消息按今天的规则插话或排队，只给父 agent。第一版不能直接跟某个子 agent 说话。
 - 今天 Codex 的子线程事件全丢了，Claude 子 agent 的步骤混进了主过程（`D/agent/codex-appserver/backend.ts:333-337`；`D/agent/claude-agent/event-map.ts:92-123`），第一版要修。
 
@@ -620,8 +620,8 @@ bot 的个性、记忆、skill 导入后为空，行为和今天一样。
 | 15 | bot 能不能在私聊里开话题，用户在私聊里开的话题事件里带不带 `thread_id` | 3.5 |
 | 16 | 机器人能不能给没开过会话的主人发私聊 | 3.10 崩溃通知 |
 | 17 | 压缩以后主区会话的摘要里还留不留话题引用；daemon 断线期间的消息，飞书重连后会不会补推 | 3.5 |
-| 18 | 按会话 id 读另一条会话：Codex 的 `thread/read` 不加载线程能不能读；Claude 的 `getSessionMessages` 能不能读到别的工作目录下的会话 | 3.5。Claude 一半已测：能读，要传那条会话原来的工作目录（e02 第 5 节）；Codex 一半在 e11 |
-| 19 | bot 的 Claude 会话会带上主人账号在 claude.ai 的连接器，和推送、远程触发、定时任务这类 Claude Code 自己的工具，和 `settingSources` 无关（e02 第 7 节）。第一版留不留 | 3.6、3.8。要 owner 定，s31 开工前问 |
+| 18 | 按会话 id 读另一条会话：Codex 的 `thread/read` 不加载线程能不能读；Claude 的 `getSessionMessages` 能不能读到别的工作目录下的会话 | 3.5。Claude 一半已测：能读，传那条会话原来的工作目录或者不传都行（e02 第 5 节）；Codex 一半在 e11 |
+| 19 | bot 的 Claude 会话的工具列表里有主人账号在 claude.ai 的连接器，和推送、远程触发、定时任务这类 Claude Code 自己的工具，和 `settingSources` 无关；这些工具没有实际调用过（e02 第 7 节）。第一版留不留 | 3.6、3.8。要 owner 定，s31 开工前问 |
 
 #281（V6b：把 Codex 子进程迁到新的进程层）关闭不合入。第一版建在 main 现有的 `agent/` 路径上；#281 合入后，打包版的 Codex 会因为缺 `vonvon-holder` 而失败。
 
