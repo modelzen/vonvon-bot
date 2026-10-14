@@ -74,11 +74,15 @@ function untrack(client: AppServerClient): void {
   residents.delete(client);
 }
 
-function closeDiscarded(client: AppServerClient): void {
-  void client.close().then(
+/** A discarded process's ending, bounded so a wedged close cannot hold up its replacement. Call sites that spawn a replacement await it (#282). */
+const DISCARD_WAIT_MS = 2000;
+
+function closeDiscarded(client: AppServerClient): Promise<void> {
+  const closed = client.close().then(
     () => untrack(client),
     error => { untrack(client); log.fail('agent', error, { phase: 'resident-close' }); },
   );
+  return Promise.race([closed, new Promise<void>(resolve => setTimeout(resolve, DISCARD_WAIT_MS).unref())]);
 }
 
 function requireOpen(): void {
@@ -98,9 +102,10 @@ async function acquireUtility(bin: string): Promise<AppServerClient> {
   const cur = utility;
   if (cur && !cur.client.exited && cur.bin === bin) return cur.client;
   if (cur) {
-    // 进程死了 / codex 二进制换了位置——重建
+    // 进程死了 / codex 二进制换了位置——先等旧进程收尾，再重建
     utility = null;
-    closeDiscarded(cur.client);
+    await closeDiscarded(cur.client);
+    requireOpen();
   }
   const create = (async () => {
     const client = new AppServerClient({ host: codexHost(), bin, cwd: NEUTRAL_CWD, clientName: 'feishu-codex-bridge-utility' });
@@ -109,7 +114,7 @@ async function acquireUtility(bin: string): Promise<AppServerClient> {
       await withDeadline(client.connect(), CONNECT_TIMEOUT_MS, 'utility connect');
       requireOpen();
     } catch (err) {
-      closeDiscarded(client);
+      await closeDiscarded(client);
       throw err;
     }
     // 没人消费常驻客户端的通知流（它不跑 thread）——永远排空，防 AsyncQueue
@@ -131,7 +136,7 @@ async function acquireUtility(bin: string): Promise<AppServerClient> {
 
 function discardUtility(client: AppServerClient): void {
   if (utility?.client === client) utility = null;
-  closeDiscarded(client);
+  void closeDiscarded(client);
 }
 
 /**
@@ -200,11 +205,11 @@ export function takeWarmClient(bin: string): AppServerClient | null {
   const entry = warm;
   if (!entry) return null;
   warm = null;
-  if (entry.client.exited) { closeDiscarded(entry.client); return null; }
+  if (entry.client.exited) { void closeDiscarded(entry.client); return null; }
   if (entry.bin !== bin || entry.fingerprint !== binFingerprint(bin)) {
     // codex 升级/换位：版本错位的待命进程不能再接新会话
     log.info('agent', 'prewarm-stale', { bin });
-    closeDiscarded(entry.client);
+    void closeDiscarded(entry.client);
     return null;
   }
   // 预热期间缓冲的通知（MCP 启动进度、ephemeral thread/started…）属于预热
@@ -250,7 +255,7 @@ export function refillWarmPool(): Promise<void> {
       log.info('agent', 'prewarm-ready');
     } catch (err) {
       log.fail('agent', err, { phase: 'prewarm' });
-      closeDiscarded(client);
+      await closeDiscarded(client);
     }
   })().finally(() => {
     warming = null;
