@@ -124,7 +124,7 @@ function channel() {
 }
 const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner' }, completionReminder: { mode: 'manual' } } };
 type GroupState = 'present' | 'missing' | 'permission-denied';
-const admission = { admission: vi.fn(), closeAll: vi.fn(async () => {}) };
+const admission = { admit: vi.fn(), closeAll: vi.fn(async () => {}) };
 const hostedShells: Shell[] = [];
 function providerHost() {
   const spawn = vi.fn(async () => {
@@ -204,7 +204,7 @@ beforeEach(async () => {
   orchestrator = undefined;
   shells.length = 0;
   hostedShells.length = 0;
-  admission.admission.mockReset().mockReturnValue(undefined);
+  admission.admit.mockReset().mockResolvedValue(undefined);
   admission.closeAll.mockReset().mockResolvedValue(undefined);
   nextPid = 987654321;
   endings.length = 0;
@@ -415,20 +415,20 @@ it.each(['utility', 'warm'] as const)('shutdown closes in-flight %s creation bef
 it('refuses a message that needs a new agent while admission is closed, and keeps a live session running', async () => {
   const run = thread();
   fake.backend.resumeThread.mockResolvedValue(run.t);
-  admission.admission.mockReturnValue(ownedWorkUnverified());
+  admission.admit.mockResolvedValue(ownedWorkUnverified());
   const o = setup();
   await o.onMessage(message('refused'));
   await vi.advanceTimersByTimeAsync(0);
   expect(fake.backend.resumeThread).not.toHaveBeenCalled();
   expect(fake.backend.startThread).not.toHaveBeenCalled();
   expect(fake.send).toHaveBeenCalledWith('chat', { markdown: `❌ ${ownedWorkUnverified().message}` }, expect.objectContaining({ replyTo: 'msg-' + seq }));
-  admission.admission.mockReturnValue(undefined);
+  admission.admit.mockResolvedValue(undefined);
   await o.onMessage(message('admitted'));
   await vi.advanceTimersByTimeAsync(0);
   expect(run.consumed).toHaveLength(1);
   run.turns[0]!.resolve();
   await vi.advanceTimersByTimeAsync(0);
-  admission.admission.mockReturnValue(ownedWorkUnverified());
+  admission.admit.mockResolvedValue(ownedWorkUnverified());
   await o.onMessage(message('live session'));
   await vi.advanceTimersByTimeAsync(0);
   expect(run.consumed).toHaveLength(2);

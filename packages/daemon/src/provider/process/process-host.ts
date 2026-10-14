@@ -24,6 +24,8 @@ import { probeWindowsJob } from './windows-job-probe';
 import { newPipeName, spawnWindowsSupervisor } from './windows-supervisor';
 
 export const RETRY_TAIL_MS = 5000;
+export const ADMIT_WAIT_MS = 2000;
+const ADMIT_POLL_MS = 25;
 const LEDGER_FILE = 'process-owners.json';
 const DEFAULT_SPAWN_DEADLINE_MS = 60_000;
 
@@ -229,6 +231,21 @@ export class ProcessHost {
   admission(): Refusal | undefined {
     const blocked = this.unreadable !== undefined || [...this.states.values()].some(s => this.ownership(s) === 'unknown');
     return blocked ? ownedWorkUnverified() : undefined;
+  }
+
+  /** `admission()` once the unknown records this process is still ending have settled, for at most `timeoutMs`. Any other unknown record refuses at once. */
+  async admit(timeoutMs = ADMIT_WAIT_MS): Promise<Refusal | undefined> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const unknown = [...this.states.values()].filter(s => this.ownership(s) === 'unknown');
+      const settling = unknown.filter(s => this.endingInFlight(s));
+      if (settling.length === 0 || settling.length < unknown.length || this.unreadable !== undefined || Date.now() >= deadline) return this.admission();
+      await Promise.race([...settling.map(s => s.retired.promise), sleep(ADMIT_POLL_MS)]);
+    }
+  }
+
+  private endingInFlight(s: RecordState): boolean {
+    return !s.retired.settled && s.unconfirmed === undefined && (s.probing || (s.identity !== 'lost' && (s.ending !== undefined || s.pending !== undefined)));
   }
 
   /** Rejects once `closeAll` has started, and when the `intent` record cannot be made durable; nothing is spawned in either case. */

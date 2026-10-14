@@ -79,8 +79,7 @@ import {
   type SessionTitleBackendConfig,
 } from '../config/schema';
 import { CardDispatcher, type CardActionHandler } from '../card/dispatcher';
-import type { ProcessHost } from '../provider/process/process-host';
-import type { Refusal } from '../provider/policy/enforcement';
+import { AdmissionRefused, type ProcessHost } from '../provider/process/process-host';
 import { shutdownResidentClients } from '../agent/codex-appserver/client-pool';
 import { sendManagedCard, updateManagedCard } from '../card/managed';
 import { RunRender } from '../card/run-render';
@@ -657,7 +656,7 @@ export function pickIdleSessions(
   return out;
 }
 
-export type ProviderAdmission = Pick<ProcessHost, 'admission' | 'closeAll'>;
+export type ProviderAdmission = Pick<ProcessHost, 'admit' | 'closeAll'>;
 
 export function createOrchestrator(
   channel: LarkChannel,
@@ -1416,14 +1415,6 @@ export function createOrchestrator(
     log.info('intake', 'goal-busy', { msgId: msg.messageId });
   }
 
-  function refuseNewAgent(msg: NormalizedMessage, inThread: boolean): Refusal | undefined {
-    const refusal = host.admission();
-    if (refusal) {
-      void trackTask(channel.send(msg.chatId, { markdown: `❌ ${refusal.message}` }, { replyTo: msg.messageId, replyInThread: inThread }).catch(() => undefined));
-    }
-    return refusal;
-  }
-
   /**
    * Reserve `sessionKey` synchronously (before any await) so a second message
    * racing in through the SDK's per-chatId queue sees it and queues instead of
@@ -1483,10 +1474,19 @@ export function createOrchestrator(
       log.info('intake', 'queued', { depth: existing.queue.length });
       return;
     }
-    if (!sessions.get(sessionKey)?.isAlive() && refuseNewAgent(msg, !flat)) return;
+    const needsAgent = !sessions.get(sessionKey)?.isAlive();
     const reserved: ActiveState = { queue: [], requesterOpenId: msg.senderId, isGoal: goal };
     active.set(sessionKey, reserved);
     void trackTask(withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
+      if (needsAgent) {
+        const refusal = await host.admit();
+        if (refusal) {
+          if (active.get(sessionKey) === reserved) active.delete(sessionKey);
+          const dropped = reserved.queue.splice(0).length;
+          await channel.send(msg.chatId, { markdown: runFailureMessage(new AdmissionRefused(refusal), dropped) }, { replyTo: msg.messageId, replyInThread: !flat }).catch(() => undefined);
+          return;
+        }
+      }
       // Goal runs use the OKR reaction (added at dispatch) as their only receipt,
       // not the ⏳/🫳 run-reaction lifecycle.
       const reaction = goal ? undefined : runReaction(msg.messageId, !sema.hasFree());
@@ -1793,12 +1793,16 @@ export function createOrchestrator(
    * topic has a unique reply target so no same-topic reservation is needed. */
   function startTopicDirectly(msg: NormalizedMessage, text: string, project?: Project, goal?: boolean): void {
     if (resumePublications.has(msg.chatId) || projectMutations.has(msg.chatId)) return;
-    if (refuseNewAgent(msg, false)) return;
     pendingTopics.set(msg.chatId, (pendingTopics.get(msg.chatId) ?? 0) + 1);
     const titleSource: SessionTitleSource = goal
       ? { text, rawContentType: 'text' }
       : sessionTitleSourceFromMessage(msg, text);
     void trackTask(withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
+      const refusal = await host.admit();
+      if (refusal) {
+        await channel.send(msg.chatId, { markdown: runFailureMessage(new AdmissionRefused(refusal), 0) }, { replyTo: msg.messageId, replyInThread: false }).catch(() => undefined);
+        return;
+      }
       // 🫳 Typing on receive (⏳ OneSecond if a slot isn't free) → ✅ DONE once
       // the topic is created (onTopicCreated, below). For this path the acked
       // action is "建话题", not the full reply — so DONE fires on first card,
