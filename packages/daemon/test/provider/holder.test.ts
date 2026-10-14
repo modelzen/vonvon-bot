@@ -284,7 +284,7 @@ describe.skipIf(process.platform === 'win32')('vonvon-holder', () => {
     expect(exit).toEqual({ code: 0, signal: null });
     expect(groupEmpty(pid)).toBe(true);
     expect(alive(grandchild)).toBe(false);
-  }, 20_000);
+  });
 
   it('fails ENOEXEC on an executable file without a valid header instead of running it through a shell', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'vonvon-noexec-'));
@@ -327,7 +327,7 @@ describe.skipIf(process.platform === 'win32')('vonvon-holder', () => {
     expect(Date.now() - closedAt).toBeGreaterThanOrEqual(1400);
     expect(groupEmpty(pid)).toBe(true);
     expect(alive(grandchild)).toBe(false);
-  }, 20_000);
+  });
 
   it('leaves exactly descriptors 0, 1, 2 in an execed libc-only provider', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'vonvon-fds-'));

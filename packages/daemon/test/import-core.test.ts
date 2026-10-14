@@ -113,7 +113,7 @@ it('rejects a mismatched HEAD without creating the destination', async () => {
   await expect(readdir(f.destination)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
-it.each([0, 1, 2])('converges after interruption at publication %i and preserves unknown staging directories', { timeout: process.platform === 'win32' ? 20_000 : 5_000 }, async count => {
+it.each([0, 1, 2])('converges after interruption at publication %i and preserves unknown staging directories', async count => {
   const f = await fixture(); expect((await f.run()).code).toBe(0);
   const manifest = manifestSchema.parse(JSON.parse(await readFile(join(f.destination, 'import-core.json'), 'utf8')));
   expect(manifest.files).toHaveLength(3);
@@ -147,7 +147,7 @@ it('refuses divergent seeding and parent symlinks without modifying external fil
   expect((await f.run()).code).toBe(1); expect(await readdir(outside)).toEqual([]);
 });
 
-it('serializes concurrent imports and rejects an unrelated provenance file', { timeout: process.platform === 'win32' ? 20_000 : 5_000 }, async () => {
+it('serializes concurrent imports and rejects an unrelated provenance file', async () => {
   const f = await fixture();
   expect((await Promise.all([f.run(), f.run(), f.run()])).every(value => value.code === 0)).toBe(true);
   await rm(f.destination, { recursive: true }); await mkdir(f.destination);
@@ -244,7 +244,7 @@ it.each(['import-core.json', 'PROVENANCE.md'])('recovers %s publication and pres
   await expectCompleteSeed(f);
 });
 
-it('preserves unknown staging after complete publication without rewriting imported files', { timeout: process.platform === 'win32' ? 20_000 : 5_000 }, async () => {
+it('preserves unknown staging after complete publication without rewriting imported files', async () => {
   const f = await fixture();
   const preload = join(f.root, 'crash-after-complete.mjs');
   await writeFile(preload, `import { promises as fs } from 'node:fs'; const rename=fs.rename; fs.rename=async(from,to)=>{const complete=to.endsWith('import-core.json')&&(await fs.readFile(from,'utf8')).includes('"phase": "complete"');await rename(from,to);if(complete)process.kill(process.pid,'SIGKILL')};`);

@@ -6,7 +6,7 @@ import { fixtureNode } from './fixture-node';
 import { requestSchema, responseSchema } from '@vonvon/protocol';
 import { fakeService, socketClient, startFixture } from './server-fixture';
 
-const processTestTimeout = process.platform === 'win32' ? 90_000 : 5_000;
+const processTestTimeout = process.platform === 'win32' ? 90_000 : undefined;
 const readinessTimeout = process.platform === 'win32' ? 15_000 : 2_000;
 const requestTimeout = process.platform === 'win32' ? 20_000 : 3_000;
 

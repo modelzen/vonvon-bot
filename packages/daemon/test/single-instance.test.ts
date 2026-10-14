@@ -215,5 +215,5 @@ describe('并发多进程抢锁', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 20_000);
+  });
 });

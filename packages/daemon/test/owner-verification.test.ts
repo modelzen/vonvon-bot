@@ -91,7 +91,7 @@ it.each<Mode>(['wrong-pid', 'missing-pid', 'stopped', 'wrong-credential', 'no-cr
     expect(JSON.parse(await readFile(join(f.home, 'daemon.pid'), 'utf8'))).toMatchObject({ pid });
     await expect.poll(f.peers).toBe(0);
   } finally { await f.close(); }
-}, 15_000);
+});
 
 it('keeps startup ownership busy and refuses stop before readiness', async () => {
   const f = await fixture('ready');

@@ -74,7 +74,7 @@ describe('app-server 进程死亡自愈（QW-6）', () => {
 });
 
 
-describe('app-server shutdown completion', { timeout: 20_000 }, () => {
+describe('app-server shutdown completion', () => {
   it('settles shutdown after a missing executable and preserves supervisor failure', async () => {
     const client = new AppServerClient({ bin: join(dir, 'missing-app-server'), cwd: dir, initializeTimeoutMs: 10_000 });
     await expect(client.connect()).rejects.toThrow();

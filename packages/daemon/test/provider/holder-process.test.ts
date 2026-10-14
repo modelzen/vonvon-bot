@@ -1,19 +1,16 @@
-import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFailed } from 'vitest';
+import { describe, expect, it, onTestFailed } from 'vitest';
 import { TERM_WAIT_MS } from '../../src/provider/engines/engine';
 import { HolderProcessError, specOf, type HolderProcess } from '../../src/provider/process/holder-process';
-import type { HostPlatform } from '../../src/provider/process/ledger';
 import { ProcessHost, Reservation } from '../../src/provider/process/process-host';
 import { alive, until } from './channel-recorder';
-import { compileHolder, type HolderBinary } from './native/holder-driver';
+import { hostFixture, PLATFORM } from './host-fixture';
 
 const NODE = process.execPath;
 const FAKE = fileURLToPath(new URL('./fixtures/fake-child.mjs', import.meta.url));
-const PLATFORM: HostPlatform = process.platform === 'win32' ? 'win32' : 'posix';
 const POSIX = PLATFORM === 'posix';
 /** The whole string environment: node.exe under the Windows supervisor needs more than PATH. */
 const ENV = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
@@ -24,36 +21,14 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const WAIT = POSIX ? 10_000 : 30_000;
 const LIMIT = POSIX ? 30_000 : 120_000;
 
-let binary: HolderBinary | undefined;
-const hosts: ProcessHost[] = [];
-const dirOf = new Map<ProcessHost, string>();
-const groups: number[] = [];
-const holderPids = new Set<number>();
-
-beforeAll(() => { if (POSIX) binary = compileHolder(); });
-afterAll(() => binary?.dispose());
-afterEach(async () => {
-  await Promise.all(hosts.splice(0).map(host => host.closeAll()));
-  for (const pid of groups.splice(0)) { try { process.kill(POSIX ? -pid : pid, 'SIGKILL'); } catch { } }
-  await Promise.all([...holderPids].map(pid => until(() => !alive(pid), 'fixture holder exited before deleting logs', WAIT)));
-  holderPids.clear();
-  for (const dir of dirOf.values()) rmSync(dir, { recursive: true, force: true });
-  dirOf.clear();
-});
-
-function newHost(spawnDeadlineMs?: number): ProcessHost {
-  const dir = mkdtempSync(join(tmpdir(), 'vonvon-holder-process-'));
-  const host = new ProcessHost({ dataDir: dir, daemonBootId: randomUUID(), ...(spawnDeadlineMs === undefined ? {} : { spawnDeadlineMs }), ...(binary ? { platform: 'posix', holderPath: binary.path } : { platform: 'win32' }) });
-  hosts.push(host);
-  dirOf.set(host, dir);
-  return host;
-}
+const fx = hostFixture('vonvon-holder-process-');
+const { newHost, groups } = fx;
 
 type Seen = { exits: Array<[number | null, string | null]>; errors: HolderProcessError[]; order: string[] };
 
 /** What a failed real-process case prints: provider output, facade events, the records, the ledger, and the holder or supervisor logs. */
 function evidence(host: ProcessHost, stdout: string, seen: Seen): string {
-  const dir = dirOf.get(host) ?? '';
+  const dir = fx.dirOf(host);
   const logDir = join(dir, 'holder-logs');
   const logs = existsSync(logDir) ? readdirSync(logDir).map(name => `${name}: ${readFileSync(join(logDir, name), 'utf8')}`) : [];
   const ledger = existsSync(join(dir, 'process-owners.json')) ? readFileSync(join(dir, 'process-owners.json'), 'utf8') : 'absent';
@@ -63,7 +38,6 @@ function evidence(host: ProcessHost, stdout: string, seen: Seen): string {
 /** Attaches `exit` and `error` at once, as the SDK's ProcessTransport does. */
 async function adoptFake(host: ProcessHost, args: string[], options: { signal?: AbortSignal; command?: string; listen?: boolean; armed?: boolean; onStderr?: (chunk: string) => void } = {}) {
   const reservation = await host.reserve('claude', 'session-1');
-  for (const { holderPid } of host.snapshot()) if (holderPid !== undefined) holderPids.add(holderPid);
   if (!(reservation instanceof Reservation)) throw new Error('reservation refused');
   const proc: HolderProcess = reservation.adopt({
     command: options.command ?? NODE, args: [FAKE, ...args],
@@ -157,7 +131,7 @@ describe('HolderProcess on both platforms', () => {
 
   it('a signal already aborted at adopt never launches: the provider never executes and the facade raises cancelled', async () => {
     const host = newHost();
-    const marker = join(dirOf.get(host) as string, 'provider-ran');
+    const marker = join(fx.dirOf(host), 'provider-ran');
     const controller = new AbortController();
     controller.abort();
     const { proc, seen } = await adoptFake(host, ['--marker', marker], { signal: controller.signal, armed: false });
@@ -183,7 +157,6 @@ describe('HolderProcess on both platforms', () => {
   it('adopt once closeAll has started throws instead of returning a process that never settles', async () => {
     const host = newHost();
     const reservation = await host.reserve('claude') as Reservation;
-    for (const { holderPid } of host.snapshot()) if (holderPid !== undefined) holderPids.add(holderPid);
     const closing = host.closeAll();
     expect(() => reservation.adopt({ command: NODE, args: [FAKE], env: ENV, signal: new AbortController().signal })).toThrow(/process host is closing/);
     await closing;
@@ -192,7 +165,7 @@ describe('HolderProcess on both platforms', () => {
   }, LIMIT);
 
   it.skipIf(!POSIX)('the POSIX zero spawn deadline raises holder-not-ready after reservation', async () => {
-    const host = newHost(0);
+    const host = newHost({ spawnDeadlineMs: 0 });
     const { proc, seen } = await adoptFake(host, ['--ignore-term'], { armed: false });
     await expect(proc.ready).rejects.toMatchObject({ code: 'holder-not-ready' });
     expect(seen.errors.map(error => error.code)).toEqual(['holder-not-ready']);
@@ -299,9 +272,8 @@ describe.skipIf(!POSIX)('HolderProcess on POSIX', () => {
 
   it('an attempting write the ledger refuses raises launch-failed carrying the write error, and nothing runs', async () => {
     const host = newHost();
-    const obstruction = join(dirOf.get(host) as string, `process-owners.json.${process.pid}.tmp`);
+    const obstruction = join(fx.dirOf(host), `process-owners.json.${process.pid}.tmp`);
     const reservation = await host.reserve('claude') as Reservation;
-    for (const { holderPid } of host.snapshot()) if (holderPid !== undefined) holderPids.add(holderPid);
     mkdirSync(obstruction);
     const proc = reservation.adopt({ command: NODE, args: [FAKE], env: ENV, signal: new AbortController().signal });
     const errors: HolderProcessError[] = [];

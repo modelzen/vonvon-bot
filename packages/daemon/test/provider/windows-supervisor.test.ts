@@ -5,7 +5,7 @@ import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { HolderChannel } from '../../src/provider/process/holder-channel';
+import { exitOf, type HolderChannel } from '../../src/provider/process/holder-channel';
 import { validateSignalReceipt, type HolderCommand } from '../../src/provider/process/holder-protocol';
 import { windowsCommandLine } from '../../src/provider/process/windows-command-line';
 import { newPipeName, POWERSHELL, spawnWindowsSupervisor, type WindowsSupervisorOptions } from '../../src/provider/process/windows-supervisor';
@@ -22,15 +22,42 @@ const channels: HolderChannel[] = [];
 const helpers: ChildProcess[] = [];
 const dirs: string[] = [];
 
+const EXIT_WAIT_MS = 15_000;
+const KILL_WAIT_MS = 5_000;
+type Exiting = { what: string; pid: number; exited: Promise<unknown> };
+
 afterEach(async () => {
-  for (const channel of channels.splice(0)) {
-    channel.close();
-    const ended = await Promise.race([channel.exited, new Promise(resolve => setTimeout(resolve, 15_000, 'stuck'))]);
-    if (ended === 'stuck') { try { process.kill(channel.holderPid); } catch { /* gone */ } }
+  const failures: unknown[] = [];
+  try {
+    const exiting: Exiting[] = [
+      ...channels.splice(0).map(channel => { channel.close(); return { what: `supervisor ${channel.holderPid}`, pid: channel.holderPid, exited: channel.exited }; }),
+      ...helpers.splice(0).map(helper => { try { helper.kill(); } catch { /* gone */ } return { what: `helper ${helper.pid ?? 0}`, pid: helper.pid ?? 0, exited: exitOf(helper) }; }),
+    ];
+    const stuck = await survivors(exiting, EXIT_WAIT_MS);
+    if (stuck.length > 0) {
+      for (const { pid } of stuck) if (pid > 0) { try { process.kill(pid, 'SIGKILL'); } catch { /* exited meanwhile */ } }
+      const immortal = await survivors(stuck, KILL_WAIT_MS);
+      failures.push(new Error(`${names(stuck)} still running ${EXIT_WAIT_MS} ms after close and were killed by the fixture${immortal.length > 0 ? `; ${names(immortal)} survived SIGKILL` : ''}`));
+    }
+  } finally {
+    for (const dir of dirs.splice(0)) {
+      try { rmSync(dir, { recursive: true, force: true }); }
+      catch (error) { failures.push(error); }
+    }
   }
-  for (const helper of helpers.splice(0)) { try { helper.kill(); } catch { /* gone */ } }
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  if (failures.length > 0) throw failures[0];
 });
+
+const names = (exiting: Exiting[]): string => exiting.map(e => e.what).join(', ');
+
+/** The processes whose exit has not been observed by the shared deadline. */
+async function survivors(exiting: Exiting[], timeoutMs: number): Promise<Exiting[]> {
+  let timer: NodeJS.Timeout | undefined;
+  const expired = new Promise<'expired'>(resolve => { timer = setTimeout(resolve, timeoutMs, 'expired'); });
+  const left = await Promise.all(exiting.map(e => Promise.race([e.exited.then(() => undefined), expired.then(() => e)])));
+  clearTimeout(timer);
+  return left.filter((e): e is Exiting => e !== undefined);
+}
 
 function tempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'vonvon-supervisor-test-'));
