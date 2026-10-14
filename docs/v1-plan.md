@@ -203,13 +203,14 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 
 | 状态 | 编号 | 切片 | 内容 | 约行数 | 依赖 | 风险 | Mac 检查 |
 |---|---|---|---|---|---|---|---|
-| 进行中 | s01 | v1 计划、改名和第一版权限表 | 建这份计划；扫码预填名、群欢迎卡和提示里残留的 bridge 名字改成 Vonvon Bot 和 vonvon 命令（3.12）；`im:message:readonly` 进必需权限，`include_bot` 和 `self_manage` 进可选组和一键授权链接（3.11）；product.md 开头的修改规则改成本文 4.2 | 800 | — | — | 无（预填名在 M1 验收时看） |
-| [ ] | s02 | 打包版自带 npm、找得到 Homebrew 装的 Codex、Claude SDK 锁版本 | app 资源里带 npm，桌面端起 daemon 时补 PATH，托管安装用自带的 npm；catalog 写死 SDK 0.3.296，下载和"更新"都装它，devDependency 改成精确版本（3.11） | 420 | — | 子进程、macOS 原生 | 从 Finder 打开打包版：找得到 Homebrew 或 npm 装的 codex，下载的 Claude SDK 是 0.3.296 且用的是自带 npm，托管安装 Codex 能跑完 |
+| [x] | s01 | v1 计划、改名和第一版权限表 | 建这份计划；扫码预填名、群欢迎卡和提示里残留的 bridge 名字改成 Vonvon Bot 和 vonvon 命令（3.12）；`im:message:readonly` 进必需权限，`include_bot` 和 `self_manage` 进可选组和一键授权链接（3.11）；product.md 开头的修改规则改成本文 4.2 | 800 | — | — | 无（预填名在 M1 验收时看） |
+| 进行中 | s02 | 打包版自带 npm、找得到 Homebrew 装的 Codex、Claude SDK 锁版本 | app 资源里带 npm 11.20.0，下载 Claude SDK 和 `installCodex` 用它，由 daemon 自己的 Node 执行；桌面端起 daemon 时补 PATH；catalog 写死 SDK 0.3.296，下载和"更新"都装它，devDependency 改成精确版本（3.11） | 420 | — | 子进程、macOS 原生 | 从 Finder 打开打包版：找得到 Homebrew 或 npm 装的 codex；下载的 Claude SDK 是 0.3.296，日志里用的是 app 自带的 npm；"安装托管副本"用 Homebrew 的 npm 能装完 Codex |
 
 开工要点：
 - s01：兼容标识不动：旧目录、`FEISHU_CODEX_BRIDGE`、`CLAUDE_CODE_ENTRYPOINT`、hook 正则、旧服务标签。不申请 `im:message.group_msg.include_bot:read`。补拉因为缺权限失败时，记一条带权限名的结构化日志；今天没有现成的诊断去处，诊断页上显示缺的权限在 s19 做。
 - s01 没改的旧名字：私聊控制台（`D/card/dm-cards.ts`）里的，s51a 到 s51c 整体删掉；没注册的 `doctor`、`bot`、`update` 命令文件（`D/cli/commands/`）里的，走不到，以后要接上这些命令时先改文案。
-- s02：补 PATH 的函数放在 daemon 里，s07 写服务定义时复用；不跑登录 shell，免得卡在用户的交互配置上。M1 的 app 从 Finder 打开，不补 PATH 就找不到 Codex。
+- s02：补 PATH 的函数放在 daemon 里（`D/platform/tool-path.ts`），s07 写服务定义时复用；不跑登录 shell，免得卡在用户的交互配置上。M1 的 app 从 Finder 打开，不补 PATH 就找不到 Codex。`locate.ts` 不另加候选目录：补了 PATH 以后 `which` 就找得到，加了反而让"找不到 Codex"的测试随机器上有没有 Homebrew 的 codex 变。
+- s02：自带的 npm 只给下载 Claude SDK 和 `installCodex` 用，daemon 按自己所在的位置找它（`D/platform/npm.ts`），不靠环境变量。本机环境页的"安装托管副本"仍用 PATH 上的 npm：npm 11.19 起默认不跑依赖的安装脚本，claude-code 和 lark-cli 都靠 postinstall；托管副本自己也要本机有 `node` 才能跑，没装 Node 的 Mac 用自带的 npm 也装不成。
 
 ### M2 首次运行清单和开机自动运行
 
@@ -223,11 +224,15 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 | [ ] | s08 | 桌面端的"登录电脑时启动"和清单里的这一步 | 桌面端调打包的 CLI 装卸服务；清单加"登录电脑时自动运行 bot（推荐）"，跳过就起分离 daemon 并提示；删桌面端的 Windows 代码；Linux 上不显示"登录时启动"开关；本文第 10 节写卸载步骤（3.10） | 1000 | s07、s04 | 子进程、macOS 原生、错误路径 | 真实窗口里：开关状态和 `launchctl print` 一致，退出 app 后 bot 在线，app 挪走再挪回能恢复，换新版后 daemon 跑新版本 |
 
 开工要点：
+- s03：nvm 装的 codex 从 Finder 打开时，PATH 里没有那个 Node 版本的目录，`#!/usr/bin/env node` 起不来。判断 Codex 时一并处理：起 codex 子进程时，PATH 补上 codex 所在的目录。
 - s03：Codex 的最低版本先定成 vonvon 现在用的 app-server 协议能跑的最低版本，验证过的版本和托管安装锁定的 0.156.1 一致；e05 做完后在 s39 抬高。Claude 登录先用 SDK 自带的运行时查，查不了退回 `claude auth status`，再看有没有 `ANTHROPIC_API_KEY`。
+- s04：没装 Node 的 Mac 上托管副本装不了也跑不了，Codex 那一步引导装 Codex.app 或用 Homebrew 装。用户的 npm 是 11.19 以上时，托管安装 claude-code 和 lark-cli 会跳过它们的 postinstall，开工时实测。
 - s04：写一句"企业租户里新权限可能要管理员审核"（e13）。卡片回调没有只读接口可查，这一步请主人手动勾上。"登录电脑时自动运行"由 s08 加，"从 bridge 导入"由 s63 加。
 - s05：删 `D/cli/index.ts:15` 白名单里的 `__win-relaunch` 和 `:57` 的命令本体。`D/service/control.ts:91` 正则里的 `__win-relaunch` 是识别 bridge 的兼容标识，保留。
 - s06：开工时先量，超过 1300 行就把 #287 的修复和测试单独成片（s06a、s06b）。合入后在已关闭的 #285 下补一条评论，写明代码去了哪里，再关闭 #287。
 - s07、s08：参考 #110 拆分表的第 13、14 块和它的 `login-item.ts`，去掉 Windows 部分。
+- s07：服务定义里的 PATH 用 s02 的 `withToolDirectories` 补全。自带的 npm 由 daemon 自己找，服务定义里不用写 `VONVON_NPM_CLI`。
+- s07：POSIX 上的互斥锁是 `127.0.0.1` 上按数据目录哈希出来的端口（20000 到 49999），和 Linux 的临时端口重叠。#295 的 CI 撞过一次（`host-service-shutdown` 测试报 busy），开工时看要不要改成 Unix 域套接字。
 - s07：`D/admin/host.ts:194` 的 `resolveCliBinPath` 还指向 `bin/feishu-codex-bridge.mjs`，包里只有 `bin/vonvon.mjs`（`D/service/common.ts` 的同名函数是对的）。查清 `host.ts:210` 那条路径还用不用，用就改成调 service/common 的。
 
 ### M3 群里的上下文
@@ -490,6 +495,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 - 写网页和桌面端界面时用 frontend-design。
 - 网页界面在 JP-VPS 上用 playwright 无头打开，截各种状态看。
 - 新 worktree 跑 typecheck 前，先 build `@vonvon/protocol` 和 `@vonvon/client`，不然找不到它们的 dist。
+- JP-VPS 上的 npm 11.19 默认不跑依赖的安装脚本，`npm ci` 后 electron 的二进制不在。要在 JP-VPS 上打 Linux 目录包（`electron-builder --dir --linux`）验证打包结果时，先跑 `node node_modules/electron/install.js`。
 - 行数可能超过 1500 的片（s05、s06、s51a 到 s51c、s59），开工后先用 `git diff --stat` 量。
 
 ## 10. 记录

@@ -148,7 +148,8 @@ describe('shared backend prefix mutation ownership', () => {
     expect(children.map(child => child.pkg)).toEqual(['fixture-a@1.0.0']);
     await finish(children[0]!); expect((await first).ok).toBe(true);
     await eventually(() => expect(children).toHaveLength(2));
-    expect(children[1]?.pkg).toBe('fixture-b@latest');
+    // 有 pin 的后端，更新也装 pin。
+    expect(children[1]?.pkg).toBe('fixture-b@1.0.0');
     await finish(children[1]!); expect((await second).ok).toBe(true);
     expect(await remove).toMatchObject({ ok: true });
     expect(existsSync(join(paths.backendsDir, 'node_modules/fixture-b/package.json'))).toBe(false);
@@ -167,7 +168,7 @@ describe('shared backend prefix mutation ownership', () => {
     expect(children.map(child => child.pkg)).toEqual(['fixture-a@1.0.0']);
     await finish(children[0]!); await first.operation.done;
     await eventually(() => expect(children).toHaveLength(2));
-    expect(children[1]?.pkg).toBe('fixture-a@latest');
+    expect(children[1]?.pkg).toBe('fixture-a@1.0.0');
     await finish(children[1]!); await update.operation.done;
   });
 

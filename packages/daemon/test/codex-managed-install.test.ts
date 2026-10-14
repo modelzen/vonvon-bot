@@ -148,7 +148,7 @@ describe('managed Codex installation', () => {
     await expect(install()).rejects.toThrow('CODEX_BIN');
     expect(resolveCodexBin()).toBe(process.execPath);
     vi.stubEnv('CODEX_BIN', ''); vi.stubEnv('VONVON_NPM_CLI', '');
-    await expect(install()).rejects.toThrow('可信 npm');
+    await expect(install()).rejects.toThrow('可信的 npm');
     vi.stubEnv('VONVON_NPM_CLI', npm);
   });
 });

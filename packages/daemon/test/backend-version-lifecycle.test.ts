@@ -102,7 +102,8 @@ it('keeps the real environment backendVersion RPC pending with its npm view chil
   const service = createAdminService();
   const jobs = new Jobs({ service, changed() {}, toolsSettled() {} });
   let settled = false;
-  const request = environmentRpc(service, jobs, { id: 'version', open: true, event() {} }, { type: 'backendVersion', id: 'claude-agent' }).then(reply => {
+  // claude-agent 锁了版本、不查 npm，所以用没锁版本的 codex 条目走 npm view。
+  const request = environmentRpc(service, jobs, { id: 'version', open: true, event() {} }, { type: 'backendVersion', id: 'codex-appserver' }).then(reply => {
     settled = true;
     return reply;
   });
@@ -111,13 +112,13 @@ it('keeps the real environment backendVersion RPC pending with its npm view chil
     expect(processControl.spawn).toHaveBeenCalledOnce();
     expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
     expect(settled).toBe(false);
-    expect(logger.info).toHaveBeenCalledExactlyOnceWith('backend-version', 'term_sent', { pkg: '@anthropic-ai/claude-agent-sdk', pid: 76547 });
+    expect(logger.info).toHaveBeenCalledExactlyOnceWith('backend-version', 'term_sent', { pkg: 'codex', pid: 76547 });
     expect(logger.info).not.toHaveBeenCalledWith('backend-queue', 'reserved', expect.anything());
   } finally {
     child.emit('close', 0, null);
     await jobs.close();
   }
-  expect(await request).toMatchObject({ kind: 'read', value: { kind: 'backendVersion', id: 'claude-agent', latest: null, hasUpdate: false } });
+  expect(await request).toMatchObject({ kind: 'read', value: { kind: 'backendVersion', id: 'codex-appserver', latest: null, hasUpdate: false } });
 });
 
 it('returns the parsed version after a successful close', async () => {
@@ -125,7 +126,7 @@ it('returns the parsed version after a successful close', async () => {
   const done = latestNpmVersion('@example/backend@1.0.0');
   expect(processControl.spawn).toHaveBeenCalledWith(
     'npm', ['view', '@example/backend', 'version', '--no-fund', '--no-audit'],
-    { stdio: ['ignore', 'pipe', 'ignore'] },
+    { stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env } },
   );
   stdout.write('9.8.7\n');
   child.emit('close', 0, null);

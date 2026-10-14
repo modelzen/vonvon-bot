@@ -2,6 +2,7 @@ import { mkdir, rm, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
+import { npmInvocation } from '../platform/npm';
 import { spawnProcess } from '../platform/spawn';
 import { paths } from '../config/paths';
 import { log } from '../core/logger';
@@ -15,16 +16,15 @@ import { fixNativeHelperPerms } from './native-helpers';
  * design/backend-catalog-ondemand.md §2.2 方案A）。流程：
  *   ① 确保 backendsDir 有 package.json（npm `--prefix` 目录必须有 package.json
  *      才不向上回溯查找——实验 D；首次写一个最小 private 包等价 `npm init`）。
- *   ② spawn `npm install <pkg> --prefix backendsDir --include=optional`（cross-spawn，
- *      Windows `.cmd` shim 安全；--include=optional 拉平台二进制——实验 F）。
+ *   ② spawn `npm install <pkg> --prefix backendsDir --include=optional`（--include=optional
+ *      拉平台二进制——实验 F）。npm 用 {@link npmInvocation}：桌面应用自带的 npm 由本进程的
+ *      Node 执行，没装 Node 的 Mac 也能装；npm 安装版用 PATH 上的 npm。
  *      stdout/stderr 逐块流给 onProgress（Web SSE / DM 卡轮询的进度源）。
  *
  * 可取消：传 AbortSignal，abort 时 kill npm 子进程并清半装子目录回滚。
  * 限纯 JS / 自带 prebuild 二进制的包（catalog 的 npm-ondemand 标注保证）——不触发
  * 本机原生编译，所以无需 build 工具链。
  */
-
-const NPM = 'npm';
 
 let mutationTail: Promise<void> = Promise.resolve();
 let queuePosition = 0;
@@ -44,8 +44,9 @@ export async function latestNpmVersion(pkg: string, timeoutMs = 8000): Promise<s
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawnProcess>;
     try {
-      child = spawnProcess(NPM, ['view', bare, 'version', '--no-fund', '--no-audit'], {
-        stdio: ['ignore', 'pipe', 'ignore'],
+      const npm = npmInvocation();
+      child = spawnProcess(npm.command, [...npm.args, 'view', bare, 'version', '--no-fund', '--no-audit'], {
+        stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, ...npm.env },
       });
     } catch {
       resolve(null);
@@ -119,13 +120,15 @@ async function ensureBackendsDir(): Promise<void> {
  */
 export function buildInstallCommand(
   pkg: string,
-  opts: { prefix?: string; cacheDir?: string } = {},
-): { command: string; args: string[] } {
+  opts: { prefix?: string; cacheDir?: string; npm?: ReturnType<typeof npmInvocation> } = {},
+): { command: string; args: string[]; env: NodeJS.ProcessEnv } {
   const prefix = opts.prefix ?? paths.backendsDir;
   const cacheDir = opts.cacheDir ?? paths.npmCacheDir;
+  const npm = opts.npm ?? npmInvocation();
   return {
-    command: NPM,
+    command: npm.command,
     args: [
+      ...npm.args,
       'install',
       pkg,
       '--prefix',
@@ -137,6 +140,7 @@ export function buildInstallCommand(
       '--cache',
       cacheDir,
     ],
+    env: npm.env,
   };
 }
 
@@ -181,13 +185,14 @@ async function installInTurn(
     return { ok: false, code: null, aborted: true, tail: '安装已取消' };
   }
 
-  const { command, args } = buildInstallCommand(pkg);
-  log.info('agent', 'backend-install-start', { pkg });
+  const npm = npmInvocation();
+  const { command, args, env } = buildInstallCommand(pkg, { npm });
+  log.info('agent', 'backend-install-start', { pkg, npm: npm.args[0] ?? 'PATH' });
 
   const result = await new Promise<InstallResult>((resolve) => {
     let child;
     try {
-      child = spawnProcess(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      child = spawnProcess(command, args, { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env } });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       resolve({ ok: false, code: null, aborted: false, tail: `spawn npm 失败：${msg}` });

@@ -867,8 +867,8 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
           tail: `「${entry.displayName}」不支持一键下载。手动安装：${entry.dep.installCmd ?? entry.dep.detectHint}`,
         };
       }
-      // 更新 = 装 @latest（无视 catalog 的 version pin，取 npm 最新）；普通下载用 pin（有的话）。
-      const spec = opts?.update ? 'latest' : entry.dep.version;
+      // 有 pin 的（Claude Agent SDK）下载和更新都装 pin，不装 latest；没 pin 的，更新装 latest。
+      const spec = entry.dep.version ?? (opts?.update ? 'latest' : undefined);
       const pkg = spec ? `${entry.dep.pkg}@${spec}` : entry.dep.pkg!;
       const verb = opts?.update ? '🔄 更新' : '⬇️ 下载';
       // install/update 是 daemon 注入态能力（owns runtime）；只读预览无注入 → 501 引导起 daemon。
@@ -910,6 +910,9 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       const entry = catalogById(id);
       if (!entry?.dep.pkg) return { installed: null, latest: null, hasUpdate: false };
       const installed = installedBackendVersion(entry.dep.pkg);
+      // 有 pin 时目标就是 pin：装的版本和它不同（更新或更旧）都提示更新，更新会装回 pin。
+      const pinned = entry.dep.version;
+      if (pinned) return { installed, latest: pinned, hasUpdate: !!installed && installed !== pinned };
       const latest = await latestNpmVersion(entry.dep.pkg).catch(() => null);
       const hasUpdate = !!installed && !!latest && cmpSemver(latest, installed) > 0;
       return { installed, latest, hasUpdate };

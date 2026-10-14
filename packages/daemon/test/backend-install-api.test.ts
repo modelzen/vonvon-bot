@@ -81,10 +81,11 @@ vi.mock('../src/agent', () => ({
   effectiveDefaultBackend: async () => 'codex-appserver',
   installBackendDep: vi.fn(),
   isBackendInstalledInUserDir: () => false,
-  installedBackendVersion: () => null,
-  latestNpmVersion: async () => null,
+  installedBackendVersion: vi.fn(() => null),
+  latestNpmVersion: vi.fn(async () => null),
 }));
 
+import { installedBackendVersion, latestNpmVersion } from '../src/agent';
 import { createAdminService, NotWiredYetError } from '../src/admin/service';
 
 afterEach(() => vi.clearAllMocks());
@@ -157,6 +158,14 @@ describe('installBackend · installer 委托 + 守门', () => {
     expect(installer).toHaveBeenCalledWith('fake-bin-cli', undefined, undefined, { binName: 'fake-bin-cli' });
   });
 
+  it('更新：有 pin 的仍装 pin，没 pin 的装 latest', async () => {
+    const installer = vi.fn(async () => ({ ok: true as const, code: 0, aborted: false, tail: 'done' }));
+    const svc = createAdminService({ installBackend: installer });
+    await svc.installBackend('fake-lib', undefined, undefined, { update: true });
+    await svc.installBackend('fake-bin', undefined, undefined, { update: true });
+    expect(installer.mock.calls.map((call) => (call as unknown[])[0])).toEqual(['@example/fake-lib@0.3.175', 'fake-bin-cli@latest']);
+  });
+
   it('非 installable 后端（external-cli codex）→ {ok:false} 给手动装法，不调 installer', async () => {
     const installer = vi.fn();
     const svc = createAdminService({ installBackend: installer });
@@ -180,5 +189,24 @@ describe('installBackend · installer 委托 + 守门', () => {
     await expect(svc.installBackend('fake-lib')).rejects.toBeInstanceOf(NotWiredYetError);
     // bin 类同样是 installable（npm-ondemand bin 类）→ 同样走 501 引导起 daemon
     await expect(svc.installBackend('fake-bin')).rejects.toBeInstanceOf(NotWiredYetError);
+  });
+});
+
+describe('backendVersion · 锁定版本', () => {
+  it('有 pin 时以 pin 为目标，不查 npm；装的不是 pin 就提示更新', async () => {
+    const svc = createAdminService();
+    vi.mocked(installedBackendVersion).mockReturnValueOnce('0.3.300');
+    expect(await svc.backendVersion('fake-lib')).toEqual({ installed: '0.3.300', latest: '0.3.175', hasUpdate: true });
+    vi.mocked(installedBackendVersion).mockReturnValueOnce('0.3.175');
+    expect(await svc.backendVersion('fake-lib')).toEqual({ installed: '0.3.175', latest: '0.3.175', hasUpdate: false });
+    expect(await svc.backendVersion('fake-lib')).toEqual({ installed: null, latest: '0.3.175', hasUpdate: false });
+    expect(latestNpmVersion).not.toHaveBeenCalled();
+  });
+
+  it('没 pin 时照旧查 npm 上的最新版', async () => {
+    const svc = createAdminService();
+    vi.mocked(installedBackendVersion).mockReturnValueOnce('1.0.0');
+    vi.mocked(latestNpmVersion).mockResolvedValueOnce('1.1.0');
+    expect(await svc.backendVersion('fake-bin')).toEqual({ installed: '1.0.0', latest: '1.1.0', hasUpdate: true });
   });
 });
