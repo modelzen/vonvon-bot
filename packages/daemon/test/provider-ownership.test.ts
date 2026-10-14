@@ -434,6 +434,31 @@ it('refuses a message that needs a new agent while admission is closed, and keep
   expect(run.consumed).toHaveLength(2);
 });
 
+it('a slow admission lets follow-ups queue behind the reservation, and its refusal drops them with the resend note', async () => {
+  const admitted = deferred<ReturnType<typeof ownedWorkUnverified> | undefined>();
+  admission.admit.mockReturnValue(admitted.promise);
+  const o = setup();
+  await o.onMessage(message('first'));
+  await o.onMessage(message('second'));
+  await o.onMessage(message('third'));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(admission.admit).toHaveBeenCalledOnce();
+  admitted.resolve(ownedWorkUnverified());
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fake.backend.resumeThread).not.toHaveBeenCalled();
+  expect(fake.send).toHaveBeenCalledWith('chat', { markdown: `❌ ${ownedWorkUnverified().message}\n\n⚠️ 2 条排队消息未执行，请重发。` }, expect.objectContaining({ replyTo: 'msg-' + (seq - 2) }));
+});
+
+it('refuses a new topic while admission is closed: no thread starts and the group gets the refusal', async () => {
+  fake.project.mockImplementation(async () => ({ name: 'test', chatId: 'chat', cwd: '/test', groupMode: 'multi' }));
+  admission.admit.mockResolvedValue(ownedWorkUnverified());
+  const o = setup();
+  await o.onMessage({ ...message('new topic'), threadId: undefined });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fake.backend.startThread).not.toHaveBeenCalled();
+  expect(fake.send).toHaveBeenCalledWith('chat', { markdown: `❌ ${ownedWorkUnverified().message}` }, { replyTo: 'msg-' + seq, replyInThread: false });
+});
+
 async function activeOrchestrator() {
   const { owner, fixture } = born();
   const run = thread();
