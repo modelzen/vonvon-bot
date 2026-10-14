@@ -4,7 +4,6 @@ import { bridgeVersion } from '../core/version';
 import { paths } from '../config/paths';
 import { enterDataAccess, type DataLease } from '../config/data-access';
 import { observeShutdown, type ShutdownControl } from '../host/lifecycle';
-import { SERVICE_UNAVAILABLE } from '../host/service';
 
 const program = new Command().name('vonvon').description('Vonvon Bot daemon').version(bridgeVersion());
 let lease: DataLease | undefined;
@@ -12,7 +11,7 @@ let control: ShutdownControl | undefined;
 program.hook('preAction', async (_command, action) => {
   if (action.parent?.name() === 'service' || action.name() === '__daemon-control') return;
   if (action.name() === 'run') control = observeShutdown(Boolean(action.opts().parentControl));
-  if (action.name() === 'open' || action.name() === 'status' || action.name() === 'logs' || action.name() === '__restart-after-exit' || action.name() === '__win-relaunch') return;
+  if (action.name() === 'open' || action.name() === 'status' || action.name() === 'logs' || action.name() === '__restart-after-exit') return;
   await mkdir(paths.appDir, { recursive: true, mode: 0o700 });
   lease = await enterDataAccess(paths.appDir);
 });
@@ -53,9 +52,6 @@ service.command('install').description('Install and start the OS service').actio
 });
 service.command('uninstall').description('Stop and remove the OS service').action(async () => {
   await (await import('./commands/service')).runServiceCommand('uninstall');
-});
-program.command('__win-relaunch <requestPath>', { hidden: true }).action(() => {
-  throw new Error(SERVICE_UNAVAILABLE);
 });
 program.command('__daemon-control <action>', { hidden: true }).action(async (action: string) => {
   await (await import('./commands/daemon-control')).runDaemonControl(action);

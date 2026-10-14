@@ -219,8 +219,9 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 |---|---|---|---|---|---|---|---|
 | [ ] | s03 | Codex 版本检查和 Claude 登录检测 | Codex 定最低版本和验证过的版本，状态分够用、太旧、比验证过的新；Claude 登录分已登录、未登录、无法确认；本机环境页显示（3.11） | 380 | — | 子进程、错误路径、macOS 原生 | Codex.app 自带和 npm 装的 CLI 版本都判断对；Claude 登录检测和真实跑一轮一致，退出登录后显示未登录 |
 | [ ] | s04 | 首次运行清单 | 桌面端和网页共用的清单：扫码、开权限、长连接、事件订阅、发布、Codex 和 Claude；每步轮询，失败给原因和按钮（3.1 第 4 条） | 650 | s01、s03 | 错误路径 | 无（JP-VPS 上无头看各状态） |
-| [ ] | s05 | 删掉 daemon 里的 Windows 服务代码 | 删 Windows 服务实现、三份测试、服务代码里的 win32 分支和 `__win-relaunch`；没有用户可见变化，理由见本文第 6 节 | 1370 | — | — | 无 |
-| [ ] | s06 | 注册服务后只由服务管理器拉起 daemon | 从 #285 搬启动路由（约 120 行源码加测试）：拿锁前先读注册，`daemon start` 改请服务管理器启动；修 #287（3.10） | 1000 | s05 | 子进程、并发、关闭清理、错误路径 | 已注册服务时 launchd 拉起的多余进程退出 0、不反复重启；持锁进程被 kill -9、PID 被复用后服务仍会重试 |
+| [x] | s05a | 删掉 daemon 里的 Windows 服务实现 | 删 `windows.ts`、`win-startup.ts`、三份 Windows 服务测试和 `__win-relaunch` 命令及其两份测试；没有用户可见变化，理由见本文第 6 节 | 1370 | — | — | 无 |
+| [ ] | s05b | 删掉服务定义和注册里的 win32 分支 | 删 `identity.ts`、`definitions.ts`、`registration.ts` 里的 win32 分支和 Windows 注册测试，以及桌面端跟着要删的 Run 键读取；没有用户可见变化，理由见本文第 6 节 | 520 | s05a | — | 无 |
+| [ ] | s06 | 注册服务后只由服务管理器拉起 daemon | 从 #285 搬启动路由（约 120 行源码加测试）：拿锁前先读注册，`daemon start` 改请服务管理器启动；修 #287（3.10） | 1000 | s05b | 子进程、并发、关闭清理、错误路径 | 已注册服务时 launchd 拉起的多余进程退出 0、不反复重启；持锁进程被 kill -9、PID 被复用后服务仍会重试 |
 | [ ] | s07 | vonvon service install、uninstall、status | darwin 用 launchd、linux 用 systemd；装服务前先排空自己起的分离 daemon；快照和 RPC 读真实状态（3.10） | 700 | s06、s02、e06 | 子进程、错误路径、关闭清理、macOS 原生 | 打包版执行 install：plist 写入并起来，`daemon stop` 后不再拉起，注销再登录会起来，没有 Dock 图标，已有分离 daemon 时马上接管 |
 | [ ] | s08 | 桌面端的"登录电脑时启动"和清单里的这一步 | 桌面端调打包的 CLI 装卸服务；清单加"登录电脑时自动运行 bot（推荐）"，跳过就起分离 daemon 并提示；删桌面端的 Windows 代码；Linux 上不显示"登录时启动"开关；本文第 10 节写卸载步骤（3.10） | 1000 | s07、s04 | 子进程、macOS 原生、错误路径 | 真实窗口里：开关状态和 `launchctl print` 一致，退出 app 后 bot 在线，app 挪走再挪回能恢复，换新版后 daemon 跑新版本 |
 
@@ -229,7 +230,9 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 - s03：Codex 的最低版本先定成 vonvon 现在用的 app-server 协议能跑的最低版本，验证过的版本和托管安装锁定的 0.156.1 一致；e05 做完后在 s39 抬高。Claude 登录先用 SDK 自带的运行时查，查不了退回 `claude auth status`，再看有没有 `ANTHROPIC_API_KEY`。
 - s04：没装 Node 的 Mac 上托管副本装不了也跑不了，Codex 那一步引导装 Codex.app 或用 Homebrew 装。用户的 npm 是 11.19 以上时，托管安装 claude-code 和 lark-cli 会跳过它们的 postinstall，开工时实测。
 - s04：写一句"企业租户里新权限可能要管理员审核"（e13）。卡片回调没有只读接口可查，这一步请主人手动勾上。"登录电脑时自动运行"由 s08 加，"从 bridge 导入"由 s63 加。
-- s05：删 `D/cli/index.ts:15` 白名单里的 `__win-relaunch` 和 `:57` 的命令本体。`D/service/control.ts:91` 正则里的 `__win-relaunch` 是识别 bridge 的兼容标识，保留。
+- s05：开工时量出约 1,890 行，超过上限，拆成 s05a 和 s05b。
+- s05a：删 `D/cli/index.ts:15` 白名单里的 `__win-relaunch` 和 `:57` 的命令本体。`D/service/control.ts:91` 正则里的 `__win-relaunch` 是识别 bridge 的兼容标识，保留。
+- s05b：删了 `WindowsRunObservation` 和 Run 键常量后，桌面端 `daemon-dependencies.ts` 的 `parseWindowsRunQuery`、`observeWindowsRun` 和 `windows-native.test.ts` 里的 Run 注册测试编译不过，一起删，不留到 s08。桌面端在 win32 上读注册时报"不支持的平台"。
 - s06：开工时先量，超过 1300 行就把 #287 的修复和测试单独成片（s06a、s06b）。合入后在已关闭的 #285 下补一条评论，写明代码去了哪里，再关闭 #287。
 - s07、s08：参考 #110 拆分表的第 13、14 块和它的 `login-item.ts`，去掉 Windows 部分。
 - s07：服务定义里的 PATH 用 s02 的 `withToolDirectories` 补全。自带的 npm 由 daemon 自己找，服务定义里不用写 `VONVON_NPM_CLI`。
@@ -458,12 +461,12 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 
 第一版不做 Windows（product.md 第 7 节），不写新的 Windows 专属代码，CI 不跑 Windows（#290）。已有的代码要删，但不为 Windows 单独铺开改动，分三类。
 
-**一、专门开一片来删：s05**（约 1,370 行，没有用户可见的变化）
+**一、专门开两片来删：s05a、s05b**（约 1,890 行，没有用户可见的变化）
 - 要删的：`D/service/windows.ts`、`win-startup.ts` 和三份 Windows 服务测试；`definitions.ts`、`identity.ts`、`registration.ts` 里的 win32 分支；`D/cli/index.ts:15` 白名单里的 `__win-relaunch` 和 `:57` 的命令本体。`D/service/control.ts:91` 正则里的 `__win-relaunch` 是识别 bridge 的兼容标识，保留。
 - 理由：这些代码没有调用方，而 s06、s07 要改的正是这几个文件。先删，后台服务那两片就只剩 macOS 和 Linux 的逻辑，审查更集中，以后也少维护约 1,300 行。
 
 **二、跟着本来就要改这些文件的切片一起删**
-- s08：桌面端每次启动读注册表的 `parseWindowsRunQuery`、`observeWindowsRun`；`cli-registration.ts` 的 Windows PATH 注册；`windows-native.test.ts`；electron-builder 的 win nsis 和 linux AppImage 目标。issue #288 按 product.md 3.10 以"第一版不做 Windows"关闭。
+- s08：`cli-registration.ts` 的 Windows PATH 注册；`windows-native.test.ts`；electron-builder 的 win nsis 和 linux AppImage 目标。issue #288 按 product.md 3.10 以"第一版不做 Windows"关闭。
 - s20a：`open.ts` 的 `cmd /c start`；协议平台枚举里的 windows，以及界面上的"这台 Windows 电脑"。
 - s20b：Codex 只读、读写档的 win32 分支；`codex-appserver/windows-job.ts`、它的两处引用和两份测试。
 - s51a：私聊菜单里的"安装桌面版 · Windows x64"按钮。
@@ -512,7 +515,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 - 网页界面在 JP-VPS 上用 playwright 无头打开，截各种状态看。
 - 新 worktree 跑 typecheck 前，先 build `@vonvon/protocol` 和 `@vonvon/client`，不然找不到它们的 dist。
 - JP-VPS 上的 npm 11.19 默认不跑依赖的安装脚本，`npm ci` 后 electron 的二进制不在。要在 JP-VPS 上打 Linux 目录包（`electron-builder --dir --linux`）验证打包结果时，先跑 `node node_modules/electron/install.js`。Mac 上打包也缺过这个二进制，原因没查，见第 7 节。
-- 行数可能超过 1500 的片（s05、s06、s51a 到 s51c、s59），开工后先用 `git diff --stat` 量。
+- 行数可能超过 1500 的片（s06、s51a 到 s51c、s59），开工后先用 `git diff --stat` 量。
 
 ## 10. 记录
 
