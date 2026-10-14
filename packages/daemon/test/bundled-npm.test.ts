@@ -36,10 +36,16 @@ describe('bundled npm', () => {
     expect(bundledNpmCli({})).toBeUndefined();
   });
 
-  it('prefers an absolute VONVON_NPM_CLI and ignores a relative one', async () => {
-    const daemon = join(await resources(), 'daemon');
-    expect(bundledNpmCli({ VONVON_NPM_CLI: '/opt/npm/bin/npm-cli.js' }, daemon)).toBe('/opt/npm/bin/npm-cli.js');
-    expect(bundledNpmCli({ VONVON_NPM_CLI: 'npm-cli.js' }, daemon)).toBeUndefined();
+  it('prefers VONVON_NPM_CLI only when it is an absolute path to a file', async () => {
+    const root = await resources();
+    const daemon = join(root, 'daemon');
+    const bundled = join(root, 'npm', 'bin', 'npm-cli.js');
+    const override = join(root, 'other-npm-cli.js');
+    await writeFile(override, '');
+    expect(bundledNpmCli({ VONVON_NPM_CLI: override }, daemon)).toBe(override);
+    expect(bundledNpmCli({ VONVON_NPM_CLI: 'npm-cli.js' }, daemon)).toBe(bundled);
+    expect(bundledNpmCli({ VONVON_NPM_CLI: join(root, 'missing-npm-cli.js') }, daemon)).toBe(bundled);
+    expect(bundledNpmCli({ VONVON_NPM_CLI: root }, daemon)).toBe(bundled);
   });
 
   it('runs a trusted CLI with this Node in Node mode, otherwise npm from PATH', () => {

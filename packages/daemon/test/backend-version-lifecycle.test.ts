@@ -1,5 +1,6 @@
 import { ChildProcess } from 'node:child_process';
 import { PassThrough } from 'node:stream';
+import { fileURLToPath } from 'node:url';
 import { afterEach, expect, it, vi } from 'vitest';
 
 const processControl = vi.hoisted(() => ({ spawn: vi.fn() }));
@@ -131,6 +132,22 @@ it('returns the parsed version after a successful close', async () => {
   stdout.write('9.8.7\n');
   child.emit('close', 0, null);
   expect(await done).toBe('9.8.7');
+});
+
+it('asks a trusted npm-cli.js with this Node in Node mode', async () => {
+  const cli = fileURLToPath(import.meta.url);
+  vi.stubEnv('VONVON_NPM_CLI', cli);
+  try {
+    const { child, stdout } = heldNpm(76548);
+    const done = latestNpmVersion('@example/backend');
+    expect(processControl.spawn).toHaveBeenCalledWith(
+      process.execPath, [cli, 'view', '@example/backend', 'version', '--no-fund', '--no-audit'],
+      { stdio: ['ignore', 'pipe', 'ignore'], env: expect.objectContaining({ ELECTRON_RUN_AS_NODE: '1', npm_config_update_notifier: 'false' }) },
+    );
+    stdout.write('9.8.7\n');
+    child.emit('close', 0, null);
+    expect(await done).toBe('9.8.7');
+  } finally { vi.unstubAllEnvs(); }
 });
 
 it('returns null after a nonzero npm close', async () => {

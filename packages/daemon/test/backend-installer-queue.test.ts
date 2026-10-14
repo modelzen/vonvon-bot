@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAdminService } from '../src/admin/service';
 import { paths } from '../src/config/paths';
@@ -14,13 +15,13 @@ import { Jobs } from '../src/server/jobs';
 import { environmentRpc } from '../src/server/rpc/environment';
 
 const controls = vi.hoisted(() => ({
-  spawn: (_args: string[]): EventEmitter => { throw new Error('fixture not initialized'); },
+  spawn: (_args: string[], _command?: string, _options?: { env?: NodeJS.ProcessEnv }): EventEmitter => { throw new Error('fixture not initialized'); },
   prepare: undefined as undefined | (() => Promise<void>),
   rollback: undefined as undefined | (() => Promise<void>),
   repair: undefined as undefined | (() => Promise<void>),
   preparations: 0,
 }));
-vi.mock('../src/platform/spawn', () => ({ spawnProcess: (_command: string, args: string[]) => controls.spawn(args) }));
+vi.mock('../src/platform/spawn', () => ({ spawnProcess: (command: string, args: string[], options?: { env?: NodeJS.ProcessEnv }) => controls.spawn(args, command, options) }));
 vi.mock('../src/core/logger', () => ({ log: { info() {}, warn() {}, fail() {} } }));
 vi.mock('../src/agent/native-helpers', () => ({ fixNativeHelperPerms: async () => { await controls.repair?.(); } }));
 vi.mock('node:fs/promises', async importOriginal => {
@@ -86,12 +87,13 @@ beforeEach(async () => {
   automaticClose = false;
   controls.preparations = 0;
   controls.spawn = args => {
-    const child = new HeldChild(args[1] ?? 'unknown'); children.push(child);
+    const child = new HeldChild(args[args.indexOf('install') + 1] ?? 'unknown'); children.push(child);
     if (automaticClose) setImmediate(() => child.emit('close', 1));
     return child;
   };
 });
 afterEach(async () => {
+  vi.unstubAllEnvs();
   automaticClose = true;
   controls.prepare = undefined; controls.rollback = undefined; controls.repair = undefined;
   releases.splice(0).forEach(release => release());
@@ -102,6 +104,23 @@ afterEach(async () => {
   Object.assign(paths, previous);
   await rm(home, { recursive: true, force: true });
   expect(existsSync(home)).toBe(false);
+});
+
+describe('bundled npm', () => {
+  it('runs a trusted npm-cli.js with this Node in Node mode', async () => {
+    const cli = fileURLToPath(import.meta.url);
+    vi.stubEnv('VONVON_NPM_CLI', cli);
+    const seen: Array<{ command?: string; args: string[]; env?: NodeJS.ProcessEnv }> = [];
+    const spawn = controls.spawn;
+    controls.spawn = (args, command, options) => { seen.push({ command, args, env: options?.env }); return spawn(args); };
+    const install = own(installBackendDep('fixture-a@1.0.0'));
+    await eventually(() => expect(children).toHaveLength(1));
+    expect(seen[0]?.command).toBe(process.execPath);
+    expect(seen[0]?.args.slice(0, 3)).toEqual([cli, 'install', 'fixture-a@1.0.0']);
+    expect(seen[0]?.env).toMatchObject({ ELECTRON_RUN_AS_NODE: '1', npm_config_update_notifier: 'false' });
+    await finish(children[0]!);
+    expect((await install).ok).toBe(true);
+  });
 });
 
 describe('shared backend prefix mutation ownership', () => {

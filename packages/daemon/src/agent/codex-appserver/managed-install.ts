@@ -48,7 +48,7 @@ export async function runSetupChild(command: string, args: string[], options: { 
 export async function installManagedCodex(signal: AbortSignal): Promise<void> {
   if (process.env.CODEX_BIN) throw new Error('当前使用显式 CODEX_BIN，请先移除此覆盖再安装托管 Codex');
   const npmCli = bundledNpmCli();
-  if (!npmCli) throw new Error('找不到可信的 npm：桌面应用自带的 npm 不在，也没有设置 VONVON_NPM_CLI');
+  if (!npmCli) throw new Error('找不到可信的 npm：桌面应用自带的 npm 不在，VONVON_NPM_CLI 也没有指向一个文件（要写绝对路径）');
   const npm = await realpath(npmCli);
   if (!(await stat(npm)).isFile()) throw new Error('可信 npm 路径不是文件');
   const parent = await realpath(dirname(paths.appDir));
