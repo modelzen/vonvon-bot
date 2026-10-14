@@ -89,6 +89,15 @@ process-ci、draft 和 final 里的流程说法，凡和 `AGENTS.md` 不一致�
 | [approval-ux](2026-10-14-session-approval-service/approval-ux.md) | Codex 和 Claude 自己的审批模型，v2 今天为什么从不问，权限档怎么换成两家的设置，授权卡、选项卡、确认卡的样子和谁能点 | 换算表的根基没核实：Codex 用 `on-request` 加 vonvon 自定义的沙箱设置时，会不会真的发审批请求 |
 | [service](2026-10-14-session-approval-service/service.md) | 不依赖 Electron 的后台服务：main 上已有的 launchd 和 systemd 代码，崩溃重启和连环崩溃，Linux 只装 daemon，#285 和 #110 怎么处理 | 崩溃私聊依赖"机器人能直接给主人发私聊"，没核实 |
 
+## 2026-10-14 第一版实验 e01、e02
+
+`2026-10-14-v1-spikes/`，基于 `main` 的 `20d5fec`。`docs/v1-plan.md` 第 4 节的两个实验，在 JP-VPS 上用 Claude Agent SDK 0.3.296（自带 CLI 2.1.296）和 haiku 实测。每份末尾有另一个代理（Sonnet）对照原始日志的核实记录。
+
+| 报告 | 内容 | 说明 |
+|---|---|---|
+| [e01-background-tasks](2026-10-14-v1-spikes/e01-background-tasks.md) | `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` 能不能让主回合等子 agent，后台 Bash 会怎样，关闭会话时后台任务会怎样 | 前台子 agent 跑着时按 ⏹ 还没测 |
+| [e02-claude-permissions-sessions](2026-10-14-v1-spikes/e02-claude-permissions-sessions.md) | 三种模式下哪些请求走到 canUseTool，今天的 AskUserQuestion，拒绝，中途改档和 resume，子 agent 的 id，读别的工作目录下的会话，`claudeMdExcludes` | 没带沙箱，沙箱看 e03。第 7 节（claude.ai 连接器和 Claude Code 自己的工具）和第 8 节（会话标题）是顺带发现，没经过核实那一轮 |
+
 ## 补充
 
 codex-desktop 报告写完以后，对照 openai/codex 源码又核实了一次。`codex mcp list` 里的 `cua_repl` 来自内置插件 `unified-computer-use@openai-bundled`，就是原生 Computer Use；显示为 disabled 的 `computer-use` 是旧通道。经 Paseo 调用时，Mac 锁屏会失败（getpaseo/paseo#3346），`full-access` 模式会自动批准打开应用。process 报告里的相关说法和这里一致。
