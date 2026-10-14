@@ -298,9 +298,12 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 
 开工要点：
 - s30：要不要另发一条带 @ 的文字，按 e09 的结果定；结果出来前默认另发。
-- s31：按 e02、e03 的结果决定要不要抬高 SDK 的版本，同时改掉 `permission.ts` 顶部那段注释。
+- s31：e02 用到的字段，s02 锁定的 SDK 0.3.296 里都有，e02 这边不用抬版本；沙箱看 e03。同时改掉 `permission.ts` 顶部那段注释。
+- s31：按 e02 的结果做：所有会话启动时都带 `allowDangerouslySkipPermissions: true`，中途升到完全访问才不用重开会话；resume 时明确传档，档不从记录里恢复；拒绝时不用 `interrupt`，不然原因会丢、这一轮按出错结束；提问的答案放进 `updatedInput.answers`。回调拿不到"这是在联网"的标记，关网时 Bash 联网靠沙箱挡，看 e03。
+- s31：开工前用【需要你决定】问 owner：bot 的会话要不要关掉 claude.ai 连接器，和推送、远程触发、定时任务这类 Claude Code 自己的工具（e02 第 7 节）。建议用内置工具白名单，连接器默认关。
+- s31：顺手修会话标题的读法：`readSessionTitle` 只认记录里 `custom-title` 的条目，不用 `customTitle` 字段，因为它会退回 CLI 自动起的标题（e02 第 8 节）。约 40 行。
 - s32：vonvon 不开计划模式，Codex 的提问实际上不会来。这一片主要是不再回报错，不让回合卡住。
-- s35：e01 证明变量不生效时改做备选：主回答发出后卡片保持打开，写"已回复，还有 N 个在跑"，Claude 接着跑的那一轮写进同一张卡。备选另加约 250 行。
+- s35：e01 测过，变量有效，不做备选。运行卡在这一轮唯一的 result 到达时收尾，子 agent 区用 task_* 消息和 `parent_tool_use_id`（e02 第 4 节）。开工时补测两件事：前台子 agent 跑着时按 ⏹ 多久能停下；设了变量后 Monitor 还能不能用。
 
 ### M7 个性、记忆和多工作区
 
@@ -333,8 +336,10 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 
 开工要点：
 - s44：`~/.codex/AGENTS.md` 能不能按会话不加载，看 e05。关不掉的话，按本文 4.2 第 3 条用【需要你决定】问 owner，比如接受"带上但在指令里声明 bot 的规矩优先"。
+- s44：Claude 一侧按 e02 第 6 节：新建的 bot 用 `claudeMdExcludes`（经 `options.settings` 传）或只给 `settingSources: ['project']`，导入的 bot 照旧。
 - s46：变量名避开 TOKEN、KEY、SECRET，Codex 默认会滤掉含这些词的变量。e04 证明连不上时，按 product.md 第 9 节第 2 项的退路，把同一组命令做成 vonvon 自己的 MCP 工具，这一片照那个做。
 - s48：飞书 skill 的 SKILL.md 随 daemon 包发，每个会话都装。
+- s48：读 Claude 的会话时，把那条会话记下的 cwd 作为 `dir` 传给 `getSessionMessages`，自己滤掉工具步骤、思考块和合成的通知条目；子 agent 的消息不在里面（e02 第 5 节）。
 
 ### M9 私聊
 
@@ -398,8 +403,8 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 
 | 状态 | 编号 | 测什么 | 在哪做 | 怎么测 | 挡住 | 最晚在 |
 |---|---|---|---|---|---|---|
-| [ ] | e01 | 第 1 项：`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` 经 Agent SDK 能不能让主回合等子 agent | JP-VPS | 用 SDK 0.3.296 和已有的 Claude 登录，带和不带这个变量各跑一次：并行起两个 Task 子 agent 加一个后台 Bash，看 result 是不是等子 agent 都结束才来，后台 Bash 是不是被关掉 | s35 | s35 之前 |
-| [ ] | e02 | 第 11、12 项里不要沙箱的部分，第 18 项的 Claude 一半，加上 claudeMdExcludes | JP-VPS | 用记录每次调用的 canUseTool 看哪些请求走到回调；今天 AskUserQuestion 是否被拒；运行中 setPermissionMode 和重开 resume 的差别；agentID 等字段从哪个 SDK 版本有；getSessionMessages 能否读别的 cwd 下的会话；claudeMdExcludes 能否排除 `~/.claude/CLAUDE.md`（不改这个文件） | s31、s44、s48 | s31 之前 |
+| [x] | e01 | 第 1 项：`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` 经 Agent SDK 能不能让主回合等子 agent | JP-VPS | 用 SDK 0.3.296 和已有的 Claude 登录，带和不带这个变量各跑一次：并行起两个 Task 子 agent 加一个后台 Bash，看 result 是不是等子 agent 都结束才来，后台 Bash 是不是被关掉 | s35 | s35 之前 |
+| [x] | e02 | 第 11、12 项里不要沙箱的部分，第 18 项的 Claude 一半，加上 claudeMdExcludes | JP-VPS | 用记录每次调用的 canUseTool 看哪些请求走到回调；今天 AskUserQuestion 是否被拒；运行中 setPermissionMode 和重开 resume 的差别；agentID 等字段从哪个 SDK 版本有；getSessionMessages 能否读别的 cwd 下的会话；claudeMdExcludes 能否排除 `~/.claude/CLAUDE.md`（不改这个文件） | s31、s44、s48 | s31 之前 |
 | [ ] | e03 | 第 11、12 项里要 macOS 沙箱的部分 | Mac | 只读用 default、读写用 acceptEdits，加今天的 Seatbelt 沙箱和记录回调的 canUseTool，看 cwd 外的读写、不在名单里的主机、WebFetch 哪些走到回调；今天的 bypassPermissions 下关网能否 curl 出去、能否写到 /tmp。Mac 上没有 Claude 登录时回"卡住了" | s31、s39 | s31 之前 |
 | [ ] | e04 | 第 2、4 项：沙箱里调 vonvon 命令行，`.git` 只读 | Mac | Codex 只读、读写、关网三种设置下和 Claude 的沙箱里，从 agent 的 shell 连 127.0.0.1 上的测试服务（TCP 和 Unix socket 各一个），看能否连上、能否从环境变量读到令牌；workspace-write 下在 git 目录里 `git commit` 会不会失败 | s37、s39、s46 | s37 之前 |
 | [ ] | e05 | 第 3 项：Codex 会话级配置 | Mac | 用 s03 定的最低版本和当前 Codex.app 各测一次：会话级 mcp_servers、runtimeWorkspaceRoots、skills/extraRoots/set 能不能用，resume 后还在不在，中途能否换 skill 列表；memories 的两个键能否在会话层关掉；`~/.codex/AGENTS.md` 能否按会话不加载。结果决定 Codex 的最低版本，在 s39 写回 s03 的常量 | s37、s39、s44 | s37 之前 |
@@ -412,6 +417,8 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 | [ ] | e12 | 第 9 项：判断的延迟和额度 | Mac | s23 合入后，用 Codex 和 Claude 的订阅各跑 50 次判断，记延迟分布和额度变化（看各自的账户页面），用来定 s25 每群每小时的上限 | s25 | s25 之前 |
 | [ ] | e13 | 第 7 项：企业租户的权限审核 | — | 不单独做，现在没有企业租户。清单里写一句"企业租户里新权限可能要管理员审核"；M11 时 owner 手里有企业租户，就顺手看一次 | — | — |
 | [ ] | e14 | 第 8 项和第 17 项前半 | Mac | 在 M3 的预览版会话里看：Codex 应用和 `claude --resume` 打开 bot 的群会话，看到的和 bot 是否一样，两边同时写会怎样；手动 `/compact` 后摘要里引用行还在不在。只影响说明文字和"最近 5 个活跃话题"那张表 | — | M3 验收时 |
+
+e01、e02 已做完，结果在 `docs/research/2026-10-14-v1-spikes/`。
 
 Mac 上按最晚期限排：e06、e10、e12、e09、e03、e04、e05、e11、e08，一次一个。JP-VPS 上先做 e01、e02，e07 在 M10 之前做。
 
