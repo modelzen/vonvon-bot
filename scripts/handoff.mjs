@@ -59,11 +59,16 @@ export function notifyAction(sessions, pr) {
 
 function parseArgs(argv) {
   const args = { dryRun: false, notifyOnly: false };
+  // A missing value must not swallow the next option: `--quota-wait --dry-run` would otherwise run a real handoff.
+  const value = (i) => {
+    if (argv[i + 1] === undefined || argv[i + 1].startsWith('--')) throw new Error(`${argv[i]} needs a value`);
+    return argv[i + 1];
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === '--to') args.to = argv[++i];
-    else if (arg === '--comment-file') args.commentFile = argv[++i];
-    else if (arg === '--quota-wait') args.quotaWait = argv[++i]?.trim();
+    if (arg === '--to') args.to = value(i++);
+    else if (arg === '--comment-file') args.commentFile = value(i++);
+    else if (arg === '--quota-wait') args.quotaWait = value(i++).trim();
     else if (arg === '--dry-run') args.dryRun = true;
     else if (arg === '--notify-only') args.notifyOnly = true;
     else if (/^\d+$/.test(arg)) args.pr = Number(arg);

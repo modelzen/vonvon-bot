@@ -120,6 +120,20 @@ test('the comment records the handoff count and the quota wait, and a handoff wi
   } finally { f.cleanup(); }
 });
 
+test('an option with a missing value refuses before any external call instead of swallowing the next option', () => {
+  for (const missing of ['--to', '--comment-file', '--quota-wait']) {
+    const f = fixture({ labels: ['owner:claude'], sessions: [] });
+    try {
+      const given = { '--to': ['--to', 'codex'], '--comment-file': ['--comment-file', join(f.dir, 'comment.md')], '--quota-wait': ['--quota-wait', '0'] };
+      const argv = ['7', ...Object.entries(given).flatMap(([flag, pair]) => (flag === missing ? [] : pair)), missing, '--dry-run'];
+      const result = spawnSync('node', [script, ...argv], { cwd: f.dir, encoding: 'utf8', env: { ...process.env, PATH: `${f.dir}:${process.env.PATH}` } });
+      assert.equal(result.status, 1, `${missing}: ${result.stdout}${result.stderr}`);
+      assert.match(result.stderr, new RegExp(`${missing} needs a value`), missing);
+      assert.deepEqual(f.calls(), [], `${missing}: no read, write or notice`);
+    } finally { f.cleanup(); }
+  }
+});
+
 test('--dry-run reads and reports but writes nothing', () => {
   const f = fixture({ labels: ['owner:claude'], sessions: [] });
   try {
