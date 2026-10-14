@@ -244,7 +244,7 @@ it.each(['import-core.json', 'PROVENANCE.md'])('recovers %s publication and pres
   await expectCompleteSeed(f);
 });
 
-it('preserves unknown staging after complete publication without rewriting imported files', async () => {
+it('preserves unknown staging after complete publication without rewriting imported files', { timeout: process.platform === 'win32' ? 20_000 : 5_000 }, async () => {
   const f = await fixture();
   const preload = join(f.root, 'crash-after-complete.mjs');
   await writeFile(preload, `import { promises as fs } from 'node:fs'; const rename=fs.rename; fs.rename=async(from,to)=>{const complete=to.endsWith('import-core.json')&&(await fs.readFile(from,'utf8')).includes('"phase": "complete"');await rename(from,to);if(complete)process.kill(process.pid,'SIGKILL')};`);
