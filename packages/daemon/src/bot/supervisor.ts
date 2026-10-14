@@ -1,6 +1,6 @@
 import { readSingleInstanceHolder } from '../core/single-instance';
 import { botPaths, paths } from '../config/paths';
-import { CHILD_SHUTDOWN_GRACE_MS, closeOwnedProviders, observeShutdown, settleOwnedChild, type ShutdownControl } from '../host/lifecycle';
+import { CHILD_SHUTDOWN_GRACE_MS, closeOwnedProviders, observeShutdown, settleOwnedChild, type OwnedProviders, type ShutdownControl } from '../host/lifecycle';
 import type { ChildProcess } from 'node:child_process';
 import { spawnProcess } from '../platform/spawn';
 import { log } from '../core/logger';
@@ -44,7 +44,7 @@ interface Child {
  * 假死子进程拖住整页——超时按 connection:'unknown' 渲染。 */
 const STATUS_IPC_TIMEOUT_MS = 2_000;
 
-export async function runSupervisor(bots: BotEntry[], options: { control?: ShutdownControl; managed?: boolean; port?: number; onListening?: (listen: string) => Promise<void> } = {}): Promise<void> {
+export async function runSupervisor(bots: BotEntry[], options: { host: OwnedProviders; control?: ShutdownControl; managed?: boolean; port?: number; onListening?: (listen: string) => Promise<void> }): Promise<void> {
   const control = options.control ?? observeShutdown();
   const supervisorStartedAt = Date.now();
   const cliEntry = process.argv[1];
@@ -259,7 +259,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   finally {
     shuttingDown = true;
     for (const child of children.values()) if (child.restartTimer) clearTimeout(child.restartTimer);
-    const cleanup = await Promise.allSettled([closeOwnedProviders(async () => {
+    const cleanup = await Promise.allSettled([closeOwnedProviders(options.host, async () => {
       const drained = await Promise.allSettled([Promise.resolve().then(() => api?.beginDrain())]);
       drained.push(...await Promise.allSettled([...children.values()].map(stopBot)));
       errors.push(...drained.filter(result => result.status === 'rejected').map(result => result.reason));

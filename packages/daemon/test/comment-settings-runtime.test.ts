@@ -5,6 +5,7 @@ import type { AppConfig } from '../src/config/schema';
 import { paths } from '../src/config/paths';
 import { getSession } from '../src/bot/session-store';
 import { createOrchestrator } from '../src/bot/handle-message';
+import { idleHost } from './helpers/idle-host';
 
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
@@ -38,7 +39,7 @@ afterAll(() => rm(paths.appDir, { recursive: true, force: true }));
 it('the next comment applies model changes to the same native session and backend changes to a new session', async () => {
   const codex = backend('codex-appserver'); const claude = backend('claude-agent');
   const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, comments: { backend: 'codex-appserver', model: 'one', effort: 'low' } } };
-  const orchestrator = createOrchestrator({} as never, cfg, paths.appDir);
+  const orchestrator = createOrchestrator({} as never, cfg, paths.appDir, idleHost);
   const event = (replyId: string) => ({ fileType: 'docx', fileToken: 'fixture-doc', commentId: 'comment', replyId, mentionedBot: true, operator: { openId: 'ou_owner' } });
   try {
     await orchestrator.onComment(event('one') as never);

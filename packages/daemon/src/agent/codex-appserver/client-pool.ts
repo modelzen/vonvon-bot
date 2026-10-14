@@ -1,8 +1,20 @@
 import { statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { log } from '../../core/logger';
+import type { ProcessHost } from '../../provider/process/process-host';
 import { AppServerClient, JsonRpcError } from './app-server-client';
 import { resolveCodexBin } from './locate';
+
+let host: ProcessHost | undefined;
+
+export function bindCodexHost(next: ProcessHost): void {
+  host = next;
+}
+
+export function codexHost(): ProcessHost {
+  if (!host) throw new Error('Codex process host is not bound');
+  return host;
+}
 
 /**
  * 常驻 app-server 进程（M-2，依据 research/08 实测）：
@@ -91,7 +103,7 @@ async function acquireUtility(bin: string): Promise<AppServerClient> {
     closeDiscarded(cur.client);
   }
   const create = (async () => {
-    const client = new AppServerClient({ bin, cwd: NEUTRAL_CWD, clientName: 'feishu-codex-bridge-utility' });
+    const client = new AppServerClient({ host: codexHost(), bin, cwd: NEUTRAL_CWD, clientName: 'feishu-codex-bridge-utility' });
     track(client);
     try {
       await withDeadline(client.connect(), CONNECT_TIMEOUT_MS, 'utility connect');
@@ -106,7 +118,7 @@ async function acquireUtility(bin: string): Promise<AppServerClient> {
       for await (const n of client.stream()) void n;
     })();
     utility = { client, bin };
-    log.info('agent', 'utility-up', { pid: client.pid ?? null });
+    log.info('agent', 'utility-up');
     return client;
   })();
   utilityCreating = create.catch(() => undefined);
@@ -199,7 +211,7 @@ export function takeWarmClient(bin: string): AppServerClient | null {
   // 线程，清空——绝不能漏进真实会话的事件流。
   untrack(entry.client);
   entry.client.clearNotifications();
-  log.info('agent', 'prewarm-hit', { pid: entry.client.pid ?? null });
+  log.info('agent', 'prewarm-hit');
   return entry.client;
 }
 
@@ -218,7 +230,7 @@ export function refillWarmPool(): Promise<void> {
     // 指纹在 spawn 之前取——若 spawn 与升级赛跑，取用时的复验自会兜住。
     const fingerprint = binFingerprint(bin);
     // clientName 用默认值：这个进程取走后就是真实会话的进程（compliance log 同名）。
-    const client = new AppServerClient({ bin, cwd: NEUTRAL_CWD });
+    const client = new AppServerClient({ host: codexHost(), bin, cwd: NEUTRAL_CWD });
     track(client);
     try {
       await withDeadline(client.connect(), CONNECT_TIMEOUT_MS, 'prewarm connect');
@@ -235,7 +247,7 @@ export function refillWarmPool(): Promise<void> {
       );
       requireOpen();
       warm = { client, bin, fingerprint };
-      log.info('agent', 'prewarm-ready', { pid: client.pid ?? null });
+      log.info('agent', 'prewarm-ready');
     } catch (err) {
       log.fail('agent', err, { phase: 'prewarm' });
       closeDiscarded(client);

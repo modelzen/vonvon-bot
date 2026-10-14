@@ -1,7 +1,7 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { paths, useBotDir } from '../../config/paths';
+import { botDir, paths, useBotDir } from '../../config/paths';
 import { ensureRegistry, currentBot } from '../../config/bots';
 import { loadConfig } from '../../config/store';
 import { isComplete } from '../../config/schema';
@@ -10,6 +10,7 @@ import { buildEventConfigUrl } from '../../config/scopes';
 import { diagnoseEventSubscription, summarizeEventDiagnosis } from '../../utils/event-diagnosis';
 import { createBackend } from '../../agent';
 import { spawnProcessSync } from '../../platform/spawn';
+import { inspectLedger, type LedgerInspection } from '../../provider/process/process-host';
 
 interface Check {
   name: string;
@@ -82,6 +83,11 @@ export async function runDoctor(): Promise<void> {
     checks.push(await checkEventSubscription());
   }
 
+  for (const dir of ledgerDirs()) {
+    const check = ledgerCheck(await inspectLedger(dir, process.platform === 'win32' ? 'win32' : 'posix'));
+    if (check) checks.push(check);
+  }
+
   // render
   console.log('\n🩺 feishu-codex-bridge 自检\n');
   for (const c of checks) {
@@ -90,6 +96,21 @@ export async function runDoctor(): Promise<void> {
   const failed = checks.filter((c) => !c.ok).length;
   console.log(`\n${failed === 0 ? '全部通过 ✓' : `${failed} 项需处理`}\n`);
   process.exitCode = failed === 0 ? 0 : 1;
+}
+
+function ledgerDirs(): string[] {
+  const root = join(paths.appDir, 'bots');
+  const bots = existsSync(root) ? readdirSync(root, { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => botDir(entry.name)) : [];
+  return [paths.appDir, ...bots];
+}
+
+function ledgerCheck(inspection: LedgerInspection): Check | undefined {
+  const name = 'agent 进程记录';
+  if (inspection.kind === 'missing') return undefined;
+  if (inspection.kind === 'unreadable') return { name, ok: false, detail: `无法读取 ${inspection.path}：${inspection.error}。确认相关进程已结束后移走此文件。` };
+  const lines = inspection.records.map(r => `\n      ${r.id} ${r.providerId} ${r.stage} holder ${r.holderPid ?? '-'} ${r.ownership}`);
+  const ok = inspection.records.every(r => r.ownership !== 'unknown');
+  return { name, ok, detail: `${inspection.path}，${inspection.records.length} 条${lines.join('')}` };
 }
 
 /** 当前机器人的事件订阅诊断（useBotDir 已切到该 bot 的配置目录）。 */

@@ -44,6 +44,9 @@ daemon.command('logs').description('Read recent daemon logs').option('--tail <li
     if (!Number.isInteger(options.tail) || options.tail < 1) throw new Error('Invalid tail count.');
     await (await import('./commands/daemon')).runLogs(options.tail);
   });
+program.command('doctor').description('Check this host').action(async () => {
+  await (await import('./commands/doctor')).runDoctor();
+});
 program.command('open').description('Open the local web UI').action(async () => {
   await (await import('./commands/open')).runOpen();
 });

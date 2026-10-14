@@ -1,12 +1,13 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppServerClient } from '../src/agent/codex-appserver/app-server-client';
 import { CodexAppServerBackend } from '../src/agent/codex-appserver/backend';
-import { shutdownResidentClients } from '../src/agent/codex-appserver/client-pool';
-import { CodexProcessCleanupError } from '../src/platform/owned-process';
+import { bindCodexHost, shutdownResidentClients } from '../src/agent/codex-appserver/client-pool';
+import type { ProcessHost } from '../src/provider/process/process-host';
 import { writeNodeExecutable } from './helpers/node-executable';
+import { processHosts } from './helpers/process-hosts';
 
 // 一个最小的假 codex app-server：应答 initialize / thread/start，收到 turn/start
 // 即自杀且不回包（模拟 app-server 中途崩溃），在所有平台运行真实子进程。
@@ -32,22 +33,31 @@ setInterval(() => {}, 1 << 30); // stay alive until killed
 const dir = mkdtempSync(join(tmpdir(), 'app-server-liveness-'));
 const { bin } = writeNodeExecutable(dir, 'codex', FAKE_SERVER);
 
+const hosts = processHosts();
+let host: ProcessHost;
+beforeAll(() => {
+  hosts.setup();
+  host = hosts.host();
+  bindCodexHost(host);
+});
 afterAll(async () => {
   await shutdownResidentClients();
+  await hosts.teardown();
   rmSync(dir, { recursive: true, force: true });
 });
 
 describe('app-server 进程死亡自愈（QW-6）', () => {
   it('exited flips on child death; pending request rejects, later requests fail fast', async () => {
-    const client = new AppServerClient({ bin, cwd: dir });
+    const client = new AppServerClient({ host, bin, cwd: dir });
     await client.connect();
     expect(client.exited).toBe(false);
 
     // turn/start 让假 server 直接退出且不回包 → exit 处理器拒掉 pending
-    await expect(client.request('turn/start', {})).rejects.toThrow(/app-server exited/);
+    await expect(client.request('turn/start', {})).rejects.toThrow(/app-server exited|JSON-RPC output closed/);
     expect(client.exited).toBe(true);
     // 死后的新请求立即拒绝，而不是写进断管
     await expect(client.request('thread/list')).rejects.toThrow(/closed/);
+    await vi.waitFor(() => expect(host.snapshot()).toEqual([]));
   });
 
   it('thread.isAlive() goes false after the process dies mid-turn', async () => {
@@ -75,17 +85,16 @@ describe('app-server 进程死亡自愈（QW-6）', () => {
 
 
 describe('app-server shutdown completion', { timeout: 20_000 }, () => {
-  it('settles shutdown after a missing executable and preserves supervisor failure', async () => {
-    const client = new AppServerClient({ bin: join(dir, 'missing-app-server'), cwd: dir, initializeTimeoutMs: 10_000 });
+  it('settles a missing executable as a refused launch that leaves no owned record', async () => {
+    const host = hosts.host();
+    const client = new AppServerClient({ host, bin: join(dir, 'missing-app-server'), cwd: dir, initializeTimeoutMs: 10_000 });
     await expect(client.connect()).rejects.toThrow();
-    if (process.platform === 'win32') {
-      expect(client.pid).toBeDefined();
-      await expect(client.close()).rejects.toBeInstanceOf(CodexProcessCleanupError);
-      expect(() => process.kill(client.pid!, 0)).toThrow();
-    } else await expect(client.close()).resolves.toBeUndefined();
+    await expect(client.close()).resolves.toBeUndefined();
+    expect(host.snapshot()).toEqual([]);
+    expect(host.owesWork()).toBe(false);
   });
 
-  it('awaits process death after escalating an ignored SIGTERM', async () => {
+  it('close escalates an ignored SIGTERM and retires the record only once the provider is gone', async () => {
     const fixture = writeNodeExecutable(dir, 'ignores-term', `
       process.on('SIGTERM', () => {});
       require('node:readline').createInterface({input:process.stdin}).on('line', line => {
@@ -93,12 +102,14 @@ describe('app-server shutdown completion', { timeout: 20_000 }, () => {
         if(msg.id)process.stdout.write(JSON.stringify({id:msg.id,result:{}})+'\\n');
       });
     `);
-    const client = new AppServerClient({ bin: fixture.bin, cwd: dir, initializeTimeoutMs: 10_000 });
+    const host = hosts.host();
+    const client = new AppServerClient({ host, bin: fixture.bin, cwd: dir, initializeTimeoutMs: 10_000 });
     await client.connect();
-    const pid = client.pid;
-    if (process.platform === 'win32') await expect(client.close(20)).resolves.toBeUndefined();
-    else await expect(client.close(20)).rejects.toBeInstanceOf(CodexProcessCleanupError);
+    const [record] = host.snapshot();
+    expect(record).toMatchObject({ providerId: 'codex', stage: 'running', ownership: 'bound' });
+    await expect(client.close()).resolves.toBeUndefined();
     expect(client.exited).toBe(true);
-    expect(() => process.kill(pid!, 0)).toThrow();
+    expect(host.snapshot()).toEqual([]);
+    expect(() => process.kill(record!.providerPid!, 0)).toThrow();
   });
 });

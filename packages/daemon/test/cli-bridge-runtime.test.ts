@@ -33,6 +33,7 @@ import { CLI } from '../src/cli-bridge/cards';
 import type { AppConfig } from '../src/config/schema';
 import { saveConfig } from '../src/config/store';
 import { installCliBridgeHooks } from '../src/cli-bridge/hooks';
+import { idleHost } from './helpers/idle-host';
 
 function cfg(enabled: boolean): AppConfig {
   const result: AppConfig = {
@@ -97,7 +98,7 @@ describe('cli bridge runtime settings', () => {
   it('starts the runtime service when Local agents is enabled from settings', async () => {
     const appCfg = cfg(false);
     const bridge = cliBridge();
-    const orchestrator = createOrchestrator(channel(), appCfg, '/repo', bridge);
+    const orchestrator = createOrchestrator(channel(), appCfg, '/repo', idleHost, bridge);
 
     await orchestrator.dispatcher.handle({
       chatId: 'ou_owner',
@@ -114,7 +115,7 @@ describe('cli bridge runtime settings', () => {
   it('stops the runtime service when Local agents is disabled from settings', async () => {
     const appCfg = cfg(true);
     const bridge = cliBridge();
-    const orchestrator = createOrchestrator(channel(), appCfg, '/repo', bridge);
+    const orchestrator = createOrchestrator(channel(), appCfg, '/repo', idleHost, bridge);
 
     await orchestrator.dispatcher.handle({
       chatId: 'ou_owner',
@@ -131,7 +132,7 @@ describe('cli bridge runtime settings', () => {
   it('does not persist enabled=true when starting the runtime service fails', async () => {
     const appCfg = cfg(false);
     const bridge = cliBridge({ start: vi.fn(async () => { throw new Error('bind failed'); }) });
-    const orchestrator = createOrchestrator(channel(), appCfg, '/repo', bridge);
+    const orchestrator = createOrchestrator(channel(), appCfg, '/repo', idleHost, bridge);
 
     await orchestrator.dispatcher.handle({
       chatId: 'ou_owner',
@@ -147,7 +148,7 @@ describe('cli bridge runtime settings', () => {
     vi.mocked(saveConfig).mockRejectedValueOnce(new Error('disk full'));
     const appCfg = cfg(false);
     const bridge = cliBridge();
-    const orchestrator = createOrchestrator(channel(), appCfg, '/repo', bridge);
+    const orchestrator = createOrchestrator(channel(), appCfg, '/repo', idleHost, bridge);
 
     await orchestrator.dispatcher.handle({
       chatId: 'ou_owner',
@@ -164,7 +165,7 @@ describe('cli bridge runtime settings', () => {
   it('serializes rapid on/off transitions so runtime follows the final persisted flag', async () => {
     const appCfg = cfg(false);
     const bridge = cliBridge();
-    const orchestrator = createOrchestrator(channel(), appCfg, '/repo', bridge);
+    const orchestrator = createOrchestrator(channel(), appCfg, '/repo', idleHost, bridge);
     const event = (value: 'on' | 'off') => ({
       chatId: 'ou_owner',
       messageId: 'settings-card',
@@ -185,7 +186,7 @@ describe('cli bridge runtime settings', () => {
 
   it('shows partial hook repair failures in the returned settings card', async () => {
     vi.mocked(installCliBridgeHooks).mockRejectedValueOnce(new Error('fixture readonly hook file'));
-    const orchestrator = createOrchestrator(channel(), cfg(false), '/repo', cliBridge());
+    const orchestrator = createOrchestrator(channel(), cfg(false), '/repo', idleHost, cliBridge());
     await orchestrator.dispatcher.handle({
       chatId: 'ou_owner', messageId: 'repair-settings-card', operator: { openId: 'ou_owner' },
       action: { tag: 'button', value: { a: CLI.repairHooks } },

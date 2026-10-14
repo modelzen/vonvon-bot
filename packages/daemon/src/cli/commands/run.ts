@@ -11,15 +11,19 @@ import { createAdminService } from '../../admin/service';
 import { installBackendDep, uninstallBackendDep } from '../../agent';
 import { performCoreUpdate } from '../../service/update';
 import { startApi } from '../../server/http';
+import { bindCodexHost } from '../../agent/codex-appserver/client-pool';
+import type { ProcessHost } from '../../provider/process/process-host';
 
 interface RunOptions {
+  host: ProcessHost;
   control?: ShutdownControl;
   managed?: boolean;
   port?: number;
   onListening?: (listen: string) => Promise<void>;
 }
 
-export async function runRun(botName?: string, options: RunOptions = {}): Promise<void> {
+export async function runRun(botName: string | undefined, options: RunOptions): Promise<void> {
+  bindCodexHost(options.host);
   const control = options.control ?? observeShutdown();
   const managed = Boolean(options.managed);
   // Explicit selector always runs exactly that one bot inline (this is also how
@@ -35,7 +39,7 @@ export async function runRun(botName?: string, options: RunOptions = {}): Promis
     if (!ready) { process.exitCode = 1; return; }
     registry = await ensureRegistry();
   }
-  await runSupervisor(activeBots(registry), { control, managed, port: options.port, onListening: options.onListening });
+  await runSupervisor(activeBots(registry), { host: options.host, control, managed, port: options.port, onListening: options.onListening });
 }
 
 /** Run a single bot inline in this process. `botName` undefined → the implicit
@@ -70,7 +74,7 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
   let bridge: Awaited<ReturnType<typeof startBridge>> | undefined;
   const errors: unknown[] = [];
   try {
-    const handle = bridge = await startBridge({ cfg, appSecret: secret, fallbackCwd, onConnectionChange: () => {
+    const handle = bridge = await startBridge({ cfg, appSecret: secret, fallbackCwd, host: options.host, onConnectionChange: () => {
       if (process.send) {
         if (process.connected) process.send({ fcb: 'fcb.connection' }, undefined, undefined, (error: Error | null) => { if (error && process.connected) log.fail('run', error, { phase: 'connection-notice' }); });
       }
@@ -143,7 +147,7 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
     await control.waitForRequest();
   } catch (error) { errors.push(error); }
   finally {
-    const cleanup = await Promise.allSettled([closeOwnedProviders(async () => {
+    const cleanup = await Promise.allSettled([closeOwnedProviders(options.host, async () => {
       const drained = await Promise.allSettled([Promise.resolve().then(() => api?.beginDrain())]);
       drained.push(...await Promise.allSettled([Promise.resolve().then(() => bridge?.shutdown())]));
       errors.push(...drained.filter(result => result.status === 'rejected').map(result => result.reason));

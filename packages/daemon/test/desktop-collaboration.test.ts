@@ -9,6 +9,7 @@ import { addProject, getProjectByName, removeProject, updateProject } from '../s
 import { getSession, listSessions, upsertSession } from '../src/bot/session-store';
 import { createOrchestrator } from '../src/bot/handle-message';
 import { parseCollaborationRequest, projectRevision } from '../src/admin/collaboration';
+import { idleHost } from './helpers/idle-host';
 
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
@@ -36,7 +37,7 @@ function backend() {
   fixture.backend = backend;
   return { ...backend, thread };
 }
-function orchestrator(channel: unknown = { send: fixture.send }) { return createOrchestrator(channel as never, cfg, paths.appDir); }
+function orchestrator(channel: unknown = { send: fixture.send }) { return createOrchestrator(channel as never, cfg, paths.appDir, idleHost); }
 beforeEach(async () => {
   await rm(pendingGroupsFile(paths.projectsFile), { force: true });
   await rm(paths.projectsFile, { force: true }); await rm(paths.sessionsFile, { force: true });

@@ -3,12 +3,17 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { CodexProcessCleanupError, OwnedCodexProcess } from '../src/platform/owned-process';
 import { AppServerClient } from '../src/agent/codex-appserver/app-server-client';
 import { runSetupChild } from '../src/agent/codex-appserver/managed-install';
 import { writeNodeExecutable } from './helpers/node-executable';
 import { WindowsCodexJob } from '../src/platform/windows-job';
+import { processHosts } from './helpers/process-hosts';
+
+const hosts = processHosts();
+beforeAll(() => hosts.setup());
+afterAll(() => hosts.teardown());
 
 const roots: string[] = [];
 const cleanups: Array<() => Promise<void>> = [];
@@ -219,7 +224,7 @@ describe('owned Codex process trees', () => {
     expectedCleanupErrors.add(result);
   }, 20_000);
 
-  it.each([false, true])('close reaps inherited pipes after leader already exited=%s', async earlyExit => {
+  it.each([false, true])('hosted close ends a tree whose descendant holds the pipes, after leader already exited=%s', async earlyExit => {
     const f = fixture(true);
     const leaderFile = join(f.root, 'leader.pid');
     const server = writeNodeExecutable(f.root, 'server', `
@@ -231,27 +236,20 @@ describe('owned Codex process trees', () => {
         if(m.id)process.stdout.write(JSON.stringify({id:m.id,result:{}})+'\\n');
       });
     `);
-    const client = new AppServerClient({ bin: server.bin, cwd: f.root, initializeTimeoutMs: 10_000 });
+    const host = hosts.host();
+    const client = new AppServerClient({ host, bin: server.bin, cwd: f.root, initializeTimeoutMs: 10_000 });
     await client.connect();
     const target = await descendant(f.ready);
-    const leader = Number(readFileSync(leaderFile, 'utf8'));
     if (earlyExit) {
-      const leaderProcess = captureProcess(leader);
-      const wrapper = process.platform === 'win32'
-        ? captureProcess(Number(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-          `$ErrorActionPreference='Stop'; $wrappers=@(Get-CimInstance Win32_Process -Filter "ParentProcessId=${client.pid} AND Name='node.exe'"); if ($wrappers.Count -ne 1) { throw "Expected one Node wrapper, found $($wrappers.Count)" }; [Console]::Out.WriteLine($wrappers[0].ProcessId)`], { encoding: 'utf8', timeout: 15_000 }).trim()))
-        : undefined;
+      const leader = captureProcess(Number(readFileSync(leaderFile, 'utf8')));
       client.notify('exit');
-      await vi.waitFor(() => expect(originalAlive(leaderProcess)).toBe(false), { timeout: 5000 });
-      if (wrapper) await vi.waitFor(() => expect(originalAlive(wrapper)).toBe(false), { timeout: 5000 });
-      expect(originalAlive(target)).toBe(true);
-      if (process.platform !== 'win32') expect(client.exited).toBe(true);
+      await vi.waitFor(() => expect(originalAlive(leader)).toBe(false), { timeout: 5000 });
+      await vi.waitFor(() => expect(client.exited).toBe(true), { timeout: 5000 });
     }
-    const result = await Promise.race([client.close(50).catch(error => error), delay(8000).then(() => 'timeout')]);
-    if (process.platform === 'win32' && !earlyExit) expect(result).toBeUndefined();
-    else expect(result).toBeInstanceOf(CodexProcessCleanupError);
+    const result = await Promise.race([client.close(), delay(8000).then(() => 'timeout')]);
+    expect(result).toBeUndefined();
     expect(originalAlive(target)).toBe(false);
-    expectedCleanupErrors.add(result);
+    expect(host.snapshot()).toEqual([]);
   }, process.platform === 'win32' ? 60_000 : 30_000);
 });
 
