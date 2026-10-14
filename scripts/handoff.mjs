@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Hands a PR from Claude to Codex or back, per AGENTS.md.
 //
-//   node scripts/handoff.mjs <pr> --to codex|claude --comment-file <path> [--dry-run]
+//   node scripts/handoff.mjs <pr> --to codex|claude --comment-file <path> --quota-wait <text> [--dry-run]
 //   node scripts/handoff.mjs <pr> --to codex|claude --notify-only [--dry-run]   resend the notice after a failed one
 //
 // State lives only on GitHub: the comment and the owner: label. Paseo only carries a notice
@@ -38,6 +38,10 @@ const WAIT_SECONDS = 300;
 export const handoffLine = (from, to, sha) => `交接：${from} → ${to}，head \`${sha.slice(0, 7)}\`。`;
 const HANDOFF_LINE = /^交接：\w+ → \w+，head `[0-9a-f]{7}`。$/m;
 
+// The per-PR record the subscription review reads after a week: how often the PR changed hands, and how long it waited on quota.
+export const recordLine = (count, quotaWait) => `本 PR 第 ${count} 次交接，等待额度阻塞：${quotaWait}。`;
+export const handoffCount = (comments) => comments.filter((c) => HANDOFF_LINE.test(c.body)).length + 1;
+
 // The latest handoff comment, if it hands this head from `from` to `to`.
 export function currentHandoff(comments, from, to, sha) {
   const latest = comments.filter((c) => HANDOFF_LINE.test(c.body)).at(-1);
@@ -55,17 +59,24 @@ export function notifyAction(sessions, pr) {
 
 function parseArgs(argv) {
   const args = { dryRun: false, notifyOnly: false };
+  // A missing value must not swallow the next option: `--quota-wait --dry-run` would otherwise run a real handoff.
+  const value = (i) => {
+    if (argv[i + 1] === undefined || argv[i + 1].startsWith('--')) throw new Error(`${argv[i]} needs a value`);
+    return argv[i + 1];
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === '--to') args.to = argv[++i];
-    else if (arg === '--comment-file') args.commentFile = argv[++i];
+    if (arg === '--to') args.to = value(i++);
+    else if (arg === '--comment-file') args.commentFile = value(i++);
+    else if (arg === '--quota-wait') args.quotaWait = value(i++).trim();
     else if (arg === '--dry-run') args.dryRun = true;
     else if (arg === '--notify-only') args.notifyOnly = true;
     else if (/^\d+$/.test(arg)) args.pr = Number(arg);
     else throw new Error(`unknown argument: ${arg}`);
   }
-  if (!args.pr || !SIDES[args.to] || !args.commentFile === !args.notifyOnly) {
-    throw new Error('usage: node scripts/handoff.mjs <pr> --to codex|claude (--comment-file <path> | --notify-only) [--dry-run]');
+  if (!args.pr || !SIDES[args.to] || !args.commentFile === !args.notifyOnly || !args.commentFile !== !args.quotaWait) {
+    throw new Error('usage: node scripts/handoff.mjs <pr> --to codex|claude (--comment-file <path> --quota-wait <text> | --notify-only) [--dry-run]\n'
+      + '--quota-wait names the time this round waited on model quota, for example 0 or "40 分钟，Claude 周限额"');
   }
   return args;
 }
@@ -112,7 +123,7 @@ function sendNotice(pr, to, { kind, id, notice }) {
 const describe = ({ kind, id }) => `${kind}${id ? ` ${id}` : ''}`;
 
 function main(argv) {
-  const { pr, to, commentFile, dryRun, notifyOnly } = parseArgs(argv);
+  const { pr, to, commentFile, quotaWait, dryRun, notifyOnly } = parseArgs(argv);
   const from = to === 'codex' ? 'claude' : 'codex';
 
   const pull = JSON.parse(gh([`repos/${REPO}/pulls/${pr}`]));
@@ -145,7 +156,7 @@ function main(argv) {
   }
   checkLocal(pull.head);
 
-  const body = `${readFileSync(commentFile, 'utf8').trimEnd()}\n\n${handoffLine(from, to, pull.head.sha)}`;
+  const body = `${readFileSync(commentFile, 'utf8').trimEnd()}\n\n${handoffLine(from, to, pull.head.sha)}\n${recordLine(handoffCount(comments), quotaWait)}`;
   if (dryRun) {
     const { notice, ...plan } = planNotice(pr, to, handoff?.html_url ?? '<new comment>');
     console.log(JSON.stringify({ pr, from, to, head: pull.head.sha, reuse: handoff?.html_url ?? null, notify: plan, comment: body }, null, 2));
