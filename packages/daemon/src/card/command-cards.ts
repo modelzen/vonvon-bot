@@ -344,7 +344,7 @@ export function buildWelcomeCard(
   // /context 总在；/compact 仅后端支持时合并进同一行。
   const ctxLine = showCompact ? '· `/context` · `/compact` → 看 / 压缩上下文' : '· `/context` → 看上下文占比';
   const elements: CardElement[] = [
-    md(`👋 **欢迎使用 ${agentName} Bridge** — 本群已绑定一个项目目录，在群里就能驱动本机 ${agentName} 干活。`),
+    md(`👋 **欢迎使用 Vonvon Bot** — 本群已绑定一个项目目录，在群里就能驱动本机 ${agentName} 干活。`),
     hr(),
   ];
   if (kind === 'single') {

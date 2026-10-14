@@ -1,11 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
+import { log } from '../src/core/logger';
 import {
   extractCardText,
   extractMessageText,
   fetchQuotedMessage,
   fetchThreadContext,
   sanitizeContext,
+  scopeDenial,
   weaveQuote,
   weaveSender,
   weaveThreadHistory,
@@ -286,6 +288,83 @@ describe('fetchThreadContext', () => {
     }));
     const out = await fetchThreadContext(fakeChannel(many), 'omt_x', { limit: 3 });
     expect(out.map((m) => m.text)).toEqual(['m7', 'm8', 'm9']);
+  });
+});
+
+// ── 缺权限时的结构化警告 ────────────────────────────────────────────────
+
+/** Feishu's 99991672 body, as the live API returns it when a scope is missing. */
+const SCOPE_DENIED_BODY = {
+  code: 99991672,
+  msg: 'Access denied. One of the following scopes is required: [im:message:readonly, im:message]. 应用尚未开通所需的应用身份权限。',
+  error: { permission_violations: [{ type: 'action_scope_required', subject: 'im:message:readonly' }, { type: 'action_scope_required', subject: 'im:message' }] },
+};
+
+/** A thrown SDK (axios) error carrying the Feishu body in `response.data`. */
+function axiosError(status: number, data: unknown): Error {
+  return Object.assign(new Error(`Request failed with status code ${status}`), { response: { status, data } });
+}
+
+function listChannel(list: () => Promise<unknown>): LarkChannel {
+  return { rawClient: { im: { v1: { message: { list } } } } } as unknown as LarkChannel;
+}
+
+describe('scopeDenial', () => {
+  it('reads the accepted scopes from permission_violations on a thrown SDK error', () => {
+    expect(scopeDenial(axiosError(400, SCOPE_DENIED_BODY))).toEqual({ code: 99991672, accepted: ['im:message:readonly', 'im:message'] });
+  });
+
+  it('falls back to the bracketed list in msg, and works on a returned body', () => {
+    expect(scopeDenial({ code: 99991672, msg: SCOPE_DENIED_BODY.msg })).toEqual({ code: 99991672, accepted: ['im:message:readonly', 'im:message'] });
+    expect(scopeDenial({ code: 99991672, msg: 'Access denied.' })).toEqual({ code: 99991672, accepted: [] });
+  });
+
+  it('ignores every other failure', () => {
+    expect(scopeDenial(new Error('socket hang up'))).toBeUndefined();
+    expect(scopeDenial(axiosError(400, { code: 230002, msg: 'Bot is not in the chat' }))).toBeUndefined();
+    expect(scopeDenial(axiosError(502, '<html>bad gateway</html>'))).toBeUndefined();
+    expect(scopeDenial(undefined)).toBeUndefined();
+  });
+});
+
+describe('fetchThreadContext · 缺权限', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('a thrown 99991672 logs a structured warning naming im:message:readonly, and the turn gets []', async () => {
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+    const out = await fetchThreadContext(listChannel(async () => { throw axiosError(400, SCOPE_DENIED_BODY); }), 'omt_scope');
+    expect(out).toEqual([]);
+    expect(warn).toHaveBeenCalledWith('intake', 'thread-context-failed', {
+      threadId: 'omt_scope',
+      reason: 'missing-scope',
+      scope: 'im:message:readonly',
+      scopeLabel: expect.stringContaining('im:message:readonly'),
+      code: 99991672,
+      accepted: ['im:message:readonly', 'im:message'],
+    });
+  });
+
+  it('a returned non-zero code is a failure too (no silent empty history)', async () => {
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+    const out = await fetchThreadContext(listChannel(async () => ({ code: 99991672, msg: 'Access denied.' })), 'omt_body');
+    expect(out).toEqual([]);
+    expect(warn).toHaveBeenCalledWith('intake', 'thread-context-failed', expect.objectContaining({ reason: 'missing-scope', scope: 'im:message:readonly', code: 99991672 }));
+  });
+
+  it('names the scope Feishu asked for when ours would not satisfy the call', async () => {
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+    await fetchThreadContext(listChannel(async () => { throw axiosError(400, { code: 99991672, msg: 'Access denied. One of the following scopes is required: [im:message.group_msg]' }); }), 'omt_other');
+    expect(warn).toHaveBeenCalledWith('intake', 'thread-context-failed', expect.objectContaining({ scope: 'im:message.group_msg', accepted: ['im:message.group_msg'] }));
+  });
+
+  it('other failures keep the plain error and no scope', async () => {
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+    await fetchThreadContext(listChannel(async () => { throw new Error('socket hang up'); }), 'omt_net');
+    await fetchThreadContext(listChannel(async () => ({ code: 230002, msg: 'Bot is not in the chat' })), 'omt_code');
+    expect(warn).toHaveBeenNthCalledWith(1, 'intake', 'thread-context-failed', { threadId: 'omt_net', err: 'Error: socket hang up' });
+    expect(warn).toHaveBeenNthCalledWith(2, 'intake', 'thread-context-failed', { threadId: 'omt_code', err: 'code=230002 msg=Bot is not in the chat' });
   });
 });
 

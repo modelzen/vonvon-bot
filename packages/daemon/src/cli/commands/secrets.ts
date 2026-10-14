@@ -35,7 +35,7 @@ export async function secretsGet(): Promise<void> {
 export async function secretsSet(id: string): Promise<void> {
   const value = (await readStdin()).trim();
   if (!value) {
-    console.error('无输入：把密钥通过 stdin 传入，如 `echo <secret> | feishu-codex-bridge secrets set <id>`');
+    console.error('无输入：把密钥通过 stdin 传入，如 `echo <secret> | vonvon secrets set <id>`');
     process.exitCode = 1;
     return;
   }

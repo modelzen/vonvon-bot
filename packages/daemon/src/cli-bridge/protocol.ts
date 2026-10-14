@@ -1,5 +1,7 @@
 import type { CliHookMessage, CliHookResponse } from './types';
 
+const DEFAULT_DENY_REASON = 'Denied by Vonvon Bot.';
+
 export function buildHookStdout(msg: CliHookMessage, response: CliHookResponse): string {
   if (response.stdout !== undefined) return response.stdout;
   if (msg.type === 'post_tool_use') return '{}';
@@ -10,7 +12,7 @@ export function buildHookStdout(msg: CliHookMessage, response: CliHookResponse):
   if (msg.source === 'codex') {
     if (msg.hookEventName === 'PermissionRequest') {
       const decisionObj: Record<string, unknown> = { behavior: decision };
-      if (decision === 'deny') decisionObj.message = response.reason || 'Denied by feishu-codex-bridge.';
+      if (decision === 'deny') decisionObj.message = response.reason || DEFAULT_DENY_REASON;
       return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: decisionObj } });
     }
     if (msg.hookEventName === 'PreToolUse' && decision === 'deny') {
@@ -18,7 +20,7 @@ export function buildHookStdout(msg: CliHookMessage, response: CliHookResponse):
         hookSpecificOutput: {
           hookEventName: 'PreToolUse',
           permissionDecision: 'deny',
-          permissionDecisionReason: response.reason || 'Denied by feishu-codex-bridge.',
+          permissionDecisionReason: response.reason || DEFAULT_DENY_REASON,
         },
       });
     }
@@ -31,7 +33,7 @@ export function buildHookStdout(msg: CliHookMessage, response: CliHookResponse):
     // Claude carries the denial reason in `message` (PermissionResult shape:
     // { behavior:'deny', message, interrupt? }); without it the model sees a bare
     // denial. Mirrors the codex branch above.
-    decisionObj.message = response.reason || 'Denied by feishu-codex-bridge.';
+    decisionObj.message = response.reason || DEFAULT_DENY_REASON;
     if (response.interrupt) decisionObj.interrupt = true;
   }
   return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: decisionObj } });
