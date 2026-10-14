@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { homedir } from 'node:os';
 import type { Registration } from '../src/service/registration';
+import { clearPosixFixtures, registerPosixFixture } from './service-posix-fixture';
 
 const fixture = vi.hoisted(() => ({
   registration: vi.fn<() => Promise<Registration>>(), owner: vi.fn(), acquireMutex: vi.fn(), acquirePidLock: vi.fn(),
@@ -18,7 +19,15 @@ vi.mock('../src/service/win-startup', () => ({ readVonvonRunValue: fixture.runVa
 vi.mock('../src/core/logger', () => ({ log: { info: fixture.info } }));
 vi.mock('../src/service/codex-bin', () => ({ readServiceCodexBin: vi.fn() }));
 vi.mock('../src/cli/commands/run', () => { fixture.importedRun(); return { runRun: fixture.run }; });
-vi.mock('node:fs/promises', async original => ({ ...await original<typeof import('node:fs/promises')>(), realpath: vi.fn(async () => process.platform === 'win32' ? 'C:\\owned\\root' : '/owned/root'), stat: vi.fn(async () => ({ isDirectory: () => true })) }));
+vi.mock('node:fs/promises', async original => {
+  const actual = await original<typeof import('node:fs/promises')>();
+  const { mappedServiceFs } = await import('./service-posix-fixture');
+  return {
+    ...mappedServiceFs(actual),
+    realpath: vi.fn(async () => process.platform === 'win32' ? 'C:\\owned\\root' : '/owned/root'),
+    stat: vi.fn(async () => ({ isDirectory: () => true })),
+  };
+});
 
 import { runHostRuntime } from '../src/host/bootstrap';
 import { resolveServiceRoot } from '../src/service/identity';
@@ -43,7 +52,7 @@ beforeEach(async () => {
   fixture.owner.mockResolvedValue(null);
   fixture.runValue.mockReturnValue({ kind: 'absent' });
 });
-afterEach(() => { vi.mocked(homedir).mockReset(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
+afterEach(() => { clearPosixFixtures(); vi.mocked(homedir).mockReset(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
 function untouched(): void {
   expect(fixture.acquireMutex).not.toHaveBeenCalled(); expect(fixture.acquirePidLock).not.toHaveBeenCalled();
@@ -200,12 +209,13 @@ it('cancels a requested restart when the runner rejects before completing shutdo
 it.each(['success', 'error', 'timeout'] as const)('launchd %s bootstrap composes the actual duplicate pre-lock guard and owner-preserving rollback', async bootstrap => {
   const { mkdtemp, mkdir, open, readFile, writeFile, unlink, rm } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
-  const { join, basename } = await import('node:path');
+  const { join, basename, posix } = await import('node:path');
   const { createLaunchdService } = await import('../src/service/launchd');
   const { renderDefinition } = await import('../src/service/definitions');
   const directory = await mkdtemp(join(tmpdir(), 'vonvon-composed-prelock-'));
   const root = await resolveServiceRoot('/owned/root');
-  const target = { platform: 'darwin' as const, plistPath: join(directory, 'Library/LaunchAgents/com.vonvon.bot.daemon.plist') };
+  const home = registerPosixFixture(directory);
+  const target = { platform: 'darwin' as const, plistPath: posix.join(home, 'Library/LaunchAgents/com.vonvon.bot.daemon.plist') };
   const definition = { root, port: 1234, capturedPath: '/bin', distribution: { kind: 'npm' as const, executable: '/node', entry: '/cli' } };
   const rendered = renderDefinition({ target, ...definition });
   if (rendered.platform !== 'darwin') throw new Error('Expected plist');
@@ -223,10 +233,10 @@ it.each(['success', 'error', 'timeout'] as const)('launchd %s bootstrap composes
     catch (error) { if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return { kind: 'absent' }; throw error; }
   });
   const service = createLaunchdService({ root }, {
-    home: directory, uid: 501, resolveRoot: async () => root,
+    home, uid: 501, resolveRoot: async () => root,
     distribution: async () => ({ kind: 'global-npm', cliPath: '/cli' }), executable: '/node', capturedPath: '/bin',
     readOwner: async () => { observations.push('lock'); return fixture.owner(); }, verifyOwner: async () => {}, stopOwner: stop,
-    open: (path, flags, mode) => open(String(path).startsWith('/owned/root/') ? join(directory, basename(String(path))) : path, flags, mode),
+    open: (path, flags, mode) => open(String(path).replaceAll('\\', '/').startsWith(`${root.replaceAll('\\', '/')}/`) ? join(directory, basename(String(path))) : path, flags, mode),
     unlink: async path => { await unlink(path); observations.length = 0; },
     pause: async () => { throw new Error('Unexpected retained owner wait'); },
     run: async args => {
@@ -277,7 +287,7 @@ it.each(['success', 'error', 'timeout'] as const)('launchd %s bootstrap composes
 it('launchd rollback composes modeled W exit and reused manager PID with actual absent pre-lock exit and O4 refusal', async () => {
   const { mkdtemp, open, readFile, writeFile, unlink, rm } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
-  const { join, basename } = await import('node:path');
+  const { join, basename, posix } = await import('node:path');
   const { createServer } = await import('node:http');
   const { randomUUID } = await import('node:crypto');
   const { machineIdSchema, PROTOCOL_VERSION } = await import('@vonvon/protocol');
@@ -289,7 +299,8 @@ it('launchd rollback composes modeled W exit and reused manager PID with actual 
   const directory = await mkdtemp(join(tmpdir(), 'vonvon-reused-prelock-'));
   vi.stubEnv('VONVON_HOME', directory);
   const root = await resolveServiceRoot('/owned/root');
-  const target = { platform: 'darwin' as const, plistPath: join(directory, 'Library/LaunchAgents/com.vonvon.bot.daemon.plist') };
+  const home = registerPosixFixture(directory);
+  const target = { platform: 'darwin' as const, plistPath: posix.join(home, 'Library/LaunchAgents/com.vonvon.bot.daemon.plist') };
   const definition = { root, port: 1234, capturedPath: '/bin', distribution: { kind: 'npm' as const, executable: '/node', entry: '/cli' } };
   const rendered = renderDefinition({ target, ...definition });
   if (rendered.platform !== 'darwin') throw new Error('Expected plist');
@@ -336,7 +347,7 @@ it('launchd rollback composes modeled W exit and reused manager PID with actual 
     await stopVerifiedOwner(directory, lock);
   });
   const service = createLaunchdService({ root }, {
-    home: directory, uid: 501, resolveRoot: async () => root,
+    home, uid: 501, resolveRoot: async () => root,
     distribution: async () => ({ kind: 'global-npm', cliPath: '/cli' }), executable: '/node', capturedPath: '/bin',
     readOwner: async () => {
       if (!published) return null;
@@ -345,7 +356,7 @@ it('launchd rollback composes modeled W exit and reused manager PID with actual 
       return stale;
     },
     verifyOwner: async () => { throw new Error('Readiness failed'); }, stopOwner: stop,
-    open: (path, flags, mode) => open(String(path).startsWith('/owned/root/') ? join(directory, basename(String(path))) : path, flags, mode),
+    open: (path, flags, mode) => open(String(path).replaceAll('\\', '/').startsWith(`${root.replaceAll('\\', '/')}/`) ? join(directory, basename(String(path))) : path, flags, mode),
     unlink: async path => { await unlink(path); withdrawn = true; events.push('withdraw'); },
     now: () => clock, pause: async ms => { clock += ms; }, freePort: async () => 1234,
     run: async args => {

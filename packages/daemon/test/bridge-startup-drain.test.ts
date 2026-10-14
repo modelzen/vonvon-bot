@@ -4,8 +4,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { AppConfig } from '../src/config/schema';
+import type { WindowsRunObservation } from '../src/service/registration';
 
 const fixture = vi.hoisted(() => ({
+  windowsRun: vi.fn<() => WindowsRunObservation>(() => ({ kind: 'absent' })),
   connect: vi.fn(),
   disconnect: vi.fn(async () => {}),
   membership: vi.fn(),
@@ -15,6 +17,8 @@ const fixture = vi.hoisted(() => ({
   registryClose: vi.fn(async () => {}),
   logFail: vi.fn(),
 }));
+
+vi.mock('../src/service/win-startup', () => ({ readVonvonRunValue: fixture.windowsRun }));
 
 vi.mock('@larksuiteoapi/node-sdk', async original => ({
   ...await original<object>(),
@@ -85,6 +89,9 @@ beforeEach(async () => {
   vi.resetModules();
   const root = await mkdtemp(join(tmpdir(), 'vonvon-startup-drain-'));
   vi.stubEnv('HOME', join(root, 'home'));
+  vi.stubEnv('USERPROFILE', join(root, 'home'));
+  vi.stubEnv('XDG_CONFIG_HOME', join(root, 'home', '.config'));
+  vi.stubEnv('VONVON_SERVICE', '');
   vi.stubEnv('VONVON_HOME', join(root, 'vonvon'));
   vi.stubEnv('CODEX_HOME', join(root, 'codex'));
   vi.stubEnv('CODEX_BIN', join(root, 'unavailable-codex'));
@@ -94,6 +101,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  fixture.windowsRun.mockClear();
   fixture.connect.mockReset();
   fixture.membership.mockReset();
   fixture.disconnect.mockClear();
@@ -139,6 +147,7 @@ it.each([false, true])('keeps host and Bot ownership through accepted startup ve
   try {
     await vi.waitFor(() => expect(fixture.membership).toHaveBeenCalledOnce());
     await Promise.resolve();
+    if (process.platform === 'win32') expect(fixture.windowsRun).toHaveBeenCalledOnce();
     expect(running.state()).toBe('pending');
     expect(fixture.lockHeld).toBe(true);
     expect(existsSync(join(paths.appDir, 'daemon.pid'))).toBe(true);
