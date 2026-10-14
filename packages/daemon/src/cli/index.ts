@@ -107,5 +107,5 @@ program.parseAsync(process.argv).then(() => {
   if (control) process.exit(process.exitCode ?? 0);
 }).catch((err) => {
   console.error(err instanceof Error ? err.message : String(err));
-  process.exit(1);
+  process.exit(control && process.env.VONVON_SERVICE && !process.send && (process.exitCode === 0 || process.exitCode === 75) ? 0 : 1);
 });

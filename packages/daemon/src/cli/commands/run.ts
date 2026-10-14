@@ -148,6 +148,7 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
       drained.push(...await Promise.allSettled([Promise.resolve().then(() => bridge?.shutdown())]));
       errors.push(...drained.filter(result => result.status === 'rejected').map(result => result.reason));
     })]);
+    if (control.requested && (errors.length || cleanup.some(result => result.status === 'rejected'))) control.requestStop();
     cleanup.push(...await Promise.allSettled([control.completeShutdown(() => api?.release() ?? Promise.resolve())]));
     const failures = cleanup.filter((result) => result.status === 'rejected');
     errors.push(...failures.map(failure => failure.reason));

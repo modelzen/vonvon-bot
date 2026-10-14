@@ -45,6 +45,7 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
   } catch (error) { errors.push(error); }
   finally {
     try { await host?.closeAll(); } catch (error) { errors.push(error); }
+    if (errors.length && control.requested) control.requestStop();
     try { await control.completeShutdown(async () => {}); }
     catch (error) { errors.push(error); }
     control.dispose();
@@ -56,6 +57,7 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
         try { await closeMutex(lock); } catch (error) { errors.push(error); }
       }
     }
+    if (errors.length && process.exitCode === 75 && process.env.VONVON_SERVICE && !process.send) process.exitCode = 0;
     if (errors.length === 1) throw errors[0];
     if (errors.length) throw new AggregateError(errors, 'Host shutdown failed.');
   }

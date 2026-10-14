@@ -55,7 +55,7 @@ export function hostFixture(prefix: string): HostFixture {
   function newHost(options: { dir?: string; spawnDeadlineMs?: number } = {}): ProcessHost {
     const dir = options.dir ?? dataDir();
     const host = new ProcessHost({
-      dataDir: dir, daemonBootId: randomUUID(), spawnDeadlineMs: options.spawnDeadlineMs ?? 20_000,
+      dataDir: dir, daemonBootId: randomUUID(), ...(options.spawnDeadlineMs === undefined ? {} : { spawnDeadlineMs: options.spawnDeadlineMs }),
       ...(binary ? { platform: 'posix', holderPath: binary.path } : { platform: 'win32' }),
     });
     const reserve = host.reserve.bind(host);

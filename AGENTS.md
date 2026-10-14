@@ -11,7 +11,7 @@
 
 ## 一个 PR 的流程
 
-1. Claude 从 `main` 开 `claude/<任务>` 分支，开 PR 并打 `owner:claude`。实现、Linux 验证、push，PR 描述写清改动、Linux 证据和验收要点，然后用 `node scripts/handoff.mjs <PR> --to codex --comment-file <文件>` 交接。
+1. Claude 从 `main` 开 `claude/<任务>` 分支，开 PR 并打 `owner:claude`。实现、Linux 验证、push，PR 描述写清改动、Linux 证据和验收要点，然后用 `node scripts/handoff.mjs <PR> --to codex --comment-file <文件> --quota-wait <时长>` 交接。
 2. Codex pull，审查和验证。通过则打 `frozen`、跑完整 CI、做 Shipping 检查、合入。发现问题，在验证范围内就修并记录；超出范围就把复现命令、输出和平台写进评论文件，用 `scripts/handoff.mjs --to claude` 交回。
 3. Claude 修复后只回答该评论，push，用 `scripts/handoff.mjs --to codex` 交回。Codex 只重验改动涉及的项，冻结时再跑一次完整链。
 4. 合入后两台机器各自删除该分支的 worktree。
@@ -31,7 +31,7 @@
 ## 工具和同步
 
 - 两台机器的 Paseo daemon 通过 Tailscale 互通。JP-VPS 为 `100.121.117.46:6767`，provider `claude`，项目 `/home/ops/vonvon/vonvon-bot`。Mac 为 `100.127.134.58:6767`，provider `codex`。不通过 SSH 执行 `claude -p`。
-- 交接只用 `scripts/handoff.mjs`。它检查 PR 标签归自己、工作区干净且已 push，写交接评论，先加对方的 owner 标签再去掉自己的，最后经对方的 Paseo daemon 通知对方。状态只在 PR 里，Paseo 消息只含 PR 号和评论链接，丢失或重复都不影响。
+- 交接只用 `scripts/handoff.mjs`。它检查 PR 标签归自己、工作区干净且已 push，写交接评论并在末尾记下本 PR 第几次交接和本轮等待额度的时长（`--quota-wait`，没有等待写 0），先加对方的 owner 标签再去掉自己的，最后经对方的 Paseo daemon 通知对方。状态只在 PR 里，Paseo 消息只含 PR 号和评论链接，丢失或重复都不影响。
 - 会话按标题 `PR #<号>` 查找，不维护映射。对方机器上没有该会话时，脚本按对方的模型表新建一个（Codex 用 Sol，Claude 用 Opus、effort medium），这是唯一允许跨机创建会话的情况。对方会话正在运行时，脚本等它空闲后再发，因为 `paseo send` 默认会打断对方当前的回合。
 - 各台机器只通过 Git 同步，各自运行 npm ci，不拷贝 node_modules、dist、build、release。
 - 用户已授权连续执行后续版本。每个 PR 通过验证、独立审查和准确 head 的 Shipping 检查后，Codex 受控合入并继续，不在版本边界等用户确认。只有需要用户决策、补充信息或用户操作时才暂停并说明原因。

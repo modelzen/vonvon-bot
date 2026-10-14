@@ -1107,3 +1107,332 @@ it.each(['absent', 'identity', 'listen'] as const)('launchd resumed owner_unprov
     expect((await readRegistration({ target: f.target, requestedRoot: f.root })).kind).toBe('absent');
   }, { readOwner });
 });
+
+async function composedOwner() {
+  const child = spawn(process.execPath, ['-e', "process.stdout.write('ready');process.stdin.once('data',()=>process.exit(0))"], { stdio: ['pipe', 'pipe', 'ignore'] });
+  await new Promise<void>((resolve, reject) => { child.once('error', reject); child.stdout.once('data', () => resolve()); });
+  if (!child.pid) throw new Error('Missing composed fixture child');
+  const pid = child.pid;
+  const credential = 'cd'.repeat(32);
+  const server = createServer();
+  const state = {
+    status: 0, stops: 0, rejectEndpoint: false, loseReply: false, draining: false, work: ['accepted-work'],
+    onStatus: async () => {}, onStop: async () => {},
+  };
+  const sockets = createSocketServer({
+    server, credential,
+    info: { type: 'serverInfo', machineId: machineIdSchema.parse(randomUUID()), version: 'test', protocolVersion: PROTOCOL_VERSION },
+    detached: () => undefined,
+    request: async (peer, request) => {
+      if (request.method === 'admin' && request.payload.type === 'daemonStatus') {
+        state.status++;
+        await state.onStatus();
+        peer.send({ type: 'response', id: request.id, method: 'admin', payload: { kind: 'daemonStatus', status: {
+          installed: false, running: true, selfHosted: true, version: 'test', supported: true, pid: state.rejectEndpoint ? pid + 1 : pid,
+        } } });
+      } else if (request.method === 'machine' && request.payload.type === 'stopHost') {
+        state.stops++; state.draining = true;
+        await state.onStop();
+        if (!state.loseReply) peer.send({ type: 'response', id: request.id, method: 'machine', payload: { type: 'done', message: 'Draining' } });
+      } else throw new Error('Unexpected composed owner request');
+    },
+  });
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Missing composed fixture port');
+  const old: PidLockInfo = { pid, startedAt: new Date().toISOString(), listen: `127.0.0.1:${address.port}` };
+  const replacement = { ...old, startedAt: new Date(Date.now() + 1).toISOString() };
+  const finish = async () => {
+    if (child.exitCode !== null) return;
+    await new Promise<void>(resolve => { child.once('exit', () => resolve()); child.stdin.end('drain complete'); });
+    expect(child.exitCode).toBe(0); expect(child.signalCode).toBeNull();
+    state.work = []; state.draining = false;
+  };
+  return { state, old, replacement, credential, child, finish, close: async () => {
+    await sockets.close();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    await finish();
+  } };
+}
+
+it.each(['before-O1', 'stale-lock endpoint mismatch', 'O2-O3', 'O3-O4'] as const)('launchd rollback composes PID generation reuse at %s with real O4', async boundary => {
+  const endpoint = await composedOwner();
+  const generations = new Map<number, { generation: number; manager: boolean; work: string[] }>();
+  generations.set(endpoint.old.pid, { generation: 0, manager: true, work: ['old-work'] });
+  let f: LaunchdFixture;
+  let cleanup = async () => {};
+  let withdrawn = false;
+  let reads = 0;
+  const events: string[] = [];
+  const publish = async (lock: PidLockInfo) => {
+    f.state.owner = lock;
+    await writeFile(join(f.root, 'daemon.pid'), JSON.stringify(lock));
+  };
+  const reuse = async (stale: boolean) => {
+    generations.set(endpoint.old.pid, { generation: 1, manager: stale, work: stale ? [] : ['replacement-work'] });
+    events.push('generation 1');
+    if (!stale) { f.state.pid = null; await publish(endpoint.replacement); }
+  };
+  try {
+    f = await launchdFixture({
+      readOwner: async () => {
+        if (!withdrawn) return f.state.owner;
+        reads++;
+        if (reads === 1) events.push('O1');
+        if (reads === 2) {
+          events.push('O3');
+          if (boundary === 'O2-O3') await reuse(false);
+        }
+        return f.state.owner;
+      },
+      stopOwner: async (home, lock) => { events.push('O4'); await stopVerifiedOwner(home, lock); },
+    });
+    cleanup = f.cleanup;
+    await writeFile(join(f.root, 'local-credential'), endpoint.credential);
+    f.state.verifyFails = true;
+    f.state.afterUnlink = async () => {
+      withdrawn = true; f.state.pid = endpoint.old.pid; await publish(endpoint.old);
+      if (boundary === 'before-O1') await reuse(false);
+    };
+    f.state.beforeCommand = async command => {
+      if (withdrawn && command === 'print') {
+        const live = generations.get(endpoint.old.pid);
+        f.state.pid = live?.manager ? endpoint.old.pid : null;
+      }
+      if (withdrawn && command === 'print' && reads === 1) {
+        events.push('O2');
+        if (boundary === 'stale-lock endpoint mismatch') { await reuse(true); endpoint.state.rejectEndpoint = true; }
+      }
+    };
+    endpoint.state.onStatus = async () => {
+      events.push('authenticated status');
+      if (boundary === 'O3-O4') await reuse(false);
+    };
+    const result = await f.service.install();
+    expect(result.kind).toBe('install_incomplete');
+    expect(endpoint.state.stops).toBe(0);
+    expect(endpoint.state.work).toEqual(['accepted-work']);
+    expect(endpoint.child.signalCode).toBeNull();
+    expect(endpoint.child.exitCode).toBeNull();
+    expect(generations.get(endpoint.old.pid)).toEqual({ generation: 1, manager: boundary === 'stale-lock endpoint mismatch', work: boundary === 'stale-lock endpoint mismatch' ? [] : ['replacement-work'] });
+    const retained = boundary === 'stale-lock endpoint mismatch' ? endpoint.old : endpoint.replacement;
+    expect(await readFile(join(f.root, 'daemon.pid'), 'utf8')).toBe(JSON.stringify(retained));
+    expect(f.state.owner).toEqual(retained);
+    expect(result.retained).toEqual({ pid: retained.pid, startedAt: retained.startedAt });
+    expect((await readRegistration({ target: f.target, requestedRoot: f.root })).kind).toBe('absent');
+    await expect(readFile(f.plistPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    if (boundary === 'stale-lock endpoint mismatch' || boundary === 'O3-O4') {
+      expect(result.detail).toContain('stop_unconfirmed');
+      expect(bootouts(f)).toEqual([]);
+      expect(endpoint.state.status).toBe(1);
+      expect(events.slice(0, 4)).toEqual(boundary === 'stale-lock endpoint mismatch' ? ['O1', 'O2', 'generation 1', 'O3'] : ['O1', 'O2', 'O3', 'O4']);
+    } else {
+      expect(endpoint.state.status).toBe(0);
+      expect(bootouts(f)).toHaveLength(1);
+    }
+  } finally { await cleanup(); await endpoint.close(); }
+});
+
+it.each(['old-child-still-visible', 'same-pid-reused-after-reap', 'old-child-visible-through-second-round'] as const)('launchd literal O1-O2 lock change preserves the new owner: %s', async interleaving => {
+  const endpoint = await composedOwner();
+  const replacement = { ...endpoint.replacement, pid: interleaving !== 'same-pid-reused-after-reap' ? endpoint.old.pid + 1 : endpoint.old.pid };
+  const processes = new Map<number, { generation: number; manager: boolean; work: string[]; signals: number }>();
+  processes.set(endpoint.old.pid, { generation: 0, manager: true, work: [] , signals: 0 });
+  const events: string[] = [];
+  let f: LaunchdFixture;
+  let cleanup = async () => {};
+  let withdrawn = false;
+  let changed = false;
+  let reads = 0;
+  let waits = 0;
+  const stop = vi.fn(stopVerifiedOwner);
+  const publish = async (lock: PidLockInfo) => {
+    await writeFile(join(f.root, 'daemon.pid'), JSON.stringify(lock));
+    f.state.owner = lock;
+  };
+  try {
+    f = await launchdFixture({
+      readOwner: async () => {
+        if (!withdrawn) return f.state.owner;
+        const bytes = await readFile(join(f.root, 'daemon.pid'), 'utf8');
+        const lock: PidLockInfo = JSON.parse(bytes);
+        reads++;
+        events.push(`lock ${reads}: ${bytes}`);
+        return lock;
+      },
+      stopOwner: stop,
+    });
+    cleanup = f.cleanup;
+    await writeFile(join(f.root, 'local-credential'), endpoint.credential);
+    f.state.verifyFails = true;
+    f.state.afterUnlink = async () => {
+      withdrawn = true;
+      await publish(endpoint.old);
+      events.push('withdrawn');
+    };
+    f.state.beforeCommand = async command => {
+      if (withdrawn && command === 'bootout') {
+        expect.soft(events.at(-1)).toBe('manager: null');
+        events.push('bootout');
+      }
+      if (!withdrawn || command !== 'print') return;
+      if (!changed && reads === 1) {
+        expect(await readFile(join(f.root, 'daemon.pid'), 'utf8')).toBe(JSON.stringify(endpoint.old));
+        processes.set(replacement.pid, { generation: 1, manager: false, work: ['replacement-work'], signals: 0 });
+        await publish(replacement);
+        changed = true;
+        events.push(`published: ${await readFile(join(f.root, 'daemon.pid'), 'utf8')}`);
+      }
+      f.state.pid = [...processes].find(([, process]) => process.manager)?.[0] ?? null;
+      events.push(`manager: ${f.state.pid}`);
+    };
+    f.state.onPause = async () => {
+      if (!changed) return;
+      waits++;
+      expect(stop).not.toHaveBeenCalled();
+      expect(bootouts(f)).toEqual([]);
+      if (interleaving === 'old-child-visible-through-second-round' && waits === 1) {
+        events.push('wait with old child visible');
+        return;
+      }
+      const old = processes.get(endpoint.old.pid);
+      if (old?.generation === 0) processes.delete(endpoint.old.pid);
+      events.push('old child reaped');
+    };
+    const result = await f.service.install();
+    expect(events.slice(0, 4)).toEqual([
+      'withdrawn', `lock 1: ${JSON.stringify(endpoint.old)}`,
+      `published: ${JSON.stringify(replacement)}`,
+      `manager: ${interleaving !== 'same-pid-reused-after-reap' ? endpoint.old.pid : null}`,
+    ]);
+    if (interleaving === 'old-child-still-visible') {
+      expect(events.slice(4, 8)).toEqual([
+        `lock 2: ${JSON.stringify(replacement)}`, 'old child reaped',
+        `lock 3: ${JSON.stringify(replacement)}`, 'manager: null',
+      ]);
+    }
+    if (interleaving === 'old-child-visible-through-second-round') {
+      expect(events.slice(4, 11)).toEqual([
+        `lock 2: ${JSON.stringify(replacement)}`, 'wait with old child visible',
+        `lock 3: ${JSON.stringify(replacement)}`, `manager: ${endpoint.old.pid}`,
+        'old child reaped', `lock 4: ${JSON.stringify(replacement)}`, 'manager: null',
+      ]);
+      expect(waits).toBe(2);
+    }
+    expect(stop).not.toHaveBeenCalled();
+    expect(endpoint.state.status).toBe(0);
+    expect(endpoint.state.stops).toBe(0);
+    expect(endpoint.state.work).toEqual(['accepted-work']);
+    expect(endpoint.child.signalCode).toBeNull();
+    expect(endpoint.child.exitCode).toBeNull();
+    expect([...processes]).toEqual([[replacement.pid, { generation: 1, manager: false, work: ['replacement-work'], signals: 0 }]]);
+    expect(await readFile(join(f.root, 'daemon.pid'), 'utf8')).toBe(JSON.stringify(replacement));
+    expect(f.state.owner).toEqual(replacement);
+    expect(result.retained).toEqual({ pid: replacement.pid, startedAt: replacement.startedAt });
+    expect((await readRegistration({ target: f.target, requestedRoot: f.root })).kind).toBe('absent');
+    await expect(readFile(f.plistPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    const trace = JSON.stringify({ events, result, calls: f.calls });
+    expect(result.kind, trace).toBe('install_incomplete');
+    expect(result.detail, trace).not.toContain('owner_unproven');
+    expect(result.detail, trace).not.toContain('stop_unconfirmed');
+    expect(bootouts(f), trace).toEqual([`bootout gui/501/${LAUNCHD_LABEL}`]);
+    expect(events.indexOf('bootout')).toBeGreaterThan(events.indexOf('manager: null'));
+    expect(events.at(-1)).toBe(`lock ${reads}: ${JSON.stringify(replacement)}`);
+  } finally { await cleanup(); await endpoint.close(); }
+});
+
+it.each(['replacement', 'rollback'] as const)('launchd %s accepted real stop loses done, drains normally and fresh uninstall converges', async mode => {
+  const endpoint = await composedOwner();
+  endpoint.state.loseReply = true;
+  const f = await launchdFixture({ stopOwner: stopVerifiedOwner });
+  try {
+    await writeFile(join(f.root, 'local-credential'), endpoint.credential);
+    if (mode === 'replacement') await f.seed(49102);
+    else f.state.verifyFails = true;
+    f.state.beforeUnlink = async () => {
+      f.state.owner = endpoint.old; f.state.pid = endpoint.old.pid;
+      await writeFile(join(f.root, 'daemon.pid'), JSON.stringify(endpoint.old));
+    };
+    const result = await f.service.install({ port: 49101 });
+    expect(result.kind).toBe('install_incomplete'); expect(result.detail).toContain('stop_unconfirmed');
+    expect(result.detail).toContain(`PID ${endpoint.old.pid}`);
+    expect(endpoint.state.stops).toBe(1); expect(endpoint.state.draining).toBe(true);
+    expect(endpoint.state.work).toEqual(['accepted-work']);
+    expect(await readFile(join(f.root, 'daemon.pid'), 'utf8')).toBe(JSON.stringify(endpoint.old));
+    expect(bootouts(f)).toEqual([]);
+    await expect(readFile(f.plistPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    const calls = [...f.calls];
+    for (let round = 0; round < 600; round++) {
+      f.state.clock += 1000;
+      expect(endpoint.child.exitCode).toBeNull();
+    }
+    expect(f.calls).toEqual(calls); expect(endpoint.state.stops).toBe(1);
+    await endpoint.finish();
+    f.state.owner = null; f.state.pid = null;
+    await unlink(join(f.root, 'daemon.pid'));
+    f.state.beforeUnlink = null;
+    expect((await f.service.uninstall()).kind).toBe('uninstalled');
+    expect(bootouts(f)).toHaveLength(1);
+    expect(endpoint.state.stops).toBe(1); expect(endpoint.state.work).toEqual([]);
+    expect(endpoint.child.exitCode).toBe(0); expect(endpoint.child.signalCode).toBeNull();
+    expect((await f.service.uninstall()).kind).toBe('not-installed');
+  } finally { await f.cleanup(); await endpoint.close(); }
+});
+
+it('launchd composes self-hosted exit, job takeover, real proof and long drain before rollback unload', async () => {
+  const endpoint = await composedOwner();
+  const original = { ...endpoint.old, pid: endpoint.old.pid + 1 };
+  const f = await launchdFixture({ stopOwner: stopVerifiedOwner });
+  const processes = new Map([
+    [original.pid, { role: 'self-hosted', alive: true, work: ['original-work'] }],
+    [endpoint.old.pid, { role: 'job', alive: false, work: [] }],
+  ]);
+  try {
+    f.state.owner = original;
+    await writeFile(join(f.root, 'local-credential'), endpoint.credential);
+    await writeFile(join(f.root, 'daemon.pid'), JSON.stringify(original));
+    let bootstrapped = false;
+    f.state.beforeCommand = async command => {
+      if (command === 'bootstrap') bootstrapped = true;
+      else if (command === 'print' && bootstrapped) { f.state.queryFailure = true; bootstrapped = false; }
+    };
+    f.state.afterUnlink = async () => {
+      expect(f.state.owner).toEqual(original);
+      processes.set(original.pid, { role: 'self-hosted', alive: false, work: [] });
+      f.state.owner = null;
+      await unlink(join(f.root, 'daemon.pid'));
+      processes.set(endpoint.old.pid, { role: 'job', alive: true, work: ['accepted-work'] });
+      f.state.queryFailure = false;
+      f.state.owner = endpoint.old; f.state.pid = endpoint.old.pid;
+      await writeFile(join(f.root, 'daemon.pid'), JSON.stringify(endpoint.old));
+    };
+    let rounds = 0;
+    f.state.onPause = async () => {
+      if (!endpoint.state.draining) return;
+      expect(endpoint.state.work).toEqual(['accepted-work']);
+      expect(bootouts(f)).toEqual([]);
+      if (++rounds === 600) {
+        await endpoint.finish();
+        processes.set(endpoint.old.pid, { role: 'job', alive: false, work: [] });
+        f.state.owner = null; f.state.pid = null;
+        await unlink(join(f.root, 'daemon.pid'));
+      }
+    };
+    endpoint.state.onStop = async () => {
+      expect(processes.get(original.pid)).toEqual({ role: 'self-hosted', alive: false, work: [] });
+      expect(processes.get(endpoint.old.pid)).toEqual({ role: 'job', alive: true, work: ['accepted-work'] });
+      expect(bootouts(f)).toEqual([]);
+    };
+    const result = await f.service.install();
+    expect(result.kind).toBe('install_incomplete');
+    expect(result.retained).toBeNull();
+    expect([...processes.values()]).toEqual([
+      { role: 'self-hosted', alive: false, work: [] }, { role: 'job', alive: false, work: [] },
+    ]);
+    expect(rounds).toBe(600); expect(f.state.clock).toBeGreaterThanOrEqual(150_000);
+    expect(endpoint.state.status).toBe(1); expect(endpoint.state.stops).toBe(1);
+    expect(endpoint.child.exitCode).toBe(0); expect(endpoint.child.signalCode).toBeNull();
+    expect(endpoint.state.work).toEqual([]); expect(bootouts(f)).toHaveLength(1);
+    expect((await readRegistration({ target: f.target, requestedRoot: f.root })).kind).toBe('absent');
+  } finally { await f.cleanup(); await endpoint.close(); }
+});
