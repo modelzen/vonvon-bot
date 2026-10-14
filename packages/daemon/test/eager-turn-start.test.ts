@@ -1,10 +1,11 @@
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { CodexAppServerBackend } from '../src/agent/codex-appserver/backend';
-import { shutdownResidentClients } from '../src/agent/codex-appserver/client-pool';
+import { bindCodexHost, shutdownResidentClients } from '../src/agent/codex-appserver/client-pool';
 import { writeNodeExecutable } from './helpers/node-executable';
+import { processHosts } from './helpers/process-hosts';
 
 // 一个最小的假 codex app-server：收到 turn/start 先落一个标记文件（证明请求
 // 已到达），再按 input 文本分流——'fail' 回 JSON-RPC error（测 start-failure
@@ -46,6 +47,8 @@ setInterval(() => {}, 1 << 30); // stay alive until killed
 const dir = mkdtempSync(join(tmpdir(), 'eager-turn-start-'));
 const { bin } = writeNodeExecutable(dir, 'codex', FAKE_SERVER);
 const marker = join(dir, 'turn-start-received');
+const hosts = processHosts();
+beforeAll(() => { hosts.setup(); bindCodexHost(hosts.host()); });
 
 async function withFakeCodex<T>(fn: () => Promise<T>): Promise<T> {
   const prev = process.env.CODEX_BIN;
@@ -60,6 +63,7 @@ async function withFakeCodex<T>(fn: () => Promise<T>): Promise<T> {
 
 afterAll(async () => {
   await shutdownResidentClients();
+  await hosts.teardown();
   rmSync(dir, { recursive: true, force: true });
 });
 
