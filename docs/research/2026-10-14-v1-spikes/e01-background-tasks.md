@@ -7,12 +7,13 @@
 - 这个变量有效。经 Agent SDK 给会话设上 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` 后，子 agent 都在前台跑，主回合的 result 等最慢的子 agent 结束才来，一条用户消息只有一个 result。同一条消息里的几个子 agent 仍然并行。
 - 不设这个变量（今天的 vonvon）时，子 agent 默认在后台跑。主回合约 6 秒就出 result，每个后台任务结束后 CLI 自己再起一轮，又出一个 result。一条用户消息出了 4 到 6 个 result。
 - 代价是后台 Bash 没了。模型带 `run_in_background` 调 Bash 会直接报参数错误，命令不执行；模型去掉参数重试后，命令在前台跑完，这一轮跟着等。
-- 3.9 可以定下来：第一版在 bot 的 Claude 会话里打开这个变量，s35 不做"已回复，还有 N 个在跑"的备选。
+- 3.9 可以定下来：第一版在 bot 的 Claude 会话里打开这个变量，s35 不做"已回复，还有 N 个在跑"的备选。前提是 s35 开工时补测的 ⏹ 没问题：前台子 agent 跑着时按 ⏹ 还没测，这是这个做法最主要的风险（见"对第一版的影响"）。
 
 ## 怎么测
 
 - Claude Agent SDK 0.3.296，自带的 CLI 是 2.1.296，模型 `claude-haiku-5-5`，用 JP-VPS 上已有的 Claude 登录。
-- 调用方式照 vonvon 今天的写法：一条常驻的 streaming input `query()`（`D/agent/claude-agent/thread.ts`）；env 从 `process.env` 拷一份，再加 vonvon 的两个标记（`D/agent/claude-agent/backend.ts:51-70`）；完全访问档，也就是 `bypassPermissions`；`settingSources` 为空；关闭时和 vonvon 一样，先关输入，再 abort，再 close。
+- 调用方式照 vonvon 今天的写法：一条常驻的 streaming input `query()`（`D/agent/claude-agent/thread.ts`）；env 从 `process.env` 拷一份，再加 vonvon 的两个标记（`D/agent/claude-agent/backend.ts:68-74`）；完全访问档，也就是 `bypassPermissions`；关闭时和 vonvon 一样，先关输入，再 abort，再 close。
+- 和 vonvon 不同的两处：`settingSources` 为空，vonvon 今天给的是 `['user', 'project']`（`D/agent/claude-agent/backend.ts:48`）；每次都挂了一个只记录、一律放行的 canUseTool，vonvon 今天没有。
 - 一条消息让模型在同一条回复里发三个调用：两个 Agent 子 agent，分别等 25 秒和 35 秒后回话；一个后台 Bash，等 45 秒后写一个文件。然后马上回复。
 - 带和不带变量各跑一次。另有几种变体：显式传 `run_in_background: true`；关闭时还有后台任务在跑；用 `default` 模式让 canUseTool 真的被调用。共 8 次。
 - 每条 SDK 消息记下到达时间，另起探针看进程树。不设变量时，CLI 会拦"前台 `sleep N && …`"（见下文），所以不设变量的几次让子 agent 用 `python3 -c 'time.sleep(…)'` 等待。
@@ -46,7 +47,7 @@
 
 ## 对第一版的影响
 
-- 3.9 按"打开变量"做，s35 不做备选。
+- 3.9 按"打开变量"做，s35 不做备选。s35 开工时先补测 ⏹；前台子 agent 停不下来的话，回头再定。
 - 运行卡在这一轮唯一的 result 到达时收尾。子 agent 区用 task_* 消息和 `parent_tool_use_id`。
 - bot 不能在后台起开发服务器再结束这一轮，3.9 已经写了这个代价。模型带后台参数调 Bash 时会先失败一次，多一次工具调用。
 - 还没测的，s35 开工时补：

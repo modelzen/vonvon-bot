@@ -4,8 +4,8 @@
 
 ## 结论
 
-1. 今天 Claude 的会话里根本没有 AskUserQuestion。没有 canUseTool 时，SDK 不给 CLI 留提问的通道，CLI 就把 AskUserQuestion、EnterPlanMode、ExitPlanMode 三个工具都去掉了，模型只能用文字问。product.md 3.8 写的"会被拒"不准确。
-2. 不带沙箱时，今天的只读档只是拿掉了写文件和上网的工具。Bash 照样能写工作区内外的文件，也能 curl 出去。沙箱能不能补上，看 e03。
+1. 今天 Claude 的会话里根本没有 AskUserQuestion。只读、读写两档照今天的配置跑，会话的工具列表里都没有 AskUserQuestion、EnterPlanMode、ExitPlanMode，模型只能用文字问；挂上 canUseTool 后三个工具都在。原因推断是 SDK 只在有 canUseTool 时才给 CLI 留提问的通道（`sdk.mjs` 的参数逻辑）；完全访问档今天也没有 canUseTool，推断一样。product.md 3.8 写的"会被拒"不准确。
+2. 今天的只读档除了拿掉写文件和上网的工具，还给了沙箱设置（`D/agent/claude-agent/permission.ts:59-65`）。这次没带沙箱：只拿掉工具时，Bash 照样能写工作区内外的文件，也能 curl 出去。沙箱能不能补上，看 e03。
 3. 换成 `default` 加 canUseTool 后，写文件的 Bash、联网的 Bash、工作区以外的读写、WebFetch、WebSearch 和提问都会走到回调，vonvon 可以逐个拒绝。`ls`、`find`、`grep` 和工作区里的 Read 不走回调。
 4. `acceptEdits` 下，工作区里的写不走回调，Bash 的重定向写也算在内；其余和 `default` 一样。
 5. `bypassPermissions` 加 canUseTool 时，只有 AskUserQuestion 走到回调，其余一律放行。
@@ -14,7 +14,7 @@
 8. 子 agent 有一个固定的 id，task_* 消息、子 agent 的消息、hook 和 canUseTool 里都是同一个值。消息上的 `agent_id` 字段 0.3.291 以后才有，s02 锁定的 0.3.296 有。
 9. `getSessionMessages` 能读别的工作目录下的会话：`dir` 不传（扫所有项目，约 120 毫秒），或者传那条会话原来的 cwd（约 5 毫秒）。读出来的包含工具步骤，没有"只要用户消息和最终回答"的选项，要自己过滤。子 agent 的消息不在里面。
 10. `claudeMdExcludes` 能排除 `~/.claude/CLAUDE.md`，它 @ 引入的文件也一起排除。它是设置项，经 `options.settings` 传。只给 `settingSources: ['project']` 也不会加载个人的 CLAUDE.md。
-11. 新发现：bot 的 Claude 会话会挂上主人账号在 claude.ai 的连接器，还带着推送通知、远程触发、定时任务、工作流这些 Claude Code 自己的工具，和 `settingSources` 无关。今天的 vonvon 没有关掉它们。见第 7 节。
+11. 新发现：bot 的 Claude 会话的工具列表里有主人账号在 claude.ai 的连接器，还有推送通知、远程触发、定时任务、工作流这些 Claude Code 自己的工具，和 `settingSources` 无关。今天的 vonvon 没有关掉它们。这些工具这次没有实际调用过。见第 7 节。
 12. 新发现：没人改过名时，`getSessionInfo().customTitle` 返回的是 CLI 自动起的标题。vonvon 的标题协调器会因此以为会话已经有名字，不再写 vonvon 的标题。见第 8 节。
 
 ## 怎么测
@@ -26,7 +26,7 @@
 
 ## 1. 哪些请求走到回调
 
-| 操作 | `default` | `acceptEdits` | `bypassPermissions` | 今天的只读档，无沙箱 |
+| 操作 | `default` | `acceptEdits` | `bypassPermissions` | 今天的只读档去掉沙箱 |
 |---|---|---|---|---|
 | 工作区里的 Read | 直接放行 | 直接放行 | 直接放行 | 直接放行 |
 | 工作区外的 Read | 回调 | 回调 | 直接放行 | 直接放行 |
@@ -41,7 +41,7 @@
 | 写 `.claude/` 下的文件 | 回调 | 回调 | 直接放行 | 没有 Write |
 | 子 agent 的 Write | 回调，带子 agent 的 id | 直接放行 | 直接放行 | 没有这个工具 |
 
-"今天的只读档"指 `bypassPermissions` 加 `allowDangerouslySkipPermissions`，关网时 `disallowedTools` 是 Write、Edit、NotebookEdit、WebFetch、WebSearch，没有 canUseTool（`D/agent/claude-agent/permission.ts:56-76`）。读写档关网时只去掉 WebFetch 和 WebSearch，提问也一样没有。
+最后一列指 `bypassPermissions` 加 `allowDangerouslySkipPermissions`，关网时 `disallowedTools` 是 Write、Edit、NotebookEdit、WebFetch、WebSearch，没有 canUseTool（`D/agent/claude-agent/permission.ts:67-76`）。今天的配置还带沙箱设置（`:59-65`），这次没带，所以这一列不是今天的完整行为，带沙箱的结果看 e03。读写档关网时只去掉 WebFetch 和 WebSearch，提问也一样没有。
 
 - 回调的参数里有 `suggestions`、`blockedPath`、`decisionReason`、`toolUseID`、`agentID`、`requestId`、`description` 等。`decisionReasonType`（`workingDir`、`safetyCheck`、`subcommandResults`）和 `requiresUserInteraction`（只在 AskUserQuestion 上为 true）运行时有，sdk.d.ts 的类型里没有。`title` 一直是空的。
 - 回答 AskUserQuestion：回调返回 allow，`updatedInput` 里加 `answers`，键是问题原文，值是选中的选项。模型收到"Your questions have been answered: …"。
@@ -110,11 +110,11 @@
 
 - `settingSources` 为空、`tools` 为空时，会话里仍然有 claude.ai 的连接器，是一个来源为 claudeai 的 MCP server（这次是 Claude Docs）。
 - 不传 `tools` 时，会话里除了文件、Bash、网页这些工具，还有 CronCreate、CronDelete、CronList、Workflow、PushNotification、RemoteTrigger、SendMessage、ListAgents、DesignSync、ScheduleWakeup、EnterWorktree、ExitWorktree、ReportFindings、Monitor、TaskStop、Skill 等，有一次运行里还有 Artifact 的三个工具。这些是 Claude Code 跟账号和本机相关的功能。
-- 也就是说，群里的人能让 bot 用主人账号的连接器，给主人的设备发推送，建定时任务，以主人的名义发 claude.ai 页面。今天的 vonvon 没有限制这些：`D/agent/claude-agent/permission.ts` 只按档去掉写文件和上网的工具。bridge 依赖 `^0.3.178`，用户下载的是最新的 SDK，推断 bridge 的会话今天也带着这些。
-- 关掉的办法，JP-VPS 上实测过：
-  - env 设 `ENABLE_CLAUDEAI_MCP_SERVERS=false`，连接器就没有了。CLI 里另有设置项 `disableClaudeAiConnectors`，没测。
-  - `CLAUDE_CODE_DISABLE_CRON=1`、`CLAUDE_CODE_DISABLE_WORKFLOWS=1` 分别去掉 Cron 的三个工具和 Workflow。
-  - 更干脆的是 `query()` 的 `tools` 选项给白名单。传 Read、Write、Edit、Bash、WebFetch、WebSearch、Task、AskUserQuestion 八个，会话里就正好是这八个。
+- 推断，只看了工具列表，这些工具一个都没有实际调用：群里的人能让 bot 用主人账号的连接器，给主人的设备发推送，建定时任务，以主人的名义发 claude.ai 页面。今天的 vonvon 没有限制这些：`D/agent/claude-agent/permission.ts` 只按档去掉写文件和上网的工具。bridge 依赖 `^0.3.178`，用户下载的是最新的 SDK，推断 bridge 的会话今天也带着这些。
+- 关掉的办法，JP-VPS 上各跑了一次：
+  - 一次同时设了四个变量：`ENABLE_CLAUDEAI_MCP_SERVERS=false`、`CLAUDE_CODE_DISABLE_ARTIFACT=1`、`CLAUDE_CODE_DISABLE_CRON=1`、`CLAUDE_CODE_DISABLE_WORKFLOWS=1`。结果连接器没了，Cron 的三个工具和 Workflow 没了；Artifact 两次都不在列表里，看不出效果。四个是一起设的，没有分开测哪个变量去掉了哪个，按名字推断各管各的。CLI 里另有设置项 `disableClaudeAiConnectors`，没测。
+  - 这四个变量设了以后，PushNotification、RemoteTrigger、SendMessage、DesignSync、ScheduleWakeup 等还在。所以靠变量关不干净。
+  - `query()` 的 `tools` 选项给白名单：传 Read、Write、Edit、Bash、WebFetch、WebSearch、Task、AskUserQuestion 八个，会话里就正好是这八个，连接器另用 `ENABLE_CLAUDEAI_MCP_SERVERS=false` 关。真要关，用这个办法。
 - 第一版留不留这些，要主人定，因为是少做一件今天能做的事（`docs/v1-plan.md` 4.2 第 3 条）。建议：bot 的会话用内置工具白名单，连接器默认关掉；主人要用哪个连接器，以后按 3.6 的 MCP 名单加。s31 开工前要定。
 
 ## 8. 新发现：会话标题读错了
@@ -148,7 +148,7 @@
 
 ## 核实记录
 
-另一个代理（Sonnet）读了脚本和原始日志，逐条核对，没有重跑。第 7、8 节是之后补测的，没有经过这一轮核对，第 8 节的 SDK 取值顺序是直接读 `sdk.mjs` 确认的。
+另一个代理（Sonnet）读了脚本和原始日志，逐条核对，没有重跑。第 7、8 节是之后补测的，没有经过这一轮核对；合入前的独立审查读过它们的脚本和输出，第 8 节的取值顺序在 `sdk.mjs` 里核对过。
 
 | 结论 | 判定 | 说明 |
 |---|---|---|
