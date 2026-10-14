@@ -74,7 +74,7 @@ function untrack(client: AppServerClient): void {
   residents.delete(client);
 }
 
-/** A discarded process's ending, bounded so a wedged close cannot hold up its replacement. Call sites that spawn a replacement await it (#282). */
+/** Bounded so a wedged close cannot hold up the replacement. */
 const DISCARD_WAIT_MS = 2000;
 
 function closeDiscarded(client: AppServerClient): Promise<void> {
@@ -101,13 +101,13 @@ async function acquireUtility(bin: string): Promise<AppServerClient> {
   requireOpen();
   const cur = utility;
   if (cur && !cur.client.exited && cur.bin === bin) return cur.client;
-  if (cur) {
-    // 进程死了 / codex 二进制换了位置——先等旧进程收尾，再重建
-    utility = null;
-    await closeDiscarded(cur.client);
-    requireOpen();
-  }
+  // 等旧进程收尾也在单飞内，否则并发调用方会在这段 await 里各自重建（#283）。
   const create = (async () => {
+    if (cur) {
+      utility = null;
+      await closeDiscarded(cur.client);
+      requireOpen();
+    }
     const client = new AppServerClient({ host: codexHost(), bin, cwd: NEUTRAL_CWD, clientName: 'feishu-codex-bridge-utility' });
     track(client);
     try {

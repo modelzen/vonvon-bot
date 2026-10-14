@@ -152,6 +152,24 @@ describe('utility client 复用与出错即重建（M-2）', () => {
     expect(runs()).toBe(2);
   });
 
+  it('外部杀死 utility 后两个并发调用只重建一个进程', async () => {
+    const { runs, pids } = makeFakeCodex();
+    await utilityRequest('model/list');
+    process.kill(pids()[0]!, 'SIGKILL');
+    const deadline = Date.now() + 10_000;
+    while (host.snapshot().length > 0) {
+      if (Date.now() > deadline) throw new Error(`utility record never retired: ${JSON.stringify(host.snapshot())}`);
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    const [a, b] = await Promise.all([
+      utilityRequest<{ data: { id: string }[] }>('model/list'),
+      utilityRequest<{ data: { id: string }[] }>('model/list'),
+    ]);
+    expect([a.data[0]!.id, b.data[0]!.id]).toEqual(['pool-model', 'pool-model']);
+    expect(runs()).toBe(2);
+    expect(host.snapshot()).toHaveLength(1);
+  });
+
   it('超时（wedged codex）→ 报错并重建，不留挂死进程', async () => {
     const { runs } = makeFakeCodex();
     await expect(utilityRequest('hang', {}, { timeoutMs: 300 })).rejects.toThrow(/timed out/);
