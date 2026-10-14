@@ -25,7 +25,7 @@ const npmSource = `
 const fs=require('node:fs'),path=require('node:path');
 const prefix=process.argv[process.argv.indexOf('--prefix')+1];
 const cache=process.argv[process.argv.indexOf('--cache')+1];
-const record={pid:process.pid,prefix,cache,args:process.argv.slice(2),cwd:process.cwd(),lock:JSON.parse(fs.readFileSync(path.join(prefix,'package-lock.json'),'utf8'))};
+const record={pid:process.pid,prefix,cache,args:process.argv.slice(2),cwd:process.cwd(),nodeMode:process.env.ELECTRON_RUN_AS_NODE,lock:JSON.parse(fs.readFileSync(path.join(prefix,'package-lock.json'),'utf8'))};
 fs.writeFileSync(${JSON.stringify(trace)},JSON.stringify(record));
 const bins=path.join(prefix,'node_modules/.bin'); fs.mkdirSync(bins,{recursive:true});
 const script=path.join(bins,'codex.cjs'); fs.writeFileSync(script,process.env.FIXTURE_NPM_MODE==='wrong-version' ? "console.log('codex-cli 9.9.9')" : ${JSON.stringify(codexSource)});
@@ -41,7 +41,7 @@ beforeAll(() => {
 });
 afterEach(() => { vi.stubEnv('FIXTURE_NPM_MODE', ''); vi.mocked(rename).mockClear(); });
 afterAll(() => { vi.unstubAllEnvs(); rmSync(home, { recursive: true, force: true }); });
-const traceValue = (): { prefix: string; cache: string; args: string[]; pid: number; lock: { packages: Record<string, { integrity?: string }> } } => JSON.parse(readFileSync(trace, 'utf8'));
+const traceValue = (): { prefix: string; cache: string; args: string[]; pid: number; nodeMode?: string; lock: { packages: Record<string, { integrity?: string }> } } => JSON.parse(readFileSync(trace, 'utf8'));
 const install = () => installManagedCodex(new AbortController().signal);
 const stages = () => readdirSync(home).filter(name => name.startsWith('.vonvon-codex-stage-'));
 
@@ -53,6 +53,7 @@ describe('managed Codex installation', () => {
     expect(record.cache.startsWith(paths.appDir)).toBe(false);
     expect(record.args).toContain('--ignore-scripts');
     expect(record.args).toContain('ci');
+    expect(record.nodeMode).toBe('1');
     expect(record.lock.packages['node_modules/@openai/codex']?.integrity).toMatch(/^sha512-/);
     expect(stages()).toEqual([]);
     expect(managedCodexBin()).toMatch(/releases/);
@@ -148,7 +149,7 @@ describe('managed Codex installation', () => {
     await expect(install()).rejects.toThrow('CODEX_BIN');
     expect(resolveCodexBin()).toBe(process.execPath);
     vi.stubEnv('CODEX_BIN', ''); vi.stubEnv('VONVON_NPM_CLI', '');
-    await expect(install()).rejects.toThrow('可信 npm');
+    await expect(install()).rejects.toThrow('可信的 npm');
     vi.stubEnv('VONVON_NPM_CLI', npm);
   });
 });

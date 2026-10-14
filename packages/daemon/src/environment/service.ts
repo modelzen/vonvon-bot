@@ -321,7 +321,7 @@ export class EnvironmentService {
       signal.throwIfAborted();
       if (tool === "codex" && process.env.CODEX_BIN) return refused("explicit-codex", "当前使用显式 CODEX_BIN，请先移除此覆盖再安装托管 Codex。");
       const npm = await this.resolveNpm();
-      if (!npm) return refused("npm-missing", "未找到 npm，无法安装工具。");
+      if (!npm) return refused("npm-missing", "未找到 npm，无法安装托管副本。托管副本要用本机的 Node.js 和 npm 来装和运行；Codex 也可以装 Codex.app 或用 Homebrew 安装。");
       signal.throwIfAborted();
       await mkdir(release, { recursive: true, mode: 0o700 });
       const result = await this.command(npm, ["install", "--global", "--prefix", release, `${tools[tool].package}@latest`, "--no-audit", "--no-fund"], 10 * 60_000, undefined, signal);

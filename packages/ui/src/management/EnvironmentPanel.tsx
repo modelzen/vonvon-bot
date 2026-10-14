@@ -179,7 +179,9 @@ export function EnvironmentPanel({ request, onCodexLogin, codexJobs, codexBusy, 
   async function checkBackendVersion(backend: BackendEntry) {
     try {
       const reply = await request({ type: "backendVersion", id: backend.id });
-      if (reply.kind === "backendVersion") setNotice(reply.latest ? `已安装 ${reply.installed ?? "未知"}，最新 ${reply.latest}` : "暂时无法查询最新版本。");
+      // Claude Agent SDK 锁定版本，回来的 latest 是 Vonvon Bot 验证过的版本，不是 npm 上的最新版。
+      const target = backend.id === "claude-agent" ? "验证过的版本" : "最新";
+      if (reply.kind === "backendVersion") setNotice(reply.latest ? `已安装 ${reply.installed ?? "未知"}，${target} ${reply.latest}` : "暂时无法查询最新版本。");
       else if (reply.kind === "refused") setNotice(reply.message);
     } catch { setNotice("暂时无法查询最新版本。"); }
   }

@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, realpath, rename, rm, stat, writeFile } from 'node:fs/p
 import { randomUUID } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { paths } from '../../config/paths';
+import { bundledNpmCli } from '../../platform/npm';
 import { mergeProcessEnv } from '../../platform/spawn';
 import lock from './codex-install-lock.json';
 import { OwnedCodexProcess } from './owned-process';
@@ -46,8 +47,8 @@ export async function runSetupChild(command: string, args: string[], options: { 
 
 export async function installManagedCodex(signal: AbortSignal): Promise<void> {
   if (process.env.CODEX_BIN) throw new Error('当前使用显式 CODEX_BIN，请先移除此覆盖再安装托管 Codex');
-  const npmCli = process.env.VONVON_NPM_CLI;
-  if (!npmCli || !isAbsolute(npmCli)) throw new Error('缺少桌面应用提供的可信 npm 路径');
+  const npmCli = bundledNpmCli();
+  if (!npmCli) throw new Error('找不到可信的 npm：桌面应用自带的 npm 不在，VONVON_NPM_CLI 也没有指向一个文件（要写绝对路径）');
   const npm = await realpath(npmCli);
   if (!(await stat(npm)).isFile()) throw new Error('可信 npm 路径不是文件');
   const parent = await realpath(dirname(paths.appDir));
@@ -64,7 +65,7 @@ export async function installManagedCodex(signal: AbortSignal): Promise<void> {
     await writeFile(join(prefix, 'package.json'), JSON.stringify({ private: true, dependencies: { '@openai/codex': CODEX_INSTALL_VERSION } }));
     await writeFile(join(prefix, 'package-lock.json'), JSON.stringify(lock));
     await writeFile(join(stagePath, 'npmrc'), '');
-    const env = mergeProcessEnv(process.env, { npm_config_userconfig: join(stagePath, 'npmrc'), npm_config_cache: join(stagePath, 'cache'), npm_config_update_notifier: 'false' });
+    const env = mergeProcessEnv(process.env, { npm_config_userconfig: join(stagePath, 'npmrc'), npm_config_cache: join(stagePath, 'cache'), npm_config_update_notifier: 'false', ELECTRON_RUN_AS_NODE: '1' });
     await runSetupChild(process.execPath, [npm, 'ci', '--prefix', prefix, '--ignore-scripts', '--no-audit', '--no-fund', '--registry=https://registry.npmjs.org', '--cache', join(stagePath, 'cache')], { cwd: prefix, signal, env });
     const bin = privateCodexBin(prefix);
     const executable = await realpath(bin);
