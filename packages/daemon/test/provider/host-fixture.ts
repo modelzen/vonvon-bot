@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll } from 'vitest';
-import { readStartToken } from '../../src/provider/process/identity';
+import { readStartToken, type StartRead } from '../../src/provider/process/identity';
 import { readLedger, type HolderIdentity, type HostPlatform } from '../../src/provider/process/ledger';
 import { ProcessHost, Reservation } from '../../src/provider/process/process-host';
 import { alive } from './channel-recorder';
@@ -14,6 +14,7 @@ const POSIX = PLATFORM === 'posix';
 /** How long a holder may outlive `closeAll` before the hook kills it and fails the test. */
 const EXIT_WAIT_MS = POSIX ? 5_000 : 15_000;
 const KILL_WAIT_MS = 3_000;
+const IDENTITY_WAIT_MS = 1_000;
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const killQuietly = (pid: number) => { try { process.kill(POSIX ? -pid : pid, 'SIGKILL'); } catch { /* exited meanwhile */ } };
 
@@ -85,9 +86,13 @@ export function hostFixture(prefix: string): HostFixture {
       for (const pid of groups.splice(0)) killQuietly(pid);
       const leaked = await survivors(holders.splice(0), EXIT_WAIT_MS);
       if (leaked.length > 0) {
-        for (const holder of leaked) killQuietly(holder.pid);
-        const immortal = await survivors(leaked, KILL_WAIT_MS);
-        failures.push(new Error(`holders ${pids(leaked)} outlived closeAll by ${EXIT_WAIT_MS} ms and were killed by the fixture${immortal.length > 0 ? `; ${pids(immortal)} survived SIGKILL` : ''}`));
+        const outcomes = await Promise.all(leaked.map(forceHolder));
+        const attempted = outcomes.flatMap(outcome => outcome.kind === 'attempted' ? [outcome.holder] : []);
+        const unverified = outcomes.flatMap(outcome => outcome.kind === 'unverified' ? [outcome.holder] : []);
+        const immortal = await survivors(attempted, KILL_WAIT_MS);
+        if (attempted.length > 0 || unverified.length > 0) {
+          failures.push(new Error(`holders ${pids([...attempted, ...unverified])} outlived closeAll by ${EXIT_WAIT_MS} ms${attempted.length > 0 ? `; fixture attempted SIGKILL on ${pids(attempted)}` : ''}${unverified.length > 0 ? `; identity unverified for ${pids(unverified)}, not signalled` : ''}${immortal.length > 0 ? `; ${pids(immortal)} still present after SIGKILL` : ''}`));
+        }
       }
     } finally {
       for (const dir of dirs.splice(0)) {
@@ -104,10 +109,36 @@ export function hostFixture(prefix: string): HostFixture {
 
 const pids = (holders: HolderIdentity[]): string => holders.map(holder => holder.pid).join(', ');
 
-/** A pid now carrying another start token was reused, so the recorded holder is gone. Read once: a token read can exec. */
-async function reused(holder: HolderIdentity): Promise<boolean> {
+type ForceOutcome =
+  | { kind: 'gone' }
+  | { kind: 'attempted'; holder: HolderIdentity }
+  | { kind: 'unverified'; holder: HolderIdentity };
+
+async function readStartWithin(pid: number, deadline: number): Promise<StartRead> {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) return 'unreadable';
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      readStartToken(pid),
+      new Promise<StartRead>(resolve => { timer = setTimeout(resolve, remaining, 'unreadable'); }),
+    ]);
+  } finally { clearTimeout(timer); }
+}
+
+async function forceHolder(holder: HolderIdentity): Promise<ForceOutcome> {
+  if (!alive(holder.pid)) return { kind: 'gone' };
+  if (holder.start === undefined) return { kind: 'unverified', holder };
+  const read = await readStartWithin(holder.pid, Date.now() + IDENTITY_WAIT_MS);
+  if (read === 'unreadable') return { kind: 'unverified', holder };
+  if (read !== holder.start) return { kind: 'gone' };
+  killQuietly(holder.pid);
+  return { kind: 'attempted', holder };
+}
+
+async function reused(holder: HolderIdentity, deadline: number): Promise<boolean> {
   if (holder.start === undefined) return false;
-  const read = await readStartToken(holder.pid);
+  const read = await readStartWithin(holder.pid, deadline);
   return read === 'absent' || (read !== 'unreadable' && read !== holder.start);
 }
 
@@ -115,7 +146,7 @@ async function reused(holder: HolderIdentity): Promise<boolean> {
 async function survivors(candidates: HolderIdentity[], timeoutMs: number): Promise<HolderIdentity[]> {
   const deadline = Date.now() + timeoutMs;
   const left = await Promise.all(candidates.map(async holder => {
-    if (!alive(holder.pid) || await reused(holder)) return undefined;
+    if (!alive(holder.pid) || await reused(holder, deadline)) return undefined;
     while (alive(holder.pid)) {
       if (Date.now() > deadline) return holder;
       await sleep(20);
