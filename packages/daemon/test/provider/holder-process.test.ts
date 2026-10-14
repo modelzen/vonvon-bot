@@ -41,9 +41,9 @@ afterEach(async () => {
   dirOf.clear();
 });
 
-function newHost(spawnDeadlineMs = 20_000): ProcessHost {
+function newHost(spawnDeadlineMs?: number): ProcessHost {
   const dir = mkdtempSync(join(tmpdir(), 'vonvon-holder-process-'));
-  const host = new ProcessHost({ dataDir: dir, daemonBootId: randomUUID(), spawnDeadlineMs, ...(binary ? { platform: 'posix', holderPath: binary.path } : { platform: 'win32' }) });
+  const host = new ProcessHost({ dataDir: dir, daemonBootId: randomUUID(), ...(spawnDeadlineMs === undefined ? {} : { spawnDeadlineMs }), ...(binary ? { platform: 'posix', holderPath: binary.path } : { platform: 'win32' }) });
   hosts.push(host);
   dirOf.set(host, dir);
   return host;
