@@ -48,7 +48,7 @@ import {
   type AdminWriteOp,
 } from '../admin/ops';
 import { isGoalTerminal } from '../agent/types';
-import { UsageError } from '../provider/model';
+import { migrateProviderId, UsageError } from '../provider/model';
 import {
   getMaxConcurrentRuns,
   getPendingPolicy,
@@ -394,7 +394,8 @@ function backendOptionsFor(mode: PermissionMode): SelectOption[] {
 
 /** 把卡片提交的 backend 收成安全值：必须是注册表里的 id，否则丢弃（落回默认 codex），防伪造。 */
 export function safeBackendId(formValue: Record<string, unknown> | undefined): string | undefined {
-  const v = selectValue(formValue, 'backend');
+  const raw = selectValue(formValue, 'backend');
+  const v = raw && migrateProviderId(raw);
   return v && backendIds().includes(v) ? v : undefined;
 }
 
@@ -2378,7 +2379,7 @@ export function createOrchestrator(
       const sessionId = typeof value.t === 'string' ? value.t : undefined;
       // backend id from the button value (M-8: card callbacks carry it), with
       // the card state's copy as fallback for cards minted before the change.
-      const backendId = typeof value.b === 'string' ? value.b : state?.backend;
+      const backendId = typeof value.b === 'string' ? migrateProviderId(value.b) : state?.backend;
       if (!state || !sessionId || state.launching) return;
       state.launching = true;
       settleUpdate(evt.messageId, buildResumeLaunchingCard(state));
@@ -3330,16 +3331,16 @@ export function createOrchestrator(
     })
     .on(DM.sessionTitleSetBackend, ({ evt, value }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
-      const backendId = typeof value.v === 'string' ? value.v : undefined;
+      const backendId = typeof value.v === 'string' ? migrateProviderId(value.v) : undefined;
       void patch(evt, () => renderSessionTitleSettingsFor(evt.messageId, backendId));
     })
     .on(DM.sessionTitleDisable, ({ evt, value }) => {
-      const backendId = typeof value.b === 'string' ? value.b : '';
+      const backendId = typeof value.b === 'string' ? migrateProviderId(value.b) : '';
       applySessionTitlePref(evt, backendId, { enabled: false }, '✅ 已改为截断首句；以后新建的会话不调用标题模型。');
     })
     .on(DM.sessionTitleSubmit, ({ evt, value, formValue }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
-      const backendId = typeof value.b === 'string' ? value.b : '';
+      const backendId = typeof value.b === 'string' ? migrateProviderId(value.b) : '';
       const parsed = parseSessionTitleFormValue(formValue);
       if (!parsed.ok) {
         sendFreshSettingsResult(
@@ -3373,7 +3374,7 @@ export function createOrchestrator(
     })
     .on(DM.commentSetBackend, ({ evt, value }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
-      const v = typeof value.v === 'string' ? value.v : undefined;
+      const v = typeof value.v === 'string' ? migrateProviderId(value.v) : undefined;
       // Transient cascade source: fetch that Agent's models, but do not mutate
       // persistent comments config until the form is submitted.
       void patch(evt, () => renderCommentSettingsFor(evt.messageId, v));
@@ -3382,7 +3383,7 @@ export function createOrchestrator(
     // current value, so a submit always carries a concrete model/effort to store.
     .on(DM.commentSubmit, ({ evt, value, formValue }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
-      const backendId = typeof value.b === 'string' ? value.b : getCommentsConfig(cfg).backend ?? DEFAULT_BACKEND_ID;
+      const backendId = typeof value.b === 'string' ? migrateProviderId(value.b) : getCommentsConfig(cfg).backend ?? DEFAULT_BACKEND_ID;
       if (!commentBackendOptions().some((entry) => entry.id === backendId)) {
         sendFreshSettingsResult(
           evt,

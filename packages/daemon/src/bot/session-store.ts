@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import { paths } from '../config/paths';
 import { DEFAULT_BACKEND_ID, type ReasoningEffort } from '../agent/types';
+import { migrateProviderId, migrateTitleJobKey } from '../provider/model';
 
 /**
  * A persisted session = one Feishu topic (thread) bound to a codex thread.
@@ -115,8 +116,19 @@ function migrate(raw: Record<string, unknown>): SessionRecord {
     const legacy = raw[LEGACY_V1_SESSION_FIELD];
     if (typeof legacy === 'string') (rec as { sessionId: string }).sessionId = legacy;
   }
-  if (typeof rec.backend !== 'string') (rec as { backend: string }).backend = DEFAULT_BACKEND_ID;
+  (rec as { backend: string }).backend = typeof rec.backend === 'string' ? migrateProviderId(rec.backend) : DEFAULT_BACKEND_ID;
+  if (typeof rec.titleJobKey === 'string') rec.titleJobKey = migrateTitleJobKey(rec.titleJobKey);
   return rec;
+}
+
+// A store holding both an old-id job and its migrated twin keeps the first, as createSessionTitleJob would.
+function migrateTitleJobs(jobs: SessionTitleJob[]): SessionTitleJob[] {
+  const byKey = new Map<string, SessionTitleJob>();
+  for (const job of jobs) {
+    const migrated = { ...job, backend: migrateProviderId(job.backend), key: migrateTitleJobKey(job.key) };
+    if (!byKey.has(migrated.key)) byKey.set(migrated.key, migrated);
+  }
+  return [...byKey.values()];
 }
 
 function emptyStore(): StoreFile {
@@ -134,7 +146,7 @@ async function readStoreIn(file: string): Promise<StoreFile> {
     // bridge-created sessions registered after the upgrade.
     const titleJobs =
       typeof parsed.version === 'number' && parsed.version >= 3 && Array.isArray(parsed.titleJobs)
-        ? (parsed.titleJobs as SessionTitleJob[])
+        ? migrateTitleJobs(parsed.titleJobs as SessionTitleJob[])
         : [];
     return { ...parsed, version: FILE_VERSION, sessions, titleJobs };
   } catch (err) {

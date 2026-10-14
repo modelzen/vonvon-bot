@@ -1,6 +1,18 @@
 import type { ModelCatalog } from '@vonvon/protocol';
 
 export type ProviderId = 'codex' | 'claude';
+
+const LEGACY_PROVIDER_IDS = new Map<string, ProviderId>([['codex-appserver', 'codex'], ['claude-agent', 'claude']]);
+
+/** Maps the bridge-era ids that `main` and the bridge importer store on disk; any other id passes through. */
+export function migrateProviderId(id: string): string {
+  return LEGACY_PROVIDER_IDS.get(id) ?? id;
+}
+
+export function migrateTitleJobKey(key: string): string {
+  const colon = key.indexOf(':');
+  return colon < 0 ? key : migrateProviderId(key.slice(0, colon)) + key.slice(colon);
+}
 export type Tier = 'qa' | 'write' | 'full';
 export type ReadScope = 'project' | 'unrestricted';
 export type Os = 'darwin' | 'linux' | 'win32';

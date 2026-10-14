@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import { paths } from '../config/paths';
 import type { PermissionMode, ReasoningEffort } from '../agent/types';
+import { migrateProviderId } from '../provider/model';
 
 /** A project = a Feishu group bound to a fixed working directory. */
 export interface Project {
@@ -144,7 +145,7 @@ export async function listProjectsIn(file: string): Promise<Project[]> {
     const text = await readFile(file, 'utf8');
     const parsed = JSON.parse(text) as Partial<StoreFile>;
     if (!parsed || !Array.isArray(parsed.projects) || parsed.projects.some(p => !p || typeof p !== 'object' || typeof p.name !== 'string' || typeof p.cwd !== 'string')) throw new Error('项目注册表格式无效');
-    return parsed.projects;
+    return parsed.projects.map(p => (p.backend === undefined ? p : { ...p, backend: migrateProviderId(p.backend) }));
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw err;

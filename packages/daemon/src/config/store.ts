@@ -5,15 +5,30 @@ import { dirname } from 'node:path';
 import { paths } from './paths';
 import type { AppConfig, AppPreferences, TenantBrand } from './schema';
 import { secretKeyForApp } from './schema';
+import { migrateProviderId } from '../provider/model';
 
 export async function loadConfig(path: string = paths.configFile): Promise<Partial<AppConfig>> {
   try {
     const text = await readFile(path, 'utf8');
-    return JSON.parse(text) as Partial<AppConfig>;
+    return migratePreferences(JSON.parse(text) as Partial<AppConfig>);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
     throw err;
   }
+}
+
+function migratePreferences(cfg: Partial<AppConfig>): Partial<AppConfig> {
+  const prefs = cfg.preferences;
+  if (typeof prefs?.comments?.backend === 'string') prefs.comments.backend = migrateProviderId(prefs.comments.backend);
+  const byBackend = prefs?.sessionTitles?.byBackend;
+  if (byBackend && typeof byBackend === 'object') {
+    const migrated: typeof byBackend = {};
+    for (const [id, policy] of Object.entries(byBackend)) if (migrateProviderId(id) === id) migrated[id] = policy;
+    // An entry already stored under the new id was written after the upgrade, so it outranks the legacy one.
+    for (const [id, policy] of Object.entries(byBackend)) migrated[migrateProviderId(id)] ??= policy;
+    prefs!.sessionTitles!.byBackend = migrated;
+  }
+  return cfg;
 }
 
 /**
