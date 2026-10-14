@@ -1,10 +1,11 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CodexAppServerBackend } from '../src/agent/codex-appserver/backend';
-import { shutdownResidentClients } from '../src/provider/engines/codex/client-pool';
+import { bindCodexHost, shutdownResidentClients } from '../src/provider/engines/codex/client-pool';
 import { writeNodeExecutable } from './helpers/node-executable';
+import { processHosts } from './helpers/process-hosts';
 import type { AgentEvent, AgentRun, AgentThread } from '../src/agent/types';
 
 // Exercise the real JSON-RPC transport, notification queue and backend together.
@@ -61,8 +62,11 @@ readline.createInterface({input:process.stdin}).on('line', line => {
 `;
 const dir = mkdtempSync(join(tmpdir(), 'turn-isolation-'));
 const { bin } = writeNodeExecutable(dir, 'codex', SERVER);
+const hosts = processHosts();
+beforeAll(() => { hosts.setup(); bindCodexHost(hosts.host()); });
 afterAll(async () => {
   await shutdownResidentClients();
+  await hosts.teardown();
   rmSync(dir, { recursive: true, force: true });
 });
 

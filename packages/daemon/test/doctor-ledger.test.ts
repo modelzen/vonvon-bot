@@ -39,7 +39,6 @@ async function liveHolder(): Promise<{ pid: number; start: StartToken }> {
   return { pid: process.pid, start: read };
 }
 
-/** A provider group still alive under a holder that is gone: unknown from outside on both platforms. */
 async function orphanedRecord(id: string): Promise<LedgerRecord> {
   const leader = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
   leaders.push(leader.pid!);
@@ -105,7 +104,7 @@ describe('doctor', () => {
     mkdirSync(orphan, { recursive: true });
     writeIndentedLedger(home, [{ ...base, id: 'supervisor-intent', stage: 'intent' }]);
     writeIndentedLedger(bot, [{ ...base, id: 'bot-held', stage: 'running', holder: await liveHolder(), provider: { pid: process.pid } }]);
-    const orphaned = await orphanedRecord('bot-unknown');
+    const orphaned: LedgerRecord = { ...await orphanedRecord('bot-unknown'), sessionId: 'orphan-session' };
     writeIndentedLedger(orphan, [orphaned]);
     vi.stubEnv('VONVON_HOME', home);
     vi.resetModules();
@@ -115,9 +114,9 @@ describe('doctor', () => {
     try {
       await (await import('../src/cli/commands/doctor')).runDoctor();
       const text = printed.join('\n');
-      expect(text).toMatch(/✅ agent 进程记录\s+\S*process-owners\.json，1 条\n\s+supervisor-intent codex intent holder - inert/);
-      expect(text).toMatch(new RegExp(`✅ agent 进程记录\\s+\\S*cli_fixture\\S*process-owners\\.json，1 条\\n\\s+bot-held codex running holder ${process.pid} held`));
-      expect(text).toMatch(new RegExp(`❌ agent 进程记录\\s+\\S*cli_orphan\\S*process-owners\\.json，1 条\\n\\s+bot-unknown codex running holder ${'holder' in orphaned ? orphaned.holder.pid : ''} unknown`));
+      expect(text).toMatch(/✅ agent 进程记录\s+\S*process-owners\.json，1 条\n\s+supervisor-intent codex intent holder - provider - inert/);
+      expect(text).toMatch(new RegExp(`✅ agent 进程记录\\s+\\S*cli_fixture\\S*process-owners\\.json，1 条\\n\\s+bot-held codex running holder ${process.pid} provider ${process.pid} held`));
+      expect(text).toMatch(new RegExp(`❌ agent 进程记录\\s+\\S*cli_orphan\\S*process-owners\\.json，1 条\\n\\s+bot-unknown codex session orphan-session running holder ${'holder' in orphaned ? orphaned.holder.pid : ''} provider ${'provider' in orphaned ? orphaned.provider.pid : ''} unknown`));
       expect(process.exitCode).toBe(1);
     } finally {
       process.exitCode = exitCode;

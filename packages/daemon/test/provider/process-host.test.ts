@@ -134,6 +134,22 @@ describe.skipIf(PLATFORM !== 'posix')('ProcessHost on POSIX', () => {
     await ended;
   }, 30_000);
 
+  it('spawn() during the reaped window of an end in flight waits for it instead of refusing: the client pool rebuilds a utility process this way (#282)', async () => {
+    const host = newHost(dataDir());
+    const { hosted } = await spawnFake(host, []);
+    const ended = hosted.end();
+    while (host.snapshot()[0]?.ownership !== 'unknown') {
+      if (host.snapshot().length === 0) throw new Error('record retired before its reaped window was observed');
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    expect(host.admission()).toMatchObject({ reason: 'owned-work-unverified' });
+    const { hosted: next } = await spawnFake(host, []);
+    expect(host.snapshot().map(record => [record.id, record.ownership])).toEqual([[next.id, 'bound']]);
+    await ended;
+    await next.end();
+    expect(host.snapshot()).toEqual([]);
+  }, 30_000);
+
   it('terminateTree on a TERM-ignoring tree returns sent, then killTree removes every pid in the group and watch() reports the exit without transport-lost', async () => {
     const host = newHost(dataDir());
     const { hosted, pid, grandchildren, facts } = await spawnFake(host, ['--ignore-term', '--grandchildren', '1']);

@@ -259,11 +259,15 @@ export class ProcessHost {
     return !s.retired.settled && s.unconfirmed === undefined && (s.probing || (s.identity !== 'lost' && (s.ending !== undefined || s.pending !== undefined)));
   }
 
-  /** Rejects once `closeAll` has started, and when the `intent` record cannot be made durable; nothing is spawned in either case. */
+  /**
+   * Admits through `admit()`, so a spawn right after a stop by this process waits out the stop's reaped window instead of refusing (#282).
+   * Rejects once `closeAll` has started, and when the `intent` record cannot be made durable; nothing is spawned in either case.
+   */
   async reserve(providerId: ProviderId, sessionId?: string): Promise<Reservation | Refusal> {
     if (this.closing) throw new Error('process host is closing');
-    const refusal = this.admission();
+    const refusal = await this.admit();
     if (refusal) return refusal;
+    if (this.closing) throw new Error('process host is closing');
     const id = randomUUID();
     const control = this.platform === 'win32' ? { pipe: newPipeName(), jobName: `Local\\vonvon-${id}` } : undefined;
     const intent: LedgerRecord = { id, daemonBootId: this.options.daemonBootId, providerId, sessionId, stage: 'intent', control };
@@ -278,7 +282,7 @@ export class ProcessHost {
     finally { this.inflight.delete(setup); s.setup.resolve(); }
   }
 
-  private async setUp(s: RecordState, control: { pipe: string; jobName: string } | undefined): Promise<Reservation> {
+  private async setUp(s: RecordState, control: { pipe: string; jobName: string } | undefined): Promise<Reservation | Refusal> {
     const id = s.record.id;
     let channel: HolderChannel;
     try {
@@ -307,6 +311,12 @@ export class ProcessHost {
     catch (error) {
       await this.abandon(s);
       throw error;
+    }
+    // A record can reach its reaped window while the holder was spawning; `launch` rechecks admission synchronously, so the wait happens here.
+    const refusal = await this.admit();
+    if (refusal) {
+      await this.abandon(s);
+      return refusal;
     }
     return new Reservation(this, id);
   }
@@ -347,7 +357,6 @@ export class ProcessHost {
     const nonce = newNonce();
     s.issued.set(nonce, { command: 'launch' });
     const args = this.platform === 'win32' ? [windowsCommandLine(spec.file, spec.args, { shim: spec.shim === true })] : spec.args;
-    // A shim's command line starts with cmd.exe, so cmd.exe is the application CreateProcessW runs.
     const file = this.platform === 'win32' && spec.shim ? process.env.ComSpec ?? 'C:\\Windows\\System32\\cmd.exe' : spec.file;
     s.channel.send({ command: 'launch', nonce, file, args, env: spec.env, cwd: spec.cwd });
     log.info('process-host', 'launch', { id, file: spec.file });
