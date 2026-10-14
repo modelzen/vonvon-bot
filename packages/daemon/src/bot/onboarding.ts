@@ -42,7 +42,7 @@ export async function ensureAnyAgent(): Promise<boolean> {
   console.error(`\n${rule}`);
   console.error('⚠️  未检测到可用的 codex 后端——仍会启动，但群里发消息会报后端不可用。');
   console.error('   装上 codex：npm i -g @openai/codex，然后 codex login');
-  console.error('   装好后用 `feishu-codex-bridge doctor` 自检。');
+  console.error('   装好后运行 `vonvon open`，在「状态与诊断」页检查。');
   console.error(`${rule}\n`);
   return true;
 }
@@ -78,12 +78,12 @@ export async function ensureOnboarded(
   if (!entry) {
     if (opts.bot) {
       console.error(
-        `✗ 找不到机器人「${opts.bot}」。用 \`feishu-codex-bridge bot list\` 查看已注册的机器人。`,
+        `✗ 找不到机器人「${opts.bot}」。运行 \`vonvon open\` 在网页里查看已注册的机器人。`,
       );
       return null;
     }
     if (!opts.allowCreate) {
-      console.error('✗ 尚未配置任何飞书机器人。请先运行 `feishu-codex-bridge bot init`（或前台 `run`）扫码创建。');
+      console.error('✗ 尚未配置任何飞书机器人。请运行 `vonvon open` 在网页里「注册 Bot」，或在终端前台运行 `vonvon daemon run` 扫码创建。');
       return null;
     }
     return registerNewBot('default');
@@ -92,7 +92,7 @@ export async function ensureOnboarded(
   useBotDir(entry.appId);
   const cfg = await loadConfig();
   if (!isComplete(cfg)) {
-    console.error(`✗ 当前机器人「${entry.name}」(${entry.appId}) 配置缺失或损坏。可 \`bot rm ${entry.name}\` 后重新 \`bot init\`。`);
+    console.error(`✗ 当前机器人「${entry.name}」(${entry.appId}) 配置缺失或损坏。请运行 \`vonvon open\`，在网页的「移除 Bot」里删掉它，再重新注册。`);
     return null;
   }
   const r = await validateAndReport(cfg);
@@ -113,7 +113,7 @@ export async function registerNewBot(desiredName?: string): Promise<OnboardResul
   if (!process.stdout.isTTY) {
     console.error(
       '✗ 当前不是交互式终端，无法扫码创建飞书应用。\n' +
-        '  请在终端前台运行 `feishu-codex-bridge bot init`（或 `run` / `start`）扫码 onboarding。',
+        '  请运行 `vonvon open` 在网页里「注册 Bot」，或在终端前台运行 `vonvon daemon run` 扫码创建。',
     );
     return null;
   }
@@ -162,7 +162,7 @@ async function validateAndReport(
   const v = await validateAppCredentials(cfg.accounts.app.id, secret, cfg.accounts.app.tenant);
   if (!v.ok) {
     console.error(`✗ 应用凭据校验失败：${v.reason}`);
-    console.error('  应用可能被禁用/未发布；可重跑 `feishu-codex-bridge bot init` 重新扫码。');
+    console.error('  应用可能被禁用/未发布；可运行 `vonvon open`，在这个 Bot 的页面点「重新授权」重新扫码。');
     return null;
   }
   console.log(`✓ 凭据校验通过  bot: ${v.botName ?? '-'}  appId: ${cfg.accounts.app.id}`);

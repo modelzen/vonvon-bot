@@ -1,5 +1,6 @@
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { log } from '../core/logger';
+import { labelScope } from '../config/scopes';
 
 /**
  * Inbound CONTEXT weaving — give codex the上下文 a Feishu @ alone doesn't carry.
@@ -20,12 +21,13 @@ import { log } from '../core/logger';
  * pulled text into the prompt as clearly-fenced blocks PREPENDED to the user's
  * actual line (which stays the instruction codex acts on).
  *
- * The bot reads these with its OWN tenant identity: it already holds
- * `im:message.group_msg` (read ALL group messages, see config/scopes.ts) and
- * already calls `im.v1.message.get` (media.ts) — no second identity / lark-cli
- * needed. Every fetch is best-effort: a deleted message, a missing scope, or a
- * timeout is logged and skipped, never thrown — a missing block must not break
- * the turn.
+ * The bot reads these with its OWN tenant identity — no second identity /
+ * lark-cli needed. Reading history needs `im:message:readonly` (required since
+ * v1, see config/scopes.ts); an app that hasn't been granted it gets Feishu's
+ * 99991672 rejection, which the thread pull logs as a structured
+ * `thread-context-failed` warning naming the scope (see {@link scopeDenial}).
+ * Every fetch is best-effort: a deleted message, a missing scope, or a timeout
+ * is logged and skipped, never thrown — a missing block must not break the turn.
  *
  * {@link sanitizeContext} is the SINGLE sanitization boundary for this
  * uploader-controlled text (mirrors media.cleanFileName): it strips control
@@ -43,6 +45,11 @@ const THREAD_WEAVE_MAX = 20;
  * 50 is the Feishu page_size ceiling; older messages beyond it are intentionally
  * dropped (we only want recent context) and the truncation is logged. */
 const THREAD_PAGE_SIZE = 50;
+
+/** Feishu OpenAPI error code for "the app lacks a scope this call needs" (same on every endpoint). */
+const SCOPE_DENIED_CODE = 99991672;
+/** The scope this app requests for reading chat history with its own identity (config/scopes.ts). */
+const HISTORY_SCOPE = 'im:message:readonly';
 
 /** A message pulled for context (the quoted message, or one thread-history entry). */
 export interface ContextMessage {
@@ -116,6 +123,11 @@ export async function fetchThreadContext(
         page_size: THREAD_PAGE_SIZE,
       },
     });
+    // The SDK only throws on HTTP errors; a 200 with a non-zero code is a failure too.
+    if (typeof res.code === 'number' && res.code !== 0) {
+      warnThreadContextFailed(threadId, res);
+      return [];
+    }
     const items = (res.data as { items?: RawMsgItem[] } | undefined)?.items ?? [];
     const picked = items
       .filter((it) => !it.deleted)
@@ -135,9 +147,74 @@ export async function fetchThreadContext(
     }
     return out;
   } catch (err) {
-    log.warn('intake', 'thread-context-failed', { threadId, err: String(err) });
+    warnThreadContextFailed(threadId, err);
     return [];
   }
+}
+
+/** Feishu's error body, as thrown by the SDK (axios `response.data`) or returned with a non-zero code. */
+interface FeishuErrorBody {
+  code?: unknown;
+  msg?: unknown;
+  error?: { permission_violations?: { subject?: unknown }[] };
+}
+
+/** A Feishu call rejected because the app lacks a scope. */
+export interface ScopeDenial {
+  code: number;
+  /** Scopes Feishu says would satisfy the call (any one of them); empty when it didn't list them. */
+  accepted: string[];
+}
+
+/**
+ * Recognise Feishu's "app lacks a scope" rejection (code 99991672) from either
+ * shape the SDK surfaces: a thrown axios error carrying the body in
+ * `response.data`, or a resolved body with the non-zero code. The accepted
+ * scopes come from `error.permission_violations[].subject`, else from the
+ * bracketed list in `msg` ("One of the following scopes is required: [a, b]").
+ * Returns undefined for every other failure. Exported for testing.
+ */
+export function scopeDenial(failure: unknown): ScopeDenial | undefined {
+  if (!failure || typeof failure !== 'object') return undefined;
+  const wrapped = (failure as { response?: { data?: unknown } }).response?.data;
+  const body = (wrapped && typeof wrapped === 'object' ? wrapped : failure) as FeishuErrorBody;
+  if (body.code !== SCOPE_DENIED_CODE) return undefined;
+  const isScope = (s: unknown): s is string => typeof s === 'string' && /^[\w.:-]+$/.test(s);
+  const violations = body.error?.permission_violations;
+  const fromViolations = Array.isArray(violations) ? violations.map((v) => v?.subject).filter(isScope) : [];
+  const listed = typeof body.msg === 'string' ? /\[([^\]]*)\]/.exec(body.msg)?.[1] : undefined;
+  const fromMsg = listed ? listed.split(',').map((s) => s.trim()).filter(isScope) : [];
+  return { code: SCOPE_DENIED_CODE, accepted: fromViolations.length ? fromViolations : fromMsg };
+}
+
+/**
+ * Log a failed 话题上文 pull. A missing scope gets a structured warning naming the
+ * scope to grant (so the gap is visible in the log rather than a bare error
+ * string); anything else keeps the plain error. The turn still proceeds without
+ * the history block either way.
+ */
+function warnThreadContextFailed(threadId: string, failure: unknown): void {
+  const denial = scopeDenial(failure);
+  if (denial) {
+    // We request HISTORY_SCOPE; name another only when Feishu says ours wouldn't satisfy the call.
+    const scope = denial.accepted.includes(HISTORY_SCOPE) ? HISTORY_SCOPE : (denial.accepted[0] ?? HISTORY_SCOPE);
+    log.warn('intake', 'thread-context-failed', {
+      threadId,
+      reason: 'missing-scope',
+      scope,
+      scopeLabel: labelScope(scope),
+      code: denial.code,
+      ...(denial.accepted.length ? { accepted: denial.accepted } : {}),
+    });
+    return;
+  }
+  // A returned error body has no useful String(); show its code and msg instead.
+  const body = failure as FeishuErrorBody | undefined;
+  const err =
+    failure instanceof Error || typeof body?.code !== 'number'
+      ? String(failure)
+      : `code=${body.code} msg=${String(body.msg ?? '')}`;
+  log.warn('intake', 'thread-context-failed', { threadId, err });
 }
 
 /**
