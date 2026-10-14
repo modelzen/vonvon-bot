@@ -1,22 +1,14 @@
 import { lstat, open } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { win32 } from 'node:path';
 import { decodeGeneratedDefinition, type Definition, type SerializedDefinition } from './definitions';
-import { resolveServiceRoot, WINDOWS_CMD_NAME, WINDOWS_VBS_NAME, WINDOWS_RUN_KEY, WINDOWS_RUN_VALUE, type CanonicalRoot, type Target } from './identity';
+import { resolveServiceRoot, type CanonicalRoot, type Target } from './identity';
 
 export type Registration =
   | { kind: 'absent' }
   | { kind: 'ours'; definition: Definition }
   | { kind: 'other-root'; recordedRoot: CanonicalRoot; definition: Definition }
   | { kind: 'unrecognized'; location: string; reason: string };
-export type WindowsRunObservation =
-  | { kind: 'absent' }
-  | { kind: 'value'; type: 'REG_SZ' | 'REG_EXPAND_SZ'; value: string }
-  | { kind: 'unavailable'; reason: string };
-
-type ReadInput =
-  | { target: Extract<Target, { platform: 'darwin' | 'linux' }>; requestedRoot: string }
-  | { target: Extract<Target, { platform: 'win32' }>; requestedRoot: string; windowsRun: WindowsRunObservation };
+type ReadInput = { target: Target; requestedRoot: string };
 
 const MAX_DEFINITION_BYTES = 1024 * 1024;
 
@@ -46,44 +38,19 @@ async function readFile(path: string): Promise<Buffer | null> {
 }
 
 export async function readRegistration(input: ReadInput): Promise<Registration> {
-  let target = input.target;
-  let location = target.platform === 'darwin' ? target.plistPath : target.platform === 'linux' ? target.unitPath : target.vbsPath;
+  const target = input.target;
+  const location = target.platform === 'darwin' ? target.plistPath : target.unitPath;
   try {
     const requestedRoot = await resolveServiceRoot(input.requestedRoot);
-    let bytes: SerializedDefinition;
-    if (target.platform === 'win32') {
-      location = `${WINDOWS_RUN_KEY}\\${WINDOWS_RUN_VALUE}`;
-      if (!('windowsRun' in input)) throw new Error('Windows Run observation is required');
-      const observation = input.windowsRun;
-      if (observation.kind === 'unavailable') throw new Error(`Windows Run observation unavailable: ${observation.reason}`);
-      if (observation.kind === 'absent') return { kind: 'absent' };
-      if (observation.type !== 'REG_SZ') throw new Error('Windows Run value must be REG_SZ');
-      const match = /^wscript\.exe \/\/B "([^"\r\n]+)"$/.exec(observation.value);
-      const vbsPath = match?.[1];
-      if (!vbsPath || !win32.isAbsolute(vbsPath) || win32.basename(vbsPath) !== WINDOWS_VBS_NAME) throw new Error('Unrecognized Windows Run locator');
-      target = { platform: 'win32', vbsPath, cmdPath: win32.join(win32.dirname(vbsPath), WINDOWS_CMD_NAME) };
-      const runValue = observation.value;
-      location = target.vbsPath;
-      const vbs = await readFile(target.vbsPath);
-      location = target.cmdPath;
-      const cmd = await readFile(target.cmdPath);
-      if (vbs === null || cmd === null) {
-        location = vbs === null ? target.vbsPath : target.cmdPath;
-        throw new Error('Incomplete Windows launcher pair');
-      }
-      bytes = { platform: 'win32', cmd, vbs, runValue };
-    } else {
-      const content = await readFile(location);
-      if (content === null) return { kind: 'absent' };
-      bytes = target.platform === 'darwin' ? { platform: 'darwin', plist: content } : { platform: 'linux', unit: content };
-    }
+    const content = await readFile(location);
+    if (content === null) return { kind: 'absent' };
+    const bytes: SerializedDefinition = target.platform === 'darwin' ? { platform: 'darwin', plist: content } : { platform: 'linux', unit: content };
     const decoded = decodeGeneratedDefinition(target, bytes);
     const root = await resolveServiceRoot(decoded.root);
     if (root !== decoded.root) throw new Error('Recorded root is not its canonical realpath');
     const definition: Definition = { ...decoded, root };
     return root === requestedRoot ? { kind: 'ours', definition } : { kind: 'other-root', recordedRoot: root, definition };
   } catch (error) {
-    if (error instanceof Error && 'location' in error && typeof error.location === 'string') location = error.location;
     return { kind: 'unrecognized', location, reason: error instanceof Error ? error.message : String(error) };
   }
 }

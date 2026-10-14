@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, realpath, rm, stat, symlink, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { PROTOCOL_VERSION } from '@vonvon/protocol';
-import { createDaemonDependencies, parseWindowsRunQuery, prepareDesktopRoot } from '../src/daemon-dependencies.js';
+import { createDaemonDependencies, prepareDesktopRoot } from '../src/daemon-dependencies.js';
 import { readRunningPidLock } from '../../daemon/src/server/pid-lock.js';
 import { verifyPidLockOwner } from '../../daemon/src/server/owner-verification.js';
 import { toolDirectories } from '../../daemon/src/platform/tool-path.js';
@@ -133,24 +133,5 @@ describe('desktop daemon dependencies', () => {
     });
     await expect(dependencies.startSelectedBot(0, 'cli_selected')).rejects.toThrow('spawn denied');
     expect(spawn).toHaveBeenCalledOnce();
-  });
-
-  it('requires an observed registry key before reporting absence', () => {
-    const key = 'HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
-    expect(parseWindowsRunQuery('')).toMatchObject({ kind: 'unavailable' });
-    expect(parseWindowsRunQuery(key)).toEqual({ kind: 'absent' });
-    expect(parseWindowsRunQuery(key.replace('Software', 'SOFTWARE'))).toEqual({ kind: 'absent' });
-    expect(parseWindowsRunQuery(key.toLowerCase())).toEqual({ kind: 'absent' });
-    expect(parseWindowsRunQuery(key.replace('HKEY_CURRENT_USER', 'HKEY_LOCAL_MACHINE'))).toMatchObject({ kind: 'unavailable' });
-    expect(parseWindowsRunQuery(`${key}Backup`)).toMatchObject({ kind: 'unavailable' });
-    expect(parseWindowsRunQuery(`${key}\r\n    Other    REG_SZ    unrelated`)).toEqual({ kind: 'absent' });
-    expect(parseWindowsRunQuery(`${key}\r\n    VONVON BOT    REG_SZ    owned`)).toEqual({ kind: 'value', type: 'REG_SZ', value: 'owned' });
-    expect(parseWindowsRunQuery(`${key}\r\n    vonvon bot    REG_SZ    owned`)).toEqual({ kind: 'value', type: 'REG_SZ', value: 'owned' });
-    expect(parseWindowsRunQuery(`${key}\r\n    Vonvon Bot Backup    REG_SZ    foreign`)).toEqual({ kind: 'absent' });
-    expect(parseWindowsRunQuery(`${key}\r\n    Empty    REG_SZ    \r\n    Vonvon Bot    REG_SZ    `)).toEqual({ kind: 'value', type: 'REG_SZ', value: '' });
-    expect(parseWindowsRunQuery(`${key}\r\n    Vonvon Bot    REG_SZ    wscript.exe //B "C:\\data\\service\\vonvon-bot.vbs"`)).toEqual({
-      kind: 'value', type: 'REG_SZ', value: 'wscript.exe //B "C:\\data\\service\\vonvon-bot.vbs"',
-    });
-    expect(parseWindowsRunQuery(`${key}\r\n    Vonvon Bot    REG_BINARY    0102`)).toMatchObject({ kind: 'unavailable' });
   });
 });
