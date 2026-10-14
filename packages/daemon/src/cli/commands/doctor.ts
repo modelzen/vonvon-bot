@@ -108,7 +108,7 @@ function ledgerCheck(inspection: LedgerInspection): Check | undefined {
   const name = 'agent 进程记录';
   if (inspection.kind === 'missing') return undefined;
   if (inspection.kind === 'unreadable') return { name, ok: false, detail: `无法读取 ${inspection.path}：${inspection.error}。确认相关进程已结束后移走此文件。` };
-  const lines = inspection.records.map(r => `\n      ${r.id} ${r.providerId} ${r.stage} holder ${r.holderPid ?? '-'} ${r.ownership}`);
+  const lines = inspection.records.map(r => `\n      ${r.id} ${r.providerId} ${r.stage} holder ${r.holderPid ?? '-'} ${r.ownership === 'held' ? 'held（holder 仍在运行，归运行中的 daemon 管理）' : r.ownership}`);
   const ok = inspection.records.every(r => r.ownership !== 'unknown');
   return { name, ok, detail: `${inspection.path}，${inspection.records.length} 条${lines.join('')}` };
 }

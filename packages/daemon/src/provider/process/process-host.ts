@@ -136,8 +136,10 @@ const posixGroupProbe = (pid: number): Probe => {
   catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH' ? 'empty' : 'unknown'; }
 };
 
+/** `held`: seen from outside the daemon, the record's holder is alive with its recorded start token, so a running daemon may still own it. */
+export type OutsideOwnership = Ownership | 'held';
 export interface InspectedRecord {
-  id: ReservationId; providerId: ProviderId; sessionId?: string; stage: Stage; ownership: Ownership; holderPid?: number; providerPid?: number;
+  id: ReservationId; providerId: ProviderId; sessionId?: string; stage: Stage; ownership: OutsideOwnership; holderPid?: number; providerPid?: number;
 }
 export type LedgerInspection =
   | { kind: 'missing'; path: string }
@@ -150,14 +152,23 @@ export async function inspectLedger(dataDir: string, platform: HostPlatform): Pr
   if (read.kind === 'missing') return { kind: 'missing', path };
   if (read.kind === 'unreadable') return { kind: 'unreadable', path, error: String(read.error) };
   const records = await Promise.all(read.records.map(async (r): Promise<InspectedRecord> => ({
-    id: r.id, providerId: r.providerId, sessionId: r.sessionId, stage: r.stage, ownership: ownershipOf(r, await outsideEvidence(r, platform), platform),
+    id: r.id, providerId: r.providerId, sessionId: r.sessionId, stage: r.stage, ownership: await outsideOwnership(r, platform),
     holderPid: 'holder' in r ? r.holder.pid : undefined, providerPid: 'provider' in r ? r.provider.pid : undefined,
   })));
   return { kind: 'ok', path, records };
 }
 
-async function outsideEvidence(r: LedgerRecord, platform: HostPlatform): Promise<Evidence> {
-  if (r.stage === 'intent' || !holderProvenGone(await readStartToken(r.holder.pid), r.holder.start)) return { kind: 'unsealed' };
+async function outsideOwnership(r: LedgerRecord, platform: HostPlatform): Promise<OutsideOwnership> {
+  if (r.stage === 'intent') return ownershipOf(r, { kind: 'unsealed' }, platform);
+  const read = await readStartToken(r.holder.pid);
+  if (!holderProvenGone(read, r.holder.start)) {
+    const ownership = ownershipOf(r, { kind: 'unsealed' }, platform);
+    return ownership === 'unknown' && r.holder.start !== undefined && read === r.holder.start ? 'held' : ownership;
+  }
+  return ownershipOf(r, await sealedEvidence(r, platform), platform);
+}
+
+async function sealedEvidence(r: Exclude<LedgerRecord, { stage: 'intent' }>, platform: HostPlatform): Promise<Evidence> {
   if (r.stage === 'born') return { kind: 'sealed', probe: 'none' };
   if (platform === 'posix') return { kind: 'sealed', probe: 'provider' in r ? posixGroupProbe(r.provider.pid) : 'none' };
   const osSession = r.control?.osSession;
