@@ -19,7 +19,7 @@
 3. 直接推进 M1。新用户扫码时看到的预填名、一键授权里的权限，是 owner 第一次验收最先看到的东西。
 4. 后面的片要靠它开工。`im:message:readonly` 进了必需权限，s04 的清单才能检测它，s09、s14 的补拉才有权限；`include_bot` 和 `self_manage` 进了授权链接，s27 和 s53 才用得上。
 
-和 s01 同时在飞的是 s02。这两片合入，就能出 M1 预览版。同时可以开实验：JP-VPS 上先做 e01、e02，Mac 上先做 e06、e10。
+和 s01 同时在飞的是 s02。这两片合入，就能出 M1 预览版。同时可以开实验：e01、e02 已在 JP-VPS 上做完（#297），Mac 上先做 e06、e10。
 
 ## 2. 里程碑
 
@@ -204,7 +204,7 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 | 状态 | 编号 | 切片 | 内容 | 约行数 | 依赖 | 风险 | Mac 检查 |
 |---|---|---|---|---|---|---|---|
 | [x] | s01 | v1 计划、改名和第一版权限表 | 建这份计划；扫码预填名、群欢迎卡和提示里残留的 bridge 名字改成 Vonvon Bot 和 vonvon 命令（3.12）；`im:message:readonly` 进必需权限，`include_bot` 和 `self_manage` 进可选组和一键授权链接（3.11）；product.md 开头的修改规则改成本文 4.2 | 800 | — | — | 无（预填名在 M1 验收时看） |
-| 进行中 | s02 | 打包版自带 npm、找得到 Homebrew 装的 Codex、Claude SDK 锁版本 | app 资源里带 npm 11.20.0，下载 Claude SDK 和 `installCodex` 用它，由 daemon 自己的 Node 执行；桌面端起 daemon 时补 PATH；catalog 写死 SDK 0.3.296，下载和"更新"都装它，devDependency 改成精确版本（3.11） | 420 | — | 子进程、macOS 原生 | 从 Finder 打开打包版：找得到 Homebrew 或 npm 装的 codex；下载的 Claude SDK 是 0.3.296，日志里用的是 app 自带的 npm；"安装托管副本"用 Homebrew 的 npm 能装完 Codex |
+| [x] | s02 | 打包版自带 npm、找得到 Homebrew 装的 Codex、Claude SDK 锁版本 | app 资源里带 npm 11.20.0，下载 Claude SDK 和 `installCodex` 用它，由 daemon 自己的 Node 执行；桌面端起 daemon 时补 PATH；catalog 写死 SDK 0.3.296，下载和"更新"都装它，devDependency 改成精确版本（3.11） | 420 | — | 子进程、macOS 原生 | 从 Finder 打开打包版：找得到 Homebrew 或 npm 装的 codex；下载的 Claude SDK 是 0.3.296，日志里用的是 app 自带的 npm；"安装托管副本"用 Homebrew 的 npm 能装完 Codex |
 
 开工要点：
 - s01：兼容标识不动：旧目录、`FEISHU_CODEX_BRIDGE`、`CLAUDE_CODE_ENTRYPOINT`、hook 正则、旧服务标签。不申请 `im:message.group_msg.include_bot:read`。补拉因为缺权限失败时，记一条带权限名的结构化日志；今天没有现成的诊断去处，诊断页上显示缺的权限在 s19 做。
