@@ -41,6 +41,7 @@ vi.mock('../src/card/run-card-stream', () => ({
 }));
 import { createOrchestrator } from '../src/bot/handle-message';
 import type { AppConfig } from '../src/config/schema';
+import { idleHost } from './helpers/idle-host';
 
 function deferred<T>() {
   let resolve!: (v: T) => void;
@@ -85,7 +86,7 @@ function setup(showModel: 'off' | 'running' | 'always' = 'always') {
   const channel = { send: fake.send, rawClient: { im: { v1: { messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
-  orchestrator = createOrchestrator(channel as never, cfg, '/test');
+  orchestrator = createOrchestrator(channel as never, cfg, '/test', idleHost);
   return orchestrator;
 }
 beforeEach(() => {

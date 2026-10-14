@@ -8,7 +8,7 @@ import type { AdminWriteOp } from '../admin/ops';
 import type { AppConfig } from '../config/schema';
 import { log } from '../core/logger';
 import { sep } from 'node:path';
-import { createOrchestrator } from './handle-message';
+import { createOrchestrator, type ProviderAdmission } from './handle-message';
 import { paths } from '../config/paths';
 import { listProjects } from '../project/registry';
 import { createCliBridgeService, shouldStartCliBridge } from '../cli-bridge';
@@ -33,6 +33,7 @@ export interface BridgeOptions {
   appSecret: string;
   /** fallback cwd for groups that aren't registered projects. */
   fallbackCwd: string;
+  host: ProviderAdmission;
   onConnectionChange?: () => void;
 }
 
@@ -89,7 +90,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     socketPath: paths.cliBridgeSocket,
     isBoundProject: cwdIsBoundProject,
   });
-  const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd, cliBridge);
+  const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd, opts.host, cliBridge);
   const groupTasks = new Set<Promise<JoinedGroups | Project>>();
   let closing: Promise<void> | undefined;
   const shutdown = (): Promise<void> => {

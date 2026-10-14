@@ -3,7 +3,9 @@ let AppServerClient: typeof import('../src/agent/codex-appserver/app-server-clie
 import { appendFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ProcessHost } from '../src/provider/process/process-host';
+import { processHosts } from './helpers/process-hosts';
 let CodexAppServerBackend: typeof import('../src/agent/codex-appserver/backend').CodexAppServerBackend;
 import { writeNodeExecutable } from './helpers/node-executable';
 let refillWarmPool: typeof import('../src/agent/codex-appserver/client-pool').refillWarmPool;
@@ -11,12 +13,20 @@ let shutdownResidentClients: typeof import('../src/agent/codex-appserver/client-
 let takeWarmClient: typeof import('../src/agent/codex-appserver/client-pool').takeWarmClient;
 let utilityRequest: typeof import('../src/agent/codex-appserver/client-pool').utilityRequest;
 
+const hosts = processHosts();
+let host: ProcessHost;
+beforeAll(() => hosts.setup());
+afterAll(() => hosts.teardown());
+
 beforeEach(async () => {
   vi.resetModules();
+  host = hosts.host();
   ({ UnsentRequestError } = await import('../src/agent/types'));
   ({ AppServerClient } = await import('../src/agent/codex-appserver/app-server-client'));
   ({ CodexAppServerBackend } = await import('../src/agent/codex-appserver/backend'));
-  ({ refillWarmPool, shutdownResidentClients, takeWarmClient, utilityRequest } = await import('../src/agent/codex-appserver/client-pool'));
+  const pool = await import('../src/agent/codex-appserver/client-pool');
+  ({ refillWarmPool, shutdownResidentClients, takeWarmClient, utilityRequest } = pool);
+  pool.bindCodexHost(host);
 });
 
 // M-2（research/08 probe 思路的单测化）：utility client 复用/出错即重建 + 容量 1
@@ -136,7 +146,7 @@ describe('utility client 复用与出错即重建（M-2）', () => {
 
   it('进程死亡 → 后续调用自动重建', async () => {
     const { runs } = makeFakeCodex();
-    await expect(utilityRequest('die')).rejects.toThrow(/app-server exited/);
+    await expect(utilityRequest('die')).rejects.toThrow(/app-server exited|JSON-RPC output closed/);
     const res = await utilityRequest<{ data: { id: string }[] }>('model/list');
     expect(res.data[0]!.id).toBe('pool-model');
     expect(runs()).toBe(2);
@@ -219,7 +229,7 @@ describe('容量 1 预热池（M-2）', () => {
 
 it('bounds a missing RPC response without killing unrelated requests', async () => {
   const { bin } = makeFakeCodex();
-  const client = new AppServerClient({ bin, cwd: tmpdir() });
+  const client = new AppServerClient({ host, bin, cwd: tmpdir() });
   try {
     await client.connect();
     const hanging = client.request('hang', {}, 30);
@@ -232,11 +242,11 @@ it('bounds a missing RPC response without killing unrelated requests', async () 
 });
 
 it('classifies a locally closed request as definitely unsent', async () => {
- const client = new AppServerClient({bin:'unused',cwd:tmpdir()});
+ const client = new AppServerClient({host,bin:'unused',cwd:tmpdir()});
  await expect(client.request('turn/steer')).rejects.toBeInstanceOf(UnsentRequestError);
 });
 it('returning a notification iterator removes its pending read', async () => {
- const {bin} = makeFakeCodex(); const client = new AppServerClient({bin,cwd:tmpdir()});
+ const {bin} = makeFakeCodex(); const client = new AppServerClient({host,bin,cwd:tmpdir()});
  try {
   await client.connect();
   const abandoned = client.stream()[Symbol.asyncIterator]();

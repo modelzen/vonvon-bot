@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { paths } from '../config/paths';
+import { mkdirSync } from 'node:fs';
+import { botDir, paths } from '../config/paths';
 import { acquireMutex, closeMutex } from '../config/data-access';
 import { listenerCloseUnconfirmed, observeShutdown, type ShutdownControl } from './lifecycle';
 import { readServiceCodexBin } from '../service/codex-bin';
@@ -19,8 +20,10 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
       owner = await acquirePidLock(paths.appDir);
     }
     if (control.requested) return;
+    const dataDir = options.bot ? botDir(options.bot) : paths.appDir;
+    mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     host = new ProcessHost({
-      dataDir: paths.appDir, daemonBootId: randomUUID(),
+      dataDir, daemonBootId: randomUUID(),
       ...(process.platform === 'win32' ? { platform: 'win32' } : { platform: 'posix', holderPath: defaultHolderPath() }),
     });
     log.info('process-host', 'boot-sweep', { ...await host.sweepOrphans() });
@@ -37,6 +40,7 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
     const { runRun } = await import('../cli/commands/run');
     const claimedOwner = owner;
     await runRun(options.bot, {
+      host,
       control,
       managed: options.managed,
       port: options.port,

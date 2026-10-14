@@ -20,6 +20,7 @@ import { readSingleInstanceHolder } from '../src/core/single-instance';
 vi.mock('../src/platform/spawn', () => ({ spawnProcess: vi.fn() }));
 import { spawnProcess } from '../src/platform/spawn';
 import { startApi } from '../src/server/http';
+import { idleHost } from './helpers/idle-host';
 
 const processes: ChildProcess[] = [];
 let requestShutdown = () => {};
@@ -49,7 +50,7 @@ async function start(ids: string[]) {
     return child;
   });
   const pending = new Promise<void>((resolve) => { requestShutdown = resolve; });
-  supervisor = runSupervisor(ids.map(bot), { control: { requested: false, waitForRequest: () => pending, requestStop() {}, requestRestart(_port: number) {}, completeShutdown: async (release: () => Promise<void>) => release(), dispose() {} } });
+  supervisor = runSupervisor(ids.map(bot), { host: idleHost, control: { requested: false, waitForRequest: () => pending, requestStop() {}, requestRestart(_port: number) {}, completeShutdown: async (release: () => Promise<void>) => release(), dispose() {} } });
   await vi.waitFor(() => expect(captured.deps).toBeDefined());
   const deps = (() : AdminServiceDeps | undefined => captured.deps)();
   if (!deps?.applyBotActivation || !deps.liveStatus || !deps.executeGroups) throw new Error('Runtime activation unavailable');
@@ -127,7 +128,7 @@ it('refreshes the parent snapshot on a child connection notice', async () => {
 it('fails an empty host when its only usable interface cannot start', async () => {
   vi.mocked(startApi).mockRejectedValueOnce(new Error('API unavailable'));
   supervisor = undefined;
-  await expect(runSupervisor([], { control: { requested: false, waitForRequest: () => new Promise(() => {}), requestStop() {}, requestRestart(_port: number) {}, completeShutdown: async (release: () => Promise<void>) => release(), dispose() {} } })).rejects.toThrow('API unavailable');
+  await expect(runSupervisor([], { host: idleHost, control: { requested: false, waitForRequest: () => new Promise(() => {}), requestStop() {}, requestRestart(_port: number) {}, completeShutdown: async (release: () => Promise<void>) => release(), dispose() {} } })).rejects.toThrow('API unavailable');
 });
 
 it('reexecutes the foreground CLI and does not expose inherited service callbacks', async () => {

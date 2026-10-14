@@ -5,7 +5,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { CodexProcessCleanupError, OwnedCodexProcess } from '../src/platform/owned-process';
 import { CodexSetupService } from '../src/agent/codex-appserver/setup';
 import { resolveCodexBin } from '../src/agent/codex-appserver/locate';
+import { bindCodexHost } from '../src/agent/codex-appserver/client-pool';
 import { writeNodeExecutable } from './helpers/node-executable';
+import { processHosts } from './helpers/process-hosts';
 
 const home = mkdtempSync(join(tmpdir(), 'codex-setup-home-'));
 const log = join(home, 'calls.jsonl');
@@ -48,7 +50,10 @@ async function terminal(value: CodexSetupService, id: string) {
 function calls(): { method?: string; params?: { loginId?: string }; bin: string; home: string; pid: number }[] { return existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line)) : []; }
 function alive(pid: number): boolean { try { process.kill(pid, 0); return true; } catch { return false; } }
 
+const hosts = processHosts();
 beforeAll(() => {
+  hosts.setup();
+  bindCodexHost(hosts.host());
   vi.stubEnv('HOME', home); vi.stubEnv('USERPROFILE', home); vi.stubEnv('XDG_CONFIG_HOME', join(home, '.config')); vi.stubEnv('CODEX_HOME', auth); vi.stubEnv('CODEX_BIN', fixture.bin);
 });
 afterEach(async () => {
@@ -56,7 +61,7 @@ afterEach(async () => {
   rmSync(join(auth, 'fixture-account'), { force: true }); rmSync(log, { force: true });
   vi.stubEnv('FIXTURE_MODE', 'hold'); vi.stubEnv('CODEX_BIN', fixture.bin);
 });
-afterAll(() => { vi.unstubAllEnvs(); rmSync(home, { recursive: true, force: true }); });
+afterAll(async () => { vi.unstubAllEnvs(); await hosts.teardown(); rmSync(home, { recursive: true, force: true }); });
 
 describe('Codex account setup uses the task executable and home', { timeout: 40_000 }, () => {
   it('distinguishes installation, signed-out, signed-in, not-required and malformed account state', async () => {

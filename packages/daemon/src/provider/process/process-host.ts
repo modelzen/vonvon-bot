@@ -14,16 +14,17 @@ import { HolderProcess, HolderProcessError, specOf, type AdoptExtras } from './h
 import { EXIT_HOLD_START, stepExitHold, type ExitHoldInput, type ExitHoldState } from './exit-hold';
 import { spawnPosixHolder, type HolderChannel } from './holder-channel';
 import { newNonce, validateSignalReceipt, type CommandName, type Nonce, type ReceiptLine, type Rung } from './holder-protocol';
-import { hostBootMs, readStartToken } from './identity';
+import { hostBootMs, readStartToken, type StartRead } from './identity';
 import {
   advance, legacyExpired, ownershipOf, readLedger, readLegacy, writeLedger,
-  type Evidence, type HostPlatform, type LedgerRecord, type Ownership, type Probe, type ReservationId, type Stage,
+  type Evidence, type HostPlatform, type LedgerRecord, type Ownership, type Probe, type ReservationId, type Stage, type StartToken,
 } from './ledger';
 import { windowsCommandLine } from './windows-command-line';
 import { probeWindowsJob } from './windows-job-probe';
 import { newPipeName, spawnWindowsSupervisor } from './windows-supervisor';
 
 export const RETRY_TAIL_MS = 5000;
+const LEDGER_FILE = 'process-owners.json';
 const DEFAULT_SPAWN_DEADLINE_MS = 60_000;
 
 export type Identity = 'retained' | 'reaped' | 'lost';
@@ -125,10 +126,41 @@ function unconfirmedReason(s: RecordState): UnconfirmedReason {
   return s.probe === 'live' ? 'children-alive' : 'tree-unknown';
 }
 
+const holderProvenGone = (read: StartRead, recorded: StartToken | undefined): boolean =>
+  read === 'absent' || (read !== 'unreadable' && recorded !== undefined && read !== recorded);
+
 const posixGroupProbe = (pid: number): Probe => {
   try { process.kill(-pid, 0); return 'live'; }
   catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH' ? 'empty' : 'unknown'; }
 };
+
+export interface InspectedRecord {
+  id: ReservationId; providerId: ProviderId; sessionId?: string; stage: Stage; ownership: Ownership; holderPid?: number; providerPid?: number;
+}
+export type LedgerInspection =
+  | { kind: 'missing'; path: string }
+  | { kind: 'unreadable'; path: string; error: string }
+  | { kind: 'ok'; path: string; records: InspectedRecord[] };
+
+export async function inspectLedger(dataDir: string, platform: HostPlatform): Promise<LedgerInspection> {
+  const path = join(dataDir, LEDGER_FILE);
+  const read = readLedger(path);
+  if (read.kind === 'missing') return { kind: 'missing', path };
+  if (read.kind === 'unreadable') return { kind: 'unreadable', path, error: String(read.error) };
+  const records = await Promise.all(read.records.map(async (r): Promise<InspectedRecord> => ({
+    id: r.id, providerId: r.providerId, sessionId: r.sessionId, stage: r.stage, ownership: ownershipOf(r, await outsideEvidence(r, platform), platform),
+    holderPid: 'holder' in r ? r.holder.pid : undefined, providerPid: 'provider' in r ? r.provider.pid : undefined,
+  })));
+  return { kind: 'ok', path, records };
+}
+
+async function outsideEvidence(r: LedgerRecord, platform: HostPlatform): Promise<Evidence> {
+  if (r.stage === 'intent' || !holderProvenGone(await readStartToken(r.holder.pid), r.holder.start)) return { kind: 'unsealed' };
+  if (r.stage === 'born') return { kind: 'sealed', probe: 'none' };
+  if (platform === 'posix') return { kind: 'sealed', probe: 'provider' in r ? posixGroupProbe(r.provider.pid) : 'none' };
+  const osSession = r.control?.osSession;
+  return { kind: 'sealed', probe: r.control && osSession !== undefined ? (await probeWindowsJob({ ...r.control, osSession })).probe : 'none' };
+}
 
 export function defaultHolderPath(): string {
   return fileURLToPath(new URL(`./native/${process.platform}-${process.arch}/vonvon-holder`, import.meta.url));
@@ -176,7 +208,7 @@ export class ProcessHost {
   constructor(private readonly options: ProcessHostOptions) {
     this.platform = options.platform;
     this.spawnDeadlineMs = options.spawnDeadlineMs ?? DEFAULT_SPAWN_DEADLINE_MS;
-    this.ledgerPath = join(options.dataDir, 'process-owners.json');
+    this.ledgerPath = join(options.dataDir, LEDGER_FILE);
     this.legacyPath = join(options.dataDir, 'owned-pids.json');
     const read = readLedger(this.ledgerPath);
     if (read.kind === 'unreadable') {
@@ -287,7 +319,9 @@ export class ProcessHost {
     const nonce = newNonce();
     s.issued.set(nonce, { command: 'launch' });
     const args = this.platform === 'win32' ? [windowsCommandLine(spec.file, spec.args, { shim: spec.shim === true })] : spec.args;
-    s.channel.send({ command: 'launch', nonce, file: spec.file, args, env: spec.env, cwd: spec.cwd });
+    // A shim's command line starts with cmd.exe, so cmd.exe is the application CreateProcessW runs.
+    const file = this.platform === 'win32' && spec.shim ? process.env.ComSpec ?? 'C:\\Windows\\System32\\cmd.exe' : spec.file;
+    s.channel.send({ command: 'launch', nonce, file, args, env: spec.env, cwd: spec.cwd });
     log.info('process-host', 'launch', { id, file: spec.file });
     s.spawnTimer = setTimeout(() => { if (!s.ready.settled) s.ready.reject(new HolderProcessError('holder-not-ready')); }, this.spawnDeadlineMs);
     s.spawnTimer.unref();
@@ -500,7 +534,7 @@ export class ProcessHost {
     if (r.stage === 'intent') { this.retire(s, 'inert'); return; }
     if (!s.sealed) {
       const read = await readStartToken(r.holder.pid);
-      s.sealed = read === 'absent' || (read !== 'unreadable' && r.holder.start !== undefined && read !== r.holder.start);
+      s.sealed = holderProvenGone(read, r.holder.start);
       log.info('process-host', 'recover-identity', { id: r.id, stage: r.stage, pid: r.holder.pid, recorded: r.holder.start, read, sealed: s.sealed });
     }
     if (s.sealed && r.stage !== 'born') await this.probeByDaemon(s);

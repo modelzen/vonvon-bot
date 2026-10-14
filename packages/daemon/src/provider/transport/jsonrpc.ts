@@ -2,11 +2,10 @@ import { UnsentRequestError } from '../../agent/types';
 import { StringDecoder } from 'node:string_decoder';
 import type { Readable, Writable } from 'node:stream';
 import { z } from 'zod';
-import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mergeProcessEnv } from '../../platform/spawn';
 import { log } from '../../core/logger';
 import type { ServerNotification } from '../../agent/codex-appserver/protocol';
-import { OwnedCodexProcess } from '../../platform/owned-process';
+import type { HostedProcess, ProcessHost } from '../process/process-host';
 
 class AsyncQueue<T> {
   private items: T[] = [];
@@ -218,6 +217,7 @@ export class JsonRpcError extends Error {
 }
 
 export interface AppServerClientOptions {
+  host: ProcessHost;
   bin: string;
   cwd: string;
   env?: Record<string, string>;
@@ -227,8 +227,8 @@ export interface AppServerClientOptions {
 }
 
 export class AppServerClient {
-  private child: ChildProcessWithoutNullStreams | null = null;
-  private owned: OwnedCodexProcess | undefined;
+  private hosted: HostedProcess | undefined;
+  private spawning: Promise<HostedProcess> | undefined;
   private peer: JsonRpcPeer | undefined;
   private readonly notifications = new AsyncQueue<ServerNotification>();
   private closed = false;
@@ -240,31 +240,30 @@ export class AppServerClient {
     return { size: this.peer?.pendingCount ?? 0 };
   }
 
-  get pid(): number | undefined {
-    return this.child?.pid;
-  }
-
   get exited(): boolean {
     return this.hasExited || this.closed;
   }
 
   async connect(): Promise<void> {
     if (this.closed) throw new UnsentRequestError('app-server client closed');
-    // Launch via cross-spawn (platform/spawn) so a Windows `.cmd` codex shim
-    // runs instead of throwing EINVAL (CVE-2024-27980). With stdio all-piped the
-    // streams are non-null, so the cast to *WithoutNullStreams is sound.
-    const owned = new OwnedCodexProcess(this.opts.bin, ['app-server', '--listen', 'stdio://'], {
+    const env = mergeProcessEnv(process.env, { ...this.opts.env, FEISHU_CODEX_BRIDGE: '1' });
+    this.spawning = this.opts.host.spawn('codex', undefined, {
+      file: this.opts.bin,
+      args: ['app-server', '--listen', 'stdio://'],
+      env: Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
       cwd: this.opts.cwd,
-      env: mergeProcessEnv(process.env, { ...this.opts.env, FEISHU_CODEX_BRIDGE: '1' }),
-      stdio: ['pipe', 'pipe', 'pipe'],
+      shim: process.platform === 'win32' && /\.(cmd|bat)$/i.test(this.opts.bin),
     });
-    const child = owned.child as ChildProcessWithoutNullStreams;
-    this.owned = owned;
-    this.child = child;
-    log.info('agent', 'spawn', { pid: child.pid ?? null, cwd: this.opts.cwd });
+    const hosted = this.hosted = await this.spawning;
+    if (this.closed) {
+      await hosted.end();
+      throw new UnsentRequestError('app-server client closed');
+    }
+    log.info('agent', 'spawn', { id: hosted.id, cwd: this.opts.cwd });
+    hosted.stderr.resume();
 
     let inputCloseTimer: NodeJS.Timeout | undefined;
-    const peer = new JsonRpcPeer(child.stdout, child.stdin, error => {
+    const peer = new JsonRpcPeer(hosted.stdout, hosted.stdin, error => {
       if (this.closed) return;
       this.closed = true;
       // stdout can end before child exit delivers the legacy failure reason.
@@ -286,30 +285,23 @@ export class AppServerClient {
       this.hasExited = true;
       this.notifications.close();
     });
-    child.stderr.on('data', (d: Buffer) => {
-      const line = d.toString('utf8').trim();
-      if (line && !this.opts.quietOutput) log.warn('agent', 'stderr', { line: line.slice(0, 200) });
-    });
-    child.on('exit', (code, signal) => {
-      log.info('agent', 'exit', { pid: child.pid ?? null, code, signal });
+    hosted.watch(fact => {
+      if (fact.kind !== 'exit') return;
+      const { exit } = fact;
+      log.info('agent', 'exit', { id: hosted.id, ...exit });
       this.hasExited = true;
       this.closed = true;
-      peer.close(new Error(`app-server exited (code=${code} signal=${signal})`));
+      peer.close(new Error(exit.observed === 'parent' ? `app-server exited (code=${exit.code} signal=${exit.signal})` : 'app-server exited'));
       this.notifications.close();
-    });
-    child.on('error', (err) => {
-      this.closed = true;
-      peer.close(err);
-      this.notifications.close();
-      void this.close().catch(error => log.fail('agent', error, { phase: 'process-error-close' }));
+      void this.close().catch(error => log.fail('agent', error, { phase: 'exit-close' }));
     });
     const outputClosed = (err: Error) => {
       peer.close(err);
       this.notifications.close();
       if (!this.hasExited) void this.close().catch(error => log.fail('agent', error));
     };
-    child.stdin.on('error', outputClosed);
-    child.stdin.on('close', () => outputClosed(new Error('app-server stdin closed')));
+    hosted.stdin.on('error', outputClosed);
+    hosted.stdin.on('close', () => outputClosed(new Error('app-server stdin closed')));
 
     await this.request('initialize', {
       clientInfo: { name: this.opts.clientName ?? 'feishu-codex-bridge', version: '0.0.1' },
@@ -347,16 +339,17 @@ export class AppServerClient {
 
   private closing: Promise<void> | undefined;
 
-  close(graceMs = 4000): Promise<void> {
-    this.closing ??= this.closeChild(graceMs);
+  close(): Promise<void> {
+    this.closing ??= this.closeChild();
     return this.closing;
   }
 
-  private async closeChild(graceMs: number): Promise<void> {
+  private async closeChild(): Promise<void> {
     this.closed = true;
     this.peer?.close(new Error('app-server client closed'));
     this.notifications.close();
-    await this.owned?.close(graceMs);
+    const hosted = this.hosted ?? await this.spawning?.catch(() => undefined);
+    await hosted?.end();
   }
 
 }

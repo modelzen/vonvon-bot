@@ -47,6 +47,7 @@ vi.mock('../src/card/run-card-stream', () => ({
 vi.mock('../src/voice/inbound', async original => ({ ...await original<object>(), ingestVoice: fake.voice }));
 import { createOrchestrator } from '../src/bot/handle-message';
 import type { AppConfig } from '../src/config/schema';
+import { idleHost } from './helpers/idle-host';
 
 function voiceResult(text: string, messageId = 'voice') {
   return { text, voice: { messageId, text, transcribed: true } };
@@ -105,7 +106,7 @@ function setup(policy: 'steer' | 'queue' = 'steer') {
   const channel = { send: fake.send, rawClient: { im: { v1: { message: { get: async () => ({ data: { items: [{ thread_id: 'new-topic' }] } }) }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
-  orchestrator = createOrchestrator(channel as never, cfg, '/test');
+  orchestrator = createOrchestrator(channel as never, cfg, '/test', idleHost);
   return orchestrator;
 }
 beforeEach(() => {

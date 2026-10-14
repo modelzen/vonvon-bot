@@ -36,7 +36,7 @@ vi.mock('../src/config/paths', async () => {
   const { join } = await import('node:path');
   const appDir = realpathSync(mkdtempSync(join(tmpdir(), 'vonvon-lifecycle-red-')));
   console.log('runner fixture root', appDir);
-  return { paths: { appDir }, botPaths: (appId: string) => ({ processesFile: join(appDir, appId + '.lock') }) };
+  return { paths: { appDir }, botDir: (appId: string) => join(appDir, 'bots', appId), botPaths: (appId: string) => ({ processesFile: join(appDir, appId + '.lock') }) };
 });
 vi.mock('../src/server/pid-lock', async (original) => {
   const real = await original<typeof import('../src/server/pid-lock')>();
@@ -117,6 +117,7 @@ import { runStart, runStop } from '../src/cli/commands/daemon';
 import { runServiceCommand } from '../src/cli/commands/service';
 import { controlDesktopService } from '../src/host/service';
 import { acquireUpdateLock, finishOwnedUpdate, readUpdateStatus, restartDaemon, writeUpdateStatus } from '../src/service/update';
+import { idleHost } from './helpers/idle-host';
 
 const old = { pid: 43210, startedAt: '2026-10-10T00:00:00.000Z', listen: '127.0.0.1:43119' } satisfies PidLockInfo;
 const replacement = { pid: 43211, startedAt: '2026-10-10T00:02:00.000Z', listen: old.listen } satisfies PidLockInfo;
@@ -593,7 +594,7 @@ describe('provider runner ownership', () => {
       return true;
     });
     vi.stubGlobal('process', Object.defineProperties(Object.create(process), { send: { value: send }, connected: { value: true } }));
-    const owner = runnerControl(); const running = observed(runRun('runner-bot', { control: owner }));
+    const owner = runnerControl(); const running = observed(runRun('runner-bot', { host: idleHost, control: owner }));
     try {
       await vi.advanceTimersByTimeAsync(0); owner.requestStop();
       await vi.advanceTimersByTimeAsync(121_000);
@@ -627,7 +628,7 @@ describe('provider runner ownership', () => {
   ];
   it.each(unsettledReports)('does not kill a Bot past grace for $name and permits escalation only after settlement', async ({ report }) => {
     const shell = supervisorShell(); const owner = runnerControl();
-    const running = observed(runSupervisor([botEntry], { control: owner }));
+    const running = observed(runSupervisor([botEntry], { host: idleHost, control: owner }));
     try {
       await vi.advanceTimersByTimeAsync(0);
       if (report) shell.emit('message', report);
@@ -650,7 +651,7 @@ describe('provider runner ownership', () => {
 
   it('toggle-off waits for the same provider settlement before acknowledging', async () => {
     const shell = supervisorShell(); const owner = runnerControl();
-    const running = observed(runSupervisor([botEntry], { control: owner }));
+    const running = observed(runSupervisor([botEntry], { host: idleHost, control: owner }));
     try {
       await vi.advanceTimersByTimeAsync(0);
       const apply = fixture.admin?.applyBotActivation;
@@ -671,7 +672,7 @@ describe('provider runner ownership', () => {
 
   it('a late settlement report from a dead generation cannot authorize killing its replacement', async () => {
     const first = supervisorShell(); const owner = runnerControl();
-    const running = observed(runSupervisor([botEntry], { control: owner }));
+    const running = observed(runSupervisor([botEntry], { host: idleHost, control: owner }));
     let next = first;
     try {
       await vi.advanceTimersByTimeAsync(0);

@@ -57,6 +57,7 @@ vi.mock('../src/card/run-card-stream', () => ({
 }));
 
 import { createOrchestrator } from '../src/bot/handle-message';
+import { idleHost } from './helpers/idle-host';
 
 const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, completionReminder: { mode: 'manual' } } };
 const channel = { send: fake.send, rawClient: { im: { v1: { messageReaction: { create: async () => ({ data: {} }), delete: async () => ({}) } } } } };
@@ -70,7 +71,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   fake.kind = 'multi';
   fake.noMention = true;
-  orchestrator = createOrchestrator(channel as never, cfg, '/tmp/demo');
+  orchestrator = createOrchestrator(channel as never, cfg, '/tmp/demo', idleHost);
 });
 afterEach(async () => { await orchestrator.shutdown(); });
 

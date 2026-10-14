@@ -22,7 +22,7 @@ import type {
 import { isGoalTerminal } from '../types';
 import { BRIDGE_DEVELOPER_INSTRUCTIONS } from '../bridge-instructions';
 import { AppServerClient } from './app-server-client';
-import { refillWarmPool, takeWarmClient, utilityRequest } from './client-pool';
+import { codexHost, refillWarmPool, takeWarmClient, utilityRequest } from './client-pool';
 import { mapNotification } from './event-map';
 import { codexVersionAsync, resolveCodexBin } from './locate';
 import type { ServerNotification, Thread, ThreadItem, Turn, TurnStartResponse } from './protocol';
@@ -140,7 +140,7 @@ const DEFAULT_TITLE_DEPS: CodexTitleBackendDeps = {
   utilityRequest,
   resolveBin: resolveCodexBin,
   createClient: (bin, cwd) =>
-    new AppServerClient({ bin, cwd, clientName: 'feishu-codex-bridge-title' }),
+    new AppServerClient({ host: codexHost(), bin, cwd, clientName: 'feishu-codex-bridge-title' }),
 };
 
 function parseGeneratedTitle(text: string): string | undefined {
@@ -701,7 +701,7 @@ export class CodexAppServerBackend implements AgentBackend {
     const warmed = takeWarmClient(bin);
     void refillWarmPool();
     if (warmed) return warmed;
-    const client = new AppServerClient({ bin, cwd });
+    const client = new AppServerClient({ host: codexHost(), bin, cwd });
     await client.connect();
     return client;
   }

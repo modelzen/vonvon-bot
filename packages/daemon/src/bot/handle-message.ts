@@ -79,7 +79,8 @@ import {
   type SessionTitleBackendConfig,
 } from '../config/schema';
 import { CardDispatcher, type CardActionHandler } from '../card/dispatcher';
-import { closeOwnedCodexProcesses } from '../platform/owned-process';
+import type { ProcessHost } from '../provider/process/process-host';
+import type { Refusal } from '../provider/policy/enforcement';
 import { shutdownResidentClients } from '../agent/codex-appserver/client-pool';
 import { sendManagedCard, updateManagedCard } from '../card/managed';
 import { RunRender } from '../card/run-render';
@@ -656,10 +657,13 @@ export function pickIdleSessions(
   return out;
 }
 
+export type ProviderAdmission = Pick<ProcessHost, 'admission' | 'closeAll'>;
+
 export function createOrchestrator(
   channel: LarkChannel,
   cfg: AppConfig,
   fallbackCwd: string,
+  host: ProviderAdmission,
   cliBridge?: CliBridgeRuntimeHooks,
 ): Orchestrator {
   /** Lazily-constructed backends by id — one instance per backend for the whole
@@ -1412,6 +1416,14 @@ export function createOrchestrator(
     log.info('intake', 'goal-busy', { msgId: msg.messageId });
   }
 
+  function refuseNewAgent(msg: NormalizedMessage, inThread: boolean): Refusal | undefined {
+    const refusal = host.admission();
+    if (refusal) {
+      void trackTask(channel.send(msg.chatId, { markdown: `❌ ${refusal.message}` }, { replyTo: msg.messageId, replyInThread: inThread }).catch(() => undefined));
+    }
+    return refusal;
+  }
+
   /**
    * Reserve `sessionKey` synchronously (before any await) so a second message
    * racing in through the SDK's per-chatId queue sees it and queues instead of
@@ -1471,6 +1483,7 @@ export function createOrchestrator(
       log.info('intake', 'queued', { depth: existing.queue.length });
       return;
     }
+    if (!sessions.get(sessionKey)?.isAlive() && refuseNewAgent(msg, !flat)) return;
     const reserved: ActiveState = { queue: [], requesterOpenId: msg.senderId, isGoal: goal };
     active.set(sessionKey, reserved);
     void trackTask(withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
@@ -1780,6 +1793,7 @@ export function createOrchestrator(
    * topic has a unique reply target so no same-topic reservation is needed. */
   function startTopicDirectly(msg: NormalizedMessage, text: string, project?: Project, goal?: boolean): void {
     if (resumePublications.has(msg.chatId) || projectMutations.has(msg.chatId)) return;
+    if (refuseNewAgent(msg, false)) return;
     pendingTopics.set(msg.chatId, (pendingTopics.get(msg.chatId) ?? 0) + 1);
     const titleSource: SessionTitleSource = goal
       ? { text, rawContentType: 'text' }
@@ -5705,7 +5719,7 @@ export function createOrchestrator(
       try { cleanup.push(operation()); }
       catch (error) { shutdownErrors.add(error); }
     };
-    startCleanup(closeOwnedCodexProcesses);
+    startCleanup(() => host.closeAll());
     startCleanup(shutdownResidentClients);
     for (const state of active.values()) {
       state.intakeCancelled = true;

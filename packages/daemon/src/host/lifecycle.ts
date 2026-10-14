@@ -7,6 +7,9 @@ import { z } from 'zod';
 import { paths } from '../config/paths';
 import { ApiCleanupError } from '../server/http';
 import { closeOwnedCodexProcesses, unconfirmedCodexPids } from '../platform/owned-process';
+import type { ProcessHost } from '../provider/process/process-host';
+
+export type OwnedProviders = Pick<ProcessHost, 'owesWork' | 'closeAll' | 'snapshot'>;
 
 export interface ShutdownControl {
   readonly requested: boolean;
@@ -28,9 +31,13 @@ export function listenerCloseUnconfirmed(error: unknown): boolean {
     || (error instanceof AggregateError && error.errors.some(listenerCloseUnconfirmed));
 }
 
-export async function closeOwnedProviders(shutdown: () => Promise<void> = async () => {}): Promise<void> {
+export async function closeOwnedProviders(host: OwnedProviders, shutdown: () => Promise<void> = async () => {}): Promise<void> {
   const report = (settled: boolean): Promise<void> => {
-    const pids = unconfirmedCodexPids();
+    const owed = host.snapshot().flatMap(r => {
+      const pid = r.providerPid ?? r.holderPid;
+      return (r.ownership === 'bound' || r.ownership === 'unknown') && pid !== undefined ? [pid] : [];
+    });
+    const pids = [...unconfirmedCodexPids(), ...owed];
     if (!settled && pids.length) log.warn('daemon-shutdown', 'owned_work_unconfirmed', { pid: process.pid, pids });
     if (!process.send) return Promise.resolve();
     return new Promise((resolve, reject) => {
@@ -46,10 +53,10 @@ export async function closeOwnedProviders(shutdown: () => Promise<void> = async 
   const errors: unknown[] = [];
   try { await shutdown(); }
   catch (error) { errors.push(error); }
-  try { await closeOwnedCodexProcesses(); }
-  catch (error) { errors.push(error); }
-  finally { clearInterval(timer); }
-  try { await report(true); }
+  const closed = await Promise.allSettled([closeOwnedCodexProcesses(), host.closeAll()]);
+  clearInterval(timer);
+  errors.push(...closed.flatMap(result => result.status === 'rejected' ? [result.reason] : []));
+  try { await report(!host.owesWork()); }
   catch (error) { log.fail('daemon-shutdown', error, { phase: 'owned-work-report' }); errors.push(error); }
   if (errors.length) throw new AggregateError(errors, 'Provider cleanup failed.');
 }

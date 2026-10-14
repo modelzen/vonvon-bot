@@ -3,6 +3,8 @@ import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import type { AgentEvent, AgentInput } from '../src/agent/types';
+import { ownedWorkUnverified } from '../src/provider/policy/messages.zh';
+import type { ProcessHost } from '../src/provider/process/process-host';
 
 const transport = vi.hoisted(() => ({
   spawn: vi.fn(),
@@ -105,7 +107,7 @@ function setup(policy: 'steer' | 'queue' = 'steer') {
   const channel = { send: fake.send, rawClient: { im: { v1: { message: { get: async () => ({ data: { items: [{ thread_id: 'new-topic' }] } }) }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
-  orchestrator = createOrchestrator(channel as never, cfg, '/test');
+  orchestrator = createOrchestrator(channel as never, cfg, '/test', admission);
   return orchestrator;
 }
 
@@ -122,8 +124,19 @@ function channel() {
 }
 const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner' }, completionReminder: { mode: 'manual' } } };
 type GroupState = 'present' | 'missing' | 'permission-denied';
+const admission = { admission: vi.fn(), closeAll: vi.fn(async () => {}) };
+const hostedShells: Shell[] = [];
+function providerHost() {
+  const spawn = vi.fn(async () => {
+    const fixture = hostedShells.shift();
+    if (!fixture) throw new Error('Unexpected hosted spawn');
+    return fixture.hosted;
+  });
+  return { spawn, host: { spawn } as unknown as ProcessHost };
+}
 interface Shell {
   child: ChildProcess;
+  hosted: { id: string; stdin: PassThrough; stdout: PassThrough; stderr: PassThrough; watch(): () => void; end: ReturnType<typeof vi.fn> };
   pid: number | undefined;
   requests: { id: number; method: string }[];
   held: Set<string>;
@@ -165,8 +178,11 @@ function shell(pid: number | undefined = nextPid++): Shell {
       if (!held.has(rpc.method)) queueMicrotask(() => respond(rpc));
     }
   });
-  const exit = (code = 0) => { if (!exited) { exited = true; child.emit('exit', code, null); child.emit('close', code, null); } };
-  const fixture = { child, pid, requests, held, state: () => state,
+  const exit = (code = 0) => { if (!exited) { exited = true; child.emit('exit', code, null); child.emit('close', code, null); ended(); } };
+  let ended!: () => void;
+  const ending = new Promise<void>(resolve => { ended = resolve; });
+  const hosted = { id: `reservation-${pid}`, stdin, stdout, stderr, watch: () => () => {}, end: vi.fn(() => ending) };
+  const fixture = { child, hosted, pid, requests, held, state: () => state,
     setGroup(next: GroupState) { state = next; },
     reply(method: string) { held.delete(method); for (const request of requests.filter(r => r.method === method)) respond(request); },
     exit,
@@ -187,6 +203,9 @@ beforeEach(async () => {
   vi.useFakeTimers();
   orchestrator = undefined;
   shells.length = 0;
+  hostedShells.length = 0;
+  admission.admission.mockReset().mockReturnValue(undefined);
+  admission.closeAll.mockReset().mockResolvedValue(undefined);
   nextPid = 987654321;
   endings.length = 0;
   transport.jobs.length = 0;
@@ -336,11 +355,12 @@ it('nonzero direct exit propagates a cleanup failure after confirmed death', asy
   expect(result.error).toBeInstanceOf(ownerModule.CodexProcessCleanupError);
 });
 
-it('real AppServerClient close retains its exact Promise and forced-death failure', async () => {
+it('AppServerClient close caches one Promise that settles only when the host ends its process', async () => {
   const fixture = shell();
-  transport.spawn.mockReturnValueOnce(fixture.child);
+  hostedShells.push(fixture);
+  const { host } = providerHost();
   const { AppServerClient } = await import('../src/agent/codex-appserver/app-server-client');
-  const client = new AppServerClient({ bin: '/fixture/no-provider', cwd: '/test' });
+  const client = new AppServerClient({ host, bin: '/fixture/no-provider', cwd: '/test' });
   const connecting = client.connect();
   await vi.advanceTimersByTimeAsync(0);
   await connecting;
@@ -350,26 +370,29 @@ it('real AppServerClient close retains its exact Promise and forced-death failur
   await vi.advanceTimersByTimeAsync(120000);
   expect.soft(result.status).toBe('pending');
   fixture.die();
-  await vi.advanceTimersByTimeAsync(1000);
-  expect(result.status).toBe('rejected');
-  expect(result.error).toBeInstanceOf(ownerModule.CodexProcessCleanupError);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(result.status).toBe('fulfilled');
+  expect(fixture.hosted.end).toHaveBeenCalledOnce();
 });
 
 it('connecting an already closed client rejects without spawning', async () => {
+  const { host, spawn } = providerHost();
   const { AppServerClient } = await import('../src/agent/codex-appserver/app-server-client');
-  const client = new AppServerClient({ bin: '/fixture/no-provider', cwd: '/test' });
+  const client = new AppServerClient({ host, bin: '/fixture/no-provider', cwd: '/test' });
   await client.close();
   const result = observe(client.connect());
   await vi.advanceTimersByTimeAsync(0);
   expect(result.status).toBe('rejected');
-  expect(transport.spawn).not.toHaveBeenCalled();
+  expect(spawn).not.toHaveBeenCalled();
 });
 
 it.each(['utility', 'warm'] as const)('shutdown closes in-flight %s creation before initialization and prevents late publication or refill', async kind => {
   const fixture = shell();
   fixture.held.add('initialize');
-  transport.spawn.mockReturnValueOnce(fixture.child);
+  hostedShells.push(fixture);
+  const { host, spawn } = providerHost();
   const pool = await import('../src/agent/codex-appserver/client-pool');
+  pool.bindCodexHost(host);
   const creating = kind === 'utility' ? pool.utilityRequest('model/list') : pool.refillWarmPool();
   observe(creating);
   await vi.advanceTimersByTimeAsync(0);
@@ -377,16 +400,38 @@ it.each(['utility', 'warm'] as const)('shutdown closes in-flight %s creation bef
   const closing = pool.shutdownResidentClients();
   const result = observe(closing);
   await vi.advanceTimersByTimeAsync(0);
-  expect.soft(kill).toHaveBeenCalledWith(-fixture.pid!, 'SIGTERM');
+  expect.soft(fixture.hosted.end).toHaveBeenCalled();
   fixture.reply('initialize');
   await vi.advanceTimersByTimeAsync(120000);
   expect.soft(result.status).toBe('pending');
   expect.soft(pool.takeWarmClient('/fixture/no-provider')).toBeNull();
   fixture.die();
   await vi.advanceTimersByTimeAsync(1000);
-  expect.soft(result.status).toBe('rejected');
+  expect.soft(result.status).toBe('fulfilled');
   await pool.refillWarmPool();
-  expect(transport.spawn).toHaveBeenCalledTimes(1);
+  expect(spawn).toHaveBeenCalledTimes(1);
+});
+
+it('refuses a message that needs a new agent while admission is closed, and keeps a live session running', async () => {
+  const run = thread();
+  fake.backend.resumeThread.mockResolvedValue(run.t);
+  admission.admission.mockReturnValue(ownedWorkUnverified());
+  const o = setup();
+  await o.onMessage(message('refused'));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fake.backend.resumeThread).not.toHaveBeenCalled();
+  expect(fake.backend.startThread).not.toHaveBeenCalled();
+  expect(fake.send).toHaveBeenCalledWith('chat', { markdown: `❌ ${ownedWorkUnverified().message}` }, expect.objectContaining({ replyTo: 'msg-' + seq }));
+  admission.admission.mockReturnValue(undefined);
+  await o.onMessage(message('admitted'));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(run.consumed).toHaveLength(1);
+  run.turns[0]!.resolve();
+  await vi.advanceTimersByTimeAsync(0);
+  admission.admission.mockReturnValue(ownedWorkUnverified());
+  await o.onMessage(message('live session'));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(run.consumed).toHaveLength(2);
 });
 
 async function activeOrchestrator() {
@@ -400,7 +445,7 @@ async function activeOrchestrator() {
   expect(run.consumed).toHaveLength(1);
   run.turns[0]!.resolve();
   await vi.advanceTimersByTimeAsync(0);
-  return { o, run, fixture };
+  return { o, run, fixture, owner };
 }
 
 it('real orchestrator shutdown caches one Promise and propagates provider failure only after death', async () => {
@@ -410,6 +455,7 @@ it('real orchestrator shutdown caches one Promise and propagates provider failur
   const second = o.shutdown();
   observe(second);
   expect.soft(second).toBe(first);
+  expect(admission.closeAll).toHaveBeenCalledOnce();
   await vi.advanceTimersByTimeAsync(120000);
   expect.soft(result.status).toBe('pending');
   fixture.die();
@@ -419,8 +465,9 @@ it('real orchestrator shutdown caches one Promise and propagates provider failur
   expect(o.shutdown()).toBe(first);
 });
 
-it('idle-reaped provider remains owned after removal from the real orchestrator session map', async () => {
-  const { o, run, fixture } = await activeOrchestrator();
+it('idle-reaped provider stays owned by the host, whose close the orchestrator shutdown awaits', async () => {
+  const { o, run, fixture, owner } = await activeOrchestrator();
+  admission.closeAll.mockImplementation(() => owner.close());
   await vi.advanceTimersByTimeAsync(50 * 60000);
   expect(run.t.close).toHaveBeenCalled();
   const closing = o.shutdown();
@@ -439,7 +486,7 @@ it('real BridgeHandle shares shutdown and retains provider failure through trans
   run.t.close.mockImplementation(() => owner.close());
   fake.backend.resumeThread.mockResolvedValue(run.t);
   const { startBridge } = await import('../src/bot/bridge');
-  const bridge = await startBridge({ cfg, appSecret: 'fixture', fallbackCwd: '/test' });
+  const bridge = await startBridge({ cfg, appSecret: 'fixture', fallbackCwd: '/test', host: admission });
   const registration = fake.channel.on.mock.calls.find(call => call[0] === 'message');
   if (!registration || typeof registration[1] !== 'function') throw new Error('Message handler absent');
   await registration[1](message('first'));
@@ -501,7 +548,7 @@ it.each(['clean', 'failed'] as const)('startup failure waits for the accepted ru
     throw startupError;
   });
   const { startBridge } = await import('../src/bot/bridge');
-  const startup = startBridge({ cfg, appSecret: 'fixture', fallbackCwd: '/test' });
+  const startup = startBridge({ cfg, appSecret: 'fixture', fallbackCwd: '/test', host: admission });
   const starting = observe(startup);
   await vi.advanceTimersByTimeAsync(0);
   expect(run.consumed).toHaveLength(1);
@@ -512,7 +559,6 @@ it.each(['clean', 'failed'] as const)('startup failure waits for the accepted ru
   expect(run.t.close).toHaveBeenCalledOnce();
   expect(kill).toHaveBeenCalledWith(-fixture.pid!, 'SIGTERM');
   const providerClosing = observe(owner.close());
-  const registryClosing = observe(ownerModule.closeOwnedCodexProcesses());
   expect(starting.status).toBe('pending');
   expect(fake.channel.disconnect).not.toHaveBeenCalled();
 
@@ -520,7 +566,6 @@ it.each(['clean', 'failed'] as const)('startup failure waits for the accepted ru
     fixture.die();
     await vi.advanceTimersByTimeAsync(1000);
     expect(providerClosing.status).toBe('fulfilled');
-    expect(registryClosing.status).toBe('fulfilled');
     expect(starting.status).toBe('pending');
     expect(fake.channel.disconnect).not.toHaveBeenCalled();
     run.turns[0]!.resolve();
@@ -530,7 +575,6 @@ it.each(['clean', 'failed'] as const)('startup failure waits for the accepted ru
     expect(fake.final).toHaveBeenCalled();
     expect(starting.status).toBe('pending');
     expect(providerClosing.status).toBe('pending');
-    expect(registryClosing.status).toBe('pending');
     expect(fake.channel.disconnect).not.toHaveBeenCalled();
     fixture.die(17);
   }
@@ -544,25 +588,25 @@ it.each(['clean', 'failed'] as const)('startup failure waits for the accepted ru
   } else {
     expect(providerClosing.status).toBe('rejected');
     expect(providerClosing.error).toBeInstanceOf(ownerModule.CodexProcessCleanupError);
-    expect(registryClosing.status).toBe('rejected');
     if (!(starting.error instanceof AggregateError)) throw new Error('Startup cleanup failure was not aggregated');
     expect(starting.error.errors).toHaveLength(2);
     expect(starting.error.errors[0]).toBe(startupError);
     const cleanupError: unknown = starting.error.errors[1];
     if (!(cleanupError instanceof AggregateError)) throw new Error('Orchestrator cleanup failure was not retained');
-    expect(cleanupError.errors).toEqual([registryClosing.error, providerClosing.error]);
-    expect(cleanupError.errors[0]).toBe(registryClosing.error);
-    expect(cleanupError.errors[1]).toBe(providerClosing.error);
+    expect(cleanupError.errors).toEqual([providerClosing.error]);
+    expect(cleanupError.errors[0]).toBe(providerClosing.error);
   }
 });
 
 
-it('actual backend thread close and resident warm client remain pending past grace and propagate death failure', async () => {
+it('actual backend thread close and resident warm client stay pending until the host ends their processes', async () => {
   const warm = shell();
   const session = shell();
-  transport.spawn.mockReturnValueOnce(warm.child).mockReturnValueOnce(session.child);
+  hostedShells.push(warm, session);
+  const { host } = providerHost();
   const { CodexAppServerBackend } = await import('../src/agent/codex-appserver/backend');
   const pool = await import('../src/agent/codex-appserver/client-pool');
+  pool.bindCodexHost(host);
   const pendingThread = new CodexAppServerBackend().resumeThread({ cwd: '/test', sessionId: 'host' });
   await vi.advanceTimersByTimeAsync(0);
   const actualThread = await pendingThread;
@@ -574,8 +618,10 @@ it('actual backend thread close and resident warm client remain pending past gra
   warm.die();
   session.die();
   await vi.advanceTimersByTimeAsync(1000);
-  expect.soft(threadResult.status).toBe('rejected');
-  expect(residentResult.status).toBe('rejected');
+  expect.soft(threadResult.status).toBe('fulfilled');
+  expect(residentResult.status).toBe('fulfilled');
+  expect(session.hosted.end).toHaveBeenCalledOnce();
+  expect(warm.hosted.end).toHaveBeenCalledOnce();
 });
 
 });
@@ -650,36 +696,6 @@ describe('explicit Windows Job model', () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect(result.status).toBe('fulfilled');
     expect(job.dispose).toHaveBeenCalledOnce();
-    expect(kill).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { failure: 'unexpected nonzero exit', exitCode: 17, pipeError: false },
-    { failure: 'forced descendant cleanup', exitCode: 1, pipeError: false },
-    { failure: 'postbirth error', exitCode: 0, pipeError: true },
-  ])('retains $failure through real client close and proof confirmation', async ({ exitCode, pipeError }) => {
-    const fixture = shell();
-    transport.spawn.mockReturnValueOnce(fixture.child);
-    const { AppServerClient } = await import('../src/agent/codex-appserver/app-server-client');
-    const client = new AppServerClient({ bin: '/fixture/no-provider', cwd: '/test' });
-    const connecting = client.connect();
-    await vi.advanceTimersByTimeAsync(0);
-    await connecting;
-    const closing = client.close();
-    const result = observe(closing);
-    expect(client.close()).toBe(closing);
-    if (pipeError) fixture.child.emit('error', new Error('unexpected provider pipe error'));
-    fixture.exit(exitCode);
-    await vi.advanceTimersByTimeAsync(120000);
-    expect(result.status).toBe('pending');
-    const job = transport.jobs[0]!;
-    expect(job.dispose).not.toHaveBeenCalled();
-    job.proof = job.identity;
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(result.status).toBe('rejected');
-    expect(result.error).toBeInstanceOf(ownerModule.CodexProcessCleanupError);
-    expect(job.dispose).toHaveBeenCalledOnce();
-    expect(client.close()).toBe(closing);
     expect(kill).not.toHaveBeenCalled();
   });
 });

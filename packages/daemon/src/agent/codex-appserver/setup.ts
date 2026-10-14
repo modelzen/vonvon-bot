@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { AppServerClient } from './app-server-client';
+import { codexHost } from './client-pool';
 import { resolveCodexBin } from './locate';
 import { installManagedCodex, runSetupChild } from './managed-install';
 import { CodexProcessCleanupError } from '../../platform/owned-process';
@@ -59,7 +60,7 @@ export class CodexSetupService {
   }
 
   private client(bin: string): AppServerClient {
-    return new AppServerClient({ bin, cwd: homedir(), clientName: 'vonvon-codex-setup', quietOutput: true, initializeTimeoutMs: 10_000 });
+    return new AppServerClient({ host: codexHost(), bin, cwd: homedir(), clientName: 'vonvon-codex-setup', quietOutput: true, initializeTimeoutMs: 10_000 });
   }
 
   private async readSetup(signal: AbortSignal): Promise<CodexSetup> {

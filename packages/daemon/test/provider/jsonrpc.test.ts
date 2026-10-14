@@ -1,39 +1,13 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { ownedWorkUnverified } from '../../src/provider/policy/messages.zh';
+import { AdmissionRefused, type HostedProcess, type ProcessHost } from '../../src/provider/process/process-host';
 import { AppServerClient, JsonRpcError, JsonRpcPeer } from '../../src/provider/transport/jsonrpc';
 import type { JsonRpcFrame } from '../../src/provider/transport/jsonrpc';
-import { writeNodeExecutable } from '../helpers/node-executable';
-
-vi.mock('../../src/platform/owned-process', async original => {
-  const actual = await original<typeof import('../../src/platform/owned-process')>();
-  const { PassThrough } = await import('node:stream');
-  const { createInterface } = await import('node:readline');
-  return { ...actual, OwnedCodexProcess: class extends actual.OwnedCodexProcess {
-    constructor(...args: ConstructorParameters<typeof actual.OwnedCodexProcess>) {
-      super(...args);
-      const stdout = this.child.stdout;
-      const stderr = this.child.stderr;
-      if (!stdout || !stderr) throw new Error('Fixture requires piped output');
-      const input = new PassThrough();
-      stdout.pipe(input);
-      // Windows wrappers retain pipe writers, so control only the client's readable.
-      Object.defineProperty(this.child, 'stdout', { value: input });
-      createInterface({ input: stderr }).on('line', line => {
-        if (line === 'fixture-close-stdin') {
-          this.child.stdin?.destroy();
-          return;
-        }
-        if (line !== 'fixture-request-received') return;
-        console.info('[jsonrpc-input-close] request received; ending readable');
-        stdout.unpipe(input);
-        input.end();
-      });
-    }
-  } };
-});
+import { processHosts } from '../helpers/process-hosts';
 
 function fixture() {
   const input = new PassThrough();
@@ -190,38 +164,40 @@ describe('JsonRpcPeer', () => {
 });
 
 
+const hosts = processHosts();
+beforeAll(() => hosts.setup());
+afterAll(() => hosts.teardown());
+
+/** Runs `node <cwd>/app-server`, so no shell or cmd.exe wrapper holds a copy of the provider's pipes. */
+async function connectFixture(prefix: string, onRequest: string) {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  writeFileSync(join(dir, 'app-server'), `
+    require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
+      const message = JSON.parse(line);
+      if (message.method === 'initialize') process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + '\\n');
+      ${onRequest}
+    });
+    setInterval(() => {}, 1000);
+  `);
+  const host = hosts.host();
+  const client = new AppServerClient({ host, bin: process.execPath, cwd: dir, quietOutput: true });
+  await client.connect();
+  const [record] = host.snapshot();
+  if (record?.providerPid === undefined) throw new Error('Fixture child did not start');
+  return { dir, host, client, pid: record.providerPid };
+}
+
+const gone = (pid: number) => { try { process.kill(pid, 0); return false; } catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; } };
+
 describe('AppServerClient input closure', () => {
-  it('rejects pending work and reclaims the owned child when readable transport ends while the child lives', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'jsonrpc-input-close-'));
-    const { bin } = writeNodeExecutable(dir, 'ended-readable', `
-      require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
-        const message = JSON.parse(line);
-        if (message.method === 'initialize') {
-          process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + '\\n');
-        } else if (message.method === 'end-readable') {
-          process.stderr.write('fixture-request-received\\n');
-        }
-      });
-      setInterval(() => {}, 1000);
-    `);
-    const client = new AppServerClient({ bin, cwd: dir, quietOutput: true });
+  it('rejects pending work and ends the hosted provider when readable transport ends while the provider lives', async () => {
+    const { dir, host, client, pid } = await connectFixture('jsonrpc-input-close-', "if (message.method === 'end-readable') require('node:fs').closeSync(1);");
     try {
-      console.info('[jsonrpc-input-close] connecting');
-      await client.connect();
-      console.info('[jsonrpc-input-close] connected');
-      const pid = client.pid;
-      if (pid === undefined) throw new Error('Fixture child did not start');
-      expect(() => process.kill(pid, 0)).not.toThrow();
+      expect(gone(pid)).toBe(false);
       await expect(client.request('end-readable')).rejects.toThrow('JSON-RPC input ended');
-      console.info('[jsonrpc-input-close] pending request rejected on EOF');
       await expect(client.request('late')).rejects.toThrow('app-server client closed');
-      await vi.waitFor(() => {
-        let probeError: unknown;
-        try { process.kill(pid, 0); }
-        catch (error) { probeError = error; }
-        expect(probeError).toMatchObject({ code: 'ESRCH' });
-      });
-      console.info('[jsonrpc-input-close] owned child reclaimed');
+      await vi.waitFor(() => expect(host.snapshot()).toEqual([]), { timeout: 10_000 });
+      expect(gone(pid)).toBe(true);
       const closed = client.close();
       expect(client.close()).toBe(closed);
       await expect(closed).resolves.toBeUndefined();
@@ -232,36 +208,26 @@ describe('AppServerClient input closure', () => {
     }
   });
 
-  it('rejects pending work and reclaims the owned child when its stdin closes while the child and stdout live', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'jsonrpc-output-close-'));
-    const { bin } = writeNodeExecutable(dir, 'closed-stdin', `
-      require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
-        const message = JSON.parse(line);
-        if (message.method === 'initialize') {
-          process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + '\\n');
-        } else if (message.method === 'close-stdin') {
-          process.stderr.write('fixture-close-stdin\\n');
-        }
-      });
-      setInterval(() => {}, 1000);
-    `);
-    const client = new AppServerClient({ bin, cwd: dir, quietOutput: true });
+  it('rejects pending work and ends the hosted provider when its stdin closes while the provider and stdout live', async () => {
+    const { dir, host, client, pid } = await connectFixture('jsonrpc-output-close-', '');
     try {
-      await client.connect();
-      const pid = client.pid;
-      if (pid === undefined) throw new Error('Fixture child did not start');
-      await expect(client.request('close-stdin')).rejects.toThrow('JSON-RPC output closed');
+      const pending = client.request('never-answered');
+      (client as unknown as { hosted: HostedProcess }).hosted.stdin.destroy();
+      await expect(pending).rejects.toThrow('JSON-RPC output closed');
       await expect(client.request('late')).rejects.toThrow('app-server client closed');
-      await vi.waitFor(() => {
-        let probeError: unknown;
-        try { process.kill(pid, 0); }
-        catch (error) { probeError = error; }
-        expect(probeError).toMatchObject({ code: 'ESRCH' });
-      });
+      await vi.waitFor(() => expect(host.snapshot()).toEqual([]), { timeout: 10_000 });
+      expect(gone(pid)).toBe(true);
       expect(client.exited).toBe(true);
     } finally {
       try { await client.close(); }
       finally { rmSync(dir, { recursive: true, force: true }); }
     }
+  });
+
+  it('surfaces a refused admission as owned-work-unverified and spawns nothing', async () => {
+    const host = { spawn: async () => { throw new AdmissionRefused(ownedWorkUnverified()); } } as unknown as ProcessHost;
+    const client = new AppServerClient({ host, bin: process.execPath, cwd: tmpdir() });
+    await expect(client.connect()).rejects.toThrow(ownedWorkUnverified().message);
+    await expect(client.close()).resolves.toBeUndefined();
   });
 });
