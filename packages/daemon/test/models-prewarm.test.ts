@@ -3,8 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CodexAppServerBackend } from '../src/agent/codex-appserver/backend';
-import { shutdownResidentClients } from '../src/agent/codex-appserver/client-pool';
+import { bindCodexHost, shutdownResidentClients } from '../src/agent/codex-appserver/client-pool';
 import { writeNodeExecutable } from './helpers/node-executable';
+import { processHosts } from './helpers/process-hosts';
 
 // 启动预热（createOrchestrator 末尾的 void backend.listModels()）的安全前提：
 // listModels 失败时返回 STATIC_MODELS 兜底但**不写缓存**——否则预热一旦撞上
@@ -41,14 +42,18 @@ setInterval(() => {}, 1 << 30); // stay alive until killed
 const dir = mkdtempSync(join(tmpdir(), 'models-prewarm-'));
 const { bin, script } = writeNodeExecutable(dir, 'codex', BROKEN_SERVER);
 let prevEnv: string | undefined;
+const hosts = processHosts();
 
 beforeAll(() => {
+  hosts.setup();
+  bindCodexHost(hosts.host());
   prevEnv = process.env.CODEX_BIN;
   process.env.CODEX_BIN = bin;
 });
 
 afterAll(async () => {
   await shutdownResidentClients();
+  await hosts.teardown();
   if (prevEnv === undefined) delete process.env.CODEX_BIN;
   else process.env.CODEX_BIN = prevEnv;
   rmSync(dir, { recursive: true, force: true });

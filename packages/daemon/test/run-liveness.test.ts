@@ -1,10 +1,11 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { CodexAppServerBackend } from '../src/agent/codex-appserver/backend';
-import { shutdownResidentClients } from '../src/agent/codex-appserver/client-pool';
+import { bindCodexHost, shutdownResidentClients } from '../src/agent/codex-appserver/client-pool';
 import { writeNodeExecutable } from './helpers/node-executable';
+import { processHosts } from './helpers/process-hosts';
 
 // 一个最小的假 codex app-server：应答 initialize / thread/start；收到 turn/start
 // 后只持续发 event-map 映射为 null 的原始通知（命令输出 delta），永不发可映射
@@ -37,9 +38,12 @@ setInterval(() => {}, 1 << 30); // stay alive until killed
 
 const dir = mkdtempSync(join(tmpdir(), 'run-liveness-'));
 const { bin } = writeNodeExecutable(dir, 'codex', FAKE_SERVER);
+const hosts = processHosts();
+beforeAll(() => { hosts.setup(); bindCodexHost(hosts.host()); });
 
 afterAll(async () => {
   await shutdownResidentClients();
+  await hosts.teardown();
   rmSync(dir, { recursive: true, force: true });
 });
 

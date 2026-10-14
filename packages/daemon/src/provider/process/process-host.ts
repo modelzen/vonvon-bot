@@ -347,7 +347,6 @@ export class ProcessHost {
     const nonce = newNonce();
     s.issued.set(nonce, { command: 'launch' });
     const args = this.platform === 'win32' ? [windowsCommandLine(spec.file, spec.args, { shim: spec.shim === true })] : spec.args;
-    // A shim's command line starts with cmd.exe, so cmd.exe is the application CreateProcessW runs.
     const file = this.platform === 'win32' && spec.shim ? process.env.ComSpec ?? 'C:\\Windows\\System32\\cmd.exe' : spec.file;
     s.channel.send({ command: 'launch', nonce, file, args, env: spec.env, cwd: spec.cwd });
     log.info('process-host', 'launch', { id, file: spec.file });

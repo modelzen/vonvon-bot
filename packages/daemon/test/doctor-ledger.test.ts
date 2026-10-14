@@ -39,7 +39,6 @@ async function liveHolder(): Promise<{ pid: number; start: StartToken }> {
   return { pid: process.pid, start: read };
 }
 
-/** A provider group still alive under a holder that is gone: unknown from outside on both platforms. */
 async function orphanedRecord(id: string): Promise<LedgerRecord> {
   const leader = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
   leaders.push(leader.pid!);

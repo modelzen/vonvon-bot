@@ -168,7 +168,6 @@ const hosts = processHosts();
 beforeAll(() => hosts.setup());
 afterAll(() => hosts.teardown());
 
-/** Runs `node <cwd>/app-server`, so no shell or cmd.exe wrapper holds a copy of the provider's pipes. */
 async function connectFixture(prefix: string, onRequest: string) {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   writeFileSync(join(dir, 'app-server'), `
