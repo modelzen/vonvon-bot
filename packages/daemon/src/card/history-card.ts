@@ -1,4 +1,4 @@
-import type { HistoryTool, HistoryTurn, ThreadHistory } from '../agent/types';
+import type { HistoryTool, HistoryTurn, ThreadHistory } from '../provider/model';
 import {
   card,
   collapsiblePanel,

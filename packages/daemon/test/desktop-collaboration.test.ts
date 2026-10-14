@@ -2,7 +2,7 @@ import { pendingGroupsFile, readPendingGroups } from '../src/project/pending-gro
 import { afterAll, beforeEach, expect, it, vi } from 'vitest';
 import { rm, mkdir, realpath, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import type { AccountUsageBundle } from '../src/agent/types';
+import type { AccountUsage } from '../src/provider/model';
 import type { AppConfig } from '../src/config/schema';
 import { paths } from '../src/config/paths';
 import { addProject, getProjectByName, removeProject, updateProject } from '../src/project/registry';
@@ -16,7 +16,7 @@ vi.mock('../src/config/paths', async () => {
   const appDir = mkdtempSync(join(tmpdir(), 'desktop-collaboration-'));
   return { paths: { appDir, sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), commentInstructionsFile: join(appDir, 'instructions.md'), commentsRootDir: join(appDir, 'comments'), projectsRootDir: join(appDir, 'projects') } };
 });
-const fixture = vi.hoisted(() => ({ failProjectsWrite: false, backend: undefined as unknown, leave: vi.fn(), send: vi.fn(async () => ({ messageId: 'om_sent' })), usage: vi.fn<() => Promise<AccountUsageBundle>>(async () => ({ profile: { topInvocations: [], dailyBuckets: [] }, usage: { main: {}, extras: [], fetchedAt: 1 } })) }));
+const fixture = vi.hoisted(() => ({ failProjectsWrite: false, backend: undefined as unknown, leave: vi.fn(), send: vi.fn(async () => ({ messageId: 'om_sent' })), usage: vi.fn<() => Promise<AccountUsage>>(async () => ({ profile: { topInvocations: [], dailyBuckets: [] }, usage: { main: {}, extras: [], fetchedAt: 1 } })) }));
 vi.mock('node:fs/promises', async original => {
   const actual = await original<typeof import('node:fs/promises')>();
   return { ...actual, rename: async (...args: Parameters<typeof actual.rename>) => {

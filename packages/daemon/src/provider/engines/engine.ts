@@ -1,6 +1,6 @@
 import type {
-  Failure, GoalEnd, HostFacts, InstallProbe, ProviderAnswer, ProviderFeatures, ProviderRequest, RunEvent, SubagentId,
-  TitleControl, TurnId, TurnOptions, UserInput,
+  AccountUsage, Failure, GoalEnd, HistoryControl, HostFacts, InstallProbe, ModelInfo, ProviderAnswer, ProviderFeatures,
+  ProviderRequest, RunEvent, SubagentId, TitleControl, TurnId, TurnOptions, UserInput,
 } from '../model';
 import type { EnforcementPlan, EnforcementTable } from '../policy/enforcement';
 
@@ -60,7 +60,11 @@ export interface Engine {
   readonly table: EnforcementTable;
   probe(host: HostFacts): Promise<InstallProbe>;
   open(spec: OpenSpec, plan: EnforcementPlan, host: ProcessHost): Promise<EngineSession>;
+  /** The native catalog. iff features.models !== 'none'. */
+  models?(): Promise<ModelInfo[]>;
+  history?: HistoryControl;                                   // iff features.history !== 'none'
   titles?: TitleControl;                                      // iff features.titles !== 'none'
+  usage?(): Promise<AccountUsage>;                            // iff features.usage !== 'none'
   /** iff features.oneShot !== 'none'. A separate process with no tools, owned by ProcessHost, killed at timeoutMs. */
   oneShot?(prompt: string, opts: { timeoutMs: number }): Promise<string | undefined>;
 }

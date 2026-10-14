@@ -12,14 +12,12 @@ import type {
   AgentThread,
   BackendProbe,
   GenerateSessionTitleOptions,
-  ModelInfo,
   PermissionMode,
   ReasoningEffort,
   ResumeThreadOptions,
   StartThreadOptions,
-  ThreadHistory,
-  ThreadSummary,
 } from '../types';
+import type { ModelInfo, ThreadHistory, ThreadSummary } from '../../provider/model';
 import { BRIDGE_DEVELOPER_INSTRUCTIONS } from '../bridge-instructions';
 import { isBackendDepInstalled, installedBackendVersion, loadBackendDep } from '../backend-loader';
 import { permissionOptions } from './permission';

@@ -7,7 +7,7 @@ import {
   buildWelcomeCard,
   type ResumeCardState,
 } from '../src/card/command-cards';
-import type { ThreadSummary } from '../src/agent/types';
+import type { ThreadSummary } from '../src/provider/model';
 
 function buttons(node: unknown, acc: any[] = []): any[] {
   if (Array.isArray(node)) node.forEach((n) => buttons(n, acc));

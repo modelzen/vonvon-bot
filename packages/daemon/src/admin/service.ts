@@ -62,7 +62,8 @@ import {
   type UninstallResult,
   type InstallProgress,
 } from '../agent';
-import type { AccountUsageBundle, BackendDepState, BackendProbe, PermissionMode } from '../agent/types';
+import type { BackendDepState, BackendProbe, PermissionMode } from '../agent/types';
+import type { AccountUsage } from '../provider/model';
 import { readRecentLogs } from '../core/logger';
 import {
   checkUpdate as checkUpdateImpl,
@@ -107,7 +108,7 @@ import type { AdminWriteOp } from './ops';
  */
 export interface AdminService {
   collaboration?(botId: string, request: CollaborationRequest): Promise<unknown>;
-  accountUsage(force: boolean): Promise<AccountUsageBundle>;
+  accountUsage(force: boolean): Promise<AccountUsage>;
   settings?: HostSettings;
   codexSetup?(): Promise<CodexSetup>;
   startCodexJob?(type: CodexJobType): { id: string };
@@ -421,7 +422,7 @@ export interface AdminBackendCatalogEntry {
 
 /** daemon/预览两种进程形态的差异全部收进这几个注入点；读路径完全同源。 */
 export interface AdminServiceDeps {
-  fetchAccountUsage?: (force: boolean) => Promise<AccountUsageBundle>;
+  fetchAccountUsage?: (force: boolean) => Promise<AccountUsage>;
   applyBotActivation?: (appId: string, enabled: boolean) => Promise<void>;
   executeSettingsRead?: (botId: string, op: AdminSettingsReadOp) => Promise<unknown>;
   codexTools?: CodexSetupService;
@@ -468,7 +469,7 @@ export interface AdminServiceDeps {
 export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
   let activationQueue: Promise<unknown> = Promise.resolve();
   const codexTools = deps.codexTools ?? new CodexSetupService();
-  const inFlightUsage = new Set<Promise<AccountUsageBundle>>();
+  const inFlightUsage = new Set<Promise<AccountUsage>>();
   let closing: Promise<void> | undefined;
   const credentials = async (botId: string) => {
     const cfg = await loadConfig(botPaths(botId).configFile);

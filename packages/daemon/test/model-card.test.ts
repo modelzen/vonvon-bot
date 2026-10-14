@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildModelCard, reasoningEffortLabel, type ModelCardState } from '../src/card/command-cards';
-import type { ModelInfo } from '../src/agent/types';
+import type { ModelInfo } from '../src/provider/model';
 
 // /model 卡按「当前模型能力」自适应（对齐 Codex 的诚实体验）：
 //  - effort 下拉只在当前模型真有 supportedEfforts 时出现（修旧版「空 effort 回退假

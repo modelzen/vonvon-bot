@@ -8,17 +8,13 @@ import type {
   BackendProbe,
   CompactResult,
   GenerateSessionTitleOptions,
-  HistoryTool,
-  HistoryTurn,
-  ModelInfo,
   PermissionMode,
   ReasoningEffort,
   ResumeThreadOptions,
   StartThreadOptions,
-  ThreadHistory,
-  ThreadSummary,
   TurnOptions,
 } from '../types';
+import type { HistoryTool, HistoryTurn, ModelInfo, ThreadHistory, ThreadSummary } from '../../provider/model';
 import { isGoalTerminal } from '../types';
 import { BRIDGE_DEVELOPER_INSTRUCTIONS } from '../bridge-instructions';
 import { AppServerClient } from './app-server-client';

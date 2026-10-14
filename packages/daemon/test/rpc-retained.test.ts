@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { agentIdSchema } from '@vonvon/protocol';
 import { createBackend } from '../src/agent';
-import { UsageError, type UsageErrorKind } from '../src/agent/types';
+import { UsageError, type UsageErrorKind } from '../src/provider/model';
 import { createAppPreferencesWriter } from '../src/admin/ops';
 import { createSettingsOwner } from '../src/admin/settings';
 import type { AppConfig } from '../src/config/schema';

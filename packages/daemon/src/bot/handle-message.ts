@@ -30,10 +30,10 @@ import {
   type AgentInput,
   type AgentRun,
   type AgentThread,
-  type ModelInfo,
   type PermissionMode,
   type ReasoningEffort,
 } from '../agent/types';
+import type { ModelInfo } from '../provider/model';
 import type { SelectOption } from '../card/cards';
 import {
   createAppPreferencesWriter,
@@ -47,7 +47,8 @@ import {
   probeBackends,
   type AdminWriteOp,
 } from '../admin/ops';
-import { isGoalTerminal, UsageError } from '../agent/types';
+import { isGoalTerminal } from '../agent/types';
+import { UsageError } from '../provider/model';
 import {
   getMaxConcurrentRuns,
   getPendingPolicy,

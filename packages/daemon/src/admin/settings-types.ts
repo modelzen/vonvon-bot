@@ -1,4 +1,5 @@
-import type { ModelInfo, PermissionMode, ReasoningEffort } from '../agent/types';
+import type { PermissionMode, ReasoningEffort } from '../agent/types';
+import type { ModelInfo } from '../provider/model';
 import type { ModelDisplayMode, PendingPolicy, ResolvedCliBridgePreferences, ResolvedCompletionReminderConfig } from '../config/schema';
 import type { VoiceAction, VoiceView } from '../voice/types';
 import type { CliHookStatus } from '../cli-bridge/types';

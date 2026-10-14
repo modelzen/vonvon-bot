@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ModelInfo } from '../src/agent/types';
+import type { ModelInfo } from '../src/provider/model';
 import {
   buildSessionTitleSettingsCard,
   buildSettingsCard,

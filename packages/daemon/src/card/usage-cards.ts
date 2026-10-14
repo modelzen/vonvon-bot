@@ -1,11 +1,11 @@
 import type {
   AccountProfileStats,
-  AccountUsageBundle,
+  AccountUsage,
   DailyBucket,
   RateBucket,
   RateWindow,
   UsageErrorKind,
-} from '../agent/types';
+} from '../provider/model';
 import { actions, button, card, hr, md, note, noteMd, submitButton, type CardElement, type CardObject } from './cards';
 import { DM } from './dm-cards';
 
@@ -365,7 +365,7 @@ function joinWithHr(blocks: CardElement[][]): CardElement[] {
 export type UsageCardState =
   | { phase: 'loading' }
   | { phase: 'error'; kind: UsageErrorKind; message: string }
-  | { phase: 'ready'; data: AccountUsageBundle; now?: number; today?: string };
+  | { phase: 'ready'; data: AccountUsage; now?: number; today?: string };
 
 const usageButtons = (): CardElement =>
   actions([
@@ -498,7 +498,7 @@ export function buildShareConfigCard(done = false): CardObject {
  * 区块按 sections 取舍，joinWithHr 动态排版——缺席的区块连分隔线一起消失。
  */
 export function buildUsageShareCard(
-  data: AccountUsageBundle,
+  data: AccountUsage,
   opts: { now?: number; today?: string; sections?: Set<ShareSectionKey> } = {},
 ): CardObject {
   const { profile, usage } = data;

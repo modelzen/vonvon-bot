@@ -1,5 +1,5 @@
 import type { SDKSessionInfo, SessionMessage } from '@anthropic-ai/claude-agent-sdk';
-import type { HistoryTool, HistoryTurn, ThreadHistory, ThreadSummary } from '../types';
+import type { HistoryTool, HistoryTurn, ThreadHistory, ThreadSummary } from '../../provider/model';
 import { toolTitle } from './event-map';
 
 /**

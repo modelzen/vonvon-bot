@@ -5,7 +5,7 @@ import {
   resolveCommentModelFormValue,
 } from '../src/card/dm-cards';
 import type { AppConfig } from '../src/config/schema';
-import type { ModelInfo } from '../src/agent/types';
+import type { ModelInfo } from '../src/provider/model';
 
 // 云文档评论设置卡。Agent 按钮只切换预览，Agent+模型+推理强度由表单一次提交；
 // 无显式「默认/后端默认」选项；回复规则在子卡内编辑；带飞书 CLI 配合提示。

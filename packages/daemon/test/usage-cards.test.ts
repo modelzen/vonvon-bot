@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AccountUsageBundle } from '../src/agent/types';
+import type { AccountUsage } from '../src/provider/model';
 import {
   buildShareConfigCard,
   buildUsageCard,
@@ -23,7 +23,7 @@ const NOW = new Date(2026, 5, 7, 19, 0).getTime();
 const at = (y: number, mo: number, d: number, h: number, mi: number): number =>
   Math.floor(new Date(y, mo - 1, d, h, mi).getTime() / 1000);
 
-function bundle(over: Partial<AccountUsageBundle> = {}): AccountUsageBundle {
+function bundle(over: Partial<AccountUsage> = {}): AccountUsage {
   return {
     profile: {
       displayName: 'Clay Zhang',

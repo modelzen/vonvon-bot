@@ -21,10 +21,10 @@ import {
   DEFAULT_BACKEND_ID,
   REASONING_EFFORTS,
   type BackendProbe,
-  type ModelInfo,
   type PermissionMode,
   type ReasoningEffort,
 } from '../agent/types';
+import type { ModelInfo } from '../provider/model';
 import { catalogById } from '../agent/catalog';
 import type { SessionRecord } from '../bot/session-store';
 import { labelScope } from '../config/scopes';

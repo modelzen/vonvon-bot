@@ -1,3 +1,5 @@
+import type { ModelInfo, ThreadHistory, ThreadSummary } from '../provider/model';
+
 /** Request rejected locally before any transport write: safe to resubmit. */
 export class UnsentRequestError extends Error {}
 
@@ -39,74 +41,6 @@ export interface AgentInput {
   /** absolute local paths of images the user sent — codex reads them directly as
    * `localImage`; the claude backend base64-encodes them into image blocks. */
   images?: string[];
-}
-
-export interface ModelInfo {
-  id: string;
-  displayName: string;
-  description: string;
-  supportedEfforts: ReasoningEffort[];
-  defaultEffort: ReasoningEffort;
-  isDefault: boolean;
-  hidden: boolean;
-}
-
-/** A past agent session, for the "恢复历史会话" picker (codex: thread/list). */
-export interface ThreadSummary {
-  /** backend session id（codex 的 thread id，其它后端可能是 session UUID），传给 resumeThread */
-  sessionId: string;
-  /** first user message preview */
-  preview: string;
-  /** unix seconds */
-  createdAt: number;
-  updatedAt: number;
-  /** optional user-facing title */
-  name?: string;
-}
-
-/** One past tool/command/file/web call in a resumed session's transcript. */
-export interface HistoryTool {
-  /** short header — the shell command, or a label like '编辑文件' / '联网搜索' */
-  title: string;
-  /** aggregated stdout/stderr, if any (renderer truncates) */
-  output?: string;
-  /** process exit code for command executions */
-  exitCode?: number | null;
-  /** the call errored / was declined */
-  failed?: boolean;
-}
-
-/** One user→assistant exchange in a resumed session (a codex Turn). */
-export interface HistoryTurn {
-  /** the user's prompt for this turn ('' for a tool-only / boilerplate turn) */
-  userText: string;
-  /** the assistant's reply (agent messages concatenated) */
-  assistantText: string;
-  /** the assistant's reasoning, if surfaced ('' if none) */
-  reasoning: string;
-  /** tool/command/file/web calls in this turn, in arrival order */
-  tools: HistoryTool[];
-  /** unix seconds when the turn started, if known */
-  startedAt?: number;
-}
-
-/**
- * A resumed codex thread's transcript, for the "恢复历史会话" history card —
- * normalized off the app-server `thread/read` (includeTurns) turns so the card
- * layer never touches codex protocol shapes.
- */
-export interface ThreadHistory {
-  /** turns kept for display, oldest→newest (the most recent `turns.length`) */
-  turns: HistoryTurn[];
-  /** total non-empty turns in the thread before truncation (>= turns.length) */
-  totalTurns: number;
-  /** user-facing thread title, if set */
-  name?: string;
-  /** first user message preview */
-  preview?: string;
-  /** unix seconds */
-  createdAt?: number;
-  updatedAt?: number;
 }
 
 /**
@@ -270,90 +204,6 @@ export interface GenerateSessionTitleOptions {
   prompt: string;
   model: string;
   effort: ReasoningEffort;
-}
-
-// ── 账号用量（归一化）──────────────────────────────────────────────────
-// /usage 卡的数据形状。目前只有 codex（ChatGPT 登录）后端有这份数据（实现在
-// codex-appserver/usage，经 src/agent/usage 出口），但类型是后端中立的归一化
-// 形状 —— 卡片层只 import 这里，绝不碰后端协议类型。
-
-export type UsageErrorKind =
-  /** 没有登录态（codex：无 auth.json）—— 本机未登录 */
-  | 'no-auth'
-  /** 登录模式没有用量数据（codex：API-key 模式无 profile/限额） */
-  | 'api-key-mode'
-  /** 登录态被服务端永久拒绝 → 需要重新登录 */
-  | 'need-relogin'
-  /** 网络/服务波动 → 稍后重试 */
-  | 'transient';
-
-export class UsageError extends Error {
-  constructor(
-    readonly kind: UsageErrorKind,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'UsageError';
-  }
-}
-
-export interface RateWindow {
-  /** 已用百分比（整数 0-100） */
-  usedPercent: number;
-  /** 窗口长度（秒）：5h=18000，7d=604800 */
-  windowSeconds?: number;
-  /** 重置时刻（Unix epoch 秒） */
-  resetAt?: number;
-}
-
-export interface RateBucket {
-  /** 附加限额的名字（如 GPT-5.3-Codex-Spark）；主限额为 undefined */
-  name?: string;
-  primary?: RateWindow;
-  secondary?: RateWindow;
-}
-
-export interface AccountUsageSnapshot {
-  planType?: string;
-  /** 主限额（5h + 7d 双窗口） */
-  main: RateBucket;
-  /** 按 feature 的附加限额（独立 5h/7d 双窗口） */
-  extras: RateBucket[];
-  /** 拉取时刻（ms） */
-  fetchedAt: number;
-}
-
-export interface DailyBucket {
-  /** YYYY-MM-DD（服务端口径，疑似 UTC 日界；只含有用量的日期，热力图自己补 0） */
-  date: string;
-  tokens: number;
-}
-
-export interface AccountProfileStats {
-  displayName?: string;
-  lifetimeTokens?: number;
-  peakDailyTokens?: number;
-  currentStreakDays?: number;
-  longestStreakDays?: number;
-  /** 最长单任务时长（秒） */
-  longestTurnSec?: number;
-  totalThreads?: number;
-  fastModePct?: number;
-  /** 技能调用总次数 */
-  totalSkillsUsed?: number;
-  /** 用过的不同技能数 */
-  uniqueSkillsUsed?: number;
-  mostUsedEffort?: string;
-  mostUsedEffortPct?: number;
-  /** top 调用的插件/skill（名字 + 次数 + 类型），最多 5 条 */
-  topInvocations: { name: string; count: number; kind: 'plugin' | 'skill' }[];
-  dailyBuckets: DailyBucket[];
-  statsAsOf?: string;
-}
-
-export interface AccountUsageBundle {
-  profile: AccountProfileStats;
-  usage: AccountUsageSnapshot;
 }
 
 /** 一个按需后端依赖的安装态（doctor 三态的细分；catalog/Web 据此决定渲染）。

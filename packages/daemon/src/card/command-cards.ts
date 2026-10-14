@@ -1,4 +1,5 @@
-import type { ModelInfo, ReasoningEffort, ThreadSummary } from '../agent/types';
+import type { ReasoningEffort } from '../agent/types';
+import type { ModelInfo, ThreadSummary } from '../provider/model';
 import { actions, button, card, hr, linkButton, md, note, selectStatic, type CardElement, type CardObject } from './cards';
 
 /** Action ids for the `/model` card. */

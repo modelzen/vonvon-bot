@@ -4,13 +4,13 @@ import { join } from 'node:path';
 import { log } from '../../../core/logger';
 import type {
   AccountProfileStats,
-  AccountUsageBundle,
+  AccountUsage,
   AccountUsageSnapshot,
   DailyBucket,
   RateBucket,
   RateWindow,
-} from '../../../agent/types';
-import { UsageError } from '../../../agent/types';
+} from '../../model';
+import { UsageError } from '../../model';
 import { utilityRequest } from './client-pool';
 import { resolveCodexBin } from './locate';
 
@@ -40,8 +40,8 @@ const PROFILE_CACHE_MS = 5 * 60_000;
 /** usage（限额）缓存 30s：防连点击穿，刷新按钮可 force 绕过。 */
 const USAGE_CACHE_MS = 30_000;
 
-// 错误模型（UsageError/UsageErrorKind）与对外数据形状（AccountUsageBundle 等）
-// 已归一化上提到 ../types —— 本模块只保留 codex 专属的取数与映射实现。
+// 错误模型（UsageError/UsageErrorKind）与对外数据形状（AccountUsage 等）
+// 已归一化上提到 ../../model —— 本模块只保留 codex 专属的取数与映射实现。
 
 // ── auth.json ─────────────────────────────────────────────────────────
 
@@ -366,7 +366,7 @@ export async function fetchUsageSnapshot(force = false): Promise<AccountUsageSna
 }
 
 /** 一次拉齐两端点（并行）。任一失败抛 UsageError，调用方按 kind 渲染错误卡。 */
-export async function fetchUsageBundle(force = false): Promise<AccountUsageBundle> {
+export async function fetchUsageBundle(force = false): Promise<AccountUsage> {
   let firstFailure: { reason: unknown } | undefined;
   const trackFailure = <T>(pending: Promise<T>): Promise<T> => pending.catch((reason: unknown) => {
     firstFailure ??= { reason };

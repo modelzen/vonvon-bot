@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { collaborationReplySchema, projectRecordSchema, type CollaborationRequest, type CollaborationReply } from '@vonvon/protocol';
 import type { AdminService } from '../../admin/service';
 import type { CollaborationRequest as ServiceRequest } from '../../admin/collaboration';
-import { UsageError, type UsageErrorKind } from '../../agent/types';
+import { UsageError, type UsageErrorKind } from '../../provider/model';
 import type { DirectoryBrowser } from '../directory-browser';
 import type { RpcOutcome } from '../rpc';
 import { RpcError, unsupported } from '../errors';

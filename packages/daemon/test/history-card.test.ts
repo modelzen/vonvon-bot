@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildHistoryCard } from '../src/card/history-card';
-import type { ThreadHistory, HistoryTurn } from '../src/agent/types';
+import type { ThreadHistory, HistoryTurn } from '../src/provider/model';
 
 function turn(p: Partial<HistoryTurn>): HistoryTurn {
   return { userText: '', assistantText: '', reasoning: '', tools: [], ...p };

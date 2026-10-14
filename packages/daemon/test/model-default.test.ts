@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { pickDefault } from '../src/bot/handle-message';
 import { buildModelDefaultCard, modelDefaultSummary } from '../src/card/dm-cards';
-import type { ModelInfo } from '../src/agent/types';
+import type { ModelInfo } from '../src/provider/model';
 
 // 项目级「新话题默认模型 / 推理强度」。两条不变量：
 //  ① pickDefault：项目默认（prefer）只在对**实时**模型列表仍有效时生效；陈旧 / 跨后端 /
