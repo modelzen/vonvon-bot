@@ -39,7 +39,13 @@
 
 `2026-10-14-v1-definition/`，基于 `main` 的 `be17859`。用户决定第一版做 macOS 桌面端，每个 bot 有自己的工作区、仓库、skill、记忆和性格，并且在不同的群里可以各不相同。这一轮调研就是为了定义第一版。
 
-这批报告没有核实记录，用之前自己核对关键事实。流程方案、上下文方案和第一版草案完成后补进这个目录。
+这批报告没有核实记录，用之前自己核对关键事实。critique 是另一个代理对 draft 的评审，final 已按它改过。final 是给主人确认的定稿候选，里面的 8 个决策问题还没有答，主人的回答写进 `docs/product.md`。
+
+process-ci、draft 和 final 里的流程说法，凡和 `AGENTS.md` 不一致的，以 `AGENTS.md` 为准（#290 流程 PR）。已知的有三处：
+
+- 这几份写"Codex 不改代码，不 push"。主人后来决定 Codex 可以改代码：在 Claude 发起的 Mac 检查里直接提交，验收预览版时开 `codex/fix-*` PR。
+- 这几份把 `macOS checks` 写成和 `linux` 一样的必需检查。合入规则其实只强制 `linux`，`macOS checks` 由 Claude 用 `gh pr checks` 确认。
+- final 写短检查在十分钟内，`AGENTS.md` 定为大约 30 分钟以内。
 
 | 报告 | 内容 |
 |---|---|
@@ -50,6 +56,12 @@
 | [context-feishu-products](2026-10-14-v1-definition/context-feishu-products.md) | 飞书的群、话题、私聊和历史消息接口，lark-cli 能查什么，其他产品怎么处理上下文和子 Agent |
 | [v2-fit](2026-10-14-v1-definition/v2-fit.md) | v2 现有代码里第一版能留什么、要改什么、哪些可以暂停或删掉。末尾"和要不要开源有关的事实"已不需要：第一版闭源 |
 | [bridge-inventory](2026-10-14-v1-definition/bridge-inventory.md) | bridge 的功能逐项盘点：保留、修改还是丢弃，老用户的数据怎么搬 |
+| [context-model](2026-10-14-v1-definition/context-model.md) | 上下文方案：群主区、话题、私聊各算什么上下文，多人多 bot，子 Agent 怎么显示，压缩，查飞书历史，和记忆的关系 |
+| [process-ci](2026-10-14-v1-definition/process-ci.md) | 第一版的开发流程和 CI：分工、Mac 检查、预览版、通知主人、去掉 Windows。部分流程说法已被 `AGENTS.md` 取代，见上文 |
+| [draft](2026-10-14-v1-definition/draft.md) | 第一版产品定义和流程的初稿，已被 final 取代 |
+| [critique](2026-10-14-v1-definition/critique.md) | 对 draft 的评审，逐条标了严重程度 |
+| [final](2026-10-14-v1-definition/final.md) | 第一版产品定义与流程提案（定稿候选）：范围、bot 模型、上下文、群聊回复、里程碑、8 个决策问题和 20 条默认选择。流程部分同上 |
+| [owner-updates](2026-10-14-v1-definition/owner-updates.md) | 调研进行中主人的 5 次决定，其中两次附了接近原话的记录。之后的决定以 `AGENTS.md` 和 `docs/product.md` 为准 |
 
 ## 补充
 
