@@ -44,7 +44,7 @@ esac`);
 
   const comment = join(dir, 'comment.md');
   writeFileSync(comment, 'Linux 证据与验收要点。\n');
-  const handoff = (...extra) => spawnSync('node', [script, '7', '--to', 'codex', ...(extra.includes('--notify-only') ? [] : ['--comment-file', comment]), ...extra], {
+  const handoff = (...extra) => spawnSync('node', [script, '7', '--to', 'codex', ...(extra.includes('--notify-only') || extra.includes('--no-defaults') ? [] : ['--comment-file', comment, '--quota-wait', '0']), ...extra.filter((a) => a !== '--no-defaults')], {
     cwd: repo, encoding: 'utf8', env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
   });
   const calls = () => { try { return readFileSync(log, 'utf8').trim().split('\n'); } catch { return []; } };
@@ -97,6 +97,39 @@ test('a handoff refuses without side effects when the PR is not ours, the tree i
       assert.match(result.stderr, message, name);
       assert.ok(!f.calls().some((c) => c.includes('-X')), `${name}: no GitHub write`);
       assert.ok(!f.calls().some((c) => c.startsWith('paseo')), `${name}: no notice`);
+    } finally { f.cleanup(); }
+  }
+});
+
+test('the comment records the handoff count and the quota wait, and a handoff without --quota-wait refuses', () => {
+  const f = fixture({ labels: ['owner:claude'], sessions: [], comments: (sha) => [
+    { html_url: 'https://example/c0', body: `首轮\n\n${handoffLine('claude', 'codex', '0000000000')}` },
+    { html_url: 'https://example/c1', body: `退回\n\n${handoffLine('codex', 'claude', sha)}` },
+    { html_url: 'https://example/c2', body: '审查意见' },
+  ] });
+  try {
+    const result = f.handoff('--no-defaults', '--comment-file', join(f.dir, 'comment.md'), '--quota-wait', '40 分钟，Claude 周限额', '--dry-run');
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(JSON.parse(result.stdout).comment, /\n交接：claude → codex，head `[0-9a-f]{7}`。\n本 PR 第 3 次交接，等待额度阻塞：40 分钟，Claude 周限额。$/);
+
+    const before = f.calls().length;
+    const refused = f.handoff('--no-defaults', '--comment-file', join(f.dir, 'comment.md'));
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /--quota-wait/);
+    assert.deepEqual(f.calls().slice(before), [], 'the refusal reads, writes and notifies nothing');
+  } finally { f.cleanup(); }
+});
+
+test('an option with a missing value refuses before any external call instead of swallowing the next option', () => {
+  for (const missing of ['--to', '--comment-file', '--quota-wait']) {
+    const f = fixture({ labels: ['owner:claude'], sessions: [] });
+    try {
+      const given = { '--to': ['--to', 'codex'], '--comment-file': ['--comment-file', join(f.dir, 'comment.md')], '--quota-wait': ['--quota-wait', '0'] };
+      const argv = ['7', ...Object.entries(given).flatMap(([flag, pair]) => (flag === missing ? [] : pair)), missing, '--dry-run'];
+      const result = spawnSync('node', [script, ...argv], { cwd: f.dir, encoding: 'utf8', env: { ...process.env, PATH: `${f.dir}:${process.env.PATH}` } });
+      assert.equal(result.status, 1, `${missing}: ${result.stdout}${result.stderr}`);
+      assert.match(result.stderr, new RegExp(`${missing} needs a value`), missing);
+      assert.deepEqual(f.calls(), [], `${missing}: no read, write or notice`);
     } finally { f.cleanup(); }
   }
 });
