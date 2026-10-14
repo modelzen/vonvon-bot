@@ -51,17 +51,25 @@ process-ci、draft 和 final 里的流程说法，凡和 `AGENTS.md` 不一致�
 |---|---|
 | [persona-memory-skills](2026-10-14-v1-definition/persona-memory-skills.md) | bot 的性格、记忆和 skill 放在哪里，群里怎么覆盖（参考 comma、OpenClaw、Grok Bot、Agent Skills） |
 | [agent-mechanics](2026-10-14-v1-definition/agent-mechanics.md) | Codex 和 Claude Code 能用什么机制，给每个（bot，群）会话配人设、多个目录、独立的 skill 和记忆 |
-| [group-response](2026-10-14-v1-definition/group-response.md) | 一个群里有多个 bot 时谁回哪条消息：仅 @、全部回复、智能回复，以及判断用的模型 |
+| [group-response](2026-10-14-v1-definition/group-response.md) | 一个群里有多个 bot 时谁回哪条消息：仅 @、全部回复、智能回复，以及判断用的模型。"没找到 Jev"有误，见 2026-10-14-decision-models |
 | [context-code-agents](2026-10-14-v1-definition/context-code-agents.md) | 上下文在现有代码和原生 Codex、Claude Code 里怎么算，子 Agent 的事件，压缩 |
 | [context-feishu-products](2026-10-14-v1-definition/context-feishu-products.md) | 飞书的群、话题、私聊和历史消息接口，lark-cli 能查什么，其他产品怎么处理上下文和子 Agent |
 | [v2-fit](2026-10-14-v1-definition/v2-fit.md) | v2 现有代码里第一版能留什么、要改什么、哪些可以暂停或删掉。末尾"和要不要开源有关的事实"已不需要：第一版闭源 |
 | [bridge-inventory](2026-10-14-v1-definition/bridge-inventory.md) | bridge 的功能逐项盘点：保留、修改还是丢弃，老用户的数据怎么搬 |
 | [context-model](2026-10-14-v1-definition/context-model.md) | 上下文方案：群主区、话题、私聊各算什么上下文，多人多 bot，子 Agent 怎么显示，压缩，查飞书历史，和记忆的关系 |
 | [process-ci](2026-10-14-v1-definition/process-ci.md) | 第一版的开发流程和 CI：分工、Mac 检查、预览版、通知主人、去掉 Windows。部分流程说法已被 `AGENTS.md` 取代，见上文 |
-| [draft](2026-10-14-v1-definition/draft.md) | 第一版产品定义和流程的初稿，已被 final 取代 |
+| [draft](2026-10-14-v1-definition/draft.md) | 第一版产品定义和流程的初稿，已被 final 取代。"没找到 Jev"有误，见 2026-10-14-decision-models |
 | [critique](2026-10-14-v1-definition/critique.md) | 对 draft 的评审，逐条标了严重程度 |
-| [final](2026-10-14-v1-definition/final.md) | 第一版产品定义与流程提案（定稿候选）：范围、bot 模型、上下文、群聊回复、里程碑、8 个决策问题和 20 条默认选择。流程部分同上 |
+| [final](2026-10-14-v1-definition/final.md) | 第一版产品定义与流程提案（定稿候选）：范围、bot 模型、上下文、群聊回复、里程碑、8 个决策问题和 20 条默认选择。流程部分同上；"没找到 Jev"有误，见 2026-10-14-decision-models |
 | [owner-updates](2026-10-14-v1-definition/owner-updates.md) | 调研进行中主人的 5 次决定，其中两次附了接近原话的记录。之后的决定以 `AGENTS.md` 和 `docs/product.md` 为准 |
+
+## 2026-10-14 判断模型
+
+`2026-10-14-decision-models/`。主人提到的"OpenAI Decisions API，或者 Jev"，用来做智能回复和智能会话的前置判断。
+
+| 报告 | 内容 | 说明 |
+|---|---|---|
+| [decision-models](2026-10-14-decision-models/decision-models.md) | 两个判断模型的接口、价格、速度、认证，以及用在 vonvon-bot 上要注意的地方 | 更正 v1-definition 里 group-response、draft 和 final"没找到 Jev"的说法 |
 
 ## 补充
 
