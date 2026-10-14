@@ -1,5 +1,7 @@
 # Vonvon Bot v2 plan
 
+> **2026-10-14 起停止执行。** owner 重新定义了第一版：macOS 桌面端，每个 bot 有自己的工作区、仓库、skill、记忆和性格。v1 的范围以定稿后的 `docs/product.md` 为准，规则见 `AGENTS.md`。本文只作历史参考，其中的清单不再勾选，也不再按它开 PR。
+
 Vonvon Bot becomes an independent product with a per-machine daemon, a web UI and an Electron desktop shell as clients, and an optional Vonvon account that lists every machine for remote management. It stops vendoring feishu-codex-bridge, imports a bridge user's data, and then shuts the bridge service down. The rule the program enforces is that the daemon is the only writer of machine data and the cloud never stores settings. The design and its reasons live in `docs/architecture.md` and `docs/roadmap.md` next to this file in `modelzen/vonvon-bot`. The provider layer's design is in `docs/providers.md`. The planned PRs are V1, V2, V3, V4, V5, V6a, V6b, V6c, V6d, V7a, V7b, V7c, V8, V9, V10, and V11; their merge order follows the dependency graph below.
 
 ## How to read this

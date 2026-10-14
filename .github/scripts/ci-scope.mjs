@@ -62,7 +62,6 @@ export function determineScope(eventName, event, cwd) {
 
 export function isFullRunEligible(eventName, event) {
   if (eventName === 'workflow_dispatch') return true;
-  if (event?.action === 'labeled' && event?.label?.name !== 'frozen') return false;
   const labels = event?.pull_request?.labels;
   return eventName === 'pull_request' &&
     Array.isArray(labels) && labels.some(label => label?.name === 'frozen');

@@ -1,5 +1,7 @@
 # Vonvon Bot 实施路线
 
+> **2026-10-14 起停止执行。** owner 重新定义了第一版：macOS 桌面端，每个 bot 有自己的工作区、仓库、skill、记忆和性格。v1 的范围以定稿后的 `docs/product.md` 为准，规则见 `AGENTS.md`。下文的 PR 顺序、合并图、分工、issue #122 看板和三平台 CI 都是历史记录。
+
 这份文档按顺序列出把 Vonvon Bot 做成独立产品要合并的 PR。每个决定的理由见 [architecture.md](architecture.md)。
 
 ## PR 顺序

@@ -38,7 +38,8 @@ test('only frozen PR events and explicit dispatch permit the full suite', () => 
     assert.equal(isFullRunEligible('pull_request', { ...plain, action: eventName }), false, eventName);
     assert.equal(isFullRunEligible('pull_request', { ...frozen, action: eventName, label: { name: 'frozen' } }), true, eventName);
   }
-  assert.equal(isFullRunEligible('pull_request', { ...frozen, action: 'labeled', label: { name: 'other' } }), false);
+  assert.equal(isFullRunEligible('pull_request', { ...frozen, action: 'labeled', label: { name: 'other' } }), true);
+  assert.equal(isFullRunEligible('pull_request', { ...plain, action: 'labeled', label: { name: 'other' } }), false);
   assert.equal(isFullRunEligible('pull_request', { pull_request: { labels: [{ name: 'frozen-old' }] } }), false);
   assert.equal(isFullRunEligible('pull_request', { pull_request: { labels: 'frozen' } }), false);
   assert.equal(isFullRunEligible('pull_request', null), false);
@@ -70,13 +71,13 @@ test('event JSON drives full, deferred, docs, and unknown-path decisions', () =>
   const frozen = invoke('pull_request', { pull_request: { ...event.pull_request, labels: [{ name: 'frozen' }] } });
   assert.equal(frozen.result.full, true);
   assert.match(frozen.output, /full=true\n/);
-  const informational = invoke('pull_request', {
+  const relabeled = invoke('pull_request', {
     action: 'labeled', label: { name: 'other' },
-    pull_request: { ...event.pull_request, labels: [{ name: 'frozen' }] },
+    pull_request: { ...event.pull_request, labels: [{ name: 'frozen' }, { name: 'other' }] },
   });
-  assert.equal(informational.result.scope, 'full');
-  assert.equal(informational.result.full, false);
-  assert.match(informational.output, /full=false\n/);
+  assert.equal(relabeled.result.scope, 'full');
+  assert.equal(relabeled.result.full, true);
+  assert.match(relabeled.output, /full=true\n/);
   const manual = invoke('workflow_dispatch', {});
   assert.equal(manual.result.full, true);
   put('docs/guide.md');
@@ -97,28 +98,26 @@ test('event JSON drives full, deferred, docs, and unknown-path decisions', () =>
 
 test('workflow gates every expensive step and platform on the frozen full decision', () => {
   const workflow = readFileSync(new URL('../workflows/ci.yml', import.meta.url), 'utf8');
-  const linux = workflow.split(/^  linux:\n/m)[1]?.split(/^  windows:\n/m)[0];
-  const windows = workflow.split(/^  windows:\n/m)[1]?.split(/^  macos:\n/m)[0];
+  const linux = workflow.split(/^  linux:\n/m)[1]?.split(/^  macos:\n/m)[0];
   const macos = workflow.split(/^  macos:\n/m)[1];
-  assert.ok(linux && windows && macos);
+  assert.ok(linux && macos);
+  assert.doesNotMatch(workflow, /^  windows:\n/m);
   assert.match(workflow, /types: \[opened, synchronize, reopened, labeled\]/);
   assert.doesNotMatch(workflow, /^  (?:push|schedule):/m);
   for (const name of ['Install dependencies', 'Build', 'Typecheck', 'Test', 'Lint']) {
     assert.match(linux, new RegExp(`      - name: ${name}\\n        if: steps\\.scope\\.outputs\\.full == 'true'\\n`), name);
   }
   assert.match(linux, /- uses: actions\/setup-node@v4\n        if: steps\.scope\.outputs\.full == 'true'/);
-  assert.match(linux, /- name: Require frozen head for full scope\n        if: steps\.scope\.outputs\.scope == 'full' && steps\.scope\.outputs\.full != 'true'/);
-  assert.match(windows, /    if: needs\.linux\.outputs\.full == 'true'/);
+  assert.match(linux, /- name: Require frozen head for full scope\n        if: steps\.scope\.outputs\.scope == 'full' && steps\.scope\.outputs\.full != 'true'\n/);
+  assert.doesNotMatch(linux, /^    if:/m, 'a skipped linux job would satisfy the required check');
+  assert.match(linux, /^    name: linux\n/m);
+  assert.match(macos, /^    name: macOS checks\n/m);
   assert.match(macos, /needs\.linux\.outputs\.full == 'true' &&/);
-  for (const [platform, job] of Object.entries({ linux, windows, macos })) {
+  for (const [platform, job] of Object.entries({ linux, macos })) {
     assert.match(job, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}/, platform);
     assert.match(job, /- name: Verify tested source/, platform);
     assert.match(job, /SOURCE_SHA: \$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}/, platform);
-    if (platform === 'windows') {
-      assert.match(job, /git rev-parse HEAD\) -ne \$env:SOURCE_SHA/, platform);
-    } else {
-      assert.match(job, /run: test "\$\(git rev-parse HEAD\)" = "\$SOURCE_SHA"/, platform);
-    }
+    assert.match(job, /run: test "\$\(git rev-parse HEAD\)" = "\$SOURCE_SHA"/, platform);
   }
 });
 
@@ -227,7 +226,7 @@ test('Git whitespace check rejects actual documentation violations', () => fixtu
 
 
 const workflow = readFileSync(new URL('../workflows/ci.yml', import.meta.url), 'utf8');
-const jobs = Object.fromEntries(['linux', 'windows', 'macos'].map(name =>
+const jobs = Object.fromEntries(['linux', 'macos'].map(name =>
   [name, workflow.split(new RegExp(`^  ${name}:\n`, 'm'))[1]?.split(/^  \w+:\n/m)[0]]));
 
 function expression(source, context) {
@@ -261,7 +260,6 @@ function workflowDecision(eventName, event, scope = 'full') {
     full,
     rejects: expression(guard, context),
     expensive,
-    windows: expression(jobs.windows.match(/^    if: (.+)$/m)[1], context),
     macos: expression(jobs.macos.match(/    if: >-\n([\s\S]*?)\n    runs-on:/)[1].trim(), context),
     sources: Object.values(jobs).map(job => rendered(job.match(/          ref: (.+)/)[1], context)),
   };
@@ -272,42 +270,38 @@ const routingEvent = (action, { frozen = true, label = 'frozen', head = 'b'.repe
     ...pr('a'.repeat(40), head).pull_request,
     number: 217,
     head: { sha: head, repo: { full_name: fork ? 'fork/repo' : 'owner/repo' } },
-    labels: frozen ? [{ name: 'frozen' }] : [],
+    labels: [
+      ...(frozen ? [{ name: 'frozen' }] : []),
+      ...(action === 'labeled' && label !== 'frozen' ? [{ name: label }] : []),
+    ],
   },
 });
 
-const formalNames = { linux: 'linux', windows: 'Windows checks', macos: 'macOS checks' };
-const informationalNames = {
-  linux: 'informational linux', windows: 'informational Windows checks', macos: 'informational macOS checks',
-};
+const formalNames = { linux: 'linux', macos: 'macOS checks' };
 
-test('actual workflow isolates unrelated labels before, during, and after formal evidence', () => {
+test('actual workflow re-evaluates every label event under the formal names', () => {
   const formal = workflowDecision('pull_request', routingEvent('labeled'));
   assert.deepEqual(formal.names, formalNames);
   assert.equal(formal.group, 'CI-pr-217');
   assert.equal(formal.full, true);
   assert.equal(formal.rejects, false);
-  assert.equal(formal.windows, true);
   assert.equal(formal.macos, true);
-  for (const status of ['pending', 'in_progress', 'success']) {
-    const info = workflowDecision('pull_request', routingEvent('labeled', { label: 'in-progress' }));
-    assert.deepEqual(info.names, informationalNames, status);
-    assert.equal(info.group, 'CI-pr-217-informational', status);
-    assert.equal(info.full, false);
-    assert.equal(info.rejects, false);
-    assert.equal(info.windows, false);
-    assert.equal(info.macos, false);
-    assert.equal(info.expensive.length, 6);
-    assert.ok(info.expensive.every(value => value === false));
-    assert.equal(info.cancel && info.group === formal.group, false, `cannot cancel ${status}`);
-    const evidence = new Map(Object.values(formal.names).map(name => [name, status]));
-    for (const [platform, name] of Object.entries(info.names)) evidence.set(name, platform === 'linux' ? 'success' : 'skipped');
-    for (const name of Object.values(formalNames)) assert.equal(evidence.get(name), status);
-  }
+  const afterFreeze = workflowDecision('pull_request', routingEvent('labeled', { label: 'other' }));
+  assert.deepEqual(afterFreeze.names, formalNames);
+  assert.equal(afterFreeze.group, formal.group);
+  assert.equal(afterFreeze.cancel, true);
+  assert.equal(afterFreeze.full, true);
+  assert.equal(afterFreeze.rejects, false);
+  assert.equal(afterFreeze.macos, true);
+  assert.equal(afterFreeze.expensive.length, 6);
+  assert.ok(afterFreeze.expensive.every(Boolean));
   const beforeFreeze = workflowDecision('pull_request', routingEvent('labeled', { frozen: false, label: 'other' }));
-  assert.deepEqual(beforeFreeze.names, informationalNames);
-  assert.equal(beforeFreeze.group, 'CI-pr-217-informational');
-  assert.equal(beforeFreeze.rejects, false);
+  assert.deepEqual(beforeFreeze.names, formalNames);
+  assert.equal(beforeFreeze.group, formal.group);
+  assert.equal(beforeFreeze.full, false);
+  assert.equal(beforeFreeze.rejects, true);
+  assert.equal(beforeFreeze.macos, false);
+  assert.ok(beforeFreeze.expensive.every(value => value === false));
 });
 
 test('actual workflow preserves formal gates, source heads, docs, dispatch, and platform trust', () => {
@@ -317,21 +311,19 @@ test('actual workflow preserves formal gates, source heads, docs, dispatch, and 
     assert.equal(unfrozen.group, 'CI-pr-217');
     assert.equal(unfrozen.rejects, true);
     assert.ok(unfrozen.expensive.every(value => value === false));
-    assert.equal(unfrozen.windows, false);
     assert.equal(unfrozen.macos, false);
     const frozen = workflowDecision('pull_request', routingEvent(action, { head: 'c'.repeat(40) }));
     assert.deepEqual(frozen.names, formalNames);
     assert.equal(frozen.group, 'CI-pr-217');
     assert.equal(frozen.full, true);
     assert.equal(frozen.rejects, false);
-    assert.deepEqual(frozen.sources, Array(3).fill('c'.repeat(40)));
+    assert.deepEqual(frozen.sources, Array(2).fill('c'.repeat(40)));
   }
   for (const action of ['opened', 'labeled', 'synchronize', 'reopened']) {
     const docs = workflowDecision('pull_request', routingEvent(action), 'docs');
     assert.deepEqual(docs.names, formalNames);
     assert.equal(docs.full, false);
     assert.equal(docs.rejects, false);
-    assert.equal(docs.windows, false);
     assert.equal(docs.macos, false);
   }
   const manual = workflowDecision('workflow_dispatch', { pull_request: { head: {} } });
@@ -339,11 +331,9 @@ test('actual workflow preserves formal gates, source heads, docs, dispatch, and 
   assert.equal(manual.group, 'CI-workflow_dispatch-123');
   assert.equal(manual.cancel, false);
   assert.equal(manual.full, true);
-  assert.equal(manual.windows, true);
   assert.equal(manual.macos, true);
-  assert.deepEqual(manual.sources, Array(3).fill('d'.repeat(40)));
+  assert.deepEqual(manual.sources, Array(2).fill('d'.repeat(40)));
   const fork = workflowDecision('pull_request', routingEvent('labeled', { fork: true }));
-  assert.equal(fork.windows, true);
   assert.equal(fork.macos, false);
   for (const event of ['push', 'schedule']) assert.equal(isFullRunEligible(event, routingEvent('labeled')), false);
 });

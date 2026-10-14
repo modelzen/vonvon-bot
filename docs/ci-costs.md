@@ -1,20 +1,24 @@
 # 查看 CI 触发条件与费用
 
+> 2026-10-14 起，v1 只支持 macOS，CI 去掉了 Windows 任务，只剩 Linux 和自托管 Mac 两个平台。下文涉及 Windows 的触发条件和费用是历史记录。
+
 ## 何时运行
 
-两个仓库的主线 CI 都由目标为 `main` 的 PR 创建、更新提交或重新打开触发，也可在 Actions 页面手动运行。vonvon-bot 还在 PR 添加标签时触发。每次 PR 事件都在 Linux 上运行范围分类、分类回归测试和改动空白检查。`full` 范围只有在 PR 带 `frozen` 标签或手动触发时才运行完整平台链；未冻结时 Linux 报告完整检查待运行并使必需检查失败，防止轻量运行被视为完整通过。纯文档 PR 即使带 `frozen` 标签也只运行轻量检查。没有普通分支 push、合入后的 main push 或定时 CI。同一 PR 的新正式运行取消旧正式运行；其他标签事件使用独立的信息检查并发组，不取消正式运行。已执行的云端时间仍计入使用量。
+两个仓库的主线 CI 都由目标为 `main` 的 PR 创建、更新提交或重新打开触发，也可在 Actions 页面手动运行。vonvon-bot 还在 PR 添加标签时触发。每次 PR 事件都在 Linux 上运行范围分类、分类回归测试和改动空白检查。`full` 范围只有在 PR 带 `frozen` 标签或手动触发时才运行完整平台链；未冻结时 Linux 报告完整检查待运行并使必需检查失败，防止轻量运行被视为完整通过。纯文档 PR 即使带 `frozen` 标签也只运行轻量检查。没有普通分支 push、合入后的 main push 或定时 CI。同一 PR 的新运行取消旧运行，添加标签触发的运行也一样。已执行的云端时间仍计入使用量。
 
-给 PR 添加其他标签时，CI 只运行轻量检查，成功后结束，不安装 Node 或依赖，也不重复完整平台链。信息检查名称为 `informational linux`、`informational Windows checks` 和 `informational macOS checks`，后两个平台跳过。这些检查与正式的 `linux`、`Windows checks`、`macOS checks` 名称及并发组不同，因此无论正式运行正在执行还是已经完成，都不会取消或覆盖其证据，也不能满足必需的 `linux` 检查。添加 `frozen` 标签、带该标签的 PR 创建、更新提交或重新打开时，`full` 范围运行完整平台链。
+给 PR 添加任何标签，CI 都按 PR 当时的全部标签重新判断，检查名称始终是 `linux` 和 `macOS checks`。PR 已带 `frozen` 时，再加别的标签会取消正在跑的完整运行，从头再跑一遍完整平台链，多花一次运行时间。未冻结的 `full` PR 加别的标签，Linux 必需检查照常失败。去掉 `frozen` 之后再有任何标签事件，同一个 head 上通过的 `linux` 也会被新的失败结果盖住，重新打 `frozen` 就能恢复。添加 `frozen` 标签、带该标签的 PR 创建、更新提交或重新打开时，`full` 范围运行完整平台链。
+
+2026-10-14 之前，其他标签事件用 `informational linux` 等单独的名称和并发组运行，为的是不打断正式运行。但它生成的检查组比正式运行新，盖住了已经通过的 `linux`，合入规则因此报 "Required status check linux is expected"，#289（调研归档）就遇到过。现在改成同名重跑。`linux` 任务不能加任务级的 `if:`：名称固定的任务被跳过时，GitHub 把它算作通过，未冻结的 PR 就能绕过必需检查。
 
 | 改动或操作 | Notelet | vonvon-bot |
 | --- | --- | --- |
-| 纯文档 PR，包括带 `frozen` 标签 | Linux 范围与空白检查 | Linux 范围、分类回归与空白检查；Windows 和 Mac 跳过 |
+| 纯文档 PR，包括带 `frozen` 标签 | Linux 范围与空白检查 | Linux 范围、分类回归与空白检查；Mac 跳过 |
 | 纯静态网站 PR | Linux 范围、空白与部署语法检查 | 不适用 |
-| 产品代码、依赖、CI 或未知路径 | 完整 Linux，成功后运行专用 Mac | 带 `frozen` 标签或手动触发：完整 Linux，成功后运行托管 Windows 与专用 Mac。未冻结 PR 只运行分类回归、范围与空白检查，Linux 必需检查失败并报告完整检查待运行 |
-| 手动运行 main CI | 完整 Linux 与专用 Mac | 完整 Linux、Windows 与专用 Mac |
-| fork PR | Linux；自托管 Mac 跳过 | 未冻结时只运行 Linux 轻量检查；冻结且为 `full` 范围时运行完整 Linux 与 Windows，自托管 Mac 跳过 |
+| 产品代码、依赖、CI 或未知路径 | 完整 Linux，成功后运行专用 Mac | 带 `frozen` 标签或手动触发：完整 Linux，成功后运行专用 Mac。未冻结 PR 只运行分类回归、范围与空白检查，Linux 必需检查失败并报告完整检查待运行 |
+| 手动运行 main CI | 完整 Linux 与专用 Mac | 完整 Linux 与专用 Mac |
+| fork PR | Linux；自托管 Mac 跳过 | 未冻结时只运行 Linux 轻量检查；冻结且为 `full` 范围时只运行完整 Linux，自托管 Mac 跳过 |
 
-手动运行前确认 ref 受信任。三个平台检出的源提交都须与事件的 PR head SHA 或手动运行 SHA 一致。自托管 Mac 还要求 `ENABLE_SELF_HOSTED_MACOS_CI=true`，`ci-user` 保持图形登录且 runner 在线。云端 Linux 失败时，后续 Windows 和 Mac 不启动。Mac 离线时对应 job 排队等待，不能把它记为通过。
+手动运行前确认 ref 受信任。两个平台检出的源提交都须与事件的 PR head SHA 或手动运行 SHA 一致。自托管 Mac 还要求 `ENABLE_SELF_HOSTED_MACOS_CI=true`，`ci-user` 保持图形登录且 runner 在线。云端 Linux 失败时，后续 Mac 不启动。Mac 离线时对应 job 排队等待，不能把它记为通过。
 
 未冻结的 `full` PR 会完成轻量检查，但 Linux 必需检查随后失败，直到冻结 head 或手动运行产生完整证据。事件 JSON 无效、提交信息缺失或差异收集失败也使 Linux 检查失败，不会产生可用于合入的通过结果。
 
@@ -33,9 +37,9 @@
 GitHub 对每个 job 的部分分钟向上取整，然后计算费用。计算时使用各 job 的执行时长，不把排队和整个工作流的墙钟时间当作计费时长。
 
 - Notelet 完整一次约为 `ceil(Linux 秒数 / 60) × $0.006`。
-- vonvon-bot 完整一次约为 `ceil(Linux 秒数 / 60) × $0.006 + ceil(Windows 秒数 / 60) × $0.010`。
-- 例如 Linux 用 3 分钟、Windows 用 5 分钟，名义费用为 `$0.018 + $0.050 = $0.068`。
-- 文档的 Linux job 即使只用数秒，按 1 分钟估算也为 `$0.006`；跳过的 Windows 和 Mac 不产生云端计算费用。
+- vonvon-bot 完整一次约为 `ceil(Linux 秒数 / 60) × $0.006`，自托管 Mac 不计费。2026-10-14 之前还要加 `ceil(Windows 秒数 / 60) × $0.010`。
+- 例如 Linux 用 5 分钟，名义费用为 `$0.030`。
+- 文档的 Linux job 即使只用数秒，按 1 分钟估算也为 `$0.006`；跳过的 Mac 不产生云端计算费用。
 
 重新运行和失败前已执行的部分也消耗额度。计算费估算不包括已有构建产物、超额缓存或 Packages 的存储费用。当前 main CI 没有新增 artifact 上传。
 
@@ -43,7 +47,7 @@ GitHub 对每个 job 的部分分钟向上取整，然后计算费用。计算�
 
 ## 到 V11 的预算估算
 
-2026-10-12 按最近成功运行的实际时长估算。一次完整运行 Linux 约 5 分钟、Windows 约 10 分钟、Mac 约 2 分钟（自托管，不计费）。
+这一节是 2026-10-12 的历史估算，当时还有 Windows 任务，V1 到 V11 的计划也已在 2026-10-14 停止执行。2026-10-12 按最近成功运行的实际时长估算。一次完整运行 Linux 约 5 分钟、Windows 约 10 分钟、Mac 约 2 分钟（自托管，不计费）。
 
 | 项目 | 数值 |
 | --- | --- |

@@ -1,6 +1,8 @@
 # 管理自托管 Mac CI
 
-两个仓库当前 `main` 的 Linux 检查保留 GitHub 托管，macOS 检查使用本机自托管 runner。vonvon-bot 的 Windows 检查使用 GitHub 托管 `windows-2025`。
+> 2026-10-14 起，vonvon-bot 的 CI 不再有 Windows 任务。下文提到托管 Windows 的地方是历史记录。
+
+两个仓库当前 `main` 的 Linux 检查保留 GitHub 托管，macOS 检查使用本机自托管 runner。vonvon-bot 的 Windows 检查原先使用 GitHub 托管 `windows-2025`，2026-10-14 已移除。
 
 ## 当前状态
 
