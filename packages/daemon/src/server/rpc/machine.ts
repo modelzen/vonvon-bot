@@ -2,15 +2,23 @@ import type { MachineRequest, MachineReply } from '@vonvon/protocol';
 import type { AdminService } from '../../admin/service';
 import type { ShutdownControl } from '../../host/lifecycle';
 import { controlDesktopService } from '../../host/service';
+import type { ServiceActionLauncher } from '../../host/service-action';
+import { writeServiceSkipped } from '../../service/action-report';
 import { resolveCliBinPath, serviceStdoutPath, serviceStderrPath } from '../../service/common';
 import { runtimeDistribution } from '../../service/distribution';
 import type { RpcOutcome } from '../rpc';
+import type { SnapshotStore } from '../snapshot';
 import { unsupported } from '../errors';
 
-export async function machineRpc(service: AdminService, control: ShutdownControl | undefined, port: number, request: MachineRequest): Promise<RpcOutcome<MachineReply>> {
+/** The login-time service switch (3.10): the helper launcher, the snapshot that shows it, and the data root. */
+export type MachineServiceContext = { launcher: ServiceActionLauncher; snapshots: Pick<SnapshotStore, 'observeService' | 'refreshService'>; root: string };
+
+export async function machineRpc(service: AdminService, control: ShutdownControl | undefined, port: number, request: MachineRequest, services?: MachineServiceContext): Promise<RpcOutcome<MachineReply>> {
   switch (request.type) {
     case 'status': {
       const status = await controlDesktopService('status');
+      // 重新检测 asks here; the snapshot takes the same answer instead of waiting for its 60 s read.
+      services?.snapshots.observeService(status);
       return { kind: 'read', value: { type: 'status', service: {
         platformName: process.platform, servicePath: '', stdoutPath: serviceStdoutPath(), stderrPath: serviceStderrPath(),
         ...status,
@@ -28,6 +36,20 @@ export async function machineRpc(service: AdminService, control: ShutdownControl
       if (!control) return unsupported();
       const update = await service.applyUpdate();
       return { kind: 'shutdown', reply: () => ({ type: 'done', message: '正在更新 daemon。' }), afterReply: () => control.requestRestart(port, update ?? undefined) };
+    }
+    case 'service': {
+      // start and stop stay with the desktop shell and the terminal.
+      if (!services || (request.action !== 'install' && request.action !== 'uninstall')) return unsupported();
+      const helper = services.launcher.reserve(request.action);
+      const message = request.action === 'install' ? '正在打开登录时启动，页面会断开几秒。' : '正在关闭登录时启动，页面会断开几秒。';
+      // The helper stops this daemon, so the reply goes out first.
+      return { kind: 'shutdown', reply: () => ({ type: 'done', message }), afterReply: helper.start, cancel: helper.cancel };
+    }
+    case 'setServiceSkipped': {
+      if (!services) return unsupported();
+      await writeServiceSkipped(services.root, request.skipped);
+      void services.snapshots.refreshService().catch(() => undefined);
+      return { kind: 'mutation', reply: () => ({ type: 'done', message: request.skipped ? '已跳过登录时启动。' : '已取消跳过。' }) };
     }
     default: return unsupported();
   }

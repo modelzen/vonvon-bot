@@ -1,32 +1,51 @@
-import { afterEach, expect, it, vi } from 'vitest';
-import { runServiceCommand, runServiceStatus } from '../src/cli/commands/service';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { runServiceCommand, runServiceStatus, type ServiceCommandDependencies } from '../src/cli/commands/service';
+import { acquireMutex, closeMutex } from '../src/config/data-access';
+import type { PidLockInfo } from '../src/server/pid-lock';
+import { classifyServiceFailure, readServiceActionRecord } from '../src/service/action-report';
 import { serviceStatus } from '../src/service/adapter';
 import type { ServiceTransactionOutcome } from '../src/service/adapter';
+import { TRANSLOCATED_REFUSAL } from '../src/service/launchd';
 
 const outcome = (kind: ServiceTransactionOutcome['kind'], extra: Partial<ServiceTransactionOutcome> = {}): ServiceTransactionOutcome => ({ kind, detail: kind, retained: null, leftovers: [], ...extra });
-afterEach(() => { vi.restoreAllMocks(); });
+const roots: string[] = [];
+afterEach(async () => { vi.restoreAllMocks(); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
+/** A data root, and a daemon lock that `owners` hands out one read at a time (the last one repeats). */
+async function helper(owners: (PidLockInfo | null)[] = [null]) {
+  const root = await mkdtemp(join(tmpdir(), 'vonvon-service-cli-')); roots.push(root);
+  const reads = [...owners];
+  const start = vi.fn(async (_port: number) => ({ pid: 4242 }));
+  const deps: Partial<ServiceCommandDependencies> = { root, start, now: () => 1000, readOwner: async () => (reads.length > 1 ? reads.shift() : reads[0]) ?? null };
+  return { root, start, deps };
+}
+/** No data root: the s07 behaviour, without the mutex or the report. */
+const absent: Partial<ServiceCommandDependencies> = { root: join(tmpdir(), 'vonvon-service-cli-absent', 'root'), readOwner: async () => null };
+const daemon: PidLockInfo = { pid: 31, startedAt: '2026-10-15T00:00:00.000Z', listen: '127.0.0.1:43210' };
 
 it.each(['installed', 'already-installed'] as const)('install prints %s and succeeds', async kind => {
   const write = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
   const adapter = { install: vi.fn(async () => outcome(kind)), uninstall: vi.fn() };
-  await runServiceCommand('install', adapter, { port: 32123 });
+  await runServiceCommand('install', adapter, { port: 32123 }, absent);
   expect(adapter.install).toHaveBeenCalledWith({ port: 32123 }); expect(adapter.uninstall).not.toHaveBeenCalled();
   expect(write).toHaveBeenCalledWith(`${kind}: ${kind}\n`);
 });
 it('a successful install names the service daemon without calling it left behind', async () => {
   const write = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
   const adapter = { install: vi.fn(async () => outcome('installed', { detail: 'Installed', retained: { pid: 7, startedAt: 'x' }, leftovers: ['retained pid 7', 'plist /p: ours'] })), uninstall: vi.fn() };
-  await runServiceCommand('install', adapter);
+  await runServiceCommand('install', adapter, {}, absent);
   expect(write).toHaveBeenCalledWith('installed: Installed\nDaemon PID 7 is running under the service.\n');
 });
 it.each(['install_refused', 'install_rolled_back', 'install_incomplete'] as const)('install %s fails with the detail and what was left behind', async kind => {
   const adapter = { install: vi.fn(async () => outcome(kind, { detail: 'stop_unconfirmed: lost', retained: { pid: 7, startedAt: 'x' }, leftovers: ['plist /p: ours'] })), uninstall: vi.fn() };
-  await expect(runServiceCommand('install', adapter)).rejects.toThrow(`${kind}: stop_unconfirmed: lost\nDaemon PID 7 is still running.\nLeft behind: plist /p: ours\nNext step: vonvon service uninstall`);
+  await expect(runServiceCommand('install', adapter, {}, absent)).rejects.toThrow(`${kind}: stop_unconfirmed: lost\nDaemon PID 7 is still running.\nLeft behind: plist /p: ours\nNext step: vonvon service uninstall`);
 });
 it('uninstall reports not-installed as success', async () => {
   vi.spyOn(process.stdout, 'write').mockReturnValue(true);
   const adapter = { install: vi.fn(), uninstall: vi.fn(async () => outcome('not-installed')) };
-  await expect(runServiceCommand('uninstall', adapter)).resolves.toBeUndefined();
+  await expect(runServiceCommand('uninstall', adapter, {}, absent)).resolves.toBeUndefined();
 });
 
 const observed = { platformName: 'launchd (macOS)', name: 'com.vonvon.bot.daemon', servicePath: '/Users/u/Library/LaunchAgents/com.vonvon.bot.daemon.plist', ownerError: null } as const;
@@ -61,4 +80,106 @@ it('status prints the state, its next step and the files, or JSON', async () => 
   expect(String(write.mock.calls[0]?.[0])).toMatch(/^launchd \(macOS\) com\.vonvon\.bot\.daemon: running \(PID 9\)\nRunning under the service manager\.\nDefinition: .*com\.vonvon\.bot\.daemon\.plist\nLogs: /);
   await runServiceStatus(true, { status: async () => status });
   expect(JSON.parse(String(write.mock.calls[1]?.[0]))).toMatchObject({ state: 'running', pid: '9', installed: true });
+});
+
+describe('the helper run (s08)', () => {
+  it('records running before the transaction and the result after it, readable only by the user', async () => {
+    vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    const { root, deps } = await helper();
+    const adapter = { install: vi.fn(async () => { expect(readServiceActionRecord(root)).toEqual({ pid: process.pid, action: 'install', phase: 'running', startedAt: 1000 }); return outcome('installed', { detail: 'Installed' }); }), uninstall: vi.fn() };
+    await runServiceCommand('install', adapter, {}, deps);
+    expect(adapter.install).toHaveBeenCalledOnce();
+    expect(readServiceActionRecord(root)).toEqual({ pid: process.pid, action: 'install', phase: 'done', ok: true, kind: 'installed', detail: 'Installed', leftovers: [], startedAt: 1000, finishedAt: 1000 });
+    if (process.platform !== 'win32') expect((await stat(join(root, 'service-action.json'))).mode & 0o777).toBe(0o600);
+  });
+  it.each([
+    ['installed', true], ['already-installed', true], ['uninstalled', true], ['not-installed', true],
+    ['install_refused', false], ['install_rolled_back', false], ['install_incomplete', false],
+    ['uninstall_refused', false], ['uninstall_rolled_back', false], ['uninstall_incomplete', false],
+  ] as const)('reports %s with ok=%s and, on failure, its reason', async (kind, ok) => {
+    vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    const { root, deps } = await helper();
+    const action = kind.startsWith('un') || kind === 'not-installed' ? 'uninstall' : 'install';
+    const detail = ok ? 'Done' : 'Run vonvon daemon stop before replacing the service';
+    const transaction = vi.fn(async () => outcome(kind, { detail, leftovers: ['plist /p: ours'] }));
+    const run = runServiceCommand(action, { install: transaction, uninstall: transaction }, {}, deps);
+    if (ok) await run; else await expect(run).rejects.toThrow(`${kind}: ${detail}`);
+    expect(readServiceActionRecord(root)).toEqual({
+      pid: process.pid, action, phase: 'done', ok, kind, detail, leftovers: ['plist /p: ours'], startedAt: 1000, finishedAt: 1000,
+      ...(ok ? {} : { reason: 'replace-running' }),
+    });
+  });
+  it('--keep-running after install_incomplete starts the drained daemon again on its port', async () => {
+    const { root, start, deps } = await helper([daemon, null]);
+    const adapter = { install: vi.fn(async () => outcome('install_incomplete', { detail: 'Daemon readiness timed out; the detached daemon was stopped, run vonvon daemon start to start it again' })), uninstall: vi.fn() };
+    await expect(runServiceCommand('install', adapter, { keepRunning: true }, deps)).rejects.toThrow('Daemon PID 4242 was started again, detached, on port 43210.');
+    expect(start).toHaveBeenCalledWith(43210);
+    expect(readServiceActionRecord(root)).toMatchObject({ phase: 'done', ok: false, kind: 'install_incomplete', reason: 'other', restarted: { pid: 4242 } });
+  });
+  it('--keep-running after uninstall starts a detached daemon on the old port', async () => {
+    const write = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    const { root, start, deps } = await helper([daemon, null]);
+    await runServiceCommand('uninstall', { install: vi.fn(), uninstall: vi.fn(async () => outcome('uninstalled', { detail: 'Uninstalled' })) }, { keepRunning: true }, deps);
+    expect(start).toHaveBeenCalledWith(43210);
+    expect(write).toHaveBeenCalledWith('uninstalled: Uninstalled\nDaemon PID 4242 was started again, detached, on port 43210.\n');
+    expect(readServiceActionRecord(root)).toMatchObject({ ok: true, kind: 'uninstalled', restarted: { pid: 4242 } });
+  });
+  it('--keep-running records a failed restart without failing the uninstall', async () => {
+    vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    const { root, start, deps } = await helper([daemon, null]);
+    start.mockRejectedValueOnce(new Error('Daemon readiness timed out.'));
+    await runServiceCommand('uninstall', { install: vi.fn(), uninstall: vi.fn(async () => outcome('uninstalled')) }, { keepRunning: true }, deps);
+    expect(readServiceActionRecord(root)).toMatchObject({ ok: true, restartError: 'Daemon readiness timed out.' });
+  });
+  it.each([
+    ['no daemon ran before', [null], true],
+    ['the service now runs one', [daemon, { ...daemon, pid: 32 }], true],
+    ['--keep-running was not given', [daemon, null], false],
+  ] as const)('starts nothing when %s', async (_case, owners, keepRunning) => {
+    vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    const { root, start, deps } = await helper([...owners]);
+    await runServiceCommand('uninstall', { install: vi.fn(), uninstall: vi.fn(async () => outcome('uninstalled')) }, { keepRunning }, deps);
+    expect(start).not.toHaveBeenCalled();
+    expect(readServiceActionRecord(root)).not.toHaveProperty('restarted');
+  });
+  it('refuses while another install or uninstall holds the service mutex, and leaves the report alone', async () => {
+    const { root, deps } = await helper();
+    const previous = `${JSON.stringify({ pid: 77, action: 'install', phase: 'running', startedAt: 5 })}\n`;
+    await writeFile(join(root, 'service-action.json'), previous);
+    const held = await acquireMutex(root, 'service', 0);
+    try {
+      const adapter = { install: vi.fn(), uninstall: vi.fn() };
+      await expect(runServiceCommand('uninstall', adapter, { keepRunning: true }, deps)).rejects.toThrow(/^uninstall_refused: Another vonvon service install or uninstall is running\.$/);
+      expect(adapter.uninstall).not.toHaveBeenCalled();
+      expect(await readFile(join(root, 'service-action.json'), 'utf8')).toBe(previous);
+      expect(classifyServiceFailure('Another vonvon service install or uninstall is running.')).toBe('busy');
+    } finally { await closeMutex(held); }
+    // The mutex is released after each run, so the next one goes ahead.
+    vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    await runServiceCommand('uninstall', { install: vi.fn(), uninstall: vi.fn(async () => outcome('not-installed')) }, {}, deps);
+    await runServiceCommand('uninstall', { install: vi.fn(), uninstall: vi.fn(async () => outcome('not-installed')) }, {}, deps);
+  });
+  it('turns a thrown transaction into an incomplete report', async () => {
+    const { root, deps } = await helper();
+    await expect(runServiceCommand('install', { install: vi.fn(async () => { throw new Error('EACCES: plist'); }), uninstall: vi.fn() }, {}, deps)).rejects.toThrow('install_incomplete: EACCES: plist');
+    expect(readServiceActionRecord(root)).toMatchObject({ phase: 'done', ok: false, kind: 'install_incomplete', reason: 'other', detail: 'EACCES: plist' });
+  });
+});
+
+// The s07 strings as launchd.ts, systemd.ts and adapter.ts write them; a reworded refusal fails here first.
+it.each([
+  ['launchd has no job for the installed plist. launchd has not loaded the service; if it is turned off in System Settings > General > Login Items & Extensions, turn it on. Or run vonvon daemon stop, then vonvon service install.', 'turned-off'],
+  ['Bootstrap failed: 5: Input/output error launchd has not loaded the service; if it is turned off in System Settings > General > Login Items & Extensions, turn it on.', 'turned-off'],
+  ['Run vonvon daemon stop before replacing the service', 'replace-running'],
+  ['Distribution cannot install a service', 'distribution'],
+  [TRANSLOCATED_REFUSAL, 'translocated'],
+  ['Interrupted uninstall; run vonvon service uninstall first', 'interrupted'],
+  ['Registration belongs to /Users/u/.vonvon-other', 'other-root'],
+  ['GUI domain unavailable', 'manager-unavailable'],
+  ['launchd query failed: launchctl client timed out', 'manager-unavailable'],
+  ['User manager unavailable: offline', 'manager-unavailable'],
+  ['Could not stop the detached daemon: stop_unconfirmed: lost', 'other'],
+  ['Daemon readiness timed out; the detached daemon was stopped, run vonvon daemon start to start it again', 'other'],
+] as const)('classifies %s', (detail, reason) => {
+  expect(classifyServiceFailure(detail)).toBe(reason);
 });

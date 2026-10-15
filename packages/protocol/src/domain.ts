@@ -133,7 +133,33 @@ export const toolStateSchema = z.object({
   compatibility: codexCompatibilitySchema.optional(),
 });
 export type ToolState = z.infer<typeof toolStateSchema>;
-const jobBase = { id: jobIdSchema, type: z.enum(["registerAgent", "installCodex", "loginCodex"]) };
+export const serviceStateSchema = z.enum(["not-installed", "running", "stopped", "disabled", "detached", "conflict", "unknown"]);
+export type ServiceState = z.infer<typeof serviceStateSchema>;
+/** Why a service install or uninstall failed, read from the transaction's detail (daemon service/action-report.ts). */
+export const serviceActionReasonSchema = z.enum(["busy", "turned-off", "replace-running", "distribution", "translocated", "interrupted", "other-root", "manager-unavailable", "other"]);
+export type ServiceActionReason = z.infer<typeof serviceActionReasonSchema>;
+export const serviceOutcomeKindSchema = z.enum([
+  "installed", "already-installed", "uninstalled", "not-installed",
+  "install_refused", "install_rolled_back", "install_incomplete", "uninstall_refused", "uninstall_rolled_back", "uninstall_incomplete",
+]);
+/** The last `vonvon service install|uninstall`: running while its helper lives, then its result. */
+export const serviceActionReportSchema = z.object({
+  action: z.enum(["install", "uninstall"]), phase: z.enum(["running", "done"]),
+  ok: z.boolean().optional(), kind: serviceOutcomeKindSchema.optional(), reason: serviceActionReasonSchema.optional(), detail: z.string().optional(),
+  startedAt: z.number(), finishedAt: z.number().optional(),
+  /** The bot was started again, detached, on the port it had before (`--keep-running`). */
+  restarted: z.object({ pid: z.number() }).optional(), restartError: z.string().optional(),
+});
+export type ServiceActionReport = z.infer<typeof serviceActionReportSchema>;
+/** The login-time service as the daemon sees it (3.10): the manager's state, why installing is impossible, and the user's choices. */
+export const applicationServiceSchema = z.object({
+  state: serviceStateSchema, detail: z.string().optional(),
+  blocked: z.enum(["development", "translocated"]).optional(),
+  skipped: z.boolean(),
+  action: serviceActionReportSchema.optional(),
+});
+export type ApplicationService = z.infer<typeof applicationServiceSchema>;
+const jobBase ={ id: jobIdSchema, type: z.enum(["registerAgent", "installCodex", "loginCodex"]) };
 export const jobSchema = z.discriminatedUnion("phase", [
   z.object({ ...jobBase, phase: z.literal("running"), message: z.string() }),
   z.object({ ...jobBase, phase: z.literal("unresolved"), message: z.string() }),
@@ -151,7 +177,7 @@ export const desktopSnapshotSchema = z.object({
   revision: z.number(), observedAt: z.number(), stale: z.boolean(), host: hostStateSchema,
   agents: z.array(agentSchema), groups: z.array(groupSchema), memberships: z.array(membershipSchema),
   tools: z.array(toolStateSchema), jobs: z.array(jobSchema), diagnostics: z.array(diagnosticSchema),
-  application: z.object({ platform: z.enum(["macos", "windows", "unsupported"]), version: z.string(), loginItem: z.boolean(), dataPath: z.string() }),
+  application: z.object({ platform: z.enum(["macos", "windows", "unsupported"]), version: z.string(), loginItem: z.boolean(), dataPath: z.string(), service: applicationServiceSchema.optional() }),
 });
 export type DesktopSnapshot = z.infer<typeof desktopSnapshotSchema>;
 export const folderChoiceSchema = z.object({ token: folderTokenSchema, displayPath: z.string() });

@@ -1,11 +1,14 @@
 import { isDeepStrictEqual } from 'node:util';
-import type { DesktopSnapshot, Diagnostic, Job, ToolState } from '@vonvon/protocol';
+import type { ApplicationService, DesktopSnapshot, Diagnostic, Job, ServiceActionReport, ToolState } from '@vonvon/protocol';
 import { createBackend } from '../agent';
 import { cachedClaudeLogin } from '../agent/claude-agent/login';
 import { CODEX_MIN_VERSION, CODEX_VERIFIED_VERSION, classifyCodexVersion } from '../agent/codex-appserver/version';
 import type { AdminService } from '../admin/service';
 import { paths } from '../config/paths';
-import { controlDesktopService } from '../host/service';
+import type { RunningServiceAction } from '../host/service-action';
+import { controlDesktopService, type DesktopServiceStatus } from '../host/service';
+import { liveServiceActionRecord, readServiceSkipped } from '../service/action-report';
+import { isTranslocated, runtimeDistribution, type Distribution } from '../service/distribution';
 import { bridgeVersion } from '../core/version';
 import { projectState } from './projection';
 import { readAdminState } from './state';
@@ -14,6 +17,10 @@ export interface SnapshotStore {
   current(): DesktopSnapshot;
   rebuild(committed?: (snapshot: DesktopSnapshot) => void): Promise<void>;
   refreshTools(): Promise<void>;
+  /** Asks the service manager again (after a service action, 重新检测, or a skip), then rebuilds. */
+  refreshService(): Promise<void>;
+  /** Takes a manager read someone else just made (machine `status`) instead of asking again. */
+  observeService(status: DesktopServiceStatus): void;
   diagnose(agentId: string, diagnostics: Diagnostic[]): void;
   close(): Promise<void>;
 }
@@ -23,22 +30,49 @@ export async function createSnapshotStore(options: {
   jobs: () => Job[];
   publish: (snapshot: DesktopSnapshot) => void;
   readTools?: () => Promise<ToolState[]>;
-  /** Whether the background service is installed and enabled (3.10), null when the manager cannot tell; read with the tools, every 60 s. */
-  readLoginItem?: () => Promise<boolean | null>;
+  /** The background service as its manager reports it (3.10); read at startup, with the tools every 60 s, and on refreshService(). */
+  readService?: () => Promise<DesktopServiceStatus>;
+  /** Read once: a development checkout or a translocated app cannot install the service. */
+  distribution?: () => Promise<Distribution>;
+  /** The helper this daemon is running, which the report file may not show yet. */
+  serviceAction?: () => RunningServiceAction | undefined;
+  /** Holds `service-action.json` and `setup.json`; the data root. */
+  root?: string;
 }): Promise<SnapshotStore> {
   const version = bridgeVersion();
+  const root = options.root ?? paths.appDir;
+  const base = { platform: process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'unsupported', version, dataPath: paths.appDir } as const;
   let snapshot: DesktopSnapshot = {
     revision: 0, observedAt: 0, stale: false,
     host: { kind: 'connected', ownership: 'owned', version },
     agents: [], groups: [], memberships: [], tools: [], jobs: [], diagnostics: [],
-    application: { platform: process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'unsupported', version, loginItem: false, dataPath: paths.appDir },
+    application: { ...base, loginItem: false },
   };
   let tools: ToolState[] = [];
   let loginItem = false;
-  const readLoginItem = options.readLoginItem ?? (async (): Promise<boolean | null> => {
-    const status = await controlDesktopService('status');
-    return status.state === 'unknown' ? null : status.state === 'running' || status.state === 'stopped' || status.state === 'detached';
-  });
+  // The last manager answer; none before the first read or where there is no manager (Windows).
+  let manager: Pick<ApplicationService, 'state' | 'detail'> | undefined;
+  let blocked: ApplicationService['blocked'];
+  const readService = options.readService ?? (() => controlDesktopService('status'));
+  function observeService(status: DesktopServiceStatus): void {
+    if (!status.supported || !status.state) return;
+    // An unknown answer keeps the last login item, as before s08; the step says it cannot tell.
+    if (status.state !== 'unknown') loginItem = status.state === 'running' || status.state === 'stopped' || status.state === 'detached';
+    manager = { state: status.state, ...(status.detail ? { detail: status.detail } : {}) };
+  }
+  function serviceAction(): ServiceActionReport | undefined {
+    const running = options.serviceAction?.();
+    if (running) return { action: running.action, phase: 'running', startedAt: running.startedAt };
+    const record = liveServiceActionRecord(root);
+    if (!record) return undefined;
+    const { pid: _pid, leftovers: _leftovers, ...report } = record;
+    return report;
+  }
+  function serviceView(): ApplicationService | undefined {
+    if (!manager) return undefined;
+    const action = serviceAction();
+    return { ...manager, ...(blocked ? { blocked } : {}), skipped: readServiceSkipped(root), ...(action ? { action } : {}) };
+  }
   const diagnostics = new Map<string, Diagnostic[]>();
   let queue = Promise.resolve();
   let refreshing: Promise<void> | undefined;
@@ -61,9 +95,11 @@ export async function createSnapshotStore(options: {
   });
   async function build(committed?: (snapshot: DesktopSnapshot) => void): Promise<void> {
     const state = await readAdminState(options.service);
+    // The report and the skip flag are files, re-read here: a helper's result shows within one 5 s rebuild.
+    const service = serviceView();
     const next = {
       ...snapshot, ...projectState(state, snapshot, new Set()), tools,
-      application: { ...snapshot.application, loginItem },
+      application: { ...base, loginItem, ...(service ? { service } : {}) },
       jobs: options.jobs(), diagnostics: [...diagnostics.values()].flat(),
       observedAt: Date.now(),
     };
@@ -87,17 +123,27 @@ export async function createSnapshotStore(options: {
     // A read already running may have looked before the caller's change (a login check
     // that just finished), so callers during it share one more read after it.
     if (refreshing) return followUp ??= refreshing.catch(() => undefined).then(() => { followUp = undefined; return refreshTools(); });
-    refreshing = Promise.all([readTools(), readLoginItem().catch(() => loginItem)]).then(async ([values, item]) => {
+    refreshing = Promise.all([readTools(), readService().catch(() => null)]).then(async ([values, status]) => {
       tools = values;
-      loginItem = item ?? loginItem;
+      if (status) observeService(status);
       if (!closed) await rebuild();
     }).finally(() => { refreshing = undefined; });
     return refreshing;
   }
+  async function refreshService(): Promise<void> {
+    if (closed) return;
+    observeService(await readService());
+    if (!closed) await rebuild();
+  }
   tools = await readTools();
   await rebuild();
   // Not awaited: launchctl may take up to 30 s just after login, and the API should listen first.
-  void readLoginItem().then(item => { if (item !== null && item !== loginItem && !closed) { loginItem = item; return rebuild(); } }).catch(() => undefined);
+  void readService().then(status => { observeService(status); if (!closed) return rebuild(); }).catch(() => undefined);
+  void (options.distribution ?? runtimeDistribution)().then(distribution => {
+    blocked = isTranslocated(process.execPath) || isTranslocated(distribution.cliPath) ? 'translocated'
+      : distribution.kind === 'development' || distribution.kind === 'unknown' ? 'development' : undefined;
+    if (blocked && !closed) return rebuild();
+  }).catch(() => undefined);
   const poll = setInterval(() => { void rebuild().catch(() => undefined); }, 5_000);
   const toolPoll = setInterval(() => { void refreshTools().catch(() => undefined); }, 60_000);
   poll.unref();
@@ -106,6 +152,8 @@ export async function createSnapshotStore(options: {
     current: () => snapshot,
     rebuild,
     refreshTools,
+    refreshService,
+    observeService: status => { observeService(status); if (!closed) void rebuild().catch(() => undefined); },
     diagnose: (agentId, value) => { diagnostics.set(agentId, value); },
     async close() {
       closed = true;

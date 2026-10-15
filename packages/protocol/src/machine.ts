@@ -1,10 +1,12 @@
 import {z} from 'zod';
-import {agentIdSchema} from './domain.js';
+import {agentIdSchema, serviceStateSchema} from './domain.js';
 
 export const machineRequestSchema = z.discriminatedUnion('type', [
   z.object({type:z.literal('status')}),
   z.object({type:z.literal('repairCli')}),
   z.object({type:z.literal('service'), action:z.enum(['install','start','stop','uninstall'])}),
+  /** Remembers that the user chose a detached daemon over the login-time service, so the checklist stops asking. */
+  z.object({type:z.literal('setServiceSkipped'), skipped:z.boolean()}),
   z.object({type:z.literal('startHost'), bot:agentIdSchema.unwrap().optional()}),
   z.object({type:z.literal('stopHost')}),
   z.object({type:z.literal('logs')}),
@@ -16,11 +18,9 @@ export const machineRequestSchema = z.discriminatedUnion('type', [
   z.object({type:z.literal('installDesktopUpdate')}),
 ]);
 export type MachineRequest = z.infer<typeof machineRequestSchema>;
-export const serviceStateSchema = z.enum(['not-installed','running','stopped','disabled','detached','conflict','unknown']);
 export const serviceStatusSchema = z.object({platformName:z.string(),installed:z.boolean(),running:z.boolean(),servicePath:z.string(),stdoutPath:z.string(),stderrPath:z.string(),pid:z.string().optional(),lastExit:z.string().optional(),state:serviceStateSchema.optional(),detail:z.string().optional(),name:z.string().optional()});
 export const coreUpdateStatusSchema = z.object({phase:z.enum(['installing','restarting','done','error']),ok:z.boolean().optional(),message:z.string().optional(),from:z.string().optional(),to:z.string().optional(),at:z.number()}).nullable();
 export type ServiceStatus = z.infer<typeof serviceStatusSchema>;
-export type ServiceState = z.infer<typeof serviceStateSchema>;
 export const desktopUpdateSchema = z.object({state:z.enum(['current','available','unavailable','downloaded']),current:z.string(),latest:z.string().optional(),message:z.string()});
 export type DesktopUpdate = z.infer<typeof desktopUpdateSchema>;
 export const machineReplySchema = z.discriminatedUnion('type', [

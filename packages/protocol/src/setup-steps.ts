@@ -1,5 +1,5 @@
 import type {AdminSetupStatus} from './admin.js';
-import type {Agent, ToolState} from './domain.js';
+import type {Agent, ServiceActionReason, ServiceActionReport, ToolState} from './domain.js';
 
 export type StepTone = 'success' | 'warning' | 'danger' | 'neutral';
 /** What the step's button does; the checklist component wires each kind. */
@@ -120,4 +120,36 @@ function claudeStep(tool: ToolState | undefined): SetupStep {
   if (tool.authentication === 'signedIn' || tool.authentication === 'notRequired') return {...base, status: `已登录${version}`, tone: 'success', done: true, detail: tool.message, actions: [{kind: 'claudeLogin', label: '检查登录'}]};
   const status = tool.authentication === 'signedOut' ? '未登录' : '登录状态无法确认';
   return {...base, status: `${status}${version}`, tone: tool.authentication === 'signedOut' ? 'warning' : 'neutral', done: false, detail: tool.message ?? '在终端运行 claude 并登录，然后点"检查登录"。', actions: [{kind: 'claudeLogin', label: '检查登录'}]};
+}
+
+export const SERVICE_BUSY_MESSAGE = '另一个后台服务操作正在进行，等它结束再试。';
+/** Section 1.5: a running service has another definition, e.g. after the app moved or the PATH changed. */
+export const SERVICE_REPLACE_RUNNING_MESSAGE = '后台服务正在用另一份定义运行（比如 app 换过位置或版本）。重新打开 Vonvon Bot 会自动更新；或者在终端运行 vonvon daemon stop 后再打开这个开关。';
+const SERVICE_REASON_TEXT: Partial<Record<ServiceActionReason, string>> = {
+  busy: SERVICE_BUSY_MESSAGE,
+  'turned-off': '系统设置里关掉了 Vonvon Bot 的后台运行。到"系统设置 › 通用 › 登录项与扩展"的"允许在后台"里打开它，再点「重新检测」。',
+  'replace-running': SERVICE_REPLACE_RUNNING_MESSAGE,
+  distribution: '从源码运行的 daemon 不能装后台服务。用打包的 Vonvon Bot，或用 npm 装的 vonvon。',
+  translocated: 'Vonvon Bot 正从临时位置运行。先把它拖到"应用程序"文件夹，从那里打开，再打开这个开关。',
+  interrupted: '上次关闭没有做完。在终端运行 vonvon service uninstall，再试一次。',
+};
+
+/** What a finished `vonvon service install|uninstall` did, for the web UI, the desktop and the CLI. A failure names
+ * the cause and the next step; the suffix says whether the bot was started again on its old port. */
+export function serviceActionMessage(report: ServiceActionReport): string {
+  // The s07 details are English sentences; drop their own full stop before Chinese punctuation follows.
+  const detail = (report.detail ?? '').replace(/[.。]\s*$/, '');
+  const failure = (): string => {
+    const known = report.reason && SERVICE_REASON_TEXT[report.reason];
+    if (known) return known;
+    if (report.reason === 'other-root') return `后台服务属于另一个数据目录：${/belongs to (.+)$/.exec(detail)?.[1] ?? detail}。`;
+    if (report.action === 'uninstall') return `没关掉：${detail}。在终端运行 vonvon service uninstall 再试。`;
+    if (report.kind === 'install_rolled_back') return `没装上，已经恢复原样：${detail}`;
+    if (report.kind === 'install_incomplete') return `没装完：${detail}。在终端运行 vonvon service status 查看。`;
+    return `没装上：${detail}`;
+  };
+  const parts = report.ok ? [] : [failure()];
+  if (report.restarted) parts.push('已按原来的端口重新起了 bot（分离运行）。');
+  if (report.restartError) parts.push('bot 现在没在运行：在终端运行 vonvon daemon start。');
+  return parts.map((part, index) => index < parts.length - 1 && !part.endsWith('。') ? `${part}。` : part).join('');
 }
