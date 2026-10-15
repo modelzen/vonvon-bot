@@ -1423,11 +1423,7 @@ export function createOrchestrator(
     // No project = an unbound group: never run (or resume a session) with no
     // tier, which backends read as full access. Messages stop earlier; this
     // also covers the card-originated turns (👍 继续, 🔁 重试).
-    const refused = turnRefusal(project, msg.chatId);
-    if (refused) {
-      extra?.retry?.refused(refused);
-      return Promise.resolve();
-    }
+    if (refusedTurn(project, msg.chatId, extra)) return Promise.resolve();
     const owner = active.get(sessionKey);
     return orderTurns(sessionKey, async () => {
       if (staleRetry(extra)) return;
@@ -1494,6 +1490,13 @@ export function createOrchestrator(
     if (!extra?.retry || extra.retry.current()) return false;
     extra.retry.stale();
     return true;
+  }
+
+  /** Whether the group takes no turn now (see turnRefusal); a 🔁 重试 is told why. */
+  function refusedTurn(project: Project | undefined, chatId: string, extra?: TurnExtra): boolean {
+    const refused = turnRefusal(project, chatId);
+    if (refused) extra?.retry?.refused(refused);
+    return refused !== undefined;
   }
 
   // Keep preparation ordered, but do not pin the lane on an uncertain steer ACK.
@@ -1581,11 +1584,7 @@ export function createOrchestrator(
     const titleSource: SessionTitleSource = goal
       ? { text, rawContentType: 'text' }
       : sessionTitleSourceFromMessage(msg, summaryText ?? text);
-    const refused = turnRefusal(project, msg.chatId);
-    if (refused) {
-      extra?.retry?.refused(refused);
-      return;
-    }
+    if (refusedTurn(project, msg.chatId, extra)) return;
     // A retry re-checks here, in the same synchronous step that reserves it: a
     // message may have reserved the session while it waited.
     if (staleRetry(extra)) return;

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createGracefulInterrupt,
   createIdlePause,
+  type IdlePause,
   INTERRUPT_DRAIN_TIMEOUT_MS,
   Semaphore,
   withIdleTimeout,
@@ -17,6 +18,26 @@ async function* delayedValues<T>(values: Array<{ delayMs: number; value: T }>): 
 async function* neverEnding<T>(first: T): AsyncGenerator<T> {
   yield first;
   await new Promise<never>(() => {});
+}
+
+/** A 1 s watchdog on `pause` over `neverEnding('first')`, past its first value.
+ * Needs fake timers. */
+async function pausedWatchdog(pause: IdlePause, lastActivity?: () => number) {
+  const onTimeout = vi.fn();
+  const iter = withIdleTimeout(neverEnding('first'), 1_000, onTimeout, undefined, lastActivity, pause)[
+    Symbol.asyncIterator
+  ]();
+  await expect(iter.next()).resolves.toEqual({ done: false, value: 'first' });
+  const second = iter.next();
+  /** The watchdog fires exactly one full window from now. */
+  async function firesAfterFullWindow(): Promise<void> {
+    await vi.advanceTimersByTimeAsync(999);
+    expect(onTimeout).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(second).resolves.toEqual({ done: true, value: undefined });
+    expect(onTimeout).toHaveBeenCalledTimes(1);
+  }
+  return { onTimeout, firesAfterFullWindow };
 }
 
 describe('Semaphore', () => {
@@ -170,58 +191,35 @@ describe('withIdleTimeout', () => {
 
   it('does not fire while a hold is out, then gives a full window after release', async () => {
     vi.useFakeTimers();
-    const onTimeout = vi.fn();
     const pause = createIdlePause();
-    const iter = withIdleTimeout(neverEnding('first'), 1_000, onTimeout, undefined, undefined, pause)[
-      Symbol.asyncIterator
-    ]();
-    await expect(iter.next()).resolves.toEqual({ done: false, value: 'first' });
-    const second = iter.next();
+    const { onTimeout, firesAfterFullWindow } = await pausedWatchdog(pause);
     await vi.advanceTimersByTimeAsync(400);
     const release = pause.hold(); // taken while the timer is armed
     await vi.advanceTimersByTimeAsync(60_000);
     expect(onTimeout).not.toHaveBeenCalled();
     release();
     release(); // a second call is a no-op
-    await vi.advanceTimersByTimeAsync(999);
-    expect(onTimeout).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(second).resolves.toEqual({ done: true, value: undefined });
-    expect(onTimeout).toHaveBeenCalledTimes(1);
+    await firesAfterFullWindow();
   });
 
   it('keeps nested holds until the last one is released', async () => {
     vi.useFakeTimers();
-    const onTimeout = vi.fn();
     const pause = createIdlePause();
     const a = pause.hold();
     const b = pause.hold();
-    const iter = withIdleTimeout(neverEnding('first'), 1_000, onTimeout, undefined, () => 0, pause)[
-      Symbol.asyncIterator
-    ]();
-    await iter.next();
-    const second = iter.next();
+    const { onTimeout, firesAfterFullWindow } = await pausedWatchdog(pause, () => 0);
     a();
     await vi.advanceTimersByTimeAsync(5_000);
     expect(onTimeout).not.toHaveBeenCalled();
     b();
     // lastActivity is ancient, but the release itself starts the window over
-    await vi.advanceTimersByTimeAsync(999);
-    expect(onTimeout).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(second).resolves.toEqual({ done: true, value: undefined });
-    expect(onTimeout).toHaveBeenCalledTimes(1);
+    await firesAfterFullWindow();
   });
 
   it('reset drops outstanding holds: old releases are no-ops and a full window starts', async () => {
     vi.useFakeTimers();
-    const onTimeout = vi.fn();
     const pause = createIdlePause();
-    const iter = withIdleTimeout(neverEnding('first'), 1_000, onTimeout, undefined, undefined, pause)[
-      Symbol.asyncIterator
-    ]();
-    await iter.next();
-    const second = iter.next();
+    const { onTimeout, firesAfterFullWindow } = await pausedWatchdog(pause);
     const stale = pause.hold(); // never released by its owner (an abandoned card)
     await vi.advanceTimersByTimeAsync(60_000);
     expect(onTimeout).not.toHaveBeenCalled();
@@ -231,30 +229,17 @@ describe('withIdleTimeout', () => {
     stale(); // ...is not released by the old turn's late release
     expect(pause.held).toBe(true);
     next();
-    await vi.advanceTimersByTimeAsync(999);
-    expect(onTimeout).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(second).resolves.toEqual({ done: true, value: undefined });
-    expect(onTimeout).toHaveBeenCalledTimes(1);
+    await firesAfterFullWindow();
   });
 
   it('reset wakes a watchdog waiting on a hold and gives it a full window', async () => {
     vi.useFakeTimers();
-    const onTimeout = vi.fn();
     const pause = createIdlePause();
     pause.hold();
-    const iter = withIdleTimeout(neverEnding('first'), 1_000, onTimeout, undefined, () => 0, pause)[
-      Symbol.asyncIterator
-    ]();
-    await iter.next();
-    const second = iter.next();
+    const { firesAfterFullWindow } = await pausedWatchdog(pause, () => 0);
     await vi.advanceTimersByTimeAsync(5_000);
     pause.reset();
-    await vi.advanceTimersByTimeAsync(999);
-    expect(onTimeout).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(second).resolves.toEqual({ done: true, value: undefined });
-    expect(onTimeout).toHaveBeenCalledTimes(1);
+    await firesAfterFullWindow();
   });
 
   it('still yields events and honors stop while paused', async () => {
