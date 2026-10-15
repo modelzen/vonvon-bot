@@ -39,7 +39,6 @@ import {
   createAppPreferencesWriter,
   createAdminWriteExecutor,
   performBackendSwitch,
-  performSetAutoCompact,
   performSetCompletionReminder,
   performSetModelDefault,
   performSetNoMention,
@@ -118,7 +117,6 @@ import { buildCleanCard } from '../card/markdown-render';
 import { extractCardFences } from '../card/md-scan';
 import { uploadOutboundImages } from '../card/outbound-images';
 import {
-  buildAutoCompactCard,
   buildCompactFailedCard,
   buildCompactedCard,
   buildCompactingCard,
@@ -126,6 +124,7 @@ import {
 } from '../card/context-gauge';
 import { log, withTrace } from '../core/logger';
 import {
+  AUTO_COMPACT_RETIRED,
   buildAddAdminCard,
   buildAddAllowedCard,
   buildAdminsCard,
@@ -964,8 +963,9 @@ export function createOrchestrator(
   const completionReminderSent = new RecentIdCache(4096, 24 * 60 * 60_000);
   /** the latest settings-bearing run card per topic thread */
   const lastRunCard = new Map<string, string>();
-  /** latest context usage per session (sessionKey → tokens), for `/context`.
-   * Fed from context_usage events in the run loop; keyed like topicThreadId. */
+  /** latest context usage per session (sessionKey → tokens), for `/context` and
+   * the next turn's meter. Fed from the run card's usage in the run loop; keyed
+   * like topicThreadId. */
   const lastUsage = new Map<string, { used: number; window: number | null }>();
   /** inbound message/comment dedup (at-least-once delivery, see RecentIdCache) */
   const seenInbound = new RecentIdCache();
@@ -1349,13 +1349,13 @@ export function createOrchestrator(
   /** A turn's resolved permission, by sender role. `roleSuffix` is set only when
    * the project splits admin/guest tiers — then the session key is namespaced by
    * it so a guest never shares the admin thread (sandbox + codex history). */
-  type TurnPerm = { mode?: PermissionMode; network?: boolean; autoCompact?: boolean; roleSuffix?: 'admin' | 'guest' };
+  type TurnPerm = { mode?: PermissionMode; network?: boolean; roleSuffix?: 'admin' | 'guest' };
 
   /** Pick this sender's tier (admin vs guest) for `project`. */
   function turnPerm(project: Project | undefined, senderId: string): TurnPerm {
     if (!project) return {};
     const t = turnTier(project, isAdmin(cfg, senderId));
-    return { mode: t.mode, network: project.network, autoCompact: project.autoCompact, roleSuffix: t.split ? t.role : undefined };
+    return { mode: t.mode, network: project.network, roleSuffix: t.split ? t.role : undefined };
   }
 
   /** As {@link turnPerm}, plus the role-namespaced session key (only namespaced
@@ -1656,7 +1656,6 @@ export function createOrchestrator(
         const resolveP = resolveThread(sessionKey, msg.chatId, {
           mode: perm.mode,
           network: perm.network,
-          autoCompact: perm.autoCompact,
         }).then((r) => {
           tResolveDone = Date.now();
           return r;
@@ -1718,7 +1717,7 @@ export function createOrchestrator(
           // a fresh session bound to the resolved cwd, on the project's backend.
           const cwd = project?.cwd ?? fallbackCwd;
           const be = backendFor(project?.backend);
-          thread = await be.startThread({ cwd, model, effort, mode: perm.mode, network: perm.network, autoCompact: perm.autoCompact });
+          thread = await be.startThread({ cwd, model, effort, mode: perm.mode, network: perm.network });
           trackSession(sessionKey, thread);
           // 自愈观测：来源=全新会话（无持久化记录），与 resume-ok/resume-recreate
           // 互斥——三者其一 + agent 层的 spawn/prewarm-hit 即可还原完整恢复路径。
@@ -1867,7 +1866,7 @@ export function createOrchestrator(
   async function resolveThread(
     threadId: string,
     chatId: string,
-    perm?: { mode?: PermissionMode; network?: boolean; autoCompact?: boolean },
+    perm?: { mode?: PermissionMode; network?: boolean },
   ): Promise<{ thread: AgentThread | undefined; recreated: boolean; reason?: RecreateReason }> {
     const live = sessions.get(threadId);
     if (live) {
@@ -1885,7 +1884,10 @@ export function createOrchestrator(
     // later must not strand existing sessions on the wrong runtime; the project
     // is still consulted for cwd / tier defaults on the recreate path below.
     const project = await getProjectByChatId(chatId);
-    if (project && rec.cwd !== project.cwd) return { thread: undefined, recreated: true, reason: 'cwd-changed' };
+    if (project && rec.cwd !== project.cwd) {
+      lastUsage.delete(threadId); // a new session: the meter starts over
+      return { thread: undefined, recreated: true, reason: 'cwd-changed' };
+    }
     const be = backendFor(rec.backend);
     try {
       const resumed = await be.resumeThread({
@@ -1895,7 +1897,6 @@ export function createOrchestrator(
         effort: rec.effort,
         mode: perm?.mode,
         network: perm?.network,
-        autoCompact: perm?.autoCompact,
       });
       trackSession(threadId, resumed);
       // 自愈观测：resume 来源=持久化记录（区分「resume 自愈」与 LIVE 快路径的
@@ -1911,9 +1912,9 @@ export function createOrchestrator(
         effort: rec.effort,
         mode: perm?.mode ?? project?.mode,
         network: perm?.network ?? project?.network,
-        autoCompact: perm?.autoCompact ?? project?.autoCompact,
       });
       trackSession(threadId, fresh);
+      lastUsage.delete(threadId);
       // The resumed codex thread is gone — repoint the persisted record at the
       // new thread id so a later restart doesn't keep resuming the dead one.
       await patchSession(threadId, { sessionId: fresh.sessionId }).catch(() => undefined);
@@ -1983,7 +1984,7 @@ export function createOrchestrator(
           effort: project?.defaultEffort,
           custom: project?.defaultModelCustom,
         });
-        const thread = await be.startThread({ cwd, model, effort, mode: perm.mode, network: perm.network, autoCompact: perm.autoCompact });
+        const thread = await be.startThread({ cwd, model, effort, mode: perm.mode, network: perm.network });
         tResolveDone = Date.now();
         return { thread, model, effort };
       })();
@@ -2202,7 +2203,6 @@ export function createOrchestrator(
         const { thread } = await resolveThread(sessionKey, msg.chatId, {
           mode: perm.mode,
           network: perm.network,
-          autoCompact: perm.autoCompact,
         });
         if (!thread) {
           await reply('这个会话还没开始，先发条消息聊两句再 `/compact`。');
@@ -2321,15 +2321,14 @@ export function createOrchestrator(
         const be = backendFor(rec?.backend ?? project?.backend);
         const cwd = rec?.cwd ?? project?.cwd ?? fallbackCwd;
         // Carry the session's chosen model/effort into the new thread so /clear
-        // resets the CONVERSATION, not the user's model pick. Tier (mode/network/
-        // autoCompact) comes from the caller's live perm.
+        // resets the CONVERSATION, not the user's model pick. Tier (mode/network)
+        // comes from the caller's live perm.
         const fresh = await be.startThread({
           cwd,
           model: rec?.model,
           effort: rec?.effort,
           mode: perm.mode,
           network: perm.network,
-          autoCompact: perm.autoCompact,
         });
         // Close + evict the parked live thread (a separate app-server proc); its
         // on-disk session survives for /resume. Then track the fresh one.
@@ -3793,24 +3792,17 @@ export function createOrchestrator(
         return buildGroupSettingsCard({ name: '本群', kind: 'multi', noMention: on });
       });
     })
-    .on(GS.setAutoCompact, ({ evt, value }) => {
+    // s12：自动压缩一直开，开关已去掉。旧卡上的按钮不写盘，只把卡刷新成没有开关的样子并说一声。
+    .on(GS.setAutoCompact, ({ evt }) => {
       if (!isAdmin(cfg, evt.operator?.openId ?? '')) return;
-      const on = value.v === 'on';
       patch(evt, async () => {
         const project = await getProjectByChatId(evt.chatId);
-        if (project) {
-          // 共享层落盘 + 驱逐活跃会话（压缩上限在 thread/start 绑定，驱逐后下一条
-          // 消息重绑生效——与 🔐 权限同语义）。
-          const r = await performSetAutoCompact({ projectName: project.name, on, evictLiveSessionsForChat });
-          log.info('console', 'group-autocompact', { project: project.name, on });
-          return buildGroupSettingsCard(r.ok ? r.project : { ...project, autoCompact: on });
-        }
-        return buildGroupSettingsCard({ name: '本群', kind: 'multi', autoCompact: on });
+        return buildGroupSettingsCard(project ?? { name: '本群', kind: 'multi' }, AUTO_COMPACT_RETIRED);
       });
     })
     // 🤖 默认模型/强度：群内 /settings 的镜像入口。GS.settings 返回群设置卡；GS.modelDefault
     // 进子卡（按项目后端实时列模型）；GS.modelDefaultSubmit 校验+落盘后回群设置卡。均 isAdmin
-    // 门控（与 ✋免@ / 🗜️自动压缩 同级），项目按 evt.chatId 解析；不驱逐活跃会话（默认只管新话题）。
+    // 门控（与 ✋免@ 同级），项目按 evt.chatId 解析；不驱逐活跃会话（默认只管新话题）。
     .on(GS.settings, ({ evt }) => {
       if (!isAdmin(cfg, evt.operator?.openId ?? '')) return;
       patch(evt, async () => {
@@ -3975,17 +3967,13 @@ export function createOrchestrator(
         return buildProjectSettingsCard(r.project, backendDisplayName(r.project.backend));
       });
     })
+    // 旧卡上的 🗜️ 自动压缩按钮：同群设置，不写盘，只刷新卡。
     .on(DM.setAutoCompactDm, ({ evt, value }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
       const name = typeof value.n === 'string' ? value.n : '';
-      const on = value.v === 'on';
       patch(evt, async () => {
-        // 共享层落盘 + 驱逐活跃会话（压缩上限在 thread/start 绑定，驱逐后下一条
-        // 消息重绑生效——mirrors 群设置）。
-        const r = await performSetAutoCompact({ projectName: name, on, evictLiveSessionsForChat });
-        if (!r.ok) return renderDmMenuCard();
-        log.info('console', 'project-autocompact', { project: name, on });
-        return buildProjectSettingsCard(r.project, backendDisplayName(r.project.backend));
+        const p = await getProjectByName(name);
+        return p ? buildProjectSettingsCard(p, backendDisplayName(p.backend), AUTO_COMPACT_RETIRED) : renderDmMenuCard();
       });
     })
     // 🔐 权限：打开下拉表单子卡（管理员档 + 普通用户档 + 联网，选完提交）。
@@ -4368,7 +4356,7 @@ export function createOrchestrator(
     try {
       if (request.action === 'clear') {
         if (project.kind !== 'single' || key !== perm.sessionKey) throw new AdminWriteError('只有单会话群可以清空当前上下文');
-        const fresh = await sessionBackend.startThread({ cwd: project.cwd, model: record.model, effort: record.effort, mode: perm.mode, network: perm.network, autoCompact: perm.autoCompact });
+        const fresh = await sessionBackend.startThread({ cwd: project.cwd, model: record.model, effort: record.effort, mode: perm.mode, network: perm.network });
         const now = Date.now();
         try { await upsertSession({ ...record, sessionId: fresh.sessionId, summary: '(新会话)', createdAt: now, updatedAt: now }); }
         catch (error) { await fresh.close(); throw error; }
@@ -4716,6 +4704,7 @@ export function createOrchestrator(
         const turnStartAt = Date.now(); // turn/start 已在 runStreamed() 内发出（与下面的建卡并行）
         state.run = run;
         const render = new RunRender();
+        render.seedUsage(topicThreadId ? lastUsage.get(topicThreadId) : undefined);
         const cardEvents = new TurnCardEvents();
         state.steerReply = { run, accept: (messageId, voice) => cardEvents.accept(messageId, voice) };
         let boundary: RunState | undefined;
@@ -4961,19 +4950,15 @@ export function createOrchestrator(
           }
           lastEvAt = tEv;
           evCount++;
-          // Track context usage for /context, and surface an auto-compact notice.
-          if (et === 'context_usage' && topicThreadId) {
-            const cu = ev as { usedTokens: number; contextWindow: number | null };
-            lastUsage.set(topicThreadId, { used: cu.usedTokens, window: cu.contextWindow });
-          } else if (et === 'context_compacted') {
-            // Only genuine auto-compaction reaches the turn loop — a manual
-            // /compact drains its own events in runCompact, so this is always an
-            // auto-compaction → post the special notice (non-blocking).
-            void trackTask(sendManagedCard(channel, opts.chatId, buildAutoCompactCard(), cardMsgId, !opts.flat).catch((err) =>
-              log.fail('card', err, { phase: 'auto-compact-notice' }),
-            ));
-          }
           render.apply(ev);
+          // Track context usage for /context and the next turn's meter. Only
+          // auto-compaction reaches the turn loop (a manual /compact drains its own
+          // events); it shows as a line on this card, and Claude's post-compaction
+          // count moves the meter too.
+          if ((et === 'context_usage' || et === 'compaction') && topicThreadId) {
+            const usage = render.snapshot().usage;
+            if (usage) lastUsage.set(topicThreadId, usage);
+          }
           rc.rs = segmentSnapshot();
           // The global mode is live-editable. Re-evaluate on every structural /
           // answer frame so switching away from manual removes the button from
@@ -5390,6 +5375,7 @@ export function createOrchestrator(
     /** Begin a turn's render context WITHOUT sending a card yet. */
     const startTurn = (): GoalTurnCtx => {
       const render = new RunRender();
+      render.seedUsage(topicThreadId ? lastUsage.get(topicThreadId) : undefined);
       render.showTools = getShowToolCalls(cfg);
       const goalModelDisp = getModelDisplay(cfg);
       const rc: RunCardState = {
@@ -5500,18 +5486,17 @@ export function createOrchestrator(
           goalSeconds = ev.timeUsedSeconds;
           continue;
         }
-        if (ev.type === 'context_usage') {
-          if (topicThreadId) lastUsage.set(topicThreadId, { used: ev.usedTokens, window: ev.contextWindow });
+        // Usage and compaction update the meter and the process lines of the
+        // turn's card; on their own they don't send a card (like reasoning).
+        if (ev.type === 'context_usage' || ev.type === 'compaction') {
+          let usage = ev.type === 'context_usage' ? { used: ev.usedTokens, window: ev.contextWindow } : undefined;
           if (cur) {
             cur.render.apply(ev);
             cur.rc.rs = cur.render.snapshot();
+            usage = cur.rc.rs.usage;
+            if (cur.stream) cur.stream.streamCoalesced(channel, buildRunCard(cur.rc), ANSWER_EID);
           }
-          continue;
-        }
-        if (ev.type === 'context_compacted') {
-          void trackTask(sendManagedCard(channel, opts.chatId, buildAutoCompactCard(), cur?.cardMsgId ?? undefined, !opts.flat).catch((err) =>
-            log.fail('card', err, { phase: 'auto-compact-notice' }),
-          ));
+          if (topicThreadId && usage) lastUsage.set(topicThreadId, usage);
           continue;
         }
         if (ev.type === 'turn_started') {

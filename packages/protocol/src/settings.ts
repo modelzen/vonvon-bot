@@ -78,7 +78,6 @@ export const projectSectionSchemas = {
     network: z.boolean(),
   }),
   response: z.object({ noMention: z.boolean() }),
-  compact: z.object({ autoCompact: z.boolean() }),
   model: z.object({ selection }),
 };
 export const sessionSectionSchemas = { model: z.object({ selection }) };

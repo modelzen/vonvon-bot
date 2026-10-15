@@ -1656,7 +1656,6 @@ function ProjectPanel({
   }, discard: () => setMemberId('')});
   const permission = view.sections.permission,
     response = view.sections.response,
-    compact = view.sections.compact,
     model = view.sections.model;
   return (
     <>
@@ -1734,24 +1733,6 @@ function ProjectPanel({
               }
             />
           </>
-        )}
-      />
-      <Editor
-        title="会话压缩"
-        section={compact}
-        save={(draft, revision) => save("compact", draft, revision)}
-        render={(draft, set, disabled, commit) => (
-          <SettingsRow
-            title="自动压缩上下文"
-            trailing={
-              <Switch
-                label="自动压缩上下文"
-                value={draft.autoCompact}
-                disabled={disabled}
-                onChange={(autoCompact) => void commit({ autoCompact })}
-              />
-            }
-          />
         )}
       />
       <h2 className="membership-settings-heading">成员与群消息</h2>

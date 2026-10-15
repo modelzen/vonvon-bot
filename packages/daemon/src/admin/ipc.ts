@@ -10,7 +10,7 @@ import { AdminWriteError, type AdminWriteOp } from './ops';
  *   1. registry 的 withLock 是**进程内**锁——bot 子进程自己也在读-改-写
  *      projects.json，supervisor 直写会与之交错丢更新（O_EXCL 文件锁只能保
  *      互斥，挡不住子进程模块内已排队的旧快照写回）。
- *   2. 写操作的既有语义包含「驱逐活跃会话」（🔐 权限 / 🗜️ 自动压缩），LIVE
+ *   2. 写操作的既有语义包含「驱逐活跃会话」（🔐 权限），LIVE
  *      线程只存在于 bot 进程内存里——文件锁方案根本做不到，必须进程内执行。
  *   把写请求转发给对应子进程，在子进程内走既有 withLock + 校验 + 驱逐，与
  *   DM 卡片回调完全同一条代码路径（admin/ops.ts）。

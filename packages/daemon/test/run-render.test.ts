@@ -301,9 +301,10 @@ describe('buildRunCard — terminal collapse', () => {
   it('folds process into one collapsed panel and surfaces only the final answer', () => {
     const card = buildRunCard({ rs: fullRun() });
     const els = bodyEls(card);
-    expect(els).toHaveLength(2);
+    expect(els).toHaveLength(3);
 
-    const [panel, answer] = els;
+    const [meter, panel, answer] = els;
+    expect(JSON.stringify(meter)).toContain('上下文'); // s12: the meter heads the card
     // first element: a single collapsed process panel holding reasoning + tools + preamble
     expect(panel!.tag).toBe('collapsible_panel');
     expect(panel!.expanded).toBe(false);
@@ -428,7 +429,8 @@ describe('buildRunCard — full command visibility', () => {
   });
 });
 
-describe('context usage gauge', () => {
+describe('context meter (s12: always at the top)', () => {
+  const meter = (rs: RunState) => JSON.stringify(bodyEls(buildRunCard({ rs, cardKey: 'm1' }))[0]);
   it('stores the latest usage from context_usage events', () => {
     const rs = run([
       { type: 'context_usage', usedTokens: 100, contextWindow: 8192 },
@@ -437,36 +439,31 @@ describe('context usage gauge', () => {
     expect(rs.usage).toEqual({ used: 4096, window: 8192 });
   });
 
-  it('keeps the run card clean below the threshold', () => {
-    const rs = run([{ type: 'context_usage', usedTokens: 100, contextWindow: 8192 }]);
-    expect(JSON.stringify(buildRunCard({ rs }))).not.toContain('上下文');
+  it('shows below the threshold too, in grey', () => {
+    expect(meter(run([{ type: 'context_usage', usedTokens: 100, contextWindow: 8192 }]))).toContain('上下文 1% · 100/8k');
   });
 
-  it('surfaces the gauge + /compact nudge above the threshold', () => {
-    const rs = run([{ type: 'context_usage', usedTokens: 8000, contextWindow: 8192 }]);
-    const json = JSON.stringify(buildRunCard({ rs }));
-    expect(json).toContain('上下文');
-    expect(json).toContain('/compact');
+  it('is tier-colored above the threshold, without a /compact nudge', () => {
+    const json = meter(run([{ type: 'context_usage', usedTokens: 8000, contextWindow: 8192 }]));
+    expect(json).toContain('🔴 上下文 98%');
+    expect(json).not.toContain('/compact');
   });
 
-  it('does not surface the gauge when the window is unknown', () => {
-    const rs = run([{ type: 'context_usage', usedTokens: 999999, contextWindow: null }]);
-    expect(JSON.stringify(buildRunCard({ rs }))).not.toContain('上下文');
+  it('shows tokens when the window is unknown, and a placeholder before any reading', () => {
+    expect(meter(run([{ type: 'context_usage', usedTokens: 999999, contextWindow: null }]))).toContain('上下文 已用 1000k');
+    expect(meter(run([{ type: 'text_delta', itemId: 'a', delta: 'hi' }]))).toContain('上下文 —');
   });
 
-  it('renders the gauge as the closing footnote, below the answer', () => {
+  it('heads the terminal card too, above the session notice and the answer', () => {
     const rs = run([
       { type: 'context_usage', usedTokens: 8000, contextWindow: 8192 },
       { type: 'text', itemId: 'a', text: 'FINAL ANSWER' },
       { type: 'done', turnId: 'turn-1' },
     ]);
-    const els = bodyEls(buildRunCard({ rs }));
-    const last = els[els.length - 1]!;
-    expect(JSON.stringify(last)).toContain('上下文');
-    // the answer must come before the gauge footnote
-    const answerIdx = els.findIndex((e) => JSON.stringify(e).includes('FINAL ANSWER'));
-    expect(answerIdx).toBeGreaterThanOrEqual(0);
-    expect(answerIdx).toBeLessThan(els.length - 1);
+    const els = bodyEls(buildRunCard({ rs, sessionNotice: 'NOTICE' }));
+    expect(JSON.stringify(els[0])).toContain('上下文 98%');
+    expect(JSON.stringify(els[1])).toContain('NOTICE');
+    expect(els.filter((e) => JSON.stringify(e).includes('上下文'))).toHaveLength(1);
   });
 });
 
@@ -546,10 +543,10 @@ describe('buildRunCard — 图片（issue #14）', () => {
       { type: 'text_delta', itemId: 'a', delta: '前 ![拼图](shot.jpg) 后' },
     ]);
     const els = bodyEls(buildRunCard({ rs, cardKey: 'm1', images: new Map([['shot.jpg', 'k']]) }));
-    // answer run first (footer + ⏹ 控件跟在后面)
-    expect(els.slice(0, 3).map((e) => e.tag)).toEqual(['markdown', 'collapsible_panel', 'markdown']);
-    expect(els[0]!.element_id).toBeUndefined();
-    expect(els[2]!.element_id).toBe(ANSWER_EID);
+    // meter, then the answer run (footer + ⏹ 控件跟在后面)
+    expect(els.slice(0, 4).map((e) => e.tag)).toEqual(['div', 'markdown', 'collapsible_panel', 'markdown']);
+    expect(els[1]!.element_id).toBeUndefined();
+    expect(els[3]!.element_id).toBe(ANSWER_EID);
   });
 
   it('terminal：已上传的引用同样是小标签（展开体里是真图）', () => {

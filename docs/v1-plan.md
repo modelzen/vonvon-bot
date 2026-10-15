@@ -349,6 +349,17 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
   - ［重试］只重放这一轮最初的输入。运行中插话补进来的内容不在里面，只在会话历史里。
   - 进程中途死掉（"agent 进程异常退出"）不算网络失败，没有重试按钮。
   - 登录失效的提示仍然写 `codex login`，Claude 会话也是这句；运行卡不知道后端是哪个，留给 s19 诊断页一起改。
+- s12 做法（去掉开关）：网页的"会话压缩"、群设置卡和私聊项目设置卡上的开关、设置里的 `compact` 这一节（协议、RPC、daemon 校验）、`setAutoCompact` 写操作和 Codex 的 `model_auto_compact_token_limit` 覆盖都删了，管理面的项目快照不再带 `autoCompact`。`vonvon settings set --group … compact.autoCompact=…` 回"自动压缩现在一直开着，不能关了。"，RPC 存这一节按无效请求拒。已经发出去的旧卡上的开关还能点：不写盘，把卡刷新成没有开关的样子，顶部写一行"自动压缩现在一直开着，这个开关已经去掉了。"。
+- s12 做法（已存的 false）：`projects.json` 里旧的 `autoCompact: false` 不迁移、不删，没有代码读它；存别的设置时原样留在文件里，等 s60 换算时丢掉。
+- s12 做法（Claude 也一直开）：bot 的 Claude 会话在 flag 层设置里传 `autoCompactEnabled: true`，并把 `DISABLE_AUTO_COMPACT`、`DISABLE_COMPACT` 设成空。JP-VPS 实测（SDK 0.3.296，看 `getContextUsage().isAutoCompactEnabled`）：用户设置里关掉，或者进程环境、设置文件的 `env` 里设了这两个变量，都会关掉自动压缩；flag 层盖得过它们，空值算没设。用户自己终端里的 Claude Code 不受影响。Codex 不传阈值，用它自己的默认。
+- s12 做法（仪表）：每张运行卡（包括 `/goal` 的）第一行是上下文仪表，运行中和终态都有。低于 70% 是灰色的"上下文 43% · 86k/200k"，70% 以上按档位着色，不再劝 `/compact`；不知道窗口时写"上下文 已用 86k"，还没有读数时写"上下文 —"。每一轮从这个会话上一次的读数（内存里的 `lastUsage`）起步，接着聊的会话一开始就有数；新会话的第一轮和 daemon 重启后的第一轮，在第一条读数到之前是"—"。换会话（恢复失败重建、目录变了）时清掉旧读数。读数从哪来：Codex 是每次请求后的 `thread/tokenUsage/updated`（`last.totalTokens` 和 `modelContextWindow`）；Claude 是主 agent 每个请求的 assistant 消息里的 usage（input、cache_read、cache_creation 相加），回合末用 `getContextUsage()` 校准，窗口用上一次的 `maxTokens`，没有就按模型 id 猜。以前 Claude 的仪表只在回合末动。原来 70% 以上才在卡底出现的那行，和单独发的"上下文已自动压缩"卡，都去掉了。
+- s12 做法（压缩行）：过程区在压缩发生的位置写一行，进行中是"正在压缩上下文…"，完成后是"已压缩 85% → 20%"；终态卡里折在过程面板里，卡片容量不够时也不省略这一行。Codex 用 `contextCompaction` 项的 started 和 completed 夹住一次压缩。压缩前取开始时的仪表读数，这一轮还没有读数时取压缩中的第一条（总结请求本身，带着旧历史）。压缩后取压缩中的最后一条（codex 压完按新历史重算一次），比压缩前低才算，否则取结束后的第一条，还不低就只写"已压缩，压缩前 85%"。旧的 `thread/compacted` 也认，跟在项的结束后面时去重；codex main 已经不发给 v2 客户端，0.156.1 发不发没看。Claude 用 `status: compacting` 开始、`compact_boundary` 结束，直接用其中的 `pre_tokens` 和 `post_tokens`，有 `post_tokens` 时仪表马上降下来；`compact_result: failed` 写"上下文压缩失败"。压缩行的百分比用这张卡最新读数的窗口，和仪表一致：Claude 会话第一轮中途的窗口是按模型 id 猜的，回合末 `getContextUsage()` 校准仪表时，这一行也跟着改。Codex 的压缩失败时，项只有 started 没有 completed（codex-rs 装好新历史后才发 completed），终态卡写"上下文压缩没有完成"。
+- s12 留下的：
+  - 仪表读数只在内存里，daemon 重启后第一轮先是"—"。要落盘的话，s13 给 SessionRecord 加字段时一起考虑。
+  - Claude 会话的第一轮（新会话、恢复的会话、daemon 重启后）还没调过 `getContextUsage()`，回合中途的仪表和压缩行按模型 id 猜窗口。用户设了 `autoCompactWindow`，或者 1M 窗口的模型 id 里没有 `1m`，就会猜错，回合末才校准。
+  - Claude 空闲时也会自己压缩（`idleCompaction`），那时没有运行卡，这一行看不到；下一轮的读数会把仪表校准。
+  - 手动 `/compact` 仍是单独的"压缩中 → 压缩完成"卡，s15 做排队时再看要不要也改成过程里的一行。
+  - 两家真压缩时的事件顺序是按源码和 SDK 类型推的（Codex 看 codex-rs main 的 `core/src/compact.rs`，Claude 看 `docs/native-capabilities.md` 第 19 到 20 条），没有真把会话压满测过。M3 验收时跑一个长会话看一眼，Codex 那边顺便看 0.156.1 还发不发 `thread/compacted`。
 - s16 做法（设置源）：Claude 的三个辅助查询（登录检测、模型列表、生成标题）共用一套选项：只读 user 层设置，和回合是同一个 CLI、同一份 `env`，关掉 hooks、MCP 和 claude.ai 连接器，用 `claudeMdExcludes` 排除个人 CLAUDE.md。没读 project 层，因为模型列表按后端缓存，不按项目。
 - s16 实测（JP-VPS，SDK 0.3.296）：传 `model: 'default'` 或调 `setModel(undefined)` 都用账号的默认模型，不看 `ANTHROPIC_MODEL`，只有不传 model 才用它。bot 的会话总是传一个明确的模型，所以用户设置里 `env.ANTHROPIC_MODEL` 指定的模型排到列表第一、当默认（其次是 daemon 自己的 `ANTHROPIC_MODEL`，再其次是设置里的 `model`）；列表里没有就补一行，SDK 失败时的兜底列表也一样。配了 `ANTHROPIC_MODEL` 时，SDK 的列表末尾会多一行 "Custom model"。
 - s16 做法（手填）：手填的 id 只挡空白、控制字符、反引号、尖括号、`-` 开头和超过 200 字，不对模型列表校验，填错了在回合里报错。`/model` 卡总有一个手填表单，提交会锁卡，结果发一张新卡接管；会话记 `modelCustom`。默认模型卡的下拉多一项"自定义模型 ID…"，项目记 `defaultModelCustom`，`pickDefault` 见到它就原样用。网页的"新会话默认模型"和"本话题模型"也能手填，协议的 `ModelSelection` 加了可选的 `custom`；评论模型不开放。顺带：没有会话时 `/model` 卡不再显示"已切换"；群设置里默认模型选得不对时，带提示重发表单，不再不声不响地回到群设置卡；Codex 返回空列表时不再把兜底列表缓存一辈子。

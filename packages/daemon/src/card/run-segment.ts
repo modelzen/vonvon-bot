@@ -9,10 +9,11 @@ export function runSegment(state: RunState, boundary?: RunState, startedAt?: num
   for (const block of state.blocks) {
     const old = prior.get(key(block));
     if (!old) { blocks.push(block); continue; }
-    if (block.kind === 'tool' || old.kind === 'tool') {
-      // A tool already in flight crosses the boundary: keep its eventual
-      // result accessible in the new card rather than losing it in a frozen one.
-      if (block.kind === 'tool' && old.kind === 'tool' && old.tool.status === 'running') blocks.push(block);
+    if (block.kind === 'tool' || block.kind === 'compaction' || old.kind === 'tool' || old.kind === 'compaction') {
+      // A tool or compaction already in flight crosses the boundary: keep its
+      // eventual result accessible in the new card rather than losing it in a frozen one.
+      const running = old.kind === 'tool' ? old.tool.status === 'running' : old.kind === 'compaction' && old.compaction.status === 'running';
+      if (running) blocks.push(block);
       continue;
     }
     // A rewritten final snapshot has no reliable split point. Preserve the
@@ -27,5 +28,7 @@ export function runSegment(state: RunState, boundary?: RunState, startedAt?: num
 }
 
 function key(block: Block): string {
-  return block.kind === 'tool' ? `tool:${block.tool.id}` : `${block.kind}:${block.id}`;
+  if (block.kind === 'tool') return `tool:${block.tool.id}`;
+  if (block.kind === 'compaction') return `compaction:${block.compaction.id}`;
+  return `${block.kind}:${block.id}`;
 }

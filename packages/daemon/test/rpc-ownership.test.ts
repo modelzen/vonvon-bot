@@ -13,7 +13,7 @@ import { createSettingsOwner } from '../src/admin/settings';
 import { fakeService, socketClient, startFixture } from './server-fixture';
 
 const bot: AdminBot = { name: 'Owner', appId: 'cli_owner', tenant: 'feishu', active: true, current: false, running: true, completionReminder: { mode: 'failures', longTaskMinutes: 3 } };
-const project: AdminProject = { name: 'Project', chatId: 'oc_group', cwd: '/', blank: false, kind: 'multi', origin: 'joined', noMention: false, autoCompact: true, mode: 'qa', guestMode: 'qa', network: false, backend: 'codex-appserver', allowedUsersCount: 0, sessionCount: 0, createdAt: 1 };
+const project: AdminProject = { name: 'Project', chatId: 'oc_group', cwd: '/', blank: false, kind: 'multi', origin: 'joined', noMention: false, mode: 'qa', guestMode: 'qa', network: false, backend: 'codex-appserver', allowedUsersCount: 0, sessionCount: 0, createdAt: 1 };
 
 function requests(agentId: string, folderToken = '00000000-0000-4000-8000-000000000000') {
   return [

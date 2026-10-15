@@ -21,12 +21,7 @@ import { StreamingImages } from './outbound-images';
 import type { RunCardStream } from './run-card-stream';
 import { processPanel } from './process-panel';
 import { buildProcessBody, currentAnswerIndex, processTitle, runElapsedMs } from './run-process';
-import { runCardGauge } from './context-gauge';
-
-/** The context-usage gauge line, only at/above the warn tier (else null). */
-function gaugeEl(state: RunState): CardElement | null {
-  return state.usage ? runCardGauge(state.usage.used, state.usage.window) : null;
-}
+import { runCardMeter } from './context-gauge';
 
 /** Action ids for the in-topic run card. */
 export const RC = {
@@ -229,12 +224,13 @@ function runTypography(element: CardElement): CardElement {
  * item streams through ANSWER_EID; earlier progress text remains in the process.
  * Controls stay at the bottom and preserve their stable routing element id. */
 function renderRunning(state: RunState, rc: RunCardState): CardElement[] {
-  const elements: CardElement[] = [];
+  // The context meter heads every run card (s12), running and terminal.
+  const elements: CardElement[] = [runCardMeter(state.usage)];
   if (rc.sessionNotice) elements.push(noteMd(rc.sessionNotice));
 
   const answerIdx = currentAnswerIndex(state.blocks);
   const processBlocks = state.blocks.filter((b, i) => i !== answerIdx && (rc.showTools !== false || b.kind !== 'tool'));
-  const process = buildProcessBody(processBlocks, rc.images);
+  const process = buildProcessBody(processBlocks, rc.images, PROCESS_COMPONENT_BUDGET, true);
   const title = processTitle(state.terminal, runElapsedMs(state));
   if (process.length) elements.push(processPanel(title, process, true));
   else if (state.startedAt !== undefined) elements.push(md(`<font color='grey'>${title}</font>`));
@@ -249,10 +245,6 @@ function renderRunning(state: RunState, rc: RunCardState): CardElement[] {
   if (state.footer && mEl) elements.push(splitRow(footerStatus(state.footer), mEl));
   else if (state.footer) elements.push(footerStatus(state.footer));
   else if (mEl) elements.push(mEl);
-  // Context-usage gauge sits just above the controls (only at/above the warn
-  // tier) so it never pushes the answer down.
-  const gauge = gaugeEl(state);
-  if (gauge) elements.push(gauge);
 
   // The controls row stays at the bottom, next to the newest output where the
   // reader is looking (tradeoff: a long stream may push it below the fold; see
@@ -304,7 +296,7 @@ function renderRunning(state: RunState, rc: RunCardState): CardElement[] {
  * a partial answer (if any text streamed) stays visible above the note.
  */
 function renderTerminal(state: RunState, rc: RunCardState): CardElement[] {
-  const elements: CardElement[] = [];
+  const elements: CardElement[] = [runCardMeter(state.usage)];
   if (rc.sessionNotice) elements.push(noteMd(rc.sessionNotice));
 
   const answerIdx = lastTextIndex(state.blocks);
@@ -352,9 +344,6 @@ function renderTerminal(state: RunState, rc: RunCardState): CardElement[] {
     elements.push(noteMd('_🔁 已重试，结果见下一张卡片_'));
   }
 
-  // Context-usage gauge as the closing footnote (only at/above the warn tier).
-  const gauge = gaugeEl(state);
-  if (gauge) elements.push(gauge);
   // 「模型 · 推理强度」footnote, bottom-right — only the always(始终) mode keeps it
   // on the terminal card; running(仅输出时) drops it once the turn ends.
   const mEl = rc.modelOnTerminal ? modelEl(rc) : null;

@@ -88,7 +88,6 @@ import type { AdminWriteOp } from './ops';
  *       switchBackend       ← dm.proj.backend.submit（🧠 后端 · 切换）
  *       setPermissionMode   ← dm.proj.perm.submit（🔐 权限 · 保存）
  *       setNoMention        ← dm.proj.noMention（✋ 免@）
- *       setAutoCompact      ← dm.proj.autoCompact（🗜️ 自动压缩）
  *       setCompletionReminder ← dm.set.completionReminder（🔔 完成提醒）
  *       doctorBackends      ← dm.doctor 的后端探测段（🩺 诊断）
  *       eventDiagnosis      ← dm.doctor 的事件订阅三态段（M-7）
@@ -137,8 +136,6 @@ export interface AdminService {
   ): Promise<void>;
   /** ✋ 免@ 开关（写）。 */
   setNoMention(botId: string, projectName: string, on: boolean): Promise<void>;
-  /** 🗜️ 自动压缩开关（写），含驱逐活跃会话的既有语义。 */
-  setAutoCompact(botId: string, projectName: string, on: boolean): Promise<void>;
   /** 🔔 每 bot 的普通任务结束提醒（写）；经 bot 进程落盘并热更新 LIVE cfg。 */
   setCompletionReminder(
     botId: string,
@@ -301,8 +298,6 @@ export interface AdminProject {
   origin: 'created' | 'joined';
   /** effective 免@（noMention ?? defaultNoMention） */
   noMention: boolean;
-  /** effective 自动压缩（autoCompact ?? true） */
-  autoCompact: boolean;
   /** effective 管理员权限档 */
   mode: PermissionMode;
   /** effective 普通用户权限档 */
@@ -531,7 +526,6 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       kind: p.kind ?? 'multi',
       origin: p.origin ?? 'created',
       noMention: p.noMention ?? defaultNoMention(p),
-      autoCompact: p.autoCompact ?? true,
       mode: effectiveMode(p),
       guestMode: effectiveGuestMode(p),
       network: p.network ?? false,
@@ -700,10 +694,6 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
 
     async setNoMention(botId: string, projectName: string, on: boolean): Promise<void> {
       await executeWrite(botId, '✋ 免@ 开关', { kind: 'setNoMention', project: projectName, on });
-    },
-
-    async setAutoCompact(botId: string, projectName: string, on: boolean): Promise<void> {
-      await executeWrite(botId, '🗜️ 自动压缩开关', { kind: 'setAutoCompact', project: projectName, on });
     },
 
     async setCompletionReminder(

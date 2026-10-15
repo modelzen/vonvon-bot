@@ -51,25 +51,6 @@ const APPROVAL_POLICY = 'never';
  * host (ask the bot to read a file outside cwd → it must refuse) before trusting
  * the read-only tiers with an untrusted external group.
  */
-/**
- * Auto-compact "off" sentinel. codex resolves its auto-compact threshold as
- * `config.model_auto_compact_token_limit → model default → i64::MAX` (codex-rs
- * core/session/turn.rs), so setting a limit no real session reaches disables it.
- * 1e9 is safely inside JS's integer range (i64::MAX would lose JSON precision)
- * and far past any model's context window. */
-const AUTO_COMPACT_OFF_LIMIT = 1_000_000_000;
-
-/** Merge codex's auto-compact disable into thread/start|resume params when the
- * project turned it off; ON (default/undefined) leaves codex's own default. */
-export function withAutoCompact(
-  params: Record<string, unknown>,
-  autoCompact: boolean | undefined,
-): Record<string, unknown> {
-  if (autoCompact !== false) return params;
-  const config = (params.config as Record<string, unknown> | undefined) ?? {};
-  return { ...params, config: { ...config, model_auto_compact_token_limit: AUTO_COMPACT_OFF_LIMIT } };
-}
-
 export function sandboxParams(
   mode: PermissionMode | undefined,
   network: boolean | undefined,
@@ -502,7 +483,7 @@ class CodexThread implements AgentThread {
         const ev = mapNotification(step.value);
         if (!ev) continue;
         if (ev.type === 'context_usage') usage = { usedTokens: ev.usedTokens, contextWindow: ev.contextWindow };
-        else if (ev.type === 'context_compacted') compacted = true;
+        else if (ev.type === 'compaction' && ev.phase === 'end' && !ev.failed) compacted = true;
         else if (ev.type === 'error' && !ev.willRetry) throw new Error(ev.message);
         else if (ev.type === 'done') break;
       }
@@ -668,7 +649,10 @@ export class CodexAppServerBackend implements AgentBackend {
   async startThread(opts: StartThreadOptions): Promise<AgentThread> {
     // Build sandbox params first — the platform fail-closed guard throws here,
     // before we spawn, so a rejected tier leaves no orphan app-server process.
-    const sandbox = withAutoCompact(sandboxParams(opts.mode, opts.network), opts.autoCompact);
+    // Auto-compaction is codex's own default and stays on (s12): no
+    // model_auto_compact_token_limit override, and newer codex caps any limit at
+    // 90% of the window anyway.
+    const sandbox = sandboxParams(opts.mode, opts.network);
     const client = await this.spawn(opts.cwd);
     const res = await client.request<{ thread: { id: string } }>('thread/start', {
       cwd: opts.cwd,
@@ -681,7 +665,7 @@ export class CodexAppServerBackend implements AgentBackend {
   }
 
   async resumeThread(opts: ResumeThreadOptions): Promise<AgentThread> {
-    const sandbox = withAutoCompact(sandboxParams(opts.mode, opts.network), opts.autoCompact);
+    const sandbox = sandboxParams(opts.mode, opts.network);
     const client = await this.spawn(opts.cwd);
     const res = await client.request<{ thread: { id: string } }>('thread/resume', {
       threadId: opts.sessionId,
