@@ -43,6 +43,7 @@ describe('Claude login mapping', () => {
     await readClaudeLogin(probe, { refresh: true });
     expect(probe).toHaveBeenCalledTimes(2);
     vi.advanceTimersByTime(5 * 60_000);
+    expect(cachedClaudeLogin()).toBeUndefined();
     await readClaudeLogin(probe);
     expect(probe).toHaveBeenCalledTimes(3);
   });

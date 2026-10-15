@@ -51,8 +51,13 @@ function start(probe: () => Promise<ClaudeLogin>): Promise<ClaudeLogin> {
   return current;
 }
 
+function fresh(): ClaudeLogin | undefined {
+  return cache && Date.now() - cache.at < (cache.value.state === 'signedIn' ? SIGNED_IN_TTL_MS : OTHER_TTL_MS) ? cache.value : undefined;
+}
+
 export function readClaudeLogin(probe: () => Promise<ClaudeLogin>, opts: { refresh?: boolean } = {}): Promise<ClaudeLogin> {
-  if (!opts.refresh && cache && Date.now() - cache.at < (cache.value.state === 'signedIn' ? SIGNED_IN_TTL_MS : OTHER_TTL_MS)) return Promise.resolve(cache.value);
+  const cached = opts.refresh ? undefined : fresh();
+  if (cached) return Promise.resolve(cached);
   if (!inflight) return start(probe);
   if (!opts.refresh) return inflight;
   queued ??= inflight.then(() => undefined, () => undefined).then(() => {
@@ -62,9 +67,10 @@ export function readClaudeLogin(probe: () => Promise<ClaudeLogin>, opts: { refre
   return queued;
 }
 
-/** The last answer without probing, for the 60 s snapshot poll. */
+/** The last answer without probing, for the 60 s snapshot poll; nothing once it is
+ * older than its TTL, so a stale 已登录 does not stay on the home page. */
 export function cachedClaudeLogin(): ClaudeLogin | undefined {
-  return cache?.value;
+  return fresh();
 }
 
 /** Test seam. */
