@@ -109,6 +109,7 @@ process-ci、draft 和 final 里的流程说法，凡和 `AGENTS.md` 不一致�
 | [e07-bridge-lock](2026-10-15-v1-spikes/e07-bridge-lock.md) | v2 的 `acquireSingleInstanceLock` 写出 bridge 格式的锁，bridge 0.6.14 的同名函数抢不抢得到；持有者退出、startedAt+15s、同时抢锁；锁挡不挡得住 `run` 和 `start` | 只测了从发布包里切出来的锁函数，没跑 bridge 的 CLI。`run`、`start` 和多 bot 模式的表现是读代码得到的，真机在 e08 |
 | [e10-feishu-platform](2026-10-15-v1-spikes/e10-feishu-platform.md) | 机器人能否自己进已有的群，`with_sender_name` 拿不拿得到名字，能否拉到别的 bot 卡片的正文，话题里的引用，私聊里的话题，断线期间的消息会不会补推 | "同时发送到群"和给没开过会话的人发私聊没测到，留给 owner。补推只有一个样本，daemon 自己能不能收到补推没测 |
 | [e11-codex-thread-read](2026-10-15-v1-spikes/e11-codex-thread-read.md) | 另起一个 utility app-server 进程、不加载线程，能不能读到别的进程的线程；能否只拿用户消息和最终回答；正在跑、没跑过回合、旧格式、压缩过的线程读出来是什么样 | 只测了 JP-VPS 上的 CLI，没测子 agent 和很长的会话 |
+| [e14-resume-same-session](2026-10-15-v1-spikes/e14-resume-same-session.md) | 用 `claude --resume` 和 `codex exec resume` 打开 bot 的会话，看到的和 bot 是否一样；两边都写会怎样；手动压缩后摘要里还留不留引用行 | 只在 JP-VPS 上测了终端，没测 Codex 桌面端；压缩只有一个样本；空闲回收后 Claude 接上哪一支是推测 |
 
 ## 补充
 
