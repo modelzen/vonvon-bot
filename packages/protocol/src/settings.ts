@@ -86,6 +86,8 @@ export const hostSectionSchemas = {
   execution: z.object({ codexBin: z.string().nullable() }),
 };
 
+/** A session's Feishu thread id; the CLI checks `--session` with it before connecting. */
+export const sessionThreadIdSchema = z.string().trim().min(1).max(1000);
 const scope = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("host") }).strict(),
   z.object({ kind: z.literal("agent"), botId: agentIdSchema }).strict(),
@@ -100,7 +102,7 @@ const scope = z.discriminatedUnion("kind", [
     .object({
       kind: z.literal("session"),
       botId: agentIdSchema,
-      threadId: z.string().trim().min(1).max(1000),
+      threadId: sessionThreadIdSchema,
     })
     .strict(),
 ]);

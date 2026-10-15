@@ -5,7 +5,7 @@ import {useClient, useShellCapabilities} from '../client-context';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import {Button, StatusBadge} from '../reference/components/ui';
 import {openExternalUrl} from '../url-actions';
-import {scopeStep, type StepTone} from './setupPresentation';
+import {scopeStep, type StepTone} from '@vonvon/protocol';
 import {stepDescription} from './SetupChecklist';
 import './setup.css';
 

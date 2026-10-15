@@ -462,7 +462,7 @@ owner 说过"崩溃报错就好了"，让 Claude 斟酌。自动重启是 Claude
 1. `npm i -g vonvon-bot`，或者装下载的安装包。
 2. 在终端里登录 Codex 或 Claude：`codex login --device-auth`，或者在 `claude` 里 `/login`。
 3. 执行 `vonvon service install`。它装 systemd 用户服务，处理 linger，最后打印打开网页的办法。
-4. 在自己的电脑上执行打印出来的 `ssh -L …`，打开网页，走首次运行清单。网页和桌面端是同一套页面，daemon 仍然只监听 `127.0.0.1`。
+4. 在自己的电脑上执行打印出来的 `ssh -L …`，打开网页，走首次运行清单。网页和桌面端是同一套页面，daemon 仍然只监听 `127.0.0.1`。不开网页也行：`vonvon bot status` 在终端里看清单各步，`vonvon group bind` 绑群，`vonvon settings get`、`set` 改设置。
 5. 连 SSH 转发都用不了时，终端里也能扫码建 bot。
 
 要补的：

@@ -1,4 +1,5 @@
-import type {AdminSetupStatus, Agent, ToolState} from '@vonvon/protocol';
+import type {AdminSetupStatus} from './admin.js';
+import type {Agent, ToolState} from './domain.js';
 
 export type StepTone = 'success' | 'warning' | 'danger' | 'neutral';
 /** What the step's button does; the checklist component wires each kind. */
@@ -13,9 +14,9 @@ export type StepAction =
 export type SetupStep = {
   id: 'credentials' | 'scopes' | 'connection' | 'event' | 'callback' | 'publish' | 'codex' | 'claude';
   title: string; status: string; tone: StepTone; done: boolean;
-  detail?: string; items?: readonly string[]; actions: readonly StepAction[];
+  detail?: string | undefined; items?: readonly string[] | undefined; actions: readonly StepAction[];
   /** Shown under the step without changing its tone or `done`: optional settings whose absence breaks a later flow. */
-  warnings?: readonly string[];
+  warnings?: readonly string[] | undefined;
 };
 
 /** Join-group scope and bot-added event: optional for receiving messages, needed to bind groups (s02a). */
