@@ -8,7 +8,7 @@ import { verifyPidLockOwner } from '../../daemon/src/server/owner-verification.j
 import { classifyDistribution } from '../../daemon/src/service/distribution.js';
 import { withToolDirectories } from '../../daemon/src/platform/tool-path.js';
 import { serviceTarget } from '../../daemon/src/service/identity.js';
-import { readRegistration } from '../../daemon/src/service/registration.js';
+import { isIrreplaceableDefinition, readRegistration } from '../../daemon/src/service/registration.js';
 import { attachExisting } from './attach.js';
 import type { DaemonManagerDependencies } from './daemon-manager.js';
 
@@ -18,6 +18,15 @@ export async function prepareDesktopRoot(selected: DataRoot): Promise<string> {
   const info = await lstat(selected.path);
   if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('The Vonvon data folder must be a physical directory.');
   return realpath(selected.path);
+}
+
+/** The environment of every bundled `vonvon` the app starts: the daemon, `daemon stop` and the service helper. */
+export function daemonEnvironment(root: string, home: string): NodeJS.ProcessEnv {
+  // Opened from Finder, the app's PATH lacks Homebrew, so the daemon would not find Codex.
+  const env: NodeJS.ProcessEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1', VONVON_HOME: root, PATH: withToolDirectories(process.env.PATH, home) };
+  // A service's own variable: what the app starts is never the service's job.
+  delete env.VONVON_SERVICE;
+  return env;
 }
 
 interface DesktopDaemonRuntime {
@@ -36,9 +45,7 @@ export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonM
     if (!runtime.packaged || distribution.kind !== 'bundled') {
       throw new Error('The packaged Vonvon daemon is unavailable. Build and open the desktop application.');
     }
-    // Opened from Finder, the app's PATH lacks Homebrew, so the daemon would not find Codex.
-    const env: NodeJS.ProcessEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1', VONVON_HOME: runtime.root, PATH: withToolDirectories(process.env.PATH, runtime.home) };
-    delete env.VONVON_SERVICE;
+    const env = daemonEnvironment(runtime.root, runtime.home);
     const log = await open(join(runtime.root, 'daemon.log'), 'a', 0o600);
     try {
       return await new Promise<number | undefined>((resolve, reject) => {
@@ -46,7 +53,7 @@ export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonM
         const args = [distribution.cliPath, 'daemon', command, '--port', String(port)];
         if (bot !== undefined) args.push('--bot', bot);
         const child = spawn(runtime.executable, args, {
-          env, detached, windowsHide: true, stdio: ['ignore', log.fd, log.fd],
+          env, detached, stdio: ['ignore', log.fd, log.fd],
         });
         child.once('error', reject);
         if (detached) child.once('spawn', () => { child.unref(); resolve(child.pid); });
@@ -71,19 +78,23 @@ export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonM
       catch (cause) {
         throw new Error(`Cannot authenticate daemon PID ${lock.pid} with desktop protocol ${PROTOCOL_VERSION}. Leave it running and check app/daemon compatibility and the local credential.`, { cause });
       }
-      return { pid: lock.pid, startedAt: lock.startedAt, listen: lock.listen };
+      return { pid: lock.pid, startedAt: lock.startedAt, listen: lock.listen, ...(lock.version === undefined ? {} : { version: lock.version }) };
     },
     async readRegistration() {
       const platform = process.platform;
+      // The app ships for macOS only; Linux stays so the Linux CI job reads a real definition through this mapping.
       if (platform !== 'darwin' && platform !== 'linux') throw new Error(`Unsupported desktop platform: ${platform}.`);
       const target = platform === 'darwin' ? serviceTarget({ platform, home: runtime.home, root: runtime.root })
         : serviceTarget({ platform, home: runtime.home, root: runtime.root, xdgConfigHome: process.env.XDG_CONFIG_HOME });
       const registration = await readRegistration({ target, requestedRoot: runtime.root });
       switch (registration.kind) {
         case 'absent': return { kind: 'absent' };
-        case 'ours': return { kind: 'ours' };
+        case 'ours': {
+          const { definition: { port, distribution: { kind, executable, entry } } } = registration;
+          return { kind: 'ours', definition: { kind, executable, entry, port } };
+        }
         case 'other-root': return { kind: 'other-root', root: registration.recordedRoot };
-        case 'unrecognized': return { kind: 'unrecognized', file: registration.location };
+        case 'unrecognized': return { kind: 'unrecognized', file: registration.location, replaceable: !isIrreplaceableDefinition(registration.reason) };
       }
     },
     async startManaged(port) { await launch('start', port); },

@@ -259,7 +259,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | [x] | s07 | vonvon service install、uninstall、status | darwin 用 launchd、linux 用 systemd；装服务前先排空自己起的分离 daemon；快照和 RPC 读真实状态（3.10） | 700 | s06、s02、e06 | 子进程、错误路径、关闭清理、macOS 原生 | 打包版执行 install：plist 写入并起来，`daemon stop` 后不再拉起，注销再登录会起来，没有 Dock 图标，已有分离 daemon 时马上接管 |
 | [x] | s07a | 终端里用 vonvon 管 bot 和群 | vonvon bot list、bot status（清单各步的状态）、group list、group joined（查已加入的群）、group pending、group bind（文件夹、Codex 或 Claude、会话方式）、settings get 和 settings set（bot、群、会话的各节设置）；走网页端同一套本机接口和本机凭据，人看的输出加 --json；不做 agent 的令牌那条路（3.7 第 1 条、3.10） | 1111 | s07 | 错误路径 | 无 |
 | [ ] | s08a | 网页里的"登录电脑时启动"和清单里的这一步 | `vonvon service install`、`uninstall` 加 `--keep-running`；daemon 的 machine RPC 先回复、再起分离的助手进程跑这条命令（只在 macOS）；快照带服务状态、"跳过"和最近一次操作的结果；清单在"执行工具"后加"后台运行"："登录电脑时自动运行 bot（推荐）"，跳过就记下来并提示；"应用与启动"页的开关网页里也能用，只在 macOS 显示；Linux 上这一步只读，写明终端命令；`vonvon bot status` 也列这一步（3.1 第 4 条、3.10） | 880 | s07、s04 | 子进程、并发、错误路径、macOS 原生 | 只用网页端，`npm i -g` 装 PR 的打包 CLI，临时 `VONVON_HOME`：打开后页面重连到原地址，`launchctl print` 的 PID 和 `daemon status` 一致；关掉后 launchd 里没有这个任务，原端口上起了分离 daemon；新数据目录点跳过不写 plist；在"允许在后台"里关掉后显示"已在系统设置里关掉"；两个标签页同时点打开，一个提示正在进行；`npm run build` 的开发版显示"开发版不能装"；服务里跑着时关掉，助手进程挺过 bootout，结果是已卸载 |
-| [ ] | s08b | 桌面端的"登录电脑时启动"，app 挪走或换新版后修好服务，删桌面端的 Windows 代码 | 桌面端用自己的 Electron 起同一个助手命令，等它做完再接回 daemon；启动时发现 app 挪过位置、换了新版本或定义是旧格式，先停 daemon 再重装服务；删桌面端按注册读 `loginItem` 的覆盖和 Windows 代码；本文第 10 节写卸载步骤（3.10） | 875 | s08a | 子进程、macOS 原生、错误路径 | 装在"应用程序"里的打包版、临时 HOME：窗口里开关没有"连接断开"弹窗，和 `launchctl print` 一致；退出 app 后服务还在跑；服务跑着时把 app 挪到 `~/Applications` 再打开，plist 重写、服务恢复，挪回来也恢复；换成升了版本号的包后打开，`daemon status` 是新版本、新 PID；签名版在"允许在后台"里显示什么 |
+| [ ] | s08b | 桌面端的"登录电脑时启动"，app 挪走或换新版后修好服务，删桌面端的 Windows 代码 | 桌面端用自己的 Electron 起同一个助手命令，等它做完再接回 daemon；启动时发现 app 挪过位置、换了新版本或定义是旧格式，先停 daemon 再重装服务；删桌面端按注册读 `loginItem` 的覆盖和 Windows 代码；本文第 10 节写卸载步骤（3.10） | 875 | s08a | 子进程、macOS 原生、错误路径 | 装在"应用程序"里的打包版、真实 HOME 加临时 `VONVON_HOME`（本文第 7 节）：窗口里开关没有"连接断开"弹窗，和 `launchctl print` 一致；退出 app 后服务还在跑；服务跑着时把 app 挪到 `~/Applications` 再打开，plist 重写、服务恢复，挪回来也恢复；换成升了版本号的包后打开，`daemon status` 是新版本、新 PID；签名版在"允许在后台"里显示什么 |
 
 开工要点：
 - s03：nvm 装的 codex 从 Finder 打开时，PATH 里没有那个 Node 版本的目录，`#!/usr/bin/env node` 起不来。已改：起 codex 子进程（查版本、app-server、装完托管副本后的版本检查）时，PATH 补上 codex 所在的目录和 s02 的工具目录。
@@ -319,6 +319,12 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s08 的做法：app 从 App Translocation 的临时位置运行时，install 拒绝，提示先把 app 拖进"应用程序"再打开：不然装进去的定义下次就找不到 app。
 - s08 的做法：install 不加"替换运行中的服务"（没有 `--replace`）。定义要换时（app 挪过位置、换了版本），桌面端（s08b）先 `daemon stop` 再 `service install`，s07 审过的安装事务不动。
 - s08 留下的：版本号相同的两次构建分不出新旧，预览版要升补丁号，构建号以后再加；不拒绝从 `/Volumes` 运行；plist 里加不加 `AssociatedBundleIdentifiers`，等 s08b 的 Mac 检查看签名版显示什么再定；网页重连后回到默认页，记住当前页约 6 行，需要时再加。s47 加 agent 令牌时，不能让它们调 machine `service`。
+- s08b 的做法：app 挪走或换新版后，桌面端启动时在接 daemon 之前修服务。只在 macOS 上的打包版、不在 App Translocation 里时做，不看 `VONVON_DESKTOP_TEST_HOME`（Mac 检查要用它）。判断是一个纯函数 `planStartupRepair`，看三件事：服务定义属于桌面版（`ours`，安装方式 `desktop`）而它记的 Electron 或 CLI 入口已经不在了（挪过位置）；正在跑的 daemon 比 app 自带的旧；自己名下的定义是旧格式（`unrecognized` 里的普通文件；符号链接或目录 install 不替换，就不修，这个判断用 daemon 的 `isIrreplaceableDefinition`，桌面端不匹配英文原文）。服务定义属于桌面版、在跑的 daemon 比 app 旧时，先 `daemon stop`（等 60 秒），再 `service install --keep-running`（等 180 秒）；只是挪过位置或定义是旧格式时，先直接 install，install 回"服务自己的 daemon 挡着"（`replace-running`）才 `daemon stop` 再装一次，这样 install 一直被拒（比如系统设置里关了后台运行）时，不会每次打开 app 都把 bot 停一次。然后照常接 daemon；没有注册服务、只是 daemon 比 app 旧时，`daemon stop` 后照常起 app 自带的新版本。npm 装的服务和别的数据目录的服务都不动。挪过位置时停了 daemon 以后，launchd 里的任务没有 PID，install 能重写定义；原地换新版时定义的字节不变，install 回 `already-installed`，接下来的 `daemon start` 把新版本拉起来。两份 app 不会来回抢：只有记的路径没了，或者在跑的版本更旧，才修。同一个数据目录上 npm 起的旧版分离 daemon 也会被换成 app 自带的版本，这种情况少，接受。
+- s08b 的做法：修服务失败的原因留着。之后接 daemon 也失败时，致命错误框里写修服务的原因，不写"等待就绪超时"；接上了就弹一个不挡操作的提示"后台服务没能更新到这个位置的 Vonvon Bot：<原因>"。`daemon stop` 失败时不往下修，接回旧 daemon，提示"没能停下旧版本的 daemon：<原因>。先用着旧版本，稍后在「应用与启动」里重启 daemon。"
+- s08b 的做法：新旧只比版本号（`D/service/update.ts` 的 `isNewer`）。app 自带的版本读 `Resources/daemon/package.json`，不用 `app.getVersion()`，那是 stage 包的 0.1.0。只升不降：在跑的 daemon 比 app 新时不动。版本号相同的两次构建分不出新旧，所以每出一次预览版都要升补丁号。
+- s08b 的做法：helper 可能还在换 daemon 时，窗口等它做完再接上，不另起 daemon。窗口里开关等了 3 分钟超时、或者另一个 helper 占着锁（busy）而 daemon 已经停了，窗口等到 helper 的报告不在跑（或 pid 没了）或新 daemon 出现，再走 `ensureReady` 接上。app 开着时从网页（`vonvon open`）或终端装卸服务，daemon 自己起的 helper 会停掉窗口连着的 daemon：bridge 收到断开时只要有活着的 service helper，就跟着它重连，不弹"连接断开"，接不上才弹。
+- s08b 留下的：plist 里加不加 `AssociatedBundleIdentifiers` 还没定，等 s08b 的 Mac 检查第 B5 项看签名版在"允许在后台"里显示什么。要加的话，旧的 plist 成了旧格式，启动时的修复会重写它，不用另做迁移。
+- s08b 留下的：两个版本之间协议版本变了时，启动时的修复认不出正在跑的服务 daemon（它的锁过不了协议校验），不会替换它，窗口最后弹"无法验证 daemon"。这种升级要先用旧版的 `vonvon daemon stop` 停掉，再打开新版。以后要修的话，让启动修复在登记是我们的、类型是桌面版、只差协议版本时，按 launchd 任务停掉旧 daemon。
 
 ### M3 群里的上下文
 
@@ -612,7 +618,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 - 理由：这些代码没有调用方，而 s06、s07 要改的正是这几个文件。先删，后台服务那两片就只剩 macOS 和 Linux 的逻辑，审查更集中，以后也少维护约 1,300 行。
 
 **二、跟着本来就要改这些文件的切片一起删**
-- s08：`cli-registration.ts` 的 Windows PATH 注册；`windows-native.test.ts`；electron-builder 的 win nsis 和 linux AppImage 目标。issue #288 按 product.md 3.10 以"第一版不做 Windows"关闭。
+- s08b：`cli-registration.ts` 的 Windows PATH 注册和 `.cmd` 入口，命令行注册只认 macOS；`windows-native.test.ts`；electron-builder 的 win nsis 和 linux AppImage 目标；`daemon-dependencies.ts` 的 `windowsHide` 和两份桌面端测试里的 win32 小分支。删完以后桌面端（`packages/desktop`）不再有 Windows 代码。issue #288 按 product.md 3.10 以"第一版不做 Windows"关闭。
 - s20a：`open.ts` 的 `cmd /c start`；协议平台枚举里的 windows，以及界面上的"这台 Windows 电脑"。
 - s20b：Codex 只读、读写档的 win32 分支；`codex-appserver/windows-job.ts`、它的两处引用和两份测试。
 - s51a：私聊菜单里的"安装桌面版 · Windows x64"按钮。
@@ -623,7 +629,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 **三、先留着**
 - `provider/process` 下的 windows-supervisor、windows-job-probe、windows-command-line，以及 `test/provider/windows-*` 测试。它们属于 ProcessHost；main 上 ProcessHost 只在启动时清理孤儿进程，第一版没有切片要改它，这些代码也只在 win32 上会走到。要删它们，得先定那层没接线的 provider 代码留不留，放到第一版之后一起定。
 - Codex 协议生成的 `Windows*.ts`，这些是生成文件。
-- 约 40 个文件里零散的 `process.platform === 'win32'` 小分支和 `windowsHide` 参数。以后改到这些文件时顺手删，不专门开 PR。
+- 约 40 个文件里零散的 `process.platform === 'win32'` 小分支和 `windowsHide` 参数，都在 daemon 和 `scripts/` 里，桌面端的已随 s08b 删掉。以后改到这些文件时顺手删，不专门开 PR。
 
 ## 7. 预览版怎么出
 
@@ -658,6 +664,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 - 在终端里用 `open` 启动 app，会继承终端的长 PATH。要模拟从 Finder 打开，显式加 PATH：`open -n --env PATH=/usr/bin:/bin:/usr/sbin:/sbin --env HOME=<临时目录> ... <app>`。
 - 测 Claude 时，隔离 HOME 下读不到 owner 的 Claude 凭据：owner 的凭据写在 `~/.claude/settings.json` 的 `env` 里，不在钥匙串。要测已登录，那一条命令用真实 HOME，VONVON_HOME 仍用临时目录。
 - 退出桌面端不停 daemon（product.md 3.10）。测完用包里的命令行 `daemon stop` 停掉隔离 HOME 里的 daemon。
+- 测后台服务（launchd）时不换 HOME，只换 `VONVON_HOME`，任务名就带上数据目录的哈希。launchd 拉起的 daemon 拿的是账号真实的 HOME，按它找自己的 plist；HOME 换成临时目录时 plist 写进了临时目录，daemon 找不到注册，按"没有注册"以 0 退出，安装等到超时回滚（#320 的第二轮 Mac 检查）。这时 plist 会写进真实的 `~/Library/LaunchAgents`，只许有那一个带哈希的文件，测完用 `service uninstall` 去掉。打开 app 时另带 `VONVON_DESKTOP_TEST_HOME`，免得往 PATH 里注册 `vonvon` 命令。
 
 测 Claude 后端时，用 owner 本机的 Claude 登录跑少量回合。这是测产品，不是在 Mac 上开 Claude 的开发会话。
 
@@ -690,7 +697,19 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 
 切片合入时在这里补。
 
-**卸载步骤**（s08 填）：待填。
+**卸载步骤**（s08b 填）
+
+macOS：
+1. 在"应用与启动"页关掉"登录电脑时启动"，或者在终端运行 `vonvon service uninstall`。这会删掉 `~/Library/LaunchAgents/com.vonvon.bot.daemon.plist`；用开关关的，bot 改由一个分离的 daemon 接着跑。
+2. 从菜单栏退出 Vonvon Bot。要先退出：app 开着时停 daemon，窗口会弹"连接断开"。
+3. 运行 `vonvon daemon stop`。
+4. 把 app 拖进废纸篓。到第 6 步删完数据之前别再打开它，打开会重建 `~/.vonvon-bot`、装回命令行入口并起一个 daemon。
+5. 运行 `rm ~/.local/share/vonvon-bot/bin/vonvon`，再删掉 `~/.zshrc`、`~/.zprofile`（设了 `ZDOTDIR` 的，是 `$ZDOTDIR` 下的这两个）、`~/.bash_profile`（或 `.bash_login`、`.profile`）和 `~/.bashrc` 里 `# >>> Vonvon Bot CLI >>>` 到 `# <<< Vonvon Bot CLI <<<` 之间的几行。
+6. 数据：`rm -rf ~/.vonvon-bot`（凭据、会话和记忆都在里面，删了找不回来），再删 `~/Library/Application Support/vonvon-bot-desktop`。这个目录名是 Electron 按 app 里 `package.json` 的 `name` 取的（stage 包没写 `productName`），还没在 Mac 上核对，s08b 的 Mac 检查顺手看一眼。
+7. 先删了 app、没关开关的：运行 `launchctl bootout gui/$(id -u)/com.vonvon.bot.daemon`，再删掉上面那个 plist。
+8. 可选：在飞书开发者后台删掉这个应用。
+
+Linux：`vonvon service uninstall`，`vonvon daemon stop`，`npm rm -g vonvon-bot`，`rm -rf ~/.vonvon-bot`。linger 那一行由 s20a 补。
 
 **Linux 验收**（s20b 填，product.md 第 8 节第 5 条的 Linux 一半）：待填。
 

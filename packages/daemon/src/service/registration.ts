@@ -11,6 +11,10 @@ export type Registration =
 type ReadInput = { target: Target; requestedRoot: string };
 
 const MAX_DEFINITION_BYTES = 1024 * 1024;
+const NOT_A_REGULAR_FILE = 'Definition must be a regular file, not a symlink or directory';
+
+/** An unrecognized definition that is a symlink or directory: install refuses to replace it, unlike an older format. */
+export function isIrreplaceableDefinition(reason: string): boolean { return reason === NOT_A_REGULAR_FILE; }
 
 async function readFile(path: string): Promise<Buffer | null> {
   let info;
@@ -19,7 +23,7 @@ async function readFile(path: string): Promise<Buffer | null> {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null;
     throw error;
   }
-  if (!info.isFile()) throw new Error('Definition must be a regular file, not a symlink or directory');
+  if (!info.isFile()) throw new Error(NOT_A_REGULAR_FILE);
   const file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const opened = await file.stat();

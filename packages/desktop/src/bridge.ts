@@ -94,7 +94,7 @@ function safeFailure(error: unknown): SafeFailure {
     return { kind: 'rpc', message: sanitizeDaemonMessage(error.message), ...(code ? { code } : {}) };
   }
   if (error instanceof ConnectionError) return { kind: 'connection', message: 'Daemon connection lost' };
-  if (error instanceof ServiceActionError) return { kind: 'validation', message: error.safeMessage };
+  if (error instanceof ServiceActionError) return { kind: 'validation', message: sanitizeDaemonMessage(error.safeMessage) };
   if (error instanceof StartHostRefusal) return { kind: 'validation', message: error.message };
   return { kind: 'validation', message: 'Desktop request failed' };
 }
@@ -140,9 +140,10 @@ export function installBridge(
     if (retainedErrors.length > 32) retainedErrors.shift();
   }
 
-  function onError(error: Error): void {
+  function onError(error: Error, from: AttachedDaemon): void {
     if (disposed) return;
-    if (error instanceof ConnectionError && actions.isExpectedDisconnect()) return;
+    // The window's own switch or restart expects the drop; a helper started elsewhere the shell follows.
+    if (error instanceof ConnectionError && (actions.isExpectedDisconnect() || actions.followServiceHelper(from.identity))) return;
     const safe = safeFailure(error);
     if (!subscribed || !currentDocument()) retain(safe);
     else send({ type: 'error', value: safe });
@@ -157,58 +158,37 @@ export function installBridge(
     return activeOwner.client;
   }
 
-  async function desktopSnapshot() {
-    const snapshot = await client().snapshot();
-    return { ...snapshot, application: { ...snapshot.application, loginItem: await actions.readLoginItem() } };
-  }
-
-  async function publishRegistration(): Promise<void> {
-    const current = activeOwner;
-    const value = await desktopSnapshot();
-    if (current === activeOwner) send({ type: 'snapshot', value });
+  /** A login-item switch changed the service: machine `status` reads it again, and the daemon pushes the new snapshot. */
+  async function refreshService(): Promise<void> {
+    await activeOwner?.client.machine({ type: 'status' }).catch(() => {});
   }
 
   function bind(current: AttachedDaemon, paused = false) {
     let latest: Awaited<ReturnType<AttachedDaemon['client']['snapshot']>> | undefined;
     let revision = -1;
-    let reading = false;
     let bound = true;
-    async function flushSnapshots(): Promise<void> {
-      if (reading || paused) return;
-      reading = true;
-      try {
-        while (latest && bound && activeOwner === current) {
-          const value = latest;
-          latest = undefined;
-          const loginItem = await actions.readLoginItem();
-          if (!latest && bound && activeOwner === current) {
-            send({ type: 'snapshot', value: { ...value, application: { ...value.application, loginItem } } });
-          }
-        }
-      } catch (error) { onError(error instanceof Error ? error : new Error('Cannot read service registration')); }
-      finally { reading = false; if (latest && bound && activeOwner === current) void flushSnapshots(); }
-    }
     const removers: (() => void)[] = [];
     const dispose = () => { if (!bound) return; bound = false; latest = undefined; for (const off of removers) off(); };
     try {
       removers.push(current.client.watchSnapshots(value => {
         if (!bound || value.revision < revision) return;
         revision = value.revision;
-        if (!latest || value.revision >= latest.revision) latest = value;
-        void flushSnapshots();
+        // A paused binding is the candidate of a replacement: it keeps the newest until activated.
+        if (paused) latest = value;
+        else if (activeOwner === current) send({ type: 'snapshot', value });
       }));
       removers.push(current.client.onLog(value => { if (!paused && activeOwner === current) send({ type: 'log', value }); }));
       removers.push(current.client.onBackendInstall(value => { if (!paused && activeOwner === current) send({ type: 'backendInstall', value }); }));
-      removers.push(current.client.onError(error => { if (!paused && activeOwner === current) onError(error); }));
+      removers.push(current.client.onError(error => { if (!paused && activeOwner === current) onError(error, current); }));
     } catch (error) { dispose(); throw error; }
     return {
       dispose,
-      activate(initial: Awaited<ReturnType<AttachedDaemon['client']['snapshot']>>, loginItem: boolean) {
+      activate(initial: Awaited<ReturnType<AttachedDaemon['client']['snapshot']>>) {
         const value = latest && latest.revision >= initial.revision ? latest : initial;
         latest = undefined;
         revision = value.revision;
         paused = false;
-        send({ type: 'snapshot', value: { ...value, application: { ...value.application, loginItem } } });
+        send({ type: 'snapshot', value });
       },
     };
   }
@@ -230,7 +210,7 @@ export function installBridge(
   const noArg = (_: unknown): undefined => undefined;
   const onNavigation = (): void => { subscribed = false; };
   try {
-    register(desktopChannels.snapshot, 0, noArg, desktopSnapshot);
+    register(desktopChannels.snapshot, 0, noArg, () => client().snapshot());
     register(desktopChannels.run, 1, value => commandSchema.parse(value), value => {
       if (value.type !== 'restartHost' || !activeOwner) return client().run(value);
       return actions.restartHost(activeOwner.identity, () => client().run(value));
@@ -266,17 +246,23 @@ export function installBridge(
     }, async value => {
       const before = value === 'stop' ? stoppedStatus ?? await client().machine({ type: 'status' }) : undefined;
       if (before && before.type !== 'status') throw new Error('Cannot read service status');
-      const reply = machineReplySchema.parse(await actions.service(value));
+      const switchesLoginItem = value === 'install' || value === 'uninstall';
+      let reply: MachineReply;
+      try { reply = machineReplySchema.parse(await actions.service(value, activeOwner?.identity ?? null)); }
+      finally { if (switchesLoginItem) await refreshService(); }
       if (value === 'stop' && before?.type === 'status') {
         stoppedStatus = { ...before, host: null, service: { ...before.service, running: false, pid: undefined } };
       }
-      if (value === 'install' || value === 'uninstall') await publishRegistration();
       return reply;
     });
     register(desktopChannels.setLoginItem, 1, value => {
       if (typeof value !== 'boolean') throw new Error('Invalid login item request');
       return value;
-    }, async value => { await actions.setLoginItem(value); await publishRegistration(); });
+    }, async value => {
+      // A failed switch may still have changed the service, so the state is read again either way.
+      try { await actions.setLoginItem(value, activeOwner?.identity ?? null); }
+      finally { await refreshService(); }
+    });
     register(desktopChannels.repairCli, 0, noArg,
       () => actions.repairCli().then(reply => machineReplySchema.parse(reply)));
     register(desktopChannels.chooseExecutablePath, 0, noArg, () => actions.chooseExecutablePath());
@@ -316,11 +302,9 @@ export function installBridge(
         catch (error) { await next.dispose(); throw error; }
         if (disposed) { await next.dispose(); throw new Error('Desktop connection is unavailable'); }
         let initial: Awaited<ReturnType<AttachedDaemon['client']['snapshot']>>;
-        let loginItem: boolean;
         try {
           binding = bind(next, true);
           initial = await next.client.snapshot();
-          loginItem = await actions.readLoginItem();
           if (disposed) throw new Error('Desktop connection is unavailable');
         } catch (error) {
           binding.dispose();
@@ -331,7 +315,7 @@ export function installBridge(
         stoppedStatus = undefined;
         connectionLost = false;
         send({ type: 'reattached' });
-        binding.activate(initial, loginItem);
+        binding.activate(initial);
       })().finally(() => { replacing = undefined; candidate = null; });
       return replacing;
     },

@@ -72,7 +72,7 @@ vi.mock('electron', async () => {
     app,
     autoUpdater: new MockUpdater(),
     BrowserWindow: MockWindow,
-    dialog: { showErrorBox: vi.fn(), showMessageBoxSync: vi.fn() },
+    dialog: { showErrorBox: vi.fn(), showMessageBoxSync: vi.fn(), showMessageBox: vi.fn(async () => ({ response: 0 })) },
     Menu: { buildFromTemplate: vi.fn((items: unknown) => items), setApplicationMenu: vi.fn() },
     net: { fetch: vi.fn() },
   };
@@ -96,8 +96,13 @@ vi.mock('../src/daemon-manager.js', async importOriginal => ({
   createDaemonManager: vi.fn(() => ({ ensureReady: fake.ready })),
 }));
 vi.mock('../../daemon/src/config/data-root.js', () => ({ resolveDataRoot: vi.fn(() => ({ kind: 'canonical', path: fake.root })) }));
+vi.mock('../src/login-item.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../src/login-item.js')>();
+  return { ...actual, changeLoginItem: vi.fn(actual.changeLoginItem), repairServiceAtStartup: vi.fn(actual.repairServiceAtStartup) };
+});
 
 import { startDesktop, desktopResources } from '../src/main.js';
+import { changeLoginItem, repairServiceAtStartup } from '../src/login-item.js';
 import { autoUpdater, dialog, net } from 'electron';
 
 type MockApp = EventEmitter & { requestSingleInstanceLock: ReturnType<typeof vi.fn>; quit: ReturnType<typeof vi.fn>; getAppPath: ReturnType<typeof vi.fn> };
@@ -124,6 +129,10 @@ beforeEach(async () => {
   vi.mocked(autoUpdater.quitAndInstall).mockReset();
   autoUpdater.removeAllListeners();
   vi.mocked(dialog.showErrorBox).mockClear();
+  vi.mocked(dialog.showMessageBox).mockClear();
+  vi.mocked(dialog.showMessageBoxSync).mockClear();
+  vi.mocked(changeLoginItem).mockClear();
+  vi.mocked(repairServiceAtStartup).mockClear();
   vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('the update check must use Electron net'); }));
   vi.mocked(net.fetch).mockReset().mockImplementation(async () => new Response(JSON.stringify({
     version: '0.2.0', feedURL: 'https://updates.example.test/feed',
@@ -131,7 +140,7 @@ beforeEach(async () => {
   const resources = join(await realpath(temp), 'resources');
   await mkdir(resources);
   const alias = join(temp, 'resources-alias');
-  await symlink(resources, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  await symlink(resources, alias, 'dir');
   appPath = join(alias, 'desktop');
   await mkdir(join(appPath, '..', 'ui', 'dist'), { recursive: true });
   await mkdir(join(appPath, 'dist'), { recursive: true });
@@ -386,17 +395,69 @@ describe('daemon restart from the window', () => {
   });
 });
 
+describe('a service helper started from the web UI or a terminal', () => {
+  const previous = { pid: 42, startedAt: 'initial', listen: '127.0.0.1:42345' };
+
+  it('takes the dropped connection as expected and reattaches to the daemon the helper hands over', async () => {
+    const successor = { pid: 43, startedAt: 'service', listen: '127.0.0.1:42345' };
+    const next = { identity: successor, dispose: vi.fn(async () => {}) };
+    await writeFile(join(temp, 'service-action.json'), JSON.stringify({ pid: process.pid, action: 'install', phase: 'running', startedAt: Date.now() }));
+    fake.verified.mockResolvedValueOnce(null).mockResolvedValue(successor);
+    fake.ready.mockResolvedValueOnce(successor);
+    fake.attach.mockResolvedValueOnce(next);
+    expect(actions.followServiceHelper(previous)).toBe(true);
+    expect(actions.isExpectedDisconnect()).toBe(true);
+    await vi.waitFor(() => expect(fake.bridge.replaceOwner).toHaveBeenCalledExactlyOnceWith(next));
+    expect(actions.isExpectedDisconnect()).toBe(false);
+    expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
+  });
+
+  it('leaves a drop with no helper running to the lost-connection dialog', () => {
+    expect(actions.followServiceHelper(previous)).toBe(false);
+    expect(actions.isExpectedDisconnect()).toBe(false);
+  });
+});
+
 describe('native window lifecycle', () => {
-  it('refuses Open at login and service install, uninstall and stop in this version', async () => {
-    fake.readRegistration.mockResolvedValue({ kind: 'ours' });
-    await expect(actions.setLoginItem(true)).rejects.toThrow('cannot manage an OS service');
-    await expect(actions.setLoginItem(false)).rejects.toThrow('cannot manage an OS service');
-    for (const action of ['install', 'uninstall', 'stop'] as const) {
-      await expect(actions.service(action)).rejects.toThrow('cannot manage an OS service');
-    }
+  it('refuses the switch in an app that cannot set it, before expecting a disconnect, and refuses stop', async () => {
+    // JP-VPS and the Linux job run on Linux; the macOS job runs the unpackaged app.
+    const refusal = process.platform === 'darwin' ? '要用打包的 Vonvon Bot 才能设置登录时启动。' : '这台电脑上不能设置登录时启动。';
+    await expect(actions.setLoginItem(true)).rejects.toThrow(refusal);
+    await expect(actions.setLoginItem(false)).rejects.toThrow(refusal);
+    for (const action of ['install', 'uninstall'] as const) await expect(actions.service(action)).rejects.toThrow(refusal);
+    await expect(actions.service('stop')).rejects.toThrow('桌面版还不能单独停止后台服务');
     expect(fake.ready).toHaveBeenCalledTimes(1);
     expect(fake.bridge.replaceOwner).not.toHaveBeenCalled();
     expect(actions.isExpectedDisconnect()).toBe(false);
+  });
+
+  it('turns service install and uninstall into the login-item switch with the attached daemon', async () => {
+    const previous = { pid: 42, startedAt: 'initial', listen: '127.0.0.1:42345' };
+    const during: boolean[] = [];
+    const change = async (...[, , , hooks]: Parameters<typeof changeLoginItem>) => {
+      hooks.expectDisconnect(true);
+      during.push(actions.isExpectedDisconnect());
+      hooks.expectDisconnect(false);
+    };
+    vi.mocked(changeLoginItem).mockImplementationOnce(change).mockImplementationOnce(change);
+    await expect(actions.service('install', previous)).resolves.toEqual({ type: 'done', message: '已打开登录时启动。' });
+    await expect(actions.service('uninstall', previous)).resolves.toEqual({ type: 'done', message: '已关闭登录时启动。' });
+    expect(vi.mocked(changeLoginItem).mock.calls.map(call => [call[0].root, call[1], call[2]])).toEqual([[fake.root, true, previous], [fake.root, false, previous]]);
+    expect(during).toEqual([true, true]);
+    expect(actions.isExpectedDisconnect()).toBe(false);
+  });
+
+  it('shows why the startup repair failed instead of the readiness error, and as a notice when the daemon came up', async () => {
+    const notice = '后台服务没能更新到这个位置的 Vonvon Bot：系统设置里关掉了 Vonvon Bot 的后台运行。';
+    expect(dialog.showMessageBox).toHaveBeenCalledTimes(0);
+    vi.mocked(repairServiceAtStartup).mockResolvedValueOnce(notice);
+    await startDesktop();
+    expect(dialog.showMessageBox).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.objectContaining({ type: 'warning', message: notice }));
+    vi.mocked(repairServiceAtStartup).mockResolvedValueOnce(notice);
+    fake.ready.mockRejectedValueOnce(new Error('Daemon did not become ready within the startup wait.'));
+    await startDesktop();
+    await vi.waitFor(() => expect(dialog.showErrorBox).toHaveBeenCalledWith('Vonvon Bot', notice));
+    expect(dialog.showErrorBox).not.toHaveBeenCalledWith('Vonvon Bot', expect.stringContaining('startup wait'));
   });
 
   it('starts a registered service through the manager and blocks a concurrent start', async () => {

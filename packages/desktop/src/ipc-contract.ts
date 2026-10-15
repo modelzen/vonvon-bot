@@ -74,10 +74,13 @@ export interface ShellActions {
   chooseExecutablePath(): Promise<string | null>;
   startHost(bot?: string): Promise<MachineReply>;
   restartHost(previous: AttachedDaemon['identity'], send: () => Promise<CommandResult>): Promise<CommandResult>;
-  service(action: 'install' | 'start' | 'stop' | 'uninstall'): Promise<MachineReply>;
-  setLoginItem(enabled: boolean): Promise<void>;
-  readLoginItem(): Promise<boolean>;
+  /** `previous` is the daemon the window talks to, so a switch that replaced it reattaches. */
+  service(action: 'install' | 'start' | 'stop' | 'uninstall', previous?: AttachedDaemon['identity'] | null): Promise<MachineReply>;
+  setLoginItem(enabled: boolean, previous?: AttachedDaemon['identity'] | null): Promise<void>;
   isExpectedDisconnect(): boolean;
+  /** The connection to `lost` dropped while a `vonvon service` helper from the web UI or a terminal runs: true when the
+   * shell follows that helper and reattaches the window, so the drop is not reported. */
+  followServiceHelper(lost: AttachedDaemon['identity']): boolean;
   repairCli(): Promise<MachineReply>;
   observeCli(): Promise<Extract<MachineReply, { type: 'status' }>['cli']>;
   checkDesktopUpdate(): Promise<DesktopUpdate>;
