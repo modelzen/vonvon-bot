@@ -902,7 +902,7 @@ export function buildSettingsCard(cfg: AppConfig, notice?: string): CardObject {
 }
 
 /** Action ids on old cards for 咖啡一下, which s02b removed: the entry on the
- * settings card and the controls on its sub-card (`CLI` in cli-bridge/cards). */
+ * settings card and the controls on its sub-card. */
 export const COFFEE_RETIRED_ACTIONS = [
   'dm.coffee.settings',
   'cli.toggle.enabled',
