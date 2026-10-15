@@ -213,6 +213,50 @@ describe('withIdleTimeout', () => {
     expect(onTimeout).toHaveBeenCalledTimes(1);
   });
 
+  it('reset drops outstanding holds: old releases are no-ops and a full window starts', async () => {
+    vi.useFakeTimers();
+    const onTimeout = vi.fn();
+    const pause = createIdlePause();
+    const iter = withIdleTimeout(neverEnding('first'), 1_000, onTimeout, undefined, undefined, pause)[
+      Symbol.asyncIterator
+    ]();
+    await iter.next();
+    const second = iter.next();
+    const stale = pause.hold(); // never released by its owner (an abandoned card)
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(onTimeout).not.toHaveBeenCalled();
+    pause.reset(); // the goal moved to its next turn
+    expect(pause.held).toBe(false);
+    const next = pause.hold(); // the new turn's own hold...
+    stale(); // ...is not released by the old turn's late release
+    expect(pause.held).toBe(true);
+    next();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(onTimeout).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(second).resolves.toEqual({ done: true, value: undefined });
+    expect(onTimeout).toHaveBeenCalledTimes(1);
+  });
+
+  it('reset wakes a watchdog waiting on a hold and gives it a full window', async () => {
+    vi.useFakeTimers();
+    const onTimeout = vi.fn();
+    const pause = createIdlePause();
+    pause.hold();
+    const iter = withIdleTimeout(neverEnding('first'), 1_000, onTimeout, undefined, () => 0, pause)[
+      Symbol.asyncIterator
+    ]();
+    await iter.next();
+    const second = iter.next();
+    await vi.advanceTimersByTimeAsync(5_000);
+    pause.reset();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(onTimeout).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(second).resolves.toEqual({ done: true, value: undefined });
+    expect(onTimeout).toHaveBeenCalledTimes(1);
+  });
+
   it('still yields events and honors stop while paused', async () => {
     vi.useFakeTimers();
     const onTimeout = vi.fn();

@@ -86,27 +86,42 @@ export interface IdlePause {
   readonly held: boolean;
   /** Settles once no hold is out (immediately when none is). */
   released(): Promise<void>;
-  /** Epoch ms of the last time the final hold was released, or -Infinity. */
+  /** Epoch ms of the last time the final hold was released (or the pause was
+   * reset), or -Infinity. */
   releasedAt(): number;
+  /** Drop every hold, as at a turn boundary of a run that spans turns (/goal).
+   * Their release functions become no-ops; if any was out, the watchdog wakes
+   * and starts a full window over. */
+  reset(): void;
 }
 
 export function createIdlePause(now: () => number = Date.now): IdlePause {
   let holds = 0;
+  let generation = 0;
   let lastRelease = -Infinity;
   let waiting: { promise: Promise<void>; wake: () => void } | undefined;
+  const free = (): void => {
+    lastRelease = now();
+    waiting?.wake();
+    waiting = undefined;
+  };
   return {
     hold() {
       holds++;
+      const taken = generation;
       let released = false;
       return () => {
-        if (released) return;
+        if (released || taken !== generation) return;
         released = true;
         holds--;
-        if (holds > 0) return;
-        lastRelease = now();
-        waiting?.wake();
-        waiting = undefined;
+        if (holds === 0) free();
       };
+    },
+    reset() {
+      generation++;
+      if (holds === 0) return;
+      holds = 0;
+      free();
     },
     get held() {
       return holds > 0;

@@ -57,6 +57,7 @@ type Authorize = (context: FileContext, openId: string) => Promise<PermissionMod
 interface FileClick { messageId: string; chatId: string; operator?: { openId?: string } }
 
 const CLAIM_DENIED = '当前无权获取此文件：只有本群能使用 bot 的成员可以领取';
+const TIER_DENIED = '当前无权获取此文件：它在项目目录之外，请让管理员领取';
 
 /**
  * Who may claim a file linked in a bot answer (product.md 3.12): anyone allowed
@@ -391,6 +392,7 @@ export class OutboundFiles {
   ): Promise<void> {
     let manifest: Manifest | undefined;
     let authorized = false;
+    let denied: string | undefined;
     let file: FileEntry | undefined;
     try {
       manifest = JSON.parse(await readFile(join(this.dir, `${id}.json`), 'utf8')) as Manifest;
@@ -414,10 +416,18 @@ export class OutboundFiles {
       if (file.sendStartedAt && Date.now() - file.sendStartedAt >= SEND_RETRY_WINDOW_MS) {
         throw new Error('上次发送结果未确认，请先检查会话；需要重新发送时请让 agent 重新引用文件');
       }
+      const policy = manifest.mode === 'full' && mode === 'full' ? 'full' : 'qa';
+      // A clicker below the answer's tier (a guest on an admin's full-tier
+      // file) may not reach it. That denies the clicker and says nothing about
+      // the file: reply to them only, leave the shared card and manifest alone.
+      if (manifest.mode === 'full' && policy !== 'full'
+        && !await checkUploadPath(await uploadPlan({ cwd: manifest.cwd, mode: policy, network: false }), file.path)) {
+        denied = TIER_DENIED;
+        throw new Error(denied);
+      }
       file.needsPaint = true;
       await this.save(id, manifest);
       await this.repaint(channel, id, manifest, index, true);
-      const policy = manifest.mode === 'full' && mode === 'full' ? 'full' : 'qa';
       const current = await inspect(file.path, manifest.cwd, policy);
       if (!unchanged(file, current) || current.path !== file.path) throw new Error('本地文件已变化，请让 agent 重新引用后获取');
       if (!file.fileKey) {
@@ -445,8 +455,8 @@ export class OutboundFiles {
       log.info('outbound', 'file-sent', { messageId: manifest.messageId, bytes: file.size });
     } catch (err) {
       log.fail('outbound', err, { phase: 'file-get' });
-      const message = manifest ? (authorized ? friendly(err) : CLAIM_DENIED) : '文件入口已失效，请让 agent 重新引用文件';
-      if (manifest && authorized && file?.occurrences?.length && !file.messageId) {
+      const message = denied ?? (manifest ? (authorized ? friendly(err) : CLAIM_DENIED) : '文件入口已失效，请让 agent 重新引用文件');
+      if (!denied && manifest && authorized && file?.occurrences?.length && !file.messageId) {
         file.error = friendly(err);
         file.needsPaint = true;
         // A fresh value also bypasses the SDK's callback deduplication on retry.
