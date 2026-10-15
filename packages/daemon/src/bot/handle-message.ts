@@ -203,6 +203,7 @@ import {
   isSeen,
   listSessions,
   nextSeen,
+  nothingSeen,
   patchSession,
   sessionTitleJobKey,
   upsertSession,
@@ -390,9 +391,12 @@ export interface QueuedTurn {
   summary?: string;
   /** Set on a 🔁 重试 turn: the original input it wraps (see {@link retryPrompt}). */
   replayText?: string;
-  /** The inbound message, marked seen when the turn is dequeued (not when
-   * queued: a dropped queue must leave it for the next back-fill). */
+  /** The inbound message, marked seen once the host accepts its turn
+   * (turn_started), never when it is queued or dequeued: a dropped queue or a
+   * refused turn/start must leave it for the next back-fill. */
   seen?: SeenMark;
+  /** How {@link seen} moves the watermark (session-store.nextSeen); 'id' when unset. */
+  seenHow?: SeenHow;
 }
 
 /** How long ago the message was sent (0 when its createTime is unknown). */
@@ -945,6 +949,10 @@ export function createOrchestrator(
    * concurrent marks from overwriting each other. */
   function markSeen(sessionKey: string, mark: SeenMark, how: SeenHow = 'id'): void {
     void trackTask(patchSession(sessionKey, (rec) => nextSeen(rec, mark, how)).catch(() => undefined));
+  }
+  /** Take back an `id` mark whose message did not reach the session after all. */
+  function unmarkSeen(sessionKey: string, id: string): void {
+    void trackTask(patchSession(sessionKey, (rec) => ({ seen: (rec.seen ?? []).filter((s) => s.id !== id) })).catch(() => undefined));
   }
 
   /** Feishu re-pushes messages sent while the bot was offline, minutes late
@@ -1520,6 +1528,9 @@ export function createOrchestrator(
               { replyTo: msg.messageId, replyInThread: !flat }).catch(() => undefined));
             return;
           }
+          // Refused outright, so it never reached the model: take the mark back.
+          // Queued or run below, it is marked again once its turn starts.
+          unmarkSeen(sessionKey, msg.messageId);
         }
       }
     }
@@ -1738,7 +1749,8 @@ export function createOrchestrator(
         // the session: the back-fill succeeded, or there is none (main area until
         // s14, a resumed session). After a failed back-fill, or a goal in a topic
         // (no history woven), only the trigger counts; a new session then restarts
-        // from 0 so its next turn pulls the whole topic.
+        // from 0 so its next turn pulls the whole topic. Written once the host
+        // accepts the turn (launchRun), not here.
         const behind = topicId ? Boolean(pull && !pull.ok) : Boolean(goal && msg.threadId);
         let seenHow: SeenHow = 'advance';
         if (behind) seenHow = codexEmpty ? 'restart' : 'id';
@@ -1768,7 +1780,8 @@ export function createOrchestrator(
             // `summaryText` (handleTurn's original) so the session label isn't
             // manifest boilerplate + a temp path.
             summary: stripFileTokens(summaryText ?? text).slice(0, 80),
-            ...nextSeen({}, seenMark, seenHow),
+            // Nothing reached it yet; the trigger is marked once the turn starts.
+            ...nothingSeen(),
             createdAt: Date.now(),
             updatedAt: Date.now(),
           });
@@ -1784,6 +1797,8 @@ export function createOrchestrator(
           if (prior) {
             await upsertSession({
               ...prior,
+              // A new native session: the old watermark does not cover it.
+              ...nothingSeen(),
               model,
               effort,
               modelCustom,
@@ -1808,8 +1823,6 @@ export function createOrchestrator(
             titleJobKey = expected;
           }
         }
-        // Advance the watermark (a brand-new session already wrote it in the upsert above).
-        if (!neverSeen) markSeen(sessionKey, seenMark, seenHow);
         reserved.thread = thread;
         launchOpts = {
           chatId: msg.chatId,
@@ -1836,6 +1849,8 @@ export function createOrchestrator(
           requesterOpenId: msg.senderId,
           requestedAt: msg.createTime || tIntake,
           replayText: extra?.replayText,
+          seen: seenMark,
+          seenHow,
           // 编织完成 → turn/start 之间不再读盘：首轮直接用预取的会话记录
           // （新会话及旧单会话的缺失值由上面的 model/effort 补齐）。
           firstRec: prior ?? null,
@@ -4282,6 +4297,9 @@ export function createOrchestrator(
       if (request.action === 'clear') {
         if (project.kind !== 'single' || key !== perm.sessionKey) throw new AdminWriteError('只有单会话群可以清空当前上下文');
         const fresh = await sessionBackend.startThread({ cwd: project.cwd, model: record.model, effort: record.effort, mode: perm.mode, network: perm.network });
+        // The local clock, not a Feishu createTime like the other watermarks: this
+        // is the main-area session, which no back-fill reads until s14 (it must
+        // then allow for clock skew, or use the newest createTime it has).
         const now = Date.now();
         try { await upsertSession({ ...record, sessionId: fresh.sessionId, summary: '(新会话)', lastSeenAt: now, seen: undefined, createdAt: now, updatedAt: now }); }
         catch (error) { await fresh.close(); throw error; }
@@ -4353,6 +4371,9 @@ export function createOrchestrator(
      * written as the new session's watermark (never `requestedAt`, which falls
      * back to the local clock) so its next turn back-fills what came after. */
     seenAt?: number;
+    /** The trigger, marked seen once the host accepts the first turn (see QueuedTurn.seen). */
+    seen?: SeenMark;
+    seenHow?: SeenHow;
     /** single-session group: reply by quoting (no reply_in_thread / topic). */
     flat?: boolean;
     /** when admin/guest tiers are split: 'admin'|'guest' to namespace the
@@ -4604,6 +4625,8 @@ export function createOrchestrator(
         requestedAt: opts.requestedAt ?? Date.now(),
         summary: opts.summary,
         replayText: opts.replayText,
+        seen: opts.seen,
+        seenHow: opts.seenHow,
       };
       let replyTo = opts.replyTo;
       let replyInThread = opts.flat ? false : (opts.replyInThread ?? Boolean(opts.knownThreadId));
@@ -4630,6 +4653,7 @@ export function createOrchestrator(
         const turnEffort = rec?.effort ?? opts.effort;
         const modelDisp = getModelDisplay(cfg);
         const run = opts.thread.runStreamed(turnInput, { model: turnModel, effort: turnEffort });
+        let unseen = currentTurn.seen;
         titleTurnAttempted = true;
         const turnStartAt = Date.now(); // turn/start 已在 runStreamed() 内发出（与下面的建卡并行）
         state.run = run;
@@ -4868,6 +4892,11 @@ export function createOrchestrator(
           if (!firstEvAt) firstEvAt = tEv;
           const et = (ev as { type?: string }).type;
           if (et === 'turn_started') {
+            // The host took the input: only now do it and the history woven into
+            // it count as seen (a refused turn/start or a crash before here leaves
+            // both for the next back-fill and a re-push).
+            if (unseen && topicThreadId) markSeen(topicThreadId, unseen, currentTurn.seenHow);
+            unseen = undefined;
             // Host accepted the first turn. Title generation now overlaps the
             // remainder of that turn; the binding was persisted before this loop.
             beginSessionTitle();
@@ -5080,7 +5109,6 @@ export function createOrchestrator(
         settleTurn?.(); // moving on: whatever queued meanwhile made the retry stale
         settleTurn = undefined;
         currentTurn = state.queue.shift()!;
-        if (currentTurn.seen && topicThreadId) markSeen(topicThreadId, currentTurn.seen);
         // Per-turn ownership + one-shot override must not leak from the previous
         // requester. The queued item's timestamp preserves all waiting time for
         // the `long` policy and notification copy.
@@ -5411,6 +5439,7 @@ export function createOrchestrator(
       const guarded = withIdleTimeout(run.events, GOAL_IDLE_MS, () => {
         idledOut = true;
       }, stop, run.lastActivity, idlePause);
+      let unseen = opts.seen; // marked once the host starts the goal's first turn (see launchRun)
       for await (const ev of guarded) {
         if (ev.type === 'goal_update') {
           lastStatus = ev.status;
@@ -5433,6 +5462,8 @@ export function createOrchestrator(
         }
         if (ev.type === 'turn_started') {
           idlePause.reset();
+          if (unseen && topicThreadId) markSeen(topicThreadId, unseen, opts.seenHow);
+          unseen = undefined;
           // Unlike runGoal() construction, this proves the host accepted and
           // started the goal's first turn. Generate in parallel from here.
           beginGoalSessionTitle();

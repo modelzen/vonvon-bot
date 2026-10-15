@@ -60,6 +60,12 @@ export type SeenHow = 'advance' | 'id' | 'restart';
  * may come back once as history). */
 const SEEN_MAX = 64;
 
+/** A session nothing has reached yet (a new or recreated native session before
+ * its first turn starts): its next back-fill starts from the topic's beginning. */
+export function nothingSeen(): Pick<SessionRecord, 'lastSeenAt' | 'seen'> {
+  return { lastSeenAt: 0, seen: [] };
+}
+
 /** Whether the message reached the session as a turn, an interjection or a queued turn. */
 export function isDelivered(rec: Pick<SessionRecord, 'seen'> | undefined, id: string): boolean {
   return Boolean(rec?.seen?.some((s) => s.id === id));

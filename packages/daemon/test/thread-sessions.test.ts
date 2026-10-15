@@ -305,4 +305,66 @@ describe('names and watermark (s09)', () => {
     await done();
     expect(run.consumed[0]!.text).toContain('（这条消息 5 分钟前发出，bot 断线重连后才收到）');
   });
+
+  /** A thread whose first turn/start the host rejects (no turn_started). */
+  function rejectingFirstTurn(run: ReturnType<typeof thread>) {
+    return { ...run.t, runStreamed(input: AgentInput) {
+      run.consumed.push(input);
+      return { turnId: () => undefined, events: (async function* (): AsyncGenerator<AgentEvent> {
+        yield { type: 'error', message: 'turn/start rejected', willRetry: false };
+      })() };
+    } };
+  }
+
+  it('moves the watermark only once the host accepts the turn, so a re-push after a restart is answered', async () => {
+    const now = Date.now();
+    fake.records.set('omt_topic', record('omt_topic', { lastSeenAt: 5 }));
+    const run = thread('old');
+    fake.backend.resumeThread.mockResolvedValueOnce(rejectingFirstTurn(run)).mockResolvedValue(run.t);
+    fake.history.mockResolvedValue({ ok: true, complete: true, messages: [ctx('om_h', '补拉的那句', now - 6 * 60_000)] });
+    const o = setup();
+    const trigger = message('the trigger', 'omt_topic', { createTime: now - 5 * 60_000 });
+    await o.onMessage(trigger);
+    await done();
+    expect(run.consumed[0]!.text).toContain('李四：补拉的那句');
+    expect(fake.records.get('omt_topic').lastSeenAt).toBe(5);
+    expect(fake.records.get('omt_topic').seen ?? []).toEqual([]);
+    // The daemon restarts (the in-memory dedup is gone) and Feishu re-pushes the trigger.
+    await o.shutdown();
+    fake.log.info.mockClear();
+    const again = setup();
+    await again.onMessage(trigger);
+    await done();
+    expect(fake.log.info).not.toHaveBeenCalledWith('intake', 'late-redelivery-skipped', expect.anything());
+    expect(run.consumed[1]!.text).toContain('李四：补拉的那句');
+    await vi.waitFor(() => expect(fake.records.get('omt_topic').lastSeenAt).toBe(trigger.createTime));
+  });
+
+  it('starts a new topic session with nothing seen until its first turn is accepted', async () => {
+    const run = thread('topic-session');
+    const ok = thread('other-session');
+    fake.backend.startThread.mockResolvedValueOnce(rejectingFirstTurn(run)).mockResolvedValue(ok.t);
+    const o = setup();
+    await o.onMessage(message('first time here', 'omt_topic'));
+    await done();
+    expect(fake.records.get('omt_topic')).toMatchObject({ lastSeenAt: 0, seen: [] });
+    fake.log.info.mockClear();
+    const accepted = message('in another topic', 'omt_other');
+    await o.onMessage(accepted);
+    await done();
+    await vi.waitFor(() => expect(fake.records.get('omt_other')).toMatchObject({
+      lastSeenAt: accepted.createTime, seen: [{ id: accepted.messageId, at: accepted.createTime }],
+    }));
+  });
+
+  it('resets the watermark when the session is recreated, until the new session takes a turn', async () => {
+    fake.records.set('omt_topic', record('omt_topic', { lastSeenAt: 5, seen: [{ id: 'om_old', at: 9 }] }));
+    const fresh = thread('fresh');
+    fake.backend.resumeThread.mockRejectedValue(new Error('no rollout'));
+    fake.backend.startThread.mockResolvedValue(rejectingFirstTurn(fresh));
+    const o = setup();
+    await o.onMessage(message('again', 'omt_topic'));
+    await done();
+    expect(fake.records.get('omt_topic')).toMatchObject({ sessionId: 'fresh', lastSeenAt: 0, seen: [] });
+  });
 });

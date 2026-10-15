@@ -579,6 +579,31 @@ describe('watermark for interjections and queued turns (s09)', () => {
     run.turns[0]!.resolve(); pending.resolve();
   });
 
+  it('unmarks a rejected interjection, so a dropped queue leaves it for the next back-fill', async () => {
+    fake.record = { lastSeenAt: 1 };
+    const run = thread(); fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup(); await o.onMessage(message('first'));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    const steer = deferred<void>();
+    run.t.steer.mockReturnValueOnce(steer.promise);
+    const rejected = later('rejected steer', 1000);
+    await o.onMessage(rejected);
+    await until(() => expect(run.t.steer).toHaveBeenCalledTimes(1));
+    // The host had already ended the turn: the steer is refused and the message queues on this run.
+    steer.reject(new JsonRpcError('no active turn'));
+    await until(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'queued', { depth: 1 }));
+    // The run then fails, and its queue is dropped.
+    run.turns[0]!.reject(new Error('stream broke'));
+    await until(() => expect(fake.send.mock.calls.some(c => JSON.stringify(c).includes('1 条排队消息未执行'))).toBe(true));
+    const isMarked = () => ((fake.record.seen ?? []) as { id: string }[]).some((m) => m.id === rejected.messageId);
+    await until(() => expect(isMarked()).toBe(false));
+    fake.history.mockResolvedValueOnce({ ok: true, complete: true, messages: [ctx(rejected.messageId, 'rejected steer', rejected.createTime)] });
+    await o.onMessage(later('next', 2000));
+    await until(() => expect(run.consumed).toHaveLength(2));
+    expect(run.consumed[1]!.text).toContain('李四：rejected steer');
+    run.turns[1]!.resolve();
+  });
+
   it('marks a queued message seen when it is dequeued, not when it is queued', async () => {
     fake.record = { lastSeenAt: 1 };
     const run = thread(); fake.backend.resumeThread.mockResolvedValue(run.t);
