@@ -136,12 +136,31 @@ describe('desktop IPC boundary', () => {
     ['control and format characters', 'a\u0000b\u001b[31mc\u202ed\u200be\r\n\tf', 'a b [31mcde f'],
     ['URL credentials, queries and fragments', '打不开 https://user:pa55@open.feishu.cn/app/cli_a/auth?q=im:chat&token=x#frag 和 http://127.0.0.1:4000/x?credential=y',
       '打不开 https://open.feishu.cn/app/cli_a/auth 和 http://127.0.0.1:4000/x'],
-    ['bearer tokens', 'Authorization: Bearer abc.def-123 failed', 'Authorization: … … failed'],
+    ['bearer tokens', 'Authorization: Bearer abc.def-123 failed', 'Authorization: … failed'],
+    ['quoted auth headers and bare schemes', "headers: {authorization: 'Basic dXNlcjpwYXNz'} then Bearer eyJhbGciOiJIUzI1NiJ9.e30 rejected",
+      "headers: {authorization: '…'} then Bearer … rejected"],
+    ['API keys', 'Invalid API key sk-ant-api03-abcdefghijklmnop, api_key=abc, apiKey: "xyz"', 'Invalid API key …, api_key=…, apiKey: "…"'],
+    ['credential-shaped values after an unquoted label', 'password: hunter22 and token: 0123456789abcdef', 'password: … and token: …'],
+    ['ordinary words after bearer, basic or a secret label', 'Basic settings are invalid. Invalid token: expired; tokens: 1234 used',
+      'Basic settings are invalid. Invalid token: expired; tokens: 1234 used'],
+    ['file paths, which the web UI shows too', 'ENOENT: no such file /home/ops/.vonvon/bots/cli_a/setup.json', 'ENOENT: no such file /home/ops/.vonvon/bots/cli_a/setup.json'],
     ['secret-style values', 'unsupported secret form: {"app_secret":"s3cr3t","password":\'pw\', token = abc}', 'unsupported secret form: {"app_secret":"…","password":\'…\', token = …}'],
     ['bare Feishu access tokens', 'invalid access t-g1044ghJRUIJJ5ELPPA7VQ5XWQUQAP4XMYWC4P7S here', 'invalid access … here'],
     ['empty text', ' \u0000 ', 'Daemon request failed'],
   ])('sanitizes %s in daemon messages', (_name, raw, expected) => {
     expect(sanitizeDaemonMessage(raw)).toBe(expected);
+  });
+
+  it('scans only the start of a huge daemon message, so the patterns cannot stall the main process', () => {
+    for (const raw of ['a-'.repeat(50_000), 'a.'.repeat(50_000), 'a://'.repeat(25_000), 'token '.repeat(20_000), '😀'.repeat(100_000)]) {
+      const started = performance.now();
+      const text = sanitizeDaemonMessage(raw);
+      expect(performance.now() - started).toBeLessThan(250);
+      expect(Array.from(text).length).toBeLessThanOrEqual(300);
+    }
+    // The cut lands inside a Feishu token after a long query string; its first characters must not show.
+    const raw = `打不开 https://h/p?${'q'.repeat(1975)} t-g1044abcdefghijklmnopqrstuvwxyz0123`;
+    expect(sanitizeDaemonMessage(raw)).toBe('打不开 https://h/p…');
   });
 
   it('caps daemon messages at 300 characters without splitting a character', () => {

@@ -1,5 +1,6 @@
 import {useEffect, useState} from 'react';
-import type {AdminSetupStatus, AgentId, Job} from '@vonvon/protocol';
+import type {VonvonClient} from '@vonvon/client/browser';
+import type {AdminSetupStatus, AgentId, Job, JobId} from '@vonvon/protocol';
 import {useClient, useShellCapabilities} from '../client-context';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import {Button, StatusBadge} from '../reference/components/ui';
@@ -10,6 +11,8 @@ import './setup.css';
 
 /** Faster than the checklist (10 s): the user is waiting on this one screen. */
 export const GRANT_POLL_MS = 5_000;
+/** Bot 设置 re-reads slowly until the user opens the grant link there, then at {@link GRANT_POLL_MS}. */
+export const GRANT_ROW_POLL_MS = 30_000;
 export const PUBLISH_NOTE = '在飞书确认后，要创建版本并发布才生效；首次运行清单会继续检测。';
 
 /** Runs `tick` now, then again `intervalMs` after each run settles, for as long as it resolves true.
@@ -30,27 +33,47 @@ export function registeredAgentId(job: Job | undefined, refresh: boolean | undef
   return !refresh && job?.type === 'registerAgent' && job.phase === 'succeeded' ? job.agentId : undefined;
 }
 
+/** The 注册 Bot dialog. `agentId` is set once a first registration succeeds; the dialog then shows the grant step. */
+export type RegisterModal = {kind: 'register'; jobId: JobId; refresh?: boolean; agentId?: AgentId};
+/** The dialog after a snapshot. Job views expire after a while, so it keeps the new bot's id itself. */
+export function withRegisteredAgent(modal: RegisterModal, jobs: readonly Job[]): RegisterModal {
+  if (modal.agentId) return modal;
+  const agentId = registeredAgentId(jobs.find(job => job.id === modal.jobId), modal.refresh);
+  return agentId ? {...modal, agentId} : modal;
+}
+/** The job to cancel when the dialog closes. A finished registration has none, and its job may already be gone. */
+export function jobToCancel(modal: RegisterModal): JobId | undefined {
+  return modal.agentId ? undefined : modal.jobId;
+}
+
 export type ScopeRead = {status?: AdminSetupStatus; problem?: string};
-/** Reads one bot's setupStatus. With `pollMs` it keeps reading until the required scopes read granted;
- * without, it reads once. A failed read keeps the last good status. */
-export function useScopeStatus(agentId: AgentId, pollMs?: number): ScopeRead {
+/** Nothing left to grant: the required scopes, and the join-group scope the step warns about. */
+export function scopesSettled(status: AdminSetupStatus): boolean {
+  const step = scopeStep(status);
+  return step.done && !step.warnings?.length;
+}
+/** Reads one bot's setupStatus now, then every `pollMs` until {@link scopesSettled}. A failed read keeps the
+ * last good status and is retried. The returned function stops it; a read still in flight is not reported. */
+export function watchScopeStatus(client: Pick<VonvonClient, 'admin'>, agentId: AgentId, pollMs: number,
+  onRead: (update: (previous: ScopeRead) => ScopeRead) => void): () => void {
+  let live = true;
+  const stop = pollEvery(pollMs, async () => {
+    try {
+      const reply = await client.admin({type: 'setupStatus', agentId});
+      if (reply.kind !== 'setupStatus') throw new Error('检测结果格式不对。');
+      if (live) onRead(() => ({status: reply.status}));
+      return !scopesSettled(reply.status);
+    } catch (error) {
+      if (live) onRead(previous => ({status: previous.status, problem: error instanceof Error ? error.message : '检测失败，请稍后重试。'}));
+      return true;
+    }
+  });
+  return () => { live = false; stop(); };
+}
+export function useScopeStatus(agentId: AgentId, pollMs: number): ScopeRead {
   const client = useClient();
   const [read, setRead] = useState<ScopeRead>({});
-  useEffect(() => {
-    let current = true;
-    const stop = pollEvery(pollMs ?? 0, async () => {
-      try {
-        const reply = await client.admin({type: 'setupStatus', agentId});
-        if (reply.kind !== 'setupStatus') throw new Error('检测结果格式不对。');
-        if (current) setRead({status: reply.status});
-        return pollMs !== undefined && reply.status.scopes.missingRequired?.length !== 0;
-      } catch (error) {
-        if (current) setRead(previous => ({status: previous.status, problem: error instanceof Error ? error.message : '检测失败，请稍后重试。'}));
-        return pollMs !== undefined;
-      }
-    });
-    return () => { current = false; stop(); };
-  }, [client, agentId, pollMs]);
+  useEffect(() => watchScopeStatus(client, agentId, pollMs, setRead), [client, agentId, pollMs]);
   return read;
 }
 
@@ -99,10 +122,12 @@ export function GrantStep({agentId, onOpenChecklist, onDone}: {agentId: AgentId;
   </>;
 }
 
-/** Bot 设置 → 连接与权限: the same grant link, read once when the page opens. */
+/** Bot 设置 → 连接与权限: the same grant link. It re-reads slowly, so a failed read or a grant made elsewhere
+ * shows up, and at the dialog's pace once the user opened the link here. */
 export function ScopeGrantRow({agentId, disabled, onError}: {agentId: AgentId; disabled: boolean; onError: (message: string) => void}) {
   const shell = useShellCapabilities();
-  const read = useScopeStatus(agentId);
+  const [opened, setOpened] = useState(false);
+  const read = useScopeStatus(agentId, opened ? GRANT_POLL_MS : GRANT_ROW_POLL_MS);
   const view = grantView(read, false);
   const url = view.grantUrl;
   return <SettingsRow title="飞书权限"
@@ -114,6 +139,6 @@ export function ScopeGrantRow({agentId, disabled, onError}: {agentId: AgentId; d
     trailing={<span className="setup-step-trailing">
       <StatusBadge tone={view.tone} variant="pill">{view.status}</StatusBadge>
       <Button size="sm" disabled={disabled || !url}
-        onClick={() => { if (url) void openExternalUrl(url, 'app-console', shell).catch(error => onError(error instanceof Error ? error.message : '无法打开飞书开发者后台。')); }}>一键开权限</Button>
+        onClick={() => { if (url) void openExternalUrl(url, 'app-console', shell).then(() => setOpened(true), error => onError(error instanceof Error ? error.message : '无法打开飞书开发者后台。')); }}>一键开权限</Button>
     </span>}/>;
 }

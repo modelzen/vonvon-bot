@@ -28,25 +28,48 @@ export async function openAllowedExternal(raw: unknown): Promise<void> {
 
 /** The web UI shows daemon messages unabridged; the desktop caps them at this many characters. */
 const daemonMessageLimit = 300;
+/** The patterns below backtrack, so their cost grows with the square of the length; only this much is scanned. */
+const daemonMessageScanLimit = 2000;
+
+/** A key that names a secret, as in `app_secret`, `access_token`, `password`, `Authorization` or `api_key`. */
+const secretKey = String.raw`((?:secret|token|password|passwd|credential|authorization|api[_-]?key)[\w-]{0,64})`;
+/** The auth scheme that may come before the value, as in `Authorization: Bearer …`. */
+const authScheme = String.raw`(?:(?:bearer|basic)\s+)?`;
+/** A value that looks like a credential rather than a word: 8+ characters with a letter and a digit, or 16+. */
+const credential = String.raw`(?:(?=[\w.~+/=-]*[a-z])(?=[\w.~+/=-]*\d)[\w.~+/=-]{8,}|[\w.~+/=-]{16,})`;
+/** `key=value`, or a quoted key or value as in JSON and inspected objects: the value is always the secret. */
+const assignedSecret = new RegExp(String.raw`${secretKey}(["']?\s*=\s*["']?|["']\s*:\s*["']?|\s*:\s*["'])${authScheme}[^\s"',;&)}\]]+`, 'gi');
+/** Unquoted `key: value` is also prose ("Invalid token: expired"), so only a credential-shaped value goes. */
+const labelledSecret = new RegExp(String.raw`${secretKey}(\s*:\s*)${authScheme}${credential}`, 'gi');
+const bareAuthScheme = new RegExp(String.raw`\b(bearer|basic)\s+${credential}`, 'gi');
 
 /**
  * Daemon RPC errors are the user-facing texts the web UI already shows, so the desktop shows them too, as one
  * plain line: no control or format characters, no URL credentials, query strings or fragments, no bearer
- * tokens, `secret=…`-style values or Feishu access tokens, and at most {@link daemonMessageLimit} characters.
+ * tokens, `secret=…`-style values, Feishu access tokens or `sk-` API keys, and at most
+ * {@link daemonMessageLimit} characters. File paths stay: the web UI shows them too, and they say what failed.
  */
 export function sanitizeDaemonMessage(raw: string): string {
-  const text = raw
+  // Cut before matching. The word the cut lands in goes too: half a secret would slip past the patterns.
+  const head = raw.length > 2 * daemonMessageScanLimit ? raw.slice(0, 2 * daemonMessageScanLimit) : raw;
+  const points = Array.from(head);
+  const cut = head !== raw || points.length > daemonMessageScanLimit;
+  const scanned = cut ? points.slice(0, daemonMessageScanLimit).join('').replace(/\S+$/, '') : raw;
+  const text = scanned
     .replace(/\p{Cf}/gu, '')
     .replace(/[\p{Cc}\u2028\u2029]/gu, ' ')
-    .replace(/\b([a-z][a-z\d+.-]*:\/\/)[^\s/?#@]*@/gi, '$1')
-    .replace(/\b([a-z][a-z\d+.-]*:\/\/[^\s?#]*)[?#]\S*/gi, '$1')
-    .replace(/\b(bearer|basic)\s+[\w.~+/=-]+/gi, '$1 …')
-    .replace(/\b([\w-]*(?:secret|token|password|passwd|credential|authorization)[\w-]*)(["']?\s*[:=]\s*["']?)[^\s"',;&)}\]]+/gi, '$1$2…')
+    .replace(/\b([a-z][a-z\d+.-]{0,31}:\/\/)[^\s/?#@]*@/gi, '$1')
+    .replace(/\b([a-z][a-z\d+.-]{0,31}:\/\/[^\s?#]*)[?#]\S*/gi, '$1')
+    .replace(assignedSecret, '$1$2…')
+    .replace(labelledSecret, '$1$2…')
+    .replace(bareAuthScheme, '$1 …')
     .replace(/\b[tua]-[A-Za-z0-9]{24,}\b/g, '…')
+    .replace(/\bsk-[\w-]{16,}/g, '…')
     .replace(/\s+/g, ' ').trim();
   const chars = Array.from(text);
   if (chars.length === 0) return 'Daemon request failed';
-  return chars.length > daemonMessageLimit ? `${chars.slice(0, daemonMessageLimit - 1).join('')}…` : text;
+  if (!cut && chars.length <= daemonMessageLimit) return text;
+  return `${chars.slice(0, daemonMessageLimit - 1).join('')}…`;
 }
 
 function safeFailure(error: unknown): SafeFailure {

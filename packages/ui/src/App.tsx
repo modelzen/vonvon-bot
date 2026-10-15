@@ -39,7 +39,6 @@ import {
   type CommandResult,
   type DesktopSnapshot,
   type Job,
-  type JobId,
   type Membership,
 } from "@vonvon/protocol";
 import type { CollaborationView, Page } from "./collaboration-model";
@@ -54,14 +53,13 @@ import {ConversationPanel} from './management/ConversationPanel';
 import {ShareUsagePanel, UsagePanel} from './management/UsagePanel';
 import {EnvironmentPanel} from './management/EnvironmentPanel';
 import {SetupChecklist} from './setup/SetupChecklist';
-import {GrantStep, ScopeGrantRow, registeredAgentId} from './setup/GrantStep';
+import {GrantStep, ScopeGrantRow, jobToCancel, withRegisteredAgent, type RegisterModal} from './setup/GrantStep';
 import {MachinePanel} from './management/MachinePanel';
 import {LogPanel} from './management/LogPanel';
 import {UpdatePanel} from './management/UpdatePanel';
 
 type Modal =
-  // agentId is set once a first registration succeeds; the dialog then shows the grant step.
-  | { kind: "register"; jobId: JobId; refresh?: boolean; agentId?: AgentId }
+  | RegisterModal
   | { kind: "join"; agentId: AgentId; group?: PendingGroup }
   | { kind: "collaboration"; membership: Membership }
   | { kind: "shareUsage" }
@@ -197,12 +195,7 @@ function DesktopApp() {
     () =>
       client.watchSnapshots((next) => {
         setSnapshot(next);
-        // Job views expire after a while, so the register dialog keeps the new bot's id itself.
-        setModal(current => {
-          if (current?.kind !== "register" || current.agentId) return current;
-          const agentId = registeredAgentId(next.jobs.find(job => job.id === current.jobId), current.refresh);
-          return agentId ? {...current, agentId} : current;
-        });
+        setModal(current => current?.kind === "register" ? withRegisteredAgent(current, next.jobs) : current);
         // A machine with no bot yet opens on the checklist, once per window.
         if (!firstRunDecided.current && next.host.kind === "connected" && !next.stale) {
           firstRunDecided.current = true;
@@ -304,9 +297,8 @@ function DesktopApp() {
   }
   async function closeModal() {
     const generation = ++modalGeneration.current;
-    // A finished registration has nothing to cancel, and its job may already be gone.
-    if (modal?.kind === "register" && !modal.agentId)
-      await run({ type: "cancelJob", jobId: modal.jobId });
+    const cancel = modal?.kind === "register" ? jobToCancel(modal) : undefined;
+    if (cancel) await run({ type: "cancelJob", jobId: cancel });
     if (generation === modalGeneration.current) setModal(null);
   }
   if (!snapshot)
