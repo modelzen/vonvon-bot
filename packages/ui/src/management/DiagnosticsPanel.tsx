@@ -54,11 +54,14 @@ export function scopeView(status: AdminSetupStatus | undefined, agent: Agent, no
   return view('没有缺的', 'success');
 }
 
-/** 飞书设置: the checklist's Feishu steps still to do. */
-function setupBadge(agent: Agent, read: SetupRead | undefined) {
-  if (!read?.status) return read?.problem ? badge('读取失败', 'warning') : badge('检查中', 'neutral');
-  const left = botSteps(agent, read.status).filter(step => !step.done);
-  return left.length ? badge(`还差 ${left.length} 步：${left.map(step => step.title).join('、')}`, 'warning') : badge('全部完成', 'success');
+/** 飞书设置: the checklist's Feishu steps still to do, and its warnings about optional events; the
+ * scopes step's warning is the 缺的权限 row's. */
+export function setupView(agent: Agent, read: SetupRead | undefined): {badge: ReactNode; warnings: string[]} {
+  if (!read?.status) return {badge: read?.problem ? badge('读取失败', 'warning') : badge('检查中', 'neutral'), warnings: []};
+  const steps = botSteps(agent, read.status);
+  const left = steps.filter(step => !step.done);
+  const warnings = steps.flatMap(step => step.id === 'scopes' ? [] : step.warnings ?? []);
+  return {badge: left.length ? badge(`还差 ${left.length} 步：${left.map(step => step.title).join('、')}`, 'warning') : badge('全部完成', 'success'), warnings};
 }
 
 function NotRepliedList({records, snapshot, now}: {records: readonly NotReplied[]; snapshot: DesktopSnapshot; now: number}) {
@@ -90,6 +93,7 @@ function BotDiagnostics({agent, snapshot, read, tools, onOpenSetup, onError}: {
   const total = records.reduce((sum, record) => sum + record.count, 0);
   const connection = connectionView(agent);
   const scopes = scopeView(read?.status, agent, now, read?.problem);
+  const setup = setupView(agent, read);
   const grantUrl = read?.status?.scopes.grantUrl;
   const counts = new Map<string, number>();
   for (const member of snapshot.memberships) if (member.agentId === agent.id) counts.set(member.backend, (counts.get(member.backend) ?? 0) + 1);
@@ -100,8 +104,9 @@ function BotDiagnostics({agent, snapshot, read, tools, onOpenSetup, onError}: {
   return <SettingsGroup id={settingAnchor(diagnosticsSection(agent.id))}
     label={<span className="diagnostics-bot"><AgentAvatar agent={agent}/>{agent.name}{total > 0 && <StatusBadge tone="warning">{`${total} 条没回`}</StatusBadge>}</span>}>
     <SettingsRow title="连接" description={connection.detail} trailing={badge(connection.status, connection.tone)}/>
-    <SettingsRow title="飞书设置" description={read?.problem && !read.status ? read.problem : undefined}
-      trailing={<span className="setup-step-trailing">{setupBadge(agent, read)}<Button size="sm" onClick={onOpenSetup}>打开清单</Button></span>}/>
+    <SettingsRow title="飞书设置" description={read?.problem && !read.status ? read.problem
+      : setup.warnings.length ? <ul className="diagnostics-scopes">{setup.warnings.map(text => <li key={text}>{text}</li>)}</ul> : undefined}
+      trailing={<span className="setup-step-trailing">{setup.badge}<Button size="sm" onClick={onOpenSetup}>打开清单</Button></span>}/>
     <SettingsRow title="缺的权限" description={scopes.lines.length ? <ul className="diagnostics-scopes">{scopes.lines}</ul> : undefined}
       trailing={<span className="setup-step-trailing">{scopes.badge}{grantUrl && scopes.lines.length > 0 && <Button size="sm"
         onClick={() => void openExternalUrl(grantUrl, 'app-console', shell).catch(error => onError(error instanceof Error ? error.message : '无法打开开发者后台。'))}>一键开权限</Button>}</span>}/>

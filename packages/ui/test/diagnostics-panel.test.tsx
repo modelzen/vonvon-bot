@@ -3,7 +3,7 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import type {AdminSetupStatus, Agent, DesktopSnapshot, NotReplied, ToolState} from '@vonvon/protocol';
 import {createClient} from '../../client/src/client';
 import {ClientProvider} from '../src/client-context';
-import {DiagnosticsPanel, scopeView, shortTime} from '../src/management/DiagnosticsPanel';
+import {DiagnosticsPanel, scopeView, setupView, shortTime} from '../src/management/DiagnosticsPanel';
 import {diagnosticsSection, findEntries, searchEntries, settingAnchor} from '../src/search';
 
 const client = createClient({isOpen: () => true, onMessage: () => {}, onClose: () => {}, onError: () => {}, send: () => {}, close: async () => {}});
@@ -72,6 +72,16 @@ it('merges the console\'s missing scopes with the ones Feishu refused at runtime
   expect(renderToStaticMarkup(<>{scopeView({scopes: {grantUrl: 'x'}} as AdminSetupStatus, agent, now).badge}</>)).toContain('暂时读不到已开通的权限');
   expect(renderToStaticMarkup(<>{scopeView(undefined, agent, now, '应用凭据不对').badge}</>)).toContain('读取失败');
   expect(renderToStaticMarkup(<>{scopeView({scopes: {missingRequired: [], missingOptional: [], grantUrl: 'x'}} as AdminSetupStatus, agent, now).badge}</>)).toContain('没有缺的');
+});
+
+it('says 全部完成 with the optional events the checklist warns about, and leaves the scope warning to 缺的权限', () => {
+  const status = {appId: 'cli_diag', tenant: 'feishu', credentials: {ok: true}, eventConfigUrl: 'x', consoleUrl: 'x', cardCallback: {confirmed: true},
+    event: {state: 'ok', missingOptional: ['im.message.recalled_v1']},
+    scopes: {missingRequired: [], missingOptional: [], missingJoinScopes: ['im:chat:readonly'], grantUrl: 'x'}} as unknown as AdminSetupStatus;
+  const view = setupView(agent, {status, checking: false});
+  expect(renderToStaticMarkup(<>{view.badge}</>)).toContain('全部完成');
+  expect(view.warnings).toEqual([expect.stringContaining('没订阅「撤回消息」')]);
+  expect(setupView(agent, {problem: '应用凭据不对', checking: false}).warnings).toEqual([]);
 });
 
 it('writes today\'s time short and another day\'s with its date, and finds each bot from search', () => {
