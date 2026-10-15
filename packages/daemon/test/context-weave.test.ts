@@ -697,6 +697,24 @@ describe('fetchChatContext (a single group\'s main area)', () => {
     expect(out.ownRoots?.map((m) => m.messageId)).toEqual(['om_mine_q']);
   });
 
+  it('tells a topic reply by its root on a later page, or by a root that is the trigger (s14c)', async () => {
+    const pages = [
+      [user('om_tr', 6800, '话题里的回复', { thread_id: 'omt_h', root_id: 'om_hq', parent_id: 'om_hq' }),
+        user('om_tr2', 6700, '触发消息下的话题回复', { thread_id: 'omt_t2', root_id: 'om_trigger', parent_id: 'om_trigger' })],
+      [user('om_trigger', 6600, '触发', { thread_id: 'omt_t2' }),
+        user('om_hq', 6500, '引用了 om_x，后来被开了话题', { thread_id: 'omt_h', root_id: 'om_x', parent_id: 'om_x' }),
+        user('om_x', 6400, '被引用的')],
+    ];
+    const ch = { botIdentity: { openId: 'ou_me', name: '小码' }, rawClient: { appId: 'cli_bot', im: { v1: { message: {
+      list: async ({ params }: { params: Record<string, unknown> }) => {
+        const i = Number(params.page_token ?? 0);
+        return { code: 0, data: { items: pages[i], has_more: i + 1 < pages.length, page_token: i + 1 < pages.length ? String(i + 1) : undefined } };
+      },
+    } } } } } as unknown as LarkChannel;
+    const out = await fetchChatContext(ch, 'oc_chat', { excludeMessageId: 'om_trigger' });
+    expect(out.messages.map((m) => m.messageId)).toEqual(['om_x', 'om_hq']);
+  });
+
   it("keeps this bot's own messages for an opening, and gives a topic's first message its topic id", async () => {
     const out = await fetchChatContext(fakeChannel(items), 'oc_chat', { before: 9000, excludeMessageId: 'om_trigger', keepSelf: true });
     expect(out.messages.find((m) => m.messageId === 'om_mine')).toMatchObject({ from: 'self', text: '我的回复' });
