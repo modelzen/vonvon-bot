@@ -10,7 +10,7 @@ import { fakeService } from './server-fixture';
 
 const snapshot = {
   revision: 0, observedAt: 0, stale: false, host: { kind: 'starting' },
-  agents: [], groups: [], memberships: [], tools: [], jobs: [], diagnostics: [],
+  agents: [], groups: [], memberships: [], tools: [], jobs: [],
   application: { platform: 'unsupported', version: 'test', loginItem: false, dataPath: '' },
 } satisfies DesktopSnapshot;
 

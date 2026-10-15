@@ -44,7 +44,7 @@ import {
 import type { CollaborationView, Page } from "./collaboration-model";
 import {SettingsPanel,membershipSettingsTarget} from "./settings/SettingsPanel";
 import {DraftGuardProvider, useDraftGuard} from './settings/DraftGuard';
-import {searchEntries, settingAnchor, type Destination, type SearchEntry, type Selection} from './search';
+import {diagnosticsSection, searchEntries, settingAnchor, type Destination, type SearchEntry, type Selection} from './search';
 import {initialRoute, openMembership, routeBack, routeDetail, routeFromSearch, routeSelection, routeView, type AgentPane, type CollaborationRoute, type MembershipPane} from './collaboration-navigation';
 import {SearchDialog} from './SearchDialog';
 import {flushSync} from 'react-dom';
@@ -56,7 +56,7 @@ import {SetupChecklist} from './setup/SetupChecklist';
 import {LoginServiceRow, toggleService} from './setup/service-toggle';
 import {GrantStep, ScopeGrantRow, jobToCancel, withRegisteredAgent, type RegisterModal} from './setup/GrantStep';
 import {MachinePanel} from './management/MachinePanel';
-import {LogPanel} from './management/LogPanel';
+import {DiagnosticsPanel} from './management/DiagnosticsPanel';
 import {UpdatePanel} from './management/UpdatePanel';
 
 type Modal =
@@ -711,24 +711,8 @@ function DesktopApp() {
                     <ScopeGrantRow key={`grant-${agent.id}`} agentId={agent.id} disabled={busy || !ready} onError={message => setNotice({message, error: true})}/>
                     <SettingsRow title="刷新飞书凭据" description="重新扫码换一份凭据，保留群绑定、会话和设置。开权限用上面的「一键开权限」。"
                       trailing={<Button size="sm" disabled={busy || !ready} onClick={() => void register(agent.id)}>重新扫码</Button>}/>
-                    <SettingsRow
-                      title="飞书权限与连接"
-                      trailing={
-                        <Button
-                          size="sm"
-                          disabled={busy}
-                          onClick={async () => {
-                            await run({
-                              type: "inspectAgent",
-                              agentId: agent.id,
-                            });
-                            openPage("diagnostics");
-                          }}
-                        >
-                          检查
-                        </Button>
-                      }
-                    />
+                    <SettingsRow title="状态与诊断" description="连接、缺的权限、执行工具和最近没回的消息。"
+                      trailing={<Button size="sm" onClick={() => { openPage("diagnostics"); setSearchTarget({page: "diagnostics", section: diagnosticsSection(agent.id)}); }}>查看</Button>}/>
                   </SettingsGroup>
                   <SettingsPanel
                     key={`agent-${agent.id}`}
@@ -904,53 +888,9 @@ function DesktopApp() {
               </SettingsGroup>
             </>
           )}
-          {page === "diagnostics" && (
-            <div id={settingAnchor('诊断操作')}>
-              <SettingsGroup label="当前状态" id={settingAnchor('当前状态')}>
-                <SettingsRow
-                  title="daemon 版本"
-                  value={host.kind === "connected" ? host.version : "未知"}
-                />
-                <SettingsRow
-                  title="已注册 Bot"
-                  value={`${snapshot.agents.length} 个`}
-                />
-                <SettingsRow
-                  title="已连接飞书群"
-                  value={`${snapshot.groups.length} 个`}
-                />
-                <SettingsRow
-                  title="最近读取"
-                  value={
-                    snapshot.observedAt
-                      ? new Date(snapshot.observedAt).toLocaleTimeString()
-                      : "尚未读取"
-                  }
-                />
-                <SettingsRow
-                  title="数据目录"
-                  value={<code>{snapshot.application.dataPath}</code>}
-                />
-              </SettingsGroup>
-              <LogPanel request={client.machine}/>
-              {snapshot.diagnostics.map((diagnostic, index) => (
-                <InlineNotice
-                  key={`${diagnostic.title}-${index}`}
-                  title={diagnostic.title}
-                  tone={diagnostic.status === "ok" ? "success" : diagnostic.status === "error" ? "danger" : "warning"}
-                >
-                  {diagnostic.message}
-                  {diagnostic.eventConfigUrl && <Button size="sm" onClick={() => {if (diagnostic.eventConfigUrl) void openExternalUrl(diagnostic.eventConfigUrl, 'event-settings', shell).catch(error => setNotice({message: error instanceof Error ? error.message : '无法打开事件设置。', error: true}));}}>打开事件设置</Button>}
-                </InlineNotice>
-              ))}
-              <Button
-                disabled={busy}
-                onClick={() => void run({ type: "refresh" })}
-              >
-                重新检查
-              </Button>
-            </div>
-          )}
+          {page === "diagnostics" && <DiagnosticsPanel snapshot={snapshot} ready={ready} busy={busy} run={run}
+            onOpenSetup={() => openPage("setup")} onOpenEnvironment={() => openPage("environment")}
+            onNotice={(message, error) => setNotice({message, error})}/>}
           </>}
         </div>
       </AppShell>

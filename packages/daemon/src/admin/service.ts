@@ -348,7 +348,7 @@ export interface AdminSetupStatus {
    * missingJoinScopes 是加入现有群要的 scope（同样三态）：缺了只提醒——拉进群不会提醒绑定，查找已加入的群会失败。
    * grantUrl 始终给（预选全部 scope，缺啥点一次补齐）。
    */
-  scopes: { missingRequired?: string[]; missingJoinScopes?: string[]; grantUrl: string };
+  scopes: { missingRequired?: string[]; missingJoinScopes?: string[]; missingOptional?: string[]; grantUrl: string };
   /** 开发者后台「事件与回调」配置页深链（事件订阅没写 API，只能引导手动配 + 发版本）。 */
   eventConfigUrl: string;
   /** 开发者后台这个应用的首页（版本管理与发布在里面）。 */
@@ -815,6 +815,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
         scopes: {
           missingRequired: validation.ok ? validation.missingScopes : undefined,
           missingJoinScopes: validation.ok ? validation.missingJoinScopes : undefined,
+          missingOptional: validation.ok ? validation.missingOptional : undefined,
           grantUrl: buildScopeGrantUrl(app.id, app.tenant),
         },
       };

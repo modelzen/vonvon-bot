@@ -147,7 +147,7 @@ it("stops retries after handshake cleanup fails", async () => {
 it("keeps one healthy client through persistent log and watch failures, then retries one terminal failure", async () => {
   const diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
   const clients: ReturnType<typeof fixture>[] = [];
-  const snapshot = (revision: number) => ({ revision, observedAt: 1, stale: false, host: { kind: "starting" }, agents: [], groups: [], memberships: [], tools: [], jobs: [], diagnostics: [], application: { platform: "macos", version: "1", loginItem: false, dataPath: "/tmp" } });
+  const snapshot = (revision: number) => ({ revision, observedAt: 1, stale: false, host: { kind: "starting" }, agents: [], groups: [], memberships: [], tools: [], jobs: [], application: { platform: "macos", version: "1", loginItem: false, dataPath: "/tmp" } });
   harness.connect.mockImplementation(async () => {
     const next = fixture();
     next.client.watchSnapshots(() => { throw new Error("watch observer failed"); });

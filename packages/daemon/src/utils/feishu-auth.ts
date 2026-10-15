@@ -1,5 +1,5 @@
 import type { TenantBrand } from '../config/schema';
-import { JOIN_GROUP_SCOPES, REQUIRED_SCOPES } from '../config/scopes';
+import { CHAT_OPTIONAL_SCOPES, JOIN_GROUP_SCOPES, REQUIRED_SCOPES } from '../config/scopes';
 
 const ENDPOINTS: Record<TenantBrand, string> = {
   feishu: 'https://open.feishu.cn',
@@ -25,6 +25,8 @@ export interface ValidationResult {
    * doctor card surfaces them so existing users can discover + enable them.
    */
   missingJoinScopes?: string[];
+  /** {@link CHAT_OPTIONAL_SCOPES} not yet granted; same 3-state semantics. */
+  missingOptional?: string[];
 }
 
 interface TokenResp {
@@ -89,6 +91,7 @@ export async function validateAppCredentials(
     botOpenId: info?.bot?.open_id,
     missingScopes: missing(REQUIRED_SCOPES),
     missingJoinScopes: missing(JOIN_GROUP_SCOPES),
+    missingOptional: missing(CHAT_OPTIONAL_SCOPES),
   };
 }
 

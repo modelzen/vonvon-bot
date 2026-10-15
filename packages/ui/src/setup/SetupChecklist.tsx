@@ -1,4 +1,4 @@
-import {useEffect, useRef, useState, type ReactNode} from 'react';
+import {useState, type ReactNode} from 'react';
 import type {AgentId, Command, CommandResult, DesktopSnapshot} from '@vonvon/protocol';
 import {useClient, useShellCapabilities} from '../client-context';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
@@ -7,6 +7,7 @@ import {openExternalUrl} from '../url-actions';
 import {botSteps, serviceStep, toolSteps, type SetupStep, type StepAction} from '@vonvon/protocol';
 import {skipService, toggleService} from './service-toggle';
 import {useSetupStatus} from './useSetupStatus';
+import {useClaudeLoginCheck} from './useClaudeLoginCheck';
 import './setup.css';
 
 /** A step's detail, its items as code chips and its warnings; undefined when it has none, so the row stays plain. */
@@ -30,24 +31,8 @@ export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEn
   const client = useClient();
   const shell = useShellCapabilities();
   const {reads, recheck} = useSetupStatus(snapshot.agents.map(agent => agent.id));
-  // A count, not a flag: the automatic check and a click can overlap.
-  const [claudeChecks, setClaudeChecks] = useState(0);
+  const claudeLogin = useClaudeLoginCheck(snapshot.tools, message => onNotice(message, true));
   const [working, setWorking] = useState<string>();
-  const claude = snapshot.tools.find(tool => tool.tool === 'claude');
-  const askedClaude = useRef(false);
-  async function checkClaude(refresh: boolean) {
-    setClaudeChecks(count => count + 1);
-    // The daemon refreshes the snapshot's tools after this reply, so the row follows it.
-    try { await client.environment({type: 'backendLogin', id: 'claude-agent', refresh}); }
-    catch (error) { onNotice(error instanceof Error ? error.message : '暂时无法检查 Claude 登录。', true); }
-    finally { setClaudeChecks(count => count - 1); }
-  }
-  useEffect(() => {
-    // The snapshot only carries a cached login; ask once so a fresh window has an answer.
-    if (askedClaude.current || claude?.installation !== 'installed' || claude.authentication !== 'unknown') return;
-    askedClaude.current = true;
-    void checkClaude(false);
-  }, [claude?.installation, claude?.authentication]);
   async function act(action: StepAction, agentId?: AgentId) {
     const key = `${agentId ?? 'tools'}:${action.kind}`;
     setWorking(key);
@@ -61,7 +46,7 @@ export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEn
           break;
         case 'environment': onOpenEnvironment(); break;
         case 'codexLogin': await run({type: 'startCodexLogin'}); break;
-        case 'claudeLogin': await checkClaude(true); break;
+        case 'claudeLogin': await claudeLogin.check(true); break;
         // Installing from the web page drops the connection for a few seconds; the snapshot shows the result.
         case 'serviceInstall': onNotice(await toggleService(true, client, shell), false); break;
         case 'serviceSkip': onNotice(await skipService(client), false); break;
@@ -80,11 +65,11 @@ export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEn
       trailing={<span className="setup-step-trailing">
         <StatusBadge tone={step.tone} variant="pill">{step.status}</StatusBadge>
         {step.actions.map(action => <Button key={action.kind + action.label} size="sm" variant={action.kind === 'serviceInstall' && action.primary ? 'primary' : undefined}
-          loading={working === `${agentId ?? 'tools'}:${action.kind}` || (action.kind === 'claudeLogin' && claudeChecks > 0)}
+          loading={working === `${agentId ?? 'tools'}:${action.kind}` || (action.kind === 'claudeLogin' && claudeLogin.checking)}
           disabled={busy || !ready} onClick={() => void act(action, agentId)}>{action.label}</Button>)}
       </span>}/>;
   }
-  const tools = toolSteps(snapshot.tools);
+  const tools = toolSteps(snapshot.tools, {claudeChecking: claudeLogin.checking});
   return <div className="page-stack setup-checklist">
     <p className="collaboration-footnote">每一步都会自动检测，做完会变成绿色。飞书那边的设置改完后，几秒内这里会跟着变。</p>
     <SettingsGroup label="执行工具" footer="Codex 或 Claude 至少需要一个可用。"

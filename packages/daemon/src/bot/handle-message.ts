@@ -22,6 +22,11 @@ import type {
   ReactionEvent,
 } from '@larksuiteoapi/node-sdk';
 import { DEFAULT_BACKEND_ID, backendIds, createBackend, isBackendEntryInstalled } from '../agent';
+import { BackendNotInstalledError } from '../agent/backend-loader';
+import { errorKindFromText, type AgentErrorKind } from '../agent/error-kind';
+import { scopeDenial } from '../utils/feishu-error';
+import type { NotReplied, NotRepliedReason } from '@vonvon/protocol';
+import { deniedScopeName, errorDetail, reportNotReplied, reportScopeDenied } from './diagnostics';
 import { catalogById, projectCreatableBackends, visibleCatalog } from '../agent/catalog';
 import {
   DEFAULT_PERMISSION_MODE,
@@ -468,6 +473,39 @@ export function settleOrdinaryTurnRender(
     // finalize() is a no-op for explicit done/error terminals.
     render.finalize();
   }
+}
+
+/** A turn that started but did not answer: the error it threw, or the run state it ended in. */
+interface TurnFailure { error?: unknown; rs?: RunState; procDead?: boolean }
+/** The message a not-replied record is about. */
+type NotedMessage = Pick<NormalizedMessage, 'chatId' | 'messageId' | 'senderId' | 'createTime' | 'threadId'>;
+
+const REASON_BY_ERROR_KIND = {
+  auth: 'signed-out', version: 'codex-too-old', quota: 'quota', network: 'network',
+} as const satisfies Record<AgentErrorKind, NotRepliedReason>;
+
+/** Why a turn that started did not answer, for the 状态与诊断 page (s19): a scope Feishu refused, a missing
+ * backend, the watchdog, the error's kind, a dead process, else the error's first line. */
+export function failureReason(failure: TurnFailure): { reason: NotRepliedReason; detail?: string; scope?: string } {
+  const denial = failure.error === undefined ? undefined : scopeDenial(failure.error);
+  if (denial) {
+    const scope = deniedScopeName(denial.accepted);
+    return scope ? { reason: 'missing-scope', detail: scope, scope } : { reason: 'missing-scope' };
+  }
+  if (failure.error instanceof BackendNotInstalledError) return { reason: 'tool-missing' };
+  if (failure.rs?.terminal === 'idle_timeout') return { reason: 'idle-timeout' };
+  const message = failure.error === undefined ? failure.rs?.errorMsg : errorDetail(failure.error);
+  const kind = failure.rs?.errorKind ?? (message ? errorKindFromText(message) : undefined);
+  if (kind) return { reason: REASON_BY_ERROR_KIND[kind] };
+  if (failure.procDead) return { reason: 'agent-exited' };
+  const detail = message ? errorDetail(message) : undefined;
+  return detail ? { reason: 'failed', detail } : { reason: 'failed' };
+}
+
+function backendTool(id: string | undefined): NotReplied['backend'] {
+  if (id === 'claude-agent') return 'claude';
+  if (id === 'codex-appserver') return 'codex';
+  return undefined;
 }
 
 /** Failure feedback includes unprocessed follow-ups; they must never disappear
@@ -1241,6 +1279,26 @@ export function createOrchestrator(
     };
   }
 
+  /** A message to this bot that got no answer, for the 状态与诊断 page (s19). The sender only from the
+   * name cache, never looked up; no text. Rule mode's messages not meant for it are never noted, nor a
+   * recalled one whose turn failed after the recall (s15). */
+  function noteNotReplied(msg: NotedMessage, reason: NotRepliedReason,
+    extra: { place?: NotReplied['place']; backendId?: string | undefined; detail?: string | undefined } = {}): void {
+    if (recalled.has(msg.messageId)) return;
+    const sender = names.peek(msg.senderId)?.slice(0, 64);
+    const backend = backendTool(extra.backendId);
+    reportNotReplied({
+      at: msg.createTime || Date.now(), groupId: msg.chatId, place: extra.place ?? (msg.threadId ? 'topic' : 'main'), reason,
+      ...(sender ? { sender } : {}), ...(backend ? { backend } : {}), ...(extra.detail ? { detail: extra.detail } : {}), ref: msg.messageId.slice(-6),
+    });
+  }
+  /** A turn that started but did not answer; a refused scope also goes to the page's 缺的权限. */
+  function noteFailure(msg: NotedMessage, place: NotReplied['place'], backendId: string | undefined, failure: TurnFailure): void {
+    const { reason, detail, scope } = failureReason(failure);
+    if (scope) reportScopeDenied(scope, 'send');
+    noteNotReplied(msg, reason, { place, backendId, detail });
+  }
+
   // ── inbound messages ──────────────────────────────────────────────
   const intakeChats = new Map<string, number>();
   const pendingTopics = new Map<string, number>();
@@ -1259,11 +1317,13 @@ export function createOrchestrator(
     }
     // Feishu does not keep events in order: a recall can come before its message (s15).
     if (recalledSkip(msg)) return;
+    // No message text (3.5); the ids' last 6 characters match the 状态与诊断 page's 消息尾号.
     log.info('intake', 'recv', {
       chatType: msg.chatType,
       mentionedBot: msg.mentionedBot,
-      threadId: msg.threadId ?? null,
-      preview: msg.content.slice(0, 40),
+      threadId: msg.threadId ? msg.threadId.slice(-6) : null,
+      chat: msg.chatId.slice(-6),
+      ref: msg.messageId.slice(-6),
     });
 
     if (msg.chatType === 'p2p') {
@@ -1276,13 +1336,25 @@ export function createOrchestrator(
       await channel.send(msg.chatId, { markdown: '正在恢复历史会话，请完成后重发此消息。' }, { replyTo: msg.messageId });
       return;
     }
-    if (project?.enabled === false || projectMutations.has(msg.chatId) || resumePublications.has(msg.chatId)) return;
-    if (project && msg.threadId && isChatAllowed(cfg, msg.chatId)) noteTopicMessage(msg);
+    if (project?.enabled === false) {
+      if (msg.mentionedBot) noteNotReplied(msg, 'group-disabled');
+      return;
+    }
     // @门：没 @ 时只在「项目群 + 免@ 适用」才响应。免@默认开,但 multi 仅话题内、
     // single 整群;非项目群一律不响应非 @ 消息。
-    if (!msg.mentionedBot && !(project && shouldRespondWithoutMention(project, msg))) return;
-    if (!isChatAllowed(cfg, msg.chatId) || !isUserAllowedInProject(cfg, project, msg.senderId)) {
+    const addressed = msg.mentionedBot || Boolean(project && shouldRespondWithoutMention(project, msg));
+    if (projectMutations.has(msg.chatId)) {
+      if (addressed) noteNotReplied(msg, 'group-updating');
+      return;
+    }
+    if (project && msg.threadId && isChatAllowed(cfg, msg.chatId)) noteTopicMessage(msg);
+    if (!addressed) return;
+    let refused: NotRepliedReason | undefined;
+    if (!isChatAllowed(cfg, msg.chatId)) refused = 'chat-not-allowed';
+    else if (!isUserAllowedInProject(cfg, project, msg.senderId)) refused = 'user-not-allowed';
+    if (refused) {
       log.info('intake', 'reject', { reason: 'not_allowed', chatId: msg.chatId.slice(-6) });
+      noteNotReplied(msg, refused);
       return;
     }
 
@@ -1292,6 +1364,8 @@ export function createOrchestrator(
     if (!project) {
       log.info('intake', 'unbound-group', { chatId: msg.chatId.slice(-6), atBot: msg.mentionedBot });
       if (msg.mentionedBot) {
+        // It got only a hint, so the owner sees why on the page.
+        noteNotReplied(msg, 'unbound');
         await channel
           .send(
             msg.chatId,
@@ -2211,6 +2285,8 @@ export function createOrchestrator(
           cwd: project?.cwd ?? prior?.cwd ?? fallbackCwd,
           mode: perm.mode,
           network: perm.network,
+          // The backend resolveThread routed by: the record's, else the project's.
+          backendId: backendFor(prior?.backend ?? project?.backend).id,
           summary: stripFileTokens(summaryText ?? text).slice(0, 80) || '(本轮任务)',
           requesterOpenId: msg.senderId,
           requestedAt: msg.createTime || tIntake,
@@ -2240,6 +2316,7 @@ export function createOrchestrator(
         dropCompact(reserved);
         reaction?.done();
         log.fail('intake', err);
+        if (!goal) noteFailure(msg, flat ? 'main' : 'topic', launchOpts?.backendId ?? backendFor(project?.backend).id, { error: err });
         await channel
           .send(msg.chatId, { markdown: runFailureMessage(err, dropped, launchOpts?.sessionNotice) }, { replyTo: msg.messageId, replyInThread: !flat })
           .catch(() => undefined);
@@ -2393,7 +2470,10 @@ export function createOrchestrator(
    * Detached — onMessage must return fast (see {@link handleTurn}); a new
    * topic has a unique reply target so no same-topic reservation is needed. */
   function startTopicDirectly(msg: NormalizedMessage, text: string, project?: Project, goal?: boolean): void {
-    if (resumePublications.has(msg.chatId) || projectMutations.has(msg.chatId)) return;
+    if (resumePublications.has(msg.chatId) || projectMutations.has(msg.chatId)) {
+      noteNotReplied(msg, 'group-updating');
+      return;
+    }
     pendingTopics.set(msg.chatId, (pendingTopics.get(msg.chatId) ?? 0) + 1);
     const titleSource: SessionTitleSource = goal
       ? { text, rawContentType: 'text' }
@@ -2459,6 +2539,7 @@ export function createOrchestrator(
         // Keep the project reserved until any delayed backend process has closed.
         await threadP.then((s) => s.thread.close()).catch(error => log.fail('agent', error, { phase: 'unadopted-thread-close' }));
         log.fail('card', err, { phase: 'start-topic' });
+        if (!goal) noteFailure(msg, 'topic', be.id, { error: err });
         await channel
           .send(msg.chatId, { markdown: `❌ 启动失败：${err instanceof Error ? err.message : String(err)}` }, { replyTo: msg.messageId })
           .catch(() => undefined);
@@ -5105,6 +5186,11 @@ export function createOrchestrator(
     // Wakes a [重试] tapped while this run still wraps up the failed turn: it
     // waits, then starts a fresh run instead of joining a queue this run drops.
     let settleTurn: (() => void) | undefined;
+    // The turn running now, for a failure noted from the catch below.
+    let noted: QueuedTurn | undefined;
+    const noteTurnFailure = (turn: QueuedTurn | undefined, failure: TurnFailure): void =>
+      noteFailure({ chatId: opts.chatId, messageId: turn?.seen?.id ?? opts.replyTo, senderId: turn?.requesterOpenId ?? opts.requesterOpenId ?? '', createTime: turn?.requestedAt ?? 0 },
+        opts.flat ? 'main' : 'topic', opts.backendId, failure);
     try {
       let currentTurn: QueuedTurn = {
         input: { text: opts.firstText, images: opts.images },
@@ -5123,6 +5209,7 @@ export function createOrchestrator(
         recallsShown: opts.recallsShown,
         from: opts.from,
       };
+      noted = currentTurn;
       // Recall notes a turn of this run said; only a queued turn says the newer ones (s15).
       const said = new Set(opts.recallsShown);
       let fromQueue = false;
@@ -5186,6 +5273,7 @@ export function createOrchestrator(
           requesterOpenId: currentTurn.requesterOpenId,
           showTools: render.showTools,
           completionReminder: completionReminderView(state),
+          ...(opts.backendId ? { backend: opts.backendId } : {}),
           // 模型显示档位：footnote 本轮 model·推理强度；always 档终态卡也保留。
           ...(modelDisp !== 'off' && turnModel
             ? { model: turnModel, effort: turnEffort, modelOnTerminal: modelDisp === 'always' }
@@ -5479,6 +5567,8 @@ export function createOrchestrator(
         });
         rc.rs = segmentSnapshot();
         if (interrupted) log.info('agent', 'interrupt', { graceful: !stopper.forced(), threadId: topicThreadId ?? null });
+        // A ⏹ is not a failure; an error or the watchdog is.
+        else if (rc.rs.terminal === 'error' || rc.rs.terminal === 'idle_timeout') noteTurnFailure(currentTurn, { rs: rc.rs, procDead });
 
         // A killed turn (watchdog / forced ⏹) leaves codex mid-turn with a
         // notification stream that never terminates. Recycle the process:
@@ -5658,6 +5748,7 @@ export function createOrchestrator(
         settleTurn?.(); // moving on: whatever queued meanwhile made the retry stale
         settleTurn = undefined;
         currentTurn = state.queue.shift()!;
+        noted = currentTurn;
         fromQueue = true;
         // Per-turn ownership + one-shot override must not leak from the previous
         // requester. The queued item's timestamp preserves all waiting time for
@@ -5677,6 +5768,7 @@ export function createOrchestrator(
       if (topicThreadId && sessions.get(topicThreadId) === opts.thread) sessions.delete(topicThreadId);
       await opts.thread.close().catch(error => log.fail('agent', error, { phase: 'thread-close' }));
       log.fail('intake', err);
+      noteTurnFailure(noted, { error: err });
       await channel
         .send(opts.chatId, { markdown: runFailureMessage(err, dropped, opts.sessionNotice) }, { replyTo: opts.replyTo, replyInThread: !opts.flat })
         .catch((sendError) => log.fail('intake', sendError, { phase: 'run-failure-feedback', dropped }));
@@ -5895,6 +5987,7 @@ export function createOrchestrator(
         requesterOpenId: opts.requesterOpenId,
         showTools: render.showTools,
         goalControls: true,
+        ...(opts.backendId ? { backend: opts.backendId } : {}),
         ...(goalModelDisp !== 'off' && opts.model
           ? { model: opts.model, effort: opts.effort, modelOnTerminal: goalModelDisp === 'always' }
           : {}),

@@ -165,7 +165,7 @@ else process.exit(0);
         { type: 'setResponse', membershipId: JSON.stringify([agentId, groupId]), response: 'all' },
         { type: 'setPermission', membershipId: JSON.stringify([agentId, groupId]), administrator: 'write', member: 'qa', network: true },
         { type: 'setAgentEnabled', agentId, enabled: true }, { type: 'deleteAgent', agentId }, { type: 'cancelJob', jobId: operationId },
-        { type: 'openJobAuthorization', jobId: operationId }, { type: 'copyJobAuthorization', jobId: operationId }, { type: 'inspectAgent', agentId },
+        { type: 'openJobAuthorization', jobId: operationId }, { type: 'copyJobAuthorization', jobId: operationId },
       ],
       settings: [
         { type: 'read', scope: { kind: 'host' } },

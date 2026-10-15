@@ -152,6 +152,8 @@ export interface RunCardState {
   /** Terminal cards only. `available` renders [重试] (needs {@link cardKey});
    * `sent` replaces it with a note once someone tapped it. */
   retry?: 'available' | 'sent';
+  /** The run's backend id, so a login hint names the right command. */
+  backend?: string;
 }
 
 /**
@@ -335,7 +337,7 @@ function renderTerminal(state: RunState, rc: RunCardState): CardElement[] {
     elements.push(noteMd(`_⏱ ${idleLabel(state.idleTimeoutSeconds ?? 0)}没有输出，已自动停止_`));
   } else if (state.terminal === 'error' && state.errorMsg) {
     elements.push(noteMd(state.errorKind === 'network' ? `🌐 网络失败：${state.errorMsg}` : `⚠️ agent 失败：${state.errorMsg}`));
-    const advice = errorAdvice(state.errorKind, rc.retry === 'available' && Boolean(rc.cardKey));
+    const advice = errorAdvice(state.errorKind, rc.retry === 'available' && Boolean(rc.cardKey), rc.backend);
     if (advice) elements.push(noteMd(advice));
   } else if (state.terminal === 'done' && !answer) {
     elements.push(noteMd('_（未返回内容）_'));
@@ -366,8 +368,13 @@ export function idleLabel(seconds: number): string {
  * NEVER fires a request (the codex 401 chain stays codex's own business);
  * unclassified errors get no advice line.
  */
-function errorAdvice(kind: AgentErrorKind | undefined, canRetry: boolean): string | null {
-  if (kind === 'auth') return '🔑 凭证可能已失效：请在部署机上运行 `codex login` 重新登录后重试';
+function errorAdvice(kind: AgentErrorKind | undefined, canRetry: boolean, backend?: string): string | null {
+  if (kind === 'auth') {
+    if (backend === 'codex-appserver') return '🔑 Codex 的登录可能失效了：在运行 bot 的电脑上运行 `codex login` 重新登录，再重试。';
+    if (backend === 'claude-agent') return '🔑 Claude 的登录可能失效了：在运行 bot 的电脑上运行 `claude`，用 `/login` 重新登录，再重试。';
+    return '🔑 登录可能失效了：在运行 bot 的电脑上重新登录，再重试。';
+  }
+  if (kind === 'version') return '⬆️ Codex 版本太旧，服务端不让它用这个模型：在 Vonvon 的本机环境里更新 Codex，再重试。';
   if (kind === 'quota') return '📊 可能触达用量上限：发送 /usage 查看用量，稍后再试';
   if (kind === 'network') {
     return canRetry

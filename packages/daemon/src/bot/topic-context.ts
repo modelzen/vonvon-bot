@@ -3,6 +3,7 @@ import { loadBots } from '../config/bots';
 import { botPaths } from '../config/paths';
 import { log } from '../core/logger';
 import { scopeDenial } from '../utils/feishu-error';
+import { reportScopeDenied } from './diagnostics';
 import { fetchTopicOpener, type ContextMessage, type TopicQuote, type TopicRow, type Who } from './context-weave';
 import { withDeadline, type NameBook } from './names';
 import { readTopicsIn, type TopicPerson, type TopicRecord, type TopicRegistry, type TopicView } from './topic-registry';
@@ -147,7 +148,9 @@ export function createTopicContext(
 
   async function chatMode(chatId: string): Promise<{ topic: boolean; ttl: number }> {
     const unknown = (reason: string, failure?: unknown) => {
-      const why = scopeDenial(failure) ? { reason: 'missing-scope', scope: 'im:chat:readonly' } : { reason };
+      const denied = Boolean(scopeDenial(failure));
+      const why = denied ? { reason: 'missing-scope', scope: 'im:chat:readonly' } : { reason };
+      if (denied) reportScopeDenied('im:chat:readonly', 'chat-info');
       log.info('intake', 'chat-mode-unknown', { chatId: chatId.slice(-6), ...why });
       return { topic: false, ttl: 10 * 60_000 };
     };

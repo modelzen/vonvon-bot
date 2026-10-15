@@ -4,7 +4,7 @@ import { createDesktopFacades, type FacadeTransport } from '../src/facade.js';
 
 const snapshot = (revision: number) => ({
   revision, observedAt: 1, stale: false, host: { kind: 'starting' },
-  agents: [], groups: [], memberships: [], tools: [], jobs: [], diagnostics: [],
+  agents: [], groups: [], memberships: [], tools: [], jobs: [],
   application: { platform: 'macos', version: '1', loginItem: false, dataPath: '/tmp' },
 });
 

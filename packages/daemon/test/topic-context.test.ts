@@ -6,6 +6,7 @@ import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { log } from '../src/core/logger';
 import type { ContextMessage } from '../src/bot/context-weave';
 import { createNameBook } from '../src/bot/names';
+import { setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
 import { createTopicContext, personOf, topicQuotes, topicRows, type QuoteWindow } from '../src/bot/topic-context';
 import { createTopicRegistry, type TopicView } from '../src/bot/topic-registry';
 
@@ -73,7 +74,11 @@ describe('createTopicContext', () => {
     const denied = { code: 99991672, msg: 'Access denied. One of the following scopes is required: [im:chat:readonly]' };
     const get = vi.fn(async () => { throw Object.assign(new Error('Request failed'), { response: { status: 400, data: denied } }); });
     const ctx = ctxOn({ chat: { get } });
+    const events: DiagnosticsEvent[] = [];
+    setDiagnosticsSink(event => events.push(event));
     expect([await ctx.noMainArea('oc_123456789'), await ctx.noMainArea('oc_123456789')]).toEqual([false, false]);
+    setDiagnosticsSink(undefined);
+    expect(events).toEqual([{ kind: 'scopeDenied', denial: { scope: 'im:chat:readonly', where: 'chat-info', at: expect.any(Number) } }]);
     expect(get).toHaveBeenCalledTimes(1);
     expect(info).toHaveBeenCalledWith('intake', 'chat-mode-unknown', { chatId: '456789', reason: 'missing-scope', scope: 'im:chat:readonly' });
     vi.advanceTimersByTime(10 * 60_000 + 1);

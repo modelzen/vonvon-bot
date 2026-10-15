@@ -118,10 +118,25 @@ describe('reduce', () => {
 describe('buildRunCard — fatal error advice', () => {
   const fatal = (message: string): RunState => run([{ type: 'error', message, willRetry: false }]);
 
-  it('suggests re-login on auth-shaped errors', () => {
-    const json = JSON.stringify(buildRunCard({ rs: fatal('401 Unauthorized: token expired') }));
-    expect(json).toContain('agent 失败');
-    expect(json).toContain('codex login');
+  it('suggests re-login on auth-shaped errors, naming the run\'s backend', () => {
+    const rs = fatal('401 Unauthorized: token expired');
+    const codex = JSON.stringify(buildRunCard({ rs, backend: 'codex-appserver' }));
+    expect(codex).toContain('agent 失败');
+    expect(codex).toContain('Codex 的登录可能失效了');
+    expect(codex).toContain('codex login');
+    const claude = JSON.stringify(buildRunCard({ rs, backend: 'claude-agent' }));
+    expect(claude).toContain('Claude 的登录可能失效了');
+    expect(claude).toContain('/login');
+    expect(claude).not.toContain('codex login');
+    const unknown = JSON.stringify(buildRunCard({ rs }));
+    expect(unknown).toContain('登录可能失效了：在运行 bot 的电脑上重新登录');
+    expect(unknown).not.toContain('codex login');
+  });
+
+  it('says Codex is too old when the server wants a newer one', () => {
+    const json = JSON.stringify(buildRunCard({ rs: fatal('This model requires a newer version of Codex.'), backend: 'codex-appserver' }));
+    expect(json).toContain('Codex 版本太旧');
+    expect(json).not.toContain('登录可能失效');
   });
 
   it('points at /usage on quota-shaped errors', () => {

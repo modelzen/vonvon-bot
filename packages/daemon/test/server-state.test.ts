@@ -6,7 +6,7 @@ import { desktopSnapshotSchema } from '@vonvon/protocol';
 
 const bot: AdminBot = { appId: 'cli_test', name: 'test', tenant: 'feishu', active: true, current: true, running: true, pid: 123, startedAt: 100, completionReminder: { mode: 'failures', longTaskMinutes: 3 } };
 const project: AdminProject = { name: 'project', chatId: 'oc_test', cwd: '/tmp/project', blank: false, branch: 'main', kind: 'multi', origin: 'joined', noMention: false, mode: 'write', guestMode: 'qa', network: true, backend: 'codex-appserver', allowedUsersCount: 2, sessionCount: 3, createdAt: 1 };
-const empty = desktopSnapshotSchema.parse({ revision: 1, observedAt: 1, stale: false, host: { kind: 'connected', ownership: 'owned', version: '1' }, agents: [], memberships: [], groups: [], tools: [], jobs: [], diagnostics: [], application: { platform: 'macos', version: '1', loginItem: false, dataPath: '/tmp' } });
+const empty = desktopSnapshotSchema.parse({ revision: 1, observedAt: 1, stale: false, host: { kind: 'connected', ownership: 'owned', version: '1' }, agents: [], memberships: [], groups: [], tools: [], jobs: [], application: { platform: 'macos', version: '1', loginItem: false, dataPath: '/tmp' } });
 
 describe('lossless admin state and pinned projection', () => {
   it('retains every service field and ordered avatar budget without mutating service values', async () => {

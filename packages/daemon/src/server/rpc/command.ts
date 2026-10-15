@@ -1,4 +1,4 @@
-import { groupIdSchema, pendingGroupsSchema, type Command, type CommandResult, type Diagnostic } from '@vonvon/protocol';
+import { groupIdSchema, pendingGroupsSchema, type Command, type CommandResult } from '@vonvon/protocol';
 import type { AdminService } from '../../admin/service';
 import type { ShutdownControl } from '../../host/lifecycle';
 import type { DirectoryBrowser } from '../directory-browser';
@@ -6,7 +6,6 @@ import { RpcError, unsupported } from '../errors';
 import type { Jobs, JobPeer } from '../jobs';
 import type { RpcOutcome } from '../rpc';
 import type { SnapshotStore } from '../snapshot';
-import { diagnosis } from './admin';
 import { requireRunningAgent } from './ownership';
 
 export async function commandRpc(options: { service: AdminService; jobs: Jobs; peer: JobPeer; directory: DirectoryBrowser; snapshots: SnapshotStore; control?: ShutdownControl; port: number }, request: Command): Promise<RpcOutcome<CommandResult>> {
@@ -59,13 +58,6 @@ export async function commandRpc(options: { service: AdminService; jobs: Jobs; p
     case 'deleteAgent': {
       const result = await service.deleteBot(request.agentId);
       return result.ok ? applied : { kind: 'mutation', reply: () => ({ kind: 'refused', code: 'delete_failed', message: result.reason }) };
-    }
-    case 'inspectAgent': {
-      const result = await diagnosis(service, request.agentId);
-      const diagnostics: Diagnostic[] = result.backends.map(backend => ({ title: backend.name, message: backend.hint ?? backend.version ?? '', status: backend.ok ? 'ok' : 'warning' }));
-      if (result.event) diagnostics.push({ title: '事件订阅', message: result.event.reason ?? result.event.state, status: result.event.state === 'ok' ? 'ok' : 'warning', ...(result.eventConfigUrl ? { eventConfigUrl: result.eventConfigUrl } : {}) });
-      snapshots.diagnose(request.agentId, diagnostics);
-      return applied;
     }
     case 'restartHost': {
       if (!control) return unsupported();

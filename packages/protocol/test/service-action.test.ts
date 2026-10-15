@@ -27,7 +27,7 @@ describe("login-time service (s08)", () => {
   it("carries the service field and the skip request", () => {
     const application = { platform: "macos", version: "1", loginItem: false, dataPath: "/tmp",
       service: { state: "disabled", detail: "d", skipped: true, blocked: "translocated", action: { action: "install", phase: "running", startedAt: 1 } } };
-    const snapshot = { revision: 1, observedAt: 1, stale: false, host: { kind: "starting" }, agents: [], groups: [], memberships: [], tools: [], jobs: [], diagnostics: [], application };
+    const snapshot = { revision: 1, observedAt: 1, stale: false, host: { kind: "starting" }, agents: [], groups: [], memberships: [], tools: [], jobs: [], application };
     expect(desktopSnapshotSchema.parse(snapshot).application).toEqual(application);
     expect(desktopSnapshotSchema.parse({ ...snapshot, application: { ...application, service: undefined } }).application.service).toBeUndefined();
     expect(machineRequestSchema.parse({ type: "setServiceSkipped", skipped: true })).toEqual({ type: "setServiceSkipped", skipped: true });
