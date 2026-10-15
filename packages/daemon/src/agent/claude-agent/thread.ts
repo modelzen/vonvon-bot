@@ -34,8 +34,8 @@ export interface ClaudeThreadConfig {
    * with process.env — callers must spread it themselves. The backend passes
    * `{ ...process.env, FEISHU_CODEX_BRIDGE: '1',
    * CLAUDE_CODE_ENTRYPOINT: 'feishu-codex-bridge' }`
-   * so inherited cli-bridge hooks recognize a bridge-owned session and don't
-   * self-forward, while Claude Code's native `/resume` picker treats a newly
+   * so cli-bridge hooks the bridge installed recognize a bridge-owned session and
+   * don't forward it, while Claude Code's native `/resume` picker treats a newly
    * created Bridge conversation like a selectable local CLI session. `cli`
    * itself cannot be used because headless Claude rewrites it to `sdk-cli`. */
   env?: Record<string, string>;

@@ -31,17 +31,17 @@ vi.mock('../src/core/logger', () => ({
 
 afterAll(() => rm(paths.appDir, { recursive: true, force: true }));
 
+// config.json as s02b left it: a stored 咖啡一下 section, kept as is and read by
+// nobody. AppConfig has had no cliBridge since s02c5, so the fixture is plain
+// JSON, the way loadConfig hands it over.
+const STORED = JSON.stringify({
+  accounts: { app: { id: 'cli_fixture', secret: 'secret', tenant: 'feishu' } },
+  preferences: { access: { ownerOpenId: 'ou_owner' }, cliBridge: { enabled: true, notifyScope: 'bound_projects' } },
+});
+
 function cfg(): AppConfig {
-  const result: AppConfig = {
-    accounts: { app: { id: 'cli_fixture', secret: 'secret', tenant: 'feishu' } },
-    preferences: {
-      access: { ownerOpenId: 'ou_owner' },
-      // A stored 咖啡一下 section from before s02b: kept as is, read by nobody.
-      cliBridge: { enabled: true, notifyScope: 'bound_projects' },
-    },
-  };
-  fixtureStore.config = structuredClone(result);
-  return result;
+  fixtureStore.config = JSON.parse(STORED);
+  return JSON.parse(STORED) as AppConfig;
 }
 
 function channel() {
@@ -105,7 +105,7 @@ describe('s02b: 咖啡一下 is gone', () => {
     expect(card).toContain('全局设置');
     expect(card).not.toContain('dm.coffee.settings');
     expect(saveConfig).not.toHaveBeenCalled();
-    expect(appCfg.preferences?.cliBridge).toEqual({ enabled: true, notifyScope: 'bound_projects' });
+    expect(JSON.stringify(appCfg)).toBe(STORED);
   });
 
   it('ignores a tap from someone who is not an admin', async () => {
@@ -115,8 +115,11 @@ describe('s02b: 咖啡一下 is gone', () => {
     expect(createdCards).toHaveLength(0);
   });
 
-  it('the bot starts and stops when the stored 咖啡一下 setting says enabled', async () => {
-    const bridge = await startBridge({ cfg: cfg(), appSecret: 'secret', fallbackCwd: '/repo' });
+  it('the bot starts and stops when the stored 咖啡一下 setting says enabled, and leaves it alone', async () => {
+    const appCfg = cfg();
+    const bridge = await startBridge({ cfg: appCfg, appSecret: 'secret', fallbackCwd: '/repo' });
     await expect(bridge.shutdown()).resolves.toBeUndefined();
+    expect(saveConfig).not.toHaveBeenCalled();
+    expect(JSON.stringify(appCfg)).toBe(STORED);
   });
 });
