@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, type ExecFileException } from 'node:child_process';
 import { stat } from 'node:fs/promises';
 import { userInfo } from 'node:os';
 
@@ -15,21 +15,26 @@ export type SessionDependencies = {
 
 const firstLine = (text: string): string => text.trim().split('\n')[0]?.trim() ?? '';
 
-/** Never a shell; a failure is described without the command line, and a timeout kills the child. */
+/** A failure without the command line: the timeout, a missing file, the first stderr line or the exit code. */
+function failureReason(file: string, timeoutMs: number, error: ExecFileException, stderr: string): string {
+  if (error.killed) return `${file} 在 ${timeoutMs / 1000} 秒内没有回应`;
+  if (error.code === 'ENOENT') return `找不到 ${file}`;
+  const line = firstLine(stderr);
+  if (line) return line;
+  return typeof error.code === 'number' ? `${file} 退出码 ${error.code}` : `${file} 没有运行成功`;
+}
+
+/** Never a shell; a timeout kills the child. */
 export function runCommand(file: string, args: string[], timeoutMs: number): Promise<CommandResult> {
   return new Promise(resolve => {
     execFile(file, args, { timeout: timeoutMs, killSignal: 'SIGKILL', encoding: 'utf8' }, (error, stdout, stderr) => {
-      if (!error) { resolve({ ok: true, stdout }); return; }
-      const code = (error as NodeJS.ErrnoException).code;
-      const reason = error.killed ? `${file} 在 ${timeoutMs / 1000} 秒内没有回应`
-        : code === 'ENOENT' ? `找不到 ${file}`
-        : firstLine(stderr) || (typeof code === 'number' ? `${file} 退出码 ${code}` : `${file} 没有运行成功`);
-      resolve({ ok: false, stdout, reason });
+      if (error) resolve({ ok: false, stdout, reason: failureReason(file, timeoutMs, error, stderr) });
+      else resolve({ ok: true, stdout });
     });
   });
 }
 
-export const sessionDefaults = (): SessionDependencies => ({
+const sessionDefaults = (): SessionDependencies => ({
   run: runCommand,
   exists: path => stat(path).then(() => true, () => false),
   uid: process.getuid?.() ?? -1,
@@ -58,7 +63,7 @@ export async function enableLinger(d: SessionDependencies = sessionDefaults()): 
 }
 
 const sudoLinger = (user: string): string => `sudo loginctl enable-linger ${user}`;
-export const lingerOffHint = (user: string): string => `要开就运行 loginctl enable-linger（不行再用 ${sudoLinger(user)}）。`;
+const lingerOffHint = (user: string): string => `要开就运行 loginctl enable-linger（不行再用 ${sudoLinger(user)}）。`;
 export const enableFailed = (detail: string, user: string): string => `没开成：${detail}。用管理员权限运行：${sudoLinger(user)}`;
 
 /** The linger line of `service status` and of an install that leaves it alone. */

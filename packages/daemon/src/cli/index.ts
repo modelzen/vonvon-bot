@@ -4,6 +4,7 @@ import { bridgeVersion } from '../core/version';
 import { paths } from '../config/paths';
 import { enterDataAccess, type DataLease } from '../config/data-access';
 import { observeShutdown, type ShutdownControl } from '../host/lifecycle';
+import type { LingerChoice } from './commands/service';
 
 const program = new Command().name('vonvon').description('Vonvon Bot daemon').version(bridgeVersion());
 let lease: DataLease | undefined;
@@ -59,7 +60,9 @@ service.command('install').description('Install and start the OS service; a runn
   .option('--no-linger', 'Linux：linger 没开也不开，只打印命令')
   .action(async (options: { port?: number; keepRunning: boolean; linger?: boolean }) => {
     if (options.port !== undefined && (!Number.isInteger(options.port) || options.port < 1 || options.port > 65535)) throw new Error('Invalid port.');
-    const linger = options.linger === undefined ? 'ask' : options.linger ? 'on' : 'off';
+    let linger: LingerChoice = 'ask';
+    if (options.linger === true) linger = 'on';
+    else if (options.linger === false) linger = 'off';
     await (await import('./commands/service')).runServiceCommand('install', undefined, { ...(options.port ? { port: options.port } : {}), keepRunning: options.keepRunning, linger });
   });
 service.command('uninstall').description('Stop and remove the OS service').option(...KEEP_RUNNING).action(async (options: { keepRunning: boolean }) => {

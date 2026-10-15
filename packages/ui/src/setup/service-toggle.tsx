@@ -34,9 +34,9 @@ export async function skipService(client: ServiceClient): Promise<string> {
   return '已跳过。bot 跑在分离的 daemon 里，这样崩溃后不会自动重启。';
 }
 
+const DEVICE_TITLE: Record<DesktopSnapshot['application']['platform'], string> = {macos: '这台 Mac', linux: '这台 Linux 主机', unsupported: '这台电脑'};
 /** The 这台设备 row of the 应用与启动 page. */
-export const deviceTitle = (platform: DesktopSnapshot['application']['platform']): string =>
-  platform === 'macos' ? '这台 Mac' : platform === 'linux' ? '这台 Linux 主机' : '这台电脑';
+export const deviceTitle = (platform: DesktopSnapshot['application']['platform']): string => DEVICE_TITLE[platform];
 
 /** 登录电脑时启动 on the 应用与启动 page: macOS only (Linux uses vonvon service install), on while the service is installed. */
 export function LoginServiceRow({application, busy, onToggle}: {application: DesktopSnapshot['application']; busy: boolean; onToggle: (enabled: boolean) => void}) {

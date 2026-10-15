@@ -133,6 +133,9 @@ export const claudeSandboxSchema = z.object({
   userns: z.enum(["ok", "apparmor", "disabled", "failed", "unchecked"]), detail: z.string().optional(),
 });
 export type ClaudeSandbox = z.infer<typeof claudeSandboxSchema>;
+/** The daemon's trial `bwrap` arguments, also printed when the trial fails: user and network namespaces, the two
+ * refusals hit on JP-VPS. */
+export const BWRAP_TRIAL = ["--ro-bind", "/", "/", "--dev", "/dev", "--unshare-all", "--die-with-parent", "true"];
 export const toolStateSchema = z.object({
   tool: toolSchema, installation: z.enum(["missing", "installed", "unknown"]),
   authentication: z.enum(["signedOut", "signedIn", "notRequired", "unknown"]),

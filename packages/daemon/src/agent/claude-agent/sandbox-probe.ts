@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { access, readFile, stat } from 'node:fs/promises';
 import { delimiter, isAbsolute, join } from 'node:path';
-import type { ClaudeSandbox } from '@vonvon/protocol';
+import { BWRAP_TRIAL, type ClaudeSandbox } from '@vonvon/protocol';
 
 type Trial = { code: number | null; stderr: string; timedOut: boolean };
 export type ProbeDependencies = {
@@ -13,8 +13,6 @@ export type ProbeDependencies = {
   read: (file: string) => Promise<string | undefined>;
 };
 
-/** What Claude Code's sandbox runs: user and network namespaces, the two refusals hit on JP-VPS. */
-export const BWRAP_TRIAL = ['--ro-bind', '/', '/', '--dev', '/dev', '--unshare-all', '--die-with-parent', 'true'];
 const STDERR_LIMIT = 4096;
 // eslint-disable-next-line no-control-regex
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g;

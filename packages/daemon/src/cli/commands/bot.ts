@@ -4,6 +4,7 @@ import { botSteps, linuxSteps, serviceStep, toolSteps, type AdminSetupStatus, ty
 import { localTime, pickBot, print, printable, want, withDaemon, withoutAvatar, NO_BOT, type Daemon, type Io } from '../daemon-client';
 
 const MARK: Record<StepTone, string> = { success: '✓', warning: '!', danger: '✗', neutral: '·' };
+const messageOf = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
 function botLine(agent: Agent, groups: number): string {
   const state = !agent.enabled ? '没启用' : !agent.running ? '没运行' : '已启用';
@@ -50,7 +51,7 @@ export async function runBotStatus(wanted: string | undefined, io: Io, daemon: D
     let setup: AdminSetupStatus | undefined;
     let problem: string | undefined;
     try { setup = want('读取清单状态', await call('读取清单状态', c => c.admin({ type: 'setupStatus', agentId: agent.id }), { feishu: true }), 'setupStatus').status; }
-    catch (error) { problem = error instanceof Error ? error.message : String(error); }
+    catch (error) { problem = messageOf(error); }
     return { agent, setup, problem, tools: toolSteps(snapshot.tools), linux: snapshot.application.platform === 'linux' ? linuxSteps(snapshot.tools) : [], service: serviceStep(snapshot.application) };
   });
   const bot = botSteps(agent, setup, problem);
@@ -83,6 +84,7 @@ const addDefaults = (): AddDependencies => ({
 });
 /** The QR expires after 10 minutes and the SDK then fails the job; this only bounds a daemon that never answers. */
 const REGISTRATION_WAIT = 15 * 60_000;
+const SCAN_UNKNOWN = '不知道扫码有没有完成：运行 vonvon bot list 看看。';
 
 /**
  * Follows one registration job of the web page's `registerAgent` RPC until it ends. Ctrl-C cancels the job (5 s at most),
@@ -101,13 +103,17 @@ function follow(c: VonvonClient, io: Io, d: AddDependencies, onStop: (stop: () =
     const stops: Array<() => void> = [];
     const stop = (): void => { for (const each of stops.splice(0)) each(); };
     onStop(stop);
-    const settle = (finish: () => void): void => { if (!settled) { settled = true; stop(); finish(); } };
+    const settle = (end: () => void): void => { if (!settled) { settled = true; stop(); end(); } };
     const finish = (outcome: Registration): void => settle(() => resolve(outcome));
+    const fail = (error: unknown): void => settle(() => reject(error));
     async function show(job: Job): Promise<void> {
       if (settled) return;
       if (job.phase === 'running' && !said) { said = true; io.write(`${printable(job.message)}\n`); }
       if (job.phase === 'qr') {
-        if (job.status !== status && (status = job.status) === 'domain_switched') io.write('识别到国际版租户，改用 larksuite.com。\n');
+        if (job.status !== status) {
+          status = job.status;
+          if (status === 'domain_switched') io.write('识别到国际版租户，改用 larksuite.com。\n');
+        }
         if (job.url === url) return;
         url = job.url;
         const art = await d.qr(job.url);
@@ -122,7 +128,7 @@ function follow(c: VonvonClient, io: Io, d: AddDependencies, onStop: (stop: () =
     const observe = (snapshot: DesktopSnapshot): void => {
       latest = snapshot;
       const job = jobId === undefined ? undefined : snapshot.jobs.find(each => each.id === jobId);
-      if (job) queue = queue.then(() => show(job)).catch(error => settle(() => reject(error)));
+      if (job) queue = queue.then(() => show(job)).catch(fail);
     };
     stops.push(c.watchSnapshots(observe));
     stops.push(c.onError(error => { if (error instanceof ConnectionError) finish({ kind: 'lost', shown: url !== undefined }); }));
@@ -135,11 +141,11 @@ function follow(c: VonvonClient, io: Io, d: AddDependencies, onStop: (stop: () =
     }));
     c.run({ type: 'registerAgent' }).then(result => {
       if (result.kind === 'refused') finish({ kind: 'refused', message: result.message });
-      else if (result.kind !== 'started') settle(() => reject(new Error(`daemon 回了意外的结果（${result.kind}）。`)));
+      else if (result.kind !== 'started') fail(new Error(`daemon 回了意外的结果（${result.kind}）。`));
       else { jobId = result.jobId; if (latest) observe(latest); }
     }, error => {
       if (error instanceof ConnectionError) finish({ kind: 'lost', shown: false });
-      else settle(() => reject(error));
+      else fail(error);
     });
   });
 }
@@ -154,22 +160,22 @@ export async function runBotAdd(io: Io, daemon: Daemon = withDaemon, overrides: 
   let stop = (): void => {};
   try {
     await daemon(async call => {
-      const outcome = await call('扫码注册', c => follow(c, io, d, each => { stop = each; }), { ms: REGISTRATION_WAIT, unknown: '不知道扫码有没有完成：运行 vonvon bot list 看看。' });
+      const outcome = await call('扫码注册', c => follow(c, io, d, each => { stop = each; }), { ms: REGISTRATION_WAIT, unknown: SCAN_UNKNOWN });
       switch (outcome.kind) {
         case 'interrupted': io.write('已取消扫码。\n'); d.exitCode(130); return;
         case 'failed': throw new Error(`${outcome.message}${outcome.code === 'expired_token' ? '重新运行 vonvon bot add。' : ''}`);
         case 'cancelled': throw new Error('扫码被取消了：可能在网页里又开了一次注册（同一时间只能有一个）。');
         case 'refused': throw new Error(outcome.message);
-        case 'lost': throw new Error(outcome.shown ? '不知道扫码有没有完成：运行 vonvon bot list 看看。' : '和 daemon 的连接断了，扫码已经取消。重新运行 vonvon bot add。');
+        case 'lost': throw new Error(outcome.shown ? SCAN_UNKNOWN : '和 daemon 的连接断了，扫码已经取消。重新运行 vonvon bot add。');
         case 'succeeded': break;
       }
       let agent: Agent | undefined;
       let setup: AdminSetupStatus | undefined;
       let problem: string | undefined;
       try {
-        const found = agent = (await call('读取快照', c => c.snapshot())).agents.find(each => each.id === outcome.agentId);
-        if (found) setup = want('读取清单状态', await call('读取清单状态', c => c.admin({ type: 'setupStatus', agentId: found.id }), { feishu: true }), 'setupStatus').status;
-      } catch (error) { problem = (error instanceof Error ? error.message : String(error)).replace(/[。.]\s*$/, ''); }
+        agent = (await call('读取快照', c => c.snapshot())).agents.find(each => each.id === outcome.agentId);
+        if (agent) setup = want('读取清单状态', await call('读取清单状态', c => c.admin({ type: 'setupStatus', agentId: outcome.agentId }), { feishu: true }), 'setupStatus').status;
+      } catch (error) { problem = messageOf(error).replace(/[。.]\s*$/, ''); }
       const human = [`✓ 已保存 bot：${agent ? `${agent.name}（${agent.id}）` : outcome.agentId}${agent?.enabled ? '，已启用' : ''}。`];
       if (problem !== undefined) human.push(`清单没读到：${problem}。稍后运行 vonvon bot status。`);
       else if (agent && setup) human.push('接下来在飞书开发者后台做完这几步，做完一步运行 vonvon bot status 看进度：', ...botSteps(agent, setup).flatMap(stepLines));

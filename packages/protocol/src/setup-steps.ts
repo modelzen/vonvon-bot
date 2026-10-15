@@ -1,5 +1,5 @@
 import type {AdminSetupStatus} from './admin.js';
-import type {Agent, ApplicationService, ClaudeSandbox, DesktopSnapshot, ServiceActionReason, ServiceActionReport, ToolState} from './domain.js';
+import {BWRAP_TRIAL, type Agent, type ApplicationService, type ClaudeSandbox, type DesktopSnapshot, type ServiceActionReason, type ServiceActionReport, type ToolState} from './domain.js';
 
 export type StepTone = 'success' | 'warning' | 'danger' | 'neutral';
 /** What the step's button does; the checklist component wires each kind. */
@@ -176,7 +176,7 @@ function claudeSandboxStep(sandbox: ClaudeSandbox | undefined): SetupStep {
         [`sudo sysctl -w ${setting}=${USERNS_SETTINGS[setting]}`]);
     }
     case 'failed': return step('沙箱起不来', 'warning', `bwrap 试跑失败：${sandbox.detail ?? '原因不明'}。在终端里跑一次下面这条，看完整的报错。`,
-      [`${sandbox.bwrap} --ro-bind / / --dev /dev --unshare-all --die-with-parent true`]);
+      [[sandbox.bwrap, ...BWRAP_TRIAL].join(' ')]);
     default: return step('无法确认', 'neutral');
   }
 }
@@ -219,9 +219,10 @@ export const LINGER_OFF_WARNING = '没开 linger：退出最后一个登录会�
 function linuxServiceStep(service: ApplicationService | undefined): SetupStep & {id: 'service'} {
   const step = (status: string, tone: StepTone, done: boolean, detail: string | undefined, warnings?: readonly string[]) => ({id: 'service', title: '后台服务', status, tone, done, detail, actions: [], warnings} as const);
   switch (service?.state) {
-    case 'running': return service.linger === 'off'
-      ? step('在运行', 'success', true, 'bot 跑在 systemd 用户服务里，崩溃后自动重启。', [LINGER_OFF_WARNING])
-      : step('在运行', 'success', true, `bot 跑在 systemd 用户服务里，崩溃后自动重启${service.linger === 'on' ? '；开机就启动，退出 SSH 也在线' : ''}。`);
+    case 'running': {
+      const boot = service.linger === 'on' ? '；开机就启动，退出 SSH 也在线' : '';
+      return step('在运行', 'success', true, `bot 跑在 systemd 用户服务里，崩溃后自动重启${boot}。`, service.linger === 'off' ? [LINGER_OFF_WARNING] : undefined);
+    }
     case 'not-installed': return step('没装', 'neutral', false, '在终端运行 vonvon service install，装成 systemd 用户服务，崩溃后自动重启。');
     case 'disabled': return step('没启用', 'neutral', false, '在终端运行 vonvon service install。');
     case 'detached': return step('已装 · 这次没交给后台服务', 'warning', true, '在终端运行 vonvon daemon stop，再运行 vonvon daemon start。');

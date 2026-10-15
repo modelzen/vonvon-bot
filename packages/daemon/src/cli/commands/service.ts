@@ -113,7 +113,8 @@ export async function runServiceCommand(action: 'install' | 'uninstall', adapter
     case 'uninstalled':
     case 'not-installed': {
       const linger = result.kind === 'uninstalled' ? await d.linux?.afterUninstall() : undefined;
-      process.stdout.write(`${[...lines, ...(linger ? [linger] : [])].join('\n')}\n`);
+      if (linger) lines.push(linger);
+      process.stdout.write(`${lines.join('\n')}\n`);
       return;
     }
     case 'install_refused':
@@ -155,9 +156,10 @@ export const LINGER_QUESTION = 'linger 没开：退出最后一个登录会话�
  */
 export async function afterLinuxInstall(choice: LingerChoice, d: AfterInstallDependencies): Promise<boolean> {
   const linger = await d.readLinger();
+  const enable = linger.state !== 'on'
+    && (choice === 'on' || (choice === 'ask' && linger.state === 'off' && d.interactive && await d.ask(LINGER_QUESTION)));
   let ok = true;
-  if (linger.state === 'on') d.write(`${lingerLine(linger, d.user)}\n`);
-  else if (choice === 'on' || (choice === 'ask' && linger.state === 'off' && d.interactive && await d.ask(LINGER_QUESTION))) {
+  if (enable) {
     const enabled = await d.enableLinger();
     d.write(`${enabled.ok ? '已开 linger。' : enableFailed(enabled.detail, d.user)}\n`);
     ok = enabled.ok || choice !== 'on';
@@ -184,13 +186,13 @@ function linuxServiceSteps(): LinuxServiceSteps {
       const { serviceOpenGuide } = await import('./open');
       const tty = Boolean(process.stdout.isTTY);
       return afterLinuxInstall(choice, {
-        readLinger: () => readLinger(), enableLinger: () => enableLinger(), ask, interactive: tty && Boolean(process.stdin.isTTY), user,
+        readLinger, enableLinger, ask, interactive: tty && Boolean(process.stdin.isTTY), user,
         guide: () => serviceOpenGuide(tty), write: text => { process.stdout.write(text); },
       });
     },
     // linger belongs to the account and other user services may need it, so uninstall leaves it on.
     afterUninstall: async () => (await readLinger()).state === 'on' ? 'linger 没关：这个账号上别的用户服务可能也要它。不需要的话运行 loginctl disable-linger。' : undefined,
-    hint: () => userManagerHint(),
+    hint: userManagerHint,
   };
 }
 

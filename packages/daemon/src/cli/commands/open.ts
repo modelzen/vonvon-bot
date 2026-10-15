@@ -94,11 +94,11 @@ export async function runOpen(print = false, overrides: Partial<OpenDependencies
   const d: OpenDependencies = { ...defaults(), ...overrides };
   const listen = await d.listen();
   const credential = await d.credential();
-  const url = buildOpenUrl(listen, credential);
   if (print || (d.platform === 'linux' && !d.env.DISPLAY && !d.env.WAYLAND_DISPLAY)) {
     d.write(`${guideFor(listen, credential, d.tty, d.env).join('\n')}\n`);
     return;
   }
+  const url = buildOpenUrl(listen, credential);
   const file = d.platform === 'darwin' ? 'open' : 'xdg-open';
   try { await d.launch(file, [url]); }
   catch (error) { throw new Error(`没能打开浏览器：${launchFailure(file, error)}。运行 vonvon open --print 手动打开。`); }

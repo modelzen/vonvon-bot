@@ -2,7 +2,8 @@ import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, expect, it, vi } from 'vitest';
-import { BWRAP_TRIAL, probeClaudeSandbox, runTrial, type ProbeDependencies } from '../src/agent/claude-agent/sandbox-probe';
+import { BWRAP_TRIAL } from '@vonvon/protocol';
+import { probeClaudeSandbox, runTrial, type ProbeDependencies } from '../src/agent/claude-agent/sandbox-probe';
 
 const dirs: string[] = [];
 afterAll(async () => { await Promise.all(dirs.map(dir => rm(dir, { recursive: true, force: true }))); });
