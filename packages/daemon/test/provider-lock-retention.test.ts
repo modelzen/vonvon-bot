@@ -80,9 +80,6 @@ vi.mock('@larksuiteoapi/node-sdk', async original => ({
     } } },
   }),
 }));
-vi.mock('../src/cli-bridge', () => ({
-  createCliBridgeService: () => ({ async shutdown() {}, register() {} }), shouldStartCliBridge: () => false,
-}));
 vi.mock('../src/bot/onboarding', () => ({
   ensureOnboarded: async () => {
     const { useBotDir } = await import('../src/config/paths');

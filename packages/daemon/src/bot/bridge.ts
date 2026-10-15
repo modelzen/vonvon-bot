@@ -7,26 +7,7 @@ import { createLarkChannel, Domain, type LarkChannel } from '@larksuiteoapi/node
 import type { AdminWriteOp } from '../admin/ops';
 import type { AppConfig } from '../config/schema';
 import { log } from '../core/logger';
-import { sep } from 'node:path';
 import { createOrchestrator } from './handle-message';
-import { paths } from '../config/paths';
-import { listProjects } from '../project/registry';
-import { createCliBridgeService, shouldStartCliBridge } from '../cli-bridge';
-
-/** True when `cwd` is a registered project's working dir (or a subdir of one) —
- *  drives the 'bound_projects' notify scope. Trailing slashes normalized so
- *  `/a/b` and `/a/b/` compare equal; a subdir match requires a path-separator
- *  boundary so `/a/bc` never counts as inside `/a/b`. */
-async function cwdIsBoundProject(cwd: string): Promise<boolean> {
-  if (!cwd) return false;
-  const strip = (p: string): string => p.replace(/[/\\]+$/, '');
-  const target = strip(cwd);
-  const projects = await listProjects().catch(() => []);
-  return projects.some((project) => {
-    const root = strip(project.cwd);
-    return root.length > 0 && (target === root || target.startsWith(root + sep));
-  });
-}
 
 export interface BridgeOptions {
   cfg: AppConfig;
@@ -80,16 +61,10 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     safety: { batch: { text: { delayMs: 0 } } },
   });
 
-  // Local CLI agent bridge (Claude Code / Codex hooks → owner DM). Always create
-  // the runtime object so card actions are registered even when disabled at
-  // boot; start the IPC listener only when config says it should be live.
-  const cliBridge = createCliBridgeService({
-    cfg: opts.cfg,
-    channel,
-    socketPath: paths.cliBridgeSocket,
-    isBoundProject: cwdIsBoundProject,
-  });
-  const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd, cliBridge);
+  // 咖啡一下 (the local Claude Code / Codex hook relay, D/cli-bridge) left v1 in
+  // s02b: no service and no socket, so installed hooks find no daemon and fall
+  // back to asking in the terminal.
+  const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd);
   const groupTasks = new Set<Promise<JoinedGroups | Project>>();
   let closing: Promise<void> | undefined;
   const shutdown = (): Promise<void> => {
@@ -102,8 +77,6 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
       catch (error) { errors.push(error); }
       const groups = await groupsClosing;
       for (const result of groups) if (result.status === 'rejected') errors.push(result.reason);
-      try { await cliBridge.shutdown(); }
-      catch (error) { log.fail('cli-bridge', error, { phase: 'shutdown' }); errors.push(error); }
       try { await channel.disconnect(); }
       catch (error) { log.fail('ws', error, { phase: 'disconnect' }); errors.push(error); }
       if (errors.length) throw new AggregateError(errors, 'Bridge cleanup failed');
@@ -161,9 +134,6 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
 
     await channel.connect();
     opts.onConnectionChange?.();
-    if (shouldStartCliBridge(opts.cfg)) {
-      await cliBridge.start().catch((err) => log.fail('cli-bridge', err, { phase: 'start' }));
-    }
     log.info('ws', 'connected', { appId: app.id, fallbackCwd: opts.fallbackCwd });
 
     const executeGroup = createGroupExecutor(channel);

@@ -26,18 +26,17 @@ import {
   type TitlePolicy,
 } from "@vonvon/protocol";
 import "./settings.css";
-import {useDraft, useDraftGuard} from './DraftGuard';
+import {useDraft} from './DraftGuard';
 import {settingAnchor} from '../search';
-import type {SearchReveal} from '../search';
 
 type AgentScope = { kind: "agent"; botId: AgentId };
 type ProjectScope = { kind: "project"; botId: AgentId; projectName: string };
 type PanelProps =
-  | {scope: 'agent'; target: AgentScope; reveal?: SearchReveal}
+  | {scope: 'agent'; target: AgentScope}
   | {scope: 'project'; target: ProjectScope}
-  | {scope: 'host'; target: {kind: 'host'}; category: 'coffee' | 'execution'; reveal?: SearchReveal};
+  | {scope: 'host'; target: {kind: 'host'}};
 const isAgentView = (view: SettingsView): view is AgentSettingsView =>
-  view.scope.kind === "agent" && "cliRuntime" in view;
+  view.scope.kind === "agent" && "administrators" in view;
 const isProjectView = (view: SettingsView): view is ProjectSettingsView =>
   view.scope.kind === "project" && "members" in view;
 const isSessionView = (view: SettingsView): view is SessionSettingsView =>
@@ -599,21 +598,9 @@ function ActionNotice({ message }: { message: string | undefined }) {
 function AgentPanel({
   view,
   refresh,
-  mode,
-  reveal,
-  coffeeControls,
-  onCoffeeEnabled,
-  coffeeEnabled,
-  coffeeBusy,
 }: {
   view: AgentSettingsView;
   refresh: () => Promise<void>;
-  mode: 'settings' | 'cli';
-  coffeeControls?: ReactNode;
-  coffeeEnabled?: boolean;
-  coffeeBusy?: boolean;
-  onCoffeeEnabled?: (enabled: boolean) => Promise<void>;
-  reveal?: SearchReveal;
 }) {
   const client = useClient();
   const [actionMessage, setActionMessage] = useState<string>();
@@ -637,8 +624,6 @@ function AgentPanel({
     view.commentInstructions.content.text,
     instructionBase,
   ]);
-  const [advanced, setAdvanced] = useState(false);
-  useEffect(() => {if (reveal === 'cli-advanced') setAdvanced(true);}, [reveal]);
   const [titleBackend, setTitleBackend] = useState("codex-appserver");
   const [commentBackend, setCommentBackend] = useState(
     view.sections.comments.stored.backend,
@@ -708,14 +693,12 @@ function AgentPanel({
     run = view.sections.run,
     completion = view.sections.completion,
     voice = view.voice,
-    cli = view.sections.cliBridge,
     comments = view.sections.comments,
     titles = view.sections.titles,
     paths = view.sections.paths,
     access = view.sections.access;
   return (
     <>
-      {mode === "settings" && <>
       <section className="agent-card-section" aria-labelledby="agent-card-heading">
         <h3 id="agent-card-heading">飞书任务卡片</h3>
         <div className="agent-card-cluster agent-card-display">
@@ -937,294 +920,6 @@ function AgentPanel({
           }
         />
       </SettingsGroup>
-      </>}
-      {mode === "cli" && <>
-      <SettingsGroup label="接力设置" id={settingAnchor("接力设置")}
-        footer={cards.access.kind === 'readonly' ? cards.access.message : undefined}>
-        <SettingsRow
-          title="启用咖啡一下"
-          description={
-            !view.ownerOpenId
-              ? "需要先确认 Bot 所有者。"
-              : view.cliRuntime.running
-                ? "服务运行中"
-                : "服务未运行"
-          }
-          trailing={
-            <Switch
-              label="启用咖啡一下"
-              value={coffeeEnabled ?? view.cliRuntime.enabled}
-              disabled={coffeeBusy || cards.access.kind === "readonly" || !view.ownerOpenId}
-              onChange={(enabled) =>
-                void (onCoffeeEnabled ? onCoffeeEnabled(enabled) : act({
-                  type: "act",
-                  action: {
-                    kind: "setCliBridgeEnabled",
-                    botId: view.scope.botId,
-                    enabled,
-                    revision: view.cliRuntime.revision,
-                  },
-                }))
-              }
-            />
-          }
-        />
-      </SettingsGroup>
-      {coffeeControls}
-      <Editor
-        title="通知偏好"
-        section={cli}
-        save={(draft, revision) => save("cliBridge", draft, revision)}
-        render={(draft, set, disabled, commit) => (
-          <>
-            <SettingsRow
-              title="通知范围"
-              trailing={
-                <Select
-                  label="通知范围"
-                  value={draft.notifyScope}
-                  disabled={disabled}
-                  choices={[
-                    { value: "all", label: "全部会话" },
-                    { value: "bound_projects", label: "已绑定项目" },
-                    { value: "none", label: "不通知" },
-                  ]}
-                  onChange={(value) => void commit({ notifyScope: value })}
-                />
-              }
-            />
-            <SettingsRow
-              title="转发 Claude"
-              trailing={
-                <Switch
-                  label="转发 Claude"
-                  value={draft.agents.claude}
-                  disabled={disabled}
-                  onChange={(value) =>
-                    set({
-                      ...draft,
-                      agents: { ...draft.agents, claude: value },
-                    })
-                  }
-                />
-              }
-            />
-            <SettingsRow
-              title="转发 Codex"
-              trailing={
-                <Switch
-                  label="转发 Codex"
-                  value={draft.agents.codex}
-                  disabled={disabled}
-                  onChange={(value) =>
-                    set({ ...draft, agents: { ...draft.agents, codex: value } })
-                  }
-                />
-              }
-            />
-            <SettingsRow
-              title="离开时保活"
-              description={
-                view.cliRuntime.keepAwakeSupported
-                  ? undefined
-                  : "此系统不支持保活。"
-              }
-              trailing={
-                <Switch
-                  label="离开时保活"
-                  value={draft.keepAwake.enabled}
-                  disabled={disabled || !view.cliRuntime.keepAwakeSupported}
-                  onChange={(value) =>
-                    set({ ...draft, keepAwake: { enabled: value } })
-                  }
-                />
-              }
-            />
-            <button
-              className="settings-advanced-toggle"
-              type="button"
-              onClick={() => setAdvanced(!advanced)}
-            >
-              {advanced ? "收起高级选项" : "显示高级选项"}
-            </button>
-            {advanced && (
-              <>
-                <SettingsRow
-                  title="转发权限审批"
-                  trailing={
-                    <Switch
-                      label="转发权限审批"
-                      value={draft.approval.enabled}
-                      disabled={disabled}
-                      onChange={(value) =>
-                        set({
-                          ...draft,
-                          approval: { ...draft.approval, enabled: value },
-                        })
-                      }
-                    />
-                  }
-                />
-                <SettingsRow
-                  title="审批超时（秒）"
-                  trailing={
-                    <NumberField
-                      label="审批超时"
-                      value={draft.approval.timeoutSeconds}
-                      min={1}
-                      max={86400}
-                      disabled={disabled}
-                      onChange={(value) =>
-                        set({
-                          ...draft,
-                          approval: {
-                            ...draft.approval,
-                            timeoutSeconds: value,
-                          },
-                        })
-                      }
-                    />
-                  }
-                />
-                <SettingsRow
-                  title="发送任务完成卡"
-                  trailing={
-                    <Switch
-                      label="发送任务完成卡"
-                      value={draft.taskCompletion.enabled}
-                      disabled={disabled}
-                      onChange={(value) =>
-                        set({
-                          ...draft,
-                          taskCompletion: {
-                            ...draft.taskCompletion,
-                            enabled: value,
-                          },
-                        })
-                      }
-                    />
-                  }
-                />
-                <SettingsRow
-                  title="允许从完成卡续聊"
-                  trailing={
-                    <Switch
-                      label="允许从完成卡续聊"
-                      value={draft.taskCompletion.replyEnabled}
-                      disabled={disabled}
-                      onChange={(value) =>
-                        set({
-                          ...draft,
-                          taskCompletion: {
-                            ...draft.taskCompletion,
-                            replyEnabled: value,
-                          },
-                        })
-                      }
-                    />
-                  }
-                />
-                <SettingsRow
-                  title="续聊等待（秒）"
-                  trailing={
-                    <NumberField
-                      label="续聊等待"
-                      value={draft.taskCompletion.replyTimeoutSeconds}
-                      min={1}
-                      max={86400}
-                      disabled={disabled}
-                      onChange={(value) =>
-                        set({
-                          ...draft,
-                          taskCompletion: {
-                            ...draft.taskCompletion,
-                            replyTimeoutSeconds: value,
-                          },
-                        })
-                      }
-                    />
-                  }
-                />
-                <SettingsRow
-                  title="本会话放行缓存"
-                  trailing={
-                    <Switch
-                      label="本会话放行缓存"
-                      value={draft.allowCache.enabled}
-                      disabled={disabled}
-                      onChange={(value) =>
-                        set({
-                          ...draft,
-                          allowCache: { ...draft.allowCache, enabled: value },
-                        })
-                      }
-                    />
-                  }
-                />
-                <SettingsRow
-                  title="在场检测"
-                  trailing={
-                    <Switch
-                      label="在场检测"
-                      value={draft.presence.enabled}
-                      disabled={disabled}
-                      onChange={(value) =>
-                        set({
-                          ...draft,
-                          presence: { ...draft.presence, enabled: value },
-                        })
-                      }
-                    />
-                  }
-                />
-                <SettingsRow
-                  title="在场检测平台"
-                  trailing={
-                    <Select
-                      label="在场检测平台"
-                      value={draft.presence.platform}
-                      disabled={disabled}
-                      choices={[
-                        { value: "auto", label: "自动" },
-                        { value: "macos", label: "macOS" },
-                      ]}
-                      onChange={(value) =>
-                        set({
-                          ...draft,
-                          presence: { ...draft.presence, platform: value },
-                        })
-                      }
-                    />
-                  }
-                />
-                <SettingsRow
-                  title="离开判定（秒）"
-                  trailing={
-                    <NumberField
-                      label="离开判定"
-                      value={draft.presence.idleThresholdSeconds}
-                      min={10}
-                      max={3600}
-                      disabled={disabled}
-                      onChange={(value) =>
-                        set({
-                          ...draft,
-                          presence: {
-                            ...draft.presence,
-                            idleThresholdSeconds: value,
-                          },
-                        })
-                      }
-                    />
-                  }
-                />
-              </>
-            )}
-          </>
-        )}
-      />
-      </>}
-      {mode === "settings" && <>
       <details className="agent-settings-disclosure">
         <summary><span>会话标题<small>生成简短名称</small></span></summary>
       <Catalog botId={view.scope.botId} backend={titleBackend} purpose="titles">
@@ -1599,7 +1294,6 @@ function AgentPanel({
         )}
       />
       </details>
-      </>}
       <ActionNotice message={actionMessage} />
     </>
   );
@@ -2030,101 +1724,6 @@ function SessionPanel({
     </>
   );
 }
-function CoffeeHostPanel({view, refresh, reveal}: {view: HostSettingsView; refresh: () => Promise<void>; reveal?: SearchReveal}) {
-  const client = useClient();
-  const guard = useDraftGuard();
-  const coffee = view.runtime.coffee;
-  const [recipient, setRecipient] = useState<AgentSettingsView>();
-  const [inspectedBotId, setInspectedBotId] = useState<AgentId>();
-  const editorBotId = inspectedBotId ?? coffee?.editorBotId ?? coffee?.botId;
-  const [notice, setNotice] = useState<string>();
-  const [busy, setBusy] = useState<'route' | 'codex' | 'claude' | null>(null);
-  const pending = useRef(false);
-  const recipientRequest = useRef(0);
-  const refreshRecipient = useCallback(async () => {
-    const requestId = ++recipientRequest.current;
-    const botId = editorBotId;
-    if (!botId) { setRecipient(undefined); return; }
-    const reply = await client.settings({type: 'read', scope: {kind: 'agent', botId}});
-    if (requestId !== recipientRequest.current) return;
-    if (reply.kind === 'view' && isAgentView(reply.view) && reply.view.scope.botId === botId) {
-      setRecipient(reply.view);
-      return;
-    }
-    setNotice(reply.kind === 'refused' ? reply.message : '通知 Bot 的设置暂不可用。');
-  }, [editorBotId, coffee?.revision, view]);
-  useEffect(() => { void refreshRecipient(); return () => { recipientRequest.current += 1; }; }, [refreshRecipient]);
-  async function saveRoute(next: AgentId | '') {
-    if (!coffee || pending.current) return false;
-    pending.current = true;
-    setBusy('route');
-    try {
-      const reply = await client.settings({type: 'act', action: {kind: 'setHostCliRoute', botId: next || null, revision: coffee.revision}});
-      setNotice(errorText(reply) ?? (reply.kind === 'acted' && reply.result.kind === 'saved'
-        ? reply.result.effects.map(effect => effect.detail).join(' ') || '通知目标已保存。'
-        : '无法保存通知目标。'));
-      if (reply.kind === 'acted' && reply.result.kind === 'saved') { if (next) setInspectedBotId(undefined); await refresh(); return true; }
-      return false;
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : '无法保存通知目标。');
-      return false;
-    } finally { pending.current = false; setBusy(null); }
-  }
-  async function repair(agent: 'claude' | 'codex') {
-    if (pending.current) return;
-    pending.current = true;
-    setBusy(agent);
-    try {
-      const reply = await client.settings({type: 'act', action: {kind: 'repairHostCliHooks', agents: [agent]}});
-      setNotice(errorText(reply) ?? (reply.kind === 'acted' && reply.result.kind === 'saved'
-        ? reply.result.warnings.join(' ') || `${agent === 'codex' ? 'Codex' : 'Claude'} Hook 已检查并修复。`
-        : 'Hook 修复未完成。'));
-      await refresh();
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Hook 修复未完成。');
-    } finally { pending.current = false; setBusy(null); }
-  }
-  const statusLabel = {installed: '已安装', not_installed: '未安装', needs_repair: '需要修复', conflict_agent2lark: '与已有 Hook 冲突'};
-  if (!coffee) return <InlineNotice title="咖啡一下暂不可用">当前 daemon 尚不支持全局设置，请更新后重新读取。</InlineNotice>;
-  const selected = coffee.agents.find(agent => agent.botId === editorBotId);
-  const missingTarget = coffee.botId && !coffee.agents.some(agent => agent.botId === coffee.botId);
-  const targetIds = [...new Set([...coffee.targets.codex, ...coffee.targets.claude])];
-  const split = targetIds.length > 1;
-  const controls = <SettingsGroup label="通知设置" id={settingAnchor('咖啡一下')}>
-    <SettingsRow title="通知 Bot" description="通过这个 Bot 的飞书私聊接收通知。"
-      trailing={<Select label="通知 Bot" value={!coffee.targetsReadable && coffee.route === 'legacy' ? '__unknown__' : split ? '__split__' : selected?.botId ?? coffee.botId ?? ''} choices={[...(!coffee.targetsReadable && coffee.route === 'legacy' ? [{value: '__unknown__' as const, label: '无法读取通知目标'}] : []), ...(missingTarget ? [{value: coffee.botId ?? '' as const, label: '通知 Bot 已不可用'}] : []), ...(split ? [{value: '__split__' as const, label: '按工具分别设置'}] : []), {value: '' as const, label: '停止发送到飞书'}, ...coffee.agents.map(agent => ({value: agent.botId, label: agent.name}))]} onChange={next => {if (next !== '__split__' && next !== '__unknown__') guard.navigate(() => { if (coffee.route === 'none' && next) setInspectedBotId(next); else void saveRoute(next); });}} disabled={busy !== null}/>}/>
-    {split && <SettingsRow title="查看通知规则" trailing={<Select label="查看通知规则" disabled={busy !== null} value={selected?.botId ?? ''} choices={coffee.agents.filter(agent => targetIds.includes(agent.botId)).map(agent => ({value: agent.botId, label: agent.name}))} onChange={next => guard.navigate(() => setInspectedBotId(next || undefined))}/>}/>}
-    {coffee.route === 'none' && <SettingsRow title="通知状态" value="已关闭" description="可继续修改设置，开启后开始发送通知。"/>}
-    {!coffee.targetsReadable && <SettingsRow title="Hook 配置" value="无法读取通知目标" description="请检查配置文件权限后重新读取。"/>}
-  </SettingsGroup>;
-  return <>
-    <p className="settings-description">离开电脑，也能继续协作。在飞书中接收本机 Codex 和 Claude 的审批、问答与任务完成提醒。</p>
-    {selected && recipient?.scope.botId === selected.botId
-      ? <AgentPanel key={selected.botId} view={recipient} refresh={refreshRecipient} mode="cli" reveal={reveal} coffeeControls={controls} coffeeEnabled={coffee.route !== 'none' && recipient.cliRuntime.enabled} coffeeBusy={busy !== null} onCoffeeEnabled={async enabled => {
-        if (pending.current) return;
-        if (!enabled) { setInspectedBotId(selected.botId); await saveRoute(''); return; }
-        pending.current = true;
-        setBusy('route');
-        try {
-          const reply = await client.settings({type: 'act', action: {kind: 'setCliBridgeEnabled', botId: selected.botId, enabled, revision: recipient.cliRuntime.revision}});
-          const error = errorText(reply);
-          if (error || reply.kind !== 'acted' || reply.result.kind !== 'saved') { setNotice(error ?? '咖啡一下设置未保存，请重试。'); return; }
-          pending.current = false;
-          if (await saveRoute(selected.botId)) await refreshRecipient();
-        } catch (error) { setNotice(error instanceof Error ? error.message : '无法更新咖啡一下设置。'); }
-        finally { pending.current = false; setBusy(null); }
-      }}/>
-      : <><SettingsGroup label="咖啡一下"><SettingsRow title="启用咖啡一下" value={coffee.route === 'none' ? '已关闭' : !coffee.targetsReadable ? '无法读取 Hook 配置' : missingTarget ? '通知 Bot 已不可用，请选择其他 Bot' : selected ? '正在读取设置' : '请先注册 Bot'}/></SettingsGroup>{controls}</>}
-    <SettingsGroup label="本机 Hook" id={settingAnchor('本机 Hook')} footer="Hook 安装在这台设备上，由所有 Bot 共用。">
-      {(['codex', 'claude'] as const).map(agent => <SettingsRow key={agent} title={agent === 'codex' ? 'Codex Hook' : 'Claude Hook'}
-        value={statusLabel[coffee.hooks[agent].status]}
-        description={split ? `通知 Bot：${coffee.targets[agent].map(id => coffee.agents.find(item => item.botId === id)?.name ?? id).join('、') || '未设置'}` : coffee.hooks[agent].status === 'conflict_agent2lark' ? '修复会替换 agent2lark 的 Hook。' : undefined}
-        trailing={<Button size="sm" loading={busy === agent} disabled={busy !== null} onClick={() => void repair(agent)}>检查并修复</Button>}/>)}
-    </SettingsGroup>
-    {notice && <InlineNotice title="操作结果">{notice}</InlineNotice>}
-  </>;
-}
-
 export function HostPanel({
   view,
   refresh,
@@ -2321,13 +1920,11 @@ function ScopedSettingsPanel(props: PanelProps) {
     </SettingsGroup>
   );
   const content = isAgentView(view) && props.scope === 'agent' ? (
-    <AgentPanel view={view} refresh={refresh} mode="settings" reveal={props.reveal} />
+    <AgentPanel view={view} refresh={refresh} />
   ) : isProjectView(view) && props.scope === 'project' ? (
     <ProjectPanel view={view} refresh={refresh} />
   ) : isHostView(view) ? (
-    props.scope === 'host' && props.category === 'coffee'
-      ? <CoffeeHostPanel view={view} refresh={refresh} reveal={props.reveal}/>
-      : <HostPanel view={view} refresh={refresh} />
+    <HostPanel view={view} refresh={refresh} />
   ) : null;
   return (
     <>

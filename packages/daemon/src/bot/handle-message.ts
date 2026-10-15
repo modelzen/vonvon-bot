@@ -3,7 +3,7 @@ import { realpath, stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { projectRevision, projectView, type CollaborationRequest } from '../admin/collaboration';
 import { AdminWriteError } from '../admin/ops';
-import { createSettingsOwner, settingsRevision } from '../admin/settings';
+import { createSettingsOwner } from '../admin/settings';
 import type { HostSettings } from '../admin/settings-types';
 import type { AdminWriteResult } from '../admin/ops';
 import { registerVoiceConsole } from './voice-console';
@@ -67,8 +67,6 @@ import {
   COMPLETION_REMINDER_LONG_TASK_MAX_MINUTES,
   COMPLETION_REMINDER_LONG_TASK_MIN_MINUTES,
   secretKeyForApp,
-  canEnableCliBridge,
-  getCliBridgePreferences,
   type AppAccess,
   type AppConfig,
   type AppPreferences,
@@ -146,12 +144,13 @@ import {
   buildReconnectCard,
   buildForegroundRestartCard,
   buildRmConfirmCard,
-  buildCoffeeSettingsCard,
   buildCompletionReminderCustomCard,
   buildSessionTitleSettingsCard,
   buildSettingsCard,
   buildForegroundUpdateCard,
   buildWatchdogCustomCard,
+  COFFEE_RETIRED,
+  COFFEE_RETIRED_ACTIONS,
   DM,
   GS,
   parseSessionTitleFormValue,
@@ -159,10 +158,6 @@ import {
   type BackendProbeRow,
   type DoctorInfo,
 } from '../card/dm-cards';
-import { cliBridgeSettingsSection, CLI } from '../cli-bridge/cards';
-import { inspectCliBridgeHooks } from '../cli-bridge/hooks';
-import type { CliBridgeRuntimeHooks } from '../cli-bridge/service';
-export type { CliBridgeRuntimeHooks };
 import {
   sendCompletionReminderReply,
   type CompletionReminderReplyInput,
@@ -752,7 +747,6 @@ export function createOrchestrator(
   channel: LarkChannel,
   cfg: AppConfig,
   fallbackCwd: string,
-  cliBridge?: CliBridgeRuntimeHooks,
 ): Orchestrator {
   /** Lazily-constructed backends by id — one instance per backend for the whole
    * bridge (mirrors the old single-instance shape; codex stays the default). */
@@ -1065,16 +1059,6 @@ export function createOrchestrator(
     });
 
     if (msg.chatType === 'p2p') {
-      // 本地 CLI Stop 续聊：owner 在私聊里回复任务完成卡 → 把文本喂回本地 agent。
-      // 必须抢在 handleDmConsole（任意 p2p 消息都会弹菜单卡）之前；命中即不再下传。
-      if (cliBridge?.onMessage({
-        parentId: msg.replyToMessageId,
-        rootId: msg.threadId,
-        text: msg.content,
-        messageId: msg.messageId,
-      })) {
-        return;
-      }
       await handleDmConsole(channel, cfg, msg);
       return;
     }
@@ -2405,7 +2389,6 @@ export function createOrchestrator(
   void trackTask(outboundFiles.recover(channel));
   outboundFiles.register(dispatcher, async (record, openId) =>
     fileClaimMode(cfg, await getProjectByChatId(record.chatId), record, openId));
-  cliBridge?.register(dispatcher);
   const PENDING_TTL_MS = 30 * 60_000; // abandoned config cards expire after 30 min
   // Goal runs have NO total wall-clock cap (a healthy goal may legitimately run
   // for days — matching codex's native behavior). The only automatic backstop is
@@ -2890,13 +2873,7 @@ export function createOrchestrator(
     return m;
   };
 
-  // Pass { render: false } when the caller does async start/stop/repair work
-  // before refreshing the unified settings card itself.
-  function applyPref(
-    evt: CardActionEvent,
-    mut: (p: AppPreferences) => void,
-    opts?: { render?: boolean },
-  ): Promise<boolean> {
+  function applyPref(evt: CardActionEvent, mut: (p: AppPreferences) => void): Promise<boolean> {
     if (!dmAdmin(evt.operator?.openId)) return Promise.resolve(false);
     const saved = writePreferences(mut).then(
       () => true,
@@ -2905,32 +2882,15 @@ export function createOrchestrator(
         return false;
       },
     );
-    if (opts?.render !== false) {
-      void patch(evt, async () => {
-        await saved;
-        return renderSettings();
-      });
-    }
+    void patch(evt, async () => {
+      await saved;
+      return renderSettings();
+    });
     return saved;
   }
 
-  let cardCliTransitions: Promise<unknown> = Promise.resolve();
-  function setCliBridgeEnabled(evt: CardActionEvent, enabled: boolean): Promise<void> {
-    if (!dmAdmin(evt.operator?.openId)) return Promise.resolve();
-    const next = cardCliTransitions.then(async () => {
-      const result = await settings.act({ kind: 'setCliBridgeEnabled', botId: cfg.accounts.app.id, enabled, revision: settingsRevision([cfg.accounts.app.id, cfg.preferences?.cliBridge?.enabled]) });
-      if (result.kind !== 'saved') log.info('cli-bridge', 'settings-transition-failed', { result: result.kind });
-    }).catch(() => { log.info('cli-bridge', 'settings-transition-failed'); });
-    cardCliTransitions = next;
-    return next;
-  }
-
-  // 「☕ 咖啡一下」那组控件现在独立成二级卡（buildCoffeeSettingsCard），主设置卡只放入口。
-  // hook 安装状态要读 ~/.claude、~/.codex，按需缓存：只有进咖啡子卡 / 修复 hooks 才刷新，
-  // 切换通知范围等其它轴的 re-render 复用上次结果，免每次都 fs 读。
-  let cliHookStatuses: Awaited<ReturnType<typeof inspectCliBridgeHooks>> | undefined;
-  function renderSettings(): object {
-    return buildSettingsCard(cfg);
+  function renderSettings(notice?: string): object {
+    return buildSettingsCard(cfg, notice);
   }
 
   /** A submitted CardKit form locks its card id, so any result containing more
@@ -2956,23 +2916,6 @@ export function createOrchestrator(
       if (oldest !== undefined) map.delete(oldest);
     }
     map.set(messageId, value);
-  }
-
-  /** ☕ 咖啡一下 二级卡：本机离开转发那组控件（总开关 / 通知范围 / 转发后端 / 离开保活 /
-   *  hooks）独立渲染。进卡 / 修复 hooks 时刷新一次 hook 安装状态，其它轴的改动复用缓存。 */
-  async function renderCoffeeSettings(refreshHooks = false, notice?: string): Promise<object> {
-    if (refreshHooks || !cliHookStatuses) cliHookStatuses = await inspectCliBridgeHooks();
-    const cliPrefs = getCliBridgePreferences(cfg);
-    const section = cliBridgeSettingsSection({
-      enabled: cliPrefs.enabled,
-      statuses: cliHookStatuses,
-      canEnable: canEnableCliBridge(cfg),
-      notifyScope: cliPrefs.notifyScope,
-      agents: cliPrefs.agents,
-      keepAwake: cliPrefs.keepAwake.enabled,
-    });
-    if (notice) section.splice(1, 0, { tag: 'markdown', content: notice });
-    return buildCoffeeSettingsCard(section);
   }
 
   // ── 🏷️ Bridge 新会话的原生 resume 标题设置 ───────────────────────
@@ -3278,6 +3221,14 @@ export function createOrchestrator(
 
   const voiceConsole = registerVoiceConsole(dispatcher, channel, cfg, voice);
 
+  // s02b：咖啡一下第一版拿掉了。旧设置卡上的入口和咖啡子卡上的按钮不写盘，只把卡刷新成
+  // 没有咖啡一下的设置卡并说一声；已存的 cliBridge 设置留在文件里，不迁移。
+  for (const action of COFFEE_RETIRED_ACTIONS) {
+    dispatcher.on(action, ({ evt }) => {
+      if (dmAdmin(evt.operator?.openId)) patch(evt, () => renderSettings(COFFEE_RETIRED));
+    });
+  }
+
   dispatcher
     .on(DM.menu, ({ evt }) => {
       if (dmAdmin(evt.operator?.openId)) freshMenu(evt);
@@ -3375,63 +3326,6 @@ export function createOrchestrator(
         voiceConsole.leave(evt.messageId);
         await patch(evt, renderSettings);
       }
-    })
-    // ☕ 咖啡一下 二级卡：进卡时读一次 hook 安装状态（~/.claude、~/.codex）再渲染。
-    .on(DM.coffeeSettings, async ({ evt }) => {
-      if (dmAdmin(evt.operator?.openId)) await patch(evt, () => renderCoffeeSettings(true));
-    })
-    .on(CLI.toggleEnabled, async ({ evt, value }) => {
-      if (!dmAdmin(evt.operator?.openId)) return;
-      const enabled = value.v === 'on';
-      if (enabled && !canEnableCliBridge(cfg).ok) return;
-      await setCliBridgeEnabled(evt, enabled);
-      void patch(evt, () => renderCoffeeSettings());
-    })
-    .on(CLI.repairHooks, async ({ evt }) => {
-      if (!dmAdmin(evt.operator?.openId)) return;
-      const result = await settings.act({ kind: 'repairCliHooks', botId: cfg.accounts.app.id });
-      const notice = result.kind === 'saved'
-        ? result.warnings.join('；') || 'Hooks 已修复。'
-        : 'Hooks 修复未完成，请检查本机配置后重试。';
-      patch(evt, () => renderCoffeeSettings(true, notice));
-    })
-    // 这三个轴属于咖啡子卡：applyPref 落盘但不渲染（{render:false}），改由我们 patch 回
-    // 咖啡子卡（renderSettings 现在只渲主卡入口，会把用户踢出子卡）。
-    .on(CLI.setNotifyScope, ({ evt, value }) => {
-      if (!dmAdmin(evt.operator?.openId)) return;
-      const scope = value.v === 'bound_projects' || value.v === 'none' ? value.v : 'all';
-      const saved = applyPref(evt, (p) => {
-        p.cliBridge = { ...(p.cliBridge ?? {}), notifyScope: scope };
-      }, { render: false });
-      void patch(evt, async () => {
-        await saved;
-        return renderCoffeeSettings();
-      });
-    })
-    .on(CLI.toggleAgent, ({ evt, value }) => {
-      if (!dmAdmin(evt.operator?.openId)) return;
-      const agent = value.agent === 'codex' ? 'codex' : 'claude';
-      const on = value.v === 'on';
-      const saved = applyPref(evt, (p) => {
-        const cur = p.cliBridge ?? {};
-        p.cliBridge = { ...cur, agents: { ...(cur.agents ?? {}), [agent]: on } };
-      }, { render: false });
-      void patch(evt, async () => {
-        await saved;
-        return renderCoffeeSettings();
-      });
-    })
-    .on(CLI.toggleKeepAwake, ({ evt, value }) => {
-      if (!dmAdmin(evt.operator?.openId)) return;
-      const on = value.v === 'on';
-      const saved = applyPref(evt, (p) => {
-        const cur = p.cliBridge ?? {};
-        p.cliBridge = { ...cur, keepAwake: { ...(cur.keepAwake ?? {}), enabled: on } };
-      }, { render: false });
-      void patch(evt, async () => {
-        await saved;
-        return renderCoffeeSettings();
-      });
     })
     .on(DM.doctor, async ({ evt }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
@@ -6151,9 +6045,7 @@ export function createOrchestrator(
   // 首次真实调用会自动重试，fallback 绝不被钉死（listModels 包装层也不缓存）。
   void trackTask(backend.listModels().catch((err) => log.fail('agent', err, { phase: 'models-prewarm' })));
 
-  const settings = createSettingsOwner({ cfg, backendFor, evictLiveSessionsForChat, writePreferences, voiceAction: voice.action, refreshCompletionReminders: refreshCompletionReminderCards,
-    cliBridge: cliBridge?.start && cliBridge.shutdown ? { start: cliBridge.start, shutdown: cliBridge.shutdown, isRunning: cliBridge.isRunning } : undefined,
-  });
+  const settings = createSettingsOwner({ cfg, backendFor, evictLiveSessionsForChat, writePreferences, voiceAction: voice.action, refreshCompletionReminders: refreshCompletionReminderCards });
   const executeAdminWrite = createAdminWriteExecutor({ cfg, backendFor, evictLiveSessionsForChat, writePreferences, voiceAction: voice.action, settings });
   const adminExecute = async (op: AdminWriteOp): Promise<AdminWriteResult> => {
     const result = await executeAdminWrite(op);

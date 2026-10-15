@@ -4,7 +4,7 @@ import type {CollaborationView, Page} from './collaboration-model';
 
 export type Selection = {kind: 'overview'} | {kind: 'agent'; id: AgentId} | {kind: 'group'; id: GroupId} | {kind: 'membership'; id: MembershipId};
 export type DetailPane = {kind: 'overview'} | {kind: 'agent-settings'} | {kind: 'membership-settings'};
-export type SearchReveal = 'cli-advanced' | 'machine-advanced' | 'codex-tool' | 'claude-tool' | 'lark-tool' | 'profile-manager' | 'profile-add' | 'profile-create';
+export type SearchReveal = 'machine-advanced' | 'codex-tool' | 'claude-tool' | 'lark-tool' | 'profile-manager' | 'profile-add' | 'profile-create';
 export type Destination = {page: Page; view?: CollaborationView; selection?: Selection; detail?: DetailPane; section?: string; field?: string; reveal?: SearchReveal; guide?: string};
 export type SearchEntry = {id: string; title: string; context: string; aliases: readonly string[]; destination: Destination; kind: 'page' | 'setting' | 'action' | 'item'};
 export const settingAnchor = (title: string) => `setting-${encodeURIComponent(title)}`;
@@ -37,12 +37,7 @@ const membershipGroups: readonly Group[] = [
   {title: '响应成员', fields: [item('添加成员 Open ID'), item('移除成员', [], {field: '', guide: '在响应成员列表中找到要移除的成员。'}), item('允许所有成员', ['清空白名单'], {guide: '设置了成员白名单后，会显示「清空白名单」。'})]},
   {title: '话题模型', fields: [item('选择话题'), item('话题身份', [], {field: '选择话题', guide: '选择话题后可以查看身份。'}), item('本话题模型', [], {field: '选择话题', guide: '先选择话题，再设置该话题的模型。'}), item('自定义模型 ID', ['话题手填模型 ID'], {field: '选择话题', guide: '先选择话题，再在「本话题模型」里选「自定义模型 ID…」。'}), item('推理强度', ['话题推理强度'], {field: '选择话题', guide: '先选择话题并选定具体模型，再调整推理强度。'})]},
 ];
-const noBotGuide = '没有 Bot 时，请先注册 Bot。';
 const globalGroups: readonly {page: Page; section: string; fields: readonly Target[]}[] = [
-  {page: 'coffee', section: '咖啡一下', fields: [item('通知 Bot'), item('通知状态'), item('查看通知规则'), item('Hook 配置')]},
-  {page: 'coffee', section: '本机 Hook', fields: [item('本机 Hook', [], {field: 'Codex Hook'}), item('Codex Hook', ['修复 Codex Hook']), item('Claude Hook', ['修复 Claude Hook'])]},
-  {page: 'coffee', section: '接力设置', fields: [item('接力设置', ['CLI 转发'], {field: '启用咖啡一下', guide: noBotGuide}), item('启用咖啡一下', [], {guide: noBotGuide})]},
-  {page: 'coffee', section: '通知偏好', fields: [item('通知偏好', ['CLI 通知设置'], {field: '通知范围', guide: noBotGuide}), ...['通知范围', '转发 Claude', '转发 Codex', '离开时保活'].map(title => item(title, [], {guide: noBotGuide})), ...['转发权限审批', '审批超时（秒）', '发送任务完成卡', '允许从完成卡续聊', '续聊等待（秒）', '本会话放行缓存', '在场检测', '在场检测平台', '离开判定（秒）'].map(title => item(title, [], {reveal: 'cli-advanced', guide: noBotGuide}))]},
   {page: 'application', section: '启动选项', fields: [item('运行状态'), item('重启 daemon'), item('登录电脑时启动', ['开机启动'])]},
   {page: 'application', section: '命令行工具', fields: [item('vonvon', ['CLI', '修复命令行工具'])]},
   {page: 'application', section: 'daemon 运行', fields: [item('运行方式'), item('daemon 服务', ['启动 daemon', '停止 daemon']), item('临时运行 Bot', [], {guide: '仅运行指定 Bot 时显示当前临时运行状态。'})]},
@@ -73,14 +68,13 @@ export function searchEntries(snapshot: DesktopSnapshot): SearchEntry[] {
     {id: 'setup', title: '首次运行清单', aliases: ['准备执行工具', '扫码', '开权限', '一键开权限', '事件订阅', '卡片回调', '发布版本', '长连接'], page: 'setup'},
     {id: 'groups', title: '群聊', aliases: ['飞书群', '项目', '已连接飞书群'], page: 'collaboration', view: 'groups'},
     {id: 'usage', title: 'Codex 用量', aliases: ['账号', '套餐', '限额', '活动', '热力图'], page: 'usage'},
-    {id: 'coffee', title: '咖啡一下', aliases: ['Hook', '通知', '离开电脑'], page: 'coffee'},
     {id: 'environment', title: '本机环境', aliases: ['工具', '安装', '授权'], page: 'environment'},
     {id: 'application', title: '应用与启动', aliases: ['版本', '更新', '后台服务'], page: 'application'},
     {id: 'diagnostics', title: '状态与诊断', aliases: ['日志', '数据目录', '连接'], page: 'diagnostics'},
   ];
   const entries: SearchEntry[] = pages.map(page => ({id: page.id, title: page.title, context: '页面', aliases: page.aliases, destination: {page: page.page, view: page.view, selection: page.view ? {kind: 'overview'} : undefined}, kind: 'page'}));
   for (const group of globalGroups) group.fields.forEach((field, index) => entries.push({
-    id: `global-${group.page}-${group.section}-${index}`, title: field.title, context: ['本机 Hook', '接力设置', '通知偏好'].includes(group.section) ? `咖啡一下 · ${group.section}` : group.section, aliases: field.aliases ?? [], destination: {page: group.page, section: group.section, field: field.field ?? field.title, reveal: field.reveal, guide: group.page === 'coffee' && snapshot.agents.length > 0 ? undefined : field.guide}, kind: 'setting',
+    id: `global-${group.page}-${group.section}-${index}`, title: field.title, context: group.section, aliases: field.aliases ?? [], destination: {page: group.page, section: group.section, field: field.field ?? field.title, reveal: field.reveal, guide: field.guide}, kind: 'setting',
   }));
   for (const agent of snapshot.agents) {
     const base: Destination = {page: 'collaboration', view: 'agents', selection: {kind: 'agent', id: agent.id}};
@@ -110,7 +104,7 @@ export function searchEntries(snapshot: DesktopSnapshot): SearchEntry[] {
 }
 export function findEntries(entries: readonly SearchEntry[], query: string): SearchEntry[] {
   const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
-  if (!terms.length) return ['agents', 'groups', 'usage', 'coffee', 'environment', 'application', 'diagnostics'].flatMap(id => entries.find(entry => entry.id === id) ?? []);
+  if (!terms.length) return ['agents', 'groups', 'usage', 'environment', 'application', 'diagnostics'].flatMap(id => entries.find(entry => entry.id === id) ?? []);
   const rank = (entry: SearchEntry) => {
     const title = entry.title.toLocaleLowerCase();
     const needle = terms.join(' ');
