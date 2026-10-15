@@ -33,7 +33,7 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
 
 ## 2. 里程碑
 
-"怎么验收"的每一步前面写着谁来做。"Claude 先做"：Claude 在 JP-VPS 上用 lark-cli、`vonvon` 命令行和无头网页端做，默认用那边的测试 bot 和测试群，要用 Mac 上的 bot 时步骤里写明；"Codex 先查"：Codex 在 Mac 的预览版会话里做。这两种都在通知 owner 之前做完，结果写进通知。"Claude 接着做""Codex 接着查"：要用 owner 刚扫码建的 bot，或者要等 owner 注销再登录，只能排在 owner 那一步后面；owner 做完回一句，Claude 和 Codex 再做，结果写进下一条通知，预览版会话留到这些步骤做完再归档。"owner"只留要人来做的，JP-VPS 上做不了的（比如 Claude 的沙箱装好之前的只读、读写档）也退回 owner，Claude 在通知里写明。"Codex 先查""Codex 接着查"都只在合入后的预览版会话里做；PR 上的 Mac 检查按 `AGENTS.md` 另开检查会话。顺序和环境见本文第 7 节。
+"怎么验收"的每一步前面写着谁来做。"Claude 先做"：Claude 在 JP-VPS 上用 lark-cli、`vonvon` 命令行和无头网页端做，默认用那边的测试 bot 和测试群，要用 Mac 上的 bot 时步骤里写明；"Codex 先查"：Codex 在 Mac 上的预览版任务里做。这两种都在通知 owner 之前做完，结果写进通知。"Claude 接着做""Codex 接着查"：要用 owner 刚扫码建的 bot，或者要等 owner 注销再登录，只能排在 owner 那一步后面；owner 做完回一句，Claude 和 Codex 再做，结果写进下一条通知。Codex 接着查时，Claude 往 #322 贴一个新任务，只列这几步，Codex 用装好的 app 做，不重新构建和安装，除非任务写明；Mac 上处理队列的会话已经结束，就请 owner 再转发一次（`AGENTS.md`"工具和同步"）。"owner"只留要人来做的，JP-VPS 上做不了的（比如 lark-cli 的用户授权过期时的聊天步骤，本文第 7 节）也退回 owner，Claude 在通知里写明。"Codex 先查""Codex 接着查"都只在合入后的预览版任务里做；PR 上的 Mac 检查按 `AGENTS.md` 另贴检查任务。顺序和环境见本文第 7 节。
 
 ### M0 实验（e01 到 e14）
 
@@ -48,7 +48,7 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
 通知里写明：Claude 的登录要 owner 事先在终端里用 `claude` 登好。登录检测在 M2 才有，M1 的界面上还看不出 Claude 登没登录。
 
 **怎么验收：** 复验时 owner 要做的：第 1 到 3 步（打开 app、扫码建 bot、开权限和事件并发布），做完回一句；第 6 步里在飞书客户端看一眼 Codex 的运行卡。其余步骤 Claude 和 Codex 做，结果写在通知里。
-1. owner：打开预览版会话装好的 Vonvon Bot。旧的 bridge 照常用，两边是不同的飞书应用，互不影响。先别打开"咖啡一下"，它会替换 bridge 正在用的 hook。第一版拿掉了它，s02b 合入后的预览版里就没有了。
+1. owner：打开预览版任务装好的 Vonvon Bot。旧的 bridge 照常用，两边是不同的飞书应用，互不影响。先别打开"咖啡一下"，它会替换 bridge 正在用的 hook。第一版拿掉了它，s02b 合入后的预览版里就没有了。
 2. owner：Bot 页点"注册 Bot"，用手机飞书扫码，确认预填的名字是 Vonvon Bot，然后建好。建好的 Bot 默认已启用，不用再去打开。
 3. owner：建好后，注册对话框接着显示"第 2 步 · 开权限"。点"一键开权限"，在飞书开发者后台确认预选好的权限；对话框每 5 秒检测一次，开好后显示"权限已开通"。再点"去首次运行清单"，在飞书开发者后台的"事件与回调"里选长连接，加上事件 `im.message.receive_v1`、`application.bot.menu_v6`、`im.chat.member.bot.added_v1`、`im.chat.member.bot.deleted_v1` 和回调 `card.action.trigger`，创建版本并发布。Bot 设置的"连接与权限"里也有"一键开权限"；旁边的"重新扫码"只换一份凭据，不开权限。
 4. Claude 先做：在 JP-VPS 上用测试 bot 走一遍：用 lark-cli 把 bot 加进测试群，网页端出现"已加入"的提示，"查找已经加入的群"也找得到，绑好。Claude 接着做：用 lark-cli 建一个测试群，把 owner 新建的 bot 加进去（bot 的 app_id 由 Codex 从装好的 app 里读出）。Codex 接着查：Vonvon 弹出"已加入 <群名>"的通知时，点"继续绑定"，选一个文件夹。没弹出的话，在 Bot 页点"加入飞书群"，再点"查找已经加入的群"，选这个群；回复里写明通知弹没弹出。群聊页没有绑群的入口。
@@ -134,7 +134,7 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
 - Claude 的权限档（3.8）：只读、读写档下不再写到工作区以外，关网时连不上网，开网时能用 WebFetch。
 - 子 agent（3.9）：Codex 和 Claude 的子 agent 显示在运行卡的子 agent 区，每个能单独停；子 agent 都结束，这张卡才收尾。
 
-**怎么验收：** owner 要做的：第 1 步里在选项卡上选一项，第 4 步（请同事点卡），第 6 步里在飞书客户端看子 agent 区、单独停掉一个。其余步骤 Claude 和 Codex 先做完，结果写在通知里。JP-VPS 上 Claude 的沙箱装好之前（本文第 7 节），第 1 到 3 步和第 5 步也退回 owner。第 6 步不等沙箱：用一个改成完全访问的 Claude 测试群做，子 agent 不靠沙箱，e01 就是在 JP-VPS 上用完全访问档跑通两个并行子 agent 的。
+**怎么验收：** owner 要做的：第 1 步里在选项卡上选一项，第 4 步（请同事点卡），第 6 步里在飞书客户端看子 agent 区、单独停掉一个。其余步骤 Claude 和 Codex 先做完，结果写在通知里。JP-VPS 上 Claude 的沙箱 2026-10-15 能用了（本文第 7 节），第 1 到 3 步和第 5 步也在 JP-VPS 上做，不再退回 owner；还没用真 bot 的回合从头到尾验过。第 6 步不靠沙箱，可以用一个改成完全访问的 Claude 测试群做，e01 就是在 JP-VPS 上用完全访问档跑通两个并行子 agent 的。
 1. Claude 先做：在一个用 Claude、读写档的群里说"先用选项问我用哪种方案，再动手"。群里出现选项卡，用 lark-cli 读出卡片内容。owner：自己说一次，选一项后 bot 接着做。
 2. Claude 先做：再来一次，这次直接打字回答。
 3. Claude 先做：再来一次，不理它；15 分钟后卡片变成"没人回答"。
@@ -153,7 +153,7 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
 - bot 能同时在多个工作区和代码仓库里干活。
 - bot 的会话不再读写你自己 Claude 和 Codex 的自动记忆。
 
-**怎么验收：** owner 要做的：第 5 步里在卡片上点撤销。其余步骤 Claude 和 Codex 先做完，结果写在通知里。JP-VPS 上 Claude 的沙箱装好之前（本文第 7 节），第 3 步也退回 owner：Linux 上的 Codex 只能用完全访问，Claude 的只读、读写档要沙箱。
+**怎么验收：** owner 要做的：第 5 步里在卡片上点撤销。其余步骤 Claude 和 Codex 先做完，结果写在通知里。第 3 步要读写档：Linux 上的 Codex 只能用完全访问，所以用 Claude 做，Claude 的读写档要沙箱。JP-VPS 上的沙箱 2026-10-15 能用了（本文第 7 节），这一步也在 JP-VPS 上做，不再退回 owner；还没用真 bot 的回合从头到尾验过。
 1. Claude 先做：在 Bot 页给一个 bot 写几句个性，比如"说话简短，不客套"；在群里 @ 它，语气变了。
 2. Claude 先做：在某个群的详情页给这个群补一句个性，只在这个群生效。
 3. Claude 先做：把 bot 拉进一个新建的群：不弹私聊绑定卡，群里 @ 它能回。在群详情页把权限档改成读写，让它写一个文件；到 `~/.vonvon-bot/projects/<bot 名>/groups/<群名>/` 下能找到（JP-VPS 上换成它自己的 `VONVON_HOME`）。
@@ -193,7 +193,7 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
 
 **给 owner 什么：**（第 5 节）桌面端发现 `~/.feishu-codex-bridge` 就显示导入页，页上有预检表，以及"会感到的变化"和"失去"两张清单。点一下就把全部 bot 搬进来：群、话题和旧会话都在；迁来的群用规则模式，沿用原来的设置；bridge 装的咖啡一下 hook 卸掉。任何一步失败都会自动回滚，并重新启动 bridge。迁移之后，误开 bridge 会被拒。bridge 最后一版的分支和 PR 已准备好，发布时间由 owner 定。
 
-s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预检先在 Mac 检查会话里用 bridge 数据的副本和隔离的 HOME 跑，不碰 owner 在用的 bridge。
+s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预检先在 Mac 检查任务里用 bridge 数据的副本和隔离的 HOME 跑，不碰 owner 在用的 bridge。
 
 **怎么验收：** owner 要做的：第 1 到 5 步，时间由 owner 定。这五步迁的是每天在用的 bridge 和原来的群，Claude 和 Codex 都不碰；同样的导入 Codex 先在 Mac 的测试用户账号里走一遍（下面这段），结果写在通知里。
 
@@ -208,7 +208,7 @@ Codex 先用隔离的 HOME 和 bridge 数据副本走完整个导入，包括故
 
 **给 owner 什么：**（第 8 节）能出签名并公证过的 universal dmg，Intel Mac 也能装；应用里能检查更新并装上新版。npm 包和桌面包的许可证改成闭源（UNLICENSED）。在一台没有 bridge 的 Mac 上，从零安装、扫码、开权限，第一次对话走通，这是第 8 节第 5 条的 Mac 一半。s66 只在要不到 Anthropic 的书面确认时做。
 
-**怎么验收：** owner 要做的：第 1 步里新开一个干净的 macOS 用户装 dmg，第 2 步（从零扫码走清单，到第一次对话）。其余步骤 Codex 在 M11 的预览版会话里先做完，结果写在通知里。
+**怎么验收：** owner 要做的：第 1 步里新开一个干净的 macOS 用户装 dmg，第 2 步（从零扫码走清单，到第一次对话）。其余步骤 Codex 在 M11 的预览版任务里先做完，结果写在通知里。
 
 product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前办好。开始前还没定的，Claude 用【需要你决定】一次问齐。然后：
 1. Codex 先查：从下载地址下载 dmg，用 `spctl --assess --type open --context context:primary-signature` 查 dmg、`spctl --assess --type execute` 查里面的 app，再用 `xcrun stapler validate` 查两者，都通过。命令行下载的文件不带隔离标记，Gatekeeper 不会真的拦一次，所以放不放行只在 owner 这一半看。owner：在 Mac 上新开一个干净的 macOS 用户（没有 bridge），从下载地址装 dmg，Gatekeeper 直接放行。
@@ -325,7 +325,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | [x] | s11 | 空闲超时 10 分钟、重试按钮、群里都能领文件 | 看门狗默认 600 秒，加暂停接口给 s30 用；超时和网络失败分开写、带［重试］；本群能用 bot 的人都能领文件（3.12） | 360 | — | 错误路径、并发 | 无 |
 | [ ] | s12 | 自动压缩一直开，上下文仪表常驻 | 去掉"关闭自动压缩"，已存的 false 读时忽略；运行卡头部一直有仪表，压缩时写"已压缩 85% → 20%"（3.5"压缩"） | 470 | — | 数据迁移 | 无 |
 | [ ] | s13 | 话题登记表 | 每个 bot 每个群一份，记话题 id、第一条、谁开的、几点、标题、有没有会话；SessionRecord 加可选字段，旧文件不迁移（3.5"daemon 在本机记什么"）；没有用户可见变化，s14、s15、s48 要读它 | 380 | s09 | 并发、数据迁移 | 无 |
-| [ ] | s14 | 对话记录块：主区补拉、话题开场带主区、引用行 | 统一的记录块；主区按水位补拉，开场最多 20 条；话题开场带回指和主区 10 条；引用行带两边会话 id；压缩后主区下一次开口附"本群最近 5 个活跃话题"；缺 `im:message:readonly` 时只带触发消息（3.5） | 850 | s09、s13、e10 | 错误路径、并发 | 无（M3 验收前，预览版会话按 3.5 时间线第 1 到 6 步核对日志） |
+| [ ] | s14 | 对话记录块：主区补拉、话题开场带主区、引用行 | 统一的记录块；主区按水位补拉，开场最多 20 条；话题开场带回指和主区 10 条；引用行带两边会话 id；压缩后主区下一次开口附"本群最近 5 个活跃话题"；缺 `im:message:readonly` 时只带触发消息（3.5） | 850 | s09、s13、e10 | 错误路径、并发 | 无（M3 验收前，预览版任务按 3.5 时间线第 1 到 6 步核对日志） |
 | [ ] | s15 | /new、/compact 排队和撤回说明 | 加 `/new`；主区 `/new`、`/clear` 只限主人和管理员，话题里不换；`/compact` 忙时排队；订阅撤回事件，进过会话的下次开口加一行说明（3.5"命令""撤回和编辑"） | 660 | s10、s13、s14 | 并发、关闭清理、错误路径 | 无 |
 | [x] | s16 | 手填模型 id | Claude 查模型列表用和跑回合一样的设置源；`/model` 卡和默认模型能手填 id（3.11） | 350 | — | 错误路径 | 无（owner 在用 DeepSeek 或 Kimi 的话，M3 验收时顺手试一次） |
 
@@ -395,7 +395,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | [ ] | s21 | 群的智能/规则开关和运行中来了消息 | 群加智能或规则模式和"运行中来了消息"覆盖，缺省按规则读；切主区方式时回复方式不变（3.2、3.4） | 360 | — | 数据迁移 | 无 |
 | [ ] | s22 | 三条底线：点名、接着聊、bot 消息 | 入站先判断对谁说；话题里只看 @；规则模式"仅 @"下引用我的消息不算点名（3.4 第 1 条的例外）；多 bot 群主区命令要 @；从群信息读 chat_mode 认出话题群，加一个单测（3.4"三条底线"） | 550 | s21、s15、e10 | 错误路径 | 无 |
 | [ ] | s23 | 判断模型：订阅里的小模型 | 判断层三选一加原因；Codex 用常驻的 utility 进程，Claude 单轮、不带工具；出错算不回，主区被 @ 的出错算回在主区（3.4） | 550 | — | 子进程、错误路径 | 真实 Codex 用 gpt-6-luna 跑判断：结果格式对，超时按不回；合入后接着做 e12 |
-| [ ] | s25 | 智能模式的入站：判断回不回、回在哪里 | 主区底线定不下来时调一次判断；话题里只判断回不回；每群每小时上限 60 次；进群说一句；新群默认智能；"不回"的原因进诊断页；话题里只有一个真人在和我聊时不调判断、直接回（3.4"控制成本"） | 800 | s21、s22、s23、s14、s19、e12 | 并发、错误路径 | 无（M5 验收前，预览版会话按 3.4 例子第 3、4 行跑一遍） |
+| [ ] | s25 | 智能模式的入站：判断回不回、回在哪里 | 主区底线定不下来时调一次判断；话题里只判断回不回；每群每小时上限 60 次；进群说一句；新群默认智能；"不回"的原因进诊断页；话题里只有一个真人在和我聊时不调判断、直接回（3.4"控制成本"） | 800 | s21、s22、s23、s14、s19、e12 | 并发、错误路径 | 无（M5 验收前，预览版任务按 3.4 例子第 3、4 行跑一遍） |
 | [ ] | s26 | 本机几个 bot 合成一次判断，只放行一个 | supervisor 里加协调器，按 message_id 收齐本机各 bot 的报名，智能 bot 合成一次判断，"全部回复"的也只放行一个；界面提示不同电脑上的 bot 可能抢着回（3.4） | 680 | s25 | 并发、子进程、关闭清理、错误路径 | 无 |
 | [ ] | s27 | bot 之间互相 @ | 智能模式下收别的 bot @ 我的消息，只看对方最终回答；没有真人插话时最多来回 3 轮（3.4"bot 之间"） | 420 | s22、s25、e10 | 错误路径、并发 | 无 |
 | [ ] | s28 | 群详情页的模式设置和用量页的判断次数 | 群详情页加模式、主区方式、回复方式、运行中来了消息，没设的显示"继承 bot 默认"；用量页按天显示判断次数（3.1 第 7、8 条） | 480 | s21、s25 | — | 无（JP-VPS 上无头检查） |
@@ -441,7 +441,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | [ ] | s36 | bot 默认和群覆盖的数据，新群自动建目录 | bot 默认项和群覆盖进存储，生效值按 3.2 的表算；bot 默认档取读写、开网（本文第 5 节）；新群目录自动建在 `projects/<bot 名>/groups/<群名>/`（3.3） | 820 | s21 | 数据迁移 | 无 |
 | [ ] | s36b | 被拉进已有的群就绑定 | 不再私聊发绑定卡：bot 被拉进群就绑定，默认只读、关网（3.8），目录按 3.3 自动建；Linux 上用 Codex 时照常绑定，回合开始时再回说明（s20b） | 250 | s36、s20b | 错误路径、数据迁移 | 无（M7 验收时把 bot 拉进一个群看） |
 | [ ] | s37 | 会话参数统一由 profile 给，关掉两家自带的记忆 | 起会话和恢复会话都带一份 profile：指令、额外根、skill、MCP、给子进程的环境变量、原生设置；关掉 Claude 的 auto memory 和 Codex 的 memories（3.6） | 460 | e04、e05 | 子进程、错误路径 | bot 的 Codex 会话不读写 `$CODEX_HOME/memories`（Claude 一半在 JP-VPS 上看） |
-| [ ] | s38 | 个性和记忆生效 | bot 文件模块（原子写、字数上限）；按 3.6 的顺序拼指令，第一层加"不提别的群的内容"；记忆按位置组合，A 群的不进 B 群；云文档评论只带公共记忆 | 960 | s36、s37 | 错误路径 | 无（指令压不压得住仓库自己的 AGENTS.md，由预览版会话用两家各看一次） |
+| [ ] | s38 | 个性和记忆生效 | bot 文件模块（原子写、字数上限）；按 3.6 的顺序拼指令，第一层加"不提别的群的内容"；记忆按位置组合，A 群的不进 B 群；云文档评论只带公共记忆 | 960 | s36、s37 | 错误路径 | 无（指令压不压得住仓库自己的 AGENTS.md，由预览版任务用两家各看一次） |
 | [ ] | s39 | 多工作区和代码仓库交给 Codex 和 Claude | Codex 传 runtimeWorkspaceRoots 并按根配读写，失败直接报错，按 e05 抬高 s03 的最低版本；Claude 传 additionalDirectories，沙箱按档配根（3.6） | 430 | s37、s36、s03、e03、e04、e05 | 子进程、错误路径 | 真实 Codex：第二个根能写、根外被拒、仓库里 `git commit` 能不能成功；真实 Claude：额外目录能读写，只读档哪个根都写不进 |
 | [ ] | s40 | 说"记住"就写进记忆，卡片上能撤销 | agent 直接写自己那份记忆，daemon 一轮前后比对，卡片显示"已记到本群记忆：…［撤销］"；超上限回滚（3.6） | 420 | s38、s39 | 并发、错误路径 | 只读档下 agent 能写记忆文件、写不到别处（"已记到本群记忆"的卡片 Claude 用 lark-cli 读，撤销 M7 验收时 owner 点） |
 | [ ] | s41 | Bot 页：个性、规矩、智能提示词、记忆、工作区和仓库 | 编辑 SOUL.md、AGENTS.md、SMART.md（显示内置默认值）、工作区、代码仓库和公共记忆（3.1 第 6 条） | 550 | s36、s38 | — | 无（目录选择器在 M7 验收时看） |
@@ -465,7 +465,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | [ ] | s45 | skill 和 MCP 页面，bot 和群的启用名单 | 两个库页面，删除时列出还在用的 bot 和群；Bot 页的启用名单，群详情页的增减（3.6） | 550 | s43、s41、s42 | — | 无 |
 | [ ] | s46 | 会话令牌和 agent 调 vonvon 的入口 | 每条会话一个令牌，经环境变量交给 agent；host 加一个只接 POST 的路由，子进程依次校验令牌、私聊、触发人、开关（3.7） | 520 | s37、e04 | 子进程、并发、关闭清理、错误路径 | agent 调不调得到 vonvon、带不带得上令牌：Codex 只读、读写、关网各一次，Claude 沙箱一次 |
 | [ ] | s47 | vonvon settings 和 vonvon feishu 命令行框架 | 在 s07a 的命令上加：两组命令从环境变量读地址和令牌，不拿数据租约，输出 JSON；飞书组先做群列表和群成员（3.7） | 380 | s46、s07a | 错误路径 | 无 |
-| [ ] | s48 | vonvon 飞书 skill：列话题、读另一条会话、读飞书消息 | 列本群话题、按会话 id 读另一条会话、按话题或时间读消息；只放行同一个 bot、同一个群、档不高于自己的会话；卡片写"读了话题 T1、T2 的会话"（3.5"查飞书上下文"） | 950 | s47、s44、s13、e02、e11 | 子进程、错误路径 | 无（M8 验收前，预览版会话按 3.5 时间线第 7 步跑一遍） |
+| [ ] | s48 | vonvon 飞书 skill：列话题、读另一条会话、读飞书消息 | 列本群话题、按会话 id 读另一条会话、按话题或时间读消息；只放行同一个 bot、同一个群、档不高于自己的会话；卡片写"读了话题 T1、T2 的会话"（3.5"查飞书上下文"） | 950 | s47、s44、s13、e02、e11 | 子进程、错误路径 | 无（M8 验收前，预览版任务按 3.5 时间线第 7 步跑一遍） |
 
 开工要点：
 - s44：`~/.codex/AGENTS.md` 按会话关不掉（e05，4 个版本；会话层 `project_doc_max_bytes: 0` 只关项目里的那份）。按本文 4.2 第 3 条用【需要你决定】问 owner，比如接受"带上但在指令里声明 bot 的规矩优先"。`thread/start` 回包的 `instructionSources` 列出实际加载的文件，可以显示在桌面端。
@@ -489,7 +489,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | [ ] | s51b | 拿掉私聊控制台（二）：项目和权限卡 | 删新建项目、项目列表、话题、删除确认、项目设置、权限、默认模型、白名单、管理员这些私聊卡，以及被拉进群时私聊发的绑定卡（第 4 节） | 950 | s51a、s36b | — | 无 |
 | [ ] | s51c | 拿掉私聊控制台（三）：设置卡 | 删全局设置、语音、云文档评论、会话标题、看门狗和完成提醒这些私聊卡和它们的测试（第 4 节） | 950 | s51b | — | 无 |
 | [ ] | s53 | 飞书应用的所有者、管理员和开发者都能管 bot | 开了 self_manage 时读所有者和协作者名单，缓存 10 分钟；管理员判断读"飞书名单 ∪ 扫码人 ∪ 本机名单"；设置页标出来源（第 6 节） | 640 | s01 | 并发、错误路径 | 开了 self_manage 的测试 bot 在真实租户里读出所有者和协作者 |
-| [ ] | s54 | 私聊里改个性、记忆、skill 和 MCP | 设置命令改 SOUL、AGENTS、SMART、三种记忆、skill 和 MCP 名单，只限这个 bot；设置 skill 只放进私聊会话；加"聊天改设置"开关，默认开（3.7） | 700 | s47、s49、s43、s44 | 并发、错误路径 | 无（M9 验收前，预览版会话用真实 Codex 和 Claude 各让 bot 调一次设置命令） |
+| [ ] | s54 | 私聊里改个性、记忆、skill 和 MCP | 设置命令改 SOUL、AGENTS、SMART、三种记忆、skill 和 MCP 名单，只限这个 bot；设置 skill 只放进私聊会话；加"聊天改设置"开关，默认开（3.7） | 700 | s47、s49、s43、s44 | 并发、错误路径 | 无（M9 验收前，预览版任务用真实 Codex 和 Claude 各让 bot 调一次设置命令） |
 | [ ] | s55 | 私聊里改工作区、模式和权限档 | 设置命令加仓库和工作区、智能或规则模式、权限档、访客档和网络（3.7） | 300 | s54、s36 | 并发 | 无 |
 | [ ] | s56 | 改完的卡片、撤销和扩大能力的标记 | 改完在私聊发卡写改前改后；装 MCP、装含脚本的 skill、加目录、升档、开网单独标出；［撤销］只有主人和管理员能点（3.7、3.8） | 380 | s54、s55 | 并发、错误路径 | 无 |
 | [ ] | s57 | 建群和拉人 | `group create` 建群（默认完全访问）并把触发人拉进来；`group invite` 按 open_id 拉人；已有的群只回拉 bot 进群的步骤（3.7） | 260 | s54、e10 | 错误路径 | 无（M9 验收时 owner 让 bot 建群并把自己拉进去） |
@@ -510,7 +510,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | [ ] | s60 | 把 bridge 的数据换算成第一版的形状 | 一个纯函数：bot 照搬，管理员进本机名单，个人指令照旧带上；每个群变成规则模式下的覆盖，cwd 原地引用（第 5 节） | 320 | s59、s36、s21、s12 | 数据迁移 | 无 |
 | [ ] | s61 | 导入事务（上）：停 bridge、占锁、复制、回滚 | 第 5 节第 3 到 5 步：调 bridge 自己的 stop，按 bridge 的格式占锁，复制并用新密钥重新加密；任何一步失败就倒序回滚，再 start bridge | 650 | s60、e07、e08 | 子进程、并发、关闭清理、错误路径、数据迁移、macOS 原生 | 在 Mac 的测试用户账号里装 bridge 0.6.14：前半段后 plist 被删、手动 run 被拒；复制后故意失败，回滚后 bridge 重新起来 |
 | [ ] | s62 | 导入事务（下）：Codex 兜底、hook、启动、回执 | 第 5 节第 6 到 9 步：找 codex，备份后卸掉 bridge 的 hook，启动全部 bot，写迁移标记和回执；之后每次启动都占 bridge 的锁 | 450 | s61 | 子进程、并发、错误路径、macOS 原生 | 同一个测试用户账号里从头导入：旧会话接得上，卸掉 hook 后审批回到终端里问；第 8 步故意失败能回滚；导入后手动 run 被拒 |
-| [ ] | s63 | 导入页 | 发现 bridge 就显示导入页：预检表、"会感到的变化"和"失去"两张清单、进度、回执；清单加"可选：从 bridge 导入"，只在 macOS 显示（第 5 节） | 520 | s62、s04 | 错误路径 | 无（M10 验收前，预览版会话在测试用户账号里走一遍导入页） |
+| [ ] | s63 | 导入页 | 发现 bridge 就显示导入页：预检表、"会感到的变化"和"失去"两张清单、进度、回执；清单加"可选：从 bridge 导入"，只在 macOS 显示（第 5 节） | 520 | s62、s04 | 错误路径 | 无（M10 验收前，预览版任务在测试用户账号里走一遍导入页） |
 | [ ] | s64 | bridge 最后一版（feishu-codex-bridge 仓库） | 从 0.6.14（`6698118`）开分支：看到迁移标记就拒绝启动，stop 和 status 给提示，第一次启动给主人发通知（第 5 节、第 8 节第 4 条） | 200 | s62 | 错误路径 | 无（发布前由 owner 在飞书客户端里看通知） |
 
 开工要点：
@@ -535,13 +535,13 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 
 开工要点：
 - s65：今天 `build.mjs` 写死版本 0.1.0，而更新比较用的正是它。bridge 和 Paseo 的许可声明（NOTICE、LICENSE.bridge、LICENSE.paseo）今天已经随 npm 包和桌面包发，只改 license 字段。
-- s67：先由预览版会话装好，Codex 走一遍不需要扫码的部分，再交 owner 验收。Linux 那一半在 s20b 做。
+- s67：先由预览版任务装好，Codex 走一遍不需要扫码的部分，再交 owner 验收。Linux 那一半在 s20b 做。
 
 ## 4. 实验清单（M0）
 
 ### 4.1 实验
 
-第 9 节要实测的事，按下表做。结果放进 `docs/research/` 下新的日期目录（例如 `<日期>-v1-spikes/`），按那里 README 的规矩加一行。一个实验一个纯文档 PR，同时出结果的可以合成一个；不占在飞名额。临时脚本不进仓库。Mac 上的实验先开它的文档 PR，PR 里写清要测什么，再经 Paseo 开检查会话 `Mac 检查 PR #<号>` 去做（`AGENTS.md`"工具和同步"）。检查会话只接一个回合、约 30 分钟能做完的事，做不完就拆成几次检查，或拆成几个实验。Mac 上的实验和各切片的 Mac 检查一次只开一个会话，不同时开。e03 在 Mac 上跑 Claude SDK 是测产品，见本文第 7 节。
+第 9 节要实测的事，按下表做。结果放进 `docs/research/` 下新的日期目录（例如 `<日期>-v1-spikes/`），按那里 README 的规矩加一行。一个实验一个纯文档 PR，同时出结果的可以合成一个；不占在飞名额。临时脚本不进仓库。Mac 上的实验先开它的文档 PR，PR 里写清要测什么，再在 PR 里贴检查提示词，往 #322 贴一个检查任务指过去（`AGENTS.md`"工具和同步"）。一个检查任务只接约 30 分钟能做完的事，做不完就拆成几个任务，或拆成几个实验。Mac 上的实验和各切片的 Mac 检查都排在 #322 里，Codex 一个一个做，不同时做。e03 在 Mac 上跑 Claude SDK 是测产品，见本文第 7 节。
 
 | 状态 | 编号 | 测什么 | 在哪做 | 怎么测 | 挡住 | 最晚在 |
 |---|---|---|---|---|---|---|
@@ -625,8 +625,8 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 
 一个里程碑按这个顺序验收（本文第 1 节"Linux 先行"）：
 1. **先在 JP-VPS 上验。** 里程碑的片都合入后，Claude 用 main 的 head 先做完不需要 Mac 的步骤，用验收用的数据目录：飞书里的聊天步骤（建测试群、把 bot 拉进群、@ 它、看回复和卡片）用 lark-cli 以 owner 的用户身份做，改设置用 `vonvon` 命令行和无头打开的网页端。结果写进给 owner 的通知（owner 2026-10-15 要求）。发现问题就开 `claude/*` PR 修，合入后这一步重来。
-2. **再在 Mac 上验网页端。** Claude 开预览版会话（见下面"Mac 上怎么打包"）。Codex 构建好之后先不打包：用隔离的数据目录在 Mac 上起 daemon 和网页端，查网页端连 Mac 上的 daemon，以及不打包也能查的 Mac 专属项，比如 launchd、钥匙串、Seatbelt 沙箱。要真 bot 的项第 1 步已经验过，这一步不注册新 bot。有问题 Codex 就停下回复，不打包，也不 push；Claude 开 `claude/*` PR 修，合入后重开预览版会话。
-3. **最后打包给 owner。** 第 2 步过了，Codex 才打包、装好 .app。装好后，Codex 用 Computer Use 打开装好的 app，做本文第 2 节标"Codex 先查"、要用装好的 app 的步骤，比如窗口、托盘、菜单、退出 app；要 @ Mac 上的 bot 时，Claude 用 lark-cli 接着做。这些都过了，Claude 才通知 owner；标"接着做""接着查"的步骤等 owner 做完前一步再做（本文第 2 节开头）。要用装好的 app 的步骤，用的是 owner 账号里真实装好的 app 和它的数据，所以只在预览版会话里做；Claude 的提示按里程碑和步骤号列出这次做哪几步，没列的不做，其余的查用隔离的数据目录。Mac 锁屏时 Computer Use 会失败（getpaseo/paseo#3346），按 `AGENTS.md`：停下，不重试，回复第一行写"卡住了："。owner 只做要人来做的：手机扫码、飞书开发者后台、在飞书客户端里点卡片按钮和看显示、注销再登录、要第二个人的步骤，以及 M10 什么时候迁移每天在用的 bridge。每个里程碑留给 owner 的是哪几步，写在本文第 2 节各里程碑的"怎么验收"后面。
+2. **再在 Mac 上验网页端。** Claude 往 #322 贴预览版任务（见下面"Mac 上怎么打包"）。Codex 构建好之后先不打包：用隔离的数据目录在 Mac 上起 daemon 和网页端，查网页端连 Mac 上的 daemon，以及不打包也能查的 Mac 专属项，比如 launchd、钥匙串、Seatbelt 沙箱。要真 bot 的项第 1 步已经验过，这一步不注册新 bot。有问题 Codex 就停下贴结果，不打包，也不 push；Claude 开 `claude/*` PR 修，合入后再贴一个预览版任务。
+3. **最后打包给 owner。** 第 2 步过了，Codex 才打包、装好 .app。装好后，Codex 用 Computer Use 打开装好的 app，做本文第 2 节标"Codex 先查"、要用装好的 app 的步骤，比如窗口、托盘、菜单、退出 app；要 @ Mac 上的 bot 时，Claude 用 lark-cli 接着做。这些都过了，Claude 才通知 owner；标"接着做""接着查"的步骤等 owner 做完前一步再做（本文第 2 节开头）。要用装好的 app 的步骤，用的是 owner 账号里真实装好的 app 和它的数据，所以只在预览版任务里做；Claude 的任务按里程碑和步骤号列出这次做哪几步，没列的不做，其余的查用隔离的数据目录。Mac 锁屏时 Computer Use 会失败（getpaseo/paseo#3346），按 `AGENTS.md`：停下，不重试，结果评论第二行写"卡住了："。owner 只做要人来做的：手机扫码、飞书开发者后台、在飞书客户端里点卡片按钮和看显示、注销再登录、要第二个人的步骤，以及 M10 什么时候迁移每天在用的 bridge。每个里程碑留给 owner 的是哪几步，写在本文第 2 节各里程碑的"怎么验收"后面。
 
 **JP-VPS 上的验收环境。**
 - 验收用一棵单独的 worktree，detach 在要验的提交上；用它自己的 `VONVON_HOME`，里面注册一个测试 bot。
@@ -637,20 +637,20 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 - 用接口建群时把 bot 一起放进去，不会触发 `im.chat.member.bot.added_v1`。要测"机器人进群"的提示，先建群，再用 lark-cli 的 `im chat.members create`（`member_id_type=app_id`）把 bot 加进去。"查找已经加入的群"两种群都找得到。
 - Claude 的只读、读写档在 Linux 上要 Claude Code 的沙箱，就是 `bubblewrap` 和 `socat`；没装时回合失败，报"Sandbox required but unavailable"。
 - Ubuntu 24.04 上光装好还不够：`kernel.apparmor_restrict_unprivileged_userns = 1` 挡住了非特权的用户命名空间，bwrap 报"setting up uid map: Permission denied"或"loopback: Failed RTM_NEWADDR: Operation not permitted"，Claude 的 Bash 在只读、读写档下都失败。JP-VPS 上的办法：加一份 AppArmor profile，只给 `/usr/bin/bwrap` 开 `userns` 权限（和 Ubuntu 自己给浏览器的 profile 一个样子），用 `apparmor_parser -r` 加载；不全局关掉这个 sysctl。
-- 2026-10-15 查过：`bwrap` 和 `socat` 已经装好，`kernel.apparmor_restrict_unprivileged_userns` 仍是 1，`/etc/apparmor.d/` 下还没有 bwrap 的 profile，bwrap 仍报"setting up uid map: Permission denied"。加载 profile 要 sudo，由 owner 经 SSH 做（本文第 8 节）。做完之前，JP-VPS 上只能验 Claude 的完全访问档，只读、读写档退回 owner 在 Mac 上验，是哪几步写在 M6、M7 的"怎么验收"里。
+- 2026-10-15 owner 经 SSH 加载了 bwrap 的 AppArmor profile（`/etc/apparmor.d/bwrap`）。`bwrap` 和 `socat` 已经装好；`kernel.apparmor_restrict_unprivileged_userns` 仍是 1，没有全局关掉。加载以后，在 JP-VPS 上跑 `bwrap --ro-bind / / --unshare-net true` 和 `bwrap --ro-bind / / --dev /dev --unshare-all --die-with-parent true`，都以 0 退出。所以 JP-VPS 上能验 Claude 的只读、读写档了，M6、M7 里这些步骤不再退回 owner 在 Mac 上验。还没用真 bot 的回合从头到尾再验一遍：第一次用到时，先在测试群里各跑一轮只读档和读写档；跑不通就退回 owner，并在通知里写明。
 - Linux 上的 Codex 只能用完全访问（product.md 3.8，`D/agent/codex-appserver/backend.ts`），JP-VPS 上用 Codex 的测试群要明确改成完全访问。访客档没设时跟着管理员的档走（3.8"访客档照旧"），所以改成完全访问的测试群，访客也是完全访问；这种群里不放别人。
 
 **Mac 上怎么打包。**
-1. Claude 经 Paseo 开预览版会话 `Mac 预览版 <里程碑名>`，模式 full-access（owner 2026-10-15），规则见 `AGENTS.md`"工具和同步"。
-2. Codex 在 Mac 上从 main pull，`npm ci`，`npm run build`，先按上面第 2 步查网页端，过了再在 `packages/desktop` 下用 `electron-builder --config electron-builder.yml --dir` 打包，也就是今天的 `package:dir` 脚本。electron-builder 会自动用钥匙串里的 Developer ID 签名。不公证，只出 Apple Silicon。
+1. Claude 往 #322 贴一个预览版任务，提示词整份写在任务里，不再另开 `Mac 预览版 <里程碑名>` issue。Mac 上没有会话在处理队列时，Claude 请 owner 在 Mac mini 上新开 Codex 会话，模式选 full access（owner 2026-10-15），发一次"按 modelzen/vonvon-bot#322 正文做"。规则见 `AGENTS.md`"工具和同步"。
+2. Codex 在临时 worktree 里取 Claude 给的 main sha，`npm ci`，`npm run build`，先按上面第 2 步查网页端，过了再在 `packages/desktop` 下用 `electron-builder --config electron-builder.yml --dir` 打包，也就是今天的 `package:dir` 脚本。electron-builder 会自动用钥匙串里的 Developer ID 签名。不公证，只出 Apple Silicon。
 3. 打好的 .app 装进 /Applications，按上面第 3 步先做标"Codex 先查"的步骤，再由 Claude 通知 owner 验收。
 4. 具体命令以仓库脚本为准。M1 预览版（2026-10-14）按第 2 条做通了，打包前补跑 `node node_modules/electron/install.js`，打包后验签，用 `ditto` 装进 /Applications。
 
 下面几条来自 #296 的 Mac 检查和 M1 预览版：
-- Mac 上 Paseo 用的仓库，本地 main 可能是旧的（M1 预览版时停在 d90f4d4）。预览版和检查会话的提示里写明先 `git fetch`，核对 main 或分支的 sha 和 Claude 给的一致再构建。
+- Mac 上的仓库，本地 main 可能是旧的（M1 预览版时停在 d90f4d4）。提示词里写明先 `git fetch`，核对 main 或分支的 sha 和 Claude 给的一致，再从那个 sha 建临时 worktree 构建。
 - 打包和验签直接跑。以前用 auto 模式时，沙箱里打包跳过了签名（`0 valid identities found`），`codesign --verify` 报 `invalid signature`、`Authority=(unavailable)`，应该是沙箱看不到钥匙串，只好到沙箱外跑；full-access 没有这层沙箱。打完仍看 electron-builder 的输出里签上了没有，`codesign --verify` 要通过。
 - `npm ci` 之后第一次打包缺 Electron 的二进制，原因没查（Mac 的 npm 版本没记）。打包前先跑 `node node_modules/electron/install.js`。
-- auto 模式下，联网（`npm ci`、`gh`）、沙箱外的命令、打开 app、用 Computer Use 操作 app 都会发申请，没人批就一直等，#296 的检查卡在这里将近一小时。full-access 下没有这些申请，Claude 不用再盯着批；这次做什么、用哪些隔离目录、哪些不碰，都写在提示里（`AGENTS.md`"工具和同步"）。
+- auto 模式下，联网（`npm ci`、`gh`）、沙箱外的命令、打开 app、用 Computer Use 操作 app 都会发申请，没人批就一直等，#296 的检查卡在这里将近一小时。full-access 下没有这些申请，Claude 不用再盯着批；这次做什么、用哪些隔离目录、哪些不碰，都写在提示词里（`AGENTS.md`"工具和同步"）。
 - 在终端里用 `open` 启动 app，会继承终端的长 PATH。要模拟从 Finder 打开，显式加 PATH：`open -n --env PATH=/usr/bin:/bin:/usr/sbin:/sbin --env HOME=<临时目录> ... <app>`。
 - 测 Claude 时，隔离 HOME 下读不到 owner 的 Claude 凭据：owner 的凭据写在 `~/.claude/settings.json` 的 `env` 里，不在钥匙串。要测已登录，那一条命令用真实 HOME，VONVON_HOME 仍用临时目录。
 - 退出桌面端不停 daemon（product.md 3.10）。测完用包里的命令行 `daemon stop` 停掉隔离 HOME 里的 daemon。
@@ -668,7 +668,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 | 向 Anthropic 要 Claude 登录的书面确认 | 公开发布前 | product.md 第 8 节第 2 条，可能要几周；要不到就做 s66 |
 | 一位同事或第二个飞书账号 | e10（s18 之前）、M3 第 7 步、e09（s30 之前）、M6 第 4 步、M9 第 2 和第 6 步 | 验收时要有另一个人点卡片、私聊 bot |
 | JP-VPS 上再加两个测试 bot | M5 之前 | M5 要同一台机器上三个 bot（一个规则模式、两个智能模式），JP-VPS 上现在只有一个。Claude 扫不了码，要 owner 扫码、在开发者后台发布 |
-| JP-VPS 上给 bwrap 加载 AppArmor profile | M6 之前 | 要 sudo，经 SSH 做，做法见本文第 7 节。不做的话，M6 第 1 到 3、5 步和 M7 第 3 步退回 owner |
+| JP-VPS 上给 bwrap 加载 AppArmor profile | 已做（2026-10-15） | owner 经 SSH 加载了，结果见本文第 7 节。M6 第 1 到 3、5 步和 M7 第 3 步不再退回 owner |
 | bridge 最后一版什么时候发 | M10 之前定 | product.md 第 8 节第 4 条，s64 按这个时间发 |
 | Mac 上的一个测试用户账号 | M10 之前（e08、s61、s62） | 不用等，但要 owner 用管理员身份建。停 bridge 会碰 launchd 里同名的任务，只能在另一个用户账号里测 |
 
