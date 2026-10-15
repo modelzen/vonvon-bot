@@ -57,21 +57,24 @@ export function runCardMeter(usage: Usage | undefined): CardElement {
 }
 
 /** The process-area line for one compaction, e.g. `已压缩 85% → 20%`. Both ends
- * share one window; without a window they show tokens. */
-export function compactionLine(c: CompactionEntry, running: boolean): CardElement {
+ * share one window; without a window they show tokens. `live`: the run is still
+ * going, so an unfinished compaction reads as in progress. */
+export function compactionLine(c: CompactionEntry, live: boolean): CardElement {
+  return noteMd(`<font color='grey'>🗜️ ${compactionText(c, live)}</font>`);
+}
+
+function compactionText(c: CompactionEntry, live: boolean): string {
+  if (c.status === 'failed') return '上下文压缩失败';
+  if (c.status === 'running') return live ? '正在压缩上下文…' : '上下文压缩没有完成';
   const window = c.before?.window ?? c.after?.window ?? null;
   const at = (u: Usage): string => {
     const pct = ctxPercent(u.used, window);
     return pct === null ? k(u.used) : `${pct}%`;
   };
-  const text =
-    c.status === 'failed' ? '上下文压缩失败'
-      : c.status === 'running' ? (running ? '正在压缩上下文…' : '上下文压缩没有完成')
-        : c.before && c.after ? `已压缩 ${at(c.before)} → ${at(c.after)}`
-          : c.before ? `已压缩，压缩前 ${at(c.before)}`
-            : c.after ? `已压缩，现在 ${at(c.after)}`
-              : '已压缩上下文';
-  return noteMd(`<font color='grey'>🗜️ ${text}</font>`);
+  if (c.before && c.after) return `已压缩 ${at(c.before)} → ${at(c.after)}`;
+  if (c.before) return `已压缩，压缩前 ${at(c.before)}`;
+  if (c.after) return `已压缩，现在 ${at(c.after)}`;
+  return '已压缩上下文';
 }
 
 /** On-demand `/context` card — always shows, even at low usage. */

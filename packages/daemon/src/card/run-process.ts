@@ -39,6 +39,7 @@ export function buildProcessBody(
   const kept: CardElement[] = [];
   let omitted = 0;
   for (const unit of compact) {
+    // Compaction lines always stay; from the first unit that doesn't fit, the rest are omitted.
     if (unit.marker || (omitted === 0 && fitsProcessBudget([...kept, unit.element], 512, componentBudget))) kept.push(unit.element);
     else omitted += unit.itemCount;
   }

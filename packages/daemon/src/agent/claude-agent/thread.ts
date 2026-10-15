@@ -386,11 +386,8 @@ export class ClaudeAgentThread implements AgentThread {
               // (totalTokens used, maxTokens window). Overrides the event-map's
               // fallback estimate. Best-effort: a control RTT that may fail.
               try {
-                const cu = await self.query.getContextUsage();
-                if (cu && typeof cu.totalTokens === 'number' && typeof cu.maxTokens === 'number') {
-                  self.contextWindow = cu.maxTokens;
-                  yield { type: 'context_usage', usedTokens: cu.totalTokens, contextWindow: cu.maxTokens };
-                }
+                const usage = await self.readContextUsage();
+                if (usage) yield { type: 'context_usage', ...usage };
               } catch (err) {
                 log.fail('agent', err, { backend: 'claude-agent', phase: 'getContextUsage' });
               }
@@ -506,11 +503,8 @@ export class ClaudeAgentThread implements AgentThread {
               return;
             }
             try {
-              const cu = await self.query.getContextUsage();
-              if (cu && typeof cu.totalTokens === 'number' && typeof cu.maxTokens === 'number') {
-                self.contextWindow = cu.maxTokens;
-                yield { type: 'context_usage', usedTokens: cu.totalTokens, contextWindow: cu.maxTokens };
-              }
+              const usage = await self.readContextUsage();
+              if (usage) yield { type: 'context_usage', ...usage };
             } catch {
               /* best-effort */
             }
@@ -592,15 +586,20 @@ export class ClaudeAgentThread implements AgentThread {
 
     let usage: CompactResult['usage'] = null;
     try {
-      const cu = await this.query.getContextUsage();
-      if (cu && typeof cu.totalTokens === 'number' && typeof cu.maxTokens === 'number') {
-        this.contextWindow = cu.maxTokens;
-        usage = { usedTokens: cu.totalTokens, contextWindow: cu.maxTokens };
-      }
+      usage = (await this.readContextUsage()) ?? null;
     } catch {
       /* best-effort post-compaction usage */
     }
     return { compacted, usage };
+  }
+
+  /** getContextUsage() as a reading (undefined when it lacks the numbers; throws
+   * as the SDK does). Keeps maxTokens for the next turn's mid-turn readings. */
+  private async readContextUsage(): Promise<{ usedTokens: number; contextWindow: number } | undefined> {
+    const cu = await this.query.getContextUsage();
+    if (!cu || typeof cu.totalTokens !== 'number' || typeof cu.maxTokens !== 'number') return undefined;
+    this.contextWindow = cu.maxTokens;
+    return { usedTokens: cu.totalTokens, contextWindow: cu.maxTokens };
   }
 
   async abort(_turnId: string): Promise<void> {

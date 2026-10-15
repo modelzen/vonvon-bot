@@ -963,8 +963,9 @@ export function createOrchestrator(
   const completionReminderSent = new RecentIdCache(4096, 24 * 60 * 60_000);
   /** the latest settings-bearing run card per topic thread */
   const lastRunCard = new Map<string, string>();
-  /** latest context usage per session (sessionKey → tokens), for `/context`.
-   * Fed from context_usage events in the run loop; keyed like topicThreadId. */
+  /** latest context usage per session (sessionKey → tokens), for `/context` and
+   * the next turn's meter. Fed from the run card's usage in the run loop; keyed
+   * like topicThreadId. */
   const lastUsage = new Map<string, { used: number; window: number | null }>();
   /** inbound message/comment dedup (at-least-once delivery, see RecentIdCache) */
   const seenInbound = new RecentIdCache();
@@ -5488,12 +5489,13 @@ export function createOrchestrator(
         // Usage and compaction update the meter and the process lines of the
         // turn's card; on their own they don't send a card (like reasoning).
         if (ev.type === 'context_usage' || ev.type === 'compaction') {
+          let usage = ev.type === 'context_usage' ? { used: ev.usedTokens, window: ev.contextWindow } : undefined;
           if (cur) {
             cur.render.apply(ev);
             cur.rc.rs = cur.render.snapshot();
+            usage = cur.rc.rs.usage;
             if (cur.stream) cur.stream.streamCoalesced(channel, buildRunCard(cur.rc), ANSWER_EID);
           }
-          const usage = cur ? cur.rc.rs.usage : ev.type === 'context_usage' ? { used: ev.usedTokens, window: ev.contextWindow } : undefined;
           if (topicThreadId && usage) lastUsage.set(topicThreadId, usage);
           continue;
         }

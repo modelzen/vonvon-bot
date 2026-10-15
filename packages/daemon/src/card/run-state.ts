@@ -58,6 +58,7 @@ export type Block =
   | { kind: 'compaction'; compaction: CompactionEntry };
 
 type TextBlock = Extract<Block, { kind: 'reasoning' | 'text' }>;
+type CompactionBlock = Extract<Block, { kind: 'compaction' }>;
 
 /** One reasoning item (codex may emit several across a turn). */
 export interface ReasoningItem {
@@ -272,8 +273,16 @@ function lastCompaction(blocks: Block[], match: (c: CompactionEntry) => boolean)
   return -1;
 }
 
+function compactionAt(blocks: Block[], idx: number): CompactionEntry {
+  return (blocks[idx] as CompactionBlock).compaction;
+}
+
 function withCompaction(blocks: Block[], idx: number, next: CompactionEntry): Block[] {
   return blocks.map((b, i) => (i === idx ? { kind: 'compaction', compaction: next } : b));
+}
+
+function appendCompaction(blocks: Block[], entry: CompactionEntry): Block[] {
+  return [...closeStreamingText(blocks), { kind: 'compaction', compaction: entry }];
 }
 
 function startCompaction(state: RunState, itemId: string | undefined): RunState {
@@ -281,7 +290,7 @@ function startCompaction(state: RunState, itemId: string | undefined): RunState 
   // A repeated start (same item, or another Claude 'compacting' status) is the same compaction.
   if (lastCompaction(state.blocks, (c) => c.id === id || (itemId === undefined && c.status === 'running')) >= 0) return state;
   const entry: CompactionEntry = { id, status: 'running', ...(state.usage ? { before: state.usage } : {}) };
-  return { ...state, blocks: [...closeStreamingText(state.blocks), { kind: 'compaction', compaction: entry }] };
+  return { ...state, blocks: appendCompaction(state.blocks, entry) };
 }
 
 function endCompaction(state: RunState, evt: Extract<AgentEvent, { type: 'compaction' }>): RunState {
@@ -291,21 +300,12 @@ function endCompaction(state: RunState, evt: Extract<AgentEvent, { type: 'compac
   if (idx < 0) idx = lastCompaction(state.blocks, (c) => c.status === 'running');
   // Codex versions that still send thread/compacted send it after the item's end.
   if (idx < 0 && evt.legacy) idx = lastCompaction(state.blocks, (c) => !c.legacySeen);
-  if (idx < 0) {
-    const after = counted(evt.postTokens);
-    const entry: CompactionEntry = {
-      id: evt.itemId ?? `compaction${state.blocks.length}`,
-      status: evt.failed ? 'failed' : 'done',
-      ...(evt.preTokens !== undefined ? { before: counted(evt.preTokens) } : {}),
-      ...(after ? { after } : {}),
-      ...(evt.legacy ? { legacySeen: true } : {}),
-    };
-    return { ...state, ...(after ? { usage: after } : {}), blocks: [...closeStreamingText(state.blocks), { kind: 'compaction', compaction: entry }] };
+  const found = idx < 0 ? undefined : compactionAt(state.blocks, idx);
+  if (found && found.status !== 'running') {
+    return evt.legacy ? { ...state, blocks: withCompaction(state.blocks, idx, { ...found, legacySeen: true }) } : state;
   }
-  const prev = (state.blocks[idx] as Extract<Block, { kind: 'compaction' }>).compaction;
-  if (prev.status !== 'running') {
-    return evt.legacy ? { ...state, blocks: withCompaction(state.blocks, idx, { ...prev, legacySeen: true }) } : state;
-  }
+  // An end with no start on this card gets its own line.
+  const prev: CompactionEntry = found ?? { id: evt.itemId ?? `compaction${state.blocks.length}`, status: 'running' };
   const before = counted(evt.preTokens) ?? prev.before;
   const reported = counted(evt.postTokens);
   const recomputed = prev.pending && before && prev.pending.used < before.used ? prev.pending : undefined;
@@ -318,7 +318,8 @@ function endCompaction(state: RunState, evt: Extract<AgentEvent, { type: 'compac
     ...(after ? { after } : {}),
     ...(evt.legacy ? { legacySeen: true } : {}),
   };
-  return { ...state, ...(reported ? { usage: reported } : {}), blocks: withCompaction(state.blocks, idx, next) };
+  const blocks = found ? withCompaction(state.blocks, idx, next) : appendCompaction(state.blocks, next);
+  return { ...state, ...(reported ? { usage: reported } : {}), blocks };
 }
 
 /** A usage reading goes to the latest compaction: while it runs, as `before`
@@ -326,7 +327,7 @@ function endCompaction(state: RunState, evt: Extract<AgentEvent, { type: 'compac
 function noteUsage(blocks: Block[], usage: Usage): Block[] {
   const idx = lastCompaction(blocks, () => true);
   if (idx < 0) return blocks;
-  const c = (blocks[idx] as Extract<Block, { kind: 'compaction' }>).compaction;
+  const c = compactionAt(blocks, idx);
   if (c.status === 'running') {
     return withCompaction(blocks, idx, c.before ? { ...c, pending: usage } : { ...c, before: usage });
   }
