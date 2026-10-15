@@ -170,7 +170,7 @@ else process.exit(0);
       settings: [
         { type: 'read', scope: { kind: 'host' } },
         { type: 'save', edit: { scope: { kind: 'host' }, section: 'execution', revision: 'token', patch: { codexBin: null } } },
-        { type: 'act', action: { kind: 'repairHostCliHooks', agents: ['codex'] } },
+        { type: 'act', action: { kind: 'voice', botId: agentId, action: { action: 'disable' } } },
         { type: 'models', query: { botId: agentId, backend: 'codex-appserver', purpose: 'session' } },
         { type: 'sessions', botId: agentId, projectName }, { type: 'chooseExecutable' }, { type: 'saveExecutable', token: operationId, revision: 'token' },
       ],

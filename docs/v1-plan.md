@@ -228,8 +228,8 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | [x] | s02a | M1 反馈修复：注册、开权限、复制链接、真实报错 | "添加 Bot"统一叫"注册 Bot"；桌面端只放开本应用页面写剪贴板这一项权限；注册对话框扫码成功后接着"一键开权限"并每 5 秒检测，Bot 设置加"一键开权限"，"重新授权"改名"重新扫码"；桌面端显示 daemon 的真实报错；查已加入的群和绑群时读出飞书的错误码，缺权限说缺哪项并写日志，没名字的群不再让整张列表失败；清单单列读群信息的权限和"机器人进群"事件；"有未保存的修改"里不再能"保存并离开"建出一个群（3.1 第 4 条） | 700 | — | 错误路径、macOS 原生 | 点"复制链接"后能粘贴；bot 没运行时点"查找已加入的群"，显示真实原因而不是"Daemon request failed"（注册后的一键开权限要扫码，M1 复验时看） |
 | [x] | s02d | Claude 第一轮没建成会话时整群卡住 | 第一轮在 Claude Code 写下会话记录之前就失败（沙箱缺工具、没登录）时，之后每条消息都报"找不到会话"，要 `/clear` 才好；恢复前先查会话存不存在，不存在就换新会话，运行卡上说一声（3.5） | 60 | — | 错误路径 | 无（JP-VPS 上用 lark-cli 复现过） |
 | [x] | s02e | 注册完 Bot 默认启用 | 扫码注册的新 Bot 直接加进活跃集并启动连接，和手动打开"启用 Bot"一样：Bot 不再显示"已停用"或"待生效"，清单的"长连接"一步不再停在"没有启用"；启动失败不让注册失败，界面显示真实的运行和连接状态；"重新扫码"只换凭据，不动启用状态，停用过的 Bot 仍停用（3.1 第 4 条） | 160 | — | 并发、错误路径 | 无（注册要 owner 扫码，下次装预览版时看注册完 Bot 已启用、长连接连上） |
-| [ ] | s02b | 拿掉咖啡一下（一）：入口和设置 | 删桌面端和网页的咖啡一下开关、搜索词和设置项，私聊设置卡里的咖啡一下；daemon 不再起咖啡一下的服务（3.12） | 400 | — | — | 无 |
-| [ ] | s02c | 拿掉咖啡一下（二）：daemon 代码 | 删 `D/cli-bridge/` 和它的测试；`vonvon hook` 留一个直接退出的空命令（3.12） | 4600，拆成至少 4 片 | s02b | 子进程 | 无 |
+| [x] | s02b | 拿掉咖啡一下（一）：入口和设置 | 删桌面端和网页的咖啡一下开关、搜索词和设置项，私聊设置卡里的咖啡一下；daemon 不再起咖啡一下的服务（3.12） | 400 | — | — | 无 |
+| [ ] | s02c | 拿掉咖啡一下（二）：daemon 代码 | 删设置协议里的咖啡一下、`D/cli-bridge/` 和它的测试；`vonvon hook` 留一个直接退出的空命令（3.12） | 5600，拆成 5 片（下面的 s02c 拆法） | s02b | 子进程 | 无 |
 
 开工要点：
 - s01：兼容标识不动：旧目录、`FEISHU_CODEX_BRIDGE`、`CLAUDE_CODE_ENTRYPOINT`、hook 正则、旧服务标签。不申请 `im:message.group_msg.include_bot:read`。补拉因为缺权限失败时，记一条带权限名的结构化日志；今天没有现成的诊断去处，诊断页上显示缺的权限在 s19 做。
@@ -244,8 +244,18 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s02b 做法（界面）：网页的"咖啡一下"页、侧栏入口和搜索词（咖啡一下、本机 Hook、接力设置、通知偏好和下面各项）都删了，Bot 设置面板里的那组接力和通知控件、本机 Hook 的检查修复一起删。桌面端没有自己的咖啡一下代码，它显示的就是这个网页。
 - s02b 做法（私聊设置卡）：全局设置卡里"☕ 咖啡一下"一节和它的二级卡删了。已经发出去的旧卡上的按钮（入口和二级卡上的总开关、通知范围、转发哪个工具、离开保活、修复 hooks，id 列在 `COFFEE_RETIRED_ACTIONS`）还能点：管理员点了不写盘，卡刷新成没有咖啡一下的设置卡，顶上写一行"☕ 咖啡一下第一版已经拿掉了。本机 Claude Code、Codex 要审批时，照常在终端里问。"；别人点了没反应，和以前一样。旧的审批卡、问答卡、完成卡上的按钮不再有人接，点了只记一条 `action-nohandler` 日志，以前 daemon 重启过也是这样。
 - s02b 做法（服务）：bot 不再建、不再起咖啡一下的服务，也就没有 socket；`handle-message.ts` 不再引用 `D/cli-bridge/`，私聊里回复旧完成卡的话照常进私聊。已经装进 Claude Code、Codex CLI 的 hook 连不上 daemon，回 `fallback_local`，终端照常问：在 JP-VPS 上用源码跑 `vonvon hook claude` 和 `vonvon hook codex`，各喂一条 PermissionRequest，标准输出都是空的，退出码 0。已存的 `cliBridge` 设置不迁移、不删。
-- s02b 留给 s02c 的：设置协议和 RPC 里的咖啡一下还在，界面已经不调了：Agent 设置的 `cliBridge` 一节和 `cliRuntime`，本机设置的 `coffee`，`setCliBridgeEnabled`、`repairCliHooks`、`setHostCliRoute`、`repairHostCliHooks` 四个写操作（`D/admin/settings.ts`、`host-settings.ts` 和协议，连测试约 750 行，放进本片会超过 1500 行）。bot 不再把服务交给设置层，`cliRuntime.running` 一直是 false，`setCliBridgeEnabled` 回"请先启动此 Agent"。s02c 的第一片先删这一层，`vonvon settings` 里隐藏 `cliBridge` 的过滤跟着去掉。`packages/ui/src/reference/styles` 里早就没人用的 `coffee-*` 样式也在那时删。
+- s02b 留给 s02c 的：设置协议和 RPC 里的咖啡一下还在，界面已经不调了：Agent 设置的 `cliBridge` 一节和 `cliRuntime`，本机设置的 `coffee`，`setCliBridgeEnabled`、`repairCliHooks`、`setHostCliRoute`、`repairHostCliHooks` 四个写操作（`D/admin/settings.ts`、`host-settings.ts` 和协议，连测试约 750 行，放进本片会超过 1500 行）。bot 不再把服务交给设置层，`cliRuntime.running` 一直是 false，`setCliBridgeEnabled` 回"请先启动此 Agent"。s02c 的第一片先删这一层，`vonvon settings` 里隐藏 `cliBridge` 的过滤跟着去掉。`packages/ui/src/reference/styles` 里早就没人用的 `coffee-*` 样式也在那时删。s02c1 已删，见下面的 s02c1 做法。
 - s02c：几乎全是删除，开工前用 `git diff --stat` 量，按 1500 行拆成 s02c1、s02c2……，依次合入。不急，放在第二条线上做。s02b 以后 `handle-message.ts` 不再引用 `D/cli-bridge/`，s02c 不用再改它。cli-bridge 的 Windows 分支随它一起删。s01 说不动的 hook 正则在 `D/cli-bridge/hooks.ts:310`，跟着删掉；s62 卸 bridge 的 hook 用 #226 里的 hook 改写代码，不靠它。
+- s02c 拆法：2026-10-15 量过，`D/cli-bridge/` 的源码约 1990 行，它的测试约 2290 行，加上设置协议这一层和配置，s02c 一共约 5600 行，比原来估的 4600 多，拆成 5 片，依次合入。按谁引用谁的顺序删：先删没人引用的，每片合入后都能单独过 typecheck。
+  - s02c1（约 1100 行）：设置协议这一层，见下面的 s02c1 做法。
+  - s02c2（约 780 行，子进程）：`vonvon hook` 改成直接退出的空命令：照收 `--agent`、`--bot`，什么都不输出，退出码 0，已经装进 Claude Code、Codex CLI 的 hook 照常在终端里问。删 `D/cli-bridge/index.ts`（只有 `vonvon hook` 引用它）、`protocol.ts`、`hooks.ts`（s01 说的 `hooks.ts:310` 的 hook 正则和 cmd.exe 引号在这里），和 `cli-bridge-hook-routing`、`cli-bridge-protocol`、`cli-bridge-hooks`、`cli-bridge-hook-targets` 四份测试；`coffee-retired.test.ts` 去掉对 `D/cli-bridge` 的 mock。合入前在 JP-VPS 上用源码跑 `vonvon hook --agent claude` 和 `--agent codex`，各喂一条 PermissionRequest 和 Stop，看标准输出是空的、退出码 0。
+  - s02c3（约 1190 行）：删 `cli-bridge-service.test.ts` 和 `cli-bridge-global-service.test.ts`。`service.ts` 连它的测试约 1700 行，一片放不下，所以测试先删；s02c2 以后 `service.ts` 已经没有调用方。
+  - s02c4（约 1360 行）：删 `service.ts`、`cards.ts`（Windows 离开检测的提示在这里）、`store.ts`，和 `cli-bridge-cards`、`cli-bridge-store` 两份测试；`D/card/dm-cards.ts:905` 注释里提到 `cli-bridge/cards` 的那句跟着改。
+  - s02c5（约 1150 行）：删剩下的 `ipc.ts`、`parser.ts`、`keep-awake.ts`、`presence.ts`（PowerShell 离开检测）、`route.ts`、`types.ts` 和它们的五份测试，以及 `cli-bridge-config.test.ts`；删 `D/config/schema.ts` 里 `cliBridge` 的类型和读取函数（约 150 行）、`D/config/paths.ts` 的 `cliBridgeSocket` 和它的命名管道分支。`preferences.cliBridge` 到这一片才从类型里去掉，旧文件里的这个键照旧留着、没人读；`coffee-retired.test.ts` 里写 `cliBridge` 的那条配置改成不靠类型。`D/cli-bridge/` 到这里删空。
+- s02c1 做法（协议）：Agent 设置的 `cliBridge` 一节和 `cliRuntime`、本机设置的 `runtime.coffee`，`setCliBridgeEnabled`、`repairCliHooks`、`setHostCliRoute`、`repairHostCliHooks` 四个写操作，从协议、`D/admin/settings.ts`、`host-settings.ts`、`settings-parse.ts`、`settings-service.ts` 里删了。只给它们用的 hook 状态、生效时机 `next-hook` 和 `next-presence-check`、写操作结果 `diverged` 一起删；本机设置没有写操作了，写操作的结果里也就不再带本机视图。RPC 收到这四个写操作或存 `cliBridge` 这一节，按无效请求拒。`vonvon settings` 不再过滤 `cliBridge`，`--json` 里也没有了；`settings set cliBridge.…` 还是回"咖啡一下第一版已拿掉，不能改。"。
+- s02c1 做法（旧数据）：`config.json` 里的 `preferences.cliBridge` 和 `cli-bridge-route.json` 不迁移、不删。读设置时不看它们，存别的设置时原样留在文件里；`vonvon hook` 照旧读它们，s02c2 以后就没人读了。测试用一份带全套旧字段的 `config.json` 读一次、存一次别的设置，再比对文件。
+- s02c1 做法（协议版本）：`PROTOCOL_VERSION` 不升，和 s12 删 `compact` 一节一样。网页由 daemon 自己发，和 daemon 总是同一版。新的桌面端连旧 daemon 时，多出来的 `cliBridge`、`cliRuntime` 被丢掉，照常显示；旧的桌面端连新 daemon 时，读 Bot 设置会因为少了 `cliRuntime` 解析失败，只有把 app 换回旧版、或者 daemon 单独升级了才会碰到。升版本号反而会让刚装的新 app 拒绝连还在跑的旧 daemon，s08b 之前它不会自动重启旧 daemon。
+- s02c1 做法（顺带）：`packages/ui/src/reference/styles` 里的 `coffee-*` 样式（grep 过，没有组件用）和没人调用的 `D/cli/commands/doctor.ts` 删了。同一处还有一条没人用的 `handoff`（接力设置）选择器，没动。
 
 ### M2 首次运行清单和开机自动运行
 
@@ -258,8 +268,8 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | [x] | s06 | 注册服务后只由服务管理器拉起 daemon | 从 #285 搬启动路由（约 120 行源码加测试）：拿锁前先读注册，`daemon start` 改请服务管理器启动；修 #287（3.10） | 1000 | s05b | 子进程、并发、关闭清理、错误路径 | 已注册服务时 launchd 拉起的多余进程退出 0、不反复重启；持锁进程被 kill -9、PID 被复用后服务仍会重试 |
 | [x] | s07 | vonvon service install、uninstall、status | darwin 用 launchd、linux 用 systemd；装服务前先排空自己起的分离 daemon；快照和 RPC 读真实状态（3.10） | 700 | s06、s02、e06 | 子进程、错误路径、关闭清理、macOS 原生 | 打包版执行 install：plist 写入并起来，`daemon stop` 后不再拉起，注销再登录会起来，没有 Dock 图标，已有分离 daemon 时马上接管 |
 | [x] | s07a | 终端里用 vonvon 管 bot 和群 | vonvon bot list、bot status（清单各步的状态）、group list、group joined（查已加入的群）、group pending、group bind（文件夹、Codex 或 Claude、会话方式）、settings get 和 settings set（bot、群、会话的各节设置）；走网页端同一套本机接口和本机凭据，人看的输出加 --json；不做 agent 的令牌那条路（3.7 第 1 条、3.10） | 1111 | s07 | 错误路径 | 无 |
-| [ ] | s08a | 网页里的"登录电脑时启动"和清单里的这一步 | `vonvon service install`、`uninstall` 加 `--keep-running`；daemon 的 machine RPC 先回复、再起分离的助手进程跑这条命令（只在 macOS）；快照带服务状态、"跳过"和最近一次操作的结果；清单在"执行工具"后加"后台运行"："登录电脑时自动运行 bot（推荐）"，跳过就记下来并提示；"应用与启动"页的开关网页里也能用，只在 macOS 显示；Linux 上这一步只读，写明终端命令；`vonvon bot status` 也列这一步（3.1 第 4 条、3.10） | 880 | s07、s04 | 子进程、并发、错误路径、macOS 原生 | 只用网页端，`npm i -g` 装 PR 的打包 CLI，临时 `VONVON_HOME`：打开后页面重连到原地址，`launchctl print` 的 PID 和 `daemon status` 一致；关掉后 launchd 里没有这个任务，原端口上起了分离 daemon；新数据目录点跳过不写 plist；在"允许在后台"里关掉后显示"已在系统设置里关掉"；两个标签页同时点打开，一个提示正在进行；`npm run build` 的开发版显示"开发版不能装"；服务里跑着时关掉，助手进程挺过 bootout，结果是已卸载 |
-| [ ] | s08b | 桌面端的"登录电脑时启动"，app 挪走或换新版后修好服务，删桌面端的 Windows 代码 | 桌面端用自己的 Electron 起同一个助手命令，等它做完再接回 daemon；启动时发现 app 挪过位置、换了新版本或定义是旧格式，先停 daemon 再重装服务；删桌面端按注册读 `loginItem` 的覆盖和 Windows 代码；本文第 10 节写卸载步骤（3.10） | 875 | s08a | 子进程、macOS 原生、错误路径 | 装在"应用程序"里的打包版、真实 HOME 加临时 `VONVON_HOME`（本文第 7 节）：窗口里开关没有"连接断开"弹窗，和 `launchctl print` 一致；退出 app 后服务还在跑；服务跑着时把 app 挪到 `~/Applications` 再打开，plist 重写、服务恢复，挪回来也恢复；换成升了版本号的包后打开，`daemon status` 是新版本、新 PID；签名版在"允许在后台"里显示什么 |
+| [x] | s08a | 网页里的"登录电脑时启动"和清单里的这一步 | `vonvon service install`、`uninstall` 加 `--keep-running`；daemon 的 machine RPC 先回复、再起分离的助手进程跑这条命令（只在 macOS）；快照带服务状态、"跳过"和最近一次操作的结果；清单在"执行工具"后加"后台运行"："登录电脑时自动运行 bot（推荐）"，跳过就记下来并提示；"应用与启动"页的开关网页里也能用，只在 macOS 显示；Linux 上这一步只读，写明终端命令；`vonvon bot status` 也列这一步（3.1 第 4 条、3.10） | 880 | s07、s04 | 子进程、并发、错误路径、macOS 原生 | 只用网页端，`npm i -g` 装 PR 的打包 CLI，临时 `VONVON_HOME`：打开后页面重连到原地址，`launchctl print` 的 PID 和 `daemon status` 一致；关掉后 launchd 里没有这个任务，原端口上起了分离 daemon；新数据目录点跳过不写 plist；在"允许在后台"里关掉后显示"已在系统设置里关掉"；两个标签页同时点打开，一个提示正在进行；`npm run build` 的开发版显示"开发版不能装"；服务里跑着时关掉，助手进程挺过 bootout，结果是已卸载 |
+| [x] | s08b | 桌面端的"登录电脑时启动"，app 挪走或换新版后修好服务，删桌面端的 Windows 代码 | 桌面端用自己的 Electron 起同一个助手命令，等它做完再接回 daemon；启动时发现 app 挪过位置、换了新版本或定义是旧格式，先停 daemon 再重装服务；删桌面端按注册读 `loginItem` 的覆盖和 Windows 代码；本文第 10 节写卸载步骤（3.10） | 875 | s08a | 子进程、macOS 原生、错误路径 | 装在"应用程序"里的打包版、真实 HOME 加临时 `VONVON_HOME`（本文第 7 节）：窗口里开关没有"连接断开"弹窗，和 `launchctl print` 一致；退出 app 后服务还在跑；服务跑着时把 app 挪到 `~/Applications` 再打开，plist 重写、服务恢复，挪回来也恢复；换成升了版本号的包后打开，`daemon status` 是新版本、新 PID；签名版在"允许在后台"里显示什么 |
 
 开工要点：
 - s03：nvm 装的 codex 从 Finder 打开时，PATH 里没有那个 Node 版本的目录，`#!/usr/bin/env node` 起不来。已改：起 codex 子进程（查版本、app-server、装完托管副本后的版本检查）时，PATH 补上 codex 所在的目录和 s02 的工具目录。
@@ -305,8 +315,8 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s07a 的做法：Linux 上用 Codex 绑完群，多打一行提示运行 `vonvon settings set --group <群 id> permission.mode=full`。只提示，不自动改，默认档留给 s20a、s20b。
 - s07a 留下的，给 s47：agent 那条路在 `D/cli/daemon-client.ts` 里加第二种连接（从环境变量读地址和令牌），传给 `withDaemon`，命令函数照用。
 - s07a 留下的：本机那一节（`codexBin`）和设置里走 `act` 的操作（管理员、群成员、评论提示词、语音）没进命令行，s47 或以后要用再加。
-- s07a 留下的，给 s02b、s02c：`cliBridge`（咖啡一下）在人看的输出里不显示，`settings set` 拒绝改，`--json` 里还在，等 s02b、s02c 删掉。
-- s07a 留下的：`D/cli/commands/doctor.ts` 也是没人调用的旧代码，随 s02c 或 s58 删。旧的 `commands/bot.ts`（直接读 `bots.json`）和 `checkbox.ts` 已在本片删掉。
+- s07a 留下的，给 s02b、s02c：`cliBridge`（咖啡一下）在人看的输出里不显示，`settings set` 拒绝改，`--json` 里还在，等 s02b、s02c 删掉。s02c1 已删，`--json` 里也没有了。
+- s07a 留下的：`D/cli/commands/doctor.ts` 也是没人调用的旧代码，随 s02c 或 s58 删。s02c1 已删。旧的 `commands/bot.ts`（直接读 `bots.json`）和 `checkbox.ts` 已在本片删掉。
 - s08：e06 发现系统设置"App 后台活动"里也有一个开关，用户在那里关掉时服务从 launchd 里消失。桌面端的"登录电脑时启动"要读 s07 的状态，显示"已在系统设置里关掉"，不能只看自己存的值。未签名的 Electron 在那里显示为"Electron"、"身份不明的开发者"；签名后的预览版显示什么，s08 的 Mac 检查时看。
 - s08：按 Linux 先行（本文第 1 节），开关放在网页端和桌面端共用的清单里，daemon 调的也是同一个 `vonvon service` 命令，所以先在 Mac 网页端查；桌面窗口里的部分，等网页端封装成桌面端时再查。
 - s08 的做法：拆成两片，合起来约 1750 行，超过 1500 行的上限。s08a 做 daemon、协议和网页端共用的界面，Linux 先行；s08b 做桌面端接线、app 挪走和换新版后的修复、删 Windows 代码和卸载步骤，依赖 s08a。
@@ -650,7 +660,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 - s20a：`open.ts` 的 `cmd /c start`；协议平台枚举里的 windows，以及界面上的"这台 Windows 电脑"。
 - s20b：Codex 只读、读写档的 win32 分支；`codex-appserver/windows-job.ts`、它的两处引用和两份测试。
 - s51a：私聊菜单里的"安装桌面版 · Windows x64"按钮。
-- s02c：cli-bridge 整个删掉，它的 cmd.exe 引号、命名管道、PowerShell 离开检测和 Windows 提示跟着没了；`config/paths.ts` 的命名管道分支。
+- s02c：cli-bridge 整个删掉，它的 cmd.exe 引号、命名管道、PowerShell 离开检测和 Windows 提示跟着没了；`config/paths.ts` 的命名管道分支。分在 s02c2 到 s02c5，见第 3 节的 s02c 拆法。
 - s58：从没上线的改名迁移（`data-root-migration.ts`、`legacy-data-root.ts`、`host/migration.ts`）；`data-compatibility.ts` 的 Windows 分支。`isBridgeGetter` 还有人用，留下。
 - s59：`D/service/control.ts` 里检测 bridge 的 Windows Run 键和计划任务。导入只做 macOS。
 

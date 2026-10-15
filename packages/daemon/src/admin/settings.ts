@@ -3,13 +3,12 @@ import { readFile } from 'node:fs/promises';
 import { DEFAULT_BACKEND_ID, type AgentBackend, type ReasoningEffort } from '../agent/types';
 import { backendIds } from '../agent';
 import { parseModelId } from '../agent/model-id';
-import { getCliBridgePreferences, getCompletionReminderConfig, getMaxConcurrentRuns, getModelDisplay, getPendingPolicy, getRunIdleTimeoutMs, getSessionTitleConfig, getSessionTitleEfforts, getShowToolCalls, resolveOwner, type AppConfig, type AppPreferences } from '../config/schema';
+import { getCompletionReminderConfig, getMaxConcurrentRuns, getModelDisplay, getPendingPolicy, getRunIdleTimeoutMs, getSessionTitleConfig, getSessionTitleEfforts, getShowToolCalls, resolveOwner, type AppConfig, type AppPreferences } from '../config/schema';
 import { paths } from '../config/paths';
 import { resolveProjectsRootDir } from '../project/lifecycle';
 import { defaultNoMention, effectiveGuestMode, effectiveMode, getProjectByName, listProjects, mutateProject, type Project } from '../project/registry';
 import { getSession, mutateSession, type SessionRecord } from '../bot/session-store';
 import { DEFAULT_COMMENT_INSTRUCTIONS, saveCommentInstructions, syncAllCommentInstructions } from '../bot/comments';
-import { inspectCliBridgeHooks, installCliBridgeHooks, resolveBridgeHookCommand } from '../cli-bridge/hooks';
 import { voiceView } from '../voice/view';
 import type { VoiceAction } from '../voice/types';
 import { probeBackends, type AppPreferencesWriter } from './ops';
@@ -35,11 +34,6 @@ export interface SettingsOwnerDeps {
   evictLiveSessionsForChat: (chatId: string) => Promise<void>;
   voiceAction?: (action: VoiceAction) => Promise<void>;
   refreshCompletionReminders?: () => void;
-  cliBridge?: {
-    start(): Promise<void>;
-    shutdown(): Promise<void>;
-    isRunning?(): boolean;
-  };
   access?: T.SettingsAccess;
   runningConcurrency?: number;
   readProject?: typeof getProjectByName;
@@ -47,10 +41,6 @@ export interface SettingsOwnerDeps {
   readSession?: typeof getSession;
   mutateProject?: typeof mutateProject;
   mutateSession?: typeof mutateSession;
-  hooks?: {
-    inspect: typeof inspectCliBridgeHooks;
-    install: typeof installCliBridgeHooks;
-  };
   instructions?: {
     read(): Promise<string>;
     save(text: string): Promise<void>;
@@ -70,7 +60,6 @@ const agentEffects: {
   cards: effect(['showToolCalls', 'showModel'], 'next-message', '后续任务卡片输出生效'),
   run: [...effect(['maxConcurrentRuns'], 'restart', '已保存的并发上限在 Host 重启后生效'), ...effect(['pendingPolicy'], 'next-message', '下一条消息生效'), ...effect(['runIdleTimeoutSeconds'], 'next-turn', '下一次超时检测生效')],
   completion: effect(['mode', 'longTaskMinutes'], 'task-completion', '任务结束时读取最新策略'),
-  cliBridge: [...effect(['agents', 'notifyScope', 'approval', 'taskCompletion', 'allowCache', 'keepAwake'], 'next-hook', '下一次适用的 hook 操作生效；已有等待保留原截止时间'), ...effect(['presence'], 'next-presence-check', '下一次在场检测生效')],
   comments: effect(['backend', 'selection'], 'new-comment', '下一条评论使用新设置'),
   titles: effect(['byBackend'], 'new-session', '仅影响之后由 Bridge 新建的会话'),
   paths: effect(['projectsRootDir'], 'new-project', '仅影响之后新建的空白项目'),
@@ -101,7 +90,6 @@ function applySelection(target: {
 }
 function agentData(cfg: AppConfig): T.AgentSections {
   const p = cfg.preferences ?? {};
-  const { enabled: _enabled, delivery: _delivery, includeBridgeOwnedSessionsForDebugging: _debug, ...cli } = getCliBridgePreferences(cfg);
   const titles: Record<string, T.TitlePolicy> = {};
   for (const id of new Set([...backendIds(), ...Object.keys(p.sessionTitles?.byBackend ?? {})]))
     titles[id] = getSessionTitleConfig(cfg, id);
@@ -116,7 +104,6 @@ function agentData(cfg: AppConfig): T.AgentSections {
       runIdleTimeoutSeconds: (getRunIdleTimeoutMs(cfg) ?? 0) / 1000
     },
     completion: getCompletionReminderConfig(cfg),
-    cliBridge: cli,
     comments: {
       backend: p.comments?.backend ?? DEFAULT_BACKEND_ID,
       selection: selection(p.comments?.model, p.comments?.effort)
@@ -137,10 +124,6 @@ function agentRaw(p: AppPreferences, section: keyof T.AgentSections): unknown {
     case 'cards': return [p.showToolCalls, p.showModel];
     case 'run': return [p.maxConcurrentRuns, p.runIdleTimeoutSeconds, p.pendingPolicy];
     case 'completion': return [p.completionReminder?.mode, p.completionReminder?.longTaskMinutes];
-    case 'cliBridge': {
-      const c = p.cliBridge;
-      return [c?.agents?.claude, c?.agents?.codex, c?.notifyScope, c?.keepAwake?.enabled, c?.approval?.enabled, c?.approval?.timeoutSeconds, c?.taskCompletion?.enabled, c?.taskCompletion?.replyEnabled, c?.taskCompletion?.replyTimeoutSeconds, c?.allowCache?.enabled, c?.allowCache?.scope, c?.presence?.enabled, c?.presence?.platform, c?.presence?.idleThresholdSeconds];
-    }
     case 'comments': return [p.comments?.backend, p.comments?.model, p.comments?.effort];
     case 'titles': return Object.entries(p.sessionTitles?.byBackend ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([id, v]) => [id, v?.enabled, v?.model, v?.effort]);
     case 'paths': return p.projectsRootDir ?? null;
@@ -205,10 +188,6 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
   const readSession = deps.readSession ?? getSession;
   const changeProject = deps.mutateProject ?? mutateProject;
   const changeSession = deps.mutateSession ?? mutateSession;
-  const hooks = deps.hooks ?? {
-    inspect: inspectCliBridgeHooks,
-    install: installCliBridgeHooks
-  };
   const instructions = deps.instructions ?? {
     read: () => readFile(paths.commentInstructionsFile, 'utf8').catch(error => {
       if (error.code === 'ENOENT')
@@ -218,8 +197,6 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
     save: (text: string) => saveCommentInstructions(paths.commentInstructionsFile, text),
     sync: (text: string) => syncAllCommentInstructions(paths.commentsRootDir, text, cfg.accounts.app.tenant),
   };
-  // s02b: the bot no longer hands the service over, so without it nothing runs.
-  let cliRunning = !!deps.cliBridge && getCliBridgePreferences(cfg).enabled && access.kind === 'writable';
   let actionChain: Promise<unknown> = Promise.resolve();
   const own = (scope: T.SettingsScope) => {
     if (scope.kind === 'host' || scope.botId !== botId)
@@ -341,24 +318,6 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           revision: settingsRevision([botId, resolveOwner(cfg), cfg.preferences?.access?.admins ?? []])
         },
         voice: voiceView(cfg),
-        cliRuntime: {
-          enabled: getCliBridgePreferences(cfg).enabled,
-          running: deps.cliBridge?.isRunning?.() ?? cliRunning,
-          revision: settingsRevision([botId, cfg.preferences?.cliBridge?.enabled]),
-          hooks: await hooks.inspect().catch(() => ({
-            claude: {
-              agent: 'claude' as const,
-              status: 'needs_repair' as const,
-              details: ['读取 hook 状态失败，请重试']
-            },
-            codex: {
-              agent: 'codex' as const,
-              status: 'needs_repair' as const,
-              details: ['读取 hook 状态失败，请重试']
-            }
-          })),
-          keepAwakeSupported: process.platform === 'darwin'
-        },
         commentInstructions: {
           content: text === DEFAULT_COMMENT_INSTRUCTIONS ? {
             kind: 'default',
@@ -460,46 +419,6 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
                 ...e.patch
               };
               break;
-            case 'cliBridge': {
-              const patch = e.patch;
-              const c = {
-                ...p.cliBridge
-              };
-              if (patch.notifyScope !== undefined)
-                c.notifyScope = patch.notifyScope;
-              if (patch.agents)
-                c.agents = {
-                  ...c.agents,
-                  ...patch.agents
-                };
-              if (patch.keepAwake)
-                c.keepAwake = {
-                  ...c.keepAwake,
-                  ...patch.keepAwake
-                };
-              if (patch.approval)
-                c.approval = {
-                  ...c.approval,
-                  ...patch.approval
-                };
-              if (patch.taskCompletion)
-                c.taskCompletion = {
-                  ...c.taskCompletion,
-                  ...patch.taskCompletion
-                };
-              if (patch.allowCache)
-                c.allowCache = {
-                  ...c.allowCache,
-                  ...patch.allowCache
-                };
-              if (patch.presence)
-                c.presence = {
-                  ...c.presence,
-                  ...patch.presence
-                };
-              p.cliBridge = c;
-              break;
-            }
             case 'comments': {
               const backend = e.patch.backend ?? p.comments?.backend ?? DEFAULT_BACKEND_ID;
               const choice = e.patch.selection ?? selection(p.comments?.model, p.comments?.effort);
@@ -627,7 +546,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       return rejected(error);
     }
   }
-  async function performAction(action: T.BotSettingsAction): Promise<T.SettingsActionResult> {
+  async function performAction(action: T.SettingsAction): Promise<T.SettingsActionResult> {
     own({
       kind: 'agent',
       botId: action.botId
@@ -657,74 +576,6 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
             };
           await deps.voiceAction(action.action);
           break;
-        case 'repairCliHooks':
-          for (const agent of ['claude', 'codex'] as const) {
-            try {
-              await hooks.install({
-                command: resolveBridgeHookCommand(botId),
-                agents: {
-                  claude: agent === 'claude',
-                  codex: agent === 'codex'
-                }
-              });
-            }
-            catch {
-              warnings.push(`${agent} hooks 修复失败，请查看状态并重试`);
-            }
-          }
-          break;
-        case 'setCliBridgeEnabled': {
-          if (!deps.cliBridge)
-            return {
-              kind: 'unavailable',
-              reason: offlineSettings
-            };
-          const previous = deps.cliBridge.isRunning?.() ?? cliRunning;
-          let changed = false;
-          try {
-            await deps.writePreferences(async (p) => {
-              if (getCliBridgePreferences(cfg).enabled !== action.enabled || previous !== action.enabled)
-                check([botId, p.cliBridge?.enabled], action.revision);
-              if (action.enabled && !resolveOwner(cfg))
-                throw new SettingsInputError('请先配置不可变的机器人所有者');
-              if (previous !== action.enabled) {
-                if (action.enabled)
-                  await deps.cliBridge!.start();
-                else
-                  await deps.cliBridge!.shutdown();
-                cliRunning = action.enabled;
-                changed = true;
-              }
-              p.cliBridge = {
-                ...p.cliBridge,
-                enabled: action.enabled
-              };
-            });
-          }
-          catch (error) {
-            if (changed) {
-              try {
-                if (previous)
-                  await deps.cliBridge.start();
-                else
-                  await deps.cliBridge.shutdown();
-                cliRunning = previous;
-              }
-              catch {
-                return {
-                  kind: 'diverged',
-                  view: await read({
-                    kind: 'agent',
-                    botId
-                  }) as T.AgentSettingsView,
-                  message: '配置保存失败，运行状态补偿也失败。请重启 Host 使运行状态与已保存配置一致'
-                };
-              }
-            }
-            throw error;
-          }
-          break;
-        }
         case 'adminMember':
           await deps.writePreferences(p => {
             check([botId, resolveOwner(cfg), p.access?.admins ?? []], action.revision);
@@ -790,7 +641,6 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
     models,
     act(input) {
       const action = parseSettingsAction(input);
-      if (action.kind === 'setHostCliRoute' || action.kind === 'repairHostCliHooks') throw new SettingsInputError('本机操作不能由 Agent 执行');
       const result = actionChain.then(() => performAction(action));
       actionChain = result.then(() => undefined, () => undefined);
       return result;

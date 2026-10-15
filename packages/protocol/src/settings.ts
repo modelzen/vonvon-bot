@@ -34,23 +34,6 @@ const title = z.discriminatedUnion("enabled", [
     })
     .strict(),
 ]);
-const cli = z.object({
-  agents: z.object({ claude: z.boolean(), codex: z.boolean() }),
-  notifyScope: z.enum(["all", "bound_projects", "none"]),
-  keepAwake: z.object({ enabled: z.boolean() }),
-  approval: z.object({ enabled: z.boolean(), timeoutSeconds: z.number() }),
-  taskCompletion: z.object({
-    enabled: z.boolean(),
-    replyEnabled: z.boolean(),
-    replyTimeoutSeconds: z.number(),
-  }),
-  allowCache: z.object({ enabled: z.boolean(), scope: z.literal("session") }),
-  presence: z.object({
-    enabled: z.boolean(),
-    platform: z.enum(["auto", "macos"]),
-    idleThresholdSeconds: z.number(),
-  }),
-});
 export const agentSectionSchemas = {
   cards: z.object({
     showToolCalls: z.boolean(),
@@ -65,7 +48,6 @@ export const agentSectionSchemas = {
     mode: z.enum(["manual", "long", "failures", "always"]),
     longTaskMinutes: z.number(),
   }),
-  cliBridge: cli,
   comments: z.object({ backend: z.string(), selection }),
   titles: z.object({ byBackend: z.record(title) }),
   paths: z.object({ projectsRootDir: z.string().nullable() }),
@@ -123,8 +105,6 @@ const effect = z.object({
     "new-session",
     "new-comment",
     "new-project",
-    "next-hook",
-    "next-presence-check",
     "restart",
     "session-rebind",
     "immediate",
@@ -159,16 +139,6 @@ const voice = z.object({
   result: z.string(),
   grantUrl: z.string(),
 });
-const hook = z.object({
-  agent: z.enum(["claude", "codex"]),
-  status: z.enum([
-    "installed",
-    "not_installed",
-    "needs_repair",
-    "conflict_agent2lark",
-  ]),
-  details: z.array(z.string()),
-});
 export const agentViewSchema = z.object({
   scope: z.object({ kind: z.literal("agent"), botId: agentIdSchema }),
   sections: sections(agentSectionSchemas),
@@ -178,13 +148,6 @@ export const agentViewSchema = z.object({
     revision: z.string(),
   }),
   voice,
-  cliRuntime: z.object({
-    enabled: z.boolean(),
-    running: z.boolean(),
-    revision: z.string(),
-    hooks: z.object({ claude: hook, codex: hook }),
-    keepAwakeSupported: z.boolean(),
-  }),
   commentInstructions: z.object({
     content: z.discriminatedUnion("kind", [
       z.object({ kind: z.literal("default"), text: z.string() }),
@@ -230,16 +193,6 @@ export const hostViewSchema = z.object({
     codexBin: z.string().nullable(),
     fallbackCwd: z.string(),
     platform: z.string(),
-    coffee: z.object({
-      route: z.enum(['legacy', 'none', 'agent']),
-      targets: z.object({codex: z.array(z.string()), claude: z.array(z.string())}).default({codex: [], claude: []}),
-      editorBotId: agentIdSchema.nullable().optional(),
-      targetsReadable: z.boolean().default(false),
-      botId: agentIdSchema.nullable(),
-      revision: z.string(),
-      agents: z.array(z.object({ botId: agentIdSchema, name: z.string(), enabled: z.boolean(), hasOwner: z.boolean() })),
-      hooks: z.object({ claude: hook, codex: hook }),
-    }).optional(),
   }),
 });
 export const settingsViewSchema = z.union([
@@ -325,19 +278,6 @@ export type SettingsEdit =
       patch: Partial<z.infer<typeof hostSectionSchemas.execution>>;
     };
 export const actionSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal('setHostCliRoute'), botId: agentIdSchema.nullable(), revision: z.string() }).strict(),
-  z.object({ kind: z.literal('repairHostCliHooks'), agents: z.array(z.enum(['claude', 'codex'])).min(1).max(2) }).strict(),
-  z
-    .object({
-      kind: z.literal("setCliBridgeEnabled"),
-      botId: agentIdSchema,
-      enabled: z.boolean(),
-      revision: z.string(),
-    })
-    .strict(),
-  z
-    .object({ kind: z.literal("repairCliHooks"), botId: agentIdSchema })
-    .strict(),
   z
     .object({
       kind: z.literal("voice"),
@@ -478,24 +418,19 @@ const saveSchema = z.discriminatedUnion("kind", [
 const actionResultSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("saved"),
-    view: z.union([agentViewSchema, projectViewSchema, hostViewSchema]),
+    view: z.union([agentViewSchema, projectViewSchema]),
     effects: z.array(effect),
     warnings: z.array(z.string()),
   }),
   z.object({
     kind: z.literal("conflict"),
-    view: z.union([agentViewSchema, projectViewSchema, hostViewSchema]),
+    view: z.union([agentViewSchema, projectViewSchema]),
   }),
   z.object({
     kind: z.literal("rejected"),
     fields: z.array(z.object({ field: z.string(), message: z.string() })),
   }),
   z.object({ kind: z.literal("unavailable"), reason: access }),
-  z.object({
-    kind: z.literal("diverged"),
-    view: agentViewSchema,
-    message: z.string(),
-  }),
 ]);
 export const settingsReplySchema = z.discriminatedUnion("kind", [
   z.object({

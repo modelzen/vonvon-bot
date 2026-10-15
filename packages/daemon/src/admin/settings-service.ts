@@ -75,8 +75,6 @@ export function createSettingsService(deps: AdminServiceDeps): HostSettings {
       }) as SettingsSave;
     },
     async act(action) {
-      if (action.kind === 'setHostCliRoute' || action.kind === 'repairHostCliHooks')
-        return host.act(action);
       if (!await owned(action.botId))
         return {
           kind: 'unavailable',

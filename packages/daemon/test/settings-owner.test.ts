@@ -22,11 +22,10 @@ const agent = { kind: 'agent' as const, botId };
 const project = { kind: 'project' as const, botId, projectName: 'demo' };
 const session = { kind: 'session' as const, botId, threadId: 'omt_fixture' };
 const backend = { id: 'codex-appserver', doctor: async () => ({ ok: true }), supportedModes: ['qa', 'write', 'full'], listModels: async () => [{ id: 'fixture-model', displayName: 'Fixture', description: '', defaultEffort: 'high', supportedEfforts: ['low', 'high'], isDefault: true, hidden: false }] } as unknown as AgentBackend;
-const hooks = { inspect: async () => ({ claude: { agent: 'claude' as const, status: 'installed' as const, details: [] }, codex: { agent: 'codex' as const, status: 'installed' as const, details: [] } }), install: vi.fn(async () => {}) };
 let cfg: AppConfig;
 async function fixture(overrides: Partial<SettingsOwnerDeps> = {}) {
   const writer = createAppPreferencesWriter({ cfg });
-  return { writer, owner: createSettingsOwner({ cfg, writePreferences: writer, backendFor: () => backend, evictLiveSessionsForChat: vi.fn(async () => {}), hooks, ...overrides }) };
+  return { writer, owner: createSettingsOwner({ cfg, writePreferences: writer, backendFor: () => backend, evictLiveSessionsForChat: vi.fn(async () => {}), ...overrides }) };
 }
 beforeEach(async () => {
   await rm(paths.appDir, { recursive: true, force: true }); await mkdir(paths.appDir, { recursive: true });
@@ -39,9 +38,8 @@ afterAll(() => rm(paths.appDir, { recursive: true, force: true }));
 describe('strict boundaries', () => {
   it.each([{ maxConcurrentRuns: '2' }, { runIdleTimeoutSeconds: 1 }, { runIdleTimeoutSeconds: 3601 }, { pendingPolicy: 'other' }, { ownerOpenId: 'ou_steal' }])('rejects malformed run edits %j', patch => expect(() => parseSettingsEdit({ scope: agent, section: 'run', revision: 'x', patch })).toThrow());
   it('rejects wrong action values and arbitrary fields', () => {
-    expect(() => parseSettingsAction({ kind: 'setCliBridgeEnabled', botId, enabled: 'true', revision: 'x' })).toThrow();
     expect(() => parseSettingsAction({ kind: 'adminMember', botId, openId: 'bad', membership: 'present', revision: 'x' })).toThrow();
-    expect(() => parseSettingsEdit({ scope: agent, section: 'cliBridge', revision: 'x', patch: { includeBridgeOwnedSessionsForDebugging: true } })).toThrow();
+    expect(() => parseSettingsEdit({ scope: agent, section: 'cards', revision: 'x', patch: { debug: true } })).toThrow();
   });
 });
 it('serializes card and HTTP preference edits, preserves unknown nested keys and secrets, reports running concurrency', async () => {
@@ -52,12 +50,11 @@ it('serializes card and HTTP preference edits, preserves unknown nested keys and
   expect(fresh.sections.run.stored.maxConcurrentRuns).toBe(7); expect(fresh.sections.run.effective.maxConcurrentRuns).toBe(10);
   expect(fresh.sections.cards.effective.showToolCalls).toBe(false);
   await owner.save({ scope: agent, section: 'completion', revision: fresh.sections.completion.revision, patch: { mode: 'always' } });
-  await owner.save({ scope: agent, section: 'cliBridge', revision: fresh.sections.cliBridge.revision, patch: { presence: { enabled: true, platform: 'auto', idleThresholdSeconds: 77 } } });
   await owner.save({ scope: agent, section: 'titles', revision: fresh.sections.titles.revision, patch: { byBackend: { 'codex-appserver': { enabled: false } } } });
   const disk = await loadConfig() as AppConfig & { futureRoot: number };
   expect(disk.accounts).toEqual(cfg.accounts); expect(disk.secrets).toEqual(cfg.secrets); expect(disk.futureRoot).toBe(17);
   expect(disk.preferences?.completionReminder).toMatchObject({ future: true, mode: 'always' });
-  expect(disk.preferences?.cliBridge?.presence).toMatchObject({ future: 8, idleThresholdSeconds: 77 });
+  expect((disk.preferences as Record<string, unknown>).cliBridge).toEqual({ enabled: false, presence: { future: 8 } }); // 咖啡一下 left it, kept as is
   expect(disk.preferences?.sessionTitles?.byBackend?.['codex-appserver']).toMatchObject({ model: 'custom-title', future: 3, enabled: false });
   expect(JSON.stringify(fresh)).not.toMatch(/fixture-secret|SECRET|futurePreference|futureRoot/);
 });
@@ -74,8 +71,8 @@ it('rejects external file changes and leaves LIVE untouched', async () => {
 });
 it('failed persistence cannot mutate nested live preferences', async () => {
   const write = createAppPreferencesWriter({ cfg, persistConfig: async () => { throw new Error('disk'); } });
-  await expect(write(p => { p.cliBridge!.presence!.enabled = false; })).rejects.toThrow();
-  expect(cfg.preferences?.cliBridge?.presence?.enabled).toBeUndefined();
+  await expect(write(p => { p.sessionTitles!.byBackend!['codex-appserver'] = { enabled: false }; })).rejects.toThrow();
+  expect(cfg.preferences?.sessionTitles?.byBackend?.['codex-appserver']).toMatchObject({ enabled: true, model: 'custom-title' });
 });
 it('validates models, allows custom title ids, resets actual project and session overrides', async () => {
   const { owner } = await fixture(); let p = await owner.read(project) as ProjectSettingsView;
@@ -137,13 +134,6 @@ it('membership operations retain owner and preserve concurrent project edits', a
   await owner.act({ kind: 'projectMember', botId, projectName: 'demo', openId: 'ou_member', membership: 'absent', revision: now.members.revision });
   expect(await getProjectByName('demo')).toMatchObject({ noMention: false, allowedUsers: [] });
 });
-it.each([false, true])('CLI persist failure compensates runtime; compensation failure=%s is explicit', async failedRollback => {
-  const start = vi.fn(async () => {}); const shutdown = vi.fn(async () => { if (failedRollback) throw new Error('stop failed'); });
-  const { owner } = await fixture({ cliBridge: { start, shutdown }, writePreferences: createAppPreferencesWriter({ cfg, persistConfig: async () => { throw new Error('disk'); } }) });
-  const view = await owner.read(agent) as AgentSettingsView;
-  const result = await owner.act({ kind: 'setCliBridgeEnabled', botId, enabled: true, revision: view.cliRuntime.revision });
-  expect(result.kind).toBe(failedRollback ? 'diverged' : 'rejected'); expect(start).toHaveBeenCalledOnce(); expect(shutdown).toHaveBeenCalledOnce(); expect(cfg.preferences?.cliBridge?.enabled).toBe(false);
-});
 it('comment partial propagation reports saved master and retryable warning', async () => {
   let text = 'original';
   const { owner } = await fixture({ instructions: { read: async () => text, save: async next => { text = next; }, sync: async () => { throw new Error('partial'); } } });
@@ -169,16 +159,6 @@ it('readonly owner never permits writes; failed catalogs do not disable unrelate
   expect((await owner.save({ scope: agent, section: 'cards', revision: view.sections.cards.revision, patch: { showToolCalls: false } })).kind).toBe('saved');
   expect(JSON.stringify(await owner.models({ botId, backend: 'codex-appserver', purpose: 'project' }))).not.toContain('private diagnostics');
 });
-it('CLI desired-state retries start once and repair hooks reports each failed backend', async () => {
-  const start = vi.fn(async () => {}); const shutdown = vi.fn(async () => {});
-  const install = vi.fn(async (options: import('../src/cli-bridge/hooks').InstallCliBridgeHooksOptions) => { if ((options as { agents: { claude: boolean } }).agents.claude) throw new Error('claude readonly'); });
-  const { owner } = await fixture({ cliBridge: { start, shutdown }, hooks: { inspect: hooks.inspect, install } });
-  const view = await owner.read(agent) as AgentSettingsView;
-  const action = { kind: 'setCliBridgeEnabled' as const, botId, enabled: true, revision: view.cliRuntime.revision };
-  expect((await owner.act(action)).kind).toBe('saved'); expect((await owner.act(action)).kind).toBe('saved'); expect(start).toHaveBeenCalledOnce();
-  const result = await owner.act({ kind: 'repairCliHooks', botId });
-  expect(install).toHaveBeenCalledTimes(2); if (result.kind === 'saved') expect(result.warnings).toHaveLength(1); else throw new Error(result.kind);
-});
 it('project persistence survives failed runtime eviction with an explicit restart effect', async () => {
   const { owner } = await fixture({ evictLiveSessionsForChat: async () => { throw new Error('busy'); } });
   const view = await owner.read(project) as ProjectSettingsView;
@@ -196,10 +176,23 @@ it('s12: a stored autoCompact:false is ignored on read and the switch cannot be 
   expect(() => parseSettingsEdit({ scope: project, section: 'compact', revision: 'x', patch: { autoCompact: true } })).toThrow('设置字段、类型或范围无效');
   expect(JSON.parse(await readFile(paths.projectsFile, 'utf8')).projects[0]).toMatchObject({ autoCompact: false });
 });
-it('s02b: with no 咖啡一下 service handed over, a stored enabled flag never reads as running', async () => {
-  cfg.preferences!.cliBridge = { enabled: true };
+it('s02c1: an old config.json with 咖啡一下 settings loads, reads without them and keeps them on disk', async () => {
+  // What s02b left on disk: the switch on and every 咖啡一下 field set.
+  const old = { enabled: true, delivery: 'always', notifyScope: 'bound_projects', agents: { claude: true, codex: false }, keepAwake: { enabled: true }, approval: { enabled: true, timeoutSeconds: 600 }, presence: { enabled: true, platform: 'macos', idleThresholdSeconds: 120 } };
+  await writeFile(paths.configFile, JSON.stringify({ ...cfg, preferences: { ...cfg.preferences, cliBridge: old } }));
+  cfg = await loadConfig() as AppConfig;
   const { owner } = await fixture();
-  expect((await owner.read(agent) as AgentSettingsView).cliRuntime).toMatchObject({ enabled: true, running: false });
+  const view = await owner.read(agent) as AgentSettingsView;
+  expect(Object.keys(view.sections)).toEqual(['cards', 'run', 'completion', 'comments', 'titles', 'paths', 'access']);
+  expect(view).not.toHaveProperty('cliRuntime');
+  expect((await owner.save({ scope: agent, section: 'cards', revision: view.sections.cards.revision, patch: { showToolCalls: false } })).kind).toBe('saved');
+  const disk = JSON.parse(await readFile(paths.configFile, 'utf8'));
+  expect(disk.preferences.cliBridge).toEqual(old);
+  expect(disk.preferences).toMatchObject({ showToolCalls: false, futurePreference: true });
+  expect(disk.futureRoot).toBe(17);
+  expect(() => parseSettingsEdit({ scope: agent, section: 'cliBridge', revision: 'x', patch: { notifyScope: 'all' } })).toThrow('设置字段、类型或范围无效');
+  for (const action of [{ kind: 'setCliBridgeEnabled', botId, enabled: false, revision: 'x' }, { kind: 'repairCliHooks', botId }, { kind: 'setHostCliRoute', botId: null, revision: 'x' }, { kind: 'repairHostCliHooks', agents: ['codex'] }])
+    expect(() => parseSettingsAction(action)).toThrow('设置操作参数无效');
 });
 it('real instruction propagation retains saved master and reports partial filesystem failure', async () => {
   const { join } = await import('node:path');
