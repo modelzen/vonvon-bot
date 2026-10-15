@@ -229,6 +229,8 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 - s03：nvm 装的 codex 从 Finder 打开时，PATH 里没有那个 Node 版本的目录，`#!/usr/bin/env node` 起不来。已改：起 codex 子进程（查版本、app-server、装完托管副本后的版本检查）时，PATH 补上 codex 所在的目录和 s02 的工具目录。
 - s03：Codex 的最低版本定成 0.139.0。vonvon 用到的 app-server 方法 0.131.0 就都有，但 vonvon 依赖的行为（`turn/interrupt` 以 `turn/completed(interrupted)` 收尾、目标自动开始和目标状态）实际跑过的最老版本是 0.139。验证过的版本跟托管安装锁定的版本走，现在是 0.156.1。e05 做完后在 s39 抬高。
 - s03：Claude 登录只用 SDK 自带的运行时查：起一个不跑回合的 query，读 initialize 返回的 account；查不了（没下载 SDK、超时、报错）就看环境变量，有 `ANTHROPIC_API_KEY`、`CLAUDE_CODE_OAUTH_TOKEN` 或 `ANTHROPIC_AUTH_TOKEN` 算已登录、没验证过，没有就是无法确认，不报未登录。没用 `claude auth status`：它是另一个 CLI，版本和 SDK 自带的不一定一样，查到了也说明不了 bot 的回合能不能跑。account 是 CLI 从本地凭据读的，不问服务器，所以过期的登录也显示已登录，直到真跑一轮失败。
+- s03：#301 的 Mac 检查发现 owner 的 Mac 上没有 Codex.app，ChatGPT.app 里自带一份 codex（`Contents/Resources/codex-cli/bin/codex`，版本是预发布号，例如 0.162.0-alpha.17.2）。已加进候选，排在 nvm 之后，用户自己装的优先。
+- s03 留下的：Claude 的两个辅助查询（取模型列表、生成标题）用 `settingSources: []`，不读用户设置。凭据写在 `~/.claude/settings.json` 的 `env` 里时（owner 的 Mac 就是这样），这两个查询会报未登录，回合本身（读 user 和 project）和登录检测（读 user）不受影响。下一个碰 Claude 后端的切片改，改之前先在 Mac 上看现象；只读 user 会把用户的 CLAUDE.md 带进生成标题的提示，要一起考虑。
 - s03 留下的：Claude 已登录的结果留 30 分钟，终端里退出登录后，首页最长 30 分钟还显示已登录，点"检查登录"才马上更新。s19 做状态页时，回合因为没登录而失败，就清掉这个缓存。daemon 由 LaunchAgent 起来时（s07）可能读不到钥匙串，探测会报未登录；e06 测钥匙串时一并跑一次登录检测，读不到就在 s07 改成无法确认。
 - s04：没装 Node 的 Mac 上托管副本装不了也跑不了，Codex 那一步引导装 Codex.app 或用 Homebrew 装。用户的 npm 是 11.19 以上时，托管安装 claude-code 和 lark-cli 会跳过它们的 postinstall，开工时实测。
 - s04：写一句"企业租户里新权限可能要管理员审核"（e13）。卡片回调没有只读接口可查，这一步请主人手动勾上。"登录电脑时自动运行"由 s08 加，"从 bridge 导入"由 s63 加。
@@ -496,6 +498,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 - `npm ci` 之后第一次打包缺 Electron 的二进制，原因没查（Mac 的 npm 版本没记）。打包前先跑 `node node_modules/electron/install.js`。
 - auto 模式下，联网（`npm ci`、`gh`）、沙箱外的命令、打开 app、用 Computer Use 操作 app 都会发申请，没人批就一直等。#296 的检查卡在这里将近一小时。Claude 发起会话后要盯着这些申请，按检查范围用 `paseo permit allow` 批准，范围外的不批。
 - 在终端里用 `open` 启动 app，会继承终端的长 PATH。要模拟从 Finder 打开，显式加 PATH：`open -n --env PATH=/usr/bin:/bin:/usr/sbin:/sbin --env HOME=<临时目录> ... <app>`。
+- 测 Claude 时，隔离 HOME 下读不到 owner 的 Claude 凭据：owner 的凭据写在 `~/.claude/settings.json` 的 `env` 里，不在钥匙串。要测已登录，那一条命令用真实 HOME，VONVON_HOME 仍用临时目录。
 - 退出桌面端不停 daemon（product.md 3.10）。测完用包里的命令行 `daemon stop` 停掉隔离 HOME 里的 daemon。
 
 测 Claude 后端时，用 owner 本机的 Claude 登录跑少量回合。这是测产品，不是在 Mac 上开 Claude 的开发会话。

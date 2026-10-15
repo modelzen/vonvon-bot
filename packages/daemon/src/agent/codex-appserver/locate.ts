@@ -55,6 +55,11 @@ function locateBin(home: string, root: string, env: NodeJS.ProcessEnv, blockLega
     const versions = readdirSync(nvm).filter(version => /^v\d+\.\d+\.\d+$/.test(version)).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
     directories.push(...versions.map(version => join(nvm, version, 'bin')));
   } catch {}
+  // ChatGPT.app ships its own codex (a prerelease build). It comes last, so a codex
+  // the user installed is preferred, as in their terminal.
+  if (process.platform === 'darwin') {
+    directories.push('/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin', join(home, 'Applications/ChatGPT.app/Contents/Resources/codex-cli/bin'));
+  }
   for (const directory of directories) {
     for (const candidate of execCandidates(directory, 'codex', env)) {
       if (existsSync(candidate)) return candidate;
