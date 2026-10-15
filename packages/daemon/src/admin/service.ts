@@ -12,7 +12,7 @@ import { parseJoinedGroups, type AdminGroupOp, type BindGroupInput, type JoinedG
 import { voiceView } from '../voice/view';
 import type { VoiceAction, VoiceView } from '../voice/types';
 import { readFile, rm } from 'node:fs/promises';
-import { loadBots, setActiveBots, removeBot } from '../config/bots';
+import { activeBots, loadBots, setActiveBots, removeBot } from '../config/bots';
 import { botPaths, botDir } from '../config/paths';
 import { removeSecret } from '../config/keystore';
 import {
@@ -64,7 +64,7 @@ import {
   type InstallProgress,
 } from '../agent';
 import type { AccountUsageBundle, BackendDepState, BackendLogin, BackendProbe, PermissionMode } from '../agent/types';
-import { readRecentLogs } from '../core/logger';
+import { log, readRecentLogs } from '../core/logger';
 import {
   checkUpdate as checkUpdateImpl,
   readUpdateStatus,
@@ -169,6 +169,7 @@ export interface AdminService {
    * （HTTP/SSE 层据 code 映射）。callbacks 把 SDK 的 onQr/onStatus 透传给上层做 SSE，
    * signal 取消（abort → SDK reject code='abort'，本方法返回 {ok:false,code:'abort'}）。
    * 拿不到扫码人的 open_id 时拒绝落盘，避免产生无人可管理的机器人配置。
+   * 新 Bot 默认启用：加进活跃集并启动连接，启动失败不算注册失败。
    */
   registerBotByQr(opts: {
     signal: AbortSignal;
@@ -488,6 +489,26 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
   };
   const avatars = createAgentAvatarProvider({ credentials });
   const groupAvatars = createGroupAvatarProvider({ credentials });
+  /**
+   * 扫码注册的新 Bot 默认启用，和用户自己打开「启用 Bot」一样：在 setBotEnabled 的同一条队列里把它加进
+   * 活跃集（其余 bot 的启停原样保留，旧安装按 current 回退的语义也保留），再启动它的连接。返回的 Promise
+   * 只等落盘，不等启动：权限、事件还没配时启动可能失败，注册照样成功，Bot 仍算启用，界面按真实的运行和
+   * 连接状态显示。
+   */
+  function enableRegisteredBot(appId: string): Promise<void> {
+    const saved = activationQueue.then(async () => {
+      await setActiveBots([...activeBots(await loadBots()).map((bot) => bot.appId), appId]);
+    });
+    const started = saved.then(async () => {
+      try {
+        await deps.applyBotActivation?.(appId, true);
+      } catch (error) {
+        log.warn('register-bot', 'start-failed', { appId, reason: error instanceof Error ? error.message : String(error) });
+      }
+    });
+    activationQueue = started.catch(() => undefined);
+    return saved;
+  }
   async function projectsWithCounts(botId: string): Promise<AdminProject[]> {
     const files = botPaths(botId);
     const projects = await listProjectsIn(files.projectsFile);
@@ -849,6 +870,8 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
           r.code === 'already_registered' ? 'already_registered' : r.code === 'credential_rejected' ? 'credential_rejected' : r.code === 'persist_failed' ? 'persist_failed' : 'unknown';
         return { ok: false, code, reason: r.reason };
       }
+      // ③ 默认启用并启动。落盘失败只记日志：Bot 已经保存，清单里显示"没有启用"，可以手动打开。
+      await enableRegisteredBot(r.appId).catch((error) => log.fail('register-bot', error, { phase: 'enable', appId: r.appId }));
       return {
         ok: true,
         appId: r.appId,

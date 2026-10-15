@@ -1,8 +1,50 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // 隔离 registerBotByQr 的**编排**：mock SDK registerApp（推 onQr/onStatus + resolve/
 // reject）与共享写盘 registerBotFromCredentials（spy 验入参），不碰真网络/keystore。
 // startRegistration 的 reject-code 解析（registrationErrorCode）走真实实现。
+// 注册成功后会写 bots.json 的启用状态，所以整个数据目录指到临时目录。
+
+vi.mock('../src/config/paths', async () => {
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const appDir = mkdtempSync(join(tmpdir(), 'qr-register-test-'));
+  const botDir = (appId: string): string => join(appDir, 'bots', appId);
+  const botPaths = (appId: string) => {
+    const dir = botDir(appId);
+    return {
+      dir,
+      configFile: join(dir, 'config.json'),
+      sessionsFile: join(dir, 'sessions.json'),
+      projectsFile: join(dir, 'projects.json'),
+      processesFile: join(dir, 'processes.json'),
+      setupFile: join(dir, 'setup.json'),
+    };
+  };
+  return {
+    botDir,
+    botPaths,
+    useBotDir: (): void => {},
+    paths: {
+      appDir,
+      cacheDir: appDir,
+      botsFile: join(appDir, 'bots.json'),
+      secretsFile: join(appDir, 'secrets.enc'),
+      masterKeyFile: join(appDir, 'master.key'),
+      keystoreSaltFile: join(appDir, '.keystore.salt'),
+      secretsGetterScript: join(appDir, 'secrets-getter'),
+      configFile: join(appDir, 'config.json'),
+    },
+  };
+});
+
+// 真实落盘的用例（s02e）里探活一律通过，不打真飞书。
+const validateMock = vi.hoisted(() => vi.fn(async () => ({ ok: true as const, botName: '新机器人', missingScopes: [] as string[] })));
+vi.mock('../src/utils/feishu-auth', async (original) => ({
+  ...(await original<typeof import('../src/utils/feishu-auth')>()),
+  validateAppCredentials: validateMock,
+}));
 
 const registerAppMock = vi.fn();
 vi.mock('@larksuiteoapi/node-sdk', () => ({
@@ -14,12 +56,19 @@ vi.mock('../src/bot/register-bot', () => ({
   registerBotFromCredentials: (input: unknown) => registerBotFromCredentialsMock(input),
 }));
 
+import { rmSync } from 'node:fs';
 import { createAdminService } from '../src/admin/service';
 import { runRegistrationWizard, startRegistration } from '../src/bot/wizard';
+import { loadBots, saveBots, type BotEntry } from '../src/config/bots';
+import { paths } from '../src/config/paths';
 
 afterEach(() => {
   registerAppMock.mockReset();
   registerBotFromCredentialsMock.mockReset();
+});
+
+afterAll(() => {
+  rmSync(paths.appDir, { recursive: true, force: true });
 });
 
 interface RegisterAppOpts {
@@ -151,6 +200,76 @@ describe('registerBotByQr · 扫码编排', () => {
     expect(r).toMatchObject({ ok: false, code: 'identity_missing' });
     if (!r.ok) expect(r.reason).toContain('未获取到扫码人的飞书身份');
     expect(registerBotFromCredentialsMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('registerBotByQr · 注册完默认启用（s02e）', () => {
+  const ON = 'cli_enabledold1';
+  const OFF = 'cli_disabledold';
+  const bot = (appId: string, active?: boolean): BotEntry => ({ name: appId, appId, tenant: 'feishu', createdAt: 1, ...(active === undefined ? {} : { active }) });
+  const scanned = (appId: string): void => {
+    registerAppMock.mockResolvedValue({ client_id: appId, client_secret: 'scan-secret', user_info: { open_id: 'ou_owner', tenant_brand: 'feishu' } });
+  };
+  const scan = { signal: new AbortController().signal, onQr: () => {} };
+  const activeFlags = async (): Promise<Record<string, boolean | undefined>> =>
+    Object.fromEntries((await loadBots()).bots.map((entry) => [entry.appId, entry.active]));
+
+  beforeEach(() => {
+    // 这一组走真实的落盘（keystore + config + bots.json），只有探活是假的。
+    registerBotFromCredentialsMock.mockImplementation(async (input) =>
+      (await vi.importActual<typeof import('../src/bot/register-bot')>('../src/bot/register-bot')).registerBotFromCredentials(input as never));
+  });
+
+  it('新 Bot 写成启用并马上启动；主人停用的 Bot 仍是停用', async () => {
+    await saveBots({ version: 1, current: ON, bots: [bot(ON, true), bot(OFF, false)] });
+    const apply = vi.fn(async () => {});
+    scanned('cli_newbot00001');
+    const r = await createAdminService({ applyBotActivation: apply }).registerBotByQr(scan);
+    expect(r).toMatchObject({ ok: true, appId: 'cli_newbot00001' });
+    expect(await activeFlags()).toEqual({ [ON]: true, [OFF]: false, cli_newbot00001: true });
+    await vi.waitFor(() => expect(apply).toHaveBeenCalledWith('cli_newbot00001', true));
+    expect(apply).toHaveBeenCalledTimes(1);
+  });
+
+  it('旧安装没有启用标记：原来的 current 仍启用，其余照旧不启用', async () => {
+    await saveBots({ version: 1, current: ON, bots: [bot(ON), bot(OFF)] });
+    scanned('cli_newbot00002');
+    expect(await createAdminService().registerBotByQr(scan)).toMatchObject({ ok: true });
+    expect(await activeFlags()).toEqual({ [ON]: true, [OFF]: false, cli_newbot00002: true });
+    expect((await loadBots()).current).toBe(ON);
+  });
+
+  it('启动失败不让注册失败：Bot 仍算启用，之后的开关照常', async () => {
+    await saveBots({ version: 1, bots: [] });
+    const apply = vi.fn(async (_appId: string, enabled: boolean) => {
+      if (enabled) throw new Error('Agent 启动后未能及时响应');
+    });
+    const service = createAdminService({ applyBotActivation: apply });
+    scanned('cli_newbot00003');
+    expect(await service.registerBotByQr(scan)).toMatchObject({ ok: true, appId: 'cli_newbot00003' });
+    expect(await activeFlags()).toEqual({ cli_newbot00003: true });
+    await vi.waitFor(() => expect(apply).toHaveBeenCalledWith('cli_newbot00003', true));
+    expect(await service.setBotEnabled('cli_newbot00003', false)).toMatchObject({ ok: true, activation: 'applied' });
+    expect(await activeFlags()).toEqual({ cli_newbot00003: false });
+  });
+
+  it('重新扫码只换凭据，不动启用状态；同一个应用再注册也不会被打开', async () => {
+    await saveBots({ version: 1, bots: [] });
+    const apply = vi.fn(async () => {});
+    const service = createAdminService({ applyBotActivation: apply });
+    scanned('cli_newbot00004');
+    expect(await service.registerBotByQr(scan)).toMatchObject({ ok: true });
+    expect(await service.setBotEnabled('cli_newbot00004', false)).toMatchObject({ ok: true });
+    apply.mockClear();
+
+    scanned('cli_newbot00004');
+    expect(await service.refreshBotByQr('cli_newbot00004', scan)).toMatchObject({ ok: true, appId: 'cli_newbot00004' });
+    expect(await activeFlags()).toEqual({ cli_newbot00004: false });
+
+    scanned('cli_newbot00004');
+    expect(await service.registerBotByQr(scan)).toMatchObject({ ok: false, code: 'already_registered' });
+    expect(await activeFlags()).toEqual({ cli_newbot00004: false });
+    expect(apply).not.toHaveBeenCalled();
   });
 });
 
