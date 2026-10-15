@@ -181,6 +181,26 @@ describe('extractSendCardText', () => {
     expect(extractSendCardText(card)).toBe('改好了，测试都过了');
   });
 
+  it('keeps only the answer of a Vonvon run card as user_card_content returns it (no sizes or colours)', () => {
+    // The shape of a real pull on JP-VPS, 2026-10-15.
+    const card = { schema: '2.0', config: { streaming_mode: false, summary: { content: '已完成' } }, body: { elements: [
+      { element_id: '_3', tag: 'div', text: { content: '上下文 15% · 61k/400k', tag: 'lark_md' }, width: 'fill' },
+      { content: "<font color='grey'>用时 5秒</font>", element_id: '_2', tag: 'markdown' },
+      { content: '我上次回答之后，你在群里又发了一条：\n1. 17:36 周报改到周四交\n', element_id: '_1', tag: 'markdown' },
+    ] } };
+    expect(extractSendCardText(card)).toBe('我上次回答之后，你在群里又发了一条：\n1. 17:36 周报改到周四交');
+    const meters = ['🟡 上下文 72% · 288k/400k', '上下文 已用 12k', '上下文 —'];
+    for (const content of meters) {
+      expect(extractSendCardText({ body: { elements: [{ tag: 'div', text: { tag: 'lark_md', content } }, { tag: 'markdown', content: '好' }] } })).toBe('好');
+    }
+    // Colour inside the answer keeps its text; a grey line that is only part of a text stays.
+    expect(extractSendCardText({ body: { elements: [
+      { tag: 'markdown', content: "<font color='red'>注意</font>：别删 build" },
+      { tag: 'markdown', content: "结论 <font color='grey'>（草稿）</font>" },
+      { tag: 'markdown', content: '上下文 15% 是我估的' },
+    ] } })).toBe('注意：别删 build\n结论 （草稿）\n上下文 15% 是我估的');
+  });
+
   it('de-duplicates lines and reads one locale of an i18n card', () => {
     expect(extractSendCardText({ schema: '2.0', body: { elements: [{ tag: 'markdown', content: '同一句' }, { tag: 'markdown', content: '同一句' }] } })).toBe('同一句');
     expect(extractSendCardText({ i18n_elements: { en_us: [{ tag: 'markdown', content: 'hello' }], zh_cn: [{ tag: 'markdown', content: '你好' }] } })).toBe('你好');

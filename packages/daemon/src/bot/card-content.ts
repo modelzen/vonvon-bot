@@ -131,6 +131,11 @@ export function isStreamingCard(content: string | undefined): boolean {
  * notation-size lines and notes (status, such as the context meter), images,
  * buttons and rules are skipped. Lines are de-duplicated, order kept; '' when
  * nothing readable remains.
+ *
+ * `user_card_content` drops text sizes and colours, so on a pulled card the
+ * notation check never fires. A Vonvon run card's status lines are told by
+ * their text instead: a line that is grey as a whole (用时, 已压缩) and the
+ * context meter. `<font>` tags are removed and their text kept.
  */
 export function extractSendCardText(card: unknown): string {
   if (!card || typeof card !== 'object') return '';
@@ -157,8 +162,17 @@ function textOf(t: unknown): unknown {
 }
 
 function push(out: string[], v: unknown): void {
-  if (typeof v === 'string' && v.trim()) out.push(v.trim());
+  if (typeof v !== 'string') return;
+  if (WHOLE_GREY.test(v.trim()) || RUN_CARD_METER.test(v.trim())) return;
+  const line = v.replace(FONT_TAG, '').trim();
+  if (line) out.push(line);
 }
+
+const FONT_TAG = /<\/?font\b[^>]*>/g;
+/** One `<font color='grey'>` around the whole text, as Vonvon writes a status line. */
+const WHOLE_GREY = /^<font color=['"]?grey['"]?>(?:(?!<\/?font\b).)*<\/font>$/s;
+/** The context meter of a Vonvon run card (`runCardMeter`). */
+const RUN_CARD_METER = /^(?:[🟡🟠🔴] )?上下文 (?:\d+% · \S+\/\S+|已用 \S+|—)$/u;
 
 function sendElements(els: unknown, out: string[]): void {
   if (!Array.isArray(els)) return;
