@@ -2,7 +2,11 @@ import {createContext, useCallback, useContext, useId, useLayoutEffect, useMemo,
 import {Button, InlineNotice} from '../reference/components/ui';
 import {Dialog} from '../reference/components/ui/Dialog';
 
-type Draft = {title: string; save: () => Promise<boolean>; discard: () => void};
+/** A draft without `save` is one whose save is not a harmless write (JoinGroupDialog's would create a
+ * real Feishu group), so leaving only offers 继续编辑 and 放弃并离开. */
+type Draft = {title: string; save?: () => Promise<boolean>; discard: () => void};
+/** 保存并离开 is offered only when every open draft can be saved. */
+export const canSaveAll = (drafts: Iterable<Pick<Draft, 'save'>>): boolean => [...drafts].every(draft => draft.save);
 type Guard = {
   register: (id: string, draft: Draft) => () => void;
   navigate: (action: () => void) => void;
@@ -15,6 +19,7 @@ export function DraftGuardProvider({children}: {children: ReactNode}) {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [failure, setFailure] = useState<string>();
+  const [savable, setSavable] = useState(true);
   const register = useCallback((id: string, draft: Draft) => {
     drafts.current.set(id, draft);
     return () => { if (drafts.current.get(id) === draft) drafts.current.delete(id); };
@@ -24,6 +29,7 @@ export function DraftGuardProvider({children}: {children: ReactNode}) {
     if (!drafts.current.size) { action(); return; }
     destination.current = action;
     setFailure(undefined);
+    setSavable(canSaveAll(drafts.current.values()));
     setOpen(true);
   }, []);
   const context = useMemo(() => ({register, navigate}), [register, navigate]);
@@ -39,7 +45,7 @@ export function DraftGuardProvider({children}: {children: ReactNode}) {
     setFailure(undefined);
     try {
       for (const [id, draft] of [...drafts.current]) {
-        if (!await draft.save()) {
+        if (!draft.save || !await draft.save()) {
           setFailure(`“${draft.title}”未能保存。修改仍保留在当前页面。`);
           return;
         }
@@ -56,9 +62,9 @@ export function DraftGuardProvider({children}: {children: ReactNode}) {
       footer={<>
         <Button disabled={saving} onClick={stay}>继续编辑</Button>
         <Button disabled={saving} onClick={() => {for (const draft of drafts.current.values()) draft.discard(); drafts.current.clear(); proceed();}}>放弃并离开</Button>
-        <Button variant="primary" loading={saving} onClick={() => void saveAll()}>保存并离开</Button>
+        {savable && <Button variant="primary" loading={saving} onClick={() => void saveAll()}>保存并离开</Button>}
       </>}>
-      <p>离开前，请选择如何处理当前修改。</p>
+      <p>{savable ? '离开前，请选择如何处理当前修改。' : '离开后，填写的内容不会保留。'}</p>
       {failure && <InlineNotice title="保存未完成" tone="danger">{failure}</InlineNotice>}
     </Dialog>
   </Context.Provider>;

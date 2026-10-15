@@ -50,11 +50,28 @@ export async function openExternalUrl(value: string, kind: ExternalUrlKind, shel
   else window.open(url, "_blank", "noopener");
 }
 
-export async function copyAuthorizationUrl(value: string, kind: "registration" | "authorization"): Promise<void> {
+export type CopyOutcome = "copied" | "selected";
+/** Copies a validated link. When the clipboard refuses (or is missing) and `select` is given, `select`
+ * puts the link in a selected field for a manual ⌘C / Ctrl+C and this resolves "selected";
+ * without `select` the refusal is thrown. An unsupported link always throws. */
+export async function copyAuthorizationUrl(value: string, kind: "registration" | "authorization", select?: () => void): Promise<CopyOutcome> {
   const url = allowedExternalUrl(value, kind);
   if (!url) throw new Error("链接不是受支持的官方地址。");
-  await navigator.clipboard.writeText(url);
+  try { await navigator.clipboard.writeText(url); }
+  catch (error) {
+    if (!select) throw error;
+    select();
+    return "selected";
+  }
+  return "copied";
 }
+
+/** The copy shortcut on the viewer's own keyboard. */
+export function copyShortcut(platform = typeof navigator === "undefined" ? "" : navigator.platform || navigator.userAgent): string {
+  return /mac|iphone|ipad|ipod/i.test(platform) ? "⌘C" : "Ctrl+C";
+}
+export const copyFeedback = (outcome: CopyOutcome, shortcut = copyShortcut()): string =>
+  outcome === "copied" ? "已复制" : `已选中链接，按 ${shortcut} 复制`;
 
 export function groupUrl(groupId: string, threadId?: string): string {
   const group = encodeURIComponent(groupId);
