@@ -90,7 +90,7 @@ function setup(topics?: TopicRegistry) {
   const channel = { send: fake.send, rawClient: { im: { v1: { message: { get: fake.get }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
-  orchestrator = createOrchestrator(channel as never, cfg, '/test', undefined, topics);
+  orchestrator = createOrchestrator(channel as never, cfg, '/test', topics);
   return orchestrator;
 }
 const record = (key: string, extra: object = {}) => ({ threadId: key, chatId: 'chat', sessionId: `old-${key}`, backend: 'codex', cwd: '/test', summary: '', model: 'm', effort: 'medium', lastSeenAt: 1, ...extra });
