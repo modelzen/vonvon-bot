@@ -72,19 +72,6 @@
   background: var(--color-surface);
   line-height: 1.5;
 }
-.settings-advanced-toggle {
-  display: block;
-  width: 100%;
-  padding: 12px 14px;
-  text-align: left;
-  border: 0;
-  background: transparent;
-  color: var(--color-text-secondary);
-  font: inherit;
-}
-.settings-advanced-toggle:hover {
-  text-decoration: underline;
-}
 .desktop-job {
   width: 100%;
   box-sizing: border-box;

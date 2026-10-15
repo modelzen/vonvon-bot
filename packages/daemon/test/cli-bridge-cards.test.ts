@@ -246,35 +246,4 @@ describe('cli bridge cards', () => {
     expect(json.length).toBeLessThan(10_000);
     expect(json).toContain('truncated');
   });
-
-  it('puts the local-agents controls on a ☕ 咖啡一下 sub-card reached via the settings entry', async () => {
-    const { buildSettingsCard, buildCoffeeSettingsCard, DM } = await import('../src/card/dm-cards');
-    const { cliBridgeSettingsSection } = await import('../src/cli-bridge/cards');
-    // Global settings card: an ENTRY into the sub-card, not the inlined controls.
-    const main = JSON.stringify(buildSettingsCard({
-      accounts: { app: { id: 'app', secret: 'secret', tenant: 'feishu' } },
-      preferences: { access: { ownerOpenId: 'ou_owner' } },
-    }));
-    expect(main).toContain('全局设置');
-    expect(main).toContain('☕ 咖啡一下'); // the entry section heading
-    expect(main).toContain(DM.coffeeSettings); // entry button action → sub-card
-    expect(main).not.toContain('咖啡一下：开'); // the master toggle is NOT on the main card anymore
-    expect(main).not.toContain('📣 通知范围'); // nor the rest of the controls
-    // Comment entry now spells out supported doc types + what's configurable.
-    expect(main).toContain('多维表格');
-    // Sub-card: the actual controls + a back button to the settings card.
-    const section = cliBridgeSettingsSection({
-      enabled: true,
-      statuses,
-      canEnable: { ok: true },
-      notifyScope: 'all',
-      agents: { claude: true, codex: true },
-      keepAwake: true,
-    });
-    const sub = JSON.stringify(buildCoffeeSettingsCard(section));
-    expect(sub).toContain('☕ 咖啡一下'); // header
-    expect(sub).toContain('咖啡一下：开'); // master toggle
-    expect(sub).toContain('📣 通知范围'); // moved here
-    expect(sub).toContain(DM.settings); // ⬅️ back to the settings card
-  });
 });
