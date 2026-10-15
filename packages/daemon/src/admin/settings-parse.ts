@@ -58,34 +58,6 @@ const schemas: Record<string, Record<string, Rule>> = {
       mode: one('manual', 'long', 'failures', 'always'),
       longTaskMinutes: integer(1, 1440)
     }, true),
-    cliBridge: shape({
-      agents: shape({
-        claude: bool,
-        codex: bool
-      }),
-      notifyScope: one('all', 'bound_projects', 'none'),
-      keepAwake: shape({
-        enabled: bool
-      }),
-      approval: shape({
-        enabled: bool,
-        timeoutSeconds: integer(1, 86400)
-      }),
-      taskCompletion: shape({
-        enabled: bool,
-        replyEnabled: bool,
-        replyTimeoutSeconds: integer(1, 86400)
-      }),
-      allowCache: shape({
-        enabled: bool,
-        scope: one('session')
-      }),
-      presence: shape({
-        enabled: bool,
-        platform: one('auto', 'macos'),
-        idleThresholdSeconds: integer(10, 3600)
-      })
-    }, true),
     comments: shape({
       backend: text,
       selection
@@ -189,14 +161,6 @@ export function parseSettingsAction(input: unknown): SettingsAction {
   const revision = text;
   const membership = one('present', 'absent');
   const rules: Record<string, Rule> = {
-    setHostCliRoute: shape({ kind: one('setHostCliRoute'), botId: value => value === null || identifier('cli')(value), revision }),
-    repairHostCliHooks: shape({ kind: one('repairHostCliHooks'), agents: value => Array.isArray(value) && value.length > 0 && value.length <= 2 && new Set(value).size === value.length && value.every(agent => agent === 'claude' || agent === 'codex') }),
-    setCliBridgeEnabled: shape({
-      ...common,
-      enabled: bool,
-      revision
-    }),
-    repairCliHooks: shape(common),
     voice: shape({
       ...common,
       action: shape({

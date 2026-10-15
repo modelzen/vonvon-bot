@@ -91,89 +91,6 @@
         }
       ]
     },
-    "cliBridge": {
-      "stored": {
-        "agents": {
-          "claude": true,
-          "codex": true
-        },
-        "notifyScope": "all",
-        "keepAwake": {
-          "enabled": true
-        },
-        "approval": {
-          "enabled": true,
-          "timeoutSeconds": 86400
-        },
-        "taskCompletion": {
-          "enabled": true,
-          "replyEnabled": true,
-          "replyTimeoutSeconds": 600
-        },
-        "allowCache": {
-          "enabled": true,
-          "scope": "session"
-        },
-        "presence": {
-          "enabled": true,
-          "platform": "auto",
-          "idleThresholdSeconds": 180
-        }
-      },
-      "effective": {
-        "agents": {
-          "claude": true,
-          "codex": true
-        },
-        "notifyScope": "all",
-        "keepAwake": {
-          "enabled": true
-        },
-        "approval": {
-          "enabled": true,
-          "timeoutSeconds": 86400
-        },
-        "taskCompletion": {
-          "enabled": true,
-          "replyEnabled": true,
-          "replyTimeoutSeconds": 600
-        },
-        "allowCache": {
-          "enabled": true,
-          "scope": "session"
-        },
-        "presence": {
-          "enabled": true,
-          "platform": "auto",
-          "idleThresholdSeconds": 180
-        }
-      },
-      "revision": "458c2a5fe29bd87dd9a939e16a5627dbe3518e5eb04583bfc6227ec0f2ebc693",
-      "access": {
-        "kind": "writable"
-      },
-      "apply": [
-        {
-          "fields": [
-            "agents",
-            "notifyScope",
-            "approval",
-            "taskCompletion",
-            "allowCache",
-            "keepAwake"
-          ],
-          "when": "next-hook",
-          "detail": "下一次适用的 hook 操作生效；已有等待保留原截止时间"
-        },
-        {
-          "fields": [
-            "presence"
-          ],
-          "when": "next-presence-check",
-          "detail": "下一次在场检测生效"
-        }
-      ]
-    },
     "comments": {
       "stored": {
         "backend": "codex-appserver",
@@ -299,24 +216,6 @@
     },
     "result": "正在检查权限…",
     "grantUrl": "https://open.feishu.cn/app/cli_fixture_engineering/auth"
-  },
-  "cliRuntime": {
-    "enabled": false,
-    "running": false,
-    "revision": "056476ee337bbc769c67f1666052a2a0b3fc40f95aa48c1c108c3a81150b399e",
-    "hooks": {
-      "claude": {
-        "agent": "claude",
-        "status": "not_installed",
-        "details": []
-      },
-      "codex": {
-        "agent": "codex",
-        "status": "not_installed",
-        "details": []
-      }
-    },
-    "keepAwakeSupported": true
   },
   "commentInstructions": {
     "content": {

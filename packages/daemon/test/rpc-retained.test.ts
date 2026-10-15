@@ -43,10 +43,6 @@ async function settingsFixture() {
       await writeFile(projectFile, JSON.stringify(current));
       return current;
     },
-    hooks: {
-      inspect: async () => ({ claude: { agent: 'claude', status: 'installed', details: [] }, codex: { agent: 'codex', status: 'installed', details: [] } }),
-      install: async () => {},
-    },
     instructions: { read: async () => 'Retained test instructions', save: async () => {}, sync: async () => 0 },
   });
   const api = await startFixture(fakeService({ settings: owner }));
@@ -119,7 +115,7 @@ describe('retained settings behavior over real WebSocket', () => {
       await client.ready();
       const originalConfig = await readFile(fixture.configFile, 'utf8');
       const originalProject = await readFile(fixture.projectFile, 'utf8');
-      const foreign = await client.call({ type: 'request', id: 'foreign', method: 'settings', payload: { type: 'act', action: { kind: 'repairCliHooks', botId: agentIdSchema.parse('cli_other') } } });
+      const foreign = await client.call({ type: 'request', id: 'foreign', method: 'settings', payload: { type: 'act', action: { kind: 'voice', botId: agentIdSchema.parse('cli_other'), action: { action: 'disable' } } } });
       expect(foreign).toMatchObject({ type: 'error', code: 'invalid_request' });
       const absent = await client.call({ type: 'request', id: 'absent', method: 'settings', payload: { type: 'read', scope: { kind: 'session', botId, threadId: 'omt_missing' } } });
       expect(absent).toMatchObject({ type: 'error', code: 'invalid_request' });

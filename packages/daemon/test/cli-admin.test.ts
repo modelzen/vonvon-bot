@@ -234,9 +234,9 @@ it('a blank --session is an input error, a bad request is never sent, and only a
   expect(settings).toHaveBeenCalledTimes(2);
 });
 
-it('settings get hides cliBridge for people, keeps it in JSON, and lists a group\'s newest sessions', async () => {
+it('settings get prints each section, has no cliBridge in JSON either, and lists a group\'s newest sessions', async () => {
   const agentView = { scope: { kind: 'agent', botId: 'cli_a' }, sections: {
-    cards: section({ showToolCalls: true, showModel: 'running' }), cliBridge: section({ agents: { claude: false, codex: false } }),
+    cards: section({ showToolCalls: true, showModel: 'running' }),
     comments: section({ backend: 'codex-appserver', selection: { kind: 'default' } }, 'r', { backend: 'codex-appserver', selection: { kind: 'explicit', model: 'gpt-5.5', effort: 'medium' } }),
   } };
   const projectView = { scope: { kind: 'project', botId: 'cli_a', projectName: 'pay' }, sections: { permission: { ...section({ mode: 'qa' }), access: { kind: 'readonly', reason: 'owner-offline', message: '请先启动此 Agent，再编辑设置' } } } };
@@ -250,7 +250,7 @@ it('settings get hides cliBridge for people, keeps it in JSON, and lists a group
   expect(h.out()).toContain('  selection = {"kind":"default"}（生效：{"kind":"explicit","model":"gpt-5.5","effort":"medium"}）\n');
   expect(h.out()).not.toContain('cliBridge');
   h.clear(); await runSettingsGet(undefined, {}, h.io(true), h.daemon);
-  expect(JSON.parse(h.out()).view.sections.cliBridge).toBeDefined();
+  expect(Object.keys(JSON.parse(h.out()).view.sections)).toEqual(['cards', 'comments']);
   h.clear(); await runSettingsGet(undefined, { group: 'pay' }, h.io(), h.daemon);
   const out = h.out();
   expect(out).toContain('群 pay（oc_pay）· Codex · 按话题独立会话 · /home/u/pay\n[permission]（只读：请先启动此 Agent，再编辑设置）\n  mode = qa\n');

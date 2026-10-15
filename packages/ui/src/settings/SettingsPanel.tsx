@@ -89,7 +89,6 @@ const errorText = (reply: SettingsReply): string | undefined => {
         : "当前不可编辑。";
     if (reply.result.kind === "conflict")
       return "这项设置已在别处更改。请重新读取后确认。";
-    if (reply.result.kind === "diverged") return reply.result.message;
   }
 };
 function Editor<T extends object>({

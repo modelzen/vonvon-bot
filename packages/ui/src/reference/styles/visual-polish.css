@@ -129,8 +129,7 @@ html[data-desktop-platform="windows"] .settings-sidebar {
 
 .settings-sidebar-icon,
 .ss-icon,
-.ui-page-header__icon,
-.coffee-introduction__icon {
+.ui-page-header__icon {
   box-shadow:
     inset 0 1px rgba(255, 255, 255, 0.4),
     inset 0 0 0 0.5px rgba(0, 0, 0, 0.17),
@@ -190,7 +189,6 @@ html[data-desktop-platform="windows"] .settings-sidebar {
 .ss-group,
 .ui-page-header,
 .management-detail-header,
-.coffee-introduction,
 .robots-registration-result {
   border: 0;
   background: var(--system-group);
@@ -202,7 +200,6 @@ html[data-desktop-platform="windows"] .settings-sidebar {
 .ui-card,
 .environment-list,
 .ss-group,
-.coffee-introduction,
 .robots-registration-result {
   border-radius: var(--settings-group-radius);
 }
@@ -304,27 +301,6 @@ html[data-desktop-platform="windows"] .settings-sidebar {
   box-shadow: inset 0 1px rgba(255, 255, 255, 0.7);
 }
 
-.coffee-introduction {
-  background:
-    radial-gradient(circle at 92% 8%, rgba(255, 55, 95, 0.09), transparent 11rem),
-    linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(252, 247, 249, 0.9));
-}
-
-.coffee-setting-row--conditional {
-  opacity: 1;
-  transform: translateY(0);
-  transition:
-    opacity var(--duration-fast) ease-out,
-    transform var(--duration-base) var(--ease-emphasized);
-}
-
-@starting-style {
-  .coffee-setting-row--conditional {
-    opacity: 0;
-    transform: translateY(-3px);
-  }
-}
-
 .system-environment-page .environment-dependency-group {
   border: 0;
   border-radius: var(--settings-group-radius);
@@ -424,11 +400,6 @@ html[data-desktop-platform="windows"] .settings-sidebar {
   .ui-select-control__popup,
   .apple-registration__link-menu-popover {
     transform: none !important;
-    transition: none;
-  }
-
-  .coffee-setting-row--conditional {
-    transform: none;
     transition: none;
   }
 }
