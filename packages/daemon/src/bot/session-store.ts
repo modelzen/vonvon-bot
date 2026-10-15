@@ -43,6 +43,10 @@ export interface SessionRecord {
    * cannot cover them, since messages the bot skipped (an @ to someone else)
    * sit in between. Older records lack it. */
   seen?: SeenMark[];
+  /** The context meter's last reading, saved at the end of a turn so the first
+   * card after a restart is not blank. Read only while `sessionId` still matches
+   * the record's: a rebuilt, cleared or resumed session starts over. */
+  usage?: { sessionId: string; used: number; window: number | null };
   createdAt: number;
   updatedAt: number;
 }

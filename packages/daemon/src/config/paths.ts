@@ -38,6 +38,7 @@ export function botPaths(appId: string): {
   projectsFile: string;
   processesFile: string;
   setupFile: string;
+  topicsDir: string;
 } {
   const dir = botDir(appId);
   return {
@@ -47,6 +48,7 @@ export function botPaths(appId: string): {
     projectsFile: join(dir, 'projects.json'),
     processesFile: join(dir, 'processes.json'),
     setupFile: join(dir, 'setup.json'),
+    topicsDir: join(dir, 'topics'),
   };
 }
 
@@ -62,6 +64,10 @@ export const paths = {
   /** thread(话题) → codex thread_id + cwd + 会话级配置（当前 bot） */
   get sessionsFile(): string {
     return join(currentBotDir, 'sessions.json');
+  },
+  /** Topic registry, one file per group (bot/topic-registry.ts; current bot). */
+  get topicsDir(): string {
+    return join(currentBotDir, 'topics');
   },
   /** Durable local-file references attached to this bot's reply cards. */
   get outboundFilesDir(): string {

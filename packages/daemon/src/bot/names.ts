@@ -142,7 +142,8 @@ export function createNameBook(
   };
 }
 
-function withDeadline<T>(p: Promise<T>, ms: number): Promise<T | undefined> {
+/** `p`, or undefined once `ms` passed (the SDK's calls have no timeout). */
+export function withDeadline<T>(p: Promise<T>, ms: number): Promise<T | undefined> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<undefined>((resolve) => {
     timer = setTimeout(() => resolve(undefined), ms);

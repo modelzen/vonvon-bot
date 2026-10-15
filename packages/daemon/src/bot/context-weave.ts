@@ -59,6 +59,8 @@ export interface ContextMessage {
   text: string;
   /** sender_type === 'user' — false for the bot itself, other apps, system. */
   fromUser: boolean;
+  /** A person's open_id, or a bot's open_bot_id (undefined when the item has neither). */
+  senderId?: string;
   /** create_time as epoch ms (0 when unknown). */
   createTime: number;
 }
@@ -83,6 +85,12 @@ function learnNames(names: NameBook | undefined, item: RawMsgItem): void {
   if (s?.sender_type === 'user' && isOpenId(s.id_type)) names.remember(s.id, s.sender_name);
   else if (s?.open_bot_id) names.remember(s.open_bot_id, s.sender_name);
   for (const m of item.mentions ?? []) if (isOpenId(m.id_type)) names.remember(m.id, m.name);
+}
+
+/** A person's open_id, or a bot's open_bot_id (undefined when the item has neither). */
+function senderIdOf(s: RawMsgItem['sender']): string | undefined {
+  if (s?.sender_type !== 'user') return s?.open_bot_id;
+  return s.id && isOpenId(s.id_type) ? s.id : undefined;
 }
 
 /** An item's id is an open_id unless it says otherwise. */
@@ -252,6 +260,7 @@ function toContextMessage(item: RawMsgItem, names?: NameBook): ContextMessage {
     senderName: name,
     text: extractMessageText(item.msg_type, item.body?.content, item.mentions),
     fromUser: item.sender?.sender_type === 'user',
+    senderId: senderIdOf(item.sender),
     createTime: Number(item.create_time) || 0,
   };
 }
