@@ -559,8 +559,10 @@ export class CodexAppServerBackend implements AgentBackend {
       // 常驻 utility client（M-2）：原本每次付一套 spawn+initialize，现在共享复用。
       const res = await utilityRequest<{ data?: RawModel[] }>('model/list', { limit: 50 });
       const models = (res.data ?? []).map(mapModel);
-      this.modelCache = models.length ? models : STATIC_MODELS;
-      return this.modelCache;
+      // 空列表和失败一样：回落兜底但不缓存，下次再问（handle-message 的 listModels 注释）。
+      if (!models.length) return STATIC_MODELS;
+      this.modelCache = models;
+      return models;
     } catch (err) {
       log.fail('agent', err, { phase: 'model/list' });
       return STATIC_MODELS;

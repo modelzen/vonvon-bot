@@ -69,6 +69,9 @@ export interface Project {
   /** 本项目新话题的默认推理强度。仅当所选 {@link defaultModel} 支持该 effort 时生效，
    * 否则回落该模型的 defaultEffort（claude 等不调 effort 的后端忽略）。 */
   defaultEffort?: ReasoningEffort;
+  /** true 表示 {@link defaultModel} 是手填的 id（3.11）：不在模型列表里也照用，不回落
+   * 后端默认。选回列表里的模型时写 false。 */
+  defaultModelCustom?: boolean;
 }
 
 /**

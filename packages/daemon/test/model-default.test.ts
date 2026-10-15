@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { pickDefault } from '../src/bot/handle-message';
-import { buildModelDefaultCard, modelDefaultSummary } from '../src/card/dm-cards';
+import { buildModelDefaultCard, modelDefaultSummary, parseModelDefaultFormValue } from '../src/card/dm-cards';
+import { CUSTOM_MODEL_OPTION } from '../src/agent/model-id';
 import type { ModelInfo } from '../src/agent/types';
 
 // 项目级「新话题默认模型 / 推理强度」。两条不变量：
@@ -99,12 +100,20 @@ describe('buildModelDefaultCard · 按后端能力自适应 + ctx 路由', () =>
     expect(j).toContain('不调节推理强度');
   });
 
-  it('单模型 + 无 effort → 信息卡，无表单提交', () => {
+  it('单模型 + 无 effort → 仍给表单：列表里那一个，或手填', () => {
     const single = [model({ id: 'only', displayName: '唯一模型', isDefault: true })];
     const j = json({ name: 'p' }, single, 'dm');
     expect(j).toContain('唯一模型');
-    expect(j).toContain('无需设置默认');
-    expect(j).not.toContain('dm.proj.modelDefault.submit');
+    expect(j).toContain(CUSTOM_MODEL_OPTION);
+    expect(j).toContain('"name":"customModel"');
+    expect(j).toContain('dm.proj.modelDefault.submit');
+    expect(j).not.toContain('"name":"effort"');
+  });
+
+  it('手填的默认 → 下拉停在「自定义」，输入框预填', () => {
+    const j = json({ name: 'p', defaultModel: 'kimi-k2', defaultEffort: 'high', defaultModelCustom: true }, codex, 'dm');
+    expect(j).toContain(`"initial_option":"${CUSTOM_MODEL_OPTION}"`);
+    expect(j).toContain('"default_value":"kimi-k2"');
   });
 
   it('ctx=group → 群入口的提交/返回 action', () => {
@@ -129,5 +138,38 @@ describe('modelDefaultSummary', () => {
     const s = modelDefaultSummary({ defaultModel: 'gpt-5.5', defaultEffort: 'high' });
     expect(s).toContain('gpt-5.5');
     expect(s).toContain('高'); // EFFORT_LABEL.high
+  });
+});
+
+describe('手填模型 id（3.11）', () => {
+  it('pickDefault：手填的默认原样用，不对列表校验', () => {
+    expect(pickDefault(codex, { model: 'deepseek-chat', effort: 'high', custom: true })).toEqual({
+      model: 'deepseek-chat',
+      effort: 'high',
+    });
+    expect(pickDefault(codex, { model: 'deepseek-chat', custom: true })).toEqual({ model: 'deepseek-chat', effort: 'medium' });
+    // 没标手填的列表外 id 照旧自愈
+    expect(pickDefault(codex, { model: 'deepseek-chat', effort: 'high' })).toEqual({ model: 'gpt-5.5', effort: 'medium' });
+  });
+
+  it('parseModelDefaultFormValue：列表里的模型按支持的 effort 收窄', () => {
+    expect(parseModelDefaultFormValue({ model: 'gpt-5-codex', effort: 'xhigh' }, codex, 'codex-appserver')).toEqual({
+      ok: true, model: 'gpt-5-codex', effort: 'high', custom: false, label: 'GPT-5 Codex',
+    });
+    expect(parseModelDefaultFormValue({ model: 'gone' }, codex, 'codex-appserver')).toMatchObject({ ok: false });
+    expect(parseModelDefaultFormValue({}, codex, 'codex-appserver')).toMatchObject({ ok: false });
+  });
+
+  it('parseModelDefaultFormValue：自定义取输入框，effort 只认后端协议的档位', () => {
+    expect(parseModelDefaultFormValue({ model: CUSTOM_MODEL_OPTION, customModel: ' moonshotai/kimi-k2 ', effort: 'max' }, codex, 'claude-agent')).toEqual({
+      ok: true, model: 'moonshotai/kimi-k2', effort: 'max', custom: true, label: 'moonshotai/kimi-k2',
+    });
+    expect(parseModelDefaultFormValue({ model: CUSTOM_MODEL_OPTION, customModel: 'kimi-k2', effort: 'ultra' }, codex, 'claude-agent')).toMatchObject({
+      ok: true, effort: undefined,
+    });
+    expect(parseModelDefaultFormValue({ model: CUSTOM_MODEL_OPTION, customModel: '' }, codex, 'claude-agent')).toEqual({
+      ok: false, message: '请填写模型 ID。',
+    });
+    expect(parseModelDefaultFormValue({ model: [CUSTOM_MODEL_OPTION], customModel: 'a b' }, codex, 'claude-agent')).toMatchObject({ ok: false });
   });
 });
