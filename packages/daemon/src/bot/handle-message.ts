@@ -1741,7 +1741,9 @@ export function createOrchestrator(
         // 情况：有记录但无水位（resume 上来的旧会话，codex 已带历史，只在 recreated 罕见
         // 路径补拉）；开话题群的主区不留会话（3.5），也不拉。
         const topicId = goal ? undefined : msg.threadId;
-        const place = topicId ? 'topic' : !goal && flat && !msg.threadId ? 'main' : undefined;
+        let place: 'topic' | 'main' | undefined;
+        if (topicId) place = 'topic';
+        else if (!goal && flat && !msg.threadId) place = 'main';
         const pullFor = (opts: Pick<PullOpts, 'stopAt' | 'enough'>): Promise<ThreadPull> => {
           const o = { before: msg.createTime || undefined, excludeMessageId: msg.messageId, names, ...opts };
           return topicId ? fetchThreadContext(channel, topicId, { ...o, keepId: msg.rootId }) : fetchChatContext(channel, msg.chatId, o);
@@ -1815,7 +1817,7 @@ export function createOrchestrator(
             if (root) history = [root, ...history];
           }
           const kept = keepRecent(history, codexEmpty ? rootId : undefined, codexEmpty ? OPENING_MAX : BACKFILL_MAX);
-          const earlier = pull.complete ? history.length - kept.length || undefined : 'some';
+          const earlier = pull.complete ? history.length - kept.length : 'some';
           const rootTitle = rootId ? topicTitle(history.find((m) => m.messageId === rootId)?.text) : undefined;
           firstText = weaveRecordBlock(firstText, {
             place: { group: project?.name, me: channel.botIdentity?.name, ...(topicId ? { topic: { title: title ?? rootTitle } } : {}) },
@@ -1823,7 +1825,7 @@ export function createOrchestrator(
             earlier,
             now: msg.createTime || Date.now(),
           });
-          log.info('intake', 'record-block', { place, lines: kept.length, earlier: earlier ?? 0, opening: codexEmpty, ok: pull.ok });
+          log.info('intake', 'record-block', { place, lines: kept.length, earlier, opening: codexEmpty, ok: pull.ok });
         }
         // The watermark moves to the trigger only when everything before it reached
         // the session: the back-fill succeeded, or there is none (a resumed

@@ -224,13 +224,9 @@ async function pullContext(channel: LarkChannel, c: Container, opts: PullOpts): 
   function done(complete: boolean): ThreadPull {
     return { messages: found.sort((a, b) => a.createTime - b.createTime), ok: true, complete };
   }
-  const window =
-    c.type === 'chat'
-      ? {
-          ...(stopAt > 0 ? { start_time: String(Math.floor(stopAt / 1000)) } : {}),
-          ...(opts.before ? { end_time: String(Math.ceil(opts.before / 1000)) } : {}),
-        }
-      : {};
+  const window: { start_time?: string; end_time?: string } = {};
+  if (c.type === 'chat' && stopAt > 0) window.start_time = String(Math.floor(stopAt / 1000));
+  if (c.type === 'chat' && opts.before) window.end_time = String(Math.ceil(opts.before / 1000));
   let pageToken: string | undefined;
   try {
     const me = meOf(channel);
@@ -341,7 +337,7 @@ function toContextMessage(item: RawMsgItem, me: Me, names?: NameBook): ContextMe
   const name = item.sender?.sender_name || names?.peek(id) || (id ? `用户${id.slice(-4)}` : '某人');
   // An @ to this bot becomes the line's "→ @你"; its token is left out of the text.
   const mine = me.openId ? (item.mentions ?? []).filter((m) => m.id === me.openId) : [];
-  const others = mine.length ? item.mentions?.filter((m) => !mine.includes(m)) : item.mentions;
+  const others = item.mentions?.filter((m) => !mine.includes(m));
   let text = extractMessageText(item.msg_type, item.body?.content, others);
   for (const m of mine) if (m.key) text = text.split(m.key).join('');
   return {
@@ -644,23 +640,28 @@ export function weaveRecordBlock(text: string, block: RecordBlock): string {
     .map((m) => recordLine(m, block.now))
     .filter((l) => l.length > 0);
   if (lines.length === 0) return text;
-  const earlier =
-    block.earlier === 'some'
-      ? '（更早的消息没带进来，需要时用 vonvon 飞书 skill 查）'
-      : block.earlier
-        ? `（更早还有 ${block.earlier} 条没带进来，需要时用 vonvon 飞书 skill 查）`
-        : undefined;
+  const earlier = earlierNote(block.earlier);
   return prependBlock([recordHeader(block.place), ...(earlier ? [earlier] : []), ...lines, '[/飞书]'].join('\n'), text);
 }
 
 function recordHeader(p: RecordPlace): string {
   const group = label(p.group ?? '', 40);
   const title = label(p.topic?.title ?? '', 30);
-  const where = p.topic ? (title ? `话题「${title}」` : '话题') : '主区';
   const me = label(p.me ?? '', 40);
-  const parts = ['飞书', group ? `群「${group}」` : '群', where, ...(me ? [`你是「${me}」`] : [])];
+  let area = '主区';
+  if (p.topic) area = title ? `话题「${title}」` : '话题';
+  const parts = [group ? `群「${group}」` : '群', area, ...(me ? [`你是「${me}」`] : [])];
+  let header = '飞书';
   // As in product.md 3.5: no space between a closing 」 and the dot.
-  return `[${parts.reduce((out, part) => `${out}${out.endsWith('」') ? '· ' : ' · '}${part}`)}]`;
+  for (const part of parts) header += `${header.endsWith('」') ? '· ' : ' · '}${part}`;
+  return `[${header}]`;
+}
+
+/** The note on older messages left out, or undefined when there are none. */
+function earlierNote(earlier: RecordBlock['earlier']): string | undefined {
+  if (earlier === 'some') return '（更早的消息没带进来，需要时用 vonvon 飞书 skill 查）';
+  if (earlier) return `（更早还有 ${earlier} 条没带进来，需要时用 vonvon 飞书 skill 查）`;
+  return undefined;
 }
 
 /** One message as a line, or '' when its text sanitizes to nothing. */

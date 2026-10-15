@@ -117,7 +117,8 @@ export function isSendCard(card: unknown): boolean {
 /** Whether a card body (the raw JSON string) is still streaming (`config.streaming_mode`). */
 export function isStreamingCard(content: string | undefined): boolean {
   try {
-    return (JSON.parse(content ?? '') as { config?: { streaming_mode?: unknown } } | null)?.config?.streaming_mode === true;
+    const card = JSON.parse(content ?? '') as { config?: { streaming_mode?: unknown } } | null;
+    return card?.config?.streaming_mode === true;
   } catch {
     return false;
   }
