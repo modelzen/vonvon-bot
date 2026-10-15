@@ -250,7 +250,18 @@ async function pullContext(channel: LarkChannel, c: Container, opts: PullOpts): 
   const stopAt = opts.stopAt ?? 0;
   const found: ContextMessage[] = [];
   const ownRoots: ContextMessage[] = [];
+  /** Each listed message's topic, and the main-area messages whose root_id is another message (see below). */
+  const threadOf = new Map<string, string>();
+  const held: { m: ContextMessage; own: boolean; rootId: string }[] = [];
+  const take = (m: ContextMessage, own: boolean): void => {
+    if (!own) {
+      if (m.text.trim().length > 0) found.push(m);
+    } else if (c.type === 'chat' && m.threadId) {
+      ownRoots.push(m);
+    }
+  };
   function done(complete: boolean): ThreadPull {
+    for (const h of held.splice(0)) if (threadOf.get(h.rootId) !== h.m.threadId) take(h.m, h.own);
     const byTime = (a: ContextMessage, b: ContextMessage): number => a.createTime - b.createTime;
     const pull: ThreadPull = { messages: found.sort(byTime), ok: true, complete };
     if (ownRoots.length) pull.ownRoots = ownRoots.sort(byTime);
@@ -299,19 +310,23 @@ async function pullContext(channel: LarkChannel, c: Container, opts: PullOpts): 
         const m = toContextMessage(it, me, opts.names);
         if (m.createTime > 0) oldest = Math.min(oldest, m.createTime);
         const kind = kindOf(it.sender, me);
-        const topicReply = c.type === 'chat' && it.thread_id && it.root_id && it.root_id !== it.message_id;
+        if (it.thread_id) threadOf.set(m.messageId, it.thread_id);
         if (
           it.deleted ||
           kind === undefined || // drop system notices
-          topicReply ||
           m.messageId === opts.excludeMessageId || // drop the triggering @ message
           (opts.before && m.createTime > opts.before) // the trigger's own ms too: the watermark covers it
         ) continue;
-        if (kind === 'self' && !opts.keepSelf && m.messageId !== opts.keepId) { // the bot's own replies (see above)
-          if (c.type === 'chat' && it.thread_id) ownRoots.push(m);
+        const own = kind === 'self' && !opts.keepSelf && m.messageId !== opts.keepId; // the bot's own replies (see above)
+        if (c.type === 'chat' && it.thread_id && it.root_id && it.root_id !== it.message_id) {
+          // A topic reply, which the chat container should not list, or a reply that a
+          // topic was opened under later: its root_id stays the message it replied to.
+          // It is a topic reply only when that root is listed in the same topic (s14c).
+          held.push({ m, own, rootId: it.root_id });
           continue;
         }
-        if (m.text.trim().length > 0) found.push(m);
+        // The bot's own messages are left out; one a topic hangs under is handed back apart (s14c).
+        take(m, own);
       }
       if (!data?.has_more || !data.page_token || items.length === 0) return done(true);
       if (stopAt > 0 && oldest <= stopAt) return done(true);

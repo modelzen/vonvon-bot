@@ -682,6 +682,21 @@ describe('fetchChatContext (a single group\'s main area)', () => {
     expect((await fetchThreadContext(fakeChannel(list), 'omt_m', {})).ownRoots).toBeUndefined();
   });
 
+  it('keeps a reply that a topic was opened under later: its root_id stays the message it replied to (s14c)', async () => {
+    const mine = { message_id: 'om_mine_q', msg_type: 'text', create_time: '6600', thread_id: 'omt_q', root_id: 'om_x', parent_id: 'om_x',
+      sender: { id: 'cli_bot', id_type: 'app_id', sender_type: 'app', sender_name: '小码' }, body: { content: JSON.stringify({ text: '我的回答' }) } };
+    const list = [
+      user('om_tr', 6800, '话题里的回复', { thread_id: 'omt_h', root_id: 'om_hq', parent_id: 'om_hq' }), // its root is listed in the same topic
+      user('om_hq', 6700, '引用了 om_x，后来被开了话题', { thread_id: 'omt_h', root_id: 'om_x', parent_id: 'om_x' }),
+      mine,
+      user('om_far', 6550, '根不在列表里的', { thread_id: 'omt_f', root_id: 'om_old_root', parent_id: 'om_old_root' }),
+      user('om_x', 6500, '被引用的', { thread_id: 'omt_x' }), // a topic of its own under it
+    ];
+    const out = await fetchChatContext(fakeChannel(list), 'oc_chat', {});
+    expect(out.messages.map((m) => m.messageId)).toEqual(['om_x', 'om_far', 'om_hq']);
+    expect(out.ownRoots?.map((m) => m.messageId)).toEqual(['om_mine_q']);
+  });
+
   it("keeps this bot's own messages for an opening, and gives a topic's first message its topic id", async () => {
     const out = await fetchChatContext(fakeChannel(items), 'oc_chat', { before: 9000, excludeMessageId: 'om_trigger', keepSelf: true });
     expect(out.messages.find((m) => m.messageId === 'om_mine')).toMatchObject({ from: 'self', text: '我的回复' });
