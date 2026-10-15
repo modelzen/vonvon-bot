@@ -37,19 +37,22 @@ const secretKey = String.raw`((?:secret|token|password|passwd|credential|authori
 const authScheme = String.raw`(?:(?:bearer|basic)\s+)?`;
 /** A value that looks like a credential rather than a word: 8+ characters with a letter and a digit, or 16+. */
 const credential = String.raw`(?:(?=[\w.~+/=-]*[a-z])(?=[\w.~+/=-]*\d)[\w.~+/=-]{8,}|[\w.~+/=-]{16,})`;
-/** A quoted value goes up to its closing quote, spaces and commas included. */
-const quotedSecret = new RegExp(String.raw`${secretKey}(["']?\s*[:=]\s*)(["'])[^"'\r\n]{0,256}`, 'gi');
+/** A quoted value goes up to the quote that opened it, spaces, commas, the other quote and escapes included. */
+const quotedSecret = new RegExp(String.raw`${secretKey}(["']?\s*[:=]\s*)(["'])(?:\\.|(?!\3)[^\r\n\\]){0,256}`, 'gi');
 /** `key=value`, or a quoted key or value as in JSON and inspected objects: the value is always the secret. */
 const assignedSecret = new RegExp(String.raw`${secretKey}(["']?\s*=\s*["']?|["']\s*:\s*["']?|\s*:\s*["'])${authScheme}[^\s"',;&)}\]]+`, 'gi');
-/** An `Authorization:` header value is always a credential, whatever it looks like. */
-const authorizationValue = /\b(authorization)(\s*:\s*)(?:(?:bearer|basic)\s+)?[^\s"',;&)}\]]+/gi;
+/** An unquoted `Authorization:` value is a credential under any scheme (Token, Digest, …), so the rest of the
+ * text goes, up to 256 characters. A quoted one was already cut at its closing quote by {@link quotedSecret}. */
+const authorizationValue = /\b(authorization)(\s*:\s*)(?![\s"'])[^\r\n]{1,256}/gi;
 /** Unquoted `key: value` is also prose ("Invalid token: expired"), so only a credential-shaped value goes. */
 const labelledSecret = new RegExp(String.raw`${secretKey}(\s*:\s*)${authScheme}${credential}`, 'gi');
+/** Any 8+ character word after Bearer goes: "Bearer authentication failed" loses a word, a short token does not leak. */
 const bareBearer = /\b(bearer)\s+[\w.~+/=-]{8,}/gi;
-/** `Basic` and base64: a credential has mixed case, a digit or padding; "Basic settings" stays. */
-const bareBasic = /\b(basic)\s+([A-Za-z0-9+/]{8,}={0,2})/gi;
+/** `Basic` and base64 or base64url: a credential has a digit, a symbol or padding, or a capital after its first
+ * letter. "Basic settings", "Basic Settings" and "Basic HTTP" stay. */
+const bareBasic = /\b(basic)\s+([\w+/-]{4,}={0,2})/gi;
 function maskBasic(match: string, scheme: string, value: string): string {
-  return /[A-Z]/.test(value) && /[a-z]/.test(value) || /[\d=+/]/.test(value) ? `${scheme} …` : match;
+  return /[\d=+/_-]/.test(value) || /[a-z]/.test(value) && /[A-Z]/.test(value.slice(1)) ? `${scheme} …` : match;
 }
 
 /**
