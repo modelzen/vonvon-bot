@@ -98,6 +98,7 @@ export interface LoginItemHooks {
  */
 export async function changeLoginItem(runtime: ServiceRuntime, enabled: boolean,
   previous: Pick<VerifiedDaemon, 'pid' | 'startedAt'> | null | undefined, hooks: LoginItemHooks, options: CliOptions = {}): Promise<void> {
+  // Refuse an unsupported app before the window expects its daemon to go.
   bundledServiceCli(runtime);
   hooks.expectDisconnect(true);
   let failure: unknown;
@@ -127,8 +128,9 @@ export interface StartupRepairInput {
   exists(path: string): boolean;
 }
 
-const repairApplies = (input: Pick<StartupRepairInput, 'platform' | 'packaged' | 'executable'>): boolean =>
-  input.platform === 'darwin' && input.packaged && !isTranslocated(input.executable);
+function repairApplies(input: Pick<StartupRepairInput, 'platform' | 'packaged' | 'executable'>): boolean {
+  return input.platform === 'darwin' && input.packaged && !isTranslocated(input.executable);
+}
 
 /**
  * Before the desktop attaches: an app that moved or was updated rewrites the service, a newer bundled daemon replaces
@@ -160,8 +162,10 @@ function readBundledVersion(resources: string): string | undefined {
   } catch { return undefined; }
 }
 
-const messageOf = (error: unknown): string => error instanceof ServiceActionError ? error.safeMessage
-  : error instanceof Error ? error.message : String(error);
+function messageOf(error: unknown): string {
+  if (error instanceof ServiceActionError) return error.safeMessage;
+  return error instanceof Error ? error.message : String(error);
+}
 
 /**
  * Runs the repair planned for this start. Returns what the user should read: the fatal dialog shows it when the

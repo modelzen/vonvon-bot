@@ -173,7 +173,7 @@ export function installBridge(
         if (!bound || value.revision < revision) return;
         revision = value.revision;
         // A paused binding is the candidate of a replacement: it keeps the newest until activated.
-        if (paused) { if (!latest || value.revision >= latest.revision) latest = value; }
+        if (paused) latest = value;
         else if (activeOwner === current) send({ type: 'snapshot', value });
       }));
       removers.push(current.client.onLog(value => { if (!paused && activeOwner === current) send({ type: 'log', value }); }));
@@ -245,10 +245,10 @@ export function installBridge(
     }, async value => {
       const before = value === 'stop' ? stoppedStatus ?? await client().machine({ type: 'status' }) : undefined;
       if (before && before.type !== 'status') throw new Error('Cannot read service status');
-      const loginItem = value === 'install' || value === 'uninstall';
+      const switchesLoginItem = value === 'install' || value === 'uninstall';
       let reply: MachineReply;
       try { reply = machineReplySchema.parse(await actions.service(value, activeOwner?.identity ?? null)); }
-      finally { if (loginItem) await refreshService(); }
+      finally { if (switchesLoginItem) await refreshService(); }
       if (value === 'stop' && before?.type === 'status') {
         stoppedStatus = { ...before, host: null, service: { ...before.service, running: false, pid: undefined } };
       }

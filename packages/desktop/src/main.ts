@@ -299,12 +299,13 @@ export async function startDesktop(): Promise<void> {
     }
 
     /** The bundled helper changes the service; the window expects the daemon to go and reattaches to its successor. */
-    const setLoginItem = (enabled: boolean, previous?: AttachedDaemon['identity'] | null): Promise<void> => guardedService(() =>
-      changeLoginItem(serviceRuntime, enabled, previous, {
+    function setLoginItem(enabled: boolean, previous?: AttachedDaemon['identity'] | null): Promise<void> {
+      return guardedService(() => changeLoginItem(serviceRuntime, enabled, previous, {
         readVerifiedDaemon: () => managerDependencies.readVerifiedDaemon(),
         reattach: () => reattachReady(),
         expectDisconnect: expected => { controlledDisconnect = expected; },
       }));
+    }
 
     bridge = installBridge(owner, current, paths, {
       observeCli: () => observeCli(cliOptions),
