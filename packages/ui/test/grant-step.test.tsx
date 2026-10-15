@@ -7,7 +7,7 @@ import {
   GRANT_POLL_MS, GRANT_ROW_POLL_MS, GrantStep, PUBLISH_NOTE, ScopeGrantRow, grantView, jobToCancel, pollEvery,
   registeredAgentId, scopesSettled, watchScopeStatus, withRegisteredAgent, type ScopeRead,
 } from '../src/setup/GrantStep';
-import {JOIN_SCOPE_WARNING} from '../src/setup/setupPresentation';
+import {JOIN_SCOPE_WARNING} from '@vonvon/protocol';
 
 const agentId = 'cli_grant' as AgentId;
 const grantUrl = 'https://open.feishu.cn/app/cli_grant/auth?q=im%3Aresource';

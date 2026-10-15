@@ -1,7 +1,7 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import type {AdminSetupStatus, AgentId} from '@vonvon/protocol';
 import {useClient} from '../client-context';
-import {remoteStepsDone} from './setupPresentation';
+import {remoteStepsDone} from '@vonvon/protocol';
 
 export type SetupRead = {status?: AdminSetupStatus; problem?: string; checking: boolean};
 /** Each read makes several Feishu calls per bot, so only unfinished bots are polled. */

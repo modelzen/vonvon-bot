@@ -1,129 +1,49 @@
-import { rm } from 'node:fs/promises';
-import { ensureAnyAgent, registerNewBot } from '../../bot/onboarding';
-import { loadBots, findBot, activeBots, setActiveBots, removeBot } from '../../config/bots';
-import { removeSecret } from '../../config/keystore';
-import { secretKeyForApp } from '../../config/schema';
-import { botDir } from '../../config/paths';
-import { checkboxSelect } from '../checkbox';
+import { botSteps, toolSteps, type Agent, type SetupStep, type StepTone } from '@vonvon/protocol';
+import { pickBot, print, want, withDaemon, withoutAvatar, type Daemon, type Io } from '../daemon-client';
 
-/** `bot init [name]` — register an additional feishu app via scan-QR + authorize. */
-export async function runBotInit(name?: string): Promise<void> {
-  // 任一 agent 可用即放行；都无也只告警不阻塞（Web 引导下载）。
-  await ensureAnyAgent();
-  const result = await registerNewBot(name);
-  if (!result) {
-    process.exitCode = 1;
-    return;
-  }
-  console.log('\n下一步（飞书开放平台后台，需手动一次 https://open.feishu.cn/app ）：');
-  console.log('  1) 事件与回调 → 长连接 → 订阅：im.message.receive_v1 / card.action.trigger / application.bot.menu_v6');
-  console.log('     （可选）「加进已有群」功能再订阅：im.chat.member.bot.added_v1 / im.chat.member.bot.deleted_v1');
-  console.log('     （可选）「表情回复驱动（👍 续轮 / OK 终止）」再订阅：im.message.reaction.created_v1');
-  console.log('  2) 创建并发布应用版本');
-  console.log('\n`bot list` 查看全部；`bot use` 勾选要同时连接的机器人；`run` 前台跑 / `start` 后台常驻。\n');
+const MARK: Record<StepTone, string> = { success: '✓', warning: '!', danger: '✗', neutral: '·' };
+
+function botLine(agent: Agent, groups: number): string {
+  const state = !agent.enabled ? '没启用' : !agent.running ? '没运行' : '已启用';
+  const connection = agent.connection === 'connected' ? '已连接' : agent.connection === 'connecting' || agent.connection === 'reconnecting' ? '连接中' : '未连接';
+  const parts = [state, connection, `${groups} 个群`];
+  if (agent.activation === 'restartRequired') parts.push('还没按新状态运行');
+  if (agent.readError) parts.push(`读取失败：${agent.readError}`);
+  return `${agent.name}  ${agent.id}  ${parts.join(' · ')}`;
 }
 
-/** `bot list` — list registered bots, marking the active set. */
-export async function runBotList(): Promise<void> {
-  const reg = await loadBots();
-  if (reg.bots.length === 0) {
-    console.log('（还没有注册任何飞书机器人。运行 `feishu-codex-bridge bot init` 创建。）');
-    return;
-  }
-  const active = new Set(activeBots(reg).map((b) => b.appId));
-  console.log('\n已注册的飞书机器人：\n');
-  for (const b of reg.bots) {
-    const mark = active.has(b.appId) ? '✅' : '⬜';
-    console.log(`${mark} ${b.name.padEnd(16)} ${b.appId}  [${b.tenant}]${b.botName ? `  ${b.botName}` : ''}`);
-  }
-  console.log('\n\x1b[2m`bot use` 勾选要同时连接的机器人，或 `bot use <名> [名…]` 直接指定。\x1b[0m\n');
+export async function runBotList(io: Io, daemon: Daemon = withDaemon): Promise<void> {
+  const snapshot = await daemon(call => call('读取快照', c => c.snapshot()));
+  const human = snapshot.agents.length
+    ? snapshot.agents.map(agent => botLine(agent, snapshot.memberships.filter(m => m.agentId === agent.id).length))
+    : ['还没有 bot。在网页里扫码注册（vonvon open）。'];
+  print(io, human, { bots: snapshot.agents.map(withoutAvatar) });
 }
 
-/**
- * `bot use [names...]` — choose the active set (multi-select). With names, sets
- * the active set to exactly those bots (overwrite). With no args on a TTY, opens
- * an interactive checkbox preselected with the current active set.
- */
-export async function runBotUse(names: string[]): Promise<void> {
-  const reg = await loadBots();
-  if (reg.bots.length === 0) {
-    console.error('✗ 还没有注册任何飞书机器人。先 `feishu-codex-bridge bot init` 创建。');
-    process.exitCode = 1;
-    return;
+function stepLines(step: SetupStep): string[] {
+  const out = [`${MARK[step.tone]} ${step.title}：${step.status}`];
+  if (step.detail) out.push(`    ${step.detail}`);
+  for (const item of step.items ?? []) out.push(`    - ${item}`);
+  for (const warning of step.warnings ?? []) out.push(`    ${warning}`);
+  // A finished step's buttons (取消勾选, 检查登录) are not a next step, unless a warning still points at one.
+  if (step.done && !step.warnings?.length) return out;
+  for (const action of step.actions) {
+    out.push(action.kind === 'open' ? `    ${action.label}：${action.url}` : `    在网页里点「${action.label}」（vonvon open）`);
   }
-
-  let appIds: string[];
-  if (names.length > 0) {
-    const resolved: string[] = [];
-    const unknown: string[] = [];
-    for (const n of names) {
-      const b = findBot(reg, n);
-      if (!b) unknown.push(n);
-      else if (!resolved.includes(b.appId)) resolved.push(b.appId);
-    }
-    if (unknown.length) {
-      console.error(`✗ 找不到机器人：${unknown.join(', ')}。已注册：${botNames(reg.bots)}`);
-      process.exitCode = 1;
-      return;
-    }
-    appIds = resolved;
-  } else {
-    if (!process.stdin.isTTY) {
-      const cur = activeBots(reg).map((b) => b.name).join(', ') || '（空）';
-      console.log(`当前活跃机器人：${cur}`);
-      console.log('（非交互式终端，无法弹勾选框。用 `bot use <名> [名…]` 直接指定要同时连接的机器人。）');
-      return;
-    }
-    const activeSet = new Set(activeBots(reg).map((b) => b.appId));
-    const items = reg.bots.map((b) => ({
-      label: b.name,
-      hint: `${b.appId}  [${b.tenant}]${b.botName ? `  ${b.botName}` : ''}`,
-      checked: activeSet.has(b.appId),
-    }));
-    const picked = await checkboxSelect('选择要同时连接的机器人（空格勾选，回车确认）：', items);
-    if (picked === null) {
-      console.log('已取消，未改动。');
-      return;
-    }
-    appIds = picked.map((i) => reg.bots[i]?.appId).filter((id): id is string => Boolean(id));
-  }
-
-  await setActiveBots(appIds);
-  const chosen = appIds.map((id) => reg.bots.find((b) => b.appId === id)?.name ?? id);
-  if (chosen.length === 0) {
-    console.log('✓ 已清空活跃机器人——`run` / `start` 暂不连接任何 bot。`bot use` 重新勾选。');
-    return;
-  }
-  console.log(
-    `✓ 活跃机器人（${chosen.length} 个）→ ${chosen.join(', ')}。` +
-      `前台重跑 \`run\` 生效${chosen.length > 1 ? '（多进程托管）' : ''}；后台请 \`restart\`。`,
-  );
+  return out;
 }
 
-/** `bot rm <name>` — remove a bot's config: registry entry + keystore secret + state dir. */
-export async function runBotRm(name: string): Promise<void> {
-  const reg = await loadBots();
-  const bot = findBot(reg, name);
-  if (!bot) {
-    console.error(`✗ 找不到机器人「${name}」。已注册：${botNames(reg.bots)}`);
-    process.exitCode = 1;
-    return;
-  }
-  const after = await removeBot(bot.appId);
-  await removeSecret(secretKeyForApp(bot.appId));
-  await rm(botDir(bot.appId), { recursive: true, force: true });
-  console.log(`✓ 已移除机器人「${bot.name}」(${bot.appId})：注册表 + 密钥 + 状态目录(projects/sessions)。`);
-
-  if (after.bots.length === 0) {
-    console.log('  已无任何机器人，`bot init` 重新创建。');
-  } else if (after.current) {
-    const cur = after.bots.find((b) => b.appId === after.current);
-    if (cur) console.log(`  当前机器人现为「${cur.name}」。`);
-  } else {
-    console.log('  当前机器人未设置，用 `bot use <名>` 选择。');
-  }
-}
-
-function botNames(bots: { name: string }[]): string {
-  return bots.map((b) => b.name).join(', ') || '（无）';
+/** Exits 0 whatever the steps show; scripts read `ready` from --json. */
+export async function runBotStatus(wanted: string | undefined, io: Io, daemon: Daemon = withDaemon): Promise<void> {
+  const { agent, setup, tools } = await daemon(async call => {
+    const snapshot = await call('读取快照', c => c.snapshot());
+    const agent = pickBot(snapshot.agents, wanted);
+    const reply = await call('读取清单状态', c => c.admin({ type: 'setupStatus', agentId: agent.id }), { feishu: true });
+    return { agent, setup: want('读取清单状态', reply, 'setupStatus').status, tools: toolSteps(snapshot.tools) };
+  });
+  const bot = botSteps(agent, setup);
+  const steps = [...bot, ...tools.steps];
+  const left = bot.filter(step => !step.done).length + (tools.ready ? 0 : 1);
+  const human = [`${agent.name}（${agent.id}）`, ...steps.flatMap(stepLines), left ? `还有 ${left} 步没完成。` : '全部就绪。'];
+  print(io, human, { bot: withoutAvatar(agent), setup, steps, ready: left === 0 });
 }

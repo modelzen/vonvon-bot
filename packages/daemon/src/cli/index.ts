@@ -9,7 +9,9 @@ const program = new Command().name('vonvon').description('Vonvon Bot daemon').ve
 let lease: DataLease | undefined;
 let control: ShutdownControl | undefined;
 program.hook('preAction', async (_command, action) => {
-  if (action.parent?.name() === 'service' || action.name() === '__daemon-control') return;
+  // bot, group and settings only talk RPC to a running daemon, so they never create the data root or take a lease.
+  const parent = action.parent?.name();
+  if (parent === 'service' || parent === 'bot' || parent === 'group' || parent === 'settings' || action.name() === '__daemon-control') return;
   if (action.name() === 'run') control = observeShutdown(Boolean(action.opts().parentControl));
   if (action.name() === 'open' || action.name() === 'status' || action.name() === 'logs' || action.name() === '__restart-after-exit') return;
   await mkdir(paths.appDir, { recursive: true, mode: 0o700 });
@@ -59,6 +61,51 @@ service.command('uninstall').description('Stop and remove the OS service').actio
 service.command('status').description('Show the OS service and whether it runs the daemon').option('--json', 'Print JSON').action(async (options: { json?: boolean }) => {
   await (await import('./commands/service')).runServiceStatus(Boolean(options.json));
 });
+type Json = { json?: boolean };
+const io = (options: Json) => ({ json: Boolean(options.json), write: (text: string) => { process.stdout.write(text); } });
+const BOT = ['--bot <bot>', 'Bot id (cli_…) or name'] as const;
+const bot = program.command('bot').description('Show bots through the running daemon');
+bot.command('list').description('List bots and their connection state').option('--json', 'Print JSON').action(async (options: Json) => {
+  await (await import('./commands/bot')).runBotList(io(options));
+});
+bot.command('status [bot]').description("Show a bot's setup checklist").option('--json', 'Print JSON').action(async (wanted: string | undefined, options: Json) => {
+  await (await import('./commands/bot')).runBotStatus(wanted, io(options));
+});
+const group = program.command('group').description('List and bind Feishu groups');
+group.command('list').description('List bound groups').option(...BOT).option('--json', 'Print JSON').action(async (options: Json & { bot?: string }) => {
+  await (await import('./commands/group')).runGroupList(options, io(options));
+});
+group.command('joined').description('List the groups a bot is in, from Feishu').option(...BOT).option('--json', 'Print JSON').action(async (options: Json & { bot?: string }) => {
+  await (await import('./commands/group')).runGroupJoined(options, io(options));
+});
+group.command('pending').description('List groups that added the bot and wait to be bound').option(...BOT).option('--json', 'Print JSON').action(async (options: Json & { bot?: string }) => {
+  await (await import('./commands/group')).runGroupPending(options, io(options));
+});
+group.command('bind <groupId>').description('Bind a group (oc_…) to a folder')
+  .requiredOption('--folder <path>', 'Working folder')
+  .option('--name <name>', 'Project name; defaults to the group name')
+  .option('--tool <tool>', 'codex or claude', 'codex')
+  .option('--conversation <mode>', 'threads (one session per topic) or shared (one for the group)', 'threads')
+  .option(...BOT).option('--json', 'Print JSON')
+  .action(async (groupId: string, options: Json & { folder: string; name?: string; tool: string; conversation: string; bot?: string }) => {
+    await (await import('./commands/group')).runGroupBind(groupId, options, io(options));
+  });
+const settings = program.command('settings').description('Read and change bot, group and session settings');
+type Target = Json & { bot?: string; group?: string; session?: string };
+const scoped = (command: Command) => command.option(...BOT).option('--group <group>', 'Group id (oc_…) or project name').option('--session <threadId>', 'Session thread id').option('--json', 'Print JSON');
+scoped(settings.command('get [section]').description('Show settings, or one section')).action(async (section: string | undefined, options: Target) => {
+  await (await import('./commands/settings')).runSettingsGet(section, options, io(options));
+});
+scoped(settings.command('set <section.key=value...>').description('Change fields of one section; values are JSON or plain text'))
+  .addHelpText('after', `
+Examples:
+  vonvon settings set --group oc_xxx permission.mode=full
+  vonvon settings set --group oc_xxx permission.mode=write permission.network=true
+  vonvon settings set cards.showToolCalls=false
+  vonvon settings set --group oc_xxx model.selection='{"kind":"explicit","model":"gpt-5.5","effort":"medium"}'`)
+  .action(async (assignments: string[], options: Target) => {
+    await (await import('./commands/settings')).runSettingsSet(assignments, options, io(options));
+  });
 program.command('__daemon-control <action>', { hidden: true }).action(async (action: string) => {
   await (await import('./commands/daemon-control')).runDaemonControl(action);
 });
