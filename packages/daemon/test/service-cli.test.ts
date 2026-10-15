@@ -124,6 +124,15 @@ describe('the helper run (s08)', () => {
     expect(write).toHaveBeenCalledWith('uninstalled: Uninstalled\nDaemon PID 4242 was started again, detached, on port 43210.\n');
     expect(readServiceActionRecord(root)).toMatchObject({ ok: true, kind: 'uninstalled', restarted: { pid: 4242 } });
   });
+  it('--keep-running does not start a daemon on a fresh port when the old one had not published its port', async () => {
+    const write = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    const { root, start, deps } = await helper([{ ...daemon, listen: null }, null]);
+    await runServiceCommand('uninstall', { install: vi.fn(), uninstall: vi.fn(async () => outcome('uninstalled', { detail: 'Uninstalled' })) }, { keepRunning: true }, deps);
+    expect(start).not.toHaveBeenCalled();
+    expect(write).toHaveBeenCalledWith('uninstalled: Uninstalled\nThe daemon was not started again: Daemon PID 31 had not published its port. Run vonvon daemon start.\n');
+    expect(readServiceActionRecord(root)).toMatchObject({ ok: true, restartError: 'Daemon PID 31 had not published its port' });
+    expect(readServiceActionRecord(root)).not.toHaveProperty('restarted');
+  });
   it('--keep-running records a failed restart without failing the uninstall', async () => {
     vi.spyOn(process.stdout, 'write').mockReturnValue(true);
     const { root, start, deps } = await helper([daemon, null]);
@@ -152,7 +161,6 @@ describe('the helper run (s08)', () => {
       await expect(runServiceCommand('uninstall', adapter, { keepRunning: true }, deps)).rejects.toThrow(/^uninstall_refused: Another vonvon service install or uninstall is running\.$/);
       expect(adapter.uninstall).not.toHaveBeenCalled();
       expect(await readFile(join(root, 'service-action.json'), 'utf8')).toBe(previous);
-      expect(classifyServiceFailure('Another vonvon service install or uninstall is running.')).toBe('busy');
     } finally { await closeMutex(held); }
     // The mutex is released after each run, so the next one goes ahead.
     vi.spyOn(process.stdout, 'write').mockReturnValue(true);
@@ -176,8 +184,10 @@ it.each([
   ['Interrupted uninstall; run vonvon service uninstall first', 'interrupted'],
   ['Registration belongs to /Users/u/.vonvon-other', 'other-root'],
   ['GUI domain unavailable', 'manager-unavailable'],
+  ['GUI domain unavailable: Could not find domain for user gui: 501', 'manager-unavailable'],
   ['launchd query failed: launchctl client timed out', 'manager-unavailable'],
   ['User manager unavailable: offline', 'manager-unavailable'],
+  ['User manager unavailable: Failed to connect to bus: No medium found', 'manager-unavailable'],
   ['Could not stop the detached daemon: stop_unconfirmed: lost', 'other'],
   ['Daemon readiness timed out; the detached daemon was stopped, run vonvon daemon start to start it again', 'other'],
 ] as const)('classifies %s', (detail, reason) => {

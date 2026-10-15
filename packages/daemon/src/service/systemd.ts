@@ -289,7 +289,7 @@ export function createSystemdService(options: { root: string }, overrides: Parti
       try {
         const manager = await d.run(['is-system-running'], 30_000);
         const state = manager.stdout.trim();
-        if (!(manager.ok && manager.status === 0 && state === 'running') && !(manager.status === 1 && state === 'degraded') && !(manager.ok && manager.status === 0 && state === 'degraded')) throw new Error(manager.stderr || `User manager unavailable: ${state}`);
+        if (!(manager.ok && manager.status === 0 && state === 'running') && !(manager.status === 1 && state === 'degraded') && !(manager.ok && manager.status === 0 && state === 'degraded')) throw new Error(`User manager unavailable: ${manager.stderr.trim() || state}`);
         const distribution = await d.distribution();
         if (distribution.kind !== 'global-npm' && distribution.kind !== 'bundled') throw new Error('Distribution cannot install a service');
         const current = await registration(s);

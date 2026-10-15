@@ -29,12 +29,19 @@ export function readServiceActionRecord(root: string): ServiceActionRecord | nul
   return report.success && record.success ? { ...report.data, ...record.data } : null;
 }
 
-/** A running record whose helper died (killed, or the machine slept and rebooted) is dropped. */
-export function liveServiceActionRecord(root: string): ServiceActionRecord | null {
+/** Longer than any helper runs: its launchctl calls (30 s each), readiness waits (25 s), a rollback and the restart. */
+const RUNNING_REPORT_MAX_AGE = 10 * 60_000;
+
+/**
+ * A running record whose helper died (killed, or the machine slept and rebooted) is dropped. Its pid may have been
+ * reused since: a process we may not signal is another user's, never our helper; one of ours only its age gives away.
+ */
+export function liveServiceActionRecord(root: string, now = Date.now()): ServiceActionRecord | null {
   const record = readServiceActionRecord(root);
   if (record?.phase !== 'running') return record;
+  if (now - record.startedAt > RUNNING_REPORT_MAX_AGE) return null;
   try { return isDead(record.pid) ? null : record; }
-  catch { return record; }
+  catch { return null; }
 }
 
 export async function writeServiceActionRecord(root: string, record: ServiceActionRecord): Promise<void> {
@@ -52,10 +59,9 @@ export async function writeServiceSkipped(root: string, skipped: boolean, at = D
   await writeFileAtomic(setupPath(root), `${JSON.stringify({ ...(parsed.success ? parsed.data : {}), service: { skipped, at } })}\n`);
 }
 
-/** Each pattern matches one s07 refusal string; service-cli.test.ts pins the texts and service-transaction.test.ts the launchd outcomes. */
+/** Each pattern matches one s07 refusal string; service-cli.test.ts pins the texts and service-transaction.test.ts the launchd outcomes.
+ * A held service mutex is not here: that refusal writes no report (host/service-action.ts reports the helper's exit). */
 const FAILURES: readonly [ServiceActionReason, RegExp][] = [
-  // cli/commands/service.ts: the service mutex is held.
-  ['busy', /^Another vonvon service install or uninstall is running/],
   // launchd.ts TRANSLOCATED_REFUSAL.
   ['translocated', /\(App Translocation\)/],
   // launchd.ts: a plist with no job while a daemon runs, and the bootstrap failure hint.

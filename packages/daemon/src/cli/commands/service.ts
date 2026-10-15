@@ -65,8 +65,12 @@ export async function runServiceCommand(action: 'install' | 'uninstall', adapter
     // The service now owns the port, or nothing changed: a daemon that still runs is left alone.
     if (keepRunning && before && !(await d.readOwner(d.root).catch(() => null))) {
       port = Number(/^127\.0\.0\.1:(\d+)$/.exec(before.listen ?? '')?.[1] ?? 0);
-      try { restart = { restarted: { pid: (await d.start(port)).pid } }; }
-      catch (error) { restart = { restartError: detailOf(error) }; }
+      // Port 0 would pick a fresh one, which the open page and the report's "the old port" would not match.
+      if (!port) restart = { restartError: `Daemon PID ${before.pid} had not published its port` };
+      else {
+        try { restart = { restarted: { pid: (await d.start(port)).pid } }; }
+        catch (error) { restart = { restartError: detailOf(error) }; }
+      }
     }
     if (mutex) {
       const ok = succeeded(result.kind);

@@ -1520,6 +1520,17 @@ it.each([
     expect(f.state.owner?.startedAt).toBe('detached');
   }, overrides);
 });
+it.each([
+  ['with launchctl\'s own words', 'Could not find domain for user gui: 501\n', 'GUI domain unavailable: Could not find domain for user gui: 501'],
+  ['without any', '', 'GUI domain unavailable'],
+])('launchd names a missing GUI domain %s, so it classifies as manager-unavailable', async (_case, stderr, detail) => {
+  await withLaunchd(async f => {
+    const result = await f.service.install();
+    expect(result.kind).toBe('install_refused'); expect(result.detail).toBe(detail);
+    expect(classifyServiceFailure(result.detail)).toBe('manager-unavailable');
+    await expect(readFile(f.plistPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  }, { run: async args => { if (args.join(' ') !== 'print gui/501') throw new Error(`Unexpected command ${args.join(' ')}`); return { ok: false, stdout: '', stderr }; } });
+});
 it('launchd refusals the login-time switch can meet classify to their reasons', async () => {
   await withLaunchd(async f => {
     await f.seed(); f.state.loaded = false; f.state.owner = { ...first, startedAt: 'detached' };

@@ -7,7 +7,7 @@ import { requestSchema, SERVICE_BUSY_MESSAGE } from '@vonvon/protocol';
 import { fakeService, socketClient, startFixture } from './server-fixture';
 import { createServiceActionLauncher, LINUX_SERVICE_REFUSAL } from '../src/host/service-action';
 import { machineRpc } from '../src/server/rpc/machine';
-import { readServiceActionRecord, readServiceSkipped, writeServiceActionRecord } from '../src/service/action-report';
+import { liveServiceActionRecord, readServiceActionRecord, readServiceSkipped, writeServiceActionRecord, type ServiceActionRecord } from '../src/service/action-report';
 
 const roots: string[] = [];
 afterEach(async () => { vi.unstubAllEnvs(); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
@@ -89,6 +89,57 @@ it('a running report from a live helper is busy; one from a dead helper is not',
   await expect(m.call({ type: 'service', action: 'install' })).rejects.toMatchObject({ code: 'busy', message: SERVICE_BUSY_MESSAGE });
   await writeServiceActionRecord(m.root, { pid: 99_999_999, action: 'uninstall', phase: 'running', startedAt: 1 });
   expect((await m.call({ type: 'service', action: 'install' })).kind).toBe('shutdown');
+});
+
+it('a running report whose pid was reused after the helper died is stale: past the longest run, or another user\'s process', async () => {
+  const m = await machine();
+  const bound = 10 * 60_000;
+  await writeServiceActionRecord(m.root, { pid: process.pid, action: 'install', phase: 'running', startedAt: 1 });
+  expect(liveServiceActionRecord(m.root, 1 + bound)).toMatchObject({ phase: 'running' });
+  expect(liveServiceActionRecord(m.root, 2 + bound)).toBeNull();
+  await writeServiceActionRecord(m.root, { pid: process.pid, action: 'install', phase: 'running', startedAt: 999 - bound });
+  expect((await m.call({ type: 'service', action: 'install' })).kind).toBe('shutdown');
+});
+
+// pid 1 is root's init or launchd: signalling it fails with EPERM unless the tests run as root.
+it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('a running report naming a process this user may not signal is not busy', async () => {
+  const m = await machine();
+  await writeServiceActionRecord(m.root, { pid: 1, action: 'uninstall', phase: 'running', startedAt: 1000 });
+  expect(liveServiceActionRecord(m.root, 1000)).toBeNull();
+  expect((await m.call({ type: 'service', action: 'install' })).kind).toBe('shutdown');
+});
+
+async function started(m: Awaited<ReturnType<typeof machine>>) {
+  const outcome = await m.call({ type: 'service', action: 'install' });
+  if (outcome.kind !== 'shutdown') throw new Error('Expected a shutdown outcome');
+  outcome.afterReply();
+  const child = m.children[0];
+  if (!child) throw new Error('Expected a helper');
+  return child;
+}
+it.each([
+  ['lost the service mutex', undefined, [1, null], 'install_refused', 'code 1'],
+  ['was killed mid-transaction', 'running', [null, 'SIGKILL'], 'install_incomplete', 'SIGKILL'],
+] as const)('a helper that %s without writing its result leaves a failed report', async (_case, phase, [code, signal], kind, how) => {
+  const m = await machine();
+  const child = await started(m);
+  if (phase) await writeServiceActionRecord(m.root, { pid: child.pid, action: 'install', phase, startedAt: 1000 });
+  child.emit('exit', code, signal);
+  await vi.waitFor(() => expect(m.onSettled).toHaveBeenCalledOnce());
+  expect(readServiceActionRecord(m.root)).toEqual({ pid: process.pid, action: 'install', phase: 'done', ok: false, kind, reason: 'other', detail: `vonvon service install exited with ${how} before writing its result; see daemon.log`, startedAt: 1000, finishedAt: 1000 });
+  expect(m.launcher.current()).toBeUndefined();
+});
+it.each([
+  ['its own failed result', (pid: number): ServiceActionRecord => ({ pid, action: 'install', phase: 'done', ok: false, kind: 'install_refused', reason: 'turned-off', detail: 'turned off in System Settings', startedAt: 1000, finishedAt: 1000 })],
+  ['another helper\'s live run', (_pid: number): ServiceActionRecord => ({ pid: process.pid, action: 'uninstall', phase: 'running', startedAt: 1000 })],
+] as const)('a helper that exits 1 after %s leaves that report alone', async (_case, report) => {
+  const m = await machine();
+  const child = await started(m);
+  const written = report(child.pid);
+  await writeServiceActionRecord(m.root, written);
+  child.emit('exit', 1, null);
+  expect(m.onSettled).toHaveBeenCalledOnce();
+  expect(readServiceActionRecord(m.root)).toEqual(written);
 });
 
 it('a helper that cannot start leaves a failed report and frees the slot', async () => {

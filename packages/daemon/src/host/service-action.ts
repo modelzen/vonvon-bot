@@ -3,7 +3,7 @@ import { closeSync, openSync } from 'node:fs';
 import { join } from 'node:path';
 import { SERVICE_BUSY_MESSAGE } from '@vonvon/protocol';
 import { RpcError } from '../server/errors';
-import { liveServiceActionRecord, writeServiceActionRecord } from '../service/action-report';
+import { liveServiceActionRecord, readServiceActionRecord, writeServiceActionRecord } from '../service/action-report';
 
 export type ServiceActionKind = 'install' | 'uninstall';
 /** The helper this daemon started, from the reservation until it exits. */
@@ -32,7 +32,7 @@ export function createServiceActionLauncher(options: {
     reserve(action) {
       // Linux would need the helper moved out of the unit's cgroup, and linger first (s20a); the terminal works today.
       if (platform !== 'darwin') throw new RpcError('unsupported', LINUX_SERVICE_REFUSAL);
-      if (slot || liveServiceActionRecord(root)?.phase === 'running') throw new RpcError('busy', SERVICE_BUSY_MESSAGE);
+      if (slot || liveServiceActionRecord(root, now())?.phase === 'running') throw new RpcError('busy', SERVICE_BUSY_MESSAGE);
       const cliEntry = options.cliEntry ?? process.argv[1];
       if (!cliEntry) throw new Error('Cannot locate the daemon CLI entry.');
       const reserved: RunningServiceAction = { action, startedAt: now() };
@@ -47,12 +47,21 @@ export function createServiceActionLauncher(options: {
         options.onSettled?.();
       };
       // Node may or may not emit exit after a spawn error; the slot stays until the failure is on disk.
-      const failed = (error: unknown): void => {
+      const failed = (detail: string, begun = false): void => {
         if (settled || failing) return;
         failing = true;
-        const detail = `Could not start vonvon service ${action}: ${error instanceof Error ? error.message : String(error)}`;
-        void writeServiceActionRecord(root, { pid: process.pid, action, phase: 'done', ok: false, kind: `${action}_refused`, reason: 'other', detail, startedAt: reserved.startedAt, finishedAt: now() })
+        void writeServiceActionRecord(root, { pid: process.pid, action, phase: 'done', ok: false, kind: begun ? `${action}_incomplete` : `${action}_refused`, reason: 'other', detail, startedAt: reserved.startedAt, finishedAt: now() })
           .catch(() => undefined).finally(settle);
+      };
+      const notStarted = (error: unknown): void => failed(`Could not start vonvon service ${action}: ${error instanceof Error ? error.message : String(error)}`);
+      // A helper that fails before writing its result (it lost the service mutex, or crashed) would let the switch flip
+      // back without a word. Its own running record means the transaction began; another helper's live run shows itself.
+      const exited = (pid: number | undefined, code: number | null, signal: NodeJS.Signals | null): void => {
+        if (failing) return;
+        const record = readServiceActionRecord(root);
+        const own = record !== null && record.pid === pid;
+        if (code === 0 || (own ? record.phase === 'done' : liveServiceActionRecord(root, now())?.phase === 'running')) { settle(); return; }
+        failed(`vonvon service ${action} exited with ${code === null ? signal : `code ${code}`} before writing its result; see daemon.log`, own);
       };
       return {
         cancel() {
@@ -73,9 +82,9 @@ export function createServiceActionLauncher(options: {
             reserved.pid = child.pid;
             // The helper outlives this daemon on purpose: install and uninstall both stop it.
             child.unref();
-            child.once('error', failed);
-            child.once('exit', () => { if (!failing) settle(); });
-          } catch (error) { failed(error); }
+            child.once('error', notStarted);
+            child.once('exit', (code, signal) => exited(child.pid, code, signal));
+          } catch (error) { notStarted(error); }
         },
       };
     },

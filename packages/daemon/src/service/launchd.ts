@@ -297,7 +297,7 @@ export function createLaunchdService(options: { root: string }, overrides: Parti
       let stoppedDetached = '';
       try {
         const domainResult = await d.run(['print', domain], 30_000);
-        if (!domainResult.ok) throw new Error(domainResult.stderr || 'GUI domain unavailable');
+        if (!domainResult.ok) throw new Error(`GUI domain unavailable${domainResult.stderr.trim() ? `: ${domainResult.stderr.trim()}` : ''}`);
         const distribution = await d.distribution();
         if (distribution.kind !== 'bundled' && distribution.kind !== 'global-npm') throw new Error('Distribution cannot install a service');
         if (isTranslocated(d.executable) || isTranslocated(distribution.cliPath)) throw new Error(TRANSLOCATED_REFUSAL);

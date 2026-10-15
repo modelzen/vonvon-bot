@@ -124,9 +124,10 @@ describe('login-time service field (s08)', () => {
     await writeServiceActionRecord(root, { pid: 99_999_999, action: 'install', phase: 'running', startedAt: 1 });
     await store.rebuild();
     expect(store.current().application.service?.action).toBeUndefined();
-    await writeServiceActionRecord(root, { pid: process.pid, action: 'install', phase: 'running', startedAt: 2 });
+    const startedAt = Date.now();
+    await writeServiceActionRecord(root, { pid: process.pid, action: 'install', phase: 'running', startedAt });
     await store.rebuild();
-    expect(store.current().application.service?.action).toEqual({ action: 'install', phase: 'running', startedAt: 2 });
+    expect(store.current().application.service?.action).toEqual({ action: 'install', phase: 'running', startedAt });
     running = { action: 'install', startedAt: 3 };
     await store.rebuild();
     expect(store.current().application.service?.action).toEqual({ action: 'install', phase: 'running', startedAt: 3 });
