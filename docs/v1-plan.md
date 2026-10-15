@@ -481,7 +481,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s30：要不要另发一条带 @ 的文字，按 e09 的结果定；结果出来前默认另发。
 - s31：e02 用到的字段，s02 锁定的 SDK 0.3.296 里都有，e02 这边不用抬版本；e03 的结果还可能要抬。同时改掉 `permission.ts` 顶部那段注释。
 - s31：按 e02 的结果做：所有会话启动时都带 `allowDangerouslySkipPermissions: true`，中途升到完全访问才不用重开会话；resume 时明确传档，档不从记录里恢复；拒绝时不用 `interrupt`，不然原因会丢、这一轮按出错结束；提问的答案放进 `updatedInput.answers`。启动时带上这个参数后，升档只能走两条路：daemon 调 `setPermissionMode`，或者回调返回带 `setMode` 的 `updatedPermissions`。两处都只按权限档的设置来，回调不照搬 `suggestions` 里的 `setMode`。回调拿不到"这是在联网"的标记，关网时 Bash 联网靠沙箱挡，看 e03。
-- s31：开工前用【需要你决定】问 owner：bot 的会话要不要关掉 claude.ai 连接器，和推送、远程触发、定时任务这类 Claude Code 自己的工具（e02 第 7 节）。建议用内置工具白名单，连接器默认关。Codex 一侧的同一类问题一起问：用主人的 ChatGPT 登录时，每条会话都挂着 `codex_apps`（主人账号的连接器，0.162.1 上 197 个工具，含合并 GitHub PR 这类写操作），会话层 `features.apps: false` 能关（e05），在 s37 的 profile 里传。
+- s31：owner 2026-10-15 定（选了 B）：两家的连接器和 Claude Code 自己的工具第一版都留着，不关，Codex 也不传 `features.apps: false`。当时问的是：bot 的会话要不要关掉 claude.ai 连接器，和推送、远程触发、定时任务这类 Claude Code 自己的工具（e02 第 7 节）。建议用内置工具白名单，连接器默认关。Codex 一侧的同一类问题一起问：用主人的 ChatGPT 登录时，每条会话都挂着 `codex_apps`（主人账号的连接器，0.162.1 上 197 个工具，含合并 GitHub PR 这类写操作），会话层 `features.apps: false` 能关（e05），在 s37 的 profile 里传。
 - s31：e02 没测完的两件，开工时补测：完全访问下，Claude 设置里的 ask 规则、删除关键目录会不会走到回调；vonvon 真实的 `['user', 'project']` 下，用户层的权限规则会不会改变哪些调用走回调。e02 用的是空的 `settingSources`。
 - s31：顺手修会话标题的读法：`readSessionTitle` 只认记录里 `custom-title` 的条目，不用 `customTitle` 字段，因为它会退回 CLI 自动起的标题（e02 第 8 节）。放在这一片，是因为 s31 本来就要改 `D/agent/claude-agent/` 下的后端代码；约 40 行，算进这一片的行数。
 - s32：vonvon 不开计划模式，Codex 的提问实际上不会来。这一片主要是不再回报错，不让回合卡住。
@@ -521,7 +521,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | [ ] | s48 | vonvon 飞书 skill：列话题、读另一条会话、读飞书消息 | 列本群话题、按会话 id 读另一条会话、按话题或时间读消息；只放行同一个 bot、同一个群、档不高于自己的会话；卡片写"读了话题 T1、T2 的会话"（3.5"查飞书上下文"） | 950 | s47、s44、s13、e02、e11 | 子进程、错误路径 | 无（M8 验收前，预览版任务按 3.5 时间线第 7 步跑一遍） |
 
 开工要点：
-- s44：`~/.codex/AGENTS.md` 按会话关不掉（e05，4 个版本；会话层 `project_doc_max_bytes: 0` 只关项目里的那份）。按本文 4.2 第 3 条用【需要你决定】问 owner，比如接受"带上但在指令里声明 bot 的规矩优先"。`thread/start` 回包的 `instructionSources` 列出实际加载的文件，可以显示在桌面端。
+- s44：`~/.codex/AGENTS.md` 按会话关不掉（e05，4 个版本；会话层 `project_doc_max_bytes: 0` 只关项目里的那份）。owner 2026-10-15 定（选了 A）：接受，带上它，在 bot 的指令里声明 bot 的规矩优先；product.md 3.6 已跟着改。`thread/start` 回包的 `instructionSources` 列出实际加载的文件，可以显示在桌面端。
 - s44：bot 的 MCP 在 `feishu` 权限配置（`approvalPolicy: never`，工作区可写）下不配 `default_tools_approval_mode: "approve"` 时调用被拒（e05，0.162.1，只见过一次），和第 9 节第 2 项的推断一致；只读档和完全访问档不配会怎样没测，开工时补测。用户的个人 skill 先 `skills/list` 列出，再用 `skills.config` 逐个禁；系统 skill 用 `skills.bundled.enabled: false` 关。按名字禁会连同名的 bot skill 一起禁，按 `path` 禁没实测，开工时补测。中途换 skill 名单从 0.148.0 起下一轮生效，最低版本 0.156.1 时不用为这个开新会话。
 - s44：Claude 一侧按 e02 第 6 节：新建的 bot 用 `claudeMdExcludes`（经 `options.settings` 传）或只给 `settingSources: ['project']`，导入的 bot 照旧。
 - s46：变量名避开 TOKEN、KEY、SECRET，Codex 默认会滤掉含这些词的变量。e04 证明连不上时，按 product.md 第 9 节第 2 项的退路，把同一组命令做成 vonvon 自己的 MCP 工具，这一片照那个做。
@@ -552,7 +552,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s51a 到 s51c：开工前先在草稿上用 `git diff --stat` 量，超过 1500 行再拆。每个 PR 里列一张"私聊卡片 → 网页上的对应页面"对照表；s51b 删之前逐项确认网页有替代：新建项目、绑群、权限、白名单、管理员；s51c 也一样：语音、云文档评论、会话标题、看门狗、完成提醒。其中语音、云文档评论、完成提醒是 3.12 要保留的，看门狗按 3.12 改成 10 分钟（s11）。网页上没有对应开关的，先在同一片里补上再删卡。群里 `/settings` 用的 GS 卡，`tierLabel`、`permissionSummary` 这些共享函数，以及群里 `/usage` 等命令要用的卡片都保留。
 - s51a 到 s51c 和 s54 改 `handle-message.ts` 的同一段，不要同时在飞。
 - s53：从飞书来的人不能在本机删。缺权限或接口出错时保留上一次的结果，从来没拿到过时退回"扫码人加本机名单"。
-- s57：拉人要 `im:chat.members:write_only`，它现在在可选的进群权限组里。e10：机器人能自己进公开群（`PATCH /im/v1/chats/:chat_id/members/me_join`），私有群回 HTTP 400、`code 232008`。lark-cli 建的群默认私有；客户端建群的默认值没查，开了入群审批的公开群能不能进也没测，开工时补。product.md 3.7 写的是"机器人自己进不了已有的群"，改成"公开群 bot 自己进"是承诺变强，属于本文 4.2 第 3 类：s57 开工前用【需要你决定】问 owner，owner 定了再改 product.md。owner 同意的话，先调 `me_join`，回 232008 再发拉 bot 进群的步骤。自己进群也会推 `im.chat.member.bot.added_v1`，操作人是 bot 自己，今天的 `onBotAddedToChat` 把它记成 `bot-added-nonadmin`、什么也不做；要和别人拉它进群（s36b）分开处理，绑定不靠这个事件触发。`me_join` 靠哪个权限，开工时用只开一个权限的应用试一次。
+- s57：拉人要 `im:chat.members:write_only`，它现在在可选的进群权限组里。e10：机器人能自己进公开群（`PATCH /im/v1/chats/:chat_id/members/me_join`），私有群回 HTTP 400、`code 232008`。lark-cli 建的群默认私有；客户端建群的默认值没查，开了入群审批的公开群能不能进也没测，开工时补。product.md 3.7 写的是"机器人自己进不了已有的群"，改成"公开群 bot 自己进"是承诺变强，属于本文 4.2 第 3 类：owner 2026-10-15 定（选了 B）：不用 `me_join`，已有的群一律发拉 bot 进群的步骤；product.md 3.7 的承诺不变，只改了事实。自己进群也会推 `im.chat.member.bot.added_v1`，操作人是 bot 自己，今天的 `onBotAddedToChat` 把它记成 `bot-added-nonadmin`、什么也不做；要和别人拉它进群（s36b）分开处理，绑定不靠这个事件触发。`me_join` 靠哪个权限，开工时用只开一个权限的应用试一次。
 
 ### M10 从 bridge 迁移
 
