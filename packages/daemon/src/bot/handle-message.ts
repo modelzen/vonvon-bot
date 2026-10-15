@@ -2873,13 +2873,7 @@ export function createOrchestrator(
     return m;
   };
 
-  // Pass { render: false } when the caller does async start/stop/repair work
-  // before refreshing the unified settings card itself.
-  function applyPref(
-    evt: CardActionEvent,
-    mut: (p: AppPreferences) => void,
-    opts?: { render?: boolean },
-  ): Promise<boolean> {
+  function applyPref(evt: CardActionEvent, mut: (p: AppPreferences) => void): Promise<boolean> {
     if (!dmAdmin(evt.operator?.openId)) return Promise.resolve(false);
     const saved = writePreferences(mut).then(
       () => true,
@@ -2888,12 +2882,10 @@ export function createOrchestrator(
         return false;
       },
     );
-    if (opts?.render !== false) {
-      void patch(evt, async () => {
-        await saved;
-        return renderSettings();
-      });
-    }
+    void patch(evt, async () => {
+      await saved;
+      return renderSettings();
+    });
     return saved;
   }
 

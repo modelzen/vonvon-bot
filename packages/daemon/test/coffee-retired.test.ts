@@ -1,4 +1,11 @@
+import { rm } from 'node:fs/promises';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { startBridge } from '../src/bot/bridge';
+import { createOrchestrator } from '../src/bot/handle-message';
+import { COFFEE_RETIRED, COFFEE_RETIRED_ACTIONS, buildSettingsCard } from '../src/card/dm-cards';
+import { paths } from '../src/config/paths';
+import type { AppConfig } from '../src/config/schema';
+import { saveConfig } from '../src/config/store';
 
 const fixtureStore = vi.hoisted(() => ({ config: {} as unknown }));
 const createdCards = vi.hoisted(() => [] as unknown[]);
@@ -8,7 +15,9 @@ vi.mock('../src/config/store', () => ({
   loadConfig: vi.fn(async () => structuredClone(fixtureStore.config)),
 }));
 vi.mock('../src/config/paths', async () => {
-  const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
   const appDir = mkdtempSync(join(tmpdir(), 'coffee-retired-'));
   return { paths: { appDir, projectsFile: join(appDir, 'projects.json'), commentInstructionsFile: join(appDir, 'comment-instructions.md'), commentsRootDir: join(appDir, 'comments'), projectsRootDir: join(appDir, 'projects') } };
 });
@@ -21,24 +30,12 @@ vi.mock('@larksuiteoapi/node-sdk', async original => ({
   ...await original<object>(),
   createLarkChannel: () => ({ ...(channel() as object), on: vi.fn(), connect: vi.fn(async () => undefined), disconnect: vi.fn(async () => undefined) }),
 }));
-import { paths } from '../src/config/paths';
-import { rm } from 'node:fs/promises';
-afterAll(() => rm(paths.appDir, { recursive: true, force: true }));
-
 vi.mock('../src/core/logger', () => ({
-  log: {
-    info: () => undefined,
-    warn: () => undefined,
-    fail: () => undefined,
-  },
+  log: { info: () => undefined, warn: () => undefined, fail: () => undefined },
   withTrace: async (_ctx: unknown, fn: () => Promise<void> | void) => fn(),
 }));
 
-import { createOrchestrator } from '../src/bot/handle-message';
-import { startBridge } from '../src/bot/bridge';
-import { COFFEE_RETIRED, COFFEE_RETIRED_ACTIONS, buildSettingsCard } from '../src/card/dm-cards';
-import type { AppConfig } from '../src/config/schema';
-import { saveConfig } from '../src/config/store';
+afterAll(() => rm(paths.appDir, { recursive: true, force: true }));
 
 function cfg(): AppConfig {
   const result: AppConfig = {
