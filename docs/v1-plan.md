@@ -319,6 +319,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s08b 的做法：新旧只比版本号（`D/service/update.ts` 的 `isNewer`）。app 自带的版本读 `Resources/daemon/package.json`，不用 `app.getVersion()`，那是 stage 包的 0.1.0。只升不降：在跑的 daemon 比 app 新时不动。版本号相同的两次构建分不出新旧，所以每出一次预览版都要升补丁号。
 - s08b 的做法：helper 可能还在换 daemon 时，窗口等它做完再接上，不另起 daemon。窗口里开关等了 3 分钟超时、或者另一个 helper 占着锁（busy）而 daemon 已经停了，窗口等到 helper 的报告不在跑（或 pid 没了）或新 daemon 出现，再走 `ensureReady` 接上。app 开着时从网页（`vonvon open`）或终端装卸服务，daemon 自己起的 helper 会停掉窗口连着的 daemon：bridge 收到断开时只要有活着的 service helper，就跟着它重连，不弹"连接断开"，接不上才弹。
 - s08b 留下的：plist 里加不加 `AssociatedBundleIdentifiers` 还没定，等 s08b 的 Mac 检查第 B5 项看签名版在"允许在后台"里显示什么。要加的话，旧的 plist 成了旧格式，启动时的修复会重写它，不用另做迁移。
+- s08b 留下的：两个版本之间协议版本变了时，启动时的修复认不出正在跑的服务 daemon（它的锁过不了协议校验），不会替换它，窗口最后弹"无法验证 daemon"。这种升级要先用旧版的 `vonvon daemon stop` 停掉，再打开新版。以后要修的话，让启动修复在登记是我们的、类型是桌面版、只差协议版本时，按 launchd 任务停掉旧 daemon。
 
 ### M3 群里的上下文
 
