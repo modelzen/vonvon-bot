@@ -1436,7 +1436,7 @@ export function createOrchestrator(
    *     上文 the bare @ doesn't carry. Best-effort: a deleted/unreadable quote is
    *     skipped, never thrown.
    * Both are gated (messageHasFiles / replyToMessageId) so the common text path
-   * stays await-free. 话题上文 is woven separately in startReservedRun (it is
+   * stays await-free. The record block is woven separately in startReservedRun (it is
    * session-scoped, not per-message). Voice display metadata stays separate
    * from the woven agent input.
    */
