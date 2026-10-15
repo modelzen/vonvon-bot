@@ -256,6 +256,10 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s02c1 做法（旧数据）：`config.json` 里的 `preferences.cliBridge` 和 `cli-bridge-route.json` 不迁移、不删。读设置时不看它们，存别的设置时原样留在文件里；`vonvon hook` 照旧读它们，s02c2 以后就没人读了。测试用一份带全套旧字段的 `config.json` 读一次、存一次别的设置，再比对文件。
 - s02c1 做法（协议版本）：`PROTOCOL_VERSION` 不升，和 s12 删 `compact` 一节一样。网页由 daemon 自己发，和 daemon 总是同一版。新的桌面端连旧 daemon 时，多出来的 `cliBridge`、`cliRuntime` 被丢掉，照常显示；旧的桌面端连新 daemon 时，读 Bot 设置会因为少了 `cliRuntime` 解析失败，只有把 app 换回旧版、或者 daemon 单独升级了才会碰到。升版本号反而会让刚装的新 app 拒绝连还在跑的旧 daemon，s08b 之前它不会自动重启旧 daemon。
 - s02c1 做法（顺带）：`packages/ui/src/reference/styles` 里的 `coffee-*` 样式（grep 过，没有组件用）和没人调用的 `D/cli/commands/doctor.ts` 删了。同一处还有一条没人用的 `handoff`（接力设置）选择器，没动。
+- s02c2 做法（空命令）：`vonvon hook` 在 `packages/daemon/bin/vonvon.mjs` 里、加载命令行主包之前就答完：主包连依赖要加载大半秒（JP-VPS 上 `--version` 0.7 秒），空命令 0.07 秒。什么参数都收，不认识的 agent、多出来的选项、没有 `--agent`、`--help` 都一样；不建数据目录、不拿锁、不写日志。标准输入读到结束再退，免得 Claude Code、Codex CLI 写事件时碰上关掉的管道；标准输入是终端就不读，一直不关最多等 2 秒。什么都不输出，退出码总是 0。主包里的 `hook` 命令删了：装进去的 hook 写的是 daemon 自己的入口（`process.argv[1]`），桌面端、后台服务和 npm 都从 `bin/vonvon.mjs` 起，不会直接跑 `dist/cli.js hook`。
+- s02c2 做法（删的）：`D/cli-bridge/index.ts`、`protocol.ts`、`hooks.ts` 和四份测试；`route.ts` 里只给 hook 挑 bot 的 `selectCliBridgeHookBot` 一起删了，读写 `cli-bridge-route.json` 的留到 s02c5。`parser.ts` 的 `parseHookPayload`、`ipc.ts` 的 `sendCliHookMessage` 已经没有产品代码调用，只剩测试在用，随 s02c3、s02c5 删。`coffee-retired.test.ts` 去掉 mock 以后，最后一条只看带着旧的"已开"设置 bot 能起能停：`D/bot/` 早已不引用 `D/cli-bridge/`。
+- s02c2 做法（测试）：`hook-command.test.ts` 起真的 `bin/vonvon.mjs`，喂 Claude 和 Codex 的 PermissionRequest、Stop，旧的 PostToolUse，空输入、截断的 JSON、二进制，各种多余选项，8 MB 的事件（写的一方不能报错），和一直不关的标准输入（2 秒后退）；每条都看标准输出、标准错误是空的，退出码 0，临时 `HOME` 里什么都没写。另有一条把入口拷到没有 `dist/` 的目录，`hook` 照样成功、别的命令加载不了主包，证明 `hook` 不碰主包。标准输入是终端的情况在 JP-VPS 上用 `script` 手工跑过，立刻退出。
+- s02c2 留下的：打包版的 daemon 跑在 Electron 里，那时装的 hook 写的是 Electron 本身加 `bin/vonvon.mjs`，不带 `ELECTRON_RUN_AS_NODE`，Claude Code、Codex 跑它时起的是桌面端而不是这个空命令。没在 Mac 上看过会怎样；M1 预览版装过、又在咖啡一下里修过 hook 的 Mac 才有这种 hook，卸掉归 s62。2026-10-15 在 owner 的 Mac 上只读查过：`~/.claude/settings.json` 和 `~/.codex/hooks.json` 里都没有 vonvon 的 hook，这台 Mac 不受影响。
 
 ### M2 首次运行清单和开机自动运行
 
