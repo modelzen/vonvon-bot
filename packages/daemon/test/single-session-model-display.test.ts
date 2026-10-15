@@ -77,7 +77,7 @@ function thread() {
 let orchestrator: ReturnType<typeof createOrchestrator>;
 let seq = 0;
 function message(text: string): NormalizedMessage {
-  return { messageId: `msg-${++seq}`, chatId: 'chat', chatType: 'group', threadId: 'topic',
+  return { messageId: `msg-${++seq}`, chatId: 'chat', chatType: 'group',
     content: text, senderId: 'owner', senderName: 'Owner', mentionedBot: true, createTime: Date.now(), rawContentType: 'text', resources: [], mentions: [], mentionAll: false };
 }
 function setup(showModel: 'off' | 'running' | 'always' = 'always') {
