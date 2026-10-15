@@ -52,6 +52,8 @@ const LINE_MAX = 280;
 const BOT_LINE_MAX = 300;
 /** Lines a new session's opening carries, most recent kept (see {@link keepRecent}). */
 export const OPENING_MAX = 20;
+/** Main-area lines a topic session's opening carries (product.md 3.5). */
+export const OPENING_MAIN_MAX = 10;
 /** Lines a back-fill into an existing session carries; older ones are only counted. */
 export const BACKFILL_MAX = 40;
 /** How long another bot's card that is still streaming gets read again on later
@@ -64,6 +66,8 @@ const PAGE_CAP = 10;
 /** How long one pull, all its pages together, or one lookup may take: the turn
  * waits for it, and a stuck Feishu call would otherwise hold the turn forever. */
 const FETCH_DEADLINE_MS = 10_000;
+/** How long the lookup of a topic's first reply may take (at most 5 per turn, in parallel). */
+const OPENER_DEADLINE_MS = 3000;
 /** Pulls and lookups get cards in the send format, so another bot's answer is
  * readable; without it a 2.0 or CardKit card is only its title (e10). */
 const CARD_CONTENT = 'user_card_content';
@@ -88,6 +92,8 @@ export interface ContextMessage {
   mentionsMe?: boolean;
   /** A card still streaming: its bot has not finished answering. */
   streaming?: boolean;
+  /** The topic it is in (a main-area pull lists only a topic's first message). */
+  threadId?: string;
 }
 
 /** Subset of the `im.v1.message.get` / `.list` item shape we read. */
@@ -190,6 +196,8 @@ export interface PullOpts {
   before?: number;
   excludeMessageId?: string;
   keepId?: string;
+  /** Keep this bot's own messages too (a topic opening's main-area lines). */
+  keepSelf?: boolean;
   names?: NameBook;
 }
 
@@ -287,7 +295,7 @@ async function pullContext(channel: LarkChannel, c: Container, opts: PullOpts): 
         if (
           !it.deleted &&
           kind !== undefined && // drop system notices
-          (kind !== 'self' || m.messageId === opts.keepId) && // the bot's own replies (see above)
+          (kind !== 'self' || opts.keepSelf || m.messageId === opts.keepId) && // the bot's own replies (see above)
           !(c.type === 'chat' && it.thread_id && it.root_id && it.root_id !== it.message_id) && // a topic reply
           m.messageId !== opts.excludeMessageId && // drop the triggering @ message
           (!opts.before || m.createTime <= opts.before) && // the trigger's own ms too: the watermark covers it
@@ -376,7 +384,48 @@ function toContextMessage(item: RawMsgItem, me: Me, names?: NameBook): ContextMe
     createTime: Number(item.create_time) || 0,
     ...(mine.length ? { mentionsMe: true } : {}),
     ...(item.msg_type === 'interactive' && isStreamingCard(item.body?.content) ? { streaming: true } : {}),
+    ...(item.thread_id ? { threadId: item.thread_id } : {}),
   };
+}
+
+/** Who opened a topic and when: the sender of its first reply. */
+export interface TopicOpener {
+  at: number;
+  from: ContextMessage['from'];
+  senderId?: string;
+}
+
+/**
+ * The first reply in a topic, from its two oldest messages (whether or not
+ * the listing includes the root), so a topic another bot opened can be told
+ * apart from the message it hangs under. Undefined when there is none or the
+ * lookup fails (logged as info `topic-opener-failed`); limited to
+ * {@link OPENER_DEADLINE_MS}.
+ */
+export async function fetchTopicOpener(
+  channel: LarkChannel,
+  threadId: string,
+  rootId: string,
+  names?: NameBook,
+): Promise<TopicOpener | undefined> {
+  const failed = (err: string): undefined => {
+    log.info('intake', 'topic-opener-failed', { topic: threadId.slice(-6), err });
+    return undefined;
+  };
+  try {
+    const res = await withDeadline(channel.rawClient.im.v1.message.list({
+      params: { container_id_type: 'thread', container_id: threadId, sort_type: 'ByCreateTimeAsc', page_size: 2, with_sender_name: true },
+    }), OPENER_DEADLINE_MS);
+    if (!res) return failed('timeout');
+    if (typeof res.code === 'number' && res.code !== 0) return failed(`code=${res.code}`);
+    const item = ((res.data as { items?: RawMsgItem[] } | undefined)?.items ?? []).find((it) => it.message_id !== rootId);
+    if (!item) return undefined;
+    learnNames(names, item);
+    const from = kindOf(item.sender, meOf(channel));
+    return from ? { at: Number(item.create_time) || 0, from, senderId: senderIdOf(item.sender) } : undefined;
+  } catch (err) {
+    return failed(String(err));
+  }
 }
 
 // ── content → plain text ───────────────────────────────────────────────────
@@ -643,6 +692,41 @@ export interface RecordPlace {
   topic?: { title?: string };
 }
 
+/** Someone a daemon line names: this bot, a person or another bot. */
+export interface Who {
+  kind: 'self' | 'user' | 'bot';
+  name?: string;
+}
+
+/** Where a topic session's topic hangs in the main area (its opening's first line). */
+export interface TopicPointer {
+  /** This bot opened the topic on the trigger (a main @ in a multi group). */
+  botOpened?: boolean;
+  /** The message it hangs under; undefined when that could not be read. */
+  root?: { at: number; who: Who };
+  /** The main area's session in a single group, same tier. */
+  mainSessionId?: string;
+}
+
+/** A topic opened in the main area, written as a 引用行 among the main-area lines. */
+export interface TopicQuote {
+  topicId: string;
+  title?: string;
+  /** When it was opened. */
+  at: number;
+  /** Who opened it; undefined when unknown. */
+  who?: Who;
+  /** The message it hangs under. */
+  root?: { id: string; at?: number; who?: Who };
+  /** This bot's session there, same tier only. */
+  sessionId?: string;
+}
+
+/** A row of the table of recent topics shown after a compaction. */
+export interface TopicRow extends TopicQuote {
+  lastAt: number;
+}
+
 /** A record block (product.md 3.5): the messages a session has not seen yet. */
 export interface RecordBlock {
   place: RecordPlace;
@@ -651,6 +735,16 @@ export interface RecordBlock {
   earlier?: number | 'some';
   /** The trigger's createTime: a line from another day carries its date. */
   now: number;
+  /** The topic's first message, marked （话题第一条）; the earlier note goes after it. */
+  rootId?: string;
+  /** A topic session's opening: the pointer, and the main-area lines before the topic's first message. */
+  opening?: { pointer: TopicPointer; main: ContextMessage[] };
+  /** 引用行, among `opening.main` when there is an opening, else among `entries`. */
+  quotes?: TopicQuote[];
+  /** Topics left out of `quotes`. */
+  moreTopics?: number;
+  /** The recent topics, as the block's last lines. */
+  table?: TopicRow[];
 }
 
 /**
@@ -664,6 +758,12 @@ export interface RecordBlock {
  *   10:03 小P（bot）：网关日志里 500 都来自 OrderService
  *   [/飞书]
  *
+ * A topic session's opening starts with a pointer to the message the topic
+ * hangs under, then `主区在这之前：` with the main-area lines before it and
+ * `话题里：`. Topics opened in the main area show as 引用行 among the
+ * main-area lines (`10:01 〔话题〕李四在上面这条下开了话题「…」…`); after a
+ * compaction the recent topics come last (s14b).
+ *
  * Every line from a message starts with its time and sender, and every
  * user-controlled part is collapsed to one line, so a crafted body or name can
  * neither close the block nor pass for a line the daemon writes; names and
@@ -671,13 +771,108 @@ export interface RecordBlock {
  * unchanged when there is nothing to show.
  */
 export function weaveRecordBlock(text: string, block: RecordBlock): string {
-  const lines = [...block.entries]
-    .sort((a, b) => a.createTime - b.createTime)
-    .map((m) => recordLine(m, block.now))
-    .filter((l) => l.length > 0);
+  const { opening, now } = block;
+  const quotes = block.quotes ?? [];
+  const all = [...block.entries, ...(opening?.main ?? [])];
+  const more = block.moreTopics && quotes.length ? [`（还有 ${block.moreTopics} 个话题没列，需要时用 vonvon 飞书 skill 列）`] : [];
+  const own = sectionLines(block.entries, opening ? [] : quotes, all, now, block.rootId, earlierNote(block.earlier));
+  const lines = opening || !quotes.length ? own : [...more, ...own];
+  if (opening) {
+    const main = sectionLines(opening.main, quotes, all, now);
+    const head = main.length ? ['主区在这之前：', ...more, ...main, ...(own.length ? ['话题里：'] : [])] : [];
+    lines.unshift(pointerLine(opening.pointer, now), ...head);
+  }
+  lines.push(...tableLines(block.table ?? [], now));
   if (lines.length === 0) return text;
-  const earlier = earlierNote(block.earlier);
-  return prependBlock([recordHeader(block.place), ...(earlier ? [earlier] : []), ...lines, '[/飞书]'].join('\n'), text);
+  return prependBlock([recordHeader(block.place), ...lines, '[/飞书]'].join('\n'), text);
+}
+
+/**
+ * One section's lines, time-ascending: its messages, and the 引用行 among
+ * them (after a message of the same time). The root gets （话题第一条）, and
+ * the earlier note goes right after it, else first; none without a line.
+ */
+function sectionLines(msgs: ContextMessage[], quotes: TopicQuote[], all: ContextMessage[], now: number, rootId?: string, earlier?: string): string[] {
+  const out: string[] = [];
+  const qs = [...quotes].sort((a, b) => a.at - b.at);
+  let prev: ContextMessage | undefined; // the message on the line above, if that line is one
+  let rootAt = 0;
+  const quote = (q: TopicQuote) => {
+    out.push(quoteLine(q, prev, all, now));
+    prev = undefined;
+  };
+  for (const m of [...msgs].sort((a, b) => a.createTime - b.createTime)) {
+    while (qs.length && qs[0]!.at < m.createTime) quote(qs.shift()!);
+    const line = recordLine(m, now);
+    if (!line) continue;
+    out.push(m.messageId === rootId ? `${line}（话题第一条）` : line);
+    if (m.messageId === rootId) rootAt = out.length;
+    prev = m;
+  }
+  qs.forEach(quote);
+  if (earlier && out.length) out.splice(rootAt, 0, earlier);
+  return out;
+}
+
+/** The opening's pointer: where the topic hangs, and the main session's id. */
+function pointerLine(p: TopicPointer, now: number): string {
+  const rest = '主区的其他内容不在这里，需要时用 vonvon 飞书 skill 查。';
+  const at = p.root ? ` ${clockOf(p.root.at, now)} ` : '';
+  if (p.botOpened) return `这个话题是你在群主区${p.root ? `${at}${whoText(p.root.who)}的这条` : '的一条'}消息下开的，就是下面这条。${rest}`;
+  const where = !p.root ? '的一条消息' : p.root.who.kind === 'self' ? `${at}你的回复` : `${at}${whoText(p.root.who)}的消息`;
+  const sid = p.mainSessionId ? `（主区会话 id：${label(p.mainSessionId, 80)}）` : '';
+  return `这个话题开在群主区${where}下${sid}。${rest}`;
+}
+
+/** A 引用行: `HH:MM 〔话题〕{谁}{在哪条下}开了话题「…」，{会话}，这里不用接。（ids）`. */
+function quoteLine(q: TopicQuote, prev: ContextMessage | undefined, all: ContextMessage[], now: number): string {
+  const title = label(q.title ?? '', 30);
+  const tail = `你在那边${q.sessionId ? '另有一条会话' : '还没有会话'}，这里不用接。（${topicIds(q)}）`;
+  const what = title ? `开了话题「${title}」` : '开了一个话题';
+  return `${clockOf(q.at, now)} 〔话题〕${whoText(q.who)}${whereText(q.root, prev, all, now)}${what}，${q.who?.kind === 'self' ? tail.slice(1) : tail}`;
+}
+
+/** The message a topic hangs under: the line above, or its time and sender (from the block when it is there). */
+function whereText(root: TopicQuote['root'], prev: ContextMessage | undefined, all: ContextMessage[], now: number): string {
+  if (!root) return '';
+  if (prev?.messageId === root.id) return '在上面这条下';
+  const m = all.find((x) => x.messageId === root.id);
+  const who = m ? { kind: m.from, name: m.senderName } : root.who;
+  if (!who) return '';
+  const t = m?.createTime ?? root.at;
+  const at = t ? clockOf(t, now) : '';
+  if (who.kind === 'self') return `在你${at ? ` ${at} ` : ''}的回复下`;
+  return `在${at ? ` ${at} ` : ''}${whoText(who)}的消息下`;
+}
+
+/** The table of recent topics (product.md 3.5), or none without rows. */
+function tableLines(rows: TopicRow[], now: number): string[] {
+  if (!rows.length) return [];
+  const head = `〔本群最近 ${rows.length} 个活跃话题〕这条会话压缩过，前面的话题引用可能已经被摘要掉。更多话题用 vonvon 飞书 skill 列。`;
+  return [head, ...rows.map((r) => {
+    const title = label(r.title ?? '', 30);
+    const who = whoText(r.who);
+    const has = r.sessionId ? '你在那边有会话' : '你在那边还没有会话';
+    return `· ${title ? `「${title}」` : '一个话题，'}${who}${who.endsWith('）') ? '' : ' '}${clockOf(r.at, now)} 开的，最近 ${clockOf(r.lastAt, now)} 有消息，${has}（${topicIds(r)}）`;
+  })];
+}
+
+function topicIds(q: TopicQuote): string {
+  return `话题 id：${label(q.topicId, 80)}${q.sessionId ? `，会话 id：${label(q.sessionId, 80)}` : ''}`;
+}
+
+/** A daemon line's name for someone: 你, a person's name, `名字（bot）`, or a stand-in. */
+function whoText(who: Who | undefined): string {
+  if (!who) return '有人';
+  if (who.kind === 'self') return '你';
+  const name = personName(who.name ?? '');
+  if (who.kind === 'bot') return name ? `${name}（bot）` : '另一个 bot';
+  return name || '某人';
+}
+
+/** Without parentheses, a person's name cannot pass for "名字（bot）". */
+function personName(s: string): string {
+  return label(s.replace(/[（）()]/g, ''), 40);
 }
 
 function recordHeader(p: RecordPlace): string {
@@ -706,8 +901,7 @@ function recordLine(m: ContextMessage, now: number): string {
   if (!body) return '';
   const at = clockOf(m.createTime, now);
   if (m.from === 'self') return `${at} 你：${body}`;
-  // Without parentheses, a person's name cannot pass for "名字（bot）".
-  const who = label(m.senderName.replace(/[（）()]/g, ''), 40) || '某人';
+  const who = personName(m.senderName) || '某人';
   if (m.from === 'bot') return `${at} ${who}（bot${m.streaming ? '，还没答完' : ''}）：${body}`;
   return `${at} ${who}${m.mentionsMe ? ' → @你' : ''}：${body}`;
 }
