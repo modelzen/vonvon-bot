@@ -25,6 +25,14 @@ export function loginFromAccount(account: ClaudeAccount | undefined): ClaudeLogi
   return account.tokenSource === 'none' || account.apiKeySource === 'none' ? { state: 'signedOut', message: CLAUDE_SIGNED_OUT_MESSAGE } : null;
 }
 
+/** Under launchd the daemon may not reach the login keychain, and the CLI then reports
+ * no credentials. e06 could not check this (that Mac's login is not in the keychain),
+ * so under the LaunchAgent a signed-out answer is 无法确认, never 未登录. */
+export function loginUnderService(login: ClaudeLogin, env: NodeJS.ProcessEnv): ClaudeLogin {
+  if (login.state !== 'signedOut' || env.VONVON_SERVICE !== 'launchd') return login;
+  return { state: 'unknown', message: '无法确认：后台服务里没查到 Claude 登录，可能是读不到钥匙串。在终端里运行 `claude` 看是否已登录，或设置 ANTHROPIC_API_KEY。' };
+}
+
 /** When the SDK cannot tell: a credential in the env counts as signed in (not
  * validated); otherwise 无法确认, never 未登录, since a keychain login may exist. */
 export function loginFromEnv(env: NodeJS.ProcessEnv, reason: string): ClaudeLogin {

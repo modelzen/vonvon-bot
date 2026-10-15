@@ -95,7 +95,7 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
 3. 在诊断页看各 bot 的连接状态和版本；在一个没绑定的群里 @bot，诊断页里能看到没回的原因。
 4. Linux 部分不用 owner 做；有 Linux 机器的话，可以照本文第 10 节的记录试一次。
 
-### M5 智能模式（s21 到 s28）
+### M5 智能模式（s21 到 s23、s25 到 s28）
 
 **给 owner 什么：**（3.4）
 - 新建的群默认智能模式：bot 自己判断接不接话、回在主区还是开新话题；进群时说一句"我会读群消息，合适时接话"。
@@ -103,7 +103,6 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
 - 同一台 Mac 上几个智能 bot 合成一次判断，只放行一个回复。
 - 智能 bot 之间能互相 @，没有真人插话时最多来回 3 轮。
 - 群详情页能切换智能或规则模式，改回复方式和"运行中来了消息"。
-- 可以填 OpenAI、TypeSafe 或 OpenRouter 的 key 来做判断。
 - 用量页显示判断次数，诊断页显示"不回"的原因。
 - 已有的群仍是规则模式，行为不变。
 
@@ -233,7 +232,7 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 | [x] | s05a | 删掉 daemon 里的 Windows 服务实现 | 删 `windows.ts`、`win-startup.ts`、三份 Windows 服务测试和 `__win-relaunch` 命令及其两份测试；没有用户可见变化，理由见本文第 6 节 | 1370 | — | — | 无 |
 | [x] | s05b | 删掉服务定义和注册里的 win32 分支 | 删 `identity.ts`、`definitions.ts`、`registration.ts` 里的 win32 分支和 Windows 注册测试，以及桌面端跟着要删的 Run 键读取；没有用户可见变化，理由见本文第 6 节 | 520 | s05a | — | 无 |
 | [x] | s06 | 注册服务后只由服务管理器拉起 daemon | 从 #285 搬启动路由（约 120 行源码加测试）：拿锁前先读注册，`daemon start` 改请服务管理器启动；修 #287（3.10） | 1000 | s05b | 子进程、并发、关闭清理、错误路径 | 已注册服务时 launchd 拉起的多余进程退出 0、不反复重启；持锁进程被 kill -9、PID 被复用后服务仍会重试 |
-| [ ] | s07 | vonvon service install、uninstall、status | darwin 用 launchd、linux 用 systemd；装服务前先排空自己起的分离 daemon；快照和 RPC 读真实状态（3.10） | 700 | s06、s02、e06 | 子进程、错误路径、关闭清理、macOS 原生 | 打包版执行 install：plist 写入并起来，`daemon stop` 后不再拉起，注销再登录会起来，没有 Dock 图标，已有分离 daemon 时马上接管 |
+| [x] | s07 | vonvon service install、uninstall、status | darwin 用 launchd、linux 用 systemd；装服务前先排空自己起的分离 daemon；快照和 RPC 读真实状态（3.10） | 700 | s06、s02、e06 | 子进程、错误路径、关闭清理、macOS 原生 | 打包版执行 install：plist 写入并起来，`daemon stop` 后不再拉起，注销再登录会起来，没有 Dock 图标，已有分离 daemon 时马上接管 |
 | [ ] | s08 | 桌面端的"登录电脑时启动"和清单里的这一步 | 桌面端调打包的 CLI 装卸服务；清单加"登录电脑时自动运行 bot（推荐）"，跳过就起分离 daemon 并提示；删桌面端的 Windows 代码；Linux 上不显示"登录时启动"开关；本文第 10 节写卸载步骤（3.10） | 1000 | s07、s04 | 子进程、macOS 原生、错误路径 | 真实窗口里：开关状态和 `launchctl print` 一致，退出 app 后 bot 在线，app 挪走再挪回能恢复，换新版后 daemon 跑新版本 |
 
 开工要点：
@@ -259,6 +258,16 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 - s07：POSIX 上的互斥锁是 `127.0.0.1` 上按数据目录哈希出来的端口（20000 到 49999），和 Linux 的临时端口重叠。#295 的 CI 撞过一次（`host-service-shutdown` 测试报 busy），开工时看要不要改成 Unix 域套接字。#296 的 CI 也失败过一次，可能是同一个原因：`daemon-cli.test.ts` 的"concurrent detached starts return the same ready owner"两个启动都退出 1，日志里没有子进程的输出，重跑通过。开工时让这个测试失败时打印子进程输出。
 - s07：e06 实测（`docs/research/2026-10-15-v1-spikes/e06-launchagent-keychain.md`）：LaunchAgent 起的进程拿到真实 HOME 和 USER、PATH 只有系统目录，Claude 和 Codex 的登录检测和终端一样是已登录。owner 的登录不走钥匙串，钥匙串那条路没验证到，所以 s03 留下的"读不到钥匙串时改成无法确认"照做，并在用钥匙串登录的账号上验证。用户在系统设置"App 后台活动"里关掉这一项时，服务从 launchd 里消失（`launchctl print` 退出码 113，表现和卸载一样），`service status` 把"plist 在、服务找不到"显示成"已在系统设置里关掉"。不用 `sfltool`（不加 sudo 时卡住）。产品 plist 的 `SuccessfulExit=false` 和 5 秒节流没测，放进 s07 的 Mac 检查。
 - s07：`D/admin/host.ts:194` 的 `resolveCliBinPath` 还指向 `bin/feishu-codex-bridge.mjs`，包里只有 `bin/vonvon.mjs`（`D/service/common.ts` 的同名函数是对的）。查清 `host.ts:210` 那条路径还用不用，用就改成调 service/common 的。
+- s07 的做法：服务名跟着数据目录走。默认的 `~/.vonvon-bot` 仍是 `com.vonvon.bot.daemon` 和 `vonvon-bot.service`；别的 `VONVON_HOME` 在名字后面加数据目录路径哈希的前 12 位（如 `com.vonvon.bot.daemon.<12 位>`），plist 和 unit 的文件名也一样。测试和 Mac 检查用临时 `VONVON_HOME` 就有自己的 label，碰不到 owner 的服务，不用另设变量。
+- s07 的做法：`service install` 先停掉 `daemon start` 起的分离 daemon（等它排空退出），再写定义、让服务起来，端口沿用分离 daemon 的，网页地址不变。定义已装好、服务空闲时只 `kickstart`（systemd 是 `start`）。停了分离 daemon 以后装失败，结果是 `install_incomplete`，并写明"运行 vonvon daemon start"，不自动把分离 daemon 起回来。
+- s07 的做法：自己名下的 `unrecognized` 定义（旧版本写的、格式对不上的普通文件）当作旧格式：install 重写、uninstall 删除，回滚时写回原字节。符号链接、目录和别的数据目录的定义仍然拒绝。服务正在跑时换定义仍要先 `vonvon daemon stop`。
+- s07 的做法：`service status` 分七种：未安装、在运行、已停止、已关掉、分离运行、要处理、查不到。"定义在、launchd 里没有这个任务"显示为已关掉，提示去系统设置的"登录项与扩展"打开（e06）。`--json` 输出完整状态。网页的机器状态、`daemonStatus` 的 installed 和快照里的 `loginItem` 都读真实状态；`loginItem` 随工具检查每 60 秒读一次。
+- s07 的做法：服务定义里的 PATH 是执行 install 时的 PATH 补上 s02 的工具目录。daemon 由 launchd 起来时（`VONVON_SERVICE=launchd`），Claude 登录检测报未登录就改成无法确认，提示可能读不到钥匙串。
+- s07 的做法：互斥锁没改成 Unix 域套接字。换算法会让升级那一刻新旧版本的互斥失效：旧 daemon 占着旧端口，新进程拿到新的锁，以为没人持锁，接管 `daemon.pid`。`daemon-cli.test.ts` 的并发启动测试失败时会打印两个 CLI 的输出和 `daemon.log`；准入锁只等 1.5 秒，CI 负载高时也可能是原因，下次失败看输出再定。`D/admin/host.ts` 里指向 `bin/feishu-codex-bridge.mjs` 的 `resolveCliBinPath` 已删，改用 `D/service/common.ts` 的；用到它的 `buildDaemonControlCommand` 只有测试在用。
+- s07 的 Mac 检查（未签名打包版、临时 `VONVON_HOME`）：接管分离 daemon、plist 内容、`daemon stop` 后 30 秒不拉起、卸载都通过。kill -9 后被拉起，launchd 记下 `last terminating signal = Killed: 9`；连续两次时第二次约 4 秒后看到新进程（每秒采样，没测准 5 秒节流）。Dock 用 Computer Use 没查成（超时），`lsappinfo` 里没有服务进程。在"App 后台活动"里关掉后 `service status` 显示已关掉，这时 `daemon start` 仍能把服务起来，系统设置里的开关还是关的；未签名打包版在那里显示为"Vonvon Bot"、"身份不明的开发者"。install 成功时原来把服务自己的 daemon 写成"Left behind"，已改成"running under the service"。
+- s07 留下的，给 s08：服务正在跑时 install 拒绝替换定义，桌面端换新版本后要先 `daemon stop` 再 `service install`，或者在 s08 给 install 加"替换运行中的服务"。开关读 `service status --json` 的 `state`，`disabled` 就是系统设置里关掉了。网页和桌面端的 machine RPC 里 install、uninstall 仍然拒绝，s08 接到 CLI。系统设置里显示成什么，s08 看要不要在 plist 里加 `AssociatedBundleIdentifiers`（会改定义格式，旧定义变成 `unrecognized`，install 会重写）。
+- s07 留下的，给 s17：`service status` 还不显示 launchd 的 `last exit code` 和 `last terminating signal`，崩溃记录做的时候一起加。
+- s07 留下的，给 s20a：Linux 的 install 没处理 linger；没有用户 systemd（比如容器里）时 `service status` 显示查不到，install 报 `User manager unavailable`。
 - s08：e06 发现系统设置"App 后台活动"里也有一个开关，用户在那里关掉时服务从 launchd 里消失。桌面端的"登录电脑时启动"要读 s07 的状态，显示"已在系统设置里关掉"，不能只看自己存的值。未签名的 Electron 在那里显示为"Electron"、"身份不明的开发者"；签名后的预览版显示什么，s08 的 Mac 检查时看。
 
 ### M3 群里的上下文
@@ -307,8 +316,7 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 |---|---|---|---|---|---|---|---|
 | [ ] | s21 | 群的智能/规则开关和运行中来了消息 | 群加智能或规则模式和"运行中来了消息"覆盖，缺省按规则读；切主区方式时回复方式不变（3.2、3.4） | 360 | — | 数据迁移 | 无 |
 | [ ] | s22 | 三条底线：点名、接着聊、bot 消息 | 入站先判断对谁说；话题里只看 @；规则模式"仅 @"下引用我的消息不算点名（3.4 第 1 条的例外）；多 bot 群主区命令要 @；从群信息读 chat_mode 认出话题群，加一个单测（3.4"三条底线"） | 550 | s21、s15、e10 | 错误路径 | 无 |
-| [ ] | s23 | 判断模型：订阅里的小模型 | 判断层三选一加原因；Codex 用常驻的 utility 进程，Claude 单轮、不带工具；出错算不回，主区被 @ 的出错算回在主区（3.4） | 550 | — | 子进程、错误路径 | 真实 Codex 跑判断：结果格式对，超时按不回；合入后接着做 e12 |
-| [ ] | s24 | 判断模型：填 key | OpenAI（Decisions API）、TypeSafe（Jev）、OpenRouter 三个客户端；key 进本机密钥库，设置页能填，聊天里不收（3.4、3.7） | 480 | s23 | 错误路径 | 无 |
+| [ ] | s23 | 判断模型：订阅里的小模型 | 判断层三选一加原因；Codex 用常驻的 utility 进程，Claude 单轮、不带工具；出错算不回，主区被 @ 的出错算回在主区（3.4） | 550 | — | 子进程、错误路径 | 真实 Codex 用 gpt-6-luna 跑判断：结果格式对，超时按不回；合入后接着做 e12 |
 | [ ] | s25 | 智能模式的入站：判断回不回、回在哪里 | 主区底线定不下来时调一次判断；话题里只判断回不回；每群每小时上限 60 次；进群说一句；新群默认智能；"不回"的原因进诊断页；话题里只有一个真人在和我聊时不调判断、直接回（3.4"控制成本"） | 800 | s21、s22、s23、s14、s19、e12 | 并发、错误路径 | 无（M5 验收前，预览版会话按 3.4 例子第 3、4 行跑一遍） |
 | [ ] | s26 | 本机几个 bot 合成一次判断，只放行一个 | supervisor 里加协调器，按 message_id 收齐本机各 bot 的报名，智能 bot 合成一次判断，"全部回复"的也只放行一个；界面提示不同电脑上的 bot 可能抢着回（3.4） | 680 | s25 | 并发、子进程、关闭清理、错误路径 | 无 |
 | [ ] | s27 | bot 之间互相 @ | 智能模式下收别的 bot @ 我的消息，只看对方最终回答；没有真人插话时最多来回 3 轮（3.4"bot 之间"） | 420 | s22、s25、e10 | 错误路径、并发 | 无 |
@@ -318,6 +326,8 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 - s21：新建和新绑的群先也写规则模式，等 s25 接上智能入站再改成默认智能，中间不出现半成品的智能群。Claude 不支持插话，照样排队。
 - s22：话题群和话题形式群在 s25 里不判断开不开话题，靠这里读到的 chat_mode 认出来。查询失败时，没点名的消息一律不回。
 - s23：读 `SMART.md` 的那一小段先写在这里，s38 的 bot 文件模块合入后改成调它。
+- s23：Codex 的判断用 gpt-6-luna，推理强度取最低档。测试、Mac 检查和 M5 验收里，判断都用它（owner 2026-10-15："测试的时候就用 gpt-6-luma 去判断"，按 gpt-6-luna 理解）。Claude 的 bot 用 Claude 订阅里的小模型。
+- s24 不做了：填 key 的判断模型（Decisions API、Jev）移到 product.md 第 10 节（owner 2026-10-15）。编号空着，不挪别的片。
 - s25：每群每小时的上限先按 60 次做，e12 量完再调。
 - s26：单独跑一个 bot（`--bot`）时退化成单 bot；子进程退出或请求超时，退回由各 bot 自己判断。
 
@@ -453,7 +463,7 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 | [ ] | e09 | 第 13 项：卡片里的 @ 会不会提醒人 | Mac | 测试 bot 往测试群发一张带 `<at>` 的卡片和一条带 @ 的文字，在飞书客户端看两条有没有"有人@我"的标记和通知 | s30 | s30 之前 |
 | [ ] | e10 | 第 6、14、15、16 项和第 17 项后半：飞书平台 | Mac | 用测试 bot 的应用身份调接口，再在客户端看：机器人能否自己进已有的群；`with_sender_name` 拿不拿得到名字；能否拉到别的 bot 卡片回答的正文；话题里的引用分不分得出是哪条；"同时发送到群"收几次事件；私聊里的话题；能否给没开过会话的人发私聊；断线期间的消息重连后会不会补推 | s09、s14；s18、s22、s27、s49、s57 也用它的结果 | s09 之前 |
 | [ ] | e11 | 第 18 项的 Codex 一半 | Mac | 用真实 Codex 起两条线程、关掉一条，再用 utility 进程发 thread/read，看不加载线程能不能读到用户消息和最终回答 | s48 | s48 之前 |
-| [ ] | e12 | 第 9 项：判断的延迟和额度 | Mac | s23 合入后，用 Codex 和 Claude 的订阅各跑 50 次判断，记延迟分布和额度变化（看各自的账户页面），用来定 s25 每群每小时的上限 | s25 | s25 之前 |
+| [ ] | e12 | 第 9 项：判断的延迟和额度 | Mac | s23 合入后，用 Codex 订阅的 gpt-6-luna 和 Claude 订阅的小模型各跑 50 次判断，记延迟分布和额度变化（看各自的账户页面），用来定 s25 每群每小时的上限 | s25 | s25 之前 |
 | [ ] | e13 | 第 7 项：企业租户的权限审核 | — | 不单独做，现在没有企业租户。清单里写一句"企业租户里新权限可能要管理员审核"；M11 时 owner 手里有企业租户，就顺手看一次 | — | — |
 | [ ] | e14 | 第 8 项和第 17 项前半 | Mac | 在 M3 的预览版会话里看：Codex 应用和 `claude --resume` 打开 bot 的群会话，看到的和 bot 是否一样，两边同时写会怎样；手动 `/compact` 后摘要里引用行还在不在。只影响说明文字和"最近 5 个活跃话题"那张表 | — | M3 验收时 |
 

@@ -73,6 +73,7 @@ import {
 } from '../service/update';
 import { bridgeVersion } from '../core/version';
 import { collectHostDoctor, toDaemonStatus, type DaemonStatus, type HostDoctor } from './host';
+import { controlDesktopService } from '../host/service';
 import type { AdminWriteOp } from './ops';
 
 /**
@@ -949,8 +950,12 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       const foreground = deps.daemonStartedAt === undefined
         ? undefined
         : { pid: process.pid, startedAt: deps.daemonStartedAt };
+      const service = await controlDesktopService('status');
       return {
         ...toDaemonStatus({ foreground, version: bridgeVersion() }),
+        installed: service.installed, supported: service.supported,
+        ...(service.platformName ? { platformName: service.platformName } : {}),
+        ...(service.servicePath ? { servicePath: service.servicePath, stdoutPath: service.stdoutPath, stderrPath: service.stderrPath } : {}),
         distribution: await runtimeDistribution(),
       };
     },

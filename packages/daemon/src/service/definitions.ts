@@ -1,5 +1,5 @@
 import { posix } from 'node:path';
-import { LAUNCHD_LABEL, type CanonicalRoot, type Target } from './identity';
+import type { CanonicalRoot, Target } from './identity';
 
 export type DistributionInput =
   | { kind: 'npm'; executable: string; entry: string }
@@ -68,7 +68,7 @@ function render(target: Target, definition: DecodedDefinition): SerializedDefini
   switch (target.platform) {
     case 'darwin': {
       const string = (value: string) => `<string>${xml(value)}</string>`;
-      const plist = `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n<key>Label</key>${string(LAUNCHD_LABEL)}\n<key>ProgramArguments</key><array>${[distribution.executable, distribution.entry, 'daemon', 'run', '--port', String(port)].map(string).join('')}</array>\n<key>EnvironmentVariables</key><dict>\n<key>VONVON_HOME</key>${string(root)}\n<key>VONVON_SERVICE</key>${string('launchd')}\n<key>PATH</key>${string(capturedPath)}\n${desktop ? '<key>ELECTRON_RUN_AS_NODE</key><string>1</string>\n' : ''}</dict>\n<key>StandardOutPath</key>${string(out)}\n<key>StandardErrorPath</key>${string(err)}\n<key>RunAtLoad</key><true/>\n<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>\n<key>ThrottleInterval</key><integer>5</integer>\n</dict>\n</plist>\n`;
+      const plist = `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n<key>Label</key>${string(target.label)}\n<key>ProgramArguments</key><array>${[distribution.executable, distribution.entry, 'daemon', 'run', '--port', String(port)].map(string).join('')}</array>\n<key>EnvironmentVariables</key><dict>\n<key>VONVON_HOME</key>${string(root)}\n<key>VONVON_SERVICE</key>${string('launchd')}\n<key>PATH</key>${string(capturedPath)}\n${desktop ? '<key>ELECTRON_RUN_AS_NODE</key><string>1</string>\n' : ''}</dict>\n<key>StandardOutPath</key>${string(out)}\n<key>StandardErrorPath</key>${string(err)}\n<key>RunAtLoad</key><true/>\n<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>\n<key>ThrottleInterval</key><integer>5</integer>\n</dict>\n</plist>\n`;
       return { platform: target.platform, plist: Buffer.from(plist) };
     }
     case 'linux': {

@@ -2,29 +2,42 @@ import { createReadStream, statSync } from 'node:fs';
 import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { ServiceState } from '@vonvon/protocol';
 import { paths } from '../config/paths';
 
 /**
- * Platform-agnostic snapshot of the background service, produced by whichever
- * OS service manager backs this platform (launchd on macOS, Task Scheduler on
- * Windows, systemd on Linux). Callers render these fields without knowing the
- * platform.
+ * Where the background service stands:
+ * - `not-installed`: no definition and no manager job;
+ * - `running`: the manager's job runs the verified daemon for this data root;
+ * - `stopped`: installed, nothing running (after `vonvon daemon stop`);
+ * - `disabled`: the definition is there but the manager has no enabled job, on macOS
+ *   usually because the user turned it off under App Background Activity (e06);
+ * - `detached`: installed, but the daemon running is not the manager's process;
+ * - `conflict`: an unrecognized definition (an older format, which install rewrites),
+ *   one for another data root, an interrupted uninstall, or a daemon that does not
+ *   authenticate;
+ * - `unknown`: the manager could not be asked.
  */
+export type { ServiceState };
+
+/** The background service as launchd (macOS) or systemd (Linux) reports it. */
 export interface ServiceStatus {
-  /** Human label of the service manager, e.g. `"launchd (macOS)"`. */
+  /** `"launchd (macOS)"` or `"systemd (Linux)"`. */
   platformName: string;
-  /** The service definition (plist / task / unit) is registered with the OS. */
+  state: ServiceState;
+  /** The definition file exists. */
   installed: boolean;
-  /** The service process is currently alive. */
+  /** A verified daemon for this data root is running, whoever started it. */
   running: boolean;
-  /** Path or name of the service definition (plist path / task name / unit path). */
+  /** Label or unit name. */
+  name: string;
+  /** Path of the plist or unit. */
   servicePath: string;
   stdoutPath: string;
   stderrPath: string;
   pid?: string;
-  lastExit?: string;
-  /** Raw status output from the underlying tool, for diagnostics. */
-  raw: string;
+  /** One line on the state and the next step. */
+  detail: string;
 }
 
 /** Service log files live under the app dir, identical across platforms. */

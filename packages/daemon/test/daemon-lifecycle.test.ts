@@ -115,8 +115,7 @@ import { paths } from '../src/config/paths';
 import { observeShutdown, settleOwnedChild, type ShutdownControl } from '../src/host/lifecycle';
 import { runSamePortRestartHelper } from '../src/host/restart';
 import { runStart, runStop } from '../src/cli/commands/daemon';
-import { runServiceCommand } from '../src/cli/commands/service';
-import { controlDesktopService } from '../src/host/service';
+import { controlDesktopService, SERVICE_UNAVAILABLE } from '../src/host/service';
 import { acquireUpdateLock, finishOwnedUpdate, readUpdateStatus, restartDaemon, writeUpdateStatus } from '../src/service/update';
 
 const old = { pid: 43210, startedAt: '2026-10-10T00:00:00.000Z', listen: '127.0.0.1:43119' } satisfies PidLockInfo;
@@ -325,19 +324,8 @@ describe('CLI ownership', () => {
   });
 });
 
-describe('V3 service refusal', () => {
-  const refusal = 'Vonvon Bot cannot manage an OS service in this version. Use vonvon daemon start and vonvon daemon stop.';
-  it.each(['install', 'uninstall'] as const)('service %s refuses before loading an adapter or mutating files', async (action) => {
-    const before = readdirSync(paths.appDir);
-    const result = observed(runServiceCommand(action)); await result.settled;
-    expect.soft(String(result.error())).toContain(refusal);
-    expect.soft(fixture.getAdapter).not.toHaveBeenCalled();
-    expect.soft(fixture.adapter.install).not.toHaveBeenCalled();
-    expect.soft(fixture.adapter.uninstall).not.toHaveBeenCalled();
-    expect.soft(fixture.spawn).not.toHaveBeenCalled();
-    expect.soft(fixture.spawnSync).not.toHaveBeenCalled();
-    expect(readdirSync(paths.appDir)).toEqual(before);
-  });
+describe('service actions outside the CLI', () => {
+  const refusal = SERVICE_UNAVAILABLE;
   it.each(['install', 'start', 'stop', 'uninstall'])('desktop service %s also refuses before adapter access', async (action) => {
     const result = observed(controlDesktopService(action)); await result.settled;
     expect.soft(String(result.error())).toContain(refusal);
