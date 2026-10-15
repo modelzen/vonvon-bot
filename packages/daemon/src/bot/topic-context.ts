@@ -86,7 +86,8 @@ export interface TopicContext {
 /**
  * `track` keeps registry writes for shutdown; `stopping` skips them once it starts.
  * Per process: a chat's mode is cached (an hour, ten minutes when unknown),
- * and each topic is looked up at most once.
+ * and each topic is looked up at most once: a turn that reaches a topic still
+ * being looked up, or one recorded after its list was read, gets that lookup's answer.
  */
 export function createTopicContext(
   channel: LarkChannel,
@@ -95,7 +96,7 @@ export function createTopicContext(
   opts: { stopping: () => boolean; track: <T>(p: Promise<T>) => Promise<T> },
 ): TopicContext {
   const modes = new Map<string, { topic: Promise<boolean>; until: number }>();
-  const tried = new Set<string>();
+  const looked = new Map<string, Promise<TopicView | undefined>>();
 
   async function chatMode(chatId: string): Promise<{ topic: boolean; ttl: number }> {
     const unknown = (reason: string, failure?: unknown) => {
@@ -138,21 +139,28 @@ export function createTopicContext(
     },
     async discover(chatId, msgs, known) {
       if (!topics) return [];
-      const roots = msgs.filter((m) => m.threadId && !known.has(m.threadId) && !tried.has(m.threadId)).slice(-DISCOVER_MAX);
-      const found = await Promise.all(roots.map(async (root): Promise<TopicView | undefined> => {
+      const roots = msgs.filter((m) => m.threadId && !known.has(m.threadId));
+      // Topics already looked up take none of the 5 slots.
+      const fresh = new Set(roots.filter((m) => !looked.has(m.threadId!)).slice(-DISCOVER_MAX));
+      const found = await Promise.all(roots.filter((m) => fresh.has(m) || looked.has(m.threadId!)).map((root) => {
         const topicId = root.threadId!;
-        if (tried.size >= 1000) tried.clear();
-        tried.add(topicId);
-        const opener = await fetchTopicOpener(channel, topicId, root.messageId, names);
-        if (!opener || opts.stopping()) return undefined;
-        const rec = await opts.track(topics.note(chatId, {
-          topicId,
-          at: opener.at,
-          from: person(opener.from, opener.senderId),
-          first: { id: root.messageId, from: person(root.from, root.senderId), at: root.createTime || undefined, text: root.text },
-        }));
-        if (rec) log.info('intake', 'topic-discovered', { chatId: chatId.slice(-6), topic: topicId.slice(-6), opener: opener.from });
-        return rec ? { ...rec, sessions: [] } : undefined;
+        const hit = looked.get(topicId);
+        if (hit) return hit;
+        if (looked.size >= 1000) looked.clear();
+        const lookup = (async (): Promise<TopicView | undefined> => {
+          const opener = await fetchTopicOpener(channel, topicId, root.messageId, names);
+          if (!opener || opts.stopping()) return undefined;
+          const rec = await opts.track(topics.note(chatId, {
+            topicId,
+            at: opener.at,
+            from: person(opener.from, opener.senderId),
+            first: { id: root.messageId, from: person(root.from, root.senderId), at: root.createTime || undefined, text: root.text },
+          }));
+          if (rec) log.info('intake', 'topic-discovered', { chatId: chatId.slice(-6), topic: topicId.slice(-6), opener: opener.from });
+          return rec ? { ...rec, sessions: [] } : undefined;
+        })().catch(() => undefined);
+        looked.set(topicId, lookup);
+        return lookup;
       }));
       return found.filter((t): t is TopicView => Boolean(t));
     },

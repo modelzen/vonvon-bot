@@ -97,7 +97,8 @@ describe('createTopicContext', () => {
       })]);
       expect(await topics.get('chat', 'omt_a')).toMatchObject({ openedBy: { kind: 'bot', openId: 'ou_p' } });
       expect(names.peek('ou_p')).toBe('小P');
-      expect(await ctx.discover('chat', [root], new Set())).toEqual([]);
+      // Asked again with a list read before it was recorded: the same topic, no second request.
+      expect(await ctx.discover('chat', [root], new Set())).toEqual(found);
       expect(list).toHaveBeenCalledTimes(1);
       // A failed lookup records nothing and is not tried again.
       list.mockRejectedValueOnce(new Error('down'));
@@ -111,6 +112,27 @@ describe('createTopicContext', () => {
     }
   });
 
+  it('shares a lookup still running with a turn that reaches the same topic', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'topics-'));
+    try {
+      const topics = createTopicRegistry({ dir, sessions: async () => [] });
+      const items = [{ message_id: 'om_p', create_time: '7000', sender: { id: 'cli_p', id_type: 'app_id', sender_type: 'app', sender_name: '小P', open_bot_id: 'ou_p' } }];
+      let answer!: () => void;
+      const held = new Promise<void>((r) => { answer = r; });
+      const list = vi.fn(async () => { await held; return { code: 0, data: { items } }; });
+      const ctx = ctxOn({ message: { list } }, topics);
+      const root: ContextMessage = { messageId: 'om_root', senderName: '张三', senderId: 'ou_z', text: '订单', from: 'user', createTime: 5000, threadId: 'omt_a' };
+      const first = ctx.discover('chat', [root], new Set());
+      const second = ctx.discover('chat', [root], new Set());
+      answer();
+      const ids = (await Promise.all([first, second])).map((f) => f.map((t) => t.topicId));
+      expect(ids).toEqual([['omt_a'], ['omt_a']]);
+      expect(list).toHaveBeenCalledTimes(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('looks up at most 5 topics a turn, the newest', async () => {
     const list = vi.fn(async () => ({ code: 0, data: { items: [] } }));
     const ctx = ctxOn({ message: { list } }, createTopicRegistry({ dir: '/nonexistent', sessions: async () => [] }));
@@ -119,5 +141,8 @@ describe('createTopicContext', () => {
     await ctx.discover('chat', roots, new Set());
     expect(list.mock.calls.map((c) => (c as unknown as [{ params: { container_id: string } }])[0].params.container_id))
       .toEqual(['omt_2', 'omt_3', 'omt_4', 'omt_5', 'omt_6']);
+    // The next turn looks up the 2 left; the 5 already looked up take no slot.
+    await ctx.discover('chat', roots, new Set());
+    expect(list).toHaveBeenCalledTimes(7);
   });
 });
