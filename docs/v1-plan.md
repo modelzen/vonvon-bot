@@ -260,7 +260,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 开工要点：
 - s03：nvm 装的 codex 从 Finder 打开时，PATH 里没有那个 Node 版本的目录，`#!/usr/bin/env node` 起不来。已改：起 codex 子进程（查版本、app-server、装完托管副本后的版本检查）时，PATH 补上 codex 所在的目录和 s02 的工具目录。
 - s03：Codex 的最低版本定成 0.139.0。vonvon 用到的 app-server 方法 0.131.0 就都有，但 vonvon 依赖的行为（`turn/interrupt` 以 `turn/completed(interrupted)` 收尾、目标自动开始和目标状态）实际跑过的最老版本是 0.139。验证过的版本跟托管安装锁定的版本走，现在是 0.156.1。e05 做完后在 s39 抬高。
-- s03 留下的，给 s39：e05 实测 0.139.0 用 ChatGPT 登录已经跑不了任何模型，服务端拒绝它认识的全部模型；0.148.0 跑不了 gpt-6-luna；0.156.1 各项都过。最低版本抬到 0.156.1，和验证过的版本相同，版本检查不用改结构。只改常量和测试，不必等 s39，下一个碰 `version.ts` 的片可以顺手改。服务端按客户端版本放行模型，这条线还会上移，所以回合里报"requires a newer version of Codex"时，s19 的诊断页也按版本太旧提示。
+- s03 留下的，给 s39：e05 实测 0.139.0 用 ChatGPT 登录，试过的模型都被服务端拒了（它列出的 5 个里试了 gpt-5.5 和 gpt-5.4-mini）；0.148.0 跑不了 gpt-6-luna；0.156.1 各项都过。最低版本抬到 0.156.1，和验证过的版本相同，版本检查不用改结构。只改常量和测试，不必等 s39，下一个碰 `version.ts` 的片可以顺手改。服务端按客户端版本放行模型，这条线还会上移，所以回合里报"requires a newer version of Codex"时，s19 的诊断页也按版本太旧提示。
 - s03：Claude 登录只用 SDK 自带的运行时查：起一个不跑回合的 query，读 initialize 返回的 account；查不了（没下载 SDK、超时、报错）就看环境变量，有 `ANTHROPIC_API_KEY`、`CLAUDE_CODE_OAUTH_TOKEN` 或 `ANTHROPIC_AUTH_TOKEN` 算已登录、没验证过，没有就是无法确认，不报未登录。没用 `claude auth status`：它是另一个 CLI，版本和 SDK 自带的不一定一样，查到了也说明不了 bot 的回合能不能跑。account 是 CLI 从本地凭据读的，不问服务器，所以过期的登录也显示已登录，直到真跑一轮失败。
 - s03：#301 的 Mac 检查发现 owner 的 Mac 上没有 Codex.app，ChatGPT.app 里自带一份 codex（`Contents/Resources/codex-cli/bin/codex`，版本是预发布号，例如 0.162.0-alpha.17.2）。已加进候选，排在 nvm 之后，用户自己装的优先。
 - s03 留下的：Claude 的两个辅助查询（取模型列表、生成标题）用 `settingSources: []`，不读用户设置。凭据写在 `~/.claude/settings.json` 的 `env` 里时（owner 的 Mac 就是这样），这两个查询会报未登录，回合本身（读 user 和 project）和登录检测（读 user）不受影响。下一个碰 Claude 后端的切片改，改之前先在 Mac 上看现象；只读 user 会把用户的 CLAUDE.md 带进生成标题的提示，要一起考虑。s16 已改，见 M3 的开工要点。
@@ -331,7 +331,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 
 开工要点：
 - s09：e10 实测拉历史带 `with_sender_name=true` 拿得到真人和 bot 的名字，不用为换名再申请 `contact:user.base:readonly`。真人用 `sender_name`，它和客户端显示的一致，`sender_i18n_names.zh_cn` 可能是另一个名字；bot 多一个 `open_bot_id`，能和事件 `mentions` 里的 open_id 对上。open_id 按应用区分，不能拿 lark-cli 看到的 id 去比 daemon 收到的。换名缓存用拉历史的结果填，查不到再走通讯录，再查不到写 open_id 尾号。
-- s09：e10 测到断线期间的消息会补推，但这次在消息发出约 5 分钟后才到，不是一连上就推，可能晚于按水位补拉、甚至晚于回复。补推的消息按 message_id 和水位比对，进过记录块或回复过的跳过；今天的去重只在内存里（`RecentIdCache` 和 SDK 自带的），重启就没了，要持久化或直接比水位。晚到很久的 @ 要不要回、怎么说明晚了，在这片定。只有一个样本，补推时连着的是监听脚本，开工时用 daemon 自己的长连接再测断线 2 分钟和 10 分钟。
+- s09：e10 这次测到断线期间的消息补推了，但在消息发出约 5 分钟后才到，daemon 重连后 3 分多钟里一条都没收到，所以补推可能晚于按水位补拉、甚至晚于回复。补推的消息按 message_id 和水位比对，进过记录块或回复过的跳过；今天的去重只在内存里（`RecentIdCache` 和 SDK 自带的），重启就没了，要持久化或直接比水位。晚到很久的 @ 要不要回、怎么说明晚了，在这片定。只有一个样本，补推时连着的是监听脚本，开工时用 daemon 自己的长连接再测断线 2 分钟和 10 分钟。
 - s10：已有连续群里的旧话题，从下一条消息起建自己的会话，旧数据不搬。
 - s10 做法：连续群（代码里的 `single`）只有主区消息走整群会话，带 `thread_id` 的消息和多话题群一样走话题路径，会话键是话题 id；旧话题的下一条消息建新会话，开场按新会话补拉话题历史。话题里 `/clear` 不换会话，提示开新话题。点表情"继续"按会话键判断回在主区还是话题。`resolveThread` 带出重建原因（恢复失败、工作目录变了），第一张运行卡的顶部写一行说明，终态卡保留，日志记 `session-changed`；说明在卡真正发出后才算用掉，建卡失败或目标模式某轮没出卡时，留给失败回复或下一张卡。
 - s10 留下的事：工作目录变了时旧记录被新会话覆盖，旧会话只能从原生历史里找；目标模式整个运行都没出卡、也没报错时，这行说明不显示；连续群话题里的 `/help` 卡仍写"回到主群区 @我 + 内容"开新话题，s15 改命令时一起改。
@@ -395,7 +395,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s22：引用按 s14 的规则认：`parent_id` 不等于 `root_id` 就是引用了话题里的某一条，按 `parent_id` 查是谁的消息；话题里引用话题根分不出来，算没引用。e10 只测了普通群里的话题，话题群（`chat_mode=topic`）里的引用这片补测一次。
 - s23：读 `SMART.md` 的那一小段先写在这里，s38 的 bot 文件模块合入后改成调它。
 - s23：Codex 的判断用 gpt-6-luna，推理强度取最低档。测试、Mac 检查和 M5 验收里，判断都用它（owner 2026-10-15："测试的时候就用 gpt-6-luma 去判断"，按 gpt-6-luna 理解）。Claude 的 bot 用 Claude 订阅里的小模型。
-- s23：gpt-6-luna 要 Codex 0.156.1 起才能用（e05：0.148.0 用 ChatGPT 登录被拒），和 s03 留下的最低版本一致。
+- s23：gpt-6-luna 用 ChatGPT 登录时，Codex 0.148.0 被拒、0.156.1 能用，中间的边界没查（e05）。最低版本定 0.156.1 时够用，和 s03 留下的一致。
 - s24 不做了：填 key 的判断模型（Decisions API、Jev）移到 product.md 第 10 节（owner 2026-10-15）。编号空着，不挪别的片。
 - s25：每群每小时的上限先按 60 次做，e12 量完再调。
 - s26：单独跑一个 bot（`--bot`）时退化成单 bot；子进程退出或请求超时，退回由各 bot 自己判断。
@@ -439,9 +439,9 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 开工要点：
 - s36：群没设工作区时只用群自己的目录，不带 bot 的其余工作区，代码仓库照常继承（本文第 5 节）。仓库只收本机已有、带 `.git` 的目录。旧项目的 cwd 原样当作主工作区覆盖，不搬目录。
 - s37：给子进程的环境变量在这一片定下，s46 的令牌也走它，所以 e04、e05 要先做完。
-- s37：e05 实测，profile 在 `thread/start` 和每次 `thread/resume` 都要整份重传：`runtimeWorkspaceRoots`、`mcp_servers`（含禁掉用户的全局 MCP）、`skills.config`、`skills.bundled`、`projects.<cwd>.trust_level`，以及 memories 的两个键加 `features.memories: false`。只关两个键时，用户开着 memories 的话，bot 会话的第一轮仍会用 bot 的配置起一次全局整合任务，花主人的额度。不重传时用户的 MCP 和个人 skill 会悄悄回来。`skills/extraRoots/set` 对整个进程生效，预热池的进程在取出后、`thread/start` 前调。
+- s37：e05 实测，profile 在 `thread/start` 和每次 `thread/resume` 都要整份重传：`runtimeWorkspaceRoots`、`mcp_servers`（含禁掉用户的全局 MCP）、`skills.config`、`skills.bundled`、`projects.<cwd>.trust_level`，以及 memories 的两个键加 `features.memories: false`。memories 这三个 resume 后保不保留没查清：只带 cwd resume 后那一轮没重新注入记忆，`memory_mode` 和整合任务没单独查，按保险重传。只关两个键时，用户开着 memories 的话，bot 会话的第一轮仍会用 bot 的配置起一次全局整合任务，花主人的额度。不重传时用户的 MCP 和个人 skill 会悄悄回来。`skills/extraRoots/set` 对整个进程生效，预热池的进程在取出后、`thread/start` 前调。
 - s37：resume 时传新的 `developerInstructions` 不生效（e05，4 个版本）。改过的个性、群的 `SOUL.md` 和记忆，要用 `thread/inject_items` 或 `turn/start` 的 `additionalContext` 放进去，或者开新会话。product.md 3.6"记忆在会话开始或恢复时放进去"的 Codex 一半按这个做，先按本文 4.2 改 product.md。
-- s37：今天的 `thread/start` 会把 bot 的工作区写进用户 `config.toml` 的信任记录（e05），和 3.6"不改用户的全局配置"不符。会话层传 `projects.<cwd>.trust_level` 就不写；`untrusted` 会跳过项目里的 AGENTS.md（读源码，没实测），要加载就传 `trusted`。拼错的字段和配置键都被静默忽略，实验字段生没生效要自己核对：`runtimeWorkspaceRoots` 看回包回显，MCP 看 `mcpServerStatus/list`，skill 看 `skills/list`。
+- s37：今天的 `thread/start` 会把 bot 的工作区写进用户 `config.toml` 的信任记录（e05），和 3.6"不改用户的全局配置"不符。会话层传 `projects.<cwd>.trust_level` 就不写；`untrusted` 会跳过项目里的 AGENTS.md（读源码，没实测），要加载就传 `trusted`。但 `trusted` 还会加载工作区和仓库里 `.codex/` 的项目配置、hooks 和 exec policy（读源码，没实测），会话层没覆盖的设置会被它们改掉，比如多出 MCP；开工时定怎么处理。拼错的字段和配置键都被静默忽略，实验字段生没生效要自己核对：`runtimeWorkspaceRoots` 看回包回显，MCP 看 `mcpServerStatus/list`，skill 看 `skills/list`。
 - s39：按 e05 把最低版本抬到 0.156.1（见 s03 留下的）。起会话和恢复会话都传 `runtimeWorkspaceRoots`，不靠 0.156.1 起 resume 会保留它；回包回显的和传的不一致就报错。第二个根能写、根外被拒、`.git` 只读时 `git commit` 会不会失败，JP-VPS 上测不了（bwrap 起不来），只在 Mac 检查里看；macOS 上 `feishu` 权限配置加 `runtimeWorkspaceRoots` 时经沙箱读 AGENTS.md 正不正常，也一起看。第二个根里的 AGENTS.md 不会加载（e05），照 3.6 在指令里写"先读该仓库的 AGENTS.md"。
 - s40：product.md 没定写入方式。这里选"agent 直接写文件，daemon 前后比对"，不在群里另开记忆命令，和 3.7"群里不能用设置命令"一致。公共记忆只在私聊里由 s54 的设置命令写。
 
@@ -458,7 +458,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 
 开工要点：
 - s44：`~/.codex/AGENTS.md` 按会话关不掉（e05，4 个版本；会话层 `project_doc_max_bytes: 0` 只关项目里的那份）。按本文 4.2 第 3 条用【需要你决定】问 owner，比如接受"带上但在指令里声明 bot 的规矩优先"。`thread/start` 回包的 `instructionSources` 列出实际加载的文件，可以显示在桌面端。
-- s44：bot 的 MCP 在只读、读写档要配 `default_tools_approval_mode: "approve"`，不然调用被拒（e05，0.162.1），第 9 节第 2 项的推断成立。用户的个人 skill 先 `skills/list` 列出，再用 `skills.config` 逐个禁；系统 skill 用 `skills.bundled.enabled: false` 关。按名字禁会连同名的 bot skill 一起禁，按 `path` 禁没实测，开工时补测。中途换 skill 名单从 0.148.0 起下一轮生效，最低版本 0.156.1 时不用为这个开新会话。
+- s44：bot 的 MCP 在读写档不配 `default_tools_approval_mode: "approve"` 时调用被拒（e05，0.162.1，`approvalPolicy: never`），第 9 节第 2 项的推断在读写档上对得上；只读档和完全访问档不配会怎样没测，开工时补测。用户的个人 skill 先 `skills/list` 列出，再用 `skills.config` 逐个禁；系统 skill 用 `skills.bundled.enabled: false` 关。按名字禁会连同名的 bot skill 一起禁，按 `path` 禁没实测，开工时补测。中途换 skill 名单从 0.148.0 起下一轮生效，最低版本 0.156.1 时不用为这个开新会话。
 - s44：Claude 一侧按 e02 第 6 节：新建的 bot 用 `claudeMdExcludes`（经 `options.settings` 传）或只给 `settingSources: ['project']`，导入的 bot 照旧。
 - s46：变量名避开 TOKEN、KEY、SECRET，Codex 默认会滤掉含这些词的变量。e04 证明连不上时，按 product.md 第 9 节第 2 项的退路，把同一组命令做成 vonvon 自己的 MCP 工具，这一片照那个做。
 - s48：飞书 skill 的 SKILL.md 随 daemon 包发，每个会话都装。
@@ -488,7 +488,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s51a 到 s51c：开工前先在草稿上用 `git diff --stat` 量，超过 1500 行再拆。每个 PR 里列一张"私聊卡片 → 网页上的对应页面"对照表；s51b 删之前逐项确认网页有替代：新建项目、绑群、权限、白名单、管理员；s51c 也一样：语音、云文档评论、会话标题、看门狗、完成提醒。其中语音、云文档评论、完成提醒是 3.12 要保留的，看门狗按 3.12 改成 10 分钟（s11）。网页上没有对应开关的，先在同一片里补上再删卡。群里 `/settings` 用的 GS 卡，`tierLabel`、`permissionSummary` 这些共享函数，以及群里 `/usage` 等命令要用的卡片都保留。
 - s51a 到 s51c 和 s54 改 `handle-message.ts` 的同一段，不要同时在飞。
 - s53：从飞书来的人不能在本机删。缺权限或接口出错时保留上一次的结果，从来没拿到过时退回"扫码人加本机名单"。
-- s57：拉人要 `im:chat.members:write_only`，它现在在可选的进群权限组里。e10：机器人只能自己进公开群（`PATCH /im/v1/chats/:chat_id/members/me_join`），私有群回 HTTP 400、`code 232008`；客户端和 lark-cli 建的群默认私有，多数已有的群仍要有人拉。所以先调 `me_join`，回 232008 再发拉 bot 进群的步骤，先按本文 4.2 改 product.md 3.7。自己进群也会推 `im.chat.member.bot.added_v1`，操作人是 bot 自己，今天的 `onBotAddedToChat` 把它记成 `bot-added-nonadmin`、什么也不做；要和别人拉它进群（s36b）分开处理，绑定不靠这个事件触发。`me_join` 靠哪个权限，开工时用只开一个权限的应用试一次。
+- s57：拉人要 `im:chat.members:write_only`，它现在在可选的进群权限组里。e10：机器人能自己进公开群（`PATCH /im/v1/chats/:chat_id/members/me_join`），私有群回 HTTP 400、`code 232008`。lark-cli 建的群默认私有；客户端建群的默认值没查，开了入群审批的公开群能不能进也没测，开工时补。product.md 3.7 写的是"机器人自己进不了已有的群"，改成"公开群 bot 自己进"是承诺变强，属于本文 4.2 第 3 类：s57 开工前用【需要你决定】问 owner，owner 定了再改 product.md。owner 同意的话，先调 `me_join`，回 232008 再发拉 bot 进群的步骤。自己进群也会推 `im.chat.member.bot.added_v1`，操作人是 bot 自己，今天的 `onBotAddedToChat` 把它记成 `bot-added-nonadmin`、什么也不做；要和别人拉它进群（s36b）分开处理，绑定不靠这个事件触发。`me_join` 靠哪个权限，开工时用只开一个权限的应用试一次。
 
 ### M10 从 bridge 迁移
 
@@ -543,7 +543,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | [x] | e07 | 第 10 项（预查）：bridge 的锁 | JP-VPS | 临时 HOME 下用 v2 的 acquireSingleInstanceLock 写一份 bridge 格式的锁，再用 bridge 0.6.14（`6698118`）的同名函数去抢，应该抛 BridgeAlreadyRunningError；再看持有者退出后锁失效、startedAt+15s 那条判断 | s61 | s61 之前 |
 | [ ] | e08 | 第 10 项（真机） | Mac | 在 Mac 的测试用户账号里装 bridge 0.6.14，用数据副本和测试 bot：写入锁后 run 被拒，`start` 本身不被拒、会重新装好 plist 和 launchd 任务，被拉起的 run 反复被拒（e07 读代码的结论）；stop 删掉 plist 和 launchd 任务，bridge 多久退干净；持有者退出后锁失效；多 bot 模式下子进程也被拒；macOS 的 `ps -o etime=` 是否和 Linux 一样。没有测试用户账号时回"卡住了" | s61 | s61 之前 |
 | [ ] | e09 | 第 13 项：卡片里的 @ 会不会提醒人 | JP-VPS 和 owner | 测试 bot 往测试群发一张带 `<at>` 的卡片和一条带 @ 的文字。JP-VPS 上看消息数据：卡片里的 `<at>` 算不算提到了人。两条在飞书客户端里有没有"有人@我"的标记和通知，由 owner 看 | s30 | s30 之前 |
-| [x] | e10 | 第 6、14、15、16 项和第 17 项后半：飞书平台 | JP-VPS（客户端里看的由 owner 看） | 用测试 bot 的应用身份调接口，lark-cli 以 owner 的用户身份发消息：机器人能否自己进已有的群；`with_sender_name` 拿不拿得到名字；能否拉到别的 bot 卡片回答的正文；话题里的引用分不分得出是哪条；"同时发送到群"收几次事件；私聊里的话题；能否给没开过会话的人发私聊；断线期间的消息重连后会不会补推。只有客户端里才看得到的，留给 owner 找同事看：没开过会话的人收到的私聊在客户端里怎么显示、有没有通知。测"同时发送到群"要有人发一条这样的消息，lark-cli 发不出来时，改在客户端里发 | s09、s14；s18、s22、s27、s49、s57 也用它的结果 | s09 之前 |
+| [x] | e10 | 第 6、14、15、16 项和第 17 项后半：飞书平台（"同时发送到群"和给没开过会话的人发私聊没测，留给 owner，见下） | JP-VPS（客户端里看的由 owner 看） | 用测试 bot 的应用身份调接口，lark-cli 以 owner 的用户身份发消息：机器人能否自己进已有的群；`with_sender_name` 拿不拿得到名字；能否拉到别的 bot 卡片回答的正文；话题里的引用分不分得出是哪条；"同时发送到群"收几次事件；私聊里的话题；能否给没开过会话的人发私聊；断线期间的消息重连后会不会补推。只有客户端里才看得到的，留给 owner 找同事看：没开过会话的人收到的私聊在客户端里怎么显示、有没有通知。测"同时发送到群"要有人发一条这样的消息，lark-cli 发不出来时，改在客户端里发 | s09、s14；s18、s22、s27、s49、s57 也用它的结果 | s09 之前 |
 | [x] | e11 | 第 18 项的 Codex 一半 | JP-VPS | 用真实 Codex 起两条线程、关掉一条，再用 utility 进程发 thread/read，看不加载线程能不能读到用户消息和最终回答 | s48 | s48 之前 |
 | [ ] | e12 | 第 9 项：判断的延迟和额度 | JP-VPS | s23 合入后，用 Codex 订阅的 gpt-6-luna 和 Claude 订阅的小模型各跑 50 次判断，记延迟分布和额度变化，用来定 s25 每群每小时的上限。额度看各自的账户页面，跑之前和跑完由 owner 各读一次 | s25 | s25 之前 |
 | [ ] | e13 | 第 7 项：企业租户的权限审核 | — | 不单独做，现在没有企业租户。清单里写一句"企业租户里新权限可能要管理员审核"；M11 时 owner 手里有企业租户，就顺手看一次 | — | — |
@@ -582,7 +582,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 | 被拉进群时 | 直接绑定，不再私聊发绑定卡 | 第 4 节拿掉私聊控制台；被拉进的群用什么默认档，3.8 已经给了 | s36b |
 | 记忆怎么写 | agent 直接写自己那份记忆文件，daemon 在一轮前后比对，卡片显示写了什么 | 3.6 只说"记住"能写、带撤销，没说怎么写；不在群里另开记忆命令，和 3.7"群里不能在聊天里改设置"一致 | s40 |
 | 改设置卡片上的［撤销］谁能点 | 主人和管理员 | 3.7 只说带撤销；和 3.8 里"Claude 自己要问的"卡一样 | s56 |
-| Codex 最低版本 | 0.139.0，比它旧显示"版本太旧"、按钮是更新 | vonvon 依赖的行为实际跑过的最老版本（第 3 节 s03 开工要点）。e05 测出它用 ChatGPT 登录已经跑不了模型，要抬到 0.156.1，见 s03 留下的 | s03、s39 |
+| Codex 最低版本 | 0.139.0，比它旧显示"版本太旧"、按钮是更新 | vonvon 依赖的行为实际跑过的最老版本（第 3 节 s03 开工要点）。e05 测出它用 ChatGPT 登录，试过的模型都跑不了，要抬到 0.156.1，见 s03 留下的 | s03、s39 |
 | Codex 验证过的版本 | 跟托管安装锁定的版本，现在是 0.156.1；比它新的照常用，只在本机环境页写一句"比验证过的新" | 只有这个版本完整跑过；新版本大多兼容，拦住反而让用户装旧版 | s03 |
 | 首次运行清单多久查一次飞书 | 10 秒，只在清单页开着时查，只查还没做完的 bot，一个一个查；全部变绿就停，点"重新检测"马上查 | 每查一个 bot 要调四五个飞书接口；长连接状态直接从快照来，不用查 | s04 |
 | Claude 登录结果留多久 | 已登录留 30 分钟，其他留 5 分钟；点"检查登录"马上重查 | 每查一次要起一个约 250 MB 的 CLI，本机环境页每次打开都会问。daemon 自己不查，首页只显示上一次查到、还没过期的结果 | s03 |

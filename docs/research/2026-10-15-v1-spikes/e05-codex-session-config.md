@@ -4,15 +4,15 @@
 
 ## 结论先行
 
-1. **会话级 `mcp_servers`：能**（0.139.0、0.148.0、0.156.1、0.162.1 都一样）。`thread/start` 的 `config.mcp_servers.<名字>` 起得来，模型的工具列表里有，能调用；用户全局配的 MCP 在会话层写 `enabled: false` 就不出现。只读、读写档（`approvalPolicy: never` 加沙箱）下，要给 server 配 `default_tools_approval_mode: "approve"`，不然调用直接被拒，回的是"MCP tool call requires approval, but approval policy is never"（0.162.1 实测）。完全访问档不配也能调。真实登录下 0.148.0、0.156.1、0.162.1 各让模型调了一次，都成功。
+1. **会话级 `mcp_servers`：能**（0.139.0、0.148.0、0.156.1、0.162.1 都一样）。`thread/start` 的 `config.mcp_servers.<名字>` 起得来，模型的工具列表里有，能调用；用户全局配的 MCP 在会话层写 `enabled: false` 就不出现。读写档（`approvalPolicy: never`，工作区可写的 `feishu` 权限配置）下不配 `default_tools_approval_mode: "approve"`，调用直接被拒，回的是"MCP tool call requires approval, but approval policy is never"（0.162.1，只见过这一次）。只读档和完全访问档下不配会怎样，没测。配了 approve 以后，读写档（`workspace-write`）下 4 个版本都能调。真实登录下 0.148.0、0.156.1、0.162.1 各让模型调了一次，都成功。
 2. **`runtimeWorkspaceRoots`：能**（4 个版本）。`thread/start`、`thread/resume`、`turn/start` 都收，回包原样回显这组根，沙箱的 `writableRoots` 里多出第二个根。第二个根真能写、根外真被拒，JP-VPS 上测不了：Linux 沙箱（bwrap）在这台机器上起不来，见"没测到的"。
 3. **`skills/extraRoots/set`：能**（4 个版本）。对整个 app-server 进程生效，设完以后 `skills/list` 和会话里给模型的 skill 清单都有 bot 的 skill。用户自己的 skill 不会自动消失，要在会话层用 `skills.config` 逐个禁掉，按名字禁有效（4 个版本）；系统 skill 用 `skills.bundled.enabled: false` 关（0.156.1、0.162.1 实测）。
-4. **resume 后还在不在：部分。** `mcp_servers`、`skills.config`、memories 的键和 `skills/extraRoots/set` 都不保留：resume 时不重传，用户的 MCP 和个人 skill 就回到这条会话里。`runtimeWorkspaceRoots` 从 0.156.1 起保留，0.139.0、0.148.0 不保留。resume 时把参数全部重传，4 个版本都恢复。另外，resume 时传的新 `developerInstructions` 不生效（4 个版本），模型看到的还是开会话时的那份。
+4. **resume 后还在不在：部分。** `mcp_servers`、`skills.config` 和 `skills/extraRoots/set` 都不保留：resume 时不重传，用户的 MCP 和个人 skill 就回到这条会话里。`runtimeWorkspaceRoots` 从 0.156.1 起保留，0.139.0、0.148.0 不保留。resume 时把参数全部重传，4 个版本都恢复。memories 的键没查清：只带 cwd 和沙箱 resume 后，那一轮没有重新注入记忆（4 个版本）；会话的 `memory_mode` 和会不会触发整合任务，resume 后没单独查。另外，resume 时传的新 `developerInstructions` 不生效（4 个版本），模型看到的还是开会话时的那份。
 5. **中途换 skill 列表：0.148.0 起能，0.139.0 不能。** 0.148.0、0.156.1、0.162.1 上，会话进行中再调一次 `skills/extraRoots/set`，下一轮开头会追加一条新的 skill 清单，旧清单留在历史里。0.139.0 上 `skills/list` 变了，但会话里给模型的清单不变。
 6. **memories 两个键能在会话层关掉：能，但光关这两个键不够。** `memories.use_memories: false` 让这条会话不注入记忆，`memories.generate_memories: false` 让这条会话不被收进记忆（状态库里记成 `disabled`）。但用户全局打开了 memories 时，bot 会话的第一轮仍会触发一次全局整合任务：Codex 用这条 bot 会话的配置（含 bot 的 developer 指令和 skill 清单）起一个"Memory Writing Agent"，花的是用户的额度。会话层再加 `features.memories: false` 才不触发。三个一起传（0.139.0、0.156.1、0.162.1 一致）。
 7. **`~/.codex/AGENTS.md` 能按会话不加载：不能**（4 个版本）。会话层的 `project_doc_max_bytes: 0` 只能关掉项目里的 AGENTS.md，全局那份照样加载。`thread/start` 回包的 `instructionSources` 列出了实际加载的文件，可以用来显示。源码里全局指令对每条主会话都会加载，没有开关（`codex-rs/core/src/thread_manager.rs:1916`、`core/src/agents_md_manager.rs:103-106`）。
 8. **最低版本建议定 0.156.1**，和托管安装锁的版本、验证过的版本一样。原因：
-   - 0.139.0 现在用 ChatGPT 登录跑不了任何模型。它的 `model/list` 只有 gpt-5.5、gpt-5.4、gpt-5.4-mini、gpt-5.3-codex、gpt-5.2；试了 gpt-5.5 和 gpt-5.4-mini，服务端都回"not supported when using Codex with a ChatGPT account"；新模型 gpt-5.6-luna 回"requires a newer version of Codex"。
+   - 0.139.0 现在用 ChatGPT 登录，试过的模型都跑不了。它的 `model/list` 只有 gpt-5.5、gpt-5.4、gpt-5.4-mini、gpt-5.3-codex、gpt-5.2；试了 gpt-5.5 和 gpt-5.4-mini，服务端都回"not supported when using Codex with a ChatGPT account"；新模型 gpt-5.6-luna 回"requires a newer version of Codex"。
    - 0.148.0 能跑 gpt-5.6-luna，但 gpt-6-luna 被拒；owner 定的智能判断测试模型是 GPT-6-Luna（product.md 第 11 节 2026-10-15）。0.148.0 的 resume 也不保留 `runtimeWorkspaceRoots`。
    - 0.156.1 本文的各项都通过，真实登录一轮成功（gpt-6-luna）。
    - 服务端按客户端版本放行模型，这条线以后还会往上移。所以最低版本不能只看协议字段，"版本太旧"的判断也要接住"模型要求更新的 Codex"这类报错。
@@ -20,7 +20,7 @@
 顺带发现的几件事，都会影响 s37、s39、s44：
 
 - **主人的 ChatGPT 连接器默认挂在每条 bot 会话上。** 用 owner 的登录时，会话里有一个 `codex_apps` MCP server，0.162.1 上有 197 个工具，含 GitHub 合并 PR、改文件、建 issue 这类写操作。会话层 `features.apps: false` 能去掉（0.162.1，用真实登录，没跑回合）。这和 Claude 一侧的 claude.ai 连接器是同一类问题（product.md 第 9 节第 19 项）。
-- **`thread/start` 会改用户的 `config.toml`。** cwd 没有信任设置、沙箱可写时，Codex 把这个项目写成 trusted，存进用户的 `config.toml`：cwd 在 git 仓库里时 0.139.0 和 0.162.1 都写；不在 git 仓库里时 0.139.0、0.148.0 写，0.156.1、0.162.1 不写。会话层传 `projects.<cwd>.trust_level` 后都不写（`trusted` 和 `untrusted` 都试过）。注意 `untrusted` 会跳过项目里的 AGENTS.md（源码 `codex-rs/core/src/agents_md.rs:64-66`，没实测）。
+- **`thread/start` 会改用户的 `config.toml`。** cwd 没有信任设置、沙箱可写时，Codex 把这个项目写成 trusted，存进用户的 `config.toml`：cwd 在 git 仓库里时 0.139.0 和 0.162.1 都写；不在 git 仓库里时 0.139.0、0.148.0 写，0.156.1、0.162.1 不写。会话层传 `projects.<cwd>.trust_level` 后都不写（`trusted` 和 `untrusted` 都试过）。注意 `untrusted` 会跳过项目里的 AGENTS.md（源码 `codex-rs/core/src/agents_md.rs:64-66`，没实测）；`trusted` 除了加载项目 AGENTS.md，还会加载 cwd、上级目录和仓库根下 `.codex/` 里的项目配置、hooks 和 exec policy（源码 `codex-rs/config/src/loader/mod.rs:1093-1098`，没实测），仓库里带着这些文件时，会话层没覆盖的设置会被它们改掉，比如多出 MCP。
 - **拼错的字段不报错。** 顶层字段名拼错、`config` 里的键名拼错，app-server 都静默忽略；值的类型错了才报错。没打开 `experimentalApi` 时，`runtimeWorkspaceRoots` 会报"requires experimentalApi capability"，`skills/extraRoots/set` 不要求它；目录不存在时 `skills/extraRoots/set` 也不报错。所以"实验字段失败就报错"要靠 vonvon 自己核对回包：`runtimeWorkspaceRoots` 看回显，MCP 看 `mcpServerStatus/list`，skill 看 `skills/list`。
 - **resume 时要换指令，有两条路。** `thread/inject_items` 塞一条 developer 消息，或者 `turn/start` 带 `additionalContext`（实验字段）。两种 4 个版本都会进模型的请求，并留在历史里。
 
@@ -85,6 +85,7 @@ T1 的会话参数（路径已略）：
 | 中途换 extraRoots，下一轮追加新清单 | 不能 | 能 | 能 | 能 |
 | 只带 cwd 和沙箱 resume：`runtimeWorkspaceRoots` 还在 | 不在 | 不在 | 在 | 在 |
 | 只带 cwd 和沙箱 resume：MCP、skill 禁用、extraRoots 还在 | 都不在 | 都不在 | 都不在 | 都不在 |
+| 只带 cwd 和沙箱 resume：那一轮重新注入记忆 | 没有 | 没有 | 没有 | 没有 |
 | 全部重传后 resume 恢复 | 能 | 能 | 能 | 能 |
 | resume 时传新的 `developerInstructions` 生效 | 不 | 不 | 不 | 不 |
 | `thread/inject_items`、`additionalContext` 进请求 | 进 | 进 | 进 | 进 |
@@ -94,6 +95,8 @@ T1 的会话参数（路径已略）：
 | 不带信任覆盖时改临时 home 的 `config.toml`（cwd 不在 git 仓库里） | 改 | 改 | 不改 | 不改 |
 
 只带 cwd 和沙箱 resume 后，那一轮新注入的 skill 清单里出现了 `lark-im` 和 `user-skill-x`，bot 的 skill 没有了；工具列表里只有 `global_probe`。
+
+记忆那一行：临时 home 里放了带标记的 `memory_summary.md`，不带 memories 键的会话（T0、T3、T4）请求里都有这个标记，只带 cwd resume 后的 T1 没有。T1 的 `memory_mode` 只在最后读了一次，那时已经全部重传过，是 `disabled`，看不出只带 cwd resume 时有没有变回 `enabled`。
 
 中途换 skill（0.162.1，那一轮新注入的内容）：
 
@@ -132,7 +135,7 @@ T1 的会话参数（路径已略）：
 
 ### 4. 其他摘录
 
-0.162.1，不带 approve 时（`feishu` 权限配置）：
+0.162.1，不带 approve 时（`approvalPolicy: never`，`feishu` 权限配置，工作区可写）。这一次的脚本后来改过，当时的会话参数没留全，没法确认带没带 `project_doc_max_bytes: 0`（下面说的绕过办法）；它的请求里没有项目 AGENTS.md 的标记。只读档和完全访问档下不带 approve 的调用没测：
 
 ```
 function_call_output: "MCP tool call requires approval, but approval policy is never"
@@ -160,9 +163,9 @@ Ubuntu 24.04 的 `kernel.apparmor_restrict_unprivileged_userns = 1`。读权限�
 
 ## 对设计的影响
 
-- **s39 / s03**：`CODEX_MIN_VERSION` 从 0.139.0 改成 0.156.1，和 `CODEX_VERIFIED_VERSION` 相同，s03 的版本检查不用改结构。比 0.156.1 新的显示"比验证过的新"，照旧能用。v1-plan 里 s03 那条"0.139 实际跑过"要补一句：2026-10-15 起它用 ChatGPT 登录跑不了模型。起会话和恢复会话都传 `runtimeWorkspaceRoots`，不依赖 0.156.1 起的保留行为；回包里的 `runtimeWorkspaceRoots` 和传的不一致就报错。验收里"第二个根能写、根外被拒、`git commit`"只能在 Mac 上做。
-- **s37**：profile 在 `thread/start` 和每次 `thread/resume` 都整份重传：`runtimeWorkspaceRoots`、`mcp_servers`（含禁用用户的全局 MCP）、`skills.config`、`skills.bundled`、`features.memories: false` 加两个 memories 键、`projects.<cwd>.trust_level`，以及进程级的 `skills/extraRoots/set`（预热池的进程要在取出后、`thread/start` 前调）。不重传时用户的 MCP 和个人 skill 会悄悄回来。`developerInstructions` 只在开会话时生效：resume 时要放进新内容（改过的人设、群的 `SOUL.md`、记忆），用 `thread/inject_items` 或 `turn/start` 的 `additionalContext`，或者干脆开新会话。product.md 3.6"记忆在会话开始或恢复时放进去"，Codex 一半要按这个做。
-- **s44**：bot 的 MCP 在只读、读写档要配 `default_tools_approval_mode: "approve"`，product.md 第 9 节第 2 项"要给它配 approve"的推断成立（0.162.1）。用户的个人 skill 要先 `skills/list` 列出来，再逐个禁掉。bot 的 skill 和个人 skill 可能重名，按名字禁会连 bot 的一起禁，建议按 `path` 禁（按路径禁没实测）。中途换 skill 名单从 0.148.0 起能下一轮生效，0.156.1 当最低版本就不用为这个开新会话。`~/.codex/AGENTS.md` 关不掉，按 v1-plan 4.2 第 3 条用【需要你决定】问 owner；可以把 `instructionSources` 里有没有全局 AGENTS.md 显示在桌面端。
+- **s39 / s03**：`CODEX_MIN_VERSION` 从 0.139.0 改成 0.156.1，和 `CODEX_VERIFIED_VERSION` 相同，s03 的版本检查不用改结构。比 0.156.1 新的显示"比验证过的新"，照旧能用。v1-plan 里 s03 那条"0.139 实际跑过"要补一句：2026-10-15 起它用 ChatGPT 登录，试过的模型都跑不了。起会话和恢复会话都传 `runtimeWorkspaceRoots`，不依赖 0.156.1 起的保留行为；回包里的 `runtimeWorkspaceRoots` 和传的不一致就报错。验收里"第二个根能写、根外被拒、`git commit`"只能在 Mac 上做。
+- **s37**：profile 在 `thread/start` 和每次 `thread/resume` 都整份重传：`runtimeWorkspaceRoots`、`mcp_servers`（含禁用用户的全局 MCP）、`skills.config`、`skills.bundled`、`features.memories: false` 加两个 memories 键（这三个 resume 后保不保留没查清，按保险重传）、`projects.<cwd>.trust_level`，以及进程级的 `skills/extraRoots/set`（预热池的进程要在取出后、`thread/start` 前调）。不重传时用户的 MCP 和个人 skill 会悄悄回来。`developerInstructions` 只在开会话时生效：resume 时要放进新内容（改过的人设、群的 `SOUL.md`、记忆），用 `thread/inject_items` 或 `turn/start` 的 `additionalContext`，或者干脆开新会话。product.md 3.6"记忆在会话开始或恢复时放进去"，Codex 一半要按这个做。
+- **s44**：bot 的 MCP 在读写档不配 `default_tools_approval_mode: "approve"` 会被拒（0.162.1），product.md 第 9 节第 2 项"要给它配 approve"的推断在读写档上对得上；只读档和完全访问档没测。用户的个人 skill 要先 `skills/list` 列出来，再逐个禁掉。bot 的 skill 和个人 skill 可能重名，按名字禁会连 bot 的一起禁，建议按 `path` 禁（按路径禁没实测）。中途换 skill 名单从 0.148.0 起能下一轮生效，0.156.1 当最低版本就不用为这个开新会话。`~/.codex/AGENTS.md` 关不掉，按 v1-plan 4.2 第 3 条用【需要你决定】问 owner；可以把 `instructionSources` 里有没有全局 AGENTS.md 显示在桌面端。
 - **新的 owner 决定项**：bot 的 Codex 会话默认带主人 ChatGPT 账号的连接器（`codex_apps`，含 GitHub 写操作）。留不留，和 Claude 的连接器（第 9 节第 19 项）一起问，s31 开工前问。技术上会话层 `features.apps: false` 能关。
 - **product.md 3.6"不改用户的全局配置"**：Codex 会自己把 bot 的工作区写进用户的 `config.toml`。vonvon 每次起会话都要带 `projects` 的会话层覆盖。
 
@@ -172,7 +175,8 @@ Ubuntu 24.04 的 `kernel.apparmor_restrict_unprivileged_userns = 1`。读权限�
 - **Mac 上 ChatGPT.app 自带的 codex**（预发布号）：v1-plan 已写在 s39 的 Mac 检查里。
 - **边界版本没有逐个二分**：中途换 skill 在 0.140 到 0.148 之间的哪一版开始，resume 保留 roots、能用 gpt-6-luna 在 0.149 到 0.156.1 之间的哪一版开始，都没查。最低版本定 0.156.1 时不需要。
 - **用户真的开了 memories 的情况**：owner 的 JP-VPS 没开，只在临时 home 里模拟过。
-- **按 `path` 禁 skill、只读档（`read-only`）下的 MCP 审批**：没单独测。
+- **resume 后 memories 的设置**：只看了那一轮有没有重新注入记忆，`memory_mode` 和整合任务没在只带 cwd resume 之后单独查。
+- **按 `path` 禁 skill；只读档（`read-only`）和完全访问档下不配 approve 时的 MCP 调用**：没测。不配 approve 被拒，只在读写档下见过一次。
 - **模型是否真的照 developer 指令压住全局 AGENTS.md**：不在本实验范围（agent-mechanics 第 1 节的推断还没验证）。
 
 ## 副作用和清理

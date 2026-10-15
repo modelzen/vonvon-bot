@@ -151,7 +151,7 @@ full:    同上，轮4 是 [{"type":"contextCompaction"}]
 - **今天的 `readHistory` 和 `readSessionTitle`**（`backend.ts:597-641`）用的是 `thread/read`。在 0.162.1 上还能用，但每次都会多一条 `deprecationNotice`；`includeTurns: true` 将来可能被去掉。不是 e11 的范围，给 s48 或 s39 顺手换掉的人参考。
 - **product.md 3.5**：写着"背后是 Codex 的 `thread/read`"，按 4.2 的第 2 类（换一种做法，承诺不变）改成 `thread/turns/list`（summary 视图），并补一句"正在进行的那一轮只有用户的消息"。"返回用户的消息和 bot 的最终回答，不含工具步骤"这条承诺能兑现。
 - **给 e05 和 s39 的版本问题**（不是 e11 要回答的，顺带发现）：
-  - 0.139.0（今天的 `CODEX_MIN_VERSION`）用 ChatGPT 登录跑不了任何回合，它认识的模型全被服务端拒了。0.148.0 用 `gpt-5.6-luna` 能跑。0.139.0 和 0.148.0 之间的版本没试，最低版本抬到哪一版由 e05 定。
+  - 0.139.0（今天的 `CODEX_MIN_VERSION`）用 ChatGPT 登录，试过的模型都被服务端拒了（它列出的 5 个里试了 `gpt-5.5` 和 `gpt-5.4-mini`，另试了它没列出的 `gpt-6-luna`）。0.148.0 用 `gpt-5.6-luna` 能跑。0.139.0 和 0.148.0 之间的版本没试，最低版本抬到哪一版由 e05 定。
   - 0.139.0 读新格式线程时每一轮的 `items` 都是空的。用户一旦换回旧的 codex，新会话就读不出内容。Mac 上 ChatGPT.app、Codex.app 里各带一份 codex，daemon 找 codex 的结果要是在新旧之间跳，会碰到这个问题。
 
 ## 没测到的
