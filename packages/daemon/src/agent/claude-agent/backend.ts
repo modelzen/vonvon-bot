@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { access, readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type {
@@ -449,6 +450,7 @@ export class ClaudeAgentBackend implements AgentBackend {
 
   async resumeThread(opts: ResumeThreadOptions): Promise<AgentThread> {
     const sdk = await this.sdkLoader();
+    await assertSessionSaved(opts.sessionId);
     return new ClaudeAgentThread({
       sessionId: opts.sessionId,
       resume: true,
@@ -462,6 +464,36 @@ export class ClaudeAgentBackend implements AgentBackend {
       query: sdk.query,
     });
   }
+}
+
+/**
+ * A first turn that failed before Claude Code wrote its transcript (sandbox tools missing, not logged in) leaves
+ * a session id with nothing behind it, and resuming it fails every later turn with "No conversation found".
+ * Throwing here sends the caller down its resume-failed path instead: a fresh session, and in a group a line on
+ * the run card saying so.
+ *
+ * Only a missing `<id>.jsonl` counts. The SDK's getSessionInfo is no test: it reads 64 KB at each end of the
+ * file and returns nothing when no summary is there, which a long saved session can hit. Every project folder is
+ * searched, so how Claude Code names the folder for a cwd (case, symlinks, long paths) does not matter. A folder
+ * that cannot be read does not block the resume.
+ */
+async function assertSessionSaved(sessionId: string): Promise<void> {
+  if (!/^[\w-]+$/.test(sessionId)) return;
+  const projects = join(claudeConfigDir(), 'projects');
+  let folders: string[] = [];
+  try {
+    folders = await readdir(projects);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      log.fail('agent', err, { backend: 'claude-agent', phase: 'resume-lookup', sessionId });
+      return;
+    }
+  }
+  const file = `${sessionId}.jsonl`;
+  for (const folder of folders) {
+    if (await access(join(projects, folder, file)).then(() => true, () => false)) return;
+  }
+  throw new Error(`Claude 会话 ${sessionId} 没有保存下来，无法恢复`);
 }
 
 const EFFORTS: ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh'];
