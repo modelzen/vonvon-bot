@@ -33,6 +33,7 @@ vi.mock('../src/project/registry', async (original) => ({
   ...await original<object>(),
   getProjectByChatId: async () => fake.project,
   getProjectByName: async () => fake.project,
+  mutateProject: async (_name: string, mutate: (project: object) => void) => { const next = { ...fake.project }; mutate(next); return next; },
 }));
 vi.mock('../src/bot/session-store', async (original) => ({
   ...await original<object>(),
@@ -45,6 +46,7 @@ vi.mock('../src/bot/session-store', async (original) => ({
   },
   upsertSession: async () => undefined,
   listSessions: async () => fake.sessions,
+  detachSessionsForChat: async (_chatId: string, commit: () => Promise<unknown>) => commit(),
 }));
 vi.mock('../src/bot/session-title-coordinator', () => ({
   SessionTitleCoordinator: class { startRecovery() {} async shutdown() {} },
@@ -64,6 +66,7 @@ vi.mock('../src/card/run-card-stream', () => ({
   },
 }));
 import { createOrchestrator, retryPrompt } from '../src/bot/handle-message';
+import { projectRevision } from '../src/admin/collaboration';
 import type { AppConfig } from '../src/config/schema';
 
 const NETWORK: AgentEvent = { type: 'error', message: 'stream disconnected before completion', willRetry: false, kind: 'network' };
@@ -173,6 +176,7 @@ beforeEach(() => {
   fake.idleMs = undefined;
   fake.patchGate = undefined;
   fake.sessions = [];
+  Object.assign(fake.backend, { listThreads: async () => [{ sessionId: 'past', preview: '', createdAt: 1, updatedAt: 2 }], readHistory: async () => ({ turns: [], totalTurns: 0 }) });
 });
 afterEach(async () => {
   await orchestrator?.shutdown();
@@ -346,7 +350,19 @@ describe('[重试] on a failed run card', () => {
     } },
     { how: 'a desktop clear', sessions: [{ threadId: 'chat', chatId: 'chat', cwd: '/test', sessionId: 'host', backend: 'codex', summary: '' }],
       async clear(o: Orchestrator) { await o.collaboration({ action: 'clear', projectName: 'test', chatId: 'chat', threadId: 'chat' }); } },
-  ])('expires once $how swaps in a fresh thread', async ({ sessions, clear }) => {
+    { how: 'a /resume pick', sessions: [], async clear(o: Orchestrator) {
+      await o.onMessage({ ...message('/resume'), threadId: undefined });
+      await until(() => expect(fake.log.info).toHaveBeenCalledWith('card', 'resume', expect.anything()));
+      await o.dispatcher.handle({ messageId: 'managed', chatId: 'chat', operator: { openId: 'owner' }, action: { value: { a: 'resume.pick', t: 'past' } } } as never);
+      await until(() => expect(fake.log.info).toHaveBeenCalledWith('card', 'resume-done-single', expect.anything()));
+    } },
+    { how: 'a desktop resume', sessions: [], async clear(o: Orchestrator) {
+      await o.collaboration({ action: 'resume', projectName: 'test', chatId: 'chat', sessionId: 'past', backend: 'codex' });
+    } },
+    { how: 'a folder change', sessions: [], async clear(o: Orchestrator) {
+      await o.collaboration({ action: 'editProject', projectName: 'test', chatId: 'chat', expectedRevision: projectRevision(fake.project as never), directory: process.cwd() });
+    } },
+  ])('expires once $how swaps the session for another thread', async ({ sessions, clear }) => {
     fake.project = { ...PROJECT, kind: 'single' };
     fake.sessions = sessions;
     const run = scriptedThread([[NETWORK]]);
