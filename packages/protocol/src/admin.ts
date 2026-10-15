@@ -56,7 +56,11 @@ export const adminSetupStatusSchema = z.object({
   credentials: z.object({ ok: z.boolean(), reason: z.string().optional(), unreachable: z.boolean().optional() }),
   connection: z.object({ running: z.boolean(), connection: z.string().optional() }),
   event: eventDiagnosisSchema,
-  scopes: z.object({ missingRequired: z.array(z.string()).optional(), grantUrl: z.string() }),
+  /** missingRequired gates the checklist step; missingJoinScopes (im:chat:readonly and the leave-group scope)
+   * only warns. Both are undefined when the grants could not be read. */
+  scopes: z.object({
+    missingRequired: z.array(z.string()).optional(), missingJoinScopes: z.array(z.string()).optional(), grantUrl: z.string(),
+  }),
   eventConfigUrl: z.string(),
   /** The app's page on the developer console (versions and publishing are there). */
   consoleUrl: z.string(),

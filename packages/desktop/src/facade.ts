@@ -7,7 +7,7 @@ import {
   type BackendInstallEventPayload, type DesktopSnapshot, type LogEventPayload,
 } from '@vonvon/protocol';
 import {
-  desktopChannels, type DesktopShell, type SafeFailure,
+  desktopChannels, safeErrorCode, type DesktopShell,
 } from './ipc-contract.js';
 
 export interface FacadeTransport {
@@ -15,8 +15,11 @@ export interface FacadeTransport {
   receive(listener: (event: unknown) => void): () => void;
 }
 
-function ordinaryError(failure: SafeFailure): Error {
-  return new Error(failure.message);
+/** A plain Error carrying the daemon's message and code. contextBridge copies only an Error's message into
+ * the page, so code in the page sees the (sanitized) message; the code serves the preload side. */
+function ordinaryError(message: string, rawCode: unknown): Error {
+  const code = safeErrorCode(rawCode);
+  return code ? Object.assign(new Error(message), { code }) : new Error(message);
 }
 
 function readResult<T>(value: unknown, parse: (value: unknown) => T): T {
@@ -26,7 +29,7 @@ function readResult<T>(value: unknown, parse: (value: unknown) => T): T {
       'kind' in value.error && 'message' in value.error &&
       (value.error.kind === 'rpc' || value.error.kind === 'connection' || value.error.kind === 'validation') &&
       typeof value.error.message === 'string') {
-    throw ordinaryError({ kind: value.error.kind, message: value.error.message });
+    throw ordinaryError(value.error.message, 'code' in value.error ? value.error.code : undefined);
   }
   throw new Error('Invalid desktop response');
 }
@@ -108,7 +111,7 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
           const kind = value.kind;
           if (kind !== 'rpc' && kind !== 'connection' && kind !== 'validation')
             throw new Error('Invalid desktop event');
-          emitError(ordinaryError({ kind, message: value.message }));
+          emitError(ordinaryError(value.message, 'code' in value ? value.code : undefined));
           break;
         }
         default: throw new Error('Invalid desktop event');

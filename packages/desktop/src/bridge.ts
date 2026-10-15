@@ -11,7 +11,7 @@ import { allowedExternalUrl, type ExternalUrlKind } from '../../ui/src/url-actio
 import { ServiceActionError } from './service-error.js';
 import { StartHostRefusal } from './daemon-manager.js';
 import {
-  desktopChannels, type AttachedDaemon, type DesktopBridge, type DesktopEvent,
+  desktopChannels, safeErrorCode, type AttachedDaemon, type DesktopBridge, type DesktopEvent,
   type DesktopResources, type IpcResult, type SafeFailure, type ShellActions,
 } from './ipc-contract.js';
 
@@ -26,12 +26,33 @@ export async function openAllowedExternal(raw: unknown): Promise<void> {
   await shell.openExternal(url);
 }
 
+/** The web UI shows daemon messages unabridged; the desktop caps them at this many characters. */
+const daemonMessageLimit = 300;
+
+/**
+ * Daemon RPC errors are the user-facing texts the web UI already shows, so the desktop shows them too, as one
+ * plain line: no control or format characters, no URL credentials, query strings or fragments, no bearer
+ * tokens, `secret=…`-style values or Feishu access tokens, and at most {@link daemonMessageLimit} characters.
+ */
+export function sanitizeDaemonMessage(raw: string): string {
+  const text = raw
+    .replace(/\p{Cf}/gu, '')
+    .replace(/[\p{Cc}\u2028\u2029]/gu, ' ')
+    .replace(/\b([a-z][a-z\d+.-]*:\/\/)[^\s/?#@]*@/gi, '$1')
+    .replace(/\b([a-z][a-z\d+.-]*:\/\/[^\s?#]*)[?#]\S*/gi, '$1')
+    .replace(/\b(bearer|basic)\s+[\w.~+/=-]+/gi, '$1 …')
+    .replace(/\b([\w-]*(?:secret|token|password|passwd|credential|authorization)[\w-]*)(["']?\s*[:=]\s*["']?)[^\s"',;&)}\]]+/gi, '$1$2…')
+    .replace(/\b[tua]-[A-Za-z0-9]{24,}\b/g, '…')
+    .replace(/\s+/g, ' ').trim();
+  const chars = Array.from(text);
+  if (chars.length === 0) return 'Daemon request failed';
+  return chars.length > daemonMessageLimit ? `${chars.slice(0, daemonMessageLimit - 1).join('')}…` : text;
+}
+
 function safeFailure(error: unknown): SafeFailure {
   if (error instanceof RpcError) {
-    return {
-      kind: 'rpc', message: 'Daemon request failed',
-      ...( /^[A-Za-z0-9_.-]{1,80}$/.test(error.code) ? { code: error.code } : {}),
-    };
+    const code = safeErrorCode(error.code);
+    return { kind: 'rpc', message: sanitizeDaemonMessage(error.message), ...(code ? { code } : {}) };
   }
   if (error instanceof ConnectionError) return { kind: 'connection', message: 'Daemon connection lost' };
   if (error instanceof ServiceActionError) return { kind: 'validation', message: error.safeMessage };

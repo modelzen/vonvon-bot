@@ -25,7 +25,7 @@ vi.mock('electron', () => ({
   shell: { openExternal },
 }));
 
-import { installBridge, openAllowedExternal } from '../src/bridge.js';
+import { installBridge, openAllowedExternal, sanitizeDaemonMessage } from '../src/bridge.js';
 import { createDesktopFacades } from '../src/facade.js';
 
 const fixtureRoot = mkdtempSync(join(tmpdir(), 'vonvon-bridge-test-'));
@@ -117,13 +117,38 @@ describe('desktop IPC boundary', () => {
     await h.bridge.dispose();
   });
 
-  it('keeps arbitrary errors and RPC diagnostics sanitized', async () => {
+  it('masks arbitrary errors and passes daemon messages through sanitized', async () => {
     const h = harness();
     h.actions.setLoginItem.mockRejectedValueOnce(new Error('uninstall_incomplete: SECRET_TOKEN'));
     expect(await h.invoke(desktopChannels.setLoginItem, false)).toEqual({ ok: false, error: { kind: 'validation', message: 'Desktop request failed' } });
-    h.machine.mockRejectedValueOnce(new RpcError('safe_code', 'SECRET_TOKEN'));
-    expect(await h.invoke(desktopChannels.machine, { type: 'status' })).toEqual({ ok: false, error: { kind: 'rpc', code: 'safe_code', message: 'Daemon request failed' } });
+    h.machine.mockRejectedValueOnce(new RpcError('upstream', '缺少飞书权限 im:chat:readonly（读取群信息）。\n在 Bot 设置点「一键开权限」。'));
+    expect(await h.invoke(desktopChannels.machine, { type: 'status' })).toEqual({ ok: false, error: {
+      kind: 'rpc', code: 'upstream', message: '缺少飞书权限 im:chat:readonly（读取群信息）。 在 Bot 设置点「一键开权限」。' } });
+    h.machine.mockRejectedValueOnce(new RpcError('bad code\n', '机器人未启用或尚未运行'));
+    expect(await h.invoke(desktopChannels.machine, { type: 'status' })).toEqual({ ok: false, error: { kind: 'rpc', message: '机器人未启用或尚未运行' } });
+    await h.invoke(desktopChannels.subscribe);
+    h.emitError(new RpcError('conflict', 'token=t-g1044abcdefghijklmnopqrstuvwxyz0123'));
+    expect(h.webContents.send).toHaveBeenLastCalledWith(desktopChannels.event, { type: 'error', value: { kind: 'rpc', code: 'conflict', message: 'token=…' } });
     await h.bridge.dispose();
+  });
+
+  it.each([
+    ['control and format characters', 'a\u0000b\u001b[31mc\u202ed\u200be\r\n\tf', 'a b [31mcde f'],
+    ['URL credentials, queries and fragments', '打不开 https://user:pa55@open.feishu.cn/app/cli_a/auth?q=im:chat&token=x#frag 和 http://127.0.0.1:4000/x?credential=y',
+      '打不开 https://open.feishu.cn/app/cli_a/auth 和 http://127.0.0.1:4000/x'],
+    ['bearer tokens', 'Authorization: Bearer abc.def-123 failed', 'Authorization: … … failed'],
+    ['secret-style values', 'unsupported secret form: {"app_secret":"s3cr3t","password":\'pw\', token = abc}', 'unsupported secret form: {"app_secret":"…","password":\'…\', token = …}'],
+    ['bare Feishu access tokens', 'invalid access t-g1044ghJRUIJJ5ELPPA7VQ5XWQUQAP4XMYWC4P7S here', 'invalid access … here'],
+    ['empty text', ' \u0000 ', 'Daemon request failed'],
+  ])('sanitizes %s in daemon messages', (_name, raw, expected) => {
+    expect(sanitizeDaemonMessage(raw)).toBe(expected);
+  });
+
+  it('caps daemon messages at 300 characters without splitting a character', () => {
+    expect(sanitizeDaemonMessage('群'.repeat(300))).toBe('群'.repeat(300));
+    const capped = sanitizeDaemonMessage('😀'.repeat(400));
+    expect(Array.from(capped)).toHaveLength(300);
+    expect(capped.endsWith('😀…')).toBe(true);
   });
 
   it('reports the desktop registration in its snapshot', async () => {
