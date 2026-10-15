@@ -68,4 +68,16 @@ describe('snapshot commit queue', () => {
     expect(reads).toBe(3);
     expect(store.current().tools[0]).toMatchObject({ authentication: 'signedIn', version: '3' });
   });
+  it('does not wait for the service manager before serving, and keeps the last login item when it cannot tell', async () => {
+    let answer: (value: boolean | null) => void = () => {};
+    let item: Promise<boolean | null> = new Promise(resolve => { answer = resolve; });
+    const store = await createSnapshotStore({ service: { listBots: async () => [], listProjects: async () => [] }, jobs: () => [], publish: () => {}, readTools: async () => [], readLoginItem: () => item });
+    stores.push(store);
+    expect(store.current().application.loginItem).toBe(false);
+    answer(true);
+    await vi.waitFor(() => expect(store.current().application.loginItem).toBe(true));
+    item = Promise.resolve(null);
+    await store.refreshTools();
+    expect(store.current().application.loginItem).toBe(true);
+  });
 });

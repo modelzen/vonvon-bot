@@ -124,7 +124,7 @@ it.runIf(process.platform === 'darwin')('parses the fixed launchd definition wit
   await withFixture(false, async (fixture) => {
     const root = await resolveServiceRoot(fixture.root);
     const plistPath = join(root, 'definition.plist');
-    const rendered = renderDefinition({ target: { platform: 'darwin', plistPath }, root, port: 32123,
+    const rendered = renderDefinition({ target: { platform: 'darwin', label: LAUNCHD_LABEL, plistPath }, root, port: 32123,
       distribution: { kind: 'npm', executable: process.execPath, entry: fixture.options.cliBinPath! }, capturedPath: fixture.options.envPath! });
     if (rendered.platform !== 'darwin') throw new Error('Expected plist');
     await writeFile(plistPath, rendered.plist);
@@ -145,7 +145,7 @@ it.runIf(process.platform === 'linux')('parses the fixed Linux definition offlin
   await withFixture(false, async fixture => {
     const root = await resolveServiceRoot(fixture.root);
     const unitPath = join(root, SYSTEMD_UNIT_NAME);
-    const rendered = renderDefinition({ target: { platform: 'linux', unitPath }, root, port: 32123,
+    const rendered = renderDefinition({ target: { platform: 'linux', unitName: SYSTEMD_UNIT_NAME, unitPath }, root, port: 32123,
       distribution: { kind: 'npm', executable: process.execPath, entry: fixture.options.cliBinPath }, capturedPath: fixture.options.envPath });
     if (rendered.platform !== 'linux') throw new Error('Expected unit');
     await writeFile(unitPath, rendered.unit);

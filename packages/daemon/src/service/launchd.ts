@@ -10,8 +10,9 @@ import { stopVerifiedOwner, verifyPidLockOwner } from '../server/owner-verificat
 import { renderDefinition, type Definition } from './definitions';
 import { runtimeDistribution } from './distribution';
 import { createServiceDrain, type DrainFailure, type DrainScope, type OwnerIdentity } from './drain';
-import { LAUNCHD_LABEL, resolveServiceRoot, serviceTarget, type CanonicalRoot } from './identity';
-import { readRegistration, type Registration } from './registration';
+import { resolveServiceRoot, serviceTarget, type CanonicalRoot } from './identity';
+import { readDefinitionBytes, readRegistration, type Registration } from './registration';
+import { withToolDirectories } from '../platform/tool-path';
 
 type CommandResult = { ok: boolean; stdout: string; stderr: string };
 type JobObservation =
@@ -26,9 +27,10 @@ type BarrierRequest =
   | { scope: Extract<DrainScope, { kind: 'all-owners' }>; context: 'uninstall' | 'install-replacement' }
   | { scope: { kind: 'job-only'; context: 'uninstall-resumed' }; context: 'uninstall-resumed' }
   | { scope: { kind: 'job-only'; context: 'install-rollback' }; context: 'install-rollback' };
+type DarwinTarget = { platform: 'darwin'; label: string; plistPath: string };
 type Snapshot = {
   root: CanonicalRoot;
-  target: { platform: 'darwin'; plistPath: string };
+  target: DarwinTarget;
   expected: Uint8Array | null;
   kept: Uint8Array | null;
   temporaryLeftovers: string[];
@@ -57,6 +59,8 @@ type Dependencies = {
   pause: (ms: number) => Promise<void>;
   now: () => number;
   home: string;
+  /** Where the plist goes and its label; derived from the data root (`serviceTarget`). */
+  target: (root: CanonicalRoot) => DarwinTarget;
   uid: number;
   executable: string;
   capturedPath: string;
@@ -91,6 +95,7 @@ function freePort(): Promise<number> {
   });
 }
 
+const TURNED_OFF_HINT = ' launchd has not loaded the service; if it is turned off in System Settings > General > Login Items & Extensions, turn it on.';
 const detailOf = (error: unknown): string => error instanceof Error ? error.message : String(error);
 const sameOwner = (a: OwnerIdentity | null, b: OwnerIdentity | null): boolean => a === null ? b === null : b !== null && a.pid === b.pid && a.startedAt === b.startedAt;
 const registrationDetail = (registration: Registration): string => registration.kind === 'other-root'
@@ -104,17 +109,23 @@ export function createLaunchdService(options: { root: string }, overrides: Parti
     distribution: runtimeDistribution, readOwner: readRunningPidLock, verifyOwner: verifyPidLockOwner,
     stopOwner: stopVerifiedOwner, mkdir, open, rename, unlink, freePort,
     pause: ms => new Promise(resolve => setTimeout(resolve, ms)), now: Date.now,
-    home: homedir(), uid: userInfo().uid, executable: process.execPath, capturedPath: process.env.PATH ?? '',
+    home: homedir(), uid: userInfo().uid, executable: process.execPath, capturedPath: withToolDirectories(process.env.PATH, homedir(), 'darwin'),
+    target: root => {
+      const target = serviceTarget({ platform: 'darwin', home: d.home, root });
+      if (target.platform !== 'darwin') throw new Error('Invalid launchd target');
+      return target;
+    },
     ...overrides,
   };
   const domain = `gui/${d.uid}`;
-  const job = `${domain}/${LAUNCHD_LABEL}`;
+  // Set by snapshot(), which every operation calls first: the label follows the data root.
+  let job = '';
   const drain = createServiceDrain({ readRunningPidLock: d.readOwner, stopVerifiedOwner: d.stopOwner, pause: d.pause });
 
   async function snapshot(): Promise<Snapshot> {
     const root = await d.resolveRoot(options.root);
-    const target = serviceTarget({ platform: 'darwin', home: d.home });
-    if (target.platform !== 'darwin') throw new Error('Invalid launchd target');
+    const target = d.target(root);
+    job = `${domain}/${target.label}`;
     return { root, target, expected: null, kept: null, temporaryLeftovers: [] };
   }
   const registration = (s: Snapshot): Promise<Registration> => d.registration({ target: s.target, requestedRoot: s.root });
@@ -189,10 +200,9 @@ export function createLaunchdService(options: { root: string }, overrides: Parti
     }
   }
   async function checkExpected(s: Snapshot): Promise<void> {
-    const current = await registration(s);
-    if (s.expected === null && current.kind === 'absent') return;
-    if (s.expected !== null && current.kind === 'ours' && Buffer.from(s.expected).equals(bytes(s, current.definition))) return;
-    throw new Error(`Registration changed before mutation: ${current.kind}`);
+    const current = await readDefinitionBytes(s.target);
+    if (s.expected === null ? current === null : current !== null && current.equals(s.expected)) return;
+    throw new Error(`Registration changed before mutation: ${(await registration(s)).kind}`);
   }
   async function unloadBarrier(request: BarrierRequest, s: Snapshot): Promise<BarrierResult> {
     await checkExpected(s);
@@ -281,14 +291,18 @@ export function createLaunchdService(options: { root: string }, overrides: Parti
       let desired: Uint8Array;
       let port: number;
       let initial: JobObservation;
+      let detached = false;
+      let identical = false;
+      let stoppedDetached = '';
       try {
         const domainResult = await d.run(['print', domain], 30_000);
         if (!domainResult.ok) throw new Error(domainResult.stderr || 'GUI domain unavailable');
         const distribution = await d.distribution();
         if (distribution.kind !== 'bundled' && distribution.kind !== 'global-npm') throw new Error('Distribution cannot install a service');
         const current = await registration(s);
-        if (current.kind !== 'ours' && current.kind !== 'absent') throw new Error(registrationDetail(current));
-        previous = current.kind === 'ours' ? bytes(s, current.definition) : null;
+        // An unrecognized plist under our own name is an older format: replace it, keeping its bytes for rollback.
+        if (current.kind === 'other-root') throw new Error(registrationDetail(current));
+        previous = current.kind === 'ours' ? bytes(s, current.definition) : current.kind === 'unrecognized' ? await readDefinitionBytes(s.target) : null;
         s.expected = previous;
         const owner = await d.readOwner(s.root);
         before = identity(owner);
@@ -300,10 +314,31 @@ export function createLaunchdService(options: { root: string }, overrides: Parti
         } else port = input.port ?? (current.kind === 'ours' ? current.definition.port : await d.freePort());
         desired = bytes(s, { root: s.root, port, distribution: { kind: distribution.kind === 'bundled' ? 'desktop' : 'npm', executable: d.executable, entry: distribution.cliPath }, capturedPath: d.capturedPath });
         initial = await observeJob();
+        // Without a readable job record the running daemon may be the job's own: never stop it on a guess.
+        if (initial.kind === 'unknown') throw new Error(`launchd query failed: ${initial.detail}`);
+        // A plist with no job is usually turned off in System Settings; bootstrap would fail after the detached daemon was stopped.
+        if (initial.kind === 'absent' && previous !== null && owner !== null) throw new Error(`launchd has no job for the installed plist.${TURNED_OFF_HINT} Or run vonvon daemon stop, then vonvon service install.`);
+        detached = owner !== null && !(initial.kind === 'loaded' && initial.pid === owner.pid);
+        identical = previous !== null && Buffer.from(previous).equals(desired);
         if (initial.kind === 'loaded' && previous === null) throw new Error('Interrupted uninstall; run vonvon service uninstall first');
-        if (initial.kind === 'loaded' && previous !== null && Buffer.from(previous).equals(desired)) return outcome(s, 'already-installed', 'Already installed');
-        if (initial.kind === 'loaded' && (owner !== null || initial.pid !== null)) throw new Error('Run vonvon daemon stop before replacing the service');
+        if (initial.kind === 'loaded' && identical && !detached) return outcome(s, 'already-installed', 'Already installed');
+        if (initial.kind === 'loaded' && !identical && !detached && (owner !== null || initial.pid !== null)) throw new Error('Run vonvon daemon stop before replacing the service');
       } catch (error) { return outcome(s, 'install_refused', detailOf(error)); }
+      if (detached) {
+        // A daemon started with vonvon daemon start holds the data root: stop it so the manager's job takes over on the same port.
+        const result = await drain({ home: s.root, scope: { kind: 'all-owners' }, queryJobPid: async () => null });
+        if (result.kind === 'drain-failed') return outcome(s, 'install_refused', `Could not stop the detached daemon: ${result.reason}: ${result.detail}`);
+        stoppedDetached = '; the detached daemon was stopped, run vonvon daemon start to start it again';
+      }
+      if (initial.kind === 'loaded' && identical) {
+        // Only reached after stopping a detached daemon: the job is loaded but idle, so start it.
+        try {
+          const kick = await d.run(['kickstart', job], 30_000);
+          if (!kick.ok) throw new Error(kick.stderr || 'Service start failed');
+          await ready(s, port, true);
+          return outcome(s, 'installed', 'Installed');
+        } catch (error) { return outcome(s, 'install_incomplete', `${detailOf(error)}${stoppedDetached}`); }
+      }
       if (initial.kind === 'loaded') {
         try {
           const barrier = await unloadBarrier({ scope: { kind: 'all-owners' }, context: 'install-replacement' }, s);
@@ -316,14 +351,14 @@ export function createLaunchdService(options: { root: string }, overrides: Parti
         if (s.expected === null || !Buffer.from(s.expected).equals(desired)) { await atomicWrite(s, desired); s.expected = desired; }
         for (const name of ['service.log', 'service.err.log']) { const log = await d.open(join(s.root, name), 'a', 0o600); await log.close(); }
         const bootstrap = await d.run(['bootstrap', domain, s.target.plistPath], 30_000);
-        if (!bootstrap.ok) throw new Error(bootstrap.stderr || 'Bootstrap failed');
+        if (!bootstrap.ok) throw new Error(`${bootstrap.stderr.trim() || 'Bootstrap failed'}${initial.kind === 'absent' && previous !== null ? TURNED_OFF_HINT : ''}`);
         loaded = true;
         const manager = await observeJob();
         if (manager.kind !== 'loaded') throw new Error('Manager did not confirm the loaded job');
-        await ready(s, port, before === null);
+        await ready(s, port, true);
         return outcome(s, 'installed', 'Installed');
       } catch (error) {
-        const reason = detailOf(error);
+        const reason = `${detailOf(error)}${stoppedDetached}`;
         if (loaded) {
           try {
             const barrier = await unloadBarrier({ scope: { kind: 'job-only', context: 'install-rollback' }, context: 'install-rollback' }, s);
@@ -345,18 +380,22 @@ export function createLaunchdService(options: { root: string }, overrides: Parti
     async uninstall(): Promise<LaunchdTransactionOutcome> {
       const s = await snapshot();
       const current = await registration(s);
-      if (current.kind !== 'ours' && current.kind !== 'absent') return outcome(s, 'uninstall_refused', registrationDetail(current));
+      // An unrecognized plist under our own name is an older format of ours, so it is removed like ours.
+      if (current.kind === 'other-root') return outcome(s, 'uninstall_refused', registrationDetail(current));
       const manager = await observeJob();
       if (manager.kind === 'unknown') return outcome(s, 'uninstall_incomplete', manager.detail);
       if (current.kind === 'absent' && manager.kind === 'absent') return outcome(s, 'not-installed', 'Not installed');
-      s.expected = current.kind === 'ours' ? bytes(s, current.definition) : null;
+      // Only a regular file is replaced; a symlink or directory under our name is refused.
+      try { s.expected = current.kind === 'ours' ? bytes(s, current.definition) : current.kind === 'unrecognized' ? await readDefinitionBytes(s.target) : null; }
+      catch (error) { return outcome(s, 'uninstall_refused', `${registrationDetail(current)}: ${detailOf(error)}`); }
       try {
+        // An older format's job may run a process without our lock: job-only refuses it instead of waiting forever.
         const request: BarrierRequest = current.kind === 'ours'
           ? { scope: { kind: 'all-owners' }, context: 'uninstall' }
           : { scope: { kind: 'job-only', context: 'uninstall-resumed' }, context: 'uninstall-resumed' };
         const barrier = await unloadBarrier(request, s);
         if (barrier.kind !== 'unloaded') return barrierFailure(s, barrier, 'uninstall', null);
-        if (current.kind === 'ours') {
+        if (current.kind !== 'absent') {
           const final = await drain({ home: s.root, scope: { kind: 'all-owners' }, queryJobPid: async () => null });
           if (final.kind === 'drain-failed') return outcome(s, 'uninstall_incomplete', `${final.reason}: ${final.detail}`);
         }
@@ -374,7 +413,11 @@ export function createLaunchdService(options: { root: string }, overrides: Parti
       const manager = await observeJob();
       if (manager.kind === 'unknown') throw new Error(manager.detail);
       const command = await d.run(manager.kind === 'absent' ? ['bootstrap', domain, s.target.plistPath] : ['kickstart', job], 30_000);
-      if (!command.ok && (manager.kind !== 'absent' || (await observeJob()).kind !== 'loaded')) throw new Error(command.stderr || 'Service start failed');
+      if (!command.ok && (manager.kind !== 'absent' || (await observeJob()).kind !== 'loaded')) {
+        // The plist is there but launchd has no job: usually the user turned it off under App Background Activity.
+        const hint = manager.kind === 'absent' ? TURNED_OFF_HINT : '';
+        throw new Error(`${command.stderr.trim() || 'Service start failed'}${hint}`);
+      }
       return ready(s, port, true, input.staleOwner);
     },
     async status() {
@@ -383,8 +426,13 @@ export function createLaunchdService(options: { root: string }, overrides: Parti
       const manager = await observeJob();
       const owner = await d.readOwner(s.root);
       let running = false;
-      if (owner?.listen) { await d.verifyOwner(s.root, owner); running = true; }
-      return { registration: current, manager, owner: identity(owner), running };
+      let ownerError: string | null = null;
+      if (owner?.listen) {
+        // The daemon asking about its own service need not authenticate itself over its own socket.
+        try { if (owner.pid !== process.pid) await d.verifyOwner(s.root, owner); running = true; }
+        catch (error) { ownerError = detailOf(error); }
+      }
+      return { target: s.target, registration: current, manager, owner: identity(owner), running, ownerError };
     },
   };
 }

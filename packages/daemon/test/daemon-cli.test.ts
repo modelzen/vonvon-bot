@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
 import { z } from 'zod';
 import { afterAll, beforeAll, expect, it } from 'vitest';
+import { SERVICE_UNAVAILABLE } from '../src/host/service';
 
 let buildDir: string;
 let entry: string;
@@ -81,11 +82,25 @@ it('starts without bots, refuses duplicate ownership and releases PID lease on s
   expect(await readdir(join(f.root, '.access'))).toEqual([]);
 });
 
+it('service status gives an isolated data root service names of its own', async () => {
+  const f = await fixture();
+  const p = launch(f.home, f.root, ['service', 'status', '--json']);
+  expect(await p.exited, p.output()).toBe(0);
+  const line = p.output().split('\n').find(text => text.startsWith('{'));
+  const status = z.object({ name: z.string(), servicePath: z.string(), installed: z.boolean() }).parse(JSON.parse(line ?? 'null'));
+  expect(status.name).toMatch(/^(com\.vonvon\.bot\.daemon\.|vonvon-bot-)[0-9a-f]{12}(\.service)?$/);
+  expect(status.servicePath.startsWith(f.home)).toBe(true);
+  expect(status.installed).toBe(false);
+});
+
 it('concurrent detached starts return the same ready owner and stop clears its lease', async () => {
   const f = await fixture();
   const first = launch(f.home, f.root, ['daemon', 'start', '--port', '0']);
   const second = launch(f.home, f.root, ['daemon', 'start', '--port', '0']);
-  expect(await Promise.all([first.exited, second.exited])).toEqual([0, 0]);
+  const codes = await Promise.all([first.exited, second.exited]);
+  // #296's CI saw both exit 1 once with nothing to go on: show both CLIs and the detached daemon's log.
+  const log = await readFile(join(f.root, 'daemon.log'), 'utf8').catch(() => '(no daemon.log)');
+  expect(codes, `first:\n${first.output()}\nsecond:\n${second.output()}\ndaemon.log:\n${log}`).toEqual([0, 0]);
   const record = z.object({ pid: z.number(), listen: z.string() }).parse(JSON.parse(await readFile(join(f.root, 'daemon.pid'), 'utf8')));
   expect(first.output()).toContain(`PID ${record.pid} at ${record.listen}`);
   expect(second.output()).toContain(`PID ${record.pid} at ${record.listen}`);
@@ -167,18 +182,19 @@ it('service-managed run exits 0 without locks when no registration names this ro
   expect(await readdir(f.root)).not.toContain('daemon.pid');
 });
 
-it('service refusal leaves an absent data home untouched for public and hidden commands', async () => {
+it('service commands from a checkout and hidden controls leave an absent data home untouched', async () => {
   const f = await fixture();
   await rm(f.root, { recursive: true });
-  const refusal = 'Vonvon Bot cannot manage an OS service in this version. Use vonvon daemon start and vonvon daemon stop.';
-  for (const args of [
-    ['service', 'install'], ['service', 'uninstall'],
-    ['__daemon-control', 'start'], ['__daemon-control', 'stop'],
-    ['__daemon-control', 'restart'], ['__daemon-control', 'update'],
-  ]) {
-    const attempt = launch(f.home, f.root, args);
-    expect(await attempt.exited).toBe(1);
-    expect(attempt.output()).toContain(refusal);
+  for (const [args, code, text] of [
+    [['service', 'install'], 1, 'install_refused: Distribution cannot install a service'],
+    [['service', 'uninstall'], 0, 'not-installed: No data directory'],
+    [['service', 'status'], 0, 'not installed'],
+    [['__daemon-control', 'start'], 1, SERVICE_UNAVAILABLE], [['__daemon-control', 'stop'], 1, SERVICE_UNAVAILABLE],
+    [['__daemon-control', 'restart'], 1, SERVICE_UNAVAILABLE], [['__daemon-control', 'update'], 1, SERVICE_UNAVAILABLE],
+  ] as const) {
+    const attempt = launch(f.home, f.root, [...args]);
+    expect(await attempt.exited, attempt.output()).toBe(code);
+    expect(attempt.output()).toContain(text);
     await expect(readdir(f.root)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readdir(f.home)).toEqual([]);
   }

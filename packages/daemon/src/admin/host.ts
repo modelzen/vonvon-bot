@@ -1,9 +1,9 @@
 import type {Distribution} from '../service/distribution';
 import { readdir, stat } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { arch, platform, release } from 'node:os';
 import { paths } from '../config/paths';
+import { resolveCliBinPath } from '../service/common';
 import { bridgeVersion } from '../core/version';
 import {
   visibleCatalog,
@@ -182,16 +182,6 @@ export async function doctorBackends(): Promise<BackendDoctorRow[]> {
       };
     }),
   );
-}
-
-/**
- * 绝对路径到本包的 bin 入口（与 service/common.resolveCliBinPath 同算法）。打包后
- * 本模块在 dist/，bin 在 ../bin/feishu-codex-bridge.mjs——全局安装与本地 checkout
- * 同布局。detached helper 必须用绝对路径起（脱离本进程后 cwd / PATH 不可依赖）。
- */
-export function resolveCliBinPath(): string {
-  const distDir = dirname(fileURLToPath(import.meta.url));
-  return resolve(distDir, '..', 'bin', 'feishu-codex-bridge.mjs');
 }
 
 export type DaemonControlAction = 'restart' | 'update' | 'start' | 'stop';

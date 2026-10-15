@@ -47,11 +47,17 @@ program.command('open').description('Open the local web UI').action(async () => 
   await (await import('./commands/open')).runOpen();
 });
 const service = program.command('service').description('Manage the OS background service');
-service.command('install').description('Install and start the OS service').action(async () => {
-  await (await import('./commands/service')).runServiceCommand('install');
-});
+service.command('install').description('Install and start the OS service; a running detached daemon is handed over')
+  .option('--port <port>', 'Loopback API port', (value) => Number(value))
+  .action(async (options: { port?: number }) => {
+    if (options.port !== undefined && (!Number.isInteger(options.port) || options.port < 1 || options.port > 65535)) throw new Error('Invalid port.');
+    await (await import('./commands/service')).runServiceCommand('install', undefined, options.port ? { port: options.port } : {});
+  });
 service.command('uninstall').description('Stop and remove the OS service').action(async () => {
   await (await import('./commands/service')).runServiceCommand('uninstall');
+});
+service.command('status').description('Show the OS service and whether it runs the daemon').option('--json', 'Print JSON').action(async (options: { json?: boolean }) => {
+  await (await import('./commands/service')).runServiceStatus(Boolean(options.json));
 });
 program.command('__daemon-control <action>', { hidden: true }).action(async (action: string) => {
   await (await import('./commands/daemon-control')).runDaemonControl(action);

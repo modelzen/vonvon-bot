@@ -67,7 +67,7 @@ describe.skipIf(process.platform !== 'linux')('built CLI under systemd', () => {
   it('takes over a lock whose PID was reused by an unrelated live process (#287)', async () => {
     const fixture = serviceFixture();
     const port = await freePort();
-    const target = serviceTarget({ platform: 'linux', home: fixture.home, xdgConfigHome: fixture.config });
+    const target = serviceTarget({ platform: 'linux', home: fixture.home, root: fixture.data, xdgConfigHome: fixture.config });
     if (target.platform !== 'linux') throw new Error('Expected systemd target');
     const rendered = renderDefinition({ target, root: await resolveServiceRoot(fixture.data), port, distribution: { kind: 'npm', executable: process.execPath, entry: bin }, capturedPath: '/usr/bin' });
     if (rendered.platform !== 'linux') throw new Error('Expected unit');
