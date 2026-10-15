@@ -127,7 +127,7 @@ Vonvon Bot 是一个 macOS 桌面应用；Linux 上可以只装后台服务，�
 这三条顺带修掉今天多 bot 群里的三个毛病：开了免 @ 的 bot 会进别的 bot 的话题；主区不带 @ 的 `/help` 每个 bot 都回；连续群里每个免 @ 的 bot 都回每条（推断，`docs/research/2026-10-14-v1-definition/group-response.md` 结论 3）。
 
 **智能模式怎么判断。** 底线定不下来时，调一次判断模型，结果三选一：不回、在主区接着聊、开新话题回。在话题里只判断回不回，不再拆话题。
-- 判断用这个 bot 那家订阅里的小模型，比如 Codex 的 GPT-6-Luna，关掉思考，一次不带工具的调用。专门做判断的模型（OpenAI 的 Decisions API、TypeSafe 的 Jev，要主人填 OpenAI、TypeSafe 或 OpenRouter 的 key）第一版不做，见第 10 节。资料见 `docs/research/2026-10-14-decision-models/decision-models.md`。
+- 判断用这个 bot 那家订阅里的小模型，比如 Codex 的 GPT-6-Luna（走 Codex 订阅的普通调用，不是 Decisions API），关掉思考，一次不带工具的调用。专门做判断的模型（OpenAI 的 Decisions API、TypeSafe 的 Jev，要主人填 OpenAI、TypeSafe 或 OpenRouter 的 key）第一版不做，见第 10 节。资料见 `docs/research/2026-10-14-decision-models/decision-models.md`。
 - 判断出错或超时就不回。被 @ 的消息一定回：在话题里直接回；在主区要调一次判断，只决定回在主区还是开新话题，出错或超时就在主区回（3.5）。
 - 只回"回"或"不回"，不做"只回一个表情"。"不回"的原因只记在本机诊断页，不发到群里。
 - 判断用的提示词就是智能提示词：内置默认值，主人可以在 bot 层改，群里可以覆盖。

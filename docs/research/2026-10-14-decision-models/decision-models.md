@@ -9,7 +9,7 @@
 1. 两个都有，都是专门做判断的模型：输入一段文字（Decisions API 还能带图），问几个事先定好的问题，返回选项和概率，不生成文字。
 2. 两个都要单独的 API key，按量付费。Codex 和 Claude 的订阅应该都用不上：推断，两家文档都只给了 API key 的写法，没提订阅。
 3. 用在 vonvon-bot 上很便宜。一次判断按 2,000 个输入 token 算，1,000 次约 0.2 美元（Decisions API）或 0.08 美元（Jev）。推断，按下面的单价算出来的，没算 OpenAI 的区域处理加价。OpenAI 超长上下文倍率的门槛文档没给，2,000 个 token 应该碰不到（推断）。Jev 的 0.08 美元按 TypeSafe 直连价算，经 OpenRouter 的价格以它的模型页为准。
-4. 所以第一版的做法是：默认用订阅里的小模型做判断，关掉思考；用户在设置里填了 OpenAI、TypeSafe 或 OpenRouter 的 key，就改用 Decisions API 或 Jev。这是主人 2026-10-14 的回答。OpenRouter 一个 key 就能用 Jev，对用户最省事。
+4. 所以第一版的做法是：默认用订阅里的小模型做判断，关掉思考；用户在设置里填了 OpenAI、TypeSafe 或 OpenRouter 的 key，就改用 Decisions API 或 Jev。这是主人 2026-10-14 的回答。OpenRouter 一个 key 就能用 Jev，对用户最省事。2026-10-15 owner 改成第一版只用订阅里的小模型，填 key 的判断模型放到 v1 之后，见 `docs/product.md` 3.4 和第 10 节。
 
 ## OpenAI Decisions API
 
