@@ -53,6 +53,7 @@ it('exposes daemon lifecycle commands while status and logs leave a missing home
   for (const args of [['--help'], ['daemon', '--help']]) {
     const p = launch(f.home, f.root, args); expect(await p.exited).toBe(0);
     expect(p.output()).not.toMatch(/__daemon-control|__desktop-service|migrate|restart/);
+    if (args[0] === '--help') for (const name of ['bot', 'group', 'settings']) expect(p.output()).toMatch(new RegExp(`^ +${name} +\\S`, 'm'));
   }
   const service = launch(f.home, f.root, ['service', '--help']);
   expect(await service.exited).toBe(0);
@@ -64,6 +65,11 @@ it('exposes daemon lifecycle commands while status and logs leave a missing home
   for (const args of [['daemon', 'status', '--json'], ['daemon', 'logs']]) {
     const p = launch(f.home, f.root, args); expect(await p.exited).toBe(0);
   }
+  // The RPC commands take no data lease, so the empty root below also proves they skip it.
+  for (const args of [['bot', 'list'], ['bot', 'status', '--bot', 'cli_a'], ['group', 'list', '--json'], ['settings', 'get']]) {
+    const p = launch(f.home, f.root, args); expect(await p.exited).toBe(1);
+    expect(p.output()).toContain('daemon 没有运行。先运行 vonvon daemon start。');
+  }
   expect(await readdir(f.home)).toEqual([]); expect(await readdir(f.root)).toEqual([]);
 });
 it('starts without bots, refuses duplicate ownership and releases PID lease on shutdown', async () => {
@@ -72,6 +78,11 @@ it('starts without bots, refuses duplicate ownership and releases PID lease on s
   await expect.poll(p.output, { timeout: 15_000 }).toContain('vonvon daemon ready');
   const record = z.object({ listen: z.string(), pid: z.number(), startedAt: z.string() }).parse(JSON.parse(await readFile(join(f.root, 'daemon.pid'), 'utf8')));
   expect(record.pid).toBe(p.child.pid); expect(record.listen).toMatch(/^127\.0\.0\.1:\d+$/);
+  // The real connectLocal path: both must exit on their own once the socket is closed.
+  const bots = launch(f.home, f.root, ['bot', 'list', '--json']);
+  expect(await bots.exited, bots.output()).toBe(0); expect(bots.output()).toContain('{"bots":[]}');
+  const groups = launch(f.home, f.root, ['group', 'list']);
+  expect(await groups.exited, groups.output()).toBe(0); expect(groups.output()).toContain('还没有绑定的群');
   const second = launch(f.home, f.root, ['daemon', 'run']);
   expect(await second.exited).toBe(1); expect(second.output()).toMatch(/host is busy|already running/);
   expect((await readdir(f.home)).filter((entry) => entry !== '.codex')).toEqual([]);

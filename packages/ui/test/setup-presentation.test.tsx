@@ -4,7 +4,7 @@ import type {AdminSetupStatus, Agent, DesktopSnapshot, ToolState} from '@vonvon/
 import {createClient} from '../../client/src/client';
 import {ClientProvider} from '../src/client-context';
 import {SetupChecklist} from '../src/setup/SetupChecklist';
-import {BOT_ADDED_WARNING, JOIN_SCOPE_WARNING, botSteps, remoteStepsDone, scopeStep, toolSteps} from '../src/setup/setupPresentation';
+import {BOT_ADDED_WARNING, JOIN_SCOPE_WARNING, botSteps, remoteStepsDone, scopeStep, toolSteps} from '@vonvon/protocol';
 
 const agent: Agent = {id: 'cli_setup' as Agent['id'], name: '小助手', enabled: true, running: true, connection: 'connected', activation: 'active'};
 const done: AdminSetupStatus = {
