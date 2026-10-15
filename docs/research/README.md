@@ -104,7 +104,7 @@ process-ci、draft 和 final 里的流程说法，凡和 `AGENTS.md` 不一致�
 
 | 报告 | 内容 | 说明 |
 |---|---|---|
-| [e06-launchagent-keychain](2026-10-15-v1-spikes/e06-launchagent-keychain.md) | LaunchAgent 起的 daemon 能不能用主人的 Claude 和 Codex 登录，读钥匙串会不会弹窗，`kill -9` 后多久拉起、退出码记在哪，"允许在后台"里显示什么，怎么判断重新登录过 | 没打包，用 worktree 里的 Electron 跑 |
+| [e06-launchagent-keychain](2026-10-15-v1-spikes/e06-launchagent-keychain.md) | LaunchAgent 起的 daemon 能不能用主人的 Claude 和 Codex 登录，读钥匙串会不会弹窗，`kill -9` 后多久拉起、退出码记在哪，"允许在后台"里显示什么，怎么判断重新登录过 | 没打包，用 worktree 里的 Electron 跑。owner 的凭据都在文件里，钥匙串那条路没验证到；重新登录的判断只查了资料 |
 
 ## 补充
 

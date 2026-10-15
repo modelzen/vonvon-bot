@@ -246,7 +246,9 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 - s07：s06 起，服务拉起的进程读到 `unrecognized` 的注册（比如旧版本写的、和现在生成的格式不一致的 plist 或 unit）会退出 1，由管理器每 5 秒重试一次。升级以后要先重写服务定义，再让服务起来，否则换版本后 bot 起不来。
 - s07：服务定义里的 PATH 用 s02 的 `withToolDirectories` 补全。自带的 npm 由 daemon 自己找，服务定义里不用写 `VONVON_NPM_CLI`。
 - s07：POSIX 上的互斥锁是 `127.0.0.1` 上按数据目录哈希出来的端口（20000 到 49999），和 Linux 的临时端口重叠。#295 的 CI 撞过一次（`host-service-shutdown` 测试报 busy），开工时看要不要改成 Unix 域套接字。#296 的 CI 也失败过一次，可能是同一个原因：`daemon-cli.test.ts` 的"concurrent detached starts return the same ready owner"两个启动都退出 1，日志里没有子进程的输出，重跑通过。开工时让这个测试失败时打印子进程输出。
+- s07：e06 实测（`docs/research/2026-10-15-v1-spikes/e06-launchagent-keychain.md`）：LaunchAgent 起的进程拿到真实 HOME 和 USER、PATH 只有系统目录，owner 的 Claude 和 Codex 登录都在 HOME 下的文件里，照样是已登录。钥匙串里的登录没验证到（owner 没用钥匙串），所以 s03 留下的"读不到钥匙串时改成无法确认"照做。用户在系统设置"App 后台活动"里关掉这一项时，服务被直接卸载（`launchctl print` 退出码 113），`service status` 把"plist 在、服务找不到"显示成"已在系统设置里关掉"。不用 `sfltool`（不加 sudo 时卡住）。产品 plist 的 `SuccessfulExit=false` 和 5 秒节流没测，放进 s07 的 Mac 检查。
 - s07：`D/admin/host.ts:194` 的 `resolveCliBinPath` 还指向 `bin/feishu-codex-bridge.mjs`，包里只有 `bin/vonvon.mjs`（`D/service/common.ts` 的同名函数是对的）。查清 `host.ts:210` 那条路径还用不用，用就改成调 service/common 的。
+- s08：e06 发现系统设置"App 后台活动"里也有一个开关，用户在那里关掉时服务被卸载。桌面端的"登录电脑时启动"要读 s07 的状态，显示"已在系统设置里关掉"，不能只看自己存的值。未签名的 Electron 在那里显示为"Electron"、"身份不明的开发者"；签名后的预览版显示什么，s08 的 Mac 检查时看。
 
 ### M3 群里的上下文
 
@@ -276,7 +278,7 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 | [ ] | s20b | Linux 命令行版（下）：Codex 只能完全访问，删 windows-job | Linux 上的 Codex 遇到只读、读写档不起会话，回一句说明，设置里置灰；删 `codex-appserver/windows-job.ts`；在这片的 head 上做 Linux 验收（3.8、第 8 节第 5 条） | 400 | s20a | 子进程、关闭清理、错误路径 | 无（Linux 在 JP-VPS 上验） |
 
 开工要点：
-- s17：macOS 上用什么判断"重新登录过"、给崩溃计数清零，按 e06 的结果定。
+- s17：e06 实测 `kill -9` 后约 1 秒被拉起，两次启动至少隔 `minimum runtime`（默认 10 秒，产品 plist 设 5 秒）；`launchctl print` 的 `last exit code` 和 `last terminating signal` 分得清正常退出和被杀。"重新登录过"用 Security 框架 `SessionGetInfo` 取的安全会话 id 判断（e06 只查了资料），开工时先在 Mac 上注销再登录验证一次；区分重启再加开机标识。
 - s18：机器人能不能给没开过会话的主人发私聊，看 e10。
 - s20a：清单里那一步写明"Linux 上 Codex 只能用完全访问"，由主人自己选要不要把 bot 默认档改成完全访问，不自动放开（本文第 5 节）。
 - s20b：被拉进的已有群默认只读，在 Linux 上用 Codex 时起不来：bot 回一句说明，等主人改（product.md 第 11 节第 24 条）。今天的代码在绑定之前就抛错（`D/project/lifecycle.ts:206` 附近），要改成照常绑定、回合开始时再回说明。`windows-job.ts` 被 `owned-process.ts` 和 `environment/service.ts` 引用，属于子进程的代码。
@@ -427,7 +429,7 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 | [ ] | e03 | 第 11、12 项里要 macOS 沙箱的部分 | Mac | 只读用 default、读写用 acceptEdits，加今天的 Seatbelt 沙箱和记录回调的 canUseTool，看 cwd 外的读写、不在名单里的主机、WebFetch 哪些走到回调；今天的 bypassPermissions 下关网能否 curl 出去、能否写到 /tmp。Mac 上没有 Claude 登录时回"卡住了" | s31、s39 | s31 之前 |
 | [ ] | e04 | 第 2、4 项：沙箱里调 vonvon 命令行，`.git` 只读 | Mac | Codex 只读、读写、关网三种设置下和 Claude 的沙箱里，从 agent 的 shell 连 127.0.0.1 上的测试服务（TCP 和 Unix socket 各一个），看能否连上、能否从环境变量读到令牌；workspace-write 下在 git 目录里 `git commit` 会不会失败 | s37、s39、s46 | s37 之前 |
 | [ ] | e05 | 第 3 项：Codex 会话级配置 | Mac | 用 s03 定的最低版本和当前 Codex.app 各测一次：会话级 mcp_servers、runtimeWorkspaceRoots、skills/extraRoots/set 能不能用，resume 后还在不在，中途能否换 skill 列表；memories 的两个键能否在会话层关掉；`~/.codex/AGENTS.md` 能否按会话不加载。结果决定 Codex 的最低版本，在 s39 写回 s03 的常量 | s37、s39、s44 | s37 之前 |
-| [ ] | e06 | 第 5 项：LaunchAgent 和钥匙串 | Mac | 手写一个 LaunchAgent，用打包版 app 里的 Electron 以 `ELECTRON_RUN_AS_NODE=1` 跑小脚本：能否用钥匙串里的 Claude 和 Codex 登录；"允许在后台"里显示什么，关掉后 `launchctl print` 显示什么；kill -9 后多久被拉起，退出码在哪个字段；怎么判断用户重新登录过。测完卸载 | s07、s17 | s07 之前 |
+| [x] | e06 | 第 5 项：LaunchAgent 和钥匙串 | Mac | 手写一个 LaunchAgent，用打包版 app 里的 Electron 以 `ELECTRON_RUN_AS_NODE=1` 跑小脚本：能否用钥匙串里的 Claude 和 Codex 登录；"允许在后台"里显示什么，关掉后 `launchctl print` 显示什么；kill -9 后多久被拉起，退出码在哪个字段；怎么判断用户重新登录过。测完卸载 | s07、s17 | s07 之前 |
 | [ ] | e07 | 第 10 项（预查）：bridge 的锁 | JP-VPS | 临时 HOME 下用 v2 的 acquireSingleInstanceLock 写一份 bridge 格式的锁，再用 bridge 0.6.14（`6698118`）的同名函数去抢，应该抛 BridgeAlreadyRunningError；再看持有者退出后锁失效、startedAt+15s 那条判断 | s61 | s61 之前 |
 | [ ] | e08 | 第 10 项（真机） | Mac | 在 Mac 的测试用户账号里装 bridge 0.6.14，用数据副本和测试 bot：写入锁后 run 和 start 被拒；stop 删掉 plist 和 launchd 任务；持有者退出后锁失效；多 bot 模式下子进程也被拒。没有测试用户账号时回"卡住了" | s61 | s61 之前 |
 | [ ] | e09 | 第 13 项：卡片里的 @ 会不会提醒人 | Mac | 测试 bot 往测试群发一张带 `<at>` 的卡片和一条带 @ 的文字，在飞书客户端看两条有没有"有人@我"的标记和通知 | s30 | s30 之前 |

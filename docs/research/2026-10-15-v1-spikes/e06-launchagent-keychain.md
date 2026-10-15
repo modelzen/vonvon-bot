@@ -23,4 +23,56 @@ product.md 3.10 说：macOS 上用用户级 LaunchAgent 跑 daemon，"用户登�
 
 ## 结果
 
-待 Mac 检查完成后填写。
+2026-10-15 在 owner 的 Mac（macOS，uid 501）上由 Paseo 检查会话实测，北京时间 10:47 到 11:03。没打包：Electron 是 worktree 里 `npm ci` 后补下载的（npm 11 也跳过了 electron 的 postinstall，要单独跑 `node node_modules/electron/install.js`）。终端对照和 LaunchAgent 用同一个探测脚本、同一个 Electron。
+
+### 1. 登录：LaunchAgent 下和终端一样，都是已登录
+
+| | 终端 | LaunchAgent |
+|---|---|---|
+| HOME、USER | 真实值 | 真实值，launchd 给的 |
+| PATH | 带 nvm、Homebrew 等目录 | 只有 `/usr/bin:/bin:/usr/sbin:/sbin` |
+| Claude（s03 的检测） | 已登录，凭据来自 `ANTHROPIC_AUTH_TOKEN` | 同左 |
+| Codex（`account/read`） | 已安装、已登录，`codex-cli 0.162.1`，用的是 nvm 下的 codex | 同左 |
+| 钥匙串 `Claude Code-credentials` | 没有这个条目（退出码 44） | 同左 |
+| 钥匙串 `Codex Auth` | 没有这个条目（退出码 44） | 同左 |
+
+- owner 的 Claude 凭据在 `~/.claude/settings.json` 的 `env` 里，Codex 的登录在钥匙串里也没查到，所以这次**没有验证到"读钥匙串"这条路**：LaunchAgent 能用主人的登录，是因为凭据放在 HOME 下的文件里，launchd 给了真实的 HOME。
+- PATH 很短，但 s03 找 codex 时会查 nvm 等目录，所以照样找到了。这和 s03 修的 Finder 场景一样。
+- 没看到钥匙串访问的系统对话框。因为钥匙串里本来就没有这两个条目，这一点也说明不了用钥匙串登录的人会不会弹窗。
+
+### 2. `kill -9` 和退出码
+
+这次的 plist 是 `KeepAlive=true`、不设 `ThrottleInterval`。`launchctl print gui/501/com.vonvon.e06.probe` 的字段：
+
+| 事件 | 多久出现新进程 | print 里怎么记 |
+|---|---|---|
+| 首次加载 | — | `state = running`、`runs = 1`、`last exit code = (never exited)`、`minimum runtime = 10` |
+| `kill -9` | 约 1 秒（每秒看一次） | `runs = 2`、`last terminating signal = Killed: 9` |
+| 退出码 3 | 约 1 秒 | `last exit code = 3`、`runs = 3` |
+| 3 秒后再退出码 3 | 约 7 秒 | `last exit code = 3`、`runs = 4` |
+| 8 秒后退出码 0 | 约 9 秒 | `last exit code = 0`、`runs = 5` |
+
+- 两次启动之间至少隔约 10 秒，和 `minimum runtime = 10`（默认节流）一致。日志里只看到 `service inactive: com.vonvon.e06.probe`，没有明确写"节流"的字样。
+- `KeepAlive=true` 下退出码 0 也会被拉起。产品的 plist（`D/service/definitions.ts`）是 `KeepAlive = {SuccessfulExit: false}`、`ThrottleInterval = 5`，按 `launchd.plist` 手册，退出 0 不会被拉起、节流是 5 秒；这次没用产品的 plist，留给 s07 的 Mac 检查（"`daemon stop` 后不再拉起"）。
+
+### 3. "允许在后台"
+
+- 系统设置"通用 → 登录项与扩展 → App 后台活动"里显示为 **Electron**，说明是"项目来自身份不明的开发者"；"在访达中显示"指向 worktree 里的 Electron。打包签名后的 app 应该显示 app 名和开发者，这次没验证。
+- 在那里只关掉这一项后：`launchctl print` 退出码 113（"Could not find service"），`launchctl list | grep e06` 为空。也就是服务被直接卸载了，不是"已加载但停用"。
+- 重新打开后服务马上回来并在跑，`runs` 从 1 重新计数。
+- 不用 sudo 时，`sfltool dumpbtm` 两分钟没返回，只能放弃。产品里不要依赖它。
+
+### 4. 怎么判断用户重新登录过（只查了资料，没实测）
+
+- 首选：用 Security 框架的 `SessionGetInfo(callerSecuritySession, …)` 取当前安全会话 id，存下来，下次比较。Apple 的多用户文档说重新登录会得到不同的 id（[System Contexts](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPMultipleUsers/Concepts/SystemContexts.html)、[Fast User Switching](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPMultipleUsers/Concepts/FastUserSwitching.html)）。区分重启还要再加开机标识，没验证。
+- `launchctl print gui/<uid>` 里的 ASID 可以人工看，但手册说这个输出不是稳定接口。`who`、`last` 只能辅助。`$TMPDIR` 不保证每次登录都变，不能用。
+
+### 5. 清理
+
+`launchctl bootout` 返回 0（卸载是异步的，紧接着还短暂看到旧记录）；之后 `launchctl list` 里没有、`print` 返回 113、探测进程都已退出，plist、临时目录、Mac 上的 worktree 和本地分支都已删除。没碰 `/Applications/Vonvon Bot.app`、`~/.vonvon-bot`、`com.vonvon.bot.daemon` 和 bridge。
+
+## 对后面切片的影响
+
+- **s07**：LaunchAgent 能用 HOME 下文件里的 Claude 和 Codex 登录，3.10 里"能用钥匙串里的 Claude 登录和 Codex 的登录"只验证了"文件"这一半。钥匙串那一半等有人用钥匙串登录时再看；s03 说的"读不到钥匙串就改成无法确认"仍然要做，因为现在的检测在读不到时会报未登录。`vonvon service status` 可以把"plist 在、但 `launchctl print` 找不到服务"显示成"已在系统设置里关掉后台运行"。不要用 `sfltool`。产品 plist 的 `SuccessfulExit=false` 和 5 秒节流要在 s07 的 Mac 检查里实测。
+- **s17**：崩溃后约 1 秒被拉起，节流按启动间隔算；`last exit code` 和 `last terminating signal` 可以区分正常退出和被杀。"下次登录时重新计数"用安全会话 id，s17 开工时先在 Mac 上验证一次注销再登录。
+- **s08**：桌面端的"登录时启动"开关和系统设置里的开关是两处，用户在系统设置里关掉时服务会被卸载，桌面端要把这个状态读出来。
