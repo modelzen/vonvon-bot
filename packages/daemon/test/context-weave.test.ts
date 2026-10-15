@@ -538,6 +538,47 @@ describe('fetchChatContext (a single group\'s main area)', () => {
   });
 });
 
+describe('a Feishu call that never answers', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+  const never = () => new Promise<never>(() => undefined);
+
+  it('fails a pull whose first page does not come in 10 s, so the turn runs on the trigger alone', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+    const out = fetchChatContext(listChannel(never), 'oc_123456789', { stopAt: 5 });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(await out).toEqual({ messages: [], ok: false, complete: false });
+    expect(warn).toHaveBeenCalledWith('intake', 'chat-context-failed', { chatId: '456789', reason: 'timeout' });
+  });
+
+  it('keeps the pages it got when a later one does not come, as at the page cap', async () => {
+    vi.useFakeTimers();
+    const info = vi.spyOn(log, 'info').mockImplementation(() => undefined);
+    let pages = 0;
+    const out = fetchThreadContext(listChannel(async () => {
+      if (++pages > 1) return never();
+      return { code: 0, data: { items: [{ message_id: 'om_1', msg_type: 'text', create_time: '10',
+        sender: { id: 'ou_a', sender_type: 'user', sender_name: 'A' }, body: { content: JSON.stringify({ text: '最近的一条' }) } }], has_more: true, page_token: '1' } };
+    }), 'omt_x', { stopAt: 1 });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(await out).toMatchObject({ ok: true, complete: false, messages: [{ messageId: 'om_1' }] });
+    expect(info).toHaveBeenCalledWith('intake', 'thread-context-timeout', { threadId: 'omt_x', pages: 1, found: 1 });
+  });
+
+  it('gives up on a quoted message after 10 s', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+    const ch = { botIdentity: { openId: 'ou_me' }, rawClient: { appId: 'cli_bot', im: { v1: { message: { get: never } } } } } as unknown as LarkChannel;
+    const out = fetchQuotedMessage(ch, 'om_q');
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(await out).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith('intake', 'quote-fetch-failed', { messageId: 'om_q', err: 'timeout' });
+  });
+});
+
 // ── 缺权限时的结构化警告 ────────────────────────────────────────────────
 
 /** Feishu's 99991672 body, as the live API returns it when a scope is missing. */

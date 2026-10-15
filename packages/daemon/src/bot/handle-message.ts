@@ -196,10 +196,12 @@ export { bindModeFor } from '../project/lifecycle';
 import { refreshBranch } from '../project/announcement';
 import { leaveChat, transferOwnership } from '../project/group-ops';
 import {
+  backfillFrom,
   clearSessionTitleJobKey,
   detachSessionsForChat,
   getSession,
   isSeen,
+  isUnread,
   listSessions,
   nextSeen,
   nothingSeen,
@@ -229,6 +231,7 @@ import {
 } from './media';
 import {
   BACKFILL_MAX,
+  STREAMING_RECHECK_MS,
   fetchChatContext,
   fetchQuotedMessage,
   fetchThreadContext,
@@ -400,6 +403,10 @@ export interface QueuedTurn {
   seen?: SeenMark;
   /** How {@link seen} moves the watermark (session-store.nextSeen); 'id' when unset. */
   seenHow?: SeenHow;
+  /** Other bots' cards its record block wove while they were still streaming (SessionRecord.streaming). */
+  streaming?: SeenMark[];
+  /** Ids of the messages its record block carried (see ActiveState.woven). */
+  woven?: string[];
 }
 
 /** How long ago the message was sent (0 when its createTime is unknown). */
@@ -497,6 +504,10 @@ interface ActiveState {
    * but let the in-flight turn finish streaming; the loop then ends after that
    * turn's `done` (or immediately if no turn is in flight). No summary card. */
   endGoal?: () => void;
+  /** The messages the record block of this run's first turn carried, set once
+   * the host took that turn. Feishu does not keep events in order, so a message
+   * queued while the block was pulled can be one of them: it is not run again. */
+  woven?: Set<string>;
   /** goal run (launchGoalRun): turns are auto-continued by codex and the queue
    * is never consumed — incoming messages get a prompt instead of queueing
    * (they'd be dropped silently at the end otherwise). */
@@ -952,8 +963,8 @@ export function createOrchestrator(
   /** Record that a message reached the session (see session-store.nextSeen).
    * Fire-and-forget like every watermark write; the function form keeps
    * concurrent marks from overwriting each other. */
-  function markSeen(sessionKey: string, mark: SeenMark, how: SeenHow = 'id'): void {
-    void trackTask(patchSession(sessionKey, (rec) => nextSeen(rec, mark, how)).catch(() => undefined));
+  function markSeen(sessionKey: string, mark: SeenMark, how: SeenHow = 'id', streaming?: SeenMark[]): void {
+    void trackTask(patchSession(sessionKey, (rec) => nextSeen(rec, mark, how, streaming)).catch(() => undefined));
   }
   /** Take back an `id` mark whose message did not reach the session after all. */
   function unmarkSeen(sessionKey: string, id: string): void {
@@ -1022,15 +1033,16 @@ export function createOrchestrator(
     return u ? { usage: { sessionId: thread.sessionId, used: u.used, window: u.window } } : {};
   }
 
-  /** Feishu re-pushes messages sent while the bot was offline, minutes late
-   * (e10). One this session already took in, as a turn or as a line of a
-   * record block, is skipped. Only late messages pay for the disk read. */
-  async function lateRedelivery(msg: NormalizedMessage, sessionKey: string): Promise<boolean> {
-    const lateMs = deliveryLagMs(msg);
-    if (lateMs < 60_000) return false;
+  /** A message this session already took in, as a turn or as a line of a
+   * record block, is skipped. Feishu re-pushes messages sent while the bot was
+   * offline, minutes late (e10), and does not keep events in order: a message's
+   * own event can come in seconds after a later message's back-fill carried it.
+   * So every message pays for the disk read, not only late ones. */
+  async function alreadySeen(msg: NormalizedMessage, sessionKey: string): Promise<boolean> {
+    if (!msg.createTime) return false;
     const rec = await getSession(sessionKey).catch(() => undefined);
     const taken = isSeen(rec, msg.messageId, msg.createTime);
-    if (taken) log.info('intake', 'late-redelivery-skipped', { msgId: msg.messageId, lateMs });
+    if (taken) log.info('intake', 'late-redelivery-skipped', { msgId: msg.messageId, lateMs: deliveryLagMs(msg) });
     return taken;
   }
 
@@ -1232,7 +1244,7 @@ export function createOrchestrator(
         startReservedRun(msg, goalObjective, ts.sessionKey, true, project, ts, undefined, undefined, undefined, true);
         return;
       }
-      if (await lateRedelivery(msg, ts.sessionKey)) return;
+      if (await alreadySeen(msg, ts.sessionKey)) return;
       void trackTask(handleTurn(msg, text, ts.sessionKey, true, project, ts).catch((err) => log.fail('intake', err)));
       return;
     }
@@ -1283,7 +1295,7 @@ export function createOrchestrator(
         startReservedRun(msg, goalObjective, ts.sessionKey, false, project, ts, undefined, undefined, undefined, true);
         return;
       }
-      if (await lateRedelivery(msg, ts.sessionKey)) return;
+      if (await alreadySeen(msg, ts.sessionKey)) return;
       void trackTask(handleTurn(msg, text, ts.sessionKey, false, project, ts).catch((err) => log.fail('intake', err)));
       return;
     }
@@ -1736,10 +1748,11 @@ export function createOrchestrator(
         // resolveThread's outcome, so it rides the same Promise.all.
         const priorP = getSession(sessionKey);
         // 上文投机拉取（话题，或连续群的主区）：不等 resolveThread 的 codexEmpty，按已有
-        // 水位翻页拉到水位为止（没有记录就按开场拉最近的），汇合后在本地按水位和已送达的
-        // id 收敛成增量。只拉比触发消息早的，之后到的消息各自成轮或插话，不重复。不拉的
-        // 情况：有记录但无水位（resume 上来的旧会话，codex 已带历史，只在 recreated 罕见
-        // 路径补拉）；开话题群的主区不留会话（3.5），也不拉。
+        // 水位翻页拉到水位为止（水位前有上次还没答完的别的 bot 卡片时，拉到最早那张；没有
+        // 记录就按开场拉最近的），汇合后在本地按水位和已送达的 id 收敛成增量。只拉比触发
+        // 消息早的，之后到的消息各自成轮或插话，不重复。不拉的情况：有记录但无水位（resume
+        // 上来的旧会话，codex 已带历史，只在 recreated 罕见路径补拉）；开话题群的主区不留
+        // 会话（3.5），也不拉。
         const topicId = goal ? undefined : msg.threadId;
         let place: 'topic' | 'main' | undefined;
         if (topicId) place = 'topic';
@@ -1752,7 +1765,7 @@ export function createOrchestrator(
           ? priorP.then((p) =>
               p && p.lastSeenAt === undefined
                 ? undefined
-                : pullFor({ stopAt: p?.lastSeenAt ?? 0, ...(p?.lastSeenAt ? {} : { enough: OPENING_MAX + (p?.seen?.length ?? 0) }) }),
+                : pullFor({ stopAt: p ? backfillFrom(p) : 0, ...(p?.lastSeenAt ? {} : { enough: OPENING_MAX + (p?.seen?.length ?? 0) }) }),
             )
           : Promise.resolve(undefined);
         // The topic's title for the record block's header (the registry never throws).
@@ -1800,6 +1813,8 @@ export function createOrchestrator(
         // codex's ~4000-char goal limit), and a resumed thread already carries codex's
         // own history.
         let pull = specHistory;
+        let streaming: SeenMark[] = [];
+        let woven: string[] | undefined;
         if (place && codexEmpty && prior && prior.lastSeenAt !== 0) {
           // The speculative pull stopped at the old session's watermark (or was
           // skipped): the new session needs the whole opening.
@@ -1808,7 +1823,7 @@ export function createOrchestrator(
         if (place && pull) {
           let history = codexEmpty
             ? pull.messages
-            : pull.messages.filter((m) => !isSeen(prior, m.messageId, m.createTime));
+            : pull.messages.filter((m) => isUnread(prior, m.messageId, m.createTime));
           const rootId = topicId && msg.rootId && msg.rootId !== msg.messageId ? msg.rootId : undefined;
           if (codexEmpty && rootId && !history.some((m) => m.messageId === rootId)) {
             // The topic's first message is no longer re-quoted every turn, so a new
@@ -1818,21 +1833,31 @@ export function createOrchestrator(
           }
           const kept = keepRecent(history, codexEmpty ? rootId : undefined, codexEmpty ? OPENING_MAX : BACKFILL_MAX);
           const earlier = pull.complete ? history.length - kept.length : 'some';
+          const now = msg.createTime || Date.now();
+          // Another bot's card still streaming is woven as not done, and read again
+          // next turn for its final answer (3.5), for ten minutes; one that never
+          // finishes is then taken as it was.
+          streaming = kept
+            .filter((m) => m.streaming && now - m.createTime < STREAMING_RECHECK_MS)
+            .map((m) => ({ id: m.messageId, at: m.createTime }));
+          woven = kept.map((m) => m.messageId);
           const rootTitle = rootId ? topicTitle(history.find((m) => m.messageId === rootId)?.text) : undefined;
           firstText = weaveRecordBlock(firstText, {
             place: { group: project?.name, me: channel.botIdentity?.name, ...(topicId ? { topic: { title: title ?? rootTitle } } : {}) },
             entries: kept,
             earlier,
-            now: msg.createTime || Date.now(),
+            now,
           });
-          log.info('intake', 'record-block', { place, lines: kept.length, earlier, opening: codexEmpty, ok: pull.ok });
+          log.info('intake', 'record-block', { place, lines: kept.length, earlier, opening: codexEmpty, ok: pull.ok, streaming: streaming.length });
         }
         // The watermark moves to the trigger only when everything before it reached
         // the session: the back-fill succeeded, or there is none (a resumed
         // session, or a multi group's main area, which keeps no session). After a
         // failed back-fill, or a goal (no record block woven), only the trigger
         // counts; a new session then restarts from 0 so its next turn pulls the
-        // whole opening. Written once the host accepts the turn (launchRun), not here.
+        // whole opening. The cards still streaming are recorded with an advance
+        // (session-store's `streaming`). Written once the host accepts the turn
+        // (launchRun), not here.
         const behind = place ? Boolean(pull && !pull.ok) : Boolean(goal && (msg.threadId || flat));
         let seenHow: SeenHow = 'advance';
         if (behind) seenHow = codexEmpty ? 'restart' : 'id';
@@ -1933,6 +1958,8 @@ export function createOrchestrator(
           replayText: extra?.replayText,
           seen: seenMark,
           seenHow,
+          streaming,
+          woven,
           // 编织完成 → turn/start 之间不再读盘：首轮直接用预取的会话记录
           // （新会话及旧单会话的缺失值由上面的 model/effort 补齐）。
           firstRec: prior ?? null,
@@ -4462,6 +4489,9 @@ export function createOrchestrator(
     /** The trigger, marked seen once the host accepts the first turn (see QueuedTurn.seen). */
     seen?: SeenMark;
     seenHow?: SeenHow;
+    /** The first turn's record block: cards still streaming, and the ids it carried (see QueuedTurn). */
+    streaming?: SeenMark[];
+    woven?: string[];
     /** single-session group: reply by quoting (no reply_in_thread / topic). */
     flat?: boolean;
     /** when admin/guest tiers are split: 'admin'|'guest' to namespace the
@@ -4715,6 +4745,8 @@ export function createOrchestrator(
         replayText: opts.replayText,
         seen: opts.seen,
         seenHow: opts.seenHow,
+        streaming: opts.streaming,
+        woven: opts.woven,
       };
       let replyTo = opts.replyTo;
       let replyInThread = opts.flat ? false : (opts.replyInThread ?? Boolean(opts.knownThreadId));
@@ -4984,8 +5016,9 @@ export function createOrchestrator(
             // The host took the input: only now do it and the history woven into
             // it count as seen (a refused turn/start or a crash before here leaves
             // both for the next back-fill and a re-push).
-            if (unseen && topicThreadId) markSeen(topicThreadId, unseen, currentTurn.seenHow);
+            if (unseen && topicThreadId) markSeen(topicThreadId, unseen, currentTurn.seenHow, currentTurn.streaming);
             unseen = undefined;
+            if (currentTurn.woven?.length) state.woven = new Set(currentTurn.woven);
             // Host accepted the first turn. Title generation now overlaps the
             // remainder of that turn; the binding was persisted before this loop.
             beginSessionTitle();
@@ -5193,6 +5226,11 @@ export function createOrchestrator(
             log.info('intake', 'queue-dropped', { depth: state.queue.length, killed, procDead, interrupted });
           }
           break;
+        }
+        // A message queued while this run's back-fill was pulled may be a line of
+        // its record block already (see ActiveState.woven): it is not run again.
+        while (state.queue[0]?.seen && state.woven?.has(state.queue[0].seen.id)) {
+          log.info('intake', 'queued-seen-skipped', { msgId: state.queue.shift()!.seen!.id });
         }
         if (state.queue.length === 0) break;
         settleTurn?.(); // moving on: whatever queued meanwhile made the retry stale

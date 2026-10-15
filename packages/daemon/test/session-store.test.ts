@@ -3,11 +3,13 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  backfillFrom,
   clearSessionTitleJobKey,
   createSessionTitleJob,
   getSession,
   getSessionTitleJob,
   isSeen,
+  isUnread,
   listSessions,
   listSessionTitleJobs,
   nextSeen,
@@ -288,6 +290,19 @@ describe('watermark (s09)', () => {
     expect(nextSeen(many, { id: 'trigger', at: 50 }, 'advance').seen?.map((m) => m.id)).toEqual(['m49', 'trigger', ...Array.from({ length: 20 }, (_, i) => `m${i + 50}`)]);
     // An interjection the watermark already covers adds nothing.
     expect(nextSeen({ lastSeenAt: 500 }, { id: 'old', at: 400 }, 'id')).toEqual({ lastSeenAt: 500, seen: [] });
+  });
+
+  it('remembers cards still streaming on a fresh run, keeps them on an id mark, and reads them again (s14)', () => {
+    const card = { id: 'card', at: 400 };
+    const advanced = nextSeen({ lastSeenAt: 300, seen: [] }, { id: 't', at: 500 }, 'advance', [card]);
+    expect(advanced).toEqual({ lastSeenAt: 500, seen: [{ id: 't', at: 500 }], streaming: [card] });
+    expect(nextSeen(advanced, { id: 'steer', at: 600 }, 'id').streaming).toBeUndefined(); // left as it is
+    expect(nextSeen(advanced, { id: 't2', at: 700 }, 'advance')).toMatchObject({ lastSeenAt: 700, streaming: [] });
+    expect(nextSeen({ lastSeenAt: 300 }, { id: 't', at: 500 }, 'advance')).not.toHaveProperty('streaming');
+    expect(nextSeen(advanced, { id: 'older', at: 450 }, 'advance').streaming).toBeUndefined(); // an older advance landing late
+    expect(backfillFrom(advanced)).toBe(400);
+    expect(backfillFrom({ lastSeenAt: 500 })).toBe(500);
+    expect([isUnread(advanced, 'card', 400), isUnread(advanced, 'other', 450), isUnread(advanced, 'new', 501)]).toEqual([true, false, true]);
   });
 
   it('restart goes back to 0 and forgets older marks', () => {

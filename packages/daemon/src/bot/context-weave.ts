@@ -3,7 +3,7 @@ import { log } from '../core/logger';
 import { labelScope } from '../config/scopes';
 import { scopeDenial, type FeishuErrorBody } from '../utils/feishu-error';
 import { extractSendCardText, isSendCard, isStreamingCard } from './card-content';
-import type { NameBook } from './names';
+import { withDeadline, type NameBook } from './names';
 
 /**
  * Inbound CONTEXT weaving — give codex the上下文 a Feishu @ alone doesn't carry.
@@ -36,7 +36,8 @@ import type { NameBook } from './names';
  * 99991672 rejection, which a pull logs as a structured `thread-context-failed`
  * / `chat-context-failed` warning naming the scope (see {@link scopeDenial}).
  * Every fetch is best-effort: a deleted message, a missing scope, or a timeout
- * is logged and skipped, never thrown — a missing block must not break the turn.
+ * ({@link FETCH_DEADLINE_MS}; the SDK's calls have none) is logged and skipped,
+ * never thrown — a missing block must not break the turn.
  *
  * {@link sanitizeContext} is the SINGLE sanitization boundary for this
  * uploader-controlled text (mirrors media.cleanFileName): it strips control
@@ -53,10 +54,16 @@ const BOT_LINE_MAX = 300;
 export const OPENING_MAX = 20;
 /** Lines a back-fill into an existing session carries; older ones are only counted. */
 export const BACKFILL_MAX = 40;
+/** How long another bot's card that is still streaming gets read again on later
+ * turns (session-store's `streaming`); after that it is taken as it was. */
+export const STREAMING_RECHECK_MS = 10 * 60_000;
 /** Feishu's page_size ceiling for one newest-first page. */
 const PAGE_SIZE = 50;
 /** Pages pulled at most per turn (500 messages); the rest is logged as cut. */
 const PAGE_CAP = 10;
+/** How long one pull, all its pages together, or one lookup may take: the turn
+ * waits for it, and a stuck Feishu call would otherwise hold the turn forever. */
+const FETCH_DEADLINE_MS = 10_000;
 /** Pulls and lookups get cards in the send format, so another bot's answer is
  * readable; without it a 2.0 or CardKit card is only its title (e10). */
 const CARD_CONTENT = 'user_card_content';
@@ -147,10 +154,14 @@ export async function fetchQuotedMessage(
   names?: NameBook,
 ): Promise<ContextMessage | undefined> {
   try {
-    const res = await channel.rawClient.im.v1.message.get({
+    const res = await withDeadline(channel.rawClient.im.v1.message.get({
       path: { message_id: messageId },
       params: { with_sender_name: true, card_msg_content_type: CARD_CONTENT },
-    });
+    }), FETCH_DEADLINE_MS);
+    if (!res) {
+      log.warn('intake', 'quote-fetch-failed', { messageId, err: 'timeout' });
+      return undefined;
+    }
     const items = (res.data as { items?: RawMsgItem[] } | undefined)?.items ?? [];
     const item = items[0];
     if (!item || item.deleted) return undefined;
@@ -192,9 +203,14 @@ export interface PullOpts {
  *     only the most recent ones are woven).
  *   - `before`: only messages older than this (the trigger's createTime), so a
  *     message that arrives as its own turn later is not woven twice.
- * This bot's own replies (already in the session), system notices, deleted,
- * empty and `excludeMessageId` messages are dropped, except `keepId` (the
- * topic's first message, kept even when this bot sent it). Other bots stay.
+ * This bot's own replies, system notices, deleted, empty and
+ * `excludeMessageId` messages are dropped, except `keepId` (the topic's first
+ * message, kept even when this bot sent it). Other bots stay. Own replies are
+ * dropped as already in the session (product.md 3.5); in a group split into
+ * admin and guest tiers that holds only for the tier that answered, so each
+ * tier's session sees the other's questions without the answers. The guest
+ * session must not get the admin one's answers; the admin session missing the
+ * guest answers is accepted.
  * Filtering by what the session has already seen is the caller's job
  * (session-store.isSeen). Never throws: a failure logs and returns `ok: false`.
  */
@@ -228,10 +244,11 @@ async function pullContext(channel: LarkChannel, c: Container, opts: PullOpts): 
   if (c.type === 'chat' && stopAt > 0) window.start_time = String(Math.floor(stopAt / 1000));
   if (c.type === 'chat' && opts.before) window.end_time = String(Math.ceil(opts.before / 1000));
   let pageToken: string | undefined;
+  const deadline = Date.now() + FETCH_DEADLINE_MS;
   try {
     const me = meOf(channel);
     for (let page = 0; page < PAGE_CAP; page++) {
-      const res = await channel.rawClient.im.v1.message.list({
+      const res = await withDeadline(channel.rawClient.im.v1.message.list({
         params: {
           container_id_type: c.type,
           container_id: c.id,
@@ -242,7 +259,17 @@ async function pullContext(channel: LarkChannel, c: Container, opts: PullOpts): 
           ...window,
           ...(pageToken ? { page_token: pageToken } : {}),
         },
-      });
+      }), deadline - Date.now());
+      if (!res) {
+        // Out of time. The pages read so far hold the most recent messages and are
+        // kept, as at the page cap; with none, the pull fails and the watermark stays.
+        if (page > 0) {
+          log.info('intake', `${c.type}-context-timeout`, { ...where(c), pages: page, found: found.length });
+          return done(false);
+        }
+        log.warn('intake', `${c.type}-context-failed`, { ...where(c), reason: 'timeout' });
+        return failedPull();
+      }
       // The SDK only throws on HTTP errors; a 200 with a non-zero code is a failure too.
       if (typeof res.code === 'number' && res.code !== 0) {
         warnContextFailed(c, res);
@@ -259,7 +286,7 @@ async function pullContext(channel: LarkChannel, c: Container, opts: PullOpts): 
         if (
           !it.deleted &&
           kind !== undefined && // drop system notices
-          (kind !== 'self' || m.messageId === opts.keepId) && // the bot's own replies are already in the session
+          (kind !== 'self' || m.messageId === opts.keepId) && // the bot's own replies (see above)
           !(c.type === 'chat' && it.thread_id && it.root_id && it.root_id !== it.message_id) && // a topic reply
           m.messageId !== opts.excludeMessageId && // drop the triggering @ message
           (!opts.before || m.createTime < opts.before) &&

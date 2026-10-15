@@ -43,6 +43,11 @@ export interface SessionRecord {
    * cannot cover them, since messages the bot skipped (an @ to someone else)
    * sit in between. Older records lack it. */
   seen?: SeenMark[];
+  /** Other bots' cards that were still streaming when a back-fill wove them, at
+   * or before {@link lastSeenAt}: the next back-fill reaches back to the oldest
+   * and weaves them again, so the session gets their final answer (product.md
+   * 3.5). Older records lack it. */
+  streaming?: SeenMark[];
   /** The context meter's last reading, saved at the end of a turn so the first
    * card after a restart is not blank. Read only while `sessionId` still matches
    * the record's: a rebuilt, cleared or resumed session starts over. */
@@ -81,6 +86,18 @@ export function isSeen(rec: Pick<SessionRecord, 'lastSeenAt' | 'seen'> | undefin
   return isDelivered(rec, id) || (rec?.lastSeenAt !== undefined && at <= rec.lastSeenAt);
 }
 
+/** Whether a back-fill should weave the message (again): not seen yet, or a
+ * card the session saw while it was still streaming. */
+export function isUnread(rec: Pick<SessionRecord, 'lastSeenAt' | 'seen' | 'streaming'> | undefined, id: string, at: number): boolean {
+  return !isSeen(rec, id, at) || Boolean(rec?.streaming?.some((s) => s.id === id));
+}
+
+/** Where the next back-fill stops paging back: the watermark, or the oldest
+ * card still streaming before it. */
+export function backfillFrom(rec: Pick<SessionRecord, 'lastSeenAt' | 'streaming'>): number {
+  return Math.min(rec.lastSeenAt ?? 0, ...(rec.streaming ?? []).map((s) => s.at));
+}
+
 /**
  * The watermark after `mark` reached the session (pure; apply it through
  * {@link patchSession}'s function form so concurrent marks never lose each other):
@@ -89,12 +106,15 @@ export function isSeen(rec: Pick<SessionRecord, 'lastSeenAt' | 'seen'> | undefin
  *   - `id`: only this message did (an interjection, a queued turn, a failed back-fill).
  *   - `restart`: a new session whose back-fill failed: start over from 0 so
  *     the next turn back-fills the whole topic.
+ * The newest `advance`, and `restart`, also replace the cards to read again
+ * with `streaming` (see {@link SessionRecord.streaming}); `id` keeps them.
  */
 export function nextSeen(
-  rec: Pick<SessionRecord, 'lastSeenAt' | 'seen'>,
+  rec: Pick<SessionRecord, 'lastSeenAt' | 'seen' | 'streaming'>,
   mark: SeenMark,
   how: SeenHow,
-): Pick<SessionRecord, 'lastSeenAt' | 'seen'> {
+  streaming: SeenMark[] = [],
+): Pick<SessionRecord, 'lastSeenAt' | 'seen' | 'streaming'> {
   const base = how === 'restart' ? 0 : rec.lastSeenAt;
   const lastSeenAt = how === 'advance' ? Math.max(base ?? 0, mark.at) : base;
   const prior = how === 'restart' ? [] : (rec.seen ?? []);
@@ -102,7 +122,11 @@ export function nextSeen(
     .filter((s) => lastSeenAt === undefined || s.at >= lastSeenAt)
     .sort((a, b) => a.at - b.at)
     .slice(-SEEN_MAX);
-  return { lastSeenAt, seen };
+  // The newest advance, or a restart, decides which cards to read again. Set only
+  // when there is something to set or to clear (patchSession skips undefined).
+  const newest = how === 'restart' || (how === 'advance' && lastSeenAt === mark.at);
+  const cards = newest && (streaming.length > 0 || (rec.streaming?.length ?? 0) > 0) ? { streaming } : {};
+  return { lastSeenAt, seen, ...cards };
 }
 
 export type SessionTitlePhase =
