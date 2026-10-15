@@ -53,7 +53,7 @@ import {ConversationPanel} from './management/ConversationPanel';
 import {ShareUsagePanel, UsagePanel} from './management/UsagePanel';
 import {EnvironmentPanel} from './management/EnvironmentPanel';
 import {SetupChecklist} from './setup/SetupChecklist';
-import {LoginServiceRow, toggleService} from './setup/service-toggle';
+import {LoginServiceRow, deviceTitle, toggleService} from './setup/service-toggle';
 import {GrantStep, ScopeGrantRow, jobToCancel, withRegisteredAgent, type RegisterModal} from './setup/GrantStep';
 import {MachinePanel} from './management/MachinePanel';
 import {DiagnosticsPanel} from './management/DiagnosticsPanel';
@@ -844,11 +844,7 @@ function DesktopApp() {
               <SettingsGroup label="这台设备">
                 <SettingsRow
                   icon={Monitor}
-                  title={
-                    snapshot.application.platform === "macos"
-                      ? "这台 Mac"
-                      : "这台 Windows 电脑"
-                  }
+                  title={deviceTitle(snapshot.application.platform)}
                   description="本地使用，无需产品账号。"
                   value={`v${snapshot.application.version}`}
                 />

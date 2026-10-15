@@ -126,15 +126,26 @@ export const groupSchema = z.object({ id: groupIdSchema, name: z.string(), avata
 export type Group = z.infer<typeof groupSchema>;
 /** Codex only: how its version compares with the minimum and the tested version. */
 export const codexCompatibilitySchema = z.object({ status: z.enum(["ok", "tooOld", "newer", "unknown"]), minimum: z.string(), verified: z.string() });
+/** `bwrap` found on the daemon's PATH, `socat` too, and whether a trial `bwrap --unshare-all` ran; `detail` names the
+ * setting that is 0 (`disabled`) or the first stderr line (`failed`). */
+export const claudeSandboxSchema = z.object({
+  bwrap: z.string().nullable(), socat: z.boolean(),
+  userns: z.enum(["ok", "apparmor", "disabled", "failed", "unchecked"]), detail: z.string().optional(),
+});
+export type ClaudeSandbox = z.infer<typeof claudeSandboxSchema>;
 export const toolStateSchema = z.object({
   tool: toolSchema, installation: z.enum(["missing", "installed", "unknown"]),
   authentication: z.enum(["signedOut", "signedIn", "notRequired", "unknown"]),
   version: z.string().nullable(), message: z.string().optional(),
   compatibility: codexCompatibilitySchema.optional(),
+  /** Claude on Linux: what its bubblewrap sandbox for the qa and write modes needs (s20a). */
+  sandbox: claudeSandboxSchema.optional(),
 });
 export type ToolState = z.infer<typeof toolStateSchema>;
 export const serviceStateSchema = z.enum(["not-installed", "running", "stopped", "disabled", "detached", "conflict", "unknown"]);
 export type ServiceState = z.infer<typeof serviceStateSchema>;
+/** Linux: whether systemd keeps this account's user services running without a login session (s20a). */
+export const lingerStateSchema = z.enum(["on", "off", "unknown"]);
 /** Why a service install or uninstall failed, read from the transaction's detail (daemon service/action-report.ts). */
 export const serviceActionReasonSchema = z.enum(["busy", "turned-off", "replace-running", "distribution", "translocated", "interrupted", "other-root", "manager-unavailable", "other"]);
 export type ServiceActionReason = z.infer<typeof serviceActionReasonSchema>;
@@ -157,6 +168,8 @@ export const applicationServiceSchema = z.object({
   blocked: z.enum(["development", "translocated"]).optional(),
   skipped: z.boolean(),
   action: serviceActionReportSchema.optional(),
+  /** Linux: linger, and a sentence on why the user manager cannot be asked. */
+  linger: lingerStateSchema.optional(), hint: z.string().optional(),
 });
 export type ApplicationService = z.infer<typeof applicationServiceSchema>;
 const jobBase = { id: jobIdSchema, type: z.enum(["registerAgent", "installCodex", "loginCodex"]) };
@@ -175,7 +188,7 @@ export const desktopSnapshotSchema = z.object({
   revision: z.number(), observedAt: z.number(), stale: z.boolean(), host: hostStateSchema,
   agents: z.array(agentSchema), groups: z.array(groupSchema), memberships: z.array(membershipSchema),
   tools: z.array(toolStateSchema), jobs: z.array(jobSchema),
-  application: z.object({ platform: z.enum(["macos", "windows", "unsupported"]), version: z.string(), loginItem: z.boolean(), dataPath: z.string(), service: applicationServiceSchema.optional() }),
+  application: z.object({ platform: z.enum(["macos", "linux", "unsupported"]), version: z.string(), loginItem: z.boolean(), dataPath: z.string(), service: applicationServiceSchema.optional() }),
 });
 export type DesktopSnapshot = z.infer<typeof desktopSnapshotSchema>;
 export const folderChoiceSchema = z.object({ token: folderTokenSchema, displayPath: z.string() });

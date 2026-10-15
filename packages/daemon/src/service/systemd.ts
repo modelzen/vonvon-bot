@@ -129,7 +129,7 @@ export function createSystemdService(options: { root: string }, overrides: Parti
   async function observeUnit(): Promise<UnitObservation> {
     try {
       const result = await d.run(['show', '-p', 'LoadState', '-p', 'FragmentPath', '-p', 'MainPID', unitName], 30_000);
-      if (!result.ok || result.status !== 0) throw new Error(result.stderr || 'systemctl show failed');
+      if (!result.ok || result.status !== 0) throw new Error(result.stderr.trim() || 'systemctl show failed');
       const fields = new Map<string, string>();
       for (const line of result.stdout.trimEnd().split('\n')) {
         const match = /^(LoadState|FragmentPath|MainPID)=(.*)$/.exec(line);

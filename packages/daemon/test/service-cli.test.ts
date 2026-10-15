@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { runServiceCommand, runServiceStatus, type ServiceCommandDependencies } from '../src/cli/commands/service';
+import { afterLinuxInstall, LINGER_QUESTION, runServiceCommand, runServiceStatus, type AfterInstallDependencies, type LingerChoice, type ServiceCommandDependencies } from '../src/cli/commands/service';
 import { acquireMutex, closeMutex } from '../src/config/data-access';
 import type { PidLockInfo } from '../src/server/pid-lock';
 import { classifyServiceFailure, readServiceActionRecord } from '../src/service/action-report';
@@ -18,11 +18,11 @@ async function helper(owners: (PidLockInfo | null)[] = [null]) {
   const root = await mkdtemp(join(tmpdir(), 'vonvon-service-cli-')); roots.push(root);
   const reads = [...owners];
   const start = vi.fn(async (_port: number) => ({ pid: 4242 }));
-  const deps: Partial<ServiceCommandDependencies> = { root, start, now: () => 1000, readOwner: async () => (reads.length > 1 ? reads.shift() : reads[0]) ?? null };
+  const deps: Partial<ServiceCommandDependencies> = { root, start, now: () => 1000, linux: undefined, readOwner: async () => (reads.length > 1 ? reads.shift() : reads[0]) ?? null };
   return { root, start, deps };
 }
 /** No data root: the s07 behaviour, without the mutex or the report. */
-const absent: Partial<ServiceCommandDependencies> = { root: join(tmpdir(), 'vonvon-service-cli-absent', 'root'), readOwner: async () => null };
+const absent: Partial<ServiceCommandDependencies> = { root: join(tmpdir(), 'vonvon-service-cli-absent', 'root'), readOwner: async () => null, linux: undefined };
 const daemon: PidLockInfo = { pid: 31, startedAt: '2026-10-15T00:00:00.000Z', listen: '127.0.0.1:43210' };
 
 it.each(['installed', 'already-installed'] as const)('install prints %s and succeeds', async kind => {
@@ -80,6 +80,74 @@ it('status prints the state, its next step and the files, or JSON', async () => 
   expect(String(write.mock.calls[0]?.[0])).toMatch(/^launchd \(macOS\) com\.vonvon\.bot\.daemon: running \(PID 9\)\nRunning under the service manager\.\nDefinition: .*com\.vonvon\.bot\.daemon\.plist\nLogs: /);
   await runServiceStatus(true, { status: async () => status });
   expect(JSON.parse(String(write.mock.calls[1]?.[0]))).toMatchObject({ state: 'running', pid: '9', installed: true });
+});
+
+describe('Linux: linger and the user manager (s20a)', () => {
+  const guide = ['网页地址：', '  http://127.0.0.1:41234/'];
+  function after(state: 'on' | 'off' | 'unknown', fields: Partial<AfterInstallDependencies> = {}) {
+    let out = '';
+    const states = [state];
+    const d: AfterInstallDependencies = {
+      readLinger: vi.fn(async () => ({ state: states.shift() ?? state, ...(state === 'unknown' ? { detail: '找不到 loginctl' } : {}) })),
+      enableLinger: vi.fn(async () => ({ ok: true as const })), ask: vi.fn(async () => true), interactive: true, user: 'ops',
+      guide: async () => guide, write: text => { out += text; }, ...fields,
+    };
+    return { d, out: () => out, run: (choice: LingerChoice) => afterLinuxInstall(choice, d) };
+  }
+  const OFF = '没开 linger：退出最后一个登录会话后 bot 会停，开机也不启动。要开就运行 loginctl enable-linger（不行再用 sudo loginctl enable-linger ops）。';
+  it.each([
+    ['on', 'ask', true, ['linger 已开：开机就启动，退出 SSH 以后 bot 也还在跑。'], false, false],
+    ['off', 'ask', true, ['已开 linger。'], true, true],
+    ['off', 'ask', false, [OFF], true, false],
+    ['off', 'off', true, [OFF], false, false],
+    ['off', 'on', true, ['已开 linger。'], false, true],
+    ['unknown', 'ask', true, ['查不到 linger 的状态：找不到 loginctl。要开就运行 loginctl enable-linger（不行再用 sudo loginctl enable-linger ops）。'], false, false],
+  ] as const)('linger %s with %s and an answer of %s', async (state, choice, answer, lines, asked, enabled) => {
+    const h = after(state, { ask: vi.fn(async () => answer) });
+    await expect(h.run(choice)).resolves.toBe(true);
+    expect(h.out()).toBe([...lines, ...guide, ''].join('\n'));
+    expect(h.d.ask).toHaveBeenCalledTimes(asked ? 1 : 0);
+    if (asked) expect(h.d.ask).toHaveBeenCalledWith(LINGER_QUESTION);
+    expect(h.d.enableLinger).toHaveBeenCalledTimes(enabled ? 1 : 0);
+  });
+  it('asks nobody without a terminal, and fails only --linger that did not take', async () => {
+    const piped = after('off', { interactive: false });
+    await piped.run('ask');
+    expect(piped.d.ask).not.toHaveBeenCalled();
+    expect(piped.d.enableLinger).not.toHaveBeenCalled();
+    const failed = after('off', { enableLinger: vi.fn(async () => ({ ok: false as const, detail: 'Access denied' })) });
+    await expect(failed.run('on')).resolves.toBe(false);
+    expect(failed.out()).toBe(['没开成：Access denied。用管理员权限运行：sudo loginctl enable-linger ops', ...guide, ''].join('\n'));
+    await expect(after('off', { enableLinger: failed.d.enableLinger }).run('ask')).resolves.toBe(true);
+  });
+  const linux = (fields: Partial<NonNullable<ServiceCommandDependencies['linux']>> = {}) => ({ ...absent, linux: { afterInstall: vi.fn(async () => true), afterUninstall: vi.fn(async () => undefined), hint: vi.fn(async () => undefined), ...fields } });
+  it('runs the Linux step after a successful install only, and exits 1 when it says so', async () => {
+    vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    const ok = linux();
+    await runServiceCommand('install', { install: vi.fn(async () => outcome('installed')), uninstall: vi.fn() }, { linger: 'on' }, ok);
+    expect(ok.linux.afterInstall).toHaveBeenCalledWith('on');
+    const refused = linux();
+    await expect(runServiceCommand('install', { install: vi.fn(async () => outcome('install_refused')), uninstall: vi.fn() }, {}, refused)).rejects.toThrow('install_refused');
+    expect(refused.linux.afterInstall).not.toHaveBeenCalled();
+    await expect(runServiceCommand('install', { install: vi.fn(async () => outcome('installed')), uninstall: vi.fn() }, {}, linux({ afterInstall: async () => false }))).rejects.toThrow('服务已经装好，只是 linger 没开成。');
+  });
+  it('explains an unavailable user manager and a linger left on by uninstall', async () => {
+    const hint = '当前终端没有 XDG_RUNTIME_DIR（用 sudo -u 或 su 切到这个账号时常见）。';
+    const failed = { install: vi.fn(async () => outcome('install_refused', { detail: 'User manager unavailable: Failed to connect to bus: No medium found' })), uninstall: vi.fn() };
+    await expect(runServiceCommand('install', failed, {}, linux({ hint: async () => hint }))).rejects.toThrow(`install_refused: User manager unavailable: Failed to connect to bus: No medium found\n${hint}`);
+    const write = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    const kept = 'linger 没关：这个账号上别的用户服务可能也要它。不需要的话运行 loginctl disable-linger。';
+    await runServiceCommand('uninstall', { install: vi.fn(), uninstall: vi.fn(async () => outcome('uninstalled', { detail: 'Uninstalled' })) }, {}, linux({ afterUninstall: async () => kept }));
+    expect(write).toHaveBeenLastCalledWith(`uninstalled: Uninstalled\n${kept}\n`);
+  });
+  it('status prints the hint under the manager error and the linger line', async () => {
+    const write = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    const status = serviceStatus({ ...observed, platformName: 'systemd (Linux)', registration: ours, manager: { kind: 'unknown', detail: 'Failed to connect to bus: No medium found' }, owner: null, running: false });
+    await runServiceStatus(false, { status: async () => ({ ...status, hint: '当前终端没有 XDG_RUNTIME_DIR。', linger: { state: 'on' } }) });
+    expect(String(write.mock.calls[0]?.[0])).toMatch(/: unknown\nCannot ask systemd \(Linux\): Failed to connect to bus: No medium found\n当前终端没有 XDG_RUNTIME_DIR。\nlinger 已开：开机就启动，退出 SSH 以后 bot 也还在跑。\nDefinition: /);
+    await runServiceStatus(true, { status: async () => ({ ...status, linger: { state: 'off' } }) });
+    expect(JSON.parse(String(write.mock.calls[1]?.[0]))).toMatchObject({ state: 'unknown', linger: { state: 'off' } });
+  });
 });
 
 describe('the helper run (s08)', () => {
