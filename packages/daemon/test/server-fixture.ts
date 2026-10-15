@@ -7,6 +7,12 @@ import { eventSchema, replyEnvelopeSchema, serverInfoSchema, type Request, type 
 import type { AdminService } from '../src/admin/service';
 import type { ShutdownControl } from '../src/host/lifecycle';
 import type { EnvironmentServiceOptions } from '../src/environment/service';
+import type { startApi as StartApi } from '../src/server/http';
+
+type StartApiOptions = Parameters<typeof StartApi>[0];
+/** Linux refuses the service switch, so no test spawns `vonvon service install` from a Mac runner; and with no
+ * manager the snapshot gets no service field, whose first real read would publish an event at a random moment. */
+const noServiceManager: StartApiOptions['serviceActions'] = { platform: 'linux', readService: async () => ({ supported: false, installed: false, running: false }) };
 
 const testHome = vi.hoisted(() => ({ current: '' }));
 vi.mock('../src/config/paths', () => ({ paths: { get appDir() { return testHome.current; } } }));
@@ -34,12 +40,12 @@ export function fakeService(overrides: Partial<AdminService> = {}): AdminService
     ...overrides,
   };
 }
-export async function startFixture(service = fakeService(), environmentOptions?: EnvironmentServiceOptions) {
+export async function startFixture(service = fakeService(), environmentOptions?: EnvironmentServiceOptions, serviceActions: StartApiOptions['serviceActions'] = noServiceManager) {
   const home = await mkdtemp(join(tmpdir(), 'vonvon-api-'));
   testHome.current = home;
   const { startApi } = await import('../src/server/http');
   const control: ShutdownControl = { requested: false, waitForRequest: () => new Promise<void>(() => {}), dispose: () => {}, requestStop: vi.fn(), requestRestart: vi.fn(), completeShutdown: release => release() };
-  const api = await startApi({ service, port: 0, control, environmentOptions });
+  const api = await startApi({ service, port: 0, control, environmentOptions, serviceActions });
   const credential = (await readFile(join(home, 'local-credential'), 'utf8')).trim();
   return { api, home, credential, control, close: async () => { await api.close(); await rm(home, { recursive: true, force: true }); } };
 }

@@ -190,7 +190,7 @@ else process.exit(0);
         { type: 'profileInit', name: 'test' }, { type: 'profileInitStatus' }, { type: 'profileInitCancel', operationId },
       ],
       machine: [
-        { type: 'status' }, { type: 'repairCli' }, { type: 'service', action: 'install' }, { type: 'startHost' }, { type: 'stopHost' }, { type: 'logs' },
+        { type: 'status' }, { type: 'repairCli' }, { type: 'service', action: 'install' }, { type: 'setServiceSkipped', skipped: false }, { type: 'startHost' }, { type: 'stopHost' }, { type: 'logs' },
         { type: 'checkCoreUpdate' }, { type: 'applyCoreUpdate' }, { type: 'coreUpdateStatus' }, { type: 'checkDesktopUpdate' }, { type: 'openReleases' }, { type: 'installDesktopUpdate' },
       ],
     };

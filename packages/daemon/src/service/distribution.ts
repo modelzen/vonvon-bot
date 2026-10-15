@@ -57,6 +57,9 @@ export function classifyDistribution(root:string, globalRoot?:string):Distributi
   return unknown;
 }
 
+/** macOS runs a quarantined app from a random read-only copy (App Translocation); a service pointing there breaks on the next login. */
+export const isTranslocated = (path:string):boolean => path.includes('/AppTranslocation/');
+
 export function nearestPackageRoot(modulePath:string):string {
   for (let dir=dirname(modulePath);;dir=dirname(dir)) {
     if (existsSync(join(dir,'package.json'))) return dir;

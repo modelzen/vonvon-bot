@@ -8,7 +8,7 @@ import type { HostEndpoint } from '../host/discovery';
 import { isStaleOwner, readRunningPidLock, type StaleOwner } from '../server/pid-lock';
 import { stopVerifiedOwner, verifyPidLockOwner } from '../server/owner-verification';
 import { renderDefinition, type Definition } from './definitions';
-import { runtimeDistribution } from './distribution';
+import { isTranslocated, runtimeDistribution } from './distribution';
 import { createServiceDrain, type DrainFailure, type DrainScope, type OwnerIdentity } from './drain';
 import { resolveServiceRoot, serviceTarget, type CanonicalRoot } from './identity';
 import { readDefinitionBytes, readRegistration, type Registration } from './registration';
@@ -95,6 +95,7 @@ function freePort(): Promise<number> {
   });
 }
 
+export const TRANSLOCATED_REFUSAL = 'Vonvon Bot is running from a temporary location (App Translocation). Move it to the Applications folder, open it from there, then install the service.';
 const TURNED_OFF_HINT = ' launchd has not loaded the service; if it is turned off in System Settings > General > Login Items & Extensions, turn it on.';
 const detailOf = (error: unknown): string => error instanceof Error ? error.message : String(error);
 const sameOwner = (a: OwnerIdentity | null, b: OwnerIdentity | null): boolean => a === null ? b === null : b !== null && a.pid === b.pid && a.startedAt === b.startedAt;
@@ -296,9 +297,10 @@ export function createLaunchdService(options: { root: string }, overrides: Parti
       let stoppedDetached = '';
       try {
         const domainResult = await d.run(['print', domain], 30_000);
-        if (!domainResult.ok) throw new Error(domainResult.stderr || 'GUI domain unavailable');
+        if (!domainResult.ok) throw new Error(`GUI domain unavailable${domainResult.stderr.trim() ? `: ${domainResult.stderr.trim()}` : ''}`);
         const distribution = await d.distribution();
         if (distribution.kind !== 'bundled' && distribution.kind !== 'global-npm') throw new Error('Distribution cannot install a service');
+        if (isTranslocated(d.executable) || isTranslocated(distribution.cliPath)) throw new Error(TRANSLOCATED_REFUSAL);
         const current = await registration(s);
         // An unrecognized plist under our own name is an older format: replace it, keeping its bytes for rollback.
         if (current.kind === 'other-root') throw new Error(registrationDetail(current));

@@ -252,7 +252,8 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | [x] | s06 | 注册服务后只由服务管理器拉起 daemon | 从 #285 搬启动路由（约 120 行源码加测试）：拿锁前先读注册，`daemon start` 改请服务管理器启动；修 #287（3.10） | 1000 | s05b | 子进程、并发、关闭清理、错误路径 | 已注册服务时 launchd 拉起的多余进程退出 0、不反复重启；持锁进程被 kill -9、PID 被复用后服务仍会重试 |
 | [x] | s07 | vonvon service install、uninstall、status | darwin 用 launchd、linux 用 systemd；装服务前先排空自己起的分离 daemon；快照和 RPC 读真实状态（3.10） | 700 | s06、s02、e06 | 子进程、错误路径、关闭清理、macOS 原生 | 打包版执行 install：plist 写入并起来，`daemon stop` 后不再拉起，注销再登录会起来，没有 Dock 图标，已有分离 daemon 时马上接管 |
 | [x] | s07a | 终端里用 vonvon 管 bot 和群 | vonvon bot list、bot status（清单各步的状态）、group list、group joined（查已加入的群）、group pending、group bind（文件夹、Codex 或 Claude、会话方式）、settings get 和 settings set（bot、群、会话的各节设置）；走网页端同一套本机接口和本机凭据，人看的输出加 --json；不做 agent 的令牌那条路（3.7 第 1 条、3.10） | 1111 | s07 | 错误路径 | 无 |
-| [ ] | s08 | 桌面端的"登录电脑时启动"和清单里的这一步 | 桌面端调打包的 CLI 装卸服务；清单加"登录电脑时自动运行 bot（推荐）"，跳过就起分离 daemon 并提示；删桌面端的 Windows 代码；Linux 上不显示"登录时启动"开关；本文第 10 节写卸载步骤（3.10） | 1000 | s07、s04 | 子进程、macOS 原生、错误路径 | 先在 Mac 网页端、再在真实窗口里：开关状态和 `launchctl print` 一致，退出 app 后 bot 在线，app 挪走再挪回能恢复，换新版后 daemon 跑新版本 |
+| [ ] | s08a | 网页里的"登录电脑时启动"和清单里的这一步 | `vonvon service install`、`uninstall` 加 `--keep-running`；daemon 的 machine RPC 先回复、再起分离的助手进程跑这条命令（只在 macOS）；快照带服务状态、"跳过"和最近一次操作的结果；清单在"执行工具"后加"后台运行"："登录电脑时自动运行 bot（推荐）"，跳过就记下来并提示；"应用与启动"页的开关网页里也能用，只在 macOS 显示；Linux 上这一步只读，写明终端命令；`vonvon bot status` 也列这一步（3.1 第 4 条、3.10） | 880 | s07、s04 | 子进程、并发、错误路径、macOS 原生 | 只用网页端，`npm i -g` 装 PR 的打包 CLI，临时 `VONVON_HOME`：打开后页面重连到原地址，`launchctl print` 的 PID 和 `daemon status` 一致；关掉后 launchd 里没有这个任务，原端口上起了分离 daemon；新数据目录点跳过不写 plist；在"允许在后台"里关掉后显示"已在系统设置里关掉"；两个标签页同时点打开，一个提示正在进行；`npm run build` 的开发版显示"开发版不能装"；服务里跑着时关掉，助手进程挺过 bootout，结果是已卸载 |
+| [ ] | s08b | 桌面端的"登录电脑时启动"，app 挪走或换新版后修好服务，删桌面端的 Windows 代码 | 桌面端用自己的 Electron 起同一个助手命令，等它做完再接回 daemon；启动时发现 app 挪过位置、换了新版本或定义是旧格式，先停 daemon 再重装服务；删桌面端按注册读 `loginItem` 的覆盖和 Windows 代码；本文第 10 节写卸载步骤（3.10） | 875 | s08a | 子进程、macOS 原生、错误路径 | 装在"应用程序"里的打包版、临时 HOME：窗口里开关没有"连接断开"弹窗，和 `launchctl print` 一致；退出 app 后服务还在跑；服务跑着时把 app 挪到 `~/Applications` 再打开，plist 重写、服务恢复，挪回来也恢复；换成升了版本号的包后打开，`daemon status` 是新版本、新 PID；签名版在"允许在后台"里显示什么 |
 
 开工要点：
 - s03：nvm 装的 codex 从 Finder 打开时，PATH 里没有那个 Node 版本的目录，`#!/usr/bin/env node` 起不来。已改：起 codex 子进程（查版本、app-server、装完托管副本后的版本检查）时，PATH 补上 codex 所在的目录和 s02 的工具目录。
@@ -301,6 +302,16 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s07a 留下的：`D/cli/commands/doctor.ts` 也是没人调用的旧代码，随 s02c 或 s58 删。旧的 `commands/bot.ts`（直接读 `bots.json`）和 `checkbox.ts` 已在本片删掉。
 - s08：e06 发现系统设置"App 后台活动"里也有一个开关，用户在那里关掉时服务从 launchd 里消失。桌面端的"登录电脑时启动"要读 s07 的状态，显示"已在系统设置里关掉"，不能只看自己存的值。未签名的 Electron 在那里显示为"Electron"、"身份不明的开发者"；签名后的预览版显示什么，s08 的 Mac 检查时看。
 - s08：按 Linux 先行（本文第 1 节），开关放在网页端和桌面端共用的清单里，daemon 调的也是同一个 `vonvon service` 命令，所以先在 Mac 网页端查；桌面窗口里的部分，等网页端封装成桌面端时再查。
+- s08 的做法：拆成两片，合起来约 1750 行，超过 1500 行的上限。s08a 做 daemon、协议和网页端共用的界面，Linux 先行；s08b 做桌面端接线、app 挪走和换新版后的修复、删 Windows 代码和卸载步骤，依赖 s08a。
+- s08 的做法：daemon 不能在自己的进程里装卸服务：`service install` 要排空的分离 daemon 正是在回网页请求的这个，`uninstall` 会把服务里的 daemon 停掉。所以交给另一个 CLI 进程（助手）跑 `vonvon service install` 或 `uninstall --keep-running`，可执行文件和入口用 daemon 自己的 `process.execPath` 和 `process.argv[1]`。助手用 `detached` 起（setsid），输出写进 `daemon.log`，环境里去掉 `VONVON_SERVICE`。网页端由 daemon 的 machine RPC 起助手，先回复再动手，页面断开几秒后在原地址重连；桌面端（s08b）用自己的 Electron 起同一条命令，等它结束再接回 daemon。桌面端 bridge 仍拒绝 machine `service`，每个界面只有一个起助手的地方。
+- s08 的做法：`--keep-running` 是公开选项：结束时之前在跑的 daemon 没了，就按原来的端口起一个分离的 daemon（已注册服务时请服务管理器起）；那个 daemon 还没公布端口的，不换新端口起，结果里记"没重新起"。不加时还是 s07 的行为。关掉开关后 bot 改成分离运行，网页也就有 daemon 可连。
+- s08 的做法：`service` 互斥锁串起终端、网页和桌面端的装卸。它是端口锁，进程死了就释放，不会留下陈旧的锁；拿不到就报"另一个后台服务操作正在进行"，不写结果文件。daemon 起助手前也先查：自己的助手还活着，或者结果文件说在跑、那个 PID 还活着，都直接回 busy。助手死后 PID 可能被别的进程用上，所以 PID 属于别的用户（发不了信号），或者"在跑"已经超过 10 分钟（比助手最长的一次还久），都当它已经结束。助手没写结果就以非零退出（没拿到锁，或者中途崩了），由起它的 daemon 补一条失败结果，开关旁边写出原因；这时另一个助手正在跑的，就不覆盖它的"在跑"。
+- s08 的做法：`<root>/service-action.json`（权限 600）记最近一次装卸：运行中时写助手的 PID，做完写成败、原因、留下的东西，以及有没有按原端口重新起 bot。原因由 `classifyServiceFailure` 按 s07 的报错文字归类，每条文字都有测试钉住。"跳过"记在数据目录根下的 `setup.json`（`{service: {skipped, at}}`），是整台机器的选择，和每个 bot 目录里的 `setup.json` 不是一个文件。打开前清掉"跳过"，关掉开关时记上，主人特意关掉以后清单不再催。
+- s08 的做法：界面只读快照。`application.service` 带 s07 的状态、为什么不能装（开发版、App Translocation；认不出安装方式的不拦，交给安装时再判断）、是否跳过和最近一次操作；结果文件和跳过标记在每 5 秒的重建里重读，launchctl 只在启动时、每 60 秒、助手退出后、"重新检测"和"跳过"时问，几次问询重叠时以最后发出的那次为准。`loginItem` 仍按 s07：在运行、已停止和分离运行都算开着。清单、桌面端和 `vonvon bot status` 用同一个 `serviceStep`（`packages/protocol/src/setup-steps.ts`），这一步不算进"还有几步"。最近一次操作 10 分钟内失败的，清单和开关旁边写出原因。
+- s08 的做法：只有 macOS 能在界面里装卸。Linux 上清单这一步只读，写明终端命令，"应用与启动"页不显示开关，machine RPC 也拒绝装卸；linger 在 s20a 做。这样也避开了 systemd 的问题：服务里的 daemon 起的助手会跟着 unit 一起被停掉。
+- s08 的做法：app 从 App Translocation 的临时位置运行时，install 拒绝，提示先把 app 拖进"应用程序"再打开：不然装进去的定义下次就找不到 app。
+- s08 的做法：install 不加"替换运行中的服务"（没有 `--replace`）。定义要换时（app 挪过位置、换了版本），桌面端（s08b）先 `daemon stop` 再 `service install`，s07 审过的安装事务不动。
+- s08 留下的：版本号相同的两次构建分不出新旧，预览版要升补丁号，构建号以后再加；不拒绝从 `/Volumes` 运行；plist 里加不加 `AssociatedBundleIdentifiers`，等 s08b 的 Mac 检查看签名版显示什么再定；网页重连后回到默认页，记住当前页约 6 行，需要时再加。s47 加 agent 令牌时，不能让它们调 machine `service`。
 
 ### M3 群里的上下文
 
