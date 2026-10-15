@@ -1,5 +1,5 @@
 import { connectLocal, ConnectionError, RpcError, type VonvonClient } from '@vonvon/client';
-import type { Agent, Membership } from '@vonvon/protocol';
+import { requestSchema, type Agent, type Membership } from '@vonvon/protocol';
 import { paths } from '../config/paths';
 import { verifyPidLockOwner } from '../server/owner-verification';
 import { PidLockError, readRunningPidLock } from '../server/pid-lock';
@@ -17,6 +17,11 @@ const firstLine = (error: unknown): string => (error instanceof Error ? error.me
 const lines = (...parts: Array<string | undefined>): string => parts.filter(Boolean).join('\n');
 const isZodError = (error: unknown): boolean => error instanceof Error && error.name === 'ZodError';
 class CallTimeout extends Error {}
+class BadRequest extends Error {}
+/** C0, DEL and C1: a name from Feishu must not move the cursor or start an escape sequence. */
+// eslint-disable-next-line no-control-regex
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g;
+export const printable = (text: string): string => text.replace(CONTROL, '');
 
 export async function connectLocalDaemon(home = paths.appDir, cliEntry = process.argv[1]): Promise<VonvonClient> {
   let lock;
@@ -36,7 +41,7 @@ export async function connectLocalDaemon(home = paths.appDir, cliEntry = process
     // The child printed {"running":false}: the daemon stopped between the lock check and discovery.
     if (isZodError(error)) throw new Error('daemon 刚刚停止了。先运行 vonvon daemon start。');
     const message = firstLine(error);
-    if (message === 'Daemon closed during handshake') throw new Error('daemon 没有接受本机凭据。');
+    if (message === 'Daemon closed during handshake') throw new Error('daemon 在握手时断开了：本机凭据对不上，或者 daemon 刚好停止或重启了。稍后重试，或运行 vonvon daemon status 查看。');
     if (message === 'Daemon handshake timed out') throw new Error('和 daemon 握手超时。');
     if (message.includes('protocol version mismatch')) throw new Error(VERSION_MISMATCH);
     throw new Error(`连不上 daemon：${message}`);
@@ -44,26 +49,61 @@ export async function connectLocalDaemon(home = paths.appDir, cliEntry = process
 }
 
 function translate(what: string, error: unknown, ms: number, unknown?: string): Error {
+  if (error instanceof BadRequest) return new Error(`${what}没有发出：命令行给的参数不对（${error.message}）。`);
   if (error instanceof CallTimeout) return new Error(lines(`daemon 在 ${ms / 1000} 秒内没有回应（${what}）。`, unknown, '运行 vonvon daemon logs 查看。'));
   if (error instanceof RpcError) return new Error(lines(`${what}失败：${error.message}`, error.code === 'unsupported' ? 'daemon 可能比命令行旧。' : undefined));
   if (error instanceof ConnectionError || firstLine(error) === 'Daemon connection closed') return new Error(lines('和 daemon 的连接断了，daemon 可能正在停止。', unknown));
-  if (isZodError(error)) return new Error(VERSION_MISMATCH);
+  // checkRequests already parsed the request, so the client's own ZodError is a reply this CLI cannot read.
+  if (isZodError(error)) return new Error(lines(VERSION_MISMATCH, unknown));
   return new Error(`${what}失败：${firstLine(error)}`);
+}
+
+/** Client method → RPC method; snapshot() always sends the same payload. */
+const METHODS = {
+  run: 'command', settings: 'settings', collaboration: 'collaboration', environment: 'environment', machine: 'machine', admin: 'admin', directory: 'directory',
+} as const;
+
+/**
+ * The client zod-parses a request before sending it and the reply after, and both throw a ZodError. Parsing the
+ * request here first, with the same schema, tells a bad request (nothing sent) from a reply this CLI cannot read.
+ */
+function checkRequests(client: VonvonClient): VonvonClient {
+  const checked: Record<string, unknown> = { ...client };
+  for (const [name, method] of Object.entries(METHODS)) {
+    const send = (client as unknown as Record<string, ((payload: unknown) => Promise<unknown>) | undefined>)[name];
+    if (!send) continue;
+    checked[name] = (payload: unknown) => {
+      const parsed = requestSchema.safeParse({ type: 'request', id: 'cli', method, payload });
+      if (parsed.success) return send.call(client, payload);
+      const issue = parsed.error.issues[0];
+      return Promise.reject(new BadRequest(issue ? `${issue.path.slice(1).join('.') || method}：${issue.message}` : parsed.error.message));
+    };
+  }
+  return checked as unknown as VonvonClient;
+}
+
+/** Errors keep their line breaks; daemon or Feishu text inside them loses its control characters. */
+function printableError(error: unknown): unknown {
+  if (!(error instanceof Error)) return error;
+  const message = error.message.split('\n').map(printable).join('\n');
+  return message === error.message ? error : new Error(message);
 }
 
 export async function withDaemon<T>(fn: (call: Call) => Promise<T>, connect = connectLocalDaemon, timeouts = TIMEOUTS): Promise<T> {
   const client = await connect();
+  const checked = checkRequests(client);
   const call: Call = async (what, run, o = {}) => {
     const ms = o.feishu ? timeouts.feishu : timeouts.local;
     let timer: NodeJS.Timeout | undefined;
     const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new CallTimeout()), ms); });
     // race keeps a handler on the losing call, so its late "connection closed" from close() is handled.
-    try { return await Promise.race([run(client), timeout]); }
+    try { return await Promise.race([run(checked), timeout]); }
     catch (error) { throw translate(what, error, ms, o.unknown); }
     finally { clearTimeout(timer); }
   };
   // Ordinary commands exit when the event loop drains, so an open socket would hang the CLI.
   try { return await fn(call); }
+  catch (error) { throw printableError(error); }
   finally { await client.close().catch(() => undefined); }
 }
 
@@ -81,7 +121,8 @@ export function want<R extends { kind: string }, K extends R['kind']>(what: stri
 export function pickBot(agents: readonly Agent[], wanted?: string): Agent {
   const [only] = agents;
   if (!only) throw new Error('还没有 bot。在网页里扫码注册（vonvon open）。');
-  const list = agents.map(agent => `${agent.name}（${agent.id}）`).join('、');
+  // Error lines keep their own breaks (printableError), so a name loses a line break of its own here.
+  const list = agents.map(agent => `${printable(agent.name)}（${agent.id}）`).join('、');
   if (wanted === undefined) {
     if (agents.length === 1) return only;
     throw new Error(`有 ${agents.length} 个 bot，用 --bot 指定：${list}`);
@@ -98,13 +139,14 @@ export function pickBot(agents: readonly Agent[], wanted?: string): Agent {
 export function pickGroup(memberships: readonly Membership[], bot: Agent, wanted: string): Membership {
   const own = memberships.filter(membership => membership.agentId === bot.id);
   const found = own.find(membership => membership.groupId === wanted) ?? own.find(membership => membership.name === wanted);
-  if (!found) throw new Error(`bot「${bot.name}」没有绑定「${wanted}」。用 vonvon group list 查看。`);
+  if (!found) throw new Error(`bot「${printable(bot.name)}」没有绑定「${wanted}」。用 vonvon group list 查看。`);
   return found;
 }
 
+/** Each human line is printed without control characters; --json keeps the daemon's text as it is. */
 export function print(io: Io, human: string[], json: unknown): void {
   if (io.json) io.write(`${JSON.stringify(json)}\n`);
-  else if (human.length) io.write(`${human.join('\n')}\n`);
+  else if (human.length) io.write(`${human.map(printable).join('\n')}\n`);
 }
 
 export const withoutAvatar = <T extends { avatarDataUrl?: string }>({ avatarDataUrl: _avatar, ...rest }: T): Omit<T, 'avatarDataUrl'> => rest;

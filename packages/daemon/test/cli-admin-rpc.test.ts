@@ -3,6 +3,7 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { connectLocal } from '@vonvon/client';
+import { agentIdSchema } from '@vonvon/protocol';
 import type { AdminBot } from '../src/admin/service';
 import { withDaemon, type Daemon } from '../src/cli/daemon-client';
 import { runBotList } from '../src/cli/commands/bot';
@@ -27,6 +28,9 @@ it('maps the real daemon\'s replies and refusals without printing the local cred
     ]);
     expect(errors[0]).toBe('查待绑定的群失败：机器人未启用或尚未运行');
     expect(errors[1]).toBe('读取设置失败：当前 daemon 不支持此操作。\ndaemon 可能比命令行旧。');
+    // The real client would throw its request-side ZodError here; the CLI's own check names the field instead.
+    const scope = { kind: 'session' as const, botId: agentIdSchema.parse('cli_a'), threadId: '' };
+    await expect(daemon(call => call('读取设置', c => c.settings({ type: 'read', scope })))).rejects.toThrow(/^读取设置没有发出：命令行给的参数不对（scope\.threadId：/);
     expect(`${out}${errors.join('')}`).not.toContain(fixture.credential);
   } finally { await fixture.close(); }
 });

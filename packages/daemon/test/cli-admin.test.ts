@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterAll, expect, it, vi } from 'vitest';
 import { RpcError, type VonvonClient } from '@vonvon/client';
 import {
-  agentIdSchema, groupIdSchema, membershipIdSchema,
+  agentIdSchema, groupIdSchema, membershipIdSchema, settingsReplySchema,
   type AdminSetupStatus, type Agent, type DesktopSnapshot, type Membership, type SettingsReply, type ToolState,
 } from '@vonvon/protocol';
 import { pickBot, withDaemon, type Daemon } from '../src/cli/daemon-client';
@@ -56,6 +56,16 @@ it('bot list shows state and connection, and its JSON has no avatars', async () 
   expect(h.close).toHaveBeenCalledTimes(2);
 });
 
+it('human output drops control characters from Feishu names and --json keeps them', async () => {
+  const name = '\u001b[2J坏\u009b31m名\r\n字';
+  const h = harness({ snapshot: one([agent('cli_a', name, { readError: '读\u0007不到' })]) });
+  await runBotList(h.io(), h.daemon);
+  expect(h.out()).toBe('[2J坏31m名字  cli_a  已启用 · 已连接 · 0 个群 · 读取失败：读不到\n');
+  h.clear(); await runBotList(h.io(true), h.daemon);
+  expect(JSON.parse(h.out()).bots[0].name).toBe(name);
+  await expect(h.daemon(async () => pickBot([agent('cli_a', name)], 'x'))).rejects.toThrow(/^没有找到 bot「x」。现有的 bot：\[2J坏31m名字（cli_a）$/);
+});
+
 it('bot status prints the checklist with its links and next steps', async () => {
   const setup: AdminSetupStatus = {
     appId: 'cli_a', tenant: 'feishu', credentials: { ok: true }, connection: { running: true, connection: 'connected' }, event: { state: 'unpublished' },
@@ -74,6 +84,17 @@ it('bot status prints the checklist with its links and next steps', async () => 
   expect(json).toMatchObject({ bot: { id: 'cli_a' }, setup: { appId: 'cli_a' }, ready: false });
 });
 
+it('bot status still prints the connection and tool steps when the checklist read fails, then exits 1', async () => {
+  const h = harness({ snapshot: one(undefined, [], [{ tool: 'codex', installation: 'installed', authentication: 'signedIn', version: '0.156.1' }]), admin: async () => { throw new RpcError('internal', '飞书接口超时'); } });
+  await expect(runBotStatus(undefined, h.io(), h.daemon)).rejects.toThrow('清单没有读全，稍后重新运行 vonvon bot status。');
+  expect(h.out()).toBe(['Vonvon Bot（cli_a）', '! 飞书应用：检测失败', '    读取清单状态失败：飞书接口超时', '✓ 长连接：已连接', '✓ Codex：可用 · 0.156.1',
+    '· Claude：无法确认', '    在网页里点「去本机环境」（vonvon open）', ''].join('\n'));
+  h.clear(); await expect(runBotStatus(undefined, h.io(true), h.daemon)).rejects.toThrow('清单没有读全');
+  const json = JSON.parse(h.out());
+  expect(json).toMatchObject({ problem: '读取清单状态失败：飞书接口超时', ready: false });
+  expect(json.steps.map((step: { id: string }) => step.id)).toEqual(['credentials', 'connection', 'codex', 'claude']);
+});
+
 it('group joined follows pages, stops on a repeated cursor or at 20 pages', async () => {
   const run = vi.fn(async (command: { cursor?: string }) => command.cursor
     ? { kind: 'groups', groups: [{ id: 'oc_1', name: '一', bound: true }, { id: 'oc_2', name: '二', bound: false }], nextCursor: 'p2' }
@@ -87,6 +108,13 @@ it('group joined follows pages, stops on a repeated cursor or at 20 pages', asyn
   await runGroupJoined({}, endless.io(), endless.daemon);
   expect(page).toBe(20);
   expect(endless.out()).toContain('只显示了前 1000 个群。');
+});
+
+it('group pending leaves out groups already bound to this bot', async () => {
+  const run = async () => ({ kind: 'pendingGroups', groups: [{ chatId: 'oc_pay', name: '支付组', addedAt: 1 }, { chatId: 'oc_new', name: '新群', addedAt: 2 }] });
+  const h = harness({ snapshot: one(undefined, [member('cli_a', 'oc_pay', 'pay'), member('cli_b', 'oc_new', 'new')]), run });
+  await runGroupPending({}, h.io(true), h.daemon);
+  expect(JSON.parse(h.out()).groups.map((group: { chatId: string }) => group.chatId)).toEqual(['oc_new']);
 });
 
 it('group pending reports the daemon refusal and still closes', async () => {
@@ -128,6 +156,8 @@ it('settings set parses values as JSON or text and names the bad field', () => {
   expect(parseAssignments('agent', ['run.maxConcurrentRuns=3']).patch).toEqual({ maxConcurrentRuns: 3 });
   expect(parseAssignments('agent', ['paths.projectsRootDir=null']).patch).toEqual({ projectsRootDir: null });
   expect(parseAssignments('session', ['model.selection={"kind":"explicit","model":"gpt-5.5","effort":"medium"}']).patch).toEqual({ selection: { kind: 'explicit', model: 'gpt-5.5', effort: 'medium' } });
+  expect(parseAssignments('agent', ['paths.projectsRootDir=2024']).patch).toEqual({ projectsRootDir: '2024' });
+  expect(parseAssignments('agent', ['comments.backend=true']).patch).toEqual({ backend: 'true' });
   for (const [kind, args, message] of [
     ['project', ['permission.mode=bad'], 'permission.mode 只能是 qa、write、full'],
     ['project', ['permission.nope=1'], 'permission 没有 nope 这一项。可以改的有：mode、guestMode、network'],
@@ -135,6 +165,8 @@ it('settings set parses values as JSON or text and names the bad field', () => {
     ['agent', ['cliBridge.agents={}'], '咖啡一下第一版已拿掉，不能改。'],
     ['session', ['permission.mode=full'], '没有 permission 这一节。可以改的有：model'],
     ['agent', ['run.maxConcurrentRuns=many'], 'run.maxConcurrentRuns 要填数字'],
+    ['agent', ['run.maxConcurrentRuns=true'], 'run.maxConcurrentRuns 要填数字'],
+    ['project', ['model.selection={"kind":"explicit","model":5,"effort":"medium"}'], 'model.selection.model 要填文字，JSON 里的文字要加双引号'],
     ['agent', ['cards.showModel=3'], 'cards.showModel 只能是 off、running、always'],
     ['project', ['model.selection={"kind":"x"}'], 'model.selection 的 kind 只能是 default 或 explicit'],
     ['project', ['mode=full'], '写成 节.项=值，例如 permission.mode=full'],
@@ -160,6 +192,24 @@ it('settings set saves with the section revision and explains each refusal', asy
   }
   await expect(runSettingsSet(['permission.mode=full'], { group: 'pay', session: 'omt_x' }, h.io(), h.daemon)).rejects.toThrow('--group 和 --session 只能选一个。');
   expect(h.connect).toHaveBeenCalledTimes(4);
+});
+
+it('a blank --session is an input error, a bad request is never sent, and only an unreadable reply blames the version', async () => {
+  const settings = vi.fn(async (request: { type: string }): Promise<unknown> => {
+    if (request.type === 'read') return { kind: 'view', view: { scope: { kind: 'agent', botId: 'cli_a' }, sections: { cards: section({ showModel: 'off' }) } } };
+    // What the client throws when replySchemas.settings.parse fails.
+    const parsed = settingsReplySchema.safeParse({ kind: 'saved', result: { kind: 'nope' } });
+    throw parsed.success ? new Error('parsed') : parsed.error;
+  });
+  const h = harness({ snapshot: one(), settings });
+  for (const session of ['', '   ']) await expect(runSettingsGet(undefined, { session }, h.io(), h.daemon)).rejects.toThrow('--session 要填会话的话题 id（1 到 1000 个字）。');
+  expect(h.connect).not.toHaveBeenCalled();
+  const scope = { kind: 'session' as const, botId: agentIdSchema.parse('cli_a'), threadId: ' ' };
+  await expect(h.daemon(call => call('读取设置', c => c.settings({ type: 'read', scope })))).rejects.toThrow(/^读取设置没有发出：命令行给的参数不对（scope\.threadId：.+）。$/);
+  expect(settings).not.toHaveBeenCalled();
+  await expect(runSettingsSet(['cards.showModel=always'], {}, h.io(), h.daemon))
+    .rejects.toThrow(/^daemon 和命令行的版本不一致。先 vonvon daemon stop，再 vonvon daemon start。\n可能已经保存，运行 vonvon settings get 查看。$/);
+  expect(settings).toHaveBeenCalledTimes(2);
 });
 
 it('settings get hides cliBridge for people, keeps it in JSON, and lists a group\'s newest sessions', async () => {

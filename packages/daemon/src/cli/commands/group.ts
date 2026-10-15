@@ -50,10 +50,13 @@ export async function runGroupJoined(options: { bot?: string }, io: Io, daemon: 
   print(io, human, { groups, complete });
 }
 
+/** Like the web page, drops a pending record whose group is already bound to this bot. */
 export async function runGroupPending(options: { bot?: string }, io: Io, daemon: Daemon = withDaemon): Promise<void> {
   const groups = await daemon(async call => {
-    const agent = pickBot((await call('读取快照', c => c.snapshot())).agents, options.bot);
-    return want('查待绑定的群', await call('查待绑定的群', c => c.run({ type: 'listPendingGroups', agentId: agent.id })), 'pendingGroups').groups;
+    const snapshot = await call('读取快照', c => c.snapshot());
+    const agent = pickBot(snapshot.agents, options.bot);
+    const pending = want('查待绑定的群', await call('查待绑定的群', c => c.run({ type: 'listPendingGroups', agentId: agent.id })), 'pendingGroups').groups;
+    return pending.filter(group => !snapshot.memberships.some(m => m.agentId === agent.id && m.groupId === group.chatId));
   });
   const human = groups.length
     ? groups.map(group => `${group.chatId}  ${group.name}  ${localTime(group.addedAt)} 加入`)

@@ -1,5 +1,5 @@
 import {
-  agentSectionSchemas, projectSectionSchemas, sessionSectionSchemas,
+  agentSectionSchemas, projectSectionSchemas, sessionSectionSchemas, sessionThreadIdSchema,
   type Agent, type Membership, type SessionSettingsView, type SettingsScope, type SettingsView,
 } from '@vonvon/protocol';
 import {
@@ -18,11 +18,16 @@ const TABLES: Record<Kind, Record<string, SectionSchema>> = { agent: agentSectio
 /** cliBridge (咖啡一下) left v1 in M1; it stays in --json until s02b and s02c remove it. */
 const sectionNames = (kind: Kind): string[] => Object.keys(TABLES[kind]).filter(name => name !== 'cliBridge');
 const FORMAT = '写成 节.项=值，例如 permission.mode=full';
-const TYPES: Record<string, string> = { number: '要填数字', boolean: '要填 true 或 false', string: '要填文字', object: '要填 JSON', array: '要填 JSON' };
+// A top-level text field already takes 2024 or true as typed (parseAssignments), so only text inside JSON lands here.
+const TYPES: Record<string, string> = { number: '要填数字', boolean: '要填 true 或 false', string: '要填文字，JSON 里的文字要加双引号', object: '要填 JSON', array: '要填 JSON' };
 const show = (value: unknown): string => typeof value === 'string' ? value : String(JSON.stringify(value));
 
+/** Checked before connecting: the protocol would refuse a blank --session, and that refusal is not the daemon's fault. */
 function scopeKind(target: Target): Kind {
   if (target.group !== undefined && target.session !== undefined) throw new Error('--group 和 --session 只能选一个。');
+  if (target.session !== undefined && !sessionThreadIdSchema.safeParse(target.session).success) {
+    throw new Error('--session 要填会话的话题 id（1 到 1000 个字）。用 vonvon settings get --group <群> 看群里的会话。');
+  }
   return target.group !== undefined ? 'project' : target.session !== undefined ? 'session' : 'agent';
 }
 
@@ -52,6 +57,7 @@ function explain(section: string, schema: SectionSchema, issue: Issue): string {
 export function parseAssignments(kind: Kind, assignments: readonly string[]): { section: string; patch: Record<string, unknown> } {
   let section: string | undefined;
   const fields = new Map<string, unknown>();
+  const texts = new Map<string, string>();
   for (const assignment of assignments) {
     const equals = assignment.indexOf('=');
     const key = equals < 0 ? '' : assignment.slice(0, equals);
@@ -60,7 +66,10 @@ export function parseAssignments(kind: Kind, assignments: readonly string[]): { 
     const name = key.slice(0, dot);
     if (section !== undefined && name !== section) throw new Error(`一次只能改一节；${section} 和 ${name} 分两次改。`);
     section = name;
-    fields.set(key.slice(dot + 1), parseValue(assignment.slice(equals + 1)));
+    const field = key.slice(dot + 1);
+    const text = assignment.slice(equals + 1);
+    fields.set(field, parseValue(text));
+    texts.set(field, text);
   }
   if (section === undefined) throw new Error(FORMAT);
   if (section === 'cliBridge') throw new Error('咖啡一下第一版已拿掉，不能改。');
@@ -68,7 +77,15 @@ export function parseAssignments(kind: Kind, assignments: readonly string[]): { 
   if (!schema) throw new Error(`没有 ${section} 这一节。可以改的有：${sectionNames(kind).join('、')}`);
   // fromEntries keeps a key like __proto__ as data, so strict() reports it.
   const patch: Record<string, unknown> = Object.fromEntries(fields);
-  const checked = schema.partial().strict().safeParse(patch);
+  const check = schema.partial().strict();
+  // `paths.projectsRootDir=2024` parses as a number: a field that takes text gets the text as typed, and keeps it
+  // when the text is wrong in another way, so the error names that instead of asking for text.
+  for (const [field, value] of fields) {
+    if (typeof value === 'string' || check.safeParse(Object.fromEntries([[field, value]])).success) continue;
+    const asText = check.safeParse(Object.fromEntries([[field, texts.get(field)]]));
+    if (asText.success || !asText.error.issues.some(issue => issue.code === 'invalid_type' && issue.path.length === 1)) patch[field] = texts.get(field);
+  }
+  const checked = check.safeParse(patch);
   if (!checked.success) throw new Error(checked.error.issues.map(issue => explain(section, schema, issue)).join('\n'));
   return { section, patch };
 }

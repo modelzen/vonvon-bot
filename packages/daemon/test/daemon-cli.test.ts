@@ -66,7 +66,7 @@ it('exposes daemon lifecycle commands while status and logs leave a missing home
     const p = launch(f.home, f.root, args); expect(await p.exited).toBe(0);
   }
   // The RPC commands take no data lease, so the empty root below also proves they skip it.
-  for (const args of [['bot', 'list'], ['group', 'list', '--json'], ['settings', 'get']]) {
+  for (const args of [['bot', 'list'], ['bot', 'status', '--bot', 'cli_a'], ['group', 'list', '--json'], ['settings', 'get']]) {
     const p = launch(f.home, f.root, args); expect(await p.exited).toBe(1);
     expect(p.output()).toContain('daemon 没有运行。先运行 vonvon daemon start。');
   }

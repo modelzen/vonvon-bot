@@ -1,4 +1,4 @@
-import { botSteps, toolSteps, type Agent, type SetupStep, type StepTone } from '@vonvon/protocol';
+import { botSteps, toolSteps, type AdminSetupStatus, type Agent, type SetupStep, type StepTone } from '@vonvon/protocol';
 import { pickBot, print, want, withDaemon, withoutAvatar, type Daemon, type Io } from '../daemon-client';
 
 const MARK: Record<StepTone, string> = { success: '✓', warning: '!', danger: '✗', neutral: '·' };
@@ -22,7 +22,8 @@ export async function runBotList(io: Io, daemon: Daemon = withDaemon): Promise<v
 
 function stepLines(step: SetupStep): string[] {
   const out = [`${MARK[step.tone]} ${step.title}：${step.status}`];
-  if (step.detail) out.push(`    ${step.detail}`);
+  // A failed read's detail is the CLI's own error, which can run to two lines.
+  for (const line of step.detail?.split('\n') ?? []) out.push(`    ${line}`);
   for (const item of step.items ?? []) out.push(`    - ${item}`);
   for (const warning of step.warnings ?? []) out.push(`    ${warning}`);
   // A finished step's buttons (取消勾选, 检查登录) are not a next step, unless a warning still points at one.
@@ -33,17 +34,25 @@ function stepLines(step: SetupStep): string[] {
   return out;
 }
 
-/** Exits 0 whatever the steps show; scripts read `ready` from --json. */
+/**
+ * Exits 0 whatever the steps show; scripts read `ready` from --json. When the checklist read fails it prints what the
+ * web page shows then (检测失败, the connection and the tools) and exits 1.
+ */
 export async function runBotStatus(wanted: string | undefined, io: Io, daemon: Daemon = withDaemon): Promise<void> {
-  const { agent, setup, tools } = await daemon(async call => {
+  const { agent, setup, problem, tools } = await daemon(async call => {
     const snapshot = await call('读取快照', c => c.snapshot());
     const agent = pickBot(snapshot.agents, wanted);
-    const reply = await call('读取清单状态', c => c.admin({ type: 'setupStatus', agentId: agent.id }), { feishu: true });
-    return { agent, setup: want('读取清单状态', reply, 'setupStatus').status, tools: toolSteps(snapshot.tools) };
+    let setup: AdminSetupStatus | undefined;
+    let problem: string | undefined;
+    try { setup = want('读取清单状态', await call('读取清单状态', c => c.admin({ type: 'setupStatus', agentId: agent.id }), { feishu: true }), 'setupStatus').status; }
+    catch (error) { problem = error instanceof Error ? error.message : String(error); }
+    return { agent, setup, problem, tools: toolSteps(snapshot.tools) };
   });
-  const bot = botSteps(agent, setup);
+  const bot = botSteps(agent, setup, problem);
   const steps = [...bot, ...tools.steps];
   const left = bot.filter(step => !step.done).length + (tools.ready ? 0 : 1);
-  const human = [`${agent.name}（${agent.id}）`, ...steps.flatMap(stepLines), left ? `还有 ${left} 步没完成。` : '全部就绪。'];
-  print(io, human, { bot: withoutAvatar(agent), setup, steps, ready: left === 0 });
+  const human = [`${agent.name}（${agent.id}）`, ...steps.flatMap(stepLines)];
+  if (problem === undefined) human.push(left ? `还有 ${left} 步没完成。` : '全部就绪。');
+  print(io, human, { bot: withoutAvatar(agent), ...(setup ? { setup } : { problem }), steps, ready: problem === undefined && left === 0 });
+  if (problem !== undefined) throw new Error('清单没有读全，稍后重新运行 vonvon bot status。');
 }

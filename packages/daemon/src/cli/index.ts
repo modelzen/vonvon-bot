@@ -68,8 +68,9 @@ const bot = program.command('bot').description('Show bots through the running da
 bot.command('list').description('List bots and their connection state').option('--json', 'Print JSON').action(async (options: Json) => {
   await (await import('./commands/bot')).runBotList(io(options));
 });
-bot.command('status [bot]').description("Show a bot's setup checklist").option('--json', 'Print JSON').action(async (wanted: string | undefined, options: Json) => {
-  await (await import('./commands/bot')).runBotStatus(wanted, io(options));
+bot.command('status [bot]').description("Show a bot's setup checklist").option(...BOT).option('--json', 'Print JSON').action(async (wanted: string | undefined, options: Json & { bot?: string }) => {
+  if (wanted !== undefined && options.bot !== undefined && wanted !== options.bot) throw new Error(`bot 填了两次（${wanted} 和 --bot ${options.bot}），只留一个。`);
+  await (await import('./commands/bot')).runBotStatus(options.bot ?? wanted, io(options));
 });
 const group = program.command('group').description('List and bind Feishu groups');
 group.command('list').description('List bound groups').option(...BOT).option('--json', 'Print JSON').action(async (options: Json & { bot?: string }) => {
