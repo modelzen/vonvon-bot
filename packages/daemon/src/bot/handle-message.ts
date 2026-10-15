@@ -975,14 +975,16 @@ export function createOrchestrator(
   function noteTopicMessage(msg: NormalizedMessage): void {
     if (!topics || !msg.threadId) return;
     const from = senderOf(msg);
-    const isFirst = !msg.rootId || msg.rootId === msg.messageId; // a topic group's post
+    // A topic group's post names no root and replies to nothing. A reply that
+    // lacks root_id says nothing about the first message; a later one fills it.
+    const isFirst = msg.rootId === msg.messageId || (!msg.rootId && !msg.replyToMessageId);
     const sighting: TopicSighting = {
       topicId: msg.threadId,
       at: msg.createTime || Date.now(),
       from,
-      first: isFirst
-        ? { id: msg.messageId, from, at: msg.createTime || undefined, text: msg.content }
-        : { id: msg.rootId as string },
+      ...(isFirst
+        ? { first: { id: msg.messageId, from, at: msg.createTime || undefined, text: msg.content } }
+        : msg.rootId ? { first: { id: msg.rootId } } : {}),
     };
     void trackTask((async () => {
       const rec = await topics.note(msg.chatId, sighting);

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { log } from '../core/logger';
 import { sanitizeContext } from './context-weave';
@@ -19,7 +19,8 @@ import { listSessions, type SessionRecord } from './session-store';
  *
  * Only the title (the first message's first {@link TITLE_MAX} chars) is chat
  * text; nothing else from messages is stored. The file keeps the
- * {@link MAX_TOPICS} most recently active topics. Writes go through one lock
+ * {@link MAX_TOPICS} most recently active topics, plus older ones that still
+ * have a session. Writes go through one lock
  * per file and a function of the latest disk value, so concurrent turns never
  * overwrite each other. Unknown fields are kept; a file that does not parse is
  * moved aside to `.corrupt` on the next write and the registry starts empty.
@@ -81,7 +82,7 @@ export interface TopicRegistry {
 }
 
 export const TITLE_MAX = 30;
-/** Topics kept per group; the least recently active go first. */
+/** Topics kept per group; the least recently active without a session go first. */
 export const MAX_TOPICS = 200;
 /** lastAt moves only in steps this large, so chatter in a topic does not rewrite the file per message. */
 const LAST_AT_STEP_MS = 60_000;
@@ -103,7 +104,9 @@ export function topicTitle(text: string | undefined): string | undefined {
  *   - the opener is the earliest sighting's, except that this bot opening the
  *     topic always wins (a reply in the topic can be seen before the bot
  *     learns the new topic's id);
- *   - first-message fields are filled once, never overwritten;
+ *   - first-message fields are filled once, never overwritten, except that
+ *     this bot opening the topic sets the title (a resumed session's name),
+ *     over one a lookup of the first message got in first;
  *   - lastAt only moves up, in steps of a minute.
  */
 export function mergeTopic(prev: TopicRecord | undefined, s: TopicSighting): TopicRecord | undefined {
@@ -141,7 +144,8 @@ export function mergeTopic(prev: TopicRecord | undefined, s: TopicSighting): Top
     if (first.id === next.firstId) {
       if (!prev.firstFrom && first.from) { next.firstFrom = first.from; changed = true; }
       if (!prev.firstAt && first.at) { next.firstAt = first.at; changed = true; }
-      if (!prev.title && title) { next.title = title; changed = true; }
+      const opening = s.from.kind === 'self' && prev.openedBy?.kind !== 'self';
+      if (title && title !== prev.title && (!prev.title || opening)) { next.title = title; changed = true; }
     }
   }
   return changed ? next : undefined;
@@ -150,6 +154,11 @@ export function mergeTopic(prev: TopicRecord | undefined, s: TopicSighting): Top
 /** Most recently active first. */
 function byActivity(topics: TopicRecord[]): TopicRecord[] {
   return [...topics].sort((a, b) => b.lastAt - a.lastAt || b.openedAt - a.openedAt);
+}
+
+/** The {@link MAX_TOPICS} most recently active of `sorted`, plus older ones in `bound`. */
+function trim(sorted: TopicRecord[], bound: Set<string>): TopicRecord[] {
+  return sorted.filter((t, i) => i < MAX_TOPICS || bound.has(t.topicId));
 }
 
 /** Last chars of an id, for logs (no full chat ids in logs). */
@@ -235,16 +244,22 @@ export function createTopicRegistry(opts: {
     }
   }
 
-  async function view(chatId: string, topics: TopicRecord[]): Promise<TopicView[]> {
-    if (!topics.length) return [];
-    const bindings = await loadSessions().catch((err: unknown) => {
+  /** This bot's live bindings in the group (none when sessions.json cannot be read). */
+  async function bindingsIn(chatId: string): Promise<SessionRecord[]> {
+    const all = await loadSessions().catch((err: unknown) => {
       log.warn('intake', 'topic-registry-sessions-failed', { chatId: tail(chatId), err: String(err) });
       return [] as SessionRecord[];
     });
+    return all.filter((b) => !b.detached && b.chatId === chatId);
+  }
+
+  async function view(chatId: string, topics: TopicRecord[]): Promise<TopicView[]> {
+    if (!topics.length) return [];
+    const bindings = await bindingsIn(chatId);
     return topics.map((t) => {
       const keys = new Set([t.topicId, `${t.topicId}#admin`, `${t.topicId}#guest`]);
       const sessions = bindings
-        .filter((b) => !b.detached && b.chatId === chatId && keys.has(b.threadId))
+        .filter((b) => keys.has(b.threadId))
         .map((b) => ({ key: b.threadId, sessionId: b.sessionId, backend: b.backend }));
       return { ...t, sessions };
     });
@@ -267,11 +282,19 @@ export function createTopicRegistry(opts: {
           const next = mergeTopic(prev, sighting);
           if (!next) return prev;
           const topics = byActivity(idx === -1 ? [...store.topics, next] : store.topics.map((t, i) => (i === idx ? next : t)));
-          const kept = topics.slice(0, MAX_TOPICS);
+          const bound = topics.length > MAX_TOPICS
+            ? new Set((await bindingsIn(chatId)).map((b) => b.threadId.replace(/#(admin|guest)$/, '')))
+            : new Set<string>();
+          const kept = trim(topics, bound);
           await mkdir(opts.dir, { recursive: true });
           const tmp = `${file}.tmp-${process.pid}-${randomUUID()}`;
-          await writeFile(tmp, `${JSON.stringify({ ...store, topics: kept }, null, 2)}\n`, 'utf8');
-          await rename(tmp, file);
+          try {
+            await writeFile(tmp, `${JSON.stringify({ ...store, topics: kept }, null, 2)}\n`, 'utf8');
+            await rename(tmp, file);
+          } catch (err) {
+            await unlink(tmp).catch(() => undefined);
+            throw err;
+          }
           return kept.includes(next) ? next : undefined;
         });
       } catch (err) {

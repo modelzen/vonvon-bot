@@ -406,6 +406,24 @@ describe('topic registry (s13)', () => {
     expect(fake.get.mock.calls.filter(([p]) => p.path.message_id === 'om_root').length).toBeLessThanOrEqual(2);
   });
 
+  it('does not take a reply without root_id for the first message', async () => {
+    multi();
+    const topics = registry();
+    const o = setup(topics);
+    // Addressed to someone else, so the bot records them without answering.
+    const toLi = { mentionedBot: false, mentions: [{ key: '@_user_1', openId: 'ou_li', name: '李四', isBot: false }] };
+    await o.onMessage(message('@李四 同意楼上', 'omt_q', { ...toLi, replyToMessageId: 'om_parent', senderId: 'ou_zhang' }));
+    await vi.waitFor(async () => expect(await topics.get('chat', 'omt_q')).toMatchObject({ openedBy: { kind: 'user', openId: 'ou_zhang' } }));
+    const rec = await topics.get('chat', 'omt_q');
+    expect(rec).not.toHaveProperty('firstId');
+    expect(rec).not.toHaveProperty('title');
+    // The next message that names the root fills it in.
+    await o.onMessage(message('@李四 补一句', 'omt_q', { ...toLi, rootId: 'om_root', senderId: 'ou_wang' }));
+    await vi.waitFor(async () => expect(await topics.get('chat', 'omt_q')).toMatchObject({
+      firstId: 'om_root', firstFrom: { kind: 'user', openId: 'ou_q' }, title: 'om_root 的原话',
+    }));
+  });
+
   it('records a topic the bot opens from the main area as opened by itself', async () => {
     multi();
     const topics = registry();

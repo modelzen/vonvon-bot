@@ -1,11 +1,18 @@
 import { mkdtempSync, rmSync } from 'node:fs';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const fake = vi.hoisted(() => ({ log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() } }));
+const fake = vi.hoisted(() => ({ log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() }, failRename: false }));
 vi.mock('../src/core/logger', () => ({ log: fake.log }));
+vi.mock('node:fs/promises', async (original) => {
+  const fs = await original<typeof import('node:fs/promises')>();
+  return { ...fs, rename: async (from: string, to: string) => {
+    if (fake.failRename) throw Object.assign(new Error('EXDEV'), { code: 'EXDEV' });
+    return fs.rename(from, to);
+  } };
+});
 
 import { createTopicRegistry, MAX_TOPICS, mergeTopic, topicTitle, type TopicRecord, type TopicSighting } from '../src/bot/topic-registry';
 import type { SessionRecord } from '../src/bot/session-store';
@@ -20,6 +27,7 @@ const seen = (topicId: string, at: number, extra: Partial<TopicSighting> = {}): 
 
 beforeEach(() => {
   vi.clearAllMocks();
+  fake.failRename = false;
   dir = mkdtempSync(join(tmpdir(), 'topic-registry-'));
   bindings = [];
 });
@@ -42,6 +50,14 @@ describe('mergeTopic', () => {
     expect(mergeTopic(filled, seen('t', 100_000, { first: { id: 'om_root', text: '别的' } }))).toBeUndefined();
     expect(mergeTopic(filled, seen('t', 159_999))).toBeUndefined();
     expect(mergeTopic(filled, seen('t', 160_000))?.lastAt).toBe(160_000);
+  });
+
+  it("lets this bot opening the topic set the title over a looked-up one, once", () => {
+    const looked = mergeTopic(base, seen('t', 100_000, { first: { id: 'om_resume', from: user('ou_a'), text: '/resume abc' } }))!;
+    expect(looked.title).toBe('/resume abc');
+    const opened = mergeTopic(looked, seen('t', 100_500, { from: { kind: 'self' }, first: { id: 'om_resume', text: '修订单接口' } }))!;
+    expect(opened).toMatchObject({ title: '修订单接口', firstFrom: user('ou_a'), openedBy: { kind: 'self' } });
+    expect(mergeTopic(opened, seen('t', 100_500, { from: { kind: 'self' }, first: { id: 'om_resume', text: '别的' } }))).toBeUndefined();
   });
 
   it('makes a short one-line title without file tokens', () => {
@@ -119,6 +135,13 @@ describe('topic registry file', () => {
     expect(JSON.stringify(fake.log.warn.mock.calls)).not.toContain(CHAT);
   });
 
+  it('removes its temp file when the rename fails', async () => {
+    fake.failRename = true;
+    await expect(registry().note(CHAT, seen('omt_a', 1))).resolves.toBeUndefined();
+    expect(await readdir(dir)).toEqual([]);
+    expect(fake.log.warn).toHaveBeenCalledWith('intake', 'topic-registry-write-failed', expect.objectContaining({ err: expect.stringContaining('EXDEV') }));
+  });
+
   it('logs a failed write instead of throwing', async () => {
     await writeFile(join(dir, 'blocked'), '');
     const reg = createTopicRegistry({ dir: join(dir, 'blocked'), sessions: async () => [] });
@@ -140,5 +163,25 @@ describe('topic registry file', () => {
     // A late message from a topic quieter than all kept ones is not stored.
     await expect(reg.note(CHAT, seen('omt_ancient', 1))).resolves.toBeUndefined();
     expect((await reg.list(CHAT)).map((t) => t.topicId)).not.toContain('omt_ancient');
+  });
+
+  it('keeps an older topic past the cap while it still has a session', async () => {
+    const reg = registry();
+    const minute = 60_000;
+    for (let i = 0; i < MAX_TOPICS; i++) await reg.note(CHAT, seen(`omt_${i}`, (i + 10) * minute));
+    bindings = [
+      { threadId: 'omt_0#guest', chatId: CHAT, sessionId: 's-0', backend: 'codex' },
+      { threadId: 'omt_1', chatId: CHAT, sessionId: 's-1', backend: 'codex', detached: true },
+      { threadId: 'omt_2', chatId: 'oc_other', sessionId: 's-2', backend: 'codex' },
+    ];
+    await reg.note(CHAT, seen('omt_new', (MAX_TOPICS + 20) * minute));
+    await reg.note(CHAT, seen('omt_newer', (MAX_TOPICS + 21) * minute));
+    await reg.note(CHAT, seen('omt_newest', (MAX_TOPICS + 22) * minute));
+    const ids = (await reg.list(CHAT)).map((t) => t.topicId);
+    expect(ids).toHaveLength(MAX_TOPICS + 1);
+    expect(ids.at(-1)).toBe('omt_0');
+    expect(ids).not.toContain('omt_1');
+    expect(ids).not.toContain('omt_2');
+    expect((await reg.get(CHAT, 'omt_0'))?.sessions).toEqual([{ key: 'omt_0#guest', sessionId: 's-0', backend: 'codex' }]);
   });
 });
