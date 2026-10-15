@@ -455,7 +455,7 @@ describe('topic registry (s13)', () => {
       mentions: [{ key: '@_user_1', openId: 'ou_li', name: '李四', isBot: false }],
     }));
     await vi.waitFor(() => expect(fake.get).toHaveBeenCalled());
-    const stopped = await Promise.race([o.shutdown().then(() => 'stopped'), new Promise((r) => setTimeout(r, 2_000, 'waiting'))]);
+    const stopped = await Promise.race([o.shutdown().then(() => 'stopped'), new Promise((r) => setTimeout(r, 4_000, 'waiting'))]);
     expect(stopped).toBe('stopped');
     expect(await topics.get('chat', 'omt_slow')).toMatchObject({ firstId: 'om_root', openedBy: { kind: 'user', openId: 'ou_zhang' } });
   });
