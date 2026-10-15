@@ -13,7 +13,7 @@ const fake = vi.hoisted(() => ({
   createCard: vi.fn(async () => 'card'),
   send: vi.fn(async () => ({})),
   history: vi.fn(async (..._args: unknown[]) => ({ messages: [] as unknown[], ok: true, complete: true })),
-  chat: vi.fn(async (..._args: unknown[]) => ({ messages: [] as unknown[], ok: true, complete: true })),
+  chat: vi.fn(async (..._args: unknown[]) => ({ messages: [] as unknown[], ok: true, complete: true } as { messages: unknown[]; ok: boolean; complete: boolean; ownRoots?: unknown[] })),
   get: vi.fn(async ({ path }: { path: { message_id: string } }) => ({ data: { items: [{
     message_id: path.message_id, thread_id: 'omt_new', msg_type: 'text', create_time: '1',
     sender: { id: 'ou_q', sender_type: 'user', sender_name: '王五' }, body: { content: JSON.stringify({ text: `${path.message_id} 的原话` }) },
@@ -952,6 +952,26 @@ describe('topic openings, 引用行 and the topics table (s14b)', () => {
     expect(await topics.get('chat', 'omt_a')).toMatchObject({ openedBy: { kind: 'bot', openId: 'ou_p' }, firstId: 'om_root' });
     expect(run.consumed[0]!.text).toContain('张三：订单接口一直报 500\n');
     expect(run.consumed[0]!.text).toMatch(/〔话题〕小P（bot）在上面这条下开了话题「订单接口一直报 500」，你在那边还没有会话，这里不用接。（话题 id：omt_a）\n/);
+  });
+
+  it("recognises a topic another bot opened under this bot's own main-area reply, which stays out of the block (s14c)", async () => {
+    fake.records.set('chat', record('chat', { lastSeenAt: 5 }));
+    const topics = registry();
+    const run = thread('old-chat');
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const trigger = message('总结一下');
+    fake.chat.mockResolvedValueOnce({ ok: true, complete: true, messages: [ctx('om_u', '先看下日志', trigger.createTime - 3000)],
+      ownRoots: [ctx('om_mine', '网关日志', trigger.createTime - 2000, { threadId: 'omt_m', from: 'self', senderName: '小码' })] });
+    fake.list.mockResolvedValueOnce({ code: 0, data: { items: [{ message_id: 'om_p', msg_type: 'text', create_time: String(trigger.createTime - 1000),
+      sender: { id: 'cli_p', id_type: 'app_id', sender_type: 'app', sender_name: '小P', open_bot_id: 'ou_p' }, body: { content: '{"text":"展开说说"}' } }] } });
+    const o = setup(topics);
+    await o.onMessage(trigger);
+    await done();
+    expect(await topics.get('chat', 'omt_m')).toMatchObject({ openedBy: { kind: 'bot', openId: 'ou_p' }, firstId: 'om_mine' });
+    const text = run.consumed[0]!.text!;
+    expect(text).toContain('李四：先看下日志\n');
+    expect(text).not.toMatch(/你：网关日志/);
+    expect(text).toMatch(new RegExp(`〔话题〕小P（bot）在你 ${clock} 的回复下开了话题「网关日志」，你在那边还没有会话，这里不用接。（话题 id：omt_m）\n`));
   });
 
   it("quotes the topics another vonvon bot on this daemon opened, from its registry, with this bot's session ids only", async () => {

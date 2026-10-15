@@ -2064,19 +2064,24 @@ export function createOrchestrator(
           woven = kept.map((m) => m.messageId);
           const root = rootId ? history.find(isRoot) : undefined;
           const tier = perm.roleSuffix;
-          let topicsPart: Pick<RecordBlock, 'opening' | 'quotes' | 'moreTopics' | 'table'> = {};
+          let topicsPart: Pick<RecordBlock, 'opening' | 'quotes' | 'moreTopics' | 'table' | 'refs'> = {};
           let openingLog = {};
           if (place === 'main') {
             // 引用行 for topics opened since the session last spoke (a new one: since its
             // oldest line), each sent once; after a compaction, the recent topics too.
             const known = await topicCtx.quotable(msg.chatId, list);
-            const found = await orStop(topicCtx.discover(msg.chatId, kept, knownIds(known)), []);
+            // This bot's own replies are not woven, but another bot's topic under one
+            // sends no event, so they are looked at too (s14c).
+            const from = kept[0]?.createTime ?? floor;
+            const mine = (pull.ownRoots ?? []).filter((m) => m.createTime >= from && (codexEmpty || isUnread(prior, m.messageId, m.createTime)));
+            const roots = [...kept, ...mine].sort((a, b) => a.createTime - b.createTime);
+            const found = await orStop(topicCtx.discover(msg.chatId, roots, knownIds(known)), []);
             const since = codexEmpty ? undefined : prior?.lastSeenAt;
             const skip = codexEmpty ? undefined : (t: TopicView) => isDelivered(prior, t.topicId);
             const { quotes, more } = topicQuotes([...known, ...found],
-              { ...(since ? { after: since } : { from: kept[0]?.createTime ?? floor }), to: now, skip, tier }, names);
+              { ...(since ? { after: since } : { from }), to: now, skip, tier }, names);
             const table = thread && topicsDueFor(sessionKey, msg.chatId, prior, thread.sessionId) ? topicRows(list.slice(0, 5), tier, names) : [];
-            topicsPart = { quotes, moreTopics: more, table };
+            topicsPart = { quotes, moreTopics: more, table, refs: mine };
             seenExtra = quotes.map((q) => ({ id: q.topicId, at: q.at }));
             tableShown = table.length > 0;
           } else if (codexEmpty && rootId) {
@@ -2096,7 +2101,8 @@ export function createOrchestrator(
           const times = [...kept, ...topicsPart.opening?.main ?? []].map((m) => m.createTime).filter((t) => t > 0);
           if (codexEmpty && pull.ok) openFrom = Math.min(now, ...times);
           log.info('intake', 'record-block', { place, lines: kept.length, earlier, opening: codexEmpty, ok: pull.ok, streaming: streaming.length,
-            quotes: topicsPart.quotes?.length ?? 0, moreTopics: topicsPart.moreTopics ?? 0, table: topicsPart.table?.length ?? 0, recalls: recalls.length, ...openingLog });
+            quotes: topicsPart.quotes?.length ?? 0, moreTopics: topicsPart.moreTopics ?? 0, table: topicsPart.table?.length ?? 0,
+            ownRoots: topicsPart.refs?.length ?? 0, recalls: recalls.length, ...openingLog });
         } else if (place && recalls.length) {
           // No back-fill (a resumed session without a watermark): a block with the notes only.
           const header = { group: project?.name, me: channel.botIdentity?.name, ...(topicId ? { topic: { title } } : {}) };
