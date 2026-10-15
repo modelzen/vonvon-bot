@@ -232,7 +232,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | [x] | s02c | 拿掉咖啡一下（二）：daemon 代码 | 删设置协议里的咖啡一下、`D/cli-bridge/` 和它的测试；`vonvon hook` 留一个直接退出的空命令（3.12） | 5600，拆成 5 片（下面的 s02c 拆法） | s02b | 子进程 | 无 |
 
 开工要点：
-- s01：兼容标识不动：旧目录、`FEISHU_CODEX_BRIDGE`、`CLAUDE_CODE_ENTRYPOINT`、hook 正则、旧服务标签。不申请 `im:message.group_msg.include_bot:read`。补拉因为缺权限失败时，记一条带权限名的结构化日志；今天没有现成的诊断去处，诊断页上显示缺的权限在 s19 做。
+- s01：兼容标识不动：旧目录、`FEISHU_CODEX_BRIDGE`、`CLAUDE_CODE_ENTRYPOINT`、hook 正则、旧服务标签。不申请 `im:message.group_msg.include_bot:read`。补拉因为缺权限失败时，记一条带权限名的结构化日志；今天没有现成的诊断去处，诊断页上显示缺的权限在 s19 做。s19 已改，见 M4 的"s19 做法（缺的权限）"。
 - s01 没改的旧名字：私聊控制台（`D/card/dm-cards.ts`）里的，s51a 到 s51c 整体删掉；没注册的 `doctor`、`bot`、`update` 命令文件（`D/cli/commands/`）里的，走不到，以后要接上这些命令时先改文案。
 - s02：补 PATH 的函数放在 daemon 里（`D/platform/tool-path.ts`），s07 写服务定义时复用；不跑登录 shell，免得卡在用户的交互配置上。M1 的 app 从 Finder 打开，不补 PATH 就找不到 Codex。`locate.ts` 不另加候选目录：补了 PATH 以后 `which` 就找得到，加了反而让"找不到 Codex"的测试随机器上有没有 Homebrew 的 codex 变。
 - s02：自带的 npm 只给下载 Claude SDK 和 `installCodex` 用，daemon 按自己所在的位置找它（`D/platform/npm.ts`），不靠环境变量。本机环境页的"安装托管副本"仍用 PATH 上的 npm：npm 11.19 起默认不跑依赖的安装脚本，claude-code 和 lark-cli 都靠 postinstall；托管副本自己也要本机有 `node` 才能跑，没装 Node 的 Mac 用自带的 npm 也装不成。
@@ -282,11 +282,11 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 开工要点：
 - s03：nvm 装的 codex 从 Finder 打开时，PATH 里没有那个 Node 版本的目录，`#!/usr/bin/env node` 起不来。已改：起 codex 子进程（查版本、app-server、装完托管副本后的版本检查）时，PATH 补上 codex 所在的目录和 s02 的工具目录。
 - s03：Codex 的最低版本定成 0.139.0。vonvon 用到的 app-server 方法 0.131.0 就都有，但 vonvon 依赖的行为（`turn/interrupt` 以 `turn/completed(interrupted)` 收尾、目标自动开始和目标状态）实际跑过的最老版本是 0.139。验证过的版本跟托管安装锁定的版本走，现在是 0.156.1。e05 做完后在 s39 抬高。
-- s03 留下的，给 s39：e05 实测 0.139.0 用 ChatGPT 登录，试过的模型都被服务端拒了（它列出的 5 个里试了 gpt-5.5 和 gpt-5.4-mini）；0.148.0 跑不了 gpt-6-luna；0.156.1 各项都过。最低版本抬到 0.156.1，和验证过的版本相同，版本检查不用改结构。只改常量和测试，不必等 s39，下一个碰 `version.ts` 的片可以顺手改。服务端按客户端版本放行模型，这条线还会上移，所以回合里报"requires a newer version of Codex"时，s19 的诊断页也按版本太旧提示。
+- s03 留下的，给 s39：e05 实测 0.139.0 用 ChatGPT 登录，试过的模型都被服务端拒了（它列出的 5 个里试了 gpt-5.5 和 gpt-5.4-mini）；0.148.0 跑不了 gpt-6-luna；0.156.1 各项都过。最低版本抬到 0.156.1，和验证过的版本相同，版本检查不用改结构。只改常量和测试，不必等 s39，下一个碰 `version.ts` 的片可以顺手改。服务端按客户端版本放行模型，这条线还会上移，所以回合里报"requires a newer version of Codex"时，s19 的诊断页也按版本太旧提示。s19 已改（错误类别 `version`），最低版本没动。
 - s03：Claude 登录只用 SDK 自带的运行时查：起一个不跑回合的 query，读 initialize 返回的 account；查不了（没下载 SDK、超时、报错）就看环境变量，有 `ANTHROPIC_API_KEY`、`CLAUDE_CODE_OAUTH_TOKEN` 或 `ANTHROPIC_AUTH_TOKEN` 算已登录、没验证过，没有就是无法确认，不报未登录。没用 `claude auth status`：它是另一个 CLI，版本和 SDK 自带的不一定一样，查到了也说明不了 bot 的回合能不能跑。account 是 CLI 从本地凭据读的，不问服务器，所以过期的登录也显示已登录，直到真跑一轮失败。
 - s03：#301 的 Mac 检查发现 owner 的 Mac 上没有 Codex.app，ChatGPT.app 里自带一份 codex（`Contents/Resources/codex-cli/bin/codex`，版本是预发布号，例如 0.162.0-alpha.17.2）。已加进候选，排在 nvm 之后，用户自己装的优先。
 - s03 留下的：Claude 的两个辅助查询（取模型列表、生成标题）用 `settingSources: []`，不读用户设置。凭据写在 `~/.claude/settings.json` 的 `env` 里时（owner 的 Mac 就是这样），这两个查询会报未登录，回合本身（读 user 和 project）和登录检测（读 user）不受影响。下一个碰 Claude 后端的切片改，改之前先在 Mac 上看现象；只读 user 会把用户的 CLAUDE.md 带进生成标题的提示，要一起考虑。s16 已改，见 M3 的开工要点。
-- s03 留下的：首页只显示上一次查到、还没过期的 Claude 登录结果，daemon 不在后台自己查（快照每 60 秒刷一次，没开窗口时也刷，每次都起 CLI 太重）；没查过或过期了显示未确认，查完马上刷新首页。已登录的结果留 30 分钟，终端里退出登录后，首页最长 30 分钟还显示已登录，点"检查登录"才马上更新。s19 做状态页时，回合因为没登录而失败，就清掉这个缓存。daemon 由 LaunchAgent 起来时（s07）可能读不到钥匙串，探测会报未登录；e06 测钥匙串时一并跑一次登录检测，读不到就在 s07 改成无法确认。
+- s03 留下的：首页只显示上一次查到、还没过期的 Claude 登录结果，daemon 不在后台自己查（快照每 60 秒刷一次，没开窗口时也刷，每次都起 CLI 太重）；没查过或过期了显示未确认，查完马上刷新首页。已登录的结果留 30 分钟，终端里退出登录后，首页最长 30 分钟还显示已登录，点"检查登录"才马上更新。s19 做状态页时，回合因为没登录而失败，就清掉这个缓存。s19 已改，没有清掉，换成"未登录"并写明原因，见 M4 的"s19 做法（Codex 和 Claude）"。daemon 由 LaunchAgent 起来时（s07）可能读不到钥匙串，探测会报未登录；e06 测钥匙串时一并跑一次登录检测，读不到就在 s07 改成无法确认。
 - s04：没装 Node 的 Mac 上托管副本装不了也跑不了，Codex 那一步写明三条路：本机环境里装托管副本（要 Node 和 npm）、装 ChatGPT 或 Codex 桌面应用、用 Homebrew 装。
 - s04：JP-VPS 上实测 npm 11.19.0：全局 `--prefix` 安装会跳过 claude-code 和 lark-cli 自己的 postinstall（npm 提示 allowScripts 没覆盖），两个 `--version` 仍能跑；加上 `--allow-scripts=<包名>` 后 postinstall 照常跑。托管安装已加这个参数，npm 10.9 不认识它也照常装。
 - s04：清单是侧栏里的"首次运行清单"页，没有 bot 时打开 app 先到这一页；首页和 bot 设置的"连接与权限"里也有入口。每个 bot 的顺序按飞书后台走：凭据、权限、长连接、事件订阅、卡片回调、发布。长连接排在事件前，因为事件页要先连上才能保存"长连接"方式；凭据被飞书拒绝时，后面几步显示"等第 1 步"，不重复报同一个错；只是连不上飞书（断网、超时、5xx）时，凭据显示"无法确认"，不给"重新授权"。写了"企业租户里新权限可能要管理员审核"（e13）。
@@ -394,7 +394,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
   - 给 s60：bridge 里存着 `runIdleTimeoutSeconds: 120` 的用户，多半是点过当时的默认按钮。换算时要不要去掉这个值，由 s60 定。
   - ［重试］只重放这一轮最初的输入。运行中插话补进来的内容不在里面，只在会话历史里。
   - 进程中途死掉（"agent 进程异常退出"）不算网络失败，没有重试按钮。
-  - 登录失效的提示仍然写 `codex login`，Claude 会话也是这句；运行卡不知道后端是哪个，留给 s19 诊断页一起改。
+  - 登录失效的提示仍然写 `codex login`，Claude 会话也是这句；运行卡不知道后端是哪个，留给 s19 诊断页一起改。s19 已改：运行卡按后端写 Codex 或 Claude 的登录办法。
 - s12 做法（去掉开关）：网页的"会话压缩"、群设置卡和私聊项目设置卡上的开关、设置里的 `compact` 这一节（协议、RPC、daemon 校验）、`setAutoCompact` 写操作和 Codex 的 `model_auto_compact_token_limit` 覆盖都删了，管理面的项目快照不再带 `autoCompact`。`vonvon settings set --group … compact.autoCompact=…` 回"自动压缩现在一直开着，不能关了。"，RPC 存这一节按无效请求拒。已经发出去的旧卡上的开关还能点：不写盘，把卡刷新成没有开关的样子，顶部写一行"自动压缩现在一直开着，这个开关已经去掉了。"。
 - s12 做法（已存的 false）：`projects.json` 里旧的 `autoCompact: false` 不迁移、不删，没有代码读它；存别的设置时原样留在文件里，等 s60 换算时丢掉。
 - s12 做法（Claude 也一直开）：bot 的 Claude 会话在 flag 层设置里传 `autoCompactEnabled: true`，并把 `DISABLE_AUTO_COMPACT`、`DISABLE_COMPACT` 设成空。JP-VPS 实测（SDK 0.3.296，看 `getContextUsage().isAutoCompactEnabled`）：用户设置里关掉，或者进程环境、设置文件的 `env` 里设了这两个变量，都会关掉自动压缩；flag 层盖得过它们，空值算没设。用户自己终端里的 Claude Code 不受影响。Codex 不传阈值，用它自己的默认。
@@ -420,7 +420,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
   - 话题开出来那一刻的主区会话 id 没记（3.5 的回指要用）。s14 在话题会话开场时取当时的主区会话；开话题之后、话题会话开场之前主区 `/new` 过的，回指会指向新的主区会话。s14b 照这个做了。
   - 仪表只在一轮结束时写：`/compact` 以后、下一轮结束以前重启，第一张卡先显示压缩前的读数，第一条读数到了就对了。`/context` 卡、网页上的上下文和 `/goal` 的卡，重启后在第一轮之前仍是空的。
   - 私聊里的话题不进登记表（3.5 只要群里的）。
-  - JP-VPS 自验时看到，s13 之前就有：`daemon.log` 给收到的每条消息记了完整的话题 id 和正文前 40 个字（`D/bot/handle-message.ts` 的 `intake recv`），和 3.5"除了话题标题，群里的聊天内容不存到本机磁盘"不一致。s19 整理日志时去掉正文、id 截短，顺带查一遍别的日志有没有带正文。
+  - JP-VPS 自验时看到，s13 之前就有：`daemon.log` 给收到的每条消息记了完整的话题 id 和正文前 40 个字（`D/bot/handle-message.ts` 的 `intake recv`），和 3.5"除了话题标题，群里的聊天内容不存到本机磁盘"不一致。s19 整理日志时去掉正文、id 截短，顺带查一遍别的日志有没有带正文。s19 已改，见 M4 的"s19 做法（日志）"。
 - s14：拉别的 bot 的卡片回答要带 `card_msg_content_type`（e10）。不带时 2.0 卡片和 CardKit 流式卡片只返回标题和"请升级至最新版本客户端"，今天 daemon 发的正是这两种。`user_card_content` 返回发送时的卡片 JSON，比 `raw_card_content`（`D/bot/card-content.ts` 已在用的 `json_card` 包装）好解析。拉历史和查引用都要带。
 - s14：话题里的引用（e10）：在话题里回复某一条时，`parent_id` 是被回复的那条，`root_id` 是话题根；直接在话题里发的消息，`parent_id` 是话题根。所以只有 `parent_id` 不等于 `root_id` 时才放引用，这就是 3.5"今天的代码和这里不一样"第 4 条的修法；引用话题根的那条分不出来，按普通消息处理。客户端里在话题中"回复"某条发出的是不是同一种消息，由 owner 在客户端里回一次，Claude 看 `parent_id`。"同时发送到群"收几次事件还没测（e10 第 5 项），s14 开工前请 owner 在客户端里发一条。
 - s14 做法（拆片）：设计估出来约 1330 行，离 1500 行的上限太近，拆成两片。s14a 做记录块本身、连续群主区补拉、别的 bot 的回答和缺权限；s14b 做话题开场的回指和主区 10 条、引用行、认出别的 bot 开的话题、压缩后的话题表和话题群。s14a 不依赖 s14b，s15、s25 依赖 s14b。
@@ -482,7 +482,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 |---|---|---|---|---|---|---|---|
 | [ ] | s17 | 崩溃记录、整机暂停和 daemon restart | 崩溃前写 `~/.vonvon-bot/crash/` 记录，被强制结束的下次补一条；10 分钟 3 次进入暂停；加 `vonvon daemon restart`，`daemon status` 显示最近崩溃（3.10） | 800 | s07、e06 | 错误路径、关闭清理、并发、子进程 | launchd 下 10 分钟内 kill -9 三次：进入暂停、网页能开、每次都补了记录，`daemon restart` 能恢复 |
 | [ ] | s18 | 单个 bot 暂停和崩溃通知 | 单个 bot 10 分钟崩 3 次只停它；用应用身份直接给主人发私聊，每个 bot 每 10 分钟最多一条；daemon 主进程崩溃时只由最早加入的 bot 发，列出受影响的 bot；诊断页列崩溃记录，红条带"恢复运行"（3.10） | 900 | s17、s19、e10 | 并发、错误路径、子进程 | 无（M4 验收时看私聊和红条） |
-| [ ] | s19 | 状态与诊断页 | 按 bot 列连接状态、Codex 和 Claude 的版本与登录、缺的权限；每个 bot 记最近没回的消息和原因（3.1 第 8 条） | 450 | s03、s01 | 并发 | 无 |
+| [x] | s19 | 状态与诊断页 | 按 bot 列连接状态、Codex 和 Claude 的版本与登录、缺的权限；每个 bot 记最近没回的消息和原因（3.1 第 8 条） | 450 | s03、s01 | 并发 | 无 |
 | [ ] | s20a | Linux 命令行版（上）：平台、open --print、linger、终端扫码 | 平台枚举加 linux、去掉 windows，界面显示"这台 Linux 主机"；`vonvon open --print`；`service install` 处理 linger；`vonvon bot add` 终端扫码；Linux 的首次运行清单加"Linux 上 Codex 只能用完全访问"一步（3.10） | 750 | s07、s04 | 子进程、错误路径 | 无 |
 | [ ] | s20b | Linux 命令行版（下）：Codex 只能完全访问，删 windows-job | Linux 上的 Codex 遇到只读、读写档不起会话，回一句说明，设置里置灰；删 `codex-appserver/windows-job.ts`；在这片的 head 上做 Linux 验收（3.8、第 8 节第 5 条） | 400 | s20a | 子进程、关闭清理、错误路径 | 无（Linux 在 JP-VPS 上验） |
 
@@ -490,6 +490,17 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s17：e06 实测 `kill -9` 后约 1 秒被拉起，两次启动至少隔 `minimum runtime`（默认 10 秒；产品 plist 的 `ThrottleInterval` 是 5，实际间隔没测）；`launchctl print` 的 `last exit code` 和 `last terminating signal` 分得清正常退出和被杀。"重新登录过"用 Security 框架 `SessionGetInfo` 取的安全会话 id 判断（e06 只查了资料），开工时先在 Mac 上注销再登录验证一次；区分重启再加开机标识。
 - s17：2026-10-15 在 JP-VPS 上发现：网页端点"重启"（`restartHost`）时，关闭阶段的清理失败会取消重启，手动启动的 daemon 就此停掉；AggregateError 里面的各条错误没写进日志，看不出是哪一步失败。做 `daemon restart` 时一起处理。
 - s18：机器人能不能给没开过会话的主人发私聊，e10 没测到：owner 已经私聊过测试 bot。s18 开工前请 owner 找一位没和测试 bot 说过话的同事（本文第 8 节）：Claude 用应用身份按 open_id 给他发一条私聊、记返回码，同事在客户端里看收没收到、有没有通知。在那之前 3.10 的崩溃通知仍按推断做。给主人发私聊要用这个应用下主人的 open_id（从主人发给 bot 的消息事件里取），或者用 `user_id`、`union_id`，不能用 lark-cli 应用下的 open_id。
+- s19 做法（页面）：侧栏"状态与诊断"换成 `U/management/DiagnosticsPanel.tsx`，用现有的设置组件。"这台电脑"一节是 daemon 版本、Codex 和 Claude（和清单同一套 `toolSteps`）、数据目录、最近读取；"重新检查"重建快照、每个 bot 再读一次飞书设置，不起 CLI。每个 bot 一组：连接（和清单的"长连接"共用 `connectionStep`，另加没在运行、待生效、重连中）、飞书设置（还差哪几步，"打开清单"）、缺的权限、执行工具（按绑的群数）、最近没回的消息；最后是 daemon 日志。打开页面时每个 bot 读一次 `setupStatus`，不轮询。Bot 设置里的"飞书权限与连接 · 检查"改成"状态与诊断 · 查看"，只跳到这个 bot；`inspectAgent` 和 `snapshot.diagnostics` 删了。
+- s19 做法（没回的消息）：只记对这个 bot 说的（@ 了它，或按群设置不 @ 也该它回）却没回的。门控有群停用（只记 @ 的）、群正在改设置、群不在"允许的飞书群"、发信人不在"响应成员"、群没绑定（回了提示也记）；回合开始了没答完的有没登录、Codex 版本太旧、工具没装、缺权限、用量、网络、超时、进程中途退出和其他错误。不记：规则模式下不是对它说的、重投、撤回、私聊、云文档评论、`/goal`、按了停的。原因和下一步写在 `P/diagnostics.ts` 的 `NOT_REPLIED_TEXT`。bot 子进程经 IPC（`fcb.diagnostics`，zod 校验）送到 daemon 主进程的内存，单个 bot 独立运行时直接进本进程；变了以后最多每秒重建一次快照。一条记录只有时间、群 id、主区或话题、名字缓存里已有的发信人名字、原因、后端、报错的第一行（120 字）和消息 id 末 6 位，没有正文（3.5）。
+- s19 做法（缺的权限）：两个来源合在一行。飞书后台：`setupStatus` 缺的必需权限，加 3.11 表里影响对话的四项可选权限（新加的 `missingOptional`）。运行中被拒：补拉、查真名、认话题群、发卡片时被飞书拒绝，记权限名和在哪；后台显示已开却被拒的，提示发布一个新版本。
+- s19 做法（Codex 和 Claude）：清单和诊断页共用 `useClaudeLoginCheck`：Claude 装了、登录没查过时，每个窗口自动问一次，问完前写"检查中"，不再先显示"登录状态无法确认"，`vonvon bot status` 不变。快照每次重建都从缓存读 Claude 的登录，"检查登录"先重建快照再回复，不再多起一次 Codex。Claude 的回合因为没登录失败时，缓存换成"未登录"并写明原因，没有清空：清空后清单会再问，探测只看本机凭据，过期的登录照样报已登录；缓存带代数，之前开始的探测回来不覆盖它。错误类别加 `version`（"requires a newer version of Codex"），运行卡和诊断页提示更新 Codex，工具那一行和清单的判定不改。运行卡的登录提示按后端写，不知道后端时不写命令。
+- s19 做法（日志）：`intake recv` 去掉正文前 40 个字，话题、群、消息 id 只写末 6 位。日志器把 trace 上下文的 `chatId`、`msgId`，和顶层整串就是飞书 id 的字段（`oc_`、`om_`、`omt_`、`ou_`、`on_` 开头，可带 `#admin` 这类后缀）都截到末 6 位，嵌套对象和报错文字不动；删了没人用的 `intake.enter`。别的日志查过，不带群里的话；出站图片的 `src` 和后端的 stderr 留着。
+- s19 留下的：
+  - 给 s18、s25 留了口子：记录表按 bot 存一个对象，IPC 事件带 `kind`，崩溃记录、"已暂停"和智能模式"不回"的原因加字段和原因代码就行；页面最上面是 s18 红条的位置。
+  - "群正在改设置"没有单测：要走管理面改群设置才进 `projectMutations`。发信人只在名字缓存里有时才写，daemon 刚重启时多半没有。
+  - 飞书里"在没绑定的群 @ bot，诊断页看到原因"留到 M4 验收第 3 步：要用验收 daemon 没在跑的测试 bot。
+  - 顺带看到的：没绑定群的提示（`UNBOUND_GROUP_REPLY`）还写"在与我的私聊里完成绑定"，由 s51 一起改；`D/provider/policy/messages.zh.ts` 里 Claude 的登录命令写成 `claude login`，用不用得到还没查；`sessions.json` 的 `summary` 存了会话第一条消息的前 80 个字，作用相当于会话标题，留给碰会话列表的片（s48 或 s51）定。
+  - #338（s15）也改了 `handleMessage` 的同一段、`startReservedRun` 的 catch 和 `P/setup-steps.ts`，后合的那个 merge main 时解冲突。
 - s20a：清单里那一步写明"Linux 上 Codex 只能用完全访问"，由主人自己选要不要把 bot 默认档改成完全访问，不自动放开（本文第 5 节）。
 - s20a：Linux 的首次运行清单还要查 Claude 只读、读写档要的沙箱：有没有 `bwrap` 和 `socat`，以及 Ubuntu 23.10 以后 AppArmor 是否挡住了非特权的用户命名空间（`kernel.apparmor_restrict_unprivileged_userns`）。缺了就写明 Claude 只能用完全访问或要先装、先放开，给出命令，不自动改系统设置。2026-10-15 JP-VPS 上实际遇到，见本文第 7 节。
 - s20b：被拉进的已有群默认只读，在 Linux 上用 Codex 时起不来：bot 回一句说明，等主人改（product.md 第 11 节第 24 条）。今天的代码在绑定之前就抛错（`D/project/lifecycle.ts:206` 附近），要改成照常绑定、回合开始时再回说明。`windows-job.ts` 被 `owned-process.ts` 和 `environment/service.ts` 引用，属于子进程的代码。
@@ -704,6 +715,9 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 | Codex 验证过的版本 | 跟托管安装锁定的版本，现在是 0.156.1；比它新的照常用，只在本机环境页写一句"比验证过的新" | 只有这个版本完整跑过；新版本大多兼容，拦住反而让用户装旧版 | s03 |
 | 首次运行清单多久查一次飞书 | 10 秒，只在清单页开着时查，只查还没做完的 bot，一个一个查；全部变绿就停，点"重新检测"马上查 | 每查一个 bot 要调四五个飞书接口；长连接状态直接从快照来，不用查 | s04 |
 | Claude 登录结果留多久 | 已登录留 30 分钟，其他留 5 分钟；点"检查登录"马上重查 | 每查一次要起一个约 250 MB 的 CLI，本机环境页每次打开都会问。daemon 自己不查，首页只显示上一次查到、还没过期的结果 | s03 |
+| 最近没回的消息记多少 | 每个 bot 30 条，新的在前；同群、同位置、同原因、同后端 10 分钟内并成一条带次数；放 daemon 主进程内存，重启清空 | 3.1 第 8 条只说"最近"；没登录时群里连发十条只占一条；记录不带正文，用不着跨重启 | s19 |
+| 运行中被拒的权限显示多久 | 每个权限留最近一次，最多 10 项，显示 24 小时内的 | 发布新版本以后，旧的拒绝不该一直挂着 | s19 |
+| 诊断页多久查一次 | 打开时每个 bot 读一次飞书设置，点"重新检查"再读，不轮询；Claude 登录每个窗口最多自动问一次 | 每读一个 bot 要调 3 到 4 个飞书接口，问 Claude 要起约 250 MB 的 CLI | s19 |
 | 已有会话补拉的条数 | 最多 40 条，更早的只写"更早还有 N 条" | 3.5 只给了开场的条数（主区 20、话题 10），已有会话只说"字数超预算就留最近的"；40 条约 12 KB | s14a |
 | 补拉和查引用的时限 | 一次补拉所有页合起来 10 秒，查一条消息 10 秒 | SDK 的请求没有超时，这一轮要等它；和登记表查第一条用的 10 秒一样。拉满 10 页要多久没测过，M3 看日志里有没有 `*-context-timeout` 再调 | s14a |
 | 别的 bot 没答完的卡片重拉多久 | 距触发消息 10 分钟以内的才重拉 | 卡在流式输出里一直不结束的卡片，不能让每一轮都从它那里重拉 | s14a |

@@ -8,6 +8,8 @@ export type SearchReveal = 'machine-advanced' | 'codex-tool' | 'claude-tool' | '
 export type Destination = {page: Page; view?: CollaborationView; selection?: Selection; detail?: DetailPane; section?: string; field?: string; reveal?: SearchReveal; guide?: string};
 export type SearchEntry = {id: string; title: string; context: string; aliases: readonly string[]; destination: Destination; kind: 'page' | 'setting' | 'action' | 'item'};
 export const settingAnchor = (title: string) => `setting-${encodeURIComponent(title)}`;
+/** One bot's section on the 状态与诊断 page. */
+export const diagnosticsSection = (agentId: string) => `Bot 状态 ${agentId}`;
 
 type Target = {title: string; aliases?: readonly string[]; reveal?: SearchReveal; guide?: string; field?: string};
 type Group = {title: string; fields: readonly Target[]};
@@ -15,7 +17,7 @@ type AgentGroup = {title: string; aliases?: readonly string[]; fields: readonly 
 const item = (title: string, aliases: readonly string[] = [], options: Omit<Target, 'title' | 'aliases'> = {}): Target => ({title, aliases, ...options});
 const agentGroups: readonly AgentGroup[] = [
   {title: 'Bot 身份', fields: [item('启用 Bot', ['停用 Bot'])]},
-  {title: '连接与权限', fields: [item('应用 ID', ['App ID']), item('首次运行清单', ['开权限', '事件订阅', '发布版本']), item('飞书权限', ['一键开权限']), item('刷新飞书凭据', ['重新扫码', '重新授权']), item('飞书权限与连接', ['检查连接'])]},
+  {title: '连接与权限', fields: [item('应用 ID', ['App ID']), item('首次运行清单', ['开权限', '事件订阅', '发布版本']), item('飞书权限', ['一键开权限']), item('刷新飞书凭据', ['重新扫码', '重新授权']), item('状态与诊断', ['检查连接', '没回的消息'])]},
   {title: '任务卡片', aliases: ['飞书任务卡片', '卡片显示'], fields: [item('显示工具调用'), item('显示模型')]},
   {title: '运行策略', aliases: ['任务行为与提醒'], fields: [item('最大并发任务'), item('当前运行并发'), item('空闲超时（秒，0 为关闭）', ['空闲超时']), item('运行中收到新消息', ['待处理消息策略', 'steer', 'queue'])]},
   {title: '任务结束提醒', fields: [item('提醒方式'), item('长任务阈值（分钟）', ['长任务阈值'], {guide: '先将提醒方式设为「长任务」，即可调整阈值。'})]},
@@ -49,8 +51,7 @@ const globalGroups: readonly {page: Page; section: string; fields: readonly Targ
   {page: 'environment', section: '本机环境', fields: [item('重新检测'), ...['安装执行后端', '检查后端版本', '更新执行后端', '卸载执行后端'].map(title => item(title, ['Claude Agent SDK', '托管后端'], {field: '', guide: '在本机环境的执行后端条目中操作；可用按钮取决于已安装状态。'}))]},
   ...(['Codex', 'Claude', '飞书 CLI'] as const).map((section, index) => ({page: 'environment' as const, section: toolNames[(['codex', 'claude', 'lark-cli'] as const)[index]!], fields: ['安装', '更新', '登录', '检查授权', '重新登录', '安装托管副本', '重新安装最新版', '停用托管副本', '安装来源', '安装位置', '当前版本', '托管版本', '最新版本', '授权状态', ...(section === 'Codex' ? ['Host 状态', 'Host 版本'] : []), ...(section === '飞书 CLI' ? ['当前 Profile'] : [])].map(title => item(`${title} ${section}`, [title], {field: title, reveal: (['codex-tool', 'claude-tool', 'lark-tool'] as const)[index], guide: ['安装来源', '安装位置', '当前版本', '托管版本', '最新版本', '授权状态', 'Host 状态', 'Host 版本', '当前 Profile'].includes(title) ? undefined : '此操作是否可用取决于本机工具的安装与授权状态。'}))})),
   {page: 'environment', section: '飞书 Profile', fields: [item('管理飞书 CLI', ['管理 Profile', '切换 Profile'], {reveal: 'profile-manager'}), item('添加已有应用', ['添加 Profile'], {reveal: 'profile-add'}), item('创建新应用', ['创建 Profile'], {reveal: 'profile-create'}), ...['Profile 名称', 'App ID', 'App Secret', '平台', '添加后设为当前'].map(title => item(title, ['飞书应用'], {reveal: 'profile-add'})), item('设为当前', ['切换飞书 Profile'], {reveal: 'profile-manager'})]},
-  {page: 'diagnostics', section: '当前状态', fields: [item('daemon 版本'), item('已注册 Bot'), item('已连接飞书群'), item('最近读取'), item('数据目录')]},
-  {page: 'diagnostics', section: '诊断操作', fields: [item('重新检查'), item('打开事件设置', [], {guide: '出现飞书事件配置诊断时，可打开对应设置。'})]},
+  {page: 'diagnostics', section: '这台电脑', fields: [item('daemon 版本'), item('重新检查'), item('最近读取'), item('数据目录')]},
   {page: 'diagnostics', section: 'daemon 日志', fields: [item('刷新日志'), item('持续跟随'), item('daemon 日志')]},
 ];
 function expand(id: string, context: string, base: Destination, groups: readonly Group[], pane: DetailPane): SearchEntry[] {
@@ -70,7 +71,7 @@ export function searchEntries(snapshot: DesktopSnapshot): SearchEntry[] {
     {id: 'usage', title: 'Codex 用量', aliases: ['账号', '套餐', '限额', '活动', '热力图'], page: 'usage'},
     {id: 'environment', title: '本机环境', aliases: ['工具', '安装', '授权'], page: 'environment'},
     {id: 'application', title: '应用与启动', aliases: ['版本', '更新', '后台服务'], page: 'application'},
-    {id: 'diagnostics', title: '状态与诊断', aliases: ['日志', '数据目录', '连接'], page: 'diagnostics'},
+    {id: 'diagnostics', title: '状态与诊断', aliases: ['日志', '数据目录', '连接', '没回的消息', '缺的权限'], page: 'diagnostics'},
   ];
   const entries: SearchEntry[] = pages.map(page => ({id: page.id, title: page.title, context: '页面', aliases: page.aliases, destination: {page: page.page, view: page.view, selection: page.view ? {kind: 'overview'} : undefined}, kind: 'page'}));
   for (const group of globalGroups) group.fields.forEach((field, index) => entries.push({
@@ -80,6 +81,7 @@ export function searchEntries(snapshot: DesktopSnapshot): SearchEntry[] {
     const base: Destination = {page: 'collaboration', view: 'agents', selection: {kind: 'agent', id: agent.id}};
     entries.push({id: agent.id, title: agent.name, context: 'Bot', aliases: [agent.id], destination: base, kind: 'item'});
     entries.push({id: `${agent.id}-settings`, title: 'Bot 设置', context: agent.name, aliases: ['机器人设置', 'Bot 权限'], destination: {...base, detail: {kind: 'agent-settings'}}, kind: 'setting'});
+    entries.push({id: `${agent.id}-diagnostics`, title: 'Bot 状态', context: `状态与诊断 · ${agent.name}`, aliases: ['连接', '缺的权限', '没回的消息'], destination: {page: 'diagnostics', section: diagnosticsSection(agent.id)}, kind: 'setting'});
     for (const group of agentGroups) {
       const destination: Destination = {...base, detail: {kind: 'agent-settings'}, section: group.title};
       entries.push({id: `${agent.id}-${group.title}`, title: group.title, context: `Bot 设置 · ${agent.name}`, aliases: group.aliases ?? [], destination, kind: 'setting'});

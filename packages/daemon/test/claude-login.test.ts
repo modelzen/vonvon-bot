@@ -2,7 +2,7 @@ import type { Query } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BackendNotInstalledError } from '../src/agent/backend-loader';
 import { ClaudeAgentBackend, type ClaudeSdkFacade } from '../src/agent/claude-agent/backend';
-import { CLAUDE_SIGNED_OUT_MESSAGE, cachedClaudeLogin, loginFromAccount, loginFromEnv, loginUnderService, readClaudeLogin, resetClaudeLoginCache } from '../src/agent/claude-agent/login';
+import { CLAUDE_SIGNED_OUT_MESSAGE, CLAUDE_TURN_SIGNED_OUT_MESSAGE, cachedClaudeLogin, loginFromAccount, loginFromEnv, loginUnderService, noteClaudeLoginFailed, readClaudeLogin, resetClaudeLoginCache } from '../src/agent/claude-agent/login';
 
 afterEach(() => {
   resetClaudeLoginCache();
@@ -71,6 +71,24 @@ describe('Claude login mapping', () => {
     expect(await second).toEqual({ state: 'signedIn', message: 'after' });
     expect(probe).toHaveBeenCalledTimes(2);
     expect(cachedClaudeLogin()).toEqual({ state: 'signedIn', message: 'after' });
+  });
+
+  it('says 未登录 after a turn failed for its login, and an older probe cannot undo it (s19)', async () => {
+    type Answer = { state: 'signedIn'; message: string };
+    const releases: Array<(value: Answer) => void> = [];
+    const probe = vi.fn(() => new Promise<Answer>(resolve => { releases.push(resolve); }));
+    await Promise.all([readClaudeLogin(probe), Promise.resolve().then(() => releases[0]!({ state: 'signedIn', message: 'cached' }))]);
+    const older = readClaudeLogin(probe, { refresh: true });
+    noteClaudeLoginFailed();
+    releases[1]!({ state: 'signedIn', message: 'stale' });
+    expect(await older).toEqual({ state: 'signedIn', message: 'stale' });
+    expect(cachedClaudeLogin()).toEqual({ state: 'signedOut', message: CLAUDE_TURN_SIGNED_OUT_MESSAGE });
+    // 检查登录 after the failure probes again and shows what it finds.
+    const after = readClaudeLogin(probe, { refresh: true });
+    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(3));
+    releases[2]!({ state: 'signedIn', message: 'fresh' });
+    expect(await after).toEqual({ state: 'signedIn', message: 'fresh' });
+    expect(cachedClaudeLogin()).toEqual({ state: 'signedIn', message: 'fresh' });
   });
 });
 

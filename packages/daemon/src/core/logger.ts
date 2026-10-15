@@ -19,7 +19,6 @@ const STDOUT_INFO_ALLOWLIST = new Set<string>([
   'ws.connected',
   'ws.reconnecting',
   'ws.reconnected',
-  'intake.enter',
   'intake.recv',
   'intake.reject',
   'card.final',
@@ -101,8 +100,23 @@ const RESERVED_KEYS = new Set([
   'msgId',
 ]);
 
+/**
+ * A Feishu chat, message, topic or person id is cut to its last 6 characters, as the call sites
+ * already do with `.slice(-6)` (s19): enough to match a log line to the 状态与诊断 page, not the
+ * whole id. Only a string that is wholly one id, with a suffix like `#admin` kept; nested values
+ * and error text are left alone.
+ */
+export function shortenFeishuId(value: string): string {
+  const id = /^((?:oc|om|omt|ou|on)_[A-Za-z0-9_-]{7,})(#[A-Za-z]+)?$/.exec(value);
+  return id ? `${id[1]!.slice(-6)}${id[2] ?? ''}` : value;
+}
+const shortened = (value: unknown): unknown => typeof value === 'string' ? shortenFeishuId(value) : value;
+
 function emit(level: Level, phase: string, event: string, fields: LogFields = {}): void {
-  const ctx = als.getStore() ?? {};
+  const stored = als.getStore() ?? {};
+  const ctx: LogContext = { ...stored };
+  if (ctx.chatId) ctx.chatId = shortenFeishuId(ctx.chatId);
+  if (ctx.msgId) ctx.msgId = shortenFeishuId(ctx.msgId);
   const entry: Record<string, unknown> = {
     ts: new Date().toISOString(),
     level,
@@ -110,7 +124,10 @@ function emit(level: Level, phase: string, event: string, fields: LogFields = {}
     event,
     ...ctx,
   };
-  for (const [k, v] of Object.entries(fields)) {
+  const shown: LogFields = {};
+  for (const [k, raw] of Object.entries(fields)) {
+    const v = shortened(raw);
+    shown[k] = v;
     if (RESERVED_KEYS.has(k)) {
       entry[`_${k}`] = v;
     } else {
@@ -131,7 +148,7 @@ function emit(level: Level, phase: string, event: string, fields: LogFields = {}
   if (!showOnStdout) return;
 
   const fn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
-  fn(formatStdout(level, phase, event, ctx, fields));
+  fn(formatStdout(level, phase, event, ctx, shown));
 }
 
 function formatStdout(
@@ -150,12 +167,6 @@ function formatStdout(
     if (event === 'reconnecting') return '↻ 正在重连…';
     if (event === 'reconnected') return '✓ 已重连';
     if (event === 'fail') return `✗ WS 错误: ${fields.err ?? ''}`;
-  }
-  if (phase === 'intake' && event === 'enter') {
-    const c = ctx.chatId ? ctx.chatId.slice(-6) : '-';
-    const sender = fields.sender ?? '-';
-    const preview = fields.preview ?? '';
-    return `▸ ${fields.chatType ?? '?'}/${c} ${sender}: ${preview}`;
   }
   if (phase === 'card' && event === 'final') {
     const c = ctx.chatId ? ctx.chatId.slice(-6) : '-';

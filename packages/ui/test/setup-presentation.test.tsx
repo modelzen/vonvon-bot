@@ -80,7 +80,7 @@ it('needs Codex or Claude installed, signed in and new enough', () => {
 const client = createClient({isOpen: () => true, onMessage: () => {}, onClose: () => {}, onError: () => {}, send: () => {}, close: async () => {}});
 const snapshot = (agents: Agent[]): DesktopSnapshot => ({
   revision: 1, observedAt: 1, stale: false, host: {kind: 'connected', ownership: 'owned', version: 'test'},
-  agents, groups: [], memberships: [], tools: [tool({tool: 'codex', installation: 'missing', authentication: 'unknown', version: null})], jobs: [], diagnostics: [],
+  agents, groups: [], memberships: [], tools: [tool({tool: 'codex', installation: 'missing', authentication: 'unknown', version: null})], jobs: [],
   application: {platform: 'macos', version: 'test', loginItem: false, dataPath: '/tmp/test'},
 });
 const render = (agents: Agent[], application: Partial<DesktopSnapshot['application']> = {}) => renderToStaticMarkup(<ClientProvider client={client}>
@@ -95,6 +95,19 @@ it('starts a new machine with the tools and the scan step', () => {
   expect(html).toContain('扫码建飞书应用');
   expect(html).toContain('注册 Bot');
   expect(html).not.toContain('添加 Bot');
+});
+
+it('says 检查中 for Claude until its login is asked, never 无法确认 before the first ask (s19)', () => {
+  const claude = tool({tool: 'claude', authentication: 'unknown', version: '0.3.296'});
+  expect(toolSteps([claude], {claudeChecking: true}).steps[1]).toMatchObject({status: '检查中 · 0.3.296', tone: 'neutral', done: false});
+  // The CLI's `vonvon bot status` asks nothing, so it keeps saying it cannot tell.
+  expect(toolSteps([claude]).steps[1]?.status).toBe('登录状态无法确认 · 0.3.296');
+  expect(toolSteps([{...claude, authentication: 'signedOut'}], {claudeChecking: true}).steps[1]?.status).toBe('未登录 · 0.3.296');
+  const html = renderToStaticMarkup(<ClientProvider client={client}>
+    <SetupChecklist snapshot={{...snapshot([]), tools: [claude]}} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onRegister={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}} codexJobs={null}/>
+  </ClientProvider>);
+  expect(html).toContain('检查中 · 0.3.296');
+  expect(html).not.toContain('登录状态无法确认');
 });
 
 it('lists each bot with the admin-review note while its first read is pending', () => {

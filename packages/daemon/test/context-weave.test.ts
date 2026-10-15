@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { log } from '../src/core/logger';
+import { setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
 import {
   extractCardText,
   extractMessageText,
@@ -885,8 +886,12 @@ describe('fetchThreadContext · 缺权限', () => {
 
   it('a thrown 99991672 logs a structured warning naming im:message:readonly, and the turn gets []', async () => {
     const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+    const events: DiagnosticsEvent[] = [];
+    setDiagnosticsSink(event => events.push(event));
     const out = await fetchThreadContext(listChannel(async () => { throw axiosError(400, SCOPE_DENIED_BODY); }), 'omt_scope');
+    setDiagnosticsSink(undefined);
     expect(out).toEqual({ messages: [], ok: false, complete: false });
+    expect(events).toEqual([{ kind: 'scopeDenied', denial: { scope: 'im:message:readonly', where: 'history', at: expect.any(Number) } }]);
     expect(warn).toHaveBeenCalledWith('intake', 'thread-context-failed', {
       threadId: 'omt_scope',
       reason: 'missing-scope',

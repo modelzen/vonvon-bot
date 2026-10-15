@@ -1,0 +1,8 @@
+.diagnostics-bot {display:flex;align-items:center;gap:8px;}
+.diagnostics-replies, .diagnostics-scopes {margin:4px 0 0;padding:0;list-style:none;display:grid;gap:8px;}
+.diagnostics-scopes {gap:2px;}
+.diagnostics-scopes code {font-size:11px;}
+.diagnostics-replies li {display:grid;gap:1px;}
+.diagnostics-replies__head {display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;color:var(--ss-text);}
+.diagnostics-replies__head time {font-variant-numeric:tabular-nums;}
+.diagnostics-replies__head span {color:var(--color-status-warning);}

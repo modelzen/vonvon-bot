@@ -20,7 +20,7 @@ const member = (agentId: string, groupId: string, name: string): Membership => (
   backend: 'codex-appserver', conversation: 'threads', response: 'mention', permission: { administrator: 'qa', member: 'qa', network: false }, stale: false,
 });
 const snapshot = (agents: Agent[], memberships: Membership[] = [], tools: ToolState[] = []): DesktopSnapshot => ({
-  revision: 1, observedAt: 1, stale: false, host: { kind: 'starting' }, agents, groups: [], memberships, tools, jobs: [], diagnostics: [],
+  revision: 1, observedAt: 1, stale: false, host: { kind: 'starting' }, agents, groups: [], memberships, tools, jobs: [],
   application: { platform: 'unsupported', version: '1', loginItem: false, dataPath: '/x' },
 });
 const section = (stored: object, revision = `rev-${Object.keys(stored)[0]}`, effective = stored) => ({ stored, effective, revision, access: { kind: 'writable' }, apply: [] });

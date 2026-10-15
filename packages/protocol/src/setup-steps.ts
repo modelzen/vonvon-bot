@@ -79,7 +79,8 @@ export function scopeStep(status: AdminSetupStatus): SetupStep & {id: 'scopes'} 
   return {...base, status: '已开通', tone: 'success', done: true, actions: warnings ? [grant] : []};
 }
 
-function connectionStep(agent: Agent): SetupStep {
+/** The 长连接 step, also the 连接 row of the 状态与诊断 page. */
+export function connectionStep(agent: Agent): SetupStep {
   const base = {id: 'connection', title: '长连接'} as const;
   if (agent.readError) return {...base, status: '读取失败', tone: 'warning', done: false, detail: agent.readError, actions: []};
   if (!agent.enabled) return {...base, status: '没有启用', tone: 'warning', done: false, detail: '启用后 Bot 会连上飞书，事件设置页才能保存长连接方式。', actions: [{kind: 'enable', label: '启用 Bot'}]};
@@ -94,11 +95,12 @@ export function remoteStepsDone(status: AdminSetupStatus | undefined): boolean {
 }
 
 export type ToolSteps = {steps: SetupStep[]; ready: boolean};
-/** Codex or Claude: either one installed, signed in and new enough is enough. */
-export function toolSteps(tools: readonly ToolState[]): ToolSteps {
+/** Codex or Claude: either one installed, signed in and new enough is enough. `claudeChecking`: the page is asking
+ * for the Claude login (or about to), so an unknown answer reads 检查中; `vonvon bot status` leaves it out. */
+export function toolSteps(tools: readonly ToolState[], opts: {claudeChecking?: boolean} = {}): ToolSteps {
   const codex = tools.find(tool => tool.tool === 'codex');
   const claude = tools.find(tool => tool.tool === 'claude');
-  const steps = [codexStep(codex), claudeStep(claude)];
+  const steps = [codexStep(codex), claudeStep(claude, opts.claudeChecking)];
   return {steps, ready: steps.some(step => step.done)};
 }
 
@@ -115,12 +117,13 @@ function codexStep(tool: ToolState | undefined): SetupStep {
   return {...base, status: `可用${version}`, tone: 'success', done: true, detail: newer, actions: []};
 }
 
-function claudeStep(tool: ToolState | undefined): SetupStep {
+function claudeStep(tool: ToolState | undefined, checking = false): SetupStep {
   const base = {id: 'claude', title: 'Claude'} as const;
   const version = tool?.version ? ` · ${tool.version}` : '';
   if (!tool || tool.installation === 'unknown') return {...base, status: '无法确认', tone: 'neutral', done: false, detail: tool?.message, actions: [{kind: 'environment', label: '去本机环境'}]};
   if (tool.installation === 'missing') return {...base, status: '未安装', tone: 'neutral', done: false, detail: '要用 Claude，在本机环境里安装 Claude Agent SDK。', actions: [{kind: 'environment', label: '去本机环境'}]};
   if (tool.authentication === 'signedIn' || tool.authentication === 'notRequired') return {...base, status: `已登录${version}`, tone: 'success', done: true, detail: tool.message, actions: [{kind: 'claudeLogin', label: '检查登录'}]};
+  if (checking && tool.authentication === 'unknown') return {...base, status: `检查中${version}`, tone: 'neutral', done: false, detail: '正在检查 Claude 的登录。', actions: [{kind: 'claudeLogin', label: '检查登录'}]};
   const status = tool.authentication === 'signedOut' ? '未登录' : '登录状态无法确认';
   return {...base, status: `${status}${version}`, tone: tool.authentication === 'signedOut' ? 'warning' : 'neutral', done: false, detail: tool.message ?? '在终端运行 claude 并登录，然后点"检查登录"。', actions: [{kind: 'claudeLogin', label: '检查登录'}]};
 }

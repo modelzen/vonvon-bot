@@ -11,6 +11,8 @@ import { createAdminService } from '../admin/service';
 import { installBackendDep, uninstallBackendDep } from '../agent';
 import { performCoreUpdate } from '../service/update';
 import { startApi } from '../server/http';
+import { noteClaudeLoginFailed } from '../agent/claude-agent/login';
+import { createDiagnosticsStore, parseDiagnosticsIpc } from './diagnostics';
 import { z } from 'zod';
 
 const ownedWorkSchema = z.object({
@@ -57,6 +59,8 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   const errors: unknown[] = [];
   let api: Awaited<ReturnType<typeof startApi>> | undefined;
   const children = new Map<string, Child>(bots.map((bot) => [bot.appId, { bot, enabled: true, backoffMs: BACKOFF_MIN_MS, startedAt: 0 } satisfies Child]));
+  // Lives here, not in the child: a bot's records survive its restarts and go with the daemon's.
+  const diagnostics = createDiagnosticsStore({ changed: () => api?.invalidate(), claudeSignedOut: noteClaudeLoginFailed });
 
   console.log(`\n正在启动 ${bots.length} 个机器人（各自独立进程）：`);
   for (const b of bots) console.log(`  • ${b.name}  (${b.appId})  [${b.tenant}]`);
@@ -107,6 +111,8 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
       const parsed = ownedWorkSchema.safeParse(message);
       if (parsed.success && !owned.report?.settled) owned.report = parsed.data;
       if (message && typeof message === 'object' && 'fcb' in message && message.fcb === 'fcb.connection') api?.invalidate();
+      const event = parseDiagnosticsIpc(message);
+      if (event) diagnostics.accept(c.bot.appId, event);
     });
     log.info('supervisor', 'child-start', { bot: c.bot.name, appId: c.bot.appId, pid: proc.pid ?? null });
     prefixPipe(c.bot.name, proc.stdout, process.stdout);
@@ -166,6 +172,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     api = await startApi({
       port: options.port,
       control,
+      diagnostics,
       service: createAdminService({
         applyBotActivation: async (appId, enabled) => {
           if (shuttingDown) throw new Error('Host 正在退出。');
@@ -258,6 +265,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   } catch (error) { errors.push(error); }
   finally {
     shuttingDown = true;
+    diagnostics.close();
     for (const child of children.values()) if (child.restartTimer) clearTimeout(child.restartTimer);
     const cleanup = await Promise.allSettled([closeOwnedProviders(async () => {
       const drained = await Promise.allSettled([Promise.resolve().then(() => api?.beginDrain())]);

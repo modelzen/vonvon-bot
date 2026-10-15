@@ -2,6 +2,7 @@ import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { log } from '../core/logger';
 import { labelScope } from '../config/scopes';
 import { scopeDenial, type FeishuErrorBody } from '../utils/feishu-error';
+import { reportScopeDenied } from './diagnostics';
 import { extractSendCardText, isSendCard, isStreamingCard } from './card-content';
 import { withDeadline, type NameBook } from './names';
 
@@ -373,6 +374,7 @@ function warnContextFailed(c: Container, failure: unknown): void {
   if (denial) {
     // We request HISTORY_SCOPE; name another only when Feishu says ours wouldn't satisfy the call.
     const scope = denial.accepted.includes(HISTORY_SCOPE) ? HISTORY_SCOPE : (denial.accepted[0] ?? HISTORY_SCOPE);
+    reportScopeDenied(scope, 'history');
     log.warn('intake', event, {
       ...where(c),
       reason: 'missing-scope',

@@ -27,7 +27,6 @@ const samples = [
   {type:"cancelJob",jobId},
   {type:"openJobAuthorization",jobId},
   {type:"copyJobAuthorization",jobId},
-  {type:"inspectAgent",agentId},
 ];
 assert.deepEqual(new Set(samples.map(sample => sample.type)), new Set(commandSchema.optionsMap.keys()));
 for (const sample of samples) commandSchema.parse(sample);

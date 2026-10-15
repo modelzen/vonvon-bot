@@ -1,6 +1,7 @@
 import type { LarkChannel, MentionInfo, NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import { log } from '../core/logger';
 import { scopeDenial } from '../utils/feishu-error';
+import { reportScopeDenied } from './diagnostics';
 
 /**
  * Real names by open_id (product.md 3.5: 真人的话带真名).
@@ -97,7 +98,7 @@ export function createNameBook(
         if (name) return name;
       } catch (err) {
         const denied = Boolean(scopeDenial(err));
-        if (denied) contactDeniedUntil = now() + CONTACT_RETRY_MS;
+        if (denied) { contactDeniedUntil = now() + CONTACT_RETRY_MS; reportScopeDenied('contact:user.base:readonly', 'names'); }
         log.info('intake', 'sender-name-miss', { step: 'contact', denied, err: String(err) });
       }
     }
