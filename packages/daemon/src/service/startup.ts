@@ -9,9 +9,9 @@ export async function readStartupRegistration(root: string): Promise<Registratio
   const home = homedir();
   switch (process.platform) {
     case 'darwin':
-      return readRegistration({ target: serviceTarget({ platform: 'darwin', home }), requestedRoot: root });
+      return readRegistration({ target: serviceTarget({ platform: 'darwin', home, root }), requestedRoot: root });
     case 'linux':
-      return readRegistration({ target: serviceTarget({ platform: 'linux', home, xdgConfigHome: process.env.XDG_CONFIG_HOME }), requestedRoot: root });
+      return readRegistration({ target: serviceTarget({ platform: 'linux', home, root, xdgConfigHome: process.env.XDG_CONFIG_HOME }), requestedRoot: root });
     default:
       return { kind: 'absent' };
   }

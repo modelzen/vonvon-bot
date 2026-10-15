@@ -27,7 +27,7 @@ import { BackendNotInstalledError, isBackendDepInstalled, installedBackendVersio
 import { permissionOptions } from './permission';
 import { foldSessionMessages, mapSessionSummary } from './history';
 import { ClaudeAgentThread } from './thread';
-import { loginFromAccount, loginFromEnv, readClaudeLogin } from './login';
+import { loginFromAccount, loginFromEnv, loginUnderService, readClaudeLogin } from './login';
 
 /** The on-demand npm package backing this backend. */
 const SDK_PKG = '@anthropic-ai/claude-agent-sdk';
@@ -284,7 +284,7 @@ export class ClaudeAgentBackend implements AgentBackend {
         },
       });
       const init = await withAbortDeadline(query.initializationResult(), abortController, LOGIN_PROBE_TIMEOUT_MS);
-      return loginFromAccount(init.account) ?? loginFromEnv(process.env, 'Claude 没有报告账号信息。');
+      return loginUnderService(loginFromAccount(init.account) ?? loginFromEnv(process.env, 'Claude 没有报告账号信息。'), process.env);
     } catch (err) {
       if (err instanceof BackendNotInstalledError) throw err;
       log.fail('agent', err, { backend: 'claude-agent', phase: 'loginStatus' });

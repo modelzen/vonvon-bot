@@ -5,6 +5,7 @@ import { cachedClaudeLogin } from '../agent/claude-agent/login';
 import { CODEX_MIN_VERSION, CODEX_VERIFIED_VERSION, classifyCodexVersion } from '../agent/codex-appserver/version';
 import type { AdminService } from '../admin/service';
 import { paths } from '../config/paths';
+import { controlDesktopService } from '../host/service';
 import { bridgeVersion } from '../core/version';
 import { projectState } from './projection';
 import { readAdminState } from './state';
@@ -22,6 +23,8 @@ export async function createSnapshotStore(options: {
   jobs: () => Job[];
   publish: (snapshot: DesktopSnapshot) => void;
   readTools?: () => Promise<ToolState[]>;
+  /** Whether the background service is installed and enabled (3.10); read with the tools, every 60 s. */
+  readLoginItem?: () => Promise<boolean>;
 }): Promise<SnapshotStore> {
   const version = bridgeVersion();
   let snapshot: DesktopSnapshot = {
@@ -31,6 +34,11 @@ export async function createSnapshotStore(options: {
     application: { platform: process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'unsupported', version, loginItem: false, dataPath: paths.appDir },
   };
   let tools: ToolState[] = [];
+  let loginItem = false;
+  const readLoginItem = options.readLoginItem ?? (async (): Promise<boolean> => {
+    const status = await controlDesktopService('status');
+    return status.state === 'running' || status.state === 'stopped' || status.state === 'detached';
+  });
   const diagnostics = new Map<string, Diagnostic[]>();
   let queue = Promise.resolve();
   let refreshing: Promise<void> | undefined;
@@ -55,6 +63,7 @@ export async function createSnapshotStore(options: {
     const state = await readAdminState(options.service);
     const next = {
       ...snapshot, ...projectState(state, snapshot, new Set()), tools,
+      application: { ...snapshot.application, loginItem },
       jobs: options.jobs(), diagnostics: [...diagnostics.values()].flat(),
       observedAt: Date.now(),
     };
@@ -78,13 +87,14 @@ export async function createSnapshotStore(options: {
     // A read already running may have looked before the caller's change (a login check
     // that just finished), so callers during it share one more read after it.
     if (refreshing) return followUp ??= refreshing.catch(() => undefined).then(() => { followUp = undefined; return refreshTools(); });
-    refreshing = readTools().then(async values => {
+    refreshing = Promise.all([readTools(), readLoginItem().catch(() => loginItem)]).then(async ([values, item]) => {
       tools = values;
+      loginItem = item;
       if (!closed) await rebuild();
     }).finally(() => { refreshing = undefined; });
     return refreshing;
   }
-  tools = await readTools();
+  [tools, loginItem] = await Promise.all([readTools(), readLoginItem().catch(() => false)]);
   await rebuild();
   const poll = setInterval(() => { void rebuild().catch(() => undefined); }, 5_000);
   const toolPoll = setInterval(() => { void refreshTools().catch(() => undefined); }, 60_000);

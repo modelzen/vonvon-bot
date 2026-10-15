@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdtemp, open, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, open, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, posix } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -369,7 +369,7 @@ async function launchdFixture(overrides: NonNullable<Parameters<typeof createLau
   const directory = await mkdtemp(join(tmpdir(), 'launchd-transaction-'));
   const root = await resolveServiceRoot(registerPosixFixture(await resolveServiceRoot(directory)));
   const plistPath = posix.join(root, 'Library/LaunchAgents', `${LAUNCHD_LABEL}.plist`);
-  const target = { platform: 'darwin' as const, plistPath };
+  const target = { platform: 'darwin' as const, label: LAUNCHD_LABEL, plistPath };
   const calls: string[] = [];
   const fileCalls: string[] = [];
   const state: {
@@ -424,7 +424,7 @@ async function launchdFixture(overrides: NonNullable<Parameters<typeof createLau
   };
   const temporaryFiles = async () => (await readdir(posix.dirname(plistPath))).filter(name => name.endsWith('.tmp')).map(name => posix.join(posix.dirname(plistPath), name));
   const dependencies = {
-    home: root, uid: 501, executable: '/fixture/bin/node', capturedPath: '/captured/bin',
+    home: root, uid: 501, executable: '/fixture/bin/node', capturedPath: '/captured/bin', target: () => target,
     distribution: async () => ({ kind: 'global-npm', cliPath: '/package/bin/vonvon.mjs' }),
     readOwner: async () => state.owner,
     verifyOwner: async (_root, owner) => { if (state.verifyFails || state.owner !== owner) throw new Error('Owner not authenticated'); },
@@ -587,17 +587,17 @@ it('launchd refuses a leftover loaded job without a plist', async () => {
 });
 it.each(['error', 'timeout'] as const)('launchd partial bootstrap %s never grants stop or unload authority', async bootstrap => {
   await withLaunchd(async f => {
-    f.state.owner = { ...first }; f.state.bootstrap = bootstrap;
+    f.state.bootstrap = bootstrap;
     const result = await f.service.install();
-    expect(result.kind).toBe('install_incomplete'); expect(result.retained).toEqual({ pid: first.pid, startedAt: first.startedAt });
-    expect(f.state.owner).toEqual(first); expect(f.state.loaded).toBe(true);
+    expect(result.kind).toBe('install_incomplete'); expect(result.retained).toBeNull();
+    expect(f.state.owner).toBeNull(); expect(f.state.loaded).toBe(true);
     expect(result.leftovers).toContain(`job gui/501/${LAUNCHD_LABEL}: loaded`);
     await expect(readFile(f.plistPath)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(f.calls).toEqual(['print gui/501', printJob, `bootstrap gui/501 ${f.plistPath}`, 'withdraw', printJob]);
     expect(bootouts(f)).toEqual([]); expect(f.calls.filter(call => call.startsWith('stop '))).toEqual([]);
     expect((await readRegistration({ target: f.target, requestedRoot: f.root })).kind).toBe('absent');
     expect((await f.service.uninstall()).kind).toBe('uninstalled');
-    expect(f.state.owner?.pid).toBe(first.pid); expect(bootouts(f)).toHaveLength(1);
+    expect(bootouts(f)).toHaveLength(1);
   });
 });
 it('launchd successful replacement and failed verification each run their own withdrawal barrier', async () => {
@@ -808,18 +808,19 @@ it.each(['0x10', '1e3', '-1', '1.5', '9007199254740993'])('launchd status classi
     expect(await readFile(f.plistPath)).toEqual(f.content()); expect(bootouts(f)).toEqual([]);
   });
 });
-it('launchd proven-loaded rollback retains the pre-existing self-hosted owner and its identity', async () => {
+it('launchd stops a detached owner before writing, and a later rollback reports it stopped', async () => {
   await withLaunchd(async f => {
-    const owner = { ...first }; f.state.owner = owner; f.state.ownerWork = 3;
+    const owner = { ...first, startedAt: 'detached' }; f.state.owner = owner; f.state.ownerWork = 3;
     let bootstrapped = false; let prints = 0;
     f.state.beforeCommand = async command => {
       if (command === 'bootstrap') bootstrapped = true;
       if (command === 'print' && bootstrapped) f.state.queryFailure = ++prints === 1;
     };
     const result = await f.service.install();
-    expect(result.kind).toBe('install_rolled_back'); expect(result.retained).toEqual({ pid: owner.pid, startedAt: owner.startedAt });
-    expect(f.state.owner).toBe(owner); expect(f.state.ownerWork).toBe(3); expect(f.state.loaded).toBe(false);
-    expect(f.calls.filter(call => call.startsWith('stop '))).toEqual([]);
+    expect(result.kind).toBe('install_incomplete'); expect(result.retained).toBeNull();
+    expect(result.detail).toContain('the detached daemon was stopped');
+    expect(f.state.owner).toBeNull(); expect(f.state.loaded).toBe(false);
+    expect(f.calls.indexOf(`stop ${owner.pid}`)).toBeLessThan(f.calls.indexOf(`bootstrap gui/501 ${f.plistPath}`));
     await expect(readFile(f.plistPath)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(bootouts(f)).toHaveLength(1);
     expect((await readRegistration({ target: f.target, requestedRoot: f.root })).kind).toBe('absent');
@@ -1400,28 +1401,21 @@ it.each(['replacement', 'rollback'] as const)('launchd %s accepted real stop los
   } finally { await f.cleanup(); await endpoint.close(); }
 });
 
-it('launchd composes self-hosted exit, job takeover, real proof and long drain before rollback unload', async () => {
+it('launchd composes job takeover, real proof and long drain before rollback unload', async () => {
   const endpoint = await composedOwner();
-  const original = { ...endpoint.old, pid: endpoint.old.pid + 1 };
   const f = await launchdFixture({ stopOwner: stopVerifiedOwner });
   const processes = new Map([
-    [original.pid, { role: 'self-hosted', alive: true, work: ['original-work'] }],
-    [endpoint.old.pid, { role: 'job', alive: false, work: [] }],
+    [endpoint.old.pid, { role: 'job', alive: false, work: [] as string[] }],
   ]);
   try {
-    f.state.owner = original;
     await writeFile(join(f.root, 'local-credential'), endpoint.credential);
-    await writeFile(join(f.root, 'daemon.pid'), JSON.stringify(original));
     let bootstrapped = false;
     f.state.beforeCommand = async command => {
       if (command === 'bootstrap') bootstrapped = true;
       else if (command === 'print' && bootstrapped) { f.state.queryFailure = true; bootstrapped = false; }
     };
     f.state.afterUnlink = async () => {
-      expect(f.state.owner).toEqual(original);
-      processes.set(original.pid, { role: 'self-hosted', alive: false, work: [] });
-      f.state.owner = null;
-      await unlink(join(f.root, 'daemon.pid'));
+      // The job the bootstrap started is replaced by the real endpoint, which then drains for minutes.
       processes.set(endpoint.old.pid, { role: 'job', alive: true, work: ['accepted-work'] });
       f.state.queryFailure = false;
       f.state.owner = endpoint.old; f.state.pid = endpoint.old.pid;
@@ -1440,20 +1434,46 @@ it('launchd composes self-hosted exit, job takeover, real proof and long drain b
       }
     };
     endpoint.state.onStop = async () => {
-      expect(processes.get(original.pid)).toEqual({ role: 'self-hosted', alive: false, work: [] });
       expect(processes.get(endpoint.old.pid)).toEqual({ role: 'job', alive: true, work: ['accepted-work'] });
       expect(bootouts(f)).toEqual([]);
     };
     const result = await f.service.install();
-    expect(result.kind).toBe('install_incomplete');
+    expect(result.kind).toBe('install_rolled_back');
     expect(result.retained).toBeNull();
-    expect([...processes.values()]).toEqual([
-      { role: 'self-hosted', alive: false, work: [] }, { role: 'job', alive: false, work: [] },
-    ]);
+    expect([...processes.values()]).toEqual([{ role: 'job', alive: false, work: [] }]);
     expect(rounds).toBe(600); expect(f.state.clock).toBeGreaterThanOrEqual(150_000);
     expect(endpoint.state.status).toBe(1); expect(endpoint.state.stops).toBe(1);
     expect(endpoint.child.exitCode).toBe(0); expect(endpoint.child.signalCode).toBeNull();
     expect(endpoint.state.work).toEqual([]); expect(bootouts(f)).toHaveLength(1);
     expect((await readRegistration({ target: f.target, requestedRoot: f.root })).kind).toBe('absent');
   } finally { await f.cleanup(); await endpoint.close(); }
+});
+
+it('launchd install rewrites an older-format plist under our label', async () => {
+  await withLaunchd(async f => {
+    await mkdir(posix.dirname(f.plistPath), { recursive: true }); await writeFile(f.plistPath, 'older plist format'); f.state.loaded = true;
+    expect((await f.service.install()).kind).toBe('installed');
+    expect(await readFile(f.plistPath)).toEqual(f.content());
+    expect(bootouts(f)).toHaveLength(1);
+  });
+});
+it('launchd uninstall refuses a symlinked plist under our label', async () => {
+  await withLaunchd(async f => {
+    await mkdir(posix.dirname(f.plistPath), { recursive: true });
+    const external = posix.join(f.root, 'external.plist'); await writeFile(external, f.content()); await symlink(external, f.plistPath);
+    f.state.loaded = true;
+    expect((await f.service.uninstall()).kind).toBe('uninstall_refused');
+    expect((await f.service.install()).kind).toBe('install_refused');
+    expect(bootouts(f)).toEqual([]); expect(await readFile(external)).toEqual(f.content());
+  });
+});
+it('launchd hands a detached daemon to the installed idle job', async () => {
+  await withLaunchd(async f => {
+    await f.seed(); f.state.owner = { ...first, pid: first.pid + 7, startedAt: 'detached' };
+    expect((await f.service.install()).kind).toBe('installed');
+    const kick = f.calls.indexOf(`kickstart gui/501/${LAUNCHD_LABEL}`);
+    expect(f.calls.indexOf(`stop ${first.pid + 7}`)).toBeGreaterThan(-1);
+    expect(f.calls.indexOf(`stop ${first.pid + 7}`)).toBeLessThan(kick);
+    expect(f.state.owner?.pid).toBe(first.pid); expect(bootouts(f)).toEqual([]);
+  });
 });

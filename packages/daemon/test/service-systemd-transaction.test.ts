@@ -4,7 +4,7 @@ import { join, posix } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createSystemdService } from '../src/service/systemd';
 import { renderDefinition } from '../src/service/definitions';
-import { resolveServiceRoot, SYSTEMD_UNIT_NAME } from '../src/service/identity';
+import { resolveServiceRoot, serviceTarget, SYSTEMD_UNIT_NAME } from '../src/service/identity';
 import type { PidLockInfo } from '../src/server/pid-lock';
 import { readRegistration } from '../src/service/registration';
 import { clearPosixFixtures, registerPosixFixture } from './service-posix-fixture';
@@ -32,7 +32,7 @@ async function fixture() {
   roots.push(folder);
   const root = await resolveServiceRoot(registerPosixFixture(await resolveServiceRoot(folder)));
   const unitPath = posix.join(root, '.config/systemd/user', SYSTEMD_UNIT_NAME);
-  const target = { platform: 'linux' as const, unitPath };
+  const target = { platform: 'linux' as const, unitName: SYSTEMD_UNIT_NAME, unitPath };
   const calls: string[] = [];
   commandTraces.push(calls);
   const state = {
@@ -50,7 +50,7 @@ async function fixture() {
   const desired = Buffer.from(rendered.unit);
   async function seed(content: Uint8Array = desired) { await mkdir(posix.join(root, '.config/systemd/user'), { recursive: true }); await writeFile(unitPath, content); state.loaded = true; state.enabled = true; }
   const dependencies: Overrides = {
-    home: root, xdgConfigHome: undefined, executable: '/fixture/bin/node', capturedPath: definition.capturedPath,
+    home: root, xdgConfigHome: undefined, executable: '/fixture/bin/node', capturedPath: definition.capturedPath, target: () => target,
     distribution: async () => ({ kind: 'global-npm', cliPath: definition.distribution.entry }),
     freePort: async () => 32123, now: () => state.clock,
     pause: async ms => { state.clock += ms; await state.onPause(); if (state.clock > 900_000) throw new Error('Fixture exceeded virtual drain budget'); },
@@ -122,10 +122,10 @@ it.each(['error', 'masked'])('reloads an identical enabled unit with LoadState=%
 it.each([
   { loadState: 'error', previous: false }, { loadState: 'masked', previous: false },
   { loadState: 'error', previous: true }, { loadState: 'masked', previous: true },
-])('rolls back LoadState=$loadState after load with a ready self-hosted owner and previous=$previous', async ({ loadState, previous }) => {
+])('stops a detached owner, then rolls back LoadState=$loadState after load with previous=$previous', async ({ loadState, previous }) => {
   const f = await fixture();
   if (previous) await f.seed();
-  f.state.loaded = false;
+  f.state.loaded = false; f.state.autoStart = false;
   const owner = { pid: 42001, startedAt: 'self-hosted-birth', listen: '127.0.0.1:32123' };
   f.state.owner = owner;
   f.state.onCommand = async command => {
@@ -136,15 +136,16 @@ it.each([
     if (command === 'daemon-reload') f.state.showReply = null;
   };
   const result = await f.service().install();
-  expect(result.kind).toBe('install_rolled_back');
+  expect(result.kind).toBe('install_incomplete');
   expect(result.detail).toContain('Manager did not confirm installed unit');
-  expect(result.retained).toEqual({ pid: owner.pid, startedAt: owner.startedAt });
-  expect(f.state.owner).toEqual(owner);
+  expect(result.detail).toContain('the detached daemon was stopped');
+  expect(result.retained).toBeNull();
+  expect(f.state.owner).toBeNull();
   expect(f.state.pid).toBe(0);
   expect(f.state.loaded).toBe(false);
   if (previous) { expect(await f.bytes()).toEqual(f.desired); expect(f.state.enabled).toBe(true); }
   else { expect((await f.registration()).kind).toBe('absent'); expect(f.state.enabled).toBe(false); }
-  expect(f.mutations()).toEqual(['daemon-reload', `enable --now ${SYSTEMD_UNIT_NAME}`, `disable ${SYSTEMD_UNIT_NAME}`, 'daemon-reload', `reset-failed ${SYSTEMD_UNIT_NAME}`, ...(previous ? [`enable ${SYSTEMD_UNIT_NAME}`] : [])]);
+  expect(f.mutations()).toEqual([`stop:${owner.pid}`, 'daemon-reload', `enable --now ${SYSTEMD_UNIT_NAME}`, `disable ${SYSTEMD_UNIT_NAME}`, 'daemon-reload', `reset-failed ${SYSTEMD_UNIT_NAME}`, ...(previous ? [`enable ${SYSTEMD_UNIT_NAME}`] : [])]);
 });
 it('withdraws before owner stop and unloads once', async () => {
   const f = await fixture(); await f.seed(); f.state.pid = 41001;
@@ -197,10 +198,25 @@ it.each([failed('bus unavailable'), { ...failed('client timed out'), status: nul
   const result = await f.service().uninstall(); expect(result.kind).toBe('uninstall_rolled_back'); expect(result.detail).toContain('query_failed');
   expect(f.mutations()).toEqual([`disable ${SYSTEMD_UNIT_NAME}`, `enable ${SYSTEMD_UNIT_NAME}`]);
 });
-it('foreign and unrecognized registrations refuse all writes', async () => {
-  const f = await fixture(); await f.seed(Buffer.from('foreign unit bytes'));
+it('another root\'s registration refuses all writes', async () => {
+  const f = await fixture();
+  const other = await resolveServiceRoot(registerPosixFixture(await resolveServiceRoot(await mkdtemp(join(tmpdir(), 'vonvon-systemd-other-')))));
+  roots.push(other);
+  const rendered = renderDefinition({ target: f.target, ...f.definition, root: other });
+  if (rendered.platform !== 'linux') throw new Error('Expected Linux unit');
+  await f.seed(rendered.unit);
   expect((await f.service().install()).kind).toBe('install_refused'); expect((await f.service().uninstall()).kind).toBe('uninstall_refused');
-  expect(await f.bytes()).toEqual(Buffer.from('foreign unit bytes')); expect(f.mutations()).toEqual([]);
+  expect(await f.bytes()).toEqual(Buffer.from(rendered.unit)); expect(f.mutations()).toEqual([]);
+});
+it('an unrecognized unit under our name is an older format: install rewrites it', async () => {
+  const f = await fixture(); await f.seed(Buffer.from('older unit format'));
+  expect((await f.service().install()).kind).toBe('installed');
+  expect(await f.bytes()).toEqual(f.desired); expect(f.mutations()).toEqual(['daemon-reload', `enable --now ${SYSTEMD_UNIT_NAME}`]);
+});
+it('an unrecognized unit under our name is removed by uninstall', async () => {
+  const f = await fixture(); await f.seed(Buffer.from('older unit format'));
+  expect((await f.service().uninstall()).kind).toBe('uninstalled');
+  expect((await f.registration()).kind).toBe('absent'); expect(f.mutations()).toEqual([`disable ${SYSTEMD_UNIT_NAME}`, 'daemon-reload', `reset-failed ${SYSTEMD_UNIT_NAME}`]);
 });
 it('changed definition with live manager PID refuses replacement', async () => {
   const f = await fixture(); await f.seed(); f.state.pid = 41001;
@@ -272,11 +288,22 @@ it('same PID with new birth cannot be classified as rolled back', async () => {
   const f = await fixture(); f.state.owner = { pid: 42000, startedAt: 'before', listen: '127.0.0.1:32123' }; f.state.fail = `enable --now ${SYSTEMD_UNIT_NAME}`;
   f.state.onCommand = async command => { if (command.startsWith('disable ')) f.state.owner = { pid: 42000, startedAt: 'after', listen: '127.0.0.1:32123' }; };
   const result = await f.service().install(); expect(result.kind).toBe('install_incomplete'); expect(result.retained).toEqual({ pid: 42000, startedAt: 'after' });
-  expect(f.state.clock).toBe(0); expect(f.calls.some(c => c.startsWith('stop:'))).toBe(false);
+  expect(f.calls.filter(c => c.startsWith('stop:'))).toEqual(['stop:42000']);
 });
-it('failed install retains the identical self-hosted owner', async () => {
+it('failed install after stopping the detached owner is incomplete and says so', async () => {
   const f = await fixture(); f.state.owner = { pid: 42000, startedAt: 'before', listen: '127.0.0.1:32123' }; f.state.fail = `enable --now ${SYSTEMD_UNIT_NAME}`;
-  const result = await f.service().install(); expect(result.kind).toBe('install_rolled_back'); expect(result.retained).toEqual({ pid: 42000, startedAt: 'before' }); expect(f.state.clock).toBe(0);
+  const result = await f.service().install(); expect(result.kind).toBe('install_incomplete'); expect(result.retained).toBeNull();
+  expect(result.detail).toContain('run vonvon daemon start'); expect((await f.registration()).kind).toBe('absent');
+});
+it('detached owner refused by verification is left running and nothing is written', async () => {
+  const f = await fixture(); f.state.owner = { pid: 42000, startedAt: 'before', listen: '127.0.0.1:32123' };
+  const result = await f.service({ verifyOwner: async () => { throw new Error('not ours'); } }).install();
+  expect(result.kind).toBe('install_refused'); expect(f.state.owner?.pid).toBe(42000); expect(f.mutations()).toEqual([]);
+});
+it('a detached owner beside the installed idle unit is stopped and the unit started', async () => {
+  const f = await fixture(); await f.seed(); f.state.owner = { pid: 42000, startedAt: 'before', listen: '127.0.0.1:32123' };
+  expect((await f.service().install()).kind).toBe('installed');
+  expect(f.mutations()).toEqual(['stop:42000', `start ${SYSTEMD_UNIT_NAME}`]); expect(f.state.owner?.pid).toBe(41001);
 });
 it('rollback uncertain stop restores neither byte set and never unloads', async () => {
   const f = await fixture(); await f.seed(); f.state.autoStart = false;
@@ -381,7 +408,7 @@ it('owner read failure after unpublished write failure cannot mean unchanged abs
 });
 it('relative XDG directory refuses installation with a complete outcome', async () => {
   const f = await fixture();
-  const result = await f.service({ xdgConfigHome: 'relative' }).install();
+  const result = await f.service({ target: root => serviceTarget({ platform: 'linux', home: f.root, root, xdgConfigHome: 'relative' }) as typeof f.target }).install();
   expect(result).toEqual({ kind: 'install_refused', detail: 'Config home must be absolute', retained: null, leftovers: [] }); expect(f.mutations()).toEqual([]);
 });
 it('rollback stops only after two stable owner observations', async () => {
@@ -412,12 +439,12 @@ it('bundled install uses the captured executable and desktop Node mode with root
   expect(unit).toContain('Environment="ELECTRON_RUN_AS_NODE=1"'); expect(unit).toContain(`StandardOutput=append:${f.root}/service.log`); expect(unit).not.toContain('CODEX_BIN');
   expect(await readFile(posix.join(f.root, 'service.log'))).toEqual(Buffer.alloc(0)); expect(await readFile(posix.join(f.root, 'service.err.log'))).toEqual(Buffer.alloc(0));
 });
-it('authenticated self-hosted owner overrides the explicit install port and stays running', async () => {
+it('a detached owner\'s port overrides the explicit install port, and the unit takes over from it', async () => {
   const f = await fixture(); f.state.owner = { pid: 42000, startedAt: 'self-hosted', listen: '127.0.0.1:32124' };
   let verified = 0; const service = f.service({ verifyOwner: async () => { verified++; } });
   expect((await service.install({ port: 32123 })).kind).toBe('installed');
-  expect((await f.bytes()).toString()).toContain('daemon run --port 32124'); expect(f.state.owner.pid).toBe(42000); expect(verified).toBe(2);
-  expect(f.calls.filter(command => command.startsWith('stop:'))).toEqual([]);
+  expect((await f.bytes()).toString()).toContain('daemon run --port 32124'); expect(f.state.owner?.pid).toBe(41001); expect(f.state.owner?.listen).toBe('127.0.0.1:32124'); expect(verified).toBe(2);
+  expect(f.mutations()).toEqual(['stop:42000', 'daemon-reload', `enable --now ${SYSTEMD_UNIT_NAME}`]);
 });
 it('honors the explicit install port when no owner runs', async () => {
   const f = await fixture();

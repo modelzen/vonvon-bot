@@ -222,7 +222,7 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 | [x] | s05a | 删掉 daemon 里的 Windows 服务实现 | 删 `windows.ts`、`win-startup.ts`、三份 Windows 服务测试和 `__win-relaunch` 命令及其两份测试；没有用户可见变化，理由见本文第 6 节 | 1370 | — | — | 无 |
 | [x] | s05b | 删掉服务定义和注册里的 win32 分支 | 删 `identity.ts`、`definitions.ts`、`registration.ts` 里的 win32 分支和 Windows 注册测试，以及桌面端跟着要删的 Run 键读取；没有用户可见变化，理由见本文第 6 节 | 520 | s05a | — | 无 |
 | [x] | s06 | 注册服务后只由服务管理器拉起 daemon | 从 #285 搬启动路由（约 120 行源码加测试）：拿锁前先读注册，`daemon start` 改请服务管理器启动；修 #287（3.10） | 1000 | s05b | 子进程、并发、关闭清理、错误路径 | 已注册服务时 launchd 拉起的多余进程退出 0、不反复重启；持锁进程被 kill -9、PID 被复用后服务仍会重试 |
-| [ ] | s07 | vonvon service install、uninstall、status | darwin 用 launchd、linux 用 systemd；装服务前先排空自己起的分离 daemon；快照和 RPC 读真实状态（3.10） | 700 | s06、s02、e06 | 子进程、错误路径、关闭清理、macOS 原生 | 打包版执行 install：plist 写入并起来，`daemon stop` 后不再拉起，注销再登录会起来，没有 Dock 图标，已有分离 daemon 时马上接管 |
+| [x] | s07 | vonvon service install、uninstall、status | darwin 用 launchd、linux 用 systemd；装服务前先排空自己起的分离 daemon；快照和 RPC 读真实状态（3.10） | 700 | s06、s02、e06 | 子进程、错误路径、关闭清理、macOS 原生 | 打包版执行 install：plist 写入并起来，`daemon stop` 后不再拉起，注销再登录会起来，没有 Dock 图标，已有分离 daemon 时马上接管 |
 | [ ] | s08 | 桌面端的"登录电脑时启动"和清单里的这一步 | 桌面端调打包的 CLI 装卸服务；清单加"登录电脑时自动运行 bot（推荐）"，跳过就起分离 daemon 并提示；删桌面端的 Windows 代码；Linux 上不显示"登录时启动"开关；本文第 10 节写卸载步骤（3.10） | 1000 | s07、s04 | 子进程、macOS 原生、错误路径 | 真实窗口里：开关状态和 `launchctl print` 一致，退出 app 后 bot 在线，app 挪走再挪回能恢复，换新版后 daemon 跑新版本 |
 
 开工要点：
@@ -248,6 +248,15 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 - s07：POSIX 上的互斥锁是 `127.0.0.1` 上按数据目录哈希出来的端口（20000 到 49999），和 Linux 的临时端口重叠。#295 的 CI 撞过一次（`host-service-shutdown` 测试报 busy），开工时看要不要改成 Unix 域套接字。#296 的 CI 也失败过一次，可能是同一个原因：`daemon-cli.test.ts` 的"concurrent detached starts return the same ready owner"两个启动都退出 1，日志里没有子进程的输出，重跑通过。开工时让这个测试失败时打印子进程输出。
 - s07：e06 实测（`docs/research/2026-10-15-v1-spikes/e06-launchagent-keychain.md`）：LaunchAgent 起的进程拿到真实 HOME 和 USER、PATH 只有系统目录，Claude 和 Codex 的登录检测和终端一样是已登录。owner 的登录不走钥匙串，钥匙串那条路没验证到，所以 s03 留下的"读不到钥匙串时改成无法确认"照做，并在用钥匙串登录的账号上验证。用户在系统设置"App 后台活动"里关掉这一项时，服务从 launchd 里消失（`launchctl print` 退出码 113，表现和卸载一样），`service status` 把"plist 在、服务找不到"显示成"已在系统设置里关掉"。不用 `sfltool`（不加 sudo 时卡住）。产品 plist 的 `SuccessfulExit=false` 和 5 秒节流没测，放进 s07 的 Mac 检查。
 - s07：`D/admin/host.ts:194` 的 `resolveCliBinPath` 还指向 `bin/feishu-codex-bridge.mjs`，包里只有 `bin/vonvon.mjs`（`D/service/common.ts` 的同名函数是对的）。查清 `host.ts:210` 那条路径还用不用，用就改成调 service/common 的。
+- s07 的做法：服务名跟着数据目录走。默认的 `~/.vonvon-bot` 仍是 `com.vonvon.bot.daemon` 和 `vonvon-bot.service`；别的 `VONVON_HOME` 在名字后面加数据目录路径哈希的前 12 位（如 `com.vonvon.bot.daemon.<12 位>`），plist 和 unit 的文件名也一样。测试和 Mac 检查用临时 `VONVON_HOME` 就有自己的 label，碰不到 owner 的服务，不用另设变量。
+- s07 的做法：`service install` 先停掉 `daemon start` 起的分离 daemon（等它排空退出），再写定义、让服务起来，端口沿用分离 daemon 的，网页地址不变。定义已装好、服务空闲时只 `kickstart`（systemd 是 `start`）。停了分离 daemon 以后装失败，结果是 `install_incomplete`，并写明"运行 vonvon daemon start"，不自动把分离 daemon 起回来。
+- s07 的做法：自己名下的 `unrecognized` 定义（旧版本写的、格式对不上的普通文件）当作旧格式：install 重写、uninstall 删除，回滚时写回原字节。符号链接、目录和别的数据目录的定义仍然拒绝。服务正在跑时换定义仍要先 `vonvon daemon stop`。
+- s07 的做法：`service status` 分七种：未安装、在运行、已停止、已关掉、分离运行、要处理、查不到。"定义在、launchd 里没有这个任务"显示为已关掉，提示去系统设置的"登录项与扩展"打开（e06）。`--json` 输出完整状态。网页的机器状态、`daemonStatus` 的 installed 和快照里的 `loginItem` 都读真实状态；`loginItem` 随工具检查每 60 秒读一次。
+- s07 的做法：服务定义里的 PATH 是执行 install 时的 PATH 补上 s02 的工具目录。daemon 由 launchd 起来时（`VONVON_SERVICE=launchd`），Claude 登录检测报未登录就改成无法确认，提示可能读不到钥匙串。
+- s07 的做法：互斥锁没改成 Unix 域套接字。换算法会让升级那一刻新旧版本的互斥失效：旧 daemon 占着旧端口，新进程拿到新的锁，以为没人持锁，接管 `daemon.pid`。`daemon-cli.test.ts` 的并发启动测试失败时会打印两个 CLI 的输出和 `daemon.log`；准入锁只等 1.5 秒，CI 负载高时也可能是原因，下次失败看输出再定。`D/admin/host.ts` 里指向 `bin/feishu-codex-bridge.mjs` 的 `resolveCliBinPath` 已删，改用 `D/service/common.ts` 的；用到它的 `buildDaemonControlCommand` 只有测试在用。
+- s07 留下的，给 s08：服务正在跑时 install 拒绝替换定义，桌面端换新版本后要先 `daemon stop` 再 `service install`，或者在 s08 给 install 加"替换运行中的服务"。开关读 `service status --json` 的 `state`，`disabled` 就是系统设置里关掉了。网页和桌面端的 machine RPC 里 install、uninstall 仍然拒绝，s08 接到 CLI。系统设置里显示成什么，s08 看要不要在 plist 里加 `AssociatedBundleIdentifiers`（会改定义格式，旧定义变成 `unrecognized`，install 会重写）。
+- s07 留下的，给 s17：`service status` 还不显示 launchd 的 `last exit code` 和 `last terminating signal`，崩溃记录做的时候一起加。
+- s07 留下的，给 s20a：Linux 的 install 没处理 linger；没有用户 systemd（比如容器里）时 `service status` 显示查不到，install 报 `User manager unavailable`。
 - s08：e06 发现系统设置"App 后台活动"里也有一个开关，用户在那里关掉时服务从 launchd 里消失。桌面端的"登录电脑时启动"要读 s07 的状态，显示"已在系统设置里关掉"，不能只看自己存的值。未签名的 Electron 在那里显示为"Electron"、"身份不明的开发者"；签名后的预览版显示什么，s08 的 Mac 检查时看。
 
 ### M3 群里的上下文
