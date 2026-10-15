@@ -112,9 +112,6 @@ const schemas: Record<string, Record<string, Rule>> = {
     response: shape({
       noMention: bool
     }, true),
-    compact: shape({
-      autoCompact: bool
-    }, true),
     model: shape({
       selection
     })

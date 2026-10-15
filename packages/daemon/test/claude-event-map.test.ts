@@ -26,9 +26,30 @@ describe('createTurnMapper —— SDKMessage → AgentEvent', () => {
     expect(mp.map(sysInit('sess-1'))).toEqual([]); // 第二次 init 抑制
   });
 
-  it('system/compact_boundary（自动压缩）→ context_compacted 通知', () => {
-    const evs = createTurnMapper().map(m({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'auto', pre_tokens: 9000 } }));
-    expect(evs).toEqual([{ type: 'context_compacted' }]);
+  it('压缩：status compacting → start；compact_boundary → end，带前后 token 和窗口', () => {
+    const mp = createTurnMapper({ contextWindow: 200_000 });
+    expect(mp.map(m({ type: 'system', subtype: 'status', status: 'compacting' }))).toEqual([{ type: 'compaction', phase: 'start' }]);
+    expect(mp.map(m({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'auto', pre_tokens: 170_000, post_tokens: 40_000 } }))).toEqual([
+      { type: 'compaction', phase: 'end', preTokens: 170_000, postTokens: 40_000, contextWindow: 200_000 },
+    ]);
+    // post_tokens is optional; without a known window the init model's heuristic stands in.
+    const bare = createTurnMapper();
+    bare.map(sysInit('s', 'claude-sonnet-4-5'));
+    expect(bare.map(m({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'auto', pre_tokens: 9000 } }))).toEqual([
+      { type: 'compaction', phase: 'end', preTokens: 9000, contextWindow: 200_000 },
+    ]);
+    expect(mp.map(m({ type: 'system', subtype: 'status', status: null, compact_result: 'failed', compact_error: 'x' }))).toEqual([{ type: 'compaction', phase: 'end', failed: true }]);
+    expect(mp.map(m({ type: 'system', subtype: 'status', status: null, compact_result: 'success' }))).toEqual([]);
+  });
+
+  it('主 agent 每个请求的 usage → 一次 context_usage（每块一条 assistant 也只算一次；子 agent 不算）', () => {
+    const mp = createTurnMapper({ contextWindow: 400_000 });
+    const usage = { input_tokens: 10, cache_read_input_tokens: 80_000, cache_creation_input_tokens: 6_000, output_tokens: 5 };
+    const block = (id: string, parent: string | null) => m({ type: 'assistant', parent_tool_use_id: parent, message: { id, usage, content: [{ type: 'text', text: 'x' }] } });
+    expect(mp.map(block('msg-1', null))).toEqual([{ type: 'context_usage', usedTokens: 86_010, contextWindow: 400_000 }]);
+    expect(mp.map(block('msg-1', null))).toEqual([]);
+    expect(mp.map(block('msg-2', 'toolu_task'))).toEqual([]);
+    expect(mp.map(block('msg-3', null))).toHaveLength(1);
   });
 
   it('文本块：delta 累积 + stop 收尾，itemId 在 delta 与 text 间一致', () => {

@@ -134,12 +134,24 @@ export type AgentEvent =
   | { type: 'tool_result'; itemId: string; output?: string; exitCode?: number | null }
   | { type: 'usage'; inputTokens?: number; outputTokens?: number }
   // Context-window usage for this thread (from thread/tokenUsage/updated). Drives
-  // the run card's threshold gauge + the /context command. `contextWindow` is the
+  // the run card's context meter + the /context command. `contextWindow` is the
   // model's total window (null when codex doesn't report one → percent unknown).
   | { type: 'context_usage'; usedTokens: number; contextWindow: number | null }
-  // codex compacted the thread's history (thread/compacted). Auto-compaction
-  // surfaces a notice; a manual /compact is suppressed (see handle-message).
-  | { type: 'context_compacted' }
+  // The backend's own compaction of the thread's history. Codex: the
+  // contextCompaction item (start/end by itemId), plus the deprecated
+  // thread/compacted (`legacy`) that repeats the end on versions still sending it.
+  // Claude: status 'compacting' starts it, compact_boundary ends it with the token
+  // counts before and after. The run card shows one line per compaction.
+  | {
+      type: 'compaction';
+      phase: 'start' | 'end';
+      itemId?: string;
+      legacy?: boolean;
+      preTokens?: number;
+      postTokens?: number;
+      contextWindow?: number | null;
+      failed?: boolean;
+    }
   | { type: 'done'; turnId: string }
   // A codex goal's state changed (thread/goal/updated). Only emitted during a
   // goal run (runGoal); the normal turn loop ignores it. `status` is an open
@@ -252,10 +264,6 @@ export interface StartThreadOptions {
   /** let the sandboxed agent's shell reach the network (qa/write only; full is
    * always networked). Default false. */
   network?: boolean;
-  /** codex's built-in auto-compaction (on by default). `false` disables it by
-   * pushing the auto-compact token limit past any real usage. Undefined → leave
-   * codex's default (on). */
-  autoCompact?: boolean;
 }
 
 export interface ResumeThreadOptions extends StartThreadOptions {

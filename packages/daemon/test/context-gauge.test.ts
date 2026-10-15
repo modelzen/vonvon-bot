@@ -4,9 +4,10 @@ import {
   buildCompactedCard,
   buildCompactingCard,
   buildContextCard,
+  compactionLine,
   ctxPercent,
   ctxTier,
-  runCardGauge,
+  runCardMeter,
   CTX_CRIT,
   CTX_HIGH,
   CTX_WARN,
@@ -42,22 +43,42 @@ describe('ctxPercent', () => {
   });
 });
 
-describe('runCardGauge', () => {
-  it('is null below the warn threshold (run card stays clean)', () => {
-    expect(runCardGauge(10, 100)).toBeNull();
-    expect(runCardGauge(50, 100)).toBeNull();
+describe('runCardMeter', () => {
+  const meter = (usage: Parameters<typeof runCardMeter>[0]) => runCardMeter(usage) as unknown as Div;
+  it('shows a placeholder before the first reading', () => {
+    expect(meter(undefined).text).toMatchObject({ content: '上下文 —', text_color: 'grey' });
   });
-  it('is null when the window is unknown (cannot tier)', () => {
-    expect(runCardGauge(9999, null)).toBeNull();
+  it('is a grey line below the warn threshold', () => {
+    expect(meter({ used: 86_000, window: 200_000 }).text).toMatchObject({ content: '上下文 43% · 86k/200k', text_color: 'grey' });
   });
-  it('renders a colored, /compact-nudging line at/above the threshold', () => {
-    const warn = runCardGauge(70, 100) as unknown as Div;
-    expect(warn.text.text_color).toBe('yellow');
-
-    const crit = runCardGauge(96, 100) as unknown as Div;
+  it('shows tokens when the window is unknown', () => {
+    expect(meter({ used: 9_999, window: null }).text.content).toBe('上下文 已用 10k');
+  });
+  it('is tier-colored at/above the threshold, with no /compact nudge (compaction is automatic)', () => {
+    expect(meter({ used: 70, window: 100 }).text.text_color).toBe('yellow');
+    const crit = meter({ used: 96, window: 100 });
     expect(crit.text.text_color).toBe('red');
-    expect(crit.text.content).toContain('96%');
-    expect(crit.text.content).toContain('/compact');
+    expect(crit.text.content).toBe('🔴 上下文 96% · 96/100');
+  });
+});
+
+describe('compactionLine', () => {
+  const line = (c: Parameters<typeof compactionLine>[0], live = true): string => JSON.stringify(compactionLine(c, live));
+  const w = 200_000;
+  it('writes before → after as percents of one window', () => {
+    expect(line({ id: 'c', status: 'done', before: { used: 170_000, window: w }, after: { used: 40_000, window: w } })).toContain('已压缩 85% → 20%');
+  });
+  it('says what it knows when one end is missing', () => {
+    expect(line({ id: 'c', status: 'done', before: { used: 170_000, window: w } })).toContain('已压缩，压缩前 85%');
+    expect(line({ id: 'c', status: 'done', before: { used: 170_000, window: w }, after: null })).toContain('已压缩，压缩前 85%');
+    expect(line({ id: 'c', status: 'done', after: { used: 40_000, window: w } })).toContain('已压缩，现在 20%');
+    expect(line({ id: 'c', status: 'done' })).toContain('已压缩上下文');
+    expect(line({ id: 'c', status: 'done', before: { used: 170_000, window: null }, after: { used: 40_000, window: null } })).toContain('已压缩 170k → 40k');
+  });
+  it('shows a running compaction, and one the run ended before it finished', () => {
+    expect(line({ id: 'c', status: 'running' })).toContain('正在压缩上下文…');
+    expect(line({ id: 'c', status: 'running' }, false)).toContain('上下文压缩没有完成');
+    expect(line({ id: 'c', status: 'failed' })).toContain('上下文压缩失败');
   });
 });
 

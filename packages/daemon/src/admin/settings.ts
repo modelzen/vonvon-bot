@@ -157,16 +157,13 @@ function projectData(p: Project): T.ProjectSections {
     response: {
       noMention: p.noMention ?? defaultNoMention(p)
     },
-    compact: {
-      autoCompact: p.autoCompact ?? true
-    },
     model: {
       selection: selection(p.defaultModel, p.defaultEffort, p.defaultModelCustom)
     }
   };
 }
 function projectRaw(p: Project, section: keyof T.ProjectSections): unknown {
-  const data = section === 'permission' ? [p.mode, p.guestMode, p.network] : section === 'response' ? p.noMention : section === 'compact' ? p.autoCompact : [p.defaultModel, p.defaultEffort, p.defaultModelCustom === true];
+  const data = section === 'permission' ? [p.mode, p.guestMode, p.network] : section === 'response' ? p.noMention : [p.defaultModel, p.defaultEffort, p.defaultModelCustom === true];
   return [p.name, p.chatId, p.cwd, p.backend, data];
 }
 function sessionRaw(s: SessionRecord): unknown {
@@ -379,7 +376,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       if (!p)
         throw new SettingsInputError('项目不存在');
       const data = projectData(p);
-      const sections = Object.fromEntries(Object.entries(data).map(([key, value]) => [key, makeSection(value, [botId, projectRaw(p, key as keyof T.ProjectSections)], access, effect(Object.keys(value), key === 'model' ? 'new-session' : key === 'permission' || key === 'compact' ? 'session-rebind' : 'next-message', key === 'model' ? '仅新会话使用项目默认模型' : '下一条消息生效'))])) as T.ProjectSettingsView['sections'];
+      const sections = Object.fromEntries(Object.entries(data).map(([key, value]) => [key, makeSection(value, [botId, projectRaw(p, key as keyof T.ProjectSections)], access, effect(Object.keys(value), key === 'model' ? 'new-session' : key === 'permission' ? 'session-rebind' : 'next-message', key === 'model' ? '仅新会话使用项目默认模型' : '下一条消息生效'))])) as T.ProjectSettingsView['sections'];
       sections.model.effective = {
         selection: await effectiveSelection(p.backend ?? DEFAULT_BACKEND_ID, p.defaultModel, p.defaultEffort, p.defaultModelCustom)
       };
@@ -571,9 +568,6 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
             case 'response':
               Object.assign(p, e.patch);
               break;
-            case 'compact':
-              Object.assign(p, e.patch);
-              break;
             case 'model': {
               if (!e.patch.selection)
                 throw new SettingsInputError('缺少模型选择');
@@ -591,12 +585,12 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
             }
           }
         });
-        if (e.section === 'permission' || e.section === 'compact') {
+        if (e.section === 'permission') {
           try {
             await deps.evictLiveSessionsForChat(p.chatId);
           }
           catch {
-            additionalEffects = effect([e.section], 'restart', '设置已保存，但活跃会话重新绑定失败。请重启 Host 使权限或压缩设置生效');
+            additionalEffects = effect([e.section], 'restart', '设置已保存，但活跃会话重新绑定失败。请重启 Host 使权限设置生效');
           }
         }
       }
