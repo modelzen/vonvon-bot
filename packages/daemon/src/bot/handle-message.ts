@@ -213,6 +213,7 @@ import {
   type SessionTitlePolicySnapshot,
 } from './session-store';
 import { SessionTitleCoordinator } from './session-title-coordinator';
+import type { TopicPerson, TopicRegistry, TopicSighting } from './topic-registry';
 import {
   sessionTitleSourceFromMessage,
   type SessionTitleSource,
@@ -254,7 +255,7 @@ import {
   syncCommentInstructions,
 } from './comments';
 import { createGracefulInterrupt, createIdlePause, Semaphore, withIdleTimeout, type IdlePause } from './watchdog';
-import { createNameBook, fetchChatMembers, resolveNames } from './names';
+import { createNameBook, fetchChatMembers, resolveNames, withDeadline } from './names';
 
 /** 所有项目群成员的并集（去重）—— admins 加人的候选源（admins 通常是项目相关的人）。
  * 逐群调 fetchChatMembers，失败的群跳过；不含 bot/应用（接口保证）。 */
@@ -725,6 +726,8 @@ export function createOrchestrator(
   channel: LarkChannel,
   cfg: AppConfig,
   fallbackCwd: string,
+  /** The topic registry (s13); without it nothing is recorded (tests). */
+  topics?: TopicRegistry,
 ): Orchestrator {
   /** Lazily-constructed backends by id — one instance per backend for the whole
    * bridge (mirrors the old single-instance shape; codex stays the default). */
@@ -955,6 +958,62 @@ export function createOrchestrator(
     void trackTask(patchSession(sessionKey, (rec) => ({ seen: (rec.seen ?? []).filter((s) => s.id !== id) })).catch(() => undefined));
   }
 
+  /** Who sent a message, as the topic registry records it. */
+  function senderOf(msg: NormalizedMessage): TopicPerson {
+    const app = (msg.raw as { sender?: { sender_type?: string } } | undefined)?.sender?.sender_type === 'app';
+    return { kind: app ? 'bot' : 'user', ...(msg.senderId ? { openId: msg.senderId } : {}) };
+  }
+  /** First messages looked up for the registry in this process (at most once each). */
+  const rootLookups = new Set<string>();
+  /** Record a topic message of a bound group in the topic registry, addressed
+   * to the bot or not. Fire-and-forget: the registry logs its own failures and
+   * never touches the turn. A topic first seen through a reply in it gets its
+   * first message (sender, time, title) from one `message.get`. */
+  function noteTopicMessage(msg: NormalizedMessage): void {
+    const reg = topics;
+    if (!reg || !msg.threadId) return;
+    const from = senderOf(msg);
+    const isFirst = !msg.rootId || msg.rootId === msg.messageId; // a topic group's post
+    const sighting: TopicSighting = {
+      topicId: msg.threadId,
+      at: msg.createTime || Date.now(),
+      from,
+      first: isFirst
+        ? { id: msg.messageId, from, at: msg.createTime || undefined, text: msg.content }
+        : { id: msg.rootId as string },
+    };
+    void trackTask((async () => {
+      const rec = await reg.note(msg.chatId, sighting);
+      if (!rec?.firstId || rec.firstFrom || rootLookups.has(rec.firstId) || shuttingDown) return;
+      if (rootLookups.size >= 1000) rootLookups.clear();
+      rootLookups.add(rec.firstId);
+      // Bounded: shutdown waits for this task.
+      const root = await withDeadline(fetchQuotedMessage(channel, rec.firstId, names), 10_000);
+      if (!root) return;
+      const self = Boolean(root.senderId && root.senderId === channel.botIdentity?.openId);
+      const rootFrom: TopicPerson = self
+        ? { kind: 'self' }
+        : { kind: root.fromUser ? 'user' : 'bot', ...(root.senderId ? { openId: root.senderId } : {}) };
+      await reg.note(msg.chatId, { ...sighting, first: { id: rec.firstId, from: rootFrom, at: root.createTime || undefined, text: root.text } });
+    })().catch((err) => log.fail('intake', err, { phase: 'topic-registry' })));
+  }
+  /** This bot opened `topicId` (a reply in thread, or a resumed session's topic). */
+  function noteOpenedTopic(chatId: string, topicId: string, first: TopicSighting['first']): void {
+    if (topics) void trackTask(topics.note(chatId, { topicId, at: Date.now(), from: { kind: 'self' }, first }));
+  }
+  /** The session's last meter reading: in memory, else the one saved with its
+   * record while the record still points at this native session (s13). */
+  function meterOf(key: string | undefined, rec: SessionRecord | undefined, thread: AgentThread): { used: number; window: number | null } | undefined {
+    if (!key) return undefined;
+    const saved = rec?.usage;
+    return lastUsage.get(key) ?? (saved && saved.sessionId === thread.sessionId ? { used: saved.used, window: saved.window } : undefined);
+  }
+  /** The meter reading saved with the record at the end of a turn. */
+  function savedMeter(key: string, thread: AgentThread): Pick<SessionRecord, 'usage'> {
+    const u = lastUsage.get(key);
+    return u ? { usage: { sessionId: thread.sessionId, used: u.used, window: u.window } } : {};
+  }
+
   /** Feishu re-pushes messages sent while the bot was offline, minutes late
    * (e10). One this session already took in, as a turn or as a history line,
    * is skipped. Only late messages pay for the disk read; the main area pulls
@@ -1073,6 +1132,7 @@ export function createOrchestrator(
       return;
     }
     if (project?.enabled === false || projectMutations.has(msg.chatId) || resumePublications.has(msg.chatId)) return;
+    if (project && msg.threadId && isChatAllowed(cfg, msg.chatId)) noteTopicMessage(msg);
     // @门：没 @ 时只在「项目群 + 免@ 适用」才响应。免@默认开,但 multi 仅话题内、
     // single 整群;非项目群一律不响应非 @ 消息。
     if (!msg.mentionedBot && !(project && shouldRespondWithoutMention(project, msg))) return;
@@ -2069,6 +2129,7 @@ export function createOrchestrator(
         requesterOpenId: msg.senderId,
         requestedAt: msg.createTime || tIntake,
         seenAt: msg.createTime,
+        openTopic: { id: msg.messageId, from: senderOf(msg), at: msg.createTime || undefined, text: msg.content },
         roleSuffix: perm.roleSuffix,
         backendId: be.id,
         titleJobKey,
@@ -4094,6 +4155,8 @@ export function createOrchestrator(
         const tid = await getThreadId(channel, sent.messageId, 4);
         if (tid) {
           const now = Date.now();
+          // Titled by the resumed session's name: the first message is the `/resume` itself.
+          noteOpenedTopic(state.chatId, tid, { id: state.originalMsgId, text: history.name || history.preview });
           await upsertSession({
             threadId: tid,
             chatId: state.chatId,
@@ -4250,6 +4313,7 @@ export function createOrchestrator(
           const sent = await sendManagedCard(channel, project.chatId, buildHistoryCard({ cwd: project.cwd, projectName: project.name, history }), root.messageId, true);
           const tid = await getThreadId(channel, sent.messageId, 4);
           if (!tid) throw new AdminWriteError('已创建话题，但飞书尚未返回话题标识；会话未绑定');
+          noteOpenedTopic(project.chatId, tid, { id: root.messageId, from: { kind: 'self' }, at: Date.now(), text: history.name || history.preview });
           threadId = turnSession(tid, project, owner).sessionKey;
           if (active.has(threadId)) throw new AdminWriteError('新话题已有任务，会话未切换');
           active.set(threadId, reserved);
@@ -4371,6 +4435,8 @@ export function createOrchestrator(
      * written as the new session's watermark (never `requestedAt`, which falls
      * back to the local clock) so its next turn back-fills what came after. */
     seenAt?: number;
+    /** A topic this run opens under {@link replyTo}: its first message, for the topic registry. */
+    openTopic?: TopicSighting['first'];
     /** The trigger, marked seen once the host accepts the first turn (see QueuedTurn.seen). */
     seen?: SeenMark;
     seenHow?: SeenHow;
@@ -4658,7 +4724,7 @@ export function createOrchestrator(
         const turnStartAt = Date.now(); // turn/start 已在 runStreamed() 内发出（与下面的建卡并行）
         state.run = run;
         const render = new RunRender();
-        render.seedUsage(topicThreadId ? lastUsage.get(topicThreadId) : undefined);
+        render.seedUsage(meterOf(topicThreadId, rec, opts.thread));
         const cardEvents = new TurnCardEvents();
         state.steerReply = { run, accept: (messageId, voice) => cardEvents.accept(messageId, voice) };
         let boundary: RunState | undefined;
@@ -4695,6 +4761,7 @@ export function createOrchestrator(
               topicThreadId = key;
               rc.threadId = key;
               await persist(key);
+              if (opts.openTopic) noteOpenedTopic(opts.chatId, tid, opts.openTopic);
             }
           } else {
             topicThreadId = activeKey;
@@ -5066,7 +5133,7 @@ export function createOrchestrator(
           }
           if (topicThreadId) {
             touchSession(topicThreadId); // 轮次收尾打点（M-3 reaper 的空闲时钟）
-            await patchSession(topicThreadId, { updatedAt: Date.now() });
+            await patchSession(topicThreadId, { updatedAt: Date.now(), ...savedMeter(topicThreadId, opts.thread) });
           }
           await sendCompletionReminder({
             cardMsgId: finalMsgId,
@@ -5289,6 +5356,7 @@ export function createOrchestrator(
           topicThreadId = key;
           card.threadId = key;
           await persist(key);
+          if (opts.openTopic) noteOpenedTopic(opts.chatId, tid, opts.openTopic);
         }
       } else {
         topicThreadId = activeKey;
@@ -5545,7 +5613,7 @@ export function createOrchestrator(
       } else {
         log.info('card', 'goal-final', { status: interrupted ? 'interrupted' : 'ended', tokens: goalTokens, seconds: goalSeconds });
       }
-      if (topicThreadId) await patchSession(topicThreadId, { updatedAt: Date.now() }).catch(() => undefined);
+      if (topicThreadId) await patchSession(topicThreadId, { updatedAt: Date.now(), ...savedMeter(topicThreadId, opts.thread) }).catch(() => undefined);
     } catch (err) {
       log.fail('intake', err);
       await channel

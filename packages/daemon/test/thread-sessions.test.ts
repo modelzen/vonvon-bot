@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import type { AgentEvent, AgentInput } from '../src/agent/types';
@@ -53,6 +56,7 @@ vi.mock('../src/card/run-card-stream', () => ({
   },
 }));
 import { createOrchestrator, sessionChangeNotice } from '../src/bot/handle-message';
+import { createTopicRegistry, type TopicRegistry } from '../src/bot/topic-registry';
 import type { AppConfig } from '../src/config/schema';
 
 function thread(sessionId: string) {
@@ -81,12 +85,12 @@ function message(text: string, threadId?: string, extra: Partial<NormalizedMessa
   return { messageId: `msg-${++seq}`, chatId: 'chat', chatType: 'group', ...(threadId ? { threadId } : {}),
     content: text, senderId: 'owner', senderName: 'Owner', mentionedBot: true, createTime: Date.now(), rawContentType: 'text', resources: [], mentions: [], mentionAll: false, ...extra };
 }
-function setup() {
+function setup(topics?: TopicRegistry) {
   const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner' } } };
   const channel = { send: fake.send, rawClient: { im: { v1: { message: { get: fake.get }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
-  orchestrator = createOrchestrator(channel as never, cfg, '/test');
+  orchestrator = createOrchestrator(channel as never, cfg, '/test', undefined, topics);
   return orchestrator;
 }
 const record = (key: string, extra: object = {}) => ({ threadId: key, chatId: 'chat', sessionId: `old-${key}`, backend: 'codex', cwd: '/test', summary: '', model: 'm', effort: 'medium', lastSeenAt: 1, ...extra });
@@ -366,5 +370,113 @@ describe('names and watermark (s09)', () => {
     await o.onMessage(message('again', 'omt_topic'));
     await done();
     expect(fake.records.get('omt_topic')).toMatchObject({ sessionId: 'fresh', lastSeenAt: 0, seen: [] });
+  });
+});
+
+describe('topic registry (s13)', () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'topics-')); });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+  const registry = () => createTopicRegistry({ dir, sessions: async () => [...fake.records.values()] });
+  const multi = () => { fake.project = { name: 'test', chatId: 'chat', cwd: '/test', kind: 'multi', noMention: true }; };
+
+  it("records a user's topic when first seen, and the session the bot opens there later", async () => {
+    multi();
+    const topics = registry();
+    const o = setup(topics);
+    // Addressed to someone else: not answered, still recorded, with its first message looked up once.
+    const chatter = message('@李四 看下这个', 'omt_user', {
+      rootId: 'om_root', mentionedBot: false, senderId: 'ou_zhang',
+      mentions: [{ key: '@_user_1', openId: 'ou_li', name: '李四', isBot: false }],
+    });
+    await o.onMessage(chatter);
+    await vi.waitFor(async () => expect(await topics.get('chat', 'omt_user')).toMatchObject({
+      firstId: 'om_root', firstFrom: { kind: 'user', openId: 'ou_q' }, firstAt: 1, title: 'om_root 的原话',
+      openedBy: { kind: 'user', openId: 'ou_zhang' }, openedAt: chatter.createTime, sessions: [],
+    }));
+    expect(fake.backend.startThread).not.toHaveBeenCalled();
+    const run = thread('topic-session');
+    fake.backend.startThread.mockResolvedValue(run.t);
+    await o.onMessage(message('@bot 帮忙看下', 'omt_user', { rootId: 'om_root' }));
+    await done();
+    expect(await topics.get('chat', 'omt_user')).toMatchObject({
+      openedBy: { kind: 'user', openId: 'ou_zhang' },
+      sessions: [{ key: 'omt_user', sessionId: 'topic-session', backend: 'codex' }],
+    });
+    expect(fake.get.mock.calls.filter(([p]) => p.path.message_id === 'om_root').length).toBeLessThanOrEqual(2);
+  });
+
+  it('records a topic the bot opens from the main area as opened by itself', async () => {
+    multi();
+    const topics = registry();
+    const run = thread('opened');
+    fake.backend.startThread.mockResolvedValue(run.t);
+    const o = setup(topics);
+    const trigger = message('订单接口一直报 500', undefined, { senderId: 'ou_zhang' });
+    await o.onMessage(trigger);
+    await done();
+    await vi.waitFor(async () => expect(await topics.get('chat', 'omt_new')).toMatchObject({
+      firstId: trigger.messageId, firstFrom: { kind: 'user', openId: 'ou_zhang' }, firstAt: trigger.createTime,
+      title: '订单接口一直报 500', openedBy: { kind: 'self' },
+      sessions: [{ key: 'omt_new', sessionId: 'opened', backend: 'codex' }],
+    }));
+    // A reply in the new topic keeps it opened by the bot.
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    await o.onMessage(message('@bot 接着说', 'omt_new', { rootId: trigger.messageId, senderId: 'ou_li' }));
+    await done();
+    expect((await topics.list('chat')).map((t) => [t.topicId, t.openedBy])).toEqual([['omt_new', { kind: 'self' }]]);
+  });
+
+  it('keeps the turn going when the registry cannot write', async () => {
+    multi();
+    const blocked = join(dir, 'blocked');
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(blocked, '');
+    const run = thread('topic-session');
+    fake.backend.startThread.mockResolvedValue(run.t);
+    const o = setup(createTopicRegistry({ dir: blocked, sessions: async () => [] }));
+    await o.onMessage(message('@bot 在吗', 'omt_user', { rootId: 'om_root' }));
+    await done();
+    expect(run.consumed).toHaveLength(1);
+    expect(fake.log.warn).toHaveBeenCalledWith('intake', 'topic-registry-write-failed', expect.objectContaining({ chatId: 'chat' }));
+  });
+});
+
+describe('context meter after a restart (s13)', () => {
+  function metered(sessionId: string) {
+    const t = thread(sessionId);
+    t.t.runStreamed = (input: AgentInput) => {
+      t.consumed.push(input);
+      return { turnId: () => 'turn', events: (async function* (): AsyncGenerator<AgentEvent> {
+        yield { type: 'turn_started', turnId: 'turn' };
+        yield { type: 'context_usage', usedTokens: 50_000, contextWindow: 200_000 };
+        yield { type: 'done', turnId: 'turn' };
+      })() };
+    };
+    return t;
+  }
+
+  it('saves the last reading with the session at the end of a turn', async () => {
+    fake.records.set('omt_topic', record('omt_topic'));
+    fake.backend.resumeThread.mockResolvedValue(metered('old-omt_topic').t);
+    const o = setup();
+    await o.onMessage(message('hi', 'omt_topic'));
+    await done();
+    await vi.waitFor(() => expect(fake.records.get('omt_topic').usage).toEqual({ sessionId: 'old-omt_topic', used: 50_000, window: 200_000 }));
+  });
+
+  it('starts the first card from the saved reading of the same session only', async () => {
+    fake.records.set('omt_topic', record('omt_topic', { usage: { sessionId: 'old-omt_topic', used: 86_000, window: 200_000 } }));
+    fake.backend.resumeThread.mockResolvedValue(thread('old-omt_topic').t);
+    const o = setup();
+    await o.onMessage(message('after restart', 'omt_topic'));
+    await done();
+    expect(finalCard()).toContain('上下文 43%');
+    fake.records.set('omt_other', record('omt_other', { usage: { sessionId: 'gone', used: 86_000, window: 200_000 } }));
+    fake.backend.resumeThread.mockResolvedValue(thread('old-omt_other').t);
+    fake.log.info.mockClear();
+    await o.onMessage(message('rebuilt elsewhere', 'omt_other'));
+    await done();
+    expect(finalCard()).toContain('上下文 —');
   });
 });

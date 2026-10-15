@@ -59,6 +59,8 @@ export interface ContextMessage {
   text: string;
   /** sender_type === 'user' — false for the bot itself, other apps, system. */
   fromUser: boolean;
+  /** A person's open_id, or a bot's open_bot_id (undefined when the item has neither). */
+  senderId?: string;
   /** create_time as epoch ms (0 when unknown). */
   createTime: number;
 }
@@ -245,13 +247,15 @@ function warnThreadContextFailed(threadId: string, failure: unknown): void {
 }
 
 function toContextMessage(item: RawMsgItem, names?: NameBook): ContextMessage {
-  const id = item.sender?.id ?? '';
+  const s = item.sender;
+  const id = s?.id ?? '';
   const name = item.sender?.sender_name || names?.peek(id) || (id ? `用户${id.slice(-4)}` : '某人');
   return {
     messageId: item.message_id ?? '',
     senderName: name,
     text: extractMessageText(item.msg_type, item.body?.content, item.mentions),
     fromUser: item.sender?.sender_type === 'user',
+    senderId: s?.sender_type === 'user' ? (id && isOpenId(s.id_type) ? id : undefined) : s?.open_bot_id,
     createTime: Number(item.create_time) || 0,
   };
 }

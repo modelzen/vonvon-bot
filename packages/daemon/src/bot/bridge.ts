@@ -8,6 +8,8 @@ import type { AdminWriteOp } from '../admin/ops';
 import type { AppConfig } from '../config/schema';
 import { log } from '../core/logger';
 import { createOrchestrator } from './handle-message';
+import { createTopicRegistry } from './topic-registry';
+import { paths } from '../config/paths';
 
 export interface BridgeOptions {
   cfg: AppConfig;
@@ -64,7 +66,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   // 咖啡一下 (the local Claude Code / Codex hook relay, D/cli-bridge) left v1 in
   // s02b: no service and no socket, so installed hooks find no daemon and fall
   // back to asking in the terminal.
-  const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd);
+  const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd, createTopicRegistry({ dir: paths.topicsDir }));
   const groupTasks = new Set<Promise<JoinedGroups | Project>>();
   let closing: Promise<void> | undefined;
   const shutdown = (): Promise<void> => {
