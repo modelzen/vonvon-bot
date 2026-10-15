@@ -246,9 +246,9 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 - s07：s06 起，服务拉起的进程读到 `unrecognized` 的注册（比如旧版本写的、和现在生成的格式不一致的 plist 或 unit）会退出 1，由管理器每 5 秒重试一次。升级以后要先重写服务定义，再让服务起来，否则换版本后 bot 起不来。
 - s07：服务定义里的 PATH 用 s02 的 `withToolDirectories` 补全。自带的 npm 由 daemon 自己找，服务定义里不用写 `VONVON_NPM_CLI`。
 - s07：POSIX 上的互斥锁是 `127.0.0.1` 上按数据目录哈希出来的端口（20000 到 49999），和 Linux 的临时端口重叠。#295 的 CI 撞过一次（`host-service-shutdown` 测试报 busy），开工时看要不要改成 Unix 域套接字。#296 的 CI 也失败过一次，可能是同一个原因：`daemon-cli.test.ts` 的"concurrent detached starts return the same ready owner"两个启动都退出 1，日志里没有子进程的输出，重跑通过。开工时让这个测试失败时打印子进程输出。
-- s07：e06 实测（`docs/research/2026-10-15-v1-spikes/e06-launchagent-keychain.md`）：LaunchAgent 起的进程拿到真实 HOME 和 USER、PATH 只有系统目录，Claude 和 Codex 的登录检测和终端一样是已登录。owner 的登录不走钥匙串，钥匙串那条路没验证到，所以 s03 留下的"读不到钥匙串时改成无法确认"照做，并在用钥匙串登录的账号上验证。用户在系统设置"App 后台活动"里关掉这一项时，服务被直接卸载（`launchctl print` 退出码 113），`service status` 把"plist 在、服务找不到"显示成"已在系统设置里关掉"。不用 `sfltool`（不加 sudo 时卡住）。产品 plist 的 `SuccessfulExit=false` 和 5 秒节流没测，放进 s07 的 Mac 检查。
+- s07：e06 实测（`docs/research/2026-10-15-v1-spikes/e06-launchagent-keychain.md`）：LaunchAgent 起的进程拿到真实 HOME 和 USER、PATH 只有系统目录，Claude 和 Codex 的登录检测和终端一样是已登录。owner 的登录不走钥匙串，钥匙串那条路没验证到，所以 s03 留下的"读不到钥匙串时改成无法确认"照做，并在用钥匙串登录的账号上验证。用户在系统设置"App 后台活动"里关掉这一项时，服务从 launchd 里消失（`launchctl print` 退出码 113，表现和卸载一样），`service status` 把"plist 在、服务找不到"显示成"已在系统设置里关掉"。不用 `sfltool`（不加 sudo 时卡住）。产品 plist 的 `SuccessfulExit=false` 和 5 秒节流没测，放进 s07 的 Mac 检查。
 - s07：`D/admin/host.ts:194` 的 `resolveCliBinPath` 还指向 `bin/feishu-codex-bridge.mjs`，包里只有 `bin/vonvon.mjs`（`D/service/common.ts` 的同名函数是对的）。查清 `host.ts:210` 那条路径还用不用，用就改成调 service/common 的。
-- s08：e06 发现系统设置"App 后台活动"里也有一个开关，用户在那里关掉时服务被卸载。桌面端的"登录电脑时启动"要读 s07 的状态，显示"已在系统设置里关掉"，不能只看自己存的值。未签名的 Electron 在那里显示为"Electron"、"身份不明的开发者"；签名后的预览版显示什么，s08 的 Mac 检查时看。
+- s08：e06 发现系统设置"App 后台活动"里也有一个开关，用户在那里关掉时服务从 launchd 里消失。桌面端的"登录电脑时启动"要读 s07 的状态，显示"已在系统设置里关掉"，不能只看自己存的值。未签名的 Electron 在那里显示为"Electron"、"身份不明的开发者"；签名后的预览版显示什么，s08 的 Mac 检查时看。
 
 ### M3 群里的上下文
 
