@@ -27,6 +27,11 @@ export const JOIN_SCOPE_WARNING = '还没开读群信息的权限（im:chat:read
 export const BOT_ADDED_WARNING = '没订阅「机器人进群」（im.chat.member.bot.added_v1）：把 bot 拉进群后不会提醒你绑定。';
 /** Recall event: optional, without it a recalled message the bot read is still used (s15). */
 export const RECALL_WARNING = '没订阅「撤回消息」（im.message.recalled_v1）：撤回 bot 读过的消息后，bot 不会知道，还会接着用它。';
+/** Optional events whose absence gets a warning under the 事件订阅 step. */
+const OPTIONAL_EVENT_WARNINGS = [
+  ['im.chat.member.bot.added_v1', BOT_ADDED_WARNING],
+  ['im.message.recalled_v1', RECALL_WARNING],
+] as const;
 
 /** The order follows the Feishu console: the long connection must be up before the
  * event page can save "长连接" mode, and events only count once a version is published. */
@@ -37,8 +42,7 @@ export function botSteps(agent: Agent, status: AdminSetupStatus | undefined, pro
   }
   const event = status.event;
   const eventSettings: StepAction = {kind: 'open', label: '打开事件设置', url: status.eventConfigUrl, target: 'event-settings'};
-  const missed = ([['im.chat.member.bot.added_v1', BOT_ADDED_WARNING], ['im.message.recalled_v1', RECALL_WARNING]] as const)
-    .filter(([e]) => event.missingOptional?.includes(e)).map(([, w]) => w);
+  const missed = OPTIONAL_EVENT_WARNINGS.filter(([e]) => event.missingOptional?.includes(e)).map(([, w]) => w);
   const eventWarnings = missed.length ? missed : undefined;
   const steps: SetupStep[] = [
     status.credentials.ok

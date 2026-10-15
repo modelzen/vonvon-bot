@@ -727,6 +727,22 @@ export class RecentIdCache {
   }
 }
 
+/** How long and how many recalled message ids a process keeps (s15). */
+const RECALLED_TTL_MS = 24 * 60 * 60_000;
+const RECALLED_MAX = 2000;
+
+/** Remove the items `hit` picks from `list` in place; how many went. */
+function removeWhere<T>(list: T[], hit: (item: T) => boolean): number {
+  let removed = 0;
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (hit(list[i]!)) {
+      list.splice(i, 1);
+      removed++;
+    }
+  }
+  return removed;
+}
+
 /**
  * card_id of a CardKit-entity message (a run card's carrier message body is
  * `{"type":"card","data":{"card_id":…}}`), or undefined for any other shape.
@@ -1004,14 +1020,14 @@ export function createOrchestrator(
   /** inbound message/comment dedup (at-least-once delivery, see RecentIdCache) */
   const seenInbound = new RecentIdCache();
   /** Messages recalled in this process (s15), oldest first: one whose recall came
-   * first is not run. Kept a day, at most 2000. */
+   * first is not run. Kept {@link RECALLED_TTL_MS}, at most {@link RECALLED_MAX}. */
   const recalled = new Map<string, number>();
   function noteRecalled(id: string): void {
     const now = Date.now();
     recalled.delete(id);
     recalled.set(id, now);
     for (const [old, at] of recalled) {
-      if (recalled.size <= 2000 && now - at < 24 * 60 * 60_000) break;
+      if (recalled.size <= RECALLED_MAX && now - at < RECALLED_TTL_MS) break;
       recalled.delete(old);
     }
   }
@@ -1132,6 +1148,9 @@ export function createOrchestrator(
   const knownIds = (list: TopicView[]) => new Set(list.map((t) => t.topicId));
   /** Who sent a message, as a record block's pointer names them. */
   const senderWho = (msg: NormalizedMessage): Who => ({ kind: senderOf(msg).kind, name: names.peek(msg.senderId) ?? msg.senderName });
+  /** Recall notes as a record block's 〔撤回〕 lines (s15). */
+  const recallLines = (notes: RecallNote[]): NonNullable<RecordBlock['recalls']> =>
+    notes.map((r) => ({ at: r.at, who: personOf(r.who, names), ...(r.other ? { other: true } : {}) }));
   const tierOf = (key: string) => /#(admin|guest)$/.exec(key)?.[1] as 'admin' | 'guest' | undefined;
   const isMainKey = (key: string, chatId: string) => key.replace(/#(admin|guest)$/, '') === chatId;
   /** Main sessions that compacted, by key: the native session id, '' once the
@@ -1474,9 +1493,8 @@ export function createOrchestrator(
     noteRecalled(id);
     let dropped = 0;
     for (const state of active.values()) {
-      for (const list of [state.queue, state.deferred ?? []] as { seen?: SeenMark; id?: string }[][]) {
-        for (let i = list.length - 1; i >= 0; i--) if ((list[i]!.seen?.id ?? list[i]!.id) === id) { list.splice(i, 1); dropped++; }
-      }
+      dropped += removeWhere(state.queue, (turn) => turn.seen?.id === id);
+      if (state.deferred) dropped += removeWhere(state.deferred, (held) => held.id === id);
     }
     if (dropped) log.info('intake', 'recall-queued-dropped', { msgId: id, dropped });
     const bindings = (await listSessions().catch(() => [])).filter((s) => s.chatId === chatId && !s.detached);
@@ -2006,7 +2024,7 @@ export function createOrchestrator(
         const floor = codexEmpty ? prior?.from ?? 0 : 0;
         // Recalled messages the session got are said once (s15); a rebuilt one never had them.
         const notes = place && !codexEmpty ? prior?.recalls ?? [] : [];
-        const recalls = notes.map((r) => ({ at: r.at, who: personOf(r.who, names), ...(r.other ? { other: true } : {}) }));
+        const recalls = recallLines(notes);
         if (place && codexEmpty && prior && prior.lastSeenAt !== 0) {
           // The speculative pull stopped at the old session's watermark (or was
           // skipped): the new session needs the whole opening.
@@ -5119,8 +5137,7 @@ export function createOrchestrator(
           const main = isMainKey(topicThreadId, opts.chatId);
           const topic = main ? {} : { topic: { title: (await topics?.get(opts.chatId, topicThreadId.replace(/#(admin|guest)$/, '')))?.title } };
           const place = { group: (await getProjectByChatId(opts.chatId))?.name, me: channel.botIdentity?.name, ...topic };
-          const recalls = notes.map((r) => ({ at: r.at, who: personOf(r.who, names), ...(r.other ? { other: true } : {}) }));
-          turnInput = { ...turnInput, text: weaveRecordBlock(turnInput.text ?? '', { place, entries: [], now: Date.now(), table: rows, recalls }) };
+          turnInput = { ...turnInput, text: weaveRecordBlock(turnInput.text ?? '', { place, entries: [], now: Date.now(), table: rows, recalls: recallLines(notes) }) };
           if (rows.length) currentTurn.tableShown = true;
           currentTurn.recallsShown = notes.map((r) => r.id);
           for (const r of notes) said.add(r.id);

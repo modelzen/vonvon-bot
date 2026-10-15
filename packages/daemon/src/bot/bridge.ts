@@ -92,9 +92,9 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     channel.on('botAdded', orchestrator.onBotAddedToChat);
     channel.on('reaction', orchestrator.onReaction);
     // The SDK exposes no named event for bot-*removed* (im.chat.member.bot.deleted_v1),
-    // recalls nor bot-menu clicks (application.bot.menu_v6), so tap its private raw
-    // EventDispatcher: register() merges by event key, so this adds our handlers
-    // without clobbering the SDK's built-ins.
+    // recalls (im.message.recalled_v1) or bot-menu clicks (application.bot.menu_v6),
+    // so tap its private raw EventDispatcher: register() merges by event key, so
+    // this adds our handlers without clobbering the SDK's built-ins.
     try {
       const tap = (
         channel as unknown as {
