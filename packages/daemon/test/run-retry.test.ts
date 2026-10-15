@@ -18,6 +18,7 @@ const fake = vi.hoisted(() => ({
   /** Holds the turn's terminal patchSession({ updatedAt }) while set. */
   patchGate: undefined as Promise<void> | undefined,
   patchEntered: vi.fn(),
+  sessions: [] as Record<string, unknown>[],
 }));
 vi.mock('../src/config/schema', async (original) => {
   const schema = await original<typeof import('../src/config/schema')>();
@@ -31,6 +32,7 @@ vi.mock('../src/agent', async (original) => ({ ...await original<object>(), crea
 vi.mock('../src/project/registry', async (original) => ({
   ...await original<object>(),
   getProjectByChatId: async () => fake.project,
+  getProjectByName: async () => fake.project,
 }));
 vi.mock('../src/bot/session-store', async (original) => ({
   ...await original<object>(),
@@ -42,6 +44,7 @@ vi.mock('../src/bot/session-store', async (original) => ({
     }
   },
   upsertSession: async () => undefined,
+  listSessions: async () => fake.sessions,
 }));
 vi.mock('../src/bot/session-title-coordinator', () => ({
   SessionTitleCoordinator: class { startRecovery() {} async shutdown() {} },
@@ -168,6 +171,7 @@ beforeEach(() => {
   fake.project = { ...PROJECT };
   fake.idleMs = undefined;
   fake.patchGate = undefined;
+  fake.sessions = [];
 });
 afterEach(async () => {
   await orchestrator?.shutdown();
@@ -295,6 +299,35 @@ describe('[重试] on a failed run card', () => {
     expect(sentText().filter((t) => t.includes('已丢弃'))).toEqual([expect.stringContaining('1 条排队消息已丢弃')]);
   });
 
+  it('tells the tap when a resume starts while it waits out the wrap-up, and keeps the button', async () => {
+    fake.idleMs = 300;
+    let wrapUp!: () => void;
+    fake.patchGate = new Promise<void>((r) => { wrapUp = r; });
+    const run = silentThread();
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    let readHistory: ((err: Error) => void) | undefined;
+    Object.assign(fake.backend, {
+      listThreads: async () => [{ sessionId: 'past' }],
+      readHistory: () => new Promise((_resolve, reject) => { readHistory = reject; }),
+    });
+    const o = setup();
+    await o.onMessage(message('跑个长命令'));
+    await until(() => expect(fake.patchEntered).toHaveBeenCalled());
+    await tap(o, 'card-1', 'owner'); // passes the tap checks, then waits
+    const resume = o.collaboration({ action: 'resume', projectName: 'test', chatId: 'chat', sessionId: 'past', backend: 'codex' })
+      .catch(() => undefined);
+    await until(() => expect(readHistory).toBeDefined()); // the desktop resume is publishing
+    fake.patchGate = undefined;
+    wrapUp();
+    await until(() => expect(sentText().some((t) => t.includes('正在恢复历史会话'))).toBe(true));
+    expect(run.consumed).toHaveLength(1);
+    readHistory!(new Error('gone'));
+    await resume;
+
+    await tap(o, 'card-1', 'owner');
+    await until(() => expect(run.consumed).toHaveLength(2));
+  });
+
   it('runs once when tapped twice, telling the second tap it is already on its way', async () => {
     const run = scriptedThread([[NETWORK]]);
     fake.backend.resumeThread.mockResolvedValue(run.t);
@@ -356,6 +389,45 @@ describe('[重试] on a failed run card', () => {
     await tap(o, 'card-1', 'owner');
     await until(() => expect(run.consumed).toHaveLength(2));
     await until(() => expect(finalCards().some((json) => json.includes('已重试'))).toBe(true));
+  });
+
+  it('expires once /clear swaps in a fresh thread', async () => {
+    fake.project = { ...PROJECT, kind: 'single' };
+    const run = scriptedThread([[NETWORK]]);
+    const fresh = scriptedThread([]);
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    fake.backend.startThread.mockResolvedValue(fresh.t);
+    const o = setup();
+    await o.onMessage({ ...message('整理一下文档'), threadId: undefined });
+    await until(() => expect(finals('error')).toHaveLength(1));
+    expect(finalCards().some((json) => json.includes('run.retry'))).toBe(true);
+    await o.onMessage({ ...message('/clear'), threadId: undefined });
+    await until(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'clear', expect.anything()));
+
+    await tap(o, 'card-1', 'owner');
+    await until(() => expect(sentText().some((t) => t.includes('这个重试按钮已失效'))).toBe(true));
+    await sleep(50);
+    expect(run.consumed).toHaveLength(1);
+    expect(fresh.consumed).toHaveLength(0);
+  });
+
+  it('expires once a desktop clear swaps in a fresh thread', async () => {
+    fake.project = { ...PROJECT, kind: 'single' };
+    fake.sessions = [{ threadId: 'chat', chatId: 'chat', cwd: '/test', sessionId: 'host', backend: 'codex', summary: '' }];
+    const run = scriptedThread([[NETWORK]]);
+    const fresh = scriptedThread([]);
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    fake.backend.startThread.mockResolvedValue(fresh.t);
+    const o = setup();
+    await o.onMessage({ ...message('整理一下文档'), threadId: undefined });
+    await until(() => expect(finals('error')).toHaveLength(1));
+    await o.collaboration({ action: 'clear', projectName: 'test', chatId: 'chat', threadId: 'chat' });
+
+    await tap(o, 'card-1', 'owner');
+    await until(() => expect(sentText().some((t) => t.includes('这个重试按钮已失效'))).toBe(true));
+    await sleep(50);
+    expect(run.consumed).toHaveLength(1);
+    expect(fresh.consumed).toHaveLength(0);
   });
 
   it('stays usable while /compact holds the session, instead of joining a queue it drops', async () => {

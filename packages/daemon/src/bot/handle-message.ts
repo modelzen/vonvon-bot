@@ -549,12 +549,14 @@ interface TurnExtra {
 
 /** A 🔁 重试 turn's say in its own reservation. */
 interface RetryGate {
-  /** False once the session took newer input after the failed turn. */
+  /** False once the button was taken away (newer input, a swapped thread). */
   current(): boolean;
   /** Tell the tapper the button went stale; nothing was queued. */
   stale(): void;
   /** Tell the tapper something else holds the session; the button stays. */
   busy(): void;
+  /** Tell the tapper the group takes no turns right now (see turnRefusal); the button stays. */
+  refused(note: string): void;
   /** The session reserved the retry as a fresh run. */
   accepted(): void;
 }
@@ -569,8 +571,9 @@ interface RetryTurn {
   replayText: string;
   reason: 'idle' | 'network';
   idleSeconds: number;
-  /** The session's input count when the turn failed; stale once it moves. */
-  seq: number;
+  /** Set when the button is taken away (the session took newer input, or the
+   * tap was used): a tap still in flight holding this record sees it. */
+  expired?: boolean;
   /** Settles once the failed run finished wrapping up that turn. */
   settled: Promise<void>;
 }
@@ -926,21 +929,22 @@ export function createOrchestrator(
   const retryTurns = new Map<string, RetryTurn>();
   /** Cards whose [重试] tap is being handled: a second tap must not queue twice. */
   const retrying = new Set<string>();
+  /** Every removal goes through here: a tap in flight keeps its own reference
+   * to the record, so it learns from `expired`, not from the map. */
+  const expireRetry = (cardId: string): void => {
+    const retry = retryTurns.get(cardId);
+    if (retry) retry.expired = true;
+    retryTurns.delete(cardId);
+  };
+  const expireRetries = (match: (retry: RetryTurn) => boolean): void => {
+    for (const [cardId, retry] of retryTurns) if (match(retry)) expireRetry(cardId);
+  };
+  /** The session took input (a run reserved, a follow-up queued, a steer sent,
+   * a /goal started) or swapped its thread (/clear, /resume): replaying its
+   * [重试] now would land after that, or in another conversation. */
   const dropRetries = (sessionKey: string | undefined): void => {
-    if (!sessionKey) return;
-    for (const [cardId, retry] of retryTurns) {
-      if (retry.sessionKey === sessionKey) retryTurns.delete(cardId);
-    }
+    if (sessionKey) expireRetries((retry) => retry.sessionKey === sessionKey);
   };
-  /** Per-session count of accepted input (a run reserved, a follow-up queued, a
-   * steer sent, a /goal started). A [重试] taken at count N is stale once it
-   * moves: replaying it would land after the newer input. */
-  const turnSeq = new Map<string, number>();
-  const acceptInput = (sessionKey: string): void => {
-    turnSeq.set(sessionKey, (turnSeq.get(sessionKey) ?? 0) + 1);
-    dropRetries(sessionKey);
-  };
-  const retryCurrent = (retry: RetryTurn): boolean => (turnSeq.get(retry.sessionKey) ?? 0) === retry.seq;
   /** CardKit entity backing each run card, by messageId — drives the native
    * typewriter stream and whole-card (button/settings) updates. */
   const runStreams = new Map<string, RunCardStream>();
@@ -1419,7 +1423,11 @@ export function createOrchestrator(
     // No project = an unbound group: never run (or resume a session) with no
     // tier, which backends read as full access. Messages stop earlier; this
     // also covers the card-originated turns (👍 继续, 🔁 重试).
-    if (!project || project.enabled === false || projectMutations.has(msg.chatId) || resumePublications.has(msg.chatId)) return Promise.resolve();
+    const refused = turnRefusal(project, msg.chatId);
+    if (refused) {
+      extra?.retry?.refused(refused);
+      return Promise.resolve();
+    }
     const owner = active.get(sessionKey);
     return orderTurns(sessionKey, async () => {
       if (staleRetry(extra)) return;
@@ -1500,9 +1508,9 @@ export function createOrchestrator(
       if (tid) {
         const voiceReply = cur.voiceReply?.run === cur.run ? cur.voiceReply : undefined;
         const steerReply = cur.steerReply?.run === cur.run ? cur.steerReply : undefined;
-        // Counted before the RPC: once sent, the input may reach the model even
-        // if the ACK is lost. A rejected steer is counted again when it queues.
-        acceptInput(sessionKey);
+        // Dropped before the RPC: once sent, the input may reach the model even
+        // if the ACK is lost.
+        dropRetries(sessionKey);
         try {
           await steerWithDeadline(cur.thread, { text: woven.text, images }, tid);
           const split = steerReply?.accept(msg.messageId, woven.voice);
@@ -1573,7 +1581,11 @@ export function createOrchestrator(
     const titleSource: SessionTitleSource = goal
       ? { text, rawContentType: 'text' }
       : sessionTitleSourceFromMessage(msg, summaryText ?? text);
-    if (!project || project.enabled === false || projectMutations.has(msg.chatId) || resumePublications.has(msg.chatId)) return;
+    const refused = turnRefusal(project, msg.chatId);
+    if (refused) {
+      extra?.retry?.refused(refused);
+      return;
+    }
     // A retry re-checks here, in the same synchronous step that reserves it: a
     // message may have reserved the session while it waited.
     if (staleRetry(extra)) return;
@@ -1610,13 +1622,13 @@ export function createOrchestrator(
         requestedAt: msg.createTime || Date.now(),
         summary: stripFileTokens(summaryText ?? text).slice(0, 80) || undefined,
       });
-      acceptInput(sessionKey);
+      dropRetries(sessionKey);
       log.info('intake', 'queued', { depth: existing.queue.length });
       return;
     }
     const reserved: ActiveState = { queue: [], requesterOpenId: msg.senderId, isGoal: goal };
     active.set(sessionKey, reserved);
-    acceptInput(sessionKey);
+    dropRetries(sessionKey);
     extra?.retry?.accepted();
     void trackTask(withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
       // Goal runs use the OKR reaction (added at dispatch) as their only receipt,
@@ -2329,6 +2341,7 @@ export function createOrchestrator(
         }
         trackSession(sessionKey, fresh);
         lastUsage.delete(sessionKey); // context gauge → 0 until the next turn
+        dropRetries(sessionKey); // a [重试] from the old conversation must not replay into this one
         // `/clear` has no user question to title from. Park a policy-snapshotted
         // waiting job; the next real message supplies the source and activates it
         // only after that host turn is issued.
@@ -2649,7 +2662,7 @@ export function createOrchestrator(
     })());
   };
 
-  const RETRY_STALE = 'ℹ️ 这个重试按钮已失效（之后已经有新的回合，或者 bot 重启过）。要重试，请重新发送原消息。';
+  const RETRY_STALE = 'ℹ️ 这个重试按钮已失效（之后已经有新的回合、换过会话，或者 bot 重启过）。要重试，请重新发送原消息。';
   /** A reply to a [重试] tap that ran nothing; the button stays for later. */
   const retryNote = (evt: CardActionEvent, key: string, markdown: string): void => {
     if (runControlNotes.seen(`retry:${key}:${markdown}`)) return;
@@ -2739,7 +2752,7 @@ export function createOrchestrator(
       const key = typeof value.m === 'string' ? value.m : evt.messageId;
       if (!runAllowed(evt)) return;
       const retry = retryTurns.get(key);
-      if (!retry || !retryCurrent(retry)) {
+      if (!retry) {
         healDeadRunCard(evt, key, RC.retry, RETRY_STALE);
         return;
       }
@@ -2757,36 +2770,48 @@ export function createOrchestrator(
         .finally(() => retrying.delete(key)));
     });
 
+  /** Why no turn may start in this group right now, in the words a [重试] tap
+   * gets; undefined when one may. Messages are stopped by the same states. */
+  function turnRefusal(project: Project | undefined, chatId: string): string | undefined {
+    if (!project) return UNBOUND_GROUP_REPLY;
+    if (project.enabled === false) return 'ℹ️ 本群的项目已停用，暂时不能重试。';
+    if (projectMutations.has(chatId)) return 'ℹ️ 项目正在修改，请稍后再点重试。';
+    if (resumePublications.has(chatId)) return 'ℹ️ 正在恢复历史会话，请完成后再点重试。';
+    return undefined;
+  }
+
   async function retryTurn(evt: CardActionEvent, key: string, retry: RetryTurn): Promise<void> {
     const op = evt.operator?.openId ?? '';
-    const project = await getProjectByChatId(retry.chatId);
     // Refused where a message in that group would be, before anything is used
-    // up. Only an unbound group takes the button away for good.
-    if (!project) {
-      retryTurns.delete(key);
-      healDeadRunCard(evt, key, RC.retry, UNBOUND_GROUP_REPLY);
-      return;
-    }
-    if (!isUserAllowedInProject(cfg, project, op)) {
-      denyRunControl(evt, key, RC.retry, '重试');
-      return;
-    }
-    if (!retryCurrent(retry)) {
-      healDeadRunCard(evt, key, RC.retry, RETRY_STALE);
-      return;
-    }
+    // up, and again after the waits below: the group can change meanwhile.
+    // Only an unbound group takes the button away for good.
+    const admitRetry = async (): Promise<Project | undefined> => {
+      const project = await getProjectByChatId(retry.chatId);
+      if (!project) {
+        expireRetry(key);
+        healDeadRunCard(evt, key, RC.retry, UNBOUND_GROUP_REPLY);
+        return undefined;
+      }
+      if (!isUserAllowedInProject(cfg, project, op)) {
+        denyRunControl(evt, key, RC.retry, '重试');
+        return undefined;
+      }
+      if (retry.expired) {
+        healDeadRunCard(evt, key, RC.retry, RETRY_STALE);
+        return undefined;
+      }
+      const refused = turnRefusal(project, retry.chatId);
+      if (refused) {
+        retryNote(evt, key, refused);
+        return undefined;
+      }
+      return project;
+    };
+    if (!await admitRetry()) return;
     const text = retryPrompt(retry, retry.replayText);
     const msg = cardTurnMessage(key, retry.chatId, op, text, retry.sessionKey, retry.flat);
     if (active.get(retry.sessionKey)?.isGoal) {
       await replyGoalBusy(msg, retry.flat);
-      return;
-    }
-    const refused = project.enabled === false ? 'ℹ️ 本群的项目已停用，暂时不能重试。'
-      : projectMutations.has(retry.chatId) ? 'ℹ️ 项目正在修改，请稍后再点重试。'
-        : resumePublications.has(retry.chatId) ? '正在恢复历史会话，请完成后重发此消息。'
-          : undefined;
-    if (refused) {
-      retryNote(evt, key, refused);
       return;
     }
     // The failed run may still be wrapping up that turn (its queue is dropped
@@ -2796,6 +2821,8 @@ export function createOrchestrator(
     const savedImages = retry.turn.input.images ?? [];
     const onDisk = await Promise.all(savedImages.map((path) => stat(path).then((st) => st.isFile(), () => false)));
     const images = savedImages.filter((_, i) => onDisk[i]);
+    const project = await admitRetry();
+    if (!project) return;
     log.info('intake', 'retry', { key: retry.sessionKey, reason: retry.reason, op: op.slice(-6) });
     await handleTurn(
       msg, text, retry.sessionKey, retry.flat, project,
@@ -2806,9 +2833,10 @@ export function createOrchestrator(
         queueOnly: true,
         replayText: retry.replayText,
         retry: {
-          current: () => retryCurrent(retry),
+          current: () => !retry.expired,
           stale: () => healDeadRunCard(evt, key, RC.retry, RETRY_STALE),
           busy: () => retryNote(evt, key, 'ℹ️ 会话正在处理别的操作，请等它结束后再点重试。'),
+          refused: (note) => retryNote(evt, key, note),
           accepted: () => markRetried(key),
         },
       },
@@ -2817,7 +2845,7 @@ export function createOrchestrator(
 
   /** The session took the retry: drop the button for 「已重试」 on its card. */
   function markRetried(key: string): void {
-    retryTurns.delete(key);
+    expireRetry(key);
     const rc = runCards.get(key);
     const stream = runStreams.get(key);
     if (!rc || !stream) return;
@@ -4101,6 +4129,7 @@ export function createOrchestrator(
               createdAt: now,
               updatedAt: now,
             });
+            dropRetries(sessionKey); // the next turn runs in the picked session
             log.info('card', 'resume-done-single', { sessionKey, sessionId, turns: history.totalTurns });
           });
           settleUpdate(evt.messageId, buildResumeDoneCard(state));
@@ -4262,6 +4291,7 @@ export function createOrchestrator(
         });
         const archive = (patch.cwd !== undefined && patch.cwd !== project.cwd) || (patch.kind !== undefined && patch.kind !== (project.kind ?? 'multi'));
         const updated = archive ? await detachSessionsForChat(project.chatId, commit) : await commit();
+        if (archive) expireRetries((retry) => retry.chatId === project.chatId); // its sessions start over
         for (const rec of records) {
           const thread = sessions.get(rec.threadId); sessions.delete(rec.threadId);
           if (thread) await thread.close().catch(error => log.fail('desktop', error, { phase: 'project-session-close' }));
@@ -4302,6 +4332,7 @@ export function createOrchestrator(
         lastUsage.delete(threadId);
         const now = Date.now();
         await upsertSession({ threadId, chatId: project.chatId, cwd: project.cwd, sessionId: request.sessionId, backend: be.id, summary: history.name || history.preview || '(恢复会话)', createdAt: now, updatedAt: now });
+        dropRetries(threadId);
         return { ok: true, threadId };
       } finally {
         resumePublications.delete(project.chatId);
@@ -4343,7 +4374,7 @@ export function createOrchestrator(
         try { await upsertSession({ ...record, sessionId: fresh.sessionId, summary: '(新会话)', createdAt: now, updatedAt: now }); }
         catch (error) { await fresh.close(); throw error; }
         const old = sessions.get(key); if (old) await old.close();
-        trackSession(key, fresh); lastUsage.delete(key);
+        trackSession(key, fresh); lastUsage.delete(key); dropRetries(key);
         return { ok: true, threadId: key };
       }
       const { thread } = await resolveThread(key, project.chatId, perm);
@@ -4630,7 +4661,7 @@ export function createOrchestrator(
         if (prevState && prevStream) void trackTask(prevStream.updateCard(channel, buildRunCardPlain(prevState)));
         runCards.delete(prev);
         runStreams.delete(prev);
-        retryTurns.delete(prev);
+        expireRetry(prev);
       }
       lastRunCard.set(topicThreadId, cardMsgId);
       runCards.set(cardMsgId, rc);
@@ -5024,7 +5055,6 @@ export function createOrchestrator(
               sessionKey: topicThreadId, chatId: opts.chatId, flat: Boolean(opts.flat), turn: currentTurn,
               replayText: currentTurn.replayText ?? currentTurn.input.text ?? '',
               reason: retryReason, idleSeconds: Math.round(idleMs / 1000),
-              seq: turnSeq.get(topicThreadId) ?? 0,
               settled: new Promise<void>((resolve) => { settleTurn = resolve; }),
             });
             rc.retry = 'available';
@@ -5208,7 +5238,7 @@ export function createOrchestrator(
     active.set(activeKey, state);
     if (opts.knownThreadId) {
       trackSession(opts.knownThreadId, opts.thread);
-      acceptInput(opts.knownThreadId); // an older card's [重试] must not replay after the goal
+      dropRetries(opts.knownThreadId); // an older card's [重试] must not replay after the goal
     }
 
     // M-3: 池满先排队（占位卡可见可取消）；null = 等待期被 ⏹ 取消，预订已释放。
@@ -5331,7 +5361,7 @@ export function createOrchestrator(
         if (prevState && prevStream) void trackTask(prevStream.updateCard(channel, buildRunCardPlain(prevState)));
         runCards.delete(prev);
         runStreams.delete(prev);
-        retryTurns.delete(prev);
+        expireRetry(prev);
       }
       lastRunCard.set(topicThreadId, msgId);
       runCards.set(msgId, card);
