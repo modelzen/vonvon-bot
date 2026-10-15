@@ -26,7 +26,7 @@ import { BackendNotInstalledError } from '../agent/backend-loader';
 import { errorKindFromText, type AgentErrorKind } from '../agent/error-kind';
 import { scopeDenial } from '../utils/feishu-error';
 import type { NotReplied, NotRepliedReason } from '@vonvon/protocol';
-import { errorDetail, reportNotReplied, reportScopeDenied } from './diagnostics';
+import { deniedScopeName, errorDetail, reportNotReplied, reportScopeDenied } from './diagnostics';
 import { catalogById, projectCreatableBackends, visibleCatalog } from '../agent/catalog';
 import {
   DEFAULT_PERMISSION_MODE,
@@ -481,7 +481,7 @@ const REASON_BY_ERROR_KIND = {
 export function failureReason(failure: TurnFailure): { reason: NotRepliedReason; detail?: string; scope?: string } {
   const denial = failure.error === undefined ? undefined : scopeDenial(failure.error);
   if (denial) {
-    const scope = denial.accepted[0];
+    const scope = deniedScopeName(denial.accepted);
     return scope ? { reason: 'missing-scope', detail: scope, scope } : { reason: 'missing-scope' };
   }
   if (failure.error instanceof BackendNotInstalledError) return { reason: 'tool-missing' };

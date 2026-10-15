@@ -2,6 +2,7 @@ import {
   DENIED_SCOPE_SHOWN_MS, diagnosticsEventSchema,
   type BotDiagnostics, type DeniedScope, type DiagnosticsEvent, type NotReplied, type ScopeDenialPlace,
 } from '@vonvon/protocol';
+import { CHAT_OPTIONAL_SCOPES, REQUIRED_SCOPES } from '../config/scopes';
 
 /**
  * The 状态与诊断 page's not-replied messages and runtime scope denials (product.md 3.1 item 8).
@@ -19,8 +20,12 @@ function report(event: DiagnosticsEvent): void {
   try { if (parsed.success) sink?.(parsed.data); } catch { /* the page is best-effort; a turn never fails for it */ }
 }
 export function reportNotReplied(record: Omit<NotReplied, 'count'>): void { report({ kind: 'notReplied', record }); }
+/** Only scopes the console check reads reach 缺的权限, which may call one 后台显示已开; Feishu's list of scopes that
+ * would do can start with an alias (`im:message`), so the name is the first the check reads, else the first. */
+const CHECKED_SCOPES: ReadonlySet<string> = new Set([...REQUIRED_SCOPES, ...CHAT_OPTIONAL_SCOPES]);
+export const deniedScopeName = (accepted: readonly string[]): string | undefined => accepted.find(scope => CHECKED_SCOPES.has(scope)) ?? accepted[0];
 export function reportScopeDenied(scope: string, where: ScopeDenialPlace, at = Date.now()): void {
-  report({ kind: 'scopeDenied', denial: { scope, where, at } });
+  if (CHECKED_SCOPES.has(scope)) report({ kind: 'scopeDenied', denial: { scope, where, at } });
 }
 /** A supervised child's sink: one IPC message per event, send errors ignored like fcb.connection. */
 export function ipcDiagnosticsSink(send: (message: unknown, callback: (error: Error | null) => void) => void): (event: DiagnosticsEvent) => void {
@@ -73,14 +78,12 @@ export function createDiagnosticsStore(opts: { changed: () => void; claudeSigned
         bot.deniedScopes = [event.denial, ...bot.deniedScopes.filter(item => item.scope !== event.denial.scope)].slice(0, DENIED_SCOPE_LIMIT);
       } else {
         const record = event.record;
-        const last = bot.notReplied[0];
-        if (last && last.groupId === record.groupId && last.place === record.place && last.reason === record.reason
-          && last.backend === record.backend && Math.abs(record.at - last.at) < MERGE_MS) {
-          bot.notReplied[0] = { ...record, count: last.count + 1 };
-        } else {
-          bot.notReplied = [{ ...record, count: 1 }, ...bot.notReplied].slice(0, NOT_REPLIED_LIMIT);
-        }
-        if (record.reason === 'signed-out' && record.backend === 'claude') opts.claudeSignedOut?.(record.at);
+        // Any matching record, moved to the front; always a new array, or the snapshot's deep compare sees no change.
+        const same = bot.notReplied.find(item => item.groupId === record.groupId && item.place === record.place
+          && item.reason === record.reason && item.backend === record.backend && Math.abs(record.at - item.at) < MERGE_MS);
+        bot.notReplied = [{ ...record, count: (same?.count ?? 0) + 1 }, ...bot.notReplied.filter(item => item !== same)].slice(0, NOT_REPLIED_LIMIT);
+        // Stamped now: a queued turn can fail long after its message was sent.
+        if (record.reason === 'signed-out' && record.backend === 'claude') opts.claudeSignedOut?.(now());
       }
       changed();
     },

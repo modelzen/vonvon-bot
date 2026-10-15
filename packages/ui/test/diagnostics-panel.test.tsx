@@ -70,6 +70,7 @@ it('merges the console\'s missing scopes with the ones Feishu refused at runtime
   expect(html).toContain('补拉群消息时被飞书拒绝：<code>im:message:readonly</code></li>');
   expect(html).toContain('读群信息时被飞书拒绝：<code>im:chat:readonly</code>。后台显示已开，但还没生效');
   expect(renderToStaticMarkup(<>{scopeView({scopes: {grantUrl: 'x'}} as AdminSetupStatus, agent, now).badge}</>)).toContain('暂时读不到已开通的权限');
+  expect(renderToStaticMarkup(<>{scopeView(undefined, agent, now, '应用凭据不对').badge}</>)).toContain('读取失败');
   expect(renderToStaticMarkup(<>{scopeView({scopes: {missingRequired: [], missingOptional: [], grantUrl: 'x'}} as AdminSetupStatus, agent, now).badge}</>)).toContain('没有缺的');
 });
 

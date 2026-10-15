@@ -1,8 +1,5 @@
 import type { TenantBrand } from '../config/schema';
-import { CONTACT_SCOPES, JOIN_GROUP_SCOPES, REQUIRED_SCOPES, V1_OPTIONAL_SCOPES } from '../config/scopes';
-
-/** The 3.11 optional scopes that change what the bot does in a chat, listed on the 状态与诊断 page. */
-const CHAT_OPTIONAL_SCOPES = [...CONTACT_SCOPES, 'im:chat:readonly', ...V1_OPTIONAL_SCOPES] as const;
+import { CHAT_OPTIONAL_SCOPES, JOIN_GROUP_SCOPES, REQUIRED_SCOPES } from '../config/scopes';
 
 const ENDPOINTS: Record<TenantBrand, string> = {
   feishu: 'https://open.feishu.cn',

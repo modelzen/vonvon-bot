@@ -172,7 +172,7 @@ describe('failed turns', () => {
   });
 
   it('notes a card Feishu refused for a scope, and the scope for 缺的权限', async () => {
-    fake.cardError = { response: { data: { code: 99991672, msg: 'Access denied. One of the following scopes is required: [im:message:send_as_bot]' } } };
+    fake.cardError = { response: { data: { code: 99991672, msg: 'Access denied. One of the following scopes is required: [im:message, im:message:send_as_bot]' } } };
     await orchestrator.onMessage(message());
     await vi.waitFor(() => expect(records()).toHaveLength(1));
     expect(records()[0]).toMatchObject({ reason: 'missing-scope', detail: 'im:message:send_as_bot' });
@@ -199,4 +199,5 @@ it('maps each failure to its reason', () => {
   expect(failureReason({ rs: rs({ errorMsg: 'agent 进程异常退出，请重发本条消息' }), procDead: true })).toEqual({ reason: 'agent-exited' });
   expect(failureReason({ error: new Error('first line\nstack') })).toEqual({ reason: 'failed', detail: 'first line' });
   expect(failureReason({ error: { code: 99991672, msg: 'denied' } })).toEqual({ reason: 'missing-scope' });
+  expect(failureReason({ error: { code: 99991672, msg: 'denied: [im:message]' } })).toEqual({ reason: 'missing-scope', detail: 'im:message', scope: 'im:message' });
 });

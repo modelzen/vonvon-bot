@@ -24,6 +24,17 @@ describe('diagnostics store', () => {
     expect(store.view('cli_b')).toBeUndefined();
   });
 
+  it('merges into any matching record within 10 minutes as a new value, so the snapshot sees the count', () => {
+    const store = createDiagnosticsStore({ changed: () => {} });
+    store.accept('cli_a', replied());
+    const before = store.view('cli_a');
+    store.accept('cli_a', replied({ ref: 'def456' }));
+    expect(before?.notReplied[0]?.count).toBe(1);
+    store.accept('cli_a', replied({ groupId: 'oc_other_group' }));
+    store.accept('cli_a', replied({ at: 1_000_000 + 60_000 }));
+    expect(store.view('cli_a')?.notReplied.map(item => [item.groupId, item.count])).toEqual([['oc_fixture_group', 3], ['oc_other_group', 1]]);
+  });
+
   it('keeps 30 records newest first, and each scope\'s latest denial within 24 hours', () => {
     let now = 5_000_000;
     const store = createDiagnosticsStore({ changed: () => {}, now: () => now });
@@ -58,12 +69,12 @@ describe('diagnostics store', () => {
 
   it('tells the login cache when a Claude turn failed for its login', () => {
     const claudeSignedOut = vi.fn();
-    const store = createDiagnosticsStore({ changed: () => {}, claudeSignedOut });
+    const store = createDiagnosticsStore({ changed: () => {}, claudeSignedOut, now: () => 5_000_000 });
     store.accept('cli_a', replied({ backend: 'codex' }));
     store.accept('cli_a', replied({ reason: 'quota', backend: 'claude' }));
     expect(claudeSignedOut).not.toHaveBeenCalled();
     store.accept('cli_a', replied({ backend: 'claude', at: 42 }));
-    expect(claudeSignedOut).toHaveBeenCalledWith(42);
+    expect(claudeSignedOut).toHaveBeenCalledWith(5_000_000); // when it failed, not when the message was sent
   });
 });
 
@@ -84,6 +95,7 @@ describe('diagnostics events', () => {
     reportNotReplied(record());
     reportNotReplied(record({ detail: 'x'.repeat(200) }));
     reportScopeDenied('im:message:readonly', 'names', 7);
+    reportScopeDenied('im:message', 'send', 8); // not one the console check reads
     expect(seen).toEqual([replied(), { kind: 'scopeDenied', denial: { scope: 'im:message:readonly', where: 'names', at: 7 } }]);
     setDiagnosticsSink(() => { throw new Error('sink broke'); });
     expect(() => reportNotReplied(record())).not.toThrow();

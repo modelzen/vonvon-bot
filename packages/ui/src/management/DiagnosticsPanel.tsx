@@ -33,8 +33,8 @@ function connectionView(agent: Agent): Pick<SetupStep, 'status' | 'tone' | 'deta
   return connectionStep(agent);
 }
 
-/** 缺的权限: what the developer console shows missing, and what Feishu refused while running. */
-export function scopeView(status: AdminSetupStatus | undefined, agent: Agent, now: number) {
+/** 缺的权限: what the console shows missing and what Feishu refused while running; a failed read as in 飞书设置 above. */
+export function scopeView(status: AdminSetupStatus | undefined, agent: Agent, now: number, problem?: string) {
   const required = status?.scopes.missingRequired;
   const optional = status?.scopes.missingOptional?.filter(scope => scope in OPTIONAL_SCOPE_EFFECTS) ?? [];
   const missing = new Set([...required ?? [], ...optional]);
@@ -47,7 +47,7 @@ export function scopeView(status: AdminSetupStatus | undefined, agent: Agent, no
     </li>),
   ];
   const view = (text: string, tone: StepTone) => ({badge: badge(text, tone), lines});
-  if (!status) return view('检查中', 'neutral');
+  if (!status) return problem ? view('读取失败', 'warning') : view('检查中', 'neutral');
   if (required === undefined) return view('暂时读不到已开通的权限', 'neutral');
   if (missing.size) return view(`缺 ${missing.size} 项`, required.length ? 'warning' : 'neutral');
   if (lines.length) return view('被拒过', 'warning');
@@ -89,7 +89,7 @@ function BotDiagnostics({agent, snapshot, read, tools, onOpenSetup, onError}: {
   const records = agent.diagnostics?.notReplied ?? [];
   const total = records.reduce((sum, record) => sum + record.count, 0);
   const connection = connectionView(agent);
-  const scopes = scopeView(read?.status, agent, now);
+  const scopes = scopeView(read?.status, agent, now, read?.problem);
   const grantUrl = read?.status?.scopes.grantUrl;
   const counts = new Map<string, number>();
   for (const member of snapshot.memberships) if (member.agentId === agent.id) counts.set(member.backend, (counts.get(member.backend) ?? 0) + 1);
@@ -105,7 +105,7 @@ function BotDiagnostics({agent, snapshot, read, tools, onOpenSetup, onError}: {
     <SettingsRow title="缺的权限" description={scopes.lines.length ? <ul className="diagnostics-scopes">{scopes.lines}</ul> : undefined}
       trailing={<span className="setup-step-trailing">{scopes.badge}{grantUrl && scopes.lines.length > 0 && <Button size="sm"
         onClick={() => void openExternalUrl(grantUrl, 'app-console', shell).catch(error => onError(error instanceof Error ? error.message : '无法打开开发者后台。'))}>一键开权限</Button>}</span>}/>
-    <SettingsRow title="执行工具" value={toolText || '还没有绑定群'}/>
+    <SettingsRow title="执行工具" description={toolText || '还没有绑定群'}/>
     <SettingsRow title="最近没回的消息" description={<NotRepliedList records={records} snapshot={snapshot} now={now}/>}/>
   </SettingsGroup>;
 }

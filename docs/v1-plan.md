@@ -492,7 +492,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s18：机器人能不能给没开过会话的主人发私聊，e10 没测到：owner 已经私聊过测试 bot。s18 开工前请 owner 找一位没和测试 bot 说过话的同事（本文第 8 节）：Claude 用应用身份按 open_id 给他发一条私聊、记返回码，同事在客户端里看收没收到、有没有通知。在那之前 3.10 的崩溃通知仍按推断做。给主人发私聊要用这个应用下主人的 open_id（从主人发给 bot 的消息事件里取），或者用 `user_id`、`union_id`，不能用 lark-cli 应用下的 open_id。
 - s19 做法（页面）：侧栏"状态与诊断"换成 `U/management/DiagnosticsPanel.tsx`，用现有的设置组件。"这台电脑"一节是 daemon 版本、Codex 和 Claude（和清单同一套 `toolSteps`）、数据目录、最近读取；"重新检查"重建快照、每个 bot 再读一次飞书设置，不起 CLI。每个 bot 一组：连接（和清单的"长连接"共用 `connectionStep`，另加没在运行、待生效、重连中）、飞书设置（还差哪几步，"打开清单"）、缺的权限、执行工具（按绑的群数）、最近没回的消息；最后是 daemon 日志。打开页面时每个 bot 读一次 `setupStatus`，不轮询。Bot 设置里的"飞书权限与连接 · 检查"改成"状态与诊断 · 查看"，只跳到这个 bot；`inspectAgent` 和 `snapshot.diagnostics` 删了。
 - s19 做法（没回的消息）：只记对这个 bot 说的（@ 了它，或按群设置不 @ 也该它回）却没回的。门控有群停用（只记 @ 的）、群正在改设置、群不在"允许的飞书群"、发信人不在"响应成员"、群没绑定（回了提示也记）；回合开始了没答完的有没登录、Codex 版本太旧、工具没装、缺权限、用量、网络、超时、进程中途退出和其他错误。不记：规则模式下不是对它说的、重投、撤回、私聊、云文档评论、`/goal`、按了停的。原因和下一步写在 `P/diagnostics.ts` 的 `NOT_REPLIED_TEXT`。bot 子进程经 IPC（`fcb.diagnostics`，zod 校验）送到 daemon 主进程的内存，单个 bot 独立运行时直接进本进程；变了以后最多每秒重建一次快照。一条记录只有时间、群 id、主区或话题、名字缓存里已有的发信人名字、原因、后端、报错的第一行（120 字）和消息 id 末 6 位，没有正文（3.5）。
-- s19 做法（缺的权限）：两个来源合在一行。飞书后台：`setupStatus` 缺的必需权限，加 3.11 表里影响对话的四项可选权限（新加的 `missingOptional`）。运行中被拒：补拉、查真名、认话题群、发卡片时被飞书拒绝，记权限名和在哪；后台显示已开却被拒的，提示发布一个新版本。
+- s19 做法（缺的权限）：两个来源合在一行。飞书后台：`setupStatus` 缺的必需权限，加 3.11 表里影响对话的四项可选权限（新加的 `missingOptional`）。运行中被拒：补拉、查真名、认话题群、发卡片时被飞书拒绝，记权限名和在哪；后台显示已开却被拒的，提示发布一个新版本。飞书列的可用权限可能以别名打头（`im:message`），取后台检查读的那个；都不在检查范围里的只进没回的消息，不进这一行。读不到飞书设置时，这一行和"飞书设置"一样写"读取失败"。
 - s19 做法（Codex 和 Claude）：清单和诊断页共用 `useClaudeLoginCheck`：Claude 装了、登录没查过时，每个窗口自动问一次，问完前写"检查中"，不再先显示"登录状态无法确认"，`vonvon bot status` 不变。快照每次重建都从缓存读 Claude 的登录，"检查登录"先重建快照再回复，不再多起一次 Codex。Claude 的回合因为没登录失败时，缓存换成"未登录"并写明原因，没有清空：清空后清单会再问，探测只看本机凭据，过期的登录照样报已登录；缓存带代数，之前开始的探测回来不覆盖它。错误类别加 `version`（"requires a newer version of Codex"），运行卡和诊断页提示更新 Codex，工具那一行和清单的判定不改。运行卡的登录提示按后端写，不知道后端时不写命令。
 - s19 做法（日志）：`intake recv` 去掉正文前 40 个字，话题、群、消息 id 只写末 6 位。日志器把 trace 上下文的 `chatId`、`msgId`，和顶层整串就是飞书 id 的字段（`oc_`、`om_`、`omt_`、`ou_`、`on_` 开头，可带 `#admin` 这类后缀）都截到末 6 位，嵌套对象和报错文字不动；删了没人用的 `intake.enter`。别的日志查过，不带群里的话；出站图片的 `src` 和后端的 stderr 留着。
 - s19 留下的：
@@ -500,6 +500,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
   - "群正在改设置"没有单测：要走管理面改群设置才进 `projectMutations`。发信人只在名字缓存里有时才写，daemon 刚重启时多半没有。
   - 飞书里"在没绑定的群 @ bot，诊断页看到原因"留到 M4 验收第 3 步：要用验收 daemon 没在跑的测试 bot。
   - 顺带看到的：没绑定群的提示（`UNBOUND_GROUP_REPLY`）还写"在与我的私聊里完成绑定"，由 s51 一起改；`D/provider/policy/messages.zh.ts` 里 Claude 的登录命令写成 `claude login`，用不用得到还没查；`sessions.json` 的 `summary` 存了会话第一条消息的前 80 个字，作用相当于会话标题，留给碰会话列表的片（s48 或 s51）定。
+  - 没回的消息按后端写 Codex 或 Claude，没有后端的按 Codex 写（`LaunchOpts.backendId` 不设就是 Codex）；今天只有这两个后端，V7 加 Cursor、Grok 这些时，`P/diagnostics.ts` 的 `tool` 和 `backendTool` 要跟着加。
   - #338（s15）也改了 `handleMessage` 的同一段、`startReservedRun` 的 catch 和 `P/setup-steps.ts`，后合的那个 merge main 时解冲突。
 - s20a：清单里那一步写明"Linux 上 Codex 只能用完全访问"，由主人自己选要不要把 bot 默认档改成完全访问，不自动放开（本文第 5 节）。
 - s20a：Linux 的首次运行清单还要查 Claude 只读、读写档要的沙箱：有没有 `bwrap` 和 `socat`，以及 Ubuntu 23.10 以后 AppArmor 是否挡住了非特权的用户命名空间（`kernel.apparmor_restrict_unprivileged_userns`）。缺了就写明 Claude 只能用完全访问或要先装、先放开，给出命令，不自动改系统设置。2026-10-15 JP-VPS 上实际遇到，见本文第 7 节。
