@@ -87,6 +87,12 @@ function learnNames(names: NameBook | undefined, item: RawMsgItem): void {
   for (const m of item.mentions ?? []) if (isOpenId(m.id_type)) names.remember(m.id, m.name);
 }
 
+/** A person's open_id, or a bot's open_bot_id (undefined when the item has neither). */
+function senderIdOf(s: RawMsgItem['sender']): string | undefined {
+  if (s?.sender_type !== 'user') return s?.open_bot_id;
+  return s.id && isOpenId(s.id_type) ? s.id : undefined;
+}
+
 /** An item's id is an open_id unless it says otherwise. */
 function isOpenId(idType: string | undefined): boolean {
   return (idType ?? 'open_id') === 'open_id';
@@ -247,15 +253,14 @@ function warnThreadContextFailed(threadId: string, failure: unknown): void {
 }
 
 function toContextMessage(item: RawMsgItem, names?: NameBook): ContextMessage {
-  const s = item.sender;
-  const id = s?.id ?? '';
+  const id = item.sender?.id ?? '';
   const name = item.sender?.sender_name || names?.peek(id) || (id ? `用户${id.slice(-4)}` : '某人');
   return {
     messageId: item.message_id ?? '',
     senderName: name,
     text: extractMessageText(item.msg_type, item.body?.content, item.mentions),
     fromUser: item.sender?.sender_type === 'user',
-    senderId: s?.sender_type === 'user' ? (id && isOpenId(s.id_type) ? id : undefined) : s?.open_bot_id,
+    senderId: senderIdOf(item.sender),
     createTime: Number(item.create_time) || 0,
   };
 }

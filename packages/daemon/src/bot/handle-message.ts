@@ -958,10 +958,13 @@ export function createOrchestrator(
     void trackTask(patchSession(sessionKey, (rec) => ({ seen: (rec.seen ?? []).filter((s) => s.id !== id) })).catch(() => undefined));
   }
 
+  function topicPerson(kind: 'user' | 'bot', openId: string | undefined): TopicPerson {
+    return openId ? { kind, openId } : { kind };
+  }
   /** Who sent a message, as the topic registry records it. */
   function senderOf(msg: NormalizedMessage): TopicPerson {
     const app = (msg.raw as { sender?: { sender_type?: string } } | undefined)?.sender?.sender_type === 'app';
-    return { kind: app ? 'bot' : 'user', ...(msg.senderId ? { openId: msg.senderId } : {}) };
+    return topicPerson(app ? 'bot' : 'user', msg.senderId);
   }
   /** First messages looked up for the registry in this process (at most once each). */
   const rootLookups = new Set<string>();
@@ -970,8 +973,7 @@ export function createOrchestrator(
    * never touches the turn. A topic first seen through a reply in it gets its
    * first message (sender, time, title) from one `message.get`. */
   function noteTopicMessage(msg: NormalizedMessage): void {
-    const reg = topics;
-    if (!reg || !msg.threadId) return;
+    if (!topics || !msg.threadId) return;
     const from = senderOf(msg);
     const isFirst = !msg.rootId || msg.rootId === msg.messageId; // a topic group's post
     const sighting: TopicSighting = {
@@ -983,7 +985,7 @@ export function createOrchestrator(
         : { id: msg.rootId as string },
     };
     void trackTask((async () => {
-      const rec = await reg.note(msg.chatId, sighting);
+      const rec = await topics.note(msg.chatId, sighting);
       if (!rec?.firstId || rec.firstFrom || rootLookups.has(rec.firstId) || shuttingDown) return;
       if (rootLookups.size >= 1000) rootLookups.clear();
       rootLookups.add(rec.firstId);
@@ -991,10 +993,8 @@ export function createOrchestrator(
       const root = await withDeadline(fetchQuotedMessage(channel, rec.firstId, names), 10_000);
       if (!root) return;
       const self = Boolean(root.senderId && root.senderId === channel.botIdentity?.openId);
-      const rootFrom: TopicPerson = self
-        ? { kind: 'self' }
-        : { kind: root.fromUser ? 'user' : 'bot', ...(root.senderId ? { openId: root.senderId } : {}) };
-      await reg.note(msg.chatId, { ...sighting, first: { id: rec.firstId, from: rootFrom, at: root.createTime || undefined, text: root.text } });
+      const rootFrom: TopicPerson = self ? { kind: 'self' } : topicPerson(root.fromUser ? 'user' : 'bot', root.senderId);
+      await topics.note(msg.chatId, { ...sighting, first: { id: rec.firstId, from: rootFrom, at: root.createTime || undefined, text: root.text } });
     })().catch((err) => log.fail('intake', err, { phase: 'topic-registry' })));
   }
   /** This bot opened `topicId` (a reply in thread, or a resumed session's topic). */
@@ -1005,8 +1005,10 @@ export function createOrchestrator(
    * record while the record still points at this native session (s13). */
   function meterOf(key: string | undefined, rec: SessionRecord | undefined, thread: AgentThread): { used: number; window: number | null } | undefined {
     if (!key) return undefined;
+    const live = lastUsage.get(key);
+    if (live) return live;
     const saved = rec?.usage;
-    return lastUsage.get(key) ?? (saved && saved.sessionId === thread.sessionId ? { used: saved.used, window: saved.window } : undefined);
+    return saved?.sessionId === thread.sessionId ? { used: saved.used, window: saved.window } : undefined;
   }
   /** The meter reading saved with the record at the end of a turn. */
   function savedMeter(key: string, thread: AgentThread): Pick<SessionRecord, 'usage'> {

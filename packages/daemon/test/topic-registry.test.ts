@@ -1,5 +1,5 @@
 import { mkdtempSync, rmSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -83,8 +83,7 @@ describe('topic registry file', () => {
       reg.note(CHAT, seen('omt_x', 6_000, { first: { id: 'om_x', from: user('ou_r'), text: '标题' } })),
     ];
     await Promise.all([...topics, ...same]);
-    const all = await reg.list(CHAT);
-    expect(all).toHaveLength(21);
+    expect(await reg.list(CHAT)).toHaveLength(21);
     expect(await reg.get(CHAT, 'omt_x')).toMatchObject({ openedBy: { kind: 'self' }, firstFrom: user('ou_r'), title: '标题', lastAt: 400_000 });
     // A second registry on the same directory shares the lock.
     await Promise.all([registry().note(CHAT, seen('omt_y', 1)), reg.note(CHAT, seen('omt_z', 1))]);
@@ -92,7 +91,6 @@ describe('topic registry file', () => {
   });
 
   it('reads old or newer files tolerantly and keeps fields it does not know', async () => {
-    await mkdir(dir, { recursive: true });
     await writeFile(file(), JSON.stringify({
       version: 9,
       later: { keep: true },
@@ -111,7 +109,6 @@ describe('topic registry file', () => {
   });
 
   it('survives a corrupt file: reads empty, then moves it aside and starts over', async () => {
-    await mkdir(dir, { recursive: true });
     await writeFile(file(), '{"topics": [');
     const reg = registry();
     expect(await reg.list(CHAT)).toEqual([]);

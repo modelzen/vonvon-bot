@@ -123,12 +123,11 @@ export function mergeTopic(prev: TopicRecord | undefined, s: TopicSighting): Top
   }
   const next: TopicRecord = { ...prev };
   let changed = false;
-  const prevSelf = prev.openedBy?.kind === 'self';
   if (!prev.openedBy) {
     next.openedBy = s.from;
     next.openedAt = prev.openedAt || s.at;
     changed = true;
-  } else if (!prevSelf && (s.from.kind === 'self' || s.at < prev.openedAt)) {
+  } else if (prev.openedBy.kind !== 'self' && (s.from.kind === 'self' || s.at < prev.openedAt)) {
     next.openedBy = s.from;
     next.openedAt = s.at;
     changed = true;
@@ -148,7 +147,7 @@ export function mergeTopic(prev: TopicRecord | undefined, s: TopicSighting): Top
   return changed ? next : undefined;
 }
 
-/** Keep the {@link MAX_TOPICS} most recently active, newest first. */
+/** Most recently active first. */
 function byActivity(topics: TopicRecord[]): TopicRecord[] {
   return [...topics].sort((a, b) => b.lastAt - a.lastAt || b.openedAt - a.openedAt);
 }
@@ -163,20 +162,21 @@ function normalize(raw: unknown): TopicRecord | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const r = raw as Record<string, unknown>;
   if (typeof r.topicId !== 'string' || !r.topicId) return undefined;
-  return {
-    ...(r as unknown as TopicRecord),
-    openedAt: typeof r.openedAt === 'number' ? r.openedAt : 0,
-    lastAt: typeof r.lastAt === 'number' ? r.lastAt : typeof r.openedAt === 'number' ? r.openedAt : 0,
-  };
+  const openedAt = typeof r.openedAt === 'number' ? r.openedAt : 0;
+  return { ...(r as unknown as TopicRecord), openedAt, lastAt: typeof r.lastAt === 'number' ? r.lastAt : openedAt };
+}
+
+function emptyFile(): RegistryFile {
+  return { version: FILE_VERSION, topics: [] };
 }
 
 /** The parsed file (empty when missing), or 'corrupt' when it does not parse. */
-async function readFileIn(file: string): Promise<RegistryFile | 'corrupt'> {
+async function readStore(file: string): Promise<RegistryFile | 'corrupt'> {
   let text: string;
   try {
     text = await readFile(file, 'utf8');
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { version: FILE_VERSION, topics: [] };
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return emptyFile();
     throw err;
   }
   try {
@@ -217,11 +217,13 @@ export function createTopicRegistry(opts: {
   sessions?: () => Promise<SessionRecord[]>;
 }): TopicRegistry {
   const loadSessions = opts.sessions ?? listSessions;
-  const fileFor = (chatId: string): string => join(opts.dir, fileName(chatId));
+  function fileFor(chatId: string): string {
+    return join(opts.dir, fileName(chatId));
+  }
 
   async function readTopics(chatId: string): Promise<TopicRecord[]> {
     try {
-      const store = await readFileIn(fileFor(chatId));
+      const store = await readStore(fileFor(chatId));
       if (store === 'corrupt') {
         log.warn('intake', 'topic-registry-corrupt', { chatId: tail(chatId) });
         return [];
@@ -253,12 +255,12 @@ export function createTopicRegistry(opts: {
       const file = fileFor(chatId);
       try {
         return await withFileLock(file, async () => {
-          let store = await readFileIn(file);
+          let store = await readStore(file);
           if (store === 'corrupt') {
             // Keep the bad file for a look, start over: the registry is rebuilt from new messages.
             await rename(file, `${file}.corrupt`);
             log.warn('intake', 'topic-registry-corrupt', { chatId: tail(chatId), action: 'moved-aside' });
-            store = { version: FILE_VERSION, topics: [] };
+            store = emptyFile();
           }
           const idx = store.topics.findIndex((t) => t.topicId === sighting.topicId);
           const prev = idx === -1 ? undefined : store.topics[idx];
@@ -268,7 +270,7 @@ export function createTopicRegistry(opts: {
           const kept = topics.slice(0, MAX_TOPICS);
           await mkdir(opts.dir, { recursive: true });
           const tmp = `${file}.tmp-${process.pid}-${randomUUID()}`;
-          await writeFile(tmp, `${JSON.stringify({ ...store, version: FILE_VERSION, topics: kept }, null, 2)}\n`, 'utf8');
+          await writeFile(tmp, `${JSON.stringify({ ...store, topics: kept }, null, 2)}\n`, 'utf8');
           await rename(tmp, file);
           return kept.includes(next) ? next : undefined;
         });

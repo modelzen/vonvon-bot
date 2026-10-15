@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -430,7 +430,6 @@ describe('topic registry (s13)', () => {
   it('keeps the turn going when the registry cannot write', async () => {
     multi();
     const blocked = join(dir, 'blocked');
-    const { writeFileSync } = await import('node:fs');
     writeFileSync(blocked, '');
     const run = thread('topic-session');
     fake.backend.startThread.mockResolvedValue(run.t);
