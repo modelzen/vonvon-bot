@@ -156,7 +156,8 @@ describe('retained registration terminal snapshots', () => {
     const service = fakeService({ registerBotByQr: async () => ({ ok: false, code: 'expired_token', reason: 'expired' }) });
     const jobs = new Jobs({ service, changed: () => {}, toolsSettled: () => {} });
     const published: DesktopSnapshot[] = [];
-    const store = await createSnapshotStore({ service, jobs: () => jobs.snapshot(), publish: value => published.push(value), readTools: async () => [] });
+    // No service manager: its first answer lands at a real-time moment and would add a revision of its own.
+    const store = await createSnapshotStore({ service, jobs: () => jobs.snapshot(), publish: value => published.push(value), readTools: async () => [], readService: async () => ({ supported: false, installed: false, running: false }) });
     try {
       const started = jobs.startRegistration({ id: 'owner', open: true, event: () => {} });
       if (started.kind !== 'started') throw new Error('Registration did not start');

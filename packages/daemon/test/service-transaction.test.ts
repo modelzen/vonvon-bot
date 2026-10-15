@@ -12,7 +12,8 @@ import type { PidLockInfo } from '../src/server/pid-lock';
 import { createServiceDrain, type DrainScope } from '../src/service/drain';
 
 import { mkdir, unlink, rename } from 'node:fs/promises';
-import { createLaunchdService } from '../src/service/launchd';
+import { createLaunchdService, TRANSLOCATED_REFUSAL } from '../src/service/launchd';
+import { classifyServiceFailure } from '../src/service/action-report';
 import { renderDefinition } from '../src/service/definitions';
 import { resolveServiceRoot, LAUNCHD_LABEL } from '../src/service/identity';
 import { readRegistration } from '../src/service/registration';
@@ -1502,4 +1503,49 @@ it('launchd install keeps a detached daemon running when the installed plist has
     expect(result.kind).toBe('install_refused'); expect(result.detail).toContain('Login Items & Extensions');
     expect(f.calls.filter(call => /^(stop|bootstrap)/.test(call))).toEqual([]); expect(f.state.owner?.startedAt).toBe('detached');
   });
+});
+
+const translocated = '/private/var/folders/x1/T/AppTranslocation/1F2E3D4C/d/Vonvon Bot.app/Contents';
+it.each([
+  ['executable', { executable: `${translocated}/MacOS/Vonvon Bot` }],
+  ['CLI entry', { distribution: async () => ({ kind: 'bundled' as const, cliPath: `${translocated}/Resources/daemon/bin/vonvon.mjs` }) }],
+])('launchd refuses to install from an App Translocation %s and leaves the detached daemon running', async (_where, overrides) => {
+  await withLaunchd(async f => {
+    f.state.owner = { ...first, startedAt: 'detached' };
+    const result = await f.service.install();
+    expect(result.kind).toBe('install_refused'); expect(result.detail).toBe(TRANSLOCATED_REFUSAL);
+    expect(classifyServiceFailure(result.detail)).toBe('translocated');
+    expect(f.calls.filter(call => /^(stop|bootstrap|kickstart)/.test(call))).toEqual([]);
+    await expect(readFile(f.plistPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(f.state.owner?.startedAt).toBe('detached');
+  }, overrides);
+});
+it.each([
+  ['with launchctl\'s own words', 'Could not find domain for user gui: 501\n', 'GUI domain unavailable: Could not find domain for user gui: 501'],
+  ['without any', '', 'GUI domain unavailable'],
+])('launchd names a missing GUI domain %s, so it classifies as manager-unavailable', async (_case, stderr, detail) => {
+  await withLaunchd(async f => {
+    const result = await f.service.install();
+    expect(result.kind).toBe('install_refused'); expect(result.detail).toBe(detail);
+    expect(classifyServiceFailure(result.detail)).toBe('manager-unavailable');
+    await expect(readFile(f.plistPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  }, { run: async args => { if (args.join(' ') !== 'print gui/501') throw new Error(`Unexpected command ${args.join(' ')}`); return { ok: false, stdout: '', stderr }; } });
+});
+it('launchd refusals the login-time switch can meet classify to their reasons', async () => {
+  await withLaunchd(async f => {
+    await f.seed(); f.state.loaded = false; f.state.owner = { ...first, startedAt: 'detached' };
+    expect(classifyServiceFailure((await f.service.install()).detail)).toBe('turned-off');
+  });
+  await withLaunchd(async f => {
+    f.state.loaded = true;
+    expect(classifyServiceFailure((await f.service.install()).detail)).toBe('interrupted');
+  });
+  await withLaunchd(async f => {
+    await f.seed(); f.state.owner = { ...first }; f.state.pid = first.pid;
+    const result = await f.service.install();
+    expect(result.kind).toBe('install_refused'); expect(classifyServiceFailure(result.detail)).toBe('replace-running');
+  }, { executable: '/Users/u/Applications/Vonvon Bot.app/Contents/MacOS/Vonvon Bot' });
+  await withLaunchd(async f => {
+    expect(classifyServiceFailure((await f.service.install()).detail)).toBe('distribution');
+  }, { distribution: async () => ({ kind: 'development', cliPath: '/src/packages/daemon/bin/vonvon.mjs' }) });
 });

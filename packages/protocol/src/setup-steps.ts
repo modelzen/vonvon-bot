@@ -1,5 +1,5 @@
 import type {AdminSetupStatus} from './admin.js';
-import type {Agent, ToolState} from './domain.js';
+import type {Agent, ApplicationService, DesktopSnapshot, ServiceActionReason, ServiceActionReport, ToolState} from './domain.js';
 
 export type StepTone = 'success' | 'warning' | 'danger' | 'neutral';
 /** What the step's button does; the checklist component wires each kind. */
@@ -10,9 +10,12 @@ export type StepAction =
   | {kind: 'confirmCallback'; label: string; confirmed: boolean}
   | {kind: 'environment'; label: string}
   | {kind: 'codexLogin'; label: string}
-  | {kind: 'claudeLogin'; label: string};
+  | {kind: 'claudeLogin'; label: string}
+  | {kind: 'serviceInstall'; label: string; primary?: boolean}
+  | {kind: 'serviceSkip'; label: string}
+  | {kind: 'serviceRecheck'; label: string};
 export type SetupStep = {
-  id: 'credentials' | 'scopes' | 'connection' | 'event' | 'callback' | 'publish' | 'codex' | 'claude';
+  id: 'credentials' | 'scopes' | 'connection' | 'event' | 'callback' | 'publish' | 'codex' | 'claude' | 'service';
   title: string; status: string; tone: StepTone; done: boolean;
   detail?: string | undefined; items?: readonly string[] | undefined; actions: readonly StepAction[];
   /** Shown under the step without changing its tone or `done`: optional settings whose absence breaks a later flow. */
@@ -120,4 +123,92 @@ function claudeStep(tool: ToolState | undefined): SetupStep {
   if (tool.authentication === 'signedIn' || tool.authentication === 'notRequired') return {...base, status: `已登录${version}`, tone: 'success', done: true, detail: tool.message, actions: [{kind: 'claudeLogin', label: '检查登录'}]};
   const status = tool.authentication === 'signedOut' ? '未登录' : '登录状态无法确认';
   return {...base, status: `${status}${version}`, tone: tool.authentication === 'signedOut' ? 'warning' : 'neutral', done: false, detail: tool.message ?? '在终端运行 claude 并登录，然后点"检查登录"。', actions: [{kind: 'claudeLogin', label: '检查登录'}]};
+}
+
+const SERVICE_RECHECK: StepAction = {kind: 'serviceRecheck', label: '重新检测'};
+/** A failed service action stays on the step for 10 minutes; after that it is history. */
+const SERVICE_FAILURE_SHOWN_FOR = 10 * 60_000;
+const serviceUnreachable = (manager: string, detail: string | undefined): string => `暂时问不到 ${manager}${detail ? `：${detail}` : '。'}`;
+
+/** 登录电脑时自动运行 bot (3.1 item 4, 3.10), for the checklist, the desktop and `vonvon bot status`. On macOS the web UI and
+ * the desktop install it; elsewhere the step only names the terminal command (linger comes with s20a). First match wins. */
+export function serviceStep(application: Pick<DesktopSnapshot['application'], 'platform' | 'service'>, now = Date.now()): SetupStep & {id: 'service'} {
+  const service = application.service;
+  if (application.platform !== 'macos') return otherServiceStep(service);
+  const failure = recentServiceFailure(service, now);
+  const step = (status: string, tone: StepTone, done: boolean, detail: string | undefined, actions: readonly StepAction[] = []) =>
+    ({id: 'service', title: '登录电脑时自动运行 bot（推荐）', status, tone, done, detail, actions, warnings: failure ? [failure] : undefined} as const);
+  const action = service?.action;
+  if (action?.phase === 'running') return step(action.action === 'install' ? '正在打开…' : '正在关闭…', 'neutral', false, '页面会断开几秒再连上。');
+  if (service?.blocked === 'development') return step('开发版不能装', 'neutral', false, SERVICE_DISTRIBUTION_MESSAGE);
+  if (service?.blocked === 'translocated') return step('先移到"应用程序"', 'warning', false, 'Vonvon Bot 正从临时位置运行，装成后台服务后下次会找不到它。把它拖到"应用程序"文件夹，从那里打开，再回到这一步。', [SERVICE_RECHECK]);
+  switch (service?.state) {
+    case 'running': return step('已开启', 'success', true, 'bot 跑在后台服务里：退出 app、注销再登录都在线，崩溃后自动重启。');
+    case 'detached': case 'stopped':
+      return step('已开启 · 这次没交给后台服务', 'warning', true, '现在的 daemon 是单独启动的，崩溃后不会自动重启；下次登录电脑时会由后台服务启动。', [{kind: 'serviceInstall', label: '交给后台服务'}]);
+    case 'disabled': return step('已在系统设置里关掉', 'warning', false, '在"系统设置 › 通用 › 登录项与扩展"的"允许在后台"里打开 Vonvon Bot，再点「重新检测」。', [SERVICE_RECHECK]);
+    case 'not-installed': return service?.skipped
+      ? step('已跳过', 'neutral', true, 'bot 跑在单独启动的 daemon 里，退出 app 不停，但这样崩溃后不会自动重启；注销或重启电脑后要重新打开 app。', [{kind: 'serviceInstall', label: '改为自动运行'}])
+      : step('推荐打开', 'warning', false, '打开后 bot 跑在 macOS 的后台服务里：退出 app、注销再登录都在线，崩溃后自动重启。', [{kind: 'serviceInstall', label: '打开', primary: true}, {kind: 'serviceSkip', label: '跳过'}]);
+    case 'conflict': return step('要处理', 'danger', false, service?.detail, [SERVICE_RECHECK]);
+    default: return step('无法确认', 'neutral', false, serviceUnreachable('launchd', service?.detail), [SERVICE_RECHECK]);
+  }
+}
+
+/** Linux (1.4): read-only, the step names the terminal command. */
+function otherServiceStep(service: ApplicationService | undefined): SetupStep & {id: 'service'} {
+  const step = (status: string, tone: StepTone, done: boolean, detail: string | undefined) => ({id: 'service', title: '后台服务', status, tone, done, detail, actions: []} as const);
+  switch (service?.state) {
+    case 'running': return step('在运行', 'success', true, 'bot 跑在 systemd 用户服务里，崩溃后自动重启。');
+    case 'not-installed': return step('没装', 'neutral', false, '在终端运行 vonvon service install，装成 systemd 用户服务，崩溃后自动重启。');
+    case 'disabled': return step('没启用', 'neutral', false, '在终端运行 vonvon service install。');
+    case 'detached': return step('已装 · 这次没交给后台服务', 'warning', true, '在终端运行 vonvon daemon stop，再运行 vonvon daemon start。');
+    case 'stopped': return step('已装 · 没在运行', 'warning', true, '在终端运行 vonvon daemon start。');
+    case 'conflict': return step('要处理', 'danger', false, service?.detail);
+    default: return step('无法确认', 'neutral', false, serviceUnreachable('systemd', service?.detail));
+  }
+}
+
+/** The last service action's failure while it is recent, for the step's warning and the 登录电脑时启动 row. */
+export function recentServiceFailure(service: ApplicationService | undefined, now = Date.now()): string | undefined {
+  const action = service?.action;
+  if (action?.phase !== 'done' || action.ok !== false) return undefined;
+  return now - (action.finishedAt ?? action.startedAt) < SERVICE_FAILURE_SHOWN_FOR ? serviceActionMessage(action) : undefined;
+}
+
+/** The daemon's reply to the web page's switch, which the page also shows when the connection drops first. */
+export const serviceActionStartedMessage = (action: ServiceActionReport['action']): string =>
+  action === 'install' ? '正在打开登录时启动，页面会断开几秒。' : '正在关闭登录时启动，页面会断开几秒。';
+export const SERVICE_BUSY_MESSAGE = '另一个后台服务操作正在进行，等它结束再试。';
+/** Section 1.5: a running service has another definition, e.g. after the app moved or the PATH changed. */
+export const SERVICE_REPLACE_RUNNING_MESSAGE = '后台服务正在用另一份定义运行（比如 app 换过位置或版本）。重新打开 Vonvon Bot 会自动更新；或者在终端运行 vonvon daemon stop 后再打开这个开关。';
+const SERVICE_DISTRIBUTION_MESSAGE = '从源码运行的 daemon 不能装后台服务。用打包的 Vonvon Bot，或用 npm 装的 vonvon。';
+const SERVICE_REASON_TEXT: Partial<Record<ServiceActionReason, string>> = {
+  busy: SERVICE_BUSY_MESSAGE,
+  'turned-off': '系统设置里关掉了 Vonvon Bot 的后台运行。到"系统设置 › 通用 › 登录项与扩展"的"允许在后台"里打开它，再点「重新检测」。',
+  'replace-running': SERVICE_REPLACE_RUNNING_MESSAGE,
+  // A development checkout is blocked before the switch; what reaches the transaction is mostly an unrecognized layout.
+  distribution: '认不出这份 vonvon 是怎么装的，不能装后台服务。从源码运行的装不了；用 npm 装的，在终端运行 vonvon service install。',
+  translocated: 'Vonvon Bot 正从临时位置运行。先把它拖到"应用程序"文件夹，从那里打开，再打开这个开关。',
+  interrupted: '上次关闭没有做完。在终端运行 vonvon service uninstall，再试一次。',
+};
+
+/** What a finished `vonvon service install|uninstall` did, for the web UI, the desktop and the CLI. A failure names
+ * the cause and the next step; the suffix says whether the bot was started again on its old port. */
+export function serviceActionMessage(report: ServiceActionReport): string {
+  // The s07 details are English sentences; drop their own full stop before Chinese punctuation follows.
+  const detail = (report.detail ?? '').replace(/[.。]\s*$/, '');
+  const failure = (): string => {
+    const known = report.reason && SERVICE_REASON_TEXT[report.reason];
+    if (known) return known;
+    if (report.reason === 'other-root') return `后台服务属于另一个数据目录：${/belongs to (.+)$/.exec(detail)?.[1] ?? detail}。`;
+    if (report.action === 'uninstall') return `没关掉：${detail}。在终端运行 vonvon service uninstall 再试。`;
+    if (report.kind === 'install_rolled_back') return `没装上，已经恢复原样：${detail}`;
+    if (report.kind === 'install_incomplete') return `没装完：${detail}。在终端运行 vonvon service status 查看。`;
+    return `没装上：${detail}`;
+  };
+  const parts = report.ok ? [] : [failure()];
+  if (report.restarted) parts.push('已按原来的端口重新起了 bot（分离运行）。');
+  if (report.restartError) parts.push('bot 现在没在运行：在终端运行 vonvon daemon start。');
+  return parts.map((part, index) => index < parts.length - 1 && !part.endsWith('。') ? `${part}。` : part).join('');
 }

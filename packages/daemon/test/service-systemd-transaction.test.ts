@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, open, readFile, readdir, rename, rm, symlink, unlink, w
 import { tmpdir } from 'node:os';
 import { join, posix } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
+import { classifyServiceFailure } from '../src/service/action-report';
 import { createSystemdService } from '../src/service/systemd';
 import { renderDefinition } from '../src/service/definitions';
 import { resolveServiceRoot, serviceTarget, SYSTEMD_UNIT_NAME } from '../src/service/identity';
@@ -90,6 +91,12 @@ it.each(['offline', 'starting', '', 'running\ndegraded', 'garbage'])('refuses un
   const f = await fixture(); f.state.manager = ok(value);
   expect((await f.service().install()).kind).toBe('install_refused');
   expect((await f.registration()).kind).toBe('absent'); expect(f.mutations()).toEqual([]);
+});
+it('names the unusable user manager in its refusal, with systemctl\'s own words', async () => {
+  const f = await fixture(); f.state.manager = failed('Failed to connect to bus: No medium found');
+  const result = await f.service().install();
+  expect(result.kind).toBe('install_refused'); expect(result.detail).toBe('User manager unavailable: Failed to connect to bus: No medium found');
+  expect(classifyServiceFailure(result.detail)).toBe('manager-unavailable');
 });
 it('accepts nonzero degraded manager and writes the fixed definition', async () => {
   const f = await fixture(); f.state.manager = { ...failed(''), stdout: 'degraded' };
