@@ -49,7 +49,7 @@
 - 两台机器的 Paseo daemon 通过 Tailscale 互通。JP-VPS 为 `100.121.117.46:6767`，provider `claude`，项目 `/home/ops/vonvon/vonvon-bot`。Mac 为 `100.127.134.58:6767`，provider `codex`。不通过 SSH 执行 `claude -p`。
 - Claude 和 Codex 之间不再交接 PR。Claude 经 Mac 的 daemon 新建三种 Codex 会话，这是唯一允许的跨机创建：
   - 检查会话，标题 `Mac 检查 PR #<号>`。Codex 在 Mac 上 pull 这个分支，在本机构建和检查。只接短检查：Codex 一个回合内能做完，大约 30 分钟以内，结果能用文字说清对错。
-  - 预览版会话，标题 `Mac 预览版 <里程碑名>`。Codex 从 `main` pull，在 Mac 本机构建，用真实 `HOME` 下的钥匙串签名，装到本机给 owner 验收。
+  - 预览版会话，标题 `Mac 预览版 <里程碑名>`。Codex 从 `main` pull，在 Mac 本机构建；先用隔离的数据目录查 Mac 上的网页端连 Mac 上的 daemon，有问题就停下回复，不打包，不 push；过了再用真实 `HOME` 下的钥匙串签名，装到本机给 owner 验收。
   - 修复会话，标题 `Mac 修复 PR #<号>`。只在开 `codex/fix-*` PR 的会话已经不在、审查又发现问题时新建。Codex pull 这个分支，按 PR 评论修，push。
 - 三种会话都按下面的规则跑：
   - 模式用 `auto`，不用 `full-access`；

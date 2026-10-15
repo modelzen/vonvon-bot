@@ -10,7 +10,7 @@
 
 **两条线。**
 - 第一条线按里程碑顺序做，当前里程碑的片做完，就出预览版给 owner 验收。
-- 第二条线做依赖已满足、不挡第一条线的片：当前里程碑里能并行的片；下一个里程碑里没有依赖的片，比如 M3 的 s10、s11、s12、s16；拿掉咖啡一下的 s02b、s02c；M4 之后的迁移准备 s58、s59（本文第 2 节 M10）。尽量挑和第一条线不改同一批文件的片。
+- 第二条线做依赖已满足、不挡第一条线的片：当前里程碑里能并行的片；下一个里程碑里没有依赖的片，比如 M2 的 s07a（Linux 先行的验收要用）、M3 的 s10、s11、s12、s16；拿掉咖啡一下的 s02b、s02c；M4 之后的迁移准备 s58、s59（本文第 2 节 M10）。尽量挑和第一条线不改同一批文件的片。
 - 实验 PR 是纯文档，不占在飞名额，随时可以开（本文第 4 节）。
 
 **第一片是 s01**（v1 计划、改名和第一版权限表），理由有四条：
@@ -56,7 +56,7 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
 
 哪一步不对，回一句"第几步、看到了什么"就行，Claude 修好后再装一版。s02a 之后复验时，飞书里的聊天步骤（把 bot 拉进测试群、@ 它看回复）由 Claude 按本文第 7 节先做。
 
-### M2 首次运行清单和开机自动运行（s03 到 s08）
+### M2 首次运行清单和开机自动运行（s03 到 s08，含 s07a）
 
 **给 owner 什么：** 打开 app 先看到一张首次运行清单（product.md 3.1 第 4 条）：扫码建应用、开权限、长连接、事件订阅、发布、Codex 和 Claude 的版本与登录、登录电脑时自动运行。每一步实时变绿，失败时告诉你怎么做。打开"登录电脑时自动运行"以后，bot 跑在 macOS 的后台服务里，退出 app、注销再登录都在线（3.10）。终端里能用 `vonvon service status` 查看状态。
 
@@ -275,7 +275,7 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 - s07 留下的，给 s08：服务正在跑时 install 拒绝替换定义，桌面端换新版本后要先 `daemon stop` 再 `service install`，或者在 s08 给 install 加"替换运行中的服务"。开关读 `service status --json` 的 `state`，`disabled` 就是系统设置里关掉了。网页和桌面端的 machine RPC 里 install、uninstall 仍然拒绝，s08 接到 CLI。系统设置里显示成什么，s08 看要不要在 plist 里加 `AssociatedBundleIdentifiers`（会改定义格式，旧定义变成 `unrecognized`，install 会重写）。
 - s07 留下的，给 s17：`service status` 还不显示 launchd 的 `last exit code` 和 `last terminating signal`，崩溃记录做的时候一起加。
 - s07 留下的，给 s20a：Linux 的 install 没处理 linger；没有用户 systemd（比如容器里）时 `service status` 显示查不到，install 报 `User manager unavailable`。
-- s07a：放在第二条线上尽快做，因为 Linux 先行的验收要用它（本文第 1 节）。owner 2026-10-15 说："改配置也不一定非要网页端改。也可以 vonvon-bot 命令行改。我感觉命令行实现验收的快一些。"命令用网页端用的同一套 RPC（`@vonvon/client` 的 `connectLocal` 和本机凭据），不改 daemon 的行为。s47 以后在同一套命令代码上加 agent 那条路（从环境变量读地址和会话令牌）。`vonvon bot add`（终端扫码）仍在 s20a。行数和风险都是估的，开工时先量。
+- s07a：放在第二条线上尽快做，因为 Linux 先行的验收要用它（本文第 1 节）。owner 2026-10-15 说："改配置也不一定非要网页端改。也可以 vonvon-bot 命令行改。我感觉命令行实现验收的快一些。你自行考虑。当然网页端的验收肯定也要的。"命令只调网页端已经在用的 RPC（快照、`listJoinedGroups`、`listPendingGroups`、`bindGroup`、各设置页的读和存），走 `@vonvon/client` 的 `connectLocal` 和本机凭据，不改 daemon 的行为。本机凭据这条路和网页端同一级，给在终端里的主人用，不交给 agent，设置 skill 也不走它。s47 以后在同一套命令代码上另加 agent 那条路（从环境变量读地址和会话令牌，按 3.7 校验私聊和触发人）。`vonvon bot add`（终端扫码）仍在 s20a。行数和风险都是估的，开工时先量。
 - s08：e06 发现系统设置"App 后台活动"里也有一个开关，用户在那里关掉时服务从 launchd 里消失。桌面端的"登录电脑时启动"要读 s07 的状态，显示"已在系统设置里关掉"，不能只看自己存的值。未签名的 Electron 在那里显示为"Electron"、"身份不明的开发者"；签名后的预览版显示什么，s08 的 Mac 检查时看。
 - s08：按 Linux 先行（本文第 1 节），开关放在网页端和桌面端共用的清单里，daemon 调的也是同一个 `vonvon service` 命令，所以先在 Mac 网页端查；桌面窗口里的部分，等网页端封装成桌面端时再查。
 
@@ -483,12 +483,12 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 | [x] | e02 | 第 11、12 项里不要沙箱的部分，第 18 项的 Claude 一半，加上 claudeMdExcludes | JP-VPS | 用记录每次调用的 canUseTool 看哪些请求走到回调；今天 AskUserQuestion 是否被拒；运行中 setPermissionMode 和重开 resume 的差别；agentID 等字段从哪个 SDK 版本有；getSessionMessages 能否读别的 cwd 下的会话；claudeMdExcludes 能否排除 `~/.claude/CLAUDE.md`（不改这个文件） | s31、s44、s48 | s31 之前 |
 | [ ] | e03 | 第 11、12 项里要 macOS 沙箱的部分 | Mac | 只读用 default、读写用 acceptEdits，加今天的 Seatbelt 沙箱和记录回调的 canUseTool，看 cwd 外的读写、不在名单里的主机、WebFetch 哪些走到回调；今天的 bypassPermissions 下关网能否 curl 出去、能否写到 /tmp。Mac 上没有 Claude 登录时回"卡住了" | s31、s39 | s31 之前 |
 | [ ] | e04 | 第 2、4 项：沙箱里调 vonvon 命令行，`.git` 只读 | Mac | Codex 只读、读写、关网三种设置下和 Claude 的沙箱里，从 agent 的 shell 连 127.0.0.1 上的测试服务（TCP 和 Unix socket 各一个），看能否连上、能否从环境变量读到令牌；workspace-write 下在 git 目录里 `git commit` 会不会失败 | s37、s39、s46 | s37 之前 |
-| [ ] | e05 | 第 3 项：Codex 会话级配置 | JP-VPS | 用 s03 定的最低版本和 JP-VPS 上装的当前 Codex CLI 各测一次，最低版本那次用 npm 另装一份旧的 codex：会话级 mcp_servers、runtimeWorkspaceRoots、skills/extraRoots/set 能不能用，resume 后还在不在，中途能否换 skill 列表；memories 的两个键能否在会话层关掉；`~/.codex/AGENTS.md` 能否按会话不加载。结果决定 Codex 的最低版本，在 s39 写回 s03 的常量 | s37、s39、s44 | s37 之前 |
+| [ ] | e05 | 第 3 项：Codex 会话级配置 | JP-VPS | 用 s03 定的最低版本和 JP-VPS 上装的当前 Codex CLI 各测一次，最低版本那次用 npm 另装一份旧的 codex：会话级 mcp_servers、runtimeWorkspaceRoots、skills/extraRoots/set 能不能用，resume 后还在不在，中途能否换 skill 列表；memories 的两个键能否在会话层关掉；`~/.codex/AGENTS.md` 能否按会话不加载。结果决定 Codex 的最低版本，在 s39 写回 s03 的常量。Codex.app 里带的也是 codex 程序，s39 的 Mac 检查顺带用 Codex.app 里的那份确认一次 | s37、s39、s44 | s37 之前 |
 | [x] | e06 | 第 5 项：LaunchAgent 和钥匙串 | Mac | 手写一个 LaunchAgent，用打包版 app 里的 Electron 以 `ELECTRON_RUN_AS_NODE=1` 跑小脚本：能否用钥匙串里的 Claude 和 Codex 登录；"允许在后台"里显示什么，关掉后 `launchctl print` 显示什么；kill -9 后多久被拉起，退出码在哪个字段；怎么判断用户重新登录过。测完卸载 | s07、s17 | s07 之前 |
 | [ ] | e07 | 第 10 项（预查）：bridge 的锁 | JP-VPS | 临时 HOME 下用 v2 的 acquireSingleInstanceLock 写一份 bridge 格式的锁，再用 bridge 0.6.14（`6698118`）的同名函数去抢，应该抛 BridgeAlreadyRunningError；再看持有者退出后锁失效、startedAt+15s 那条判断 | s61 | s61 之前 |
 | [ ] | e08 | 第 10 项（真机） | Mac | 在 Mac 的测试用户账号里装 bridge 0.6.14，用数据副本和测试 bot：写入锁后 run 和 start 被拒；stop 删掉 plist 和 launchd 任务；持有者退出后锁失效；多 bot 模式下子进程也被拒。没有测试用户账号时回"卡住了" | s61 | s61 之前 |
 | [ ] | e09 | 第 13 项：卡片里的 @ 会不会提醒人 | JP-VPS 和 Mac | 测试 bot 往测试群发一张带 `<at>` 的卡片和一条带 @ 的文字。JP-VPS 上看消息数据：卡片里的 `<at>` 算不算提到了人。两条在飞书客户端里有没有"有人@我"的标记和通知，在 Mac 上或由 owner 看 | s30 | s30 之前 |
-| [ ] | e10 | 第 6、14、15、16 项和第 17 项后半：飞书平台 | JP-VPS（客户端里看的在 Mac） | 用测试 bot 的应用身份调接口，lark-cli 以 owner 的用户身份发消息：机器人能否自己进已有的群；`with_sender_name` 拿不拿得到名字；能否拉到别的 bot 卡片回答的正文；话题里的引用分不分得出是哪条；"同时发送到群"收几次事件；私聊里的话题；能否给没开过会话的人发私聊；断线期间的消息重连后会不会补推。只有客户端里才看得到的，留给 Mac 检查：没开过会话的人收到的私聊在客户端里怎么显示、有没有通知；"同时发送到群"的消息接口发不出来的话，也在客户端里发 | s09、s14；s18、s22、s27、s49、s57 也用它的结果 | s09 之前 |
+| [ ] | e10 | 第 6、14、15、16 项和第 17 项后半：飞书平台 | JP-VPS（客户端里看的在 Mac） | 用测试 bot 的应用身份调接口，lark-cli 以 owner 的用户身份发消息：机器人能否自己进已有的群；`with_sender_name` 拿不拿得到名字；能否拉到别的 bot 卡片回答的正文；话题里的引用分不分得出是哪条；"同时发送到群"收几次事件；私聊里的话题；能否给没开过会话的人发私聊；断线期间的消息重连后会不会补推。只有客户端里才看得到的，留给 Mac 检查：没开过会话的人收到的私聊在客户端里怎么显示、有没有通知。测"同时发送到群"要有人发一条这样的消息，lark-cli 发不出来时，改在客户端里发 | s09、s14；s18、s22、s27、s49、s57 也用它的结果 | s09 之前 |
 | [ ] | e11 | 第 18 项的 Codex 一半 | JP-VPS | 用真实 Codex 起两条线程、关掉一条，再用 utility 进程发 thread/read，看不加载线程能不能读到用户消息和最终回答 | s48 | s48 之前 |
 | [ ] | e12 | 第 9 项：判断的延迟和额度 | JP-VPS | s23 合入后，用 Codex 订阅的 gpt-6-luna 和 Claude 订阅的小模型各跑 50 次判断，记延迟分布和额度变化，用来定 s25 每群每小时的上限。额度看各自的账户页面，跑之前和跑完由 owner 各读一次 | s25 | s25 之前 |
 | [ ] | e13 | 第 7 项：企业租户的权限审核 | — | 不单独做，现在没有企业租户。清单里写一句"企业租户里新权限可能要管理员审核"；M11 时 owner 手里有企业租户，就顺手看一次 | — | — |
@@ -556,9 +556,9 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 ## 7. 预览版怎么出
 
 一个里程碑按这个顺序验收（本文第 1 节"Linux 先行"）：
-1. **先在 JP-VPS 上验。** Claude 先做完不需要 Mac 的步骤：main 到里程碑的 head，用验收用的数据目录；飞书里的聊天步骤（建测试群、把 bot 拉进群、@ 它、看回复和卡片）用 lark-cli 以 owner 的用户身份做，改设置用 `vonvon` 命令行和无头打开的网页端。结果写进给 owner 的通知（owner 2026-10-15 要求）。
-2. **再做 Mac 检查。** Claude 经 Paseo 开一个检查会话，查 Mac 上的网页端连 Mac 上的 daemon，以及只有 Mac 才有的项（本文第 1 节列的那些）。标题照 `AGENTS.md` 写成 `Mac 检查 PR #<号>`，号用这个里程碑最后合入的那一片的 PR；一个回合做不完就分几次，一次一个会话。
-3. **最后出预览版。** 前两步都过了，Claude 才开预览版会话，按下面的办法打包、装好 .app，再通知 owner。owner 只做要人来做的：手机扫码、点卡片按钮、只有桌面端才有的行为、看飞书客户端里的显示。
+1. **先在 JP-VPS 上验。** 里程碑的片都合入后，Claude 用 main 的 head 先做完不需要 Mac 的步骤，用验收用的数据目录：飞书里的聊天步骤（建测试群、把 bot 拉进群、@ 它、看回复和卡片）用 lark-cli 以 owner 的用户身份做，改设置用 `vonvon` 命令行和无头打开的网页端。结果写进给 owner 的通知（owner 2026-10-15 要求）。发现问题就开 `claude/*` PR 修，合入后这一步重来。
+2. **再在 Mac 上验网页端。** Claude 开预览版会话（见下面"Mac 上怎么打包"）。Codex 构建好之后先不打包：用隔离的数据目录在 Mac 上起 daemon 和网页端，查网页端连 Mac 上的 daemon，以及不打包也能查的 Mac 专属项，比如 launchd、钥匙串、Seatbelt 沙箱。要真 bot 的项第 1 步已经验过，这一步不注册新 bot。有问题 Codex 就停下回复，不打包，也不 push；Claude 开 `claude/*` PR 修，合入后重开预览版会话。
+3. **最后打包给 owner。** 第 2 步过了，Codex 才打包、装好 .app，Claude 通知 owner。owner 只做要人来做的：手机扫码、点卡片按钮、只有桌面端才有的行为、看飞书客户端里的显示。
 
 **JP-VPS 上的验收环境。**
 - 验收用一棵单独的 worktree，detach 在要验的提交上；用它自己的 `VONVON_HOME`，里面注册一个测试 bot。
@@ -566,13 +566,14 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 - lark-cli 发的消息以 owner 的名义发出，bot 把它当主人的消息；要第二个人的步骤，仍按本文第 8 节找同事或第二个账号。JP-VPS 上的 lark-cli 没有 owner 的用户授权、授权过期或权限不够时，退回由 owner 手工做，并在通知里说明。只碰为验收建的测试群，不读 owner 别的聊天；群号、名字不写进仓库。
 - 以用户身份 @ bot 要用 bot 的 open_id：用 lark-cli 的 `im +chat-messages-list --format json` 列出群消息，从 bot 自己发的那条取 `sender.open_bot_id`。
 - 用接口建群时把 bot 一起放进去，不会触发 `im.chat.member.bot.added_v1`。要测"机器人进群"的提示，先建群，再用 lark-cli 的 `im chat.members create`（`member_id_type=app_id`）把 bot 加进去。"查找已经加入的群"两种群都找得到。
-- Claude 的只读、读写档在 Linux 上要 Claude Code 的沙箱，就是 `bubblewrap` 和 `socat`；没装时回合失败，报"Sandbox required but unavailable"。装要 sudo，由 owner 经 SSH 装。
+- Claude 的只读、读写档在 Linux 上要 Claude Code 的沙箱，就是 `bubblewrap` 和 `socat`；没装时回合失败，报"Sandbox required but unavailable"。
 - Ubuntu 24.04 上光装好还不够：`kernel.apparmor_restrict_unprivileged_userns = 1` 挡住了非特权的用户命名空间，bwrap 报"setting up uid map: Permission denied"或"loopback: Failed RTM_NEWADDR: Operation not permitted"，Claude 的 Bash 在只读、读写档下都失败。JP-VPS 上的办法：加一份 AppArmor profile，只给 `/usr/bin/bwrap` 开 `userns` 权限（和 Ubuntu 自己给浏览器的 profile 一个样子），用 `apparmor_parser -r` 加载；不全局关掉这个 sysctl。
+- 装这两个包和加载 profile 都要 sudo，由 owner 经 SSH 做。两步都做完之前，JP-VPS 上只能验 Claude 的完全访问档，只读、读写档留到 Mac 上验。
 - Linux 上的 Codex 只能用完全访问（product.md 3.8，`D/agent/codex-appserver/backend.ts`），JP-VPS 上用 Codex 的测试群要明确改成完全访问。访客档没设时跟着管理员的档走（3.8"访客档照旧"），所以改成完全访问的测试群，访客也是完全访问；这种群里不放别人。
 
 **Mac 上怎么打包。**
 1. Claude 经 Paseo 开预览版会话 `Mac 预览版 <里程碑名>`，模式 auto，规则见 `AGENTS.md`"工具和同步"。
-2. Codex 在 Mac 上从 main pull，`npm ci`，`npm run build`，再在 `packages/desktop` 下用 `electron-builder --config electron-builder.yml --dir` 打包，也就是今天的 `package:dir` 脚本。electron-builder 会自动用钥匙串里的 Developer ID 签名。不公证，只出 Apple Silicon。
+2. Codex 在 Mac 上从 main pull，`npm ci`，`npm run build`，先按上面第 2 步查网页端，过了再在 `packages/desktop` 下用 `electron-builder --config electron-builder.yml --dir` 打包，也就是今天的 `package:dir` 脚本。electron-builder 会自动用钥匙串里的 Developer ID 签名。不公证，只出 Apple Silicon。
 3. 打好的 .app 装进 /Applications，通知 owner 验收。
 4. 具体命令以仓库脚本为准。M1 预览版（2026-10-14）按第 2 条做通了，打包前补跑 `node node_modules/electron/install.js`，在沙箱外打包和验签，用 `ditto` 装进 /Applications。
 
