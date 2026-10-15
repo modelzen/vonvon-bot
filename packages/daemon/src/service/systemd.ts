@@ -313,6 +313,7 @@ export function createSystemdService(options: { root: string }, overrides: Parti
         const identical = previous !== null && Buffer.from(previous).equals(desired);
         idle = identical && enabled.kind === 'enabled' && unit.kind === 'present' && unit.loadState === 'loaded' && unit.fragmentPath === s.target.unitPath;
         if (idle && !detached) return outcome(s, 'already-installed', 'Already installed');
+        if (previous === null && unit.kind === 'present' && unit.mainPid !== null && owner === null) throw new Error('Interrupted uninstall; run vonvon service uninstall first');
         if (!identical && !detached && unit.kind === 'present' && unit.mainPid !== null) throw new Error('Run vonvon daemon stop before replacing the service');
       } catch (error) { return outcome(s, 'install_refused', detailOf(error)); }
       if (detached) {
