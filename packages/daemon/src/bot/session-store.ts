@@ -28,6 +28,9 @@ export interface SessionRecord {
   titleJobKey?: string;
   model?: string;
   effort?: ReasoningEffort;
+  /** true 表示 {@link model} 是 /model 卡或网页上手填的 id（3.11），不在模型列表里也
+   * 照显示；选回列表里的模型时写 false。 */
+  modelCustom?: boolean;
   /** first user message excerpt, for context */
   summary: string;
   /** createTime (epoch ms) of the most recent message woven into this session —

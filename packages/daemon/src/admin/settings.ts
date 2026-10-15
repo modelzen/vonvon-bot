@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { DEFAULT_BACKEND_ID, type AgentBackend, type ReasoningEffort } from '../agent/types';
 import { backendIds } from '../agent';
+import { parseModelId } from '../agent/model-id';
 import { getCliBridgePreferences, getCompletionReminderConfig, getMaxConcurrentRuns, getModelDisplay, getPendingPolicy, getRunIdleTimeoutMs, getSessionTitleConfig, getSessionTitleEfforts, getShowToolCalls, resolveOwner, type AppConfig, type AppPreferences } from '../config/schema';
 import { paths } from '../config/paths';
 import { resolveProjectsRootDir } from '../project/lifecycle';
@@ -75,11 +76,12 @@ const agentEffects: {
   paths: effect(['projectsRootDir'], 'new-project', '仅影响之后新建的空白项目'),
   access: effect(['allowedChats'], 'next-message', '下一条消息使用新权限'),
 };
-function selection(model?: string, effort?: ReasoningEffort): T.ModelSelection {
+function selection(model?: string, effort?: ReasoningEffort, custom?: boolean): T.ModelSelection {
   return model ? {
     kind: 'explicit',
     model,
-    effort: effort ?? 'medium'
+    effort: effort ?? 'medium',
+    ...(custom ? { custom: true } : {})
   } : {
     kind: 'default'
   };
@@ -159,16 +161,16 @@ function projectData(p: Project): T.ProjectSections {
       autoCompact: p.autoCompact ?? true
     },
     model: {
-      selection: selection(p.defaultModel, p.defaultEffort)
+      selection: selection(p.defaultModel, p.defaultEffort, p.defaultModelCustom)
     }
   };
 }
 function projectRaw(p: Project, section: keyof T.ProjectSections): unknown {
-  const data = section === 'permission' ? [p.mode, p.guestMode, p.network] : section === 'response' ? p.noMention : section === 'compact' ? p.autoCompact : [p.defaultModel, p.defaultEffort];
+  const data = section === 'permission' ? [p.mode, p.guestMode, p.network] : section === 'response' ? p.noMention : section === 'compact' ? p.autoCompact : [p.defaultModel, p.defaultEffort, p.defaultModelCustom === true];
   return [p.name, p.chatId, p.cwd, p.backend, data];
 }
 function sessionRaw(s: SessionRecord): unknown {
-  return [s.threadId, s.backend, s.sessionId, s.chatId, s.model, s.effort];
+  return [s.threadId, s.backend, s.sessionId, s.chatId, s.model, s.effort, s.modelCustom === true];
 }
 function makeSection<V>(stored: V, raw: unknown, access: T.SettingsAccess, apply: T.ApplyEffect[], effective = stored): T.SettingsSection<V> {
   return {
@@ -268,11 +270,25 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       };
     }
   }
-  async function validateSelection(backend: string, value: T.ModelSelection): Promise<void> {
+  /** Returns the selection to store. A hand-typed id (`custom`, 3.11) is never
+   * checked against the catalog, only by parseModelId (and stored trimmed), and its
+   * effort only against the backend protocol; `allowCustom` is off where hand-typed
+   * ids are not offered (comments). */
+  async function validateSelection(backend: string, value: T.ModelSelection, allowCustom = false): Promise<T.ModelSelection> {
     if (!backendIds().includes(backend))
       throw new SettingsInputError('未知后端');
     if (value.kind === 'default')
-      return;
+      return value;
+    if (value.custom) {
+      if (!allowCustom)
+        throw new SettingsInputError('这里不能手填模型 ID');
+      const parsed = parseModelId(value.model);
+      if (!parsed.ok)
+        throw new SettingsInputError(parsed.message);
+      if (!getSessionTitleEfforts(backend).includes(value.effort))
+        throw new SettingsInputError('当前后端不支持这个推理强度');
+      return { ...value, model: parsed.id };
+    }
     const catalog = await models({
       botId,
       backend,
@@ -281,10 +297,11 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
     const model = catalog.models.find(item => item.id === value.model);
     if (!model || model.hidden || !model.supportedEfforts.includes(value.effort))
       throw new SettingsInputError('模型或推理强度不在当前后端支持列表中，请刷新模型列表');
+    return value;
   }
-  async function effectiveSelection(backend: string, model?: string, effort?: ReasoningEffort): Promise<T.ModelSelection> {
-    if (access.kind !== 'writable')
-      return selection(model, effort);
+  async function effectiveSelection(backend: string, model?: string, effort?: ReasoningEffort, custom?: boolean): Promise<T.ModelSelection> {
+    if (access.kind !== 'writable' || custom && model)
+      return selection(model, effort, custom);
     const catalog = await models({
       botId,
       backend,
@@ -364,7 +381,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       const data = projectData(p);
       const sections = Object.fromEntries(Object.entries(data).map(([key, value]) => [key, makeSection(value, [botId, projectRaw(p, key as keyof T.ProjectSections)], access, effect(Object.keys(value), key === 'model' ? 'new-session' : key === 'permission' || key === 'compact' ? 'session-rebind' : 'next-message', key === 'model' ? '仅新会话使用项目默认模型' : '下一条消息生效'))])) as T.ProjectSettingsView['sections'];
       sections.model.effective = {
-        selection: await effectiveSelection(p.backend ?? DEFAULT_BACKEND_ID, p.defaultModel, p.defaultEffort)
+        selection: await effectiveSelection(p.backend ?? DEFAULT_BACKEND_ID, p.defaultModel, p.defaultEffort, p.defaultModelCustom)
       };
       return {
         scope,
@@ -390,7 +407,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         scope,
         sections: {
           model: makeSection({
-            selection: selection(s.model, s.effort)
+            selection: selection(s.model, s.effort, s.modelCustom)
           }, [botId, sessionRaw(s)], access, effect(['selection'], 'next-turn', '下一轮对话使用新模型'))
         },
         identity: {
@@ -560,14 +577,16 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
             case 'model': {
               if (!e.patch.selection)
                 throw new SettingsInputError('缺少模型选择');
-              await validateSelection(p.backend ?? DEFAULT_BACKEND_ID, e.patch.selection);
-              if (e.patch.selection.kind === 'default') {
+              const chosen = await validateSelection(p.backend ?? DEFAULT_BACKEND_ID, e.patch.selection, true);
+              if (chosen.kind === 'default') {
                 delete p.defaultModel;
                 delete p.defaultEffort;
+                delete p.defaultModelCustom;
               }
               else {
-                p.defaultModel = e.patch.selection.model;
-                p.defaultEffort = e.patch.selection.effort;
+                p.defaultModel = chosen.model;
+                p.defaultEffort = chosen.effort;
+                p.defaultModelCustom = chosen.custom === true;
               }
             }
           }
@@ -589,8 +608,12 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           check([botId, sessionRaw(s)], e.revision);
           if (!e.patch.selection)
             throw new SettingsInputError('缺少模型选择');
-          await validateSelection(s.backend, e.patch.selection);
-          applySelection(s, e.patch.selection);
+          const chosen = await validateSelection(s.backend, e.patch.selection, true);
+          applySelection(s, chosen);
+          if (chosen.kind === 'default')
+            delete s.modelCustom;
+          else
+            s.modelCustom = chosen.custom === true;
         });
       }
       const section = await sectionView(edit);

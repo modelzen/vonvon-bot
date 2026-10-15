@@ -25,6 +25,8 @@ export type ModelSelection = {
   kind: 'explicit';
   model: string;
   effort: ReasoningEffort;
+  /** a hand-typed id, not checked against the model list (product.md 3.11) */
+  custom?: boolean;
 };
 export type TitlePolicy = {
   enabled: false;

@@ -90,6 +90,37 @@ it('validates models, allows custom title ids, resets actual project and session
   const a = await owner.read(agent) as AgentSettingsView;
   expect((await owner.save({ scope: agent, section: 'titles', revision: a.sections.titles.revision, patch: { byBackend: { 'codex-appserver': { enabled: true, model: 'third-party-custom', effort: 'ultra' } } } })).kind).toBe('saved');
 });
+it('accepts hand-typed model ids for the project default and a topic, never for comments (3.11)', async () => {
+  const { owner } = await fixture(); let p = await owner.read(project) as ProjectSettingsView;
+  const custom = { kind: 'explicit' as const, model: ' kimi-k2 ', effort: 'xhigh' as const, custom: true };
+  const stored = { kind: 'explicit', model: 'kimi-k2', effort: 'xhigh', custom: true };
+  expect((await owner.save({ scope: project, section: 'model', revision: p.sections.model.revision, patch: { selection: custom } })).kind).toBe('saved');
+  expect(await getProjectByName('demo')).toMatchObject({ defaultModel: 'kimi-k2', defaultEffort: 'xhigh', defaultModelCustom: true });
+  p = await owner.read(project) as ProjectSettingsView;
+  expect(p.sections.model.stored.selection).toEqual(stored);
+  expect(p.sections.model.effective.selection).toEqual(stored); // not replaced by the catalog default
+  expect((await owner.save({ scope: project, section: 'model', revision: p.sections.model.revision, patch: { selection: { kind: 'explicit', model: 'fixture-model', effort: 'low' } } })).kind).toBe('saved');
+  expect((await getProjectByName('demo'))?.defaultModelCustom).toBe(false);
+  p = await owner.read(project) as ProjectSettingsView;
+  expect((await owner.save({ scope: project, section: 'model', revision: p.sections.model.revision, patch: { selection: { ...custom, model: 'two words' } } })).kind).toBe('rejected');
+
+  let s = await owner.read(session) as SessionSettingsView;
+  expect((await owner.save({ scope: session, section: 'model', revision: s.sections.model.revision, patch: { selection: { ...custom, model: 'deepseek-chat' } } })).kind).toBe('saved');
+  expect(await getSession(session.threadId)).toMatchObject({ model: 'deepseek-chat', effort: 'xhigh', modelCustom: true });
+  s = await owner.read(session) as SessionSettingsView;
+  expect(s.sections.model.stored.selection).toMatchObject({ model: 'deepseek-chat', custom: true });
+  await owner.save({ scope: session, section: 'model', revision: s.sections.model.revision, patch: { selection: { kind: 'default' } } });
+  expect(await getSession(session.threadId)).not.toHaveProperty('modelCustom');
+
+  // A Claude topic only takes efforts the Claude protocol has.
+  await upsertSession({ threadId: 'omt_claude', chatId: 'oc_demo', sessionId: 'native-claude', backend: 'claude-agent', cwd: '/tmp/demo', createdAt: 1, updatedAt: 1, summary: '' });
+  const claudeTopic = { kind: 'session' as const, botId, threadId: 'omt_claude' };
+  const c = await owner.read(claudeTopic) as SessionSettingsView;
+  expect((await owner.save({ scope: claudeTopic, section: 'model', revision: c.sections.model.revision, patch: { selection: { ...custom, effort: 'ultra' } } })).kind).toBe('rejected');
+
+  const a = await owner.read(agent) as AgentSettingsView;
+  expect((await owner.save({ scope: agent, section: 'comments', revision: a.sections.comments.revision, patch: { selection: custom } })).kind).toBe('rejected');
+});
 it('stale resume identity conflicts and cannot change the replacement session', async () => {
   const { owner } = await fixture(); const old = await owner.read(session) as SessionSettingsView;
   const rec = (await getSession(session.threadId))!; await upsertSession({ ...rec, sessionId: 'native-two' });

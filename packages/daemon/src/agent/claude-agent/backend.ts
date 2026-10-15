@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type {
   EffortLevel,
   ModelInfo as ClaudeModelInfo,
+  Options,
   Query,
   SettingSource,
 } from '@anthropic-ai/claude-agent-sdk';
@@ -27,6 +29,7 @@ import { BackendNotInstalledError, isBackendDepInstalled, installedBackendVersio
 import { permissionOptions } from './permission';
 import { foldSessionMessages, mapSessionSummary } from './history';
 import { ClaudeAgentThread } from './thread';
+import { claudeConfigDir, readConfiguredClaudeModel } from './configured-model';
 import { loginFromAccount, loginFromEnv, readClaudeLogin } from './login';
 
 /** The on-demand npm package backing this backend. */
@@ -35,7 +38,8 @@ const SDK_PKG = '@anthropic-ai/claude-agent-sdk';
 /**
  * Make every bridge-started claude session behave like Claude Code in its cwd:
  * load project + user `CLAUDE.md`, skills, and `.claude/settings.json`. Without
- * `settingSources` the SDK loads every source; helper queries pass `[]` to load none.
+ * `settingSources` the SDK loads every source; helper queries load only 'user'
+ * (see helperQueryOptions).
  * Turns once passed nothing here, which is why a project's CLAUDE.md / the user's
  * lark-* skills were previously ignored. The programmatic permission tier
  * (permission.ts: bypassPermissions + sandbox) still takes precedence, so a
@@ -77,6 +81,36 @@ function bridgeClaudeEnv(): Record<string, string> {
   return base;
 }
 
+/**
+ * Options shared by the helper queries (login probe, model list, session title).
+ * They start the same CLI with the same user settings a turn reads, so an `env`
+ * key there counts (ANTHROPIC_AUTH_TOKEN, or ANTHROPIC_BASE_URL and
+ * ANTHROPIC_MODEL for DeepSeek or Kimi). With `settingSources: []` those keys were
+ * ignored and the helpers reported "not logged in" on such machines. Hooks,
+ * tools, MCP servers, claude.ai connectors, the transcript and the user's
+ * personal CLAUDE.md stay off. The project layer is not loaded: the model list is
+ * cached per backend, not per project, and titles only need the credentials.
+ */
+function helperQueryOptions(cwd: string): Options {
+  return {
+    cwd,
+    env: { ...bridgeClaudeEnv(), ENABLE_CLAUDEAI_MCP_SERVERS: 'false' },
+    persistSession: false,
+    maxTurns: 1,
+    tools: [],
+    skills: [],
+    mcpServers: {},
+    strictMcpConfig: true,
+    settingSources: ['user'],
+    settings: {
+      disableAllHooks: true,
+      // e02: with 'user' loaded the personal CLAUDE.md is read unless excluded;
+      // the glob covers ~/.claude, the absolute path covers CLAUDE_CONFIG_DIR.
+      claudeMdExcludes: [join(claudeConfigDir(), 'CLAUDE.md'), '**/.claude/CLAUDE.md'],
+    },
+  };
+}
+
 /** The SDK's runtime surface we use (typed off the package, erased at build). */
 type ClaudeSdk = typeof import('@anthropic-ai/claude-agent-sdk');
 export type ClaudeSdkFacade = Pick<
@@ -103,6 +137,7 @@ function loadSdk(): Promise<ClaudeSdkFacade> {
 }
 
 const TITLE_GENERATION_TIMEOUT_MS = 30_000;
+const MODEL_DISCOVERY_TIMEOUT_MS = 30_000;
 const LOGIN_PROBE_TIMEOUT_MS = 15_000;
 const TITLE_OUTPUT_SCHEMA = {
   type: 'object',
@@ -147,11 +182,12 @@ function withAbortDeadline<T>(
   work: Promise<T>,
   abortController: AbortController,
   timeoutMs = TITLE_GENERATION_TIMEOUT_MS,
+  what = 'title generation',
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       abortController.abort();
-      reject(new Error(`Claude title generation timed out after ${timeoutMs}ms`));
+      reject(new Error(`Claude ${what} timed out after ${timeoutMs}ms`));
     }, timeoutMs);
     work.then(
       (value) => {
@@ -202,7 +238,11 @@ export class ClaudeAgentBackend implements AgentBackend {
    * retry on the next call (same policy as the Codex backend). */
   private modelCache: ModelInfo[] | null = null;
 
-  constructor(private readonly sdkLoader: () => Promise<ClaudeSdkFacade> = loadSdk) {}
+  constructor(
+    private readonly sdkLoader: () => Promise<ClaudeSdkFacade> = loadSdk,
+    /** injectable so tests do not read the machine's ~/.claude/settings.json */
+    private readonly configuredModel: () => string | undefined = readConfiguredClaudeModel,
+  ) {}
 
   readonly capabilities: AgentCapabilities = {
     // /goal：goal-like —— 一个自主轮跑完目标 + 合成状态 + abort 硬停可终止续聊
@@ -257,9 +297,8 @@ export class ClaudeAgentBackend implements AgentBackend {
   }
 
   /** Reads the account the SDK's CLI reports at initialize, with no turn and no
-   * tokens. The CLI is the same binary turns use and gets the same env and user
-   * settings (an apiKeyHelper or `env` key there counts, and plugins enabled there
-   * load), but no hooks, MCP servers or claude.ai connectors. If it cannot start,
+   * tokens, using {@link helperQueryOptions} (an apiKeyHelper or `env` key in the
+   * user settings counts, and plugins enabled there load). If it cannot start,
    * `claude auth status` from a separate CLI would not say whether turns can run, so
    * only the env is checked. */
   private async probeLogin(): Promise<BackendLogin> {
@@ -269,21 +308,14 @@ export class ClaudeAgentBackend implements AgentBackend {
       const sdk = await this.sdkLoader();
       query = sdk.query({
         prompt: idleClaudeInput(abortController.signal),
-        options: {
-          abortController,
-          cwd: homedir(),
-          env: { ...bridgeClaudeEnv(), ENABLE_CLAUDEAI_MCP_SERVERS: 'false' },
-          persistSession: false,
-          maxTurns: 1,
-          tools: [],
-          skills: [],
-          mcpServers: {},
-          strictMcpConfig: true,
-          settingSources: ['user'],
-          settings: { disableAllHooks: true },
-        },
+        options: { ...helperQueryOptions(homedir()), abortController },
       });
-      const init = await withAbortDeadline(query.initializationResult(), abortController, LOGIN_PROBE_TIMEOUT_MS);
+      const init = await withAbortDeadline(
+        query.initializationResult(),
+        abortController,
+        LOGIN_PROBE_TIMEOUT_MS,
+        'login probe',
+      );
       return loginFromAccount(init.account) ?? loginFromEnv(process.env, 'Claude 没有报告账号信息。');
     } catch (err) {
       if (err instanceof BackendNotInstalledError) throw err;
@@ -303,26 +335,24 @@ export class ClaudeAgentBackend implements AgentBackend {
       const sdk = await this.sdkLoader();
       // supportedModels() is exposed on an initialized SDK Query rather than as
       // a package-level function. An idle streaming input lets the CLI initialize
-      // without submitting a user turn or spending model tokens.
+      // without submitting a user turn or spending model tokens. Same settings as
+      // the login probe, so a model configured in the user settings is listed.
       query = sdk.query({
         prompt: idleClaudeInput(abortController.signal),
-        options: {
-          abortController,
-          persistSession: false,
-          maxTurns: 1,
-          tools: [],
-          skills: [],
-          mcpServers: {},
-          settingSources: [],
-        },
+        options: { ...helperQueryOptions(homedir()), abortController },
       });
-      const discovered = await withAbortDeadline(query.supportedModels(), abortController);
+      const discovered = await withAbortDeadline(
+        query.supportedModels(),
+        abortController,
+        MODEL_DISCOVERY_TIMEOUT_MS,
+        'model discovery',
+      );
       if (!discovered.length) throw new Error('Claude SDK returned an empty model catalog');
-      this.modelCache = discovered.map(mapClaudeModel);
+      this.modelCache = withConfiguredDefault(discovered.map(mapClaudeModel), this.configuredModel());
       return this.modelCache;
     } catch (err) {
       log.fail('agent', err, { backend: 'claude-agent', phase: 'supportedModels' });
-      return STATIC_MODELS;
+      return withConfiguredDefault(STATIC_MODELS, this.configuredModel());
     } finally {
       abortController.abort();
       query?.close();
@@ -381,19 +411,13 @@ export class ClaudeAgentBackend implements AgentBackend {
     const query = sdk.query({
       prompt: opts.prompt,
       options: {
-        cwd: opts.cwd,
+        ...helperQueryOptions(opts.cwd),
         model: opts.model,
         // Pass through verbatim. If a stale configuration names an effort the
         // installed SDK rejects, that error must reach the coordinator; never
         // downgrade or substitute behind the administrator's back.
         effort: opts.effort as EffortLevel,
         abortController,
-        persistSession: false,
-        maxTurns: 1,
-        tools: [],
-        skills: [],
-        mcpServers: {},
-        settingSources: [],
         outputFormat: { type: 'json_schema', schema: TITLE_OUTPUT_SCHEMA },
       },
     });
@@ -459,6 +483,30 @@ function mapClaudeModel(model: ClaudeModelInfo, index: number): ModelInfo {
     isDefault: index === 0,
     hidden: false,
   };
+}
+
+/**
+ * Make the model Claude Code is configured to start on (see
+ * {@link readConfiguredClaudeModel}) the list's default and put it first, adding a
+ * row when the list lacks it (the SDK lists an ANTHROPIC_MODEL as "Custom model",
+ * the static fallback does not). Without one the list is returned unchanged, so a
+ * plain Claude login keeps the SDK's leading "default" row.
+ */
+export function withConfiguredDefault(models: ModelInfo[], configured: string | undefined): ModelInfo[] {
+  if (!configured) return models;
+  const hit = models.find((m) => m.id === configured);
+  const row: ModelInfo = hit
+    ? { ...hit, isDefault: true, hidden: false }
+    : {
+        id: configured,
+        displayName: configured,
+        description: '来自 Claude 设置',
+        supportedEfforts: EFFORTS,
+        defaultEffort: 'high',
+        isDefault: true,
+        hidden: false,
+      };
+  return [row, ...models.filter((m) => m !== hit).map((m) => ({ ...m, isDefault: false }))];
 }
 
 /** Failure-only fallback when SDK model discovery cannot initialize. Successful

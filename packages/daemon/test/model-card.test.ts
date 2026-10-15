@@ -6,7 +6,8 @@ import type { ModelInfo } from '../src/agent/types';
 //  - effort 下拉只在当前模型真有 supportedEfforts 时出现（修旧版「空 effort 回退假
 //    low/medium/high」→ 没有 effort 档的模型显示点了没用的 effort 下拉）。
 //  - 模型下拉只在有多个可见模型时出现。
-//  - 都不可调（单模型 + 无 effort）→ 信息卡 + 明确「不支持在此切换」。
+//  - 都不可调（单模型 + 无 effort）→ 只显示当前模型。
+//  - 总有「手填模型 ID」表单（3.11）；当前模型是手填的时，effort 给后端协议的全部档位。
 // 这些都是按 ModelInfo 能力派生的通用分支，用 codex 形态的 fixture 覆盖（codex 是
 // 现在唯一后端，但同一张卡仍按能力自适应）。
 
@@ -72,12 +73,30 @@ describe('buildModelCard · 按当前模型能力自适应', () => {
     expect(j).toContain('不调节推理强度'); // 给出说明
   });
 
-  it('单模型，无 effort → 无任何下拉，信息卡 + 不支持说明', () => {
+  it('单模型，无 effort → 无下拉，当前模型以文字呈现，仍可手填', () => {
     const j = json(state(singleNoEffort, 'only'));
     expect(j).not.toContain('model.set');
     expect(j).not.toContain('model.effort');
     expect(j).toContain('唯一模型'); // 当前模型以文字呈现
-    expect(j).toContain('不支持在此切换'); // 明确说明
+    expect(j).toContain('model.custom'); // 手填表单
+  });
+
+  it('每种形态都有手填表单，输入框限 200 字', () => {
+    for (const [models, cur] of [[codex, 'gpt-5.6-sol'], [multiNoEffort, 'm1'], [singleNoEffort, 'only']] as const) {
+      const card = buildModelCard(state([...models], cur));
+      const form = JSON.stringify(card).match(/"name":"model_custom".*?"max_length":(\d+)/);
+      expect(form?.[1]).toBe('200');
+    }
+  });
+
+  it('当前模型是手填的 → 写明（手填）、输入框预填、effort 给协议档位', () => {
+    const s = { ...state(codex, 'deepseek-chat'), backend: 'claude-agent' };
+    const j = json(s);
+    expect(j).toContain('`deepseek-chat`（手填）');
+    expect(j).toContain('"default_value":"deepseek-chat"');
+    expect(j).toContain('model.effort');
+    expect(j).toContain('effort：最高'); // claude 协议有 max
+    expect(j).not.toContain('effort：超强'); // 没有 ultra
   });
 
   it('hidden 模型不计入「是否多模型」', () => {

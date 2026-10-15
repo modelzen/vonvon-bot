@@ -19,6 +19,8 @@ const selection = z.discriminatedUnion("kind", [
       kind: z.literal("explicit"),
       model: z.string().trim().min(1).max(1000),
       effort,
+      /** a hand-typed id, not checked against the model list (product.md 3.11) */
+      custom: z.boolean().optional(),
     })
     .strict(),
 ]);
