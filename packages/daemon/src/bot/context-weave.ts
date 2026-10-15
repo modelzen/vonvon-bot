@@ -187,6 +187,9 @@ export interface ThreadPull {
   ok: boolean;
   /** true when paging reached `stopAt` or the start; false when it stopped at the page cap or after `enough`. */
   complete: boolean;
+  /** Main area only: this bot's own messages a topic hangs under, left out of
+   * `messages`. Another bot's topic under one sends this bot no event (s14c). */
+  ownRoots?: ContextMessage[];
 }
 
 /** What a pull collects (see {@link fetchThreadContext}). */
@@ -246,8 +249,23 @@ interface Container {
 async function pullContext(channel: LarkChannel, c: Container, opts: PullOpts): Promise<ThreadPull> {
   const stopAt = opts.stopAt ?? 0;
   const found: ContextMessage[] = [];
+  const ownRoots: ContextMessage[] = [];
+  /** Each listed message's topic, and the main-area messages whose root_id is another message (see below). */
+  const threadOf = new Map<string, string>();
+  const held: { m: ContextMessage; own: boolean; rootId: string }[] = [];
+  const take = (m: ContextMessage, own: boolean): void => {
+    if (!own) {
+      if (m.text.trim().length > 0) found.push(m);
+    } else if (c.type === 'chat' && m.threadId) {
+      ownRoots.push(m);
+    }
+  };
   function done(complete: boolean): ThreadPull {
-    return { messages: found.sort((a, b) => a.createTime - b.createTime), ok: true, complete };
+    for (const h of held.splice(0)) if (threadOf.get(h.rootId) !== h.m.threadId) take(h.m, h.own);
+    const byTime = (a: ContextMessage, b: ContextMessage): number => a.createTime - b.createTime;
+    const pull: ThreadPull = { messages: found.sort(byTime), ok: true, complete };
+    if (ownRoots.length) pull.ownRoots = ownRoots.sort(byTime);
+    return pull;
   }
   const window: { start_time?: string; end_time?: string } = {};
   if (c.type === 'chat' && stopAt > 0) window.start_time = String(Math.floor(stopAt / 1000));
@@ -292,17 +310,23 @@ async function pullContext(channel: LarkChannel, c: Container, opts: PullOpts): 
         const m = toContextMessage(it, me, opts.names);
         if (m.createTime > 0) oldest = Math.min(oldest, m.createTime);
         const kind = kindOf(it.sender, me);
+        if (it.thread_id) threadOf.set(m.messageId, it.thread_id);
         if (
-          !it.deleted &&
-          kind !== undefined && // drop system notices
-          (kind !== 'self' || opts.keepSelf || m.messageId === opts.keepId) && // the bot's own replies (see above)
-          !(c.type === 'chat' && it.thread_id && it.root_id && it.root_id !== it.message_id) && // a topic reply
-          m.messageId !== opts.excludeMessageId && // drop the triggering @ message
-          (!opts.before || m.createTime <= opts.before) && // the trigger's own ms too: the watermark covers it
-          m.text.trim().length > 0
-        ) {
-          found.push(m);
+          it.deleted ||
+          kind === undefined || // drop system notices
+          m.messageId === opts.excludeMessageId || // drop the triggering @ message
+          (opts.before && m.createTime > opts.before) // the trigger's own ms too: the watermark covers it
+        ) continue;
+        const own = kind === 'self' && !opts.keepSelf && m.messageId !== opts.keepId; // the bot's own replies (see above)
+        if (c.type === 'chat' && it.thread_id && it.root_id && it.root_id !== it.message_id) {
+          // A topic reply, which the chat container should not list, or a reply that a
+          // topic was opened under later: its root_id stays the message it replied to.
+          // It is a topic reply only when that root is listed in the same topic (s14c).
+          held.push({ m, own, rootId: it.root_id });
+          continue;
         }
+        // The bot's own messages are left out; one a topic hangs under is handed back apart (s14c).
+        take(m, own);
       }
       if (!data?.has_more || !data.page_token || items.length === 0) return done(true);
       if (stopAt > 0 && oldest <= stopAt) return done(true);
@@ -745,6 +769,8 @@ export interface RecordBlock {
   moreTopics?: number;
   /** The recent topics, as the block's last lines. */
   table?: TopicRow[];
+  /** Not woven, only for the 引用行 to say whose message a topic hangs under (`ThreadPull.ownRoots`). */
+  refs?: ContextMessage[];
 }
 
 /**
@@ -773,7 +799,7 @@ export interface RecordBlock {
 export function weaveRecordBlock(text: string, block: RecordBlock): string {
   const { opening, now } = block;
   const quotes = block.quotes ?? [];
-  const all = [...block.entries, ...(opening?.main ?? [])];
+  const all = [...block.entries, ...(opening?.main ?? []), ...(block.refs ?? [])];
   const more = block.moreTopics && quotes.length ? [`（还有 ${block.moreTopics} 个话题没列，需要时用 vonvon 飞书 skill 列）`] : [];
   const own = sectionLines(block.entries, opening ? [] : quotes, all, now, block.rootId, earlierNote(block.earlier));
   const lines = opening ? own : [...more, ...own];
