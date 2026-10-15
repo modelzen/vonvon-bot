@@ -150,6 +150,7 @@ describe('desktop IPC boundary', () => {
     ...['Bearer abcdefghijkl', 'Basic dXNlcjpwYXNz', 'Token abcdefgh12345678', 'Digest username="bob", response="deadbeef"']
       .map(value => [`an Authorization value under ${value.split(' ')[0]}`, `Authorization: ${value}`, 'Authorization: …']),
     ['authorization= under any scheme', 'headers: {authorization=Token abcdefgh}', 'headers: {authorization=…'],
+    ['a quoted Authorization key with an unquoted value', '{"authorization": Token abc12345}', '{"authorization": …'],
     ['a long quoted value with spaces', `secret: "${'a'.repeat(260)} leaked words" end`, 'secret: "…" end'],
     ['base64 and base64url after Basic', 'Basic dXNlcjpwYXNz; Basic YTpi; Basic dXNlcjpw-Xz', 'Basic …; Basic …; Basic …'],
     ['a short token after Bearer', 'then Bearer abcdefghijkl rejected', 'then Bearer … rejected'],

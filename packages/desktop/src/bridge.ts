@@ -44,7 +44,7 @@ const quotedSecret = new RegExp(String.raw`${secretKey}(["']?\s*[:=]\s*)(["'])(?
 const assignedSecret = new RegExp(String.raw`${secretKey}(["']?\s*=\s*["']?|["']\s*:\s*["']?|\s*:\s*["'])${authScheme}[^\s"',;&)}\]]+`, 'gi');
 /** An unquoted `Authorization:` or `authorization=` value is a credential under any scheme (Token, Digest, …), so
  * the rest of the text goes, up to 256 characters. A quoted one was already cut at its closing quote by {@link quotedSecret}. */
-const authorizationValue = /\b(authorization)(\s*[:=]\s*)(?![\s"'])[^\r\n]{1,256}/gi;
+const authorizationValue = /\b(authorization)(["']?\s*[:=]\s*)(?![\s"'])[^\r\n]{1,256}/gi;
 /** Unquoted `key: value` is also prose ("Invalid token: expired"), so only a credential-shaped value goes. */
 const labelledSecret = new RegExp(String.raw`${secretKey}(\s*:\s*)${authScheme}${credential}`, 'gi');
 /** Any 8+ character word after Bearer goes: "Bearer authentication failed" loses a word, a short token does not leak. */
