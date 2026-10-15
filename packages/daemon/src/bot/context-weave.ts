@@ -2,6 +2,7 @@ import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { log } from '../core/logger';
 import { labelScope } from '../config/scopes';
 import { scopeDenial, type FeishuErrorBody } from '../utils/feishu-error';
+import type { NameBook } from './names';
 
 /**
  * Inbound CONTEXT weaving — give codex the上下文 a Feishu @ alone doesn't carry.
@@ -39,13 +40,12 @@ import { scopeDenial, type FeishuErrorBody } from '../utils/feishu-error';
 const QUOTE_MAX = 800;
 /** Max chars per thread-history line (collapsed to a single line each). */
 const LINE_MAX = 280;
-/** Max thread messages woven (most-recent kept). */
-const THREAD_WEAVE_MAX = 20;
-/** How many thread messages to PULL (one page, newest-first) before filtering —
- * bot/system/empty messages drop out, so pull extra headroom over THREAD_WEAVE_MAX.
- * 50 is the Feishu page_size ceiling; older messages beyond it are intentionally
- * dropped (we only want recent context) and the truncation is logged. */
+/** Max thread messages woven (most-recent kept, see {@link keepRecent}). */
+export const THREAD_WEAVE_MAX = 20;
+/** Feishu's page_size ceiling for one newest-first page of a topic. */
 const THREAD_PAGE_SIZE = 50;
+/** Pages pulled at most per turn (500 messages); the rest is logged as cut. */
+const THREAD_PAGE_CAP = 10;
 
 /** The scope this app requests for reading chat history with its own identity (config/scopes.ts). */
 const HISTORY_SCOPE = 'im:message:readonly';
@@ -53,7 +53,7 @@ const HISTORY_SCOPE = 'im:message:readonly';
 /** A message pulled for context (the quoted message, or one thread-history entry). */
 export interface ContextMessage {
   messageId: string;
-  /** Best-effort display name (sender_name, else `用户<id尾4>`, else 某人). */
+  /** Best-effort display name (sender_name, else the name book's, else `用户<id尾4>`, else 某人). */
   senderName: string;
   /** Plain text extracted from the message body (NOT yet sanitized). */
   text: string;
@@ -69,9 +69,25 @@ interface RawMsgItem {
   msg_type?: string;
   create_time?: string;
   deleted?: boolean;
-  sender?: { id?: string; sender_type?: string; sender_name?: string };
+  /** `sender_name` and `open_bot_id` come only `with_sender_name` (e10). */
+  sender?: { id?: string; id_type?: string; sender_type?: string; sender_name?: string; open_bot_id?: string };
   body?: { content?: string };
-  mentions?: { key?: string; name?: string }[];
+  mentions?: { key?: string; id?: string; id_type?: string; name?: string }[];
+}
+
+/** Remember every name a pulled item carries: its sender (a bot by its
+ * `open_bot_id`, which matches the open_id in event mentions) and its @mentions. */
+function learnNames(names: NameBook | undefined, item: RawMsgItem): void {
+  if (!names) return;
+  const s = item.sender;
+  if (s?.sender_type === 'user' && isOpenId(s.id_type)) names.remember(s.id, s.sender_name);
+  else if (s?.open_bot_id) names.remember(s.open_bot_id, s.sender_name);
+  for (const m of item.mentions ?? []) if (isOpenId(m.id_type)) names.remember(m.id, m.name);
+}
+
+/** An item's id is an open_id unless it says otherwise. */
+function isOpenId(idType: string | undefined): boolean {
+  return (idType ?? 'open_id') === 'open_id';
 }
 
 // ── pulling ──────────────────────────────────────────────────────────────
@@ -83,13 +99,18 @@ interface RawMsgItem {
 export async function fetchQuotedMessage(
   channel: LarkChannel,
   messageId: string,
+  names?: NameBook,
 ): Promise<ContextMessage | undefined> {
   try {
-    const res = await channel.rawClient.im.v1.message.get({ path: { message_id: messageId } });
+    const res = await channel.rawClient.im.v1.message.get({
+      path: { message_id: messageId },
+      params: { with_sender_name: true },
+    });
     const items = (res.data as { items?: RawMsgItem[] } | undefined)?.items ?? [];
     const item = items[0];
     if (!item || item.deleted) return undefined;
-    const cm = toContextMessage(item);
+    learnNames(names, item);
+    const cm = toContextMessage(item, names);
     return cm.text.trim() ? cm : undefined;
   } catch (err) {
     log.warn('intake', 'quote-fetch-failed', { messageId, err: String(err) });
@@ -97,58 +118,100 @@ export async function fetchQuotedMessage(
   }
 }
 
+/** One topic pull: the human messages found, oldest→newest. */
+export interface ThreadPull {
+  messages: ContextMessage[];
+  /** false when a page failed (messages is then empty): the watermark must not move. */
+  ok: boolean;
+  /** true when paging reached `stopAt` or the topic's start; false when it stopped at the page cap or after `enough`. */
+  complete: boolean;
+}
+
 /**
- * Pull the human messages in a topic the bot hasn't fed to codex yet.
- *   - `sinceTime === 0` (fresh session): return the most-recent N人对人 messages
- *     as opening context.
- *   - `sinceTime > 0` (existing session): return only messages newer than that —
- *     the chatter that happened between bot turns (codex already has the rest).
- * Bot/app/system messages and the triggering @ message are filtered out. Returns
- * [] on any failure (best-effort). Result is oldest→newest.
+ * Page through a topic newest-first (`with_sender_name`, so people and bots
+ * come with real names) and collect the human messages:
+ *   - `stopAt`: the session's watermark. Paging stops at the first page that
+ *     reaches it; 0 means none (a fresh session's opening).
+ *   - `enough`: also stop once this many are found (for an opening, where
+ *     only the most recent ones are woven).
+ *   - `before`: only messages older than this (the trigger's createTime), so a
+ *     message that arrives as its own turn later is not woven twice.
+ * Bot/app/system, deleted, empty and `excludeMessageId` messages are dropped,
+ * except `keepId` (the topic's first message, kept even when a bot sent it).
+ * Filtering by what the session has already seen is the caller's job
+ * (session-store.isSeen). Never throws: a failure logs and returns `ok: false`.
  */
 export async function fetchThreadContext(
   channel: LarkChannel,
   threadId: string,
-  opts: { sinceTime?: number; excludeMessageId?: string; limit?: number } = {},
-): Promise<ContextMessage[]> {
-  const limit = opts.limit ?? THREAD_WEAVE_MAX;
-  const since = opts.sinceTime ?? 0;
+  opts: { stopAt?: number; enough?: number; before?: number; excludeMessageId?: string; keepId?: string; names?: NameBook } = {},
+): Promise<ThreadPull> {
+  const stopAt = opts.stopAt ?? 0;
+  const found: ContextMessage[] = [];
+  function done(complete: boolean): ThreadPull {
+    return { messages: found.sort((a, b) => a.createTime - b.createTime), ok: true, complete };
+  }
+  let pageToken: string | undefined;
   try {
-    const res = await channel.rawClient.im.v1.message.list({
-      params: {
-        container_id_type: 'thread',
-        container_id: threadId,
-        sort_type: 'ByCreateTimeDesc',
-        page_size: THREAD_PAGE_SIZE,
-      },
-    });
-    // The SDK only throws on HTTP errors; a 200 with a non-zero code is a failure too.
-    if (typeof res.code === 'number' && res.code !== 0) {
-      warnThreadContextFailed(threadId, res);
-      return [];
-    }
-    const items = (res.data as { items?: RawMsgItem[] } | undefined)?.items ?? [];
-    const picked = items
-      .filter((it) => !it.deleted)
-      .map(toContextMessage)
-      .filter(
-        (m) =>
-          m.fromUser && // drop the bot's own replies, other apps, system notices
+    for (let page = 0; page < THREAD_PAGE_CAP; page++) {
+      const res = await channel.rawClient.im.v1.message.list({
+        params: {
+          container_id_type: 'thread',
+          container_id: threadId,
+          sort_type: 'ByCreateTimeDesc',
+          page_size: THREAD_PAGE_SIZE,
+          with_sender_name: true,
+          ...(pageToken ? { page_token: pageToken } : {}),
+        },
+      });
+      // The SDK only throws on HTTP errors; a 200 with a non-zero code is a failure too.
+      if (typeof res.code === 'number' && res.code !== 0) {
+        warnThreadContextFailed(threadId, res);
+        return failedPull();
+      }
+      const data = res.data as { items?: RawMsgItem[]; has_more?: boolean; page_token?: string } | undefined;
+      const items = data?.items ?? [];
+      let oldest = Infinity;
+      for (const it of items) {
+        learnNames(opts.names, it);
+        const m = toContextMessage(it, opts.names);
+        if (m.createTime > 0) oldest = Math.min(oldest, m.createTime);
+        if (
+          !it.deleted &&
+          (m.fromUser || m.messageId === opts.keepId) && // drop the bot's own replies, other apps, system notices
           m.messageId !== opts.excludeMessageId && // drop the triggering @ message
-          (since === 0 || m.createTime > since) && // delta only for existing sessions
-          m.text.trim().length > 0,
-      );
-    // `list` returned newest-first; weave oldest→newest, keeping the most recent `limit`.
-    picked.sort((a, b) => a.createTime - b.createTime);
-    const out = picked.slice(-limit);
-    if (picked.length > out.length) {
-      log.info('intake', 'thread-context-truncated', { threadId, kept: out.length, total: picked.length });
+          (!opts.before || m.createTime < opts.before) &&
+          m.text.trim().length > 0
+        ) {
+          found.push(m);
+        }
+      }
+      if (!data?.has_more || !data.page_token || items.length === 0) return done(true);
+      if (stopAt > 0 && oldest <= stopAt) return done(true);
+      if (opts.enough && found.length >= opts.enough) return done(false);
+      pageToken = data.page_token;
     }
-    return out;
+    log.info('intake', 'thread-context-page-cap', { threadId, pages: THREAD_PAGE_CAP, found: found.length });
+    return done(false);
   } catch (err) {
     warnThreadContextFailed(threadId, err);
-    return [];
+    return failedPull();
   }
+}
+
+function failedPull(): ThreadPull {
+  return { messages: [], ok: false, complete: false };
+}
+
+/** The most recent `limit` messages to weave (oldest→newest in, same order
+ * out), always keeping `pinId` (a topic's first message) when present. */
+export function keepRecent(msgs: ContextMessage[], pinId?: string, limit = THREAD_WEAVE_MAX): ContextMessage[] {
+  if (msgs.length <= limit) return msgs;
+  const pinned = pinId ? msgs.find((m) => m.messageId === pinId) : undefined;
+  const rest = msgs.filter((m) => m !== pinned);
+  const out = pinned ? [pinned, ...rest.slice(-(limit - 1))] : rest.slice(-limit);
+  log.info('intake', 'thread-context-truncated', { kept: out.length, total: msgs.length });
+  return out;
 }
 
 /**
@@ -181,24 +244,9 @@ function warnThreadContextFailed(threadId: string, failure: unknown): void {
   log.warn('intake', 'thread-context-failed', { threadId, err });
 }
 
-/**
- * Narrow a speculatively-pulled FULL history (`sinceTime: 0`) down to the delta
- * an existing session needs — byte-for-byte equivalent to having called
- * {@link fetchThreadContext} with `sinceTime` directly. The equivalence holds
- * because the API pull is identical for every sinceTime (one newest-first page;
- * sinceTime is purely a local filter) and watermark survivors are always the
- * newest messages, so they can never be evicted by the most-recent-`limit`
- * slice in favor of older ones. This is what lets the intake path pull 话题上文
- * in parallel with resolveThread instead of waiting for its codexEmpty answer.
- */
-export function filterHistorySince(msgs: ContextMessage[], sinceTime: number): ContextMessage[] {
-  if (sinceTime <= 0) return msgs;
-  return msgs.filter((m) => m.createTime > sinceTime);
-}
-
-function toContextMessage(item: RawMsgItem): ContextMessage {
+function toContextMessage(item: RawMsgItem, names?: NameBook): ContextMessage {
   const id = item.sender?.id ?? '';
-  const name = item.sender?.sender_name || (id ? `用户${id.slice(-4)}` : '某人');
+  const name = item.sender?.sender_name || names?.peek(id) || (id ? `用户${id.slice(-4)}` : '某人');
   return {
     messageId: item.message_id ?? '',
     senderName: name,
@@ -471,6 +519,9 @@ export function weaveThreadHistory(text: string, msgs: ContextMessage[]): string
 
 /** Max chars for the woven sender display name (matches the per-line history clamp). */
 const SENDER_NAME_MAX = 40;
+/** A message received this long after it was sent says so in its sender block:
+ * Feishu re-pushes messages sent while the bot was offline about 5 minutes late (e10). */
+const LATE_NOTE_MS = 2 * 60_000;
 
 /**
  * Prepend a fenced "发信人" block so codex knows WHO sent THIS turn. Feishu's
@@ -483,10 +534,16 @@ const SENDER_NAME_MAX = 40;
  * uploader-influenced, so oneLine=true collapses it so a crafted name can't
  * forge a fenced block (mirrors weaveQuote / weaveThreadHistory).
  */
-export function weaveSender(text: string, sender: { senderId?: string; senderName?: string }): string {
+export function weaveSender(
+  text: string,
+  sender: { senderId?: string; senderName?: string },
+  lateMs = 0,
+): string {
   const id = (sender.senderId ?? '').trim();
   if (!id) return text;
   const who = sanitizeContext(sender.senderName ?? '', SENDER_NAME_MAX, true) || '某用户';
-  const block = `[本条消息的发信人：${who}（open_id：${id}）]`;
+  // Inside the block (still ending in "）]") so session-title strips it with the block.
+  const late = lateMs > LATE_NOTE_MS ? `（这条消息 ${Math.round(lateMs / 60_000)} 分钟前发出，bot 断线重连后才收到）` : '';
+  const block = `[本条消息的发信人：${who}（open_id：${id}）${late}]`;
   return prependBlock(block, text);
 }

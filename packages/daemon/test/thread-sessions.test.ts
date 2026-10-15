@@ -9,7 +9,11 @@ const fake = vi.hoisted(() => ({
   final: vi.fn(async () => true),
   createCard: vi.fn(async () => 'card'),
   send: vi.fn(async () => ({})),
-  history: vi.fn(async () => [] as unknown[]),
+  history: vi.fn(async (..._args: unknown[]) => ({ messages: [] as unknown[], ok: true, complete: true })),
+  get: vi.fn(async ({ path }: { path: { message_id: string } }) => ({ data: { items: [{
+    message_id: path.message_id, thread_id: 'omt_new', msg_type: 'text', create_time: '1',
+    sender: { id: 'ou_q', sender_type: 'user', sender_name: '王五' }, body: { content: JSON.stringify({ text: `${path.message_id} 的原话` }) },
+  }] } })),
   log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() },
 }));
 vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_ctx: unknown, fn: () => unknown) => fn() }));
@@ -25,7 +29,10 @@ vi.mock('../src/bot/context-weave', async (original) => ({
 vi.mock('../src/bot/session-store', async (original) => ({
   ...await original<object>(),
   getSession: async (key: string) => fake.records.get(key),
-  patchSession: async (key: string, patch: object) => { const r = fake.records.get(key); if (r) Object.assign(r, patch); },
+  patchSession: async (key: string, patch: object | ((r: object) => object)) => {
+    const r = fake.records.get(key);
+    if (r) Object.assign(r, typeof patch === 'function' ? patch({ ...r }) : patch);
+  },
   upsertSession: async (record: { threadId: string }) => { fake.records.set(record.threadId, record); },
 }));
 vi.mock('../src/bot/session-title-coordinator', () => ({
@@ -70,13 +77,13 @@ function thread(sessionId: string) {
 }
 let orchestrator: ReturnType<typeof createOrchestrator>;
 let seq = 0;
-function message(text: string, threadId?: string): NormalizedMessage {
+function message(text: string, threadId?: string, extra: Partial<NormalizedMessage> = {}): NormalizedMessage {
   return { messageId: `msg-${++seq}`, chatId: 'chat', chatType: 'group', ...(threadId ? { threadId } : {}),
-    content: text, senderId: 'owner', senderName: 'Owner', mentionedBot: true, createTime: Date.now(), rawContentType: 'text', resources: [], mentions: [], mentionAll: false };
+    content: text, senderId: 'owner', senderName: 'Owner', mentionedBot: true, createTime: Date.now(), rawContentType: 'text', resources: [], mentions: [], mentionAll: false, ...extra };
 }
 function setup() {
   const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner' } } };
-  const channel = { send: fake.send, rawClient: { im: { v1: { messageReaction: {
+  const channel = { send: fake.send, rawClient: { im: { v1: { message: { get: fake.get }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
   orchestrator = createOrchestrator(channel as never, cfg, '/test');
@@ -94,7 +101,7 @@ beforeEach(() => {
   fake.final.mockReset().mockResolvedValue(true);
   fake.createCard.mockReset().mockResolvedValue('card');
   fake.send.mockReset().mockResolvedValue({});
-  fake.history.mockReset().mockResolvedValue([]);
+  fake.history.mockReset().mockResolvedValue({ messages: [], ok: true, complete: true });
   fake.backend.resumeThread.mockReset();
   fake.backend.startThread.mockReset();
 });
@@ -209,5 +216,155 @@ describe('forced session change notice', () => {
     expect(sessionChangeNotice('cwd-changed', false)).toContain('工作目录改了');
     expect(sessionChangeNotice('resume-failed', false)).not.toContain('话题');
     expect(sessionChangeNotice('resume-failed', true)).toContain('话题里最近的消息已重新带上');
+  });
+});
+
+describe('names and watermark (s09)', () => {
+  const quoted = (id: string) => fake.get.mock.calls.some(([p]) => p.path.message_id === id);
+  const ctx = (messageId: string, text: string, createTime: number) => ({ messageId, senderName: '李四', text, fromUser: true, createTime });
+
+  it('does not re-quote the topic root on a later turn, but keeps a reply quote in the main area', async () => {
+    fake.records.set('omt_topic', record('omt_topic'));
+    fake.records.set('chat', record('chat'));
+    const run = thread('old');
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup();
+    await o.onMessage(message('in the topic', 'omt_topic', { rootId: 'om_root', replyToMessageId: 'om_root' }));
+    await done();
+    expect(quoted('om_root')).toBe(false);
+    expect(run.consumed[0]!.text).not.toContain('用户引用了一条消息');
+    fake.log.info.mockClear();
+    await o.onMessage(message('replying', undefined, { rootId: 'om_x', replyToMessageId: 'om_x' }));
+    await done();
+    expect(run.consumed[1]!.text).toContain('[用户引用了一条消息（来自 王五）：\nom_x 的原话\n]');
+  });
+
+  it('quotes a reply to another message inside the topic', async () => {
+    fake.records.set('omt_topic', record('omt_topic'));
+    const run = thread('old');
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup();
+    await o.onMessage(message('this one', 'omt_topic', { rootId: 'om_root', replyToMessageId: 'om_t1' }));
+    await done();
+    expect(run.consumed[0]!.text).toContain('om_t1 的原话');
+  });
+
+  it("gives a new topic session the topic's first message once, when the listing leaves it out", async () => {
+    const run = thread('topic-session');
+    fake.backend.startThread.mockResolvedValue(run.t);
+    const o = setup();
+    await o.onMessage(message('first time here', 'omt_topic', { rootId: 'om_root', replyToMessageId: 'om_root' }));
+    await done();
+    expect(run.consumed[0]!.text).toContain('[话题中在此之前已有的消息');
+    expect(run.consumed[0]!.text).toContain('王五：om_root 的原话');
+    expect(run.consumed[0]!.text).not.toContain('用户引用了一条消息');
+  });
+
+  it('writes the watermark when the bot opens a topic, so its next turn catches up the chatter', async () => {
+    fake.project = { name: 'test', chatId: 'chat', cwd: '/test', kind: 'multi' };
+    const run = thread('opened');
+    fake.backend.startThread.mockResolvedValue(run.t);
+    const o = setup();
+    const opener = message('open a topic');
+    await o.onMessage(opener);
+    await done();
+    expect(fake.records.get('omt_new')).toMatchObject({ lastSeenAt: opener.createTime, seen: [{ id: opener.messageId, at: opener.createTime }] });
+    fake.log.info.mockClear();
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    fake.history.mockResolvedValueOnce({ ok: true, complete: true, messages: [ctx('om_chat', '中间别人说的', opener.createTime + 1)] });
+    await o.onMessage(message('@bot 接着说', 'omt_new', { rootId: opener.messageId, replyToMessageId: opener.messageId }));
+    await done();
+    expect(fake.history).toHaveBeenLastCalledWith(expect.anything(), 'omt_new', expect.objectContaining({ stopAt: opener.createTime }));
+    expect(run.consumed.at(-1)!.text).toContain('李四：中间别人说的');
+  });
+
+  it('does not move the watermark when the back-fill fails', async () => {
+    fake.records.set('omt_topic', record('omt_topic', { lastSeenAt: 5 }));
+    const run = thread('old');
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    fake.history.mockResolvedValueOnce({ ok: false, complete: false, messages: [] });
+    const o = setup();
+    const m = message('pull fails', 'omt_topic');
+    await o.onMessage(m);
+    await done();
+    await vi.waitFor(() => expect(fake.records.get('omt_topic').seen).toEqual([{ id: m.messageId, at: m.createTime }]));
+    expect(fake.records.get('omt_topic').lastSeenAt).toBe(5);
+  });
+
+  it('skips a late re-push the session already took in, and says when a late one is answered', async () => {
+    const now = Date.now();
+    fake.records.set('omt_topic', record('omt_topic', { lastSeenAt: now - 60_000 }));
+    const run = thread('old');
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup();
+    await o.onMessage(message('sent while offline', 'omt_topic', { createTime: now - 5 * 60_000 }));
+    expect(fake.log.info).toHaveBeenCalledWith('intake', 'late-redelivery-skipped', expect.objectContaining({ msgId: `msg-${seq}` }));
+    expect(fake.backend.resumeThread).not.toHaveBeenCalled();
+    fake.records.set('omt_topic', record('omt_topic', { lastSeenAt: now - 10 * 60_000 }));
+    await o.onMessage(message('never seen', 'omt_topic', { createTime: now - 5 * 60_000 }));
+    await done();
+    expect(run.consumed[0]!.text).toContain('（这条消息 5 分钟前发出，bot 断线重连后才收到）');
+  });
+
+  /** A thread whose first turn/start the host rejects (no turn_started). */
+  function rejectingFirstTurn(run: ReturnType<typeof thread>) {
+    return { ...run.t, runStreamed(input: AgentInput) {
+      run.consumed.push(input);
+      return { turnId: () => undefined, events: (async function* (): AsyncGenerator<AgentEvent> {
+        yield { type: 'error', message: 'turn/start rejected', willRetry: false };
+      })() };
+    } };
+  }
+
+  it('moves the watermark only once the host accepts the turn, so a re-push after a restart is answered', async () => {
+    const now = Date.now();
+    fake.records.set('omt_topic', record('omt_topic', { lastSeenAt: 5 }));
+    const run = thread('old');
+    fake.backend.resumeThread.mockResolvedValueOnce(rejectingFirstTurn(run)).mockResolvedValue(run.t);
+    fake.history.mockResolvedValue({ ok: true, complete: true, messages: [ctx('om_h', '补拉的那句', now - 6 * 60_000)] });
+    const o = setup();
+    const trigger = message('the trigger', 'omt_topic', { createTime: now - 5 * 60_000 });
+    await o.onMessage(trigger);
+    await done();
+    expect(run.consumed[0]!.text).toContain('李四：补拉的那句');
+    expect(fake.records.get('omt_topic').lastSeenAt).toBe(5);
+    expect(fake.records.get('omt_topic').seen ?? []).toEqual([]);
+    // The daemon restarts (the in-memory dedup is gone) and Feishu re-pushes the trigger.
+    await o.shutdown();
+    fake.log.info.mockClear();
+    const again = setup();
+    await again.onMessage(trigger);
+    await done();
+    expect(fake.log.info).not.toHaveBeenCalledWith('intake', 'late-redelivery-skipped', expect.anything());
+    expect(run.consumed[1]!.text).toContain('李四：补拉的那句');
+    await vi.waitFor(() => expect(fake.records.get('omt_topic').lastSeenAt).toBe(trigger.createTime));
+  });
+
+  it('starts a new topic session with nothing seen until its first turn is accepted', async () => {
+    const run = thread('topic-session');
+    const ok = thread('other-session');
+    fake.backend.startThread.mockResolvedValueOnce(rejectingFirstTurn(run)).mockResolvedValue(ok.t);
+    const o = setup();
+    await o.onMessage(message('first time here', 'omt_topic'));
+    await done();
+    expect(fake.records.get('omt_topic')).toMatchObject({ lastSeenAt: 0, seen: [] });
+    fake.log.info.mockClear();
+    const accepted = message('in another topic', 'omt_other');
+    await o.onMessage(accepted);
+    await done();
+    await vi.waitFor(() => expect(fake.records.get('omt_other')).toMatchObject({
+      lastSeenAt: accepted.createTime, seen: [{ id: accepted.messageId, at: accepted.createTime }],
+    }));
+  });
+
+  it('resets the watermark when the session is recreated, until the new session takes a turn', async () => {
+    fake.records.set('omt_topic', record('omt_topic', { lastSeenAt: 5, seen: [{ id: 'om_old', at: 9 }] }));
+    const fresh = thread('fresh');
+    fake.backend.resumeThread.mockRejectedValue(new Error('no rollout'));
+    fake.backend.startThread.mockResolvedValue(rejectingFirstTurn(fresh));
+    const o = setup();
+    await o.onMessage(message('again', 'omt_topic'));
+    await done();
+    expect(fake.records.get('omt_topic')).toMatchObject({ sessionId: 'fresh', lastSeenAt: 0, seen: [] });
   });
 });
