@@ -200,6 +200,17 @@ describe('diagnoseEventSubscription — 三态 + unchecked 降级', () => {
     expect(d.state).toBe('unchecked');
     expect(d.reason).toContain('ECONNRESET');
   });
+
+  it('unchecked：飞书接口卡住时 10 秒后放弃，并说清是超时', async () => {
+    let signal: AbortSignal | null | undefined;
+    const stalled = ((_url: unknown, init?: RequestInit) => {
+      signal = init?.signal;
+      return Promise.reject(new DOMException('The operation was aborted due to timeout', 'TimeoutError'));
+    }) as unknown as typeof fetch;
+    const d = await diagnoseEventSubscription('cli_x', 's', 'feishu', stalled);
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(d).toEqual({ state: 'unchecked', reason: '飞书接口 10 秒没有响应' });
+  });
 });
 
 describe('summarizeEventDiagnosis — 一行中文摘要', () => {

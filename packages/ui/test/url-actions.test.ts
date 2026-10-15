@@ -8,6 +8,9 @@ it("accepts each old main process destination for its own action", () => {
   expect(allowedExternalUrl("https://auth.openai.com/authorize", "authorization")).toBe("https://auth.openai.com/authorize");
   expect(allowedExternalUrl("https://claude.ai/verify", "verification")).toBe("https://claude.ai/verify");
   expect(allowedExternalUrl("https://open.feishu.cn/app/cli_1/event", "event-settings")).toBe("https://open.feishu.cn/app/cli_1/event");
+  expect(allowedExternalUrl("https://open.feishu.cn/app/cli_1", "app-console")).toBe("https://open.feishu.cn/app/cli_1");
+  expect(allowedExternalUrl("https://open.larksuite.com/app/cli_1/auth?q=im%3Aresource&op_from=openapi", "app-console"))
+    .toBe("https://open.larksuite.com/app/cli_1/auth?q=im%3Aresource&op_from=openapi");
   expect(allowedExternalUrl("https://github.com/modelzen/vonvon-bot/releases", "releases"))
     .toBe("https://github.com/modelzen/vonvon-bot/releases");
   expect(groupUrl("oc_a/b", "omt_topic#admin"))
@@ -45,4 +48,7 @@ it("rejects non-HTTPS, credentials, ports, host confusion, and unrelated GitHub 
   expect(allowedExternalUrl("https://auth.openai.com/authorize", "registration")).toBeNull();
   expect(allowedExternalUrl("https://github.com/modelzen/vonvon-bot/issues", "releases")).toBeNull();
   expect(allowedExternalUrl("https://open.feishu.cn/app/cli_1/other", "event-settings")).toBeNull();
+  expect(allowedExternalUrl("https://open.feishu.cn/app/cli_1/event", "app-console")).toBeNull();
+  expect(allowedExternalUrl("https://open.feishu.cn/app/", "app-console")).toBeNull();
+  expect(allowedExternalUrl("https://accounts.feishu.cn/app/cli_1", "app-console")).toBeNull();
 });

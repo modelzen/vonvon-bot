@@ -48,6 +48,7 @@ function inventory(folderToken: string) {
     ['GET register-qr/stream', 'command', { type: 'registerAgent' }],
     ['GET refresh-qr/stream', 'command', { type: 'refreshAgentCredentials', agentId: bot.appId }],
     ['GET setup-status', 'admin', { type: 'setupStatus', agentId: bot.appId }],
+    ['POST card-callback', 'admin', { type: 'confirmCardCallback', agentId: bot.appId, confirmed: true }],
     ['GET diagnosis', 'admin', { type: 'diagnosis', agentId: bot.appId }],
     ['GET daemon', 'admin', { type: 'daemonStatus' }],
     ['POST daemon/restart', 'command', { type: 'restartHost' }],

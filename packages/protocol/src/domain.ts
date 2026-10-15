@@ -124,10 +124,13 @@ export const membershipSchema = z.object({
 export type Membership = z.infer<typeof membershipSchema>;
 export const groupSchema = z.object({ id: groupIdSchema, name: z.string(), avatarDataUrl: z.string().optional() });
 export type Group = z.infer<typeof groupSchema>;
+/** Codex only: how its version compares with the minimum and the tested version. */
+export const codexCompatibilitySchema = z.object({ status: z.enum(["ok", "tooOld", "newer", "unknown"]), minimum: z.string(), verified: z.string() });
 export const toolStateSchema = z.object({
   tool: toolSchema, installation: z.enum(["missing", "installed", "unknown"]),
   authentication: z.enum(["signedOut", "signedIn", "notRequired", "unknown"]),
   version: z.string().nullable(), message: z.string().optional(),
+  compatibility: codexCompatibilitySchema.optional(),
 });
 export type ToolState = z.infer<typeof toolStateSchema>;
 const jobBase = { id: jobIdSchema, type: z.enum(["registerAgent", "installCodex", "loginCodex"]) };

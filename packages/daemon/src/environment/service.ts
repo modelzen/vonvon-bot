@@ -327,7 +327,9 @@ export class EnvironmentService {
       if (!npm) return refused("npm-missing", "未找到 npm，无法安装托管副本。托管副本要用本机的 Node.js 和 npm 来装和运行；Codex 也可以装 Codex.app 或用 Homebrew 安装。");
       signal.throwIfAborted();
       await mkdir(release, { recursive: true, mode: 0o700 });
-      const result = await this.command(npm, ["install", "--global", "--prefix", release, `${tools[tool].package}@latest`, "--no-audit", "--no-fund"], 10 * 60_000, undefined, signal);
+      // npm 11.19+ skips a global install's own postinstall unless the package is allowed;
+      // lark-cli and Claude Code both have one. Older npm ignores the flag with a warning.
+      const result = await this.command(npm, ["install", "--global", "--prefix", release, `${tools[tool].package}@latest`, `--allow-scripts=${tools[tool].package}`, "--no-audit", "--no-fund"], 10 * 60_000, undefined, signal);
       if (result.exitCode !== 0) return refused("install-failed", "工具安装失败，请检查网络连接或 npm 配置。");
       signal.throwIfAborted();
       const file = join(release, process.platform === "win32" ? "node_modules" : join("lib", "node_modules"), tools[tool].package, "package.json");

@@ -15,7 +15,7 @@ type AgentGroup = {title: string; aliases?: readonly string[]; fields: readonly 
 const item = (title: string, aliases: readonly string[] = [], options: Omit<Target, 'title' | 'aliases'> = {}): Target => ({title, aliases, ...options});
 const agentGroups: readonly AgentGroup[] = [
   {title: 'Bot 身份', fields: [item('启用 Bot', ['停用 Bot'])]},
-  {title: '连接与权限', fields: [item('应用 ID', ['App ID']), item('刷新飞书凭据', ['重新授权']), item('飞书权限与连接', ['检查连接'])]},
+  {title: '连接与权限', fields: [item('应用 ID', ['App ID']), item('首次运行清单', ['开权限', '事件订阅', '发布版本']), item('刷新飞书凭据', ['重新授权']), item('飞书权限与连接', ['检查连接'])]},
   {title: '任务卡片', aliases: ['飞书任务卡片', '卡片显示'], fields: [item('显示工具调用'), item('显示模型')]},
   {title: '运行策略', aliases: ['任务行为与提醒'], fields: [item('最大并发任务'), item('当前运行并发'), item('空闲超时（秒，0 为关闭）', ['空闲超时']), item('运行中收到新消息', ['待处理消息策略', 'steer', 'queue'])]},
   {title: '任务结束提醒', fields: [item('提醒方式'), item('长任务阈值（分钟）', ['长任务阈值'], {guide: '先将提醒方式设为「长任务」，即可调整阈值。'})]},
@@ -69,7 +69,8 @@ function expand(id: string, context: string, base: Destination, groups: readonly
 }
 export function searchEntries(snapshot: DesktopSnapshot): SearchEntry[] {
   const pages: readonly {id: string; title: string; aliases: readonly string[]; page: Page; view?: CollaborationView}[] = [
-    {id: 'agents', title: 'Bot', aliases: ['机器人', '准备执行工具', '注册 Bot', '加入飞书群并设置工作目录'], page: 'collaboration', view: 'agents'},
+    {id: 'agents', title: 'Bot', aliases: ['机器人', '注册 Bot', '加入飞书群并设置工作目录'], page: 'collaboration', view: 'agents'},
+    {id: 'setup', title: '首次运行清单', aliases: ['准备执行工具', '扫码', '开权限', '一键开权限', '事件订阅', '卡片回调', '发布版本', '长连接'], page: 'setup'},
     {id: 'groups', title: '群聊', aliases: ['飞书群', '项目', '已连接飞书群'], page: 'collaboration', view: 'groups'},
     {id: 'usage', title: 'Codex 用量', aliases: ['账号', '套餐', '限额', '活动', '热力图'], page: 'usage'},
     {id: 'coffee', title: '咖啡一下', aliases: ['Hook', '通知', '离开电脑'], page: 'coffee'},

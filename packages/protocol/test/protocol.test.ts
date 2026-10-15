@@ -28,7 +28,7 @@ describe("pinned contract extraction", () => {
   it("parses each V3 request and reply variant", () => {
     const adminRequests = [
       {type:"state"},{type:"diagnosis",agentId:"cli_fixture"},{type:"hostDoctor"},
-      {type:"setupStatus",agentId:"cli_fixture"},{type:"daemonStatus"},{type:"codexSetup"},
+      {type:"setupStatus",agentId:"cli_fixture"},{type:"confirmCardCallback",agentId:"cli_fixture",confirmed:true},{type:"daemonStatus"},{type:"codexSetup"},
       {type:"logs",maxBytes:1024},{type:"followLogs",follow:true},
       {type:"switchBackend",agentId:"cli_fixture",projectName:"p",backend:"codex-appserver"},
     ];
@@ -43,7 +43,7 @@ describe("pinned contract extraction", () => {
     for (const payload of [
       {kind:"diagnosis",bot:"cli_fixture",backends:[backend],event:{state:"ok"},eventConfigUrl:"https://example.test"},
       {kind:"hostDoctor",doctor:{node:"24",platform:"darwin",arch:"arm64",osRelease:"1",appDir:"/tmp",logsDir:"/tmp/logs",logBytes:0,version:"1",backends:[backend]}},
-      {kind:"setupStatus",status:{appId:"cli_fixture",tenant:"feishu",credentials:{ok:true},connection:{running:true},event:{state:"ok"},scopes:{grantUrl:"https://example.test"},eventConfigUrl:"https://example.test"}},
+      {kind:"setupStatus",status:{appId:"cli_fixture",tenant:"feishu",credentials:{ok:true},connection:{running:true},event:{state:"ok"},scopes:{grantUrl:"https://example.test"},eventConfigUrl:"https://example.test",consoleUrl:"https://example.test/app/cli_fixture",cardCallback:{confirmed:false}}},
       {kind:"daemonStatus",status:daemon},
       {kind:"codexSetup",setup:{installation:"installed",authentication:"signedIn",version:"1",executable:"/bin/codex"}},
       {kind:"logs",text:"x"},{kind:"following",follow:true},{kind:"applied",revision:2},

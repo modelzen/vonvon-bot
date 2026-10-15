@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { codexCompatibilitySchema } from "./domain.js";
 
 export const environmentToolSchema = z.enum(["codex", "claude", "lark-cli"]);
 export type EnvironmentTool = z.infer<typeof environmentToolSchema>;
@@ -65,8 +66,7 @@ export const environmentToolStateSchema = z.object({
   tool: environmentToolSchema, installation: z.enum(["missing", "managed", "external"]),
   executable: z.string().nullable(), version: z.string().nullable(), managedVersion: z.string().nullable(),
   latestVersion: z.string().nullable(), updateAvailable: z.boolean().nullable(), canUninstall: z.boolean(),
-  /** Codex only: how `version` compares with the minimum and the tested version. */
-  compatibility: z.object({ status: z.enum(["ok", "tooOld", "newer", "unknown"]), minimum: z.string(), verified: z.string() }).optional(),
+  compatibility: codexCompatibilitySchema.optional(),
 });
 export type EnvironmentToolState = z.infer<typeof environmentToolStateSchema>;
 const operationPurposeSchema = z.union([

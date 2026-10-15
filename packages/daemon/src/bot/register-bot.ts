@@ -90,7 +90,9 @@ export async function registerBotFromCredentials(
     return {
       ok: false,
       code: 'credential_rejected',
-      reason: `凭据校验失败：${v.reason ?? '未知原因'}。请核对 App ID / App Secret（应用可能被禁用或 Secret 已重置）。`,
+      reason: v.unreachable
+        ? `连不上飞书，凭据还没校验：${v.reason ?? '未知原因'}。请检查网络后重试。`
+        : `凭据校验失败：${v.reason ?? '未知原因'}。请核对 App ID / App Secret（应用可能被禁用或 Secret 已重置）。`,
     };
   }
 
