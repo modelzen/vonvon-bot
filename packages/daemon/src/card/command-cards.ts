@@ -1,10 +1,27 @@
+import { MODEL_ID_MAX_LENGTH } from '../agent/model-id';
 import type { ModelInfo, ReasoningEffort, ThreadSummary } from '../agent/types';
-import { actions, button, card, hr, linkButton, md, note, selectStatic, type CardElement, type CardObject } from './cards';
+import { getSessionTitleEfforts } from '../config/schema';
+import {
+  actions,
+  button,
+  card,
+  form,
+  hr,
+  input,
+  linkButton,
+  md,
+  note,
+  selectStatic,
+  submitButton,
+  type CardElement,
+  type CardObject,
+} from './cards';
 
 /** Action ids for the `/model` card. */
 export const MC = {
   model: 'model.set',
   effort: 'model.effort',
+  custom: 'model.custom',
 } as const;
 
 /** Action ids for the `/resume` card. */
@@ -42,9 +59,19 @@ export interface ModelCardState {
   /** the backend whose models this card lists（写回会话前复核，防跨后端把一个后端的
    * model id 持久化进另一后端的会话——resume 时会喂坏 CLI）。旧卡缺省。 */
   backend?: string;
+  /** where the card was posted: a hand-typed id is a form submit, which locks the
+   * card, so the result goes out as a new card in the same place. 旧卡缺省。 */
+  replyTo?: string;
+  inThread?: boolean;
   createdAt: number;
   /** transient confirmation line */
   note?: string;
+}
+
+/** A model id inside inline code. Hand-typed ids are checked by parseModelId;
+ * older stored values only lose backticks so they cannot break out. */
+export function modelIdCode(id: string): string {
+  return `\`${id.replace(/`/g, '')}\``;
 }
 
 /**
@@ -52,28 +79,33 @@ export interface ModelCardState {
  *   - 只在「当前模型真的有 supportedEfforts」时才显示 effort 下拉（没有就不显示，不
  *     回退成点了没用的假 low/medium/high）。
  *   - 只在「有多个可见模型」时才显示模型下拉（单模型用文字呈现，不给只有一项的下拉）。
- *   - 既不能切模型也不能调 effort 的后端 → 纯信息卡 + 明确「此后端不支持在此切换」。
+ *   - 既不能切模型也不能调 effort 的后端 → 只显示当前模型。
+ *   - 总有一个「手填模型 ID」表单（3.11）：列表里没有的模型（第三方网关的）照样能用。
+ *     当前模型是手填的（不在列表里）时，effort 下拉给后端协议的全部档位。
  * 能调的给控件、不能调的给清晰说明（不静默、不造假）。
  */
 export function buildModelCard(state: ModelCardState): CardObject {
   const visible = state.models.filter((m) => !m.hidden);
   const cur = state.models.find((m) => m.id === state.model);
-  const efforts = cur?.supportedEfforts ?? [];
+  const efforts = cur ? cur.supportedEfforts : [...getSessionTitleEfforts(state.backend ?? '')];
   const canPickModel = visible.length > 1;
   const canPickEffort = efforts.length > 0;
-  const curLabel = cur?.displayName ?? state.model;
+  const curLabel = cur ? `**${cur.displayName}**` : `${modelIdCode(state.model)}（手填）`;
 
   const elements: CardElement[] = [md('🧠 **模型 / 推理强度**')];
 
   if (canPickModel || canPickEffort) {
     elements.push(note('选择后下一轮生效'), hr());
+    // 手填的 id 不在下拉里，下拉会显示占位文字，所以单独写出当前模型。
+    if (!cur) elements.push(md(`当前模型：${curLabel}`));
     const controls: CardElement[] = [];
     if (canPickModel) {
       controls.push(
         selectStatic({
           actionId: MC.model,
           placeholder: '选择模型',
-          initial: state.model,
+          // 手填的 id 不在选项里，不当初值（上面单独写出了当前模型）
+          initial: cur ? state.model : undefined,
           options: visible.map((m) => ({ label: m.displayName, value: m.id })),
         }),
       );
@@ -94,10 +126,24 @@ export function buildModelCard(state: ModelCardState): CardObject {
       elements.push(note('该后端不调节推理强度（思考由模型自动调度，无 Codex 那样的 effort 档）'));
     }
   } else {
-    // 既不能切模型也不能调 effort 的后端 → 信息卡，明确「此后端不支持」。
-    elements.push(hr(), md(`当前模型：**${curLabel}**`));
-    elements.push(note('该后端不支持在此切换模型或推理强度。'));
+    elements.push(hr(), md(`当前模型：${curLabel}`));
   }
+
+  elements.push(
+    hr(),
+    form('model_custom', [
+      input({
+        name: 'customModel',
+        label: '手填模型 ID',
+        placeholder: '列表里没有的模型，例如 deepseek-chat',
+        value: cur ? undefined : state.model,
+        maxLength: MODEL_ID_MAX_LENGTH,
+        width: 'fill',
+      }),
+      actions([submitButton('用这个模型', { a: MC.custom }, 'default', 'submit_model_custom')]),
+    ]),
+    note('填错了，下一轮会报错；再发 /model 改回来。'),
+  );
 
   if (state.note) elements.push(note(state.note));
   return card(elements, { summary: '模型设置' });

@@ -30,6 +30,11 @@ const selection: Rule = value => shape({
   kind: one('explicit'),
   model: text,
   effort: one(...REASONING_EFFORTS)
+})(value) || shape({
+  kind: one('explicit'),
+  model: text,
+  effort: one(...REASONING_EFFORTS),
+  custom: bool
 })(value);
 const title: Rule = value => shape({
   enabled: one(false)

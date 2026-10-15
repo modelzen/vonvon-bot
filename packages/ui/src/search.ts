@@ -34,9 +34,9 @@ const membershipGroups: readonly Group[] = [
   {title: '群内响应', fields: [item('不 @ 也能发起任务', ['免 @'])]},
   {title: '工作目录权限', fields: [item('管理员权限'), item('普通成员权限'), item('允许网络访问')]},
   {title: '会话压缩', fields: [item('自动压缩上下文')]},
-  {title: '新会话默认模型', fields: [item('模型'), item('推理强度', [], {guide: '先选择一个具体模型，再调整推理强度。'})]},
+  {title: '新会话默认模型', fields: [item('模型'), item('自定义模型 ID', ['手填模型 ID', '第三方模型'], {field: '模型', guide: '在「模型」里选「自定义模型 ID…」，再填写模型 ID。'}), item('推理强度', [], {guide: '先选择一个具体模型，再调整推理强度。'})]},
   {title: '响应成员', fields: [item('添加成员 Open ID'), item('移除成员', [], {field: '', guide: '在响应成员列表中找到要移除的成员。'}), item('允许所有成员', ['清空白名单'], {guide: '设置了成员白名单后，会显示「清空白名单」。'})]},
-  {title: '话题模型', fields: [item('选择话题'), item('话题身份', [], {field: '选择话题', guide: '选择话题后可以查看身份。'}), item('本话题模型', [], {field: '选择话题', guide: '先选择话题，再设置该话题的模型。'}), item('推理强度', ['话题推理强度'], {field: '选择话题', guide: '先选择话题并选定具体模型，再调整推理强度。'})]},
+  {title: '话题模型', fields: [item('选择话题'), item('话题身份', [], {field: '选择话题', guide: '选择话题后可以查看身份。'}), item('本话题模型', [], {field: '选择话题', guide: '先选择话题，再设置该话题的模型。'}), item('自定义模型 ID', ['话题手填模型 ID'], {field: '选择话题', guide: '先选择话题，再在「本话题模型」里选「自定义模型 ID…」。'}), item('推理强度', ['话题推理强度'], {field: '选择话题', guide: '先选择话题并选定具体模型，再调整推理强度。'})]},
 ];
 const globalGroups: readonly {page: Page; section: string; fields: readonly Target[]}[] = [
   {page: 'coffee', section: '咖啡一下', fields: [item('通知 Bot'), item('通知状态'), item('查看通知规则'), item('Hook 配置')]},

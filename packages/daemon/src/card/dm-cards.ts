@@ -26,6 +26,7 @@ import {
   type ReasoningEffort,
 } from '../agent/types';
 import { catalogById } from '../agent/catalog';
+import { CUSTOM_MODEL_OPTION, MODEL_ID_MAX_LENGTH, parseModelId } from '../agent/model-id';
 import type { SessionRecord } from '../bot/session-store';
 import { labelScope } from '../config/scopes';
 import { summarizeEventDiagnosis, type EventDiagnosis } from '../utils/event-diagnosis';
@@ -923,7 +924,7 @@ export function buildCoffeeSettingsCard(section: CardElement[]): CardObject {
 /** Reserved select value that switches the adjacent free-text input on. It is
  * deliberately not a model id/allowlist: any caller-provided live model id is
  * otherwise passed through unchanged, including third-party providers. */
-export const SESSION_TITLE_CUSTOM_MODEL_OPTION = '__bridge_custom_model__';
+export const SESSION_TITLE_CUSTOM_MODEL_OPTION = CUSTOM_MODEL_OPTION;
 
 export interface SessionTitleBackendOption {
   id: string;
@@ -958,9 +959,15 @@ export function parseSessionTitleFormValue(
 ): SessionTitleFormParseResult {
   const selectedModel = sessionTitleFormScalar(formValue, 'model');
   const customModel = sessionTitleFormScalar(formValue, 'customModel');
-  const model =
-    selectedModel === SESSION_TITLE_CUSTOM_MODEL_OPTION || !selectedModel ? customModel : selectedModel;
-  if (!model) return { ok: false, message: '请选择模型，或填写自定义模型 ID。' };
+  let model: string;
+  if (selectedModel && selectedModel !== SESSION_TITLE_CUSTOM_MODEL_OPTION) {
+    model = selectedModel;
+  } else {
+    if (!customModel) return { ok: false, message: '请选择模型，或填写自定义模型 ID。' };
+    const parsed = parseModelId(customModel);
+    if (!parsed.ok) return parsed;
+    model = parsed.id;
+  }
 
   const rawEffort = sessionTitleFormScalar(formValue, 'effort');
   if (!rawEffort || !(REASONING_EFFORTS as readonly string[]).includes(rawEffort)) {
@@ -1582,26 +1589,29 @@ export function modelDefaultSummary(p: Pick<Project, 'defaultModel' | 'defaultEf
  * 用 selectMenu 表单（选完提交、不用即时按钮，规避 select 锁卡）。两个入口共用本卡，用
  * `ctx` 决定提交 / 返回的 action（dm = DM 项目设置卡；group = 群 /settings 卡）。
  *
- * 自适应（对齐 /model 卡的诚实体验）：只在有多个可见模型时给模型下拉；effort 下拉只在
- * 该后端**至少一个模型**支持 effort 时出现（claude 这类不调强度的后端不显示假档）。effort
- * 选项取所有可见模型 supportedEfforts 的并集——提交时再按所选模型校验收窄。`models` 由
+ * 模型下拉总在：列表里的模型，加一项「自定义模型 ID…」配一个输入框（3.11，第三方网关的
+ * 模型常不在列表里）。effort 下拉只在该后端**至少一个模型**支持 effort 时出现（claude
+ * 这类不调强度的后端不显示假档）。effort 选项取所有可见模型 supportedEfforts 的并集——
+ * 提交时再按所选模型校验收窄（见 {@link parseModelDefaultFormValue}）。`models` 由
  * 调用方按项目 backend 实时拉取后传入。
  */
 export function buildModelDefaultCard(
-  p: Pick<Project, 'name' | 'defaultModel' | 'defaultEffort'>,
+  p: Pick<Project, 'name' | 'defaultModel' | 'defaultEffort' | 'defaultModelCustom'>,
   models: ModelInfo[],
   ctx: 'dm' | 'group',
   notice?: string,
 ): CardObject {
   const visible = models.filter((m) => !m.hidden);
-  // current effective default: explicit project default (if still valid) else backend isDefault
-  const explicit = p.defaultModel ? visible.find((m) => m.id === p.defaultModel) : undefined;
-  const curModel = explicit ?? visible.find((m) => m.isDefault) ?? visible[0];
+  const custom = p.defaultModelCustom && p.defaultModel ? p.defaultModel : undefined;
+  // current effective default: hand-typed id, else explicit project default (if
+  // still valid), else backend isDefault
+  const explicit = !custom && p.defaultModel ? visible.find((m) => m.id === p.defaultModel) : undefined;
+  const curModel = custom ? undefined : (explicit ?? visible.find((m) => m.isDefault) ?? visible[0]);
   const curEfforts = curModel?.supportedEfforts ?? [];
-  const curEffort =
-    explicit && p.defaultEffort && curEfforts.includes(p.defaultEffort) ? p.defaultEffort : curModel?.defaultEffort;
+  // a hand-typed id keeps its stored effort; a listed model only one it still supports
+  const keepStoredEffort = Boolean(custom || (explicit && p.defaultEffort && curEfforts.includes(p.defaultEffort)));
+  const curEffort = keepStoredEffort ? p.defaultEffort : curModel?.defaultEffort;
   const unionEfforts = EFFORT_ORDER.filter((e) => visible.some((m) => (m.supportedEfforts ?? []).includes(e)));
-  const canPickModel = visible.length > 1;
   const canPickEffort = unionEfforts.length > 0;
 
   const submit = ctx === 'dm' ? { a: DM.modelDefaultSubmit, n: p.name } : { a: GS.modelDefaultSubmit };
@@ -1616,31 +1626,26 @@ export function buildModelDefaultCard(
     ),
   ];
 
-  if (!canPickModel && !canPickEffort) {
-    return card(
-      [
-        ...head,
-        hr(),
-        md(`当前模型：**${curModel?.displayName ?? p.defaultModel ?? '后端默认'}**`),
-        note('该后端只有一个模型且不支持调节推理强度，无需设置默认。'),
-        actions([button('⬅️ 返回', back)]),
+  const formEls: CardElement[] = [
+    md('🤖 **默认模型**'),
+    selectMenu({
+      name: 'model',
+      placeholder: '选择默认模型',
+      options: [
+        ...visible.map((m) => ({ label: m.displayName, value: m.id })),
+        { label: '自定义模型 ID…', value: CUSTOM_MODEL_OPTION },
       ],
-      { header: { title: '🤖 默认模型', template: 'blue' } },
-    );
-  }
-
-  const formEls: CardElement[] = [];
-  if (canPickModel) {
-    formEls.push(
-      md('🤖 **默认模型**'),
-      selectMenu({
-        name: 'model',
-        placeholder: '选择默认模型',
-        options: visible.map((m) => ({ label: m.displayName, value: m.id })),
-        initial: curModel?.id,
-      }),
-    );
-  }
+      initial: custom ? CUSTOM_MODEL_OPTION : curModel?.id,
+    }),
+    input({
+      name: 'customModel',
+      label: '自定义模型 ID（选“自定义”时填）',
+      placeholder: '列表里没有的模型，例如 deepseek-chat',
+      value: custom,
+      maxLength: MODEL_ID_MAX_LENGTH,
+      width: 'fill',
+    }),
+  ];
   if (canPickEffort) {
     formEls.push(
       md('🧠 **默认推理强度**'),
@@ -1658,18 +1663,51 @@ export function buildModelDefaultCard(
     [
       ...head,
       hr(),
-      // single-model backend (effort-only form): name the locked model so the lone
-      // effort dropdown isn't confusing.
-      ...(canPickModel ? [] : [md(`默认模型：**${curModel?.displayName ?? '后端默认'}**（该后端仅一个模型）`)]),
       form('model_default', formEls),
-      ...(canPickModel && !canPickEffort
-        ? [note('该后端不调节推理强度（思考由模型自动调度，无 effort 档）。')]
-        : []),
-      note('保存只影响之后新建的话题，不会打断正在进行的会话。'),
+      ...(!canPickEffort ? [note('该后端不调节推理强度（思考由模型自动调度，无 effort 档）。')] : []),
+      note('保存只影响之后新建的话题，不会打断正在进行的会话。手填的模型 ID 不核对，填错了新话题第一轮会报错。'),
       actions([button('⬅️ 返回', back)]),
     ],
     { header: { title: '🤖 默认模型', template: 'blue' } },
   );
+}
+
+export type ModelDefaultFormParseResult =
+  | { ok: true; model: string; effort?: ReasoningEffort; custom: boolean; label: string }
+  | { ok: false; message: string };
+
+/**
+ * Parse the default-model form of {@link buildModelDefaultCard}. A listed model is
+ * checked against the live list and its effort narrowed to what it supports; the
+ * 「自定义」 option takes the typed id through {@link parseModelId} and keeps an
+ * effort only if the backend's protocol accepts it.
+ */
+export function parseModelDefaultFormValue(
+  formValue: Record<string, unknown> | undefined,
+  models: ModelInfo[],
+  backendId: string,
+): ModelDefaultFormParseResult {
+  const selected = sessionTitleFormScalar(formValue, 'model');
+  const rawEffort = sessionTitleFormScalar(formValue, 'effort');
+  const requestedEffort =
+    rawEffort && (REASONING_EFFORTS as readonly string[]).includes(rawEffort) ? (rawEffort as ReasoningEffort) : undefined;
+  if (selected === CUSTOM_MODEL_OPTION) {
+    const parsed = parseModelId(sessionTitleFormScalar(formValue, 'customModel'));
+    if (!parsed.ok) return parsed;
+    const effort =
+      requestedEffort && getSessionTitleEfforts(backendId).includes(requestedEffort) ? requestedEffort : undefined;
+    return { ok: true, model: parsed.id, effort, custom: true, label: parsed.id };
+  }
+  const m = selected ? models.find((x) => x.id === selected && !x.hidden) : undefined;
+  if (!m) return { ok: false, message: '所选模型无效或已下架，未保存。' };
+  const supported = m.supportedEfforts ?? [];
+  let effort: ReasoningEffort | undefined;
+  if (requestedEffort && supported.includes(requestedEffort)) {
+    effort = requestedEffort;
+  } else if (supported.length) {
+    effort = m.defaultEffort;
+  }
+  return { ok: true, model: m.id, effort, custom: false, label: m.displayName };
 }
 
 /** 单个后端的检测结果（🧠 后端检测结果卡的一行）。`probe` undefined = 探测没

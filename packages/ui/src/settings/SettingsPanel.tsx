@@ -442,25 +442,37 @@ function Catalog({
     </>
   );
 }
-function ModelChoice({
+/** Select value that switches the model id text field on (never a real id). */
+const CUSTOM_MODEL = "__custom__";
+export function ModelChoice({
   value,
   onChange,
   catalog,
   disabled,
-  custom,
+  allowCustom,
 }: {
   value: ModelSelection;
   onChange: (value: ModelSelection) => void;
   catalog: ModelCatalog | undefined;
   disabled: boolean;
-  custom?: boolean;
+  /** offer「自定义模型 ID…」: a hand-typed id the catalog does not list (3.11) */
+  allowCustom?: boolean;
 }) {
   const model = value.kind === "explicit" ? value.model : "";
   const listed = catalog?.models.filter((item) => !item.hidden) ?? [];
   const selected = listed.find((item) => item.id === model);
+  const savedCustom = value.kind === "explicit" && value.custom === true;
+  // Picking「自定义」before typing leaves the draft on its old value; this keeps
+  // the text field open until another option is picked.
+  const [typing, setTyping] = useState(false);
+  useEffect(() => {
+    if (value.kind === "explicit" && !value.custom) setTyping(false);
+  }, [value]);
+  const customMode = Boolean(allowCustom) && (savedCustom || typing);
+  const savedEfforts = value.kind === "explicit" ? [value.effort] : [];
   const efforts =
-    selected?.supportedEfforts ??
-    (value.kind === "explicit" ? [value.effort] : []);
+    (customMode ? catalog?.titleEfforts : selected?.supportedEfforts) ??
+    savedEfforts;
   return (
     <>
       <SettingsRow
@@ -473,60 +485,85 @@ function ModelChoice({
               : undefined
         }
         trailing={
-          custom ? (
+          <select
+            aria-label="模型"
+            value={customMode ? CUSTOM_MODEL : model}
+            disabled={
+              disabled ||
+              (!allowCustom &&
+                catalog?.state === "unavailable" &&
+                value.kind === "default")
+            }
+            onChange={(event) => {
+              if (event.target.value === CUSTOM_MODEL) {
+                // Start from the current id so it can be edited in place.
+                setTyping(true);
+                if (value.kind === "explicit")
+                  onChange({ ...value, custom: true });
+                return;
+              }
+              setTyping(false);
+              const picked = event.target.value;
+              const next = listed.find((item) => item.id === picked);
+              if (next) {
+                onChange({
+                  kind: "explicit",
+                  model: next.id,
+                  effort: next.defaultEffort,
+                });
+              } else if (picked && picked === model) {
+                onChange(value);
+              } else {
+                onChange({ kind: "default" });
+              }
+            }}
+          >
+            <option value="">使用默认模型</option>
+            {model && !selected && !customMode && (
+              <option value={model}>{model}（已保存，当前目录不可用）</option>
+            )}
+            {listed.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.displayName} · {item.id}
+              </option>
+            ))}
+            {allowCustom && (
+              <option value={CUSTOM_MODEL}>自定义模型 ID…</option>
+            )}
+          </select>
+        }
+      />
+      {customMode && (
+        <SettingsRow
+          title="自定义模型 ID"
+          description="列表里没有的模型（比如第三方网关的）。不核对，填错了下一轮会报错。"
+          trailing={
             <Text
               label="自定义模型 ID"
               value={model}
+              placeholder="例如 deepseek-chat"
               disabled={disabled}
-              onChange={(next) =>
-                onChange(
-                  next
-                    ? {
-                        kind: "explicit",
-                        model: next,
-                        effort:
-                          value.kind === "explicit" ? value.effort : "medium",
-                      }
-                    : { kind: "default" },
-                )
-              }
-            />
-          ) : (
-            <select
-              aria-label="模型"
-              value={model}
-              disabled={
-                disabled ||
-                (catalog?.state === "unavailable" && value.kind === "default")
-              }
-              onChange={(event) => {
-                const next = listed.find(
-                  (item) => item.id === event.target.value,
-                );
-                onChange(
-                  next
-                    ? {
-                        kind: "explicit",
-                        model: next.id,
-                        effort: next.defaultEffort,
-                      }
-                    : { kind: "default" },
-                );
+              onChange={(next) => {
+                if (!next.trim()) {
+                  onChange({ kind: "default" });
+                  return;
+                }
+                const effort =
+                  value.kind === "explicit" &&
+                  (catalog?.titleEfforts ?? []).includes(value.effort)
+                    ? value.effort
+                    : "medium";
+                onChange({
+                  kind: "explicit",
+                  model: next,
+                  effort,
+                  custom: true,
+                });
               }}
-            >
-              <option value="">使用默认模型</option>
-              {model && !selected && (
-                <option value={model}>{model}（已保存，当前目录不可用）</option>
-              )}
-              {listed.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.displayName} · {item.id}
-                </option>
-              ))}
-            </select>
-          )
-        }
-      />
+            />
+          }
+        />
+      )}
       {value.kind === "explicit" && (
         <SettingsRow
           title="推理强度"
@@ -1640,6 +1677,7 @@ function ProjectPanel({
                 onChange={(selection) => set({ selection })}
                 catalog={catalog}
                 disabled={disabled}
+                allowCustom
               />
             )}
           />
@@ -2002,6 +2040,7 @@ function SessionPanel({
                 onChange={(selection) => set({ selection })}
                 catalog={catalog}
                 disabled={disabled}
+                allowCustom
               />
             )}
           />
