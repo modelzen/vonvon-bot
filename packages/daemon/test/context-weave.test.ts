@@ -385,6 +385,18 @@ describe('weaveRecordBlock · topics (s14b)', () => {
     ]);
   });
 
+  it("says a topic hangs under this bot's own reply from the refs, which are not woven (s14c)", () => {
+    const lines = weaveRecordBlock('', { place: main, now,
+      entries: [cm({ messageId: 'om_1', text: '先看下日志', createTime: at(15, 10, 1) })],
+      refs: [cm({ messageId: 'om_mine', from: 'self', text: '网关日志里 500 都来自 OrderService', createTime: at(15, 10, 2) })],
+      quotes: [q({ at: at(15, 10, 4), root: { id: 'om_mine' }, who: { kind: 'bot', name: '小P' } })],
+    }).split('\n');
+    expect(lines.slice(1, -1)).toEqual([
+      '10:01 张三：先看下日志',
+      '10:04 〔话题〕小P（bot）在你 10:02 的回复下开了话题「订单接口 500」，你在那边还没有会话，这里不用接。（话题 id：omt_1）',
+    ]);
+  });
+
   it('says how many topics were left out, and quotes them when the pull brought no line', () => {
     expect(weaveRecordBlock('', { place: main, now, earlier: 'some', entries: [], quotes: [q()], moreTopics: 4 }).split('\n').slice(1)).toEqual([
       '（还有 4 个话题没列，需要时用 vonvon 飞书 skill 列）',
@@ -657,6 +669,50 @@ describe('fetchChatContext (a single group\'s main area)', () => {
     const out = await fetchChatContext(fakeChannel(items), 'oc_chat', { before: 9000, excludeMessageId: 'om_trigger' });
     expect(out.messages.map((m) => m.messageId)).toEqual(['om_old', 'om_p', 'om_at', 'om_quote', 'om_root']);
     expect(out.messages.find((m) => m.messageId === 'om_p')).toMatchObject({ from: 'bot', senderName: '小P' });
+  });
+
+  it("hands back this bot's own topic roots apart from the lines, from the main area only (s14c)", async () => {
+    const mine = (id: string, t: number, extra: object = {}) => ({ message_id: id, msg_type: 'text', create_time: String(t),
+      sender: { id: 'cli_bot', id_type: 'app_id', sender_type: 'app', sender_name: '小码' }, body: { content: JSON.stringify({ text: '我的回复' }) }, ...extra });
+    const list = [user('om_u', 6000, '一条'), mine('om_r', 5000, { thread_id: 'omt_m' }), mine('om_plain', 4000), mine('om_gone', 3000, { thread_id: 'omt_g', deleted: true })];
+    const out = await fetchChatContext(fakeChannel(list), 'oc_chat', {});
+    expect(out.messages.map((m) => m.messageId)).toEqual(['om_u']);
+    expect(out.ownRoots).toEqual([expect.objectContaining({ messageId: 'om_r', from: 'self', threadId: 'omt_m' })]);
+    expect((await fetchChatContext(fakeChannel(list), 'oc_chat', { keepSelf: true })).ownRoots).toBeUndefined();
+    expect((await fetchThreadContext(fakeChannel(list), 'omt_m', {})).ownRoots).toBeUndefined();
+  });
+
+  it('keeps a reply that a topic was opened under later: its root_id stays the message it replied to (s14c)', async () => {
+    const mine = { message_id: 'om_mine_q', msg_type: 'text', create_time: '6600', thread_id: 'omt_q', root_id: 'om_x', parent_id: 'om_x',
+      sender: { id: 'cli_bot', id_type: 'app_id', sender_type: 'app', sender_name: '小码' }, body: { content: JSON.stringify({ text: '我的回答' }) } };
+    const list = [
+      user('om_tr', 6800, '话题里的回复', { thread_id: 'omt_h', root_id: 'om_hq', parent_id: 'om_hq' }), // its root is listed in the same topic
+      user('om_hq', 6700, '引用了 om_x，后来被开了话题', { thread_id: 'omt_h', root_id: 'om_x', parent_id: 'om_x' }),
+      mine,
+      user('om_far', 6550, '根不在列表里的', { thread_id: 'omt_f', root_id: 'om_old_root', parent_id: 'om_old_root' }),
+      user('om_x', 6500, '被引用的', { thread_id: 'omt_x' }), // a topic of its own under it
+    ];
+    const out = await fetchChatContext(fakeChannel(list), 'oc_chat', {});
+    expect(out.messages.map((m) => m.messageId)).toEqual(['om_x', 'om_far', 'om_hq']);
+    expect(out.ownRoots?.map((m) => m.messageId)).toEqual(['om_mine_q']);
+  });
+
+  it('tells a topic reply by its root on a later page, or by a root that is the trigger (s14c)', async () => {
+    const pages = [
+      [user('om_tr', 6800, '话题里的回复', { thread_id: 'omt_h', root_id: 'om_hq', parent_id: 'om_hq' }),
+        user('om_tr2', 6700, '触发消息下的话题回复', { thread_id: 'omt_t2', root_id: 'om_trigger', parent_id: 'om_trigger' })],
+      [user('om_trigger', 6600, '触发', { thread_id: 'omt_t2' }),
+        user('om_hq', 6500, '引用了 om_x，后来被开了话题', { thread_id: 'omt_h', root_id: 'om_x', parent_id: 'om_x' }),
+        user('om_x', 6400, '被引用的')],
+    ];
+    const ch = { botIdentity: { openId: 'ou_me', name: '小码' }, rawClient: { appId: 'cli_bot', im: { v1: { message: {
+      list: async ({ params }: { params: Record<string, unknown> }) => {
+        const i = Number(params.page_token ?? 0);
+        return { code: 0, data: { items: pages[i], has_more: i + 1 < pages.length, page_token: i + 1 < pages.length ? String(i + 1) : undefined } };
+      },
+    } } } } } as unknown as LarkChannel;
+    const out = await fetchChatContext(ch, 'oc_chat', { excludeMessageId: 'om_trigger' });
+    expect(out.messages.map((m) => m.messageId)).toEqual(['om_x', 'om_hq']);
   });
 
   it("keeps this bot's own messages for an opening, and gives a topic's first message its topic id", async () => {
