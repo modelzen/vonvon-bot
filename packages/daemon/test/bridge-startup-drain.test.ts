@@ -11,7 +11,6 @@ const fixture = vi.hoisted(() => ({
   membership: vi.fn(),
   lockHeld: false,
   releaseLock: vi.fn(),
-  cliShutdown: vi.fn(async () => {}),
   registryClose: vi.fn(async () => {}),
   logFail: vi.fn(),
 }));
@@ -39,10 +38,6 @@ vi.mock('../src/bot/session-title-coordinator', () => ({
 vi.mock('../src/project/registry', async original => ({
   ...await original<object>(),
   getProjectByChatId: async () => undefined,
-}));
-vi.mock('../src/cli-bridge', () => ({
-  createCliBridgeService: () => ({ shutdown: fixture.cliShutdown, register() {} }),
-  shouldStartCliBridge: () => false,
 }));
 vi.mock('../src/bot/onboarding', () => ({
   ensureOnboarded: async () => ({ cfg, secret: 'fixture' }),
@@ -99,7 +94,6 @@ afterEach(() => {
   fixture.connect.mockReset();
   fixture.membership.mockReset();
   fixture.disconnect.mockClear();
-  fixture.cliShutdown.mockReset();
   fixture.registryClose.mockClear();
   fixture.releaseLock.mockClear();
   fixture.logFail.mockClear();
@@ -124,10 +118,8 @@ it.each([false, true])('keeps host and Bot ownership through accepted startup ve
   const verification = deferred<{ code: number; data: { is_in_chat: boolean } }>();
   fixture.membership.mockReturnValue(verification.promise);
   const connectError = new Error('fixture connect rejected');
-  const cleanupError = new Error('fixture CLI cleanup rejected');
-  fixture.cliShutdown.mockImplementation(async () => {
-    if (cleanupFails) throw cleanupError;
-  });
+  const cleanupError = new Error('fixture disconnect rejected');
+  if (cleanupFails) fixture.disconnect.mockImplementationOnce(async () => { throw cleanupError; });
   fixture.connect.mockRejectedValue(connectError);
   const control: ShutdownControl = {
     requested: false,
@@ -154,7 +146,6 @@ it.each([false, true])('keeps host and Bot ownership through accepted startup ve
   if (cleanupFails) expect(reasons(running.error())).toContain(cleanupError);
   expect((await readPendingGroups(file))[0]).toMatchObject({ state: 'ready', name: 'Research' });
   expect(fixture.disconnect).toHaveBeenCalledOnce();
-  expect(fixture.cliShutdown).toHaveBeenCalledOnce();
   expect(fixture.lockHeld).toBe(false);
   expect(existsSync(join(paths.appDir, 'daemon.pid'))).toBe(false);
   expect(await readFile(file, 'utf8')).toContain('Research');

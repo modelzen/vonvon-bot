@@ -65,8 +65,6 @@ export const DM = {
   setVoice: 'dm.voice.set',
   testVoice: 'dm.voice.test',
   refreshVoicePermission: 'dm.voice.refreshPermission',
-  // ☕ 咖啡一下（离开接管）：从全局设置卡进入的二级卡片（仿云文档评论那样的子卡入口）
-  coffeeSettings: 'dm.coffee.settings',
   doctor: 'dm.doctor',
   reconnect: 'dm.reconnect',
   restart: 'dm.restart',
@@ -799,13 +797,14 @@ export function buildVoiceSettingsCard(cfg: AppConfig, notice?: string): CardObj
  * buttons, current value highlighted). Buttons, not select_static, on purpose:
  * Feishu locks a card_id once a select has been interacted with, after which
  * *every* button on it (including ⬅️ 菜单) stops firing. Buttons never lock, so
- * this card stays fully interactive and updates in place.
+ * this card stays fully interactive and updates in place. `notice` = 卡顶提示行。
  */
-export function buildSettingsCard(cfg: AppConfig): CardObject {
+export function buildSettingsCard(cfg: AppConfig, notice?: string): CardObject {
   const watchdogSec = normalizeRunIdleTimeoutSeconds(cfg.preferences?.runIdleTimeoutSeconds);
   const completionReminder = getCompletionReminderConfig(cfg);
   return card(
     [
+      ...(notice ? [md(notice)] : []),
       settingSection('📤 输出展示'),
       ...settingItem(
         '🔧 工具调用',
@@ -880,10 +879,6 @@ export function buildSettingsCard(cfg: AppConfig): CardObject {
         ],
       ),
       hr(),
-      settingSection('☕ 咖啡一下'),
-      note('去倒杯咖啡的工夫，我替你盯着本机的 Claude Code / Codex——它要审批、要问你、或跑完了，都推到这个私聊。含通知范围、转发后端、离开保活、hooks 修复。'),
-      actions([button('设置咖啡一下 / 通知 / 保活 / hooks', { a: DM.coffeeSettings }, 'primary')]),
-      hr(),
       note('会话标题与云文档评论分别配置，互不影响，也不会改变普通聊天使用的模型。'),
       md('**🏷️ 会话标题**'),
       note('让 Bridge 新建的会话在 Claude Code / Codex 的恢复列表（/resume）中显示易识别的标题。'),
@@ -906,23 +901,21 @@ export function buildSettingsCard(cfg: AppConfig): CardObject {
   );
 }
 
-/**
- * ☕ 咖啡一下（离开接管）二级设置卡（DM「⚙️ 设置 → ☕ 咖啡一下」进入）。把本机
- * Claude Code / Codex 的离开转发那组控件（总开关 / 通知范围 / 转发后端 / 离开保活 /
- * hooks 修复）从主设置卡抽出、独立成卡，主卡只留入口。`section` 是
- * {@link cliBridgeSettingsSection} 的输出（调用方传入，含实时 hook 状态）——其首元素是
- * 当年内联进主卡用的分隔线，独立成卡时去掉。
- */
-export function buildCoffeeSettingsCard(section: CardElement[]): CardObject {
-  return card(
-    [
-      ...section.slice(1), // 去掉为「内联进主卡」而加的开头 hr()
-      hr(),
-      actions([button('⬅️ 返回设置', { a: DM.settings })]),
-    ],
-    { header: { title: '☕ 咖啡一下', template: 'blue' } },
-  );
-}
+/** Action ids on old cards for 咖啡一下, which s02b removed: the entry on the
+ * settings card and the controls on its sub-card (`CLI` in cli-bridge/cards). */
+export const COFFEE_RETIRED_ACTIONS = [
+  'dm.coffee.settings',
+  'cli.toggle.enabled',
+  'cli.set.delivery',
+  'cli.set.notifyScope',
+  'cli.toggle.agent',
+  'cli.toggle.keepAwake',
+  'cli.toggle.includeBridge',
+  'cli.hooks.repair',
+] as const;
+
+/** Top line of the settings card re-rendered after a tap on one of them. */
+export const COFFEE_RETIRED = '☕ 咖啡一下第一版已经拿掉了。本机 Claude Code、Codex 要审批时，照常在终端里问。';
 
 /** Reserved select value that switches the adjacent free-text input on. It is
  * deliberately not a model id/allowlist: any caller-provided live model id is

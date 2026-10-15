@@ -22,7 +22,6 @@ vi.mock('../src/agent/codex-appserver/windows-job', () => ({ WindowsCodexJob: cl
 const fake = vi.hoisted(() => ({
   project: vi.fn(),
   channel: { on: vi.fn((..._args: unknown[]) => {}), connect: vi.fn(async () => {}), disconnect: vi.fn(async () => {}) },
-  cliStop: vi.fn(async () => {}),
   backend: { capabilities: { steer: true }, id: 'codex', listModels: vi.fn(async () => []), resumeThread: vi.fn(), startThread: vi.fn() },
   voice: vi.fn(async (_channel: unknown, msg: NormalizedMessage) => ({ text: '语音正文', voice: { messageId: msg.messageId, text: '语音正文', transcribed: true } })),
   live: vi.fn(),
@@ -110,7 +109,6 @@ function setup(policy: 'steer' | 'queue' = 'steer') {
 }
 
 vi.mock('@larksuiteoapi/node-sdk', async original => ({ ...await original<object>(), createLarkChannel: () => channel() }));
-vi.mock('../src/cli-bridge', () => ({ createCliBridgeService: () => ({ shutdown: fake.cliStop, register() {} }), shouldStartCliBridge: () => false }));
 
 vi.mock('../src/card/managed', async original => ({ ...await original<object>(), sendManagedCard: (...args: unknown[]) => fake.send(...args) }));
 
