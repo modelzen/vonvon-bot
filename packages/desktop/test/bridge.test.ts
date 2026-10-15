@@ -149,6 +149,8 @@ describe('desktop IPC boundary', () => {
       String.raw`{"app_secret":"…"} {"secret":"…"} client_secret = "…" {"password":"…"} {"password":"…"} secret:'…' end`],
     ...['Bearer abcdefghijkl', 'Basic dXNlcjpwYXNz', 'Token abcdefgh12345678', 'Digest username="bob", response="deadbeef"']
       .map(value => [`an Authorization value under ${value.split(' ')[0]}`, `Authorization: ${value}`, 'Authorization: …']),
+    ['authorization= under any scheme', 'headers: {authorization=Token abcdefgh}', 'headers: {authorization=…'],
+    ['a long quoted value with spaces', `secret: "${'a'.repeat(260)} leaked words" end`, 'secret: "…" end'],
     ['base64 and base64url after Basic', 'Basic dXNlcjpwYXNz; Basic YTpi; Basic dXNlcjpw-Xz', 'Basic …; Basic …; Basic …'],
     ['a short token after Bearer', 'then Bearer abcdefghijkl rejected', 'then Bearer … rejected'],
     ['capitalised words after Basic', 'Basic Settings are invalid. Basic HTTP auth is off. Basic Information missing',

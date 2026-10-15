@@ -37,13 +37,14 @@ const secretKey = String.raw`((?:secret|token|password|passwd|credential|authori
 const authScheme = String.raw`(?:(?:bearer|basic)\s+)?`;
 /** A value that looks like a credential rather than a word: 8+ characters with a letter and a digit, or 16+. */
 const credential = String.raw`(?:(?=[\w.~+/=-]*[a-z])(?=[\w.~+/=-]*\d)[\w.~+/=-]{8,}|[\w.~+/=-]{16,})`;
-/** A quoted value goes up to the quote that opened it, spaces, commas, the other quote and escapes included. */
-const quotedSecret = new RegExp(String.raw`${secretKey}(["']?\s*[:=]\s*)(["'])(?:\\.|(?!\3)[^\r\n\\]){0,256}`, 'gi');
+/** A quoted value goes up to the quote that opened it, spaces, commas, the other quote and escapes included;
+ * without one, to the end of the scanned text. */
+const quotedSecret = new RegExp(String.raw`${secretKey}(["']?\s*[:=]\s*)(["'])(?:\\.|(?!\3)[^\r\n\\])*`, 'gi');
 /** `key=value`, or a quoted key or value as in JSON and inspected objects: the value is always the secret. */
 const assignedSecret = new RegExp(String.raw`${secretKey}(["']?\s*=\s*["']?|["']\s*:\s*["']?|\s*:\s*["'])${authScheme}[^\s"',;&)}\]]+`, 'gi');
-/** An unquoted `Authorization:` value is a credential under any scheme (Token, Digest, …), so the rest of the
- * text goes, up to 256 characters. A quoted one was already cut at its closing quote by {@link quotedSecret}. */
-const authorizationValue = /\b(authorization)(\s*:\s*)(?![\s"'])[^\r\n]{1,256}/gi;
+/** An unquoted `Authorization:` or `authorization=` value is a credential under any scheme (Token, Digest, …), so
+ * the rest of the text goes, up to 256 characters. A quoted one was already cut at its closing quote by {@link quotedSecret}. */
+const authorizationValue = /\b(authorization)(\s*[:=]\s*)(?![\s"'])[^\r\n]{1,256}/gi;
 /** Unquoted `key: value` is also prose ("Invalid token: expired"), so only a credential-shaped value goes. */
 const labelledSecret = new RegExp(String.raw`${secretKey}(\s*:\s*)${authScheme}${credential}`, 'gi');
 /** Any 8+ character word after Bearer goes: "Bearer authentication failed" loses a word, a short token does not leak. */
@@ -73,8 +74,8 @@ export function sanitizeDaemonMessage(raw: string): string {
     .replace(/\b([a-z][a-z\d+.-]{0,31}:\/\/)[^\s/?#@]*@/gi, '$1')
     .replace(/\b([a-z][a-z\d+.-]{0,31}:\/\/[^\s?#]*)[?#]\S*/gi, '$1')
     .replace(quotedSecret, '$1$2$3…')
-    .replace(assignedSecret, '$1$2…')
     .replace(authorizationValue, '$1$2…')
+    .replace(assignedSecret, '$1$2…')
     .replace(labelledSecret, '$1$2…')
     .replace(bareBearer, '$1 …')
     .replace(bareBasic, maskBasic)
