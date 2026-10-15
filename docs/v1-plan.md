@@ -660,6 +660,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 - 在终端里用 `open` 启动 app，会继承终端的长 PATH。要模拟从 Finder 打开，显式加 PATH：`open -n --env PATH=/usr/bin:/bin:/usr/sbin:/sbin --env HOME=<临时目录> ... <app>`。
 - 测 Claude 时，隔离 HOME 下读不到 owner 的 Claude 凭据：owner 的凭据写在 `~/.claude/settings.json` 的 `env` 里，不在钥匙串。要测已登录，那一条命令用真实 HOME，VONVON_HOME 仍用临时目录。
 - 退出桌面端不停 daemon（product.md 3.10）。测完用包里的命令行 `daemon stop` 停掉隔离 HOME 里的 daemon。
+- 测后台服务（launchd）时不换 HOME，只换 `VONVON_HOME`，任务名就带上数据目录的哈希。launchd 拉起的 daemon 拿的是账号真实的 HOME，按它找自己的 plist；HOME 换成临时目录时 plist 写进了临时目录，daemon 找不到注册，按"没有注册"以 0 退出，安装等到超时回滚（#320 的第二轮 Mac 检查）。这时 plist 会写进真实的 `~/Library/LaunchAgents`，只许有那一个带哈希的文件，测完用 `service uninstall` 去掉。打开 app 时另带 `VONVON_DESKTOP_TEST_HOME`，免得往 PATH 里注册 `vonvon` 命令。
 
 测 Claude 后端时，用 owner 本机的 Claude 登录跑少量回合。这是测产品，不是在 Mac 上开 Claude 的开发会话。
 
