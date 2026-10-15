@@ -37,11 +37,20 @@ const secretKey = String.raw`((?:secret|token|password|passwd|credential|authori
 const authScheme = String.raw`(?:(?:bearer|basic)\s+)?`;
 /** A value that looks like a credential rather than a word: 8+ characters with a letter and a digit, or 16+. */
 const credential = String.raw`(?:(?=[\w.~+/=-]*[a-z])(?=[\w.~+/=-]*\d)[\w.~+/=-]{8,}|[\w.~+/=-]{16,})`;
+/** A quoted value goes up to its closing quote, spaces and commas included. */
+const quotedSecret = new RegExp(String.raw`${secretKey}(["']?\s*[:=]\s*)(["'])[^"'\r\n]{0,256}`, 'gi');
 /** `key=value`, or a quoted key or value as in JSON and inspected objects: the value is always the secret. */
 const assignedSecret = new RegExp(String.raw`${secretKey}(["']?\s*=\s*["']?|["']\s*:\s*["']?|\s*:\s*["'])${authScheme}[^\s"',;&)}\]]+`, 'gi');
+/** An `Authorization:` header value is always a credential, whatever it looks like. */
+const authorizationValue = /\b(authorization)(\s*:\s*)(?:(?:bearer|basic)\s+)?[^\s"',;&)}\]]+/gi;
 /** Unquoted `key: value` is also prose ("Invalid token: expired"), so only a credential-shaped value goes. */
 const labelledSecret = new RegExp(String.raw`${secretKey}(\s*:\s*)${authScheme}${credential}`, 'gi');
-const bareAuthScheme = new RegExp(String.raw`\b(bearer|basic)\s+${credential}`, 'gi');
+const bareBearer = /\b(bearer)\s+[\w.~+/=-]{8,}/gi;
+/** `Basic` and base64: a credential has mixed case, a digit or padding; "Basic settings" stays. */
+const bareBasic = /\b(basic)\s+([A-Za-z0-9+/]{8,}={0,2})/gi;
+function maskBasic(match: string, scheme: string, value: string): string {
+  return /[A-Z]/.test(value) && /[a-z]/.test(value) || /[\d=+/]/.test(value) ? `${scheme} …` : match;
+}
 
 /**
  * Daemon RPC errors are the user-facing texts the web UI already shows, so the desktop shows them too, as one
@@ -60,9 +69,12 @@ export function sanitizeDaemonMessage(raw: string): string {
     .replace(/[\p{Cc}\u2028\u2029]/gu, ' ')
     .replace(/\b([a-z][a-z\d+.-]{0,31}:\/\/)[^\s/?#@]*@/gi, '$1')
     .replace(/\b([a-z][a-z\d+.-]{0,31}:\/\/[^\s?#]*)[?#]\S*/gi, '$1')
+    .replace(quotedSecret, '$1$2$3…')
     .replace(assignedSecret, '$1$2…')
+    .replace(authorizationValue, '$1$2…')
     .replace(labelledSecret, '$1$2…')
-    .replace(bareAuthScheme, '$1 …')
+    .replace(bareBearer, '$1 …')
+    .replace(bareBasic, maskBasic)
     .replace(/\b[tua]-[A-Za-z0-9]{24,}\b/g, '…')
     .replace(/\bsk-[\w-]{16,}/g, '…')
     .replace(/\s+/g, ' ').trim();

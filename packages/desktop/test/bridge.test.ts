@@ -145,6 +145,10 @@ describe('desktop IPC boundary', () => {
       'Basic settings are invalid. Invalid token: expired; tokens: 1234 used'],
     ['file paths, which the web UI shows too', 'ENOENT: no such file /home/ops/.vonvon/bots/cli_a/setup.json', 'ENOENT: no such file /home/ops/.vonvon/bots/cli_a/setup.json'],
     ['secret-style values', 'unsupported secret form: {"app_secret":"s3cr3t","password":\'pw\', token = abc}', 'unsupported secret form: {"app_secret":"…","password":\'…\', token = …}'],
+    ['quoted values with spaces or commas', '{"app_secret":"abc def ghi"} {"secret":"a,b-c-d"} client_secret = "s e c" end',
+      '{"app_secret":"…"} {"secret":"…"} client_secret = "…" end'],
+    ['any Authorization value and base64 after Basic', 'Authorization: Bearer abcdefghijkl, Authorization: Basic dXNlcjpwYXNz, Basic dXNlcjpwYXNz, Bearer abcdefghijkl',
+      'Authorization: …, Authorization: …, Basic …, Bearer …'],
     ['bare Feishu access tokens', 'invalid access t-g1044ghJRUIJJ5ELPPA7VQ5XWQUQAP4XMYWC4P7S here', 'invalid access … here'],
     ['empty text', ' \u0000 ', 'Daemon request failed'],
   ])('sanitizes %s in daemon messages', (_name, raw, expected) => {
@@ -152,7 +156,7 @@ describe('desktop IPC boundary', () => {
   });
 
   it('scans only the start of a huge daemon message, so the patterns cannot stall the main process', () => {
-    for (const raw of ['a-'.repeat(50_000), 'a.'.repeat(50_000), 'a://'.repeat(25_000), 'token '.repeat(20_000), '😀'.repeat(100_000)]) {
+    for (const raw of ['a-'.repeat(50_000), 'a.'.repeat(50_000), 'a://'.repeat(25_000), 'token '.repeat(20_000), 'secret:"'.repeat(15_000), 'basic '.repeat(20_000), '😀'.repeat(100_000)]) {
       const started = performance.now();
       const text = sanitizeDaemonMessage(raw);
       expect(performance.now() - started).toBeLessThan(250);
