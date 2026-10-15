@@ -4,7 +4,7 @@ import type {AdminSetupStatus, Agent, ApplicationService, DesktopSnapshot, Servi
 import {createClient} from '../../client/src/client';
 import {ClientProvider} from '../src/client-context';
 import {SetupChecklist} from '../src/setup/SetupChecklist';
-import {BOT_ADDED_WARNING, JOIN_SCOPE_WARNING, botSteps, recentServiceFailure, remoteStepsDone, scopeStep, serviceStep, toolSteps} from '@vonvon/protocol';
+import {BOT_ADDED_WARNING, JOIN_SCOPE_WARNING, RECALL_WARNING, botSteps, recentServiceFailure, remoteStepsDone, scopeStep, serviceStep, toolSteps} from '@vonvon/protocol';
 
 const agent: Agent = {id: 'cli_setup' as Agent['id'], name: '小助手', enabled: true, running: true, connection: 'connected', activation: 'active'};
 const done: AdminSetupStatus = {
@@ -126,6 +126,9 @@ it('names the bot-added event in the events step as a warning only', () => {
   const missing = byId(botSteps(agent, {...done, event: {state: 'missing', version: '1.0.0', missingRequired: ['im.message.receive_v1'], missingOptional: ['im.chat.member.bot.added_v1']}}));
   expect(missing.event).toMatchObject({done: false, status: '缺少接收消息事件', warnings: [BOT_ADDED_WARNING]});
   expect(byId(botSteps(agent, {...done, event: {state: 'ok', version: '1.0.2', missingOptional: ['application.bot.menu_v6']}})).event?.warnings).toBeUndefined();
+  // s15: an unsubscribed recall event says what the bot then misses, next to bot-added.
+  expect(byId(botSteps(agent, {...done, event: {state: 'ok', version: '1.0.2', missingOptional: ['im.chat.member.bot.added_v1', 'im.message.recalled_v1']}})).event?.warnings).toEqual([BOT_ADDED_WARNING, RECALL_WARNING]);
+  expect(RECALL_WARNING).toContain('撤回');
   expect(byId(botSteps(agent, {...done, event: {state: 'unpublished'}})).event?.warnings).toBeUndefined();
   expect(remoteStepsDone({...done, scopes: {...done.scopes, missingJoinScopes: ['im:chat:readonly']}, event: {state: 'ok', missingOptional: ['im.chat.member.bot.added_v1']}})).toBe(true);
 });

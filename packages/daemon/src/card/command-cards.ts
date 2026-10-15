@@ -321,13 +321,14 @@ export interface HelpCaps {
  * don't see them listed (they'd be denied anyway — see handle-message 的门控).
  * `caps` 按会话后端能力裁剪：不支持 /goal、/compact、/resume 的后端
  * （能力守卫会拒），就不在速查卡里列出来——避免「列了点了才发现不支持」的不一致。
- * 缺省（undefined 或不传）= 全列（codex 行为，向后兼容）。 */
-export function buildHelpCard(scope: HelpScope, noMention = true, isAdmin = false, caps?: HelpCaps): CardObject {
+ * 缺省（undefined 或不传）= 全列（codex 行为，向后兼容）。`kind` 是群的类型：
+ * 连续群的话题里，新会话在主区的消息下开（s15）。 */
+export function buildHelpCard(scope: HelpScope, noMention = true, isAdmin = false, caps?: HelpCaps, kind: 'multi' | 'single' = 'multi'): CardObject {
   const showGoal = caps?.goal ?? true;
   const showCompact = caps?.compact ?? true;
   const showResume = caps?.resume ?? true;
   const goalLine = '· `/goal <目标>` → 自主多轮跑到完成（卡上 ⏹ 终止 / 🎯 结束目标）';
-  const compactLine = '· `/compact` → 压缩上下文（释放空间）';
+  const compactLine = '· `/compact` → 压缩上下文（正忙时等这一轮结束再压）';
 
   const elements: CardElement[] = [];
   if (scope === 'single') {
@@ -335,7 +336,7 @@ export function buildHelpCard(scope: HelpScope, noMention = true, isAdmin = fals
     if (showGoal) lines.push(goalLine);
     lines.push('· `/model` → 切换模型 / 推理强度', '· `/context` → 看上下文占比');
     if (showCompact) lines.push(compactLine);
-    if (isAdmin) lines.push('· `/clear` → 清空上下文，开一段全新会话（飞书消息保留）');
+    if (isAdmin) lines.push(`· \`/new\`（或 \`/clear\`）→ 换一条新会话${showResume ? '，旧的能 `/resume` 回来' : ''}（飞书消息保留）`);
     if (isAdmin && showResume) lines.push('· `/resume` → 切回历史会话');
     if (isAdmin) lines.push('· `/settings` → 群设置（免@ 开关）');
     lines.push('· `/help` → 这张速查卡');
@@ -350,7 +351,7 @@ export function buildHelpCard(scope: HelpScope, noMention = true, isAdmin = fals
       md('🧵 **话题内** — 每个话题是一个独立会话。'),
       hr(),
       md(lines.join('\n')),
-      note('开新话题：回到主群区 @我 + 内容。'),
+      note(kind === 'single' ? '要新的会话，就在主区的某条消息下开一个新话题。' : '开新话题：回到主群区 @我 + 内容。'),
     );
   } else {
     const lines = ['· **@我 + 内容** → 开一个新话题并开始'];
@@ -401,7 +402,7 @@ export function buildWelcomeCard(
           talkLine(noMention, '交给我处理'),
           ...(showGoal ? [goalLine] : []),
           '· `/model` → 切换模型 / 推理强度',
-          '· `/clear` → 清空上下文，开新会话（管理员，飞书消息保留）',
+          `· \`/new\` → 开新会话（管理员，${showResume ? '旧的能 `/resume` 回来，' : ''}飞书消息保留）`,
           ...(showResume ? ['· `/resume` → 切回历史会话（管理员）'] : []),
           '· `/settings` → 群设置（免@ 开关）',
           '· `/help` → 命令速查卡',

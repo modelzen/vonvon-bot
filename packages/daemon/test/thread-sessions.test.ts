@@ -44,6 +44,7 @@ vi.mock('../src/bot/context-weave', async (original) => ({
 vi.mock('../src/bot/session-store', async (original) => ({
   ...await original<object>(),
   getSession: async (key: string) => fake.records.get(key),
+  listSessions: async () => [...fake.records.values()],
   patchSession: async (key: string, patch: object | ((r: object) => object)) => {
     const r = fake.records.get(key);
     if (r) Object.assign(r, typeof patch === 'function' ? patch({ ...r }) : patch);
@@ -99,7 +100,7 @@ function message(text: string, threadId?: string, extra: Partial<NormalizedMessa
 }
 function setup(topics?: TopicRegistry) {
   const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner' } } };
-  const channel = { send: fake.send, rawClient: { im: { v1: { message: { get: fake.get, list: fake.list }, chat: { get: fake.chatGet }, messageReaction: {
+  const channel = { send: fake.send, rawClient: { appId: 'cli_me', im: { v1: { message: { get: fake.get, list: fake.list }, chat: { get: fake.chatGet }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
   orchestrator = createOrchestrator(channel as never, cfg, '/test', topics);
@@ -157,9 +158,9 @@ describe('topics in a single-session group', () => {
     expect(fake.records.has('omt_topic')).toBe(false);
   });
 
-  it('answers /clear inside a topic without switching sessions', async () => {
+  it.each(['/clear', '/new'])('answers %s inside a topic without switching sessions', async (cmd) => {
     const o = setup();
-    await o.onMessage(message('/clear', 'omt_topic'));
+    await o.onMessage(message(cmd, 'omt_topic'));
     expect(fake.send).toHaveBeenCalledWith('chat', { markdown: expect.stringContaining('开一个新话题') }, expect.objectContaining({ replyInThread: true }));
     expect(fake.backend.startThread).not.toHaveBeenCalled();
   });
@@ -1097,5 +1098,249 @@ describe('topic openings, 引用行 and the topics table (s14b)', () => {
     await o.onMessage(sent);
     expect(fake.log.info).toHaveBeenCalledWith('intake', 'late-redelivery-skipped', expect.objectContaining({ msgId: sent.messageId, reopen: true }));
     expect(fake.backend.startThread).not.toHaveBeenCalled();
+  });
+});
+
+describe('/new, /compact while busy and recall notes (s15)', () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'topics-')); });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+  const ctx = (messageId: string, text: string, createTime: number) => ({ messageId, senderName: '李四', text, from: 'user', createTime });
+  const clock = '(?:\\d\\d-\\d\\d )?\\d\\d:\\d\\d';
+  const sent = () => JSON.stringify(fake.send.mock.calls);
+  const logged = (event: string) => vi.waitFor(() => expect(fake.log.info).toHaveBeenCalledWith('intake', event, expect.anything()));
+  /** A thread that does not steer; each turn waits for `next()` before it ends. */
+  function held(sessionId: string) {
+    const run = thread(sessionId);
+    const gates: (() => void)[] = [];
+    let compacted!: () => void;
+    const compact = vi.fn(() => new Promise((resolve) => { compacted = () => resolve({ usage: null }); }));
+    Object.assign(run.t, { supportsSteer: false, compact });
+    run.t.runStreamed = (input: AgentInput) => {
+      run.consumed.push(input);
+      const gate = new Promise<void>((resolve) => gates.push(resolve));
+      return { turnId: () => 'turn', events: (async function* (): AsyncGenerator<AgentEvent> {
+        yield { type: 'turn_started', turnId: 'turn' };
+        await gate;
+        yield { type: 'done', turnId: 'turn' };
+      })() };
+    };
+    return { ...run, compact, next: () => gates.shift()?.(), compacted: () => compacted() };
+  }
+  /** The next message.get of `id` finds it recalled (a deleted item keeps its place and sender). */
+  const recalledOnce = (id: string, at: number, extra: object = {}) => fake.get.mockImplementationOnce((async () => ({ code: 0, data: { items: [{
+    message_id: id, deleted: true, msg_type: 'text', create_time: String(at),
+    sender: { id: 'ou_li', id_type: 'open_id', sender_type: 'user', sender_name: '李四' }, ...extra }] } })) as never);
+
+  it('swaps the main session for the owner on /new, starting after the command', async () => {
+    fake.records.set('chat', record('chat', { lastSeenAt: 5, recalls: [{ id: 'om_r', at: 3 }] }));
+    fake.backend.startThread.mockResolvedValue(thread('fresh').t);
+    const o = setup();
+    const cmd = message('/new');
+    await o.onMessage(cmd);
+    await vi.waitFor(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'clear', expect.objectContaining({ cmd: 'new' })));
+    expect(fake.records.get('chat')).toMatchObject({ sessionId: 'fresh', lastSeenAt: cmd.createTime, from: cmd.createTime + 1 });
+    expect(fake.records.get('chat')).not.toHaveProperty('recalls');
+  });
+
+  it('lets only the owner and admins use /new in the main area, and explains it in a multi group', async () => {
+    const o = setup();
+    await o.onMessage(message('/new', undefined, { senderId: 'ou_guest' }));
+    expect(fake.send).toHaveBeenCalledWith('chat', { markdown: '⚠️ `/new` 只有主人和管理员能用。主区的会话是大家共用的。' }, expect.anything());
+    fake.project = { name: 'test', chatId: 'chat', cwd: '/test', kind: 'multi' };
+    await o.onMessage(message('/new'));
+    expect(sent()).toContain('这个群的主区不留会话，不用 `/new`');
+    expect(fake.backend.startThread).not.toHaveBeenCalled();
+  });
+
+  it('runs a message sent during the swap on the new session', async () => {
+    fake.records.set('chat', record('chat'));
+    const fresh = thread('fresh');
+    let start!: (t: unknown) => void;
+    fake.backend.startThread.mockImplementationOnce(() => new Promise((resolve) => { start = resolve; }));
+    const o = setup();
+    await o.onMessage(message('/new'));
+    await vi.waitFor(() => expect(fake.backend.startThread).toHaveBeenCalled());
+    await o.onMessage(message('换完再说'));
+    await logged('deferred');
+    start(fresh.t);
+    await done();
+    expect(fresh.consumed[0]!.text).toContain('换完再说');
+    expect(fake.backend.resumeThread).not.toHaveBeenCalled();
+    expect(sent()).not.toContain('请重发');
+  });
+
+  it('rebuilds a session unused since /new without the lines before it, and says nothing about it', async () => {
+    const at = Date.now() - 60_000;
+    fake.records.set('chat', record('chat', { lastSeenAt: at, from: at + 1 }));
+    const fresh = thread('fresh');
+    fake.backend.resumeThread.mockRejectedValue(new Error('no rollout'));
+    fake.backend.startThread.mockResolvedValue(fresh.t);
+    fake.chat.mockResolvedValue({ ok: true, complete: true, messages: [ctx('om_before', '命令之前', at - 1000), ctx('om_after', '命令之后', at + 1000)] });
+    const o = setup();
+    await o.onMessage(message('接着'));
+    await done();
+    expect(fake.chat).toHaveBeenLastCalledWith(expect.anything(), 'chat', expect.objectContaining({ stopAt: at + 1, enough: 20 }));
+    expect(fresh.consumed[0]!.text).toContain('李四：命令之后');
+    expect(fresh.consumed[0]!.text).not.toContain('命令之前');
+    expect(finalCard()).not.toContain('⚠️');
+    expect(fake.log.info).toHaveBeenCalledWith('agent', 'session-changed', { sessionKey: 'chat', reason: 'resume-failed', unused: true });
+  });
+
+  it('compacts right after the running turn, and runs what came in during the compaction', async () => {
+    fake.records.set('chat', record('chat', { lastSeenAt: 5 }));
+    const run = held('old-chat');
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup();
+    await o.onMessage(message('一'));
+    await vi.waitFor(() => expect(run.consumed).toHaveLength(1));
+    await o.onMessage(message('/compact'));
+    await o.onMessage(message('/compact'));
+    expect(sent()).toContain('⏳ 等这一轮结束就压缩，不用再发。');
+    expect(sent()).toContain('已经排上了，这一轮结束后就压缩。');
+    run.next();
+    await vi.waitFor(() => expect(run.compact).toHaveBeenCalledTimes(1));
+    await o.onMessage(message('二'));
+    await logged('queued');
+    await o.onMessage(message('/compact'));
+    expect(sent()).toContain('正在压缩，不用再发 `/compact`。');
+    expect(run.consumed).toHaveLength(1);
+    run.compacted();
+    await vi.waitFor(() => expect(run.consumed).toHaveLength(2));
+    expect(run.consumed[1]!.text).toContain('二');
+    run.next();
+    await vi.waitFor(() => expect((fake.log.info.mock.calls as unknown[][]).filter((c) => c[1] === 'final')).toHaveLength(2));
+    expect(run.compact).toHaveBeenCalledTimes(1);
+    expect(sent()).not.toContain('请重发');
+  });
+
+  it('refuses /compact during a goal, and drops a waiting one when the turn ends with its process gone', async () => {
+    fake.records.set('chat', record('chat', { lastSeenAt: 5 }));
+    const run = held('old-chat');
+    let alive = true;
+    run.t.isAlive = () => alive;
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup();
+    await o.onMessage(message('/goal 把单测跑绿'));
+    await o.onMessage(message('/compact'));
+    expect(sent()).toContain('🎯 目标运行中，结束后再 `/compact`。');
+    await vi.waitFor(() => expect(fake.log.fail).toHaveBeenCalled()); // the fake thread has no goal support
+    await o.onMessage(message('一'));
+    await vi.waitFor(() => expect(run.consumed).toHaveLength(1));
+    await o.onMessage(message('/compact'));
+    alive = false;
+    run.next();
+    await vi.waitFor(() => expect(sent()).toContain('前面那一轮停了，`/compact` 没有执行，要压缩就再发一次。'));
+    expect(run.compact).not.toHaveBeenCalled();
+  });
+
+  it('runs a message sent during an idle /compact once it is done', async () => {
+    fake.records.set('chat', record('chat', { lastSeenAt: 5 }));
+    const run = held('old-chat');
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup();
+    await o.onMessage(message('/compact'));
+    await vi.waitFor(() => expect(run.compact).toHaveBeenCalled());
+    await o.onMessage(message('压缩时说的'));
+    await logged('deferred');
+    expect(run.consumed).toHaveLength(0);
+    run.compacted();
+    await vi.waitFor(() => expect(run.consumed).toHaveLength(1));
+    expect(run.consumed[0]!.text).toContain('压缩时说的');
+    run.next();
+    await done();
+    expect(sent()).not.toContain('请重发');
+  });
+
+  it('says a recalled line the main session got once, at its next turn', async () => {
+    const at = Date.now() - 60_000;
+    fake.records.set('chat', record('chat', { lastSeenAt: at + 1000 }));
+    const run = thread('old-chat');
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup();
+    recalledOnce('om_r', at);
+    await o.onRecall({ messageId: 'om_r', chatId: 'chat', recallType: 'message_owner' });
+    expect(fake.records.get('chat').recalls).toEqual([{ id: 'om_r', at, who: { kind: 'user', openId: 'ou_li' } }]);
+    await o.onMessage(message('接着说'));
+    await done();
+    expect(run.consumed[0]!.text).toMatch(new RegExp(`^\\[飞书 · 群「test」· 主区\\]\\n${clock} 〔撤回〕李四撤回了一条消息，不要再用它。\\n\\[/飞书\\]\\n`));
+    await vi.waitFor(() => expect(fake.records.get('chat').recalls).toEqual([]));
+    fake.log.info.mockClear();
+    await o.onMessage(message('再说'));
+    await done();
+    expect(run.consumed[1]!.text).not.toContain('〔撤回〕');
+  });
+
+  it('notes a recall for the sessions the message reached only', async () => {
+    const at = Date.now() - 60_000;
+    const topics = createTopicRegistry({ dir, sessions: async () => [...fake.records.values()] });
+    await topics.note('chat', { topicId: 'omt_t', at: at + 500, from: { kind: 'user', openId: 'ou_li' }, first: { id: 'om_root', at: at + 500 } });
+    fake.records.set('chat', record('chat', { lastSeenAt: at + 1000 }));
+    fake.records.set('omt_t', record('omt_t', { lastSeenAt: at + 1000, from: at - 5000 }));
+    const o = setup(topics);
+    const ids = (key: string) => (fake.records.get(key).recalls ?? []).map((r: { id: string }) => r.id);
+    recalledOnce('om_reply', at, { thread_id: 'omt_t', root_id: 'om_root' }); // a reply in the topic
+    await o.onRecall({ messageId: 'om_reply', chatId: 'chat', recallType: 'group_owner' });
+    recalledOnce('om_main', at); // a main line the topic's opening carried
+    await o.onRecall({ messageId: 'om_main', chatId: 'chat' });
+    recalledOnce('om_older', at - 10_000); // before the topic's opening
+    await o.onRecall({ messageId: 'om_older', chatId: 'chat' });
+    recalledOnce('om_unseen', at + 5000); // after both watermarks
+    await o.onRecall({ messageId: 'om_unseen', chatId: 'chat' });
+    recalledOnce('om_mine', at, { sender: { id: 'cli_me', id_type: 'app_id', sender_type: 'app' } }); // the bot's own
+    await o.onRecall({ messageId: 'om_mine', chatId: 'chat' });
+    expect(ids('chat')).toEqual(['om_older', 'om_main']);
+    expect(ids('omt_t')).toEqual(['om_reply', 'om_main']);
+    expect(fake.records.get('omt_t').recalls[0]).toMatchObject({ other: true });
+  });
+
+  it('drops a queued message recalled before its turn, skips one whose recall came first, and says one written meanwhile', async () => {
+    const at = Date.now() - 60_000;
+    fake.records.set('chat', record('chat', { lastSeenAt: 5 }));
+    const run = held('old-chat');
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup();
+    await o.onMessage(message('一'));
+    await vi.waitFor(() => expect(run.consumed).toHaveLength(1));
+    const queued = message('二');
+    await o.onMessage(queued);
+    await logged('queued');
+    recalledOnce(queued.messageId, queued.createTime);
+    await o.onRecall({ messageId: queued.messageId, chatId: 'chat' });
+    expect(fake.log.info).toHaveBeenCalledWith('intake', 'recall-queued-dropped', { msgId: queued.messageId, dropped: 1 });
+    const early = message('三');
+    recalledOnce(early.messageId, early.createTime);
+    await o.onRecall({ messageId: early.messageId, chatId: 'chat' });
+    await o.onMessage(early);
+    expect(fake.log.info).toHaveBeenCalledWith('intake', 'reject', { reason: 'recalled', msgId: early.messageId });
+    recalledOnce('om_r', at); // under the watermark the running turn moved
+    await o.onRecall({ messageId: 'om_r', chatId: 'chat' });
+    await o.onMessage(message('四'));
+    run.next();
+    await vi.waitFor(() => expect(run.consumed).toHaveLength(2));
+    expect(run.consumed[0]!.text).not.toContain('〔撤回〕');
+    expect(run.consumed[1]!.text).toMatch(new RegExp(`^\\[飞书 · 群「test」· 主区\\]\\n${clock} 〔撤回〕李四撤回了一条消息，不要再用它。\\n\\[/飞书\\]\\n[^]*四$`));
+    await vi.waitFor(() => expect(fake.records.get('chat').recalls).toEqual([]));
+    run.next();
+    await done();
+  });
+
+  it('notes a trigger recalled while its turn was prepared, for the next turn', async () => {
+    fake.records.set('chat', record('chat', { lastSeenAt: 5 }));
+    const run = thread('old-chat');
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    type Pull = { messages: unknown[]; ok: boolean; complete: boolean };
+    let pulled!: (p: Pull) => void;
+    fake.chat.mockImplementationOnce(() => new Promise<Pull>((resolve) => { pulled = resolve; }));
+    const o = setup();
+    const trigger = message('马上撤回');
+    await o.onMessage(trigger);
+    await vi.waitFor(() => expect(fake.chat).toHaveBeenCalled());
+    recalledOnce(trigger.messageId, trigger.createTime);
+    await o.onRecall({ messageId: trigger.messageId, chatId: 'chat' });
+    expect(fake.records.get('chat')).not.toHaveProperty('recalls');
+    pulled({ ok: true, complete: true, messages: [] });
+    await done();
+    await vi.waitFor(() => expect(fake.records.get('chat').recalls).toEqual([{ id: trigger.messageId, at: trigger.createTime, who: { kind: 'user', openId: 'owner' } }]));
   });
 });

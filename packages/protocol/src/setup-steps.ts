@@ -25,6 +25,8 @@ export type SetupStep = {
 /** Join-group scope and bot-added event: optional for receiving messages, needed to bind groups (s02a). */
 export const JOIN_SCOPE_WARNING = '还没开读群信息的权限（im:chat:readonly）：把 bot 拉进群后不会提醒你绑定，「查找已经加入的群」也会失败。';
 export const BOT_ADDED_WARNING = '没订阅「机器人进群」（im.chat.member.bot.added_v1）：把 bot 拉进群后不会提醒你绑定。';
+/** Recall event: optional, without it a recalled message the bot read is still used (s15). */
+export const RECALL_WARNING = '没订阅「撤回消息」（im.message.recalled_v1）：撤回 bot 读过的消息后，bot 不会知道，还会接着用它。';
 
 /** The order follows the Feishu console: the long connection must be up before the
  * event page can save "长连接" mode, and events only count once a version is published. */
@@ -35,7 +37,9 @@ export function botSteps(agent: Agent, status: AdminSetupStatus | undefined, pro
   }
   const event = status.event;
   const eventSettings: StepAction = {kind: 'open', label: '打开事件设置', url: status.eventConfigUrl, target: 'event-settings'};
-  const botAdded = event.missingOptional?.includes('im.chat.member.bot.added_v1') ? [BOT_ADDED_WARNING] : undefined;
+  const missed = ([['im.chat.member.bot.added_v1', BOT_ADDED_WARNING], ['im.message.recalled_v1', RECALL_WARNING]] as const)
+    .filter(([e]) => event.missingOptional?.includes(e)).map(([, w]) => w);
+  const eventWarnings = missed.length ? missed : undefined;
   const steps: SetupStep[] = [
     status.credentials.ok
       ? {id: 'credentials', title: '飞书应用', status: '凭据有效', tone: 'success', done: true, actions: []}
@@ -45,9 +49,9 @@ export function botSteps(agent: Agent, status: AdminSetupStatus | undefined, pro
     scopeStep(status),
     connectionStep(agent),
     event.state === 'ok'
-      ? {id: 'event', title: '事件订阅', status: '已订阅接收消息', tone: 'success', done: true, detail: event.missingOptional?.length ? '有几项可选事件没订阅，不影响收消息。' : undefined, items: event.missingOptional, actions: [], warnings: botAdded}
+      ? {id: 'event', title: '事件订阅', status: '已订阅接收消息', tone: 'success', done: true, detail: event.missingOptional?.length ? '有几项可选事件没订阅，不影响收消息。' : undefined, items: event.missingOptional, actions: [], warnings: eventWarnings}
       : event.state === 'missing'
-        ? {id: 'event', title: '事件订阅', status: '缺少接收消息事件', tone: 'warning', done: false, detail: '在事件设置里选"使用长连接接收事件"，添加"接收消息"（im.message.receive_v1），再发布一个新版本。', actions: [eventSettings], warnings: botAdded}
+        ? {id: 'event', title: '事件订阅', status: '缺少接收消息事件', tone: 'warning', done: false, detail: '在事件设置里选"使用长连接接收事件"，添加"接收消息"（im.message.receive_v1），再发布一个新版本。', actions: [eventSettings], warnings: eventWarnings}
         : event.state === 'unpublished'
           ? {id: 'event', title: '事件订阅', status: '上线后才能确认', tone: 'neutral', done: false, detail: '在事件设置里选"使用长连接接收事件"，添加"接收消息"（im.message.receive_v1）。版本上线后这里会自动确认。', actions: [eventSettings]}
           : {id: 'event', title: '事件订阅', status: '无法确认', tone: 'neutral', done: false, detail: event.reason, actions: [eventSettings]},
