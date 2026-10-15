@@ -449,6 +449,7 @@ export class ClaudeAgentBackend implements AgentBackend {
 
   async resumeThread(opts: ResumeThreadOptions): Promise<AgentThread> {
     const sdk = await this.sdkLoader();
+    await assertSessionSaved(sdk, opts.sessionId, opts.cwd);
     return new ClaudeAgentThread({
       sessionId: opts.sessionId,
       resume: true,
@@ -462,6 +463,23 @@ export class ClaudeAgentBackend implements AgentBackend {
       query: sdk.query,
     });
   }
+}
+
+/**
+ * A first turn that failed before Claude Code wrote its transcript (sandbox tools missing, not logged in) leaves
+ * a session id with nothing behind it, and resuming it fails every later turn with "No conversation found".
+ * Throwing here sends the caller down its resume-failed path instead: a fresh session, and in a group a line on
+ * the run card saying so. A lookup that fails by itself does not block the resume.
+ */
+async function assertSessionSaved(sdk: ClaudeSdkFacade, sessionId: string, cwd: string): Promise<void> {
+  let saved: Awaited<ReturnType<ClaudeSdkFacade['getSessionInfo']>>;
+  try {
+    saved = await sdk.getSessionInfo(sessionId, { dir: cwd });
+  } catch (err) {
+    log.fail('agent', err, { backend: 'claude-agent', phase: 'resume-lookup', sessionId });
+    return;
+  }
+  if (!saved) throw new Error(`Claude 会话 ${sessionId} 没有保存下来，无法恢复`);
 }
 
 const EFFORTS: ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh'];

@@ -168,7 +168,7 @@ describe('Claude backend native session titles', () => {
     const sdk = {
       query,
       listSessions: vi.fn(),
-      getSessionInfo: vi.fn(),
+      getSessionInfo: vi.fn(async () => ({ sessionId: 'session-1', summary: '', lastModified: 1 })),
       getSessionMessages: vi.fn(),
       renameSession: vi.fn(),
     } as unknown as ClaudeSdkFacade;
@@ -193,6 +193,30 @@ describe('Claude backend native session titles', () => {
     }));
 
     await fresh.close();
+    await resumed.close();
+  });
+
+  it('refuses to resume a session Claude Code never saved, so the caller starts a fresh one', async () => {
+    const query = vi.fn(() => asyncQuery([]));
+    const getSessionInfo = vi.fn(async (): Promise<SDKSessionInfo | undefined> => undefined);
+    const sdk = { query, listSessions: vi.fn(), getSessionInfo, getSessionMessages: vi.fn(), renameSession: vi.fn() } as unknown as ClaudeSdkFacade;
+    const backend = new ClaudeAgentBackend(async () => sdk);
+
+    await expect(backend.resumeThread({ cwd: '/repo', sessionId: 'never-saved' })).rejects.toThrow('没有保存下来');
+    expect(getSessionInfo).toHaveBeenCalledWith('never-saved', { dir: '/repo' });
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('still resumes when the saved-session lookup itself fails', async () => {
+    const query = vi.fn((_params: { options?: { resume?: string } }) => asyncQuery([]));
+    const sdk = {
+      query, listSessions: vi.fn(), getSessionMessages: vi.fn(), renameSession: vi.fn(),
+      getSessionInfo: vi.fn(async () => { throw new Error('EACCES'); }),
+    } as unknown as ClaudeSdkFacade;
+    const backend = new ClaudeAgentBackend(async () => sdk);
+
+    const resumed = await backend.resumeThread({ cwd: '/repo', sessionId: 'session-1' });
+    expect(query.mock.calls[0]![0].options).toEqual(expect.objectContaining({ resume: 'session-1' }));
     await resumed.close();
   });
 
