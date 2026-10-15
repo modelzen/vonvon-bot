@@ -36,7 +36,10 @@ export function presentTool(tool: EnvironmentToolState, auth: Extract<Environmen
   };
   const source = tool.installation === "managed" ? "Vonvon 托管" : "现有安装";
   const version = tool.version ? `版本 ${tool.version}` : "版本未知";
-  const summary = `${version} · ${source}${tool.updateAvailable && tool.latestVersion ? ` · 可更新至 ${tool.latestVersion}` : ""}`;
+  const compatibility = tool.compatibility;
+  const versionNote = compatibility?.status === "tooOld" ? ` · 太旧，最低要 ${compatibility.minimum}` : compatibility?.status === "newer" ? ` · 比验证过的 ${compatibility.verified} 新` : "";
+  const summary = `${version}${versionNote} · ${source}${tool.updateAvailable && tool.latestVersion ? ` · 可更新至 ${tool.latestVersion}` : ""}`;
+  if (compatibility?.status === "tooOld") return { action: "update", status: "版本太旧", tone: "warning", summary };
   if (tool.tool === "lark-cli" && (profile?.tokenStatus === "needs_refresh" || profile?.tokenStatus === "expired" || profile?.tokenStatus === "missing")) return {
     action: "login", status: profileTokenLabel(profile.tokenStatus), tone: "warning", summary,
   };

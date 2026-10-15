@@ -1,9 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { managedToolExecutable, managedToolSelection } from '../src/agent/codex-appserver/managed-tools';
 import { resolveCodexBin } from '../src/agent/codex-appserver/locate';
+
+// What the lookup finds on this machine once nothing else is left: a codex inside an app
+// under /Applications (the macOS CI runner has ChatGPT.app), otherwise none.
+const appCodex = process.platform === 'darwin'
+  ? ['/Applications/Codex.app/Contents/Resources/codex', '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex'].find(path => existsSync(path)) ?? null
+  : null;
 
 describe('desktop managed tool pointer', () => {
   it('selects only the published complete release and keeps explicit CODEX_BIN first', () => {
@@ -33,7 +39,7 @@ describe('desktop managed tool pointer', () => {
       expect(resolveCodexBin(context)).toBe(secondBin);
       expect(resolveCodexBin({ ...context, env: { PATH: '', CODEX_BIN: external } })).toBe(external);
       writeFileSync(join(toolRoot, 'current.json'), JSON.stringify({ schemaVersion: 1, tool: 'codex', state: 'disabled' }));
-      expect(resolveCodexBin(context)).toBeNull();
+      expect(resolveCodexBin(context)).toBe(appCodex);
       expect(resolveCodexBin({ ...context, env: { PATH: '', CODEX_BIN: external } })).toBe(external);
       const externalDir = join(home, 'external');
       mkdirSync(externalDir);
@@ -59,7 +65,7 @@ describe('desktop managed tool pointer', () => {
         PATH: [bin, ...(process.platform === 'win32' && process.env.SystemRoot ? [join(process.env.SystemRoot, 'System32')] : [])].join(delimiter),
         ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot, PATHEXT: '.COM;.EXE;.BAT;.CMD' } : {}),
       };
-      expect(resolveCodexBin({ home, dataRoot: alias, env })).toBeNull();
+      expect(resolveCodexBin({ home, dataRoot: alias, env })).toBe(appCodex);
       const externalDir = join(home, 'external');
       mkdirSync(externalDir);
       const external = join(externalDir, process.platform === 'win32' ? 'codex.cmd' : 'codex');

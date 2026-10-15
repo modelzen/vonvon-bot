@@ -19,7 +19,7 @@
 3. 直接推进 M1。新用户扫码时看到的预填名、一键授权里的权限，是 owner 第一次验收最先看到的东西。
 4. 后面的片要靠它开工。`im:message:readonly` 进了必需权限，s04 的清单才能检测它，s09、s14 的补拉才有权限；`include_bot` 和 `self_manage` 进了授权链接，s27 和 s53 才用得上。
 
-s01（#295）和 s02（#296）合入后，就能出 M1 预览版。同时可以开实验：e01、e02 已在 JP-VPS 上做完（#297），Mac 上先做 e06、e10。
+s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owner 的 Mac 上，等 owner 验收。同时可以开实验：e01、e02 已在 JP-VPS 上做完（#297），Mac 上先做 e06、e10。
 
 ## 2. 里程碑
 
@@ -31,18 +31,18 @@ s01（#295）和 s02（#296）合入后，就能出 M1 预览版。同时可以�
 
 ### M1 第一个预览版（s01、s02）
 
-**给 owner 什么：** 在自己的 Mac 上装好预览版。预览版用 Mac 钥匙串里的 Developer ID 签名，没有公证，只出 Apple Silicon 包。owner 自己扫码建一个新 bot，开权限和事件订阅、发布，拉进测试群，@ 它用 Codex 干活；再下载 Claude，把这个群换成 Claude 试一次。这是 v2 第一次有人从头扫码建成 bot，也是 Claude 的回合第一次在真机上跑。
+**给 owner 什么：** 在自己的 Mac 上装好预览版。预览版用 Mac 钥匙串里的 Developer ID 签名，没有公证，只出 Apple Silicon 包。owner 自己扫码建一个新 bot，开权限和事件订阅、发布，拉进测试群，@ 它用 Codex 干活；再下载 Claude，绑第二个群用 Claude 试一次。这是 v2 第一次有人从头扫码建成 bot，也是 Claude 的回合第一次在真机上跑。
 
 通知里写明：Claude 的登录要 owner 事先在终端里用 `claude` 登好。登录检测在 M2 才有，M1 的界面上还看不出 Claude 登没登录。
 
 **怎么验收：**
 1. 打开预览版会话装好的 Vonvon Bot。旧的 bridge 照常用，两边是不同的飞书应用，互不影响。先别打开"咖啡一下"，它会替换 bridge 正在用的 hook（M10 再处理）。
 2. Bot 页点"添加 Bot"，用手机飞书扫码，确认预填的名字是 Vonvon Bot，然后建好。
-3. 在 bot 详情页点"重新授权"开权限。在飞书开发者后台的"事件与回调"里选长连接，加上 `im.message.receive_v1` 和卡片回调，创建版本并发布。完整步骤写在通知里。
+3. 在 bot 详情页点"重新授权"开权限。在飞书开发者后台的"事件与回调"里选长连接，加上事件 `im.message.receive_v1`、`application.bot.menu_v6`、`im.chat.member.bot.added_v1`、`im.chat.member.bot.deleted_v1` 和回调 `card.action.trigger`，创建版本并发布。
 4. 把 bot 拉进一个测试群，在"群聊"页给这个群绑定一个文件夹。
 5. 本机环境页看 Codex 那一行，应该显示找到的 codex。显示"未安装"的话，点"安装托管副本"，装好后显示"codex <版本> 已安装。"。装了托管副本，bot 就先用它，不用自己装的 codex。#296 的检查在隔离 HOME 里这样装过，用的是 `/usr/local/bin` 下的 npm 和 node。
 6. 群里 @bot 让它做件小事，看 Codex 的运行卡。
-7. 在本机环境页下载 Claude，把这个群的后端改成 Claude，再 @ 一次。
+7. 在本机环境页下载 Claude（0.3.296），再拉 bot 进第二个测试群，绑定时执行工具选 Claude，@ 一次。群绑定后界面上换不了执行工具：`bindGroup` 带 `tool`，群设置页的执行工具只读。
 
 哪一步不对，回一句"第几步、看到了什么"就行，Claude 修好后再装一版。
 
@@ -217,7 +217,7 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 
 | 状态 | 编号 | 切片 | 内容 | 约行数 | 依赖 | 风险 | Mac 检查 |
 |---|---|---|---|---|---|---|---|
-| [ ] | s03 | Codex 版本检查和 Claude 登录检测 | Codex 定最低版本和验证过的版本，状态分够用、太旧、比验证过的新；Claude 登录分已登录、未登录、无法确认；本机环境页显示（3.11） | 380 | — | 子进程、错误路径、macOS 原生 | Codex.app 自带和 npm 装的 CLI 版本都判断对；Claude 登录检测和真实跑一轮一致，退出登录后显示未登录 |
+| [x] | s03 | Codex 版本检查和 Claude 登录检测 | Codex 定最低版本和验证过的版本，状态分够用、太旧、比验证过的新；Claude 登录分已登录、未登录、无法确认；本机环境页显示（3.11） | 380 | — | 子进程、错误路径、macOS 原生 | Codex.app 自带和 npm 装的 CLI 版本都判断对；Claude 登录检测和真实跑一轮一致，退出登录后显示未登录 |
 | [ ] | s04 | 首次运行清单 | 桌面端和网页共用的清单：扫码、开权限、长连接、事件订阅、发布、Codex 和 Claude；每步轮询，失败给原因和按钮（3.1 第 4 条） | 650 | s01、s03 | 错误路径 | 无（JP-VPS 上无头看各状态） |
 | [x] | s05a | 删掉 daemon 里的 Windows 服务实现 | 删 `windows.ts`、`win-startup.ts`、三份 Windows 服务测试和 `__win-relaunch` 命令及其两份测试；没有用户可见变化，理由见本文第 6 节 | 1370 | — | — | 无 |
 | [x] | s05b | 删掉服务定义和注册里的 win32 分支 | 删 `identity.ts`、`definitions.ts`、`registration.ts` 里的 win32 分支和 Windows 注册测试，以及桌面端跟着要删的 Run 键读取；没有用户可见变化，理由见本文第 6 节 | 520 | s05a | — | 无 |
@@ -226,8 +226,12 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 | [ ] | s08 | 桌面端的"登录电脑时启动"和清单里的这一步 | 桌面端调打包的 CLI 装卸服务；清单加"登录电脑时自动运行 bot（推荐）"，跳过就起分离 daemon 并提示；删桌面端的 Windows 代码；Linux 上不显示"登录时启动"开关；本文第 10 节写卸载步骤（3.10） | 1000 | s07、s04 | 子进程、macOS 原生、错误路径 | 真实窗口里：开关状态和 `launchctl print` 一致，退出 app 后 bot 在线，app 挪走再挪回能恢复，换新版后 daemon 跑新版本 |
 
 开工要点：
-- s03：nvm 装的 codex 从 Finder 打开时，PATH 里没有那个 Node 版本的目录，`#!/usr/bin/env node` 起不来。判断 Codex 时一并处理：起 codex 子进程时，PATH 补上 codex 所在的目录。
-- s03：Codex 的最低版本先定成 vonvon 现在用的 app-server 协议能跑的最低版本，验证过的版本和托管安装锁定的 0.156.1 一致；e05 做完后在 s39 抬高。Claude 登录先用 SDK 自带的运行时查，查不了退回 `claude auth status`，再看有没有 `ANTHROPIC_API_KEY`。
+- s03：nvm 装的 codex 从 Finder 打开时，PATH 里没有那个 Node 版本的目录，`#!/usr/bin/env node` 起不来。已改：起 codex 子进程（查版本、app-server、装完托管副本后的版本检查）时，PATH 补上 codex 所在的目录和 s02 的工具目录。
+- s03：Codex 的最低版本定成 0.139.0。vonvon 用到的 app-server 方法 0.131.0 就都有，但 vonvon 依赖的行为（`turn/interrupt` 以 `turn/completed(interrupted)` 收尾、目标自动开始和目标状态）实际跑过的最老版本是 0.139。验证过的版本跟托管安装锁定的版本走，现在是 0.156.1。e05 做完后在 s39 抬高。
+- s03：Claude 登录只用 SDK 自带的运行时查：起一个不跑回合的 query，读 initialize 返回的 account；查不了（没下载 SDK、超时、报错）就看环境变量，有 `ANTHROPIC_API_KEY`、`CLAUDE_CODE_OAUTH_TOKEN` 或 `ANTHROPIC_AUTH_TOKEN` 算已登录、没验证过，没有就是无法确认，不报未登录。没用 `claude auth status`：它是另一个 CLI，版本和 SDK 自带的不一定一样，查到了也说明不了 bot 的回合能不能跑。account 是 CLI 从本地凭据读的，不问服务器，所以过期的登录也显示已登录，直到真跑一轮失败。
+- s03：#301 的 Mac 检查发现 owner 的 Mac 上没有 Codex.app，ChatGPT.app 里自带一份 codex（`Contents/Resources/codex-cli/bin/codex`，版本是预发布号，例如 0.162.0-alpha.17.2）。已加进候选，排在 nvm 之后，用户自己装的优先。
+- s03 留下的：Claude 的两个辅助查询（取模型列表、生成标题）用 `settingSources: []`，不读用户设置。凭据写在 `~/.claude/settings.json` 的 `env` 里时（owner 的 Mac 就是这样），这两个查询会报未登录，回合本身（读 user 和 project）和登录检测（读 user）不受影响。下一个碰 Claude 后端的切片改，改之前先在 Mac 上看现象；只读 user 会把用户的 CLAUDE.md 带进生成标题的提示，要一起考虑。
+- s03 留下的：首页只显示上一次查到、还没过期的 Claude 登录结果，daemon 不在后台自己查（快照每 60 秒刷一次，没开窗口时也刷，每次都起 CLI 太重）；没查过或过期了显示未确认，查完马上刷新首页。已登录的结果留 30 分钟，终端里退出登录后，首页最长 30 分钟还显示已登录，点"检查登录"才马上更新。s19 做状态页时，回合因为没登录而失败，就清掉这个缓存。daemon 由 LaunchAgent 起来时（s07）可能读不到钥匙串，探测会报未登录；e06 测钥匙串时一并跑一次登录检测，读不到就在 s07 改成无法确认。
 - s04：没装 Node 的 Mac 上托管副本装不了也跑不了，Codex 那一步引导装 Codex.app 或用 Homebrew 装。用户的 npm 是 11.19 以上时，托管安装 claude-code 和 lark-cli 会跳过它们的 postinstall，开工时实测。
 - s04：写一句"企业租户里新权限可能要管理员审核"（e13）。卡片回调没有只读接口可查，这一步请主人手动勾上。"登录电脑时自动运行"由 s08 加，"从 bridge 导入"由 s63 加。
 - s05：开工时量出约 1,890 行，超过上限，拆成 s05a 和 s05b。
@@ -236,7 +240,7 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 - s06：开工时先量，超过 1300 行就把 #287 的修复和测试单独成片（s06a、s06b）。合入后在已关闭的 #285 下补一条评论，写明代码去了哪里，再关闭 #287。
 - s07、s08：参考 #110 拆分表的第 13、14 块和它的 `login-item.ts`，去掉 Windows 部分。
 - s07：服务定义里的 PATH 用 s02 的 `withToolDirectories` 补全。自带的 npm 由 daemon 自己找，服务定义里不用写 `VONVON_NPM_CLI`。
-- s07：POSIX 上的互斥锁是 `127.0.0.1` 上按数据目录哈希出来的端口（20000 到 49999），和 Linux 的临时端口重叠。#295 的 CI 撞过一次（`host-service-shutdown` 测试报 busy），开工时看要不要改成 Unix 域套接字。
+- s07：POSIX 上的互斥锁是 `127.0.0.1` 上按数据目录哈希出来的端口（20000 到 49999），和 Linux 的临时端口重叠。#295 的 CI 撞过一次（`host-service-shutdown` 测试报 busy），开工时看要不要改成 Unix 域套接字。#296 的 CI 也失败过一次，可能是同一个原因：`daemon-cli.test.ts` 的"concurrent detached starts return the same ready owner"两个启动都退出 1，日志里没有子进程的输出，重跑通过。开工时让这个测试失败时打印子进程输出。
 - s07：`D/admin/host.ts:194` 的 `resolveCliBinPath` 还指向 `bin/feishu-codex-bridge.mjs`，包里只有 `bin/vonvon.mjs`（`D/service/common.ts` 的同名函数是对的）。查清 `host.ts:210` 那条路径还用不用，用就改成调 service/common 的。
 
 ### M3 群里的上下文
@@ -455,6 +459,9 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 | 被拉进群时 | 直接绑定，不再私聊发绑定卡 | 第 4 节拿掉私聊控制台；被拉进的群用什么默认档，3.8 已经给了 | s36b |
 | 记忆怎么写 | agent 直接写自己那份记忆文件，daemon 在一轮前后比对，卡片显示写了什么 | 3.6 只说"记住"能写、带撤销，没说怎么写；不在群里另开记忆命令，和 3.7"群里不能在聊天里改设置"一致 | s40 |
 | 改设置卡片上的［撤销］谁能点 | 主人和管理员 | 3.7 只说带撤销；和 3.8 里"Claude 自己要问的"卡一样 | s56 |
+| Codex 最低版本 | 0.139.0，比它旧显示"版本太旧"、按钮是更新 | vonvon 依赖的行为实际跑过的最老版本（第 3 节 s03 开工要点）；e05 后在 s39 抬高 | s03、s39 |
+| Codex 验证过的版本 | 跟托管安装锁定的版本，现在是 0.156.1；比它新的照常用，只在本机环境页写一句"比验证过的新" | 只有这个版本完整跑过；新版本大多兼容，拦住反而让用户装旧版 | s03 |
+| Claude 登录结果留多久 | 已登录留 30 分钟，其他留 5 分钟；点"检查登录"马上重查 | 每查一次要起一个约 250 MB 的 CLI，本机环境页每次打开都会问。daemon 自己不查，首页只显示上一次查到、还没过期的结果 | s03 |
 | 预览版 | 只出 Apple Silicon，不公证 | 只装在 owner 自己的 Mac 上验收；universal 包和公证在 M11（第 8 节第 1 条） | 本文第 7 节 |
 
 ## 6. Windows 代码去留
@@ -483,13 +490,15 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 1. Claude 经 Paseo 开预览版会话 `Mac 预览版 <里程碑名>`，模式 auto，规则见 `AGENTS.md`"工具和同步"。
 2. Codex 在 Mac 上从 main pull，`npm ci`，`npm run build`，再在 `packages/desktop` 下用 `electron-builder --config electron-builder.yml --dir` 打包，也就是今天的 `package:dir` 脚本。electron-builder 会自动用钥匙串里的 Developer ID 签名。不公证，只出 Apple Silicon。
 3. 打好的 .app 装进 /Applications，通知 owner 验收。
-4. 具体命令以仓库脚本为准。第一次出预览版时由预览版会话核对，再补进这一节。
+4. 具体命令以仓库脚本为准。M1 预览版（2026-10-14）按第 2 条做通了，打包前补跑 `node node_modules/electron/install.js`，在沙箱外打包和验签，用 `ditto` 装进 /Applications。
 
-下面几条来自 #296 的 Mac 检查，其余命令仍等第一次出预览版时核对：
+下面几条来自 #296 的 Mac 检查和 M1 预览版：
+- Mac 上 Paseo 用的仓库，本地 main 可能是旧的（M1 预览版时停在 d90f4d4）。预览版和检查会话的提示里写明先 `git fetch`，核对 main 或分支的 sha 和 Claude 给的一致再构建。
 - 在沙箱里打包会跳过签名（electron-builder 输出 `0 valid identities found`），应该是 auto 模式的沙箱看不到钥匙串。所以在 `packages/desktop` 下跑 `npm run package:dir` 要申请在沙箱外执行。验签也在沙箱外做：沙箱里的 `codesign --verify` 报 `invalid signature`、`Authority=(unavailable)`，沙箱外是通过的。
 - `npm ci` 之后第一次打包缺 Electron 的二进制，原因没查（Mac 的 npm 版本没记）。打包前先跑 `node node_modules/electron/install.js`。
 - auto 模式下，联网（`npm ci`、`gh`）、沙箱外的命令、打开 app、用 Computer Use 操作 app 都会发申请，没人批就一直等。#296 的检查卡在这里将近一小时。Claude 发起会话后要盯着这些申请，按检查范围用 `paseo permit allow` 批准，范围外的不批。
 - 在终端里用 `open` 启动 app，会继承终端的长 PATH。要模拟从 Finder 打开，显式加 PATH：`open -n --env PATH=/usr/bin:/bin:/usr/sbin:/sbin --env HOME=<临时目录> ... <app>`。
+- 测 Claude 时，隔离 HOME 下读不到 owner 的 Claude 凭据：owner 的凭据写在 `~/.claude/settings.json` 的 `env` 里，不在钥匙串。要测已登录，那一条命令用真实 HOME，VONVON_HOME 仍用临时目录。
 - 退出桌面端不停 daemon（product.md 3.10）。测完用包里的命令行 `daemon stop` 停掉隔离 HOME 里的 daemon。
 
 测 Claude 后端时，用 owner 本机的 Claude 登录跑少量回合。这是测产品，不是在 Mac 上开 Claude 的开发会话。

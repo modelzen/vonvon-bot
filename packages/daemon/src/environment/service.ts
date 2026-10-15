@@ -6,6 +6,7 @@ import { access, mkdir, readFile, realpath, rename, rm, writeFile } from "node:f
 import { basename, delimiter, dirname, isAbsolute, join, relative, win32 } from "node:path";
 import { spawnProcess } from "../platform/spawn";
 import { WindowsCodexJob } from "../agent/codex-appserver/windows-job";
+import { CODEX_MIN_VERSION, CODEX_VERIFIED_VERSION, classifyCodexVersion } from "../agent/codex-appserver/version";
 import {
   environmentProfileSchema,
   type EnvironmentOperation,
@@ -109,7 +110,7 @@ export class EnvironmentService {
     let child: ChildProcess;
     try {
       child = this.spawnProcess(job?.executable ?? executablePath, job ? job.launch(executablePath, args) : args, {
-        env: this.environment(), stdio: [secret === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+        env: this.environment(executablePath), stdio: [secret === undefined ? "ignore" : "pipe", "pipe", "pipe"],
         windowsHide: true, detached: process.platform !== "win32",
       });
     } catch (error) { job?.dispose(); throw error; }
@@ -259,6 +260,7 @@ export class EnvironmentService {
     const managedVersion = await this.managedVersion(tool);
     const result = resolved ? await this.command(resolved.executable, ["--version"], 5_000).catch(() => null) : null;
     const version = result?.exitCode === 0 ? result.stdout.match(/\b\d+\.\d+\.\d+(?:[-+][\w.-]+)?\b/)?.[0] ?? null : null;
+    const compatibility = tool === "codex" && resolved ? { status: classifyCodexVersion(version), minimum: CODEX_MIN_VERSION, verified: CODEX_VERIFIED_VERSION } : undefined;
     const latest = await this.fetchLatest(tools[tool].package).catch(() => null);
     return {
       tool,
@@ -269,6 +271,7 @@ export class EnvironmentService {
       latestVersion: latest,
       updateAvailable: version && latest ? version !== latest : null,
       canUninstall: Boolean(managedVersion),
+      ...(compatibility ? { compatibility } : {}),
     };
   }
 
@@ -495,11 +498,13 @@ export class EnvironmentService {
     return null;
   }
 
-  private environment(): NodeJS.ProcessEnv {
+  /** `executablePath`'s own directory goes last on PATH: an nvm-installed tool's
+   * `#!/usr/bin/env node` launcher needs the `node` next to it. */
+  private environment(executablePath?: string): NodeJS.ProcessEnv {
     return {
       ...(process.platform === "win32" ? { ComSpec: process.env.ComSpec ?? win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe") } : {}),
       HOME: this.home, USERPROFILE: this.home,
-      PATH: [dirname(this.nodePath), this.searchPath, "/usr/bin", "/bin"].join(delimiter),
+      PATH: [dirname(this.nodePath), this.searchPath, "/usr/bin", "/bin", ...(executablePath && isAbsolute(executablePath) ? [dirname(executablePath)] : [])].join(delimiter),
       LANG: "en_US.UTF-8", LARKSUITE_CLI_NO_SKILLS_NOTIFIER: "1", LARKSUITE_CLI_NO_UPDATE_NOTIFIER: "1",
     };
   }

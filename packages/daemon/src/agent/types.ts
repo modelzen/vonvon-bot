@@ -363,6 +363,8 @@ export interface AccountUsageBundle {
  */
 export type BackendDepState = 'installed' | 'not-installed' | 'external-missing';
 
+export type BackendLogin = { state: 'signedIn' | 'signedOut' | 'unknown'; message: string };
+
 /** A backend's environment probe（doctor / onboarding / DM 体检卡共用）。 */
 export interface BackendProbe {
   /** the backend runtime is present and runnable */
@@ -418,6 +420,9 @@ export interface AgentBackend {
    * 「现在」的状态）。绝不抛错，必须全程异步（卡片回调里 spawnSync 会冻住
    * 事件循环——见 DM.doctor）。 */
   doctor(opts?: { force?: boolean }): Promise<BackendProbe>;
+  /** Login state (已登录 / 未登录 / 无法确认) for backends that need one; slower than
+   * {@link doctor}, so it is kept out of it (callers race doctor() against 3 s). */
+  loginStatus?(opts?: { refresh?: boolean }): Promise<BackendLogin>;
   listModels(): Promise<ModelInfo[]>;
   /** recent codex threads under `cwd`, newest first (for resume picker) */
   listThreads(cwd: string, limit?: number): Promise<ThreadSummary[]>;

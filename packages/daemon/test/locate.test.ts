@@ -136,4 +136,20 @@ describe('desktop and Agent executable selection', () => {
     const global = '/Applications/Codex.app/Contents/Resources/codex';
     expect(resolveCodexBin({ home, dataRoot: join(home, '.vonvon-bridge'), env: { PATH: '' } })).toBe(existsSync(global) ? global : local);
   });
+
+  it.skipIf(process.platform !== 'darwin')('falls back to the codex inside ChatGPT.app, after an nvm install', async () => {
+    const { mkdirSync, existsSync } = await import('node:fs');
+    const home = join(dir, 'chatgpt-home');
+    const bundled = join(home, 'Applications', 'ChatGPT.app', 'Contents', 'Resources', 'codex-cli', 'bin');
+    mkdirSync(bundled, { recursive: true });
+    const local = writeNodeExecutable(bundled, 'codex', 'console.log("codex-cli 0.162.0-alpha.17.2")').bin;
+    const globals = ['/Applications/Codex.app/Contents/Resources/codex', '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex'];
+    const context = { home, dataRoot: join(home, '.vonvon-bridge'), env: { PATH: '' } };
+    expect(resolveCodexBin(context)).toBe(globals.find(path => existsSync(path)) ?? local);
+    if (existsSync(globals[0]!)) return;
+    const nvm = join(home, '.nvm', 'versions', 'node', 'v24.14.1', 'bin');
+    mkdirSync(nvm, { recursive: true });
+    const viaNvm = writeNodeExecutable(nvm, 'codex', 'console.log("codex-cli 0.162.1")').bin;
+    expect(resolveCodexBin({ ...context, force: true })).toBe(viaNvm);
+  });
 });

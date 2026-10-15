@@ -183,7 +183,7 @@ else process.exit(0);
         { action: 'usage', force: false }, { action: 'shareUsage', ...target, sections: ['stats'] }, { action: 'openGroup', ...target },
       ],
       environment: [
-        { type: 'scan' }, { type: 'backendCatalog' }, { type: 'backendVersion', id: 'claude-agent' }, { type: 'backendInstall', id: 'claude-agent', update: false }, { type: 'backendUninstall', id: 'claude-agent' },
+        { type: 'scan' }, { type: 'backendCatalog' }, { type: 'backendVersion', id: 'claude-agent' }, { type: 'backendLogin', id: 'claude-agent', refresh: false }, { type: 'backendInstall', id: 'claude-agent', update: false }, { type: 'backendUninstall', id: 'claude-agent' },
         { type: 'install', tool: 'lark-cli' }, { type: 'update', tool: 'lark-cli' }, { type: 'toolInstallStatus' }, { type: 'cancelInstall', operationId }, { type: 'uninstall', tool: 'lark-cli' },
         { type: 'authStatus', tool: 'lark-cli' }, { type: 'startLogin', tool: 'lark-cli' }, { type: 'loginStatus' }, { type: 'openVerification', operationId }, { type: 'cancelLogin', operationId },
         { type: 'profileList' }, { type: 'profileUse', name: 'test' }, { type: 'profileAdd', name: 'test', appId: 'cli_test', appSecret: 'fake-secret', brand: 'feishu', use: false },
