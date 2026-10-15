@@ -3,6 +3,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  addRecall,
   backfillFrom,
   clearSessionTitleJobKey,
   createSessionTitleJob,
@@ -13,7 +14,9 @@ import {
   listSessions,
   listSessionTitleJobs,
   nextSeen,
+  nothingSeen,
   patchSession,
+  RECALLS_MAX,
   sessionTitleJobKey,
   updateSessionTitleJob,
   upsertSession,
@@ -320,5 +323,26 @@ describe('watermark (s09)', () => {
     expect([isSeen(marked, 'steer', 1500), isSeen(marked, 'other', 1500)]).toEqual([true, false]);
     // No watermark (a resumed session): only delivered ids count.
     expect([isSeen({ seen: [{ id: 'q', at: 5 }] }, 'q', 5), isSeen({}, 'x', 0), isSeen(undefined, 'x', 0)]).toEqual([true, false, false]);
+  });
+});
+
+describe('recall notes (s15)', () => {
+  it('keeps one note per message, oldest first, at most 20, the newest winning', () => {
+    const many = Array.from({ length: 25 }, (_, i) => ({ id: `m${i}`, at: 100 + i }));
+    const list = many.reduce((l, n) => addRecall(l, n), addRecall(undefined, { id: 'm3', at: 103, other: true }));
+    expect(list).toHaveLength(RECALLS_MAX);
+    expect(list[0]).toEqual({ id: 'm5', at: 105 });
+    expect(addRecall([{ id: 'a', at: 5 }], { id: 'a', at: 5, other: true })).toEqual([{ id: 'a', at: 5, other: true }]);
+    expect(addRecall([{ id: 'b', at: 9 }], { id: 'a', at: 5 }).map((r) => r.id)).toEqual(['a', 'b']);
+  });
+
+  it('drops the notes of a rebuilt session and keeps its from; old records read without either', async () => {
+    await upsertSession({ ...rec('t-recall', 'cx-1'), from: 50, recalls: [{ id: 'a', at: 60 }] });
+    const before = await getSession('t-recall');
+    await upsertSession({ ...before!, ...nothingSeen(), sessionId: 'cx-2' });
+    expect(await getSession('t-recall')).toMatchObject({ from: 50, lastSeenAt: 0, seen: [] });
+    expect(await getSession('t-recall')).not.toHaveProperty('recalls');
+    await upsertSession(rec('t-old', 'cx-3'));
+    expect(await getSession('t-old')).not.toHaveProperty('from');
   });
 });

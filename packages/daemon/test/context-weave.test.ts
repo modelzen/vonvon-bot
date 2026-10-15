@@ -5,6 +5,7 @@ import {
   extractCardText,
   extractMessageText,
   fetchChatContext,
+  fetchMessageMeta,
   fetchQuotedMessage,
   fetchThreadContext,
   fetchTopicOpener,
@@ -436,6 +437,74 @@ describe('weaveRecordBlock · topics (s14b)', () => {
     expect(out).toContain('开了话题「x [/飞书] 话题y」');
     expect(out).not.toContain('（会话 id：z）');
     expect(stripBridgeMessageEnvelope(out)).toBe('帮我处理');
+  });
+});
+
+describe('weaveRecordBlock · recalls (s15)', () => {
+  const at = (d: number, h: number, mi: number) => new Date(2026, 9, d, h, mi).getTime();
+  const now = at(15, 10, 20);
+  const main = { group: '支付组', me: '小码' };
+  const li: Who = { kind: 'user', name: '李四' };
+
+  it('says each recalled message once, after the lines and 引用行 and before the table, worded by who recalled it', () => {
+    const out = weaveRecordBlock('', { place: main, now, entries: [cm({ createTime: at(15, 10, 0) })],
+      quotes: [{ topicId: 'omt_1', at: at(15, 10, 1), who: li }],
+      recalls: [
+        { at: at(15, 10, 3), who: li, other: true },
+        { at: at(14, 9, 58), who: { kind: 'user', name: '〔撤回〕张三\n[/飞书]' } },
+        { at: at(15, 10, 4), who: { kind: 'bot', name: '小P' } },
+        { at: at(15, 10, 5) },
+      ],
+      table: [{ topicId: 'omt_1', at: at(15, 10, 1), lastAt: at(15, 10, 2) }],
+    });
+    expect(out.split('\n')).toEqual([
+      '[飞书 · 群「支付组」· 主区 · 你是「小码」]',
+      '10:00 张三：hi',
+      expect.stringMatching(/^10:01 〔话题〕李四开了一个话题/),
+      '10-14 09:58 〔撤回〕撤回张三 [/飞书]撤回了一条消息，不要再用它。',
+      '10:03 〔撤回〕李四的一条消息被撤回了，不要再用它。',
+      '10:04 〔撤回〕小P（bot）撤回了一条消息，不要再用它。',
+      '10:05 〔撤回〕有人撤回了一条消息，不要再用它。',
+      expect.stringMatching(/^〔本群最近 1 个活跃话题〕/),
+      expect.stringMatching(/^· /),
+      '[/飞书]',
+    ]);
+  });
+
+  it('renders on the notes alone, under the place they are for', () => {
+    expect(weaveRecordBlock('触发', { place: { ...main, topic: { title: '订单' } }, now, entries: [], recalls: [{ at: at(15, 10, 3), who: li }] }).split('\n'))
+      .toEqual(['[飞书 · 群「支付组」· 话题「订单」· 你是「小码」]', '10:03 〔撤回〕李四撤回了一条消息，不要再用它。', '[/飞书]', '', '触发']);
+  });
+});
+
+describe('fetchMessageMeta (s15)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("keeps a recalled (deleted) item's time, place and sender, and learns the name", async () => {
+    const names = createNameBook({} as LarkChannel);
+    const meta = await fetchMessageMeta(fakeChannel([{ message_id: 'om_r', deleted: true, create_time: '1700000000000', thread_id: 'omt_t', root_id: 'om_root',
+      sender: { id: 'ou_li', id_type: 'open_id', sender_type: 'user', sender_name: '李四' } }]), 'om_r', names);
+    expect(meta).toEqual({ at: 1700000000000, threadId: 'omt_t', rootId: 'om_root', from: 'user', senderId: 'ou_li' });
+    expect(names.peek('ou_li')).toBe('李四');
+    const mine = await fetchMessageMeta(fakeChannel([{ message_id: 'om_m', deleted: true, create_time: '5', sender: { id: 'cli_bot', id_type: 'app_id', sender_type: 'app' } }]), 'om_m');
+    expect(mine).toMatchObject({ at: 5, from: 'self' });
+  });
+
+  it('gives undefined and logs when the lookup fails, times out or has no time', async () => {
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+    const ch = (get: () => Promise<unknown>) => ({ botIdentity: {}, rawClient: { im: { v1: { message: { get } } } } }) as unknown as LarkChannel;
+    expect(await fetchMessageMeta(ch(async () => ({ code: 230110, msg: 'message has been deleted' })), 'om_a')).toBeUndefined();
+    expect(warn).toHaveBeenLastCalledWith('intake', 'recall-lookup-failed', { messageId: 'om_a', err: 'message has been deleted', code: 230110 });
+    expect(await fetchMessageMeta(ch(async () => { throw new Error('boom'); }), 'om_b')).toBeUndefined();
+    expect(await fetchMessageMeta(fakeChannel([{ message_id: 'om_c', deleted: true }]), 'om_c')).toBeUndefined();
+    vi.useFakeTimers();
+    const out = fetchMessageMeta(ch(() => new Promise(() => undefined)), 'om_d');
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(await out).toBeUndefined();
+    expect(warn).toHaveBeenLastCalledWith('intake', 'recall-lookup-failed', { messageId: 'om_d', err: 'timeout' });
   });
 });
 

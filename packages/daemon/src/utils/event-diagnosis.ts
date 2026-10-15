@@ -35,7 +35,7 @@ export const REQUIRED_EVENTS = ['im.message.receive_v1'] as const;
 
 /**
  * 可选功能各自依赖的事件：缺了只是对应功能静默关闭（机器人菜单 / 文档评论回复 /
- * 加入存量群绑定与自动解绑 / 表情回复驱动），不影响诊断状态，仅在结果里单列提醒。
+ * 加入存量群绑定与自动解绑 / 表情回复驱动 / 撤回说明），不影响诊断状态，仅在结果里单列提醒。
  */
 export const OPTIONAL_EVENTS = [
   'application.bot.menu_v6',
@@ -43,6 +43,7 @@ export const OPTIONAL_EVENTS = [
   'im.chat.member.bot.added_v1',
   'im.chat.member.bot.deleted_v1',
   'im.message.reaction.created_v1',
+  'im.message.recalled_v1',
 ] as const;
 
 export type EventDiagnosisState = 'unchecked' | 'unpublished' | 'missing' | 'ok';
