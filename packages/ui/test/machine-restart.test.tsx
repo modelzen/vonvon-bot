@@ -79,8 +79,14 @@ it('offers start only when a desktop shell supplies the capability', () => {
 });
 
 it('leaves installing and uninstalling the service to the 登录电脑时启动 switch', () => {
-  const html = renderToStaticMarkup(<ClientProvider client={client}><MachinePanel request={async () => running} agents={[]} /></ClientProvider>);
+  const html = renderToStaticMarkup(<ClientProvider client={client}><MachinePanel request={async () => running} agents={[]} macos /></ClientProvider>);
   expect(html).toContain('打开「登录电脑时启动」后，daemon 跑在后台服务里，退出桌面后仍运行。');
   for (const gone of ['安装并启动', '卸载后台服务']) expect(html).not.toContain(gone);
   expect(html).toContain('停止后台服务');
+});
+
+it('names the terminal command instead of the macOS switch elsewhere', () => {
+  const html = renderToStaticMarkup(<ClientProvider client={client}><MachinePanel request={async () => running} agents={[]} /></ClientProvider>);
+  expect(html).toContain('在终端运行 vonvon service install，装成 systemd 用户服务，崩溃后自动重启。');
+  expect(html).not.toContain('登录电脑时启动');
 });

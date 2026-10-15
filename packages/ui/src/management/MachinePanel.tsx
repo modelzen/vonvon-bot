@@ -26,7 +26,7 @@ export async function runMachineRequest(request: MachineRequestHandler, operatio
   }
 }
 
-export function MachinePanel({request, agents, reveal}: {request: MachineRequestHandler; agents: ReadonlyArray<{id: string; name: string}>; reveal?: SearchReveal}) {
+export function MachinePanel({request, agents, reveal, macos = false}: {request: MachineRequestHandler; agents: ReadonlyArray<{id: string; name: string}>; reveal?: SearchReveal; macos?: boolean}) {
   const shell = useShellCapabilities();
   const advanced = useRef<HTMLDetailsElement>(null);
   useEffect(() => {if (reveal === 'machine-advanced' && advanced.current) advanced.current.open = true;}, [reveal]);
@@ -81,8 +81,8 @@ export function MachinePanel({request, agents, reveal}: {request: MachineRequest
       {status?.temporaryAgent && <SettingsRow title="临时运行 Bot" description="默认 Bot 选择未改变。" value={status.temporaryAgent} />}
     </SettingsGroup>
 
-    <SettingsGroup id={settingAnchor('后台服务')} label="后台服务" footer="打开「登录电脑时启动」后，daemon 跑在后台服务里，退出桌面后仍运行。">
-      <SettingsRow title="系统服务" description={service ? service.detail ?? service.platformName : '正在读取服务状态…'}
+    <SettingsGroup id={settingAnchor('后台服务')} label="后台服务" footer={macos ? '打开「登录电脑时启动」后，daemon 跑在后台服务里，退出桌面后仍运行。' : '在终端运行 vonvon service install，装成 systemd 用户服务，崩溃后自动重启。'}>
+      <SettingsRow title="系统服务" description={service ? service.platformName : '正在读取服务状态…'}
         value={service && (service.state ? SERVICE_STATE_TEXT[service.state] : `${service.installed ? '已安装' : '未安装'} · ${service.running ? '运行中' : '已停止'}`)} />
       <SettingsRow title="服务运行" description={!shell?.service ? '桌面版提供；命令行：vonvon daemon start / stop。' : '已安装的服务可单独启动或停止。'}
         trailing={<span className="settings-inline-actions">

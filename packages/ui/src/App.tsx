@@ -898,7 +898,7 @@ function DesktopApp() {
                 />
                 <LoginServiceRow application={snapshot.application} busy={busy} onToggle={enabled => void runShell(async () => setNotice({message: await toggleService(enabled, client, shell), error: false}))}/>
               </SettingsGroup>
-              <MachinePanel reveal={searchTarget?.reveal} request={client.machine} agents={snapshot.agents}/>
+              <MachinePanel reveal={searchTarget?.reveal} request={client.machine} agents={snapshot.agents} macos={snapshot.application.platform === 'macos'}/>
               <UpdatePanel request={client.machine} attached={host.kind === 'connected' && host.ownership === 'attached'}/>
               <SettingsPanel scope="host" target={{ kind: "host" }} category="execution" />
               <SettingsGroup label="窗口与退出" id={settingAnchor('窗口与退出')} footer="关闭窗口会留在菜单栏或托盘继续运行。退出应用后，daemon 和 Bot 会继续在后台运行。">
