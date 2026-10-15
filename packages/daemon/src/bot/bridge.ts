@@ -91,10 +91,10 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     channel.on('comment', orchestrator.onComment);
     channel.on('botAdded', orchestrator.onBotAddedToChat);
     channel.on('reaction', orchestrator.onReaction);
-    // The SDK exposes no named event for bot-*removed* (im.chat.member.bot.deleted_v1)
-    // nor for bot-menu clicks (application.bot.menu_v6), so tap its private raw
-    // EventDispatcher: register() merges by event key, so this adds our handlers
-    // without clobbering the SDK's built-ins.
+    // The SDK exposes no named event for bot-*removed* (im.chat.member.bot.deleted_v1),
+    // recalls (im.message.recalled_v1) or bot-menu clicks (application.bot.menu_v6),
+    // so tap its private raw EventDispatcher: register() merges by event key, so
+    // this adds our handlers without clobbering the SDK's built-ins.
     try {
       const tap = (
         channel as unknown as {
@@ -107,6 +107,16 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
             const ev = raw as { chat_id?: string; event?: { chat_id?: string } };
             const chatId = ev?.chat_id ?? ev?.event?.chat_id;
             if (chatId) void orchestrator.onBotRemovedFromChat(chatId);
+          },
+          // A recall carries only the message, the chat, when and who (s15).
+          'im.message.recalled_v1': (raw: unknown) => {
+            type Recall = { message_id?: string; chat_id?: string; recall_type?: string };
+            const ev = raw as Recall & { event?: Recall };
+            void orchestrator.onRecall({
+              messageId: ev?.message_id ?? ev?.event?.message_id,
+              chatId: ev?.chat_id ?? ev?.event?.chat_id,
+              recallType: ev?.recall_type ?? ev?.event?.recall_type,
+            });
           },
           'application.bot.menu_v6': (raw: unknown) => {
             const ev = raw as {
@@ -122,7 +132,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
             });
           },
         });
-        log.info('ws', 'raw-event-tap', { events: ['im.chat.member.bot.deleted_v1', 'application.bot.menu_v6'] });
+        log.info('ws', 'raw-event-tap', { events: ['im.chat.member.bot.deleted_v1', 'im.message.recalled_v1', 'application.bot.menu_v6'] });
       } else {
         log.info('ws', 'raw-event-tap-unavailable');
       }

@@ -196,6 +196,7 @@ export { bindModeFor } from '../project/lifecycle';
 import { refreshBranch } from '../project/announcement';
 import { leaveChat, transferOwnership } from '../project/group-ops';
 import {
+  addRecall,
   backfillFrom,
   clearSessionTitleJobKey,
   detachSessionsForChat,
@@ -209,14 +210,16 @@ import {
   patchSession,
   sessionTitleJobKey,
   upsertSession,
+  type RecallNote,
   type SeenHow,
   type SeenMark,
   type SessionRecord,
   type SessionTitlePolicySnapshot,
 } from './session-store';
+import { isTopicReply, reachedAt } from './recall';
 import { SessionTitleCoordinator } from './session-title-coordinator';
 import { topicTitle, type TopicPerson, type TopicRegistry, type TopicSighting, type TopicView } from './topic-registry';
-import { createTopicContext, localBots, topicQuotes, topicRows } from './topic-context';
+import { createTopicContext, localBots, personOf, topicQuotes, topicRows } from './topic-context';
 import {
   sessionTitleSourceFromMessage,
   type SessionTitleSource,
@@ -236,6 +239,7 @@ import {
   OPENING_MAIN_MAX,
   STREAMING_RECHECK_MS,
   fetchChatContext,
+  fetchMessageMeta,
   fetchQuotedMessage,
   fetchThreadContext,
   keepRecent,
@@ -417,6 +421,10 @@ export interface QueuedTurn {
   seenExtra?: SeenMark[];
   /** Its record block carried the recent topics (SessionRecord.topicsDue), cleared once it starts. */
   tableShown?: boolean;
+  /** The recall notes its block said (SessionRecord.recalls), dropped once it starts (s15). */
+  recallsShown?: string[];
+  /** An opening turn's oldest line, written as SessionRecord.from once it starts (s15). */
+  from?: number;
 }
 
 /** How long ago the message was sent (0 when its createTime is unknown). */
@@ -527,6 +535,18 @@ interface ActiveState {
    * resets its one at every turn boundary. Either way a hold never outlives
    * the turn that took it. */
   idlePause?: IdlePause;
+  /** A run loop drains this state's queue and {@link compactAfter} (startReservedRun, launchRun). */
+  runLoop?: true;
+  /** A /compact sent while this run was busy: done right after the current turn (product.md 3.5). */
+  compactAfter?: { msg: NormalizedMessage; inThread: boolean };
+  /** A compaction runs on this session now (an idle /compact, or a queued one between turns). */
+  compacting?: boolean;
+  /** Set while /compact or /new holds the session with no run: input waits here and
+   * goes through intake again once the command is done (s15). `early` tells one
+   * sent before a /new that swapped ({@link newAt}) instead. */
+  deferred?: { id: string; at?: number; go: () => void; early: () => void }[];
+  /** The /new command's send time, once its swap is done: input sent before it belongs to the old session. */
+  newAt?: number;
 }
 
 /** Inputs a synthetic turn (🔁 重试) carries that a real message would not. */
@@ -592,6 +612,14 @@ interface RunReaction {
   done: () => void;
 }
 
+/** A recall event's fields (it has no sender, time or topic). */
+export interface RecallEvent {
+  messageId?: string;
+  chatId?: string;
+  /** message_owner, group_owner, group_manager or enterprise_manager. */
+  recallType?: string;
+}
+
 export interface Orchestrator {
   collaboration: (request: CollaborationRequest) => Promise<unknown>;
   onMessage: (msg: NormalizedMessage) => Promise<void>;
@@ -608,6 +636,8 @@ export interface Orchestrator {
   onReaction: (evt: ReactionEvent) => Promise<void>;
   /** application.bot.menu_v6（raw-tap）：bot 单聊菜单点击 → DM 管理台菜单卡。 */
   onBotMenu: (evt: { openId?: string; eventKey?: string; eventId?: string }) => Promise<void>;
+  /** im.message.recalled_v1 (raw-tap): note the recall for the sessions the message reached (s15). */
+  onRecall: (evt: RecallEvent) => Promise<void>;
   dispatcher: CardDispatcher;
   adminExecute: (op: AdminWriteOp) => Promise<AdminWriteResult>;
   settings: HostSettings;
@@ -698,6 +728,22 @@ export class RecentIdCache {
     }
     return false;
   }
+}
+
+/** How long and how many recalled message ids a process keeps (s15). */
+const RECALLED_TTL_MS = 24 * 60 * 60_000;
+const RECALLED_MAX = 2000;
+
+/** Remove the items `hit` picks from `list` in place; how many went. */
+function removeWhere<T>(list: T[], hit: (item: T) => boolean): number {
+  let removed = 0;
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (hit(list[i]!)) {
+      list.splice(i, 1);
+      removed++;
+    }
+  }
+  return removed;
 }
 
 /**
@@ -976,17 +1022,37 @@ export function createOrchestrator(
   const lastUsage = new Map<string, { used: number; window: number | null }>();
   /** inbound message/comment dedup (at-least-once delivery, see RecentIdCache) */
   const seenInbound = new RecentIdCache();
+  /** Messages recalled in this process (s15), oldest first: one whose recall came
+   * first is not run. Kept {@link RECALLED_TTL_MS}, at most {@link RECALLED_MAX}. */
+  const recalled = new Map<string, number>();
+  function noteRecalled(id: string): void {
+    const now = Date.now();
+    recalled.delete(id);
+    recalled.set(id, now);
+    for (const [old, at] of recalled) {
+      if (recalled.size <= RECALLED_MAX && now - at < RECALLED_TTL_MS) break;
+      recalled.delete(old);
+    }
+  }
   /** Real names for this bot's open_ids (open_id is per app, so per orchestrator). */
   const names = createNameBook(channel);
 
   /** Record that a message reached the session (see session-store.nextSeen).
    * Fire-and-forget like every watermark write; the function form keeps
-   * concurrent marks from overwriting each other. */
-  function markSeen(sessionKey: string, mark: SeenMark, how: SeenHow = 'id', streaming?: SeenMark[], extra: SeenMark[] = []): void {
+   * concurrent marks from overwriting each other. A turn's start also drops
+   * the recall notes it said, adds one for a trigger recalled meanwhile and
+   * moves `from` to an opening's oldest line (s15). */
+  function markSeen(sessionKey: string, mark: SeenMark | undefined, how: SeenHow = 'id', streaming?: SeenMark[], extra: SeenMark[] = [],
+    also: { recallsShown?: string[]; from?: number; late?: RecallNote } = {}): void {
     // The 引用行 its block carried, by topic id, in the same write (s14b).
-    const next = (rec: SessionRecord) => {
-      let patch = nextSeen(rec, mark, how, streaming);
+    const next = (rec: SessionRecord): Partial<SessionRecord> => {
+      let patch: Partial<SessionRecord> = mark ? nextSeen(rec, mark, how, streaming) : {};
       for (const x of extra) patch = { ...patch, ...nextSeen({ ...rec, ...patch }, x, 'id') };
+      if (also.from) patch.from = Math.max(rec.from ?? 0, also.from);
+      if (also.recallsShown?.length || also.late) {
+        const left = (rec.recalls ?? []).filter((r) => !also.recallsShown?.includes(r.id));
+        patch.recalls = also.late ? addRecall(left, also.late) : left;
+      }
       return patch;
     };
     void trackTask(patchSession(sessionKey, next).catch(() => undefined));
@@ -1085,6 +1151,9 @@ export function createOrchestrator(
   const knownIds = (list: TopicView[]) => new Set(list.map((t) => t.topicId));
   /** Who sent a message, as a record block's pointer names them. */
   const senderWho = (msg: NormalizedMessage): Who => ({ kind: senderOf(msg).kind, name: names.peek(msg.senderId) ?? msg.senderName });
+  /** Recall notes as a record block's 〔撤回〕 lines (s15). */
+  const recallLines = (notes: RecallNote[]): NonNullable<RecordBlock['recalls']> =>
+    notes.map((r) => ({ at: r.at, who: personOf(r.who, names), ...(r.other ? { other: true } : {}) }));
   const tierOf = (key: string) => /#(admin|guest)$/.exec(key)?.[1] as 'admin' | 'guest' | undefined;
   const isMainKey = (key: string, chatId: string) => key.replace(/#(admin|guest)$/, '') === chatId;
   /** Main sessions that compacted, by key: the native session id, '' once the
@@ -1188,6 +1257,8 @@ export function createOrchestrator(
       log.info('intake', 'reject', { reason: 'duplicate', msgId: msg.messageId });
       return;
     }
+    // Feishu does not keep events in order: a recall can come before its message (s15).
+    if (recalledSkip(msg)) return;
     log.info('intake', 'recv', {
       chatType: msg.chatType,
       mentionedBot: msg.mentionedBot,
@@ -1273,9 +1344,9 @@ export function createOrchestrator(
         postResumeCard(msg, ts.sessionKey);
         return;
       }
-      if (cmd === 'clear') {
+      if (cmd === 'clear' || cmd === 'new') {
         // 单会话群：停泊当前会话 + 重绑到全新 thread（旧 thread 留档可 /resume）。admin 门控在 runClear 内。
-        runClear(msg, ts.sessionKey, ts);
+        runClear(msg, ts.sessionKey, ts, cmd);
         return;
       }
       if (cmd === 'model') {
@@ -1318,7 +1389,7 @@ export function createOrchestrator(
           .catch(() => undefined);
         return;
       }
-      if (cmd === 'clear') {
+      if (cmd === 'clear' || cmd === 'new') {
         await channel
           .send(
             msg.chatId,
@@ -1369,11 +1440,11 @@ export function createOrchestrator(
       await postGroupSettings(msg, project);
       return;
     }
-    if (cmd === 'clear') {
+    if (cmd === 'clear' || cmd === 'new') {
       await channel
         .send(
           msg.chatId,
-          { markdown: '`/clear` 仅单会话群可用。多话题群里，@我 + 内容 即开新话题；`/resume` 可恢复历史会话。' },
+          { markdown: `这个群的主区不留会话，不用 \`/${cmd}\`：@我 加内容就开一个新话题，每个话题是一条新会话。` },
           { replyTo: msg.messageId },
         )
         .catch(() => undefined);
@@ -1414,8 +1485,47 @@ export function createOrchestrator(
     startTopicDirectly(msg, text, project);
   };
 
+  /**
+   * A message was recalled (im.message.recalled_v1, s15). Not in a session yet:
+   * queued or held input of it is dropped, and its own late event is not run.
+   * Already in one: each session it reached says so at its next turn, from what
+   * the daemon records (see recall.reachedAt). Idempotent: Feishu may push twice.
+   */
+  async function onRecall({ messageId: id, chatId, recallType }: RecallEvent): Promise<void> {
+    if (!id || !chatId) return;
+    const say = (lookup: string, sessions = 0, noted = 0): void =>
+      log.info('intake', 'recall', { chat: chatId.slice(-6), msg: id.slice(-6), type: recallType ?? null, lookup, sessions, noted });
+    // Pushed again: the first event's notes stand (once said, a second lookup would add them back).
+    if (recalled.has(id)) { say('repeat'); return; }
+    noteRecalled(id);
+    let dropped = 0;
+    for (const state of active.values()) {
+      dropped += removeWhere(state.queue, (turn) => turn.seen?.id === id);
+      if (state.deferred) dropped += removeWhere(state.deferred, (held) => held.id === id);
+    }
+    if (dropped) log.info('intake', 'recall-queued-dropped', { msgId: id, dropped });
+    const bindings = (await listSessions().catch(() => [])).filter((s) => s.chatId === chatId && !s.detached);
+    if (!bindings.length) { say('skipped'); return; }
+    const x = await orStop(fetchMessageMeta(channel, id, names), undefined);
+    if (x?.from === 'self') { say('self', bindings.length); return; } // the bot's own: its native history has it
+    const list = x && !isTopicReply(x, id) && topics && bindings.some((b) => !isMainKey(b.threadId, chatId)) ? await topics.list(chatId) : [];
+    const other = recallType !== undefined && recallType !== 'message_owner';
+    const who = x ? { kind: x.from, ...(x.senderId ? { openId: x.senderId } : {}) } : undefined;
+    let noted = 0;
+    for (const rec of bindings) {
+      const rootAt = list.find((t) => t.topicId === rec.threadId.replace(/#(admin|guest)$/, ''))?.firstAt;
+      const at = reachedAt(rec, chatId, id, x, rootAt);
+      if (at === undefined) continue;
+      noted++;
+      const note: RecallNote = { id, at, ...(who ? { who } : {}), ...(other ? { other: true } : {}) };
+      // Only while the binding still points at the session the message reached.
+      void trackTask(patchSession(rec.threadId, (r) => (r.sessionId === rec.sessionId ? { recalls: addRecall(r.recalls, note) } : {})).catch(() => undefined));
+    }
+    say(x ? 'ok' : 'failed', bindings.length, noted);
+  }
+
   /** Parse a leading slash command; null otherwise. */
-  function parseCommand(text: string): 'resume' | 'model' | 'settings' | 'help' | 'compact' | 'context' | 'clear' | null {
+  function parseCommand(text: string): 'resume' | 'model' | 'settings' | 'help' | 'compact' | 'context' | 'clear' | 'new' | null {
     const m = /^\/(\w+)/.exec(text);
     const name = m?.[1]?.toLowerCase();
     return name === 'resume' ||
@@ -1424,7 +1534,8 @@ export function createOrchestrator(
       name === 'help' ||
       name === 'compact' ||
       name === 'context' ||
-      name === 'clear'
+      name === 'clear' ||
+      name === 'new'
       ? name
       : null;
   }
@@ -1446,9 +1557,10 @@ export function createOrchestrator(
 
   /** 非管理员触发 owner-only 命令(/resume、/settings)时的统一无权限提示。
    * design §5: 管理类命令仅 bot owner(=admins[]) 可用；对话类(/model、/help)对所有人开放。 */
-  async function denyAdminCommand(msg: NormalizedMessage, cmd: 'resume' | 'settings' | 'clear'): Promise<void> {
+  async function denyAdminCommand(msg: NormalizedMessage, cmd: 'resume' | 'settings' | 'clear' | 'new'): Promise<void> {
+    const why = cmd === 'clear' || cmd === 'new' ? '主区的会话是大家共用的。' : '';
     await channel
-      .send(msg.chatId, { markdown: `⚠️ \`/${cmd}\` 仅 bot 管理员可用。` }, { replyTo: msg.messageId })
+      .send(msg.chatId, { markdown: `⚠️ \`/${cmd}\` 只有主人和管理员能用。${why}` }, { replyTo: msg.messageId })
       .catch(() => undefined);
     log.info('intake', 'cmd-denied', { cmd });
   }
@@ -1640,7 +1752,7 @@ export function createOrchestrator(
     extra?: TurnExtra,
   ): Promise<void> {
     // Already a line of the running turn's record block (see ActiveState.woven): not steered in again.
-    if (wovenSkip(cur, msg)) return;
+    if (wovenSkip(cur, msg) || recalledSkip(msg)) return;
     if (!extra?.queueOnly && getPendingPolicy(cfg) === 'steer' && cur.run && cur.thread && cur.thread.supportsSteer !== false) {
       const tid = cur.run.turnId();
       if (tid) {
@@ -1681,6 +1793,13 @@ export function createOrchestrator(
       if (sessions.get(sessionKey) === cur.thread) sessions.delete(sessionKey);
     }
     startReservedRun(msg, woven.text, sessionKey, flat, project, perm, images, woven, text, undefined, extra);
+  }
+
+  /** Whether `msg` was recalled while it was prepared: it reached no session, so it is dropped (s15). */
+  function recalledSkip(msg: NormalizedMessage): boolean {
+    if (!recalled.has(msg.messageId)) return false;
+    log.info('intake', 'reject', { reason: 'recalled', msgId: msg.messageId });
+    return true;
   }
 
   /** Whether `msg` is a line of the record block `state`'s running turn carried (logged then). */
@@ -1735,8 +1854,20 @@ export function createOrchestrator(
     // A retry re-checks here, in the same synchronous step that reserves it: a
     // message may have reserved the session while it waited.
     if (staleRetry(extra)) return;
+    if (recalledSkip(msg)) return;
     const existing = active.get(sessionKey);
     if (existing) {
+      // A /compact or /new holds the session: wait, then go through here again (s15).
+      if (existing.deferred && !extra?.retry) {
+        existing.deferred.push({ id: msg.messageId, at: msg.createTime, go: () =>
+          startReservedRun(msg, text, sessionKey, flat, project, perm, preloadedImages, preIngested, summaryText, goal, extra), early: () => {
+          log.info('intake', 'reject', { reason: 'before-new', msgId: msg.messageId });
+          void trackTask(channel.send(msg.chatId, { markdown: '⚠️ 这条在 `/new` 之前发的，新会话不带它，要问就再发一次。' },
+            { replyTo: msg.messageId, replyInThread: !flat }).catch(() => undefined));
+        } });
+        log.info('intake', 'deferred', { msgId: msg.messageId });
+        return;
+      }
       // A goal can't co-run with (or queue behind) a turn on the same session —
       // it's an autonomous multi-turn run, not a follow-up. Tell the user and skip.
       if (goal) {
@@ -1752,7 +1883,7 @@ export function createOrchestrator(
         return;
       }
       // A current retry only starts as a fresh run: whatever holds the session
-      // now is a /compact, /clear or /resume, which drops what queues on it.
+      // now is a /compact, /new or /resume.
       if (extra?.retry) {
         extra.retry.busy();
         return;
@@ -1774,7 +1905,7 @@ export function createOrchestrator(
       log.info('intake', 'queued', { depth: existing.queue.length });
       return;
     }
-    const reserved: ActiveState = { queue: [], requesterOpenId: msg.senderId, isGoal: goal };
+    const reserved: ActiveState = { queue: [], requesterOpenId: msg.senderId, isGoal: goal, runLoop: true };
     active.set(sessionKey, reserved);
     dropRetries(sessionKey);
     extra?.retry?.accepted();
@@ -1885,6 +2016,8 @@ export function createOrchestrator(
         // resume failed and we fell back to a new thread (recreated) — both want
         // the opening woven, not just the delta.
         const codexEmpty = neverSeen || recreated;
+        // A session that never spoke since a /new forgets nothing when it is rebuilt: no notice (s15).
+        const unused = prior?.from !== undefined && (prior.lastSeenAt ?? 0) < prior.from && !prior.seen?.length;
         // 对话记录块：把 bot 还没喂给 codex 的消息补进这一轮。codexEmpty（新会话 /
         // resume 失败重建）→ 开场带最近 20 条，话题再加第一条；已有会话 → 只带没见过的
         // （水位之后、不是插话或排队送过的），最多 40 条。Goals skip the record block
@@ -1896,14 +2029,21 @@ export function createOrchestrator(
         let woven: string[] | undefined;
         let seenExtra: SeenMark[] = [];
         let tableShown = false;
+        let openFrom: number | undefined;
+        // A rebuilt session's opening goes back no further than the old one's `from`:
+        // after a /new, nothing before the command (s15).
+        const floor = codexEmpty ? prior?.from ?? 0 : 0;
+        // Recalled messages the session got are said once (s15); a rebuilt one never had them.
+        const notes = place && !codexEmpty ? prior?.recalls ?? [] : [];
+        const recalls = recallLines(notes);
         if (place && codexEmpty && prior && prior.lastSeenAt !== 0) {
           // The speculative pull stopped at the old session's watermark (or was
           // skipped): the new session needs the whole opening.
-          pull = await pullFor({ enough: OPENING_MAX });
+          pull = await pullFor({ enough: OPENING_MAX, ...(floor ? { stopAt: floor } : {}) });
         }
         if (place && pull) {
           let history = codexEmpty
-            ? pull.messages
+            ? pull.messages.filter((m) => m.createTime >= floor)
             : pull.messages.filter((m) => isUnread(prior, m.messageId, m.createTime));
           const spec = codexEmpty ? await openingP : undefined;
           if (codexEmpty && rootId && !history.some(isRoot)) {
@@ -1932,7 +2072,7 @@ export function createOrchestrator(
             const known = await topicCtx.quotable(msg.chatId, list);
             // This bot's own replies are not woven, but another bot's topic under one
             // sends no event, so they are looked at too (s14c).
-            const from = kept[0]?.createTime ?? 0;
+            const from = kept[0]?.createTime ?? floor;
             const mine = (pull.ownRoots ?? []).filter((m) => m.createTime >= from && (codexEmpty || isUnread(prior, m.messageId, m.createTime)));
             const roots = [...kept, ...mine].sort((a, b) => a.createTime - b.createTime);
             const found = await orStop(topicCtx.discover(msg.chatId, roots, knownIds(known)), []);
@@ -1955,10 +2095,19 @@ export function createOrchestrator(
             now,
             rootId,
             ...topicsPart,
+            recalls,
           });
+          // The oldest line the new session got (s15), the trigger without one.
+          const times = [...kept, ...topicsPart.opening?.main ?? []].map((m) => m.createTime).filter((t) => t > 0);
+          if (codexEmpty && pull.ok) openFrom = Math.min(now, ...times);
           log.info('intake', 'record-block', { place, lines: kept.length, earlier, opening: codexEmpty, ok: pull.ok, streaming: streaming.length,
             quotes: topicsPart.quotes?.length ?? 0, moreTopics: topicsPart.moreTopics ?? 0, table: topicsPart.table?.length ?? 0,
-            ownRoots: topicsPart.refs?.length ?? 0, ...openingLog });
+            ownRoots: topicsPart.refs?.length ?? 0, recalls: recalls.length, ...openingLog });
+        } else if (place && recalls.length) {
+          // No back-fill (a resumed session without a watermark): a block with the notes only.
+          const header = { group: project?.name, me: channel.botIdentity?.name, ...(topicId ? { topic: { title } } : {}) };
+          firstText = weaveRecordBlock(firstText, { place: header, entries: [], now: msg.createTime || Date.now(), recalls });
+          log.info('intake', 'record-block', { place, lines: 0, recalls: recalls.length });
         }
         // The watermark moves to the trigger only when everything before it reached
         // the session: the back-fill succeeded, or there is none (a resumed
@@ -2072,20 +2221,23 @@ export function createOrchestrator(
           woven,
           seenExtra,
           tableShown,
+          recallsShown: notes.map((r) => r.id),
+          from: openFrom,
           // 编织完成 → turn/start 之间不再读盘：首轮直接用预取的会话记录
           // （新会话及旧单会话的缺失值由上面的 model/effort 补齐）。
           firstRec: prior ?? null,
           titleJobKey,
           titleSource,
           timing: { tResolve: tResolveDone - tIntake, tWeave: Date.now() - tIntake },
-          ...(recreateReason ? { sessionNotice: sessionChangeNotice(recreateReason, Boolean(topicId)) } : {}),
+          ...(recreateReason && !unused ? { sessionNotice: sessionChangeNotice(recreateReason, Boolean(topicId)) } : {}),
         };
-        if (recreateReason) log.info('agent', 'session-changed', { sessionKey, reason: recreateReason });
+        if (recreateReason) log.info('agent', 'session-changed', { sessionKey, reason: recreateReason, ...(unused ? { unused } : {}) });
         if (goal) await trackRun(launchGoalRun(launchOpts));
         else await trackRun(launchRun(launchOpts, reaction));
       } catch (err) {
         if (active.get(sessionKey) === reserved) active.delete(sessionKey);
         const dropped = reserved.queue.splice(0).length;
+        dropCompact(reserved);
         reaction?.done();
         log.fail('intake', err);
         await channel
@@ -2354,6 +2506,8 @@ export function createOrchestrator(
         requesterOpenId: msg.senderId,
         requestedAt: msg.createTime || tIntake,
         seenAt: msg.createTime,
+        // The topic session's oldest line: the opening's first main line, else the trigger (s15).
+        from: section ? section.main[0]?.createTime || msg.createTime : undefined,
         openTopic: { id: msg.messageId, from: senderOf(msg), at: msg.createTime || undefined, text: msg.content },
         roleSuffix: perm.roleSuffix,
         backendId: be.id,
@@ -2484,18 +2638,18 @@ export function createOrchestrator(
    * card updates (each is a round-trip). */
   const COMPACT_ANIM_INTERVAL_MS = 800;
 
-  /** `/compact`: summarize the session's history to free context. Idle-only (a
-   * running turn owns the thread's single event stream); resumes the session
-   * under its current tier if it isn't live. Compaction is a background turn (not
-   * instant), so we post a managed "压缩中" card and flip it in place to
-   * 压缩完成/失败 once {@link AgentThread.compact} actually settles.
+  /** `/compact`: summarize the session's history to free context; resumes the
+   * session under its current tier if it isn't live. While a turn runs it waits:
+   * the run loop compacts right after that turn, before the turns already queued
+   * (product.md 3.5, s15). One waits per session; during a goal or another
+   * operation it is refused.
    *
-   * Detached (startReservedRun 同模式): the session is reserved SYNCHRONOUSLY so
-   * a message racing in mid-compaction queues instead of launching a turn that
-   * would steal the thread's single event stream — then everything slow
-   * (resolveThread, the compaction turn, up to COMPACT_TIMEOUT_MS) runs off the
-   * await chain. Holding onMessage here would pin the SDK's per-chat queue —
-   * sibling topics and the ⏹ card-action would stall for the whole compaction. */
+   * Idle, it is detached (startReservedRun 同模式): the session is reserved
+   * SYNCHRONOUSLY so a message racing in mid-compaction waits on the reservation
+   * (ActiveState.deferred) instead of launching a turn that would steal the
+   * thread's single event stream, and runs once the compaction is done. Holding
+   * onMessage here would pin the SDK's per-chat queue — sibling topics and the ⏹
+   * card-action would stall for the whole compaction. */
   function runCompact(
     msg: NormalizedMessage,
     sessionKey: string,
@@ -2506,11 +2660,21 @@ export function createOrchestrator(
       channel
         .send(msg.chatId, { markdown }, { replyTo: msg.messageId, replyInThread: inThread })
         .then(() => undefined, () => undefined);
-    if (active.get(sessionKey)) {
-      void trackTask(reply('⏳ 这一轮还在跑，结束后再 `/compact`。'));
+    const existing = active.get(sessionKey);
+    if (existing) {
+      let busy = '⏳ 正在处理别的操作，结束后再 `/compact`。';
+      if (existing.compacting) busy = '正在压缩，不用再发 `/compact`。';
+      else if (existing.compactAfter) busy = '已经排上了，这一轮结束后就压缩。';
+      else if (existing.isGoal) busy = '🎯 目标运行中，结束后再 `/compact`。';
+      else if (existing.runLoop) {
+        existing.compactAfter = { msg, inThread };
+        busy = '⏳ 等这一轮结束就压缩，不用再发。';
+        log.info('intake', 'compact-queued', { sessionKey });
+      }
+      void trackTask(reply(busy));
       return;
     }
-    const reserved: ActiveState = { queue: [], requesterOpenId: msg.senderId };
+    const reserved: ActiveState = { queue: [], requesterOpenId: msg.senderId, compacting: true, deferred: [] };
     active.set(sessionKey, reserved);
     void trackTask(withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
       try {
@@ -2522,111 +2686,131 @@ export function createOrchestrator(
           await reply('这个会话还没开始，先发条消息聊两句再 `/compact`。');
           return;
         }
-
-        // "压缩中" card we flip in place to the result. Keep its messageId so the
-        // settle step can update the same entity; fall back to a fresh card if the
-        // initial send (or the in-place update) fails.
-        let cardMsgId: string | undefined;
-        try {
-          const sent = await sendManagedCard(channel, msg.chatId, buildCompactingCard(0), msg.messageId, inThread);
-          cardMsgId = sent.messageId;
-        } catch (err) {
-          log.fail('card', err, { phase: 'compact-start-card' });
-        }
-
-        // Spin the "压缩中" card so it visibly keeps working (compaction can take a
-        // while). Self-rescheduling tick — never overlaps an in-flight update, and
-        // checks `stop` right before each render so no frame can clobber the result;
-        // the card has no buttons, so these updates can't hit an interaction lock.
-        let stop = false;
-        const wakers: Array<() => void> = [];
-        const sleep = (ms: number): Promise<void> =>
-          new Promise((res) => {
-            const t = setTimeout(res, ms);
-            wakers.push(() => {
-              clearTimeout(t);
-              res();
-            });
-          });
-        const anim = (async () => {
-          let tick = 0;
-          while (!stop && cardMsgId) {
-            await sleep(COMPACT_ANIM_INTERVAL_MS);
-            if (stop || !cardMsgId) break;
-            tick++;
-            await updateManagedCard(channel, cardMsgId, buildCompactingCard(tick)).catch(() => undefined);
-          }
-        })();
-
-        const settle = async (result: object): Promise<void> => {
-          stop = true;
-          wakers.forEach((w) => w()); // cut the current sleep so the result shows promptly
-          await anim; // let the in-flight frame finish so it can't land after the result
-          if (cardMsgId && (await updateManagedCard(channel, cardMsgId, result))) return;
-          await sendManagedCard(channel, msg.chatId, result, msg.messageId, inThread).catch((err) =>
-            log.fail('card', err, { phase: 'compact-settle' }),
-          );
-        };
-
-        // Pre-compaction occupancy, so the result card can show 旧% → 新%.
-        const before = lastUsage.get(sessionKey) ?? null;
-        try {
-          // Resolves only when codex's compaction turn truly finishes (compact()
-          // drains the stream to turn/completed), so the card flips at the right
-          // time AND no stale `done` leaks into the next turn.
-          const { usage } = await thread.compact();
-          markTopicsDue(sessionKey, msg.chatId, thread.sessionId);
-          if (usage) lastUsage.set(sessionKey, { used: usage.usedTokens, window: usage.contextWindow });
-          else lastUsage.delete(sessionKey); // refreshes on the next turn's usage event
-          log.info('intake', 'compact', { sessionKey, used: usage?.usedTokens ?? null, before: before?.used ?? null });
-          await settle(buildCompactedCard(usage, before));
-        } catch (err) {
-          const m = err instanceof Error ? err.message : String(err);
-          const unsupported = /method not found|-32601|unknown (method|request)/i.test(m);
-          log.fail('intake', err, { phase: 'compact' });
-          await settle(buildCompactFailedCard(unsupported ? '当前 codex 版本不支持 /compact，请升级后再试。' : m));
-        }
+        await compactWithCard(msg, inThread, thread, sessionKey);
       } catch (err) {
         // pre-card failures (resolveThread 等) have no card to land on — surface
         // them as a plain reply rather than dying silently in the detached task.
         log.fail('intake', err, { phase: 'compact-detached' });
         await reply(`❌ ${err instanceof Error ? err.message : String(err)}`);
       } finally {
-        if (active.get(sessionKey) === reserved) active.delete(sessionKey);
-        // Messages that queued onto the reservation during compaction never ran —
-        // say so instead of dropping them silently (same contract as a killed run).
-        if (reserved.queue.length > 0) {
-          await reply(`⚠️ 压缩期间收到的 ${reserved.queue.length} 条消息未进入会话，请重发。`);
-        }
+        releaseHold(sessionKey, reserved);
       }
     }));
   }
 
+  /** End a /compact or /new hold: the input that waited on it goes through intake again, in order.
+   * After a swap, input sent before the /new is told instead: the new session starts at the command (product.md 3.5). */
+  function releaseHold(sessionKey: string, reserved: ActiveState): void {
+    if (active.get(sessionKey) === reserved) active.delete(sessionKey);
+    const newAt = reserved.newAt;
+    if (!shuttingDown) for (const d of reserved.deferred?.splice(0) ?? []) (newAt && d.at && d.at < newAt ? d.early : d.go)();
+  }
+
+  /** Tell the sender a /compact that waited on a run that stopped did not happen (not at shutdown). */
+  function dropCompact(state: ActiveState): void {
+    const c = state.compactAfter;
+    state.compactAfter = undefined;
+    if (!c || shuttingDown) return;
+    log.info('intake', 'compact-dropped', { msgId: c.msg.messageId });
+    void trackTask(channel.send(c.msg.chatId, { markdown: '⚠️ 前面那一轮停了，`/compact` 没有执行，要压缩就再发一次。' },
+      { replyTo: c.msg.messageId, replyInThread: c.inThread }).catch(() => undefined));
+  }
+
+  /** Compact `thread` behind a "压缩中" card flipped in place to the result (an idle
+   * /compact, or one the run loop does between turns). Never throws. */
+  async function compactWithCard(msg: NormalizedMessage, inThread: boolean, thread: AgentThread, sessionKey: string): Promise<void> {
+    // "压缩中" card we flip in place to the result. Keep its messageId so the
+    // settle step can update the same entity; fall back to a fresh card if the
+    // initial send (or the in-place update) fails.
+    let cardMsgId: string | undefined;
+    try {
+      const sent = await sendManagedCard(channel, msg.chatId, buildCompactingCard(0), msg.messageId, inThread);
+      cardMsgId = sent.messageId;
+    } catch (err) {
+      log.fail('card', err, { phase: 'compact-start-card' });
+    }
+
+    // Spin the "压缩中" card so it visibly keeps working (compaction can take a
+    // while). Self-rescheduling tick — never overlaps an in-flight update, and
+    // checks `stop` right before each render so no frame can clobber the result;
+    // the card has no buttons, so these updates can't hit an interaction lock.
+    let stop = false;
+    const wakers: Array<() => void> = [];
+    const sleep = (ms: number): Promise<void> =>
+      new Promise((res) => {
+        const t = setTimeout(res, ms);
+        wakers.push(() => {
+          clearTimeout(t);
+          res();
+        });
+      });
+    const anim = (async () => {
+      let tick = 0;
+      while (!stop && cardMsgId) {
+        await sleep(COMPACT_ANIM_INTERVAL_MS);
+        if (stop || !cardMsgId) break;
+        tick++;
+        await updateManagedCard(channel, cardMsgId, buildCompactingCard(tick)).catch(() => undefined);
+      }
+    })();
+
+    const settle = async (result: object): Promise<void> => {
+      stop = true;
+      wakers.forEach((w) => w()); // cut the current sleep so the result shows promptly
+      await anim; // let the in-flight frame finish so it can't land after the result
+      if (cardMsgId && (await updateManagedCard(channel, cardMsgId, result))) return;
+      await sendManagedCard(channel, msg.chatId, result, msg.messageId, inThread).catch((err) =>
+        log.fail('card', err, { phase: 'compact-settle' }),
+      );
+    };
+
+    // Pre-compaction occupancy, so the result card can show 旧% → 新%.
+    const before = lastUsage.get(sessionKey) ?? null;
+    try {
+      // Resolves only when codex's compaction turn truly finishes (compact()
+      // drains the stream to turn/completed), so the card flips at the right
+      // time AND no stale `done` leaks into the next turn.
+      const { usage } = await thread.compact();
+      markTopicsDue(sessionKey, msg.chatId, thread.sessionId);
+      if (usage) lastUsage.set(sessionKey, { used: usage.usedTokens, window: usage.contextWindow });
+      else lastUsage.delete(sessionKey); // refreshes on the next turn's usage event
+      log.info('intake', 'compact', { sessionKey, used: usage?.usedTokens ?? null, before: before?.used ?? null });
+      await settle(buildCompactedCard(usage, before));
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err);
+      const unsupported = /method not found|-32601|unknown (method|request)/i.test(m);
+      log.fail('intake', err, { phase: 'compact' });
+      await settle(buildCompactFailedCard(unsupported ? '当前 codex 版本不支持 /compact，请升级后再试。' : m));
+    }
+  }
+
   /**
-   * `/clear` (single-session groups only, admin-gated): park the current session
+   * `/new` or `/clear` (single-session groups only, admin-gated): park the current session
    * and rebind the group to a BRAND-NEW backend thread, preserving the session's
    * model / effort / backend. The parked thread stays on disk (resumable via
    * `/resume`) — non-destructive; Feishu chat history is untouched, and the card
    * says so. Reserves the session SYNCHRONOUSLY (like {@link runCompact}) so a
-   * message racing in through the SDK's per-chat queue queues instead of
+   * message racing in through the SDK's per-chat queue waits (then runs on the new
+   * thread, or the old one when the swap failed) instead of
    * launching a turn on the about-to-be-replaced thread; the slow work
    * (startThread) runs detached so onMessage returns fast.
    */
-  function runClear(msg: NormalizedMessage, sessionKey: string, perm: TurnPerm): void {
+  function runClear(msg: NormalizedMessage, sessionKey: string, perm: TurnPerm, cmd: 'clear' | 'new'): void {
     const reply = (markdown: string): Promise<void> =>
       channel.send(msg.chatId, { markdown }, { replyTo: msg.messageId }).then(
         () => undefined,
         () => undefined,
       );
     if (!isAdmin(cfg, msg.senderId)) {
-      void trackTask(denyAdminCommand(msg, 'clear'));
+      void trackTask(denyAdminCommand(msg, cmd));
       return;
     }
-    if (active.get(sessionKey)) {
-      void trackTask(reply('⏳ 这一轮还在跑，结束后再 `/clear`。'));
+    const existing = active.get(sessionKey);
+    if (existing) {
+      void trackTask(reply(existing.compacting ? `⏳ 正在压缩，压完再 \`/${cmd}\`。` : `⏳ 这一轮还在跑，结束后再 \`/${cmd}\`。`));
       return;
     }
-    const reserved: ActiveState = { queue: [], requesterOpenId: msg.senderId };
+    const reserved: ActiveState = { queue: [], requesterOpenId: msg.senderId, deferred: [] };
     active.set(sessionKey, reserved);
     void trackTask(withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
       try {
@@ -2670,25 +2854,23 @@ export function createOrchestrator(
           effort: rec?.effort,
           modelCustom: rec?.modelCustom,
           summary: '(新会话)',
-          // The new session starts at this command (product.md 3.5 "命令").
+          // The new session starts at this command (product.md 3.5 "命令"), also
+          // when it is rebuilt before its first turn (from).
           lastSeenAt: msg.createTime || Date.now(),
+          from: (msg.createTime || Date.now()) + 1,
           createdAt: Date.now(),
           updatedAt: Date.now(),
         });
+        reserved.newAt = msg.createTime;
         await sendManagedCard(channel, msg.chatId, buildClearedCard(), msg.messageId, false).catch((err) =>
           log.fail('card', err, { phase: 'clear' }),
         );
-        log.info('intake', 'clear', { sessionKey, sessionId: fresh.sessionId, backend: be.id });
+        log.info('intake', 'clear', { sessionKey, sessionId: fresh.sessionId, backend: be.id, cmd });
       } catch (err) {
         log.fail('intake', err, { phase: 'clear' });
         await reply(`❌ ${err instanceof Error ? err.message : String(err)}`);
       } finally {
-        if (active.get(sessionKey) === reserved) active.delete(sessionKey);
-        // Messages that queued onto the reservation during the swap never ran —
-        // say so instead of dropping them silently (same contract as runCompact).
-        if (reserved.queue.length > 0) {
-          await reply(`⚠️ 清空期间收到的 ${reserved.queue.length} 条消息未进入会话，请重发。`);
-        }
+        releaseHold(sessionKey, reserved);
       }
     }));
   }
@@ -2705,7 +2887,8 @@ export function createOrchestrator(
     // （能力守卫会拒），避免「列了点了才发现不支持」。codex(capabilities undefined)=全列。
     const caps = backendFor(project?.backend).capabilities;
     await withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
-      await sendManagedCard(channel, msg.chatId, buildHelpCard(scope, noMention, isAdmin(cfg, msg.senderId), caps), msg.messageId, inThread).catch((err) =>
+      const card = buildHelpCard(scope, noMention, isAdmin(cfg, msg.senderId), caps, project?.kind ?? 'multi');
+      await sendManagedCard(channel, msg.chatId, card, msg.messageId, inThread).catch((err) =>
         log.fail('card', err, { cmd: 'help', scope }),
       );
       log.info('card', 'help', { scope });
@@ -4591,7 +4774,7 @@ export function createOrchestrator(
         // is the main-area session, which no back-fill reads until s14 (it must
         // then allow for clock skew, or use the newest createTime it has).
         const now = Date.now();
-        try { await upsertSession({ ...record, sessionId: fresh.sessionId, summary: '(新会话)', lastSeenAt: now, seen: undefined, createdAt: now, updatedAt: now }); }
+        try { await upsertSession({ ...record, sessionId: fresh.sessionId, summary: '(新会话)', lastSeenAt: now, seen: undefined, from: now, recalls: undefined, createdAt: now, updatedAt: now }); }
         catch (error) { await fresh.close(); throw error; }
         const old = sessions.get(key); if (old) await old.close();
         trackSession(key, fresh); lastUsage.delete(key); dropRetries(key);
@@ -4671,6 +4854,10 @@ export function createOrchestrator(
     woven?: string[];
     seenExtra?: SeenMark[];
     tableShown?: boolean;
+    /** The first turn's said recall notes and an opening's oldest line (see QueuedTurn); a topic
+     * this run opens writes `from` with its record. */
+    recallsShown?: string[];
+    from?: number;
     /** single-session group: reply by quoting (no reply_in_thread / topic). */
     flat?: boolean;
     /** when admin/guest tiers are split: 'admin'|'guest' to namespace the
@@ -4795,7 +4982,7 @@ export function createOrchestrator(
     const runCwd = opts.cwd ?? fallbackCwd;
     // Reuse the reservation handleTurn made for this session (so messages
     // queued during startup aren't lost); fall back to a fresh state otherwise.
-    const state: ActiveState = active.get(activeKey) ?? { queue: [], requesterOpenId: opts.requesterOpenId };
+    const state: ActiveState = active.get(activeKey) ?? { queue: [], requesterOpenId: opts.requesterOpenId, runLoop: true };
     state.thread = opts.thread;
     if (opts.requesterOpenId) state.requesterOpenId = opts.requesterOpenId;
     active.set(activeKey, state);
@@ -4803,7 +4990,10 @@ export function createOrchestrator(
 
     // M-3: 池满先排队（占位卡可见可取消）；null = 等待期被 ⏹ 取消，预订已释放。
     const slot = await acquireRunSlot(opts, state, activeKey, reaction);
-    if (!slot) return;
+    if (!slot) {
+      dropCompact(state);
+      return;
+    }
     if (shuttingDown) {
       slot.release();
       active.delete(activeKey);
@@ -4882,6 +5072,7 @@ export function createOrchestrator(
         modelCustom: opts.modelCustom,
         summary: opts.summary ?? opts.firstText.slice(0, 80),
         ...(opts.seenAt ? nextSeen({}, { id: opts.replyTo, at: opts.seenAt }, 'advance') : {}),
+        ...(opts.from ? { from: opts.from } : {}),
         createdAt: Date.now(),
         updatedAt: Date.now(),
       }).catch((err) => log.fail('console', err, { phase: 'persist-session', threadId }));
@@ -4929,7 +5120,12 @@ export function createOrchestrator(
         woven: opts.woven,
         seenExtra: opts.seenExtra,
         tableShown: opts.tableShown,
+        recallsShown: opts.recallsShown,
+        from: opts.from,
       };
+      // Recall notes a turn of this run said; only a queued turn says the newer ones (s15).
+      const said = new Set(opts.recallsShown);
+      let fromQueue = false;
       let replyTo = opts.replyTo;
       let replyInThread = opts.flat ? false : (opts.replyInThread ?? Boolean(opts.knownThreadId));
       for (;;) {
@@ -4951,16 +5147,21 @@ export function createOrchestrator(
         const rec =
           firstRec !== undefined ? (firstRec ?? undefined) : topicThreadId ? await getSession(topicThreadId) : undefined;
         firstRec = undefined;
-        if (!currentTurn.tableShown && topics && topicThreadId && topicsDueFor(topicThreadId, opts.chatId, rec, opts.thread.sessionId)) {
-          // The main session compacted, and no block of this run carried the recent
-          // topics yet (a queued turn, or one that wove none): they go first (s14b).
-          const rows = topicRows(await topics.list(opts.chatId, { limit: 5 }), tierOf(topicThreadId), names);
-          if (rows.length) {
-            const place = { group: (await getProjectByChatId(opts.chatId))?.name, me: channel.botIdentity?.name };
-            turnInput = { ...turnInput, text: weaveRecordBlock(turnInput.text ?? '', { place, entries: [], now: Date.now(), table: rows }) };
-            currentTurn.tableShown = true;
-            log.info('intake', 'record-block', { place: 'main', lines: 0, table: rows.length });
-          }
+        // The main session compacted, and no block of this run carried the recent
+        // topics yet (a queued turn, or one that wove none): they go first (s14b).
+        // So do recall notes no turn of this run said yet (s15).
+        const notes = fromQueue && topicThreadId ? (rec?.recalls ?? []).filter((r) => !said.has(r.id)) : [];
+        const rows = !currentTurn.tableShown && topics && topicThreadId && topicsDueFor(topicThreadId, opts.chatId, rec, opts.thread.sessionId)
+          ? topicRows(await topics.list(opts.chatId, { limit: 5 }), tierOf(topicThreadId), names) : [];
+        if (topicThreadId && (rows.length || notes.length)) {
+          const main = isMainKey(topicThreadId, opts.chatId);
+          const topic = main ? {} : { topic: { title: (await topics?.get(opts.chatId, topicThreadId.replace(/#(admin|guest)$/, '')))?.title } };
+          const place = { group: (await getProjectByChatId(opts.chatId))?.name, me: channel.botIdentity?.name, ...topic };
+          turnInput = { ...turnInput, text: weaveRecordBlock(turnInput.text ?? '', { place, entries: [], now: Date.now(), table: rows, recalls: recallLines(notes) }) };
+          if (rows.length) currentTurn.tableShown = true;
+          currentTurn.recallsShown = notes.map((r) => r.id);
+          for (const r of notes) said.add(r.id);
+          log.info('intake', 'record-block', { place: main ? 'main' : 'topic', lines: 0, table: rows.length, recalls: notes.length });
         }
         const turnModel = rec?.model ?? opts.model;
         const turnEffort = rec?.effort ?? opts.effort;
@@ -5209,7 +5410,13 @@ export function createOrchestrator(
             // The host took the input: only now do it and the history woven into
             // it count as seen (a refused turn/start or a crash before here leaves
             // both for the next back-fill and a re-push).
-            if (unseen && topicThreadId) markSeen(topicThreadId, unseen, currentTurn.seenHow, currentTurn.streaming, currentTurn.seenExtra);
+            if (topicThreadId && (unseen || currentTurn.recallsShown?.length)) {
+              // A trigger recalled while its turn was prepared still runs; the next turn says so (s15).
+              const late: RecallNote | undefined = unseen && recalled.has(unseen.id)
+                ? { id: unseen.id, at: unseen.at, who: { kind: 'user', openId: currentTurn.requesterOpenId } } : undefined;
+              markSeen(topicThreadId, unseen, currentTurn.seenHow, currentTurn.streaming, currentTurn.seenExtra,
+                { recallsShown: currentTurn.recallsShown, from: currentTurn.from, late });
+            }
             unseen = undefined;
             if (currentTurn.tableShown && topicThreadId) setTopicsDue(topicThreadId, '');
             if (currentTurn.woven?.length) state.woven = new Set(currentTurn.woven);
@@ -5404,12 +5611,32 @@ export function createOrchestrator(
         replyInThread = !opts.flat; // stay in the topic for queued turns (single: stay flat)
         log.info('card', 'final', { terminal: render.terminal() });
 
+        // A /compact sent during the turn compacts now, before the turns already
+        // queued; what comes in meanwhile queues (product.md 3.5, s15). Checked
+        // after the last await of the turn, so a /compact either sees this run
+        // or none. A process the compaction killed ends the run as below.
+        let compactDied = false;
+        const pending = state.compactAfter;
+        if (pending && !(killed || procDead || interrupted)) {
+          state.compactAfter = undefined;
+          state.compacting = true;
+          try { await compactWithCard(pending.msg, pending.inThread, opts.thread, topicThreadId ?? activeKey); }
+          finally { state.compacting = false; }
+          compactDied = !opts.thread.isAlive();
+          if (compactDied) {
+            void trackTask(opts.thread.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
+            if (topicThreadId && sessions.get(topicThreadId) === opts.thread) sessions.delete(topicThreadId);
+            log.info('agent', 'session-evict', { threadId: topicThreadId ?? null, reason: 'compact-proc-dead' });
+          }
+        }
+
         // A stop (⏹ graceful or forced / watchdog) or a dead process ends the
         // whole run — drop any queued follow-ups, but tell the user instead of
         // swallowing them. 优雅 ⏹ 虽然线程留用，但用户按了停就是要停：排队消息
         // 同样丢弃（语义与杀进程路径一致，只是进程不回收）。
-        if (killed || procDead || interrupted) {
+        if (killed || procDead || interrupted || compactDied) {
           state.intakeCancelled = true;
+          dropCompact(state);
           if (state.queue.length > 0) {
             void trackTask(channel
               .send(
@@ -5431,6 +5658,7 @@ export function createOrchestrator(
         settleTurn?.(); // moving on: whatever queued meanwhile made the retry stale
         settleTurn = undefined;
         currentTurn = state.queue.shift()!;
+        fromQueue = true;
         // Per-turn ownership + one-shot override must not leak from the previous
         // requester. The queued item's timestamp preserves all waiting time for
         // the `long` policy and notification copy.
@@ -5440,6 +5668,7 @@ export function createOrchestrator(
       // Detach before any await: new messages must not join a failed consumer.
       if (active.get(activeKey) === state) active.delete(activeKey);
       const dropped = state.queue.splice(0).length;
+      dropCompact(state);
       disposeInterrupt?.();
       state.run = undefined;
       state.interrupt = undefined;
@@ -6409,6 +6638,9 @@ export function createOrchestrator(
     for (const state of active.values()) {
       state.intakeCancelled = true;
       state.queue.length = 0;
+      // A waiting /compact and input held by /compact or /new go silently; the input comes back in the next back-fill.
+      state.compactAfter = undefined;
+      state.deferred?.splice(0);
       try { state.interrupt?.(); }
       catch (error) { shutdownErrors.add(error); }
     }
@@ -6455,6 +6687,7 @@ export function createOrchestrator(
     onBotRemovedFromChat: admitEvent(onBotRemovedFromChat),
     onReaction: admitEvent(onReaction),
     onBotMenu: admitEvent(onBotMenu),
+    onRecall: admitEvent(onRecall),
     dispatcher,
     adminExecute: admit(adminExecute),
     settings: { read: admit(settings.read), save: admit(settings.save), models: admit(settings.models), act: admit(settings.act) },

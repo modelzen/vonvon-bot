@@ -27,6 +27,7 @@ describe('OPTIONAL_EVENTS（事件订阅诊断清单）', () => {
   it('reaction 入站事件进可选清单，必需清单不变', () => {
     expect(OPTIONAL_EVENTS).toContain('im.message.reaction.created_v1');
     expect(OPTIONAL_EVENTS).toContain('application.bot.menu_v6');
+    expect(OPTIONAL_EVENTS).toContain('im.message.recalled_v1'); // s15 撤回说明
     expect(REQUIRED_EVENTS).toEqual(['im.message.receive_v1']);
   });
 });
