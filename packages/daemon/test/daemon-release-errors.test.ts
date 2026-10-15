@@ -18,6 +18,7 @@ const owned = await vi.hoisted(async () => {
   };
 });
 vi.mock('../src/agent/codex-appserver/owned-process', () => ({ closeOwnedCodexProcesses: async () => {}, unconfirmedCodexPids: () => [] }));
+vi.mock('../src/service/startup', () => ({ readStartupRegistration: async () => ({ kind: 'absent' }), startRegisteredDaemon: async () => { throw new Error('unexpected service start'); } }));
 vi.mock('../src/config/data-access', async original => {
   const actual = await original<typeof import('../src/config/data-access')>();
   return { ...actual, acquireMutex: async (...args: Parameters<typeof actual.acquireMutex>) => {

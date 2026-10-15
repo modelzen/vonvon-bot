@@ -1,11 +1,29 @@
 import { randomUUID } from 'node:crypto';
 import { paths } from '../config/paths';
-import { acquireMutex, closeMutex } from '../config/data-access';
+import { acquireMutex, closeMutex, DataAccessError } from '../config/data-access';
 import { listenerCloseUnconfirmed, observeShutdown, type ShutdownControl } from './lifecycle';
 import { readServiceCodexBin } from '../service/codex-bin';
-import { acquirePidLock, publishPidLock, releasePidLock, type PidLockInfo } from '../server/pid-lock';
+import { acquirePidLock, getPidLockInfo, isPidLockOwnerRunning, PidLockError, publishPidLock, readRunningPidLock, releasePidLock, type PidLockInfo } from '../server/pid-lock';
+import { verifyPidLockOwner } from '../server/owner-verification';
+import { readStartupRegistration } from '../service/startup';
 import { log } from '../core/logger';
 import { defaultHolderPath, ProcessHost } from '../provider/process/process-host';
+
+const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Waits for the host mutex holder to publish readiness, then authenticates it; null when it never proves itself. */
+async function verifiedOtherOwner(): Promise<PidLockInfo | null> {
+  const deadline = Date.now() + 25_000;
+  for (;;) {
+    const existing = await readRunningPidLock(paths.appDir);
+    if (existing && existing.pid !== process.pid && existing.listen) {
+      try { await verifyPidLockOwner(paths.appDir, existing); return existing; }
+      catch (error) { if (!(error instanceof PidLockError)) throw error; }
+    }
+    if (Date.now() >= deadline) return null;
+    await pause(100);
+  }
+}
 
 export async function runHostRuntime(options: { bot?: string; port?: number; managed: boolean; control?: ShutdownControl }): Promise<void> {
   const control = options.control ?? observeShutdown(options.managed);
@@ -15,8 +33,29 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
   const errors: unknown[] = [];
   try {
     if (!process.send) {
-      lock = await acquireMutex(paths.appDir, 'host');
-      owner = await acquirePidLock(paths.appDir);
+      // Read the registration before any lock: a service manager may only run a daemon its own registration names.
+      const serviceManaged = Boolean(process.env.VONVON_SERVICE);
+      const registration = await readStartupRegistration(paths.appDir);
+      // An unreadable registration may be one being rewritten; fail so the manager tries again.
+      if (serviceManaged && registration.kind === 'unrecognized') throw new Error(`Unrecognized service registration ${registration.location}: ${registration.reason}`);
+      if (serviceManaged && registration.kind !== 'ours') {
+        log.info('daemon-startup', 'registration_absent', registration.kind === 'other-root' ? { kind: registration.kind, recordedRoot: registration.recordedRoot } : { kind: registration.kind });
+        process.exitCode = 0;
+        return;
+      }
+      if (!serviceManaged && registration.kind === 'ours') throw new Error('Daemon is registered as a service. Use vonvon daemon start or vonvon service uninstall.');
+      try { lock = await acquireMutex(paths.appDir, 'host'); }
+      catch (error) {
+        // Exit 0 only for an owner that proves it is our daemon; anything else exits 1 so the manager retries.
+        const existing = serviceManaged && error instanceof DataAccessError ? await verifiedOtherOwner() : null;
+        if (!existing) throw error;
+        log.info('daemon-startup', 'owner_present', { pid: existing.pid });
+        process.exitCode = 0;
+        return;
+      }
+      const previous = await getPidLockInfo(paths.appDir).catch(() => null);
+      if (previous && isPidLockOwnerRunning(previous)) log.info('daemon-startup', 'stale_owner_replaced', { pid: previous.pid });
+      owner = await acquirePidLock(paths.appDir, { hostMutexHeld: true });
     }
     if (control.requested) return;
     host = new ProcessHost({
