@@ -4,7 +4,7 @@ import type {AdminSetupStatus, Agent, DesktopSnapshot, ToolState} from '@vonvon/
 import {createClient} from '../../client/src/client';
 import {ClientProvider} from '../src/client-context';
 import {SetupChecklist} from '../src/setup/SetupChecklist';
-import {botSteps, remoteStepsDone, toolSteps} from '../src/setup/setupPresentation';
+import {BOT_ADDED_WARNING, JOIN_SCOPE_WARNING, botSteps, remoteStepsDone, scopeStep, toolSteps} from '../src/setup/setupPresentation';
 
 const agent: Agent = {id: 'cli_setup' as Agent['id'], name: '小助手', enabled: true, running: true, connection: 'connected', activation: 'active'};
 const done: AdminSetupStatus = {
@@ -49,7 +49,7 @@ it('does not count unknown scopes or an unchecked event as done', () => {
   expect(steps.publish).toMatchObject({done: false, status: '无法确认'});
   expect(remoteStepsDone(unknown)).toBe(false);
   const broken = byId(botSteps(agent, {...done, credentials: {ok: false, reason: 'code=10014'}, event: {state: 'unchecked', reason: 'token code=10014'}}));
-  expect(broken.credentials).toMatchObject({done: false, detail: 'code=10014', actions: [{kind: 'reauthorize', label: '重新授权'}]});
+  expect(broken.credentials).toMatchObject({done: false, detail: 'code=10014', actions: [{kind: 'reauthorize', label: '重新扫码'}]});
   expect([broken.scopes?.status, broken.event?.status, broken.publish?.status]).toEqual(['等第 1 步', '等第 1 步', '等第 1 步']);
   expect(broken.callback?.done).toBe(true);
   const offline = byId(botSteps(agent, {...done, credentials: {ok: false, reason: '飞书接口 10 秒没有响应', unreachable: true}, scopes: {grantUrl: done.scopes.grantUrl}, event: {state: 'unchecked', reason: '飞书接口 10 秒没有响应'}}));
@@ -93,6 +93,8 @@ it('starts a new machine with the tools and the scan step', () => {
   expect(html).toContain('还没有可用的工具');
   expect(html).toContain('第一步');
   expect(html).toContain('扫码建飞书应用');
+  expect(html).toContain('注册 Bot');
+  expect(html).not.toContain('添加 Bot');
 });
 
 it('lists each bot with the admin-review note while its first read is pending', () => {
@@ -100,5 +102,35 @@ it('lists each bot with the admin-review note while its first read is pending', 
   expect(html).toContain('小助手');
   expect(html).toContain('正在检测…');
   expect(html).toContain('企业租户里新权限可能要管理员审核');
-  expect(html).toContain('再加一个 Bot');
+  expect(html).toContain('再注册一个 Bot');
+});
+
+it('warns about the join-group scope without turning the 权限 step red', () => {
+  const granted = scopeStep({...done, scopes: {...done.scopes, missingJoinScopes: ['im:chat:readonly', 'im:chat.members:write_only']}});
+  expect(granted).toMatchObject({done: true, tone: 'success', status: '已开通', warnings: [JOIN_SCOPE_WARNING]});
+  expect(granted.actions).toEqual([{kind: 'open', label: '一键开权限', url: done.scopes.grantUrl, target: 'app-console'}]);
+  expect(JOIN_SCOPE_WARNING).toContain('查找已经加入的群');
+  const missing = scopeStep({...done, scopes: {...done.scopes, missingRequired: ['im:resource'], missingJoinScopes: ['im:chat:readonly']}});
+  expect(missing).toMatchObject({done: false, tone: 'warning', status: '还缺 1 项', items: ['im:resource'], warnings: [JOIN_SCOPE_WARNING]});
+  // Only the leave-group scope missing, all granted, or unreadable grants: no warning.
+  expect(scopeStep({...done, scopes: {...done.scopes, missingJoinScopes: ['im:chat.members:write_only']}}).warnings).toBeUndefined();
+  expect(scopeStep({...done, scopes: {...done.scopes, missingJoinScopes: []}})).toMatchObject({done: true, actions: [], warnings: undefined});
+  expect(scopeStep({...done, scopes: {grantUrl: done.scopes.grantUrl}})).toMatchObject({status: '无法确认', warnings: undefined});
+  expect(byId(botSteps(agent, {...done, scopes: {...done.scopes, missingJoinScopes: ['im:chat:readonly']}})).scopes).toMatchObject({done: true, warnings: [JOIN_SCOPE_WARNING]});
+});
+
+it('names the bot-added event in the events step as a warning only', () => {
+  const ok = byId(botSteps(agent, {...done, event: {state: 'ok', version: '1.0.2', missingOptional: ['im.chat.member.bot.added_v1', 'application.bot.menu_v6']}}));
+  expect(ok.event).toMatchObject({done: true, tone: 'success', items: ['im.chat.member.bot.added_v1', 'application.bot.menu_v6'], warnings: [BOT_ADDED_WARNING]});
+  expect(BOT_ADDED_WARNING).toContain('机器人进群');
+  const missing = byId(botSteps(agent, {...done, event: {state: 'missing', version: '1.0.0', missingRequired: ['im.message.receive_v1'], missingOptional: ['im.chat.member.bot.added_v1']}}));
+  expect(missing.event).toMatchObject({done: false, status: '缺少接收消息事件', warnings: [BOT_ADDED_WARNING]});
+  expect(byId(botSteps(agent, {...done, event: {state: 'ok', version: '1.0.2', missingOptional: ['application.bot.menu_v6']}})).event?.warnings).toBeUndefined();
+  expect(byId(botSteps(agent, {...done, event: {state: 'unpublished'}})).event?.warnings).toBeUndefined();
+  expect(remoteStepsDone({...done, scopes: {...done.scopes, missingJoinScopes: ['im:chat:readonly']}, event: {state: 'ok', missingOptional: ['im.chat.member.bot.added_v1']}})).toBe(true);
+});
+
+it('drops the warnings while the credentials are rejected', () => {
+  const steps = byId(botSteps(agent, {...done, credentials: {ok: false, reason: 'code=10014'}, scopes: {...done.scopes, missingJoinScopes: ['im:chat:readonly']}, event: {state: 'ok', missingOptional: ['im.chat.member.bot.added_v1']}}));
+  expect([steps.scopes?.warnings, steps.event?.warnings]).toEqual([undefined, undefined]);
 });

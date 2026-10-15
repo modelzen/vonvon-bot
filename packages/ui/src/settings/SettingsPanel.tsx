@@ -2133,7 +2133,7 @@ function CoffeeHostPanel({view, refresh, reveal}: {view: HostSettingsView; refre
         } catch (error) { setNotice(error instanceof Error ? error.message : '无法更新咖啡一下设置。'); }
         finally { pending.current = false; setBusy(null); }
       }}/>
-      : <><SettingsGroup label="咖啡一下"><SettingsRow title="启用咖啡一下" value={coffee.route === 'none' ? '已关闭' : !coffee.targetsReadable ? '无法读取 Hook 配置' : missingTarget ? '通知 Bot 已不可用，请选择其他 Bot' : selected ? '正在读取设置' : '请先添加 Bot'}/></SettingsGroup>{controls}</>}
+      : <><SettingsGroup label="咖啡一下"><SettingsRow title="启用咖啡一下" value={coffee.route === 'none' ? '已关闭' : !coffee.targetsReadable ? '无法读取 Hook 配置' : missingTarget ? '通知 Bot 已不可用，请选择其他 Bot' : selected ? '正在读取设置' : '请先注册 Bot'}/></SettingsGroup>{controls}</>}
     <SettingsGroup label="本机 Hook" id={settingAnchor('本机 Hook')} footer="Hook 安装在这台设备上，由所有 Bot 共用。">
       {(['codex', 'claude'] as const).map(agent => <SettingsRow key={agent} title={agent === 'codex' ? 'Codex Hook' : 'Claude Hook'}
         value={statusLabel[coffee.hooks[agent].status]}

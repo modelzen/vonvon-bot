@@ -89,6 +89,10 @@ describe('automatic event checks during startup', () => {
     mocks.validate.mockResolvedValue({ ok: false, reason: 'invalid secret' });
     expect(await ensureOnboarded({ bot: 'test' })).toBeNull();
     expect(mocks.install).not.toHaveBeenCalled();
+    // The desktop button is called 重新扫码 since s02a; the CLI hint names it that way.
+    const errors = vi.mocked(console.error).mock.calls.map((args) => args.join(' ')).join('\n');
+    expect(errors).toContain('「重新扫码」');
+    expect(errors).not.toContain('重新授权');
   });
 
   it('run reports newly published subscriptions without opening the configuration page', async () => {

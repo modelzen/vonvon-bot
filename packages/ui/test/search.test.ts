@@ -105,3 +105,15 @@ test('tool search destinations use the same section names as the rendered tool c
     assert.equal(result?.destination.guide, undefined);
   }
 });
+
+test('注册 Bot is the one name, and the old word and the grant button still find their places', () => {
+  assert.equal(findEntries(entries, '添加 Bot')[0]?.id, 'agents');
+  const empty = searchEntries({...snapshot, agents: [], memberships: []});
+  assert.equal(findEntries(empty, '启用咖啡一下')[0]?.destination.guide, '没有 Bot 时，请先注册 Bot。');
+  assert.ok(!JSON.stringify(empty).includes('添加 Bot。'));
+  const grant = findEntries(entries, '飞书权限')[0];
+  assert.equal(grant?.destination.section, '连接与权限');
+  assert.equal(grant?.destination.field, '飞书权限');
+  assert.equal(findEntries(entries, '一键开权限').some(entry => entry.title === '飞书权限'), true);
+  assert.equal(findEntries(entries, '重新扫码')[0]?.title, '刷新飞书凭据');
+});

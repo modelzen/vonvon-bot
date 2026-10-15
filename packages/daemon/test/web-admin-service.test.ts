@@ -271,6 +271,10 @@ describe('createReadonlyAdminService · 写方法（只读预览占位）', () =
     expect((err as NotWiredYetError).message).toContain('daemon');
     expect((err as NotWiredYetError).message).toContain('只读预览');
   });
+
+  it('只读预览里扫码注册说「注册 Bot」', async () => {
+    await expect(service.registerBotByQr({ signal: new AbortController().signal, onQr: () => {} })).rejects.toThrow('「注册 Bot」需要 daemon 在跑');
+  });
 });
 
 describe('createAdminService · daemon 进程内（executeWrite + liveStatus 注入）', () => {
@@ -421,8 +425,12 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
     expect(s.credentials.ok).toBe(true);
     expect(s.botName).toBe('SetupBot');
     expect(s.scopes.missingRequired).toEqual([]);
+    // 加入现有群的权限没开：只作提醒，不影响 missingRequired。
+    expect(s.scopes.missingJoinScopes).toEqual(['im:chat:readonly', 'im:chat.members:write_only']);
     expect(s.scopes.grantUrl).toContain('/app/cli_setupbot/auth?q=');
     expect(s.event.state).toBe('ok');
+    // 机器人进群事件没订阅：清单靠 missingOptional 提醒。
+    expect(s.event.missingOptional).toContain('im.chat.member.bot.added_v1');
     expect(s.connection.running).toBe(false); // 没锁文件 + 预览态
     expect(s.eventConfigUrl).toContain('/app/cli_setupbot/event');
     expect(s.consoleUrl).toBe('https://open.feishu.cn/app/cli_setupbot');
@@ -490,6 +498,29 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
     const s = await createReadonlyAdminService().getSetupStatus(SETUP_BOT);
     expect(s.scopes.missingRequired).toEqual(['im:message:readonly']);
     expect(decodeURIComponent(s.scopes.grantUrl)).toContain('im:message:readonly');
+  });
+
+  it('开了读群信息、订阅了机器人进群：missingJoinScopes 只剩退群权限，missingOptional 不含进群事件', async () => {
+    writeCompleteConfig();
+    vi.stubGlobal('fetch', stubFetch({
+      grantedScopes: [...REQUIRED_SCOPES, 'im:chat:readonly'],
+      eventEvents: ['im.message.receive_v1', 'im.chat.member.bot.added_v1'],
+    }));
+    const s = await createReadonlyAdminService().getSetupStatus(SETUP_BOT);
+    expect(s.scopes.missingRequired).toEqual([]);
+    expect(s.scopes.missingJoinScopes).toEqual(['im:chat.members:write_only']);
+    expect(s.event.missingOptional).not.toContain('im.chat.member.bot.added_v1');
+  });
+
+  it('读不到已开通的权限时，missingRequired 和 missingJoinScopes 都是 undefined', async () => {
+    writeCompleteConfig();
+    const base = stubFetch({ grantedScopes: [], eventEvents: ['im.message.receive_v1'] });
+    vi.stubGlobal('fetch', (async (input: unknown, init?: RequestInit) =>
+      String(input).includes('/application/v6/scopes') ? new Response('denied', { status: 400 }) : base(input as string, init)) as unknown as typeof fetch);
+    const s = await createReadonlyAdminService().getSetupStatus(SETUP_BOT);
+    expect(s.credentials.ok).toBe(true);
+    expect(s.scopes.missingRequired).toBeUndefined();
+    expect(s.scopes.missingJoinScopes).toBeUndefined();
   });
 
   it('配置缺失（未写 config.json）→ credentials.ok=false + event unchecked，绝不抛错', async () => {

@@ -6,6 +6,8 @@ import { isAbsolute } from 'node:path';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { bindModeFor, joinExistingGroup } from '../project/lifecycle';
 import { getProjectByChatId, getProjectByName, listProjects, type Project } from '../project/registry';
+import { log } from '../core/logger';
+import { feishuError, scopeDenial } from '../utils/feishu-error';
 import { AdminWriteError } from './ops';
 
 export interface BindGroupInput {
@@ -47,8 +49,43 @@ export function parseJoinedGroups(raw: unknown): JoinedGroups {
   return { groups, ...('nextCursor' in raw && typeof raw.nextCursor === 'string' ? { nextCursor: raw.nextCursor } : {}) };
 }
 
-function upstream(error: unknown): never {
-  throw new GroupUpstreamError(error instanceof Error ? error.message : '飞书群接口调用失败');
+/** Listing groups and checking membership need this scope; it is in the one-click grant link. */
+const GROUP_READ_SCOPE = 'im:chat:readonly';
+/** Shown for a chat Feishu lists without a name, so one odd item cannot fail the whole list. */
+export const UNNAMED_GROUP = '（未命名群）';
+type GroupPhase = 'joined-groups' | 'bind-group';
+
+/**
+ * What the desktop shows for a failed Feishu group call. The SDK throws axios errors whose message
+ * is only "Request failed with status code 400"; Feishu's own code and msg are in the body.
+ */
+export function describeGroupFailure(failure: unknown): string {
+  const denial = scopeDenial(failure);
+  if (denial) {
+    if (!denial.accepted.length || denial.accepted.includes(GROUP_READ_SCOPE)) {
+      return `缺少飞书权限 ${GROUP_READ_SCOPE}（读取群信息）。在 Bot 设置点「一键开权限」，再到开发者后台创建版本并发布。`;
+    }
+    return `缺少飞书权限 ${denial.accepted.slice(0, 4).join(' 或 ')}（读取群信息）。到开发者后台开通其中一项，再创建版本并发布。`;
+  }
+  const feishu = feishuError(failure);
+  if (feishu) return `飞书接口出错 code=${feishu.code}：${feishu.msg ?? '没有说明'}`;
+  return `飞书群接口调用失败：${failure instanceof Error ? failure.message : String(failure)}`;
+}
+
+/** Log the raw failure (with Feishu's body) and throw the readable one. */
+function upstream(phase: GroupPhase): (failure: unknown) => never {
+  return failure => {
+    log.fail('groups', failure, { phase });
+    throw new GroupUpstreamError(describeGroupFailure(failure));
+  };
+}
+
+/** A reply Feishu resolved but did not answer properly; a non-zero code reads like a thrown one. */
+function refused(phase: GroupPhase, reply: { code?: number; msg?: string }, fallback: string): never {
+  const feishu = feishuError(reply);
+  const error = new GroupUpstreamError(feishu ? describeGroupFailure(reply) : fallback);
+  log.fail('groups', error, { phase, ...feishu });
+  throw error;
 }
 
 export function createGroupExecutor(channel: LarkChannel): (op: AdminGroupOp) => Promise<JoinedGroups | Project> {
@@ -59,8 +96,8 @@ export function createGroupExecutor(channel: LarkChannel): (op: AdminGroupOp) =>
       directory = await realpath(input.directory);
       if (!(await stat(directory)).isDirectory()) throw new Error('not directory');
     } catch { throw new InvalidGroupInput('所选文件夹不存在或不是目录'); }
-    const membership = await channel.rawClient.im.v1.chatMembers.isInChat({ path: { chat_id: input.chatId } }).catch(upstream);
-    if (membership.code !== 0 || typeof membership.data?.is_in_chat !== 'boolean') throw new GroupUpstreamError(membership.msg ?? '无法确认机器人群成员身份');
+    const membership = await channel.rawClient.im.v1.chatMembers.isInChat({ path: { chat_id: input.chatId } }).catch(upstream('bind-group'));
+    if (membership.code !== 0 || typeof membership.data?.is_in_chat !== 'boolean') refused('bind-group', membership, '无法确认机器人群成员身份');
     if (!membership.data.is_in_chat) throw new AdminWriteError('机器人不在此群中');
     async function same(project: Project): Promise<boolean> {
       const cwd = await realpath(project.cwd).catch(() => project.cwd);
@@ -93,14 +130,16 @@ export function createGroupExecutor(channel: LarkChannel): (op: AdminGroupOp) =>
       bindChain = run.catch(() => undefined);
       return run;
     }
-    const response = await channel.rawClient.im.v1.chat.list({ params: { page_size: 50, ...(op.cursor ? { page_token: op.cursor } : {}) } }).catch(upstream);
-    if (response.code !== 0 || !response.data || !Array.isArray(response.data.items)) throw new GroupUpstreamError(response.msg ?? '飞书群列表响应无效');
+    const response = await channel.rawClient.im.v1.chat.list({ params: { page_size: 50, ...(op.cursor ? { page_token: op.cursor } : {}) } }).catch(upstream('joined-groups'));
+    if (response.code !== 0 || !response.data || !Array.isArray(response.data.items)) refused('joined-groups', response, '飞书群列表响应无效');
     const projects = await listProjects();
-    const groups = response.data.items.map(item => {
-      if (!item.chat_id || typeof item.name !== 'string') throw new GroupUpstreamError('飞书群列表缺少群标识或名称');
-      return { chatId: item.chat_id, name: item.name, bound: projects.some(project => project.chatId === item.chat_id) };
-    });
-    if (response.data.has_more && !response.data.page_token) throw new GroupUpstreamError('飞书群列表缺少下一页游标');
+    // A chat without an id cannot be bound, so it is left out; one without a name is still listed.
+    const groups = response.data.items.flatMap(item => item.chat_id ? [{
+      chatId: item.chat_id,
+      name: typeof item.name === 'string' && item.name.trim() ? item.name : UNNAMED_GROUP,
+      bound: projects.some(project => project.chatId === item.chat_id),
+    }] : []);
+    if (response.data.has_more && !response.data.page_token) refused('joined-groups', {}, '飞书群列表缺少下一页游标');
     return { groups, ...(response.data.has_more ? { nextCursor: response.data.page_token } : {}) };
   };
 }
