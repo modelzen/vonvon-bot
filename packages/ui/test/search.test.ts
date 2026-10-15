@@ -13,7 +13,7 @@ const snapshot: DesktopSnapshot = {
   agents: [{id: agentId, name: '研发助手', enabled: true, running: true, connection: 'connected', activation: 'active'}],
   groups: [{id: groupId, name: '研发群'}],
   memberships: [{id: membershipId, agentId, groupId, name: '研发项目', directory: '/tmp/research', backend: 'codex-appserver', conversation: 'threads', response: 'mention', permission: {administrator: 'full', member: 'qa', network: false}, stale: false}],
-  tools: [], jobs: [], diagnostics: [],
+  tools: [], jobs: [],
   application: {platform: 'macos', version: '0.7.0', loginItem: false, dataPath: '/tmp/test'},
 };
 const entries = searchEntries(snapshot);

@@ -50,10 +50,13 @@ const OTHER_TTL_MS = 5 * 60_000;
 let cache: { value: ClaudeLogin; at: number } | undefined;
 let inflight: Promise<ClaudeLogin> | undefined;
 let queued: Promise<ClaudeLogin> | undefined;
+/** Bumped when a turn fails for its login: a probe begun before that cannot write over it. */
+let generation = 0;
 
 function start(probe: () => Promise<ClaudeLogin>): Promise<ClaudeLogin> {
+  const begun = generation;
   const current = inflight = probe().then(value => {
-    cache = { value, at: Date.now() };
+    if (begun === generation) cache = { value, at: Date.now() };
     return value;
   }).finally(() => { if (inflight === current) inflight = undefined; });
   return current;
@@ -79,6 +82,15 @@ export function readClaudeLogin(probe: () => Promise<ClaudeLogin>, opts: { refre
  * older than its TTL, so a stale 已登录 does not stay on the home page. */
 export function cachedClaudeLogin(): ClaudeLogin | undefined {
   return fresh();
+}
+
+export const CLAUDE_TURN_SIGNED_OUT_MESSAGE = '刚才有一轮因为没登录或登录过期失败了。在终端运行 `claude` 登录，再点「检查登录」。';
+/** A Claude turn failed for its login (s19). The probe only reads local credentials and would still say
+ * 已登录 for an expired one, so the cache says 未登录 for the usual 5 minutes instead of being cleared;
+ * a probe started by 检查登录 after this writes as usual. */
+export function noteClaudeLoginFailed(at = Date.now()): void {
+  generation++;
+  cache = { value: { state: 'signedOut', message: CLAUDE_TURN_SIGNED_OUT_MESSAGE }, at };
 }
 
 /** Test seam. */

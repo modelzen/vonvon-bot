@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { createNameBook } from '../src/bot/names';
+import { setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
 
 vi.mock('../src/core/logger', () => ({ log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() } }));
 
@@ -59,9 +60,14 @@ describe('NameBook', () => {
   });
 
   it('remembers a missing contact scope and stops calling contact', async () => {
+    const events: DiagnosticsEvent[] = [];
+    setDiagnosticsSink(event => events.push(event));
     const c = channel({ contact: SCOPE_DENIED, members: { ou_a: '张三', ou_b: '李四' } });
     const book = createNameBook(c.ch);
     expect(await book.senderName(msg('om_1'))).toBe('张三');
+    setDiagnosticsSink(undefined);
+    // The 状态与诊断 page lists the refusal (s19).
+    expect(events).toEqual([{ kind: 'scopeDenied', denial: { scope: 'contact:user.base:readonly', where: 'names', at: expect.any(Number) } }]);
     expect(await book.senderName(msg('om_2', 'ou_c'))).toBeUndefined();
     expect(c.batch).toHaveBeenCalledTimes(1);
     expect(c.members).toHaveBeenCalledTimes(2);

@@ -8,8 +8,9 @@ export type SetupRead = {status?: AdminSetupStatus; problem?: string; checking: 
 export const SETUP_POLL_MS = 10_000;
 
 /** Polls `setupStatus` one bot at a time while the checklist is open, and stops once
- * every bot's Feishu steps are done. A failed read keeps the last good status. */
-export function useSetupStatus(agentIds: readonly AgentId[]) {
+ * every bot's Feishu steps are done. A failed read keeps the last good status. With
+ * `poll: false` (the 状态与诊断 page) each bot is read once, and again only on recheck. */
+export function useSetupStatus(agentIds: readonly AgentId[], {poll: polling = true}: {poll?: boolean} = {}) {
   const client = useClient();
   const [reads, setReads] = useState<Partial<Record<AgentId, SetupRead>>>({});
   // Kept beside the state so the loop sees a result before React re-renders.
@@ -49,17 +50,17 @@ export function useSetupStatus(agentIds: readonly AgentId[]) {
         if (!remoteStepsDone(statuses.current[id])) await read(id);
       }
       running = false;
-      if (live && ids.some(id => !remoteStepsDone(statuses.current[id]))) timer = setTimeout(() => void poll(), SETUP_POLL_MS);
+      if (polling && live && ids.some(id => !remoteStepsDone(statuses.current[id]))) timer = setTimeout(() => void poll(), SETUP_POLL_MS);
     }
     wake.current = () => { if (live && !running) void poll(); };
     void poll();
     return () => { live = false; clearTimeout(timer); wake.current = () => {}; };
-  }, [scope, read]);
+  }, [scope, read, polling]);
 
   /** Re-reads one bot now, and resumes polling if it turned out unfinished. */
   const recheck = useCallback(async (agentId: AgentId) => {
     await read(agentId);
-    wake.current();
-  }, [read]);
+    if (polling) wake.current();
+  }, [read, polling]);
   return {reads, recheck};
 }

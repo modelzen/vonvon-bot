@@ -13,6 +13,7 @@ describe('errorKindFromText', () => {
     ['Not logged in · Please run /login', 'auth'],
     ['429 Too Many Requests', 'quota'],
     ["You've hit your usage limit", 'quota'],
+    ["The 'gpt-6-luna' model requires a newer version of Codex. Please upgrade to the latest app or CLI and try again.", 'version'],
     ['boom', undefined],
   ])('%s → %s', (message, kind) => {
     expect(errorKindFromText(message)).toBe(kind);

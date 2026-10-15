@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { botDiagnosticsSchema } from "./diagnostics.js";
 
 export const agentIdSchema = z
   .string()
@@ -96,9 +97,6 @@ export const commandSchema = z.discriminatedUnion("type", [
   z
     .object({ type: z.literal("copyJobAuthorization"), jobId: jobIdSchema })
     .strict(),
-  z
-    .object({ type: z.literal("inspectAgent"), agentId: agentIdSchema })
-    .strict(),
 ]);
 export type Command = z.infer<typeof commandSchema>;
 export const hostStateSchema = z.discriminatedUnion("kind", [
@@ -112,6 +110,8 @@ export const agentSchema = z.object({
   id: agentIdSchema, name: z.string(), avatarDataUrl: z.string().optional(),
   enabled: z.boolean(), running: z.boolean(), connection: z.string(),
   activation: z.enum(["active", "restartRequired"]), readError: z.string().optional(),
+  /** The bot's recent not-replied messages and scope denials; absent when it has none. */
+  diagnostics: botDiagnosticsSchema.optional(),
 });
 export type Agent = z.infer<typeof agentSchema>;
 export const membershipSchema = z.object({
@@ -171,12 +171,10 @@ export const jobSchema = z.discriminatedUnion("phase", [
   z.object({ ...jobBase, phase: z.literal("cancelled"), message: z.string() }),
 ]);
 export type Job = z.infer<typeof jobSchema>;
-export const diagnosticSchema = z.object({ title: z.string(), message: z.string(), status: z.enum(["ok", "warning", "error"]), eventConfigUrl: z.string().optional() });
-export type Diagnostic = z.infer<typeof diagnosticSchema>;
 export const desktopSnapshotSchema = z.object({
   revision: z.number(), observedAt: z.number(), stale: z.boolean(), host: hostStateSchema,
   agents: z.array(agentSchema), groups: z.array(groupSchema), memberships: z.array(membershipSchema),
-  tools: z.array(toolStateSchema), jobs: z.array(jobSchema), diagnostics: z.array(diagnosticSchema),
+  tools: z.array(toolStateSchema), jobs: z.array(jobSchema),
   application: z.object({ platform: z.enum(["macos", "windows", "unsupported"]), version: z.string(), loginItem: z.boolean(), dataPath: z.string(), service: applicationServiceSchema.optional() }),
 });
 export type DesktopSnapshot = z.infer<typeof desktopSnapshotSchema>;

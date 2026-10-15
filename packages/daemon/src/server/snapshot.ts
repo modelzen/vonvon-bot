@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
-import type { ApplicationService, DesktopSnapshot, Diagnostic, Job, ServiceActionReport, ToolState } from '@vonvon/protocol';
+import type { ApplicationService, BotDiagnostics, DesktopSnapshot, Job, ServiceActionReport, ToolState } from '@vonvon/protocol';
 import { createBackend } from '../agent';
-import { cachedClaudeLogin } from '../agent/claude-agent/login';
+import { cachedClaudeLogin, type ClaudeLogin } from '../agent/claude-agent/login';
 import { CODEX_MIN_VERSION, CODEX_VERIFIED_VERSION, classifyCodexVersion } from '../agent/codex-appserver/version';
 import type { AdminService } from '../admin/service';
 import { paths } from '../config/paths';
@@ -21,7 +21,6 @@ export interface SnapshotStore {
   refreshService(): Promise<void>;
   /** Takes a manager read someone else started (machine `status`) instead of asking again; it counts from when it began. */
   observeService(read: Promise<DesktopServiceStatus>): void;
-  diagnose(agentId: string, diagnostics: Diagnostic[]): void;
   close(): Promise<void>;
 }
 
@@ -39,6 +38,11 @@ export async function createSnapshotStore(options: {
   serviceAction?: () => RunningServiceAction | undefined;
   /** Holds `service-action.json` and `setup.json`; the data root. */
   root?: string;
+  /** Each bot's not-replied records and scope denials (bot/diagnostics.ts), read on every rebuild. */
+  diagnostics?: { view(appId: string): BotDiagnostics | undefined; retain(appIds: ReadonlySet<string>): void };
+  /** The cached Claude login, read on every rebuild so a check or a failed turn shows at once; defaults to
+   * the login cache when the tools are the real ones. */
+  claudeLogin?: () => ClaudeLogin | undefined;
 }): Promise<SnapshotStore> {
   const version = bridgeVersion();
   const root = options.root ?? paths.appDir;
@@ -46,7 +50,7 @@ export async function createSnapshotStore(options: {
   let snapshot: DesktopSnapshot = {
     revision: 0, observedAt: 0, stale: false,
     host: { kind: 'connected', ownership: 'owned', version },
-    agents: [], groups: [], memberships: [], tools: [], jobs: [], diagnostics: [],
+    agents: [], groups: [], memberships: [], tools: [], jobs: [],
     application: { ...base, loginItem: false },
   };
   let tools: ToolState[] = [];
@@ -86,7 +90,7 @@ export async function createSnapshotStore(options: {
     const action = serviceAction();
     return { ...manager, ...(blocked ? { blocked } : {}), skipped: readServiceSkipped(root), ...(action ? { action } : {}) };
   }
-  const diagnostics = new Map<string, Diagnostic[]>();
+  const claudeLogin = options.claudeLogin ?? (options.readTools ? undefined : cachedClaudeLogin);
   let queue = Promise.resolve();
   let refreshing: Promise<void> | undefined;
   let followUp: Promise<void> | undefined;
@@ -96,24 +100,30 @@ export async function createSnapshotStore(options: {
       options.service.codexSetup?.().catch(() => undefined),
       createBackend('claude-agent').doctor({ force: true }).catch(() => undefined),
     ]);
-    // Only the last answer: the probe starts a ~250 MB Claude CLI, and this runs every
-    // 60 s even when no window is open. The 本机环境 page and 检查登录 probe.
-    const login = claude?.ok ? cachedClaudeLogin() : undefined;
-    const claudeMessage = login?.message ?? claude?.hint;
+    // The login is not probed here: the probe starts a ~250 MB Claude CLI, and this runs every
+    // 60 s even when no window is open. build() lays the cached answer over it.
     const compatibility = codex?.installation === 'installed' ? { status: classifyCodexVersion(codex.version), minimum: CODEX_MIN_VERSION, verified: CODEX_VERIFIED_VERSION } : undefined;
     return [
       { tool: 'codex', installation: codex?.installation ?? 'unknown', authentication: codex?.authentication ?? 'unknown', version: codex?.version ?? null, ...(codex?.message ? { message: codex.message } : {}), ...(compatibility ? { compatibility } : {}) },
-      { tool: 'claude', installation: claude ? (claude.ok ? 'installed' : claude.depState === 'not-installed' || claude.depState === 'external-missing' ? 'missing' : 'unknown') : 'unknown', authentication: login?.state ?? 'unknown', version: claude?.version ?? null, ...(claudeMessage ? { message: claudeMessage } : {}) },
+      { tool: 'claude', installation: claude ? (claude.ok ? 'installed' : claude.depState === 'not-installed' || claude.depState === 'external-missing' ? 'missing' : 'unknown') : 'unknown', authentication: 'unknown', version: claude?.version ?? null, ...(claude?.hint ? { message: claude.hint } : {}) },
     ];
   });
   async function build(committed?: (snapshot: DesktopSnapshot) => void): Promise<void> {
     const state = await readAdminState(options.service);
     // The report and the skip flag are files, re-read here: a helper's result shows within one 5 s rebuild.
     const service = serviceView();
+    const projected = projectState(state, snapshot, new Set());
+    options.diagnostics?.retain(new Set(projected.agents.map(agent => agent.id)));
+    const agents = projected.agents.map(agent => {
+      const diagnostics = options.diagnostics?.view(agent.id);
+      return diagnostics ? { ...agent, diagnostics } : agent;
+    });
+    const login = claudeLogin?.();
+    const shownTools = login ? tools.map(tool => tool.tool === 'claude' && tool.installation === 'installed' ? { ...tool, authentication: login.state, message: login.message } : tool) : tools;
     const next = {
-      ...snapshot, ...projectState(state, snapshot, new Set()), tools,
+      ...snapshot, ...projected, agents, tools: shownTools,
       application: { ...base, loginItem, ...(service ? { service } : {}) },
-      jobs: options.jobs(), diagnostics: [...diagnostics.values()].flat(),
+      jobs: options.jobs(),
       observedAt: Date.now(),
     };
     const changed = snapshot.revision === 0 || !isDeepStrictEqual(
@@ -166,7 +176,6 @@ export async function createSnapshotStore(options: {
     refreshTools,
     refreshService,
     observeService: read => { void readManager(read).then(() => { if (!closed) return rebuild(); }).catch(() => undefined); },
-    diagnose: (agentId, value) => { diagnostics.set(agentId, value); },
     async close() {
       closed = true;
       clearInterval(poll);

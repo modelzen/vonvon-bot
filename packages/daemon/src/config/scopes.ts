@@ -134,6 +134,9 @@ export const V1_OPTIONAL_SCOPES = [
   'application:application:self_manage',
 ] as const;
 
+/** The 3.11 optional scopes that change what the bot does in a chat, listed on the 状态与诊断 page. */
+export const CHAT_OPTIONAL_SCOPES = [...CONTACT_SCOPES, 'im:chat:readonly', ...V1_OPTIONAL_SCOPES] as const;
+
 /** Everything the one-click grant URL pre-selects: required + opt-in extras. */
 export const GRANT_SCOPES = [
   ...REQUIRED_SCOPES,

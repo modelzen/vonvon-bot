@@ -11,6 +11,8 @@ import { createAdminService } from '../../admin/service';
 import { installBackendDep, uninstallBackendDep } from '../../agent';
 import { performCoreUpdate } from '../../service/update';
 import { startApi } from '../../server/http';
+import { noteClaudeLoginFailed } from '../../agent/claude-agent/login';
+import { createDiagnosticsStore, ipcDiagnosticsSink, setDiagnosticsSink } from '../../bot/diagnostics';
 
 interface RunOptions {
   control?: ShutdownControl;
@@ -69,6 +71,12 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
   let api: Awaited<ReturnType<typeof startApi>> | undefined;
   let bridge: Awaited<ReturnType<typeof startBridge>> | undefined;
   const errors: unknown[] = [];
+  // Supervised: the records go to the supervisor, which keeps them across this child's restarts.
+  const ownAppId = cfg.accounts.app.id;
+  const diagnostics = process.send ? undefined : createDiagnosticsStore({ changed: () => api?.invalidate(), claudeSignedOut: noteClaudeLoginFailed });
+  setDiagnosticsSink(diagnostics
+    ? event => diagnostics.accept(ownAppId, event)
+    : ipcDiagnosticsSink((message, callback) => { if (process.connected) process.send?.(message, undefined, undefined, callback); }));
   try {
     const handle = bridge = await startBridge({ cfg, appSecret: secret, fallbackCwd, onConnectionChange: () => {
       if (process.send) {
@@ -94,11 +102,11 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
       );
       process.on('message', respond);
     } else {
-      const ownAppId = cfg.accounts.app.id;
       const startedAt = Date.now();
       api = await startApi({
         port: options.port,
         control,
+        ...(diagnostics ? { diagnostics } : {}),
         service: createAdminService({
           executeCollaboration: async (botId, request) => {
             if (botId !== ownAppId) throw new AdminWriteError('机器人不在本进程的活跃集里');
@@ -143,6 +151,8 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
     await control.waitForRequest();
   } catch (error) { errors.push(error); }
   finally {
+    setDiagnosticsSink(undefined);
+    diagnostics?.close();
     const cleanup = await Promise.allSettled([closeOwnedProviders(async () => {
       const drained = await Promise.allSettled([Promise.resolve().then(() => api?.beginDrain())]);
       drained.push(...await Promise.allSettled([Promise.resolve().then(() => bridge?.shutdown())]));

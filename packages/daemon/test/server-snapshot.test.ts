@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AdminBot } from '../src/admin/service';
 import type { DesktopServiceStatus } from '../src/host/service';
 import { createSnapshotStore, type SnapshotStore } from '../src/server/snapshot';
+import { environmentRpc } from '../src/server/rpc/environment';
 import { writeServiceActionRecord, writeServiceSkipped, type ServiceActionRecord } from '../src/service/action-report';
 
 vi.mock('../src/agent', () => ({ createBackend: () => ({ doctor: async () => ({ ok: false, version: null, depState: 'not-installed' }) }) }));
@@ -91,6 +92,39 @@ describe('snapshot commit queue', () => {
 
 const npm = { kind: 'global-npm', cliPath: '/usr/local/lib/node_modules/vonvon-bot/bin/vonvon.mjs' } as const;
 const managed = (state: NonNullable<DesktopServiceStatus['state']>, detail: string = state): DesktopServiceStatus => ({ supported: true, installed: state !== 'not-installed', running: state === 'running', state, detail });
+describe('状态与诊断 in the snapshot (s19)', () => {
+  it('lays the cached Claude login over the tools on every rebuild, without reading the tools again', async () => {
+    let login: { state: 'signedOut'; message: string } | undefined;
+    let reads = 0;
+    const store = await createSnapshotStore({ service: { listBots: async () => [], listProjects: async () => [] }, jobs: () => [], publish: () => {}, readService: noManager, claudeLogin: () => login,
+      readTools: async () => { reads++; return [{ tool: 'claude', installation: 'installed', authentication: 'unknown', version: '0.3.296', message: 'hint' }]; } });
+    stores.push(store);
+    expect(store.current().tools[0]).toMatchObject({ authentication: 'unknown', message: 'hint' });
+    login = { state: 'signedOut', message: 'a turn failed' };
+    await store.rebuild();
+    expect(store.current().tools[0]).toMatchObject({ authentication: 'signedOut', message: 'a turn failed', version: '0.3.296' });
+    expect(reads).toBe(1);
+  });
+
+  it('answers 检查登录 only after a rebuild, so the page has the new login when the reply lands', async () => {
+    const service = { backendLogin: async () => ({ state: 'signedIn' as const, message: 'ok' }) };
+    const outcome = await environmentRpc(service as never, {} as never, {} as never, { type: 'backendLogin', id: 'claude-agent', refresh: true });
+    expect(outcome.kind).toBe('mutation');
+    if (outcome.kind === 'mutation') expect(outcome.reply({} as never)).toEqual({ kind: 'backendLogin', id: 'claude-agent', state: 'signedIn', message: 'ok' });
+  });
+
+  it('carries the records of the bots that have some, and lets go of deleted bots', async () => {
+    const view = { notReplied: [{ at: 1, count: 2, groupId: 'oc_fixture', place: 'main' as const, reason: 'unbound' as const }], deniedScopes: [] };
+    const retained: string[][] = [];
+    const store = await createSnapshotStore({ service: { listBots: async () => [bot, { ...bot, appId: 'cli_other', name: 'other' }], listProjects: async () => [] }, jobs: () => [], publish: () => {}, readTools: async () => [], readService: noManager,
+      diagnostics: { view: appId => appId === 'cli_test' ? view : undefined, retain: appIds => { retained.push([...appIds]); } } });
+    stores.push(store);
+    expect(store.current().agents.find(agent => agent.id === 'cli_test')?.diagnostics).toEqual(view);
+    expect(store.current().agents.find(agent => agent.id === 'cli_other')).not.toHaveProperty('diagnostics');
+    expect(retained.at(-1)).toEqual(['cli_test', 'cli_other']);
+  });
+});
+
 describe('login-time service field (s08)', () => {
   const roots: string[] = [];
   afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });

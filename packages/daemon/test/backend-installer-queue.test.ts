@@ -66,7 +66,7 @@ const children: HeldChild[] = [];
 const pending: Promise<unknown>[] = [];
 const managers: Jobs[] = [];
 const releases: (() => void)[] = [];
-const snapshot: DesktopSnapshot = { revision: 0, observedAt: 0, stale: false, host: { kind: 'starting' }, agents: [], groups: [], memberships: [], tools: [], jobs: [], diagnostics: [], application: { platform: 'unsupported', version: 'test', loginItem: false, dataPath: '' } };
+const snapshot: DesktopSnapshot = { revision: 0, observedAt: 0, stale: false, host: { kind: 'starting' }, agents: [], groups: [], memberships: [], tools: [], jobs: [], application: { platform: 'unsupported', version: 'test', loginItem: false, dataPath: '' } };
 const service = () => createAdminService({ installBackend: installBackendDep, uninstallBackend: uninstallBackendDep });
 const own = <T>(promise: Promise<T>): Promise<T> => { pending.push(promise); return promise; };
 async function packageFiles(pkg: string, root = paths.backendsDir) {
