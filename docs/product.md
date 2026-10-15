@@ -162,7 +162,7 @@ owner 说这一块很关键：飞书里的位置怎么对应 agent 的会话，�
 | 群主区 | 一条会话，一直接着聊 | 一条会话 | 不留会话，@ bot 就开一个话题 | 这个 bot 第一次在主区回复时 |
 | 话题，不管是谁开的，包括话题群里的帖子 | 一条会话 | 一条会话 | 一条会话 | 这个 bot 第一次在这个话题里回复时 |
 | 私聊（不在群里，一对一） | 一个私聊窗口一条会话：主人一条，每个管理员各一条 | 同左 | 同左 | 第一次私聊时 |
-| 私聊里的话题 | 单独一条会话，和群里一样（要实测） | 同左 | 同左 | 第一次在这个话题里回复时 |
+| 私聊里的话题 | 单独一条会话，和群里一样。用户开的和 bot 开的私聊话题，事件里都带 `thread_id`（e10） | 同左 | 同左 | 第一次在这个话题里回复时 |
 | 云文档评论 | 每篇文档一条，和今天一样 | 同左 | 同左 | 和今天一样 |
 
 - 会话就是一条普通的 Codex 线程或 Claude 会话。主人在 Codex 应用里或用 `claude --resume` 打开它，看到的和 bot 看到的一样（推断，要实测）。
@@ -220,7 +220,7 @@ owner 说这一块很关键：飞书里的位置怎么对应 agent 的会话，�
 [/飞书]
 ```
 
-- 真名用 `contact:user.base:readonly` 换，查不到写 open_id 尾号。
+- 真名取拉历史时带 `with_sender_name` 返回的 `sender_name`，真人和 bot 都有（e10）；拿不到再用 `contact:user.base:readonly` 换，还查不到写 open_id 尾号。
 - 字数超预算就留最近的，并写"更早还有 N 条，可以查"。新的主区会话开场最多带主区 20 条，新话题开场带主区 10 条。
 - 一条会话大家共用，每条带名字。
 
@@ -264,7 +264,7 @@ owner 说这一块很关键：飞书里的位置怎么对应 agent 的会话，�
 群里有几个 bot 时，每个 bot 各有自己的一套会话、水位和引用行。A 开的话题，B 的主区会话也会看到一行"A（bot）开了话题"；B 只有在这个话题里被 @，才建自己的话题会话，开场里 A 的发言只放最终回答。
 
 **查飞书上下文。** 每个会话预装一个 vonvon 飞书 skill，背后是 `vonvon` 命令行（见 3.7）。bot 用它查自己能看到的飞书内容：主区要看某个话题里说了什么，话题里要看主区更早的消息，都通过它查；它也能列出本群的话题。
-- 按会话 id 读另一条会话：返回那条会话里用户的消息和 bot 的最终回答，不含工具步骤。背后是 Codex 的 `thread/read`（`D/agent/codex-appserver/protocol/generated/v2/ThreadReadParams.ts`）和 Claude Agent SDK 的 `getSessionMessages`（0.3.296 的 `sdk.d.ts:906`）。Claude 一半实测过：能读别的工作目录下的会话。传那条会话原来的工作目录最快；不传也能读，但要扫所有项目；传错了读到 0 条，不报错。读出来含工具步骤，vonvon 自己滤掉（e02 第 5 节）。Codex 一半要实测。
+- 按会话 id 读另一条会话：返回那条会话里用户的消息和 bot 的最终回答，不含工具步骤。背后是 Codex 的 `thread/turns/list`（带 `itemsView: "summary"`）和 Claude Agent SDK 的 `getSessionMessages`（0.3.296 的 `sdk.d.ts:906`）。Claude 一半实测过：能读别的工作目录下的会话。传那条会话原来的工作目录最快；不传也能读，但要扫所有项目；传错了读到 0 条，不报错。读出来含工具步骤，vonvon 自己滤掉（e02 第 5 节）。Codex 一半也实测过：用 daemon 常驻的辅助进程读，不用加载那条会话，也不起回合（所以不花额度，推断）；summary 视图只返回用户的消息和最终回答。只做过 `thread/start`、还没跑过回合的会话读不到，报 `thread not loaded`，和 id 不存在时一样，vonvon 按空会话返回。正在跑的那一轮读出来只有用户的消息，和被打断的一样，所以哪条会话正在跑，daemon 按自己的记录写成"这一轮还在进行"（e11）。不用 `thread/read`：0.162.1 上用它读全部历史已经标成过时。
 - 只能读同一个 bot、同一个群里的会话。访客档的会话读不到管理员档的会话。私聊的会话在群里读不到。owner 说过这个 skill 可以以后再做；Claude 把它放进了第一版，因为主区只留话题的引用，没有它就查不到话题里说了什么。
 - 用机器人身份查，只能查这个 bot 所在的群；在群里只能查当前这个群。卡片上显示"查了本群 9:00 到 10:00 的 40 条"。
 - 不把用户身份的 lark-cli 交给 agent：它能读到主人所在的所有群，包括机器人不在的群（实测，`docs/research/2026-10-14-v1-definition/context-feishu-products.md` 2.3）。
@@ -283,11 +283,11 @@ owner 说这一块很关键：飞书里的位置怎么对应 agent 的会话，�
 1. 单会话群里，用户自己开的话题并进整群那条会话（`D/bot/handle-message.ts:1031`）。改成单独的会话。
 2. 主区从来不补拉没触发的消息：没 @ 的消息在门口就丢了（`D/bot/handle-message.ts:976`），历史补拉只对话题做（`D/bot/handle-message.ts:1516`）。改成主区也按水位补拉。
 3. 从主区开的新话题，开场只有触发消息（`D/bot/handle-message.ts:1820-1833`）。改成带主区最近 10 条。
-4. 话题里每条消息的 `parent_id` 都是话题第一条，代码只要有 `parent_id` 就当引用再放一遍（`D/bot/handle-message.ts:1286-1289`），所以每一轮都重复放话题第一条（推断）。
+4. 话题里直接发的消息，`parent_id` 是话题第一条；在话题里回复某一条时，`parent_id` 是被回复的那条，`root_id` 才是话题第一条（实测，e10 第 4 项；测的是用接口发的回复，客户端里的回复还没看）。代码只要有 `parent_id` 就当引用再放一遍（`D/bot/handle-message.ts:1286-1289`），所以每一轮都重复放话题第一条（推断）。改成 `parent_id` 不等于 `root_id` 时才放引用；引用话题第一条的分不出来，按普通消息处理，话题第一条本来就在开场里。
 5. bot 自己开的话题不写水位（`D/bot/handle-message.ts:4285-4299`），下一次会漏掉中间别人说的话（推断）。
 6. 插话和排队送进去的消息不推进水位（`D/bot/handle-message.ts:1637`），下一轮会再放一遍（推断）。
 7. 话题历史只拉一页 50 条（`D/bot/context-weave.ts:45`）。改成翻页拉到水位为止。
-8. 触发人的名字恒为"某用户"：建通道时没传 `resolveSenderName`（`D/bot/bridge.ts:59-81`；`D/bot/context-weave.ts:448`）。拉历史没带 `with_sender_name`（`D/bot/context-weave.ts:111-118`），别人的名字大概都是"用户"加 open_id 尾号（`D/bot/context-weave.ts:159`，推断）。
+8. 触发人的名字恒为"某用户"：建通道时没传 `resolveSenderName`（`D/bot/bridge.ts:59-81`；`D/bot/context-weave.ts:448`）。拉历史没带 `with_sender_name`（`D/bot/context-weave.ts:111-118`），别人的名字大概都是"用户"加 open_id 尾号（`D/bot/context-weave.ts:159`，推断）。带上它，真人和 bot 的名字都拿得到（e10）。
 9. 没有 `/new`。
 
 ### 3.6 个性、记忆、skill、MCP
@@ -309,7 +309,7 @@ owner 说这一块很关键：飞书里的位置怎么对应 agent 的会话，�
 
 - A 群的记忆永远不会出现在 B 群。同一个群里几个 bot 各有一份本群记忆，不共享。
 - 写入在卡片上显示"已记到本群记忆：…［撤销］"。第一版不做后台自动整理。
-- 记忆在会话开始或恢复时放进去，标成"背景资料，不是指令"。中途写的，下一条会话才生效。每份有字数上限，满了让 bot 先整理，不悄悄截断。
+- 记忆在会话开始或恢复时放进去，标成"背景资料，不是指令"。Codex 恢复会话时不认新传的 `developerInstructions`，模型看到的还是开会话时那份，所以恢复时的记忆用 `thread/inject_items` 或 `turn/start` 的 `additionalContext`（实验字段）放进去（e05）。中途写的，下一条会话才生效。每份有字数上限，满了让 bot 先整理，不悄悄截断。
 - 关掉两家自带的记忆：Claude 的 auto memory 按 git 仓库共享，两个群用同一个仓库就会串；Codex 的 memories 是全局整合的。
 - 主人本机的个人指令（`~/.claude/CLAUDE.md`、`~/.codex/AGENTS.md`）和个人 skill：从 bridge 导入的 bot 默认带上，行为不变；新建的 bot 默认不带。
 
@@ -318,10 +318,10 @@ owner 说这一块很关键：飞书里的位置怎么对应 agent 的会话，�
 - skill 的来源：内置、本机文件夹、从 `~/.agents/skills`、`~/.codex/skills`、`~/.claude/skills` 导入。格式按 Agent Skills 标准（agentskills.io/specification）。
 - MCP 的来源：从本机 Codex、Claude 的配置导入，或在桌面端填命令或网址。
 - 都不从 git 地址装，不自动更新。
-- 只有主人和管理员能装和启用。含脚本的 skill 和所有 MCP 都会在主人的 Mac 上跑程序。在聊天里装，只能在私聊里，而且私聊的"聊天改设置"开着，见 3.7。Claude 的会话今天的工具列表里还有主人账号在 claude.ai 的连接器，留不留见第 9 节第 19 项。
+- 只有主人和管理员能装和启用。含脚本的 skill 和所有 MCP 都会在主人的 Mac 上跑程序。在聊天里装，只能在私聊里，而且私聊的"聊天改设置"开着，见 3.7。Claude 的会话今天的工具列表里还有主人账号在 claude.ai 的连接器，Codex 的会话用主人的 ChatGPT 登录时也挂着主人账号的连接器，留不留见第 9 节第 19 项。
 - 内置两个 vonvon skill。飞书 skill 每个会话都预装（3.5）；设置 skill 只在私聊里装，"聊天改设置"关掉后私聊里也不装（3.7）。
 
-**怎么交给 Codex 和 Claude。** 两家都有会话级的参数，不改用户的全局配置，不换 `CODEX_HOME` 和 `CLAUDE_CONFIG_DIR`（换了要重新登录，旧会话也续不上）。
+**怎么交给 Codex 和 Claude。** 两家都有会话级的参数，不改用户的全局配置，不换 `CODEX_HOME` 和 `CLAUDE_CONFIG_DIR`（换了要重新登录，旧会话也续不上）。Codex 的 `thread/start` 在 cwd 还没有信任设置、沙箱可写时，可能把这个目录记成 trusted，写进用户的 `config.toml`（cwd 在 git 仓库里时，测过的两个版本都写）；vonvon 起会话和恢复会话时都在会话层传 `projects.<cwd>.trust_level`，它就不写（e05）。
 
 | 项 | Codex（app-server） | Claude（Agent SDK） |
 |---|---|---|
@@ -329,10 +329,10 @@ owner 说这一块很关键：飞书里的位置怎么对应 agent 的会话，�
 | 主工作区 | `cwd` | `cwd` |
 | 其余工作区和仓库 | `runtimeWorkspaceRoots`（实验字段）加逐路径的读写权限 | `additionalDirectories` 加沙箱的根列表 |
 | skill | `skills/extraRoots/set`（实验字段）指向 vonvon 生成的目录，会话层禁掉用户自己的 skill | `plugins: [{type:'local', path}]` 加 `skills` 白名单 |
-| MCP | 会话配置里挂 MCP server（要实测） | `mcpServers`，今天传的是空对象（`D/agent/claude-agent/backend.ts:258`） |
+| MCP | 会话配置的 `mcp_servers`，用户全局的 MCP 在会话层写 `enabled: false` 关掉（实测，e05）。读写档（`feishu` 权限配置）下不配 `default_tools_approval_mode: "approve"` 时，调用被拒过一次（0.162.1）；只读档和完全访问档没测 | `mcpServers`，今天传的是空对象（`D/agent/claude-agent/backend.ts:258`） |
 
-- 实验字段的风险：Codex.app 会自己升级，字段改名或删掉时，多工作区和 skill 隔离会悄悄失效。所以第一版定 Codex 的最低版本；调用实验字段失败时直接报错，不悄悄退回单目录。
-- Codex 在可写根下默认把 `.git` 设成只读，`git commit` 可能失败；额外根目录里的 `AGENTS.md` 不会自动加载，vonvon 要在指令里写"先读该仓库的 AGENTS.md"。都要实测。
+- 实验字段的风险：Codex.app 会自己升级，字段改名或删掉时，多工作区和 skill 隔离会悄悄失效。所以第一版定 Codex 的最低版本；调用实验字段失败时直接报错，不悄悄退回单目录。Codex 对拼错的字段名和配置键不报错，直接忽略，所以生没生效由 vonvon 自己核对：`runtimeWorkspaceRoots` 看回包里的回显，MCP 看 `mcpServerStatus/list`，skill 看 `skills/list`，对不上就报错（e05）。
+- Codex 在可写根下默认把 `.git` 设成只读，`git commit` 可能失败，要在 Mac 上实测（第 9 节第 4 项）。额外根目录里的 `AGENTS.md` 不会自动加载（实测，e05），vonvon 要在指令里写"先读该仓库的 AGENTS.md"。
 
 ### 3.7 在聊天里改设置
 
@@ -353,7 +353,7 @@ owner 说这一块很关键：飞书里的位置怎么对应 agent 的会话，�
 - daemon 靠每条会话自己的令牌认出命令来自哪条会话：会话启动时 vonvon 给它一个令牌，命令行调用时带上。没有令牌、令牌对不上，或者不是私聊会话的设置命令，一律拒绝。能不能在沙箱里带上，见第 9 节第 2 项。
 - 改完在卡片上显示改了什么，带［撤销］。
 - 私聊有一个"聊天改设置"开关，默认开着。关掉以后，私聊的会话也不装设置 skill，daemon 也拒绝它的设置命令。开关只在桌面端或网页里改，聊天里不改，因为关掉以后聊天里就打不开了。群里没有这个开关，第一版群里不装设置 skill、不能用设置命令；给群加开关放进第 10 节。这是 owner 第 29 题和之后的补充定的。
-- 会话中途改了开关：设置命令的拒绝马上生效，因为是 daemon 判断的；skill 装不装，要等私聊的下一条会话，除非两家能中途换 skill 列表（第 9 节第 3 项）。
+- 会话中途改了开关：设置命令的拒绝马上生效，因为是 daemon 判断的；skill 装不装，要等私聊的下一条会话，除非两家能中途换 skill 列表（第 9 节第 3 项：Codex 从 0.148.0 起能，Claude 没测）。
 - 群里不能用的只是设置 skill 和设置命令。飞书 skill 和它用的只读查询命令不受影响，每个会话都能用，因为主区和话题要靠它互相查（3.5）。这一条是 Claude 定的，和 owner 说的"禁止使用 vonvon-bot 的 CLI"字面上不同，见第 11 节第 26 条。
 - 建群和拉人：bot 可以自己建一个新群，再把人拉进来。飞书里机器人自己进不了一个已有的群，要群里有人拉它（要核实），所以对已有的群，bot 把拉它进群的步骤发给你。
 
@@ -548,14 +548,14 @@ bot 的个性、记忆、skill 导入后为空，行为和今天一样。
 1. 桌面端首次运行发现 `~/.feishu-codex-bridge`，就显示导入页。
 2. 只读预检：每个 bot 的群数、目录是否还在、密钥能否解开、hook 是否装了、bridge 是否在跑、bridge 自己装的 codex 在不在。
 3. 调 bridge 自己的 `stop`，它会删 plist、去掉自启。
-4. 用 bridge 的锁格式占住 `processes.json`，防止有人手动 `run`（推断，要实测）。
+4. 用 bridge 的锁格式给每个 bot 占住它的 `bots/<appId>/processes.json`，防止有人手动 `run`。锁挡不住 `start`：`start` 不看锁，会把自启装回来，launchd 拉起的 `run` 再一遍遍被锁拒掉（e07：锁在函数层面实测过，`run` 和 `start` 的表现是读代码，真机在 e08）。
 5. 复制数据，用新密钥重新加密。
 6. 找不到别的 codex 时，引用 bridge 那份，或者装一份。
 7. 备份后卸掉 bridge 装的 hook。
 8. 启动全部 bot，等长连接连上。
-9. 写迁移标记，显示回执"旧目录不要删，空白项目还在里面"。
+9. 再查一次 bridge 的 plist 和 launchd 任务，还在就再 `stop` 一次；然后写迁移标记，显示回执"旧目录不要删，空白项目还在里面"。
 
-任何一步失败就回滚，再 `start` bridge。
+任何一步失败就回滚：先放掉 bridge 的锁，再 `start` bridge，不然被拉起的 `run` 会被这把锁拒掉。
 
 - 一次导入全部 bot，因为 bridge 是一个服务带全部 bot。
 - 密钥用主机名加用户名派生，改过主机名就解不开，这时让主人扫码刷新。
@@ -604,24 +604,24 @@ bot 的个性、记忆、skill 导入后为空，行为和今天一样。
 | # | 事 | 影响 |
 |---|---|---|
 | 1 | `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` 经 Agent SDK 能不能让主回合等子 agent | 3.9 的两种做法选哪种。已测：能，3.9 按打开这个开关做（e01） |
-| 2 | agent 在沙箱里能不能调 `vonvon` 命令行连上 daemon，只读档和关网时尤其要测；调用时能不能带上会话的令牌（3.7） | 连不上就把同一组命令做成 vonvon 自己的 MCP 工具：MCP server 由 Codex 和 Claude 自己拉起，不在沙箱里。这时要给它配 `approve`，不然 Codex 的只读、读写档会拒掉它（推断，`approval-ux.md` 1.5） |
-| 3 | Codex 的会话级 MCP 配置、`runtimeWorkspaceRoots`、`skills/extraRoots/set` 在最低版本上能不能用；resume 以后还在不在；两家能不能在会话中途换 skill 列表 | 多工作区、skill 和 MCP 的隔离 |
+| 2 | agent 在沙箱里能不能调 `vonvon` 命令行连上 daemon，只读档和关网时尤其要测；调用时能不能带上会话的令牌（3.7） | 连不上就把同一组命令做成 vonvon 自己的 MCP 工具：MCP server 由 Codex 和 Claude 自己拉起，不在沙箱里。这时要给它配 `approve`，不然 Codex 的只读、读写档会拒掉它（推断，`approval-ux.md` 1.5）。读写档下实测被拒过一次（e05，0.162.1）；只读档和完全访问档没测 |
+| 3 | Codex 的会话级 MCP 配置、`runtimeWorkspaceRoots`、`skills/extraRoots/set` 在最低版本上能不能用；resume 以后还在不在；两家能不能在会话中途换 skill 列表 | 多工作区、skill 和 MCP 的隔离。Codex 一半已测（e05）：三样在测过的 4 个版本（0.139.0 到 0.162.1）上都能用；resume 后会话级的 MCP 和 skill 设置不保留，`runtimeWorkspaceRoots` 从 0.156.1 起保留，每次 resume 整份重传就都恢复；中途换 skill 列表从 0.148.0 起下一轮生效。0.139.0 用 ChatGPT 登录跑不了模型，e05 建议最低版本定 0.156.1。第二个根真能写、根外被拒，在 Mac 上测。Claude 中途换 skill 列表没测 |
 | 4 | Codex 下 `.git` 只读会不会让 `git commit` 失败 | 代码仓库能不能直接提交 |
 | 5 | LaunchAgent 里的 daemon 能不能用钥匙串里的 Claude 登录；系统设置的"允许在后台"里显示成什么，用户在那里关掉后，状态能不能反映出来；`kill -9` 后多久被拉起 | 3.10 |
-| 6 | 机器人能不能自己进一个已有的群 | 3.7 建群拉人的做法 |
+| 6 | 机器人能不能自己进一个已有的群 | 3.7 建群拉人的做法。已测（e10）：公开群能自己进，私有群不能。3.7 改不改要 owner 定，s57 开工前问 |
 | 7 | 企业租户里 `im:message:readonly`、`include_bot` 和 `self_manage` 要不要管理员审核 | 首次运行清单的提示 |
 | 8 | 主人在 Codex 应用或 `claude --resume` 里打开同一条会话，看到的是否和 bot 一样；两边同时写会怎样 | 3.5 |
 | 9 | 智能判断的延迟和每次占多少额度 | 3.4 的成本上限 |
-| 10 | bridge 的锁格式能不能占住 `processes.json` | 第 5 节第 4 步 |
+| 10 | bridge 的锁格式能不能占住 `processes.json` | 第 5 节第 4 步。预查能（e07）：每个 bot 一把锁，挡得住 `run`，挡不住 `start`。真机在 e08 |
 | 11 | Claude 的只读、读写换成 `default`、`acceptEdits` 加 `canUseTool` 以后，拒绝的范围是不是和今天一样；完全访问下 Claude 实际还会问哪些事；Claude 的 AskUserQuestion 今天是不是被拒；中途改档能不能不重开会话（Codex 的 `turn/start` 带新设置，Claude 的 `setPermissionMode`） | 3.8 的换算表。Claude 一半不带沙箱的部分已测（e02）：哪些请求走到回调见 e02 第 1 节；今天的 AskUserQuestion 不是被拒，是没有这个工具；`setPermissionMode` 能中途改档。还没测：带沙箱的部分（e03），完全访问下的 ask 规则和删除关键目录 |
 | 12 | 今天 Claude 的只读、读写档是不是真有关网和写文件的缺口 | 3.8。不带沙箱时两个缺口都在（e02）；带今天的沙箱还在不在，在 Mac 上测（e03） |
 | 13 | 飞书卡片里的 @ 会不会提醒人 | 3.8 卡片怎么发 |
-| 14 | 拉历史带 `with_sender_name` 能不能拿到名字；别的 bot 的卡片回答能不能拉到正文；话题里引用某一条消息时有没有字段能分出来；勾了"同时发送到群"会收到几次事件 | 3.4、3.5 |
-| 15 | bot 能不能在私聊里开话题，用户在私聊里开的话题事件里带不带 `thread_id` | 3.5 |
-| 16 | 机器人能不能给没开过会话的主人发私聊 | 3.10 崩溃通知 |
-| 17 | 压缩以后主区会话的摘要里还留不留话题引用；daemon 断线期间的消息，飞书重连后会不会补推 | 3.5 |
-| 18 | 按会话 id 读另一条会话：Codex 的 `thread/read` 不加载线程能不能读；Claude 的 `getSessionMessages` 能不能读到别的工作目录下的会话 | 3.5。Claude 一半已测：能读，传那条会话原来的工作目录或者不传都行（e02 第 5 节）；Codex 一半在 e11 |
-| 19 | bot 的 Claude 会话的工具列表里有主人账号在 claude.ai 的连接器，和推送、远程触发、定时任务这类 Claude Code 自己的工具，和 `settingSources` 无关；这些工具没有实际调用过（e02 第 7 节）。第一版留不留 | 3.6、3.8。要 owner 定，s31 开工前问 |
+| 14 | 拉历史带 `with_sender_name` 能不能拿到名字；别的 bot 的卡片回答能不能拉到正文；话题里引用某一条消息时有没有字段能分出来；勾了"同时发送到群"会收到几次事件 | 3.4、3.5。已测（e10）：名字能拿到，真人和 bot 都有；别的 bot 的卡片正文要带 `card_msg_content_type` 才拉得到；话题里回复某一条时，`parent_id` 是那一条，`root_id` 是话题第一条（接口发的回复）。"同时发送到群"没测，s14 之前由 owner 在客户端里发 |
+| 15 | bot 能不能在私聊里开话题，用户在私聊里开的话题事件里带不带 `thread_id` | 3.5。已测（e10）：bot 用 `reply_in_thread` 能在私聊里开话题；用户开的和 bot 开的，事件里都带 `thread_id` |
+| 16 | 机器人能不能给没开过会话的主人发私聊 | 3.10 崩溃通知。e10 没测到：owner 已经私聊过测试 bot，测不干净。s18 之前由 owner 和一位同事看 |
+| 17 | 压缩以后主区会话的摘要里还留不留话题引用；daemon 断线期间的消息，飞书重连后会不会补推 | 3.5。前半在 e14。后半 e10 测了一次：断线期间的消息补推了，但在消息发出约 5 分钟后才到，daemon 重连后 3 分多钟里没收到。只有一个样本，s09 开工时用 daemon 自己的长连接再测 |
+| 18 | 按会话 id 读另一条会话：Codex 的 `thread/read` 不加载线程能不能读；Claude 的 `getSessionMessages` 能不能读到别的工作目录下的会话 | 3.5。Claude 一半已测：能读，传那条会话原来的工作目录或者不传都行（e02 第 5 节）。Codex 一半已测：另起的进程不加载线程就能读，用 `thread/turns/list` 的 summary 视图，只返回用户的消息和最终回答；正在跑的那一轮只有用户的消息（e11） |
+| 19 | bot 的 Claude 会话的工具列表里有主人账号在 claude.ai 的连接器，和推送、远程触发、定时任务这类 Claude Code 自己的工具，和 `settingSources` 无关；这些工具没有实际调用过（e02 第 7 节）。Codex 的会话也有同一类问题：用主人的 ChatGPT 登录时，每条会话都挂着主人账号的连接器 `codex_apps`，0.162.1 上有 197 个工具，含合并 GitHub PR、改文件、建 issue 这类写操作；会话层 `features.apps: false` 能去掉（e05，0.162.1，没跑回合）。第一版留不留 | 3.6、3.8。要 owner 定，s31 开工前问 |
 
 #281（V6b：把 Codex 子进程迁到新的进程层）关闭不合入。第一版建在 main 现有的 `agent/` 路径上；#281 合入后，打包版的 Codex 会因为缺 `vonvon-holder` 而失败。
 
@@ -701,7 +701,7 @@ bot 的个性、记忆、skill 导入后为空，行为和今天一样。
 11. 话题引用只存在主区会话里，在主区会话下一次开口时写进记录块，不在群里另发消息（3.5）。
 12. 新话题开场带主区 10 条，新的主区会话开场最多带 20 条（3.5）。
 13. 除了话题登记表里的标题，群里的聊天内容不存到本机磁盘；撤回的消息，下次开口时加一行说明；编辑不跟踪（3.5）。
-14. 私聊里开的话题是单独的会话，要实测（3.5）。
+14. 私聊里开的话题是单独的会话（3.5）。已实测：私聊话题的事件带 `thread_id`（e10）。
 15. 选项卡、确认卡单独发一条消息，@ 能回答的人；回复卡片或在同一位置发新消息都算回答（3.8）。
 16. 云文档评论的会话没地方放卡片：提问按"没人回答"处理，Claude 自己要问的直接拒绝（3.8）。
 17. 完全访问下 Claude 自己仍要问的几类，卡片只有主人和管理员能点，15 分钟没人点按拒绝；只读、读写档下这几类直接拒绝（3.8）。
