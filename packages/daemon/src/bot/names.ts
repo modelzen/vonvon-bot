@@ -13,16 +13,21 @@ import { scopeDenial } from '../utils/feishu-error';
  *   1. `message.get` on the trigger `with_sender_name` (the history scope we
  *      already require);
  *   2. `contact.v3.user.batch` (optional `contact:user.base:readonly`; a
- *      99991672 turns this step off for the book's lifetime);
+ *      99991672 skips this step for half an hour, since the owner may grant
+ *      the scope meanwhile);
  *   3. the chat's member list (first page; remembers every member at once).
  * Everything is best-effort and bounded by a deadline: a failed lookup
- * returns undefined and the caller shows what it showed before.
+ * returns undefined and the caller shows what it showed before. The SDK's
+ * HTTP calls have no timeout, so a lookup still running after a longer hard
+ * deadline counts as a miss; a name it finds later is still kept.
  */
 
 const HIT_TTL_MS = 12 * 60 * 60_000;
 const MISS_TTL_MS = 10 * 60_000;
 const MAX_NAMES = 2000;
 const LOOKUP_DEADLINE_MS = 3000;
+const LOOKUP_HARD_DEADLINE_MS = 15_000;
+const CONTACT_RETRY_MS = 30 * 60_000;
 
 interface NameEntry {
   /** undefined for a remembered miss. */
@@ -41,13 +46,15 @@ export interface NameBook {
 
 export function createNameBook(
   channel: LarkChannel,
-  opts: { now?: () => number; deadlineMs?: number } = {},
+  opts: { now?: () => number; deadlineMs?: number; hardDeadlineMs?: number } = {},
 ): NameBook {
   const now = opts.now ?? Date.now;
   const deadlineMs = opts.deadlineMs ?? LOOKUP_DEADLINE_MS;
+  const hardDeadlineMs = opts.hardDeadlineMs ?? LOOKUP_HARD_DEADLINE_MS;
   const entries = new Map<string, NameEntry>();
   const inflight = new Map<string, Promise<string | undefined>>();
-  let contactDenied = false;
+  /** Until when contact is skipped after a missing scope. */
+  let contactDeniedUntil = 0;
 
   function put(id: string, name: string | undefined): void {
     entries.delete(id); // re-insert so the oldest entry is evicted first
@@ -84,13 +91,14 @@ export function createNameBook(
     } catch (err) {
       log.info('intake', 'sender-name-miss', { step: 'message', err: String(err) });
     }
-    if (!contactDenied) {
+    if (now() >= contactDeniedUntil) {
       try {
         const name = (await contactNames(channel, [id])).get(id);
         if (name) return name;
       } catch (err) {
-        if (scopeDenial(err)) contactDenied = true;
-        log.info('intake', 'sender-name-miss', { step: 'contact', denied: contactDenied, err: String(err) });
+        const denied = Boolean(scopeDenial(err));
+        if (denied) contactDeniedUntil = now() + CONTACT_RETRY_MS;
+        log.info('intake', 'sender-name-miss', { step: 'contact', denied, err: String(err) });
       }
     }
     try {
@@ -114,12 +122,16 @@ export function createNameBook(
       if (hit) return Promise.resolve(hit.name);
       let pending = inflight.get(id);
       if (!pending) {
-        pending = lookup(msg)
+        const looked = lookup(msg)
           .catch(() => undefined)
           .then((name) => {
+            if (name) put(id, name); // also when it arrives after the hard deadline
+            return name;
+          });
+        pending = withDeadline(looked, hardDeadlineMs)
+          .then(() => {
             // A history pull may have learned the name while this lookup failed.
-            if (name) put(id, name);
-            else if (!peek(id)) put(id, undefined);
+            if (!peek(id)) put(id, undefined);
             return peek(id);
           })
           .finally(() => inflight.delete(id));

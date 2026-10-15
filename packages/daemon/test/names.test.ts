@@ -67,6 +67,29 @@ describe('NameBook', () => {
     expect(c.members).toHaveBeenCalledTimes(2);
   });
 
+  it('tries contact again half an hour after a missing scope, in case it was granted since', async () => {
+    let clock = 0;
+    const c = channel({ contact: SCOPE_DENIED, members: {} });
+    const book = createNameBook(c.ch, { now: () => clock });
+    expect(await book.senderName(msg('om_1'))).toBeUndefined();
+    clock += 11 * 60_000; // the miss expired, the denial still holds
+    expect(await book.senderName(msg('om_2'))).toBeUndefined();
+    expect(c.batch).toHaveBeenCalledTimes(1);
+    clock += 20 * 60_000;
+    c.batch.mockResolvedValueOnce({ code: 0, data: { items: [{ open_id: 'ou_a', name: '张三' }] } });
+    expect(await book.senderName(msg('om_3'))).toBe('张三');
+    expect(c.batch).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops a hung lookup at the hard deadline, so later turns from that sender do not wait on it', async () => {
+    const c = channel({ slow: new Promise<void>(() => undefined) });
+    const book = createNameBook(c.ch, { deadlineMs: 1000, hardDeadlineMs: 20 });
+    expect(await book.senderName(msg('om_1'))).toBeUndefined();
+    const stalled = new Promise((r) => setTimeout(() => r('stalled'), 200));
+    expect(await Promise.race([book.senderName(msg('om_2')), stalled])).toBeUndefined();
+    expect(c.get).toHaveBeenCalledTimes(1);
+  });
+
   it('returns undefined when every step fails, and does not retry until the miss expires', async () => {
     let clock = 0;
     const c = channel({ contact: new Error('socket hang up'), members: new Error('socket hang up') });
