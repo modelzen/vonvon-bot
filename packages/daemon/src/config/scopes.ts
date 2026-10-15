@@ -219,6 +219,11 @@ export function buildScopeGrantUrl(
  * *state* IS readable though (app-version API, see utils/event-diagnosis.ts), so
  * run/doctor diagnose precisely and announce once the config takes effect.
  */
+/** The app's own page on the developer console; versions and publishing are under it. */
+export function buildAppConsoleUrl(appId: string, tenant: TenantBrand): string {
+  return `https://${HOSTS[tenant]}/app/${encodeURIComponent(appId)}`;
+}
+
 export function buildEventConfigUrl(appId: string, tenant: TenantBrand): string {
   return `https://${HOSTS[tenant]}/app/${encodeURIComponent(appId)}/event`;
 }

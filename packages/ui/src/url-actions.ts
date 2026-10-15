@@ -8,7 +8,7 @@ const verificationHosts = new Set([
   ...registrationHosts, "auth.openai.com", "chatgpt.com",
   "claude.ai", "console.anthropic.com", "platform.claude.com",
 ]);
-export type ExternalUrlKind = "registration" | "authorization" | "verification" | "event-settings" | "group" | "releases";
+export type ExternalUrlKind = "registration" | "authorization" | "verification" | "event-settings" | "app-console" | "group" | "releases";
 
 export function allowedExternalUrl(value: string, kind: ExternalUrlKind): string | null {
   try {
@@ -23,6 +23,11 @@ export function allowedExternalUrl(value: string, kind: ExternalUrlKind): string
       case "event-settings":
         if (!new Set(["open.feishu.cn", "open.larksuite.com"]).has(url.hostname) ||
             !/^\/app\/[^/]+\/event$/.test(url.pathname)) return null;
+        break;
+      case "app-console":
+        // The app's console page, or its permission page with preselected scopes.
+        if (!new Set(["open.feishu.cn", "open.larksuite.com"]).has(url.hostname) ||
+            !/^\/app\/[^/]+(?:\/auth)?$/.test(url.pathname)) return null;
         break;
       case "group":
         if (url.hostname !== "applink.feishu.cn" ||

@@ -1,5 +1,5 @@
 import { createPendingGroups, pendingGroupsFile } from '../src/project/pending-groups';
-import { rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, rmSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { paths, botPaths, useBotDir } from '../src/config/paths';
 import { saveBots } from '../src/config/bots';
@@ -34,6 +34,7 @@ vi.mock('../src/config/paths', async () => {
       sessionsFile: join(dir, 'sessions.json'),
       projectsFile: join(dir, 'projects.json'),
       processesFile: join(dir, 'processes.json'),
+      setupFile: join(dir, 'setup.json'),
     };
   };
   return {
@@ -424,6 +425,51 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
     expect(s.event.state).toBe('ok');
     expect(s.connection.running).toBe(false); // 没锁文件 + 预览态
     expect(s.eventConfigUrl).toContain('/app/cli_setupbot/event');
+    expect(s.consoleUrl).toBe('https://open.feishu.cn/app/cli_setupbot');
+    expect(s.cardCallback).toEqual({ confirmed: false });
+  });
+
+  it('卡片回调勾选按 Bot 存在 setup.json，重开后还在；文件坏了按未勾选', async () => {
+    writeCompleteConfig();
+    rmSync(botPaths(SETUP_BOT).setupFile, { force: true });
+    const svc = createAdminService({});
+    await svc.confirmCardCallback(SETUP_BOT, true);
+    expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: true });
+    expect(statSync(botPaths(SETUP_BOT).setupFile).mode & 0o777).toBe(0o600);
+    expect((await createAdminService({}).getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: true });
+    await svc.confirmCardCallback(SETUP_BOT, false);
+    expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: false });
+    writeFileSync(botPaths(SETUP_BOT).setupFile, '{not json');
+    expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: false });
+  });
+
+  it('不认识的 Bot、目录已删的 Bot 和只读预览都不写卡片回调勾选', async () => {
+    await expect(createAdminService({}).confirmCardCallback('cli_nobody', true)).rejects.toThrow('没有这个 Bot');
+    expect(existsSync(botPaths('cli_nobody').setupFile)).toBe(false);
+    rmSync(botPaths(SETUP_BOT).dir, { recursive: true, force: true });
+    await expect(createAdminService({}).confirmCardCallback(SETUP_BOT, true)).rejects.toThrow('没有这个 Bot');
+    expect(existsSync(botPaths(SETUP_BOT).dir)).toBe(false);
+    writeCompleteConfig();
+    await expect(createReadonlyAdminService().confirmCardCallback(SETUP_BOT, true)).rejects.toThrow('卡片回调勾选');
+    expect(existsSync(botPaths(SETUP_BOT).setupFile)).toBe(false);
+  });
+
+  it.each([
+    [400, { code: 10014, msg: 'app secret invalid' }, { ok: false, reason: 'code=10014 msg=app secret invalid' }],
+    [400, 'not json', { ok: false, reason: 'HTTP 400', unreachable: true }],
+    [503, { code: 1, msg: 'busy' }, { ok: false, reason: 'HTTP 503', unreachable: true }],
+  ])('换 token 返回 HTTP %i 时，带错误码的算凭据被拒，其余算没检测', async (status, body, credentials) => {
+    writeCompleteConfig();
+    vi.stubGlobal('fetch', (async () => new Response(typeof body === 'string' ? body : JSON.stringify(body), { status })) as unknown as typeof fetch);
+    expect((await createReadonlyAdminService().getSetupStatus(SETUP_BOT)).credentials).toEqual(credentials);
+  });
+
+  it('连不上飞书时凭据算"无法确认"，不算无效', async () => {
+    writeCompleteConfig();
+    vi.stubGlobal('fetch', (async () => { throw new DOMException('The operation was aborted due to timeout', 'TimeoutError'); }) as unknown as typeof fetch);
+    const s = await createReadonlyAdminService().getSetupStatus(SETUP_BOT);
+    expect(s.credentials).toEqual({ ok: false, reason: '飞书接口 10 秒没有响应', unreachable: true });
+    expect(s.event).toEqual({ state: 'unchecked', reason: '飞书接口 10 秒没有响应' });
   });
 
   it('缺 scope + 事件未发布：missingRequired 非空、event=unpublished', async () => {

@@ -10,11 +10,11 @@ import {
   Bot,
   Check,
   ChevronRight,
+  ListChecks,
   MessageSquare,
   Monitor,
   Plus,
   Terminal,
-  Wrench,
   X,
 } from "lucide-react";
 import { AppShell } from "./LocalShell";
@@ -53,6 +53,7 @@ import {ProjectPanel, ProjectStatus} from './management/ProjectPanel';
 import {ConversationPanel} from './management/ConversationPanel';
 import {ShareUsagePanel, UsagePanel} from './management/UsagePanel';
 import {EnvironmentPanel} from './management/EnvironmentPanel';
+import {SetupChecklist} from './setup/SetupChecklist';
 import {MachinePanel} from './management/MachinePanel';
 import {LogPanel} from './management/LogPanel';
 import {UpdatePanel} from './management/UpdatePanel';
@@ -189,10 +190,16 @@ function DesktopApp() {
     }, 3500);
     return () => {observer.disconnect(); window.clearTimeout(timeout);};
   }, [searchTarget, page, selection]);
+  const firstRunDecided = useRef(false);
   useEffect(
     () =>
       client.watchSnapshots((next) => {
         setSnapshot(next);
+        // A machine with no bot yet opens on the checklist, once per window.
+        if (!firstRunDecided.current && next.host.kind === "connected" && !next.stale) {
+          firstRunDecided.current = true;
+          if (!next.agents.length) setPage(current => current === "collaboration" ? "setup" : current);
+        }
         document.documentElement.dataset.desktopPlatform =
           next.application.platform;
       }),
@@ -319,6 +326,7 @@ function DesktopApp() {
     collaboration: member
       ? `${group?.name ?? '飞书群'} · ${agent?.name ?? 'Bot'}`
       : (agent?.name ?? group?.name ?? (view === "agents" ? "Bot" : "群聊")),
+    setup: "首次运行清单",
     environment: "本机环境",
     usage: "用量",
     coffee: "咖啡一下",
@@ -472,22 +480,14 @@ function DesktopApp() {
                 )}
               {route.kind === 'list' && !snapshot.agents.length && (
                 <SettingsGroup
-                  label="邀请你的第一个 Bot"
+                  label="开始使用"
                   footer="配置完成后，请在飞书群发送真实任务并查看回复。"
                 >
                   <SettingsRow
-                    icon={Wrench}
-                    title="准备执行工具"
-                    onClick={() => openPage("environment")}
-                    value={
-                      snapshot.tools.some(
-                        (t) =>
-                          t.authentication === "signedIn" ||
-                          t.authentication === "notRequired",
-                      )
-                        ? "已授权"
-                        : "检查安装与授权"
-                    }
+                    icon={ListChecks}
+                    title="首次运行清单"
+                    description="执行工具、扫码、开权限、事件订阅、发布，一步步检测。"
+                    onClick={() => openPage("setup")}
                   />
                   <SettingsRow
                     icon={Bot}
@@ -706,6 +706,7 @@ function DesktopApp() {
                   </SettingsGroup>
                   <SettingsGroup label="连接与权限" id={settingAnchor('连接与权限')}>
                     <SettingsRow title="应用 ID" value={<code>{agent.id}</code>} />
+                    <SettingsRow title="首次运行清单" description="权限、长连接、事件订阅、卡片回调和发布，逐项检测。" onClick={() => openPage("setup")} />
                     <SettingsRow title="刷新飞书凭据" description="重新授权当前 Bot，保留群绑定、会话和设置。"
                       trailing={<Button size="sm" disabled={busy || !ready} onClick={() => void register(agent.id)}>重新授权</Button>}/>
                     <SettingsRow
@@ -850,6 +851,7 @@ function DesktopApp() {
               )}
             </>
           )}
+          {page === "setup" && <SetupChecklist snapshot={snapshot} ready={ready} busy={busy} run={run} onRegister={agentId => void register(agentId)} onOpenEnvironment={() => openPage("environment")} onNotice={(message, error) => setNotice({message, error})} codexJobs={snapshot.jobs.filter(job => job.type === "loginCodex" && isActive(job)).map(job => <JobPanel key={job.id} job={job} run={run} busy={busy}/>)}/>}
           {page === "environment" && <><EnvironmentPanel reveal={searchTarget?.reveal} codexBusy={snapshot.jobs.some(job => (job.type === "loginCodex" || job.type === "installCodex") && isActive(job))} request={client.environment} onCodexLogin={async () => {await run({type: "startCodexLogin"});}} codexJobs={snapshot.jobs.filter(job => job.type === "loginCodex" || job.type === "installCodex").map(job => <JobPanel key={job.id} job={job} run={run} busy={busy}/>)}/></>}
           {page === "coffee" && <SettingsPanel scope="host" target={{kind: 'host'}} category="coffee" reveal={searchTarget?.reveal}/> }
           {page === "usage" && <UsagePanel request={client.collaboration} onOpenEnvironment={() => openPage('environment')} onOpenShare={() => setModal({kind: 'shareUsage'})}/>}

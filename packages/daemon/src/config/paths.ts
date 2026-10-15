@@ -37,6 +37,7 @@ export function botPaths(appId: string): {
   sessionsFile: string;
   projectsFile: string;
   processesFile: string;
+  setupFile: string;
 } {
   const dir = botDir(appId);
   return {
@@ -45,6 +46,7 @@ export function botPaths(appId: string): {
     sessionsFile: join(dir, 'sessions.json'),
     projectsFile: join(dir, 'projects.json'),
     processesFile: join(dir, 'processes.json'),
+    setupFile: join(dir, 'setup.json'),
   };
 }
 

@@ -1,6 +1,8 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AdminBot } from '../src/admin/service';
 import { createSnapshotStore, type SnapshotStore } from '../src/server/snapshot';
+
+vi.mock('../src/agent', () => ({ createBackend: () => ({ doctor: async () => ({ ok: false, version: null, depState: 'not-installed' }) }) }));
 
 const stores: SnapshotStore[] = [];
 afterEach(async () => { await Promise.all(stores.splice(0).map(store => store.close())); });
@@ -37,5 +39,33 @@ describe('snapshot commit queue', () => {
     enabled = true;
     await store.rebuild();
     expect(revisions).toEqual([2]);
+  });
+
+  it('marks an installed Codex that is too old so the checklist can say so', async () => {
+    const setup = { installation: 'installed' as const, authentication: 'signedIn' as const, version: 'codex-cli 0.120.0', executable: '/bin/codex' };
+    const store = await createSnapshotStore({ service: { listBots: async () => [], listProjects: async () => [], codexSetup: async () => setup }, jobs: () => [], publish: () => {} });
+    stores.push(store);
+    expect(store.current().tools[0]).toMatchObject({ tool: 'codex', version: 'codex-cli 0.120.0', compatibility: { status: 'tooOld', minimum: '0.139.0' } });
+    expect(store.current().tools[1]).toMatchObject({ tool: 'claude', installation: 'missing' });
+  });
+
+  it('reads tools once more when asked during a read, so a fresh login is not lost', async () => {
+    let reads = 0;
+    let release: (() => void) | undefined;
+    const store = await createSnapshotStore({ service: { listBots: async () => [], listProjects: async () => [] }, jobs: () => [], publish: () => {}, readTools: async () => {
+      reads++;
+      const version = String(reads);
+      if (reads === 2) await new Promise<void>(resolve => { release = resolve; });
+      return [{ tool: 'claude', installation: 'installed', authentication: reads >= 3 ? 'signedIn' : 'unknown', version }];
+    } });
+    stores.push(store);
+    const inFlight = store.refreshTools();
+    const afterLogin = store.refreshTools();
+    const another = store.refreshTools();
+    expect(afterLogin).toBe(another);
+    release?.();
+    await Promise.all([inFlight, afterLogin]);
+    expect(reads).toBe(3);
+    expect(store.current().tools[0]).toMatchObject({ authentication: 'signedIn', version: '3' });
   });
 });
