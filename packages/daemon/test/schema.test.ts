@@ -5,6 +5,7 @@ import {
   getModelDisplay,
   getPendingPolicy,
   getRunIdleTimeoutMs,
+  normalizeRunIdleTimeoutSeconds,
   isAdmin,
   isChatAllowed,
   isUserAllowed,
@@ -37,13 +38,24 @@ describe('config schema helpers', () => {
   });
 
   it('resolves run idle timeout defaults, disabled value, and clamp bounds', () => {
-    expect(getRunIdleTimeoutMs(cfg())).toBe(120_000);
+    expect(getRunIdleTimeoutMs(cfg())).toBe(600_000);
+    expect(getRunIdleTimeoutMs(cfg({ runIdleTimeoutSeconds: 120 }))).toBe(120_000); // a stored 120 is kept
     expect(getRunIdleTimeoutMs(cfg({ runIdleTimeoutSeconds: 0 }))).toBeUndefined();
     expect(getRunIdleTimeoutMs(cfg({ runIdleTimeoutSeconds: 1 }))).toBe(10_000);
     expect(getRunIdleTimeoutMs(cfg({ runIdleTimeoutSeconds: 2000 }))).toBe(2_000_000);
     expect(getRunIdleTimeoutMs(cfg({ runIdleTimeoutSeconds: 5000 }))).toBe(3_600_000);
     expect(getRunIdleTimeoutMs(cfg({ runIdleTimeoutSeconds: 12.9 }))).toBe(12_000);
-    expect(getRunIdleTimeoutMs(cfg({ runIdleTimeoutSeconds: -1 }))).toBe(120_000);
+    expect(getRunIdleTimeoutMs(cfg({ runIdleTimeoutSeconds: -1 }))).toBe(600_000);
+  });
+
+  it('normalizes a watchdog value the way it will take effect', () => {
+    expect(normalizeRunIdleTimeoutSeconds(undefined)).toBe(600);
+    expect(normalizeRunIdleTimeoutSeconds('300')).toBe(600);
+    expect(normalizeRunIdleTimeoutSeconds(Number.NaN)).toBe(600);
+    expect(normalizeRunIdleTimeoutSeconds(0)).toBe(0);
+    expect(normalizeRunIdleTimeoutSeconds(3)).toBe(10);
+    expect(normalizeRunIdleTimeoutSeconds(300.7)).toBe(300);
+    expect(normalizeRunIdleTimeoutSeconds(99_999)).toBe(3600);
   });
 
   it('resolves pending policy with steer as the default', () => {

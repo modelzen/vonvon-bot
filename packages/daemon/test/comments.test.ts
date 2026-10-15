@@ -9,9 +9,11 @@ import {
   commentSessionKey,
   DEFAULT_COMMENT_INSTRUCTIONS,
   fetchCommentContext,
+  fitCommentReply,
   loadCommentInstructions,
   postCommentReply,
   renderCommentInstructions,
+  REPLY_MAX_CHARS,
   resolveComment,
   stripMarkdown,
   SUPPORTED_FILE_TYPES,
@@ -39,6 +41,17 @@ function evt(overrides: Partial<CommentEvent> = {}): CommentEvent {
 }
 
 const docxTarget: ResolvedTarget = { fileToken: 'doccnAAA', fileType: 'docx' };
+
+describe('fitCommentReply', () => {
+  it('cuts a long answer, never the idle notice after it', () => {
+    const notice = '\n\n（10 分钟没有输出，已停止）';
+    const reply = fitCommentReply('答'.repeat(1990), notice);
+    expect(reply).toHaveLength(REPLY_MAX_CHARS);
+    expect(reply.endsWith(`…${notice}`)).toBe(true);
+    expect(fitCommentReply('短答案', notice)).toBe(`短答案${notice}`);
+    expect(fitCommentReply('答'.repeat(3000))).toHaveLength(REPLY_MAX_CHARS);
+  });
+});
 
 describe('stripMarkdown', () => {
   it('removes bold/italic/heading/inline-code/bullet/quote markers', () => {

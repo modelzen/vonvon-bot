@@ -1,4 +1,5 @@
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import { claudeErrorKind } from '../error-kind';
 import type { AgentEvent, ToolKind } from '../types';
 
 /**
@@ -84,6 +85,9 @@ export function createTurnMapper(ctx: ClaudeMapContext = {}): TurnMapper {
         }
         // Auto-compaction during a turn → surface the「上下文已压缩」notice.
         if (m.subtype === 'compact_boundary') return [{ type: 'context_compacted' }];
+        // The SDK is retrying a failed API call itself (SDKAPIRetryMessage):
+        // show the retrying footer; the next deltas clear it.
+        if (m.subtype === 'api_retry') return [{ type: 'error', message: '网络波动，正在重试…', willRetry: true }];
         return [];
 
       case 'stream_event':
@@ -106,6 +110,7 @@ export function createTurnMapper(ctx: ClaudeMapContext = {}): TurnMapper {
             type: 'error',
             message: message || `模型服务请求失败（${String(m.error ?? 'unknown')}）`,
             willRetry: false,
+            kind: claudeErrorKind(m.error),
           }];
         }
         const out: AgentEvent[] = [];
@@ -168,8 +173,7 @@ export function createTurnMapper(ctx: ClaudeMapContext = {}): TurnMapper {
         return out;
       }
 
-      // Transient API hiccup the SDK auto-retries — surface a retrying footer
-      // (run-state keeps the ⏹ button and lets the next deltas overwrite it).
+      // Older SDKs sent the retry notice as its own message type.
       case 'system_api_retry':
       case 'api_retry':
         return [{ type: 'error', message: '网络波动，正在重试…', willRetry: true }];

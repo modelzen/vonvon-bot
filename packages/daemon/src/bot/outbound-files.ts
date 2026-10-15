@@ -10,7 +10,9 @@ import { scanLocalFiles, type LocalFileRef } from '../card/file-refs';
 import type { CardElement } from '../card/cards';
 import { fileComponentCount, renderFileAnswer, type InlineFiles } from '../card/inline-files';
 import type { CardDispatcher } from '../card/dispatcher';
+import { isAdmin, isChatAllowed, isUserAllowedInProject, type AppConfig } from '../config/schema';
 import { log } from '../core/logger';
+import { turnTier, type Project } from '../project/registry';
 import { checkUploadPath, uploadPlan } from '../provider/outbound/policy';
 
 export const FILE_GET = 'file.get';
@@ -53,6 +55,24 @@ interface Manifest extends FileContext { files: FileEntry[]; sequence?: number }
 type Paint = (elementId: string, element: CardElement) => Promise<boolean>;
 type Authorize = (context: FileContext, openId: string) => Promise<PermissionMode | undefined>;
 interface FileClick { messageId: string; chatId: string; operator?: { openId?: string } }
+
+const CLAIM_DENIED = '当前无权获取此文件：只有本群能使用 bot 的成员可以领取';
+const TIER_DENIED = '当前无权获取此文件：它在项目目录之外，请让管理员领取';
+
+/**
+ * Who may claim a file linked in a bot answer (product.md 3.12): anyone allowed
+ * to use the bot in that group, not only the turn's requester (bridge issue
+ * #43). Returns the clicker's own tier, which {@link OutboundFiles} intersects
+ * with the tier the file was written under; undefined refuses.
+ */
+export function fileClaimMode(
+  cfg: AppConfig, project: Project | undefined, record: Pick<FileContext, 'chatId' | 'cwd'>, openId: string,
+): PermissionMode | undefined {
+  if (!openId || !isChatAllowed(cfg, record.chatId)) return undefined;
+  if (!project || project.enabled === false || project.cwd !== record.cwd) return undefined;
+  if (!isUserAllowedInProject(cfg, project, openId)) return undefined;
+  return turnTier(project, isAdmin(cfg, openId)).mode;
+}
 
 /** Raw IM responses return message_position; message_app_link is sometimes
  * added by a higher-level client (including lark-cli), not by the IM API.
@@ -372,12 +392,13 @@ export class OutboundFiles {
   ): Promise<void> {
     let manifest: Manifest | undefined;
     let authorized = false;
+    let denied: string | undefined;
     let file: FileEntry | undefined;
     try {
       manifest = JSON.parse(await readFile(join(this.dir, `${id}.json`), 'utf8')) as Manifest;
       if (manifest.messageId !== evt.messageId || manifest.chatId !== evt.chatId) return;
       const mode = await authorize(manifest, evt.operator?.openId ?? '');
-      if (!mode) throw new Error('当前无权获取此文件，请由任务发起人或管理员操作');
+      if (!mode) throw new Error(CLAIM_DENIED);
       authorized = true;
       file = manifest.files[index];
       if (!file?.occurrences?.length) throw new Error('文件入口已失效，请让 agent 重新引用文件');
@@ -395,10 +416,18 @@ export class OutboundFiles {
       if (file.sendStartedAt && Date.now() - file.sendStartedAt >= SEND_RETRY_WINDOW_MS) {
         throw new Error('上次发送结果未确认，请先检查会话；需要重新发送时请让 agent 重新引用文件');
       }
+      const policy = manifest.mode === 'full' && mode === 'full' ? 'full' : 'qa';
+      // A clicker below the answer's tier (a guest on an admin's full-tier
+      // file) may not reach it. That denies the clicker and says nothing about
+      // the file: reply to them only, leave the shared card and manifest alone.
+      if (manifest.mode === 'full' && policy !== 'full'
+        && !await checkUploadPath(await uploadPlan({ cwd: manifest.cwd, mode: policy, network: false }), file.path)) {
+        denied = TIER_DENIED;
+        throw new Error(denied);
+      }
       file.needsPaint = true;
       await this.save(id, manifest);
       await this.repaint(channel, id, manifest, index, true);
-      const policy = manifest.mode === 'full' && mode === 'full' ? 'full' : 'qa';
       const current = await inspect(file.path, manifest.cwd, policy);
       if (!unchanged(file, current) || current.path !== file.path) throw new Error('本地文件已变化，请让 agent 重新引用后获取');
       if (!file.fileKey) {
@@ -426,8 +455,8 @@ export class OutboundFiles {
       log.info('outbound', 'file-sent', { messageId: manifest.messageId, bytes: file.size });
     } catch (err) {
       log.fail('outbound', err, { phase: 'file-get' });
-      const message = manifest ? (authorized ? friendly(err) : '当前无权获取此文件，请由任务发起人或管理员操作') : '文件入口已失效，请让 agent 重新引用文件';
-      if (manifest && authorized && file?.occurrences?.length && !file.messageId) {
+      const message = denied ?? (manifest ? (authorized ? friendly(err) : CLAIM_DENIED) : '文件入口已失效，请让 agent 重新引用文件');
+      if (!denied && manifest && authorized && file?.occurrences?.length && !file.messageId) {
         file.error = friendly(err);
         file.needsPaint = true;
         // A fresh value also bypasses the SDK's callback deduplication on retry.
