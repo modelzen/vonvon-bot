@@ -34,10 +34,13 @@ async function fixture() {
   await mkdir(home); await mkdir(root);
   return { home, root };
 }
-function launch(home: string, root: string, args: string[]) {
+function launch(home: string, root: string, args: string[], extraEnv: NodeJS.ProcessEnv = {}) {
   const prefix = process.platform === 'win32' && args[0] === 'daemon' && args[1] === 'run'
     ? ['--import', pathToFileURL(interruptDriver).href] : [];
-  const child = spawn(process.execPath, [...prefix, entry, ...args], { env: { ...process.env, HOME: home, USERPROFILE: home, VONVON_HOME: root }, stdio: 'pipe' });
+  // HOME and XDG_CONFIG_HOME isolate the service registration lookup from the real user.
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, '.config'), VONVON_HOME: root, ...extraEnv };
+  if (!extraEnv.VONVON_SERVICE) delete env.VONVON_SERVICE;
+  const child = spawn(process.execPath, [...prefix, entry, ...args], { env, stdio: 'pipe' });
   children.push(child);
   let output = '';
   child.stdout.on('data', data => { output += String(data); }); child.stderr.on('data', data => { output += String(data); });
@@ -138,6 +141,31 @@ it('refuses a reused PID without signaling the unrelated process or changing its
   expect((await readdir(f.root)).filter(name => name !== '.access')).toEqual(before);
   expect(await readdir(f.home)).toEqual([]);
 }, 30_000);
+
+it('replaces a dead daemon lock whose PID was reused without signaling the reusing process (#287)', async () => {
+  const f = await fixture();
+  const sleeper = spawn(process.execPath, ['-e', "process.stdout.write('ready\\n');setInterval(()=>{},1000)"], { stdio: 'pipe' });
+  children.push(sleeper);
+  await new Promise<void>(resolve => sleeper.stdout.once('data', () => resolve()));
+  await writeFile(join(f.root, 'daemon.pid'), JSON.stringify({ pid: sleeper.pid, startedAt: new Date().toISOString(), listen: '127.0.0.1:9' }));
+  const start = launch(f.home, f.root, ['daemon', 'start', '--port', '0']);
+  expect(await start.exited, start.output()).toBe(0);
+  const record = z.object({ pid: z.number(), listen: z.string() }).parse(JSON.parse(await readFile(join(f.root, 'daemon.pid'), 'utf8')));
+  expect(record.pid).not.toBe(sleeper.pid);
+  expect(start.output()).toContain(`PID ${record.pid} at ${record.listen}`);
+  const stop = launch(f.home, f.root, ['daemon', 'stop']);
+  expect(await stop.exited, stop.output()).toBe(0);
+  expect(sleeper.exitCode).toBeNull();
+  expect(sleeper.signalCode).toBeNull();
+  await expect(readFile(join(f.root, 'daemon.pid'))).rejects.toMatchObject({ code: 'ENOENT' });
+}, 40_000);
+
+it('service-managed run exits 0 without locks when no registration names this root', async () => {
+  const f = await fixture();
+  const run = launch(f.home, f.root, ['daemon', 'run', '--port', '0'], { VONVON_SERVICE: process.platform === 'darwin' ? 'launchd' : 'systemd' });
+  expect(await run.exited, run.output()).toBe(0);
+  expect(await readdir(f.root)).not.toContain('daemon.pid');
+});
 
 it('service refusal leaves an absent data home untouched for public and hidden commands', async () => {
   const f = await fixture();
