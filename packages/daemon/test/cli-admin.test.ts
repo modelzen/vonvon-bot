@@ -158,6 +158,7 @@ it('settings set parses values as JSON or text and names the bad field', () => {
   expect(parseAssignments('session', ['model.selection={"kind":"explicit","model":"gpt-5.5","effort":"medium"}']).patch).toEqual({ selection: { kind: 'explicit', model: 'gpt-5.5', effort: 'medium' } });
   expect(parseAssignments('agent', ['paths.projectsRootDir=2024']).patch).toEqual({ projectsRootDir: '2024' });
   expect(parseAssignments('agent', ['comments.backend=true']).patch).toEqual({ backend: 'true' });
+  for (const text of ['null', '[]', '{}']) expect(() => parseAssignments('agent', [`comments.backend=${text}`])).toThrow('comments.backend');
   for (const [kind, args, message] of [
     ['project', ['permission.mode=bad'], 'permission.mode 只能是 qa、write、full'],
     ['project', ['permission.nope=1'], 'permission 没有 nope 这一项。可以改的有：mode、guestMode、network'],

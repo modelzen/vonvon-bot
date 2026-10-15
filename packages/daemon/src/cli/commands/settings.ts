@@ -79,9 +79,10 @@ export function parseAssignments(kind: Kind, assignments: readonly string[]): { 
   const patch: Record<string, unknown> = Object.fromEntries(fields);
   const check = schema.partial().strict();
   // `paths.projectsRootDir=2024` parses as a number: a field that takes text gets the text as typed, and keeps it
-  // when the text is wrong in another way, so the error names that instead of asking for text.
+  // when the text is wrong in another way, so the error names that instead of asking for text. Only numbers and
+  // booleans read as text: `null`, `[]` and `{}` are never meant as the words.
   for (const [field, value] of fields) {
-    if (typeof value === 'string' || check.safeParse(Object.fromEntries([[field, value]])).success) continue;
+    if ((typeof value !== 'number' && typeof value !== 'boolean') || check.safeParse(Object.fromEntries([[field, value]])).success) continue;
     const asText = check.safeParse(Object.fromEntries([[field, texts.get(field)]]));
     if (asText.success || !asText.error.issues.some(issue => issue.code === 'invalid_type' && issue.path.length === 1)) patch[field] = texts.get(field);
   }
