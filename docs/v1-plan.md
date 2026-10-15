@@ -497,7 +497,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
   - 私聊里的 `/new` 和撤回等 s49。
   - 开发者后台里这个事件的中文名没核对，提醒里写的是「撤回消息」。撤回事件本身要 owner 在开发者后台给 bot 订阅、发布新版本后才收得到，JP-VPS 上的验收 bot 还没订阅，事件这一路（`bridge.ts` 的接线、`onRecall`、说明行）没在真机上走过。
   - bridge 里撤回事件的接线没有单测，和"机器人被移出群"一样挂在 SDK 私有的原始分发器上；M3 第 6 步看日志里的 `recall`。
-  - product.md 的两处已改：3.5"今天的代码和这里不一样"第 9 条标了 s15；撤回的说明行带`〔撤回〕`，不是本人撤回的写"的一条消息被撤回了"。D4、D5 等 owner 定了另开纯文档 PR。
+  - product.md 的两处已改：3.5"今天的代码和这里不一样"第 9 条标了 s15；撤回的说明行带`〔撤回〕`，不是本人撤回的写"的一条消息被撤回了"。压缩后话题表和别的 bot 开的话题引用行这两处缺口要不要补，等 owner 定了另开纯文档 PR。
 - s16 做法（设置源）：Claude 的三个辅助查询（登录检测、模型列表、生成标题）共用一套选项：只读 user 层设置，和回合是同一个 CLI、同一份 `env`，关掉 hooks、MCP 和 claude.ai 连接器，用 `claudeMdExcludes` 排除个人 CLAUDE.md。没读 project 层，因为模型列表按后端缓存，不按项目。
 - s16 实测（JP-VPS，SDK 0.3.296）：传 `model: 'default'` 或调 `setModel(undefined)` 都用账号的默认模型，不看 `ANTHROPIC_MODEL`，只有不传 model 才用它。bot 的会话总是传一个明确的模型，所以用户设置里 `env.ANTHROPIC_MODEL` 指定的模型排到列表第一、当默认（其次是 daemon 自己的 `ANTHROPIC_MODEL`，再其次是设置里的 `model`）；列表里没有就补一行，SDK 失败时的兜底列表也一样。配了 `ANTHROPIC_MODEL` 时，SDK 的列表末尾会多一行 "Custom model"。
 - s16 做法（手填）：手填的 id 只挡空白、控制字符、反引号、尖括号、`-` 开头和超过 200 字，不对模型列表校验，填错了在回合里报错。`/model` 卡总有一个手填表单，提交会锁卡，结果发一张新卡接管；会话记 `modelCustom`。默认模型卡的下拉多一项"自定义模型 ID…"，项目记 `defaultModelCustom`，`pickDefault` 见到它就原样用。网页的"新会话默认模型"和"本话题模型"也能手填，协议的 `ModelSelection` 加了可选的 `custom`；评论模型不开放。顺带：没有会话时 `/model` 卡不再显示"已切换"；群设置里默认模型选得不对时，带提示重发表单，不再不声不响地回到群设置卡；Codex 返回空列表时不再把兜底列表缓存一辈子。
@@ -716,7 +716,7 @@ e05、e06、e07、e10、e11 已做完，结果在 `docs/research/2026-10-15-v1-s
 
 Mac 上按最晚期限排：e03、e04、e08，一次一个。e10 留给 owner 的两项在 s14、s18 之前，e09 在客户端里看的部分在 s30 之前，Claude 分别请 owner 做。
 
-JP-VPS 上剩下的按最晚期限排：e12（等 s23 合入）、e09 看消息数据的一半。e14 已在 2026-10-15 做完，见 `docs/research/2026-10-15-v1-spikes/e14-resume-same-session.md`；"两边都写"那一条的去留问 owner（D6）。
+JP-VPS 上剩下的按最晚期限排：e12（等 s23 合入）、e09 看消息数据的一半。e14 已在 2026-10-15 做完，见 `docs/research/2026-10-15-v1-spikes/e14-resume-same-session.md`；"两边都写"要不要改（每轮开口前看一眼会话，别人写过就重新接上；Codex 每轮结束就放开线程），等 owner 定。
 
 ### 4.2 实验结果和 product.md 不一致时
 

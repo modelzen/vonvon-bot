@@ -98,9 +98,9 @@ process-ci、draft 和 final 里的流程说法，凡和 `AGENTS.md` 不一致�
 | [e01-background-tasks](2026-10-14-v1-spikes/e01-background-tasks.md) | `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` 能不能让主回合等子 agent，后台 Bash 会怎样，关闭会话时后台任务会怎样 | 前台子 agent 跑着时按 ⏹ 还没测 |
 | [e02-claude-permissions-sessions](2026-10-14-v1-spikes/e02-claude-permissions-sessions.md) | 三种模式下哪些请求走到 canUseTool，今天的 AskUserQuestion，拒绝，中途改档和 resume，子 agent 的 id，读别的工作目录下的会话，`claudeMdExcludes` | 没带沙箱，沙箱看 e03。第 7 节（claude.ai 连接器和 Claude Code 自己的工具）和第 8 节（会话标题）是顺带发现，没经过核实那一轮 |
 
-## 2026-10-15 第一版实验 e05、e06、e07、e10、e11
+## 2026-10-15 第一版实验 e05、e06、e07、e10、e11、e14
 
-`2026-10-15-v1-spikes/`。`docs/v1-plan.md` 第 4 节的实验。e06 基于 `main` 的 `f1c2fb8`，在 owner 的 Mac 上经 Paseo 的检查会话实测；e05、e07、e10、e11 基于 `bfc01d7`，在 JP-VPS 上实测。这几份没有核实记录，用之前自己核对关键事实。
+`2026-10-15-v1-spikes/`。`docs/v1-plan.md` 第 4 节的实验。e06 基于 `main` 的 `f1c2fb8`，在 owner 的 Mac 上经 Paseo 的检查会话实测；e05、e07、e10、e11 基于 `bfc01d7`，在 JP-VPS 上实测；e14 基于 `5a37103`，在 JP-VPS 上实测。这几份没有核实记录，用之前自己核对关键事实。
 
 | 报告 | 内容 | 说明 |
 |---|---|---|
