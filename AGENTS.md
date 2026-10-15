@@ -4,8 +4,8 @@
 
 ## 分工
 
-- JP-VPS 上的 Claude Code 负责 v1 的设计、实现、独立审查、测试和合入。它写 `docs/product.md` 和 `docs/v1-plan.md`，写产品代码和测试，在 JP-VPS 上跑构建、typecheck、lint、定向测试和无头网页界面检查。重命令一律加 `flock /tmp/vonvon-heavy.lock`。全量测试交给 CI 的 Linux 和 macOS 任务。Claude 是唯一的合入入口。
-- Mac 上的 Codex 做 Claude 做不到的桌面事项：真实 macOS 窗口、托盘、菜单、登录项和系统权限弹窗，飞书客户端里卡片的实际显示，真实 Codex provider 的运行，用 Mac 钥匙串签名打包预览版。短检查和预览版由 Claude 经 Paseo 发起；长的、需要人来判断的验收交给 owner。公证和对外发布由 owner 在发布前决定谁来做。
+- JP-VPS 上的 Claude Code 负责 v1 的设计、实现、独立审查、测试和合入。它写 `docs/product.md` 和 `docs/v1-plan.md`，写产品代码和测试，在 JP-VPS 上跑构建、typecheck、lint、定向测试和无头网页界面检查。飞书一侧的行为也在 JP-VPS 上自测：用 lark-cli 以 owner 的用户身份、只在测试群里做，改设置用 `vonvon` 命令行。每个里程碑的验收，不需要 Mac 的步骤由 Claude 先在 JP-VPS 上做完，见 `docs/v1-plan.md` 第 7 节。重命令一律加 `flock /tmp/vonvon-heavy.lock`。全量测试交给 CI 的 Linux 和 macOS 任务。Claude 是唯一的合入入口。
+- Mac 上的 Codex 做 Claude 做不到的桌面事项：Mac 上的网页端连 Mac 上的 daemon，真实 macOS 窗口、托盘、菜单、登录项和系统权限弹窗，飞书客户端里卡片的实际显示，真实 Codex provider 的运行，用 Mac 钥匙串签名打包预览版。短检查和预览版由 Claude 经 Paseo 发起；长的、需要人来判断的验收交给 owner。公证和对外发布由 owner 在发布前决定谁来做。
 - Codex 可以改代码，按下面两种情况提交：
   - Claude 发起的 Mac 检查里发现问题，Codex 直接修，在被检查的 `claude/*` 分支上 commit 和 push，不 force-push，不 rebase。回复里写清改了什么、为什么改和提交号。回复之后 Codex 不再 push 这个分支。
   - owner 在 Mac 上验收已合入的预览版时发现问题，Codex 从 `main` 开 `codex/fix-<问题>` 分支和自己的 PR，不 push 到任何 `claude/*` 分支。`codex/fix-*` 分支只有 Codex push。开这个 PR 的 Codex 会话和它的 Mac worktree 留到 PR 合入或关闭。Claude 审查发现问题时，把发现写进 PR 评论，再经 Paseo 通知这个会话去修；会话已经不在了，Claude 新建一个修复会话（见"工具和同步"）。2026-10-14 之前开的 `codex/*` PR 是旧桌面版的参考栈，不是修复 PR。
@@ -49,7 +49,7 @@
 - 两台机器的 Paseo daemon 通过 Tailscale 互通。JP-VPS 为 `100.121.117.46:6767`，provider `claude`，项目 `/home/ops/vonvon/vonvon-bot`。Mac 为 `100.127.134.58:6767`，provider `codex`。不通过 SSH 执行 `claude -p`。
 - Claude 和 Codex 之间不再交接 PR。Claude 经 Mac 的 daemon 新建三种 Codex 会话，这是唯一允许的跨机创建：
   - 检查会话，标题 `Mac 检查 PR #<号>`。Codex 在 Mac 上 pull 这个分支，在本机构建和检查。只接短检查：Codex 一个回合内能做完，大约 30 分钟以内，结果能用文字说清对错。
-  - 预览版会话，标题 `Mac 预览版 <里程碑名>`。Codex 从 `main` pull，在 Mac 本机构建，用真实 `HOME` 下的钥匙串签名，装到本机给 owner 验收。
+  - 预览版会话，标题 `Mac 预览版 <里程碑名>`。Codex 从 `main` pull，在 Mac 本机构建；先用隔离的数据目录查 Mac 上的网页端连 Mac 上的 daemon，有问题就停下回复，不打包，不 push；过了再用真实 `HOME` 下的钥匙串签名，装到本机给 owner 验收。
   - 修复会话，标题 `Mac 修复 PR #<号>`。只在开 `codex/fix-*` PR 的会话已经不在、审查又发现问题时新建。Codex pull 这个分支，按 PR 评论修，push。
 - 三种会话都按下面的规则跑：
   - 模式用 `auto`，不用 `full-access`；
