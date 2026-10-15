@@ -10,7 +10,6 @@
 .settings-sidebar-icon--groups {--sidebar-icon-color:#1687f8;}
 .settings-sidebar-icon--setup {--sidebar-icon-color:#34c759;}
 .settings-sidebar-icon--usage {--sidebar-icon-color:#10a9c9;}
-.settings-sidebar-icon--coffee {--sidebar-icon-color:#ff375f;}
 .section-title-link {display:inline-flex;align-items:center;gap:4px;padding:0;border:0;background:none;color:inherit;font:inherit;}
 .collaboration-device-nav {display:grid;gap:1px;flex:none;margin-top:14px;}
 .collaboration-page-heading {display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin:0 0 6px;}

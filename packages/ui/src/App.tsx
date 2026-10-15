@@ -331,7 +331,6 @@ function DesktopApp() {
     setup: "首次运行清单",
     environment: "本机环境",
     usage: "用量",
-    coffee: "咖啡一下",
     application: "应用与启动",
     diagnostics: "状态与诊断",
   };
@@ -735,7 +734,6 @@ function DesktopApp() {
                     key={`agent-${agent.id}`}
                     scope="agent"
                     target={{ kind: "agent", botId: agent.id }}
-                    reveal={searchTarget?.reveal}
                   />
                   <SettingsGroup id={settingAnchor('移除 Bot')}
                     label="移除 Bot"
@@ -856,7 +854,6 @@ function DesktopApp() {
           )}
           {page === "setup" && <SetupChecklist snapshot={snapshot} ready={ready} busy={busy} run={run} onRegister={agentId => void register(agentId)} onOpenEnvironment={() => openPage("environment")} onNotice={(message, error) => setNotice({message, error})} codexJobs={snapshot.jobs.filter(job => job.type === "loginCodex" && isActive(job)).map(job => <JobPanel key={job.id} job={job} run={run} busy={busy}/>)}/>}
           {page === "environment" && <><EnvironmentPanel reveal={searchTarget?.reveal} codexBusy={snapshot.jobs.some(job => (job.type === "loginCodex" || job.type === "installCodex") && isActive(job))} request={client.environment} onCodexLogin={async () => {await run({type: "startCodexLogin"});}} codexJobs={snapshot.jobs.filter(job => job.type === "loginCodex" || job.type === "installCodex").map(job => <JobPanel key={job.id} job={job} run={run} busy={busy}/>)}/></>}
-          {page === "coffee" && <SettingsPanel scope="host" target={{kind: 'host'}} category="coffee" reveal={searchTarget?.reveal}/> }
           {page === "usage" && <UsagePanel request={client.collaboration} onOpenEnvironment={() => openPage('environment')} onOpenShare={() => setModal({kind: 'shareUsage'})}/>}
           {page === "application" && (
             <>
@@ -900,7 +897,7 @@ function DesktopApp() {
               </SettingsGroup>
               <MachinePanel reveal={searchTarget?.reveal} request={client.machine} agents={snapshot.agents} macos={snapshot.application.platform === 'macos'}/>
               <UpdatePanel request={client.machine} attached={host.kind === 'connected' && host.ownership === 'attached'}/>
-              <SettingsPanel scope="host" target={{ kind: "host" }} category="execution" />
+              <SettingsPanel scope="host" target={{ kind: "host" }} />
               <SettingsGroup label="窗口与退出" id={settingAnchor('窗口与退出')} footer="关闭窗口会留在菜单栏或托盘继续运行。退出应用后，daemon 和 Bot 会继续在后台运行。">
                 <SettingsRow title="隐藏到托盘" value={!shell?.hideWindow ? '桌面版提供' : undefined} trailing={<Button size="sm" disabled={!shell?.hideWindow} onClick={() => {if (shell?.hideWindow) void runShell(shell.hideWindow);}}>隐藏窗口</Button>} />
                 <SettingsRow title="退出 Vonvon Bot" value={!shell?.quit ? '桌面版提供' : undefined} trailing={<Button size="sm" disabled={busy || !shell?.quit} onClick={() => {const quit = shell?.quit; if (quit) navigate(() => void runShell(quit));}}>退出应用</Button>} />

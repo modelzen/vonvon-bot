@@ -196,6 +196,11 @@ it('s12: a stored autoCompact:false is ignored on read and the switch cannot be 
   expect(() => parseSettingsEdit({ scope: project, section: 'compact', revision: 'x', patch: { autoCompact: true } })).toThrow('设置字段、类型或范围无效');
   expect(JSON.parse(await readFile(paths.projectsFile, 'utf8')).projects[0]).toMatchObject({ autoCompact: false });
 });
+it('s02b: with no 咖啡一下 service handed over, a stored enabled flag never reads as running', async () => {
+  cfg.preferences!.cliBridge = { enabled: true };
+  const { owner } = await fixture();
+  expect((await owner.read(agent) as AgentSettingsView).cliRuntime).toMatchObject({ enabled: true, running: false });
+});
 it('real instruction propagation retains saved master and reports partial filesystem failure', async () => {
   const { join } = await import('node:path');
   const healthy = join(paths.commentsRootDir, 'comment-docx-healthy');

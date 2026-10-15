@@ -218,7 +218,8 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
     save: (text: string) => saveCommentInstructions(paths.commentInstructionsFile, text),
     sync: (text: string) => syncAllCommentInstructions(paths.commentsRootDir, text, cfg.accounts.app.tenant),
   };
-  let cliRunning = getCliBridgePreferences(cfg).enabled && access.kind === 'writable';
+  // s02b: the bot no longer hands the service over, so without it nothing runs.
+  let cliRunning = !!deps.cliBridge && getCliBridgePreferences(cfg).enabled && access.kind === 'writable';
   let actionChain: Promise<unknown> = Promise.resolve();
   const own = (scope: T.SettingsScope) => {
     if (scope.kind === 'host' || scope.botId !== botId)

@@ -34,30 +34,14 @@ test('every literal configuration row label in the current desktop UI is indexed
 });
 
 test('rare field, aliases, and multi-term scope queries resolve to their real category', () => {
-  const timeout = findEntries(entries, '审批超时')[0];
-  assert.equal(timeout?.title, '审批超时（秒）');
-  assert.equal(timeout?.destination.reveal, 'cli-advanced');
-  assert.equal(timeout?.destination.page, 'coffee');
-  assert.equal(timeout?.destination.section, '通知偏好');
-  const scope = findEntries(entries, '在场检测平台')[0];
-  assert.equal(scope?.destination.page, 'coffee');
   assert.equal(findEntries(entries, '清空白名单')[0]?.destination.detail?.kind, 'membership-settings');
   assert.equal(findEntries(entries, 'App Secret')[0]?.destination.reveal, 'profile-add');
   assert.equal(findEntries(entries, '修复命令行工具')[0]?.destination.section, '命令行工具');
 });
 
-test('coffee and Hook settings are indexed once globally, including without Agents', () => {
-  const empty = searchEntries({...snapshot, agents: []});
-  for (const title of ['咖啡一下', '本机 Hook', '接力设置', '通知偏好']) {
-    const matches = empty.filter(entry => entry.title === title);
-    assert.equal(matches.length, 1);
-    assert.equal(matches[0]?.destination.page, 'coffee');
-  }
-  assert.equal(findEntries(empty, 'Codex Hook')[0]?.destination.section, '本机 Hook');
-  assert.equal(findEntries(empty, '咖啡一下 Codex Hook')[0]?.destination.section, '本机 Hook');
-  assert.equal(findEntries(empty, '咖啡一下 审批')[0]?.destination.section, '通知偏好');
-  assert.equal(findEntries(entries, '启用咖啡一下').length, 1);
-  assert.equal(entries.some(entry => entry.destination.detail?.kind === 'agent-settings' && entry.title === 'CLI 协作'), false);
+test('s02b: 咖啡一下 and its Hook settings are gone from search', () => {
+  for (const query of ['咖啡一下', '启用咖啡一下', '本机 Hook', 'Codex Hook', '通知偏好', '审批超时', '在场检测']) assert.deepEqual(findEntries(entries, query), []);
+  assert.ok(!findEntries(entries, '').some(entry => entry.title === '咖啡一下'));
 });
 
 test('usage sharing has one global result even without a group binding', () => {
@@ -109,7 +93,6 @@ test('tool search destinations use the same section names as the rendered tool c
 test('注册 Bot is the one name, and the old word and the grant button still find their places', () => {
   assert.equal(findEntries(entries, '添加 Bot')[0]?.id, 'agents');
   const empty = searchEntries({...snapshot, agents: [], memberships: []});
-  assert.equal(findEntries(empty, '启用咖啡一下')[0]?.destination.guide, '没有 Bot 时，请先注册 Bot。');
   assert.ok(!JSON.stringify(empty).includes('添加 Bot。'));
   const grant = findEntries(entries, '飞书权限')[0];
   assert.equal(grant?.destination.section, '连接与权限');
