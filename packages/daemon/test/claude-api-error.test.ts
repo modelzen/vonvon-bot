@@ -64,12 +64,19 @@ async function collect(thread: ClaudeAgentThread, goal = false): Promise<AgentEv
 
 describe('Claude API error mapping', () => {
   it.each([
-    { error: 'authentication_failed' },
-    { isApiErrorMessage: true },
-  ])('surfaces explicitly marked assistant errors: %j', (fields) => {
+    { fields: { error: 'authentication_failed' }, kind: 'auth' },
+    { fields: { isApiErrorMessage: true }, kind: undefined },
+  ])('surfaces explicitly marked assistant errors: $fields', ({ fields, kind }) => {
     expect(createTurnMapper().map(assistant(fields))).toEqual([
-      { type: 'error', message: apiErrorText, willRetry: false },
+      { type: 'error', message: apiErrorText, willRetry: false, kind },
     ]);
+  });
+
+  it.each([
+    ['overloaded', 'network'], ['server_error', 'network'], ['rate_limit', 'quota'],
+    ['billing_error', 'quota'], ['authentication_failed', 'auth'], ['invalid_request', undefined],
+  ])('classifies the SDK error code %s as %s', (error, kind) => {
+    expect(createTurnMapper().map(assistant({ error }))).toMatchObject([{ type: 'error', kind }]);
   });
 
   it('joins error text blocks without rendering them as a successful answer', () => {
@@ -80,12 +87,12 @@ describe('Claude API error mapping', () => {
         { type: 'text', text: 'Try again later' },
       ] },
     }));
-    expect(events).toEqual([{ type: 'error', message: 'Request rejected\nTry again later', willRetry: false }]);
+    expect(events).toEqual([{ type: 'error', message: 'Request rejected\nTry again later', willRetry: false, kind: 'quota' }]);
   });
 
   it('retains the error code when the API supplies no text', () => {
     expect(createTurnMapper().map(assistant({ error: 'billing_error' }, ''))).toEqual([
-      { type: 'error', message: expect.stringContaining('billing_error'), willRetry: false },
+      { type: 'error', message: expect.stringContaining('billing_error'), willRetry: false, kind: 'quota' },
     ]);
   });
 
@@ -119,7 +126,7 @@ describe.each([false, true])('Claude terminal errors (goal: %s)', (goal) => {
   it('keeps the visible failure when the SDK follows it with an empty success result', async () => {
     const events = await collect(makeThread([[apiError, success]]), goal);
     expect(events.filter((event) => event.type === 'error')).toEqual([
-      { type: 'error', message: apiErrorText, willRetry: false },
+      { type: 'error', message: apiErrorText, willRetry: false, kind: 'auth' },
     ]);
     expect(events.some((event) => event.type === 'done')).toBe(false);
     expect(events).toContainEqual({ type: 'usage', inputTokens: 0, outputTokens: 0 });
@@ -135,7 +142,7 @@ describe.each([false, true])('Claude terminal errors (goal: %s)', (goal) => {
   it('does not replace the first assistant error with duplicate or generic result errors', async () => {
     const events = await collect(makeThread([[apiError, apiError, failure]]), goal);
     expect(events.filter((event) => event.type === 'error')).toEqual([
-      { type: 'error', message: apiErrorText, willRetry: false },
+      { type: 'error', message: apiErrorText, willRetry: false, kind: 'auth' },
     ]);
     expect(events.some((event) => event.type === 'done')).toBe(false);
   });
@@ -143,7 +150,7 @@ describe.each([false, true])('Claude terminal errors (goal: %s)', (goal) => {
   it('does not replace a specific API error with a generic process-exit error', async () => {
     const events = await collect(makeThread([[apiError]], true), goal);
     expect(events.filter((event) => event.type === 'error')).toEqual([
-      { type: 'error', message: apiErrorText, willRetry: false },
+      { type: 'error', message: apiErrorText, willRetry: false, kind: 'auth' },
     ]);
   });
 
@@ -178,6 +185,7 @@ describe.each([false, true])('Claude terminal errors (goal: %s)', (goal) => {
     });
     const events = await collect(makeThread([[retry, ...reply]]), goal);
     expect(events.some((event) => event.type === 'error' && !event.willRetry)).toBe(false);
+    expect(events).toContainEqual({ type: 'error', message: '网络波动，正在重试…', willRetry: true });
     expect(events.reduce(reduce, initialState).terminal).toBe('done');
   });
 

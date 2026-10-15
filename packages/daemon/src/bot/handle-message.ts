@@ -63,9 +63,8 @@ import {
   isAdmin,
   isChatAllowed,
   isUserAllowedInProject,
+  normalizeRunIdleTimeoutSeconds,
   resolveOwner,
-  RUN_IDLE_TIMEOUT_MAX_SEC,
-  RUN_IDLE_TIMEOUT_MIN_SEC,
   COMPLETION_REMINDER_LONG_TASK_MAX_MINUTES,
   COMPLETION_REMINDER_LONG_TASK_MIN_MINUTES,
   secretKeyForApp,
@@ -110,6 +109,7 @@ import {
   CONTROLS_EID,
   RC,
   attachRunImages,
+  idleLabel,
   type RunCardState,
 } from '../card/run-card';
 import { buildGoalDoneCard } from '../card/goal-card';
@@ -182,7 +182,7 @@ import { bridgeVersion } from '../core/version';
 import { getDesktopRelease } from '../service/desktop-release';
 import { runtimeDistribution } from '../service/distribution';
 import { paths } from '../config/paths';
-import { OutboundFiles } from './outbound-files';
+import { fileClaimMode, OutboundFiles } from './outbound-files';
 import { getSecret } from '../config/keystore';
 import { buildScopeGrantUrl, JOIN_GROUP_SCOPES } from '../config/scopes';
 import { validateAppCredentials } from '../utils/feishu-auth';
@@ -252,7 +252,7 @@ import {
   SUPPORTED_FILE_TYPES,
   syncCommentInstructions,
 } from './comments';
-import { createGracefulInterrupt, Semaphore, withIdleTimeout } from './watchdog';
+import { createGracefulInterrupt, createIdlePause, Semaphore, withIdleTimeout, type IdlePause } from './watchdog';
 
 /**
  * open_id → 姓名 的批量解析（管理员 / 白名单卡展示用）。需 contact:user.base:readonly
@@ -524,6 +524,36 @@ interface ActiveState {
    * is never consumed — incoming messages get a prompt instead of queueing
    * (they'd be dropped silently at the end otherwise). */
   isGoal?: boolean;
+  /** The in-flight turn's idle watchdog. s30 holds it while a card waits on a
+   * person (product.md 3.8); a fresh one per turn, so a hold never outlives it. */
+  idlePause?: IdlePause;
+}
+
+/** Inputs a synthetic turn (🔁 重试) carries that a real message would not. */
+interface TurnExtra {
+  /** Local image paths to send instead of downloading the message's own. */
+  images?: string[];
+  /** Clean label for titles and reminders, instead of the prompt text. */
+  summary?: string;
+  /** Never steer into a running turn; wait in its queue. */
+  queueOnly?: boolean;
+}
+
+/** A turn whose terminal card offers [重试] (idle watchdog or network failure). */
+interface RetryTurn {
+  sessionKey: string;
+  chatId: string;
+  flat: boolean;
+  turn: QueuedTurn;
+  reason: 'idle' | 'network';
+  idleSeconds: number;
+}
+
+/** What the agent receives when [重试] is tapped: why the last turn stopped,
+ * then that turn's input as it was sent. */
+export function retryPrompt(retry: Pick<RetryTurn, 'reason' | 'idleSeconds'>, text: string): string {
+  const why = retry.reason === 'idle' ? `${idleLabel(retry.idleSeconds)}没有输出，被自动停止了` : '网络失败，中断了';
+  return `（重试）上一轮因为${why}。下面是上一轮收到的消息，请重新处理。上一轮可能已经做了一部分，先看看做到哪了再继续，别重复做。\n\n${text}`;
 }
 
 /** Message-reaction lifecycle controller (see {@link runReaction}). */
@@ -862,6 +892,13 @@ export function createOrchestrator(
   const runsByCard = new Map<string, ActiveState>();
   /** latest run-card state by messageId (to demote a previous turn's card) */
   const runCards = new Map<string, RunCardState>();
+  /** [重试] targets by terminal card messageId. In memory only; a session keeps
+   * at most its newest one, and any new turn in that session drops it. */
+  const retryTurns = new Map<string, RetryTurn>();
+  const dropRetries = (sessionKey: string | undefined): void => {
+    if (!sessionKey) return;
+    for (const [cardId, retry] of retryTurns) if (retry.sessionKey === sessionKey) retryTurns.delete(cardId);
+  };
   /** CardKit entity backing each run card, by messageId — drives the native
    * typewriter stream and whole-card (button/settings) updates. */
   const runStreams = new Map<string, RunCardStream>();
@@ -1333,7 +1370,10 @@ export function createOrchestrator(
    * the chatId (single, `flat`). steer/queue mid-turn; otherwise reserve + run.
    * `flat` = reply by quoting (no reply_in_thread / topic), for single groups.
    */
-  function handleTurn(msg: NormalizedMessage, text: string, sessionKey: string, flat: boolean, project: Project | undefined, perm: TurnPerm): Promise<void> {
+  function handleTurn(
+    msg: NormalizedMessage, text: string, sessionKey: string, flat: boolean, project: Project | undefined, perm: TurnPerm,
+    extra?: TurnExtra,
+  ): Promise<void> {
     if (project?.enabled === false || projectMutations.has(msg.chatId) || resumePublications.has(msg.chatId)) return Promise.resolve();
     const owner = active.get(sessionKey);
     return orderTurns(sessionKey, async () => {
@@ -1341,7 +1381,7 @@ export function createOrchestrator(
         await channel.send(msg.chatId, { markdown: '排队期间会话已停止，请重发本条消息。' }, { replyTo: msg.messageId, replyInThread: !flat }).catch(() => undefined);
         return;
       }
-      await prepareTurn(msg, text, sessionKey, flat, project, perm);
+      await prepareTurn(msg, text, sessionKey, flat, project, perm, extra);
     });
   }
 
@@ -1352,6 +1392,7 @@ export function createOrchestrator(
     flat: boolean,
     project: Project | undefined,
     perm: TurnPerm,
+    extra?: TurnExtra,
   ): Promise<void> {
     // Mid-turn: steer (引导) or queue (排队).
     const existing = active.get(sessionKey);
@@ -1367,7 +1408,8 @@ export function createOrchestrator(
       // turn, so there's no reservation race to protect; gated on
       // messageHasImages so the common text path stays await-free and fast.
       const [images, woven] = await Promise.all([
-        messageHasImages(msg) ? collectInboundImages(channel, msg) : Promise.resolve(undefined),
+        extra?.images ? Promise.resolve(extra.images)
+          : messageHasImages(msg) ? collectInboundImages(channel, msg) : Promise.resolve(undefined),
         ingestContext(msg, text),
       ]);
       if (existing.intakeCancelled) {
@@ -1378,7 +1420,7 @@ export function createOrchestrator(
       // If it's gone, start a fresh run (carrying what we already fetched).
       const cur = active.get(sessionKey);
       if (!cur) {
-        startReservedRun(msg, woven.text, sessionKey, flat, project, perm, images, woven, text);
+        startReservedRun(msg, woven.text, sessionKey, flat, project, perm, images, woven, extra?.summary ?? text);
         return;
       }
       // A goal may have started while media downloaded — same prompt as above.
@@ -1386,12 +1428,12 @@ export function createOrchestrator(
         await replyGoalBusy(msg, flat);
         return;
       }
-      void trackTask(deliverPreparedTurn(msg, woven, images, text, sessionKey, flat, project, perm, cur)
+      void trackTask(deliverPreparedTurn(msg, woven, images, extra?.summary ?? text, sessionKey, flat, project, perm, cur, extra?.queueOnly)
         .catch((err) => log.fail('intake', err)));
       return;
     }
 
-    startReservedRun(msg, text, sessionKey, flat, project, perm);
+    startReservedRun(msg, text, sessionKey, flat, project, perm, extra?.images, undefined, extra?.summary);
   }
 
   // Keep preparation ordered, but do not pin the lane on an uncertain steer ACK.
@@ -1399,8 +1441,9 @@ export function createOrchestrator(
   async function deliverPreparedTurn(
     msg: NormalizedMessage, woven: IngestedContext, images: string[] | undefined, text: string,
     sessionKey: string, flat: boolean, project: Project | undefined, perm: TurnPerm, cur: ActiveState,
+    queueOnly = false,
   ): Promise<void> {
-    if (getPendingPolicy(cfg) === 'steer' && cur.run && cur.thread && cur.thread.supportsSteer !== false) {
+    if (!queueOnly && getPendingPolicy(cfg) === 'steer' && cur.run && cur.thread && cur.thread.supportsSteer !== false) {
       const tid = cur.run.turnId();
       if (tid) {
         const voiceReply = cur.voiceReply?.run === cur.run ? cur.voiceReply : undefined;
@@ -2280,13 +2323,8 @@ export function createOrchestrator(
   }(channel, cfg);
   const outboundFiles = new OutboundFiles(paths.outboundFilesDir);
   void trackTask(outboundFiles.recover(channel));
-  outboundFiles.register(dispatcher, async (record, openId) => {
-    if (!openId || !isChatAllowed(cfg, record.chatId)) return undefined;
-    const project = await getProjectByChatId(record.chatId);
-    if (!project || project.cwd !== record.cwd || !isUserAllowedInProject(cfg, project, openId)) return undefined;
-    if (openId !== record.requesterOpenId && !isAdmin(cfg, openId)) return undefined;
-    return turnTier(project, isAdmin(cfg, openId)).mode;
-  });
+  outboundFiles.register(dispatcher, async (record, openId) =>
+    fileClaimMode(cfg, await getProjectByChatId(record.chatId), record, openId));
   cliBridge?.register(dispatcher);
   const PENDING_TTL_MS = 30 * 60_000; // abandoned config cards expire after 30 min
   // Goal runs have NO total wall-clock cap (a healthy goal may legitimately run
@@ -2511,10 +2549,10 @@ export function createOrchestrator(
    * 只删 {@link CONTROLS_EID} 控件行（其余内容无从重建；实体 seq 也丢了，用
    * epoch 秒——必大于按帧自增的运行期计数）。改版前的旧卡没有该 element_id，
    * 删除失败仅记日志（告知已发出）。卡片改动等 CARD_SETTLE_MS，避开点击互动窗。 */
-  const healDeadRunCard = (evt: CardActionEvent, key: string, actionId: string): void => {
+  const healDeadRunCard = (evt: CardActionEvent, key: string, actionId: string, notice = 'ℹ️ 该任务已结束，按钮已失效。'): void => {
     if (runControlNotes.seen(`dead:${key}`)) return; // 已答复过 / 自愈在路上
     void trackTask(channel
-      .send(evt.chatId, { markdown: 'ℹ️ 该任务已结束，按钮已失效。' }, { replyTo: evt.messageId })
+      .send(evt.chatId, { markdown: notice }, { replyTo: evt.messageId })
       .catch(() => undefined));
     const rc = runCards.get(key);
     const stream = runStreams.get(key);
@@ -2617,7 +2655,55 @@ export function createOrchestrator(
       }
       st.endGoal?.();
       log.info('card', 'action', { actionId: 'goal.end', ended: Boolean(st.endGoal) });
+    })
+    // 🔁 重试 (terminal card of an idle-timeout / network failure): run that
+    // turn's input again. Same gate as 👍 继续: the requester or an admin, still
+    // allowed in the project. One tap consumes it.
+    .on(RC.retry, ({ evt, value }) => {
+      const key = typeof value.m === 'string' ? value.m : evt.messageId;
+      if (!runAllowed(evt)) return;
+      const retry = retryTurns.get(key);
+      if (!retry) {
+        healDeadRunCard(evt, key, RC.retry, 'ℹ️ 这个重试按钮已失效（之后已经有新的回合，或者 bot 重启过）。要重试，请重新发送原消息。');
+        return;
+      }
+      if (!runOwnerOrAdmin(evt, retry.turn.requesterOpenId)) {
+        denyRunControl(evt, key, RC.retry, '重试');
+        return;
+      }
+      retryTurns.delete(key); // synchronous: a double tap finds nothing
+      void trackTask(retryTurn(evt, key, retry).catch((err) => log.fail('card', err, { phase: 'run-retry' })));
     });
+
+  async function retryTurn(evt: CardActionEvent, key: string, retry: RetryTurn): Promise<void> {
+    const op = evt.operator?.openId ?? '';
+    const project = await getProjectByChatId(retry.chatId);
+    if (!isUserAllowedInProject(cfg, project, op)) {
+      if (!retryTurns.has(key)) retryTurns.set(key, retry);
+      denyRunControl(evt, key, RC.retry, '重试');
+      return;
+    }
+    const rc = runCards.get(key);
+    const stream = runStreams.get(key);
+    if (rc && stream) {
+      rc.retry = 'sent';
+      void trackTask((async () => {
+        await new Promise((r) => setTimeout(r, CARD_SETTLE_MS));
+        await stream.updateCard(channel, buildRunCard(rc));
+      })().catch((err) => log.fail('card', err, { phase: 'run-retry-repaint' })));
+    }
+    // Media is pruned after an hour; send what is still on disk.
+    const images = (await Promise.all((retry.turn.input.images ?? []).map(async (path) =>
+      (await stat(path).then((st) => st.isFile(), () => false)) ? path : undefined))).filter((p): p is string => Boolean(p));
+    const text = retryPrompt(retry, retry.turn.input.text ?? '');
+    log.info('intake', 'retry', { key: retry.sessionKey, reason: retry.reason, op: op.slice(-6) });
+    await handleTurn(
+      cardTurnMessage(key, retry.chatId, op, text, retry.sessionKey, retry.flat),
+      text, retry.sessionKey, retry.flat, project,
+      turnPerm(project, retry.turn.requesterOpenId ?? op),
+      { images: images.length ? images : undefined, summary: retry.turn.summary ?? retry.turn.titleSource.text, queueOnly: true },
+    );
+  }
 
   // DM management console buttons (design §3.1). Admin-gated; sub-views patch
   // the same card in place, each carrying a ⬅️ 菜单 back button.
@@ -3325,7 +3411,7 @@ export function createOrchestrator(
     })
     .on(DM.setWatchdog, ({ evt, value }) => {
       const n = Number(value.v);
-      if (Number.isFinite(n)) applyPref(evt, (p) => (p.runIdleTimeoutSeconds = n));
+      if (Number.isFinite(n) && n >= 0) applyPref(evt, (p) => (p.runIdleTimeoutSeconds = normalizeRunIdleTimeoutSeconds(n)));
     })
     // 「自定义…」→ 打开输入卡（设置卡本身保持纯按钮、不会锁死）
     .on(DM.watchdogCustom, ({ evt }) => {
@@ -3341,9 +3427,7 @@ export function createOrchestrator(
         void patch(evt, buildWatchdogCustomCard(cfg));
         return;
       }
-      const sec =
-        n === 0 ? 0 : Math.min(Math.max(Math.floor(n), RUN_IDLE_TIMEOUT_MIN_SEC), RUN_IDLE_TIMEOUT_MAX_SEC);
-      applyPref(evt, (p) => (p.runIdleTimeoutSeconds = sec));
+      applyPref(evt, (p) => (p.runIdleTimeoutSeconds = normalizeRunIdleTimeoutSeconds(n)));
     })
     .on(DM.setCompletionReminder, ({ evt, value }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
@@ -4421,6 +4505,7 @@ export function createOrchestrator(
         if (prevState && prevStream) void trackTask(prevStream.updateCard(channel, buildRunCardPlain(prevState)));
         runCards.delete(prev);
         runStreams.delete(prev);
+        retryTurns.delete(prev);
       }
       lastRunCard.set(topicThreadId, cardMsgId);
       runCards.set(cardMsgId, rc);
@@ -4448,6 +4533,7 @@ export function createOrchestrator(
       for (;;) {
         const turnInput = currentTurn.input;
         state.requesterOpenId = currentTurn.requesterOpenId;
+        dropRetries(topicThreadId); // an older card's [重试] would replay out of order
         if (titleTurnAttempted && !titleStart && opts.titleJobKey) {
           // A prior turn/start was rejected before turn_started. If a queued
           // follow-up now becomes the first accepted turn, title that message,
@@ -4675,6 +4761,8 @@ export function createOrchestrator(
         disposeInterrupt = stopper.dispose;
         state.interrupt = () => { state.intakeCancelled = true; stopper.interrupt(); };
         const idleMs = currentIdleMs();
+        const idlePause = createIdlePause();
+        state.idlePause = idlePause;
         const guarded = withIdleTimeout(
           run.events,
           idleMs,
@@ -4683,6 +4771,7 @@ export function createOrchestrator(
           },
           stopSignal,
           run.lastActivity, // raw-notification liveness: a long shell command isn't "idle"
+          idlePause,
         );
         // Per-turn stream-latency observability (file log `stream.timing`): locates
         // where a reply lags — first byte, backlog (lastEv vs done), push split, RTT.
@@ -4739,6 +4828,7 @@ export function createOrchestrator(
         clearInterval(cardClock);
         cardClock = undefined;
         state.steerReply = undefined;
+        state.idlePause = undefined;
         state.run = undefined; // completion-card I/O must queue, never steer into a finished turn
         const doneAt = Date.now(); // codex stopped emitting / loop ended
         stopper.dispose(); // 事件流已收尾：撤掉 ⏹ 的 5s 强停兜底定时器
@@ -4803,6 +4893,19 @@ export function createOrchestrator(
           // The ```feishu-card fences are hoisted into standalone clean cards here.
           // Best-effort throughout: an unresolved ref renders as text, a failed
           // card is logged.
+          // [重试] for a turn that went quiet or lost the model (product.md 3.12).
+          // Not when follow-ups are queued: they run next and would make a replay
+          // land out of order.
+          const retryReason = timedOut ? 'idle' as const
+            : rc.rs.terminal === 'error' && rc.rs.errorKind === 'network' ? 'network' as const : undefined;
+          if (retryReason && topicThreadId && state.queue.length === 0) {
+            retryTurns.set(finalMsgId, {
+              sessionKey: topicThreadId, chatId: opts.chatId, flat: Boolean(opts.flat), turn: currentTurn,
+              reason: retryReason, idleSeconds: Math.round(idleMs / 1000),
+            });
+            rc.retry = 'available';
+          }
+
           const answerText = finalMessageText(rc.rs);
           rc.localFiles = await outboundFiles.prepare(answerText, {
             messageId: finalMsgId, chatId: opts.chatId, cwd: runCwd,
@@ -5088,6 +5191,7 @@ export function createOrchestrator(
         if (prevState && prevStream) void trackTask(prevStream.updateCard(channel, buildRunCardPlain(prevState)));
         runCards.delete(prev);
         runStreams.delete(prev);
+        retryTurns.delete(prev);
       }
       lastRunCard.set(topicThreadId, msgId);
       runCards.set(msgId, card);
@@ -5213,9 +5317,10 @@ export function createOrchestrator(
       // only fires when codex goes fully silent. stopSignal/endSignal end the loop
       // WITHOUT killing the process, so we can clear the goal + recycle cleanly.
       const stop = Promise.race([stopSignal, endSignal]);
+      state.idlePause = createIdlePause();
       const guarded = withIdleTimeout(run.events, GOAL_IDLE_MS, () => {
         idledOut = true;
-      }, stop, run.lastActivity);
+      }, stop, run.lastActivity, state.idlePause);
       for await (const ev of guarded) {
         if (ev.type === 'goal_update') {
           lastStatus = ev.status;
@@ -5426,7 +5531,8 @@ export function createOrchestrator(
 
             let state: RunState = initialState;
             let timedOut = false;
-            const guarded = withIdleTimeout(run.events, currentIdleMs(), () => {
+            const idleMs = currentIdleMs();
+            const guarded = withIdleTimeout(run.events, idleMs, () => {
               timedOut = true;
             }, undefined, run.lastActivity);
             for await (const ev of guarded) state = reduce(state, ev);
@@ -5452,7 +5558,11 @@ export function createOrchestrator(
 
             let reply = stripMarkdown(finalMessageText(state)).trim();
             if (state.terminal === 'error' && state.errorMsg) reply = `⚠️ 出错了：${state.errorMsg}`;
-            if (!reply) reply = timedOut ? '（处理超时，请重试或把问题问得更具体些）' : '（没有可回复的内容）';
+            if (timedOut) {
+              const stopped = `${idleLabel(Math.round(idleMs / 1000))}没有输出，已停止`;
+              reply = reply ? `${reply}\n\n（${stopped}）` : `（${stopped}。可以再 @ 我一次，或者把问题问得更具体些）`;
+            }
+            if (!reply) reply = '（没有可回复的内容）';
             if (reply.length > REPLY_MAX_CHARS) reply = `${reply.slice(0, REPLY_MAX_CHARS - 1)}…`;
 
             await postCommentReply(channel, target, evt, reply).catch((err) =>
@@ -5638,6 +5748,27 @@ export function createOrchestrator(
    * 在话题里发「继续」。事件天然限机器人所在会话；缺 im:message.reactions:read
    * scope 时事件根本不会推送 —— 整条链路零报错地静默关闭。
    */
+  /** A message posed as if `senderId` sent `content` in reply to the run card
+   * `cardMessageId`, so 👍 继续 and 🔁 重试 reuse the whole message pipeline. */
+  function cardTurnMessage(
+    cardMessageId: string, chatId: string, senderId: string, content: string, sessionKey: string, flat: boolean,
+  ): NormalizedMessage {
+    return {
+      messageId: cardMessageId,
+      chatId,
+      chatType: 'group',
+      senderId,
+      content,
+      rawContentType: 'text',
+      resources: [],
+      mentions: [],
+      mentionAll: false,
+      mentionedBot: true,
+      threadId: flat ? undefined : sessionKey.replace(/#(admin|guest)$/, ''),
+      createTime: Date.now(),
+    };
+  }
+
   const onReaction = async (evt: ReactionEvent): Promise<void> => {
     if (evt.action !== 'added') return;
     // 机器人（含自己的 ⏳/🫳/OKR 生命周期表情）不能触发自己：事件体 operator_type
@@ -5684,20 +5815,7 @@ export function createOrchestrator(
       // 合成一条等价的「继续」消息复用整条消息管线（steer/queue/goal 提示全部
       // 生效）：replyTo 指向被点的终态卡，⏳/🫳 生命周期表情也落在卡上作回执；
       // sessionKey 用卡片自己的会话键（含 #role 后缀），续的就是这张卡的会话。
-      const synthetic: NormalizedMessage = {
-        messageId: evt.messageId,
-        chatId: rec.chatId,
-        chatType: 'group',
-        senderId: op,
-        content: '继续',
-        rawContentType: 'text',
-        resources: [],
-        mentions: [],
-        mentionAll: false,
-        mentionedBot: true,
-        threadId: flat ? undefined : baseKey,
-        createTime: Date.now(),
-      };
+      const synthetic = cardTurnMessage(evt.messageId, rec.chatId, op, '继续', sessionKey, flat);
       log.info('intake', 'reaction-continue', { key: sessionKey, op: op.slice(-6) });
       // 权限档随会话原发起人（LIVE 线程本就钉死在 thread/start 的沙箱档；
       // recreate 兜底时也不该因点赞者身份升降档）。

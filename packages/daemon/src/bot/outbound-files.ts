@@ -10,7 +10,9 @@ import { scanLocalFiles, type LocalFileRef } from '../card/file-refs';
 import type { CardElement } from '../card/cards';
 import { fileComponentCount, renderFileAnswer, type InlineFiles } from '../card/inline-files';
 import type { CardDispatcher } from '../card/dispatcher';
+import { isAdmin, isChatAllowed, isUserAllowedInProject, type AppConfig } from '../config/schema';
 import { log } from '../core/logger';
+import { turnTier, type Project } from '../project/registry';
 import { checkUploadPath, uploadPlan } from '../provider/outbound/policy';
 
 export const FILE_GET = 'file.get';
@@ -52,6 +54,23 @@ export interface FileContext {
 interface Manifest extends FileContext { files: FileEntry[]; sequence?: number }
 type Paint = (elementId: string, element: CardElement) => Promise<boolean>;
 type Authorize = (context: FileContext, openId: string) => Promise<PermissionMode | undefined>;
+
+const CLAIM_DENIED = '当前无权获取此文件：只有本群能使用 bot 的成员可以领取';
+
+/**
+ * Who may claim a file linked in a bot answer (product.md 3.12): anyone allowed
+ * to use the bot in that group, not only the turn's requester (bridge issue
+ * #43). Returns the clicker's own tier, which {@link OutboundFiles} intersects
+ * with the tier the file was written under; undefined refuses.
+ */
+export function fileClaimMode(
+  cfg: AppConfig, project: Project | undefined, record: Pick<FileContext, 'chatId' | 'cwd'>, openId: string,
+): PermissionMode | undefined {
+  if (!openId || !isChatAllowed(cfg, record.chatId)) return undefined;
+  if (!project || project.enabled === false || project.cwd !== record.cwd) return undefined;
+  if (!isUserAllowedInProject(cfg, project, openId)) return undefined;
+  return turnTier(project, isAdmin(cfg, openId)).mode;
+}
 interface FileClick { messageId: string; chatId: string; operator?: { openId?: string } }
 
 /** Raw IM responses return message_position; message_app_link is sometimes
@@ -377,7 +396,7 @@ export class OutboundFiles {
       manifest = JSON.parse(await readFile(join(this.dir, `${id}.json`), 'utf8')) as Manifest;
       if (manifest.messageId !== evt.messageId || manifest.chatId !== evt.chatId) return;
       const mode = await authorize(manifest, evt.operator?.openId ?? '');
-      if (!mode) throw new Error('当前无权获取此文件，请由任务发起人或管理员操作');
+      if (!mode) throw new Error(CLAIM_DENIED);
       authorized = true;
       file = manifest.files[index];
       if (!file?.occurrences?.length) throw new Error('文件入口已失效，请让 agent 重新引用文件');
@@ -426,7 +445,7 @@ export class OutboundFiles {
       log.info('outbound', 'file-sent', { messageId: manifest.messageId, bytes: file.size });
     } catch (err) {
       log.fail('outbound', err, { phase: 'file-get' });
-      const message = manifest ? (authorized ? friendly(err) : '当前无权获取此文件，请由任务发起人或管理员操作') : '文件入口已失效，请让 agent 重新引用文件';
+      const message = manifest ? (authorized ? friendly(err) : CLAIM_DENIED) : '文件入口已失效，请让 agent 重新引用文件';
       if (manifest && authorized && file?.occurrences?.length && !file.messageId) {
         file.error = friendly(err);
         file.needsPaint = true;

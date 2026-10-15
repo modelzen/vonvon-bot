@@ -12,6 +12,10 @@
  * shell command can stream output for minutes while yielding nothing here.
  * When the idle timer fires we check the backend's real activity clock — if it
  * moved within `idleMs`, re-arm for the remainder instead of killing the turn.
+ *
+ * `pause` stops the clock while someone holds it (product.md 3.8: a turn waiting
+ * on a person's answer card is not "没输出"). Releasing the last hold starts a
+ * full `idleMs` window over.
  */
 export async function* withIdleTimeout<T>(
   source: AsyncIterable<T>,
@@ -19,6 +23,7 @@ export async function* withIdleTimeout<T>(
   onTimeout: () => void,
   stop?: Promise<unknown>,
   lastActivity?: () => number,
+  pause?: IdlePause,
 ): AsyncGenerator<T> {
   if ((!idleMs || idleMs <= 0) && !stop) {
     yield* source;
@@ -34,17 +39,28 @@ export async function* withIdleTimeout<T>(
   while (true) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     pendingNext ??= iter.next();
-    const races: Promise<IteratorResult<T> | '__idle__' | '__stop__'>[] = [pendingNext];
+    const races: Promise<IteratorResult<T> | '__idle__' | '__stop__' | '__released__'>[] = [pendingNext];
     if (idleMs && idleMs > 0) {
-      races.push(new Promise<'__idle__'>((res) => {
-        timer = setTimeout(() => res('__idle__'), timerMs);
-      }));
+      if (pause?.held) {
+        races.push(pause.released().then(() => '__released__' as const));
+      } else {
+        races.push(new Promise<'__idle__'>((res) => {
+          timer = setTimeout(() => res('__idle__'), timerMs);
+        }));
+      }
     }
     if (stopRace) races.push(stopRace);
     const raced = await Promise.race(races);
     if (timer) clearTimeout(timer);
+    if (raced === '__released__') {
+      timerMs = idleMs;
+      continue;
+    }
     if (raced === '__idle__') {
-      const sinceActivity = lastActivity ? Date.now() - lastActivity() : Infinity;
+      // A hold taken while the timer was armed: the next lap waits for release.
+      if (pause?.held) continue;
+      const lastAt = Math.max(lastActivity?.() ?? -Infinity, pause?.releasedAt() ?? -Infinity);
+      const sinceActivity = Date.now() - lastAt;
       if (sinceActivity < idleMs) {
         timerMs = idleMs - sinceActivity; // real activity recently — re-arm for the remainder
         continue;
@@ -59,6 +75,56 @@ export async function* withIdleTimeout<T>(
     if (r.done) return;
     yield r.value;
   }
+}
+
+/**
+ * Stops one turn's idle watchdog while a hold is out (for s30's answer cards).
+ * Holds nest; each release function works once.
+ */
+export interface IdlePause {
+  hold(): () => void;
+  readonly held: boolean;
+  /** Settles once no hold is out (immediately when none is). */
+  released(): Promise<void>;
+  /** Epoch ms of the last time the final hold was released, or -Infinity. */
+  releasedAt(): number;
+}
+
+export function createIdlePause(now: () => number = Date.now): IdlePause {
+  let holds = 0;
+  let lastRelease = -Infinity;
+  let waiting: { promise: Promise<void>; wake: () => void } | undefined;
+  return {
+    hold() {
+      holds++;
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        holds--;
+        if (holds > 0) return;
+        lastRelease = now();
+        const w = waiting;
+        waiting = undefined;
+        w?.wake();
+      };
+    },
+    get held() {
+      return holds > 0;
+    },
+    released() {
+      if (holds === 0) return Promise.resolve();
+      if (!waiting) {
+        let wake!: () => void;
+        const promise = new Promise<void>((res) => {
+          wake = res;
+        });
+        waiting = { promise, wake };
+      }
+      return waiting.promise;
+    },
+    releasedAt: () => lastRelease,
+  };
 }
 
 /** ⏹ 优雅中断的兜底窗口：turn/interrupt 发出后等不到事件流自然收尾（codex 旧版

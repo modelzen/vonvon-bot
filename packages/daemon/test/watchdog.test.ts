@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createGracefulInterrupt,
+  createIdlePause,
   INTERRUPT_DRAIN_TIMEOUT_MS,
   Semaphore,
   withIdleTimeout,
@@ -165,6 +166,74 @@ describe('withIdleTimeout', () => {
     await expect(second).resolves.toEqual({ done: true, value: undefined });
     expect(onTimeout).toHaveBeenCalledTimes(1);
     clearInterval(heartbeat);
+  });
+
+  it('does not fire while a hold is out, then gives a full window after release', async () => {
+    vi.useFakeTimers();
+    const onTimeout = vi.fn();
+    const pause = createIdlePause();
+    const iter = withIdleTimeout(neverEnding('first'), 1_000, onTimeout, undefined, undefined, pause)[
+      Symbol.asyncIterator
+    ]();
+    await expect(iter.next()).resolves.toEqual({ done: false, value: 'first' });
+    const second = iter.next();
+    await vi.advanceTimersByTimeAsync(400);
+    const release = pause.hold(); // taken while the timer is armed
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(onTimeout).not.toHaveBeenCalled();
+    release();
+    release(); // a second call is a no-op
+    await vi.advanceTimersByTimeAsync(999);
+    expect(onTimeout).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(second).resolves.toEqual({ done: true, value: undefined });
+    expect(onTimeout).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps nested holds until the last one is released', async () => {
+    vi.useFakeTimers();
+    const onTimeout = vi.fn();
+    const pause = createIdlePause();
+    const a = pause.hold();
+    const b = pause.hold();
+    const iter = withIdleTimeout(neverEnding('first'), 1_000, onTimeout, undefined, () => 0, pause)[
+      Symbol.asyncIterator
+    ]();
+    await iter.next();
+    const second = iter.next();
+    a();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(onTimeout).not.toHaveBeenCalled();
+    b();
+    // lastActivity is ancient, but the release itself starts the window over
+    await vi.advanceTimersByTimeAsync(999);
+    expect(onTimeout).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(second).resolves.toEqual({ done: true, value: undefined });
+    expect(onTimeout).toHaveBeenCalledTimes(1);
+  });
+
+  it('still yields events and honors stop while paused', async () => {
+    vi.useFakeTimers();
+    const onTimeout = vi.fn();
+    const pause = createIdlePause();
+    pause.hold();
+    let stop!: () => void;
+    const stopped = new Promise<void>((res) => { stop = res; });
+    const out: string[] = [];
+    const done = (async () => {
+      for await (const v of withIdleTimeout(
+        delayedValues([{ delayMs: 5_000, value: 'a' }, { delayMs: 90_000, value: 'never' }]),
+        1_000, onTimeout, stopped, undefined, pause,
+      )) out.push(v);
+    })();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(out).toEqual(['a']);
+    stop();
+    await vi.advanceTimersByTimeAsync(0);
+    await done;
+    expect(out).toEqual(['a']);
+    expect(onTimeout).not.toHaveBeenCalled();
   });
 
   it('re-arming keeps waiting on the same pending next() — a late value is not dropped', async () => {
