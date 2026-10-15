@@ -36,7 +36,7 @@ product.md 3.10 说：macOS 上用用户级 LaunchAgent 跑 daemon，"用户登�
 | 钥匙串里服务名为 `Claude Code-credentials` 的条目 | 没有（退出码 44） | 同左 |
 | 钥匙串里服务名为 `Codex Auth` 的条目 | 没有（退出码 44） | 同左 |
 
-- Claude 的凭据来自 `ANTHROPIC_AUTH_TOKEN`。#301 的 Mac 检查查过，owner 把它写在 `~/.claude/settings.json` 的 `env` 里；这次没再核对文件。Codex 的登录来源没查，只知道钥匙串里没有 `Codex Auth` 这个服务名。所以这次**没有验证到"读钥匙串"这条路**：LaunchAgent 下的结果和终端一样，说明 launchd 给的真实 HOME 够用，但说明不了钥匙串。
+- Claude 的凭据来自 `ANTHROPIC_AUTH_TOKEN`。v1-plan 里 s03（#301 Claude 登录检测）留下的记录说，owner 把它写在 `~/.claude/settings.json` 的 `env` 里；这次没核对文件。Codex 的登录来源没查，只知道钥匙串里没有 `Codex Auth` 这个服务名。所以这次**没有验证到"读钥匙串"这条路**：LaunchAgent 下的结果和终端一样，说明 launchd 给的真实 HOME 够用，但说明不了钥匙串。
 - 两边都只做了登录检测，没有发真实的模型请求，凭据本身是否还有效没验证。
 - PATH 很短，codex 照样找到了 nvm 下的那个。按 s03 的说明，找 codex 时会查 nvm 等目录（推断，这次没看是哪条路找到的）。
 - 截屏时没看到钥匙串访问的系统对话框（只在截屏那一刻看过）。钥匙串里本来就没有这两个条目，这一点也说明不了用钥匙串登录的人会不会弹窗。
