@@ -1280,9 +1280,11 @@ export function createOrchestrator(
   }
 
   /** A message to this bot that got no answer, for the 状态与诊断 page (s19). The sender only from the
-   * name cache, never looked up; no text. Rule mode's messages not meant for it are never noted. */
+   * name cache, never looked up; no text. Rule mode's messages not meant for it are never noted, nor a
+   * recalled one whose turn failed after the recall (s15). */
   function noteNotReplied(msg: NotedMessage, reason: NotRepliedReason,
     extra: { place?: NotReplied['place']; backendId?: string | undefined; detail?: string | undefined } = {}): void {
+    if (recalled.has(msg.messageId)) return;
     const sender = names.peek(msg.senderId)?.slice(0, 64);
     const backend = backendTool(extra.backendId);
     reportNotReplied({

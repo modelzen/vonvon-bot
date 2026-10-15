@@ -142,6 +142,19 @@ describe('failed turns', () => {
     expect(records()).toEqual([]);
   });
 
+  it('does not note a turn whose message was recalled while it ran', async () => {
+    let recall!: () => void;
+    const recalled = new Promise<void>(resolve => { recall = resolve; });
+    fake.stream = async function* () { await recalled; yield { type: 'error', message: '401 Unauthorized', willRetry: false }; };
+    const msg = message();
+    await orchestrator.onMessage(msg);
+    await vi.waitFor(() => expect(startThread).toHaveBeenCalled());
+    await orchestrator.onRecall({ messageId: msg.messageId, chatId: msg.chatId });
+    recall();
+    await vi.waitFor(() => expect(fake.log.info).toHaveBeenCalledWith('card', 'final', { terminal: 'error' }));
+    expect(records()).toEqual([]);
+  });
+
   it('notes a Codex login failure with its backend', async () => {
     fake.events = [{ type: 'error', message: '401 Unauthorized', willRetry: false }];
     await orchestrator.onMessage(message());
