@@ -10,8 +10,9 @@ import { stopVerifiedOwner, verifyPidLockOwner } from '../server/owner-verificat
 import { renderDefinition, type Definition } from './definitions';
 import { runtimeDistribution } from './distribution';
 import { createServiceDrain, type DrainFailure, type DrainScope, type OwnerIdentity } from './drain';
-import { SYSTEMD_UNIT_NAME, resolveServiceRoot, serviceTarget, type CanonicalRoot } from './identity';
-import { readRegistration, type Registration } from './registration';
+import { resolveServiceRoot, serviceTarget, type CanonicalRoot } from './identity';
+import { readDefinitionBytes, readRegistration, type Registration } from './registration';
+import { withToolDirectories } from '../platform/tool-path';
 
 type CommandResult = { ok: boolean; status: number | null; stdout: string; stderr: string };
 type UnitObservation =
@@ -27,7 +28,8 @@ type TransactionOutcome = {
   retained: OwnerIdentity | null;
   leftovers: readonly string[];
 };
-type Snapshot = { root: CanonicalRoot; target: { platform: 'linux'; unitPath: string }; expected: Uint8Array | null; temporaryLeftovers: string[] };
+type LinuxTarget = { platform: 'linux'; unitName: string; unitPath: string };
+type Snapshot = { root: CanonicalRoot; target: LinuxTarget; expected: Uint8Array | null; temporaryLeftovers: string[] };
 type RemovalResult =
   | { kind: 'unloaded' }
   | DrainFailure
@@ -49,6 +51,8 @@ type Dependencies = {
   now: () => number;
   home: string;
   xdgConfigHome: string | undefined;
+  /** The unit's name and path; derived from the data root (`serviceTarget`). */
+  target: (root: CanonicalRoot) => LinuxTarget;
   executable: string;
   capturedPath: string;
 };
@@ -95,13 +99,21 @@ export function createSystemdService(options: { root: string }, overrides: Parti
     distribution: runtimeDistribution, readOwner: readRunningPidLock, verifyOwner: verifyPidLockOwner,
     stopOwner: stopVerifiedOwner, mkdir, open, rename, unlink, freePort,
     pause: ms => new Promise(resolve => setTimeout(resolve, ms)), now: Date.now,
-    home: homedir(), xdgConfigHome: process.env.XDG_CONFIG_HOME, executable: process.execPath, capturedPath: process.env.PATH ?? '', ...overrides,
+    home: homedir(), xdgConfigHome: process.env.XDG_CONFIG_HOME, executable: process.execPath, capturedPath: withToolDirectories(process.env.PATH, homedir(), 'linux'),
+    target: root => {
+      const target = serviceTarget({ platform: 'linux', home: d.home, root, xdgConfigHome: d.xdgConfigHome });
+      if (target.platform !== 'linux') throw new Error('Invalid systemd target');
+      return target;
+    },
+    ...overrides,
   };
+  // Set by snapshot(), which every operation calls first: the unit name follows the data root.
+  let unitName = '';
   const drain = createServiceDrain({ readRunningPidLock: d.readOwner, stopVerifiedOwner: d.stopOwner, pause: d.pause });
   async function snapshot(): Promise<Snapshot> {
     const root = await d.resolveRoot(options.root);
-    const target = serviceTarget({ platform: 'linux', home: d.home, xdgConfigHome: d.xdgConfigHome });
-    if (target.platform !== 'linux') throw new Error('Invalid systemd target');
+    const target = d.target(root);
+    unitName = target.unitName;
     return { root, target, expected: null, temporaryLeftovers: [] };
   }
   const registration = (s: Snapshot): Promise<Registration> => d.registration({ target: s.target, requestedRoot: s.root });
@@ -116,7 +128,7 @@ export function createSystemdService(options: { root: string }, overrides: Parti
   }
   async function observeUnit(): Promise<UnitObservation> {
     try {
-      const result = await d.run(['show', '-p', 'LoadState', '-p', 'FragmentPath', '-p', 'MainPID', SYSTEMD_UNIT_NAME], 30_000);
+      const result = await d.run(['show', '-p', 'LoadState', '-p', 'FragmentPath', '-p', 'MainPID', unitName], 30_000);
       if (!result.ok || result.status !== 0) throw new Error(result.stderr || 'systemctl show failed');
       const fields = new Map<string, string>();
       for (const line of result.stdout.trimEnd().split('\n')) {
@@ -138,7 +150,7 @@ export function createSystemdService(options: { root: string }, overrides: Parti
   }
   async function observeEnabled(): Promise<EnableObservation> {
     try {
-      const r = await d.run(['is-enabled', SYSTEMD_UNIT_NAME], 30_000);
+      const r = await d.run(['is-enabled', unitName], 30_000);
       const state = r.stdout.trim();
       if (r.ok && r.status === 0 && state === 'enabled') return { kind: 'enabled' };
       const successfulState = r.ok && r.status === 0 && /^(static|indirect|enabled-runtime|alias|generated|transient)$/.test(state);
@@ -149,15 +161,14 @@ export function createSystemdService(options: { root: string }, overrides: Parti
     } catch (error) { return { kind: 'unknown', detail: detailOf(error) }; }
   }
   async function queryJobPid(): Promise<number | null> {
-    const r = await d.run(['show', '-p', 'MainPID', '--value', SYSTEMD_UNIT_NAME], 30_000);
+    const r = await d.run(['show', '-p', 'MainPID', '--value', unitName], 30_000);
     if (!r.ok || r.status !== 0) throw new Error(r.stderr || 'MainPID query failed');
     return mainPid(r.stdout.trim());
   }
   async function checkExpected(s: Snapshot): Promise<void> {
-    const current = await registration(s);
-    if (s.expected === null && current.kind === 'absent') return;
-    if (s.expected !== null && current.kind === 'ours' && Buffer.from(s.expected).equals(bytes(s, current.definition))) return;
-    throw new Error(`Registration changed before mutation: ${registrationDetail(current)}`);
+    const current = await readDefinitionBytes(s.target);
+    if (s.expected === null ? current === null : current !== null && current.equals(s.expected)) return;
+    throw new Error(`Registration changed before mutation: ${registrationDetail(await registration(s))}`);
   }
   async function atomicWrite(s: Snapshot, content: Uint8Array): Promise<void> {
     await d.mkdir(dirname(s.target.unitPath), { recursive: true });
@@ -183,7 +194,7 @@ export function createSystemdService(options: { root: string }, overrides: Parti
     try {
       await checkExpected(s);
       if (s.expected !== null) {
-        await command(['disable', SYSTEMD_UNIT_NAME]);
+        await command(['disable', unitName]);
         await checkExpected(s);
         await d.unlink(s.target.unitPath);
         s.expected = null;
@@ -193,9 +204,9 @@ export function createSystemdService(options: { root: string }, overrides: Parti
     if (result.kind === 'drain-failed') return result;
     try {
       await command(['daemon-reload']);
-      const reset = await d.run(['reset-failed', SYSTEMD_UNIT_NAME], 30_000);
+      const reset = await d.run(['reset-failed', unitName], 30_000);
       if (!(reset.ok && reset.status === 0) && !(!reset.ok && reset.status === 1)) {
-        throw new Error(`systemctl reset-failed ${SYSTEMD_UNIT_NAME}: ${reset.stderr || reset.stdout || 'failed'}`);
+        throw new Error(`systemctl reset-failed ${unitName}: ${reset.stderr || reset.stdout || 'failed'}`);
       }
       await checkExpected(s);
       const observed = await observeUnit();
@@ -228,7 +239,7 @@ export function createSystemdService(options: { root: string }, overrides: Parti
     await checkExpected(s);
     if (content !== null) {
       await atomicWrite(s, content);
-      await command(['enable', SYSTEMD_UNIT_NAME]);
+      await command(['enable', unitName]);
       await checkExpected(s);
       const enabled = await observeEnabled();
       if (enabled.kind !== 'enabled') throw new Error('Restoration enable state was not confirmed');
@@ -272,6 +283,9 @@ export function createSystemdService(options: { root: string }, overrides: Parti
       let previous: Uint8Array | null = null;
       let desired: Uint8Array;
       let port: number;
+      let detached = false;
+      let idle = false;
+      let stoppedDetached = '';
       try {
         const manager = await d.run(['is-system-running'], 30_000);
         const state = manager.stdout.trim();
@@ -279,8 +293,9 @@ export function createSystemdService(options: { root: string }, overrides: Parti
         const distribution = await d.distribution();
         if (distribution.kind !== 'global-npm' && distribution.kind !== 'bundled') throw new Error('Distribution cannot install a service');
         const current = await registration(s);
-        if (current.kind !== 'ours' && current.kind !== 'absent') throw new Error(registrationDetail(current));
-        previous = current.kind === 'ours' ? bytes(s, current.definition) : null;
+        // An unrecognized unit under our own name is an older format: replace it, keeping its bytes for rollback.
+        if (current.kind === 'other-root') throw new Error(registrationDetail(current));
+        previous = current.kind === 'ours' ? bytes(s, current.definition) : current.kind === 'unrecognized' ? await readDefinitionBytes(s.target) : null;
         s.expected = previous;
         const owner = await d.readOwner(s.root);
         before = identity(owner);
@@ -294,10 +309,27 @@ export function createSystemdService(options: { root: string }, overrides: Parti
         const unit = await observeUnit();
         const enabled = await observeEnabled();
         if (unit.kind === 'unknown' || enabled.kind === 'unknown') throw new Error(unit.kind === 'unknown' ? unit.detail : 'Enable state is unknown');
+        detached = owner !== null && !(unit.kind === 'present' && unit.mainPid === owner.pid);
         const identical = previous !== null && Buffer.from(previous).equals(desired);
-        if (identical && enabled.kind === 'enabled' && unit.kind === 'present' && unit.loadState === 'loaded' && unit.fragmentPath === s.target.unitPath) return outcome(s, 'already-installed', 'Already installed');
-        if (!identical && unit.kind === 'present' && unit.mainPid !== null) throw new Error('Run vonvon daemon stop before replacing the service');
+        idle = identical && enabled.kind === 'enabled' && unit.kind === 'present' && unit.loadState === 'loaded' && unit.fragmentPath === s.target.unitPath;
+        if (idle && !detached) return outcome(s, 'already-installed', 'Already installed');
+        if (previous === null && unit.kind === 'present' && unit.mainPid !== null && owner === null) throw new Error('Interrupted uninstall; run vonvon service uninstall first');
+        if (!identical && !detached && unit.kind === 'present' && unit.mainPid !== null) throw new Error('Run vonvon daemon stop before replacing the service');
       } catch (error) { return outcome(s, 'install_refused', detailOf(error)); }
+      if (detached) {
+        // A daemon started with vonvon daemon start holds the data root: stop it so the unit takes over on the same port.
+        const result = await drain({ home: s.root, scope: { kind: 'all-owners' }, queryJobPid: async () => null });
+        if (result.kind === 'drain-failed') return outcome(s, 'install_refused', `Could not stop the detached daemon: ${result.reason}: ${result.detail}`);
+        stoppedDetached = '; the detached daemon was stopped, run vonvon daemon start to start it again';
+      }
+      if (idle) {
+        // Only reached after stopping a detached daemon: the unit is installed but idle, so start it.
+        try {
+          await command(['start', unitName]);
+          await ready(s, port, true);
+          return outcome(s, 'installed', 'Installed');
+        } catch (error) { return outcome(s, 'install_incomplete', `${detailOf(error)}${stoppedDetached}`); }
+      }
       let transactionOwnsRegistration = false;
       try {
         await checkExpected(s);
@@ -305,14 +337,14 @@ export function createSystemdService(options: { root: string }, overrides: Parti
         transactionOwnsRegistration = true;
         for (const name of ['service.log', 'service.err.log']) { const log = await d.open(join(s.root, name), 'a', 0o600); await log.close(); }
         await command(['daemon-reload']);
-        await command(['enable', '--now', SYSTEMD_UNIT_NAME]);
+        await command(['enable', '--now', unitName]);
         const unit = await observeUnit();
         const enabled = await observeEnabled();
         if (unit.kind !== 'present' || unit.loadState !== 'loaded' || unit.fragmentPath !== s.target.unitPath || enabled.kind !== 'enabled') throw new Error('Manager did not confirm installed unit');
-        await ready(s, port, before === null);
+        await ready(s, port, true);
         return outcome(s, 'installed', 'Installed');
       } catch (error) {
-        const reason = detailOf(error);
+        const reason = `${detailOf(error)}${stoppedDetached}`;
         if (!transactionOwnsRegistration) {
           try { await checkExpected(s); }
           catch (failure) { return outcome(s, 'install_incomplete', `${reason}; ${detailOf(failure)}`); }
@@ -337,12 +369,17 @@ export function createSystemdService(options: { root: string }, overrides: Parti
       try { s = await snapshot(); }
       catch (error) { return { kind: 'uninstall_refused', detail: detailOf(error), retained: null, leftovers: [] }; }
       const current = await registration(s);
-      if (current.kind !== 'ours' && current.kind !== 'absent') return outcome(s, 'uninstall_refused', registrationDetail(current));
+      // An unrecognized unit under our own name is an older format of ours, so it is removed like ours.
+      if (current.kind === 'other-root') return outcome(s, 'uninstall_refused', registrationDetail(current));
       const unit = await observeUnit();
       if (unit.kind === 'unknown') return outcome(s, 'uninstall_incomplete', unit.detail);
       if (current.kind === 'absent' && unit.kind === 'absent') return outcome(s, 'not-installed', 'Not installed');
-      const kept = current.kind === 'ours' ? bytes(s, current.definition) : null;
+      let kept: Uint8Array | null;
+      // Only a regular file is replaced; a symlink or directory under our name is refused.
+      try { kept = current.kind === 'ours' ? bytes(s, current.definition) : current.kind === 'unrecognized' ? await readDefinitionBytes(s.target) : null; }
+      catch (error) { return outcome(s, 'uninstall_refused', `${registrationDetail(current)}: ${detailOf(error)}`); }
       s.expected = kept;
+      // An older format's unit may run a process without our lock: job-only refuses it instead of waiting forever.
       const scope: DrainScope = current.kind === 'ours' ? { kind: 'all-owners' } : { kind: 'job-only', context: 'uninstall-resumed' };
       const result = await remove(s, scope);
       if (result.kind === 'withdrawal-failed') return outcome(s, 'uninstall_incomplete', result.detail);
@@ -374,7 +411,7 @@ export function createSystemdService(options: { root: string }, overrides: Parti
       if (input.port !== undefined && input.port !== port) throw new Error(`Service uses port ${port}, not requested port ${input.port}.`);
       const owner = await d.readOwner(s.root);
       if (owner && !isStaleOwner(owner, input.staleOwner)) return ready(s, port, true);
-      await command(['start', SYSTEMD_UNIT_NAME]);
+      await command(['start', unitName]);
       return ready(s, port, true, input.staleOwner);
     },
     async status() {
@@ -384,8 +421,13 @@ export function createSystemdService(options: { root: string }, overrides: Parti
       const enabled = await observeEnabled();
       const owner = await d.readOwner(s.root);
       let running = false;
-      if (owner?.listen) { await d.verifyOwner(s.root, owner); running = true; }
-      return { registration: current, manager, enabled, owner: identity(owner), running };
+      let ownerError: string | null = null;
+      if (owner?.listen) {
+        // The daemon asking about its own service need not authenticate itself over its own socket.
+        try { if (owner.pid !== process.pid) await d.verifyOwner(s.root, owner); running = true; }
+        catch (error) { ownerError = detailOf(error); }
+      }
+      return { target: s.target, registration: current, manager, enabled, owner: identity(owner), running, ownerError };
     },
   };
 }

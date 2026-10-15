@@ -104,13 +104,12 @@ describe('V2 foreground status regression', () => {
     statusMock.mockResolvedValue({ installed: true, running: true, pid: '424242', platformName: 'launchd' });
     const d = await createAdminService({ daemonStartedAt: Date.now() - 1000 }).getDaemonStatus();
     expect(d.pid).toBe(process.pid);
-    expect(d).toMatchObject({ running: true, selfHosted: true, installed: false, supported: false });
-    expect(statusMock).not.toHaveBeenCalled();
+    expect(d).toMatchObject({ running: true, selfHosted: true, installed: true, supported: true });
   });
 });
 
-describe('AdminService · getDaemonStatus（前台进程状态，不查询旧 service 模块）', () => {
-  it('daemon 进程内：注入 daemonStartedAt → uptimeMs 有值、supported=false', async () => {
+describe('AdminService · getDaemonStatus（前台进程状态，加上服务是否已安装）', () => {
+  it('daemon 进程内：注入 daemonStartedAt → uptimeMs 有值，服务状态来自适配器', async () => {
     statusMock.mockResolvedValue({
       platformName: 'launchd (macOS)',
       installed: true,
@@ -124,19 +123,17 @@ describe('AdminService · getDaemonStatus（前台进程状态，不查询旧 se
     });
     const svc = createAdminService({ daemonStartedAt: Date.now() - 5000 });
     const d = await svc.getDaemonStatus();
-    expect(d.installed).toBe(false);
+    expect(d).toMatchObject({ installed: true, supported: true, servicePath: '/x.plist', stdoutPath: '/o', stderrPath: '/e' });
     expect(d.running).toBe(true);
     expect(d.pid).toBe(process.pid);
-    expect(statusMock).not.toHaveBeenCalled();
-    expect(d.supported).toBe(false);
     expect(d.uptimeMs).toBeGreaterThanOrEqual(5000);
   });
 
-  it('service 适配器抛错（未支持平台）→ supported=false，绝不让接口 500', async () => {
+  it('service 适配器抛错 → 未安装，绝不让接口 500', async () => {
     statusMock.mockRejectedValue(new Error('平台不支持'));
     const svc = createAdminService();
     const d = await svc.getDaemonStatus();
-    expect(d.supported).toBe(false);
+    expect(d.installed).toBe(false);
     expect(d.running).toBe(false);
   });
 });

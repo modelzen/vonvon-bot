@@ -2,7 +2,7 @@ import type { Query } from '@anthropic-ai/claude-agent-sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BackendNotInstalledError } from '../src/agent/backend-loader';
 import { ClaudeAgentBackend, type ClaudeSdkFacade } from '../src/agent/claude-agent/backend';
-import { CLAUDE_SIGNED_OUT_MESSAGE, cachedClaudeLogin, loginFromAccount, loginFromEnv, readClaudeLogin, resetClaudeLoginCache } from '../src/agent/claude-agent/login';
+import { CLAUDE_SIGNED_OUT_MESSAGE, cachedClaudeLogin, loginFromAccount, loginFromEnv, loginUnderService, readClaudeLogin, resetClaudeLoginCache } from '../src/agent/claude-agent/login';
 
 afterEach(() => {
   resetClaudeLoginCache();
@@ -27,6 +27,14 @@ describe('Claude login mapping', () => {
     expect(loginFromEnv({ ANTHROPIC_API_KEY: '  ' }, '起不来')).toEqual({ state: 'unknown', message: '无法确认：起不来' });
   });
 
+  it('under launchd a signed-out answer is unconfirmed: the keychain may be out of reach (s07)', () => {
+    const signedOut = { state: 'signedOut', message: CLAUDE_SIGNED_OUT_MESSAGE } as const;
+    expect(loginUnderService(signedOut, { VONVON_SERVICE: 'launchd' })).toMatchObject({ state: 'unknown', message: expect.stringContaining('钥匙串') });
+    expect(loginUnderService(signedOut, { VONVON_SERVICE: 'systemd' })).toBe(signedOut);
+    expect(loginUnderService(signedOut, {})).toBe(signedOut);
+    const signedIn = { state: 'signedIn', message: 'ok' } as const;
+    expect(loginUnderService(signedIn, { VONVON_SERVICE: 'launchd' })).toBe(signedIn);
+  });
   it('caches answers, shares one probe and refreshes on request', async () => {
     vi.useFakeTimers();
     let release!: (value: { state: 'signedOut'; message: string }) => void;

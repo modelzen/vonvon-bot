@@ -76,8 +76,8 @@ export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonM
     async readRegistration() {
       const platform = process.platform;
       if (platform !== 'darwin' && platform !== 'linux') throw new Error(`Unsupported desktop platform: ${platform}.`);
-      const target = platform === 'darwin' ? serviceTarget({ platform, home: runtime.home })
-        : serviceTarget({ platform, home: runtime.home, xdgConfigHome: process.env.XDG_CONFIG_HOME });
+      const target = platform === 'darwin' ? serviceTarget({ platform, home: runtime.home, root: runtime.root })
+        : serviceTarget({ platform, home: runtime.home, root: runtime.root, xdgConfigHome: process.env.XDG_CONFIG_HOME });
       const registration = await readRegistration({ target, requestedRoot: runtime.root });
       switch (registration.kind) {
         case 'absent': return { kind: 'absent' };

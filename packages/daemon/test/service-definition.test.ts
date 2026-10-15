@@ -30,7 +30,7 @@ describe.skipIf(process.platform === 'win32')('POSIX definition bytes and real f
   for (const platform of ['darwin', 'linux'] as const) {
     it(`${platform} recognizes ours, other-root, absent and malformed without invoking a manager`, async () => {
       const input = await fixture();
-      const target = serviceTarget({ platform, home: input.root, xdgConfigHome: undefined });
+      const target = serviceTarget({ platform, home: input.root, root: input.root, xdgConfigHome: undefined });
       const location = target.platform === 'darwin' ? target.plistPath : target.unitPath;
       const bytes = renderDefinition({ ...input, target });
       const content = bytes.platform === 'darwin' ? bytes.plist : bytes.unit;
@@ -52,7 +52,7 @@ describe.skipIf(process.platform === 'win32')('POSIX definition bytes and real f
 
   it('fails closed for directories, unreadable files, unresolved roots and noncanonical recorded roots', async () => {
     const input = await fixture();
-    const target = serviceTarget({ platform: 'linux', home: input.root, xdgConfigHome: undefined });
+    const target = serviceTarget({ platform: 'linux', home: input.root, root: input.root, xdgConfigHome: undefined });
     if (target.platform !== 'linux') throw new Error('Expected unit target');
     await mkdir(target.unitPath, { recursive: true });
     expect((await readRegistration({ target, requestedRoot: input.root })).kind).toBe('unrecognized');
@@ -80,7 +80,7 @@ describe.skipIf(process.platform === 'win32')('POSIX definition bytes and real f
 
   it('serializes independent launchd argv, XML literals and restart policy', async () => {
     const input = await fixture();
-    const target = serviceTarget({ platform: 'darwin', home: input.root });
+    const target = serviceTarget({ platform: 'darwin', home: input.root, root: input.root });
     const bytes = renderDefinition({ ...input, target, distribution: { kind: 'desktop', executable: '/Applications/Vonvon & "Bot".app/Electron', entry: "/app/<entry>'/main.js" } });
     if (bytes.platform !== 'darwin') throw new Error('Expected plist');
     const text = Buffer.from(bytes.plist).toString();
@@ -97,7 +97,7 @@ describe.skipIf(process.platform === 'win32')('POSIX definition bytes and real f
 
   it('serializes systemd percent and dollar literals with fixed policy and rejects injected directives', async () => {
     const input = await fixture();
-    const target = serviceTarget({ platform: 'linux', home: input.root, xdgConfigHome: undefined });
+    const target = serviceTarget({ platform: 'linux', home: input.root, root: input.root, xdgConfigHome: undefined });
     const bytes = renderDefinition({ ...input, target, distribution: { kind: 'npm', executable: '/node %n/$HOME/"bin"', entry: '/app/$HOME/中文\\entry.mjs' }, capturedPath: '/bin/%n:$HOME' });
     if (bytes.platform !== 'linux') throw new Error('Expected unit');
     const text = Buffer.from(bytes.unit).toString();
@@ -114,7 +114,7 @@ describe.skipIf(process.platform === 'win32')('POSIX definition bytes and real f
 
   it('decodes literal executable dollars separately from expanded argument dollars', async () => {
     const input = await fixture();
-    const target = serviceTarget({ platform: 'linux', home: input.root, xdgConfigHome: undefined });
+    const target = serviceTarget({ platform: 'linux', home: input.root, root: input.root, xdgConfigHome: undefined });
     const bytes = renderDefinition({ ...input, target, distribution: { kind: 'npm', executable: '/opt/$literal/node', entry: '/opt/$literal/main.mjs' } });
     if (bytes.platform !== 'linux') throw new Error('Expected unit');
     const text = Buffer.from(bytes.unit).toString();
@@ -126,7 +126,7 @@ describe.skipIf(process.platform === 'win32')('POSIX definition bytes and real f
 
   it('includes Electron Node mode only for the desktop systemd definition', async () => {
     const input = await fixture();
-    const target = serviceTarget({ platform: 'linux', home: input.root, xdgConfigHome: undefined });
+    const target = serviceTarget({ platform: 'linux', home: input.root, root: input.root, xdgConfigHome: undefined });
     const bytes = renderDefinition({ ...input, target, distribution: { kind: 'desktop', executable: '/opt/Vonvon/electron', entry: '/opt/Vonvon/main.js' } });
     if (bytes.platform !== 'linux') throw new Error('Expected unit');
     expect(Buffer.from(bytes.unit).toString()).toContain('ExecStart="/opt/Vonvon/electron" "/opt/Vonvon/main.js" daemon run --port 43121\n');
@@ -136,7 +136,7 @@ describe.skipIf(process.platform === 'win32')('POSIX definition bytes and real f
 
   it('rejects unsafe input before serialization', async () => {
     const input = await fixture();
-    const target = serviceTarget({ platform: 'linux', home: input.root, xdgConfigHome: undefined });
+    const target = serviceTarget({ platform: 'linux', home: input.root, root: input.root, xdgConfigHome: undefined });
     for (const port of [0, 65536, NaN, 1.5]) expect(() => renderDefinition({ ...input, target, port })).toThrow();
     for (const kind of ['development', 'unknown'] as const) expect(() => renderDefinition({ ...input, target, distribution: { kind } })).toThrow();
     for (const capturedPath of ['a\nb', 'a\u0000b', '\ud800']) expect(() => renderDefinition({ ...input, target, capturedPath })).toThrow();
