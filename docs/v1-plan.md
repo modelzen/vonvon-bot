@@ -33,7 +33,7 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
 
 ## 2. 里程碑
 
-"怎么验收"的每一步前面写着谁来做。"Claude 先做"：Claude 在 JP-VPS 上用 lark-cli、`vonvon` 命令行和无头网页端做，默认用那边的测试 bot 和测试群，要用 Mac 上的 bot 时步骤里写明；"Codex 先查"：Codex 在 Mac 的预览版会话里做。这两种都在通知 owner 之前做完，结果写进通知。"Claude 接着做""Codex 接着查"：要用 owner 刚扫码建的 bot，或者要等 owner 注销再登录，只能排在 owner 那一步后面；owner 做完回一句，Claude 和 Codex 再做，结果写进下一条通知：预览版会话还在等追问时，Claude 在同一个 issue 里贴追问；已经结束了，Claude 在同一个 issue 里再贴一份只列这几步的预览版提示词，owner 再转发一次，Codex 用装好的 app 做，不重装（`AGENTS.md`"工具和同步"）。"owner"只留要人来做的，JP-VPS 上做不了的（比如 Claude 的沙箱装好之前的只读、读写档）也退回 owner，Claude 在通知里写明。"Codex 先查""Codex 接着查"都只在合入后的预览版会话里做；PR 上的 Mac 检查按 `AGENTS.md` 在 PR 里另贴检查提示词。顺序和环境见本文第 7 节。
+"怎么验收"的每一步前面写着谁来做。"Claude 先做"：Claude 在 JP-VPS 上用 lark-cli、`vonvon` 命令行和无头网页端做，默认用那边的测试 bot 和测试群，要用 Mac 上的 bot 时步骤里写明；"Codex 先查"：Codex 在 Mac 的预览版会话里做。这两种都在通知 owner 之前做完，结果写进通知。"Claude 接着做""Codex 接着查"：要用 owner 刚扫码建的 bot，或者要等 owner 注销再登录，只能排在 owner 那一步后面；owner 做完回一句，Claude 和 Codex 再做，结果写进下一条通知。Codex 接着查时，Claude 往 #322 贴一个新任务，只列这几步，Codex 用装好的 app 做，不重新构建和安装，除非任务写明；Mac 上处理队列的会话已经结束，就请 owner 再转发一次（`AGENTS.md`"工具和同步"）。"owner"只留要人来做的，JP-VPS 上做不了的（比如 lark-cli 的用户授权过期时的聊天步骤，本文第 7 节）也退回 owner，Claude 在通知里写明。"Codex 先查""Codex 接着查"都只在合入后的预览版任务里做；PR 上的 Mac 检查按 `AGENTS.md` 另贴检查任务。顺序和环境见本文第 7 节。
 
 ### M0 实验（e01 到 e14）
 
@@ -134,7 +134,7 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
 - Claude 的权限档（3.8）：只读、读写档下不再写到工作区以外，关网时连不上网，开网时能用 WebFetch。
 - 子 agent（3.9）：Codex 和 Claude 的子 agent 显示在运行卡的子 agent 区，每个能单独停；子 agent 都结束，这张卡才收尾。
 
-**怎么验收：** owner 要做的：第 1 步里在选项卡上选一项，第 4 步（请同事点卡），第 6 步里在飞书客户端看子 agent 区、单独停掉一个。其余步骤 Claude 和 Codex 先做完，结果写在通知里。JP-VPS 上 Claude 的沙箱装好之前（本文第 7 节），第 1 到 3 步和第 5 步也退回 owner。第 6 步不等沙箱：用一个改成完全访问的 Claude 测试群做，子 agent 不靠沙箱，e01 就是在 JP-VPS 上用完全访问档跑通两个并行子 agent 的。
+**怎么验收：** owner 要做的：第 1 步里在选项卡上选一项，第 4 步（请同事点卡），第 6 步里在飞书客户端看子 agent 区、单独停掉一个。其余步骤 Claude 和 Codex 先做完，结果写在通知里。JP-VPS 上 Claude 的沙箱 2026-10-15 能用了（本文第 7 节），第 1 到 3 步和第 5 步也在 JP-VPS 上做，不再退回 owner；还没用真 bot 的回合从头到尾验过。第 6 步不靠沙箱，可以用一个改成完全访问的 Claude 测试群做，e01 就是在 JP-VPS 上用完全访问档跑通两个并行子 agent 的。
 1. Claude 先做：在一个用 Claude、读写档的群里说"先用选项问我用哪种方案，再动手"。群里出现选项卡，用 lark-cli 读出卡片内容。owner：自己说一次，选一项后 bot 接着做。
 2. Claude 先做：再来一次，这次直接打字回答。
 3. Claude 先做：再来一次，不理它；15 分钟后卡片变成"没人回答"。
@@ -153,7 +153,7 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
 - bot 能同时在多个工作区和代码仓库里干活。
 - bot 的会话不再读写你自己 Claude 和 Codex 的自动记忆。
 
-**怎么验收：** owner 要做的：第 5 步里在卡片上点撤销。其余步骤 Claude 和 Codex 先做完，结果写在通知里。JP-VPS 上 Claude 的沙箱装好之前（本文第 7 节），第 3 步也退回 owner：Linux 上的 Codex 只能用完全访问，Claude 的只读、读写档要沙箱。
+**怎么验收：** owner 要做的：第 5 步里在卡片上点撤销。其余步骤 Claude 和 Codex 先做完，结果写在通知里。第 3 步要读写档：Linux 上的 Codex 只能用完全访问，所以用 Claude 做，Claude 的读写档要沙箱。JP-VPS 上的沙箱 2026-10-15 能用了（本文第 7 节），这一步也在 JP-VPS 上做，不再退回 owner；还没用真 bot 的回合从头到尾验过。
 1. Claude 先做：在 Bot 页给一个 bot 写几句个性，比如"说话简短，不客套"；在群里 @ 它，语气变了。
 2. Claude 先做：在某个群的详情页给这个群补一句个性，只在这个群生效。
 3. Claude 先做：把 bot 拉进一个新建的群：不弹私聊绑定卡，群里 @ 它能回。在群详情页把权限档改成读写，让它写一个文件；到 `~/.vonvon-bot/projects/<bot 名>/groups/<群名>/` 下能找到（JP-VPS 上换成它自己的 `VONVON_HOME`）。
@@ -522,7 +522,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 
 ### 4.1 实验
 
-第 9 节要实测的事，按下表做。结果放进 `docs/research/` 下新的日期目录（例如 `<日期>-v1-spikes/`），按那里 README 的规矩加一行。一个实验一个纯文档 PR，同时出结果的可以合成一个；不占在飞名额。临时脚本不进仓库。Mac 上的实验先开它的文档 PR，PR 里写清要测什么，再在 PR 里贴检查提示词，由 owner 转发给 Mac 上的 Codex（`AGENTS.md`"工具和同步"）。检查会话只接一个回合、约 30 分钟能做完的事，做不完就拆成几次检查，或拆成几个实验。Mac 上的实验和各切片的 Mac 检查一次只做一个：上一个会话结束之前，Claude 不贴下一份提示词。e03 在 Mac 上跑 Claude SDK 是测产品，见本文第 7 节。
+第 9 节要实测的事，按下表做。结果放进 `docs/research/` 下新的日期目录（例如 `<日期>-v1-spikes/`），按那里 README 的规矩加一行。一个实验一个纯文档 PR，同时出结果的可以合成一个；不占在飞名额。临时脚本不进仓库。Mac 上的实验先开它的文档 PR，PR 里写清要测什么，再在 PR 里贴检查提示词，往 #322 贴一个检查任务指过去（`AGENTS.md`"工具和同步"）。一个检查任务只接约 30 分钟能做完的事，做不完就拆成几个任务，或拆成几个实验。Mac 上的实验和各切片的 Mac 检查都排在 #322 里，Codex 一个一个做，不同时做。e03 在 Mac 上跑 Claude SDK 是测产品，见本文第 7 节。
 
 | 状态 | 编号 | 测什么 | 在哪做 | 怎么测 | 挡住 | 最晚在 |
 |---|---|---|---|---|---|---|
@@ -604,8 +604,8 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 
 一个里程碑按这个顺序验收（本文第 1 节"Linux 先行"）：
 1. **先在 JP-VPS 上验。** 里程碑的片都合入后，Claude 用 main 的 head 先做完不需要 Mac 的步骤，用验收用的数据目录：飞书里的聊天步骤（建测试群、把 bot 拉进群、@ 它、看回复和卡片）用 lark-cli 以 owner 的用户身份做，改设置用 `vonvon` 命令行和无头打开的网页端。结果写进给 owner 的通知（owner 2026-10-15 要求）。发现问题就开 `claude/*` PR 修，合入后这一步重来。
-2. **再在 Mac 上验网页端。** Claude 贴预览版提示词，owner 转发给 Mac 上的 Codex（见下面"Mac 上怎么打包"）。Codex 构建好之后先不打包：用隔离的数据目录在 Mac 上起 daemon 和网页端，查网页端连 Mac 上的 daemon，以及不打包也能查的 Mac 专属项，比如 launchd、钥匙串、Seatbelt 沙箱。要真 bot 的项第 1 步已经验过，这一步不注册新 bot。有问题 Codex 就停下贴结果，不打包，也不 push；Claude 开 `claude/*` PR 修，合入后再贴一份预览版提示词。
-3. **最后打包给 owner。** 第 2 步过了，Codex 才打包、装好 .app。装好后，Codex 用 Computer Use 打开装好的 app，做本文第 2 节标"Codex 先查"、要用装好的 app 的步骤，比如窗口、托盘、菜单、退出 app；要 @ Mac 上的 bot 时，Claude 用 lark-cli 接着做。这些都过了，Claude 才通知 owner；标"接着做""接着查"的步骤等 owner 做完前一步再做（本文第 2 节开头）。要用装好的 app 的步骤，用的是 owner 账号里真实装好的 app 和它的数据，所以只在预览版会话里做；Claude 的提示词按里程碑和步骤号列出这次做哪几步，没列的不做，其余的查用隔离的数据目录。Mac 锁屏时 Computer Use 会失败（getpaseo/paseo#3346），按 `AGENTS.md`：停下，不重试，结果评论第二行写"卡住了："。owner 只做要人来做的：手机扫码、飞书开发者后台、在飞书客户端里点卡片按钮和看显示、注销再登录、要第二个人的步骤，以及 M10 什么时候迁移每天在用的 bridge。每个里程碑留给 owner 的是哪几步，写在本文第 2 节各里程碑的"怎么验收"后面。
+2. **再在 Mac 上验网页端。** Claude 往 #322 贴预览版任务（见下面"Mac 上怎么打包"）。Codex 构建好之后先不打包：用隔离的数据目录在 Mac 上起 daemon 和网页端，查网页端连 Mac 上的 daemon，以及不打包也能查的 Mac 专属项，比如 launchd、钥匙串、Seatbelt 沙箱。要真 bot 的项第 1 步已经验过，这一步不注册新 bot。有问题 Codex 就停下贴结果，不打包，也不 push；Claude 开 `claude/*` PR 修，合入后再贴一个预览版任务。
+3. **最后打包给 owner。** 第 2 步过了，Codex 才打包、装好 .app。装好后，Codex 用 Computer Use 打开装好的 app，做本文第 2 节标"Codex 先查"、要用装好的 app 的步骤，比如窗口、托盘、菜单、退出 app；要 @ Mac 上的 bot 时，Claude 用 lark-cli 接着做。这些都过了，Claude 才通知 owner；标"接着做""接着查"的步骤等 owner 做完前一步再做（本文第 2 节开头）。要用装好的 app 的步骤，用的是 owner 账号里真实装好的 app 和它的数据，所以只在预览版任务里做；Claude 的任务按里程碑和步骤号列出这次做哪几步，没列的不做，其余的查用隔离的数据目录。Mac 锁屏时 Computer Use 会失败（getpaseo/paseo#3346），按 `AGENTS.md`：停下，不重试，结果评论第二行写"卡住了："。owner 只做要人来做的：手机扫码、飞书开发者后台、在飞书客户端里点卡片按钮和看显示、注销再登录、要第二个人的步骤，以及 M10 什么时候迁移每天在用的 bridge。每个里程碑留给 owner 的是哪几步，写在本文第 2 节各里程碑的"怎么验收"后面。
 
 **JP-VPS 上的验收环境。**
 - 验收用一棵单独的 worktree，detach 在要验的提交上；用它自己的 `VONVON_HOME`，里面注册一个测试 bot。
@@ -616,11 +616,11 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 - 用接口建群时把 bot 一起放进去，不会触发 `im.chat.member.bot.added_v1`。要测"机器人进群"的提示，先建群，再用 lark-cli 的 `im chat.members create`（`member_id_type=app_id`）把 bot 加进去。"查找已经加入的群"两种群都找得到。
 - Claude 的只读、读写档在 Linux 上要 Claude Code 的沙箱，就是 `bubblewrap` 和 `socat`；没装时回合失败，报"Sandbox required but unavailable"。
 - Ubuntu 24.04 上光装好还不够：`kernel.apparmor_restrict_unprivileged_userns = 1` 挡住了非特权的用户命名空间，bwrap 报"setting up uid map: Permission denied"或"loopback: Failed RTM_NEWADDR: Operation not permitted"，Claude 的 Bash 在只读、读写档下都失败。JP-VPS 上的办法：加一份 AppArmor profile，只给 `/usr/bin/bwrap` 开 `userns` 权限（和 Ubuntu 自己给浏览器的 profile 一个样子），用 `apparmor_parser -r` 加载；不全局关掉这个 sysctl。
-- 2026-10-15 查过：`bwrap` 和 `socat` 已经装好，`kernel.apparmor_restrict_unprivileged_userns` 仍是 1，`/etc/apparmor.d/` 下还没有 bwrap 的 profile，bwrap 仍报"setting up uid map: Permission denied"。加载 profile 要 sudo，由 owner 经 SSH 做（本文第 8 节）。做完之前，JP-VPS 上只能验 Claude 的完全访问档，只读、读写档退回 owner 在 Mac 上验，是哪几步写在 M6、M7 的"怎么验收"里。
+- 2026-10-15 owner 经 SSH 加载了 bwrap 的 AppArmor profile（`/etc/apparmor.d/bwrap`）。`bwrap` 和 `socat` 已经装好；`kernel.apparmor_restrict_unprivileged_userns` 仍是 1，没有全局关掉。加载以后，在 JP-VPS 上跑 `bwrap --ro-bind / / --unshare-net true` 和 `bwrap --ro-bind / / --dev /dev --unshare-all --die-with-parent true`，都以 0 退出。所以 JP-VPS 上能验 Claude 的只读、读写档了，M6、M7 里这些步骤不再退回 owner 在 Mac 上验。还没用真 bot 的回合从头到尾再验一遍：第一次用到时，先在测试群里各跑一轮只读档和读写档；跑不通就退回 owner，并在通知里写明。
 - Linux 上的 Codex 只能用完全访问（product.md 3.8，`D/agent/codex-appserver/backend.ts`），JP-VPS 上用 Codex 的测试群要明确改成完全访问。访客档没设时跟着管理员的档走（3.8"访客档照旧"），所以改成完全访问的测试群，访客也是完全访问；这种群里不放别人。
 
 **Mac 上怎么打包。**
-1. Claude 开 issue `Mac 预览版 <里程碑名>`，把预览版提示词贴成评论，给 owner 一行要转发的话；owner 在 Mac mini 上新开 Codex 会话，模式选 full access（owner 2026-10-15），发一次。规则见 `AGENTS.md`"工具和同步"。
+1. Claude 往 #322 贴一个预览版任务，提示词整份写在任务里，不再另开 `Mac 预览版 <里程碑名>` issue。Mac 上没有会话在处理队列时，Claude 请 owner 在 Mac mini 上新开 Codex 会话，模式选 full access（owner 2026-10-15），发一次"按 modelzen/vonvon-bot#322 正文做"。规则见 `AGENTS.md`"工具和同步"。
 2. Codex 在临时 worktree 里取 Claude 给的 main sha，`npm ci`，`npm run build`，先按上面第 2 步查网页端，过了再在 `packages/desktop` 下用 `electron-builder --config electron-builder.yml --dir` 打包，也就是今天的 `package:dir` 脚本。electron-builder 会自动用钥匙串里的 Developer ID 签名。不公证，只出 Apple Silicon。
 3. 打好的 .app 装进 /Applications，按上面第 3 步先做标"Codex 先查"的步骤，再由 Claude 通知 owner 验收。
 4. 具体命令以仓库脚本为准。M1 预览版（2026-10-14）按第 2 条做通了，打包前补跑 `node node_modules/electron/install.js`，打包后验签，用 `ditto` 装进 /Applications。
@@ -647,7 +647,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 | 向 Anthropic 要 Claude 登录的书面确认 | 公开发布前 | product.md 第 8 节第 2 条，可能要几周；要不到就做 s66 |
 | 一位同事或第二个飞书账号 | e10（s09 之前）、M3 第 7 步、e09（s30 之前）、M6 第 4 步、M9 第 2 和第 6 步 | 验收时要有另一个人点卡片、私聊 bot |
 | JP-VPS 上再加两个测试 bot | M5 之前 | M5 要同一台机器上三个 bot（一个规则模式、两个智能模式），JP-VPS 上现在只有一个。Claude 扫不了码，要 owner 扫码、在开发者后台发布 |
-| JP-VPS 上给 bwrap 加载 AppArmor profile | M6 之前 | 要 sudo，经 SSH 做，做法见本文第 7 节。不做的话，M6 第 1 到 3、5 步和 M7 第 3 步退回 owner |
+| JP-VPS 上给 bwrap 加载 AppArmor profile | 已做（2026-10-15） | owner 经 SSH 加载了，结果见本文第 7 节。M6 第 1 到 3、5 步和 M7 第 3 步不再退回 owner |
 | bridge 最后一版什么时候发 | M10 之前定 | product.md 第 8 节第 4 条，s64 按这个时间发 |
 | Mac 上的一个测试用户账号 | M10 之前（e08、s61、s62） | 不用等，但要 owner 用管理员身份建。停 bridge 会碰 launchd 里同名的任务，只能在另一个用户账号里测 |
 
