@@ -76,7 +76,7 @@ export async function runServiceHelper(runtime: ServiceRuntime, action: 'install
     throw new ServiceActionError(another ? 'busy' : 'exit');
   }
   if (report.phase !== 'done') throw new ServiceActionError('exit');
-  if (!report.ok) throw new ServiceActionError('report', serviceActionMessage(report));
+  if (!report.ok) throw new ServiceActionError('report', serviceActionMessage(report), report.reason);
 }
 
 /** `vonvon daemon stop`, waiting up to a minute; the error message completes "没能停下旧版本的 daemon：". */
@@ -145,7 +145,12 @@ export async function changeLoginItem(runtime: ServiceRuntime, enabled: boolean,
   if (failure) throw failure;
 }
 
-export type StartupRepair = 'none' | 'stop' | 'reinstall';
+/**
+ * `stop`: no service and an older daemon; ensureReady then starts the bundled one. `stop-and-reinstall`: an older
+ * daemon runs under a service of ours. `reinstall`: the service points at a moved app or is in an older format; a
+ * running daemon is stopped only when the install says it is in the way.
+ */
+export type StartupRepair = 'none' | 'stop' | 'stop-and-reinstall' | 'reinstall';
 
 export interface StartupRepairInput {
   platform: NodeJS.Platform;
@@ -164,8 +169,7 @@ function repairApplies(input: Pick<StartupRepairInput, 'platform' | 'packaged' |
 
 /**
  * Before the desktop attaches: an app that moved or was updated rewrites the service, a newer bundled daemon replaces
- * an older running one. `reinstall` stops a running daemon, then installs; `stop` only stops, so ensureReady starts the
- * bundled one. An npm service or another root's is left alone, and nothing is ever downgraded.
+ * an older running one. An npm service or another root's is left alone, and nothing is ever downgraded.
  */
 export function planStartupRepair(input: StartupRepairInput): StartupRepair {
   if (!repairApplies(input)) return 'none';
@@ -175,11 +179,11 @@ export function planStartupRepair(input: StartupRepairInput): StartupRepair {
     case 'ours': {
       const definition = registration.definition;
       if (definition?.kind !== 'desktop') return 'none';
-      const missing = !input.exists(definition.executable) || !input.exists(definition.entry);
-      return missing || older ? 'reinstall' : 'none';
+      if (older) return 'stop-and-reinstall';
+      return !input.exists(definition.executable) || !input.exists(definition.entry) ? 'reinstall' : 'none';
     }
-    // A regular file under our name is an older format of ours; install rewrites it. A symlink or directory it refuses.
-    case 'unrecognized': return /regular file/.test(registration.reason ?? '') ? 'none' : 'reinstall';
+    // An older format of ours, which install rewrites; a symlink or directory under our name it refuses.
+    case 'unrecognized': return registration.replaceable !== true ? 'none' : older ? 'stop-and-reinstall' : 'reinstall';
     case 'absent': return older ? 'stop' : 'none';
     case 'other-root': return 'none';
   }
@@ -214,12 +218,27 @@ export async function repairServiceAtStartup(runtime: ServiceRuntime,
     ...runtime, registration, running, bundledVersion: readBundledVersion(runtime.resources), exists: options.exists ?? existsSync,
   });
   if (plan === 'none') return undefined;
-  if (running) {
-    try { await stopDaemon(runtime, options.stop); }
+  const stop = async (): Promise<string | undefined> => {
+    try { await stopDaemon(runtime, options.stop); return undefined; }
     catch (error) { return `没能停下旧版本的 daemon：${messageOf(error)}。先用着旧版本，稍后在「应用与启动」里重启 daemon。`; }
+  };
+  if (running && plan !== 'reinstall') {
+    const failed = await stop();
+    if (failed) return failed;
   }
   if (plan === 'stop') return undefined;
-  try { await runServiceHelper(runtime, 'install', options.helper); }
-  catch (error) { return `后台服务没能更新到这个位置的 Vonvon Bot：${messageOf(error)}`; }
+  const install = () => runServiceHelper(runtime, 'install', options.helper);
+  try {
+    try { await install(); }
+    catch (error) {
+      // The service's own daemon still runs the old definition. Stopping it only now keeps a refusal that lasts, such as
+      // the service turned off in System Settings, from interrupting the bot at every launch.
+      const inTheWay = error instanceof ServiceActionError && error.reportReason === 'replace-running';
+      if (plan !== 'reinstall' || !running || !inTheWay) throw error;
+      const failed = await stop();
+      if (failed) return failed;
+      await install();
+    }
+  } catch (error) { return `后台服务没能更新到这个位置的 Vonvon Bot：${messageOf(error)}`; }
   return undefined;
 }

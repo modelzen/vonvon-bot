@@ -8,7 +8,7 @@ import { verifyPidLockOwner } from '../../daemon/src/server/owner-verification.j
 import { classifyDistribution } from '../../daemon/src/service/distribution.js';
 import { withToolDirectories } from '../../daemon/src/platform/tool-path.js';
 import { serviceTarget } from '../../daemon/src/service/identity.js';
-import { readRegistration } from '../../daemon/src/service/registration.js';
+import { isIrreplaceableDefinition, readRegistration } from '../../daemon/src/service/registration.js';
 import { attachExisting } from './attach.js';
 import type { DaemonManagerDependencies } from './daemon-manager.js';
 
@@ -93,7 +93,7 @@ export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonM
           return { kind: 'ours', definition: { kind, executable, entry, port } };
         }
         case 'other-root': return { kind: 'other-root', root: registration.recordedRoot };
-        case 'unrecognized': return { kind: 'unrecognized', file: registration.location, reason: registration.reason };
+        case 'unrecognized': return { kind: 'unrecognized', file: registration.location, replaceable: !isIrreplaceableDefinition(registration.reason) };
       }
     },
     async startManaged(port) { await launch('start', port); },

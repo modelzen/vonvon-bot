@@ -22,7 +22,8 @@ export type Registration =
   | { kind: 'absent' }
   | { kind: 'ours'; definition?: RegisteredDaemon }
   | { kind: 'other-root'; root: string }
-  | { kind: 'unrecognized'; file: string; reason?: string };
+  /** `replaceable`: an older format of ours, which install rewrites; a symlink or directory it refuses. */
+  | { kind: 'unrecognized'; file: string; replaceable?: boolean };
 
 export interface DaemonManagerDependencies {
   /** Must verify the lock against the authenticated daemon owner, not only its PID. */

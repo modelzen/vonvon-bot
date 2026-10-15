@@ -1,4 +1,4 @@
-import { SERVICE_BUSY_MESSAGE } from '@vonvon/protocol';
+import { SERVICE_BUSY_MESSAGE, type ServiceActionReport } from '@vonvon/protocol';
 
 const messages = {
   unsupported: '这台电脑上不能设置登录时启动。',
@@ -12,17 +12,20 @@ const messages = {
 
 export type ServiceActionReason = keyof typeof messages | 'report';
 
-/** A login-item failure the window may show as is; `report` carries the helper's own report text (serviceActionMessage). */
+/** A login-item failure the window may show as is; `report` carries the helper's own report text (serviceActionMessage)
+ * and the report's own reason, which the startup repair acts on. */
 export class ServiceActionError extends Error {
   readonly reason: ServiceActionReason;
+  readonly reportReason: ServiceActionReport['reason'];
   readonly #message: string;
 
   constructor(reason: keyof typeof messages);
-  constructor(reason: 'report', message: string);
-  constructor(reason: ServiceActionReason, message?: string) {
+  constructor(reason: 'report', message: string, reportReason?: ServiceActionReport['reason']);
+  constructor(reason: ServiceActionReason, message?: string, reportReason?: ServiceActionReport['reason']) {
     const text = reason === 'report' ? message ?? '' : messages[reason];
     super(text);
     this.reason = reason;
+    this.reportReason = reportReason;
     this.#message = text;
   }
 

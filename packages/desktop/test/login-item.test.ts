@@ -267,15 +267,19 @@ describe('repairing the service when the app starts', () => {
   it.each([
     ['moved: the recorded app is gone', { exists: (path: string) => path !== app }, 'reinstall'],
     ['moved: the recorded entry is gone, nothing running', { exists: (path: string) => path !== entry, running: null }, 'reinstall'],
-    ['updated: an older daemon runs', { running: running('0.1.9') }, 'reinstall'],
+    ['updated: an older daemon runs', { running: running('0.1.9') }, 'stop-and-reinstall'],
+    ['moved and updated', { running: running('0.1.9'), exists: () => false }, 'stop-and-reinstall'],
     ['a newer daemon runs', { running: running('0.3.0') }, 'none'],
     ['the same version runs', {}, 'none'],
+    ['no bundled version to compare', { bundledVersion: undefined, running: running('0.1.0') }, 'none'],
     ['an npm service, even older and moved', { registration: ours('npm'), running: running('0.1.0'), exists: () => false }, 'none'],
     ['no service and an older daemon', { registration: { kind: 'absent' as const }, running: running('0.1.0') }, 'stop'],
     ['no service and nothing running', { registration: { kind: 'absent' as const }, running: null }, 'none'],
     ['translocated', { executable: '/private/var/folders/x/AppTranslocation/1/d/Vonvon Bot.app/Contents/MacOS/Vonvon Bot', running: running('0.1.0') }, 'none'],
-    ['an older definition format', { registration: { kind: 'unrecognized' as const, file: '/p', reason: 'Definition does not match the complete generated format' } }, 'reinstall'],
-    ['a symlink under our name', { registration: { kind: 'unrecognized' as const, file: '/p', reason: 'Definition must be a regular file, not a symlink or directory' } }, 'none'],
+    ['an older definition format', { registration: { kind: 'unrecognized' as const, file: '/p', replaceable: true } }, 'reinstall'],
+    ['an older definition format and an older daemon', { registration: { kind: 'unrecognized' as const, file: '/p', replaceable: true }, running: running('0.1.0') }, 'stop-and-reinstall'],
+    ['a symlink under our name', { registration: { kind: 'unrecognized' as const, file: '/p', replaceable: false }, running: running('0.1.0') }, 'none'],
+    ['an unrecognized definition of unknown kind', { registration: { kind: 'unrecognized' as const, file: '/p' } }, 'none'],
     ['another root\'s service', { registration: { kind: 'other-root' as const, root: '/other' }, running: running('0.1.0') }, 'none'],
     ['unpackaged', { packaged: false, running: running('0.1.0') }, 'none'],
     ['not macOS', { platform: 'linux' as const, running: running('0.1.0') }, 'none'],
@@ -293,6 +297,30 @@ describe('repairing the service when the app starts', () => {
     await writeReport(runtime, done(701, { kind: 'already-installed' }));
     await expect(repairServiceAtStartup(runtime, reads(ours(), running('0.1.0')), { stop: { spawn }, helper: { spawn }, exists: () => true })).resolves.toBeUndefined();
     expect(start.mock.calls.map(call => (call[1] as string[]).slice(1))).toEqual([['daemon', 'stop'], ['service', 'install', '--keep-running']]);
+  });
+
+  const refused = (pid: number, reason: 'replace-running' | 'turned-off') => done(pid, { ok: false, kind: 'install_refused', reason, detail: reason });
+
+  it('installs a moved app\'s service first, and stops the service\'s daemon only when the install says it is in the way', async () => {
+    const runtime = await packagedRuntime({ executable: app });
+    const { start, spawn } = children({ code: 1 }, { code: 0 }, { code: 0 });
+    const readReport = vi.fn().mockReturnValueOnce(refused(700, 'replace-running')).mockReturnValueOnce(done(702));
+    const notice = await repairServiceAtStartup(runtime, reads(ours(), running('0.2.0')), { stop: { spawn }, helper: { spawn, readReport }, exists: () => false });
+    expect(notice).toBeUndefined();
+    expect(start.mock.calls.map(call => (call[1] as string[]).slice(1))).toEqual([
+      ['service', 'install', '--keep-running'], ['daemon', 'stop'], ['service', 'install', '--keep-running'],
+    ]);
+  });
+
+  it('leaves the running daemon alone at every launch while the install keeps being refused', async () => {
+    const runtime = await packagedRuntime({ executable: app });
+    const { start, spawn } = children({ code: 1 }, { code: 1 });
+    const readReport = vi.fn().mockReturnValueOnce(refused(700, 'turned-off')).mockReturnValueOnce(refused(701, 'turned-off'));
+    for (let launch = 0; launch < 2; launch++) {
+      const notice = await repairServiceAtStartup(runtime, reads(ours(), running('0.2.0')), { stop: { spawn }, helper: { spawn, readReport }, exists: () => false });
+      expect(notice).toMatch(/^后台服务没能更新到这个位置的 Vonvon Bot：系统设置里关掉了/);
+    }
+    expect(start.mock.calls.map(call => (call[1] as string[])[1])).toEqual(['service', 'service']);
   });
 
   it('keeps the old daemon when it cannot be stopped', async () => {

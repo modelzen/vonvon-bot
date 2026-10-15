@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { PROTOCOL_VERSION } from '@vonvon/protocol';
 import { createDaemonDependencies, prepareDesktopRoot } from '../src/daemon-dependencies.js';
+import type { Registration } from '../src/daemon-manager.js';
+import { planStartupRepair } from '../src/login-item.js';
 import { readRunningPidLock } from '../../daemon/src/server/pid-lock.js';
 import { verifyPidLockOwner } from '../../daemon/src/server/owner-verification.js';
 import { toolDirectories } from '../../daemon/src/platform/tool-path.js';
@@ -94,8 +96,19 @@ describe('desktop daemon dependencies', () => {
     await writeFile(file, rendered.platform === 'darwin' ? rendered.plist : rendered.unit);
     const read = createDaemonDependencies({ root, home: root, resources: '/owned/resources', executable: '/owned/Electron', packaged: true });
     await expect(read.readRegistration()).resolves.toEqual({ kind: 'ours', definition: { ...distribution, port: 4321 } });
+    // The startup repair rewrites an older format but leaves a symlink alone; both come from the daemon's real refusal.
+    const plan = (registration: Registration) => planStartupRepair({ platform: 'darwin', packaged: true, executable: distribution.executable,
+      registration, running: null, bundledVersion: '0.2.0', exists: () => true });
     await writeFile(file, 'an older format');
-    await expect(read.readRegistration()).resolves.toEqual({ kind: 'unrecognized', file, reason: expect.any(String) });
+    const older = await read.readRegistration();
+    expect(older).toEqual({ kind: 'unrecognized', file, replaceable: true });
+    expect(plan(older)).toBe('reinstall');
+    await rm(file);
+    await mkdir(join(root, 'elsewhere'));
+    await symlink(join(root, 'elsewhere'), file);
+    const linked = await read.readRegistration();
+    expect(linked).toEqual({ kind: 'unrecognized', file, replaceable: false });
+    expect(plan(linked)).toBe('none');
   });
 
   it('checks the attached identity and closes the probe', async () => {
