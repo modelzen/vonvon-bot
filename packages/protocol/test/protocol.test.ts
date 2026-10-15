@@ -71,6 +71,16 @@ describe("pinned contract extraction", () => {
   it("parses the agent settings fixture", () => {
     expect(agentViewSchema.parse(fixture("agent-settings.json")).scope.kind).toBe("agent");
   });
+  it("s02c1: drops 咖啡一下 from an older daemon's view and refuses its four actions", () => {
+    const old = fixture("agent-settings.json") as { sections: Record<string, unknown> };
+    const parsed = agentViewSchema.parse({ ...old, sections: { ...old.sections, cliBridge: {} }, cliRuntime: { enabled: true } });
+    expect(parsed.sections).not.toHaveProperty("cliBridge");
+    expect(parsed).not.toHaveProperty("cliRuntime");
+    for (const action of [
+      { kind: "setCliBridgeEnabled", botId: "cli_fixture", enabled: true, revision: "r" }, { kind: "repairCliHooks", botId: "cli_fixture" },
+      { kind: "setHostCliRoute", botId: null, revision: "r" }, { kind: "repairHostCliHooks", agents: ["codex"] },
+    ]) expect(requestSchema.safeParse({ type: "request", id: "x", method: "settings", payload: { type: "act", action } }).success).toBe(false);
+  });
   it("rejects a bindGroup project name with a slash", () => {
     expect(commandSchema.safeParse({type:"bindGroup",agentId:"cli_fixture",groupId:"oc_fixture",projectName:"a/b",folderToken:randomUUID(),tool:"codex",conversation:"threads"}).success).toBe(false);
   });

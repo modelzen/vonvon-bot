@@ -27,7 +27,7 @@ async function fixture() {
   await writeFile(nonExecutable, '', { mode: 0o600 });
   await symlink(executable, link);
   const settings = createHostSettings({ appDir: dir, runningCodexBin: executable });
-  const service = fakeService({ settings: { ...settings, models: async () => { throw new Error('unused'); } } });
+  const service = fakeService({ settings: { ...settings, act: async () => { throw new Error('unused'); }, models: async () => { throw new Error('unused'); } } });
   const save = async (codexBin: string | null) => {
     const view = await settings.read({ kind: 'host' });
     if (!('runtime' in view)) throw new Error('Host view missing');

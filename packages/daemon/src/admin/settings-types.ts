@@ -1,7 +1,6 @@
 import type { ModelInfo, PermissionMode, ReasoningEffort } from '../agent/types';
-import type { ModelDisplayMode, PendingPolicy, ResolvedCliBridgePreferences, ResolvedCompletionReminderConfig } from '../config/schema';
+import type { ModelDisplayMode, PendingPolicy, ResolvedCompletionReminderConfig } from '../config/schema';
 import type { VoiceAction, VoiceView } from '../voice/types';
-import type { CliHookStatus } from '../cli-bridge/types';
 export type SettingsScope = {
   kind: 'host';
 } | {
@@ -46,7 +45,6 @@ export interface AgentSections {
     pendingPolicy: PendingPolicy;
   };
   completion: ResolvedCompletionReminderConfig;
-  cliBridge: Omit<ResolvedCliBridgePreferences, 'enabled' | 'delivery' | 'includeBridgeOwnedSessionsForDebugging'>;
   comments: {
     backend: string;
     selection: ModelSelection;
@@ -93,7 +91,7 @@ export type SettingsAccess = {
 };
 export interface ApplyEffect {
   fields: string[];
-  when: 'next-message' | 'next-turn' | 'task-completion' | 'new-session' | 'new-comment' | 'new-project' | 'next-hook' | 'next-presence-check' | 'restart' | 'session-rebind' | 'immediate';
+  when: 'next-message' | 'next-turn' | 'task-completion' | 'new-session' | 'new-comment' | 'new-project' | 'restart' | 'session-rebind' | 'immediate';
   detail: string;
 }
 export interface SettingsSection<T> {
@@ -117,16 +115,6 @@ export interface AgentSettingsView {
     revision: string;
   };
   voice: VoiceView;
-  cliRuntime: {
-    enabled: boolean;
-    running: boolean;
-    revision: string;
-    hooks: {
-      claude: CliHookStatus;
-      codex: CliHookStatus;
-    };
-    keepAwakeSupported: boolean;
-  };
   commentInstructions: {
     content: {
       kind: 'default';
@@ -176,16 +164,6 @@ export interface HostSettingsView {
     codexBin: string | null;
     fallbackCwd: string;
     platform: string;
-    coffee?: {
-      route: 'legacy' | 'none' | 'agent';
-      targets: {codex: string[]; claude: string[]};
-      targetsReadable: boolean;
-      botId: string | null;
-      editorBotId: string | null;
-      revision: string;
-      agents: { botId: string; name: string; enabled: boolean; hasOwner: boolean }[];
-      hooks: { claude: CliHookStatus; codex: CliHookStatus };
-    };
   };
 }
 export type SettingsView = AgentSettingsView | ProjectSettingsView | SessionSettingsView | HostSettingsView;
@@ -226,21 +204,6 @@ export type SettingsSave = {
   reason: SettingsAccess;
 };
 export type SettingsAction = {
-  kind: 'setHostCliRoute';
-  botId: string | null;
-  revision: string;
-} | {
-  kind: 'repairHostCliHooks';
-  agents: ('claude' | 'codex')[];
-} | {
-  kind: 'setCliBridgeEnabled';
-  botId: string;
-  enabled: boolean;
-  revision: string;
-} | {
-  kind: 'repairCliHooks';
-  botId: string;
-} | {
   kind: 'voice';
   botId: string;
   action: VoiceAction;
@@ -274,25 +237,20 @@ export type SettingsAction = {
     kind: 'default';
   };
 };
-export type BotSettingsAction = Exclude<SettingsAction, { kind: 'setHostCliRoute' | 'repairHostCliHooks' }>;
 export type SettingsActionResult = {
   kind: 'saved';
-  view: AgentSettingsView | ProjectSettingsView | HostSettingsView;
+  view: AgentSettingsView | ProjectSettingsView;
   effects: ApplyEffect[];
   warnings: string[];
 } | {
   kind: 'conflict';
-  view: AgentSettingsView | ProjectSettingsView | HostSettingsView;
+  view: AgentSettingsView | ProjectSettingsView;
 } | {
   kind: 'rejected';
   fields: SettingsFieldError[];
 } | {
   kind: 'unavailable';
   reason: SettingsAccess;
-} | {
-  kind: 'diverged';
-  view: AgentSettingsView;
-  message: string;
 };
 export interface ModelQuery {
   botId: string;

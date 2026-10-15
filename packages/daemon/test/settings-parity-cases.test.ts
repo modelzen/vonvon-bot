@@ -24,11 +24,10 @@ const agent = { kind: 'agent' as const, botId };
 const project = { kind: 'project' as const, botId, projectName: 'demo' };
 const session = { kind: 'session' as const, botId, threadId: 'omt_fixture' };
 const backend = { id: 'codex-appserver', doctor: async () => ({ ok: true }), supportedModes: ['qa', 'write', 'full'], listModels: async () => [{ id: 'fixture-model', displayName: 'Fixture', description: '', defaultEffort: 'high', supportedEfforts: ['medium', 'high'], isDefault: true, hidden: false }] } as unknown as AgentBackend;
-const hooks = { inspect: async () => ({ claude: { agent: 'claude' as const, status: 'installed' as const, details: [] }, codex: { agent: 'codex' as const, status: 'installed' as const, details: [] } }), install: vi.fn(async () => {}) };
 let cfg: AppConfig;
 
 async function owner(overrides: Partial<SettingsOwnerDeps> = {}) {
-  return createSettingsOwner({ cfg, writePreferences: createAppPreferencesWriter({ cfg }), backendFor: () => backend, evictLiveSessionsForChat: vi.fn(async () => {}), hooks, ...overrides });
+  return createSettingsOwner({ cfg, writePreferences: createAppPreferencesWriter({ cfg }), backendFor: () => backend, evictLiveSessionsForChat: vi.fn(async () => {}), ...overrides });
 }
 
 beforeEach(async () => {
@@ -51,13 +50,6 @@ const agentCases = [
   { id: 'CARD-024', section: 'run', patch: { pendingPolicy: 'queue' }, field: 'pendingPolicy', expected: 'queue' },
   { id: 'CARD-025', section: 'completion', patch: { mode: 'failures' }, field: 'completionReminder.mode', expected: 'failures' },
   { id: 'CARD-026', section: 'completion', patch: { longTaskMinutes: 1440 }, field: 'completionReminder.longTaskMinutes', expected: 1440 },
-  { id: 'CARD-029', section: 'cliBridge', patch: { notifyScope: 'bound_projects' }, field: 'cliBridge.notifyScope', expected: 'bound_projects' },
-  { id: 'CARD-030', section: 'cliBridge', patch: { agents: { claude: false, codex: true } }, field: 'cliBridge.agents', expected: { claude: false, codex: true } },
-  { id: 'CARD-031', section: 'cliBridge', patch: { keepAwake: { enabled: true } }, field: 'cliBridge.keepAwake.enabled', expected: true },
-  { id: 'CARD-032', section: 'cliBridge', patch: { approval: { enabled: true, timeoutSeconds: 86400 } }, field: 'cliBridge.approval', expected: { enabled: true, timeoutSeconds: 86400 } },
-  { id: 'CARD-033', section: 'cliBridge', patch: { taskCompletion: { enabled: true, replyEnabled: true, replyTimeoutSeconds: 86400 } }, field: 'cliBridge.taskCompletion', expected: { enabled: true, replyEnabled: true, replyTimeoutSeconds: 86400 } },
-  { id: 'CARD-034', section: 'cliBridge', patch: { allowCache: { enabled: true, scope: 'session' } }, field: 'cliBridge.allowCache', expected: { enabled: true, scope: 'session' } },
-  { id: 'CARD-035', section: 'cliBridge', patch: { presence: { enabled: true, platform: 'auto', idleThresholdSeconds: 3600 } }, field: 'cliBridge.presence.idleThresholdSeconds', expected: 3600 },
   { id: 'CARD-039', section: 'paths', patch: { projectsRootDir: '/tmp/parity-projects' }, field: 'projectsRootDir', expected: '/tmp/parity-projects' },
 ] as const;
 
@@ -78,6 +70,7 @@ describe('agent settings persist in config.json and preserve unrelated data', ()
     expect(disk.secrets).toEqual(original.secrets);
     expect(disk.futureRoot).toBe(17);
     expect((disk.preferences as Record<string, unknown>).futurePreference).toBe(true);
+    expect((disk.preferences as Record<string, unknown>).cliBridge).toEqual({ enabled: false, presence: { future: 9 } }); // 咖啡一下 left it, kept as is
     const after = await settings.read(agent) as AgentSettingsView;
     expect(getField(after.sections[section].stored, field.includes('.') ? field.slice(field.indexOf('.') + 1) : field)).toEqual(expected);
   });
@@ -93,12 +86,6 @@ const edgeCases = [
   { id: 'CARD-025', section: 'completion', patch: { mode: 'long' }, field: 'completionReminder.mode', expected: 'long' },
   { id: 'CARD-025', section: 'completion', patch: { mode: 'always' }, field: 'completionReminder.mode', expected: 'always' },
   { id: 'CARD-026', section: 'completion', patch: { longTaskMinutes: 1 }, field: 'completionReminder.longTaskMinutes', expected: 1 },
-  { id: 'CARD-029', section: 'cliBridge', patch: { notifyScope: 'all' }, field: 'cliBridge.notifyScope', expected: 'all' },
-  { id: 'CARD-029', section: 'cliBridge', patch: { notifyScope: 'none' }, field: 'cliBridge.notifyScope', expected: 'none' },
-  { id: 'CARD-030', section: 'cliBridge', patch: { agents: { claude: true, codex: false } }, field: 'cliBridge.agents', expected: { claude: true, codex: false } },
-  { id: 'CARD-032', section: 'cliBridge', patch: { approval: { enabled: false, timeoutSeconds: 1 } }, field: 'cliBridge.approval', expected: { enabled: false, timeoutSeconds: 1 } },
-  { id: 'CARD-033', section: 'cliBridge', patch: { taskCompletion: { enabled: false, replyEnabled: false, replyTimeoutSeconds: 1 } }, field: 'cliBridge.taskCompletion', expected: { enabled: false, replyEnabled: false, replyTimeoutSeconds: 1 } },
-  { id: 'CARD-035', section: 'cliBridge', patch: { presence: { enabled: false, platform: 'macos', idleThresholdSeconds: 10 } }, field: 'cliBridge.presence', expected: { future: 9, enabled: false, platform: 'macos', idleThresholdSeconds: 10 } },
 ] as const;
 
 it.each(edgeCases)('$id accepts $section boundary $field', async ({ section, patch, field, expected }) => {
@@ -169,17 +156,11 @@ it('CARD-017 CARD-018 handles members, audience and immutable owner with persist
   expect(a.ownerOpenId).toBe('ou_owner');
 });
 
-it('CARD-022 CARD-023 CARD-026 CARD-032 CARD-033 CARD-035 rejects out-of-range values without writing', async () => {
+it('CARD-022 CARD-023 CARD-026 rejects out-of-range values without writing', async () => {
   const invalid = [
     ['run', { maxConcurrentRuns: 0 }], ['run', { maxConcurrentRuns: 51 }], ['run', { maxConcurrentRuns: 1.5 }],
     ['run', { runIdleTimeoutSeconds: 9 }], ['run', { runIdleTimeoutSeconds: 3601 }],
     ['completion', { longTaskMinutes: 0 }], ['completion', { longTaskMinutes: 1441 }],
-    ['cliBridge', { approval: { enabled: true, timeoutSeconds: 0 } }],
-    ['cliBridge', { approval: { enabled: true, timeoutSeconds: 86401 } }],
-    ['cliBridge', { taskCompletion: { enabled: true, replyEnabled: true, replyTimeoutSeconds: 0 } }],
-    ['cliBridge', { taskCompletion: { enabled: true, replyEnabled: true, replyTimeoutSeconds: 86401 } }],
-    ['cliBridge', { presence: { enabled: true, platform: 'auto', idleThresholdSeconds: 9 } }],
-    ['cliBridge', { presence: { enabled: true, platform: 'auto', idleThresholdSeconds: 3601 } }],
   ] as const;
   const before = await readFile(paths.configFile, 'utf8');
   for (const [section, patch] of invalid) {
@@ -188,26 +169,13 @@ it('CARD-022 CARD-023 CARD-026 CARD-032 CARD-033 CARD-035 rejects out-of-range v
   expect(await readFile(paths.configFile, 'utf8')).toBe(before);
 });
 
-it('CARD-027 CARD-028 dispatches voice actions, starts CLI once, repairs both hook backends and disables', async () => {
+it('CARD-027 dispatches voice actions', async () => {
   const voiceAction = vi.fn(async () => {});
-  const start = vi.fn(async () => {});
-  const shutdown = vi.fn(async () => {});
-  const settings = await owner({ voiceAction, cliBridge: { start, shutdown } });
+  const settings = await owner({ voiceAction });
   for (const action of ['enable', 'test', 'refreshPermission', 'disable'] as const) {
     expect((await settings.act({ kind: 'voice', botId, action: { action } })).kind).toBe('saved');
   }
   expect(voiceAction.mock.calls.map(call => (call as unknown as [{ action: string }])[0].action)).toEqual(['enable', 'test', 'refreshPermission', 'disable']);
-  const before = await settings.read(agent) as AgentSettingsView;
-  expect((await settings.act({ kind: 'setCliBridgeEnabled', botId, enabled: true, revision: before.cliRuntime.revision })).kind).toBe('saved');
-  expect(start).toHaveBeenCalledOnce();
-  expect((await loadConfig()).preferences?.cliBridge?.enabled).toBe(true);
-  hooks.install.mockClear();
-  expect((await settings.act({ kind: 'repairCliHooks', botId })).kind).toBe('saved');
-  expect(hooks.install.mock.calls).toHaveLength(2);
-  const enabled = await settings.read(agent) as AgentSettingsView;
-  expect((await settings.act({ kind: 'setCliBridgeEnabled', botId, enabled: false, revision: enabled.cliRuntime.revision })).kind).toBe('saved');
-  expect(shutdown).toHaveBeenCalledOnce();
-  expect((await loadConfig()).preferences?.cliBridge?.enabled).toBe(false);
 });
 
 it('CARD-036 CARD-038 CARD-040 keeps comment, title and current-session model choices separate', async () => {
