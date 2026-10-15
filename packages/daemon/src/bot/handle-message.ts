@@ -542,8 +542,11 @@ interface ActiveState {
   /** A compaction runs on this session now (an idle /compact, or a queued one between turns). */
   compacting?: boolean;
   /** Set while /compact or /new holds the session with no run: input waits here and
-   * goes through intake again once the command is done (s15). */
-  deferred?: { id: string; go: () => void }[];
+   * goes through intake again once the command is done (s15). `early` tells one
+   * sent before a /new that swapped ({@link newAt}) instead. */
+  deferred?: { id: string; at?: number; go: () => void; early: () => void }[];
+  /** The /new command's send time, once its swap is done: input sent before it belongs to the old session. */
+  newAt?: number;
 }
 
 /** Inputs a synthetic turn (🔁 重试) carries that a real message would not. */
@@ -1490,6 +1493,10 @@ export function createOrchestrator(
    */
   async function onRecall({ messageId: id, chatId, recallType }: RecallEvent): Promise<void> {
     if (!id || !chatId) return;
+    const say = (lookup: string, sessions = 0, noted = 0): void =>
+      log.info('intake', 'recall', { chat: chatId.slice(-6), msg: id.slice(-6), type: recallType ?? null, lookup, sessions, noted });
+    // Pushed again: the first event's notes stand (once said, a second lookup would add them back).
+    if (recalled.has(id)) { say('repeat'); return; }
     noteRecalled(id);
     let dropped = 0;
     for (const state of active.values()) {
@@ -1498,9 +1505,9 @@ export function createOrchestrator(
     }
     if (dropped) log.info('intake', 'recall-queued-dropped', { msgId: id, dropped });
     const bindings = (await listSessions().catch(() => [])).filter((s) => s.chatId === chatId && !s.detached);
-    if (!bindings.length) return;
+    if (!bindings.length) { say('skipped'); return; }
     const x = await orStop(fetchMessageMeta(channel, id, names), undefined);
-    if (x?.from === 'self') return; // the bot's own: its native history has it
+    if (x?.from === 'self') { say('self', bindings.length); return; } // the bot's own: its native history has it
     const list = x && !isTopicReply(x, id) && topics && bindings.some((b) => !isMainKey(b.threadId, chatId)) ? await topics.list(chatId) : [];
     const other = recallType !== undefined && recallType !== 'message_owner';
     const who = x ? { kind: x.from, ...(x.senderId ? { openId: x.senderId } : {}) } : undefined;
@@ -1514,7 +1521,7 @@ export function createOrchestrator(
       // Only while the binding still points at the session the message reached.
       void trackTask(patchSession(rec.threadId, (r) => (r.sessionId === rec.sessionId ? { recalls: addRecall(r.recalls, note) } : {})).catch(() => undefined));
     }
-    log.info('intake', 'recall', { chat: chatId.slice(-6), msg: id.slice(-6), type: recallType ?? null, lookup: x ? 'ok' : 'failed', sessions: bindings.length, noted });
+    say(x ? 'ok' : 'failed', bindings.length, noted);
   }
 
   /** Parse a leading slash command; null otherwise. */
@@ -1852,8 +1859,12 @@ export function createOrchestrator(
     if (existing) {
       // A /compact or /new holds the session: wait, then go through here again (s15).
       if (existing.deferred && !extra?.retry) {
-        existing.deferred.push({ id: msg.messageId, go: () =>
-          startReservedRun(msg, text, sessionKey, flat, project, perm, preloadedImages, preIngested, summaryText, goal, extra) });
+        existing.deferred.push({ id: msg.messageId, at: msg.createTime, go: () =>
+          startReservedRun(msg, text, sessionKey, flat, project, perm, preloadedImages, preIngested, summaryText, goal, extra), early: () => {
+          log.info('intake', 'reject', { reason: 'before-new', msgId: msg.messageId });
+          void trackTask(channel.send(msg.chatId, { markdown: '⚠️ 这条在 `/new` 之前发的，新会话不带它，要问就再发一次。' },
+            { replyTo: msg.messageId, replyInThread: !flat }).catch(() => undefined));
+        } });
         log.info('intake', 'deferred', { msgId: msg.messageId });
         return;
       }
@@ -2681,10 +2692,12 @@ export function createOrchestrator(
     }));
   }
 
-  /** End a /compact or /new hold: the input that waited on it goes through intake again, in order. */
+  /** End a /compact or /new hold: the input that waited on it goes through intake again, in order.
+   * After a swap, input sent before the /new is told instead: the new session starts at the command (product.md 3.5). */
   function releaseHold(sessionKey: string, reserved: ActiveState): void {
     if (active.get(sessionKey) === reserved) active.delete(sessionKey);
-    if (!shuttingDown) for (const d of reserved.deferred?.splice(0) ?? []) d.go();
+    const newAt = reserved.newAt;
+    if (!shuttingDown) for (const d of reserved.deferred?.splice(0) ?? []) (newAt && d.at && d.at < newAt ? d.early : d.go)();
   }
 
   /** Tell the sender a /compact that waited on a run that stopped did not happen (not at shutdown). */
@@ -2842,6 +2855,7 @@ export function createOrchestrator(
           createdAt: Date.now(),
           updatedAt: Date.now(),
         });
+        reserved.newAt = msg.createTime;
         await sendManagedCard(channel, msg.chatId, buildClearedCard(), msg.messageId, false).catch((err) =>
           log.fail('card', err, { phase: 'clear' }),
         );

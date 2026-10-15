@@ -197,7 +197,7 @@ describe('buildWelcomeCard 按后端能力裁剪命令（与 /help 同源 caps�
 
   it('单会话群欢迎卡列出 /new 与 /resume（codex 默认全能）', () => {
     const single = JSON.stringify(buildWelcomeCard('single'));
-    expect(single).toContain('`/new` → 开新会话（管理员，旧的能 `/resume` 回来，飞书消息保留）');
+    expect(single).toContain('`/new`（或 `/clear`）→ 开新会话（管理员，旧的能 `/resume` 回来，飞书消息保留）');
     expect(single).toContain('/resume');
   });
 

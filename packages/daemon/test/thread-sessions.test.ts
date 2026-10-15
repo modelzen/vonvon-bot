@@ -1153,19 +1153,26 @@ describe('/new, /compact while busy and recall notes (s15)', () => {
     expect(fake.backend.startThread).not.toHaveBeenCalled();
   });
 
-  it('runs a message sent during the swap on the new session', async () => {
+  it('runs a message sent during the swap on the new session, and tells one sent before the command', async () => {
     fake.records.set('chat', record('chat'));
     const fresh = thread('fresh');
     let start!: (t: unknown) => void;
     fake.backend.startThread.mockImplementationOnce(() => new Promise((resolve) => { start = resolve; }));
     const o = setup();
-    await o.onMessage(message('/new'));
+    const cmd = message('/new');
+    await o.onMessage(cmd);
     await vi.waitFor(() => expect(fake.backend.startThread).toHaveBeenCalled());
-    await o.onMessage(message('换完再说'));
-    await logged('deferred');
+    const before = message('命令之前发的', undefined, { createTime: cmd.createTime - 1 }); // still prepared, or Feishu's order
+    await o.onMessage(before);
+    await o.onMessage(message('换完再说', undefined, { createTime: cmd.createTime + 1 }));
+    await vi.waitFor(() => expect((fake.log.info.mock.calls as unknown[][]).filter((c) => c[1] === 'deferred')).toHaveLength(2));
     start(fresh.t);
     await done();
+    expect(fresh.consumed).toHaveLength(1);
     expect(fresh.consumed[0]!.text).toContain('换完再说');
+    expect(fresh.consumed[0]!.text).not.toContain('命令之前发的');
+    expect(fake.send).toHaveBeenCalledWith('chat', { markdown: '⚠️ 这条在 `/new` 之前发的，新会话不带它，要问就再发一次。' }, expect.objectContaining({ replyTo: before.messageId }));
+    expect(fake.log.info).toHaveBeenCalledWith('intake', 'reject', { reason: 'before-new', msgId: before.messageId });
     expect(fake.backend.resumeThread).not.toHaveBeenCalled();
     expect(sent()).not.toContain('请重发');
   });
@@ -1265,10 +1272,21 @@ describe('/new, /compact while busy and recall notes (s15)', () => {
     await done();
     expect(run.consumed[0]!.text).toMatch(new RegExp(`^\\[飞书 · 群「test」· 主区\\]\\n${clock} 〔撤回〕李四撤回了一条消息，不要再用它。\\n\\[/飞书\\]\\n`));
     await vi.waitFor(() => expect(fake.records.get('chat').recalls).toEqual([]));
+    const gets = fake.get.mock.calls.length;
+    await o.onRecall({ messageId: 'om_r', chatId: 'chat', recallType: 'message_owner' }); // Feishu pushes it again
+    expect(fake.get).toHaveBeenCalledTimes(gets);
+    expect(fake.records.get('chat').recalls).toEqual([]);
+    expect(fake.log.info).toHaveBeenCalledWith('intake', 'recall', { chat: 'chat', msg: 'om_r', type: 'message_owner', lookup: 'repeat', sessions: 0, noted: 0 });
     fake.log.info.mockClear();
     await o.onMessage(message('再说'));
     await done();
     expect(run.consumed[1]!.text).not.toContain('〔撤回〕');
+  });
+
+  it('logs a recall in a chat with no session yet', async () => {
+    const o = setup();
+    await o.onRecall({ messageId: 'om_quiet', chatId: 'chat' });
+    expect(fake.log.info).toHaveBeenCalledWith('intake', 'recall', { chat: 'chat', msg: '_quiet', type: null, lookup: 'skipped', sessions: 0, noted: 0 });
   });
 
   it('notes a recall for the sessions the message reached only', async () => {
@@ -1289,6 +1307,7 @@ describe('/new, /compact while busy and recall notes (s15)', () => {
     await o.onRecall({ messageId: 'om_unseen', chatId: 'chat' });
     recalledOnce('om_mine', at, { sender: { id: 'cli_me', id_type: 'app_id', sender_type: 'app' } }); // the bot's own
     await o.onRecall({ messageId: 'om_mine', chatId: 'chat' });
+    expect(fake.log.info).toHaveBeenCalledWith('intake', 'recall', expect.objectContaining({ msg: 'm_mine', lookup: 'self', sessions: 2, noted: 0 }));
     expect(ids('chat')).toEqual(['om_older', 'om_main']);
     expect(ids('omt_t')).toEqual(['om_reply', 'om_main']);
     expect(fake.records.get('omt_t').recalls[0]).toMatchObject({ other: true });

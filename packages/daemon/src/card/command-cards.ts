@@ -402,7 +402,7 @@ export function buildWelcomeCard(
           talkLine(noMention, '交给我处理'),
           ...(showGoal ? [goalLine] : []),
           '· `/model` → 切换模型 / 推理强度',
-          `· \`/new\` → 开新会话（管理员，${showResume ? '旧的能 `/resume` 回来，' : ''}飞书消息保留）`,
+          `· \`/new\`（或 \`/clear\`）→ 开新会话（管理员，${showResume ? '旧的能 `/resume` 回来，' : ''}飞书消息保留）`,
           ...(showResume ? ['· `/resume` → 切回历史会话（管理员）'] : []),
           '· `/settings` → 群设置（免@ 开关）',
           '· `/help` → 命令速查卡',
