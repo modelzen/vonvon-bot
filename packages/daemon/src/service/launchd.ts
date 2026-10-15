@@ -260,7 +260,16 @@ export function createLaunchdService(options: { root: string }, overrides: Parti
       if (d.now() >= deadline) break;
       await d.pause(50);
     } while (d.now() < deadline);
-    if (stale) throw new Error(`Daemon PID ${stale.pid} could not be verified and no daemon replaced it; readiness timed out.`);
+    if (stale) {
+      // Nothing replaced the skipped owner; its earlier verification failure may have been transient, so try it once more.
+      const owner = await d.readOwner(s.root);
+      if (owner?.listen && isStaleOwner(owner, stale)) {
+        await d.verifyOwner(s.root, owner);
+        if (owner.listen !== `127.0.0.1:${port}`) throw new Error(`Daemon PID ${owner.pid} already runs at ${owner.listen}, not requested port ${port}.`);
+        return { pid: owner.pid, startedAt: owner.startedAt, listen: owner.listen, port };
+      }
+      throw new Error(`Daemon PID ${stale.pid} could not be verified and no replacement became ready; readiness timed out.`);
+    }
     throw new Error('Daemon readiness timed out');
   }
 

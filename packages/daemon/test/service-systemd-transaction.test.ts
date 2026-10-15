@@ -466,8 +466,10 @@ it('start asks systemd past a stale owner that failed authentication and waits f
   await expect(service.start({ staleOwner: stale })).resolves.toMatchObject({ pid: 42001, port: 32123 });
   expect(f.mutations()).toEqual([`start ${SYSTEMD_UNIT_NAME}`]);
   f.state.owner = stale; f.state.onPause = async () => {};
-  await expect(service.start({ staleOwner: stale })).rejects.toThrow('Daemon PID 42000 could not be verified');
-  await expect(service.start()).rejects.toThrow('auth refused');
+  await expect(service.start({ staleOwner: stale })).rejects.toThrow('auth refused');
+  await expect(f.service().start({ staleOwner: stale })).resolves.toMatchObject({ pid: 42000 });
+  f.state.onPause = async () => { f.state.owner = { ...stale, listen: null }; };
+  await expect(service.start({ staleOwner: stale })).rejects.toThrow('Daemon PID 42000 could not be verified and no replacement became ready');
 });
 it('unknown enable observation refuses installation before writing', async () => {
   const f = await fixture(); await f.seed(); f.state.enabledReply = { ...failed('client timed out'), status: null, stdout: 'enabled' };

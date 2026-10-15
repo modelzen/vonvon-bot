@@ -95,6 +95,25 @@ it('starts the registered manager past a recorded owner that never publishes rea
     expect(fixture.verify).not.toHaveBeenCalled();
   } finally { vi.useRealTimers(); }
 });
+it.each([['verifies once more and returns', true], ['keeps the exit diagnosis', false]] as const)('when the child loses to an unverified owner that becomes ready, %s', async (_name, recovers) => {
+  vi.useFakeTimers();
+  try {
+    fixture.registration.mockResolvedValue({ kind: 'absent' });
+    const child = new ChildProcess();
+    Object.defineProperties(child, { pid: { value: 5555 }, exitCode: { value: 1 } });
+    vi.spyOn(child, 'unref').mockImplementation(() => {});
+    fixture.spawn.mockReturnValue(child);
+    fixture.owner.mockResolvedValue(owner);
+    fixture.verify.mockRejectedValueOnce(new PidLockError('busy'));
+    if (recovers) fixture.verify.mockResolvedValue(undefined); else fixture.verify.mockRejectedValue(new PidLockError('busy'));
+    const started = runStart();
+    const settled = started.then(value => ({ value }), (error: unknown) => ({ error }));
+    await vi.advanceTimersByTimeAsync(2_000);
+    if (recovers) expect(await settled).toEqual({ value: { running: true, ...owner } });
+    else expect(await settled).toMatchObject({ error: expect.objectContaining({ message: expect.stringContaining('Daemon exited before readiness') }) });
+    expect(fixture.verify).toHaveBeenCalledTimes(2);
+  } finally { vi.useRealTimers(); }
+});
 it('refuses unrecognized definitions', async () => {
   fixture.registration.mockResolvedValue({ kind: 'unrecognized', location: '/service', reason: 'invalid' });
   await expect(runStart()).rejects.toThrow('Unrecognized service registration /service: invalid');

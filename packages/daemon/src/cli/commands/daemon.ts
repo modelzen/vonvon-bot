@@ -108,7 +108,10 @@ export async function runStart(port = 0): Promise<DaemonStatus> {
       exitedAt ??= Date.now();
       if (Date.now() - exitedAt > 1000) {
         // The child lost the host mutex to an owner we could not verify; it may have become ready since.
-        if (lock && unverified && lock.pid === unverified.pid && lock.listen) return checkedStatus();
+        if (lock && unverified && lock.pid === unverified.pid && lock.listen) {
+          try { return await checkedStatus(); }
+          catch (error) { if (!(error instanceof PidLockError)) throw error; }
+        }
         throw new Error(`Daemon exited before readiness. Check ${join(paths.appDir, 'daemon.log')}.`);
       }
     }
