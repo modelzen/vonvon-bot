@@ -1,7 +1,7 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   ModelInfo as ClaudeSdkModelInfo,
   Query,
@@ -34,15 +34,22 @@ function asyncQuery(
   return generator;
 }
 
-/** A throwaway CLAUDE_CONFIG_DIR holding the given files (paths relative to it). */
-function claudeConfig(files: string[]): { dir: string; done: () => void } {
+const configDirs: string[] = [];
+afterEach(() => {
+  vi.unstubAllEnvs();
+  for (const dir of configDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+/** A throwaway CLAUDE_CONFIG_DIR holding the given files (paths relative to it), removed after the test. */
+function claudeConfig(files: string[]): string {
   const dir = mkdtempSync(join(tmpdir(), 'vonvon-claude-config-'));
+  configDirs.push(dir);
   for (const file of files) {
     mkdirSync(join(dir, file, '..'), { recursive: true });
     writeFileSync(join(dir, file), '{}\n');
   }
   vi.stubEnv('CLAUDE_CONFIG_DIR', dir);
-  return { dir, done: () => { vi.unstubAllEnvs(); rmSync(dir, { recursive: true, force: true }); } };
+  return dir;
 }
 
 function successResult(title: string): SDKMessage {
@@ -184,7 +191,7 @@ describe('Claude backend native session titles', () => {
       renameSession: vi.fn(),
     } as unknown as ClaudeSdkFacade;
     const backend = new ClaudeAgentBackend(async () => sdk);
-    const config = claudeConfig(['projects/-repo/session-1.jsonl']);
+    claudeConfig(['projects/-repo/session-1.jsonl']);
 
     const fresh = await backend.startThread({ cwd: '/repo' });
     const resumed = await backend.resumeThread({ cwd: '/repo', sessionId: 'session-1' });
@@ -206,22 +213,19 @@ describe('Claude backend native session titles', () => {
 
     await fresh.close();
     await resumed.close();
-    config.done();
   });
 
   it('refuses to resume a session Claude Code never saved, so the caller starts a fresh one', async () => {
     const query = vi.fn(() => asyncQuery([]));
     const sdk = { query, listSessions: vi.fn(), getSessionInfo: vi.fn(), getSessionMessages: vi.fn(), renameSession: vi.fn() } as unknown as ClaudeSdkFacade;
     const backend = new ClaudeAgentBackend(async () => sdk);
-    const config = claudeConfig(['projects/-repo/other-session.jsonl']);
+    claudeConfig(['projects/-repo/other-session.jsonl']);
 
     await expect(backend.resumeThread({ cwd: '/repo', sessionId: 'never-saved' })).rejects.toThrow('没有保存下来');
     expect(query).not.toHaveBeenCalled();
-    config.done();
 
-    const empty = claudeConfig([]);
+    claudeConfig([]);
     await expect(backend.resumeThread({ cwd: '/repo', sessionId: 'never-saved' })).rejects.toThrow('没有保存下来');
-    empty.done();
   });
 
   it('resumes a saved transcript in any project folder, even one getSessionInfo cannot summarise', async () => {
@@ -230,25 +234,23 @@ describe('Claude backend native session titles', () => {
     const sdk = { query, listSessions: vi.fn(), getSessionInfo, getSessionMessages: vi.fn(), renameSession: vi.fn() } as unknown as ClaudeSdkFacade;
     const backend = new ClaudeAgentBackend(async () => sdk);
     // Claude Code named the folder after another spelling of the path (case, symlink): still found.
-    const config = claudeConfig(['projects/-Users-me-Documents-repo/long-session.jsonl']);
+    claudeConfig(['projects/-Users-me-Documents-repo/long-session.jsonl']);
 
     const resumed = await backend.resumeThread({ cwd: '/Users/me/documents/repo', sessionId: 'long-session' });
     expect(query.mock.calls[0]![0].options).toEqual(expect.objectContaining({ resume: 'long-session' }));
     await resumed.close();
-    config.done();
   });
 
   it('still resumes when the transcript folder cannot be read', async () => {
     const query = vi.fn((_params: { options?: { resume?: string } }) => asyncQuery([]));
     const sdk = { query, listSessions: vi.fn(), getSessionInfo: vi.fn(), getSessionMessages: vi.fn(), renameSession: vi.fn() } as unknown as ClaudeSdkFacade;
     const backend = new ClaudeAgentBackend(async () => sdk);
-    const config = claudeConfig([]);
-    writeFileSync(join(config.dir, 'projects'), 'not a folder');
+    const dir = claudeConfig([]);
+    writeFileSync(join(dir, 'projects'), 'not a folder');
 
     const resumed = await backend.resumeThread({ cwd: '/repo', sessionId: 'session-1' });
     expect(query.mock.calls[0]![0].options).toEqual(expect.objectContaining({ resume: 'session-1' }));
     await resumed.close();
-    config.done();
   });
 
   it('uses customTitle/renameSession and an ephemeral no-tools structured query', async () => {
