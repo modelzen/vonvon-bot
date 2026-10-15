@@ -98,6 +98,14 @@ process-ci、draft 和 final 里的流程说法，凡和 `AGENTS.md` 不一致�
 | [e01-background-tasks](2026-10-14-v1-spikes/e01-background-tasks.md) | `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` 能不能让主回合等子 agent，后台 Bash 会怎样，关闭会话时后台任务会怎样 | 前台子 agent 跑着时按 ⏹ 还没测 |
 | [e02-claude-permissions-sessions](2026-10-14-v1-spikes/e02-claude-permissions-sessions.md) | 三种模式下哪些请求走到 canUseTool，今天的 AskUserQuestion，拒绝，中途改档和 resume，子 agent 的 id，读别的工作目录下的会话，`claudeMdExcludes` | 没带沙箱，沙箱看 e03。第 7 节（claude.ai 连接器和 Claude Code 自己的工具）和第 8 节（会话标题）是顺带发现，没经过核实那一轮 |
 
+## 2026-10-15 第一版实验 e06
+
+`2026-10-15-v1-spikes/`，基于 `main` 的 `f1c2fb8`。`docs/v1-plan.md` 第 4 节的 e06，在 owner 的 Mac 上经 Paseo 的检查会话实测。
+
+| 报告 | 内容 | 说明 |
+|---|---|---|
+| [e06-launchagent-keychain](2026-10-15-v1-spikes/e06-launchagent-keychain.md) | LaunchAgent 起的 daemon 能不能用主人的 Claude 和 Codex 登录，读钥匙串会不会弹窗，`kill -9` 后多久拉起、退出码记在哪，"允许在后台"里显示什么，怎么判断重新登录过 | 没打包，用 worktree 里的 Electron 跑。owner 的凭据都在文件里，钥匙串那条路没验证到；重新登录的判断只查了资料 |
+
 ## 补充
 
 codex-desktop 报告写完以后，对照 openai/codex 源码又核实了一次。`codex mcp list` 里的 `cua_repl` 来自内置插件 `unified-computer-use@openai-bundled`，就是原生 Computer Use；显示为 disabled 的 `computer-use` 是旧通道。经 Paseo 调用时，Mac 锁屏会失败（getpaseo/paseo#3346），`full-access` 模式会自动批准打开应用。process 报告里的相关说法和这里一致。
