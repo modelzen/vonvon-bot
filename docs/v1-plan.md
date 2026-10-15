@@ -247,9 +247,9 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s02b 留给 s02c 的：设置协议和 RPC 里的咖啡一下还在，界面已经不调了：Agent 设置的 `cliBridge` 一节和 `cliRuntime`，本机设置的 `coffee`，`setCliBridgeEnabled`、`repairCliHooks`、`setHostCliRoute`、`repairHostCliHooks` 四个写操作（`D/admin/settings.ts`、`host-settings.ts` 和协议，连测试约 750 行，放进本片会超过 1500 行）。bot 不再把服务交给设置层，`cliRuntime.running` 一直是 false，`setCliBridgeEnabled` 回"请先启动此 Agent"。s02c 的第一片先删这一层，`vonvon settings` 里隐藏 `cliBridge` 的过滤跟着去掉。`packages/ui/src/reference/styles` 里早就没人用的 `coffee-*` 样式也在那时删。s02c1 已删，见下面的 s02c1 做法。
 - s02c：几乎全是删除，开工前用 `git diff --stat` 量，按 1500 行拆成 s02c1、s02c2……，依次合入。不急，放在第二条线上做。s02b 以后 `handle-message.ts` 不再引用 `D/cli-bridge/`，s02c 不用再改它。cli-bridge 的 Windows 分支随它一起删。s01 说不动的 hook 正则在 `D/cli-bridge/hooks.ts:310`，跟着删掉；s62 卸 bridge 的 hook 用 #226 里的 hook 改写代码，不靠它。
 - s02c 拆法：2026-10-15 量过，`D/cli-bridge/` 的源码约 1990 行，它的测试约 2290 行，加上设置协议这一层和配置，s02c 一共约 5600 行，比原来估的 4600 多，拆成 5 片，依次合入。按谁引用谁的顺序删：先删没人引用的，每片合入后都能单独过 typecheck。
-  - s02c1（约 1100 行）：设置协议这一层，见下面的 s02c1 做法。
+  - s02c1（约 1100 行，#326 已合入）：设置协议这一层，见下面的 s02c1 做法。
   - s02c2（约 780 行，子进程）：`vonvon hook` 改成直接退出的空命令：照收 `--agent`、`--bot`，什么都不输出，退出码 0，已经装进 Claude Code、Codex CLI 的 hook 照常在终端里问。删 `D/cli-bridge/index.ts`（只有 `vonvon hook` 引用它）、`protocol.ts`、`hooks.ts`（s01 说的 `hooks.ts:310` 的 hook 正则和 cmd.exe 引号在这里），和 `cli-bridge-hook-routing`、`cli-bridge-protocol`、`cli-bridge-hooks`、`cli-bridge-hook-targets` 四份测试；`coffee-retired.test.ts` 去掉对 `D/cli-bridge` 的 mock。合入前在 JP-VPS 上用源码跑 `vonvon hook --agent claude` 和 `--agent codex`，各喂一条 PermissionRequest 和 Stop，看标准输出是空的、退出码 0。
-  - s02c3（约 1190 行）：删 `cli-bridge-service.test.ts` 和 `cli-bridge-global-service.test.ts`。`service.ts` 连它的测试约 1700 行，一片放不下，所以测试先删；s02c2 以后 `service.ts` 已经没有调用方。
+  - s02c3（约 1190 行）：删 `cli-bridge-service.test.ts` 和 `cli-bridge-global-service.test.ts`。`service.ts` 连它的测试约 1700 行，一片放不下，所以测试先删；s02c2 以后 `service.ts` 已经没有调用方。测试只测 `service.ts`，别的测试没有引用它们；`service.ts` 本身和它对 `ipc.ts`、`store.ts` 等的引用留到 s02c4，所以这一片合入后 `D/cli-bridge/` 照样能过 typecheck。
   - s02c4（约 1360 行）：删 `service.ts`、`cards.ts`（Windows 离开检测的提示在这里）、`store.ts`，和 `cli-bridge-cards`、`cli-bridge-store` 两份测试；`D/card/dm-cards.ts:905` 注释里提到 `cli-bridge/cards` 的那句跟着改。
   - s02c5（约 1150 行）：删剩下的 `ipc.ts`、`parser.ts`、`keep-awake.ts`、`presence.ts`（PowerShell 离开检测）、`route.ts`、`types.ts` 和它们的五份测试，以及 `cli-bridge-config.test.ts`；删 `D/config/schema.ts` 里 `cliBridge` 的类型和读取函数（约 150 行）、`D/config/paths.ts` 的 `cliBridgeSocket` 和它的命名管道分支。`preferences.cliBridge` 到这一片才从类型里去掉，旧文件里的这个键照旧留着、没人读；`coffee-retired.test.ts` 里写 `cliBridge` 的那条配置改成不靠类型。`D/cli-bridge/` 到这里删空。
 - s02c1 做法（协议）：Agent 设置的 `cliBridge` 一节和 `cliRuntime`、本机设置的 `runtime.coffee`，`setCliBridgeEnabled`、`repairCliHooks`、`setHostCliRoute`、`repairHostCliHooks` 四个写操作，从协议、`D/admin/settings.ts`、`host-settings.ts`、`settings-parse.ts`、`settings-service.ts` 里删了。只给它们用的 hook 状态、生效时机 `next-hook` 和 `next-presence-check`、写操作结果 `diverged` 一起删；本机设置没有写操作了，写操作的结果里也就不再带本机视图。RPC 收到这四个写操作或存 `cliBridge` 这一节，按无效请求拒。`vonvon settings` 不再过滤 `cliBridge`，`--json` 里也没有了；`settings set cliBridge.…` 还是回"咖啡一下第一版已拿掉，不能改。"。
@@ -344,11 +344,11 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 
 | 状态 | 编号 | 切片 | 内容 | 约行数 | 依赖 | 风险 | Mac 检查 |
 |---|---|---|---|---|---|---|---|
-| [ ] | s09 | 真名和水位 | 按 open_id 换真名并缓存，拉历史带 `with_sender_name`；修水位：话题第一条不再重放、bot 开话题写水位、插话和排队推进水位、话题补拉翻页（3.5 末尾第 4 到 8 条） | 500 | s01、e10 | 并发、错误路径 | 无 |
+| [x] | s09 | 真名和水位 | 按 open_id 换真名并缓存，拉历史带 `with_sender_name`；修水位：话题第一条不再重放、bot 开话题写水位、插话和排队推进水位、话题补拉翻页（3.5 末尾第 4 到 8 条） | 500 | s01、e10 | 并发、错误路径 | 无 |
 | [x] | s10 | 连续群的话题单独成会话，被迫换会话时说一声 | 话题消息一律按 thread_id 分会话（3.5 末尾第 1 条）；resume 失败或目录变了而重建会话时，运行卡上说明 | 250 | — | 错误路径 | 无 |
 | [x] | s11 | 空闲超时 10 分钟、重试按钮、群里都能领文件 | 看门狗默认 600 秒，加暂停接口给 s30 用；超时和网络失败分开写、带［重试］；本群能用 bot 的人都能领文件（3.12） | 360 | — | 错误路径、并发 | 无 |
 | [x] | s12 | 自动压缩一直开，上下文仪表常驻 | 去掉"关闭自动压缩"，已存的 false 读时忽略；运行卡头部一直有仪表，压缩时写"已压缩 85% → 20%"（3.5"压缩"） | 470 | — | 数据迁移 | 无 |
-| [ ] | s13 | 话题登记表 | 每个 bot 每个群一份，记话题 id、第一条、谁开的、几点、标题、有没有会话；SessionRecord 加可选字段，旧文件不迁移（3.5"daemon 在本机记什么"）；没有用户可见变化，s14、s15、s48 要读它 | 380 | s09 | 并发、数据迁移 | 无 |
+| [x] | s13 | 话题登记表 | 每个 bot 每个群一份，记话题 id、第一条、谁开的、几点、标题、有没有会话；SessionRecord 加可选字段，旧文件不迁移（3.5"daemon 在本机记什么"）；没有用户可见变化，s14、s15、s48 要读它 | 380 | s09 | 并发、数据迁移 | 无 |
 | [ ] | s14 | 对话记录块：主区补拉、话题开场带主区、引用行 | 统一的记录块；主区按水位补拉，开场最多 20 条；话题开场带回指和主区 10 条；引用行带两边会话 id；压缩后主区下一次开口附"本群最近 5 个活跃话题"；缺 `im:message:readonly` 时只带触发消息（3.5） | 850 | s09、s13、e10 | 错误路径、并发 | 无（M3 验收前，预览版任务按 3.5 时间线第 1 到 6 步核对日志） |
 | [ ] | s15 | /new、/compact 排队和撤回说明 | 加 `/new`；主区 `/new`、`/clear` 只限主人和管理员，话题里不换；`/compact` 忙时排队；订阅撤回事件，进过会话的下次开口加一行说明（3.5"命令""撤回和编辑"） | 660 | s10、s13、s14 | 并发、关闭清理、错误路径 | 无 |
 | [x] | s16 | 手填模型 id | Claude 查模型列表用和跑回合一样的设置源；`/model` 卡和默认模型能手填 id（3.11） | 350 | — | 错误路径 | 无（owner 在用 DeepSeek 或 Kimi 的话，M3 验收时顺手试一次） |
