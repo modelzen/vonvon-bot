@@ -1053,6 +1053,41 @@ describe('topic openings, 引用行 and the topics table (s14b)', () => {
     await vi.waitFor(() => expect(fake.records.get('chat').topicsDue).toBe(''));
   });
 
+  it("asks the group and pulls the main area of a new topic session without waiting for the model list", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const run = thread('topic-session');
+    fake.backend.startThread.mockResolvedValue(run.t);
+    const rootAt = Date.now() - 60_000;
+    fake.history.mockResolvedValueOnce({ ok: true, complete: true, messages: [ctx('om_root', '订单接口一直报 500', rootAt, { senderName: '张三' })] });
+    fake.chat.mockResolvedValueOnce({ ok: true, complete: true, messages: [ctx('om_m1', '下午三点发版', rootAt - 40_000)] });
+    const o = setup();
+    const models = await fake.backend.listModels(); // after the boot prewarm: the turn's own call is held
+    fake.backend.listModels.mockImplementationOnce(async () => { await held; return models; });
+    await o.onMessage(message('@bot 帮忙看下', 'omt_new', { rootId: 'om_root' }));
+    await vi.waitFor(() => expect(fake.chat).toHaveBeenCalledWith(expect.anything(), 'chat', expect.objectContaining({ before: rootAt })));
+    expect(fake.chatGet).toHaveBeenCalledTimes(1);
+    expect(fake.backend.startThread).not.toHaveBeenCalled();
+    release();
+    await done();
+    expect(run.consumed[0]!.text).toContain('李四：下午三点发版');
+  });
+
+  it('looks up the topics under the main lines while a bot-opened topic session starts', async () => {
+    multi();
+    const run = thread('opened');
+    let release!: (t: unknown) => void;
+    fake.backend.startThread.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const trigger = message('订单接口一直报 500');
+    fake.chat.mockResolvedValueOnce({ ok: true, complete: true, messages: [ctx('om_r', '灰度方案', trigger.createTime - 1000, { threadId: 'omt_a' })] });
+    const o = setup(registry());
+    await o.onMessage(trigger);
+    await vi.waitFor(() => expect(fake.list).toHaveBeenCalled());
+    release(run.t);
+    await done();
+    expect(run.consumed[0]!.text).toContain('李四：灰度方案');
+  });
+
   it('does not open a second topic for a main @ re-pushed after a restart', async () => {
     multi();
     const topics = registry();

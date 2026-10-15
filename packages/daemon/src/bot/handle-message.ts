@@ -1839,6 +1839,15 @@ export function createOrchestrator(
         // The group's topics: the topic's title for the header, the 引用行 and the
         // table (s14b). The registry never throws.
         const listP = place && topics ? topics.list(msg.chatId) : Promise.resolve([]);
+        // A user-opened topic with no session yet: its opening's lookups need only the
+        // group and the topic's first message, so they overlap the session start and
+        // the model list (s14b). Never rejects; a recreated session does them later.
+        const rootId = topicId && msg.rootId && msg.rootId !== msg.messageId ? msg.rootId : undefined;
+        const isRoot = (m: ContextMessage) => m.messageId === rootId;
+        const openingP = rootId
+          ? priorP.then((p) => p ? undefined : topicOpening(msg, historyP.then((h) => h?.messages.find(isRoot)
+            ?? orStop(fetchQuotedMessage(channel, rootId, names), undefined)), listP, project, perm.roleSuffix)).catch(() => undefined)
+          : undefined;
         const [images, ingested, { thread: resolved, recreated, reason: recreateReason }, prior, specHistory, list] = await Promise.all([
           imagesP,
           ingestP,
@@ -1896,11 +1905,11 @@ export function createOrchestrator(
           let history = codexEmpty
             ? pull.messages
             : pull.messages.filter((m) => isUnread(prior, m.messageId, m.createTime));
-          const rootId = topicId && msg.rootId && msg.rootId !== msg.messageId ? msg.rootId : undefined;
-          if (codexEmpty && rootId && !history.some((m) => m.messageId === rootId)) {
+          const spec = codexEmpty ? await openingP : undefined;
+          if (codexEmpty && rootId && !history.some(isRoot)) {
             // The topic's first message is no longer re-quoted every turn, so a new
             // session gets it here once, even when the listing leaves it out.
-            const root = await orStop(fetchQuotedMessage(channel, rootId, names), undefined);
+            const root = spec ? spec.root : await orStop(fetchQuotedMessage(channel, rootId, names), undefined);
             if (root) history = [root, ...history];
           }
           const kept = keepRecent(history, codexEmpty ? rootId : undefined, codexEmpty ? OPENING_MAX : BACKFILL_MAX);
@@ -1913,7 +1922,7 @@ export function createOrchestrator(
             .filter((m) => m.streaming && now - m.createTime < STREAMING_RECHECK_MS)
             .map((m) => ({ id: m.messageId, at: m.createTime }));
           woven = kept.map((m) => m.messageId);
-          const root = rootId ? history.find((m) => m.messageId === rootId) : undefined;
+          const root = rootId ? history.find(isRoot) : undefined;
           const tier = perm.roleSuffix;
           let topicsPart: Pick<RecordBlock, 'opening' | 'quotes' | 'moreTopics' | 'table'> = {};
           let openingLog = {};
@@ -1931,7 +1940,8 @@ export function createOrchestrator(
             seenExtra = quotes.map((q) => ({ id: q.topicId, at: q.at }));
             tableShown = table.length > 0;
           } else if (codexEmpty && rootId) {
-            ({ part: topicsPart, log: openingLog } = await topicOpening(msg, root, list, project, tier));
+            const opening = spec && spec.root === root ? spec : await topicOpening(msg, Promise.resolve(root), Promise.resolve(list), project, tier);
+            ({ part: topicsPart, log: openingLog } = opening);
           }
           firstText = weaveRecordBlock(firstText, {
             place: { group: project?.name, me: channel.botIdentity?.name, ...(topicId ? { topic: { title: title ?? topicTitle(root?.text) } } : {}) },
@@ -2099,24 +2109,24 @@ export function createOrchestrator(
    * A user-opened topic session's opening (product.md 3.5, s14b): a pointer to
    * the message the topic hangs under, and the main area's 10 lines before it
    * with the 引用行 among them; in a single group the pointer names the main
-   * session (same tier). A topic group has no main area: none of it.
+   * session (same tier). A topic group has no main area: none of it. Each
+   * lookup starts once its inputs (the first message, the group's topics) arrive.
    */
-  async function topicOpening(msg: NormalizedMessage, root: ContextMessage | undefined, list: TopicView[], project: Project | undefined, tier: TurnPerm['roleSuffix']) {
+  async function topicOpening(msg: NormalizedMessage, rootP: Promise<ContextMessage | undefined>, listP: Promise<TopicView[]>, project: Project | undefined, tier: TurnPerm['roleSuffix']) {
+    const mainRecP = project?.kind === 'single' ? getSession(tier ? `${msg.chatId}#${tier}` : msg.chatId).catch(() => undefined) : undefined;
     // The group's mode first (cached), so a topic group pulls no main area.
-    const noMainP = orStop(topicCtx.noMainArea(msg.chatId), false);
-    const [noMain, pull, mainRec] = await Promise.all([
-      noMainP,
-      noMainP.then((no) => (!no && root?.createTime ? pullMainBefore(msg.chatId, root.createTime, root.messageId, tier) : undefined)),
-      project?.kind === 'single' ? getSession(tier ? `${msg.chatId}#${tier}` : msg.chatId).catch(() => undefined) : undefined,
-    ]);
-    if (noMain) return { part: {}, log: { topicGroup: true } };
-    const section = pull && root ? await mainSection(msg.chatId, pull, list, root.createTime, msg.threadId, tier) : { main: [] };
+    const [noMain, root] = await Promise.all([orStop(topicCtx.noMainArea(msg.chatId), false), rootP]);
+    if (noMain) return { root, part: {}, log: { topicGroup: true } };
+    const pull = root?.createTime ? await pullMainBefore(msg.chatId, root.createTime, root.messageId, tier) : undefined;
+    const section = pull && root ? await mainSection(msg.chatId, pull, await listP, root.createTime, msg.threadId, tier) : { main: [] };
+    const mainRec = await mainRecP;
     const pointer = {
       ...(root ? { root: { at: root.createTime, who: { kind: root.from, name: root.senderName } } } : {}),
       ...(mainRec?.sessionId ? { mainSessionId: mainRec.sessionId } : {}),
     };
     const { main, ...quoted } = section;
     return {
+      root,
       part: { opening: { pointer, main }, ...quoted },
       log: { pointer: true, mainLines: main.length, mainSession: Boolean(pointer.mainSessionId), topicGroup: false, mainOk: pull?.ok ?? false },
     };
@@ -2267,26 +2277,25 @@ export function createOrchestrator(
       // and any file attachments (their paths get woven into the prompt text).
       const imagesP = messageHasImages(msg) ? collectInboundImages(channel, msg) : Promise.resolve(undefined);
       const ingestP = ingestContext(msg, text);
-      // The opening's main-area lines before the trigger (not for a goal: its
-      // objective stays self-contained). Neither rejects.
-      const mainP = goal ? undefined : pullMainBefore(msg.chatId, msg.createTime, msg.messageId, perm.roleSuffix);
+      // The opening's main-area lines before the trigger and the 引用行 among them
+      // (not for a goal: its objective stays self-contained). Never rejects.
       const listP = !goal && topics ? topics.list(msg.chatId) : Promise.resolve([]);
+      const sectionP = goal ? undefined : Promise.all([pullMainBefore(msg.chatId, msg.createTime, msg.messageId, perm.roleSuffix), listP])
+        .then(async ([pull, list]) => ({ pull, ...await mainSection(msg.chatId, pull, list, msg.createTime, undefined, perm.roleSuffix) }));
       let thread: AgentThread;
       let model: string;
       let effort: ReasoningEffort;
       let images: string[] | undefined;
       let firstText: string;
       let voiceReply: VoiceReply | undefined;
-      let mainPull: ThreadPull | undefined;
-      let list: TopicView[];
+      let section: Awaited<typeof sectionP>;
       try {
-        const [started, imgs, ingested, pulled, topicList] = await Promise.all([threadP, imagesP, ingestP, mainP, listP]);
+        const [started, imgs, ingested, opened] = await Promise.all([threadP, imagesP, ingestP, sectionP]);
         ({ thread, model, effort } = started);
         images = imgs;
         firstText = ingested.text || '你好，我们开始吧。';
         voiceReply = ingested.voice;
-        mainPull = pulled;
-        list = topicList;
+        section = opened;
       } catch (err) {
         reaction?.done();
         // Keep the project reserved until any delayed backend process has closed.
@@ -2297,9 +2306,9 @@ export function createOrchestrator(
           .catch(() => undefined);
         return;
       }
-      if (mainPull) {
+      if (section) {
         // The bot-opened topic's opening (s14b): where it hangs, and the main area before it.
-        const { main, quotes, moreTopics } = await mainSection(msg.chatId, mainPull, list, msg.createTime, undefined, perm.roleSuffix);
+        const { pull, main, quotes, moreTopics } = section;
         firstText = weaveRecordBlock(firstText, {
           place: { group: project?.name, me: channel.botIdentity?.name, topic: { title: topicTitle(msg.content) } },
           entries: [],
@@ -2308,7 +2317,7 @@ export function createOrchestrator(
           quotes,
           moreTopics,
         });
-        log.info('intake', 'record-block', { place: 'topic', lines: 0, opening: true, botOpened: true, ok: mainPull.ok,
+        log.info('intake', 'record-block', { place: 'topic', lines: 0, opening: true, botOpened: true, ok: pull.ok,
           pointer: true, mainLines: main.length, quotes: quotes.length, moreTopics });
       }
       log.info('card', 'start', { project: project?.name ?? '(unregistered)', model, effort, images: images?.length ?? 0, goal: Boolean(goal) });
