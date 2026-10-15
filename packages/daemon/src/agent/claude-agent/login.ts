@@ -33,7 +33,7 @@ export function loginFromEnv(env: NodeJS.ProcessEnv, reason: string): ClaudeLogi
 }
 
 /** Each probe starts the ~250 MB CLI, and the desktop snapshot asks every 60 s, so a
- * signed-in answer is kept 30 minutes and others 5 minutes. 重新检测 passes `refresh`
+ * signed-in answer is kept 30 minutes and others 5 minutes. 检查登录 passes `refresh`
  * and shows a login made in the terminal at once. One probe at a time. */
 const SIGNED_IN_TTL_MS = 30 * 60_000;
 const OTHER_TTL_MS = 5 * 60_000;

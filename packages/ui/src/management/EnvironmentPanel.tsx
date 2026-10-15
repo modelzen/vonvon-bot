@@ -120,10 +120,11 @@ export function EnvironmentPanel({ request, onCodexLogin, codexJobs, codexBusy, 
     return () => { live = false; };
   }, [tools, request]);
   const checkLogin = useCallback(async (id: string, refresh: boolean) => {
+    if (refresh) setLogins((current) => { const next = { ...current }; delete next[id]; return next; });
     try {
       const reply = await request({ type: "backendLogin", id, refresh });
       if (reply.kind === "backendLogin") setLogins((current) => ({ ...current, [id]: reply }));
-    } catch { setLogins((current) => ({ ...current, [id]: { kind: "backendLogin", id, state: "unknown", message: "暂时无法检查登录，请重新检测。" } })); }
+    } catch { setLogins((current) => ({ ...current, [id]: { kind: "backendLogin", id, state: "unknown", message: "暂时无法检查登录，稍后再点“检查登录”。" } })); }
   }, [request]);
   useEffect(() => {
     for (const backend of backends) if (backend.id === "claude-agent" && backend.depState === "installed") void checkLogin(backend.id, false);
