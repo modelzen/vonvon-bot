@@ -9,7 +9,9 @@ import {
   getSessionTitleConfig,
   getSessionTitleEfforts,
   getShowToolCalls,
+  normalizeRunIdleTimeoutSeconds,
   resolveOwner,
+  RUN_IDLE_TIMEOUT_DEFAULT_SEC,
   RUN_IDLE_TIMEOUT_MAX_SEC,
   RUN_IDLE_TIMEOUT_MIN_SEC,
   summarizeSessionTitles,
@@ -799,7 +801,7 @@ export function buildVoiceSettingsCard(cfg: AppConfig, notice?: string): CardObj
  * this card stays fully interactive and updates in place.
  */
 export function buildSettingsCard(cfg: AppConfig): CardObject {
-  const watchdogSec = cfg.preferences?.runIdleTimeoutSeconds ?? 120;
+  const watchdogSec = normalizeRunIdleTimeoutSeconds(cfg.preferences?.runIdleTimeoutSeconds);
   const completionReminder = getCompletionReminderConfig(cfg);
   return card(
     [
@@ -827,11 +829,11 @@ export function buildSettingsCard(cfg: AppConfig): CardObject {
       ),
       hr(),
       settingSection('⏱ 运行控制'),
-      md(`**⏱ 假死超时** · 当前 **${watchdogSec === 0 ? '关闭' : `${watchdogSec} 秒`}**`),
+      md(`**⏱ 假死超时** · 当前 **${watchdogSec === 0 ? '关闭' : watchdogSec % 60 === 0 ? `${watchdogSec / 60} 分钟` : `${watchdogSec} 秒`}**`),
       note('多久没有任何输出就自动终止本轮（防卡死）。'),
       actions([
-        ...[0, 120, 300].map((v) =>
-          button(v === 0 ? '关闭' : `${v}秒`, { a: DM.setWatchdog, v: String(v) }, v === watchdogSec ? 'primary' : 'default'),
+        ...[0, 300, RUN_IDLE_TIMEOUT_DEFAULT_SEC].map((v) =>
+          button(v === 0 ? '关闭' : `${v / 60} 分钟`, { a: DM.setWatchdog, v: String(v) }, v === watchdogSec ? 'primary' : 'default'),
         ),
         button('自定义…', { a: DM.watchdogCustom }),
       ]),
@@ -1345,7 +1347,7 @@ export function buildCommentPromptCard(
  * {@link DM.watchdogCustomSubmit}; 返回 goes back to the settings card in place.
  */
 export function buildWatchdogCustomCard(cfg: AppConfig): CardObject {
-  const cur = cfg.preferences?.runIdleTimeoutSeconds ?? 120;
+  const cur = normalizeRunIdleTimeoutSeconds(cfg.preferences?.runIdleTimeoutSeconds);
   return card(
     [
       md('**自定义假死超时**'),

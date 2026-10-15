@@ -63,9 +63,8 @@ import {
   isAdmin,
   isChatAllowed,
   isUserAllowedInProject,
+  normalizeRunIdleTimeoutSeconds,
   resolveOwner,
-  RUN_IDLE_TIMEOUT_MAX_SEC,
-  RUN_IDLE_TIMEOUT_MIN_SEC,
   COMPLETION_REMINDER_LONG_TASK_MAX_MINUTES,
   COMPLETION_REMINDER_LONG_TASK_MIN_MINUTES,
   secretKeyForApp,
@@ -110,6 +109,7 @@ import {
   CONTROLS_EID,
   RC,
   attachRunImages,
+  idleLabel,
   type RunCardState,
 } from '../card/run-card';
 import { buildGoalDoneCard } from '../card/goal-card';
@@ -182,7 +182,7 @@ import { bridgeVersion } from '../core/version';
 import { getDesktopRelease } from '../service/desktop-release';
 import { runtimeDistribution } from '../service/distribution';
 import { paths } from '../config/paths';
-import { OutboundFiles } from './outbound-files';
+import { fileClaimMode, OutboundFiles } from './outbound-files';
 import { getSecret } from '../config/keystore';
 import { buildScopeGrantUrl, JOIN_GROUP_SCOPES } from '../config/scopes';
 import { validateAppCredentials } from '../utils/feishu-auth';
@@ -242,17 +242,17 @@ import {
   commentCwd,
   commentSessionKey,
   DEFAULT_COMMENT_INSTRUCTIONS,
+  fitCommentReply,
   loadCommentInstructions,
   postCommentReply,
   removeCommentReaction,
   renderCommentInstructions,
-  REPLY_MAX_CHARS,
   resolveComment,
   stripMarkdown,
   SUPPORTED_FILE_TYPES,
   syncCommentInstructions,
 } from './comments';
-import { createGracefulInterrupt, Semaphore, withIdleTimeout } from './watchdog';
+import { createGracefulInterrupt, createIdlePause, Semaphore, withIdleTimeout, type IdlePause } from './watchdog';
 
 /**
  * open_id → 姓名 的批量解析（管理员 / 白名单卡展示用）。需 contact:user.base:readonly
@@ -428,6 +428,8 @@ export interface QueuedTurn {
   requestedAt: number;
   /** Clean user-authored label; never derive reminder copy from woven input. */
   summary?: string;
+  /** Set on a 🔁 重试 turn: the original input it wraps (see {@link retryPrompt}). */
+  replayText?: string;
 }
 
 /** Switch the mutable session control state to a queued follow-up. Exported as
@@ -524,6 +526,66 @@ interface ActiveState {
    * is never consumed — incoming messages get a prompt instead of queueing
    * (they'd be dropped silently at the end otherwise). */
   isGoal?: boolean;
+  /** The in-flight turn's idle watchdog. s30 holds it while a card waits on a
+   * person (product.md 3.8). An ordinary turn gets a fresh one; a /goal run
+   * resets its one at every turn boundary. Either way a hold never outlives
+   * the turn that took it. */
+  idlePause?: IdlePause;
+}
+
+/** Inputs a synthetic turn (🔁 重试) carries that a real message would not. */
+interface TurnExtra {
+  /** Local image paths to send instead of downloading the message's own. */
+  images?: string[];
+  /** Clean label for titles and reminders, instead of the prompt text. */
+  summary?: string;
+  /** Never steer into a running turn. */
+  queueOnly?: boolean;
+  /** The failed turn's own input, kept unwrapped so a retry of a retry wraps it once. */
+  replayText?: string;
+  /** Asked right before the turn is reserved (see startReservedRun). */
+  retry?: RetryGate;
+}
+
+/** A 🔁 重试 turn's say in its own reservation. */
+interface RetryGate {
+  /** False once the button was taken away (newer input, a swapped thread). */
+  current(): boolean;
+  /** Tell the tapper the button went stale; nothing was queued. */
+  stale(): void;
+  /** Tell the tapper something else holds the session; the button stays. */
+  busy(): void;
+  /** Tell the tapper the group takes no turns right now (see turnRefusal); the button stays. */
+  refused(note: string): void;
+  /** The session reserved the retry as a fresh run. */
+  accepted(): void;
+}
+
+/** A turn whose terminal card offers [重试] (idle watchdog or network failure). */
+interface RetryTurn {
+  sessionKey: string;
+  chatId: string;
+  flat: boolean;
+  turn: QueuedTurn;
+  /** What the agent got for that turn, before any retry wrapper. */
+  replayText: string;
+  reason: 'idle' | 'network';
+  idleSeconds: number;
+  /** Set when the button is taken away (the session took newer input, or the
+   * tap was used): a tap still in flight holding this record sees it. */
+  expired?: boolean;
+  /** Settles once the failed run finished wrapping up that turn. */
+  settled: Promise<void>;
+}
+
+/** Reply to an @ (or a 🔁 重试) in a group not bound to any project. */
+const UNBOUND_GROUP_REPLY = '本群还没绑定为项目。请**把我拉进群的管理员**在与我的私聊里完成绑定后再 @我。';
+
+/** What the agent receives when [重试] is tapped: why the last turn stopped,
+ * then that turn's input as it was sent. */
+export function retryPrompt(retry: Pick<RetryTurn, 'reason' | 'idleSeconds'>, text: string): string {
+  const why = retry.reason === 'idle' ? `${idleLabel(retry.idleSeconds)}没有输出，被自动停止了` : '网络失败，中断了';
+  return `（重试）上一轮因为${why}。下面是上一轮收到的消息，请重新处理。上一轮可能已经做了一部分，先看看做到哪了再继续，别重复做。\n\n${text}`;
 }
 
 /** Message-reaction lifecycle controller (see {@link runReaction}). */
@@ -862,6 +924,27 @@ export function createOrchestrator(
   const runsByCard = new Map<string, ActiveState>();
   /** latest run-card state by messageId (to demote a previous turn's card) */
   const runCards = new Map<string, RunCardState>();
+  /** [重试] targets by terminal card messageId. In memory only; a session keeps
+   * at most its newest one, and any input that session accepts drops it. */
+  const retryTurns = new Map<string, RetryTurn>();
+  /** Cards whose [重试] tap is being handled: a second tap must not queue twice. */
+  const retrying = new Set<string>();
+  /** Every removal goes through here: a tap in flight keeps its own reference
+   * to the record, so it learns from `expired`, not from the map. */
+  const expireRetry = (cardId: string): void => {
+    const retry = retryTurns.get(cardId);
+    if (retry) retry.expired = true;
+    retryTurns.delete(cardId);
+  };
+  const expireRetries = (match: (retry: RetryTurn) => boolean): void => {
+    for (const [cardId, retry] of retryTurns) if (match(retry)) expireRetry(cardId);
+  };
+  /** The session took input (a run reserved, a follow-up queued, a steer sent,
+   * a /goal started) or swapped its thread (/clear, /resume): replaying its
+   * [重试] now would land after that, or in another conversation. */
+  const dropRetries = (sessionKey: string | undefined): void => {
+    if (sessionKey) expireRetries((retry) => retry.sessionKey === sessionKey);
+  };
   /** CardKit entity backing each run card, by messageId — drives the native
    * typewriter stream and whole-card (button/settings) updates. */
   const runStreams = new Map<string, RunCardStream>();
@@ -1019,7 +1102,7 @@ export function createOrchestrator(
         await channel
           .send(
             msg.chatId,
-            { markdown: '本群还没绑定为项目。请**把我拉进群的管理员**在与我的私聊里完成绑定后再 @我。' },
+            { markdown: UNBOUND_GROUP_REPLY },
             { replyTo: msg.messageId },
           )
           .catch(() => undefined);
@@ -1333,15 +1416,22 @@ export function createOrchestrator(
    * the chatId (single, `flat`). steer/queue mid-turn; otherwise reserve + run.
    * `flat` = reply by quoting (no reply_in_thread / topic), for single groups.
    */
-  function handleTurn(msg: NormalizedMessage, text: string, sessionKey: string, flat: boolean, project: Project | undefined, perm: TurnPerm): Promise<void> {
-    if (project?.enabled === false || projectMutations.has(msg.chatId) || resumePublications.has(msg.chatId)) return Promise.resolve();
+  function handleTurn(
+    msg: NormalizedMessage, text: string, sessionKey: string, flat: boolean, project: Project | undefined, perm: TurnPerm,
+    extra?: TurnExtra,
+  ): Promise<void> {
+    // No project = an unbound group: never run (or resume a session) with no
+    // tier, which backends read as full access. Messages stop earlier; this
+    // also covers the card-originated turns (👍 继续, 🔁 重试).
+    if (refusedTurn(project, msg.chatId, extra)) return Promise.resolve();
     const owner = active.get(sessionKey);
     return orderTurns(sessionKey, async () => {
+      if (staleRetry(extra)) return;
       if (owner?.intakeCancelled) {
         await channel.send(msg.chatId, { markdown: '排队期间会话已停止，请重发本条消息。' }, { replyTo: msg.messageId, replyInThread: !flat }).catch(() => undefined);
         return;
       }
-      await prepareTurn(msg, text, sessionKey, flat, project, perm);
+      await prepareTurn(msg, text, sessionKey, flat, project, perm, extra);
     });
   }
 
@@ -1352,6 +1442,7 @@ export function createOrchestrator(
     flat: boolean,
     project: Project | undefined,
     perm: TurnPerm,
+    extra?: TurnExtra,
   ): Promise<void> {
     // Mid-turn: steer (引导) or queue (排队).
     const existing = active.get(sessionKey);
@@ -1366,10 +1457,10 @@ export function createOrchestrator(
       // carry them. Awaited here — the session is already held by a running
       // turn, so there's no reservation race to protect; gated on
       // messageHasImages so the common text path stays await-free and fast.
-      const [images, woven] = await Promise.all([
-        messageHasImages(msg) ? collectInboundImages(channel, msg) : Promise.resolve(undefined),
-        ingestContext(msg, text),
-      ]);
+      // A retry brings its own saved images instead.
+      let pendingImages: Promise<string[] | undefined> = Promise.resolve(extra?.images);
+      if (!extra?.images && messageHasImages(msg)) pendingImages = collectInboundImages(channel, msg);
+      const [images, woven] = await Promise.all([pendingImages, ingestContext(msg, text)]);
       if (existing.intakeCancelled) {
         await channel.send(msg.chatId, { markdown: '本条消息处理期间会话已停止，请重发。' }, { replyTo: msg.messageId, replyInThread: !flat }).catch(() => undefined);
         return;
@@ -1378,7 +1469,7 @@ export function createOrchestrator(
       // If it's gone, start a fresh run (carrying what we already fetched).
       const cur = active.get(sessionKey);
       if (!cur) {
-        startReservedRun(msg, woven.text, sessionKey, flat, project, perm, images, woven, text);
+        startReservedRun(msg, woven.text, sessionKey, flat, project, perm, images, woven, extra?.summary ?? text, undefined, extra);
         return;
       }
       // A goal may have started while media downloaded — same prompt as above.
@@ -1386,12 +1477,26 @@ export function createOrchestrator(
         await replyGoalBusy(msg, flat);
         return;
       }
-      void trackTask(deliverPreparedTurn(msg, woven, images, text, sessionKey, flat, project, perm, cur)
+      void trackTask(deliverPreparedTurn(msg, woven, images, extra?.summary ?? text, sessionKey, flat, project, perm, cur, extra)
         .catch((err) => log.fail('intake', err)));
       return;
     }
 
-    startReservedRun(msg, text, sessionKey, flat, project, perm);
+    startReservedRun(msg, text, sessionKey, flat, project, perm, extra?.images, undefined, extra?.summary, undefined, extra);
+  }
+
+  /** A 🔁 重试 whose session took newer input since: say so, queue nothing. */
+  function staleRetry(extra?: TurnExtra): boolean {
+    if (!extra?.retry || extra.retry.current()) return false;
+    extra.retry.stale();
+    return true;
+  }
+
+  /** Whether the group takes no turn now (see turnRefusal); a 🔁 重试 is told why. */
+  function refusedTurn(project: Project | undefined, chatId: string, extra?: TurnExtra): boolean {
+    const refused = turnRefusal(project, chatId);
+    if (refused) extra?.retry?.refused(refused);
+    return refused !== undefined;
   }
 
   // Keep preparation ordered, but do not pin the lane on an uncertain steer ACK.
@@ -1399,12 +1504,16 @@ export function createOrchestrator(
   async function deliverPreparedTurn(
     msg: NormalizedMessage, woven: IngestedContext, images: string[] | undefined, text: string,
     sessionKey: string, flat: boolean, project: Project | undefined, perm: TurnPerm, cur: ActiveState,
+    extra?: TurnExtra,
   ): Promise<void> {
-    if (getPendingPolicy(cfg) === 'steer' && cur.run && cur.thread && cur.thread.supportsSteer !== false) {
+    if (!extra?.queueOnly && getPendingPolicy(cfg) === 'steer' && cur.run && cur.thread && cur.thread.supportsSteer !== false) {
       const tid = cur.run.turnId();
       if (tid) {
         const voiceReply = cur.voiceReply?.run === cur.run ? cur.voiceReply : undefined;
         const steerReply = cur.steerReply?.run === cur.run ? cur.steerReply : undefined;
+        // Dropped before the RPC: once sent, the input may reach the model even
+        // if the ACK is lost.
+        dropRetries(sessionKey);
         try {
           await steerWithDeadline(cur.thread, { text: woven.text, images }, tid);
           const split = steerReply?.accept(msg.messageId, woven.voice);
@@ -1431,7 +1540,7 @@ export function createOrchestrator(
       active.delete(sessionKey);
       if (sessions.get(sessionKey) === cur.thread) sessions.delete(sessionKey);
     }
-    startReservedRun(msg, woven.text, sessionKey, flat, project, perm, images, woven, text);
+    startReservedRun(msg, woven.text, sessionKey, flat, project, perm, images, woven, text, undefined, extra);
   }
 
   /** 🎯 goal 运行中收到消息的统一提示（goal 会话不入队，见 ActiveState.isGoal）。 */
@@ -1467,6 +1576,7 @@ export function createOrchestrator(
     preIngested?: IngestedContext,
     summaryText?: string,
     goal?: boolean,
+    extra?: TurnExtra,
   ): void {
     // A goal title is the already-extracted objective. Ordinary turns retain
     // the SDK content type so merge-forward/media envelopes can be decoded
@@ -1474,7 +1584,10 @@ export function createOrchestrator(
     const titleSource: SessionTitleSource = goal
       ? { text, rawContentType: 'text' }
       : sessionTitleSourceFromMessage(msg, summaryText ?? text);
-    if (project?.enabled === false || projectMutations.has(msg.chatId) || resumePublications.has(msg.chatId)) return;
+    if (refusedTurn(project, msg.chatId, extra)) return;
+    // A retry re-checks here, in the same synchronous step that reserves it: a
+    // message may have reserved the session while it waited.
+    if (staleRetry(extra)) return;
     const existing = active.get(sessionKey);
     if (existing) {
       // A goal can't co-run with (or queue behind) a turn on the same session —
@@ -1491,6 +1604,12 @@ export function createOrchestrator(
         void trackTask(replyGoalBusy(msg, flat));
         return;
       }
+      // A current retry only starts as a fresh run: whatever holds the session
+      // now is a /compact, /clear or /resume, which drops what queues on it.
+      if (extra?.retry) {
+        extra.retry.busy();
+        return;
+      }
       // A run appeared between handleTurn's check and here (we awaited an image
       // download) — queue onto it rather than launch a second turn. `text` is
       // already file-woven when preIngested (handleTurn's fall-through).
@@ -1502,11 +1621,14 @@ export function createOrchestrator(
         requestedAt: msg.createTime || Date.now(),
         summary: stripFileTokens(summaryText ?? text).slice(0, 80) || undefined,
       });
+      dropRetries(sessionKey);
       log.info('intake', 'queued', { depth: existing.queue.length });
       return;
     }
     const reserved: ActiveState = { queue: [], requesterOpenId: msg.senderId, isGoal: goal };
     active.set(sessionKey, reserved);
+    dropRetries(sessionKey);
+    extra?.retry?.accepted();
     void trackTask(withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
       // Goal runs use the OKR reaction (added at dispatch) as their only receipt,
       // not the ⏳/🫳 run-reaction lifecycle.
@@ -1702,6 +1824,7 @@ export function createOrchestrator(
           summary: stripFileTokens(summaryText ?? text).slice(0, 80) || '(本轮任务)',
           requesterOpenId: msg.senderId,
           requestedAt: msg.createTime || tIntake,
+          replayText: extra?.replayText,
           // 编织完成 → turn/start 之间不再读盘：首轮直接用预取的会话记录
           // （新会话及旧单会话的缺失值由上面的 model/effort 补齐）。
           firstRec: prior ?? null,
@@ -2217,6 +2340,7 @@ export function createOrchestrator(
         }
         trackSession(sessionKey, fresh);
         lastUsage.delete(sessionKey); // context gauge → 0 until the next turn
+        dropRetries(sessionKey); // a [重试] from the old conversation must not replay into this one
         // `/clear` has no user question to title from. Park a policy-snapshotted
         // waiting job; the next real message supplies the source and activates it
         // only after that host turn is issued.
@@ -2280,13 +2404,8 @@ export function createOrchestrator(
   }(channel, cfg);
   const outboundFiles = new OutboundFiles(paths.outboundFilesDir);
   void trackTask(outboundFiles.recover(channel));
-  outboundFiles.register(dispatcher, async (record, openId) => {
-    if (!openId || !isChatAllowed(cfg, record.chatId)) return undefined;
-    const project = await getProjectByChatId(record.chatId);
-    if (!project || project.cwd !== record.cwd || !isUserAllowedInProject(cfg, project, openId)) return undefined;
-    if (openId !== record.requesterOpenId && !isAdmin(cfg, openId)) return undefined;
-    return turnTier(project, isAdmin(cfg, openId)).mode;
-  });
+  outboundFiles.register(dispatcher, async (record, openId) =>
+    fileClaimMode(cfg, await getProjectByChatId(record.chatId), record, openId));
   cliBridge?.register(dispatcher);
   const PENDING_TTL_MS = 30 * 60_000; // abandoned config cards expire after 30 min
   // Goal runs have NO total wall-clock cap (a healthy goal may legitimately run
@@ -2511,10 +2630,10 @@ export function createOrchestrator(
    * 只删 {@link CONTROLS_EID} 控件行（其余内容无从重建；实体 seq 也丢了，用
    * epoch 秒——必大于按帧自增的运行期计数）。改版前的旧卡没有该 element_id，
    * 删除失败仅记日志（告知已发出）。卡片改动等 CARD_SETTLE_MS，避开点击互动窗。 */
-  const healDeadRunCard = (evt: CardActionEvent, key: string, actionId: string): void => {
+  const healDeadRunCard = (evt: CardActionEvent, key: string, actionId: string, notice = 'ℹ️ 该任务已结束，按钮已失效。'): void => {
     if (runControlNotes.seen(`dead:${key}`)) return; // 已答复过 / 自愈在路上
     void trackTask(channel
-      .send(evt.chatId, { markdown: 'ℹ️ 该任务已结束，按钮已失效。' }, { replyTo: evt.messageId })
+      .send(evt.chatId, { markdown: notice }, { replyTo: evt.messageId })
       .catch(() => undefined));
     const rc = runCards.get(key);
     const stream = runStreams.get(key);
@@ -2540,6 +2659,13 @@ export function createOrchestrator(
         log.fail('card', err, { phase: 'run-card-heal', key });
       }
     })());
+  };
+
+  const RETRY_STALE = 'ℹ️ 这个重试按钮已失效（之后已经有新的回合、换过会话，或者 bot 重启过）。要重试，请重新发送原消息。';
+  /** A reply to a [重试] tap that ran nothing; the button stays for later. */
+  const retryNote = (evt: CardActionEvent, key: string, markdown: string): void => {
+    if (runControlNotes.seen(`retry:${key}:${markdown}`)) return;
+    void trackTask(channel.send(evt.chatId, { markdown }, { replyTo: evt.messageId }).catch(() => undefined));
   };
 
   // run card buttons (design §3.3). ⏹ (st.interrupt) sends turn/interrupt and
@@ -2617,7 +2743,117 @@ export function createOrchestrator(
       }
       st.endGoal?.();
       log.info('card', 'action', { actionId: 'goal.end', ended: Boolean(st.endGoal) });
+    })
+    // 🔁 重试 (terminal card of an idle-timeout / network failure): run that
+    // turn's input again. Same gate as 👍 继续: the requester or an admin, still
+    // allowed in the project. The tap is used up once the session takes it.
+    .on(RC.retry, ({ evt, value }) => {
+      const key = typeof value.m === 'string' ? value.m : evt.messageId;
+      if (!runAllowed(evt)) return;
+      const retry = retryTurns.get(key);
+      if (!retry) {
+        healDeadRunCard(evt, key, RC.retry, RETRY_STALE);
+        return;
+      }
+      if (!runOwnerOrAdmin(evt, retry.turn.requesterOpenId)) {
+        denyRunControl(evt, key, RC.retry, '重试');
+        return;
+      }
+      if (retrying.has(key)) { // synchronous: a double tap never queues twice
+        retryNote(evt, key, 'ℹ️ 正在重试，结果见下一张卡片。');
+        return;
+      }
+      retrying.add(key);
+      void trackTask(retryTurn(evt, key, retry)
+        .catch((err) => log.fail('card', err, { phase: 'run-retry' }))
+        .finally(() => retrying.delete(key)));
     });
+
+  /** Why no turn may start in this group right now, in the words a [重试] tap
+   * gets; undefined when one may. Messages are stopped by the same states. */
+  function turnRefusal(project: Project | undefined, chatId: string): string | undefined {
+    if (!project) return UNBOUND_GROUP_REPLY;
+    if (project.enabled === false) return 'ℹ️ 本群的项目已停用，暂时不能重试。';
+    if (projectMutations.has(chatId)) return 'ℹ️ 项目正在修改，请稍后再点重试。';
+    if (resumePublications.has(chatId)) return 'ℹ️ 正在恢复历史会话，请完成后再点重试。';
+    return undefined;
+  }
+
+  async function retryTurn(evt: CardActionEvent, key: string, retry: RetryTurn): Promise<void> {
+    const op = evt.operator?.openId ?? '';
+    // Refused where a message in that group would be, before anything is used
+    // up, and again after the waits below: the group can change meanwhile.
+    // Only an unbound group takes the button away for good.
+    const admitRetry = async (): Promise<Project | undefined> => {
+      const project = await getProjectByChatId(retry.chatId);
+      if (!project) {
+        expireRetry(key);
+        healDeadRunCard(evt, key, RC.retry, UNBOUND_GROUP_REPLY);
+        return undefined;
+      }
+      if (!isUserAllowedInProject(cfg, project, op)) {
+        denyRunControl(evt, key, RC.retry, '重试');
+        return undefined;
+      }
+      if (retry.expired) {
+        healDeadRunCard(evt, key, RC.retry, RETRY_STALE);
+        return undefined;
+      }
+      const refused = turnRefusal(project, retry.chatId);
+      if (refused) {
+        retryNote(evt, key, refused);
+        return undefined;
+      }
+      return project;
+    };
+    if (!await admitRetry()) return;
+    const text = retryPrompt(retry, retry.replayText);
+    const msg = cardTurnMessage(key, retry.chatId, op, text, retry.sessionKey, retry.flat);
+    if (active.get(retry.sessionKey)?.isGoal) {
+      await replyGoalBusy(msg, retry.flat);
+      return;
+    }
+    // The failed run may still be wrapping up that turn (its queue is dropped
+    // when it was stopped): start after it, as a fresh run.
+    await retry.settled;
+    // Media is pruned after an hour; send what is still on disk.
+    const savedImages = retry.turn.input.images ?? [];
+    const onDisk = await Promise.all(savedImages.map((path) => stat(path).then((st) => st.isFile(), () => false)));
+    const images = savedImages.filter((_, i) => onDisk[i]);
+    const project = await admitRetry();
+    if (!project) return;
+    log.info('intake', 'retry', { key: retry.sessionKey, reason: retry.reason, op: op.slice(-6) });
+    await handleTurn(
+      msg, text, retry.sessionKey, retry.flat, project,
+      turnPerm(project, retry.turn.requesterOpenId ?? op),
+      {
+        images: images.length ? images : undefined,
+        summary: retry.turn.summary ?? retry.turn.titleSource.text,
+        queueOnly: true,
+        replayText: retry.replayText,
+        retry: {
+          current: () => !retry.expired,
+          stale: () => healDeadRunCard(evt, key, RC.retry, RETRY_STALE),
+          busy: () => retryNote(evt, key, 'ℹ️ 会话正在处理别的操作，请等它结束后再点重试。'),
+          refused: (note) => retryNote(evt, key, note),
+          accepted: () => markRetried(key),
+        },
+      },
+    );
+  }
+
+  /** The session took the retry: drop the button for 「已重试」 on its card. */
+  function markRetried(key: string): void {
+    expireRetry(key);
+    const rc = runCards.get(key);
+    const stream = runStreams.get(key);
+    if (!rc || !stream) return;
+    rc.retry = 'sent';
+    void trackTask((async () => {
+      await new Promise((r) => setTimeout(r, CARD_SETTLE_MS));
+      await stream.updateCard(channel, buildRunCard(rc));
+    })().catch((err) => log.fail('card', err, { phase: 'run-retry-repaint' })));
+  }
 
   // DM management console buttons (design §3.1). Admin-gated; sub-views patch
   // the same card in place, each carrying a ⬅️ 菜单 back button.
@@ -3325,7 +3561,7 @@ export function createOrchestrator(
     })
     .on(DM.setWatchdog, ({ evt, value }) => {
       const n = Number(value.v);
-      if (Number.isFinite(n)) applyPref(evt, (p) => (p.runIdleTimeoutSeconds = n));
+      if (Number.isFinite(n) && n >= 0) applyPref(evt, (p) => (p.runIdleTimeoutSeconds = normalizeRunIdleTimeoutSeconds(n)));
     })
     // 「自定义…」→ 打开输入卡（设置卡本身保持纯按钮、不会锁死）
     .on(DM.watchdogCustom, ({ evt }) => {
@@ -3341,9 +3577,7 @@ export function createOrchestrator(
         void patch(evt, buildWatchdogCustomCard(cfg));
         return;
       }
-      const sec =
-        n === 0 ? 0 : Math.min(Math.max(Math.floor(n), RUN_IDLE_TIMEOUT_MIN_SEC), RUN_IDLE_TIMEOUT_MAX_SEC);
-      applyPref(evt, (p) => (p.runIdleTimeoutSeconds = sec));
+      applyPref(evt, (p) => (p.runIdleTimeoutSeconds = normalizeRunIdleTimeoutSeconds(n)));
     })
     .on(DM.setCompletionReminder, ({ evt, value }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
@@ -3894,6 +4128,7 @@ export function createOrchestrator(
               createdAt: now,
               updatedAt: now,
             });
+            dropRetries(sessionKey); // the next turn runs in the picked session
             log.info('card', 'resume-done-single', { sessionKey, sessionId, turns: history.totalTurns });
           });
           settleUpdate(evt.messageId, buildResumeDoneCard(state));
@@ -4055,6 +4290,7 @@ export function createOrchestrator(
         });
         const archive = (patch.cwd !== undefined && patch.cwd !== project.cwd) || (patch.kind !== undefined && patch.kind !== (project.kind ?? 'multi'));
         const updated = archive ? await detachSessionsForChat(project.chatId, commit) : await commit();
+        if (archive) expireRetries((retry) => retry.chatId === project.chatId); // its sessions start over
         for (const rec of records) {
           const thread = sessions.get(rec.threadId); sessions.delete(rec.threadId);
           if (thread) await thread.close().catch(error => log.fail('desktop', error, { phase: 'project-session-close' }));
@@ -4095,6 +4331,7 @@ export function createOrchestrator(
         lastUsage.delete(threadId);
         const now = Date.now();
         await upsertSession({ threadId, chatId: project.chatId, cwd: project.cwd, sessionId: request.sessionId, backend: be.id, summary: history.name || history.preview || '(恢复会话)', createdAt: now, updatedAt: now });
+        dropRetries(threadId);
         return { ok: true, threadId };
       } finally {
         resumePublications.delete(project.chatId);
@@ -4136,7 +4373,7 @@ export function createOrchestrator(
         try { await upsertSession({ ...record, sessionId: fresh.sessionId, summary: '(新会话)', createdAt: now, updatedAt: now }); }
         catch (error) { await fresh.close(); throw error; }
         const old = sessions.get(key); if (old) await old.close();
-        trackSession(key, fresh); lastUsage.delete(key);
+        trackSession(key, fresh); lastUsage.delete(key); dropRetries(key);
         return { ok: true, threadId: key };
       }
       const { thread } = await resolveThread(key, project.chatId, perm);
@@ -4192,6 +4429,8 @@ export function createOrchestrator(
     /** Remote image refs are fetched only when this is on, in every tier. */
     network?: boolean;
     summary?: string;
+    /** first turn is a 🔁 重试: the original input it wraps (QueuedTurn.replayText) */
+    replayText?: string;
     /** who triggered this run (for ⏹/⚙️ ownership gating) */
     requesterOpenId?: string;
     /** wall-clock origin for completion reminders; normally the inbound
@@ -4421,6 +4660,7 @@ export function createOrchestrator(
         if (prevState && prevStream) void trackTask(prevStream.updateCard(channel, buildRunCardPlain(prevState)));
         runCards.delete(prev);
         runStreams.delete(prev);
+        expireRetry(prev);
       }
       lastRunCard.set(topicThreadId, cardMsgId);
       runCards.set(cardMsgId, rc);
@@ -4434,6 +4674,9 @@ export function createOrchestrator(
     // intake durations ride the FIRST turn's stream.timing line only (M-1)
     let intake = opts.timing;
     let firstRec = opts.firstRec;
+    // Wakes a [重试] tapped while this run still wraps up the failed turn: it
+    // waits, then starts a fresh run instead of joining a queue this run drops.
+    let settleTurn: (() => void) | undefined;
     try {
       let currentTurn: QueuedTurn = {
         input: { text: opts.firstText, images: opts.images },
@@ -4442,12 +4685,14 @@ export function createOrchestrator(
         requesterOpenId: opts.requesterOpenId,
         requestedAt: opts.requestedAt ?? Date.now(),
         summary: opts.summary,
+        replayText: opts.replayText,
       };
       let replyTo = opts.replyTo;
       let replyInThread = opts.flat ? false : (opts.replyInThread ?? Boolean(opts.knownThreadId));
       for (;;) {
         const turnInput = currentTurn.input;
         state.requesterOpenId = currentTurn.requesterOpenId;
+        dropRetries(topicThreadId); // an older card's [重试] would replay out of order
         if (titleTurnAttempted && !titleStart && opts.titleJobKey) {
           // A prior turn/start was rejected before turn_started. If a queued
           // follow-up now becomes the first accepted turn, title that message,
@@ -4675,6 +4920,8 @@ export function createOrchestrator(
         disposeInterrupt = stopper.dispose;
         state.interrupt = () => { state.intakeCancelled = true; stopper.interrupt(); };
         const idleMs = currentIdleMs();
+        const idlePause = createIdlePause();
+        state.idlePause = idlePause;
         const guarded = withIdleTimeout(
           run.events,
           idleMs,
@@ -4683,6 +4930,7 @@ export function createOrchestrator(
           },
           stopSignal,
           run.lastActivity, // raw-notification liveness: a long shell command isn't "idle"
+          idlePause,
         );
         // Per-turn stream-latency observability (file log `stream.timing`): locates
         // where a reply lags — first byte, backlog (lastEv vs done), push split, RTT.
@@ -4739,6 +4987,7 @@ export function createOrchestrator(
         clearInterval(cardClock);
         cardClock = undefined;
         state.steerReply = undefined;
+        state.idlePause = undefined;
         state.run = undefined; // completion-card I/O must queue, never steer into a finished turn
         const doneAt = Date.now(); // codex stopped emitting / loop ended
         stopper.dispose(); // 事件流已收尾：撤掉 ⏹ 的 5s 强停兜底定时器
@@ -4792,6 +5041,23 @@ export function createOrchestrator(
         try {
           await adoptThreadId(finalMsgId);
           rc.cardKey = finalMsgId;
+
+          // [重试] for a turn that went quiet or lost the model (product.md 3.12),
+          // read from the settled render: a ⏹ wins over a timer that fired
+          // while it waited. Not when follow-ups are queued: they run next and
+          // would make a replay land out of order.
+          let retryReason: RetryTurn['reason'] | undefined;
+          if (rc.rs.terminal === 'idle_timeout') retryReason = 'idle';
+          else if (rc.rs.terminal === 'error' && rc.rs.errorKind === 'network') retryReason = 'network';
+          if (retryReason && topicThreadId && state.queue.length === 0) {
+            retryTurns.set(finalMsgId, {
+              sessionKey: topicThreadId, chatId: opts.chatId, flat: Boolean(opts.flat), turn: currentTurn,
+              replayText: currentTurn.replayText ?? currentTurn.input.text ?? '',
+              reason: retryReason, idleSeconds: Math.round(idleMs / 1000),
+              settled: new Promise<void>((resolve) => { settleTurn = resolve; }),
+            });
+            rc.retry = 'available';
+          }
 
           // Outbound images + 卡片围栏. The answer's images mostly uploaded already
           // (the background uploader started on the ref's first appearance, so the
@@ -4896,6 +5162,8 @@ export function createOrchestrator(
           break;
         }
         if (state.queue.length === 0) break;
+        settleTurn?.(); // moving on: whatever queued meanwhile made the retry stale
+        settleTurn = undefined;
         currentTurn = state.queue.shift()!;
         // Per-turn ownership + one-shot override must not leak from the previous
         // requester. The queued item's timestamp preserves all waiting time for
@@ -4921,6 +5189,7 @@ export function createOrchestrator(
       // A replacement run may have reserved the key while failure feedback
       // was in flight. Never delete another run's reservation.
       if (active.get(activeKey) === state) active.delete(activeKey);
+      settleTurn?.();
       clearInterval(cardClock);
       state.steerReply = undefined;
       state.voiceReply = undefined;
@@ -4966,7 +5235,10 @@ export function createOrchestrator(
     state.isGoal = true; // messages during the goal get a prompt, never queue (handleTurn)
     if (opts.requesterOpenId) state.requesterOpenId = opts.requesterOpenId;
     active.set(activeKey, state);
-    if (opts.knownThreadId) trackSession(opts.knownThreadId, opts.thread);
+    if (opts.knownThreadId) {
+      trackSession(opts.knownThreadId, opts.thread);
+      dropRetries(opts.knownThreadId); // an older card's [重试] must not replay after the goal
+    }
 
     // M-3: 池满先排队（占位卡可见可取消）；null = 等待期被 ⏹ 取消，预订已释放。
     const slot = await acquireRunSlot(opts, state, activeKey);
@@ -5088,6 +5360,7 @@ export function createOrchestrator(
         if (prevState && prevStream) void trackTask(prevStream.updateCard(channel, buildRunCardPlain(prevState)));
         runCards.delete(prev);
         runStreams.delete(prev);
+        expireRetry(prev);
       }
       lastRunCard.set(topicThreadId, msgId);
       runCards.set(msgId, card);
@@ -5213,9 +5486,13 @@ export function createOrchestrator(
       // only fires when codex goes fully silent. stopSignal/endSignal end the loop
       // WITHOUT killing the process, so we can clear the goal + recycle cleanly.
       const stop = Promise.race([stopSignal, endSignal]);
+      // One watchdog spans every auto-continued turn, so its pause is reset at
+      // each turn boundary: a hold never carries into the next turn.
+      const idlePause = createIdlePause();
+      state.idlePause = idlePause;
       const guarded = withIdleTimeout(run.events, GOAL_IDLE_MS, () => {
         idledOut = true;
-      }, stop, run.lastActivity);
+      }, stop, run.lastActivity, idlePause);
       for await (const ev of guarded) {
         if (ev.type === 'goal_update') {
           lastStatus = ev.status;
@@ -5238,6 +5515,7 @@ export function createOrchestrator(
           continue;
         }
         if (ev.type === 'turn_started') {
+          idlePause.reset();
           // Unlike runGoal() construction, this proves the host accepted and
           // started the goal's first turn. Generate in parallel from here.
           beginGoalSessionTitle();
@@ -5247,6 +5525,7 @@ export function createOrchestrator(
           continue;
         }
         if (ev.type === 'done') {
+          idlePause.reset();
           // turn/completed for an intermediate turn — finalize its card (if any).
           // codex auto-continues with the next turn (a terminal goal status, handled
           // after the loop, preempts the final turn's done).
@@ -5262,7 +5541,9 @@ export function createOrchestrator(
           continue;
         }
         if (ev.type === 'error') {
-          goalErrorMsg = ev.message;
+          // A retry notice (the backend is retrying the call itself) is not why
+          // the goal ended; keep it off the summary card.
+          if (!ev.willRetry) goalErrorMsg = ev.message;
           if (!cur) continue; // set-failure before any turn → terminal card only
         }
         if (!cur) cur = startTurn();
@@ -5281,6 +5562,7 @@ export function createOrchestrator(
         cur.rc.rs = cur.render.snapshot();
         cur.stream!.streamCoalesced(channel, buildRunCard(cur.rc), ANSWER_EID);
       }
+      state.idlePause = undefined;
       // ⏹ 终止: mark the in-flight turn's card as interrupted before finalizing
       // (finalize() is a no-op once terminal, so this doesn't clash).
       if (interrupted && cur) cur.render.interrupt();
@@ -5322,6 +5604,7 @@ export function createOrchestrator(
         .send(opts.chatId, { markdown: runFailureMessage(err, 0, opts.sessionNotice) }, { replyTo: opts.replyTo, replyInThread: !opts.flat })
         .catch(() => undefined);
     } finally {
+      state.idlePause = undefined;
       clearInterval(cur?.clock);
       active.delete(activeKey);
       if (cur?.cardMsgId) runsByCard.delete(cur.cardMsgId);
@@ -5426,7 +5709,8 @@ export function createOrchestrator(
 
             let state: RunState = initialState;
             let timedOut = false;
-            const guarded = withIdleTimeout(run.events, currentIdleMs(), () => {
+            const idleMs = currentIdleMs();
+            const guarded = withIdleTimeout(run.events, idleMs, () => {
               timedOut = true;
             }, undefined, run.lastActivity);
             for await (const ev of guarded) state = reduce(state, ev);
@@ -5452,8 +5736,14 @@ export function createOrchestrator(
 
             let reply = stripMarkdown(finalMessageText(state)).trim();
             if (state.terminal === 'error' && state.errorMsg) reply = `⚠️ 出错了：${state.errorMsg}`;
-            if (!reply) reply = timedOut ? '（处理超时，请重试或把问题问得更具体些）' : '（没有可回复的内容）';
-            if (reply.length > REPLY_MAX_CHARS) reply = `${reply.slice(0, REPLY_MAX_CHARS - 1)}…`;
+            let notice = '';
+            if (timedOut) {
+              const stopped = `${idleLabel(Math.round(idleMs / 1000))}没有输出，已停止`;
+              if (reply) notice = `\n\n（${stopped}）`;
+              else reply = `（${stopped}。可以再 @ 我一次，或者把问题问得更具体些）`;
+            }
+            if (!reply) reply = '（没有可回复的内容）';
+            reply = fitCommentReply(reply, notice);
 
             await postCommentReply(channel, target, evt, reply).catch((err) =>
               log.fail('comment', err, { step: 'postCommentReply' }),
@@ -5630,6 +5920,27 @@ export function createOrchestrator(
     }
   }
 
+  /** A message posed as if `senderId` sent `content` in reply to the run card
+   * `cardMessageId`, so 👍 继续 and 🔁 重试 reuse the whole message pipeline. */
+  function cardTurnMessage(
+    cardMessageId: string, chatId: string, senderId: string, content: string, sessionKey: string, flat: boolean,
+  ): NormalizedMessage {
+    return {
+      messageId: cardMessageId,
+      chatId,
+      chatType: 'group',
+      senderId,
+      content,
+      rawContentType: 'text',
+      resources: [],
+      mentions: [],
+      mentionAll: false,
+      mentionedBot: true,
+      threadId: flat ? undefined : sessionKey.replace(/#(admin|guest)$/, ''),
+      createTime: Date.now(),
+    };
+  }
+
   // ── M-6 reaction 入站：零打字驱动 ─────────────────────────────────
   /**
    * `reaction` event（SDK 已归一化 im.message.reaction.created_v1 并自带去重）。
@@ -5676,6 +5987,12 @@ export function createOrchestrator(
       const rec = await getSession(sessionKey);
       if (!rec) return;
       const project = await getProjectByChatId(rec.chatId);
+      // Unbound or disabled: a message there would not run either, and an
+      // unbound resume has no tier (backends read that as full access).
+      if (!project || project.enabled === false) {
+        log.info('intake', 'reaction-denied', { emoji: evt.emojiType, unbound: !project });
+        return;
+      }
       if (!isChatAllowed(cfg, rec.chatId) || !isUserAllowedInProject(cfg, project, op)) return;
       // Flat only for a single group's main-area session (keyed by chatId); a
       // topic in a single group is its own session and continues in the topic.
@@ -5684,20 +6001,7 @@ export function createOrchestrator(
       // 合成一条等价的「继续」消息复用整条消息管线（steer/queue/goal 提示全部
       // 生效）：replyTo 指向被点的终态卡，⏳/🫳 生命周期表情也落在卡上作回执；
       // sessionKey 用卡片自己的会话键（含 #role 后缀），续的就是这张卡的会话。
-      const synthetic: NormalizedMessage = {
-        messageId: evt.messageId,
-        chatId: rec.chatId,
-        chatType: 'group',
-        senderId: op,
-        content: '继续',
-        rawContentType: 'text',
-        resources: [],
-        mentions: [],
-        mentionAll: false,
-        mentionedBot: true,
-        threadId: flat ? undefined : baseKey,
-        createTime: Date.now(),
-      };
+      const synthetic = cardTurnMessage(evt.messageId, rec.chatId, op, '继续', sessionKey, flat);
       log.info('intake', 'reaction-continue', { key: sessionKey, op: op.slice(-6) });
       // 权限档随会话原发起人（LIVE 线程本就钉死在 thread/start 的沙箱档；
       // recreate 兜底时也不该因点赞者身份升降档）。

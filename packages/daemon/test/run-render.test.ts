@@ -129,7 +129,42 @@ describe('buildRunCard — fatal error advice', () => {
   });
 
   it('suggests a resend on network-shaped errors', () => {
-    expect(JSON.stringify(buildRunCard({ rs: fatal('fetch failed: ETIMEDOUT') }))).toContain('重发本条消息');
+    const json = JSON.stringify(buildRunCard({ rs: fatal('fetch failed: ETIMEDOUT') }));
+    expect(json).toContain('网络失败：fetch failed');
+    expect(json).toContain('重发本条消息');
+  });
+
+  it('trusts the backend error kind over the message text', () => {
+    const rs = run([{ type: 'error', message: 'stream closed', willRetry: false, kind: 'network' }]);
+    expect(rs.errorKind).toBe('network');
+    expect(JSON.stringify(buildRunCard({ rs }))).toContain('网络失败：stream closed');
+  });
+
+  it('offers [重试] on a network failure card, routed by the card', () => {
+    const rs = fatal('fetch failed');
+    const json = JSON.stringify(buildRunCard({ rs, cardKey: 'om_card', retry: 'available' }));
+    expect(json).toContain('🔁 重试');
+    expect(json).toContain(JSON.stringify({ a: RC.retry, m: 'om_card' }).slice(1, -1));
+    expect(json).toContain('点「重试」再跑一次');
+    expect(json).not.toContain('重发本条消息');
+  });
+
+  it('offers [重试] on an idle-timeout card in the controls row', () => {
+    const rs = markIdleTimeout(run([{ type: 'tool_use', itemId: 't1', title: 'hang' }]), 600);
+    const els = bodyEls(buildRunCard({ rs, cardKey: 'om_card', retry: 'available' }));
+    expect(JSON.stringify(els)).toContain('10 分钟没有输出，已自动停止');
+    expect(els.at(-1)).toMatchObject({ element_id: 'controls' });
+    expect(JSON.stringify(els.at(-1))).toContain(RC.retry);
+  });
+
+  it('drops [重试] once tapped, and from plain (demoted) cards', () => {
+    const rs = fatal('fetch failed');
+    const sent = JSON.stringify(buildRunCard({ rs, cardKey: 'om_card', retry: 'sent' }));
+    expect(sent).not.toContain(RC.retry);
+    expect(sent).toContain('已重试');
+    const plain = JSON.stringify(buildRunCard({ rs, retry: 'available' }));
+    expect(plain).not.toContain(RC.retry);
+    expect(plain).toContain('重发本条消息');
   });
 
   it('keeps the bare message when no pattern matches', () => {
@@ -318,13 +353,13 @@ describe('buildRunCard — terminal collapse', () => {
   it('shows the idle-timeout note in minutes for round values', () => {
     let rs = run([{ type: 'tool_use', itemId: 't1', title: 'hang' }]);
     rs = markIdleTimeout(rs, 420);
-    expect(JSON.stringify(bodyEls(buildRunCard({ rs })))).toContain('7 分钟无响应');
+    expect(JSON.stringify(bodyEls(buildRunCard({ rs })))).toContain('7 分钟没有输出，已自动停止');
   });
 
   it('shows the idle-timeout note in seconds for non-round values', () => {
     let rs = run([{ type: 'tool_use', itemId: 't1', title: 'hang' }]);
     rs = markIdleTimeout(rs, 90);
-    expect(JSON.stringify(bodyEls(buildRunCard({ rs })))).toContain('90 秒无响应');
+    expect(JSON.stringify(bodyEls(buildRunCard({ rs })))).toContain('90 秒没有输出，已自动停止');
   });
 
   it('reports no content when a done run produced no text', () => {

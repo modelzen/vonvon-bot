@@ -240,6 +240,24 @@ describe('click-to-get local files', () => {
     expect(upload.mock.calls[0]![0].data).toMatchObject({ file_name: 'approved.txt', file: Buffer.from('approved bytes') });
   });
 
+  it("denies a lower-tier clicker without marking the shared link broken", async () => {
+    const outside = join(root, 'approved.txt');
+    await writeFile(outside, 'approved bytes');
+    const paint = vi.fn(async () => true);
+    const prepared = await service.prepare(`[file](${outside})`, { ...context, mode: 'full' }, paint);
+    const payload = values(prepared.links)[0]!;
+
+    await service.deliver(channel, { ...evt, operator: { openId: 'ou_guest' } }, payload, async () => 'qa');
+    expect(send.mock.calls.at(-1)![1].markdown).toContain('无权');
+    expect(paint).not.toHaveBeenCalled();
+    const manifest = JSON.parse(await readFile(join(dir, (await readdir(dir))[0]!), 'utf8'));
+    expect(manifest.files[0].error).toBeUndefined();
+    expect(JSON.stringify(prepared)).not.toContain('点击重试');
+
+    await service.deliver(channel, evt, payload, async () => 'full'); // the admin still can
+    expect(upload).toHaveBeenCalledOnce();
+  });
+
   it('rejects a replaced, deleted, or changed file with visible feedback', async () => {
     const payload = values((await prepare()).links)[0]!;
     await writeFile(join(cwd, '测试 报告.xlsx'), 'different bytes');

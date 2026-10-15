@@ -1,3 +1,5 @@
+import type { AgentErrorKind } from './error-kind';
+
 /** Request rejected locally before any transport write: safe to resubmit. */
 export class UnsentRequestError extends Error {}
 
@@ -156,7 +158,7 @@ export type AgentEvent =
   // codex 后端在 approvalPolicy 'never' 下永不 emit；run-state 的 reduce 对
   // 未知事件走 default no-op，所以提前声明是安全的。
   | { type: 'approval_request'; requestId: string; title: string; detail?: string }
-  | { type: 'error'; message: string; willRetry: boolean };
+  | { type: 'error'; message: string; willRetry: boolean; kind?: AgentErrorKind };
 
 /**
  * A codex goal's lifecycle status (thread/goal/updated). The vendored protocol
@@ -188,7 +190,7 @@ export interface AgentRun {
   /** epoch ms of the last RAW backend activity — refreshed on EVERY server
    * notification, including ones the event map drops (e.g. command output
    * deltas). Lets the idle watchdog tell a busy-but-quiet turn (long shell
-   * command, >120s npm install) from a truly wedged one. */
+   * command, a long npm install) from a truly wedged one. */
   lastActivity?(): number;
 }
 

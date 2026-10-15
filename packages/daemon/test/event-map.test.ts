@@ -38,6 +38,21 @@ describe('mapNotification', () => {
     ).toEqual({ type: 'error', message: 'network failed', willRetry: true });
   });
 
+  it.each([
+    [{ responseStreamDisconnected: { httpStatusCode: null } }, 'network'],
+    [{ httpConnectionFailed: { httpStatusCode: 502 } }, 'network'],
+    ['serverOverloaded', 'network'],
+    ['usageLimitExceeded', 'quota'],
+    ['unauthorized', 'auth'],
+    ['contextWindowExceeded', undefined],
+    [null, undefined],
+  ])('classifies codexErrorInfo %j as %s', (codexErrorInfo, kind) => {
+    expect(mapNotification(notification('error', {
+      error: { message: 'boom', codexErrorInfo, additionalDetails: null },
+      willRetry: false, threadId: 'thread-1', turnId: 'turn-1',
+    }))).toEqual({ type: 'error', message: 'boom', willRetry: false, kind });
+  });
+
   it('maps thread/goal/updated to goal_update and ignores thread/goal/cleared', () => {
     const goal = {
       threadId: 'thread-1',
