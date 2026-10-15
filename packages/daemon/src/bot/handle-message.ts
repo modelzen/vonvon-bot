@@ -5512,7 +5512,8 @@ export function createOrchestrator(
     if (rec && rec.backend === be.id) {
       try {
         const resumed = await be.resumeThread({ cwd: rec.cwd, sessionId: rec.sessionId, model, effort });
-        await patchSession(sessionKey, { model, effort });
+        // 评论的模型来自评论设置，不是手填的
+        await patchSession(sessionKey, { model, effort, modelCustom: false });
         trackSession(sessionKey, resumed);
         commentInstrUsed.set(sessionKey, instructions);
         return resumed;
