@@ -10,7 +10,7 @@ const bin = resolve(import.meta.dirname, '../bin/vonvon.mjs');
 const root = mkdtempSync(join(tmpdir(), 'vonvon-hook-'));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
-type Run = { code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; ms: number; writeError?: Error; homeFiles: string[] };
+type Run = { code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; ms: number; writeError: Error | undefined; homeFiles: string[] };
 
 function run(entry: string, args: string[], input?: string | Buffer, keepOpen = false): Promise<Run> {
   const home = mkdtempSync(join(root, 'home-'));
@@ -30,7 +30,7 @@ function run(entry: string, args: string[], input?: string | Buffer, keepOpen = 
     child.once('error', fail);
     child.once('close', (code, signal) => {
       clearTimeout(timer);
-      done({ code, signal, stdout, stderr, ms: Date.now() - started, ...(writeError ? { writeError } : {}), homeFiles: readdirSync(home, { recursive: true }).map(String) });
+      done({ code, signal, stdout, stderr, ms: Date.now() - started, writeError, homeFiles: readdirSync(home, { recursive: true }).map(String) });
     });
   });
 }
