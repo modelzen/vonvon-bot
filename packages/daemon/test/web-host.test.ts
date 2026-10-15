@@ -82,7 +82,7 @@ describe('host · buildDaemonControlCommand（detached helper 命令构建，只
   it('缺省 binPath/nodePath 时回退到当前 Node 与解析出的 bin（绝对路径）', () => {
     const { command, args } = buildDaemonControlCommand('restart');
     expect(command).toBe(process.execPath);
-    expect(args[0]).toMatch(/feishu-codex-bridge\.mjs$/);
+    expect(args[0]).toMatch(/bin\/vonvon\.mjs$/);
     expect(args.slice(1)).toEqual(['__daemon-control', 'restart']);
   });
 });

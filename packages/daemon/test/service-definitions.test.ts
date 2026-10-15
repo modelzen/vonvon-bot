@@ -9,7 +9,7 @@ vi.mock('../src/service/identity', async importOriginal => ({
 describe('systemd definition', () => {
   it('fixes the identity, root, port, restart policy, logs and PATH', async () => {
     const root = await resolveServiceRoot('/fixture/root');
-    const rendered = renderDefinition({ target: { platform: 'linux', unitPath: '/unused.service' }, root, port: 32123,
+    const rendered = renderDefinition({ target: { platform: 'linux', unitName: SYSTEMD_UNIT_NAME, unitPath: '/unused.service' }, root, port: 32123,
       distribution: { kind: 'desktop', executable: '/fixture/bin/node', entry: '/package/tools %n/$entry.mjs' }, capturedPath: '/captured/"tools":/bin' });
     if (rendered.platform !== 'linux') throw new Error('Expected unit');
     const unit = Buffer.from(rendered.unit).toString();
@@ -33,7 +33,7 @@ describe('systemd definition', () => {
 describe('launchd definition', () => {
   it('fixes the identity, root, port and PATH without CODEX_BIN passthrough', async () => {
     const root = await resolveServiceRoot('/fixture/root');
-    const rendered = renderDefinition({ target: { platform: 'darwin', plistPath: '/unused.plist' }, root, port: 32123,
+    const rendered = renderDefinition({ target: { platform: 'darwin', label: LAUNCHD_LABEL, plistPath: '/unused.plist' }, root, port: 32123,
       distribution: { kind: 'npm', executable: '/fixture/bin/node', entry: '/package/bin/vonvon.mjs' }, capturedPath: '/captured/bin' });
     if (rendered.platform !== 'darwin') throw new Error('Expected plist');
     const plist = Buffer.from(rendered.plist).toString();

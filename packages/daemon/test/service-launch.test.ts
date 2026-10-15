@@ -85,7 +85,7 @@ describe('Linux helper proof', () => {
     expect(linuxHelperReady(`0::/user.slice/${scope}\n`, ['/absolute/node', ...args], scope, args)).toBe(true);
   });
   it.each([
-    '', '1:cpu:/scope', `0::relative/${scope}`, `0::/vonvon-bot.service/${scope}`,
+    '', '1:cpu:/scope', `0::relative/${scope}`, `0::/vonvon-bot.service/${scope}`, `0::/app.slice/vonvon-bot-03a569fa6599.service/${scope}`,
     '0::/different.scope', `0::/user.slice/${scope}/`, `0::/user.slice//${scope}`,
     `0::/../${scope}`, `0::/user.slice/${scope}\n0::/other`, `0::/bad\0/${scope}`,
   ])('rejects malformed or unowned cgroup %j', value => {

@@ -37,6 +37,11 @@ async function readFile(path: string): Promise<Buffer | null> {
   } finally { await file.close(); }
 }
 
+/** The definition file's exact bytes, or null when there is none. */
+export function readDefinitionBytes(target: Target): Promise<Buffer | null> {
+  return readFile(target.platform === 'darwin' ? target.plistPath : target.unitPath);
+}
+
 export async function readRegistration(input: ReadInput): Promise<Registration> {
   const target = input.target;
   const location = target.platform === 'darwin' ? target.plistPath : target.unitPath;
