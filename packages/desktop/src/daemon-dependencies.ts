@@ -82,6 +82,7 @@ export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonM
     },
     async readRegistration() {
       const platform = process.platform;
+      // The app ships for macOS only; Linux stays so the Linux CI job reads a real definition through this mapping.
       if (platform !== 'darwin' && platform !== 'linux') throw new Error(`Unsupported desktop platform: ${platform}.`);
       const target = platform === 'darwin' ? serviceTarget({ platform, home: runtime.home, root: runtime.root })
         : serviceTarget({ platform, home: runtime.home, root: runtime.root, xdgConfigHome: process.env.XDG_CONFIG_HOME });
