@@ -313,7 +313,7 @@ export function createSystemdService(options: { root: string }, overrides: Parti
         const identical = previous !== null && Buffer.from(previous).equals(desired);
         idle = identical && enabled.kind === 'enabled' && unit.kind === 'present' && unit.loadState === 'loaded' && unit.fragmentPath === s.target.unitPath;
         if (idle && !detached) return outcome(s, 'already-installed', 'Already installed');
-        if (!identical && !detached && unit.kind === 'present' && unit.mainPid !== null && (owner !== null || current.kind === 'ours')) throw new Error('Run vonvon daemon stop before replacing the service');
+        if (!identical && !detached && unit.kind === 'present' && unit.mainPid !== null) throw new Error('Run vonvon daemon stop before replacing the service');
       } catch (error) { return outcome(s, 'install_refused', detailOf(error)); }
       if (detached) {
         // A daemon started with vonvon daemon start holds the data root: stop it so the unit takes over on the same port.
@@ -378,7 +378,8 @@ export function createSystemdService(options: { root: string }, overrides: Parti
       try { kept = current.kind === 'ours' ? bytes(s, current.definition) : current.kind === 'unrecognized' ? await readDefinitionBytes(s.target) : null; }
       catch (error) { return outcome(s, 'uninstall_refused', `${registrationDetail(current)}: ${detailOf(error)}`); }
       s.expected = kept;
-      const scope: DrainScope = current.kind !== 'absent' ? { kind: 'all-owners' } : { kind: 'job-only', context: 'uninstall-resumed' };
+      // An older format's unit may run a process without our lock: job-only refuses it instead of waiting forever.
+      const scope: DrainScope = current.kind === 'ours' ? { kind: 'all-owners' } : { kind: 'job-only', context: 'uninstall-resumed' };
       const result = await remove(s, scope);
       if (result.kind === 'withdrawal-failed') return outcome(s, 'uninstall_incomplete', result.detail);
       if (result.kind === 'drain-failed' && result.reason === 'stop_unconfirmed') return outcome(s, 'uninstall_incomplete', `${result.reason}: ${result.detail}; no unload issued`);

@@ -690,3 +690,9 @@ it.each(['absent', 'identity', 'listen'] as const)('systemd resumed owner_unprov
   expect(f.mutations()).toEqual([]); expect((await f.registration()).kind).toBe('absent');
   await expect(f.bytes()).rejects.toMatchObject({ code: 'ENOENT' });
 });
+it('an older-format unit whose process runs without our lock is refused, never drained forever', async () => {
+  const f = await fixture(); await f.seed(Buffer.from('older unit format')); f.state.pid = 777;
+  expect((await f.service().install()).kind).toBe('install_refused');
+  const result = await f.service().uninstall();
+  expect(result.detail).toContain('foreign_job_pid'); expect(f.state.clock).toBeLessThan(10_000);
+});

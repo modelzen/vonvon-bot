@@ -33,7 +33,9 @@ export function serviceStatus(o: Observed): ServiceStatus {
   const { registration: r, manager: m } = o;
   const state = ((): [ServiceState, string] => {
     if (m.kind === 'unknown') return ['unknown', `Cannot ask ${o.platformName}: ${m.detail}`];
-    if (r.kind === 'unrecognized') return ['conflict', `The service definition is not in the format this version writes (${r.reason}). Run vonvon service install to rewrite it.`];
+    if (r.kind === 'unrecognized') return ['conflict', /regular file/.test(r.reason)
+      ? `The service definition is a symlink or directory (${r.reason}). Remove it by hand.`
+      : `The service definition is not in the format this version writes (${r.reason}). Run vonvon service install to rewrite it.`];
     if (r.kind === 'other-root') return ['conflict', `The service belongs to another data directory, ${r.recordedRoot}.`];
     if (o.ownerError !== null) return ['conflict', `Daemon PID ${o.owner?.pid} did not authenticate: ${o.ownerError}`];
     if (r.kind === 'absent') {
@@ -42,7 +44,7 @@ export function serviceStatus(o: Observed): ServiceStatus {
     }
     if (m.kind === 'absent' || m.kind === 'not-enabled') {
       return ['disabled', o.platformName.startsWith('launchd')
-        ? 'Turned off in System Settings > General > Login Items & Extensions (App Background Activity), or unloaded with launchctl. Turn it on there, or run vonvon service install.'
+        ? 'launchd has no job for it: turned off in System Settings > General > Login Items & Extensions (App Background Activity), or unloaded after a failed install. Turn it on there, or run vonvon daemon start.'
         : 'The unit is not enabled. Run vonvon service install.'];
     }
     if (o.running && o.owner !== null && m.pid === o.owner.pid) return ['running', 'Running under the service manager.'];

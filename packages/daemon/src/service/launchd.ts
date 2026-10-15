@@ -95,6 +95,7 @@ function freePort(): Promise<number> {
   });
 }
 
+const TURNED_OFF_HINT = ' launchd has not loaded the service; if it is turned off in System Settings > General > Login Items & Extensions, turn it on.';
 const detailOf = (error: unknown): string => error instanceof Error ? error.message : String(error);
 const sameOwner = (a: OwnerIdentity | null, b: OwnerIdentity | null): boolean => a === null ? b === null : b !== null && a.pid === b.pid && a.startedAt === b.startedAt;
 const registrationDetail = (registration: Registration): string => registration.kind === 'other-root'
@@ -313,11 +314,15 @@ export function createLaunchdService(options: { root: string }, overrides: Parti
         } else port = input.port ?? (current.kind === 'ours' ? current.definition.port : await d.freePort());
         desired = bytes(s, { root: s.root, port, distribution: { kind: distribution.kind === 'bundled' ? 'desktop' : 'npm', executable: d.executable, entry: distribution.cliPath }, capturedPath: d.capturedPath });
         initial = await observeJob();
+        // Without a readable job record the running daemon may be the job's own: never stop it on a guess.
+        if (initial.kind === 'unknown') throw new Error(`launchd query failed: ${initial.detail}`);
+        // A plist with no job is usually turned off in System Settings; bootstrap would fail after the detached daemon was stopped.
+        if (initial.kind === 'absent' && previous !== null && owner !== null) throw new Error(`launchd has no job for the installed plist.${TURNED_OFF_HINT} Or run vonvon daemon stop, then vonvon service install.`);
         detached = owner !== null && !(initial.kind === 'loaded' && initial.pid === owner.pid);
         identical = previous !== null && Buffer.from(previous).equals(desired);
         if (initial.kind === 'loaded' && previous === null) throw new Error('Interrupted uninstall; run vonvon service uninstall first');
         if (initial.kind === 'loaded' && identical && !detached) return outcome(s, 'already-installed', 'Already installed');
-        if (initial.kind === 'loaded' && !identical && !detached && (owner !== null || (initial.pid !== null && current.kind === 'ours'))) throw new Error('Run vonvon daemon stop before replacing the service');
+        if (initial.kind === 'loaded' && !identical && !detached && (owner !== null || initial.pid !== null)) throw new Error('Run vonvon daemon stop before replacing the service');
       } catch (error) { return outcome(s, 'install_refused', detailOf(error)); }
       if (detached) {
         // A daemon started with vonvon daemon start holds the data root: stop it so the manager's job takes over on the same port.
@@ -346,7 +351,7 @@ export function createLaunchdService(options: { root: string }, overrides: Parti
         if (s.expected === null || !Buffer.from(s.expected).equals(desired)) { await atomicWrite(s, desired); s.expected = desired; }
         for (const name of ['service.log', 'service.err.log']) { const log = await d.open(join(s.root, name), 'a', 0o600); await log.close(); }
         const bootstrap = await d.run(['bootstrap', domain, s.target.plistPath], 30_000);
-        if (!bootstrap.ok) throw new Error(bootstrap.stderr || 'Bootstrap failed');
+        if (!bootstrap.ok) throw new Error(`${bootstrap.stderr.trim() || 'Bootstrap failed'}${initial.kind === 'absent' && previous !== null ? TURNED_OFF_HINT : ''}`);
         loaded = true;
         const manager = await observeJob();
         if (manager.kind !== 'loaded') throw new Error('Manager did not confirm the loaded job');
@@ -384,7 +389,8 @@ export function createLaunchdService(options: { root: string }, overrides: Parti
       try { s.expected = current.kind === 'ours' ? bytes(s, current.definition) : current.kind === 'unrecognized' ? await readDefinitionBytes(s.target) : null; }
       catch (error) { return outcome(s, 'uninstall_refused', `${registrationDetail(current)}: ${detailOf(error)}`); }
       try {
-        const request: BarrierRequest = current.kind !== 'absent'
+        // An older format's job may run a process without our lock: job-only refuses it instead of waiting forever.
+        const request: BarrierRequest = current.kind === 'ours'
           ? { scope: { kind: 'all-owners' }, context: 'uninstall' }
           : { scope: { kind: 'job-only', context: 'uninstall-resumed' }, context: 'uninstall-resumed' };
         const barrier = await unloadBarrier(request, s);
@@ -409,7 +415,7 @@ export function createLaunchdService(options: { root: string }, overrides: Parti
       const command = await d.run(manager.kind === 'absent' ? ['bootstrap', domain, s.target.plistPath] : ['kickstart', job], 30_000);
       if (!command.ok && (manager.kind !== 'absent' || (await observeJob()).kind !== 'loaded')) {
         // The plist is there but launchd has no job: usually the user turned it off under App Background Activity.
-        const hint = manager.kind === 'absent' ? ' launchd has not loaded the service; if it is turned off in System Settings > General > Login Items & Extensions, turn it on.' : '';
+        const hint = manager.kind === 'absent' ? TURNED_OFF_HINT : '';
         throw new Error(`${command.stderr.trim() || 'Service start failed'}${hint}`);
       }
       return ready(s, port, true, input.staleOwner);

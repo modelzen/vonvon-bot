@@ -24,3 +24,11 @@ it('any other data root gets its own stable names, so a test install never repla
   const target = serviceTarget({ platform: 'linux', home: h, root: other, xdgConfigHome: undefined });
   expect(target.platform === 'linux' && target.unitPath).toBe(join(h, '.config/systemd/user', serviceName('linux', other, h)));
 });
+it('a data root not created yet gets the name it will have once created', async () => {
+  const h = home(); const linked = `${h}-link`; homes.push(linked);
+  (await import('node:fs')).symlinkSync(h, linked);
+  const before = serviceName('darwin', join(linked, 'later'), linked);
+  mkdirSync(join(h, 'later'));
+  expect(serviceName('darwin', join(linked, 'later'), linked)).toBe(before);
+  expect(serviceName('darwin', join(linked, '.vonvon-bot'), h)).toBe(LAUNCHD_LABEL);
+});

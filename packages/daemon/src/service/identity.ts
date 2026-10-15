@@ -19,8 +19,13 @@ export async function resolveServiceRoot(path: string): Promise<CanonicalRoot> {
   return root as CanonicalRoot;
 }
 
+/** The real path, resolving the nearest existing ancestor of a path not created yet, as `resolveDataRoot` does. */
 function canonical(path: string): string {
-  try { return realpathSync(path); } catch { return path; }
+  try { return realpathSync(path); }
+  catch {
+    const parent = posix.dirname(path);
+    return parent === path ? path : posix.join(canonical(parent), posix.basename(path));
+  }
 }
 
 /**

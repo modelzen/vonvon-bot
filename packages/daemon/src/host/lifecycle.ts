@@ -86,7 +86,7 @@ export function linuxHelperReady(cgroup: string, cmdline: string[], scope: strin
   const path = unified[0]?.slice(3);
   if (!path?.startsWith('/') || path.includes('\0')) return false;
   const components = path.slice(1).split('/');
-  if (components.some(part => !part || part === '.' || part === '..' || part === 'vonvon-bot.service')) return false;
+  if (components.some(part => !part || part === '.' || part === '..' || /^vonvon-bot(?:-[0-9a-f]{12})?\.service$/.test(part))) return false;
   return components.at(-1) === scope && cmdline.length === helperArgs.length + 1
     && helperArgs.every((arg, index) => cmdline[index + 1] === arg);
 }

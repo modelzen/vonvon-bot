@@ -23,8 +23,8 @@ export async function createSnapshotStore(options: {
   jobs: () => Job[];
   publish: (snapshot: DesktopSnapshot) => void;
   readTools?: () => Promise<ToolState[]>;
-  /** Whether the background service is installed and enabled (3.10); read with the tools, every 60 s. */
-  readLoginItem?: () => Promise<boolean>;
+  /** Whether the background service is installed and enabled (3.10), null when the manager cannot tell; read with the tools, every 60 s. */
+  readLoginItem?: () => Promise<boolean | null>;
 }): Promise<SnapshotStore> {
   const version = bridgeVersion();
   let snapshot: DesktopSnapshot = {
@@ -35,9 +35,9 @@ export async function createSnapshotStore(options: {
   };
   let tools: ToolState[] = [];
   let loginItem = false;
-  const readLoginItem = options.readLoginItem ?? (async (): Promise<boolean> => {
+  const readLoginItem = options.readLoginItem ?? (async (): Promise<boolean | null> => {
     const status = await controlDesktopService('status');
-    return status.state === 'running' || status.state === 'stopped' || status.state === 'detached';
+    return status.state === 'unknown' ? null : status.state === 'running' || status.state === 'stopped' || status.state === 'detached';
   });
   const diagnostics = new Map<string, Diagnostic[]>();
   let queue = Promise.resolve();
@@ -89,13 +89,15 @@ export async function createSnapshotStore(options: {
     if (refreshing) return followUp ??= refreshing.catch(() => undefined).then(() => { followUp = undefined; return refreshTools(); });
     refreshing = Promise.all([readTools(), readLoginItem().catch(() => loginItem)]).then(async ([values, item]) => {
       tools = values;
-      loginItem = item;
+      loginItem = item ?? loginItem;
       if (!closed) await rebuild();
     }).finally(() => { refreshing = undefined; });
     return refreshing;
   }
-  [tools, loginItem] = await Promise.all([readTools(), readLoginItem().catch(() => false)]);
+  tools = await readTools();
   await rebuild();
+  // Not awaited: launchctl may take up to 30 s just after login, and the API should listen first.
+  void readLoginItem().then(item => { if (item !== null && item !== loginItem && !closed) { loginItem = item; return rebuild(); } }).catch(() => undefined);
   const poll = setInterval(() => { void rebuild().catch(() => undefined); }, 5_000);
   const toolPoll = setInterval(() => { void refreshTools().catch(() => undefined); }, 60_000);
   poll.unref();

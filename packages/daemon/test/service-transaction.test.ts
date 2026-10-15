@@ -779,7 +779,8 @@ it('launchd failed initial print cannot authorize unloading an existing job', as
   await withLaunchd(async f => {
     await f.seed(); f.state.queryFailure = true; f.state.bootstrap = 'error';
     f.state.beforeCommand = async command => { if (command === 'bootstrap') f.state.queryFailure = false; };
-    expect((await f.service.install()).kind).toBe('install_incomplete');
+    expect((await f.service.install()).kind).toBe('install_refused');
+    expect(f.calls.some(call => call.startsWith('bootstrap'))).toBe(false);
     expect(bootouts(f)).toEqual([]); expect(await readFile(f.plistPath)).toEqual(f.content());
   });
 });
@@ -1475,5 +1476,30 @@ it('launchd hands a detached daemon to the installed idle job', async () => {
     expect(f.calls.indexOf(`stop ${first.pid + 7}`)).toBeGreaterThan(-1);
     expect(f.calls.indexOf(`stop ${first.pid + 7}`)).toBeLessThan(kick);
     expect(f.state.owner?.pid).toBe(first.pid); expect(bootouts(f)).toEqual([]);
+  });
+});
+it('launchd install refuses without stopping anything when the job record cannot be read', async () => {
+  await withLaunchd(async f => {
+    await f.seed(); f.state.owner = { ...first }; f.state.pid = first.pid; f.state.queryFailure = true;
+    const result = await f.service.install();
+    expect(result.kind).toBe('install_refused'); expect(result.detail).toContain('launchd query failed');
+    expect(f.calls.filter(call => /^(stop|bootstrap|bootout|kickstart)/.test(call))).toEqual([]); expect(f.state.owner?.pid).toBe(first.pid);
+  });
+});
+it('launchd install refuses an older-format plist whose job runs a process without our lock', async () => {
+  await withLaunchd(async f => {
+    await mkdir(posix.dirname(f.plistPath), { recursive: true }); await writeFile(f.plistPath, 'older plist format'); f.state.loaded = true; f.state.pid = 777;
+    expect((await f.service.install()).kind).toBe('install_refused');
+    const uninstall = await f.service.uninstall();
+    expect(uninstall.kind).toBe('uninstall_rolled_back'); expect(uninstall.detail).toContain('foreign_job_pid');
+    expect(await readFile(f.plistPath, 'utf8')).toBe('older plist format'); expect(bootouts(f)).toEqual([]);
+  });
+});
+it('launchd install keeps a detached daemon running when the installed plist has no job (turned off in System Settings)', async () => {
+  await withLaunchd(async f => {
+    await f.seed(); f.state.loaded = false; f.state.owner = { ...first, startedAt: 'detached' };
+    const result = await f.service.install();
+    expect(result.kind).toBe('install_refused'); expect(result.detail).toContain('Login Items & Extensions');
+    expect(f.calls.filter(call => /^(stop|bootstrap)/.test(call))).toEqual([]); expect(f.state.owner?.startedAt).toBe('detached');
   });
 });
