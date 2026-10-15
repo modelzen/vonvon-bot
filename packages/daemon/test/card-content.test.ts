@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractRawCardText, isDegradedCardContent, parseRawCardWrapper } from '../src/bot/card-content';
+import { extractRawCardText, extractSendCardText, isDegradedCardContent, isSendCard, isStreamingCard, parseRawCardWrapper } from '../src/bot/card-content';
 
 // The real `json_card` returned by
 //   GET /open-apis/im/v1/messages/:id?card_msg_content_type=raw_card_content
@@ -138,5 +138,98 @@ describe('extractRawCardText', () => {
   it('yields nothing for an empty / unparseable card', () => {
     expect(extractRawCardText({})).toBe('');
     expect(extractRawCardText(null)).toBe('');
+  });
+});
+
+// The send-format JSON a pull returns with card_msg_content_type=user_card_content (e10).
+describe('extractSendCardText', () => {
+  it('reads a 2.0 card: header title, then the body', () => {
+    const card = {
+      schema: '2.0',
+      config: { streaming_mode: false },
+      header: { title: { tag: 'plain_text', content: '排查结论' } },
+      body: { elements: [
+        { tag: 'markdown', content: '网关的 500 都来自 **OrderService**' },
+        { tag: 'column_set', columns: [{ tag: 'column', elements: [{ tag: 'markdown', content: '下一步：回滚 v3' }] }] },
+      ] },
+    };
+    expect(extractSendCardText(card)).toBe('排查结论\n网关的 500 都来自 **OrderService**\n下一步：回滚 v3');
+  });
+
+  it('reads a 1.0 card: div lark_md, fields and markdown', () => {
+    const card = {
+      header: { title: { tag: 'plain_text', content: '部署清单' } },
+      elements: [
+        { tag: 'div', text: { tag: 'lark_md', content: '环境：生产' }, fields: [{ is_short: true, text: { tag: 'lark_md', content: '负责人：张三' } }] },
+        { tag: 'markdown', content: '低峰期执行' },
+        { tag: 'action', actions: [{ tag: 'button', text: { tag: 'plain_text', content: '确认' } }] },
+      ],
+    };
+    expect(extractSendCardText(card)).toBe('部署清单\n环境：生产\n负责人：张三\n低峰期执行');
+  });
+
+  it('keeps only the answer: no process panel, status lines, notes, images or buttons', () => {
+    const card = { schema: '2.0', body: { elements: [
+      { tag: 'div', text: { tag: 'lark_md', content: '上下文 43% · 86k/200k', text_size: 'notation' } },
+      { tag: 'collapsible_panel', header: { title: { content: '执行了 3 条命令' } }, elements: [{ tag: 'markdown', content: '$ rm -rf build' }] },
+      { tag: 'img', img_key: 'img_x' },
+      { tag: 'markdown', content: '改好了，测试都过了' },
+      { tag: 'markdown', content: '耗时 12 秒', text_size: 'notation' },
+      { tag: 'note', elements: [{ tag: 'plain_text', content: '来自小P' }] },
+      { tag: 'button', text: { tag: 'plain_text', content: '⏹ 停止' } },
+    ] } };
+    expect(extractSendCardText(card)).toBe('改好了，测试都过了');
+  });
+
+  it('keeps only the answer of a Vonvon run card as user_card_content returns it (no sizes or colours)', () => {
+    // The shape of a real pull on JP-VPS, 2026-10-15.
+    const card = { schema: '2.0', config: { streaming_mode: false, summary: { content: '已完成' } }, body: { elements: [
+      { element_id: '_3', tag: 'div', text: { content: '上下文 15% · 61k/400k', tag: 'lark_md' }, width: 'fill' },
+      { content: "<font color='grey'>用时 5秒</font>", element_id: '_2', tag: 'markdown' },
+      { content: '我上次回答之后，你在群里又发了一条：\n1. 17:36 周报改到周四交\n', element_id: '_1', tag: 'markdown' },
+    ] } };
+    expect(extractSendCardText(card)).toBe('我上次回答之后，你在群里又发了一条：\n1. 17:36 周报改到周四交');
+    const meters = ['🟡 上下文 72% · 288k/400k', '上下文 已用 12k', '上下文 —'];
+    for (const content of meters) {
+      expect(extractSendCardText({ body: { elements: [{ tag: 'div', text: { tag: 'lark_md', content } }, { tag: 'markdown', content: '好' }] } })).toBe('好');
+    }
+    // Colour inside the answer keeps its text; a grey line that is only part of a text stays.
+    expect(extractSendCardText({ body: { elements: [
+      { tag: 'markdown', content: "<font color='red'>注意</font>：别删 build" },
+      { tag: 'markdown', content: "结论 <font color='grey'>（草稿）</font>" },
+      { tag: 'markdown', content: '上下文 15% 是我估的' },
+    ] } })).toBe('注意：别删 build\n结论 （草稿）\n上下文 15% 是我估的');
+    // Only Vonvon's own grey status lines go; another bot's grey answer or caveat stays.
+    const grey = (t: string) => ({ tag: 'markdown', content: `<font color='grey'>${t}</font>` });
+    expect(extractSendCardText({ body: { elements: ['❌ 用时 1分钟 · 失败', '已处理 3秒', '执行过程 · 已停止', '🗜️ 已压缩 85% → 20%', '正在输出', '🤖 由 Vonvon Bot 于 10-15 17:36 生成'].map(grey) } })).toBe('');
+    expect(extractSendCardText({ body: { elements: [grey('⚠️ 无法回答'), grey('注：以上为估算')] } })).toBe('⚠️ 无法回答\n注：以上为估算');
+  });
+
+  it('de-duplicates lines and reads one locale of an i18n card', () => {
+    expect(extractSendCardText({ schema: '2.0', body: { elements: [{ tag: 'markdown', content: '同一句' }, { tag: 'markdown', content: '同一句' }] } })).toBe('同一句');
+    expect(extractSendCardText({ i18n_elements: { en_us: [{ tag: 'markdown', content: 'hello' }], zh_cn: [{ tag: 'markdown', content: '你好' }] } })).toBe('你好');
+  });
+
+  it('reads i18n_content where a title or a text has no content', () => {
+    expect(extractSendCardText({ schema: '2.0',
+      header: { title: { tag: 'plain_text', i18n_content: { en_us: 'Title', zh_cn: '标题' } } },
+      body: { elements: [
+        { tag: 'markdown', i18n_content: { en_us: 'Body', zh_cn: '正文' } },
+        { tag: 'div', text: { tag: 'plain_text', i18n_content: { zh_cn: '一行' } } },
+      ] } })).toBe('标题\n正文\n一行');
+  });
+
+  it('yields nothing for an empty or unreadable card', () => {
+    expect(extractSendCardText({ schema: '2.0', body: { elements: [{ tag: 'img' }] } })).toBe('');
+    expect(extractSendCardText(null)).toBe('');
+  });
+
+  it('tells the send format from the down-converted shape, and reads the streaming flag', () => {
+    expect(isSendCard({ schema: '2.0', body: {} })).toBe(true);
+    expect(isSendCard({ elements: [{ tag: 'markdown', content: 'x' }] })).toBe(true);
+    expect(isSendCard({ title: 'T', elements: [[{ tag: 'text', text: 'x' }]] })).toBe(false);
+    expect(isStreamingCard(JSON.stringify({ config: { streaming_mode: true } }))).toBe(true);
+    expect(isStreamingCard(JSON.stringify({ config: { streaming_mode: false } }))).toBe(false);
+    expect(isStreamingCard('not json')).toBe(false);
   });
 });

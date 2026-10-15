@@ -542,7 +542,7 @@ it('does not start queued follow-ups while shutdown closes an active run', async
 
 describe('watermark for interjections and queued turns (s09)', () => {
   const later = (text: string, ms: number) => ({ ...message(text), createTime: Date.now() + ms });
-  const ctx = (messageId: string, text: string, createTime: number) => ({ messageId, senderName: '李四', text, fromUser: true, createTime });
+  const ctx = (messageId: string, text: string, createTime: number) => ({ messageId, senderName: '李四', text, from: 'user', createTime });
   const finals = () => fake.log.info.mock.calls.filter((c) => c[0] === 'card' && c[1] === 'final').length;
 
   it('marks an interjection seen, so the next fresh run does not weave it again', async () => {

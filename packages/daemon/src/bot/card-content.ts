@@ -18,6 +18,9 @@ import { log } from '../core/logger';
  * property-wrapped card-builder schema (distinct from the send-format schema the
  * SDK's walkCard handles). We re-fetch that here and extract its text + links so
  * codex reads「请处理这条记录 [查看…](base链接)」and can follow the link.
+ *
+ * Pulled history and quote lookups ask for `user_card_content` instead, the
+ * send-format JSON (e10), read by {@link extractSendCardText}.
  */
 
 /** True when the normalized card content is a downgraded placeholder (no real
@@ -99,6 +102,115 @@ function visit(node: unknown, out: string[]): void {
   visit(prop.elements, out);
   visit(prop.columns, out);
   visit(prop.actions, out);
+}
+
+/** True when a parsed `interactive` body is a card in the send format, as a
+ * pull with `card_msg_content_type=user_card_content` returns it (e10), rather
+ * than the down-converted `{title, elements:[[node…]]}` shape. */
+export function isSendCard(card: unknown): boolean {
+  if (!card || typeof card !== 'object') return false;
+  const c = card as Record<string, unknown>;
+  if (c.schema || c.body || c.header || c.config || c.i18n_elements) return true;
+  return Array.isArray(c.elements) && c.elements.some((e) => e && typeof e === 'object' && !Array.isArray(e));
+}
+
+/** Whether a card body (the raw JSON string) is still streaming (`config.streaming_mode`). */
+export function isStreamingCard(content: string | undefined): boolean {
+  try {
+    const card = JSON.parse(content ?? '') as { config?: { streaming_mode?: unknown } } | null;
+    return card?.config?.streaming_mode === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Readable text of a send-format card: schema 2.0 (`header` + `body.elements`)
+ * or 1.0 (`header` + `elements`). Only what reads as the answer is kept:
+ * collapsible panels (a Vonvon card keeps its process and tool output there),
+ * notation-size lines and notes (status, such as the context meter), images,
+ * buttons and rules are skipped. Lines are de-duplicated, order kept; '' when
+ * nothing readable remains.
+ *
+ * `user_card_content` drops text sizes and colours, so on a pulled card the
+ * notation check never fires. A Vonvon run card's status lines are told by
+ * their text instead: a line that is grey as a whole and is one of Vonvon's
+ * own status texts (用时, 已压缩), and the context meter. `<font>` tags are removed and their text kept.
+ */
+export function extractSendCardText(card: unknown): string {
+  if (!card || typeof card !== 'object') return '';
+  const c = card as Record<string, unknown>;
+  const out: string[] = [];
+  const header = (c.header ?? localized(c.i18n_header)) as { title?: unknown } | undefined;
+  push(out, textOf(header?.title));
+  const body = c.body as { elements?: unknown; i18n_elements?: unknown } | undefined;
+  sendElements(body?.elements ?? localized(body?.i18n_elements) ?? c.elements ?? localized(c.i18n_elements), out);
+  return [...new Set(out)].join('\n');
+}
+
+/** One locale of an i18n map (zh_cn first). */
+function localized(v: unknown): unknown {
+  if (!v || typeof v !== 'object') return undefined;
+  const m = v as Record<string, unknown>;
+  return m.zh_cn ?? m.zh_hk ?? m.zh_tw ?? m.en_us ?? Object.values(m)[0];
+}
+
+/** A text object's `content`, else one locale of its `i18n_content`. */
+function textOf(t: unknown): unknown {
+  const x = t && typeof t === 'object' ? (t as { content?: unknown; i18n_content?: unknown }) : undefined;
+  return typeof x?.content === 'string' && x.content.trim() ? x.content : localized(x?.i18n_content);
+}
+
+function push(out: string[], v: unknown): void {
+  if (typeof v !== 'string') return;
+  const grey = WHOLE_GREY.exec(v.trim())?.[1]?.trim();
+  if ((grey !== undefined && VONVON_GREY_STATUS.test(grey)) || RUN_CARD_METER.test(v.trim())) return;
+  const line = v.replace(FONT_TAG, '').trim();
+  if (line) out.push(line);
+}
+
+const FONT_TAG = /<\/?font\b[^>]*>/g;
+/** One `<font color='grey'>` around the whole text, as Vonvon writes a status line. */
+const WHOLE_GREY = /^<font color=['"]?grey['"]?>((?:(?!<\/?font\b).)*)<\/font>$/s;
+/** Vonvon's own grey lines: `processTitle`, `compactionLine`, `footerStatus` and the usage card's stamp.
+ * Another bot's grey answer or caveat is kept. */
+const VONVON_GREY_STATUS = /^(?:(?:❌ )?(?:执行过程|已处理 |用时 )|🗜️ |🤖 由 Vonvon Bot 于 |(?:正在处理|正在调用工具|瞬断，自动重试中…|正在输出)$)/u;
+/** The context meter of a Vonvon run card (`runCardMeter`). */
+const RUN_CARD_METER = /^(?:[🟡🟠🔴] )?上下文 (?:\d+% · \S+\/\S+|已用 \S+|—)$/u;
+
+function sendElements(els: unknown, out: string[]): void {
+  if (!Array.isArray(els)) return;
+  for (const el of els) {
+    if (!el || typeof el !== 'object') continue;
+    const e = el as Record<string, unknown>;
+    switch (e.tag) {
+      case 'collapsible_panel':
+      case 'note':
+      case 'img':
+      case 'img_combination':
+      case 'button':
+      case 'action':
+      case 'hr':
+        break;
+      case 'markdown':
+      case 'plain_text':
+      case 'lark_md':
+        if (e.text_size !== 'notation') push(out, textOf(e));
+        break;
+      case 'div': {
+        const t = e.text as { text_size?: unknown } | undefined;
+        if (t?.text_size !== 'notation') push(out, textOf(t));
+        for (const f of Array.isArray(e.fields) ? e.fields : []) push(out, textOf((f as { text?: unknown } | null)?.text));
+        break;
+      }
+      case 'column_set':
+        for (const col of Array.isArray(e.columns) ? e.columns : []) sendElements((col as { elements?: unknown } | null)?.elements, out);
+        break;
+      default:
+        // Containers (form, interactive_container, column, …) hold elements.
+        sendElements(e.elements, out);
+    }
+  }
 }
 
 /**

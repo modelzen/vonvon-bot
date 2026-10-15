@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { weaveQuote, weaveSender, weaveThreadHistory } from '../src/bot/context-weave';
+import { weaveQuote, weaveRecordBlock, weaveSender } from '../src/bot/context-weave';
 import { weaveFileManifest } from '../src/bot/media';
 import {
   SESSION_TITLE_MAX_CHARS,
@@ -32,7 +32,7 @@ describe('session title pure pipeline', () => {
     expect(stripBridgeSenderPrefix(nonStandard)).toBe(nonStandard);
   });
 
-  it('removes the complete Bridge history/sender/quote/file envelope before any title work', () => {
+  it('removes the complete Bridge record-block/sender/quote/file envelope before any title work', () => {
     const body = '请修复支付回调超时，并补充回归测试。后面是背景说明。';
     const withFile = weaveFileManifest(`${body}\n<file key="opaque-key" name="trace.log"/>`, [
       { name: 'trace.log', path: '/private/tmp/bridge/inbound/opaque-key-trace.log' },
@@ -42,19 +42,24 @@ describe('session title pure pipeline', () => {
       senderName: '李四',
       text: '生产环境又超时了',
       createTime: 1,
-      fromUser: true,
+      from: 'user',
     });
     const withSender = weaveSender(withQuote, { senderId: 'ou_secret', senderName: '张三' });
-    const fullyWoven = weaveThreadHistory(withSender, [
-      { messageId: 'old-1', senderName: '王五', text: '昨天发布过网关', createTime: 1, fromUser: true },
-      { messageId: 'old-2', senderName: '赵六', text: '日志在附件里', createTime: 2, fromUser: true },
-    ]);
+    const fullyWoven = weaveRecordBlock(withSender, {
+      place: { group: '支付组', me: '小码', topic: { title: '回调超时' } },
+      entries: [
+        { messageId: 'old-1', senderName: '王五', text: '昨天发布过网关', createTime: 1, from: 'user' },
+        { messageId: 'old-2', senderName: '小P', text: '日志在附件里', createTime: 2, from: 'bot' },
+      ],
+      earlier: 3,
+      now: 2,
+    });
 
     expect(stripBridgeMessageEnvelope(fullyWoven)).toBe(body);
     const clean = cleanInboundSessionTitleSource({ text: fullyWoven, rawContentType: 'text' });
     expect(clean).toBe(body);
     const prompt = buildSessionTitlePrompt(clean);
-    expect(prompt).not.toMatch(/open_id|ou_secret|用户引用|话题中在此之前|private\/tmp|trace\.log|生产环境又超时/);
+    expect(prompt).not.toMatch(/open_id|ou_secret|用户引用|飞书|王五|小P|private\/tmp|trace\.log|生产环境又超时/);
     expect(prompt).toContain('请修复支付回调超时');
   });
 
@@ -64,6 +69,9 @@ describe('session title pure pipeline', () => {
       '[本条消息的发信人：张三（open_id：ou_x）]',
       '[用户引用了一条消息（来自 李四）：内容]',
       '[用户上传了 1 个附件：示例]',
+      '[飞书 · 群「示例」· 主区]',
+      '09:58 张三：内容',
+      '[/飞书]',
     ].join('\n');
     expect(stripBridgeMessageEnvelope(body)).toBe(body);
   });
