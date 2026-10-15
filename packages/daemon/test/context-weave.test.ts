@@ -6,6 +6,7 @@ import {
   extractMessageText,
   fetchQuotedMessage,
   fetchThreadContext,
+  keepRecent,
   sanitizeContext,
   weaveQuote,
   weaveSender,
@@ -13,6 +14,8 @@ import {
   type ContextMessage,
 } from '../src/bot/context-weave';
 import { feishuError, scopeDenial } from '../src/utils/feishu-error';
+import { createNameBook } from '../src/bot/names';
+import { stripBridgeMessageEnvelope } from '../src/bot/session-title';
 
 describe('extractMessageText', () => {
   it('reads a plain text body and resolves @mentions to names', () => {
@@ -261,33 +264,102 @@ describe('fetchThreadContext', () => {
 
   it('drops the trigger message, bot/app messages and deleted ones; returns user messages oldest→newest', async () => {
     const out = await fetchThreadContext(fakeChannel(items), 'omt_x', { excludeMessageId: 'om_trigger' });
-    expect(out.map((m) => m.messageId)).toEqual(['om_a', 'om_b']);
-    expect(out.map((m) => m.text)).toEqual(['先看登录接口', '我贴一下日志']);
+    expect(out.messages.map((m) => m.messageId)).toEqual(['om_a', 'om_b']);
+    expect(out.messages.map((m) => m.text)).toEqual(['先看登录接口', '我贴一下日志']);
+    expect(out).toMatchObject({ ok: true, complete: true });
   });
 
-  it('returns only messages newer than sinceTime (delta catch-up)', async () => {
-    const out = await fetchThreadContext(fakeChannel(items), 'omt_x', { excludeMessageId: 'om_trigger', sinceTime: 2000 });
-    expect(out.map((m) => m.messageId)).toEqual(['om_b']); // om_a at 2000 is NOT > 2000
+  it('keeps only messages older than the trigger, and the topic root even from a bot', async () => {
+    const out = await fetchThreadContext(fakeChannel(items), 'omt_x', { before: 3000, keepId: 'om_bot' });
+    expect(out.messages.map((m) => m.messageId)).toEqual(['om_a']);
+    const rooted = await fetchThreadContext(fakeChannel(items), 'omt_x', { before: 5000, keepId: 'om_bot' });
+    expect(rooted.messages.map((m) => m.messageId)).toEqual(['om_a', 'om_b', 'om_bot']);
   });
 
-  it('requests the thread container sorted newest-first', async () => {
+  it('requests the thread container newest-first, with sender names', async () => {
     let seen: Record<string, unknown> = {};
     await fetchThreadContext(fakeChannel(items, (p) => (seen = p as Record<string, unknown>)), 'omt_x', {});
-    expect(seen.container_id_type).toBe('thread');
-    expect(seen.container_id).toBe('omt_x');
-    expect(seen.sort_type).toBe('ByCreateTimeDesc');
+    expect(seen).toMatchObject({ container_id_type: 'thread', container_id: 'omt_x', sort_type: 'ByCreateTimeDesc', with_sender_name: true });
+    expect(seen.page_token).toBeUndefined();
   });
 
-  it('caps the number of woven messages to the limit (keeps the most recent)', async () => {
-    const many = Array.from({ length: 10 }, (_, i) => ({
-      message_id: `om_${i}`,
-      msg_type: 'text',
-      create_time: String(1000 + i),
-      sender: { id: 'ou_a', sender_type: 'user', sender_name: 'A' },
-      body: { content: JSON.stringify({ text: `m${i}` }) },
+  it('keepRecent keeps the most recent messages, and the pinned root', () => {
+    const many = Array.from({ length: 10 }, (_, i) => cm({ messageId: `om_${i}`, text: `m${i}`, createTime: 1000 + i }));
+    expect(keepRecent(many, undefined, 3).map((m) => m.text)).toEqual(['m7', 'm8', 'm9']);
+    expect(keepRecent(many, 'om_0', 3).map((m) => m.text)).toEqual(['m0', 'm8', 'm9']);
+    expect(keepRecent(many.slice(0, 2), 'om_0', 3)).toHaveLength(2);
+  });
+
+  it('remembers sender names, bot names by open_bot_id, and @mention names', async () => {
+    const names = createNameBook({} as LarkChannel);
+    const out = await fetchThreadContext(fakeChannel([
+      { message_id: 'om_1', msg_type: 'text', create_time: '1', sender: { id: 'ou_a', id_type: 'open_id', sender_type: 'user', sender_name: '张三' },
+        body: { content: JSON.stringify({ text: '@_user_1 看下' }) }, mentions: [{ key: '@_user_1', id: 'ou_m', name: '李四' }] },
+      { message_id: 'om_2', msg_type: 'text', create_time: '2', sender: { id: 'cli_x', id_type: 'app_id', sender_type: 'app', sender_name: '小码', open_bot_id: 'ou_bot' },
+        body: { content: JSON.stringify({ text: '好的' }) } },
+      { message_id: 'om_3', msg_type: 'text', create_time: '3', sender: { id: 'ou_m', id_type: 'open_id', sender_type: 'user' },
+        body: { content: JSON.stringify({ text: '没带名字' }) } },
+    ]), 'omt_x', { names });
+    expect([names.peek('ou_a'), names.peek('ou_m'), names.peek('ou_bot'), names.peek('cli_x')]).toEqual(['张三', '李四', '小码', undefined]);
+    // A message without sender_name takes the name the book already knows.
+    expect(out.messages.map((m) => m.senderName)).toEqual(['张三', '李四']);
+  });
+});
+
+describe('fetchThreadContext · paging', () => {
+  /** `total` user messages at createTime 1..total, served newest-first one page at a time. */
+  function pagedChannel(total: number, calls: Record<string, unknown>[], fail?: number): LarkChannel {
+    const all = Array.from({ length: total }, (_, i) => total - i).map((t) => ({
+      message_id: `om_${t}`, msg_type: 'text', create_time: String(t),
+      sender: { id: 'ou_a', sender_type: 'user', sender_name: 'A' }, body: { content: JSON.stringify({ text: `m${t}` }) },
     }));
-    const out = await fetchThreadContext(fakeChannel(many), 'omt_x', { limit: 3 });
-    expect(out.map((m) => m.text)).toEqual(['m7', 'm8', 'm9']);
+    return { rawClient: { im: { v1: { message: { list: async ({ params }: { params: Record<string, unknown> }) => {
+      calls.push(params);
+      if (fail !== undefined && calls.length === fail) return { code: 230002, msg: 'Bot is not in the chat' };
+      const start = Number(params.page_token ?? 0);
+      const items = all.slice(start, start + Number(params.page_size));
+      const next = start + items.length;
+      return { code: 0, data: { items, has_more: next < all.length, page_token: next < all.length ? String(next) : undefined } };
+    } } } } } } as unknown as LarkChannel;
+  }
+
+  it('pages until a page reaches the watermark', async () => {
+    const calls: Record<string, unknown>[] = [];
+    const out = await fetchThreadContext(pagedChannel(120, calls), 'omt_x', { stopAt: 30 });
+    expect(calls.map((c) => c.page_token)).toEqual([undefined, '50']); // the second page reaches 30
+    expect(out).toMatchObject({ ok: true, complete: true });
+    expect(out.messages).toHaveLength(100);
+    expect(out.messages[0]!.createTime).toBe(21);
+  });
+
+  it('pages to the topic start when nothing stops it', async () => {
+    const calls: Record<string, unknown>[] = [];
+    const out = await fetchThreadContext(pagedChannel(120, calls), 'omt_x', {});
+    expect(calls).toHaveLength(3);
+    expect(out.messages).toHaveLength(120);
+    expect(out.complete).toBe(true);
+  });
+
+  it('an opening stops once it has enough', async () => {
+    const calls: Record<string, unknown>[] = [];
+    const out = await fetchThreadContext(pagedChannel(120, calls), 'omt_x', { enough: 20 });
+    expect(calls).toHaveLength(1);
+    expect(out).toMatchObject({ ok: true, complete: false });
+  });
+
+  it('stops at the page cap', async () => {
+    const calls: Record<string, unknown>[] = [];
+    const out = await fetchThreadContext(pagedChannel(700, calls), 'omt_x', { stopAt: 1 });
+    expect(calls).toHaveLength(10);
+    expect(out).toMatchObject({ ok: true, complete: false });
+    expect(out.messages).toHaveLength(500);
+  });
+
+  it('a failed later page fails the whole pull', async () => {
+    vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+    const out = await fetchThreadContext(pagedChannel(120, [], 2), 'omt_x', {});
+    expect(out).toEqual({ messages: [], ok: false, complete: false });
+    vi.restoreAllMocks();
   });
 });
 
@@ -345,7 +417,7 @@ describe('fetchThreadContext · 缺权限', () => {
   it('a thrown 99991672 logs a structured warning naming im:message:readonly, and the turn gets []', async () => {
     const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
     const out = await fetchThreadContext(listChannel(async () => { throw axiosError(400, SCOPE_DENIED_BODY); }), 'omt_scope');
-    expect(out).toEqual([]);
+    expect(out).toEqual({ messages: [], ok: false, complete: false });
     expect(warn).toHaveBeenCalledWith('intake', 'thread-context-failed', {
       threadId: 'omt_scope',
       reason: 'missing-scope',
@@ -359,7 +431,7 @@ describe('fetchThreadContext · 缺权限', () => {
   it('a returned non-zero code is a failure too (no silent empty history)', async () => {
     const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
     const out = await fetchThreadContext(listChannel(async () => ({ code: 99991672, msg: 'Access denied.' })), 'omt_body');
-    expect(out).toEqual([]);
+    expect(out).toEqual({ messages: [], ok: false, complete: false });
     expect(warn).toHaveBeenCalledWith('intake', 'thread-context-failed', expect.objectContaining({ reason: 'missing-scope', scope: 'im:message:readonly', code: 99991672 }));
   });
 
@@ -387,6 +459,13 @@ describe('weaveSender', () => {
 
   it('falls back to 某用户 when senderName is missing', () => {
     expect(weaveSender('确认', { senderId: 'ou_x' })).toContain('[本条消息的发信人：某用户（open_id：ou_x）]');
+  });
+
+  it('says so inside the block when the message arrives over two minutes late', () => {
+    expect(weaveSender('确认', { senderId: 'ou_x', senderName: '张三' }, 90_000)).toContain('[本条消息的发信人：张三（open_id：ou_x）]');
+    const late = weaveSender('确认', { senderId: 'ou_x', senderName: '张三' }, 5 * 60_000);
+    expect(late).toContain('[本条消息的发信人：张三（open_id：ou_x）（这条消息 5 分钟前发出，bot 断线重连后才收到）]');
+    expect(stripBridgeMessageEnvelope(late)).toBe('确认');
   });
 
   it('returns the block alone when the user text is empty', () => {

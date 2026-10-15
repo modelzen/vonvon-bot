@@ -34,11 +34,71 @@ export interface SessionRecord {
   /** first user message excerpt, for context */
   summary: string;
   /** createTime (epoch ms) of the most recent message woven into this session —
-   * the high-water mark for topic-history catch-up: the next turn only pulls
-   * thread messages newer than this (see context-weave.fetchThreadContext). */
+   * the high-water mark for topic-history catch-up: every message at or before
+   * it reached the session, so the next turn only pulls newer ones (see
+   * context-weave.fetchThreadContext). Only moves up (see {@link nextSeen}). */
   lastSeenAt?: number;
+  /** Messages newer than {@link lastSeenAt} that reached the session anyway: an
+   * interjection, a queued turn, or a trigger whose back-fill failed. One mark
+   * cannot cover them, since messages the bot skipped (an @ to someone else)
+   * sit in between. Older records lack it. */
+  seen?: SeenMark[];
   createdAt: number;
   updatedAt: number;
+}
+
+/** One message that reached a session: its id and createTime (epoch ms). */
+export interface SeenMark {
+  id: string;
+  at: number;
+}
+
+/** How a mark moves the watermark (see {@link nextSeen}). */
+export type SeenHow = 'advance' | 'id' | 'restart';
+
+/** Most marks kept above the watermark; past it the oldest are dropped (and
+ * may come back once as history). */
+const SEEN_MAX = 64;
+
+/** A session nothing has reached yet (a new or recreated native session before
+ * its first turn starts): its next back-fill starts from the topic's beginning. */
+export function nothingSeen(): Pick<SessionRecord, 'lastSeenAt' | 'seen'> {
+  return { lastSeenAt: 0, seen: [] };
+}
+
+/** Whether the message reached the session as a turn, an interjection or a queued turn. */
+export function isDelivered(rec: Pick<SessionRecord, 'seen'> | undefined, id: string): boolean {
+  return Boolean(rec?.seen?.some((s) => s.id === id));
+}
+
+/** Whether the message already reached the session, delivered or woven as
+ * history. Without a watermark only delivered ids count. */
+export function isSeen(rec: Pick<SessionRecord, 'lastSeenAt' | 'seen'> | undefined, id: string, at: number): boolean {
+  return isDelivered(rec, id) || (rec?.lastSeenAt !== undefined && at <= rec.lastSeenAt);
+}
+
+/**
+ * The watermark after `mark` reached the session (pure; apply it through
+ * {@link patchSession}'s function form so concurrent marks never lose each other):
+ *   - `advance`: everything up to `mark` reached it (a fresh run whose back-fill
+ *     succeeded, or one that pulls none). The mark only moves up.
+ *   - `id`: only this message did (an interjection, a queued turn, a failed back-fill).
+ *   - `restart`: a new session whose back-fill failed: start over from 0 so
+ *     the next turn back-fills the whole topic.
+ */
+export function nextSeen(
+  rec: Pick<SessionRecord, 'lastSeenAt' | 'seen'>,
+  mark: SeenMark,
+  how: SeenHow,
+): Pick<SessionRecord, 'lastSeenAt' | 'seen'> {
+  const base = how === 'restart' ? 0 : rec.lastSeenAt;
+  const lastSeenAt = how === 'advance' ? Math.max(base ?? 0, mark.at) : base;
+  const prior = how === 'restart' ? [] : (rec.seen ?? []);
+  const seen = [...prior.filter((s) => s.id !== mark.id), mark]
+    .filter((s) => lastSeenAt === undefined || s.at >= lastSeenAt)
+    .sort((a, b) => a.at - b.at)
+    .slice(-SEEN_MAX);
+  return { lastSeenAt, seen };
 }
 
 export type SessionTitlePhase =

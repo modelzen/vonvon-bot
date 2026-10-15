@@ -7,8 +7,10 @@ import {
   createSessionTitleJob,
   getSession,
   getSessionTitleJob,
+  isSeen,
   listSessions,
   listSessionTitleJobs,
+  nextSeen,
   patchSession,
   sessionTitleJobKey,
   updateSessionTitleJob,
@@ -261,5 +263,47 @@ describe('session-store', () => {
 
     await clearSessionTitleJobKey('t-marker', marker);
     expect(await getSession('t-marker')).not.toHaveProperty('titleJobKey');
+  });
+});
+
+describe('watermark (s09)', () => {
+  it('never moves back, and concurrent marks through patchSession all land', async () => {
+    await upsertSession({ ...rec('t-mark', 'cx-mark'), lastSeenAt: 100 });
+    await Promise.all([
+      patchSession('t-mark', (s) => nextSeen(s, { id: 'trigger-late', at: 300 }, 'advance')),
+      patchSession('t-mark', (s) => nextSeen(s, { id: 'steer', at: 400 }, 'id')),
+      patchSession('t-mark', (s) => nextSeen(s, { id: 'trigger-early', at: 200 }, 'advance')),
+    ]);
+    const got = await getSession('t-mark');
+    expect(got?.lastSeenAt).toBe(300);
+    expect(got?.seen).toEqual([{ id: 'trigger-late', at: 300 }, { id: 'steer', at: 400 }]);
+  });
+
+  it('drops marks the watermark covers, and keeps at most 64', () => {
+    const many = { lastSeenAt: 0, seen: Array.from({ length: 70 }, (_, i) => ({ id: `m${i}`, at: i + 1 })) };
+    const capped = nextSeen(many, { id: 'new', at: 100 }, 'id');
+    expect(capped.seen).toHaveLength(64);
+    expect(capped.seen?.at(-1)).toEqual({ id: 'new', at: 100 });
+    // Advancing to 50 keeps only marks at 50 or later (m49 is at 50).
+    expect(nextSeen(many, { id: 'trigger', at: 50 }, 'advance').seen?.map((m) => m.id)).toEqual(['m49', 'trigger', ...Array.from({ length: 20 }, (_, i) => `m${i + 50}`)]);
+    // An interjection the watermark already covers adds nothing.
+    expect(nextSeen({ lastSeenAt: 500 }, { id: 'old', at: 400 }, 'id')).toEqual({ lastSeenAt: 500, seen: [] });
+  });
+
+  it('restart goes back to 0 and forgets older marks', () => {
+    expect(nextSeen({ lastSeenAt: 500, seen: [{ id: 'x', at: 600 }] }, { id: 't', at: 700 }, 'restart')).toEqual({ lastSeenAt: 0, seen: [{ id: 't', at: 700 }] });
+  });
+
+  it('isSeen: at or before the watermark, or delivered; old records without seen still read', async () => {
+    await mkdir(dirname(paths.sessionsFile), { recursive: true });
+    await writeFile(paths.sessionsFile, JSON.stringify({ version: 3, titleJobs: [], sessions: [
+      { threadId: 'old', chatId: 'c', cwd: '/', sessionId: 's', backend: 'codex', summary: '', lastSeenAt: 1000, createdAt: 1, updatedAt: 1 },
+    ] }));
+    const old = await getSession('old');
+    expect([isSeen(old, 'a', 999), isSeen(old, 'b', 1000), isSeen(old, 'c', 1001)]).toEqual([true, true, false]);
+    const marked = { lastSeenAt: 1000, seen: [{ id: 'steer', at: 1500 }] };
+    expect([isSeen(marked, 'steer', 1500), isSeen(marked, 'other', 1500)]).toEqual([true, false]);
+    // No watermark (a resumed session): only delivered ids count.
+    expect([isSeen({ seen: [{ id: 'q', at: 5 }] }, 'q', 5), isSeen({}, 'x', 0), isSeen(undefined, 'x', 0)]).toEqual([true, false, false]);
   });
 });

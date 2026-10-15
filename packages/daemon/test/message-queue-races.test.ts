@@ -13,6 +13,8 @@ const fake = vi.hoisted(() => ({
   createCard: vi.fn(async (..._args: unknown[]) => 'card'),
   send: vi.fn(async () => ({})),
   log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() },
+  record: {} as Record<string, unknown>,
+  history: vi.fn(async (..._args: unknown[]) => ({ messages: [] as unknown[], ok: true, complete: true })),
 }));
 vi.mock('../src/bot/steer-delivery', async original => { const real = await original<typeof import('../src/bot/steer-delivery')>(); return { ...real, steerWithDeadline: (thread: any, input: any, id: string) => real.steerWithDeadline(thread, input, id, undefined, 150) }; });
 vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_ctx: unknown, fn: () => unknown) => fn() }));
@@ -23,10 +25,14 @@ vi.mock('../src/project/registry', async (original) => ({
 }));
 vi.mock('../src/bot/session-store', async (original) => ({
   ...await original<object>(),
-  getSession: async () => ({ threadId: 'topic', chatId: 'chat', sessionId: 'host', backend: 'codex', cwd: '/test', summary: '' }),
-  patchSession: async () => undefined,
+  getSession: async () => ({ threadId: 'topic', chatId: 'chat', sessionId: 'host', backend: 'codex', cwd: '/test', summary: '', ...fake.record }),
+  // Only watermark writes (the function form) land; other patches stay no-ops.
+  patchSession: async (_key: string, patch: unknown) => {
+    if (typeof patch === 'function') Object.assign(fake.record, patch({ ...fake.record }));
+  },
   upsertSession: async () => undefined,
 }));
+vi.mock('../src/bot/context-weave', async (original) => ({ ...await original<object>(), fetchThreadContext: fake.history }));
 vi.mock('../src/bot/session-title-coordinator', () => ({
   SessionTitleCoordinator: class { startRecovery() {} async shutdown() {} },
 }));
@@ -111,6 +117,8 @@ function setup(policy: 'steer' | 'queue' = 'steer') {
 beforeEach(() => {
   vi.clearAllMocks();
   fake.groupMode = 'single';
+  fake.record = {};
+  fake.history.mockReset().mockResolvedValue({ messages: [], ok: true, complete: true });
   fake.voice.mockReset().mockImplementation(async (_channel, msg) => voiceResult('语音正文', msg.messageId));
   fake.backend.capabilities.steer = true;
   fake.final.mockReset().mockResolvedValue(true);
@@ -530,4 +538,91 @@ it('does not start queued follow-ups while shutdown closes an active run', async
   await o.shutdown();
   expect(run.consumed).toHaveLength(1);
   expect(run.t.close).toHaveBeenCalled();
+});
+
+describe('watermark for interjections and queued turns (s09)', () => {
+  const later = (text: string, ms: number) => ({ ...message(text), createTime: Date.now() + ms });
+  const ctx = (messageId: string, text: string, createTime: number) => ({ messageId, senderName: '李四', text, fromUser: true, createTime });
+  const finals = () => fake.log.info.mock.calls.filter((c) => c[0] === 'card' && c[1] === 'final').length;
+
+  it('marks an interjection seen, so the next fresh run does not weave it again', async () => {
+    fake.record = { lastSeenAt: 1 };
+    const run = thread(); fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup(); await o.onMessage(message('first'));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    const steered = later('steered in', 1000);
+    await o.onMessage(steered);
+    await until(() => expect(run.t.steer).toHaveBeenCalledTimes(1));
+    run.turns[0]!.resolve();
+    await until(() => expect(finals()).toBe(1));
+    expect(fake.record.seen).toContainEqual({ id: steered.messageId, at: steered.createTime });
+    fake.history.mockResolvedValueOnce({ ok: true, complete: true, messages: [
+      ctx(steered.messageId, 'steered in', steered.createTime), ctx('om_chat', '别人插的一句', steered.createTime + 1),
+    ] });
+    await o.onMessage(later('next', 2000));
+    await until(() => expect(run.consumed).toHaveLength(2));
+    expect(run.consumed[1]!.text).toContain('别人插的一句');
+    expect(run.consumed[1]!.text).not.toContain('steered in');
+    run.turns[1]!.resolve();
+  });
+
+  it('marks an interjection seen even when the steer ACK is lost', async () => {
+    const run = thread(); fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup(); await o.onMessage(message('first'));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    const pending = deferred<void>();
+    run.t.steer.mockImplementationOnce(async () => { await pending.promise; });
+    const lost = later('ack lost', 1000);
+    await o.onMessage(lost);
+    await until(() => expect(fake.send.mock.calls.some(c => JSON.stringify(c).includes('未自动重投'))).toBe(true));
+    expect(fake.record.seen).toContainEqual({ id: lost.messageId, at: lost.createTime });
+    run.turns[0]!.resolve(); pending.resolve();
+  });
+
+  it('unmarks a rejected interjection, so a dropped queue leaves it for the next back-fill', async () => {
+    fake.record = { lastSeenAt: 1 };
+    const run = thread(); fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup(); await o.onMessage(message('first'));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    const steer = deferred<void>();
+    run.t.steer.mockReturnValueOnce(steer.promise);
+    const rejected = later('rejected steer', 1000);
+    await o.onMessage(rejected);
+    await until(() => expect(run.t.steer).toHaveBeenCalledTimes(1));
+    // The host had already ended the turn: the steer is refused and the message queues on this run.
+    steer.reject(new JsonRpcError('no active turn'));
+    await until(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'queued', { depth: 1 }));
+    // The run then fails, and its queue is dropped.
+    run.turns[0]!.reject(new Error('stream broke'));
+    await until(() => expect(fake.send.mock.calls.some(c => JSON.stringify(c).includes('1 条排队消息未执行'))).toBe(true));
+    const isMarked = () => ((fake.record.seen ?? []) as { id: string }[]).some((m) => m.id === rejected.messageId);
+    await until(() => expect(isMarked()).toBe(false));
+    fake.history.mockResolvedValueOnce({ ok: true, complete: true, messages: [ctx(rejected.messageId, 'rejected steer', rejected.createTime)] });
+    await o.onMessage(later('next', 2000));
+    await until(() => expect(run.consumed).toHaveLength(2));
+    expect(run.consumed[1]!.text).toContain('李四：rejected steer');
+    run.turns[1]!.resolve();
+  });
+
+  it('marks a queued message seen when it is dequeued, not when it is queued', async () => {
+    fake.record = { lastSeenAt: 1 };
+    const run = thread(); fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup('queue'); await o.onMessage(message('first'));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    const queued = later('queued one', 1000);
+    await o.onMessage(queued);
+    await until(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'queued', expect.anything()));
+    const isMarked = () => ((fake.record.seen ?? []) as { id: string }[]).some((m) => m.id === queued.messageId);
+    expect(isMarked()).toBe(false);
+    run.turns[0]!.resolve();
+    await until(() => expect(run.consumed).toHaveLength(2));
+    await until(() => expect(isMarked()).toBe(true));
+    run.turns[1]!.resolve();
+    await until(() => expect(finals()).toBe(2));
+    fake.history.mockResolvedValueOnce({ ok: true, complete: true, messages: [ctx(queued.messageId, 'queued one', queued.createTime)] });
+    await o.onMessage(later('next', 2000));
+    await until(() => expect(run.consumed).toHaveLength(3));
+    expect(run.consumed[2]!.text).not.toContain('queued one');
+    run.turns[2]!.resolve();
+  });
 });
