@@ -39,7 +39,7 @@ describe('strict boundaries', () => {
   it.each([{ maxConcurrentRuns: '2' }, { runIdleTimeoutSeconds: 1 }, { runIdleTimeoutSeconds: 3601 }, { pendingPolicy: 'other' }, { ownerOpenId: 'ou_steal' }])('rejects malformed run edits %j', patch => expect(() => parseSettingsEdit({ scope: agent, section: 'run', revision: 'x', patch })).toThrow());
   it('rejects wrong action values and arbitrary fields', () => {
     expect(() => parseSettingsAction({ kind: 'adminMember', botId, openId: 'bad', membership: 'present', revision: 'x' })).toThrow();
-    expect(() => parseSettingsEdit({ scope: agent, section: 'cards', revision: 'x', patch: { includeBridgeOwnedSessionsForDebugging: true } })).toThrow();
+    expect(() => parseSettingsEdit({ scope: agent, section: 'cards', revision: 'x', patch: { debug: true } })).toThrow();
   });
 });
 it('serializes card and HTTP preference edits, preserves unknown nested keys and secrets, reports running concurrency', async () => {

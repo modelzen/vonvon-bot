@@ -234,7 +234,7 @@ it('a blank --session is an input error, a bad request is never sent, and only a
   expect(settings).toHaveBeenCalledTimes(2);
 });
 
-it('settings get prints each section, has no cliBridge in JSON either, and lists a group\'s newest sessions', async () => {
+it('settings get prints each section, gives the view as JSON, and lists a group\'s newest sessions', async () => {
   const agentView = { scope: { kind: 'agent', botId: 'cli_a' }, sections: {
     cards: section({ showToolCalls: true, showModel: 'running' }),
     comments: section({ backend: 'codex-appserver', selection: { kind: 'default' } }, 'r', { backend: 'codex-appserver', selection: { kind: 'explicit', model: 'gpt-5.5', effort: 'medium' } }),
@@ -248,7 +248,6 @@ it('settings get prints each section, has no cliBridge in JSON either, and lists
   await runSettingsGet(undefined, {}, h.io(), h.daemon);
   expect(h.out()).toContain('bot Vonvon Bot（cli_a）的设置\n[cards]\n  showToolCalls = true\n  showModel = running\n[comments]\n  backend = codex-appserver\n');
   expect(h.out()).toContain('  selection = {"kind":"default"}（生效：{"kind":"explicit","model":"gpt-5.5","effort":"medium"}）\n');
-  expect(h.out()).not.toContain('cliBridge');
   h.clear(); await runSettingsGet(undefined, {}, h.io(true), h.daemon);
   expect(Object.keys(JSON.parse(h.out()).view.sections)).toEqual(['cards', 'comments']);
   h.clear(); await runSettingsGet(undefined, { group: 'pay' }, h.io(), h.daemon);
