@@ -70,15 +70,20 @@ function sameOwner(a: PidLockInfo, b: PidLockInfo): boolean {
   return a.pid === b.pid && a.startedAt === b.startedAt;
 }
 
-export async function acquirePidLock(home: string): Promise<PidLockInfo> {
+/**
+ * Creates `daemon.pid` for this process. With `hostMutexHeld`, the caller holds the host mutex, which every live
+ * daemon keeps while it owns the lock, so a lock whose PID still answers belongs to a dead daemon whose PID was reused.
+ */
+export async function acquirePidLock(home: string, options: { hostMutexHeld?: boolean } = {}): Promise<PidLockInfo> {
   await mkdir(home, { recursive: true, mode: 0o700 });
   const path = lockPath(home);
+  const live = (lock: PidLockInfo): boolean => !options.hostMutexHeld && isPidLockOwnerRunning(lock);
   for (let attempt = 0; attempt < 3; attempt++) {
     const previous = await getPidLockInfo(home);
     if (previous) {
-      if (isPidLockOwnerRunning(previous)) throw new PidLockError(`Another Vonvon daemon is already running (PID ${previous.pid}).`, previous);
+      if (live(previous)) throw new PidLockError(`Another Vonvon daemon is already running (PID ${previous.pid}).`, previous);
       const confirmation = await getPidLockInfo(home);
-      if (!confirmation || !sameOwner(previous, confirmation) || isPidLockOwnerRunning(confirmation)) {
+      if (!confirmation || !sameOwner(previous, confirmation) || live(confirmation)) {
         throw new PidLockError('PID lock changed while checking its owner.');
       }
       await unlink(path);

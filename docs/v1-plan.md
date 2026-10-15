@@ -234,6 +234,7 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 - s05a：删 `D/cli/index.ts:15` 白名单里的 `__win-relaunch` 和 `:57` 的命令本体。`D/service/control.ts:91` 正则里的 `__win-relaunch` 是识别 bridge 的兼容标识，保留。
 - s05b：删了 `WindowsRunObservation` 和 Run 键常量后，桌面端 `daemon-dependencies.ts` 的 `parseWindowsRunQuery`、`observeWindowsRun` 和 `windows-native.test.ts` 里的 Run 注册测试编译不过，一起删，不留到 s08。桌面端在 win32 上读注册时报"不支持的平台"。
 - s06：开工时先量，超过 1300 行就把 #287 的修复和测试单独成片（s06a、s06b）。合入后在已关闭的 #285 下补一条评论，写明代码去了哪里，再关闭 #287。
+- s06：#287 的修法是用 host 互斥锁认人，不再只看 PID。活着的 daemon 拿着 `daemon.pid` 时一定也拿着 host 互斥锁，所以拿到互斥锁以后，PID 还活着的锁只可能是死掉的 daemon 留下、PID 又被别的进程复用了，直接接管，不碰那个进程。拿不到互斥锁时，等持锁的 daemon 就绪并通过本地凭据认证才退出 0，认证不了就退出 1，让服务管理器重试。Windows 的 Run 值读取随 s05 删掉，不搬。
 - s07、s08：参考 #110 拆分表的第 13、14 块和它的 `login-item.ts`，去掉 Windows 部分。
 - s07：服务定义里的 PATH 用 s02 的 `withToolDirectories` 补全。自带的 npm 由 daemon 自己找，服务定义里不用写 `VONVON_NPM_CLI`。
 - s07：POSIX 上的互斥锁是 `127.0.0.1` 上按数据目录哈希出来的端口（20000 到 49999），和 Linux 的临时端口重叠。#295 的 CI 撞过一次（`host-service-shutdown` 测试报 busy），开工时看要不要改成 Unix 域套接字。

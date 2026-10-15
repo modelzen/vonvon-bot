@@ -732,6 +732,17 @@ it('launchd start uses fixed port and kickstart without kill, and status require
     expect((await f.service.status()).running).toBe(true);
   });
 });
+it.each(['loaded', 'absent'] as const)('launchd start after a failed bootstrap that left the job %s', async after => {
+  await withLaunchd(async f => {
+    await f.seed(); f.state.loaded = false; f.state.bootstrap = 'error';
+    f.state.beforeCommand = async command => { if (command === 'print' && f.calls.some(call => call.startsWith('bootstrap '))) f.state.loaded = after === 'loaded'; };
+    f.state.onPause = () => { f.state.owner = { ...first }; f.state.pid = first.pid; };
+    if (after === 'loaded') expect((await f.service.start()).port).toBe(49101);
+    else await expect(f.service.start()).rejects.toThrow('error');
+    expect(f.calls.filter(call => call.startsWith('bootstrap '))).toHaveLength(1);
+    expect(f.calls.some(call => call.startsWith('kickstart '))).toBe(false);
+  });
+});
 it('launchd authenticated rollback waits through minutes of accepted drain without a deadline', async () => {
   await withLaunchd(async f => {
     f.state.verifyFails = true; f.state.delayStop = true;
