@@ -163,7 +163,7 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
 
 ### M8 skill、MCP 和查飞书上下文（s43 到 s48）
 
-**给 owner 什么：** 桌面端有本机 skill 库和 MCP 库（3.6）。skill 可以从 `~/.claude/skills`、`~/.codex/skills`、`~/.agents/skills` 或任意文件夹导入；MCP 可以从 Codex、Claude 的配置导入，也可以手填命令或网址。导入后给 bot 启用，在某个群里另外增减。新建的 bot 不再带你自己的个人指令和 skill，导入的 bot 不变。bot 能用 vonvon 飞书 skill 查本群的话题和另一条会话（3.5）：在主区问"两个话题的结论"，它去读了再答，卡片上写读了哪些。
+**给 owner 什么：** 桌面端有本机 skill 库和 MCP 库（3.6）。skill 可以从 `~/.claude/skills`、`~/.codex/skills`、`~/.agents/skills` 或任意文件夹导入；MCP 可以从 Codex、Claude 的配置导入，也可以手填命令或网址。导入后给 bot 启用，在某个群里另外增减。新建的 bot 不再带你的 Claude 个人指令和两家的个人 skill，导入的 bot 不变。Codex 的 `~/.codex/AGENTS.md` 关不掉，新建的 bot 也带着，bot 的指令里写明 bot 自己的规矩优先。bot 能用 vonvon 飞书 skill 查本群的话题和另一条会话（3.5）：在主区问"两个话题的结论"，它去读了再答，卡片上写读了哪些。
 
 **怎么验收：** owner 要做的：第 3 步里扫码新建一个 bot、照清单做到全绿，做完回一句。其余步骤 Claude 和 Codex 做，结果写在通知里。
 1. Claude 先做：在 skill 页从 `~/.claude/skills` 导入一个 skill，给 bot 启用，在群里让 bot 用它；在另一个群的详情页把它移除，那个群里就用不上。
@@ -247,9 +247,9 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s02b 留给 s02c 的：设置协议和 RPC 里的咖啡一下还在，界面已经不调了：Agent 设置的 `cliBridge` 一节和 `cliRuntime`，本机设置的 `coffee`，`setCliBridgeEnabled`、`repairCliHooks`、`setHostCliRoute`、`repairHostCliHooks` 四个写操作（`D/admin/settings.ts`、`host-settings.ts` 和协议，连测试约 750 行，放进本片会超过 1500 行）。bot 不再把服务交给设置层，`cliRuntime.running` 一直是 false，`setCliBridgeEnabled` 回"请先启动此 Agent"。s02c 的第一片先删这一层，`vonvon settings` 里隐藏 `cliBridge` 的过滤跟着去掉。`packages/ui/src/reference/styles` 里早就没人用的 `coffee-*` 样式也在那时删。s02c1 已删，见下面的 s02c1 做法。
 - s02c：几乎全是删除，开工前用 `git diff --stat` 量，按 1500 行拆成 s02c1、s02c2……，依次合入。不急，放在第二条线上做。s02b 以后 `handle-message.ts` 不再引用 `D/cli-bridge/`，s02c 不用再改它。cli-bridge 的 Windows 分支随它一起删。s01 说不动的 hook 正则在 `D/cli-bridge/hooks.ts:310`，跟着删掉；s62 卸 bridge 的 hook 用 #226 里的 hook 改写代码，不靠它。
 - s02c 拆法：2026-10-15 量过，`D/cli-bridge/` 的源码约 1990 行，它的测试约 2290 行，加上设置协议这一层和配置，s02c 一共约 5600 行，比原来估的 4600 多，拆成 5 片，依次合入。按谁引用谁的顺序删：先删没人引用的，每片合入后都能单独过 typecheck。
-  - s02c1（约 1100 行）：设置协议这一层，见下面的 s02c1 做法。
-  - s02c2（约 780 行，子进程）：`vonvon hook` 改成直接退出的空命令：照收 `--agent`、`--bot`，什么都不输出，退出码 0，已经装进 Claude Code、Codex CLI 的 hook 照常在终端里问。删 `D/cli-bridge/index.ts`（只有 `vonvon hook` 引用它）、`protocol.ts`、`hooks.ts`（s01 说的 `hooks.ts:310` 的 hook 正则和 cmd.exe 引号在这里），和 `cli-bridge-hook-routing`、`cli-bridge-protocol`、`cli-bridge-hooks`、`cli-bridge-hook-targets` 四份测试；`coffee-retired.test.ts` 去掉对 `D/cli-bridge` 的 mock。合入前在 JP-VPS 上用源码跑 `vonvon hook --agent claude` 和 `--agent codex`，各喂一条 PermissionRequest 和 Stop，看标准输出是空的、退出码 0。
-  - s02c3（约 1190 行）：删 `cli-bridge-service.test.ts` 和 `cli-bridge-global-service.test.ts`。`service.ts` 连它的测试约 1700 行，一片放不下，所以测试先删；s02c2 以后 `service.ts` 已经没有调用方。
+  - s02c1（约 1100 行，#326 已合入）：设置协议这一层，见下面的 s02c1 做法。
+  - s02c2（约 780 行，子进程，#329 已合入）：`vonvon hook` 改成直接退出的空命令：照收 `--agent`、`--bot`，什么都不输出，退出码 0，已经装进 Claude Code、Codex CLI 的 hook 照常在终端里问。删 `D/cli-bridge/index.ts`（只有 `vonvon hook` 引用它）、`protocol.ts`、`hooks.ts`（s01 说的 `hooks.ts:310` 的 hook 正则和 cmd.exe 引号在这里），和 `cli-bridge-hook-routing`、`cli-bridge-protocol`、`cli-bridge-hooks`、`cli-bridge-hook-targets` 四份测试；`coffee-retired.test.ts` 去掉对 `D/cli-bridge` 的 mock。合入前在 JP-VPS 上用源码跑 `vonvon hook --agent claude` 和 `--agent codex`，各喂一条 PermissionRequest 和 Stop，看标准输出是空的、退出码 0。
+  - s02c3（约 1190 行，#330 已合入）：删 `cli-bridge-service.test.ts` 和 `cli-bridge-global-service.test.ts`。`service.ts` 连它的测试约 1700 行，一片放不下，所以测试先删；s02c2 以后 `service.ts` 已经没有调用方。测试只测 `service.ts`，别的测试没有引用它们；`service.ts` 本身和它对 `ipc.ts`、`store.ts` 等的引用留到 s02c4，所以这一片合入后 `D/cli-bridge/` 照样能过 typecheck。
   - s02c4（约 1360 行）：删 `service.ts`、`cards.ts`（Windows 离开检测的提示在这里）、`store.ts`，和 `cli-bridge-cards`、`cli-bridge-store` 两份测试；`D/card/dm-cards.ts:905` 注释里提到 `cli-bridge/cards` 的那句跟着改。
   - s02c5（约 1150 行）：删剩下的 `ipc.ts`、`parser.ts`、`keep-awake.ts`、`presence.ts`（PowerShell 离开检测）、`route.ts`、`types.ts` 和它们的五份测试，以及 `cli-bridge-config.test.ts`；删 `D/config/schema.ts` 里 `cliBridge` 的类型和读取函数（约 150 行）、`D/config/paths.ts` 的 `cliBridgeSocket` 和它的命名管道分支。`preferences.cliBridge` 到这一片才从类型里去掉，旧文件里的这个键照旧留着、没人读；`coffee-retired.test.ts` 里写 `cliBridge` 的那条配置改成不靠类型。`D/cli-bridge/` 到这里删空。
 - s02c1 做法（协议）：Agent 设置的 `cliBridge` 一节和 `cliRuntime`、本机设置的 `runtime.coffee`，`setCliBridgeEnabled`、`repairCliHooks`、`setHostCliRoute`、`repairHostCliHooks` 四个写操作，从协议、`D/admin/settings.ts`、`host-settings.ts`、`settings-parse.ts`、`settings-service.ts` 里删了。只给它们用的 hook 状态、生效时机 `next-hook` 和 `next-presence-check`、写操作结果 `diverged` 一起删；本机设置没有写操作了，写操作的结果里也就不再带本机视图。RPC 收到这四个写操作或存 `cliBridge` 这一节，按无效请求拒。`vonvon settings` 不再过滤 `cliBridge`，`--json` 里也没有了；`settings set cliBridge.…` 还是回"咖啡一下第一版已拿掉，不能改。"。
@@ -344,11 +344,11 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 
 | 状态 | 编号 | 切片 | 内容 | 约行数 | 依赖 | 风险 | Mac 检查 |
 |---|---|---|---|---|---|---|---|
-| [ ] | s09 | 真名和水位 | 按 open_id 换真名并缓存，拉历史带 `with_sender_name`；修水位：话题第一条不再重放、bot 开话题写水位、插话和排队推进水位、话题补拉翻页（3.5 末尾第 4 到 8 条） | 500 | s01、e10 | 并发、错误路径 | 无 |
+| [x] | s09 | 真名和水位 | 按 open_id 换真名并缓存，拉历史带 `with_sender_name`；修水位：话题第一条不再重放、bot 开话题写水位、插话和排队推进水位、话题补拉翻页（3.5 末尾第 4 到 8 条） | 500 | s01、e10 | 并发、错误路径 | 无 |
 | [x] | s10 | 连续群的话题单独成会话，被迫换会话时说一声 | 话题消息一律按 thread_id 分会话（3.5 末尾第 1 条）；resume 失败或目录变了而重建会话时，运行卡上说明 | 250 | — | 错误路径 | 无 |
 | [x] | s11 | 空闲超时 10 分钟、重试按钮、群里都能领文件 | 看门狗默认 600 秒，加暂停接口给 s30 用；超时和网络失败分开写、带［重试］；本群能用 bot 的人都能领文件（3.12） | 360 | — | 错误路径、并发 | 无 |
 | [x] | s12 | 自动压缩一直开，上下文仪表常驻 | 去掉"关闭自动压缩"，已存的 false 读时忽略；运行卡头部一直有仪表，压缩时写"已压缩 85% → 20%"（3.5"压缩"） | 470 | — | 数据迁移 | 无 |
-| [ ] | s13 | 话题登记表 | 每个 bot 每个群一份，记话题 id、第一条、谁开的、几点、标题、有没有会话；SessionRecord 加可选字段，旧文件不迁移（3.5"daemon 在本机记什么"）；没有用户可见变化，s14、s15、s48 要读它 | 380 | s09 | 并发、数据迁移 | 无 |
+| [x] | s13 | 话题登记表 | 每个 bot 每个群一份，记话题 id、第一条、谁开的、几点、标题、有没有会话；SessionRecord 加可选字段，旧文件不迁移（3.5"daemon 在本机记什么"）；没有用户可见变化，s14、s15、s48 要读它 | 380 | s09 | 并发、数据迁移 | 无 |
 | [ ] | s14a | 对话记录块和主区补拉 | 统一的记录块，每条带时间和真名，@ 了 bot 的写"→ @你"，别的 bot 写"某某（bot）"；连续群主区按水位补拉，开场最多 20 条；拉历史和查引用带 `card_msg_content_type`，别的 bot 的卡片回答进记录块；话题补拉改用同一个记录块；缺 `im:message:readonly` 时只带触发消息（3.5） | 960 | s09、s13、e10 | 错误路径、并发 | 无 |
 | [ ] | s14b | 话题开场带主区、引用行、压缩后的话题表 | 话题开场带回指和主区 10 条，用户开的和 bot 开的都带；主区记录块里的引用行带两边会话 id，只送一次；从主区补拉里认出别的 bot 开的话题；压缩后主区下一次开口附"本群最近 5 个活跃话题"；话题群尽量认出来，不带主区（3.5） | 630 | s14a | 并发、错误路径 | 无（M3 验收前，预览版任务按 3.5 时间线第 1 到 6 步核对日志，规则模式下按"s14 留下的"里那一版） |
 | [ ] | s15 | /new、/compact 排队和撤回说明 | 加 `/new`；主区 `/new`、`/clear` 只限主人和管理员，话题里不换；`/compact` 忙时排队；订阅撤回事件，进过会话的下次开口加一行说明（3.5"命令""撤回和编辑"） | 660 | s10、s13、s14b | 并发、关闭清理、错误路径 | 无 |
@@ -506,7 +506,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s30：要不要另发一条带 @ 的文字，按 e09 的结果定；结果出来前默认另发。
 - s31：e02 用到的字段，s02 锁定的 SDK 0.3.296 里都有，e02 这边不用抬版本；e03 的结果还可能要抬。同时改掉 `permission.ts` 顶部那段注释。
 - s31：按 e02 的结果做：所有会话启动时都带 `allowDangerouslySkipPermissions: true`，中途升到完全访问才不用重开会话；resume 时明确传档，档不从记录里恢复；拒绝时不用 `interrupt`，不然原因会丢、这一轮按出错结束；提问的答案放进 `updatedInput.answers`。启动时带上这个参数后，升档只能走两条路：daemon 调 `setPermissionMode`，或者回调返回带 `setMode` 的 `updatedPermissions`。两处都只按权限档的设置来，回调不照搬 `suggestions` 里的 `setMode`。回调拿不到"这是在联网"的标记，关网时 Bash 联网靠沙箱挡，看 e03。
-- s31：开工前用【需要你决定】问 owner：bot 的会话要不要关掉 claude.ai 连接器，和推送、远程触发、定时任务这类 Claude Code 自己的工具（e02 第 7 节）。建议用内置工具白名单，连接器默认关。Codex 一侧的同一类问题一起问：用主人的 ChatGPT 登录时，每条会话都挂着 `codex_apps`（主人账号的连接器，0.162.1 上 197 个工具，含合并 GitHub PR 这类写操作），会话层 `features.apps: false` 能关（e05），在 s37 的 profile 里传。
+- s31：owner 2026-10-15 定（选了 B）：两家的连接器和 Claude Code 自己的工具第一版都留着，不关，Codex 也不传 `features.apps: false`。当时问的是：bot 的会话要不要关掉 claude.ai 连接器，和推送、远程触发、定时任务这类 Claude Code 自己的工具（e02 第 7 节）。建议用内置工具白名单，连接器默认关。Codex 一侧的同一类问题一起问：用主人的 ChatGPT 登录时，每条会话都挂着 `codex_apps`（主人账号的连接器，0.162.1 上 197 个工具，含合并 GitHub PR 这类写操作），会话层 `features.apps: false` 能关（e05），在 s37 的 profile 里传。
 - s31：e02 没测完的两件，开工时补测：完全访问下，Claude 设置里的 ask 规则、删除关键目录会不会走到回调；vonvon 真实的 `['user', 'project']` 下，用户层的权限规则会不会改变哪些调用走回调。e02 用的是空的 `settingSources`。
 - s31：顺手修会话标题的读法：`readSessionTitle` 只认记录里 `custom-title` 的条目，不用 `customTitle` 字段，因为它会退回 CLI 自动起的标题（e02 第 8 节）。放在这一片，是因为 s31 本来就要改 `D/agent/claude-agent/` 下的后端代码；约 40 行，算进这一片的行数。
 - s32：vonvon 不开计划模式，Codex 的提问实际上不会来。这一片主要是不再回报错，不让回合卡住。
@@ -539,14 +539,14 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | 状态 | 编号 | 切片 | 内容 | 约行数 | 依赖 | 风险 | Mac 检查 |
 |---|---|---|---|---|---|---|---|
 | [ ] | s43 | 本机 skill 库和 MCP 库 | skill 从三个目录或本机文件夹拷进来，校验 SKILL.md，记下带不带脚本；MCP 从 Codex、Claude 的配置导入或手填；都不收 git 地址（3.6） | 970 | s38 | 错误路径 | 无 |
-| [ ] | s44 | skill 和 MCP 按名单交给会话，新 bot 不带个人指令 | 按位置算生效名单，交给 Codex 和 Claude 的会话层参数；向导新建的 bot 不带个人指令和 skill，导入的不变（3.6） | 740 | s43、s37、e02、e05 | 子进程、错误路径 | 真实 Codex：用得上 bot 的 skill、看不到个人 skill、MCP 起得来、resume 后还在；新 bot 的 Claude 会话不读 `~/.claude/CLAUDE.md` |
+| [ ] | s44 | skill 和 MCP 按名单交给会话，新 bot 不带 Claude 的个人指令 | 按位置算生效名单，交给 Codex 和 Claude 的会话层参数；向导新建的 bot 不带 Claude 的个人指令和两家的个人 skill，Codex 的 `~/.codex/AGENTS.md` 照常带上，指令里声明 bot 的规矩优先；导入的不变（3.6） | 740 | s43、s37、e02、e05 | 子进程、错误路径 | 真实 Codex：用得上 bot 的 skill、看不到个人 skill、MCP 起得来、resume 后还在；新 bot 的 Claude 会话不读 `~/.claude/CLAUDE.md`；`~/.codex/AGENTS.md` 里和 bot 冲突的规矩，bot 的指令压得住 |
 | [ ] | s45 | skill 和 MCP 页面，bot 和群的启用名单 | 两个库页面，删除时列出还在用的 bot 和群；Bot 页的启用名单，群详情页的增减（3.6） | 550 | s43、s41、s42 | — | 无 |
 | [ ] | s46 | 会话令牌和 agent 调 vonvon 的入口 | 每条会话一个令牌，经环境变量交给 agent；host 加一个只接 POST 的路由，子进程依次校验令牌、私聊、触发人、开关（3.7） | 520 | s37、e04 | 子进程、并发、关闭清理、错误路径 | agent 调不调得到 vonvon、带不带得上令牌：Codex 只读、读写、关网各一次，Claude 沙箱一次 |
 | [ ] | s47 | vonvon settings 和 vonvon feishu 命令行框架 | 在 s07a 的命令上加：两组命令从环境变量读地址和令牌，不拿数据租约，输出 JSON；飞书组先做群列表和群成员（3.7） | 380 | s46、s07a | 错误路径 | 无 |
 | [ ] | s48 | vonvon 飞书 skill：列话题、读另一条会话、读飞书消息 | 列本群话题、按会话 id 读另一条会话、按话题或时间读消息；只放行同一个 bot、同一个群、档不高于自己的会话；卡片写"读了话题 T1、T2 的会话"（3.5"查飞书上下文"） | 950 | s47、s44、s13、e02、e11 | 子进程、错误路径 | 无（M8 验收前，预览版任务按 3.5 时间线第 7 步跑一遍） |
 
 开工要点：
-- s44：`~/.codex/AGENTS.md` 按会话关不掉（e05，4 个版本；会话层 `project_doc_max_bytes: 0` 只关项目里的那份）。按本文 4.2 第 3 条用【需要你决定】问 owner，比如接受"带上但在指令里声明 bot 的规矩优先"。`thread/start` 回包的 `instructionSources` 列出实际加载的文件，可以显示在桌面端。
+- s44：`~/.codex/AGENTS.md` 按会话关不掉（e05，4 个版本；会话层 `project_doc_max_bytes: 0` 只关项目里的那份）。owner 2026-10-15 定（选了 A）：接受，带上它，在 bot 的指令里声明 bot 的规矩优先；product.md 3.6 已跟着改。`thread/start` 回包的 `instructionSources` 列出实际加载的文件，可以显示在桌面端。
 - s44：bot 的 MCP 在 `feishu` 权限配置（`approvalPolicy: never`，工作区可写）下不配 `default_tools_approval_mode: "approve"` 时调用被拒（e05，0.162.1，只见过一次），和第 9 节第 2 项的推断一致；只读档和完全访问档不配会怎样没测，开工时补测。用户的个人 skill 先 `skills/list` 列出，再用 `skills.config` 逐个禁；系统 skill 用 `skills.bundled.enabled: false` 关。按名字禁会连同名的 bot skill 一起禁，按 `path` 禁没实测，开工时补测。中途换 skill 名单从 0.148.0 起下一轮生效，最低版本 0.156.1 时不用为这个开新会话。
 - s44：Claude 一侧按 e02 第 6 节：新建的 bot 用 `claudeMdExcludes`（经 `options.settings` 传）或只给 `settingSources: ['project']`，导入的 bot 照旧。
 - s46：变量名避开 TOKEN、KEY、SECRET，Codex 默认会滤掉含这些词的变量。e04 证明连不上时，按 product.md 第 9 节第 2 项的退路，把同一组命令做成 vonvon 自己的 MCP 工具，这一片照那个做。
@@ -577,7 +577,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s51a 到 s51c：开工前先在草稿上用 `git diff --stat` 量，超过 1500 行再拆。每个 PR 里列一张"私聊卡片 → 网页上的对应页面"对照表；s51b 删之前逐项确认网页有替代：新建项目、绑群、权限、白名单、管理员；s51c 也一样：语音、云文档评论、会话标题、看门狗、完成提醒。其中语音、云文档评论、完成提醒是 3.12 要保留的，看门狗按 3.12 改成 10 分钟（s11）。网页上没有对应开关的，先在同一片里补上再删卡。群里 `/settings` 用的 GS 卡，`tierLabel`、`permissionSummary` 这些共享函数，以及群里 `/usage` 等命令要用的卡片都保留。
 - s51a 到 s51c 和 s54 改 `handle-message.ts` 的同一段，不要同时在飞。
 - s53：从飞书来的人不能在本机删。缺权限或接口出错时保留上一次的结果，从来没拿到过时退回"扫码人加本机名单"。
-- s57：拉人要 `im:chat.members:write_only`，它现在在可选的进群权限组里。e10：机器人能自己进公开群（`PATCH /im/v1/chats/:chat_id/members/me_join`），私有群回 HTTP 400、`code 232008`。lark-cli 建的群默认私有；客户端建群的默认值没查，开了入群审批的公开群能不能进也没测，开工时补。product.md 3.7 写的是"机器人自己进不了已有的群"，改成"公开群 bot 自己进"是承诺变强，属于本文 4.2 第 3 类：s57 开工前用【需要你决定】问 owner，owner 定了再改 product.md。owner 同意的话，先调 `me_join`，回 232008 再发拉 bot 进群的步骤。自己进群也会推 `im.chat.member.bot.added_v1`，操作人是 bot 自己，今天的 `onBotAddedToChat` 把它记成 `bot-added-nonadmin`、什么也不做；要和别人拉它进群（s36b）分开处理，绑定不靠这个事件触发。`me_join` 靠哪个权限，开工时用只开一个权限的应用试一次。
+- s57：拉人要 `im:chat.members:write_only`，它现在在可选的进群权限组里。e10：机器人能自己进公开群（`PATCH /im/v1/chats/:chat_id/members/me_join`），私有群回 HTTP 400、`code 232008`。lark-cli 建的群默认私有；客户端建群的默认值没查，开了入群审批的公开群能不能进也没测，开工时补。product.md 3.7 写的是"机器人自己进不了已有的群"，改成"公开群 bot 自己进"是承诺变强，属于本文 4.2 第 3 类：owner 2026-10-15 定（选了 B）：不用 `me_join`，已有的群一律发拉 bot 进群的步骤；product.md 3.7 的承诺不变，只改了事实。自己进群也会推 `im.chat.member.bot.added_v1`，操作人是 bot 自己，今天的 `onBotAddedToChat` 把它记成 `bot-added-nonadmin`、什么也不做；要和别人拉它进群（s36b）分开处理，绑定不靠这个事件触发。`me_join` 靠哪个权限，开工时用只开一个权限的应用试一次。
 
 ### M10 从 bridge 迁移
 
@@ -652,7 +652,7 @@ JP-VPS 上剩下的按最晚期限排：e14（M3 验收时）、e12（等 s23 �
 
 1. 先开一个只改 `docs/product.md` 的纯文档 PR，写清改了什么、为什么，以及属于下面哪一类。产品切片等它合入后再按新说法做。
 2. 不改用户能感到的承诺：照 owner 的回答改写；或者实测发现某个接口做不到、某个版本才有，换一种做法仍能兑现 product.md 的承诺。Claude 找另一个模型审查后合入，不等 owner 认可。依据：owner 在被请求认可 #294（按 owner 第 19 到 29 题改的 product.md）时说"不是每条 PR 都要我认可吧？"。实测修正事实这一种是 Claude 照这句话补的，owner 可以改。
-3. 改了承诺或范围：用户能感到的承诺变弱或变强，或者多做、少做某件事，不管起因是不是实测。用【需要你决定】通知 owner，等 owner 定。例如 s44：`~/.codex/AGENTS.md` 关不掉，"新建的 bot 默认不带个人指令"（3.6）就做不到，算这一类。
+3. 改了承诺或范围：用户能感到的承诺变弱或变强，或者多做、少做某件事，不管起因是不是实测。用【需要你决定】通知 owner，等 owner 定。例如 s44：`~/.codex/AGENTS.md` 关不掉，"新建的 bot 默认不带个人指令"（3.6）就做不到，算这一类（owner 2026-10-15 已定，见 s44）。
 
 product.md 开头的状态说明按这三条写（s01 改的）。
 
