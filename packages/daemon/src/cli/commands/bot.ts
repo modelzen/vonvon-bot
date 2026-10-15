@@ -29,7 +29,9 @@ function stepLines(step: SetupStep): string[] {
   for (const line of step.detail?.split('\n') ?? []) out.push(`    ${line}`);
   for (const item of step.items ?? []) out.push(`    - ${item}`);
   for (const warning of step.warnings ?? []) out.push(`    ${warning}`);
-  for (const command of step.commands ?? []) out.push(`    ${command}`);
+  // Unindented, with a blank line on each side, so the block pastes into a shell as is: an indented closing EOF
+  // would not end the AppArmor step's heredoc.
+  if (step.commands?.length) out.push('', ...step.commands, '');
   // A finished step's buttons (取消勾选, 检查登录) are not a next step, unless a warning still points at one.
   if (step.done && !step.warnings?.length) return out;
   for (const action of step.actions) {

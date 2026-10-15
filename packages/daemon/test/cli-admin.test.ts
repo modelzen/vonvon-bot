@@ -120,8 +120,10 @@ it('bot status prints the service step after the tools without counting it', asy
   const out = sandboxed.out();
   expect(out).toMatch(/· Codex 的权限档：只能用完全访问\n    Linux 上 Codex 的沙箱只挡写/);
   expect(out).toContain("! Claude 的权限档：被 AppArmor 挡住\n");
-  expect(out).toContain("\n    sudo tee /etc/apparmor.d/bwrap >/dev/null <<'EOF'\n    abi <abi/4.0>,\n");
-  expect(out).toContain('    profile bwrap /usr/bin/bwrap flags=(unconfined) {\n');
+  // The commands are not indented: an indented closing EOF would not end the heredoc when pasted into a shell.
+  expect(out).toContain(["\n\nsudo tee /etc/apparmor.d/bwrap >/dev/null <<'EOF'", 'abi <abi/4.0>,', 'include <tunables/global>',
+    'profile bwrap /usr/bin/bwrap flags=(unconfined) {', '  userns,', '  include if exists <local/bwrap>', '}', 'EOF',
+    'sudo apparmor_parser -r /etc/apparmor.d/bwrap\n\n'].join('\n'));
   expect(out.indexOf('Claude 的权限档')).toBeLessThan(out.indexOf('后台服务'));
   expect(out).toMatch(/全部就绪。\n$/);
   sandboxed.clear(); await runBotStatus(undefined, sandboxed.io(true), sandboxed.daemon);
