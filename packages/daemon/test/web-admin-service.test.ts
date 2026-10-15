@@ -454,6 +454,16 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
     expect(existsSync(botPaths(SETUP_BOT).setupFile)).toBe(false);
   });
 
+  it.each([
+    [400, { code: 10014, msg: 'app secret invalid' }, { ok: false, reason: 'code=10014 msg=app secret invalid' }],
+    [400, 'not json', { ok: false, reason: 'HTTP 400', unreachable: true }],
+    [503, { code: 1, msg: 'busy' }, { ok: false, reason: 'HTTP 503', unreachable: true }],
+  ])('换 token 返回 HTTP %i 时，带错误码的算凭据被拒，其余算没检测', async (status, body, credentials) => {
+    writeCompleteConfig();
+    vi.stubGlobal('fetch', (async () => new Response(typeof body === 'string' ? body : JSON.stringify(body), { status })) as unknown as typeof fetch);
+    expect((await createReadonlyAdminService().getSetupStatus(SETUP_BOT)).credentials).toEqual(credentials);
+  });
+
   it('连不上飞书时凭据算"无法确认"，不算无效', async () => {
     writeCompleteConfig();
     vi.stubGlobal('fetch', (async () => { throw new DOMException('The operation was aborted due to timeout', 'TimeoutError'); }) as unknown as typeof fetch);

@@ -61,7 +61,14 @@ export async function validateAppCredentials(
   } catch (err) {
     return { ok: false, reason: networkReason(err), unreachable: true };
   }
-  if (!resp.ok) return { ok: false, reason: `HTTP ${resp.status}`, unreachable: true };
+  if (!resp.ok) {
+    // Feishu may put a rejection's {code,msg} on a 4xx; only a body without one means "not judged".
+    const body = (await resp.json().catch(() => undefined)) as TokenResp | undefined;
+    if (resp.status < 500 && resp.status !== 429 && typeof body?.code === 'number' && body.code !== 0) {
+      return { ok: false, reason: `code=${body.code} msg=${body.msg ?? '<no msg>'}` };
+    }
+    return { ok: false, reason: `HTTP ${resp.status}`, unreachable: true };
+  }
   let data: TokenResp;
   try {
     data = (await resp.json()) as TokenResp;
