@@ -206,6 +206,7 @@ import {
   patchSession,
   sessionTitleJobKey,
   upsertSession,
+  type SeenHow,
   type SeenMark,
   type SessionRecord,
   type SessionTitlePolicySnapshot,
@@ -392,6 +393,11 @@ export interface QueuedTurn {
   /** The inbound message, marked seen when the turn is dequeued (not when
    * queued: a dropped queue must leave it for the next back-fill). */
   seen?: SeenMark;
+}
+
+/** How long ago the message was sent (0 when its createTime is unknown). */
+function deliveryLagMs(msg: Pick<NormalizedMessage, 'createTime'>): number {
+  return msg.createTime ? Date.now() - msg.createTime : 0;
 }
 
 /** Switch the mutable session control state to a queued follow-up. Exported as
@@ -937,7 +943,7 @@ export function createOrchestrator(
   /** Record that a message reached the session (see session-store.nextSeen).
    * Fire-and-forget like every watermark write; the function form keeps
    * concurrent marks from overwriting each other. */
-  function markSeen(sessionKey: string, mark: SeenMark, how: 'advance' | 'id' | 'restart' = 'id'): void {
+  function markSeen(sessionKey: string, mark: SeenMark, how: SeenHow = 'id'): void {
     void trackTask(patchSession(sessionKey, (rec) => nextSeen(rec, mark, how)).catch(() => undefined));
   }
 
@@ -946,7 +952,7 @@ export function createOrchestrator(
    * is skipped. Only late messages pay for the disk read; the main area pulls
    * no history yet (s14), so there only a delivered id counts. */
   async function lateRedelivery(msg: NormalizedMessage, sessionKey: string): Promise<boolean> {
-    const lateMs = msg.createTime ? Date.now() - msg.createTime : 0;
+    const lateMs = deliveryLagMs(msg);
     if (lateMs < 60_000) return false;
     const rec = await getSession(sessionKey).catch(() => undefined);
     const taken = msg.threadId ? isSeen(rec, msg.messageId, msg.createTime) : isDelivered(rec, msg.messageId);
@@ -1391,7 +1397,7 @@ export function createOrchestrator(
     // codex can match the roster (approve-gate) and @ them back. Covers both the
     // first-turn (startReservedRun) and mid-turn (handleTurn) paths.
     const senderName = (await senderNameP) ?? msg.senderName;
-    body = weaveSender(body, { senderId: msg.senderId, senderName }, msg.createTime ? Date.now() - msg.createTime : 0);
+    body = weaveSender(body, { senderId: msg.senderId, senderName }, deliveryLagMs(msg));
     return { ...ingested, text: body };
   }
 
@@ -1734,7 +1740,8 @@ export function createOrchestrator(
         // (no history woven), only the trigger counts; a new session then restarts
         // from 0 so its next turn pulls the whole topic.
         const behind = topicId ? Boolean(pull && !pull.ok) : Boolean(goal && msg.threadId);
-        const seenHow = !behind ? 'advance' : codexEmpty ? 'restart' : 'id';
+        let seenHow: SeenHow = 'advance';
+        if (behind) seenHow = codexEmpty ? 'restart' : 'id';
         const seenMark: SeenMark = { id: msg.messageId, at: msg.createTime };
         if (!thread) {
           // Unknown session (created before this bridge, or store lost): treat as

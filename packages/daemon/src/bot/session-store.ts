@@ -53,6 +53,9 @@ export interface SeenMark {
   at: number;
 }
 
+/** How a mark moves the watermark (see {@link nextSeen}). */
+export type SeenHow = 'advance' | 'id' | 'restart';
+
 /** Most marks kept above the watermark; past it the oldest are dropped (and
  * may come back once as history). */
 const SEEN_MAX = 64;
@@ -80,7 +83,7 @@ export function isSeen(rec: Pick<SessionRecord, 'lastSeenAt' | 'seen'> | undefin
 export function nextSeen(
   rec: Pick<SessionRecord, 'lastSeenAt' | 'seen'>,
   mark: SeenMark,
-  how: 'advance' | 'id' | 'restart',
+  how: SeenHow,
 ): Pick<SessionRecord, 'lastSeenAt' | 'seen'> {
   const base = how === 'restart' ? 0 : rec.lastSeenAt;
   const lastSeenAt = how === 'advance' ? Math.max(base ?? 0, mark.at) : base;

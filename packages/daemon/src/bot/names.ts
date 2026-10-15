@@ -24,6 +24,12 @@ const MISS_TTL_MS = 10 * 60_000;
 const MAX_NAMES = 2000;
 const LOOKUP_DEADLINE_MS = 3000;
 
+interface NameEntry {
+  /** undefined for a remembered miss. */
+  name?: string;
+  until: number;
+}
+
 export interface NameBook {
   /** The cached name, without any lookup. */
   peek(openId: string | undefined): string | undefined;
@@ -39,28 +45,31 @@ export function createNameBook(
 ): NameBook {
   const now = opts.now ?? Date.now;
   const deadlineMs = opts.deadlineMs ?? LOOKUP_DEADLINE_MS;
-  const entries = new Map<string, { name?: string; until: number }>();
+  const entries = new Map<string, NameEntry>();
   const inflight = new Map<string, Promise<string | undefined>>();
   let contactDenied = false;
 
-  const put = (id: string, name: string | undefined): void => {
+  function put(id: string, name: string | undefined): void {
     entries.delete(id); // re-insert so the oldest entry is evicted first
     entries.set(id, { name, until: now() + (name ? HIT_TTL_MS : MISS_TTL_MS) });
     if (entries.size > MAX_NAMES) entries.delete(entries.keys().next().value as string);
-  };
-  const entry = (id: string) => {
+  }
+  /** The live entry (a hit or a remembered miss); an expired one is dropped. */
+  function entry(id: string): NameEntry | undefined {
     const e = entries.get(id);
     if (e && e.until <= now()) {
       entries.delete(id);
       return undefined;
     }
     return e;
-  };
-  const peek = (id: string | undefined): string | undefined => (id ? entry(id)?.name : undefined);
-  const remember = (id: string | undefined, name: string | undefined): void => {
+  }
+  function peek(id: string | undefined): string | undefined {
+    return id ? entry(id)?.name : undefined;
+  }
+  function remember(id: string | undefined, name: string | undefined): void {
     const n = name?.trim();
     if (id && n) put(id, n);
-  };
+  }
 
   async function lookup(msg: Pick<NormalizedMessage, 'senderId' | 'messageId' | 'chatId'>): Promise<string | undefined> {
     const id = msg.senderId;
@@ -70,7 +79,8 @@ export function createNameBook(
         params: { with_sender_name: true },
       });
       const sender = (res.data?.items?.[0] as { sender?: { id?: string; sender_name?: string } } | undefined)?.sender;
-      if (sender?.id === id && sender.sender_name?.trim()) return sender.sender_name.trim();
+      const name = sender?.sender_name?.trim();
+      if (sender?.id === id && name) return name;
     } catch (err) {
       log.info('intake', 'sender-name-miss', { step: 'message', err: String(err) });
     }

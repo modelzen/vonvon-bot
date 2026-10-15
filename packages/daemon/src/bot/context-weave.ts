@@ -80,9 +80,14 @@ interface RawMsgItem {
 function learnNames(names: NameBook | undefined, item: RawMsgItem): void {
   if (!names) return;
   const s = item.sender;
-  if (s?.sender_type === 'user' && (s.id_type ?? 'open_id') === 'open_id') names.remember(s.id, s.sender_name);
+  if (s?.sender_type === 'user' && isOpenId(s.id_type)) names.remember(s.id, s.sender_name);
   else if (s?.open_bot_id) names.remember(s.open_bot_id, s.sender_name);
-  for (const m of item.mentions ?? []) if ((m.id_type ?? 'open_id') === 'open_id') names.remember(m.id, m.name);
+  for (const m of item.mentions ?? []) if (isOpenId(m.id_type)) names.remember(m.id, m.name);
+}
+
+/** An item's id is an open_id unless it says otherwise. */
+function isOpenId(idType: string | undefined): boolean {
+  return (idType ?? 'open_id') === 'open_id';
 }
 
 // ── pulling ──────────────────────────────────────────────────────────────
@@ -143,11 +148,9 @@ export async function fetchThreadContext(
 ): Promise<ThreadPull> {
   const stopAt = opts.stopAt ?? 0;
   const found: ContextMessage[] = [];
-  const done = (complete: boolean): ThreadPull => ({
-    messages: found.sort((a, b) => a.createTime - b.createTime),
-    ok: true,
-    complete,
-  });
+  function done(complete: boolean): ThreadPull {
+    return { messages: found.sort((a, b) => a.createTime - b.createTime), ok: true, complete };
+  }
   let pageToken: string | undefined;
   try {
     for (let page = 0; page < THREAD_PAGE_CAP; page++) {
@@ -164,7 +167,7 @@ export async function fetchThreadContext(
       // The SDK only throws on HTTP errors; a 200 with a non-zero code is a failure too.
       if (typeof res.code === 'number' && res.code !== 0) {
         warnThreadContextFailed(threadId, res);
-        return { messages: [], ok: false, complete: false };
+        return failedPull();
       }
       const data = res.data as { items?: RawMsgItem[]; has_more?: boolean; page_token?: string } | undefined;
       const items = data?.items ?? [];
@@ -192,8 +195,12 @@ export async function fetchThreadContext(
     return done(false);
   } catch (err) {
     warnThreadContextFailed(threadId, err);
-    return { messages: [], ok: false, complete: false };
+    return failedPull();
   }
+}
+
+function failedPull(): ThreadPull {
+  return { messages: [], ok: false, complete: false };
 }
 
 /** The most recent `limit` messages to weave (oldest→newest in, same order
@@ -514,7 +521,7 @@ export function weaveThreadHistory(text: string, msgs: ContextMessage[]): string
 const SENDER_NAME_MAX = 40;
 /** A message received this long after it was sent says so in its sender block:
  * Feishu re-pushes messages sent while the bot was offline about 5 minutes late (e10). */
-export const LATE_NOTE_MS = 2 * 60_000;
+const LATE_NOTE_MS = 2 * 60_000;
 
 /**
  * Prepend a fenced "发信人" block so codex knows WHO sent THIS turn. Feishu's
