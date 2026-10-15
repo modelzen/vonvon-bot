@@ -24,7 +24,8 @@ async function settingsFixture() {
     accounts: { app: { id: botId, tenant: 'feishu', secret: { source: 'exec', id: 'credential-original' } } },
     preferences: { access: { ownerOpenId: 'ou_owner', admins: [] } },
   };
-  const initialProject: Project = { name: 'demo', chatId: 'oc_demo', cwd: home, blank: false, createdAt: 1, autoCompact: true };
+  // An old row with auto-compaction turned off: since s12 nothing reads it.
+  const initialProject = { name: 'demo', chatId: 'oc_demo', cwd: home, blank: false, createdAt: 1, autoCompact: false };
   await writeFile(configFile, JSON.stringify(cfg));
   await writeFile(projectFile, JSON.stringify(initialProject));
   const readProject = async (name: string) => name === 'demo' ? JSON.parse(await readFile(projectFile, 'utf8')) as Project : undefined;
@@ -74,15 +75,21 @@ describe('retained settings behavior over real WebSocket', () => {
       expect(disk.accounts.app.secret).toEqual({ source: 'exec', id: 'credential-original' });
 
       const readProject = await client.call({ type: 'request', id: 'read-project', method: 'settings', payload: { type: 'read', scope: project } });
-      if (readProject.type !== 'response' || readProject.method !== 'settings' || readProject.payload.kind !== 'view' || !('compact' in readProject.payload.view.sections)) throw new Error('project view missing');
-      const compactRevision = readProject.payload.view.sections.compact.revision;
-      const compact = await client.call({ type: 'request', id: 'save-project', method: 'settings', payload: { type: 'save', edit: { scope: project, section: 'compact', revision: compactRevision, patch: { autoCompact: false } } } });
-      expect(compact).toMatchObject({ type: 'response', method: 'settings', payload: { kind: 'saved', result: { kind: 'saved', section: { scope: project, section: 'compact', value: { stored: { autoCompact: false } } } } } });
-      if (compact.type !== 'response' || compact.method !== 'settings' || compact.payload.kind !== 'saved' || compact.payload.result.kind !== 'saved') throw new Error('project save missing');
-      expect(compact.payload.result.section.value.revision).not.toBe(compactRevision);
+      if (readProject.type !== 'response' || readProject.method !== 'settings' || readProject.payload.kind !== 'view' || !('response' in readProject.payload.view.sections)) throw new Error('project view missing');
+      expect(Object.keys(readProject.payload.view.sections).sort()).toEqual(['model', 'permission', 'response']);
+      const responseRevision = readProject.payload.view.sections.response.revision;
+      const response = await client.call({ type: 'request', id: 'save-project', method: 'settings', payload: { type: 'save', edit: { scope: project, section: 'response', revision: responseRevision, patch: { noMention: false } } } });
+      expect(response).toMatchObject({ type: 'response', method: 'settings', payload: { kind: 'saved', result: { kind: 'saved', section: { scope: project, section: 'response', value: { stored: { noMention: false } } } } } });
+      if (response.type !== 'response' || response.method !== 'settings' || response.payload.kind !== 'saved' || response.payload.result.kind !== 'saved') throw new Error('project save missing');
+      expect(response.payload.result.section.value.revision).not.toBe(responseRevision);
       const rereadProject = await client.call({ type: 'request', id: 'reread-project', method: 'settings', payload: { type: 'read', scope: project } });
-      expect(rereadProject).toMatchObject({ payload: { kind: 'view', view: { sections: { compact: { revision: compact.payload.result.section.value.revision, stored: { autoCompact: false } } } } } });
-      expect(JSON.parse(await readFile(fixture.projectFile, 'utf8'))).toMatchObject({ autoCompact: false });
+      expect(rereadProject).toMatchObject({ payload: { kind: 'view', view: { sections: { response: { revision: response.payload.result.section.value.revision, stored: { noMention: false } } } } } });
+      // The old key stays in the file untouched (no migration) and can no longer be written.
+      const afterSave = await readFile(fixture.projectFile, 'utf8');
+      expect(JSON.parse(afterSave)).toMatchObject({ noMention: false, autoCompact: false });
+      client.socket.send(JSON.stringify({ type: 'request', id: 'compact', method: 'settings', payload: { type: 'save', edit: { scope: project, section: 'compact', revision: responseRevision, patch: { autoCompact: true } } } }));
+      expect(await client.wait(frame => frame.type === 'error' && frame.id === 'compact')).toMatchObject({ code: 'invalid_request' });
+      expect(await readFile(fixture.projectFile, 'utf8')).toBe(afterSave);
     } finally { await client.close(); await fixture.close(); }
   });
 

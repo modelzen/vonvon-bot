@@ -29,12 +29,21 @@ import type { AgentEvent, ToolKind } from '../types';
  *   tool_result (user msg) → tool_result(itemId = tool_use_id)
  * The thread layer owns turn_started/done (synthetic turnId — the SDK has no turn
  * id; interrupt() needs none); this mapper emits everything else, and on `result`
- * emits usage + context_usage (the thread appends `done`).
+ * emits usage + context_usage (the thread appends `done`). Each top-level API
+ * request also yields one context_usage, from its assistant message's usage, so
+ * the run card's meter moves during the turn.
+ *
+ * Compaction (s12): status 'compacting' → compaction start; compact_boundary →
+ * compaction end with pre_tokens / post_tokens; status with compact_result
+ * 'failed' → a failed end.
  */
 
 export interface ClaudeMapContext {
   /** thread cwd, to relativize file paths in tool titles */
   cwd?: string;
+  /** the window from the thread's last getContextUsage (maxTokens); mid-turn
+   * readings use it, else the model-id heuristic */
+  contextWindow?: number;
 }
 
 type Kind = 'text' | 'thinking' | 'tool_use' | 'other';
@@ -71,6 +80,10 @@ export function createTurnMapper(ctx: ClaudeMapContext = {}): TurnMapper {
   // Captured from system/init — the result message has NO `model`, so the context
   // window fallback must read it here (else the window shows as 未知/unknown).
   let initModel: string | undefined;
+  // Every content block arrives as its own assistant message with the same
+  // usage; emit context_usage once per API message.
+  let usageMessageId: string | undefined;
+  const window = (): number | null => ctx.contextWindow ?? contextWindowFor(initModel);
 
   function map(msg: SDKMessage): AgentEvent[] {
     const m = msg as unknown as Record<string, any>;
@@ -83,8 +96,21 @@ export function createTurnMapper(ctx: ClaudeMapContext = {}): TurnMapper {
             return [{ type: 'system', threadId: String(m.session_id ?? '') }];
           }
         }
-        // Auto-compaction during a turn → surface the「上下文已压缩」notice.
-        if (m.subtype === 'compact_boundary') return [{ type: 'context_compacted' }];
+        if (m.subtype === 'status') {
+          if (m.status === 'compacting') return [{ type: 'compaction', phase: 'start' }];
+          if (m.compact_result === 'failed') return [{ type: 'compaction', phase: 'end', failed: true }];
+          return [];
+        }
+        if (m.subtype === 'compact_boundary') {
+          const meta = (m.compact_metadata ?? {}) as { pre_tokens?: unknown; post_tokens?: unknown };
+          return [{
+            type: 'compaction',
+            phase: 'end',
+            ...(typeof meta.pre_tokens === 'number' ? { preTokens: meta.pre_tokens } : {}),
+            ...(typeof meta.post_tokens === 'number' ? { postTokens: meta.post_tokens } : {}),
+            contextWindow: window(),
+          }];
+        }
         // The SDK is retrying a failed API call itself (SDKAPIRetryMessage):
         // show the retrying footer; the next deltas clear it.
         if (m.subtype === 'api_retry') return [{ type: 'error', message: '网络波动，正在重试…', willRetry: true }];
@@ -114,6 +140,14 @@ export function createTurnMapper(ctx: ClaudeMapContext = {}): TurnMapper {
           }];
         }
         const out: AgentEvent[] = [];
+        // A nested agent's requests have their own context; only the main one counts.
+        const usage = m.message?.usage as Record<string, number> | undefined;
+        const messageId = typeof m.message?.id === 'string' ? m.message.id : undefined;
+        if (m.parent_tool_use_id == null && usage && messageId && messageId !== usageMessageId) {
+          usageMessageId = messageId;
+          const used = contextTokens(usage);
+          if (used > 0) out.push({ type: 'context_usage', usedTokens: used, contextWindow: window() });
+        }
         for (const b of content) {
           if (b.type === 'tool_use' || b.type === 'server_tool_use') {
             out.push({
@@ -162,12 +196,9 @@ export function createTurnMapper(ctx: ClaudeMapContext = {}): TurnMapper {
           // getContextUsage() reading). used = input + cache_read + cache_creation
           // (≈ the request's full input context — verified to equal getContextUsage
           // totalTokens). Window comes from the init model, NOT result.model (absent).
-          const used =
-            (usage.input_tokens ?? 0) +
-            (usage.cache_read_input_tokens ?? 0) +
-            (usage.cache_creation_input_tokens ?? 0);
+          const used = contextTokens(usage);
           if (used > 0) {
-            out.push({ type: 'context_usage', usedTokens: used, contextWindow: contextWindowFor(initModel) });
+            out.push({ type: 'context_usage', usedTokens: used, contextWindow: window() });
           }
         }
         return out;
@@ -345,6 +376,11 @@ function displayPath(p: string, cwd?: string): string {
     out = cand;
   }
   return `…/${out}`;
+}
+
+/** A request's full input context: input + cache_read + cache_creation. */
+function contextTokens(usage: Record<string, number>): number {
+  return (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
 }
 
 /** Model context window heuristic — the SDK's result message doesn't report it.

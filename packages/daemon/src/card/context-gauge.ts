@@ -1,20 +1,21 @@
-import { card, colorNote, hr, note, type CardElement, type CardObject, type NoteColor } from './cards';
+import { card, colorNote, note, noteMd, type CardElement, type CardObject, type NoteColor } from './cards';
+import type { CompactionEntry, Usage } from './run-state';
 
 /**
- * Context-window usage gauge. The run card stays clean by default; once usage
- * crosses a tier it surfaces a colored one-liner nudging `/compact`. The same
- * tiers back the on-demand `/context` card (which always shows, even below the
- * first threshold) and the model/window numbers come from
- * `thread/tokenUsage/updated` (used = last.totalTokens — the current context
- * occupancy, NOT cumulative total; window = modelContextWindow). Thresholds are
- * fractions of the window — tune here.
+ * Context-window usage gauge. Every run card opens with a one-line meter (s12),
+ * grey below the first tier and tier-colored above it; both backends compact on
+ * their own, so it carries no `/compact` nudge. The same tiers back the on-demand
+ * `/context` card. Codex numbers come from `thread/tokenUsage/updated` (used =
+ * last.totalTokens — the current context occupancy, NOT cumulative total;
+ * window = modelContextWindow), Claude's from the request usage and
+ * getContextUsage(). Thresholds are fractions of the window — tune here.
  */
-export const CTX_WARN = 0.7; // 🟡 first visible tier
+export const CTX_WARN = 0.7; // 🟡 first colored tier
 export const CTX_HIGH = 0.85; // 🟠
 export const CTX_CRIT = 0.95; // 🔴
 
 export interface CtxTier {
-  /** 0 = below WARN (run card stays clean); 1/2/3 = yellow/orange/red */
+  /** 0 = below WARN (grey meter); 1/2/3 = yellow/orange/red */
   level: 0 | 1 | 2 | 3;
   color: NoteColor;
   /** colored dot — the reliable cross-client color signal */
@@ -42,17 +43,35 @@ function k(n: number): string {
 }
 
 /**
- * The run-card gauge element — ONLY when usage is at/above {@link CTX_WARN}, so
- * the card carries nothing extra at low usage (per design). Returns null below
- * the threshold or when the window is unknown (can't tier without a percent).
+ * The meter line at the top of every run card. Before the session's first
+ * reading it shows `上下文 —` so the card doesn't jump when the number lands;
+ * with no window it shows the tokens used.
  */
-export function runCardGauge(used: number, window: number | null): CardElement | null {
-  const pct = ctxPercent(used, window);
-  if (pct === null || !window) return null;
-  const frac = used / window;
-  if (frac < CTX_WARN) return null;
-  const t = ctxTier(frac);
-  return colorNote(`${t.dot} 上下文 ${pct}% · ${k(used)}/${k(window)} · ${t.advice}`, t.color);
+export function runCardMeter(usage: Usage | undefined): CardElement {
+  if (!usage) return colorNote('上下文 —', 'grey');
+  const pct = ctxPercent(usage.used, usage.window);
+  if (pct === null || !usage.window) return colorNote(`上下文 已用 ${k(usage.used)}`, 'grey');
+  const t = ctxTier(usage.used / usage.window);
+  const text = `上下文 ${pct}% · ${k(usage.used)}/${k(usage.window)}`;
+  return t.level === 0 ? colorNote(text, 'grey') : colorNote(`${t.dot} ${text}`, t.color);
+}
+
+/** The process-area line for one compaction, e.g. `已压缩 85% → 20%`. Both ends
+ * share one window; without a window they show tokens. */
+export function compactionLine(c: CompactionEntry, running: boolean): CardElement {
+  const window = c.before?.window ?? c.after?.window ?? null;
+  const at = (u: Usage): string => {
+    const pct = ctxPercent(u.used, window);
+    return pct === null ? k(u.used) : `${pct}%`;
+  };
+  const text =
+    c.status === 'failed' ? '上下文压缩失败'
+      : c.status === 'running' ? (running ? '正在压缩上下文…' : '上下文压缩没有完成')
+        : c.before && c.after ? `已压缩 ${at(c.before)} → ${at(c.after)}`
+          : c.before ? `已压缩，压缩前 ${at(c.before)}`
+            : c.after ? `已压缩，现在 ${at(c.after)}`
+              : '已压缩上下文';
+  return noteMd(`<font color='grey'>🗜️ ${text}</font>`);
 }
 
 /** On-demand `/context` card — always shows, even at low usage. */
@@ -113,20 +132,4 @@ export function buildCompactedCard(
 /** Terminal "压缩失败" state of the manual `/compact` card. */
 export function buildCompactFailedCard(message: string): CardObject {
   return card([colorNote(`⚠️ 压缩失败：${message}`, 'red')], { summary: '压缩失败' });
-}
-
-/**
- * The auto-compact notice — a deliberately distinct little card posted whenever
- * codex auto-compacts a thread mid-turn (a manual `/compact` is suppressed). The
- * divider + 🗜️ frame sets it apart from run cards / replies.
- */
-export function buildAutoCompactCard(): CardObject {
-  return card(
-    [
-      hr(),
-      colorNote('🗜️ ─── 上下文已自动压缩 ───', 'blue'),
-      note('早前对话已总结归档、腾出空间继续；最近的上下文保留。'),
-    ],
-    { summary: '上下文已自动压缩' },
-  );
 }

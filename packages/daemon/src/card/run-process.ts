@@ -3,6 +3,7 @@ import { md as markdown, type CardElement } from './cards';
 import { processPanel } from './process-panel';
 import { renderRichText } from './markdown-render';
 import { toolPresentation, toolArguments } from './tool-presentation';
+import { compactionLine } from './context-gauge';
 import type { Block, ToolEntry, RunState, Terminal } from './run-state';
 
 const PROCESS_BODY_BUDGET = 22_000;
@@ -16,29 +17,31 @@ const COMPACT_GROUP_BUDGET = 18_000;
 interface ProcessUnit {
   readonly element: CardElement;
   readonly itemCount: number;
+  /** a compaction line: one short line, never dropped for the budget */
+  readonly marker?: boolean;
 }
 
+/** `live`: the run is still going, so an unfinished compaction reads as in progress. */
 export function buildProcessBody(
   blocks: readonly Block[],
   images?: ReadonlyMap<string, string>,
   componentBudget = PROCESS_COMPONENT_BUDGET,
+  live = false,
 ): CardElement[] {
-  const rich = processUnits(blocks, false, images);
+  const rich = processUnits(blocks, false, live, images);
   const richElements = rich.map(unit => unit.element);
   if (fitsProcessBudget(richElements, 0, componentBudget)) return richElements;
 
-  const compact = processUnits(blocks, true, images);
+  const compact = processUnits(blocks, true, live, images);
   const compactElements = compact.map(unit => unit.element);
   if (fitsProcessBudget(compactElements, 0, componentBudget)) return compactElements;
 
   const kept: CardElement[] = [];
-  let keptUnits = 0;
+  let omitted = 0;
   for (const unit of compact) {
-    if (!fitsProcessBudget([...kept, unit.element], 512, componentBudget)) break;
-    kept.push(unit.element);
-    keptUnits += 1;
+    if (unit.marker || (omitted === 0 && fitsProcessBudget([...kept, unit.element], 512, componentBudget))) kept.push(unit.element);
+    else omitted += unit.itemCount;
   }
-  const omitted = compact.slice(keptUnits).reduce((total, unit) => total + unit.itemCount, 0);
   if (omitted > 0) kept.push(markdown(`_…后续 ${String(omitted)} 项过程已省略（卡片容量限制）_`));
   return kept;
 }
@@ -55,6 +58,7 @@ function fitsProcessBudget(
 function processUnits(
   blocks: readonly Block[],
   compactTools: boolean,
+  live: boolean,
   images?: ReadonlyMap<string, string>,
 ): ProcessUnit[] {
   const units: ProcessUnit[] = [];
@@ -77,6 +81,11 @@ function processUnits(
   for (const block of blocks) {
     if (block.kind === 'tool') {
       tools.push(block.tool);
+      continue;
+    }
+    if (block.kind === 'compaction') {
+      flushTools();
+      units.push({ element: compactionLine(block.compaction, live), itemCount: 1, marker: true });
       continue;
     }
     if (block.content.trim() === '') continue;
@@ -233,7 +242,7 @@ function formatElapsed(milliseconds: number): string {
 export function currentAnswerIndex(blocks: readonly Block[]): number {
   for (let index = blocks.length - 1; index >= 0; index -= 1) {
     const block = blocks[index];
-    if (block?.kind === 'tool') return -1;
+    if (block?.kind === 'tool' || block?.kind === 'compaction') return -1;
     if (block !== undefined && block.content.trim() !== '') return block.kind === 'text' ? index : -1;
   }
   return -1;

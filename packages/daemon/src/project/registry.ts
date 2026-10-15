@@ -48,11 +48,8 @@ export interface Project {
   /** allow the agent's shell to reach the network in 'qa'/'write' ('full' always can), and Vonvon to
    * fetch remote images in every tier. Default false. */
   network?: boolean;
-  /** let codex auto-compact this project's threads when context fills (codex's
-   * own built-in, on by default). Read as `autoCompact ?? true`; when false the
-   * bridge pushes codex's auto-compact token limit past any real usage to disable
-   * it (see backend sandboxParams / AUTO_COMPACT_OFF_LIMIT). */
-  autoCompact?: boolean;
+  // Old projects.json rows may still carry `autoCompact: false`. Since s12 both
+  // backends always auto-compact and nothing reads it; rows keep it until s60.
   /** agent backend id for this project (see src/agent/index.ts registry).
    * Omitted on old/normal data → the codex default (DEFAULT_BACKEND_ID — historical path,
    * zero behavior change). Routed per project in createOrchestrator's

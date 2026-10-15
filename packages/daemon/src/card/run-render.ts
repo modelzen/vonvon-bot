@@ -7,6 +7,7 @@ import {
   reduce,
   type RunState,
   type Terminal,
+  type Usage,
 } from './run-state';
 
 /**
@@ -19,6 +20,12 @@ export class RunRender {
   private state: RunState = { ...initialState, startedAt: Date.now() };
   /** when false, tool blocks are dropped from the rendered card (pref) */
   showTools = true;
+
+  /** Start the meter at the session's last reading, so it shows before this
+   * turn's first usage arrives (a reading from the turn itself wins). */
+  seedUsage(usage: Usage | undefined): void {
+    if (usage && !this.state.usage) this.state = { ...this.state, usage };
+  }
 
   apply(ev: AgentEvent): void {
     this.state = reduce(this.state, ev);

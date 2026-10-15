@@ -123,10 +123,10 @@ else process.exit(0);
   const host = { scope: { kind: 'host' as const }, sections: { execution: { stored: { codexBin: null }, effective: { codexBin: null }, revision: 'token', access: { kind: 'writable' as const }, apply: [] } }, runtime: { codexBin: null, fallbackCwd: '/fixture', platform: 'darwin' } };
   const service = fakeService({
     listBots: async () => [bot],
-    listProjects: async () => [{ name: projectName, chatId: groupId, cwd: '/fixture', blank: false, kind: 'multi', origin: 'joined', noMention: false, autoCompact: true, mode: 'qa', guestMode: 'qa', network: false, backend: 'codex-appserver', allowedUsersCount: 0, sessionCount: 0, createdAt: 1 }],
+    listProjects: async () => [{ name: projectName, chatId: groupId, cwd: '/fixture', blank: false, kind: 'multi', origin: 'joined', noMention: false, mode: 'qa', guestMode: 'qa', network: false, backend: 'codex-appserver', allowedUsersCount: 0, sessionCount: 0, createdAt: 1 }],
     pendingGroups: async () => ({ groups: [] }),
     joinedGroups: async () => ({ groups: [] }),
-    bindGroup: async () => ({ name: projectName, chatId: groupId, cwd: '/fixture', blank: false, kind: 'multi', origin: 'joined', noMention: false, autoCompact: true, mode: 'qa', guestMode: 'qa', network: false, backend: 'codex-appserver', allowedUsersCount: 0, sessionCount: 0, createdAt: 1 }),
+    bindGroup: async () => ({ name: projectName, chatId: groupId, cwd: '/fixture', blank: false, kind: 'multi', origin: 'joined', noMention: false, mode: 'qa', guestMode: 'qa', network: false, backend: 'codex-appserver', allowedUsersCount: 0, sessionCount: 0, createdAt: 1 }),
     startCodexJob: () => ({ id: operationId }),
     codexJob: () => ({ id: operationId, type: 'install', state: 'succeeded' }),
     collaboration: async (_agent, request) => {

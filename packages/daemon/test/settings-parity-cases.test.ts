@@ -110,7 +110,6 @@ it.each(edgeCases)('$id accepts $section boundary $field', async ({ section, pat
 
 const projectCases = [
   { id: 'CARD-010', section: 'response', patch: { noMention: true }, field: 'noMention', expected: true },
-  { id: 'CARD-011', section: 'compact', patch: { autoCompact: false }, field: 'autoCompact', expected: false },
   { id: 'CARD-012', section: 'permission', patch: { mode: 'write' }, field: 'mode', expected: 'write' },
   { id: 'CARD-013', section: 'permission', patch: { guestMode: 'qa' }, field: 'guestMode', expected: 'qa' },
   { id: 'CARD-014', section: 'permission', patch: { network: true }, field: 'network', expected: true },
@@ -125,7 +124,7 @@ describe('project settings persist in projects.json and isolate group scope', ()
     const result = await settings.save({ scope: project, section, revision: before.sections[section].revision, patch } as SettingsEdit);
     expect(result.kind).toBe('saved');
     expect(getField(await getProjectByName('demo'), field)).toEqual(expected);
-    if (section === 'permission' || section === 'compact') {
+    if (section === 'permission') {
       expect(evict).toHaveBeenCalledOnce();
       expect(evict).toHaveBeenCalledWith('oc_demo');
     }

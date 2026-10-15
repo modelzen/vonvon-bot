@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { effectiveGuestMode, effectiveMode, turnTier } from '../src/project/registry';
-import { sandboxParams, withAutoCompact } from '../src/agent/codex-appserver/backend';
-import { buildGroupSettingsCard, buildPermissionCard, buildProjectSettingsCard } from '../src/card/dm-cards';
+import { effectiveGuestMode, effectiveMode, turnTier, type Project } from '../src/project/registry';
+import { sandboxParams } from '../src/agent/codex-appserver/backend';
+import { AUTO_COMPACT_RETIRED, buildGroupSettingsCard, buildPermissionCard, buildProjectSettingsCard } from '../src/card/dm-cards';
 
 describe('effectiveMode', () => {
   it('defaults missing mode to full (legacy data unaffected)', () => {
@@ -95,39 +95,18 @@ describe('sandboxParams', () => {
 });
 
 describe('group settings card', () => {
-  it('renders the auto-compact toggle, defaulting to on', () => {
-    const json = JSON.stringify(buildGroupSettingsCard({ name: 'P', kind: 'multi', origin: 'created' }));
-    expect(json).toContain('gs.autoCompact');
-    expect(json).toContain('自动压缩');
+  // s12: auto-compaction is always on. A row stored with autoCompact:false reads
+  // like any other: no toggle, no off state.
+  const stored = JSON.parse('{"name":"P","kind":"multi","origin":"created","autoCompact":false}') as Project;
+  it('has no auto-compact toggle, even for a project stored with it off', () => {
+    for (const project of [{ name: 'P', kind: 'multi' as const, origin: 'created' as const }, stored]) {
+      const json = JSON.stringify(buildGroupSettingsCard(project));
+      expect(json).not.toContain('gs.autoCompact');
+      expect(json).not.toContain('自动压缩');
+    }
   });
-  it('reflects an explicit off setting', () => {
-    const json = JSON.stringify(
-      buildGroupSettingsCard({ name: 'P', kind: 'multi', origin: 'created', autoCompact: false }),
-    );
-    // the 'off' option button is primary-selected when autoCompact is false
-    expect(json).toContain('gs.autoCompact');
-  });
-});
-
-describe('withAutoCompact', () => {
-  it('leaves params untouched when auto-compact is on (true/undefined)', () => {
-    const full = { sandbox: 'danger-full-access' };
-    expect(withAutoCompact(full, undefined)).toEqual(full);
-    expect(withAutoCompact(full, true)).toEqual(full);
-  });
-
-  it('injects a disable limit into a fresh config (full mode keeps sandbox)', () => {
-    const out = withAutoCompact({ sandbox: 'danger-full-access' }, false) as any;
-    expect(out.sandbox).toBe('danger-full-access');
-    expect(out.config.model_auto_compact_token_limit).toBeGreaterThan(100_000_000);
-  });
-
-  it('merges the disable limit into an existing config without clobbering permissions', () => {
-    const qa = { config: { default_permissions: 'feishu', permissions: { feishu: {} } } };
-    const out = withAutoCompact(qa, false) as any;
-    expect(out.config.default_permissions).toBe('feishu');
-    expect(out.config.permissions.feishu).toBeDefined();
-    expect(out.config.model_auto_compact_token_limit).toBeGreaterThan(100_000_000);
+  it('says the switch is gone when re-rendered after a tap on an old toggle', () => {
+    expect(JSON.stringify(buildGroupSettingsCard(stored, AUTO_COMPACT_RETIRED))).toContain('自动压缩现在一直开着');
   });
 });
 
@@ -144,12 +123,12 @@ describe('permission cards', () => {
     expect(json).toContain('其他人');
   });
 
-  it('project settings card carries the auto-compact toggle (project-scoped)', () => {
-    const json = JSON.stringify(
-      buildProjectSettingsCard({ name: 'P', cwd: '/x', kind: 'multi', origin: 'created', mode: 'full', guestMode: 'qa', network: false }),
-    );
-    expect(json).toContain('dm.proj.autoCompact');
-    expect(json).toContain('自动压缩');
+  it('project settings card has no auto-compact toggle (s12), even for a project stored with it off', () => {
+    const stored = JSON.parse('{"name":"P","cwd":"/x","kind":"multi","origin":"created","mode":"full","autoCompact":false}') as Project;
+    const json = JSON.stringify(buildProjectSettingsCard(stored));
+    expect(json).not.toContain('dm.proj.autoCompact');
+    expect(json).not.toContain('自动压缩');
+    expect(JSON.stringify(buildProjectSettingsCard(stored, undefined, AUTO_COMPACT_RETIRED))).toContain('自动压缩现在一直开着');
   });
 
   it('permission form has admin + guest tier dropdowns, network, submit, and pre-selects current tiers', () => {

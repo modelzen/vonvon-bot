@@ -195,7 +195,7 @@
 
 ### 19 到 20 压缩
 
-- **Codex。** 手动压缩用 `thread/compact/start`（CX `ClientRequest.ts:83`，VB:479）【读】。自动压缩完成后发 `thread/compacted{threadId, turnId}`，并生成 `contextCompaction` 项（CX `v2/ContextCompactedNotification.ts`，`v2/ThreadItem.ts:101`）【读】。阈值通过 thread config 设置，Vonvon 已在用（`withAutoCompact`，VB:666）【读】。
+- **Codex。** 手动压缩用 `thread/compact/start`（CX `ClientRequest.ts:83`，VB:479）【读】。自动压缩完成后发 `thread/compacted{threadId, turnId}`，并生成 `contextCompaction` 项（CX `v2/ContextCompactedNotification.ts`，`v2/ThreadItem.ts:101`）【读】。阈值通过 thread config 设置（`model_auto_compact_token_limit`）【读】；s12 起 Vonvon 不再设它，自动压缩一直开。
 - **Claude。** 没有压缩方法。`/compact` 是 CLI 自己处理的斜杠命令，Paseo 原样作为提示发出【推】，所以记"是，原生命令"。压缩过程中 `status` 为 `compacting`，结束带 `compact_result`（SDK:4808-4820）【读】。随后发 `compact_boundary`，带 `trigger` manual 或 auto、`pre_tokens`、`post_tokens`（SDK:3187）【读】。Paseo 映射成 compaction 项（P `providers/claude/agent.ts:4428`，:4459）【读】。V6 把 `/compact` 当普通回合来模拟（见 JP-VPS 笔记 `/home/ops/vonvon/provider-redesign/vonvon-current.md`，不在仓库里，3.1），新设计应该直接发原生命令，并读 `compact_boundary`。
 - **Pi。** 有 `compact`、`set_auto_compaction`（PIR:74，:78），以及 `compaction_start` 和 `compaction_end`，reason 为 manual、threshold、overflow（PIS:60，:72）【读】。
 - **Cursor、Grok。** 协议里没有压缩，命令清单拿不到（Grok 录制的 `availableCommands` 是空数组，Cursor 未知）。所以记未知。
