@@ -497,7 +497,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
   - 私聊里的 `/new` 和撤回等 s49。
   - 开发者后台里这个事件的中文名没核对，提醒里写的是「撤回消息」。撤回事件本身要 owner 在开发者后台给 bot 订阅、发布新版本后才收得到，JP-VPS 上的验收 bot 还没订阅，事件这一路（`bridge.ts` 的接线、`onRecall`、说明行）没在真机上走过。
   - bridge 里撤回事件的接线没有单测，和"机器人被移出群"一样挂在 SDK 私有的原始分发器上；M3 第 6 步看日志里的 `recall`。
-  - product.md 的两处已改：3.5"今天的代码和这里不一样"第 9 条标了 s15；撤回的说明行带`〔撤回〕`，群主或管理员撤回时写"的一条消息被撤回了"。D4、D5 等 owner 定了另开纯文档 PR。
+  - product.md 的两处已改：3.5"今天的代码和这里不一样"第 9 条标了 s15；撤回的说明行带`〔撤回〕`，不是本人撤回的写"的一条消息被撤回了"。D4、D5 等 owner 定了另开纯文档 PR。
 - s16 做法（设置源）：Claude 的三个辅助查询（登录检测、模型列表、生成标题）共用一套选项：只读 user 层设置，和回合是同一个 CLI、同一份 `env`，关掉 hooks、MCP 和 claude.ai 连接器，用 `claudeMdExcludes` 排除个人 CLAUDE.md。没读 project 层，因为模型列表按后端缓存，不按项目。
 - s16 实测（JP-VPS，SDK 0.3.296）：传 `model: 'default'` 或调 `setModel(undefined)` 都用账号的默认模型，不看 `ANTHROPIC_MODEL`，只有不传 model 才用它。bot 的会话总是传一个明确的模型，所以用户设置里 `env.ANTHROPIC_MODEL` 指定的模型排到列表第一、当默认（其次是 daemon 自己的 `ANTHROPIC_MODEL`，再其次是设置里的 `model`）；列表里没有就补一行，SDK 失败时的兜底列表也一样。配了 `ANTHROPIC_MODEL` 时，SDK 的列表末尾会多一行 "Custom model"。
 - s16 做法（手填）：手填的 id 只挡空白、控制字符、反引号、尖括号、`-` 开头和超过 200 字，不对模型列表校验，填错了在回合里报错。`/model` 卡总有一个手填表单，提交会锁卡，结果发一张新卡接管；会话记 `modelCustom`。默认模型卡的下拉多一项"自定义模型 ID…"，项目记 `defaultModelCustom`，`pickDefault` 见到它就原样用。网页的"新会话默认模型"和"本话题模型"也能手填，协议的 `ModelSelection` 加了可选的 `custom`；评论模型不开放。顺带：没有会话时 `/model` 卡不再显示"已切换"；群设置里默认模型选得不对时，带提示重发表单，不再不声不响地回到群设置卡；Codex 返回空列表时不再把兜底列表缓存一辈子。
@@ -530,7 +530,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
   - 没回的消息按后端写 Codex 或 Claude，没有后端的按 Codex 写（`LaunchOpts.backendId` 不设就是 Codex）；今天只有这两个后端，V7 加 Cursor、Grok 这些时，`P/diagnostics.ts` 的 `tool` 和 `backendTool` 要跟着加。
   - 和 #338（s15）改到同一段：`handleMessage` 里先查撤回再记 `intake recv`；撤回的消息不进没回的消息。
   - bot 子进程关闭时丢掉的排队消息、`/new` 和 `/compact` 期间暂存的消息不告诉发信人，也不记（s15 之前排队的就这样），s17 做重启时一起看。补拉和查引用被拒会进缺的权限，查撤回的消息（`message.get`）被拒只记日志。
-- s20a：`service install|uninstall` 的互斥锁（还有 `host`、`admission`、`keystore` 三个）在 macOS 和 Linux 上是 127.0.0.1 上的一个端口，按数据目录哈希出来，在 20000 到 49999 之间（`D/config/data-access.ts` 的 `coordinationAddress`）。Linux 的临时端口是 32768 到 60999，大半重叠：本机连接正好占着这个端口时，安装报"Another vonvon service install or uninstall is running"。2026-10-15 #339 的冻结 CI 撞上一次（`service-cli.test.ts`），重跑就过。macOS 的临时端口从 49152 起，只重叠 848 个。做 Linux 服务时换成 Unix 域套接字或文件锁，macOS 一起换。
+- s20a：互斥锁端口和 Linux 临时端口重叠的事（见 s07）又撞上一次：2026-10-15 #339 的冻结 CI 里 `service-cli.test.ts` 报"Another vonvon service install or uninstall is running"，重跑就过。四个角色（`admission`、`host`、`keystore`、`service`）都用这个端口；macOS 的临时端口从 49152 起，只重叠 848 个。做 Linux 服务时换成 Unix 域套接字或文件锁，macOS 一起换。
 - s20a：清单里那一步写明"Linux 上 Codex 只能用完全访问"，由主人自己选要不要把 bot 默认档改成完全访问，不自动放开（本文第 5 节）。
 - s20a：Linux 的首次运行清单还要查 Claude 只读、读写档要的沙箱：有没有 `bwrap` 和 `socat`，以及 Ubuntu 23.10 以后 AppArmor 是否挡住了非特权的用户命名空间（`kernel.apparmor_restrict_unprivileged_userns`）。缺了就写明 Claude 只能用完全访问或要先装、先放开，给出命令，不自动改系统设置。2026-10-15 JP-VPS 上实际遇到，见本文第 7 节。
 - s20b：被拉进的已有群默认只读，在 Linux 上用 Codex 时起不来：bot 回一句说明，等主人改（product.md 第 11 节第 24 条）。今天的代码在绑定之前就抛错（`D/project/lifecycle.ts:206` 附近），要改成照常绑定、回合开始时再回说明。`windows-job.ts` 被 `owned-process.ts` 和 `environment/service.ts` 引用，属于子进程的代码。
@@ -798,7 +798,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 - Claude 的只读、读写档在 Linux 上要 Claude Code 的沙箱，就是 `bubblewrap` 和 `socat`；没装时回合失败，报"Sandbox required but unavailable"。
 - Ubuntu 24.04 上光装好还不够：`kernel.apparmor_restrict_unprivileged_userns = 1` 挡住了非特权的用户命名空间，bwrap 报"setting up uid map: Permission denied"或"loopback: Failed RTM_NEWADDR: Operation not permitted"，Claude 的 Bash 在只读、读写档下都失败。JP-VPS 上的办法：加一份 AppArmor profile，只给 `/usr/bin/bwrap` 开 `userns` 权限（和 Ubuntu 自己给浏览器的 profile 一个样子），用 `apparmor_parser -r` 加载；不全局关掉这个 sysctl。
 - 2026-10-15 owner 经 SSH 加载了 bwrap 的 AppArmor profile（`/etc/apparmor.d/bwrap`）。`bwrap` 和 `socat` 已经装好；`kernel.apparmor_restrict_unprivileged_userns` 仍是 1，没有全局关掉。加载以后，在 JP-VPS 上跑 `bwrap --ro-bind / / --unshare-net true` 和 `bwrap --ro-bind / / --dev /dev --unshare-all --die-with-parent true`，都以 0 退出。所以 JP-VPS 上能验 Claude 的只读、读写档了，M6、M7 里这些步骤不再退回 owner 在 Mac 上验。还没用真 bot 的回合从头到尾再验一遍：第一次用到时，先在测试群里各跑一轮只读档和读写档；跑不通就退回 owner，并在通知里写明。
-- 验收 daemon 的 Claude 会话读 ops 用户的 `~/.claude`（s16 起读 user 和 project 两层设置）：开发用的 CLAUDE.md 和 lark 技能都在里面。所以 JP-VPS 上的 Claude bot 有时像开发 agent 一样做事。2026-10-15 实测到三种：
+- 验收 daemon 的 Claude 会话读 ops 用户的 `~/.claude`（回合一直读 user 和 project 两层设置，`D/agent/claude-agent/backend.ts` 的 `BRIDGE_SETTING_SOURCES`）：开发用的 CLAUDE.md 和 lark 技能都在里面。所以 JP-VPS 上的 Claude bot 有时像开发 agent 一样做事。2026-10-15 实测到三种：
   - 用 lark-cli 查飞书；
   - 翻验收 daemon 的日志和数据目录（没读出凭据）；
   - 说"这一项不能算验收通过"。
