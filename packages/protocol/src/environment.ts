@@ -17,6 +17,7 @@ export const environmentRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("backendVersion"), id: z.string().regex(/^[a-z0-9-]{1,80}$/) }).strict(),
   z.object({ type: z.literal("backendInstall"), id: z.string().regex(/^[a-z0-9-]{1,80}$/), update: z.boolean() }).strict(),
   z.object({ type: z.literal("backendUninstall"), id: z.string().regex(/^[a-z0-9-]{1,80}$/) }).strict(),
+  z.object({ type: z.literal("backendLogin"), id: z.string().regex(/^[a-z0-9-]{1,80}$/), refresh: z.boolean() }).strict(),
   z.object({ type: z.literal("install"), tool: environmentToolSchema }).strict(),
   z.object({ type: z.literal("update"), tool: environmentToolSchema }).strict(),
   z.object({ type: z.literal("toolInstallStatus") }).strict(),
@@ -64,6 +65,8 @@ export const environmentToolStateSchema = z.object({
   tool: environmentToolSchema, installation: z.enum(["missing", "managed", "external"]),
   executable: z.string().nullable(), version: z.string().nullable(), managedVersion: z.string().nullable(),
   latestVersion: z.string().nullable(), updateAvailable: z.boolean().nullable(), canUninstall: z.boolean(),
+  /** Codex only: how `version` compares with the minimum and the tested version. */
+  compatibility: z.object({ status: z.enum(["ok", "tooOld", "newer", "unknown"]), minimum: z.string(), verified: z.string() }).optional(),
 });
 export type EnvironmentToolState = z.infer<typeof environmentToolStateSchema>;
 const operationPurposeSchema = z.union([
@@ -86,6 +89,7 @@ export const environmentReplySchema = z.discriminatedUnion("kind", [
   z.object({kind:z.literal("backendVersion"), id:z.string(), installed:z.string().nullable(), latest:z.string().nullable(), hasUpdate:z.boolean().nullable()}),
   z.object({kind:z.literal("profiles"), profiles:z.array(environmentProfileSchema)}),
   z.object({kind:z.literal("auth"), tool:environmentToolSchema, state:z.enum(["signedIn", "signedOut", "unknown"]), message:z.string()}),
+  z.object({kind:z.literal("backendLogin"), id:z.string(), state:z.enum(["signedIn", "signedOut", "unknown"]), message:z.string()}),
   z.object({kind:z.literal("operation"), operation:environmentOperationSchema.nullable()}),
   z.object({kind:z.literal("toolInstall"), operation:toolInstallOperationSchema.nullable()}),
   z.object({kind:z.literal("applied"), message:z.string()}),

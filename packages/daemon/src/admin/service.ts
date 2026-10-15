@@ -62,7 +62,7 @@ import {
   type UninstallResult,
   type InstallProgress,
 } from '../agent';
-import type { AccountUsageBundle, BackendDepState, BackendProbe, PermissionMode } from '../agent/types';
+import type { AccountUsageBundle, BackendDepState, BackendLogin, BackendProbe, PermissionMode } from '../agent/types';
 import { readRecentLogs } from '../core/logger';
 import {
   checkUpdate as checkUpdateImpl,
@@ -206,6 +206,8 @@ export interface AdminService {
    * 绝不抛错：查不到 latest → null、hasUpdate=false。
    */
   backendVersion(id: string): Promise<{ installed: string | null; latest: string | null; hasUpdate: boolean }>;
+  /** 后端的登录状态（已登录 / 未登录 / 无法确认）。要起一次 CLI，按需调；`refresh` 跳过缓存。绝不抛错。 */
+  backendLogin(id: string, refresh: boolean): Promise<BackendLogin>;
 
   // ── Web 专属：daemon 生命周期 / 升级 / 多 bot 管理 / 宿主机体检 ──────────────
   getDaemonStatus(): Promise<DaemonStatus>;
@@ -916,6 +918,13 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       const latest = await latestNpmVersion(entry.dep.pkg).catch(() => null);
       const hasUpdate = !!installed && !!latest && cmpSemver(latest, installed) > 0;
       return { installed, latest, hasUpdate };
+    },
+
+    async backendLogin(id, refresh): Promise<BackendLogin> {
+      if (!catalogById(id)) return { state: 'unknown', message: '没有这个后端。' };
+      const backend = createBackend(id);
+      if (!backend.loginStatus) return { state: 'unknown', message: `「${backend.displayName}」的登录在它自己的设置里看。` };
+      return backend.loginStatus({ refresh }).catch(() => ({ state: 'unknown' as const, message: '无法确认登录状态，请重新检测。' }));
     },
 
     async getDaemonStatus(): Promise<DaemonStatus> {

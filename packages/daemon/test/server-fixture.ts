@@ -22,7 +22,7 @@ export function fakeService(overrides: Partial<AdminService> = {}): AdminService
     registerBotByQr: async () => ({ ok: false, code: 'abort', reason: 'cancelled' }), refreshBotByQr: async () => ({ ok: false, code: 'abort', reason: 'cancelled' }),
     listBackendCatalog: async () => ({ defaultBackend: 'codex-appserver', entries: [] }),
     installBackend: async () => ({ ok: true, code: 0, aborted: false, tail: '' }),
-    uninstallBackend: async () => ({ ok: true, message: 'removed' }), backendVersion: async () => ({ installed: null, latest: null, hasUpdate: false }),
+    uninstallBackend: async () => ({ ok: true, message: 'removed' }), backendVersion: async () => ({ installed: null, latest: null, hasUpdate: false }), backendLogin: async () => ({ state: 'unknown', message: 'fixture' }),
     getDaemonStatus: async () => ({ installed: false, running: true, selfHosted: true, version: 'test', supported: true }),
     restartDaemon: empty, startDaemon: empty, stopDaemon: empty, applyUpdate: empty,
     checkUpdate: async () => ({ current: 'test', latest: null, hasUpdate: false, dev: true }), updateStatus: () => null,

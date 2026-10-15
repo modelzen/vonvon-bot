@@ -9,6 +9,7 @@ export async function environmentRpc(service: AdminService, jobs: Jobs, peer: Jo
   switch (request.type) {
     case 'backendCatalog': return { kind: 'read', value: environmentReplySchema.parse({ kind: 'backends', entries: (await service.listBackendCatalog()).entries }) };
     case 'backendVersion': return { kind: 'read', value: { kind: 'backendVersion', id: request.id, ...await service.backendVersion(request.id) } };
+    case 'backendLogin': return { kind: 'read', value: { kind: 'backendLogin', id: request.id, ...await service.backendLogin(request.id, request.refresh) } };
     case 'backendUninstall': {
       const result = await service.uninstallBackend(request.id);
       return { kind: 'mutation', reply: () => result.ok ? { kind: 'applied', message: result.message } : { kind: 'refused', code: 'uninstall_failed', message: result.message } };

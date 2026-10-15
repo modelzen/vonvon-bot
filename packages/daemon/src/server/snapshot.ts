@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { DesktopSnapshot, Diagnostic, Job, ToolState } from '@vonvon/protocol';
 import { createBackend } from '../agent';
+import { cachedClaudeLogin } from '../agent/claude-agent/login';
 import type { AdminService } from '../admin/service';
 import { paths } from '../config/paths';
 import { bridgeVersion } from '../core/version';
@@ -38,9 +39,13 @@ export async function createSnapshotStore(options: {
       options.service.codexSetup?.().catch(() => undefined),
       createBackend('claude-agent').doctor({ force: true }).catch(() => undefined),
     ]);
+    // Only the last answer: the probe starts a ~250 MB Claude CLI, and this runs every
+    // 60 s even when no window is open. The 本机环境 page and 检查登录 probe.
+    const login = claude?.ok ? cachedClaudeLogin() : undefined;
+    const claudeMessage = login?.message ?? claude?.hint;
     return [
       { tool: 'codex', installation: codex?.installation ?? 'unknown', authentication: codex?.authentication ?? 'unknown', version: codex?.version ?? null, ...(codex?.message ? { message: codex.message } : {}) },
-      { tool: 'claude', installation: claude ? (claude.ok ? 'installed' : claude.depState === 'not-installed' || claude.depState === 'external-missing' ? 'missing' : 'unknown') : 'unknown', authentication: claude?.ok ? 'notRequired' : 'unknown', version: claude?.version ?? null, ...(claude?.hint ? { message: claude.hint } : {}) },
+      { tool: 'claude', installation: claude ? (claude.ok ? 'installed' : claude.depState === 'not-installed' || claude.depState === 'external-missing' ? 'missing' : 'unknown') : 'unknown', authentication: login?.state ?? 'unknown', version: claude?.version ?? null, ...(claudeMessage ? { message: claudeMessage } : {}) },
     ];
   });
   async function build(committed?: (snapshot: DesktopSnapshot) => void): Promise<void> {
