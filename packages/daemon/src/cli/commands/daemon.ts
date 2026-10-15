@@ -34,8 +34,9 @@ export async function runStart(port = 0): Promise<DaemonStatus> {
   let unverified: PidLockInfo | undefined;
   const waitReady = async (pid: number): Promise<DaemonStatus | null> => {
     const deadline = Date.now() + 25_000;
+    let owner: PidLockInfo | null = null;
     while (Date.now() < deadline) {
-      const owner = await readRunningPidLock(paths.appDir);
+      owner = await readRunningPidLock(paths.appDir);
       if (!owner || owner.pid !== pid) return null;
       if (owner.listen) {
         // A lock that fails authentication may be a dead daemon's PID reused by another process; the child decides under the host mutex.
@@ -44,7 +45,9 @@ export async function runStart(port = 0): Promise<DaemonStatus> {
       }
       await pause(50);
     }
-    throw new Error(`Daemon PID ${pid} did not publish readiness.`);
+    // Never ready may also be a PID reused after a crash before readiness; the host mutex decides that too.
+    if (owner) unverified = owner;
+    return null;
   };
   const existing = await readRunningPidLock(paths.appDir);
   if (existing) {
@@ -55,7 +58,7 @@ export async function runStart(port = 0): Promise<DaemonStatus> {
     const registration = await readStartupRegistration(paths.appDir);
     switch (registration.kind) {
       case 'ours': {
-        const endpoint = await startRegisteredDaemon(paths.appDir, port);
+        const endpoint = await startRegisteredDaemon(paths.appDir, port, unverified);
         return { running: true, pid: endpoint.pid, listen: endpoint.listen, startedAt: endpoint.startedAt };
       }
       case 'unrecognized':

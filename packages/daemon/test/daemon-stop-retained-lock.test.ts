@@ -21,6 +21,7 @@ vi.mock('../src/config/paths', async () => {
   const { join } = await import('node:path');
   return { paths: { appDir: mkdtempSync(join(tmpdir(), 'vonvon-retained-stop-')) } };
 });
+vi.mock('../src/service/startup', () => ({ readStartupRegistration: async () => ({ kind: 'absent' }), startRegisteredDaemon: async () => { throw new Error('unexpected service start'); } }));
 vi.mock('../src/server/owner-verification', () => ({
   stopVerifiedOwner: fixture.stop,
   verifyPidLockOwner: fixture.verify,

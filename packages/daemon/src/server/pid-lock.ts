@@ -66,9 +66,13 @@ export async function readRunningPidLock(home: string): Promise<PidLockInfo | nu
   return lock && isPidLockOwnerRunning(lock) ? lock : null;
 }
 
-function sameOwner(a: PidLockInfo, b: PidLockInfo): boolean {
+function sameOwner(a: Pick<PidLockInfo, 'pid' | 'startedAt'>, b: Pick<PidLockInfo, 'pid' | 'startedAt'>): boolean {
   return a.pid === b.pid && a.startedAt === b.startedAt;
 }
+
+/** A lock identity that failed authentication; a starter waits past it for the daemon that replaces it. */
+export type StaleOwner = Pick<PidLockInfo, 'pid' | 'startedAt'>;
+export const isStaleOwner = (lock: PidLockInfo, stale: StaleOwner | undefined): boolean => stale !== undefined && sameOwner(lock, stale);
 
 /**
  * Creates `daemon.pid` for this process. With `hostMutexHeld`, the caller holds the host mutex, which every live

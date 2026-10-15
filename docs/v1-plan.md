@@ -236,6 +236,7 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 - s06：开工时先量，超过 1300 行就把 #287 的修复和测试单独成片（s06a、s06b）。合入后在已关闭的 #285 下补一条评论，写明代码去了哪里，再关闭 #287。
 - s06：#287 的修法是用 host 互斥锁认人，不再只看 PID。活着的 daemon 拿着 `daemon.pid` 时一定也拿着 host 互斥锁，所以拿到互斥锁以后，PID 还活着的锁只可能是死掉的 daemon 留下、PID 又被别的进程复用了，直接接管，不碰那个进程。拿不到互斥锁时，等持锁的 daemon 就绪并通过本地凭据认证才退出 0，认证不了就退出 1，让服务管理器重试。Windows 的 Run 值读取随 s05 删掉，不搬。
 - s07、s08：参考 #110 拆分表的第 13、14 块和它的 `login-item.ts`，去掉 Windows 部分。
+- s07：s06 起，服务拉起的进程读到 `unrecognized` 的注册（比如旧版本写的、和现在生成的格式不一致的 plist 或 unit）会退出 1，由管理器每 5 秒重试一次。升级以后要先重写服务定义，再让服务起来，否则换版本后 bot 起不来。
 - s07：服务定义里的 PATH 用 s02 的 `withToolDirectories` 补全。自带的 npm 由 daemon 自己找，服务定义里不用写 `VONVON_NPM_CLI`。
 - s07：POSIX 上的互斥锁是 `127.0.0.1` 上按数据目录哈希出来的端口（20000 到 49999），和 Linux 的临时端口重叠。#295 的 CI 撞过一次（`host-service-shutdown` 测试报 busy），开工时看要不要改成 Unix 域套接字。
 - s07：`D/admin/host.ts:194` 的 `resolveCliBinPath` 还指向 `bin/feishu-codex-bridge.mjs`，包里只有 `bin/vonvon.mjs`（`D/service/common.ts` 的同名函数是对的）。查清 `host.ts:210` 那条路径还用不用，用就改成调 service/common 的。

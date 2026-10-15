@@ -732,6 +732,16 @@ it('launchd start uses fixed port and kickstart without kill, and status require
     expect((await f.service.status()).running).toBe(true);
   });
 });
+it('launchd start kickstarts past a stale owner that failed authentication and waits for its replacement', async () => {
+  await withLaunchd(async f => {
+    await f.seed();
+    const stale = { ...first, startedAt: '2026-10-10T00:00:00.000Z' };
+    f.state.owner = stale;
+    const started = await f.service.start({ staleOwner: stale });
+    expect(f.calls).toContain(`kickstart gui/501/${LAUNCHD_LABEL}`);
+    expect(started).toMatchObject({ startedAt: first.startedAt, port: 49101 });
+  });
+});
 it.each(['loaded', 'absent'] as const)('launchd start after a failed bootstrap that left the job %s', async after => {
   await withLaunchd(async f => {
     await f.seed(); f.state.loaded = false; f.state.bootstrap = 'error';

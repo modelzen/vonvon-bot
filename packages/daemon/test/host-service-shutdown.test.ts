@@ -10,6 +10,7 @@ import { acquireMutex, closeMutex } from '../src/config/data-access';
 import { Jobs } from '../src/server/jobs';
 
 const execution = vi.hoisted(() => ({ run: async (_options: { onListening?: (listen: string) => Promise<void> }): Promise<void> => { throw new Error('runtime not arranged'); } }));
+vi.mock('../src/service/startup', () => ({ readStartupRegistration: async () => ({ kind: 'absent' }), startRegisteredDaemon: async () => { throw new Error('unexpected service start'); } }));
 vi.mock('../src/cli/commands/run', () => ({ runRun: (_bot: unknown, options: { onListening?: (listen: string) => Promise<void> }) => execution.run(options) }));
 
 vi.mock('../src/server/http', async importOriginal => {

@@ -38,7 +38,7 @@ vi.mock('../src/server/owner-verification', async original => {
 import { runHostRuntime } from '../src/host/bootstrap';
 
 const realNow = Date.now.bind(Date);
-const bootId = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+const bootId = process.platform === 'linux' ? readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim() : undefined;
 const control = (): ShutdownControl => ({
   requested: false, requestStop: vi.fn(), requestRestart: vi.fn(), waitForRequest: vi.fn(), dispose: vi.fn(),
   completeShutdown: vi.fn(async (release: () => Promise<void>) => { await release(); }),
@@ -86,7 +86,6 @@ afterEach(async () => {
 it.each<[string, () => Registration]>([
   ['absent', () => ({ kind: 'absent' })],
   ['other-root', () => ({ ...ours(), kind: 'other-root', recordedRoot: '/elsewhere' } as never)],
-  ['unrecognized', () => ({ kind: 'unrecognized', location: '/unit', reason: 'invalid' })],
 ])('exits zero for a %s registration under the service manager without touching locks', async (_kind, registration) => {
   fixture.registration.mockResolvedValue(registration());
   const bytes = JSON.stringify({ pid: 99999999, startedAt: new Date().toISOString(), listen: null });
@@ -94,6 +93,15 @@ it.each<[string, () => Registration]>([
   await run();
   expect(process.exitCode).toBe(0);
   expect(fixture.info).toHaveBeenCalledWith('daemon-startup', 'registration_absent', expect.objectContaining({ kind: registration().kind }));
+  expect(fixture.mutex).not.toHaveBeenCalled(); expect(fixture.run).not.toHaveBeenCalled();
+  expect(await readFile(lockPath(), 'utf8')).toBe(bytes);
+});
+
+it('fails an unrecognized registration under the service manager so it retries, without touching locks', async () => {
+  fixture.registration.mockResolvedValue({ kind: 'unrecognized', location: '/unit', reason: 'Definition changed during read' });
+  const bytes = JSON.stringify({ pid: 99999999, startedAt: new Date().toISOString(), listen: null });
+  await writeFile(lockPath(), bytes);
+  await expect(run()).rejects.toThrow('Unrecognized service registration /unit: Definition changed during read');
   expect(fixture.mutex).not.toHaveBeenCalled(); expect(fixture.run).not.toHaveBeenCalled();
   expect(await readFile(lockPath(), 'utf8')).toBe(bytes);
 });
@@ -116,7 +124,7 @@ it('runs a foreground daemon when nothing is registered and releases its lock', 
 
 it('exits zero on a busy host mutex only after authenticating the ready owner', async () => {
   const holder = await bystander(true);
-  const bytes = JSON.stringify({ pid: holder.pid, startedAt: new Date().toISOString(), listen: '127.0.0.1:1', bootId });
+  const bytes = JSON.stringify({ pid: holder.pid, startedAt: new Date().toISOString(), listen: '127.0.0.1:1', ...(bootId ? { bootId } : {}) });
   await writeFile(lockPath(), bytes);
   fixture.realVerify = false;
   await run();
@@ -132,7 +140,7 @@ it.each([
   ['an owner that never publishes readiness', null],
 ])('rejects on a busy host mutex with %s, leaving the lock and process untouched', async (_case, listen) => {
   const holder = await bystander(true);
-  const bytes = JSON.stringify({ pid: holder.pid, startedAt: new Date().toISOString(), listen, bootId });
+  const bytes = JSON.stringify({ pid: holder.pid, startedAt: new Date().toISOString(), listen, ...(bootId ? { bootId } : {}) });
   await writeFile(lockPath(), bytes);
   await expect(run()).rejects.toThrow('Bridge host is busy');
   expect(process.exitCode).not.toBe(0);
@@ -143,7 +151,7 @@ it.each([
 }, 15_000);
 
 it('replaces a lock naming this process once it holds the host mutex', async () => {
-  const stale = { pid: process.pid, startedAt: new Date(realNow() - 1000).toISOString(), listen: null, bootId };
+  const stale = { pid: process.pid, startedAt: new Date(realNow() - 1000).toISOString(), listen: null, ...(bootId ? { bootId } : {}) };
   await writeLock(stale);
   fixture.run.mockImplementation(async () => {
     const current = JSON.parse(await readFile(lockPath(), 'utf8'));
@@ -156,7 +164,7 @@ it('replaces a lock naming this process once it holds the host mutex', async () 
 
 it('takes over a lock whose PID now belongs to a live unrelated process instead of exiting zero (#287)', async () => {
   const unrelated = await bystander(false);
-  await writeLock({ pid: unrelated.pid, startedAt: new Date().toISOString(), listen: '127.0.0.1:1', bootId });
+  await writeLock({ pid: unrelated.pid, startedAt: new Date().toISOString(), listen: '127.0.0.1:1', ...(bootId ? { bootId } : {}) });
   let during: unknown;
   fixture.run.mockImplementation(async () => { during = JSON.parse(await readFile(lockPath(), 'utf8')); });
   await run();

@@ -5,7 +5,7 @@ import { createServer } from 'node:net';
 import { homedir, userInfo } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { HostEndpoint } from '../host/discovery';
-import { readRunningPidLock } from '../server/pid-lock';
+import { isStaleOwner, readRunningPidLock, type StaleOwner } from '../server/pid-lock';
 import { stopVerifiedOwner, verifyPidLockOwner } from '../server/owner-verification';
 import { renderDefinition, type Definition } from './definitions';
 import { runtimeDistribution } from './distribution';
@@ -248,11 +248,11 @@ export function createLaunchdService(options: { root: string }, overrides: Parti
     if (mode === 'replacement') return rollbackResult(s, before, reason);
     return outcome(s, mode === 'uninstall' ? 'uninstall_rolled_back' : 'install_incomplete', `${reason}${mode === 'rollback' ? '; previous definition was not restored' : ''}`);
   }
-  async function ready(s: Snapshot, port: number, wait: boolean): Promise<HostEndpoint> {
+  async function ready(s: Snapshot, port: number, wait: boolean, stale?: StaleOwner): Promise<HostEndpoint> {
     const deadline = d.now() + (wait ? 25_000 : 0);
     do {
       const owner = await d.readOwner(s.root);
-      if (owner?.listen) {
+      if (owner?.listen && !isStaleOwner(owner, stale)) {
         await d.verifyOwner(s.root, owner);
         if (owner.listen !== `127.0.0.1:${port}`) throw new Error(`Daemon PID ${owner.pid} already runs at ${owner.listen}, not requested port ${port}.`);
         return { pid: owner.pid, startedAt: owner.startedAt, listen: owner.listen, port };
@@ -353,19 +353,19 @@ export function createLaunchdService(options: { root: string }, overrides: Parti
         return outcome(s, 'uninstalled', 'Uninstalled');
       } catch (error) { return outcome(s, 'uninstall_incomplete', detailOf(error)); }
     },
-    async start(input: { port?: number } = {}): Promise<HostEndpoint> {
+    async start(input: { port?: number; staleOwner?: StaleOwner } = {}): Promise<HostEndpoint> {
       const s = await snapshot();
       const current = await registration(s);
       if (current.kind !== 'ours') throw new Error(registrationDetail(current));
       const port = current.definition.port;
       if (input.port && input.port !== port) throw new Error(`Service uses port ${port}, not requested port ${input.port}.`);
       const owner = await d.readOwner(s.root);
-      if (owner) return ready(s, port, true);
+      if (owner && !isStaleOwner(owner, input.staleOwner)) return ready(s, port, true);
       const manager = await observeJob();
       if (manager.kind === 'unknown') throw new Error(manager.detail);
       const command = await d.run(manager.kind === 'absent' ? ['bootstrap', domain, s.target.plistPath] : ['kickstart', job], 30_000);
       if (!command.ok && (manager.kind !== 'absent' || (await observeJob()).kind !== 'loaded')) throw new Error(command.stderr || 'Service start failed');
-      return ready(s, port, true);
+      return ready(s, port, true, input.staleOwner);
     },
     async status() {
       const s = await snapshot();

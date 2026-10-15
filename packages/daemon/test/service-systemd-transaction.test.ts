@@ -457,6 +457,17 @@ it('start authentication failure never starts or stops another owner', async () 
   const f = await fixture(); await f.seed(); f.state.owner = { pid: 42000, startedAt: 'unproven', listen: '127.0.0.1:32123' };
   await expect(f.service({ verifyOwner: async () => { throw new Error('auth refused'); } }).start()).rejects.toThrow('auth refused'); expect(f.mutations()).toEqual([]);
 });
+it('start asks systemd past a stale owner that failed authentication and waits for its replacement', async () => {
+  const f = await fixture(); await f.seed(); f.state.autoStart = false;
+  const stale = { pid: 42000, startedAt: 'reused', listen: '127.0.0.1:32123' };
+  f.state.owner = stale;
+  f.state.onPause = async () => { if (f.mutations().length && f.state.clock >= 200) f.state.owner = { pid: 42001, startedAt: 'fresh', listen: '127.0.0.1:32123' }; };
+  const service = f.service({ verifyOwner: async (_root, owner) => { if (owner.pid === stale.pid) throw new Error('auth refused'); } });
+  await expect(service.start({ staleOwner: stale })).resolves.toMatchObject({ pid: 42001, port: 32123 });
+  expect(f.mutations()).toEqual([`start ${SYSTEMD_UNIT_NAME}`]);
+  f.state.owner = stale;
+  await expect(service.start()).rejects.toThrow('auth refused');
+});
 it('unknown enable observation refuses installation before writing', async () => {
   const f = await fixture(); await f.seed(); f.state.enabledReply = { ...failed('client timed out'), status: null, stdout: 'enabled' };
   expect((await f.service().install()).kind).toBe('install_refused'); expect(await f.bytes()).toEqual(f.desired); expect(f.mutations()).toEqual([]);

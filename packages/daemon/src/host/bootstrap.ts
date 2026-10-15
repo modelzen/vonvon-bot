@@ -36,8 +36,10 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
       // Read the registration before any lock: a service manager may only run a daemon its own registration names.
       const serviceManaged = Boolean(process.env.VONVON_SERVICE);
       const registration = await readStartupRegistration(paths.appDir);
+      // An unreadable registration may be one being rewritten; fail so the manager tries again.
+      if (serviceManaged && registration.kind === 'unrecognized') throw new Error(`Unrecognized service registration ${registration.location}: ${registration.reason}`);
       if (serviceManaged && registration.kind !== 'ours') {
-        log.info('daemon-startup', 'registration_absent', registration.kind === 'other-root' ? { kind: registration.kind, recordedRoot: registration.recordedRoot } : registration);
+        log.info('daemon-startup', 'registration_absent', registration.kind === 'other-root' ? { kind: registration.kind, recordedRoot: registration.recordedRoot } : { kind: registration.kind });
         process.exitCode = 0;
         return;
       }

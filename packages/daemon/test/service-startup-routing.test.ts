@@ -80,8 +80,20 @@ it('starts the registered manager when the recorded owner fails PID-lock authent
   fixture.owner.mockResolvedValue(owner);
   fixture.verify.mockRejectedValue(new PidLockError('PID 4242 is not a Vonvon daemon'));
   await expect(runStart()).resolves.toEqual({ running: true, ...owner });
-  expect(fixture.launchdStart).toHaveBeenCalledWith({});
+  expect(fixture.launchdStart).toHaveBeenCalledWith({ staleOwner: owner });
   expect(fixture.spawn).not.toHaveBeenCalled();
+});
+it('starts the registered manager past a recorded owner that never publishes readiness', async () => {
+  vi.useFakeTimers();
+  try {
+    const unready = { ...owner, listen: null };
+    fixture.owner.mockResolvedValue(unready);
+    const started = runStart();
+    await vi.advanceTimersByTimeAsync(26_000);
+    await expect(started).resolves.toEqual({ running: true, ...owner });
+    expect(fixture.launchdStart).toHaveBeenCalledWith({ staleOwner: unready });
+    expect(fixture.verify).not.toHaveBeenCalled();
+  } finally { vi.useRealTimers(); }
 });
 it('refuses unrecognized definitions', async () => {
   fixture.registration.mockResolvedValue({ kind: 'unrecognized', location: '/service', reason: 'invalid' });
