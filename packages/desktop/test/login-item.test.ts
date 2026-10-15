@@ -7,7 +7,7 @@ import { SERVICE_BUSY_MESSAGE, serviceActionMessage } from '@vonvon/protocol';
 import type { ServiceActionRecord } from '../../daemon/src/service/action-report.js';
 import { toolDirectories } from '../../daemon/src/platform/tool-path.js';
 import {
-  changeLoginItem, planStartupRepair, repairServiceAtStartup, runServiceHelper,
+  changeLoginItem, followServiceHelper, planStartupRepair, repairServiceAtStartup, runServiceHelper,
   type LoginItemHooks, type ServiceRuntime, type StartupRepairInput,
 } from '../src/login-item.js';
 import type { Registration, VerifiedDaemon } from '../src/daemon-manager.js';
@@ -125,7 +125,7 @@ describe('the login-item helper', () => {
   ])('refuses %s before the window expects a disconnect', async (reason, overrides, message) => {
     const runtime = await packagedRuntime(overrides);
     const { start, spawn } = children({ code: 0 });
-    const hooks = { readVerifiedDaemon: vi.fn(async () => null), reattach: vi.fn(async () => {}), expectDisconnect: vi.fn() };
+    const hooks = { readVerifiedDaemon: vi.fn(async () => null), reattach: vi.fn(async () => {}), expectDisconnect: vi.fn(), cancelled: () => false };
     const refusal = changeLoginItem(runtime, true, null, hooks, { spawn });
     await expect(refusal).rejects.toThrow(message);
     await expect(refusal).rejects.toMatchObject({ reason });
@@ -142,6 +142,7 @@ describe('switching 登录电脑时启动 from the window', () => {
       readVerifiedDaemon: vi.fn(async () => after),
       reattach: vi.fn(async () => {}),
       expectDisconnect: vi.fn((flag: boolean) => { expected.push(flag); }),
+      cancelled: vi.fn(() => false),
     } satisfies LoginItemHooks;
     return { ...value, expected };
   }
@@ -177,13 +178,33 @@ describe('switching 登录电脑时启动 from the window', () => {
     expect(h.reattach).toHaveBeenCalledOnce();
   });
 
-  it('starts no daemon while a helper may still be changing the service', async () => {
+  it.each([
+    ['our helper timed out', { ...children(null), timeoutMs: 5 }, 'timeout'],
+    ['another helper holds the mutex', children({ code: 1 }), 'busy'],
+  ] as const)('waits until the helper is done before reattaching when the daemon is gone: %s', async (_case, spawn, reason) => {
     const runtime = await packagedRuntime();
+    const successor = { pid: 43, startedAt: 'after', listen: '127.0.0.1:4000' };
+    if (reason === 'busy') await writeReport(runtime, running(process.pid));
+    let polls = 0;
+    const helper = vi.fn(() => ++polls < 3);
     const h = hooks(null);
-    await expect(changeLoginItem(runtime, true, previous, h, { ...children(null), timeoutMs: 5 })).rejects.toMatchObject({ reason: 'timeout' });
+    h.readVerifiedDaemon.mockImplementation(async () => {
+      // No daemon while the helper drains and installs; the service's own one appears as it finishes.
+      expect(h.reattach).not.toHaveBeenCalled();
+      return polls >= 2 ? successor : null;
+    });
+    await expect(changeLoginItem(runtime, true, previous, h, { ...spawn, helperRunning: helper, pollMs: 1 })).rejects.toMatchObject({ reason });
+    expect(h.reattach).toHaveBeenCalledOnce();
+    expect(h.expected).toEqual([true]);
+  });
+
+  it('keeps the connection after a busy refusal while the old daemon still runs', async () => {
+    const runtime = await packagedRuntime();
     await writeReport(runtime, running(process.pid));
+    const h = hooks(previous);
     await expect(changeLoginItem(runtime, true, previous, h, children({ code: 1 }))).rejects.toMatchObject({ reason: 'busy' });
     expect(h.reattach).not.toHaveBeenCalled();
+    expect(h.expected).toEqual([true, false]);
   });
 
   it('says the window could not reconnect when reattaching fails', async () => {
@@ -192,6 +213,44 @@ describe('switching 登录电脑时启动 from the window', () => {
     const h = hooks(null);
     h.reattach.mockRejectedValueOnce(new Error('Daemon did not become ready within the startup wait.'));
     await expect(changeLoginItem(runtime, true, previous, h, children({ code: 0 }))).rejects.toMatchObject({ reason: 'reattach' });
+  });
+});
+
+describe('following a helper started elsewhere', () => {
+  const previous = { pid: 42, startedAt: 'before', listen: '127.0.0.1:4000' };
+  const successor = { pid: 43, startedAt: 'after', listen: '127.0.0.1:4000' };
+  const hooks = (daemons: Array<VerifiedDaemon | null>) => ({
+    readVerifiedDaemon: vi.fn(async () => daemons.length > 1 ? daemons.shift() ?? null : daemons[0] ?? null),
+    reattach: vi.fn(async () => {}), expectDisconnect: vi.fn(), cancelled: vi.fn(() => false),
+  });
+
+  it('waits while the old daemon drains, then reattaches to the daemon the helper started', async () => {
+    const runtime = await packagedRuntime();
+    const h = hooks([previous, previous, null, successor]);
+    await followServiceHelper(runtime, previous, h, { helperRunning: () => true, pollMs: 1 });
+    expect(h.readVerifiedDaemon).toHaveBeenCalledTimes(4);
+    expect(h.reattach).toHaveBeenCalledOnce();
+  });
+
+  it('reattaches through ensureReady once the helper is done, even with no daemon left', async () => {
+    const runtime = await packagedRuntime();
+    await writeReport(runtime, running(process.pid));
+    const h = hooks([null]);
+    const following = followServiceHelper(runtime, previous, h, { pollMs: 1 });
+    await vi.waitFor(() => expect(h.readVerifiedDaemon.mock.calls.length).toBeGreaterThan(2));
+    expect(h.reattach).not.toHaveBeenCalled();
+    await writeReport(runtime, done(process.pid));
+    await following;
+    expect(h.reattach).toHaveBeenCalledOnce();
+  });
+
+  it('stops waiting without reattaching when the window closes', async () => {
+    const runtime = await packagedRuntime();
+    const h = hooks([null]);
+    let polls = 0;
+    h.cancelled.mockImplementation(() => ++polls > 2);
+    await followServiceHelper(runtime, previous, h, { helperRunning: () => true, pollMs: 1 });
+    expect(h.reattach).not.toHaveBeenCalled();
   });
 });
 

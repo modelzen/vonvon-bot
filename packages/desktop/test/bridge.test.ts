@@ -67,6 +67,7 @@ function harness() {
     service: vi.fn(async (_action: 'install' | 'start' | 'stop' | 'uninstall', _previous?: AttachedDaemon['identity'] | null) => ({ type: 'done' as const, message: 'service updated' })),
     setLoginItem: vi.fn(async (_enabled: boolean, _previous?: AttachedDaemon['identity'] | null) => {}),
     isExpectedDisconnect: vi.fn(() => false),
+    followServiceHelper: vi.fn((_lost: AttachedDaemon['identity']) => false),
     repairCli: vi.fn(async () => ({ type: 'done' as const, message: 'installed' })),
     observeCli: vi.fn(async () => ({ kind: 'error' as const, message: 'not registered' })),
     chooseExecutablePath: vi.fn(async (): Promise<string | null> => '/usr/local/bin/codex'),
@@ -198,6 +199,20 @@ describe('desktop IPC boundary', () => {
       { type: 'snapshot', value: { revision: 2, application } },
       { type: 'snapshot', value: { revision: 3, application: { ...application, loginItem: false } } },
     ]);
+    await h.bridge.dispose();
+  });
+
+  it('hands a drop during a helper started elsewhere to the shell instead of reporting it', async () => {
+    const h = harness();
+    await h.invoke(desktopChannels.subscribe);
+    h.actions.followServiceHelper.mockReturnValue(true);
+    h.emitError(new ConnectionError('drained by the web UI\'s helper'));
+    expect(h.actions.followServiceHelper).toHaveBeenCalledExactlyOnceWith(h.owner.identity);
+    expect(h.actions.connectionLost).not.toHaveBeenCalled();
+    expect(h.webContents.send).not.toHaveBeenCalled();
+    h.actions.followServiceHelper.mockReturnValue(false);
+    h.emitError(new ConnectionError('daemon crashed'));
+    expect(h.actions.connectionLost).toHaveBeenCalledOnce();
     await h.bridge.dispose();
   });
 

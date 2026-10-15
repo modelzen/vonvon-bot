@@ -140,9 +140,10 @@ export function installBridge(
     if (retainedErrors.length > 32) retainedErrors.shift();
   }
 
-  function onError(error: Error): void {
+  function onError(error: Error, from: AttachedDaemon): void {
     if (disposed) return;
-    if (error instanceof ConnectionError && actions.isExpectedDisconnect()) return;
+    // The window's own switch or restart expects the drop; a helper started elsewhere the shell follows.
+    if (error instanceof ConnectionError && (actions.isExpectedDisconnect() || actions.followServiceHelper(from.identity))) return;
     const safe = safeFailure(error);
     if (!subscribed || !currentDocument()) retain(safe);
     else send({ type: 'error', value: safe });
@@ -178,7 +179,7 @@ export function installBridge(
       }));
       removers.push(current.client.onLog(value => { if (!paused && activeOwner === current) send({ type: 'log', value }); }));
       removers.push(current.client.onBackendInstall(value => { if (!paused && activeOwner === current) send({ type: 'backendInstall', value }); }));
-      removers.push(current.client.onError(error => { if (!paused && activeOwner === current) onError(error); }));
+      removers.push(current.client.onError(error => { if (!paused && activeOwner === current) onError(error, current); }));
     } catch (error) { dispose(); throw error; }
     return {
       dispose,

@@ -13,7 +13,8 @@ import { desktopUpdateConfiguration } from './update-configuration.js';
 import { createDaemonManager, StartHostRefusal } from './daemon-manager.js';
 import { createDaemonDependencies, prepareDesktopRoot } from './daemon-dependencies.js';
 import { desktopCliOptions, observeCli, registerCli } from './cli-registration.js';
-import { changeLoginItem, repairServiceAtStartup, type ServiceRuntime } from './login-item.js';
+import { liveServiceActionRecord } from '../../daemon/src/service/action-report.js';
+import { changeLoginItem, followServiceHelper, repairServiceAtStartup, type LoginItemHooks, type ServiceRuntime } from './login-item.js';
 import type { CommandResult, MachineReply } from '@vonvon/protocol';
 
 const restartDeadlineMs = 60_000;
@@ -298,13 +299,38 @@ export async function startDesktop(): Promise<void> {
       return run;
     }
 
+    const loginItemHooks: LoginItemHooks = {
+      readVerifiedDaemon: () => managerDependencies.readVerifiedDaemon(),
+      reattach: () => reattachReady(),
+      expectDisconnect: expected => { controlledDisconnect = expected; },
+      cancelled: () => terminating || cleanupPromise !== undefined || !bridge,
+    };
+
     /** The bundled helper changes the service; the window expects the daemon to go and reattaches to its successor. */
     function setLoginItem(enabled: boolean, previous?: AttachedDaemon['identity'] | null): Promise<void> {
-      return guardedService(() => changeLoginItem(serviceRuntime, enabled, previous, {
-        readVerifiedDaemon: () => managerDependencies.readVerifiedDaemon(),
-        reattach: () => reattachReady(),
-        expectDisconnect: expected => { controlledDisconnect = expected; },
-      }));
+      return guardedService(() => changeLoginItem(serviceRuntime, enabled, previous, loginItemHooks));
+    }
+
+    /** The web UI's or a terminal's helper took the daemon away: the window follows it as it follows its own switch. */
+    function followForeignHelper(lost: AttachedDaemon['identity']): boolean {
+      if (starting || terminating || cleanupPromise || !bridge || liveServiceActionRecord(root)?.phase !== 'running') return false;
+      controlledDisconnect = true;
+      void guardedService(() => followServiceHelper(serviceRuntime, lost, loginItemHooks)).catch(() => {
+        controlledDisconnect = false;
+        showConnectionLost();
+      });
+      return true;
+    }
+
+    function showConnectionLost(): void {
+      if (connectionFailureShown || terminating) return;
+      connectionFailureShown = true;
+      dialog.showMessageBoxSync(current, {
+        type: 'error',
+        title: 'Vonvon Bot connection lost',
+        message: 'The daemon connection was lost. Check the daemon, then start it again in Vonvon Bot.',
+        buttons: ['OK'],
+      });
     }
 
     bridge = installBridge(owner, current, paths, {
@@ -330,6 +356,7 @@ export async function startDesktop(): Promise<void> {
         return run;
       },
       isExpectedDisconnect: () => controlledDisconnect,
+      followServiceHelper: followForeignHelper,
       setLoginItem,
       service: async (action, previous) => {
         if (action === 'install' || action === 'uninstall') {
@@ -365,16 +392,7 @@ export async function startDesktop(): Promise<void> {
       },
       hide: () => current.hide(),
       confirmQuit,
-      connectionLost: () => {
-        if (connectionFailureShown || terminating) return;
-        connectionFailureShown = true;
-        dialog.showMessageBoxSync(current, {
-          type: 'error',
-          title: 'Vonvon Bot connection lost',
-          message: 'The daemon connection was lost. Check the daemon, then start it again in Vonvon Bot.',
-          buttons: ['OK'],
-        });
-      },
+      connectionLost: showConnectionLost,
     });
     tray = createDesktopTray(icon, show, requestQuit);
     Menu.setApplicationMenu(Menu.buildFromTemplate([

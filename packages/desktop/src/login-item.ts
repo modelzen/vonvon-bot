@@ -92,6 +92,34 @@ export interface LoginItemHooks {
   reattach(): Promise<void>;
   /** While true, a dropped daemon connection is part of the switch, not a failure to report. */
   expectDisconnect(expected: boolean): void;
+  /** A quit or an update is closing the window: stop waiting for a helper. */
+  cancelled(): boolean;
+}
+
+export interface FollowOptions {
+  /** Whether a `vonvon service` helper still runs; by default, whether its report is running and its pid alive. */
+  helperRunning?: () => boolean;
+  pollMs?: number;
+}
+
+type DaemonIdentity = Pick<VerifiedDaemon, 'pid' | 'startedAt'>;
+const sameDaemon = (daemon: DaemonIdentity, other: DaemonIdentity | null | undefined): boolean =>
+  other !== null && other !== undefined && daemon.pid === other.pid && daemon.startedAt === other.startedAt;
+
+/**
+ * Reattaches a window whose daemon `previous` a helper may replace: to the daemon the helper hands over, or, once no
+ * helper runs, to what ensureReady finds or starts. Nothing is started while a helper may still change the service.
+ */
+export async function followServiceHelper(runtime: ServiceRuntime, previous: DaemonIdentity | null | undefined,
+  hooks: LoginItemHooks, options: FollowOptions = {}): Promise<void> {
+  const helperRunning = options.helperRunning ?? (() => liveServiceActionRecord(runtime.root)?.phase === 'running');
+  for (;;) {
+    if (hooks.cancelled()) return;
+    const current = await hooks.readVerifiedDaemon().catch(() => null);
+    if ((current && !sameDaemon(current, previous)) || !helperRunning()) break;
+    await new Promise(resolve => setTimeout(resolve, options.pollMs ?? 250));
+  }
+  if (!hooks.cancelled()) await hooks.reattach();
 }
 
 /**
@@ -100,19 +128,18 @@ export interface LoginItemHooks {
  * verified daemon is not `previous` any more.
  */
 export async function changeLoginItem(runtime: ServiceRuntime, enabled: boolean,
-  previous: Pick<VerifiedDaemon, 'pid' | 'startedAt'> | null | undefined, hooks: LoginItemHooks, options: CliOptions = {}): Promise<void> {
+  previous: DaemonIdentity | null | undefined, hooks: LoginItemHooks, options: CliOptions & FollowOptions = {}): Promise<void> {
   // Refuse an unsupported app before the window expects its daemon to go.
   bundledServiceCli(runtime);
   hooks.expectDisconnect(true);
   let failure: unknown;
   try { await runServiceHelper(runtime, enabled ? 'install' : 'uninstall', options); }
   catch (error) { failure = error; }
-  // A helper that still runs, ours or the one holding the mutex, may yet replace the daemon: start none behind its back.
-  const settled = !(failure instanceof ServiceActionError && (failure.reason === 'timeout' || failure.reason === 'busy'));
   const current = await hooks.readVerifiedDaemon().catch(() => null);
-  if (current && previous && current.pid === previous.pid && current.startedAt === previous.startedAt) hooks.expectDisconnect(false);
-  else if (current || settled) {
-    try { await hooks.reattach(); }
+  if (current && sameDaemon(current, previous)) hooks.expectDisconnect(false);
+  else {
+    // After a timeout or a busy refusal a helper, ours or the one holding the mutex, may still be draining the daemon.
+    try { await followServiceHelper(runtime, previous, hooks, options); }
     catch { throw new ServiceActionError('reattach'); }
   }
   if (failure) throw failure;

@@ -130,6 +130,7 @@ beforeEach(async () => {
   autoUpdater.removeAllListeners();
   vi.mocked(dialog.showErrorBox).mockClear();
   vi.mocked(dialog.showMessageBox).mockClear();
+  vi.mocked(dialog.showMessageBoxSync).mockClear();
   vi.mocked(changeLoginItem).mockClear();
   vi.mocked(repairServiceAtStartup).mockClear();
   vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('the update check must use Electron net'); }));
@@ -391,6 +392,29 @@ describe('daemon restart from the window', () => {
     expect(fake.attach).toHaveBeenCalledTimes(1);
     expect(fake.bridge.replaceOwner).not.toHaveBeenCalled();
     expect(autoUpdater.quitAndInstall).toHaveBeenCalledOnce();
+  });
+});
+
+describe('a service helper started from the web UI or a terminal', () => {
+  const previous = { pid: 42, startedAt: 'initial', listen: '127.0.0.1:42345' };
+
+  it('takes the dropped connection as expected and reattaches to the daemon the helper hands over', async () => {
+    const successor = { pid: 43, startedAt: 'service', listen: '127.0.0.1:42345' };
+    const next = { identity: successor, dispose: vi.fn(async () => {}) };
+    await writeFile(join(temp, 'service-action.json'), JSON.stringify({ pid: process.pid, action: 'install', phase: 'running', startedAt: Date.now() }));
+    fake.verified.mockResolvedValueOnce(null).mockResolvedValue(successor);
+    fake.ready.mockResolvedValueOnce(successor);
+    fake.attach.mockResolvedValueOnce(next);
+    expect(actions.followServiceHelper(previous)).toBe(true);
+    expect(actions.isExpectedDisconnect()).toBe(true);
+    await vi.waitFor(() => expect(fake.bridge.replaceOwner).toHaveBeenCalledExactlyOnceWith(next));
+    expect(actions.isExpectedDisconnect()).toBe(false);
+    expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
+  });
+
+  it('leaves a drop with no helper running to the lost-connection dialog', () => {
+    expect(actions.followServiceHelper(previous)).toBe(false);
+    expect(actions.isExpectedDisconnect()).toBe(false);
   });
 });
 
