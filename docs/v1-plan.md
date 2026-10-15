@@ -33,7 +33,7 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
 
 ## 2. 里程碑
 
-"怎么验收"的每一步前面写着谁来做。"Claude 先做"：Claude 在 JP-VPS 上用 lark-cli、`vonvon` 命令行和无头网页端做，默认用那边的测试 bot 和测试群，要用 Mac 上的 bot 时步骤里写明；"Codex 先查"：Codex 在 Mac 的预览版会话里做。这两种都在通知 owner 之前做完，结果写进通知。"Claude 接着做""Codex 接着查"：要用 owner 刚扫码建的 bot，或者要等 owner 注销再登录，只能排在 owner 那一步后面；owner 做完回一句，Claude 和 Codex 再做，结果写进下一条通知，预览版会话留到这些步骤做完再归档。"owner"只留要人来做的，JP-VPS 上做不了的（比如 Claude 的沙箱装好之前的只读、读写档）也退回 owner，Claude 在通知里写明。"Codex 先查""Codex 接着查"都只在合入后的预览版会话里做；PR 上的 Mac 检查按 `AGENTS.md` 另开检查会话。顺序和环境见本文第 7 节。
+"怎么验收"的每一步前面写着谁来做。"Claude 先做"：Claude 在 JP-VPS 上用 lark-cli、`vonvon` 命令行和无头网页端做，默认用那边的测试 bot 和测试群，要用 Mac 上的 bot 时步骤里写明；"Codex 先查"：Codex 在 Mac 的预览版会话里做。这两种都在通知 owner 之前做完，结果写进通知。"Claude 接着做""Codex 接着查"：要用 owner 刚扫码建的 bot，或者要等 owner 注销再登录，只能排在 owner 那一步后面；owner 做完回一句，Claude 和 Codex 再做，结果写进下一条通知：预览版会话还在等追问时，Claude 在同一个 issue 里贴追问；已经结束了，Claude 在同一个 issue 里再贴一份预览版提示词，owner 再转发一次。"owner"只留要人来做的，JP-VPS 上做不了的（比如 Claude 的沙箱装好之前的只读、读写档）也退回 owner，Claude 在通知里写明。"Codex 先查""Codex 接着查"都只在合入后的预览版会话里做；PR 上的 Mac 检查按 `AGENTS.md` 在 PR 里另贴检查提示词。顺序和环境见本文第 7 节。
 
 ### M0 实验（e01 到 e14）
 
@@ -522,7 +522,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 
 ### 4.1 实验
 
-第 9 节要实测的事，按下表做。结果放进 `docs/research/` 下新的日期目录（例如 `<日期>-v1-spikes/`），按那里 README 的规矩加一行。一个实验一个纯文档 PR，同时出结果的可以合成一个；不占在飞名额。临时脚本不进仓库。Mac 上的实验先开它的文档 PR，PR 里写清要测什么，再经 Paseo 开检查会话 `Mac 检查 PR #<号>` 去做（`AGENTS.md`"工具和同步"）。检查会话只接一个回合、约 30 分钟能做完的事，做不完就拆成几次检查，或拆成几个实验。Mac 上的实验和各切片的 Mac 检查一次只开一个会话，不同时开。e03 在 Mac 上跑 Claude SDK 是测产品，见本文第 7 节。
+第 9 节要实测的事，按下表做。结果放进 `docs/research/` 下新的日期目录（例如 `<日期>-v1-spikes/`），按那里 README 的规矩加一行。一个实验一个纯文档 PR，同时出结果的可以合成一个；不占在飞名额。临时脚本不进仓库。Mac 上的实验先开它的文档 PR，PR 里写清要测什么，再在 PR 里贴检查提示词，由 owner 转发给 Mac 上的 Codex（`AGENTS.md`"工具和同步"）。检查会话只接一个回合、约 30 分钟能做完的事，做不完就拆成几次检查，或拆成几个实验。Mac 上的实验和各切片的 Mac 检查一次只做一个：上一个会话结束之前，Claude 不贴下一份提示词。e03 在 Mac 上跑 Claude SDK 是测产品，见本文第 7 节。
 
 | 状态 | 编号 | 测什么 | 在哪做 | 怎么测 | 挡住 | 最晚在 |
 |---|---|---|---|---|---|---|
@@ -604,8 +604,8 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 
 一个里程碑按这个顺序验收（本文第 1 节"Linux 先行"）：
 1. **先在 JP-VPS 上验。** 里程碑的片都合入后，Claude 用 main 的 head 先做完不需要 Mac 的步骤，用验收用的数据目录：飞书里的聊天步骤（建测试群、把 bot 拉进群、@ 它、看回复和卡片）用 lark-cli 以 owner 的用户身份做，改设置用 `vonvon` 命令行和无头打开的网页端。结果写进给 owner 的通知（owner 2026-10-15 要求）。发现问题就开 `claude/*` PR 修，合入后这一步重来。
-2. **再在 Mac 上验网页端。** Claude 开预览版会话（见下面"Mac 上怎么打包"）。Codex 构建好之后先不打包：用隔离的数据目录在 Mac 上起 daemon 和网页端，查网页端连 Mac 上的 daemon，以及不打包也能查的 Mac 专属项，比如 launchd、钥匙串、Seatbelt 沙箱。要真 bot 的项第 1 步已经验过，这一步不注册新 bot。有问题 Codex 就停下回复，不打包，也不 push；Claude 开 `claude/*` PR 修，合入后重开预览版会话。
-3. **最后打包给 owner。** 第 2 步过了，Codex 才打包、装好 .app。装好后，Codex 用 Computer Use 打开装好的 app，做本文第 2 节标"Codex 先查"、要用装好的 app 的步骤，比如窗口、托盘、菜单、退出 app；要 @ Mac 上的 bot 时，Claude 用 lark-cli 接着做。这些都过了，Claude 才通知 owner；标"接着做""接着查"的步骤等 owner 做完前一步再做（本文第 2 节开头）。要用装好的 app 的步骤，用的是 owner 账号里真实装好的 app 和它的数据，所以只在预览版会话里做；Claude 的提示按里程碑和步骤号列出这次做哪几步，没列的不做，其余的查用隔离的数据目录。Mac 锁屏时 Computer Use 会失败（getpaseo/paseo#3346），按 `AGENTS.md`：停下，不重试，回复第一行写"卡住了："。owner 只做要人来做的：手机扫码、飞书开发者后台、在飞书客户端里点卡片按钮和看显示、注销再登录、要第二个人的步骤，以及 M10 什么时候迁移每天在用的 bridge。每个里程碑留给 owner 的是哪几步，写在本文第 2 节各里程碑的"怎么验收"后面。
+2. **再在 Mac 上验网页端。** Claude 贴预览版提示词，owner 转发给 Mac 上的 Codex（见下面"Mac 上怎么打包"）。Codex 构建好之后先不打包：用隔离的数据目录在 Mac 上起 daemon 和网页端，查网页端连 Mac 上的 daemon，以及不打包也能查的 Mac 专属项，比如 launchd、钥匙串、Seatbelt 沙箱。要真 bot 的项第 1 步已经验过，这一步不注册新 bot。有问题 Codex 就停下贴结果，不打包，也不 push；Claude 开 `claude/*` PR 修，合入后再贴一份预览版提示词。
+3. **最后打包给 owner。** 第 2 步过了，Codex 才打包、装好 .app。装好后，Codex 用 Computer Use 打开装好的 app，做本文第 2 节标"Codex 先查"、要用装好的 app 的步骤，比如窗口、托盘、菜单、退出 app；要 @ Mac 上的 bot 时，Claude 用 lark-cli 接着做。这些都过了，Claude 才通知 owner；标"接着做""接着查"的步骤等 owner 做完前一步再做（本文第 2 节开头）。要用装好的 app 的步骤，用的是 owner 账号里真实装好的 app 和它的数据，所以只在预览版会话里做；Claude 的提示词按里程碑和步骤号列出这次做哪几步，没列的不做，其余的查用隔离的数据目录。Mac 锁屏时 Computer Use 会失败（getpaseo/paseo#3346），按 `AGENTS.md`：停下，不重试，结果评论第二行写"卡住了："。owner 只做要人来做的：手机扫码、飞书开发者后台、在飞书客户端里点卡片按钮和看显示、注销再登录、要第二个人的步骤，以及 M10 什么时候迁移每天在用的 bridge。每个里程碑留给 owner 的是哪几步，写在本文第 2 节各里程碑的"怎么验收"后面。
 
 **JP-VPS 上的验收环境。**
 - 验收用一棵单独的 worktree，detach 在要验的提交上；用它自己的 `VONVON_HOME`，里面注册一个测试 bot。
@@ -620,16 +620,16 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 - Linux 上的 Codex 只能用完全访问（product.md 3.8，`D/agent/codex-appserver/backend.ts`），JP-VPS 上用 Codex 的测试群要明确改成完全访问。访客档没设时跟着管理员的档走（3.8"访客档照旧"），所以改成完全访问的测试群，访客也是完全访问；这种群里不放别人。
 
 **Mac 上怎么打包。**
-1. Claude 经 Paseo 开预览版会话 `Mac 预览版 <里程碑名>`，模式 full-access（owner 2026-10-15），规则见 `AGENTS.md`"工具和同步"。
-2. Codex 在 Mac 上从 main pull，`npm ci`，`npm run build`，先按上面第 2 步查网页端，过了再在 `packages/desktop` 下用 `electron-builder --config electron-builder.yml --dir` 打包，也就是今天的 `package:dir` 脚本。electron-builder 会自动用钥匙串里的 Developer ID 签名。不公证，只出 Apple Silicon。
+1. Claude 开 issue `Mac 预览版 <里程碑名>`，把预览版提示词贴成评论，给 owner 一行要转发的话；owner 在 Mac mini 上新开 Codex 会话，模式选 full access（owner 2026-10-15），发一次。规则见 `AGENTS.md`"工具和同步"。
+2. Codex 在临时 worktree 里取 Claude 给的 main sha，`npm ci`，`npm run build`，先按上面第 2 步查网页端，过了再在 `packages/desktop` 下用 `electron-builder --config electron-builder.yml --dir` 打包，也就是今天的 `package:dir` 脚本。electron-builder 会自动用钥匙串里的 Developer ID 签名。不公证，只出 Apple Silicon。
 3. 打好的 .app 装进 /Applications，按上面第 3 步先做标"Codex 先查"的步骤，再由 Claude 通知 owner 验收。
 4. 具体命令以仓库脚本为准。M1 预览版（2026-10-14）按第 2 条做通了，打包前补跑 `node node_modules/electron/install.js`，打包后验签，用 `ditto` 装进 /Applications。
 
 下面几条来自 #296 的 Mac 检查和 M1 预览版：
-- Mac 上 Paseo 用的仓库，本地 main 可能是旧的（M1 预览版时停在 d90f4d4）。预览版和检查会话的提示里写明先 `git fetch`，核对 main 或分支的 sha 和 Claude 给的一致再构建。
+- Mac 上的仓库，本地 main 可能是旧的（M1 预览版时停在 d90f4d4）。提示词里写明先 `git fetch`，核对 main 或分支的 sha 和 Claude 给的一致，再从那个 sha 建临时 worktree 构建。
 - 打包和验签直接跑。以前用 auto 模式时，沙箱里打包跳过了签名（`0 valid identities found`），`codesign --verify` 报 `invalid signature`、`Authority=(unavailable)`，应该是沙箱看不到钥匙串，只好到沙箱外跑；full-access 没有这层沙箱。打完仍看 electron-builder 的输出里签上了没有，`codesign --verify` 要通过。
 - `npm ci` 之后第一次打包缺 Electron 的二进制，原因没查（Mac 的 npm 版本没记）。打包前先跑 `node node_modules/electron/install.js`。
-- auto 模式下，联网（`npm ci`、`gh`）、沙箱外的命令、打开 app、用 Computer Use 操作 app 都会发申请，没人批就一直等，#296 的检查卡在这里将近一小时。full-access 下没有这些申请，Claude 不用再盯着批；这次做什么、用哪些隔离目录、哪些不碰，都写在提示里（`AGENTS.md`"工具和同步"）。
+- auto 模式下，联网（`npm ci`、`gh`）、沙箱外的命令、打开 app、用 Computer Use 操作 app 都会发申请，没人批就一直等，#296 的检查卡在这里将近一小时。full-access 下没有这些申请，Claude 不用再盯着批；这次做什么、用哪些隔离目录、哪些不碰，都写在提示词里（`AGENTS.md`"工具和同步"）。
 - 在终端里用 `open` 启动 app，会继承终端的长 PATH。要模拟从 Finder 打开，显式加 PATH：`open -n --env PATH=/usr/bin:/bin:/usr/sbin:/sbin --env HOME=<临时目录> ... <app>`。
 - 测 Claude 时，隔离 HOME 下读不到 owner 的 Claude 凭据：owner 的凭据写在 `~/.claude/settings.json` 的 `env` 里，不在钥匙串。要测已登录，那一条命令用真实 HOME，VONVON_HOME 仍用临时目录。
 - 退出桌面端不停 daemon（product.md 3.10）。测完用包里的命令行 `daemon stop` 停掉隔离 HOME 里的 daemon。
