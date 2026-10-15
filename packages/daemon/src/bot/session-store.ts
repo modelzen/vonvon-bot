@@ -56,8 +56,33 @@ export interface SessionRecord {
    * the group's recent topics (s14b); '' once shown. Tied to the session id
    * like {@link usage}, so a new session drops it. Older records lack it. */
   topicsDue?: string;
+  /** The oldest message the session got (epoch ms): older ones never reached it,
+   * and a rebuilt session's opening does not reach past it. `/new` sets it to
+   * the command, an opening turn to its oldest line (s15). Older records lack it. */
+  from?: number;
+  /** Messages that reached the session and were recalled since, said at its next
+   * ordinary turn and then dropped (product.md 3.5 "撤回和编辑"). Ids, times and
+   * open_ids only, never text. Older records lack it. */
+  recalls?: RecallNote[];
   createdAt: number;
   updatedAt: number;
+}
+
+/** A recalled message the session got: its id and send time, who sent it, and
+ * whether someone else (a group owner or admin) recalled it. */
+export interface RecallNote {
+  id: string;
+  at: number;
+  who?: { kind: 'user' | 'bot'; openId?: string };
+  other?: true;
+}
+
+/** Recall notes kept per session; the newest win. */
+export const RECALLS_MAX = 20;
+
+/** `list` with `note` added once (by id), oldest first, at most {@link RECALLS_MAX}. */
+export function addRecall(list: RecallNote[] | undefined, note: RecallNote): RecallNote[] {
+  return [...(list ?? []).filter((r) => r.id !== note.id), note].sort((a, b) => a.at - b.at).slice(-RECALLS_MAX);
 }
 
 /** One message that reached a session: its id and createTime (epoch ms). */
@@ -74,9 +99,10 @@ export type SeenHow = 'advance' | 'id' | 'restart';
 const SEEN_MAX = 64;
 
 /** A session nothing has reached yet (a new or recreated native session before
- * its first turn starts): its next back-fill starts from the topic's beginning. */
-export function nothingSeen(): Pick<SessionRecord, 'lastSeenAt' | 'seen'> {
-  return { lastSeenAt: 0, seen: [] };
+ * its first turn starts): its next back-fill starts from the topic's beginning,
+ * bounded by `from`, which stays. The old session's recall notes go. */
+export function nothingSeen(): Pick<SessionRecord, 'lastSeenAt' | 'seen' | 'recalls'> {
+  return { lastSeenAt: 0, seen: [], recalls: undefined };
 }
 
 /** Whether the message reached the session as a turn, an interjection or a queued turn. */

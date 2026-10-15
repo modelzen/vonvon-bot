@@ -1,10 +1,11 @@
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { log } from '../core/logger';
 import { labelScope } from '../config/scopes';
-import { scopeDenial, type FeishuErrorBody } from '../utils/feishu-error';
+import { feishuError, scopeDenial, type FeishuErrorBody } from '../utils/feishu-error';
 import { deniedScopeName, reportScopeDenied } from './diagnostics';
 import { extractSendCardText, isSendCard, isStreamingCard } from './card-content';
 import { withDeadline, type NameBook } from './names';
+import type { MessageMeta } from './recall';
 
 /**
  * Inbound CONTEXT weaving — give codex the上下文 a Feishu @ alone doesn't carry.
@@ -178,6 +179,39 @@ export async function fetchQuotedMessage(
   } catch (err) {
     log.warn('intake', 'quote-fetch-failed', { messageId, err: String(err) });
     return undefined;
+  }
+}
+
+/**
+ * Look up a recalled message's place, time and sender (s15). Unlike
+ * {@link fetchQuotedMessage} it keeps a deleted item, which still carries them.
+ * Undefined on a failure, a timeout or a missing create_time (logged).
+ */
+export async function fetchMessageMeta(channel: LarkChannel, messageId: string, names?: NameBook): Promise<MessageMeta | undefined> {
+  const failed = (err: unknown, code?: number) => {
+    log.warn('intake', 'recall-lookup-failed', { messageId, err: String(err), ...(code !== undefined ? { code } : {}) });
+    return undefined;
+  };
+  try {
+    const res = await withDeadline(channel.rawClient.im.v1.message.get({
+      path: { message_id: messageId },
+      params: { with_sender_name: true },
+    }), FETCH_DEADLINE_MS);
+    if (!res) return failed('timeout');
+    if (typeof res.code === 'number' && res.code !== 0) return failed(res.msg, res.code);
+    const item = (res.data as { items?: RawMsgItem[] } | undefined)?.items?.[0];
+    const at = Number(item?.create_time);
+    if (!item || !at) return failed('no create_time');
+    learnNames(names, item);
+    return {
+      at,
+      ...(item.thread_id ? { threadId: item.thread_id } : {}),
+      ...(item.root_id ? { rootId: item.root_id } : {}),
+      from: kindOf(item.sender, meOf(channel)) ?? 'user',
+      senderId: senderIdOf(item.sender),
+    };
+  } catch (err) {
+    return failed(err, feishuError(err)?.code);
   }
 }
 
@@ -769,6 +803,8 @@ export interface RecordBlock {
   quotes?: TopicQuote[];
   /** Topics left out of `quotes`. */
   moreTopics?: number;
+  /** Recalled messages the session got, after the lines and 引用行 (s15). */
+  recalls?: { at: number; who?: Who; other?: boolean }[];
   /** The recent topics, as the block's last lines. */
   table?: TopicRow[];
   /** Not woven, only for the 引用行 to say whose message a topic hangs under (`ThreadPull.ownRoots`). */
@@ -790,7 +826,8 @@ export interface RecordBlock {
  * hangs under, then `主区在这之前：` with the main-area lines before it and
  * `话题里：`. Topics opened in the main area show as 引用行 among the
  * main-area lines (`10:01 〔话题〕李四在上面这条下开了话题「…」…`); after a
- * compaction the recent topics come last (s14b).
+ * compaction the recent topics come last (s14b). A recalled message the
+ * session got is one line before them: `10:03 〔撤回〕李四撤回了一条消息，不要再用它。` (s15).
  *
  * Every line from a message starts with its time and sender, and every
  * user-controlled part is collapsed to one line, so a crafted body or name can
@@ -809,6 +846,10 @@ export function weaveRecordBlock(text: string, block: RecordBlock): string {
     const main = sectionLines(opening.main, quotes, all, now);
     const head = main.length ? ['主区在这之前：', ...more, ...main, ...(own.length ? ['话题里：'] : [])] : [];
     lines.unshift(pointerLine(opening.pointer, now), ...head);
+  }
+  for (const r of [...block.recalls ?? []].sort((a, b) => a.at - b.at)) {
+    // Like 〔话题〕, the tag cannot come from a user: names and titles lose 〔〕.
+    lines.push(`${clockOf(r.at, now)} 〔撤回〕${whoText(r.who)}${r.other ? '的一条消息被撤回了' : '撤回了一条消息'}，不要再用它。`);
   }
   lines.push(...tableLines(block.table ?? [], now));
   if (lines.length === 0) return text;
