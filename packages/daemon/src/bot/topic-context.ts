@@ -98,22 +98,21 @@ export function createTopicContext(
   const tried = new Set<string>();
 
   async function chatMode(chatId: string): Promise<{ topic: boolean; ttl: number }> {
-    const unknown = (reason: string, extra: object = {}) => {
-      log.info('intake', 'chat-mode-unknown', { chatId: chatId.slice(-6), reason, ...extra });
+    const unknown = (reason: string, failure?: unknown) => {
+      const why = scopeDenial(failure) ? { reason: 'missing-scope', scope: 'im:chat:readonly' } : { reason };
+      log.info('intake', 'chat-mode-unknown', { chatId: chatId.slice(-6), ...why });
       return { topic: false, ttl: 10 * 60_000 };
     };
     try {
       const res = await withDeadline(channel.rawClient.im.v1.chat.get({ path: { chat_id: chatId } }), 3000);
       if (!res) return unknown('timeout');
-      if (typeof res.code === 'number' && res.code !== 0) {
-        return scopeDenial(res) ? unknown('missing-scope', { scope: 'im:chat:readonly' }) : unknown(`code=${res.code}`);
-      }
+      if (typeof res.code === 'number' && res.code !== 0) return unknown(`code=${res.code}`, res);
       const d = res.data as { chat_mode?: string; group_message_type?: string } | undefined;
       const topic = d?.chat_mode === 'topic' || d?.group_message_type === 'thread';
       log.info('intake', 'chat-mode', { chatId: chatId.slice(-6), topic });
       return { topic, ttl: HOUR };
     } catch (err) {
-      return scopeDenial(err) ? unknown('missing-scope', { scope: 'im:chat:readonly' }) : unknown(String(err));
+      return unknown(String(err), err);
     }
   }
 
@@ -126,7 +125,14 @@ export function createTopicContext(
     noMainArea(chatId) {
       const hit = modes.get(chatId);
       if (hit && hit.until > Date.now()) return hit.topic;
-      const entry = { topic: chatMode(chatId).then((r) => { entry.until = Date.now() + r.ttl; return r.topic; }), until: Infinity };
+      // Cached before it answers, so concurrent openings share one lookup.
+      const entry = {
+        topic: chatMode(chatId).then((r) => {
+          entry.until = Date.now() + r.ttl;
+          return r.topic;
+        }),
+        until: Infinity,
+      };
       modes.set(chatId, entry);
       return entry.topic;
     },

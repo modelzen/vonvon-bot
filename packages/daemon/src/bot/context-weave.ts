@@ -776,7 +776,7 @@ export function weaveRecordBlock(text: string, block: RecordBlock): string {
   const all = [...block.entries, ...(opening?.main ?? [])];
   const more = block.moreTopics && quotes.length ? [`（还有 ${block.moreTopics} 个话题没列，需要时用 vonvon 飞书 skill 列）`] : [];
   const own = sectionLines(block.entries, opening ? [] : quotes, all, now, block.rootId, earlierNote(block.earlier));
-  const lines = opening || !quotes.length ? own : [...more, ...own];
+  const lines = opening ? own : [...more, ...own];
   if (opening) {
     const main = sectionLines(opening.main, quotes, all, now);
     const head = main.length ? ['主区在这之前：', ...more, ...main, ...(own.length ? ['话题里：'] : [])] : [];
@@ -805,8 +805,12 @@ function sectionLines(msgs: ContextMessage[], quotes: TopicQuote[], all: Context
     while (qs.length && qs[0]!.at < m.createTime) quote(qs.shift()!);
     const line = recordLine(m, now);
     if (!line) continue;
-    out.push(m.messageId === rootId ? `${line}（话题第一条）` : line);
-    if (m.messageId === rootId) rootAt = out.length;
+    if (m.messageId === rootId) {
+      out.push(`${line}（话题第一条）`);
+      rootAt = out.length;
+    } else {
+      out.push(line);
+    }
     prev = m;
   }
   qs.forEach(quote);
@@ -818,8 +822,13 @@ function sectionLines(msgs: ContextMessage[], quotes: TopicQuote[], all: Context
 function pointerLine(p: TopicPointer, now: number): string {
   const rest = '主区的其他内容不在这里，需要时用 vonvon 飞书 skill 查。';
   const at = p.root ? ` ${clockOf(p.root.at, now)} ` : '';
-  if (p.botOpened) return `这个话题是你在群主区${p.root ? `${at}${whoText(p.root.who)}的这条` : '的一条'}消息下开的，就是下面这条。${rest}`;
-  const where = !p.root ? '的一条消息' : p.root.who.kind === 'self' ? `${at}你的回复` : `${at}${whoText(p.root.who)}的消息`;
+  if (p.botOpened) {
+    const under = p.root ? `${at}${whoText(p.root.who)}的这条` : '的一条';
+    return `这个话题是你在群主区${under}消息下开的，就是下面这条。${rest}`;
+  }
+  let where = '的一条消息';
+  if (p.root?.who.kind === 'self') where = `${at}你的回复`;
+  else if (p.root) where = `${at}${whoText(p.root.who)}的消息`;
   const sid = p.mainSessionId ? `（主区会话 id：${label(p.mainSessionId, 80)}）` : '';
   return `这个话题开在群主区${where}下${sid}。${rest}`;
 }
@@ -827,9 +836,10 @@ function pointerLine(p: TopicPointer, now: number): string {
 /** A 引用行: `HH:MM 〔话题〕{谁}{在哪条下}开了话题「…」，{会话}，这里不用接。（ids）`. */
 function quoteLine(q: TopicQuote, prev: ContextMessage | undefined, all: ContextMessage[], now: number): string {
   const title = label(q.title ?? '', 30);
-  const tail = `你在那边${q.sessionId ? '另有一条会话' : '还没有会话'}，这里不用接。（${topicIds(q)}）`;
   const what = title ? `开了话题「${title}」` : '开了一个话题';
-  return `${clockOf(q.at, now)} 〔话题〕${whoText(q.who)}${whereText(q.root, prev, all, now)}${what}，${q.who?.kind === 'self' ? tail.slice(1) : tail}`;
+  const there = q.who?.kind === 'self' ? '在那边' : '你在那边'; // the line already starts with 你
+  const session = q.sessionId ? '另有一条会话' : '还没有会话';
+  return `${clockOf(q.at, now)} 〔话题〕${whoText(q.who)}${whereText(q.root, prev, all, now)}${what}，${there}${session}，这里不用接。（${topicIds(q)}）`;
 }
 
 /** The message a topic hangs under: the line above, or its time and sender (from the block when it is there). */
@@ -840,9 +850,9 @@ function whereText(root: TopicQuote['root'], prev: ContextMessage | undefined, a
   const who = m ? { kind: m.from, name: m.senderName } : root.who;
   if (!who) return '';
   const t = m?.createTime ?? root.at;
-  const at = t ? clockOf(t, now) : '';
-  if (who.kind === 'self') return `在你${at ? ` ${at} ` : ''}的回复下`;
-  return `在${at ? ` ${at} ` : ''}${whoText(who)}的消息下`;
+  const at = t ? ` ${clockOf(t, now)} ` : '';
+  if (who.kind === 'self') return `在你${at}的回复下`;
+  return `在${at}${whoText(who)}的消息下`;
 }
 
 /** The table of recent topics (product.md 3.5), or none without rows. */
@@ -851,9 +861,11 @@ function tableLines(rows: TopicRow[], now: number): string[] {
   const head = `〔本群最近 ${rows.length} 个活跃话题〕这条会话压缩过，前面的话题引用可能已经被摘要掉。更多话题用 vonvon 飞书 skill 列。`;
   return [head, ...rows.map((r) => {
     const title = label(r.title ?? '', 30);
+    const what = title ? `「${title}」` : '一个话题，';
     const who = whoText(r.who);
+    const by = who.endsWith('）') ? who : `${who} `; // 名字（bot） needs no space before the time
     const has = r.sessionId ? '你在那边有会话' : '你在那边还没有会话';
-    return `· ${title ? `「${title}」` : '一个话题，'}${who}${who.endsWith('）') ? '' : ' '}${clockOf(r.at, now)} 开的，最近 ${clockOf(r.lastAt, now)} 有消息，${has}（${topicIds(r)}）`;
+    return `· ${what}${by}${clockOf(r.at, now)} 开的，最近 ${clockOf(r.lastAt, now)} 有消息，${has}（${topicIds(r)}）`;
   })];
 }
 

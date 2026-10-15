@@ -984,8 +984,11 @@ export function createOrchestrator(
    * concurrent marks from overwriting each other. */
   function markSeen(sessionKey: string, mark: SeenMark, how: SeenHow = 'id', streaming?: SeenMark[], extra: SeenMark[] = []): void {
     // The 引用行 its block carried, by topic id, in the same write (s14b).
-    const next = (rec: SessionRecord) =>
-      extra.reduce((r, x) => ({ ...r, ...nextSeen({ ...rec, ...r }, x, 'id') }), nextSeen(rec, mark, how, streaming));
+    const next = (rec: SessionRecord) => {
+      let patch = nextSeen(rec, mark, how, streaming);
+      for (const x of extra) patch = { ...patch, ...nextSeen({ ...rec, ...patch }, x, 'id') };
+      return patch;
+    };
     void trackTask(patchSession(sessionKey, next).catch(() => undefined));
   }
   /** Take back an `id` mark whose message did not reach the session after all. */
@@ -1086,10 +1089,12 @@ export function createOrchestrator(
   /** Main sessions that compacted, by key: the native session id, '' once the
    * table was shown (in memory first, then SessionRecord.topicsDue). */
   const topicsDue = new Map<string, string>();
-  function markTopicsDue(key: string | undefined, chatId: string, sessionId: string): void {
-    if (!key || !isMainKey(key, chatId)) return;
+  function setTopicsDue(key: string, sessionId: string): void {
     topicsDue.set(key, sessionId);
     void trackTask(patchSession(key, { topicsDue: sessionId }).catch(() => undefined));
+  }
+  function markTopicsDue(key: string | undefined, chatId: string, sessionId: string): void {
+    if (key && isMainKey(key, chatId)) setTopicsDue(key, sessionId);
   }
   function topicsDueFor(key: string, chatId: string, rec: SessionRecord | undefined, sessionId: string): boolean {
     return isMainKey(key, chatId) && (topicsDue.get(key) ?? rec?.topicsDue) === sessionId;
@@ -2107,9 +2112,9 @@ export function createOrchestrator(
       ...(root ? { root: { at: root.createTime, who: { kind: root.from, name: root.senderName } } } : {}),
       ...(mainRec?.sessionId ? { mainSessionId: mainRec.sessionId } : {}),
     };
-    const { main, ...quotes } = section;
+    const { main, ...quoted } = section;
     return {
-      part: { opening: { pointer, main }, ...quotes },
+      part: { opening: { pointer, main }, ...quoted },
       log: { pointer: true, mainLines: main.length, mainSession: Boolean(pointer.mainSessionId), topicGroup: false, mainOk: pull?.ok ?? false },
     };
   }
@@ -2291,16 +2296,17 @@ export function createOrchestrator(
       }
       if (mainPull) {
         // The bot-opened topic's opening (s14b): where it hangs, and the main area before it.
-        const { main, ...quotes } = await mainSection(msg.chatId, mainPull, list, msg.createTime, undefined, perm.roleSuffix);
+        const { main, quotes, moreTopics } = await mainSection(msg.chatId, mainPull, list, msg.createTime, undefined, perm.roleSuffix);
         firstText = weaveRecordBlock(firstText, {
           place: { group: project?.name, me: channel.botIdentity?.name, topic: { title: topicTitle(msg.content) } },
           entries: [],
           now: msg.createTime || Date.now(),
           opening: { pointer: { botOpened: true, root: { at: msg.createTime, who: senderWho(msg) } }, main },
-          ...quotes,
+          quotes,
+          moreTopics,
         });
         log.info('intake', 'record-block', { place: 'topic', lines: 0, opening: true, botOpened: true, ok: mainPull.ok,
-          pointer: true, mainLines: main.length, quotes: quotes.quotes.length, moreTopics: quotes.moreTopics });
+          pointer: true, mainLines: main.length, quotes: quotes.length, moreTopics });
       }
       log.info('card', 'start', { project: project?.name ?? '(unregistered)', model, effort, images: images?.length ?? 0, goal: Boolean(goal) });
       const titleJobKey = await registerSessionTitle(be, thread.sessionId, cwd, titleSource);
@@ -5187,10 +5193,7 @@ export function createOrchestrator(
             // both for the next back-fill and a re-push).
             if (unseen && topicThreadId) markSeen(topicThreadId, unseen, currentTurn.seenHow, currentTurn.streaming, currentTurn.seenExtra);
             unseen = undefined;
-            if (currentTurn.tableShown && topicThreadId) {
-              topicsDue.set(topicThreadId, '');
-              void trackTask(patchSession(topicThreadId, { topicsDue: '' }).catch(() => undefined));
-            }
+            if (currentTurn.tableShown && topicThreadId) setTopicsDue(topicThreadId, '');
             if (currentTurn.woven?.length) state.woven = new Set(currentTurn.woven);
             // Host accepted the first turn. Title generation now overlaps the
             // remainder of that turn; the binding was persisted before this loop.
