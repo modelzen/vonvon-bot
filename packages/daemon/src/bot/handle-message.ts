@@ -216,7 +216,7 @@ import {
 } from './session-store';
 import { SessionTitleCoordinator } from './session-title-coordinator';
 import { topicTitle, type TopicPerson, type TopicRegistry, type TopicSighting, type TopicView } from './topic-registry';
-import { createTopicContext, topicQuotes, topicRows } from './topic-context';
+import { createTopicContext, localBots, topicQuotes, topicRows } from './topic-context';
 import {
   sessionTitleSourceFromMessage,
   type SessionTitleSource,
@@ -1080,7 +1080,8 @@ export function createOrchestrator(
     return hit;
   }
 
-  const topicCtx = createTopicContext(channel, topics, names, { stopping: () => shuttingDown, track: trackTask });
+  const topicCtx = createTopicContext(channel, topics, names,
+    { stopping: () => shuttingDown, track: trackTask, localBots: () => localBots(cfg.accounts.app.id) });
   const knownIds = (list: TopicView[]) => new Set(list.map((t) => t.topicId));
   /** Who sent a message, as a record block's pointer names them. */
   const senderWho = (msg: NormalizedMessage): Who => ({ kind: senderOf(msg).kind, name: names.peek(msg.senderId) ?? msg.senderName });
@@ -1919,10 +1920,11 @@ export function createOrchestrator(
           if (place === 'main') {
             // 引用行 for topics opened since the session last spoke (a new one: since its
             // oldest line), each sent once; after a compaction, the recent topics too.
-            const found = await orStop(topicCtx.discover(msg.chatId, kept, knownIds(list)), []);
+            const known = await topicCtx.quotable(msg.chatId, list);
+            const found = await orStop(topicCtx.discover(msg.chatId, kept, knownIds(known)), []);
             const since = codexEmpty ? undefined : prior?.lastSeenAt;
             const skip = codexEmpty ? undefined : (t: TopicView) => isDelivered(prior, t.topicId);
-            const { quotes, more } = topicQuotes([...list, ...found],
+            const { quotes, more } = topicQuotes([...known, ...found],
               { ...(since ? { after: since } : { from: kept[0]?.createTime ?? 0 }), to: now, skip, tier }, names);
             const table = thread && topicsDueFor(sessionKey, msg.chatId, prior, thread.sessionId) ? topicRows(list.slice(0, 5), tier, names) : [];
             topicsPart = { quotes, moreTopics: more, table };
@@ -2087,8 +2089,9 @@ export function createOrchestrator(
    * with the topics other bots opened there found first. */
   async function mainSection(chatId: string, pull: ThreadPull, list: TopicView[], to: number, exclude: string | undefined, tier: TurnPerm['roleSuffix']) {
     const main = pull.ok ? keepRecent(pull.messages, undefined, OPENING_MAIN_MAX) : [];
-    const found = await orStop(topicCtx.discover(chatId, main, knownIds(list)), []);
-    const { quotes, more } = topicQuotes([...list, ...found], { from: main[0]?.createTime ?? 0, to, exclude, tier }, names);
+    const known = await topicCtx.quotable(chatId, list);
+    const found = await orStop(topicCtx.discover(chatId, main, knownIds(known)), []);
+    const { quotes, more } = topicQuotes([...known, ...found], { from: main[0]?.createTime ?? 0, to, exclude, tier }, names);
     return { main, quotes, moreTopics: more };
   }
 

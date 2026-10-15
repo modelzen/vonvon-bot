@@ -31,6 +31,8 @@ export interface TopicPerson {
   kind: 'user' | 'bot' | 'self';
   /** open_id (another bot's open_bot_id); absent for self. */
   openId?: string;
+  /** A name known without the name book: another vonvon bot's on this daemon (s14b). Never stored. */
+  name?: string;
 }
 
 export interface TopicRecord {
@@ -196,6 +198,16 @@ async function readStore(file: string): Promise<RegistryFile | 'corrupt'> {
   } catch {
     return 'corrupt';
   }
+}
+
+/**
+ * Another bot's registry, read only (s14b): the group's topics stored under
+ * `dir`, [] when there are none. Throws when the file cannot be read or parsed.
+ */
+export async function readTopicsIn(dir: string, chatId: string): Promise<TopicRecord[]> {
+  const store = await readStore(join(dir, fileName(chatId)));
+  if (store === 'corrupt') throw new Error('topic registry does not parse');
+  return store.topics;
 }
 
 // One lock per file, shared by every registry in the process (see session-store's withLock).

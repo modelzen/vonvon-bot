@@ -21,7 +21,15 @@ const fake = vi.hoisted(() => ({
   list: vi.fn(async (..._args: unknown[]) => ({ code: 0, data: { items: [] as unknown[] } })),
   chatGet: vi.fn(async (..._args: unknown[]): Promise<unknown> => { throw new Error('no im:chat:readonly'); }),
   log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() },
+  /** bots.json's bots, and where their topic registries live. */
+  bots: [] as object[],
+  localRoot: '',
 }));
+vi.mock('../src/config/bots', async (original) => ({ ...await original<object>(), loadBots: async () => ({ version: 1, bots: fake.bots }) }));
+vi.mock('../src/config/paths', async (original) => {
+  const real = await original<typeof import('../src/config/paths')>();
+  return { ...real, botPaths: (appId: string) => ({ ...real.botPaths(appId), topicsDir: `${fake.localRoot}/${appId}` }) };
+});
 vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_ctx: unknown, fn: () => unknown) => fn() }));
 vi.mock('../src/agent', async (original) => ({ ...await original<object>(), createBackend: () => fake.backend }));
 vi.mock('../src/project/registry', async (original) => ({
@@ -113,6 +121,7 @@ beforeEach(() => {
   fake.chat.mockReset().mockResolvedValue({ messages: [], ok: true, complete: true });
   fake.list.mockReset().mockResolvedValue({ code: 0, data: { items: [] } });
   fake.chatGet.mockReset().mockRejectedValue(new Error('no im:chat:readonly'));
+  fake.bots = [];
   fake.backend.resumeThread.mockReset();
   fake.backend.startThread.mockReset();
 });
@@ -942,6 +951,30 @@ describe('topic openings, 引用行 and the topics table (s14b)', () => {
     expect(await topics.get('chat', 'omt_a')).toMatchObject({ openedBy: { kind: 'bot', openId: 'ou_p' }, firstId: 'om_root' });
     expect(run.consumed[0]!.text).toContain('张三：订单接口一直报 500\n');
     expect(run.consumed[0]!.text).toMatch(/〔话题〕小P（bot）在上面这条下开了话题「订单接口一直报 500」，你在那边还没有会话，这里不用接。（话题 id：omt_a）\n/);
+  });
+
+  it("quotes the topics another vonvon bot on this daemon opened, from its registry, with this bot's session ids only", async () => {
+    fake.records.set('chat', record('chat', { lastSeenAt: 5 }));
+    fake.records.set('omt_both', record('omt_both'));
+    const topics = registry();
+    const at = Date.now() - 3000;
+    await opened(topics, 'omt_both', at + 500); // this bot first saw it from 李四's reply
+    fake.localRoot = dir;
+    fake.bots = [{ name: 'me', appId: 'app' }, { name: 'p', appId: 'cli_p', botName: '小P' }];
+    const theirs = createTopicRegistry({ dir: join(dir, 'cli_p'), sessions: async () => [] });
+    await theirs.note('chat', { topicId: 'omt_both', at, from: { kind: 'self' } });
+    await theirs.note('chat', { topicId: 'omt_p', at: at + 1000, from: { kind: 'self' }, first: { id: 'om_r', text: '灰度方案' } });
+    await createTopicRegistry({ dir: join(dir, 'app'), sessions: async () => [] }).note('chat', { topicId: 'omt_self', at, from: { kind: 'self' } });
+    const run = thread('old-chat');
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    fake.chat.mockResolvedValueOnce({ ok: true, complete: true, messages: [ctx('om_r', '灰度方案', at + 900, { threadId: 'omt_p', senderName: '张三' })] });
+    const o = setup(topics);
+    await o.onMessage(message('总结一下'));
+    await done();
+    expect(run.consumed[0]!.text).toMatch(new RegExp(`\\n${clock} 〔话题〕小P（bot）开了话题「omt_both 的标题」，你在那边另有一条会话，这里不用接。（话题 id：omt_both，会话 id：old-omt_both）\\n`
+      + `${clock} 张三：灰度方案\\n${clock} 〔话题〕小P（bot）在上面这条下开了话题「灰度方案」，你在那边还没有会话，这里不用接。（话题 id：omt_p）\\n\\[/飞书\\]`));
+    expect(run.consumed[0]!.text).not.toContain('omt_self');
+    expect(fake.list).not.toHaveBeenCalled(); // known from the registry: not looked up
   });
 
   /** A thread whose turns yield these events between turn_started and done, one list per turn. */

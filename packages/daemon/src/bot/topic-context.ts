@@ -1,15 +1,18 @@
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
+import { loadBots } from '../config/bots';
+import { botPaths } from '../config/paths';
 import { log } from '../core/logger';
 import { scopeDenial } from '../utils/feishu-error';
 import { fetchTopicOpener, type ContextMessage, type TopicQuote, type TopicRow, type Who } from './context-weave';
 import { withDeadline, type NameBook } from './names';
-import type { TopicPerson, TopicRegistry, TopicView } from './topic-registry';
+import { readTopicsIn, type TopicPerson, type TopicRecord, type TopicRegistry, type TopicView } from './topic-registry';
 
 /**
  * Topics in a record block (product.md 3.5, s14b): which registry topics
  * become 引用行 or table rows, and two Feishu lookups the openings need —
  * whether a group has a main area at all, and who opened a topic another bot
- * started (this bot gets no events for that bot's messages).
+ * started (this bot gets no events for that bot's messages). The topics the
+ * other vonvon bots on this daemon opened come from their registries instead.
  */
 
 /** 引用行 per block at most; the newest are kept, the rest only counted. */
@@ -38,7 +41,7 @@ export interface QuoteWindow {
 export function personOf(p: TopicPerson | undefined, names: NameBook): Who | undefined {
   if (!p) return undefined;
   if (p.kind === 'self') return { kind: 'self' };
-  const name = names.peek(p.openId);
+  const name = p.name ?? names.peek(p.openId);
   if (p.kind === 'bot') return { kind: 'bot', name };
   return { kind: 'user', name: name ?? (p.openId ? `用户${p.openId.slice(-4)}` : undefined) };
 }
@@ -76,11 +79,54 @@ export function topicRows(topics: TopicView[], tier: QuoteWindow['tier'], names:
   return topics.map((t) => ({ ...quoteOf(t, tier, names), lastAt: t.lastAt }));
 }
 
+/** Another vonvon bot on this daemon: its name and its topic registry's directory. */
+export interface LocalBot {
+  name?: string;
+  topicsDir: string;
+}
+
+/** The vonvon bots in bots.json other than `selfAppId`. */
+export async function localBots(selfAppId: string): Promise<LocalBot[]> {
+  return (await loadBots()).bots
+    .filter((b) => b.appId !== selfAppId)
+    .map((b) => ({ ...(b.botName ? { name: b.botName } : {}), topicsDir: botPaths(b.appId).topicsDir }));
+}
+
+/**
+ * A topic another local bot opened, as this bot sees it: opened by that bot,
+ * with its first message's sender only when that bot sent it (the other
+ * open_ids are of that bot's app). Its sessions are that bot's: none shown.
+ */
+function asLocal(t: TopicRecord, name: string | undefined): TopicView {
+  const bot: TopicPerson = { kind: 'bot', ...(name ? { name } : {}) };
+  const { topicId, firstId, firstAt, title, openedAt, lastAt } = t;
+  return { topicId, ...(firstId ? { firstId } : {}), ...(firstAt ? { firstAt } : {}), ...(title ? { title } : {}),
+    ...(t.firstFrom?.kind === 'self' ? { firstFrom: bot } : {}), openedBy: bot, openedAt, lastAt, sessions: [] };
+}
+
+/**
+ * This bot's topics plus the local bots' (pure). A topic both know keeps this
+ * bot's record and sessions, but takes its opener from the bot that opened it,
+ * unless this bot did, and the earlier opening time.
+ */
+function withLocal(own: TopicView[], local: TopicView[]): TopicView[] {
+  const theirs = new Map(local.map((t) => [t.topicId, t]));
+  const merged = own.map((t) => {
+    const o = theirs.get(t.topicId);
+    theirs.delete(t.topicId);
+    return o && t.openedBy?.kind !== 'self' ? { ...t, openedBy: o.openedBy, openedAt: Math.min(t.openedAt, o.openedAt) } : t;
+  });
+  return [...merged, ...theirs.values()];
+}
+
 export interface TopicContext {
   /** A topic group (话题群 / 话题形式群): no main-area chat. False when unknown. */
   noMainArea(chatId: string): Promise<boolean>;
   /** Record the topics under `msgs` (main-area lines) the registry does not know yet. */
   discover(chatId: string, msgs: ContextMessage[], known: Set<string>): Promise<TopicView[]>;
+  /** `own` (this bot's topics in the group) with the ones the other vonvon bots
+   * on this daemon opened there, read from their registries. Never throws. */
+  quotable(chatId: string, own: TopicView[]): Promise<TopicView[]>;
 }
 
 /**
@@ -88,12 +134,13 @@ export interface TopicContext {
  * Per process: a chat's mode is cached (an hour, ten minutes when unknown),
  * and each topic is looked up at most once: a turn that reaches a topic still
  * being looked up, or one recorded after its list was read, gets that lookup's answer.
+ * `localBots` lists the other vonvon bots whose registries {@link TopicContext.quotable} reads.
  */
 export function createTopicContext(
   channel: LarkChannel,
   topics: TopicRegistry | undefined,
   names: NameBook,
-  opts: { stopping: () => boolean; track: <T>(p: Promise<T>) => Promise<T> },
+  opts: { stopping: () => boolean; track: <T>(p: Promise<T>) => Promise<T>; localBots?: () => Promise<LocalBot[]> },
 ): TopicContext {
   const modes = new Map<string, { topic: Promise<boolean>; until: number }>();
   const looked = new Map<string, Promise<TopicView | undefined>>();
@@ -163,6 +210,18 @@ export function createTopicContext(
         return lookup;
       }));
       return found.filter((t): t is TopicView => Boolean(t));
+    },
+    async quotable(chatId, own) {
+      if (!topics || !opts.localBots) return own;
+      // A registry that is missing has nothing; one that cannot be read is skipped, logged once a call.
+      let skipped = 0;
+      const bots = await opts.localBots().catch((): LocalBot[] => { skipped += 1; return []; });
+      const local = await Promise.all(bots.map((bot) => readTopicsIn(bot.topicsDir, chatId).then(
+        (ts) => ts.filter((t) => t.openedBy?.kind === 'self').map((t) => asLocal(t, bot.name)),
+        () => { skipped += 1; return []; },
+      )));
+      if (skipped) log.info('intake', 'local-bot-topics-skipped', { chatId: chatId.slice(-6), skipped });
+      return withLocal(own, local.flat());
     },
   };
 }

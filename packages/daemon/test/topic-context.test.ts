@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -144,5 +144,39 @@ describe('createTopicContext', () => {
     // The next turn looks up the 2 left; the 5 already looked up take no slot.
     await ctx.discover('chat', roots, new Set());
     expect(list).toHaveBeenCalledTimes(7);
+  });
+});
+
+describe('topics the other local bots opened (3b)', () => {
+  it("adds their own topics in the group, in this bot's terms, and skips a registry it cannot read", async () => {
+    const root = mkdtempSync(join(tmpdir(), 'local-'));
+    try {
+      const theirs = createTopicRegistry({ dir: join(root, 'p'), sessions: async () => [] });
+      await theirs.note('chat', { topicId: 'omt_s', at: 7, from: { kind: 'self' }, first: { id: 'om_r', from: { kind: 'user', openId: 'ou_their' }, at: 5, text: '灰度方案' } });
+      await theirs.note('chat', { topicId: 'omt_both', at: 9, from: { kind: 'self' }, first: { id: 'om_b', from: { kind: 'self' }, at: 8 } });
+      await theirs.note('chat', { topicId: 'omt_u', at: 6, from: { kind: 'user', openId: 'ou_their' } }); // a person's topic: not taken
+      await theirs.note('other', { topicId: 'omt_x', at: 6, from: { kind: 'self' } });
+      mkdirSync(join(root, 'bad'));
+      writeFileSync(join(root, 'bad', 'chat.json'), '{');
+      const info = vi.spyOn(log, 'info').mockImplementation(() => undefined);
+      const bots = [{ name: '小P', topicsDir: join(root, 'p') }, { topicsDir: join(root, 'missing') }, { topicsDir: join(root, 'bad') }];
+      const ctxWith = (localBots: () => Promise<typeof bots>) => createTopicContext({} as LarkChannel,
+        createTopicRegistry({ dir: join(root, 'me'), sessions: async () => [] }), names, { stopping: () => false, track: (p) => p, localBots });
+      // This bot first saw omt_both from 李四's reply, and has a session there.
+      const own = [view('omt_both', 12, { sessions: [session('omt_both')] }), view('omt_mine', 4)];
+      const all = await ctxWith(async () => bots).quotable('chat', own);
+      expect(topicQuotes(all, { from: 0, to: 20 }, names).quotes).toEqual([
+        { topicId: 'omt_mine', at: 4, who: { kind: 'user', name: '李四' } },
+        { topicId: 'omt_s', title: '灰度方案', at: 7, who: { kind: 'bot', name: '小P' }, root: { id: 'om_r', at: 5, who: undefined } },
+        { topicId: 'omt_both', at: 9, who: { kind: 'bot', name: '小P' }, sessionId: 's-omt_both' },
+      ]);
+      expect(info.mock.calls).toEqual([['intake', 'local-bot-topics-skipped', { chatId: 'chat', skipped: 1 }]]);
+      // A topic this bot opened stays its own; bots.json it cannot read adds nothing.
+      const mine = [view('omt_both', 12, { openedBy: { kind: 'self' } })];
+      expect((await ctxWith(async () => bots).quotable('chat', mine)).find((t) => t.topicId === 'omt_both')).toEqual(mine[0]);
+      expect(await ctxWith(async () => { throw new Error('bots.json'); }).quotable('chat', own)).toEqual(own);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
