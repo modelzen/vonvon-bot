@@ -4,8 +4,8 @@ import { existsSync, readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { extname, isAbsolute, join, relative, sep } from 'node:path';
 import { paths } from '../../config/paths';
-import { mergeProcessEnv, spawnProcess, spawnProcessSync } from '../../platform/spawn';
-import { withBinDirectory } from '../../platform/tool-path';
+import { spawnProcess, spawnProcessSync } from '../../platform/spawn';
+import { binChildEnv } from '../../platform/tool-path';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -98,12 +98,6 @@ function which(cmd: string, env: NodeJS.ProcessEnv, blockedDataRoot?: string): s
   }
 }
 
-/** Env for any child started from the codex binary `bin`: PATH gains `bin`'s directory,
- * so an nvm-installed codex finds the `node` its launcher needs (see {@link withBinDirectory}). */
-export function codexChildEnv(bin: string, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  return mergeProcessEnv(base, { PATH: withBinDirectory(bin, base.PATH) });
-}
-
 /** Best-effort version string of the resolved codex binary（同步，CLI 场景用；
  * 卡片回调等事件循环上下文请用 {@link codexVersionAsync}）。 */
 export function codexVersion(bin: string, opts?: { force?: boolean }): string | null {
@@ -114,7 +108,7 @@ export function codexVersion(bin: string, opts?: { force?: boolean }): string | 
   let out: string | null;
   try {
     // cross-spawn so a Windows `.cmd` shim runs (avoids execFile EINVAL).
-    const res = spawnProcessSync(bin, ['--version'], { encoding: 'utf8', env: codexChildEnv(bin) });
+    const res = spawnProcessSync(bin, ['--version'], { encoding: 'utf8', env: binChildEnv(bin) });
     out = res.status === 0 && typeof res.stdout === 'string' ? res.stdout.trim() : null;
   } catch {
     out = null;
@@ -135,7 +129,7 @@ export async function codexVersionAsync(bin: string, opts?: { force?: boolean })
     let child;
     try {
       // 同 codexVersion：cross-spawn 跑 Windows `.cmd` shim（裸 execFile 会 EINVAL）。
-      child = spawnProcess(bin, ['--version'], { stdio: ['ignore', 'pipe', 'ignore'], env: codexChildEnv(bin) });
+      child = spawnProcess(bin, ['--version'], { stdio: ['ignore', 'pipe', 'ignore'], env: binChildEnv(bin) });
     } catch {
       resolve(null);
       return;

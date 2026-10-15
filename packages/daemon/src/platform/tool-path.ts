@@ -29,6 +29,14 @@ export function withBinDirectory(bin: string, path: string | undefined = process
   return appendDirectories(path, [...(isAbsolute(bin) ? [dirname(bin)] : []), ...toolDirectories(home, platform)]);
 }
 
+/** Env for a child started from `bin` (codex and its `--version`): `base` with
+ * {@link withBinDirectory} applied to its PATH. POSIX only, like the rest of v1: a
+ * Windows `Path` key is not merged. The desktop imports this file, so it needs nothing
+ * beyond node. */
+export function binChildEnv(bin: string, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return { ...base, PATH: withBinDirectory(bin, base.PATH) };
+}
+
 function appendDirectories(path: string | undefined, directories: string[]): string {
   const entries = (path ?? '').split(delimiter).filter(Boolean);
   for (const directory of directories) if (!entries.includes(directory)) entries.push(directory);

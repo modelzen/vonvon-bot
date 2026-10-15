@@ -16,6 +16,7 @@ describe('Claude login mapping', () => {
     expect(loginFromAccount({ apiKeySource: 'ANTHROPIC_API_KEY', tokenSource: 'none', apiProvider: 'firstParty' })).toEqual({ state: 'signedIn', message: '已登录，凭据来自 ANTHROPIC_API_KEY。' });
     expect(loginFromAccount({ tokenSource: 'CLAUDE_CODE_OAUTH_TOKEN' })).toMatchObject({ state: 'signedIn' });
     expect(loginFromAccount({ tokenSource: 'none', apiProvider: 'firstParty' })).toEqual({ state: 'signedOut', message: CLAUDE_SIGNED_OUT_MESSAGE });
+    expect(loginFromAccount({ apiKeySource: 'none' })).toEqual({ state: 'signedOut', message: CLAUDE_SIGNED_OUT_MESSAGE });
     expect(loginFromAccount({ apiProvider: 'bedrock' })).toMatchObject({ state: 'unknown' });
     expect(loginFromAccount({})).toBeNull();
     expect(loginFromAccount(undefined)).toBeNull();
@@ -45,6 +46,23 @@ describe('Claude login mapping', () => {
     await readClaudeLogin(probe);
     expect(probe).toHaveBeenCalledTimes(3);
   });
+
+  it('answers a refresh with a probe that starts after it, not one already running', async () => {
+    type Answer = { state: 'signedIn' | 'signedOut'; message: string };
+    const releases: Array<(value: Answer) => void> = [];
+    const probe = vi.fn(() => new Promise<Answer>(resolve => { releases.push(resolve); }));
+    const background = readClaudeLogin(probe);
+    const first = readClaudeLogin(probe, { refresh: true });
+    const second = readClaudeLogin(probe, { refresh: true });
+    releases[0]!({ state: 'signedOut', message: 'before' });
+    expect(await background).toEqual({ state: 'signedOut', message: 'before' });
+    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+    releases[1]!({ state: 'signedIn', message: 'after' });
+    expect(await first).toEqual({ state: 'signedIn', message: 'after' });
+    expect(await second).toEqual({ state: 'signedIn', message: 'after' });
+    expect(probe).toHaveBeenCalledTimes(2);
+    expect(cachedClaudeLogin()).toEqual({ state: 'signedIn', message: 'after' });
+  });
 });
 
 describe('ClaudeAgentBackend.loginStatus', () => {
@@ -66,7 +84,7 @@ describe('ClaudeAgentBackend.loginStatus', () => {
 
   it('says the SDK is missing, and uses the env when the CLI cannot start', async () => {
     expect(await new ClaudeAgentBackend(async () => { throw new BackendNotInstalledError('@anthropic-ai/claude-agent-sdk'); }).loginStatus()).toEqual({ state: 'unknown', message: '还没下载 Claude Agent SDK。' });
-    resetClaudeLoginCache();
+    expect(cachedClaudeLogin()).toBeUndefined();
     vi.stubEnv('ANTHROPIC_API_KEY', '');
     vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', '');
     vi.stubEnv('ANTHROPIC_AUTH_TOKEN', '');

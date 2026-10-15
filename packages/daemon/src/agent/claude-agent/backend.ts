@@ -94,7 +94,11 @@ let sdkPromise: Promise<ClaudeSdkFacade> | undefined;
  * and never re-downloads.
  */
 function loadSdk(): Promise<ClaudeSdkFacade> {
-  sdkPromise ??= loadBackendDep<ClaudeSdkFacade>(SDK_PKG);
+  // A failed load is not kept, so a download made after it is picked up.
+  sdkPromise ??= loadBackendDep<ClaudeSdkFacade>(SDK_PKG).catch((err: unknown) => {
+    sdkPromise = undefined;
+    throw err;
+  });
   return sdkPromise;
 }
 
@@ -245,14 +249,19 @@ export class ClaudeAgentBackend implements AgentBackend {
   }
 
   loginStatus(opts?: { refresh?: boolean }): Promise<BackendLogin> {
-    return readClaudeLogin(() => this.probeLogin(), opts);
+    // Not cached, so the answer changes as soon as the SDK is downloaded.
+    return readClaudeLogin(() => this.probeLogin(), opts).catch((err: unknown) => {
+      if (err instanceof BackendNotInstalledError) return { state: 'unknown', message: '还没下载 Claude Agent SDK。' };
+      throw err;
+    });
   }
 
   /** Reads the account the SDK's CLI reports at initialize, with no turn and no
    * tokens. The CLI is the same binary turns use and gets the same env and user
-   * settings (an apiKeyHelper or `env` key there counts), but no hooks, MCP servers
-   * or claude.ai connectors. If it cannot start, `claude auth status` from a
-   * separate CLI would not say whether turns can run, so only the env is checked. */
+   * settings (an apiKeyHelper or `env` key there counts, and plugins enabled there
+   * load), but no hooks, MCP servers or claude.ai connectors. If it cannot start,
+   * `claude auth status` from a separate CLI would not say whether turns can run, so
+   * only the env is checked. */
   private async probeLogin(): Promise<BackendLogin> {
     let query: Query | undefined;
     const abortController = new AbortController();
@@ -277,7 +286,7 @@ export class ClaudeAgentBackend implements AgentBackend {
       const init = await withAbortDeadline(query.initializationResult(), abortController, LOGIN_PROBE_TIMEOUT_MS);
       return loginFromAccount(init.account) ?? loginFromEnv(process.env, 'Claude 没有报告账号信息。');
     } catch (err) {
-      if (err instanceof BackendNotInstalledError) return { state: 'unknown', message: '还没下载 Claude Agent SDK。' };
+      if (err instanceof BackendNotInstalledError) throw err;
       log.fail('agent', err, { backend: 'claude-agent', phase: 'loginStatus' });
       return loginFromEnv(process.env, 'Claude 起不来，看不到登录状态。');
     } finally {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import QRCode from "qrcode";
 import { ChevronDown, RefreshCw } from "lucide-react";
 import { Button, StatusBadge } from "../reference/components/ui";
@@ -119,12 +119,17 @@ export function EnvironmentPanel({ request, onCodexLogin, codexJobs, codexBusy, 
     });
     return () => { live = false; };
   }, [tools, request]);
+  const loginRequests = useRef<Record<string, number>>({});
   const checkLogin = useCallback(async (id: string, refresh: boolean) => {
+    const sequence = (loginRequests.current[id] ?? 0) + 1;
+    loginRequests.current[id] = sequence;
+    // Only the latest request for a backend may set its line.
+    const settle = (reply: BackendLogin) => { if (loginRequests.current[id] === sequence) setLogins((current) => ({ ...current, [id]: reply })); };
     if (refresh) setLogins((current) => { const next = { ...current }; delete next[id]; return next; });
     try {
       const reply = await request({ type: "backendLogin", id, refresh });
-      if (reply.kind === "backendLogin") setLogins((current) => ({ ...current, [id]: reply }));
-    } catch { setLogins((current) => ({ ...current, [id]: { kind: "backendLogin", id, state: "unknown", message: "暂时无法检查登录，稍后再点“检查登录”。" } })); }
+      if (reply.kind === "backendLogin") settle(reply);
+    } catch { settle({ kind: "backendLogin", id, state: "unknown", message: "暂时无法检查登录，稍后再点“检查登录”。" }); }
   }, [request]);
   useEffect(() => {
     for (const backend of backends) if (backend.id === "claude-agent" && backend.depState === "installed") void checkLogin(backend.id, false);
@@ -296,7 +301,7 @@ function BackendRow({ backend, actions, login, onCheckLogin }: { backend: Backen
       {backend.hint && login?.state !== "signedIn" && <small>{backend.hint}</small>}
     </div>
     <div className="environment-actions">
-      {checksLogin && <Button size="sm" disabled={actions.busy} onClick={onCheckLogin}>检查登录</Button>}
+      {checksLogin && <Button size="sm" disabled={actions.busy || !login} onClick={onCheckLogin}>检查登录</Button>}
       <BackendActions backend={backend} actions={actions} />
     </div>
   </article>;

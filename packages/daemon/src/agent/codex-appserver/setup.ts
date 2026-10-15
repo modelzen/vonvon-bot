@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { AppServerClient } from './app-server-client';
-import { codexChildEnv, resolveCodexBin } from './locate';
+import { resolveCodexBin } from './locate';
+import { binChildEnv } from '../../platform/tool-path';
 import { installManagedCodex, runSetupChild } from './managed-install';
 import { CodexProcessCleanupError } from './owned-process';
 
@@ -70,7 +71,7 @@ export class CodexSetupService {
     const stop = (): void => { void client.close().catch(() => undefined); };
     signal.addEventListener('abort', stop, { once: true });
     try {
-      version = await runSetupChild(bin, ['--version'], { cwd: homedir(), signal, env: codexChildEnv(bin), timeoutMs: 20_000 });
+      version = await runSetupChild(bin, ['--version'], { cwd: homedir(), signal, env: binChildEnv(bin), timeoutMs: 20_000 });
       if (!/^codex-cli \S+$/.test(version)) throw new SetupDisplayError('所选文件不是可识别的 Codex CLI');
       signal.throwIfAborted();
       await client.connect();
