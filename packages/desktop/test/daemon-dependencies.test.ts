@@ -8,6 +8,8 @@ import { createDaemonDependencies, prepareDesktopRoot } from '../src/daemon-depe
 import { readRunningPidLock } from '../../daemon/src/server/pid-lock.js';
 import { verifyPidLockOwner } from '../../daemon/src/server/owner-verification.js';
 import { toolDirectories } from '../../daemon/src/platform/tool-path.js';
+import { renderDefinition } from '../../daemon/src/service/definitions.js';
+import { serviceTarget, type CanonicalRoot } from '../../daemon/src/service/identity.js';
 
 const attach = vi.hoisted(() => vi.fn());
 
@@ -54,7 +56,7 @@ describe('desktop daemon dependencies', () => {
     roots.push(parent);
     const path = join(parent, 'data');
     expect(await prepareDesktopRoot({ kind: 'fresh', path })).toBe(path);
-    if (process.platform !== 'win32') expect((await stat(path)).mode & 0o777).toBe(0o700);
+    expect((await stat(path)).mode & 0o777).toBe(0o700);
     const alias = join(parent, 'alias');
     await symlink(path, alias, 'dir');
     await expect(prepareDesktopRoot({ kind: 'canonical', path: alias })).rejects.toThrow('physical directory');
@@ -70,6 +72,30 @@ describe('desktop daemon dependencies', () => {
     vi.mocked(readRunningPidLock).mockResolvedValue(owner);
     await expect(dependencies().readVerifiedDaemon()).resolves.toEqual(owner);
     expect(verifyPidLockOwner).toHaveBeenCalledExactlyOnceWith('/owned/data', owner);
+  });
+
+  it('passes the lock\'s daemon version on for the startup repair', async () => {
+    vi.mocked(readRunningPidLock).mockResolvedValue({ ...owner, version: '0.2.0' });
+    await expect(dependencies().readVerifiedDaemon()).resolves.toEqual({ ...owner, version: '0.2.0' });
+  });
+
+  it('returns what an installed definition starts, and why one is unrecognized', async () => {
+    vi.stubEnv('XDG_CONFIG_HOME', '');
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'desktop-registration-')));
+    roots.push(root);
+    const platform = process.platform === 'darwin' ? 'darwin' : 'linux';
+    const target = platform === 'darwin' ? serviceTarget({ platform, home: root, root })
+      : serviceTarget({ platform, home: root, root, xdgConfigHome: undefined });
+    const file = target.platform === 'darwin' ? target.plistPath : target.unitPath;
+    const distribution = { kind: 'desktop' as const, executable: '/Applications/Vonvon Bot.app/Contents/MacOS/Vonvon Bot',
+      entry: '/Applications/Vonvon Bot.app/Contents/Resources/daemon/bin/vonvon.mjs' };
+    const rendered = renderDefinition({ target, root: root as CanonicalRoot, port: 4321, distribution, capturedPath: '/usr/bin:/bin' });
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(file, rendered.platform === 'darwin' ? rendered.plist : rendered.unit);
+    const read = createDaemonDependencies({ root, home: root, resources: '/owned/resources', executable: '/owned/Electron', packaged: true });
+    await expect(read.readRegistration()).resolves.toEqual({ kind: 'ours', definition: { ...distribution, port: 4321 } });
+    await writeFile(file, 'an older format');
+    await expect(read.readRegistration()).resolves.toEqual({ kind: 'unrecognized', file, reason: expect.any(String) });
   });
 
   it('checks the attached identity and closes the probe', async () => {

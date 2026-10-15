@@ -74,9 +74,9 @@ export interface ShellActions {
   chooseExecutablePath(): Promise<string | null>;
   startHost(bot?: string): Promise<MachineReply>;
   restartHost(previous: AttachedDaemon['identity'], send: () => Promise<CommandResult>): Promise<CommandResult>;
-  service(action: 'install' | 'start' | 'stop' | 'uninstall'): Promise<MachineReply>;
-  setLoginItem(enabled: boolean): Promise<void>;
-  readLoginItem(): Promise<boolean>;
+  /** `previous` is the daemon the window talks to, so a switch that replaced it reattaches. */
+  service(action: 'install' | 'start' | 'stop' | 'uninstall', previous?: AttachedDaemon['identity'] | null): Promise<MachineReply>;
+  setLoginItem(enabled: boolean, previous?: AttachedDaemon['identity'] | null): Promise<void>;
   isExpectedDisconnect(): boolean;
   repairCli(): Promise<MachineReply>;
   observeCli(): Promise<Extract<MachineReply, { type: 'status' }>['cli']>;

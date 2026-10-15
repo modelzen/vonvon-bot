@@ -6,13 +6,23 @@ export interface VerifiedDaemon {
   pid: number;
   listen: string;
   startedAt: string;
+  /** The daemon's package version from its lock, for the startup repair. */
+  version?: string;
+}
+
+/** What an installed definition starts; the startup repair checks it still exists. */
+export interface RegisteredDaemon {
+  kind: 'npm' | 'desktop';
+  executable: string;
+  entry: string;
+  port: number;
 }
 
 export type Registration =
   | { kind: 'absent' }
-  | { kind: 'ours' }
+  | { kind: 'ours'; definition?: RegisteredDaemon }
   | { kind: 'other-root'; root: string }
-  | { kind: 'unrecognized'; file: string };
+  | { kind: 'unrecognized'; file: string; reason?: string };
 
 export interface DaemonManagerDependencies {
   /** Must verify the lock against the authenticated daemon owner, not only its PID. */

@@ -20,6 +20,15 @@ export async function prepareDesktopRoot(selected: DataRoot): Promise<string> {
   return realpath(selected.path);
 }
 
+/** The environment of every bundled `vonvon` the app starts: the daemon, `daemon stop` and the service helper. */
+export function daemonEnvironment(root: string, home: string): NodeJS.ProcessEnv {
+  // Opened from Finder, the app's PATH lacks Homebrew, so the daemon would not find Codex.
+  const env: NodeJS.ProcessEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1', VONVON_HOME: root, PATH: withToolDirectories(process.env.PATH, home) };
+  // A service's own variable: what the app starts is never the service's job.
+  delete env.VONVON_SERVICE;
+  return env;
+}
+
 interface DesktopDaemonRuntime {
   root: string;
   home: string;
@@ -36,9 +45,7 @@ export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonM
     if (!runtime.packaged || distribution.kind !== 'bundled') {
       throw new Error('The packaged Vonvon daemon is unavailable. Build and open the desktop application.');
     }
-    // Opened from Finder, the app's PATH lacks Homebrew, so the daemon would not find Codex.
-    const env: NodeJS.ProcessEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1', VONVON_HOME: runtime.root, PATH: withToolDirectories(process.env.PATH, runtime.home) };
-    delete env.VONVON_SERVICE;
+    const env = daemonEnvironment(runtime.root, runtime.home);
     const log = await open(join(runtime.root, 'daemon.log'), 'a', 0o600);
     try {
       return await new Promise<number | undefined>((resolve, reject) => {
@@ -46,7 +53,7 @@ export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonM
         const args = [distribution.cliPath, 'daemon', command, '--port', String(port)];
         if (bot !== undefined) args.push('--bot', bot);
         const child = spawn(runtime.executable, args, {
-          env, detached, windowsHide: true, stdio: ['ignore', log.fd, log.fd],
+          env, detached, stdio: ['ignore', log.fd, log.fd],
         });
         child.once('error', reject);
         if (detached) child.once('spawn', () => { child.unref(); resolve(child.pid); });
@@ -71,7 +78,7 @@ export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonM
       catch (cause) {
         throw new Error(`Cannot authenticate daemon PID ${lock.pid} with desktop protocol ${PROTOCOL_VERSION}. Leave it running and check app/daemon compatibility and the local credential.`, { cause });
       }
-      return { pid: lock.pid, startedAt: lock.startedAt, listen: lock.listen };
+      return { pid: lock.pid, startedAt: lock.startedAt, listen: lock.listen, ...(lock.version === undefined ? {} : { version: lock.version }) };
     },
     async readRegistration() {
       const platform = process.platform;
@@ -81,9 +88,12 @@ export function createDaemonDependencies(runtime: DesktopDaemonRuntime): DaemonM
       const registration = await readRegistration({ target, requestedRoot: runtime.root });
       switch (registration.kind) {
         case 'absent': return { kind: 'absent' };
-        case 'ours': return { kind: 'ours' };
+        case 'ours': {
+          const { definition: { port, distribution: { kind, executable, entry } } } = registration;
+          return { kind: 'ours', definition: { kind, executable, entry, port } };
+        }
         case 'other-root': return { kind: 'other-root', root: registration.recordedRoot };
-        case 'unrecognized': return { kind: 'unrecognized', file: registration.location };
+        case 'unrecognized': return { kind: 'unrecognized', file: registration.location, reason: registration.reason };
       }
     },
     async startManaged(port) { await launch('start', port); },

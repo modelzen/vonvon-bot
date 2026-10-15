@@ -150,24 +150,21 @@ export function createDesktopFacades(transport: FacadeTransport): { client: Vonv
       if (clientClosed) return () => {};
       let active = true;
       let revision = -1;
-      let loginItem: boolean | undefined;
       let observedEpoch = connectionEpoch;
-      const receive = (value: DesktopSnapshot, allowLoginChange = true): void => {
+      const receive = (value: DesktopSnapshot): void => {
         if (observedEpoch !== connectionEpoch) {
           revision = -1;
           observedEpoch = connectionEpoch;
         }
-        if (active && !clientClosed && (value.revision > revision ||
-            (allowLoginChange && value.revision === revision && value.application.loginItem !== loginItem))) {
+        if (active && !clientClosed && value.revision > revision) {
           revision = value.revision;
-          loginItem = value.application.loginItem;
           try { listener(value); }
           catch (failure) { emitError(failure instanceof Error ? failure : new Error(String(failure))); }
         }
       };
       snapshots.add(receive);
       const seedEpoch = connectionEpoch;
-      void client.snapshot().then(value => { if (seedEpoch === connectionEpoch) receive(value, false); }).catch(error => {
+      void client.snapshot().then(value => { if (seedEpoch === connectionEpoch) receive(value); }).catch(error => {
         if (active && !clientClosed && seedEpoch === connectionEpoch) emitError(error instanceof Error ? error : new Error('Snapshot failed'));
       });
       return () => { active = false; snapshots.delete(receive); };

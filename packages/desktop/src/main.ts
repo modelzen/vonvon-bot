@@ -13,10 +13,10 @@ import { desktopUpdateConfiguration } from './update-configuration.js';
 import { createDaemonManager, StartHostRefusal } from './daemon-manager.js';
 import { createDaemonDependencies, prepareDesktopRoot } from './daemon-dependencies.js';
 import { desktopCliOptions, observeCli, registerCli } from './cli-registration.js';
+import { changeLoginItem, repairServiceAtStartup, type ServiceRuntime } from './login-item.js';
 import type { CommandResult, MachineReply } from '@vonvon/protocol';
 
 const restartDeadlineMs = 60_000;
-const serviceUnavailable = 'Vonvon Bot cannot manage an OS service in this version. Use vonvon daemon start and vonvon daemon stop.';
 
 export function desktopResources(appPath: string, packaged: boolean): DesktopResources {
   return packaged ? {
@@ -152,15 +152,19 @@ export async function startDesktop(): Promise<void> {
         quitting = true;
       },
     });
-    const managerDependencies = createDaemonDependencies({
-      root, home: homedir(), executable: process.execPath,
-      resources: process.resourcesPath, packaged: app.isPackaged,
-    });
+    const serviceRuntime: ServiceRuntime = {
+      platform: process.platform, packaged: app.isPackaged, root, home: homedir(),
+      executable: process.execPath, resources: process.resourcesPath,
+    };
+    const managerDependencies = createDaemonDependencies(serviceRuntime);
     const manager = createDaemonManager(managerDependencies);
     const cliOptions = desktopCliOptions({ platform: process.platform, executable: process.execPath,
       resources: process.resourcesPath, packaged: app.isPackaged });
     if (app.isPackaged && !process.env.VONVON_DESKTOP_TEST_HOME) await registerCli(cliOptions);
-    await manager.ensureReady(0);
+    // A moved or updated app points its service at itself first. If the desktop then cannot attach, that is the cause.
+    const repairNotice = await repairServiceAtStartup(serviceRuntime, managerDependencies);
+    try { await manager.ensureReady(0); }
+    catch (error) { throw repairNotice ? new Error(repairNotice) : error; }
     owner = await attachExisting(root);
     if (terminating) {
       await owner.dispose();
@@ -287,12 +291,20 @@ export async function startDesktop(): Promise<void> {
       return restart;
     }
 
-    async function guardedService(operation: () => Promise<MachineReply>): Promise<MachineReply> {
+    async function guardedService<T>(operation: () => Promise<T>): Promise<T> {
       if (starting || terminating || cleanupPromise) throw new StartHostRefusal('Desktop service operation is unavailable.');
       const run = operation().finally(() => { starting = undefined; });
       starting = run;
       return run;
     }
+
+    /** The bundled helper changes the service; the window expects the daemon to go and reattaches to its successor. */
+    const setLoginItem = (enabled: boolean, previous?: AttachedDaemon['identity'] | null): Promise<void> => guardedService(() =>
+      changeLoginItem(serviceRuntime, enabled, previous, {
+        readVerifiedDaemon: () => managerDependencies.readVerifiedDaemon(),
+        reattach: () => reattachReady(),
+        expectDisconnect: expected => { controlledDisconnect = expected; },
+      }));
 
     bridge = installBridge(owner, current, paths, {
       observeCli: () => observeCli(cliOptions),
@@ -316,15 +328,20 @@ export async function startDesktop(): Promise<void> {
         starting = run;
         return run;
       },
-      readLoginItem: async () => (await managerDependencies.readRegistration()).kind === 'ours',
       isExpectedDisconnect: () => controlledDisconnect,
-      setLoginItem: async () => { throw new StartHostRefusal(serviceUnavailable); },
-      service: action => guardedService(async () => {
-        if (action !== 'start') throw new StartHostRefusal(serviceUnavailable);
-        if ((await managerDependencies.readRegistration()).kind !== 'ours') throw new StartHostRefusal('Install the background service first.');
-        await reattachReady();
-        return { type: 'done', message: 'Background service started.' };
-      }),
+      setLoginItem,
+      service: async (action, previous) => {
+        if (action === 'install' || action === 'uninstall') {
+          await setLoginItem(action === 'install', previous);
+          return { type: 'done', message: action === 'install' ? '已打开登录时启动。' : '已关闭登录时启动。' };
+        }
+        return guardedService(async () => {
+          if (action === 'stop') throw new StartHostRefusal('桌面版还不能单独停止后台服务：在终端运行 vonvon daemon stop。');
+          if ((await managerDependencies.readRegistration()).kind !== 'ours') throw new StartHostRefusal('Install the background service first.');
+          await reattachReady();
+          return { type: 'done', message: 'Background service started.' };
+        });
+      },
       chooseExecutablePath: async () => {
         const result = await dialog.showOpenDialog(current, {
           title: 'Choose Codex executable',
@@ -366,6 +383,7 @@ export async function startDesktop(): Promise<void> {
       ] },
     ]));
     await current.loadFile(uiIndex);
+    if (repairNotice) void dialog.showMessageBox(current, { type: 'warning', title: 'Vonvon Bot', message: repairNotice, buttons: ['OK'] }).catch(() => {});
     if (focusWhenReady) show();
     if (quitWhenReady) requestQuit();
   } catch (error) {
