@@ -136,8 +136,8 @@ export function extractSendCardText(card: unknown): string {
   if (!card || typeof card !== 'object') return '';
   const c = card as Record<string, unknown>;
   const out: string[] = [];
-  const header = (c.header ?? localized(c.i18n_header)) as { title?: { content?: unknown } } | undefined;
-  push(out, header?.title?.content);
+  const header = (c.header ?? localized(c.i18n_header)) as { title?: unknown } | undefined;
+  push(out, textOf(header?.title));
   const body = c.body as { elements?: unknown; i18n_elements?: unknown } | undefined;
   sendElements(body?.elements ?? localized(body?.i18n_elements) ?? c.elements ?? localized(c.i18n_elements), out);
   return [...new Set(out)].join('\n');
@@ -148,6 +148,12 @@ function localized(v: unknown): unknown {
   if (!v || typeof v !== 'object') return undefined;
   const m = v as Record<string, unknown>;
   return m.zh_cn ?? m.zh_hk ?? m.zh_tw ?? m.en_us ?? Object.values(m)[0];
+}
+
+/** A text object's `content`, else one locale of its `i18n_content`. */
+function textOf(t: unknown): unknown {
+  const x = t && typeof t === 'object' ? (t as { content?: unknown; i18n_content?: unknown }) : undefined;
+  return typeof x?.content === 'string' && x.content.trim() ? x.content : localized(x?.i18n_content);
 }
 
 function push(out: string[], v: unknown): void {
@@ -171,12 +177,12 @@ function sendElements(els: unknown, out: string[]): void {
       case 'markdown':
       case 'plain_text':
       case 'lark_md':
-        if (e.text_size !== 'notation') push(out, e.content);
+        if (e.text_size !== 'notation') push(out, textOf(e));
         break;
       case 'div': {
-        const t = e.text as { content?: unknown; text_size?: unknown } | undefined;
-        if (t?.text_size !== 'notation') push(out, t?.content);
-        for (const f of Array.isArray(e.fields) ? e.fields : []) push(out, (f as { text?: { content?: unknown } } | null)?.text?.content);
+        const t = e.text as { text_size?: unknown } | undefined;
+        if (t?.text_size !== 'notation') push(out, textOf(t));
+        for (const f of Array.isArray(e.fields) ? e.fields : []) push(out, textOf((f as { text?: unknown } | null)?.text));
         break;
       }
       case 'column_set':

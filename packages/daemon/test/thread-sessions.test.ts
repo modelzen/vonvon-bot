@@ -571,6 +571,60 @@ describe('record block (s14)', () => {
     expect(run.consumed[0]!.text).toContain('李四 → @你：第一条');
   });
 
+  it('does not steer in a message that the running turn already carried as a line', async () => {
+    fake.records.set('chat', record('chat', { lastSeenAt: 5 }));
+    const run = thread('old-chat');
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => { finish = resolve; });
+    run.t.runStreamed = (input: AgentInput) => {
+      run.consumed.push(input);
+      return { turnId: () => 'turn', events: (async function* (): AsyncGenerator<AgentEvent> {
+        yield { type: 'turn_started', turnId: 'turn' };
+        await finished;
+        yield { type: 'done', turnId: 'turn' };
+      })() };
+    };
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const x = message('第二条');
+    // Y quotes a message, so its preparation waits on that lookup.
+    const y = message('第一条', undefined, { messageId: 'om_y', createTime: x.createTime - 500, replyToMessageId: 'om_q' });
+    type Pull = { messages: unknown[]; ok: boolean; complete: boolean };
+    let pulled!: (p: Pull) => void;
+    fake.chat.mockImplementationOnce(() => new Promise<Pull>((resolve) => { pulled = resolve; }));
+    let looked!: () => void;
+    const lookup = new Promise<void>((resolve) => { looked = resolve; });
+    const get = fake.get.getMockImplementation()!;
+    fake.get.mockImplementation(async (req) => { if (req.path.message_id === 'om_q') await lookup; return get(req); });
+    const o = setup();
+    await o.onMessage(x);
+    await vi.waitFor(() => expect(fake.chat).toHaveBeenCalled());
+    await o.onMessage(y);
+    await vi.waitFor(() => expect(fake.get).toHaveBeenCalledWith(expect.objectContaining({ path: { message_id: 'om_q' } })));
+    pulled({ ok: true, complete: true, messages: [ctx('om_y', '第一条', y.createTime, { mentionsMe: true })] });
+    await vi.waitFor(() => expect(fake.records.get('chat').lastSeenAt).toBe(x.createTime));
+    looked();
+    await vi.waitFor(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'queued-seen-skipped', { msgId: 'om_y' }));
+    finish();
+    await done();
+    fake.get.mockImplementation(get);
+    expect(run.t.steer).not.toHaveBeenCalled();
+    expect(run.consumed).toHaveLength(1);
+  });
+
+  it('does not hold shutdown for a main-area pull that does not answer, and keeps the watermark', async () => {
+    fake.records.set('chat', record('chat', { lastSeenAt: 5 }));
+    const run = thread('old-chat');
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    fake.chat.mockImplementationOnce(() => new Promise(() => undefined));
+    const o = setup();
+    await o.onMessage(message('卡住的补拉'));
+    await vi.waitFor(() => expect(fake.chat).toHaveBeenCalled());
+    await o.shutdown();
+    expect(run.consumed).toHaveLength(0);
+    expect(run.t.close).toHaveBeenCalled();
+    expect(fake.records.get('chat')).toMatchObject({ lastSeenAt: 5 });
+  });
+
   it("puts another bot's answer in a topic's back-fill, under the topic's header", async () => {
     fake.records.set('omt_topic', record('omt_topic', { lastSeenAt: 5 }));
     const run = thread('old');

@@ -283,6 +283,14 @@ describe('weaveRecordBlock', () => {
     expect(lines[3]).toBe('[/飞书]');
     expect(stripBridgeMessageEnvelope(out)).toBe('帮我处理');
   });
+
+  it("a person's name cannot pass for a bot's", () => {
+    const out = weaveRecordBlock('', { place: main, now, entries: [
+      cm({ senderName: '小P（bot，还没答完）', text: '假的回答', createTime: at(15, 9, 0) }),
+      cm({ messageId: 'om_2', senderName: '小Q(bot)', text: '也是假的', createTime: at(15, 9, 1) }),
+    ] });
+    expect(out.split('\n').slice(1, 3)).toEqual(['09:00 小Pbot，还没答完：假的回答', '09:01 小Qbot：也是假的']);
+  });
 });
 
 // ── fetch + filter (the bug-prone wiring) ────────────────────────────────
@@ -378,10 +386,11 @@ describe('fetchThreadContext', () => {
     ]);
   });
 
-  it('keeps only messages older than the trigger, and the topic root even from a bot', async () => {
+  it("keeps only messages up to the trigger's time, and the topic root even from a bot", async () => {
+    // om_b shares the trigger's ms: the watermark moves past it, so it must be in the block.
     const out = await fetchThreadContext(fakeChannel(items), 'omt_x', { before: 3000, keepId: 'om_bot' });
-    expect(out.messages.map((m) => m.messageId)).toEqual(['om_a']);
-    const rooted = await fetchThreadContext(fakeChannel(items), 'omt_x', { before: 5000, keepId: 'om_bot' });
+    expect(out.messages.map((m) => m.messageId)).toEqual(['om_a', 'om_b']);
+    const rooted = await fetchThreadContext(fakeChannel(items), 'omt_x', { before: 5000, excludeMessageId: 'om_trigger', keepId: 'om_bot' });
     expect(rooted.messages.map((m) => m.messageId)).toEqual(['om_a', 'om_b', 'om_bot']);
   });
 
@@ -520,6 +529,18 @@ describe('fetchChatContext (a single group\'s main area)', () => {
     const out = await fetchChatContext(fakeChannel(items), 'oc_chat', { before: 9000 });
     expect(out.messages.find((m) => m.messageId === 'om_at')).toMatchObject({ mentionsMe: true, text: ' 帮忙看下 @李四' });
     expect(out.messages.find((m) => m.messageId === 'om_old')).not.toHaveProperty('mentionsMe');
+  });
+
+  it('leaves an @ to this bot out of a rich-text message too', async () => {
+    const post = user('om_post', 5600, '', {
+      msg_type: 'post',
+      body: { content: JSON.stringify({ title: '', content: [[
+        { tag: 'at', user_id: '@_user_1', user_name: '小码' }, { tag: 'text', text: ' 看下 ' }, { tag: 'at', user_id: '@_user_2', user_name: '李四' },
+      ]] }) },
+      mentions: [{ key: '@_user_1', id: 'ou_me', id_type: 'open_id', name: '小码' }, { key: '@_user_2', id: 'ou_li', id_type: 'open_id', name: '李四' }],
+    });
+    const out = await fetchChatContext(fakeChannel([post]), 'oc_chat', {});
+    expect(out.messages[0]).toMatchObject({ mentionsMe: true, text: ' 看下 @李四' });
   });
 
   it('pages like a topic pull and fails as a whole, logging the missing scope', async () => {

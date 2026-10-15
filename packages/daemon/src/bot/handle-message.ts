@@ -860,6 +860,15 @@ export function createOrchestrator(
   const sema = new Semaphore(getMaxConcurrentRuns(cfg));
   let shuttingDown = false;
   let shutdownPromise: Promise<void> | undefined;
+  const onStop = new Set<() => void>();
+  /** `p`, or `fallback` once shutdown starts: shutdown does not wait on a back-fill's Feishu calls. */
+  function orStop<T>(p: Promise<T>, fallback: T): Promise<T> {
+    if (shuttingDown) return Promise.resolve(fallback);
+    let stop!: () => void;
+    const stopped = new Promise<T>((resolve) => { stop = () => resolve(fallback); });
+    onStop.add(stop);
+    return Promise.race([p, stopped]).finally(() => onStop.delete(stop));
+  }
   const acceptedTasks = new Set<Promise<unknown>>();
   const shutdownErrors = new Set<unknown>();
 
@@ -1583,6 +1592,8 @@ export function createOrchestrator(
     sessionKey: string, flat: boolean, project: Project | undefined, perm: TurnPerm, cur: ActiveState,
     extra?: TurnExtra,
   ): Promise<void> {
+    // Already a line of the running turn's record block (see ActiveState.woven): not steered in again.
+    if (wovenSkip(cur, msg)) return;
     if (!extra?.queueOnly && getPendingPolicy(cfg) === 'steer' && cur.run && cur.thread && cur.thread.supportsSteer !== false) {
       const tid = cur.run.turnId();
       if (tid) {
@@ -1623,6 +1634,13 @@ export function createOrchestrator(
       if (sessions.get(sessionKey) === cur.thread) sessions.delete(sessionKey);
     }
     startReservedRun(msg, woven.text, sessionKey, flat, project, perm, images, woven, text, undefined, extra);
+  }
+
+  /** Whether `msg` is a line of the record block `state`'s running turn carried (logged then). */
+  function wovenSkip(state: ActiveState, msg: NormalizedMessage): boolean {
+    if (!state.woven?.has(msg.messageId)) return false;
+    log.info('intake', 'queued-seen-skipped', { msgId: msg.messageId });
+    return true;
   }
 
   /** 🎯 goal 运行中收到消息的统一提示（goal 会话不入队，见 ActiveState.isGoal）。 */
@@ -1692,6 +1710,7 @@ export function createOrchestrator(
         extra.retry.busy();
         return;
       }
+      if (wovenSkip(existing, msg)) return;
       // A run appeared between handleTurn's check and here (we awaited an image
       // download) — queue onto it rather than launch a second turn. `text` is
       // already file-woven when preIngested (handleTurn's fall-through).
@@ -1759,7 +1778,9 @@ export function createOrchestrator(
         else if (!goal && flat && !msg.threadId) place = 'main';
         const pullFor = (opts: Pick<PullOpts, 'stopAt' | 'enough'>): Promise<ThreadPull> => {
           const o = { before: msg.createTime || undefined, excludeMessageId: msg.messageId, names, ...opts };
-          return topicId ? fetchThreadContext(channel, topicId, { ...o, keepId: msg.rootId }) : fetchChatContext(channel, msg.chatId, o);
+          // Cut short by a shutdown, it fails: the turn will not run (launchRun), and the watermark stays.
+          return orStop(topicId ? fetchThreadContext(channel, topicId, { ...o, keepId: msg.rootId }) : fetchChatContext(channel, msg.chatId, o),
+            { messages: [], ok: false, complete: false });
         };
         const historyP: Promise<ThreadPull | undefined> = place
           ? priorP.then((p) =>
@@ -1828,7 +1849,7 @@ export function createOrchestrator(
           if (codexEmpty && rootId && !history.some((m) => m.messageId === rootId)) {
             // The topic's first message is no longer re-quoted every turn, so a new
             // session gets it here once, even when the listing leaves it out.
-            const root = await fetchQuotedMessage(channel, rootId, names);
+            const root = await orStop(fetchQuotedMessage(channel, rootId, names), undefined);
             if (root) history = [root, ...history];
           }
           const kept = keepRecent(history, codexEmpty ? rootId : undefined, codexEmpty ? OPENING_MAX : BACKFILL_MAX);
@@ -4608,7 +4629,7 @@ export function createOrchestrator(
     reaction?: RunReaction,
     onTopicCreated?: () => void,
   ): Promise<void> {
-    if (shuttingDown) { await opts.thread.close(); return; }
+    if (shuttingDown) { reaction?.done(); await opts.thread.close(); return; }
     let activeKey = opts.knownThreadId ?? `pending:${opts.replyTo}`;
     let topicThreadId = opts.knownThreadId;
     // The turn's workspace: resolves relative image refs in the reply and is what
@@ -4628,6 +4649,7 @@ export function createOrchestrator(
     if (shuttingDown) {
       slot.release();
       active.delete(activeKey);
+      reaction?.done();
       await opts.thread.close();
       return;
     }
@@ -6200,6 +6222,7 @@ export function createOrchestrator(
   function shutdown(): Promise<void> {
     if (shutdownPromise) return shutdownPromise;
     shuttingDown = true;
+    for (const stop of onStop) stop();
     clearInterval(pendingGroupTimer);
     clearInterval(reaper);
     const cleanup: Promise<unknown>[] = [];

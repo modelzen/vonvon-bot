@@ -201,8 +201,9 @@ export interface PullOpts {
  *     reaches it; 0 means none (a fresh session's opening).
  *   - `enough`: also stop once this many are found (for an opening, where
  *     only the most recent ones are woven).
- *   - `before`: only messages older than this (the trigger's createTime), so a
- *     message that arrives as its own turn later is not woven twice.
+ *   - `before`: only messages up to this (the trigger's createTime), so a
+ *     message that arrives as its own turn later is not woven twice; one in
+ *     the same ms is kept, as the watermark moving to the trigger covers it.
  * This bot's own replies, system notices, deleted, empty and
  * `excludeMessageId` messages are dropped, except `keepId` (the topic's first
  * message, kept even when this bot sent it). Other bots stay. Own replies are
@@ -289,7 +290,7 @@ async function pullContext(channel: LarkChannel, c: Container, opts: PullOpts): 
           (kind !== 'self' || m.messageId === opts.keepId) && // the bot's own replies (see above)
           !(c.type === 'chat' && it.thread_id && it.root_id && it.root_id !== it.message_id) && // a topic reply
           m.messageId !== opts.excludeMessageId && // drop the triggering @ message
-          (!opts.before || m.createTime < opts.before) &&
+          (!opts.before || m.createTime <= opts.before) && // the trigger's own ms too: the watermark covers it
           m.text.trim().length > 0
         ) {
           found.push(m);
@@ -365,12 +366,11 @@ function toContextMessage(item: RawMsgItem, me: Me, names?: NameBook): ContextMe
   // An @ to this bot becomes the line's "→ @你"; its token is left out of the text.
   const mine = me.openId ? (item.mentions ?? []).filter((m) => m.id === me.openId) : [];
   const others = item.mentions?.filter((m) => !mine.includes(m));
-  let text = extractMessageText(item.msg_type, item.body?.content, others);
-  for (const m of mine) if (m.key) text = text.split(m.key).join('');
+  const drop = mine.map((m) => m.key).filter((k): k is string => Boolean(k));
   return {
     messageId: item.message_id ?? '',
     senderName: name,
-    text,
+    text: extractMessageText(item.msg_type, item.body?.content, others, drop),
     from: kindOf(item.sender, me) ?? 'bot',
     senderId: senderIdOf(item.sender),
     createTime: Number(item.create_time) || 0,
@@ -386,12 +386,14 @@ function toContextMessage(item: RawMsgItem, me: Me, names?: NameBook): ContextMe
  * words (with @mentions resolved to names); everything else collapses to a short
  * placeholder (`[图片]`, `[文件：a.log]`, …) so codex knows something was there
  * without us trying to render it. Exported for testing — the body shapes are the
- * bug-prone part. Returned text is NOT yet sanitized (caller's job).
+ * bug-prone part. Returned text is NOT yet sanitized (caller's job). The
+ * mentions keyed in `drop` (this bot's) are left out.
  */
 export function extractMessageText(
   msgType: string | undefined,
   content: string | undefined,
   mentions?: { key?: string; name?: string }[],
+  drop: string[] = [],
 ): string {
   if (!content) return placeholderFor(msgType);
   let parsed: unknown;
@@ -402,9 +404,9 @@ export function extractMessageText(
   }
   switch (msgType) {
     case 'text':
-      return replaceMentions((parsed as { text?: string } | null)?.text ?? '', mentions);
+      return replaceMentions(drop.reduce((t, k) => t.split(k).join(''), (parsed as { text?: string } | null)?.text ?? ''), mentions);
     case 'post':
-      return replaceMentions(extractPostText(parsed), mentions);
+      return replaceMentions(extractPostText(parsed, drop), mentions);
     case 'image':
       return '[图片]';
     case 'audio':
@@ -437,7 +439,7 @@ function placeholderFor(msgType: string | undefined): string {
 
 /** Pull text out of a `post` (rich-text) body — both the direct
  * `{title, content:[[node]]}` shape and the locale-wrapped `{zh_cn:{...}}` one. */
-function extractPostText(parsed: unknown): string {
+function extractPostText(parsed: unknown, drop: string[]): string {
   if (!parsed || typeof parsed !== 'object') return '';
   const obj = parsed as Record<string, unknown>;
   let title = obj.title;
@@ -456,7 +458,8 @@ function extractPostText(parsed: unknown): string {
   if (Array.isArray(blocks)) {
     for (const line of blocks) {
       if (!Array.isArray(line)) continue;
-      const lineText = line.map(nodeToText).join('');
+      // A post's at node carries the mention key as its user_id.
+      const lineText = line.filter((n) => !drop.includes((n as { user_id?: string } | null)?.user_id ?? '')).map(nodeToText).join('');
       if (lineText) parts.push(lineText);
     }
   }
@@ -697,7 +700,8 @@ function recordLine(m: ContextMessage, now: number): string {
   if (!body) return '';
   const at = clockOf(m.createTime, now);
   if (m.from === 'self') return `${at} 你：${body}`;
-  const who = label(m.senderName, 40) || '某人';
+  // Without parentheses, a person's name cannot pass for "名字（bot）".
+  const who = label(m.senderName.replace(/[（）()]/g, ''), 40) || '某人';
   if (m.from === 'bot') return `${at} ${who}（bot${m.streaming ? '，还没答完' : ''}）：${body}`;
   return `${at} ${who}${m.mentionsMe ? ' → @你' : ''}：${body}`;
 }

@@ -66,8 +66,8 @@ describe('翻页拉到水位为止 ≡ 整个话题全拉（同样的本地过�
     expect(await delta(items, { lastSeenAt: 2000, seen: [{ id: 'om_2', at: 2000 }, { id: 'om_4', at: 4000 }] })).toEqual(['om_3', 'om_5', 'om_6']);
   });
 
-  it('只带比触发消息早的', async () => {
-    expect(await delta(items, { lastSeenAt: 1000 }, 5000)).toEqual(['om_2', 'om_3', 'om_4']);
+  it('只带不晚于触发消息的（同一毫秒的也带，触发消息本身按 id 去掉）', async () => {
+    expect(await delta(items, { lastSeenAt: 1000 }, 5000)).toEqual(['om_2', 'om_3', 'om_4', 'om_5']);
   });
 
   it('补拉失败后从 0 重来：整个话题都没见过，送过的除外', async () => {

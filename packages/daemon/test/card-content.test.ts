@@ -186,6 +186,15 @@ describe('extractSendCardText', () => {
     expect(extractSendCardText({ i18n_elements: { en_us: [{ tag: 'markdown', content: 'hello' }], zh_cn: [{ tag: 'markdown', content: '你好' }] } })).toBe('你好');
   });
 
+  it('reads i18n_content where a title or a text has no content', () => {
+    expect(extractSendCardText({ schema: '2.0',
+      header: { title: { tag: 'plain_text', i18n_content: { en_us: 'Title', zh_cn: '标题' } } },
+      body: { elements: [
+        { tag: 'markdown', i18n_content: { en_us: 'Body', zh_cn: '正文' } },
+        { tag: 'div', text: { tag: 'plain_text', i18n_content: { zh_cn: '一行' } } },
+      ] } })).toBe('标题\n正文\n一行');
+  });
+
   it('yields nothing for an empty or unreadable card', () => {
     expect(extractSendCardText({ schema: '2.0', body: { elements: [{ tag: 'img' }] } })).toBe('');
     expect(extractSendCardText(null)).toBe('');
