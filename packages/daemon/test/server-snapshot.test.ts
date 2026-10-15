@@ -141,7 +141,7 @@ describe('login-time service field (s08)', () => {
     await vi.waitFor(() => expect(store.current().application.service?.blocked).toBe(blocked));
   });
   it('has no service field where there is no manager', async () => {
-    const store = await createSnapshotStore({ service: { listBots: async () => [], listProjects: async () => [] }, jobs: () => [], publish: () => {}, readTools: async () => [], readService: async () => ({ supported: false, installed: false, running: false }), distribution: async () => npm });
+    const store = await createSnapshotStore({ service: { listBots: async () => [], listProjects: async () => [] }, jobs: () => [], publish: () => {}, readTools: async () => [], readService: noManager, distribution: async () => npm });
     stores.push(store);
     await store.refreshService();
     expect(store.current().application.service).toBeUndefined();

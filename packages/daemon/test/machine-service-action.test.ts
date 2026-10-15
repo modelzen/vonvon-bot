@@ -144,11 +144,9 @@ it.each([
 
 it('a helper that cannot start leaves a failed report and frees the slot', async () => {
   const m = await machine();
-  const outcome = await m.call({ type: 'service', action: 'install' });
-  if (outcome.kind !== 'shutdown') throw new Error('Expected a shutdown outcome');
-  outcome.afterReply();
-  m.children[0]?.emit('error', new Error('spawn ENOENT'));
-  m.children[0]?.emit('exit', -2, null);
+  const child = await started(m);
+  child.emit('error', new Error('spawn ENOENT'));
+  child.emit('exit', -2, null);
   await vi.waitFor(() => expect(m.onSettled).toHaveBeenCalledOnce());
   expect(readServiceActionRecord(m.root)).toEqual({ pid: process.pid, action: 'install', phase: 'done', ok: false, kind: 'install_refused', reason: 'other', detail: 'Could not start vonvon service install: spawn ENOENT', startedAt: 1000, finishedAt: 1000 });
   expect(m.launcher.current()).toBeUndefined();

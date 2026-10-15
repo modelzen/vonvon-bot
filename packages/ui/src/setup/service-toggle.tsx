@@ -1,5 +1,5 @@
 import {ConnectionError, type VonvonClient} from '@vonvon/client/browser';
-import {recentServiceFailure, serviceStep, type DesktopSnapshot} from '@vonvon/protocol';
+import {recentServiceFailure, serviceActionStartedMessage, serviceStep, type DesktopSnapshot} from '@vonvon/protocol';
 import type {ShellCapabilities} from '../client-context';
 import {SettingsRow} from '../reference/components/system-settings';
 import {Toggle} from '../reference/components/ui';
@@ -17,14 +17,15 @@ export async function toggleService(enabled: boolean, client: ServiceClient, she
     await shell.setLoginItem(enabled);
     return enabled ? '已打开登录时启动。' : '已关闭登录时启动。bot 改成单独启动的 daemon，这样崩溃后不会自动重启。';
   }
+  const action = enabled ? 'install' : 'uninstall';
   try {
-    const reply = await client.machine({type: 'service', action: enabled ? 'install' : 'uninstall'});
+    const reply = await client.machine({type: 'service', action});
     if (reply.type === 'done') return reply.message;
   } catch (error) {
     // The daemon replies before its helper stops it, so losing the connection here is the handover.
     if (!(error instanceof ConnectionError)) throw error;
   }
-  return enabled ? '正在打开登录时启动，页面会断开几秒。' : '正在关闭登录时启动，页面会断开几秒。';
+  return serviceActionStartedMessage(action);
 }
 
 /** 跳过: the daemon the page talks to is already a detached one, so there is nothing to start. */

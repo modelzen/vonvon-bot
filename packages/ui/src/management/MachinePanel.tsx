@@ -83,7 +83,7 @@ export function MachinePanel({request, agents, reveal}: {request: MachineRequest
 
     <SettingsGroup id={settingAnchor('后台服务')} label="后台服务" footer="打开「登录电脑时启动」后，daemon 跑在后台服务里，退出桌面后仍运行。">
       <SettingsRow title="系统服务" description={service ? service.detail ?? service.platformName : '正在读取服务状态…'}
-        value={service ? service.state ? SERVICE_STATE_TEXT[service.state] : `${service.installed ? '已安装' : '未安装'} · ${service.running ? '运行中' : '已停止'}` : undefined} />
+        value={service && (service.state ? SERVICE_STATE_TEXT[service.state] : `${service.installed ? '已安装' : '未安装'} · ${service.running ? '运行中' : '已停止'}`)} />
       <SettingsRow title="服务运行" description={!shell?.service ? '桌面版提供；命令行：vonvon daemon start / stop。' : '已安装的服务可单独启动或停止。'}
         trailing={<span className="settings-inline-actions">
           <Button size="sm" disabled={busy || !shell?.service || serviceDisabled('start')} onClick={() => setConfirm({type: 'service', action: 'start'})}>启动已安装服务</Button>

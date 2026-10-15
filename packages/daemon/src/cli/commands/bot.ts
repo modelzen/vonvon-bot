@@ -29,8 +29,9 @@ function stepLines(step: SetupStep): string[] {
   // A finished step's buttons (取消勾选, 检查登录) are not a next step, unless a warning still points at one.
   if (step.done && !step.warnings?.length) return out;
   for (const action of step.actions) {
-    out.push(action.kind === 'open' ? `    ${action.label}：${action.url}`
-      : action.kind === 'serviceInstall' ? '    运行 vonvon service install' : `    在网页里点「${action.label}」（vonvon open）`);
+    if (action.kind === 'open') out.push(`    ${action.label}：${action.url}`);
+    else if (action.kind === 'serviceInstall') out.push('    运行 vonvon service install');
+    else out.push(`    在网页里点「${action.label}」（vonvon open）`);
   }
   return out;
 }

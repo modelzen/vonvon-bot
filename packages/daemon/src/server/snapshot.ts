@@ -138,10 +138,10 @@ export async function createSnapshotStore(options: {
   tools = await readTools();
   await rebuild();
   // Not awaited: launchctl may take up to 30 s just after login, and the API should listen first.
-  void readService().then(status => { observeService(status); if (!closed) return rebuild(); }).catch(() => undefined);
+  void refreshService().catch(() => undefined);
   void (options.distribution ?? runtimeDistribution)().then(distribution => {
-    blocked = isTranslocated(process.execPath) || isTranslocated(distribution.cliPath) ? 'translocated'
-      : distribution.kind === 'development' || distribution.kind === 'unknown' ? 'development' : undefined;
+    if (isTranslocated(process.execPath) || isTranslocated(distribution.cliPath)) blocked = 'translocated';
+    else if (distribution.kind === 'development' || distribution.kind === 'unknown') blocked = 'development';
     if (blocked && !closed) return rebuild();
   }).catch(() => undefined);
   const poll = setInterval(() => { void rebuild().catch(() => undefined); }, 5_000);

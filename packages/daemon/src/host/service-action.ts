@@ -56,10 +56,10 @@ export function createServiceActionLauncher(options: {
       const notStarted = (error: unknown): void => failed(`Could not start vonvon service ${action}: ${error instanceof Error ? error.message : String(error)}`);
       // A helper that fails before writing its result (it lost the service mutex, or crashed) would let the switch flip
       // back without a word. Its own running record means the transaction began; another helper's live run shows itself.
-      const exited = (pid: number | undefined, code: number | null, signal: NodeJS.Signals | null): void => {
+      const exited = (code: number | null, signal: NodeJS.Signals | null): void => {
         if (failing) return;
         const record = readServiceActionRecord(root);
-        const own = record !== null && record.pid === pid;
+        const own = record !== null && record.pid === reserved.pid;
         if (code === 0 || (own ? record.phase === 'done' : liveServiceActionRecord(root, now())?.phase === 'running')) { settle(); return; }
         failed(`vonvon service ${action} exited with ${code === null ? signal : `code ${code}`} before writing its result; see daemon.log`, own);
       };
@@ -83,7 +83,7 @@ export function createServiceActionLauncher(options: {
             // The helper outlives this daemon on purpose: install and uninstall both stop it.
             child.unref();
             child.once('error', notStarted);
-            child.once('exit', (code, signal) => exited(child.pid, code, signal));
+            child.once('exit', exited);
           } catch (error) { notStarted(error); }
         },
       };

@@ -1,4 +1,4 @@
-import type { MachineRequest, MachineReply } from '@vonvon/protocol';
+import { serviceActionStartedMessage, type MachineRequest, type MachineReply } from '@vonvon/protocol';
 import type { AdminService } from '../../admin/service';
 import type { ShutdownControl } from '../../host/lifecycle';
 import { controlDesktopService } from '../../host/service';
@@ -41,7 +41,7 @@ export async function machineRpc(service: AdminService, control: ShutdownControl
       // start and stop stay with the desktop shell and the terminal.
       if (!services || (request.action !== 'install' && request.action !== 'uninstall')) return unsupported();
       const helper = services.launcher.reserve(request.action);
-      const message = request.action === 'install' ? '正在打开登录时启动，页面会断开几秒。' : '正在关闭登录时启动，页面会断开几秒。';
+      const message = serviceActionStartedMessage(request.action);
       // The helper stops this daemon, so the reply goes out first.
       return { kind: 'shutdown', reply: () => ({ type: 'done', message }), afterReply: helper.start, cancel: helper.cancel };
     }

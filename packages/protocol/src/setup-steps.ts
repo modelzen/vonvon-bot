@@ -176,6 +176,9 @@ export function recentServiceFailure(service: ApplicationService | undefined, no
   return now - (action.finishedAt ?? action.startedAt) < SERVICE_FAILURE_SHOWN_FOR ? serviceActionMessage(action) : undefined;
 }
 
+/** The daemon's reply to the web page's switch, which the page also shows when the connection drops first. */
+export const serviceActionStartedMessage = (action: ServiceActionReport['action']): string =>
+  action === 'install' ? '正在打开登录时启动，页面会断开几秒。' : '正在关闭登录时启动，页面会断开几秒。';
 export const SERVICE_BUSY_MESSAGE = '另一个后台服务操作正在进行，等它结束再试。';
 /** Section 1.5: a running service has another definition, e.g. after the app moved or the PATH changed. */
 export const SERVICE_REPLACE_RUNNING_MESSAGE = '后台服务正在用另一份定义运行（比如 app 换过位置或版本）。重新打开 Vonvon Bot 会自动更新；或者在终端运行 vonvon daemon stop 后再打开这个开关。';
