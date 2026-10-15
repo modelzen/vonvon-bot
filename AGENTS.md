@@ -5,7 +5,7 @@
 ## 分工
 
 - JP-VPS 上的 Claude Code 负责 v1 的设计、实现、独立审查、测试和合入。它写 `docs/product.md` 和 `docs/v1-plan.md`，写产品代码和测试，在 JP-VPS 上跑构建、typecheck、lint、定向测试和无头网页界面检查。飞书一侧的行为也在 JP-VPS 上自测：用 lark-cli 以 owner 的用户身份、只在测试群里做，改设置用 `vonvon` 命令行。每个里程碑的验收，不需要 Mac 的步骤由 Claude 先在 JP-VPS 上做完，见 `docs/v1-plan.md` 第 7 节。重命令一律加 `flock /tmp/vonvon-heavy.lock`。全量测试交给 CI 的 Linux 和 macOS 任务。Claude 是唯一的合入入口。
-- Mac 上的 Codex 做 Claude 做不到的桌面事项：Mac 上的网页端连 Mac 上的 daemon，真实 macOS 窗口、托盘、菜单、登录项和系统权限弹窗，飞书客户端里卡片的实际显示，真实 Codex provider 的运行，用 Mac 钥匙串签名打包预览版。短检查和预览版由 Claude 经 Paseo 发起；长的、需要人来判断的验收交给 owner。公证和对外发布由 owner 在发布前决定谁来做。
+- Mac 上的 Codex 做 Claude 做不到的桌面事项：Mac 上的网页端连 Mac 上的 daemon，真实 macOS 窗口、托盘、菜单、登录项和系统权限弹窗，真实 Codex provider 的运行，用 Mac 钥匙串签名打包预览版。短检查和预览版由 Claude 经 Paseo 发起；长的、需要人来判断的验收交给 owner。公证和对外发布由 owner 在发布前决定谁来做。
 - Codex 可以改代码，按下面两种情况提交：
   - Claude 发起的 Mac 检查里发现问题，Codex 直接修，在被检查的 `claude/*` 分支上 commit 和 push，不 force-push，不 rebase。回复里写清改了什么、为什么改和提交号。回复之后 Codex 不再 push 这个分支。
   - owner 在 Mac 上验收已合入的预览版时发现问题，Codex 从 `main` 开 `codex/fix-<问题>` 分支和自己的 PR，不 push 到任何 `claude/*` 分支。`codex/fix-*` 分支只有 Codex push。开这个 PR 的 Codex 会话和它的 Mac worktree 留到 PR 合入或关闭。Claude 审查发现问题时，把发现写进 PR 评论，再经 Paseo 通知这个会话去修；会话已经不在了，Claude 新建一个修复会话（见"工具和同步"）。2026-10-14 之前开的 `codex/*` PR 是旧桌面版的参考栈，不是修复 PR。
@@ -52,9 +52,9 @@
   - 预览版会话，标题 `Mac 预览版 <里程碑名>`。Codex 从 `main` pull，在 Mac 本机构建；先用隔离的数据目录查 Mac 上的网页端连 Mac 上的 daemon，有问题就停下回复，不打包，不 push；过了再用真实 `HOME` 下的钥匙串签名，装到本机给 owner 验收。
   - 修复会话，标题 `Mac 修复 PR #<号>`。只在开 `codex/fix-*` PR 的会话已经不在、审查又发现问题时新建。Codex pull 这个分支，按 PR 评论修，push。
 - 三种会话都按下面的规则跑：
-  - 模式用 `auto`，不用 `full-access`；
+  - 模式用 `full-access`（owner 2026-10-15）。改文件、跑命令、联网都不再发申请，Computer Use 和 MCP 的权限申请也自动同意。已经用 `auto` 开着的会话，用 `paseo agent mode --host <Mac 的 daemon> <会话 id> full-access` 切过去；
   - 隔离的 `HOME`、`VONVON_HOME`、userData 和 `VONVON_DESKTOP_TEST_HOME` 只写在启动被测应用或测试的那一条命令前面，例如 `HOME=<临时目录> VONVON_HOME=<临时目录>/vonvon npm test`，不 export。git、gh 和签名命令不带这些变量，用 Mac 上的正常账号和钥匙串。不碰 owner 在用的 bridge 和数据；
-  - `auto` 模式拦住了 push、签名或打开应用时，Codex 停下并在回复里写明，不改成 `full-access`；
+  - 没有申请拦着，范围靠提示管。Claude 的提示写明这次用哪些隔离目录、哪些不碰：owner 的 bridge 和它的数据、owner 的飞书客户端；owner 的 `~/.vonvon-bot` 和 `com.vonvon.bot.daemon` 只有预览版会话能碰，因为它要替换并检查装好的 app。Codex 只做这次检查或预览版要的事，要做提示以外的事就停下，在回复里写明；
   - Mac 锁屏时 Computer Use 会失败（getpaseo/paseo#3346）。遇到就停下，不重试，回复第一行写"卡住了："，由 Claude 通知 owner；
   - Codex 用文字回复结果，Claude 把结论贴进 PR。做完删除 worktree，归档会话。
 - 对方会话正在运行时不发 `paseo send`，因为它默认会打断对方当前的回合。
