@@ -12,7 +12,7 @@ import './setup.css';
 
 const SERVICE_FOOTER: Partial<Record<DesktopSnapshot['application']['platform'], string>> = {
   macos: '装成 macOS 的后台服务（LaunchAgent）。',
-  linux: '装成 systemd 用户服务，在终端运行 vonvon service install。',
+  linux: 'systemd 用户服务。退出 SSH 后也要在线，安装时打开 linger。',
 };
 
 /** A step's detail, its items as code chips, its warnings and its commands; undefined when it has none, so the row stays plain. */

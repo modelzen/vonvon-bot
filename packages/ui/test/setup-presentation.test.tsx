@@ -268,6 +268,6 @@ it('shows the Linux group between the tools and the service, with commands in a 
   expect(html.indexOf('Linux 上的权限档')).toBeLessThan(html.indexOf('后台运行'));
   expect(html).toContain('1. Claude 的权限档');
   expect(html).toContain('<pre class="setup-step-commands">sudo apt install bubblewrap</pre>');
-  expect(html).toContain('装成 systemd 用户服务，在终端运行 vonvon service install。');
+  expect(html).toContain('systemd 用户服务。退出 SSH 后也要在线，安装时打开 linger。');
   expect(html).not.toContain('Codex 的权限档');
 });
