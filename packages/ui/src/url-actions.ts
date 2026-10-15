@@ -70,8 +70,9 @@ export async function copyAuthorizationUrl(value: string, kind: "registration" |
 export function copyShortcut(platform = typeof navigator === "undefined" ? "" : navigator.platform || navigator.userAgent): string {
   return /mac|iphone|ipad|ipod/i.test(platform) ? "⌘C" : "Ctrl+C";
 }
-export const copyFeedback = (outcome: CopyOutcome, shortcut = copyShortcut()): string =>
-  outcome === "copied" ? "已复制" : `已选中链接，按 ${shortcut} 复制`;
+export function copyFeedback(outcome: CopyOutcome, shortcut = copyShortcut()): string {
+  return outcome === "copied" ? "已复制" : `已选中链接，按 ${shortcut} 复制`;
+}
 
 export function groupUrl(groupId: string, threadId?: string): string {
   const group = encodeURIComponent(groupId);

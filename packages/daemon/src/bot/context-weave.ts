@@ -26,7 +26,7 @@ import { scopeDenial, type FeishuErrorBody } from '../utils/feishu-error';
  * lark-cli needed. Reading history needs `im:message:readonly` (required since
  * v1, see config/scopes.ts); an app that hasn't been granted it gets Feishu's
  * 99991672 rejection, which the thread pull logs as a structured
- * `thread-context-failed` warning naming the scope (see utils/feishu-error `scopeDenial`).
+ * `thread-context-failed` warning naming the scope (see {@link scopeDenial}).
  * Every fetch is best-effort: a deleted message, a missing scope, or a timeout
  * is logged and skipped, never thrown — a missing block must not break the turn.
  *

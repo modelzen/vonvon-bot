@@ -6,7 +6,9 @@ import {Dialog} from '../reference/components/ui/Dialog';
  * real Feishu group), so leaving only offers 继续编辑 and 放弃并离开. */
 type Draft = {title: string; save?: () => Promise<boolean>; discard: () => void};
 /** 保存并离开 is offered only when every open draft can be saved. */
-export const canSaveAll = (drafts: Iterable<Pick<Draft, 'save'>>): boolean => [...drafts].every(draft => draft.save);
+export function canSaveAll(drafts: Iterable<Pick<Draft, 'save'>>): boolean {
+  return [...drafts].every(draft => Boolean(draft.save));
+}
 type Guard = {
   register: (id: string, draft: Draft) => () => void;
   navigate: (action: () => void) => void;

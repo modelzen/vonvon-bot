@@ -5,6 +5,7 @@ import {SettingsGroup, SettingsRow} from '../reference/components/system-setting
 import {Button, StatusBadge} from '../reference/components/ui';
 import {openExternalUrl} from '../url-actions';
 import {scopeStep, type StepTone} from './setupPresentation';
+import {stepDescription} from './SetupChecklist';
 import './setup.css';
 
 /** Faster than the checklist (10 s): the user is waiting on this one screen. */
@@ -68,14 +69,6 @@ export function grantView(read: ScopeRead, opened: boolean): GrantView {
   return {...base, status: step.status, tone: step.tone, done: false, detail: step.detail, items: step.items, note: opened ? PUBLISH_NOTE : undefined};
 }
 
-function ScopeDescription({view}: {view: GrantView}) {
-  return <>
-    {view.detail}
-    {view.items?.length ? <span className="setup-step-items">{view.items.map(item => <code key={item}>{item}</code>)}</span> : null}
-    {view.warnings?.map(warning => <span key={warning} className="setup-step-warning">{warning}</span>)}
-  </>;
-}
-
 /** Step 2 of 注册 Bot: the bot exists, now grant its Feishu scopes. Events, callback and publishing stay on the checklist. */
 export function GrantStep({agentId, onOpenChecklist, onDone}: {agentId: AgentId; onOpenChecklist: () => void; onDone: () => void}) {
   const shell = useShellCapabilities();
@@ -91,7 +84,7 @@ export function GrantStep({agentId, onOpenChecklist, onDone}: {agentId: AgentId;
   return <>
     <p>机器人已注册。下一步：一键开权限，在飞书开发者后台确认预选好的权限。</p>
     <SettingsGroup label="第 2 步 · 开权限">
-      <SettingsRow title="权限" description={view.detail || view.items?.length || view.warnings?.length ? <ScopeDescription view={view}/> : undefined}
+      <SettingsRow title="权限" description={stepDescription(view)}
         trailing={<span className="setup-step-trailing">
           <StatusBadge tone={view.tone} variant="pill">{view.status}</StatusBadge>
           {view.grantUrl && (!view.done || view.warnings?.length) ? <Button size="sm" variant={view.done ? 'secondary' : 'primary'} onClick={() => { if (view.grantUrl) void grant(view.grantUrl); }}>一键开权限</Button> : null}

@@ -8,6 +8,16 @@ import {botSteps, toolSteps, type SetupStep, type StepAction} from './setupPrese
 import {useSetupStatus} from './useSetupStatus';
 import './setup.css';
 
+/** A step's detail, its items as code chips and its warnings; undefined when it has none, so the row stays plain. */
+export function stepDescription({detail, items, warnings}: Pick<SetupStep, 'detail' | 'items' | 'warnings'>): ReactNode {
+  if (!detail && !items?.length && !warnings?.length) return undefined;
+  return <>
+    {detail}
+    {items?.length ? <span className="setup-step-items">{items.map(item => <code key={item}>{item}</code>)}</span> : null}
+    {warnings?.map(warning => <span key={warning} className="setup-step-warning">{warning}</span>)}
+  </>;
+}
+
 export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEnvironment, onNotice, codexJobs}: {
   snapshot: DesktopSnapshot; ready: boolean; busy: boolean;
   run: (command: Command) => Promise<CommandResult>;
@@ -60,11 +70,7 @@ export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEn
   }
   function stepRow(step: SetupStep, index: number, agentId?: AgentId) {
     return <SettingsRow key={step.id} title={`${index + 1}. ${step.title}`}
-      description={step.detail || step.items?.length || step.warnings?.length ? <>
-        {step.detail}
-        {step.items?.length ? <span className="setup-step-items">{step.items.map(item => <code key={item}>{item}</code>)}</span> : null}
-        {step.warnings?.map(warning => <span key={warning} className="setup-step-warning">{warning}</span>)}
-      </> : undefined}
+      description={stepDescription(step)}
       trailing={<span className="setup-step-trailing">
         <StatusBadge tone={step.tone} variant="pill">{step.status}</StatusBadge>
         {step.actions.map(action => <Button key={action.kind + action.label} size="sm"

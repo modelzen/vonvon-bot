@@ -1,5 +1,5 @@
 /** Feishu OpenAPI error code for "the app lacks a scope this call needs" (same on every endpoint). */
-export const SCOPE_DENIED_CODE = 99991672;
+const SCOPE_DENIED_CODE = 99991672;
 
 /** Feishu's error body, as thrown by the SDK (axios `response.data`) or returned with a non-zero code. */
 export interface FeishuErrorBody {
