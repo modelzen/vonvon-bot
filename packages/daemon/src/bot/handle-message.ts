@@ -461,6 +461,18 @@ function runFailureMessage(err: unknown, dropped: number): string {
   return dropped > 0 ? `${error}\n\n⚠️ ${dropped} 条排队消息未执行，请重发。` : error;
 }
 
+/** Why a location's stored session couldn't be continued (see resolveThread). */
+export type RecreateReason = 'resume-failed' | 'cwd-changed';
+
+/** The run-card line for a forced session change: never switch sessions
+ * silently (product.md 3.5). A topic re-weaves its recent messages into the new
+ * session; the main area has nothing to re-weave. */
+export function sessionChangeNotice(reason: RecreateReason, topic: boolean): string {
+  const why = reason === 'cwd-changed' ? '本群的工作目录改了' : '原来的会话接不上了（恢复失败）';
+  const carried = topic ? '，话题里最近的消息已重新带上' : '';
+  return `⚠️ ${why}，这一轮起换了一条新会话，之前的对话记不得${carried}。`;
+}
+
 interface ActiveState {
   steerReply?: { run: AgentRun; accept: (messageId: string, voice?: VoiceReply) => boolean };
   /** Captured with the steer target so a late ACK cannot decorate another turn. */
@@ -542,8 +554,9 @@ export interface Orchestrator {
  *                               /model opens the model/effort picker for it.
  *
  * Group kinds (project.kind): 'multi' (default) = a topic per session, keyed by
- * threadId (the flow above); 'single' = the whole group is one session keyed by
- * chatId, replies quote the message (no topic, runs serialize). 免@ (noMention,
+ * threadId (the flow above); 'single' = the main area is one session keyed by
+ * chatId, replies quote the message (no topic, runs serialize). A topic someone
+ * opens in a single group is its own session keyed by threadId, like multi. 免@ (noMention,
  * default on) lets non-@ messages run too — multi only inside a topic, single
  * whole-group (needs the im:message.group_msg scope). @bot /settings toggles it.
  */
@@ -1016,10 +1029,13 @@ export function createOrchestrator(
     // Explicit slash COMMANDS above still take priority (clear, leading intent).
     const goalObjective = parseGoalTrigger(text);
 
-    // Single-session group: the whole group is one session keyed by chatId. No
+    // Single-session group: the main area is one session keyed by chatId. No
     // topics — reply by quoting (引用回复); runs serialize per chatId (active[chatId]).
     // Commands: /settings (群设置) + /model. /resume has no topic list here.
-    if ((project?.kind ?? 'multi') === 'single') {
+    // A topic opened in the group (msg.threadId) falls through to the topic path
+    // below and gets its own session (product.md 3.5); an old topic that used to
+    // share the chat session starts fresh from its next message, nothing migrated.
+    if ((project?.kind ?? 'multi') === 'single' && !msg.threadId) {
       if (cmd === 'help') {
         await postHelpCard(msg, 'single', false, project);
         return;
@@ -1064,7 +1080,7 @@ export function createOrchestrator(
       return;
     }
 
-    // Multi (default): inside a topic → a turn in that session. /settings +
+    // Inside a topic (multi, or a topic in a single group) → a turn in that session. /settings +
     // /resume aren't topic-scoped — redirect to the main area instead of feeding
     // them to codex as a normal turn (烧一轮还无人能懂).
     if (msg.threadId) {
@@ -1082,7 +1098,7 @@ export function createOrchestrator(
         await channel
           .send(
             msg.chatId,
-            { markdown: '`/clear` 仅单会话群可用。多话题群里，回主群区 @我 + 内容 即开新话题；`/resume` 可恢复历史会话。' },
+            { markdown: '话题里不换会话。要新的会话，就开一个新话题；`/resume` 请到主群区使用。' },
             { replyTo: msg.messageId, replyInThread: true },
           )
           .catch(() => undefined);
@@ -1521,7 +1537,7 @@ export function createOrchestrator(
                 : fetchThreadContext(channel, topicId, { excludeMessageId: msg.messageId }),
             )
           : Promise.resolve([]);
-        const [images, ingested, { thread: resolved, recreated }, prior, specHistory] = await Promise.all([
+        const [images, ingested, { thread: resolved, recreated, reason: recreateReason }, prior, specHistory] = await Promise.all([
           imagesP,
           ingestP,
           resolveP,
@@ -1666,7 +1682,9 @@ export function createOrchestrator(
           titleJobKey,
           titleSource,
           timing: { tResolve: tResolveDone - tIntake, tWeave: Date.now() - tIntake },
+          ...(recreateReason ? { sessionNotice: sessionChangeNotice(recreateReason, Boolean(topicId)) } : {}),
         };
+        if (recreateReason) log.info('agent', 'session-changed', { sessionKey, reason: recreateReason });
         if (goal) await trackRun(launchGoalRun(launchOpts));
         else await trackRun(launchRun(launchOpts, reaction));
       } catch (err) {
@@ -1690,15 +1708,18 @@ export function createOrchestrator(
    * eviction the fast-path below would silently keep a 'full' thread running
    * after the admin switched to read-only.
    *
-   * Returns `recreated: true` ONLY when a resume FAILED and we fell back to a
-   * brand-new codex thread — its history is empty, so the caller re-feeds full
-   * topic context (not just the delta). A `undefined` thread means "never seen"
-   * (caller starts + persists it fresh). */
+   * Returns `recreated: true` ONLY when the stored session can't be continued:
+   * the resume FAILED and we fell back to a brand-new codex thread (`reason:
+   * 'resume-failed'`), or the project's cwd changed and the caller must start
+   * one in the new directory (`thread: undefined`, `reason: 'cwd-changed'`).
+   * Either way the history is empty, so the caller re-feeds full topic context
+   * (not just the delta) and tells the user on the run card. Otherwise an
+   * `undefined` thread means "never seen" (caller starts + persists it fresh). */
   async function resolveThread(
     threadId: string,
     chatId: string,
     perm?: { mode?: PermissionMode; network?: boolean; autoCompact?: boolean },
-  ): Promise<{ thread: AgentThread | undefined; recreated: boolean }> {
+  ): Promise<{ thread: AgentThread | undefined; recreated: boolean; reason?: RecreateReason }> {
     const live = sessions.get(threadId);
     if (live) {
       if (live.isAlive()) return { thread: live, recreated: false };
@@ -1715,7 +1736,7 @@ export function createOrchestrator(
     // later must not strand existing sessions on the wrong runtime; the project
     // is still consulted for cwd / tier defaults on the recreate path below.
     const project = await getProjectByChatId(chatId);
-    if (project && rec.cwd !== project.cwd) return { thread: undefined, recreated: true };
+    if (project && rec.cwd !== project.cwd) return { thread: undefined, recreated: true, reason: 'cwd-changed' };
     const be = backendFor(rec.backend);
     try {
       const resumed = await be.resumeThread({
@@ -1749,7 +1770,7 @@ export function createOrchestrator(
       await patchSession(threadId, { sessionId: fresh.sessionId }).catch(() => undefined);
       // 自愈观测：resume 失败已重建全新线程（codex 历史为空，调用方会回灌话题上文）。
       log.info('agent', 'resume-recreate', { threadId, sessionId: fresh.sessionId, backend: be.id });
-      return { thread: fresh, recreated: true };
+      return { thread: fresh, recreated: true, reason: 'resume-failed' };
     }
   }
 
@@ -4112,6 +4133,9 @@ export function createOrchestrator(
      * tResolve = resolveThread/startThread settled, tWeave = 编织完成（含话题
      * 上文投机拉取），both measured from intake start (M-1 observability). */
     timing?: { tResolve: number; tWeave: number };
+    /** Shown on the FIRST turn's card when this location was forced onto a new
+     * session (resume failed or the cwd changed), see {@link sessionChangeNotice}. */
+    sessionNotice?: string;
   }
 
   /** The queue placeholder card's CardKit entity, handed to the run for in-place
@@ -4321,6 +4345,7 @@ export function createOrchestrator(
     // intake durations ride the FIRST turn's stream.timing line only (M-1)
     let intake = opts.timing;
     let firstRec = opts.firstRec;
+    let sessionNotice = opts.sessionNotice; // first turn's card only
     try {
       let currentTurn: QueuedTurn = {
         input: { text: opts.firstText, images: opts.images },
@@ -4375,7 +4400,9 @@ export function createOrchestrator(
           ...(modelDisp !== 'off' && turnModel
             ? { model: turnModel, effort: turnEffort, modelOnTerminal: modelDisp === 'always' }
             : {}),
+          ...(sessionNotice ? { sessionNotice } : {}),
         };
+        sessionNotice = undefined;
 
         const adoptThreadId = async (messageId: string): Promise<void> => {
           if (activeKey.startsWith('pending:')) {
@@ -4481,7 +4508,7 @@ export function createOrchestrator(
           const nextStartedAt = Date.now();
           const next: RunCardState = {
             ...rc, rs: runSegment(nextBoundary, nextBoundary, nextStartedAt),
-            cardKey: undefined, continued: false, localFiles: undefined, images: undefined,
+            cardKey: undefined, continued: false, localFiles: undefined, images: undefined, sessionNotice: undefined,
             voiceMessages: event.voice ? [event.voice] : [],
           };
           let nextId: string;
@@ -4998,6 +5025,7 @@ export function createOrchestrator(
       promoteCard(ctx.cardMsgId, ctx.rc);
     };
 
+    let goalNotice = opts.sessionNotice; // first turn's card only
     /** Begin a turn's render context WITHOUT sending a card yet. */
     const startTurn = (): GoalTurnCtx => {
       const render = new RunRender();
@@ -5011,7 +5039,9 @@ export function createOrchestrator(
         ...(goalModelDisp !== 'off' && opts.model
           ? { model: opts.model, effort: opts.effort, modelOnTerminal: goalModelDisp === 'always' }
           : {}),
+        ...(goalNotice ? { sessionNotice: goalNotice } : {}),
       };
+      goalNotice = undefined;
       return { render, rc, stream: null, cardMsgId: null };
     };
 
@@ -5558,7 +5588,10 @@ export function createOrchestrator(
       if (!rec) return;
       const project = await getProjectByChatId(rec.chatId);
       if (!isChatAllowed(cfg, rec.chatId) || !isUserAllowedInProject(cfg, project, op)) return;
-      const flat = (project?.kind ?? 'multi') === 'single';
+      // Flat only for a single group's main-area session (keyed by chatId); a
+      // topic in a single group is its own session and continues in the topic.
+      const baseKey = sessionKey.replace(/#(admin|guest)$/, '');
+      const flat = (project?.kind ?? 'multi') === 'single' && baseKey === rec.chatId;
       // 合成一条等价的「继续」消息复用整条消息管线（steer/queue/goal 提示全部
       // 生效）：replyTo 指向被点的终态卡，⏳/🫳 生命周期表情也落在卡上作回执；
       // sessionKey 用卡片自己的会话键（含 #role 后缀），续的就是这张卡的会话。
@@ -5573,7 +5606,7 @@ export function createOrchestrator(
         mentions: [],
         mentionAll: false,
         mentionedBot: true,
-        threadId: flat ? undefined : sessionKey.replace(/#(admin|guest)$/, ''),
+        threadId: flat ? undefined : baseKey,
         createTime: Date.now(),
       };
       log.info('intake', 'reaction-continue', { key: sessionKey, op: op.slice(-6) });
