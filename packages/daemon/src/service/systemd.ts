@@ -251,6 +251,7 @@ export function createSystemdService(options: { root: string }, overrides: Parti
       if (d.now() >= deadline) break;
       await d.pause(50);
     } while (d.now() < deadline);
+    if (stale) throw new Error(`Daemon PID ${stale.pid} could not be verified and no daemon replaced it; readiness timed out.`);
     throw new Error('Daemon readiness timed out');
   }
   return {

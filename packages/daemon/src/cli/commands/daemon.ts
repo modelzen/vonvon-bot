@@ -106,7 +106,11 @@ export async function runStart(port = 0): Promise<DaemonStatus> {
     }
     if (child.exitCode !== null || child.signalCode !== null) {
       exitedAt ??= Date.now();
-      if (Date.now() - exitedAt > 1000) throw new Error(`Daemon exited before readiness. Check ${join(paths.appDir, 'daemon.log')}.`);
+      if (Date.now() - exitedAt > 1000) {
+        // The child lost the host mutex to an owner we could not verify; it may have become ready since.
+        if (lock && unverified && lock.pid === unverified.pid && lock.listen) return checkedStatus();
+        throw new Error(`Daemon exited before readiness. Check ${join(paths.appDir, 'daemon.log')}.`);
+      }
     }
     await pause(50);
   }
