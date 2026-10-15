@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { extname, isAbsolute, join, relative, sep } from 'node:path';
 import { paths } from '../../config/paths';
 import { spawnProcess, spawnProcessSync } from '../../platform/spawn';
+import { binChildEnv } from '../../platform/tool-path';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -54,6 +55,11 @@ function locateBin(home: string, root: string, env: NodeJS.ProcessEnv, blockLega
     const versions = readdirSync(nvm).filter(version => /^v\d+\.\d+\.\d+$/.test(version)).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
     directories.push(...versions.map(version => join(nvm, version, 'bin')));
   } catch {}
+  // ChatGPT.app ships its own codex (a prerelease build). It comes last, so a codex
+  // the user installed is preferred, as in their terminal.
+  if (process.platform === 'darwin') {
+    directories.push('/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin', join(home, 'Applications/ChatGPT.app/Contents/Resources/codex-cli/bin'));
+  }
   for (const directory of directories) {
     for (const candidate of execCandidates(directory, 'codex', env)) {
       if (existsSync(candidate)) return candidate;
@@ -107,7 +113,7 @@ export function codexVersion(bin: string, opts?: { force?: boolean }): string | 
   let out: string | null;
   try {
     // cross-spawn so a Windows `.cmd` shim runs (avoids execFile EINVAL).
-    const res = spawnProcessSync(bin, ['--version'], { encoding: 'utf8' });
+    const res = spawnProcessSync(bin, ['--version'], { encoding: 'utf8', env: binChildEnv(bin) });
     out = res.status === 0 && typeof res.stdout === 'string' ? res.stdout.trim() : null;
   } catch {
     out = null;
@@ -128,7 +134,7 @@ export async function codexVersionAsync(bin: string, opts?: { force?: boolean })
     let child;
     try {
       // 同 codexVersion：cross-spawn 跑 Windows `.cmd` shim（裸 execFile 会 EINVAL）。
-      child = spawnProcess(bin, ['--version'], { stdio: ['ignore', 'pipe', 'ignore'] });
+      child = spawnProcess(bin, ['--version'], { stdio: ['ignore', 'pipe', 'ignore'], env: binChildEnv(bin) });
     } catch {
       resolve(null);
       return;

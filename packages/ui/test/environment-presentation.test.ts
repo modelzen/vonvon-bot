@@ -61,3 +61,14 @@ test("only the matching Codex Host is folded into a present CLI row", () => {
   assert.deepEqual(groupAgentBackends([], entries), { otherBackends: entries });
   assert.deepEqual(groupAgentBackends([installed], [{ ...codexHost, depKind: "other" }, sdk]).otherBackends.map((entry) => entry.id), ["codex-appserver", "claude-agent"]);
 });
+
+test("Codex version status: too old asks for an update, newer than verified is noted", () => {
+  const codex = { ...installed, updateAvailable: false, compatibility: { status: "tooOld", minimum: "0.139.0", verified: "0.156.1" } } satisfies EnvironmentToolState;
+  const old = presentTool(codex, { kind: "auth", tool: "codex", state: "signedIn", message: "已授权" });
+  assert.deepEqual([old.action, old.status, old.tone], ["update", "版本太旧", "warning"]);
+  assert.match(old.summary, /太旧，最低要 0\.139\.0/);
+  const newer = presentTool({ ...codex, compatibility: { ...codex.compatibility, status: "newer" } }, { kind: "auth", tool: "codex", state: "signedIn", message: "已授权" });
+  assert.deepEqual([newer.action, newer.status], ["none", "已授权"]);
+  assert.match(newer.summary, /比验证过的 0\.156\.1 新/);
+  assert.doesNotMatch(presentTool({ ...codex, compatibility: { ...codex.compatibility, status: "ok" } }, undefined).summary, /验证过|太旧/);
+});

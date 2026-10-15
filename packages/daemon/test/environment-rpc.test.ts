@@ -47,6 +47,23 @@ async function waitUntil(check: () => Promise<boolean>) {
 }
 
 describe('daemon environment operations', () => {
+  it.skipIf(process.platform === 'win32')('runs an nvm-style codex from its own directory and reports its version status', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'vonvon-environment-nvm-')); dirs.push(dir);
+    const nvm = join(dir, 'nvm-bin');
+    await import('node:fs/promises').then(fs => fs.mkdir(nvm));
+    await import('node:fs/promises').then(fs => fs.symlink(process.execPath, join(nvm, 'vonvon-fixture-node')));
+    const codex = join(nvm, 'codex');
+    await writeFile(codex, "#!/usr/bin/env vonvon-fixture-node\nprocess.stdout.write('codex-cli 0.162.1');\n", { mode: 0o700 });
+    await import('node:fs/promises').then(fs => fs.mkdir(join(dir, 'bin')));
+    const nodePath = await fixtureNode(join(dir, 'bin'));
+    const environment = new EnvironmentService({ home: dir, getDataRoot: () => dir, resolveCodex: () => codex, nodePath, path: join(dir, 'bin'), fetchLatest: async () => null, npmPath: join(dir, 'missing-npm') });
+    try {
+      expect(await environment.run({ type: 'scan' })).toMatchObject({ kind: 'tools', tools: expect.arrayContaining([expect.objectContaining({
+        tool: 'codex', version: '0.162.1', compatibility: { status: 'newer', minimum: '0.139.0', verified: '0.156.1' },
+      })]) });
+    } finally { await environment.close(); }
+  }, processTestTimeout);
+
   it('scans, reads auth, and handles lark profiles with fake local tool', async () => {
     const f = await fixture();
     try {
