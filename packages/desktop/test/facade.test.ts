@@ -276,20 +276,20 @@ describe('synchronous desktop facade', () => {
   });
 });
 
-it('updates login registration at the same daemon revision without accepting stale seeds or older events', async () => {
+it('delivers each daemon revision once: the login item changes only with the daemon\'s snapshot', async () => {
   const h = harness();
   let seed!: (value: unknown) => void;
   h.replies.set(desktopChannels.snapshot, () => new Promise(resolve => { seed = resolve; }));
   const { client } = createDesktopFacades(h.transport);
-  const seen: boolean[] = [];
-  client.watchSnapshots(value => seen.push(value.application.loginItem));
+  const seen: Array<[number, boolean]> = [];
+  client.watchSnapshots(value => seen.push([value.revision, value.application.loginItem]));
   const value = snapshot(3);
   h.event({ type: 'snapshot', value });
   h.event({ type: 'snapshot', value: { ...value, application: { ...value.application, loginItem: true } } });
   seed({ ok: true, value });
   await Promise.resolve(); await Promise.resolve();
   h.event({ type: 'snapshot', value: snapshot(2) });
-  expect(seen).toEqual([false, true]);
-  h.event({ type: 'snapshot', value });
-  expect(seen).toEqual([false, true, false]);
+  const next = snapshot(4);
+  h.event({ type: 'snapshot', value: { ...next, application: { ...next.application, loginItem: true } } });
+  expect(seen).toEqual([[3, false], [4, true]]);
 });

@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { paths } from '../config/paths';
 import { runtimeDistribution, type Distribution } from './distribution';
 import { serviceTarget } from './identity';
-import { readDefinitionBytes, type Registration } from './registration';
+import { isIrreplaceableDefinition, readDefinitionBytes, type Registration } from './registration';
 import { serviceStderrPath, serviceStdoutPath, type ServiceState, type ServiceStatus } from './common';
 import type { LaunchdTransactionOutcome } from './launchd';
 
@@ -33,7 +33,7 @@ export function serviceStatus(o: Observed): ServiceStatus {
   const { registration: r, manager: m } = o;
   const state = ((): [ServiceState, string] => {
     if (m.kind === 'unknown') return ['unknown', `Cannot ask ${o.platformName}: ${m.detail}`];
-    if (r.kind === 'unrecognized') return ['conflict', /regular file/.test(r.reason)
+    if (r.kind === 'unrecognized') return ['conflict', isIrreplaceableDefinition(r.reason)
       ? `The service definition is a symlink or directory (${r.reason}). Remove it by hand.`
       : `The service definition is not in the format this version writes (${r.reason}). Run vonvon service install to rewrite it.`];
     if (r.kind === 'other-root') return ['conflict', `The service belongs to another data directory, ${r.recordedRoot}.`];

@@ -13,10 +13,11 @@ import { desktopUpdateConfiguration } from './update-configuration.js';
 import { createDaemonManager, StartHostRefusal } from './daemon-manager.js';
 import { createDaemonDependencies, prepareDesktopRoot } from './daemon-dependencies.js';
 import { desktopCliOptions, observeCli, registerCli } from './cli-registration.js';
+import { liveServiceActionRecord } from '../../daemon/src/service/action-report.js';
+import { changeLoginItem, followServiceHelper, repairServiceAtStartup, type LoginItemHooks, type ServiceRuntime } from './login-item.js';
 import type { CommandResult, MachineReply } from '@vonvon/protocol';
 
 const restartDeadlineMs = 60_000;
-const serviceUnavailable = 'Vonvon Bot cannot manage an OS service in this version. Use vonvon daemon start and vonvon daemon stop.';
 
 export function desktopResources(appPath: string, packaged: boolean): DesktopResources {
   return packaged ? {
@@ -152,15 +153,19 @@ export async function startDesktop(): Promise<void> {
         quitting = true;
       },
     });
-    const managerDependencies = createDaemonDependencies({
-      root, home: homedir(), executable: process.execPath,
-      resources: process.resourcesPath, packaged: app.isPackaged,
-    });
+    const serviceRuntime: ServiceRuntime = {
+      platform: process.platform, packaged: app.isPackaged, root, home: homedir(),
+      executable: process.execPath, resources: process.resourcesPath,
+    };
+    const managerDependencies = createDaemonDependencies(serviceRuntime);
     const manager = createDaemonManager(managerDependencies);
     const cliOptions = desktopCliOptions({ platform: process.platform, executable: process.execPath,
       resources: process.resourcesPath, packaged: app.isPackaged });
     if (app.isPackaged && !process.env.VONVON_DESKTOP_TEST_HOME) await registerCli(cliOptions);
-    await manager.ensureReady(0);
+    // A moved or updated app points its service at itself first. If the desktop then cannot attach, that is the cause.
+    const repairNotice = await repairServiceAtStartup(serviceRuntime, managerDependencies);
+    try { await manager.ensureReady(0); }
+    catch (error) { throw repairNotice ? new Error(repairNotice) : error; }
     owner = await attachExisting(root);
     if (terminating) {
       await owner.dispose();
@@ -287,11 +292,45 @@ export async function startDesktop(): Promise<void> {
       return restart;
     }
 
-    async function guardedService(operation: () => Promise<MachineReply>): Promise<MachineReply> {
+    async function guardedService<T>(operation: () => Promise<T>): Promise<T> {
       if (starting || terminating || cleanupPromise) throw new StartHostRefusal('Desktop service operation is unavailable.');
       const run = operation().finally(() => { starting = undefined; });
       starting = run;
       return run;
+    }
+
+    const loginItemHooks: LoginItemHooks = {
+      readVerifiedDaemon: () => managerDependencies.readVerifiedDaemon(),
+      reattach: () => reattachReady(),
+      expectDisconnect: expected => { controlledDisconnect = expected; },
+      cancelled: () => terminating || cleanupPromise !== undefined || !bridge,
+    };
+
+    /** The bundled helper changes the service; the window expects the daemon to go and reattaches to its successor. */
+    function setLoginItem(enabled: boolean, previous?: AttachedDaemon['identity'] | null): Promise<void> {
+      return guardedService(() => changeLoginItem(serviceRuntime, enabled, previous, loginItemHooks));
+    }
+
+    /** The web UI's or a terminal's helper took the daemon away: the window follows it as it follows its own switch. */
+    function followForeignHelper(lost: AttachedDaemon['identity']): boolean {
+      if (starting || terminating || cleanupPromise || !bridge || liveServiceActionRecord(root)?.phase !== 'running') return false;
+      controlledDisconnect = true;
+      void guardedService(() => followServiceHelper(serviceRuntime, lost, loginItemHooks)).catch(() => {
+        controlledDisconnect = false;
+        showConnectionLost();
+      });
+      return true;
+    }
+
+    function showConnectionLost(): void {
+      if (connectionFailureShown || terminating) return;
+      connectionFailureShown = true;
+      dialog.showMessageBoxSync(current, {
+        type: 'error',
+        title: 'Vonvon Bot connection lost',
+        message: 'The daemon connection was lost. Check the daemon, then start it again in Vonvon Bot.',
+        buttons: ['OK'],
+      });
     }
 
     bridge = installBridge(owner, current, paths, {
@@ -316,15 +355,21 @@ export async function startDesktop(): Promise<void> {
         starting = run;
         return run;
       },
-      readLoginItem: async () => (await managerDependencies.readRegistration()).kind === 'ours',
       isExpectedDisconnect: () => controlledDisconnect,
-      setLoginItem: async () => { throw new StartHostRefusal(serviceUnavailable); },
-      service: action => guardedService(async () => {
-        if (action !== 'start') throw new StartHostRefusal(serviceUnavailable);
-        if ((await managerDependencies.readRegistration()).kind !== 'ours') throw new StartHostRefusal('Install the background service first.');
-        await reattachReady();
-        return { type: 'done', message: 'Background service started.' };
-      }),
+      followServiceHelper: followForeignHelper,
+      setLoginItem,
+      service: async (action, previous) => {
+        if (action === 'install' || action === 'uninstall') {
+          await setLoginItem(action === 'install', previous);
+          return { type: 'done', message: action === 'install' ? '已打开登录时启动。' : '已关闭登录时启动。' };
+        }
+        return guardedService(async () => {
+          if (action === 'stop') throw new StartHostRefusal('桌面版还不能单独停止后台服务：在终端运行 vonvon daemon stop。');
+          if ((await managerDependencies.readRegistration()).kind !== 'ours') throw new StartHostRefusal('Install the background service first.');
+          await reattachReady();
+          return { type: 'done', message: 'Background service started.' };
+        });
+      },
       chooseExecutablePath: async () => {
         const result = await dialog.showOpenDialog(current, {
           title: 'Choose Codex executable',
@@ -347,16 +392,7 @@ export async function startDesktop(): Promise<void> {
       },
       hide: () => current.hide(),
       confirmQuit,
-      connectionLost: () => {
-        if (connectionFailureShown || terminating) return;
-        connectionFailureShown = true;
-        dialog.showMessageBoxSync(current, {
-          type: 'error',
-          title: 'Vonvon Bot connection lost',
-          message: 'The daemon connection was lost. Check the daemon, then start it again in Vonvon Bot.',
-          buttons: ['OK'],
-        });
-      },
+      connectionLost: showConnectionLost,
     });
     tray = createDesktopTray(icon, show, requestQuit);
     Menu.setApplicationMenu(Menu.buildFromTemplate([
@@ -366,6 +402,7 @@ export async function startDesktop(): Promise<void> {
       ] },
     ]));
     await current.loadFile(uiIndex);
+    if (repairNotice) void dialog.showMessageBox(current, { type: 'warning', title: 'Vonvon Bot', message: repairNotice, buttons: ['OK'] }).catch(() => {});
     if (focusWhenReady) show();
     if (quitWhenReady) requestQuit();
   } catch (error) {
