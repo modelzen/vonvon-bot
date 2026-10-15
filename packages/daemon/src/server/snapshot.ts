@@ -35,17 +35,13 @@ export async function createSnapshotStore(options: {
   let refreshing: Promise<void> | undefined;
   let closed = false;
   const readTools = options.readTools ?? (async (): Promise<ToolState[]> => {
-    const claudeBackend = createBackend('claude-agent');
     const [codex, claude] = await Promise.all([
       options.service.codexSetup?.().catch(() => undefined),
-      claudeBackend.doctor({ force: true }).catch(() => undefined),
+      createBackend('claude-agent').doctor({ force: true }).catch(() => undefined),
     ]);
-    // The login probe starts the Claude CLI, so the snapshot shows the last answer
-    // and refreshes itself once a new one differs.
+    // Only the last answer: the probe starts a ~250 MB Claude CLI, and this runs every
+    // 60 s even when no window is open. The 本机环境 page and 检查登录 probe.
     const login = claude?.ok ? cachedClaudeLogin() : undefined;
-    if (claude?.ok) void claudeBackend.loginStatus?.().then(next => {
-      if (next.state !== login?.state || next.message !== login?.message) void refreshTools().catch(() => undefined);
-    }).catch(() => undefined);
     const claudeMessage = login?.message ?? claude?.hint;
     return [
       { tool: 'codex', installation: codex?.installation ?? 'unknown', authentication: codex?.authentication ?? 'unknown', version: codex?.version ?? null, ...(codex?.message ? { message: codex.message } : {}) },
