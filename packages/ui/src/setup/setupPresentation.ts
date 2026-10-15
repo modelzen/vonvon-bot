@@ -29,7 +29,9 @@ export function botSteps(agent: Agent, status: AdminSetupStatus | undefined, pro
   const steps: SetupStep[] = [
     status.credentials.ok
       ? {id: 'credentials', title: '飞书应用', status: '凭据有效', tone: 'success', done: true, actions: []}
-      : {id: 'credentials', title: '飞书应用', status: '凭据无效', tone: 'danger', done: false, detail: status.credentials.reason ?? '读不到这个 Bot 的凭据。', actions: [{kind: 'reauthorize', label: '重新授权'}]},
+      : status.credentials.unreachable
+        ? {id: 'credentials', title: '飞书应用', status: '无法确认', tone: 'neutral', done: false, detail: `连不上飞书，凭据还没检测：${status.credentials.reason ?? '未知原因'}。网络恢复后会自动重试。`, actions: []}
+        : {id: 'credentials', title: '飞书应用', status: '凭据无效', tone: 'danger', done: false, detail: status.credentials.reason ?? '读不到这个 Bot 的凭据。', actions: [{kind: 'reauthorize', label: '重新授权'}]},
     missingScopes === undefined
       ? {id: 'scopes', title: '权限', status: '无法确认', tone: 'neutral', done: false, detail: '暂时读不到已开通的权限。可以直接一键开权限，开过的不会重复申请。', actions: [{kind: 'open', label: '一键开权限', url: status.scopes.grantUrl, target: 'app-console'}]}
       : missingScopes.length
@@ -41,19 +43,19 @@ export function botSteps(agent: Agent, status: AdminSetupStatus | undefined, pro
       : event.state === 'missing'
         ? {id: 'event', title: '事件订阅', status: '缺少接收消息事件', tone: 'warning', done: false, detail: '在事件设置里选"使用长连接接收事件"，添加"接收消息"（im.message.receive_v1），再发布一个新版本。', actions: [eventSettings]}
         : event.state === 'unpublished'
-          ? {id: 'event', title: '事件订阅', status: '发布后才能确认', tone: 'neutral', done: false, detail: '在事件设置里选"使用长连接接收事件"，添加"接收消息"（im.message.receive_v1）。发布版本后这里会自动确认。', actions: [eventSettings]}
+          ? {id: 'event', title: '事件订阅', status: '上线后才能确认', tone: 'neutral', done: false, detail: '在事件设置里选"使用长连接接收事件"，添加"接收消息"（im.message.receive_v1）。版本上线后这里会自动确认。', actions: [eventSettings]}
           : {id: 'event', title: '事件订阅', status: '无法确认', tone: 'neutral', done: false, detail: event.reason, actions: [eventSettings]},
     status.cardCallback.confirmed
       ? {id: 'callback', title: '卡片回调', status: '已勾选', tone: 'success', done: true, actions: [{kind: 'confirmCallback', label: '取消勾选', confirmed: false}]}
       : {id: 'callback', title: '卡片回调', status: '请手动确认', tone: 'neutral', done: false, detail: '飞书没有接口能查这一项。在"事件与回调"的回调配置里，同样选长连接，添加"卡片回传交互"（card.action.trigger），配好后勾上。', actions: [eventSettings, {kind: 'confirmCallback', label: '我已配置', confirmed: true}]},
     event.state === 'unpublished'
-      ? {id: 'publish', title: '发布', status: '还没发布过版本', tone: 'warning', done: false, detail: '在开发者后台的"版本管理与发布"里创建并发布一个版本。改过权限、事件或回调后，也要再发布一次。', actions: [{kind: 'open', label: '打开开发者后台', url: status.consoleUrl, target: 'app-console'}]}
+      ? {id: 'publish', title: '发布', status: '还没有上线的版本', tone: 'warning', done: false, detail: '在开发者后台的"版本管理与发布"里创建并发布一个版本；已经提交的，等管理员审核通过后这里会变绿。改过权限、事件或回调后，也要再发布一次。', actions: [{kind: 'open', label: '打开开发者后台', url: status.consoleUrl, target: 'app-console'}]}
       : event.state === 'unchecked'
         ? {id: 'publish', title: '发布', status: '无法确认', tone: 'neutral', done: false, detail: event.reason, actions: [{kind: 'open', label: '打开开发者后台', url: status.consoleUrl, target: 'app-console'}]}
         : {id: 'publish', title: '发布', status: event.version ? `已发布 ${event.version}` : '已发布', tone: 'success', done: true, actions: []},
   ];
-  // Without a token Feishu answers nothing, so the later reads would only repeat step 1's error.
-  if (status.credentials.ok) return steps;
+  // Rejected credentials get no token, so the later reads would only repeat step 1's error.
+  if (status.credentials.ok || status.credentials.unreachable) return steps;
   return steps.map(step => step.id === 'scopes' || step.id === 'event' || step.id === 'publish'
     ? {...step, status: '等第 1 步', tone: 'neutral', done: false, detail: '飞书应用的凭据有效后才能检测。', items: undefined}
     : step);

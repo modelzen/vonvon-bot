@@ -53,7 +53,7 @@ export type AdminHostDoctor = z.infer<typeof adminHostDoctorSchema>;
 
 export const adminSetupStatusSchema = z.object({
   appId: z.string(), tenant: z.enum(["feishu", "lark"]), botName: z.string().optional(),
-  credentials: z.object({ ok: z.boolean(), reason: z.string().optional() }),
+  credentials: z.object({ ok: z.boolean(), reason: z.string().optional(), unreachable: z.boolean().optional() }),
   connection: z.object({ running: z.boolean(), connection: z.string().optional() }),
   event: eventDiagnosisSchema,
   scopes: z.object({ missingRequired: z.array(z.string()).optional(), grantUrl: z.string() }),

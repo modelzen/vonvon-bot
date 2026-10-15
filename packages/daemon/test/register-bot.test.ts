@@ -104,6 +104,16 @@ describe('registerBotFromCredentials · 校验', () => {
     const reg = await loadBots();
     expect(reg.bots.find((b) => b.appId === 'cli_badbad99')).toBeUndefined();
   });
+
+  it('连不上飞书时说网络问题，不让人去核对密钥', async () => {
+    const offline = vi.fn(async () => ({ ok: false as const, reason: '飞书接口 10 秒没有响应', unreachable: true }));
+    const r = await registerBotFromCredentials(
+      { appId: 'cli_offline99', appSecret: 'fine', tenant: 'feishu', ownerOpenId: 'ou_scanner' },
+      offline,
+    );
+    expect(r).toMatchObject({ ok: false, code: 'credential_rejected', reason: '连不上飞书，凭据还没校验：飞书接口 10 秒没有响应。请检查网络后重试。' });
+    expect(await getSecret(secretKeyForApp('cli_offline99'))).toBeUndefined();
+  });
 });
 
 describe('registerBotFromCredentials · 注册落盘', () => {

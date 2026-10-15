@@ -48,4 +48,24 @@ describe('snapshot commit queue', () => {
     expect(store.current().tools[0]).toMatchObject({ tool: 'codex', version: 'codex-cli 0.120.0', compatibility: { status: 'tooOld', minimum: '0.139.0' } });
     expect(store.current().tools[1]).toMatchObject({ tool: 'claude', installation: 'missing' });
   });
+
+  it('reads tools once more when asked during a read, so a fresh login is not lost', async () => {
+    let reads = 0;
+    let release: (() => void) | undefined;
+    const store = await createSnapshotStore({ service: { listBots: async () => [], listProjects: async () => [] }, jobs: () => [], publish: () => {}, readTools: async () => {
+      reads++;
+      const version = String(reads);
+      if (reads === 2) await new Promise<void>(resolve => { release = resolve; });
+      return [{ tool: 'claude', installation: 'installed', authentication: reads >= 3 ? 'signedIn' : 'unknown', version }];
+    } });
+    stores.push(store);
+    const inFlight = store.refreshTools();
+    const afterLogin = store.refreshTools();
+    const another = store.refreshTools();
+    expect(afterLogin).toBe(another);
+    release?.();
+    await Promise.all([inFlight, afterLogin]);
+    expect(reads).toBe(3);
+    expect(store.current().tools[0]).toMatchObject({ authentication: 'signedIn', version: '3' });
+  });
 });

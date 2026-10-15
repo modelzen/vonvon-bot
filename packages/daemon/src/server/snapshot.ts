@@ -34,6 +34,7 @@ export async function createSnapshotStore(options: {
   const diagnostics = new Map<string, Diagnostic[]>();
   let queue = Promise.resolve();
   let refreshing: Promise<void> | undefined;
+  let followUp: Promise<void> | undefined;
   let closed = false;
   const readTools = options.readTools ?? (async (): Promise<ToolState[]> => {
     const [codex, claude] = await Promise.all([
@@ -74,7 +75,10 @@ export async function createSnapshotStore(options: {
   }
   function refreshTools(): Promise<void> {
     if (closed) return Promise.resolve();
-    refreshing ??= readTools().then(async values => {
+    // A read already running may have looked before the caller's change (a login check
+    // that just finished), so callers during it share one more read after it.
+    if (refreshing) return followUp ??= refreshing.catch(() => undefined).then(() => { followUp = undefined; return refreshTools(); });
+    refreshing = readTools().then(async values => {
       tools = values;
       if (!closed) await rebuild();
     }).finally(() => { refreshing = undefined; });

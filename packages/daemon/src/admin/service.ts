@@ -341,7 +341,7 @@ export interface AdminSetupStatus {
   tenant: 'feishu' | 'lark';
   botName?: string;
   /** ① 密钥有效（tenant_access_token 探活）；undefined = 该 bot 配置缺失，没法探。 */
-  credentials: { ok: boolean; reason?: string };
+  credentials: { ok: boolean; reason?: string; unreachable?: boolean };
   /** ② bridge 长连接在线状态：running（进程在跑吗）+ connection（真实 WS，仅 daemon 内有）。 */
   connection: { running: boolean; connection?: string };
   /** ③ 事件订阅三态诊断（复用 M-7 event-diagnosis）。 */
@@ -786,6 +786,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
         validateAppCredentials(app.id, secret, app.tenant).catch((err) => ({
           ok: false as const,
           reason: err instanceof Error ? err.message : String(err),
+          unreachable: true,
         })),
         diagnoseEventSubscription(app.id, secret, app.tenant).catch(
           (err): EventDiagnosis => ({ state: 'unchecked', reason: err instanceof Error ? err.message : String(err) }),
@@ -795,7 +796,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       return {
         ...base,
         botName: validation.ok ? (validation.botName ?? entry?.botName) : entry?.botName,
-        credentials: validation.ok ? { ok: true } : { ok: false, reason: validation.reason },
+        credentials: validation.ok ? { ok: true } : { ok: false, reason: validation.reason, ...(validation.unreachable ? { unreachable: true } : {}) },
         connection: { running: run.running, connection: run.connection },
         event,
         scopes: {
@@ -806,6 +807,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     },
 
     async confirmCardCallback(botId: string, confirmed: boolean): Promise<void> {
+      if (deps.readonlyPreview) throw new NotWiredYetError('卡片回调勾选');
       if (!(await loadBots()).bots.some((b) => b.appId === botId)) throw new Error('没有这个 Bot。');
       await writeSetupProgress(botId, { cardCallbackConfirmed: confirmed });
     },

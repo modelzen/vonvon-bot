@@ -19,16 +19,17 @@ export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEn
   const client = useClient();
   const shell = useShellCapabilities();
   const {reads, recheck} = useSetupStatus(snapshot.agents.map(agent => agent.id));
-  const [claudeChecking, setClaudeChecking] = useState(false);
+  // A count, not a flag: the automatic check and a click can overlap.
+  const [claudeChecks, setClaudeChecks] = useState(0);
   const [working, setWorking] = useState<string>();
   const claude = snapshot.tools.find(tool => tool.tool === 'claude');
   const askedClaude = useRef(false);
   async function checkClaude(refresh: boolean) {
-    setClaudeChecking(true);
+    setClaudeChecks(count => count + 1);
     // The daemon refreshes the snapshot's tools after this reply, so the row follows it.
     try { await client.environment({type: 'backendLogin', id: 'claude-agent', refresh}); }
     catch (error) { onNotice(error instanceof Error ? error.message : '暂时无法检查 Claude 登录。', true); }
-    finally { setClaudeChecking(false); }
+    finally { setClaudeChecks(count => count - 1); }
   }
   useEffect(() => {
     // The snapshot only carries a cached login; ask once so a fresh window has an answer.
@@ -66,7 +67,7 @@ export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEn
       trailing={<span className="setup-step-trailing">
         <StatusBadge tone={step.tone} variant="pill">{step.status}</StatusBadge>
         {step.actions.map(action => <Button key={action.kind + action.label} size="sm"
-          loading={working === `${agentId ?? 'tools'}:${action.kind}` || (action.kind === 'claudeLogin' && claudeChecking)}
+          loading={working === `${agentId ?? 'tools'}:${action.kind}` || (action.kind === 'claudeLogin' && claudeChecks > 0)}
           disabled={busy || !ready} onClick={() => void act(action, agentId)}>{action.label}</Button>)}
       </span>}/>;
   }

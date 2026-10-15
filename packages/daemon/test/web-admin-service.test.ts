@@ -430,21 +430,36 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
   });
 
   it('卡片回调勾选按 Bot 存在 setup.json，重开后还在；文件坏了按未勾选', async () => {
-    rmSync(botPaths(SETUP_BOT).dir, { recursive: true, force: true });
-    const svc = createReadonlyAdminService();
+    writeCompleteConfig();
+    rmSync(botPaths(SETUP_BOT).setupFile, { force: true });
+    const svc = createAdminService({});
     await svc.confirmCardCallback(SETUP_BOT, true);
     expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: true });
     expect(statSync(botPaths(SETUP_BOT).setupFile).mode & 0o777).toBe(0o600);
-    expect((await createReadonlyAdminService().getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: true });
+    expect((await createAdminService({}).getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: true });
     await svc.confirmCardCallback(SETUP_BOT, false);
     expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: false });
     writeFileSync(botPaths(SETUP_BOT).setupFile, '{not json');
     expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: false });
   });
 
-  it('不认识的 Bot 不写卡片回调勾选', async () => {
-    await expect(createReadonlyAdminService().confirmCardCallback('cli_nobody', true)).rejects.toThrow('没有这个 Bot');
+  it('不认识的 Bot、目录已删的 Bot 和只读预览都不写卡片回调勾选', async () => {
+    await expect(createAdminService({}).confirmCardCallback('cli_nobody', true)).rejects.toThrow('没有这个 Bot');
     expect(existsSync(botPaths('cli_nobody').setupFile)).toBe(false);
+    rmSync(botPaths(SETUP_BOT).dir, { recursive: true, force: true });
+    await expect(createAdminService({}).confirmCardCallback(SETUP_BOT, true)).rejects.toThrow('没有这个 Bot');
+    expect(existsSync(botPaths(SETUP_BOT).dir)).toBe(false);
+    writeCompleteConfig();
+    await expect(createReadonlyAdminService().confirmCardCallback(SETUP_BOT, true)).rejects.toThrow('卡片回调勾选');
+    expect(existsSync(botPaths(SETUP_BOT).setupFile)).toBe(false);
+  });
+
+  it('连不上飞书时凭据算"无法确认"，不算无效', async () => {
+    writeCompleteConfig();
+    vi.stubGlobal('fetch', (async () => { throw new DOMException('The operation was aborted due to timeout', 'TimeoutError'); }) as unknown as typeof fetch);
+    const s = await createReadonlyAdminService().getSetupStatus(SETUP_BOT);
+    expect(s.credentials).toEqual({ ok: false, reason: '飞书接口 10 秒没有响应', unreachable: true });
+    expect(s.event).toEqual({ state: 'unchecked', reason: '飞书接口 10 秒没有响应' });
   });
 
   it('缺 scope + 事件未发布：missingRequired 非空、event=unpublished', async () => {

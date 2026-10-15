@@ -9,6 +9,8 @@ const ENDPOINTS: Record<TenantBrand, string> = {
 export interface ValidationResult {
   ok: boolean;
   reason?: string;
+  /** Feishu could not be reached or answered garbage, so the credentials were not judged. */
+  unreachable?: boolean;
   botName?: string;
   botOpenId?: string;
   /**
@@ -57,14 +59,14 @@ export async function validateAppCredentials(
       signal: AbortSignal.timeout(FEISHU_TIMEOUT_MS),
     });
   } catch (err) {
-    return { ok: false, reason: networkReason(err) };
+    return { ok: false, reason: networkReason(err), unreachable: true };
   }
-  if (!resp.ok) return { ok: false, reason: `HTTP ${resp.status}` };
+  if (!resp.ok) return { ok: false, reason: `HTTP ${resp.status}`, unreachable: true };
   let data: TokenResp;
   try {
     data = (await resp.json()) as TokenResp;
-  } catch {
-    return { ok: false, reason: '响应不是合法 JSON' };
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error && err.name === 'TimeoutError' ? networkReason(err) : '响应不是合法 JSON', unreachable: true };
   }
   if (data.code !== 0 || !data.tenant_access_token) {
     return { ok: false, reason: `code=${data.code ?? '?'} msg=${data.msg ?? '<no msg>'}` };

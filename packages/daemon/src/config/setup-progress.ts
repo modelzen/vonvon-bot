@@ -1,5 +1,5 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { botPaths } from './paths';
 
 /** What the first-run checklist cannot read from Feishu, kept per bot so it survives
@@ -16,10 +16,17 @@ export async function readSetupProgress(appId: string): Promise<SetupProgress> {
   }
 }
 
+/** Writes into the bot's existing directory only: a bot deleted meanwhile stays deleted
+ * instead of coming back as a directory holding nothing but this file. */
 export async function writeSetupProgress(appId: string, progress: SetupProgress): Promise<void> {
   const file = botPaths(appId).setupFile;
-  await mkdir(dirname(file), { recursive: true, mode: 0o700 });
-  const tmp = `${file}.tmp-${process.pid}`;
-  await writeFile(tmp, `${JSON.stringify(progress)}\n`, { encoding: 'utf8', mode: 0o600 });
-  await rename(tmp, file);
+  const tmp = `${file}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(tmp, `${JSON.stringify(progress)}\n`, { encoding: 'utf8', mode: 0o600 });
+    await rename(tmp, file);
+  } catch (error) {
+    await rm(tmp, { force: true });
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('没有这个 Bot。');
+    throw error;
+  }
 }

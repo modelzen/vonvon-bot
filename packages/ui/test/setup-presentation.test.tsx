@@ -28,7 +28,8 @@ it('gives the reason and the button for each unfinished step', () => {
   expect(steps.scopes).toMatchObject({done: false, status: '还缺 2 项', items: ['im:resource', 'im:message:readonly']});
   expect(steps.scopes?.actions).toEqual([{kind: 'open', label: '一键开权限', url: fresh.scopes.grantUrl, target: 'app-console'}]);
   expect(steps.connection?.actions).toEqual([{kind: 'enable', label: '启用 Bot'}]);
-  expect(steps.event).toMatchObject({done: false, status: '发布后才能确认'});
+  expect(steps.event).toMatchObject({done: false, status: '上线后才能确认'});
+  expect(steps.publish?.detail).toContain('等管理员审核通过');
   expect(steps.callback?.actions.map(action => action.label)).toEqual(['打开事件设置', '我已配置']);
   expect(steps.publish?.actions).toEqual([{kind: 'open', label: '打开开发者后台', url: fresh.consoleUrl, target: 'app-console'}]);
   expect(remoteStepsDone(fresh)).toBe(false);
@@ -51,6 +52,10 @@ it('does not count unknown scopes or an unchecked event as done', () => {
   expect(broken.credentials).toMatchObject({done: false, detail: 'code=10014', actions: [{kind: 'reauthorize', label: '重新授权'}]});
   expect([broken.scopes?.status, broken.event?.status, broken.publish?.status]).toEqual(['等第 1 步', '等第 1 步', '等第 1 步']);
   expect(broken.callback?.done).toBe(true);
+  const offline = byId(botSteps(agent, {...done, credentials: {ok: false, reason: '飞书接口 10 秒没有响应', unreachable: true}, scopes: {grantUrl: done.scopes.grantUrl}, event: {state: 'unchecked', reason: '飞书接口 10 秒没有响应'}}));
+  expect(offline.credentials).toMatchObject({status: '无法确认', tone: 'neutral', actions: []});
+  expect(offline.credentials?.detail).toContain('网络恢复后会自动重试');
+  expect([offline.scopes?.status, offline.event?.status, offline.event?.detail]).toEqual(['无法确认', '无法确认', '飞书接口 10 秒没有响应']);
 });
 
 it('keeps the long-connection step live from the snapshot before the first read', () => {
