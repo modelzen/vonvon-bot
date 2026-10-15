@@ -229,7 +229,7 @@ export function reduce(state: RunState, evt: AgentEvent): RunState {
 
     case 'context_usage': {
       const usage = { used: evt.usedTokens, window: evt.contextWindow };
-      return { ...state, usage, blocks: noteUsage(state.blocks, usage) };
+      return { ...state, usage, blocks: noteUsage(onWindow(state.blocks, usage.window), usage) };
     }
 
     case 'compaction':
@@ -320,6 +320,27 @@ function endCompaction(state: RunState, evt: Extract<AgentEvent, { type: 'compac
   };
   const blocks = found ? withCompaction(state.blocks, idx, next) : appendCompaction(state.blocks, next);
   return { ...state, ...(reported ? { usage: reported } : {}), blocks };
+}
+
+/** A reading's window becomes the window of the run's compaction lines. On a
+ * Claude thread's first turn the mid-turn window is a guess from the model id
+ * until the turn-end getContextUsage(); this way the lines end on the same window
+ * as the meter. A reading with no window leaves them. */
+function onWindow(blocks: Block[], window: number | null): Block[] {
+  if (window === null) return blocks;
+  const moved = (u: Usage | null | undefined): boolean => !!u && u.window !== window;
+  return blocks.map((b) => {
+    if (b.kind !== 'compaction') return b;
+    const c = b.compaction;
+    if (!moved(c.before) && !moved(c.after) && !moved(c.pending)) return b;
+    const next: CompactionEntry = {
+      ...c,
+      ...(c.before ? { before: { ...c.before, window } } : {}),
+      ...(c.after ? { after: { ...c.after, window } } : {}),
+      ...(c.pending ? { pending: { ...c.pending, window } } : {}),
+    };
+    return { kind: 'compaction', compaction: next };
+  });
 }
 
 /** A usage reading goes to the latest compaction: while it runs, as `before`

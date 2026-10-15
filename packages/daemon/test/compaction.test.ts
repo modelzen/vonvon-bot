@@ -61,6 +61,16 @@ describe('Codex compaction line', () => {
     expect(cardJson(run([codexUsage(170_000), codexStart()]))).toContain('正在压缩上下文…');
   });
 
+  it('a compaction whose item never completes reads as unfinished on the terminal card', () => {
+    // codex-rs completes the item only after installing the compacted history;
+    // its failure paths return before item/completed.
+    for (const end of [{ type: 'error', message: '上游错误', willRetry: false }, { type: 'done', turnId: 't' }] as AgentEvent[]) {
+      const json = cardJson(run([codexUsage(170_000), codexStart(), end]));
+      expect(json).toContain('上下文压缩没有完成');
+      expect(json).not.toContain('已压缩');
+    }
+  });
+
   it('without a recomputed reading, takes the first reading after the end', () => {
     const s = run([codexUsage(170_000), codexStart(), codexUsage(172_000), codexEnd()]);
     expect(cardJson(s)).toContain('已压缩，压缩前 85%');
@@ -156,6 +166,44 @@ describe('Claude compaction line and meter, through the real thread and mapper',
     expect(cardJson(s)).toContain('已压缩 85% → 20%');
     // mid-turn reading, the drop at the boundary, the next request, getContextUsage()
     expect(meters).toEqual(['🟠 上下文 85% · 170k/200k', '🟠 上下文 85% · 170k/200k', '上下文 20% · 40k/200k', '上下文 22% · 44k/200k', '上下文 23% · 46k/200k']);
+  });
+
+  it('on a thread\'s first turn, the line ends on the window getContextUsage() reports, like the meter', async () => {
+    // The model id reads as 200k, the real window is 1M: mid-turn readings carry
+    // the guess until the turn-end getContextUsage().
+    const firstTurn = [
+      m({ type: 'system', subtype: 'init', session_id: 's', model: 'claude-opus-4-7' }),
+      assistant('msg-1', 600_000),
+      m({ type: 'system', subtype: 'status', status: 'compacting', session_id: 's' }),
+      m({ type: 'system', subtype: 'compact_boundary', session_id: 's', compact_metadata: { trigger: 'auto', pre_tokens: 600_000, post_tokens: 150_000 } }),
+      assistant('msg-2', 155_000),
+      m({ type: 'result', subtype: 'success', is_error: false, result: 'ok', session_id: 's', usage: { input_tokens: 0, output_tokens: 0 } }),
+    ];
+    const thread = new ClaudeAgentThread({
+      sessionId: 's', resume: false, cwd: process.cwd(), permission: {}, settingSources: [],
+      query: ({ prompt }) => Object.assign((async function* () { for await (const _ of prompt) yield* firstTurn; })(), {
+        getContextUsage: async () => ({ totalTokens: 160_000, maxTokens: 1_000_000 }),
+        interrupt: async () => {}, close: () => {},
+      }) as unknown as Query,
+    });
+    threads.push(thread);
+    const render = new RunRender();
+    let midTurn = '';
+    for await (const ev of thread.runStreamed({ text: 'go' }).events) {
+      render.apply(ev);
+      if (ev.type === 'compaction' && ev.phase === 'end') midTurn = cardJson(render.snapshot());
+    }
+    expect(midTurn).toContain('已压缩 100% → 75%'); // the guess, until the turn ends
+    const s = render.snapshot();
+    expect(meterText(s)).toBe('上下文 16% · 160k/1000k');
+    expect(cardJson(s)).toContain('已压缩 60% → 15%');
+  });
+
+  it('a later reading moves the run\'s compaction lines onto its window; one with no window leaves them', () => {
+    const s = run([usage(170_000), { type: 'compaction', phase: 'start' }, { type: 'compaction', phase: 'end', preTokens: 170_000, postTokens: 40_000, contextWindow: W }]);
+    expect(cardJson(s)).toContain('已压缩 85% → 20%');
+    expect(cardJson(run([usage(50_000, 400_000)], s))).toContain('已压缩 43% → 10%');
+    expect(cardJson(run([usage(50_000, null)], s))).toContain('已压缩 85% → 20%');
   });
 
   it('a failed compaction says so', () => {
