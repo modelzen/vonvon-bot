@@ -180,19 +180,18 @@ it('s02c1, s02c5: an old config.json with 咖啡一下 settings loads, reads wit
   // What s02b left on disk: the switch on and every field the 咖啡一下 type had
   // before s02c5 removed it, so this list is the only record of the old shape.
   const old = { enabled: true, delivery: 'always', includeBridgeOwnedSessionsForDebugging: true, notifyScope: 'bound_projects', agents: { claude: true, codex: false }, keepAwake: { enabled: true }, approval: { enabled: true, timeoutSeconds: 600 }, taskCompletion: { enabled: true, replyEnabled: false, replyTimeoutSeconds: 300 }, allowCache: { enabled: true, scope: 'session' }, presence: { enabled: true, platform: 'macos', idleThresholdSeconds: 120 } };
-  await writeFile(paths.configFile, `${JSON.stringify({ ...cfg, preferences: { ...cfg.preferences, cliBridge: old } }, null, 2)}\n`);
+  const stored = { ...cfg, preferences: { ...cfg.preferences, cliBridge: old } };
+  await writeFile(paths.configFile, `${JSON.stringify(stored, null, 2)}\n`);
   cfg = await loadConfig() as AppConfig;
-  const before = JSON.parse(await readFile(paths.configFile, 'utf8'));
   const { owner } = await fixture();
   const view = await owner.read(agent) as AgentSettingsView;
   expect(Object.keys(view.sections)).toEqual(['cards', 'run', 'completion', 'comments', 'titles', 'paths', 'access']);
   expect(view).not.toHaveProperty('cliRuntime');
   expect(JSON.stringify(view)).not.toMatch(/cliBridge|notifyScope|keepAwake/);
   expect((await owner.save({ scope: agent, section: 'cards', revision: view.sections.cards.revision, patch: { showToolCalls: false } })).kind).toBe('saved');
-  // The file is what the daemon wrote before plus the one saved field: the old
-  // section, its key order and the other unknown keys are untouched.
-  expect(await readFile(paths.configFile, 'utf8')).toBe(`${JSON.stringify({ ...before, preferences: { ...before.preferences, showToolCalls: false } }, null, 2)}\n`);
-  expect(JSON.stringify(JSON.parse(await readFile(paths.configFile, 'utf8')).preferences.cliBridge)).toBe(JSON.stringify(old));
+  // The file is what was written plus the one saved field: the old section, its
+  // key order and the other unknown keys are untouched.
+  expect(await readFile(paths.configFile, 'utf8')).toBe(`${JSON.stringify({ ...stored, preferences: { ...stored.preferences, showToolCalls: false } }, null, 2)}\n`);
   expect(() => parseSettingsEdit({ scope: agent, section: 'cliBridge', revision: 'x', patch: { notifyScope: 'all' } })).toThrow('设置字段、类型或范围无效');
   for (const action of [{ kind: 'setCliBridgeEnabled', botId, enabled: false, revision: 'x' }, { kind: 'repairCliHooks', botId }, { kind: 'setHostCliRoute', botId: null, revision: 'x' }, { kind: 'repairHostCliHooks', agents: ['codex'] }])
     expect(() => parseSettingsAction(action)).toThrow('设置操作参数无效');
