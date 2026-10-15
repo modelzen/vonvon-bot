@@ -445,6 +445,21 @@ describe('topic registry (s13)', () => {
     expect((await topics.list('chat')).map((t) => [t.topicId, t.openedBy])).toEqual([['omt_new', { kind: 'self' }]]);
   });
 
+  it('does not hold shutdown for a first-message lookup that hangs', async () => {
+    multi();
+    const topics = registry();
+    const o = setup(topics);
+    fake.get.mockImplementationOnce(() => new Promise(() => undefined));
+    await o.onMessage(message('@李四 看下', 'omt_slow', {
+      rootId: 'om_root', mentionedBot: false, senderId: 'ou_zhang',
+      mentions: [{ key: '@_user_1', openId: 'ou_li', name: '李四', isBot: false }],
+    }));
+    await vi.waitFor(() => expect(fake.get).toHaveBeenCalled());
+    const stopped = await Promise.race([o.shutdown().then(() => 'stopped'), new Promise((r) => setTimeout(r, 2_000, 'waiting'))]);
+    expect(stopped).toBe('stopped');
+    expect(await topics.get('chat', 'omt_slow')).toMatchObject({ firstId: 'om_root', openedBy: { kind: 'user', openId: 'ou_zhang' } });
+  });
+
   it('keeps the turn going when the registry cannot write', async () => {
     multi();
     const blocked = join(dir, 'blocked');

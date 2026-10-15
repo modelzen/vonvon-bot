@@ -986,18 +986,21 @@ export function createOrchestrator(
         ? { first: { id: msg.messageId, from, at: msg.createTime || undefined, text: msg.content } }
         : msg.rootId ? { first: { id: msg.rootId } } : {}),
     };
-    void trackTask((async () => {
-      const rec = await topics.note(msg.chatId, sighting);
+    const fail = (err: unknown) => log.fail('intake', err, { phase: 'topic-registry' });
+    void trackTask(topics.note(msg.chatId, sighting).then((rec) => {
       if (!rec?.firstId || rec.firstFrom || rootLookups.has(rec.firstId) || shuttingDown) return;
       if (rootLookups.size >= 1000) rootLookups.clear();
-      rootLookups.add(rec.firstId);
-      // Bounded: shutdown waits for this task.
-      const root = await withDeadline(fetchQuotedMessage(channel, rec.firstId, names), 10_000);
-      if (!root) return;
-      const self = Boolean(root.senderId && root.senderId === channel.botIdentity?.openId);
-      const rootFrom: TopicPerson = self ? { kind: 'self' } : topicPerson(root.fromUser ? 'user' : 'bot', root.senderId);
-      await topics.note(msg.chatId, { ...sighting, first: { id: rec.firstId, from: rootFrom, at: root.createTime || undefined, text: root.text } });
-    })().catch((err) => log.fail('intake', err, { phase: 'topic-registry' })));
+      const firstId = rec.firstId;
+      rootLookups.add(firstId);
+      // Shutdown waits for the writes, never for Feishu: the lookup can outlast
+      // the supervisor's 8 s grace. One lost to a stop is retried next start.
+      void withDeadline(fetchQuotedMessage(channel, firstId, names), 10_000).then((root) => {
+        if (!root || shuttingDown) return;
+        const self = Boolean(root.senderId && root.senderId === channel.botIdentity?.openId);
+        const rootFrom: TopicPerson = self ? { kind: 'self' } : topicPerson(root.fromUser ? 'user' : 'bot', root.senderId);
+        void trackTask(topics.note(msg.chatId, { ...sighting, first: { id: firstId, from: rootFrom, at: root.createTime || undefined, text: root.text } }));
+      }).catch(fail);
+    }).catch(fail));
   }
   /** This bot opened `topicId` (a reply in thread, or a resumed session's topic). */
   function noteOpenedTopic(chatId: string, topicId: string, first: TopicSighting['first']): void {
