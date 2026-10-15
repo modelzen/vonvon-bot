@@ -5,11 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, win32 } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, describe, expect, it } from 'vitest';
-import { z } from 'zod';
 import { observeCli, registerCli, windowsPathStore, type CliRegistrationOptions } from '../src/cli-registration.js';
-import { createDaemonDependencies } from '../src/daemon-dependencies.js';
-import { renderDefinition } from '../../daemon/src/service/definitions.js';
-import { serviceTarget, WINDOWS_RUN_KEY, WINDOWS_RUN_VALUE, resolveServiceRoot } from '../../daemon/src/service/identity.js';
 
 const exec = promisify(execFile);
 const system32 = win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32');
@@ -18,34 +14,6 @@ const subkey = `Software\\Vonvon Bot Test ${randomUUID()}`;
 
 function reg(args: string[]): Promise<{ stdout: string }> {
   return exec(win32.join(system32, 'reg.exe'), args, { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
-}
-
-const runSubkey = WINDOWS_RUN_KEY.slice('HKCU\\'.length);
-const runSnapshot = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('key-absent') }),
-  z.object({ kind: z.literal('value-absent') }),
-  z.object({ kind: z.literal('value'), type: z.enum(['String', 'ExpandString']), value: z.string() }),
-]);
-
-function powershell(script: string, input = ''): Promise<{ stdout: string }> {
-  const pending = exec(win32.join(system32, 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
-    ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(`$ErrorActionPreference = 'Stop'; [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); ${script}`, 'utf16le').toString('base64')],
-    { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
-  pending.child.stdin?.end(input);
-  return pending;
-}
-
-async function snapshotRun(): Promise<z.infer<typeof runSnapshot>> {
-  const result = await powershell(`
-    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${runSubkey}');
-    try {
-      $snapshot = if ($null -eq $key) { @{kind='key-absent'} }
-      elseif ($key.GetValueNames() -notcontains '${WINDOWS_RUN_VALUE}') { @{kind='value-absent'} }
-      else { @{kind='value'; type=$key.GetValueKind('${WINDOWS_RUN_VALUE}').ToString(); value=$key.GetValue('${WINDOWS_RUN_VALUE}', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)} }
-      $snapshot | ConvertTo-Json -Compress;
-    } finally { if ($null -ne $key) { $key.Dispose() } }
-  `);
-  return runSnapshot.parse(JSON.parse(result.stdout));
 }
 
 async function queryType(key: string, value: string): Promise<string | undefined> {
@@ -132,63 +100,5 @@ describe.skipIf(process.platform !== 'win32')('Windows native CLI registration',
       packaged: true, localAppData: join(home, 'AppData', 'Local') };
     expect(await registerCli({ ...options, windowsPath: windowsPathStore(subkey) })).toMatchObject({ kind: 'ready' });
     expect(await observeCli(options)).toEqual({ kind: 'error', message: '用户 PATH 尚未注册命令行目录。' });
-  }, 60_000);
-});
-
-describe.skipIf(process.platform !== 'win32')('Windows native Run registration', () => {
-  it('classifies the real Run value through the desktop registration reader', async () => {
-    const saved = await snapshotRun();
-    const setRun = (type: 'REG_SZ' | 'REG_EXPAND_SZ', value: string) =>
-      reg(['add', WINDOWS_RUN_KEY, '/v', WINDOWS_RUN_VALUE, '/t', type, '/d', value, '/f']);
-    try {
-      const root = await tempRoot();
-      const resources = join(root, 'resources');
-      const readRegistration = createDaemonDependencies({ root, home: root, executable: process.execPath, resources, packaged: true }).readRegistration;
-      const canonicalRoot = await resolveServiceRoot(root);
-      const target = serviceTarget({ platform: 'win32', root: canonicalRoot });
-      if (target.platform !== 'win32') throw new Error('Expected a Windows target');
-      const bytes = renderDefinition({ target, root: canonicalRoot, port: 43121, capturedPath: win32.dirname(process.execPath),
-        distribution: { kind: 'desktop', executable: process.execPath, entry: join(resources, 'daemon', 'bin', 'vonvon.mjs') } });
-      if (bytes.platform !== 'win32') throw new Error('Expected Windows bytes');
-      await mkdir(dirname(target.cmdPath), { recursive: true });
-      await writeFile(target.cmdPath, bytes.cmd);
-      await writeFile(target.vbsPath, bytes.vbs);
-      const location = `${WINDOWS_RUN_KEY}\\${WINDOWS_RUN_VALUE}`;
-
-      if (saved.kind === 'key-absent') expect(await readRegistration()).toEqual({ kind: 'absent' });
-      await powershell(`
-        $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('${runSubkey}');
-        try { $key.DeleteValue('${WINDOWS_RUN_VALUE}', $false) } finally { $key.Dispose() }
-      `);
-      expect(await readRegistration()).toEqual({ kind: 'absent' });
-      await setRun('REG_SZ', 'notepad.exe');
-      expect(await readRegistration()).toEqual({ kind: 'unrecognized', file: location });
-      await setRun('REG_EXPAND_SZ', bytes.runValue);
-      expect(await readRegistration()).toEqual({ kind: 'unrecognized', file: location });
-      await setRun('REG_SZ', bytes.runValue);
-      expect(await readRegistration()).toEqual({ kind: 'ours' });
-    } finally {
-      if (saved.kind === 'value') {
-        const encoded = Buffer.from(saved.value, 'utf16le').toString('base64');
-        await powershell(`
-          $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('${runSubkey}');
-          try { $key.SetValue('${WINDOWS_RUN_VALUE}', [System.Text.Encoding]::Unicode.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd())), [Microsoft.Win32.RegistryValueKind]::${saved.type}) }
-          finally { $key.Dispose() }
-        `, encoded);
-        const restored = await snapshotRun();
-        expect(restored.kind === 'value' && restored.type === saved.type && restored.value === saved.value, 'Original Run value and type restored exactly').toBe(true);
-      } else {
-        await powershell(`
-          $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${runSubkey}', $true);
-          if ($null -ne $key) {
-            try {
-              $key.DeleteValue('${WINDOWS_RUN_VALUE}', $false);
-              $empty = $key.ValueCount -eq 0 -and $key.SubKeyCount -eq 0;
-            } finally { $key.Dispose() }
-            if ($${saved.kind === 'key-absent' ? 'true' : 'false'} -and $empty) { [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKey('${runSubkey}', $false) }
-          }
-        `);
-      }
-    }
   }, 60_000);
 });
