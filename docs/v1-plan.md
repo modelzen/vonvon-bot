@@ -221,7 +221,7 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 | [ ] | s04 | 首次运行清单 | 桌面端和网页共用的清单：扫码、开权限、长连接、事件订阅、发布、Codex 和 Claude；每步轮询，失败给原因和按钮（3.1 第 4 条） | 650 | s01、s03 | 错误路径 | 无（JP-VPS 上无头看各状态） |
 | [x] | s05a | 删掉 daemon 里的 Windows 服务实现 | 删 `windows.ts`、`win-startup.ts`、三份 Windows 服务测试和 `__win-relaunch` 命令及其两份测试；没有用户可见变化，理由见本文第 6 节 | 1370 | — | — | 无 |
 | [x] | s05b | 删掉服务定义和注册里的 win32 分支 | 删 `identity.ts`、`definitions.ts`、`registration.ts` 里的 win32 分支和 Windows 注册测试，以及桌面端跟着要删的 Run 键读取；没有用户可见变化，理由见本文第 6 节 | 520 | s05a | — | 无 |
-| [ ] | s06 | 注册服务后只由服务管理器拉起 daemon | 从 #285 搬启动路由（约 120 行源码加测试）：拿锁前先读注册，`daemon start` 改请服务管理器启动；修 #287（3.10） | 1000 | s05b | 子进程、并发、关闭清理、错误路径 | 已注册服务时 launchd 拉起的多余进程退出 0、不反复重启；持锁进程被 kill -9、PID 被复用后服务仍会重试 |
+| [x] | s06 | 注册服务后只由服务管理器拉起 daemon | 从 #285 搬启动路由（约 120 行源码加测试）：拿锁前先读注册，`daemon start` 改请服务管理器启动；修 #287（3.10） | 1000 | s05b | 子进程、并发、关闭清理、错误路径 | 已注册服务时 launchd 拉起的多余进程退出 0、不反复重启；持锁进程被 kill -9、PID 被复用后服务仍会重试 |
 | [ ] | s07 | vonvon service install、uninstall、status | darwin 用 launchd、linux 用 systemd；装服务前先排空自己起的分离 daemon；快照和 RPC 读真实状态（3.10） | 700 | s06、s02、e06 | 子进程、错误路径、关闭清理、macOS 原生 | 打包版执行 install：plist 写入并起来，`daemon stop` 后不再拉起，注销再登录会起来，没有 Dock 图标，已有分离 daemon 时马上接管 |
 | [ ] | s08 | 桌面端的"登录电脑时启动"和清单里的这一步 | 桌面端调打包的 CLI 装卸服务；清单加"登录电脑时自动运行 bot（推荐）"，跳过就起分离 daemon 并提示；删桌面端的 Windows 代码；Linux 上不显示"登录时启动"开关；本文第 10 节写卸载步骤（3.10） | 1000 | s07、s04 | 子进程、macOS 原生、错误路径 | 真实窗口里：开关状态和 `launchctl print` 一致，退出 app 后 bot 在线，app 挪走再挪回能恢复，换新版后 daemon 跑新版本 |
 
@@ -238,7 +238,9 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 - s05a：删 `D/cli/index.ts:15` 白名单里的 `__win-relaunch` 和 `:57` 的命令本体。`D/service/control.ts:91` 正则里的 `__win-relaunch` 是识别 bridge 的兼容标识，保留。
 - s05b：删了 `WindowsRunObservation` 和 Run 键常量后，桌面端 `daemon-dependencies.ts` 的 `parseWindowsRunQuery`、`observeWindowsRun` 和 `windows-native.test.ts` 里的 Run 注册测试编译不过，一起删，不留到 s08。桌面端在 win32 上读注册时报"不支持的平台"。
 - s06：开工时先量，超过 1300 行就把 #287 的修复和测试单独成片（s06a、s06b）。合入后在已关闭的 #285 下补一条评论，写明代码去了哪里，再关闭 #287。
+- s06：#287 的修法是用 host 互斥锁认人，不再只看 PID。活着的 daemon 拿着 `daemon.pid` 时一定也拿着 host 互斥锁，所以拿到互斥锁以后，PID 还活着的锁只可能是死掉的 daemon 留下、PID 又被别的进程复用了，直接接管，不碰那个进程。拿不到互斥锁时，等持锁的 daemon 就绪并通过本地凭据认证才退出 0，认证不了就退出 1，让服务管理器重试。Windows 的 Run 值读取随 s05 删掉，不搬。
 - s07、s08：参考 #110 拆分表的第 13、14 块和它的 `login-item.ts`，去掉 Windows 部分。
+- s07：s06 起，服务拉起的进程读到 `unrecognized` 的注册（比如旧版本写的、和现在生成的格式不一致的 plist 或 unit）会退出 1，由管理器每 5 秒重试一次。升级以后要先重写服务定义，再让服务起来，否则换版本后 bot 起不来。
 - s07：服务定义里的 PATH 用 s02 的 `withToolDirectories` 补全。自带的 npm 由 daemon 自己找，服务定义里不用写 `VONVON_NPM_CLI`。
 - s07：POSIX 上的互斥锁是 `127.0.0.1` 上按数据目录哈希出来的端口（20000 到 49999），和 Linux 的临时端口重叠。#295 的 CI 撞过一次（`host-service-shutdown` 测试报 busy），开工时看要不要改成 Unix 域套接字。#296 的 CI 也失败过一次，可能是同一个原因：`daemon-cli.test.ts` 的"concurrent detached starts return the same ready owner"两个启动都退出 1，日志里没有子进程的输出，重跑通过。开工时让这个测试失败时打印子进程输出。
 - s07：`D/admin/host.ts:194` 的 `resolveCliBinPath` 还指向 `bin/feishu-codex-bridge.mjs`，包里只有 `bin/vonvon.mjs`（`D/service/common.ts` 的同名函数是对的）。查清 `host.ts:210` 那条路径还用不用，用就改成调 service/common 的。

@@ -45,3 +45,16 @@ it('reads absent status without creating the home', async () => {
   expect(await daemonStatus(absent)).toEqual({ running: false });
   await expect(readFile(join(absent, 'daemon.pid'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
+
+it('replaces a live-PID lock only when the caller holds the host mutex', async () => {
+  const path = await home();
+  const file = join(path, 'daemon.pid');
+  const stale = JSON.stringify({ pid: process.ppid, startedAt: new Date().toISOString(), listen: '127.0.0.1:8' });
+  await writeFile(file, stale);
+  await expect(acquirePidLock(path)).rejects.toThrow(`Another Vonvon daemon is already running (PID ${process.ppid})`);
+  await expect(acquirePidLock(path, { hostMutexHeld: false })).rejects.toThrow(/already running/);
+  expect(await readFile(file, 'utf8')).toBe(stale);
+  const owner = await acquirePidLock(path, { hostMutexHeld: true });
+  expect(owner).toMatchObject({ pid: process.pid, listen: null });
+  expect(await getPidLockInfo(path)).toEqual(owner);
+});

@@ -85,6 +85,8 @@ beforeEach(async () => {
   vi.resetModules();
   const root = await mkdtemp(join(tmpdir(), 'vonvon-startup-drain-'));
   vi.stubEnv('HOME', join(root, 'home'));
+  vi.stubEnv('XDG_CONFIG_HOME', join(root, 'home', '.config'));
+  vi.stubEnv('VONVON_SERVICE', '');
   vi.stubEnv('VONVON_HOME', join(root, 'vonvon'));
   vi.stubEnv('CODEX_HOME', join(root, 'codex'));
   vi.stubEnv('CODEX_BIN', join(root, 'unavailable-codex'));

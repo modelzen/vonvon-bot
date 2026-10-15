@@ -5,7 +5,7 @@ import { createServer } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { HostEndpoint } from '../host/discovery';
-import { readRunningPidLock } from '../server/pid-lock';
+import { isStaleOwner, readRunningPidLock, type StaleOwner } from '../server/pid-lock';
 import { stopVerifiedOwner, verifyPidLockOwner } from '../server/owner-verification';
 import { renderDefinition, type Definition } from './definitions';
 import { runtimeDistribution } from './distribution';
@@ -239,11 +239,11 @@ export function createSystemdService(options: { root: string }, overrides: Parti
     if (!sameOwner(before, result.retained)) result.kind = 'install_incomplete';
     return result;
   }
-  async function ready(s: Snapshot, port: number, wait: boolean): Promise<HostEndpoint> {
+  async function ready(s: Snapshot, port: number, wait: boolean, stale?: StaleOwner): Promise<HostEndpoint> {
     const deadline = d.now() + (wait ? 25_000 : 0);
     do {
       const owner = await d.readOwner(s.root);
-      if (owner?.listen) {
+      if (owner?.listen && !isStaleOwner(owner, stale)) {
         await d.verifyOwner(s.root, owner);
         if (owner.listen !== `127.0.0.1:${port}`) throw new Error(`Daemon PID ${owner.pid} already runs at ${owner.listen}, not requested port ${port}.`);
         return { pid: owner.pid, startedAt: owner.startedAt, listen: owner.listen, port };
@@ -251,6 +251,16 @@ export function createSystemdService(options: { root: string }, overrides: Parti
       if (d.now() >= deadline) break;
       await d.pause(50);
     } while (d.now() < deadline);
+    if (stale) {
+      // Nothing replaced the skipped owner; its earlier verification failure may have been transient, so try it once more.
+      const owner = await d.readOwner(s.root);
+      if (owner?.listen && isStaleOwner(owner, stale)) {
+        await d.verifyOwner(s.root, owner);
+        if (owner.listen !== `127.0.0.1:${port}`) throw new Error(`Daemon PID ${owner.pid} already runs at ${owner.listen}, not requested port ${port}.`);
+        return { pid: owner.pid, startedAt: owner.startedAt, listen: owner.listen, port };
+      }
+      throw new Error(`Daemon PID ${stale.pid} could not be verified and no replacement became ready; readiness timed out.`);
+    }
     throw new Error('Daemon readiness timed out');
   }
   return {
@@ -356,15 +366,16 @@ export function createSystemdService(options: { root: string }, overrides: Parti
       }
       return outcome(s, 'uninstalled', 'Uninstalled');
     },
-    async start(input: { port?: number } = {}): Promise<HostEndpoint> {
+    async start(input: { port?: number; staleOwner?: StaleOwner } = {}): Promise<HostEndpoint> {
       const s = await snapshot();
       const current = await registration(s);
       if (current.kind !== 'ours') throw new Error(registrationDetail(current));
       const port = current.definition.port;
       if (input.port !== undefined && input.port !== port) throw new Error(`Service uses port ${port}, not requested port ${input.port}.`);
-      if (await d.readOwner(s.root)) return ready(s, port, true);
+      const owner = await d.readOwner(s.root);
+      if (owner && !isStaleOwner(owner, input.staleOwner)) return ready(s, port, true);
       await command(['start', SYSTEMD_UNIT_NAME]);
-      return ready(s, port, true);
+      return ready(s, port, true, input.staleOwner);
     },
     async status() {
       const s = await snapshot();
