@@ -200,6 +200,7 @@ import {
   clearSessionTitleJobKey,
   detachSessionsForChat,
   getSession,
+  isDelivered,
   isSeen,
   isUnread,
   listSessions,
@@ -214,7 +215,8 @@ import {
   type SessionTitlePolicySnapshot,
 } from './session-store';
 import { SessionTitleCoordinator } from './session-title-coordinator';
-import { topicTitle, type TopicPerson, type TopicRegistry, type TopicSighting } from './topic-registry';
+import { topicTitle, type TopicPerson, type TopicRegistry, type TopicSighting, type TopicView } from './topic-registry';
+import { createTopicContext, localBots, topicQuotes, topicRows } from './topic-context';
 import {
   sessionTitleSourceFromMessage,
   type SessionTitleSource,
@@ -231,6 +233,7 @@ import {
 } from './media';
 import {
   BACKFILL_MAX,
+  OPENING_MAIN_MAX,
   STREAMING_RECHECK_MS,
   fetchChatContext,
   fetchQuotedMessage,
@@ -240,8 +243,11 @@ import {
   weaveQuote,
   weaveRecordBlock,
   weaveSender,
+  type ContextMessage,
   type PullOpts,
+  type RecordBlock,
   type ThreadPull,
+  type Who,
 } from './context-weave';
 import {
   addCommentReaction,
@@ -407,6 +413,10 @@ export interface QueuedTurn {
   streaming?: SeenMark[];
   /** Ids of the messages its record block carried (see ActiveState.woven). */
   woven?: string[];
+  /** The topics its record block quoted, marked seen with {@link seen} so each is quoted once. */
+  seenExtra?: SeenMark[];
+  /** Its record block carried the recent topics (SessionRecord.topicsDue), cleared once it starts. */
+  tableShown?: boolean;
 }
 
 /** How long ago the message was sent (0 when its createTime is unknown). */
@@ -972,8 +982,14 @@ export function createOrchestrator(
   /** Record that a message reached the session (see session-store.nextSeen).
    * Fire-and-forget like every watermark write; the function form keeps
    * concurrent marks from overwriting each other. */
-  function markSeen(sessionKey: string, mark: SeenMark, how: SeenHow = 'id', streaming?: SeenMark[]): void {
-    void trackTask(patchSession(sessionKey, (rec) => nextSeen(rec, mark, how, streaming)).catch(() => undefined));
+  function markSeen(sessionKey: string, mark: SeenMark, how: SeenHow = 'id', streaming?: SeenMark[], extra: SeenMark[] = []): void {
+    // The 引用行 its block carried, by topic id, in the same write (s14b).
+    const next = (rec: SessionRecord) => {
+      let patch = nextSeen(rec, mark, how, streaming);
+      for (const x of extra) patch = { ...patch, ...nextSeen({ ...rec, ...patch }, x, 'id') };
+      return patch;
+    };
+    void trackTask(patchSession(sessionKey, next).catch(() => undefined));
   }
   /** Take back an `id` mark whose message did not reach the session after all. */
   function unmarkSeen(sessionKey: string, id: string): void {
@@ -1053,6 +1069,36 @@ export function createOrchestrator(
     const taken = isSeen(rec, msg.messageId, msg.createTime);
     if (taken) log.info('intake', 'late-redelivery-skipped', { msgId: msg.messageId, lateMs: deliveryLagMs(msg) });
     return taken;
+  }
+
+  /** A main @ in a multi group that Feishu re-pushed after a restart, when the
+   * bot already opened its topic: not opened again. Re-pushes come minutes late (e10). */
+  async function reopenedTopic(msg: NormalizedMessage): Promise<boolean> {
+    if (!topics || deliveryLagMs(msg) < 60_000) return false;
+    const hit = (await topics.list(msg.chatId)).some((t) => t.firstId === msg.messageId && t.openedBy?.kind === 'self');
+    if (hit) log.info('intake', 'late-redelivery-skipped', { msgId: msg.messageId, lateMs: deliveryLagMs(msg), reopen: true });
+    return hit;
+  }
+
+  const topicCtx = createTopicContext(channel, topics, names,
+    { stopping: () => shuttingDown, track: trackTask, localBots: () => localBots(cfg.accounts.app.id) });
+  const knownIds = (list: TopicView[]) => new Set(list.map((t) => t.topicId));
+  /** Who sent a message, as a record block's pointer names them. */
+  const senderWho = (msg: NormalizedMessage): Who => ({ kind: senderOf(msg).kind, name: names.peek(msg.senderId) ?? msg.senderName });
+  const tierOf = (key: string) => /#(admin|guest)$/.exec(key)?.[1] as 'admin' | 'guest' | undefined;
+  const isMainKey = (key: string, chatId: string) => key.replace(/#(admin|guest)$/, '') === chatId;
+  /** Main sessions that compacted, by key: the native session id, '' once the
+   * table was shown (in memory first, then SessionRecord.topicsDue). */
+  const topicsDue = new Map<string, string>();
+  function setTopicsDue(key: string, sessionId: string): void {
+    topicsDue.set(key, sessionId);
+    void trackTask(patchSession(key, { topicsDue: sessionId }).catch(() => undefined));
+  }
+  function markTopicsDue(key: string | undefined, chatId: string, sessionId: string): void {
+    if (key && isMainKey(key, chatId)) setTopicsDue(key, sessionId);
+  }
+  function topicsDueFor(key: string, chatId: string, rec: SessionRecord | undefined, sessionId: string): boolean {
+    return isMainKey(key, chatId) && (topicsDue.get(key) ?? rec?.topicsDue) === sessionId;
   }
 
   /** Render the one-shot affordance only while the current global mode is
@@ -1339,6 +1385,7 @@ export function createOrchestrator(
         .catch(() => undefined);
       return;
     }
+    if (await reopenedTopic(msg)) return;
     if (goalObjective) {
       if (!goalCapable(project)) {
         await denyGoal(msg, false);
@@ -1789,16 +1836,27 @@ export function createOrchestrator(
                 : pullFor({ stopAt: p ? backfillFrom(p) : 0, ...(p?.lastSeenAt ? {} : { enough: OPENING_MAX + (p?.seen?.length ?? 0) }) }),
             )
           : Promise.resolve(undefined);
-        // The topic's title for the record block's header (the registry never throws).
-        const titleP = topicId && topics ? topics.get(msg.chatId, topicId).then((t) => t?.title) : Promise.resolve(undefined);
-        const [images, ingested, { thread: resolved, recreated, reason: recreateReason }, prior, specHistory, title] = await Promise.all([
+        // The group's topics: the topic's title for the header, the 引用行 and the
+        // table (s14b). The registry never throws.
+        const listP = place && topics ? topics.list(msg.chatId) : Promise.resolve([]);
+        // A user-opened topic with no session yet: its opening's lookups need only the
+        // group and the topic's first message, so they overlap the session start and
+        // the model list (s14b). Never rejects; a recreated session does them later.
+        const rootId = topicId && msg.rootId && msg.rootId !== msg.messageId ? msg.rootId : undefined;
+        const isRoot = (m: ContextMessage) => m.messageId === rootId;
+        const openingP = rootId
+          ? priorP.then((p) => p ? undefined : topicOpening(msg, historyP.then((h) => h?.messages.find(isRoot)
+            ?? orStop(fetchQuotedMessage(channel, rootId, names), undefined)), listP, project, perm.roleSuffix)).catch(() => undefined)
+          : undefined;
+        const [images, ingested, { thread: resolved, recreated, reason: recreateReason }, prior, specHistory, list] = await Promise.all([
           imagesP,
           ingestP,
           resolveP,
           priorP,
           historyP,
-          titleP,
+          listP,
         ]);
+        const title = topicId ? list.find((t) => t.topicId === topicId)?.title : undefined;
         let firstText = ingested.text;
         let thread = resolved;
         let titleJobKey: string | undefined;
@@ -1836,6 +1894,8 @@ export function createOrchestrator(
         let pull = specHistory;
         let streaming: SeenMark[] = [];
         let woven: string[] | undefined;
+        let seenExtra: SeenMark[] = [];
+        let tableShown = false;
         if (place && codexEmpty && prior && prior.lastSeenAt !== 0) {
           // The speculative pull stopped at the old session's watermark (or was
           // skipped): the new session needs the whole opening.
@@ -1845,11 +1905,11 @@ export function createOrchestrator(
           let history = codexEmpty
             ? pull.messages
             : pull.messages.filter((m) => isUnread(prior, m.messageId, m.createTime));
-          const rootId = topicId && msg.rootId && msg.rootId !== msg.messageId ? msg.rootId : undefined;
-          if (codexEmpty && rootId && !history.some((m) => m.messageId === rootId)) {
+          const spec = codexEmpty ? await openingP : undefined;
+          if (codexEmpty && rootId && !history.some(isRoot)) {
             // The topic's first message is no longer re-quoted every turn, so a new
             // session gets it here once, even when the listing leaves it out.
-            const root = await orStop(fetchQuotedMessage(channel, rootId, names), undefined);
+            const root = spec ? spec.root : await orStop(fetchQuotedMessage(channel, rootId, names), undefined);
             if (root) history = [root, ...history];
           }
           const kept = keepRecent(history, codexEmpty ? rootId : undefined, codexEmpty ? OPENING_MAX : BACKFILL_MAX);
@@ -1862,14 +1922,37 @@ export function createOrchestrator(
             .filter((m) => m.streaming && now - m.createTime < STREAMING_RECHECK_MS)
             .map((m) => ({ id: m.messageId, at: m.createTime }));
           woven = kept.map((m) => m.messageId);
-          const rootTitle = rootId ? topicTitle(history.find((m) => m.messageId === rootId)?.text) : undefined;
+          const root = rootId ? history.find(isRoot) : undefined;
+          const tier = perm.roleSuffix;
+          let topicsPart: Pick<RecordBlock, 'opening' | 'quotes' | 'moreTopics' | 'table'> = {};
+          let openingLog = {};
+          if (place === 'main') {
+            // 引用行 for topics opened since the session last spoke (a new one: since its
+            // oldest line), each sent once; after a compaction, the recent topics too.
+            const known = await topicCtx.quotable(msg.chatId, list);
+            const found = await orStop(topicCtx.discover(msg.chatId, kept, knownIds(known)), []);
+            const since = codexEmpty ? undefined : prior?.lastSeenAt;
+            const skip = codexEmpty ? undefined : (t: TopicView) => isDelivered(prior, t.topicId);
+            const { quotes, more } = topicQuotes([...known, ...found],
+              { ...(since ? { after: since } : { from: kept[0]?.createTime ?? 0 }), to: now, skip, tier }, names);
+            const table = thread && topicsDueFor(sessionKey, msg.chatId, prior, thread.sessionId) ? topicRows(list.slice(0, 5), tier, names) : [];
+            topicsPart = { quotes, moreTopics: more, table };
+            seenExtra = quotes.map((q) => ({ id: q.topicId, at: q.at }));
+            tableShown = table.length > 0;
+          } else if (codexEmpty && rootId) {
+            const opening = spec && spec.root === root ? spec : await topicOpening(msg, Promise.resolve(root), Promise.resolve(list), project, tier);
+            ({ part: topicsPart, log: openingLog } = opening);
+          }
           firstText = weaveRecordBlock(firstText, {
-            place: { group: project?.name, me: channel.botIdentity?.name, ...(topicId ? { topic: { title: title ?? rootTitle } } : {}) },
+            place: { group: project?.name, me: channel.botIdentity?.name, ...(topicId ? { topic: { title: title ?? topicTitle(root?.text) } } : {}) },
             entries: kept,
             earlier,
             now,
+            rootId,
+            ...topicsPart,
           });
-          log.info('intake', 'record-block', { place, lines: kept.length, earlier, opening: codexEmpty, ok: pull.ok, streaming: streaming.length });
+          log.info('intake', 'record-block', { place, lines: kept.length, earlier, opening: codexEmpty, ok: pull.ok, streaming: streaming.length,
+            quotes: topicsPart.quotes?.length ?? 0, moreTopics: topicsPart.moreTopics ?? 0, table: topicsPart.table?.length ?? 0, ...openingLog });
         }
         // The watermark moves to the trigger only when everything before it reached
         // the session: the back-fill succeeded, or there is none (a resumed
@@ -1981,6 +2064,8 @@ export function createOrchestrator(
           seenHow,
           streaming,
           woven,
+          seenExtra,
+          tableShown,
           // 编织完成 → turn/start 之间不再读盘：首轮直接用预取的会话记录
           // （新会话及旧单会话的缺失值由上面的 model/effort 补齐）。
           firstRec: prior ?? null,
@@ -2002,6 +2087,49 @@ export function createOrchestrator(
           .catch(() => undefined);
       }
     }));
+  }
+
+  /** The main area's last lines before an opening's first message: 10, with this bot's own unless guest. */
+  function pullMainBefore(chatId: string, before: number, excludeMessageId: string, tier: TurnPerm['roleSuffix']): Promise<ThreadPull> {
+    return orStop(fetchChatContext(channel, chatId, { before, excludeMessageId, enough: OPENING_MAIN_MAX, names, keepSelf: tier !== 'guest' }),
+      { messages: [], ok: false, complete: false });
+  }
+
+  /** An opening's main-area section: its lines and the 引用行 among them,
+   * with the topics other bots opened there found first. */
+  async function mainSection(chatId: string, pull: ThreadPull, list: TopicView[], to: number, exclude: string | undefined, tier: TurnPerm['roleSuffix']) {
+    const main = pull.ok ? keepRecent(pull.messages, undefined, OPENING_MAIN_MAX) : [];
+    const known = await topicCtx.quotable(chatId, list);
+    const found = await orStop(topicCtx.discover(chatId, main, knownIds(known)), []);
+    const { quotes, more } = topicQuotes([...known, ...found], { from: main[0]?.createTime ?? 0, to, exclude, tier }, names);
+    return { main, quotes, moreTopics: more };
+  }
+
+  /**
+   * A user-opened topic session's opening (product.md 3.5, s14b): a pointer to
+   * the message the topic hangs under, and the main area's 10 lines before it
+   * with the 引用行 among them; in a single group the pointer names the main
+   * session (same tier). A topic group has no main area: none of it. Each
+   * lookup starts once its inputs (the first message, the group's topics) arrive.
+   */
+  async function topicOpening(msg: NormalizedMessage, rootP: Promise<ContextMessage | undefined>, listP: Promise<TopicView[]>, project: Project | undefined, tier: TurnPerm['roleSuffix']) {
+    const mainRecP = project?.kind === 'single' ? getSession(tier ? `${msg.chatId}#${tier}` : msg.chatId).catch(() => undefined) : undefined;
+    // The group's mode first (cached), so a topic group pulls no main area.
+    const [noMain, root] = await Promise.all([orStop(topicCtx.noMainArea(msg.chatId), false), rootP]);
+    if (noMain) return { root, part: {}, log: { topicGroup: true } };
+    const pull = root?.createTime ? await pullMainBefore(msg.chatId, root.createTime, root.messageId, tier) : undefined;
+    const section = pull && root ? await mainSection(msg.chatId, pull, await listP, root.createTime, msg.threadId, tier) : { main: [] };
+    const mainRec = await mainRecP;
+    const pointer = {
+      ...(root ? { root: { at: root.createTime, who: { kind: root.from, name: root.senderName } } } : {}),
+      ...(mainRec?.sessionId ? { mainSessionId: mainRec.sessionId } : {}),
+    };
+    const { main, ...quoted } = section;
+    return {
+      root,
+      part: { opening: { pointer, main }, ...quoted },
+      log: { pointer: true, mainLines: main.length, mainSession: Boolean(pointer.mainSessionId), topicGroup: false, mainOk: pull?.ok ?? false },
+    };
   }
 
   /** Reuse an in-memory codex thread, else resume from the persisted store.
@@ -2149,18 +2277,25 @@ export function createOrchestrator(
       // and any file attachments (their paths get woven into the prompt text).
       const imagesP = messageHasImages(msg) ? collectInboundImages(channel, msg) : Promise.resolve(undefined);
       const ingestP = ingestContext(msg, text);
+      // The opening's main-area lines before the trigger and the 引用行 among them
+      // (not for a goal: its objective stays self-contained). Never rejects.
+      const listP = !goal && topics ? topics.list(msg.chatId) : Promise.resolve([]);
+      const sectionP = goal ? undefined : Promise.all([pullMainBefore(msg.chatId, msg.createTime, msg.messageId, perm.roleSuffix), listP])
+        .then(async ([pull, list]) => ({ pull, ...await mainSection(msg.chatId, pull, list, msg.createTime, undefined, perm.roleSuffix) }));
       let thread: AgentThread;
       let model: string;
       let effort: ReasoningEffort;
       let images: string[] | undefined;
       let firstText: string;
       let voiceReply: VoiceReply | undefined;
+      let section: Awaited<typeof sectionP>;
       try {
-        const [started, imgs, ingested] = await Promise.all([threadP, imagesP, ingestP]);
+        const [started, imgs, ingested, opened] = await Promise.all([threadP, imagesP, ingestP, sectionP]);
         ({ thread, model, effort } = started);
         images = imgs;
         firstText = ingested.text || '你好，我们开始吧。';
         voiceReply = ingested.voice;
+        section = opened;
       } catch (err) {
         reaction?.done();
         // Keep the project reserved until any delayed backend process has closed.
@@ -2170,6 +2305,20 @@ export function createOrchestrator(
           .send(msg.chatId, { markdown: `❌ 启动失败：${err instanceof Error ? err.message : String(err)}` }, { replyTo: msg.messageId })
           .catch(() => undefined);
         return;
+      }
+      if (section) {
+        // The bot-opened topic's opening (s14b): where it hangs, and the main area before it.
+        const { pull, main, quotes, moreTopics } = section;
+        firstText = weaveRecordBlock(firstText, {
+          place: { group: project?.name, me: channel.botIdentity?.name, topic: { title: topicTitle(msg.content) } },
+          entries: [],
+          now: msg.createTime || Date.now(),
+          opening: { pointer: { botOpened: true, root: { at: msg.createTime, who: senderWho(msg) } }, main },
+          quotes,
+          moreTopics,
+        });
+        log.info('intake', 'record-block', { place: 'topic', lines: 0, opening: true, botOpened: true, ok: pull.ok,
+          pointer: true, mainLines: main.length, quotes: quotes.length, moreTopics });
       }
       log.info('card', 'start', { project: project?.name ?? '(unregistered)', model, effort, images: images?.length ?? 0, goal: Boolean(goal) });
       const titleJobKey = await registerSessionTitle(be, thread.sessionId, cwd, titleSource);
@@ -2420,6 +2569,7 @@ export function createOrchestrator(
           // drains the stream to turn/completed), so the card flips at the right
           // time AND no stale `done` leaks into the next turn.
           const { usage } = await thread.compact();
+          markTopicsDue(sessionKey, msg.chatId, thread.sessionId);
           if (usage) lastUsage.set(sessionKey, { used: usage.usedTokens, window: usage.contextWindow });
           else lastUsage.delete(sessionKey); // refreshes on the next turn's usage event
           log.info('intake', 'compact', { sessionKey, used: usage?.usedTokens ?? null, before: before?.used ?? null });
@@ -4510,9 +4660,11 @@ export function createOrchestrator(
     /** The trigger, marked seen once the host accepts the first turn (see QueuedTurn.seen). */
     seen?: SeenMark;
     seenHow?: SeenHow;
-    /** The first turn's record block: cards still streaming, and the ids it carried (see QueuedTurn). */
+    /** The first turn's record block: cards still streaming, the ids it carried, the topics it quoted and whether it had the table (see QueuedTurn). */
     streaming?: SeenMark[];
     woven?: string[];
+    seenExtra?: SeenMark[];
+    tableShown?: boolean;
     /** single-session group: reply by quoting (no reply_in_thread / topic). */
     flat?: boolean;
     /** when admin/guest tiers are split: 'admin'|'guest' to namespace the
@@ -4769,11 +4921,13 @@ export function createOrchestrator(
         seenHow: opts.seenHow,
         streaming: opts.streaming,
         woven: opts.woven,
+        seenExtra: opts.seenExtra,
+        tableShown: opts.tableShown,
       };
       let replyTo = opts.replyTo;
       let replyInThread = opts.flat ? false : (opts.replyInThread ?? Boolean(opts.knownThreadId));
       for (;;) {
-        const turnInput = currentTurn.input;
+        let turnInput = currentTurn.input;
         state.requesterOpenId = currentTurn.requesterOpenId;
         dropRetries(topicThreadId); // an older card's [重试] would replay out of order
         if (titleTurnAttempted && !titleStart && opts.titleJobKey) {
@@ -4791,6 +4945,17 @@ export function createOrchestrator(
         const rec =
           firstRec !== undefined ? (firstRec ?? undefined) : topicThreadId ? await getSession(topicThreadId) : undefined;
         firstRec = undefined;
+        if (!currentTurn.tableShown && topics && topicThreadId && topicsDueFor(topicThreadId, opts.chatId, rec, opts.thread.sessionId)) {
+          // The main session compacted, and no block of this run carried the recent
+          // topics yet (a queued turn, or one that wove none): they go first (s14b).
+          const rows = topicRows(await topics.list(opts.chatId, { limit: 5 }), tierOf(topicThreadId), names);
+          if (rows.length) {
+            const place = { group: (await getProjectByChatId(opts.chatId))?.name, me: channel.botIdentity?.name };
+            turnInput = { ...turnInput, text: weaveRecordBlock(turnInput.text ?? '', { place, entries: [], now: Date.now(), table: rows }) };
+            currentTurn.tableShown = true;
+            log.info('intake', 'record-block', { place: 'main', lines: 0, table: rows.length });
+          }
+        }
         const turnModel = rec?.model ?? opts.model;
         const turnEffort = rec?.effort ?? opts.effort;
         const modelDisp = getModelDisplay(cfg);
@@ -5038,8 +5203,9 @@ export function createOrchestrator(
             // The host took the input: only now do it and the history woven into
             // it count as seen (a refused turn/start or a crash before here leaves
             // both for the next back-fill and a re-push).
-            if (unseen && topicThreadId) markSeen(topicThreadId, unseen, currentTurn.seenHow, currentTurn.streaming);
+            if (unseen && topicThreadId) markSeen(topicThreadId, unseen, currentTurn.seenHow, currentTurn.streaming, currentTurn.seenExtra);
             unseen = undefined;
+            if (currentTurn.tableShown && topicThreadId) setTopicsDue(topicThreadId, '');
             if (currentTurn.woven?.length) state.woven = new Set(currentTurn.woven);
             // Host accepted the first turn. Title generation now overlaps the
             // remainder of that turn; the binding was persisted before this loop.
@@ -5062,6 +5228,7 @@ export function createOrchestrator(
             const usage = render.snapshot().usage;
             if (usage) lastUsage.set(topicThreadId, usage);
           }
+          if (ev.type === 'compaction' && ev.phase === 'end' && !ev.failed) markTopicsDue(topicThreadId, opts.chatId, opts.thread.sessionId);
           rc.rs = segmentSnapshot();
           // The global mode is live-editable. Re-evaluate on every structural /
           // answer frame so switching away from manual removes the button from
@@ -5608,6 +5775,7 @@ export function createOrchestrator(
             if (cur.stream) cur.stream.streamCoalesced(channel, buildRunCard(cur.rc), ANSWER_EID);
           }
           if (topicThreadId && usage) lastUsage.set(topicThreadId, usage);
+          if (ev.type === 'compaction' && ev.phase === 'end' && !ev.failed) markTopicsDue(topicThreadId, opts.chatId, opts.thread.sessionId);
           continue;
         }
         if (ev.type === 'turn_started') {

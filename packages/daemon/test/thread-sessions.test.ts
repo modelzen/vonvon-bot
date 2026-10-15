@@ -18,8 +18,18 @@ const fake = vi.hoisted(() => ({
     message_id: path.message_id, thread_id: 'omt_new', msg_type: 'text', create_time: '1',
     sender: { id: 'ou_q', sender_type: 'user', sender_name: '王五' }, body: { content: JSON.stringify({ text: `${path.message_id} 的原话` }) },
   }] } })),
+  list: vi.fn(async (..._args: unknown[]) => ({ code: 0, data: { items: [] as unknown[] } })),
+  chatGet: vi.fn(async (..._args: unknown[]): Promise<unknown> => { throw new Error('no im:chat:readonly'); }),
   log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() },
+  /** bots.json's bots, and where their topic registries live. */
+  bots: [] as object[],
+  localRoot: '',
 }));
+vi.mock('../src/config/bots', async (original) => ({ ...await original<object>(), loadBots: async () => ({ version: 1, bots: fake.bots }) }));
+vi.mock('../src/config/paths', async (original) => {
+  const real = await original<typeof import('../src/config/paths')>();
+  return { ...real, botPaths: (appId: string) => ({ ...real.botPaths(appId), topicsDir: `${fake.localRoot}/${appId}` }) };
+});
 vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_ctx: unknown, fn: () => unknown) => fn() }));
 vi.mock('../src/agent', async (original) => ({ ...await original<object>(), createBackend: () => fake.backend }));
 vi.mock('../src/project/registry', async (original) => ({
@@ -89,7 +99,7 @@ function message(text: string, threadId?: string, extra: Partial<NormalizedMessa
 }
 function setup(topics?: TopicRegistry) {
   const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner' } } };
-  const channel = { send: fake.send, rawClient: { im: { v1: { message: { get: fake.get }, messageReaction: {
+  const channel = { send: fake.send, rawClient: { im: { v1: { message: { get: fake.get, list: fake.list }, chat: { get: fake.chatGet }, messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
   orchestrator = createOrchestrator(channel as never, cfg, '/test', topics);
@@ -109,6 +119,9 @@ beforeEach(() => {
   fake.send.mockReset().mockResolvedValue({});
   fake.history.mockReset().mockResolvedValue({ messages: [], ok: true, complete: true });
   fake.chat.mockReset().mockResolvedValue({ messages: [], ok: true, complete: true });
+  fake.list.mockReset().mockResolvedValue({ code: 0, data: { items: [] } });
+  fake.chatGet.mockReset().mockRejectedValue(new Error('no im:chat:readonly'));
+  fake.bots = [];
   fake.backend.resumeThread.mockReset();
   fake.backend.startThread.mockReset();
 });
@@ -262,7 +275,7 @@ describe('names and watermark (s09)', () => {
     const o = setup();
     await o.onMessage(message('first time here', 'omt_topic', { rootId: 'om_root', replyToMessageId: 'om_root' }));
     await done();
-    expect(run.consumed[0]!.text).toMatch(/^\[飞书 · 群「test」· 话题「om_root 的原话」\]\n.* 王五：om_root 的原话\n\[\/飞书\]\n/);
+    expect(run.consumed[0]!.text).toMatch(/^\[飞书 · 群「test」· 话题「om_root 的原话」\]\n这个话题开在群主区 .* 王五的消息下。.*\n.* 王五：om_root 的原话（话题第一条）\n\[\/飞书\]\n/);
     expect(run.consumed[0]!.text).not.toContain('用户引用了一条消息');
   });
 
@@ -778,5 +791,311 @@ describe('context meter after a restart (s13)', () => {
     await o.onMessage(message('rebuilt elsewhere', 'omt_other'));
     await done();
     expect(finalCard()).toContain('上下文 —');
+  });
+});
+
+describe('topic openings, 引用行 and the topics table (s14b)', () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'topics-')); });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+  const registry = () => createTopicRegistry({ dir, sessions: async () => [...fake.records.values()] });
+  const multi = () => { fake.project = { name: 'test', chatId: 'chat', cwd: '/test', kind: 'multi' }; };
+  const ctx = (messageId: string, text: string, createTime: number, extra: object = {}) =>
+    ({ messageId, senderName: '李四', text, from: 'user', createTime, ...extra });
+  const clock = '(?:\\d\\d-\\d\\d )?\\d\\d:\\d\\d';
+  const opened = (topics: TopicRegistry, topicId: string, at: number, first: object = {}) =>
+    topics.note('chat', { topicId, at, from: { kind: 'user', openId: 'ou_li' }, first: { id: `om_${topicId}`, text: `${topicId} 的标题`, ...first } });
+
+  it("opens a user's topic with the pointer, the main area before its first message and the 引用行 there", async () => {
+    fake.records.set('chat', record('chat'));
+    fake.records.set('omt_old', record('omt_old'));
+    const topics = registry();
+    const rootAt = Date.now() - 60_000;
+    await opened(topics, 'omt_old', rootAt - 30_000, { id: 'om_m1' });
+    await opened(topics, 'omt_older', rootAt - 50_000); // before the oldest main line: not quoted
+    const run = thread('topic-session');
+    fake.backend.startThread.mockResolvedValue(run.t);
+    fake.history.mockResolvedValueOnce({ ok: true, complete: true, messages: [ctx('om_root', '订单接口一直报 500', rootAt, { senderName: '张三' })] });
+    fake.chat.mockResolvedValueOnce({ ok: true, complete: true, messages: [ctx('om_m1', '下午三点发版', rootAt - 40_000)] });
+    const o = setup(topics);
+    await o.onMessage(message('@bot 帮忙看下', 'omt_new', { rootId: 'om_root' }));
+    await done();
+    expect(fake.chat).toHaveBeenCalledWith(expect.anything(), 'chat', expect.objectContaining({ before: rootAt, excludeMessageId: 'om_root', enough: 10, keepSelf: true }));
+    expect(run.consumed[0]!.text).toMatch(new RegExp(`^\\[飞书 · 群「test」· 话题「[^」]*」\\]\\n这个话题开在群主区 ${clock} 张三的消息下（主区会话 id：old-chat）。.*\\n`
+      + `主区在这之前：\\n${clock} 李四：下午三点发版\\n`
+      + `${clock} 〔话题〕用户u_li在上面这条下开了话题「omt_old 的标题」，你在那边另有一条会话，这里不用接。（话题 id：omt_old，会话 id：old-omt_old）\\n`
+      + `话题里：\\n${clock} 张三：订单接口一直报 500（话题第一条）\\n\\[/飞书\\]\\n`));
+    expect(fake.log.info).toHaveBeenCalledWith('intake', 'record-block', expect.objectContaining({ place: 'topic', pointer: true, mainLines: 1, mainSession: true, quotes: 1 }));
+  });
+
+  it("names the same tier's main session, leaves the bot's own main lines out for a guest, and names none in a multi group", async () => {
+    fake.project = { name: 'test', chatId: 'chat', cwd: '/test', kind: 'single', guestMode: 'qa' };
+    fake.records.set('chat#guest', record('chat#guest'));
+    fake.records.set('chat#admin', record('chat#admin'));
+    const run = thread('topic-session');
+    fake.backend.startThread.mockResolvedValue(run.t);
+    const o = setup();
+    await o.onMessage(message('访客开的话题', 'omt_g', { rootId: 'om_root', senderId: 'ou_guest' }));
+    await done();
+    expect(fake.chat).toHaveBeenCalledWith(expect.anything(), 'chat', expect.objectContaining({ keepSelf: false }));
+    expect(run.consumed[0]!.text).toContain('（主区会话 id：old-chat#guest）');
+    multi();
+    fake.records.set('chat', record('chat'));
+    fake.log.info.mockClear();
+    await o.onMessage(message('多话题群', 'omt_m', { rootId: 'om_root2' }));
+    await done();
+    expect(run.consumed[1]!.text).toMatch(/\n这个话题开在群主区 .* 王五的消息下。主区/);
+  });
+
+  it('leaves the main area out of a topic group, and asks nothing for a post', async () => {
+    fake.chatGet.mockResolvedValue({ code: 0, data: { chat_mode: 'topic' } });
+    const run = thread('topic-session');
+    fake.backend.startThread.mockResolvedValue(run.t);
+    const o = setup();
+    await o.onMessage(message('帖子里的回复', 'omt_p', { rootId: 'om_post' }));
+    await done();
+    expect(run.consumed[0]!.text).not.toContain('这个话题');
+    expect(run.consumed[0]!.text).toContain('王五：om_post 的原话（话题第一条）');
+    expect(fake.chat).not.toHaveBeenCalled();
+    fake.log.info.mockClear();
+    await o.onMessage(message('发帖并 @bot', 'omt_q'));
+    await done();
+    expect(fake.chatGet).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens a topic the bot starts from a main @ with the pointer and the main area before the trigger', async () => {
+    multi();
+    const run = thread('opened');
+    fake.backend.startThread.mockResolvedValue(run.t);
+    const trigger = message('订单接口一直报 500', undefined, { senderName: '张三' });
+    fake.chat.mockResolvedValueOnce({ ok: true, complete: true, messages: [ctx('om_m1', '下午三点发版', trigger.createTime - 1000)] });
+    const o = setup();
+    await o.onMessage(trigger);
+    await done();
+    expect(fake.chat).toHaveBeenCalledWith(expect.anything(), 'chat', expect.objectContaining({ before: trigger.createTime, excludeMessageId: trigger.messageId, enough: 10 }));
+    expect(run.consumed[0]!.text).toMatch(new RegExp(`^\\[飞书 · 群「test」· 话题「订单接口一直报 500」\\]\\n这个话题是你在群主区 ${clock} 张三的这条消息下开的，就是下面这条。.*\\n`
+      + `主区在这之前：\\n${clock} 李四：下午三点发版\\n\\[/飞书\\]\\n\\n\\[本条消息的发信人：张三`));
+    fake.chat.mockResolvedValueOnce({ ok: false, complete: false, messages: [] });
+    fake.log.info.mockClear();
+    await o.onMessage(message('拉不到主区'));
+    await done();
+    expect(run.consumed[1]!.text).toMatch(/^\[飞书 · 群「test」· 话题「拉不到主区」\]\n这个话题是你在群主区 .*\n\[\/飞书\]\n/);
+  });
+
+  it('quotes a topic opened since the main session last spoke, with its session id, once', async () => {
+    fake.records.set('chat', record('chat', { lastSeenAt: 5 }));
+    fake.records.set('omt_t', record('omt_t'));
+    const topics = registry();
+    await opened(topics, 'omt_t', Date.now() - 1000);
+    const run = thread('old-chat');
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    fake.chat.mockResolvedValue({ ok: false, complete: false, messages: [] }); // the turn runs on local records only
+    const o = setup(topics);
+    const first = message('第一轮');
+    await o.onMessage(first);
+    await done();
+    expect(run.consumed[0]!.text).toMatch(new RegExp(`^\\[飞书 · 群「test」· 主区\\]\\n（更早的消息没带进来，需要时用 vonvon 飞书 skill 查）\\n`
+      + `${clock} 〔话题〕用户u_li开了话题「omt_t 的标题」，你在那边另有一条会话，这里不用接。（话题 id：omt_t，会话 id：old-omt_t）\\n\\[/飞书\\]\\n`));
+    await vi.waitFor(() => expect(fake.records.get('chat').seen).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'omt_t' })])));
+    expect(fake.records.get('chat').lastSeenAt).toBe(5);
+    fake.log.info.mockClear();
+    await o.onMessage(message('第二轮'));
+    await done();
+    expect(run.consumed[1]!.text).not.toContain('〔话题〕');
+  });
+
+  it('does not quote again to a session that starts over from 0 after a failed pull', async () => {
+    const topics = registry();
+    const at = Date.now() - 1000;
+    await opened(topics, 'omt_t', at);
+    fake.records.set('chat', record('chat', { lastSeenAt: 0, seen: [{ id: 'omt_t', at }] }));
+    const run = thread('old-chat');
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    fake.chat.mockResolvedValueOnce({ ok: true, complete: true, messages: [ctx('om_1', '一条', at - 1000)] });
+    const o = setup(topics);
+    await o.onMessage(message('又来'));
+    await done();
+    expect(run.consumed[0]!.text).toContain('李四：一条');
+    expect(run.consumed[0]!.text).not.toContain('omt_t');
+  });
+
+  it("starts a new main session's 引用行 at its oldest line", async () => {
+    const topics = registry();
+    const trigger = message('第一次在主区');
+    await opened(topics, 'omt_before', trigger.createTime - 5000);
+    await opened(topics, 'omt_after', trigger.createTime - 1000);
+    const run = thread('main-session');
+    fake.backend.startThread.mockResolvedValue(run.t);
+    fake.chat.mockResolvedValueOnce({ ok: true, complete: true, messages: [ctx('om_1', '最早的一条', trigger.createTime - 2000)] });
+    const o = setup(topics);
+    await o.onMessage(trigger);
+    await done();
+    expect(run.consumed[0]!.text).toContain('（话题 id：omt_after）');
+    expect(run.consumed[0]!.text).not.toContain('omt_before');
+  });
+
+  it('recognises a topic another bot opened under a main-area line', async () => {
+    fake.records.set('chat', record('chat', { lastSeenAt: 5 }));
+    const topics = registry();
+    const run = thread('old-chat');
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const trigger = message('总结一下');
+    fake.chat.mockResolvedValueOnce({ ok: true, complete: true, messages: [
+      ctx('om_root', '订单接口一直报 500', trigger.createTime - 2000, { threadId: 'omt_a', senderId: 'ou_zhang', senderName: '张三' }),
+    ] });
+    fake.list.mockResolvedValueOnce({ code: 0, data: { items: [{ message_id: 'om_p', msg_type: 'text', create_time: String(trigger.createTime - 1000),
+      sender: { id: 'cli_p', id_type: 'app_id', sender_type: 'app', sender_name: '小P', open_bot_id: 'ou_p' }, body: { content: '{"text":"看看"}' } }] } });
+    const o = setup(topics);
+    await o.onMessage(trigger);
+    await done();
+    expect(await topics.get('chat', 'omt_a')).toMatchObject({ openedBy: { kind: 'bot', openId: 'ou_p' }, firstId: 'om_root' });
+    expect(run.consumed[0]!.text).toContain('张三：订单接口一直报 500\n');
+    expect(run.consumed[0]!.text).toMatch(/〔话题〕小P（bot）在上面这条下开了话题「订单接口一直报 500」，你在那边还没有会话，这里不用接。（话题 id：omt_a）\n/);
+  });
+
+  it("quotes the topics another vonvon bot on this daemon opened, from its registry, with this bot's session ids only", async () => {
+    fake.records.set('chat', record('chat', { lastSeenAt: 5 }));
+    fake.records.set('omt_both', record('omt_both'));
+    const topics = registry();
+    const at = Date.now() - 3000;
+    await opened(topics, 'omt_both', at + 500); // this bot first saw it from 李四's reply
+    fake.localRoot = dir;
+    fake.bots = [{ name: 'me', appId: 'app' }, { name: 'p', appId: 'cli_p', botName: '小P' }];
+    const theirs = createTopicRegistry({ dir: join(dir, 'cli_p'), sessions: async () => [] });
+    await theirs.note('chat', { topicId: 'omt_both', at, from: { kind: 'self' } });
+    await theirs.note('chat', { topicId: 'omt_p', at: at + 1000, from: { kind: 'self' }, first: { id: 'om_r', text: '灰度方案' } });
+    await createTopicRegistry({ dir: join(dir, 'app'), sessions: async () => [] }).note('chat', { topicId: 'omt_self', at, from: { kind: 'self' } });
+    const run = thread('old-chat');
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    fake.chat.mockResolvedValueOnce({ ok: true, complete: true, messages: [ctx('om_r', '灰度方案', at + 900, { threadId: 'omt_p', senderName: '张三' })] });
+    const o = setup(topics);
+    await o.onMessage(message('总结一下'));
+    await done();
+    expect(run.consumed[0]!.text).toMatch(new RegExp(`\\n${clock} 〔话题〕小P（bot）开了话题「omt_both 的标题」，你在那边另有一条会话，这里不用接。（话题 id：omt_both，会话 id：old-omt_both）\\n`
+      + `${clock} 张三：灰度方案\\n${clock} 〔话题〕小P（bot）在上面这条下开了话题「灰度方案」，你在那边还没有会话，这里不用接。（话题 id：omt_p）\\n\\[/飞书\\]`));
+    expect(run.consumed[0]!.text).not.toContain('omt_self');
+    expect(fake.list).not.toHaveBeenCalled(); // known from the registry: not looked up
+  });
+
+  /** A thread whose turns yield these events between turn_started and done, one list per turn. */
+  function turns(sessionId: string, perTurn: AgentEvent[][], hold?: Promise<void>) {
+    const run = thread(sessionId);
+    Object.assign(run.t, { supportsSteer: false, compact: vi.fn(async () => ({ usage: null })) });
+    run.t.runStreamed = (input: AgentInput) => {
+      run.consumed.push(input);
+      const evs = perTurn.shift() ?? [];
+      const wait = run.consumed.length === 1 ? hold : undefined;
+      return { turnId: () => 'turn', events: (async function* (): AsyncGenerator<AgentEvent> {
+        yield { type: 'turn_started', turnId: 'turn' };
+        yield* evs;
+        await wait;
+        yield { type: 'done', turnId: 'turn' };
+      })() };
+    };
+    return run;
+  }
+  const compacted: AgentEvent = { type: 'compaction', phase: 'end' };
+  const table = '〔本群最近 1 个活跃话题〕';
+
+  it('shows the recent topics on the next main turn after a compaction, once', async () => {
+    fake.records.set('chat', record('chat', { lastSeenAt: 5, sessionId: 'old-chat' }));
+    const topics = registry();
+    await opened(topics, 'omt_t', 3);
+    const run = turns('old-chat', [[compacted], [], []]);
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup(topics);
+    await o.onMessage(message('一'));
+    await done();
+    expect(run.consumed[0]!.text).not.toContain('〔本群');
+    await vi.waitFor(() => expect(fake.records.get('chat').topicsDue).toBe('old-chat'));
+    for (const text of ['二', '三']) {
+      fake.log.info.mockClear();
+      await o.onMessage(message(text));
+      await done();
+    }
+    expect(run.consumed[1]!.text).toMatch(new RegExp(`^\\[飞书 · 群「test」· 主区\\]\\n${table}这条会话压缩过.*\\n· 「omt_t 的标题」用户u_li ${clock} 开的`));
+    expect(run.consumed[2]!.text).not.toContain('〔本群');
+    expect(fake.records.get('chat').topicsDue).toBe('');
+  });
+
+  it('sets nothing for a failed compaction or one in a topic, and sets it after /compact', async () => {
+    fake.records.set('chat', record('chat', { lastSeenAt: 5 }));
+    fake.records.set('omt_x', record('omt_x'));
+    const run = turns('old-chat', [[{ ...compacted, failed: true }], [compacted]]);
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup();
+    await o.onMessage(message('一'));
+    await done();
+    fake.log.info.mockClear();
+    await o.onMessage(message('话题里', 'omt_x'));
+    await done();
+    expect(fake.records.get('chat')).not.toHaveProperty('topicsDue');
+    expect(fake.records.get('omt_x')).not.toHaveProperty('topicsDue');
+    await o.onMessage(message('/compact'));
+    await vi.waitFor(() => expect(fake.records.get('chat').topicsDue).toBe('old-chat'));
+  });
+
+  it('puts the table above a message queued during the turn that compacted', async () => {
+    fake.records.set('chat', record('chat', { lastSeenAt: 5 }));
+    const topics = registry();
+    await opened(topics, 'omt_t', 3);
+    let release!: () => void;
+    const run = turns('old-chat', [[compacted], []], new Promise<void>((resolve) => { release = resolve; }));
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup(topics);
+    await o.onMessage(message('一'));
+    await vi.waitFor(() => expect(fake.records.get('chat').topicsDue).toBe('old-chat'));
+    await o.onMessage(message('排队的'));
+    await vi.waitFor(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'queued', expect.anything()));
+    release();
+    await vi.waitFor(() => expect(run.consumed).toHaveLength(2));
+    expect(run.consumed[1]!.text).toMatch(new RegExp(`^\\[飞书 · 群「test」· 主区\\]\\n${table}.*\\n· .*\\n\\[/飞书\\]\\n\\n\\[本条消息的发信人：Owner`));
+    await vi.waitFor(() => expect(fake.records.get('chat').topicsDue).toBe(''));
+  });
+
+  it("asks the group and pulls the main area of a new topic session without waiting for the model list", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const run = thread('topic-session');
+    fake.backend.startThread.mockResolvedValue(run.t);
+    const rootAt = Date.now() - 60_000;
+    fake.history.mockResolvedValueOnce({ ok: true, complete: true, messages: [ctx('om_root', '订单接口一直报 500', rootAt, { senderName: '张三' })] });
+    fake.chat.mockResolvedValueOnce({ ok: true, complete: true, messages: [ctx('om_m1', '下午三点发版', rootAt - 40_000)] });
+    const o = setup();
+    const models = await fake.backend.listModels(); // after the boot prewarm: the turn's own call is held
+    fake.backend.listModels.mockImplementationOnce(async () => { await held; return models; });
+    await o.onMessage(message('@bot 帮忙看下', 'omt_new', { rootId: 'om_root' }));
+    await vi.waitFor(() => expect(fake.chat).toHaveBeenCalledWith(expect.anything(), 'chat', expect.objectContaining({ before: rootAt })));
+    expect(fake.chatGet).toHaveBeenCalledTimes(1);
+    expect(fake.backend.startThread).not.toHaveBeenCalled();
+    release();
+    await done();
+    expect(run.consumed[0]!.text).toContain('李四：下午三点发版');
+  });
+
+  it('looks up the topics under the main lines while a bot-opened topic session starts', async () => {
+    multi();
+    const run = thread('opened');
+    let release!: (t: unknown) => void;
+    fake.backend.startThread.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const trigger = message('订单接口一直报 500');
+    fake.chat.mockResolvedValueOnce({ ok: true, complete: true, messages: [ctx('om_r', '灰度方案', trigger.createTime - 1000, { threadId: 'omt_a' })] });
+    const o = setup(registry());
+    await o.onMessage(trigger);
+    await vi.waitFor(() => expect(fake.list).toHaveBeenCalled());
+    release(run.t);
+    await done();
+    expect(run.consumed[0]!.text).toContain('李四：灰度方案');
+  });
+
+  it('does not open a second topic for a main @ re-pushed after a restart', async () => {
+    multi();
+    const topics = registry();
+    const sent = message('订单接口一直报 500', undefined, { createTime: Date.now() - 2 * 60_000 });
+    await topics.note('chat', { topicId: 'omt_mine', at: sent.createTime, from: { kind: 'self' }, first: { id: sent.messageId } });
+    const o = setup(topics);
+    await o.onMessage(sent);
+    expect(fake.log.info).toHaveBeenCalledWith('intake', 'late-redelivery-skipped', expect.objectContaining({ msgId: sent.messageId, reopen: true }));
+    expect(fake.backend.startThread).not.toHaveBeenCalled();
   });
 });

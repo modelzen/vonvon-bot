@@ -52,6 +52,10 @@ export interface SessionRecord {
    * card after a restart is not blank. Read only while `sessionId` still matches
    * the record's: a rebuilt, cleared or resumed session starts over. */
   usage?: { sessionId: string; used: number; window: number | null };
+  /** A main session that compacted: its native session id, until a turn shows
+   * the group's recent topics (s14b); '' once shown. Tied to the session id
+   * like {@link usage}, so a new session drops it. Older records lack it. */
+  topicsDue?: string;
   createdAt: number;
   updatedAt: number;
 }
