@@ -15,8 +15,7 @@ export type Kind = 'agent' | 'project' | 'session';
 export type Target = { bot?: string; group?: string; session?: string };
 
 const TABLES: Record<Kind, Record<string, SectionSchema>> = { agent: agentSectionSchemas, project: projectSectionSchemas, session: sessionSectionSchemas };
-/** cliBridge (咖啡一下) left v1 in M1; it stays in --json until s02b and s02c remove it. */
-const sectionNames = (kind: Kind): string[] => Object.keys(TABLES[kind]).filter(name => name !== 'cliBridge');
+const sectionNames = (kind: Kind): string[] => Object.keys(TABLES[kind]);
 const FORMAT = '写成 节.项=值，例如 permission.mode=full';
 // A top-level text field already takes 2024 or true as typed (parseAssignments), so only text inside JSON lands here.
 const TYPES: Record<string, string> = { number: '要填数字', boolean: '要填 true 或 false', string: '要填文字，JSON 里的文字要加双引号', object: '要填 JSON', array: '要填 JSON' };

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHostSettings } from '../src/admin/host-settings';
@@ -81,5 +81,15 @@ describe('Host executable settings', () => {
     const initial = await f.read();
     expect((await preview.save({ scope: { kind: 'host' }, section: 'execution', revision: initial.sections.execution.revision, patch: { codexBin: f.first } })).kind).toBe('unavailable');
     expect(readServiceCodexBin(f.appDir)).toBeUndefined();
+  });
+
+  it('s02c1: leaves an old 咖啡一下 route file alone and shows no coffee in the view', async () => {
+    const f = await fixture();
+    const route = join(f.appDir, 'cli-bridge-route.json');
+    await writeFile(route, '{"botId":"cli_old"}\n');
+    const view = await f.read();
+    expect(Object.keys(view.runtime).sort()).toEqual(['codexBin', 'fallbackCwd', 'platform']);
+    expect(f.settings).not.toHaveProperty('act');
+    expect(await readFile(route, 'utf8')).toBe('{"botId":"cli_old"}\n');
   });
 });

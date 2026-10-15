@@ -1,4 +1,4 @@
-import type { BotSettingsEdit, BotSettingsAction, SettingsSave, SettingsActionResult, HostSettings } from './settings-types';
+import type { BotSettingsEdit, SettingsAction, SettingsSave, SettingsActionResult, HostSettings } from './settings-types';
 import { backendIds } from '../agent';
 import { catalogById } from '../agent/catalog';
 import type { AgentBackend, BackendProbe, PermissionMode, ReasoningEffort } from '../agent/types';
@@ -41,7 +41,7 @@ export type AdminWriteResult = { kind: 'done' } | SettingsSave | SettingsActionR
 
 export type AdminWriteOp =
   | { kind: 'settingsPatch'; edit: BotSettingsEdit }
-  | { kind: 'settingsAction'; action: BotSettingsAction }
+  | { kind: 'settingsAction'; action: SettingsAction }
   | { kind: 'voice'; value: import('../voice/types').VoiceAction }
   | { kind: 'switchBackend'; project: string; backend: string }
   | {

@@ -24,7 +24,6 @@ function inventory(folderToken: string) {
     ['PATCH session settings', 'settings', { type: 'save', edit: { scope: sessionScope, section: 'model', revision: 'old', patch: { selection: { kind: 'default' } } } }],
     ['PATCH host settings', 'settings', { type: 'save', edit: { scope: { kind: 'host' }, section: 'execution', revision: 'old', patch: { codexBin: null } } }],
     ['POST agent settings/actions', 'settings', { type: 'act', action: { kind: 'voice', botId: bot.appId, action: { action: 'disable' } } }],
-    ['POST host settings/actions', 'settings', { type: 'act', action: { kind: 'repairHostCliHooks', agents: ['codex'] } }],
     ['GET models', 'settings', { type: 'models', query: { botId: bot.appId, backend: 'codex-appserver', purpose: 'session' } }],
     ['GET voice', 'settings', { type: 'read', scope: agentScope }],
     ['POST voice', 'settings', { type: 'act', action: { kind: 'voice', botId: bot.appId, action: { action: 'disable' } } }],
@@ -73,7 +72,7 @@ describe('route inventory parity', () => {
       pendingGroups: async () => ({ groups: [] }), joinedGroups: async () => ({ groups: [] }), bindGroup: async () => project,
       collaboration: async () => ({ project: { name: project.name, chatId: project.chatId, cwd: project.cwd, kind: project.kind, backend: project.backend, enabled: true, revision: 'project-token' } }),
       startCodexJob: () => ({ id: 'fixture-job' }), codexJob: () => ({ id: 'fixture-job', type: 'install', state: 'succeeded' }),
-      settings: { read: async () => host, save: async () => ({ kind: 'saved', section: { scope: { kind: 'host' }, section: 'execution', value: host.sections.execution }, effects: [] }), act: async () => ({ kind: 'saved', view: host, effects: [], warnings: [] }), models: async query => ({ backend: query.backend, models: [], state: 'unavailable', source: 'backend-provided', observedAt: new Date().toISOString(), titleEfforts: [] }) },
+      settings: { read: async () => host, save: async () => ({ kind: 'saved', section: { scope: { kind: 'host' }, section: 'execution', value: host.sections.execution }, effects: [] }), act: async () => ({ kind: 'unavailable', reason: { kind: 'readonly', reason: 'owner-offline', message: 'fixture' } }), models: async query => ({ backend: query.backend, models: [], state: 'unavailable', source: 'backend-provided', observedAt: new Date().toISOString(), titleEfforts: [] }) },
     });
     const fixture = await startFixture(service);
     try {
