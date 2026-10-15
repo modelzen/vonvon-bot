@@ -10,6 +10,7 @@ import {
   type CardElement,
   type CardObject,
 } from './cards';
+import type { AgentErrorKind } from '../agent/error-kind';
 import type { ReasoningEffort } from '../agent/types';
 import type { Block, FooterStatus, RunState } from './run-state';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
@@ -34,6 +35,9 @@ export const RC = {
   remind: 'run.remind',
   /** goal-only: clear the goal but let the in-flight turn finish (no auto-continue). */
   endGoal: 'goal.end',
+  /** terminal card of a turn stopped by the idle watchdog or a network failure:
+   * run the same message again. */
+  retry: 'run.retry',
 } as const;
 
 /**
@@ -150,6 +154,9 @@ export interface RunCardState {
   /** One line at the top of the card when this turn was forced onto a new
    * session (resume failed, cwd changed). Kept on the terminal frame too. */
   sessionNotice?: string;
+  /** Terminal cards only. `available` renders [重试] (needs {@link cardKey});
+   * `sent` replaces it with a note once someone tapped it. */
+  retry?: 'available' | 'sent';
 }
 
 /**
@@ -333,15 +340,16 @@ function renderTerminal(state: RunState, rc: RunCardState): CardElement[] {
   } else if (state.terminal === 'interrupted') {
     elements.push(noteMd('_⏹ 已被中断_'));
   } else if (state.terminal === 'idle_timeout') {
-    const s = state.idleTimeoutSeconds ?? 0;
-    const idleLabel = s > 0 && s % 60 === 0 ? `${s / 60} 分钟` : `${s} 秒`;
-    elements.push(noteMd(`_⏱ ${idleLabel}无响应，已自动终止_`));
+    elements.push(noteMd(`_⏱ ${idleLabel(state.idleTimeoutSeconds ?? 0)}没有输出，已自动停止_`));
   } else if (state.terminal === 'error' && state.errorMsg) {
-    elements.push(noteMd(`⚠️ agent 失败：${state.errorMsg}`));
-    const advice = errorAdvice(state.errorMsg);
+    elements.push(noteMd(state.errorKind === 'network' ? `🌐 网络失败：${state.errorMsg}` : `⚠️ agent 失败：${state.errorMsg}`));
+    const advice = errorAdvice(state.errorKind, rc.retry === 'available' && Boolean(rc.cardKey));
     if (advice) elements.push(noteMd(advice));
   } else if (state.terminal === 'done' && !answer) {
     elements.push(noteMd('_（未返回内容）_'));
+  }
+  if (rc.retry === 'sent') {
+    elements.push(noteMd('_🔁 已重试，结果见下一张卡片_'));
   }
 
   // Context-usage gauge as the closing footnote (only at/above the warn tier).
@@ -352,23 +360,30 @@ function renderTerminal(state: RunState, rc: RunCardState): CardElement[] {
   const mEl = rc.modelOnTerminal ? modelEl(rc) : null;
   if (mEl) elements.push(mEl);
 
+  if (rc.cardKey && rc.retry === 'available') {
+    elements.push(actions([button('🔁 重试', { a: RC.retry, m: rc.cardKey }, 'primary')], CONTROLS_EID));
+  }
+
   return elements;
 }
 
+/** `600` → "10 分钟", `90` → "90 秒". */
+export function idleLabel(seconds: number): string {
+  return seconds > 0 && seconds % 60 === 0 ? `${seconds / 60} 分钟` : `${seconds} 秒`;
+}
+
 /**
- * One next-step suggestion for a fatal error, by message pattern (登录 / 用量 /
- * 网络重试). Pure copy classification — NEVER fires a request (the codex 401
- * chain stays codex's own business); unmatched messages get no advice line.
+ * One next-step suggestion for a fatal error (登录 / 用量 / 网络). Pure copy —
+ * NEVER fires a request (the codex 401 chain stays codex's own business);
+ * unclassified errors get no advice line.
  */
-function errorAdvice(msg: string): string | null {
-  if (/401|unauthor|not.?logged.?in|login|credential|token.*(expired|invalid)/i.test(msg)) {
-    return '🔑 凭证可能已失效：请在部署机上运行 `codex login` 重新登录后重试';
-  }
-  if (/usage.?limit|quota|rate.?limit|429|too many requests/i.test(msg)) {
-    return '📊 可能触达用量上限：发送 /usage 查看用量，稍后再试';
-  }
-  if (/network|timed?.?out|econn|epipe|enotfound|eai_again|socket|fetch failed|disconnect/i.test(msg)) {
-    return '🌐 网络波动：重发本条消息即可重试';
+function errorAdvice(kind: AgentErrorKind | undefined, canRetry: boolean): string | null {
+  if (kind === 'auth') return '🔑 凭证可能已失效：请在部署机上运行 `codex login` 重新登录后重试';
+  if (kind === 'quota') return '📊 可能触达用量上限：发送 /usage 查看用量，稍后再试';
+  if (kind === 'network') {
+    return canRetry
+      ? '连不上模型服务，可能是网络断了，或者服务暂时不可用。点「重试」再跑一次。'
+      : '连不上模型服务，可能是网络断了，或者服务暂时不可用。稍后重发本条消息即可重试。';
   }
   return null;
 }

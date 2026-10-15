@@ -106,7 +106,7 @@ export interface AppPreferences {
   showModel?: ModelDisplayMode | boolean;
   /** cap concurrent codex turns across all threads. Default 10. */
   maxConcurrentRuns?: number;
-  /** per-turn idle watchdog (seconds). 0 = off. Default 120 (on). */
+  /** per-turn idle watchdog (seconds). 0 = off. Default 600 (on). */
   runIdleTimeoutSeconds?: number;
   /** new-message-mid-turn behavior. Default 'steer'. */
   pendingPolicy?: PendingPolicy;
@@ -307,17 +307,22 @@ export function getAgentStopGraceMs(cfg: AppConfig): number {
  * card's custom-input validation so stored value == effective value. */
 export const RUN_IDLE_TIMEOUT_MIN_SEC = 10;
 export const RUN_IDLE_TIMEOUT_MAX_SEC = 3600;
+/** product.md 3.12: ten minutes without output (bridge used 120 s). Only the
+ * default moved; a stored value, including an explicit 120, is kept. */
+export const RUN_IDLE_TIMEOUT_DEFAULT_SEC = 600;
 
-/**
- * Per-turn idle watchdog in ms. Default 120s, ON. `0` disables. Clamps to
- * [10, 3600] seconds when set.
- */
+/** A stored or submitted watchdog value as it will take effect: 0 stays off,
+ * anything else is clamped to [MIN, MAX]; unusable input gives the default. */
+export function normalizeRunIdleTimeoutSeconds(raw: unknown): number {
+  if (raw === 0) return 0;
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0) return RUN_IDLE_TIMEOUT_DEFAULT_SEC;
+  return Math.min(Math.max(Math.floor(raw), RUN_IDLE_TIMEOUT_MIN_SEC), RUN_IDLE_TIMEOUT_MAX_SEC);
+}
+
+/** Per-turn idle watchdog in ms, or undefined when turned off (`0`). */
 export function getRunIdleTimeoutMs(cfg: AppConfig): number | undefined {
-  const raw = cfg.preferences?.runIdleTimeoutSeconds;
-  if (raw === 0) return undefined;
-  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0) return 120_000;
-  const clamped = Math.min(Math.max(Math.floor(raw), RUN_IDLE_TIMEOUT_MIN_SEC), RUN_IDLE_TIMEOUT_MAX_SEC);
-  return clamped * 1000;
+  const sec = normalizeRunIdleTimeoutSeconds(cfg.preferences?.runIdleTimeoutSeconds);
+  return sec === 0 ? undefined : sec * 1000;
 }
 
 /**

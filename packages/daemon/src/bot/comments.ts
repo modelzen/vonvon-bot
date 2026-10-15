@@ -30,6 +30,13 @@ export const SUPPORTED_FILE_TYPES = new Set(['doc', 'docx', 'sheet', 'bitable'])
  * long comment bodies); answers longer than this are truncated with an ellipsis. */
 export const REPLY_MAX_CHARS = 2000;
 
+/** Cut a comment reply to {@link REPLY_MAX_CHARS}. A trailing `notice` (the
+ * idle watchdog's 「N 分钟没有输出，已停止」) is kept whole: the answer gives way. */
+export function fitCommentReply(answer: string, notice = ''): string {
+  const room = REPLY_MAX_CHARS - notice.length;
+  return (answer.length > room ? `${answer.slice(0, room - 1)}…` : answer) + notice;
+}
+
 export type CommentFileType = 'doc' | 'docx' | 'sheet' | 'bitable';
 
 export interface ResolvedTarget {

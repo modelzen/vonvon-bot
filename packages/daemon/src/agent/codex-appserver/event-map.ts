@@ -1,3 +1,4 @@
+import { codexErrorKind } from '../error-kind';
 import type { AgentEvent } from '../types';
 import type { FileUpdateChange, ServerNotification, ThreadItem } from './protocol';
 
@@ -75,7 +76,12 @@ export function mapNotification(n: ServerNotification, ctx?: MapContext): AgentE
     }
     // thread/goal/cleared — we clear goals ourselves; nothing to surface.
     case 'error':
-      return { type: 'error', message: n.params.error.message, willRetry: n.params.willRetry };
+      return {
+        type: 'error',
+        message: n.params.error.message,
+        willRetry: n.params.willRetry,
+        kind: codexErrorKind(n.params.error.codexErrorInfo),
+      };
     default:
       return null;
   }

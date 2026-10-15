@@ -38,7 +38,7 @@ const ABNORMAL_REASON: Record<string, string> = {
   usageLimited: '账号用量额度用尽',
   blocked: '被阻塞，需人工介入',
   paused: '已暂停',
-  timeout: '运行超过时长上限被中止',
+  timeout: '30 分钟没有输出，已自动停止',
   error: '运行出错',
 };
 

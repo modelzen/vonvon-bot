@@ -1,3 +1,4 @@
+import { errorKindFromText, type AgentErrorKind } from '../agent/error-kind';
 import type { AgentEvent, ToolKind } from '../agent/types';
 
 /**
@@ -50,6 +51,8 @@ export interface RunState {
   footer: FooterStatus;
   terminal: Terminal;
   errorMsg?: string;
+  /** set with {@link errorMsg}: the backend's own code, else guessed from the text */
+  errorKind?: AgentErrorKind;
   /** set when terminal === 'idle_timeout' — seconds idle before watchdog gave up */
   idleTimeoutSeconds?: number;
   /** latest context-window usage (from context_usage events); drives the run
@@ -209,7 +212,13 @@ export function reduce(state: RunState, evt: AgentEvent): RunState {
       if (evt.willRetry) {
         return { ...state, footer: 'retrying' };
       }
-      return { ...state, terminal: 'error', errorMsg: evt.message, footer: null };
+      return {
+        ...state,
+        terminal: 'error',
+        errorMsg: evt.message,
+        errorKind: evt.kind ?? errorKindFromText(evt.message),
+        footer: null,
+      };
 
     case 'done':
       return {
