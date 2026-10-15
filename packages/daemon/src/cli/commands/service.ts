@@ -10,11 +10,15 @@ export async function runServiceCommand(action: 'install' | 'uninstall', adapter
   const service = adapter ?? (await import('../../service/adapter')).getServiceAdapter();
   const result = action === 'install' ? await service.install(options) : await service.uninstall();
   const lines = [`${result.kind}: ${result.detail}`];
+  // A successful install reports the service's own daemon in `retained` and its plist or unit in `leftovers`; neither is left behind.
+  if (result.kind === 'installed' || result.kind === 'already-installed') {
+    if (result.retained !== null) lines.push(`Daemon PID ${result.retained.pid} is running under the service.`);
+    process.stdout.write(`${lines.join('\n')}\n`);
+    return;
+  }
   if (result.retained !== null) lines.push(`Daemon PID ${result.retained.pid} is still running.`);
   for (const leftover of result.leftovers) lines.push(`Left behind: ${leftover}`);
   switch (result.kind) {
-    case 'installed':
-    case 'already-installed':
     case 'uninstalled':
     case 'not-installed':
       process.stdout.write(`${lines.join('\n')}\n`);

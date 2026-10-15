@@ -13,6 +13,12 @@ it.each(['installed', 'already-installed'] as const)('install prints %s and succ
   expect(adapter.install).toHaveBeenCalledWith({ port: 32123 }); expect(adapter.uninstall).not.toHaveBeenCalled();
   expect(write).toHaveBeenCalledWith(`${kind}: ${kind}\n`);
 });
+it('a successful install names the service daemon without calling it left behind', async () => {
+  const write = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+  const adapter = { install: vi.fn(async () => outcome('installed', { detail: 'Installed', retained: { pid: 7, startedAt: 'x' }, leftovers: ['retained pid 7', 'plist /p: ours'] })), uninstall: vi.fn() };
+  await runServiceCommand('install', adapter);
+  expect(write).toHaveBeenCalledWith('installed: Installed\nDaemon PID 7 is running under the service.\n');
+});
 it.each(['install_refused', 'install_rolled_back', 'install_incomplete'] as const)('install %s fails with the detail and what was left behind', async kind => {
   const adapter = { install: vi.fn(async () => outcome(kind, { detail: 'stop_unconfirmed: lost', retained: { pid: 7, startedAt: 'x' }, leftovers: ['plist /p: ours'] })), uninstall: vi.fn() };
   await expect(runServiceCommand('install', adapter)).rejects.toThrow(`${kind}: stop_unconfirmed: lost\nDaemon PID 7 is still running.\nLeft behind: plist /p: ours\nNext step: vonvon service uninstall`);
