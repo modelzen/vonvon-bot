@@ -9,7 +9,6 @@ import { saveConfig } from '../src/config/store';
 
 const fixtureStore = vi.hoisted(() => ({ config: {} as unknown }));
 const createdCards = vi.hoisted(() => [] as unknown[]);
-const cliBridge = vi.hoisted(() => ({ create: vi.fn(), start: vi.fn(async () => undefined) }));
 vi.mock('../src/config/store', () => ({
   saveConfig: vi.fn(async (config: unknown) => { fixtureStore.config = structuredClone(config); }),
   loadConfig: vi.fn(async () => structuredClone(fixtureStore.config)),
@@ -21,11 +20,6 @@ vi.mock('../src/config/paths', async () => {
   const appDir = mkdtempSync(join(tmpdir(), 'coffee-retired-'));
   return { paths: { appDir, projectsFile: join(appDir, 'projects.json'), commentInstructionsFile: join(appDir, 'comment-instructions.md'), commentsRootDir: join(appDir, 'comments'), projectsRootDir: join(appDir, 'projects') } };
 });
-// The old wiring would create and start the service whenever this says so.
-vi.mock('../src/cli-bridge', () => ({
-  createCliBridgeService: (...args: unknown[]) => { cliBridge.create(...args); return { start: cliBridge.start, shutdown: async () => undefined, register() {}, onMessage: () => false }; },
-  shouldStartCliBridge: () => true,
-}));
 vi.mock('@larksuiteoapi/node-sdk', async original => ({
   ...await original<object>(),
   createLarkChannel: () => ({ ...(channel() as object), on: vi.fn(), connect: vi.fn(async () => undefined), disconnect: vi.fn(async () => undefined) }),
@@ -91,8 +85,6 @@ const tap = (actionId: string, openId = 'ou_owner') => ({
 describe('s02b: 咖啡一下 is gone', () => {
   beforeEach(() => {
     createdCards.length = 0;
-    cliBridge.create.mockClear();
-    cliBridge.start.mockClear();
     vi.mocked(saveConfig).mockClear();
   });
 
@@ -123,10 +115,8 @@ describe('s02b: 咖啡一下 is gone', () => {
     expect(createdCards).toHaveLength(0);
   });
 
-  it('the bot never creates or starts the 咖啡一下 service, even when the stored setting says enabled', async () => {
+  it('the bot starts and stops when the stored 咖啡一下 setting says enabled', async () => {
     const bridge = await startBridge({ cfg: cfg(), appSecret: 'secret', fallbackCwd: '/repo' });
-    await bridge.shutdown();
-    expect(cliBridge.create).not.toHaveBeenCalled();
-    expect(cliBridge.start).not.toHaveBeenCalled();
+    await expect(bridge.shutdown()).resolves.toBeUndefined();
   });
 });
