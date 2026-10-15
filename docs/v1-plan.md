@@ -314,6 +314,10 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s08 的做法：app 从 App Translocation 的临时位置运行时，install 拒绝，提示先把 app 拖进"应用程序"再打开：不然装进去的定义下次就找不到 app。
 - s08 的做法：install 不加"替换运行中的服务"（没有 `--replace`）。定义要换时（app 挪过位置、换了版本），桌面端（s08b）先 `daemon stop` 再 `service install`，s07 审过的安装事务不动。
 - s08 留下的：版本号相同的两次构建分不出新旧，预览版要升补丁号，构建号以后再加；不拒绝从 `/Volumes` 运行；plist 里加不加 `AssociatedBundleIdentifiers`，等 s08b 的 Mac 检查看签名版显示什么再定；网页重连后回到默认页，记住当前页约 6 行，需要时再加。s47 加 agent 令牌时，不能让它们调 machine `service`。
+- s08b 的做法：app 挪走或换新版后，桌面端启动时在接 daemon 之前修服务。只在 macOS 上的打包版、不在 App Translocation 里时做，不看 `VONVON_DESKTOP_TEST_HOME`（Mac 检查要用它）。判断是一个纯函数 `planStartupRepair`，看三件事：服务定义属于桌面版（`ours`，安装方式 `desktop`）而它记的 Electron 或 CLI 入口已经不在了（挪过位置）；正在跑的 daemon 比 app 自带的旧；自己名下的定义是旧格式（`unrecognized`）。服务定义属于桌面版、三件事有一件成立时，在跑的 daemon 先 `daemon stop`（等 60 秒），再 `service install --keep-running`（等 180 秒），然后照常接 daemon；没有注册服务、只是 daemon 比 app 旧时，`daemon stop` 后照常起 app 自带的新版本。npm 装的服务和别的数据目录的服务都不动。挪过位置时先停了 daemon，launchd 里的任务没有 PID，install 能重写定义；原地换新版时定义的字节不变，install 回 `already-installed`，接下来的 `daemon start` 把新版本拉起来。两份 app 不会来回抢：只有记的路径没了，或者在跑的版本更旧，才修。同一个数据目录上 npm 起的旧版分离 daemon 也会被换成 app 自带的版本，这种情况少，接受。
+- s08b 的做法：修服务失败的原因留着。之后接 daemon 也失败时，致命错误框里写修服务的原因，不写"等待就绪超时"；接上了就弹一个不挡操作的提示"后台服务没能更新到这个位置的 Vonvon Bot：<原因>"。`daemon stop` 失败时不往下修，接回旧 daemon，提示"没能停下旧版本的 daemon：<原因>。先用着旧版本，稍后在「应用与启动」里重启 daemon。"
+- s08b 的做法：新旧只比版本号（`D/service/update.ts` 的 `isNewer`）。app 自带的版本读 `Resources/daemon/package.json`，不用 `app.getVersion()`，那是 stage 包的 0.1.0。只升不降：在跑的 daemon 比 app 新时不动。版本号相同的两次构建分不出新旧，所以每出一次预览版都要升补丁号。
+- s08b 留下的：plist 里加不加 `AssociatedBundleIdentifiers` 还没定，等 s08b 的 Mac 检查第 B5 项看签名版在"允许在后台"里显示什么。要加的话，旧的 plist 成了旧格式，启动时的修复会重写它，不用另做迁移。
 
 ### M3 群里的上下文
 
@@ -576,7 +580,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 - 理由：这些代码没有调用方，而 s06、s07 要改的正是这几个文件。先删，后台服务那两片就只剩 macOS 和 Linux 的逻辑，审查更集中，以后也少维护约 1,300 行。
 
 **二、跟着本来就要改这些文件的切片一起删**
-- s08：`cli-registration.ts` 的 Windows PATH 注册；`windows-native.test.ts`；electron-builder 的 win nsis 和 linux AppImage 目标。issue #288 按 product.md 3.10 以"第一版不做 Windows"关闭。
+- s08b：`cli-registration.ts` 的 Windows PATH 注册和 `.cmd` 入口，命令行注册只认 macOS；`windows-native.test.ts`；electron-builder 的 win nsis 和 linux AppImage 目标；`daemon-dependencies.ts` 的 `windowsHide` 和两份桌面端测试里的 win32 小分支。删完以后桌面端（`packages/desktop`）不再有 Windows 代码。issue #288 按 product.md 3.10 以"第一版不做 Windows"关闭。
 - s20a：`open.ts` 的 `cmd /c start`；协议平台枚举里的 windows，以及界面上的"这台 Windows 电脑"。
 - s20b：Codex 只读、读写档的 win32 分支；`codex-appserver/windows-job.ts`、它的两处引用和两份测试。
 - s51a：私聊菜单里的"安装桌面版 · Windows x64"按钮。
@@ -587,7 +591,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 **三、先留着**
 - `provider/process` 下的 windows-supervisor、windows-job-probe、windows-command-line，以及 `test/provider/windows-*` 测试。它们属于 ProcessHost；main 上 ProcessHost 只在启动时清理孤儿进程，第一版没有切片要改它，这些代码也只在 win32 上会走到。要删它们，得先定那层没接线的 provider 代码留不留，放到第一版之后一起定。
 - Codex 协议生成的 `Windows*.ts`，这些是生成文件。
-- 约 40 个文件里零散的 `process.platform === 'win32'` 小分支和 `windowsHide` 参数。以后改到这些文件时顺手删，不专门开 PR。
+- 约 40 个文件里零散的 `process.platform === 'win32'` 小分支和 `windowsHide` 参数，都在 daemon 和 `scripts/` 里，桌面端的已随 s08b 删掉。以后改到这些文件时顺手删，不专门开 PR。
 
 ## 7. 预览版怎么出
 
@@ -654,7 +658,18 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 
 切片合入时在这里补。
 
-**卸载步骤**（s08 填）：待填。
+**卸载步骤**（s08b 填）
+
+macOS：
+1. 在"应用与启动"页关掉"登录电脑时启动"，或者在终端运行 `vonvon service uninstall`。这会删掉 `~/Library/LaunchAgents/com.vonvon.bot.daemon.plist`；用开关关的，bot 改由一个分离的 daemon 接着跑。
+2. 运行 `vonvon daemon stop`。
+3. 从菜单栏退出 Vonvon Bot，把 app 拖进废纸篓。
+4. 运行 `rm ~/.local/share/vonvon-bot/bin/vonvon`，再删掉 `~/.zshrc`、`~/.zprofile`、`~/.bash_profile`（或 `.bash_login`、`.profile`）和 `~/.bashrc` 里 `# >>> Vonvon Bot CLI >>>` 到 `# <<< Vonvon Bot CLI <<<` 之间的几行。
+5. 数据：`rm -rf ~/.vonvon-bot`（凭据、会话和记忆都在里面，删了找不回来），再删 `~/Library/Application Support/Vonvon Bot`（这个路径是推断的，还没在 Mac 上核对）。
+6. 先删了 app、没关开关的：运行 `launchctl bootout gui/$(id -u)/com.vonvon.bot.daemon`，再删掉上面那个 plist。
+7. 可选：在飞书开发者后台删掉这个应用。
+
+Linux：`vonvon service uninstall`，`vonvon daemon stop`，`npm rm -g vonvon-bot`，`rm -rf ~/.vonvon-bot`。linger 那一行由 s20a 补。
 
 **Linux 验收**（s20b 填，product.md 第 8 节第 5 条的 Linux 一半）：待填。
 

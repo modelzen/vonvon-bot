@@ -131,7 +131,7 @@ beforeEach(async () => {
   const resources = join(await realpath(temp), 'resources');
   await mkdir(resources);
   const alias = join(temp, 'resources-alias');
-  await symlink(resources, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  await symlink(resources, alias, 'dir');
   appPath = join(alias, 'desktop');
   await mkdir(join(appPath, '..', 'ui', 'dist'), { recursive: true });
   await mkdir(join(appPath, 'dist'), { recursive: true });
