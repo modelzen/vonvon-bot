@@ -48,7 +48,7 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
 6. 群里 @bot 让它做件小事，看 Codex 的运行卡。
 7. 在本机环境页下载 Claude（0.3.296），再拉 bot 进第二个测试群，绑定时执行工具选 Claude，@ 一次。群绑定后界面上换不了执行工具：`bindGroup` 带 `tool`，群设置页的执行工具只读。
 
-哪一步不对，回一句"第几步、看到了什么"就行，Claude 修好后再装一版。
+哪一步不对，回一句"第几步、看到了什么"就行，Claude 修好后再装一版。s02a 之后复验时，飞书里的聊天步骤（把 bot 拉进测试群、@ 它看回复）由 Claude 按本文第 7 节先做。
 
 ### M2 首次运行清单和开机自动运行（s03 到 s08）
 
@@ -220,7 +220,7 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 - s02：补 PATH 的函数放在 daemon 里（`D/platform/tool-path.ts`），s07 写服务定义时复用；不跑登录 shell，免得卡在用户的交互配置上。M1 的 app 从 Finder 打开，不补 PATH 就找不到 Codex。`locate.ts` 不另加候选目录：补了 PATH 以后 `which` 就找得到，加了反而让"找不到 Codex"的测试随机器上有没有 Homebrew 的 codex 变。
 - s02：自带的 npm 只给下载 Claude SDK 和 `installCodex` 用，daemon 按自己所在的位置找它（`D/platform/npm.ts`），不靠环境变量。本机环境页的"安装托管副本"仍用 PATH 上的 npm：npm 11.19 起默认不跑依赖的安装脚本，claude-code 和 lark-cli 都靠 postinstall；托管副本自己也要本机有 `node` 才能跑，没装 Node 的 Mac 用自带的 npm 也装不成。
 
-- s02a：owner 的五条反馈：叫法不统一、复制链接报错、注册和开权限分在两处、进群没提醒和"查找已加入的群"报错，这四条在 s02a 修；第五条建群界面留到本文第 1 节说的界面调整，其中"保存并离开"会建出一个群这一处在 s02a 修。查到的原因：桌面端拒绝了网页的全部权限，复制链接写不进剪贴板（`packages/desktop/src/main.ts:204-205`）；"重新授权"其实是重新扫码刷新凭据，不开权限，本文 M1 验收第 3 步原来的说法是错的；桌面端把 daemon 的每条报错都换成"Daemon request failed"（`packages/desktop/src/bridge.ts:29-35`），飞书返回的错误码在 `D/admin/groups.ts:50-52` 丢了；`im:chat:readonly` 不在必需权限里，清单全绿时它也可能没开。合入时改写本文 M1 验收第 2 到 4 步：群聊页没有绑群入口，绑群在 Bot 页做。
+- s02a：owner 的五条反馈：① 叫法不统一 ② 复制链接报错 ③ 注册和开权限分在两处 ④ 把 bot 拉进群后没提醒，"查找已加入的群"报错 ⑤ 建群界面不好用。前四条在 s02a 修；第五条留到本文第 1 节说的界面调整，只有"保存并离开"会建出一个群这一处在 s02a 修。咖啡一下是另外说的，见 s02b。查到的原因：桌面端拒绝了网页的全部权限，复制链接写不进剪贴板（`packages/desktop/src/main.ts:204-205`）；"重新授权"其实是重新扫码刷新凭据，不开权限，本文 M1 验收第 3 步原来的说法是错的；桌面端把 daemon 的每条报错都换成"Daemon request failed"（`packages/desktop/src/bridge.ts:29-35`），飞书返回的错误码在 `D/admin/groups.ts:50-52` 丢了；`im:chat:readonly` 不在必需权限里，清单全绿时它也可能没开。合入时改写本文 M1 验收第 2 到 4 步：群聊页没有绑群入口，绑群在 Bot 页做。
 - s02b：Claude 回合带的 `FEISHU_CODEX_BRIDGE` 标记留着：它让 bridge 装的 hook 认出这是 bot 自己的会话、不转发，迁移卸掉 bridge 的 hook 之前都要。本片不卸任何 hook，统一留给 M10 的 s62。开工时确认 daemon 不起服务以后，已经装进 Claude Code、Codex CLI 的 hook 退回终端里问。
 - s02c：几乎全是删除，开工前用 `git diff --stat` 量，按 1500 行拆成 s02c1、s02c2……，依次合入。不急，放在第二条线上做。它也改 `handle-message.ts`，不和 s51a 到 s51c、s54 同时在飞。cli-bridge 的 Windows 分支随它一起删。s01 说不动的 hook 正则在 `D/cli-bridge/hooks.ts:310`，跟着删掉；s62 卸 bridge 的 hook 用 #226 里的 hook 改写代码，不靠它。
 
@@ -417,8 +417,8 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 开工要点：
 - s58、s59 不依赖 M3 到 M9，M4 之后在第二条线上做。
 - s58：从没上线的改名迁移（`data-root-migration.ts` 等）生产路径调不到，做法又和第 5 节"复制数据、旧目录原地引用"相反，留着会让 s59 的预检读到两套说法，所以在迁移前删掉。`~/.vonvon-bridge` 的识别在 s59 里按预检的需要重写。
-- s59：合入后在 #226 里写明移植了哪些代码，然后关闭它。
-- s62：卸 hook 的代码和认 bridge hook 的规则从 #226 的 hook 改写代码移植。`D/cli-bridge/` 那时已由 s02c 删掉。
+- s59：合入后在 #226 里写明移植了哪些代码，先不关。
+- s62：卸 hook 的代码和认 bridge hook 的规则从 #226 分支的 hook 改写代码移植，和 s02c 删不删 `D/cli-bridge/` 无关。合入后在 #226 里补上这部分，再关闭它。
 - s61、s62：Mac 检查放在测试用户账号里，因为那个账号有自己的 launchd 域，停 bridge 时不会碰到 owner 账号里同名的任务。
 - s64：PR 在 feishu-codex-bridge 仓库，不占本仓库的在飞名额。下载地址等 M11 定下来再填，什么时候发布由 owner 定。
 
@@ -530,7 +530,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 
 测 Claude 后端时，用 owner 本机的 Claude 登录跑少量回合。这是测产品，不是在 Mac 上开 Claude 的开发会话。
 
-验收里飞书聊天的步骤（建测试群、把 bot 拉进群、@ 它、看回复和卡片），Claude 先用 JP-VPS 上的 lark-cli 以 owner 的用户身份做完，结果写进通知（owner 2026-10-15 的意思）。owner 只做 lark-cli 做不了的：手机扫码、点卡片按钮、桌面端的操作。只碰为验收建的测试群，不读 owner 别的聊天；群号、名字不写进仓库。
+验收里飞书聊天的步骤（建测试群、把 bot 拉进群、@ 它、看回复和卡片），Claude 先用 JP-VPS 上的 lark-cli 以 owner 的用户身份做完，结果写进通知（owner 2026-10-15 要求）。owner 只做 lark-cli 做不了的：手机扫码、点卡片按钮、桌面端的操作。这些消息以 owner 的名义发出，bot 把它当主人的消息；要第二个人的步骤，仍按本文第 8 节找同事或第二个账号。JP-VPS 上的 lark-cli 没有 owner 的用户授权、授权过期或权限不够时，退回由 owner 手工做，并在通知里说明。只碰为验收建的测试群，不读 owner 别的聊天；群号、名字不写进仓库。
 
 ## 8. owner 要提前准备的事
 
