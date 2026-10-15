@@ -18,6 +18,9 @@ import { log } from '../core/logger';
  * property-wrapped card-builder schema (distinct from the send-format schema the
  * SDK's walkCard handles). We re-fetch that here and extract its text + links so
  * codex reads「请处理这条记录 [查看…](base链接)」and can follow the link.
+ *
+ * Pulled history and quote lookups ask for `user_card_content` instead, the
+ * send-format JSON (e10), read by {@link extractSendCardText}.
  */
 
 /** True when the normalized card content is a downgraded placeholder (no real
@@ -99,6 +102,90 @@ function visit(node: unknown, out: string[]): void {
   visit(prop.elements, out);
   visit(prop.columns, out);
   visit(prop.actions, out);
+}
+
+/** True when a parsed `interactive` body is a card in the send format, as a
+ * pull with `card_msg_content_type=user_card_content` returns it (e10), rather
+ * than the down-converted `{title, elements:[[node…]]}` shape. */
+export function isSendCard(card: unknown): boolean {
+  if (!card || typeof card !== 'object') return false;
+  const c = card as Record<string, unknown>;
+  if (c.schema || c.body || c.header || c.config || c.i18n_elements) return true;
+  return Array.isArray(c.elements) && c.elements.some((e) => e && typeof e === 'object' && !Array.isArray(e));
+}
+
+/** Whether a card body (the raw JSON string) is still streaming (`config.streaming_mode`). */
+export function isStreamingCard(content: string | undefined): boolean {
+  try {
+    return (JSON.parse(content ?? '') as { config?: { streaming_mode?: unknown } } | null)?.config?.streaming_mode === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Readable text of a send-format card: schema 2.0 (`header` + `body.elements`)
+ * or 1.0 (`header` + `elements`). Only what reads as the answer is kept:
+ * collapsible panels (a Vonvon card keeps its process and tool output there),
+ * notation-size lines and notes (status, such as the context meter), images,
+ * buttons and rules are skipped. Lines are de-duplicated, order kept; '' when
+ * nothing readable remains.
+ */
+export function extractSendCardText(card: unknown): string {
+  if (!card || typeof card !== 'object') return '';
+  const c = card as Record<string, unknown>;
+  const out: string[] = [];
+  const header = (c.header ?? localized(c.i18n_header)) as { title?: { content?: unknown } } | undefined;
+  push(out, header?.title?.content);
+  const body = c.body as { elements?: unknown; i18n_elements?: unknown } | undefined;
+  sendElements(body?.elements ?? localized(body?.i18n_elements) ?? c.elements ?? localized(c.i18n_elements), out);
+  return [...new Set(out)].join('\n');
+}
+
+/** One locale of an i18n map (zh_cn first). */
+function localized(v: unknown): unknown {
+  if (!v || typeof v !== 'object') return undefined;
+  const m = v as Record<string, unknown>;
+  return m.zh_cn ?? m.zh_hk ?? m.zh_tw ?? m.en_us ?? Object.values(m)[0];
+}
+
+function push(out: string[], v: unknown): void {
+  if (typeof v === 'string' && v.trim()) out.push(v.trim());
+}
+
+function sendElements(els: unknown, out: string[]): void {
+  if (!Array.isArray(els)) return;
+  for (const el of els) {
+    if (!el || typeof el !== 'object') continue;
+    const e = el as Record<string, unknown>;
+    switch (e.tag) {
+      case 'collapsible_panel':
+      case 'note':
+      case 'img':
+      case 'img_combination':
+      case 'button':
+      case 'action':
+      case 'hr':
+        break;
+      case 'markdown':
+      case 'plain_text':
+      case 'lark_md':
+        if (e.text_size !== 'notation') push(out, e.content);
+        break;
+      case 'div': {
+        const t = e.text as { content?: unknown; text_size?: unknown } | undefined;
+        if (t?.text_size !== 'notation') push(out, t?.content);
+        for (const f of Array.isArray(e.fields) ? e.fields : []) push(out, (f as { text?: { content?: unknown } } | null)?.text?.content);
+        break;
+      }
+      case 'column_set':
+        for (const col of Array.isArray(e.columns) ? e.columns : []) sendElements((col as { elements?: unknown } | null)?.elements, out);
+        break;
+      default:
+        // Containers (form, interactive_container, column, …) hold elements.
+        sendElements(e.elements, out);
+    }
+  }
 }
 
 /**

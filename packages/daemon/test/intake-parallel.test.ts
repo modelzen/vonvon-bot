@@ -12,6 +12,7 @@ import { isSeen, type SessionRecord } from '../src/bot/session-store';
 function pagedChannel(items: unknown[]): LarkChannel {
   return {
     rawClient: {
+      appId: 'cli_b', // the bot's own replies (dropped), as in a real topic
       im: { v1: { message: { list: async ({ params }: { params: { page_token?: string } }) => {
         const start = Number(params.page_token ?? 0);
         const next = start + 2;

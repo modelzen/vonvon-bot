@@ -2,12 +2,13 @@ import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { log } from '../core/logger';
 import { labelScope } from '../config/scopes';
 import { scopeDenial, type FeishuErrorBody } from '../utils/feishu-error';
+import { extractSendCardText, isSendCard, isStreamingCard } from './card-content';
 import type { NameBook } from './names';
 
 /**
  * Inbound CONTEXT weaving — give codex the上下文 a Feishu @ alone doesn't carry.
  *
- * Feishu's message event only delivers the triggering message itself. Two common
+ * Feishu's message event only delivers the triggering message itself. Three
  * blind spots follow:
  *   1. 引用消息 (quote reply): the user 引用 another message + @bot. The quoted
  *      message id rides in `NormalizedMessage.replyToMessageId` (= the raw
@@ -17,17 +18,23 @@ import type { NameBook } from './names';
  *      little/no description. Those人对人 messages were never @ the bot, so the
  *      bridge dropped them at the @门 — codex has never seen them. They must be
  *      pulled with `im.v1.message.list` (container_id_type='thread').
+ *   3. 主区 (a single group's main area): the same, pulled with
+ *      container_id_type='chat', which lists main-area messages and topic roots
+ *      but not topic replies.
  *
  * codex has no native "quoted message" / "chat history" input, so — exactly like
  * inbound files (see {@link import('./media').weaveFileManifest}) — we fold the
  * pulled text into the prompt as clearly-fenced blocks PREPENDED to the user's
- * actual line (which stays the instruction codex acts on).
+ * actual line (which stays the instruction codex acts on). Pulled history goes
+ * into one record block, `[飞书 · 群「…」· 主区|话题「…」· 你是「…」] … [/飞书]`
+ * (product.md 3.5), one line per message with its time and real name; other
+ * bots' answers are read from their cards (`card_msg_content_type`, e10).
  *
  * The bot reads these with its OWN tenant identity — no second identity /
  * lark-cli needed. Reading history needs `im:message:readonly` (required since
  * v1, see config/scopes.ts); an app that hasn't been granted it gets Feishu's
- * 99991672 rejection, which the thread pull logs as a structured
- * `thread-context-failed` warning naming the scope (see {@link scopeDenial}).
+ * 99991672 rejection, which a pull logs as a structured `thread-context-failed`
+ * / `chat-context-failed` warning naming the scope (see {@link scopeDenial}).
  * Every fetch is best-effort: a deleted message, a missing scope, or a timeout
  * is logged and skipped, never thrown — a missing block must not break the turn.
  *
@@ -38,31 +45,42 @@ import type { NameBook } from './names';
 
 /** Max chars woven for one quoted message (collapsed to a single line). */
 const QUOTE_MAX = 800;
-/** Max chars per thread-history line (collapsed to a single line each). */
+/** Max chars per person's line in a record block (collapsed to a single line each). */
 const LINE_MAX = 280;
-/** Max thread messages woven (most-recent kept, see {@link keepRecent}). */
-export const THREAD_WEAVE_MAX = 20;
-/** Feishu's page_size ceiling for one newest-first page of a topic. */
-const THREAD_PAGE_SIZE = 50;
+/** Max chars of a bot's line: other bots only bring their answer, cut to a few hundred chars (3.5). */
+const BOT_LINE_MAX = 300;
+/** Lines a new session's opening carries, most recent kept (see {@link keepRecent}). */
+export const OPENING_MAX = 20;
+/** Lines a back-fill into an existing session carries; older ones are only counted. */
+export const BACKFILL_MAX = 40;
+/** Feishu's page_size ceiling for one newest-first page. */
+const PAGE_SIZE = 50;
 /** Pages pulled at most per turn (500 messages); the rest is logged as cut. */
-const THREAD_PAGE_CAP = 10;
+const PAGE_CAP = 10;
+/** Pulls and lookups get cards in the send format, so another bot's answer is
+ * readable; without it a 2.0 or CardKit card is only its title (e10). */
+const CARD_CONTENT = 'user_card_content';
 
 /** The scope this app requests for reading chat history with its own identity (config/scopes.ts). */
 const HISTORY_SCOPE = 'im:message:readonly';
 
-/** A message pulled for context (the quoted message, or one thread-history entry). */
+/** A message pulled for context (the quoted message, or one history entry). */
 export interface ContextMessage {
   messageId: string;
   /** Best-effort display name (sender_name, else the name book's, else `用户<id尾4>`, else 某人). */
   senderName: string;
   /** Plain text extracted from the message body (NOT yet sanitized). */
   text: string;
-  /** sender_type === 'user' — false for the bot itself, other apps, system. */
-  fromUser: boolean;
+  /** A person, another bot or app, or this bot itself. */
+  from: 'user' | 'bot' | 'self';
   /** A person's open_id, or a bot's open_bot_id (undefined when the item has neither). */
   senderId?: string;
   /** create_time as epoch ms (0 when unknown). */
   createTime: number;
+  /** It @-mentions this bot (that mention is then left out of `text`). */
+  mentionsMe?: boolean;
+  /** A card still streaming: its bot has not finished answering. */
+  streaming?: boolean;
 }
 
 /** Subset of the `im.v1.message.get` / `.list` item shape we read. */
@@ -71,6 +89,8 @@ interface RawMsgItem {
   msg_type?: string;
   create_time?: string;
   deleted?: boolean;
+  thread_id?: string;
+  root_id?: string;
   /** `sender_name` and `open_bot_id` come only `with_sender_name` (e10). */
   sender?: { id?: string; id_type?: string; sender_type?: string; sender_name?: string; open_bot_id?: string };
   body?: { content?: string };
@@ -98,6 +118,23 @@ function isOpenId(idType: string | undefined): boolean {
   return (idType ?? 'open_id') === 'open_id';
 }
 
+/** This bot as a sender: its open_id (what `open_bot_id` carries) and its app id (an app sender's `id`). */
+interface Me {
+  openId?: string;
+  appId?: string;
+}
+
+function meOf(channel: LarkChannel): Me {
+  return { openId: channel.botIdentity?.openId, appId: channel.rawClient.appId };
+}
+
+/** Who sent an item; undefined for a system notice (it has no sender). */
+function kindOf(s: RawMsgItem['sender'], me: Me): ContextMessage['from'] | undefined {
+  if (s?.sender_type === 'user') return 'user';
+  if (s?.sender_type !== 'app') return undefined;
+  return (me.openId && s.open_bot_id === me.openId) || (me.appId && s.id === me.appId) ? 'self' : 'bot';
+}
+
 // ── pulling ──────────────────────────────────────────────────────────────
 
 /**
@@ -112,13 +149,13 @@ export async function fetchQuotedMessage(
   try {
     const res = await channel.rawClient.im.v1.message.get({
       path: { message_id: messageId },
-      params: { with_sender_name: true },
+      params: { with_sender_name: true, card_msg_content_type: CARD_CONTENT },
     });
     const items = (res.data as { items?: RawMsgItem[] } | undefined)?.items ?? [];
     const item = items[0];
     if (!item || item.deleted) return undefined;
     learnNames(names, item);
-    const cm = toContextMessage(item, names);
+    const cm = toContextMessage(item, meOf(channel), names);
     return cm.text.trim() ? cm : undefined;
   } catch (err) {
     log.warn('intake', 'quote-fetch-failed', { messageId, err: String(err) });
@@ -126,55 +163,93 @@ export async function fetchQuotedMessage(
   }
 }
 
-/** One topic pull: the human messages found, oldest→newest. */
+/** One history pull: the messages found, oldest→newest. */
 export interface ThreadPull {
   messages: ContextMessage[];
   /** false when a page failed (messages is then empty): the watermark must not move. */
   ok: boolean;
-  /** true when paging reached `stopAt` or the topic's start; false when it stopped at the page cap or after `enough`. */
+  /** true when paging reached `stopAt` or the start; false when it stopped at the page cap or after `enough`. */
   complete: boolean;
+}
+
+/** What a pull collects (see {@link fetchThreadContext}). */
+export interface PullOpts {
+  stopAt?: number;
+  enough?: number;
+  before?: number;
+  excludeMessageId?: string;
+  keepId?: string;
+  names?: NameBook;
 }
 
 /**
  * Page through a topic newest-first (`with_sender_name`, so people and bots
- * come with real names) and collect the human messages:
+ * come with real names; cards in the send format, so another bot's answer
+ * is readable) and collect its messages:
  *   - `stopAt`: the session's watermark. Paging stops at the first page that
  *     reaches it; 0 means none (a fresh session's opening).
  *   - `enough`: also stop once this many are found (for an opening, where
  *     only the most recent ones are woven).
  *   - `before`: only messages older than this (the trigger's createTime), so a
  *     message that arrives as its own turn later is not woven twice.
- * Bot/app/system, deleted, empty and `excludeMessageId` messages are dropped,
- * except `keepId` (the topic's first message, kept even when a bot sent it).
+ * This bot's own replies (already in the session), system notices, deleted,
+ * empty and `excludeMessageId` messages are dropped, except `keepId` (the
+ * topic's first message, kept even when this bot sent it). Other bots stay.
  * Filtering by what the session has already seen is the caller's job
  * (session-store.isSeen). Never throws: a failure logs and returns `ok: false`.
  */
-export async function fetchThreadContext(
-  channel: LarkChannel,
-  threadId: string,
-  opts: { stopAt?: number; enough?: number; before?: number; excludeMessageId?: string; keepId?: string; names?: NameBook } = {},
-): Promise<ThreadPull> {
+export function fetchThreadContext(channel: LarkChannel, threadId: string, opts: PullOpts = {}): Promise<ThreadPull> {
+  return pullContext(channel, { type: 'thread', id: threadId }, opts);
+}
+
+/**
+ * Page through a group's main area the same way. The `chat` container lists
+ * main-area messages and topic roots, not topic replies (session-map 3.6); a
+ * reply that shows up anyway is dropped. The window is also bounded on the
+ * server with `start_time` / `end_time` (seconds, so rounded outwards); the
+ * exact bounds stay the local filters.
+ */
+export function fetchChatContext(channel: LarkChannel, chatId: string, opts: Omit<PullOpts, 'keepId'> = {}): Promise<ThreadPull> {
+  return pullContext(channel, { type: 'chat', id: chatId }, opts);
+}
+
+interface Container {
+  type: 'thread' | 'chat';
+  id: string;
+}
+
+async function pullContext(channel: LarkChannel, c: Container, opts: PullOpts): Promise<ThreadPull> {
   const stopAt = opts.stopAt ?? 0;
   const found: ContextMessage[] = [];
   function done(complete: boolean): ThreadPull {
     return { messages: found.sort((a, b) => a.createTime - b.createTime), ok: true, complete };
   }
+  const window =
+    c.type === 'chat'
+      ? {
+          ...(stopAt > 0 ? { start_time: String(Math.floor(stopAt / 1000)) } : {}),
+          ...(opts.before ? { end_time: String(Math.ceil(opts.before / 1000)) } : {}),
+        }
+      : {};
   let pageToken: string | undefined;
   try {
-    for (let page = 0; page < THREAD_PAGE_CAP; page++) {
+    const me = meOf(channel);
+    for (let page = 0; page < PAGE_CAP; page++) {
       const res = await channel.rawClient.im.v1.message.list({
         params: {
-          container_id_type: 'thread',
-          container_id: threadId,
+          container_id_type: c.type,
+          container_id: c.id,
           sort_type: 'ByCreateTimeDesc',
-          page_size: THREAD_PAGE_SIZE,
+          page_size: PAGE_SIZE,
           with_sender_name: true,
+          card_msg_content_type: CARD_CONTENT,
+          ...window,
           ...(pageToken ? { page_token: pageToken } : {}),
         },
       });
       // The SDK only throws on HTTP errors; a 200 with a non-zero code is a failure too.
       if (typeof res.code === 'number' && res.code !== 0) {
-        warnThreadContextFailed(threadId, res);
+        warnContextFailed(c, res);
         return failedPull();
       }
       const data = res.data as { items?: RawMsgItem[]; has_more?: boolean; page_token?: string } | undefined;
@@ -182,11 +257,14 @@ export async function fetchThreadContext(
       let oldest = Infinity;
       for (const it of items) {
         learnNames(opts.names, it);
-        const m = toContextMessage(it, opts.names);
+        const m = toContextMessage(it, me, opts.names);
         if (m.createTime > 0) oldest = Math.min(oldest, m.createTime);
+        const kind = kindOf(it.sender, me);
         if (
           !it.deleted &&
-          (m.fromUser || m.messageId === opts.keepId) && // drop the bot's own replies, other apps, system notices
+          kind !== undefined && // drop system notices
+          (kind !== 'self' || m.messageId === opts.keepId) && // the bot's own replies are already in the session
+          !(c.type === 'chat' && it.thread_id && it.root_id && it.root_id !== it.message_id) && // a topic reply
           m.messageId !== opts.excludeMessageId && // drop the triggering @ message
           (!opts.before || m.createTime < opts.before) &&
           m.text.trim().length > 0
@@ -199,12 +277,17 @@ export async function fetchThreadContext(
       if (opts.enough && found.length >= opts.enough) return done(false);
       pageToken = data.page_token;
     }
-    log.info('intake', 'thread-context-page-cap', { threadId, pages: THREAD_PAGE_CAP, found: found.length });
+    log.info('intake', `${c.type}-context-page-cap`, { ...where(c), pages: PAGE_CAP, found: found.length });
     return done(false);
   } catch (err) {
-    warnThreadContextFailed(threadId, err);
+    warnContextFailed(c, err);
     return failedPull();
   }
+}
+
+/** A container for the log: a topic's id, or a chat id's last 6 chars. */
+function where(c: Container): Record<string, string> {
+  return c.type === 'thread' ? { threadId: c.id } : { chatId: c.id.slice(-6) };
 }
 
 function failedPull(): ThreadPull {
@@ -213,7 +296,7 @@ function failedPull(): ThreadPull {
 
 /** The most recent `limit` messages to weave (oldest→newest in, same order
  * out), always keeping `pinId` (a topic's first message) when present. */
-export function keepRecent(msgs: ContextMessage[], pinId?: string, limit = THREAD_WEAVE_MAX): ContextMessage[] {
+export function keepRecent(msgs: ContextMessage[], pinId?: string, limit = OPENING_MAX): ContextMessage[] {
   if (msgs.length <= limit) return msgs;
   const pinned = pinId ? msgs.find((m) => m.messageId === pinId) : undefined;
   const rest = msgs.filter((m) => m !== pinned);
@@ -223,18 +306,19 @@ export function keepRecent(msgs: ContextMessage[], pinId?: string, limit = THREA
 }
 
 /**
- * Log a failed 话题上文 pull. A missing scope gets a structured warning naming the
+ * Log a failed history pull. A missing scope gets a structured warning naming the
  * scope to grant (so the gap is visible in the log rather than a bare error
  * string); anything else keeps the plain error. The turn still proceeds without
- * the history block either way.
+ * the record block either way.
  */
-function warnThreadContextFailed(threadId: string, failure: unknown): void {
+function warnContextFailed(c: Container, failure: unknown): void {
+  const event = `${c.type}-context-failed`;
   const denial = scopeDenial(failure);
   if (denial) {
     // We request HISTORY_SCOPE; name another only when Feishu says ours wouldn't satisfy the call.
     const scope = denial.accepted.includes(HISTORY_SCOPE) ? HISTORY_SCOPE : (denial.accepted[0] ?? HISTORY_SCOPE);
-    log.warn('intake', 'thread-context-failed', {
-      threadId,
+    log.warn('intake', event, {
+      ...where(c),
       reason: 'missing-scope',
       scope,
       scopeLabel: labelScope(scope),
@@ -249,19 +333,26 @@ function warnThreadContextFailed(threadId: string, failure: unknown): void {
     failure instanceof Error || typeof body?.code !== 'number'
       ? String(failure)
       : `code=${body.code} msg=${String(body.msg ?? '')}`;
-  log.warn('intake', 'thread-context-failed', { threadId, err });
+  log.warn('intake', event, { ...where(c), err });
 }
 
-function toContextMessage(item: RawMsgItem, names?: NameBook): ContextMessage {
+function toContextMessage(item: RawMsgItem, me: Me, names?: NameBook): ContextMessage {
   const id = item.sender?.id ?? '';
   const name = item.sender?.sender_name || names?.peek(id) || (id ? `用户${id.slice(-4)}` : '某人');
+  // An @ to this bot becomes the line's "→ @你"; its token is left out of the text.
+  const mine = me.openId ? (item.mentions ?? []).filter((m) => m.id === me.openId) : [];
+  const others = mine.length ? item.mentions?.filter((m) => !mine.includes(m)) : item.mentions;
+  let text = extractMessageText(item.msg_type, item.body?.content, others);
+  for (const m of mine) if (m.key) text = text.split(m.key).join('');
   return {
     messageId: item.message_id ?? '',
     senderName: name,
-    text: extractMessageText(item.msg_type, item.body?.content, item.mentions),
-    fromUser: item.sender?.sender_type === 'user',
+    text,
+    from: kindOf(item.sender, me) ?? 'bot',
     senderId: senderIdOf(item.sender),
     createTime: Number(item.create_time) || 0,
+    ...(mine.length ? { mentionsMe: true } : {}),
+    ...(item.msg_type === 'interactive' && isStreamingCard(item.body?.content) ? { streaming: true } : {}),
   };
 }
 
@@ -304,7 +395,7 @@ export function extractMessageText(
     case 'sticker':
       return '[表情]';
     case 'interactive':
-      return extractCardText(parsed) || '[卡片消息]';
+      return (isSendCard(parsed) ? extractSendCardText(parsed) : extractCardText(parsed)) || '[卡片消息]';
     case 'share_chat':
       return '[分享群名片]';
     case 'share_user':
@@ -381,11 +472,13 @@ function nodeToText(node: unknown): string {
 const CARD_UPGRADE_HINT = '请升级至最新版本客户端';
 
 /**
- * Extract human-readable text from an `interactive` (card) message body.
+ * Extract human-readable text from an `interactive` (card) message body in
+ * the down-converted shape (a send-format body, which pulls ask for, goes to
+ * card-content.extractSendCardText).
  *
- * Feishu's `im.v1.message.get` NEVER returns a card's source JSON — it returns a
- * down-converted, post-like shape `{title, elements:[[node,…],…]}` (verified
- * against the live API). For legacy (schema 1.0) cards the full body text
+ * Without `card_msg_content_type`, Feishu's `im.v1.message.get` NEVER returns a
+ * card's source JSON — it returns a down-converted, post-like shape
+ * `{title, elements:[[node,…],…]}` (verified against the live API). For legacy (schema 1.0) cards the full body text
  * survives there; for schema 2.0 / CardKit cards (incl. the bridge's own) only
  * the `title` does, the body replaced by {@link CARD_UPGRADE_HINT} (dropped).
  * Returns '' when nothing readable remains (caller falls back to [卡片消息]).
@@ -501,29 +594,98 @@ export function weaveQuote(text: string, quoted: ContextMessage | undefined): st
   const who = sanitizeContext(quoted.senderName, 40, true) || '某人';
   // oneLine=true: collapse newlines so a crafted quote body (or @mention name)
   // can't forge a `\n]\n[fake block]` to fabricate context — same defense as
-  // weaveThreadHistory. sanitizeContext is the single boundary for this text.
+  // weaveRecordBlock. sanitizeContext is the single boundary for this text.
   const body = sanitizeContext(quoted.text, QUOTE_MAX, true);
   if (!body) return text;
   const block = `[用户引用了一条消息（来自 ${who}）：\n${body}\n]`;
   return prependBlock(block, text);
 }
 
+/** Where a record block's messages come from, for its header line. */
+export interface RecordPlace {
+  /** The group's name (a project's name is its group's). */
+  group?: string;
+  /** This bot's name. */
+  me?: string;
+  /** Set in a topic, with its title when known; the main area otherwise. */
+  topic?: { title?: string };
+}
+
+/** A record block (product.md 3.5): the messages a session has not seen yet. */
+export interface RecordBlock {
+  place: RecordPlace;
+  entries: ContextMessage[];
+  /** Older messages left out: how many, or `some` when the pull did not reach them all. */
+  earlier?: number | 'some';
+  /** The trigger's createTime: a line from another day carries its date. */
+  now: number;
+}
+
 /**
- * Prepend a fenced "话题上文" block (one line per message, time-ascending) before
- * the user's text. Returns `text` unchanged when there are no messages.
+ * Prepend the record block (one line per message, time-ascending, each with its
+ * time and real name) before the user's text:
+ *
+ *   [飞书 · 群「支付组」· 主区 · 你是「小码」]
+ *   （更早还有 3 条没带进来，需要时用 vonvon 飞书 skill 查）
+ *   09:58 张三：下午三点发版
+ *   10:01 张三 → @你：订单接口一直报 500
+ *   10:03 小P（bot）：网关日志里 500 都来自 OrderService
+ *   [/飞书]
+ *
+ * Every line from a message starts with its time and sender, and every
+ * user-controlled part is collapsed to one line, so a crafted body or name can
+ * neither close the block nor pass for a line the daemon writes; names and
+ * titles also lose the brackets and arrow those lines use. Returns `text`
+ * unchanged when there is nothing to show.
  */
-export function weaveThreadHistory(text: string, msgs: ContextMessage[]): string {
-  if (msgs.length === 0) return text;
-  const lines = msgs
-    .map((m) => {
-      const who = sanitizeContext(m.senderName, 40, true) || '某人';
-      const body = sanitizeContext(m.text, LINE_MAX, true);
-      return body ? `${who}：${body}` : '';
-    })
+export function weaveRecordBlock(text: string, block: RecordBlock): string {
+  const lines = [...block.entries]
+    .sort((a, b) => a.createTime - b.createTime)
+    .map((m) => recordLine(m, block.now))
     .filter((l) => l.length > 0);
   if (lines.length === 0) return text;
-  const block = `[话题中在此之前已有的消息（按时间先后排列，供你理解上下文）：\n${lines.join('\n')}\n]`;
-  return prependBlock(block, text);
+  const earlier =
+    block.earlier === 'some'
+      ? '（更早的消息没带进来，需要时用 vonvon 飞书 skill 查）'
+      : block.earlier
+        ? `（更早还有 ${block.earlier} 条没带进来，需要时用 vonvon 飞书 skill 查）`
+        : undefined;
+  return prependBlock([recordHeader(block.place), ...(earlier ? [earlier] : []), ...lines, '[/飞书]'].join('\n'), text);
+}
+
+function recordHeader(p: RecordPlace): string {
+  const group = label(p.group ?? '', 40);
+  const title = label(p.topic?.title ?? '', 30);
+  const where = p.topic ? (title ? `话题「${title}」` : '话题') : '主区';
+  const me = label(p.me ?? '', 40);
+  const parts = ['飞书', group ? `群「${group}」` : '群', where, ...(me ? [`你是「${me}」`] : [])];
+  // As in product.md 3.5: no space between a closing 」 and the dot.
+  return `[${parts.reduce((out, part) => `${out}${out.endsWith('」') ? '· ' : ' · '}${part}`)}]`;
+}
+
+/** One message as a line, or '' when its text sanitizes to nothing. */
+function recordLine(m: ContextMessage, now: number): string {
+  const body = sanitizeContext(m.text, m.from === 'user' ? LINE_MAX : BOT_LINE_MAX, true);
+  if (!body) return '';
+  const at = clockOf(m.createTime, now);
+  if (m.from === 'self') return `${at} 你：${body}`;
+  const who = label(m.senderName, 40) || '某人';
+  if (m.from === 'bot') return `${at} ${who}（bot${m.streaming ? '，还没答完' : ''}）：${body}`;
+  return `${at} ${who}${m.mentionsMe ? ' → @你' : ''}：${body}`;
+}
+
+/** A name or title for a record block: one line, without the marks daemon-written parts use. */
+function label(s: string, max: number): string {
+  return sanitizeContext(s.replace(/[〔〕「」→]/g, ''), max, true);
+}
+
+/** `HH:MM` in the daemon's time zone, `MM-DD HH:MM` when not the trigger's day. */
+function clockOf(t: number, now: number): string {
+  if (!t) return '--:--';
+  const d = new Date(t);
+  const two = (n: number) => String(n).padStart(2, '0');
+  const hm = `${two(d.getHours())}:${two(d.getMinutes())}`;
+  return d.toDateString() === new Date(now).toDateString() ? hm : `${two(d.getMonth() + 1)}-${two(d.getDate())} ${hm}`;
 }
 
 /** Max chars for the woven sender display name (matches the per-line history clamp). */
@@ -541,7 +703,7 @@ const LATE_NOTE_MS = 2 * 60_000;
  * Returns `text` unchanged when there's no usable open_id (nothing to assert).
  * sanitizeContext is the single boundary for the display name — it is
  * uploader-influenced, so oneLine=true collapses it so a crafted name can't
- * forge a fenced block (mirrors weaveQuote / weaveThreadHistory).
+ * forge a fenced block (mirrors weaveQuote / weaveRecordBlock).
  */
 export function weaveSender(
   text: string,

@@ -199,7 +199,6 @@ import {
   clearSessionTitleJobKey,
   detachSessionsForChat,
   getSession,
-  isDelivered,
   isSeen,
   listSessions,
   nextSeen,
@@ -213,7 +212,7 @@ import {
   type SessionTitlePolicySnapshot,
 } from './session-store';
 import { SessionTitleCoordinator } from './session-title-coordinator';
-import type { TopicPerson, TopicRegistry, TopicSighting } from './topic-registry';
+import { topicTitle, type TopicPerson, type TopicRegistry, type TopicSighting } from './topic-registry';
 import {
   sessionTitleSourceFromMessage,
   type SessionTitleSource,
@@ -229,13 +228,16 @@ import {
   weaveFileManifest,
 } from './media';
 import {
+  BACKFILL_MAX,
+  fetchChatContext,
   fetchQuotedMessage,
   fetchThreadContext,
   keepRecent,
-  THREAD_WEAVE_MAX,
+  OPENING_MAX,
   weaveQuote,
+  weaveRecordBlock,
   weaveSender,
-  weaveThreadHistory,
+  type PullOpts,
   type ThreadPull,
 } from './context-weave';
 import {
@@ -996,8 +998,7 @@ export function createOrchestrator(
       // the supervisor's 8 s grace. One lost to a stop is retried next start.
       void withDeadline(fetchQuotedMessage(channel, firstId, names), 10_000).then((root) => {
         if (!root || shuttingDown) return;
-        const self = Boolean(root.senderId && root.senderId === channel.botIdentity?.openId);
-        const rootFrom: TopicPerson = self ? { kind: 'self' } : topicPerson(root.fromUser ? 'user' : 'bot', root.senderId);
+        const rootFrom: TopicPerson = root.from === 'self' ? { kind: 'self' } : topicPerson(root.from, root.senderId);
         void trackTask(topics.note(msg.chatId, { ...sighting, first: { id: firstId, from: rootFrom, at: root.createTime || undefined, text: root.text } }));
       }).catch(fail);
     }).catch(fail));
@@ -1022,14 +1023,13 @@ export function createOrchestrator(
   }
 
   /** Feishu re-pushes messages sent while the bot was offline, minutes late
-   * (e10). One this session already took in, as a turn or as a history line,
-   * is skipped. Only late messages pay for the disk read; the main area pulls
-   * no history yet (s14), so there only a delivered id counts. */
+   * (e10). One this session already took in, as a turn or as a line of a
+   * record block, is skipped. Only late messages pay for the disk read. */
   async function lateRedelivery(msg: NormalizedMessage, sessionKey: string): Promise<boolean> {
     const lateMs = deliveryLagMs(msg);
     if (lateMs < 60_000) return false;
     const rec = await getSession(sessionKey).catch(() => undefined);
-    const taken = msg.threadId ? isSeen(rec, msg.messageId, msg.createTime) : isDelivered(rec, msg.messageId);
+    const taken = isSeen(rec, msg.messageId, msg.createTime);
     if (taken) log.info('intake', 'late-redelivery-skipped', { msgId: msg.messageId, lateMs });
     return taken;
   }
@@ -1732,32 +1732,36 @@ export function createOrchestrator(
           return r;
         });
         // For an already-resumed session the high-water mark (lastSeenAt) tells us
-        // which thread messages codex hasn't seen — a pure local read, NOT
-        // dependent on resolveThread's outcome, so it rides the same Promise.all.
+        // which messages codex hasn't seen — a pure local read, NOT dependent on
+        // resolveThread's outcome, so it rides the same Promise.all.
         const priorP = getSession(sessionKey);
-        // 话题上文投机拉取：不等 resolveThread 的 codexEmpty，按已有水位翻页拉到水位为止
-        // （没有记录就按开场拉最近的），汇合后在本地按水位和已送达的 id 收敛成增量。
-        // 只拉比触发消息早的，之后到的消息各自成轮或插话，不重复。不拉的情况：有记录
-        // 但无水位（resume 上来的旧会话，codex 已带历史，只在 recreated 罕见路径补拉）。
+        // 上文投机拉取（话题，或连续群的主区）：不等 resolveThread 的 codexEmpty，按已有
+        // 水位翻页拉到水位为止（没有记录就按开场拉最近的），汇合后在本地按水位和已送达的
+        // id 收敛成增量。只拉比触发消息早的，之后到的消息各自成轮或插话，不重复。不拉的
+        // 情况：有记录但无水位（resume 上来的旧会话，codex 已带历史，只在 recreated 罕见
+        // 路径补拉）；开话题群的主区不留会话（3.5），也不拉。
         const topicId = goal ? undefined : msg.threadId;
-        const pullOpts = { before: msg.createTime || undefined, excludeMessageId: msg.messageId, keepId: msg.rootId, names };
-        const historyP: Promise<ThreadPull | undefined> = topicId
+        const place = topicId ? 'topic' : !goal && flat && !msg.threadId ? 'main' : undefined;
+        const pullFor = (opts: Pick<PullOpts, 'stopAt' | 'enough'>): Promise<ThreadPull> => {
+          const o = { before: msg.createTime || undefined, excludeMessageId: msg.messageId, names, ...opts };
+          return topicId ? fetchThreadContext(channel, topicId, { ...o, keepId: msg.rootId }) : fetchChatContext(channel, msg.chatId, o);
+        };
+        const historyP: Promise<ThreadPull | undefined> = place
           ? priorP.then((p) =>
               p && p.lastSeenAt === undefined
                 ? undefined
-                : fetchThreadContext(channel, topicId, {
-                    ...pullOpts,
-                    stopAt: p?.lastSeenAt ?? 0,
-                    ...(p?.lastSeenAt ? {} : { enough: THREAD_WEAVE_MAX + (p?.seen?.length ?? 0) }),
-                  }),
+                : pullFor({ stopAt: p?.lastSeenAt ?? 0, ...(p?.lastSeenAt ? {} : { enough: OPENING_MAX + (p?.seen?.length ?? 0) }) }),
             )
           : Promise.resolve(undefined);
-        const [images, ingested, { thread: resolved, recreated, reason: recreateReason }, prior, specHistory] = await Promise.all([
+        // The topic's title for the record block's header (the registry never throws).
+        const titleP = topicId && topics ? topics.get(msg.chatId, topicId).then((t) => t?.title) : Promise.resolve(undefined);
+        const [images, ingested, { thread: resolved, recreated, reason: recreateReason }, prior, specHistory, title] = await Promise.all([
           imagesP,
           ingestP,
           resolveP,
           priorP,
           historyP,
+          titleP,
         ]);
         let firstText = ingested.text;
         let thread = resolved;
@@ -1785,40 +1789,49 @@ export function createOrchestrator(
         }
         // codex's history is EMPTY when the session is brand-new (neverSeen) OR a
         // resume failed and we fell back to a new thread (recreated) — both want
-        // the FULL topic woven as opening context, not just the delta.
+        // the opening woven, not just the delta.
         const codexEmpty = neverSeen || recreated;
-        // 话题上文：在话题里 @bot 时，把 bot 还没喂给 codex 的消息补进开场。
-        // codexEmpty（新会话 / resume 失败重建）→ 开场带最近 N 条和话题第一条；已有
-        // 会话 → 只带没见过的（水位之后、不是插话或排队送过的）。Goals skip the
-        // topic-history weave (topicId=undefined above): the objective must stay
-        // self-contained (and under codex's ~4000-char goal limit), and a resumed
-        // thread already carries codex's own history.
+        // 对话记录块：把 bot 还没喂给 codex 的消息补进这一轮。codexEmpty（新会话 /
+        // resume 失败重建）→ 开场带最近 20 条，话题再加第一条；已有会话 → 只带没见过的
+        // （水位之后、不是插话或排队送过的），最多 40 条。Goals skip the record block
+        // (place=undefined above): the objective must stay self-contained (and under
+        // codex's ~4000-char goal limit), and a resumed thread already carries codex's
+        // own history.
         let pull = specHistory;
-        if (topicId && codexEmpty && prior && prior.lastSeenAt !== 0) {
+        if (place && codexEmpty && prior && prior.lastSeenAt !== 0) {
           // The speculative pull stopped at the old session's watermark (or was
           // skipped): the new session needs the whole opening.
-          pull = await fetchThreadContext(channel, topicId, { ...pullOpts, enough: THREAD_WEAVE_MAX });
+          pull = await pullFor({ enough: OPENING_MAX });
         }
-        if (topicId && pull) {
+        if (place && pull) {
           let history = codexEmpty
             ? pull.messages
             : pull.messages.filter((m) => !isSeen(prior, m.messageId, m.createTime));
-          const rootId = msg.rootId && msg.rootId !== msg.messageId ? msg.rootId : undefined;
+          const rootId = topicId && msg.rootId && msg.rootId !== msg.messageId ? msg.rootId : undefined;
           if (codexEmpty && rootId && !history.some((m) => m.messageId === rootId)) {
             // The topic's first message is no longer re-quoted every turn, so a new
             // session gets it here once, even when the listing leaves it out.
             const root = await fetchQuotedMessage(channel, rootId, names);
             if (root) history = [root, ...history];
           }
-          firstText = weaveThreadHistory(firstText, keepRecent(history, codexEmpty ? rootId : undefined));
+          const kept = keepRecent(history, codexEmpty ? rootId : undefined, codexEmpty ? OPENING_MAX : BACKFILL_MAX);
+          const earlier = pull.complete ? history.length - kept.length || undefined : 'some';
+          const rootTitle = rootId ? topicTitle(history.find((m) => m.messageId === rootId)?.text) : undefined;
+          firstText = weaveRecordBlock(firstText, {
+            place: { group: project?.name, me: channel.botIdentity?.name, ...(topicId ? { topic: { title: title ?? rootTitle } } : {}) },
+            entries: kept,
+            earlier,
+            now: msg.createTime || Date.now(),
+          });
+          log.info('intake', 'record-block', { place, lines: kept.length, earlier: earlier ?? 0, opening: codexEmpty, ok: pull.ok });
         }
         // The watermark moves to the trigger only when everything before it reached
-        // the session: the back-fill succeeded, or there is none (main area until
-        // s14, a resumed session). After a failed back-fill, or a goal in a topic
-        // (no history woven), only the trigger counts; a new session then restarts
-        // from 0 so its next turn pulls the whole topic. Written once the host
-        // accepts the turn (launchRun), not here.
-        const behind = topicId ? Boolean(pull && !pull.ok) : Boolean(goal && msg.threadId);
+        // the session: the back-fill succeeded, or there is none (a resumed
+        // session, or a multi group's main area, which keeps no session). After a
+        // failed back-fill, or a goal (no record block woven), only the trigger
+        // counts; a new session then restarts from 0 so its next turn pulls the
+        // whole opening. Written once the host accepts the turn (launchRun), not here.
+        const behind = place ? Boolean(pull && !pull.ok) : Boolean(goal && (msg.threadId || flat));
         let seenHow: SeenHow = 'advance';
         if (behind) seenHow = codexEmpty ? 'restart' : 'id';
         const seenMark: SeenMark = { id: msg.messageId, at: msg.createTime };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractRawCardText, isDegradedCardContent, parseRawCardWrapper } from '../src/bot/card-content';
+import { extractRawCardText, extractSendCardText, isDegradedCardContent, isSendCard, isStreamingCard, parseRawCardWrapper } from '../src/bot/card-content';
 
 // The real `json_card` returned by
 //   GET /open-apis/im/v1/messages/:id?card_msg_content_type=raw_card_content
@@ -138,5 +138,65 @@ describe('extractRawCardText', () => {
   it('yields nothing for an empty / unparseable card', () => {
     expect(extractRawCardText({})).toBe('');
     expect(extractRawCardText(null)).toBe('');
+  });
+});
+
+// The send-format JSON a pull returns with card_msg_content_type=user_card_content (e10).
+describe('extractSendCardText', () => {
+  it('reads a 2.0 card: header title, then the body', () => {
+    const card = {
+      schema: '2.0',
+      config: { streaming_mode: false },
+      header: { title: { tag: 'plain_text', content: '排查结论' } },
+      body: { elements: [
+        { tag: 'markdown', content: '网关的 500 都来自 **OrderService**' },
+        { tag: 'column_set', columns: [{ tag: 'column', elements: [{ tag: 'markdown', content: '下一步：回滚 v3' }] }] },
+      ] },
+    };
+    expect(extractSendCardText(card)).toBe('排查结论\n网关的 500 都来自 **OrderService**\n下一步：回滚 v3');
+  });
+
+  it('reads a 1.0 card: div lark_md, fields and markdown', () => {
+    const card = {
+      header: { title: { tag: 'plain_text', content: '部署清单' } },
+      elements: [
+        { tag: 'div', text: { tag: 'lark_md', content: '环境：生产' }, fields: [{ is_short: true, text: { tag: 'lark_md', content: '负责人：张三' } }] },
+        { tag: 'markdown', content: '低峰期执行' },
+        { tag: 'action', actions: [{ tag: 'button', text: { tag: 'plain_text', content: '确认' } }] },
+      ],
+    };
+    expect(extractSendCardText(card)).toBe('部署清单\n环境：生产\n负责人：张三\n低峰期执行');
+  });
+
+  it('keeps only the answer: no process panel, status lines, notes, images or buttons', () => {
+    const card = { schema: '2.0', body: { elements: [
+      { tag: 'div', text: { tag: 'lark_md', content: '上下文 43% · 86k/200k', text_size: 'notation' } },
+      { tag: 'collapsible_panel', header: { title: { content: '执行了 3 条命令' } }, elements: [{ tag: 'markdown', content: '$ rm -rf build' }] },
+      { tag: 'img', img_key: 'img_x' },
+      { tag: 'markdown', content: '改好了，测试都过了' },
+      { tag: 'markdown', content: '耗时 12 秒', text_size: 'notation' },
+      { tag: 'note', elements: [{ tag: 'plain_text', content: '来自小P' }] },
+      { tag: 'button', text: { tag: 'plain_text', content: '⏹ 停止' } },
+    ] } };
+    expect(extractSendCardText(card)).toBe('改好了，测试都过了');
+  });
+
+  it('de-duplicates lines and reads one locale of an i18n card', () => {
+    expect(extractSendCardText({ schema: '2.0', body: { elements: [{ tag: 'markdown', content: '同一句' }, { tag: 'markdown', content: '同一句' }] } })).toBe('同一句');
+    expect(extractSendCardText({ i18n_elements: { en_us: [{ tag: 'markdown', content: 'hello' }], zh_cn: [{ tag: 'markdown', content: '你好' }] } })).toBe('你好');
+  });
+
+  it('yields nothing for an empty or unreadable card', () => {
+    expect(extractSendCardText({ schema: '2.0', body: { elements: [{ tag: 'img' }] } })).toBe('');
+    expect(extractSendCardText(null)).toBe('');
+  });
+
+  it('tells the send format from the down-converted shape, and reads the streaming flag', () => {
+    expect(isSendCard({ schema: '2.0', body: {} })).toBe(true);
+    expect(isSendCard({ elements: [{ tag: 'markdown', content: 'x' }] })).toBe(true);
+    expect(isSendCard({ title: 'T', elements: [[{ tag: 'text', text: 'x' }]] })).toBe(false);
+    expect(isStreamingCard(JSON.stringify({ config: { streaming_mode: true } }))).toBe(true);
+    expect(isStreamingCard(JSON.stringify({ config: { streaming_mode: false } }))).toBe(false);
+    expect(isStreamingCard('not json')).toBe(false);
   });
 });
