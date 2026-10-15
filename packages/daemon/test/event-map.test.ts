@@ -371,8 +371,13 @@ describe('mapNotification', () => {
       })),
     ).toEqual({ type: 'context_usage', usedTokens: 100, contextWindow: null });
 
-    expect(mapNotification(notification('thread/compacted', { threadId: 'thread-1' }))).toEqual({
-      type: 'context_compacted',
+    // The contextCompaction item brackets the compaction; the deprecated
+    // thread/compacted repeats its end on codex versions that still send it.
+    const compaction = { type: 'contextCompaction', id: 'cc-1' } as ThreadItem;
+    expect(mapNotification(itemStarted(compaction))).toEqual({ type: 'compaction', phase: 'start', itemId: 'cc-1' });
+    expect(mapNotification(itemCompleted(compaction))).toEqual({ type: 'compaction', phase: 'end', itemId: 'cc-1' });
+    expect(mapNotification(notification('thread/compacted', { threadId: 'thread-1', turnId: 'turn-1' }))).toEqual({
+      type: 'compaction', phase: 'end', legacy: true,
     });
   });
 

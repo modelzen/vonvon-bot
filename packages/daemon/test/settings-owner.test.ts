@@ -131,11 +131,11 @@ it('membership operations retain owner and preserve concurrent project edits', a
   const { owner } = await fixture(); const a = await owner.read(agent) as AgentSettingsView;
   expect((await owner.act({ kind: 'adminMember', botId, openId: 'ou_owner', membership: 'absent', revision: a.administrators.revision })).kind).toBe('rejected');
   const p = await owner.read(project) as ProjectSettingsView;
-  await updateProject('demo', { autoCompact: false });
+  await updateProject('demo', { noMention: false });
   expect((await owner.act({ kind: 'projectMember', botId, projectName: 'demo', openId: 'ou_member', membership: 'present', revision: p.members.revision })).kind).toBe('saved');
   const now = await owner.read(project) as ProjectSettingsView;
   await owner.act({ kind: 'projectMember', botId, projectName: 'demo', openId: 'ou_member', membership: 'absent', revision: now.members.revision });
-  expect(await getProjectByName('demo')).toMatchObject({ autoCompact: false, allowedUsers: [] });
+  expect(await getProjectByName('demo')).toMatchObject({ noMention: false, allowedUsers: [] });
 });
 it.each([false, true])('CLI persist failure compensates runtime; compensation failure=%s is explicit', async failedRollback => {
   const start = vi.fn(async () => {}); const shutdown = vi.fn(async () => { if (failedRollback) throw new Error('stop failed'); });
@@ -182,9 +182,19 @@ it('CLI desired-state retries start once and repair hooks reports each failed ba
 it('project persistence survives failed runtime eviction with an explicit restart effect', async () => {
   const { owner } = await fixture({ evictLiveSessionsForChat: async () => { throw new Error('busy'); } });
   const view = await owner.read(project) as ProjectSettingsView;
-  const result = await owner.save({ scope: project, section: 'compact', revision: view.sections.compact.revision, patch: { autoCompact: false } });
+  const result = await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch: { network: true } });
   expect(result.kind).toBe('saved'); if (result.kind === 'saved') expect(result.effects.some(e => e.when === 'restart')).toBe(true);
-  expect((await getProjectByName('demo'))?.autoCompact).toBe(false);
+  expect((await getProjectByName('demo'))?.network).toBe(true);
+});
+it('s12: a stored autoCompact:false is ignored on read and the switch cannot be saved', async () => {
+  // An old projects.json row with auto-compaction off; nothing migrates it.
+  await updateProject('demo', JSON.parse('{"autoCompact":false}') as Parameters<typeof updateProject>[1]);
+  const { owner } = await fixture();
+  const view = await owner.read(project) as ProjectSettingsView;
+  expect(Object.keys(view.sections).sort()).toEqual(['model', 'permission', 'response']);
+  expect(JSON.stringify(view)).not.toContain('autoCompact');
+  expect(() => parseSettingsEdit({ scope: project, section: 'compact', revision: 'x', patch: { autoCompact: true } })).toThrow('设置字段、类型或范围无效');
+  expect(JSON.parse(await readFile(paths.projectsFile, 'utf8')).projects[0]).toMatchObject({ autoCompact: false });
 });
 it('real instruction propagation retains saved master and reports partial filesystem failure', async () => {
   const { join } = await import('node:path');

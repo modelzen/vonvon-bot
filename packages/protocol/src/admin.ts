@@ -6,7 +6,7 @@ export const adminProjectSchema = z.object({
   name: z.string(), chatId: z.string(), cwd: z.string(), blank: z.boolean(),
   branch: z.string().optional(), kind: z.enum(["multi", "single"]),
   origin: z.enum(["created", "joined"]), noMention: z.boolean(),
-  autoCompact: z.boolean(), mode: permissionSchema, guestMode: permissionSchema,
+  mode: permissionSchema, guestMode: permissionSchema,
   network: z.boolean(), backend: z.string(), allowedUsersCount: z.number(),
   sessionCount: z.number(), createdAt: z.number(),
 });

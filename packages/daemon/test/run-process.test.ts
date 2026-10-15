@@ -17,13 +17,14 @@ describe('ordered run process', () => {
     expect(state.blocks.map(b => b.kind)).toEqual(['reasoning', 'tool', 'text', 'tool', 'text']);
     const card = buildRunCard({ rs: state });
     const body = card.body as { elements: Record<string, unknown>[] };
-    const process = JSON.stringify(body.elements[0]);
+    expect(body.elements[0]).toMatchObject({ text: { content: '上下文 —' } }); // s12: the meter heads the card
+    const process = JSON.stringify(body.elements[1]);
     expect(process.indexOf('REASONING')).toBeLessThan(process.indexOf('pwd'));
     expect(process.indexOf('pwd')).toBeLessThan(process.indexOf('PROGRESS'));
     expect(process.indexOf('PROGRESS')).toBeLessThan(process.indexOf('npm test'));
     expect(process).not.toContain('ANSWER');
     expect(process).not.toContain('🧠');
-    expect(body.elements[1]).toMatchObject({ tag: 'markdown', element_id: 'answer', content: 'ANSWER', text_size: 'normal' });
+    expect(body.elements[2]).toMatchObject({ tag: 'markdown', element_id: 'answer', content: 'ANSWER', text_size: 'normal' });
   });
 
   it('uses a live elapsed clock and freezes the duration at completion', () => {

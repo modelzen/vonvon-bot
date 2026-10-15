@@ -7,7 +7,7 @@ import { readAdminState } from '../src/server/state';
 import { fakeService, socketClient, startFixture } from './server-fixture';
 
 const bot: AdminBot = { appId: 'cli_fixture', name: 'fixture', tenant: 'feishu', active: false, current: true, running: true, pid: 42, startedAt: 12, completionReminder: { mode: 'always', longTaskMinutes: 7 } };
-const project: AdminProject = { name: 'project', chatId: 'oc_fixture', cwd: '/fixture', blank: false, kind: 'multi', origin: 'joined', noMention: false, autoCompact: true, mode: 'qa', guestMode: 'qa', network: false, backend: 'codex-appserver', allowedUsersCount: 0, sessionCount: 2, createdAt: 1 };
+const project: AdminProject = { name: 'project', chatId: 'oc_fixture', cwd: '/fixture', blank: false, kind: 'multi', origin: 'joined', noMention: false, mode: 'qa', guestMode: 'qa', network: false, backend: 'codex-appserver', allowedUsersCount: 0, sessionCount: 2, createdAt: 1 };
 const host: HostSettingsView = { scope: { kind: 'host' }, sections: { execution: { stored: { codexBin: null }, effective: { codexBin: null }, revision: 'section-token', access: { kind: 'writable' }, apply: [] } }, runtime: { codexBin: null, fallbackCwd: '/fixture', platform: 'darwin' } };
 const agentScope = { kind: 'agent', botId: bot.appId };
 const projectScope = { kind: 'project', botId: bot.appId, projectName: project.name };
@@ -31,7 +31,6 @@ function inventory(folderToken: string) {
     ['POST completion-reminder', 'settings', { type: 'save', edit: { scope: agentScope, section: 'completion', revision: 'old', patch: { mode: 'always' } } }],
     ['POST permission', 'command', { type: 'setPermission', membershipId, administrator: 'write', member: 'qa', network: true }],
     ['POST no-mention', 'command', { type: 'setResponse', membershipId, response: 'all' }],
-    ['POST auto-compact', 'settings', { type: 'save', edit: { scope: projectScope, section: 'compact', revision: 'old', patch: { autoCompact: false } } }],
     ['POST backend', 'admin', { type: 'switchBackend', agentId: bot.appId, projectName: project.name, backend: 'claude-agent' }],
     ['PATCH bot', 'command', { type: 'setAgentEnabled', agentId: bot.appId, enabled: true }],
     ['DELETE bot', 'command', { type: 'deleteAgent', agentId: bot.appId }],
