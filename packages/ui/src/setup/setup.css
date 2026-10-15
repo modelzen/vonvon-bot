@@ -1,0 +1,5 @@
+.setup-checklist .ss-section__label {display:flex;align-items:center;gap:8px;}
+.setup-step-trailing {display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px;}
+.setup-step-items {display:flex;flex-wrap:wrap;gap:4px 6px;margin-top:4px;}
+.setup-step-items code {font-size:11px;}
+@media(max-width:800px){.setup-checklist .ss-row--described{flex-wrap:wrap;}.setup-checklist .ss-row__trailing{width:100%;}.setup-step-trailing{justify-content:flex-start;}}

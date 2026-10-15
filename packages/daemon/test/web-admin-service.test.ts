@@ -1,5 +1,5 @@
 import { createPendingGroups, pendingGroupsFile } from '../src/project/pending-groups';
-import { rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, rmSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { paths, botPaths, useBotDir } from '../src/config/paths';
 import { saveBots } from '../src/config/bots';
@@ -34,6 +34,7 @@ vi.mock('../src/config/paths', async () => {
       sessionsFile: join(dir, 'sessions.json'),
       projectsFile: join(dir, 'projects.json'),
       processesFile: join(dir, 'processes.json'),
+      setupFile: join(dir, 'setup.json'),
     };
   };
   return {
@@ -424,6 +425,26 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
     expect(s.event.state).toBe('ok');
     expect(s.connection.running).toBe(false); // 没锁文件 + 预览态
     expect(s.eventConfigUrl).toContain('/app/cli_setupbot/event');
+    expect(s.consoleUrl).toBe('https://open.feishu.cn/app/cli_setupbot');
+    expect(s.cardCallback).toEqual({ confirmed: false });
+  });
+
+  it('卡片回调勾选按 Bot 存在 setup.json，重开后还在；文件坏了按未勾选', async () => {
+    rmSync(botPaths(SETUP_BOT).dir, { recursive: true, force: true });
+    const svc = createReadonlyAdminService();
+    await svc.confirmCardCallback(SETUP_BOT, true);
+    expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: true });
+    expect(statSync(botPaths(SETUP_BOT).setupFile).mode & 0o777).toBe(0o600);
+    expect((await createReadonlyAdminService().getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: true });
+    await svc.confirmCardCallback(SETUP_BOT, false);
+    expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: false });
+    writeFileSync(botPaths(SETUP_BOT).setupFile, '{not json');
+    expect((await svc.getSetupStatus(SETUP_BOT)).cardCallback).toEqual({ confirmed: false });
+  });
+
+  it('不认识的 Bot 不写卡片回调勾选', async () => {
+    await expect(createReadonlyAdminService().confirmCardCallback('cli_nobody', true)).rejects.toThrow('没有这个 Bot');
+    expect(existsSync(botPaths('cli_nobody').setupFile)).toBe(false);
   });
 
   it('缺 scope + 事件未发布：missingRequired 非空、event=unpublished', async () => {

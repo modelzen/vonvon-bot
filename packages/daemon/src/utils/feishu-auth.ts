@@ -37,6 +37,11 @@ interface BotInfoResp {
 }
 
 /** Validate app credentials by exchanging for a tenant_access_token. */
+/** A stalled Feishu call must not hang the checklist or a credential refresh. */
+const FEISHU_TIMEOUT_MS = 10_000;
+const networkReason = (err: unknown): string =>
+  err instanceof Error && err.name === 'TimeoutError' ? `飞书接口 ${FEISHU_TIMEOUT_MS / 1000} 秒没有响应` : `网络错误：${err instanceof Error ? err.message : String(err)}`;
+
 export async function validateAppCredentials(
   appId: string,
   appSecret: string,
@@ -49,9 +54,10 @@ export async function validateAppCredentials(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+      signal: AbortSignal.timeout(FEISHU_TIMEOUT_MS),
     });
   } catch (err) {
-    return { ok: false, reason: `网络错误：${err instanceof Error ? err.message : String(err)}` };
+    return { ok: false, reason: networkReason(err) };
   }
   if (!resp.ok) return { ok: false, reason: `HTTP ${resp.status}` };
   let data: TokenResp;
@@ -80,6 +86,7 @@ export async function validateAppCredentials(
 async function fetchBotInfo(base: string, token: string): Promise<BotInfoResp | undefined> {
   const resp = await fetch(`${base}/open-apis/bot/v3/info`, {
     headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(FEISHU_TIMEOUT_MS),
   });
   if (!resp.ok) return undefined;
   return (await resp.json()) as BotInfoResp;
@@ -97,6 +104,7 @@ interface ScopeListResp {
 async function fetchGrantedScopes(base: string, token: string): Promise<Set<string> | undefined> {
   const resp = await fetch(`${base}/open-apis/application/v6/scopes`, {
     headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(FEISHU_TIMEOUT_MS),
   });
   if (!resp.ok) return undefined;
   const body = (await resp.json()) as ScopeListResp;

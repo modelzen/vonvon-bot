@@ -35,7 +35,8 @@ import { resolveAppSecret } from '../config/secret-resolver';
 import { createAgentAvatarProvider, createGroupAvatarProvider } from './avatar';
 import { diagnoseEventSubscription, type EventDiagnosis } from '../utils/event-diagnosis';
 import { validateAppCredentials } from '../utils/feishu-auth';
-import { buildScopeGrantUrl, buildEventConfigUrl } from '../config/scopes';
+import { buildAppConsoleUrl, buildScopeGrantUrl, buildEventConfigUrl } from '../config/scopes';
+import { readSetupProgress, writeSetupProgress } from '../config/setup-progress';
 import { refreshBotCredentials } from '../bot/refresh-bot';
 import { registerBotFromCredentials } from '../bot/register-bot';
 import {
@@ -158,6 +159,8 @@ export interface AdminService {
    * 生效」。绝不 throw——每段独立降级。
    */
   getSetupStatus(botId: string): Promise<AdminSetupStatus>;
+  /** 首次运行清单里"卡片回调"那一步：飞书没有读接口，由主人手动勾上。 */
+  confirmCardCallback(botId: string, confirmed: boolean): Promise<void>;
   /**
    * 扫码注册一个机器人（day-0 主路径）：编排 SDK registerApp 扫码会话 → 拿明文密钥
    * → 复用 registerBotFromCredentials 写盘（keystore + config + bots.json），扫码人
@@ -350,6 +353,10 @@ export interface AdminSetupStatus {
   scopes: { missingRequired?: string[]; grantUrl: string };
   /** 开发者后台「事件与回调」配置页深链（事件订阅没写 API，只能引导手动配 + 发版本）。 */
   eventConfigUrl: string;
+  /** 开发者后台这个应用的首页（版本管理与发布在里面）。 */
+  consoleUrl: string;
+  /** ⑤ 卡片回调（card.action.trigger）没有读接口，由主人在首次运行清单里手动勾上。 */
+  cardCallback: { confirmed: boolean };
 }
 
 /** 扫码注册成功：基本信息 + adminOpenId（扫码人 = owner）。
@@ -730,11 +737,13 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       const reg = await loadBots();
       const entry = reg.bots.find((b) => b.appId === botId);
       const tenant: 'feishu' | 'lark' = entry?.tenant ?? 'feishu';
-      const base: Pick<AdminSetupStatus, 'appId' | 'tenant' | 'botName' | 'eventConfigUrl'> = {
+      const base: Pick<AdminSetupStatus, 'appId' | 'tenant' | 'botName' | 'eventConfigUrl' | 'consoleUrl' | 'cardCallback'> = {
         appId: botId,
         tenant,
         botName: entry?.botName,
         eventConfigUrl: buildEventConfigUrl(botId, tenant),
+        consoleUrl: buildAppConsoleUrl(botId, tenant),
+        cardCallback: { confirmed: (await readSetupProgress(botId)).cardCallbackConfirmed },
       };
 
       // ② 长连接：真实状态优先（daemon 内），否则锁文件探测——绝不抛错。
@@ -794,6 +803,11 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
           grantUrl: buildScopeGrantUrl(app.id, app.tenant),
         },
       };
+    },
+
+    async confirmCardCallback(botId: string, confirmed: boolean): Promise<void> {
+      if (!(await loadBots()).bots.some((b) => b.appId === botId)) throw new Error('没有这个 Bot。');
+      await writeSetupProgress(botId, { cardCallbackConfirmed: confirmed });
     },
 
     async registerBotByQr(opts): Promise<QrRegisterResult | QrRegisterFailure> {

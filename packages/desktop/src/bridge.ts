@@ -16,7 +16,7 @@ import {
 } from './ipc-contract.js';
 
 const externalKinds: readonly ExternalUrlKind[] = [
-  'registration', 'authorization', 'verification', 'event-settings', 'group', 'releases',
+  'registration', 'authorization', 'verification', 'event-settings', 'app-console', 'group', 'releases',
 ];
 
 export async function openAllowedExternal(raw: unknown): Promise<void> {

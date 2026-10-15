@@ -58,6 +58,10 @@ export const adminSetupStatusSchema = z.object({
   event: eventDiagnosisSchema,
   scopes: z.object({ missingRequired: z.array(z.string()).optional(), grantUrl: z.string() }),
   eventConfigUrl: z.string(),
+  /** The app's page on the developer console (versions and publishing are there). */
+  consoleUrl: z.string(),
+  /** card.action.trigger has no read API, so the owner ticks it by hand (s04). */
+  cardCallback: z.object({ confirmed: z.boolean() }),
 });
 export type AdminSetupStatus = z.infer<typeof adminSetupStatusSchema>;
 
@@ -82,6 +86,7 @@ export const adminRequestSchema = z.discriminatedUnion("type", [
   z.object({type:z.literal("diagnosis"),agentId:agentIdSchema.optional()}).strict(),
   z.object({type:z.literal("hostDoctor")}).strict(),
   z.object({type:z.literal("setupStatus"),agentId:agentIdSchema}).strict(),
+  z.object({type:z.literal("confirmCardCallback"),agentId:agentIdSchema,confirmed:z.boolean()}).strict(),
   z.object({type:z.literal("daemonStatus")}).strict(),
   z.object({type:z.literal("codexSetup")}).strict(),
   z.object({type:z.literal("logs"),maxBytes:z.number().int().optional()}).strict(),

@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import type { DesktopSnapshot, Diagnostic, Job, ToolState } from '@vonvon/protocol';
 import { createBackend } from '../agent';
 import { cachedClaudeLogin } from '../agent/claude-agent/login';
+import { CODEX_MIN_VERSION, CODEX_VERIFIED_VERSION, classifyCodexVersion } from '../agent/codex-appserver/version';
 import type { AdminService } from '../admin/service';
 import { paths } from '../config/paths';
 import { bridgeVersion } from '../core/version';
@@ -43,8 +44,9 @@ export async function createSnapshotStore(options: {
     // 60 s even when no window is open. The 本机环境 page and 检查登录 probe.
     const login = claude?.ok ? cachedClaudeLogin() : undefined;
     const claudeMessage = login?.message ?? claude?.hint;
+    const compatibility = codex?.installation === 'installed' ? { status: classifyCodexVersion(codex.version), minimum: CODEX_MIN_VERSION, verified: CODEX_VERIFIED_VERSION } : undefined;
     return [
-      { tool: 'codex', installation: codex?.installation ?? 'unknown', authentication: codex?.authentication ?? 'unknown', version: codex?.version ?? null, ...(codex?.message ? { message: codex.message } : {}) },
+      { tool: 'codex', installation: codex?.installation ?? 'unknown', authentication: codex?.authentication ?? 'unknown', version: codex?.version ?? null, ...(codex?.message ? { message: codex.message } : {}), ...(compatibility ? { compatibility } : {}) },
       { tool: 'claude', installation: claude ? (claude.ok ? 'installed' : claude.depState === 'not-installed' || claude.depState === 'external-missing' ? 'missing' : 'unknown') : 'unknown', authentication: login?.state ?? 'unknown', version: claude?.version ?? null, ...(claudeMessage ? { message: claudeMessage } : {}) },
     ];
   });

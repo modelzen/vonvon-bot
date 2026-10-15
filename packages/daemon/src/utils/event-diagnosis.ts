@@ -25,6 +25,11 @@ const ENDPOINTS: Record<TenantBrand, string> = {
   lark: 'https://open.larksuite.com',
 };
 
+/** 飞书接口卡住时，诊断和首次运行清单最多等这么久。 */
+const FEISHU_TIMEOUT_MS = 10_000;
+const networkReason = (err: unknown): string =>
+  err instanceof Error && err.name === 'TimeoutError' ? `飞书接口 ${FEISHU_TIMEOUT_MS / 1000} 秒没有响应` : `网络错误：${err instanceof Error ? err.message : String(err)}`;
+
 /** 核心链路必需的事件：缺了 = @bot / 私聊都收不到消息。 */
 export const REQUIRED_EVENTS = ['im.message.receive_v1'] as const;
 
@@ -91,6 +96,7 @@ export async function diagnoseEventSubscription(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+      signal: AbortSignal.timeout(FEISHU_TIMEOUT_MS),
     });
     if (!resp.ok) return { state: 'unchecked', reason: `token HTTP ${resp.status}` };
     const data = (await resp.json()) as TokenResp;
@@ -99,7 +105,7 @@ export async function diagnoseEventSubscription(
     }
     token = data.tenant_access_token;
   } catch (err) {
-    return { state: 'unchecked', reason: `网络错误：${err instanceof Error ? err.message : String(err)}` };
+    return { state: 'unchecked', reason: networkReason(err) };
   }
 
   // order=0 = 按时间倒序 → 第一个 status=1 的就是当前在线（最新已上架）版本。
@@ -107,7 +113,7 @@ export async function diagnoseEventSubscription(
   try {
     const resp = await fetchFn(
       `${base}/open-apis/application/v6/applications/${encodeURIComponent(appId)}/app_versions?lang=zh_cn&page_size=50&order=0`,
-      { headers: { Authorization: `Bearer ${token}` } },
+      { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(FEISHU_TIMEOUT_MS) },
     );
     // 飞书即便 HTTP 4xx 也常带 {code,msg}（如缺 scope 返回 400 + 99991672）——先尝试读 body
     // 拿到可读原因，而不是甩一个裸状态码。读不到 body 才回退到 HTTP 状态。
@@ -117,7 +123,7 @@ export async function diagnoseEventSubscription(
       return { state: 'unchecked', reason: `HTTP ${resp.status}${hint}` };
     }
   } catch (err) {
-    return { state: 'unchecked', reason: `网络错误：${err instanceof Error ? err.message : String(err)}` };
+    return { state: 'unchecked', reason: networkReason(err) };
   }
   if (body.code !== 0) {
     // 典型：缺 application:application.app_version:readonly scope → 非 0 错误码。
