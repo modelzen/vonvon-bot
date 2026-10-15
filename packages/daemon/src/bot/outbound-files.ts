@@ -54,6 +54,7 @@ export interface FileContext {
 interface Manifest extends FileContext { files: FileEntry[]; sequence?: number }
 type Paint = (elementId: string, element: CardElement) => Promise<boolean>;
 type Authorize = (context: FileContext, openId: string) => Promise<PermissionMode | undefined>;
+interface FileClick { messageId: string; chatId: string; operator?: { openId?: string } }
 
 const CLAIM_DENIED = '当前无权获取此文件：只有本群能使用 bot 的成员可以领取';
 
@@ -71,7 +72,6 @@ export function fileClaimMode(
   if (!isUserAllowedInProject(cfg, project, openId)) return undefined;
   return turnTier(project, isAdmin(cfg, openId)).mode;
 }
-interface FileClick { messageId: string; chatId: string; operator?: { openId?: string } }
 
 /** Raw IM responses return message_position; message_app_link is sometimes
  * added by a higher-level client (including lark-cli), not by the IM API.

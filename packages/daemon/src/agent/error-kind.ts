@@ -11,14 +11,21 @@ export type AgentErrorKind = 'network' | 'auth' | 'quota';
 export function codexErrorKind(info: CodexErrorInfo | null | undefined): AgentErrorKind | undefined {
   if (!info) return undefined;
   if (typeof info === 'object') {
-    if ('httpConnectionFailed' in info || 'responseStreamConnectionFailed' in info
-      || 'responseStreamDisconnected' in info || 'responseTooManyFailedAttempts' in info) return 'network';
-    return undefined;
+    const connectionFailed = 'httpConnectionFailed' in info || 'responseStreamConnectionFailed' in info
+      || 'responseStreamDisconnected' in info || 'responseTooManyFailedAttempts' in info;
+    return connectionFailed ? 'network' : undefined;
   }
-  if (info === 'serverOverloaded' || info === 'internalServerError') return 'network';
-  if (info === 'usageLimitExceeded') return 'quota';
-  if (info === 'unauthorized') return 'auth';
-  return undefined;
+  switch (info) {
+    case 'serverOverloaded':
+    case 'internalServerError':
+      return 'network';
+    case 'usageLimitExceeded':
+      return 'quota';
+    case 'unauthorized':
+      return 'auth';
+    default:
+      return undefined;
+  }
 }
 
 /** From the Claude Agent SDK's `SDKAssistantMessageError` code. */

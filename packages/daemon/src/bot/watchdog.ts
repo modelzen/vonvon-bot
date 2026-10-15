@@ -104,9 +104,8 @@ export function createIdlePause(now: () => number = Date.now): IdlePause {
         holds--;
         if (holds > 0) return;
         lastRelease = now();
-        const w = waiting;
+        waiting?.wake();
         waiting = undefined;
-        w?.wake();
       };
     },
     get held() {
@@ -123,7 +122,9 @@ export function createIdlePause(now: () => number = Date.now): IdlePause {
       }
       return waiting.promise;
     },
-    releasedAt: () => lastRelease,
+    releasedAt() {
+      return lastRelease;
+    },
   };
 }
 

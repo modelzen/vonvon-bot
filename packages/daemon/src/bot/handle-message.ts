@@ -897,7 +897,9 @@ export function createOrchestrator(
   const retryTurns = new Map<string, RetryTurn>();
   const dropRetries = (sessionKey: string | undefined): void => {
     if (!sessionKey) return;
-    for (const [cardId, retry] of retryTurns) if (retry.sessionKey === sessionKey) retryTurns.delete(cardId);
+    for (const [cardId, retry] of retryTurns) {
+      if (retry.sessionKey === sessionKey) retryTurns.delete(cardId);
+    }
   };
   /** CardKit entity backing each run card, by messageId — drives the native
    * typewriter stream and whole-card (button/settings) updates. */
@@ -1407,11 +1409,10 @@ export function createOrchestrator(
       // carry them. Awaited here — the session is already held by a running
       // turn, so there's no reservation race to protect; gated on
       // messageHasImages so the common text path stays await-free and fast.
-      const [images, woven] = await Promise.all([
-        extra?.images ? Promise.resolve(extra.images)
-          : messageHasImages(msg) ? collectInboundImages(channel, msg) : Promise.resolve(undefined),
-        ingestContext(msg, text),
-      ]);
+      // A retry brings its own saved images instead.
+      let pendingImages: Promise<string[] | undefined> = Promise.resolve(extra?.images);
+      if (!extra?.images && messageHasImages(msg)) pendingImages = collectInboundImages(channel, msg);
+      const [images, woven] = await Promise.all([pendingImages, ingestContext(msg, text)]);
       if (existing.intakeCancelled) {
         await channel.send(msg.chatId, { markdown: '本条消息处理期间会话已停止，请重发。' }, { replyTo: msg.messageId, replyInThread: !flat }).catch(() => undefined);
         return;
@@ -2693,8 +2694,9 @@ export function createOrchestrator(
       })().catch((err) => log.fail('card', err, { phase: 'run-retry-repaint' })));
     }
     // Media is pruned after an hour; send what is still on disk.
-    const images = (await Promise.all((retry.turn.input.images ?? []).map(async (path) =>
-      (await stat(path).then((st) => st.isFile(), () => false)) ? path : undefined))).filter((p): p is string => Boolean(p));
+    const savedImages = retry.turn.input.images ?? [];
+    const onDisk = await Promise.all(savedImages.map((path) => stat(path).then((st) => st.isFile(), () => false)));
+    const images = savedImages.filter((_, i) => onDisk[i]);
     const text = retryPrompt(retry, retry.turn.input.text ?? '');
     log.info('intake', 'retry', { key: retry.sessionKey, reason: retry.reason, op: op.slice(-6) });
     await handleTurn(
@@ -4883,6 +4885,20 @@ export function createOrchestrator(
           await adoptThreadId(finalMsgId);
           rc.cardKey = finalMsgId;
 
+          // [重试] for a turn that went quiet or lost the model (product.md 3.12).
+          // Not when follow-ups are queued: they run next and would make a replay
+          // land out of order.
+          let retryReason: RetryTurn['reason'] | undefined;
+          if (timedOut) retryReason = 'idle';
+          else if (rc.rs.terminal === 'error' && rc.rs.errorKind === 'network') retryReason = 'network';
+          if (retryReason && topicThreadId && state.queue.length === 0) {
+            retryTurns.set(finalMsgId, {
+              sessionKey: topicThreadId, chatId: opts.chatId, flat: Boolean(opts.flat), turn: currentTurn,
+              reason: retryReason, idleSeconds: Math.round(idleMs / 1000),
+            });
+            rc.retry = 'available';
+          }
+
           // Outbound images + 卡片围栏. The answer's images mostly uploaded already
           // (the background uploader started on the ref's first appearance, so the
           // live card showed them mid-stream). settleImages finishes the job under
@@ -4893,19 +4909,6 @@ export function createOrchestrator(
           // The ```feishu-card fences are hoisted into standalone clean cards here.
           // Best-effort throughout: an unresolved ref renders as text, a failed
           // card is logged.
-          // [重试] for a turn that went quiet or lost the model (product.md 3.12).
-          // Not when follow-ups are queued: they run next and would make a replay
-          // land out of order.
-          const retryReason = timedOut ? 'idle' as const
-            : rc.rs.terminal === 'error' && rc.rs.errorKind === 'network' ? 'network' as const : undefined;
-          if (retryReason && topicThreadId && state.queue.length === 0) {
-            retryTurns.set(finalMsgId, {
-              sessionKey: topicThreadId, chatId: opts.chatId, flat: Boolean(opts.flat), turn: currentTurn,
-              reason: retryReason, idleSeconds: Math.round(idleMs / 1000),
-            });
-            rc.retry = 'available';
-          }
-
           const answerText = finalMessageText(rc.rs);
           rc.localFiles = await outboundFiles.prepare(answerText, {
             messageId: finalMsgId, chatId: opts.chatId, cwd: runCwd,
@@ -5740,14 +5743,6 @@ export function createOrchestrator(
     }
   }
 
-  // ── M-6 reaction 入站：零打字驱动 ─────────────────────────────────
-  /**
-   * `reaction` event（SDK 已归一化 im.message.reaction.created_v1 并自带去重）。
-   * 按 message_id 反查归属：运行中的 run/排队卡（runsByCard）→ OK/DONE 走与
-   * RC.stop 同语义的终止；终态 run 卡（runCards，每话题只留最新一张）→ 👍 等价
-   * 在话题里发「继续」。事件天然限机器人所在会话；缺 im:message.reactions:read
-   * scope 时事件根本不会推送 —— 整条链路零报错地静默关闭。
-   */
   /** A message posed as if `senderId` sent `content` in reply to the run card
    * `cardMessageId`, so 👍 继续 and 🔁 重试 reuse the whole message pipeline. */
   function cardTurnMessage(
@@ -5769,6 +5764,14 @@ export function createOrchestrator(
     };
   }
 
+  // ── M-6 reaction 入站：零打字驱动 ─────────────────────────────────
+  /**
+   * `reaction` event（SDK 已归一化 im.message.reaction.created_v1 并自带去重）。
+   * 按 message_id 反查归属：运行中的 run/排队卡（runsByCard）→ OK/DONE 走与
+   * RC.stop 同语义的终止；终态 run 卡（runCards，每话题只留最新一张）→ 👍 等价
+   * 在话题里发「继续」。事件天然限机器人所在会话；缺 im:message.reactions:read
+   * scope 时事件根本不会推送 —— 整条链路零报错地静默关闭。
+   */
   const onReaction = async (evt: ReactionEvent): Promise<void> => {
     if (evt.action !== 'added') return;
     // 机器人（含自己的 ⏳/🫳/OKR 生命周期表情）不能触发自己：事件体 operator_type
