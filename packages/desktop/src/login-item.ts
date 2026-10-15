@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { serviceActionMessage } from '@vonvon/protocol';
-import { readServiceActionRecord, type ServiceActionRecord } from '../../daemon/src/service/action-report.js';
+import { liveServiceActionRecord, type ServiceActionRecord } from '../../daemon/src/service/action-report.js';
 import { classifyDistribution, isTranslocated } from '../../daemon/src/service/distribution.js';
 import { isNewer } from '../../daemon/src/service/update.js';
 import { daemonEnvironment } from './daemon-dependencies.js';
@@ -62,15 +62,18 @@ async function runCli(runtime: ServiceRuntime, cli: string, args: readonly strin
 /** `vonvon service install|uninstall --keep-running`, judged by the report it wrote (`service-action.json`). */
 export async function runServiceHelper(runtime: ServiceRuntime, action: 'install' | 'uninstall', options: CliOptions = {}): Promise<void> {
   const cli = bundledServiceCli(runtime);
+  const started = Date.now();
   let exit: Exit | null;
   try { exit = await runCli(runtime, cli, ['service', action, '--keep-running'], options.timeoutMs ?? HELPER_TIMEOUT_MS, options.spawn); }
   catch { throw new ServiceActionError('exit'); }
   if (!exit) throw new ServiceActionError('timeout');
-  const report = (options.readReport ?? readServiceActionRecord)(runtime.root);
+  const report = (options.readReport ?? liveServiceActionRecord)(runtime.root);
   if (!report || report.pid !== exit.pid) {
     if (exit.code === 0) return;
-    // The service mutex refused it before it wrote anything, so a report there is another helper's.
-    throw new ServiceActionError(report ? 'busy' : 'exit');
+    // The service mutex refuses a helper before it writes anything while another one runs: that one's report is still
+    // running, or finished after this one started. An older report says nothing about why this one failed.
+    const another = report !== null && (report.phase === 'running' || (report.finishedAt ?? 0) >= started);
+    throw new ServiceActionError(another ? 'busy' : 'exit');
   }
   if (report.phase !== 'done') throw new ServiceActionError('exit');
   if (!report.ok) throw new ServiceActionError('report', serviceActionMessage(report));

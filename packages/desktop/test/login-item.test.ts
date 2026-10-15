@@ -57,6 +57,9 @@ function children(...exits: Array<{ code: number | null; signal?: NodeJS.Signals
 const done = (pid: number, report: Partial<ServiceActionRecord> = {}): ServiceActionRecord =>
   ({ pid, action: 'install', phase: 'done', ok: true, kind: 'installed', startedAt: 1, finishedAt: 2, ...report });
 
+/** A running report; a live pid keeps it current, so only another helper's own pid makes it "busy". */
+const running = (pid: number): ServiceActionRecord => ({ pid, action: 'install', phase: 'running', startedAt: Date.now() });
+
 async function writeReport(runtime: ServiceRuntime, record: ServiceActionRecord): Promise<void> {
   await writeFile(join(runtime.root, 'service-action.json'), JSON.stringify(record));
 }
@@ -87,15 +90,21 @@ describe('the login-item helper', () => {
     await expect(failure).rejects.toMatchObject({ reason: 'report' });
   });
 
-  it('reads busy from another helper\'s report: the mutex refused this one before it wrote anything', async () => {
+  it.each([
+    ['still running', () => running(process.pid)],
+    ['finished after this one started', () => done(9999, { startedAt: Date.now() - 60_000, finishedAt: Date.now() + 1_000 })],
+  ])('reads busy from another helper\'s report %s: the mutex refused this one before it wrote anything', async (_case, report) => {
     const runtime = await packagedRuntime();
-    await writeReport(runtime, { ...done(9999), phase: 'running' });
+    await writeReport(runtime, report());
     await expect(runServiceHelper(runtime, 'install', children({ code: 1 }))).rejects.toThrow(SERVICE_BUSY_MESSAGE);
   });
 
   it.each([
     ['no report', undefined, { code: 1 }],
-    ['its own report still running', { ...done(700), phase: 'running' as const }, { code: null, signal: 'SIGKILL' as const }],
+    ['its own report still running', running(700), { code: null, signal: 'SIGKILL' as const }],
+    // Last week's report, or a helper that died mid-run: this one failed for its own reason, written to daemon.log.
+    ['an older finished report', done(9999, { finishedAt: Date.now() - 7 * 86_400_000 }), { code: 1 }],
+    ['a running report whose helper is gone', running(2 ** 22 + 1), { code: 1 }],
   ])('reports a helper that exited without finishing: %s', async (_case, report, exit) => {
     const runtime = await packagedRuntime();
     if (report) await writeReport(runtime, report);
@@ -172,7 +181,7 @@ describe('switching 登录电脑时启动 from the window', () => {
     const runtime = await packagedRuntime();
     const h = hooks(null);
     await expect(changeLoginItem(runtime, true, previous, h, { ...children(null), timeoutMs: 5 })).rejects.toMatchObject({ reason: 'timeout' });
-    await writeReport(runtime, { ...done(9999), phase: 'running' });
+    await writeReport(runtime, running(process.pid));
     await expect(changeLoginItem(runtime, true, previous, h, children({ code: 1 }))).rejects.toMatchObject({ reason: 'busy' });
     expect(h.reattach).not.toHaveBeenCalled();
   });
