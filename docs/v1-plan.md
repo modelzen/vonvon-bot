@@ -230,7 +230,7 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 - s03：Codex 的最低版本定成 0.139.0。vonvon 用到的 app-server 方法 0.131.0 就都有，但 vonvon 依赖的行为（`turn/interrupt` 以 `turn/completed(interrupted)` 收尾、目标自动开始和目标状态）实际跑过的最老版本是 0.139。验证过的版本跟托管安装锁定的版本走，现在是 0.156.1。e05 做完后在 s39 抬高。
 - s03：Claude 登录只用 SDK 自带的运行时查：起一个不跑回合的 query，读 initialize 返回的 account；查不了（没下载 SDK、超时、报错）就看环境变量，有 `ANTHROPIC_API_KEY`、`CLAUDE_CODE_OAUTH_TOKEN` 或 `ANTHROPIC_AUTH_TOKEN` 算已登录、没验证过，没有就是无法确认，不报未登录。没用 `claude auth status`：它是另一个 CLI，版本和 SDK 自带的不一定一样，查到了也说明不了 bot 的回合能不能跑。account 是 CLI 从本地凭据读的，不问服务器，所以过期的登录也显示已登录，直到真跑一轮失败。
 - s03：#301 的 Mac 检查发现 owner 的 Mac 上没有 Codex.app，ChatGPT.app 里自带一份 codex（`Contents/Resources/codex-cli/bin/codex`，版本是预发布号，例如 0.162.0-alpha.17.2）。已加进候选，排在 nvm 之后，用户自己装的优先。
-- s03 留下的：Claude 的两个辅助查询（取模型列表、生成标题）用 `settingSources: []`，不读用户设置。凭据写在 `~/.claude/settings.json` 的 `env` 里时（owner 的 Mac 就是这样），这两个查询会报未登录，回合本身（读 user 和 project）和登录检测（读 user）不受影响。下一个碰 Claude 后端的切片改，改之前先在 Mac 上看现象；只读 user 会把用户的 CLAUDE.md 带进生成标题的提示，要一起考虑。
+- s03 留下的：Claude 的两个辅助查询（取模型列表、生成标题）用 `settingSources: []`，不读用户设置。凭据写在 `~/.claude/settings.json` 的 `env` 里时（owner 的 Mac 就是这样），这两个查询会报未登录，回合本身（读 user 和 project）和登录检测（读 user）不受影响。下一个碰 Claude 后端的切片改，改之前先在 Mac 上看现象；只读 user 会把用户的 CLAUDE.md 带进生成标题的提示，要一起考虑。s16 已改，见 M3 的开工要点。
 - s03 留下的：首页只显示上一次查到、还没过期的 Claude 登录结果，daemon 不在后台自己查（快照每 60 秒刷一次，没开窗口时也刷，每次都起 CLI 太重）；没查过或过期了显示未确认，查完马上刷新首页。已登录的结果留 30 分钟，终端里退出登录后，首页最长 30 分钟还显示已登录，点"检查登录"才马上更新。s19 做状态页时，回合因为没登录而失败，就清掉这个缓存。daemon 由 LaunchAgent 起来时（s07）可能读不到钥匙串，探测会报未登录；e06 测钥匙串时一并跑一次登录检测，读不到就在 s07 改成无法确认。
 - s04：没装 Node 的 Mac 上托管副本装不了也跑不了，Codex 那一步写明三条路：本机环境里装托管副本（要 Node 和 npm）、装 ChatGPT 或 Codex 桌面应用、用 Homebrew 装。
 - s04：JP-VPS 上实测 npm 11.19.0：全局 `--prefix` 安装会跳过 claude-code 和 lark-cli 自己的 postinstall（npm 提示 allowScripts 没覆盖），两个 `--version` 仍能跑；加上 `--allow-scripts=<包名>` 后 postinstall 照常跑。托管安装已加这个参数，npm 10.9 不认识它也照常装。
@@ -259,13 +259,17 @@ s58、s59 不依赖 M3 到 M9，M4 之后就在第二条线上做。s59 的预�
 | [ ] | s13 | 话题登记表 | 每个 bot 每个群一份，记话题 id、第一条、谁开的、几点、标题、有没有会话；SessionRecord 加可选字段，旧文件不迁移（3.5"daemon 在本机记什么"）；没有用户可见变化，s14、s15、s48 要读它 | 380 | s09 | 并发、数据迁移 | 无 |
 | [ ] | s14 | 对话记录块：主区补拉、话题开场带主区、引用行 | 统一的记录块；主区按水位补拉，开场最多 20 条；话题开场带回指和主区 10 条；引用行带两边会话 id；压缩后主区下一次开口附"本群最近 5 个活跃话题"；缺 `im:message:readonly` 时只带触发消息（3.5） | 850 | s09、s13、e10 | 错误路径、并发 | 无（M3 验收前，预览版会话按 3.5 时间线第 1 到 6 步核对日志） |
 | [ ] | s15 | /new、/compact 排队和撤回说明 | 加 `/new`；主区 `/new`、`/clear` 只限主人和管理员，话题里不换；`/compact` 忙时排队；订阅撤回事件，进过会话的下次开口加一行说明（3.5"命令""撤回和编辑"） | 660 | s10、s13、s14 | 并发、关闭清理、错误路径 | 无 |
-| [ ] | s16 | 手填模型 id | Claude 查模型列表用和跑回合一样的设置源；`/model` 卡和默认模型能手填 id（3.11） | 350 | — | 错误路径 | 无（owner 在用 DeepSeek 或 Kimi 的话，M3 验收时顺手试一次） |
+| [x] | s16 | 手填模型 id | Claude 查模型列表用和跑回合一样的设置源；`/model` 卡和默认模型能手填 id（3.11） | 350 | — | 错误路径 | 无（owner 在用 DeepSeek 或 Kimi 的话，M3 验收时顺手试一次） |
 
 开工要点：
 - s09：`with_sender_name` 拿不到名字也不挡这一片，改用通讯录换名，查不到写 open_id 尾号。
 - s10：已有连续群里的旧话题，从下一条消息起建自己的会话，旧数据不搬。
 - s10 做法：连续群（代码里的 `single`）只有主区消息走整群会话，带 `thread_id` 的消息和多话题群一样走话题路径，会话键是话题 id；旧话题的下一条消息建新会话，开场按新会话补拉话题历史。话题里 `/clear` 不换会话，提示开新话题。点表情"继续"按会话键判断回在主区还是话题。`resolveThread` 带出重建原因（恢复失败、工作目录变了），第一张运行卡的顶部写一行说明，终态卡保留，日志记 `session-changed`；说明在卡真正发出后才算用掉，建卡失败或目标模式某轮没出卡时，留给失败回复或下一张卡。
 - s10 留下的事：工作目录变了时旧记录被新会话覆盖，旧会话只能从原生历史里找；目标模式整个运行都没出卡、也没报错时，这行说明不显示；连续群话题里的 `/help` 卡仍写"回到主群区 @我 + 内容"开新话题，s15 改命令时一起改。
+- s16 做法（设置源）：Claude 的三个辅助查询（登录检测、模型列表、生成标题）共用一套选项：只读 user 层设置，和回合是同一个 CLI、同一份 `env`，关掉 hooks、MCP 和 claude.ai 连接器，用 `claudeMdExcludes` 排除个人 CLAUDE.md。没读 project 层，因为模型列表按后端缓存，不按项目。
+- s16 实测（JP-VPS，SDK 0.3.296）：传 `model: 'default'` 或调 `setModel(undefined)` 都用账号的默认模型，不看 `ANTHROPIC_MODEL`，只有不传 model 才用它。bot 的会话总是传一个明确的模型，所以用户设置里 `env.ANTHROPIC_MODEL` 指定的模型排到列表第一、当默认（其次是 daemon 自己的 `ANTHROPIC_MODEL`，再其次是设置里的 `model`）；列表里没有就补一行，SDK 失败时的兜底列表也一样。配了 `ANTHROPIC_MODEL` 时，SDK 的列表末尾会多一行 "Custom model"。
+- s16 做法（手填）：手填的 id 只挡空白、控制字符、反引号、尖括号、`-` 开头和超过 200 字，不对模型列表校验，填错了在回合里报错。`/model` 卡总有一个手填表单，提交会锁卡，结果发一张新卡接管；会话记 `modelCustom`。默认模型卡的下拉多一项"自定义模型 ID…"，项目记 `defaultModelCustom`，`pickDefault` 见到它就原样用。网页的"新会话默认模型"和"本话题模型"也能手填，协议的 `ModelSelection` 加了可选的 `custom`；评论模型不开放。顺带：没有会话时 `/model` 卡不再显示"已切换"；群设置里默认模型选得不对时，带提示重发表单，不再不声不响地回到群设置卡；Codex 返回空列表时不再把兜底列表缓存一辈子。
+- s16 留下的：改了用户设置里的 `ANTHROPIC_MODEL` 要重启 daemon 才进模型列表（列表按进程缓存）。手填 id 的推理强度给后端协议的全部档位，第三方模型认不认没实测。owner 用 DeepSeek 或 Kimi 的话，M3 验收时试一次手填和默认。
 
 ### M4 崩溃恢复、诊断和 Linux 命令行版
 

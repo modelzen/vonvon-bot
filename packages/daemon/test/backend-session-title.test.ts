@@ -1,3 +1,6 @@
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type {
   ModelInfo as ClaudeSdkModelInfo,
@@ -7,8 +10,11 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import {
   ClaudeAgentBackend,
+  withConfiguredDefault,
   type ClaudeSdkFacade,
 } from '../src/agent/claude-agent/backend';
+import { readConfiguredClaudeModel } from '../src/agent/claude-agent/configured-model';
+import type { ModelInfo } from '../src/agent/types';
 import {
   CodexAppServerBackend,
   type CodexTitleBackendDeps,
@@ -216,7 +222,7 @@ describe('Claude backend native session titles', () => {
       getSessionMessages: vi.fn(async () => []),
       renameSession,
     } as unknown as ClaudeSdkFacade;
-    const backend = new ClaudeAgentBackend(async () => sdk);
+    const backend = new ClaudeAgentBackend(async () => sdk, () => undefined);
 
     const models = await backend.listModels();
     expect(models).toEqual([expect.objectContaining({
@@ -224,6 +230,19 @@ describe('Claude backend native session titles', () => {
       supportedEfforts: ['low', 'high'],
       isDefault: true,
     })]);
+    // Same settings source as the login probe: the user layer (where an `env`
+    // with ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL lives), no hooks, no MCP.
+    const listCall = query.mock.calls[0]![0];
+    expect(listCall.options).toEqual(expect.objectContaining({
+      cwd: homedir(),
+      settingSources: ['user'],
+      strictMcpConfig: true,
+      settings: expect.objectContaining({
+        disableAllHooks: true,
+        claudeMdExcludes: expect.arrayContaining(['**/.claude/CLAUDE.md']),
+      }),
+      env: expect.objectContaining({ FEISHU_CODEX_BRIDGE: '1', ENABLE_CLAUDEAI_MCP_SERVERS: 'false' }),
+    }));
     await expect(backend.listModels()).resolves.toEqual(models);
     expect(query).toHaveBeenCalledOnce(); // successful discovery is cached
     expect(modelQuery.close).toHaveBeenCalledOnce();
@@ -258,7 +277,12 @@ describe('Claude backend native session titles', () => {
       tools: [],
       skills: [],
       mcpServers: {},
-      settingSources: [],
+      settingSources: ['user'],
+      settings: expect.objectContaining({
+        disableAllHooks: true,
+        claudeMdExcludes: expect.arrayContaining(['**/.claude/CLAUDE.md']),
+      }),
+      env: expect.objectContaining({ FEISHU_CODEX_BRIDGE: '1' }),
       outputFormat: {
         type: 'json_schema',
         schema: expect.objectContaining({ required: ['title'] }),
@@ -286,7 +310,7 @@ describe('Claude backend native session titles', () => {
       getSessionMessages: vi.fn(),
       renameSession: vi.fn(),
     } as unknown as ClaudeSdkFacade;
-    const backend = new ClaudeAgentBackend(async () => sdk);
+    const backend = new ClaudeAgentBackend(async () => sdk, () => undefined);
 
     const models = await backend.listModels();
     expect(models.length).toBeGreaterThan(0);
@@ -301,5 +325,72 @@ describe('Claude backend native session titles', () => {
     await backend.listModels();
     expect(query).toHaveBeenCalledTimes(2);
     expect(recovered.close).toHaveBeenCalledOnce();
+  });
+});
+
+describe('Claude model configured in the user settings (DeepSeek, Kimi)', () => {
+  const row = (id: string, isDefault = false): ModelInfo => ({
+    id,
+    displayName: id,
+    description: '',
+    supportedEfforts: ['low', 'high'],
+    defaultEffort: 'high',
+    isDefault,
+    hidden: false,
+  });
+
+  it('becomes the default and goes first, whether or not the list has it', () => {
+    const list = [row('default', true), row('opus'), row('kimi-k2')];
+    expect(withConfiguredDefault(list, undefined)).toBe(list);
+    expect(withConfiguredDefault(list, 'kimi-k2').map((m) => [m.id, m.isDefault])).toEqual([
+      ['kimi-k2', true],
+      ['default', false],
+      ['opus', false],
+    ]);
+    const added = withConfiguredDefault(list, 'deepseek-chat');
+    expect(added[0]).toMatchObject({ id: 'deepseek-chat', isDefault: true, description: '来自 Claude 设置' });
+    expect(added.slice(1).every((m) => !m.isDefault)).toBe(true);
+    expect(list[0]!.isDefault).toBe(true); // input untouched
+  });
+
+  it('marks discovery and the static fallback alike', async () => {
+    const failed = asyncQuery([]);
+    failed.supportedModels.mockRejectedValue(new Error('SDK init failed'));
+    const live = asyncQuery([], [
+      { value: 'default', displayName: 'Default', description: '' },
+      { value: 'kimi-k2', displayName: 'kimi-k2', description: 'Custom model' },
+    ]);
+    const query = vi.fn().mockReturnValueOnce(failed).mockReturnValueOnce(live);
+    const sdk = { query } as unknown as ClaudeSdkFacade;
+    const backend = new ClaudeAgentBackend(async () => sdk, () => 'kimi-k2');
+    expect((await backend.listModels())[0]).toMatchObject({ id: 'kimi-k2', isDefault: true });
+    expect((await backend.listModels()).map((m) => [m.id, m.isDefault])).toEqual([
+      ['kimi-k2', true],
+      ['default', false],
+    ]);
+  });
+
+  it('reads settings env first, then the process env, then the settings model', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vonvon-claude-cfg-'));
+    try {
+      const cfg = join(dir, 'cfg');
+      mkdirSync(cfg);
+      const env = { CLAUDE_CONFIG_DIR: cfg, ANTHROPIC_MODEL: 'from-process' };
+      const write = (body: unknown) => writeFileSync(join(cfg, 'settings.json'), typeof body === 'string' ? body : JSON.stringify(body));
+      write({ env: { ANTHROPIC_MODEL: ' deepseek-chat ' }, model: 'opus' });
+      expect(readConfiguredClaudeModel(env, dir)).toBe('deepseek-chat');
+      write({ env: {}, model: 'opus' });
+      expect(readConfiguredClaudeModel(env, dir)).toBe('from-process');
+      expect(readConfiguredClaudeModel({ CLAUDE_CONFIG_DIR: cfg }, dir)).toBe('opus');
+      write('{ not json');
+      expect(readConfiguredClaudeModel(env, dir)).toBe('from-process');
+      expect(readConfiguredClaudeModel({ CLAUDE_CONFIG_DIR: cfg }, dir)).toBeUndefined();
+      // Without CLAUDE_CONFIG_DIR it reads <home>/.claude/settings.json.
+      mkdirSync(join(dir, '.claude'));
+      writeFileSync(join(dir, '.claude', 'settings.json'), JSON.stringify({ model: 'sonnet' }));
+      expect(readConfiguredClaudeModel({}, dir)).toBe('sonnet');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

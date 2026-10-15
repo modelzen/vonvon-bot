@@ -303,11 +303,14 @@ export async function performSetModelDefault(opts: {
   projectName: string;
   model: string;
   effort?: ReasoningEffort;
+  /** 手填的 id（3.11）：调用方已用 parseModelId 校验，读取侧不再对列表校验。 */
+  custom?: boolean;
 }): Promise<AdminWriteOutcome> {
   const p = await getProjectByName(opts.projectName);
   if (!p) return { ok: false, reason: `项目「${opts.projectName}」不存在` };
-  await updateProject(opts.projectName, { defaultModel: opts.model, defaultEffort: opts.effort });
-  return { ok: true, project: await freshOr(opts.projectName, { ...p, defaultModel: opts.model, defaultEffort: opts.effort }) };
+  const patch = { defaultModel: opts.model, defaultEffort: opts.effort, defaultModelCustom: opts.custom === true };
+  await updateProject(opts.projectName, patch);
+  return { ok: true, project: await freshOr(opts.projectName, { ...p, ...patch }) };
 }
 
 /**
