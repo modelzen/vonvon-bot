@@ -134,11 +134,39 @@ describe('login-time service field (s08)', () => {
   });
   it.each([
     ['development', { kind: 'development', cliPath: '/src/vonvon-bot/packages/daemon/bin/vonvon.mjs' }],
-    ['development', { kind: 'unknown', cliPath: '/opt/vonvon/bin/vonvon.mjs' }],
     ['translocated', { kind: 'bundled', cliPath: '/private/var/folders/x/T/AppTranslocation/1F2E/d/Vonvon Bot.app/Contents/Resources/daemon/bin/vonvon.mjs' }],
   ] as const)('blocks installing from %s', async (blocked, distribution) => {
     const { store } = await serviceStore({ distribution: async () => distribution });
     await vi.waitFor(() => expect(store.current().application.service?.blocked).toBe(blocked));
+  });
+  it('leaves an unrecognized layout to the install transaction instead of calling it a development checkout', async () => {
+    // A global npm install whose `npm root -g` timed out or was not on the PATH at login.
+    const { store } = await serviceStore({ distribution: async () => ({ kind: 'unknown', cliPath: npm.cliPath }) });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await store.rebuild();
+    expect(store.current().application.service?.blocked).toBeUndefined();
+  });
+  it('keeps the newest manager answer when an older poll read lands after it', async () => {
+    let stale: (status: DesktopServiceStatus) => void = () => {};
+    let next: Promise<DesktopServiceStatus> | undefined;
+    const { store } = await serviceStore({ readService: async () => next ?? managed('not-installed') });
+    // The 60 s poll asks launchctl, slow just after login; then 重新检测 or a helper's exit asks again and hears first.
+    next = new Promise(resolve => { stale = resolve; });
+    const poll = store.refreshTools();
+    next = Promise.resolve(managed('detached'));
+    await store.refreshService();
+    expect(store.current().application).toMatchObject({ loginItem: true, service: { state: 'detached' } });
+    stale(managed('disabled'));
+    await poll;
+    expect(store.current().application).toMatchObject({ loginItem: true, service: { state: 'detached' } });
+    // 重新检测 (machine `status`) hands over a read that began after the poll's, so it wins as well.
+    next = new Promise(resolve => { stale = resolve; });
+    const again = store.refreshTools();
+    store.observeService(Promise.resolve(managed('running')));
+    await vi.waitFor(() => expect(store.current().application.service?.state).toBe('running'));
+    stale(managed('disabled'));
+    await again;
+    expect(store.current().application).toMatchObject({ loginItem: true, service: { state: 'running' } });
   });
   it('has no service field where there is no manager', async () => {
     const store = await createSnapshotStore({ service: { listBots: async () => [], listProjects: async () => [] }, jobs: () => [], publish: () => {}, readTools: async () => [], readService: noManager, distribution: async () => npm });

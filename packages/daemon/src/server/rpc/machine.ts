@@ -16,9 +16,10 @@ export type MachineServiceContext = { launcher: ServiceActionLauncher; snapshots
 export async function machineRpc(service: AdminService, control: ShutdownControl | undefined, port: number, request: MachineRequest, services?: MachineServiceContext): Promise<RpcOutcome<MachineReply>> {
   switch (request.type) {
     case 'status': {
-      const status = await controlDesktopService('status');
+      const read = controlDesktopService('status');
       // 重新检测 asks here; the snapshot takes the same answer instead of waiting for its 60 s read.
-      services?.snapshots.observeService(status);
+      services?.snapshots.observeService(read);
+      const status = await read;
       return { kind: 'read', value: { type: 'status', service: {
         platformName: process.platform, servicePath: '', stdoutPath: serviceStdoutPath(), stderrPath: serviceStderrPath(),
         ...status,

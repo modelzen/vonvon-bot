@@ -19,8 +19,8 @@ export interface SnapshotStore {
   refreshTools(): Promise<void>;
   /** Asks the service manager again (after a service action, 重新检测, or a skip), then rebuilds. */
   refreshService(): Promise<void>;
-  /** Takes a manager read someone else just made (machine `status`) instead of asking again. */
-  observeService(status: DesktopServiceStatus): void;
+  /** Takes a manager read someone else started (machine `status`) instead of asking again; it counts from when it began. */
+  observeService(read: Promise<DesktopServiceStatus>): void;
   diagnose(agentId: string, diagnostics: Diagnostic[]): void;
   close(): Promise<void>;
 }
@@ -32,7 +32,8 @@ export async function createSnapshotStore(options: {
   readTools?: () => Promise<ToolState[]>;
   /** The background service as its manager reports it (3.10); read at startup, with the tools every 60 s, and on refreshService(). */
   readService?: () => Promise<DesktopServiceStatus>;
-  /** Read once: a development checkout or a translocated app cannot install the service. */
+  /** Read once: a development checkout or a translocated app cannot install the service. An unrecognized layout (`npm root -g`
+   * timed out or missing at login) is left to the install transaction, which reads the distribution again. */
   distribution?: () => Promise<Distribution>;
   /** The helper this daemon is running, which the report file may not show yet. */
   serviceAction?: () => RunningServiceAction | undefined;
@@ -54,6 +55,18 @@ export async function createSnapshotStore(options: {
   let manager: Pick<ApplicationService, 'state' | 'detail'> | undefined;
   let blocked: ApplicationService['blocked'];
   const readService = options.readService ?? (() => controlDesktopService('status'));
+  // Reads overlap (startup, the 60 s poll, 重新检测, a helper's exit) and launchctl can take seconds: the read that
+  // began last wins, so a slow older answer cannot undo a newer one.
+  let readsBegun = 0;
+  let readShown = 0;
+  function readManager(read: Promise<DesktopServiceStatus>): Promise<void> {
+    const order = ++readsBegun;
+    return read.then(status => {
+      if (order < readShown) return;
+      readShown = order;
+      observeService(status);
+    });
+  }
   function observeService(status: DesktopServiceStatus): void {
     if (!status.supported || !status.state) return;
     // An unknown answer keeps the last login item, as before s08; the step says it cannot tell.
@@ -123,16 +136,15 @@ export async function createSnapshotStore(options: {
     // A read already running may have looked before the caller's change (a login check
     // that just finished), so callers during it share one more read after it.
     if (refreshing) return followUp ??= refreshing.catch(() => undefined).then(() => { followUp = undefined; return refreshTools(); });
-    refreshing = Promise.all([readTools(), readService().catch(() => null)]).then(async ([values, status]) => {
+    refreshing = Promise.all([readTools(), readManager(readService()).catch(() => undefined)]).then(async ([values]) => {
       tools = values;
-      if (status) observeService(status);
       if (!closed) await rebuild();
     }).finally(() => { refreshing = undefined; });
     return refreshing;
   }
   async function refreshService(): Promise<void> {
     if (closed) return;
-    observeService(await readService());
+    await readManager(readService());
     if (!closed) await rebuild();
   }
   tools = await readTools();
@@ -141,7 +153,7 @@ export async function createSnapshotStore(options: {
   void refreshService().catch(() => undefined);
   void (options.distribution ?? runtimeDistribution)().then(distribution => {
     if (isTranslocated(process.execPath) || isTranslocated(distribution.cliPath)) blocked = 'translocated';
-    else if (distribution.kind === 'development' || distribution.kind === 'unknown') blocked = 'development';
+    else if (distribution.kind === 'development') blocked = 'development';
     if (blocked && !closed) return rebuild();
   }).catch(() => undefined);
   const poll = setInterval(() => { void rebuild().catch(() => undefined); }, 5_000);
@@ -153,7 +165,7 @@ export async function createSnapshotStore(options: {
     rebuild,
     refreshTools,
     refreshService,
-    observeService: status => { observeService(status); if (!closed) void rebuild().catch(() => undefined); },
+    observeService: read => { void readManager(read).then(() => { if (!closed) return rebuild(); }).catch(() => undefined); },
     diagnose: (agentId, value) => { diagnostics.set(agentId, value); },
     async close() {
       closed = true;

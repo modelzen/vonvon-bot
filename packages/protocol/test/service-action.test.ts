@@ -8,7 +8,7 @@ describe("login-time service (s08)", () => {
     [{ reason: "busy" }, SERVICE_BUSY_MESSAGE],
     [{ reason: "turned-off", kind: "install_refused" }, "系统设置里关掉了 Vonvon Bot 的后台运行。到\"系统设置 › 通用 › 登录项与扩展\"的\"允许在后台\"里打开它，再点「重新检测」。"],
     [{ reason: "replace-running", kind: "install_refused" }, SERVICE_REPLACE_RUNNING_MESSAGE],
-    [{ reason: "distribution", kind: "install_refused" }, "从源码运行的 daemon 不能装后台服务。用打包的 Vonvon Bot，或用 npm 装的 vonvon。"],
+    [{ reason: "distribution", kind: "install_refused" }, "认不出这份 vonvon 是怎么装的，不能装后台服务。从源码运行的装不了；用 npm 装的，在终端运行 vonvon service install。"],
     [{ reason: "translocated", kind: "install_refused" }, "Vonvon Bot 正从临时位置运行。先把它拖到\"应用程序\"文件夹，从那里打开，再打开这个开关。"],
     [{ reason: "interrupted", kind: "install_refused" }, "上次关闭没有做完。在终端运行 vonvon service uninstall，再试一次。"],
     [{ reason: "other-root", kind: "install_refused", detail: "Registration belongs to /Users/u/.vonvon-other" }, "后台服务属于另一个数据目录：/Users/u/.vonvon-other。"],

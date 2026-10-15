@@ -187,7 +187,8 @@ const SERVICE_REASON_TEXT: Partial<Record<ServiceActionReason, string>> = {
   busy: SERVICE_BUSY_MESSAGE,
   'turned-off': '系统设置里关掉了 Vonvon Bot 的后台运行。到"系统设置 › 通用 › 登录项与扩展"的"允许在后台"里打开它，再点「重新检测」。',
   'replace-running': SERVICE_REPLACE_RUNNING_MESSAGE,
-  distribution: SERVICE_DISTRIBUTION_MESSAGE,
+  // A development checkout is blocked before the switch; what reaches the transaction is mostly an unrecognized layout.
+  distribution: '认不出这份 vonvon 是怎么装的，不能装后台服务。从源码运行的装不了；用 npm 装的，在终端运行 vonvon service install。',
   translocated: 'Vonvon Bot 正从临时位置运行。先把它拖到"应用程序"文件夹，从那里打开，再打开这个开关。',
   interrupted: '上次关闭没有做完。在终端运行 vonvon service uninstall，再试一次。',
 };
