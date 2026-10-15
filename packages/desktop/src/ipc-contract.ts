@@ -32,6 +32,11 @@ export type SafeFailure = {
   code?: string;
 };
 
+/** A daemon error code the renderer may see: short and plain, so it cannot carry text of its own. */
+export function safeErrorCode(value: unknown): string | undefined {
+  return typeof value === 'string' && /^[A-Za-z0-9_.-]{1,80}$/.test(value) ? value : undefined;
+}
+
 export type IpcResult<T> = { ok: true; value: T } | { ok: false; error: SafeFailure };
 
 export type DesktopEvent =

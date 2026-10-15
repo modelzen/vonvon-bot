@@ -1,5 +1,5 @@
 import {useClient, useShellCapabilities} from './client-context';
-import {copyAuthorizationUrl, groupUrl, openExternalUrl} from './url-actions';
+import {copyAuthorizationUrl, copyFeedback, groupUrl, openExternalUrl} from './url-actions';
 import {uiFeatures} from './features';
 import {PendingGroupToasts} from './PendingGroupToasts';
 import {JoinGroupDialog} from './JoinGroupDialog';
@@ -39,7 +39,6 @@ import {
   type CommandResult,
   type DesktopSnapshot,
   type Job,
-  type JobId,
   type Membership,
 } from "@vonvon/protocol";
 import type { CollaborationView, Page } from "./collaboration-model";
@@ -54,12 +53,13 @@ import {ConversationPanel} from './management/ConversationPanel';
 import {ShareUsagePanel, UsagePanel} from './management/UsagePanel';
 import {EnvironmentPanel} from './management/EnvironmentPanel';
 import {SetupChecklist} from './setup/SetupChecklist';
+import {GrantStep, ScopeGrantRow, jobToCancel, withRegisteredAgent, type RegisterModal} from './setup/GrantStep';
 import {MachinePanel} from './management/MachinePanel';
 import {LogPanel} from './management/LogPanel';
 import {UpdatePanel} from './management/UpdatePanel';
 
 type Modal =
-  | { kind: "register"; jobId: JobId; refresh?: boolean }
+  | RegisterModal
   | { kind: "join"; agentId: AgentId; group?: PendingGroup }
   | { kind: "collaboration"; membership: Membership }
   | { kind: "shareUsage" }
@@ -195,6 +195,7 @@ function DesktopApp() {
     () =>
       client.watchSnapshots((next) => {
         setSnapshot(next);
+        setModal(current => current?.kind === "register" ? withRegisteredAgent(current, next.jobs) : current);
         // A machine with no bot yet opens on the checklist, once per window.
         if (!firstRunDecided.current && next.host.kind === "connected" && !next.stale) {
           firstRunDecided.current = true;
@@ -296,8 +297,8 @@ function DesktopApp() {
   }
   async function closeModal() {
     const generation = ++modalGeneration.current;
-    if (modal?.kind === "register")
-      await run({ type: "cancelJob", jobId: modal.jobId });
+    const cancel = modal?.kind === "register" ? jobToCancel(modal) : undefined;
+    if (cancel) await run({ type: "cancelJob", jobId: cancel });
     if (generation === modalGeneration.current) setModal(null);
   }
   if (!snapshot)
@@ -494,7 +495,7 @@ function DesktopApp() {
                     title="注册 Bot"
                     disabled={!ready || busy}
                     onClick={() => void register()}
-                    value="飞书扫码授权"
+                    value="飞书扫码注册"
                   />
                   <SettingsRow
                     icon={MessageSquare}
@@ -569,7 +570,7 @@ function DesktopApp() {
                               <span aria-hidden="true" className="settings-add-row__icon">
                                 <Plus size={15} />
                               </span>
-                              <span>添加 Bot</span>
+                              <span>注册 Bot</span>
                             </button>
                           </div>
                         </section>
@@ -607,7 +608,7 @@ function DesktopApp() {
                       <Bot size={28} />
                       <h3>
                         {view === "agents"
-                          ? "邀请你的第一个 Bot"
+                          ? "注册你的第一个 Bot"
                           : "还没有连接的飞书群"}
                       </h3>
                       <p>
@@ -622,7 +623,7 @@ function DesktopApp() {
                           disabled={!ready || busy}
                           onClick={() => void register()}
                         >
-                          添加 Bot
+                          注册 Bot
                         </Button>
                       )}
                     </div>
@@ -707,8 +708,9 @@ function DesktopApp() {
                   <SettingsGroup label="连接与权限" id={settingAnchor('连接与权限')}>
                     <SettingsRow title="应用 ID" value={<code>{agent.id}</code>} />
                     <SettingsRow title="首次运行清单" description="权限、长连接、事件订阅、卡片回调和发布，逐项检测。" onClick={() => openPage("setup")} />
-                    <SettingsRow title="刷新飞书凭据" description="重新授权当前 Bot，保留群绑定、会话和设置。"
-                      trailing={<Button size="sm" disabled={busy || !ready} onClick={() => void register(agent.id)}>重新授权</Button>}/>
+                    <ScopeGrantRow key={`grant-${agent.id}`} agentId={agent.id} disabled={busy || !ready} onError={message => setNotice({message, error: true})}/>
+                    <SettingsRow title="刷新飞书凭据" description="重新扫码换一份凭据，保留群绑定、会话和设置。开权限用上面的「一键开权限」。"
+                      trailing={<Button size="sm" disabled={busy || !ready} onClick={() => void register(agent.id)}>重新扫码</Button>}/>
                     <SettingsRow
                       title="飞书权限与连接"
                       trailing={
@@ -975,8 +977,11 @@ function DesktopApp() {
       >
         <div className="page-stack">
           {feedback}
-          {modal?.kind === "register" && registration && (
-            <><p>{modal.refresh ? "重新授权这个 Bot，保留原有项目、群绑定和设置。请使用此 Bot 的管理员身份完成授权。" : "连接飞书机器人身份。"}</p><JobPanel job={registration} run={run} busy={busy} /></>
+          {modal?.kind === "register" && modal.agentId && (
+            <GrantStep key={modal.agentId} agentId={modal.agentId} onOpenChecklist={() => { setModal(null); openPage("setup"); }} onDone={() => setModal(null)} />
+          )}
+          {modal?.kind === "register" && !modal.agentId && registration && (
+            <><p>{modal.refresh ? "重新扫码刷新这个 Bot 的凭据，保留原有项目、群绑定和设置。请使用此 Bot 的管理员身份扫码。" : "第 1 步：用飞书扫码注册机器人。注册好后在这里接着一键开权限。"}</p><JobPanel job={registration} run={run} busy={busy} /></>
           )}
           {modal?.kind === "collaboration" && (
             <>
@@ -1045,7 +1050,17 @@ function JobPanel({
 }) {
   const shell = useShellCapabilities();
   const [linkError, setLinkError] = useState("");
+  const [copyNote, setCopyNote] = useState("");
+  const urlInput = useRef<HTMLInputElement>(null);
   const linkFailure = (error: unknown) => setLinkError(error instanceof Error ? error.message : "链接操作失败。");
+  async function copyLink(url: string) {
+    setLinkError(""); setCopyNote("");
+    try {
+      // When the clipboard refuses, select the full link so the user can copy it by hand.
+      const outcome = await copyAuthorizationUrl(url, "registration", () => { urlInput.current?.focus(); urlInput.current?.select(); });
+      setCopyNote(copyFeedback(outcome));
+    } catch (error) { linkFailure(error); }
+  }
   const [now, setNow] = useState(Date.now);
   const expiresAt = job.phase === "qr" ? job.expiresAt : null;
   useEffect(() => {
@@ -1080,7 +1095,7 @@ function JobPanel({
                   {new Date(job.expiresAt).toLocaleTimeString()}。
                 </p>
                 <FormField className="desktop-registration-url" label="完整注册链接">
-                  <input aria-label="完整注册链接" readOnly value={job.url} />
+                  <input ref={urlInput} aria-label="完整注册链接" readOnly value={job.url} />
                 </FormField>
                 <div className="desktop-actions">
                   <Button
@@ -1091,11 +1106,12 @@ function JobPanel({
                   </Button>
                   <Button
                     disabled={busy}
-                    onClick={() => void copyAuthorizationUrl(job.url, 'registration').catch(linkFailure)}
+                    onClick={() => void copyLink(job.url)}
                   >
                     复制链接
                   </Button>
                 </div>
+                {copyNote && <p className="settings-operation-message">{copyNote}</p>}
               </>
             )}
           </>

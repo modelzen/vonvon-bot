@@ -502,6 +502,47 @@ describe('native window lifecycle', () => {
     }
   });
 
+  it('lets only the loaded document write the clipboard and denies every other permission', async () => {
+    type Details = { isMainFrame: boolean; requestingUrl?: string };
+    type Check = (contents: unknown, permission: string, origin: string, details: Details) => boolean;
+    type Request = (contents: unknown, permission: string, callback: (granted: boolean) => void, details: Details) => void;
+    const own = window.webContents as unknown as EventEmitter & { mainFrame: { url: string }; isDestroyed: () => boolean;
+      session: { setPermissionCheckHandler: ReturnType<typeof vi.fn>; setPermissionRequestHandler: ReturnType<typeof vi.fn> } };
+    const check = own.session.setPermissionCheckHandler.mock.lastCall?.[0] as Check;
+    const request = own.session.setPermissionRequestHandler.mock.lastCall?.[0] as Request;
+    const checked = (permission: string, contents: unknown = own, isMainFrame = true) =>
+      check(contents, permission, 'file://', { isMainFrame, requestingUrl: own.mainFrame.url });
+    const requested = (permission: string, contents: unknown = own, isMainFrame = true) => {
+      const callback = vi.fn();
+      request(contents, permission, callback, { isMainFrame, requestingUrl: own.mainFrame.url });
+      expect(callback).toHaveBeenCalledOnce();
+      return callback.mock.lastCall?.[0] as boolean;
+    };
+    const uiIndex = join(appPath, '..', 'ui', 'dist', 'index.html');
+    const canonicalUrl = pathToFileURL(await realpath(uiIndex)).href;
+    expect(own.mainFrame.url).toBe(canonicalUrl);
+    expect(checked('clipboard-sanitized-write')).toBe(true);
+    expect(requested('clipboard-sanitized-write')).toBe(true);
+    for (const permission of ['clipboard-read', 'deprecated-sync-clipboard-read', 'media', 'notifications', 'openExternal', 'geolocation']) {
+      expect(checked(permission)).toBe(false);
+      expect(requested(permission)).toBe(false);
+    }
+    expect(checked('clipboard-sanitized-write', own, false)).toBe(false);
+    expect(requested('clipboard-sanitized-write', own, false)).toBe(false);
+    expect(checked('clipboard-sanitized-write', null)).toBe(false);
+    expect(checked('clipboard-sanitized-write', new EventEmitter())).toBe(false);
+    expect(requested('clipboard-sanitized-write', new EventEmitter())).toBe(false);
+    for (const lookalike of [pathToFileURL(uiIndex).href, `${canonicalUrl}?other`, `${canonicalUrl}#other`, `${canonicalUrl}.other`, 'file:///other/index.html']) {
+      own.mainFrame.url = lookalike;
+      expect(checked('clipboard-sanitized-write')).toBe(false);
+      expect(requested('clipboard-sanitized-write')).toBe(false);
+    }
+    own.mainFrame.url = canonicalUrl;
+    own.isDestroyed = () => true;
+    expect(checked('clipboard-sanitized-write')).toBe(false);
+    expect(requested('clipboard-sanitized-write')).toBe(false);
+  });
+
   it('destroys the window and closes the connection after a renderer crash', async () => {
     window.webContents.emit('render-process-gone');
     await vi.waitFor(() => expect(app.quit).toHaveBeenCalledOnce());

@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { allowedExternalUrl, groupUrl, openExternalUrl, copyAuthorizationUrl } from "../src/url-actions";
+import { allowedExternalUrl, groupUrl, openExternalUrl, copyAuthorizationUrl, copyFeedback, copyShortcut } from "../src/url-actions";
 
 it("accepts each old main process destination for its own action", () => {
   for (const host of ["accounts.feishu.cn", "accounts.larksuite.com", "open.feishu.cn", "open.larksuite.com"]) {
@@ -29,7 +29,7 @@ it("opens on the client's machine and copies the validated job URL", async () =>
     const registration = "https://accounts.feishu.cn/qr/abc";
     await openExternalUrl(registration, "registration");
     expect(open).toHaveBeenCalledWith(registration, "_blank", "noopener");
-    await copyAuthorizationUrl(registration, "registration");
+    expect(await copyAuthorizationUrl(registration, "registration")).toBe("copied");
     expect(writeText).toHaveBeenCalledWith(registration);
     const openExternal = vi.fn(async () => {});
     await openExternalUrl("https://auth.openai.com/authorize", "authorization", {openExternal});
@@ -51,4 +51,25 @@ it("rejects non-HTTPS, credentials, ports, host confusion, and unrelated GitHub 
   expect(allowedExternalUrl("https://open.feishu.cn/app/cli_1/event", "app-console")).toBeNull();
   expect(allowedExternalUrl("https://open.feishu.cn/app/", "app-console")).toBeNull();
   expect(allowedExternalUrl("https://accounts.feishu.cn/app/cli_1", "app-console")).toBeNull();
+});
+
+it("selects the link for a manual copy when the clipboard refuses", async () => {
+  const registration = "https://accounts.feishu.cn/qr/abc";
+  const writeText = vi.fn(async () => { throw new DOMException("Write permission denied.", "NotAllowedError"); });
+  vi.stubGlobal("navigator", {clipboard: {writeText}, platform: "MacIntel"});
+  try {
+    const select = vi.fn();
+    const outcome = await copyAuthorizationUrl(registration, "registration", select);
+    expect(outcome).toBe("selected");
+    expect(select).toHaveBeenCalledOnce();
+    expect(copyFeedback(outcome)).toBe("已选中链接，按 ⌘C 复制");
+    await expect(copyAuthorizationUrl(registration, "registration")).rejects.toThrow("Write permission denied.");
+    vi.stubGlobal("navigator", {platform: "Win32"});
+    expect(await copyAuthorizationUrl(registration, "registration", select)).toBe("selected");
+    expect(copyFeedback("selected")).toBe("已选中链接，按 Ctrl+C 复制");
+    await expect(copyAuthorizationUrl("https://accounts.feishu.cn.evil.test/qr", "registration", select)).rejects.toThrow("链接不是受支持的官方地址。");
+    expect(select).toHaveBeenCalledTimes(2);
+  } finally { vi.unstubAllGlobals(); }
+  expect(copyFeedback("copied")).toBe("已复制");
+  expect([copyShortcut("MacIntel"), copyShortcut("iPad"), copyShortcut("Win32"), copyShortcut("Linux x86_64")]).toEqual(["⌘C", "⌘C", "Ctrl+C", "Ctrl+C"]);
 });

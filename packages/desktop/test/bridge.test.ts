@@ -25,7 +25,7 @@ vi.mock('electron', () => ({
   shell: { openExternal },
 }));
 
-import { installBridge, openAllowedExternal } from '../src/bridge.js';
+import { installBridge, openAllowedExternal, sanitizeDaemonMessage } from '../src/bridge.js';
 import { createDesktopFacades } from '../src/facade.js';
 
 const fixtureRoot = mkdtempSync(join(tmpdir(), 'vonvon-bridge-test-'));
@@ -117,13 +117,68 @@ describe('desktop IPC boundary', () => {
     await h.bridge.dispose();
   });
 
-  it('keeps arbitrary errors and RPC diagnostics sanitized', async () => {
+  it('masks arbitrary errors and passes daemon messages through sanitized', async () => {
     const h = harness();
     h.actions.setLoginItem.mockRejectedValueOnce(new Error('uninstall_incomplete: SECRET_TOKEN'));
     expect(await h.invoke(desktopChannels.setLoginItem, false)).toEqual({ ok: false, error: { kind: 'validation', message: 'Desktop request failed' } });
-    h.machine.mockRejectedValueOnce(new RpcError('safe_code', 'SECRET_TOKEN'));
-    expect(await h.invoke(desktopChannels.machine, { type: 'status' })).toEqual({ ok: false, error: { kind: 'rpc', code: 'safe_code', message: 'Daemon request failed' } });
+    h.machine.mockRejectedValueOnce(new RpcError('upstream', '缺少飞书权限 im:chat:readonly（读取群信息）。\n在 Bot 设置点「一键开权限」。'));
+    expect(await h.invoke(desktopChannels.machine, { type: 'status' })).toEqual({ ok: false, error: {
+      kind: 'rpc', code: 'upstream', message: '缺少飞书权限 im:chat:readonly（读取群信息）。 在 Bot 设置点「一键开权限」。' } });
+    h.machine.mockRejectedValueOnce(new RpcError('bad code\n', '机器人未启用或尚未运行'));
+    expect(await h.invoke(desktopChannels.machine, { type: 'status' })).toEqual({ ok: false, error: { kind: 'rpc', message: '机器人未启用或尚未运行' } });
+    await h.invoke(desktopChannels.subscribe);
+    h.emitError(new RpcError('conflict', 'token=t-g1044abcdefghijklmnopqrstuvwxyz0123'));
+    expect(h.webContents.send).toHaveBeenLastCalledWith(desktopChannels.event, { type: 'error', value: { kind: 'rpc', code: 'conflict', message: 'token=…' } });
     await h.bridge.dispose();
+  });
+
+  it.each([
+    ['control and format characters', 'a\u0000b\u001b[31mc\u202ed\u200be\r\n\tf', 'a b [31mcde f'],
+    ['URL credentials, queries and fragments', '打不开 https://user:pa55@open.feishu.cn/app/cli_a/auth?q=im:chat&token=x#frag 和 http://127.0.0.1:4000/x?credential=y',
+      '打不开 https://open.feishu.cn/app/cli_a/auth 和 http://127.0.0.1:4000/x'],
+    ['bearer tokens', 'Authorization: Bearer abc.def-123 failed', 'Authorization: …'],
+    ['quoted auth headers and bare schemes', "headers: {authorization: 'Basic dXNlcjpwYXNz'} then Bearer eyJhbGciOiJIUzI1NiJ9.e30 rejected",
+      "headers: {authorization: '…'} then Bearer … rejected"],
+    ['API keys', 'Invalid API key sk-ant-api03-abcdefghijklmnop, api_key=abc, apiKey: "xyz"', 'Invalid API key …, api_key=…, apiKey: "…"'],
+    ['credential-shaped values after an unquoted label', 'password: hunter22 and token: 0123456789abcdef', 'password: … and token: …'],
+    ['ordinary words after bearer, basic or a secret label', 'Basic settings are invalid. Invalid token: expired; tokens: 1234 used',
+      'Basic settings are invalid. Invalid token: expired; tokens: 1234 used'],
+    ['file paths, which the web UI shows too', 'ENOENT: no such file /home/ops/.vonvon/bots/cli_a/setup.json', 'ENOENT: no such file /home/ops/.vonvon/bots/cli_a/setup.json'],
+    ['secret-style values', 'unsupported secret form: {"app_secret":"s3cr3t","password":\'pw\', token = abc}', 'unsupported secret form: {"app_secret":"…","password":\'…\', token = …}'],
+    ['quoted values with spaces, commas, the other quote or escapes', String.raw`{"app_secret":"abc def ghi"} {"secret":"a,b-c-d"} client_secret = "s e c" {"password":"it's a secret"} {"password":"ab\"cd ef"} secret:'a"b c' end`,
+      String.raw`{"app_secret":"…"} {"secret":"…"} client_secret = "…" {"password":"…"} {"password":"…"} secret:'…' end`],
+    ...['Bearer abcdefghijkl', 'Basic dXNlcjpwYXNz', 'Token abcdefgh12345678', 'Digest username="bob", response="deadbeef"']
+      .map(value => [`an Authorization value under ${value.split(' ')[0]}`, `Authorization: ${value}`, 'Authorization: …']),
+    ['authorization= under any scheme', 'headers: {authorization=Token abcdefgh}', 'headers: {authorization=…'],
+    ['a quoted Authorization key with an unquoted value', '{"authorization": Token abc12345}', '{"authorization": …'],
+    ['a long quoted value with spaces', `secret: "${'a'.repeat(260)} leaked words" end`, 'secret: "…" end'],
+    ['base64 and base64url after Basic', 'Basic dXNlcjpwYXNz; Basic YTpi; Basic dXNlcjpw-Xz', 'Basic …; Basic …; Basic …'],
+    ['a short token after Bearer', 'then Bearer abcdefghijkl rejected', 'then Bearer … rejected'],
+    ['capitalised words after Basic', 'Basic Settings are invalid. Basic HTTP auth is off. Basic Information missing',
+      'Basic Settings are invalid. Basic HTTP auth is off. Basic Information missing'],
+    ['bare Feishu access tokens', 'invalid access t-g1044ghJRUIJJ5ELPPA7VQ5XWQUQAP4XMYWC4P7S here', 'invalid access … here'],
+    ['empty text', ' \u0000 ', 'Daemon request failed'],
+  ])('sanitizes %s in daemon messages', (_name, raw, expected) => {
+    expect(sanitizeDaemonMessage(raw)).toBe(expected);
+  });
+
+  it('scans only the start of a huge daemon message, so the patterns cannot stall the main process', () => {
+    for (const raw of ['a-'.repeat(50_000), 'a.'.repeat(50_000), 'a://'.repeat(25_000), 'token '.repeat(20_000), 'secret:"'.repeat(15_000), 'basic '.repeat(20_000), '😀'.repeat(100_000)]) {
+      const started = performance.now();
+      const text = sanitizeDaemonMessage(raw);
+      expect(performance.now() - started).toBeLessThan(250);
+      expect(Array.from(text).length).toBeLessThanOrEqual(300);
+    }
+    // The cut lands inside a Feishu token after a long query string; its first characters must not show.
+    const raw = `打不开 https://h/p?${'q'.repeat(1975)} t-g1044abcdefghijklmnopqrstuvwxyz0123`;
+    expect(sanitizeDaemonMessage(raw)).toBe('打不开 https://h/p…');
+  });
+
+  it('caps daemon messages at 300 characters without splitting a character', () => {
+    expect(sanitizeDaemonMessage('群'.repeat(300))).toBe('群'.repeat(300));
+    const capped = sanitizeDaemonMessage('😀'.repeat(400));
+    expect(Array.from(capped)).toHaveLength(300);
+    expect(capped.endsWith('😀…')).toBe(true);
   });
 
   it('reports the desktop registration in its snapshot', async () => {

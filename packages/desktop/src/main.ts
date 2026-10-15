@@ -2,7 +2,7 @@ import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { app, autoUpdater, BrowserWindow, dialog, Menu, net, type Tray } from 'electron';
+import { app, autoUpdater, BrowserWindow, dialog, Menu, net, type Tray, type WebContents } from 'electron';
 import { resolveDataRoot } from '../../daemon/src/config/data-root.js';
 import { attachExisting, AttachError } from './attach.js';
 import { installBridge, openAllowedExternal } from './bridge.js';
@@ -201,8 +201,14 @@ export async function startDesktop(): Promise<void> {
     current.webContents.on('did-fail-load', (_event, code, _description, _validatedUrl, isMainFrame) => {
       if (isMainFrame && code !== -3) fatal('The desktop page could not load. Reopen Vonvon Bot.');
     });
-    current.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-    current.webContents.session.setPermissionCheckHandler(() => false);
+    // 复制链接 needs clipboard-sanitized-write: Chromium checks it after a click and requests it otherwise.
+    // Only the bundled page's main frame gets it; every other permission, clipboard-read included, stays denied.
+    const ownClipboardWrite = (contents: WebContents | null, permission: string, isMainFrame: boolean): boolean =>
+      permission === 'clipboard-sanitized-write' && contents === current.webContents && isMainFrame && authorizedDocument();
+    current.webContents.session.setPermissionRequestHandler((contents, permission, callback, details) =>
+      callback(ownClipboardWrite(contents, permission, details.isMainFrame)));
+    current.webContents.session.setPermissionCheckHandler((contents, permission, _origin, details) =>
+      ownClipboardWrite(contents, permission, details.isMainFrame));
     current.on('close', event => {
       if (!quitting && !terminating) {
         event.preventDefault();
