@@ -159,7 +159,7 @@ export const applicationServiceSchema = z.object({
   action: serviceActionReportSchema.optional(),
 });
 export type ApplicationService = z.infer<typeof applicationServiceSchema>;
-const jobBase ={ id: jobIdSchema, type: z.enum(["registerAgent", "installCodex", "loginCodex"]) };
+const jobBase = { id: jobIdSchema, type: z.enum(["registerAgent", "installCodex", "loginCodex"]) };
 export const jobSchema = z.discriminatedUnion("phase", [
   z.object({ ...jobBase, phase: z.literal("running"), message: z.string() }),
   z.object({ ...jobBase, phase: z.literal("unresolved"), message: z.string() }),

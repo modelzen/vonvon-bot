@@ -2,12 +2,16 @@ import {useEffect, useRef, useState} from 'react';
 import {Button} from '../reference/components/ui';
 import {Dialog} from '../reference/components/ui/Dialog';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
-import type {MachineRequest, MachineRequestHandler, MachineReply} from '@vonvon/protocol';
+import type {MachineRequest, MachineRequestHandler, MachineReply, ServiceState} from '@vonvon/protocol';
 import '../settings/settings.css';
 import {settingAnchor, type SearchReveal} from '../search';
 import {useShellCapabilities} from '../client-context';
 
 type MachineStatus = Extract<MachineReply, {type: 'status'}>;
+/** The s07 states as `vonvon service status` tells them apart. */
+const SERVICE_STATE_TEXT: Record<ServiceState, string> = {
+  'not-installed': '未安装', running: '在运行', stopped: '已停止', disabled: '已在系统设置里关掉', detached: '分离运行', conflict: '要处理', unknown: '查不到',
+};
 
 export async function runMachineRequest(request: MachineRequestHandler, operation: MachineRequest, update: (status: MachineStatus | undefined) => void): Promise<MachineReply> {
   try {
@@ -54,12 +58,10 @@ export function MachinePanel({request, agents, reveal}: {request: MachineRequest
     finally { setBusy(false); }
   };
   const service = status?.service;
-  const serviceDisabled = (action: 'install' | 'start' | 'stop' | 'uninstall') =>
-    !status || (action === 'install'
-      ? status.service.installed || status.host?.ownership === 'attached'
-      : action === 'start'
-        ? !status.service.installed || status.service.running || status.host?.ownership === 'attached'
-        : !status.service.installed);
+  const serviceDisabled = (action: 'start' | 'stop') =>
+    !status || (action === 'start'
+      ? !status.service.installed || status.service.running || status.host?.ownership === 'attached'
+      : !status.service.installed);
 
   return <>
     <SettingsGroup id={settingAnchor('命令行工具')} label="命令行工具" footer="安装后请打开新的终端，输入 vonvon。">
@@ -79,18 +81,14 @@ export function MachinePanel({request, agents, reveal}: {request: MachineRequest
       {status?.temporaryAgent && <SettingsRow title="临时运行 Bot" description="默认 Bot 选择未改变。" value={status.temporaryAgent} />}
     </SettingsGroup>
 
-    <SettingsGroup id={settingAnchor('后台服务')} label="后台服务" footer="后台服务在桌面退出后仍运行。桌面应用的登录启动是另一项设置。">
-      <SettingsRow title="系统服务" description={!shell?.service ? '桌面版提供服务操作；命令行：vonvon service install / uninstall。' : service?.platformName ?? '正在读取服务状态…'}
-        value={service ? `${service.installed ? '已安装' : '未安装'} · ${service.running ? '运行中' : '已停止'}` : undefined} />
-      <SettingsRow title="安装并启动" description="让 daemon 在桌面应用关闭后继续运行。"
-        trailing={<Button size="sm" disabled={busy || !shell?.service || serviceDisabled('install')} onClick={() => setConfirm({type: 'service', action: 'install'})}>安装并启动后台服务</Button>} />
-      <SettingsRow title="服务运行" description="已安装的服务可单独启动或停止。"
+    <SettingsGroup id={settingAnchor('后台服务')} label="后台服务" footer="打开「登录电脑时启动」后，daemon 跑在后台服务里，退出桌面后仍运行。">
+      <SettingsRow title="系统服务" description={service ? service.detail ?? service.platformName : '正在读取服务状态…'}
+        value={service ? service.state ? SERVICE_STATE_TEXT[service.state] : `${service.installed ? '已安装' : '未安装'} · ${service.running ? '运行中' : '已停止'}` : undefined} />
+      <SettingsRow title="服务运行" description={!shell?.service ? '桌面版提供；命令行：vonvon daemon start / stop。' : '已安装的服务可单独启动或停止。'}
         trailing={<span className="settings-inline-actions">
           <Button size="sm" disabled={busy || !shell?.service || serviceDisabled('start')} onClick={() => setConfirm({type: 'service', action: 'start'})}>启动已安装服务</Button>
           <Button size="sm" disabled={busy || !shell?.service || serviceDisabled('stop')} onClick={() => setConfirm({type: 'service', action: 'stop'})}>停止后台服务</Button>
         </span>} />
-      <SettingsRow title="卸载后台服务" description="移除系统服务及其自动启动设置。"
-        trailing={<Button size="sm" disabled={busy || !shell?.service || serviceDisabled('uninstall')} onClick={() => setConfirm({type: 'service', action: 'uninstall'})}>卸载后台服务</Button>} />
       <details ref={advanced} className="settings-disclosure">
         <summary>高级</summary>
         <SettingsRow title="仅运行指定 Bot" description={!shell?.startHost ? '启动功能由桌面版提供；命令行临时运行：vonvon daemon run --bot <Bot ID>。' : '临时运行前需停止当前 daemon。此操作不会修改默认启用列表。'}
@@ -111,7 +109,7 @@ export function MachinePanel({request, agents, reveal}: {request: MachineRequest
     <Dialog open={!!confirm} title="确认更改 daemon 运行方式" onClose={() => setConfirm(undefined)} footer={<>
       <Button onClick={() => setConfirm(undefined)}>取消</Button>
       <Button variant="danger" onClick={() => { const operation = confirm; const service = shell?.service; setConfirm(undefined); if (operation?.type === 'service' && service) void runShell(() => service(operation.action)); else if (operation && operation.type !== 'service') void run(operation); }}>确认操作</Button>
-    </>}><p>此操作可能停止正在进行的所有 Bot 任务。安装或启动后台服务后，daemon 会在桌面退出后继续运行。</p></Dialog>
+    </>}><p>此操作可能停止正在进行的所有 Bot 任务。启动后台服务后，daemon 会在桌面退出后继续运行。</p></Dialog>
     {message && <p className="settings-operation-message" role="status">{message}</p>}
   </>;
 }

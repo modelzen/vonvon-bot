@@ -4,7 +4,8 @@ import {useClient, useShellCapabilities} from '../client-context';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import {Button, StatusBadge} from '../reference/components/ui';
 import {openExternalUrl} from '../url-actions';
-import {botSteps, toolSteps, type SetupStep, type StepAction} from '@vonvon/protocol';
+import {botSteps, serviceStep, toolSteps, type SetupStep, type StepAction} from '@vonvon/protocol';
+import {skipService, toggleService} from './service-toggle';
 import {useSetupStatus} from './useSetupStatus';
 import './setup.css';
 
@@ -61,6 +62,11 @@ export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEn
         case 'environment': onOpenEnvironment(); break;
         case 'codexLogin': await run({type: 'startCodexLogin'}); break;
         case 'claudeLogin': await checkClaude(true); break;
+        // Installing from the web page drops the connection for a few seconds; the snapshot shows the result.
+        case 'serviceInstall': onNotice(await toggleService(true, client, shell), false); break;
+        case 'serviceSkip': onNotice(await skipService(client), false); break;
+        // The daemon feeds this read into the snapshot, so the step follows it.
+        case 'serviceRecheck': await client.machine({type: 'status'}); break;
       }
     } catch (error) {
       onNotice(error instanceof Error ? error.message : '操作没有完成，请重试。', true);
@@ -73,7 +79,7 @@ export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEn
       description={stepDescription(step)}
       trailing={<span className="setup-step-trailing">
         <StatusBadge tone={step.tone} variant="pill">{step.status}</StatusBadge>
-        {step.actions.map(action => <Button key={action.kind + action.label} size="sm"
+        {step.actions.map(action => <Button key={action.kind + action.label} size="sm" variant={action.kind === 'serviceInstall' && action.primary ? 'primary' : undefined}
           loading={working === `${agentId ?? 'tools'}:${action.kind}` || (action.kind === 'claudeLogin' && claudeChecks > 0)}
           disabled={busy || !ready} onClick={() => void act(action, agentId)}>{action.label}</Button>)}
       </span>}/>;
@@ -86,6 +92,9 @@ export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEn
       {tools.steps.map((step, index) => stepRow(step, index))}
     </SettingsGroup>
     {codexJobs}
+    <SettingsGroup label="后台运行" footer={snapshot.application.platform === 'macos' ? '装成 macOS 的后台服务（LaunchAgent）。' : undefined}>
+      {stepRow(serviceStep(snapshot.application), 0)}
+    </SettingsGroup>
     {snapshot.agents.map(agent => {
       const read = reads[agent.id];
       const steps = botSteps(agent, read?.status, read?.problem);

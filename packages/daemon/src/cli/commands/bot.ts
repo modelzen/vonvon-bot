@@ -1,4 +1,4 @@
-import { botSteps, toolSteps, type AdminSetupStatus, type Agent, type SetupStep, type StepTone } from '@vonvon/protocol';
+import { botSteps, serviceStep, toolSteps, type AdminSetupStatus, type Agent, type SetupStep, type StepTone } from '@vonvon/protocol';
 import { pickBot, print, want, withDaemon, withoutAvatar, type Daemon, type Io } from '../daemon-client';
 
 const MARK: Record<StepTone, string> = { success: '✓', warning: '!', danger: '✗', neutral: '·' };
@@ -29,27 +29,29 @@ function stepLines(step: SetupStep): string[] {
   // A finished step's buttons (取消勾选, 检查登录) are not a next step, unless a warning still points at one.
   if (step.done && !step.warnings?.length) return out;
   for (const action of step.actions) {
-    out.push(action.kind === 'open' ? `    ${action.label}：${action.url}` : `    在网页里点「${action.label}」（vonvon open）`);
+    out.push(action.kind === 'open' ? `    ${action.label}：${action.url}`
+      : action.kind === 'serviceInstall' ? '    运行 vonvon service install' : `    在网页里点「${action.label}」（vonvon open）`);
   }
   return out;
 }
 
 /**
  * Exits 0 whatever the steps show; scripts read `ready` from --json. When the checklist read fails it prints what the
- * web page shows then (检测失败, the connection and the tools) and exits 1.
+ * web page shows then (检测失败, the connection, the tools and the service) and exits 1.
  */
 export async function runBotStatus(wanted: string | undefined, io: Io, daemon: Daemon = withDaemon): Promise<void> {
-  const { agent, setup, problem, tools } = await daemon(async call => {
+  const { agent, setup, problem, tools, service } = await daemon(async call => {
     const snapshot = await call('读取快照', c => c.snapshot());
     const agent = pickBot(snapshot.agents, wanted);
     let setup: AdminSetupStatus | undefined;
     let problem: string | undefined;
     try { setup = want('读取清单状态', await call('读取清单状态', c => c.admin({ type: 'setupStatus', agentId: agent.id }), { feishu: true }), 'setupStatus').status; }
     catch (error) { problem = error instanceof Error ? error.message : String(error); }
-    return { agent, setup, problem, tools: toolSteps(snapshot.tools) };
+    return { agent, setup, problem, tools: toolSteps(snapshot.tools), service: serviceStep(snapshot.application) };
   });
   const bot = botSteps(agent, setup, problem);
-  const steps = [...bot, ...tools.steps];
+  // The service step is recommended, not required: it does not count toward `left` or `ready`.
+  const steps = [...bot, ...tools.steps, service];
   const left = bot.filter(step => !step.done).length + (tools.ready ? 0 : 1);
   const human = [`${agent.name}（${agent.id}）`, ...steps.flatMap(stepLines)];
   if (problem === undefined) human.push(left ? `还有 ${left} 步没完成。` : '全部就绪。');

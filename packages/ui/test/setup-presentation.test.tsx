@@ -1,10 +1,10 @@
 import {expect, it} from 'vitest';
 import {renderToStaticMarkup} from 'react-dom/server';
-import type {AdminSetupStatus, Agent, DesktopSnapshot, ToolState} from '@vonvon/protocol';
+import type {AdminSetupStatus, Agent, ApplicationService, DesktopSnapshot, ServiceActionReport, ToolState} from '@vonvon/protocol';
 import {createClient} from '../../client/src/client';
 import {ClientProvider} from '../src/client-context';
 import {SetupChecklist} from '../src/setup/SetupChecklist';
-import {BOT_ADDED_WARNING, JOIN_SCOPE_WARNING, botSteps, remoteStepsDone, scopeStep, toolSteps} from '@vonvon/protocol';
+import {BOT_ADDED_WARNING, JOIN_SCOPE_WARNING, botSteps, recentServiceFailure, remoteStepsDone, scopeStep, serviceStep, toolSteps} from '@vonvon/protocol';
 
 const agent: Agent = {id: 'cli_setup' as Agent['id'], name: '小助手', enabled: true, running: true, connection: 'connected', activation: 'active'};
 const done: AdminSetupStatus = {
@@ -83,8 +83,8 @@ const snapshot = (agents: Agent[]): DesktopSnapshot => ({
   agents, groups: [], memberships: [], tools: [tool({tool: 'codex', installation: 'missing', authentication: 'unknown', version: null})], jobs: [], diagnostics: [],
   application: {platform: 'macos', version: 'test', loginItem: false, dataPath: '/tmp/test'},
 });
-const render = (agents: Agent[]) => renderToStaticMarkup(<ClientProvider client={client}>
-  <SetupChecklist snapshot={snapshot(agents)} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onRegister={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}} codexJobs={null}/>
+const render = (agents: Agent[], application: Partial<DesktopSnapshot['application']> = {}) => renderToStaticMarkup(<ClientProvider client={client}>
+  <SetupChecklist snapshot={{...snapshot(agents), application: {...snapshot(agents).application, ...application}}} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onRegister={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}} codexJobs={null}/>
 </ClientProvider>);
 
 it('starts a new machine with the tools and the scan step', () => {
@@ -133,4 +133,80 @@ it('names the bot-added event in the events step as a warning only', () => {
 it('drops the warnings while the credentials are rejected', () => {
   const steps = byId(botSteps(agent, {...done, credentials: {ok: false, reason: 'code=10014'}, scopes: {...done.scopes, missingJoinScopes: ['im:chat:readonly']}, event: {state: 'ok', missingOptional: ['im.chat.member.bot.added_v1']}}));
   expect([steps.scopes?.warnings, steps.event?.warnings]).toEqual([undefined, undefined]);
+});
+
+const service = (fields: Partial<ApplicationService> = {}): ApplicationService => ({state: 'not-installed', skipped: false, ...fields});
+const mac = (fields?: Partial<ApplicationService>, now?: number) => serviceStep({platform: 'macos', service: fields && service(fields)}, now);
+const linux = (fields?: Partial<ApplicationService>) => serviceStep({platform: 'unsupported', service: fields && service(fields)});
+const labels = (step: ReturnType<typeof serviceStep>) => step.actions.map(action => action.label);
+
+it.each([
+  [{action: {action: 'install', phase: 'running', startedAt: 1}}, '正在打开…', 'neutral', false, '页面会断开几秒再连上。', []],
+  [{state: 'running', action: {action: 'uninstall', phase: 'running', startedAt: 1}}, '正在关闭…', 'neutral', false, '页面会断开几秒再连上。', []],
+  [{blocked: 'development'}, '开发版不能装', 'neutral', false, '从源码运行的 daemon 不能装后台服务。用打包的 Vonvon Bot，或用 npm 装的 vonvon。', []],
+  [{blocked: 'translocated'}, '先移到"应用程序"', 'warning', false, 'Vonvon Bot 正从临时位置运行，装成后台服务后下次会找不到它。把它拖到"应用程序"文件夹，从那里打开，再回到这一步。', ['重新检测']],
+  [{state: 'running'}, '已开启', 'success', true, 'bot 跑在后台服务里：退出 app、注销再登录都在线，崩溃后自动重启。', []],
+  [{state: 'detached'}, '已开启 · 这次没交给后台服务', 'warning', true, '现在的 daemon 是单独启动的，崩溃后不会自动重启；下次登录电脑时会由后台服务启动。', ['交给后台服务']],
+  [{state: 'stopped'}, '已开启 · 这次没交给后台服务', 'warning', true, '现在的 daemon 是单独启动的，崩溃后不会自动重启；下次登录电脑时会由后台服务启动。', ['交给后台服务']],
+  [{state: 'disabled'}, '已在系统设置里关掉', 'warning', false, '在"系统设置 › 通用 › 登录项与扩展"的"允许在后台"里打开 Vonvon Bot，再点「重新检测」。', ['重新检测']],
+  [{skipped: true}, '已跳过', 'neutral', true, 'bot 跑在单独启动的 daemon 里，退出 app 不停，但这样崩溃后不会自动重启；注销或重启电脑后要重新打开 app。', ['改为自动运行']],
+  [{}, '推荐打开', 'warning', false, '打开后 bot 跑在 macOS 的后台服务里：退出 app、注销再登录都在线，崩溃后自动重启。', ['打开', '跳过']],
+  [{state: 'conflict', detail: 'The service belongs to another data directory, /x.'}, '要处理', 'danger', false, 'The service belongs to another data directory, /x.', ['重新检测']],
+  [{state: 'unknown', detail: 'launchctl timed out'}, '无法确认', 'neutral', false, '暂时问不到 launchd：launchctl timed out', ['重新检测']],
+  [undefined, '无法确认', 'neutral', false, '暂时问不到 launchd。', ['重新检测']],
+] as const)('macOS service step for %j', (fields, status, tone, done, detail, actions) => {
+  const step = mac(fields as Partial<ApplicationService> | undefined);
+  expect(step).toMatchObject({id: 'service', title: '登录电脑时自动运行 bot（推荐）', status, tone, done, detail, warnings: undefined});
+  expect(labels(step)).toEqual(actions);
+});
+
+it('wires the macOS service buttons to install, skip and recheck', () => {
+  expect(mac({}).actions).toEqual([{kind: 'serviceInstall', label: '打开', primary: true}, {kind: 'serviceSkip', label: '跳过'}]);
+  expect(mac({state: 'detached'}).actions).toEqual([{kind: 'serviceInstall', label: '交给后台服务'}]);
+  expect(mac({skipped: true}).actions).toEqual([{kind: 'serviceInstall', label: '改为自动运行'}]);
+  expect(mac({state: 'disabled'}).actions).toEqual([{kind: 'serviceRecheck', label: '重新检测'}]);
+  // A blocked install wins over the state, a running action over everything.
+  expect(mac({state: 'running', blocked: 'development'}).status).toBe('开发版不能装');
+  expect(mac({blocked: 'translocated', action: {action: 'install', phase: 'running', startedAt: 1}}).status).toBe('正在打开…');
+});
+
+it.each([
+  [{state: 'running'}, '在运行', 'success', true, 'bot 跑在 systemd 用户服务里，崩溃后自动重启。'],
+  [{}, '没装', 'neutral', false, '在终端运行 vonvon service install，装成 systemd 用户服务，崩溃后自动重启。'],
+  [{state: 'disabled'}, '没启用', 'neutral', false, '在终端运行 vonvon service install。'],
+  [{state: 'detached'}, '已装 · 这次没交给后台服务', 'warning', true, '在终端运行 vonvon daemon stop，再运行 vonvon daemon start。'],
+  [{state: 'conflict', detail: 'An uninstall did not finish. Run vonvon service uninstall.'}, '要处理', 'danger', false, 'An uninstall did not finish. Run vonvon service uninstall.'],
+  [{state: 'unknown', detail: 'User manager unavailable'}, '无法确认', 'neutral', false, '暂时问不到 systemd：User manager unavailable'],
+] as const)('Linux service step for %j has no buttons', (fields, status, tone, done, detail) => {
+  const step = linux(fields as Partial<ApplicationService>);
+  expect(step).toMatchObject({id: 'service', title: '后台服务', status, tone, done, detail, actions: []});
+});
+
+it('ignores the macOS-only parts of the snapshot on Linux', () => {
+  const failed: ServiceActionReport = {action: 'install', phase: 'done', ok: false, reason: 'busy', startedAt: 1, finishedAt: 2};
+  const step = linux({blocked: 'development', action: failed});
+  expect([step.status, step.warnings]).toEqual(['没装', undefined]);
+  expect(linux({skipped: true, action: {action: 'install', phase: 'running', startedAt: 1}}).status).toBe('没装');
+});
+
+it('warns about a failed service action for 10 minutes', () => {
+  const finishedAt = 1_000_000;
+  const failed: ServiceActionReport = {action: 'install', phase: 'done', ok: false, kind: 'install_refused', reason: 'turned-off', startedAt: finishedAt - 5_000, finishedAt};
+  const text = '系统设置里关掉了 Vonvon Bot 的后台运行。到"系统设置 › 通用 › 登录项与扩展"的"允许在后台"里打开它，再点「重新检测」。';
+  expect(mac({state: 'disabled', action: failed}, finishedAt + 60_000)).toMatchObject({status: '已在系统设置里关掉', warnings: [text]});
+  expect(mac({state: 'disabled', action: failed}, finishedAt + 10 * 60_000).warnings).toBeUndefined();
+  expect(recentServiceFailure(service({action: {...failed, ok: true, kind: 'installed', reason: undefined}}), finishedAt)).toBeUndefined();
+  expect(recentServiceFailure(service({action: {action: 'uninstall', phase: 'running', startedAt: finishedAt}}), finishedAt)).toBeUndefined();
+});
+
+it('puts the service step in its own group after the tools', () => {
+  const html = render([], {service: service()});
+  expect(html.indexOf('后台运行')).toBeGreaterThan(html.indexOf('执行工具'));
+  expect(html).toContain('装成 macOS 的后台服务（LaunchAgent）。');
+  expect(html).toContain('1. 登录电脑时自动运行 bot（推荐）');
+  expect(html).toMatch(/ui-button--primary[^>]*><span>打开<\/span>/);
+  const other = render([], {platform: 'unsupported', service: service()});
+  expect(other).toContain('1. 后台服务');
+  expect(other).not.toContain('LaunchAgent');
+  expect(other).not.toContain('<span>打开</span>');
 });

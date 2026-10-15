@@ -77,3 +77,10 @@ it('offers start only when a desktop shell supplies the capability', () => {
   expect(unknown).toContain('状态未知');
   expect(unknown).not.toContain('已停止');
 });
+
+it('leaves installing and uninstalling the service to the 登录电脑时启动 switch', () => {
+  const html = renderToStaticMarkup(<ClientProvider client={client}><MachinePanel request={async () => running} agents={[]} /></ClientProvider>);
+  expect(html).toContain('打开「登录电脑时启动」后，daemon 跑在后台服务里，退出桌面后仍运行。');
+  for (const gone of ['安装并启动', '卸载后台服务']) expect(html).not.toContain(gone);
+  expect(html).toContain('停止后台服务');
+});

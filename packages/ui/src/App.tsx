@@ -53,6 +53,7 @@ import {ConversationPanel} from './management/ConversationPanel';
 import {ShareUsagePanel, UsagePanel} from './management/UsagePanel';
 import {EnvironmentPanel} from './management/EnvironmentPanel';
 import {SetupChecklist} from './setup/SetupChecklist';
+import {LoginServiceRow, toggleService} from './setup/service-toggle';
 import {GrantStep, ScopeGrantRow, jobToCancel, withRegisteredAgent, type RegisterModal} from './setup/GrantStep';
 import {MachinePanel} from './management/MachinePanel';
 import {LogPanel} from './management/LogPanel';
@@ -895,7 +896,7 @@ function DesktopApp() {
                     </Button>
                   }
                 />
-                {snapshot.application.platform !== 'unsupported' && <SettingsRow title="登录电脑时启动" value={!shell?.setLoginItem ? '桌面版提供' : undefined} trailing={<Toggle className="settings-row-switch" aria-label="登录电脑时启动" label="登录电脑时启动" checked={snapshot.application.loginItem} disabled={busy || !shell?.setLoginItem} onChange={event => { const enabled = event.target.checked; const setLoginItem = shell?.setLoginItem; if (setLoginItem) void runShell(async () => { await setLoginItem(enabled); }); }} />} />}
+                <LoginServiceRow application={snapshot.application} busy={busy} onToggle={enabled => void runShell(async () => setNotice({message: await toggleService(enabled, client, shell), error: false}))}/>
               </SettingsGroup>
               <MachinePanel reveal={searchTarget?.reveal} request={client.machine} agents={snapshot.agents}/>
               <UpdatePanel request={client.machine} attached={host.kind === 'connected' && host.ownership === 'attached'}/>

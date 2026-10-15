@@ -77,10 +77,10 @@ it('bot status prints the checklist with its links and next steps', async () => 
   await runBotStatus(undefined, h.io(), h.daemon);
   expect(admin).toHaveBeenCalledWith({ type: 'setupStatus', agentId: 'cli_a' });
   for (const line of ['Vonvon Bot（cli_a）', '✓ 飞书应用：凭据有效', '! 权限：还缺 2 项', '    - im:message:readonly', '    - im:resource', `    一键开权限：${setup.scopes.grantUrl}`,
-    '· 卡片回调：请手动确认', '    打开事件设置：https://open.feishu.cn/app/cli_a/event', '    在网页里点「我已配置」（vonvon open）', '✓ Codex：可用 · 0.156.1', '还有 4 步没完成。']) expect(h.out()).toContain(`${line}\n`);
+    '· 卡片回调：请手动确认', '    打开事件设置：https://open.feishu.cn/app/cli_a/event', '    在网页里点「我已配置」（vonvon open）', '✓ Codex：可用 · 0.156.1', '· 后台服务：无法确认', '还有 4 步没完成。']) expect(h.out()).toContain(`${line}\n`);
   h.clear(); await runBotStatus('cli_a', h.io(true), h.daemon);
   const json = JSON.parse(h.out());
-  expect(json.steps.map((step: { id: string }) => step.id)).toEqual(['credentials', 'scopes', 'connection', 'event', 'callback', 'publish', 'codex', 'claude']);
+  expect(json.steps.map((step: { id: string }) => step.id)).toEqual(['credentials', 'scopes', 'connection', 'event', 'callback', 'publish', 'codex', 'claude', 'service']);
   expect(json).toMatchObject({ bot: { id: 'cli_a' }, setup: { appId: 'cli_a' }, ready: false });
 });
 
@@ -88,11 +88,30 @@ it('bot status still prints the connection and tool steps when the checklist rea
   const h = harness({ snapshot: one(undefined, [], [{ tool: 'codex', installation: 'installed', authentication: 'signedIn', version: '0.156.1' }]), admin: async () => { throw new RpcError('internal', '飞书接口超时'); } });
   await expect(runBotStatus(undefined, h.io(), h.daemon)).rejects.toThrow('清单没有读全，稍后重新运行 vonvon bot status。');
   expect(h.out()).toBe(['Vonvon Bot（cli_a）', '! 飞书应用：检测失败', '    读取清单状态失败：飞书接口超时', '✓ 长连接：已连接', '✓ Codex：可用 · 0.156.1',
-    '· Claude：无法确认', '    在网页里点「去本机环境」（vonvon open）', ''].join('\n'));
+    '· Claude：无法确认', '    在网页里点「去本机环境」（vonvon open）', '· 后台服务：无法确认', '    暂时问不到 systemd。', ''].join('\n'));
   h.clear(); await expect(runBotStatus(undefined, h.io(true), h.daemon)).rejects.toThrow('清单没有读全');
   const json = JSON.parse(h.out());
   expect(json).toMatchObject({ problem: '读取清单状态失败：飞书接口超时', ready: false });
-  expect(json.steps.map((step: { id: string }) => step.id)).toEqual(['credentials', 'connection', 'codex', 'claude']);
+  expect(json.steps.map((step: { id: string }) => step.id)).toEqual(['credentials', 'connection', 'codex', 'claude', 'service']);
+});
+
+it('bot status prints the service step after the tools without counting it', async () => {
+  const setup: AdminSetupStatus = {
+    appId: 'cli_a', tenant: 'feishu', credentials: { ok: true }, connection: { running: true, connection: 'connected' }, event: { state: 'ok', version: '1.0.0' },
+    scopes: { missingRequired: [], grantUrl: 'https://open.feishu.cn/app/cli_a/auth' },
+    eventConfigUrl: 'https://open.feishu.cn/app/cli_a/event', consoleUrl: 'https://open.feishu.cn/app/cli_a', cardCallback: { confirmed: true },
+  };
+  const status = (application: DesktopSnapshot['application']) => async () => ({ ...snapshot([agent('cli_a')], [], [{ tool: 'codex', installation: 'installed', authentication: 'signedIn', version: '0.156.1' }]), application });
+  const mac = harness({ snapshot: status({ platform: 'macos', version: '1', loginItem: false, dataPath: '/x', service: { state: 'not-installed', skipped: false } }), admin: async () => ({ kind: 'setupStatus', status: setup }) });
+  await runBotStatus(undefined, mac.io(), mac.daemon);
+  expect(mac.out()).toContain(['✓ Codex：可用 · 0.156.1', '· Claude：无法确认', '    在网页里点「去本机环境」（vonvon open）',
+    '! 登录电脑时自动运行 bot（推荐）：推荐打开', '    打开后 bot 跑在 macOS 的后台服务里：退出 app、注销再登录都在线，崩溃后自动重启。',
+    '    运行 vonvon service install', '    在网页里点「跳过」（vonvon open）', '全部就绪。', ''].join('\n'));
+  mac.clear(); await runBotStatus(undefined, mac.io(true), mac.daemon);
+  expect(JSON.parse(mac.out())).toMatchObject({ ready: true, steps: expect.arrayContaining([expect.objectContaining({ id: 'service', done: false })]) });
+  const linux = harness({ snapshot: status({ platform: 'unsupported', version: '1', loginItem: false, dataPath: '/x', service: { state: 'not-installed', skipped: false } }), admin: async () => ({ kind: 'setupStatus', status: setup }) });
+  await runBotStatus(undefined, linux.io(), linux.daemon);
+  expect(linux.out()).toContain('· 后台服务：没装\n    在终端运行 vonvon service install，装成 systemd 用户服务，崩溃后自动重启。\n全部就绪。\n');
 });
 
 it('group joined follows pages, stops on a repeated cursor or at 20 pages', async () => {
