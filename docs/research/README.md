@@ -98,13 +98,17 @@ process-ci、draft 和 final 里的流程说法，凡和 `AGENTS.md` 不一致�
 | [e01-background-tasks](2026-10-14-v1-spikes/e01-background-tasks.md) | `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` 能不能让主回合等子 agent，后台 Bash 会怎样，关闭会话时后台任务会怎样 | 前台子 agent 跑着时按 ⏹ 还没测 |
 | [e02-claude-permissions-sessions](2026-10-14-v1-spikes/e02-claude-permissions-sessions.md) | 三种模式下哪些请求走到 canUseTool，今天的 AskUserQuestion，拒绝，中途改档和 resume，子 agent 的 id，读别的工作目录下的会话，`claudeMdExcludes` | 没带沙箱，沙箱看 e03。第 7 节（claude.ai 连接器和 Claude Code 自己的工具）和第 8 节（会话标题）是顺带发现，没经过核实那一轮 |
 
-## 2026-10-15 第一版实验 e06
+## 2026-10-15 第一版实验 e05、e06、e07、e10、e11
 
-`2026-10-15-v1-spikes/`，基于 `main` 的 `f1c2fb8`。`docs/v1-plan.md` 第 4 节的 e06，在 owner 的 Mac 上经 Paseo 的检查会话实测。
+`2026-10-15-v1-spikes/`。`docs/v1-plan.md` 第 4 节的实验。e06 基于 `main` 的 `f1c2fb8`，在 owner 的 Mac 上经 Paseo 的检查会话实测；e05、e07、e10、e11 基于 `bfc01d7`，在 JP-VPS 上实测。这几份没有核实记录，用之前自己核对关键事实。
 
 | 报告 | 内容 | 说明 |
 |---|---|---|
+| [e05-codex-session-config](2026-10-15-v1-spikes/e05-codex-session-config.md) | Codex 会话级的 `mcp_servers`、`runtimeWorkspaceRoots`、`skills/extraRoots/set` 和 memories 能不能用，resume 后还在不在，中途能否换 skill，`~/.codex/AGENTS.md` 能否按会话不加载，最低版本该定多少；顺带发现主人的 `codex_apps` 连接器挂在每条会话上，`thread/start` 会往用户的 `config.toml` 写信任记录 | 测了 0.139.0、0.148.0、0.156.1、0.162.1。第二个根真能写、根外被拒没测到：JP-VPS 上 bwrap 起不来，归 s39 的 Mac 检查 |
 | [e06-launchagent-keychain](2026-10-15-v1-spikes/e06-launchagent-keychain.md) | LaunchAgent 起的 daemon 能不能用主人的 Claude 和 Codex 登录，读钥匙串会不会弹窗，`kill -9` 后多久拉起、退出码记在哪，"允许在后台"里显示什么，怎么判断重新登录过 | 没打包，用 worktree 里的 Electron 跑。owner 的凭据都在文件里，钥匙串那条路没验证到；重新登录的判断只查了资料 |
+| [e07-bridge-lock](2026-10-15-v1-spikes/e07-bridge-lock.md) | v2 的 `acquireSingleInstanceLock` 写出 bridge 格式的锁，bridge 0.6.14 的同名函数抢不抢得到；持有者退出、startedAt+15s、同时抢锁；锁挡不挡得住 `run` 和 `start` | 只测了从发布包里切出来的锁函数，没跑 bridge 的 CLI。`run`、`start` 和多 bot 模式的表现是读代码得到的，真机在 e08 |
+| [e10-feishu-platform](2026-10-15-v1-spikes/e10-feishu-platform.md) | 机器人能否自己进已有的群，`with_sender_name` 拿不拿得到名字，能否拉到别的 bot 卡片的正文，话题里的引用，私聊里的话题，断线期间的消息会不会补推 | "同时发送到群"和给没开过会话的人发私聊没测到，留给 owner。补推只有一个样本，daemon 自己能不能收到补推没测 |
+| [e11-codex-thread-read](2026-10-15-v1-spikes/e11-codex-thread-read.md) | 另起一个 utility app-server 进程、不加载线程，能不能读到别的进程的线程；能否只拿用户消息和最终回答；正在跑、没跑过回合、旧格式、压缩过的线程读出来是什么样 | 只测了 JP-VPS 上的 CLI，没测子 agent 和很长的会话 |
 
 ## 补充
 
