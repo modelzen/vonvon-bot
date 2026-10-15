@@ -65,7 +65,7 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
 **怎么验收：** owner 要做的：第 2 步里扫码建第二个 bot、照清单做到全绿，第 4 步里注销再登录，各回一句；第 7 步是建议。其余步骤 Claude 和 Codex 做，结果写在通知里。
 1. Codex 先查：打开新装的预览版，清单显示 M1 那个 bot 每一步的状态。
 2. owner：再扫码建第二个 bot，只照清单一步步做，直到全部变绿。Claude 接着做：照 M1 第 4 步用 lark-cli 把它加进一个测试群；Codex 接着查：在 app 里绑好这个群；Claude 再 @ 它，能回复。
-3. Codex 先查：在清单里打开"登录电脑时自动运行 bot"，然后退出 app。Claude 先做：Codex 退出 app 以后，用 lark-cli 在 M1 的测试群里 @ M1 那个 bot（它跑在 Mac 上），仍然回。
+3. Codex 先查：在清单里打开"登录电脑时自动运行 bot"，然后退出 app。Claude 先做：Codex 退出 app 以后，用 lark-cli 在 M1 的测试群里 @ M1 那个 bot（它跑在 Mac 上），仍然回。Codex 再把 app 打开，留给 owner 做第 2 步。
 4. owner：注销再登录，不打开 app。Claude 接着做：用 lark-cli 在 M1 的测试群里 @ M1 那个 bot，仍然回。
 5. Codex 先查：终端执行 `vonvon service status`，显示在运行。
 6. Codex 先查：在"应用与启动"页关掉"登录电脑时启动"，`vonvon service status` 显示未注册；重新打开后 `vonvon service status` 又显示在运行。第 4 步要靠它，Codex 在回复里写明已经恢复；恢复不了就停下回复，不往下做。
@@ -211,7 +211,7 @@ Codex 先用隔离的 HOME 和 bridge 数据副本走完整个导入，包括故
 **怎么验收：** owner 要做的：第 1 步里新开一个干净的 macOS 用户装 dmg，第 2 步（从零扫码走清单，到第一次对话）。其余步骤 Codex 在 M11 的预览版会话里先做完，结果写在通知里。
 
 product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前办好。开始前还没定的，Claude 用【需要你决定】一次问齐。然后：
-1. Codex 先查：从下载地址下载 dmg，用 `spctl --assess` 和 `xcrun stapler validate` 查 dmg 和里面的 app，都通过。命令行下载的文件不带隔离标记，Gatekeeper 不会真的拦一次，所以放不放行只在 owner 这一半看。owner：在 Mac 上新开一个干净的 macOS 用户（没有 bridge），从下载地址装 dmg，Gatekeeper 直接放行。
+1. Codex 先查：从下载地址下载 dmg，用 `spctl --assess --type open --context context:primary-signature` 查 dmg、`spctl --assess --type execute` 查里面的 app，再用 `xcrun stapler validate` 查两者，都通过。命令行下载的文件不带隔离标记，Gatekeeper 不会真的拦一次，所以放不放行只在 owner 这一半看。owner：在 Mac 上新开一个干净的 macOS 用户（没有 bridge），从下载地址装 dmg，Gatekeeper 直接放行。
 2. owner：从零走一遍清单：扫码、开权限、事件订阅、发布、登录时启动，然后第一次对话走通。
 3. Codex 先查：装一个旧一点的版本，在"应用与启动"页检查更新，装上新版。装回新版后，`vonvon service status` 和装旧版之前一样，Codex 在回复里写明。
 
@@ -621,7 +621,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 | Apple 开发者的公证凭据 | M11（s65） | 申请和配置要时间 |
 | 公开的下载和更新地址 | M11（s64 的通知、s65 的更新源） | product.md 第 8 节第 1 条 |
 | 向 Anthropic 要 Claude 登录的书面确认 | 公开发布前 | product.md 第 8 节第 2 条，可能要几周；要不到就做 s66 |
-| 一位同事或第二个飞书账号 | M3 第 7 步、M6 第 4 步、M9 第 2 和第 6 步，以及 e09、e10 | 验收时要有另一个人点卡片、私聊 bot |
+| 一位同事或第二个飞书账号 | e10（s09 之前）、M3 第 7 步、e09（s30 之前）、M6 第 4 步、M9 第 2 和第 6 步 | 验收时要有另一个人点卡片、私聊 bot |
 | JP-VPS 上再加两个测试 bot | M5 之前 | M5 要同一台机器上三个 bot（一个规则模式、两个智能模式），JP-VPS 上现在只有一个。Claude 扫不了码，要 owner 扫码、在开发者后台发布 |
 | JP-VPS 上给 bwrap 加载 AppArmor profile | M6 之前 | 要 sudo，经 SSH 做，做法见本文第 7 节。不做的话，M6 第 1 到 3、5 步和 M7 第 3 步退回 owner |
 | bridge 最后一版什么时候发 | M10 之前定 | product.md 第 8 节第 4 条，s64 按这个时间发 |

@@ -53,7 +53,7 @@
   - 修复会话，标题 `Mac 修复 PR #<号>`。只在开 `codex/fix-*` PR 的会话已经不在、审查又发现问题时新建。Codex pull 这个分支，按 PR 评论修，push。
 - 三种会话都按下面的规则跑：
   - 模式用 `full-access`（owner 2026-10-15）。改文件、跑命令、联网都不再发申请，Computer Use 和 MCP 的权限申请也自动同意。已经用 `auto` 开着的会话，用 `paseo agent mode --host <Mac 的 daemon> <会话 id> full-access` 切过去；
-  - 隔离的 `HOME`、`VONVON_HOME`、userData 和 `VONVON_DESKTOP_TEST_HOME` 只写在启动被测应用或测试的那一条命令前面，例如 `HOME=<临时目录> VONVON_HOME=<临时目录>/vonvon npm test`，不 export。git、gh 和签名命令不带这些变量，用 Mac 上的正常账号和钥匙串。不碰 owner 在用的 bridge 和数据；
+  - 隔离的 `HOME`、`VONVON_HOME`、userData 和 `VONVON_DESKTOP_TEST_HOME` 只写在启动被测应用或测试的那一条命令前面，例如 `HOME=<临时目录> VONVON_HOME=<临时目录>/vonvon npm test`，不 export。git、gh 和签名命令不带这些变量，用 Mac 上的正常账号和钥匙串。装卸后台服务、碰 launchd 的命令一定要带 `VONVON_HOME`，而且不能是 `$HOME/.vonvon-bot`：launchd 的任务按用户账号区分，只换 HOME 时数据目录还是默认的 `.vonvon-bot`，任务名就是 owner 在用的 `com.vonvon.bot.daemon`；换了 `VONVON_HOME`，任务名才带上数据目录的哈希。除了下一条允许预览版会话做的步骤，不碰 owner 在用的 bridge 和数据；
   - 没有申请拦着，范围靠提示管。Claude 的提示写明这次用哪些隔离目录、哪些不碰：owner 的 bridge 和它的数据、owner 的飞书客户端；owner 的 `~/.vonvon-bot` 和 `com.vonvon.bot.daemon` 只有预览版会话能碰，而且只在替换装好的 app、做 `docs/v1-plan.md` 第 2 节标"Codex 先查""Codex 接着查"的步骤时碰，Claude 的提示按步骤号列出这几步。Codex 只做这次检查或预览版要的事，要做提示以外的事就停下，在回复里写明；
   - Mac 锁屏时 Computer Use 会失败（getpaseo/paseo#3346）。遇到就停下，不重试，回复第一行写"卡住了："，由 Claude 通知 owner；
   - Codex 用文字回复结果，Claude 把结论贴进 PR。做完删除 worktree，归档会话。
