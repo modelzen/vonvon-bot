@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { afterAll, describe, expect, it, vi } from 'vitest';
-import { createGroupExecutor, parseBindGroupInput, type BindGroupInput } from '../src/admin/groups';
+import { createGroupExecutor, describeGroupFailure, parseBindGroupInput, UNNAMED_GROUP, type BindGroupInput } from '../src/admin/groups';
+import { log } from '../src/core/logger';
 import { createAdminIpcCaller, createAdminIpcResponder } from '../src/admin/ipc';
 import { addProject, listProjects, listProjectsIn } from '../src/project/registry';
 import { joinExistingGroup } from '../src/project/lifecycle';
@@ -25,6 +26,10 @@ function channelFixture() {
   const list = vi.fn(async () => ({ code: 0, data: { items: [{ chat_id: 'oc_a', name: 'Group A' }], has_more: true, page_token: 'page2' } }));
   const channel = { rawClient: { im: { v1: { message: { create: message }, chatMembers: { isInChat: membership }, chat: { list } } } } } as unknown as LarkChannel;
   return { channel, message, membership, list };
+}
+/** A thrown SDK (axios) error carrying the Feishu body in `response.data`. */
+function axiosError(status: number, data: unknown): Error {
+  return Object.assign(new Error(`Request failed with status code ${status}`), { response: { status, data } });
 }
 const input = (directory: string): BindGroupInput => ({ chatId: 'oc_a', projectName: 'First', directory, backend: 'codex-appserver', kind: 'multi' });
 
@@ -117,6 +122,48 @@ describe('desktop group commands in the owning bot', () => {
     const invalid = join(paths.appDir, 'invalid.json');
     await writeFile(invalid, '{}');
     await expect(listProjectsIn(invalid)).rejects.toThrow('格式无效');
+  });
+
+  it('turns Feishu failures into readable text and logs the raw error with its phase', async () => {
+    const fail = vi.spyOn(log, 'fail').mockImplementation(() => {});
+    try {
+      const fixture = channelFixture();
+      const execute = createGroupExecutor(fixture.channel);
+      const denied = axiosError(400, { code: 99991672, msg: 'Access denied. One of the following scopes is required: [im:chat, im:chat:readonly]' });
+      fixture.list.mockRejectedValueOnce(denied);
+      const missing = '缺少飞书权限 im:chat:readonly（读取群信息）。在 Bot 设置点「一键开权限」，再到开发者后台创建版本并发布。';
+      await expect(execute({ kind: 'joinedGroups' })).rejects.toMatchObject({ code: 'GROUP_UPSTREAM', message: missing });
+      expect(fail).toHaveBeenLastCalledWith('groups', denied, { phase: 'joined-groups' });
+      fixture.list.mockResolvedValueOnce({ code: 99991672, msg: 'scopes is required: [im:chat:readonly]' } as never);
+      await expect(execute({ kind: 'joinedGroups' })).rejects.toThrow(missing);
+      expect(fail).toHaveBeenLastCalledWith('groups', expect.objectContaining({ message: missing }), { phase: 'joined-groups', code: 99991672, msg: 'scopes is required: [im:chat:readonly]' });
+      const notMember = axiosError(400, { code: 232011, msg: 'operator is not in the chat' });
+      fixture.membership.mockRejectedValueOnce(notMember);
+      await expect(execute({ kind: 'bindGroup', input: input(paths.appDir) })).rejects.toThrow('飞书接口出错 code=232011：operator is not in the chat');
+      expect(fail).toHaveBeenLastCalledWith('groups', notMember, { phase: 'bind-group' });
+      fixture.membership.mockResolvedValueOnce({ code: 0, data: {} } as never);
+      await expect(execute({ kind: 'bindGroup', input: input(paths.appDir) })).rejects.toThrow('无法确认机器人群成员身份');
+      expect(fail).toHaveBeenLastCalledWith('groups', expect.any(Error), { phase: 'bind-group' });
+    } finally { fail.mockRestore(); }
+  });
+
+  it('names the scopes Feishu accepts when the granted one would not do, and keeps plain errors readable', () => {
+    expect(describeGroupFailure(axiosError(400, { code: 99991672, msg: 'required: [im:chat:read, im:chat]' })))
+      .toBe('缺少飞书权限 im:chat:read 或 im:chat（读取群信息）。到开发者后台开通其中一项，再创建版本并发布。');
+    expect(describeGroupFailure(axiosError(400, { code: 99991672, msg: 'Access denied.' }))).toContain('im:chat:readonly（读取群信息）');
+    expect(describeGroupFailure({ code: 99991663, msg: '' })).toBe('飞书接口出错 code=99991663：没有说明');
+    expect(describeGroupFailure(axiosError(502, '<html>bad gateway</html>'))).toBe('飞书群接口调用失败：Request failed with status code 502');
+  });
+
+  it('lists a chat without a name instead of failing the whole page, and skips one without an id', async () => {
+    const fixture = channelFixture();
+    fixture.list.mockResolvedValueOnce({ code: 0, data: { items: [{ chat_id: 'oc_named', name: 'Named' }, { chat_id: 'oc_blank', name: ' ' }, { chat_id: 'oc_none' }, { name: 'No id' }], has_more: false } } as never);
+    const page = await createGroupExecutor(fixture.channel)({ kind: 'joinedGroups' });
+    expect(page).toEqual({ groups: [
+      { chatId: 'oc_named', name: 'Named', bound: false },
+      { chatId: 'oc_blank', name: UNNAMED_GROUP, bound: false },
+      { chatId: 'oc_none', name: '（未命名群）', bound: false },
+    ] });
   });
 
   it('parses the exact supported binding shape', () => {

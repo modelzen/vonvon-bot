@@ -129,6 +129,21 @@ describe('synchronous desktop facade', () => {
     expect(seen).toEqual([3]);
   });
 
+  it('keeps the daemon message and a plain error code on rejected requests and error events', async () => {
+    const h = harness();
+    const { client } = createDesktopFacades(h.transport);
+    h.replies.set(desktopChannels.run, async () => ({ ok: false, error: { kind: 'rpc', code: 'upstream', message: '缺少飞书权限 im:chat:readonly（读取群信息）。' } }));
+    await expect(client.run({ type: 'refresh' })).rejects.toMatchObject({ message: '缺少飞书权限 im:chat:readonly（读取群信息）。', code: 'upstream' });
+    h.replies.set(desktopChannels.run, async () => ({ ok: false, error: { kind: 'rpc', code: 'not a code!', message: 'refused' } }));
+    const rejected = await client.run({ type: 'refresh' }).catch((error: unknown) => error);
+    expect(rejected).toBeInstanceOf(Error);
+    expect(rejected).not.toHaveProperty('code');
+    const seen: Error[] = [];
+    client.onError(error => seen.push(error));
+    h.event({ type: 'error', value: { kind: 'rpc', code: 'conflict', message: '机器人未启用或尚未运行' } });
+    expect(seen[0]).toMatchObject({ message: '机器人未启用或尚未运行', code: 'conflict' });
+  });
+
   it('retains errors and quit requests until listeners attach', () => {
     const h = harness();
     const { client, shell } = createDesktopFacades(h.transport);

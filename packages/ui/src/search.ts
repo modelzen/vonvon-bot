@@ -15,7 +15,7 @@ type AgentGroup = {title: string; aliases?: readonly string[]; fields: readonly 
 const item = (title: string, aliases: readonly string[] = [], options: Omit<Target, 'title' | 'aliases'> = {}): Target => ({title, aliases, ...options});
 const agentGroups: readonly AgentGroup[] = [
   {title: 'Bot 身份', fields: [item('启用 Bot', ['停用 Bot'])]},
-  {title: '连接与权限', fields: [item('应用 ID', ['App ID']), item('首次运行清单', ['开权限', '事件订阅', '发布版本']), item('刷新飞书凭据', ['重新授权']), item('飞书权限与连接', ['检查连接'])]},
+  {title: '连接与权限', fields: [item('应用 ID', ['App ID']), item('首次运行清单', ['开权限', '事件订阅', '发布版本']), item('飞书权限', ['一键开权限']), item('刷新飞书凭据', ['重新扫码', '重新授权']), item('飞书权限与连接', ['检查连接'])]},
   {title: '任务卡片', aliases: ['飞书任务卡片', '卡片显示'], fields: [item('显示工具调用'), item('显示模型')]},
   {title: '运行策略', aliases: ['任务行为与提醒'], fields: [item('最大并发任务'), item('当前运行并发'), item('空闲超时（秒，0 为关闭）', ['空闲超时']), item('运行中收到新消息', ['待处理消息策略', 'steer', 'queue'])]},
   {title: '任务结束提醒', fields: [item('提醒方式'), item('长任务阈值（分钟）', ['长任务阈值'], {guide: '先将提醒方式设为「长任务」，即可调整阈值。'})]},
@@ -38,11 +38,12 @@ const membershipGroups: readonly Group[] = [
   {title: '响应成员', fields: [item('添加成员 Open ID'), item('移除成员', [], {field: '', guide: '在响应成员列表中找到要移除的成员。'}), item('允许所有成员', ['清空白名单'], {guide: '设置了成员白名单后，会显示「清空白名单」。'})]},
   {title: '话题模型', fields: [item('选择话题'), item('话题身份', [], {field: '选择话题', guide: '选择话题后可以查看身份。'}), item('本话题模型', [], {field: '选择话题', guide: '先选择话题，再设置该话题的模型。'}), item('自定义模型 ID', ['话题手填模型 ID'], {field: '选择话题', guide: '先选择话题，再在「本话题模型」里选「自定义模型 ID…」。'}), item('推理强度', ['话题推理强度'], {field: '选择话题', guide: '先选择话题并选定具体模型，再调整推理强度。'})]},
 ];
+const noBotGuide = '没有 Bot 时，请先注册 Bot。';
 const globalGroups: readonly {page: Page; section: string; fields: readonly Target[]}[] = [
   {page: 'coffee', section: '咖啡一下', fields: [item('通知 Bot'), item('通知状态'), item('查看通知规则'), item('Hook 配置')]},
   {page: 'coffee', section: '本机 Hook', fields: [item('本机 Hook', [], {field: 'Codex Hook'}), item('Codex Hook', ['修复 Codex Hook']), item('Claude Hook', ['修复 Claude Hook'])]},
-  {page: 'coffee', section: '接力设置', fields: [item('接力设置', ['CLI 转发'], {field: '启用咖啡一下', guide: '没有 Bot 时，请先添加 Bot。'}), item('启用咖啡一下', [], {guide: '没有 Bot 时，请先添加 Bot。'})]},
-  {page: 'coffee', section: '通知偏好', fields: [item('通知偏好', ['CLI 通知设置'], {field: '通知范围', guide: '没有 Bot 时，请先添加 Bot。'}), ...['通知范围', '转发 Claude', '转发 Codex', '离开时保活'].map(title => item(title, [], {guide: '没有 Bot 时，请先添加 Bot。'})), ...['转发权限审批', '审批超时（秒）', '发送任务完成卡', '允许从完成卡续聊', '续聊等待（秒）', '本会话放行缓存', '在场检测', '在场检测平台', '离开判定（秒）'].map(title => item(title, [], {reveal: 'cli-advanced', guide: '没有 Bot 时，请先添加 Bot。'}))]},
+  {page: 'coffee', section: '接力设置', fields: [item('接力设置', ['CLI 转发'], {field: '启用咖啡一下', guide: noBotGuide}), item('启用咖啡一下', [], {guide: noBotGuide})]},
+  {page: 'coffee', section: '通知偏好', fields: [item('通知偏好', ['CLI 通知设置'], {field: '通知范围', guide: noBotGuide}), ...['通知范围', '转发 Claude', '转发 Codex', '离开时保活'].map(title => item(title, [], {guide: noBotGuide})), ...['转发权限审批', '审批超时（秒）', '发送任务完成卡', '允许从完成卡续聊', '续聊等待（秒）', '本会话放行缓存', '在场检测', '在场检测平台', '离开判定（秒）'].map(title => item(title, [], {reveal: 'cli-advanced', guide: noBotGuide}))]},
   {page: 'application', section: '启动选项', fields: [item('运行状态'), item('重启 daemon'), item('登录电脑时启动', ['开机启动'])]},
   {page: 'application', section: '命令行工具', fields: [item('vonvon', ['CLI', '修复命令行工具'])]},
   {page: 'application', section: 'daemon 运行', fields: [item('运行方式'), item('daemon 服务', ['启动 daemon', '停止 daemon']), item('临时运行 Bot', [], {guide: '仅运行指定 Bot 时显示当前临时运行状态。'})]},
@@ -69,7 +70,7 @@ function expand(id: string, context: string, base: Destination, groups: readonly
 }
 export function searchEntries(snapshot: DesktopSnapshot): SearchEntry[] {
   const pages: readonly {id: string; title: string; aliases: readonly string[]; page: Page; view?: CollaborationView}[] = [
-    {id: 'agents', title: 'Bot', aliases: ['机器人', '注册 Bot', '加入飞书群并设置工作目录'], page: 'collaboration', view: 'agents'},
+    {id: 'agents', title: 'Bot', aliases: ['机器人', '注册 Bot', '添加 Bot', '加入飞书群并设置工作目录'], page: 'collaboration', view: 'agents'},
     {id: 'setup', title: '首次运行清单', aliases: ['准备执行工具', '扫码', '开权限', '一键开权限', '事件订阅', '卡片回调', '发布版本', '长连接'], page: 'setup'},
     {id: 'groups', title: '群聊', aliases: ['飞书群', '项目', '已连接飞书群'], page: 'collaboration', view: 'groups'},
     {id: 'usage', title: 'Codex 用量', aliases: ['账号', '套餐', '限额', '活动', '热力图'], page: 'usage'},

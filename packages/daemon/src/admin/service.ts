@@ -349,9 +349,10 @@ export interface AdminSetupStatus {
   event: EventDiagnosis;
   /**
    * ④ 必需 scope 中尚未授权的（undefined = 没查成；空 = 已齐全）+ 一键授权深链。
+   * missingJoinScopes 是加入现有群要的 scope（同样三态）：缺了只提醒——拉进群不会提醒绑定，查找已加入的群会失败。
    * grantUrl 始终给（预选全部 scope，缺啥点一次补齐）。
    */
-  scopes: { missingRequired?: string[]; grantUrl: string };
+  scopes: { missingRequired?: string[]; missingJoinScopes?: string[]; grantUrl: string };
   /** 开发者后台「事件与回调」配置页深链（事件订阅没写 API，只能引导手动配 + 发版本）。 */
   eventConfigUrl: string;
   /** 开发者后台这个应用的首页（版本管理与发布在里面）。 */
@@ -802,6 +803,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
         event,
         scopes: {
           missingRequired: validation.ok ? validation.missingScopes : undefined,
+          missingJoinScopes: validation.ok ? validation.missingJoinScopes : undefined,
           grantUrl: buildScopeGrantUrl(app.id, app.tenant),
         },
       };
@@ -815,7 +817,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
 
     async registerBotByQr(opts): Promise<QrRegisterResult | QrRegisterFailure> {
       // 「没启动只读」：只读预览不许扫码加机器人——必须先有 daemon 在跑。
-      if (deps.readonlyPreview) throw new NotWiredYetError('➕ 添加机器人');
+      if (deps.readonlyPreview) throw new NotWiredYetError('注册 Bot');
       // ① 扫码会话：透传 onQr/onStatus 给上层做 SSE；signal 取消 → SDK reject code='abort'。
       let creds;
       try {

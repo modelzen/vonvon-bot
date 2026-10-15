@@ -1,6 +1,7 @@
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { log } from '../core/logger';
 import { labelScope } from '../config/scopes';
+import { scopeDenial, type FeishuErrorBody } from '../utils/feishu-error';
 
 /**
  * Inbound CONTEXT weaving — give codex the上下文 a Feishu @ alone doesn't carry.
@@ -46,8 +47,6 @@ const THREAD_WEAVE_MAX = 20;
  * dropped (we only want recent context) and the truncation is logged. */
 const THREAD_PAGE_SIZE = 50;
 
-/** Feishu OpenAPI error code for "the app lacks a scope this call needs" (same on every endpoint). */
-const SCOPE_DENIED_CODE = 99991672;
 /** The scope this app requests for reading chat history with its own identity (config/scopes.ts). */
 const HISTORY_SCOPE = 'im:message:readonly';
 
@@ -150,41 +149,6 @@ export async function fetchThreadContext(
     warnThreadContextFailed(threadId, err);
     return [];
   }
-}
-
-/** Feishu's error body, as thrown by the SDK (axios `response.data`) or returned with a non-zero code. */
-interface FeishuErrorBody {
-  code?: unknown;
-  msg?: unknown;
-  error?: { permission_violations?: { subject?: unknown }[] };
-}
-
-/** A Feishu call rejected because the app lacks a scope. */
-export interface ScopeDenial {
-  code: number;
-  /** Scopes Feishu says would satisfy the call (any one of them); empty when it didn't list them. */
-  accepted: string[];
-}
-
-/**
- * Recognise Feishu's "app lacks a scope" rejection (code 99991672) from either
- * shape the SDK surfaces: a thrown axios error carrying the body in
- * `response.data`, or a resolved body with the non-zero code. The accepted
- * scopes come from `error.permission_violations[].subject`, else from the
- * bracketed list in `msg` ("One of the following scopes is required: [a, b]").
- * Returns undefined for every other failure. Exported for testing.
- */
-export function scopeDenial(failure: unknown): ScopeDenial | undefined {
-  if (!failure || typeof failure !== 'object') return undefined;
-  const wrapped = (failure as { response?: { data?: unknown } }).response?.data;
-  const body = (wrapped && typeof wrapped === 'object' ? wrapped : failure) as FeishuErrorBody;
-  if (body.code !== SCOPE_DENIED_CODE) return undefined;
-  const isScope = (s: unknown): s is string => typeof s === 'string' && /^[\w.:-]+$/.test(s);
-  const violations = body.error?.permission_violations;
-  const fromViolations = Array.isArray(violations) ? violations.map((v) => v?.subject).filter(isScope) : [];
-  const listed = typeof body.msg === 'string' ? /\[([^\]]*)\]/.exec(body.msg)?.[1] : undefined;
-  const fromMsg = listed ? listed.split(',').map((s) => s.trim()).filter(isScope) : [];
-  return { code: SCOPE_DENIED_CODE, accepted: fromViolations.length ? fromViolations : fromMsg };
 }
 
 /**

@@ -10,6 +10,13 @@ import {useDraft, useDraftGuard} from './settings/DraftGuard';
 import type {PendingAgentGroups} from './pending-groups';
 
 type Mode = {kind: 'create'} | {kind: 'existing'} | {kind: 'bind'; group: PendingGroup};
+/** The protocol's project-name rule, checked here so the user sees why instead of a generic request failure. */
+export function projectNameProblem(value: string): string | undefined {
+  const name = value.trim();
+  if (/[/\\]/.test(name)) return '名称里不能有 / 或 \\，请换成别的字符。';
+  if (/[\x00-\x1f]/.test(name)) return '名称里不能有换行、制表符等控制字符。';
+  return undefined;
+}
 type Props = {agent: Agent; pending?: PendingAgentGroups; initialGroup?: PendingGroup; onClose: () => void; onChanged: () => Promise<void>};
 export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChanged}: Props) {
   const {navigate} = useDraftGuard();
@@ -26,6 +33,7 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
   const [manual, setManual] = useState<Extract<CommandResult, {kind: 'groups'}>>();
   const active = useRef(true);
   useEffect(() => () => {active.current = false;}, []);
+  const nameProblem = projectNameProblem(name);
   const dirty = Boolean(name !== (mode.kind === 'bind' ? mode.group.name : '') || folder || existingDirectory || tool !== 'codex' || conversation !== 'threads');
   function discard() {setName(''); setFolder(undefined); setExistingDirectory(false); setTool('codex'); setConversation('threads');}
   function close() {if (!busy) navigate(() => {active.current = false; onClose();});}
@@ -36,6 +44,7 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
   async function save() {
     if (busy || mode.kind === 'existing') return false;
     if (!name.trim() || ((mode.kind === 'bind' || existingDirectory) && !folder)) {setError('请填写名称并选择工作目录。'); return false;}
+    if (nameProblem) {setError(nameProblem); return false;}
     setBusy(true); setError('');
     try {
       const reply = mode.kind === 'create'
@@ -49,7 +58,8 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
     } catch (failure) {setError(failure instanceof Error ? failure.message : '操作失败，填写的内容已保留。'); return false;}
     finally {setBusy(false);}
   }
-  useDraft(dirty, {title: '加入飞书群', save, discard});
+  // No save action: "保存并离开" would create a real Feishu group on the way out.
+  useDraft(dirty, {title: '加入飞书群', discard});
   async function chooseFolder() {
     setBusy(true); setError('');
     try {
@@ -84,14 +94,14 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
         {manual && <><FormField label="已经加入的飞书群"><select aria-label="选择飞书群" value="" disabled={busy} onChange={event => {const group = manual.groups.find(item => item.id === event.target.value); if (group) switchMode({kind: 'bind', group: {chatId: group.id, name: group.name, addedAt: 0}});}}><option value="">请选择已加入的群</option>{manual.groups.map(group => <option key={group.id} value={group.id} disabled={group.bound}>{group.name}{group.bound ? '（已绑定）' : ''}</option>)}</select></FormField>{!manual.groups.length && <p>没有可显示的群。请确认机器人已加入目标群。</p>}{manual.nextCursor && <Button disabled={busy} onClick={() => void findGroups(manual.nextCursor)}>加载更多</Button>}</>}
       </> : <>
         {mode.kind === 'bind' && <InlineNotice title={`绑定 ${mode.group.name}`}>Bot · {agent.name}</InlineNotice>}
-        <FormField label={mode.kind === 'create' ? '飞书群名称' : '本地绑定名称'}><input aria-label={mode.kind === 'create' ? '飞书群名称' : '本地绑定名称'} maxLength={100} disabled={busy} value={name} onChange={event => setName(event.target.value)} /></FormField>
+        <FormField label={mode.kind === 'create' ? '飞书群名称' : '本地绑定名称'} error={nameProblem}><input aria-label={mode.kind === 'create' ? '飞书群名称' : '本地绑定名称'} maxLength={100} disabled={busy} value={name} onChange={event => setName(event.target.value)} /></FormField>
         <SettingsGroup>
           {mode.kind === 'create' && <SettingsRow title="工作目录来源" trailing={<select aria-label="目录来源" disabled={busy} value={existingDirectory ? 'existing' : 'default'} onChange={event => {setExistingDirectory(event.target.value === 'existing'); setFolder(undefined);}}><option value="default">新建空白目录</option><option value="existing">使用现有目录</option></select>} />}
           <SettingsRow title="工作目录" value={mode.kind === 'create' && !existingDirectory ? '在 Bot 的默认项目目录中创建空白目录' : folder?.displayPath ?? '未选择'} trailing={(mode.kind === 'bind' || existingDirectory) && <Button disabled={busy} onClick={() => void chooseFolder()}>选择文件夹</Button>} />
           <SettingsRow title="执行工具" trailing={<select aria-label="执行工具" disabled={busy} value={tool} onChange={event => setTool(toolSchema.parse(event.target.value))}><option value="codex">Codex</option><option value="claude">Claude</option></select>} />
           <SettingsRow title="会话方式" trailing={<select aria-label="会话方式" disabled={busy} value={conversation} onChange={event => setConversation(conversationSchema.parse(event.target.value))}><option value="threads">按话题独立会话</option><option value="shared">整群连续会话</option></select>} />
         </SettingsGroup>
-        <Button variant="primary" loading={busy} disabled={!name.trim() || ((mode.kind === 'bind' || existingDirectory) && !folder)} onClick={() => void save()}>{mode.kind === 'create' ? '创建飞书群并加入' : '绑定工作目录并发送欢迎卡片'}</Button>
+        <Button variant="primary" loading={busy} disabled={!name.trim() || Boolean(nameProblem) || ((mode.kind === 'bind' || existingDirectory) && !folder)} onClick={() => void save()}>{mode.kind === 'create' ? '创建飞书群并加入' : '绑定工作目录并发送欢迎卡片'}</Button>
       </>}
       {error && <InlineNotice title="操作未完成" tone="danger">{error}</InlineNotice>}
     </div>

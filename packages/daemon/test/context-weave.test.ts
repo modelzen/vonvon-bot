@@ -7,12 +7,12 @@ import {
   fetchQuotedMessage,
   fetchThreadContext,
   sanitizeContext,
-  scopeDenial,
   weaveQuote,
   weaveSender,
   weaveThreadHistory,
   type ContextMessage,
 } from '../src/bot/context-weave';
+import { feishuError, scopeDenial } from '../src/utils/feishu-error';
 
 describe('extractMessageText', () => {
   it('reads a plain text body and resolves @mentions to names', () => {
@@ -324,6 +324,16 @@ describe('scopeDenial', () => {
     expect(scopeDenial(axiosError(400, { code: 230002, msg: 'Bot is not in the chat' }))).toBeUndefined();
     expect(scopeDenial(axiosError(502, '<html>bad gateway</html>'))).toBeUndefined();
     expect(scopeDenial(undefined)).toBeUndefined();
+  });
+});
+
+describe('feishuError', () => {
+  it('reads code and msg from a thrown SDK error or a returned body, and nothing else', () => {
+    expect(feishuError(axiosError(400, { code: 230002, msg: 'Bot is not in the chat' }))).toEqual({ code: 230002, msg: 'Bot is not in the chat' });
+    expect(feishuError({ code: 99991663, msg: '' })).toEqual({ code: 99991663 });
+    expect(feishuError({ code: 0, msg: 'ok' })).toBeUndefined();
+    expect(feishuError(axiosError(502, '<html>bad gateway</html>'))).toBeUndefined();
+    expect(feishuError(new Error('socket hang up'))).toBeUndefined();
   });
 });
 

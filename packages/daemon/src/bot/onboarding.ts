@@ -162,7 +162,7 @@ async function validateAndReport(
   const v = await validateAppCredentials(cfg.accounts.app.id, secret, cfg.accounts.app.tenant);
   if (!v.ok) {
     console.error(`✗ 应用凭据校验失败：${v.reason}`);
-    console.error('  应用可能被禁用/未发布；可运行 `vonvon open`，在这个 Bot 的页面点「重新授权」重新扫码。');
+    console.error('  应用可能被禁用/未发布；可运行 `vonvon open`，在这个 Bot 的页面点「重新扫码」换一份凭据。');
     return null;
   }
   console.log(`✓ 凭据校验通过  bot: ${v.botName ?? '-'}  appId: ${cfg.accounts.app.id}`);

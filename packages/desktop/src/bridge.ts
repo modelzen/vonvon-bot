@@ -11,7 +11,7 @@ import { allowedExternalUrl, type ExternalUrlKind } from '../../ui/src/url-actio
 import { ServiceActionError } from './service-error.js';
 import { StartHostRefusal } from './daemon-manager.js';
 import {
-  desktopChannels, type AttachedDaemon, type DesktopBridge, type DesktopEvent,
+  desktopChannels, safeErrorCode, type AttachedDaemon, type DesktopBridge, type DesktopEvent,
   type DesktopResources, type IpcResult, type SafeFailure, type ShellActions,
 } from './ipc-contract.js';
 
@@ -26,12 +26,72 @@ export async function openAllowedExternal(raw: unknown): Promise<void> {
   await shell.openExternal(url);
 }
 
+/** The web UI shows daemon messages unabridged; the desktop caps them at this many characters. */
+const daemonMessageLimit = 300;
+/** The patterns below backtrack, so their cost grows with the square of the length; only this much is scanned. */
+const daemonMessageScanLimit = 2000;
+
+/** A key that names a secret, as in `app_secret`, `access_token`, `password`, `Authorization` or `api_key`. */
+const secretKey = String.raw`((?:secret|token|password|passwd|credential|authorization|api[_-]?key)[\w-]{0,64})`;
+/** The auth scheme that may come before the value, as in `Authorization: Bearer …`. */
+const authScheme = String.raw`(?:(?:bearer|basic)\s+)?`;
+/** A value that looks like a credential rather than a word: 8+ characters with a letter and a digit, or 16+. */
+const credential = String.raw`(?:(?=[\w.~+/=-]*[a-z])(?=[\w.~+/=-]*\d)[\w.~+/=-]{8,}|[\w.~+/=-]{16,})`;
+/** A quoted value goes up to the quote that opened it, spaces, commas, the other quote and escapes included;
+ * without one, to the end of the scanned text. */
+const quotedSecret = new RegExp(String.raw`${secretKey}(["']?\s*[:=]\s*)(["'])(?:\\.|(?!\3)[^\r\n\\])*`, 'gi');
+/** `key=value`, or a quoted key or value as in JSON and inspected objects: the value is always the secret. */
+const assignedSecret = new RegExp(String.raw`${secretKey}(["']?\s*=\s*["']?|["']\s*:\s*["']?|\s*:\s*["'])${authScheme}[^\s"',;&)}\]]+`, 'gi');
+/** An unquoted `Authorization:` or `authorization=` value is a credential under any scheme (Token, Digest, …), so
+ * the rest of the text goes, up to 256 characters. A quoted one was already cut at its closing quote by {@link quotedSecret}. */
+const authorizationValue = /\b(authorization)(["']?\s*[:=]\s*)(?![\s"'])[^\r\n]{1,256}/gi;
+/** Unquoted `key: value` is also prose ("Invalid token: expired"), so only a credential-shaped value goes. */
+const labelledSecret = new RegExp(String.raw`${secretKey}(\s*:\s*)${authScheme}${credential}`, 'gi');
+/** Any 8+ character word after Bearer goes: "Bearer authentication failed" loses a word, a short token does not leak. */
+const bareBearer = /\b(bearer)\s+[\w.~+/=-]{8,}/gi;
+/** `Basic` and base64 or base64url: a credential has a digit, a symbol or padding, or a capital after its first
+ * letter. "Basic settings", "Basic Settings" and "Basic HTTP" stay. */
+const bareBasic = /\b(basic)\s+([\w+/-]{4,}={0,2})/gi;
+function maskBasic(match: string, scheme: string, value: string): string {
+  return /[\d=+/_-]/.test(value) || /[a-z]/.test(value) && /[A-Z]/.test(value.slice(1)) ? `${scheme} …` : match;
+}
+
+/**
+ * Daemon RPC errors are the user-facing texts the web UI already shows, so the desktop shows them too, as one
+ * plain line: no control or format characters, no URL credentials, query strings or fragments, no bearer
+ * tokens, `secret=…`-style values, Feishu access tokens or `sk-` API keys, and at most
+ * {@link daemonMessageLimit} characters. File paths stay: the web UI shows them too, and they say what failed.
+ */
+export function sanitizeDaemonMessage(raw: string): string {
+  // Cut before matching. The word the cut lands in goes too: half a secret would slip past the patterns.
+  const head = raw.length > 2 * daemonMessageScanLimit ? raw.slice(0, 2 * daemonMessageScanLimit) : raw;
+  const points = Array.from(head);
+  const cut = head !== raw || points.length > daemonMessageScanLimit;
+  const scanned = cut ? points.slice(0, daemonMessageScanLimit).join('').replace(/\S+$/, '') : raw;
+  const text = scanned
+    .replace(/\p{Cf}/gu, '')
+    .replace(/[\p{Cc}\u2028\u2029]/gu, ' ')
+    .replace(/\b([a-z][a-z\d+.-]{0,31}:\/\/)[^\s/?#@]*@/gi, '$1')
+    .replace(/\b([a-z][a-z\d+.-]{0,31}:\/\/[^\s?#]*)[?#]\S*/gi, '$1')
+    .replace(quotedSecret, '$1$2$3…')
+    .replace(authorizationValue, '$1$2…')
+    .replace(assignedSecret, '$1$2…')
+    .replace(labelledSecret, '$1$2…')
+    .replace(bareBearer, '$1 …')
+    .replace(bareBasic, maskBasic)
+    .replace(/\b[tua]-[A-Za-z0-9]{24,}\b/g, '…')
+    .replace(/\bsk-[\w-]{16,}/g, '…')
+    .replace(/\s+/g, ' ').trim();
+  const chars = Array.from(text);
+  if (chars.length === 0) return 'Daemon request failed';
+  if (!cut && chars.length <= daemonMessageLimit) return text;
+  return `${chars.slice(0, daemonMessageLimit - 1).join('')}…`;
+}
+
 function safeFailure(error: unknown): SafeFailure {
   if (error instanceof RpcError) {
-    return {
-      kind: 'rpc', message: 'Daemon request failed',
-      ...( /^[A-Za-z0-9_.-]{1,80}$/.test(error.code) ? { code: error.code } : {}),
-    };
+    const code = safeErrorCode(error.code);
+    return { kind: 'rpc', message: sanitizeDaemonMessage(error.message), ...(code ? { code } : {}) };
   }
   if (error instanceof ConnectionError) return { kind: 'connection', message: 'Daemon connection lost' };
   if (error instanceof ServiceActionError) return { kind: 'validation', message: error.safeMessage };
