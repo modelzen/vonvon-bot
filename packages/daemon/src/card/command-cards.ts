@@ -104,7 +104,8 @@ export function buildModelCard(state: ModelCardState): CardObject {
         selectStatic({
           actionId: MC.model,
           placeholder: '选择模型',
-          initial: state.model,
+          // 手填的 id 不在选项里，不当初值（上面单独写出了当前模型）
+          initial: cur ? state.model : undefined,
           options: visible.map((m) => ({ label: m.displayName, value: m.id })),
         }),
       );

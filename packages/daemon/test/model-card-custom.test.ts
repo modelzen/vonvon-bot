@@ -7,6 +7,9 @@ import type { AgentEvent, AgentInput, TurnOptions } from '../src/agent/types';
 
 const fake = vi.hoisted(() => ({
   record: undefined as any,
+  project: undefined as any,
+  sendFails: false,
+  channelSend: vi.fn(async () => ({})),
   backend: { capabilities: { steer: true }, id: 'claude-agent', listModels: vi.fn(async () => []), resumeThread: vi.fn(), startThread: vi.fn() },
   sent: [] as { card: unknown; replyTo?: string; inThread?: boolean }[],
   update: vi.fn(async () => true),
@@ -17,7 +20,7 @@ vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_ctx: unknown,
 vi.mock('../src/agent', async (original) => ({ ...await original<object>(), createBackend: () => fake.backend }));
 vi.mock('../src/project/registry', async (original) => ({
   ...await original<object>(),
-  getProjectByChatId: async () => ({ name: 'test', chatId: 'chat', cwd: '/test', kind: 'single', backend: 'claude-agent' }),
+  getProjectByChatId: async () => fake.project,
 }));
 vi.mock('../src/bot/session-store', async (original) => ({
   ...await original<object>(),
@@ -34,6 +37,7 @@ vi.mock('../src/bot/session-title-coordinator', () => ({
 vi.mock('../src/card/managed', async (original) => ({
   ...await original<object>(),
   sendManagedCard: async (_channel: unknown, _to: string, card: unknown, replyTo?: string, inThread?: boolean) => {
+    if (fake.sendFails) throw new Error('rate limited');
     fake.sent.push({ card, replyTo, inThread });
     return { messageId: `card-${fake.sent.length}` };
   },
@@ -71,7 +75,7 @@ function message(text: string): NormalizedMessage {
 }
 function setup() {
   const cfg: AppConfig = { accounts: { app: { id: 'app', secret: 'test', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner' } } };
-  const channel = { send: vi.fn(async () => ({})), rawClient: { im: { v1: { messageReaction: {
+  const channel = { send: fake.channelSend, rawClient: { im: { v1: { messageReaction: {
     create: async () => ({ data: {} }), delete: async () => ({}),
   } } } } };
   orchestrator = createOrchestrator(channel as never, cfg, '/test');
@@ -92,6 +96,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   fake.sent.length = 0;
   fake.record = undefined;
+  fake.sendFails = false;
+  fake.project = { name: 'test', chatId: 'chat', cwd: '/test', kind: 'single', backend: 'claude-agent' };
   fake.backend.listModels.mockResolvedValue([
     { id: 'default', displayName: 'Default', description: '', supportedEfforts: ['low', 'high', 'max'], defaultEffort: 'high', isDefault: true, hidden: false },
     { id: 'opus', displayName: 'Opus', description: '', supportedEfforts: ['low', 'high', 'max'], defaultEffort: 'high', isDefault: false, hidden: false },
@@ -161,6 +167,39 @@ describe('/model 卡手填模型 id', () => {
     await until(() => expect(fake.sent).toHaveLength(3));
     expect(fake.record).toBeUndefined();
     expect(JSON.stringify(fake.sent[2]!.card)).toContain('这里还没有会话');
+  });
+
+  it('新卡发不出去时，回一句文字说明结果', async () => {
+    fake.record = record();
+    const o = setup();
+    const ask = message('/model');
+    await o.onMessage(ask);
+    await until(() => expect(fake.sent).toHaveLength(1));
+    fake.sendFails = true;
+    await submit('card-1', 'deepseek-chat');
+    await until(() => expect(fake.channelSend).toHaveBeenCalledWith(
+      'chat',
+      { markdown: expect.stringContaining('已切换到手填的模型') },
+      { replyTo: ask.messageId, replyInThread: false },
+    ));
+    expect(fake.record).toMatchObject({ model: 'deepseek-chat', modelCustom: true });
+  });
+
+  it('从手填的项目默认新开的会话记下 modelCustom', async () => {
+    fake.project = { ...fake.project, defaultModel: 'kimi-k2', defaultEffort: 'high', defaultModelCustom: true };
+    const options: (TurnOptions | undefined)[] = [];
+    fake.backend.startThread.mockResolvedValue({
+      sessionId: 'host', isAlive: () => true, close: vi.fn(async () => {}), abort: vi.fn(async () => {}), steer: vi.fn(async () => {}),
+      runStreamed(_input: AgentInput, turn?: TurnOptions) {
+        options.push(turn);
+        return { turnId: () => 't1', events: (async function* (): AsyncGenerator<AgentEvent> { yield { type: 'done', turnId: 't1' }; })() };
+      },
+    });
+    const o = setup();
+    await o.onMessage(message('hello'));
+    await until(() => expect(options).toHaveLength(1));
+    expect(fake.backend.startThread).toHaveBeenCalledWith(expect.objectContaining({ model: 'kimi-k2', effort: 'high' }));
+    expect(fake.record).toMatchObject({ model: 'kimi-k2', modelCustom: true });
   });
 
   it('只有发卡的人能提交', async () => {

@@ -380,6 +380,13 @@ export function pickDefault(
   return { model: def?.id ?? 'gpt-5.5', effort };
 }
 
+/** Whether `model` is the project's hand-typed default (3.11): a session started
+ * on it records `modelCustom`, so the /model card and the web keep showing it as
+ * hand-typed after the project default changes. */
+function isCustomDefault(project: Pick<Project, 'defaultModel' | 'defaultModelCustom'> | undefined, model: string | undefined): boolean {
+  return Boolean(model && project?.defaultModelCustom && project.defaultModel === model);
+}
+
 /**
  * 新建/绑定项目卡的后端下拉选项：列出该权限档兼容的**全部**（非隐藏）后端——已下载的
  * 正常显示；**未下载的（如 Claude）也列出并标注「未下载·去控制台下载」**，让用户知道它
@@ -1562,6 +1569,7 @@ export function createOrchestrator(
         const neverSeen = !thread;
         let model = prior?.model;
         let effort = prior?.effort;
+        let modelCustom = prior?.modelCustom;
         // Match new-topic initialization for single-session groups. Older flat
         // sessions may also lack these fields; bind the next ordinary turn to
         // explicit defaults so the card describes what we actually request.
@@ -1572,9 +1580,12 @@ export function createOrchestrator(
             effort: project?.defaultEffort,
             custom: project?.defaultModelCustom,
           });
-          model ??= defaults.model;
+          if (!model) {
+            model = defaults.model;
+            modelCustom = isCustomDefault(project, model);
+          }
           effort ??= defaults.effort;
-          if (prior) await patchSession(sessionKey, { model, effort });
+          if (prior) await patchSession(sessionKey, { model, effort, modelCustom });
         }
         // codex's history is EMPTY when the session is brand-new (neverSeen) OR a
         // resume failed and we fell back to a new thread (recreated) — both want
@@ -1600,6 +1611,7 @@ export function createOrchestrator(
             titleJobKey,
             model,
             effort,
+            modelCustom,
             // `text` is already file-woven when preIngested; use the raw
             // `summaryText` (handleTurn's original) so the session label isn't
             // manifest boilerplate + a temp path.
@@ -1622,6 +1634,7 @@ export function createOrchestrator(
               ...prior,
               model,
               effort,
+              modelCustom,
               cwd,
               sessionId: thread.sessionId,
               backend: be.id,
@@ -1897,6 +1910,7 @@ export function createOrchestrator(
         images,
         model,
         effort,
+        modelCustom: isCustomDefault(project, model),
         cwd,
         mode: perm.mode,
         network: perm.network,
@@ -1989,12 +2003,9 @@ export function createOrchestrator(
         });
         // 记录里跨后端污染的 model id（旧版未路由的 /model 卡写入）不在本后端
         // 列表里——回落默认，别把坏值当 select 初值渲染。手填的 id（会话上标了
-        // modelCustom，或来自手填的项目默认）不在列表里也照显示。
-        const recCustom = Boolean(
-          rec?.model &&
-            (rec.modelCustom || (project?.defaultModelCustom && rec.model === project.defaultModel)),
-        );
-        const recModel = rec?.model && (recCustom || models.some((m) => m.id === rec.model)) ? rec.model : undefined;
+        // modelCustom）不在列表里也照显示。
+        const recModel =
+          rec?.model && (rec.modelCustom || models.some((m) => m.id === rec.model)) ? rec.model : undefined;
         const state: ModelCardState = {
           chatId: msg.chatId,
           threadId: sessionKey,
@@ -2219,6 +2230,7 @@ export function createOrchestrator(
           titleJobKey,
           model: rec?.model,
           effort: rec?.effort,
+          modelCustom: rec?.modelCustom,
           summary: '(新会话)',
           createdAt: Date.now(),
           updatedAt: Date.now(),
@@ -2437,10 +2449,18 @@ export function createOrchestrator(
           log.info('card', 'model-custom', { threadId: state.threadId, model: parsed.id });
         }
         state.createdAt = Date.now();
-        const res = await sendManagedCard(channel, state.chatId, buildModelCard(state), state.replyTo, state.inThread ?? false);
-        modelPending.delete(evt.messageId);
-        pruneModelPending();
-        modelPending.set(res.messageId, state);
+        try {
+          const res = await sendManagedCard(channel, state.chatId, buildModelCard(state), state.replyTo, state.inThread ?? false);
+          modelPending.delete(evt.messageId);
+          pruneModelPending();
+          modelPending.set(res.messageId, state);
+        } catch (err) {
+          // 原卡已锁、新卡没发出去：回一句文字，让人知道结果。
+          log.fail('card', err, { phase: 'model-custom-card' });
+          await channel
+            .send(state.chatId, { markdown: state.note ?? '' }, { replyTo: state.replyTo, replyInThread: state.inThread })
+            .catch(() => undefined);
+        }
       })().catch((err) => log.fail('card', err, { phase: 'model-custom' })));
     })
     .on(RES.pick, ({ evt, value }) => {
@@ -4161,6 +4181,8 @@ export function createOrchestrator(
     knownThreadId?: string;
     model?: string;
     effort?: ReasoningEffort;
+    /** {@link model} is the project's hand-typed default; persisted with it */
+    modelCustom?: boolean;
     /** The run's workspace. Resolves relative `![](…)` image refs in the reply
      * and is persisted as the session's cwd — NOT the bridge process's cwd. */
     cwd?: string;
@@ -4382,6 +4404,7 @@ export function createOrchestrator(
         titleJobKey: opts.titleJobKey,
         model: opts.model,
         effort: opts.effort,
+        modelCustom: opts.modelCustom,
         summary: opts.summary ?? opts.firstText.slice(0, 80),
         createdAt: Date.now(),
         updatedAt: Date.now(),
@@ -5021,6 +5044,7 @@ export function createOrchestrator(
         titleJobKey: opts.titleJobKey,
         model: opts.model,
         effort: opts.effort,
+        modelCustom: opts.modelCustom,
         summary: opts.summary ?? objective.slice(0, 80),
         createdAt: Date.now(),
         updatedAt: Date.now(),
