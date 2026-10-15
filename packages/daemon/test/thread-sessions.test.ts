@@ -13,6 +13,7 @@ const fake = vi.hoisted(() => ({
   createCard: vi.fn(async () => 'card'),
   send: vi.fn(async () => ({})),
   history: vi.fn(async (..._args: unknown[]) => ({ messages: [] as unknown[], ok: true, complete: true })),
+  chat: vi.fn(async (..._args: unknown[]) => ({ messages: [] as unknown[], ok: true, complete: true })),
   get: vi.fn(async ({ path }: { path: { message_id: string } }) => ({ data: { items: [{
     message_id: path.message_id, thread_id: 'omt_new', msg_type: 'text', create_time: '1',
     sender: { id: 'ou_q', sender_type: 'user', sender_name: '王五' }, body: { content: JSON.stringify({ text: `${path.message_id} 的原话` }) },
@@ -28,6 +29,7 @@ vi.mock('../src/project/registry', async (original) => ({
 vi.mock('../src/bot/context-weave', async (original) => ({
   ...await original<object>(),
   fetchThreadContext: fake.history,
+  fetchChatContext: fake.chat,
 }));
 vi.mock('../src/bot/session-store', async (original) => ({
   ...await original<object>(),
@@ -106,6 +108,7 @@ beforeEach(() => {
   fake.createCard.mockReset().mockResolvedValue('card');
   fake.send.mockReset().mockResolvedValue({});
   fake.history.mockReset().mockResolvedValue({ messages: [], ok: true, complete: true });
+  fake.chat.mockReset().mockResolvedValue({ messages: [], ok: true, complete: true });
   fake.backend.resumeThread.mockReset();
   fake.backend.startThread.mockReset();
 });
@@ -225,7 +228,7 @@ describe('forced session change notice', () => {
 
 describe('names and watermark (s09)', () => {
   const quoted = (id: string) => fake.get.mock.calls.some(([p]) => p.path.message_id === id);
-  const ctx = (messageId: string, text: string, createTime: number) => ({ messageId, senderName: '李四', text, fromUser: true, createTime });
+  const ctx = (messageId: string, text: string, createTime: number) => ({ messageId, senderName: '李四', text, from: 'user', createTime });
 
   it('does not re-quote the topic root on a later turn, but keeps a reply quote in the main area', async () => {
     fake.records.set('omt_topic', record('omt_topic'));
@@ -259,8 +262,7 @@ describe('names and watermark (s09)', () => {
     const o = setup();
     await o.onMessage(message('first time here', 'omt_topic', { rootId: 'om_root', replyToMessageId: 'om_root' }));
     await done();
-    expect(run.consumed[0]!.text).toContain('[话题中在此之前已有的消息');
-    expect(run.consumed[0]!.text).toContain('王五：om_root 的原话');
+    expect(run.consumed[0]!.text).toMatch(/^\[飞书 · 群「test」· 话题「om_root 的原话」\]\n.* 王五：om_root 的原话\n\[\/飞书\]\n/);
     expect(run.consumed[0]!.text).not.toContain('用户引用了一条消息');
   });
 
@@ -370,6 +372,272 @@ describe('names and watermark (s09)', () => {
     await o.onMessage(message('again', 'omt_topic'));
     await done();
     expect(fake.records.get('omt_topic')).toMatchObject({ sessionId: 'fresh', lastSeenAt: 0, seen: [] });
+  });
+});
+
+describe('record block (s14)', () => {
+  const ctx = (messageId: string, text: string, createTime: number, extra: object = {}) =>
+    ({ messageId, senderName: '李四', text, from: 'user', createTime, ...extra });
+  const clock = '(?:\\d\\d-\\d\\d )?\\d\\d:\\d\\d';
+  const seenOf = (key: string) => fake.records.get(key).seen;
+
+  it('back-fills the main area since the watermark, in one block above the trigger', async () => {
+    fake.records.set('chat', record('chat', { lastSeenAt: 5 }));
+    const run = thread('old-chat');
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const trigger = message('两个话题的结论总结一下');
+    fake.chat.mockResolvedValueOnce({ ok: true, complete: true, messages: [
+      ctx('om_1', '下午三点发版', trigger.createTime - 2000),
+      ctx('om_p', '网关日志里 500 都来自 OrderService', trigger.createTime - 1000, { senderName: '小P', from: 'bot' }),
+    ] });
+    const o = setup();
+    await o.onMessage(trigger);
+    await done();
+    expect(fake.chat).toHaveBeenCalledWith(expect.anything(), 'chat',
+      expect.objectContaining({ stopAt: 5, before: trigger.createTime, excludeMessageId: trigger.messageId }));
+    expect(fake.history).not.toHaveBeenCalled();
+    expect(run.consumed[0]!.text).toMatch(new RegExp(`^\\[飞书 · 群「test」· 主区\\]\\n${clock} 李四：下午三点发版\\n`
+      + `${clock} 小P（bot）：网关日志里 500 都来自 OrderService\\n\\[/飞书\\]\\n\\n\\[本条消息的发信人：Owner（open_id：owner）\\]\\n\\n两个话题的结论总结一下$`));
+    await vi.waitFor(() => expect(fake.records.get('chat').lastSeenAt).toBe(trigger.createTime));
+    expect(fake.log.info).toHaveBeenCalledWith('intake', 'record-block', expect.objectContaining({ place: 'main', lines: 2, opening: false }));
+  });
+
+  it('opens a new main session with the 20 most recent messages, and says how many were left out', async () => {
+    const run = thread('main-session');
+    fake.backend.startThread.mockResolvedValue(run.t);
+    const trigger = message('第一次在主区');
+    fake.chat.mockResolvedValueOnce({ ok: true, complete: true,
+      messages: Array.from({ length: 25 }, (_, i) => ctx(`om_${i}`, `第 ${i} 条`, trigger.createTime - 25_000 + i * 1000)) });
+    const o = setup();
+    await o.onMessage(trigger);
+    await done();
+    expect(fake.chat).toHaveBeenCalledWith(expect.anything(), 'chat', expect.objectContaining({ stopAt: 0, enough: 20 }));
+    const text = run.consumed[0]!.text ?? '';
+    expect(text.split('\n')[1]).toBe('（更早还有 5 条没带进来，需要时用 vonvon 飞书 skill 查）');
+    expect(text.match(/李四：/g)).toHaveLength(20);
+    expect(text).not.toContain('第 4 条');
+    expect(text).toContain('第 5 条');
+  });
+
+  it('runs on the trigger alone when the main pull fails, and keeps the watermark', async () => {
+    fake.records.set('chat', record('chat', { lastSeenAt: 5 }));
+    const run = thread('old-chat');
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    fake.chat.mockResolvedValueOnce({ ok: false, complete: false, messages: [] });
+    const o = setup();
+    const m = message('pull fails');
+    await o.onMessage(m);
+    await done();
+    expect(run.consumed[0]!.text).not.toContain('[飞书');
+    expect(run.consumed[0]!.text).toContain('pull fails');
+    await vi.waitFor(() => expect(seenOf('chat')).toEqual([{ id: m.messageId, at: m.createTime }]));
+    expect(fake.records.get('chat').lastSeenAt).toBe(5);
+  });
+
+  it('skips a late main-area re-push that is under the watermark', async () => {
+    const now = Date.now();
+    fake.records.set('chat', record('chat', { lastSeenAt: now - 60_000 }));
+    const o = setup();
+    await o.onMessage(message('sent while offline', undefined, { createTime: now - 5 * 60_000 }));
+    expect(fake.log.info).toHaveBeenCalledWith('intake', 'late-redelivery-skipped', expect.objectContaining({ msgId: `msg-${seq}` }));
+    expect(fake.backend.resumeThread).not.toHaveBeenCalled();
+  });
+
+  it('does not back-fill a main session that has no watermark, and starts one', async () => {
+    fake.records.set('chat', record('chat', { lastSeenAt: undefined }));
+    const run = thread('old-chat');
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup();
+    const m = message('resumed by hand');
+    await o.onMessage(m);
+    await done();
+    expect(fake.chat).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(fake.records.get('chat').lastSeenAt).toBe(m.createTime));
+  });
+
+  it('pulls nothing for a /goal in the main area, and marks only its trigger', async () => {
+    fake.records.set('chat', record('chat', { lastSeenAt: 5 }));
+    const run = thread('old-chat');
+    fake.backend.resumeThread.mockResolvedValue(Object.assign(run.t, {
+      clearGoal: vi.fn(async () => undefined),
+      runGoal: () => ({ turnId: () => 'goal', events: (async function* (): AsyncGenerator<AgentEvent> {
+        yield { type: 'turn_started', turnId: 'goal' };
+        yield { type: 'done', turnId: 'goal' };
+        yield { type: 'goal_update', status: 'complete', objective: '整理文档', tokensUsed: 1, timeUsedSeconds: 1, tokenBudget: null };
+      })() }),
+    }));
+    const o = setup();
+    const m = message('/goal 整理文档');
+    await o.onMessage(m);
+    await vi.waitFor(() => expect(seenOf('chat')).toEqual([{ id: m.messageId, at: m.createTime }]));
+    expect(fake.chat).not.toHaveBeenCalled();
+    expect(fake.records.get('chat').lastSeenAt).toBe(5);
+  });
+
+  it("uses the guest tier's own watermark, and leaves the admin tier's alone", async () => {
+    fake.project = { name: 'test', chatId: 'chat', cwd: '/test', kind: 'single', guestMode: 'qa' };
+    fake.records.set('chat#guest', record('chat#guest', { lastSeenAt: 7 }));
+    fake.records.set('chat#admin', record('chat#admin', { lastSeenAt: 3 }));
+    const run = thread('old-chat#guest');
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup();
+    const m = message('访客的问题', undefined, { senderId: 'ou_guest' });
+    await o.onMessage(m);
+    await done();
+    expect(fake.chat).toHaveBeenCalledWith(expect.anything(), 'chat', expect.objectContaining({ stopAt: 7 }));
+    await vi.waitFor(() => expect(fake.records.get('chat#guest').lastSeenAt).toBe(m.createTime));
+    expect(fake.records.get('chat#admin')).toMatchObject({ lastSeenAt: 3 });
+  });
+
+  it("reads a card that was still streaming again on the next turn, so the session gets the bot's final answer", async () => {
+    fake.records.set('chat', record('chat', { lastSeenAt: 5 }));
+    const run = thread('old-chat');
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const first = message('先看看');
+    const card = (text: string, streaming: boolean) =>
+      ctx('om_p', text, first.createTime - 2000, { senderName: '小P', from: 'bot', ...(streaming ? { streaming } : {}) });
+    const asked = ctx('om_1', '还有别的吗', first.createTime - 1000);
+    fake.chat.mockResolvedValueOnce({ ok: true, complete: true, messages: [card('查到一半', true), asked] });
+    const o = setup();
+    await o.onMessage(first);
+    await done();
+    expect(run.consumed[0]!.text).toContain('小P（bot，还没答完）：查到一半');
+    await vi.waitFor(() => expect(fake.records.get('chat').lastSeenAt).toBe(first.createTime));
+    fake.log.info.mockClear();
+    const second = message('那结论呢', undefined, { createTime: first.createTime + 5000 });
+    fake.chat.mockResolvedValueOnce({ ok: true, complete: true, messages: [
+      card('网关的 500 都来自 OrderService', false), asked, ctx(first.messageId, '先看看', first.createTime),
+    ] });
+    await o.onMessage(second);
+    await done();
+    // The pull reaches back to the card; of what it finds, only the card is new.
+    expect(fake.chat).toHaveBeenLastCalledWith(expect.anything(), 'chat', expect.objectContaining({ stopAt: first.createTime - 2000 }));
+    expect(run.consumed[1]!.text).toMatch(new RegExp(`^\\[飞书 · 群「test」· 主区\\]\\n${clock} 小P（bot）：网关的 500 都来自 OrderService\\n\\[/飞书\\]\\n`));
+    // Finished now, so the turn after starts from the watermark again.
+    await vi.waitFor(() => expect(fake.records.get('chat').lastSeenAt).toBe(second.createTime));
+    expect(fake.records.get('chat').streaming).toEqual([]);
+  });
+
+  it('stops reading a card again once it has streamed for 10 minutes', async () => {
+    fake.records.set('chat', record('chat', { lastSeenAt: 5 }));
+    const run = thread('old-chat');
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const m = message('先看看');
+    fake.chat.mockResolvedValueOnce({ ok: true, complete: true, messages: [
+      ctx('om_stuck', '一直在转', m.createTime - 11 * 60_000, { senderName: '小P', from: 'bot', streaming: true }),
+      ctx('om_p', '查到一半', m.createTime - 2000, { senderName: '小P', from: 'bot', streaming: true }),
+    ] });
+    const o = setup();
+    await o.onMessage(m);
+    await done();
+    await vi.waitFor(() => expect(fake.records.get('chat').lastSeenAt).toBe(m.createTime));
+    expect(fake.records.get('chat').streaming).toEqual([{ id: 'om_p', at: m.createTime - 2000 }]);
+  });
+
+  it("skips a main-area message whose own event comes in after a later message's block carried it", async () => {
+    fake.records.set('chat', record('chat', { lastSeenAt: 5 }));
+    const run = thread('old-chat');
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const x = message('第二条');
+    const y = message('第一条', undefined, { messageId: 'om_y', createTime: x.createTime - 500 });
+    fake.chat.mockResolvedValueOnce({ ok: true, complete: true, messages: [ctx('om_y', '第一条', y.createTime, { mentionsMe: true })] });
+    const o = setup();
+    await o.onMessage(x);
+    await done();
+    expect(run.consumed[0]!.text).toContain('李四 → @你：第一条');
+    await vi.waitFor(() => expect(fake.records.get('chat').lastSeenAt).toBe(x.createTime));
+    await o.onMessage(y); // half a second late: not a re-push
+    expect(fake.log.info).toHaveBeenCalledWith('intake', 'late-redelivery-skipped', expect.objectContaining({ msgId: 'om_y' }));
+    expect(run.consumed).toHaveLength(1);
+  });
+
+  it('drops a queued message that the running turn already carried as a line', async () => {
+    fake.records.set('chat', record('chat', { lastSeenAt: 5 }));
+    const run = thread('old-chat');
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const x = message('第二条');
+    const y = message('第一条', undefined, { messageId: 'om_y', createTime: x.createTime - 500 });
+    type Pull = { messages: unknown[]; ok: boolean; complete: boolean };
+    let pulled!: (p: Pull) => void;
+    fake.chat.mockImplementationOnce(() => new Promise<Pull>((resolve) => { pulled = resolve; }));
+    const o = setup();
+    await o.onMessage(x);
+    await vi.waitFor(() => expect(fake.chat).toHaveBeenCalled());
+    await o.onMessage(y); // in while x's back-fill is pulled: queued behind it
+    await vi.waitFor(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'queued', expect.anything()));
+    pulled({ ok: true, complete: true, messages: [ctx('om_y', '第一条', y.createTime, { mentionsMe: true })] });
+    await vi.waitFor(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'queued-seen-skipped', { msgId: 'om_y' }));
+    expect(run.consumed).toHaveLength(1);
+    expect(run.consumed[0]!.text).toContain('李四 → @你：第一条');
+  });
+
+  it('does not steer in a message that the running turn already carried as a line', async () => {
+    fake.records.set('chat', record('chat', { lastSeenAt: 5 }));
+    const run = thread('old-chat');
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => { finish = resolve; });
+    run.t.runStreamed = (input: AgentInput) => {
+      run.consumed.push(input);
+      return { turnId: () => 'turn', events: (async function* (): AsyncGenerator<AgentEvent> {
+        yield { type: 'turn_started', turnId: 'turn' };
+        await finished;
+        yield { type: 'done', turnId: 'turn' };
+      })() };
+    };
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const x = message('第二条');
+    // Y quotes a message, so its preparation waits on that lookup.
+    const y = message('第一条', undefined, { messageId: 'om_y', createTime: x.createTime - 500, replyToMessageId: 'om_q' });
+    type Pull = { messages: unknown[]; ok: boolean; complete: boolean };
+    let pulled!: (p: Pull) => void;
+    fake.chat.mockImplementationOnce(() => new Promise<Pull>((resolve) => { pulled = resolve; }));
+    let looked!: () => void;
+    const lookup = new Promise<void>((resolve) => { looked = resolve; });
+    const get = fake.get.getMockImplementation()!;
+    fake.get.mockImplementation(async (req) => { if (req.path.message_id === 'om_q') await lookup; return get(req); });
+    const o = setup();
+    await o.onMessage(x);
+    await vi.waitFor(() => expect(fake.chat).toHaveBeenCalled());
+    await o.onMessage(y);
+    await vi.waitFor(() => expect(fake.get).toHaveBeenCalledWith(expect.objectContaining({ path: { message_id: 'om_q' } })));
+    pulled({ ok: true, complete: true, messages: [ctx('om_y', '第一条', y.createTime, { mentionsMe: true })] });
+    await vi.waitFor(() => expect(fake.records.get('chat').lastSeenAt).toBe(x.createTime));
+    looked();
+    await vi.waitFor(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'queued-seen-skipped', { msgId: 'om_y' }));
+    finish();
+    await done();
+    fake.get.mockImplementation(get);
+    expect(run.t.steer).not.toHaveBeenCalled();
+    expect(run.consumed).toHaveLength(1);
+  });
+
+  it('does not hold shutdown for a main-area pull that does not answer, and keeps the watermark', async () => {
+    fake.records.set('chat', record('chat', { lastSeenAt: 5 }));
+    const run = thread('old-chat');
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    fake.chat.mockImplementationOnce(() => new Promise(() => undefined));
+    const o = setup();
+    await o.onMessage(message('卡住的补拉'));
+    await vi.waitFor(() => expect(fake.chat).toHaveBeenCalled());
+    await o.shutdown();
+    expect(run.consumed).toHaveLength(0);
+    expect(run.t.close).toHaveBeenCalled();
+    expect(fake.records.get('chat')).toMatchObject({ lastSeenAt: 5 });
+  });
+
+  it("puts another bot's answer in a topic's back-fill, under the topic's header", async () => {
+    fake.records.set('omt_topic', record('omt_topic', { lastSeenAt: 5 }));
+    const run = thread('old');
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const m = message('接着说', 'omt_topic');
+    fake.history.mockResolvedValueOnce({ ok: true, complete: true, messages: [
+      ctx('om_p', '网关的 500 都来自 OrderService', m.createTime - 1000, { senderName: '小P', from: 'bot' }),
+    ] });
+    const o = setup();
+    await o.onMessage(m);
+    await done();
+    expect(fake.chat).not.toHaveBeenCalled();
+    expect(run.consumed[0]!.text).toMatch(new RegExp(`^\\[飞书 · 群「test」· 话题\\]\\n${clock} 小P（bot）：网关的 500 都来自 OrderService\\n\\[/飞书\\]\\n`));
   });
 });
 

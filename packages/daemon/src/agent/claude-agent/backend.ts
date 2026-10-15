@@ -120,6 +120,11 @@ export type ClaudeSdkFacade = Pick<
   'query' | 'listSessions' | 'getSessionInfo' | 'getSessionMessages' | 'renameSession'
 >;
 
+// On Linux the SDK calls process.report.getReport() for every session it builds, to tell musl from glibc. The
+// report looks up the name of every open socket's peer synchronously, which held the event loop for 25 to 30 s on
+// JP-VPS, so every chat of the bot stalled and the record-block pull timed out. The SDK reads only the header.
+(process.report as { excludeNetwork?: boolean }).excludeNetwork = true;
+
 let sdkPromise: Promise<ClaudeSdkFacade> | undefined;
 /**
  * Lazy-load the SDK via the on-demand loader (bridge/global node_modules → user

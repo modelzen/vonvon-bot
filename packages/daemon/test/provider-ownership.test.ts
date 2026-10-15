@@ -60,6 +60,13 @@ vi.mock('../src/card/run-card-stream', () => ({
   },
 }));
 vi.mock('../src/voice/inbound', async original => ({ ...await original<object>(), ingestVoice: fake.voice }));
+// The real bridge wires a topic registry on disk: a topic turn reads its title
+// before starting (s14), which the fake clock's ticks don't wait for, and the
+// writes would land in the real data directory.
+vi.mock('../src/bot/topic-registry', async original => ({
+  ...await original<object>(),
+  createTopicRegistry: () => ({ note: async () => undefined, list: async () => [], get: async () => undefined }),
+}));
 let createOrchestrator: typeof import('../src/bot/handle-message').createOrchestrator;
 import type { AppConfig } from '../src/config/schema';
 

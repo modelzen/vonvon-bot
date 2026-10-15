@@ -17,8 +17,11 @@ const BRIDGE_SENDER_PREFIX =
  * text in the middle of a user's question remains ordinary content. */
 const BRIDGE_QUOTE_PREFIX =
   /^\[用户引用了一条消息（来自 [^\r\n]+）：\r?\n[^\r\n]+\r?\n\][ \t]*(?:\r?\n[ \t]*){0,2}/u;
-const BRIDGE_THREAD_HISTORY_PREFIX =
-  /^\[话题中在此之前已有的消息（按时间先后排列，供你理解上下文）：\r?\n(?:(?!\][ \t]*(?:\r?\n|$))[^\r\n]+\r?\n)+\][ \t]*(?:\r?\n[ \t]*){0,2}/u;
+/** The record block (context-weave.weaveRecordBlock): a header line, lines, and
+ * a closing `[/飞书]` line. Every line inside starts with a time or a note, so
+ * the first bare `[/飞书]` line is the block's own. */
+const BRIDGE_RECORD_BLOCK_PREFIX =
+  /^\[飞书 · [^\r\n]*\]\r?\n(?:(?!\[\/飞书\][ \t]*(?:\r?\n|$))[^\r\n]*\r?\n)*\[\/飞书\][ \t]*(?:\r?\n[ \t]*){0,2}/u;
 const BRIDGE_FILE_MANIFEST_SUFFIX =
   /(?:^|(?:\r?\n){2})\[用户上传了 \d+ 个附件，已保存到本地，可用 shell \/ 读取工具按下面的绝对路径直接打开：\r?\n(?:- [^\r\n]+ → [^\r\n]+\r?\n)+\][ \t]*$/u;
 
@@ -30,7 +33,7 @@ export function stripBridgeSenderPrefix(text: string): string {
 /**
  * Remove every envelope the Bridge may weave around an Agent prompt:
  *
- *   thread history -> sender -> quote -> user body -> local file manifest
+ *   record block -> sender -> quote -> user body -> local file manifest
  *
  * Title sources normally travel separately from that woven prompt. This is a
  * strict recovery boundary for a queued/restarted job, so an internal open_id,
@@ -43,7 +46,7 @@ export function stripBridgeMessageEnvelope(text: string): string {
   do {
     previous = out;
     out = out
-      .replace(BRIDGE_THREAD_HISTORY_PREFIX, '')
+      .replace(BRIDGE_RECORD_BLOCK_PREFIX, '')
       .replace(BRIDGE_SENDER_PREFIX, '')
       .replace(BRIDGE_QUOTE_PREFIX, '');
   } while (out !== previous);

@@ -196,11 +196,12 @@ export { bindModeFor } from '../project/lifecycle';
 import { refreshBranch } from '../project/announcement';
 import { leaveChat, transferOwnership } from '../project/group-ops';
 import {
+  backfillFrom,
   clearSessionTitleJobKey,
   detachSessionsForChat,
   getSession,
-  isDelivered,
   isSeen,
+  isUnread,
   listSessions,
   nextSeen,
   nothingSeen,
@@ -213,7 +214,7 @@ import {
   type SessionTitlePolicySnapshot,
 } from './session-store';
 import { SessionTitleCoordinator } from './session-title-coordinator';
-import type { TopicPerson, TopicRegistry, TopicSighting } from './topic-registry';
+import { topicTitle, type TopicPerson, type TopicRegistry, type TopicSighting } from './topic-registry';
 import {
   sessionTitleSourceFromMessage,
   type SessionTitleSource,
@@ -229,13 +230,17 @@ import {
   weaveFileManifest,
 } from './media';
 import {
+  BACKFILL_MAX,
+  STREAMING_RECHECK_MS,
+  fetchChatContext,
   fetchQuotedMessage,
   fetchThreadContext,
   keepRecent,
-  THREAD_WEAVE_MAX,
+  OPENING_MAX,
   weaveQuote,
+  weaveRecordBlock,
   weaveSender,
-  weaveThreadHistory,
+  type PullOpts,
   type ThreadPull,
 } from './context-weave';
 import {
@@ -398,6 +403,10 @@ export interface QueuedTurn {
   seen?: SeenMark;
   /** How {@link seen} moves the watermark (session-store.nextSeen); 'id' when unset. */
   seenHow?: SeenHow;
+  /** Other bots' cards its record block wove while they were still streaming (SessionRecord.streaming). */
+  streaming?: SeenMark[];
+  /** Ids of the messages its record block carried (see ActiveState.woven). */
+  woven?: string[];
 }
 
 /** How long ago the message was sent (0 when its createTime is unknown). */
@@ -495,6 +504,10 @@ interface ActiveState {
    * but let the in-flight turn finish streaming; the loop then ends after that
    * turn's `done` (or immediately if no turn is in flight). No summary card. */
   endGoal?: () => void;
+  /** The messages the record block of this run's first turn carried, set once
+   * the host took that turn. Feishu does not keep events in order, so a message
+   * queued while the block was pulled can be one of them: it is not run again. */
+  woven?: Set<string>;
   /** goal run (launchGoalRun): turns are auto-continued by codex and the queue
    * is never consumed — incoming messages get a prompt instead of queueing
    * (they'd be dropped silently at the end otherwise). */
@@ -847,6 +860,15 @@ export function createOrchestrator(
   const sema = new Semaphore(getMaxConcurrentRuns(cfg));
   let shuttingDown = false;
   let shutdownPromise: Promise<void> | undefined;
+  const onStop = new Set<() => void>();
+  /** `p`, or `fallback` once shutdown starts: shutdown does not wait on a back-fill's Feishu calls. */
+  function orStop<T>(p: Promise<T>, fallback: T): Promise<T> {
+    if (shuttingDown) return Promise.resolve(fallback);
+    let stop!: () => void;
+    const stopped = new Promise<T>((resolve) => { stop = () => resolve(fallback); });
+    onStop.add(stop);
+    return Promise.race([p, stopped]).finally(() => onStop.delete(stop));
+  }
   const acceptedTasks = new Set<Promise<unknown>>();
   const shutdownErrors = new Set<unknown>();
 
@@ -950,8 +972,8 @@ export function createOrchestrator(
   /** Record that a message reached the session (see session-store.nextSeen).
    * Fire-and-forget like every watermark write; the function form keeps
    * concurrent marks from overwriting each other. */
-  function markSeen(sessionKey: string, mark: SeenMark, how: SeenHow = 'id'): void {
-    void trackTask(patchSession(sessionKey, (rec) => nextSeen(rec, mark, how)).catch(() => undefined));
+  function markSeen(sessionKey: string, mark: SeenMark, how: SeenHow = 'id', streaming?: SeenMark[]): void {
+    void trackTask(patchSession(sessionKey, (rec) => nextSeen(rec, mark, how, streaming)).catch(() => undefined));
   }
   /** Take back an `id` mark whose message did not reach the session after all. */
   function unmarkSeen(sessionKey: string, id: string): void {
@@ -996,8 +1018,7 @@ export function createOrchestrator(
       // the supervisor's 8 s grace. One lost to a stop is retried next start.
       void withDeadline(fetchQuotedMessage(channel, firstId, names), 10_000).then((root) => {
         if (!root || shuttingDown) return;
-        const self = Boolean(root.senderId && root.senderId === channel.botIdentity?.openId);
-        const rootFrom: TopicPerson = self ? { kind: 'self' } : topicPerson(root.fromUser ? 'user' : 'bot', root.senderId);
+        const rootFrom: TopicPerson = root.from === 'self' ? { kind: 'self' } : topicPerson(root.from, root.senderId);
         void trackTask(topics.note(msg.chatId, { ...sighting, first: { id: firstId, from: rootFrom, at: root.createTime || undefined, text: root.text } }));
       }).catch(fail);
     }).catch(fail));
@@ -1021,16 +1042,16 @@ export function createOrchestrator(
     return u ? { usage: { sessionId: thread.sessionId, used: u.used, window: u.window } } : {};
   }
 
-  /** Feishu re-pushes messages sent while the bot was offline, minutes late
-   * (e10). One this session already took in, as a turn or as a history line,
-   * is skipped. Only late messages pay for the disk read; the main area pulls
-   * no history yet (s14), so there only a delivered id counts. */
-  async function lateRedelivery(msg: NormalizedMessage, sessionKey: string): Promise<boolean> {
-    const lateMs = deliveryLagMs(msg);
-    if (lateMs < 60_000) return false;
+  /** A message this session already took in, as a turn or as a line of a
+   * record block, is skipped. Feishu re-pushes messages sent while the bot was
+   * offline, minutes late (e10), and does not keep events in order: a message's
+   * own event can come in seconds after a later message's back-fill carried it.
+   * So every message pays for the disk read, not only late ones. */
+  async function alreadySeen(msg: NormalizedMessage, sessionKey: string): Promise<boolean> {
+    if (!msg.createTime) return false;
     const rec = await getSession(sessionKey).catch(() => undefined);
-    const taken = msg.threadId ? isSeen(rec, msg.messageId, msg.createTime) : isDelivered(rec, msg.messageId);
-    if (taken) log.info('intake', 'late-redelivery-skipped', { msgId: msg.messageId, lateMs });
+    const taken = isSeen(rec, msg.messageId, msg.createTime);
+    if (taken) log.info('intake', 'late-redelivery-skipped', { msgId: msg.messageId, lateMs: deliveryLagMs(msg) });
     return taken;
   }
 
@@ -1232,7 +1253,7 @@ export function createOrchestrator(
         startReservedRun(msg, goalObjective, ts.sessionKey, true, project, ts, undefined, undefined, undefined, true);
         return;
       }
-      if (await lateRedelivery(msg, ts.sessionKey)) return;
+      if (await alreadySeen(msg, ts.sessionKey)) return;
       void trackTask(handleTurn(msg, text, ts.sessionKey, true, project, ts).catch((err) => log.fail('intake', err)));
       return;
     }
@@ -1283,7 +1304,7 @@ export function createOrchestrator(
         startReservedRun(msg, goalObjective, ts.sessionKey, false, project, ts, undefined, undefined, undefined, true);
         return;
       }
-      if (await lateRedelivery(msg, ts.sessionKey)) return;
+      if (await alreadySeen(msg, ts.sessionKey)) return;
       void trackTask(handleTurn(msg, text, ts.sessionKey, false, project, ts).catch((err) => log.fail('intake', err)));
       return;
     }
@@ -1436,7 +1457,7 @@ export function createOrchestrator(
    *     上文 the bare @ doesn't carry. Best-effort: a deleted/unreadable quote is
    *     skipped, never thrown.
    * Both are gated (messageHasFiles / replyToMessageId) so the common text path
-   * stays await-free. 话题上文 is woven separately in startReservedRun (it is
+   * stays await-free. The record block is woven separately in startReservedRun (it is
    * session-scoped, not per-message). Voice display metadata stays separate
    * from the woven agent input.
    */
@@ -1571,6 +1592,8 @@ export function createOrchestrator(
     sessionKey: string, flat: boolean, project: Project | undefined, perm: TurnPerm, cur: ActiveState,
     extra?: TurnExtra,
   ): Promise<void> {
+    // Already a line of the running turn's record block (see ActiveState.woven): not steered in again.
+    if (wovenSkip(cur, msg)) return;
     if (!extra?.queueOnly && getPendingPolicy(cfg) === 'steer' && cur.run && cur.thread && cur.thread.supportsSteer !== false) {
       const tid = cur.run.turnId();
       if (tid) {
@@ -1611,6 +1634,13 @@ export function createOrchestrator(
       if (sessions.get(sessionKey) === cur.thread) sessions.delete(sessionKey);
     }
     startReservedRun(msg, woven.text, sessionKey, flat, project, perm, images, woven, text, undefined, extra);
+  }
+
+  /** Whether `msg` is a line of the record block `state`'s running turn carried (logged then). */
+  function wovenSkip(state: ActiveState, msg: NormalizedMessage): boolean {
+    if (!state.woven?.has(msg.messageId)) return false;
+    log.info('intake', 'queued-seen-skipped', { msgId: msg.messageId });
+    return true;
   }
 
   /** 🎯 goal 运行中收到消息的统一提示（goal 会话不入队，见 ActiveState.isGoal）。 */
@@ -1680,6 +1710,7 @@ export function createOrchestrator(
         extra.retry.busy();
         return;
       }
+      if (wovenSkip(existing, msg)) return;
       // A run appeared between handleTurn's check and here (we awaited an image
       // download) — queue onto it rather than launch a second turn. `text` is
       // already file-woven when preIngested (handleTurn's fall-through).
@@ -1732,32 +1763,41 @@ export function createOrchestrator(
           return r;
         });
         // For an already-resumed session the high-water mark (lastSeenAt) tells us
-        // which thread messages codex hasn't seen — a pure local read, NOT
-        // dependent on resolveThread's outcome, so it rides the same Promise.all.
+        // which messages codex hasn't seen — a pure local read, NOT dependent on
+        // resolveThread's outcome, so it rides the same Promise.all.
         const priorP = getSession(sessionKey);
-        // 话题上文投机拉取：不等 resolveThread 的 codexEmpty，按已有水位翻页拉到水位为止
-        // （没有记录就按开场拉最近的），汇合后在本地按水位和已送达的 id 收敛成增量。
-        // 只拉比触发消息早的，之后到的消息各自成轮或插话，不重复。不拉的情况：有记录
-        // 但无水位（resume 上来的旧会话，codex 已带历史，只在 recreated 罕见路径补拉）。
+        // 上文投机拉取（话题，或连续群的主区）：不等 resolveThread 的 codexEmpty，按已有
+        // 水位翻页拉到水位为止（水位前有上次还没答完的别的 bot 卡片时，拉到最早那张；没有
+        // 记录就按开场拉最近的），汇合后在本地按水位和已送达的 id 收敛成增量。只拉比触发
+        // 消息早的，之后到的消息各自成轮或插话，不重复。不拉的情况：有记录但无水位（resume
+        // 上来的旧会话，codex 已带历史，只在 recreated 罕见路径补拉）；开话题群的主区不留
+        // 会话（3.5），也不拉。
         const topicId = goal ? undefined : msg.threadId;
-        const pullOpts = { before: msg.createTime || undefined, excludeMessageId: msg.messageId, keepId: msg.rootId, names };
-        const historyP: Promise<ThreadPull | undefined> = topicId
+        let place: 'topic' | 'main' | undefined;
+        if (topicId) place = 'topic';
+        else if (!goal && flat && !msg.threadId) place = 'main';
+        const pullFor = (opts: Pick<PullOpts, 'stopAt' | 'enough'>): Promise<ThreadPull> => {
+          const o = { before: msg.createTime || undefined, excludeMessageId: msg.messageId, names, ...opts };
+          // Cut short by a shutdown, it fails: the turn will not run (launchRun), and the watermark stays.
+          return orStop(topicId ? fetchThreadContext(channel, topicId, { ...o, keepId: msg.rootId }) : fetchChatContext(channel, msg.chatId, o),
+            { messages: [], ok: false, complete: false });
+        };
+        const historyP: Promise<ThreadPull | undefined> = place
           ? priorP.then((p) =>
               p && p.lastSeenAt === undefined
                 ? undefined
-                : fetchThreadContext(channel, topicId, {
-                    ...pullOpts,
-                    stopAt: p?.lastSeenAt ?? 0,
-                    ...(p?.lastSeenAt ? {} : { enough: THREAD_WEAVE_MAX + (p?.seen?.length ?? 0) }),
-                  }),
+                : pullFor({ stopAt: p ? backfillFrom(p) : 0, ...(p?.lastSeenAt ? {} : { enough: OPENING_MAX + (p?.seen?.length ?? 0) }) }),
             )
           : Promise.resolve(undefined);
-        const [images, ingested, { thread: resolved, recreated, reason: recreateReason }, prior, specHistory] = await Promise.all([
+        // The topic's title for the record block's header (the registry never throws).
+        const titleP = topicId && topics ? topics.get(msg.chatId, topicId).then((t) => t?.title) : Promise.resolve(undefined);
+        const [images, ingested, { thread: resolved, recreated, reason: recreateReason }, prior, specHistory, title] = await Promise.all([
           imagesP,
           ingestP,
           resolveP,
           priorP,
           historyP,
+          titleP,
         ]);
         let firstText = ingested.text;
         let thread = resolved;
@@ -1785,40 +1825,61 @@ export function createOrchestrator(
         }
         // codex's history is EMPTY when the session is brand-new (neverSeen) OR a
         // resume failed and we fell back to a new thread (recreated) — both want
-        // the FULL topic woven as opening context, not just the delta.
+        // the opening woven, not just the delta.
         const codexEmpty = neverSeen || recreated;
-        // 话题上文：在话题里 @bot 时，把 bot 还没喂给 codex 的消息补进开场。
-        // codexEmpty（新会话 / resume 失败重建）→ 开场带最近 N 条和话题第一条；已有
-        // 会话 → 只带没见过的（水位之后、不是插话或排队送过的）。Goals skip the
-        // topic-history weave (topicId=undefined above): the objective must stay
-        // self-contained (and under codex's ~4000-char goal limit), and a resumed
-        // thread already carries codex's own history.
+        // 对话记录块：把 bot 还没喂给 codex 的消息补进这一轮。codexEmpty（新会话 /
+        // resume 失败重建）→ 开场带最近 20 条，话题再加第一条；已有会话 → 只带没见过的
+        // （水位之后、不是插话或排队送过的），最多 40 条。Goals skip the record block
+        // (place=undefined above): the objective must stay self-contained (and under
+        // codex's ~4000-char goal limit), and a resumed thread already carries codex's
+        // own history.
         let pull = specHistory;
-        if (topicId && codexEmpty && prior && prior.lastSeenAt !== 0) {
+        let streaming: SeenMark[] = [];
+        let woven: string[] | undefined;
+        if (place && codexEmpty && prior && prior.lastSeenAt !== 0) {
           // The speculative pull stopped at the old session's watermark (or was
           // skipped): the new session needs the whole opening.
-          pull = await fetchThreadContext(channel, topicId, { ...pullOpts, enough: THREAD_WEAVE_MAX });
+          pull = await pullFor({ enough: OPENING_MAX });
         }
-        if (topicId && pull) {
+        if (place && pull) {
           let history = codexEmpty
             ? pull.messages
-            : pull.messages.filter((m) => !isSeen(prior, m.messageId, m.createTime));
-          const rootId = msg.rootId && msg.rootId !== msg.messageId ? msg.rootId : undefined;
+            : pull.messages.filter((m) => isUnread(prior, m.messageId, m.createTime));
+          const rootId = topicId && msg.rootId && msg.rootId !== msg.messageId ? msg.rootId : undefined;
           if (codexEmpty && rootId && !history.some((m) => m.messageId === rootId)) {
             // The topic's first message is no longer re-quoted every turn, so a new
             // session gets it here once, even when the listing leaves it out.
-            const root = await fetchQuotedMessage(channel, rootId, names);
+            const root = await orStop(fetchQuotedMessage(channel, rootId, names), undefined);
             if (root) history = [root, ...history];
           }
-          firstText = weaveThreadHistory(firstText, keepRecent(history, codexEmpty ? rootId : undefined));
+          const kept = keepRecent(history, codexEmpty ? rootId : undefined, codexEmpty ? OPENING_MAX : BACKFILL_MAX);
+          const earlier = pull.complete ? history.length - kept.length : 'some';
+          const now = msg.createTime || Date.now();
+          // Another bot's card still streaming is woven as not done, and read again
+          // next turn for its final answer (3.5), for ten minutes; one that never
+          // finishes is then taken as it was.
+          streaming = kept
+            .filter((m) => m.streaming && now - m.createTime < STREAMING_RECHECK_MS)
+            .map((m) => ({ id: m.messageId, at: m.createTime }));
+          woven = kept.map((m) => m.messageId);
+          const rootTitle = rootId ? topicTitle(history.find((m) => m.messageId === rootId)?.text) : undefined;
+          firstText = weaveRecordBlock(firstText, {
+            place: { group: project?.name, me: channel.botIdentity?.name, ...(topicId ? { topic: { title: title ?? rootTitle } } : {}) },
+            entries: kept,
+            earlier,
+            now,
+          });
+          log.info('intake', 'record-block', { place, lines: kept.length, earlier, opening: codexEmpty, ok: pull.ok, streaming: streaming.length });
         }
         // The watermark moves to the trigger only when everything before it reached
-        // the session: the back-fill succeeded, or there is none (main area until
-        // s14, a resumed session). After a failed back-fill, or a goal in a topic
-        // (no history woven), only the trigger counts; a new session then restarts
-        // from 0 so its next turn pulls the whole topic. Written once the host
-        // accepts the turn (launchRun), not here.
-        const behind = topicId ? Boolean(pull && !pull.ok) : Boolean(goal && msg.threadId);
+        // the session: the back-fill succeeded, or there is none (a resumed
+        // session, or a multi group's main area, which keeps no session). After a
+        // failed back-fill, or a goal (no record block woven), only the trigger
+        // counts; a new session then restarts from 0 so its next turn pulls the
+        // whole opening. The cards still streaming are recorded with an advance
+        // (session-store's `streaming`). Written once the host accepts the turn
+        // (launchRun), not here.
+        const behind = place ? Boolean(pull && !pull.ok) : Boolean(goal && (msg.threadId || flat));
         let seenHow: SeenHow = 'advance';
         if (behind) seenHow = codexEmpty ? 'restart' : 'id';
         const seenMark: SeenMark = { id: msg.messageId, at: msg.createTime };
@@ -1918,6 +1979,8 @@ export function createOrchestrator(
           replayText: extra?.replayText,
           seen: seenMark,
           seenHow,
+          streaming,
+          woven,
           // 编织完成 → turn/start 之间不再读盘：首轮直接用预取的会话记录
           // （新会话及旧单会话的缺失值由上面的 model/effort 补齐）。
           firstRec: prior ?? null,
@@ -4447,6 +4510,9 @@ export function createOrchestrator(
     /** The trigger, marked seen once the host accepts the first turn (see QueuedTurn.seen). */
     seen?: SeenMark;
     seenHow?: SeenHow;
+    /** The first turn's record block: cards still streaming, and the ids it carried (see QueuedTurn). */
+    streaming?: SeenMark[];
+    woven?: string[];
     /** single-session group: reply by quoting (no reply_in_thread / topic). */
     flat?: boolean;
     /** when admin/guest tiers are split: 'admin'|'guest' to namespace the
@@ -4563,7 +4629,7 @@ export function createOrchestrator(
     reaction?: RunReaction,
     onTopicCreated?: () => void,
   ): Promise<void> {
-    if (shuttingDown) { await opts.thread.close(); return; }
+    if (shuttingDown) { reaction?.done(); await opts.thread.close(); return; }
     let activeKey = opts.knownThreadId ?? `pending:${opts.replyTo}`;
     let topicThreadId = opts.knownThreadId;
     // The turn's workspace: resolves relative image refs in the reply and is what
@@ -4583,6 +4649,7 @@ export function createOrchestrator(
     if (shuttingDown) {
       slot.release();
       active.delete(activeKey);
+      reaction?.done();
       await opts.thread.close();
       return;
     }
@@ -4700,6 +4767,8 @@ export function createOrchestrator(
         replayText: opts.replayText,
         seen: opts.seen,
         seenHow: opts.seenHow,
+        streaming: opts.streaming,
+        woven: opts.woven,
       };
       let replyTo = opts.replyTo;
       let replyInThread = opts.flat ? false : (opts.replyInThread ?? Boolean(opts.knownThreadId));
@@ -4969,8 +5038,9 @@ export function createOrchestrator(
             // The host took the input: only now do it and the history woven into
             // it count as seen (a refused turn/start or a crash before here leaves
             // both for the next back-fill and a re-push).
-            if (unseen && topicThreadId) markSeen(topicThreadId, unseen, currentTurn.seenHow);
+            if (unseen && topicThreadId) markSeen(topicThreadId, unseen, currentTurn.seenHow, currentTurn.streaming);
             unseen = undefined;
+            if (currentTurn.woven?.length) state.woven = new Set(currentTurn.woven);
             // Host accepted the first turn. Title generation now overlaps the
             // remainder of that turn; the binding was persisted before this loop.
             beginSessionTitle();
@@ -5178,6 +5248,11 @@ export function createOrchestrator(
             log.info('intake', 'queue-dropped', { depth: state.queue.length, killed, procDead, interrupted });
           }
           break;
+        }
+        // A message queued while this run's back-fill was pulled may be a line of
+        // its record block already (see ActiveState.woven): it is not run again.
+        while (state.queue[0]?.seen && state.woven?.has(state.queue[0].seen.id)) {
+          log.info('intake', 'queued-seen-skipped', { msgId: state.queue.shift()!.seen!.id });
         }
         if (state.queue.length === 0) break;
         settleTurn?.(); // moving on: whatever queued meanwhile made the retry stale
@@ -6147,6 +6222,7 @@ export function createOrchestrator(
   function shutdown(): Promise<void> {
     if (shutdownPromise) return shutdownPromise;
     shuttingDown = true;
+    for (const stop of onStop) stop();
     clearInterval(pendingGroupTimer);
     clearInterval(reaper);
     const cleanup: Promise<unknown>[] = [];
