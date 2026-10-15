@@ -163,7 +163,7 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
 
 ### M8 skill、MCP 和查飞书上下文（s43 到 s48）
 
-**给 owner 什么：** 桌面端有本机 skill 库和 MCP 库（3.6）。skill 可以从 `~/.claude/skills`、`~/.codex/skills`、`~/.agents/skills` 或任意文件夹导入；MCP 可以从 Codex、Claude 的配置导入，也可以手填命令或网址。导入后给 bot 启用，在某个群里另外增减。新建的 bot 不再带你自己的个人指令和 skill，导入的 bot 不变。bot 能用 vonvon 飞书 skill 查本群的话题和另一条会话（3.5）：在主区问"两个话题的结论"，它去读了再答，卡片上写读了哪些。
+**给 owner 什么：** 桌面端有本机 skill 库和 MCP 库（3.6）。skill 可以从 `~/.claude/skills`、`~/.codex/skills`、`~/.agents/skills` 或任意文件夹导入；MCP 可以从 Codex、Claude 的配置导入，也可以手填命令或网址。导入后给 bot 启用，在某个群里另外增减。新建的 bot 不再带你的 Claude 个人指令和两家的个人 skill，导入的 bot 不变。Codex 的 `~/.codex/AGENTS.md` 关不掉，新建的 bot 也带着，bot 的指令里写明 bot 自己的规矩优先。bot 能用 vonvon 飞书 skill 查本群的话题和另一条会话（3.5）：在主区问"两个话题的结论"，它去读了再答，卡片上写读了哪些。
 
 **怎么验收：** owner 要做的：第 3 步里扫码新建一个 bot、照清单做到全绿，做完回一句。其余步骤 Claude 和 Codex 做，结果写在通知里。
 1. Claude 先做：在 skill 页从 `~/.claude/skills` 导入一个 skill，给 bot 启用，在群里让 bot 用它；在另一个群的详情页把它移除，那个群里就用不上。
@@ -481,7 +481,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s30：要不要另发一条带 @ 的文字，按 e09 的结果定；结果出来前默认另发。
 - s31：e02 用到的字段，s02 锁定的 SDK 0.3.296 里都有，e02 这边不用抬版本；e03 的结果还可能要抬。同时改掉 `permission.ts` 顶部那段注释。
 - s31：按 e02 的结果做：所有会话启动时都带 `allowDangerouslySkipPermissions: true`，中途升到完全访问才不用重开会话；resume 时明确传档，档不从记录里恢复；拒绝时不用 `interrupt`，不然原因会丢、这一轮按出错结束；提问的答案放进 `updatedInput.answers`。启动时带上这个参数后，升档只能走两条路：daemon 调 `setPermissionMode`，或者回调返回带 `setMode` 的 `updatedPermissions`。两处都只按权限档的设置来，回调不照搬 `suggestions` 里的 `setMode`。回调拿不到"这是在联网"的标记，关网时 Bash 联网靠沙箱挡，看 e03。
-- s31：开工前用【需要你决定】问 owner：bot 的会话要不要关掉 claude.ai 连接器，和推送、远程触发、定时任务这类 Claude Code 自己的工具（e02 第 7 节）。建议用内置工具白名单，连接器默认关。Codex 一侧的同一类问题一起问：用主人的 ChatGPT 登录时，每条会话都挂着 `codex_apps`（主人账号的连接器，0.162.1 上 197 个工具，含合并 GitHub PR 这类写操作），会话层 `features.apps: false` 能关（e05），在 s37 的 profile 里传。
+- s31：owner 2026-10-15 定（选了 B）：两家的连接器和 Claude Code 自己的工具第一版都留着，不关，Codex 也不传 `features.apps: false`。当时问的是：bot 的会话要不要关掉 claude.ai 连接器，和推送、远程触发、定时任务这类 Claude Code 自己的工具（e02 第 7 节）。建议用内置工具白名单，连接器默认关。Codex 一侧的同一类问题一起问：用主人的 ChatGPT 登录时，每条会话都挂着 `codex_apps`（主人账号的连接器，0.162.1 上 197 个工具，含合并 GitHub PR 这类写操作），会话层 `features.apps: false` 能关（e05），在 s37 的 profile 里传。
 - s31：e02 没测完的两件，开工时补测：完全访问下，Claude 设置里的 ask 规则、删除关键目录会不会走到回调；vonvon 真实的 `['user', 'project']` 下，用户层的权限规则会不会改变哪些调用走回调。e02 用的是空的 `settingSources`。
 - s31：顺手修会话标题的读法：`readSessionTitle` 只认记录里 `custom-title` 的条目，不用 `customTitle` 字段，因为它会退回 CLI 自动起的标题（e02 第 8 节）。放在这一片，是因为 s31 本来就要改 `D/agent/claude-agent/` 下的后端代码；约 40 行，算进这一片的行数。
 - s32：vonvon 不开计划模式，Codex 的提问实际上不会来。这一片主要是不再回报错，不让回合卡住。
@@ -514,14 +514,14 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | 状态 | 编号 | 切片 | 内容 | 约行数 | 依赖 | 风险 | Mac 检查 |
 |---|---|---|---|---|---|---|---|
 | [ ] | s43 | 本机 skill 库和 MCP 库 | skill 从三个目录或本机文件夹拷进来，校验 SKILL.md，记下带不带脚本；MCP 从 Codex、Claude 的配置导入或手填；都不收 git 地址（3.6） | 970 | s38 | 错误路径 | 无 |
-| [ ] | s44 | skill 和 MCP 按名单交给会话，新 bot 不带个人指令 | 按位置算生效名单，交给 Codex 和 Claude 的会话层参数；向导新建的 bot 不带个人指令和 skill，导入的不变（3.6） | 740 | s43、s37、e02、e05 | 子进程、错误路径 | 真实 Codex：用得上 bot 的 skill、看不到个人 skill、MCP 起得来、resume 后还在；新 bot 的 Claude 会话不读 `~/.claude/CLAUDE.md` |
+| [ ] | s44 | skill 和 MCP 按名单交给会话，新 bot 不带 Claude 的个人指令 | 按位置算生效名单，交给 Codex 和 Claude 的会话层参数；向导新建的 bot 不带 Claude 的个人指令和两家的个人 skill，Codex 的 `~/.codex/AGENTS.md` 照常带上，指令里声明 bot 的规矩优先；导入的不变（3.6） | 740 | s43、s37、e02、e05 | 子进程、错误路径 | 真实 Codex：用得上 bot 的 skill、看不到个人 skill、MCP 起得来、resume 后还在；新 bot 的 Claude 会话不读 `~/.claude/CLAUDE.md`；`~/.codex/AGENTS.md` 里和 bot 冲突的规矩，bot 的指令压得住 |
 | [ ] | s45 | skill 和 MCP 页面，bot 和群的启用名单 | 两个库页面，删除时列出还在用的 bot 和群；Bot 页的启用名单，群详情页的增减（3.6） | 550 | s43、s41、s42 | — | 无 |
 | [ ] | s46 | 会话令牌和 agent 调 vonvon 的入口 | 每条会话一个令牌，经环境变量交给 agent；host 加一个只接 POST 的路由，子进程依次校验令牌、私聊、触发人、开关（3.7） | 520 | s37、e04 | 子进程、并发、关闭清理、错误路径 | agent 调不调得到 vonvon、带不带得上令牌：Codex 只读、读写、关网各一次，Claude 沙箱一次 |
 | [ ] | s47 | vonvon settings 和 vonvon feishu 命令行框架 | 在 s07a 的命令上加：两组命令从环境变量读地址和令牌，不拿数据租约，输出 JSON；飞书组先做群列表和群成员（3.7） | 380 | s46、s07a | 错误路径 | 无 |
 | [ ] | s48 | vonvon 飞书 skill：列话题、读另一条会话、读飞书消息 | 列本群话题、按会话 id 读另一条会话、按话题或时间读消息；只放行同一个 bot、同一个群、档不高于自己的会话；卡片写"读了话题 T1、T2 的会话"（3.5"查飞书上下文"） | 950 | s47、s44、s13、e02、e11 | 子进程、错误路径 | 无（M8 验收前，预览版任务按 3.5 时间线第 7 步跑一遍） |
 
 开工要点：
-- s44：`~/.codex/AGENTS.md` 按会话关不掉（e05，4 个版本；会话层 `project_doc_max_bytes: 0` 只关项目里的那份）。按本文 4.2 第 3 条用【需要你决定】问 owner，比如接受"带上但在指令里声明 bot 的规矩优先"。`thread/start` 回包的 `instructionSources` 列出实际加载的文件，可以显示在桌面端。
+- s44：`~/.codex/AGENTS.md` 按会话关不掉（e05，4 个版本；会话层 `project_doc_max_bytes: 0` 只关项目里的那份）。owner 2026-10-15 定（选了 A）：接受，带上它，在 bot 的指令里声明 bot 的规矩优先；product.md 3.6 已跟着改。`thread/start` 回包的 `instructionSources` 列出实际加载的文件，可以显示在桌面端。
 - s44：bot 的 MCP 在 `feishu` 权限配置（`approvalPolicy: never`，工作区可写）下不配 `default_tools_approval_mode: "approve"` 时调用被拒（e05，0.162.1，只见过一次），和第 9 节第 2 项的推断一致；只读档和完全访问档不配会怎样没测，开工时补测。用户的个人 skill 先 `skills/list` 列出，再用 `skills.config` 逐个禁；系统 skill 用 `skills.bundled.enabled: false` 关。按名字禁会连同名的 bot skill 一起禁，按 `path` 禁没实测，开工时补测。中途换 skill 名单从 0.148.0 起下一轮生效，最低版本 0.156.1 时不用为这个开新会话。
 - s44：Claude 一侧按 e02 第 6 节：新建的 bot 用 `claudeMdExcludes`（经 `options.settings` 传）或只给 `settingSources: ['project']`，导入的 bot 照旧。
 - s46：变量名避开 TOKEN、KEY、SECRET，Codex 默认会滤掉含这些词的变量。e04 证明连不上时，按 product.md 第 9 节第 2 项的退路，把同一组命令做成 vonvon 自己的 MCP 工具，这一片照那个做。
@@ -552,7 +552,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s51a 到 s51c：开工前先在草稿上用 `git diff --stat` 量，超过 1500 行再拆。每个 PR 里列一张"私聊卡片 → 网页上的对应页面"对照表；s51b 删之前逐项确认网页有替代：新建项目、绑群、权限、白名单、管理员；s51c 也一样：语音、云文档评论、会话标题、看门狗、完成提醒。其中语音、云文档评论、完成提醒是 3.12 要保留的，看门狗按 3.12 改成 10 分钟（s11）。网页上没有对应开关的，先在同一片里补上再删卡。群里 `/settings` 用的 GS 卡，`tierLabel`、`permissionSummary` 这些共享函数，以及群里 `/usage` 等命令要用的卡片都保留。
 - s51a 到 s51c 和 s54 改 `handle-message.ts` 的同一段，不要同时在飞。
 - s53：从飞书来的人不能在本机删。缺权限或接口出错时保留上一次的结果，从来没拿到过时退回"扫码人加本机名单"。
-- s57：拉人要 `im:chat.members:write_only`，它现在在可选的进群权限组里。e10：机器人能自己进公开群（`PATCH /im/v1/chats/:chat_id/members/me_join`），私有群回 HTTP 400、`code 232008`。lark-cli 建的群默认私有；客户端建群的默认值没查，开了入群审批的公开群能不能进也没测，开工时补。product.md 3.7 写的是"机器人自己进不了已有的群"，改成"公开群 bot 自己进"是承诺变强，属于本文 4.2 第 3 类：s57 开工前用【需要你决定】问 owner，owner 定了再改 product.md。owner 同意的话，先调 `me_join`，回 232008 再发拉 bot 进群的步骤。自己进群也会推 `im.chat.member.bot.added_v1`，操作人是 bot 自己，今天的 `onBotAddedToChat` 把它记成 `bot-added-nonadmin`、什么也不做；要和别人拉它进群（s36b）分开处理，绑定不靠这个事件触发。`me_join` 靠哪个权限，开工时用只开一个权限的应用试一次。
+- s57：拉人要 `im:chat.members:write_only`，它现在在可选的进群权限组里。e10：机器人能自己进公开群（`PATCH /im/v1/chats/:chat_id/members/me_join`），私有群回 HTTP 400、`code 232008`。lark-cli 建的群默认私有；客户端建群的默认值没查，开了入群审批的公开群能不能进也没测，开工时补。product.md 3.7 写的是"机器人自己进不了已有的群"，改成"公开群 bot 自己进"是承诺变强，属于本文 4.2 第 3 类：owner 2026-10-15 定（选了 B）：不用 `me_join`，已有的群一律发拉 bot 进群的步骤；product.md 3.7 的承诺不变，只改了事实。自己进群也会推 `im.chat.member.bot.added_v1`，操作人是 bot 自己，今天的 `onBotAddedToChat` 把它记成 `bot-added-nonadmin`、什么也不做；要和别人拉它进群（s36b）分开处理，绑定不靠这个事件触发。`me_join` 靠哪个权限，开工时用只开一个权限的应用试一次。
 
 ### M10 从 bridge 迁移
 
@@ -627,7 +627,7 @@ JP-VPS 上剩下的按最晚期限排：e14（M3 验收时）、e12（等 s23 �
 
 1. 先开一个只改 `docs/product.md` 的纯文档 PR，写清改了什么、为什么，以及属于下面哪一类。产品切片等它合入后再按新说法做。
 2. 不改用户能感到的承诺：照 owner 的回答改写；或者实测发现某个接口做不到、某个版本才有，换一种做法仍能兑现 product.md 的承诺。Claude 找另一个模型审查后合入，不等 owner 认可。依据：owner 在被请求认可 #294（按 owner 第 19 到 29 题改的 product.md）时说"不是每条 PR 都要我认可吧？"。实测修正事实这一种是 Claude 照这句话补的，owner 可以改。
-3. 改了承诺或范围：用户能感到的承诺变弱或变强，或者多做、少做某件事，不管起因是不是实测。用【需要你决定】通知 owner，等 owner 定。例如 s44：`~/.codex/AGENTS.md` 关不掉，"新建的 bot 默认不带个人指令"（3.6）就做不到，算这一类。
+3. 改了承诺或范围：用户能感到的承诺变弱或变强，或者多做、少做某件事，不管起因是不是实测。用【需要你决定】通知 owner，等 owner 定。例如 s44：`~/.codex/AGENTS.md` 关不掉，"新建的 bot 默认不带个人指令"（3.6）就做不到，算这一类（owner 2026-10-15 已定，见 s44）。
 
 product.md 开头的状态说明按这三条写（s01 改的）。
 
