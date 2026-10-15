@@ -23,6 +23,10 @@ describe('extractMessageText', () => {
     const content = JSON.stringify({ text: '@_user_1 帮我看下这个' });
     const mentions = [{ key: '@_user_1', name: '张三' }];
     expect(extractMessageText('text', content, mentions)).toBe('@张三 帮我看下这个');
+    // @_user_1 is not a prefix match of @_user_10, whether dropped or resolved.
+    const ten = JSON.stringify({ text: '@_user_10 hi @_user_1' });
+    expect(extractMessageText('text', ten, [{ key: '@_user_10', name: '十号' }], ['@_user_1'])).toBe('@十号 hi ');
+    expect(extractMessageText('text', ten, [{ key: '@_user_1', name: '一号' }, { key: '@_user_10', name: '十号' }])).toBe('@十号 hi @一号');
   });
 
   it('leaves text untouched when there are no mentions', () => {

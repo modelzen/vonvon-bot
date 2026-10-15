@@ -199,6 +199,10 @@ describe('extractSendCardText', () => {
       { tag: 'markdown', content: "结论 <font color='grey'>（草稿）</font>" },
       { tag: 'markdown', content: '上下文 15% 是我估的' },
     ] } })).toBe('注意：别删 build\n结论 （草稿）\n上下文 15% 是我估的');
+    // Only Vonvon's own grey status lines go; another bot's grey answer or caveat stays.
+    const grey = (t: string) => ({ tag: 'markdown', content: `<font color='grey'>${t}</font>` });
+    expect(extractSendCardText({ body: { elements: ['❌ 用时 1分钟 · 失败', '已处理 3秒', '执行过程 · 已停止', '🗜️ 已压缩 85% → 20%', '正在输出', '🤖 由 Vonvon Bot 于 10-15 17:36 生成'].map(grey) } })).toBe('');
+    expect(extractSendCardText({ body: { elements: [grey('⚠️ 无法回答'), grey('注：以上为估算')] } })).toBe('⚠️ 无法回答\n注：以上为估算');
   });
 
   it('de-duplicates lines and reads one locale of an i18n card', () => {

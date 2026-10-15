@@ -404,7 +404,7 @@ export function extractMessageText(
   }
   switch (msgType) {
     case 'text':
-      return replaceMentions(drop.reduce((t, k) => t.split(k).join(''), (parsed as { text?: string } | null)?.text ?? ''), mentions);
+      return replaceMentions(drop.reduce((t, k) => replaceKey(t, k, ''), (parsed as { text?: string } | null)?.text ?? ''), mentions);
     case 'post':
       return replaceMentions(extractPostText(parsed, drop), mentions);
     case 'image':
@@ -574,9 +574,15 @@ function replaceMentions(text: string, mentions?: { key?: string; name?: string 
   let out = text;
   for (const m of mentions) {
     if (!m.key) continue;
-    out = out.split(m.key).join(m.name ? `@${m.name}` : '@某人');
+    out = replaceKey(out, m.key, m.name ? `@${m.name}` : '@某人');
   }
   return out;
+}
+
+/** Every `key` in `text` replaced, but not where it is the head of a longer key (`@_user_1` in `@_user_10`). */
+function replaceKey(text: string, key: string, by: string): string {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return text.replace(new RegExp(escaped + '(?!\\d)', 'g'), () => by);
 }
 
 // ── sanitize + weave ─────────────────────────────────────────────────────

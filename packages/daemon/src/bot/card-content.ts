@@ -134,8 +134,8 @@ export function isStreamingCard(content: string | undefined): boolean {
  *
  * `user_card_content` drops text sizes and colours, so on a pulled card the
  * notation check never fires. A Vonvon run card's status lines are told by
- * their text instead: a line that is grey as a whole (用时, 已压缩) and the
- * context meter. `<font>` tags are removed and their text kept.
+ * their text instead: a line that is grey as a whole and is one of Vonvon's
+ * own status texts (用时, 已压缩), and the context meter. `<font>` tags are removed and their text kept.
  */
 export function extractSendCardText(card: unknown): string {
   if (!card || typeof card !== 'object') return '';
@@ -163,14 +163,18 @@ function textOf(t: unknown): unknown {
 
 function push(out: string[], v: unknown): void {
   if (typeof v !== 'string') return;
-  if (WHOLE_GREY.test(v.trim()) || RUN_CARD_METER.test(v.trim())) return;
+  const grey = WHOLE_GREY.exec(v.trim())?.[1]?.trim();
+  if ((grey !== undefined && VONVON_GREY_STATUS.test(grey)) || RUN_CARD_METER.test(v.trim())) return;
   const line = v.replace(FONT_TAG, '').trim();
   if (line) out.push(line);
 }
 
 const FONT_TAG = /<\/?font\b[^>]*>/g;
 /** One `<font color='grey'>` around the whole text, as Vonvon writes a status line. */
-const WHOLE_GREY = /^<font color=['"]?grey['"]?>(?:(?!<\/?font\b).)*<\/font>$/s;
+const WHOLE_GREY = /^<font color=['"]?grey['"]?>((?:(?!<\/?font\b).)*)<\/font>$/s;
+/** Vonvon's own grey lines: `processTitle`, `compactionLine`, `footerStatus` and the usage card's stamp.
+ * Another bot's grey answer or caveat is kept. */
+const VONVON_GREY_STATUS = /^(?:(?:❌ )?(?:执行过程|已处理 |用时 )|🗜️ |🤖 由 Vonvon Bot 于 |(?:正在处理|正在调用工具|瞬断，自动重试中…|正在输出)$)/u;
 /** The context meter of a Vonvon run card (`runCardMeter`). */
 const RUN_CARD_METER = /^(?:[🟡🟠🔴] )?上下文 (?:\d+% · \S+\/\S+|已用 \S+|—)$/u;
 
