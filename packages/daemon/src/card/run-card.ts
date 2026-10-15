@@ -147,6 +147,9 @@ export interface RunCardState {
   images?: ReadonlyMap<string, string>;
   /** Prepared at terminal, before rendering can discard local link targets. */
   localFiles?: InlineFiles;
+  /** One line at the top of the card when this turn was forced onto a new
+   * session (resume failed, cwd changed). Kept on the terminal frame too. */
+  sessionNotice?: string;
 }
 
 /**
@@ -220,6 +223,7 @@ function runTypography(element: CardElement): CardElement {
  * Controls stay at the bottom and preserve their stable routing element id. */
 function renderRunning(state: RunState, rc: RunCardState): CardElement[] {
   const elements: CardElement[] = [];
+  if (rc.sessionNotice) elements.push(noteMd(rc.sessionNotice));
 
   const answerIdx = currentAnswerIndex(state.blocks);
   const processBlocks = state.blocks.filter((b, i) => i !== answerIdx && (rc.showTools !== false || b.kind !== 'tool'));
@@ -294,6 +298,7 @@ function renderRunning(state: RunState, rc: RunCardState): CardElement[] {
  */
 function renderTerminal(state: RunState, rc: RunCardState): CardElement[] {
   const elements: CardElement[] = [];
+  if (rc.sessionNotice) elements.push(noteMd(rc.sessionNotice));
 
   const answerIdx = lastTextIndex(state.blocks);
   const answer = rc.localFiles?.text ?? (answerIdx >= 0 ? (state.blocks[answerIdx] as Extract<Block, { kind: 'text' }>).content.trim() : '');
