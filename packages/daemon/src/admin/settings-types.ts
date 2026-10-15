@@ -70,9 +70,6 @@ export interface ProjectSections {
   response: {
     noMention: boolean;
   };
-  compact: {
-    autoCompact: boolean;
-  };
   model: {
     selection: ModelSelection;
   };

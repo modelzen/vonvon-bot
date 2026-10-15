@@ -52,7 +52,6 @@ export type AdminWriteOp =
       network?: boolean;
     }
   | { kind: 'setNoMention'; project: string; on: boolean }
-  | { kind: 'setAutoCompact'; project: string; on: boolean }
   | {
       kind: 'setCompletionReminder';
       mode: CompletionReminderMode;
@@ -280,20 +279,6 @@ export async function performSetNoMention(opts: { projectName: string; on: boole
   return { ok: true, project: await freshOr(opts.projectName, { ...p, noMention: opts.on }) };
 }
 
-/** 🗜️ 自动压缩开关（DM dm.proj.autoCompact / gs.autoCompact 与 Web 同源）：
- * 压缩上限在 thread/start 绑定，落盘后驱逐活跃会话让下一条消息重绑生效。 */
-export async function performSetAutoCompact(opts: {
-  projectName: string;
-  on: boolean;
-  evictLiveSessionsForChat: (chatId: string) => Promise<void>;
-}): Promise<AdminWriteOutcome> {
-  const p = await getProjectByName(opts.projectName);
-  if (!p) return { ok: false, reason: `项目「${opts.projectName}」不存在` };
-  await updateProject(opts.projectName, { autoCompact: opts.on });
-  await opts.evictLiveSessionsForChat(p.chatId);
-  return { ok: true, project: await freshOr(opts.projectName, { ...p, autoCompact: opts.on }) };
-}
-
 /** 🤖 设置项目「新话题默认模型 / 推理强度」。**不驱逐活跃会话**——默认只管新会话，
  * 进行中 / 已 resume 的会话保留各自显式选择（语义上不该被默认改动打断，也免去给非
  * 管理员留 DoS 面）。model 的有效性（在该后端实时模型列表内、effort 受该模型支持）
@@ -409,12 +394,6 @@ export async function runAdminWriteOp(
       });
     case 'setNoMention':
       return performSetNoMention({ projectName: op.project, on: op.on });
-    case 'setAutoCompact':
-      return performSetAutoCompact({
-        projectName: op.project,
-        on: op.on,
-        evictLiveSessionsForChat: deps.evictLiveSessionsForChat,
-      });
     case 'setCompletionReminder':
       if (!deps.cfg) return { ok: false, reason: 'bot 运行配置不可用，无法即时更新完成提醒' };
       return performSetCompletionReminder({

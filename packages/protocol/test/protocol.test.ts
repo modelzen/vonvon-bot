@@ -18,7 +18,7 @@ describe("pinned contract extraction", () => {
       name:"bot",appId:"cli_fixture",tenant:"feishu",active:true,current:true,running:true,
       pid:42,startedAt:10,connection:"connected",completionReminder:{mode:"failures",longTaskMinutes:3},
       projects:[{name:"p",chatId:"oc_fixture",cwd:"/tmp/p",blank:false,kind:"multi",origin:"joined",
-        noMention:true,autoCompact:false,mode:"full",guestMode:"qa",network:false,backend:"codex-appserver",
+        noMention:true,mode:"full",guestMode:"qa",network:false,backend:"codex-appserver",
         allowedUsersCount:2,sessionCount:3,createdAt:9}],
     }]};
     expect(adminStateSchema.parse(state)).toEqual(state);
@@ -103,7 +103,7 @@ describe("pinned contract extraction", () => {
       fixture("agent-settings.json"),
       {scope:{kind:"project",botId:"cli_fixture",projectName:"fixture"},sections:{
         permission:section({mode:"qa",guestMode:"qa",network:false}),
-        response:section({noMention:false}),compact:section({autoCompact:true}),model:section({selection}),
+        response:section({noMention:false}),model:section({selection}),
       },identity:{chatId:"oc_fixture",backend:"codex-appserver",cwd:"/tmp",kind:"multi"},members:{openIds:[],revision:"r1"}},
       {scope:{kind:"session",botId:"cli_fixture",threadId:"thread"},sections:{model:section({selection})},identity:{backend:"codex-appserver",sessionId:"session",chatId:"oc_fixture",projectName:"fixture"}},
       {scope:{kind:"host"},sections:{execution:section({codexBin:null})},runtime:{codexBin:null,fallbackCwd:"/tmp",platform:"macos"}},
@@ -112,6 +112,12 @@ describe("pinned contract extraction", () => {
       const parsed = settingsViewSchema.parse(view);
       expect(settingsViewSchema.parse(JSON.parse(JSON.stringify(parsed)))).toEqual(parsed);
     }
+  });
+  it("no longer accepts the auto-compaction switch (s12)", () => {
+    const scope = {kind:"project",botId:"cli_fixture",projectName:"fixture"};
+    const save = (section: string, patch: unknown) => requestSchema.safeParse({type:"request",id:"1",method:"settings",payload:{type:"save",edit:{scope,section,revision:"r1",patch}}}).success;
+    expect(save("response", {noMention:true})).toBe(true);
+    expect(save("compact", {autoCompact:false})).toBe(false);
   });
   it("correlates method and payload in both directions", () => {
     expect(requestSchema.safeParse({type:"request",id:"1",method:"settings",payload:{type:"refresh"}}).success).toBe(false);

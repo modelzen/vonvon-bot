@@ -60,7 +60,9 @@ export function mapNotification(n: ServerNotification, ctx?: MapContext): AgentE
         contextWindow: n.params.tokenUsage.modelContextWindow,
       };
     case 'thread/compacted':
-      return { type: 'context_compacted' };
+      // Deprecated; codex main no longer sends it to v2 clients. Where it still
+      // comes, it repeats a contextCompaction item's end (the run state dedupes).
+      return { type: 'compaction', phase: 'end', legacy: true };
     case 'turn/completed':
       return { type: 'done', turnId: n.params.turn.id };
     case 'thread/goal/updated': {
@@ -116,6 +118,8 @@ function mapItemStart(item: ThreadItem, ctx?: MapContext): AgentEvent | null {
         detail: JSON.stringify(item.arguments, null, 2),
         kind: 'tool',
       };
+    case 'contextCompaction':
+      return { type: 'compaction', phase: 'start', itemId: item.id };
     default:
       return null;
   }
@@ -157,6 +161,8 @@ function mapItemComplete(item: ThreadItem): AgentEvent | null {
           ? content.text : JSON.stringify(content)).join('\n'),
         exitCode: item.status === 'failed' || item.success === false ? 1 : undefined,
       };
+    case 'contextCompaction':
+      return { type: 'compaction', phase: 'end', itemId: item.id };
     default:
       return null;
   }

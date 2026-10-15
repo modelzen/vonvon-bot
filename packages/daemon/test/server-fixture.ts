@@ -21,7 +21,7 @@ export function fakeService(overrides: Partial<AdminService> = {}): AdminService
   const empty = async (): Promise<void> => {};
   return {
     listBots: async () => [], listProjects: async () => [], getProject: async () => undefined,
-    switchBackend: empty, setPermissionMode: empty, setNoMention: empty, setAutoCompact: empty, setCompletionReminder: empty,
+    switchBackend: empty, setPermissionMode: empty, setNoMention: empty, setCompletionReminder: empty,
     doctorBackends: async () => [], eventDiagnosis: async () => ({ state: 'unchecked' }), listSessions: async () => [], tailLogs: async () => 'log\n',
     codexSetup: async () => ({ installation: 'missing', authentication: 'unknown', version: null, executable: null }),
     getSetupStatus: async appId => ({ appId, tenant: 'feishu', credentials: { ok: false }, connection: { running: false }, event: { state: 'unchecked' }, scopes: { grantUrl: 'https://example.test' }, eventConfigUrl: 'https://example.test', consoleUrl: 'https://example.test', cardCallback: { confirmed: false } }),

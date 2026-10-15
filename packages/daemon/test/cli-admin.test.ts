@@ -183,6 +183,8 @@ it('settings set parses values as JSON or text and names the bad field', () => {
     ['project', ['permission.nope=1'], 'permission 没有 nope 这一项。可以改的有：mode、guestMode、network'],
     ['project', ['permission.mode=full', 'cards.showModel=off'], '一次只能改一节；permission 和 cards 分两次改。'],
     ['agent', ['cliBridge.agents={}'], '咖啡一下第一版已拿掉，不能改。'],
+    ['project', ['compact.autoCompact=false'], '自动压缩现在一直开着，不能关了。'],
+    ['agent', ['compact.autoCompact=false'], '没有 compact 这一节。可以改的有：'],
     ['session', ['permission.mode=full'], '没有 permission 这一节。可以改的有：model'],
     ['agent', ['run.maxConcurrentRuns=many'], 'run.maxConcurrentRuns 要填数字'],
     ['agent', ['run.maxConcurrentRuns=true'], 'run.maxConcurrentRuns 要填数字'],

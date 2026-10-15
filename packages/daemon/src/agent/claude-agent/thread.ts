@@ -45,6 +45,18 @@ export interface ClaudeThreadConfig {
   query: (params: { prompt: AsyncIterable<SDKUserMessage>; options?: Options }) => Query;
 }
 
+/**
+ * Flag-layer settings that keep Claude Code's auto-compaction on (s12) whatever
+ * the user's ~/.claude says. Measured with getContextUsage() on SDK 0.3.296:
+ * `autoCompactEnabled: false` and DISABLE_AUTO_COMPACT or DISABLE_COMPACT, in the
+ * process env or a settings file's `env`, each turn it off; this layer wins over
+ * all of them, and an empty env value counts as unset. Only bot sessions get it.
+ */
+export const AUTO_COMPACT_SETTINGS = {
+  autoCompactEnabled: true,
+  env: { DISABLE_AUTO_COMPACT: '', DISABLE_COMPACT: '' },
+} satisfies Options['settings'];
+
 /** Hard ceiling on a manual /compact (a summarization turn) so a wedged process
  * can't hang the「压缩中」card forever. Mirrors codex's COMPACT_TIMEOUT_MS. */
 const COMPACT_TIMEOUT_MS = 120_000;
@@ -250,6 +262,8 @@ export class ClaudeAgentThread implements AgentThread {
   private currentTurnId: string | undefined;
   private lastActivityAt = Date.now();
   private sink: ((item: TurnItem) => void) | undefined;
+  /** maxTokens from the last getContextUsage(), for the next turn's mid-turn readings */
+  private contextWindow: number | undefined;
 
   constructor(cfg: ClaudeThreadConfig) {
     this.sessionId = cfg.sessionId;
@@ -269,6 +283,7 @@ export class ClaudeAgentThread implements AgentThread {
         : {}),
       ...(cfg.settingSources ? { settingSources: cfg.settingSources } : {}),
       ...(cfg.env ? { env: cfg.env } : {}),
+      settings: AUTO_COMPACT_SETTINGS,
       // permission tier (permissionMode / sandbox / canUseTool / disallowedTools)
       ...cfg.permission,
       stderr: (d: string) => {
@@ -313,7 +328,7 @@ export class ClaudeAgentThread implements AgentThread {
     }
     if (turn?.effort) this.effort = turn.effort;
 
-    const mapper = createTurnMapper({ cwd: this.cwd });
+    const mapper = createTurnMapper({ cwd: this.cwd, contextWindow: this.contextWindow });
     const inbox = new Inbox<TurnItem>();
     const mySink = (item: TurnItem): void => inbox.push(item);
     this.sink = mySink;
@@ -371,10 +386,8 @@ export class ClaudeAgentThread implements AgentThread {
               // (totalTokens used, maxTokens window). Overrides the event-map's
               // fallback estimate. Best-effort: a control RTT that may fail.
               try {
-                const cu = await self.query.getContextUsage();
-                if (cu && typeof cu.totalTokens === 'number' && typeof cu.maxTokens === 'number') {
-                  yield { type: 'context_usage', usedTokens: cu.totalTokens, contextWindow: cu.maxTokens };
-                }
+                const usage = await self.readContextUsage();
+                if (usage) yield { type: 'context_usage', ...usage };
               } catch (err) {
                 log.fail('agent', err, { backend: 'claude-agent', phase: 'getContextUsage' });
               }
@@ -428,7 +441,7 @@ export class ClaudeAgentThread implements AgentThread {
     this.goalRunning = true;
     this.turnInFlight = true;
     const startedAt = Date.now();
-    const mapper = createTurnMapper({ cwd: this.cwd });
+    const mapper = createTurnMapper({ cwd: this.cwd, contextWindow: this.contextWindow });
     const inbox = new Inbox<TurnItem>();
     const mySink = (item: TurnItem): void => inbox.push(item);
     this.sink = mySink;
@@ -490,10 +503,8 @@ export class ClaudeAgentThread implements AgentThread {
               return;
             }
             try {
-              const cu = await self.query.getContextUsage();
-              if (cu && typeof cu.totalTokens === 'number' && typeof cu.maxTokens === 'number') {
-                yield { type: 'context_usage', usedTokens: cu.totalTokens, contextWindow: cu.maxTokens };
-              }
+              const usage = await self.readContextUsage();
+              if (usage) yield { type: 'context_usage', ...usage };
             } catch {
               /* best-effort */
             }
@@ -575,14 +586,20 @@ export class ClaudeAgentThread implements AgentThread {
 
     let usage: CompactResult['usage'] = null;
     try {
-      const cu = await this.query.getContextUsage();
-      if (cu && typeof cu.totalTokens === 'number' && typeof cu.maxTokens === 'number') {
-        usage = { usedTokens: cu.totalTokens, contextWindow: cu.maxTokens };
-      }
+      usage = (await this.readContextUsage()) ?? null;
     } catch {
       /* best-effort post-compaction usage */
     }
     return { compacted, usage };
+  }
+
+  /** getContextUsage() as a reading (undefined when it lacks the numbers; throws
+   * as the SDK does). Keeps maxTokens for the next turn's mid-turn readings. */
+  private async readContextUsage(): Promise<{ usedTokens: number; contextWindow: number } | undefined> {
+    const cu = await this.query.getContextUsage();
+    if (!cu || typeof cu.totalTokens !== 'number' || typeof cu.maxTokens !== 'number') return undefined;
+    this.contextWindow = cu.maxTokens;
+    return { usedTokens: cu.totalTokens, contextWindow: cu.maxTokens };
   }
 
   async abort(_turnId: string): Promise<void> {

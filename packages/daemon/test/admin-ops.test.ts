@@ -7,7 +7,6 @@ import {
   createAppPreferencesWriter,
   createAdminWriteExecutor,
   performBackendSwitch,
-  performSetAutoCompact,
   performSetCompletionReminder,
   performSetNoMention,
   performSetPermissionMode,
@@ -108,7 +107,7 @@ describe('共享层契约：DM（handle-message re-export）与 ops 是同一个
   });
 });
 
-describe('performSetNoMention / performSetAutoCompact', () => {
+describe('performSetNoMention', () => {
   it('免@：落盘并写后回读（无需驱逐）', async () => {
     const r = await performSetNoMention({ projectName: 'demo', on: false });
     expect(r.ok).toBe(true);
@@ -116,21 +115,9 @@ describe('performSetNoMention / performSetAutoCompact', () => {
     expect((await getProjectByName('demo'))?.noMention).toBe(false);
   });
 
-  it('自动压缩：落盘 + 驱逐该群活跃会话（thread/start 绑定，驱逐才能重绑生效）', async () => {
-    const evict = vi.fn(async () => undefined);
-    const r = await performSetAutoCompact({ projectName: 'demo', on: false, evictLiveSessionsForChat: evict });
-    expect(r.ok).toBe(true);
-    expect((await getProjectByName('demo'))?.autoCompact).toBe(false);
-    expect(evict).toHaveBeenCalledWith('oc_demo');
-  });
-
-  it('项目不存在 → ok:false（不落盘、不驱逐）', async () => {
-    const evict = vi.fn(async () => undefined);
+  it('项目不存在 → ok:false（不落盘）', async () => {
     const r1 = await performSetNoMention({ projectName: 'nope', on: true });
-    const r2 = await performSetAutoCompact({ projectName: 'nope', on: true, evictLiveSessionsForChat: evict });
     expect(r1.ok).toBe(false);
-    expect(r2.ok).toBe(false);
-    expect(evict).not.toHaveBeenCalled();
   });
 });
 
@@ -400,7 +387,7 @@ describe('createAdminWriteExecutor / runAdminWriteOp（Web · IPC 入口）', ()
 
   it('执行器：成功返回 done，拒绝抛 AdminWriteError（带 code，IPC/HTTP 可还原）', async () => {
     const exec = createAdminWriteExecutor(deps);
-    await expect(exec({ kind: 'setAutoCompact', project: 'demo', on: true })).resolves.toEqual({ kind: 'done' });
+    await expect(exec({ kind: 'setNoMention', project: 'demo', on: true })).resolves.toEqual({ kind: 'done' });
     const err = await exec({ kind: 'switchBackend', project: 'demo', backend: 'gpt-9' }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(AdminWriteError);
     expect((err as AdminWriteError).code).toBe('ADMIN_WRITE_REJECTED');
