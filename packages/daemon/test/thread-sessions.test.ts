@@ -181,6 +181,30 @@ describe('forced session change notice', () => {
     expect(finalCard()).not.toContain('⚠️');
   });
 
+  it('puts the notice in the failure reply when the first card cannot be created', async () => {
+    fake.records.set('omt_topic', record('omt_topic'));
+    const fresh = thread('fresh');
+    fake.backend.resumeThread.mockRejectedValue(new Error('no rollout'));
+    fake.backend.startThread.mockResolvedValue(fresh.t);
+    fake.createCard.mockRejectedValueOnce(new Error('card api down'));
+    const o = setup();
+    await o.onMessage(message('again', 'omt_topic'));
+    const notice = sessionChangeNotice('resume-failed', true);
+    await vi.waitFor(() => expect(fake.send).toHaveBeenCalledWith('chat',
+      { markdown: expect.stringContaining('card api down') }, expect.objectContaining({ replyInThread: true })));
+    expect(JSON.stringify(fake.send.mock.calls.at(-1))).toContain(notice);
+  });
+
+  it('does not repeat the notice in a failure reply once a card showed it', async () => {
+    fake.records.set('chat', record('chat', { cwd: '/old' }));
+    const fresh = thread('fresh');
+    fake.backend.startThread.mockResolvedValue(fresh.t);
+    const o = setup();
+    await o.onMessage(message('main area'));
+    await done();
+    expect(JSON.stringify(fake.send.mock.calls)).not.toContain('工作目录改了');
+  });
+
   it('words the notice by reason and location', () => {
     expect(sessionChangeNotice('cwd-changed', false)).toContain('工作目录改了');
     expect(sessionChangeNotice('resume-failed', false)).not.toContain('话题');

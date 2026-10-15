@@ -455,10 +455,14 @@ export function settleOrdinaryTurnRender(
 }
 
 /** Failure feedback includes unprocessed follow-ups; they must never disappear
- * behind an error referring only to the original message. */
-function runFailureMessage(err: unknown, dropped: number): string {
+ * behind an error referring only to the original message. A session-change
+ * notice no card showed yet rides along, so the switch is never silent. */
+function runFailureMessage(err: unknown, dropped: number, sessionNotice?: string): string {
   const error = `❌ ${err instanceof Error ? err.message : String(err)}`;
-  return dropped > 0 ? `${error}\n\n⚠️ ${dropped} 条排队消息未执行，请重发。` : error;
+  const parts = [error];
+  if (dropped > 0) parts.push(`⚠️ ${dropped} 条排队消息未执行，请重发。`);
+  if (sessionNotice) parts.push(sessionNotice);
+  return parts.join('\n\n');
 }
 
 /** Why a location's stored session couldn't be continued (see resolveThread). */
@@ -1493,6 +1497,7 @@ export function createOrchestrator(
       // Goal runs use the OKR reaction (added at dispatch) as their only receipt,
       // not the ⏳/🫳 run-reaction lifecycle.
       const reaction = goal ? undefined : runReaction(msg.messageId, !sema.hasFree());
+      let launchOpts: LaunchOpts | undefined;
       try {
         const tIntake = Date.now();
         // ── 入站三路并行（M-1）── 飞书 API（图片下载 / 文件+引用织入）、本地
@@ -1652,7 +1657,7 @@ export function createOrchestrator(
         // (a brand-new session already wrote it in the upsert above.)
         if (!neverSeen) void trackTask(patchSession(sessionKey, { lastSeenAt: msg.createTime }).catch(() => undefined));
         reserved.thread = thread;
-        const launchOpts: LaunchOpts = {
+        launchOpts = {
           chatId: msg.chatId,
           replyTo: msg.messageId,
           replyInThread: !flat,
@@ -1693,7 +1698,7 @@ export function createOrchestrator(
         reaction?.done();
         log.fail('intake', err);
         await channel
-          .send(msg.chatId, { markdown: runFailureMessage(err, dropped) }, { replyTo: msg.messageId, replyInThread: !flat })
+          .send(msg.chatId, { markdown: runFailureMessage(err, dropped, launchOpts?.sessionNotice) }, { replyTo: msg.messageId, replyInThread: !flat })
           .catch(() => undefined);
       }
     }));
@@ -4133,8 +4138,10 @@ export function createOrchestrator(
      * tResolve = resolveThread/startThread settled, tWeave = 编织完成（含话题
      * 上文投机拉取），both measured from intake start (M-1 observability). */
     timing?: { tResolve: number; tWeave: number };
-    /** Shown on the FIRST turn's card when this location was forced onto a new
-     * session (resume failed or the cwd changed), see {@link sessionChangeNotice}. */
+    /** Shown on the FIRST card when this location was forced onto a new session
+     * (resume failed or the cwd changed), see {@link sessionChangeNotice}. The
+     * run clears it once a card carrying it exists; if none ever does, the
+     * intake's failure reply carries it instead. */
     sessionNotice?: string;
   }
 
@@ -4345,7 +4352,6 @@ export function createOrchestrator(
     // intake durations ride the FIRST turn's stream.timing line only (M-1)
     let intake = opts.timing;
     let firstRec = opts.firstRec;
-    let sessionNotice = opts.sessionNotice; // first turn's card only
     try {
       let currentTurn: QueuedTurn = {
         input: { text: opts.firstText, images: opts.images },
@@ -4400,9 +4406,8 @@ export function createOrchestrator(
           ...(modelDisp !== 'off' && turnModel
             ? { model: turnModel, effort: turnEffort, modelOnTerminal: modelDisp === 'always' }
             : {}),
-          ...(sessionNotice ? { sessionNotice } : {}),
+          ...(opts.sessionNotice ? { sessionNotice: opts.sessionNotice } : {}),
         };
-        sessionNotice = undefined;
 
         const adoptThreadId = async (messageId: string): Promise<void> => {
           if (activeKey.startsWith('pending:')) {
@@ -4473,6 +4478,7 @@ export function createOrchestrator(
           throw err; // 外层 catch 把错误回给用户
         }
         const tCardCreate = Date.now() - tCreate; // 建卡 RTT（与模型推理并行付出）
+        opts.sessionNotice = undefined; // shown; a failed create leaves it for the failure reply
         curCardKey = cardMsgId;
         rc.cardKey = cardMsgId;
         runsByCard.set(cardMsgId, state);
@@ -4827,7 +4833,7 @@ export function createOrchestrator(
       await opts.thread.close().catch(error => log.fail('agent', error, { phase: 'thread-close' }));
       log.fail('intake', err);
       await channel
-        .send(opts.chatId, { markdown: runFailureMessage(err, dropped) }, { replyTo: opts.replyTo, replyInThread: !opts.flat })
+        .send(opts.chatId, { markdown: runFailureMessage(err, dropped, opts.sessionNotice) }, { replyTo: opts.replyTo, replyInThread: !opts.flat })
         .catch((sendError) => log.fail('intake', sendError, { phase: 'run-failure-feedback', dropped }));
     } finally {
       // A replacement run may have reserved the key while failure feedback
@@ -5025,7 +5031,6 @@ export function createOrchestrator(
       promoteCard(ctx.cardMsgId, ctx.rc);
     };
 
-    let goalNotice = opts.sessionNotice; // first turn's card only
     /** Begin a turn's render context WITHOUT sending a card yet. */
     const startTurn = (): GoalTurnCtx => {
       const render = new RunRender();
@@ -5039,9 +5044,8 @@ export function createOrchestrator(
         ...(goalModelDisp !== 'off' && opts.model
           ? { model: opts.model, effort: opts.effort, modelOnTerminal: goalModelDisp === 'always' }
           : {}),
-        ...(goalNotice ? { sessionNotice: goalNotice } : {}),
+        ...(opts.sessionNotice ? { sessionNotice: opts.sessionNotice } : {}),
       };
-      goalNotice = undefined;
       return { render, rc, stream: null, cardMsgId: null };
     };
 
@@ -5059,6 +5063,7 @@ export function createOrchestrator(
       ctx.rc.cardKey = cardMsgId;
       ctx.stream = stream;
       ctx.cardMsgId = cardMsgId;
+      opts.sessionNotice = undefined; // shown; a turn without a card keeps it for the next
       ctx.clock = setInterval(() => {
         if (ctx.rc.rs.terminal === 'running') stream.streamCoalesced(channel, buildRunCard(ctx.rc), ANSWER_EID);
       }, 1000);
@@ -5231,7 +5236,7 @@ export function createOrchestrator(
     } catch (err) {
       log.fail('intake', err);
       await channel
-        .send(opts.chatId, { markdown: `❌ ${err instanceof Error ? err.message : String(err)}` }, { replyTo: opts.replyTo, replyInThread: !opts.flat })
+        .send(opts.chatId, { markdown: runFailureMessage(err, 0, opts.sessionNotice) }, { replyTo: opts.replyTo, replyInThread: !opts.flat })
         .catch(() => undefined);
     } finally {
       clearInterval(cur?.clock);
