@@ -48,9 +48,9 @@ const SDK_PKG = '@anthropic-ai/claude-agent-sdk';
  *
  * TRADEOFF (intentional): loading 'user'/'project' also loads any hooks / mcpServers
  * declared in those `.claude/settings.json` files — and the SDK WILL execute them in
- * bridge-owned sessions. The FEISHU_CODEX_BRIDGE marker below only stops the cli-bridge
- * from self-forwarding its OWN Stop/PermissionRequest notifications (no loop); it does
- * NOT suppress other user-defined hooks (PreToolUse/Stop/etc.). A user whose global
+ * bridge-owned sessions. The FEISHU_CODEX_BRIDGE marker below only stops a bridge's
+ * cli-bridge hooks from forwarding these sessions' Stop/PermissionRequest to Feishu; it
+ * does NOT suppress other user-defined hooks (PreToolUse/Stop/etc.). A user whose global
  * settings has an output-mutating hook will see it run here too. Accepted as the cost
  * of "claude backend = Claude Code in cwd"; revert to ['project'] (or drop 'user') if
  * that's undesirable. */
@@ -58,9 +58,10 @@ const BRIDGE_SETTING_SOURCES: SettingSource[] = ['user', 'project'];
 
 /**
  * Env for the SDK's spawned CLI. The SDK does NOT merge with process.env, so we
- * spread it and add the re-entrancy marker the cli-bridge hook handler reads
- * (parser.ts `bridgeOwned`). That marker prevents a Bridge-owned session from
- * self-forwarding to Feishu by default.
+ * spread it and add the re-entrancy marker that cli-bridge hook handlers read.
+ * Vonvon's own handler is gone since s02c; the marker stays so hooks the bridge
+ * (feishu-codex-bridge) installed in `~/.claude/settings.json` skip these
+ * sessions instead of forwarding them to Feishu.
  *
  * Persistent Bridge chats also get a dedicated entrypoint: Claude Code's
  * native `/resume` picker intentionally filters `sdk-ts`/`sdk-py`/`sdk-cli`
@@ -71,7 +72,7 @@ const BRIDGE_SETTING_SOURCES: SettingSource[] = ['user', 'project'];
  * compatibility boundary depends on Claude's upstream picker/entrypoint rules
  * and must be rechecked when upgrading the bundled Claude Code runtime.
  *
- * NOTE: FEISHU_CODEX_BRIDGE only governs the cli-bridge's own forwarding — it
+ * NOTE: FEISHU_CODEX_BRIDGE only governs cli-bridge hook forwarding — it
  * does not gate other SDK hooks loaded via settingSources (see
  * BRIDGE_SETTING_SOURCES). Mirrors the codex app-server child. */
 function bridgeClaudeEnv(): Record<string, string> {

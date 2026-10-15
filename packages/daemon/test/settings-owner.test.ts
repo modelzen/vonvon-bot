@@ -176,20 +176,22 @@ it('s12: a stored autoCompact:false is ignored on read and the switch cannot be 
   expect(() => parseSettingsEdit({ scope: project, section: 'compact', revision: 'x', patch: { autoCompact: true } })).toThrow('设置字段、类型或范围无效');
   expect(JSON.parse(await readFile(paths.projectsFile, 'utf8')).projects[0]).toMatchObject({ autoCompact: false });
 });
-it('s02c1: an old config.json with 咖啡一下 settings loads, reads without them and keeps them on disk', async () => {
-  // What s02b left on disk: the switch on and every 咖啡一下 field set.
-  const old = { enabled: true, delivery: 'always', notifyScope: 'bound_projects', agents: { claude: true, codex: false }, keepAwake: { enabled: true }, approval: { enabled: true, timeoutSeconds: 600 }, presence: { enabled: true, platform: 'macos', idleThresholdSeconds: 120 } };
-  await writeFile(paths.configFile, JSON.stringify({ ...cfg, preferences: { ...cfg.preferences, cliBridge: old } }));
+it('s02c1, s02c5: an old config.json with 咖啡一下 settings loads, reads without them and keeps them byte for byte', async () => {
+  // What s02b left on disk: the switch on and every field the 咖啡一下 type had
+  // before s02c5 removed it, so this list is the only record of the old shape.
+  const old = { enabled: true, delivery: 'always', includeBridgeOwnedSessionsForDebugging: true, notifyScope: 'bound_projects', agents: { claude: true, codex: false }, keepAwake: { enabled: true }, approval: { enabled: true, timeoutSeconds: 600 }, taskCompletion: { enabled: true, replyEnabled: false, replyTimeoutSeconds: 300 }, allowCache: { enabled: true, scope: 'session' }, presence: { enabled: true, platform: 'macos', idleThresholdSeconds: 120 } };
+  const stored = { ...cfg, preferences: { ...cfg.preferences, cliBridge: old } };
+  await writeFile(paths.configFile, `${JSON.stringify(stored, null, 2)}\n`);
   cfg = await loadConfig() as AppConfig;
   const { owner } = await fixture();
   const view = await owner.read(agent) as AgentSettingsView;
   expect(Object.keys(view.sections)).toEqual(['cards', 'run', 'completion', 'comments', 'titles', 'paths', 'access']);
   expect(view).not.toHaveProperty('cliRuntime');
+  expect(JSON.stringify(view)).not.toMatch(/cliBridge|notifyScope|keepAwake/);
   expect((await owner.save({ scope: agent, section: 'cards', revision: view.sections.cards.revision, patch: { showToolCalls: false } })).kind).toBe('saved');
-  const disk = JSON.parse(await readFile(paths.configFile, 'utf8'));
-  expect(disk.preferences.cliBridge).toEqual(old);
-  expect(disk.preferences).toMatchObject({ showToolCalls: false, futurePreference: true });
-  expect(disk.futureRoot).toBe(17);
+  // The file is what was written plus the one saved field: the old section, its
+  // key order and the other unknown keys are untouched.
+  expect(await readFile(paths.configFile, 'utf8')).toBe(`${JSON.stringify({ ...stored, preferences: { ...stored.preferences, showToolCalls: false } }, null, 2)}\n`);
   expect(() => parseSettingsEdit({ scope: agent, section: 'cliBridge', revision: 'x', patch: { notifyScope: 'all' } })).toThrow('设置字段、类型或范围无效');
   for (const action of [{ kind: 'setCliBridgeEnabled', botId, enabled: false, revision: 'x' }, { kind: 'repairCliHooks', botId }, { kind: 'setHostCliRoute', botId: null, revision: 'x' }, { kind: 'repairHostCliHooks', agents: ['codex'] }])
     expect(() => parseSettingsAction(action)).toThrow('设置操作参数无效');

@@ -1,21 +1,17 @@
-import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { bridgePipeName, getterContents, isBridgeGetter, repairLinkedCompatibility } from '../src/config/data-compatibility';
+import { getterContents, isBridgeGetter, repairLinkedCompatibility } from '../src/config/data-compatibility';
 const homes: string[] = [];
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
-it('keeps old Windows pipe identity only for a validated directory alias', () => {
-  const home = mkdtempSync(join(tmpdir(), 'vonvon-pipes-')); homes.push(home);
+it('recognizes the legacy getter path only through a validated directory alias', () => {
+  const home = mkdtempSync(join(tmpdir(), 'vonvon-alias-')); homes.push(home);
   const root = join(home, '.vonvon-bridge'); mkdirSync(root);
-  const bot = join(root, 'bots', 'fixture');
-  const expected = (path: string): string => `\\\\.\\pipe\\feishu-cli-bridge-${createHash('sha1').update(path).digest('hex').slice(0, 16)}`;
-  expect(bridgePipeName(home, root, bot)).toBe(expected(bot));
-  const legacy = join(home, '.feishu-codex-bridge');
-  symlinkSync(root, legacy, process.platform === 'win32' ? 'junction' : 'dir');
-  expect(bridgePipeName(home, root, bot)).toBe(expected(join(legacy, 'bots', 'fixture')));
   const wrapper = join(root, 'secrets-getter'); writeFileSync(wrapper, 'fixture');
+  const legacy = join(home, '.feishu-codex-bridge');
+  expect(isBridgeGetter(join(legacy, 'secrets-getter'), [], home, wrapper)).toBe(false);
+  symlinkSync(root, legacy, process.platform === 'win32' ? 'junction' : 'dir');
   expect(isBridgeGetter(join(legacy, 'secrets-getter'), [], home, wrapper)).toBe(true);
   expect(isBridgeGetter('/arbitrary/program', ['secrets', 'get'], home, wrapper)).toBe(false);
 });

@@ -229,7 +229,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | [x] | s02d | Claude 第一轮没建成会话时整群卡住 | 第一轮在 Claude Code 写下会话记录之前就失败（沙箱缺工具、没登录）时，之后每条消息都报"找不到会话"，要 `/clear` 才好；恢复前先查会话存不存在，不存在就换新会话，运行卡上说一声（3.5） | 60 | — | 错误路径 | 无（JP-VPS 上用 lark-cli 复现过） |
 | [x] | s02e | 注册完 Bot 默认启用 | 扫码注册的新 Bot 直接加进活跃集并启动连接，和手动打开"启用 Bot"一样：Bot 不再显示"已停用"或"待生效"，清单的"长连接"一步不再停在"没有启用"；启动失败不让注册失败，界面显示真实的运行和连接状态；"重新扫码"只换凭据，不动启用状态，停用过的 Bot 仍停用（3.1 第 4 条） | 160 | — | 并发、错误路径 | 无（注册要 owner 扫码，下次装预览版时看注册完 Bot 已启用、长连接连上） |
 | [x] | s02b | 拿掉咖啡一下（一）：入口和设置 | 删桌面端和网页的咖啡一下开关、搜索词和设置项，私聊设置卡里的咖啡一下；daemon 不再起咖啡一下的服务（3.12） | 400 | — | — | 无 |
-| [ ] | s02c | 拿掉咖啡一下（二）：daemon 代码 | 删设置协议里的咖啡一下、`D/cli-bridge/` 和它的测试；`vonvon hook` 留一个直接退出的空命令（3.12） | 5600，拆成 5 片（下面的 s02c 拆法） | s02b | 子进程 | 无 |
+| [x] | s02c | 拿掉咖啡一下（二）：daemon 代码 | 删设置协议里的咖啡一下、`D/cli-bridge/` 和它的测试；`vonvon hook` 留一个直接退出的空命令（3.12） | 5600，拆成 5 片（下面的 s02c 拆法） | s02b | 子进程 | 无 |
 
 开工要点：
 - s01：兼容标识不动：旧目录、`FEISHU_CODEX_BRIDGE`、`CLAUDE_CODE_ENTRYPOINT`、hook 正则、旧服务标签。不申请 `im:message.group_msg.include_bot:read`。补拉因为缺权限失败时，记一条带权限名的结构化日志；今天没有现成的诊断去处，诊断页上显示缺的权限在 s19 做。
@@ -250,8 +250,8 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
   - s02c1（约 1100 行，#326 已合入）：设置协议这一层，见下面的 s02c1 做法。
   - s02c2（约 780 行，子进程，#329 已合入）：`vonvon hook` 改成直接退出的空命令：照收 `--agent`、`--bot`，什么都不输出，退出码 0，已经装进 Claude Code、Codex CLI 的 hook 照常在终端里问。删 `D/cli-bridge/index.ts`（只有 `vonvon hook` 引用它）、`protocol.ts`、`hooks.ts`（s01 说的 `hooks.ts:310` 的 hook 正则和 cmd.exe 引号在这里），和 `cli-bridge-hook-routing`、`cli-bridge-protocol`、`cli-bridge-hooks`、`cli-bridge-hook-targets` 四份测试；`coffee-retired.test.ts` 去掉对 `D/cli-bridge` 的 mock。合入前在 JP-VPS 上用源码跑 `vonvon hook --agent claude` 和 `--agent codex`，各喂一条 PermissionRequest 和 Stop，看标准输出是空的、退出码 0。
   - s02c3（约 1190 行，#330 已合入）：删 `cli-bridge-service.test.ts` 和 `cli-bridge-global-service.test.ts`。`service.ts` 连它的测试约 1700 行，一片放不下，所以测试先删；s02c2 以后 `service.ts` 已经没有调用方。测试只测 `service.ts`，别的测试没有引用它们；`service.ts` 本身和它对 `ipc.ts`、`store.ts` 等的引用留到 s02c4，所以这一片合入后 `D/cli-bridge/` 照样能过 typecheck。
-  - s02c4（约 1360 行）：删 `service.ts`、`cards.ts`（Windows 离开检测的提示在这里）、`store.ts`，和 `cli-bridge-cards`、`cli-bridge-store` 两份测试；`D/card/dm-cards.ts:905` 注释里提到 `cli-bridge/cards` 的那句跟着改。
-  - s02c5（约 1150 行）：删剩下的 `ipc.ts`、`parser.ts`、`keep-awake.ts`、`presence.ts`（PowerShell 离开检测）、`route.ts`、`types.ts` 和它们的五份测试，以及 `cli-bridge-config.test.ts`；删 `D/config/schema.ts` 里 `cliBridge` 的类型和读取函数（约 150 行）、`D/config/paths.ts` 的 `cliBridgeSocket` 和它的命名管道分支。`preferences.cliBridge` 到这一片才从类型里去掉，旧文件里的这个键照旧留着、没人读；`coffee-retired.test.ts` 里写 `cliBridge` 的那条配置改成不靠类型。`D/cli-bridge/` 到这里删空。
+  - s02c4（约 1360 行，#332 已合入）：删 `service.ts`、`cards.ts`（Windows 离开检测的提示在这里）、`store.ts`，和 `cli-bridge-cards`、`cli-bridge-store` 两份测试；`D/card/dm-cards.ts:905` 注释里提到 `cli-bridge/cards` 的那句跟着改。
+  - s02c5（约 1150 行）：删剩下的 `ipc.ts`、`parser.ts`、`keep-awake.ts`、`presence.ts`（PowerShell 离开检测）、`route.ts`、`types.ts` 和它们的五份测试，以及 `cli-bridge-config.test.ts`；删 `D/config/schema.ts` 里 `cliBridge` 的类型和读取函数（约 150 行）、`D/config/paths.ts` 的 `cliBridgeSocket` 和它的命名管道分支。`preferences.cliBridge` 到这一片才从类型里去掉，旧文件里的这个键照旧留着、没人读；`coffee-retired.test.ts` 里写 `cliBridge` 的那条配置改成不靠类型。`D/cli-bridge/` 到这里删空。见下面的 s02c5 做法。
 - s02c1 做法（协议）：Agent 设置的 `cliBridge` 一节和 `cliRuntime`、本机设置的 `runtime.coffee`，`setCliBridgeEnabled`、`repairCliHooks`、`setHostCliRoute`、`repairHostCliHooks` 四个写操作，从协议、`D/admin/settings.ts`、`host-settings.ts`、`settings-parse.ts`、`settings-service.ts` 里删了。只给它们用的 hook 状态、生效时机 `next-hook` 和 `next-presence-check`、写操作结果 `diverged` 一起删；本机设置没有写操作了，写操作的结果里也就不再带本机视图。RPC 收到这四个写操作或存 `cliBridge` 这一节，按无效请求拒。`vonvon settings` 不再过滤 `cliBridge`，`--json` 里也没有了；`settings set cliBridge.…` 还是回"咖啡一下第一版已拿掉，不能改。"。
 - s02c1 做法（旧数据）：`config.json` 里的 `preferences.cliBridge` 和 `cli-bridge-route.json` 不迁移、不删。读设置时不看它们，存别的设置时原样留在文件里；`vonvon hook` 照旧读它们，s02c2 以后就没人读了。测试用一份带全套旧字段的 `config.json` 读一次、存一次别的设置，再比对文件。
 - s02c1 做法（协议版本）：`PROTOCOL_VERSION` 不升，和 s12 删 `compact` 一节一样。网页由 daemon 自己发，和 daemon 总是同一版。新的桌面端连旧 daemon 时，多出来的 `cliBridge`、`cliRuntime` 被丢掉，照常显示；旧的桌面端连新 daemon 时，读 Bot 设置会因为少了 `cliRuntime` 解析失败，只有把 app 换回旧版、或者 daemon 单独升级了才会碰到。升版本号反而会让刚装的新 app 拒绝连还在跑的旧 daemon，s08b 之前它不会自动重启旧 daemon。
@@ -260,6 +260,10 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s02c2 做法（删的）：`D/cli-bridge/index.ts`、`protocol.ts`、`hooks.ts` 和四份测试；`route.ts` 里只给 hook 挑 bot 的 `selectCliBridgeHookBot` 一起删了，读写 `cli-bridge-route.json` 的留到 s02c5。`parser.ts` 的 `parseHookPayload`、`ipc.ts` 的 `sendCliHookMessage` 已经没有产品代码调用，只剩测试在用，随 s02c3、s02c5 删。`coffee-retired.test.ts` 去掉 mock 以后，最后一条只看带着旧的"已开"设置 bot 能起能停：`D/bot/` 早已不引用 `D/cli-bridge/`。
 - s02c2 做法（测试）：`hook-command.test.ts` 起真的 `bin/vonvon.mjs`，喂 Claude 和 Codex 的 PermissionRequest、Stop，旧的 PostToolUse，空输入、截断的 JSON、二进制，各种多余选项，8 MB 的事件（写的一方不能报错），和一直不关的标准输入（2 秒后退）；每条都看标准输出、标准错误是空的，退出码 0，临时 `HOME` 里什么都没写。另有一条把入口拷到没有 `dist/` 的目录，`hook` 照样成功、别的命令加载不了主包，证明 `hook` 不碰主包。标准输入是终端的情况在 JP-VPS 上用 `script` 手工跑过，立刻退出。
 - s02c2 留下的：打包版的 daemon 跑在 Electron 里，那时装的 hook 写的是 Electron 本身加 `bin/vonvon.mjs`，不带 `ELECTRON_RUN_AS_NODE`，Claude Code、Codex 跑它时起的是桌面端而不是这个空命令。没在 Mac 上看过会怎样；M1 预览版装过、又在咖啡一下里修过 hook 的 Mac 才有这种 hook，卸掉归 s62。2026-10-15 在 owner 的 Mac 上只读查过：`~/.claude/settings.json` 和 `~/.codex/hooks.json` 里都没有 vonvon 的 hook，这台 Mac 不受影响。
+- s02c5 做法（删的）：`D/cli-bridge/` 剩下的 `ipc.ts`、`parser.ts`、`keep-awake.ts`、`presence.ts`、`route.ts`、`types.ts`，和 `cli-bridge-ipc`、`cli-bridge-keepawake`、`cli-bridge-parser`、`cli-bridge-presence`、`cli-bridge-route`、`cli-bridge-config` 六份测试删了，目录删空。`D/config/schema.ts` 删了 `cliBridge` 的类型和 `getCliBridgePreferences`、`resolveCliBridgeTarget`、`canEnableCliBridge` 三个函数，它们早就只有 `cli-bridge-config` 在测；`D/config/paths.ts` 删了 `cliBridgeSocket` 和它的命名管道分支。`D/config/data-compatibility.ts` 的 `bridgePipeName` 是给 cli-bridge 算旧 bridge 的 Windows 命名管道名的，只有测试在用，也删了，它那条测试只留认旧 getter 路径的部分；这个文件别的 Windows 分支照旧归 s58（本文第 6 节）。
+- s02c5 做法（旧数据）：`AppPreferences` 里没有 `cliBridge` 了，旧 `config.json` 里的这个键照旧留着，没人读。配置是整份 JSON 原样读进来、存设置时整份写回的，不按类型挑字段，所以类型删了，文件里的键也不会丢。`settings-owner.test.ts` 用一份照 daemon 的格式写的 `config.json`，带上类型删掉之前的每一项旧字段和别的未知键，读一次、存一次别的设置，再比对整个文件：只多了存的那一项，旧的那一节连键的顺序都没变。`coffee-retired.test.ts` 的配置改成一段 JSON，不靠类型；点过旧卡、bot 带着它起停以后，配置和原来一个字节都不差，也没写盘。`cli-bridge-route.json` 照旧留着，`host-settings.test.ts` 那条没改。
+- s02c5 做法（留着的）：Claude 和 Codex 子进程带的 `FEISHU_CODEX_BRIDGE` 标记照旧带，bridge 装的 hook 靠它认出 bot 自己的会话（s02b）；`D/agent/claude-agent/` 里说谁读这个标记的注释改成 bridge 的 hook，不再指 `parser.ts`。旧卡按钮的 `COFFEE_RETIRED_ACTIONS`、`settings set cliBridge.…` 的拒绝，和 `import-core.json`（一次性的导入记录）里 `src/cli-bridge/` 的几条也都留着。
+- s02c5 留下的：旧安装的数据目录里可能还有 `cli-bridge-route.json`，bot 目录里可能还有 `cli-bridge.sock`（s02b 以前咖啡一下的服务没正常退出时留下的），没人读，也不删。s02c2 留下的 Electron 里的 hook 照旧归 s62。到这里 s02c 做完了。
 
 ### M2 首次运行清单和开机自动运行
 
@@ -665,8 +669,8 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 - s20a：`open.ts` 的 `cmd /c start`；协议平台枚举里的 windows，以及界面上的"这台 Windows 电脑"。
 - s20b：Codex 只读、读写档的 win32 分支；`codex-appserver/windows-job.ts`、它的两处引用和两份测试。
 - s51a：私聊菜单里的"安装桌面版 · Windows x64"按钮。
-- s02c：cli-bridge 整个删掉，它的 cmd.exe 引号、命名管道、PowerShell 离开检测和 Windows 提示跟着没了；`config/paths.ts` 的命名管道分支。分在 s02c2 到 s02c5，见第 3 节的 s02c 拆法。
-- s58：从没上线的改名迁移（`data-root-migration.ts`、`legacy-data-root.ts`、`host/migration.ts`）；`data-compatibility.ts` 的 Windows 分支。`isBridgeGetter` 还有人用，留下。
+- s02c：cli-bridge 整个删掉，它的 cmd.exe 引号、命名管道、PowerShell 离开检测和 Windows 提示跟着没了；`config/paths.ts` 的命名管道分支。分在 s02c2 到 s02c5，见第 3 节的 s02c 拆法。s02c5 删完了，`data-compatibility.ts` 里给 cli-bridge 算旧命名管道名的 `bridgePipeName` 也在 s02c5 删了。
+- s58：从没上线的改名迁移（`data-root-migration.ts`、`legacy-data-root.ts`、`host/migration.ts`）；`data-compatibility.ts` 剩下的 Windows 分支（`bridgePipeName` 已随 s02c5 删）。`isBridgeGetter` 还有人用，留下。
 - s59：`D/service/control.ts` 里检测 bridge 的 Windows Run 键和计划任务。导入只做 macOS。
 
 **三、先留着**

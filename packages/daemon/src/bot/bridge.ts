@@ -63,9 +63,9 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     safety: { batch: { text: { delayMs: 0 } } },
   });
 
-  // 咖啡一下 (the local Claude Code / Codex hook relay, D/cli-bridge) left v1 in
-  // s02b: no service and no socket. Since s02c2 the installed hooks run an empty
-  // `vonvon hook`, and the tools ask in the terminal.
+  // 咖啡一下 (the local Claude Code / Codex hook relay) left v1 in s02b: no
+  // service and no socket; s02c deleted D/cli-bridge. Since s02c2 the installed
+  // hooks run an empty `vonvon hook`, and the tools ask in the terminal.
   const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd, createTopicRegistry({ dir: paths.topicsDir }));
   const groupTasks = new Set<Promise<JoinedGroups | Project>>();
   let closing: Promise<void> | undefined;

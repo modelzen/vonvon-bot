@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { resolveDataRoot } from './data-root';
@@ -92,20 +91,6 @@ export const paths = {
    * 编辑提示词时的「全量同步」会越界改到别的 bot 的评论目录。 */
   get commentsRootDir(): string {
     return join(currentBotDir, 'comments');
-  },
-  /**
-   * Local CLI hook IPC endpoint for the current bot. macOS/Linux use a Unix
-   * domain socket file; Windows has none, so Node maps a `\\.\pipe\…` path to a
-   * named pipe. The pipe name is hashed from the per-bot dir so the daemon and
-   * the hook subprocess (both pointed at the same bot) derive the same name,
-   * while distinct bots/users on one machine can't collide in the global pipe
-   * namespace.
-   */
-  get cliBridgeSocket(): string {
-    if (process.platform === 'win32') {
-      return `\\\\.\\pipe\\vonvon-bot-${createHash('sha256').update(currentBotDir).digest('hex').slice(0, 32)}`;
-    }
-    return join(currentBotDir, 'cli-bridge.sock');
   },
   secretsFile: join(appDir, 'secrets.enc'),
   masterKeyFile: join(appDir, 'master.key'),
