@@ -1,7 +1,7 @@
 import type {ReactNode} from 'react';
 import {
   NOT_REPLIED_TEXT, OPTIONAL_SCOPE_EFFECTS, SCOPE_DENIAL_PLACE_TEXT, botSteps, connectionStep, toolSteps,
-  type AdminSetupStatus, type Agent, type Command, type CommandResult, type DesktopSnapshot, type NotReplied, type SetupStep, type StepTone,
+  type AdminSetupStatus, type Agent, type Command, type CommandResult, type DesktopSnapshot, type NotReplied, type SetupStep, type StepAction, type StepTone,
 } from '@vonvon/protocol';
 import {useClient, useShellCapabilities} from '../client-context';
 import {AgentAvatar} from '../AgentAvatar';
@@ -49,7 +49,16 @@ export function scopeView(status: AdminSetupStatus | undefined, agent: Agent, no
   const view = (text: string, tone: StepTone) => ({badge: badge(text, tone), lines});
   if (!status) return view('检查中', 'neutral');
   if (required === undefined) return view('暂时读不到已开通的权限', 'neutral');
-  return missing.size ? view(`缺 ${missing.size} 项`, required.length ? 'warning' : 'neutral') : lines.length ? view('被拒过', 'warning') : view('没有缺的', 'success');
+  if (missing.size) return view(`缺 ${missing.size} 项`, required.length ? 'warning' : 'neutral');
+  if (lines.length) return view('被拒过', 'warning');
+  return view('没有缺的', 'success');
+}
+
+/** 飞书设置: the checklist's Feishu steps still to do. */
+function setupBadge(agent: Agent, read: SetupRead | undefined) {
+  if (!read?.status) return read?.problem ? badge('读取失败', 'warning') : badge('检查中', 'neutral');
+  const left = botSteps(agent, read.status).filter(step => !step.done);
+  return left.length ? badge(`还差 ${left.length} 步：${left.map(step => step.title).join('、')}`, 'warning') : badge('全部完成', 'success');
 }
 
 function NotRepliedList({records, snapshot, now}: {records: readonly NotReplied[]; snapshot: DesktopSnapshot; now: number}) {
@@ -57,7 +66,12 @@ function NotRepliedList({records, snapshot, now}: {records: readonly NotReplied[
   const groups = new Map(snapshot.groups.map(group => [group.id as string, group.name]));
   return <ul className="diagnostics-replies">{records.map(record => {
     const text = NOT_REPLIED_TEXT[record.reason];
-    const where = [groups.get(record.groupId) ?? `没绑定的群（尾号 ${record.groupId.slice(-6)}）`, record.place === 'topic' ? '话题' : '主区', record.sender, record.ref && `消息尾号 ${record.ref}`].filter(Boolean).join(' · ');
+    const where = [
+      groups.get(record.groupId) ?? `没绑定的群（尾号 ${record.groupId.slice(-6)}）`,
+      record.place === 'topic' ? '话题' : '主区',
+      record.sender,
+      record.ref && `消息尾号 ${record.ref}`,
+    ].filter(Boolean).join(' · ');
     return <li key={`${record.at}-${record.ref ?? ''}-${record.reason}`}>
       <span className="diagnostics-replies__head"><time>{shortTime(record.at, now)}</time><strong>{text.reason(record)}</strong>{record.count > 1 && <span>{record.count} 次</span>}</span>
       <span>{where}</span>
@@ -75,10 +89,6 @@ function BotDiagnostics({agent, snapshot, read, tools, onOpenSetup, onError}: {
   const records = agent.diagnostics?.notReplied ?? [];
   const total = records.reduce((sum, record) => sum + record.count, 0);
   const connection = connectionView(agent);
-  const left = read?.status ? botSteps(agent, read.status).filter(step => !step.done) : [];
-  const setup = read?.status
-    ? left.length ? badge(`还差 ${left.length} 步：${left.map(step => step.title).join('、')}`, 'warning') : badge('全部完成', 'success')
-    : badge(read?.problem ? '读取失败' : '检查中', read?.problem ? 'warning' : 'neutral');
   const scopes = scopeView(read?.status, agent, now);
   const grantUrl = read?.status?.scopes.grantUrl;
   const counts = new Map<string, number>();
@@ -91,9 +101,9 @@ function BotDiagnostics({agent, snapshot, read, tools, onOpenSetup, onError}: {
     label={<span className="diagnostics-bot"><AgentAvatar agent={agent}/>{agent.name}{total > 0 && <StatusBadge tone="warning">{`${total} 条没回`}</StatusBadge>}</span>}>
     <SettingsRow title="连接" description={connection.detail} trailing={badge(connection.status, connection.tone)}/>
     <SettingsRow title="飞书设置" description={read?.problem && !read.status ? read.problem : undefined}
-      trailing={<span className="setup-step-trailing">{setup}<Button size="sm" onClick={onOpenSetup}>打开清单</Button></span>}/>
+      trailing={<span className="setup-step-trailing">{setupBadge(agent, read)}<Button size="sm" onClick={onOpenSetup}>打开清单</Button></span>}/>
     <SettingsRow title="缺的权限" description={scopes.lines.length ? <ul className="diagnostics-scopes">{scopes.lines}</ul> : undefined}
-      trailing={<span className="setup-step-trailing">{scopes.badge}{grantUrl && (scopes.lines.length > 0) && <Button size="sm"
+      trailing={<span className="setup-step-trailing">{scopes.badge}{grantUrl && scopes.lines.length > 0 && <Button size="sm"
         onClick={() => void openExternalUrl(grantUrl, 'app-console', shell).catch(error => onError(error instanceof Error ? error.message : '无法打开开发者后台。'))}>一键开权限</Button>}</span>}/>
     <SettingsRow title="执行工具" value={toolText || '还没有绑定群'}/>
     <SettingsRow title="最近没回的消息" description={<NotRepliedList records={records} snapshot={snapshot} now={now}/>}/>
@@ -119,12 +129,15 @@ export function DiagnosticsPanel({snapshot, ready, busy, run, onOpenSetup, onOpe
     await run({type: 'refresh'});
     await Promise.all(snapshot.agents.map(agent => recheck(agent.id)));
   }
+  function act(action: StepAction) {
+    if (action.kind === 'claudeLogin') void claudeLogin.check(true);
+    else if (action.kind === 'codexLogin') void run({type: 'startCodexLogin'}).catch(() => undefined);
+    else onOpenEnvironment();
+  }
   function toolAction(step: SetupStep) {
     const action = step.actions[0];
     if (!action) return null;
-    const act = action.kind === 'claudeLogin' ? () => void claudeLogin.check(true)
-      : action.kind === 'codexLogin' ? () => void run({type: 'startCodexLogin'}).catch(() => undefined) : onOpenEnvironment;
-    return <Button size="sm" loading={action.kind === 'claudeLogin' && claudeLogin.checking} disabled={busy || !ready} onClick={act}>{action.label}</Button>;
+    return <Button size="sm" loading={action.kind === 'claudeLogin' && claudeLogin.checking} disabled={busy || !ready} onClick={() => act(action)}>{action.label}</Button>;
   }
   return <div className="page-stack diagnostics-page">
     <SettingsGroup label="这台电脑" id={settingAnchor('这台电脑')}

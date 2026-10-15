@@ -77,7 +77,9 @@ export function createDiagnosticsStore(opts: { changed: () => void; claudeSigned
         if (last && last.groupId === record.groupId && last.place === record.place && last.reason === record.reason
           && last.backend === record.backend && Math.abs(record.at - last.at) < MERGE_MS) {
           bot.notReplied[0] = { ...record, count: last.count + 1 };
-        } else bot.notReplied = [{ ...record, count: 1 }, ...bot.notReplied].slice(0, NOT_REPLIED_LIMIT);
+        } else {
+          bot.notReplied = [{ ...record, count: 1 }, ...bot.notReplied].slice(0, NOT_REPLIED_LIMIT);
+        }
         if (record.reason === 'signed-out' && record.backend === 'claude') opts.claudeSignedOut?.(record.at);
       }
       changed();

@@ -110,11 +110,9 @@ export function shortenFeishuId(value: string): string {
   const id = /^((?:oc|om|omt|ou|on)_[A-Za-z0-9_-]{7,})(#[A-Za-z]+)?$/.exec(value);
   return id ? `${id[1]!.slice(-6)}${id[2] ?? ''}` : value;
 }
-const shortened = (value: unknown): unknown => typeof value === 'string' ? shortenFeishuId(value) : value;
 
 function emit(level: Level, phase: string, event: string, fields: LogFields = {}): void {
-  const stored = als.getStore() ?? {};
-  const ctx: LogContext = { ...stored };
+  const ctx: LogContext = { ...als.getStore() };
   if (ctx.chatId) ctx.chatId = shortenFeishuId(ctx.chatId);
   if (ctx.msgId) ctx.msgId = shortenFeishuId(ctx.msgId);
   const entry: Record<string, unknown> = {
@@ -126,7 +124,7 @@ function emit(level: Level, phase: string, event: string, fields: LogFields = {}
   };
   const shown: LogFields = {};
   for (const [k, raw] of Object.entries(fields)) {
-    const v = shortened(raw);
+    const v = typeof raw === 'string' ? shortenFeishuId(raw) : raw;
     shown[k] = v;
     if (RESERVED_KEYS.has(k)) {
       entry[`_${k}`] = v;

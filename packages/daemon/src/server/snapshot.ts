@@ -102,11 +102,10 @@ export async function createSnapshotStore(options: {
     ]);
     // The login is not probed here: the probe starts a ~250 MB Claude CLI, and this runs every
     // 60 s even when no window is open. build() lays the cached answer over it.
-    const claudeMessage = claude?.hint;
     const compatibility = codex?.installation === 'installed' ? { status: classifyCodexVersion(codex.version), minimum: CODEX_MIN_VERSION, verified: CODEX_VERIFIED_VERSION } : undefined;
     return [
       { tool: 'codex', installation: codex?.installation ?? 'unknown', authentication: codex?.authentication ?? 'unknown', version: codex?.version ?? null, ...(codex?.message ? { message: codex.message } : {}), ...(compatibility ? { compatibility } : {}) },
-      { tool: 'claude', installation: claude ? (claude.ok ? 'installed' : claude.depState === 'not-installed' || claude.depState === 'external-missing' ? 'missing' : 'unknown') : 'unknown', authentication: 'unknown', version: claude?.version ?? null, ...(claudeMessage ? { message: claudeMessage } : {}) },
+      { tool: 'claude', installation: claude ? (claude.ok ? 'installed' : claude.depState === 'not-installed' || claude.depState === 'external-missing' ? 'missing' : 'unknown') : 'unknown', authentication: 'unknown', version: claude?.version ?? null, ...(claude?.hint ? { message: claude.hint } : {}) },
     ];
   });
   async function build(committed?: (snapshot: DesktopSnapshot) => void): Promise<void> {

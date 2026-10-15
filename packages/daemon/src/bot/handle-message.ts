@@ -23,7 +23,7 @@ import type {
 } from '@larksuiteoapi/node-sdk';
 import { DEFAULT_BACKEND_ID, backendIds, createBackend, isBackendEntryInstalled } from '../agent';
 import { BackendNotInstalledError } from '../agent/backend-loader';
-import { errorKindFromText } from '../agent/error-kind';
+import { errorKindFromText, type AgentErrorKind } from '../agent/error-kind';
 import { scopeDenial } from '../utils/feishu-error';
 import type { NotReplied, NotRepliedReason } from '@vonvon/protocol';
 import { errorDetail, reportNotReplied, reportScopeDenied } from './diagnostics';
@@ -467,21 +467,38 @@ export function settleOrdinaryTurnRender(
   }
 }
 
+/** A turn that started but did not answer: the error it threw, or the run state it ended in. */
+interface TurnFailure { error?: unknown; rs?: RunState; procDead?: boolean }
+/** The message a not-replied record is about. */
+type NotedMessage = Pick<NormalizedMessage, 'chatId' | 'messageId' | 'senderId' | 'createTime' | 'threadId'>;
+
+const REASON_BY_ERROR_KIND = {
+  auth: 'signed-out', version: 'codex-too-old', quota: 'quota', network: 'network',
+} as const satisfies Record<AgentErrorKind, NotRepliedReason>;
+
 /** Why a turn that started did not answer, for the 状态与诊断 page (s19): a scope Feishu refused, a missing
  * backend, the watchdog, the error's kind, a dead process, else the error's first line. */
-export function failureReason(failure: { error?: unknown; rs?: RunState; procDead?: boolean }): { reason: NotRepliedReason; detail?: string; scope?: string } {
+export function failureReason(failure: TurnFailure): { reason: NotRepliedReason; detail?: string; scope?: string } {
   const denial = failure.error === undefined ? undefined : scopeDenial(failure.error);
-  if (denial) return denial.accepted[0] ? { reason: 'missing-scope', detail: denial.accepted[0], scope: denial.accepted[0] } : { reason: 'missing-scope' };
+  if (denial) {
+    const scope = denial.accepted[0];
+    return scope ? { reason: 'missing-scope', detail: scope, scope } : { reason: 'missing-scope' };
+  }
   if (failure.error instanceof BackendNotInstalledError) return { reason: 'tool-missing' };
   if (failure.rs?.terminal === 'idle_timeout') return { reason: 'idle-timeout' };
   const message = failure.error === undefined ? failure.rs?.errorMsg : errorDetail(failure.error);
   const kind = failure.rs?.errorKind ?? (message ? errorKindFromText(message) : undefined);
-  if (kind) return { reason: ({ auth: 'signed-out', version: 'codex-too-old', quota: 'quota', network: 'network' } as const)[kind] };
+  if (kind) return { reason: REASON_BY_ERROR_KIND[kind] };
   if (failure.procDead) return { reason: 'agent-exited' };
   const detail = message ? errorDetail(message) : undefined;
   return detail ? { reason: 'failed', detail } : { reason: 'failed' };
 }
-const backendTool = (id: string | undefined): NotReplied['backend'] => id === 'claude-agent' ? 'claude' : id === 'codex-appserver' ? 'codex' : undefined;
+
+function backendTool(id: string | undefined): NotReplied['backend'] {
+  if (id === 'claude-agent') return 'claude';
+  if (id === 'codex-appserver') return 'codex';
+  return undefined;
+}
 
 /** Failure feedback includes unprocessed follow-ups; they must never disappear
  * behind an error referring only to the original message. A session-change
@@ -1195,8 +1212,8 @@ export function createOrchestrator(
 
   /** A message to this bot that got no answer, for the 状态与诊断 page (s19). The sender only from the
    * name cache, never looked up; no text. Rule mode's messages not meant for it are never noted. */
-  function noteNotReplied(msg: Pick<NormalizedMessage, 'chatId' | 'messageId' | 'senderId' | 'createTime' | 'threadId'>, reason: NotRepliedReason,
-    extra: { place?: NotReplied['place']; backendId?: string; detail?: string } = {}): void {
+  function noteNotReplied(msg: NotedMessage, reason: NotRepliedReason,
+    extra: { place?: NotReplied['place']; backendId?: string | undefined; detail?: string | undefined } = {}): void {
     const sender = names.peek(msg.senderId)?.slice(0, 64);
     const backend = backendTool(extra.backendId);
     reportNotReplied({
@@ -1205,11 +1222,10 @@ export function createOrchestrator(
     });
   }
   /** A turn that started but did not answer; a refused scope also goes to the page's 缺的权限. */
-  function noteFailure(msg: Pick<NormalizedMessage, 'chatId' | 'messageId' | 'senderId' | 'createTime' | 'threadId'>, place: NotReplied['place'], backendId: string | undefined,
-    failure: Parameters<typeof failureReason>[0]): void {
+  function noteFailure(msg: NotedMessage, place: NotReplied['place'], backendId: string | undefined, failure: TurnFailure): void {
     const { reason, detail, scope } = failureReason(failure);
     if (scope) reportScopeDenied(scope, 'send');
-    noteNotReplied(msg, reason, { place, ...(backendId ? { backendId } : {}), ...(detail ? { detail } : {}) });
+    noteNotReplied(msg, reason, { place, backendId, detail });
   }
 
   // ── inbound messages ──────────────────────────────────────────────
@@ -1260,7 +1276,9 @@ export function createOrchestrator(
     }
     if (project && msg.threadId && isChatAllowed(cfg, msg.chatId)) noteTopicMessage(msg);
     if (!addressed) return;
-    const refused = !isChatAllowed(cfg, msg.chatId) ? 'chat-not-allowed' : !isUserAllowedInProject(cfg, project, msg.senderId) ? 'user-not-allowed' : undefined;
+    let refused: NotRepliedReason | undefined;
+    if (!isChatAllowed(cfg, msg.chatId)) refused = 'chat-not-allowed';
+    else if (!isUserAllowedInProject(cfg, project, msg.senderId)) refused = 'user-not-allowed';
     if (refused) {
       log.info('intake', 'reject', { reason: 'not_allowed', chatId: msg.chatId.slice(-6) });
       noteNotReplied(msg, refused);
@@ -4977,7 +4995,7 @@ export function createOrchestrator(
     let settleTurn: (() => void) | undefined;
     // The turn running now, for a failure noted from the catch below.
     let noted: QueuedTurn | undefined;
-    const noteTurnFailure = (turn: QueuedTurn | undefined, failure: Parameters<typeof failureReason>[0]): void =>
+    const noteTurnFailure = (turn: QueuedTurn | undefined, failure: TurnFailure): void =>
       noteFailure({ chatId: opts.chatId, messageId: turn?.seen?.id ?? opts.replyTo, senderId: turn?.requesterOpenId ?? opts.requesterOpenId ?? '', createTime: turn?.requestedAt ?? 0 },
         opts.flat ? 'main' : 'topic', opts.backendId, failure);
     try {

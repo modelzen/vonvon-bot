@@ -9,8 +9,11 @@ export async function environmentRpc(service: AdminService, jobs: Jobs, peer: Jo
   switch (request.type) {
     case 'backendCatalog': return { kind: 'read', value: environmentReplySchema.parse({ kind: 'backends', entries: (await service.listBackendCatalog()).entries }) };
     case 'backendVersion': return { kind: 'read', value: { kind: 'backendVersion', id: request.id, ...await service.backendVersion(request.id) } };
-    // A mutation so the reply waits for a rebuild that shows the new cached login (s19).
-    case 'backendLogin': { const value = { kind: 'backendLogin' as const, id: request.id, ...await service.backendLogin(request.id, request.refresh) }; return { kind: 'mutation', reply: () => value }; }
+    case 'backendLogin': {
+      // A mutation so the reply waits for a rebuild that shows the new cached login (s19).
+      const login = await service.backendLogin(request.id, request.refresh);
+      return { kind: 'mutation', reply: () => ({ kind: 'backendLogin', id: request.id, ...login }) };
+    }
     case 'backendUninstall': {
       const result = await service.uninstallBackend(request.id);
       return { kind: 'mutation', reply: () => result.ok ? { kind: 'applied', message: result.message } : { kind: 'refused', code: 'uninstall_failed', message: result.message } };
