@@ -33,7 +33,7 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
 
 ## 2. 里程碑
 
-"怎么验收"的每一步前面写着谁来做。"Claude 先做"：Claude 在 JP-VPS 上用 lark-cli、`vonvon` 命令行和无头网页端做，默认用那边的测试 bot 和测试群，要用 Mac 上的 bot 时步骤里写明；"Codex 先查"：Codex 在 Mac 的预览版会话里做。这两种都在通知 owner 之前做完，结果写进通知。"Claude 接着做""Codex 接着查"：要用 owner 刚扫码建的 bot，或者要等 owner 注销再登录，只能排在 owner 那一步后面；owner 做完回一句，Claude 和 Codex 再做，结果写进下一条通知：预览版会话还在等追问时，Claude 在同一个 issue 里贴追问；已经结束了，Claude 在同一个 issue 里再贴一份预览版提示词，owner 再转发一次。"owner"只留要人来做的，JP-VPS 上做不了的（比如 Claude 的沙箱装好之前的只读、读写档）也退回 owner，Claude 在通知里写明。"Codex 先查""Codex 接着查"都只在合入后的预览版会话里做；PR 上的 Mac 检查按 `AGENTS.md` 在 PR 里另贴检查提示词。顺序和环境见本文第 7 节。
+"怎么验收"的每一步前面写着谁来做。"Claude 先做"：Claude 在 JP-VPS 上用 lark-cli、`vonvon` 命令行和无头网页端做，默认用那边的测试 bot 和测试群，要用 Mac 上的 bot 时步骤里写明；"Codex 先查"：Codex 在 Mac 的预览版会话里做。这两种都在通知 owner 之前做完，结果写进通知。"Claude 接着做""Codex 接着查"：要用 owner 刚扫码建的 bot，或者要等 owner 注销再登录，只能排在 owner 那一步后面；owner 做完回一句，Claude 和 Codex 再做，结果写进下一条通知：预览版会话还在等追问时，Claude 在同一个 issue 里贴追问；已经结束了，Claude 在同一个 issue 里再贴一份只列这几步的预览版提示词，owner 再转发一次，Codex 用装好的 app 做，不重装（`AGENTS.md`"工具和同步"）。"owner"只留要人来做的，JP-VPS 上做不了的（比如 Claude 的沙箱装好之前的只读、读写档）也退回 owner，Claude 在通知里写明。"Codex 先查""Codex 接着查"都只在合入后的预览版会话里做；PR 上的 Mac 检查按 `AGENTS.md` 在 PR 里另贴检查提示词。顺序和环境见本文第 7 节。
 
 ### M0 实验（e01 到 e14）
 
