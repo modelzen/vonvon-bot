@@ -264,7 +264,6 @@ class CodexThread implements AgentThread {
   runStreamed(input: AgentInput, turn?: TurnOptions): AgentRun {
     const self = this;
     this.currentTurnId = undefined;
-    this.onDisk = true;
     // Per-turn overrides persist for subsequent turns (matches turn/start semantics).
     if (turn?.model) this.model = turn.model;
     if (turn?.effort) this.effort = turn.effort;
@@ -296,6 +295,7 @@ class CodexThread implements AgentThread {
       .then((result) => {
         if (!result.turn?.id) throw new Error('turn/start response missing turn id');
         activeTurnId = result.turn.id;
+        self.onDisk = true; // accepted: codex writes the turn, so the thread resumes
         return { turnId: result.turn.id };
       })
       .catch((err: unknown) => {

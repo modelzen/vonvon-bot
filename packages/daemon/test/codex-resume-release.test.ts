@@ -49,6 +49,10 @@ process.stdin.on('data', (d) => {
       continue;
     }
     if (msg.method === 'turn/start') {
+      if (JSON.stringify(p.input).includes('reject')) {
+        send({ jsonrpc: '2.0', id: msg.id, error: { code: -32000, message: 'turn refused' } });
+        continue;
+      }
       send({ jsonrpc: '2.0', id: msg.id, result: { turn: { id: 'tr' } } });
       send({ jsonrpc: '2.0', method: 'turn/started', params: { threadId: p.threadId, turn: { id: 'tr' } } });
       send({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId: p.threadId, turn: { id: 'tr' } } });
@@ -107,13 +111,25 @@ describe('Codex resume (s15b)', () => {
     await bare.close();
   });
 
-  it('a fresh thread is kept until its first turn, then released after runs', async () => {
+  it('a fresh thread is kept until its first turn is accepted, then released after runs', async () => {
     const thread = await new CodexAppServerBackend().startThread({ cwd: dir });
     expect(thread.releaseAfterRun).toBe(false);
     expect(thread.lastCompaction).toBeUndefined();
     const run = thread.runStreamed({ text: 'go' });
-    expect(thread.releaseAfterRun).toBe(true);
+    // Not yet: codex has not accepted turn/start.
+    expect(thread.releaseAfterRun).toBe(false);
     for await (const _ of run.events) { /* drain */ }
+    expect(thread.releaseAfterRun).toBe(true);
+    await thread.close();
+  });
+
+  it('a fresh thread whose turn/start is refused is still kept', async () => {
+    const thread = await new CodexAppServerBackend().startThread({ cwd: dir });
+    const run = thread.runStreamed({ text: 'reject' });
+    const events = [];
+    for await (const ev of run.events) events.push(ev);
+    expect(events).toEqual([expect.objectContaining({ type: 'error', message: expect.stringContaining('turn refused') })]);
+    expect(thread.releaseAfterRun).toBe(false);
     await thread.close();
   });
 

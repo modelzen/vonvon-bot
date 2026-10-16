@@ -963,9 +963,13 @@ export function createOrchestrator(
     if (!key || !thread?.releaseAfterRun || active.has(key) || sessions.get(key) !== thread) return;
     sessions.delete(key);
     sessionTouchedAt.delete(key);
-    void trackTask(thread.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
+    const closed = thread.close().catch(error => log.fail('agent', error, { phase: 'thread-close' }));
+    releasing.set(key, closed);
+    void trackTask(closed.finally(() => { if (releasing.get(key) === closed) releasing.delete(key); }));
     log.info('agent', 'session-release', { threadId: key });
   }
+  /** Releases still closing, by key: the next resume waits for its own process to let go of the writer. */
+  const releasing = new Map<string, Promise<void>>();
   const active = new Map<string, ActiveState>();
   /** Per-doc serialization for comment runs (see {@link withDocLock}). */
   const docLocks = new Map<string, Promise<void>>();
@@ -1226,8 +1230,12 @@ export function createOrchestrator(
     void trackTask(patchSession(key, { topicsDue: sessionId }).catch(() => undefined));
   }
   function markTopicsDue(key: string | undefined, chatId: string, sessionId: string): void {
-    if (key && isMainKey(key, chatId)) setTopicsDue(key, sessionId);
+    if (!key || !isMainKey(key, chatId)) return;
+    setTopicsDue(key, sessionId);
+    ownCompacted.add(key);
   }
+  /** Main sessions the bot saw compact since their last {@link noteCompaction}. */
+  const ownCompacted = new Set<string>();
   function topicsDueFor(key: string, chatId: string, rec: SessionRecord | undefined, sessionId: string): boolean {
     return isMainKey(key, chatId) && (topicsDue.get(key) ?? rec?.topicsDue) === sessionId;
   }
@@ -1240,8 +1248,15 @@ export function createOrchestrator(
    */
   function noteCompaction(key: string, chatId: string, thread: AgentThread, rec: SessionRecord | undefined): void {
     const id = thread.lastCompaction;
+    // The bot's own compaction whose table a queued turn of the same run already showed:
+    // only remember it. A terminal compaction right after such a run is missed (rare).
+    const shown = ownCompacted.delete(key) && topicsDue.get(key) === '';
     if (!id || !isMainKey(key, chatId) || (compactSeen.get(key) ?? rec?.compactSeen) === id) return;
     compactSeen.set(key, id);
+    if (shown) {
+      void trackTask(patchSession(key, { compactSeen: id }).catch(() => undefined));
+      return;
+    }
     topicsDue.set(key, thread.sessionId);
     void trackTask(patchSession(key, { topicsDue: thread.sessionId, compactSeen: id }).catch(() => undefined));
     log.info('agent', 'native-compaction', { threadId: key, sessionId: thread.sessionId });
@@ -2376,6 +2391,7 @@ export function createOrchestrator(
         else await trackRun(launchRun(launchOpts, reaction));
       } catch (err) {
         if (active.get(sessionKey) === reserved) active.delete(sessionKey);
+        releaseIdle(sessionKey, sessions.get(sessionKey));
         const dropped = reserved.queue.splice(0).length;
         dropCompact(reserved);
         reaction?.done();
@@ -2505,6 +2521,7 @@ export function createOrchestrator(
       return { thread: undefined, recreated: true, reason: 'cwd-changed' };
     }
     const be = backendFor(rec.backend);
+    await releasing.get(threadId);
     try {
       const resumed = await be.resumeThread({
         cwd: rec.cwd,

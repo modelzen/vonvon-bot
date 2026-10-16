@@ -75,7 +75,7 @@ import type { AppConfig } from '../src/config/schema';
 // s15b: a live session is checked against its native file before a turn, a native
 // compaction makes the recent-topics table due, and a Codex session is let go after a run.
 
-interface Opts { foreign?: () => Promise<{ foreign: boolean }>; lastCompaction?: string; releaseAfterRun?: boolean; hold?: Promise<void> }
+interface Opts { foreign?: () => Promise<{ foreign: boolean }>; lastCompaction?: string; releaseAfterRun?: boolean; hold?: Promise<void>; closed?: Promise<void>; firstEvents?: AgentEvent[] }
 function thread(sessionId: string, opts: Opts = {}) {
   const consumed: AgentInput[] = [];
   const t = {
@@ -83,7 +83,7 @@ function thread(sessionId: string, opts: Opts = {}) {
     lastCompaction: opts.lastCompaction,
     releaseAfterRun: opts.releaseAfterRun,
     ...(opts.foreign ? { checkNative: vi.fn(opts.foreign) } : {}),
-    close: vi.fn(async () => undefined),
+    close: vi.fn(async () => { await opts.closed; }),
     abort: vi.fn(async () => undefined),
     steer: vi.fn(async () => undefined),
     compact: vi.fn(async () => ({ usage: null })),
@@ -94,6 +94,7 @@ function thread(sessionId: string, opts: Opts = {}) {
         turnId: () => 'turn',
         events: (async function* (): AsyncGenerator<AgentEvent> {
           yield { type: 'turn_started', turnId: 'turn' };
+          if (consumed.length === 1) yield* opts.firstEvents ?? [];
           await wait;
           yield { type: 'done', turnId: 'turn' };
         })(),
@@ -225,6 +226,35 @@ describe('a native compaction makes the recent topics due', () => {
     await vi.waitFor(() => expect(fake.records.get('chat')).toMatchObject({ compactSeen: 'cc-2' }));
   });
 
+  it('does not show the table again for its own compaction a queued turn already showed it for', async () => {
+    fake.records.set('chat', record('chat'));
+    let release!: () => void;
+    const first = thread('old-chat', {
+      releaseAfterRun: true,
+      hold: new Promise<void>((resolve) => { release = resolve; }),
+      firstEvents: [{ type: 'compaction', phase: 'start', itemId: 'cc-new' }, { type: 'compaction', phase: 'end', itemId: 'cc-new' }],
+    });
+    // Resumed after the release: codex now reports the compaction the bot saw in turn 1.
+    const second = thread('old-chat', { releaseAfterRun: true, lastCompaction: 'cc-new' });
+    fake.backend.resumeThread.mockResolvedValueOnce(first.t).mockResolvedValueOnce(second.t);
+    const o = setup(await withTopic());
+    await o.onMessage(message('一'));
+    await vi.waitFor(() => expect(first.consumed).toHaveLength(1));
+    await o.onMessage(message('排队的'));
+    await vi.waitFor(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'queued', expect.anything()));
+    release();
+    await vi.waitFor(() => expect(first.consumed).toHaveLength(2));
+    expect(first.consumed[0]!.text).not.toContain(table);
+    expect(first.consumed[1]!.text).toContain(table);
+    await vi.waitFor(() => expect(first.t.close).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(fake.records.get('chat')).toMatchObject({ topicsDue: '' }));
+    await turn(o, message('三'));
+    expect(fake.backend.resumeThread).toHaveBeenCalledTimes(2);
+    expect(second.consumed[0]!.text).toContain('三');
+    expect(second.consumed[0]!.text).not.toContain(table);
+    await vi.waitFor(() => expect(fake.records.get('chat')).toMatchObject({ compactSeen: 'cc-new', topicsDue: '' }));
+  });
+
   it('never marks a topic session', async () => {
     fake.records.set('omt_x', record('omt_x'));
     const run = thread('old-omt_x', { lastCompaction: 'cc-1' });
@@ -254,6 +284,39 @@ describe('a Codex session is let go after a run (releaseAfterRun)', () => {
     expect(fake.backend.startThread).not.toHaveBeenCalled();
     expect(second.consumed[0]!.text).toContain('二');
     await vi.waitFor(() => expect(second.t.close).toHaveBeenCalledTimes(1));
+  });
+
+  it('waits for the released process to close before resuming the session again', async () => {
+    fake.records.set('chat', record('chat'));
+    let closeDone!: () => void;
+    const first = thread('old-chat', { releaseAfterRun: true, closed: new Promise<void>((resolve) => { closeDone = resolve; }) });
+    const second = thread('old-chat', { releaseAfterRun: true });
+    fake.backend.resumeThread.mockResolvedValueOnce(first.t).mockResolvedValueOnce(second.t);
+    const o = setup();
+    await turn(o, message('一'));
+    await vi.waitFor(() => expect(first.t.close).toHaveBeenCalledTimes(1));
+    await o.onMessage(message('二'));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(fake.backend.resumeThread).toHaveBeenCalledTimes(1);
+    expect(second.consumed).toHaveLength(0);
+    closeDone();
+    await vi.waitFor(() => expect(fake.backend.resumeThread).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(second.consumed).toHaveLength(1));
+    expect(second.consumed[0]!.text).toContain('二');
+  });
+
+  it('lets go of a resumed thread when the run fails before it starts', async () => {
+    fake.records.set('chat', record('chat', { model: undefined }));
+    const run = thread('old-chat', { releaseAfterRun: true });
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    fake.backend.listModels.mockRejectedValue(new Error('model list down'));
+    const o = setup();
+    await o.onMessage(message('一'));
+    await vi.waitFor(() => expect(fake.log.fail).toHaveBeenCalledWith('intake', expect.objectContaining({ message: 'model list down' })));
+    expect(fake.backend.resumeThread).toHaveBeenCalledTimes(1);
+    expect(run.consumed).toHaveLength(0);
+    await vi.waitFor(() => expect(run.t.close).toHaveBeenCalledTimes(1));
+    expect(released()).toBe(1);
   });
 
   it('keeps a thread that does not ask to be let go', async () => {
