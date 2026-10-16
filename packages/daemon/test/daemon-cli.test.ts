@@ -120,6 +120,20 @@ it('concurrent detached starts return the same ready owner and stop clears its l
   await expect(readFile(join(f.root, 'daemon.pid'))).rejects.toMatchObject({ code: 'ENOENT' });
 }, 30_000);
 
+it('open --print on a new host creates the data root, starts the daemon and keeps the credential out of a pipe', async () => {
+  const f = await fixture();
+  const root = join(f.root, 'not-yet');
+  const p = launch(f.home, root, ['open', '--print']);
+  const log = async () => readFile(join(root, 'daemon.log'), 'utf8').catch(() => '(no daemon.log)');
+  expect(await p.exited, `${p.output()}\ndaemon.log:\n${await log()}`).toBe(0);
+  const record = z.object({ listen: z.string() }).parse(JSON.parse(await readFile(join(root, 'daemon.pid'), 'utf8')));
+  expect(p.output()).toContain(`http://${record.listen}/\n`);
+  expect(p.output()).toContain('带凭据的链接没打印');
+  expect(p.output()).not.toContain((await readFile(join(root, 'local-credential'), 'utf8')).trim());
+  const stopped = launch(f.home, root, ['daemon', 'stop']);
+  expect(await stopped.exited).toBe(0);
+}, 30_000);
+
 it('keeps generated secret getters on their captured root outside the parent shell', async () => {
   const f = await fixture();
   const setter = launch(f.home, f.root, ['secrets', 'set', 'fixture']); setter.child.stdin.end('dummy-only');
