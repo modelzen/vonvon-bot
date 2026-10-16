@@ -1703,12 +1703,18 @@ export function createOrchestrator(
     log.info('intake', 'reject', { reason: 'full-only', mode });
     noteNotReplied(msg, 'tier-unavailable', { backendId: be.id });
     const now = Date.now();
-    if (!msg.mentionedBot && now - (fullOnlyNoted.get(msg.chatId) ?? -Infinity) < FULL_ONLY_QUIET_MS) return true;
+    const last = fullOnlyNoted.get(msg.chatId);
+    if (!msg.mentionedBot && now - (last ?? -Infinity) < FULL_ONLY_QUIET_MS) return true;
+    // Stamped before sending so 免@ messages arriving meanwhile stay quiet; put back if the send fails.
     fullOnlyNoted.set(msg.chatId, now);
     // The command needs --bot when the host has several bots (pickBot); an unreadable registry counts as one.
     const several = await loadBots().then((reg) => reg.bots.length > 1, () => false);
     const markdown = fullOnlyReply(msg.chatId, mode, perm.roleSuffix ?? 'admin', several ? cfg.accounts.app.id : undefined);
-    await channel.send(msg.chatId, { markdown }, { replyTo: msg.messageId, replyInThread: Boolean(msg.threadId) }).catch(() => undefined);
+    const sent = await channel.send(msg.chatId, { markdown }, { replyTo: msg.messageId, replyInThread: Boolean(msg.threadId) }).then(() => true, () => false);
+    if (!sent && fullOnlyNoted.get(msg.chatId) === now) {
+      if (last === undefined) fullOnlyNoted.delete(msg.chatId);
+      else fullOnlyNoted.set(msg.chatId, last);
+    }
     return true;
   }
 

@@ -164,6 +164,16 @@ describe('Codex that runs only in 完全访问 (Linux)', () => {
     expect(replies()).toHaveLength(2);
   });
 
+  it('does not quiet a 免@ group after an explanation that failed to send', async () => {
+    fake.project = { ...base, kind: 'single', noMention: true };
+    fake.send.mockRejectedValueOnce(new Error('rate limited'));
+    await orchestrator.onMessage(message({ mentionedBot: false }));
+    await orchestrator.onMessage(message({ mentionedBot: false }));
+    await orchestrator.onMessage(message({ mentionedBot: false }));
+    expect(records().map(record => record.reason)).toEqual(['tier-unavailable', 'tier-unavailable', 'tier-unavailable']);
+    expect(fake.send).toHaveBeenCalledTimes(2);
+  });
+
   it('refuses /goal before it starts, in a single group and in a main area', async () => {
     fake.project = { ...base, kind: 'single' };
     await orchestrator.onMessage(message({ content: '/goal 把单测跑绿' }));
@@ -197,6 +207,19 @@ describe('Codex that runs only in 完全访问 (Linux)', () => {
       await submit('full');
       await vi.waitFor(() => expect(fake.card).toHaveBeenCalledTimes(2));
       expect(await getProjectByName('demo')).toMatchObject({ mode: 'full', guestMode: 'full' });
+    } finally { await removeProject('demo'); }
+  });
+
+  it('keeps a stored 只读 when the DM card is saved with the tier dropdowns left alone', async () => {
+    await addProject({ name: 'demo', chatId: 'oc_demo', cwd: '/tmp/demo', createdAt: 1, blank: false, mode: 'qa' });
+    try {
+      // The card presets no tier it cannot offer, so an untouched dropdown sends nothing.
+      await orchestrator.dispatcher.handle({ chatId: 'ou_owner', messageId: 'om_card', operator: { openId: 'ou_owner' },
+        action: { tag: 'button', value: { a: DM.permissionSubmit, n: 'demo' } }, raw: { action: { form_value: { network: 'on' } } } } as never);
+      await vi.waitFor(() => expect(fake.card).toHaveBeenCalledOnce());
+      const saved = await getProjectByName('demo');
+      expect(saved).toMatchObject({ mode: 'qa', network: true });
+      expect(saved?.guestMode).toBeUndefined();
     } finally { await removeProject('demo'); }
   });
 
