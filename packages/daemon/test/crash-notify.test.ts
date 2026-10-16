@@ -495,8 +495,11 @@ describe('sending', () => {
     reply = call => (call.url.includes('/im/v1/messages') && fails-- > 0 ? 'throw' : ok(call));
     const n = make();
     n.hostStarted(hostNotice({ crashes: 3, pauseEntered: true }), ctx(true));
-    const closing = n.close();
-    await tick(1_000);
+    let ended = false;
+    const closing = n.close().then(() => { ended = true; });
+    await tick(999);
+    expect(ended).toBe(false);
+    await tick(1);
     await closing;
     expect(messages()).toHaveLength(2);
     expect(logs.info).toHaveBeenCalledWith('crash-notify', 'sent', expect.objectContaining({ kind: 'host-paused', attempt: 2 }));
@@ -514,6 +517,12 @@ describe('sending', () => {
     await tick(10_000);
     await ending;
     expect(logs.warn).toHaveBeenLastCalledWith('crash-notify', 'failed', expect.objectContaining({ bot: ALONE, attempt: 3 }));
+  });
+
+  it('a 2xx whose body cannot be read is tried again, not taken as a refusal (it may have been sent)', async () => {
+    reply = call => (call.url.includes('/im/v1/messages') ? { status: 200 } : ok(call));
+    const result = await sendOwnerText(sender(LATE), 'hi', 'vc-1', new AbortController().signal, fetchImpl);
+    expect(result).toEqual({ ok: false, retry: true, status: 200 });
   });
 
   it('sendOwnerText goes to the Lark host for a Lark bot', async () => {
@@ -548,6 +557,11 @@ describe('texts and senders', () => {
     const reason = "出错退出：Error: Cannot find module '/tmp/tmp.x/app/missing-chunk.js'，读 ~/.vonvon-bot/bots/cli_a/config.json 时（file:///opt/x/y.js:1:2）https://open.feishu.cn/open-apis/x via /open-apis/bot/v3/info";
     expect(noticeText({ kind: 'bot-recovered', appId: LATE, name: '晚到', crashes: 1, reason }))
       .toBe("「晚到」刚才崩溃过一次，已自动恢复。原因：出错退出：Error: Cannot find module 'missing-chunk.js'，读 config.json 时（y.js:1:2）https://open.feishu.cn/open-apis/x via /open-apis/bot/v3/info。");
+    // A slash inside a word or a relative path is no home folder: it stays.
+    const kept = 'HTTP/2 stream error，text/html，codex/gpt-6.1-sol，2026/10/16，读/写，./a/b';
+    expect(noticeText({ kind: 'bot-recovered', appId: LATE, name: '晚到', crashes: 1, reason: kept })).toBe(`「晚到」刚才崩溃过一次，已自动恢复。原因：${kept}。`);
+    expect(noticeText({ kind: 'bot-recovered', appId: LATE, name: '晚到', crashes: 1, reason: 'bad dir=/Users/u/x/y.json，读取/srv/a/b失败' }))
+      .toBe('「晚到」刚才崩溃过一次，已自动恢复。原因：bad dir=y.json，读取b失败。');
   });
 
   it('reads the owner, the tenant and the secret from the bot\'s config, and says why it cannot', async () => {

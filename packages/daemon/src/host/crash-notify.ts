@@ -58,9 +58,10 @@ const HOST = '#host';
 /** The name the pages show. */
 export const botLabel = (bot: Pick<BotEntry, 'name' | 'botName'>): string => bot.botName || bot.name;
 const sentence = (text: string): string => (/[。！？.!?]$/.test(text) ? text : `${text}。`);
-/** No local path (3.10): a path keeps its last part (the file); a web address and a Feishu API path stay. */
-const withoutPaths = (text: string): string => text.replace(/[\w.~@%+=:#[\]-]*\/[\w.~@%+=:#[\]/-]*/g,
-  token => (/^(?:(?!file:)[a-z][\w+.-]*:\/\/|\/open-apis\/)/i.test(token) ? token : token.replace(/^.*\/(?=.)/, '')));
+/** No local path (3.10): an absolute one (`/…`, `~/…`, `file://…`) keeps its last part (the file). A slash inside a
+ * word is not one (`HTTP/2`, `text/html`, `codex/gpt-6.1-sol`, `2026/10/16`), nor a web address or a Feishu API path. */
+const withoutPaths = (text: string): string => text.replace(/(?<![\w.~@%+:#\]/-])(?:file:\/\/)?~?\/[\w.~@%+=:#[\]/-]*/g,
+  token => (token.startsWith('/open-apis/') ? token : token.replace(/^.*\/(?=.)/, '')));
 const because = (label: string, reason: string | undefined): string => (reason ? `${label}：${sentence(withoutPaths(reason))}` : '');
 
 /** One line each (3.10): no stack and no local path; the reason is a record's `crashText`, already sanitized. */
@@ -125,6 +126,8 @@ async function post(fetchImpl: typeof fetch, url: string, body: unknown, signal:
 function refused(reply: Reply): SendResult | undefined {
   const detail = { status: reply.status, ...(reply.code !== undefined ? { code: reply.code } : {}), ...(reply.msg ? { msg: reply.msg } : {}) };
   if (reply.status >= 500 || reply.status === 429 || (reply.code !== undefined && RATE_LIMITED.has(reply.code))) return { ok: false, retry: true, ...detail };
+  // A 2xx whose body was not read (cut in transit) may have been taken: tried again with the same uuid, never another bot.
+  if (reply.status >= 200 && reply.status < 300 && reply.code === undefined) return { ok: false, retry: true, ...detail };
   if (reply.status < 200 || reply.status >= 300 || reply.code !== 0) return { ok: false, retry: false, ...detail };
   return undefined;
 }
@@ -194,8 +197,9 @@ export function createCrashNotifier(deps: {
     ({ event, uuid: `vc-${randomUUID().replace(/-/g, '')}`, attempt: 0, scope, gen: gen(scope), exempt, candidates });
   /** One chain: the limit check, the send and the stamp of one message never interleave with another's. */
   const enqueue = (next: Job, pauseMs = 0): void => {
-    queue = queue.then(() => (pauseMs ? new Promise<void>(resolve => {
+    queue = queue.then(() => (pauseMs && !finalCut.signal.aborted ? new Promise<void>(resolve => {
       const timer = setTimeout(resolve, pauseMs);
+      timer.unref();
       finalCut.signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
     }) : undefined)).then(() => run(next)).catch(error => log.fail('crash-notify', error, { phase: 'send' }));
   };
