@@ -34,6 +34,10 @@ const STDOUT_INFO_ALLOWLIST = new Set<string>([
   'agent.resume-ok',
   'agent.resume-recreate',
   'agent.session-fresh',
+  // s15b：会话被别处写过而重新接上、别处的压缩、Codex 每轮结束放开线程。
+  'agent.native-changed',
+  'agent.native-compaction',
+  'agent.session-release',
 ]);
 
 export interface LogContext {

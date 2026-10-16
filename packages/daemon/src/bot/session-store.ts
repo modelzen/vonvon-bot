@@ -56,6 +56,10 @@ export interface SessionRecord {
    * the group's recent topics (s14b); '' once shown. Tied to the session id
    * like {@link usage}, so a new session drops it. Older records lack it. */
   topicsDue?: string;
+  /** The newest compaction of the native session the daemon has seen, by the backend's id
+   * for it (AgentThread.lastCompaction): a different one marks {@link topicsDue} (s15b).
+   * Main sessions only. Older records lack it. */
+  compactSeen?: string;
   /** The oldest message the session got (epoch ms): older ones never reached it,
    * and a rebuilt session's opening does not reach past it. `/new` sets it to
    * the command, an opening turn to its oldest line (s15). Older records lack it. */
