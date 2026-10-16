@@ -192,6 +192,14 @@ describe('crash handler in a real process', () => {
     expect(listCrashRecords(root)).toEqual([expect.objectContaining({ kind: 'exception', scope: 'host', during: 'run', reason: 'TypeError: fixture boom', errorName: 'TypeError', managed: null })]);
     expect(readRunMarker(root)).toMatchObject({ state: 'running' });
   });
+  it('prints each error of an uncaught AggregateError and keeps the record format (s17b)', async () => {
+    const root = tempRoot();
+    const { code, stderr } = await crashChild(root, ['host-aggregate']);
+    expect(code).toBe(70);
+    expect(stderr).toContain('AggregateError: fixture group');
+    expect(stderr).toContain('\n  - Error: first leaf\n  - inner group › Error: second leaf\n');
+    expect(listCrashRecords(root)).toEqual([expect.objectContaining({ kind: 'exception', reason: 'AggregateError: fixture group', errorName: 'AggregateError' })]);
+  });
   it('records an unhandled rejection of a non-Error', async () => {
     const root = tempRoot();
     const { code } = await crashChild(root, ['host-rejection']);

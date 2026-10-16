@@ -7,6 +7,7 @@ import { acquirePidLock, getPidLockInfo, isPidLockOwnerRunning, PidLockError, pu
 import { verifyPidLockOwner } from '../server/owner-verification';
 import { readStartupRegistration } from '../service/startup';
 import { log } from '../core/logger';
+import { wasLogged } from '../core/error-parts';
 import { bridgeVersion } from '../core/version';
 import { defaultHolderPath, ProcessHost } from '../provider/process/process-host';
 import { closeHostRun, guardParentPipes, openBotCrashContext, openHostRun, type HostRunStart } from './crash-guard';
@@ -93,6 +94,8 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
     }
     // JP-VPS acceptance seam (s17): a real uncaught exception or rejection in a host, 2 s into the run.
     const seam = process.env.VONVON_TEST_CRASH;
+    // Acceptance only: a value left in the environment is named at every start, in the log and on stderr.
+    if (!process.send && (seam === 'exception' || seam === 'rejection' || seam === 'cleanup')) log.warn('daemon-startup', 'test_seam', { seam });
     if (!process.send && (seam === 'exception' || seam === 'rejection')) {
       setTimeout(() => {
         if (seam === 'exception') throw new Error('VONVON_TEST_CRASH exception');
@@ -117,23 +120,34 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
   } catch (error) {
     errors.push(error);
     if (!control.requested) fatal = { error };
+    // The supervisor and a single bot log what fails inside their run; a failure before it (the registration, a
+    // lock, the registry) is logged here (s17b), in the JSON log only: the CLI prints this error itself.
+    if (!wasLogged(error)) log.fail('daemon-run', error, { phase: 'run' }, { console: false });
   }
   finally {
     // A cleanup failure no longer turns a requested restart into a stop (v1-plan s17): the replacement starts only
     // after this process has exited, and leftover provider processes are swept at the next boot.
-    try { await host?.closeAll(); } catch (error) { errors.push(error); }
+    try { await host?.closeAll(); } catch (error) { log.fail('daemon-shutdown', error, { phase: 'process-host' }); errors.push(error); }
+    // JP-VPS acceptance seam (s17b): a two-level cleanup failure, to see each error in the logs and on stderr.
+    if (host && !process.send && process.env.VONVON_TEST_CRASH === 'cleanup') {
+      const seam = new AggregateError([new Error('step 1'), new AggregateError([new Error('step 2')], 'VONVON_TEST_CRASH nested')], 'VONVON_TEST_CRASH cleanup');
+      log.fail('daemon-shutdown', seam, { phase: 'test-seam' });
+      errors.push(seam);
+    }
+    // complete() logs its own failure before it throws. It runs once: a run that called it already threw this
+    // rejection, alone or in its group, so it is not added again.
     try { await control.completeShutdown(async () => {}); }
-    catch (error) { errors.push(error); }
+    catch (error) { if (!errors.some(item => item === error || (item instanceof AggregateError && Array.isArray(item.errors) && item.errors.includes(error)))) errors.push(error); }
     control.dispose();
     closeHostRun(fatal ? { kind: 'fatal', error: fatal.error } : { kind: 'clean' });
     // A paused run that cannot stay up exits 0 under a manager, which then leaves it down: the pause ends the loop.
     if (fatal && run?.paused && process.env.VONVON_SERVICE && !process.send) process.exitCode = 0;
     if (!errors.some(listenerCloseUnconfirmed)) {
       if (owner) {
-        try { await releasePidLock(paths.appDir, owner); } catch (error) { errors.push(error); }
+        try { await releasePidLock(paths.appDir, owner); } catch (error) { log.fail('daemon-shutdown', error, { phase: 'pid-lock' }); errors.push(error); }
       }
       if (lock) {
-        try { await closeMutex(lock); } catch (error) { errors.push(error); }
+        try { await closeMutex(lock); } catch (error) { log.fail('daemon-shutdown', error, { phase: 'host-mutex' }); errors.push(error); }
       }
     }
     if (errors.length === 1) throw errors[0];

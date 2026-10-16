@@ -100,7 +100,7 @@ export function MachinePanel({request, agents, reveal, macos = false}: {request:
             <Button size="sm" disabled={busy || !bot || !!status?.host || !shell?.startHost} onClick={() => {const startHost = shell?.startHost; if (startHost) void runShell(() => startHost(bot));}}>仅运行此 Bot</Button>
           </span>} />
         <SettingsRow title="进程 PID" value={status?.host?.pid ?? service?.pid ?? '无'} />
-        <SettingsRow title="上次退出码" value={service?.lastExit ?? '无记录'} />
+        <SettingsRow title="上次退出" value={service?.lastExit ?? '无记录'} />
         <SettingsRow title="服务定义" value={service?.servicePath ?? '未读取'} />
         <SettingsRow title="标准输出" value={service?.stdoutPath ?? '未读取'} />
         <SettingsRow title="错误日志" value={service?.stderrPath ?? '未读取'} />

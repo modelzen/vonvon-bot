@@ -923,6 +923,21 @@ it('launchd reads only own state and pid beside native-shaped nested state field
     expect((await f.service.status()).manager).toMatchObject({ kind: 'loaded', pid: first.pid });
   });
 });
+it('launchd status reads the exits from the same print, and has none without a job (s17b)', async () => {
+  await withLaunchd(async f => {
+    await f.seed();
+    f.calls.length = 0;
+    f.state.queryOutput = `${jobHeader}\n\tstate = running\n\truns = 3\n\tpid = ${first.pid}\n\tlast terminating signal = Killed: 9\n\tresource coalition = {\n\t\tstate = active\n\t}\n}\n`;
+    const status = await f.service.status();
+    expect(status.manager).toMatchObject({ kind: 'loaded', pid: first.pid });
+    expect(status.exits).toEqual({ manager: 'launchd', runs: 3, lastExitCode: null, lastExitText: null, lastSignal: 'Killed: 9' });
+    expect(f.calls).toEqual([printJob]);
+    f.state.loaded = false;
+    const absent = await f.service.status();
+    expect(absent.manager.kind).toBe('absent');
+    expect(absent.exits).toBeUndefined();
+  });
+});
 
 const printJob = `print gui/501/${LAUNCHD_LABEL}`;
 const bootoutJob = `bootout gui/501/${LAUNCHD_LABEL}`;

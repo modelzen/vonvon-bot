@@ -8,6 +8,7 @@ import type { HostEndpoint } from '../host/discovery';
 import { isStaleOwner, readRunningPidLock, type StaleOwner } from '../server/pid-lock';
 import { stopVerifiedOwner, verifyPidLockOwner } from '../server/owner-verification';
 import { renderDefinition, type Definition } from './definitions';
+import { parseLaunchdExits } from './exits';
 import { isTranslocated, runtimeDistribution } from './distribution';
 import { createServiceDrain, type DrainFailure, type DrainScope, type OwnerIdentity } from './drain';
 import { resolveServiceRoot, serviceTarget, type CanonicalRoot } from './identity';
@@ -434,7 +435,9 @@ export function createLaunchdService(options: { root: string }, overrides: Parti
         try { if (owner.pid !== process.pid) await d.verifyOwner(s.root, owner); running = true; }
         catch (error) { ownerError = detailOf(error); }
       }
-      return { target: s.target, registration: current, manager, owner: identity(owner), running, ownerError };
+      // s17b: the exits come from the same print, not one more launchctl.
+      const exits = manager.kind === 'loaded' ? parseLaunchdExits(manager.raw) : undefined;
+      return { target: s.target, registration: current, manager, owner: identity(owner), running, ownerError, ...(exits ? { exits } : {}) };
     },
   };
 }
