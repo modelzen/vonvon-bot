@@ -23,6 +23,9 @@ vi.mock('../src/agent', async (original) => ({ ...await original<object>(), crea
 vi.mock('../src/project/registry', async (original) => ({
   ...await original<object>(),
   getProjectByChatId: (...args: unknown[]) => fake.project(...args),
+  // s15c's tier merge reads projects.json from disk before connect; these tests
+  // count fake-timer ticks to connect, so keep startup free of real I/O.
+  splitTierChats: async () => new Map(),
 }));
 vi.mock('../src/bot/session-store', async (original) => ({
   ...await original<object>(),
