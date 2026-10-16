@@ -48,6 +48,7 @@ it('a paused host runs the supervisor paused, also for an inline --bot host and 
   expect(runSupervisor).toHaveBeenLastCalledWith([bot], { control, managed: false, paused: true });
   vi.mocked(ensureRegistry).mockRejectedValue(new Error('bots.json unreadable'));
   await runRun(undefined, { control, paused: true });
-  expect(runSupervisor).toHaveBeenLastCalledWith([], { control, managed: false, paused: true });
+  // s18b D1: the notifier then looks for a sender among the bots' folders.
+  expect(runSupervisor).toHaveBeenLastCalledWith([], { control, managed: false, paused: true, registryUnreadable: true });
   expect(ensureOnboarded).not.toHaveBeenCalled();
 });
