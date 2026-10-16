@@ -103,6 +103,8 @@ Comparison rules.
 
 The product holds three mutexes for each data root, with the roles `host`, `admission`, and `keystore`. Each mutex is a TCP listener on `127.0.0.1`. Its port is `20000 + (the first four bytes of sha256("vonvon-bot-v2:<role>:<realpath of VONVON_HOME>"), read as a big-endian UInt32) mod 30000`, as `config/data-access.ts` computes it. On Windows the mutexes are named pipes.
 
+Since s20c the mutex itself is no longer the port. On Linux it is the abstract Unix socket `@vonvon-bot-mutex-v3:<role>:<sha256 hex of the realpath>`, listed by `ss -lx`. On macOS it is an `O_EXLOCK` lock on `<data root>/.locks/<role>.lock`. A `service` mutex from s08 follows the same rules. Until the transition from pre-s20c builds is removed (`docs/v1-plan.md`, s20c), the holder also listens on the role port above whenever that port is free, so the port rules below still apply to it. A role port that is missing because another socket had it is not a failure.
+
 Production port set Π. Before each run, root reads the sources below read-only and records, for each source, either the ports it found or `unresolved`.
 
 - The listeners at B0, from `ss -ltnuH`.

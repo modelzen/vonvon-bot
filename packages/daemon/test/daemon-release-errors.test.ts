@@ -4,6 +4,7 @@ import { createServer, type Server } from 'node:net';
 import { join } from 'node:path';
 import { WebSocket, WebSocketServer } from 'ws';
 import { afterAll, afterEach, expect, it, vi } from 'vitest';
+import type { Mutex } from '../src/config/data-access';
 import type { DaemonApi } from '../src/server/http';
 
 const owned = await vi.hoisted(async () => {
@@ -13,7 +14,7 @@ const owned = await vi.hoisted(async () => {
   const appDir = realpathSync(mkdtempSync(join(tmpdir(), 'vonvon-release-errors-')));
   vi.stubEnv('VONVON_HOME', appDir);
   return {
-    appDir, mutexes: new Set<Server>(), apis: new Set<DaemonApi>(),
+    appDir, mutexes: new Set<Mutex>(), apis: new Set<DaemonApi>(),
     listening: vi.fn<(listen: string) => void>(), release: vi.fn(),
   };
 });
@@ -90,7 +91,9 @@ afterEach(async () => {
   await Promise.allSettled([...httpServers].filter(server => server.listening).map(server => new Promise<void>(resolve => {
     server.closeAllConnections(); server.close(() => resolve());
   })));
-  await Promise.allSettled([...owned.mutexes, ...boundPorts].filter(server => server.listening).map(closeMutex));
+  await Promise.allSettled([...owned.mutexes].map(closeMutex));
+  owned.mutexes.clear();
+  await Promise.allSettled([...boundPorts].filter(server => server.listening).map(server => new Promise(resolve => server.close(resolve))));
   const owner = await getPidLockInfo(paths.appDir);
   if (owner?.pid === process.pid) await releasePidLock(paths.appDir, owner);
   vi.unstubAllGlobals();

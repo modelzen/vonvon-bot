@@ -1,11 +1,12 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import type { Registration } from '../src/service/registration';
 import type { ShutdownControl } from '../src/host/lifecycle';
+import { bundleDataAccess, mutexChild } from './helpers/mutex-child';
 
 const fixture = vi.hoisted(() => ({
   root: '', registration: vi.fn<() => Promise<Registration>>(), run: vi.fn(), info: vi.fn(), verify: vi.fn(),
@@ -47,20 +48,18 @@ const run = () => runHostRuntime({ managed: false, control: control() });
 const lockPath = () => join(fixture.root, 'daemon.pid');
 const ours = (): Registration => ({ kind: 'ours', definition: { root: fixture.root, port: 1234, capturedPath: '/bin', distribution: { kind: 'npm', executable: '/node', entry: '/cli' } } as never });
 const children: ChildProcess[] = [];
+let bundleDir = '';
+let entry = '';
+beforeAll(async () => { bundleDir = await mkdtemp(join(tmpdir(), 'vonvon-prelock-bundle-')); entry = await bundleDataAccess(bundleDir); });
+afterAll(() => rm(bundleDir, { recursive: true, force: true }));
 
-/** A live process that is not a daemon; with `mutex` it also holds this root's host mutex. */
+/** A live process that is not a daemon; with `mutex` it also holds this root's real host mutex. */
 async function bystander(mutex: boolean): Promise<{ child: ChildProcess; pid: number; signals: () => string }> {
-  const source = `const {createHash}=require('node:crypto');for(const s of ['SIGTERM','SIGINT','SIGHUP','SIGUSR1','SIGUSR2'])process.on(s,()=>process.stdout.write(s));
-if(process.argv[1]){const h=createHash('sha256').update('vonvon-bot-v2:host:'+process.argv[1]).digest();require('node:net').createServer().listen({host:'127.0.0.1',port:20000+h.readUInt32BE(0)%30000,exclusive:true},()=>process.stdout.write('ready'));}
-else process.stdout.write('ready');setInterval(()=>{},1000);`;
-  const child = spawn(process.execPath, ['-e', source, mutex ? fixture.root : ''], { stdio: ['ignore', 'pipe', 'inherit'] });
+  const { child, output } = await mutexChild(entry, `for(const s of ['SIGTERM','SIGINT','SIGHUP','SIGUSR1','SIGUSR2'])process.on(s,()=>process.stdout.write(s));
+const ready=()=>process.stdout.write('ready');
+if(process.argv[1])m.acquireMutex(process.argv[1],'host',0).then(ready,e=>{console.error(e.message);process.exit(1)});else ready()`, [mutex ? fixture.root : '']);
   children.push(child);
-  let out = '';
-  await new Promise<void>((done, fail) => {
-    child.once('exit', () => fail(new Error('bystander exited')));
-    child.stdout?.on('data', (chunk: Buffer) => { out += chunk.toString(); if (out.startsWith('ready')) done(); });
-  });
-  return { child, pid: child.pid ?? 0, signals: () => out.slice('ready'.length) };
+  return { child, pid: child.pid ?? 0, signals: output };
 }
 const untouchedBystander = (b: Awaited<ReturnType<typeof bystander>>) => {
   expect(b.child.exitCode).toBeNull(); expect(b.child.signalCode).toBeNull(); expect(b.signals()).toBe('');
