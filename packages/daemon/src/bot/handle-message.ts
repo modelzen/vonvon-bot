@@ -232,6 +232,7 @@ import {
   type SessionTitleSource,
 } from './session-title';
 import { handleDmConsole } from './dm-console';
+import { createSyncCopyGate } from './sync-copy';
 import { fetchInteractiveCardText, isDegradedCardContent } from './card-content';
 import {
   collectInboundFiles,
@@ -1066,6 +1067,8 @@ export function createOrchestrator(
   const lastUsage = new Map<string, { used: number; window: number | null }>();
   /** inbound message/comment dedup (at-least-once delivery, see RecentIdCache) */
   const seenInbound = new RecentIdCache();
+  /** The main-area copy of a reply sent with 「同时发送到群」 (s14d). */
+  const syncCopy = createSyncCopyGate(channel);
   /** Messages recalled in this process (s15), oldest first: one whose recall came
    * first is not run. Kept {@link RECALLED_TTL_MS}, at most {@link RECALLED_MAX}. */
   const recalled = new Map<string, number>();
@@ -1332,12 +1335,19 @@ export function createOrchestrator(
       ref: msg.messageId.slice(-6),
     });
 
+    // The main-area copy of a reply 「同时发送到群」 or 「同时发送到会话」 is dropped here,
+    // before any reply, record, watermark or note; its topic message is answered (s14d).
     if (msg.chatType === 'p2p') {
+      if (await syncCopy.skip(msg, true)) return;
       await handleDmConsole(channel, cfg, msg);
       return;
     }
 
     const project = await getProjectByChatId(msg.chatId);
+    // @门：没 @ 时只在「项目群 + 免@ 适用」才响应。免@默认开,但 multi 仅话题内、
+    // single 整群;非项目群一律不响应非 @ 消息。
+    const addressed = msg.mentionedBot || Boolean(project && shouldRespondWithoutMention(project, msg));
+    if (await syncCopy.skip(msg, addressed || resumePublications.has(msg.chatId))) return;
     if (resumePublications.has(msg.chatId)) {
       await channel.send(msg.chatId, { markdown: '正在恢复历史会话，请完成后重发此消息。' }, { replyTo: msg.messageId });
       return;
@@ -1346,9 +1356,6 @@ export function createOrchestrator(
       if (msg.mentionedBot) noteNotReplied(msg, 'group-disabled');
       return;
     }
-    // @门：没 @ 时只在「项目群 + 免@ 适用」才响应。免@默认开,但 multi 仅话题内、
-    // single 整群;非项目群一律不响应非 @ 消息。
-    const addressed = msg.mentionedBot || Boolean(project && shouldRespondWithoutMention(project, msg));
     if (projectMutations.has(msg.chatId)) {
       if (addressed) noteNotReplied(msg, 'group-updating');
       return;
