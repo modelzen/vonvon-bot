@@ -115,10 +115,10 @@
 |---|---|---|---|
 | `CLAUDE.md` | 加载 | **默认不加载**；设 `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` 才加载 | 跑过验证（r1、r2、r3b） |
 | `.claude/rules/*.md` | 加载 | 同上，随 env 一起加载 | 跑过验证 |
-| `AGENTS.md` | **只在同目录没有 `CLAUDE.md` 时**加载（内置插件 `cc-plugin-agents-md@builtin`，系统提示里标"project instructions, checked into the codebase"）；有 `CLAUDE.md` 时不读 | 没测 | 跑过验证（r1 有两份时没读；r7 只有 AGENTS.md 时读了） |
+| `AGENTS.md` | **只在同目录没有 `CLAUDE.md` 时**加载（内置插件 `cc-plugin-agents-md@builtin`，系统提示里标"project instructions, checked into the codebase"）；有 `CLAUDE.md` 时不读 | 不加载（#349 审查复测：add-dir 只放 AGENTS.md，没进请求） | 跑过验证（r1 有两份时没读；r7 只有 AGENTS.md 时读了） |
 | `.claude/skills/` | 加载 | **加载** | 跑过验证（r2：`ws-claude-skill` 出现在 init 和请求里） |
 | `.agents/skills/` | 不加载 | 不加载 | 跑过验证 |
-| `.mcp.json` | 加载（需要设置里批准，比如 `enableAllProjectMcpServers`） | **不加载** | 跑过验证（r2 只有 `bot_mcpjson`） |
+| `.mcp.json` | 加载；`-p` 和 SDK 下不经批准就拉起，跑在沙箱外 | **不加载** | 跑过验证（r2 只有 `bot_mcpjson`）；不经批准是 #349 审查复测的：空 HOME，`-p --setting-sources user,project`，SDK 0.3.296 的 `bypassPermissions` 和 `default` 加一律拒绝的 `canUseTool`，三种都拉起，init 里 source 是 `project` |
 | `.claude/settings.json` | 加载 | **不加载** | 跑过验证（r5/r6：工作区设置里的 `defaultMode: acceptEdits` 在 add-dir 时不生效） |
 | 用户层 `~/.claude/CLAUDE.md`、`~/.claude/skills` | 加载 | — | 跑过验证 |
 
@@ -226,7 +226,7 @@
 2. **"继承工作区的 skill 和 MCP"在 cwd = bot 家时，两家都不会自动做全**（B1，跑过验证）：
    - Claude：`--add-dir` 工作区的 `.claude/skills` 会加载；`CLAUDE.md` 要另设 env；`.mcp.json`、`settings.json` 不加载。`--project-config-root` 能整份换成工作区的项目配置，但会丢掉 bot 家自己的 `.claude/skills` 和 `.mcp.json`，而且是帮助里不列的参数。
    - Codex：第二个根的 AGENTS.md、skill、`.codex/config.toml` 一概不加载。要继承只能由 vonvon 自己读出来（`skills/list cwds:[ws]` 能列，跑过验证），再用 `skills/extraRoots/set`、`mcp_servers` 传进去。
-3. **反过来，cwd = 工作区时，工作区的东西两家都原生加载**：Claude 的 CLAUDE.md、rules、skill、批准过的 `.mcp.json`、设置；Codex 的 AGENTS.md、skill，trusted 时还有 `.codex/config.toml` 的 MCP。也就是说定稿方案下"继承"是默认行为，新方案下要 vonvon 自己补。
+3. **反过来，cwd = 工作区时，工作区的东西两家都原生加载**：Claude 的 CLAUDE.md、rules、skill、`.mcp.json`（非交互下不用批准）、设置；Codex 的 AGENTS.md、skill，trusted 时还有 `.codex/config.toml` 的 MCP。也就是说定稿方案下"继承"是默认行为，新方案下要 vonvon 自己补。
 4. **Codex 的信任设置两份资料说法不一。** e05 读源码说会话层 `projects.<cwd>.trust_level: trusted` 会加载 `.codex/` 项目配置（没实测）；本次 `codex exec -c` 同样的覆盖不加载，只有写在用户 `config.toml` 里才加载（跑过验证）。app-server 会话层到底如何，没测。
 5. **终端里接着用 bot 的会话（D6，`docs/product.md:168`）和 cwd 绑定。** Claude 会话按 cwd 存在 `~/.claude/projects/<cwd 名>/`，vonvon 读历史也按 `dir: cwd`（`D/agent/claude-agent/backend.ts:374-412`）；e14 是"在 bot 的工作目录里" `claude --resume`（`docs/research/2026-10-15-v1-spikes/e14-resume-same-session.md:20`）。cwd 换成 bot 家，主人要到 bot 家目录里 resume；Codex 应用按 cwd 分组显示（未验证）。
 6. **发文件和领文件按 cwd 判断。** 非完全访问档只放行 cwd 下的文件（`D/provider/outbound/policy.ts:20-30`）；图片约定是"相对当前工作目录"（`D/agent/bridge-instructions.ts:22-25`）。cwd = bot 家时，工作区里的产出发不出去，除非放行范围扩到所有根。新 provider 层也只有一个 `grant.root`（`D/provider/policy/enforcement.ts:110-113`）。

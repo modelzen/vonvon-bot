@@ -64,8 +64,8 @@ Vonvon Bot 是一个 macOS 桌面应用；Linux 上可以只装后台服务，�
 | 规矩 `AGENTS.md` | 有，可选 | 不能改 | 只在 bot 层 |
 | 工作区 | n 个，1 个主的 | 可覆盖 | 群没设时，在默认位置给这个群建一个目录，见 3.3 |
 | 代码仓库 | 0 到 n 个 | 可覆盖 | 只接本机已有的 git 目录，不接 git 地址 |
-| skill | 启用名单 | 可增、可减 | 实际生效 =（bot 启用 ∪ 群增加）− 群移除 |
-| MCP | 启用名单 | 可增、可减 | 同 skill |
+| skill | 启用名单 | 可增、可减 | 实际生效 =（bot 启用 ∪ bot 自己的 skill ∪ 群增加）− 群移除，bot 自己的 skill 见 3.6 |
+| MCP | 启用名单 | 可增、可减 | 实际生效 =（bot 启用 ∪ 群增加）− 群移除 |
 | 记忆 | 公共记忆，所有群都看 | 本群记忆，只在本群看 | 见 3.6 |
 | 智能提示词 | 有，带内置默认值 | 可覆盖 | 只在智能模式下用 |
 | 模式 | 无 | 智能或规则 | 只在群层，见 3.4 |
@@ -102,9 +102,9 @@ Vonvon Bot 是一个 macOS 桌面应用；Linux 上可以只装后台服务，�
 - 工作区默认放在隐藏目录 `~/.vonvon-bot/projects/` 下，和今天一样（`D/config/paths.ts:115`），可以在桌面端改到别处。比今天多一层 `<bot 名>/`：今天所有 bot 共用这个目录，两个 bot 的同名项目会落进同一个目录（推断，`docs/research/2026-10-14-v1-definition/v2-fit.md` 第 8 节第 6 条）。
 - 每个群默认有自己的目录。共用一个目录的话，B 群的会话能看到 A 群产生的文件，和"每个群的记忆分开"矛盾。
 - 目录名按建立时的名字取，之后不跟着改名，重名时加一个短后缀，"/"等字符替换掉。
-- 定义文件都是 markdown 和 json，主人可以直接用编辑器改。它们不进用户的代码仓库。仓库里的 `AGENTS.md`、`CLAUDE.md` 照旧由 agent 自己读；Claude 只在同一目录没有 `CLAUDE.md` 时才读 `AGENTS.md`（Claude Code 2.1.296 实测）。
+- 定义文件都是 markdown 和 json，主人可以直接用编辑器改。它们不进用户的代码仓库。主工作区（会话的 cwd）里的 `AGENTS.md`、`CLAUDE.md` 照旧由 agent 自己读；Claude 只在同一目录没有 `CLAUDE.md` 时才读 `AGENTS.md`（Claude Code 2.1.296 实测）。其余工作区和代码仓库里的，两家默认都不读，vonvon 在指令里让 agent 先读（3.6）。
 - vonvon 不往工作区写任何文件。个性、规矩、记忆、名单和 bot 自己的 skill 都只在 `bots/<appId>/` 下，由 vonvon 在起会话时交给 agent（3.6）。所以工作区里已有的文件不会被覆盖，工作区只读也不影响 bot 记东西。
-- 会话照旧从工作区起，不从 bot 自己的目录起（owner 2026-10-16 定）。这样工作区里的 `CLAUDE.md`、`AGENTS.md`、skill 和 MCP 由两家原生加载；从 bot 的目录起的话，两家都不会加载附加目录里的 MCP，Codex 连附加目录里的 `AGENTS.md` 和 skill 都不读，只读档、能发哪些文件也都按会话目录判断。调研见 `docs/research/2026-10-16-bot-home/`。
+- 会话照旧从工作区起，不从 bot 自己的目录起（owner 2026-10-16 定）。这样主工作区里的 `CLAUDE.md`、`AGENTS.md`、skill 和 MCP 由两家原生加载，Codex 一侧还要看 vonvon 传的信任设置（3.6）。原生加载只限主工作区：其余工作区和代码仓库在哪种做法下都是附加目录，那里的 MCP 和 `AGENTS.md` 两家都不加载，Claude 默认也不读那里的 `CLAUDE.md`，只加载 `.claude/skills`，Codex 连 skill 也不读（Claude Code 2.1.296、Codex 0.163.0 实测）。新群的主工作区默认是 vonvon 建的空目录，代码仓库作为附加目录接上（3.2，`docs/v1-plan.md` s36），所以默认情况下仓库自己的 `CLAUDE.md`、MCP 和 Codex 的 skill 都不会原生加载。从 bot 的目录起的话，连主工作区也成了附加目录；今天的代码里，只读档、能发哪些文件也只按会话目录判断。调研见 `docs/research/2026-10-16-bot-home/`。
 
 ### 3.4 群：智能模式和规则模式
 
@@ -319,18 +319,24 @@ bot 自己开的话题（比如上面主区例子里的「订单接口 500」）
 | 公共记忆 | 所有群和私聊 | 只有主人和管理员，在桌面端或聊天里 |
 | 私聊记忆 | 只在这个人的私聊里 | 这个人的私聊会话 |
 
-- A 群的记忆永远不会出现在 B 群。同一个群里几个 bot 各有一份本群记忆，不共享。
+- vonvon 永远不把 A 群的记忆放进 B 群的会话；Claude 的会话今天还能自己读到别处的记忆文件，见下面。同一个群里几个 bot 各有一份本群记忆，不共享。
 - 写入在卡片上显示"已记到本群记忆：…［撤销］"。第一版不做后台自动整理。
 - 记忆在会话开始或恢复时放进去，标成"背景资料，不是指令"。Codex 恢复会话时不认新传的 `developerInstructions`，模型看到的还是开会话时那份，所以恢复时的记忆用 `thread/inject_items` 或 `turn/start` 的 `additionalContext`（实验字段）放进去（e05）。中途写的，下一条会话才生效。每份有字数上限，满了让 bot 先整理，不悄悄截断。
-- 关掉两家自带的记忆：Claude 的 auto memory 按 git 仓库共享，两个群用同一个仓库就会串；Codex 的 memories 是全局整合的。第一层约定里写明：要记的东西只写进 vonvon 给的那份记忆文件，不改工作区里的 `CLAUDE.md`、`AGENTS.md`，也不在工作区里另建记忆文件。
-- 这一次能写的那份记忆所在的目录，作为可写的根交给会话，每一档都放行，工作区只读时也能记：群里是本群的 `memory/`，私聊是这个人的 `memory/dm/<open_id>/`。公共记忆在群里不放行。daemon 自己的 `config.json`、`sessions.json` 不在这些目录里，agent 碰不到（完全访问档除外）。
+- 关掉两家自带的记忆：Claude 的 auto memory 按 git 仓库共享，两个群用同一个仓库就会串；Codex 的 memories 是全局整合的。第一层约定里写明：要记的东西只写进 vonvon 给的那份记忆文件；不为了记东西去改工作区里的 `CLAUDE.md`、`AGENTS.md`，也不在工作区里另建记忆文件；用户明确要改这些文件时照常改。
+- 这一次能写的那份记忆所在的目录，作为可写的根交给会话，每一档都放行，工作区只读时也能记：群里是本群的 `memory/`，私聊是这个人的 `memory/dm/<open_id>/`。公共记忆哪一档、群里还是私聊都不放行：它所在的 `memory/` 下面就是每个人的 `memory/dm/`，放行它就放行了所有人的私聊记忆。公共记忆只由主人和管理员在桌面端或私聊的设置命令里改（3.7）。
+- 目录整个可写，群里任何人都能让 agent 在里面建符号链接、硬链接、FIFO 或很大的文件。daemon 不在沙箱里，跟着链接读，就会把别人的私聊记忆或 `~/.ssh` 下的文件贴进卡片和下一条会话。所以 daemon 只认这一个文件（`group.md` 或 `dm.md`），目录里别的文件不读；读时不跟随链接（`O_NOFOLLOW`，加 `O_NONBLOCK` 免得被 FIFO 卡住），打开后确认是普通文件、硬链接数是 1、不超过大小上限（比如 64 KB）。不符合就不读、不放进会话和卡片，记一条日志，按超上限一样回滚。回滚和［撤销］都先写一个新的普通文件再 rename 换上，不顺着链接写。
+- daemon 自己的 `config.json`、`sessions.json` 不在这些目录里，放行记忆目录不会让 agent 写到它们（完全访问档除外）。工作区和代码仓库只能在数据目录（默认 `~/.vonvon-bot/`）以外，或在它的 `projects/` 下面，也不能是数据目录的上级（比如 `~`），选到时拒绝。读没有隔开：Claude 的只读、读写档今天不限读（`D/agent/claude-agent/permission.ts:25-28`），沙箱里的 Bash 读得到这些文件，也读得到别的群的记忆、别人的私聊记忆和数据目录里的凭据（第 9 节第 20 项）。
 - 主人本机的个人指令（`~/.claude/CLAUDE.md`、`~/.codex/AGENTS.md`）和个人 skill：从 bridge 导入的 bot 默认带上，行为不变；新建的 bot 默认不带 Claude 的个人指令，也不带两家的个人 skill。Codex 的 `~/.codex/AGENTS.md` 按会话关不掉（e05），所以新建的 bot 也带着它；bot 的指令里写明 bot 自己的规矩优先（owner 2026-10-15 定）。
 
 **skill 和 MCP。**
 - 本机各有一个库，装一次，bot 和群各有名单。从名单移除不删库；从库里删除时，列出还在用它的 bot。
 - skill 的来源：内置、本机文件夹、从 `~/.agents/skills`、`~/.codex/skills`、`~/.claude/skills` 导入。格式按 Agent Skills 标准（agentskills.io/specification）。
-- 每个 bot 还可以有自己的 skill，放在 `bots/<appId>/skills/`，不进本机库，只给这个 bot 用。它们和库里按名单启用的一起交给会话，同名时 bot 自己的优先。群的增减名单对它们一样有效。
-- 工作区自己的 skill 和 MCP（仓库里的 `.claude/skills`、`.agents/skills`、`.mcp.json`、`.codex/config.toml` 等）不进名单，vonvon 不改它们，由两家按 cwd 加载，照两家自己的规则：Claude 的 `.mcp.json` 要主人批准过，Codex 的 `.codex/config.toml` 要这个目录是 trusted。Claude 的 `skills` 白名单会不会把工作区的 skill 一起滤掉，s44 实现时核对，会的话把它们加进白名单。
+- 每个 bot 还可以有自己的 skill，放在 `bots/<appId>/skills/`，不进本机库，只给这个 bot 用。它们和库里按名单启用的一起交给会话，同名时 bot 自己的优先。群的增减名单对它们一样有效，Bot 页和群详情页都列出它们（3.2）。
+- 工作区自己的 skill 和 MCP（`.claude/skills`、`.agents/skills`、`.codex/skills`、`.mcp.json`、`.codex/config.toml` 等）不进名单，vonvon 不改它们，由两家按自己的规则加载。只有主工作区（cwd）里的会原生加载；其余工作区和代码仓库里的，只有 Claude 的 `.claude/skills` 会加载（3.3）。
+  - Claude 经 SDK 起会话时不问批准，主工作区 `.mcp.json` 里的 server 直接拉起，跑在沙箱外（Claude Code 2.1.296、SDK 0.3.296 实测，`bypassPermissions` 和 `default` 都一样；今天已经如此，`D/agent/claude-agent/backend.ts:49-56`）。
+  - Codex 加载主工作区的哪些东西，看 vonvon 在会话层传的 `projects.<cwd>.trust_level`（见下面"怎么交给 Codex 和 Claude"），由 `docs/v1-plan.md` s37 定。读源码看，传 `untrusted` 不读工作区的 `AGENTS.md`，传 `trusted` 还会加载 `.codex/config.toml` 里的 MCP、hooks 和 exec policy；`codex exec -c` 传 `trusted` 实测不加载项目配置，app-server 会话层没测（`docs/research/2026-10-16-bot-home/bot-home.md` D4）。
+  - Claude 的 `skills` 白名单会把工作区的 skill 一起滤掉（SDK 0.3.296 实测：只列别的名字时，工作区 `.claude/skills` 里的 skill 不进给模型的清单）。vonvon 把主工作区和附加目录里 `.claude/skills` 的 skill 也加进白名单，行为才和原生一致。
+- 只读、读写档下，agent 不能写各个根（主工作区、其余工作区、代码仓库）里会被两家原生加载的配置：`.mcp.json`、`.claude/settings.json`、`.claude/settings.local.json`、`.claude/skills/`、`.claude/commands/`、`.claude/agents/`、`.codex/`、`.agents/skills/`。只有完全访问档能改。原因：仓库默认各群共用，私聊也用 bot 的主工作区（第 4 节），读写档的群里任何人都能让 bot 往这些地方写，下一条会话（可能是别的群，也可能是主人的私聊）就会加载，MCP server 和 hooks 跑在沙箱外。Claude 用沙箱的 `filesystem.denyWrite` 挡 Bash，用 `Edit(...)` 拒绝规则挡 Write、Edit（读写档的 `acceptEdits` 下，工作区里的写不经过 `canUseTool`，3.8）；Codex 在权限配置里把这些路径设成只读。
 - MCP 的来源：从本机 Codex、Claude 的配置导入，或在桌面端填命令或网址。
 - 都不从 git 地址装，不自动更新。
 - 只有主人和管理员能装和启用。含脚本的 skill 和所有 MCP 都会在主人的 Mac 上跑程序。在聊天里装，只能在私聊里，而且私聊的"聊天改设置"开着，见 3.7。Claude 的会话今天的工具列表里还有主人账号在 claude.ai 的连接器，Codex 的会话用主人的 ChatGPT 登录时也挂着主人账号的连接器。owner 2026-10-15 定第一版两家都留着，不关（第 9 节第 19 项）。
@@ -344,11 +350,12 @@ bot 自己开的话题（比如上面主区例子里的「订单接口 500」）
 | 主工作区 | `cwd` | `cwd` |
 | 其余工作区和仓库 | `runtimeWorkspaceRoots`（实验字段）加逐路径的读写权限 | `additionalDirectories` 加沙箱的根列表 |
 | skill | `skills/extraRoots/set`（实验字段）指向 vonvon 生成的目录，会话层禁掉用户自己的 skill | `plugins: [{type:'local', path}]` 加 `skills` 白名单 |
-| 记忆所在的目录 | 加进 `runtimeWorkspaceRoots`，只给它写权限 | 加进沙箱的可写目录 |
+| 记忆所在的目录 | 加进 `runtimeWorkspaceRoots`，只给它写权限 | 加进沙箱的可写目录，这只管 Bash。Write、Edit 不归沙箱管，另对这个目录放行 Read、Edit、Write（允许规则或 `canUseTool`，`docs/v1-plan.md` s40 定），只读档不再整个去掉 Write、Edit（今天去掉了，`D/agent/claude-agent/permission.ts:68`）。不加进 `additionalDirectories`，免得加载目录里的 `.claude/skills` |
+| 各个根里两家的配置文件（见上） | 只读、读写档在权限配置里按路径设成只读 | 只读、读写档用沙箱的 `filesystem.denyWrite` 加 `Edit(...)` 拒绝规则 |
 | MCP | 会话配置的 `mcp_servers`，用户全局的 MCP 在会话层写 `enabled: false` 关掉（实测，e05）。读写档（`feishu` 权限配置）下不配 `default_tools_approval_mode: "approve"` 时，调用被拒过一次（0.162.1）；只读档和完全访问档没测 | `mcpServers`，今天传的是空对象（`D/agent/claude-agent/backend.ts:258`） |
 
 - 实验字段的风险：Codex.app 会自己升级，字段改名或删掉时，多工作区和 skill 隔离会悄悄失效。所以第一版定 Codex 的最低版本；调用实验字段失败时直接报错，不悄悄退回单目录。Codex 对拼错的字段名和配置键不报错，直接忽略，所以生没生效由 vonvon 自己核对：`runtimeWorkspaceRoots` 看回包里的回显，MCP 看 `mcpServerStatus/list`，skill 看 `skills/list`，对不上就报错（e05）。
-- Codex 在可写根下默认把 `.git` 设成只读，`git commit` 可能失败，要在 Mac 上实测（第 9 节第 4 项）。额外根目录里的 `AGENTS.md` 不会自动加载（实测，e05），vonvon 要在指令里写"先读该仓库的 AGENTS.md"。
+- Codex 在可写根下默认把 `.git` 设成只读，`git commit` 可能失败，要在 Mac 上实测（第 9 节第 4 项）。其余工作区和代码仓库里的 `AGENTS.md` 两家都不会自动加载，`CLAUDE.md` Claude 默认也不读（实测，e05、bot-home 调研 B1），vonvon 要在指令里写"先读该仓库的 AGENTS.md 或 CLAUDE.md"。Claude 一侧也可以设 `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` 原生加载 `CLAUDE.md`（bot-home 调研 B2 实测），`docs/v1-plan.md` s39 定用哪种。
 
 ### 3.7 在聊天里改设置
 
@@ -379,7 +386,7 @@ owner 的话："确认卡、选项卡、授权卡这些需要用户交互、用�
 
 所以第一版的权限只靠权限档，不发卡请人批准越权：
 - 权限档三档：只读、读写、完全访问，名字沿用 bridge。有 bot 默认，群里可以覆盖，私聊用 bot 默认（3.2）。新群的默认档和今天一样：bot 自己建的群是完全访问，被拉进的已有群是只读、关网（`D/project/lifecycle.ts:138`、`:206`、`:221`）。从 bridge 迁来的群沿用原来的档。一个群只有一档，群里谁触发都用这一档：bridge 的访客档（普通成员用另一档、跑另一条会话）去掉了，owner 2026-10-16 的话："反正管理员问的信息，其他成员也都看得到，还是只保持一个权限就好了"（s15c 改）。只限主人和管理员的事照旧，比如主区的 `/new`、`/clear`、私聊、点 Claude 自己要问的卡（3.5、第 4 节、下面的表）。
-- 只读和读写：agent 要做超出这一档的事，比如写工作区以外的文件、关网时联网，直接拒绝。agent 收到拒绝的原因，自己换个办法，或者停下来说明。和今天一样。
+- 只读和读写：agent 要做超出这一档的事，比如写工作区以外的文件（这一次的记忆目录除外，3.6）、写各个根里两家的配置文件（3.6）、关网时联网，直接拒绝。agent 收到拒绝的原因，自己换个办法，或者停下来说明。和今天一样，只多了记忆目录可写、配置文件不可写这两处。
 - 完全访问：从不问权限。
 - agent 向人提问、请人确认方案时，照样发卡，因为那是在问人的意见，不是要权限。
 - 完全访问下，Claude 自己仍会停下来问的少数几类照样发卡（第 25 题 a，见下面"完全访问下还会问什么"）。那是 Claude 自己的行为，不是 vonvon 的越权授权。
@@ -392,11 +399,11 @@ owner 的话："确认卡、选项卡、授权卡这些需要用户交互、用�
 
 | 权限档 | Codex | Claude |
 |---|---|---|
-| 只读 | `never` + 今天的只读沙箱，就是今天的行为 | `default` 模式 + 今天的只读沙箱。`canUseTool` 对要权限的请求一律拒绝并说明原因，对提问发选项卡 |
-| 读写 | `never` + 今天的读写沙箱，就是今天的行为 | `acceptEdits` + 今天的读写沙箱，`canUseTool` 同上 |
+| 只读 | `never` + 今天的只读沙箱，另加记忆目录可写（3.6） | `default` 模式 + 今天的只读沙箱。`canUseTool` 对要权限的请求一律拒绝并说明原因，对提问发选项卡 |
+| 读写 | `never` + 今天的读写沙箱，另加记忆目录可写、各个根里两家的配置文件只读（3.6） | `acceptEdits` + 今天的读写沙箱，`canUseTool` 同上 |
 | 完全访问 | `never` + `danger-full-access`，就是今天的行为 | `bypassPermissions`，就是今天的行为。`canUseTool` 只处理提问和 Claude 自己仍要问的几类，见下 |
 
-- Claude 的只读、读写两档不再用 `bypassPermissions`。今天用它，推断有两个缺口：关网时 Bash 可能仍能连外网，Edit 和 Write 可能写到工作区以外（`approval-ux.md` 3.3）。不带沙箱时这两个缺口都在：今天的只读档下 Bash 能写工作区内外的文件、能 curl 出去，`bypassPermissions` 下工作区以外的 Write 也直接放行；带上今天的沙箱还在不在，第 9 节第 12 项在 Mac 上测。换成上表以后，只读档下写文件的 Bash、联网的 Bash、工作区以外的读写都会先到 `canUseTool`；读写档下工作区里的写直接放行，其余同样先到回调（实测，e02 第 1 节）。只读档可以对这些一律拒绝；读写档关网时，回调分不出哪条 Bash 在联网，要看命令文字或者靠沙箱，在 Mac 上测（e03）。代价是今天这两档下能用的 WebFetch、往工作区以外写文件会被拒；开网时给 WebFetch、WebSearch 加允许规则。
+- Claude 的只读、读写两档不再用 `bypassPermissions`。今天用它，推断有两个缺口：关网时 Bash 可能仍能连外网，Edit 和 Write 可能写到工作区以外（`approval-ux.md` 3.3）。不带沙箱时这两个缺口都在：今天的只读档下 Bash 能写工作区内外的文件、能 curl 出去，`bypassPermissions` 下工作区以外的 Write 也直接放行；带上今天的沙箱还在不在，第 9 节第 12 项在 Mac 上测。换成上表以后，只读档下写文件的 Bash、联网的 Bash、工作区以外的读写都会先到 `canUseTool`；读写档下工作区里的写直接放行，其余同样先到回调（实测，e02 第 1 节）。只读档可以对这些一律拒绝；读写档关网时，回调分不出哪条 Bash 在联网，要看命令文字或者靠沙箱，在 Mac 上测（e03）。代价是今天这两档下能用的 WebFetch、往工作区以外写文件会被拒（这一次的记忆目录除外，3.6）；开网时给 WebFetch、WebSearch 加允许规则。各个根里两家的配置文件（3.6）在读写档下要用拒绝规则挡，因为工作区里的写不经过回调。
 - Codex 三档都保留 `never`：模型知道不能申请，就不会白白尝试。`never` 下没有标成只读的 MCP 工具会被拒（`approval-ux.md` 1.5），vonvon 自己的 MCP 要配 `approve`（第 9 节第 2 项）。
 - 中途改档不用重开会话：Codex 每一轮的 `turn/start` 能带新的设置，Claude 运行中能 `setPermissionMode`，升档降档都是下一轮生效（实测，e02 第 3 节）。升到完全访问要求会话启动时带 `allowDangerouslySkipPermissions`，所以每条会话启动时都带上；resume 不恢复上次的档（`settingSources` 为空时测的），每次都明确传。Codex 一半还是推断。
 - Linux 上 Codex 的只读、读写档今天直接拒绝启动（`D/agent/codex-appserver/backend.ts` 的 `sandboxParams`），所以 Linux 上的 Codex 只能用完全访问，界面写明。被拉进的已有群默认只读，在 Linux 上用 Codex 时起不来：bot 回一句说明，等主人在设置里明确改成完全访问，不自动放开。（s20b 已改）
@@ -638,6 +645,7 @@ bot 的个性、记忆、skill 导入后为空，行为和今天一样。
 | 17 | 压缩以后主区会话的摘要里还留不留话题引用；daemon 断线期间的消息，飞书重连后会不会补推 | 3.5。前半 e14 测了一次：在终端里手动 `/compact`，摘要原样留下了引用行和两边的会话 id。后半 e10 测了一次：断线期间的消息补推了，但在消息发出约 5 分钟后才到，daemon 重连后 3 分多钟里没收到。只有一个样本，s09 开工时用 daemon 自己的长连接再测 |
 | 18 | 按会话 id 读另一条会话：Codex 的 `thread/read` 不加载线程能不能读；Claude 的 `getSessionMessages` 能不能读到别的工作目录下的会话 | 3.5。Claude 一半已测：能读，传那条会话原来的工作目录或者不传都行（e02 第 5 节）。Codex 一半已测：另起的进程不加载线程就能读，用 `thread/turns/list` 的 summary 视图，只返回用户的消息和最终回答；正在跑的那一轮只有用户的消息（e11） |
 | 19 | bot 的 Claude 会话的工具列表里有主人账号在 claude.ai 的连接器，和推送、远程触发、定时任务这类 Claude Code 自己的工具，和 `settingSources` 无关；这些工具没有实际调用过（e02 第 7 节）。Codex 的会话也有同一类问题：用主人的 ChatGPT 登录时，每条会话都挂着主人账号的连接器 `codex_apps`，0.162.1 上有 197 个工具，含合并 GitHub PR、改文件、建 issue 这类写操作；会话层 `features.apps: false` 能去掉（e05，0.162.1，没跑回合）。第一版留不留 | 3.6、3.8。owner 2026-10-15 定：第一版两家都留着，不关 |
+| 20 | Claude 的只读、读写档不限读（`D/agent/claude-agent/permission.ts:25-28`），沙箱里的 Bash 读得到别的群的记忆、别人的私聊记忆、`config.json`、`sessions.json` 和数据目录里的凭据。沙箱的 `filesystem.denyRead` 挡数据目录里的 `bots/` 和根上的凭据、`allowRead` 再放开这一次的记忆目录、`bots/<appId>/skills/` 和评论会话自己的目录，行不行 | 3.6 的记忆隔离在 Claude 一侧今天只靠不注入。s31 开工时定，在 Mac 上测 |
 
 #281（V6b：把 Codex 子进程迁到新的进程层）关闭不合入。第一版建在 main 现有的 `agent/` 路径上；#281 合入后，打包版的 Codex 会因为缺 `vonvon-holder` 而失败。
 
