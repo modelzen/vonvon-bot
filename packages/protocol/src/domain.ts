@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { botDiagnosticsSchema } from "./diagnostics.js";
+import { applicationCrashesSchema, crashPauseSchema } from "./crash.js";
 
 export const agentIdSchema = z
   .string()
@@ -111,6 +112,8 @@ export const agentSchema = z.object({
   activation: z.enum(["active", "restartRequired"]), readError: z.string().optional(),
   /** The bot's recent not-replied messages and scope denials; absent when it has none. */
   diagnostics: botDiagnosticsSchema.optional(),
+  /** This bot alone stopped restarting after 3 crashes in 10 minutes (s18a); absent from older daemons. */
+  paused: crashPauseSchema.optional(),
 });
 export type Agent = z.infer<typeof agentSchema>;
 export const membershipSchema = z.object({
@@ -195,7 +198,9 @@ export const desktopSnapshotSchema = z.object({
   revision: z.number(), observedAt: z.number(), stale: z.boolean(), host: hostStateSchema,
   agents: z.array(agentSchema), groups: z.array(groupSchema), memberships: z.array(membershipSchema),
   tools: z.array(toolStateSchema), jobs: z.array(jobSchema),
-  application: z.object({ platform: z.enum(["macos", "linux", "unsupported"]), version: z.string(), loginItem: z.boolean(), dataPath: z.string(), service: applicationServiceSchema.optional() }),
+  application: z.object({ platform: z.enum(["macos", "linux", "unsupported"]), version: z.string(), loginItem: z.boolean(), dataPath: z.string(), service: applicationServiceSchema.optional(),
+    /** The whole daemon's pause and the last day's crash records (s18a); absent from older daemons. */
+    crashes: applicationCrashesSchema.optional() }),
 });
 export type DesktopSnapshot = z.infer<typeof desktopSnapshotSchema>;
 export const folderChoiceSchema = z.object({ token: folderTokenSchema, displayPath: z.string() });

@@ -1,9 +1,9 @@
 import {expect, it} from 'vitest';
 import {renderToStaticMarkup} from 'react-dom/server';
-import type {AdminSetupStatus, Agent, DesktopSnapshot, NotReplied, ToolState} from '@vonvon/protocol';
+import type {AdminSetupStatus, Agent, ApplicationCrashes, DesktopSnapshot, NotReplied, ToolState} from '@vonvon/protocol';
 import {createClient} from '../../client/src/client';
 import {ClientProvider} from '../src/client-context';
-import {DiagnosticsPanel, scopeView, setupView, shortTime} from '../src/management/DiagnosticsPanel';
+import {crashBars, DiagnosticsPanel, scopeView, setupView, shortTime} from '../src/management/DiagnosticsPanel';
 import {diagnosticsSection, findEntries, searchEntries, settingAnchor} from '../src/search';
 
 const client = createClient({isOpen: () => true, onMessage: () => {}, onClose: () => {}, onError: () => {}, send: () => {}, close: async () => {}});
@@ -14,14 +14,14 @@ const tools: ToolState[] = [
   {tool: 'codex', installation: 'installed', authentication: 'signedIn', version: '0.156.1'},
   {tool: 'claude', installation: 'installed', authentication: 'unknown', version: '0.3.296'},
 ];
-const snapshot = (agents: Agent[]): DesktopSnapshot => ({
+const snapshot = (agents: Agent[], crashes?: ApplicationCrashes): DesktopSnapshot => ({
   revision: 1, observedAt: now, stale: false, host: {kind: 'connected', ownership: 'owned', version: '0.9.0'},
   agents, groups: [{id: 'oc_bound_group' as never, name: '发布群'}],
   memberships: [{id: 'm' as never, agentId: agent.id, groupId: 'oc_bound_group' as never, name: '发布群', directory: '/tmp/x', backend: 'codex-appserver', conversation: 'threads', response: 'mention', permission: {administrator: 'full', member: 'qa', network: false}, stale: false}],
-  tools, jobs: [], application: {platform: 'macos', version: '0.9.0', loginItem: false, dataPath: '/tmp/vonvon-home'},
+  tools, jobs: [], application: {platform: 'macos', version: '0.9.0', loginItem: false, dataPath: '/tmp/vonvon-home', ...(crashes ? {crashes} : {})},
 });
-const render = (agents: Agent[]) => renderToStaticMarkup(<ClientProvider client={client}>
-  <DiagnosticsPanel snapshot={snapshot(agents)} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onOpenSetup={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}}/>
+const render = (agents: Agent[], crashes?: ApplicationCrashes) => renderToStaticMarkup(<ClientProvider client={client}>
+  <DiagnosticsPanel snapshot={snapshot(agents, crashes)} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onOpenSetup={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}}/>
 </ClientProvider>);
 
 it('shows this machine, and 检查中 for Claude before its first login check', () => {
@@ -59,6 +59,30 @@ it('gives the full-only fix command, with --bot only when the host has several b
   expect(one).not.toContain('guestMode');
   const two = render([refused, {...agent, id: 'cli_other' as Agent['id'], name: '另一个'}]);
   expect(two).toContain('vonvon settings set --bot cli_diag --group oc_bound_group permission.mode=full');
+});
+
+it('shows a red bar per paused bot that starts it alone again, and the paused daemon\'s bar alone (s18a)', () => {
+  const paused = {...agent, running: false, connection: 'disconnected', paused: {since: now, crashes: 3}};
+  const other = {...agent, id: 'cli_other' as Agent['id'], name: '另一个', paused: {since: now, crashes: 4}};
+  expect(crashBars(snapshot([paused, other, {...agent, id: 'cli_ok' as Agent['id']}], {records: []})).map(bar => bar.command)).toEqual([
+    {type: 'setAgentEnabled', agentId: agent.id, enabled: true}, {type: 'setAgentEnabled', agentId: 'cli_other', enabled: true},
+  ]);
+  const html = render([paused], {records: [
+    {at: now, kind: 'forced', reason: 'SIGKILL', appId: agent.id, uptimeMs: 12_000},
+    {at: now - 1000, kind: 'forced', reason: '被系统强制结束', uptimeMs: 0, paused: true},
+  ]});
+  expect(html).toContain('role="alert"');
+  expect(html).toContain('「值班助手」10 分钟内崩溃了 3 次，已停止自动重启，别的 bot 照常。');
+  expect(html).toContain('恢复运行');
+  expect(html).toContain('已暂停');
+  expect(html).toContain('被系统强制结束（SIGKILL），运行了 12 秒');
+  expect(html).toContain('被系统强制结束（kill -9、内存不够，或者关机、注销时没来得及退出）（暂停期间）');
+  const host = crashBars(snapshot([paused], {paused: {since: now, crashes: 5}, records: []}));
+  expect(host).toEqual([expect.objectContaining({command: {type: 'restartHost'}, text: expect.stringContaining('daemon 已暂停：10 分钟内崩溃了 5 次')})]);
+  const old = render([agent]);
+  expect(old).not.toContain('role="alert"');
+  expect(old).not.toContain('最近的崩溃');
+  expect(render([agent], {records: []})).toContain('最近 24 小时没有崩溃');
 });
 
 it('says what the list holds when a bot has nothing', () => {
