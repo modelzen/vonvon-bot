@@ -151,11 +151,12 @@ export function createJudge(deps: JudgeDeps): Judge {
     state.running = true;
     const done = (): void => {
       state.running = false;
-      if (!backend.peekModels?.()) state.retryAt = now() + MODEL_LIST_RETRY_MS;
+      let cached: unknown;
+      try { cached = backend.peekModels?.(); } catch { /* counts as not cached */ }
+      if (!cached) state.retryAt = now() + MODEL_LIST_RETRY_MS;
     };
     try {
-      // `done` re-reads the cache; if that throws, the fetch only stays idle, never an unhandled rejection.
-      backend.listModels().then(done, done).catch(() => { state.running = false; });
+      backend.listModels().then(done, done);
     } catch {
       done();
     }

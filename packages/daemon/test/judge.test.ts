@@ -163,6 +163,25 @@ describe('judge', () => {
     expect(f.backend.listModels).toHaveBeenCalledTimes(2);
   });
 
+  it('a cache read that throws after the list settles waits 5 minutes like an empty one', async () => {
+    const f = fakeBackend();
+    const list = deferred<ModelInfo[]>();
+    (f.backend.listModels as ReturnType<typeof vi.fn>).mockImplementation(() => list.promise);
+    const judge = make(f.backend);
+    await judge.judge(req());
+    expect(f.backend.listModels).toHaveBeenCalledTimes(1);
+    (f.backend.peekModels as ReturnType<typeof vi.fn>).mockImplementation(() => { throw new Error('cache gone'); });
+    list.resolve([]);
+    await vi.advanceTimersByTimeAsync(0);
+    (f.backend.listModels as ReturnType<typeof vi.fn>).mockImplementation(async () => []);
+    (f.backend.peekModels as ReturnType<typeof vi.fn>).mockImplementation(() => undefined);
+    await judge.judge(req());
+    expect(f.backend.listModels).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(MODEL_LIST_RETRY_MS);
+    await judge.judge(req());
+    expect(f.backend.listModels).toHaveBeenCalledTimes(2);
+  });
+
   it('queues 16 behind 4 running, refuses the 21st as busy, and counts queue time in the timeout', async () => {
     const f = fakeBackend();
     f.answer(() => new Promise(() => undefined));

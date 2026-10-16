@@ -85,10 +85,12 @@ export const JUDGE_INPUT_LIMITS = {
 const NAME_MAX = 50;
 const REASON_MAX = 80;
 
-// Controls other than the newline, plus invisible format characters (zero-width, bidi), so a name
-// cannot hide a leading 你 or a trailing （bot） behind them; \r and the Unicode line separators
-// become newlines first.
-const CONTROL = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g;
+// Controls other than the newline; \r and the Unicode line separators become newlines first.
+const CONTROL = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/g;
+// In names, also every invisible character (format characters such as zero-width, bidi and tags;
+// blank-looking fillers; variation selectors), so none can hide a leading 你 or a trailing （bot）.
+// Message text keeps them: ZWJ emoji and ZWNJ scripts need them, and its lines are indented anyway.
+const INVISIBLE = /[\p{Cc}\p{Cf}\u034f\u115f\u1160\u3164\u2800\ufe00-\ufe0f]/gu;
 
 function cut(text: string, max: number): string {
   const chars = [...text];
@@ -103,7 +105,7 @@ function body(text: string, max: number): string {
 }
 
 function cleanLine(text: string): string {
-  return text.replace(/[\r\n\u2028\u2029【】]/g, '').replace(CONTROL, '').trim();
+  return text.replace(/[\r\n\u2028\u2029【】]/g, '').replace(INVISIBLE, '').trim();
 }
 
 /** Names and titles: one line, no 【】, no controls. */
