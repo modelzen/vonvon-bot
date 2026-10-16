@@ -10,6 +10,7 @@ import { getSession, listSessions, upsertSession } from '../src/bot/session-stor
 import { createOrchestrator } from '../src/bot/handle-message';
 import { parseCollaborationRequest, projectRevision } from '../src/admin/collaboration';
 import { weaveSender } from '../src/bot/context-weave';
+import { updateManagedCard } from '../src/card/managed';
 
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
@@ -109,6 +110,18 @@ it('lists resumable sessions by the person\'s words, not the woven sender line',
       { sessionId: 'named', preview: '修一下登录', name: '登录修复', createdAt: 1, updatedAt: 2 },
       { sessionId: 'odd', preview: '', name: '修一下登录', createdAt: 1, updatedAt: 2 },
     ]);
+  } finally { await app.shutdown(); }
+});
+it('the DM project settings card names the backend as users know it', async () => {
+  backend(); // the real Codex backend calls itself "Codex (app-server)"
+  vi.mocked(updateManagedCard).mockClear();
+  const app = orchestrator();
+  const settingsCard = () => vi.mocked(updateManagedCard).mock.calls.map(call => JSON.stringify(call)).find(json => json.includes('项目设置'));
+  try {
+    await app.dispatcher.handle({ messageId: 'om_settings', chatId: 'oc_dm', operator: { openId: 'ou_owner' }, action: { tag: 'button', value: { a: 'dm.projectSettings', n: 'demo' } } } as never);
+    await vi.waitFor(() => expect(settingsCard()).toBeDefined(), { timeout: 3000 });
+    expect(settingsCard()).toContain('当前 Codex 🔒');
+    expect(settingsCard()).not.toContain('app-server');
   } finally { await app.shutdown(); }
 });
 const wovenBy = (text: string) => weaveSender(text, { senderId: 'ou_secret_id', senderName: '张三' });
