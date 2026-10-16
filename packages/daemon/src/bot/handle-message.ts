@@ -232,7 +232,7 @@ import {
 import { isTopicReply, reachedAt } from './recall';
 import { SessionTitleCoordinator } from './session-title-coordinator';
 import { topicTitle, type TopicPerson, type TopicRegistry, type TopicSighting, type TopicView } from './topic-registry';
-import { createTopicContext, localBots, personOf, topicQuotes, topicRows } from './topic-context';
+import { createTopicContext, localBots, personOf, topicQuotes, topicRows, type ChatInfo } from './topic-context';
 import { audienceOf, fromBot, quotedId } from './baselines';
 import {
   sessionTitleSourceFromMessage,
@@ -1424,7 +1424,7 @@ export function createOrchestrator(
       return;
     }
     if (projectMutations.has(msg.chatId)) {
-      if (maybe) noteNotReplied(msg, 'group-updating');
+      if (!bot && (msg.mentionedBot || (project && shouldRespondWithoutMention(project, msg)))) noteNotReplied(msg, 'group-updating');
       return;
     }
     if (project && msg.threadId && isChatAllowed(cfg, msg.chatId)) noteTopicMessage(msg);
@@ -1722,13 +1722,15 @@ export function createOrchestrator(
    * answer it, is for this bot (三条底线, s22). Answers what the mode would,
    * except: a quote of this bot's message names it (免@, even in a 多会话 main
    * area); a quote of someone else's, or a topic another bot spoke in last, is
-   * someone else's; with other bots in the group a 多会话 main-area command
-   * needs an @. A lookup that fails leaves the message unanswered and noted.
+   * someone else's; with other bots in the group (or the count unread) a 多会话
+   * main-area command needs an @. A lookup that fails leaves the message
+   * unanswered and noted.
    * The group's only bot looks nothing up and answers as before s22.
    */
   async function forThisBot(msg: NormalizedMessage, project: Project): Promise<boolean> {
-    let alone: Promise<boolean> | undefined;
-    const lonely = (): Promise<boolean> => (alone ??= topicCtx.chatInfo(msg.chatId).then((r) => r.ok && r.bots === 1));
+    let info: Promise<ChatInfo> | undefined;
+    const chat = (): Promise<ChatInfo> => (info ??= topicCtx.chatInfo(msg.chatId));
+    const lonely = (): Promise<boolean> => chat().then((r) => r.ok && r.bots === 1);
     const who = await audienceOf(msg, { noMention: noMentionOf(project) }, {
       lonely,
       quoted: (id) => fetchMessageMeta(channel, id, names, { event: 'quote-lookup-failed', deadlineMs: LOOKUP_DEADLINE_MS }),
@@ -1751,6 +1753,9 @@ export function createOrchestrator(
         // Here only a main-area command or /goal of a 多会话 group: each bot would answer it.
         if (ruleKind(project) === 'multi' && !msg.threadId && !(await lonely())) {
           log.info('intake', 'audience', { to: 'other', by: 'command-needs-at', ref });
+          // Unread, the count may be just this bot: the page says why the command got nothing.
+          const r = await chat();
+          if (!r.ok || r.bots === undefined) noteNotReplied(msg, 'lookup-failed', { detail: '群里有几个 bot' });
           return false;
         }
         return true;

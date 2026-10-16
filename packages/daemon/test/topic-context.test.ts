@@ -101,12 +101,16 @@ describe('createTopicContext', () => {
     expect(await ctx.chatInfo('oc_odd')).toEqual({ ok: true, topic: false });
     expect(await ctx.chatInfo('oc_null')).toEqual({ ok: true, topic: false });
     expect(await ctx.chatInfo('oc_down')).toEqual({ ok: false, topic: false });
-    // One lookup for concurrent askers; again after ten minutes, as a bot may have joined.
-    await Promise.all([ctx.chatInfo('oc_two'), ctx.noMainArea('oc_two')]);
+    // One lookup for concurrent askers. A lone bot's count and a failure are read again after a
+    // minute (a bot may join; the failure may pass), a group with other bots after ten.
+    await Promise.all([ctx.chatInfo('oc_two'), ctx.noMainArea('oc_two'), ctx.chatInfo('oc_post'), ctx.chatInfo('oc_down')]);
     expect(get).toHaveBeenCalledTimes(5);
-    vi.advanceTimersByTime(10 * 60_000 + 1);
+    vi.advanceTimersByTime(60_000 + 1);
+    await Promise.all([ctx.chatInfo('oc_two'), ctx.chatInfo('oc_post'), ctx.chatInfo('oc_down')]);
+    expect(get.mock.calls.slice(5).map(([a]) => a.path.chat_id)).toEqual(['oc_post', 'oc_down']);
+    vi.advanceTimersByTime(10 * 60_000);
     await ctx.chatInfo('oc_two');
-    expect(get).toHaveBeenCalledTimes(6);
+    expect(get).toHaveBeenCalledTimes(8);
   });
 
   it('records a topic another bot opened under a main-area line, looking each up once', async () => {

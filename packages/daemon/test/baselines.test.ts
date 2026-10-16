@@ -232,6 +232,7 @@ describe('the orchestrator with several bots in the group', () => {
     await orchestrator.onMessage(message({ text: '/model' }));
     expect(fake.send).not.toHaveBeenCalled();
     expect(audience()).toEqual([{ to: 'other', by: 'command-needs-at', ref: expect.any(String) }]);
+    expect(records()).toEqual([]); // two bots, read: not for it
     await orchestrator.onMessage(message({ text: '/model', atMe: true }));
     expect(fake.send).toHaveBeenCalledTimes(1);
   });
@@ -240,6 +241,7 @@ describe('the orchestrator with several bots in the group', () => {
     fake.chatGet.mockImplementation(async () => { throw new Error('socket hang up'); });
     await orchestrator.onMessage(message({ text: '/model' }));
     expect(fake.send).not.toHaveBeenCalled();
+    expect(records().map((r) => [r.reason, r.place, r.detail])).toEqual([['lookup-failed', 'main', '群里有几个 bot']]);
     topicSays(item('self'));
     await orchestrator.onMessage(message(inTopic));
     await answered();

@@ -20,8 +20,10 @@ import { readTopicsIn, type TopicPerson, type TopicRecord, type TopicRegistry, t
 export const QUOTES_MAX = 10;
 /** Unknown topic roots looked up per turn at most. */
 const DISCOVER_MAX = 5;
-/** How long a group's info is kept, read or not. */
+/** How long a group's info is kept: a group with other bots, or a refused scope, keeps. */
 const INFO_TTL = 10 * 60_000;
+/** A lone bot's count (another bot may join) and a failure that may pass, again sooner. */
+const INFO_SHORT_TTL = 60_000;
 
 /** The topics a block may quote: opened in the window, not excluded or skipped. */
 export interface QuoteWindow {
@@ -128,7 +130,8 @@ export interface ChatInfo {
 }
 
 export interface TopicContext {
-  /** The group's info, cached ten minutes (the bot count can change). Never throws. */
+  /** The group's info, cached ten minutes; one when it says this bot is alone (another may join) or
+   * could not be read for a reason other than a refused scope. Never throws. */
   chatInfo(chatId: string): Promise<ChatInfo>;
   /** A topic group (话题群 / 话题形式群): no main-area chat. False when unknown. */
   noMainArea(chatId: string): Promise<boolean>;
@@ -141,7 +144,7 @@ export interface TopicContext {
 
 /**
  * `track` keeps registry writes for shutdown; `stopping` skips them once it starts.
- * Per process: a chat's info is cached ten minutes, read or not,
+ * Per process: a chat's info is cached (ten minutes, one when it may soon change),
  * and each topic is looked up at most once: a turn that reaches a topic still
  * being looked up, or one recorded after its list was read, gets that lookup's answer.
  * `localBots` lists the other vonvon bots whose registries {@link TopicContext.quotable} reads.
@@ -155,13 +158,13 @@ export function createTopicContext(
   const infos = new Map<string, { info: Promise<ChatInfo>; until: number }>();
   const looked = new Map<string, Promise<TopicView | undefined>>();
 
-  async function readChat(chatId: string): Promise<ChatInfo> {
-    const unknown = (reason: string, failure?: unknown): ChatInfo => {
+  async function readChat(chatId: string): Promise<{ info: ChatInfo; ttl: number }> {
+    const unknown = (reason: string, failure?: unknown): { info: ChatInfo; ttl: number } => {
       const denied = Boolean(scopeDenial(failure));
       const why = denied ? { reason: 'missing-scope', scope: 'im:chat:readonly' } : { reason };
       if (denied) reportScopeDenied('im:chat:readonly', 'chat-info');
       log.info('intake', 'chat-mode-unknown', { chatId: chatId.slice(-6), ...why });
-      return { ok: false, topic: false };
+      return { info: { ok: false, topic: false }, ttl: denied ? INFO_TTL : INFO_SHORT_TTL };
     };
     try {
       const res = await withDeadline(channel.rawClient.im.v1.chat.get({ path: { chat_id: chatId } }), 3000);
@@ -174,7 +177,7 @@ export function createTopicContext(
       const count = typeof raw === 'number' || (typeof raw === 'string' && raw.trim() !== '') ? Number(raw) : NaN;
       const bots = Number.isInteger(count) && count >= 0 ? count : undefined;
       log.info('intake', 'chat-mode', { chatId: chatId.slice(-6), topic, bots: bots ?? null });
-      return { ok: true, topic, ...(bots !== undefined ? { bots } : {}) };
+      return { info: { ok: true, topic, ...(bots !== undefined ? { bots } : {}) }, ttl: bots === undefined || bots <= 1 ? INFO_SHORT_TTL : INFO_TTL };
     } catch (err) {
       return unknown(String(err), err);
     }
@@ -186,8 +189,8 @@ export function createTopicContext(
     // Cached before it answers, so concurrent messages share one lookup.
     const entry = {
       info: readChat(chatId).then((r) => {
-        entry.until = Date.now() + INFO_TTL;
-        return r;
+        entry.until = Date.now() + r.ttl;
+        return r.info;
       }),
       until: Infinity,
     };
