@@ -20,12 +20,20 @@ export interface Project {
   createdAt: number;
   /** last branch shown in the announcement (for lazy change detection) */
   branch?: string;
-  /** group session model: 'multi' (default) = a topic per session (现状);
-   * 'single' = the whole group is one session keyed by chatId. */
+  /** How the main area runs (product.md 3.4): 'multi' = 多会话, a topic per session;
+   * 'single' = 单会话, the main area is one session keyed by chatId. Missing or unknown
+   * reads as 'multi'. Read via {@link ruleKind}. */
   kind?: 'multi' | 'single';
+  /** 智能 (3.4): stored with `kind: 'single'`, so a daemon from before s21 runs it as 单会话.
+   * No entry writes it before s25; until then it runs as 单会话 + 仅 @ ({@link noMentionOf}).
+   * Read via {@link sessionModeOf}; switching to 多会话 or 单会话 drops it. */
+  smart?: boolean;
   /** respond to non-@ messages too. Read as `noMention ?? defaultNoMention(p)`.
    * multi: only inside a topic; single: whole group. Needs im:message.group_msg. */
   noMention?: boolean;
+  /** 运行中来了消息 for this group: steer (插话) or queue (排队). Unset inherits the bot's
+   * `preferences.pendingPolicy`; read via {@link pendingPolicyOf}. */
+  pendingPolicy?: 'steer' | 'queue';
   /** how the bot got into this group. 'created' (default, omitted on old data) =
    * bridge built the group via chat.create and is its owner; 'joined' = a human
    * added the bot to a pre-existing group and the bot is just a plain member. */
@@ -76,8 +84,39 @@ export interface Project {
  * so existing data is unaffected. Single source of truth — every
  * `noMention ?? …` read goes through here.
  */
-export function defaultNoMention(p: Pick<Project, 'kind' | 'origin'>): boolean {
-  return !((p.origin ?? 'created') === 'joined' && (p.kind ?? 'multi') === 'single');
+export function defaultNoMention(p: Pick<Project, 'kind' | 'smart' | 'origin'>): boolean {
+  return !((p.origin ?? 'created') === 'joined' && ruleKind(p) === 'single');
+}
+
+export type SessionMode = 'multi' | 'single' | 'smart';
+
+/** The stored 会话方式; missing or unknown values read as 'multi' (rule mode, as before s21). */
+export function sessionModeOf(p: Pick<Project, 'kind' | 'smart'>): SessionMode {
+  // `smart` counts only with 'single': a daemon from before s21 that switched the group to 多会话 left it behind.
+  if (p.kind !== 'single') return 'multi';
+  return p.smart === true ? 'smart' : 'single';
+}
+
+/** How the main area runs. 智能 runs as 'single' until s25 brings the smart inbound. */
+export function ruleKind(p: Pick<Project, 'kind' | 'smart'>): 'multi' | 'single' {
+  return sessionModeOf(p) === 'multi' ? 'multi' : 'single';
+}
+
+/** The group's effective 免@. 智能 has no 免@ (3.4); until s25 it replies only when @'d. */
+export function noMentionOf(p: Pick<Project, 'kind' | 'smart' | 'origin' | 'noMention'>): boolean {
+  if (sessionModeOf(p) === 'smart') return false;
+  return p.noMention ?? defaultNoMention(p);
+}
+
+/** 免@ written for a new bind or a new group when the entry left it out (3.4): 多会话开，单会话关. */
+export function bindNoMention(kind: 'multi' | 'single'): boolean {
+  return kind === 'multi';
+}
+
+/** The group's 运行中来了消息: its own override, else the bot's. Claude cannot steer, so it queues. */
+export function pendingPolicyOf(botPolicy: 'steer' | 'queue', p: Pick<Project, 'pendingPolicy' | 'backend'> | undefined): 'steer' | 'queue' {
+  if (p?.backend === 'claude-agent') return 'queue';
+  return p?.pendingPolicy ?? botPolicy;
 }
 
 /**

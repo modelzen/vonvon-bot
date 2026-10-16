@@ -24,7 +24,8 @@ import {
   type ResolvedCompletionReminderConfig,
 } from '../config/schema';
 import {
-  defaultNoMention,
+  noMentionOf,
+  ruleKind,
   effectiveMode,
   listProjectsIn,
 } from '../project/registry';
@@ -295,7 +296,7 @@ export interface AdminProject {
   branch?: string;
   kind: 'multi' | 'single';
   origin: 'created' | 'joined';
-  /** effective 免@（noMention ?? defaultNoMention） */
+  /** effective 免@（noMentionOf） */
   noMention: boolean;
   /** effective 权限档，群里所有人都用它 */
   mode: PermissionMode;
@@ -522,9 +523,9 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       cwd: p.cwd,
       blank: p.blank,
       branch: p.branch,
-      kind: p.kind ?? 'multi',
+      kind: ruleKind(p),
       origin: p.origin ?? 'created',
-      noMention: p.noMention ?? defaultNoMention(p),
+      noMention: noMentionOf(p),
       mode: effectiveMode(p),
       guestMode: effectiveMode(p),
       network: p.network ?? false,

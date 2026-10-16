@@ -6,7 +6,7 @@ import { parseModelId } from '../agent/model-id';
 import { getCompletionReminderConfig, getMaxConcurrentRuns, getModelDisplay, getPendingPolicy, getRunIdleTimeoutMs, getSessionTitleConfig, getSessionTitleEfforts, getShowToolCalls, resolveOwner, type AppConfig, type AppPreferences } from '../config/schema';
 import { paths } from '../config/paths';
 import { resolveProjectsRootDir } from '../project/lifecycle';
-import { defaultNoMention, effectiveMode, getProjectByName, listProjects, mutateProject, type Project } from '../project/registry';
+import { effectiveMode, getProjectByName, listProjects, mutateProject, noMentionOf, pendingPolicyOf, ruleKind, type Project } from '../project/registry';
 import { getSession, isRetiredKey, mutateSession, RETIRED_KEY_TEXT, type SessionRecord } from '../bot/session-store';
 import { DEFAULT_COMMENT_INSTRUCTIONS, saveCommentInstructions, syncAllCommentInstructions } from '../bot/comments';
 import { voiceView } from '../voice/view';
@@ -138,15 +138,18 @@ function projectData(p: Project): T.ProjectSections {
       network: p.network ?? false
     },
     response: {
-      noMention: p.noMention ?? defaultNoMention(p)
+      noMention: noMentionOf(p)
     },
     model: {
       selection: selection(p.defaultModel, p.defaultEffort, p.defaultModelCustom)
+    },
+    run: {
+      pendingPolicy: p.pendingPolicy ?? 'default'
     }
   };
 }
 function projectRaw(p: Project, section: keyof T.ProjectSections): unknown {
-  const data = section === 'permission' ? [p.mode, p.network] : section === 'response' ? p.noMention : [p.defaultModel, p.defaultEffort, p.defaultModelCustom === true];
+  const data = section === 'permission' ? [p.mode, p.network] : section === 'response' ? p.noMention : section === 'run' ? p.pendingPolicy : [p.defaultModel, p.defaultEffort, p.defaultModelCustom === true];
   return [p.name, p.chatId, p.cwd, p.backend, data];
 }
 function sessionRaw(s: SessionRecord): unknown {
@@ -336,8 +339,9 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       if (!p)
         throw new SettingsInputError('项目不存在');
       const data = projectData(p);
-      const sections = Object.fromEntries(Object.entries(data).map(([key, value]) => [key, makeSection(value, [botId, projectRaw(p, key as keyof T.ProjectSections)], access, effect(Object.keys(value), key === 'model' ? 'new-session' : key === 'permission' ? 'session-rebind' : 'next-message', key === 'model' ? '仅新会话使用项目默认模型' : '下一条消息生效'))])) as T.ProjectSettingsView['sections'];
+      const sections = Object.fromEntries(Object.entries(data).map(([key, value]) => [key, makeSection(value, [botId, projectRaw(p, key as keyof T.ProjectSections)], access, effect(Object.keys(value), key === 'model' ? 'new-session' : key === 'permission' ? 'session-rebind' : 'next-message', key === 'model' ? '仅新会话使用项目默认模型' : key === 'run' && p.backend === 'claude-agent' ? 'Claude 不支持插话，运行中来的消息照样排队' : '下一条消息生效'))])) as T.ProjectSettingsView['sections'];
       const backendId = p.backend ?? DEFAULT_BACKEND_ID;
+      sections.run.effective = { pendingPolicy: pendingPolicyOf(getPendingPolicy(cfg), p) };
       sections.model.effective = {
         selection: await effectiveSelection(backendId, p.defaultModel, p.defaultEffort, p.defaultModelCustom)
       };
@@ -349,7 +353,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           chatId: p.chatId,
           backend: backendId,
           cwd: p.cwd,
-          kind: p.kind ?? 'multi',
+          kind: ruleKind(p),
           ...(fullOnly ? { fullOnly } : {})
         },
         members: {
@@ -497,6 +501,12 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
             }
             case 'response':
               Object.assign(p, e.patch);
+              break;
+            case 'run':
+              if (e.patch.pendingPolicy === 'default')
+                delete p.pendingPolicy;
+              else if (e.patch.pendingPolicy !== undefined)
+                p.pendingPolicy = e.patch.pendingPolicy;
               break;
             case 'model': {
               if (!e.patch.selection)

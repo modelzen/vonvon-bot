@@ -57,7 +57,7 @@ describe('retained settings behavior over real WebSocket', () => {
       await client.ready();
       const readAgent = await client.call({ type: 'request', id: 'read-agent', method: 'settings', payload: { type: 'read', scope: agent } });
       if (readAgent.type !== 'response' || readAgent.method !== 'settings' || readAgent.payload.kind !== 'view' || !('run' in readAgent.payload.view.sections)) throw new Error('agent view missing');
-      const revision = readAgent.payload.view.sections.run.revision;
+      const revision = readAgent.payload.view.sections.run!.revision;
       const edit = { scope: agent, section: 'run', revision, patch: { maxConcurrentRuns: 3 } } as const;
       const saved = await client.call({ type: 'request', id: 'save-agent', method: 'settings', payload: { type: 'save', edit } });
       expect(saved).toMatchObject({ type: 'response', method: 'settings', payload: { kind: 'saved', result: { kind: 'saved', section: { scope: agent, section: 'run', value: { stored: { maxConcurrentRuns: 3 } } } } } });
@@ -72,7 +72,7 @@ describe('retained settings behavior over real WebSocket', () => {
 
       const readProject = await client.call({ type: 'request', id: 'read-project', method: 'settings', payload: { type: 'read', scope: project } });
       if (readProject.type !== 'response' || readProject.method !== 'settings' || readProject.payload.kind !== 'view' || !('response' in readProject.payload.view.sections)) throw new Error('project view missing');
-      expect(Object.keys(readProject.payload.view.sections).sort()).toEqual(['model', 'permission', 'response']);
+      expect(Object.keys(readProject.payload.view.sections).sort()).toEqual(['model', 'permission', 'response', 'run']);
       const responseRevision = readProject.payload.view.sections.response.revision;
       const response = await client.call({ type: 'request', id: 'save-project', method: 'settings', payload: { type: 'save', edit: { scope: project, section: 'response', revision: responseRevision, patch: { noMention: false } } } });
       expect(response).toMatchObject({ type: 'response', method: 'settings', payload: { kind: 'saved', result: { kind: 'saved', section: { scope: project, section: 'response', value: { stored: { noMention: false } } } } } });
@@ -96,7 +96,7 @@ describe('retained settings behavior over real WebSocket', () => {
       await client.ready();
       const read = await client.call({ type: 'request', id: 'read', method: 'settings', payload: { type: 'read', scope: agent } });
       if (read.type !== 'response' || read.method !== 'settings' || read.payload.kind !== 'view' || !('run' in read.payload.view.sections)) throw new Error('agent view missing');
-      const edit = { scope: agent, section: 'run', revision: read.payload.view.sections.run.revision, patch: { maxConcurrentRuns: 3 } } as const;
+      const edit = { scope: agent, section: 'run', revision: read.payload.view.sections.run!.revision, patch: { maxConcurrentRuns: 3 } } as const;
       expect(await client.call({ type: 'request', id: 'first', method: 'settings', payload: { type: 'save', edit } })).toMatchObject({ payload: { result: { kind: 'saved' } } });
       const afterFirst = await readFile(fixture.configFile, 'utf8');
       const stale = await client.call({ type: 'request', id: 'stale', method: 'settings', payload: { type: 'save', edit } });
