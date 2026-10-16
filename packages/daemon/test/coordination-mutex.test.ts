@@ -174,8 +174,9 @@ describe('the transition from builds before s20c', () => {
 
   it('takes the lock when the old port is only some connection\'s local port', async () => {
     let local: Socket | undefined;
-    for (let attempt = 0; attempt < 400 && !local; attempt++) {
-      // Linux numbers the local ports towards one destination from a hashed start, so each try uses a new one.
+    // Linux numbers the local ports towards one destination from a hashed start, so each try uses a new one. macOS
+    // counts them up from 49152, so its tries would mostly miss the old range: it binds the local port below instead.
+    for (let attempt = 0; attempt < (platform() === 'linux' ? 400 : 0) && !local; attempt++) {
       const address = (await listenOld(0, () => {}))?.address();
       if (!address || typeof address === 'string') throw new Error('No fixture port');
       const socket = connect({ host: '127.0.0.1', port: address.port });
@@ -184,7 +185,22 @@ describe('the transition from builds before s20c', () => {
       if (socket.localPort !== undefined && socket.localPort >= 20000 && socket.localPort < 50000) local = socket;
       else socket.destroy();
     }
-    if (!local?.localPort) throw new Error('No ephemeral port in the old range');
+    let failure: string | undefined;
+    if (!local && platform() !== 'linux') {
+      // Not on Linux: libuv sets SO_REUSEADDR on a bound socket, and Linux then lets the listen below succeed. The local
+      // address is given because Node binds 0.0.0.0 without it, and macOS then lets the bind pass a listener on
+      // 127.0.0.1 of the same user; with it the bind fails where the mutex's listen would, and the next port is tried.
+      const address = (await listenOld(0, () => {}))?.address();
+      if (!address || typeof address === 'string') throw new Error('No fixture port');
+      for (let i = 0; i < 20 && !local; i++) {
+        const localPort = 20000 + (portOf(scratch, 'service') - 20000 + i) % 30000;
+        const socket = connect({ host: '127.0.0.1', port: address.port, localAddress: '127.0.0.1', localPort });
+        sockets.push(socket);
+        failure = await once(socket, 'connect').then(() => undefined, (error: NodeJS.ErrnoException) => error.code ?? error.message);
+        if (!failure) local = socket;
+      }
+    }
+    if (!local?.localPort) throw new Error(`No ephemeral port in the old range${failure ? ` (last try: ${failure})` : ''}`);
     const home = homeOnPort(local.localPort, 'service');
     // As in #339's CI: the port cannot be bound, yet nothing listens on it. Checked on Linux only, where it was seen.
     if (platform() === 'linux') expect(await listenOld(local.localPort, () => {})).toBeNull();

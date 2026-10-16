@@ -45,14 +45,16 @@ interface Child {
 /** 实时状态查询（{kind:'status'}）的短超时：/api/state 是 5s 轮询，不能被一个
  * 假死子进程拖住整页——超时按 connection:'unknown' 渲染。 */
 const STATUS_IPC_TIMEOUT_MS = 2_000;
+export const HOST_PAUSED_ACTIVATION = 'daemon 已暂停（10 分钟内崩溃了 3 次），这个 bot 恢复运行后才会启动。运行 vonvon daemon restart 恢复。';
 
-export async function runSupervisor(bots: BotEntry[], options: { control?: ShutdownControl; managed?: boolean; port?: number; onListening?: (listen: string) => Promise<void> } = {}): Promise<void> {
+export async function runSupervisor(bots: BotEntry[], options: { control?: ShutdownControl; managed?: boolean; port?: number; onListening?: (listen: string) => Promise<void>; paused?: boolean } = {}): Promise<void> {
   const control = options.control ?? observeShutdown();
   const supervisorStartedAt = Date.now();
   const cliEntry = process.argv[1];
   if (!cliEntry) throw new Error('supervisor: 无法解析 CLI 入口（process.argv[1] 为空）');
 
   const childEnv: NodeJS.ProcessEnv = { ...process.env, VONVON_HOME: paths.appDir };
+  const paused = Boolean(options.paused);
 
   let shuttingDown = false;
   const ownership = new WeakMap<ChildProcess, ChildOwnership>();
@@ -62,7 +64,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   // Lives here, not in the child: a bot's records survive its restarts and go with the daemon's.
   const diagnostics = createDiagnosticsStore({ changed: () => api?.invalidate(), claudeSignedOut: noteClaudeLoginFailed });
 
-  console.log(`\n正在启动 ${bots.length} 个机器人（各自独立进程）：`);
+  console.log(paused ? `\ndaemon 已暂停，${bots.length} 个机器人都不启动：` : `\n正在启动 ${bots.length} 个机器人（各自独立进程）：`);
   for (const b of bots) console.log(`  • ${b.name}  (${b.appId})  [${b.tenant}]`);
   console.log('Ctrl+C 退出（关闭全部）。\n');
 
@@ -85,7 +87,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   };
 
   const spawnChild = (c: Child): void => {
-    if (shuttingDown || !c.enabled || c.proc || c.stopping) return;
+    if (shuttingDown || paused || !c.enabled || c.proc || c.stopping) return;
     c.restartTimer = undefined;
     c.startedAt = Date.now();
     // 'ipc' 通道：子进程据此识别自己被 supervisor 托管（不自己挂 Web 控制台），
@@ -198,6 +200,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
             await stopBot(child);
             return;
           }
+          if (paused) throw new Error(HOST_PAUSED_ACTIVATION);
           if (child.stopping) await child.stopping;
           spawnChild(child);
           const deadline = Date.now() + 12_000;
@@ -272,7 +275,6 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
       drained.push(...await Promise.allSettled([...children.values()].map(stopBot)));
       errors.push(...drained.filter(result => result.status === 'rejected').map(result => result.reason));
     })]);
-    if (control.requested && (errors.length || cleanup.some(result => result.status === 'rejected'))) control.requestStop();
     cleanup.push(...await Promise.allSettled([control.completeShutdown(() => api?.release() ?? Promise.resolve())]));
     if (!options.control) control.dispose();
     const failures = cleanup.filter(result => result.status === 'rejected');

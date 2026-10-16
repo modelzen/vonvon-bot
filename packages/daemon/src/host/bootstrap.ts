@@ -7,7 +7,9 @@ import { acquirePidLock, getPidLockInfo, isPidLockOwnerRunning, PidLockError, pu
 import { verifyPidLockOwner } from '../server/owner-verification';
 import { readStartupRegistration } from '../service/startup';
 import { log } from '../core/logger';
+import { bridgeVersion } from '../core/version';
 import { defaultHolderPath, ProcessHost } from '../provider/process/process-host';
+import { closeHostRun, openHostRun, type HostRunStart } from './crash-guard';
 
 const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -30,6 +32,9 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
   let lock: Awaited<ReturnType<typeof acquireMutex>> | undefined;
   let owner: PidLockInfo | undefined;
   let host: ProcessHost | undefined;
+  let run: HostRunStart | undefined;
+  // The failure that no stop or restart asked for: it is a crash (`fatal`) and counts toward the pause.
+  let fatal: { error: unknown } | undefined;
   const errors: unknown[] = [];
   try {
     if (!process.send) {
@@ -56,6 +61,8 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
       const previous = await getPidLockInfo(paths.appDir).catch(() => null);
       if (previous && isPidLockOwnerRunning(previous)) log.info('daemon-startup', 'stale_owner_replaced', { pid: previous.pid });
       owner = await acquirePidLock(paths.appDir, { hostMutexHeld: true });
+      run = openHostRun({ root: paths.appDir, startedAt: owner.startedAt, version: bridgeVersion(), intent: () => control.intent ?? (control.requested ? 'stop' : 'running'), log });
+      if (run.paused) console.log(`daemon 已暂停：10 分钟内崩溃了 ${run.pauseCrashes ?? 3} 次，bot 都没有启动。查完原因后运行 vonvon daemon restart 恢复运行。`);
     }
     if (control.requested) return;
     host = new ProcessHost({
@@ -73,21 +80,37 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
       if (codexBin === null) delete process.env.CODEX_BIN;
       else if (codexBin !== undefined) process.env.CODEX_BIN = codexBin;
     }
+    // JP-VPS acceptance seam (s17): a real uncaught exception or rejection in a host, 2 s into the run.
+    const seam = process.env.VONVON_TEST_CRASH;
+    if (!process.send && (seam === 'exception' || seam === 'rejection')) {
+      setTimeout(() => {
+        if (seam === 'exception') throw new Error('VONVON_TEST_CRASH exception');
+        void Promise.reject(new Error('VONVON_TEST_CRASH rejection'));
+      }, 2000).unref();
+    }
     const { runRun } = await import('../cli/commands/run');
     const claimedOwner = owner;
     await runRun(options.bot, {
       control,
       managed: options.managed,
       port: options.port,
+      ...(run?.paused ? { paused: true } : {}),
       onListening: claimedOwner ? async (listen) => { await publishPidLock(paths.appDir, claimedOwner, listen); } : undefined,
     });
-  } catch (error) { errors.push(error); }
+  } catch (error) {
+    errors.push(error);
+    if (!control.requested) fatal = { error };
+  }
   finally {
+    // A cleanup failure no longer turns a requested restart into a stop (v1-plan s17): the replacement starts only
+    // after this process has exited, and leftover provider processes are swept at the next boot.
     try { await host?.closeAll(); } catch (error) { errors.push(error); }
-    if (errors.length && control.requested) control.requestStop();
     try { await control.completeShutdown(async () => {}); }
     catch (error) { errors.push(error); }
     control.dispose();
+    closeHostRun(fatal ? { kind: 'fatal', error: fatal.error } : { kind: 'clean' });
+    // A paused run that cannot stay up exits 0 under a manager, which then leaves it down: the pause ends the loop.
+    if (fatal && run?.paused && process.env.VONVON_SERVICE && !process.send) process.exitCode = 0;
     if (!errors.some(listenerCloseUnconfirmed)) {
       if (owner) {
         try { await releasePidLock(paths.appDir, owner); } catch (error) { errors.push(error); }
@@ -96,7 +119,6 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
         try { await closeMutex(lock); } catch (error) { errors.push(error); }
       }
     }
-    if (errors.length && process.exitCode === 75 && process.env.VONVON_SERVICE && !process.send) process.exitCode = 0;
     if (errors.length === 1) throw errors[0];
     if (errors.length) throw new AggregateError(errors, 'Host shutdown failed.');
   }

@@ -1,0 +1,209 @@
+import { spawn } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
+import { afterAll, describe, expect, it } from 'vitest';
+import {
+  countInWindow, crashDir, crashErrorName, crashScopeKey, createSystemClock, listCrashRecords, pruneCrashRecords, readBootId,
+  readCrashSummary, readRunMarker, removeResumeRequest, sanitizeReason, startedBeforeThisBoot, takeResumeRequest,
+  writeCrashRecordSync, writeResumeRequest, writeRunMarkerSync, type Clock, type CrashRecord, type RunMarker,
+} from '../src/host/crash-store';
+
+const roots: string[] = [];
+afterAll(() => { for (const root of roots) rmSync(root, { recursive: true, force: true }); });
+const tempRoot = (): string => { const root = mkdtempSync(join(tmpdir(), 'vonvon-crash-store-')); roots.push(root); return root; };
+const RUN = '11111111-1111-4111-8111-111111111111';
+const CHAIN = '22222222-2222-4222-8222-222222222222';
+const at = (ms: number): string => new Date(ms).toISOString();
+const T0 = Date.parse('2026-10-16T05:00:00.000Z');
+function record(fields: Partial<CrashRecord> = {}): CrashRecord {
+  return {
+    v: 1, at: at(T0), sysUptimeMs: 1_000_000, kind: 'exception', scope: 'host', pid: 4242, runId: RUN, chainId: CHAIN,
+    startedAt: at(T0 - 60_000), uptimeMs: 60_000, version: '0.7.0', managed: null, during: 'run', reason: 'Error: boom', ...fields,
+  };
+}
+const clock = (fields: Partial<{ now: number; uptimeMs: number; bootId: string | undefined }> = {}): Clock => ({
+  now: () => fields.now ?? T0, uptimeMs: () => fields.uptimeMs ?? 1_000_000, bootId: () => fields.bootId,
+});
+
+describe('sanitizeReason', () => {
+  const home = '/home/ops';
+  it.each([
+    ['first line only, control characters removed', new Error('line one\tx\nline two'), 'Error: line onex'],
+    ['a string', 'plain text', 'plain text'],
+    ['an object', { a: 1 }, '[object Object]'],
+    ['undefined', undefined, 'undefined'],
+    ['a symbol', Symbol('s'), 'Symbol(s)'],
+    ['an empty message', new Error(''), 'Error'],
+    ['nothing at all', '   ', '(无说明)'],
+    ['the home folder', new Error(`ENOENT: open '${home}/x/y.json'`), "Error: ENOENT: open '~/x/y.json'"],
+    ['another macOS user', 'at /Users/alice/proj/a.ts', 'at ~/proj/a.ts'],
+    ['another Linux user', 'read /home/bob/.codex/auth.json', 'read ~/.codex/auth.json'],
+    ['Feishu ids', 'chat oc_abcdef1234567 user ou_zyxwvu9876543', 'chat 234567 user 876543'],
+    ['a token', `token ${'a'.repeat(40)} end`, 'token [redacted] end'],
+    ['URL credentials and query', 'GET https://user:pass@host.example/p/a?secret=1#f failed', 'GET https://host.example/p/a failed'],
+  ])('%s', (_label, value, expected) => {
+    expect(sanitizeReason(value, home)).toBe(expected);
+  });
+  it('cuts at 200 without splitting a surrogate pair', () => {
+    expect(sanitizeReason('ab '.repeat(100), '/h')).toHaveLength(200);
+    const prefix = `${'ab '.repeat(66)}c`;
+    expect(sanitizeReason(`${prefix}😀tail`, '/h')).toBe(prefix);
+  });
+  it('names the error and its system code only', () => {
+    expect(crashErrorName(Object.assign(new Error('listen'), { code: 'EADDRINUSE' }))).toBe('Error:EADDRINUSE');
+    expect(crashErrorName(new TypeError('x'))).toBe('TypeError');
+    expect(crashErrorName(Object.assign(new Error('x'), { code: 'not a code' }))).toBe('Error');
+    expect(crashErrorName('string')).toBeUndefined();
+    expect(crashErrorName(Object.assign(new Error('x'), { name: 'bad name!' }))).toBeUndefined();
+  });
+});
+
+describe('records', () => {
+  it('writes 0600 files in a 0700 directory with a fixed name and no temp file left', () => {
+    const root = tempRoot();
+    const name = writeCrashRecordSync(root, record());
+    expect(name).toMatch(/^host-20261016T050000000Z-4242-[0-9a-f]{8}\.json$/);
+    const bot = writeCrashRecordSync(root, record({ scope: 'bot', appId: 'cli_abc' }));
+    expect(bot.startsWith(`${crashScopeKey('bot', 'cli_abc')}-`)).toBe(true);
+    expect(crashScopeKey('bot', 'cli_abc')).toMatch(/^bot-[0-9a-f]{12}$/);
+    expect(statSync(crashDir(root)).mode & 0o777).toBe(0o700);
+    expect(statSync(join(crashDir(root), name)).mode & 0o777).toBe(0o600);
+    expect(readdirSync(crashDir(root)).filter(entry => entry.endsWith('.tmp'))).toEqual([]);
+    expect(JSON.parse(readFileSync(join(crashDir(root), name), 'utf8'))).toEqual(record());
+    expect(() => writeCrashRecordSync(root, record({ reason: '' }))).toThrow();
+  });
+
+  it('lists newest first and skips foreign names, oversized files, bad JSON, bad shapes and a missing directory', () => {
+    const root = tempRoot();
+    expect(listCrashRecords(root)).toEqual([]);
+    writeCrashRecordSync(root, record({ at: at(T0) }));
+    writeCrashRecordSync(root, record({ at: at(T0 + 2000), kind: 'forced' }));
+    writeCrashRecordSync(root, record({ at: at(T0 + 1000), scope: 'bot', appId: 'cli_abc' }));
+    const dir = crashDir(root);
+    writeFileSync(join(dir, 'notes.json'), JSON.stringify(record()));
+    writeFileSync(join(dir, 'host-20261016T060000000Z-1-aaaaaaaa.json'), '{not json');
+    writeFileSync(join(dir, 'host-20261016T060000001Z-1-bbbbbbbb.json'), JSON.stringify({ ...record(), extra: 1 }));
+    writeFileSync(join(dir, 'host-20261016T060000002Z-1-cccccccc.json'), JSON.stringify({ ...record(), reason: 'x'.repeat(17_000) }));
+    expect(listCrashRecords(root).map(entry => entry.at)).toEqual([at(T0 + 2000), at(T0 + 1000), at(T0)]);
+    expect(listCrashRecords(root, { scope: 'host' }).map(entry => entry.kind)).toEqual(['forced', 'exception']);
+    expect(listCrashRecords(root, { limit: 1 })).toEqual([]);
+  });
+
+  it('keeps the newest 50 per scope within 30 days and removes temp files older than an hour', () => {
+    const root = tempRoot();
+    for (let index = 0; index < 55; index++) writeCrashRecordSync(root, record({ at: at(T0 + index * 1000) }));
+    writeCrashRecordSync(root, record({ at: at(T0 - 31 * 86_400_000), scope: 'bot', appId: 'cli_old' }));
+    writeCrashRecordSync(root, record({ at: at(T0), scope: 'bot', appId: 'cli_new' }));
+    const dir = crashDir(root);
+    writeFileSync(join(dir, '.host-x.json.aaaa.tmp'), '');
+    writeFileSync(join(dir, '.run.json.bbbb.tmp'), '');
+    const old = (T0 - 2 * 3_600_000) / 1000;
+    utimesSync(join(dir, '.host-x.json.aaaa.tmp'), old, old);
+    expect(pruneCrashRecords(root, { now: T0 + 60_000, scope: crashScopeKey('bot', 'cli_old') })).toBe(1);
+    expect(pruneCrashRecords(root, { now: Date.parse(at(T0)) + 60_000 })).toBe(5 + 1);
+    const host = listCrashRecords(root, { scope: 'host' });
+    expect(host).toHaveLength(50);
+    expect(host.at(-1)?.at).toBe(at(T0 + 5000));
+    expect(listCrashRecords(root, { scope: crashScopeKey('bot', 'cli_new') })).toHaveLength(1);
+    expect(readdirSync(dir).filter(name => name.endsWith('.tmp'))).toEqual(['.run.json.bbbb.tmp']);
+  });
+
+  it('two processes writing at once leave 50 valid distinct records', async () => {
+    const root = tempRoot();
+    const bundle = join(root, 'store.cjs');
+    await build({ entryPoints: [fileURLToPath(new URL('../src/host/crash-store.ts', import.meta.url))], outfile: bundle, bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent' });
+    const code = `const m=require(${JSON.stringify(bundle)});for(let i=0;i<25;i++)m.writeCrashRecordSync(process.argv[1],${JSON.stringify(record())});`;
+    const exits = await Promise.all([0, 1].map(() => new Promise<number | null>(resolve => {
+      spawn(process.execPath, ['-e', code, root], { stdio: 'inherit' }).once('exit', resolve);
+    })));
+    expect(exits).toEqual([0, 0]);
+    expect(new Set(readdirSync(crashDir(root)).filter(name => name.startsWith('host-'))).size).toBe(50);
+    expect(listCrashRecords(root)).toHaveLength(50);
+  }, 30_000);
+});
+
+describe('counting', () => {
+  const now = 2_000_000;
+  it.each([
+    ['600 000 ms back is in', { sysUptimeMs: now - 600_000 }, 1],
+    ['600 001 ms back is out', { sysUptimeMs: now - 600_001 }, 0],
+    ['5 s ahead (clock jitter) is in', { sysUptimeMs: now + 5000 }, 1],
+    ['another chain', { chainId: '33333333-3333-4333-8333-333333333333' }, 0],
+    ['during a requested restart', { during: 'restart' as const }, 0],
+    ['during a requested stop', { during: 'stop' as const }, 0],
+    ['a bot', { scope: 'bot' as const, appId: 'cli_a' }, 0],
+    ['no during (old record)', { during: undefined }, 1],
+  ])('%s', (_label, fields, expected) => {
+    expect(countInWindow([record({ sysUptimeMs: now, ...fields })], { chainId: CHAIN, nowUptimeMs: now })).toBe(expected);
+  });
+});
+
+describe('boots', () => {
+  it('compares boot ids when both are known (Linux /proc, macOS kern.bootsessionuuid)', () => {
+    expect(startedBeforeThisBoot({ startedAt: at(T0), bootId: 'a' }, clock({ bootId: 'a', uptimeMs: 1 }))).toBe(false);
+    expect(startedBeforeThisBoot({ startedAt: at(T0), bootId: 'a' }, clock({ bootId: 'b' }))).toBe(true);
+  });
+  it('falls back to the uptime rule without ids, which a forward clock step defeats (known miss)', () => {
+    const noId = clock({ now: T0, uptimeMs: 3_600_000 });
+    expect(startedBeforeThisBoot({ startedAt: at(T0 - 60_000) }, noId)).toBe(false);
+    expect(startedBeforeThisBoot({ startedAt: at(T0 - 3_700_000) }, noId)).toBe(true);
+    // macOS: the wall clock stepped forward 10 s after the run started moves kern.boottime too, so a crash looks like a boot.
+    expect(startedBeforeThisBoot({ startedAt: at(T0 - 3_600_000 + 1000) }, clock({ now: T0 + 10_000, uptimeMs: 3_600_000 }))).toBe(true);
+  });
+  it('reads the boot id per platform and memoizes it in the system clock', () => {
+    const uuid = '63D06F6C-7229-449F-A0F4-376A6B8827A0';
+    const exec = (file: string, args: string[]) => { expect([file, ...args]).toEqual(['/usr/sbin/sysctl', '-n', 'kern.bootsessionuuid']); return `${uuid}\n`; };
+    expect(readBootId('darwin', { readFile: () => '', exec })).toBe(uuid);
+    expect(readBootId('darwin', { readFile: () => '', exec: () => 'garbage' })).toBeUndefined();
+    expect(readBootId('darwin', { readFile: () => '', exec: () => { throw new Error('timeout'); } })).toBeUndefined();
+    expect(readBootId('linux', { readFile: () => `${uuid.toLowerCase()}\n`, exec: () => '' })).toBe(uuid.toLowerCase());
+    expect(readBootId('win32', { readFile: () => uuid, exec: () => uuid })).toBeUndefined();
+    let reads = 0;
+    const system = createSystemClock(() => { reads++; return uuid; });
+    expect([system.bootId(), system.bootId()]).toEqual([uuid, uuid]);
+    expect(reads).toBe(1);
+  });
+});
+
+describe('marker and resume request', () => {
+  const marker = (fields: Partial<RunMarker> = {}): RunMarker => ({
+    v: 1, runId: RUN, chainId: CHAIN, pid: 4242, startedAt: at(T0), startUptimeMs: 1000, aliveAt: at(T0), aliveUptimeMs: 1000,
+    version: '0.7.0', managed: 'systemd', state: 'running', ...fields,
+  });
+  it('reads a missing marker as null and an unparsable one as corrupt', () => {
+    const root = tempRoot();
+    expect(readRunMarker(root)).toBeNull();
+    writeRunMarkerSync(root, marker());
+    expect(readRunMarker(root)).toEqual(marker());
+    writeFileSync(join(crashDir(root), 'run.json'), '{');
+    expect(readRunMarker(root)).toBe('corrupt');
+  });
+  it('honours a resume request only within two minutes and consumes it either way', () => {
+    const root = tempRoot();
+    expect(takeResumeRequest(root, T0)).toBe('none');
+    writeResumeRequest(root, T0);
+    expect(takeResumeRequest(root, T0 + 60_000)).toBe('fresh');
+    expect(takeResumeRequest(root, T0 + 60_000)).toBe('none');
+    writeResumeRequest(root, T0);
+    expect(takeResumeRequest(root, T0 + 180_000)).toBe('stale');
+    expect(readdirSync(crashDir(root))).toEqual([]);
+    mkdirSync(crashDir(root), { recursive: true });
+    writeFileSync(join(crashDir(root), 'resume.json'), 'garbage');
+    expect(takeResumeRequest(root, T0)).toBe('stale');
+    const mine = writeResumeRequest(root, T0);
+    removeResumeRequest(root, mine + 1);
+    expect(readdirSync(crashDir(root))).toEqual(['resume.json']);
+    removeResumeRequest(root, mine);
+    expect(readdirSync(crashDir(root))).toEqual([]);
+  });
+  it('shows the pause of a stopped daemon only from this boot: the next start counts afresh after a reboot', () => {
+    const root = tempRoot();
+    writeRunMarkerSync(root, marker({ state: 'paused', pausedAt: at(T0), pauseCrashes: 3, bootId: 'boot-a' }));
+    const summary = (bootId: string) => readCrashSummary(root, { running: false, now: T0, clock: clock({ bootId }) }).paused;
+    expect(summary('boot-a')).toEqual({ since: at(T0), crashes: 3, running: false });
+    expect(summary('boot-b')).toBeUndefined();
+  });
+});

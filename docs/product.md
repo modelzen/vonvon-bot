@@ -453,8 +453,8 @@ owner 的话："后台服务不要依赖 Electron，因为 Linux 上没有桌面
 - 这些代码大部分已经在 main 上，只是没接线：launchd 和 systemd 的安装事务（#271、#274）、服务定义（#246）、退出码（#276）。今天 `vonvon service install` 直接报错（`D/cli/commands/service.ts:5`）。
 
 **崩溃了自动重启。** 服务管理器在 daemon 异常退出后重启它（plist 的 `KeepAlive`、unit 的 `Restart=on-failure`，`D/service/definitions.ts:81`、`:85`）。两边都不会在连环崩溃时自己停下来，所以上限由 daemon 自己判断：
-- daemon 和每个 bot 的子进程都加全局的异常兜底：崩溃前在 `~/.vonvon-bot/crash/` 写一条记录（版本、哪个 bot、错误的第一行、运行了多久），再退出。被系统强制结束、没留下记录的，下次启动时补一条"被系统强制结束"。今天没有任何崩溃记录（`D/cli-bridge/ipc.ts:24-25`）。
-- 10 分钟内崩溃 3 次，daemon 进入暂停：网页和桌面端照常能打开，显示原因；bot 不连飞书，不跑 agent。不自动恢复，等主人点"恢复运行"，或执行 `vonvon daemon restart`。下次登录或开机时重新计数。
+- daemon 和每个 bot 的子进程都加全局的异常兜底：崩溃前在 `~/.vonvon-bot/crash/` 写一条记录（版本、哪个 bot、错误的第一行、运行了多久），再退出。被系统强制结束、没留下记录的，下次启动时补一条"被系统强制结束"。今天没有任何崩溃记录（`D/cli-bridge/ipc.ts:24-25`）。（s17 已加 daemon 主进程的；bot 子进程的在 s18）
+- 10 分钟内崩溃 3 次，daemon 进入暂停：网页和桌面端照常能打开，显示原因；bot 不连飞书，不跑 agent。不自动恢复，等主人点"恢复运行"，或执行 `vonvon daemon restart`；`vonvon daemon stop` 再 `vonvon daemon start` 也算恢复。下次登录或开机时重新计数。停止和重启过程中出的错照样记录，不计入 3 次。暂停期间 daemon 自己又起不来（比如端口被占），后台服务就不再拉起它，`vonvon daemon status` 仍显示已暂停，`vonvon daemon restart` 恢复。（s17 已做；网页上的原因和"恢复运行"在 s18）
 - 某一个 bot 的子进程 10 分钟内崩溃 3 次，只暂停这一个 bot，别的照常。今天子进程会无限重试（`D/bot/supervisor.ts:115-131`）。
 
 owner 说过"崩溃报错就好了"，让 Claude 斟酌。自动重启是 Claude 加的：后台服务崩了，群里的人只会看到 bot 不回，主人不一定在电脑前。
@@ -466,6 +466,7 @@ owner 说过"崩溃报错就好了"，让 Claude 斟酌。自动重启是 Claude
 - 私聊只写一行原因，不放调用栈和本机路径。第一版不上传崩溃信息。
 - 私聊直接调发消息的接口，不靠长连接，所以暂停时也能发。机器人能不能给没开过会话的主人发私聊，要实测。
 - Linux 上用 `vonvon daemon status` 看服务状态和最近的崩溃。
+- 重启或停止时还在排队、没开始处理的消息（包括 `/new`、`/compact` 期间暂存的）：bot 起来以后在原处回一句"刚才重启了，这条没处理，请再发一次"，每个群最多一条；诊断页"最近没回的消息"记一条。owner 2026-10-16 让 Claude 定。（s18 做；s17 只在日志里记条数）
 
 **Linux 上只装后台服务。** Linux 没有桌面端，第一版做一个命令行版：
 1. `npm i -g vonvon-bot`，或者装下载的安装包。

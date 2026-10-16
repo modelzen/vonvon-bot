@@ -39,3 +39,15 @@ it('uses the legacy current bot returned by registry migration', async () => {
   await runRun(undefined, { control });
   expect(runSupervisor).toHaveBeenCalledWith([bot], { control, managed: false });
 });
+
+it('a paused host runs the supervisor paused, also for an inline --bot host and when the registry cannot be read (s17)', async () => {
+  const bot = { name: 'a', appId: 'cli_a', tenant: 'feishu' as const, createdAt: 0, active: true };
+  Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+  vi.mocked(ensureRegistry).mockResolvedValue({ version: 1, bots: [bot] });
+  await runRun('cli_a', { control, paused: true });
+  expect(runSupervisor).toHaveBeenLastCalledWith([bot], { control, managed: false, paused: true });
+  vi.mocked(ensureRegistry).mockRejectedValue(new Error('bots.json unreadable'));
+  await runRun(undefined, { control, paused: true });
+  expect(runSupervisor).toHaveBeenLastCalledWith([], { control, managed: false, paused: true });
+  expect(ensureOnboarded).not.toHaveBeenCalled();
+});
