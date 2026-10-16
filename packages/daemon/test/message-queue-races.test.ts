@@ -6,6 +6,7 @@ import type { AgentEvent, AgentInput } from '../src/agent/types';
 
 const fake = vi.hoisted(() => ({
   groupMode: 'single' as 'single' | 'multi',
+  groupPolicy: undefined as 'steer' | 'queue' | undefined,
   backend: { capabilities: { steer: true }, id: 'codex', listModels: vi.fn(async () => []), resumeThread: vi.fn(), startThread: vi.fn() },
   voice: vi.fn(async (_channel: unknown, msg: NormalizedMessage) => ({ text: '语音正文', voice: { messageId: msg.messageId, text: '语音正文', transcribed: true } })),
   live: vi.fn(),
@@ -21,7 +22,7 @@ vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_ctx: unknown,
 vi.mock('../src/agent', async (original) => ({ ...await original<object>(), createBackend: () => fake.backend }));
 vi.mock('../src/project/registry', async (original) => ({
   ...await original<object>(),
-  getProjectByChatId: async () => ({ name: 'test', chatId: 'chat', cwd: '/test', groupMode: fake.groupMode }),
+  getProjectByChatId: async () => ({ name: 'test', chatId: 'chat', cwd: '/test', groupMode: fake.groupMode, ...(fake.groupPolicy ? { pendingPolicy: fake.groupPolicy } : {}) }),
 }));
 vi.mock('../src/bot/session-store', async (original) => ({
   ...await original<object>(),
@@ -117,6 +118,7 @@ function setup(policy: 'steer' | 'queue' = 'steer') {
 beforeEach(() => {
   vi.clearAllMocks();
   fake.groupMode = 'single';
+  fake.groupPolicy = undefined;
   fake.record = {};
   fake.history.mockReset().mockResolvedValue({ messages: [], ok: true, complete: true });
   fake.voice.mockReset().mockImplementation(async (_channel, msg) => voiceResult('语音正文', msg.messageId));
@@ -188,6 +190,21 @@ describe('message queue lifecycle', () => {
     await until(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'queued', { depth: 1 }));
     expect(run.t.steer).not.toHaveBeenCalled();
     card.resolve(true);
+    await until(() => expect(run.consumed).toHaveLength(2));
+    run.turns[1]!.resolve();
+  });
+
+  it('s21: a group set to queue queues even when the bot steers', async () => {
+    const run = thread();
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    fake.groupPolicy = 'queue';
+    const o = setup('steer');
+    await o.onMessage(message('first'));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    await o.onMessage(message('second'));
+    await until(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'queued', { depth: 1 }));
+    expect(run.t.steer).not.toHaveBeenCalled();
+    run.turns[0]!.resolve();
     await until(() => expect(run.consumed).toHaveLength(2));
     run.turns[1]!.resolve();
   });

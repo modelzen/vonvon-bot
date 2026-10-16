@@ -2,7 +2,7 @@ import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { log } from '../core/logger';
 import { buildWelcomeCard } from '../card/command-cards';
 import { createBackend, catalogById } from '../agent';
-import { defaultNoMention, type Project } from './registry';
+import { noMentionOf, ruleKind, type Project } from './registry';
 
 /** 项目后端的能力位（用于欢迎卡按后端裁剪命令）。未知/手编 id 解析失败 ⇒ undefined
  * （= 全列，与 codex 一致），绝不因此让建项目/绑群失败。 */
@@ -48,7 +48,7 @@ export function sidebarPcUrl(url: string): string {
  * usable if any of them fails (e.g. missing scope).
  */
 export async function onboardGroup(channel: LarkChannel, project: Project): Promise<void> {
-  const kind = project.kind ?? 'multi';
+  const kind = ruleKind(project);
   const chatId = project.chatId;
   const agentName = welcomeAgentName(project.backend);
   // In a 'joined' group the bot is a plain member, not the owner: don't Pin or
@@ -61,7 +61,7 @@ export async function onboardGroup(channel: LarkChannel, project: Project): Prom
   //    an open_url link), so it needn't be a CardKit entity. For created groups
   //    we capture the message_id and Pin it; joined groups skip the Pin.
   try {
-    const noMention = project.noMention ?? defaultNoMention(project);
+    const noMention = noMentionOf(project);
     const content = JSON.stringify(
       buildWelcomeCard(kind, HELP_DOC_URL || undefined, noMention, welcomeCaps(project.backend), agentName),
     );

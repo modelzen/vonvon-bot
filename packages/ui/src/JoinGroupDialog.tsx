@@ -1,15 +1,19 @@
 import {useClient} from './client-context';
 import {useDirectoryPicker} from './directory-picker';
 import {useEffect, useRef, useState} from 'react';
-import type {Agent, CommandResult, FolderChoice, PendingGroup} from '@vonvon/protocol';
-import {conversationSchema, toolSchema} from '@vonvon/protocol';
-import {Button, FormField, InlineNotice} from './reference/components/ui';
+import type {Agent, CommandResult, Conversation, FolderChoice, PendingGroup} from '@vonvon/protocol';
+import {conversationCopy, toolSchema} from '@vonvon/protocol';
+import {Button, ChoiceGroup, FormField, InlineNotice} from './reference/components/ui';
 import {Dialog} from './reference/components/ui/Dialog';
 import {SettingsGroup, SettingsRow} from './reference/components/system-settings';
 import {useDraft, useDraftGuard} from './settings/DraftGuard';
 import type {PendingAgentGroups} from './pending-groups';
 
 type Mode = {kind: 'create'} | {kind: 'existing'} | {kind: 'bind'; group: PendingGroup};
+/** product.md 3.4: in this order, title plus one line, nothing preselected or marked as recommended (智能 joins in s25). */
+const CONVERSATIONS = (['threads', 'shared'] as const).map(value => ({value, label: conversationCopy[value].title, description: conversationCopy[value].subtitle}));
+/** 免@ when the user has not touched it: 多会话开，单会话关. */
+const defaultResponse = (conversation: Conversation): 'all' | 'mention' => conversation === 'threads' ? 'all' : 'mention';
 /** The protocol's project-name rule, checked here so the user sees why instead of a generic request failure. */
 export function projectNameProblem(value: string): string | undefined {
   const name = value.trim();
@@ -27,15 +31,18 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
   const [folder, setFolder] = useState<FolderChoice>();
   const [existingDirectory, setExistingDirectory] = useState(false);
   const [tool, setTool] = useState<'codex' | 'claude'>('codex');
-  const [conversation, setConversation] = useState<'threads' | 'shared'>('threads');
+  const [conversation, setConversation] = useState<Conversation>();
+  /** Set once the user picks 免@ by hand; until then it follows the 会话方式. */
+  const [response, setResponse] = useState<'all' | 'mention'>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [manual, setManual] = useState<Extract<CommandResult, {kind: 'groups'}>>();
   const active = useRef(true);
   useEffect(() => () => {active.current = false;}, []);
   const nameProblem = projectNameProblem(name);
-  const dirty = Boolean(name !== (mode.kind === 'bind' ? mode.group.name : '') || folder || existingDirectory || tool !== 'codex' || conversation !== 'threads');
-  function discard() {setName(''); setFolder(undefined); setExistingDirectory(false); setTool('codex'); setConversation('threads');}
+  const freeAt = response ?? (conversation && defaultResponse(conversation));
+  const dirty = Boolean(name !== (mode.kind === 'bind' ? mode.group.name : '') || folder || existingDirectory || tool !== 'codex' || conversation || response);
+  function discard() {setName(''); setFolder(undefined); setExistingDirectory(false); setTool('codex'); setConversation(undefined); setResponse(undefined);}
   function close() {if (!busy) navigate(() => {active.current = false; onClose();});}
   function switchMode(next: Mode) {
     if (busy) return;
@@ -44,12 +51,17 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
   async function save() {
     if (busy || mode.kind === 'existing') return false;
     if (!name.trim() || ((mode.kind === 'bind' || existingDirectory) && !folder)) {setError('请填写名称并选择工作目录。'); return false;}
+    if (!conversation || !freeAt) {setError('请选择会话方式。'); return false;}
+    // Left out only when the default gives it on this daemon and on one from before s21 alike: those bind
+    // with 3.4's defaults but create every group with 免@ on. Otherwise sent; an old daemon then refuses.
+    const omit = freeAt === defaultResponse(conversation) && (mode.kind === 'bind' || conversation === 'threads');
+    const picked = omit ? {} : {response: freeAt};
     if (nameProblem) {setError(nameProblem); return false;}
     setBusy(true); setError('');
     try {
       const reply = mode.kind === 'create'
-        ? await client.collaboration({action: 'createProject', agentId: agent.id, name: name.trim(), folder: existingDirectory && folder ? {kind: 'existing', folderToken: folder.token} : {kind: 'default'}, tool, conversation})
-        : folder && await client.run({type: 'bindGroup', agentId: agent.id, groupId: mode.group.chatId, projectName: name.trim(), folderToken: folder.token, tool, conversation});
+        ? await client.collaboration({action: 'createProject', agentId: agent.id, name: name.trim(), folder: existingDirectory && folder ? {kind: 'existing', folderToken: folder.token} : {kind: 'default'}, tool, conversation, ...picked})
+        : folder && await client.run({type: 'bindGroup', agentId: agent.id, groupId: mode.group.chatId, projectName: name.trim(), folderToken: folder.token, tool, conversation, ...picked});
       if (!reply || reply.kind !== 'applied') {setError(reply && 'message' in reply ? reply.message : '操作未完成，请重试。'); return false;}
       await onChanged();
       active.current = false;
@@ -99,9 +111,14 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
           {mode.kind === 'create' && <SettingsRow title="工作目录来源" trailing={<select aria-label="目录来源" disabled={busy} value={existingDirectory ? 'existing' : 'default'} onChange={event => {setExistingDirectory(event.target.value === 'existing'); setFolder(undefined);}}><option value="default">新建空白目录</option><option value="existing">使用现有目录</option></select>} />}
           <SettingsRow title="工作目录" value={mode.kind === 'create' && !existingDirectory ? '在 Bot 的默认项目目录中创建空白目录' : folder?.displayPath ?? '未选择'} trailing={(mode.kind === 'bind' || existingDirectory) && <Button disabled={busy} onClick={() => void chooseFolder()}>选择文件夹</Button>} />
           <SettingsRow title="执行工具" trailing={<select aria-label="执行工具" disabled={busy} value={tool} onChange={event => setTool(toolSchema.parse(event.target.value))}><option value="codex">Codex</option><option value="claude">Claude</option></select>} />
-          <SettingsRow title="会话方式" trailing={<select aria-label="会话方式" disabled={busy} value={conversation} onChange={event => setConversation(conversationSchema.parse(event.target.value))}><option value="threads">按话题独立会话</option><option value="shared">整群连续会话</option></select>} />
         </SettingsGroup>
-        <Button variant="primary" loading={busy} disabled={!name.trim() || Boolean(nameProblem) || ((mode.kind === 'bind' || existingDirectory) && !folder)} onClick={() => void save()}>{mode.kind === 'create' ? '创建飞书群并加入' : '绑定工作目录并发送欢迎卡片'}</Button>
+        <FormField label="会话方式">
+          <ChoiceGroup<Conversation | ''> label="会话方式" aria-required disabled={busy} value={conversation ?? ''} options={CONVERSATIONS} onChange={value => {if (value) setConversation(value);}} />
+        </FormField>
+        {conversation && <SettingsGroup>
+          <SettingsRow title="免 @" value={freeAt === 'all' ? '不 @ 也回' : '@ 我才回'} trailing={<select aria-label="免 @" disabled={busy} value={freeAt} onChange={event => setResponse(event.target.value === 'all' ? 'all' : 'mention')}><option value="all">开</option><option value="mention">关</option></select>} />
+        </SettingsGroup>}
+        <Button variant="primary" loading={busy} disabled={!name.trim() || Boolean(nameProblem) || ((mode.kind === 'bind' || existingDirectory) && !folder) || !conversation} onClick={() => void save()}>{mode.kind === 'create' ? '创建飞书群并加入' : '绑定工作目录并发送欢迎卡片'}</Button>
       </>}
       {error && <InlineNotice title="操作未完成" tone="danger">{error}</InlineNotice>}
     </div>
