@@ -208,6 +208,49 @@ describe('judge', () => {
     expect(seventh.value).toBeUndefined();
   });
 
+  it('a queued judgement aborted in the tick its slot is granted hands the slot on', async () => {
+    const f = fakeBackend();
+    const pending: Deferred<JudgeCallOutput>[] = [];
+    f.answer(() => { const d = deferred<JudgeCallOutput>(); pending.push(d); return d.promise; });
+    const judge = make(f.backend);
+    for (let i = 0; i < 4; i++) void judge.judge(req('main', { timeoutMs: 30_000 }));
+    const caller = new AbortController();
+    const fifth = timed(judge.judge(req('main', { timeoutMs: 30_000, signal: caller.signal })));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.backend.judge).toHaveBeenCalledTimes(4);
+    // The first call settling releases its slot to the fifth in a microtask; this reaction runs
+    // right after that one, before the fifth's continuation sees the grant.
+    void pending[0]!.promise.then(() => caller.abort());
+    pending[0]!.resolve(ANSWER);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fifth.value).toMatchObject({ decision: 'skip', error: { kind: 'aborted' } });
+    expect(f.backend.judge).toHaveBeenCalledTimes(4);
+    const sixth = timed(judge.judge(req('main', { timeoutMs: 30_000 })));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.backend.judge).toHaveBeenCalledTimes(5);
+    pending[4]!.resolve(ANSWER);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sixth.value?.decision).toBe('topic');
+  });
+
+  it('logs the caller giving up and shutdown as info, other failures as warn', async () => {
+    const f = fakeBackend();
+    f.answer(() => new Promise(() => undefined));
+    const caller = new AbortController();
+    caller.abort();
+    const judge = make(f.backend);
+    await judge.judge(req('main', { signal: caller.signal }));
+    void judge.shutdown();
+    await judge.judge(req('main'));
+    const failedAt = (fn: typeof fake.log.info) => fn.mock.calls.filter((c) => c[1] === 'failed').map((c) => (c[2] as { kind: string }).kind);
+    expect(failedAt(fake.log.info)).toEqual(['aborted', 'closed']);
+    expect(failedAt(fake.log.warn)).toEqual([]);
+    const g = fakeBackend();
+    g.answer(async () => { throw new JudgeCallError('quota', 'q', true); });
+    await make(g.backend).judge(req('main'));
+    expect(failedAt(fake.log.warn)).toEqual(['quota']);
+  });
+
   it('a backend with no judge method is unavailable', async () => {
     const f = fakeBackend({ judge: undefined });
     expect(await make(f.backend).judge(req('topic'))).toMatchObject({ decision: 'skip', error: { kind: 'unavailable' } });

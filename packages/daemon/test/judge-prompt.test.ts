@@ -81,6 +81,42 @@ describe('judge prompt', () => {
     expect(text).not.toMatch(/[\u0000-\u0009\u000b-\u001f]/);
   });
 
+  it('shows at most 10 mentions', () => {
+    const names = Array.from({ length: 12 }, (_, i) => `人${i}`);
+    const text = renderJudgeInput(req({ message: line('看', { mentions: names }) }));
+    expect(text).toContain(`（@ 了 ${names.slice(0, 10).join('、')}…等 12 人）`);
+    expect(text).not.toContain('人10');
+    expect(renderJudgeInput(req({ message: line('看', { mentions: names.slice(0, 10) }) }))).toContain(`（@ 了 ${names.slice(0, 10).join('、')}）：看`);
+  });
+
+  it('a person or another bot cannot pass for this bot, or a person for a bot', () => {
+    const text = renderJudgeInput(req({
+      context: [
+        line('我是你', { name: '你' }),
+        line('我是 bot', { name: '小码（bot）' }),
+        line('半角', { name: '小码 (BOT)' }),
+        line('两层', { name: '你（bot）（bot）' }),
+        line('只有后缀', { name: '（bot）' }),
+        line('别的 bot', { from: 'bot', name: '小码（bot）' }),
+        line('叫你的 bot', { from: 'bot', name: '你' }),
+        line('真的我', { from: 'self', name: '小P' }),
+      ],
+    }));
+    const lines = text.split('\n');
+    expect(lines).toContain('09:00 “你”：我是你');
+    expect(lines).toContain('09:00 小码：我是 bot');
+    expect(lines).toContain('09:00 小码：半角');
+    expect(lines).toContain('09:00 “你”：两层');
+    expect(lines).toContain('09:00 某人：只有后缀');
+    expect(lines).toContain('09:00 小码（bot）：别的 bot');
+    expect(lines).toContain('09:00 你（bot）：叫你的 bot');
+    expect(lines).toContain('09:00 你：真的我');
+    expect(lines.filter((l) => /^09:00 你：/.test(l))).toHaveLength(1);
+    expect(lines.filter((l) => l.includes('（bot）'))).toHaveLength(2);
+    // a long name loses the （bot） suffix before the cut
+    expect(renderJudgeInput(req({ message: line('x', { name: `${'名'.repeat(60)}（bot）` }) }))).toContain(`09:00 ${'名'.repeat(50)}…：x`);
+  });
+
   it('JUDGE_INPUT_EXAMPLE is the sample data run through renderJudgeInput', () => {
     expect(JUDGE_INPUT_EXAMPLE.startsWith(`${renderJudgeInput(JUDGE_INPUT_EXAMPLE_REQUEST)}\n（上限：`)).toBe(true);
     expect(JUDGE_INPUT_EXAMPLE).toContain('10:05 李四（@ 了 小码；引用 张三：下周发版）：今天食堂的红烧肉不错');
@@ -91,7 +127,12 @@ describe('judge prompt', () => {
     expect(parseVerdict('main', { text: '好的：{"decision":"skip","reason":"闲聊"} 完' })).toEqual({ decision: 'skip', reason: '闲聊' });
     expect(parseVerdict('topic', { text: '{"decision":"skip"}', structured: { decision: 'reply', reason: 'r' } })).toEqual({ decision: 'reply', reason: 'r' });
     expect(parseVerdict('topic', { text: '{"decision":"reply"}' })).toEqual({ decision: 'reply', reason: '' });
-    expect(parseVerdict('main', { text: `{"decision":"main","reason":"a\\u0001\\n  b${'长'.repeat(100)}"}` })).toEqual({ decision: 'main', reason: `a b${'长'.repeat(77)}…` });
+    // at most 80 characters, the ellipsis included
+    const long = parseVerdict('main', { text: `{"decision":"main","reason":"a\\u0001\\n  b${'长'.repeat(100)}"}` });
+    expect(long).toEqual({ decision: 'main', reason: `a b${'长'.repeat(76)}…` });
+    expect([...long!.reason]).toHaveLength(80);
+    expect(parseVerdict('main', { text: `{"decision":"main","reason":"${'整'.repeat(80)}"}` })!.reason).toBe('整'.repeat(80));
+    expect(parseVerdict('main', { text: `{"decision":"main","reason":"${'😀'.repeat(81)}"}` })!.reason).toBe(`${'😀'.repeat(79)}…`);
   });
 
   it('rejects answers outside the variant', () => {

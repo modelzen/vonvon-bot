@@ -100,11 +100,27 @@ function body(text: string, max: number): string {
   return cut(clean, max).replace(/\n/g, '\n  ');
 }
 
+function cleanLine(text: string): string {
+  return text.replace(/[\r\n\u2028\u2029【】]/g, '').replace(CONTROL, '').trim();
+}
+
 /** Names and titles: one line, no 【】, no controls. */
 function oneLine(text: string, max = NAME_MAX): string {
-  const clean = text.replace(/[\r\n\u2028\u2029【】]/g, '').replace(CONTROL, '').trim();
-  return cut(clean, max) || '某人';
+  return cut(cleanLine(text), max) || '某人';
 }
+
+const BOT_SUFFIX = /(?:\s*[（(]\s*bot\s*[）)])+$/i;
+
+/** A person's or another bot's display name, so neither can pass for this bot (你) or a person for a
+ * bot: a trailing （bot） is dropped and a person named exactly 你 is written “你”. */
+function speakerName(name: string, from: 'bot' | 'user'): string {
+  const bare = cleanLine(name).replace(BOT_SUFFIX, '').trim();
+  const shown = bare ? cut(bare, NAME_MAX) : '某人';
+  if (from === 'bot') return `${shown}（bot）`;
+  return shown === '你' ? '“你”' : shown;
+}
+
+const MENTIONS_MAX = 10;
 
 function hhmm(at: number): string {
   const d = new Date(at);
@@ -112,9 +128,13 @@ function hhmm(at: number): string {
 }
 
 function renderLine(line: JudgeLine, max: number): string {
-  const who = line.from === 'self' ? '你' : line.from === 'bot' ? `${oneLine(line.name)}（bot）` : oneLine(line.name);
+  const who = line.from === 'self' ? '你' : speakerName(line.name, line.from);
   const notes: string[] = [];
-  if (line.mentions?.length) notes.push(`@ 了 ${line.mentions.map((name) => oneLine(name)).join('、')}`);
+  const mentions = line.mentions ?? [];
+  if (mentions.length) {
+    const shown = mentions.slice(0, MENTIONS_MAX).map((name) => oneLine(name)).join('、');
+    notes.push(`@ 了 ${shown}${mentions.length > MENTIONS_MAX ? `…等 ${mentions.length} 人` : ''}`);
+  }
   if (line.quote) notes.push(`引用 ${oneLine(line.quote.name)}：${body(line.quote.text, JUDGE_INPUT_LIMITS.quoteChars)}`);
   const note = notes.length ? `（${notes.join('；')}）` : '';
   return `${hhmm(line.at)} ${who}${note}：${body(line.text, max)}`;
@@ -195,7 +215,9 @@ export function parseVerdict(
     const decision = candidate?.decision;
     if (typeof decision !== 'string' || !(JUDGE_ALLOWED[variant] as readonly string[]).includes(decision)) continue;
     const raw = typeof candidate?.reason === 'string' ? candidate.reason : '';
-    const reason = cut(raw.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').replace(/\s+/g, ' ').trim(), REASON_MAX);
+    const chars = [...raw.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').replace(/\s+/g, ' ').trim()];
+    // at most REASON_MAX code points, the ellipsis included
+    const reason = chars.length > REASON_MAX ? `${chars.slice(0, REASON_MAX - 1).join('')}…` : chars.join('');
     return { decision: decision as JudgeDecision, reason };
   }
   return undefined;

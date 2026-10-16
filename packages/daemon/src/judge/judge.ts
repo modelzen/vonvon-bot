@@ -200,7 +200,11 @@ export function createJudge(deps: JudgeDeps): Judge {
     let queueMs: number | undefined;
     const finish = (result: JudgeResult, extra: Record<string, unknown> = {}): JudgeResult => {
       const common = { ...fields, backend: result.backend, model: result.model, effort: result.effort, modelSource: result.modelSource, promptSource: result.promptSource, ms: result.ms, queueMs, ...extra };
-      if (result.error) log.warn('judge', 'failed', { ...common, kind: result.error.kind, detail: result.error.detail });
+      if (result.error) {
+        // the caller giving up and shutdown are not faults: info, so a shutdown does not fill the terminal with warnings
+        const quiet = result.error.kind === 'aborted' || result.error.kind === 'closed';
+        log[quiet ? 'info' : 'warn']('judge', 'failed', { ...common, kind: result.error.kind, detail: result.error.detail });
+      }
       else log.info('judge', 'verdict', { ...common, decision: result.decision });
       try {
         deps.onResult?.(req, result);
