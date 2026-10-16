@@ -234,7 +234,8 @@ import {
 import { isTopicReply, reachedAt } from './recall';
 import { SessionTitleCoordinator } from './session-title-coordinator';
 import { topicTitle, type TopicPerson, type TopicRegistry, type TopicSighting, type TopicView } from './topic-registry';
-import { createTopicContext, localBots, personOf, topicQuotes, topicRows } from './topic-context';
+import { createTopicContext, localBots, personOf, topicQuotes, topicRows, type ChatInfo } from './topic-context';
+import { audienceOf, fromBot, quotedId } from './baselines';
 import {
   sessionTitleSourceFromMessage,
   stripBridgeMessageEnvelope,
@@ -257,6 +258,7 @@ import {
   STREAMING_RECHECK_MS,
   fetchChatContext,
   fetchMessageMeta,
+  fetchTopicLastBot,
   fetchQuotedMessage,
   fetchThreadContext,
   keepRecent,
@@ -516,6 +518,8 @@ type NotedMessage = Pick<NormalizedMessage, 'chatId' | 'messageId' | 'senderId' 
 
 /** How long a group's full-only explanation quiets the next ones for 免@ messages; an @ always gets one. */
 const FULL_ONLY_QUIET_MS = 10 * 60_000;
+/** Each 三条底线 lookup's limit (s22): the group's later messages wait behind it. */
+const LOOKUP_DEADLINE_MS = 3000;
 
 const REASON_BY_ERROR_KIND = {
   auth: 'signed-out', version: 'codex-too-old', quota: 'quota', network: 'network',
@@ -1429,23 +1433,30 @@ export function createOrchestrator(
 
     const project = await getProjectByChatId(msg.chatId);
     // @门：没 @ 时只在「项目群 + 免@ 适用」才响应。免@默认开,但 multi 仅话题内、
-    // single 整群;非项目群一律不响应非 @ 消息。
-    const addressed = msg.mentionedBot || Boolean(project && shouldRespondWithoutMention(project, msg));
-    if (await syncCopy.skip(msg, addressed || resumePublications.has(msg.chatId))) return;
+    // single 整群;非项目群一律不响应非 @ 消息。Another bot's message never is (s22:
+    // rule mode's bots do not see each other). Who an unnamed message is for (三条
+    // 底线) is looked up below, after the cheap gates; this is what may be for it.
+    const bot = fromBot(msg);
+    const maybe = !bot && (msg.mentionedBot || Boolean(project && (shouldRespondWithoutMention(project, msg)
+      || (noMentionOf(project) && quotedId(msg) !== undefined))));
+    if (await syncCopy.skip(msg, maybe || resumePublications.has(msg.chatId))) return;
     if (resumePublications.has(msg.chatId)) {
       await channel.send(msg.chatId, { markdown: '正在恢复历史会话，请完成后重发此消息。' }, { replyTo: msg.messageId });
       return;
     }
     if (project?.enabled === false) {
-      if (msg.mentionedBot) noteNotReplied(msg, 'group-disabled');
+      if (msg.mentionedBot && !bot) noteNotReplied(msg, 'group-disabled');
       return;
     }
     if (projectMutations.has(msg.chatId)) {
-      if (addressed) noteNotReplied(msg, 'group-updating');
+      if (!bot && (msg.mentionedBot || (project && shouldRespondWithoutMention(project, msg)))) noteNotReplied(msg, 'group-updating');
       return;
     }
     if (project && msg.threadId && isChatAllowed(cfg, msg.chatId)) noteTopicMessage(msg);
-    if (!addressed) return;
+    if (!maybe) {
+      if (bot && msg.mentionedBot) log.info('intake', 'reject', { reason: 'bot-sender', ref: msg.messageId.slice(-6) });
+      return;
+    }
     let refused: NotRepliedReason | undefined;
     if (!isChatAllowed(cfg, msg.chatId)) refused = 'chat-not-allowed';
     else if (!isUserAllowedInProject(cfg, project, msg.senderId)) refused = 'user-not-allowed';
@@ -1454,6 +1465,7 @@ export function createOrchestrator(
       noteNotReplied(msg, refused);
       return;
     }
+    if (project && !msg.mentionedBot && !(await forThisBot(msg, project))) return;
 
     // The bot is in a group not bound to any project (e.g. it was just added and
     // the admin hasn't finished binding in DM yet). Don't run codex in the
@@ -1728,6 +1740,51 @@ export function createOrchestrator(
     if (ruleKind(project) === 'single') return true;
     const content = msg.content.trim();
     return Boolean(msg.threadId) || parseCommand(content) !== null || parseGoalTrigger(content) !== null;
+  }
+
+  /**
+   * Whether a message without an @ of this bot, in a bound group whose 免@ may
+   * answer it, is for this bot (三条底线, s22). Answers what the mode would,
+   * except: a quote of this bot's message names it (免@, even in a 多会话 main
+   * area); a quote of someone else's, or a topic another bot spoke in last, is
+   * someone else's; with other bots in the group (or the count unread) a 多会话
+   * main-area command needs an @. A lookup that fails leaves the message
+   * unanswered and noted.
+   * The group's only bot looks nothing up and answers as before s22.
+   */
+  async function forThisBot(msg: NormalizedMessage, project: Project): Promise<boolean> {
+    let info: Promise<ChatInfo> | undefined;
+    const chat = (): Promise<ChatInfo> => (info ??= topicCtx.chatInfo(msg.chatId));
+    const lonely = (): Promise<boolean> => chat().then((r) => r.ok && r.bots === 1);
+    const who = await audienceOf(msg, { noMention: noMentionOf(project) }, {
+      lonely,
+      quoted: (id) => fetchMessageMeta(channel, id, names, { event: 'quote-lookup-failed', deadlineMs: LOOKUP_DEADLINE_MS }),
+      lastBot: (threadId) => fetchTopicLastBot(channel, threadId, LOOKUP_DEADLINE_MS),
+    });
+    const ref = msg.messageId.slice(-6);
+    switch (who.to) {
+      case 'me':
+        if (who.by === 'quote') log.info('intake', 'audience', { to: 'me', by: 'quote', ref });
+        return true;
+      case 'other':
+        log.info('intake', 'audience', { to: 'other', by: who.by, ref });
+        return false;
+      case 'unknown':
+        log.info('intake', 'audience', { to: 'unknown', why: who.why, ref });
+        noteNotReplied(msg, 'lookup-failed', { detail: who.why === 'quote' ? '引用的消息' : '话题里谁在说话' });
+        return false;
+      case 'nobody':
+        if (!shouldRespondWithoutMention(project, msg)) return false;
+        // Here only a main-area command or /goal of a 多会话 group: each bot would answer it.
+        if (ruleKind(project) === 'multi' && !msg.threadId && !(await lonely())) {
+          log.info('intake', 'audience', { to: 'other', by: 'command-needs-at', ref });
+          // Unread, the count may be just this bot: the page says why the command got nothing.
+          const r = await chat();
+          if (!r.ok || r.bots === undefined) noteNotReplied(msg, 'lookup-failed', { detail: '群里有几个 bot' });
+          return false;
+        }
+        return true;
+    }
   }
 
   /** 非管理员触发 owner-only 命令(/resume、/settings)时的统一无权限提示。

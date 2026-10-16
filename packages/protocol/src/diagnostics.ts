@@ -3,7 +3,7 @@ import { z } from "zod";
 /** Why a message to this bot got no answer (product.md 3.1 item 8). Gates first, then failed turns.
  * s25 adds the smart mode's reasons here and to {@link NOT_REPLIED_TEXT}. */
 export const notRepliedReasonSchema = z.enum([
-  "group-disabled", "group-updating", "chat-not-allowed", "user-not-allowed", "unbound",
+  "group-disabled", "group-updating", "chat-not-allowed", "user-not-allowed", "unbound", "lookup-failed",
   "signed-out", "codex-too-old", "tool-missing", "tier-unavailable", "missing-scope", "quota", "network", "idle-timeout", "agent-exited", "failed",
 ]);
 export type NotRepliedReason = z.infer<typeof notRepliedReasonSchema>;
@@ -43,6 +43,10 @@ export const NOT_REPLIED_TEXT: Record<NotRepliedReason, Text> = {
   "chat-not-allowed": { reason: () => "这个群不在「允许的飞书群」里", next: () => "在 Bot 设置的「允许的飞书群」里加上它，或者清空名单。" },
   "user-not-allowed": { reason: () => "发消息的人不在「响应成员」里", next: () => "在群内设置的「响应成员」里加上这个人。" },
   unbound: { reason: () => "这个群还没绑定，只回了一句提示", next: () => "在 Bot 页点「加入飞书群」绑定这个群。" },
+  "lookup-failed": {
+    reason: r => `没查到${r.detail ?? "这条消息是对谁说的"}，没 @ 它的这条就没回`,
+    next: () => "飞书接口偶尔出错，请对方 @ 它再发一次；反复出现时看下面的日志。",
+  },
   "signed-out": { reason: r => `${tool(r)} 没登录或登录过期了`, next: r => r.backend === "claude" ? CLAUDE_LOGIN_NEXT : "在本机环境里登录 Codex，或在终端运行 codex login。" },
   "codex-too-old": { reason: () => "Codex 版本太旧，服务端不让它用这个模型", next: () => "在本机环境里更新 Codex。" },
   "tool-missing": { reason: r => r.backend === "claude" ? "Claude Agent SDK 还没下载" : "Codex 没装好", next: () => "去本机环境安装。" },
@@ -61,7 +65,7 @@ export const NOT_REPLIED_TEXT: Record<NotRepliedReason, Text> = {
 /** The optional scopes of 3.11 that change what the bot does in a chat, and what is lost without each. */
 export const OPTIONAL_SCOPE_EFFECTS: Record<string, string> = {
   "contact:user.base:readonly": "叫不出群里人的真名",
-  "im:chat:readonly": "认不出话题群；把 bot 拉进群后不提醒绑定",
+  "im:chat:readonly": "认不出话题群；数不出群里几个 bot，多会话主区的命令要 @；把 bot 拉进群后不提醒绑定",
   "im:message.group_at_msg.include_bot:readonly": "别的 bot @ 它时收不到",
   "application:application:self_manage": "飞书里的应用管理员不能管这个 bot",
 };

@@ -80,9 +80,40 @@ describe('createTopicContext', () => {
     expect(events).toEqual([{ kind: 'scopeDenied', denial: { scope: 'im:chat:readonly', where: 'chat-info', at: expect.any(Number) } }]);
     expect(get).toHaveBeenCalledTimes(1);
     expect(info).toHaveBeenCalledWith('intake', 'chat-mode-unknown', { chatId: '456789', reason: 'missing-scope', scope: 'im:chat:readonly' });
-    vi.advanceTimersByTime(10 * 60_000 + 1);
+    vi.advanceTimersByTime(60_000 + 1); // a refused scope stays refused: not the one-minute retry
+    await ctx.noMainArea('oc_123456789');
+    expect(get).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(9 * 60_000);
     await ctx.noMainArea('oc_123456789');
     expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads the bot count with the mode, and keeps a group it cannot read unknown (s22)', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(log, 'info').mockImplementation(() => undefined);
+    const data: Record<string, object> = {
+      oc_two: { chat_mode: 'group', group_message_type: 'chat', bot_count: '2' },
+      oc_post: { chat_mode: 'topic', bot_count: 1 },
+      oc_odd: { chat_mode: 'group', bot_count: 'many' },
+      oc_null: { chat_mode: 'group', bot_count: null },
+    };
+    const get = vi.fn(async ({ path }: { path: { chat_id: string } }) => path.chat_id === 'oc_down' ? { code: 230001, msg: 'internal' } : { code: 0, data: data[path.chat_id] });
+    const ctx = ctxOn({ chat: { get } });
+    expect(await ctx.chatInfo('oc_two')).toEqual({ ok: true, topic: false, bots: 2 });
+    expect(await ctx.chatInfo('oc_post')).toEqual({ ok: true, topic: true, bots: 1 });
+    expect(await ctx.chatInfo('oc_odd')).toEqual({ ok: true, topic: false });
+    expect(await ctx.chatInfo('oc_null')).toEqual({ ok: true, topic: false });
+    expect(await ctx.chatInfo('oc_down')).toEqual({ ok: false, topic: false });
+    // One lookup for concurrent askers. A lone bot's count and a failure are read again after a
+    // minute (a bot may join; the failure may pass), a group with other bots after ten.
+    await Promise.all([ctx.chatInfo('oc_two'), ctx.noMainArea('oc_two'), ctx.chatInfo('oc_post'), ctx.chatInfo('oc_down')]);
+    expect(get).toHaveBeenCalledTimes(5);
+    vi.advanceTimersByTime(60_000 + 1);
+    await Promise.all([ctx.chatInfo('oc_two'), ctx.chatInfo('oc_post'), ctx.chatInfo('oc_down')]);
+    expect(get.mock.calls.slice(5).map(([a]) => a.path.chat_id)).toEqual(['oc_post', 'oc_down']);
+    vi.advanceTimersByTime(10 * 60_000);
+    await ctx.chatInfo('oc_two');
+    expect(get).toHaveBeenCalledTimes(8);
   });
 
   it('records a topic another bot opened under a main-area line, looking each up once', async () => {
