@@ -8,7 +8,7 @@ import type { PidLockInfo } from '../src/server/pid-lock';
 
 vi.mock('../src/server/owner-verification', async original => ({ ...await original<object>(), verifyPidLockOwner: vi.fn(async () => {}) }));
 import { runRestart, runStatus, type RestartDeps } from '../src/cli/commands/daemon';
-import { crashDir, readBootId, writeCrashRecordSync, writeRunMarkerSync, type CrashRecord, type RunMarker } from '../src/host/crash-store';
+import { crashDir, readBootId, writeBotPausesSync, writeCrashRecordSync, writeRunMarkerSync, type CrashRecord, type RunMarker } from '../src/host/crash-store';
 import { PidLockError } from '../src/server/pid-lock';
 
 const roots: string[] = [];
@@ -153,6 +153,20 @@ describe('runStatus', () => {
     out = '';
     await runStatus(true, home, () => T0);
     expect(JSON.parse(out)).toMatchObject({ running: false, paused: { running: false, crashes: 3 } });
+  });
+  it('names the bots paused in this run and the bots of the records (s18a)', async () => {
+    running();
+    writeRunMarkerSync(home, marker({ pid: process.pid }));
+    writeFileSync(join(home, 'bots.json'), JSON.stringify({ version: 1, bots: [{ appId: 'cli_a1b2c3d4', name: '值班助手' }] }));
+    writeBotPausesSync(home, CHAIN, { cli_a1b2c3d4: { pausedAt: at(T0), pauseCrashes: 3 } });
+    writeCrashRecordSync(home, crash({ scope: 'bot', appId: 'cli_a1b2c3d4', kind: 'forced', reason: 'SIGKILL', uptimeMs: 5000 }));
+    await runStatus(false, home, () => T0);
+    const lines = out.trimEnd().split('\n');
+    expect(lines[1]).toBe('已暂停的 bot：值班助手（10 分钟内崩溃了 3 次）。查完原因后在网页的状态与诊断页点「恢复运行」，或运行 vonvon daemon restart。');
+    expect(lines[3]).toMatch(/ {2}bot 值班助手 {2}被系统强制结束（SIGKILL），运行了 5 秒$/);
+    out = '';
+    await runStatus(true, home, () => T0);
+    expect(JSON.parse(out).pausedBots).toEqual([{ appId: 'cli_a1b2c3d4', since: at(T0), crashes: 3 }]);
   });
   it('ignores a paused marker of another live daemon', async () => {
     running();

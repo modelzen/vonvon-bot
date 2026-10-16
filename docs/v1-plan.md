@@ -89,12 +89,20 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
 1. Claude 先做：连续群主区先不 @ 说两句，再 @bot 问"刚才大家在说什么"。在开话题的群里 @bot 开一个话题，问同样的问题。
 2. Claude 先做：话题里不 @ 说一句，再 @bot，看它知道你刚说的话、叫得出你的名字。
 3. Claude 先做：在连续群里自己开一个话题聊几句，回主区问 bot 话题里的事，它应该不知道。
-4. Claude 先做：在连续群里 `/new`，再问之前的事，它不记得。Codex 接着查：用 owner 的飞书客户端在同一个群里发 `/resume`，在卡上选回去（#322 任务 13）；Claude 再问，又记得。
+4. Claude 先做：在连续群里 `/new`，再问之前的事，它不记得。Codex 接着查：用 owner 的飞书客户端在同一个群里发 `/resume`，在卡上选回去（#322 任务 13）；Claude 再问，又记得。任务 13 选错了会话，10-16 在新建的群里重做，结果见下面。
 5. Claude 先做：让 bot 跑一个两分钟以上没有输出的任务，不会被掐断。
 6. Claude 先做：撤回一条 bot 读过的消息，再问它这条消息的内容。
 7. 拿掉了（owner 2026-10-16）。它验的是 s11"群里能用 bot 的人都能领文件"，单测已经覆盖；访客档去掉以后（s15c），领文件的人和发起人用同一档，没有"访客领不到"的情况了。以后有同事在群里用到时顺带看。
 
-### M4 崩溃恢复、诊断和 Linux 命令行版（s17、s17b、s18、s19、s20a、s20b、s20c）
+2026-10-16：第 1 到 6 步都通过。Claude 在 JP-VPS 上用 lark-cli 以 owner 的身份做，第 4 步点卡由 Codex 在 owner 的客户端里做。连续群是整群一条会话的 Claude 群，开话题的群是主区 @ 开话题的 Codex 群。
+1. 10-15，Bot 3。连续群主区先不 @ 发两句，再 @ 问"刚才大家在说什么？谁说的？"，bot 说出了两句话和发信人。开话题的群里 @ bot 开话题问同样的问题，话题里也答对了。
+2. 10-15，Bot 3，第 1 步开的话题里。先不 @ 说一句，再 @ 问，bot 复述了刚才那句话，也叫出了真名。
+3. 10-15，Bot 3。连续群里在主区一条消息下开话题说了一句，回主区问，bot 答"不知道，话题里的内容在另一条会话里"。
+4. 10-16，Bot 6，新建的"Vonvon 验收 M3 连续群"。先让 bot 记暗号，`/new` 后再问，答"不知道"。Codex 在 owner 的客户端里发 `/resume`，点回那条会话（#322 任务 17 到 19）。任务 18 那次点击没送到 daemon，日志里没有 `card` 的 `action` 事件；任务 19 按坐标点，日志有 `resume.pick`。再问，bot 答出了暗号。恢复卡上有两处显示问题，s15d 修。
+5. 10-15，Bot 3，Codex。跑 `sleep 150`，没被掐断，但等的时候 Codex 往卡上写过两句进度，算不上"没有输出"。10-16 用 Claude（Bot 6）重做：150 秒里卡上没有任何新内容，卡片用时 2 分 40 秒，答"done，实际用了 150.01 秒"。日志里第一个事件在 47 毫秒，下一段文字在 159 秒。
+6. 10-16，Bot 6。主区不 @ 发暗号，@ bot 让它记下，回"收到"。撤回那条暗号，日志记 `recall`，`noted: 1`。再问，答"不知道"。Mac 上订阅了撤回事件的 Bot 4 同样答"不知道"。10-16 凌晨的 Bot 3 没订阅撤回事件，答出了被撤回的暗号，和清单里的提示一致。
+
+### M4 崩溃恢复、诊断和 Linux 命令行版（s17、s17b、s18a、s18b、s19、s20a、s20b、s20c）
 
 **给 owner 什么：**
 - 崩溃恢复（3.10）：daemon 或某个 bot 崩溃后自动重启，主人在飞书私聊收到一行原因。10 分钟内崩溃 3 次就停下：网页和桌面端照常打开，诊断页顶上一条红条，带"恢复运行"按钮。只是某一个 bot 反复崩溃时，只停这一个。
@@ -119,7 +127,7 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
 - 已有的群仍是规则模式，行为不变。
 - M4 之后先做的三片（owner 2026-10-16 的决定）：话题里勾"同时发送到群"时 bot 只回一次；一个群只有一个权限档、一条会话；在终端或 Codex 应用里接着 bot 的会话聊过、压缩过，bot 下一轮接得上，Codex 的会话终端随时打得开。
 
-**怎么验收：** owner 要做的：开始前扫码建两个 JP-VPS 用的测试 bot，只要一次（本文第 8 节）。第 1 到 7 步、第 9 步和第 10 步 Claude 先做完，第 8 步 Codex 在 M5 的预览版任务里先查，结果写在通知里。
+**怎么验收：** owner 不用再扫码：JP-VPS 用的两个测试 bot（Vonvon Bot 7、Bot 8）2026-10-16 已建好（本文第 8 节）。第 1 到 7 步、第 9 步和第 10 步 Claude 先做完，第 8 步 Codex 在 M5 的预览版任务里先查，结果写在通知里。
 
 照 product.md 3.4 的例子：同一台 Mac 上至少两个 bot，一个规则模式、一个或两个智能模式，都在一个新建的测试群里。Claude 在 JP-VPS 上做时，三个测试 bot 都跑在 JP-VPS 上，一个规则模式、两个智能模式。
 1. Claude 先做：@ 规则模式的 bot 问一句，只有它回。
@@ -514,9 +522,10 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 
 | 状态 | 编号 | 切片 | 内容 | 约行数 | 依赖 | 风险 | Mac 检查 |
 |---|---|---|---|---|---|---|---|
-| [ ] | s17 | 崩溃记录、整机暂停和 daemon restart | daemon 主进程崩溃前写 `~/.vonvon-bot/crash/` 记录，被强制结束的下次补一条；10 分钟 3 次进入暂停；加 `vonvon daemon restart`，`daemon status` 显示暂停和最近崩溃；bot 子进程的记录移到 s18，`service status` 和逐条写日志移到 s17b（3.10） | 1500 | s07、e06 | 错误路径、关闭清理、并发、子进程 | launchd 下 10 分钟内 kill -9 三次：进入暂停、网页能开、每次都补了记录，`daemon restart` 能恢复 |
+| [x] | s17 | 崩溃记录、整机暂停和 daemon restart | daemon 主进程崩溃前写 `~/.vonvon-bot/crash/` 记录，被强制结束的下次补一条；10 分钟 3 次进入暂停；加 `vonvon daemon restart`，`daemon status` 显示暂停和最近崩溃；bot 子进程的记录移到 s18，`service status` 和逐条写日志移到 s17b（3.10） | 1500 | s07、e06 | 错误路径、关闭清理、并发、子进程 | launchd 下 10 分钟内 kill -9 三次：进入暂停、网页能开、每次都补了记录，`daemon restart` 能恢复 |
 | [ ] | s17b | `service status` 显示上次退出，关闭失败逐条写日志 | launchd 的 `last exit code`、`last terminating signal` 和 `runs`，systemd 的 `Result`、`ExecMainCode`、`ExecMainStatus` 和 `NRestarts`；AggregateError 里的每条错误各写一行日志；s17 合入后开（3.10） | 220 | s17 | 子进程、错误路径 | 无（launchd 那几行放进 s17 的 Mac 检查一起看） |
-| [ ] | s18 | 单个 bot 暂停和崩溃通知 | bot 子进程的崩溃记录、快照的 `application.crashes`、`bot list` 和 `bot status` 显示暂停，崩溃种类和文字搬进协议（都从 s17 移来）；单个 bot 10 分钟崩 3 次只停它；用应用身份直接给主人发私聊，每个 bot 每 10 分钟最多一条；重启时丢掉的排队消息回一句请重发；daemon 主进程崩溃时只由最早加入的 bot 发，列出受影响的 bot；诊断页列崩溃记录，红条带"恢复运行"（3.10） | 900 | s17、s19、e10 | 并发、错误路径、子进程 | 无（M4 验收时看私聊和红条） |
+| [x] | s18a | 单个 bot 暂停和崩溃记录 | bot 子进程的崩溃记录、快照的 `application.crashes`、`bot list` 和 `bot status` 显示暂停，崩溃种类和文字搬进协议（都从 s17 移来）；单个 bot 10 分钟崩 3 次只停它；诊断页列崩溃记录，红条带"恢复运行"（3.10）；s18 开工时拆出 s18b，见"s18a 做法（行数）" | 1020 | s17、s19 | 并发、错误路径、子进程 | 无（M4 验收时看红条） |
+| [ ] | s18b | 崩溃私聊和重启时丢掉的排队消息 | 用应用身份直接给主人发私聊，每个 bot 每 10 分钟最多一条；daemon 主进程崩溃时只由最早加入的 bot 发，列出受影响的 bot；重启时丢掉的排队消息回一句请重发（3.10）；见"s18a 留下的" | 740 | s18a、e10 | 并发、错误路径、子进程 | 无（M4 验收时看私聊） |
 | [x] | s19 | 状态与诊断页 | 按 bot 列连接状态、Codex 和 Claude 的版本与登录、缺的权限；每个 bot 记最近没回的消息和原因（3.1 第 8 条） | 450 | s03、s01 | 并发 | 无 |
 | [x] | s20a | Linux 命令行版（上）：平台、open --print、linger、终端扫码 | 平台枚举加 linux、去掉 windows，界面显示"这台 Linux 主机"；`vonvon open --print`；`service install` 处理 linger；没有用户 systemd 时的说明；`vonvon bot add` 终端扫码；Linux 的首次运行清单加"Linux 上 Codex 只能用完全访问"一步和 Claude 的沙箱检查（3.10） | 1130 | s07、s04 | 子进程、错误路径 | 无 |
 | [x] | s20c | 互斥锁换掉端口 | 四个角色（`admission`、`host`、`keystore`、`service`）的互斥锁不再用和 Linux 临时端口重叠的端口：Linux 用抽象命名空间的 Unix 域套接字，macOS 用带 `O_EXLOCK` 的文件锁；升级那一刻和旧版本的锁过渡；`inspectHost` 跟着改 | 380 | 无 | 并发、关闭清理、合入门禁 | 装着 M3 预览版、它的 daemon 在跑时，新版本的 `vonvon daemon start` 不会再起一个；macOS CI 跑锁的测试 |
@@ -526,7 +535,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s17：e06 实测 `kill -9` 后约 1 秒被拉起，两次启动至少隔 `minimum runtime`（默认 10 秒；产品 plist 的 `ThrottleInterval` 是 5，实际间隔没测）；`launchctl print` 的 `last exit code` 和 `last terminating signal` 分得清正常退出和被杀。原先打算用 Security 框架 `SessionGetInfo` 的安全会话 id 判断"重新登录过"，s17 没用（要原生代码，e06 也没验过）：正常退出就开始新的一轮计数，注销时 launchd 发 SIGTERM，daemon 照停止处理，下次登录重新数。注销时 daemon 是不是来得及退出没验过，见"s17 留下的"。开机用开机标识区分（Linux 的 `boot_id`，macOS 的 `kern.bootsessionuuid`）。
 - s17：2026-10-15 在 JP-VPS 上发现：网页端点"重启"（`restartHost`）时，关闭阶段的清理失败会取消重启，手动启动的 daemon 就此停掉；AggregateError 里面的各条错误没写进日志，看不出是哪一步失败。做 `daemon restart` 时一起处理。（重启这一半 s17 已改，见"s17 做法（重启）"；逐条写日志移到 s17b）
 - s17 做法（记录）：记录在 `<数据目录>/crash/`，一次崩溃一个文件，名字是 `host`（s18 加 `bot-<appId 的 sha256 前 12 位>`）、时间、PID 和 8 位随机数；先写临时文件再改名，目录 0700、文件 0600。内容是版本、种类、`错误名: 错误的第一行`、运行了多久、所属的那次运行和"一轮"的 id；原因去掉了家目录、飞书 id（留末 6 位）、网址里的账号和参数、32 位以上像令牌的串，最长 200 字，不存调用栈，调用栈照旧打到 stderr（`daemon.log`、`service.err.log`）。种类四种：未捕获的异常、未处理的 Promise 拒绝（`D/host/crash-guard.ts` 的处理器写完记录就退出，退出码 70）、没人要求停止时 `daemon run` 出错退出（比如端口被占），和被系统强制结束（kill -9、内存不够、abort）。强制结束靠 `crash/run.json`：主进程拿到互斥锁后写它、每 60 秒更新一次心跳、正常退出时删掉；下次启动看到它而没有这次运行的记录，就补一条，时间取最后一次心跳，运行时长写"至少"（第一分钟内不写）。重启机器（开机标识不同）不算崩溃。每种最多留 50 条、30 天，主进程启动时清理。bot 子进程也装了处理器，但只打印、退出 70（Node 原来是 1），记录在 s18。
-- s17 做法（暂停）：一轮从一次正常启动开始，崩溃后再起来的算同一轮。同一轮里 10 分钟内（按开机以来的时间算，改系统时间不影响）主进程崩溃 3 次，下一次启动就进入暂停：网页、RPC 和 API 照常，bot 子进程一个都不起，启用 bot 时报"daemon 已暂停（10 分钟内崩溃了 3 次）…"；暂停中再崩溃仍是暂停。停止和重启过程中的崩溃照样记，但不计数。离开暂停：`vonvon daemon restart`、网页的"重启"（`restartHost`，s18 的"恢复运行"按钮也调它）、`daemon stop` 再 `start`、更新 daemon、注销或重启机器。后台服务管着的 daemon 在暂停中又起不来（端口被占、暂停中又崩溃）时退出码是 0，launchd 和 systemd 就不再拉起它，免得每 5 秒写一条记录；`daemon status` 照样显示暂停，`daemon restart` 写一个 2 分钟内有效的 `crash/resume.json` 再启动，新的一轮从头数；上一次被强制结束、没留下记录的照样补一条。
+- s17 做法（暂停）：一轮从一次正常启动开始，崩溃后再起来的算同一轮。同一轮里 10 分钟内（按开机以来的时间算，改系统时间不影响）主进程崩溃 3 次，下一次启动就进入暂停：网页、RPC 和 API 照常，bot 子进程一个都不起，启用 bot 时报"daemon 已暂停（10 分钟内崩溃了 3 次）…"；暂停中再崩溃仍是暂停。停止和重启过程中的崩溃照样记，但不计数。离开暂停：`vonvon daemon restart`、网页的"重启"（`restartHost`，整机暂停时 s18a 红条上的"恢复运行"也调它；单个 bot 的见"s18a 做法（恢复运行）"）、`daemon stop` 再 `start`、更新 daemon、注销或重启机器。后台服务管着的 daemon 在暂停中又起不来（端口被占、暂停中又崩溃）时退出码是 0，launchd 和 systemd 就不再拉起它，免得每 5 秒写一条记录；`daemon status` 照样显示暂停，`daemon restart` 写一个 2 分钟内有效的 `crash/resume.json` 再启动，新的一轮从头数；上一次被强制结束、没留下记录的照样补一条。
 - s17 做法（重启）：`vonvon daemon restart`：daemon 在跑就发 `restartHost`，后台服务管着的退出 75 由服务管理器拉起，分离运行的由同一端口的重启助手拉起，等到新的 PID（最多 120 秒，每 5 秒打一行进度）；没在跑就带恢复请求启动；daemon 正在停止时说"正在停止或重启，等它结束后再试"。重启时清理失败不再取消重启（删掉了 #276 加的 `requestStop` 和"75 改成 0"），服务管着的 daemon 照样退出 75（放开监听失败时也是）；新进程要等旧进程退出才启动，端口和锁都已放开，留下的 Codex 进程下次启动时清理。`daemon run` 在前台时收到 SIGHUP（终端关了）当停止处理，不再留下强制结束的记录。关闭时丢掉的排队消息、暂存的消息和等着的 `/compact` 只记条数（`bridge shutdown_dropped`）。
 - s17 做法（daemon status）：第一行不变；暂停时加一行"已暂停：10 分钟内崩溃了 3 次，bot 都没有启动。查完原因后运行 vonvon daemon restart 恢复运行。"（没在跑时写"暂停期间 daemon 又出错退出，没有自动重启"；上次开机留下的暂停不显示，下次启动也不算暂停），再列 24 小时内最多 10 条记录。`--json` 多了 `paused` 和 `crashes`（总是数组）。只读文件，不问服务管理器，不建目录，因为每条 RPC 命令前都要跑它。
 - s17 做法（行数）：设计估出约 1,450 行，`service status` 那段先拆给 s17b；写完量出约 1,790 行，又把 bot 子进程的记录和快照里的 `application.crashes` 移到 s18（两样都是 s18 才用），AggregateError 逐条写日志移到 s17b，剩下约 1,500 行。
@@ -541,14 +550,30 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
   - `VONVON_TEST_CRASH=exception` 的那一套（分离运行）同上一条；`service uninstall` 后 unit 文件没了，`LoadState=not-found`。验收 daemon 前后是同一个进程。
   - launchd 那几步等 Mac 检查。
 - s17 留下的：
-  - 给 s18：bot 子进程的记录（处理器里按 `VONVON_HOST_RUN_ID`、`VONVON_HOST_CHAIN_ID` 记到主进程的运行下，supervisor 在子进程退出时清它那一类，一分钟最多一次，不然反复崩溃的 bot 一天能写几千条）；子进程被信号杀掉或起不来时由 supervisor 补记录；单个 bot 暂停用 `countInWindow` 按 bot 数；快照的 `application.crashes`（暂停和 24 小时内的记录，每次重建只 stat 一次目录），`bot list`、`bot status` 第一行显示暂停；"刚才崩溃过一次"的私聊由最早加入的 bot 在子进程里读记录；私聊 10 分钟一条的限额要另存一个文件。
-  - 给 s18：重启或停止时丢掉的排队消息（`shutdown_dropped` 记了条数的那些），owner 2026-10-16 让 Claude 定：关闭前把它们的消息 id 和所在群、话题记下来，bot 起来以后在原处回一句"刚才重启了，这条没处理，请再发一次"，每个群最多一条，诊断页"最近没回的消息"记一条（product.md 3.10）。
+  - 给 s18：bot 子进程的记录（处理器里按 `VONVON_HOST_RUN_ID`、`VONVON_HOST_CHAIN_ID` 记到主进程的运行下，supervisor 在子进程退出时清它那一类，一分钟最多一次，不然反复崩溃的 bot 一天能写几千条）；子进程被信号杀掉或起不来时由 supervisor 补记录；单个 bot 暂停用 `countInWindow` 按 bot 数；快照的 `application.crashes`（暂停和 24 小时内的记录，每次重建只 stat 一次目录），`bot list`、`bot status` 第一行显示暂停；"刚才崩溃过一次"的私聊由最早加入的 bot 在子进程里读记录；私聊 10 分钟一条的限额要另存一个文件。（私聊以外 s18a 已做，见"s18a 做法"；私聊放进 s18b，改由主进程发，见"s18a 留下的"）
+  - 给 s18：重启或停止时丢掉的排队消息（`shutdown_dropped` 记了条数的那些），owner 2026-10-16 让 Claude 定：关闭前把它们的消息 id 和所在群、话题记下来，bot 起来以后在原处回一句"刚才重启了，这条没处理，请再发一次"，每个群最多一条，诊断页"最近没回的消息"记一条（product.md 3.10）。（放进 s18b）
   - 给 s17b：`service status` 加上次退出和自动重启次数，systemd 的上次退出只在服务没跑时看得到（JP-VPS 实测）；AggregateError 里的每条错误各写一行日志，`daemon run` 失败时 stderr 也逐条打印。
   - Mac 检查（隔离的数据目录和临时 npm 前缀，不碰 `com.vonvon.bot.daemon`）：launchd 下 10 分钟内 kill -9 三次，记下每次被拉起隔了多久，进入暂停后 2 分钟内 PID 不变、网页能开；`daemon restart` 恢复，`launchctl print` 的 `last exit code` 和 `last terminating signal` 怎么变（决定 s17b 显示哪几项）；`daemon stop` 后不拉起、没有新记录；`sysctl -n kern.bootsessionuuid` 能读到、睡眠唤醒后不变，记录里带着它。
   - 待 owner（可选）：注销再登录时 daemon 来不来得及退出。launchd 的 `ExitTimeOut` 默认 20 秒，daemon 停止最多要 12 秒再加 Codex 的清理；来不及的话每次注销会多一条强制结束的记录，要在 plist 里加 `ExitTimeOut`。
   - 给 owner 定：关闭时丢掉的排队消息要不要告诉发信人。今天这些消息在重启后只作为补拉的上下文，不会被回答。
   - 管不到的：daemon 在拿到互斥锁之前就失败（服务登记读不出、锁被一个验证不了的进程占着）时没有记录，服务管理器照旧每 5 到 10 秒拉一次，和以前一样；看 `service status` 和 `service.err.log`。
-- s18：机器人能不能给没开过会话的主人发私聊，e10 没测到：owner 已经私聊过测试 bot。s18 开工前请 owner 找一位没和测试 bot 说过话的同事（本文第 8 节）：Claude 用应用身份按 open_id 给他发一条私聊、记返回码，同事在客户端里看收没收到、有没有通知。在那之前 3.10 的崩溃通知仍按推断做。给主人发私聊要用这个应用下主人的 open_id（从主人发给 bot 的消息事件里取），或者用 `user_id`、`union_id`，不能用 lark-cli 应用下的 open_id。
+- s18：机器人能不能给没开过会话的主人发私聊，e10 没测到：owner 已经私聊过测试 bot。2026-10-16 用测试 bot Bot 7 补测：bot 用应用身份给从没开过它私聊的主人发文字私聊，按扫码时记下的 ownerOpenId、receive_id_type=open_id 返回 code 0，进了 p2p 会话；按 union_id 发也行，同一租户的自建应用 union_id 通用；owner 确认手机和电脑都弹了通知（2026-10-16）。所以不用再找同事。给主人发私聊要用这个应用下主人的 open_id，或者用 `user_id`、`union_id`，不能用 lark-cli 应用下的 open_id。
+- s18 开工时拆成 s18a（记录、单个 bot 暂停、快照、命令行、诊断页）和 s18b（私聊、重启时丢掉的排队消息）：设计估出约 1,760 行（含测试），s17 写出来比估计多两成多。s18a 不往外发任何东西，可以单独合入；M4 第 2 步的红条和"恢复运行"只要它。
+- s18a 做法（记录）：被托管的子进程（`daemon run --bot`，带 IPC）用 `openBotCrashContext` 装 s17 的处理器，记录按 supervisor 传的 `VONVON_HOST_RUN_ID`、`VONVON_HOST_CHAIN_ID` 挂在主进程这次运行和这一轮下，`scope: 'bot'`，带 `appId`；子进程不写 `run.json`、不写心跳、不修剪，崩溃一律退出 70（后台服务管着时也是），停止期间崩溃也不删主进程的 `run.json`，不然主进程这一轮就断了。单独运行一个 bot 时没有这两个 id，照旧只打印。子进程没写成的由 supervisor 在 `exit` 时补：被信号杀掉的记"被系统强制结束（SIGKILL）"和准确的运行时长；退出码不是 0、70、75 的记"出错退出"，原因取 stderr 最后一行，拿不到写"退出码 N"；退出 70 却没有这个 PID、子进程启动 5 秒前以后的记录文件，补一条"子进程出错退出，没留下记录"（加上时间这一条，记录留 30 天里 PID 复用也不会错认）。子进程的 `fatal` 全由 supervisor 补，子进程里不写。`exit` 处理器里每一步读写各自 try/catch，失败只记日志：`crash/` 坏了时一个 bot 崩溃不会变成主进程的崩溃。修剪每个 bot 一分钟最多一次。
+- s18a 做法（暂停）：每次算崩溃的退出后，supervisor 数这个 bot 这一轮、`during: run`、10 分钟内（开机以来的时间）、上次恢复运行以后的记录，和内存里记的次数取大的（磁盘满、`crash/` 读写不了时靠内存）；到 3 次当场停，不再排重启，别的 bot 照常。暂停存在 `crash/bot-pauses.json`：`{ v: 1, chainId, bots: { <appId>: { pausedAt, pauseCrashes, resumedUptimeMs } } }`，只有主进程写，先写临时文件再改名。主进程崩溃后再起来是同一轮，暂停的 bot 照旧不起（文件坏了当作没有，全部照常起，记一条 warn `bot_pauses_corrupt`，和 `run.json` 的 `marker_corrupt` 一样）；新的一轮（`daemon restart`、网页的"重启"、停止再启动、更新、重启机器）全部恢复。不算崩溃的：退出 0（照退避重启，只记日志）、退出 75（见 D2）、停止和停用时的退出。子进程收到停止前一瞬崩溃的记录是 `during: run`，同一轮里会被下一次数进去；只在主进程崩溃后的同一轮里显出来，接受。
+- s18a 做法（恢复运行）：单个 bot 的红条按钮发 `setAgentEnabled(true)`：清掉暂停，内存里的次数清零，记下这一刻的开机时长，之前的记录不再数，退避回到 1 秒。在 Bot 页停用再启用也一样：停用即放弃暂停，停用的那一刻就照恢复运行记账，`bot status`、`daemon status` 和 `bot-pauses.json` 不再说它暂停着，再启用时直接起。`bot-pauses.json` 写不进去（磁盘满、没有写权限）时恢复运行照样生效，靠内存；写失败记一次日志，之后在下一次子进程退出、下一次起子进程时和每 30 秒重写，写成了就停，在这之前 `daemon status` 可能还显示暂停。启动时没起的 bot（已停用）在文件里的状态原样留着，不被别的 bot 写盘冲掉。命令行不加 `vonvon bot resume`，`bot status` 写"在网页的状态与诊断页点「恢复运行」，或运行 vonvon daemon restart"。整机暂停时只显示整机那一条红条，按钮调 `restartHost`。暂停中的 bot 收到网页的写请求（含绑群和协作），回"机器人「名字」10 分钟内崩溃了 N 次，已暂停。在状态与诊断页点「恢复运行」后再试。"；第 3 次崩溃那一刻在途的请求也回这一句，不再回"进程已退出（等待自动重启）"。
+- s18a 做法（快照和页面）：协议加 `P/crash.ts`：种类、文字、`crashText`、`formatUptime` 和三个 schema，都不用 `.strict()`，记录列表不设上限，由 daemon 裁到 20 条（桌面端严格解析整个快照，多一条、多一个字段就整页失效）；`agents[].paused` 和 `application.crashes`（整机暂停和 24 小时内最多 20 条记录）。记录的 schema 还在 daemon（daemon 是 zod 4、协议包是 zod 3），只共用种类列表。快照每次重建只 stat 一次 `crash/`，mtime 变了或过了 30 秒才重读；子进程退出时和 supervisor 每写一条记录后清掉缓存，下一次重建一定重读（文件系统时钟粗，同一个刻度里的写入不改 mtime）。暂停的 bot 的 `activation` 写 `active`，不显示"待生效"。诊断页最上面是红条（`role="alert"`），"这台电脑"和每个 bot 各加一行"最近的崩溃"（这台电脑只列主进程的），bot 的连接写"已暂停"。`daemon status` 加一行"已暂停的 bot：名字（10 分钟内崩溃了 N 次）……"，名字从 `bots.json` 读，`--json` 多 `pausedBots`；`bot list` 写"已暂停（10 分钟内崩溃了 N 次）"，`bot status` 第二行写怎么恢复。
+- s18a 做法（D1，主进程死后子进程写 stdout）：设计审查时在 JP-VPS 上用探针复现了（Node 24）：主进程 kill -9 后，子进程先收到 IPC 断开、开始排空，下一次写 stdout 报 EPIPE，没有监听就是未捕获的异常，子进程退出 70、留一条"停止期间"的记录、排空中断。不会出现 `during: run` 的假崩溃，但会打断排空。`guardParentPipes` 在 stdout、stderr 上装 `error` 监听，吞掉 EPIPE 让排空走完，顺带请求停止兜底。真实进程的测试：有监听时排空走完、退出 0、没有记录；去掉监听退出 70。
+- s18a 做法（D2，新子进程撞上旧子进程的锁）：被托管的子进程拿不到 bot 的单实例锁（`BridgeAlreadyRunningError`）时退出 75，supervisor 不算崩溃，照退避（1、2、4、8 秒，最多 30 秒）重试；单独运行时照旧退出 1。JP-VPS 实测（2026-10-16，分离运行，临时数据目录，假的飞书接口）：用一个活着的进程占住 `processes.json`，子进程连续 4 次退出 75，没有记录、没有暂停；放开后下一次拿到了锁。真的"旧子进程还在排空"没复现：假 bot 过不了 `bot/v3/info`（SDK 走 axios，没假到），起不来就没有可排空的旧子进程。代价：持有者一直不放锁时（主进程死后旧子进程的排空一直不结束，没有人再给它补 SIGKILL）无限重试，不记录、不暂停，页面只显示没在运行，看不出原因；和 main 比不是回归，main 上同样的情况退出 1，也是无限重试。改法留给 s18b，见"s18a 留下的"。
+- s18a 做法（macOS 的进程组）：产品 plist 没有 `AbandonProcessGroup`，按 launchd.plist(5)，job 的主进程死后 launchd 杀掉同一进程组的进程；子进程没有 `detached`，和主进程同组。所以 macOS 上主进程被 kill -9 时子进程跟着被杀：D1、D2 碰不到，也不会有假的 bot 崩溃记录；s18b 的"重启时丢掉的排队消息"在主进程崩溃时记不下来，只有 `daemon restart`、`daemon stop` 和 bot 自己重启时能回。这一版不改 `detached`：`settleOwnedChild`、`stopChild` 的进程组语义会跟着变。这是按文档推的，M4 的 Mac 检查确认。systemd 下主进程死后也是先停掉 cgroup 里剩下的进程再重启，D1、D2 主要在分离运行（`daemon start`）时碰到。
+- s18a 做法（行数）：设计估约 1,020 行，写完量出约 960 行，审查后的修复加到约 1,150 行（加减行合计，源码约 570、测试约 550、文档约 40），没到 1500，原先准备超了就移给 s18b 的命令行和两处"最近的崩溃"都留在这一片。
+- s18a 和设计不一样的：`guardParentPipes` 放在 `D/host/crash-guard.ts`，不在 `lifecycle.ts`（子进程的测试要把它打包进去）；设计 1.2 让子进程在 `closeHostRun` 里写 `fatal`，改成全由 supervisor 补；起不来（spawn 失败）不再一律算崩溃，见第 5 节；`HostRunStart` 多了 `crashes`（这一轮 10 分钟内的次数，恢复请求后为 0）和 `pausedAt`，给 s18b 的私聊用；查"子进程写没写记录"多要求文件名时间不早于子进程启动前 5 秒；协议的 schema 不 strict、不设上限；`daemon status` 里 bot 的名字从 `bots.json` 读。
+- s18a 留下的：
+  - 给 s18b：私聊（设计第 3 节和 P1 到 P4、P10、P12）：主进程用 bot 的应用身份直接发，新文件 `D/host/crash-notify.ts`，限额存 `crash/notices.json`；`HostRunStart.crashes`、`pausedAt` 已经备好，supervisor 的三个点接通知：bot 进入暂停（`countCrash`）、主进程启动、bot 恢复运行；`notifier.close()` 放在 `finally` 最前面，免得排空的十几秒里 30 秒计时器到点发出"已自动恢复"。
+  - 给 s18b：重启时丢掉的排队消息（设计第 4 节、P6 到 P9）；停用再启用也会回"刚才重启了"，文字略不准，接受；macOS 上主进程崩溃时记不下来（上面"macOS 的进程组"）。
+  - 给 s18b：product.md 3.10"要实测"那一句按上面 e10 的补测改成已测，第 9 节第 16 项跟着改；限额一句补"进入暂停的那条不受这个限制"（P2）；主人不止一个时只发给最早加入的 bot 的主人（P3）；主进程崩溃时 macOS 上记不下丢掉的排队消息。M4 第 1 步私聊的时间按 P10 改。这一片的行为和 3.10 不冲突，product.md 没改。
+  - 给 s18b：D2 的代价（多角度审查 lifecycle/L1）。被托管的子进程收到 IPC 断开（主进程已死）后给排空设上限，比如 `CHILD_SHUTDOWN_GRACE_MS` 加一点余量，到点 `process.exit`，旧子进程最多占锁几十秒；supervisor 连续退出 75 超过约 2 分钟时用 `readSingleInstanceHolder` 查持有者，`log.warn` 一次带它的 PID，快照里给这个 bot 一个"被 PID N 占着"的提示。
+  - Mac 检查：launchd 下 kill -9 主进程时子进程是不是一起被杀（设计 D3），放进 M4 预览版。
 - s19 做法（页面）：侧栏"状态与诊断"换成 `U/management/DiagnosticsPanel.tsx`，用现有的设置组件。"这台电脑"一节是 daemon 版本、Codex 和 Claude（和清单同一套 `toolSteps`）、数据目录、最近读取；"重新检查"重建快照、每个 bot 再读一次飞书设置，不起 CLI。每个 bot 一组：连接（和清单的"长连接"共用 `connectionStep`，另加没在运行、待生效、重连中）、飞书设置（还差哪几步，"打开清单"；清单里对可选事件的提醒也列在这里，比如没订阅撤回消息）、缺的权限、执行工具（按绑的群数）、最近没回的消息；最后是 daemon 日志。打开页面时每个 bot 读一次 `setupStatus`，不轮询。Bot 设置里的"飞书权限与连接 · 检查"改成"状态与诊断 · 查看"，只跳到这个 bot；`inspectAgent` 和 `snapshot.diagnostics` 删了。
 - s19 做法（没回的消息）：只记对这个 bot 说的（@ 了它，或按群设置不 @ 也该它回）却没回的。门控有群停用（只记 @ 的）、群正在改设置、群不在"允许的飞书群"、发信人不在"响应成员"、群没绑定（回了提示也记）；回合开始了没答完的有没登录、Codex 版本太旧、工具没装、缺权限、用量、网络、超时、进程中途退出和其他错误。不记：规则模式下不是对它说的、重投、撤回（回合开始后才撤回的也不记）、私聊、云文档评论、`/goal`、按了停的，以及回了说明的 `/new` 之前发的消息和没压成的排队 `/compact`。原因和下一步写在 `P/diagnostics.ts` 的 `NOT_REPLIED_TEXT`。bot 子进程经 IPC（`fcb.diagnostics`，zod 校验）送到 daemon 主进程的内存，单个 bot 独立运行时直接进本进程；变了以后最多每秒重建一次快照。一条记录只有时间、群 id、主区或话题、名字缓存里已有的发信人名字、原因、后端、报错的第一行（120 字）和消息 id 末 6 位，没有正文（3.5）。
 - s19 做法（缺的权限）：两个来源合在一行。飞书后台：`setupStatus` 缺的必需权限，加 3.11 表里影响对话的四项可选权限（新加的 `missingOptional`）。运行中被拒：补拉、查真名、认话题群、发卡片时被飞书拒绝，记权限名和在哪；后台显示已开却被拒的，提示发布一个新版本。飞书列的可用权限可能以别名打头（`im:message`），取后台检查读的那个；都不在检查范围里的只进没回的消息，不进这一行。读不到飞书设置时，这一行和"飞书设置"一样写"读取失败"。
@@ -561,7 +586,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
   - 顺带看到的：没绑定群的提示（`UNBOUND_GROUP_REPLY`）还写"在与我的私聊里完成绑定"，由 s51 一起改；`D/provider/policy/messages.zh.ts` 里 Claude 的登录命令写成 `claude login`，用不用得到还没查；`sessions.json` 的 `summary` 存了会话第一条消息的前 80 个字，作用相当于会话标题，留给碰会话列表的片（s48 或 s51）定。
   - 没回的消息按后端写 Codex 或 Claude，没有后端的按 Codex 写（`LaunchOpts.backendId` 不设就是 Codex）；今天只有这两个后端，V7 加 Cursor、Grok 这些时，`P/diagnostics.ts` 的 `tool` 和 `backendTool` 要跟着加。
   - 和 #338（s15）改到同一段：`handleMessage` 里先查撤回再记 `intake recv`；撤回的消息不进没回的消息。
-  - bot 子进程关闭时丢掉的排队消息、`/new` 和 `/compact` 期间暂存的消息不告诉发信人，也不记（s15 之前排队的就这样），s17 做重启时一起看。（s17 看了：只在日志里记条数；告诉发信人放进 s18，见"s17 留下的"）补拉和查引用被拒会进缺的权限，查撤回的消息（`message.get`）被拒只记日志。
+  - bot 子进程关闭时丢掉的排队消息、`/new` 和 `/compact` 期间暂存的消息不告诉发信人，也不记（s15 之前排队的就这样），s17 做重启时一起看。（s17 看了：只在日志里记条数；告诉发信人放进 s18b，见"s17 留下的"）补拉和查引用被拒会进缺的权限，查撤回的消息（`message.get`）被拒只记日志。
 - s20c：互斥锁端口和 Linux 临时端口重叠的事（见 s07）又撞上一次：2026-10-15 #339 的冻结 CI 里 `service-cli.test.ts` 报"Another vonvon service install or uninstall is running"，重跑就过。四个角色（`admission`、`host`、`keystore`、`service`）都用这个端口；macOS 的临时端口从 49152 起，只重叠 848 个。原定在 s20a 换成 Unix 域套接字或文件锁，s20a 开工时看下来不算小而稳，移到 s20c：升级那一刻要有过渡（新锁之外仍去占旧端口；旧端口被占时连一下，连得上是旧版本在持锁，等它；连不上是别人的临时端口，不管），否则新旧版本会在同一个数据目录上各跑一个 daemon；Linux 和 macOS 要两种做法（Linux 用抽象命名空间的 Unix 域套接字，进程一死内核就收回；macOS 没有抽象命名空间，试 `open` 带 `O_EXLOCK | O_NONBLOCK`，要在 Mac 上实测，不行就退回端口、换到 20000 到 49151，同样带过渡）；范围是四个角色、五处调用方和桌面端的 `inspectHost`，`acquireMutex` 的返回类型换成自己的锁对象，碰到 #287 那块认人的代码；按本文的规则属于并发、关闭清理和合入门禁，要单独的多角度审查。不依赖 s20a，最好排在 s20b 前面，CI 少重跑几次。s20a 没加新的抢锁：Linux 安装后的那一步写成单独的函数直接测，不经过 `service` 锁。
 - s20c 做法（锁）：`acquireMutex` 的参数和等待不变（每 40 毫秒试一次，`timeoutMs` 为 0 只试一次，到期报原来那句 busy 的 `DataAccessError`），返回自己的 `Mutex`，只能交给 `closeMutex` 放，放两次没事。键还是数据目录的真实路径加角色。Linux 用抽象命名空间的 Unix 域套接字 `@vonvon-bot-mutex-v3:<角色>:<真实路径的 sha256>`（`ss -lx` 看得到）；macOS 用 `open` 带 `O_EXLOCK | O_NONBLOCK | O_NOFOLLOW` 打开 `<数据目录>/.locks/<角色>.lock`，`O_EXLOCK` 写死 `0x20`（`fs.constants` 里没有），锁文件不删，`.locks` 不是真目录就报错。两种都是进程一死内核就收回，子进程不继承（libuv 打开时都带 close-on-exec）。别的平台照旧（Windows 命名管道、其余端口），v1 不支持，没动。平台用 `os.platform()` 判断：`provider-lock-retention` 在 Linux 上把全局 `process` 换成 darwin 和 win32，`os.platform()` 读 Node 自己的 process，不受影响，这个测试没改。
 - s20c 做法（过渡）：旧版本只认端口，所以 Linux 和 macOS 上拿到新锁以后，还去占这个角色原来的端口（`20000 + sha256("vonvon-bot-v2:<角色>:<真实路径>")` 前四字节 `% 30000`，算法不变）。占上了就一起持有、一起放，这个端口对每个连接回一行 `vonvon-mutex-v3`，写完就关掉连接，不等对方关（对方一直不关时，放锁会卡在关这个端口上，新锁也放不掉）。占不上就连一下：连接被拒（ECONNREFUSED），是某个连接的本地端口或 TIME_WAIT（#339 撞上的就是这种），不管它；连接时报别的错（比如 fd 或临时端口用光），看不出是不是旧版本，当作旧版本持锁；收到那一行，是新版本在持另一个目录的锁、撞了同一个端口，也不管；连上后一句不说就断开，或者 1 秒内既不说也不断（事件循环卡住的旧 daemon 也能完成握手），当作旧版本持锁：留着新锁、每 40 毫秒再试，到期连新锁一起放掉、报 busy。所以 M3 预览版的 daemon 在跑时，新版本的 `daemon run` 拿不到 host 锁，走不到 #287 那块接管 `daemon.pid` 的代码。过渡只在 `D/config/data-access.ts` 里标了起止的一段。
@@ -605,6 +630,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | 状态 | 编号 | 切片 | 内容 | 约行数 | 依赖 | 风险 | Mac 检查 |
 |---|---|---|---|---|---|---|---|
 | [x] | s14d | "同时发送到群"只回一次 | 话题里勾"同时发送到群"或私聊话题里勾"同时发送到会话"时，飞书推的主区副本跳过，只回话题里那条；先记一次原始事件，看带不带 `sync_to_chat_info`（3.5） | 120 | — | 错误路径 | 无（M5 验收第 8 步由 Codex 在 owner 的客户端里发） |
+| [ ] | s15d | `/resume` 恢复卡的历史显示 | 恢复卡（`D/card/history-card.ts`）的历史里，bot 那一行和"更早的 N 轮 Codex 仍保留"按群的后端写名字，不再在 Claude 群里写 Codex：`HistoryCardState` 加后端名，`handle-message.ts` 里 4 处 `buildHistoryCard` 都传。用户那一行和折叠标题（`turnBody`、`turnTitle`）去掉 `weaveSender` 加的发信人标注"[本条消息的发信人：…（open_id：…）…]"，复用 `session-title.ts` 的 `stripBridgeMessageEnvelope`，不另写；去掉后是空的那一行不显示（M3 第 4 步看到的） | 120 | — | 无 | 无（JP-VPS 用 lark-cli 读恢复卡） |
 | [x] | s15c | 去掉访客档 | 一个群一档、一条会话：`turnTier` 不再分档，会话键不再带访客的后缀，设置页、私聊的权限卡和命令行去掉"普通成员权限"；已存的 `guestMode` 读时取两档里更严的，下次写时去掉；领文件按群现在的档，和文件写出时的档比的那一步留着（3.5、3.8） | 250 | — | 数据迁移、并发 | 无 |
 | [x] | s15b | 每轮开口前看一眼会话 | 主区和话题每轮开口前看原生会话：别人写过（终端里的轮次、压缩）就重新接上，有新的压缩就附话题表；Codex 每轮结束放开线程（3.5，D4、D6） | 200 | s15c | 并发、关闭清理 | 无（M5 验收第 9 步在 JP-VPS 上用终端做；Codex 桌面端打开同一条会话放进 M5 预览版任务） |
 | [x] | s21 | 群的会话方式和运行中来了消息 | 群加会话方式（多会话、单会话、智能，前两种即规则模式的"开话题""连续"）和"运行中来了消息"覆盖，缺省按规则读；绑定的三个入口（私聊绑定卡、网页的绑定对话框 `JoinGroupDialog`、`group bind`）改成按 3.4 的顺序和文案列，不预选（网页对话框和 `group bind` 今天默认 `threads`，要去掉），命令行必须带；话题群的问法、卡发给谁和没设置好时怎么回留给 s36b；在多会话和单会话之间切换时免 @ 不变（3.2、3.4） | 450 | — | 数据迁移 | 无 |
@@ -811,7 +837,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | [x] | e07 | 第 10 项（预查）：bridge 的锁 | JP-VPS | 临时 HOME 下用 v2 的 acquireSingleInstanceLock 写一份 bridge 格式的锁，再用 bridge 0.6.14（`6698118`）的同名函数去抢，应该抛 BridgeAlreadyRunningError；再看持有者退出后锁失效、startedAt+15s 那条判断 | s61 | s61 之前 |
 | [ ] | e08 | 第 10 项（真机） | Mac | 在 Mac 的测试用户账号里装 bridge 0.6.14，用数据副本和测试 bot：写入锁后 run 被拒，`start` 本身不被拒、会重新装好 plist 和 launchd 任务，被拉起的 run 反复被拒（e07 读代码的结论）；stop 删掉 plist 和 launchd 任务，bridge 多久退干净；持有者退出后锁失效；多 bot 模式下子进程也被拒；macOS 的 `ps -o etime=` 是否和 Linux 一样。没有测试用户账号时回"卡住了" | s61 | s61 之前 |
 | [ ] | e09 | 第 13 项：卡片里的 @ 会不会提醒人 | JP-VPS 和 owner | 测试 bot 往测试群发一张带 `<at>` 的卡片和一条带 @ 的文字。JP-VPS 上看消息数据：卡片里的 `<at>` 算不算提到了人。两条在飞书客户端里有没有"有人@我"的标记和通知，由 owner 看 | s30 | s30 之前 |
-| [x] | e10 | 第 6、14、15、16 项和第 17 项后半：飞书平台（"同时发送到群"和给没开过会话的人发私聊没测，留给 owner，见下） | JP-VPS（客户端里看的由 owner 看） | 用测试 bot 的应用身份调接口，lark-cli 以 owner 的用户身份发消息：机器人能否自己进已有的群；`with_sender_name` 拿不拿得到名字；能否拉到别的 bot 卡片回答的正文；话题里的引用分不分得出是哪条；"同时发送到群"收几次事件；私聊里的话题；能否给没开过会话的人发私聊；断线期间的消息重连后会不会补推。只有客户端里才看得到的，留给 owner 找同事看：没开过会话的人收到的私聊在客户端里怎么显示、有没有通知。测"同时发送到群"要有人发一条这样的消息，lark-cli 发不出来时，改在客户端里发 | s09、s14；s18、s22、s27、s49、s57 也用它的结果 | s09 之前 |
+| [x] | e10 | 第 6、14、15、16 项和第 17 项后半：飞书平台（"同时发送到群"和给没开过会话的人发私聊当时没测，2026-10-16 都补测了，见 s14d 和 M4 的 s18 开工要点） | JP-VPS（客户端里看的由 owner 看） | 用测试 bot 的应用身份调接口，lark-cli 以 owner 的用户身份发消息：机器人能否自己进已有的群；`with_sender_name` 拿不拿得到名字；能否拉到别的 bot 卡片回答的正文；话题里的引用分不分得出是哪条；"同时发送到群"收几次事件；私聊里的话题；能否给没开过会话的人发私聊；断线期间的消息重连后会不会补推。只有客户端里才看得到的，留给 owner 找同事看：没开过会话的人收到的私聊在客户端里怎么显示、有没有通知。测"同时发送到群"要有人发一条这样的消息，lark-cli 发不出来时，改在客户端里发 | s09、s14；s18、s22、s27、s49、s57 也用它的结果 | s09 之前 |
 | [x] | e11 | 第 18 项的 Codex 一半 | JP-VPS | 用真实 Codex 起两条线程、关掉一条，再用 utility 进程发 thread/read，看不加载线程能不能读到用户消息和最终回答 | s48 | s48 之前 |
 | [ ] | e12 | 第 9 项：判断的延迟和额度 | JP-VPS | s23 合入后，用 Codex 订阅的 gpt-6-luna 和 Claude 订阅的小模型各跑 50 次判断，记延迟分布和额度变化，用来定 s25 每群每小时的上限。额度看各自的账户页面，跑之前和跑完由 owner 各读一次 | s25 | s25 之前 |
 | [ ] | e13 | 第 7 项：企业租户的权限审核 | — | 不单独做，现在没有企业租户。清单里写一句"企业租户里新权限可能要管理员审核"；M11 时 owner 手里有企业租户，就顺手看一次 | — | — |
@@ -819,7 +845,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 
 e01、e02 已做完，结果在 `docs/research/2026-10-14-v1-spikes/`。e02 没测完的两件写进了 s31 的开工要点。
 
-e05、e06、e07、e10、e11 已做完，结果在 `docs/research/2026-10-15-v1-spikes/`，对各片的影响写进了开工要点（s03、s09、s14、s18、s22、s23、s27、s31、s37、s39、s44、s48、s49、s57、s59、s61、s62、s64）。没测完的：e05 的第二个根能不能写归 s39 的 Mac 检查；e07 的真机部分在 e08；e10 的"同时发送到群"在 s14 之前、给没开过会话的人发私聊在 s18 之前由 owner 做，断线补推在 s09 开工时用 daemon 自己的长连接再测。和 product.md 不一致的几处按 4.2 处理。
+e05、e06、e07、e10、e11 已做完，结果在 `docs/research/2026-10-15-v1-spikes/`，对各片的影响写进了开工要点（s03、s09、s14、s18、s22、s23、s27、s31、s37、s39、s44、s48、s49、s57、s59、s61、s62、s64）。没测完的：e05 的第二个根能不能写归 s39 的 Mac 检查；e07 的真机部分在 e08；e10 的"同时发送到群"和给没开过会话的人发私聊 2026-10-16 补测了（见 s14d 和 M4 的 s18 开工要点，私聊的手机通知还没确认），断线补推在 s09 开工时用 daemon 自己的长连接再测。和 product.md 不一致的几处按 4.2 处理。
 
 按 Linux 先行（本文第 1 节），只有 e03、e04（macOS 沙箱）和 e08（Mac 的测试用户账号）整个留在 Mac 上，e09、e10 只把客户端里看的部分留给 owner，Codex 不碰 owner 的飞书客户端。
 
@@ -869,6 +895,11 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 | 最近没回的消息记多少 | 每个 bot 30 条，新的在前；同群、同位置、同原因、同后端 10 分钟内并成一条带次数；放 daemon 主进程内存，重启清空 | 3.1 第 8 条只说"最近"；没登录时群里连发十条只占一条；记录不带正文，用不着跨重启 | s19 |
 | 运行中被拒的权限显示多久 | 每个权限留最近一次，最多 10 项，显示 24 小时内的 | 发布新版本以后，旧的拒绝不该一直挂着 | s19 |
 | 诊断页多久查一次 | 打开时每个 bot 读一次飞书设置，点"重新检查"再读，不轮询；Claude 登录每个窗口最多自动问一次 | 每读一个 bot 要调 3 到 4 个飞书接口，问 Claude 要起约 250 MB 的 CLI | s19 |
+| bot 子进程起不来（spawn 失败）算不算崩溃 | `EAGAIN`、`ENOMEM` 这类不算：一分钟最多记一条"出错退出"，按退避重试，最长 30 秒一次；只有 `ENOENT`、`EACCES`（可执行文件没了、不能执行）算 | 资源不够是这台电脑的事，不是 bot 的；算的话 7 秒内就把所有 bot 一起停了，资源回来也不自己起 | s18a |
+| bot 子进程拿不到自己的锁 | 退出 75，不算崩溃，按退避重试 | 多半是主进程死后旧子进程还在排空，等它放锁就好（s18a 做法 D2） | s18a |
+| bot 子进程自己退出（退出码 0） | 不算崩溃，照退避重启，只记日志 | 没见过这种情况；算崩溃的话正常的退出也会停掉 bot | s18a |
+| 单个 bot 的"恢复运行" | 网页红条发 `setAgentEnabled(true)`，命令行不加 `bot resume`，用 `vonvon daemon restart`（会重启全部 bot） | 用 `restartHost` 会重启全部 bot、丢掉别的 bot 的排队消息，和"只停这一个"相反；`bot resume` 以后有人要再加 | s18a |
+| 快照里列多少条崩溃记录 | 24 小时内的，最多 20 条，新的在前；`crash/` 变了或过了 30 秒才重读 | 3.10 只说列出最近的；快照每 5 秒重建一次，不能每次都读几十个文件 | s18a |
 | 已有会话补拉的条数 | 最多 40 条，更早的只写"更早还有 N 条" | 3.5 只给了开场的条数（主区 20、话题 10），已有会话只说"字数超预算就留最近的"；40 条约 12 KB | s14a |
 | 补拉和查引用的时限 | 一次补拉所有页合起来 10 秒，查一条消息 10 秒 | SDK 的请求没有超时，这一轮要等它；和登记表查第一条用的 10 秒一样。拉满 10 页要多久没测过，M3 看日志里有没有 `*-context-timeout` 再调 | s14a |
 | 别的 bot 没答完的卡片重拉多久 | 距触发消息 10 分钟以内的才重拉 | 卡在流式输出里一直不结束的卡片，不能让每一轮都从它那里重拉 | s14a |
@@ -954,7 +985,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 | 公开的下载和更新地址 | M11（s64 的通知、s65 的更新源） | product.md 第 8 节第 1 条 |
 | 向 Anthropic 要 Claude 登录的书面确认 | 公开发布前 | product.md 第 8 节第 2 条，可能要几周；要不到就做 s66 |
 | 一位同事或第二个飞书账号 | e10（s18 之前）、e09（s30 之前）、M6 第 4 步、M9 第 2 和第 6 步 | 验收时要有另一个人点卡片、私聊 bot |
-| JP-VPS 上再加两个测试 bot | M5 之前 | M5 要同一台机器上三个 bot（一个规则模式、两个智能模式），JP-VPS 上现在只有一个。Claude 扫不了码，要 owner 扫码、在开发者后台发布 |
+| JP-VPS 上再加两个测试 bot | 已做（2026-10-16） | M5 要同一台机器上三个 bot（一个规则模式、两个智能模式）。owner 在 JP-VPS 的终端里扫码建了 Vonvon Bot 7、Bot 8，开发者后台由 Mac 上的 Codex 配好、发布（本文第 10 节"M3 验收期间顺带看到的"） |
 | JP-VPS 上给 bwrap 加载 AppArmor profile | 已做（2026-10-15） | owner 经 SSH 加载了，结果见本文第 7 节。M6 第 1 到 3、5 步和 M7 第 3 步不再退回 owner |
 | bridge 最后一版什么时候发 | M10 之前定 | product.md 第 8 节第 4 条，s64 按这个时间发 |
 | 验收 bot 和 owner Mac 上的 bot 订阅「撤回消息」事件 | M3 第 6 步之前 | 在开发者后台的事件配置里（长连接）加 `im.message.recalled_v1`，再发布一个版本；没有接口，Claude 做不了。Claude 先在 JP-VPS 上用应用版本接口查验收 bot 订阅了没有，缺了才找 owner，和别的事一起说。缺了不挡：bot 照常用，清单里只提示（owner 2026-10-16）；Bot 4、Bot 5 已订阅 |
@@ -996,5 +1027,15 @@ Linux：`vonvon service uninstall`，`vonvon daemon stop`，`npm rm -g vonvon-bo
 - `vonvon service uninstall`：打印 `uninstalled: Uninstalled` 和 linger 的提示"linger 没关：…不需要的话运行 loginctl disable-linger。"；`LoadState=not-found`，unit 文件和 `default.target.wants` 里的链接都删了。
 - linger：`loginctl show-user` 前后都是 `Linger=yes`，没关。JP-VPS 上在跑的验收 daemon 前后是同一个进程，它和它的端口都没碰。
 - 无头网页检查（实现时在 JP-VPS 上跑的）：Linux 上 Codex 项目的权限设置里，只读问答、允许写入两档是置灰的。
+
+**M3 验收期间顺带看到的**（2026-10-16，不属于哪一片）
+- 卡片回调：JP-VPS 的 Bot 6 第一次被真人点卡。在「⚙️ 群设置」卡上点「设置默认模型」，原卡不变，另发一张设置默认模型的卡。
+- M1 第 6 步的余项：运行卡过程面板里多行输出是一行一个（Mac 飞书）。「调用参数」那一栏显示的是工作目录或工具的说明，不是命令参数，留给界面那一轮。
+- M5 第 8 步（s14d）：owner 在 Mac 飞书里，话题里勾「同时发送到群」再 @Bot 6，bot 只在话题里回了一次，主区没有新卡片，也没有回复。
+- s16：Mac 上的 Bot 4（Claude 经 DeepSeek 网关）手填模型 id 和推理强度，能回复，没报错。
+- s14d 的查询：Bot 6 这次运行的第一次 `message.get` 超时了（1.5 秒），按设计当普通消息照常回。只看到这一次，没有再调。
+- 测试 bot：JP-VPS 上在终端用 `bot add` 扫码建了 Vonvon Bot 7、Vonvon Bot 8，都连上了（本文第 8 节"JP-VPS 上再加两个测试 bot"）。开发者后台的事件和回调由 Mac 上的 Codex 用浏览器配好：两个都是 8 个事件、1 个卡片回调，长连接，各发布了 1.0.1；权限和 Bot 6 一样，没改。
+- s18 的预检（bot 主动私聊没开过会话的主人）：owner 从没打开过 Bot 7 的私聊。用 Bot 7 的应用身份发两条文字私聊，一条按 `union_id`（从 lark-cli 的应用取的 owner 的 union_id），一条按 Bot 7 扫码时记下的 `ownerOpenId`，都返回 code 0，进了同一个私聊。owner 确认手机和电脑都弹了通知。所以崩溃私聊直接按扫码时记下的 `ownerOpenId` 发，不用等主人先开私聊。同一租户的自建应用之间 `union_id` 通用。
+- 飞书发消息的 `uuid` 去重（给 s18b）：同一个 uuid 在一小时内发两次，两次都成功，返回同一个 `message_id`，群里只有一条。
 
 **发布前的 Mac 验收**（s67 填，product.md 第 8 节第 5 条的 Mac 一半）：待填。

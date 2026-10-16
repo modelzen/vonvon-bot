@@ -49,7 +49,7 @@ export interface DaemonApi extends ApiLifetime {
 /** Test seams for the login-time service: the platform and spawn of the helper launcher, and the manager read. */
 type ServiceSeams = Pick<Parameters<typeof createServiceActionLauncher>[0], 'platform' | 'spawn'> & Pick<Parameters<typeof createSnapshotStore>[0], 'readService'>;
 
-export async function startApi(options: { service: AdminService; port?: number; control?: ShutdownControl; environmentOptions?: EnvironmentServiceOptions; serviceActions?: ServiceSeams; diagnostics?: Parameters<typeof createSnapshotStore>[0]['diagnostics'] }): Promise<DaemonApi> {
+export async function startApi(options: { service: AdminService; port?: number; control?: ShutdownControl; environmentOptions?: EnvironmentServiceOptions; serviceActions?: ServiceSeams; diagnostics?: Parameters<typeof createSnapshotStore>[0]['diagnostics']; crashes?: Parameters<typeof createSnapshotStore>[0]['crashes'] }): Promise<DaemonApi> {
   let acquiredServer: ReturnType<typeof createServer> | undefined;
   let acquiredJobs: Jobs | undefined;
   let acquiredLogs: LogFollowers | undefined;
@@ -189,7 +189,7 @@ export async function startApi(options: { service: AdminService; port?: number; 
       }
     }
     const sockets = acquiredSockets = createSocketServer({ server, credential, info: { type: 'serverInfo', machineId, version: bridgeVersion(), protocolVersion: PROTOCOL_VERSION }, request, control, detached: peer => { jobs.detach(peer); logs.detach(peer); } });
-    snapshots = await createSnapshotStore({ service: options.service, jobs: () => jobs.snapshot(), serviceAction: () => serviceActions.current(), ...(readService ? { readService } : {}), ...(options.diagnostics ? { diagnostics: options.diagnostics } : {}), publish: snapshot => sockets.publish({ type: 'event', event: 'snapshot', payload: snapshot }) });
+    snapshots = await createSnapshotStore({ service: options.service, jobs: () => jobs.snapshot(), serviceAction: () => serviceActions.current(), ...(readService ? { readService } : {}), ...(options.diagnostics ? { diagnostics: options.diagnostics } : {}), ...(options.crashes ? { crashes: options.crashes } : {}), publish: snapshot => sockets.publish({ type: 'event', event: 'snapshot', payload: snapshot }) });
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', () => { server.off('error', reject); resolve(); }); });
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('API did not bind a TCP port');
