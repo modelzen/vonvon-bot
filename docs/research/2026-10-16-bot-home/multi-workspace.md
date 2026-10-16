@@ -1,6 +1,6 @@
 # 多工作区和 bot 的东西怎么交：13 个后端（2026-10-16）
 
-范围：bot-home 那一轮之后，owner 又提了三点。一是参考 Codex 的多工作区：一个主工作区，其余是附加的，主人能指定自己的主工作区，甚至多个。二是个性、记忆这些文字放在单独的地方；这一点 #349 已经定了，bot 的东西只放 `bots/<appId>/`，会话从工作区起。三是第一版只有 Codex 和 Claude，以后要接更多后端，方案要通用。本文查 13 个后端一条会话能有几个目录、附加目录里自己加载什么、调用方能直接交什么，再实测 Codex 和 Claude 的细节。本文只列事实。owner 2026-10-16 的决定（1A、2A、3A）和据此写的做法见 `docs/product.md` 3.6 和第 11 节。
+范围：bot-home 那一轮之后，owner 又提了三点。一是参考 Codex 的多工作区：一个主工作区，其余是附加的，主人能指定自己的主工作区，甚至多个。二是个性、记忆这些文字放在单独的地方；这一点 #349 已经定了，bot 的东西只放 `bots/<appId>/`，会话从工作区起。三是第一版只有 Codex 和 Claude，以后要接更多后端，方案要通用。本文查 13 个后端一条会话能有几个目录、附加目录里自己加载什么、调用方能直接交什么，再实测 Codex 和 Claude 的细节。本文只列事实。owner 2026-10-16 的决定（1A、2A，第 3 题按 A 做，owner 要求下一轮热生效）和据此写的做法见 `docs/product.md` 3.6 和第 11 节。
 
 - 仓库：`claude/docs-bot-home` 的 `f7044ed`（`main` 的 `5d9327e` 加 #349 的两次提交）。`D/` = `packages/daemon/src/`。没改仓库。
 - 标注：**实测** = 2026-10-16 在 JP-VPS 上跑过；**源码** = 读了代码或类型定义，没跑；**文档** = 只读了官方文档、帮助或 changelog。版本号和日期都以 2026-10-16 为准，各家版本变得快，用之前先核对。
@@ -125,7 +125,7 @@
 | 东西 | 主目录 `cwd` | 附加目录（SDK `additionalDirectories`，即 `--add-dir`） |
 |---|---|---|
 | `CLAUDE.md`、`.claude/CLAUDE.md`、`.claude/rules/*.md`、`CLAUDE.local.md` | 加载（`project` 来源） | 设 `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` 才加载 |
-| `AGENTS.md` | 同一目录没有 `CLAUDE.md` 时才加载 | 不加载，开了环境变量也不加载 |
+| `AGENTS.md` | cwd 和上级目录都没有 `CLAUDE.md` 时才加载 | 不加载，开了环境变量也不加载 |
 | `.claude/skills` | 加载 | 加载（有热加载），要有 `project` 来源 |
 | `.claude/agents`、`.claude/commands` | 加载 | 加载，没有热加载 |
 | `.mcp.json` | 经 SDK 不问批准就拉起 | 不加载 |

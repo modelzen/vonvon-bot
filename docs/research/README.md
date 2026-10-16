@@ -113,7 +113,7 @@ process-ci、draft 和 final 里的流程说法，凡和 `AGENTS.md` 不一致�
 
 ## 2026-10-16 bot 自己的目录和工作区
 
-`2026-10-16-bot-home/`。owner 提出"会话从 bot 自己的目录起，工作区作为关联目录，继承工作区的 skill 和 MCP"，这一轮查现状、两家 CLI 实际加载什么、comma 怎么做。基于 `main` 的 `6e28d23`；Claude Code 2.1.296 和 Codex 0.163.0 在 JP-VPS 上用假 API 实测，没登录、没花额度。结论：会话照旧从工作区起，owner 2026-10-16 同意（`docs/product.md` 3.3、3.6）。同一天第二轮（multi-workspace）：owner 又提出参考 Codex 的多工作区、方案要能接更多后端，查了 13 个后端，实测 Codex 0.163.0 和 Claude 2.1.296、2.1.301，基于 #349 分支的 `f7044ed`。owner 2026-10-16 选了 1A、2A、3A：bot 的文字当指令交，skill 和 MCP 打成能力包交，附加目录只给文件访问，设置改了下一轮生效（`docs/product.md` 3.6、第 11 节）。
+`2026-10-16-bot-home/`。owner 提出"会话从 bot 自己的目录起，工作区作为关联目录，继承工作区的 skill 和 MCP"，这一轮查现状、两家 CLI 实际加载什么、comma 怎么做。基于 `main` 的 `6e28d23`；Claude Code 2.1.296 和 Codex 0.163.0 在 JP-VPS 上用假 API 实测，没登录、没花额度。结论：会话照旧从工作区起，owner 2026-10-16 同意（`docs/product.md` 3.3、3.6）。同一天第二轮（multi-workspace）：owner 又提出参考 Codex 的多工作区、方案要能接更多后端，查了 13 个后端，实测 Codex 0.163.0 和 Claude 2.1.296、2.1.301，基于 #349 分支的 `f7044ed`。owner 2026-10-16 选了 1A、2A，第 3 题按 A 做（owner 要求下一轮热生效）：bot 的文字当指令交，skill 和 MCP 打成能力包交，附加目录只给文件访问，设置改了下一轮生效（`docs/product.md` 3.6、第 11 节）。
 
 | 报告 | 内容 | 说明 |
 |---|---|---|
