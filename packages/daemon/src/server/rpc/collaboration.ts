@@ -62,7 +62,7 @@ export async function collaborationRpc(service: AdminService, directory: Directo
   if (!service.collaboration) return unsupported();
   let operation: ServiceRequest;
   if (request.action === 'createProject') {
-    operation = { action: 'createProject', requestId: randomUUID(), name: request.name, kind: request.conversation === 'threads' ? 'multi' : 'single', backend: request.tool === 'codex' ? 'codex-appserver' : 'claude-agent', ...(request.folder.kind === 'existing' ? { directory: await directory.resolve(request.folder.folderToken) } : {}) };
+    operation = { action: 'createProject', requestId: randomUUID(), name: request.name, kind: request.conversation === 'threads' ? 'multi' : 'single', ...(request.response ? { noMention: request.response === 'all' } : {}), backend: request.tool === 'codex' ? 'codex-appserver' : 'claude-agent', ...(request.folder.kind === 'existing' ? { directory: await directory.resolve(request.folder.folderToken) } : {}) };
   } else if (request.action === 'editProject') {
     operation = { action: 'editProject', projectName: request.projectName, chatId: request.groupId, expectedRevision: request.expectedRevision, ...(request.folderToken ? { directory: await directory.resolve(request.folderToken) } : {}), ...(request.conversation ? { kind: request.conversation === 'threads' ? 'multi' : 'single' } : {}), ...(request.enabled !== undefined ? { enabled: request.enabled } : {}) };
   } else {

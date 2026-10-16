@@ -1,5 +1,5 @@
 import { connectLocal, ConnectionError, RpcError, type VonvonClient } from '@vonvon/client';
-import { requestSchema, type Agent, type Membership } from '@vonvon/protocol';
+import { conversationCopy, requestSchema, type Agent, type Membership } from '@vonvon/protocol';
 import { paths } from '../config/paths';
 import { verifyPidLockOwner } from '../server/owner-verification';
 import { PidLockError, readRunningPidLock } from '../server/pid-lock';
@@ -153,7 +153,7 @@ export function print(io: Io, human: string[], json: unknown): void {
 
 export const withoutAvatar = <T extends { avatarDataUrl?: string }>({ avatarDataUrl: _avatar, ...rest }: T): Omit<T, 'avatarDataUrl'> => rest;
 export const toolLabel = (backend: string): string => backend === 'codex-appserver' ? 'Codex' : backend === 'claude-agent' ? 'Claude' : backend;
-export const conversationLabel = (conversation: string): string => conversation === 'threads' ? '按话题独立会话' : conversation === 'shared' ? '整群连续会话' : conversation;
+export const conversationLabel = (conversation: string): string => conversation === 'threads' || conversation === 'shared' ? `${conversationCopy[conversation].name}（${conversationCopy[conversation].title}）` : conversation;
 const pad = (value: number): string => String(value).padStart(2, '0');
 export function localTime(ms: number): string {
   const date = new Date(ms);

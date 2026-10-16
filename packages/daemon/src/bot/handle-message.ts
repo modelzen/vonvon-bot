@@ -139,6 +139,7 @@ import {
   buildDoctorCard,
   buildGroupSettingsCard,
   buildJoinGroupFormCard,
+  parseNoMentionPick,
   buildModelDefaultCard,
   parseModelDefaultFormValue,
   buildNewProjectDoneCard,
@@ -189,11 +190,13 @@ import { getSecret } from '../config/keystore';
 import { buildScopeGrantUrl, JOIN_GROUP_SCOPES } from '../config/scopes';
 import { validateAppCredentials } from '../utils/feishu-auth';
 import {
-  defaultNoMention,
   effectiveMode,
   getProjectByChatId,
   getProjectByName,
   listProjects,
+  noMentionOf,
+  pendingPolicyOf,
+  ruleKind,
   mutateProject,
   removeProject,
   updateProject,
@@ -1472,7 +1475,7 @@ export function createOrchestrator(
     // A topic opened in the group (msg.threadId) falls through to the topic path
     // below and gets its own session (product.md 3.5); an old topic that used to
     // share the chat session starts fresh from its next message, nothing migrated.
-    if ((project?.kind ?? 'multi') === 'single' && !msg.threadId) {
+    if (project && ruleKind(project) === 'single' && !msg.threadId) {
       if (cmd === 'help') {
         await postHelpCard(msg, 'single', false, project);
         return;
@@ -1695,9 +1698,9 @@ export function createOrchestrator(
    * 即使开了免@，若消息 @了所有人 或 @了具体的(非机器人)用户,说明是定向给别人的,
    * bot 不插话。(此函数仅在 !mentionedBot 时调用,故 @到 bot 的情况已被排除。) */
   function shouldRespondWithoutMention(project: Project, msg: NormalizedMessage): boolean {
-    if (!(project.noMention ?? defaultNoMention(project))) return false;
+    if (!noMentionOf(project)) return false;
     if (msg.mentionAll || msg.mentions.some((m) => !m.isBot)) return false;
-    if ((project.kind ?? 'multi') === 'single') return true;
+    if (ruleKind(project) === 'single') return true;
     const content = msg.content.trim();
     return Boolean(msg.threadId) || parseCommand(content) !== null || parseGoalTrigger(content) !== null;
   }
@@ -1918,7 +1921,7 @@ export function createOrchestrator(
   ): Promise<void> {
     // Already a line of the running turn's record block (see ActiveState.woven): not steered in again.
     if (wovenSkip(cur, msg) || recalledSkip(msg)) return;
-    if (!extra?.queueOnly && getPendingPolicy(cfg) === 'steer' && cur.run && cur.thread && cur.thread.supportsSteer !== false) {
+    if (!extra?.queueOnly && pendingPolicyOf(getPendingPolicy(cfg), project) === 'steer' && cur.run && cur.thread && cur.thread.supportsSteer !== false) {
       const tid = cur.run.turnId();
       if (tid) {
         const voiceReply = cur.voiceReply?.run === cur.run ? cur.voiceReply : undefined;
@@ -2439,7 +2442,7 @@ export function createOrchestrator(
    * lookup starts once its inputs (the first message, the group's topics) arrive.
    */
   async function topicOpening(msg: NormalizedMessage, rootP: Promise<ContextMessage | undefined>, listP: Promise<TopicView[]>, project: Project | undefined) {
-    const mainRecP = project?.kind === 'single' ? getSession(msg.chatId).catch(() => undefined) : undefined;
+    const mainRecP = project && ruleKind(project) === 'single' ? getSession(msg.chatId).catch(() => undefined) : undefined;
     // The group's mode first (cached), so a topic group pulls no main area.
     const [noMain, root] = await Promise.all([orStop(topicCtx.noMainArea(msg.chatId), false), rootP]);
     if (noMain) return { root, part: {}, log: { topicGroup: true } };
@@ -3088,12 +3091,12 @@ export function createOrchestrator(
     inThread = false,
     project?: Project,
   ): Promise<void> {
-    const noMention = project ? (project.noMention ?? defaultNoMention(project)) : true;
+    const noMention = project ? noMentionOf(project) : true;
     // 按本群项目的后端能力裁剪命令清单：不支持的后端不列 /goal、/compact、/resume
     // （能力守卫会拒），避免「列了点了才发现不支持」。codex(capabilities undefined)=全列。
     const caps = backendFor(project?.backend).capabilities;
     await withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
-      const card = buildHelpCard(scope, noMention, isAdmin(cfg, msg.senderId), caps, project?.kind ?? 'multi');
+      const card = buildHelpCard(scope, noMention, isAdmin(cfg, msg.senderId), caps, project ? ruleKind(project) : 'multi');
       await sendManagedCard(channel, msg.chatId, card, msg.messageId, inThread).catch((err) =>
         log.fail('card', err, { cmd: 'help', scope }),
       );
@@ -3983,6 +3986,7 @@ export function createOrchestrator(
               existingPath: cwdIn || undefined,
               projectsRootDir: cfg.preferences?.projectsRootDir,
               kind,
+              noMention: parseNoMentionPick(formValue),
               backend,
             });
             log.info('console', 'new-project', { name: p.name, blank: p.blank, backend: p.backend });
@@ -4025,6 +4029,7 @@ export function createOrchestrator(
               existingPath: cwdIn || undefined,
               projectsRootDir: cfg.preferences?.projectsRootDir,
               kind,
+              noMention: parseNoMentionPick(formValue),
               backend,
               mode: bindModeFor(backend),
             });
@@ -4846,7 +4851,7 @@ export function createOrchestrator(
       const result = createChain.then(async () => {
         const directory = request.directory === undefined ? undefined : await realpath(request.directory);
         if (directory !== undefined && !(await stat(directory)).isDirectory()) throw new AdminWriteError('所选文件夹不是目录');
-        const project = await createProject(channel, { requestId: request.requestId, requestSignature: signature, name: request.name, ownerOpenId: owner, existingPath: directory, projectsRootDir: cfg.preferences?.projectsRootDir, kind: request.kind, backend: request.backend, mode: bindModeFor(request.backend) });
+        const project = await createProject(channel, { requestId: request.requestId, requestSignature: signature, name: request.name, ownerOpenId: owner, existingPath: directory, projectsRootDir: cfg.preferences?.projectsRootDir, kind: request.kind, noMention: request.noMention, backend: request.backend, mode: bindModeFor(request.backend) });
         return { ok: true, project: projectView(project) };
       });
       createChain = result.catch(() => undefined);
@@ -4903,9 +4908,15 @@ export function createOrchestrator(
         if (request.enabled !== undefined) patch.enabled = request.enabled;
         const commit = () => mutateProject(project.name, latest => {
           if (projectRevision(latest) !== request.expectedRevision) throw new AdminWriteError('项目设置已改变，请刷新后重试');
+          // Switching 会话方式 leaves 免@ as it was (3.4): pin the value it read as before. 智能 is not
+          // offered here, so a stored one is kept when 单会话 comes back unchanged and dropped on a switch.
+          if (patch.kind !== undefined && patch.kind !== ruleKind(latest)) {
+            if (latest.noMention === undefined || latest.smart) latest.noMention = noMentionOf(latest);
+            delete latest.smart;
+          }
           Object.assign(latest, patch);
         });
-        const archive = (patch.cwd !== undefined && patch.cwd !== project.cwd) || (patch.kind !== undefined && patch.kind !== (project.kind ?? 'multi'));
+        const archive = (patch.cwd !== undefined && patch.cwd !== project.cwd) || (patch.kind !== undefined && patch.kind !== ruleKind(project));
         const updated = archive ? await detachSessionsForChat(project.chatId, commit) : await commit();
         if (archive) expireRetries((retry) => retry.chatId === project.chatId); // its sessions start over
         for (const rec of records) {
@@ -4923,16 +4934,16 @@ export function createOrchestrator(
       if (!available.some(item => item.sessionId === request.sessionId)) throw new AdminWriteError('历史会话不属于当前项目');
       const current = await getProjectByName(project.name);
       if (!current || projectMutations.has(project.chatId) || projectRevision(current) !== projectRevision(project)) throw new AdminWriteError('项目已改变，请刷新后重试');
-      const key = project.kind === 'single' ? perm.sessionKey : `desktop-resume:${project.chatId}`;
+      const key = ruleKind(project) === 'single' ? perm.sessionKey : `desktop-resume:${project.chatId}`;
       if (active.has(key) || intakeChats.has(project.chatId) || pendingTopics.has(project.chatId)) throw new AdminWriteError('会话正在运行');
       const reserved: ActiveState = { queue: [], requesterOpenId: owner };
       active.set(key, reserved);
-      if (project.kind !== 'single') resumePublications.add(project.chatId);
+      if (ruleKind(project) !== 'single') resumePublications.add(project.chatId);
       let publishedKey: string | undefined;
       try {
         const history = await be.readHistory(project.cwd, request.sessionId);
         let threadId = key;
-        if (project.kind === 'single') {
+        if (ruleKind(project) === 'single') {
           await sendManagedCard(channel, project.chatId, buildHistoryCard({ cwd: project.cwd, projectName: project.name, history }));
         } else {
           const root = await channel.send(project.chatId, { markdown: '从桌面端恢复历史会话' });
@@ -4986,7 +4997,7 @@ export function createOrchestrator(
     let compacted: AgentThread | undefined;
     try {
       if (request.action === 'clear') {
-        if (project.kind !== 'single' || key !== perm.sessionKey) throw new AdminWriteError('只有单会话群可以清空当前上下文');
+        if (ruleKind(project) !== 'single' || key !== perm.sessionKey) throw new AdminWriteError('只有单会话群可以清空当前上下文');
         const fresh = await sessionBackend.startThread({ cwd: project.cwd, model: record.model, effort: record.effort, mode: perm.mode, network: perm.network });
         // The local clock, not a Feishu createTime like the other watermarks: this
         // is the main-area session, which no back-fill reads until s14 (it must
@@ -5007,14 +5018,14 @@ export function createOrchestrator(
         return { ok: true, threadId: key };
       }
       let replyTo: string | undefined;
-      if (project.kind !== 'single') {
+      if (ruleKind(project) !== 'single') {
         const messages = await channel.rawClient.im.v1.message.list({ params: { container_id_type: 'thread', container_id: key, page_size: 1 } });
         replyTo = messages.data?.items?.[0]?.message_id;
         if (messages.code !== 0 || !replyTo) throw new AdminWriteError('无法定位原飞书话题，请在飞书确认话题仍然存在');
       }
       const root = await channel.send(project.chatId, { markdown: `桌面端启动目标：${request.objective}` }, replyTo ? { replyTo, replyInThread: true } : undefined);
       launched = true;
-      void trackRun(launchGoalRun({ chatId: project.chatId, replyTo: root.messageId, thread, firstText: request.objective, knownThreadId: key, cwd: project.cwd, mode: perm.mode, network: perm.network, model: record.model, effort: record.effort, flat: project.kind === 'single', backendId: sessionBackend.id, requesterOpenId: owner, titleSource: { text: request.objective, rawContentType: 'text' } })).catch(error => log.fail('desktop', error));
+      void trackRun(launchGoalRun({ chatId: project.chatId, replyTo: root.messageId, thread, firstText: request.objective, knownThreadId: key, cwd: project.cwd, mode: perm.mode, network: perm.network, model: record.model, effort: record.effort, flat: ruleKind(project) === 'single', backendId: sessionBackend.id, requesterOpenId: owner, titleSource: { text: request.objective, rawContentType: 'text' } })).catch(error => log.fail('desktop', error));
       return { ok: true, threadId: key };
     } finally {
       if (!launched && active.get(key) === reserved) active.delete(key);
@@ -6723,7 +6734,7 @@ export function createOrchestrator(
       if (!isChatAllowed(cfg, rec.chatId) || !isUserAllowedInProject(cfg, project, op)) return;
       // Flat only for a single group's main-area session (keyed by chatId); a
       // topic in a single group is its own session and continues in the topic.
-      const flat = (project?.kind ?? 'multi') === 'single' && sessionKey === rec.chatId;
+      const flat = project !== undefined && ruleKind(project) === 'single' && sessionKey === rec.chatId;
       // 合成一条等价的「继续」消息复用整条消息管线（steer/queue/goal 提示全部
       // 生效）：replyTo 指向被点的终态卡，⏳/🫳 生命周期表情也落在卡上作回执；
       // sessionKey 用卡片自己的会话键，续的就是这张卡的会话。

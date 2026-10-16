@@ -34,6 +34,7 @@ import {
 } from "./reference/components/ui";
 import { ConfirmDialog,Dialog } from "./reference/components/ui/Dialog";
 import {
+  conversationCopy,
   type AgentId,
   type Command,
   type CommandResult,
@@ -366,7 +367,7 @@ function DesktopApp() {
             <strong>{perspective === "agents" ? g.name : a.name}</strong>
             <small>
               {backendName(m.backend)} ·{" "}
-              {m.conversation === "threads" ? "按话题独立会话" : "整群连续会话"}
+              {conversationCopy[m.conversation].title}
               {' '}· 查看群内协作
             </small>
           </span>
@@ -810,7 +811,7 @@ function DesktopApp() {
                   <SettingsGroup label="群内协作">
                     <SettingsRow title="工作目录" value={<code>{member.directory}</code>}/>
                     <SettingsRow title="执行工具" value={backendName(member.backend)}/>
-                    <SettingsRow title="会话方式" value={member.conversation === 'threads' ? '按话题独立会话' : '整群连续会话'}/>
+                    <SettingsRow title="会话方式" value={conversationCopy[member.conversation].title} description={conversationCopy[member.conversation].subtitle}/>
                     <ProjectStatus scope={{kind: 'project', agentId: agent.id, groupId: group.id, projectName: member.name}} request={client.collaboration}/>
                     <SettingsRow title="Bot 连接" value={member.stale ? '状态过期' : agentListStatus(agent).label}/>
                   </SettingsGroup>

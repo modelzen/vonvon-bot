@@ -72,6 +72,10 @@ export interface ProjectSections {
   model: {
     selection: ModelSelection;
   };
+  /** 运行中来了消息: 'default' (stored only) inherits the bot's; effective is what runs. */
+  run: {
+    pendingPolicy: 'default' | PendingPolicy;
+  };
 }
 export interface SessionSections {
   model: {
