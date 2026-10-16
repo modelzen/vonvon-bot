@@ -1,7 +1,8 @@
 import { closeOwnedProviders, listenerCloseUnconfirmed, observeShutdown, type ShutdownControl } from '../../host/lifecycle';
 import { ensureOnboarded, announceEventsWhenLive } from '../../bot/onboarding';
 import { startBridge } from '../../bot/bridge';
-import { runSupervisor } from '../../bot/supervisor';
+import { runSupervisor, type SupervisorCrash } from '../../bot/supervisor';
+import { BOT_LOCK_BUSY_EXIT } from '../../host/crash-store';
 import { acquireSingleInstanceLock, BridgeAlreadyRunningError } from '../../core/single-instance';
 import { activeBots, ensureRegistry, type BotEntry } from '../../config/bots';
 import { log } from '../../core/logger';
@@ -21,6 +22,8 @@ interface RunOptions {
   onListening?: (listen: string) => Promise<void>;
   /** 3 crashes in 10 minutes (3.10): the API and the page run, no bot does, until `vonvon daemon restart`. */
   paused?: boolean;
+  /** The host's run and chain for the bot children's records, and its pause (s18a). */
+  crash?: SupervisorCrash;
 }
 
 export async function runRun(botName?: string, options: RunOptions = {}): Promise<void> {
@@ -31,7 +34,7 @@ export async function runRun(botName?: string, options: RunOptions = {}): Promis
     let bots: BotEntry[] = [];
     try { bots = activeBots(await ensureRegistry()); }
     catch (error) { log.fail('daemon-crash', error, { phase: 'paused-registry' }); }
-    await runSupervisor(bots, { control, managed, port: options.port, onListening: options.onListening, paused: true });
+    await runSupervisor(bots, { control, managed, port: options.port, onListening: options.onListening, paused: true, ...(options.crash ? { crash: options.crash } : {}) });
     return;
   }
   // Explicit selector always runs exactly that one bot inline (this is also how
@@ -47,7 +50,7 @@ export async function runRun(botName?: string, options: RunOptions = {}): Promis
     if (!ready) { process.exitCode = 1; return; }
     registry = await ensureRegistry();
   }
-  await runSupervisor(activeBots(registry), { control, managed, port: options.port, onListening: options.onListening });
+  await runSupervisor(activeBots(registry), { control, managed, port: options.port, onListening: options.onListening, ...(options.crash ? { crash: options.crash } : {}) });
 }
 
 /** Run a single bot inline in this process. `botName` undefined → the implicit
@@ -69,7 +72,8 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
     if (err instanceof BridgeAlreadyRunningError) {
       console.error(`✗ ${err.message}`);
       log.info('run', 'already-running', { pid: err.pid });
-      process.exitCode = 1;
+      // Supervised, the holder is most likely the previous child still draining after its host died: not a crash (s18 D2).
+      process.exitCode = process.send ? BOT_LOCK_BUSY_EXIT : 1;
       return;
     }
     throw err;

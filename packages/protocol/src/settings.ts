@@ -59,6 +59,8 @@ export const projectEditableSchemas = {
   permission: z.object({ mode: tier, network: z.boolean() }),
   response: z.object({ noMention: z.boolean() }),
   model: z.object({ selection }),
+  /** 运行中来了消息 for this group; stored "default" inherits the bot's `run.pendingPolicy` */
+  run: z.object({ pendingPolicy: z.enum(["default", "steer", "queue"]) }),
 };
 export const projectSectionSchemas = {
   ...projectEditableSchemas,
@@ -168,7 +170,8 @@ export const projectViewSchema = z.object({
     botId: agentIdSchema,
     projectName: z.string(),
   }),
-  sections: sections(projectSectionSchemas),
+  /** `run` came in s21: a daemon from before it sends none, and this view still parses. */
+  sections: sections(projectSectionSchemas).extend({ run: section(projectSectionSchemas.run).optional() }),
   identity: z.object({
     chatId: z.string(),
     backend: z.string(),

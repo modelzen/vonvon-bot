@@ -6,8 +6,11 @@ import { localTime, pickBot, print, printable, want, withDaemon, withoutAvatar, 
 const MARK: Record<StepTone, string> = { success: '✓', warning: '!', danger: '✗', neutral: '·' };
 const messageOf = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
-function botLine(agent: Agent, groups: number): string {
-  const state = !agent.enabled ? '没启用' : !agent.running ? '没运行' : '已启用';
+const PAUSED_BOT = '已暂停：10 分钟内崩溃了 {n} 次，没有自动重启。查完原因后在网页的状态与诊断页点「恢复运行」，或运行 vonvon daemon restart。';
+
+function botLine(agent: Agent, groups: number, hostPaused: boolean): string {
+  const state = !agent.enabled ? '没启用' : agent.paused ? `已暂停（10 分钟内崩溃了 ${agent.paused.crashes} 次）`
+    : hostPaused ? 'daemon 已暂停' : !agent.running ? '没运行' : '已启用';
   const connection = agent.connection === 'connected' ? '已连接' : agent.connection === 'connecting' || agent.connection === 'reconnecting' ? '连接中' : '未连接';
   const parts = [state, connection, `${groups} 个群`];
   if (agent.activation === 'restartRequired') parts.push('还没按新状态运行');
@@ -18,7 +21,7 @@ function botLine(agent: Agent, groups: number): string {
 export async function runBotList(io: Io, daemon: Daemon = withDaemon): Promise<void> {
   const snapshot = await daemon(call => call('读取快照', c => c.snapshot()));
   const human = snapshot.agents.length
-    ? snapshot.agents.map(agent => botLine(agent, snapshot.memberships.filter(m => m.agentId === agent.id).length))
+    ? snapshot.agents.map(agent => botLine(agent, snapshot.memberships.filter(m => m.agentId === agent.id).length, Boolean(snapshot.application.crashes?.paused)))
     : [NO_BOT];
   print(io, human, { bots: snapshot.agents.map(withoutAvatar) });
 }
@@ -60,7 +63,7 @@ export async function runBotStatus(wanted: string | undefined, io: Io, daemon: D
   // The Linux steps and the service step are not required: they do not count toward `left` or `ready`.
   const steps = [...bot, ...tools.steps, ...linux, service];
   const left = bot.filter(step => !step.done).length + (tools.ready ? 0 : 1);
-  const human = [`${agent.name}（${agent.id}）`, ...steps.flatMap(stepLines)];
+  const human = [`${agent.name}（${agent.id}）`, ...agent.paused ? [PAUSED_BOT.replace('{n}', String(agent.paused.crashes))] : [], ...steps.flatMap(stepLines)];
   if (problem === undefined) human.push(left ? `还有 ${left} 步没完成。` : '全部就绪。');
   print(io, human, { bot: withoutAvatar(agent), ...(setup ? { setup } : { problem }), steps, ready: problem === undefined && left === 0 });
   if (problem !== undefined) throw new Error('清单没有读全，稍后重新运行 vonvon bot status。');

@@ -90,7 +90,7 @@ describe('buildNewProjectFormCard 的后端选择（创建时选定）', () => {
 
   it('仅一个可选后端（codex）→ 不出下拉，改静态文案显示默认后端名（默认主路径）', () => {
     const json = JSON.stringify(buildNewProjectFormCard({ backends: codexOnly }));
-    expect(json).not.toContain('select_static');
+    expect(json).not.toContain('"name":"backend"');
     expect(json).toContain('Codex App Server');
   });
 
@@ -107,7 +107,7 @@ describe('buildNewProjectFormCard 的后端选择（创建时选定）', () => {
 
   it('未传 backends → 不渲染后端选择块（向后兼容）', () => {
     const json = JSON.stringify(buildNewProjectFormCard({}));
-    expect(json).not.toContain('select_static');
+    expect(json).not.toContain('"name":"backend"');
     expect(json).not.toContain('后端 Agent');
   });
 

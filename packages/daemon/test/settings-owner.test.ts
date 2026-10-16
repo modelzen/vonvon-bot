@@ -193,12 +193,29 @@ it('s20b: a full-only backend says why, refuses saving 只读 or 读写, and kee
   expect((await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch: { mode: 'full' } })).kind).toBe('saved');
   expect((await getProjectByName('demo'))?.mode).toBe('full');
 });
+it('s21: a group overrides 运行中来了消息, "default" goes back to the bot, Claude shows queue', async () => {
+  const { owner } = await fixture();
+  let view = await owner.read(project) as ProjectSettingsView;
+  expect(view.sections.run.stored).toEqual({ pendingPolicy: 'default' });
+  expect(view.sections.run.effective).toEqual({ pendingPolicy: 'steer' });
+  expect(await owner.save({ scope: project, section: 'run', revision: view.sections.run.revision, patch: { pendingPolicy: 'queue' } })).toMatchObject({ kind: 'saved' });
+  expect(await getProjectByName('demo')).toMatchObject({ pendingPolicy: 'queue' });
+  view = await owner.read(project) as ProjectSettingsView;
+  expect(view.sections.run).toMatchObject({ stored: { pendingPolicy: 'queue' }, effective: { pendingPolicy: 'queue' } });
+  await owner.save({ scope: project, section: 'run', revision: view.sections.run.revision, patch: { pendingPolicy: 'default' } });
+  expect(await getProjectByName('demo')).not.toHaveProperty('pendingPolicy');
+  expect(() => parseSettingsEdit({ scope: project, section: 'run', revision: 'x', patch: { pendingPolicy: 'other' } })).toThrow();
+  await updateProject('demo', { backend: 'claude-agent', pendingPolicy: 'steer' });
+  view = await owner.read(project) as ProjectSettingsView;
+  expect(view.sections.run).toMatchObject({ stored: { pendingPolicy: 'steer' }, effective: { pendingPolicy: 'queue' } });
+  expect(view.sections.run.apply[0]?.detail).toContain('Claude 不支持插话');
+});
 it('s12: a stored autoCompact:false is ignored on read and the switch cannot be saved', async () => {
   // An old projects.json row with auto-compaction off; nothing migrates it.
   await updateProject('demo', JSON.parse('{"autoCompact":false}') as Parameters<typeof updateProject>[1]);
   const { owner } = await fixture();
   const view = await owner.read(project) as ProjectSettingsView;
-  expect(Object.keys(view.sections).sort()).toEqual(['model', 'permission', 'response']);
+  expect(Object.keys(view.sections).sort()).toEqual(['model', 'permission', 'response', 'run']);
   expect(JSON.stringify(view)).not.toContain('autoCompact');
   expect(() => parseSettingsEdit({ scope: project, section: 'compact', revision: 'x', patch: { autoCompact: true } })).toThrow('设置字段、类型或范围无效');
   expect(JSON.parse(await readFile(paths.projectsFile, 'utf8')).projects[0]).toMatchObject({ autoCompact: false });

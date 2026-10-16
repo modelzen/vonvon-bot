@@ -340,7 +340,7 @@ export function buildHelpCard(scope: HelpScope, noMention = true, isAdmin = fals
     if (isAdmin && showResume) lines.push('· `/resume` → 切回历史会话');
     if (isAdmin) lines.push('· `/settings` → 群设置（免@ 开关）');
     lines.push('· `/help` → 这张速查卡');
-    elements.push(md('💬 **单会话群** — 整群就是一个会话，上下文连续。'), hr(), md(lines.join('\n')));
+    elements.push(md('💬 **整群一条会话** — 主区一条会话，上下文一直连着。'), hr(), md(lines.join('\n')));
   } else if (scope === 'topic') {
     const lines = [talkLine(noMention, '继续当前会话')];
     if (showGoal) lines.push(goalLine);
@@ -396,7 +396,7 @@ export function buildWelcomeCard(
   ];
   if (kind === 'single') {
     elements.push(
-      md('💬 **单会话群**（整群一个会话，上下文连续）'),
+      md('💬 **整群一条会话**（主区一条会话，上下文一直连着）'),
       md(
         [
           talkLine(noMention, '交给我处理'),
@@ -414,14 +414,14 @@ export function buildWelcomeCard(
       md('👥 **主群区**'),
       md(
         [
-          '· **@我 + 内容** → 开一个新话题并开始（每话题独立会话）',
+          '· **@我 + 内容** → 开一个新话题并开始（一个话题一条会话）',
           ...(showGoal ? [goalLine] : []),
           ...(showResume ? ['· `/resume` → 恢复历史会话'] : []),
           '· `/settings` → 群设置（免@ 开关）',
         ].join('\n'),
       ),
       md('🧵 **话题内**'),
-      md(['· 直接发消息（免@）→ 继续当前会话', '· `/model` → 切换模型 / 推理强度', ctxLine].join('\n')),
+      md([talkLine(noMention, '继续当前会话'), '· `/model` → 切换模型 / 推理强度', ctxLine].join('\n')),
       note('任意场景发 `/help` 看当前可用命令。'),
     );
   }

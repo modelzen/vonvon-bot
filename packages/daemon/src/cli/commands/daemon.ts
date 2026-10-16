@@ -1,12 +1,14 @@
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { open } from 'node:fs/promises';
+import { crashText } from '@vonvon/protocol';
 import { join } from 'node:path';
 import { paths } from '../../config/paths';
 import { readRecentLogs } from '../../core/logger';
 import { stopVerifiedOwner, verifyPidLockOwner } from '../../server/owner-verification';
 import { getPidLockInfo, isPidLockOwnerRunning, PidLockError, readRunningPidLock, type PidLockInfo } from '../../server/pid-lock';
 import { readStartupRegistration, startRegisteredDaemon } from '../../service/startup';
-import { CRASH_KIND_TEXT, readCrashSummary, removeResumeRequest, writeResumeRequest, type CrashRecord } from '../../host/crash-store';
+import { readCrashSummary, removeResumeRequest, writeResumeRequest, type CrashRecord } from '../../host/crash-store';
 import { localTime, want, withDaemon, type Daemon } from '../daemon-client';
 
 export type DaemonStatus = { running: false } | {
@@ -151,38 +153,32 @@ export async function runStop(home = paths.appDir): Promise<boolean> {
 
 const PAUSED_RUNNING = '已暂停：10 分钟内崩溃了 {n} 次，bot 都没有启动。查完原因后运行 vonvon daemon restart 恢复运行。';
 const PAUSED_STOPPED = '已暂停：10 分钟内崩溃了 {n} 次；暂停期间 daemon 又出错退出，没有自动重启。查完原因后运行 vonvon daemon restart 恢复运行。';
-const FORCED_DETAIL = '（kill -9、内存不够，或者关机、注销时没来得及退出）';
 
-function formatUptime(ms: number): string {
-  const seconds = Math.floor(ms / 1000);
-  if (seconds < 60) return `${seconds} 秒`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} 分 ${seconds % 60} 秒`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} 小时 ${minutes % 60} 分`;
-  return `${Math.floor(hours / 24)} 天 ${hours % 24} 小时`;
+/** Bot names from `bots.json`, read only; an unreadable registry leaves the app ids. */
+function botNames(home: string): Map<string, string> {
+  try {
+    const bots = (JSON.parse(readFileSync(join(home, 'bots.json'), 'utf8')) as { bots?: Array<{ appId?: unknown; name?: unknown }> }).bots ?? [];
+    return new Map(bots.flatMap(bot => typeof bot.appId === 'string' && typeof bot.name === 'string' ? [[bot.appId, bot.name] as const] : []));
+  } catch { return new Map(); }
 }
-
-function crashLine(record: CrashRecord): string {
-  const who = record.scope === 'host' ? 'daemon' : `bot ${record.appId ?? ''}`.trim();
-  const what = record.kind === 'forced' ? `${CRASH_KIND_TEXT.forced}${FORCED_DETAIL}` : `${CRASH_KIND_TEXT[record.kind]}：${record.reason}`;
-  // A forced record's uptime is the last heartbeat (every 60 s): a lower bound, and none at all inside the first minute.
-  const shown = record.uptimeMs !== undefined && (record.kind !== 'forced' || record.uptimeMs >= 1000);
-  const ran = shown ? `，运行了${record.kind === 'forced' ? '至少' : ''} ${formatUptime(record.uptimeMs ?? 0)}` : '';
-  return `  ${localTime(Date.parse(record.at))}  ${who}  ${what}${ran}${record.paused ? '（暂停期间）' : ''}`;
-}
+const crashLine = (record: CrashRecord, names: Map<string, string>): string =>
+  `  ${localTime(Date.parse(record.at))}  ${record.scope === 'host' ? 'daemon' : `bot ${names.get(record.appId ?? '') ?? record.appId ?? ''}`.trim()}  ${crashText(record)}`;
 
 export async function runStatus(json = false, home = paths.appDir, now: () => number = Date.now): Promise<void> {
   const status = await daemonStatus(home);
   const summary = readCrashSummary(home, { running: status.running, ...(status.running ? { ownerPid: status.pid } : {}), now: now() });
   if (json) {
     const crashes = summary.crashes.map(({ at, kind, scope, appId, version, uptimeMs, paused, reason }) => ({ at, kind, scope, ...(appId ? { appId } : {}), version, ...(uptimeMs !== undefined ? { uptimeMs } : {}), ...(paused ? { paused } : {}), reason }));
-    process.stdout.write(`${JSON.stringify({ ...status, ...(summary.paused ? { paused: summary.paused } : {}), crashes })}\n`);
+    process.stdout.write(`${JSON.stringify({ ...status, ...(summary.paused ? { paused: summary.paused } : {}), pausedBots: summary.pausedBots, crashes })}\n`);
     return;
   }
+  const names = botNames(home);
   const lines = [status.running ? `running PID ${status.pid} at ${status.listen}` : 'stopped'];
   if (summary.paused) lines.push((summary.paused.running ? PAUSED_RUNNING : PAUSED_STOPPED).replace('{n}', String(summary.paused.crashes)));
-  if (summary.crashes.length) lines.push('最近 24 小时的崩溃：', ...summary.crashes.map(crashLine));
+  if (summary.pausedBots.length) {
+    lines.push(`已暂停的 bot：${summary.pausedBots.map(bot => `${names.get(bot.appId) ?? bot.appId}（10 分钟内崩溃了 ${bot.crashes} 次）`).join('、')}。查完原因后在网页的状态与诊断页点「恢复运行」，或运行 vonvon daemon restart。`);
+  }
+  if (summary.crashes.length) lines.push('最近 24 小时的崩溃：', ...summary.crashes.map(record => crashLine(record, names)));
   process.stdout.write(`${lines.join('\n')}\n`);
 }
 

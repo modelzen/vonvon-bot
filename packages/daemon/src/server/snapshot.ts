@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
-import type { ApplicationService, BotDiagnostics, DesktopSnapshot, Job, ServiceActionReport, ToolState } from '@vonvon/protocol';
+import type { ApplicationCrashes, ApplicationService, BotDiagnostics, CrashPause, DesktopSnapshot, Job, ServiceActionReport, ToolState } from '@vonvon/protocol';
 import { createBackend } from '../agent';
 import { cachedClaudeLogin, type ClaudeLogin } from '../agent/claude-agent/login';
 import { probeClaudeSandbox } from '../agent/claude-agent/sandbox-probe';
@@ -41,6 +41,8 @@ export async function createSnapshotStore(options: {
   root?: string;
   /** Each bot's not-replied records and scope denials (bot/diagnostics.ts), read on every rebuild. */
   diagnostics?: { view(appId: string): BotDiagnostics | undefined; retain(appIds: ReadonlySet<string>): void };
+  /** The daemon's pause and crash records, and each bot's own pause, from the supervisor (s18a); read on every rebuild. */
+  crashes?: { application(now: number): ApplicationCrashes; paused(appId: string): CrashPause | undefined };
   /** The cached Claude login, read on every rebuild so a check or a failed turn shows at once; defaults to
    * the login cache when the tools are the real ones. */
   claudeLogin?: () => ClaudeLogin | undefined;
@@ -119,13 +121,15 @@ export async function createSnapshotStore(options: {
     options.diagnostics?.retain(new Set(projected.agents.map(agent => agent.id)));
     const agents = projected.agents.map(agent => {
       const diagnostics = options.diagnostics?.view(agent.id);
-      return diagnostics ? { ...agent, diagnostics } : agent;
+      // A paused bot is enabled and not running on purpose: not a switch waiting for a restart.
+      const paused = options.crashes?.paused(agent.id);
+      return { ...agent, ...(diagnostics ? { diagnostics } : {}), ...(paused ? { paused, activation: 'active' as const } : {}) };
     });
     const login = claudeLogin?.();
     const shownTools = login ? tools.map(tool => tool.tool === 'claude' && tool.installation === 'installed' ? { ...tool, authentication: login.state, message: login.message } : tool) : tools;
     const next = {
       ...snapshot, ...projected, agents, tools: shownTools,
-      application: { ...base, loginItem, ...(service ? { service } : {}) },
+      application: { ...base, loginItem, ...(service ? { service } : {}), ...(options.crashes ? { crashes: options.crashes.application(Date.now()) } : {}) },
       jobs: options.jobs(),
       observedAt: Date.now(),
     };

@@ -56,6 +56,19 @@ it('bot list shows state and connection, and its JSON has no avatars', async () 
   expect(h.close).toHaveBeenCalledTimes(2);
 });
 
+it('bot list and bot status show a bot paused alone, and every bot of a paused daemon (s18a)', async () => {
+  const paused = agent('cli_a', 'Vonvon Bot', { running: false, connection: 'disconnected', paused: { since: 1, crashes: 3 } });
+  const h = harness({ snapshot: one([paused, agent('cli_b', '另一个')]), admin: vi.fn(async () => { throw new Error('读不到'); }) });
+  await runBotList(h.io(), h.daemon);
+  expect(h.out()).toBe('Vonvon Bot  cli_a  已暂停（10 分钟内崩溃了 3 次） · 未连接 · 0 个群\n另一个  cli_b  已启用 · 已连接 · 0 个群\n');
+  h.clear(); await expect(runBotStatus('cli_a', h.io(), h.daemon)).rejects.toThrow();
+  expect(h.out().split('\n').slice(0, 2)).toEqual(['Vonvon Bot（cli_a）', '已暂停：10 分钟内崩溃了 3 次，没有自动重启。查完原因后在网页的状态与诊断页点「恢复运行」，或运行 vonvon daemon restart。']);
+  const host = snapshot([agent('cli_b', '另一个', { running: false, connection: 'disconnected' })]);
+  const down = harness({ snapshot: async () => ({ ...host, application: { ...host.application, crashes: { paused: { since: 1, crashes: 4 }, records: [] } } }) });
+  await runBotList(down.io(), down.daemon);
+  expect(down.out()).toBe('另一个  cli_b  daemon 已暂停 · 未连接 · 0 个群\n');
+});
+
 it('human output drops control characters from Feishu names and --json keeps them', async () => {
   const name = '\u001b[2J坏\u009b31m名\r\n字';
   const h = harness({ snapshot: one([agent('cli_a', name, { readError: '读\u0007不到' })]) });
@@ -240,22 +253,31 @@ it('group bind sends an absolute folder, the chosen token and the pending name',
     ? { kind: 'pendingGroups', groups: [{ chatId: 'oc_pay', name: '支付组', addedAt: 1 }] } : { kind: 'applied', revision: 7 });
   const directory = vi.fn(async (request: { path: string }) => ({ kind: 'folderChosen', folder: { token, displayPath: request.path } }));
   const h = harness({ snapshot: one(), run, directory });
-  await runGroupBind('oc_pay', { folder: 'pay' }, h.io(), h.daemon, host);
+  await runGroupBind('oc_pay', { folder: 'pay', conversation: 'multi' }, h.io(), h.daemon, host);
   expect(directory).toHaveBeenCalledWith({ type: 'choose', path: join(home, 'work', 'pay') });
   expect(run).toHaveBeenLastCalledWith({ type: 'bindGroup', agentId: 'cli_a', groupId: 'oc_pay', projectName: '支付组', folderToken: token, tool: 'codex', conversation: 'threads' });
-  expect(h.out()).toBe(`已绑定 支付组（oc_pay）→ ${join(home, 'work', 'pay')} · Codex · 按话题独立会话\nLinux 上 Codex 只能用完全访问，运行：vonvon settings set --group oc_pay permission.mode=full\n`);
-  await runGroupBind('oc_pay', { folder: '~/work/pay', name: '新名字', tool: 'claude' }, h.io(), h.daemon, host);
+  expect(h.out()).toBe(`已绑定 支付组（oc_pay）→ ${join(home, 'work', 'pay')} · Codex · 多会话（@ 我开新会话） · 免 @ 开\nLinux 上 Codex 只能用完全访问，运行：vonvon settings set --group oc_pay permission.mode=full\n`);
+  await runGroupBind('oc_pay', { folder: '~/work/pay', name: '新名字', tool: 'claude', conversation: 'single' }, h.io(), h.daemon, host);
   expect(directory).toHaveBeenLastCalledWith({ type: 'choose', path: join(home, 'work', 'pay') });
-  expect(run).toHaveBeenLastCalledWith(expect.objectContaining({ projectName: '新名字', tool: 'claude' }));
+  expect(run).toHaveBeenLastCalledWith(expect.objectContaining({ projectName: '新名字', tool: 'claude', conversation: 'shared' }));
+  expect(run.mock.lastCall?.[0]).not.toHaveProperty('response');
+  // The wire names still work, and --response overrides the mode's default.
+  await runGroupBind('oc_pay', { folder: 'pay', conversation: 'shared', response: 'all' }, h.io(), h.daemon, host);
+  expect(run).toHaveBeenLastCalledWith(expect.objectContaining({ conversation: 'shared', response: 'all' }));
 
   const offline = harness({});
-  await expect(runGroupBind('oc_pay', { folder: 'missing' }, offline.io(), offline.daemon, host)).rejects.toThrow(`文件夹不存在：${join(home, 'work', 'missing')}`);
-  await expect(runGroupBind('oc_pay', { folder: 'file' }, offline.io(), offline.daemon, host)).rejects.toThrow('不是文件夹：');
-  await expect(runGroupBind('chat_pay', { folder: 'pay' }, offline.io(), offline.daemon, host)).rejects.toThrow('群 id 应该以 oc_ 开头。');
+  // 3.4: the command line must name the 会话方式; nothing is picked for the user.
+  await expect(runGroupBind('oc_pay', { folder: 'pay' }, offline.io(), offline.daemon, host)).rejects.toThrow('--conversation 必须选一项：multi（@ 我开新会话）或 single（整群一条会话）。');
+  await expect(runGroupBind('oc_pay', { folder: 'pay', conversation: 'smart' }, offline.io(), offline.daemon, host)).rejects.toThrow('--conversation 必须选一项');
+  await expect(runGroupBind('oc_pay', { folder: 'pay', conversation: 'toString' }, offline.io(), offline.daemon, host)).rejects.toThrow('--conversation 必须选一项');
+  await expect(runGroupBind('oc_pay', { folder: 'pay', conversation: 'multi', response: 'yes' }, offline.io(), offline.daemon, host)).rejects.toThrow('--response 只能是 mention');
+  await expect(runGroupBind('oc_pay', { folder: 'missing', conversation: 'multi' }, offline.io(), offline.daemon, host)).rejects.toThrow(`文件夹不存在：${join(home, 'work', 'missing')}`);
+  await expect(runGroupBind('oc_pay', { folder: 'file', conversation: 'multi' }, offline.io(), offline.daemon, host)).rejects.toThrow('不是文件夹：');
+  await expect(runGroupBind('chat_pay', { folder: 'pay', conversation: 'multi' }, offline.io(), offline.daemon, host)).rejects.toThrow('群 id 应该以 oc_ 开头。');
   expect(offline.connect).not.toHaveBeenCalled();
 
   const hung = harness({ snapshot: one(), directory, run: (command: { type: string }) => command.type === 'bindGroup' ? new Promise(() => {}) : run(command) });
-  await expect(runGroupBind('oc_pay', { folder: 'pay' }, hung.io(), hung.daemon, host)).rejects.toThrow('绑定可能已经完成，运行 vonvon group list 查看。');
+  await expect(runGroupBind('oc_pay', { folder: 'pay', conversation: 'multi' }, hung.io(), hung.daemon, host)).rejects.toThrow('绑定可能已经完成，运行 vonvon group list 查看。');
   expect(hung.close).toHaveBeenCalledTimes(1);
 });
 
@@ -344,7 +366,7 @@ it('settings get prints each section, gives the view as JSON, and lists a group\
   expect(Object.keys(JSON.parse(h.out()).view.sections)).toEqual(['cards', 'comments']);
   h.clear(); await runSettingsGet(undefined, { group: 'pay' }, h.io(), h.daemon);
   const out = h.out();
-  expect(out).toContain('群 pay（oc_pay）· Codex · 按话题独立会话 · /home/u/pay\n[permission]（只读：请先启动此 Agent，再编辑设置）\n  mode = qa\n  Linux 上只能选完全访问。\n');
+  expect(out).toContain('群 pay（oc_pay）· Codex · 多会话（@ 我开新会话） · /home/u/pay\n[permission]（只读：请先启动此 Agent，再编辑设置）\n  mode = qa\n  Linux 上只能选完全访问。\n');
   expect(out).toContain('会话（最近 2 个，共 2 个；看单个会话：vonvon settings get --session <id>）');
   expect(out.indexOf('omt_new')).toBeLessThan(out.indexOf('omt_old'));
   expect(out).toContain(`gpt-5.5  ${'修'.repeat(40)}…\n`);

@@ -2,7 +2,7 @@ import {useDirectoryPicker} from '../directory-picker';
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button, InlineNotice } from "../reference/components/ui";
 import { SettingsGroup, SettingsRow } from "../reference/components/system-settings";
-import type { AgentId, FolderChoice, GroupId } from "@vonvon/protocol";
+import { conversationCopy, type AgentId, type FolderChoice, type GroupId } from "@vonvon/protocol";
 import type { CollaborationClient, CollaborationReply, ProjectRecord } from "@vonvon/protocol";
 import "../settings/settings.css";
 import {useShellCapabilities} from '../client-context';
@@ -170,7 +170,7 @@ export function ProjectPanel({ scope, request, onChanged, children }: Props) {
       {project && <>
         <SettingsRow title="飞书群" value={project.name} trailing={<Button size="sm" onClick={() => void openExternalUrl(groupUrl(scope.groupId), 'group', shell).catch((failure: unknown) => setError(failure instanceof Error ? failure.message : "无法打开飞书群。"))}>在飞书打开</Button>} />
         <SettingsRow title="工作目录" description={folder?.displayPath ?? project.cwd} trailing={<Button size="sm" disabled={saving} onClick={() => void pickDirectory().then((choice) => { if (choice) setFolder(choice); }).catch((failure: unknown) => setError(failure instanceof Error ? failure.message : "目录选择失败。"))}>更换目录</Button>} />
-        <SettingsRow title="会话方式" trailing={<select aria-label="项目会话方式" value={conversation} disabled={saving} onChange={(event) => setConversation(event.target.value === "shared" ? "shared" : "threads")}><option value="threads">每个话题独立会话</option><option value="shared">整群共享会话</option></select>} />
+        <SettingsRow title="会话方式" description={conversation !== (project.kind === "multi" ? "threads" : "shared") ? "切换会话方式不改免 @，需要时在本页的「不 @ 也能发起任务」里改。" : conversationCopy[conversation].subtitle} trailing={<select aria-label="项目会话方式" value={conversation} disabled={saving} onChange={(event) => setConversation(event.target.value === "shared" ? "shared" : "threads")}><option value="threads">{conversationCopy.threads.title}</option><option value="shared">{conversationCopy.shared.title}</option></select>} />
         <SettingsRow title="项目状态" trailing={<select aria-label="项目状态" value={enabled ? "enabled" : "disabled"} disabled={saving} onChange={(event) => setEnabled(event.target.value === "enabled")}><option value="enabled">启用</option><option value="disabled">停用</option></select>} />
         <div className="settings-edit-actions"><Button size="sm" disabled={!changed || saving} onClick={() => { setConversation(project.kind === "multi" ? "threads" : "shared"); setEnabled(project.enabled); setFolder(undefined); }}>放弃修改</Button><Button size="sm" variant="primary" loading={saving} disabled={!changed} onClick={() => void saveDraft()}>保存项目</Button></div>
       </>}

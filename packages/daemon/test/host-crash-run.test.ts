@@ -58,7 +58,8 @@ it('a failure while stopping is a clean end; three unrequested failures pause th
   expect(vi.mocked(runRun).mock.calls.every(call => call[1]?.paused === undefined)).toBe(true);
   vi.mocked(runRun).mockReset().mockResolvedValue();
   await start();
-  expect(vi.mocked(runRun).mock.calls[0]?.[1]).toMatchObject({ paused: true });
+  // The bot children's records go under this run and chain (s18a).
+  expect(vi.mocked(runRun).mock.calls[0]?.[1]).toMatchObject({ paused: true, crash: { runId: expect.any(String), chainId: listCrashRecords(fixture.root)[0]?.chainId, pause: { crashes: 3 } } });
 });
 
 it('a paused service-managed run that cannot start exits 0 and stays paused', async () => {

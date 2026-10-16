@@ -5,12 +5,16 @@ import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir, uptime } from 'node:os';
 import { join } from 'node:path';
+import { CRASH_KINDS, type CrashEntry } from '@vonvon/protocol';
 import { z } from 'zod';
 
 export const CRASH_WINDOW_MS = 600_000;
 export const CRASH_PAUSE_COUNT = 3;
 /** EX_SOFTWARE: restarted by `Restart=on-failure` and `KeepAlive{SuccessfulExit=false}`, told apart from 1 and 75. */
 export const CRASH_EXIT_CODE = 70;
+/** A supervised bot child that finds its bot's lock still held by the previous child, which is draining after its host
+ * died (s18 D2): not a crash, the supervisor retries with backoff. */
+export const BOT_LOCK_BUSY_EXIT = 75;
 export const RESUME_MAX_AGE_MS = 120_000;
 export const CRASH_SHOWN_MS = 24 * 60 * 60_000;
 const KEEP_PER_SCOPE = 50;
@@ -25,12 +29,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const iso = z.string().datetime();
 /** An uncaught exception, an unhandled rejection, a failure of `daemon run` that no stop asked for, or a forced end
- * (kill -9, out of memory, an abort) found by the next start. s18 moves the kinds and texts into the protocol. */
-const crashKindSchema = z.enum(['exception', 'rejection', 'fatal', 'forced']);
-export type CrashKind = z.infer<typeof crashKindSchema>;
-export const CRASH_KIND_TEXT: Record<CrashKind, string> = {
-  exception: '程序出错', rejection: '程序出错（未处理的异步错误）', fatal: '出错退出', forced: '被系统强制结束',
-};
+ * (kill -9, out of memory, an abort, a signal the supervisor saw). The kinds and texts live in the protocol (s18a). */
+const crashKindSchema = z.enum(CRASH_KINDS);
 export const crashRecordSchema = z.object({
   v: z.literal(1), at: iso, sysUptimeMs: z.number().finite().nonnegative(), bootId: z.string().max(64).optional(),
   kind: crashKindSchema, scope: z.enum(['host', 'bot']), appId: z.string().regex(APP_ID).optional(),
@@ -120,12 +120,14 @@ export function crashErrorName(value: unknown): string | undefined {
   return (typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,40}$/.test(code) ? `${value.name}:${code}` : value.name).slice(0, 60);
 }
 
+/** A write cut short (a full disk) or a failed rename leaves no temp file behind. */
 function writeAtomicSync(dir: string, name: string, text: string): void {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const tmp = join(dir, `.${name}.${randomBytes(4).toString('hex')}.tmp`);
-  writeFileSync(tmp, text, { flag: 'wx', mode: 0o600 });
-  try { renameSync(tmp, join(dir, name)); }
-  catch (error) { try { unlinkSync(tmp); } catch { /* the rename error is the one to report */ } throw error; }
+  try {
+    writeFileSync(tmp, text, { flag: 'wx', mode: 0o600 });
+    renameSync(tmp, join(dir, name));
+  } catch (error) { try { unlinkSync(tmp); } catch { /* the write or rename error is the one to report */ } throw error; }
 }
 
 export function writeCrashRecordSync(root: string, record: CrashRecord): string {
@@ -136,7 +138,7 @@ export function writeCrashRecordSync(root: string, record: CrashRecord): string 
   return name;
 }
 
-type Named = { name: string; key: string; stampMs: number };
+type Named = { name: string; key: string; stampMs: number; pid: number };
 function recordNames(root: string): Named[] {
   let entries: string[];
   try { entries = readdirSync(crashDir(root)); }
@@ -147,7 +149,7 @@ function recordNames(root: string): Named[] {
     const stamp = match?.[2];
     if (!match || !stamp) continue;
     const stampMs = Date.UTC(+stamp.slice(0, 4), +stamp.slice(4, 6) - 1, +stamp.slice(6, 8), +stamp.slice(9, 11), +stamp.slice(11, 13), +stamp.slice(13, 15), +stamp.slice(15, 18));
-    named.push({ name, key: match[1] ?? '', stampMs });
+    named.push({ name, key: match[1] ?? '', stampMs, pid: Number(match[3]) });
   }
   return named.sort((a, b) => b.stampMs - a.stampMs || (a.name < b.name ? 1 : -1));
 }
@@ -194,13 +196,66 @@ export function pruneCrashRecords(root: string, options: { now: number; scope?: 
   return removed;
 }
 
-/** Host crashes of one chain while running (not during a requested stop or restart) in the last 10 minutes of uptime. */
-export function countInWindow(records: readonly CrashRecord[], options: { chainId: string; nowUptimeMs: number }): number {
+/** File names only: a record of this scope key and PID written since the process started (a PID reused within the
+ * 30 days kept has older stamps). Throws on an unreadable directory. */
+export function hasCrashRecordFor(root: string, key: string, pid: number, startedAt: number): boolean {
+  return recordNames(root).some(entry => entry.key === key && entry.pid === pid && entry.stampMs >= startedAt - 5000);
+}
+
+/** Crashes of one chain while running (not during a requested stop or restart) in the last 10 minutes of uptime: the
+ * host's, or with `appId` that bot's since its last 恢复运行 (`sinceUptimeMs`). */
+export function countInWindow(records: readonly CrashRecord[], options: { chainId: string; nowUptimeMs: number; appId?: string; sinceUptimeMs?: number }): number {
   return records.filter(record => {
     const age = options.nowUptimeMs - record.sysUptimeMs;
-    return record.scope === 'host' && record.chainId === options.chainId && (record.during ?? 'run') === 'run'
-      && age >= -5000 && age <= CRASH_WINDOW_MS;
+    return (options.appId ? record.scope === 'bot' && record.appId === options.appId : record.scope === 'host')
+      && record.chainId === options.chainId && (record.during ?? 'run') === 'run' && age >= -5000 && age <= CRASH_WINDOW_MS
+      && (options.sinceUptimeMs === undefined || record.sysUptimeMs > options.sinceUptimeMs);
   }).length;
+}
+
+/** The snapshot's view of a record: no run, chain, PID, version or boot id. */
+export const crashEntry = (record: CrashRecord): CrashEntry => ({
+  at: Date.parse(record.at), kind: record.kind, ...(record.appId ? { appId: record.appId } : {}),
+  ...(record.uptimeMs !== undefined ? { uptimeMs: record.uptimeMs } : {}), ...(record.paused ? { paused: true } : {}), reason: record.reason,
+});
+
+/** The records for every snapshot rebuild (every 5 s): one stat of `crash/`, a listing only when its mtime moved or 30 s
+ * passed (a coarse file system clock can hide a write), then the last 24 hours, newest 20. `invalidate()` lists again
+ * at the next read: the supervisor calls it when a child exits and after each record it writes. */
+export type CrashRecordCache = ((now: number) => CrashEntry[]) & { invalidate(): void };
+export function createCrashRecordCache(root: string, seams: { stat?: (dir: string) => number; list?: () => CrashRecord[] } = {}): CrashRecordCache {
+  const stat = seams.stat ?? ((dir: string) => statSync(dir).mtimeMs);
+  const list = seams.list ?? (() => listCrashRecords(root, { limit: 50 }));
+  let cached: { mtimeMs: number; readAt: number; records: CrashRecord[] } | undefined;
+  const read = (now: number): CrashEntry[] => {
+    try {
+      const mtimeMs = stat(crashDir(root));
+      if (!cached || cached.mtimeMs !== mtimeMs || now - cached.readAt >= 30_000) cached = { mtimeMs, readAt: now, records: list() };
+    } catch { cached = undefined; }
+    return (cached?.records ?? []).filter(record => now - Date.parse(record.at) <= CRASH_SHOWN_MS).slice(0, 20).map(crashEntry);
+  };
+  return Object.assign(read, { invalidate: () => { cached = undefined; } });
+}
+
+/** `crash/bot-pauses.json`: the bots paused in one chain and when each last resumed. Only the host writes it. */
+const botPauseSchema = z.object({ pausedAt: iso.optional(), pauseCrashes: z.number().int().positive().optional(), resumedUptimeMs: z.number().int().nonnegative().optional() }).strict();
+export type BotPauseState = z.infer<typeof botPauseSchema>;
+const botPausesSchema = z.object({ v: z.literal(1), chainId: z.string().uuid(), bots: z.record(z.string().regex(APP_ID), botPauseSchema) }).strict();
+const botPausesPath = (root: string): string => join(crashDir(root), 'bot-pauses.json');
+/** Empty for another chain, a missing or a damaged file; `onCorrupt` hears of a file that is there but not JSON or not
+ * of this shape, for the supervisor's log (no logger here). */
+export function readBotPauses(root: string, chainId: string, onCorrupt?: () => void): Record<string, BotPauseState> {
+  let raw: string;
+  try { raw = readFileSync(botPausesPath(root), 'utf8'); } catch { return {}; }
+  try {
+    const parsed = botPausesSchema.safeParse(JSON.parse(raw));
+    if (parsed.success) return parsed.data.chainId === chainId ? parsed.data.bots : {};
+  } catch { /* not JSON */ }
+  onCorrupt?.();
+  return {};
+}
+export function writeBotPausesSync(root: string, chainId: string, bots: Record<string, BotPauseState>): void {
+  writeAtomicSync(crashDir(root), 'bot-pauses.json', JSON.stringify(botPausesSchema.parse({ v: 1, chainId, bots })));
 }
 
 const markerPath = (root: string): string => join(crashDir(root), 'run.json');
@@ -252,16 +307,23 @@ export function removeResumeRequest(root: string, at: number): void {
   } catch { /* already consumed */ }
 }
 
-export type CrashSummary = { paused?: { since: string; crashes: number; running: boolean }; crashes: CrashRecord[] };
+export type CrashSummary = {
+  paused?: { since: string; crashes: number; running: boolean };
+  pausedBots: Array<{ appId: string; since: string; crashes: number }>;
+  crashes: CrashRecord[];
+};
 /** For `vonvon daemon status`: read only, never creates the directory, never asks a service manager. */
 export function readCrashSummary(root: string, options: { running: boolean; ownerPid?: number; now: number; clock?: Clock }): CrashSummary {
   let marker: RunMarker | null = null;
   try { const read = readRunMarker(root); marker = read === 'corrupt' ? null : read; } catch { /* unreadable: no pause shown */ }
-  // Another live daemon's paused marker is not this one's; with nothing running it is the paused run that ended, if in this boot.
-  const paused = marker?.state === 'paused' && (options.running ? marker.pid === options.ownerPid : !startedBeforeThisBoot(marker, options.clock ?? systemClock))
-    ? { since: marker.pausedAt ?? marker.startedAt, crashes: marker.pauseCrashes ?? CRASH_PAUSE_COUNT, running: options.running } : undefined;
+  // Another live daemon's marker is not this one's; with nothing running it is the run that ended, if in this boot.
+  const live = marker && (options.running ? marker.pid === options.ownerPid : !startedBeforeThisBoot(marker, options.clock ?? systemClock)) ? marker : null;
+  const paused = live?.state === 'paused'
+    ? { since: live.pausedAt ?? live.startedAt, crashes: live.pauseCrashes ?? CRASH_PAUSE_COUNT, running: options.running } : undefined;
+  const pausedBots = live ? Object.entries(readBotPauses(root, live.chainId)).flatMap(([appId, bot]) =>
+    bot.pausedAt ? [{ appId, since: bot.pausedAt, crashes: bot.pauseCrashes ?? CRASH_PAUSE_COUNT }] : []) : [];
   let crashes: CrashRecord[] = [];
   try { crashes = listCrashRecords(root, { limit: 20 }).filter(record => options.now - Date.parse(record.at) <= CRASH_SHOWN_MS).slice(0, 10); }
   catch { /* unreadable directory */ }
-  return { ...(paused ? { paused } : {}), crashes };
+  return { ...(paused ? { paused } : {}), pausedBots, crashes };
 }
