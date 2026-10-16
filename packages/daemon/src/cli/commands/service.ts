@@ -1,8 +1,7 @@
 import { stat } from 'node:fs/promises';
-import type { Server } from 'node:net';
 import { userInfo } from 'node:os';
 import { createInterface } from 'node:readline';
-import { acquireMutex, closeMutex, DataAccessError } from '../../config/data-access';
+import { acquireMutex, closeMutex, DataAccessError, type Mutex } from '../../config/data-access';
 import { paths } from '../../config/paths';
 import { readRunningPidLock, type PidLockInfo } from '../../server/pid-lock';
 import { classifyServiceFailure, serviceActionPath, writeServiceActionRecord, type ServiceActionRecord } from '../../service/action-report';
@@ -56,7 +55,7 @@ export async function runServiceCommand(action: 'install' | 'uninstall', adapter
     ...overrides,
   };
   // A fresh machine has no data root yet: install creates it, and nothing else can be running there.
-  let mutex: Server | null = null;
+  let mutex: Mutex | null = null;
   if (await exists(d.root)) {
     try { mutex = await acquireMutex(d.root, 'service', 0); }
     catch (error) {

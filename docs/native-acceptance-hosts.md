@@ -101,7 +101,9 @@ Comparison rules.
 
 ### Run listeners
 
-The product holds three mutexes for each data root, with the roles `host`, `admission`, and `keystore`. Each mutex is a TCP listener on `127.0.0.1`. Its port is `20000 + (the first four bytes of sha256("vonvon-bot-v2:<role>:<realpath of VONVON_HOME>"), read as a big-endian UInt32) mod 30000`, as `config/data-access.ts` computes it. On Windows the mutexes are named pipes.
+The product holds four mutexes for each data root, with the roles `host`, `admission`, `keystore`, and `service` (s08). Before s20c each mutex was a TCP listener on `127.0.0.1`. Its port, the role port, is `20000 + (the first four bytes of sha256("vonvon-bot-v2:<role>:<realpath of VONVON_HOME>"), read as a big-endian UInt32) mod 30000`, as `config/data-access.ts` computes it. On Windows the mutexes are named pipes.
+
+Since s20c the mutex itself is no longer the port. On Linux it is the abstract Unix socket `@vonvon-bot-mutex-v3:<role>:<sha256 hex of the realpath>`, listed by `ss -lx`. On macOS it is an `O_EXLOCK` lock on `<data root>/.locks/<role>.lock`. Until the transition from pre-s20c builds is removed (`docs/v1-plan.md`, s20c), the holder also listens on the role port above whenever that port is free, so the port rules below still apply to it. A role port that is missing because another socket had it is not a failure.
 
 Production port set Π. Before each run, root reads the sources below read-only and records, for each source, either the ports it found or `unresolved`.
 
@@ -114,7 +116,7 @@ Production port set Π. Before each run, root reads the sources below read-only 
 
 If any source is `unresolved`, the Tencent host is not eligible for the run, and the box runs on the fallback VM. Π covers configuration as it was at preflight. A change made to production during the run is detected under the comparison rules, and nothing prevents it.
 
-Declared homes. Before preflight, the run ledger names exactly three data roots: `H_run`, which is the run's `VONVON_HOME`; `H_neg`, used in *Packaged build* step 7; and `H_smoke`, used in step 6. For each one, the test user creates the directory with `mkdir`, and `realpath` must print the same path. Root then computes the three role ports of each home. The resulting nine ports must be pairwise distinct, must all differ from `P`, and must all lie outside Π. If a home fails this check, the run picks a new name for it. `P` must lie outside `20000-49999` and outside Π. Every `vonvon service install` in the run passes `--port <P>`.
+Declared homes. Before preflight, the run ledger names exactly three data roots: `H_run`, which is the run's `VONVON_HOME`; `H_neg`, used in *Packaged build* step 7; and `H_smoke`, used in step 6. For each one, the test user creates the directory with `mkdir`, and `realpath` must print the same path. Root then computes the four role ports of each home. Until the transition is removed, the resulting twelve ports must be pairwise distinct, must all differ from `P`, and must all lie outside Π. If a home fails this check, the run picks a new name for it. `P` must lie outside `20000-49999` and outside Π. Every `vonvon service install` in the run passes `--port <P>`.
 
 R records are taken only at quiescent points: between steps, after every command that the step launched has exited. At a quiescent point, a listener that is not in B0 is allowed only when it is one of the following.
 
@@ -122,7 +124,7 @@ R records are taken only at quiescent points: between steps, after every command
 2. The port of (`H_run`, host), held by the daemon of `H_run`. Its `/proc/<pid>/cmdline` is the installed `bin/vonvon.mjs` running `daemon run`. When `H_run/daemon.pid` exists, it names this pid. If `P` is present in the record and its owner's `VONVON_HOME` is `H_run`, then `P` also has this pid.
 3. The port of (`H_run`, keystore), held by that daemon or by one of its Bot children, during a step that registers, refreshes, or onboards a bot, or removes a secret. A Bot child runs `daemon run --bot` and has that daemon's pid as its `PPid`.
 
-The `admission` role of any home, and every role of `H_neg` and `H_smoke`, are never allowed at a quiescent point.
+The `admission` and `service` roles of any home, and every role of `H_neg` and `H_smoke`, are never allowed at a quiescent point.
 
 The proof for a listener has four ordered parts:
 
@@ -305,7 +307,7 @@ Writes that preparation makes as root, and nothing else: the user and its home, 
   ```
 
   Pass when every path begins with `/user.slice/user-<U>.slice/`. While a daemon, bridge, provider, build, or pack runs, its pid must be in the list.
-- The daemon listens only on `127.0.0.1:<P>` and on the mutex ports that *Run listeners* allows. `P` lies outside Π and outside `20000-49999`.
+- The daemon listens only on `127.0.0.1:<P>` and, until the transition is removed, on the role ports that *Run listeners* allows. `P` lies outside Π and outside `20000-49999`.
 - The run writes only under `/home/vonvon-accept`. SSH sessions export `TMPDIR` under the home before any setup work. Manager-launched processes get it from Sequence step 9. A process that clears its environment can still write to `/tmp`. The check is therefore inventory I, and `TMPDIR` is not the check.
 - Node 22 is a user-local tarball from nodejs.org. It is pinned to the exact `22.x.y` that the Mac evidence manifest of the same head records, and its sha256 is checked against that release's `SHASUMS256.txt`. `/usr/bin/node` is never used or replaced.
 - No self-hosted GitHub runner is registered on the host. No workflow file references the host, and GitHub stores no credential for it.
@@ -440,7 +442,7 @@ The fresh B0 records each of the following, and every R, final B, and retirement
 - Identity tuple: `/etc/machine-id`, `/proc/sys/kernel/random/boot_id`, `readlink /proc/1/ns/mnt`, and F's OrbStack name and ID, read on the Mac. Any change stops the run, and no earlier record of F then qualifies anything.
 - The mount table, under *Mount table on F*. No row may be of type `virtiofs`, `9p`, `nfs*`, `cifs`, or `fuse*`. No target or source may lie under `/mnt/mac`, `/Users`, `/Volumes`, or `/private`.
 - F's OrbStack configuration, read only on the Mac: isolated and network-isolated true, 4 CPUs, 6G memory, 32G disk.
-- Mac listeners. Each R reads `lsof -nP -iTCP -sTCP:LISTEN` on the Mac with no port filter. `P` and the nine declared mutex ports must not appear. This detects a forwarded listener but does not prevent one. See G-fwd.
+- Mac listeners. Each R reads `lsof -nP -iTCP -sTCP:LISTEN` on the Mac with no port filter. `P` and the twelve declared role ports must not appear. This detects a forwarded listener but does not prevent one. See G-fwd.
 - Effective memory is the smaller of `MemTotal` and the machine's root-cgroup `memory.max` when that is a number. The `MemoryMax` bound and the start rule use it.
 - The Mac must have at least 40 GiB free at B0, and each R samples it. Below that, the run stops. The Mac's daily processes are only observed.
 
@@ -613,7 +615,7 @@ F is not eligible while any gate below is OPEN. A METHOD PASS closes none of the
 
 | Gate | State |
 | --- | --- |
-| G-fwd | OPEN. OrbStack documents that servers in a machine are reachable on the Mac's `localhost`. It does not say whether isolation disables that. The method therefore assumes F's `P` and the nine mutex ports may be forwarded. The gate closes only by one of two routes. The first is OrbStack documentation or a read-only configuration readback for F proving no forwarding. The second is a Mac port set Π_mac, built read-only and as complete as Π, that covers the Mac's listeners and the configured ports of the daily bridge and of every LaunchAgent and LaunchDaemon, with `P` and the nine ports outside it and no `unresolved` source. An operator preference does not close it. |
+| G-fwd | OPEN. OrbStack documents that servers in a machine are reachable on the Mac's `localhost`. It does not say whether isolation disables that. The method therefore assumes F's `P` and the twelve role ports may be forwarded. The gate closes only by one of two routes. The first is OrbStack documentation or a read-only configuration readback for F proving no forwarding. The second is a Mac port set Π_mac, built read-only and as complete as Π, that covers the Mac's listeners and the configured ports of the daily bridge and of every LaunchAgent and LaunchDaemon, with `P` and the twelve ports outside it and no `unresolved` source. An operator preference does not close it. |
 | G-mask | OPEN. F's own records must show that the masks leave the schedulers inactive and the timer list empty. |
 | G-noact | OPEN. That the `busctl` `Get` route loads and activates nothing on the installed v255 is a source claim. |
 | G-runtime-order | OPEN. The runtime-row position exemption relies on logind's mount lifecycle, which is source reasoning. |

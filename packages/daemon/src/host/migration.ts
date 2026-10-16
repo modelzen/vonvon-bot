@@ -13,6 +13,7 @@ export type HostMigration =
   | { kind: 'deferred'; message: string }
   | { kind: 'recovery-required'; message: string };
 
+/** Only tests call this. Like `inspectHost` it keys the admission mutex on the user HOME (macOS: `<HOME>/.locks/`). */
 export async function migrateHostDataOffline(home: string, runtime: BridgeRuntime): Promise<HostMigration> {
   let mutationStarted = false;
   try {
