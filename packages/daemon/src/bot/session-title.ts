@@ -6,10 +6,12 @@ export const SESSION_TITLE_SOURCE_MAX_CHARS = 2_000;
 /**
  * Exact one-line block produced by context-weave.weaveSender(). It is removed
  * ONLY when it is the leading block; a look-alike later in the user's message
- * is ordinary content and must survive.
+ * is ordinary content and must survive. The open_id part is lazy: it ends at
+ * the first "）]", the block's own end (after the late note when there is one),
+ * so a preview flattened to one line keeps a "）]" further on in the body.
  */
 const BRIDGE_SENDER_PREFIX =
-  /^\[\u672c\u6761\u6d88\u606f\u7684\u53d1\u4fe1\u4eba\uff1a[^\r\n]*\uff08open_id\uff1a[^\r\n]*\uff09\][ \t]*(?:\r?\n[ \t]*){0,2}/u;
+  /^\[\u672c\u6761\u6d88\u606f\u7684\u53d1\u4fe1\u4eba\uff1a[^\r\n]*\uff08open_id\uff1a[^\r\n]*?\uff09\][ \t]*(?:\r?\n[ \t]*){0,2}/u;
 
 /** Other prompt-only blocks produced by context-weave/media. Their payload is
  * context for the Agent, not the current user's title source. The expressions
