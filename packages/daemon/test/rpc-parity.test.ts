@@ -28,7 +28,7 @@ function inventory(folderToken: string) {
     ['GET voice', 'settings', { type: 'read', scope: agentScope }],
     ['POST voice', 'settings', { type: 'act', action: { kind: 'voice', botId: bot.appId, action: { action: 'disable' } } }],
     ['POST completion-reminder', 'settings', { type: 'save', edit: { scope: agentScope, section: 'completion', revision: 'old', patch: { mode: 'always' } } }],
-    ['POST permission', 'command', { type: 'setPermission', membershipId, administrator: 'write', member: 'qa', network: true }],
+    ['POST permission', 'command', { type: 'setPermission', membershipId, administrator: 'write', network: true }],
     ['POST no-mention', 'command', { type: 'setResponse', membershipId, response: 'all' }],
     ['POST backend', 'admin', { type: 'switchBackend', agentId: bot.appId, projectName: project.name, backend: 'claude-agent' }],
     ['PATCH bot', 'command', { type: 'setAgentEnabled', agentId: bot.appId, enabled: true }],

@@ -7,7 +7,7 @@ import { createSettingsOwner, type SettingsOwnerDeps } from '../src/admin/settin
 import { parseSettingsEdit, parseSettingsAction } from '../src/admin/settings-parse';
 import type { AgentSettingsView, ProjectSettingsView, SessionSettingsView } from '../src/admin/settings-types';
 import { addProject, getProjectByName, updateProject } from '../src/project/registry';
-import { getSession, upsertSession } from '../src/bot/session-store';
+import { getSession, RETIRED_KEY_TEXT, upsertSession } from '../src/bot/session-store';
 import { createAdminIpcCaller, createAdminIpcResponder } from '../src/admin/ipc';
 import type { AppConfig } from '../src/config/schema';
 import type { AgentBackend } from '../src/agent/types';
@@ -118,6 +118,17 @@ it('accepts hand-typed model ids for the project default and a topic, never for 
   const a = await owner.read(agent) as AgentSettingsView;
   expect((await owner.save({ scope: agent, section: 'comments', revision: a.sections.comments.revision, patch: { selection: custom } })).kind).toBe('rejected');
 });
+it('refuses a session key retired in s15c, to read or to save, before touching the record', async () => {
+  const retired = { kind: 'session' as const, botId, threadId: `${session.threadId}#admin` };
+  await upsertSession({ ...(await getSession(session.threadId))!, threadId: retired.threadId });
+  const mutateSession = vi.fn<NonNullable<SettingsOwnerDeps['mutateSession']>>();
+  const { owner } = await fixture({ mutateSession });
+  await expect(owner.read(retired)).rejects.toThrow(RETIRED_KEY_TEXT);
+  expect(await owner.save({ scope: retired, section: 'model', revision: 'r', patch: { selection: { kind: 'default' } } }))
+    .toEqual({ kind: 'rejected', fields: [{ field: 'settings', message: RETIRED_KEY_TEXT }] });
+  expect(mutateSession).not.toHaveBeenCalled();
+  expect((await owner.read(session)).scope).toEqual(session);
+});
 it('stale resume identity conflicts and cannot change the replacement session', async () => {
   const { owner } = await fixture(); const old = await owner.read(session) as SessionSettingsView;
   const rec = (await getSession(session.threadId))!; await upsertSession({ ...rec, sessionId: 'native-two' });
@@ -172,7 +183,7 @@ it('s20b: a full-only backend says why, refuses saving 只读 or 读写, and kee
   const { owner } = await fixture({ backendFor: () => ({ ...backend, fullAccessOnly: () => 'only full here' }) });
   let view = await owner.read(project) as ProjectSettingsView;
   expect(view.identity.fullOnly).toBe('only full here');
-  for (const patch of [{ mode: 'qa' }, { guestMode: 'write' }, { mode: 'full', guestMode: 'qa' }] as const) {
+  for (const patch of [{ mode: 'qa' }, { mode: 'write' }] as const) {
     const result = await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch });
     expect(result).toEqual({ kind: 'rejected', fields: [{ field: 'settings', message: 'only full here' }] });
   }

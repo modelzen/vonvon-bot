@@ -6,8 +6,8 @@ import { parseModelId } from '../agent/model-id';
 import { getCompletionReminderConfig, getMaxConcurrentRuns, getModelDisplay, getPendingPolicy, getRunIdleTimeoutMs, getSessionTitleConfig, getSessionTitleEfforts, getShowToolCalls, resolveOwner, type AppConfig, type AppPreferences } from '../config/schema';
 import { paths } from '../config/paths';
 import { resolveProjectsRootDir } from '../project/lifecycle';
-import { defaultNoMention, effectiveGuestMode, effectiveMode, getProjectByName, listProjects, mutateProject, type Project } from '../project/registry';
-import { getSession, mutateSession, type SessionRecord } from '../bot/session-store';
+import { defaultNoMention, effectiveMode, getProjectByName, listProjects, mutateProject, type Project } from '../project/registry';
+import { getSession, isRetiredKey, mutateSession, RETIRED_KEY_TEXT, type SessionRecord } from '../bot/session-store';
 import { DEFAULT_COMMENT_INSTRUCTIONS, saveCommentInstructions, syncAllCommentInstructions } from '../bot/comments';
 import { voiceView } from '../voice/view';
 import type { VoiceAction } from '../voice/types';
@@ -134,7 +134,7 @@ function projectData(p: Project): T.ProjectSections {
   return {
     permission: {
       mode: effectiveMode(p),
-      guestMode: effectiveGuestMode(p),
+      guestMode: effectiveMode(p),
       network: p.network ?? false
     },
     response: {
@@ -146,7 +146,7 @@ function projectData(p: Project): T.ProjectSections {
   };
 }
 function projectRaw(p: Project, section: keyof T.ProjectSections): unknown {
-  const data = section === 'permission' ? [p.mode, p.guestMode, p.network] : section === 'response' ? p.noMention : [p.defaultModel, p.defaultEffort, p.defaultModelCustom === true];
+  const data = section === 'permission' ? [p.mode, p.network] : section === 'response' ? p.noMention : [p.defaultModel, p.defaultEffort, p.defaultModelCustom === true];
   return [p.name, p.chatId, p.cwd, p.backend, data];
 }
 function sessionRaw(s: SessionRecord): unknown {
@@ -359,6 +359,8 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       };
     }
     if (scope.kind === 'session') {
+      if (isRetiredKey(scope.threadId))
+        throw new SettingsInputError(RETIRED_KEY_TEXT);
       const s = await readSession(scope.threadId);
       if (!s)
         throw new SettingsInputError('会话不存在或已被删除');
@@ -484,11 +486,11 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
               };
               const backend = deps.backendFor(p.backend ?? DEFAULT_BACKEND_ID);
               const supported = backend.supportedModes;
-              if (supported && (!supported.includes(effectiveMode(next)) || !supported.includes(effectiveGuestMode(next))))
+              if (supported && !supported.includes(effectiveMode(next)))
                 throw new SettingsInputError('后端不支持此权限档位');
-              // Only the tiers this save sets: a stored 只读 stays, and network can still change.
+              // Only the tier this save sets: a stored 只读 stays, and network can still change.
               const fullOnly = backend.fullAccessOnly?.();
-              if (fullOnly && [e.patch.mode, e.patch.guestMode].some(mode => mode !== undefined && mode !== 'full'))
+              if (fullOnly && e.patch.mode !== undefined && e.patch.mode !== 'full')
                 throw new SettingsInputError(fullOnly);
               Object.assign(p, e.patch);
               break;
@@ -526,6 +528,8 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         const e = edit as Extract<T.BotSettingsEdit, {
           scope: T.SessionSettingsView['scope'];
         }>;
+        if (isRetiredKey(e.scope.threadId))
+          throw new SettingsInputError(RETIRED_KEY_TEXT);
         await changeSession(e.scope.threadId, async (s) => {
           check([botId, sessionRaw(s)], e.revision);
           if (!e.patch.selection)

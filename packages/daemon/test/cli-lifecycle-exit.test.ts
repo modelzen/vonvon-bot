@@ -7,6 +7,8 @@ vi.mock('node:fs/promises', () => ({ mkdir: vi.fn() }));
 vi.mock('../src/config/data-access', () => ({ enterDataAccess: async () => ({ release: fixture.release }) }));
 vi.mock('../src/host/bootstrap', () => ({ runHostRuntime: fixture.run }));
 vi.mock('../src/host/lifecycle', () => ({ observeShutdown: () => ({ dispose() {} }) }));
+// The real handlers would land on the vitest worker's process.
+vi.mock('../src/host/crash-guard', () => ({ installCrashHandlers: vi.fn() }));
 
 beforeEach(() => {
   vi.resetModules();
@@ -23,7 +25,8 @@ it.each([
   { label: 'completed restart', code: 75, failure: false, expected: 75 },
   { label: 'completed stop', code: 0, failure: false, expected: 0 },
   { label: 'stop with reported cleanup error', code: 0, failure: true, expected: 0 },
-  { label: 'restart with late cleanup error', code: 75, failure: true, expected: 0 },
+  // s17: a cleanup failure no longer cancels a requested restart; the manager starts the daemon again.
+  { label: 'restart with late cleanup error', code: 75, failure: true, expected: 75 },
   { label: 'startup failure', code: undefined, failure: true, expected: 1 },
 ])('$label exits $expected', async ({ code, failure, expected }) => {
   fixture.run.mockImplementation(async () => {
@@ -35,11 +38,11 @@ it.each([
   if (failure) expect(console.error).toHaveBeenCalledWith('reported failure');
 });
 
-it('cancels a successful restart code when the CLI lease release fails', async () => {
+it('keeps a successful restart code when the CLI lease release fails', async () => {
   fixture.run.mockImplementation(async () => { process.exitCode = 75; });
   fixture.release.mockImplementation(() => { throw new Error('lease release failed'); });
   await import('../src/cli/index');
-  await vi.waitFor(() => expect(fixture.exit).toHaveBeenCalledExactlyOnceWith(0));
+  await vi.waitFor(() => expect(fixture.exit).toHaveBeenCalledExactlyOnceWith(75));
   expect(console.error).toHaveBeenCalledWith('lease release failed');
 });
 

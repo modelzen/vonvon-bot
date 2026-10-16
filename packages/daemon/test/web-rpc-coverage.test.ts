@@ -163,7 +163,7 @@ else process.exit(0);
         { type: 'registerAgent' }, { type: 'refreshAgentCredentials', agentId }, { type: 'installCodex' }, { type: 'startCodexLogin' }, { type: 'restartHost' },
         { type: 'listJoinedGroups', agentId }, { type: 'bindGroup', agentId, groupId, projectName, folderToken, tool: 'codex', conversation: 'threads' },
         { type: 'setResponse', membershipId: JSON.stringify([agentId, groupId]), response: 'all' },
-        { type: 'setPermission', membershipId: JSON.stringify([agentId, groupId]), administrator: 'write', member: 'qa', network: true },
+        { type: 'setPermission', membershipId: JSON.stringify([agentId, groupId]), administrator: 'write', network: true },
         { type: 'setAgentEnabled', agentId, enabled: true }, { type: 'deleteAgent', agentId }, { type: 'cancelJob', jobId: operationId },
         { type: 'openJobAuthorization', jobId: operationId }, { type: 'copyJobAuthorization', jobId: operationId },
       ],

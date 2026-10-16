@@ -1,5 +1,5 @@
 import {
-  agentSectionSchemas, projectSectionSchemas, sessionSectionSchemas, sessionThreadIdSchema,
+  agentSectionSchemas, projectEditableSchemas, sessionSectionSchemas, sessionThreadIdSchema,
   type Agent, type Membership, type ProjectSettingsView, type SessionSettingsView, type SettingsScope, type SettingsView,
 } from '@vonvon/protocol';
 import {
@@ -14,7 +14,7 @@ type SectionView = { stored: unknown; effective: unknown; revision: string; acce
 export type Kind = 'agent' | 'project' | 'session';
 export type Target = { bot?: string; group?: string; session?: string };
 
-const TABLES: Record<Kind, Record<string, SectionSchema>> = { agent: agentSectionSchemas, project: projectSectionSchemas, session: sessionSectionSchemas };
+const TABLES: Record<Kind, Record<string, SectionSchema>> = { agent: agentSectionSchemas, project: projectEditableSchemas, session: sessionSectionSchemas };
 const sectionNames = (kind: Kind): string[] => Object.keys(TABLES[kind]);
 const FORMAT = '写成 节.项=值，例如 permission.mode=full';
 // A top-level text field already takes 2024 or true as typed (parseAssignments), so only text inside JSON lands here.
@@ -73,6 +73,7 @@ export function parseAssignments(kind: Kind, assignments: readonly string[]): { 
   if (section === undefined) throw new Error(FORMAT);
   if (section === 'cliBridge') throw new Error('咖啡一下第一版已拿掉，不能改。');
   if (section === 'compact' && kind === 'project') throw new Error('自动压缩现在一直开着，不能关了。');
+  if (section === 'permission' && kind === 'project' && fields.has('guestMode')) throw new Error('「普通成员权限」去掉了：一个群只有一个权限档，群里谁说话都用它。改 permission.mode。');
   const schema = Object.hasOwn(TABLES[kind], section) ? TABLES[kind][section] : undefined;
   if (!schema) throw new Error(`没有 ${section} 这一节。可以改的有：${sectionNames(kind).join('、')}`);
   // fromEntries keeps a key like __proto__ as data, so strict() reports it.
@@ -120,7 +121,8 @@ function cut(text: string, max = 40): string {
 }
 
 export async function runSettingsGet(section: string | undefined, target: Target, io: Io, daemon: Daemon = withDaemon): Promise<void> {
-  const names = sectionNames(scopeKind(target));
+  const kind = scopeKind(target);
+  const names = sectionNames(kind);
   if (section !== undefined && !names.includes(section)) throw new Error(`没有 ${section} 这一节。可以看的有：${names.join('、')}`);
   const { agent, membership, view, sessions } = await daemon(async call => {
     const { agent, membership, scope } = await resolveScope(call, target);
@@ -138,7 +140,10 @@ export async function runSettingsGet(section: string | undefined, target: Target
     if (!value) continue;
     human.push(`[${name}]${value.access.kind === 'readonly' ? `（只读：${value.access.message}）` : ''}`);
     const effective = (value.effective ?? {}) as Record<string, unknown>;
+    // Only what `set` takes: the view's deprecated permission.guestMode (s15c) is left out.
+    const settable = TABLES[kind][name]!.shape;
     for (const [key, stored] of Object.entries((value.stored ?? {}) as Record<string, unknown>)) {
+      if (!Object.hasOwn(settable, key)) continue;
       const live = effective[key];
       human.push(`  ${key} = ${show(stored)}${JSON.stringify(live) === JSON.stringify(stored) ? '' : `（生效：${show(live)}）`}`);
     }

@@ -62,6 +62,7 @@ export interface AgentSections {
 export interface ProjectSections {
   permission: {
     mode: PermissionMode;
+    /** @deprecated since s15c always equal to `mode`, never saved; kept so clients from before s15c still parse the view */
     guestMode: PermissionMode;
     network: boolean;
   };
@@ -177,7 +178,9 @@ type SectionEdit<S, M> = {
     patch: Partial<M[K]>;
   };
 }[keyof M];
-export type BotSettingsEdit = SectionEdit<AgentSettingsView['scope'], AgentSections> | SectionEdit<ProjectSettingsView['scope'], ProjectSections> | SectionEdit<SessionSettingsView['scope'], SessionSections>;
+/** What a save may set in a group's settings: the view's `permission.guestMode` is output only. */
+type ProjectEdits = Omit<ProjectSections, 'permission'> & { permission: Omit<ProjectSections['permission'], 'guestMode'> };
+export type BotSettingsEdit = SectionEdit<AgentSettingsView['scope'], AgentSections> | SectionEdit<ProjectSettingsView['scope'], ProjectEdits> | SectionEdit<SessionSettingsView['scope'], SessionSections>;
 export type SettingsEdit = BotSettingsEdit | SectionEdit<HostSettingsView['scope'], HostSections>;
 type SectionView<S, M> = {
   [K in keyof M]: {
