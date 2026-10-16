@@ -89,8 +89,9 @@ const REASON_MAX = 80;
 const CONTROL = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/g;
 // In names, also every invisible character (format characters such as zero-width, bidi and tags;
 // blank-looking fillers; variation selectors), so none can hide a leading 你 or a trailing （bot）.
-// Message text keeps them: ZWJ emoji and ZWNJ scripts need them, and its lines are indented anyway.
-const INVISIBLE = /[\p{Cc}\p{Cf}\u034f\u115f\u1160\u3164\u2800\ufe00-\ufe0f]/gu;
+// Names lose ZWJ and FE0F with them (a ZWJ emoji splits, ❤️ shows as ❤); message text keeps them:
+// ZWJ emoji and ZWNJ scripts need them, and its lines are indented anyway.
+const INVISIBLE = /[\p{Cc}\p{Cf}\u034f\u115f\u1160\u3164\uffa0\u2800\ufe00-\ufe0f]/gu;
 
 function cut(text: string, max: number): string {
   const chars = [...text];

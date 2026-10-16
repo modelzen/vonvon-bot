@@ -1,4 +1,3 @@
-import { readClaudeUserEnv, readConfiguredClaudeModel } from '../agent/claude-agent/configured-model';
 import { REASONING_EFFORTS, type ModelInfo, type ReasoningEffort } from '../agent/types';
 
 // The judge model when nothing is set (design 2.3). s23c layers the bot and group settings on top.
@@ -30,39 +29,11 @@ export function codexJudgeDefault(models: ModelInfo[] | undefined): { model: str
   return effort ? { model, effort } : { model };
 }
 
-function value(key: string, settingsEnv: Record<string, string | undefined>, processEnv: NodeJS.ProcessEnv): string | undefined {
-  return settingsEnv[key]?.trim() || processEnv[key]?.trim() || undefined;
-}
-
 /**
- * The Claude judge model: the `haiku` alias, which the CLI resolves to the current Haiku (or
- * ANTHROPIC_DEFAULT_HAIKU_MODEL). Only a gateway, ANTHROPIC_BASE_URL on a host other than
- * api.anthropic.com, uses its own model: its small-fast model, else the configured one. A claude.ai
- * user with `"model":"opus"` in settings still judges on Haiku: one call per group message on Opus
- * would cost an order of magnitude more (product.md 3.4 控制成本).
+ * The backend's default small model. Claude: the `haiku` alias, which the CLI resolves to the
+ * current Haiku; no effort, the backend turns thinking off. s23c adds the gateway case (design 2.3).
  */
-export function claudeJudgeDefault(
-  settingsEnv: Record<string, string | undefined>,
-  processEnv: NodeJS.ProcessEnv,
-  configuredModel: string | undefined,
-): string {
-  const baseUrl = value('ANTHROPIC_BASE_URL', settingsEnv, processEnv);
-  if (!baseUrl) return CLAUDE_JUDGE_MODEL;
-  let host: string | undefined;
-  try {
-    host = new URL(baseUrl).hostname.toLowerCase();
-  } catch {
-    host = undefined;
-  }
-  if (host === 'api.anthropic.com') return CLAUDE_JUDGE_MODEL;
-  if (value('ANTHROPIC_DEFAULT_HAIKU_MODEL', settingsEnv, processEnv)) return CLAUDE_JUDGE_MODEL;
-  return value('ANTHROPIC_SMALL_FAST_MODEL', settingsEnv, processEnv) ?? configuredModel ?? CLAUDE_JUDGE_MODEL;
-}
-
-/** The backend's default small model. Claude passes no effort: the backend turns thinking off. */
 export function defaultJudgeModel(backendId: string, models: ModelInfo[] | undefined): { model: string; effort?: ReasoningEffort } {
-  if (backendId === CLAUDE_BACKEND_ID) {
-    return { model: claudeJudgeDefault(readClaudeUserEnv(), process.env, readConfiguredClaudeModel()) };
-  }
+  if (backendId === CLAUDE_BACKEND_ID) return { model: CLAUDE_JUDGE_MODEL };
   return codexJudgeDefault(models);
 }
