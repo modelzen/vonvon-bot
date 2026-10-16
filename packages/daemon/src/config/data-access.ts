@@ -25,7 +25,6 @@ const OS = platform();
 /** <sys/fcntl.h> on macOS; `fs.constants` has no O_EXLOCK. */
 const O_EXLOCK = 0x20;
 type Release = () => Promise<void>;
-const noRelease: Release = async () => {};
 const errorCode = (error: unknown): unknown => error instanceof Error && 'code' in error ? error.code : undefined;
 const closeServer = (server: Server): Promise<void> => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 
@@ -70,15 +69,19 @@ async function tryLock(path: string, role: MutexRole): Promise<Release | null> {
     return async () => closeSync(fd);
   }
   const server = createServer((socket) => socket.destroy());
-  const address = OS === 'linux' ? { path: `\0vonvon-bot-mutex-v3:${role}:${createHash('sha256').update(path).digest('hex')}` }
-    : OS === 'win32' ? { path: `\\\\.\\pipe\\vonvon-bot-${role}-${portHash(path.toLowerCase(), role).toString('hex')}` }
-      : { host: '127.0.0.1', port: legacyPort(path, role), exclusive: true };
-  return await listenOn(server, address) ? () => closeServer(server) : null;
+  return await listenOn(server, socketAddress(path, role)) ? () => closeServer(server) : null;
+}
+
+function socketAddress(path: string, role: MutexRole): ListenOptions {
+  if (OS === 'linux') return { path: `\0vonvon-bot-mutex-v3:${role}:${createHash('sha256').update(path).digest('hex')}` };
+  if (OS === 'win32') return { path: `\\\\.\\pipe\\vonvon-bot-${role}-${portHash(path.toLowerCase(), role).toString('hex')}` };
+  return { host: '127.0.0.1', port: legacyPort(path, role), exclusive: true };
 }
 
 // --- Transition from builds before s20c. Delete it and its tests once no pre-s20c build is installed (docs/v1-plan.md
 // s20c). Those builds lock only by listening on the port, so a holder of the new lock takes the port too when it can.
 const LEGACY_MARKER = 'vonvon-mutex-v3\n';
+const noRelease: Release = async () => {};
 
 /** Who answers on the old port: a pre-s20c mutex closes without a word, a newer holder of another key sends the marker. */
 function legacyOwner(port: number): Promise<'old-build' | 'not-a-lock'> {
@@ -102,8 +105,9 @@ function legacyOwner(port: number): Promise<'old-build' | 'not-a-lock'> {
   });
 }
 
-/** Holds the pre-s20c port as well; null while an old build holds it. */
+/** Holds the pre-s20c port as well where the new lock is not that port; null while an old build holds it. */
 async function holdLegacyPort(path: string, role: MutexRole): Promise<Release | null> {
+  if (OS !== 'linux' && OS !== 'darwin') return noRelease;
   const port = legacyPort(path, role);
   const server = createServer((socket) => { socket.on('error', () => {}); socket.end(LEGACY_MARKER); });
   if (await listenOn(server, { host: '127.0.0.1', port, exclusive: true })) return () => closeServer(server);
@@ -120,13 +124,9 @@ export async function acquireMutex(home: string, role: MutexRole, timeoutMs = 15
   try {
     for (;;) {
       lock ??= await tryLock(path, role);
-      const legacy = !lock ? null : OS === 'linux' || OS === 'darwin' ? await holdLegacyPort(path, role) : noRelease;
-      if (lock && legacy) {
-        const releases = [legacy, lock];
-        let released: Promise<void> | undefined;
-        const mutex: Mutex = Object.freeze({ role });
-        mutexReleases.set(mutex, () => released ??= releaseAll(role, releases));
-        return mutex;
+      if (lock) {
+        const legacy = await holdLegacyPort(path, role);
+        if (legacy) return heldMutex(role, [legacy, lock]);
       }
       if (Date.now() >= deadline) throw new DataAccessError(`Bridge ${role} is busy on its local coordination endpoint.`);
       await new Promise((resolve) => setTimeout(resolve, 40));
@@ -136,6 +136,13 @@ export async function acquireMutex(home: string, role: MutexRole, timeoutMs = 15
     if (lock) await lock().catch(() => {});
     throw error;
   }
+}
+
+function heldMutex(role: MutexRole, releases: Release[]): Mutex {
+  const mutex: Mutex = Object.freeze({ role });
+  let released: Promise<void> | undefined;
+  mutexReleases.set(mutex, () => released ??= releaseAll(role, releases));
+  return mutex;
 }
 
 async function releaseAll(role: MutexRole, releases: Release[]): Promise<void> {

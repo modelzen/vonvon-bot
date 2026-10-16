@@ -23,9 +23,9 @@ vi.mock('../src/service/startup', () => ({ readStartupRegistration: async () => 
 vi.mock('../src/config/data-access', async original => {
   const actual = await original<typeof import('../src/config/data-access')>();
   return { ...actual, acquireMutex: async (...args: Parameters<typeof actual.acquireMutex>) => {
-    const server = await actual.acquireMutex(...args);
-    owned.mutexes.add(server);
-    return server;
+    const mutex = await actual.acquireMutex(...args);
+    owned.mutexes.add(mutex);
+    return mutex;
   } };
 });
 vi.mock('../src/admin/service', () => ({ createAdminService: () => ({ listBots: async () => [], listProjects: async () => [] }) }));
