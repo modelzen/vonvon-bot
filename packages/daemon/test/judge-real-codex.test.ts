@@ -92,8 +92,10 @@ describe.skipIf(!REAL)('真实 Codex 判断（VONVON_REAL_JUDGE=1）', () => {
 
   // first, so the first judgement starts the process
   it('复用：同一个进程；4 条并发都出结果', async () => {
+    const spawned = judgeProcessStats().spawned;
     const first = await judge.judge(request('main'));
     const pid = judgeProcessStats().pid;
+    expect(pid).toBeTypeOf('number');
     const second = await judge.judge(request('main'));
     expect(first.error).toBeUndefined();
     expect(second.error).toBeUndefined();
@@ -102,7 +104,7 @@ describe.skipIf(!REAL)('真实 Codex 判断（VONVON_REAL_JUDGE=1）', () => {
     console.log(JSON.stringify({ coldMs: first.ms, warmMs: second.ms }));
     const four = await Promise.all((['main', 'mentioned', 'topic', 'main'] as const).map(v => judge.judge(request(v))));
     expect(four.map(r => r.error)).toEqual([undefined, undefined, undefined, undefined]);
-    expect(judgeProcessStats().pid).toBe(pid);
+    expect(judgeProcessStats()).toMatchObject({ pid, spawned: spawned + 1, stuck: 0 });
   }, 120_000);
 
   it('三种变体：格式对，决定在这个变体允许的集合里', async () => {
