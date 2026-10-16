@@ -1,7 +1,7 @@
 import type {ReactNode} from 'react';
 import {
-  NOT_REPLIED_TEXT, OPTIONAL_SCOPE_EFFECTS, SCOPE_DENIAL_PLACE_TEXT, botSteps, connectionStep, toolSteps,
-  type AdminSetupStatus, type Agent, type Command, type CommandResult, type DesktopSnapshot, type NotReplied, type SetupStep, type StepAction, type StepTone,
+  NOT_REPLIED_TEXT, OPTIONAL_SCOPE_EFFECTS, SCOPE_DENIAL_PLACE_TEXT, botSteps, connectionStep, crashText, toolSteps,
+  type AdminSetupStatus, type Agent, type Command, type CommandResult, type CrashEntry, type DesktopSnapshot, type NotReplied, type SetupStep, type StepAction, type StepTone,
 } from '@vonvon/protocol';
 import {useClient, useShellCapabilities} from '../client-context';
 import {AgentAvatar} from '../AgentAvatar';
@@ -25,9 +25,10 @@ export function shortTime(at: number, now = Date.now()): string {
 const badge = (status: string, tone: StepTone) => <StatusBadge tone={tone} variant="pill">{status}</StatusBadge>;
 const TOOL_NAMES: Record<string, string> = {'codex-appserver': 'Codex', 'claude-agent': 'Claude'};
 
-/** 连接: the checklist's 长连接 step, plus a child that is down or a switch waiting for a restart. */
-function connectionView(agent: Agent): Pick<SetupStep, 'status' | 'tone' | 'detail'> {
-  if (!agent.readError && agent.enabled && !agent.running) return {status: '没在运行', tone: 'warning', detail: '可能正在崩溃重启，或者要重启 daemon 才生效；一直这样时看下面的日志。'};
+/** 连接: the checklist's 长连接 step, plus a paused bot or daemon, a child that is down or a switch waiting for a restart. */
+function connectionView(agent: Agent, hostPaused: boolean): Pick<SetupStep, 'status' | 'tone' | 'detail'> {
+  if (agent.enabled && agent.paused) return {status: '已暂停', tone: 'danger', detail: `10 分钟内崩溃了 ${agent.paused.crashes} 次，见上面的红条。`};
+  if (!agent.readError && agent.enabled && !agent.running) return {status: '没在运行', tone: 'warning', detail: hostPaused ? 'daemon 已暂停，见上面的红条。' : '可能正在崩溃重启，或者要重启 daemon 才生效；一直这样时看下面的日志。'};
   if (!agent.readError && !agent.enabled && agent.running) return {status: '待生效', tone: 'neutral', detail: '停用要重启 daemon 后才生效。'};
   if (agent.enabled && agent.connection === 'reconnecting') return {status: '重连中', tone: 'neutral'};
   return connectionStep(agent);
@@ -83,6 +84,14 @@ function NotRepliedList({records, agent, snapshot, now}: {records: readonly NotR
   })}</ul>;
 }
 
+/** 最近的崩溃 (s18a): the last day's records, newest first; absent when the daemon is older than s18a. */
+function CrashList({records, now}: {records: readonly CrashEntry[]; now: number}) {
+  if (!records.length) return <>最近 24 小时没有崩溃。</>;
+  return <ul className="diagnostics-replies">{records.map(record => <li key={`${record.at}-${record.kind}-${record.reason}`}>
+    <span className="diagnostics-replies__head"><time>{shortTime(record.at, now)}</time><strong>{crashText(record)}</strong></span>
+  </li>)}</ul>;
+}
+
 function BotDiagnostics({agent, snapshot, read, tools, onOpenSetup, onError}: {
   agent: Agent; snapshot: DesktopSnapshot; read: SetupRead | undefined; tools: readonly SetupStep[];
   onOpenSetup: () => void; onError: (message: string) => void;
@@ -91,7 +100,8 @@ function BotDiagnostics({agent, snapshot, read, tools, onOpenSetup, onError}: {
   const now = Date.now();
   const records = agent.diagnostics?.notReplied ?? [];
   const total = records.reduce((sum, record) => sum + record.count, 0);
-  const connection = connectionView(agent);
+  const connection = connectionView(agent, Boolean(snapshot.application.crashes?.paused));
+  const crashes = snapshot.application.crashes?.records.filter(record => record.appId === agent.id);
   const scopes = scopeView(read?.status, agent, now, read?.problem);
   const setup = setupView(agent, read);
   const grantUrl = read?.status?.scopes.grantUrl;
@@ -112,11 +122,27 @@ function BotDiagnostics({agent, snapshot, read, tools, onOpenSetup, onError}: {
         onClick={() => void openExternalUrl(grantUrl, 'app-console', shell).catch(error => onError(error instanceof Error ? error.message : '无法打开开发者后台。'))}>一键开权限</Button>}</span>}/>
     <SettingsRow title="执行工具" description={toolText || '还没有绑定群'}/>
     <SettingsRow title="最近没回的消息" description={<NotRepliedList records={records} agent={agent} snapshot={snapshot} now={now}/>}/>
+    {crashes && <SettingsRow title="最近的崩溃" description={<CrashList records={crashes} now={now}/>}/>}
   </SettingsGroup>;
 }
 
-/** 状态与诊断 (product.md 3.1 item 8): this machine's tools, then each bot's connection, setup, scopes,
- * tools and recent not-replied messages, then the daemon log. s18 puts its red bar above 这台电脑. */
+/** The red bars (3.10): the paused daemon's alone, whose 恢复运行 restarts it with a new chain that ends the bots' pauses
+ * too; otherwise one per paused bot, whose 恢复运行 starts that bot alone again. */
+export function crashBars(snapshot: DesktopSnapshot): Array<{key: string; text: string; command: Command}> {
+  const host = snapshot.application.crashes?.paused;
+  if (host) return [{key: 'daemon', text: `daemon 已暂停：10 分钟内崩溃了 ${host.crashes} 次，bot 都没有启动。查完下面的崩溃记录后点「恢复运行」。`, command: {type: 'restartHost'}}];
+  return snapshot.agents.flatMap(agent => agent.enabled && agent.paused ? [{key: agent.id, command: {type: 'setAgentEnabled', agentId: agent.id, enabled: true},
+    text: `「${agent.name}」10 分钟内崩溃了 ${agent.paused.crashes} 次，已停止自动重启，别的 bot 照常。查完下面的崩溃记录后点「恢复运行」。`}] : []);
+}
+
+function CrashBars({snapshot, ready, busy, run}: {snapshot: DesktopSnapshot; ready: boolean; busy: boolean; run: (command: Command) => Promise<CommandResult>}) {
+  return <>{crashBars(snapshot).map(bar => <div key={bar.key} role="alert" className="diagnostics-alert">
+    <span>{bar.text}</span><Button size="sm" disabled={busy || !ready} onClick={() => void run(bar.command)}>恢复运行</Button>
+  </div>)}</>;
+}
+
+/** 状态与诊断 (product.md 3.1 item 8): the red bar of a crash pause, this machine's tools and the daemon's crashes, then
+ * each bot's connection, setup, scopes, tools, recent not-replied messages and crashes, then the daemon log. */
 export function DiagnosticsPanel({snapshot, ready, busy, run, onOpenSetup, onOpenEnvironment, onNotice}: {
   snapshot: DesktopSnapshot; ready: boolean; busy: boolean;
   run: (command: Command) => Promise<CommandResult>;
@@ -144,7 +170,9 @@ export function DiagnosticsPanel({snapshot, ready, busy, run, onOpenSetup, onOpe
     if (!action) return null;
     return <Button size="sm" loading={action.kind === 'claudeLogin' && claudeLogin.checking} disabled={busy || !ready} onClick={() => act(action)}>{action.label}</Button>;
   }
+  const crashes = snapshot.application.crashes;
   return <div className="page-stack diagnostics-page">
+    <CrashBars snapshot={snapshot} ready={ready} busy={busy} run={run}/>
     <SettingsGroup label="这台电脑" id={settingAnchor('这台电脑')}
       action={<Button size="sm" loading={checking} disabled={busy || !ready} onClick={() => void recheckAll().catch(error => onNotice(error instanceof Error ? error.message : '重新检查没有完成。', true))}>重新检查</Button>}
       footer="执行工具每分钟检查一次；Claude 的登录在打开这一页或点「检查登录」时检查。">
@@ -153,6 +181,7 @@ export function DiagnosticsPanel({snapshot, ready, busy, run, onOpenSetup, onOpe
         trailing={<span className="setup-step-trailing">{badge(step.status, step.tone)}{toolAction(step)}</span>}/>)}
       <SettingsRow title="数据目录" value={<code>{snapshot.application.dataPath}</code>}/>
       <SettingsRow title="最近读取" value={snapshot.observedAt ? new Date(snapshot.observedAt).toLocaleTimeString() : '尚未读取'}/>
+      {crashes && <SettingsRow title="最近的崩溃" description={<CrashList records={crashes.records.filter(record => !record.appId)} now={Date.now()}/>}/>}
     </SettingsGroup>
     {snapshot.agents.map(agent => <BotDiagnostics key={agent.id} agent={agent} snapshot={snapshot} read={reads[agent.id]} tools={tools}
       onOpenSetup={onOpenSetup} onError={message => onNotice(message, true)}/>)}

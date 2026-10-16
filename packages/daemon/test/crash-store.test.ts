@@ -6,9 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
-  countInWindow, crashDir, crashErrorName, crashScopeKey, createSystemClock, listCrashRecords, pruneCrashRecords, readBootId,
-  readCrashSummary, readRunMarker, removeResumeRequest, sanitizeReason, startedBeforeThisBoot, takeResumeRequest,
-  writeCrashRecordSync, writeResumeRequest, writeRunMarkerSync, type Clock, type CrashRecord, type RunMarker,
+  countInWindow, crashDir, crashErrorName, crashScopeKey, createCrashRecordCache, createSystemClock, hasCrashRecordFor, listCrashRecords,
+  pruneCrashRecords, readBootId, readBotPauses, readCrashSummary, readRunMarker, removeResumeRequest, sanitizeReason, startedBeforeThisBoot,
+  takeResumeRequest, writeBotPausesSync, writeCrashRecordSync, writeResumeRequest, writeRunMarkerSync, type Clock, type CrashRecord, type RunMarker,
 } from '../src/host/crash-store';
 
 const roots: string[] = [];
@@ -139,6 +139,49 @@ describe('counting', () => {
   ])('%s', (_label, fields, expected) => {
     expect(countInWindow([record({ sysUptimeMs: now, ...fields })], { chainId: CHAIN, nowUptimeMs: now })).toBe(expected);
   });
+  it('counts one bot\'s records only, and only those after its last 恢复运行 (s18a)', () => {
+    const bot = (fields: Partial<CrashRecord>) => record({ scope: 'bot', appId: 'cli_a', sysUptimeMs: now - 1000, ...fields });
+    const records = [bot({}), bot({ appId: 'cli_b' }), record({ sysUptimeMs: now }), bot({ sysUptimeMs: now - 5000 })];
+    expect(countInWindow(records, { chainId: CHAIN, nowUptimeMs: now, appId: 'cli_a' })).toBe(2);
+    expect(countInWindow(records, { chainId: CHAIN, nowUptimeMs: now, appId: 'cli_a', sinceUptimeMs: now - 3000 })).toBe(1);
+    expect(countInWindow(records, { chainId: CHAIN, nowUptimeMs: now })).toBe(1);
+  });
+});
+
+describe('bot records for the supervisor and the snapshot (s18a)', () => {
+  it('finds a child\'s record by its file name: scope, PID and a stamp not before the child started', () => {
+    const root = tempRoot();
+    const key = crashScopeKey('bot', 'cli_a');
+    writeCrashRecordSync(root, record({ scope: 'bot', appId: 'cli_a', pid: 77, at: at(T0) }));
+    expect(hasCrashRecordFor(root, key, 77, T0 - 1000)).toBe(true);
+    expect(hasCrashRecordFor(root, key, 78, T0 - 1000)).toBe(false);
+    expect(hasCrashRecordFor(root, 'host', 77, T0 - 1000)).toBe(false);
+    expect(hasCrashRecordFor(root, key, 77, T0 + 60_000)).toBe(false); // a PID reused since
+  });
+  it('lists again only when crash/ changed or 30 s passed, and shows the last day\'s newest 20', () => {
+    let mtime = 1;
+    let lists = 0;
+    const many = Array.from({ length: 30 }, (_, index) => record({ at: at(T0 - index * 60_000) }));
+    const read = createCrashRecordCache('/unused', { stat: () => mtime, list: () => { lists++; return [record({ at: at(T0 - 25 * 3_600_000) }), ...many]; } });
+    expect(read(T0)).toHaveLength(20);
+    expect(read(T0)[0]).toEqual({ at: T0, kind: 'exception', uptimeMs: 60_000, reason: 'Error: boom' });
+    read(T0 + 29_000);
+    expect(lists).toBe(1);
+    mtime = 2;
+    read(T0 + 29_000);
+    read(T0 + 60_000);
+    expect(lists).toBe(3);
+    expect(createCrashRecordCache('/unused', { stat: () => { throw new Error('ENOENT'); } })(T0)).toEqual([]);
+  });
+  it('reads the bot pauses of this chain only, and nothing from a damaged file', () => {
+    const root = tempRoot();
+    writeBotPausesSync(root, CHAIN, { cli_a: { pausedAt: at(T0), pauseCrashes: 3 }, cli_b: { resumedUptimeMs: 5 } });
+    expect(readBotPauses(root, CHAIN)).toEqual({ cli_a: { pausedAt: at(T0), pauseCrashes: 3 }, cli_b: { resumedUptimeMs: 5 } });
+    expect(readBotPauses(root, RUN)).toEqual({});
+    writeFileSync(join(crashDir(root), 'bot-pauses.json'), '{"v":1');
+    expect(readBotPauses(root, CHAIN)).toEqual({});
+    expect(listCrashRecords(root)).toEqual([]);
+  });
 });
 
 describe('boots', () => {
@@ -205,5 +248,12 @@ describe('marker and resume request', () => {
     const summary = (bootId: string) => readCrashSummary(root, { running: false, now: T0, clock: clock({ bootId }) }).paused;
     expect(summary('boot-a')).toEqual({ since: at(T0), crashes: 3, running: false });
     expect(summary('boot-b')).toBeUndefined();
+  });
+  it('lists the paused bots of the live run\'s chain (s18a)', () => {
+    const root = tempRoot();
+    writeRunMarkerSync(root, marker({ pid: process.pid }));
+    writeBotPausesSync(root, CHAIN, { cli_a: { pausedAt: at(T0), pauseCrashes: 4 }, cli_b: { resumedUptimeMs: 5 } });
+    expect(readCrashSummary(root, { running: true, ownerPid: process.pid, now: T0 }).pausedBots).toEqual([{ appId: 'cli_a', since: at(T0), crashes: 4 }]);
+    expect(readCrashSummary(root, { running: true, ownerPid: process.pid + 1, now: T0 }).pausedBots).toEqual([]);
   });
 });

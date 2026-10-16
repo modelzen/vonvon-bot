@@ -12,3 +12,4 @@ export * from "./admin.js";
 export * from "./directory.js";
 export * from "./setup-steps.js";
 export * from "./diagnostics.js";
+export * from "./crash.js";

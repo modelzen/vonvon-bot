@@ -6,3 +6,5 @@
 .diagnostics-replies__head {display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;color:var(--ss-text);}
 .diagnostics-replies__head time {font-variant-numeric:tabular-nums;}
 .diagnostics-replies__head span {color:var(--color-status-warning);}
+.diagnostics-alert {display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 12px;padding:10px 12px;border-radius:8px;
+  color:var(--color-status-danger);background:var(--color-status-danger-bg);border:1px solid var(--color-status-danger-border);}

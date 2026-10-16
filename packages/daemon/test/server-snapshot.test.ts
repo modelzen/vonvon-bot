@@ -123,6 +123,19 @@ describe('状态与诊断 in the snapshot (s19)', () => {
     expect(store.current().agents.find(agent => agent.id === 'cli_other')).not.toHaveProperty('diagnostics');
     expect(retained.at(-1)).toEqual(['cli_test', 'cli_other']);
   });
+  it('carries the daemon\'s crashes and each bot\'s own pause, a paused bot not waiting for a restart (s18a)', async () => {
+    const crashes = { paused: { since: 5, crashes: 3 }, records: [{ at: 4, kind: 'forced' as const, appId: 'cli_test', reason: 'SIGKILL', uptimeMs: 2000 }] };
+    const store = await createSnapshotStore({ service: { listBots: async () => [{ ...bot, active: true }, { ...bot, appId: 'cli_other', name: 'other', active: true }], listProjects: async () => [] }, jobs: () => [], publish: () => {}, readTools: async () => [], readService: noManager,
+      crashes: { application: () => crashes, paused: appId => appId === 'cli_test' ? { since: 4, crashes: 3 } : undefined } });
+    stores.push(store);
+    expect(store.current().application.crashes).toEqual(crashes);
+    expect(store.current().agents.find(agent => agent.id === 'cli_test')).toMatchObject({ running: false, paused: { since: 4, crashes: 3 }, activation: 'active' });
+    expect(store.current().agents.find(agent => agent.id === 'cli_other')).toMatchObject({ activation: 'restartRequired' });
+    expect(store.current().agents.find(agent => agent.id === 'cli_other')).not.toHaveProperty('paused');
+    const older = await createSnapshotStore({ service: { listBots: async () => [], listProjects: async () => [] }, jobs: () => [], publish: () => {}, readTools: async () => [], readService: noManager });
+    stores.push(older);
+    expect(older.current().application).not.toHaveProperty('crashes');
+  });
 });
 
 describe('login-time service field (s08)', () => {
