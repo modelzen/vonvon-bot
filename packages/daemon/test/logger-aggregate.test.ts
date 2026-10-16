@@ -38,6 +38,10 @@ it('writes a fail line, then one fail_part per error inside, on stderr too; a wh
   expect(String(error.mock.calls[2]?.[0])).toMatch(/^✗ \[daemon-shutdown\.fail_part\] phase=cleanup .*part=2\.1 of=2 within=Codex cleanup errors errName=Error err=abcdef$/);
   // stderr of a failed command keeps the whole text.
   expect(formatErrorTree(failure)).toContain('Codex cleanup errors › Error: oc_0123456789abcdef');
+  // The stacks stay in the JSON log: stderr gets one line per error, without its stack.
+  const printed = error.mock.calls.map(call => String(call[0]));
+  expect(printed.every(line => !line.includes('\n'))).toBe(true);
+  expect([...printed, formatErrorTree(failure)].join('\n')).not.toContain('logger-aggregate.test');
 });
 
 it('logs the same group again as one line that says where its parts are', async () => {

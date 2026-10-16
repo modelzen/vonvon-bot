@@ -91,6 +91,11 @@ describe('describeServiceExits', () => {
     expect(systemd(show('success', 0, 0, '', 2))).toEqual({ lines: ['上次退出：服务在运行时 systemd 不保留，崩溃记录看 vonvon daemon status', RESTARTS(2)] });
     expect(systemd(SYSTEMD.restartedRunning).lastExit).toBeUndefined();
     expect(systemd(SYSTEMD.running)).toEqual({ lines: [RESTARTS(0)] });
+    // A unit that only fails, on JP-VPS after the s17b review: when the restarts run out (a refused manual start
+    // changes nothing) the record stays; reset-failed clears it and the count together, so a stopped unit never
+    // gets the 运行时 line.
+    expect(systemd(show('exit-code', 1, 1, AT, 3))).toEqual({ lastExit: `退出码 1（出错退出，看 service.err.log）。systemd：Result=exit-code，${AT}`, lines: [`上次退出：退出码 1（出错退出，看 service.err.log）。systemd：Result=exit-code，${AT}`, RESTARTS(3)] });
+    expect(systemd(show('success', 0, 0, '', 0))).toEqual({ lines: [RESTARTS(0)] });
     const unknownSignal: ServiceExits = { manager: 'systemd', result: null, execMainCode: 2, execMainStatus: 99, nRestarts: null, exitedAt: null };
     expect(describeServiceExits(unknownSignal)).toEqual({ lastExit: '被信号 99 结束', lines: ['上次退出：被信号 99 结束'] });
   });

@@ -426,8 +426,8 @@ export function createSystemdService(options: { root: string }, overrides: Parti
       const s = await snapshot();
       const current = await registration(s);
       const manager = await observeUnit();
-      const enabled = await observeEnabled();
-      const exits = manager.kind === 'present' ? await observeExits() : undefined;
+      // Beside is-enabled, so a user manager that stops answering costs no more time than before s17b.
+      const [enabled, exits] = await Promise.all([observeEnabled(), manager.kind === 'present' ? observeExits() : undefined]);
       const owner = await d.readOwner(s.root);
       let running = false;
       let ownerError: string | null = null;

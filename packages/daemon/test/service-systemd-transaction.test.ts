@@ -209,6 +209,24 @@ it('status reads the exits with one more show for a present unit only, and does 
   expect(absent.calls).not.toContain(EXITS);
   expect(f.mutations()).toEqual([]);
 });
+it('status asks for the exits while is-enabled is still out, and not at all when show itself fails (s17b)', async () => {
+  const f = await fixture(); await f.seed();
+  let exitsAsked: boolean | undefined;
+  f.state.onCommand = async command => {
+    if (!command.startsWith('is-enabled')) return;
+    await new Promise(resolve => setTimeout(resolve, 20));
+    exitsAsked = f.calls.includes(EXITS);
+  };
+  expect((await f.service().status()).exits).toMatchObject({ manager: 'systemd', nRestarts: 0 });
+  expect(exitsAsked).toBe(true);
+  // A user manager that does not answer `show` (what `runSystemctl` returns after its 30 s): no second show.
+  const stuck = await fixture(); await stuck.seed();
+  stuck.state.showReply = { ok: false, stdout: '', stderr: 'systemctl client timed out', status: null };
+  const unknown = await stuck.service().status();
+  expect(unknown.manager.kind).toBe('unknown');
+  expect(unknown.exits).toBeUndefined();
+  expect(stuck.calls).not.toContain(EXITS);
+});
 
 it.each(['development', 'unknown'] as const)('refuses %s distribution before writing', async kind => {
   const f = await fixture(); expect((await f.service({ distribution: async () => ({ kind, cliPath: '/dev/bin.mjs' }) }).install()).kind).toBe('install_refused');

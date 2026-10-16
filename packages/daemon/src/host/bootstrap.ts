@@ -83,6 +83,8 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
     }
     // JP-VPS acceptance seam (s17): a real uncaught exception or rejection in a host, 2 s into the run.
     const seam = process.env.VONVON_TEST_CRASH;
+    // Acceptance only: a value left in the environment is named at every start, in the log and on stderr.
+    if (!process.send && (seam === 'exception' || seam === 'rejection' || seam === 'cleanup')) log.warn('daemon-startup', 'test_seam', { seam });
     if (!process.send && (seam === 'exception' || seam === 'rejection')) {
       setTimeout(() => {
         if (seam === 'exception') throw new Error('VONVON_TEST_CRASH exception');

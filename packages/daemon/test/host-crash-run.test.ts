@@ -114,8 +114,11 @@ it('logs a failure of the run that nothing logged yet, and not one the superviso
 it('VONVON_TEST_CRASH=cleanup: a stop logs the seam and its two parts without a crash record; a crash keeps its own record', async () => {
   vi.stubEnv('VONVON_TEST_CRASH', 'cleanup');
   const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.mocked(runRun).mockImplementationOnce(async () => { requested = true; });
   await expect(start()).rejects.toThrow('VONVON_TEST_CRASH cleanup');
+  // A seam left in the environment says so at each start.
+  expect(warn.mock.calls.map(call => String(call[0]))).toEqual(['⚠ [daemon-startup.test_seam] seam=cleanup']);
   expect(failLines(error, 'phase=test-seam')).toEqual([
     expect.stringMatching(/^✗ \[daemon-shutdown\.fail\] phase=test-seam err=VONVON_TEST_CRASH cleanup parts=2$/),
     expect.stringMatching(/ part=1 of=2 errName=Error err=step 1$/),
