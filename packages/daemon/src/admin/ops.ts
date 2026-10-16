@@ -14,7 +14,6 @@ import {
 } from '../config/schema';
 import { loadConfig, saveConfig } from '../config/store';
 import {
-  effectiveGuestMode,
   effectiveMode,
   getProjectByName,
   updateProject,
@@ -48,7 +47,6 @@ export type AdminWriteOp =
       kind: 'setPermissionMode';
       project: string;
       mode?: PermissionMode;
-      guestMode?: PermissionMode;
       network?: boolean;
     }
   | { kind: 'setNoMention'; project: string; on: boolean }
@@ -120,7 +118,7 @@ const COMPLETION_REMINDER_MODES: readonly CompletionReminderMode[] = ['manual', 
 /**
  * 项目后端切换的纯校验（exported for tests）：① 目标 id 在注册表里；② 目标后端
  * doctor() 探测通过（未装 CLI / SDK 不可用要在这里拦住，而不是切过去后每条消息
- * 报错）；③ 项目两档权限（管理员档 + 普通用户档）都在目标后端声明的支持面内
+ * 报错）；③ 项目的权限档在目标后端声明的支持面内
  * （某后端若仅支持部分权限档——其 startThread 的 fail-closed 硬守卫不变，这里
  * 只是把拒绝提前到切换时并讲清原因）。返回首个不满足的原因（中文，直接上卡）；
  * 全过返回 null。切换本身不驱逐活跃会话：SessionRecord.backend 让已有话题会话
@@ -131,8 +129,8 @@ export function validateBackendSwitch(opts: {
   target: string;
   /** 注册表内全部后端 id（backendIds()） */
   registered: readonly string[];
-  /** 项目当前权限档（两档都要被目标后端支持） */
-  project: Pick<Project, 'mode' | 'guestMode'>;
+  /** 项目当前权限档（要被目标后端支持） */
+  project: Pick<Project, 'mode'>;
   /** 目标后端声明的权限档支持面（AgentBackend.supportedModes；undefined ⇒ 全支持） */
   supportedModes?: readonly PermissionMode[];
   /** 目标后端 doctor() 探测结果；undefined = 探测没跑成，按不可用拒绝 */
@@ -145,12 +143,11 @@ export function validateBackendSwitch(opts: {
     return `后端「${opts.target}」当前不可用：${opts.probe?.hint ?? '环境探测失败（未安装或未登录）'}`;
   }
   if (opts.supportedModes) {
-    const tiers = [...new Set([effectiveMode(opts.project), effectiveGuestMode(opts.project)])];
-    const unsupported = tiers.filter((t) => !opts.supportedModes!.includes(t));
-    if (unsupported.length > 0) {
+    const tier = effectiveMode(opts.project);
+    if (!opts.supportedModes.includes(tier)) {
       return (
         `该后端仅支持 ${opts.supportedModes.map(tierLabel).join(' / ')} 权限档，` +
-        `本项目当前为 ${tiers.map(tierLabel).join(' / ')} —— 请先在「🔐 权限」把两档都调整到支持的档位再切换。`
+        `本项目当前为 ${tierLabel(tier)} —— 请先在「🔐 权限」调整到支持的档位再切换。`
       );
     }
   }
@@ -229,21 +226,18 @@ export async function performBackendSwitch(opts: {
 
 /**
  * 🔐 设置权限档（DM dm.proj.perm.submit 与 Web setPermissionMode 同源）：落盘
- * 管理员档 mode / 普通用户档 guestMode / 联网，再驱逐本项目活跃会话让新档立即
- * 生效（codex 沙箱在 thread/start 绑定后不可变）。mode/guestMode 缺省 = 不改。
+ * 权限档 mode / 联网，再驱逐本项目活跃会话让新档立即生效（codex 沙箱在
+ * thread/start 绑定后不可变）。mode 缺省 = 不改。
  */
 export async function performSetPermissionMode(opts: {
   projectName: string;
   mode?: PermissionMode;
-  guestMode?: PermissionMode;
   network?: boolean;
   /** orchestrator 进程内驱逐（LIVE 线程只存在于 bot 进程内存里） */
   evictLiveSessionsForChat: (chatId: string) => Promise<void>;
 }): Promise<AdminWriteOutcome> {
   // Web 来路的档位值未经 DM 端 asTier 收窄，这里再守一道（DM 来路恒合法）。
-  for (const v of [opts.mode, opts.guestMode]) {
-    if (v !== undefined && !TIERS.includes(v)) return { ok: false, reason: `未知权限档「${String(v)}」` };
-  }
+  if (opts.mode !== undefined && !TIERS.includes(opts.mode)) return { ok: false, reason: `未知权限档「${String(opts.mode)}」` };
   const p = await getProjectByName(opts.projectName);
   if (!p) return { ok: false, reason: `项目「${opts.projectName}」不存在` };
   // 后端档位兼容守门：后端在创建时选定、运行时固定（不支持切换），但权限档可改。
@@ -252,10 +246,8 @@ export async function performSetPermissionMode(opts: {
   // 给清晰原因，而不是让用户改完才发现聊不了。codex（supportedModes undefined）全档放行。
   const entry = p.backend ? catalogById(p.backend) : undefined;
   if (entry?.supportedModes) {
-    const resMode = opts.mode ?? effectiveMode(p);
-    const resGuest = opts.guestMode ?? effectiveGuestMode(p);
-    const bad = [...new Set([resMode, resGuest])].find((t) => !entry.supportedModes!.includes(t));
-    if (bad !== undefined) {
+    const bad = opts.mode ?? effectiveMode(p);
+    if (!entry.supportedModes.includes(bad)) {
       return {
         ok: false,
         reason:
@@ -264,8 +256,8 @@ export async function performSetPermissionMode(opts: {
       };
     }
   }
-  // updateProject 跳过 undefined 值 —— 与 DM 旧写法 {...(mode?{mode}:{})} 等价。
-  await updateProject(opts.projectName, { mode: opts.mode, guestMode: opts.guestMode, network: opts.network });
+  // updateProject 跳过 undefined 值 —— 与 DM 旧写法 {...(mode?{mode}:{})} 等价。旧行的 guestMode 在这次写盘时去掉（s15c）。
+  await updateProject(opts.projectName, { mode: opts.mode, network: opts.network });
   await opts.evictLiveSessionsForChat(p.chatId);
   return { ok: true, project: await freshOr(opts.projectName, p) };
 }
@@ -388,7 +380,6 @@ export async function runAdminWriteOp(
       return performSetPermissionMode({
         projectName: op.project,
         mode: op.mode,
-        guestMode: op.guestMode,
         network: op.network,
         evictLiveSessionsForChat: deps.evictLiveSessionsForChat,
       });

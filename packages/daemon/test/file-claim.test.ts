@@ -33,9 +33,9 @@ describe('fileClaimMode (product.md 3.12)', () => {
     expect(fileClaimMode(cfg(), project(), record, '')).toBeUndefined();
   });
 
-  it("returns the clicker's own tier", () => {
-    const p = project({ mode: 'full', guestMode: 'qa' } as Partial<Project>);
+  it("returns the group's one tier for everyone", () => {
+    const p = project({ mode: 'qa' });
     expect(fileClaimMode(cfg(), p, record, 'ou_someone')).toBe('qa');
-    expect(fileClaimMode(cfg(), p, record, 'ou_owner')).toBe('full');
+    expect(fileClaimMode(cfg(), p, record, 'ou_owner')).toBe('qa');
   });
 });

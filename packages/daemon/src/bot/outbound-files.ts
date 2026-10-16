@@ -10,9 +10,9 @@ import { scanLocalFiles, type LocalFileRef } from '../card/file-refs';
 import type { CardElement } from '../card/cards';
 import { fileComponentCount, renderFileAnswer, type InlineFiles } from '../card/inline-files';
 import type { CardDispatcher } from '../card/dispatcher';
-import { isAdmin, isChatAllowed, isUserAllowedInProject, type AppConfig } from '../config/schema';
+import { isChatAllowed, isUserAllowedInProject, type AppConfig } from '../config/schema';
 import { log } from '../core/logger';
-import { turnTier, type Project } from '../project/registry';
+import { effectiveMode, type Project } from '../project/registry';
 import { checkUploadPath, uploadPlan } from '../provider/outbound/policy';
 
 export const FILE_GET = 'file.get';
@@ -57,13 +57,14 @@ type Authorize = (context: FileContext, openId: string) => Promise<PermissionMod
 interface FileClick { messageId: string; chatId: string; operator?: { openId?: string } }
 
 const CLAIM_DENIED = '当前无权获取此文件：只有本群能使用 bot 的成员可以领取';
-const TIER_DENIED = '当前无权获取此文件：它在项目目录之外，请让管理员领取';
+const TIER_DENIED = '当前无权获取此文件：它在项目目录之外，这个群现在的权限档拿不到';
 
 /**
  * Who may claim a file linked in a bot answer (product.md 3.12): anyone allowed
  * to use the bot in that group, not only the turn's requester (bridge issue
- * #43). Returns the clicker's own tier, which {@link OutboundFiles} intersects
- * with the tier the file was written under; undefined refuses.
+ * #43). Returns the group's tier, which {@link OutboundFiles} checks against
+ * the tier the file was written under: lowering the group's tier after the
+ * answer also closes its links outside the workspace. Undefined refuses.
  */
 export function fileClaimMode(
   cfg: AppConfig, project: Project | undefined, record: Pick<FileContext, 'chatId' | 'cwd'>, openId: string,
@@ -71,7 +72,7 @@ export function fileClaimMode(
   if (!openId || !isChatAllowed(cfg, record.chatId)) return undefined;
   if (!project || project.enabled === false || project.cwd !== record.cwd) return undefined;
   if (!isUserAllowedInProject(cfg, project, openId)) return undefined;
-  return turnTier(project, isAdmin(cfg, openId)).mode;
+  return effectiveMode(project);
 }
 
 /** Raw IM responses return message_position; message_app_link is sometimes
@@ -417,9 +418,10 @@ export class OutboundFiles {
         throw new Error('上次发送结果未确认，请先检查会话；需要重新发送时请让 agent 重新引用文件');
       }
       const policy = manifest.mode === 'full' && mode === 'full' ? 'full' : 'qa';
-      // A clicker below the answer's tier (a guest on an admin's full-tier
-      // file) may not reach it. That denies the clicker and says nothing about
-      // the file: reply to them only, leave the shared card and manifest alone.
+      // The group's tier is now below the answer's (lowered since): a full-tier
+      // file outside the workspace is out of reach. That denies the click and
+      // says nothing about the file: reply to the clicker only, leave the shared
+      // card and manifest alone.
       if (manifest.mode === 'full' && policy !== 'full'
         && !await checkUploadPath(await uploadPlan({ cwd: manifest.cwd, mode: policy, network: false }), file.path)) {
         denied = TIER_DENIED;

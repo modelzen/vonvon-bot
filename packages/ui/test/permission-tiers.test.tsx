@@ -11,6 +11,7 @@ const section = <T,>(stored: T) => ({ stored, effective: stored, revision: "r", 
 const view = (fullOnly?: string): ProjectSettingsView => ({
   scope: { kind: "project", botId: "cli_fixture" as ProjectSettingsView["scope"]["botId"], projectName: "demo" },
   sections: {
+    // guestMode: the view's deprecated mirror of the one tier (s15c), never shown.
     permission: section({ mode: "qa" as const, guestMode: "qa" as const, network: false }),
     response: section({ noMention: false }),
     model: section({ selection: { kind: "default" as const } }),
@@ -25,20 +26,23 @@ const select = (html: string, label: string) => html.match(new RegExp(`<select a
 
 it("greys out 只读问答 and 允许写入 when the backend is full-only, keeps the stored 只读 selected, and says why", () => {
   const html = render(REASON);
-  for (const label of ["管理员权限", "普通成员权限"]) {
-    const options = select(html, label);
-    expect(options).toContain('<option value="qa" disabled="" selected="">只读问答</option>');
-    expect(options).toContain('<option value="write" disabled="">允许写入</option>');
-    expect(options).toContain('<option value="full">完全访问</option>');
-  }
-  const admin = html.indexOf("管理员权限");
-  expect(html.indexOf(REASON)).toBeGreaterThan(admin);
-  expect(html.indexOf(REASON)).toBeLessThan(html.indexOf("普通成员权限"));
+  const options = select(html, "权限档");
+  expect(options).toContain('<option value="qa" disabled="" selected="">只读问答</option>');
+  expect(options).toContain('<option value="write" disabled="">允许写入</option>');
+  expect(options).toContain('<option value="full">完全访问</option>');
+  expect(html.indexOf(REASON)).toBeGreaterThan(html.indexOf("权限档"));
+});
+
+it("has one tier for the whole group (s15c)", () => {
+  const html = render();
+  expect(html.match(/<select aria-label="[^"]*权限[^"]*"/g)).toEqual(['<select aria-label="权限档"']);
+  expect(html).not.toContain("普通成员权限");
+  expect(html).not.toContain("管理员权限");
 });
 
 it("offers every tier when the backend can confine reads", () => {
   const html = render();
   expect(html).not.toContain("disabled=\"\">只读问答");
-  expect(select(html, "管理员权限")).toContain('<option value="qa" selected="">只读问答</option>');
+  expect(select(html, "权限档")).toContain('<option value="qa" selected="">只读问答</option>');
   expect(html).not.toContain(REASON);
 });

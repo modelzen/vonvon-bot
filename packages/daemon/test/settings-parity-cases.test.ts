@@ -9,7 +9,7 @@ import { createAppPreferencesWriter } from '../src/admin/ops';
 import { createSettingsOwner } from '../src/admin/settings';
 import { parseSettingsEdit } from '../src/admin/settings-parse';
 import type { AgentSettingsView, ProjectSettingsView, SessionSettingsView, SettingsEdit, SettingsOwnerDeps } from '../src/admin/settings';
-import { addProject, getProjectByName } from '../src/project/registry';
+import { addProject, getProjectByName, updateProject } from '../src/project/registry';
 import { getSession, upsertSession } from '../src/bot/session-store';
 import type { AppConfig } from '../src/config/schema';
 import type { AgentBackend } from '../src/agent/types';
@@ -36,7 +36,7 @@ beforeEach(async () => {
   cfg = JSON.parse(JSON.stringify({ accounts: { app: { id: botId, tenant: 'feishu', secret: { source: 'exec', id: 'fixture-secret' } } }, secrets: { providers: { sentinel: { source: 'env', allowlist: ['SECRET'] } } }, futureRoot: 17, preferences: { access: { ownerOpenId: 'ou_owner', admins: ['ou_admin'], future: 3 }, cliBridge: { enabled: false, presence: { future: 9 } }, comments: { future: 'retain' }, futurePreference: true } }));
   await saveConfig(cfg);
   await addProject({ name: 'demo', chatId: 'oc_demo', cwd: '/tmp/demo', createdAt: 1, blank: false });
-  await addProject({ name: 'other', chatId: 'oc_other', cwd: '/tmp/other', createdAt: 2, blank: false, noMention: false, mode: 'qa', guestMode: 'qa', network: false });
+  await addProject({ name: 'other', chatId: 'oc_other', cwd: '/tmp/other', createdAt: 2, blank: false, noMention: false, mode: 'qa', network: false });
   await upsertSession({ threadId: session.threadId, chatId: 'oc_demo', sessionId: 'native-one', backend: 'codex-appserver', cwd: '/tmp/demo', model: 'fixture-model', effort: 'high', createdAt: 1, updatedAt: 1, summary: '' });
 });
 afterAll(() => rm(paths.appDir, { recursive: true, force: true }));
@@ -98,7 +98,6 @@ it.each(edgeCases)('$id accepts $section boundary $field', async ({ section, pat
 const projectCases = [
   { id: 'CARD-010', section: 'response', patch: { noMention: true }, field: 'noMention', expected: true },
   { id: 'CARD-012', section: 'permission', patch: { mode: 'write' }, field: 'mode', expected: 'write' },
-  { id: 'CARD-013', section: 'permission', patch: { guestMode: 'qa' }, field: 'guestMode', expected: 'qa' },
   { id: 'CARD-014', section: 'permission', patch: { network: true }, field: 'network', expected: true },
 ] as const;
 
@@ -120,11 +119,23 @@ describe('project settings persist in projects.json and isolate group scope', ()
   });
 });
 
-it.each(['qa', 'write', 'full'] as const)('CARD-012/013 accepts supported %s permission for administrator and member', async mode => {
+it.each(['qa', 'write', 'full'] as const)('CARD-012 accepts supported %s permission for the group', async mode => {
   const settings = await owner();
   const before = await settings.read(project) as ProjectSettingsView;
-  expect((await settings.save({ scope: project, section: 'permission', revision: before.sections.permission.revision, patch: { mode, guestMode: mode } })).kind).toBe('saved');
-  expect(await getProjectByName('demo')).toMatchObject({ mode, guestMode: mode });
+  expect((await settings.save({ scope: project, section: 'permission', revision: before.sections.permission.revision, patch: { mode } })).kind).toBe('saved');
+  expect(await getProjectByName('demo')).toMatchObject({ mode });
+});
+
+it('CARD-013 s15c: 普通成员权限 is gone, a guestMode patch is refused and nothing is written', async () => {
+  const settings = await owner();
+  await updateProject('demo', { mode: 'write' });
+  const before = await settings.read(project) as ProjectSettingsView;
+  // Output only, for clients from before s15c: always the group's one tier.
+  expect(before.sections.permission.stored).toEqual({ mode: 'write', guestMode: 'write', network: false });
+  expect(before.sections.permission.effective).toEqual({ mode: 'write', guestMode: 'write', network: false });
+  const file = await readFile(paths.projectsFile, 'utf8');
+  await expect(settings.save({ scope: project, section: 'permission', revision: before.sections.permission.revision, patch: { guestMode: 'qa' } } as unknown as SettingsEdit)).rejects.toThrow('设置字段、类型或范围无效');
+  expect(await readFile(paths.projectsFile, 'utf8')).toBe(file);
 });
 
 it('CARD-015 CARD-016 validates model and effort before changing the new-session default', async () => {

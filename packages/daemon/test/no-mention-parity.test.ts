@@ -31,7 +31,7 @@ const fake = vi.hoisted(() => ({
 vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_context: unknown, callback: () => unknown) => callback() }));
 vi.mock('../src/project/registry', async original => ({
   ...await original<object>(),
-  getProjectByChatId: async () => ({ name: 'demo', chatId: 'oc_demo', cwd: '/tmp/demo', kind: fake.kind, noMention: fake.noMention, mode: 'qa', guestMode: 'qa', network: false }),
+  getProjectByChatId: async () => ({ name: 'demo', chatId: 'oc_demo', cwd: '/tmp/demo', kind: fake.kind, noMention: fake.noMention, mode: 'qa', network: false }),
 }));
 vi.mock('../src/agent', async original => ({
   ...await original<object>(),

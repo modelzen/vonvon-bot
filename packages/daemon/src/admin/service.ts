@@ -25,11 +25,10 @@ import {
 } from '../config/schema';
 import {
   defaultNoMention,
-  effectiveGuestMode,
   effectiveMode,
   listProjectsIn,
 } from '../project/registry';
-import { listSessionsIn } from '../bot/session-store';
+import { isRetiredKey, listSessionsIn } from '../bot/session-store';
 import { loadConfig } from '../config/store';
 import { resolveAppSecret } from '../config/secret-resolver';
 import { createAgentAvatarProvider, createGroupAvatarProvider } from './avatar';
@@ -128,11 +127,11 @@ export interface AdminService {
   getProject(botId: string, name: string): Promise<AdminProject | undefined>;
   /** 🧠 切换项目后端（写）。与 DM dm.proj.backend.submit 同一套校验+落盘。 */
   switchBackend(botId: string, projectName: string, backendId: string): Promise<void>;
-  /** 🔐 设置权限档（管理员档/普通用户档/联网）（写），含驱逐活跃会话的既有语义。 */
+  /** 🔐 设置权限档（权限档/联网）（写），含驱逐活跃会话的既有语义。 */
   setPermissionMode(
     botId: string,
     projectName: string,
-    opts: { mode: PermissionMode; guestMode?: PermissionMode; network?: boolean },
+    opts: { mode: PermissionMode; network?: boolean },
   ): Promise<void>;
   /** ✋ 免@ 开关（写）。 */
   setNoMention(botId: string, projectName: string, on: boolean): Promise<void>;
@@ -298,9 +297,9 @@ export interface AdminProject {
   origin: 'created' | 'joined';
   /** effective 免@（noMention ?? defaultNoMention） */
   noMention: boolean;
-  /** effective 管理员权限档 */
+  /** effective 权限档，群里所有人都用它 */
   mode: PermissionMode;
-  /** effective 普通用户权限档 */
+  /** @deprecated since s15c always equal to the group's one tier; kept so clients from before s15c still parse */
   guestMode: PermissionMode;
   network: boolean;
   /** effective 后端 id（显式 backend ?? 智能默认 effectiveDefaultBackend，与运行时路由同源） */
@@ -513,7 +512,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     const defaultBackend = await effectiveDefaultBackend().catch(() => DEFAULT_BACKEND_ID);
     const countByChat = new Map<string, number>();
     for (const s of sessions) {
-      countByChat.set(s.chatId, (countByChat.get(s.chatId) ?? 0) + 1);
+      if (!isRetiredKey(s.threadId)) countByChat.set(s.chatId, (countByChat.get(s.chatId) ?? 0) + 1);
     }
     groupAvatars.retainChats(botId, new Set(projects.map(p => p.chatId).filter(Boolean)));
     const result = projects.map((p) => ({
@@ -527,7 +526,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       origin: p.origin ?? 'created',
       noMention: p.noMention ?? defaultNoMention(p),
       mode: effectiveMode(p),
-      guestMode: effectiveGuestMode(p),
+      guestMode: effectiveMode(p),
       network: p.network ?? false,
       backend: p.backend ?? defaultBackend,
       allowedUsersCount: p.allowedUsers?.length ?? 0,
@@ -681,13 +680,12 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     async setPermissionMode(
       botId: string,
       projectName: string,
-      opts: { mode: PermissionMode; guestMode?: PermissionMode; network?: boolean },
+      opts: { mode: PermissionMode; network?: boolean },
     ): Promise<void> {
       await executeWrite(botId, '🔐 设置权限档', {
         kind: 'setPermissionMode',
         project: projectName,
         mode: opts.mode,
-        guestMode: opts.guestMode,
         network: opts.network,
       });
     },
@@ -729,7 +727,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       if (!p?.chatId) return [];
       const sessions = await listSessionsIn(files.sessionsFile);
       return sessions
-        .filter((s) => s.chatId === p.chatId)
+        .filter((s) => s.chatId === p.chatId && !isRetiredKey(s.threadId))
         .sort((a, b) => b.updatedAt - a.updatedAt)
         .map((s) => ({
           threadId: s.threadId,

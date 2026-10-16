@@ -253,11 +253,7 @@ export interface PullOpts {
  * This bot's own replies, system notices, deleted, empty and
  * `excludeMessageId` messages are dropped, except `keepId` (the topic's first
  * message, kept even when this bot sent it). Other bots stay. Own replies are
- * dropped as already in the session (product.md 3.5); in a group split into
- * admin and guest tiers that holds only for the tier that answered, so each
- * tier's session sees the other's questions without the answers. The guest
- * session must not get the admin one's answers; the admin session missing the
- * guest answers is accepted.
+ * dropped as already in the session (product.md 3.5).
  * Filtering by what the session has already seen is the caller's job
  * (session-store.isSeen). Never throws: a failure logs and returns `ok: false`.
  */

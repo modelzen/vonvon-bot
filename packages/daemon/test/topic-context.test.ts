@@ -36,13 +36,12 @@ describe('topicQuotes', () => {
     expect(quotes.map((q) => q.at)).toEqual([91, 92, 93, 94, 95, 96, 97, 98, 99, 100]);
   });
 
-  it("names a session only from the same tier's binding", () => {
-    const t = view('omt_a', 5, { sessions: [session('omt_a'), session('omt_a#admin'), session('omt_a#guest')] });
-    const sid = (tier?: 'admin' | 'guest') => topicQuotes([t], { from: 0, to: 9, tier }, names).quotes[0]!.sessionId;
-    expect([sid(), sid('admin'), sid('guest')]).toEqual(['s-omt_a', 's-omt_a#admin', 's-omt_a#guest']);
+  it("names the topic's own session only", () => {
+    const t = view('omt_a', 5, { sessions: [session('omt_a#admin'), session('omt_a')] });
+    expect(topicQuotes([t], { from: 0, to: 9 }, names).quotes[0]!.sessionId).toBe('s-omt_a');
     const adminOnly = view('omt_b', 5, { sessions: [session('omt_b#admin')] });
-    expect(topicQuotes([adminOnly], { from: 0, to: 9, tier: 'guest' }, names).quotes[0]).not.toHaveProperty('sessionId');
     expect(topicQuotes([adminOnly], { from: 0, to: 9 }, names).quotes[0]).not.toHaveProperty('sessionId');
+    expect(topicRows([adminOnly], names)[0]).not.toHaveProperty('sessionId');
   });
 
   it('names who opened it and the message it hangs under', () => {
@@ -50,7 +49,7 @@ describe('topicQuotes', () => {
     expect(topicQuotes([t], { from: 0, to: 9 }, names).quotes).toEqual([
       { topicId: 'omt_a', title: '订单', at: 5, who: { kind: 'user', name: '李四' }, root: { id: 'om_r', at: 3, who: { kind: 'self' } } },
     ]);
-    expect(topicRows([t], undefined, names)[0]).toMatchObject({ topicId: 'omt_a', lastAt: 8 });
+    expect(topicRows([t], names)[0]).toMatchObject({ topicId: 'omt_a', lastAt: 8 });
     expect([personOf({ kind: 'user', openId: 'ou_abcd9999' }, names), personOf({ kind: 'bot', openId: 'ou_p' }, names), personOf(undefined, names)])
       .toEqual([{ kind: 'user', name: '用户9999' }, { kind: 'bot', name: undefined }, undefined]);
   });

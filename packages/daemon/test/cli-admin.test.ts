@@ -269,7 +269,8 @@ it('settings set parses values as JSON or text and names the bad field', () => {
   for (const text of ['null', '[]', '{}']) expect(() => parseAssignments('agent', [`comments.backend=${text}`])).toThrow('comments.backend');
   for (const [kind, args, message] of [
     ['project', ['permission.mode=bad'], 'permission.mode 只能是 qa、write、full'],
-    ['project', ['permission.nope=1'], 'permission 没有 nope 这一项。可以改的有：mode、guestMode、network'],
+    ['project', ['permission.nope=1'], 'permission 没有 nope 这一项。可以改的有：mode、network'],
+    ['project', ['permission.guestMode=full'], '「普通成员权限」去掉了：一个群只有一个权限档，群里谁说话都用它。改 permission.mode。'],
     ['project', ['permission.mode=full', 'cards.showModel=off'], '一次只能改一节；permission 和 cards 分两次改。'],
     ['agent', ['cliBridge.agents={}'], '咖啡一下第一版已拿掉，不能改。'],
     ['project', ['compact.autoCompact=false'], '自动压缩现在一直开着，不能关了。'],
@@ -286,7 +287,7 @@ it('settings set parses values as JSON or text and names the bad field', () => {
 
 it('settings set saves with the section revision and explains each refusal', async () => {
   const scope = { kind: 'project', botId: 'cli_a', projectName: 'pay' };
-  const view = { scope, sections: { permission: section({ mode: 'qa', guestMode: 'qa', network: false }), model: section({ selection: { kind: 'default' } }) } };
+  const view = { scope, sections: { permission: section({ mode: 'qa', network: false }), model: section({ selection: { kind: 'default' } }) } };
   const results: unknown[] = [
     { kind: 'saved', section: { scope, section: 'permission', value: section({ mode: 'full' }) }, effects: [{ fields: ['mode'], when: 'next-turn', detail: '下一轮生效。' }] },
     { kind: 'conflict', current: {} }, { kind: 'rejected', fields: [{ field: 'mode', message: '后端不支持此权限档位' }] },
@@ -328,7 +329,8 @@ it('settings get prints each section, gives the view as JSON, and lists a group\
     cards: section({ showToolCalls: true, showModel: 'running' }),
     comments: section({ backend: 'codex-appserver', selection: { kind: 'default' } }, 'r', { backend: 'codex-appserver', selection: { kind: 'explicit', model: 'gpt-5.5', effort: 'medium' } }),
   } };
-  const projectView = { scope: { kind: 'project', botId: 'cli_a', projectName: 'pay' }, sections: { permission: { ...section({ mode: 'qa' }), access: { kind: 'readonly', reason: 'owner-offline', message: '请先启动此 Agent，再编辑设置' } } },
+  // guestMode: the view's deprecated mirror of the one tier (s15c), not printed.
+  const projectView = { scope: { kind: 'project', botId: 'cli_a', projectName: 'pay' }, sections: { permission: { ...section({ mode: 'qa', guestMode: 'qa' }), access: { kind: 'readonly', reason: 'owner-offline', message: '请先启动此 Agent，再编辑设置' } } },
     identity: { chatId: 'oc_pay', backend: 'codex-appserver', cwd: '/home/u/pay', kind: 'multi', fullOnly: 'Linux 上只能选完全访问。' } };
   const sessions = [{ threadId: 'omt_old', chatId: 'oc_pay', summary: '旧的', backend: 'codex-appserver', createdAt: 1, updatedAt: 1 },
     { threadId: 'omt_new', chatId: 'oc_pay', summary: '修'.repeat(50), backend: 'codex-appserver', model: 'gpt-5.5', createdAt: 2, updatedAt: 2 }];
