@@ -22,8 +22,12 @@ type Context = {
   version: string; managed: string | null; paused: boolean; closed: boolean; intent: () => HostIntent; clock: Clock;
 };
 type HostRun = { marker: RunMarker; heartbeat?: NodeJS.Timeout; heartbeatFailed: boolean; log: CrashLog };
-/** `crashes`: this chain's host crashes in the last 10 minutes, 0 after a resume request (s18b's private message). */
-export type HostRunStart = { tracked: boolean; paused: boolean; runId?: string; chainId?: string; pauseCrashes?: number; pausedAt?: string; crashes: number; previous: CrashRecord | null };
+/** `crashes`: this chain's host crashes in the last 10 minutes, 0 after a resume request. For s18b's private message:
+ * `resumed`, this start took a fresh resume request; `pauseEntered`, this start paused a run that was not paused. */
+export type HostRunStart = {
+  tracked: boolean; paused: boolean; runId?: string; chainId?: string; pauseCrashes?: number; pausedAt?: string; crashes: number; previous: CrashRecord | null;
+  resumed: boolean; pauseEntered: boolean;
+};
 
 export const HEARTBEAT_MS = 60_000;
 let context: Context | undefined;
@@ -168,10 +172,13 @@ export function openHostRun(options: { root: string; startedAt: string; version:
       scope: 'host', root: options.root, runId: marker.runId, chainId, startedAt: options.startedAt, ...(bootId ? { bootId } : {}),
       version: marker.version, managed: marker.managed, paused, closed: false, intent: options.intent, clock,
     };
-    return { tracked: true, paused, runId: marker.runId, chainId, ...(paused ? { pauseCrashes, ...(marker.pausedAt ? { pausedAt: marker.pausedAt } : {}) } : {}), crashes: count, previous };
+    return {
+      tracked: true, paused, runId: marker.runId, chainId, ...(paused ? { pauseCrashes, ...(marker.pausedAt ? { pausedAt: marker.pausedAt } : {}) } : {}), crashes: count, previous,
+      resumed: resume === 'fresh', pauseEntered: paused && !sticky,
+    };
   } catch (error) {
     safe(() => log.fail('daemon-crash', error, { phase: 'open-run' }));
-    return { tracked: false, paused: false, crashes: 0, previous: null };
+    return { tracked: false, paused: false, crashes: 0, previous: null, resumed: false, pauseEntered: false };
   }
 }
 

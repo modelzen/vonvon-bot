@@ -10,7 +10,7 @@ type CacheEntry = {
   pending?: Promise<void>;
 };
 
-const bases = { feishu: 'https://open.feishu.cn', lark: 'https://open.larksuite.com' } as const;
+export const FEISHU_API_BASES = { feishu: 'https://open.feishu.cn', lark: 'https://open.larksuite.com' } as const;
 const allowedImageHosts = ['feishucdn.com', 'larksuitecdn.com', 'lark-cdn.com'];
 const maxImageBytes = 256 * 1024;
 
@@ -86,7 +86,7 @@ function createAvatarCache(options: AvatarOptions, limits: { entries: number; ac
 
   async function fetchAvatar(target: AvatarTarget): Promise<string | undefined> {
     const credential = await options.credentials(target.botId);
-    const base = bases[credential.tenant];
+    const base = FEISHU_API_BASES[credential.tenant];
     const signal = AbortSignal.timeout(4_000);
     const tokenResponse = await request(`${base}/open-apis/auth/v3/tenant_access_token/internal`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },

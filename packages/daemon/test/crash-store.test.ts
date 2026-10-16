@@ -6,9 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import {
-  countInWindow, crashDir, crashErrorName, crashScopeKey, createCrashRecordCache, createSystemClock, hasCrashRecordFor, listCrashRecords,
-  pruneCrashRecords, readBootId, readBotPauses, readCrashSummary, readRunMarker, removeResumeRequest, sanitizeReason, startedBeforeThisBoot,
-  takeResumeRequest, writeBotPausesSync, writeCrashRecordSync, writeResumeRequest, writeRunMarkerSync, type Clock, type CrashRecord, type RunMarker,
+  countInWindow, crashDir, crashErrorName, crashRecordFor, crashScopeKey, createCrashRecordCache, createSystemClock, hasCrashRecordFor, listCrashRecords,
+  pruneCrashRecords, readBootId, readBotPauses, readCrashSummary, readNotices, readRunMarker, removeResumeRequest, sanitizeReason, startedBeforeThisBoot,
+  takeResumeRequest, writeBotPausesSync, writeCrashRecordSync, writeNoticesSync, writeResumeRequest, writeRunMarkerSync, type Clock, type CrashRecord, type RunMarker,
 } from '../src/host/crash-store';
 
 // Passes through, so one test can cut a write short the way a full disk does.
@@ -176,6 +176,12 @@ describe('bot records for the supervisor and the snapshot (s18a)', () => {
     expect(hasCrashRecordFor(root, key, 78, T0 - 1000)).toBe(false);
     expect(hasCrashRecordFor(root, 'host', 77, T0 - 1000)).toBe(false);
     expect(hasCrashRecordFor(root, key, 77, T0 + 60_000)).toBe(false); // a PID reused since
+    // s18b: the record itself, for the owner's message; a damaged one reads as none.
+    expect(crashRecordFor(root, key, 77, T0 - 1000)).toMatchObject({ pid: 77, appId: 'cli_a', reason: 'Error: boom' });
+    expect(crashRecordFor(root, key, 77, T0 + 60_000)).toBeUndefined();
+    const [name] = readdirSync(crashDir(root));
+    writeFileSync(join(crashDir(root), name ?? ''), '{');
+    expect(crashRecordFor(root, key, 77, T0 - 1000)).toBeUndefined();
   });
   it('lists again only when crash/ changed or 30 s passed, and shows the last day\'s newest 20', () => {
     let mtime = 1;
@@ -210,6 +216,30 @@ describe('bot records for the supervisor and the snapshot (s18a)', () => {
     expect(readBotPauses(root, CHAIN, onCorrupt)).toEqual({});
     expect(corrupt).toBe(2);
     expect(listCrashRecords(root)).toEqual([]);
+  });
+});
+
+describe('notices (s18b)', () => {
+  it('reads nothing from a missing, damaged or foreign file, and reports the last two', () => {
+    const root = tempRoot();
+    let corrupt = 0;
+    expect(readNotices(root, () => corrupt++)).toEqual({});
+    mkdirSync(crashDir(root), { recursive: true });
+    writeFileSync(join(crashDir(root), 'notices.json'), '{"v":1,');
+    expect(readNotices(root, () => corrupt++)).toEqual({});
+    writeFileSync(join(crashDir(root), 'notices.json'), JSON.stringify({ v: 2, bots: {} }));
+    expect(readNotices(root, () => corrupt++)).toEqual({});
+    expect(corrupt).toBe(2);
+  });
+  it('writes 0600, drops the entries of more than a day ago, and is neither listed nor pruned as a record', () => {
+    const root = tempRoot();
+    writeNoticesSync(root, { cli_new: { at: at(T0 - 60_000), uptimeMs: 5, bootId: 'boot-a' }, cli_old: { at: at(T0 - 25 * 3_600_000), uptimeMs: 1 } }, T0);
+    expect(readNotices(root)).toEqual({ cli_new: { at: at(T0 - 60_000), uptimeMs: 5, bootId: 'boot-a' } });
+    if (process.platform !== 'win32') expect(statSync(join(crashDir(root), 'notices.json')).mode & 0o777).toBe(0o600);
+    expect(listCrashRecords(root)).toEqual([]);
+    pruneCrashRecords(root, { now: T0 + 40 * 24 * 3_600_000 });
+    expect(readdirSync(crashDir(root))).toEqual(['notices.json']);
+    expect(() => writeNoticesSync(root, { 'not-an-app': { at: at(T0), uptimeMs: 1 } }, T0)).toThrow();
   });
 });
 

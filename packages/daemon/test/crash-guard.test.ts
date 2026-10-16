@@ -52,7 +52,7 @@ describe('openHostRun and closeHostRun', () => {
   afterEach(() => { guard.closeHostRun({ kind: 'clean' }); vi.useRealTimers(); });
   it('starts a new chain without a marker and writes its own', () => {
     const start = open();
-    expect(start).toMatchObject({ tracked: true, paused: false, previous: null });
+    expect(start).toMatchObject({ tracked: true, paused: false, previous: null, resumed: false, pauseEntered: false });
     expect(readRunMarker(root)).toMatchObject({ runId: start.runId, chainId: start.chainId, pid: 5000, state: 'running', aliveAt: at(T0), startUptimeMs: UP, bootId: 'boot-a' });
     expect(listCrashRecords(root)).toEqual([]);
   });
@@ -101,7 +101,8 @@ describe('openHostRun and closeHostRun', () => {
     writeCrashRecordSync(root, crash({ sysUptimeMs: UP - 300_000 }));
     writeCrashRecordSync(root, crash({ sysUptimeMs: UP - 120_000 }));
     const start = open();
-    expect(start).toMatchObject({ paused: true, pauseCrashes: 3, pausedAt: at(T0), crashes: 3, chainId: CHAIN });
+    // s18b: the start that paused the run tells the owner at once; the next paused start does not.
+    expect(start).toMatchObject({ paused: true, pauseCrashes: 3, pausedAt: at(T0), crashes: 3, chainId: CHAIN, pauseEntered: true, resumed: false });
     const paused = readRunMarker(root);
     expect(paused).toMatchObject({ state: 'paused', pausedAt: at(T0), pauseCrashes: 3 });
     expect(logs.warn).toHaveBeenCalledWith('daemon-crash', 'paused', { crashes: 3 });
@@ -110,7 +111,7 @@ describe('openHostRun and closeHostRun', () => {
     vi.resetModules();
     const fresh = await import('../src/host/crash-guard');
     const again = fresh.openHostRun({ root, startedAt: at(now), version: '0.7.0', intent: () => 'running', log: logs, clock: clock() });
-    expect(again).toMatchObject({ paused: true, pauseCrashes: 3 });
+    expect(again).toMatchObject({ paused: true, pauseCrashes: 3, pauseEntered: false });
     expect(readRunMarker(root)).toMatchObject({ state: 'paused', pausedAt: at(T0) });
     expect(listCrashRecords(root)[0]).toMatchObject({ kind: 'forced', paused: true });
     fresh.closeHostRun({ kind: 'clean' });
@@ -119,7 +120,7 @@ describe('openHostRun and closeHostRun', () => {
     writeRunMarkerSync(root, marker({ state: 'paused', pausedAt: at(T0 - 60_000), pauseCrashes: 3 }));
     writeResumeRequest(root, now - 10_000);
     const start = open();
-    expect(start.paused).toBe(false);
+    expect(start).toMatchObject({ paused: false, resumed: true, pauseEntered: false, crashes: 0, previous: { runId: PREV_RUN } });
     expect(start.chainId).not.toBe(CHAIN);
     expect(listCrashRecords(root)).toMatchObject([{ kind: 'forced', runId: PREV_RUN, chainId: CHAIN, paused: true }]);
     expect(readdirSync(crashDir(root))).not.toContain('resume.json');
@@ -127,7 +128,7 @@ describe('openHostRun and closeHostRun', () => {
   });
   it('runs unpaused and untracked when the crash directory cannot be written', () => {
     writeFileSync(join(root, 'crash'), 'not a directory');
-    expect(open()).toEqual({ tracked: false, paused: false, crashes: 0, previous: null });
+    expect(open()).toEqual({ tracked: false, paused: false, crashes: 0, previous: null, resumed: false, pauseEntered: false });
     expect(logs.fail).toHaveBeenCalledWith('daemon-crash', expect.anything(), { phase: 'open-run' });
     guard.closeHostRun({ kind: 'fatal', error: new Error('ignored') });
   });

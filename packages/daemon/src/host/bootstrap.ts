@@ -10,6 +10,8 @@ import { log } from '../core/logger';
 import { bridgeVersion } from '../core/version';
 import { defaultHolderPath, ProcessHost } from '../provider/process/process-host';
 import { closeHostRun, guardParentPipes, openBotCrashContext, openHostRun, type HostRunStart } from './crash-guard';
+import { crashEntry } from './crash-store';
+import type { HostNotice } from './crash-notify';
 
 const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -99,12 +101,17 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
     }
     const { runRun } = await import('../cli/commands/run');
     const claimedOwner = owner;
+    // The owner's private message (s18b): the previous run's crash, unless it happened during a requested stop or restart.
+    const notice: HostNotice | undefined = run?.tracked ? {
+      ...(run.previous && (run.previous.during ?? 'run') === 'run' ? { previous: crashEntry(run.previous) } : {}),
+      crashes: run.paused ? run.pauseCrashes ?? 3 : run.crashes, resumed: run.resumed, pauseEntered: run.pauseEntered,
+    } : undefined;
     await runRun(options.bot, {
       control,
       managed: options.managed,
       port: options.port,
       ...(run?.paused ? { paused: true } : {}),
-      ...(run?.runId && run.chainId ? { crash: { runId: run.runId, chainId: run.chainId, ...(run.paused ? { pause: { since: run.pausedAt ? Date.parse(run.pausedAt) : Date.now(), crashes: run.pauseCrashes ?? 3 } } : {}) } } : {}),
+      ...(run?.runId && run.chainId ? { crash: { runId: run.runId, chainId: run.chainId, ...(run.paused ? { pause: { since: run.pausedAt ? Date.parse(run.pausedAt) : Date.now(), crashes: run.pauseCrashes ?? 3 } } : {}), ...(notice ? { notice } : {}) } } : {}),
       onListening: claimedOwner ? async (listen) => { await publishPidLock(paths.appDir, claimedOwner, listen); } : undefined,
     });
   } catch (error) {

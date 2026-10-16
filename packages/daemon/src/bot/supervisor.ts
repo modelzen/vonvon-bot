@@ -15,10 +15,11 @@ import { noteClaudeLoginFailed } from '../agent/claude-agent/login';
 import { createDiagnosticsStore, parseDiagnosticsIpc } from './diagnostics';
 import { bridgeVersion } from '../core/version';
 import {
-  BOT_LOCK_BUSY_EXIT, countInWindow, CRASH_EXIT_CODE, CRASH_PAUSE_COUNT, CRASH_WINDOW_MS, crashScopeKey, createCrashRecordCache, hasCrashRecordFor,
-  listCrashRecords, pruneCrashRecords, readBotPauses, sanitizeReason, systemClock, writeBotPausesSync, writeCrashRecordSync, type BotPauseState,
+  BOT_LOCK_BUSY_EXIT, countInWindow, CRASH_EXIT_CODE, CRASH_PAUSE_COUNT, CRASH_WINDOW_MS, crashRecordFor, crashScopeKey, createCrashRecordCache, hasCrashRecordFor,
+  listCrashRecords, pruneCrashRecords, readBotPauses, sanitizeReason, systemClock, writeBotPausesSync, writeCrashRecordSync, type BotPauseState, type CrashRecord,
 } from '../host/crash-store';
-import type { CrashKind, CrashPause } from '@vonvon/protocol';
+import { botLabel, createCrashNotifier, type CrashNotifier, type HostNotice } from '../host/crash-notify';
+import { crashText, type CrashKind, type CrashPause } from '@vonvon/protocol';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 
@@ -58,15 +59,18 @@ interface Child {
   spawnRecordedAt?: number;
 }
 
-/** The host's run and chain, under which the children's records go, and its own pause (s18a). */
-export type SupervisorCrash = { runId?: string; chainId?: string; pause?: CrashPause };
+/** The host's run and chain, under which the children's records go, and its own pause (s18a); what its start knows of
+ * the run before it, for the owner's private message (s18b). */
+export type SupervisorCrash = { runId?: string; chainId?: string; pause?: CrashPause; notice?: HostNotice };
+/** An exit 70 whose record cannot be read (s18b's message). */
+const NO_RECORD_REASON = '程序出错（子进程出错退出，没留下记录）';
 
 /** 实时状态查询（{kind:'status'}）的短超时：/api/state 是 5s 轮询，不能被一个
  * 假死子进程拖住整页——超时按 connection:'unknown' 渲染。 */
 const STATUS_IPC_TIMEOUT_MS = 2_000;
 export const HOST_PAUSED_ACTIVATION = 'daemon 已暂停（10 分钟内崩溃了 3 次），这个 bot 恢复运行后才会启动。运行 vonvon daemon restart 恢复。';
 
-export async function runSupervisor(bots: BotEntry[], options: { control?: ShutdownControl; managed?: boolean; port?: number; onListening?: (listen: string) => Promise<void>; paused?: boolean; crash?: SupervisorCrash } = {}): Promise<void> {
+export async function runSupervisor(bots: BotEntry[], options: { control?: ShutdownControl; managed?: boolean; port?: number; onListening?: (listen: string) => Promise<void>; paused?: boolean; crash?: SupervisorCrash; notifier?: CrashNotifier } = {}): Promise<void> {
   const control = options.control ?? observeShutdown();
   const supervisorStartedAt = Date.now();
   const cliEntry = process.argv[1];
@@ -101,6 +105,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   // Lives here, not in the child: a bot's records survive its restarts and go with the daemon's.
   const diagnostics = createDiagnosticsStore({ changed: () => api?.invalidate(), claudeSignedOut: noteClaudeLoginFailed });
   const records = createCrashRecordCache(root);
+  const notifier = options.notifier ?? createCrashNotifier({ root, clock, log });
 
   console.log(paused ? `\ndaemon 已暂停，${bots.length} 个机器人都不启动：` : `\n正在启动 ${bots.length} 个机器人（各自独立进程）：`);
   for (const b of bots) console.log(`  • ${b.name}  (${b.appId})  [${b.tenant}]`);
@@ -164,22 +169,24 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     pausesRetry.unref();
   };
   /** What the child could not record itself: a signal, a handler that failed to write, a fatal exit, a failed spawn. */
-  const recordCrash = (c: Child, kind: CrashKind, reason: string, pid: number): void => {
+  const recordCrash = (c: Child, kind: CrashKind, reason: string, pid: number): CrashRecord => {
     const bootId = clock.bootId();
-    tryDisk(c, 'crash-record', '', () => writeCrashRecordSync(root, {
+    const entry: CrashRecord = {
       v: 1, at: new Date(clock.now()).toISOString(), sysUptimeMs: clock.uptimeMs(), ...(bootId ? { bootId } : {}), kind, scope: 'bot', appId: c.bot.appId,
       pid, runId, chainId, startedAt: new Date(c.startedAt).toISOString(), uptimeMs: Math.max(0, Date.now() - c.startedAt), version, managed,
       during: 'run', reason: sanitizeReason(reason),
-    }));
+    };
+    tryDisk(c, 'crash-record', '', () => writeCrashRecordSync(root, entry));
     // Pruned at most once a minute, failed spawns included (they never reach countCrash); a paused bot writes no more.
     if (!(Date.now() - (c.prunedAt ?? 0) < 60_000)) {
       c.prunedAt = Date.now();
       tryDisk(c, 'crash-prune', 0, () => pruneCrashRecords(root, { now: clock.now(), scope: crashScopeKey('bot', c.bot.appId) }));
     }
     records.invalidate();
+    return entry;
   };
-  /** Counts a crash: the larger of the disk's count (it outlives a host crash) and memory's. True when it paused the bot. */
-  const countCrash = (c: Child): boolean => {
+  /** Counts a crash: the larger of the disk's count (it outlives a host crash) and memory's. `paused` when it paused the bot. */
+  const countCrash = (c: Child): { crashes: number; paused: boolean } => {
     const up = clock.uptimeMs();
     const since = c.resumedUptimeMs;
     c.crashTimes = [...c.crashTimes.filter(at => up - at <= CRASH_WINDOW_MS && (since === undefined || at > since)), up];
@@ -188,12 +195,17 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
       { chainId, nowUptimeMs: up, appId: c.bot.appId, ...(since !== undefined ? { sinceUptimeMs: since } : {}) }));
     api?.invalidate();
     const crashes = Math.max(onDisk, c.crashTimes.length);
-    if (crashes < CRASH_PAUSE_COUNT) return false;
+    if (crashes < CRASH_PAUSE_COUNT) return { crashes, paused: false };
     c.pause = { since: clock.now(), crashes };
     savePauses(c);
     log.warn('supervisor', 'bot-paused', { bot: c.bot.name, appId: c.bot.appId, crashes });
     console.error(`\x1b[2m[${c.bot.name}]\x1b[0m 10 分钟内崩溃了 ${crashes} 次，已停止自动重启。查完原因后在状态与诊断页点「恢复运行」，或运行 vonvon daemon restart。`);
-    return true;
+    return { crashes, paused: true };
+  };
+  /** The owner's private message of a counted crash (s18b): at once when it paused the bot, else once a child stays up. */
+  const tellCrash = (c: Child, counted: { crashes: number; paused: boolean }, reason: string): void => {
+    if (counted.paused) notifier.botPaused(c.bot.appId, botLabel(c.bot), counted.crashes, reason);
+    else notifier.botCrashed(c.bot.appId, botLabel(c.bot), counted.crashes, reason);
   };
   const pausedWrite = (c: Child): string =>
     `机器人「${c.bot.name}」10 分钟内崩溃了 ${c.pause?.crashes ?? CRASH_PAUSE_COUNT} 次，已暂停。在状态与诊断页点「恢复运行」后再试。`;
@@ -220,7 +232,11 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     if (shuttingDown || !c.enabled || c.stopping) return;
     const code = String((error as NodeJS.ErrnoException | undefined)?.code ?? (error instanceof Error ? error.message : error));
     if (Date.now() - (c.spawnRecordedAt ?? 0) >= 60_000) { c.spawnRecordedAt = Date.now(); recordCrash(c, 'fatal', `spawn ${code}`, process.pid); }
-    if ((code === 'ENOENT' || code === 'EACCES') && countCrash(c)) return;
+    if (code === 'ENOENT' || code === 'EACCES') {
+      const counted = countCrash(c);
+      tellCrash(c, counted, crashText({ kind: 'fatal', reason: sanitizeReason(`spawn ${code}`) }));
+      if (counted.paused) return;
+    }
     restartLater(c, { spawn: code }, `起不来（spawn ${code}）`);
   };
 
@@ -243,6 +259,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
       return;
     }
     c.proc = proc;
+    notifier.botStarted(c.bot.appId);
     const owned: ChildOwnership = {};
     ownership.set(proc, owned);
     api?.invalidate();
@@ -273,6 +290,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
       if (c.proc !== proc) return;
       c.proc = undefined;
       c.ipc = undefined;
+      notifier.botExited(c.bot.appId);
       records.invalidate();
       api?.invalidate();
       // In-flight requests are told what comes next: paused or a restart, once counted (each disk step only logs, so
@@ -286,19 +304,23 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
       // 0 (an exit nobody asked for) and 75 (the lock still held by the child before it, s18 D2) are not crashes.
       if (code !== 0 && code !== BOT_LOCK_BUSY_EXIT) {
         const pid = proc.pid ?? process.pid;
-        if (signal) recordCrash(c, 'forced', signal, pid);
-        else if (code !== CRASH_EXIT_CODE) recordCrash(c, 'fatal', lastStderr ?? `退出码 ${code}`, pid);
-        else if (!tryDisk(c, 'crash-lookup', false, () => hasCrashRecordFor(root, crashScopeKey('bot', c.bot.appId), pid, c.startedAt))) {
-          recordCrash(c, 'exception', '子进程出错退出，没留下记录', pid);
-        }
-        if (countCrash(c)) { ipc.rejectAll(pausedWrite(c)); return; }
+        const key = crashScopeKey('bot', c.bot.appId);
+        let entry: CrashRecord | undefined;
+        if (signal) entry = recordCrash(c, 'forced', signal, pid);
+        else if (code !== CRASH_EXIT_CODE) entry = recordCrash(c, 'fatal', lastStderr ?? `退出码 ${code}`, pid);
+        else if (!tryDisk(c, 'crash-lookup', false, () => hasCrashRecordFor(root, key, pid, c.startedAt))) {
+          entry = recordCrash(c, 'exception', '子进程出错退出，没留下记录', pid);
+        } else entry = tryDisk(c, 'crash-read', undefined, () => crashRecordFor(root, key, pid, c.startedAt)); // the child's own
+        const counted = countCrash(c);
+        tellCrash(c, counted, entry ? crashText(entry) : NO_RECORD_REASON);
+        if (counted.paused) { ipc.rejectAll(pausedWrite(c)); return; }
       }
       ipc.rejectAll(exited);
       restartLater(c, { code, signal }, `进程退出（code=${code ?? signal ?? '?'}）`);
     });
     proc.on('error', (err) => {
       log.fail('supervisor', err, { bot: c.bot.name, phase: 'spawn' });
-      if (proc.pid === undefined && c.proc === proc) { c.proc = undefined; c.ipc = undefined; ipc.rejectAll(err.message); spawnFailed(c, err); }
+      if (proc.pid === undefined && c.proc === proc) { c.proc = undefined; c.ipc = undefined; notifier.botExited(c.bot.appId); ipc.rejectAll(err.message); spawnFailed(c, err); }
     });
   };
 
@@ -326,6 +348,8 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   };
 
   try {
+    // Before startApi: a paused host whose port is taken still sends its pause message while it shuts down (D1).
+    notifier.hostStarted(options.crash?.notice, { bots, paused, botPaused: appId => Boolean(children.get(appId)?.pause) });
     for (const c of children.values()) spawnChild(c);
 
     const byAppId = (botId: string): Child | undefined => children.get(botId);
@@ -356,6 +380,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
             children.set(appId, child);
           }
           if (!enabled) {
+            notifier.botForget(appId);
             // A disable gives the pause up: enabling again is 恢复运行 anyway, and the CLI and the file stop calling it paused.
             if (child.pause) {
               log.info('supervisor', 'bot-pause-dropped', { bot: child.bot.name, appId });
@@ -368,6 +393,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
           if (paused) throw new Error(HOST_PAUSED_ACTIVATION);
           if (child.pause) {
             log.info('supervisor', 'bot-resumed', { bot: child.bot.name, appId });
+            notifier.botForget(appId);
             clearPause(child);
           }
           if (child.stopping) await child.stopping;
@@ -440,6 +466,8 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     await control.waitForRequest();
   } catch (error) { errors.push(error); }
   finally {
+    // First: a 30 s wait must not end during the drain and tell the owner a bot "recovered" (s18b).
+    const notices = notifier.close();
     shuttingDown = true;
     diagnostics.close();
     for (const child of children.values()) if (child.restartTimer) clearTimeout(child.restartTimer);
@@ -448,7 +476,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
       const drained = await Promise.allSettled([Promise.resolve().then(() => api?.beginDrain())]);
       drained.push(...await Promise.allSettled([...children.values()].map(stopBot)));
       errors.push(...drained.filter(result => result.status === 'rejected').map(result => result.reason));
-    })]);
+    }), notices]);
     cleanup.push(...await Promise.allSettled([control.completeShutdown(() => api?.release() ?? Promise.resolve())]));
     if (!options.control) control.dispose();
     const failures = cleanup.filter(result => result.status === 'rejected');

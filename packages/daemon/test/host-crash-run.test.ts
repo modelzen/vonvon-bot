@@ -19,7 +19,7 @@ vi.mock('../src/provider/process/process-host', () => ({
 }));
 vi.mock('../src/cli/commands/run', () => ({ runRun: vi.fn() }));
 import { runRun } from '../src/cli/commands/run';
-import { listCrashRecords, readRunMarker } from '../src/host/crash-store';
+import { listCrashRecords, readRunMarker, writeCrashRecordSync, writeRunMarkerSync } from '../src/host/crash-store';
 import { runHostRuntime } from '../src/host/bootstrap';
 
 let requested = false;
@@ -52,10 +52,31 @@ it('a failure while stopping is a clean end; three unrequested failures pause th
   for (let attempt = 0; attempt < 3; attempt++) await expect(start()).rejects.toThrow('EADDRINUSE');
   expect(listCrashRecords(fixture.root).map(entry => `${entry.kind}:${entry.errorName}`)).toEqual(['fatal:Error:EADDRINUSE', 'fatal:Error:EADDRINUSE', 'fatal:Error:EADDRINUSE']);
   expect(vi.mocked(runRun).mock.calls.every(call => call[1]?.paused === undefined)).toBe(true);
+  // s18b: what each start knows of the run before it, for the owner's private message.
+  const fatal = { kind: 'fatal', reason: 'Error: listen EADDRINUSE', uptimeMs: expect.any(Number) };
+  expect(vi.mocked(runRun).mock.calls.map(call => call[1]?.crash?.notice)).toEqual([
+    { crashes: 0, resumed: false, pauseEntered: false },
+    { crashes: 0, resumed: false, pauseEntered: false },
+    { previous: expect.objectContaining(fatal), crashes: 1, resumed: false, pauseEntered: false },
+    { previous: expect.objectContaining(fatal), crashes: 2, resumed: false, pauseEntered: false },
+  ]);
   vi.mocked(runRun).mockReset().mockResolvedValue();
   await start();
   // The bot children's records go under this run and chain (s18a).
-  expect(vi.mocked(runRun).mock.calls[0]?.[1]).toMatchObject({ paused: true, crash: { runId: expect.any(String), chainId: listCrashRecords(fixture.root)[0]?.chainId, pause: { crashes: 3 } } });
+  expect(vi.mocked(runRun).mock.calls[0]?.[1]).toMatchObject({
+    paused: true, crash: { runId: expect.any(String), chainId: listCrashRecords(fixture.root)[0]?.chainId, pause: { crashes: 3 }, notice: { previous: fatal, crashes: 3, resumed: false, pauseEntered: true } },
+  });
+});
+
+it('a crash during a requested stop is not told as one (s18b)', async () => {
+  const at = new Date().toISOString();
+  const runId = '11111111-1111-4111-8111-111111111111';
+  const chainId = '22222222-2222-4222-8222-222222222222';
+  writeRunMarkerSync(fixture.root, { v: 1, runId, chainId, pid: 4242, startedAt: at, startUptimeMs: 0, aliveAt: at, aliveUptimeMs: 0, version: '0.7.0', managed: null, state: 'running' });
+  writeCrashRecordSync(fixture.root, { v: 1, at, sysUptimeMs: 0, kind: 'exception', scope: 'host', pid: 4242, runId, chainId, startedAt: at, version: '0.7.0', managed: null, during: 'stop', reason: 'Error: drain' });
+  vi.mocked(runRun).mockResolvedValue();
+  await start();
+  expect(vi.mocked(runRun).mock.calls[0]?.[1]?.crash?.notice).toEqual({ crashes: 0, resumed: false, pauseEntered: false });
 });
 
 it('a paused service-managed run that cannot start exits 0 and stays paused', async () => {
