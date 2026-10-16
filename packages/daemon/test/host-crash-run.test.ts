@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -20,7 +21,8 @@ vi.mock('../src/provider/process/process-host', () => ({
 vi.mock('../src/cli/commands/run', () => ({ runRun: vi.fn() }));
 import { runRun } from '../src/cli/commands/run';
 import { closeMutex } from '../src/config/data-access';
-import { log } from '../src/core/logger';
+import { formatErrorTree } from '../src/core/error-parts';
+import { log, TEST_LOGS_DIR } from '../src/core/logger';
 import { releasePidLock } from '../src/server/pid-lock';
 import { listCrashRecords, readRunMarker } from '../src/host/crash-store';
 import { runHostRuntime } from '../src/host/bootstrap';
@@ -95,12 +97,28 @@ it('logs each error of a failed process-host cleanup and still releases the lock
   expect(closeMutex).toHaveBeenCalledOnce();
 });
 
+/** The JSON log lines of `phase` that contain `marker`, once the write stream has flushed them. */
+async function jsonLines(phase: string, marker: string): Promise<Record<string, unknown>[]> {
+  let found: Record<string, unknown>[] = [];
+  for (let attempt = 0; attempt < 40 && found.length === 0; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 50));
+    const text = readdirSync(TEST_LOGS_DIR).filter(file => file.endsWith('.log')).map(file => readFileSync(join(TEST_LOGS_DIR, file), 'utf8')).join('');
+    found = text.split('\n').filter(row => row.includes(marker)).map(row => JSON.parse(row) as Record<string, unknown>).filter(row => row.phase === phase);
+  }
+  return found;
+}
+
 it('logs a failure of the run that nothing logged yet, and not one the supervisor already logged', async () => {
   const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-  vi.mocked(runRun).mockImplementationOnce(async () => { throw new Error('registry unreadable'); });
-  await expect(start()).rejects.toThrow('registry unreadable');
-  expect(failLines(error, '[daemon-run.fail]')).toEqual([expect.stringMatching(/phase=run err=registry unreadable$/)]);
+  const fail = vi.spyOn(log, 'fail');
+  const unreadable = `registry unreadable ${Date.now()}`;
+  vi.mocked(runRun).mockImplementationOnce(async () => { throw new Error(unreadable); });
+  await expect(start()).rejects.toThrow(unreadable);
+  expect(await jsonLines('daemon-run', unreadable)).toEqual([expect.objectContaining({ level: 'error', phase: 'daemon-run', event: 'fail', _phase: 'run', err: unreadable })]);
+  // In the JSON log only: the CLI prints the error itself, so each start of a service that keeps failing prints it once.
+  expect(error).not.toHaveBeenCalled();
   error.mockClear();
+  fail.mockClear();
   // The supervisor's finally logs each cleanup error, then throws them as one group.
   vi.mocked(runRun).mockImplementationOnce(async () => {
     const errors = [new Error('drain failed'), new Error('IPC channel closed')];
@@ -109,7 +127,29 @@ it('logs a failure of the run that nothing logged yet, and not one the superviso
   });
   await expect(start()).rejects.toThrow('Supervisor cleanup failed.');
   expect(failLines(error, '[daemon-shutdown.fail]')).toHaveLength(2);
-  expect(failLines(error, '[daemon-run.fail')).toEqual([]);
+  expect(fail.mock.calls.map(call => call[0])).toEqual(['daemon-shutdown', 'daemon-shutdown']);
+});
+
+it('adds the shutdown failure the run already threw only once: complete() runs once and gives each caller its result', async () => {
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  const cutoff = new AggregateError([new Error('listener close failed')], 'Listener cutoff was not confirmed.');
+  // A single bot throws the failure alone; the supervisor throws it with its other cleanup errors.
+  for (const thrown of [cutoff, new AggregateError([new Error('drain failed'), cutoff], 'Supervisor cleanup failed.')]) {
+    requested = false;
+    const completion = Promise.reject(cutoff);
+    completion.catch(() => {});
+    vi.mocked(runRun).mockImplementationOnce(async () => { requested = true; throw thrown; });
+    const failure: unknown = await runHostRuntime({ managed: false, control: Object.assign(control(), { completeShutdown: () => completion }) }).catch((reason: unknown) => reason);
+    expect(failure).toBe(thrown);
+    expect(formatErrorTree(failure).split('listener close failed')).toHaveLength(2);
+  }
+  // One the run did not throw is still added.
+  requested = false;
+  const late = new Error('late cutoff');
+  const completion = Promise.reject(late);
+  completion.catch(() => {});
+  vi.mocked(runRun).mockImplementationOnce(async () => { requested = true; });
+  await expect(runHostRuntime({ managed: false, control: Object.assign(control(), { completeShutdown: () => completion }) })).rejects.toBe(late);
 });
 
 it('VONVON_TEST_CRASH=cleanup: a stop logs the seam and its two parts without a crash record; a crash keeps its own record', async () => {

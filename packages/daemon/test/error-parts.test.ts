@@ -59,6 +59,25 @@ it('marks a group already split as a repeat, and a root split before with its ti
   ]);
 });
 
+it('leaves a nested group the 20-leaf cap cut out of the split ones, so logged on its own it is split then', () => {
+  const seen: ExpandedErrors = new WeakMap();
+  const dropped = new AggregateError([new Error('deep')], 'nested');
+  const cut = new AggregateError(['c1', 'c2', 'c3', 'c4', 'c5'].map(text => new Error(text)), 'cut');
+  const kept = new AggregateError([new Error('k1')], 'kept');
+  // 25 errors: 1 is `kept`, 18 is `cut` (18.1 to 18.3 fit, 18.4 and 18.5 do not), 23 is `dropped`.
+  const children: unknown[] = Array.from({ length: 25 }, (_, index) => new Error(`e${index + 1}`));
+  children[0] = kept;
+  children[17] = cut;
+  children[22] = dropped;
+  const root = errorParts(new AggregateError(children, 'root'), seen, 'T1');
+  expect({ count: root.parts.length, total: root.total, truncated: root.truncated }).toEqual({ count: 20, total: 29, truncated: false });
+  expect(root.parts.slice(-3).map(part => part.path)).toEqual(['18.1', '18.2', '18.3']);
+  expect(errorParts(dropped, seen, 'T2')).toMatchObject({ total: 1, parts: [{ path: '1', within: [], message: 'deep' }] });
+  expect(errorParts(cut, seen, 'T3').parts.map(part => part.message)).toEqual(['c1', 'c2', 'c3', 'c4', 'c5']);
+  // A group whose leaves all fit stays split at its time.
+  expect(errorParts(kept, seen, 'T4')).toEqual({ parts: [], total: 0, truncated: false, partsAt: 'T1' });
+});
+
 it('prints the message alone for a plain error, then one line per leaf', () => {
   expect(formatErrorTree(new Error('reported failure'))).toBe('reported failure');
   expect(formatErrorTree('plain')).toBe('plain');

@@ -114,8 +114,8 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
     errors.push(error);
     if (!control.requested) fatal = { error };
     // The supervisor and a single bot log what fails inside their run; a failure before it (the registration, a
-    // lock, the registry) is logged here (s17b).
-    if (!wasLogged(error)) log.fail('daemon-run', error, { phase: 'run' });
+    // lock, the registry) is logged here (s17b), in the JSON log only: the CLI prints this error itself.
+    if (!wasLogged(error)) log.fail('daemon-run', error, { phase: 'run' }, { console: false });
   }
   finally {
     // A cleanup failure no longer turns a requested restart into a stop (v1-plan s17): the replacement starts only
@@ -127,9 +127,10 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
       log.fail('daemon-shutdown', seam, { phase: 'test-seam' });
       errors.push(seam);
     }
-    // complete() logs its own failure before it throws.
+    // complete() logs its own failure before it throws. It runs once: a run that called it already threw this
+    // rejection, alone or in its group, so it is not added again.
     try { await control.completeShutdown(async () => {}); }
-    catch (error) { errors.push(error); }
+    catch (error) { if (!errors.some(item => item === error || (item instanceof AggregateError && Array.isArray(item.errors) && item.errors.includes(error)))) errors.push(error); }
     control.dispose();
     closeHostRun(fatal ? { kind: 'fatal', error: fatal.error } : { kind: 'clean' });
     // A paused run that cannot stay up exits 0 under a manager, which then leaves it down: the pause ends the loop.

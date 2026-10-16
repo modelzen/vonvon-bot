@@ -90,10 +90,12 @@ describe('the manager\'s record of the exits (s17b)', () => {
     expect(withExits).toEqual({ ...plain, exits: killed, lastExit: '被信号结束（Killed: 9，kill -9 或内存不够）' });
     expect(plain).not.toHaveProperty('exits');
     expect(plain).not.toHaveProperty('lastExit');
-    // systemd while the service runs: the record, no last exit.
-    const cleared = serviceStatus({ ...running, platformName: 'systemd (Linux)', exits: { manager: 'systemd', result: 'success', execMainCode: 0, execMainStatus: 0, nRestarts: 1, exitedAt: null } });
-    expect(cleared.exits).toMatchObject({ nRestarts: 1 });
-    expect(cleared).not.toHaveProperty('lastExit');
+    // systemd while the service runs keeps no last exit: after a restart the web page says so as the command does;
+    // before any, it has none.
+    const systemd = (nRestarts: number) => serviceStatus({ ...running, platformName: 'systemd (Linux)', exits: { manager: 'systemd', result: 'success', execMainCode: 0, execMainStatus: 0, nRestarts, exitedAt: null } });
+    expect(systemd(1).exits).toMatchObject({ nRestarts: 1 });
+    expect(systemd(1).lastExit).toBe('服务在运行时 systemd 不保留，崩溃记录看 vonvon daemon status');
+    expect(systemd(0)).not.toHaveProperty('lastExit');
   });
   it('prints the lines after the state and before the files; --json carries both fields', async () => {
     const write = vi.spyOn(process.stdout, 'write').mockReturnValue(true);

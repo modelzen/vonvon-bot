@@ -72,9 +72,9 @@ function logsDir(): string {
   return inTestEnv() ? TEST_LOGS_DIR : join(paths.appDir, 'logs');
 }
 
-function getStream(): WriteStream | null {
-  const today = todayKey();
-  if (stream && currentDate === today) return stream;
+/** The stream of `day`'s file (`YYYY-MM-DD`), today's by default. */
+function getStream(day = todayKey()): WriteStream | null {
+  if (stream && currentDate === day) return stream;
   if (stream) {
     try {
       stream.end();
@@ -84,8 +84,8 @@ function getStream(): WriteStream | null {
   }
   try {
     mkdirSync(logsDir(), { recursive: true });
-    stream = createWriteStream(join(logsDir(), `${today}.log`), { flags: 'a' });
-    currentDate = today;
+    stream = createWriteStream(join(logsDir(), `${day}.log`), { flags: 'a' });
+    currentDate = day;
     return stream;
   } catch {
     return null;
@@ -116,7 +116,8 @@ export function shortenFeishuId(value: string): string {
   return id ? `${id[1]!.slice(-6)}${id[2] ?? ''}` : value;
 }
 
-function emit(level: Level, phase: string, event: string, fields: LogFields = {}, ts = new Date().toISOString()): void {
+/** `toConsole: false` writes the JSON line only. */
+function emit(level: Level, phase: string, event: string, fields: LogFields = {}, ts = new Date().toISOString(), toConsole = true): void {
   const ctx: LogContext = { ...als.getStore() };
   if (ctx.chatId) ctx.chatId = shortenFeishuId(ctx.chatId);
   if (ctx.msgId) ctx.msgId = shortenFeishuId(ctx.msgId);
@@ -137,7 +138,8 @@ function emit(level: Level, phase: string, event: string, fields: LogFields = {}
       entry[k] = v;
     }
   }
-  const s = getStream();
+  // The file of the line's own day: a fail line and its parts share one `ts`, and stay in one file across midnight.
+  const s = getStream(ts.slice(0, 10));
   if (s) {
     try {
       s.write(`${JSON.stringify(entry)}\n`);
@@ -148,7 +150,7 @@ function emit(level: Level, phase: string, event: string, fields: LogFields = {}
 
   const showOnStdout =
     level !== 'info' || STDOUT_INFO_ALLOWLIST.has(`${phase}.${event}`);
-  if (!showOnStdout) return;
+  if (!showOnStdout || !toConsole) return;
 
   const fn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
   fn(formatStdout(level, phase, event, ctx, shown));
@@ -221,8 +223,12 @@ export const log = {
   warn(phase: string, event: string, fields?: LogFields): void {
     emit('warn', phase, event, fields);
   },
-  /** s17b: an AggregateError (or an error caused by one) is followed by one `fail_part` line per error inside it. */
-  fail(phase: string, err: unknown, fields?: LogFields): void {
+  /**
+   * s17b: an AggregateError (or an error caused by one) is followed by one `fail_part` line per error inside it.
+   * `console: false` keeps the lines out of the terminal, for an error the command prints itself next.
+   */
+  fail(phase: string, err: unknown, fields?: LogFields, options?: { console?: boolean }): void {
+    const toConsole = options?.console !== false;
     const message = err instanceof Error ? err.message : String(err);
     const stack = err instanceof Error ? err.stack : undefined;
     const apiData = (err as { response?: { data?: unknown } })?.response?.data;
@@ -241,7 +247,7 @@ export const log = {
       apiData,
       stack,
       ...parts,
-    }, ts);
+    }, ts, toConsole);
     for (const part of split.parts) {
       emit('error', phase, 'fail_part', {
         ...fields,
@@ -252,7 +258,7 @@ export const log = {
         err: part.message,
         stack: part.stack,
         ...(part.repeat ? { repeat: true, partsAt: part.partsAt } : {}),
-      }, ts);
+      }, ts, toConsole);
     }
   },
 };

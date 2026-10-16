@@ -127,7 +127,11 @@ export function describeServiceExits(exits: ServiceExits | undefined): { lastExi
     const lastExit = record ? `${how}。systemd：${record}` : how;
     return { lastExit, lines: [`上次退出：${lastExit}`, ...restarts] };
   }
-  // A new process clears the record: while the service runs, only the restart count is left.
-  const kept = code === 0 && exits.nRestarts !== null && exits.nRestarts > 0 ? ['上次退出：服务在运行时 systemd 不保留，崩溃记录看 vonvon daemon status'] : [];
-  return { lines: [...kept, ...restarts] };
+  // A new process clears the record: while the service runs, only the restart count is left. After a restart the
+  // web page says why, in the same words.
+  if (code === 0 && exits.nRestarts !== null && exits.nRestarts > 0) {
+    const lastExit = '服务在运行时 systemd 不保留，崩溃记录看 vonvon daemon status';
+    return { lastExit, lines: [`上次退出：${lastExit}`, ...restarts] };
+  }
+  return { lines: restarts };
 }

@@ -88,8 +88,10 @@ describe('describeServiceExits', () => {
     expect(systemd(show('start-limit-hit', 1, 70, '', 5)).lastExit).toBe('退出码 70（程序崩溃，看 vonvon daemon status）。systemd：Result=start-limit-hit（启动太频繁，systemd 不再拉起）');
   });
   it('has no last exit while the service runs: says why after a restart, only the count before one', () => {
-    expect(systemd(show('success', 0, 0, '', 2))).toEqual({ lines: ['上次退出：服务在运行时 systemd 不保留，崩溃记录看 vonvon daemon status', RESTARTS(2)] });
-    expect(systemd(SYSTEMD.restartedRunning).lastExit).toBeUndefined();
+    // The web page's 上次退出 says the same as the command, not 无记录.
+    const kept = '服务在运行时 systemd 不保留，崩溃记录看 vonvon daemon status';
+    expect(systemd(show('success', 0, 0, '', 2))).toEqual({ lastExit: kept, lines: [`上次退出：${kept}`, RESTARTS(2)] });
+    expect(systemd(SYSTEMD.restartedRunning).lastExit).toBe(kept);
     expect(systemd(SYSTEMD.running)).toEqual({ lines: [RESTARTS(0)] });
     // A unit that only fails, on JP-VPS after the s17b review: when the restarts run out (a refused manual start
     // changes nothing) the record stays; reset-failed clears it and the count together, so a stopped unit never

@@ -40,8 +40,8 @@ function leaf(value: unknown, path: string, within: string[]): ErrorPart {
 /**
  * The leaves of an error tree: the `errors` of an AggregateError, nested ones and an Error whose `cause` is one opened
  * too. Empty for any other error. At most 20 leaves, 200 values and 8 levels; a cycle is a leaf. With `seen`, a group
- * already in it is one `repeat` leaf (or, at the root, `partsAt` and no parts), and each group opened is added at `at`.
- * Never throws.
+ * already in it is one `repeat` leaf (or, at the root, `partsAt` and no parts), and each group opened is added at `at`;
+ * a nested group whose leaves did not all fit is not. Never throws.
  */
 export function errorParts(error: unknown, seen?: ExpandedErrors, at = ''): ErrorParts {
   try {
@@ -75,6 +75,8 @@ export function errorParts(error: unknown, seen?: ExpandedErrors, at = ''): Erro
         walk(inner, `${id}.`, [...within, messageOf(value), ...(node.viaCause ? [messageOf(node.group)] : [])], depth + 1);
         path.delete(node.group);
         if (isObject(value)) path.delete(value);
+        // A cap left some of its errors out: it was not split, so logged on its own later it is split then.
+        if (result.total > result.parts.length || result.truncated) seen?.delete(node.group);
       }
     };
     walk(children, '', root.viaCause ? [messageOf(root.group)] : [], 1);

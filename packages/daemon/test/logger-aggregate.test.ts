@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { formatErrorTree } from '../src/core/error-parts';
@@ -65,4 +65,30 @@ it('leaves a plain error as one fail line, as before', async () => {
   expect(await lines(marker, 1)).toHaveLength(1);
   expect(Object.keys(rows[0] ?? {}).sort()).toEqual(['_phase', 'err', 'event', 'level', 'marker', 'phase', 'stack', 'ts']);
   expect(error).toHaveBeenCalledTimes(1);
+});
+
+it('with console: false writes the JSON lines only', async () => {
+  const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  const marker = `quiet-${Date.now()}`;
+  log.fail('daemon-run', new AggregateError([new Error('a')], 'group'), { phase: 'run', marker }, { console: false });
+  expect((await lines(marker, 2)).map(row => row.event)).toEqual(['fail', 'fail_part']);
+  expect(error).not.toHaveBeenCalled();
+});
+
+it('writes a fail line and its parts into the file of their ts, also across midnight', async () => {
+  vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  const marker = `midnight-${Date.now()}`;
+  const days = ['2031-03-01.log', '2031-03-02.log'].map(file => join(TEST_LOGS_DIR, file));
+  // Each `new Date()` is 1 ms later than the one before: the day changes between the fail line and its parts.
+  let now = Date.parse('2031-03-01T23:59:59.998Z');
+  class Ticking extends Date { constructor(value?: number | string) { super(value ?? now++); } }
+  try {
+    vi.stubGlobal('Date', Ticking);
+    try { log.fail('daemon-shutdown', new AggregateError([new Error('a'), new Error('b'), new Error('c')], 'group'), { marker }); }
+    finally { vi.unstubAllGlobals(); }
+    const rows = await lines(marker, 4);
+    expect(rows.map(row => row.ts)).toEqual(Array(4).fill('2031-03-01T23:59:59.998Z'));
+    const count = (file: string): number => existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(row => row.includes(marker)).length : 0;
+    expect(days.map(count)).toEqual([4, 0]);
+  } finally { for (const file of days) rmSync(file, { force: true }); }
 });
