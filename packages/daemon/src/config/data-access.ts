@@ -100,8 +100,8 @@ function legacyOwner(port: number): Promise<'old-build' | 'not-a-lock'> {
       else if (!LEGACY_MARKER.startsWith(data)) settle('old-build');
     });
     socket.once('end', () => settle('old-build'));
-    // Refused: some connection's local port or a TIME_WAIT, not a listener.
-    socket.on('error', () => settle(connected ? 'old-build' : 'not-a-lock'));
+    // Refused: some connection's local port or a TIME_WAIT, not a listener. Any other failure may hide an old build.
+    socket.on('error', (error) => settle(!connected && errorCode(error) === 'ECONNREFUSED' ? 'not-a-lock' : 'old-build'));
   });
 }
 
@@ -109,7 +109,8 @@ function legacyOwner(port: number): Promise<'old-build' | 'not-a-lock'> {
 async function holdLegacyPort(path: string, role: MutexRole): Promise<Release | null> {
   if (OS !== 'linux' && OS !== 'darwin') return noRelease;
   const port = legacyPort(path, role);
-  const server = createServer((socket) => { socket.on('error', () => {}); socket.end(LEGACY_MARKER); });
+  // Destroyed once the marker is out: a peer that keeps its end open would otherwise hold up `closeServer`.
+  const server = createServer((socket) => { socket.on('error', () => {}); socket.end(LEGACY_MARKER, () => socket.destroy()); });
   if (await listenOn(server, { host: '127.0.0.1', port, exclusive: true })) return () => closeServer(server);
   return await legacyOwner(port) === 'old-build' ? null : noRelease;
 }
