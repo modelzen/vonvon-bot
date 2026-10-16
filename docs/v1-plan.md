@@ -117,9 +117,9 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
 
 2026-10-16：第 1 到 3 步 Claude 先做的部分都通过；第 4 步不用做。Mac 上 Codex 先查的那一半放进 M4 预览版任务，等 s18c 合入后一起做。
 - 环境：Claude 在 JP-VPS 上用验收 daemon（main 955a5c3，分离运行，三个测试 bot）做。这里没有服务管理器，每次 `kill -9` 后手动 `daemon start`，代替服务管理器拉起。私聊用 lark-cli 以 owner 的身份读，网页用无头浏览器看。
-1. 17:58（UTC）`kill -9` 主进程再起来，30 秒后 Bot 6 私聊 owner："daemon 刚才崩溃过一次，已自动恢复。受影响的 bot：Vonvon Bot 6、Vonvon Bot 7、Vonvon Bot 8。原因：被系统强制结束（kill -9、内存不够，或者关机、注销时没来得及退出），运行了至少 2 分 0 秒。"发信的是最早加入的 Bot 6。
+1. 17:58（UTC）`kill -9` 主进程再起来，bot 几秒内连上，30 秒后 Bot 6 私聊 owner："daemon 刚才崩溃过一次，已自动恢复。受影响的 bot：Vonvon Bot 6、Vonvon Bot 7、Vonvon Bot 8。原因：被系统强制结束（kill -9、内存不够，或者关机、注销时没来得及退出），运行了至少 2 分 0 秒。"发信的是最早加入的 Bot 6。
 2. 10 分钟内又 `kill -9` 两次：
-   - 第二次：30 秒后日志记 `crash-notify limited`，没有私聊。
+   - 第二次：30 秒后日志记 `crash-notify limited`，没有私聊（每个 bot 每 10 分钟最多一条，发信的还是 Bot 6）。
    - 第三次：起来就进入暂停，3 秒内私聊"daemon 10 分钟内崩溃了 3 次，已停止自动重启，bot 都没有启动：Vonvon Bot 6、Vonvon Bot 7、Vonvon Bot 8。最近一次的原因：……。查完原因后在状态与诊断页点「恢复运行」，或运行 vonvon daemon restart。"
    - `daemon status` 有暂停行和三条记录，`bot list` 三个 bot 都是"daemon 已暂停 · 未连接"。
    - 暂停中在 M1 Codex 群 @ Bot 6，60 秒内没回。
@@ -129,7 +129,7 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
 3. 诊断页每个 bot 一节：连接、飞书设置、缺的权限、执行工具（Codex 0.163.0、Claude 已登录）、最近没回的消息、最近的崩溃。在没绑定的群里 @ Bot 7，它回"本群还没绑定为项目……"；诊断页 Bot 7 那一节多了"1 条没回"，写的是"这个群还没绑定，只回了一句提示"，带群和消息的尾号，以及"在 Bot 页点「加入飞书群」绑定这个群。"
 
 顺带看到的：
-- Linux 上主进程被 `kill -9` 时，bot 子进程没有跟着死（和 macOS 不同，见"s18a 做法（macOS 的进程组）"），各自走关闭，三个各记了一条带调用栈的 `daemon-shutdown fail`（`owned-work-report`："Owned-work IPC channel is closed."）。这是 s18c 里"被托管的子进程收到 IPC 断开后排空"那一块，s18c 一起处理。
+- Linux 上主进程被 `kill -9` 时，bot 子进程没有跟着死（和 macOS 不同，见"s18a 做法（macOS 的进程组）"），各自走关闭，三个各记了一条带调用栈的 `daemon-shutdown fail`（`owned-work-report`："Owned-work IPC channel is closed."）。这和 s18c 的"收到 IPC 断开后排空"有关，s18c 开工时一并看这条报错要不要降级或吞掉。
 - Bot 7、Bot 8 的首次运行清单停在"卡片回调：请手动确认"：飞书没有接口能查这一项，要在网页里勾"我已配置"。两个测试 bot 的回调已由 Mac 上的 Codex 配好（任务 16），只是没勾，不影响验收。
 - s15d 在真实飞书上：
   - 网页"群内协作"里，"Vonvon 验收 M3 连续群"（Claude）的可恢复会话标题是"本会话中的暗号"，不带发信人和记录块。
@@ -678,7 +678,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 |---|---|---|---|---|---|---|---|
 | [x] | s14d | "同时发送到群"只回一次 | 话题里勾"同时发送到群"或私聊话题里勾"同时发送到会话"时，飞书推的主区副本跳过，只回话题里那条；先记一次原始事件，看带不带 `sync_to_chat_info`（3.5） | 120 | — | 错误路径 | 无（M5 验收第 8 步由 Codex 在 owner 的客户端里发） |
 | [x] | s15d | `/resume` 恢复卡的历史显示 | 恢复卡（`D/card/history-card.ts`）的历史里，bot 那一行和"更早的 N 轮 … 仍保留"按群的后端写名字，不再在 Claude 群里写 Codex：`HistoryCardState` 加后端名，取目录（`BACKEND_CATALOG`）里的展示名 Codex、Claude，不用后端自己的 displayName（Codex 的是"Codex (app-server)"），`handle-message.ts` 里 4 处 `buildHistoryCard` 都传；私聊的项目设置卡也改用这个名字。用户那一行、折叠标题和"上次停在"（`turnBody`、`turnTitle`）去掉 `weaveSender` 加的发信人标注"[本条消息的发信人：…（open_id：…）…]"，连同记录块、引用和附件清单，复用 `session-title.ts` 的 `stripBridgeMessageEnvelope`，不另写；去掉后是空的那一行不显示，折叠标题写"👤 （没有文字）"。`stripBridgeMessageEnvelope` 也认 `retryPrompt` 加在开头的"（重试）上一轮因为…"，重试过的那一轮同样只剩人写的字；发信人标注只去到它自己结尾的"）]"，压成一行的提示里正文后面的"）]"不再被一起删掉（压成一行的记录块仍去不掉，是已知限制）。会话没有原生标题时，`/resume` 选择卡的条目标题、恢复后记下的会话摘要（私聊话题列表显示它）和话题标题，以及网页端"可恢复"列表（daemon 的 `history` 接口给的 `name`、`preview`）取的是织好的第一条提示，也一起去掉；这几处和恢复卡标题行里的原生标题也过一遍，和网页列表一致（M3 第 4 步看到的） | 336 | — | 无 | 无（JP-VPS 用 lark-cli 读恢复卡） |
-| [ ] | s15e | 恢复的 Claude 会话的标题 | Claude 的 `readHistory`（`foldSessionMessages`）不给 `name`、`preview`，恢复后记下的会话摘要、话题标题和网页"当前会话"写"(恢复会话)"：`preview` 取第一条用户消息，`name` 取原生标题（`customTitle`），都过 `stripBridgeMessageEnvelope`；Codex 照旧（M4 验收时看到的） | 80 | s15d | 无 | 无（JP-VPS 在网页上恢复一条 Claude 会话，看"当前会话"） |
+| [ ] | s15e | 恢复的 Claude 会话的标题 | Claude 的 `readHistory`（`D/agent/claude-agent/backend.ts`）不给 `name`、`preview`，所以恢复后记下的会话摘要（`handle-message.ts` 里三处 `resumedTitle(history) || '(恢复会话)'`：选择卡、恢复卡、网页恢复）都是"(恢复会话)"，网页"当前会话"、私聊话题列表和话题标题都显示它。改法：`readHistory` 里 `preview` 取 `foldSessionMessages` 折出的第一个 turn 的 `userText`，`name` 另调一次 `getSessionInfo` 取 `customTitle`（复用 `readSessionTitle`），读不到只缺 `name`、不抛错；去信封照旧由 `resumedTitle` 做。Codex 不变（M4 验收时看到的） | 80 | s15d | 无 | 无（JP-VPS 在网页上恢复一条 Claude 会话，看"当前会话"） |
 | [x] | s15c | 去掉访客档 | 一个群一档、一条会话：`turnTier` 不再分档，会话键不再带访客的后缀，设置页、私聊的权限卡和命令行去掉"普通成员权限"；已存的 `guestMode` 读时取两档里更严的，下次写时去掉；领文件按群现在的档，和文件写出时的档比的那一步留着（3.5、3.8） | 250 | — | 数据迁移、并发 | 无 |
 | [x] | s15b | 每轮开口前看一眼会话 | 主区和话题每轮开口前看原生会话：别人写过（终端里的轮次、压缩）就重新接上，有新的压缩就附话题表；Codex 每轮结束放开线程（3.5，D4、D6） | 200 | s15c | 并发、关闭清理 | 无（M5 验收第 9 步在 JP-VPS 上用终端做；Codex 桌面端打开同一条会话放进 M5 预览版任务） |
 | [x] | s21 | 群的会话方式和运行中来了消息 | 群加会话方式（多会话、单会话、智能，前两种即规则模式的"开话题""连续"）和"运行中来了消息"覆盖，缺省按规则读；绑定的三个入口（私聊绑定卡、网页的绑定对话框 `JoinGroupDialog`、`group bind`）改成按 3.4 的顺序和文案列，不预选（网页对话框和 `group bind` 今天默认 `threads`，要去掉），命令行必须带；话题群的问法、卡发给谁和没设置好时怎么回留给 s36b；在多会话和单会话之间切换时免 @ 不变（3.2、3.4） | 450 | — | 数据迁移 | 无 |
