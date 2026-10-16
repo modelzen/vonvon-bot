@@ -85,8 +85,10 @@ export const JUDGE_INPUT_LIMITS = {
 const NAME_MAX = 50;
 const REASON_MAX = 80;
 
-// Controls other than the newline; \r and the Unicode line separators become newlines first.
-const CONTROL = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/g;
+// Controls other than the newline, plus invisible format characters (zero-width, bidi), so a name
+// cannot hide a leading 你 or a trailing （bot） behind them; \r and the Unicode line separators
+// become newlines first.
+const CONTROL = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g;
 
 function cut(text: string, max: number): string {
   const chars = [...text];

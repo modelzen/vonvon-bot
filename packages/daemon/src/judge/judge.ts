@@ -154,7 +154,8 @@ export function createJudge(deps: JudgeDeps): Judge {
       if (!backend.peekModels?.()) state.retryAt = now() + MODEL_LIST_RETRY_MS;
     };
     try {
-      backend.listModels().then(done, done);
+      // `done` re-reads the cache; if that throws, the fetch only stays idle, never an unhandled rejection.
+      backend.listModels().then(done, done).catch(() => { state.running = false; });
     } catch {
       done();
     }
