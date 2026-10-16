@@ -814,6 +814,8 @@ export function cardIdFromMessageContent(content: string): string | undefined {
  * 记录保留，下一条消息经 resolveThread 的 resume 兜底自愈（~250ms–1.6s），对话
  * 无感衔接。synthesis 给的区间 30–60min，取中值。 */
 const SESSION_REAP_IDLE_MS = 45 * 60_000;
+/** How long a resume waits for the bot's own released Codex process to exit (s15b). */
+const RELEASE_WAIT_MS = 10_000;
 /** reaper 清扫周期。 */
 const SESSION_REAP_SWEEP_MS = 5 * 60_000;
 
@@ -2521,7 +2523,8 @@ export function createOrchestrator(
       return { thread: undefined, recreated: true, reason: 'cwd-changed' };
     }
     const be = backendFor(rec.backend);
-    await releasing.get(threadId);
+    // Bounded: close() escalates to SIGKILL after 4 s, so this only guards a close that never settles.
+    await Promise.race([releasing.get(threadId), new Promise<void>((r) => setTimeout(r, RELEASE_WAIT_MS).unref())]);
     try {
       const resumed = await be.resumeThread({
         cwd: rec.cwd,
