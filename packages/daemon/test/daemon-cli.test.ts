@@ -52,7 +52,8 @@ it('exposes daemon lifecycle commands while status and logs leave a missing home
   const f = await fixture();
   for (const args of [['--help'], ['daemon', '--help']]) {
     const p = launch(f.home, f.root, args); expect(await p.exited).toBe(0);
-    expect(p.output()).not.toMatch(/__daemon-control|__desktop-service|migrate|restart/);
+    expect(p.output()).not.toMatch(/__daemon-control|__desktop-service|migrate|__restart/);
+    if (args[0] === 'daemon') expect(p.output()).toMatch(/^ +restart +Restart the daemon/m);
     if (args[0] === '--help') for (const name of ['bot', 'group', 'settings']) expect(p.output()).toMatch(new RegExp(`^ +${name} +\\S`, 'm'));
   }
   const service = launch(f.home, f.root, ['service', '--help']);
@@ -119,6 +120,31 @@ it('concurrent detached starts return the same ready owner and stop clears its l
   expect(await stopped.exited).toBe(0);
   await expect(readFile(join(f.root, 'daemon.pid'))).rejects.toMatchObject({ code: 'ENOENT' });
 }, 30_000);
+
+it('daemon restart replaces a detached daemon on the same port, and a clean stop leaves no crash record (s17)', async () => {
+  const f = await fixture();
+  const start = launch(f.home, f.root, ['daemon', 'start', '--port', '0']);
+  expect(await start.exited, start.output()).toBe(0);
+  const before = z.object({ pid: z.number(), listen: z.string() }).parse(JSON.parse(await readFile(join(f.root, 'daemon.pid'), 'utf8')));
+  expect(await readdir(join(f.root, 'crash'))).toEqual(['run.json']);
+  const restart = launch(f.home, f.root, ['daemon', 'restart']);
+  const log = async () => readFile(join(f.root, 'daemon.log'), 'utf8').catch(() => '(no daemon.log)');
+  expect(await restart.exited, `${restart.output()}\ndaemon.log:\n${await log()}`).toBe(0);
+  const status = launch(f.home, f.root, ['daemon', 'status', '--json']);
+  expect(await status.exited).toBe(0);
+  const after = z.object({ running: z.literal(true), pid: z.number(), listen: z.string(), crashes: z.array(z.unknown()) }).parse(JSON.parse(status.output()));
+  expect(after.pid).not.toBe(before.pid);
+  expect(after.listen).toBe(before.listen);
+  expect(after.crashes).toEqual([]);
+  expect(restart.output()).toBe(`running PID ${after.pid} at ${after.listen}\n`);
+  const stop = launch(f.home, f.root, ['daemon', 'stop']);
+  expect(await stop.exited, stop.output()).toBe(0);
+  expect(await readdir(join(f.root, 'crash'))).toEqual([]);
+  const stopped = launch(f.home, f.root, ['daemon', 'restart']);
+  expect(await stopped.exited, stopped.output()).toBe(0);
+  expect(stopped.output()).toContain('daemon 没在运行，已启动。');
+  expect(await launch(f.home, f.root, ['daemon', 'stop']).exited).toBe(0);
+}, 60_000);
 
 it('open --print on a new host creates the data root, starts the daemon and keeps the credential out of a pipe', async () => {
   const f = await fixture();

@@ -23,7 +23,8 @@ const fixture = vi.hoisted(() => {
   };
 });
 
-vi.mock('node:child_process', () => ({ spawn: fixture.forbidden.spawn }));
+// The crash store (macOS boot id) and the RPC client (status probe) import these too; neither may run here.
+vi.mock('node:child_process', () => ({ spawn: fixture.forbidden.spawn, execFile: fixture.forbidden.spawn, execFileSync: fixture.forbidden.spawn }));
 vi.mock('node:fs/promises', () => ({ open: fixture.forbidden.open }));
 vi.mock('../src/config/paths', () => ({ paths: { appDir: fixture.home } }));
 vi.mock('../src/core/logger', () => ({ readRecentLogs: fixture.forbidden.readRecentLogs }));

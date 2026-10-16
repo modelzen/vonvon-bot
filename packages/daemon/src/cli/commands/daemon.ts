@@ -6,6 +6,8 @@ import { readRecentLogs } from '../../core/logger';
 import { stopVerifiedOwner, verifyPidLockOwner } from '../../server/owner-verification';
 import { getPidLockInfo, isPidLockOwnerRunning, PidLockError, readRunningPidLock, type PidLockInfo } from '../../server/pid-lock';
 import { readStartupRegistration, startRegisteredDaemon } from '../../service/startup';
+import { CRASH_KIND_TEXT, readCrashSummary, removeResumeRequest, writeResumeRequest, type CrashRecord } from '../../host/crash-store';
+import { localTime, want, withDaemon, type Daemon } from '../daemon-client';
 
 export type DaemonStatus = { running: false } | {
   running: true;
@@ -147,10 +149,111 @@ export async function runStop(home = paths.appDir): Promise<boolean> {
   }
 }
 
-export async function runStatus(json = false): Promise<void> {
-  const status = await daemonStatus();
-  if (json) process.stdout.write(`${JSON.stringify(status)}\n`);
-  else process.stdout.write(status.running ? `running PID ${status.pid} at ${status.listen}\n` : 'stopped\n');
+const PAUSED_RUNNING = '已暂停：10 分钟内崩溃了 {n} 次，bot 都没有启动。查完原因后运行 vonvon daemon restart 恢复运行。';
+const PAUSED_STOPPED = '已暂停：10 分钟内崩溃了 {n} 次；暂停期间 daemon 又出错退出，没有自动重启。查完原因后运行 vonvon daemon restart 恢复运行。';
+const FORCED_DETAIL = '（kill -9、内存不够，或者关机、注销时没来得及退出）';
+
+function formatUptime(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} 分 ${seconds % 60} 秒`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时 ${minutes % 60} 分`;
+  return `${Math.floor(hours / 24)} 天 ${hours % 24} 小时`;
+}
+
+function crashLine(record: CrashRecord): string {
+  const who = record.scope === 'host' ? 'daemon' : `bot ${record.appId ?? ''}`.trim();
+  const what = record.kind === 'forced' ? `${CRASH_KIND_TEXT.forced}${FORCED_DETAIL}` : `${CRASH_KIND_TEXT[record.kind]}：${record.reason}`;
+  // A forced record's uptime is the last heartbeat (every 60 s): a lower bound, and none at all inside the first minute.
+  const shown = record.uptimeMs !== undefined && (record.kind !== 'forced' || record.uptimeMs >= 1000);
+  const ran = shown ? `，运行了${record.kind === 'forced' ? '至少' : ''} ${formatUptime(record.uptimeMs ?? 0)}` : '';
+  return `  ${localTime(Date.parse(record.at))}  ${who}  ${what}${ran}${record.paused ? '（暂停期间）' : ''}`;
+}
+
+export async function runStatus(json = false, home = paths.appDir, now: () => number = Date.now): Promise<void> {
+  const status = await daemonStatus(home);
+  const summary = readCrashSummary(home, { running: status.running, ...(status.running ? { ownerPid: status.pid } : {}), now: now() });
+  if (json) {
+    const crashes = summary.crashes.map(({ at, kind, scope, appId, version, uptimeMs, paused, reason }) => ({ at, kind, scope, ...(appId ? { appId } : {}), version, ...(uptimeMs !== undefined ? { uptimeMs } : {}), ...(paused ? { paused } : {}), reason }));
+    process.stdout.write(`${JSON.stringify({ ...status, ...(summary.paused ? { paused: summary.paused } : {}), crashes })}\n`);
+    return;
+  }
+  const lines = [status.running ? `running PID ${status.pid} at ${status.listen}` : 'stopped'];
+  if (summary.paused) lines.push((summary.paused.running ? PAUSED_RUNNING : PAUSED_STOPPED).replace('{n}', String(summary.paused.crashes)));
+  if (summary.crashes.length) lines.push('最近 24 小时的崩溃：', ...summary.crashes.map(crashLine));
+  process.stdout.write(`${lines.join('\n')}\n`);
+}
+
+export type RunningStatus = Extract<DaemonStatus, { running: true }>;
+export type RestartDeps = {
+  /** The running `daemon.pid` owner, or null; throws PidLockError for a lock being rewritten. */
+  readLock: (home: string) => Promise<PidLockInfo | null>;
+  verify: (home: string, lock: PidLockInfo) => Promise<void>;
+  start: (port: number) => Promise<DaemonStatus>;
+  daemon: Daemon;
+  now: () => number;
+  pause: (ms: number) => Promise<void>;
+  progress: (text: string) => void;
+  timeoutMs: number;
+};
+const restartDeps: RestartDeps = {
+  readLock: readRunningPidLock, verify: verifyPidLockOwner, start: runStart, daemon: withDaemon,
+  now: Date.now, pause, progress: text => { process.stderr.write(text); }, timeoutMs: 120_000,
+};
+const DRAINING = 'daemon 正在停止或重启，等它结束后再试。';
+const runningStatus = (lock: PidLockInfo & { listen: string }): RunningStatus => ({ running: true, pid: lock.pid, listen: lock.listen, ...(lock.version ? { version: lock.version } : {}), startedAt: lock.startedAt });
+
+/** Waits for a verified owner other than `before`, as the manager or the restart helper starts it. */
+async function waitForReplacement(home: string, before: Pick<PidLockInfo, 'pid' | 'startedAt'>, d: RestartDeps): Promise<RunningStatus> {
+  const deadline = d.now() + d.timeoutMs;
+  let progressAt = d.now() + 5000;
+  for (;;) {
+    let lock: PidLockInfo | null = null;
+    try { lock = await d.readLock(home); }
+    catch (error) { if (!(error instanceof PidLockError)) throw error; }
+    if (lock?.listen && !(lock.pid === before.pid && lock.startedAt === before.startedAt)) {
+      try { await d.verify(home, lock); return runningStatus({ ...lock, listen: lock.listen }); }
+      catch (error) { if (!(error instanceof PidLockError)) throw error; }
+    }
+    if (d.now() >= deadline) throw new Error(`daemon ${Math.round(d.timeoutMs / 1000)} 秒内没有重启好。运行 vonvon daemon status 和 vonvon daemon logs 查看。`);
+    if (d.now() >= progressAt) { d.progress(`等待 daemon 重启…（旧 PID ${before.pid}）\n`); progressAt = d.now() + 5000; }
+    await d.pause(100);
+  }
+}
+
+/**
+ * `vonvon daemon restart`: a running daemon restarts through `restartHost` (the manager or the same-port helper starts
+ * the next one), which also leaves a crash pause. With nothing running it starts one with a resume request, so a
+ * paused run that a manager left down comes back unpaused.
+ */
+export async function runRestart(home = paths.appDir, d: RestartDeps = restartDeps): Promise<{ status: RunningStatus; outcome: 'restarted' | 'resumed' | 'started' }> {
+  const current = await d.readLock(home);
+  if (current && !current.listen) throw new Error('daemon 正在启动，稍后再试。');
+  let before: Pick<PidLockInfo, 'pid' | 'startedAt'> | null = current;
+  if (!before) {
+    const wasPaused = readCrashSummary(home, { running: false, now: d.now() }).paused !== undefined;
+    const requestedAt = writeResumeRequest(home, d.now());
+    let after: DaemonStatus;
+    try { after = await d.start(0); }
+    catch (error) { removeResumeRequest(home, requestedAt); throw error; }
+    if (!after.running) { removeResumeRequest(home, requestedAt); throw new Error('Daemon lost readiness before startup completed.'); }
+    if (Date.parse(after.startedAt) >= requestedAt) return { status: after, outcome: wasPaused ? 'resumed' : 'started' };
+    // A daemon came up on its own meanwhile and runStart returned it: the request was not consumed, so it must not
+    // reset the chain of whatever start comes next. Restart that daemon instead.
+    removeResumeRequest(home, requestedAt);
+    before = after;
+  }
+  const wasPaused = readCrashSummary(home, { running: true, ownerPid: before.pid, now: d.now() }).paused !== undefined;
+  try {
+    await d.daemon(call => call('重启 daemon', async c => want('重启 daemon', await c.run({ type: 'restartHost' }), 'applied')));
+  } catch (error) {
+    // A draining daemon answers only stopHost and daemonStatus and closes the connection on anything else.
+    if (error instanceof Error && error.message.startsWith('和 daemon 的连接断了')) throw new Error(DRAINING);
+    throw error;
+  }
+  return { status: await waitForReplacement(home, before, d), outcome: wasPaused ? 'resumed' : 'restarted' };
 }
 
 export async function runLogs(tail = 200): Promise<void> {
