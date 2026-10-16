@@ -22,7 +22,7 @@ const KEEP_MS = 30 * 24 * 60 * 60_000;
 const TMP_MAX_AGE_MS = 60 * 60_000;
 const LIST_LIMIT = 200;
 const MAX_FILE_BYTES = 16 * 1024;
-const APP_ID = /^cli_[A-Za-z0-9_-]{1,200}$/;
+export const APP_ID = /^cli_[A-Za-z0-9_-]{1,200}$/;
 const RECORD_NAME = /^(host|bot-[0-9a-f]{12})-(\d{8}T\d{9}Z)-(\d{1,10})-([0-9a-f]{8})\.json$/;
 const TMP_NAME = /^\..+\.tmp$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -98,6 +98,26 @@ function reasonText(value: unknown): string {
     return String(value);
   } catch { return ''; }
 }
+
+const NODE_TRAILER = /^Node\.js v\d/;
+const CARET = /^\s*\^+\s*$/;
+const ERROR_HEAD = /^[A-Za-z_$][\w$.]*(?:Error|Exception|Rejection)\b/;
+/** A fatal exit's reason from a child's last non-empty stderr lines, newest last. Node's own printout of an uncaught
+ * error (where, the source line, a caret, the error, its stack, `Node.js vX`) gives the error's first line, not the
+ * version (s18b review 2); without the caret, its last error-like line. Any other ending gives the last line. */
+export function stderrReason(lines: readonly string[]): string | undefined {
+  const last = lines[lines.length - 1];
+  if (last === undefined || !NODE_TRAILER.test(last.trim())) return last;
+  for (let i = lines.length - 2; i >= 0; i--) {
+    if (!CARET.test(lines[i] ?? '')) continue;
+    const error = lines[i + 1];
+    if (error !== undefined && !NODE_TRAILER.test(error.trim())) return error;
+    break;
+  }
+  for (let i = lines.length - 2; i >= 0; i--) if (ERROR_HEAD.test(lines[i] ?? '')) return lines[i];
+  return undefined;
+}
+
 /** The first line, with the home folder, Feishu ids, URL credentials and anything token-like taken out; ≤ 200. */
 export function sanitizeReason(value: unknown, home = homedir()): string {
   let text = (reasonText(value).split(/\r\n|\r|\n/)[0] ?? '').replace(CONTROL, '').trim();
@@ -201,6 +221,18 @@ export function pruneCrashRecords(root: string, options: { now: number; scope?: 
 export function hasCrashRecordFor(root: string, key: string, pid: number, startedAt: number): boolean {
   return recordNames(root).some(entry => entry.key === key && entry.pid === pid && entry.stampMs >= startedAt - 5000);
 }
+/** The newest such record itself, for the owner's private message (s18b); undefined when none can be read. */
+export function crashRecordFor(root: string, key: string, pid: number, startedAt: number): CrashRecord | undefined {
+  for (const entry of recordNames(root)) {
+    if (entry.key !== key || entry.pid !== pid || entry.stampMs < startedAt - 5000) continue;
+    try {
+      const raw = readFileSync(join(crashDir(root), entry.name), 'utf8');
+      const parsed = raw.length <= MAX_FILE_BYTES ? crashRecordSchema.safeParse(JSON.parse(raw)) : undefined;
+      if (parsed?.success) return parsed.data;
+    } catch { /* gone or not JSON: try the next */ }
+  }
+  return undefined;
+}
 
 /** Crashes of one chain while running (not during a requested stop or restart) in the last 10 minutes of uptime: the
  * host's, or with `appId` that bot's since its last 恢复运行 (`sinceUptimeMs`). */
@@ -256,6 +288,28 @@ export function readBotPauses(root: string, chainId: string, onCorrupt?: () => v
 }
 export function writeBotPausesSync(root: string, chainId: string, bots: Record<string, BotPauseState>): void {
   writeAtomicSync(crashDir(root), 'bot-pauses.json', JSON.stringify(botPausesSchema.parse({ v: 1, chainId, bots })));
+}
+
+/** `crash/notices.json` (s18b): when each bot last got a crash message through to its owner, for the limit of one in 10
+ * minutes. Only the host writes it; entries older than a day are dropped at each write. */
+const noticeStampSchema = z.object({ at: iso, uptimeMs: z.number().int().nonnegative(), bootId: z.string().max(64).optional() }).strict();
+export type NoticeStamp = z.infer<typeof noticeStampSchema>;
+const noticesSchema = z.object({ v: z.literal(1), bots: z.record(z.string().regex(APP_ID), noticeStampSchema) }).strict();
+const noticesPath = (root: string): string => join(crashDir(root), 'notices.json');
+/** Empty for a missing, unreadable or damaged file; `onCorrupt` hears of one that is there but not of this shape. */
+export function readNotices(root: string, onCorrupt?: () => void): Record<string, NoticeStamp> {
+  let raw: string;
+  try { raw = readFileSync(noticesPath(root), 'utf8'); } catch { return {}; }
+  try {
+    const parsed = noticesSchema.safeParse(JSON.parse(raw));
+    if (parsed.success) return parsed.data.bots;
+  } catch { /* not JSON */ }
+  onCorrupt?.();
+  return {};
+}
+export function writeNoticesSync(root: string, bots: Record<string, NoticeStamp>, now: number): void {
+  const kept = Object.fromEntries(Object.entries(bots).filter(([, stamp]) => now - Date.parse(stamp.at) <= CRASH_SHOWN_MS));
+  writeAtomicSync(crashDir(root), 'notices.json', JSON.stringify(noticesSchema.parse({ v: 1, bots: kept })));
 }
 
 const markerPath = (root: string): string => join(crashDir(root), 'run.json');

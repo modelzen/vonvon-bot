@@ -2,14 +2,15 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir, uptime } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AdminServiceDeps } from '../src/admin/service';
+import type { CrashNotifier, HostNotice } from '../src/host/crash-notify';
 import {
   crashDir, crashScopeKey, listCrashRecords, readCrashSummary, writeBotPausesSync, writeCrashRecordSync, writeRunMarkerSync, type CrashRecord,
 } from '../src/host/crash-store';
 
 // Real children (`node -e`) under the real supervisor, its data root a temp dir: s18a's records, count, pause and resume.
-const f = vi.hoisted(() => ({ root: '', deps: undefined as AdminServiceDeps | undefined, crashes: undefined as { application(now: number): unknown; paused(appId: string): unknown } | undefined, warn: vi.fn() }));
+const f = vi.hoisted(() => ({ root: '', deps: undefined as AdminServiceDeps | undefined, crashes: undefined as { application(now: number): unknown; paused(appId: string): unknown } | undefined, warn: vi.fn(), notes: [] as unknown[][] }));
 // A CI runner may have booted minutes ago: shift uptime an hour for the source and the seeds alike, so a seed
 // 11 minutes back is never negative.
 vi.mock('node:os', async original => {
@@ -32,7 +33,9 @@ vi.mock('../src/agent', () => ({ installBackendDep() {}, uninstallBackendDep() {
 vi.mock('../src/core/single-instance', () => ({ readSingleInstanceHolder: () => undefined }));
 vi.mock('../src/platform/spawn', () => ({ spawnProcess: vi.fn() }));
 import { spawnProcess } from '../src/platform/spawn';
+import { startApi } from '../src/server/http';
 import { runSupervisor } from '../src/bot/supervisor';
+import { createCrashNotifier } from '../src/host/crash-notify';
 
 const A = 'cli_crashy';
 const B = 'cli_steady';
@@ -53,10 +56,21 @@ const fixture = `
   });
 `;
 const procs = new Map<string, ChildProcess[]>();
+/** Records what the supervisor tells the notifier (s18b), in order with the stops sent to children. */
+const recorder: CrashNotifier = {
+  hostStarted: (notice, ctx) => { f.notes.push(['hostStarted', notice, ctx.bots.map(bot => bot.appId), ctx.paused, ...(ctx.registryUnreadable ? ['registry-unreadable'] : [])]); },
+  botStarted: appId => { f.notes.push(['botStarted', appId]); },
+  botExited: appId => { f.notes.push(['botExited', appId]); },
+  botCrashed: (...args) => { f.notes.push(['botCrashed', ...args]); },
+  botPaused: (...args) => { f.notes.push(['botPaused', ...args]); },
+  botForget: appId => { f.notes.push(['botForget', appId]); },
+  close: async () => { f.notes.push(['close']); },
+};
+const told = (appId = A): unknown[][] => f.notes.filter(note => note[1] === appId && note[0] !== 'botStarted' && note[0] !== 'stop');
 let shutdown = (): void => {};
 let supervisor: Promise<void> | undefined;
 
-beforeEach(() => { f.root = mkdtempSync(join(tmpdir(), 'vonvon-supervisor-crash-')); procs.clear(); });
+beforeEach(() => { f.root = mkdtempSync(join(tmpdir(), 'vonvon-supervisor-crash-')); procs.clear(); f.notes = []; });
 afterEach(async () => {
   shutdown();
   await supervisor;
@@ -66,18 +80,23 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
-async function start(ids: string[], running = ids, failSpawns = 0): Promise<AdminServiceDeps> {
+async function start(ids: string[], running = ids, failSpawns = 0, notice?: HostNotice, extra: { paused?: boolean; registryUnreadable?: boolean } = {}): Promise<AdminServiceDeps> {
   f.deps = undefined;
   vi.mocked(spawnProcess).mockImplementation((_bin, args, options) => {
     if (failSpawns-- > 0) throw Object.assign(new Error('spawn EAGAIN'), { code: 'EAGAIN' });
     const child = spawn(process.execPath, ['-e', fixture], options ?? {});
     const id = String(args?.[4]);
     procs.set(id, [...procs.get(id) ?? [], child]);
+    const send = child.send.bind(child) as (message: unknown, callback?: (error: Error | null) => void) => boolean;
+    child.send = ((message: unknown, callback?: (error: Error | null) => void) => {
+      if (typeof message === 'object' && message !== null && 'type' in message && message.type === 'bridge:shutdown') f.notes.push(['stop', id]);
+      return send(message, callback);
+    }) as typeof child.send;
     return child;
   });
   const pending = new Promise<void>(resolve => { shutdown = resolve; });
   supervisor = runSupervisor(ids.map(appId => ({ appId, name: appId, tenant: 'feishu' as const, createdAt: 0 })), {
-    crash: { runId: RUN, chainId: CHAIN },
+    crash: { runId: RUN, chainId: CHAIN, ...(notice ? { notice } : {}) }, notifier: recorder, ...extra,
     control: { requested: false, waitForRequest: () => pending, requestStop() {}, requestRestart() {}, completeShutdown: async release => release(), dispose() {} },
   });
   await vi.waitFor(() => expect(f.deps).toBeDefined());
@@ -101,17 +120,19 @@ async function crash(how: 'kill' | { code: number; line?: string }, restarts = t
 const records = (): CrashRecord[] => listCrashRecords(f.root, { scope: crashScopeKey('bot', A) });
 const pauses = (): { chainId: string; bots: Record<string, object> } => JSON.parse(readFileSync(join(f.root, 'crash', 'bot-pauses.json'), 'utf8'));
 /** A record of A from before this supervisor started, a minute ago in this chain unless told otherwise. */
-const seed = (fields: Partial<CrashRecord> = {}): void => { writeCrashRecordSync(f.root, {
+const seedRecord = (fields: Partial<CrashRecord> = {}): CrashRecord => ({
   v: 1, at: new Date().toISOString(), sysUptimeMs: Math.round(uptime() * 1000) - 60_000, kind: 'exception', scope: 'bot', appId: A, pid: 4000, runId: RUN, chainId: CHAIN,
   startedAt: new Date().toISOString(), version: '0.7.0', managed: null, during: 'run', reason: 'Error: before', ...fields,
-}); };
+});
+const seed = (fields: Partial<CrashRecord> = {}): void => { writeCrashRecordSync(f.root, seedRecord(fields)); };
 
 it('records what the child could not, once each, and the third crash stops only that bot', async () => {
   const deps = await start([A, B]);
   await crash('kill');
   expect(vi.mocked(spawnProcess).mock.calls[0]?.[2]?.env).toMatchObject({ VONVON_HOST_RUN_ID: RUN, VONVON_HOST_CHAIN_ID: CHAIN });
   expect(records()).toMatchObject([{ kind: 'forced', reason: 'SIGKILL', scope: 'bot', appId: A, runId: RUN, chainId: CHAIN, during: 'run' }]);
-  await crash({ code: 1, line: `Error: no config at ${homedir()}/x` });
+  // Node's own printout of an uncaught error, before a crash handler is in place: the error, not `Node.js vX` (s18b).
+  await crash({ code: 1, line: `[eval]:1\nthrow new Error('no config')\n^\n\nError: no config at ${homedir()}/x\n    at [eval]:1:7\n\nNode.js v24.21.0` });
   expect(records()[0]).toMatchObject({ kind: 'fatal', reason: 'Error: no config at ~/x' });
   // The child's own handler wrote this one before exiting 70: the supervisor adds none.
   const [fatal] = records();
@@ -269,4 +290,80 @@ it('lists crash/ again as soon as a child exits, though its mtime did not move',
   await crash('kill');
   utimesSync(crashDir(f.root), stamp, stamp);
   expect(f.crashes?.application(Date.now())).toMatchObject({ records: [{ kind: 'forced', reason: 'SIGKILL', appId: A }] });
+});
+
+describe('the owner\'s private message (s18b)', () => {
+  it('tells the notifier each crash with its reason in order, and the third as a pause', async () => {
+    await start([A, B]);
+    await crash('kill');
+    expect(told()).toEqual([['botExited', A], ['botCrashed', A, A, 1, expect.stringMatching(/^被系统强制结束（SIGKILL），运行了 \d+ 秒$/)]]);
+    expect(f.notes.filter(note => note[0] === 'botStarted' && note[1] === A)).toHaveLength(2);
+    f.notes = [];
+    // The child's own record, written before it exits 70: its reason is the one told.
+    const pid = procs.get(A)?.at(-1)?.pid ?? 1;
+    writeCrashRecordSync(f.root, { ...seedRecord(), pid, at: new Date().toISOString(), reason: 'TypeError: boom', uptimeMs: 192_000 });
+    await crash({ code: 70 });
+    expect(told()).toEqual([['botExited', A], ['botCrashed', A, A, 2, '程序出错：TypeError: boom，运行了 3 分 12 秒']]);
+    f.notes = [];
+    await crash({ code: 1, line: 'Error: third' }, false);
+    expect(told()).toEqual([['botExited', A], ['botPaused', A, A, 3, expect.stringMatching(/^出错退出：Error: third，运行了/)]]);
+    expect(told(B)).toEqual([]);
+  });
+
+  it('gives the host\'s notice and the enabled bots at the start; 恢复运行 and a disable make it forget', async () => {
+    writeBotPausesSync(f.root, CHAIN, { [A]: { pausedAt: new Date().toISOString(), pauseCrashes: 3 } });
+    const notice: HostNotice = { previous: { at: 1, kind: 'forced', reason: '被系统强制结束' }, crashes: 1, resumed: false, pauseEntered: false };
+    const deps = await start([A, B], [B], 0, notice);
+    expect(f.notes[0]).toEqual(['hostStarted', notice, [A, B], false]);
+    await deps.applyBotActivation?.(A, true);
+    expect(told()).toContainEqual(['botForget', A]);
+    f.notes = [];
+    await deps.applyBotActivation?.(B, false);
+    expect(told(B)).toEqual([['botForget', B], ['botExited', B]]);
+  });
+
+  it('a paused host whose bots.json could not be read says so to the notifier (D1)', async () => {
+    const notice: HostNotice = { previous: { at: 1, kind: 'fatal', reason: 'SyntaxError: bots.json' }, crashes: 3, resumed: false, pauseEntered: true };
+    await start([], [], 0, notice, { paused: true, registryUnreadable: true });
+    expect(f.notes[0]).toEqual(['hostStarted', notice, [], true, 'registry-unreadable']);
+  });
+
+  it('a spawn that fails without a PID ends the 30 s wait it began, and counts as a crash told later', async () => {
+    await start([A]);
+    vi.mocked(spawnProcess).mockImplementation((_bin, _args, options) => spawn(join(f.root, 'no-such-node'), [], options ?? {}));
+    f.notes = [];
+    await crash('kill', false);
+    await vi.waitFor(() => expect(f.notes.filter(note => note[0] === 'botCrashed')).toHaveLength(2), { timeout: 10_000, interval: 50 });
+    expect(f.notes.slice(0, 5)).toEqual([
+      ['botExited', A], ['botCrashed', A, A, 1, expect.stringMatching(/SIGKILL/)], ['botStarted', A], ['botExited', A], ['botCrashed', A, A, 2, '出错退出：spawn ENOENT'],
+    ]);
+  });
+
+  it('closes the notifier first in the shutdown, before any child is told to stop', async () => {
+    await start([A, B]);
+    shutdown();
+    await supervisor;
+    const order = f.notes.map(note => note[0]).filter(name => name === 'close' || name === 'stop');
+    expect(order).toEqual(['close', 'stop', 'stop']);
+  });
+
+  it('a paused host whose API cannot start still sends its pause message before it exits (D1)', async () => {
+    const sent: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      sent.push(String(input));
+      const body = String(input).includes('tenant_access_token') ? { code: 0, tenant_access_token: 't' } : { code: 0 };
+      await new Promise(resolve => setTimeout(resolve, 200));
+      void init;
+      return { status: 200, json: async () => body } as Response;
+    }) as typeof fetch;
+    const notifier = createCrashNotifier({ root: f.root, log: { info() {}, warn() {}, fail() {} }, fetchImpl, loadSender: async appId => ({ appId, tenant: 'feishu', appSecret: 's', openId: 'ou_owner' }) });
+    vi.mocked(startApi).mockRejectedValueOnce(new Error('listen EADDRINUSE'));
+    const control = { requested: false, waitForRequest: () => new Promise<void>(() => {}), requestStop() {}, requestRestart() {}, completeShutdown: async (release: () => Promise<void>) => release(), dispose() {} };
+    await expect(runSupervisor([{ appId: A, name: 'a', tenant: 'feishu', createdAt: 0 }], {
+      paused: true, notifier, control,
+      crash: { runId: RUN, chainId: CHAIN, notice: { previous: { at: 1, kind: 'forced', reason: '被系统强制结束' }, crashes: 3, resumed: false, pauseEntered: true } },
+    })).rejects.toThrow('EADDRINUSE');
+    expect(sent.filter(url => url.includes('/im/v1/messages'))).toHaveLength(1);
+    expect(readFileSync(join(f.root, 'crash', 'notices.json'), 'utf8')).toContain(A);
+  });
 });
