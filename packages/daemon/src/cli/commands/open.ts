@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { homedir, hostname, userInfo } from 'node:os';
 import { join, sep } from 'node:path';
 import { promisify } from 'node:util';
@@ -70,7 +70,10 @@ export type OpenDependencies = {
 const defaults = (): OpenDependencies => ({
   listen: async () => {
     const current = await daemonStatus();
-    const status = current.running ? current : await runStart();
+    if (current.running) return current.listen;
+    // On a new host `vonvon open --print` comes first, and the service lookup in runStart needs the data root.
+    await mkdir(paths.appDir, { recursive: true, mode: 0o700 });
+    const status = await runStart();
     if (!status.running) throw new Error('Daemon did not start.');
     return status.listen;
   },
