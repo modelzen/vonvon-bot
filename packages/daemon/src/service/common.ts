@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ServiceState } from '@vonvon/protocol';
 import { paths } from '../config/paths';
+import type { ServiceExits } from './exits';
 import type { Linger } from './linux-session';
 
 /**
@@ -42,6 +43,10 @@ export interface ServiceStatus {
   /** Linux: linger, and why the user manager cannot be asked when the state is `unknown` (s20a). */
   linger?: Linger;
   hint?: string;
+  /** s17b: the manager's record of the daemon's exits; absent without a loaded job or unit, or when it could not be read. */
+  exits?: ServiceExits;
+  /** s17b: one line on how the previous daemon process ended (also the 上次退出 row of the web page). */
+  lastExit?: string;
 }
 
 /** Service log files live under the app dir, identical across platforms. */

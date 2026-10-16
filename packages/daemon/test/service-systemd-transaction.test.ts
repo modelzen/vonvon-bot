@@ -40,7 +40,7 @@ async function fixture() {
     loaded: false, enabled: false, fragment: unitPath, pid: 0,
     owner: null as PidLockInfo | null, clock: 0,
     manager: ok('running'), enabledReply: null as Command | null,
-    showReply: null as Command | null, pidReply: null as Command | null,
+    showReply: null as Command | null, pidReply: null as Command | null, exitsReply: null as Command | null,
     fail: '' as string, stopError: false, autoStart: true,
     onCommand: async (_command: string): Promise<void> => {},
     onPause: async (): Promise<void> => {},
@@ -64,6 +64,7 @@ async function fixture() {
       if (command === 'is-system-running') return state.manager;
       if (command.startsWith('is-enabled')) return state.enabledReply ?? (state.enabled ? ok('enabled') : { ...failed(''), stdout: 'disabled' });
       if (command.startsWith('show -p MainPID --value')) return state.pidReply ?? ok(String(state.pid));
+      if (command.startsWith('show -p LoadState -p Result ')) return state.exitsReply ?? ok(`LoadState=${state.loaded ? 'loaded' : 'not-found'}\nResult=success\nExecMainCode=0\nExecMainStatus=0\nExecMainExitTimestamp=\nNRestarts=0\n`);
       if (command.startsWith('show ')) return state.showReply ?? ok(`LoadState=${state.loaded ? 'loaded' : 'not-found'}\nFragmentPath=${state.loaded ? state.fragment : ''}\nMainPID=${state.pid}\n`);
       if (command.startsWith('disable ')) { state.enabled = false; return ok(); }
       if (command === 'daemon-reload') { state.loaded = (await readRegistration({ target, requestedRoot: root })).kind !== 'absent' || state.pid !== 0; return ok(); }
@@ -191,6 +192,41 @@ it('start rejects registered port mismatch without manager mutations', async () 
   const f = await fixture(); await f.seed(); await expect(f.service().start({ port: 32124 })).rejects.toThrow('32123'); expect(f.mutations()).toEqual([]);
 });
 it('status only observes', async () => { const f = await fixture(); await f.seed(); const result = await f.service().status(); expect(result.registration.kind).toBe('ours'); expect(result.running).toBe(false); expect(f.mutations()).toEqual([]); });
+const EXITS = `show -p LoadState -p Result -p ExecMainCode -p ExecMainStatus -p ExecMainExitTimestamp -p NRestarts ${SYSTEMD_UNIT_NAME}`;
+it('status reads the exits with one more show for a present unit only, and does without them when it fails (s17b)', async () => {
+  const f = await fixture(); await f.seed();
+  f.state.exitsReply = ok('Result=signal\nNRestarts=0\nExecMainExitTimestamp=Fri 2026-10-16 14:19:07 UTC\nExecMainCode=2\nExecMainStatus=9\nLoadState=loaded\n');
+  const killed = await f.service().status();
+  expect(killed.exits).toEqual({ manager: 'systemd', result: 'signal', execMainCode: 2, execMainStatus: 9, nRestarts: 0, exitedAt: 'Fri 2026-10-16 14:19:07 UTC' });
+  expect(f.calls.filter(call => call === EXITS)).toHaveLength(1);
+  f.state.exitsReply = failed('Failed to connect to bus');
+  const unread = await f.service().status();
+  expect(unread.exits).toBeUndefined();
+  const { exits: _exits, ...rest } = killed;
+  expect(unread).toEqual(rest);
+  const absent = await fixture();
+  expect((await absent.service().status()).exits).toBeUndefined();
+  expect(absent.calls).not.toContain(EXITS);
+  expect(f.mutations()).toEqual([]);
+});
+it('status asks for the exits while is-enabled is still out, and not at all when show itself fails (s17b)', async () => {
+  const f = await fixture(); await f.seed();
+  let exitsAsked: boolean | undefined;
+  f.state.onCommand = async command => {
+    if (!command.startsWith('is-enabled')) return;
+    await new Promise(resolve => setTimeout(resolve, 20));
+    exitsAsked = f.calls.includes(EXITS);
+  };
+  expect((await f.service().status()).exits).toMatchObject({ manager: 'systemd', nRestarts: 0 });
+  expect(exitsAsked).toBe(true);
+  // A user manager that does not answer `show` (what `runSystemctl` returns after its 30 s): no second show.
+  const stuck = await fixture(); await stuck.seed();
+  stuck.state.showReply = { ok: false, stdout: '', stderr: 'systemctl client timed out', status: null };
+  const unknown = await stuck.service().status();
+  expect(unknown.manager.kind).toBe('unknown');
+  expect(unknown.exits).toBeUndefined();
+  expect(stuck.calls).not.toContain(EXITS);
+});
 
 it.each(['development', 'unknown'] as const)('refuses %s distribution before writing', async kind => {
   const f = await fixture(); expect((await f.service({ distribution: async () => ({ kind, cliPath: '/dev/bin.mjs' }) }).install()).kind).toBe('install_refused');

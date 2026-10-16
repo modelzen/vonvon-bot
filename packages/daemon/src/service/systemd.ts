@@ -8,6 +8,7 @@ import type { HostEndpoint } from '../host/discovery';
 import { isStaleOwner, readRunningPidLock, type StaleOwner } from '../server/pid-lock';
 import { stopVerifiedOwner, verifyPidLockOwner } from '../server/owner-verification';
 import { renderDefinition, type Definition } from './definitions';
+import { parseSystemdExits, type ServiceExits } from './exits';
 import { runtimeDistribution } from './distribution';
 import { createServiceDrain, type DrainFailure, type DrainScope, type OwnerIdentity } from './drain';
 import { resolveServiceRoot, serviceTarget, type CanonicalRoot } from './identity';
@@ -147,6 +148,13 @@ export function createSystemdService(options: { root: string }, overrides: Parti
       }
       return { kind: 'present', loadState, fragmentPath, mainPid: parsedPid };
     } catch (error) { return { kind: 'unknown', detail: detailOf(error) }; }
+  }
+  /** s17b: its own command, so `observeUnit()`'s strict parse that the transactions rely on stays as it is. */
+  async function observeExits(): Promise<ServiceExits | undefined> {
+    try {
+      const r = await d.run(['show', '-p', 'LoadState', '-p', 'Result', '-p', 'ExecMainCode', '-p', 'ExecMainStatus', '-p', 'ExecMainExitTimestamp', '-p', 'NRestarts', unitName], 10_000);
+      return r.ok && r.status === 0 ? parseSystemdExits(r.stdout) : undefined;
+    } catch { return undefined; }
   }
   async function observeEnabled(): Promise<EnableObservation> {
     try {
@@ -418,7 +426,8 @@ export function createSystemdService(options: { root: string }, overrides: Parti
       const s = await snapshot();
       const current = await registration(s);
       const manager = await observeUnit();
-      const enabled = await observeEnabled();
+      // Beside is-enabled, so a user manager that stops answering costs no more time than before s17b.
+      const [enabled, exits] = await Promise.all([observeEnabled(), manager.kind === 'present' ? observeExits() : undefined]);
       const owner = await d.readOwner(s.root);
       let running = false;
       let ownerError: string | null = null;
@@ -427,7 +436,7 @@ export function createSystemdService(options: { root: string }, overrides: Parti
         try { if (owner.pid !== process.pid) await d.verifyOwner(s.root, owner); running = true; }
         catch (error) { ownerError = detailOf(error); }
       }
-      return { target: s.target, registration: current, manager, enabled, owner: identity(owner), running, ownerError };
+      return { target: s.target, registration: current, manager, enabled, owner: identity(owner), running, ownerError, ...(exits ? { exits } : {}) };
     },
   };
 }

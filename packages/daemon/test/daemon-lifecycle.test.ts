@@ -108,6 +108,7 @@ vi.mock('../src/server/http', () => ({
 import * as http from '../src/server/http';
 import { runRun } from '../src/cli/commands/run';
 import { runHostRuntime } from '../src/host/bootstrap';
+import { formatErrorTree } from '../src/core/error-parts';
 import { runSupervisor } from '../src/bot/supervisor';
 import { acquireSingleInstanceLock } from '../src/core/single-instance';
 import { acquireMutex, closeMutex } from '../src/config/data-access';
@@ -712,6 +713,8 @@ describe('listener cutoff classification through runner and cached shutdown', ()
     owner.requestStop();
     await vi.waitFor(() => expect(running.state()).toBe('rejected'));
     expect.soft(allReasons(running.error())).toContain(failure.message);
+    // The runner threw it and bootstrap got the same cached rejection: printed once (s17b review).
+    expect.soft(formatErrorTree(running.error()).split(failure.message)).toHaveLength(2);
     const cached = observed(owner.completeShutdown(async () => { throw new Error('must not replace cached release'); }));
     await cached.settled;
     expect.soft(cached.state()).toBe('rejected');

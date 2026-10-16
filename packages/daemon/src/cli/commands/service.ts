@@ -6,6 +6,7 @@ import { paths } from '../../config/paths';
 import { readRunningPidLock, type PidLockInfo } from '../../server/pid-lock';
 import { classifyServiceFailure, serviceActionPath, writeServiceActionRecord, type ServiceActionRecord } from '../../service/action-report';
 import type { ServiceAdapter, ServiceTransactionOutcome } from '../../service/adapter';
+import { describeServiceExits } from '../../service/exits';
 import { enableFailed, enableLinger, lingerLine, readLinger, userManagerHint, type Linger } from '../../service/linux-session';
 
 const STATE_TEXT = {
@@ -204,6 +205,7 @@ export async function runServiceStatus(json: boolean, adapter?: Pick<ServiceAdap
   process.stdout.write([
     `${status.platformName} ${status.name}: ${STATE_TEXT[status.state]}${status.running && status.pid ? ` (PID ${status.pid})` : ''}`,
     status.detail,
+    ...describeServiceExits(status.exits).lines,
     ...(status.hint ? [status.hint] : []),
     ...(status.linger ? [lingerLine(status.linger, userInfo().username)] : []),
     `Definition: ${status.servicePath}`,

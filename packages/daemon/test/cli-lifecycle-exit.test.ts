@@ -63,3 +63,13 @@ it.each([
   await vi.waitFor(() => expect(fixture.exit).toHaveBeenCalledExactlyOnceWith(1));
   expect(console.error).toHaveBeenCalledWith('reported failure');
 });
+
+it('prints each error of a failed shutdown on its own line and keeps a requested restart (s17b)', async () => {
+  fixture.run.mockImplementation(async () => {
+    process.exitCode = 75;
+    throw new AggregateError([new Error('a'), new Error('b')], 'Host shutdown failed.');
+  });
+  await import('../src/cli/index');
+  await vi.waitFor(() => expect(fixture.exit).toHaveBeenCalledExactlyOnceWith(75));
+  expect(console.error).toHaveBeenCalledWith('Host shutdown failed.\n  - Error: a\n  - Error: b');
+});
