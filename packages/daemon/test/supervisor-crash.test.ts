@@ -1,13 +1,15 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir, uptime } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { AdminServiceDeps } from '../src/admin/service';
-import { crashScopeKey, listCrashRecords, writeBotPausesSync, writeCrashRecordSync, type CrashRecord } from '../src/host/crash-store';
+import {
+  crashDir, crashScopeKey, listCrashRecords, readCrashSummary, writeBotPausesSync, writeCrashRecordSync, writeRunMarkerSync, type CrashRecord,
+} from '../src/host/crash-store';
 
 // Real children (`node -e`) under the real supervisor, its data root a temp dir: s18a's records, count, pause and resume.
-const f = vi.hoisted(() => ({ root: '', deps: undefined as AdminServiceDeps | undefined, crashes: undefined as { application(now: number): unknown; paused(appId: string): unknown } | undefined }));
+const f = vi.hoisted(() => ({ root: '', deps: undefined as AdminServiceDeps | undefined, crashes: undefined as { application(now: number): unknown; paused(appId: string): unknown } | undefined, warn: vi.fn() }));
 vi.mock('../src/config/paths', async original => {
   const real = await original<typeof import('../src/config/paths')>();
   return { ...real, paths: { ...real.paths, get appDir() { return f.root; } } };
@@ -18,7 +20,7 @@ vi.mock('../src/server/http', async original => ({ ...await original<typeof impo
   f.crashes = options.crashes;
   return { port: 1, listen: '127.0.0.1:1', invalidate() {}, beginDrain: async () => {}, release: async () => {}, close: async () => {} };
 }) }));
-vi.mock('../src/core/logger', () => ({ log: { info() {}, warn() {}, fail() {} } }));
+vi.mock('../src/core/logger', () => ({ log: { info() {}, warn: f.warn, fail() {} } }));
 vi.mock('../src/agent', () => ({ installBackendDep() {}, uninstallBackendDep() {} }));
 vi.mock('../src/core/single-instance', () => ({ readSingleInstanceHolder: () => undefined }));
 vi.mock('../src/platform/spawn', () => ({ spawnProcess: vi.fn() }));
@@ -39,7 +41,8 @@ const fixture = `
   process.on('message', m => {
     if (m.type === 'bridge:shutdown') stop();
     else if (m.fcb === 'exit') { if (m.line) process.stderr.write(m.line + '\\n'); setTimeout(() => process.exit(m.code), 100); }
-    else if (m.fcb === 'fcb.admin.req') process.send({ fcb: 'fcb.admin.res', id: m.id, ok: true, result: { connection: 'connected' } });
+    // A 'hold' request is never answered: a web write still in flight when the child ends.
+    else if (m.fcb === 'fcb.admin.req' && m.op.kind !== 'hold') process.send({ fcb: 'fcb.admin.res', id: m.id, ok: true, result: { connection: 'connected' } });
   });
 `;
 const procs = new Map<string, ChildProcess[]>();
@@ -90,6 +93,11 @@ async function crash(how: 'kill' | { code: number; line?: string }, restarts = t
 }
 const records = (): CrashRecord[] => listCrashRecords(f.root, { scope: crashScopeKey('bot', A) });
 const pauses = (): { chainId: string; bots: Record<string, object> } => JSON.parse(readFileSync(join(f.root, 'crash', 'bot-pauses.json'), 'utf8'));
+/** A record of A from before this supervisor started, a minute ago in this chain unless told otherwise. */
+const seed = (fields: Partial<CrashRecord> = {}): void => { writeCrashRecordSync(f.root, {
+  v: 1, at: new Date().toISOString(), sysUptimeMs: Math.round(uptime() * 1000) - 60_000, kind: 'exception', scope: 'bot', appId: A, pid: 4000, runId: RUN, chainId: CHAIN,
+  startedAt: new Date().toISOString(), version: '0.7.0', managed: null, during: 'run', reason: 'Error: before', ...fields,
+}); };
 
 it('records what the child could not, once each, and the third crash stops only that bot', async () => {
   const deps = await start([A, B]);
@@ -123,14 +131,9 @@ it('exit 70 without a record gets one; exits 0 and 75 are not crashes', async ()
 });
 
 it('counts this chain\'s crashes on disk in the window, and none from before 恢复运行', async () => {
-  const up = Math.round(uptime() * 1000);
-  const seed = (fields: Partial<CrashRecord>): void => { writeCrashRecordSync(f.root, {
-    v: 1, at: new Date().toISOString(), sysUptimeMs: up - 60_000, kind: 'exception', scope: 'bot', appId: A, pid: 4000, runId: RUN, chainId: CHAIN,
-    startedAt: new Date().toISOString(), version: '0.7.0', managed: null, during: 'run', reason: 'Error: before', ...fields,
-  }); };
-  seed({}); // before the host crashed, same chain
+  seed(); // before the host crashed, same chain
   seed({ chainId: OTHER_CHAIN });
-  seed({ sysUptimeMs: up - 660_000 });
+  seed({ sysUptimeMs: Math.round(uptime() * 1000) - 660_000 });
   seed({ during: 'stop' });
   const deps = await start([A]);
   await crash('kill');
@@ -194,3 +197,69 @@ it('恢复运行 that crashes straight back into a pause says so, instead of tim
   expect(Date.now() - begun).toBeLessThan(11_000);
   expect(f.crashes?.paused(A)).toMatchObject({ crashes: 3 });
 }, 15_000);
+
+it('the third crash tells a request in flight that the bot is paused, and so do group and collaboration writes after it', async () => {
+  seed();
+  seed();
+  const deps = await start([A]);
+  const held = expect(deps.executeWrite?.(A, { kind: 'hold' } as never)).rejects.toThrow('10 分钟内崩溃了 3 次，已暂停');
+  await crash('kill', false);
+  await held;
+  expect(f.crashes?.paused(A)).toMatchObject({ crashes: 3 });
+  await expect(deps.executeGroups?.(A, { kind: 'bindGroup' } as never)).rejects.toThrow('已暂停。在状态与诊断页点「恢复运行」后再试');
+  await expect(deps.executeCollaboration?.(A, {} as never)).rejects.toThrow('已暂停。在状态与诊断页点「恢复运行」后再试');
+});
+
+it('a disable gives the pause up, in memory, on disk and for daemon status', async () => {
+  const now = new Date().toISOString();
+  writeRunMarkerSync(f.root, {
+    v: 1, runId: RUN, chainId: CHAIN, pid: process.pid, startedAt: now, startUptimeMs: 0, aliveAt: now, aliveUptimeMs: 0, version: '0.7.0', managed: null, state: 'running',
+  });
+  writeBotPausesSync(f.root, CHAIN, { [A]: { pausedAt: now, pauseCrashes: 3 } });
+  const deps = await start([A, B], [B]);
+  const pausedBots = () => readCrashSummary(f.root, { running: true, ownerPid: process.pid, now: Date.now() }).pausedBots;
+  expect(pausedBots()).toMatchObject([{ appId: A, crashes: 3 }]);
+  await deps.applyBotActivation?.(A, false);
+  expect(f.crashes?.paused(A)).toBeUndefined();
+  expect(pauses().bots[A]).toEqual({ resumedUptimeMs: expect.any(Number) });
+  expect(pausedBots()).toEqual([]);
+  expect(procs.get(A)).toBeUndefined();
+});
+
+it('keeps the saved state of a bot disabled since the start when another bot writes the file', async () => {
+  writeBotPausesSync(f.root, CHAIN, { [A]: { resumedUptimeMs: 5 }, [B]: { pausedAt: new Date().toISOString(), pauseCrashes: 3 } });
+  const deps = await start([B], []);
+  await deps.applyBotActivation?.(B, true);
+  expect(pauses().bots).toEqual({ [A]: { resumedUptimeMs: 5 }, [B]: { resumedUptimeMs: expect.any(Number) } });
+});
+
+it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('恢复运行 does not wait on the disk: a failed write is made good once crash/ is writable again', async () => {
+  writeBotPausesSync(f.root, CHAIN, { [A]: { pausedAt: new Date().toISOString(), pauseCrashes: 3 } });
+  const deps = await start([A], []);
+  chmodSync(join(f.root, 'crash'), 0o500);
+  await deps.applyBotActivation?.(A, true);
+  expect(f.crashes?.paused(A)).toBeUndefined();
+  expect(pauses().bots[A]).toMatchObject({ pausedAt: expect.any(String) });
+  chmodSync(join(f.root, 'crash'), 0o700);
+  await crash('kill');
+  expect(pauses().bots[A]).toEqual({ resumedUptimeMs: expect.any(Number) });
+});
+
+it('starts every bot over a damaged bot-pauses.json and logs it', async () => {
+  mkdirSync(join(f.root, 'crash'), { recursive: true });
+  writeFileSync(join(f.root, 'crash', 'bot-pauses.json'), `{"v":1,"chainId":"${CHAIN}","bots":{"cl`);
+  await start([A]);
+  expect(f.warn).toHaveBeenCalledWith('daemon-crash', 'bot_pauses_corrupt', {});
+});
+
+it('lists crash/ again as soon as a child exits, though its mtime did not move', async () => {
+  await start([A]);
+  mkdirSync(crashDir(f.root), { recursive: true });
+  // A coarse file system clock: the record written at the exit leaves the directory's mtime where it was.
+  const stamp = Math.floor(Date.now() / 1000) - 60;
+  utimesSync(crashDir(f.root), stamp, stamp);
+  expect(f.crashes?.application(Date.now())).toEqual({ records: [] });
+  await crash('kill');
+  utimesSync(crashDir(f.root), stamp, stamp);
+  expect(f.crashes?.application(Date.now())).toMatchObject({ records: [{ kind: 'forced', reason: 'SIGKILL', appId: A }] });
+});

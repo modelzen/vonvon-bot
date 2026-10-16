@@ -4,12 +4,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import {
   countInWindow, crashDir, crashErrorName, crashScopeKey, createCrashRecordCache, createSystemClock, hasCrashRecordFor, listCrashRecords,
   pruneCrashRecords, readBootId, readBotPauses, readCrashSummary, readRunMarker, removeResumeRequest, sanitizeReason, startedBeforeThisBoot,
   takeResumeRequest, writeBotPausesSync, writeCrashRecordSync, writeResumeRequest, writeRunMarkerSync, type Clock, type CrashRecord, type RunMarker,
 } from '../src/host/crash-store';
+
+// Passes through, so one test can cut a write short the way a full disk does.
+vi.mock('node:fs', async original => {
+  const real = await original<typeof import('node:fs')>();
+  return { ...real, writeFileSync: vi.fn(real.writeFileSync) };
+});
 
 const roots: string[] = [];
 afterAll(() => { for (const root of roots) rmSync(root, { recursive: true, force: true }); });
@@ -74,6 +80,19 @@ describe('records', () => {
     expect(readdirSync(crashDir(root)).filter(entry => entry.endsWith('.tmp'))).toEqual([]);
     expect(JSON.parse(readFileSync(join(crashDir(root), name), 'utf8'))).toEqual(record());
     expect(() => writeCrashRecordSync(root, record({ reason: '' }))).toThrow();
+  });
+
+  it('a write cut short (a full disk) leaves no temp file and the file before it as it was', async () => {
+    const root = tempRoot();
+    writeBotPausesSync(root, CHAIN, { cli_a: { resumedUptimeMs: 5 } });
+    const { writeFileSync: realWrite } = await vi.importActual<typeof import('node:fs')>('node:fs');
+    vi.mocked(writeFileSync).mockImplementationOnce((file, data, options) => {
+      realWrite(file, String(data).slice(0, 8), options);
+      throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
+    });
+    expect(() => writeBotPausesSync(root, CHAIN, { cli_b: { resumedUptimeMs: 6 } })).toThrow('ENOSPC');
+    expect(readdirSync(crashDir(root))).toEqual(['bot-pauses.json']);
+    expect(readBotPauses(root, CHAIN)).toEqual({ cli_a: { resumedUptimeMs: 5 } });
   });
 
   it('lists newest first and skips foreign names, oversized files, bad JSON, bad shapes and a missing directory', () => {
@@ -171,15 +190,25 @@ describe('bot records for the supervisor and the snapshot (s18a)', () => {
     read(T0 + 29_000);
     read(T0 + 60_000);
     expect(lists).toBe(3);
+    read.invalidate(); // a child exited: the next read lists again, whatever the mtime says
+    read(T0 + 61_000);
+    expect(lists).toBe(4);
     expect(createCrashRecordCache('/unused', { stat: () => { throw new Error('ENOENT'); } })(T0)).toEqual([]);
   });
-  it('reads the bot pauses of this chain only, and nothing from a damaged file', () => {
+  it('reads the bot pauses of this chain only, and nothing from a damaged file, which it reports', () => {
     const root = tempRoot();
+    let corrupt = 0;
+    const onCorrupt = (): void => { corrupt++; };
+    expect(readBotPauses(root, CHAIN, onCorrupt)).toEqual({});
     writeBotPausesSync(root, CHAIN, { cli_a: { pausedAt: at(T0), pauseCrashes: 3 }, cli_b: { resumedUptimeMs: 5 } });
-    expect(readBotPauses(root, CHAIN)).toEqual({ cli_a: { pausedAt: at(T0), pauseCrashes: 3 }, cli_b: { resumedUptimeMs: 5 } });
-    expect(readBotPauses(root, RUN)).toEqual({});
+    expect(readBotPauses(root, CHAIN, onCorrupt)).toEqual({ cli_a: { pausedAt: at(T0), pauseCrashes: 3 }, cli_b: { resumedUptimeMs: 5 } });
+    expect(readBotPauses(root, RUN, onCorrupt)).toEqual({});
+    expect(corrupt).toBe(0); // missing, or another chain's: nothing wrong
     writeFileSync(join(crashDir(root), 'bot-pauses.json'), '{"v":1');
-    expect(readBotPauses(root, CHAIN)).toEqual({});
+    expect(readBotPauses(root, CHAIN, onCorrupt)).toEqual({});
+    writeFileSync(join(crashDir(root), 'bot-pauses.json'), JSON.stringify({ v: 2, chainId: CHAIN, bots: {} }));
+    expect(readBotPauses(root, CHAIN, onCorrupt)).toEqual({});
+    expect(corrupt).toBe(2);
     expect(listCrashRecords(root)).toEqual([]);
   });
 });

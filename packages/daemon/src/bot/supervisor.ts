@@ -35,6 +35,8 @@ const BACKOFF_MIN_MS = 1_000;
 const BACKOFF_MAX_MS = 30_000;
 /** A child that stays up at least this long resets its backoff to the minimum. */
 const HEALTHY_UPTIME_MS = 60_000;
+/** A failed write of `crash/bot-pauses.json` is tried again this often, besides at each exit and spawn (s18a). */
+const PAUSES_RETRY_MS = 30_000;
 
 interface Child {
   bot: BotEntry;
@@ -79,8 +81,9 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   const clock = systemClock;
   const version = bridgeVersion().slice(0, 40) || '0.0.0';
   const managed = process.env.VONVON_SERVICE?.slice(0, 20) || null;
-  // Same chain after a host crash: a paused bot stays paused. A new chain (restart, stop and start) starts them all.
-  const saved = readBotPauses(root, chainId);
+  // Same chain after a host crash: a paused bot stays paused. A new chain (restart, stop and start) starts them all, and
+  // so does a damaged file, logged like a damaged run.json.
+  const saved = readBotPauses(root, chainId, () => log.warn('daemon-crash', 'bot_pauses_corrupt', {}));
   const newChild = (bot: BotEntry, enabled: boolean): Child => {
     const state = saved[bot.appId];
     return {
@@ -97,6 +100,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   const children = new Map<string, Child>(bots.map((bot) => [bot.appId, newChild(bot, true)]));
   // Lives here, not in the child: a bot's records survive its restarts and go with the daemon's.
   const diagnostics = createDiagnosticsStore({ changed: () => api?.invalidate(), claudeSignedOut: noteClaudeLoginFailed });
+  const records = createCrashRecordCache(root);
 
   console.log(paused ? `\ndaemon 已暂停，${bots.length} 个机器人都不启动：` : `\n正在启动 ${bots.length} 个机器人（各自独立进程）：`);
   for (const b of bots) console.log(`  • ${b.name}  (${b.appId})  [${b.tenant}]`);
@@ -125,8 +129,12 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   const tryDisk = <T>(c: Child, phase: string, fallback: T, step: () => T): T => {
     try { return step(); } catch (error) { log.fail('supervisor', error, { bot: c.bot.name, phase }); return fallback; }
   };
-  const savePauses = (c: Child): void => {
+  let pausesUnsaved = false;
+  let pausesRetry: NodeJS.Timeout | undefined;
+  /** `crash/bot-pauses.json` as memory has it; a bot with no Child here (disabled since the start) keeps the file's entry. */
+  const writePauses = (): void => {
     const states: Record<string, BotPauseState> = {};
+    for (const [appId, state] of Object.entries(saved)) if (!children.has(appId)) states[appId] = state;
     for (const [appId, each] of children) {
       if (!each.pause && each.resumedUptimeMs === undefined) continue;
       states[appId] = {
@@ -134,7 +142,26 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
         ...(each.resumedUptimeMs !== undefined ? { resumedUptimeMs: each.resumedUptimeMs } : {}),
       };
     }
-    tryDisk(c, 'bot-pauses', undefined, () => writeBotPausesSync(root, chainId, states));
+    writeBotPausesSync(root, chainId, states);
+    pausesUnsaved = false;
+    if (pausesRetry) clearTimeout(pausesRetry);
+    pausesRetry = undefined;
+  };
+  /** Memory decides, the disk follows (s18a): a failed write is logged here, then tried again quietly at the next exit or
+   * spawn and every 30 s, so 恢复运行 never waits on a full disk and the file catches up once it is back. */
+  const savePauses = (c: Child): void => {
+    pausesUnsaved = true;
+    tryDisk(c, 'bot-pauses', undefined, writePauses);
+    if (pausesUnsaved) armPausesRetry();
+  };
+  const retryPauses = (): void => {
+    if (!pausesUnsaved) return;
+    try { writePauses(); } catch { armPausesRetry(); }
+  };
+  const armPausesRetry = (): void => {
+    if (pausesRetry || shuttingDown) return;
+    pausesRetry = setTimeout(() => { pausesRetry = undefined; retryPauses(); }, PAUSES_RETRY_MS);
+    pausesRetry.unref();
   };
   /** What the child could not record itself: a signal, a handler that failed to write, a fatal exit, a failed spawn. */
   const recordCrash = (c: Child, kind: CrashKind, reason: string, pid: number): void => {
@@ -149,6 +176,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
       c.prunedAt = Date.now();
       tryDisk(c, 'crash-prune', 0, () => pruneCrashRecords(root, { now: clock.now(), scope: crashScopeKey('bot', c.bot.appId) }));
     }
+    records.invalidate();
   };
   /** Counts a crash: the larger of the disk's count (it outlives a host crash) and memory's. True when it paused the bot. */
   const countCrash = (c: Child): boolean => {
@@ -169,6 +197,16 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   };
   const pausedWrite = (c: Child): string =>
     `机器人「${c.bot.name}」10 分钟内崩溃了 ${c.pause?.crashes ?? CRASH_PAUSE_COUNT} 次，已暂停。在状态与诊断页点「恢复运行」后再试。`;
+  /** 恢复运行 of this bot alone, and the disable of a paused bot (s18a): the crashes before it no longer count, on disk either. */
+  const clearPause = (c: Child): void => {
+    c.pause = undefined;
+    c.crashTimes = [];
+    // macOS reports uptime in whole seconds: a crash in the same second must still count.
+    c.resumedUptimeMs = clock.uptimeMs() - 1;
+    c.backoffMs = BACKOFF_MIN_MS;
+    savePauses(c);
+    api?.invalidate();
+  };
   const restartLater = (c: Child, fields: Record<string, unknown>, what: string): void => {
     const wait = c.backoffMs;
     c.backoffMs = Math.min(c.backoffMs * 2, BACKOFF_MAX_MS);
@@ -189,6 +227,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   const spawnChild = (c: Child): void => {
     if (shuttingDown || paused || !c.enabled || c.proc || c.stopping || c.pause) return;
     c.restartTimer = undefined;
+    retryPauses();
     c.startedAt = Date.now();
     // 'ipc' 通道：子进程据此识别自己被 supervisor 托管（不自己挂 Web 控制台），
     // 并接收管理面写请求（admin/ipc.ts 协议）。
@@ -234,9 +273,13 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
       if (c.proc !== proc) return;
       c.proc = undefined;
       c.ipc = undefined;
+      records.invalidate();
       api?.invalidate();
-      ipc.rejectAll(`机器人「${c.bot.name}」进程已退出（等待自动重启）`);
-      if (shuttingDown || !c.enabled || c.stopping) return;
+      // In-flight requests are told what comes next: paused or a restart, once counted (each disk step only logs, so
+      // every path below reaches a rejectAll).
+      const exited = `机器人「${c.bot.name}」进程已退出（等待自动重启）`;
+      if (shuttingDown || !c.enabled || c.stopping) { ipc.rejectAll(exited); return; }
+      retryPauses();
       // Reset backoff if it had been healthy a while; otherwise grow it.
       const uptime = Date.now() - c.startedAt;
       if (uptime >= HEALTHY_UPTIME_MS) c.backoffMs = BACKOFF_MIN_MS;
@@ -248,8 +291,9 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
         else if (!tryDisk(c, 'crash-lookup', false, () => hasCrashRecordFor(root, crashScopeKey('bot', c.bot.appId), pid, c.startedAt))) {
           recordCrash(c, 'exception', '子进程出错退出，没留下记录', pid);
         }
-        if (countCrash(c)) return;
+        if (countCrash(c)) { ipc.rejectAll(pausedWrite(c)); return; }
       }
+      ipc.rejectAll(exited);
       restartLater(c, { code, signal }, `进程退出（code=${code ?? signal ?? '?'}）`);
     });
     proc.on('error', (err) => {
@@ -285,7 +329,6 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     for (const c of children.values()) spawnChild(c);
 
     const byAppId = (botId: string): Child | undefined => children.get(botId);
-    const records = createCrashRecordCache(root);
     const hostPause = paused ? options.crash?.pause ?? { since: supervisorStartedAt, crashes: CRASH_PAUSE_COUNT } : undefined;
     api = await startApi({
       port: options.port,
@@ -313,21 +356,19 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
             children.set(appId, child);
           }
           if (!enabled) {
+            // A disable gives the pause up: enabling again is 恢复运行 anyway, and the CLI and the file stop calling it paused.
+            if (child.pause) {
+              log.info('supervisor', 'bot-pause-dropped', { bot: child.bot.name, appId });
+              clearPause(child);
+            }
             child.ipc?.rejectAll('Agent 已停用。');
             await stopBot(child);
             return;
           }
           if (paused) throw new Error(HOST_PAUSED_ACTIVATION);
           if (child.pause) {
-            // 恢复运行 of this bot alone (s18a): the crashes before it no longer count, on disk either.
             log.info('supervisor', 'bot-resumed', { bot: child.bot.name, appId });
-            child.pause = undefined;
-            child.crashTimes = [];
-            // macOS reports uptime in whole seconds: a crash in the same second must still count.
-            child.resumedUptimeMs = clock.uptimeMs() - 1;
-            child.backoffMs = BACKOFF_MIN_MS;
-            savePauses(child);
-            api?.invalidate();
+            clearPause(child);
           }
           if (child.stopping) await child.stopping;
           spawnChild(child);
@@ -349,11 +390,13 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
         },
         executeCollaboration: async (botId, request) => {
           const child = byAppId(botId);
+          if (child?.enabled && child.pause) throw new AdminWriteError(pausedWrite(child));
           if (!child?.enabled || !child.proc || !child.ipc) throw new AdminWriteError('机器人不在运行中的活跃集里');
           return child.ipc.call({ kind: 'collaboration', request }, 180_000);
         },
         executeGroups: async (botId, op) => {
           const child = byAppId(botId);
+          if (child?.enabled && child.pause) throw new AdminWriteError(pausedWrite(child));
           if (!child?.enabled || !child.proc || !child.ipc) throw new AdminWriteError('机器人不在运行中的活跃集里');
           return child.ipc.call(op, 60_000);
         },
@@ -400,6 +443,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     shuttingDown = true;
     diagnostics.close();
     for (const child of children.values()) if (child.restartTimer) clearTimeout(child.restartTimer);
+    if (pausesRetry) clearTimeout(pausesRetry);
     const cleanup = await Promise.allSettled([closeOwnedProviders(async () => {
       const drained = await Promise.allSettled([Promise.resolve().then(() => api?.beginDrain())]);
       drained.push(...await Promise.allSettled([...children.values()].map(stopBot)));

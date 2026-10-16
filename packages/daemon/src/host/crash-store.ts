@@ -120,12 +120,14 @@ export function crashErrorName(value: unknown): string | undefined {
   return (typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,40}$/.test(code) ? `${value.name}:${code}` : value.name).slice(0, 60);
 }
 
+/** A write cut short (a full disk) or a failed rename leaves no temp file behind. */
 function writeAtomicSync(dir: string, name: string, text: string): void {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const tmp = join(dir, `.${name}.${randomBytes(4).toString('hex')}.tmp`);
-  writeFileSync(tmp, text, { flag: 'wx', mode: 0o600 });
-  try { renameSync(tmp, join(dir, name)); }
-  catch (error) { try { unlinkSync(tmp); } catch { /* the rename error is the one to report */ } throw error; }
+  try {
+    writeFileSync(tmp, text, { flag: 'wx', mode: 0o600 });
+    renameSync(tmp, join(dir, name));
+  } catch (error) { try { unlinkSync(tmp); } catch { /* the write or rename error is the one to report */ } throw error; }
 }
 
 export function writeCrashRecordSync(root: string, record: CrashRecord): string {
@@ -218,18 +220,21 @@ export const crashEntry = (record: CrashRecord): CrashEntry => ({
 });
 
 /** The records for every snapshot rebuild (every 5 s): one stat of `crash/`, a listing only when its mtime moved or 30 s
- * passed (a coarse file system clock can hide a write), then the last 24 hours, newest 20. */
-export function createCrashRecordCache(root: string, seams: { stat?: (dir: string) => number; list?: () => CrashRecord[] } = {}): (now: number) => CrashEntry[] {
+ * passed (a coarse file system clock can hide a write), then the last 24 hours, newest 20. `invalidate()` lists again
+ * at the next read: the supervisor calls it when a child exits and after each record it writes. */
+export type CrashRecordCache = ((now: number) => CrashEntry[]) & { invalidate(): void };
+export function createCrashRecordCache(root: string, seams: { stat?: (dir: string) => number; list?: () => CrashRecord[] } = {}): CrashRecordCache {
   const stat = seams.stat ?? ((dir: string) => statSync(dir).mtimeMs);
   const list = seams.list ?? (() => listCrashRecords(root, { limit: 50 }));
   let cached: { mtimeMs: number; readAt: number; records: CrashRecord[] } | undefined;
-  return now => {
+  const read = (now: number): CrashEntry[] => {
     try {
       const mtimeMs = stat(crashDir(root));
       if (!cached || cached.mtimeMs !== mtimeMs || now - cached.readAt >= 30_000) cached = { mtimeMs, readAt: now, records: list() };
     } catch { cached = undefined; }
     return (cached?.records ?? []).filter(record => now - Date.parse(record.at) <= CRASH_SHOWN_MS).slice(0, 20).map(crashEntry);
   };
+  return Object.assign(read, { invalidate: () => { cached = undefined; } });
 }
 
 /** `crash/bot-pauses.json`: the bots paused in one chain and when each last resumed. Only the host writes it. */
@@ -237,12 +242,17 @@ const botPauseSchema = z.object({ pausedAt: iso.optional(), pauseCrashes: z.numb
 export type BotPauseState = z.infer<typeof botPauseSchema>;
 const botPausesSchema = z.object({ v: z.literal(1), chainId: z.string().uuid(), bots: z.record(z.string().regex(APP_ID), botPauseSchema) }).strict();
 const botPausesPath = (root: string): string => join(crashDir(root), 'bot-pauses.json');
-/** Empty for another chain, a missing or a damaged file. */
-export function readBotPauses(root: string, chainId: string): Record<string, BotPauseState> {
+/** Empty for another chain, a missing or a damaged file; `onCorrupt` hears of a file that is there but not JSON or not
+ * of this shape, for the supervisor's log (no logger here). */
+export function readBotPauses(root: string, chainId: string, onCorrupt?: () => void): Record<string, BotPauseState> {
+  let raw: string;
+  try { raw = readFileSync(botPausesPath(root), 'utf8'); } catch { return {}; }
   try {
-    const parsed = botPausesSchema.safeParse(JSON.parse(readFileSync(botPausesPath(root), 'utf8')));
-    return parsed.success && parsed.data.chainId === chainId ? parsed.data.bots : {};
-  } catch { return {}; }
+    const parsed = botPausesSchema.safeParse(JSON.parse(raw));
+    if (parsed.success) return parsed.data.chainId === chainId ? parsed.data.bots : {};
+  } catch { /* not JSON */ }
+  onCorrupt?.();
+  return {};
 }
 export function writeBotPausesSync(root: string, chainId: string, bots: Record<string, BotPauseState>): void {
   writeAtomicSync(crashDir(root), 'bot-pauses.json', JSON.stringify(botPausesSchema.parse({ v: 1, chainId, bots })));
