@@ -25,12 +25,13 @@ beforeEach(async () => {
 // A fake `codex app-server`. Every request goes to `<script>.log` with the pid. `MODE:<m>` in
 // developerInstructions steers thread/start, in the turn input steers the turn. Files next to the
 // script: `.mcp` (config/read lists, one per call, the last repeats; thread/start rejects names
-// not in the last), `.skills`, `.config-error`, `.init-delay`, `.model-list-error`.
+// not in the last), `.skills`, `.config-error`, `.init-delay`, `.model-list-error`, `.exit-on-start`.
 const FAKE = String.raw`#!/usr/bin/env node
 const fs = require('fs');
 const base = __filename;
 fs.appendFileSync(base + '.pids', process.pid + '\n');
 const read = (name, fallback) => { try { return JSON.parse(fs.readFileSync(base + '.' + name, 'utf8')); } catch { return fallback; } };
+if (read('exit-on-start', false)) process.exit(3);
 const send = (o) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...o }) + '\n');
 const reply = (id, result) => send({ id, result });
 const later = (ms, f) => setTimeout(f, ms);
@@ -84,6 +85,7 @@ function handle(msg) {
     if (gone) return send({ id: msg.id, error: { code: -32600, message: 'failed to load configuration: invalid transport in mcp_servers.' + gone } });
     const mode = modeOf(p.developerInstructions);
     if (mode === 'stuck-start') return;
+    if (mode === 'bad-start') return reply(msg.id, { thread: {} });
     const id = 'th' + (++threads) + '_' + process.pid;
     return later(mode.startsWith('slow-start=') ? msOf(mode) : 0, () => reply(msg.id, { thread: { id, ephemeral: true } }));
   }
@@ -105,7 +107,7 @@ function handle(msg) {
       return send(failed(threadId, turnId, 'You have hit your usage limit', 'usageLimitExceeded'));
     }
     if (mode === 'fail') return send(failed(threadId, turnId, (/ERR:(.*)/.exec(text) || [])[1], null));
-    if (mode === 'shuffle') {
+    if (mode === 'interleave') { // each thread in order, threads interleaved
       let at = 0;
       for (const n of turnEnd(threadId, turnId, text)) { at += Math.floor(Math.random() * 40); later(at, () => send(n)); }
       return;
@@ -235,10 +237,20 @@ describe('Codex 判断进程：参数和结果', () => {
     await vi.waitFor(() => expect(fake.requests('thread/unsubscribe').map(threadOf).sort()).toEqual([`th1_${pid}`, `th2_${pid}`]));
   });
 
-  it('4 条并发、通知乱序，各拿各的结果', async () => {
-    const results = await Promise.all([1, 2, 3, 4].map(i => judge(call('shuffle', { tag: `ID${i}` }))));
-    expect(results.map(r => r.text)).toEqual([1, 2, 3, 4].map(i => `final:MODE:shuffle ID${i}`));
+  it('4 条并发、通知跨线程交错，各拿各的结果；cold 只给起进程的那一条', async () => {
+    const results = await Promise.all([1, 2, 3, 4].map(i => judge(call('interleave', { tag: `ID${i}` }))));
+    expect(results.map(r => r.text)).toEqual([1, 2, 3, 4].map(i => `final:MODE:interleave ID${i}`));
+    expect(results.map(r => r.cold)).toEqual([true, false, false, false]);
     expect(fake.pids()).toHaveLength(1);
+  });
+
+  it('thread/start 回包没有 thread.id → failed、写明回包异常，不算进程退出；进程照用', async () => {
+    const error = await judge(call('ok', { start: 'bad-start' })).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(JudgeCallError);
+    expect(error).toMatchObject({ kind: 'failed', structured: false, message: expect.stringContaining('thread/start 回包异常') });
+    expect((error as Error).message).not.toContain('退出了');
+    expect(alive(fake.pids()[0]!)).toBe(true);
+    expect((await judge(call())).cold).toBe(false);
   });
 
   it('turn/completed 比 turn/start 的回包先到，照样收得到', async () => {
@@ -340,6 +352,38 @@ describe('Codex 判断进程：超时和收尾', () => {
     await sleep(550);
     expect((await judge(call())).cold).toBe(true);
     expect(fake.pids()).toHaveLength(2);
+  });
+
+  it('总时长超过 stuckMs、每个 RPC 都及时回包：不算卡死，进程不杀', async () => {
+    proc.configureJudgeProcess({ stuckMs: 200 });
+    expect((await judge(call('slow=600'))).text).toBe('final:MODE:slow=600');
+    expect((await judge(call('slow=600'))).cold).toBe(false);
+    await sleep(300); // past stuckMs after the unsubscribe replies too
+    expect(proc.judgeProcessStats().stuck).toBe(0);
+    expect(fake.pids()).toHaveLength(1);
+    expect(alive(fake.pids()[0]!)).toBe(true);
+  });
+
+  it('连接超时（initialize 迟迟不回）→ failed、进程被杀、不在注册表里，接着 unavailable', async () => {
+    proc.configureJudgeProcess({ connectMs: 200, backoffMs: [10_000] });
+    fake.set('init-delay', 5000);
+    await expect(judge(call())).rejects.toMatchObject({ kind: 'failed', message: expect.stringContaining('起不来') });
+    const [pid] = fake.pids();
+    await vi.waitFor(() => expect(alive(pid!)).toBe(false));
+    await vi.waitFor(() => expect(pool.residentCount()).toBe(0));
+    await expect(judge(call())).rejects.toMatchObject({ kind: 'unavailable' });
+    expect(fake.pids()).toHaveLength(1);
+  });
+
+  it('二进制一启动就退出 → failed、不在注册表里，接着 unavailable', async () => {
+    proc.configureJudgeProcess({ backoffMs: [10_000] });
+    fake.set('exit-on-start', true);
+    await expect(judge(call())).rejects.toMatchObject({ kind: 'failed', message: expect.stringContaining('起不来') });
+    await vi.waitFor(() => expect(fake.pids()).toHaveLength(1));
+    expect(alive(fake.pids()[0]!)).toBe(false);
+    await vi.waitFor(() => expect(pool.residentCount()).toBe(0));
+    await expect(judge(call())).rejects.toMatchObject({ kind: 'unavailable' });
+    expect(fake.pids()).toHaveLength(1);
   });
 
   it('进程中途退出 → 在跑的 failed、不在注册表里；退避期内 unavailable，过了重建；成功一次退避清零', async () => {

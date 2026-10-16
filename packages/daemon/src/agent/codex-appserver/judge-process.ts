@@ -43,6 +43,8 @@ export const TOOL_OFF_KEYS = {
 
 export interface JudgeProcessOptions {
   stuckMs: number;
+  /** spawn to `initialize` reply */
+  connectMs: number;
   idleMs: number;
   backoffMs: readonly number[];
   resolveBin(): string | null;
@@ -53,6 +55,7 @@ export interface JudgeProcessOptions {
 
 const DEFAULTS: JudgeProcessOptions = {
   stuckMs: JUDGE_RPC_STUCK_MS,
+  connectMs: CONNECT_TIMEOUT_MS,
   idleMs: JUDGE_IDLE_MS,
   backoffMs: JUDGE_BACKOFF_MS,
   resolveBin: () => resolveCodexBin(),
@@ -211,6 +214,8 @@ async function dispatch(slot: Slot): Promise<void> {
   clearTimeout(slot.idleTimer);
   for (const watch of slot.watches.values()) watch.fail(goneError());
   const shuttingDown = !poolAccepting();
+  // No exit code or signal here: the stream can end (stdout closed) before the child's exit event.
+  // They are in the `agent exit` line with the same pid, logged by AppServerClient.
   log.info('judge', 'process-exit', {
     pid: slot.client.pid ?? null, inflight: slot.inflight, reason: slot.ending ?? (shuttingDown ? 'shutdown' : 'exit'),
   });
@@ -268,7 +273,7 @@ async function create(bin: string, cwd: string): Promise<Slot> {
   const client = new AppServerClient({ bin, cwd, clientName: 'vonvon-judge' });
   trackResident(client);
   try {
-    await withDeadline(client.connect(), CONNECT_TIMEOUT_MS, 'judge connect');
+    await withDeadline(client.connect(), opts.connectMs, 'judge connect');
     if (!poolAccepting()) throw closedError();
   } catch (error) {
     // A connect that loses to shutdown closes itself here.
@@ -296,11 +301,11 @@ async function acquire(cwd: string): Promise<{ slot: Slot; cold: boolean }> {
     if (slot.bin === bin && slot.fingerprint === binFingerprint(bin)) return { slot, cold: false };
     retire(slot);
   }
-  if (!creating) {
-    const wait = backoffUntil - opts.now();
-    if (wait > 0) throw new JudgeCallError('unavailable', `Codex 判断进程刚退出，${Math.ceil(wait / 1000)} 秒后再试`, false);
-    creating = create(bin, cwd).finally(() => { creating = null; });
-  }
+  // cold only for the judgement that started the process; the others share its single flight
+  if (creating) return { slot: await creating, cold: false };
+  const wait = backoffUntil - opts.now();
+  if (wait > 0) throw new JudgeCallError('unavailable', `Codex 判断进程刚退出，${Math.ceil(wait / 1000)} 秒后再试`, false);
+  creating = create(bin, cwd).finally(() => { creating = null; });
   return { slot: await creating, cold: true };
 }
 
@@ -370,12 +375,16 @@ async function startThread(slot: Slot, call: JudgeCall): Promise<string | undefi
   for (let attempt = 0; ; attempt++) {
     const inv = await inventory(slot, call.cwd);
     if (call.signal.aborted) return undefined; // no thread to clean up
+    let reply: { thread?: { id?: unknown } } | null | undefined;
     try {
-      return (await rpc<{ thread: { id: string } }>(slot, 'thread/start', threadParams(call, inv))).thread.id;
+      reply = await rpc<typeof reply>(slot, 'thread/start', threadParams(call, inv));
     } catch (error) {
       if (attempt === 0 && error instanceof JsonRpcError && /invalid transport in mcp_servers\./.test(error.message)) continue;
       throw error instanceof JsonRpcError ? await classify(slot, error.message) : goneError();
     }
+    const id = reply?.thread?.id;
+    if (typeof id === 'string' && id) return id;
+    throw new JudgeCallError('failed', `Codex thread/start 回包异常：${JSON.stringify(reply ?? null).slice(0, 120)}`, false);
   }
 }
 
