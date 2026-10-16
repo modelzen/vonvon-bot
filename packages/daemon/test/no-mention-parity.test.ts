@@ -59,7 +59,8 @@ vi.mock('../src/card/run-card-stream', () => ({
 import { createOrchestrator } from '../src/bot/handle-message';
 
 const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, completionReminder: { mode: 'manual' } } };
-const channel = { send: fake.send, rawClient: { im: { v1: { messageReaction: { create: async () => ({ data: {} }), delete: async () => ({}) } } } } };
+// The group's only bot: the bridge's 免@ rules, unchanged by s22 (test/baselines.test.ts has several bots).
+const channel = { send: fake.send, rawClient: { im: { v1: { messageReaction: { create: async () => ({ data: {} }), delete: async () => ({}) }, chat: { get: async () => ({ code: 0, data: { bot_count: '1' } }) } } } } };
 let orchestrator: ReturnType<typeof createOrchestrator>;
 let sequence = 0;
 function message(content: string, threadId?: string, mentionedBot = false): NormalizedMessage {

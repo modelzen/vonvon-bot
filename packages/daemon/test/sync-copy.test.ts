@@ -240,7 +240,8 @@ describe('createSyncCopyGate', () => {
 describe('the orchestrator answers only the topic message', () => {
   const base = { name: 'demo', chatId: 'oc_demo', cwd: '/tmp/demo', kind: 'multi', noMention: false, mode: 'qa', guestMode: 'qa', network: false };
   const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, completionReminder: { mode: 'manual' } } };
-  const channel = { send: fake.send, rawClient: { im: { v1: { messageReaction: { create: fake.react, delete: async () => ({}) }, message: { get: fake.get } } } } };
+  // The group's only bot (s22 looks nothing up then).
+  const channel = { send: fake.send, rawClient: { im: { v1: { messageReaction: { create: fake.react, delete: async () => ({}) }, message: { get: fake.get }, chat: { get: async () => ({ code: 0, data: { chat_mode: 'group', bot_count: '1' } }) } } } } };
   let orchestrator: ReturnType<typeof createOrchestrator>;
   let events: DiagnosticsEvent[] = [];
   const records = () => events.flatMap(event => event.kind === 'notReplied' ? [event.record] : []);

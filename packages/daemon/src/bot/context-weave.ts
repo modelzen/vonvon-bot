@@ -183,20 +183,21 @@ export async function fetchQuotedMessage(
 }
 
 /**
- * Look up a recalled message's place, time and sender (s15). Unlike
+ * Look up a recalled or quoted message's place, time and sender (s15, s22). Unlike
  * {@link fetchQuotedMessage} it keeps a deleted item, which still carries them.
  * Undefined on a failure, a timeout or a missing create_time (logged).
  */
-export async function fetchMessageMeta(channel: LarkChannel, messageId: string, names?: NameBook): Promise<MessageMeta | undefined> {
+export async function fetchMessageMeta(channel: LarkChannel, messageId: string, names?: NameBook,
+  opts: { event?: string; deadlineMs?: number } = {}): Promise<MessageMeta | undefined> {
   const failed = (err: unknown, code?: number) => {
-    log.warn('intake', 'recall-lookup-failed', { messageId, err: String(err), ...(code !== undefined ? { code } : {}) });
+    log.warn('intake', opts.event ?? 'recall-lookup-failed', { messageId, err: String(err), ...(code !== undefined ? { code } : {}) });
     return undefined;
   };
   try {
     const res = await withDeadline(channel.rawClient.im.v1.message.get({
       path: { message_id: messageId },
       params: { with_sender_name: true },
-    }), FETCH_DEADLINE_MS);
+    }), opts.deadlineMs ?? FETCH_DEADLINE_MS);
     if (!res) return failed('timeout');
     if (typeof res.code === 'number' && res.code !== 0) return failed(res.msg, res.code);
     const item = (res.data as { items?: RawMsgItem[] } | undefined)?.items?.[0];
@@ -210,6 +211,53 @@ export async function fetchMessageMeta(channel: LarkChannel, messageId: string, 
       from: kindOf(item.sender, meOf(channel)) ?? 'user',
       senderId: senderIdOf(item.sender),
     };
+  } catch (err) {
+    return failed(err, feishuError(err)?.code);
+  }
+}
+
+/** Pages {@link fetchTopicLastBot} reads at most before it gives up. */
+const LAST_BOT_PAGES = 3;
+
+/**
+ * The bot that spoke last in a topic (s22, 接着聊): `self`, `bot` (another
+ * one), or `none` when no bot is among its newest {@link LAST_BOT_PAGES}
+ * pages. Undefined when a page fails or `deadlineMs` runs out (logged).
+ * The topic's first message counts: a topic hung under another bot's message
+ * is that bot's until someone else speaks.
+ */
+export async function fetchTopicLastBot(channel: LarkChannel, threadId: string, deadlineMs: number): Promise<'self' | 'bot' | 'none' | undefined> {
+  const failed = (err: unknown, code?: number): undefined => {
+    log.warn('intake', 'topic-speaker-failed', { threadId, err: String(err), ...(code !== undefined ? { code } : {}) });
+    return undefined;
+  };
+  const deadline = Date.now() + deadlineMs;
+  const me = meOf(channel);
+  let pageToken: string | undefined;
+  try {
+    for (let page = 0; page < LAST_BOT_PAGES; page++) {
+      const res = await withDeadline(channel.rawClient.im.v1.message.list({
+        params: {
+          container_id_type: 'thread',
+          container_id: threadId,
+          sort_type: 'ByCreateTimeDesc',
+          page_size: PAGE_SIZE,
+          ...(pageToken ? { page_token: pageToken } : {}),
+        },
+      }), deadline - Date.now());
+      if (!res) return failed('timeout');
+      if (typeof res.code === 'number' && res.code !== 0) return failed(res.msg, res.code);
+      const data = res.data as { items?: RawMsgItem[]; has_more?: boolean; page_token?: string } | undefined;
+      const items = data?.items ?? [];
+      for (const it of items) {
+        const kind = kindOf(it.sender, me);
+        if (kind === 'self' || kind === 'bot') return kind;
+      }
+      if (!data?.has_more || !data.page_token || items.length === 0) return 'none';
+      pageToken = data.page_token;
+    }
+    log.info('intake', 'topic-speaker-page-cap', { threadId, pages: LAST_BOT_PAGES });
+    return 'none';
   } catch (err) {
     return failed(err, feishuError(err)?.code);
   }

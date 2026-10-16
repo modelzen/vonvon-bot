@@ -85,6 +85,28 @@ describe('createTopicContext', () => {
     expect(get).toHaveBeenCalledTimes(2);
   });
 
+  it('reads the bot count with the mode, and keeps a group it cannot read unknown (s22)', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(log, 'info').mockImplementation(() => undefined);
+    const data: Record<string, object> = {
+      oc_two: { chat_mode: 'group', group_message_type: 'chat', bot_count: '2' },
+      oc_post: { chat_mode: 'topic', bot_count: 1 },
+      oc_odd: { chat_mode: 'group', bot_count: 'many' },
+    };
+    const get = vi.fn(async ({ path }: { path: { chat_id: string } }) => path.chat_id === 'oc_down' ? { code: 230001, msg: 'internal' } : { code: 0, data: data[path.chat_id] });
+    const ctx = ctxOn({ chat: { get } });
+    expect(await ctx.chatInfo('oc_two')).toEqual({ ok: true, topic: false, bots: 2 });
+    expect(await ctx.chatInfo('oc_post')).toEqual({ ok: true, topic: true, bots: 1 });
+    expect(await ctx.chatInfo('oc_odd')).toEqual({ ok: true, topic: false });
+    expect(await ctx.chatInfo('oc_down')).toEqual({ ok: false, topic: false });
+    // One lookup for concurrent askers; again after ten minutes, as a bot may have joined.
+    await Promise.all([ctx.chatInfo('oc_two'), ctx.noMainArea('oc_two')]);
+    expect(get).toHaveBeenCalledTimes(4);
+    vi.advanceTimersByTime(10 * 60_000 + 1);
+    await ctx.chatInfo('oc_two');
+    expect(get).toHaveBeenCalledTimes(5);
+  });
+
   it('records a topic another bot opened under a main-area line, looking each up once', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'topics-'));
     try {

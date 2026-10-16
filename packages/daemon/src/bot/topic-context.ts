@@ -20,7 +20,8 @@ import { readTopicsIn, type TopicPerson, type TopicRecord, type TopicRegistry, t
 export const QUOTES_MAX = 10;
 /** Unknown topic roots looked up per turn at most. */
 const DISCOVER_MAX = 5;
-const HOUR = 60 * 60_000;
+/** How long a group's info is kept, read or not. */
+const INFO_TTL = 10 * 60_000;
 
 /** The topics a block may quote: opened in the window, not excluded or skipped. */
 export interface QuoteWindow {
@@ -117,7 +118,18 @@ function withLocal(own: TopicView[], local: TopicView[]): TopicView[] {
   return [...merged, ...theirs.values()];
 }
 
+/** What a group's info says (`im.v1.chat.get`). `ok` false when it could not be read. */
+export interface ChatInfo {
+  ok: boolean;
+  /** A topic group (话题群 / 话题形式群): no main-area chat. False when unknown. */
+  topic: boolean;
+  /** `bot_count`: bots in the group, this one included. Absent when unknown. */
+  bots?: number;
+}
+
 export interface TopicContext {
+  /** The group's info, cached ten minutes (the bot count can change). Never throws. */
+  chatInfo(chatId: string): Promise<ChatInfo>;
   /** A topic group (话题群 / 话题形式群): no main-area chat. False when unknown. */
   noMainArea(chatId: string): Promise<boolean>;
   /** Record the topics under `msgs` (main-area lines) the registry does not know yet. */
@@ -129,7 +141,7 @@ export interface TopicContext {
 
 /**
  * `track` keeps registry writes for shutdown; `stopping` skips them once it starts.
- * Per process: a chat's mode is cached (an hour, ten minutes when unknown),
+ * Per process: a chat's info is cached ten minutes, read or not,
  * and each topic is looked up at most once: a turn that reaches a topic still
  * being looked up, or one recorded after its list was read, gets that lookup's answer.
  * `localBots` lists the other vonvon bots whose registries {@link TopicContext.quotable} reads.
@@ -140,28 +152,46 @@ export function createTopicContext(
   names: NameBook,
   opts: { stopping: () => boolean; track: <T>(p: Promise<T>) => Promise<T>; localBots?: () => Promise<LocalBot[]> },
 ): TopicContext {
-  const modes = new Map<string, { topic: Promise<boolean>; until: number }>();
+  const infos = new Map<string, { info: Promise<ChatInfo>; until: number }>();
   const looked = new Map<string, Promise<TopicView | undefined>>();
 
-  async function chatMode(chatId: string): Promise<{ topic: boolean; ttl: number }> {
-    const unknown = (reason: string, failure?: unknown) => {
+  async function readChat(chatId: string): Promise<ChatInfo> {
+    const unknown = (reason: string, failure?: unknown): ChatInfo => {
       const denied = Boolean(scopeDenial(failure));
       const why = denied ? { reason: 'missing-scope', scope: 'im:chat:readonly' } : { reason };
       if (denied) reportScopeDenied('im:chat:readonly', 'chat-info');
       log.info('intake', 'chat-mode-unknown', { chatId: chatId.slice(-6), ...why });
-      return { topic: false, ttl: 10 * 60_000 };
+      return { ok: false, topic: false };
     };
     try {
       const res = await withDeadline(channel.rawClient.im.v1.chat.get({ path: { chat_id: chatId } }), 3000);
       if (!res) return unknown('timeout');
       if (typeof res.code === 'number' && res.code !== 0) return unknown(`code=${res.code}`, res);
-      const d = res.data as { chat_mode?: string; group_message_type?: string } | undefined;
+      const d = res.data as { chat_mode?: string; group_message_type?: string; bot_count?: string | number } | undefined;
       const topic = d?.chat_mode === 'topic' || d?.group_message_type === 'thread';
-      log.info('intake', 'chat-mode', { chatId: chatId.slice(-6), topic });
-      return { topic, ttl: HOUR };
+      // A string in the API; a missing or odd value leaves the count unknown.
+      const count = d?.bot_count === undefined || d.bot_count === '' ? NaN : Number(d.bot_count);
+      const bots = Number.isInteger(count) && count >= 0 ? count : undefined;
+      log.info('intake', 'chat-mode', { chatId: chatId.slice(-6), topic, bots: bots ?? null });
+      return { ok: true, topic, ...(bots !== undefined ? { bots } : {}) };
     } catch (err) {
       return unknown(String(err), err);
     }
+  }
+
+  function chatInfo(chatId: string): Promise<ChatInfo> {
+    const hit = infos.get(chatId);
+    if (hit && hit.until > Date.now()) return hit.info;
+    // Cached before it answers, so concurrent messages share one lookup.
+    const entry = {
+      info: readChat(chatId).then((r) => {
+        entry.until = Date.now() + INFO_TTL;
+        return r;
+      }),
+      until: Infinity,
+    };
+    infos.set(chatId, entry);
+    return entry.info;
   }
 
   function person(from: ContextMessage['from'], openId: string | undefined): TopicPerson {
@@ -170,20 +200,8 @@ export function createTopicContext(
   }
 
   return {
-    noMainArea(chatId) {
-      const hit = modes.get(chatId);
-      if (hit && hit.until > Date.now()) return hit.topic;
-      // Cached before it answers, so concurrent openings share one lookup.
-      const entry = {
-        topic: chatMode(chatId).then((r) => {
-          entry.until = Date.now() + r.ttl;
-          return r.topic;
-        }),
-        until: Infinity,
-      };
-      modes.set(chatId, entry);
-      return entry.topic;
-    },
+    chatInfo,
+    noMainArea: (chatId) => chatInfo(chatId).then((r) => r.topic),
     async discover(chatId, msgs, known) {
       if (!topics) return [];
       const roots = msgs.filter((m) => m.threadId && !known.has(m.threadId));
