@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { access, readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type {
@@ -28,8 +27,9 @@ import type {
 import { BRIDGE_DEVELOPER_INSTRUCTIONS } from '../bridge-instructions';
 import { BackendNotInstalledError, isBackendDepInstalled, installedBackendVersion, loadBackendDep } from '../backend-loader';
 import { permissionOptions } from './permission';
+import { findTranscript, scanTranscript } from './transcript';
 import { foldSessionMessages, mapSessionSummary } from './history';
-import { ClaudeAgentThread } from './thread';
+import { ClaudeAgentThread, type TranscriptMark } from './thread';
 import { claudeConfigDir, readConfiguredClaudeModel } from './configured-model';
 import { loginFromAccount, loginFromEnv, loginUnderService, readClaudeLogin } from './login';
 
@@ -456,10 +456,11 @@ export class ClaudeAgentBackend implements AgentBackend {
 
   async resumeThread(opts: ResumeThreadOptions): Promise<AgentThread> {
     const sdk = await this.sdkLoader();
-    await assertSessionSaved(opts.sessionId);
+    const transcript = await transcriptMark(await assertSessionSaved(opts.sessionId), opts.sessionId);
     return new ClaudeAgentThread({
       sessionId: opts.sessionId,
       resume: true,
+      transcript,
       cwd: opts.cwd,
       model: opts.model,
       effort: opts.effort,
@@ -483,23 +484,34 @@ export class ClaudeAgentBackend implements AgentBackend {
  * searched, so how Claude Code names the folder for a cwd (case, symlinks, long paths) does not matter. A folder
  * that cannot be read does not block the resume.
  */
-async function assertSessionSaved(sessionId: string): Promise<void> {
-  if (!/^[\w-]+$/.test(sessionId)) return;
-  const projects = join(claudeConfigDir(), 'projects');
-  let folders: string[] = [];
+async function assertSessionSaved(sessionId: string): Promise<string | undefined> {
+  if (!/^[\w-]+$/.test(sessionId)) return undefined;
+  let file: string | undefined;
   try {
-    folders = await readdir(projects);
+    file = await findTranscript(sessionId);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      log.fail('agent', err, { backend: 'claude-agent', phase: 'resume-lookup', sessionId });
-      return;
-    }
+    log.fail('agent', err, { backend: 'claude-agent', phase: 'resume-lookup', sessionId });
+    return undefined;
   }
-  const file = `${sessionId}.jsonl`;
-  for (const folder of folders) {
-    if (await access(join(projects, folder, file)).then(() => true, () => false)) return;
+  if (!file) throw new Error(`Claude 会话 ${sessionId} 没有保存下来，无法恢复`);
+  return file;
+}
+
+/**
+ * Where a resumed thread starts watching its file (s15b): everything there now is what the
+ * new process loads, so only what comes after can be someone else's. The last compaction
+ * in it is reported, so a terminal `/compact` made while no bot process was up still counts.
+ * A file that cannot be read starts the watch unset; the first check then reads it whole.
+ */
+async function transcriptMark(file: string | undefined, sessionId: string): Promise<TranscriptMark | undefined> {
+  if (!file) return undefined;
+  try {
+    const scan = await scanTranscript(file, 0);
+    return { file, to: scan.to, ...(scan.compaction ? { compaction: scan.compaction } : {}) };
+  } catch (err) {
+    log.fail('agent', err, { backend: 'claude-agent', phase: 'transcript-mark', sessionId });
+    return undefined;
   }
-  throw new Error(`Claude 会话 ${sessionId} 没有保存下来，无法恢复`);
 }
 
 const EFFORTS: ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh'];

@@ -247,12 +247,35 @@ export interface AgentThread {
    * resolve only once it actually finishes — compaction runs as a background
    * turn, so this drains the event stream to turn/completed. */
   compact(): Promise<CompactResult>;
+  /** The newest compaction in the native session (s15b): an id that changes with every
+   * compaction, whoever made it (vonvon, the agent on its own, a terminal or the Codex app).
+   * Read on resume and by {@link checkNative}; unset when there is none or it is unknown. */
+  readonly lastCompaction?: string;
+  /** Look at the native session before a turn (s15b). `foreign` means something other than
+   * this thread wrote a turn or a compaction there since it last looked (the owner in a
+   * terminal), so the caller resumes it from disk. Claude only: a live Codex thread holds
+   * the only writer, and is let go after every run instead ({@link releaseAfterRun}). */
+  checkNative?(): Promise<{ foreign: boolean }>;
+  /** Let the session go once a run ends (s15b): while an app-server holds a Codex thread, a
+   * terminal or the Codex app cannot open it, and only closing the process lets go
+   * (`thread/unsubscribe` keeps the writer). */
+  readonly releaseAfterRun?: boolean;
   /** false once the underlying agent process has died (crash / kill / close) —
    * the thread is unusable and must be evicted from the live cache so
    * resolveThread's resume fallback can take over. */
   isAlive(): boolean;
   /** terminate the underlying app-server process */
   close(): Promise<void>;
+}
+
+/** Resuming a session another program is writing (s15b): Codex lets one writer hold a
+ * thread, so while a terminal or the Codex app has it open the bot cannot continue it.
+ * The caller says so and keeps the session; starting a new one would lose the conversation. */
+export class SessionInUseError extends Error {
+  constructor(readonly sessionId: string, cause?: unknown) {
+    super('这条会话正在终端或 Codex 应用里打开着，bot 接不上。关掉那边以后再发一次。', { cause });
+    this.name = 'SessionInUseError';
+  }
 }
 
 export interface StartThreadOptions {

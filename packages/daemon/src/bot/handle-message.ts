@@ -52,7 +52,7 @@ import {
   probeBackends,
   type AdminWriteOp,
 } from '../admin/ops';
-import { isGoalTerminal, UsageError } from '../agent/types';
+import { isGoalTerminal, SessionInUseError, UsageError } from '../agent/types';
 import { parseModelId } from '../agent/model-id';
 import {
   getMaxConcurrentRuns,
@@ -814,6 +814,8 @@ export function cardIdFromMessageContent(content: string): string | undefined {
  * 记录保留，下一条消息经 resolveThread 的 resume 兜底自愈（~250ms–1.6s），对话
  * 无感衔接。synthesis 给的区间 30–60min，取中值。 */
 const SESSION_REAP_IDLE_MS = 45 * 60_000;
+/** How long a resume waits for the bot's own released Codex process to exit (s15b). */
+const RELEASE_WAIT_MS = 10_000;
 /** reaper 清扫周期。 */
 const SESSION_REAP_SWEEP_MS = 5 * 60_000;
 
@@ -952,6 +954,32 @@ export function createOrchestrator(
   /** 轮次收尾打点：刷新会话的空闲时钟（不在 LIVE 缓存则忽略）。 */
   function touchSession(key: string): void {
     if (sessions.has(key)) sessionTouchedAt.set(key, Date.now());
+  }
+  /**
+   * Let a Codex session go once nothing holds its key (s15b, product.md 3.5 D6): only closing
+   * the app-server lets go of the thread, so a terminal or the Codex app can open it between
+   * turns. The next turn resumes it from disk, which costs 0.24 to 0.37 s on JP-VPS with a
+   * warm process (measured 2026-10-16). A run, a /compact or a /new holding the key keeps it.
+   */
+  function releaseIdle(key: string | undefined, thread: AgentThread | undefined): void {
+    if (!key || !thread?.releaseAfterRun || active.has(key) || sessions.get(key) !== thread) return;
+    sessions.delete(key);
+    sessionTouchedAt.delete(key);
+    const closed = thread.close().catch(error => log.fail('agent', error, { phase: 'thread-close' }));
+    releasing.set(key, closed);
+    void trackTask(closed.finally(() => { if (releasing.get(key) === closed) releasing.delete(key); }));
+    log.info('agent', 'session-release', { threadId: key });
+  }
+  /** Releases still closing, by key: the next resume waits for its own process to let go of the writer. */
+  const releasing = new Map<string, Promise<void>>();
+  /** Wait for a release of `key` still closing. Bounded: close() escalates to SIGKILL after 4 s,
+   * so the limit only guards a close that never settles. */
+  async function waitReleased(key: string): Promise<void> {
+    const closing = releasing.get(key);
+    if (!closing) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([closing, new Promise<void>((r) => { timer = setTimeout(r, RELEASE_WAIT_MS); })]);
+    clearTimeout(timer);
   }
   const active = new Map<string, ActiveState>();
   /** Per-doc serialization for comment runs (see {@link withDocLock}). */
@@ -1213,10 +1241,36 @@ export function createOrchestrator(
     void trackTask(patchSession(key, { topicsDue: sessionId }).catch(() => undefined));
   }
   function markTopicsDue(key: string | undefined, chatId: string, sessionId: string): void {
-    if (key && isMainKey(key, chatId)) setTopicsDue(key, sessionId);
+    if (!key || !isMainKey(key, chatId)) return;
+    setTopicsDue(key, sessionId);
+    ownCompacted.add(key);
   }
+  /** Main sessions the bot saw compact since their last {@link noteCompaction}. */
+  const ownCompacted = new Set<string>();
   function topicsDueFor(key: string, chatId: string, rec: SessionRecord | undefined, sessionId: string): boolean {
     return isMainKey(key, chatId) && (topicsDue.get(key) ?? rec?.topicsDue) === sessionId;
+  }
+  /** Main sessions' newest compaction seen, by key (in memory first, then SessionRecord.compactSeen). */
+  const compactSeen = new Map<string, string>();
+  /**
+   * A main session about to speak compacted since the daemon last looked, whoever compacted
+   * it: the table is due (s15b, product.md 3.5 D4). The bot's own compactions were marked
+   * when it saw them; seen here again, they mark the same session once more, which is the same.
+   */
+  function noteCompaction(key: string, chatId: string, thread: AgentThread, rec: SessionRecord | undefined): void {
+    const id = thread.lastCompaction;
+    // The bot's own compaction whose table a queued turn of the same run already showed:
+    // only remember it. A terminal compaction right after such a run is missed (rare).
+    const shown = ownCompacted.delete(key) && topicsDue.get(key) === '';
+    if (!id || !isMainKey(key, chatId) || (compactSeen.get(key) ?? rec?.compactSeen) === id) return;
+    compactSeen.set(key, id);
+    if (shown) {
+      void trackTask(patchSession(key, { compactSeen: id }).catch(() => undefined));
+      return;
+    }
+    topicsDue.set(key, thread.sessionId);
+    void trackTask(patchSession(key, { topicsDue: thread.sessionId, compactSeen: id }).catch(() => undefined));
+    log.info('agent', 'native-compaction', { threadId: key, sessionId: thread.sessionId });
   }
 
   /** Render the one-shot affordance only while the current global mode is
@@ -2348,6 +2402,7 @@ export function createOrchestrator(
         else await trackRun(launchRun(launchOpts, reaction));
       } catch (err) {
         if (active.get(sessionKey) === reserved) active.delete(sessionKey);
+        releaseIdle(sessionKey, sessions.get(sessionKey));
         const dropped = reserved.queue.splice(0).length;
         dropCompact(reserved);
         reaction?.done();
@@ -2403,6 +2458,23 @@ export function createOrchestrator(
     };
   }
 
+  /**
+   * Whether a live thread's session was written by something else since it last looked
+   * (s15b, product.md 3.5 D6). A check that fails counts as not written: the turn goes on
+   * with the live thread, as before s15b.
+   */
+  async function writtenElsewhere(threadId: string, live: AgentThread): Promise<boolean> {
+    if (!live.checkNative) return false;
+    try {
+      const { foreign } = await live.checkNative();
+      if (foreign) log.info('agent', 'native-changed', { threadId, sessionId: live.sessionId });
+      return foreign;
+    } catch (err) {
+      log.fail('agent', err, { phase: 'native-check', threadId });
+      return false;
+    }
+  }
+
   /** Reuse an in-memory codex thread, else resume from the persisted store.
    * `perm` carries the bound project's CURRENT permission tier (mode/network),
    * applied when we (re)start a thread here. A LIVE thread keeps the sandbox it
@@ -2426,12 +2498,27 @@ export function createOrchestrator(
   ): Promise<{ thread: AgentThread | undefined; recreated: boolean; reason?: RecreateReason }> {
     const live = sessions.get(threadId);
     if (live) {
-      if (live.isAlive()) return { thread: live, recreated: false };
-      // app-server 子进程已死（崩溃/被 kill）：死线程留在缓存只会反复失败，
-      // 清掉让它落入下面既有的 resume-or-recreate 兜底（持久化的 sessionId
-      // 还在，话题自愈而不是僵死到重启）。
-      sessions.delete(threadId);
-      log.info('agent', 'dead-thread-evict', { threadId });
+      if (live.isAlive()) {
+        const elsewhere = await writtenElsewhere(threadId, live);
+        const prior = elsewhere ? undefined : await getSession(threadId).catch(() => undefined);
+        // Evicted while it looked (a tier change, the reaper): resume below like any other.
+        if (sessions.get(threadId) === live && live.isAlive()) {
+          if (!elsewhere) {
+            noteCompaction(threadId, chatId, live, prior);
+            return { thread: live, recreated: false };
+          }
+          // Someone else wrote the session (a terminal turn or /compact, s15b): this
+          // process never rereads it, so reconnect from the file below.
+          sessions.delete(threadId);
+          void trackTask(live.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
+        }
+      } else {
+        // app-server 子进程已死（崩溃/被 kill）：死线程留在缓存只会反复失败，
+        // 清掉让它落入下面既有的 resume-or-recreate 兜底（持久化的 sessionId
+        // 还在，话题自愈而不是僵死到重启）。
+        sessions.delete(threadId);
+        log.info('agent', 'dead-thread-evict', { threadId });
+      }
     }
     const rec = await getSession(threadId);
     if (!rec) return { thread: undefined, recreated: false };
@@ -2445,6 +2532,7 @@ export function createOrchestrator(
       return { thread: undefined, recreated: true, reason: 'cwd-changed' };
     }
     const be = backendFor(rec.backend);
+    await waitReleased(threadId);
     try {
       const resumed = await be.resumeThread({
         cwd: rec.cwd,
@@ -2458,9 +2546,12 @@ export function createOrchestrator(
       // 自愈观测：resume 来源=持久化记录（区分「resume 自愈」与 LIVE 快路径的
       // 普通续轮——后者不经过这里，stream.timing 的 tResolve≈0 是它的指纹）。
       log.info('agent', 'resume-ok', { threadId, sessionId: rec.sessionId, backend: be.id });
+      noteCompaction(threadId, chatId, resumed, rec);
       return { thread: resumed, recreated: false };
     } catch (err) {
       log.fail('agent', err, { phase: 'resume-on-turn', threadId });
+      // Open in a terminal or the Codex app (s15b): say so and keep the session.
+      if (err instanceof SessionInUseError) throw err;
       const cwd = project?.cwd ?? rec.cwd ?? fallbackCwd;
       const fresh = await be.startThread({
         cwd,
@@ -2790,11 +2881,12 @@ export function createOrchestrator(
     const reserved: ActiveState = { queue: [], requesterOpenId: msg.senderId, compacting: true, deferred: [] };
     active.set(sessionKey, reserved);
     void trackTask(withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
+      let thread: AgentThread | undefined;
       try {
-        const { thread } = await resolveThread(sessionKey, msg.chatId, {
+        ({ thread } = await resolveThread(sessionKey, msg.chatId, {
           mode: perm.mode,
           network: perm.network,
-        });
+        }));
         if (!thread) {
           await reply('这个会话还没开始，先发条消息聊两句再 `/compact`。');
           return;
@@ -2807,6 +2899,7 @@ export function createOrchestrator(
         await reply(`❌ ${err instanceof Error ? err.message : String(err)}`);
       } finally {
         releaseHold(sessionKey, reserved);
+        releaseIdle(sessionKey, thread);
       }
     }));
   }
@@ -4890,6 +4983,7 @@ export function createOrchestrator(
     const reserved: ActiveState = { queue: [], requesterOpenId: owner };
     active.set(key, reserved);
     let launched = false;
+    let compacted: AgentThread | undefined;
     try {
       if (request.action === 'clear') {
         if (project.kind !== 'single' || key !== perm.sessionKey) throw new AdminWriteError('只有单会话群可以清空当前上下文');
@@ -4907,6 +5001,7 @@ export function createOrchestrator(
       const { thread } = await resolveThread(key, project.chatId, perm);
       if (!thread) throw new AdminWriteError('会话尚未开始');
       if (request.action === 'compact') {
+        compacted = thread;
         const result = await thread.compact();
         if (result.usage) lastUsage.set(key, { used: result.usage.usedTokens, window: result.usage.contextWindow }); else lastUsage.delete(key);
         return { ok: true, threadId: key };
@@ -4923,6 +5018,7 @@ export function createOrchestrator(
       return { ok: true, threadId: key };
     } finally {
       if (!launched && active.get(key) === reserved) active.delete(key);
+      releaseIdle(key, compacted);
       if (!launched && reserved.queue.length) await channel.send(project.chatId, { markdown: `操作期间收到的 ${reserved.queue.length} 条消息未执行，请重发。` });
     }
   }
@@ -5812,6 +5908,7 @@ export function createOrchestrator(
       // A replacement run may have reserved the key while failure feedback
       // was in flight. Never delete another run's reservation.
       if (active.get(activeKey) === state) active.delete(activeKey);
+      releaseIdle(topicThreadId, opts.thread);
       settleTurn?.();
       clearInterval(cardClock);
       state.steerReply = undefined;
