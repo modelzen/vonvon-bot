@@ -40,6 +40,7 @@ import {
   type PermissionMode,
   type ReasoningEffort,
   type ThreadHistory,
+  type ThreadSummary,
 } from '../agent/types';
 import type { SelectOption } from '../card/cards';
 import {
@@ -445,6 +446,14 @@ export interface QueuedTurn {
  * and the sender's open_id included, so only the person's words are kept. */
 function resumedTitle(history: ThreadHistory): string | undefined {
   return history.name || stripBridgeMessageEnvelope(history.preview ?? '').trim() || undefined;
+}
+
+/** A resumable session as the desktop lists it (`name`, else `preview`): the
+ * same stripping, so an unnamed one shows the person's words, not the envelope. */
+function resumableThread(thread: ThreadSummary): ThreadSummary {
+  const { name, ...rest } = thread;
+  const title = name && stripBridgeMessageEnvelope(name).trim();
+  return { ...rest, preview: stripBridgeMessageEnvelope(thread.preview).trim(), ...(title ? { name: title } : {}) };
 }
 
 /** How long ago the message was sent (0 when its createTime is unknown). */
@@ -4877,7 +4886,7 @@ export function createOrchestrator(
     if (!currentProject || projectRevision(currentProject) !== projectRevision(project)) throw new AdminWriteError('项目已改变，请刷新后重试');
     const be = backendFor(project.backend);
     if (request.action === 'history') {
-      try { return { sessions: records, threads: await be.listThreads(project.cwd), backend: be.id }; }
+      try { return { sessions: records, threads: (await be.listThreads(project.cwd)).map(resumableThread), backend: be.id }; }
       catch (error) { return { sessions: records, threads: [], backend: be.id, threadsError: error instanceof Error ? error.message : '无法读取后端历史' }; }
     }
     if (request.action === 'editProject' || request.action === 'removeProject') {

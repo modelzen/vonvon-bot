@@ -22,6 +22,10 @@ const BRIDGE_QUOTE_PREFIX =
  * the first bare `[/飞书]` line is the block's own. */
 const BRIDGE_RECORD_BLOCK_PREFIX =
   /^\[飞书 · [^\r\n]*\]\r?\n(?:(?!\[\/飞书\][ \t]*(?:\r?\n|$))[^\r\n]*\r?\n)*\[\/飞书\][ \t]*(?:\r?\n[ \t]*){0,2}/u;
+/** The preface handle-message.retryPrompt puts before a replayed turn's input
+ * when [重试] is tapped; the reason is the only part that varies. */
+const BRIDGE_RETRY_PREFIX =
+  /^（重试）上一轮因为[^\r\n。]+。下面是上一轮收到的消息，请重新处理。上一轮可能已经做了一部分，先看看做到哪了再继续，别重复做。[ \t]*(?:\r?\n[ \t]*){0,2}/u;
 const BRIDGE_FILE_MANIFEST_SUFFIX =
   /(?:^|(?:\r?\n){2})\[用户上传了 \d+ 个附件，已保存到本地，可用 shell \/ 读取工具按下面的绝对路径直接打开：\r?\n(?:- [^\r\n]+ → [^\r\n]+\r?\n)+\][ \t]*$/u;
 
@@ -33,7 +37,7 @@ export function stripBridgeSenderPrefix(text: string): string {
 /**
  * Remove every envelope the Bridge may weave around an Agent prompt:
  *
- *   record block -> sender -> quote -> user body -> local file manifest
+ *   retry preface -> record block -> sender -> quote -> user body -> local file manifest
  *
  * Title sources normally travel separately from that woven prompt. This is a
  * strict recovery boundary for a queued/restarted job, so an internal open_id,
@@ -46,6 +50,7 @@ export function stripBridgeMessageEnvelope(text: string): string {
   do {
     previous = out;
     out = out
+      .replace(BRIDGE_RETRY_PREFIX, '')
       .replace(BRIDGE_RECORD_BLOCK_PREFIX, '')
       .replace(BRIDGE_SENDER_PREFIX, '')
       .replace(BRIDGE_QUOTE_PREFIX, '');

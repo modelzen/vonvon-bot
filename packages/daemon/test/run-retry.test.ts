@@ -66,6 +66,8 @@ vi.mock('../src/card/run-card-stream', () => ({
   },
 }));
 import { createOrchestrator, retryPrompt } from '../src/bot/handle-message';
+import { weaveRecordBlock, weaveSender } from '../src/bot/context-weave';
+import { stripBridgeMessageEnvelope } from '../src/bot/session-title';
 import { projectRevision } from '../src/admin/collaboration';
 import type { AppConfig } from '../src/config/schema';
 
@@ -176,7 +178,7 @@ beforeEach(() => {
   fake.idleMs = undefined;
   fake.patchGate = undefined;
   fake.sessions = [];
-  Object.assign(fake.backend, { listThreads: async () => [{ sessionId: 'past', preview: '', createdAt: 1, updatedAt: 2 }], readHistory: async () => ({ turns: [], totalTurns: 0 }) });
+  Object.assign(fake.backend, { displayName: 'Codex', listThreads: async () => [{ sessionId: 'past', preview: '', createdAt: 1, updatedAt: 2 }], readHistory: async () => ({ turns: [], totalTurns: 0 }) });
 });
 afterEach(async () => {
   await orchestrator?.shutdown();
@@ -187,6 +189,42 @@ describe('retryPrompt', () => {
     expect(retryPrompt({ reason: 'idle', idleSeconds: 600 }, '原消息'))
       .toMatch(/^（重试）上一轮因为10 分钟没有输出，被自动停止了。[\s\S]*别重复做。\n\n原消息$/);
     expect(retryPrompt({ reason: 'network', idleSeconds: 600 }, 'x')).toContain('上一轮因为网络失败，中断了');
+  });
+
+  // The /resume history card shows a retried turn through stripBridgeMessageEnvelope:
+  // its preface must come off with the rest of the envelope.
+  it("strips back to the person's words, for every reason", () => {
+    const woven = weaveRecordBlock(weaveSender('整理一下文档', { senderId: 'ou_secret_id', senderName: '张三' }), {
+      place: { group: '验收群', me: 'Vonvon Bot 6' },
+      entries: [{ messageId: 'om_old', senderName: '李四', text: '上文', createTime: 1, from: 'user' }],
+      now: 2,
+    });
+    for (const retry of [
+      { reason: 'idle', idleSeconds: 600 },
+      { reason: 'idle', idleSeconds: 45 },
+      { reason: 'network', idleSeconds: 0 },
+    ] as const) {
+      expect(stripBridgeMessageEnvelope(retryPrompt(retry, woven))).toBe('整理一下文档');
+    }
+  });
+});
+
+describe('a /resume pick from the Feishu card', () => {
+  it("names the group's backend on the history card", async () => {
+    fake.project = { ...PROJECT, kind: 'single' };
+    Object.assign(fake.backend, {
+      displayName: 'Claude',
+      readHistory: async () => ({ turns: [{ userText: '记住暗号', assistantText: '记住了。', reasoning: '', tools: [] }], totalTurns: 3 }),
+    });
+    const o = setup();
+    await o.onMessage({ ...message('/resume'), threadId: undefined });
+    await until(() => expect(fake.log.info).toHaveBeenCalledWith('card', 'resume', expect.anything()));
+    await o.dispatcher.handle({ messageId: 'managed', chatId: 'chat', operator: { openId: 'owner' }, action: { value: { a: 'resume.pick', t: 'past' } } } as never);
+    await until(() => expect(fake.log.info).toHaveBeenCalledWith('card', 'resume-done-single', expect.anything()));
+    const card = JSON.stringify(fake.managed.mock.calls.find((call) => JSON.stringify(call).includes('已恢复历史会话')));
+    expect(card).toContain('🤖 Claude');
+    expect(card).toContain('更早的 2 轮 Claude');
+    expect(card).not.toContain('Codex');
   });
 });
 

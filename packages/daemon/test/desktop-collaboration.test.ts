@@ -91,6 +91,26 @@ it('clears a flat binding with its model settings and keeps old backend history 
     await expect(app.collaboration({ action: 'resume', ...target, sessionId: 'foreign', backend: 'codex-appserver' })).rejects.toThrow('不属于');
   } finally { await app.shutdown(); }
 });
+it('lists resumable sessions by the person\'s words, not the woven sender line', async () => {
+  backend();
+  const woven = weaveSender('修一下登录', { senderId: 'ou_secret_id', senderName: '张三' });
+  Object.assign(fixture.backend as object, {
+    listThreads: vi.fn(async () => [
+      { sessionId: 'past', preview: woven, createdAt: 1, updatedAt: 2 },
+      { sessionId: 'named', preview: woven, name: '登录修复', createdAt: 1, updatedAt: 2 },
+      { sessionId: 'odd', preview: '', name: woven, createdAt: 1, updatedAt: 2 },
+    ]),
+  });
+  const app = orchestrator();
+  try {
+    const history = await app.collaboration({ action: 'history', ...target }) as { threads: { preview: string; name?: string }[] };
+    expect(history.threads).toEqual([
+      { sessionId: 'past', preview: '修一下登录', createdAt: 1, updatedAt: 2 },
+      { sessionId: 'named', preview: '修一下登录', name: '登录修复', createdAt: 1, updatedAt: 2 },
+      { sessionId: 'odd', preview: '', name: '修一下登录', createdAt: 1, updatedAt: 2 },
+    ]);
+  } finally { await app.shutdown(); }
+});
 it("resume names the group's backend on the history card and keeps the woven sender line out of card and record", async () => {
   backend();
   const woven = weaveSender('修一下登录', { senderId: 'ou_secret_id', senderName: '张三' });
