@@ -33,7 +33,7 @@ const target = { projectName: 'demo', chatId: 'oc_demo' };
 const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' } } };
 function backend() {
   const thread = { sessionId: 'fresh', isAlive: () => true, close: vi.fn(async () => {}), compact: vi.fn(async () => ({ usage: { usedTokens: 20, contextWindow: 100 } })) };
-  const backend = { id: 'codex-appserver', displayName: 'Codex', listModels: async () => [], startThread: vi.fn(async () => thread), resumeThread: vi.fn(async () => thread), listThreads: vi.fn(async () => [{ sessionId: 'past', preview: 'historic', createdAt: 1, updatedAt: 2 }]), readHistory: vi.fn(async () => ({ name: 'historic', preview: '', turns: [], totalTurns: 0 })) };
+  const backend = { id: 'codex-appserver', displayName: 'Codex (app-server)', listModels: async () => [], startThread: vi.fn(async () => thread), resumeThread: vi.fn(async () => thread), listThreads: vi.fn(async () => [{ sessionId: 'past', preview: 'historic', createdAt: 1, updatedAt: 2 }]), readHistory: vi.fn(async () => ({ name: 'historic', preview: '', turns: [], totalTurns: 0 })) };
   fixture.backend = backend;
   return { ...backend, thread };
 }
@@ -111,20 +111,24 @@ it('lists resumable sessions by the person\'s words, not the woven sender line',
     ]);
   } finally { await app.shutdown(); }
 });
-it("resume names the group's backend on the history card and keeps the woven sender line out of card and record", async () => {
-  backend();
-  const woven = weaveSender('修一下登录', { senderId: 'ou_secret_id', senderName: '张三' });
+const wovenBy = (text: string) => weaveSender(text, { senderId: 'ou_secret_id', senderName: '张三' });
+it.each([
+  { what: 'an unnamed session', name: undefined, summary: '修一下登录' },
+  { what: 'a session whose name is woven too', name: wovenBy('登录修复'), summary: '登录修复' },
+])("resume names the backend as users know it and keeps the woven sender line out of card and record: $what", async ({ name, summary }) => {
+  backend(); // the real Codex backend calls itself "Codex (app-server)"
+  const woven = wovenBy('修一下登录');
   Object.assign(fixture.backend as object, {
-    displayName: 'Claude',
-    readHistory: vi.fn(async () => ({ preview: woven, turns: [{ userText: woven, assistantText: '好的', reasoning: '', tools: [] }], totalTurns: 1 })),
+    readHistory: vi.fn(async () => ({ ...(name ? { name } : {}), preview: woven, turns: [{ userText: woven, assistantText: '好的', reasoning: '', tools: [] }], totalTurns: 3 })),
   });
   const app = orchestrator();
   try {
     await app.collaboration({ action: 'resume', ...target, sessionId: 'past', backend: 'codex-appserver' });
     const card = JSON.stringify(fixture.send.mock.calls.find(call => JSON.stringify(call).includes('已恢复历史会话')));
-    expect(card).toContain('🤖 Claude');
-    expect(card).not.toMatch(/Codex|open_id|ou_secret_id|发信人/);
-    expect(await getSession('oc_demo')).toMatchObject({ sessionId: 'past', summary: '修一下登录' });
+    expect(card).toContain('**🤖 Codex**');
+    expect(card).toContain('更早的 2 轮 Codex 仍保留');
+    expect(card).not.toMatch(/app-server|open_id|ou_secret_id|发信人/);
+    expect(await getSession('oc_demo')).toMatchObject({ sessionId: 'past', summary });
   } finally { await app.shutdown(); }
 });
 it('reserves a compacting session against clear and rejects stale run controls', async () => {

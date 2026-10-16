@@ -446,9 +446,16 @@ export interface QueuedTurn {
 
 /** A resumed session's title for its record and topic. Without a native name
  * the backend's preview is the first prompt as the bot wove it, record block
- * and the sender's open_id included, so only the person's words are kept. */
+ * and the sender's open_id included, so only the person's words are kept; the
+ * name goes through the same stripping, as the desktop list does. */
 function resumedTitle(history: ThreadHistory): string | undefined {
-  return history.name || stripBridgeMessageEnvelope(history.preview ?? '').trim() || undefined;
+  return stripBridgeMessageEnvelope(history.name ?? '').trim() || stripBridgeMessageEnvelope(history.preview ?? '').trim() || undefined;
+}
+
+/** The backend's name as users know it, from the catalog (Codex, Claude): the
+ * backend's own displayName can carry an implementation tag ("Codex (app-server)"). */
+function backendLabel(be: Pick<AgentBackend, 'id' | 'displayName'>): string {
+  return catalogById(be.id)?.displayName ?? be.displayName;
 }
 
 /** A resumable session as the desktop lists it (`name`, else `preview`): the
@@ -4741,7 +4748,7 @@ export function createOrchestrator(
           const history = await be.readHistory(state.cwd, sessionId);
           resumePending.delete(evt.messageId);
           await withTrace({ chatId: state.chatId, msgId: state.originalMsgId }, async () => {
-            const cardState: HistoryCardState = { cwd: state.cwd, projectName: state.projectName, backendName: be.displayName, history };
+            const cardState: HistoryCardState = { cwd: state.cwd, projectName: state.projectName, backendName: backendLabel(be), history };
             await sendManagedCard(channel, state.chatId, buildHistoryCard(cardState), state.originalMsgId, false).catch((err) =>
               log.fail('card', err, { phase: 'resume-history-single' }),
             );
@@ -4791,7 +4798,7 @@ export function createOrchestrator(
 
       let bound = false;
       await withTrace({ chatId: state.chatId, msgId: state.originalMsgId }, async () => {
-        const cardState: HistoryCardState = { cwd: state.cwd, projectName: state.projectName, backendName: be.displayName, history };
+        const cardState: HistoryCardState = { cwd: state.cwd, projectName: state.projectName, backendName: backendLabel(be), history };
         // reply_in_thread on the /resume message turns it into the topic; the
         // history card is that topic's first message.
         const sent = await sendManagedCard(channel, state.chatId, buildHistoryCard(cardState), state.originalMsgId, true);
@@ -4962,10 +4969,10 @@ export function createOrchestrator(
         const history = await be.readHistory(project.cwd, request.sessionId);
         let threadId = key;
         if (ruleKind(project) === 'single') {
-          await sendManagedCard(channel, project.chatId, buildHistoryCard({ cwd: project.cwd, projectName: project.name, backendName: be.displayName, history }));
+          await sendManagedCard(channel, project.chatId, buildHistoryCard({ cwd: project.cwd, projectName: project.name, backendName: backendLabel(be), history }));
         } else {
           const root = await channel.send(project.chatId, { markdown: '从桌面端恢复历史会话' });
-          const sent = await sendManagedCard(channel, project.chatId, buildHistoryCard({ cwd: project.cwd, projectName: project.name, backendName: be.displayName, history }), root.messageId, true);
+          const sent = await sendManagedCard(channel, project.chatId, buildHistoryCard({ cwd: project.cwd, projectName: project.name, backendName: backendLabel(be), history }), root.messageId, true);
           const tid = await getThreadId(channel, sent.messageId, 4);
           if (!tid) throw new AdminWriteError('已创建话题，但飞书尚未返回话题标识；会话未绑定');
           noteOpenedTopic(project.chatId, tid, { id: root.messageId, from: { kind: 'self' }, at: Date.now(), text: resumedTitle(history) });

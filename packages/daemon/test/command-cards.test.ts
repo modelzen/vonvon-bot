@@ -63,10 +63,13 @@ describe('buildResumeCard', () => {
     const threads: ThreadSummary[] = [
       { sessionId: 'w1', preview: woven, createdAt: NOW - 60, updatedAt: NOW - 60 },
       { sessionId: 'w2', preview: weaveSender('', { senderId: 'ou_secret_id', senderName: '张三' }), createdAt: NOW - 60, updatedAt: NOW - 60 },
+      // a name gets the same stripping, as on the desktop list
+      { sessionId: 'w3', preview: '', name: weaveSender('登录修复', { senderId: 'ou_secret_id', senderName: '张三' }), createdAt: NOW - 60, updatedAt: NOW - 60 },
     ];
     const labels = buttons(buildResumeCard(state(threads))).map((b) => b.text.content as string);
     expect(labels[0]).toMatch(/ · 修一下登录$/);
     expect(labels[1]).toMatch(/ · \(无摘要\)$/);
+    expect(labels[2]).toMatch(/ · 登录修复$/);
     for (const label of labels) expect(label).not.toMatch(/open_id|ou_secret_id|发信人|飞书|上文/);
   });
 

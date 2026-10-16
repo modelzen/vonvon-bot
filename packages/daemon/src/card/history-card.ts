@@ -106,7 +106,7 @@ export function buildHistoryCard(state: HistoryCardState): CardObject {
 function header(state: HistoryCardState): { title: string; template: 'turquoise'; subtitle?: string } {
   const { history } = state;
   const bits = [
-    history.name?.trim() || state.projectName,
+    stripBridgeMessageEnvelope(history.name ?? '').trim() || state.projectName,
     `共 ${history.totalTurns} 轮`,
     history.updatedAt ? relativeTime(history.updatedAt) : undefined,
   ].filter(Boolean);

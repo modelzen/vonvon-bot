@@ -178,7 +178,7 @@ beforeEach(() => {
   fake.idleMs = undefined;
   fake.patchGate = undefined;
   fake.sessions = [];
-  Object.assign(fake.backend, { displayName: 'Codex', listThreads: async () => [{ sessionId: 'past', preview: '', createdAt: 1, updatedAt: 2 }], readHistory: async () => ({ turns: [], totalTurns: 0 }) });
+  Object.assign(fake.backend, { id: 'codex', displayName: 'Codex (app-server)', listThreads: async () => [{ sessionId: 'past', preview: '', createdAt: 1, updatedAt: 2 }], readHistory: async () => ({ turns: [], totalTurns: 0 }) });
 });
 afterEach(async () => {
   await orchestrator?.shutdown();
@@ -210,10 +210,15 @@ describe('retryPrompt', () => {
 });
 
 describe('a /resume pick from the Feishu card', () => {
-  it("names the group's backend on the history card", async () => {
+  // The real backends' own displayName ("Codex (app-server)") is not what users call them.
+  it.each([
+    { id: 'codex-appserver', displayName: 'Codex (app-server)', shown: 'Codex', other: /Claude|app-server/ },
+    { id: 'claude-agent', displayName: 'Claude', shown: 'Claude', other: /Codex/ },
+  ])("names the group's backend on the history card: $shown", async ({ id, displayName, shown, other }) => {
     fake.project = { ...PROJECT, kind: 'single' };
     Object.assign(fake.backend, {
-      displayName: 'Claude',
+      id,
+      displayName,
       readHistory: async () => ({ turns: [{ userText: '记住暗号', assistantText: '记住了。', reasoning: '', tools: [] }], totalTurns: 3 }),
     });
     const o = setup();
@@ -222,9 +227,9 @@ describe('a /resume pick from the Feishu card', () => {
     await o.dispatcher.handle({ messageId: 'managed', chatId: 'chat', operator: { openId: 'owner' }, action: { value: { a: 'resume.pick', t: 'past' } } } as never);
     await until(() => expect(fake.log.info).toHaveBeenCalledWith('card', 'resume-done-single', expect.anything()));
     const card = JSON.stringify(fake.managed.mock.calls.find((call) => JSON.stringify(call).includes('已恢复历史会话')));
-    expect(card).toContain('🤖 Claude');
-    expect(card).toContain('更早的 2 轮 Claude');
-    expect(card).not.toContain('Codex');
+    expect(card).toContain(`**🤖 ${shown}**`);
+    expect(card).toContain(`更早的 2 轮 ${shown} 仍保留`);
+    expect(card).not.toMatch(other);
   });
 });
 

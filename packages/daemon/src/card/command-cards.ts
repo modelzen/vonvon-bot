@@ -199,8 +199,9 @@ export function buildResumeCard(state: ResumeCardState): CardObject {
       ),
     );
     for (const t of state.threads) {
-      // An unnamed session's preview is its first prompt as woven: keep only the person's words.
-      const title = (t.name?.trim() || stripBridgeMessageEnvelope(t.preview).trim() || '(无摘要)').replace(/\s+/g, ' ');
+      // An unnamed session's preview is its first prompt as woven: keep only the
+      // person's words. The name goes through the same stripping, as on the desktop list.
+      const title = (stripBridgeMessageEnvelope(t.name ?? '').trim() || stripBridgeMessageEnvelope(t.preview).trim() || '(无摘要)').replace(/\s+/g, ' ');
       const label = `↩️ ${pickerTime(t.updatedAt || t.createdAt)} · ${truncate(title, RESUME_TITLE_MAX)}`;
       elements.push(actions([button(label, { a: RES.pick, t: t.sessionId, ...(state.backend ? { b: state.backend } : {}) })]));
     }
