@@ -431,6 +431,31 @@ it('initial helper spawn failure confirms no child and permits stop release', as
   const release = vi.fn(async () => {}); await owner.completeShutdown(release);
   expect(release).toHaveBeenCalledTimes(1);
 });
+it('keeps a detached restart and its helper when the supervisor drain fails (s17)', async () => {
+  const helper = child(); fixture.spawn.mockReturnValue(helper);
+  fixture.apiDrain.mockRejectedValueOnce(new Error('fixture drain failed'));
+  const owner = control();
+  const running = observed(runSupervisor([], { control: owner }));
+  await vi.waitFor(() => expect(fixture.apiReady).toHaveBeenCalledOnce());
+  owner.requestRestart(43119);
+  helper.emit('spawn');
+  await vi.advanceTimersByTimeAsync(0);
+  await running.settled;
+  expect(running.state()).toBe('rejected');
+  expect(String(running.error())).toContain('fixture drain failed');
+  expect(owner.intent).toBe('restart');
+  expect(helper.kill).not.toHaveBeenCalled();
+});
+it('treats SIGHUP as a stop request and removes the listener on dispose (s17)', () => {
+  const before = process.listenerCount('SIGHUP');
+  const owner = control();
+  expect(process.listenerCount('SIGHUP')).toBe(before + 1);
+  process.emit('SIGHUP', 'SIGHUP');
+  expect(owner.requested).toBe(true);
+  expect(owner.intent).toBe('stop');
+  owner.dispose();
+  expect(process.listenerCount('SIGHUP')).toBe(before);
+});
 it('records stop immediately while leaving reply microtasks ahead of drain wakeup', async () => {
   const owner = control(); const order: string[] = [];
   void owner.waitForRequest().then(() => { order.push('drain'); });

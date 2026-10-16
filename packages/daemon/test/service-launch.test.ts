@@ -233,6 +233,7 @@ it.each(['confirmed cleanup', 'unknown cutoff'] as const)('caches %s rejection w
   if (kind === 'confirmed cleanup') expect(rejected).toBe(error);
   else expect(rejected.errors).toEqual([error]);
   expect(release).toHaveBeenCalledOnce();
+  expect(process.exitCode).toBe(75);
 });
 
 it('does not combine scope proof from one poll with exec proof from another', async () => {
@@ -289,12 +290,13 @@ it('does not arm restart until the listener release resolves', async () => {
   expect(process.exitCode).toBe(75);
 });
 
-it.each(['plain restart', 'stop'] as const)('%s exits zero when listener release fails', async intent => {
+// s17 reverses #276: a failed release keeps a requested restart; the manager starts the next daemon after this exits.
+it.each([['plain restart', 75], ['stop', 0]] as const)('%s exits %i when listener release fails', async (intent, code) => {
   const owner = control();
   owner.requestRestart(1234);
   if (intent === 'stop') owner.requestStop();
   await expect(owner.completeShutdown(async () => { throw new Error('release failed'); })).rejects.toThrow('Listener cutoff');
-  expect(process.exitCode).toBe(0);
+  expect(process.exitCode).toBe(code);
 });
 
 it('stop before commit cancels a helper-free restart', async () => {

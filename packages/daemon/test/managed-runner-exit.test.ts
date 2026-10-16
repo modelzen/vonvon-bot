@@ -24,26 +24,31 @@ beforeEach(() => {
 });
 afterEach(() => { control.dispose(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
-it.each(['supervisor', 'single Bot'] as const)('%s cancels restart after a drain failure and reports it with exit zero', async mode => {
+// s17 reverses #276 here on purpose (v1-plan s17): the replacement starts only after this process exits, so a
+// failed cleanup keeps the restart the user asked for (75), and the failure is still reported.
+it.each(['supervisor', 'single Bot'] as const)('%s keeps the restart after a drain failure and reports it', async mode => {
   const failure = new Error('drain failed');
   const release = vi.fn(async () => {});
+  const stop = vi.spyOn(control, 'requestStop');
   fixture.api.mockImplementation(async () => {
     control.requestRestart(1234);
     return { listen: '127.0.0.1:1234', beginDrain: async () => { throw failure; }, release };
   });
   await expect(runRun(mode === 'single Bot' ? 'fixture' : undefined, { control })).rejects.toBe(failure);
   expect(release).toHaveBeenCalledOnce();
-  expect(process.exitCode).toBe(0);
+  expect(stop).not.toHaveBeenCalled();
+  expect(control.intent).toBe('restart');
+  expect(process.exitCode).toBe(75);
 });
 
-it.each(['supervisor', 'single Bot'] as const)('%s cancels restart after provider cleanup rejects', async mode => {
+it.each(['supervisor', 'single Bot'] as const)('%s keeps the restart after provider cleanup rejects', async mode => {
   fixture.providers.mockRejectedValue(new Error('provider cleanup failed'));
   fixture.api.mockImplementation(async () => {
     control.requestRestart(1234);
     return { listen: '127.0.0.1:1234', beginDrain: async () => {}, release: async () => {} };
   });
   await expect(runRun(mode === 'single Bot' ? 'fixture' : undefined, { control })).rejects.toThrow('Provider cleanup failed');
-  expect(process.exitCode).toBe(0);
+  expect(process.exitCode).toBe(75);
 });
 
 it.each(['supervisor', 'single Bot'] as const)('%s preserves failure semantics when startup fails before any shutdown request', async mode => {
