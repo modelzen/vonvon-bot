@@ -972,6 +972,15 @@ export function createOrchestrator(
   }
   /** Releases still closing, by key: the next resume waits for its own process to let go of the writer. */
   const releasing = new Map<string, Promise<void>>();
+  /** Wait for a release of `key` still closing. Bounded: close() escalates to SIGKILL after 4 s,
+   * so the limit only guards a close that never settles. */
+  async function waitReleased(key: string): Promise<void> {
+    const closing = releasing.get(key);
+    if (!closing) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([closing, new Promise<void>((r) => { timer = setTimeout(r, RELEASE_WAIT_MS); })]);
+    clearTimeout(timer);
+  }
   const active = new Map<string, ActiveState>();
   /** Per-doc serialization for comment runs (see {@link withDocLock}). */
   const docLocks = new Map<string, Promise<void>>();
@@ -2523,8 +2532,7 @@ export function createOrchestrator(
       return { thread: undefined, recreated: true, reason: 'cwd-changed' };
     }
     const be = backendFor(rec.backend);
-    // Bounded: close() escalates to SIGKILL after 4 s, so this only guards a close that never settles.
-    await Promise.race([releasing.get(threadId), new Promise<void>((r) => setTimeout(r, RELEASE_WAIT_MS).unref())]);
+    await waitReleased(threadId);
     try {
       const resumed = await be.resumeThread({
         cwd: rec.cwd,
