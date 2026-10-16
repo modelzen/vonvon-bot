@@ -27,6 +27,7 @@ export interface HostHandle {
 }
 export class HostOwnershipError extends Error {}
 
+/** Only tests call this. It keys the admission mutex on the user HOME, so on macOS the lock file is `<HOME>/.locks/admission.lock`. */
 export async function inspectHost(home: string): Promise<HostInspection> {
   try {
     const lock = await acquireMutex(home, 'admission');

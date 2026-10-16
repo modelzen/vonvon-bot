@@ -39,7 +39,7 @@ describe('offline access admission', () => {
     expect(() => assertNoDataLeases(dir)).toThrow();
     expect(readFileSync(join(dir, '.access', 'partial.json'), 'utf8')).toBe('{');
   });
-  it('does not bypass a bound coordination port', async () => {
+  it('does not bypass a held coordination mutex', async () => {
     const dir = home(); const owner = await acquireMutex(dir, 'admission');
     try { await expect(acquireMutex(dir, 'admission', 30)).rejects.toThrow(/busy/); }
     finally { await closeMutex(owner); }
@@ -50,7 +50,8 @@ describe('offline access admission', () => {
     expect((await migrateHostDataOffline(dir, runtime)).kind).toBe('deferred');
     vi.mocked(inspectInstallation).mockImplementationOnce(() => { throw new Error('query failed'); });
     expect((await migrateHostDataOffline(dir, runtime)).kind).toBe('deferred');
-    expect(readdirSync(dir)).toEqual(['.feishu-codex-bridge']);
+    // macOS keeps the mutex lock files in `.locks`.
+    expect(readdirSync(dir).filter(name => name !== '.locks')).toEqual(['.feishu-codex-bridge']);
     expect(assertKnownOwnersStopped).not.toHaveBeenCalled();
   });
   it('retains a lease when process liveness is unknown', () => {

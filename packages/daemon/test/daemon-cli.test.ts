@@ -178,7 +178,7 @@ it('refuses a reused PID without signaling the unrelated process or changing its
   expect(status.output()).toContain('Cannot verify daemon owner');
   expect(stop.output()).toContain('Cannot verify daemon owner');
   expect(await readFile(join(f.root, 'daemon.pid'), 'utf8')).toBe(lock);
-  expect((await readdir(f.root)).filter(name => name !== '.access')).toEqual(before);
+  expect((await readdir(f.root)).filter(name => name !== '.access' && name !== '.locks')).toEqual(before);
   expect(await readdir(f.home)).toEqual([]);
 }, 30_000);
 
