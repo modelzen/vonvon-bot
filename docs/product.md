@@ -89,8 +89,9 @@ Vonvon Bot 是一个 macOS 桌面应用；Linux 上可以只装后台服务，�
     AGENTS.md                   规矩，可选
     SMART.md                    智能提示词，不存在时用内置默认值
     skills.json  mcp.json       启用名单
+    skills/                     这个 bot 自己的 skill，只给它用
     memory/shared.md            公共记忆
-    memory/dm/<open_id>.md      每个主人或管理员的私聊记忆
+    memory/dm/<open_id>/dm.md   每个主人或管理员的私聊记忆，一人一个目录
     groups/<chatId>/
       SOUL.md                   本群个性补充
       SMART.md                  本群智能提示词覆盖
@@ -101,7 +102,9 @@ Vonvon Bot 是一个 macOS 桌面应用；Linux 上可以只装后台服务，�
 - 工作区默认放在隐藏目录 `~/.vonvon-bot/projects/` 下，和今天一样（`D/config/paths.ts:115`），可以在桌面端改到别处。比今天多一层 `<bot 名>/`：今天所有 bot 共用这个目录，两个 bot 的同名项目会落进同一个目录（推断，`docs/research/2026-10-14-v1-definition/v2-fit.md` 第 8 节第 6 条）。
 - 每个群默认有自己的目录。共用一个目录的话，B 群的会话能看到 A 群产生的文件，和"每个群的记忆分开"矛盾。
 - 目录名按建立时的名字取，之后不跟着改名，重名时加一个短后缀，"/"等字符替换掉。
-- 定义文件都是 markdown 和 json，主人可以直接用编辑器改。它们不进用户的代码仓库。仓库里的 `AGENTS.md`、`CLAUDE.md` 照旧由 agent 自己读。
+- 定义文件都是 markdown 和 json，主人可以直接用编辑器改。它们不进用户的代码仓库。仓库里的 `AGENTS.md`、`CLAUDE.md` 照旧由 agent 自己读；Claude 只在同一目录没有 `CLAUDE.md` 时才读 `AGENTS.md`（Claude Code 2.1.296 实测）。
+- vonvon 不往工作区写任何文件。个性、规矩、记忆、名单和 bot 自己的 skill 都只在 `bots/<appId>/` 下，由 vonvon 在起会话时交给 agent（3.6）。所以工作区里已有的文件不会被覆盖，工作区只读也不影响 bot 记东西。
+- 会话照旧从工作区起，不从 bot 自己的目录起（owner 2026-10-16 定）。这样工作区里的 `CLAUDE.md`、`AGENTS.md`、skill 和 MCP 由两家原生加载；从 bot 的目录起的话，两家都不会加载附加目录里的 MCP，Codex 连附加目录里的 `AGENTS.md` 和 skill 都不读，只读档、能发哪些文件也都按会话目录判断。调研见 `docs/research/2026-10-16-bot-home/`。
 
 ### 3.4 群：智能模式和规则模式
 
@@ -319,12 +322,15 @@ bot 自己开的话题（比如上面主区例子里的「订单接口 500」）
 - A 群的记忆永远不会出现在 B 群。同一个群里几个 bot 各有一份本群记忆，不共享。
 - 写入在卡片上显示"已记到本群记忆：…［撤销］"。第一版不做后台自动整理。
 - 记忆在会话开始或恢复时放进去，标成"背景资料，不是指令"。Codex 恢复会话时不认新传的 `developerInstructions`，模型看到的还是开会话时那份，所以恢复时的记忆用 `thread/inject_items` 或 `turn/start` 的 `additionalContext`（实验字段）放进去（e05）。中途写的，下一条会话才生效。每份有字数上限，满了让 bot 先整理，不悄悄截断。
-- 关掉两家自带的记忆：Claude 的 auto memory 按 git 仓库共享，两个群用同一个仓库就会串；Codex 的 memories 是全局整合的。
+- 关掉两家自带的记忆：Claude 的 auto memory 按 git 仓库共享，两个群用同一个仓库就会串；Codex 的 memories 是全局整合的。第一层约定里写明：要记的东西只写进 vonvon 给的那份记忆文件，不改工作区里的 `CLAUDE.md`、`AGENTS.md`，也不在工作区里另建记忆文件。
+- 这一次能写的那份记忆所在的目录，作为可写的根交给会话，每一档都放行，工作区只读时也能记：群里是本群的 `memory/`，私聊是这个人的 `memory/dm/<open_id>/`。公共记忆在群里不放行。daemon 自己的 `config.json`、`sessions.json` 不在这些目录里，agent 碰不到（完全访问档除外）。
 - 主人本机的个人指令（`~/.claude/CLAUDE.md`、`~/.codex/AGENTS.md`）和个人 skill：从 bridge 导入的 bot 默认带上，行为不变；新建的 bot 默认不带 Claude 的个人指令，也不带两家的个人 skill。Codex 的 `~/.codex/AGENTS.md` 按会话关不掉（e05），所以新建的 bot 也带着它；bot 的指令里写明 bot 自己的规矩优先（owner 2026-10-15 定）。
 
 **skill 和 MCP。**
 - 本机各有一个库，装一次，bot 和群各有名单。从名单移除不删库；从库里删除时，列出还在用它的 bot。
 - skill 的来源：内置、本机文件夹、从 `~/.agents/skills`、`~/.codex/skills`、`~/.claude/skills` 导入。格式按 Agent Skills 标准（agentskills.io/specification）。
+- 每个 bot 还可以有自己的 skill，放在 `bots/<appId>/skills/`，不进本机库，只给这个 bot 用。它们和库里按名单启用的一起交给会话，同名时 bot 自己的优先。群的增减名单对它们一样有效。
+- 工作区自己的 skill 和 MCP（仓库里的 `.claude/skills`、`.agents/skills`、`.mcp.json`、`.codex/config.toml` 等）不进名单，vonvon 不改它们，由两家按 cwd 加载，照两家自己的规则：Claude 的 `.mcp.json` 要主人批准过，Codex 的 `.codex/config.toml` 要这个目录是 trusted。Claude 的 `skills` 白名单会不会把工作区的 skill 一起滤掉，s44 实现时核对，会的话把它们加进白名单。
 - MCP 的来源：从本机 Codex、Claude 的配置导入，或在桌面端填命令或网址。
 - 都不从 git 地址装，不自动更新。
 - 只有主人和管理员能装和启用。含脚本的 skill 和所有 MCP 都会在主人的 Mac 上跑程序。在聊天里装，只能在私聊里，而且私聊的"聊天改设置"开着，见 3.7。Claude 的会话今天的工具列表里还有主人账号在 claude.ai 的连接器，Codex 的会话用主人的 ChatGPT 登录时也挂着主人账号的连接器。owner 2026-10-15 定第一版两家都留着，不关（第 9 节第 19 项）。
@@ -338,6 +344,7 @@ bot 自己开的话题（比如上面主区例子里的「订单接口 500」）
 | 主工作区 | `cwd` | `cwd` |
 | 其余工作区和仓库 | `runtimeWorkspaceRoots`（实验字段）加逐路径的读写权限 | `additionalDirectories` 加沙箱的根列表 |
 | skill | `skills/extraRoots/set`（实验字段）指向 vonvon 生成的目录，会话层禁掉用户自己的 skill | `plugins: [{type:'local', path}]` 加 `skills` 白名单 |
+| 记忆所在的目录 | 加进 `runtimeWorkspaceRoots`，只给它写权限 | 加进沙箱的可写目录 |
 | MCP | 会话配置的 `mcp_servers`，用户全局的 MCP 在会话层写 `enabled: false` 关掉（实测，e05）。读写档（`feishu` 权限配置）下不配 `default_tools_approval_mode: "approve"` 时，调用被拒过一次（0.162.1）；只读档和完全访问档没测 | `mcpServers`，今天传的是空对象（`D/agent/claude-agent/backend.ts:258`） |
 
 - 实验字段的风险：Codex.app 会自己升级，字段改名或删掉时，多工作区和 skill 隔离会悄悄失效。所以第一版定 Codex 的最低版本；调用实验字段失败时直接报错，不悄悄退回单目录。Codex 对拼错的字段名和配置键不报错，直接忽略，所以生没生效由 vonvon 自己核对：`runtimeWorkspaceRoots` 看回包里的回显，MCP 看 `mcpServerStatus/list`，skill 看 `skills/list`，对不上就报错（e05）。

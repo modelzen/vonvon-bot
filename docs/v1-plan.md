@@ -639,9 +639,9 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | [ ] | s36 | bot 默认和群覆盖的数据，新群自动建目录 | bot 默认项和群覆盖进存储，生效值按 3.2 的表算；bot 默认档取读写、开网（本文第 5 节）；新群目录自动建在 `projects/<bot 名>/groups/<群名>/`（3.3） | 820 | s21 | 数据迁移 | 无 |
 | [ ] | s36b | 被拉进已有的群就绑定 | 不再私聊发绑定卡：bot 被拉进群就绑定，默认只读、关网（3.8），目录按 3.3 自动建；Linux 上用 Codex 时照常绑定，回合开始时再回说明（s20b） | 250 | s36、s20b | 错误路径、数据迁移 | 无（M7 验收时把 bot 拉进一个群看） |
 | [ ] | s37 | 会话参数统一由 profile 给，关掉两家自带的记忆 | 起会话和恢复会话都带一份 profile：指令、额外根、skill、MCP、给子进程的环境变量、原生设置；关掉 Claude 的 auto memory 和 Codex 的 memories（3.6） | 460 | e04、e05 | 子进程、错误路径 | bot 的 Codex 会话不读写 `$CODEX_HOME/memories`（Claude 一半在 JP-VPS 上看） |
-| [ ] | s38 | 个性和记忆生效 | bot 文件模块（原子写、字数上限）；按 3.6 的顺序拼指令，第一层加"不提别的群的内容"；记忆按位置组合，A 群的不进 B 群；云文档评论只带公共记忆 | 960 | s36、s37 | 错误路径 | 无（指令压不压得住仓库自己的 AGENTS.md，由预览版任务用两家各看一次） |
+| [ ] | s38 | 个性和记忆生效 | bot 文件模块（原子写、字数上限）；按 3.6 的顺序拼指令，第一层加"不提别的群的内容"和"要记的东西只写 vonvon 的记忆文件，不改工作区里的 CLAUDE.md、AGENTS.md"；记忆按位置组合，A 群的不进 B 群；云文档评论只带公共记忆 | 960 | s36、s37 | 错误路径 | 无（指令压不压得住仓库自己的 AGENTS.md，由预览版任务用两家各看一次） |
 | [ ] | s39 | 多工作区和代码仓库交给 Codex 和 Claude | Codex 传 runtimeWorkspaceRoots 并按根配读写，失败直接报错，按 e05 抬高 s03 的最低版本；Claude 传 additionalDirectories，沙箱按档配根（3.6） | 430 | s37、s36、s03、e03、e04、e05 | 子进程、错误路径 | 真实 Codex：第二个根能写、根外被拒、仓库里 `git commit` 能不能成功；真实 Claude：额外目录能读写，只读档哪个根都写不进 |
-| [ ] | s40 | 说"记住"就写进记忆，卡片上能撤销 | agent 直接写自己那份记忆，daemon 一轮前后比对，卡片显示"已记到本群记忆：…［撤销］"；超上限回滚（3.6） | 420 | s38、s39 | 并发、错误路径 | 只读档下 agent 能写记忆文件、写不到别处（"已记到本群记忆"的卡片 Claude 用 lark-cli 读，撤销 M7 验收时 owner 点） |
+| [ ] | s40 | 说"记住"就写进记忆，卡片上能撤销 | agent 直接写自己那份记忆，daemon 一轮前后比对，卡片显示"已记到本群记忆：…［撤销］"；超上限回滚；这份记忆所在的目录每一档都作为可写的根放行，公共记忆在群里不放行（3.6） | 420 | s38、s39 | 并发、错误路径 | 只读档下 agent 能写记忆文件、写不到别处（"已记到本群记忆"的卡片 Claude 用 lark-cli 读，撤销 M7 验收时 owner 点） |
 | [ ] | s41 | Bot 页：个性、规矩、智能提示词、记忆、工作区和仓库 | 编辑 SOUL.md、AGENTS.md、SMART.md（显示内置默认值）、工作区、代码仓库和公共记忆（3.1 第 6 条） | 550 | s36、s38 | — | 无（目录选择器在 M7 验收时看） |
 | [ ] | s42 | 群详情页的覆盖项 | 个性补充或替换、工作区和仓库、本群记忆、智能提示词、权限档、网络、后端和模型的覆盖（3.2） | 400 | s41 | — | 无 |
 
@@ -652,6 +652,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s37：resume 时传新的 `developerInstructions` 不生效（e05，4 个版本）。改过的个性、群的 `SOUL.md` 和记忆，要用 `thread/inject_items` 或 `turn/start` 的 `additionalContext` 放进去，或者开新会话。product.md 3.6"记忆在会话开始或恢复时放进去"的 Codex 一半按这个做，先按本文 4.2 改 product.md。
 - s37：今天的 `thread/start` 会把 bot 的工作区写进用户 `config.toml` 的信任记录（e05），和 3.6"不改用户的全局配置"不符。会话层传 `projects.<cwd>.trust_level` 就不写；`untrusted` 会跳过项目里的 AGENTS.md（读源码，没实测），要加载就传 `trusted`。但 `trusted` 还会加载工作区和仓库里 `.codex/` 的项目配置、hooks 和 exec policy（读源码，没实测），会话层没覆盖的设置会被它们改掉，比如多出 MCP；开工时定怎么处理。拼错的字段和配置键都被静默忽略，实验字段生没生效要自己核对：`runtimeWorkspaceRoots` 看回包回显，MCP 看 `mcpServerStatus/list`，skill 看 `skills/list`。
 - s39：按 e05 把最低版本抬到 0.156.1（见 s03 留下的）。起会话和恢复会话都传 `runtimeWorkspaceRoots`，不靠 0.156.1 起 resume 会保留它；回包回显的和传的不一致就报错。第二个根能写、根外被拒、`.git` 只读时 `git commit` 会不会失败，JP-VPS 上测不了（bwrap 起不来），只在 Mac 检查里看；macOS 上 `feishu` 权限配置加 `runtimeWorkspaceRoots` 时经沙箱读 AGENTS.md 正不正常，也一起看。第二个根里的 AGENTS.md 不会加载（e05），照 3.6 在指令里写"先读该仓库的 AGENTS.md"。
+- owner 2026-10-16 定：会话照旧从工作区起，不从 bot 自己的目录起。bot 的东西只在 `bots/<appId>/` 下由 vonvon 交给会话，vonvon 不往工作区写文件；私聊记忆改成一人一个目录 `memory/dm/<open_id>/dm.md`，s40 才能只放行这一份；bot 自己的 skill 放 `bots/<appId>/skills/`，s44 交给会话（product.md 3.3、3.6；调研 `docs/research/2026-10-16-bot-home/`）。
 - s40：product.md 没定写入方式。这里选"agent 直接写文件，daemon 前后比对"，不在群里另开记忆命令，和 3.7"群里不能用设置命令"一致。公共记忆只在私聊里由 s54 的设置命令写。
 
 ### M8 skill、MCP 和查飞书上下文
@@ -659,7 +660,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | 状态 | 编号 | 切片 | 内容 | 约行数 | 依赖 | 风险 | Mac 检查 |
 |---|---|---|---|---|---|---|---|
 | [ ] | s43 | 本机 skill 库和 MCP 库 | skill 从三个目录或本机文件夹拷进来，校验 SKILL.md，记下带不带脚本；MCP 从 Codex、Claude 的配置导入或手填；都不收 git 地址（3.6） | 970 | s38 | 错误路径 | 无 |
-| [ ] | s44 | skill 和 MCP 按名单交给会话，新 bot 不带 Claude 的个人指令 | 按位置算生效名单，交给 Codex 和 Claude 的会话层参数；向导新建的 bot 不带 Claude 的个人指令和两家的个人 skill，Codex 的 `~/.codex/AGENTS.md` 照常带上，指令里声明 bot 的规矩优先；导入的不变（3.6） | 740 | s43、s37、e02、e05 | 子进程、错误路径 | 真实 Codex：用得上 bot 的 skill、看不到个人 skill、MCP 起得来、resume 后还在；新 bot 的 Claude 会话不读 `~/.claude/CLAUDE.md`；`~/.codex/AGENTS.md` 里和 bot 冲突的规矩，bot 的指令压得住 |
+| [ ] | s44 | skill 和 MCP 按名单交给会话，新 bot 不带 Claude 的个人指令 | 按位置算生效名单，连同 bot 自己的 `bots/<appId>/skills/` 交给 Codex 和 Claude 的会话层参数；向导新建的 bot 不带 Claude 的个人指令和两家的个人 skill，Codex 的 `~/.codex/AGENTS.md` 照常带上，指令里声明 bot 的规矩优先；导入的不变（3.6） | 740 | s43、s37、e02、e05 | 子进程、错误路径 | 真实 Codex：用得上 bot 的 skill、看不到个人 skill、MCP 起得来、resume 后还在；新 bot 的 Claude 会话不读 `~/.claude/CLAUDE.md`；`~/.codex/AGENTS.md` 里和 bot 冲突的规矩，bot 的指令压得住 |
 | [ ] | s45 | skill 和 MCP 页面，bot 和群的启用名单 | 两个库页面，删除时列出还在用的 bot 和群；Bot 页的启用名单，群详情页的增减（3.6） | 550 | s43、s41、s42 | — | 无 |
 | [ ] | s46 | 会话令牌和 agent 调 vonvon 的入口 | 每条会话一个令牌，经环境变量交给 agent；host 加一个只接 POST 的路由，子进程依次校验令牌、私聊、触发人、开关（3.7） | 520 | s37、e04 | 子进程、并发、关闭清理、错误路径 | agent 调不调得到 vonvon、带不带得上令牌：Codex 只读、读写、关网各一次，Claude 沙箱一次 |
 | [ ] | s47 | vonvon settings 和 vonvon feishu 命令行框架 | 在 s07a 的命令上加：两组命令从环境变量读地址和令牌，不拿数据租约，输出 JSON；飞书组先做群列表和群成员（3.7） | 380 | s46、s07a | 错误路径 | 无 |
