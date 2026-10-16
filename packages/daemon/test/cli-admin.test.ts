@@ -328,7 +328,8 @@ it('settings get prints each section, gives the view as JSON, and lists a group\
     cards: section({ showToolCalls: true, showModel: 'running' }),
     comments: section({ backend: 'codex-appserver', selection: { kind: 'default' } }, 'r', { backend: 'codex-appserver', selection: { kind: 'explicit', model: 'gpt-5.5', effort: 'medium' } }),
   } };
-  const projectView = { scope: { kind: 'project', botId: 'cli_a', projectName: 'pay' }, sections: { permission: { ...section({ mode: 'qa' }), access: { kind: 'readonly', reason: 'owner-offline', message: '请先启动此 Agent，再编辑设置' } } } };
+  const projectView = { scope: { kind: 'project', botId: 'cli_a', projectName: 'pay' }, sections: { permission: { ...section({ mode: 'qa' }), access: { kind: 'readonly', reason: 'owner-offline', message: '请先启动此 Agent，再编辑设置' } } },
+    identity: { chatId: 'oc_pay', backend: 'codex-appserver', cwd: '/home/u/pay', kind: 'multi', fullOnly: 'Linux 上只能选完全访问。' } };
   const sessions = [{ threadId: 'omt_old', chatId: 'oc_pay', summary: '旧的', backend: 'codex-appserver', createdAt: 1, updatedAt: 1 },
     { threadId: 'omt_new', chatId: 'oc_pay', summary: '修'.repeat(50), backend: 'codex-appserver', model: 'gpt-5.5', createdAt: 2, updatedAt: 2 }];
   const settings = vi.fn(async (request: { type: string; scope?: { kind: string } }): Promise<SettingsReply> => (request.type === 'sessions'
@@ -341,7 +342,7 @@ it('settings get prints each section, gives the view as JSON, and lists a group\
   expect(Object.keys(JSON.parse(h.out()).view.sections)).toEqual(['cards', 'comments']);
   h.clear(); await runSettingsGet(undefined, { group: 'pay' }, h.io(), h.daemon);
   const out = h.out();
-  expect(out).toContain('群 pay（oc_pay）· Codex · 按话题独立会话 · /home/u/pay\n[permission]（只读：请先启动此 Agent，再编辑设置）\n  mode = qa\n');
+  expect(out).toContain('群 pay（oc_pay）· Codex · 按话题独立会话 · /home/u/pay\n[permission]（只读：请先启动此 Agent，再编辑设置）\n  mode = qa\n  Linux 上只能选完全访问。\n');
   expect(out).toContain('会话（最近 2 个，共 2 个；看单个会话：vonvon settings get --session <id>）');
   expect(out.indexOf('omt_new')).toBeLessThan(out.indexOf('omt_old'));
   expect(out).toContain(`gpt-5.5  ${'修'.repeat(40)}…\n`);
