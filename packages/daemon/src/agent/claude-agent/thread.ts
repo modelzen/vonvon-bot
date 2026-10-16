@@ -12,6 +12,7 @@ import type {
 } from '../types';
 import { createTurnMapper, resultErrorText } from './event-map';
 import type { ClaudePermissionOptions } from './permission';
+import { findTranscript, scanTranscript } from './transcript';
 
 /** Config the backend hands the thread to stand up its persistent query(). */
 export interface ClaudeThreadConfig {
@@ -43,6 +44,17 @@ export interface ClaudeThreadConfig {
    * loadBackendDep) so thread.ts carries no static runtime dep on the SDK —
    * the on-demand package can be absent until downloaded. */
   query: (params: { prompt: AsyncIterable<SDKUserMessage>; options?: Options }) => Query;
+  /** A resumed session's file as it was when resumed (s15b); unset for a fresh one. */
+  transcript?: TranscriptMark;
+}
+
+/** Where a thread's watch on its session file stands: see {@link ClaudeAgentThread.checkNative}. */
+export interface TranscriptMark {
+  file: string;
+  /** Read up to here. */
+  to: number;
+  /** The last compaction seen in it. */
+  compaction?: string;
 }
 
 /**
@@ -264,12 +276,15 @@ export class ClaudeAgentThread implements AgentThread {
   private sink: ((item: TurnItem) => void) | undefined;
   /** maxTokens from the last getContextUsage(), for the next turn's mid-turn readings */
   private contextWindow: number | undefined;
+  /** The session file and how far it has been read (s15b). */
+  private transcript: TranscriptMark | undefined;
 
   constructor(cfg: ClaudeThreadConfig) {
     this.sessionId = cfg.sessionId;
     this.cwd = cfg.cwd;
     this.model = cfg.model;
     this.effort = cfg.effort;
+    this.transcript = cfg.transcript;
 
     const options: Options = {
       cwd: cfg.cwd,
@@ -624,6 +639,28 @@ export class ClaudeAgentThread implements AgentThread {
         /* ignore */
       }
     }, ABORT_ESCALATE_MS);
+  }
+
+  get lastCompaction(): string | undefined {
+    return this.transcript?.compaction;
+  }
+
+  /**
+   * Read what the session file gained since the last look (s15b). This process keeps the
+   * history in memory and never rereads the file, so a terminal turn or `/compact` there is
+   * `foreign`: the caller drops this thread and resumes from the file. A fresh session's file
+   * appears with its first turn; until then there is nothing to read.
+   */
+  async checkNative(): Promise<{ foreign: boolean }> {
+    if (!this.transcript) {
+      const file = await findTranscript(this.sessionId);
+      if (!file) return { foreign: false };
+      this.transcript = { file, to: 0 };
+    }
+    const mark = this.transcript;
+    const scan = await scanTranscript(mark.file, mark.to);
+    this.transcript = { file: mark.file, to: scan.to, compaction: scan.compaction ?? mark.compaction };
+    return { foreign: scan.foreign };
   }
 
   isAlive(): boolean {
