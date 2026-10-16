@@ -4,12 +4,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import {
-  countInWindow, crashDir, crashErrorName, crashScopeKey, createSystemClock, listCrashRecords, pruneCrashRecords, readBootId,
-  readCrashSummary, readRunMarker, removeResumeRequest, sanitizeReason, startedBeforeThisBoot, takeResumeRequest,
-  writeCrashRecordSync, writeResumeRequest, writeRunMarkerSync, type Clock, type CrashRecord, type RunMarker,
+  countInWindow, crashDir, crashErrorName, crashScopeKey, createCrashRecordCache, createSystemClock, hasCrashRecordFor, listCrashRecords,
+  pruneCrashRecords, readBootId, readBotPauses, readCrashSummary, readRunMarker, removeResumeRequest, sanitizeReason, startedBeforeThisBoot,
+  takeResumeRequest, writeBotPausesSync, writeCrashRecordSync, writeResumeRequest, writeRunMarkerSync, type Clock, type CrashRecord, type RunMarker,
 } from '../src/host/crash-store';
+
+// Passes through, so one test can cut a write short the way a full disk does.
+vi.mock('node:fs', async original => {
+  const real = await original<typeof import('node:fs')>();
+  return { ...real, writeFileSync: vi.fn(real.writeFileSync) };
+});
 
 const roots: string[] = [];
 afterAll(() => { for (const root of roots) rmSync(root, { recursive: true, force: true }); });
@@ -76,6 +82,19 @@ describe('records', () => {
     expect(() => writeCrashRecordSync(root, record({ reason: '' }))).toThrow();
   });
 
+  it('a write cut short (a full disk) leaves no temp file and the file before it as it was', async () => {
+    const root = tempRoot();
+    writeBotPausesSync(root, CHAIN, { cli_a: { resumedUptimeMs: 5 } });
+    const { writeFileSync: realWrite } = await vi.importActual<typeof import('node:fs')>('node:fs');
+    vi.mocked(writeFileSync).mockImplementationOnce((file, data, options) => {
+      realWrite(file, String(data).slice(0, 8), options);
+      throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
+    });
+    expect(() => writeBotPausesSync(root, CHAIN, { cli_b: { resumedUptimeMs: 6 } })).toThrow('ENOSPC');
+    expect(readdirSync(crashDir(root))).toEqual(['bot-pauses.json']);
+    expect(readBotPauses(root, CHAIN)).toEqual({ cli_a: { resumedUptimeMs: 5 } });
+  });
+
   it('lists newest first and skips foreign names, oversized files, bad JSON, bad shapes and a missing directory', () => {
     const root = tempRoot();
     expect(listCrashRecords(root)).toEqual([]);
@@ -138,6 +157,59 @@ describe('counting', () => {
     ['no during (old record)', { during: undefined }, 1],
   ])('%s', (_label, fields, expected) => {
     expect(countInWindow([record({ sysUptimeMs: now, ...fields })], { chainId: CHAIN, nowUptimeMs: now })).toBe(expected);
+  });
+  it('counts one bot\'s records only, and only those after its last 恢复运行 (s18a)', () => {
+    const bot = (fields: Partial<CrashRecord>) => record({ scope: 'bot', appId: 'cli_a', sysUptimeMs: now - 1000, ...fields });
+    const records = [bot({}), bot({ appId: 'cli_b' }), record({ sysUptimeMs: now }), bot({ sysUptimeMs: now - 5000 })];
+    expect(countInWindow(records, { chainId: CHAIN, nowUptimeMs: now, appId: 'cli_a' })).toBe(2);
+    expect(countInWindow(records, { chainId: CHAIN, nowUptimeMs: now, appId: 'cli_a', sinceUptimeMs: now - 3000 })).toBe(1);
+    expect(countInWindow(records, { chainId: CHAIN, nowUptimeMs: now })).toBe(1);
+  });
+});
+
+describe('bot records for the supervisor and the snapshot (s18a)', () => {
+  it('finds a child\'s record by its file name: scope, PID and a stamp not before the child started', () => {
+    const root = tempRoot();
+    const key = crashScopeKey('bot', 'cli_a');
+    writeCrashRecordSync(root, record({ scope: 'bot', appId: 'cli_a', pid: 77, at: at(T0) }));
+    expect(hasCrashRecordFor(root, key, 77, T0 - 1000)).toBe(true);
+    expect(hasCrashRecordFor(root, key, 78, T0 - 1000)).toBe(false);
+    expect(hasCrashRecordFor(root, 'host', 77, T0 - 1000)).toBe(false);
+    expect(hasCrashRecordFor(root, key, 77, T0 + 60_000)).toBe(false); // a PID reused since
+  });
+  it('lists again only when crash/ changed or 30 s passed, and shows the last day\'s newest 20', () => {
+    let mtime = 1;
+    let lists = 0;
+    const many = Array.from({ length: 30 }, (_, index) => record({ at: at(T0 - index * 60_000) }));
+    const read = createCrashRecordCache('/unused', { stat: () => mtime, list: () => { lists++; return [record({ at: at(T0 - 25 * 3_600_000) }), ...many]; } });
+    expect(read(T0)).toHaveLength(20);
+    expect(read(T0)[0]).toEqual({ at: T0, kind: 'exception', uptimeMs: 60_000, reason: 'Error: boom' });
+    read(T0 + 29_000);
+    expect(lists).toBe(1);
+    mtime = 2;
+    read(T0 + 29_000);
+    read(T0 + 60_000);
+    expect(lists).toBe(3);
+    read.invalidate(); // a child exited: the next read lists again, whatever the mtime says
+    read(T0 + 61_000);
+    expect(lists).toBe(4);
+    expect(createCrashRecordCache('/unused', { stat: () => { throw new Error('ENOENT'); } })(T0)).toEqual([]);
+  });
+  it('reads the bot pauses of this chain only, and nothing from a damaged file, which it reports', () => {
+    const root = tempRoot();
+    let corrupt = 0;
+    const onCorrupt = (): void => { corrupt++; };
+    expect(readBotPauses(root, CHAIN, onCorrupt)).toEqual({});
+    writeBotPausesSync(root, CHAIN, { cli_a: { pausedAt: at(T0), pauseCrashes: 3 }, cli_b: { resumedUptimeMs: 5 } });
+    expect(readBotPauses(root, CHAIN, onCorrupt)).toEqual({ cli_a: { pausedAt: at(T0), pauseCrashes: 3 }, cli_b: { resumedUptimeMs: 5 } });
+    expect(readBotPauses(root, RUN, onCorrupt)).toEqual({});
+    expect(corrupt).toBe(0); // missing, or another chain's: nothing wrong
+    writeFileSync(join(crashDir(root), 'bot-pauses.json'), '{"v":1');
+    expect(readBotPauses(root, CHAIN, onCorrupt)).toEqual({});
+    writeFileSync(join(crashDir(root), 'bot-pauses.json'), JSON.stringify({ v: 2, chainId: CHAIN, bots: {} }));
+    expect(readBotPauses(root, CHAIN, onCorrupt)).toEqual({});
+    expect(corrupt).toBe(2);
+    expect(listCrashRecords(root)).toEqual([]);
   });
 });
 
@@ -205,5 +277,12 @@ describe('marker and resume request', () => {
     const summary = (bootId: string) => readCrashSummary(root, { running: false, now: T0, clock: clock({ bootId }) }).paused;
     expect(summary('boot-a')).toEqual({ since: at(T0), crashes: 3, running: false });
     expect(summary('boot-b')).toBeUndefined();
+  });
+  it('lists the paused bots of the live run\'s chain (s18a)', () => {
+    const root = tempRoot();
+    writeRunMarkerSync(root, marker({ pid: process.pid }));
+    writeBotPausesSync(root, CHAIN, { cli_a: { pausedAt: at(T0), pauseCrashes: 4 }, cli_b: { resumedUptimeMs: 5 } });
+    expect(readCrashSummary(root, { running: true, ownerPid: process.pid, now: T0 }).pausedBots).toEqual([{ appId: 'cli_a', since: at(T0), crashes: 4 }]);
+    expect(readCrashSummary(root, { running: true, ownerPid: process.pid + 1, now: T0 }).pausedBots).toEqual([]);
   });
 });

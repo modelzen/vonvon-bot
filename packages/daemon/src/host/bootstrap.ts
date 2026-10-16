@@ -9,7 +9,7 @@ import { readStartupRegistration } from '../service/startup';
 import { log } from '../core/logger';
 import { bridgeVersion } from '../core/version';
 import { defaultHolderPath, ProcessHost } from '../provider/process/process-host';
-import { closeHostRun, openHostRun, type HostRunStart } from './crash-guard';
+import { closeHostRun, guardParentPipes, openBotCrashContext, openHostRun, type HostRunStart } from './crash-guard';
 
 const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -63,6 +63,15 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
       owner = await acquirePidLock(paths.appDir, { hostMutexHeld: true });
       run = openHostRun({ root: paths.appDir, startedAt: owner.startedAt, version: bridgeVersion(), intent: () => control.intent ?? (control.requested ? 'stop' : 'running'), log });
       if (run.paused) console.log(`daemon 已暂停：10 分钟内崩溃了 ${run.pauseCrashes ?? 3} 次，bot 都没有启动。查完原因后运行 vonvon daemon restart 恢复运行。`);
+    } else if (options.bot) {
+      // A supervised bot child (s18a): its records go under the host's run and chain, and a host that died does not
+      // turn the drain's next console.log into a crash.
+      openBotCrashContext({
+        root: paths.appDir, appId: options.bot, runId: process.env.VONVON_HOST_RUN_ID, chainId: process.env.VONVON_HOST_CHAIN_ID,
+        startedAt: new Date(Date.now() - Math.round(process.uptime() * 1000)).toISOString(), version: bridgeVersion(),
+        intent: () => control.intent ?? (control.requested ? 'stop' : 'running'),
+      });
+      guardParentPipes(control);
     }
     if (control.requested) return;
     host = new ProcessHost({
@@ -95,6 +104,7 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
       managed: options.managed,
       port: options.port,
       ...(run?.paused ? { paused: true } : {}),
+      ...(run?.runId && run.chainId ? { crash: { runId: run.runId, chainId: run.chainId, ...(run.paused ? { pause: { since: run.pausedAt ? Date.parse(run.pausedAt) : Date.now(), crashes: run.pauseCrashes ?? 3 } } : {}) } } : {}),
       onListening: claimedOwner ? async (listen) => { await publishPidLock(paths.appDir, claimedOwner, listen); } : undefined,
     });
   } catch (error) {

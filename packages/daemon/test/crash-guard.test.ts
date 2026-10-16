@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { chmodSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -101,7 +101,7 @@ describe('openHostRun and closeHostRun', () => {
     writeCrashRecordSync(root, crash({ sysUptimeMs: UP - 300_000 }));
     writeCrashRecordSync(root, crash({ sysUptimeMs: UP - 120_000 }));
     const start = open();
-    expect(start).toMatchObject({ paused: true, pauseCrashes: 3, chainId: CHAIN });
+    expect(start).toMatchObject({ paused: true, pauseCrashes: 3, pausedAt: at(T0), crashes: 3, chainId: CHAIN });
     const paused = readRunMarker(root);
     expect(paused).toMatchObject({ state: 'paused', pausedAt: at(T0), pauseCrashes: 3 });
     expect(logs.warn).toHaveBeenCalledWith('daemon-crash', 'paused', { crashes: 3 });
@@ -127,7 +127,7 @@ describe('openHostRun and closeHostRun', () => {
   });
   it('runs unpaused and untracked when the crash directory cannot be written', () => {
     writeFileSync(join(root, 'crash'), 'not a directory');
-    expect(open()).toEqual({ tracked: false, paused: false, previous: null });
+    expect(open()).toEqual({ tracked: false, paused: false, crashes: 0, previous: null });
     expect(logs.fail).toHaveBeenCalledWith('daemon-crash', expect.anything(), { phase: 'open-run' });
     guard.closeHostRun({ kind: 'fatal', error: new Error('ignored') });
   });
@@ -213,6 +213,36 @@ describe('crash handler in a real process', () => {
     const records = listCrashRecords(root);
     expect(records.find(entry => entry.kind === 'exception')).toMatchObject({ paused: true });
     expect(readRunMarker(root)).toMatchObject({ state: 'paused', pauseCrashes: 3 });
+  });
+  const RUN = '55555555-5555-4555-8555-555555555555';
+  const ids = { VONVON_HOST_RUN_ID: RUN, VONVON_HOST_CHAIN_ID: CHAIN };
+  it('a bot child records under its host run and chain, exits 70 even under a manager, and never removes the host marker (s18a)', async () => {
+    const root = tempRoot();
+    writeRunMarkerSync(root, marker({ runId: RUN }));
+    expect((await crashChild(root, ['bot'], ids)).code).toBe(70);
+    expect((await crashChild(root, ['bot', 'stop'], { ...ids, VONVON_SERVICE: 'systemd' })).code).toBe(70);
+    expect(listCrashRecords(root).map(({ scope, appId, runId, chainId, during, kind }) => ({ scope, appId, runId, chainId, during, kind }))).toEqual([
+      { scope: 'bot', appId: 'cli_fixture', runId: RUN, chainId: CHAIN, during: 'stop', kind: 'exception' },
+      { scope: 'bot', appId: 'cli_fixture', runId: RUN, chainId: CHAIN, during: 'run', kind: 'exception' },
+    ]);
+    expect(readRunMarker(root)).toMatchObject({ runId: RUN });
+    const bare = tempRoot();
+    expect((await crashChild(bare, ['bot'])).code).toBe(70);
+    expect(() => readdirSync(crashDir(bare))).toThrow();
+  });
+  it.each([['bot-drain', 0], ['bot-drain-unguarded', 70]] as const)('%s: a child whose host died drains to the end only with the pipe guard (exit %i, s18 D1)', async (scenario, expected) => {
+    const root = tempRoot();
+    writeRunMarkerSync(root, marker({ runId: RUN }));
+    const child = spawn(process.execPath, [bundle, root, scenario], { env: { ...process.env, ...ids }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+    child.stdout?.resume(); child.stderr?.resume();
+    await new Promise(resolve => child.once('message', resolve));
+    const exited = new Promise(resolve => child.once('exit', resolve));
+    // The host's kill -9 as the child sees it: the IPC channel and the readers of stdout and stderr are gone.
+    child.stdout?.destroy(); child.stderr?.destroy(); child.disconnect();
+    expect(await exited).toBe(expected);
+    expect(existsSync(join(root, 'drained'))).toBe(expected === 0);
+    expect(listCrashRecords(root)).toEqual(expected === 0 ? [] : [expect.objectContaining({ scope: 'bot', during: 'stop', errorName: 'Error:EPIPE' })]);
+    expect(readRunMarker(root)).toMatchObject({ runId: RUN });
   });
   it('a host that crashes before it owns the run writes nothing', async () => {
     const root = tempRoot();

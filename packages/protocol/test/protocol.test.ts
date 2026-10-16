@@ -9,6 +9,7 @@ import {
   adminRequestSchema, adminReplySchema, adminStateSchema, directoryRequestSchema, directoryReplySchema,
   jobSchema, environmentReplySchema,
   type DesktopSnapshot, settingsViewSchema, projectViewSchema, projectEditableSchemas, settingsReplySchema,
+  applicationCrashesSchema, crashText, FORCED_DETAIL,
 } from "../src/index.js";
 
 const fixture = (name: string): unknown => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
@@ -187,4 +188,15 @@ it("accepts optional omittedBytes and rejects negative or fractional counts", ()
   expect(environmentReplySchema.parse({...reply,omittedBytes:123})).toEqual({...reply,omittedBytes:123});
   expect(environmentReplySchema.safeParse({...reply,omittedBytes:-1}).success).toBe(false);
   expect(environmentReplySchema.safeParse({...reply,omittedBytes:0.5}).success).toBe(false);
+});
+
+it("writes a crash in one line: a signal the supervisor saw with its uptime, a forced end found later with a lower bound (s18a)", () => {
+  expect(crashText({ kind: "exception", reason: "TypeError: x", uptimeMs: 192_000 })).toBe("程序出错：TypeError: x，运行了 3 分 12 秒");
+  expect(crashText({ kind: "forced", reason: "SIGKILL", uptimeMs: 500 })).toBe("被系统强制结束（SIGKILL），运行了 0 秒");
+  expect(crashText({ kind: "forced", reason: "被系统强制结束", uptimeMs: 500 })).toBe(`被系统强制结束${FORCED_DETAIL}`);
+  expect(crashText({ kind: "forced", reason: "被系统强制结束", uptimeMs: 7_380_000, paused: true })).toBe(`被系统强制结束${FORCED_DETAIL}，运行了至少 2 小时 3 分（暂停期间）`);
+  expect(crashText({ kind: "fatal", reason: "退出码 1" })).toBe("出错退出：退出码 1");
+  // A newer daemon's extra field or longer list does not fail the snapshot (the daemon trims to 20).
+  const records = Array.from({ length: 25 }, () => ({ at: 1, kind: "fatal", reason: "x", extra: true }));
+  expect(applicationCrashesSchema.parse({ records }).records).toHaveLength(25);
 });

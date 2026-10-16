@@ -56,6 +56,19 @@ it('bot list shows state and connection, and its JSON has no avatars', async () 
   expect(h.close).toHaveBeenCalledTimes(2);
 });
 
+it('bot list and bot status show a bot paused alone, and every bot of a paused daemon (s18a)', async () => {
+  const paused = agent('cli_a', 'Vonvon Bot', { running: false, connection: 'disconnected', paused: { since: 1, crashes: 3 } });
+  const h = harness({ snapshot: one([paused, agent('cli_b', '另一个')]), admin: vi.fn(async () => { throw new Error('读不到'); }) });
+  await runBotList(h.io(), h.daemon);
+  expect(h.out()).toBe('Vonvon Bot  cli_a  已暂停（10 分钟内崩溃了 3 次） · 未连接 · 0 个群\n另一个  cli_b  已启用 · 已连接 · 0 个群\n');
+  h.clear(); await expect(runBotStatus('cli_a', h.io(), h.daemon)).rejects.toThrow();
+  expect(h.out().split('\n').slice(0, 2)).toEqual(['Vonvon Bot（cli_a）', '已暂停：10 分钟内崩溃了 3 次，没有自动重启。查完原因后在网页的状态与诊断页点「恢复运行」，或运行 vonvon daemon restart。']);
+  const host = snapshot([agent('cli_b', '另一个', { running: false, connection: 'disconnected' })]);
+  const down = harness({ snapshot: async () => ({ ...host, application: { ...host.application, crashes: { paused: { since: 1, crashes: 4 }, records: [] } } }) });
+  await runBotList(down.io(), down.daemon);
+  expect(down.out()).toBe('另一个  cli_b  daemon 已暂停 · 未连接 · 0 个群\n');
+});
+
 it('human output drops control characters from Feishu names and --json keeps them', async () => {
   const name = '\u001b[2J坏\u009b31m名\r\n字';
   const h = harness({ snapshot: one([agent('cli_a', name, { readError: '读\u0007不到' })]) });
