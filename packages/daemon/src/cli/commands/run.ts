@@ -3,7 +3,7 @@ import { ensureOnboarded, announceEventsWhenLive } from '../../bot/onboarding';
 import { startBridge } from '../../bot/bridge';
 import { runSupervisor } from '../../bot/supervisor';
 import { acquireSingleInstanceLock, BridgeAlreadyRunningError } from '../../core/single-instance';
-import { activeBots, ensureRegistry } from '../../config/bots';
+import { activeBots, ensureRegistry, type BotEntry } from '../../config/bots';
 import { log } from '../../core/logger';
 import { AdminWriteError } from '../../admin/ops';
 import { createAdminIpcResponder } from '../../admin/ipc';
@@ -19,11 +19,21 @@ interface RunOptions {
   managed?: boolean;
   port?: number;
   onListening?: (listen: string) => Promise<void>;
+  /** 3 crashes in 10 minutes (3.10): the API and the page run, no bot does, until `vonvon daemon restart`. */
+  paused?: boolean;
 }
 
 export async function runRun(botName?: string, options: RunOptions = {}): Promise<void> {
   const control = options.control ?? observeShutdown();
   const managed = Boolean(options.managed);
+  if (options.paused) {
+    // Paused mode must come up even when reading the registry is what crashed; no onboarding, no inline bot.
+    let bots: BotEntry[] = [];
+    try { bots = activeBots(await ensureRegistry()); }
+    catch (error) { log.fail('daemon-crash', error, { phase: 'paused-registry' }); }
+    await runSupervisor(bots, { control, managed, port: options.port, onListening: options.onListening, paused: true });
+    return;
+  }
   // Explicit selector always runs exactly that one bot inline (this is also how
   // the supervisor launches each child: `run --bot <appId>`).
   if (botName) {
@@ -158,7 +168,6 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
       drained.push(...await Promise.allSettled([Promise.resolve().then(() => bridge?.shutdown())]));
       errors.push(...drained.filter(result => result.status === 'rejected').map(result => result.reason));
     })]);
-    if (control.requested && (errors.length || cleanup.some(result => result.status === 'rejected'))) control.requestStop();
     cleanup.push(...await Promise.allSettled([control.completeShutdown(() => api?.release() ?? Promise.resolve())]));
     const failures = cleanup.filter((result) => result.status === 'rejected');
     errors.push(...failures.map(failure => failure.reason));

@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { AdminServiceDeps } from '../src/admin/service';
-import { runSupervisor } from '../src/bot/supervisor';
+import { HOST_PAUSED_ACTIVATION, runSupervisor } from '../src/bot/supervisor';
 
 const captured = vi.hoisted(() => ({ deps: undefined as AdminServiceDeps | undefined, invalidate: vi.fn() }));
 vi.mock('../src/agent/codex-appserver/owned-process', () => ({ closeOwnedCodexProcesses: async () => {}, unconfirmedCodexPids: () => [] }));
@@ -41,7 +41,7 @@ const fixture = `
   });
 `;
 
-async function start(ids: string[]) {
+async function start(ids: string[], paused = false) {
   captured.deps = undefined;
   vi.mocked(spawnProcess).mockImplementation((_bin, _args, options) => {
     const child = spawn(process.execPath, ['-e', fixture], options ?? {});
@@ -49,11 +49,11 @@ async function start(ids: string[]) {
     return child;
   });
   const pending = new Promise<void>((resolve) => { requestShutdown = resolve; });
-  supervisor = runSupervisor(ids.map(bot), { control: { requested: false, waitForRequest: () => pending, requestStop() {}, requestRestart(_port: number) {}, completeShutdown: async (release: () => Promise<void>) => release(), dispose() {} } });
+  supervisor = runSupervisor(ids.map(bot), { ...(paused ? { paused } : {}), control: { requested: false, waitForRequest: () => pending, requestStop() {}, requestRestart(_port: number) {}, completeShutdown: async (release: () => Promise<void>) => release(), dispose() {} } });
   await vi.waitFor(() => expect(captured.deps).toBeDefined());
   const deps = (() : AdminServiceDeps | undefined => captured.deps)();
   if (!deps?.applyBotActivation || !deps.liveStatus || !deps.executeGroups) throw new Error('Runtime activation unavailable');
-  for (const id of ids) await deps.applyBotActivation(id, true);
+  if (!paused) for (const id of ids) await deps.applyBotActivation(id, true);
   return { apply: deps.applyBotActivation, status: deps.liveStatus, groups: deps.executeGroups };
 }
 
@@ -136,4 +136,14 @@ it('reexecutes the foreground CLI and does not expose inherited service callback
   expect(captured.deps?.restartDaemon).toBeUndefined();
   expect(captured.deps?.applyUpdate).toBeTypeOf('function');
   expect(captured.deps?.stopDaemon).toBeUndefined();
+});
+
+it('a paused host starts no child and refuses to start a bot, but disabling still works (s17)', async () => {
+  const runtime = await start(['a'], true);
+  expect(startApi).toHaveBeenCalled();
+  await expect(runtime.apply('a', true)).rejects.toThrow(HOST_PAUSED_ACTIVATION);
+  await expect(runtime.apply('b', true)).rejects.toThrow(HOST_PAUSED_ACTIVATION);
+  await runtime.apply('a', false);
+  expect(spawnProcess).not.toHaveBeenCalled();
+  expect(await runtime.status('a')).toBeUndefined();
 });

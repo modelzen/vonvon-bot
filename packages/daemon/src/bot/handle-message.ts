@@ -6781,15 +6781,21 @@ export function createOrchestrator(
     };
     startCleanup(closeOwnedCodexProcesses);
     startCleanup(shutdownResidentClients);
+    const dropped = { queued: 0, held: 0, compacts: 0 };
     for (const state of active.values()) {
       state.intakeCancelled = true;
+      dropped.queued += state.queue.length;
+      dropped.held += state.deferred?.length ?? 0;
+      if (state.compactAfter) dropped.compacts++;
       state.queue.length = 0;
-      // A waiting /compact and input held by /compact or /new go silently; the input comes back in the next back-fill.
+      // A waiting /compact and input held by /compact or /new go silently; the input comes back in the next back-fill
+      // as context only, unanswered. s17 logs the counts; telling the senders is the owner's call (v1-plan s17).
       state.compactAfter = undefined;
       state.deferred?.splice(0);
       try { state.interrupt?.(); }
       catch (error) { shutdownErrors.add(error); }
     }
+    if (dropped.queued || dropped.held || dropped.compacts) log.info('bridge', 'shutdown_dropped', dropped);
     startCleanup(() => sessionTitles.shutdown());
     const live = [...new Set(sessions.values())];
     sessions.clear();

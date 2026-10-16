@@ -13,7 +13,10 @@ program.hook('preAction', async (_command, action) => {
   // bot, group and settings only talk RPC to a running daemon, so they never create the data root or take a lease.
   const parent = action.parent?.name();
   if (parent === 'service' || parent === 'bot' || parent === 'group' || parent === 'settings' || action.name() === '__daemon-control') return;
-  if (action.name() === 'run') control = observeShutdown(Boolean(action.opts().parentControl));
+  if (action.name() === 'run') {
+    const runControl = control = observeShutdown(Boolean(action.opts().parentControl));
+    (await import('../host/crash-guard')).installCrashHandlers({ intent: () => runControl.intent ?? (runControl.requested ? 'stop' : 'running') });
+  }
   if (action.name() === 'open' || action.name() === 'status' || action.name() === 'logs' || action.name() === '__restart-after-exit') return;
   await mkdir(paths.appDir, { recursive: true, mode: 0o700 });
   lease = await enterDataAccess(paths.appDir);
@@ -37,6 +40,12 @@ daemon.command('start').description('Start a detached daemon')
 daemon.command('stop').description('Stop the running daemon').action(async () => {
   const stopped = await (await import('./commands/daemon')).runStop();
   process.stdout.write(stopped ? 'stopped\n' : 'already stopped\n');
+});
+daemon.command('restart').description('Restart the daemon (also resumes it after a crash pause)').action(async () => {
+  const { status, outcome } = await (await import('./commands/daemon')).runRestart();
+  process.stdout.write(`running PID ${status.pid} at ${status.listen}\n`);
+  if (outcome === 'resumed') process.stdout.write('已恢复运行（之前因 10 分钟内崩溃 3 次暂停）。\n');
+  else if (outcome === 'started') process.stdout.write('daemon 没在运行，已启动。\n');
 });
 daemon.command('status').description('Show daemon status').option('--json', 'Print JSON').action(async (options: { json?: boolean }) => {
   await (await import('./commands/daemon')).runStatus(Boolean(options.json));
@@ -165,5 +174,7 @@ program.parseAsync(process.argv).then(async () => {
 }).catch(async (err) => {
   console.error(err instanceof Error ? err.message : String(err));
   await (await import('../core/logger')).flushLogs();
-  process.exit(control && process.env.VONVON_SERVICE && !process.send && (process.exitCode === 0 || process.exitCode === 75) ? 0 : 1);
+  // A service-managed host keeps a stop (0) or a requested restart (75) even when cleanup failed; anything else is 1.
+  const code = process.exitCode;
+  process.exit(control && process.env.VONVON_SERVICE && !process.send && (code === 0 || code === 75) ? code : 1);
 });

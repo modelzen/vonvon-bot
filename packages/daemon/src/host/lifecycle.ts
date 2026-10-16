@@ -11,6 +11,8 @@ import { closeOwnedCodexProcesses, unconfirmedCodexPids } from '../agent/codex-a
 
 export interface ShutdownControl {
   readonly requested: boolean;
+  /** What was asked for; optional so a test's fake control still fits. The crash handler reads it. */
+  readonly intent?: 'running' | 'restart' | 'stop';
   waitForRequest(): Promise<void>;
   requestStop(): void;
   requestRestart(port: number, update?: UpdateStatus): void;
@@ -141,6 +143,8 @@ export function observeShutdown(parentControl = false, options: ShutdownOptions 
   };
   process.on('SIGINT', request);
   process.on('SIGTERM', request);
+  // A foreground run whose terminal goes away stops cleanly instead of dying and leaving a forced crash record.
+  process.on('SIGHUP', request);
   if (process.send) {
     process.on('message', message);
     process.on('disconnect', request);
@@ -167,13 +171,13 @@ export function observeShutdown(parentControl = false, options: ShutdownOptions 
         }
         log.fail('daemon-shutdown', error, { phase: 'listener_close_unconfirmed' });
         throw new ListenerCloseUnconfirmedError(error);
-      }
-      if (serviceManaged && intent === 'restart') process.exitCode = 75;
+      } finally { if (serviceManaged && intent === 'restart') process.exitCode = 75; } // s17: kept after a failed release
       return;
     }
   };
   return {
     get requested() { return intent !== 'running'; },
+    get intent() { return intent; },
     waitForRequest: () => pending,
     requestStop: request,
     completeShutdown(release) { return completion ??= complete(release); },
@@ -267,7 +271,7 @@ export function observeShutdown(parentControl = false, options: ShutdownOptions 
       }
     },
     dispose() {
-      process.off('SIGINT', request); process.off('SIGTERM', request);
+      process.off('SIGINT', request); process.off('SIGTERM', request); process.off('SIGHUP', request);
       process.off('message', message); process.off('disconnect', request);
       if (parentControl) {
         process.stdin.off('data', data); process.stdin.off('end', request); process.stdin.off('error', request);
