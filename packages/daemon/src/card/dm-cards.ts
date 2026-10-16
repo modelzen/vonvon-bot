@@ -18,7 +18,8 @@ import {
   type AppConfig,
   type SessionTitleAiConfig,
 } from '../config/schema';
-import { defaultNoMention, effectiveMode, type Project } from '../project/registry';
+import { conversationCopy } from '@vonvon/protocol';
+import { effectiveMode, noMentionOf, ruleKind, type Project, type SessionMode } from '../project/registry';
 import {
   DEFAULT_BACKEND_ID,
   REASONING_EFFORTS,
@@ -32,7 +33,7 @@ import { CUSTOM_MODEL_OPTION, MODEL_ID_MAX_LENGTH, parseModelId } from '../agent
 import type { SessionRecord } from '../bot/session-store';
 import { labelScope } from '../config/scopes';
 import { summarizeEventDiagnosis, type EventDiagnosis } from '../utils/event-diagnosis';
-import { actions, actionsFixed, button, card, form, hr, input, linkButton, md, note, selectMenu, submitButton, type CardElement, type CardObject, type SelectOption } from './cards';
+import { actions, actionsFixed, button, card, form, hr, input, linkButton, md, note, selectMenu, submitButton, type ActionValue, type CardElement, type CardObject, type SelectOption } from './cards';
 import { reasoningEffortLabel, relativeTime } from './command-cards';
 import type { DesktopRelease } from '../service/desktop-release';
 
@@ -141,9 +142,11 @@ export const GS = {
   modelDefaultSubmit: 'gs.modelDefault.submit',
 } as const;
 
-/** Human label for a project's session-model kind. */
-export function kindLabel(kind?: 'multi' | 'single'): string {
-  return kind === 'single' ? '💬 单会话群' : '👥 多话题群';
+/** Human label for a group's 会话方式 (product.md 3.4). */
+export function kindLabel(kind?: SessionMode): string {
+  if (kind === 'smart') return '智能 · 智能开话题';
+  const copy = conversationCopy[kind === 'single' ? 'shared' : 'threads'];
+  return `${copy.name} · ${copy.title}`;
 }
 
 function desktopReleaseElements(release?: DesktopRelease | null): CardElement[] {
@@ -535,19 +538,42 @@ export function buildNewProjectFormCard(
   } else if (backends.length === 1) {
     formItems.push(note(`🧠 后端 Agent：**${backends[0]!.label}**（创建后固定）`));
   }
-  formItems.push(
-    note('选群类型(直接点对应按钮创建)：👥 多话题群 = @我开话题、每话题独立会话；💬 单会话群 = 整群一个会话、连续上下文。'),
-    actions([
-      submitButton('👥 创建·多话题群', { a: DM.newProjectSubmit, kind: 'multi' }, 'primary', 'submit_multi'),
-      submitButton('💬 创建·单会话群', { a: DM.newProjectSubmit, kind: 'single' }, 'primary', 'submit_single'),
-    ]),
-    actions([button('⬅️ 菜单', { a: DM.menu })]),
-  );
+  formItems.push(...sessionModeItems('创建', { a: DM.newProjectSubmit }), actions([button('⬅️ 菜单', { a: DM.menu })]));
   elements.push(
     md('填项目名（必填）。**文件夹路径留空** = 自动在默认位置新建一个空白项目；**填绝对路径** = 用电脑上已有的文件夹。'),
     form('new_project', formItems),
   );
   return card(elements, { header: { title: '➕ 新建项目', template: 'turquoise' } });
+}
+
+/**
+ * 会话方式 in the order and words of product.md 3.4, then 免@. One submit button per
+ * mode, so nothing is preselected and nothing is marked as recommended; 智能 joins in s25.
+ * 免@ left unpicked takes the mode's default (多会话开，单会话关), see {@link parseNoMentionPick}.
+ */
+function sessionModeItems(verb: string, value: ActionValue): CardElement[] {
+  const multi = conversationCopy.threads;
+  const single = conversationCopy.shared;
+  return [
+    md('**会话方式**（点下面的按钮就选了这一项）'),
+    note(`**${multi.title}**：${multi.subtitle}`),
+    note(`**${single.title}**：${single.subtitle}`),
+    selectMenu({
+      name: 'noMention',
+      placeholder: '免 @：不选就按会话方式（@ 我开新会话 开，整群一条会话 关）',
+      options: [{ label: '免 @ 开：不 @ 也回', value: 'on' }, { label: '免 @ 关：@ 我才回', value: 'off' }],
+    }),
+    actions([
+      submitButton(`${verb}·${multi.title}`, { ...value, kind: 'multi' }, 'default', 'submit_multi'),
+      submitButton(`${verb}·${single.title}`, { ...value, kind: 'single' }, 'default', 'submit_single'),
+    ]),
+  ];
+}
+
+/** The 免@ pick from {@link sessionModeItems}; undefined when left unpicked. */
+export function parseNoMentionPick(formValue: Record<string, unknown> | undefined): boolean | undefined {
+  const v = formValue?.noMention;
+  return v === 'on' ? true : v === 'off' ? false : undefined;
 }
 
 /**
@@ -575,13 +601,7 @@ export function buildJoinGroupFormCard(
   } else if (backends.length === 1) {
     formItems.push(note(`🧠 后端 Agent：**${backends[0]!.label}**（绑定后固定）`));
   }
-  formItems.push(
-    note('选群类型(直接点对应按钮创建)：👥 多话题群 = @我开话题、每话题独立会话；💬 单会话群 = 整群一个会话、连续上下文（默认不免@）。'),
-    actions([
-      submitButton('👥 绑定·多话题群', { a: DM.joinGroupSubmit, kind: 'multi', chatId: opts.chatId }, 'primary', 'submit_multi'),
-      submitButton('💬 绑定·单会话群', { a: DM.joinGroupSubmit, kind: 'single', chatId: opts.chatId }, 'primary', 'submit_single'),
-    ]),
-  );
+  formItems.push(...sessionModeItems('绑定', { a: DM.joinGroupSubmit, chatId: opts.chatId }));
   elements.push(
     md('我已被加入这个群。填一下要绑定的项目信息即可开始用。'),
     md('项目名默认用群名，可改。**文件夹路径留空** = 自动新建空白项目；**填绝对路径** = 用电脑上已有的文件夹。'),
@@ -654,7 +674,7 @@ export function buildProjectListCard(
     const topicCount = (p.chatId ? sessionsByChat.get(p.chatId) : undefined)?.length ?? 0;
     const dir = `📂 \`${p.cwd}\`${p.branch && p.branch !== '—' ? `   🌿 ${p.branch}` : ''}`;
     const meta = p.chatId
-      ? `${kindLabel(p.kind)}${(p.origin ?? 'created') === 'joined' ? ' · 🔗已加入' : ''}   ·   免@：${(p.noMention ?? defaultNoMention(p)) ? '开' : '关'}`
+      ? `${kindLabel(p.kind)}${(p.origin ?? 'created') === 'joined' ? ' · 🔗已加入' : ''}   ·   免@：${noMentionOf(p) ? '开' : '关'}`
       : '⚠️ 未绑定群';
     elements.push(md(`**${p.name}**${p.blank ? ' _(空白)_' : ''}`));
     elements.push(note(`${dir}\n${meta}`));
@@ -1394,8 +1414,8 @@ export function buildGroupSettingsCard(
   project: Pick<Project, 'name' | 'kind' | 'noMention' | 'origin' | 'defaultModel' | 'defaultEffort'>,
   notice?: string,
 ): CardObject {
-  const kind = project.kind ?? 'multi';
-  const noMention = project.noMention ?? defaultNoMention(project);
+  const kind = ruleKind(project);
+  const noMention = noMentionOf(project);
   const scopeNote =
     kind === 'single'
       ? '开启后：本群所有消息(不用 @)都交给我处理。'
@@ -1742,8 +1762,8 @@ export function buildProjectSettingsCard(
   backendName?: string,
   notice?: string,
 ): CardObject {
-  const kind = project.kind ?? 'multi';
-  const noMention = project.noMention ?? defaultNoMention(project);
+  const kind = ruleKind(project);
+  const noMention = noMentionOf(project);
   return card(
     [
       ...(notice ? [md(notice)] : []),

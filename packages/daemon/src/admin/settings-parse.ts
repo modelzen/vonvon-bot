@@ -85,6 +85,9 @@ const schemas: Record<string, Record<string, Rule>> = {
     }, true),
     model: shape({
       selection
+    }),
+    run: shape({
+      pendingPolicy: one('default', 'steer', 'queue')
     })
   },
   session: {

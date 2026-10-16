@@ -5,7 +5,7 @@ import { realpath, stat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { bindModeFor, joinExistingGroup } from '../project/lifecycle';
-import { getProjectByChatId, getProjectByName, listProjects, type Project } from '../project/registry';
+import { getProjectByChatId, getProjectByName, listProjects, sessionModeOf, type Project } from '../project/registry';
 import { log } from '../core/logger';
 import { feishuError, scopeDenial } from '../utils/feishu-error';
 import { AdminWriteError } from './ops';
@@ -16,6 +16,8 @@ export interface BindGroupInput {
   directory: string;
   backend: 'codex-appserver' | 'claude-agent';
   kind: 'multi' | 'single';
+  /** 免@; left out → 3.4's default for `kind` */
+  noMention?: boolean;
 }
 export type AdminGroupOp = { kind: 'joinedGroups'; cursor?: string } | { kind: 'bindGroup'; input: BindGroupInput };
 export interface JoinedGroups {
@@ -28,15 +30,15 @@ export class GroupUpstreamError extends Error {
 export class InvalidGroupInput extends Error { readonly code = 'INVALID_GROUP_INPUT'; }
 
 export function parseBindGroupInput(raw: Record<string, unknown>): BindGroupInput {
-  const { chatId, projectName, directory, backend, kind } = raw;
-  if (Object.keys(raw).some(key => !['chatId', 'projectName', 'directory', 'backend', 'kind'].includes(key)) ||
+  const { chatId, projectName, directory, backend, kind, noMention } = raw;
+  if (Object.keys(raw).some(key => !['chatId', 'projectName', 'directory', 'backend', 'kind', 'noMention'].includes(key)) ||
       typeof chatId !== 'string' || !/^oc_[\w-]{1,200}$/.test(chatId) ||
       typeof projectName !== 'string' || !projectName.trim() || projectName.length > 200 || /[\x00-\x1f]/.test(projectName) ||
       typeof directory !== 'string' || !isAbsolute(directory) || directory.length > 4096 || /[\x00-\x1f]/.test(directory) ||
-      (backend !== 'codex-appserver' && backend !== 'claude-agent') || (kind !== 'multi' && kind !== 'single')) {
+      (backend !== 'codex-appserver' && backend !== 'claude-agent') || (kind !== 'multi' && kind !== 'single') || (noMention !== undefined && typeof noMention !== 'boolean')) {
     throw new InvalidGroupInput('群绑定参数无效');
   }
-  return { chatId, projectName: projectName.trim(), directory, backend, kind };
+  return { chatId, projectName: projectName.trim(), directory, backend, kind, ...(noMention === undefined ? {} : { noMention }) };
 }
 
 export function parseJoinedGroups(raw: unknown): JoinedGroups {
@@ -102,7 +104,7 @@ export function createGroupExecutor(channel: LarkChannel): (op: AdminGroupOp) =>
     async function same(project: Project): Promise<boolean> {
       const cwd = await realpath(project.cwd).catch(() => project.cwd);
       const backend = project.backend ?? await effectiveDefaultBackend().catch(() => DEFAULT_BACKEND_ID);
-      return project.name === input.projectName && cwd === directory && backend === input.backend && (project.kind ?? 'multi') === input.kind;
+      return project.name === input.projectName && cwd === directory && backend === input.backend && sessionModeOf(project) === input.kind;
     }
     const bound = await getProjectByChatId(input.chatId);
     if (bound) {
@@ -114,7 +116,7 @@ export function createGroupExecutor(channel: LarkChannel): (op: AdminGroupOp) =>
     }
     if (await getProjectByName(input.projectName)) throw new AdminWriteError('项目名已被使用');
     try {
-      return await joinExistingGroup(channel, { name: input.projectName, chatId: input.chatId, existingPath: directory, backend: input.backend, kind: input.kind, mode: bindModeFor(input.backend) });
+      return await joinExistingGroup(channel, { name: input.projectName, chatId: input.chatId, existingPath: directory, backend: input.backend, kind: input.kind, noMention: input.noMention, mode: bindModeFor(input.backend) });
     } catch (error) {
       const raced = await getProjectByChatId(input.chatId);
       if (raced && await same(raced)) {

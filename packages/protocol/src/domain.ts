@@ -23,7 +23,16 @@ export const jobIdSchema = z
 export const folderTokenSchema = z.string().uuid().brand<"FolderToken">();
 export const permissionSchema = z.enum(["qa", "write", "full"]);
 export const toolSchema = z.enum(["codex", "claude"]);
+/** 会话方式 on the wire: threads = 多会话（@ 我开新会话）, shared = 单会话（整群一条会话）. */
 export const conversationSchema = z.enum(["threads", "shared"]);
+export type Conversation = z.infer<typeof conversationSchema>;
+/** product.md 3.4 的叫法、主标题、副标题，三个绑定入口按这个顺序列（智能 s25 再加）。 */
+export const conversationCopy = {
+  threads: { name: "多会话", title: "@ 我开新会话", subtitle: "在主区 @ 我就开一个话题，一个话题一条会话，几件事各聊各的" },
+  shared: { name: "单会话", title: "整群一条会话", subtitle: "主区一条会话，上下文一直连着；想另起一件事，开个话题和我聊" },
+} as const;
+/** 免@ on the wire: all = 开 (no @ needed), mention = 关. Left out on a bind: 多会话开，单会话关 (product.md 3.4). */
+export const replyModeSchema = z.enum(["mention", "all"]);
 export type AgentId = z.infer<typeof agentIdSchema>;
 export type GroupId = z.infer<typeof groupIdSchema>;
 export type MembershipId = z.infer<typeof membershipIdSchema>;
@@ -64,13 +73,14 @@ export const commandSchema = z.discriminatedUnion("type", [
       folderToken: folderTokenSchema,
       tool: toolSchema,
       conversation: conversationSchema,
+      response: replyModeSchema.optional(),
     })
     .strict(),
   z
     .object({
       type: z.literal("setResponse"),
       membershipId: membershipIdSchema,
-      response: z.enum(["mention", "all"]),
+      response: replyModeSchema,
     })
     .strict(),
   z
@@ -116,7 +126,7 @@ export type Agent = z.infer<typeof agentSchema>;
 export const membershipSchema = z.object({
   avatarDataUrl: z.string().optional(), id: membershipIdSchema, agentId: agentIdSchema,
   groupId: groupIdSchema, name: z.string(), directory: z.string(), backend: z.string(),
-  conversation: conversationSchema, response: z.enum(["mention", "all"]),
+  conversation: conversationSchema, response: replyModeSchema,
   permission: z.object({
     administrator: permissionSchema,
     /** @deprecated since s15c always equal to the group's one tier; kept so clients from before s15c still parse */
