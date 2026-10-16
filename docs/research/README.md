@@ -111,6 +111,16 @@ process-ci、draft 和 final 里的流程说法，凡和 `AGENTS.md` 不一致�
 | [e11-codex-thread-read](2026-10-15-v1-spikes/e11-codex-thread-read.md) | 另起一个 utility app-server 进程、不加载线程，能不能读到别的进程的线程；能否只拿用户消息和最终回答；正在跑、没跑过回合、旧格式、压缩过的线程读出来是什么样 | 只测了 JP-VPS 上的 CLI，没测子 agent 和很长的会话 |
 | [e14-resume-same-session](2026-10-15-v1-spikes/e14-resume-same-session.md) | 用 `claude --resume` 和 `codex exec resume` 打开 bot 的会话，看到的和 bot 是否一样；两边都写会怎样；手动压缩后摘要里还留不留引用行 | 只在 JP-VPS 上测了终端，没测 Codex 桌面端；压缩只有一个样本；空闲回收后 Claude 接上哪一支是推测 |
 
+## 2026-10-16 bot 自己的目录和工作区
+
+`2026-10-16-bot-home/`。owner 提出"会话从 bot 自己的目录起，工作区作为关联目录，继承工作区的 skill 和 MCP"，这一轮查现状、两家 CLI 实际加载什么、comma 怎么做。基于 `main` 的 `6e28d23`；Claude Code 2.1.296 和 Codex 0.163.0 在 JP-VPS 上用假 API 实测，没登录、没花额度。结论：会话照旧从工作区起，owner 2026-10-16 同意（`docs/product.md` 3.3、3.6）。同一天第二轮（multi-workspace）：owner 又提出参考 Codex 的多工作区、方案要能接更多后端，查了 13 个后端，实测 Codex 0.163.0 和 Claude 2.1.296、2.1.301，基于 #349 分支的 `f7044ed`。owner 2026-10-16 选了 1A、2A，第 3 题按 A 做（owner 要求下一轮热生效）：bot 的文字当指令交，skill 和 MCP 打成能力包交，附加目录只给文件访问，设置改了下一轮生效（`docs/product.md` 3.6、第 11 节）。
+
+| 报告 | 内容 | 说明 |
+|---|---|---|
+| [bot-home](2026-10-16-bot-home/bot-home.md) | vonvon 今天和定稿往哪里写文件、cwd 怎么选；两家从 cwd 和附加目录各加载什么（指令文件、skill、MCP、设置）；不写进工作区就能交给会话的办法；待定问题 | D4（Codex 会话层 `trust_level` 加不加载项目配置）已由 multi-workspace 实测：app-server 会话层传 `trusted` 会加载。B2、D9 说 Claude 的 append 快照"只对开了这项的账号生效"已过时，默认就开；D9 的 CLAUDE.md 重读也有了答案。见 multi-workspace 4.4 |
+| [multi-workspace](2026-10-16-bot-home/multi-workspace.md) | 13 个后端一条会话能有几个目录、附加目录里加载什么、调用方能直接交什么；Codex 的主文件夹、`selectedCapabilityRoots`、多个环境、按路径的权限；Claude 2.1.296 以后的变化、从附加目录加载什么、交个性和 skill 的几种办法及恢复时的表现；每个后端一个适配的做法 | 没测：`selectedCapabilityRoots` 在 0.156.1 上、`never` 下能力包的 MCP 会不会被拒；`enabledPlugins` 能不能关掉插件；macOS 和 `:minimal` 读档下按路径的权限。Cursor、Kimi、Goose、OpenCode、DeepSeek Harness 多数只看了源码 |
+| [comma-home](2026-10-16-bot-home/comma-home.md) | comma 的 agent 家目录、人设、记忆、skill、MCP 放在哪里，Claude Code 和 Codex 用什么 cwd 和参数起 | AGPL，只看思路。comma 用每个会话一个空目录当 cwd，不继承工作区的配置 |
+
 ## 补充
 
 codex-desktop 报告写完以后，对照 openai/codex 源码又核实了一次。`codex mcp list` 里的 `cua_repl` 来自内置插件 `unified-computer-use@openai-bundled`，就是原生 Computer Use；显示为 disabled 的 `computer-use` 是旧通道。经 Paseo 调用时，Mac 锁屏会失败（getpaseo/paseo#3346），`full-access` 模式会自动批准打开应用。process 报告里的相关说法和这里一致。
