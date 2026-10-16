@@ -10,6 +10,13 @@ import {
 
 // Real children (`node -e`) under the real supervisor, its data root a temp dir: s18a's records, count, pause and resume.
 const f = vi.hoisted(() => ({ root: '', deps: undefined as AdminServiceDeps | undefined, crashes: undefined as { application(now: number): unknown; paused(appId: string): unknown } | undefined, warn: vi.fn() }));
+// A CI runner may have booted minutes ago: shift uptime an hour for the source and the seeds alike, so a seed
+// 11 minutes back is never negative.
+vi.mock('node:os', async original => {
+  const real = await original<typeof import('node:os')>();
+  const uptime = (): number => real.uptime() + 3600;
+  return { ...real, default: { ...real, uptime }, uptime };
+});
 vi.mock('../src/config/paths', async original => {
   const real = await original<typeof import('../src/config/paths')>();
   return { ...real, paths: { ...real.paths, get appDir() { return f.root; } } };
