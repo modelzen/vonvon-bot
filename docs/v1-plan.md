@@ -611,14 +611,14 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s26：单独跑一个 bot（`--bot`）时退化成单 bot；子进程退出或请求超时，退回由各 bot 自己判断。
 - s27：别的 bot 的最终回答按 s14 带 `card_msg_content_type` 拉，不然只拿到"请升级至最新版本客户端"（e10）。
 - s15c 做法（一档）：每一轮都用群的一档 `effectiveMode`，谁说话都一样；`turnTier`、`effectiveGuestMode` 删了。管理员名单和只限主人、管理员的事（`/resume`、`/new`、`/clear`、`/settings`、运行控件、私聊）不变，这些门都不读档。管理员和成员在同一条会话里，运行中来了消息按"运行中来了消息"的设置插话或排队，和两个成员之间一样。
-- s15c 做法（会话键）：会话键不再带后缀。daemon 启动、bot 起来之前，存的两档还不同的群（`guestMode` 有值、和 `mode` 不同，和原来分档的判断一样），没归档的 `<位置>#admin` 改名成 `<位置>`，顶掉那里原来的记录（分档期间没人读它，`/resume` 列的是原生会话，不受影响）；`#guest`、归档的 `#admin`、已经不分档的群里留下的 `#admin` 都不动，停着不用（`isRetiredKey`）。改名只在有记录要动时写盘，再跑一次什么也不做；失败只记日志（`run tier-merge`），bot 照常起来，下次启动再试。登记表、引用行、话题表、撤回、私聊的项目列表和话题卡、网页和桌面端的会话列表都跳过停用的键；桌面端对停用的键操作，回"已停用"。
+- s15c 做法（会话键）：会话键不再带后缀。daemon 启动、bot 起来之前，存的两档还不同的群（`guestMode` 有值、和 `mode` 不同，和原来分档的判断一样），没归档的 `<位置>#admin` 改名成 `<位置>`，顶掉那里原来的记录（分档期间没人读它，`/resume` 列的是原生会话，不受影响）；`#guest`、归档的 `#admin`、已经不分档的群里留下的 `#admin` 都不动，停着不用（`isRetiredKey`）。改名只在有记录要动时写盘，再跑一次什么也不做；失败只记日志（`run tier-merge`），bot 照常起来，要改的群记进 projects.json 顶层的 `tierMergePending`（只改这个键，各行原样），下次启动按存的两档不同的群加上它再试，中间哪次写盘去掉了 `guestMode` 也不漏；改成了就删掉这个键。登记表、引用行、话题表、撤回、私聊的项目列表和话题卡、网页和桌面端的会话列表都跳过停用的键；桌面端和会话设置（网页、`vonvon settings get/set --session`）按 id 碰停用的键，回"已停用"，什么也不改。
 - s15c 做法（已存的 `guestMode`）：读 projects.json 时，有 `guestMode` 的行取两档里更严的（只读 < 读写 < 完全访问，不认识的值算只读，`null` 算没设），内存里不再有这个字段；下一次写 projects.json，不管为什么写，每行的 `guestMode` 都去掉。改名按的是写盘之前的原样，所以要在任何写之前做：daemon 的单实例锁保证旧进程不会同时写，supervisor 和预览进程只读。
-- s15c 做法（设置）：网页只剩一个「权限档」下拉，s20b 的理由写在它下面；私聊 🔐 权限卡只剩一个下拉，升级前发的、带"普通用户档"的旧卡提交时什么也不存，再发一张新卡；`vonvon settings set --group … permission.guestMode=…` 在连 daemon 之前就拒，说明改 `permission.mode`；设置保存、IPC、RPC 带 `guestMode` 的一律拒。Linux 上 Codex 的回合开始时回的说明、诊断页的"下一步"只写「权限档」和 `permission.mode`。
+- s15c 做法（设置）：网页只剩一个「权限档」下拉，s20b 的理由写在它下面；私聊 🔐 权限卡只剩一个下拉，提交按钮的值带版本号 `v: 2`；升级前发的旧卡没有版本号，提交时什么也不存，再发一张新卡。只看表单认不出旧卡：后端只能完全访问时，s20b 的卡不预选完全访问以外的"普通用户档"，不动它就什么也不交，只交 `mode=full`，存下来会把群从只读放宽成完全访问；`vonvon settings set --group … permission.guestMode=…` 在连 daemon 之前就拒，说明改 `permission.mode`；设置保存、IPC、RPC 带 `guestMode` 的一律拒。Linux 上 Codex 的回合开始时回的说明、诊断页的"下一步"只写「权限档」和 `permission.mode`。
 - s15c 做法（领文件、开场）：领文件按群现在的档，和文件写出时的档比的那一步留着：群的档调低以后，旧卡上工作区外的文件领不到，回点的人"这个群现在的权限档拿不到"。话题开场的主区几条对谁都留 bot 自己的回复，主区会话 id 取不带后缀的那条。
-- s15c 做法（协议）：不升 `PROTOCOL_VERSION`（同 s02c1、s12、s20a）。快照里的 `membership.permission.member`、管理状态里的 `AdminProject.guestMode` 留着，等于群的一档，标了 deprecated，升级前的桌面端连新 daemon 照样能解析；群设置视图和编辑里的 `guestMode`、`setPermission` 命令里的 `member` 去掉了。升级前的桌面端连新 daemon 时打不开群设置这一页，接受。
+- s15c 做法（协议）：不升 `PROTOCOL_VERSION`（同 s02c1、s12、s20a）。快照里的 `membership.permission.member`、管理状态里的 `AdminProject.guestMode`、群设置视图里的 `permission.guestMode` 留着，等于群的一档，标了 deprecated，升级前的桌面端、网页和命令行连新 daemon 照样能解析；视图里的 `guestMode` 只出不进，编辑里的 `guestMode`、`setPermission` 命令里的 `member` 去掉了，`vonvon settings get` 不打印它。升级前的客户端照样打得开群设置这一页，在那里改「普通成员权限」会被拒。
 - s15c 留下的：
   - 给 s60：bridge 迁来的群两档不同时 `mode` 取 `stricterTier`，迁移结果里列出来（product.md 第 5 节）；这些群的 `<位置>#admin` 会话照 `adoptAdminSessions` 改名（或者迁移时原样留着 `guestMode`，让第一次启动来改，二选一），`#guest` 原样拷过来或者丢掉。
-  - 给 s15b：一个位置只有一条会话，"看一眼会话"用不带后缀的键，跳过 `isRetiredKey` 的记录。`vonvon settings get/set --session <停用的键>` 还能按 id 找到那条记录，列表里已经不出现，只有手打旧 id 才到得了；s15b 碰会话设置时可以拒掉。
+  - 给 s15b：一个位置只有一条会话，"看一眼会话"用不带后缀的键，跳过 `isRetiredKey` 的记录。
   - 升级后又退回 s15c 之前的版本：还存着 `guestMode` 的群会重新分档、起一条新的 `#admin` 会话，再升级时它顶掉 `<位置>`。原生会话都还能 `/resume`，不处理。
 
 ### M6 提问卡片、权限档和子 agent

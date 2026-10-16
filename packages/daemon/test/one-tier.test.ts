@@ -17,11 +17,23 @@ vi.mock('../src/config/paths', async () => {
   return { paths: { projectsFile: join(dir, 'projects.json'), sessionsFile: join(dir, 'sessions.json') } };
 });
 afterAll(() => rmSync(dirname(paths.projectsFile), { recursive: true, force: true }));
-const logged = vi.hoisted(() => ({ info: [] as unknown[][] }));
+const logged = vi.hoisted(() => ({ info: [] as unknown[][], fail: [] as unknown[][], adoptFails: false }));
 vi.mock('../src/core/logger', () => ({
-  log: { info: (...args: unknown[]) => void logged.info.push(args), warn: () => undefined, fail: () => undefined },
+  log: { info: (...args: unknown[]) => void logged.info.push(args), warn: () => undefined, fail: (...args: unknown[]) => void logged.fail.push(args) },
   withTrace: async (_ctx: unknown, fn: () => unknown) => fn(),
 }));
+// One start whose rename fails, as a full disk or an unreadable sessions.json would.
+vi.mock('../src/bot/session-store', async (original) => {
+  const store = await original<typeof import('../src/bot/session-store')>();
+  return {
+    ...store,
+    adoptAdminSessions: (chats: Parameters<typeof store.adoptAdminSessions>[0]) => {
+      if (!logged.adoptFails) return store.adoptAdminSessions(chats);
+      logged.adoptFails = false;
+      return Promise.reject(new Error('disk full'));
+    },
+  };
+});
 vi.mock('@larksuiteoapi/node-sdk', async (original) => ({
   ...await original<object>(),
   createLarkChannel: () => ({ rawClient: {}, on: () => undefined, connect: async () => undefined, disconnect: async () => undefined }),
@@ -131,13 +143,48 @@ describe('adoptAdminSessions', () => {
 });
 
 describe('at bot start', () => {
+  const cfg = { accounts: { app: { id: 'cli_fixture', secret: 'x', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' } } } as AppConfig;
+  const start = async () => (await startBridge({ cfg, appSecret: 'x', fallbackCwd: '/w' })).shutdown();
+  const rawStore = async () => JSON.parse(await readFile(paths.projectsFile, 'utf8')) as Record<string, unknown>;
+  beforeEach(() => { logged.info.length = 0; logged.fail.length = 0; logged.adoptFails = false; });
+
   it('renames before the bot reads the stores, and says which groups now run at which tier', async () => {
     await storeProjects([row('a', { mode: 'full', guestMode: 'qa' }), row('b')]);
     await storeSessions([rec('oc_a', 'oc_a'), rec('oc_a#admin', 'oc_a')]);
-    const cfg = { accounts: { app: { id: 'cli_fixture', secret: 'x', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' } } } as AppConfig;
-    const bridge = await startBridge({ cfg, appSecret: 'x', fallbackCwd: '/w' });
-    await bridge.shutdown();
+    await start();
     expect((await listSessions()).map((s) => [s.threadId, s.sessionId])).toEqual([['oc_a', 's-oc_a#admin']]);
     expect(logged.info).toContainEqual(['run', 'tier-merge', { chats: ['oc_a→qa'], sessions: 1, places: ['oc_a'] }]);
+    expect(await rawStore()).not.toHaveProperty('tierMergePending');
+    // The row keeps guestMode until a write, so the next start merges again and moves nothing.
+    const files = async () => [(await stat(paths.projectsFile)).ino, (await stat(paths.sessionsFile)).ino];
+    const before = await files();
+    await start();
+    expect(await files()).toEqual(before);
+    expect(logged.info).toContainEqual(['run', 'tier-merge', { chats: ['oc_a→qa'], sessions: 0, places: [] }]);
+  });
+
+  it('retries after a failed start, even when a write in between dropped guestMode', async () => {
+    await storeProjects([row('a', { mode: 'full', guestMode: 'qa' }), row('b')]);
+    await storeSessions([rec('oc_a#admin', 'oc_a'), rec('oc_a#guest', 'oc_a')]);
+    logged.adoptFails = true;
+    await start();
+    expect(logged.fail).toContainEqual(['run', new Error('disk full'), { phase: 'tier-merge' }]);
+    expect((await listSessions()).map((s) => s.threadId)).toEqual(['oc_a#admin', 'oc_a#guest']);
+    expect(await rawStore()).toMatchObject({ tierMergePending: ['oc_a'] });
+    // Any write folds the rows; the chats it left stay.
+    await updateProject('b', { noMention: true });
+    expect((await rawProjects()).filter((p) => Object.hasOwn(p, 'guestMode'))).toEqual([]);
+    expect(await rawStore()).toMatchObject({ tierMergePending: ['oc_a'] });
+    await start();
+    expect((await listSessions()).map((s) => [s.threadId, s.sessionId])).toEqual([['oc_a', 's-oc_a#admin'], ['oc_a#guest', 's-oc_a#guest']]);
+    expect(logged.info).toContainEqual(['run', 'tier-merge', { chats: ['oc_a→qa'], sessions: 1, places: ['oc_a'] }]);
+    expect(await rawStore()).not.toHaveProperty('tierMergePending');
+    expect((await listProjects()).map((p) => [p.name, p.mode, p.noMention])).toEqual([['a', 'qa', undefined], ['b', undefined, true]]);
+    // Nothing is left: a third start writes neither file.
+    logged.info.length = 0;
+    const before = [(await stat(paths.projectsFile)).ino, (await stat(paths.sessionsFile)).ino];
+    await start();
+    expect([(await stat(paths.projectsFile)).ino, (await stat(paths.sessionsFile)).ino]).toEqual(before);
+    expect(logged.info.filter(([, what]) => what === 'tier-merge')).toEqual([]);
   });
 });

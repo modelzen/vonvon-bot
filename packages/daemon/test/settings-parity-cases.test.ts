@@ -9,7 +9,7 @@ import { createAppPreferencesWriter } from '../src/admin/ops';
 import { createSettingsOwner } from '../src/admin/settings';
 import { parseSettingsEdit } from '../src/admin/settings-parse';
 import type { AgentSettingsView, ProjectSettingsView, SessionSettingsView, SettingsEdit, SettingsOwnerDeps } from '../src/admin/settings';
-import { addProject, getProjectByName } from '../src/project/registry';
+import { addProject, getProjectByName, updateProject } from '../src/project/registry';
 import { getSession, upsertSession } from '../src/bot/session-store';
 import type { AppConfig } from '../src/config/schema';
 import type { AgentBackend } from '../src/agent/types';
@@ -128,8 +128,11 @@ it.each(['qa', 'write', 'full'] as const)('CARD-012 accepts supported %s permiss
 
 it('CARD-013 s15c: 普通成员权限 is gone, a guestMode patch is refused and nothing is written', async () => {
   const settings = await owner();
+  await updateProject('demo', { mode: 'write' });
   const before = await settings.read(project) as ProjectSettingsView;
-  expect(before.sections.permission.effective).not.toHaveProperty('guestMode');
+  // Output only, for clients from before s15c: always the group's one tier.
+  expect(before.sections.permission.stored).toEqual({ mode: 'write', guestMode: 'write', network: false });
+  expect(before.sections.permission.effective).toEqual({ mode: 'write', guestMode: 'write', network: false });
   const file = await readFile(paths.projectsFile, 'utf8');
   await expect(settings.save({ scope: project, section: 'permission', revision: before.sections.permission.revision, patch: { guestMode: 'qa' } } as unknown as SettingsEdit)).rejects.toThrow('设置字段、类型或范围无效');
   expect(await readFile(paths.projectsFile, 'utf8')).toBe(file);

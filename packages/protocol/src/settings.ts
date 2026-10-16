@@ -53,13 +53,19 @@ export const agentSectionSchemas = {
   paths: z.object({ projectsRootDir: z.string().nullable() }),
   access: z.object({ allowedChats: z.array(groupIdSchema).max(1000) }),
 };
-export const projectSectionSchemas = {
-  permission: z.object({
-    mode: z.enum(["qa", "write", "full"]),
-    network: z.boolean(),
-  }),
+const tier = z.enum(["qa", "write", "full"]);
+/** What a save may set in a group's settings; the view adds the deprecated `permission.guestMode`. */
+export const projectEditableSchemas = {
+  permission: z.object({ mode: tier, network: z.boolean() }),
   response: z.object({ noMention: z.boolean() }),
   model: z.object({ selection }),
+};
+export const projectSectionSchemas = {
+  ...projectEditableSchemas,
+  permission: projectEditableSchemas.permission.extend({
+    /** @deprecated since s15c always equal to `mode`, never saved; kept so clients from before s15c still parse the view */
+    guestMode: tier,
+  }),
 };
 export const sessionSectionSchemas = { model: z.object({ selection }) };
 export const hostSectionSchemas = {
@@ -225,7 +231,7 @@ const editablePatches: Record<
     ]),
   ),
   project: Object.fromEntries(
-    Object.entries(projectSectionSchemas).map(([key, value]) => [
+    Object.entries(projectEditableSchemas).map(([key, value]) => [
       key,
       value.partial().strict(),
     ]),
@@ -259,13 +265,13 @@ export type SettingsEdit =
       };
     }[keyof typeof agentSectionSchemas]
   | {
-      [K in keyof typeof projectSectionSchemas]: {
+      [K in keyof typeof projectEditableSchemas]: {
         scope: Extract<SettingsScope, { kind: "project" }>;
         section: K;
         revision: string;
-        patch: Partial<z.infer<(typeof projectSectionSchemas)[K]>>;
+        patch: Partial<z.infer<(typeof projectEditableSchemas)[K]>>;
       };
-    }[keyof typeof projectSectionSchemas]
+    }[keyof typeof projectEditableSchemas]
   | {
       scope: Extract<SettingsScope, { kind: "session" }>;
       section: "model";

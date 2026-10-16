@@ -21,7 +21,7 @@ const samples = [
   {type:"listJoinedGroups",agentId},
   {type:"bindGroup",agentId,groupId,projectName:"fixture",folderToken,tool:"codex",conversation:"threads"},
   {type:"setResponse",membershipId,response:"mention"},
-  {type:"setPermission",membershipId,administrator:"full",member:"qa",network:false},
+  {type:"setPermission",membershipId,administrator:"full",network:false},
   {type:"setAgentEnabled",agentId,enabled:true},
   {type:"deleteAgent",agentId},
   {type:"cancelJob",jobId},

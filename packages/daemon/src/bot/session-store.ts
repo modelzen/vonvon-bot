@@ -322,6 +322,8 @@ export async function detachSessionsForChat<T>(chatId: string, commit: () => Pro
 /** A key from before s15c (one tier per group): admins' and guests' sessions of
  * a group with two tiers. Left in sessions.json, never used. */
 export const isRetiredKey = (key: string): boolean => /#(admin|guest)$/.test(key);
+/** The answer to anything asked of a retired key by its id (desktop, settings). */
+export const RETIRED_KEY_TEXT = '这条会话是分管理员、普通成员两档时留下的，已停用；请用群里现在的会话。';
 
 /**
  * At start (s15c): in each group that still stores two tiers, admins talked in

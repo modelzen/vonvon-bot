@@ -11,7 +11,8 @@ const section = <T,>(stored: T) => ({ stored, effective: stored, revision: "r", 
 const view = (fullOnly?: string): ProjectSettingsView => ({
   scope: { kind: "project", botId: "cli_fixture" as ProjectSettingsView["scope"]["botId"], projectName: "demo" },
   sections: {
-    permission: section({ mode: "qa" as const, network: false }),
+    // guestMode: the view's deprecated mirror of the one tier (s15c), never shown.
+    permission: section({ mode: "qa" as const, guestMode: "qa" as const, network: false }),
     response: section({ noMention: false }),
     model: section({ selection: { kind: "default" as const } }),
   } as unknown as ProjectSettingsView["sections"],

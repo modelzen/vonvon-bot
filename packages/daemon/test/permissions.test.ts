@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { effectiveMode, type Project } from '../src/project/registry';
 import { CodexAppServerBackend, sandboxParams } from '../src/agent/codex-appserver/backend';
 import { CODEX_FULL_ONLY, CodexFullOnlyError } from '../src/agent/codex-appserver/full-only';
-import { AUTO_COMPACT_RETIRED, buildGroupSettingsCard, buildPermissionCard, buildProjectSettingsCard } from '../src/card/dm-cards';
+import { AUTO_COMPACT_RETIRED, buildGroupSettingsCard, buildPermissionCard, buildProjectSettingsCard, PERMISSION_CARD_VERSION } from '../src/card/dm-cards';
 
 describe('effectiveMode', () => {
   it('defaults missing mode to full (legacy data unaffected)', () => {
@@ -123,11 +123,12 @@ describe('permission cards', () => {
     expect(json).toContain('"name":"network"');
     expect(json).toContain('select_static');
     expect(json).toContain('"tag":"form"');
-    // tiers listed + submit carries the project name
+    // tiers listed + submit carries the project name and the card's version (a card from before s15c has none)
     expect(json).toContain('项目内只读');
     expect(json).toContain('完全访问');
     expect(json).toContain('dm.proj.perm.submit');
     expect(json).toContain('"n":"P"');
+    expect(json).toContain(`"v":${PERMISSION_CARD_VERSION}`);
     // current tier pre-selected (initial_option)
     expect(json).toContain('"initial_option":"full"');
   });

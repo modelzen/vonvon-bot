@@ -144,6 +144,7 @@ import {
   buildNewProjectDoneCard,
   buildNewProjectFormCard,
   buildPermissionCard,
+  PERMISSION_CARD_VERSION,
   buildProjectListCard,
   buildProjectTopicsCard,
   buildProjectSettingsCard,
@@ -210,6 +211,7 @@ import {
   getSession,
   isDelivered,
   isRetiredKey,
+  RETIRED_KEY_TEXT,
   isSeen,
   isUnread,
   listSessions,
@@ -4508,10 +4510,10 @@ export function createOrchestrator(
       const name = typeof value.n === 'string' ? value.n : '';
       const mode = asTier(selectValue(formValue, 'mode'));
       const network = selectValue(formValue, 'network') === 'on';
-      // A card sent before s15c still has 普通成员权限: nothing is saved, a fresh one-tier card goes out.
-      const oldCard = selectValue(formValue, 'guestMode') !== undefined;
+      // A card sent before s15c (no version; it has 普通成员权限) saves nothing, a fresh one-tier card goes out.
+      const oldCard = value.v !== PERMISSION_CARD_VERSION || selectValue(formValue, 'guestMode') !== undefined;
       void trackTask((async () => {
-        // A card sent before the upgrade still offers 只读 and 读写: refused as the web save is, with a fresh card.
+        // On a full-only backend a save of 只读 or 读写 is refused as the web save is, with a fresh card.
         const p = await getProjectByName(name);
         const fullOnly = p && backendFor(p.backend).fullAccessOnly?.();
         if (p && (oldCard || (fullOnly && mode !== undefined && mode !== 'full'))) {
@@ -4856,7 +4858,7 @@ export function createOrchestrator(
         if (reserved.queue.length) await channel.send(project.chatId, { markdown: `切回期间收到的 ${reserved.queue.length} 条消息未执行，请重发。` });
       }
     }
-    if (isRetiredKey(request.threadId)) throw new AdminWriteError('这条会话是分管理员、普通成员两档时留下的，已停用；请用群里现在的会话。');
+    if (isRetiredKey(request.threadId)) throw new AdminWriteError(RETIRED_KEY_TEXT);
     const record = records.find(item => item.threadId === request.threadId);
     if (!record || record.detached) throw new AdminWriteError('此会话已归档或不属于当前项目，请开始新会话');
     const key = record.threadId;

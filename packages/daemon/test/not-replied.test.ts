@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
@@ -8,8 +8,8 @@ import { paths } from '../src/config/paths';
 import { BackendNotInstalledError } from '../src/agent/backend-loader';
 import { CODEX_FULL_ONLY, CodexFullOnlyError } from '../src/agent/codex-appserver/full-only';
 import { setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
-import { DM } from '../src/card/dm-cards';
-import { addProject, getProjectByName, removeProject } from '../src/project/registry';
+import { DM, PERMISSION_CARD_VERSION } from '../src/card/dm-cards';
+import { addProject, getProjectByName, removeProject, type Project } from '../src/project/registry';
 
 vi.mock('../src/config/paths', () => {
   const appDir = mkdtempSync(join(tmpdir(), 'not-replied-'));
@@ -196,10 +196,10 @@ describe('Codex that runs only in 完全访问 (Linux)', () => {
     }
   });
 
-  it('refuses an old DM card that saves 只读, and sends one offering only 完全访问', async () => {
+  it('refuses a DM card that saves 只读, and sends one offering only 完全访问', async () => {
     await addProject({ name: 'demo', chatId: 'oc_demo', cwd: '/tmp/demo', createdAt: 1, blank: false, mode: 'qa' });
     const submit = (mode: string) => orchestrator.dispatcher.handle({ chatId: 'ou_owner', messageId: 'om_card', operator: { openId: 'ou_owner' },
-      action: { tag: 'button', value: { a: DM.permissionSubmit, n: 'demo' } }, raw: { action: { form_value: { mode, network: 'off' } } } } as never);
+      action: { tag: 'button', value: { a: DM.permissionSubmit, n: 'demo', v: PERMISSION_CARD_VERSION } }, raw: { action: { form_value: { mode, network: 'off' } } } } as never);
     try {
       await submit('qa');
       await vi.waitFor(() => expect(fake.card).toHaveBeenCalledOnce());
@@ -225,12 +225,29 @@ describe('Codex that runs only in 完全访问 (Linux)', () => {
     } finally { await removeProject('demo'); }
   });
 
+  it('an old DM card left alone saves nothing, so it cannot widen a group that ran its members at 只读', async () => {
+    // Before s15c: 管理员档 full, 普通用户档 qa (now the group's one tier). On a full-only backend that card
+    // preset only 管理员档, so untouched it submits mode=full and no guestMode.
+    await addProject({ name: 'demo', chatId: 'oc_demo', cwd: '/tmp/demo', createdAt: 1, blank: false, mode: 'full', guestMode: 'qa' } as Project);
+    try {
+      await orchestrator.dispatcher.handle({ chatId: 'ou_owner', messageId: 'om_card', operator: { openId: 'ou_owner' },
+        action: { tag: 'button', value: { a: DM.permissionSubmit, n: 'demo' } }, raw: { action: { form_value: { mode: 'full', network: 'off' } } } } as never);
+      await vi.waitFor(() => expect(fake.card).toHaveBeenCalledOnce());
+      const sent = JSON.stringify(fake.card.mock.calls[0]?.[2]);
+      expect(sent).toContain(`"v":${PERMISSION_CARD_VERSION}`);
+      expect(sent).toContain('现在是🔒 项目内只读');
+      expect(fake.log.info).toHaveBeenCalledWith('console', 'permission-refused', { project: 'demo', mode: 'full', reason: 'old-card' });
+      expect(await getProjectByName('demo')).toMatchObject({ mode: 'qa' });
+      expect(JSON.parse(readFileSync(paths.projectsFile, 'utf8')).projects[0]).toMatchObject({ mode: 'full', guestMode: 'qa' });
+    } finally { await removeProject('demo'); }
+  });
+
   it('keeps a stored 只读 when the DM card is saved with the tier dropdowns left alone', async () => {
     await addProject({ name: 'demo', chatId: 'oc_demo', cwd: '/tmp/demo', createdAt: 1, blank: false, mode: 'qa' });
     try {
       // The card presets no tier it cannot offer, so an untouched dropdown sends nothing.
       await orchestrator.dispatcher.handle({ chatId: 'ou_owner', messageId: 'om_card', operator: { openId: 'ou_owner' },
-        action: { tag: 'button', value: { a: DM.permissionSubmit, n: 'demo' } }, raw: { action: { form_value: { network: 'on' } } } } as never);
+        action: { tag: 'button', value: { a: DM.permissionSubmit, n: 'demo', v: PERMISSION_CARD_VERSION } }, raw: { action: { form_value: { network: 'on' } } } } as never);
       await vi.waitFor(() => expect(fake.card).toHaveBeenCalledOnce());
       expect(await getProjectByName('demo')).toMatchObject({ mode: 'qa', network: true });
     } finally { await removeProject('demo'); }

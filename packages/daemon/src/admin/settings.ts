@@ -7,7 +7,7 @@ import { getCompletionReminderConfig, getMaxConcurrentRuns, getModelDisplay, get
 import { paths } from '../config/paths';
 import { resolveProjectsRootDir } from '../project/lifecycle';
 import { defaultNoMention, effectiveMode, getProjectByName, listProjects, mutateProject, type Project } from '../project/registry';
-import { getSession, mutateSession, type SessionRecord } from '../bot/session-store';
+import { getSession, isRetiredKey, mutateSession, RETIRED_KEY_TEXT, type SessionRecord } from '../bot/session-store';
 import { DEFAULT_COMMENT_INSTRUCTIONS, saveCommentInstructions, syncAllCommentInstructions } from '../bot/comments';
 import { voiceView } from '../voice/view';
 import type { VoiceAction } from '../voice/types';
@@ -134,6 +134,7 @@ function projectData(p: Project): T.ProjectSections {
   return {
     permission: {
       mode: effectiveMode(p),
+      guestMode: effectiveMode(p),
       network: p.network ?? false
     },
     response: {
@@ -358,6 +359,8 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       };
     }
     if (scope.kind === 'session') {
+      if (isRetiredKey(scope.threadId))
+        throw new SettingsInputError(RETIRED_KEY_TEXT);
       const s = await readSession(scope.threadId);
       if (!s)
         throw new SettingsInputError('会话不存在或已被删除');
@@ -525,6 +528,8 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         const e = edit as Extract<T.BotSettingsEdit, {
           scope: T.SessionSettingsView['scope'];
         }>;
+        if (isRetiredKey(e.scope.threadId))
+          throw new SettingsInputError(RETIRED_KEY_TEXT);
         await changeSession(e.scope.threadId, async (s) => {
           check([botId, sessionRaw(s)], e.revision);
           if (!e.patch.selection)

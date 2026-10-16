@@ -138,10 +138,19 @@ export async function listProjectsIn(file: string): Promise<Project[]> {
 }
 
 /**
+ * Top-level key of projects.json (s15c): the chats a failed start left for
+ * {@link splitTierChats}. A row loses `guestMode` at the next write, whatever
+ * it is for; this key outlives that (write keeps top-level keys) until a merge
+ * succeeds.
+ */
+const TIER_MERGE_PENDING = 'tierMergePending';
+
+/**
  * Groups whose stored row still has two tiers (s15c), chat id → the stricter
  * one they run at now. Read as stored, before the fold, with the comparison
  * the old split made: admins of exactly these groups talked in `<place>#admin`
- * sessions. A missing file has none.
+ * sessions. Bound chats named by {@link setTierMergePending} count too, folded
+ * or not. A missing file has none.
  */
 export async function splitTierChats(file = paths.projectsFile): Promise<Map<string, PermissionMode>> {
   let text: string;
@@ -151,11 +160,13 @@ export async function splitTierChats(file = paths.projectsFile): Promise<Map<str
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return new Map();
     throw err;
   }
-  const rows = (JSON.parse(text) as Partial<StoreFile>).projects;
+  const stored = JSON.parse(text) as Partial<StoreFile> & { [TIER_MERGE_PENDING]?: unknown };
+  const pending = new Set(Array.isArray(stored[TIER_MERGE_PENDING]) ? stored[TIER_MERGE_PENDING] : []);
   const split = new Map<string, PermissionMode>();
-  for (const row of Array.isArray(rows) ? rows : []) {
+  for (const row of Array.isArray(stored.projects) ? stored.projects : []) {
     const raw = row as Project & { guestMode?: unknown };
-    if (raw && typeof raw.chatId === 'string' && raw.guestMode != null && raw.guestMode !== effectiveMode(raw)) split.set(raw.chatId, foldGuestTier(raw).mode!);
+    if (!raw || typeof raw.chatId !== 'string') continue;
+    if ((raw.guestMode != null && raw.guestMode !== effectiveMode(raw)) || pending.has(raw.chatId)) split.set(raw.chatId, effectiveMode(foldGuestTier(raw)));
   }
   return split;
 }
@@ -173,13 +184,36 @@ function withLock<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-async function write(projects: Project[]): Promise<void> {
+/** projects.json as stored, `{}` when missing. */
+async function readStored(): Promise<Record<string, unknown>> {
+  return readFile(paths.projectsFile, 'utf8').then(text => JSON.parse(text)).catch(error => { if (error.code === 'ENOENT') return {}; throw error; });
+}
+
+async function writeStored(body: object): Promise<void> {
   await mkdir(dirname(paths.projectsFile), { recursive: true });
   const tmp = `${paths.projectsFile}.tmp-${process.pid}-${randomUUID()}`;
-  const previous = await readFile(paths.projectsFile, 'utf8').then(text => JSON.parse(text)).catch(error => { if (error.code === 'ENOENT') return {}; throw error; });
-  const body: StoreFile = { ...previous, version: FILE_VERSION, projects };
   await writeFile(tmp, `${JSON.stringify(body, null, 2)}\n`, 'utf8');
   await rename(tmp, paths.projectsFile);
+}
+
+async function write(projects: Project[]): Promise<void> {
+  const body: StoreFile = { ...(await readStored()), version: FILE_VERSION, projects };
+  await writeStored(body);
+}
+
+/**
+ * s15c: name the chats whose tier merge failed, so the next start retries them
+ * after a write has dropped `guestMode`; an empty list drops the key. Rows stay
+ * as stored. Writes only when there is something to change.
+ */
+export async function setTierMergePending(chats: readonly string[]): Promise<void> {
+  return withLock(async () => {
+    const stored = await readStored();
+    if (!Array.isArray(stored.projects) || (!chats.length && !Object.hasOwn(stored, TIER_MERGE_PENDING))) return;
+    if (chats.length) stored[TIER_MERGE_PENDING] = [...chats];
+    else delete stored[TIER_MERGE_PENDING];
+    await writeStored(stored);
+  });
 }
 
 export async function listProjects(): Promise<Project[]> {

@@ -11,7 +11,8 @@ import { createOrchestrator } from './handle-message';
 import { createTopicRegistry } from './topic-registry';
 import { adoptAdminSessions } from './session-store';
 import { paths } from '../config/paths';
-import { splitTierChats } from '../project/registry';
+import { setTierMergePending, splitTierChats } from '../project/registry';
+import type { PermissionMode } from '../agent/types';
 
 export interface BridgeOptions {
   cfg: AppConfig;
@@ -176,15 +177,20 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
  * take their place's key; projects.json drops `guestMode` at its next write
  * (see foldGuestTier), so this reruns until then. The single-instance lock
  * keeps an old process from writing meanwhile. A failure is logged, never
- * fatal: the bot starts and the next start tries again.
+ * fatal: the bot starts, and the chats are kept in projects.json
+ * (setTierMergePending) so the next start tries them again even after that
+ * write; a success drops them.
  */
 async function mergeTiers(): Promise<void> {
+  let split = new Map<string, PermissionMode>();
   try {
-    const split = await splitTierChats();
+    split = await splitTierChats();
     if (!split.size) return;
     const places = await adoptAdminSessions(split);
     log.info('run', 'tier-merge', { chats: [...split].map(([chat, tier]) => `${chat.slice(-6)}→${tier}`), sessions: places.length, places: places.map((p) => p.slice(-6)) });
+    await setTierMergePending([]);
   } catch (err) {
     log.fail('run', err, { phase: 'tier-merge' });
+    if (split.size) await setTierMergePending([...split.keys()]).catch((e) => log.fail('run', e, { phase: 'tier-merge-pending' }));
   }
 }

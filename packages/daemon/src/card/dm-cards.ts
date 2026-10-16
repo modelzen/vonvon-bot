@@ -1519,6 +1519,10 @@ export function permissionSummary(p: Pick<Project, 'mode'>): string {
   return tierLabel(effectiveMode(p));
 }
 
+/** Version in the 🔐 card's submit value since s15c. A card sent before has none: left alone on a full-only
+ * backend, its 普通用户档 dropdown submits nothing, so the form alone cannot tell it from this one. */
+export const PERMISSION_CARD_VERSION = 2;
+
 /**
  * 🔐 权限表单卡（DM「项目设置 → 🔐 权限」）。一个下拉选权限档，群里所有人都用这一档（s15c），
  * 外加联网开关。用 selectMenu(表单收值、提交时才读、不锁卡)而非即时按钮——选完点提交；提交
@@ -1552,7 +1556,7 @@ export function buildPermissionCard(p: Pick<Project, 'name' | 'mode' | 'network'
           ],
           initial: network ? 'on' : 'off',
         }),
-        actions([submitButton('✅ 保存权限', { a: DM.permissionSubmit, n: p.name }, 'primary', 'submit_perm')]),
+        actions([submitButton('✅ 保存权限', { a: DM.permissionSubmit, n: p.name, v: PERMISSION_CARD_VERSION }, 'primary', 'submit_perm')]),
       ]),
       note('保存会断开本项目正在进行的会话，让新档位立即生效。'),
       actions([button('⬅️ 返回设置', { a: DM.projectSettings, n: p.name })]),
