@@ -119,7 +119,7 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
 - 已有的群仍是规则模式，行为不变。
 - M4 之后先做的三片（owner 2026-10-16 的决定）：话题里勾"同时发送到群"时 bot 只回一次；一个群只有一个权限档、一条会话；在终端或 Codex 应用里接着 bot 的会话聊过、压缩过，bot 下一轮接得上，Codex 的会话终端随时打得开。
 
-**怎么验收：** owner 要做的：开始前扫码建两个 JP-VPS 用的测试 bot，只要一次（本文第 8 节）。第 1 到 7 步和第 9 步 Claude 先做完，第 8 步 Codex 在 M5 的预览版任务里先查，结果写在通知里。
+**怎么验收：** owner 要做的：开始前扫码建两个 JP-VPS 用的测试 bot，只要一次（本文第 8 节）。第 1 到 7 步、第 9 步和第 10 步 Claude 先做完，第 8 步 Codex 在 M5 的预览版任务里先查，结果写在通知里。
 
 照 product.md 3.4 的例子：同一台 Mac 上至少两个 bot，一个规则模式、一个或两个智能模式，都在一个新建的测试群里。Claude 在 JP-VPS 上做时，三个测试 bot 都跑在 JP-VPS 上，一个规则模式、两个智能模式。
 1. Claude 先做：@ 规则模式的 bot 问一句，只有它回。
@@ -131,6 +131,7 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
 7. Claude 先做：在群详情页把这个群从智能切成多会话，再切回来；在用量页看判断次数。
 8. Codex 先查：在 owner 的客户端里，进一个话题，回复时勾"同时发送到群"并 @ bot，bot 只在话题里回一次（s14d）。
 9. Claude 先做：用 `claude --resume` 在终端里接着 bot 的群会话聊一轮、再 `/compact`，回群里问终端里说的事，bot 知道，主区还附了话题表；用 `codex resume` 打开一个 Codex 群的会话，不被拒（s15b）。
+10. Claude 先做：群内设置只剩一个「权限档」下拉；`vonvon settings set --group <群> permission.guestMode=qa` 被拒并说明（s15c）。
 
 ### M6 提问卡片、权限档和子 agent（s29 到 s35）
 
@@ -393,7 +394,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
   - 不收的时候：群已解绑，回"本群还没绑定为项目"并去掉按钮；项目停用、正在修改、正在恢复历史会话、会话在跑 `/goal`，或者会话被 `/compact`、`/clear`、`/resume` 占着，回一句说明，按钮留着。等失败那一轮收尾的时候变成这些情况，也一样回。
   - 点了以后，把这一轮的原输入前面加一行"上一轮因为…中断，先看看做到哪了"，当成一条回复失败卡片的新消息，走正常管线。失败那一轮还在收尾时，等它收完再开一个新的运行，不排进它的队列（停下的运行会丢掉队列）；不插话。重试失败再点重试，原输入外面仍只包一层。图片超过一小时被清掉的，就不带。
   - 顺带：👍 继续在未绑定或停用的群里不再续轮；没绑定项目时，消息管线不再起或恢复会话（没有权限档的会话在后端等于完全权限）。
-- s11 做法（领文件）：`fileClaimMode` 去掉了"只有发起人或管理员"，本群能用 bot 的人都能领；项目停用时谁也领不了。点的人用自己的权限档，和文件写出时的档取交集，所以访客领不到完全权限档写在工作区外面的文件；这时只回点的人一句，不在共享卡上标错。s15c 去掉访客档以后，点的人和发起人用同一档，交集这一步可以删。
+- s11 做法（领文件）：`fileClaimMode` 去掉了"只有发起人或管理员"，本群能用 bot 的人都能领；项目停用时谁也领不了。点的人用自己的权限档，和文件写出时的档取交集，所以访客领不到完全权限档写在工作区外面的文件；这时只回点的人一句，不在共享卡上标错。s15c 去掉访客档以后，点的人和发起人用同一档，交集这一步可以删。s15c：点的人用群现在的档；文件写出时的档那一步留着：群的档调低以后，旧卡上工作区外的文件领不到。
 - s11 留下的事：
   - 给 s30：云文档评论没有 `ActiveState`，看门狗没接 `IdlePause`，s30 接评论的卡片时要自己加。
   - 给 s60：bridge 里存着 `runIdleTimeoutSeconds: 120` 的用户，多半是点过当时的默认按钮。换算时要不要去掉这个值，由 s60 定。
@@ -590,20 +591,20 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
   - 顺带看到的：s17b 要给 `service status` 加 launchd 的 `last exit code`，和这片改的 `runServiceStatus`、`adapter.status()` 是同一段，谁后合谁 merge main；诊断页"这台电脑"一节没跟着改名（搜索索引用它做锚点），要不要在那里也显示 Claude 的沙箱，留给 UX 那一轮。
 - s20b：被拉进的已有群默认只读，在 Linux 上用 Codex 时起不来：bot 回一句说明，等主人改（product.md 第 11 节第 24 条）。开工时核对过，绑定从来不抛错（`assertBackendUsable` 只按 `supportedModes` 过滤，Codex 没声明），原来写的"绑定之前就抛错"不对：错是在回合开始时由 `sandboxParams` 抛的，群里看到的是一段提到 Windows 的"❌ 启动失败"，诊断页记成"出错了"。所以绑定照旧，改的是回合开始时的回复、设置和删 windows-job。`windows-job.ts` 被 `owned-process.ts` 和 `environment/service.ts` 引用，属于子进程的代码。
 - s20b 的 Linux 验收：Claude 在 JP-VPS 上的普通用户账号里，用这片 PR 的 head 走一遍 npm pack、装到临时前缀、`service install`、kill -9 后被拉起、`daemon stop` 后不再拉起、`service uninstall`。不重启 JP-VPS，linger 看 loginctl 的状态。结果写进本文第 10 节。
-- s20b 做法（回合开始时）：Linux 上用 Codex 的群，发消息的人对应的档（分档时按发消息的人取）是只读或读写时不起会话：不加表情、不下载图片、不织入上下文、不补拉，直接在原处回一句说明，话题里的回在话题里。说明写明是哪一档、要改「管理员权限」还是「普通成员权限」，和 `vonvon settings set --group <群 id> permission.mode=full`（普通成员是 `permission.guestMode`；这台主机有几个 bot 时带 `--bot`）。被 @ 每次都回；免@ 触发的，每个群 10 分钟最多回一次，从这个群上一次说明算起，被 @ 时回的也算，没发出去的不算。每条都记进诊断页"最近没回的消息"，原因是新加的 `tier-unavailable`。判断放在后端实例上（`AgentBackend.fullAccessOnly`，Codex 在 macOS 以外返回理由），不直接读 `process.platform`，用假后端的测试在 Linux CI 上不受影响。挡在四处：单会话群的主区和话题里（都在命令之后、`/goal` 之前），多会话群主区的 `/goal` 和开新话题。重试、继续、`/new`、`/compact` 和协作的几个动作不经过这道门，走到 `sandboxParams` 时抛 `CodexFullOnlyError`，回"❌ Linux 上的 Codex 只能用完全访问……"，诊断页同样记 `tier-unavailable`。
+- s20b 做法（回合开始时）：Linux 上用 Codex 的群，发消息的人对应的档（分档时按发消息的人取）是只读或读写时不起会话：不加表情、不下载图片、不织入上下文、不补拉，直接在原处回一句说明，话题里的回在话题里。说明写明是哪一档、要改「管理员权限」还是「普通成员权限」，和 `vonvon settings set --group <群 id> permission.mode=full`（普通成员是 `permission.guestMode`；这台主机有几个 bot 时带 `--bot`）（s15c 已改：只剩「权限档」和 `permission.mode`）。被 @ 每次都回；免@ 触发的，每个群 10 分钟最多回一次，从这个群上一次说明算起，被 @ 时回的也算，没发出去的不算。每条都记进诊断页"最近没回的消息"，原因是新加的 `tier-unavailable`。判断放在后端实例上（`AgentBackend.fullAccessOnly`，Codex 在 macOS 以外返回理由），不直接读 `process.platform`，用假后端的测试在 Linux CI 上不受影响。挡在四处：单会话群的主区和话题里（都在命令之后、`/goal` 之前），多会话群主区的 `/goal` 和开新话题。重试、继续、`/new`、`/compact` 和协作的几个动作不经过这道门，走到 `sandboxParams` 时抛 `CodexFullOnlyError`，回"❌ Linux 上的 Codex 只能用完全访问……"，诊断页同样记 `tier-unavailable`。
 - s20b 做法（设置）：网页群内设置的两个权限下拉里，只读问答、允许写入置灰，已存的只读照样显示为选中，理由写在「管理员权限」下面。daemon 保存时（网页和 `vonvon settings set` 是同一条路）只看这次改的字段：`mode` 或 `guestMode` 改成完全访问以外的就拒，理由同上；不改档、只改联网照常保存，已存的只读不动。`vonvon settings get --group <群>` 在 `[permission]` 下多打一行理由。私聊 🔐 权限卡的两个下拉只剩完全访问，写明现在的档和理由，存的不是完全访问的那个不预选、写"不选就不改"，只改联网时存的档不动；升级前发出的旧卡提交只读、读写时不保存，再发一张新的权限卡。`vonvon group bind` 的提示不变。
 - s20b 做法（windows-job）：删了 `codex-appserver/windows-job.ts` 和它的两份测试，`owned-process.ts`、`environment/service.ts` 只剩 POSIX 进程组这条路，信号、步骤顺序和超时都没变；`environment/service.ts` 里每个子进程只记一个"管道关了"的 promise。`sandboxParams` 的 win32 分支去掉，macOS 以外一律抛 `CodexFullOnlyError`。`codex-process-tree.test.ts` 里"自然退出 7、254 时 close 报错"那条原来放在 Windows 那组，测的不是 Windows 的事，挪进 POSIX 组。`provider/process/windows-*` 按第 6 节第三类留着；`import-core.json` 里的 `windows-job.ts` 是导入时的记录，不改。
 - s20b 留下的：
   - 给 s36、s49：私聊的 bot 默认档是读写（第 5 节），Linux 上用 Codex 时私聊也要同样的检查。
   - 给 s36b：被拉进群时设置卡上照旧默认只读，靠回合开始时的这道检查回说明，不自动放开。
-  - owner 2026-10-16 定了在 s15c 去掉"普通成员权限"（#344）。这片没动分档：回复里分得出 `guestMode`，网页两个下拉都置灰，诊断页的"下一步"两个字段都写（记录里没有发消息的人是什么角色）。s15c 删分档时这几处一起改。
+  - owner 2026-10-16 定了在 s15c 去掉"普通成员权限"（#344）。这片没动分档：回复里分得出 `guestMode`，网页两个下拉都置灰，诊断页的"下一步"两个字段都写（记录里没有发消息的人是什么角色）。s15c 删分档时这几处一起改（s15c 已改：只剩「权限档」和 `permission.mode`）。
 
 ### M5 智能模式
 
 | 状态 | 编号 | 切片 | 内容 | 约行数 | 依赖 | 风险 | Mac 检查 |
 |---|---|---|---|---|---|---|---|
 | [x] | s14d | "同时发送到群"只回一次 | 话题里勾"同时发送到群"或私聊话题里勾"同时发送到会话"时，飞书推的主区副本跳过，只回话题里那条；先记一次原始事件，看带不带 `sync_to_chat_info`（3.5） | 120 | — | 错误路径 | 无（M5 验收第 8 步由 Codex 在 owner 的客户端里发） |
-| [ ] | s15c | 去掉访客档 | 一个群一档、一条会话：`turnTier` 不再分档，会话键不再带访客的后缀，设置页、私聊的权限卡和命令行去掉"普通成员权限"；已存的 `guestMode` 读时取两档里更严的，下次写时去掉；领文件不再取交集（3.5、3.8） | 250 | — | 数据迁移、并发 | 无 |
+| [x] | s15c | 去掉访客档 | 一个群一档、一条会话：`turnTier` 不再分档，会话键不再带访客的后缀，设置页、私聊的权限卡和命令行去掉"普通成员权限"；已存的 `guestMode` 读时取两档里更严的，下次写时去掉；领文件按群现在的档，和文件写出时的档比的那一步留着（3.5、3.8） | 250 | — | 数据迁移、并发 | 无 |
 | [ ] | s15b | 每轮开口前看一眼会话 | 主区和话题每轮开口前看原生会话：别人写过（终端里的轮次、压缩）就重新接上，有新的压缩就附话题表；Codex 每轮结束放开线程（3.5，D4、D6） | 200 | s15c | 并发、关闭清理 | 无（M5 验收第 9 步在 JP-VPS 上用终端做；Codex 桌面端打开同一条会话放进 M5 预览版任务） |
 | [ ] | s21 | 群的会话方式和运行中来了消息 | 群加会话方式（多会话、单会话、智能，前两种即规则模式的"开话题""连续"）和"运行中来了消息"覆盖，缺省按规则读；绑定的三个入口（私聊绑定卡、网页的绑定对话框 `JoinGroupDialog`、`group bind`）改成按 3.4 的顺序和文案列，不预选（网页对话框和 `group bind` 今天默认 `threads`，要去掉），命令行必须带；话题群的问法、卡发给谁和没设置好时怎么回留给 s36b；在多会话和单会话之间切换时免 @ 不变（3.2、3.4） | 450 | — | 数据迁移 | 无 |
 | [ ] | s22 | 三条底线：点名、接着聊、bot 消息 | 入站先判断对谁说；话题里只看 @；规则模式"仅 @"下引用我的消息不算点名（3.4 第 1 条的例外）；多 bot 群主区命令要 @；从群信息读 chat_mode 认出话题群，加一个单测（3.4"三条底线"） | 550 | s21、s15、e10 | 错误路径 | 无 |
@@ -638,6 +639,16 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s25：每群每小时的上限先按 60 次做，e12 量完再调。
 - s26：单独跑一个 bot（`--bot`）时退化成单 bot；子进程退出或请求超时，退回由各 bot 自己判断。
 - s27：别的 bot 的最终回答按 s14 带 `card_msg_content_type` 拉，不然只拿到"请升级至最新版本客户端"（e10）。
+- s15c 做法（一档）：每一轮都用群的一档 `effectiveMode`，谁说话都一样；`turnTier`、`effectiveGuestMode` 删了。管理员名单和只限主人、管理员的事（`/resume`、`/new`、`/clear`、`/settings`、运行控件、私聊）不变，这些门都不读档。管理员和成员在同一条会话里，运行中来了消息按"运行中来了消息"的设置插话或排队，和两个成员之间一样。
+- s15c 做法（会话键）：会话键不再带后缀。daemon 启动、bot 起来之前，存的两档还不同的群（`guestMode` 有值、和 `mode` 不同，和原来分档的判断一样），没归档的 `<位置>#admin` 改名成 `<位置>`，顶掉那里原来的记录（分档期间没人读它，`/resume` 列的是原生会话，不受影响）；`#guest`、归档的 `#admin`、已经不分档的群里留下的 `#admin` 都不动，停着不用（`isRetiredKey`）。改名只在有记录要动时写盘，再跑一次什么也不做；失败只记日志（`run tier-merge`），bot 照常起来，要改的群记进 projects.json 顶层的 `tierMergePending`（只改这个键，各行原样），下次启动按存的两档不同的群加上它再试，中间哪次写盘去掉了 `guestMode` 也不漏；改成了就删掉这个键。登记表、引用行、话题表、撤回、私聊的项目列表和话题卡、网页和桌面端的会话列表都跳过停用的键；桌面端和会话设置（网页、`vonvon settings get/set --session`）按 id 碰停用的键，回"已停用"，什么也不改。
+- s15c 做法（已存的 `guestMode`）：读 projects.json 时，有 `guestMode` 的行取两档里更严的（只读 < 读写 < 完全访问，不认识的值算只读，`null` 算没设），内存里不再有这个字段；下一次写 projects.json，不管为什么写，每行的 `guestMode` 都去掉。改名按的是写盘之前的原样，所以要在任何写之前做：daemon 的单实例锁保证旧进程不会同时写，supervisor 和预览进程只读。
+- s15c 做法（设置）：网页只剩一个「权限档」下拉，s20b 的理由写在它下面；私聊 🔐 权限卡只剩一个下拉，提交按钮的值带版本号 `v: 2`；升级前发的旧卡没有版本号，提交时什么也不存，再发一张新卡。只看表单认不出旧卡：后端只能完全访问时，s20b 的卡不预选完全访问以外的"普通用户档"，不动它就什么也不交，只交 `mode=full`，存下来会把群从只读放宽成完全访问；`vonvon settings set --group … permission.guestMode=…` 在连 daemon 之前就拒，说明改 `permission.mode`；设置保存、IPC、RPC 带 `guestMode` 的一律拒。Linux 上 Codex 的回合开始时回的说明、诊断页的"下一步"只写「权限档」和 `permission.mode`。
+- s15c 做法（领文件、开场）：领文件按群现在的档，和文件写出时的档比的那一步留着：群的档调低以后，旧卡上工作区外的文件领不到，回点的人"这个群现在的权限档拿不到"。话题开场的主区几条对谁都留 bot 自己的回复，主区会话 id 取不带后缀的那条。
+- s15c 做法（协议）：不升 `PROTOCOL_VERSION`（同 s02c1、s12、s20a）。快照里的 `membership.permission.member`、管理状态里的 `AdminProject.guestMode`、群设置视图里的 `permission.guestMode` 留着，等于群的一档，标了 deprecated，升级前的桌面端、网页和命令行连新 daemon 照样能解析；视图里的 `guestMode` 只出不进，编辑里的 `guestMode`、`setPermission` 命令里的 `member` 去掉了，`vonvon settings get` 不打印它。升级前的客户端照样打得开群设置这一页，在那里改「普通成员权限」会被拒。
+- s15c 留下的：
+  - 给 s60：bridge 迁来的群两档不同时 `mode` 取 `stricterTier`，迁移结果里列出来（product.md 第 5 节）；这些群的 `<位置>#admin` 会话照 `adoptAdminSessions` 改名（或者迁移时原样留着 `guestMode`，让第一次启动来改，二选一），`#guest` 原样拷过来或者丢掉。
+  - 给 s15b：一个位置只有一条会话，"看一眼会话"用不带后缀的键，跳过 `isRetiredKey` 的记录。
+  - 升级后又退回 s15c 之前的版本：还存着 `guestMode` 的群会重新分档、起一条新的 `#admin` 会话，再升级时它顶掉 `<位置>`。原生会话都还能 `/resume`，不处理。
 
 ### M6 提问卡片、权限档和子 agent
 
@@ -891,7 +902,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
   - 翻验收 daemon 的日志和数据目录（没读出凭据）；
   - 说"这一项不能算验收通过"。
   只读档下 Bash 照样能联网（product.md 3.8 的已知缺口，s31 修），lark-cli 存着 owner 的用户授权。所以 s31 合入前，JP-VPS 的测试群里只放 owner，不拉同事。M3 第 7 步已拿掉（owner 2026-10-16）。以后要拉同事进测试群，在 owner Mac 上的 bot 做：用 Codex 的群，权限档设成只读、关网，Mac 上 Codex 的只读档有 Seatbelt 沙箱。判断 Claude 的回答时，靠翻日志或 lark-cli 查到的不算上下文给到了。s19 起日志不带正文，翻日志这条路已经断了。
-- Linux 上的 Codex 只能用完全访问（product.md 3.8，`D/agent/codex-appserver/backend.ts`），JP-VPS 上用 Codex 的测试群要明确改成完全访问。一个群只有一档（s15c 之前，没设访客档时访客也跟着这一档），改成完全访问的测试群里谁说话都是完全访问；这种群里不放别人。
+- Linux 上的 Codex 只能用完全访问（product.md 3.8，`D/agent/codex-appserver/backend.ts`），JP-VPS 上用 Codex 的测试群要明确改成完全访问。一个群只有一档（s15c），改成完全访问的测试群里谁说话都是完全访问；这种群里不放别人。
 
 **Mac 上怎么打包。**
 1. Claude 往 #322 贴一个预览版任务，提示词整份写在任务里，不再另开 `Mac 预览版 <里程碑名>` issue。Mac 上没有会话在处理队列时，Claude 请 owner 在 Mac mini 上新开 Codex 会话，模式选 full access（owner 2026-10-15），发一次"按 modelzen/vonvon-bot#322 正文做"。规则见 `AGENTS.md`"工具和同步"。

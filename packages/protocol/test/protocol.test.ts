@@ -1,13 +1,14 @@
 import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   agentViewSchema, bridgeProjectsStoreSchema, commandSchema, helloSchema,
   machineIdSchema, requestSchema, responseSchema, errorEnvelopeSchema,
   desktopSnapshotSchema, eventSchema, watchSnapshots,
   adminRequestSchema, adminReplySchema, adminStateSchema, directoryRequestSchema, directoryReplySchema,
   jobSchema, environmentReplySchema,
-  type DesktopSnapshot, settingsViewSchema,
+  type DesktopSnapshot, settingsViewSchema, projectViewSchema, projectEditableSchemas, settingsReplySchema,
 } from "../src/index.js";
 
 const fixture = (name: string): unknown => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
@@ -128,6 +129,31 @@ describe("pinned contract extraction", () => {
     const save = (section: string, patch: unknown) => requestSchema.safeParse({type:"request",id:"1",method:"settings",payload:{type:"save",edit:{scope,section,revision:"r1",patch}}}).success;
     expect(save("response", {noMention:true})).toBe(true);
     expect(save("compact", {autoCompact:false})).toBe(false);
+  });
+  it("has one permission tier per group (s15c): no guestMode edit, no member in setPermission", () => {
+    const scope = {kind:"project",botId:"cli_fixture",projectName:"fixture"};
+    const save = (patch: unknown) => requestSchema.safeParse({type:"request",id:"1",method:"settings",payload:{type:"save",edit:{scope,section:"permission",revision:"r1",patch}}}).success;
+    expect(save({mode:"full"})).toBe(true);
+    expect(save({guestMode:"qa"})).toBe(false);
+    expect(save({mode:"full",guestMode:"qa"})).toBe(false);
+    const membershipId = JSON.stringify(["cli_fixture","oc_fixture"]);
+    expect(commandSchema.safeParse({type:"setPermission",membershipId,administrator:"full",network:false}).success).toBe(true);
+    expect(commandSchema.safeParse({type:"setPermission",membershipId,administrator:"full",member:"qa",network:false}).success).toBe(false);
+  });
+  it("keeps guestMode in the group's view, output only, so a client from before s15c still parses it", () => {
+    const section = (value: unknown) => ({stored:value,effective:value,revision:"r1",access:{kind:"writable"},apply:[]});
+    const view = (permission: object) => ({scope:{kind:"project",botId:"cli_fixture",projectName:"fixture"},sections:{
+      permission:section(permission),response:section({noMention:false}),model:section({selection:{kind:"default"}}),
+    },identity:{chatId:"oc_fixture",backend:"codex-appserver",cwd:"/tmp",kind:"multi"},members:{openIds:[],revision:"r1"}});
+    // The permission section as clients from before s15c (4e22f1b) parse it.
+    const tier = z.enum(["qa","write","full"]);
+    const before = z.object({mode:tier,guestMode:tier,network:z.boolean()});
+    const parsed = projectViewSchema.parse(view({mode:"write",guestMode:"write",network:true}));
+    expect(before.parse(parsed.sections.permission.stored)).toEqual({mode:"write",guestMode:"write",network:true});
+    expect(before.parse(parsed.sections.permission.effective)).toEqual({mode:"write",guestMode:"write",network:true});
+    expect(projectViewSchema.safeParse(view({mode:"write",network:true})).success).toBe(false);
+    expect(settingsReplySchema.parse({kind:"view",view:view({mode:"qa",guestMode:"qa",network:false})})).toMatchObject({view:{sections:{permission:{stored:{guestMode:"qa"}}}}});
+    expect(Object.keys(projectEditableSchemas.permission.shape)).toEqual(["mode","network"]);
   });
   it("correlates method and payload in both directions", () => {
     expect(requestSchema.safeParse({type:"request",id:"1",method:"settings",payload:{type:"refresh"}}).success).toBe(false);

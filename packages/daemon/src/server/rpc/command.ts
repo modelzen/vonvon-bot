@@ -45,7 +45,7 @@ export async function commandRpc(options: { service: AdminService; jobs: Jobs; p
     case 'setPermission': case 'setResponse': {
       const member = snapshots.current().memberships.find(member => member.id === request.membershipId);
       if (!member || member.stale) throw new RpcError('invalid_membership', '群绑定不存在或状态已失效，请刷新后重试。');
-      if (request.type === 'setPermission') await service.setPermissionMode(member.agentId, member.name, { mode: request.administrator, guestMode: request.member, network: request.network });
+      if (request.type === 'setPermission') await service.setPermissionMode(member.agentId, member.name, { mode: request.administrator, network: request.network });
       else await service.setNoMention(member.agentId, member.name, request.response === 'all');
       return applied;
     }

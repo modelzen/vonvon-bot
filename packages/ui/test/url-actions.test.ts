@@ -13,7 +13,7 @@ it("accepts each old main process destination for its own action", () => {
     .toBe("https://open.larksuite.com/app/cli_1/auth?q=im%3Aresource&op_from=openapi");
   expect(allowedExternalUrl("https://github.com/modelzen/vonvon-bot/releases", "releases"))
     .toBe("https://github.com/modelzen/vonvon-bot/releases");
-  expect(groupUrl("oc_a/b", "omt_topic#admin"))
+  expect(groupUrl("oc_a/b", "omt_topic"))
     .toBe("https://applink.feishu.cn/client/thread/open?open_chat_id=oc_a%2Fb&open_thread_id=omt_topic&thread_position=0");
   expect(groupUrl("oc_a/b", "invalid"))
     .toBe("https://applink.feishu.cn/client/chat/open?openChatId=oc_a%2Fb");

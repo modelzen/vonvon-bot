@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { log } from '../core/logger';
 import { sanitizeContext } from './context-weave';
-import { listSessions, type SessionRecord } from './session-store';
+import { isRetiredKey, listSessions, type SessionRecord } from './session-store';
 
 /**
  * Topic registry (product.md 3.5 "daemon 在本机记什么"): per bot, one file per
@@ -13,8 +13,8 @@ import { listSessions, type SessionRecord } from './session-store';
  * main-area message, so a time-ordered pull of the main area cannot find it.
  *
  * Whether the bot has a session in a topic is not stored here: reads join this
- * bot's bindings from sessions.json by key (the topic id, plus `#admin` or
- * `#guest` when tiers are split), so every path that binds, rebuilds or
+ * bot's bindings from sessions.json by key (the topic id; keys left from
+ * before s15c's one tier are skipped), so every path that binds, rebuilds or
  * resumes a session shows up without writing a second file.
  *
  * Only the title (the first message's first {@link TITLE_MAX} chars) is chat
@@ -262,16 +262,15 @@ export function createTopicRegistry(opts: {
       log.warn('intake', 'topic-registry-sessions-failed', { chatId: tail(chatId), err: String(err) });
       return [] as SessionRecord[];
     });
-    return all.filter((b) => !b.detached && b.chatId === chatId);
+    return all.filter((b) => !b.detached && b.chatId === chatId && !isRetiredKey(b.threadId));
   }
 
   async function view(chatId: string, topics: TopicRecord[]): Promise<TopicView[]> {
     if (!topics.length) return [];
     const bindings = await bindingsIn(chatId);
     return topics.map((t) => {
-      const keys = new Set([t.topicId, `${t.topicId}#admin`, `${t.topicId}#guest`]);
       const sessions = bindings
-        .filter((b) => keys.has(b.threadId))
+        .filter((b) => b.threadId === t.topicId)
         .map((b) => ({ key: b.threadId, sessionId: b.sessionId, backend: b.backend }));
       return { ...t, sessions };
     });
@@ -295,7 +294,7 @@ export function createTopicRegistry(opts: {
           if (!next) return prev;
           const topics = byActivity(idx === -1 ? [...store.topics, next] : store.topics.map((t, i) => (i === idx ? next : t)));
           const bound = topics.length > MAX_TOPICS
-            ? new Set((await bindingsIn(chatId)).map((b) => b.threadId.replace(/#(admin|guest)$/, '')))
+            ? new Set((await bindingsIn(chatId)).map((b) => b.threadId))
             : new Set<string>();
           const kept = trim(topics, bound);
           await mkdir(opts.dir, { recursive: true });

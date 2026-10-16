@@ -5,7 +5,7 @@ import { isTopicReply, reachedAt, type MessageMeta } from '../src/bot/recall';
 // watermark, the topic registry's first-message time and the session's `from`.
 describe('reachedAt', () => {
   const main = (extra: object = {}) => ({ threadId: 'oc_chat', lastSeenAt: 1000, ...extra });
-  const topic = (extra: object = {}) => ({ threadId: 'omt_t#guest', lastSeenAt: 1000, from: 100, ...extra });
+  const topic = (extra: object = {}) => ({ threadId: 'omt_t', lastSeenAt: 1000, from: 100, ...extra });
   const line = (at: number, extra: Partial<MessageMeta> = {}): MessageMeta => ({ at, from: 'user', ...extra });
 
   it('takes a delivered message at its mark, even when the lookup failed', () => {

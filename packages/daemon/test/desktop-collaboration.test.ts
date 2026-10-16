@@ -152,12 +152,14 @@ it('creates under the configured root once and preserves idempotency across owne
     await expect(app.collaboration({ ...request, name: 'changed' })).rejects.toThrow('其他参数');
   } finally { await app.shutdown(); }
 });
-it('preserves role-separated guest context and refuses unsupported goal before posting to Feishu', async () => {
+it('leaves a key from before s15c unused and refuses unsupported goal before posting to Feishu', async () => {
   const be = backend(); fixture.backend = { ...be, capabilities: { goal: false, compact: true, resume: true } };
   await upsertSession({ threadId: 'oc_demo#guest', chatId: 'oc_demo', cwd: paths.appDir, sessionId: 'guest-native', backend: 'codex-appserver', summary: 'guest', createdAt: 1, updatedAt: 1 });
   const app = orchestrator();
   try {
-    await expect(app.collaboration({ action: 'compact', ...target, threadId: 'oc_demo#guest' })).rejects.toThrow('管理员会话');
+    await expect(app.collaboration({ action: 'compact', ...target, threadId: 'oc_demo#guest' })).rejects.toThrow('已停用');
+    const history = await app.collaboration({ action: 'history', ...target }) as { sessions: { threadId: string }[] };
+    expect(history.sessions.map((s) => s.threadId)).not.toContain('oc_demo#guest');
     await expect(app.collaboration({ action: 'startGoal', ...target, threadId: 'oc_demo', objective: 'do work' })).rejects.toThrow('不支持');
     expect(fixture.send).not.toHaveBeenCalled();
     expect(await getSession('oc_demo#guest')).toMatchObject({ sessionId: 'guest-native' });
