@@ -8,6 +8,17 @@ import type { CodexErrorInfo } from './codex-appserver/protocol/generated/v2/Cod
  */
 export type AgentErrorKind = 'network' | 'auth' | 'quota' | 'version';
 
+/**
+ * Why a smart-mode judgement (s23) fell back to its default decision. The judge layer (`src/judge/`)
+ * re-exports it; it lives here so `src/judge/` depends on `src/agent/` and never the other way.
+ * `aborted`: the caller gave up; `closed`: the bot is shutting down; `busy`: the queue was full;
+ * `format`: the model did not answer in the format; `prompt`: SMART.md could not be read.
+ */
+export type JudgeErrorKind =
+  | 'timeout' | 'aborted' | 'closed' | 'busy' | 'unavailable'
+  | 'auth' | 'quota' | 'version' | 'model' | 'network'
+  | 'format' | 'prompt' | 'failed';
+
 /** From the structured `codexErrorInfo` on a Codex `error` notification. */
 export function codexErrorKind(info: CodexErrorInfo | null | undefined): AgentErrorKind | undefined {
   if (!info) return undefined;

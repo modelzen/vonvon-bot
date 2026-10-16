@@ -1,4 +1,4 @@
-import type { AgentErrorKind } from './error-kind';
+import type { AgentErrorKind, JudgeErrorKind } from './error-kind';
 
 /** Request rejected locally before any transport write: safe to resubmit. */
 export class UnsentRequestError extends Error {}
@@ -305,6 +305,47 @@ export interface GenerateSessionTitleOptions {
   effort: ReasoningEffort;
 }
 
+/** One smart-mode judgement (s23): a single turn with no tools and no saved session. The judge
+ * layer (`src/judge/`) builds it; the backend only runs it. */
+export interface JudgeCall {
+  /** SMART.md text plus the format lines vonvon appends */
+  system: string;
+  /** the input block: group, bot, recent messages, the message to judge */
+  input: string;
+  model: string;
+  /** decided by the judge layer; absent = Codex sends no `effort` key, Claude turns thinking off */
+  effort?: ReasoningEffort;
+  /** JSON schema of the answer (Codex `outputSchema`, Claude `outputFormat`) */
+  schema: Record<string, unknown>;
+  /** an empty directory under the data root */
+  cwd: string;
+  /** timeout, the caller giving up or shutdown; the backend then cleans up on its own */
+  signal: AbortSignal;
+}
+
+export interface JudgeCallOutput {
+  text: string;
+  /** Claude's `structured_output` */
+  structured?: unknown;
+  usage?: { input?: number; cached?: number; output?: number };
+  /** this call started a new process (Codex) */
+  cold?: boolean;
+}
+
+/** A judgement the backend could not run. `structured`: the kind came from a structured error code
+ * (or one of the fixed Codex sentences, design 3.1), so it may start a cooldown; a kind guessed from
+ * free text by {@link errorKindFromText} never does. */
+export class JudgeCallError extends Error {
+  constructor(
+    readonly kind: JudgeErrorKind,
+    message: string,
+    readonly structured: boolean,
+  ) {
+    super(message);
+    this.name = 'JudgeCallError';
+  }
+}
+
 // ── 账号用量（归一化）──────────────────────────────────────────────────
 // /usage 卡的数据形状。目前只有 codex（ChatGPT 登录）后端有这份数据（实现在
 // codex-appserver/usage，经 src/agent/usage 出口），但类型是后端中立的归一化
@@ -482,4 +523,11 @@ export interface AgentBackend {
   generateSessionTitle?(opts: GenerateSessionTitleOptions): Promise<string | undefined>;
   startThread(opts: StartThreadOptions): Promise<AgentThread>;
   resumeThread(opts: ResumeThreadOptions): Promise<AgentThread>;
+  /** Run one judgement (s23). The promise settles only once the call has fully cleaned up after an
+   * abort (Codex: interrupt and unsubscribe sent; Claude: the CLI closed), because the judge layer
+   * gives the concurrency slot back then. Failures reject with {@link JudgeCallError}. */
+  judge?(call: JudgeCall): Promise<JudgeCallOutput>;
+  /** The model list this backend already holds, synchronously; undefined when it has none. Never
+   * fetches: the judge path must not wait for `model/list`. */
+  peekModels?(): ModelInfo[] | undefined;
 }
