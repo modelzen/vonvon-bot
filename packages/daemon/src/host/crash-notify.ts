@@ -36,8 +36,8 @@ export interface CrashNotifier {
   /** 恢复运行 or a disable: whatever of this bot is untold or waiting to be tried again is dropped. */
   botForget(appId: string): void;
   /** First thing in the supervisor's shutdown: timers stop, ordinary messages are cut; a pause message in flight or queued
-   * is waited for, at most 10 s, counted again once from when its sender is read if that ends after this. Never rejects;
-   * calls after it do nothing. */
+   * is waited for (and tried again), at most 10 s, counted again once from when its sender is read if that ends after
+   * this, never past 15 s in all. Never rejects; calls after it do nothing. */
   close(): Promise<void>;
 }
 
@@ -45,6 +45,12 @@ export const NOTICE_STABLE_MS = 30_000;
 export const NOTICE_RETRY_MS: readonly number[] = [60_000, 300_000];
 const STEP_TIMEOUT_MS = 10_000;
 const CLOSE_WAIT_MS = 10_000;
+/** launchd kills a daemon not out 20 s after its SIGTERM (no ExitTimeOut in the plist): the close's wait, in all. */
+const CLOSE_LIMIT_MS = 15_000;
+/** In the close, a pause message is tried again this soon, not 1 or 5 minutes on. */
+const CLOSE_RETRY_MS = 1_000;
+/** A sender not read for these may be read the next time (a secret provider timing out), so it is tried again. */
+const UNREAD_FOR_NOW = new Set(['config-unreadable', 'secret-unreadable']);
 /** Feishu's rate limits: the platform's code and the send-message API's own, besides HTTP 429. */
 const RATE_LIMITED = new Set([99991400, 230020]);
 const HOST = '#host';
@@ -52,7 +58,10 @@ const HOST = '#host';
 /** The name the pages show. */
 export const botLabel = (bot: Pick<BotEntry, 'name' | 'botName'>): string => bot.botName || bot.name;
 const sentence = (text: string): string => (/[。！？.!?]$/.test(text) ? text : `${text}。`);
-const because = (label: string, reason: string | undefined): string => (reason ? `${label}：${sentence(reason)}` : '');
+/** No local path (3.10): a path keeps its last part (the file); a web address and a Feishu API path stay. */
+const withoutPaths = (text: string): string => text.replace(/[\w.~@%+=:#[\]-]*\/[\w.~@%+=:#[\]/-]*/g,
+  token => (/^(?:(?!file:)[a-z][\w+.-]*:\/\/|\/open-apis\/)/i.test(token) ? token : token.replace(/^.*\/(?=.)/, '')));
+const because = (label: string, reason: string | undefined): string => (reason ? `${label}：${sentence(withoutPaths(reason))}` : '');
 
 /** One line each (3.10): no stack and no local path; the reason is a record's `crashText`, already sanitized. */
 export function noticeText(event: NoticeEvent): string {
@@ -161,7 +170,7 @@ export function createCrashNotifier(deps: {
   const finalCut = new AbortController();
   const waiting = new Map<string, BotEvent>();
   const stable = new Map<string, NodeJS.Timeout>();
-  const retries = new Map<NodeJS.Timeout, string>();
+  const retries = new Map<NodeJS.Timeout, Job>();
   const gens = new Map<string, number>();
   const gen = (scope: string): number => gens.get(scope) ?? 0;
 
@@ -184,13 +193,25 @@ export function createCrashNotifier(deps: {
   const job = (event: NoticeEvent, scope: string, exempt: boolean, candidates: readonly string[]): Job =>
     ({ event, uuid: `vc-${randomUUID().replace(/-/g, '')}`, attempt: 0, scope, gen: gen(scope), exempt, candidates });
   /** One chain: the limit check, the send and the stamp of one message never interleave with another's. */
-  const enqueue = (next: Job): void => {
-    queue = queue.then(() => run(next)).catch(error => log.fail('crash-notify', error, { phase: 'send' }));
+  const enqueue = (next: Job, pauseMs = 0): void => {
+    queue = queue.then(() => (pauseMs ? new Promise<void>(resolve => {
+      const timer = setTimeout(resolve, pauseMs);
+      finalCut.signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+    }) : undefined)).then(() => run(next)).catch(error => log.fail('crash-notify', error, { phase: 'send' }));
   };
-  const later = (next: Job, wait: number): void => {
+  /** The queue's end, with what is added to it meanwhile. */
+  const settled = async (): Promise<void> => { for (let seen = queue; ; seen = queue) { await seen; if (seen === queue) return; } };
+  /** 1 and 5 minutes on. In the close a pause message has no later (D1's next start is sticky and tells nothing), so it
+   * goes again at the queue's end in a second, as many times. False when no try is left. */
+  const again = (next: Job, detail: Record<string, unknown>): boolean => {
+    const wait = retryMs[next.attempt];
+    if (wait === undefined || (closed && !next.exempt) || gen(next.scope) !== next.gen) return false;
+    log.warn('crash-notify', 'retry', { ...detail, inMs: closed ? CLOSE_RETRY_MS : wait });
+    if (closed) { enqueue({ ...next, attempt: next.attempt + 1 }, CLOSE_RETRY_MS); return true; }
     const timer = setTimeout(() => { retries.delete(timer); enqueue({ ...next, attempt: next.attempt + 1 }); }, wait);
     timer.unref();
-    retries.set(timer, next.scope);
+    retries.set(timer, next);
+    return true;
   };
   const arm = (scope: string, fire: () => void): void => {
     clearTimeout(stable.get(scope));
@@ -203,45 +224,53 @@ export function createCrashNotifier(deps: {
     waiting.delete(scope);
     clearTimeout(stable.get(scope));
     stable.delete(scope);
-    for (const [timer, owner] of retries) if (owner === scope) { clearTimeout(timer); retries.delete(timer); }
+    for (const [timer, next] of retries) if (next.scope === scope) { clearTimeout(timer); retries.delete(timer); }
   };
 
   async function run(next: Job): Promise<void> {
-    const current = (): boolean => !finalCut.signal.aborted && (!closed || next.exempt) && gen(next.scope) === next.gen;
-    if (!current()) return;
     const fields = { kind: next.event.kind, attempt: next.attempt + 1 };
-    let sender: Sender | undefined;
+    const gone = (): boolean => {
+      if (!finalCut.signal.aborted && (!closed || next.exempt) && gen(next.scope) === next.gen) return false;
+      if (next.exempt && finalCut.signal.aborted) log.warn('crash-notify', 'cut', fields); // the close's wait ended first
+      return true;
+    };
+    if (gone()) return;
+    if (!next.candidates.length) log.warn('crash-notify', 'skipped', { ...fields, why: 'no-bot' });
+    let unread: string | undefined;
     for (const appId of next.candidates) {
       const loaded = await Promise.resolve().then(() => loadSender(appId)).catch(() => 'config-unreadable');
-      if (typeof loaded !== 'string') { sender = loaded; break; }
+      if (gone()) return;
       // The host's message goes to the next bot that joined; a bot's own is not sent by another (P4).
-      log.warn('crash-notify', 'skipped', { ...fields, bot: appId, why: loaded });
+      if (typeof loaded === 'string') {
+        log.warn('crash-notify', 'skipped', { ...fields, bot: appId, why: loaded });
+        if (UNREAD_FOR_NOW.has(loaded)) unread = loaded;
+      } else if (await send(next, loaded, fields)) return;
     }
-    if (!next.candidates.length) log.warn('crash-notify', 'skipped', { ...fields, why: 'no-bot' });
-    if (!sender || !current()) return;
+    if (unread) again(next, { ...fields, why: unread });
+  }
+
+  /** False when Feishu refused it for good: the host's message then goes to the next bot (a retryable failure stays,
+   * as the message may have got through). */
+  async function send(next: Job, sender: Sender, fields: { kind: string; attempt: number }): Promise<boolean> {
     if (closed && next.exempt) waitAgain?.();
-    if (!next.exempt && limited(sender.appId)) { log.info('crash-notify', 'limited', { ...fields, bot: sender.appId }); return; }
+    if (!next.exempt && limited(sender.appId)) { log.info('crash-notify', 'limited', { ...fields, bot: sender.appId }); return true; }
     const signal = next.exempt ? finalCut.signal : AbortSignal.any([closeCut.signal, finalCut.signal]);
     const result = await sendOwnerText(sender, noticeText(next.event), next.uuid, signal, fetchImpl);
     if (result.ok) {
       stampSent(sender.appId);
       log.info('crash-notify', 'sent', { ...fields, bot: sender.appId, owner: sender.openId });
-      return;
+      return true;
     }
     const detail = { ...fields, bot: sender.appId, ...(result.status !== undefined ? { status: result.status } : {}), ...(result.code !== undefined ? { code: result.code } : {}), ...(result.msg ? { msg: result.msg } : {}) };
     // Cut by the shutdown, not refused by Feishu: an ordinary one is no failure; a pause message lost is worth a warning.
     if (result.retry && signal.aborted) {
       if (next.exempt) log.warn('crash-notify', 'cut', detail);
       else log.info('crash-notify', 'cut', detail);
-      return;
+      return true;
     }
-    const wait = retryMs[next.attempt];
-    if (result.retry && wait !== undefined && !closed && gen(next.scope) === next.gen) {
-      log.warn('crash-notify', 'retry', { ...detail, inMs: wait });
-      later(next, wait);
-      return;
-    }
+    if (result.retry && again(next, detail)) return true;
     log.warn('crash-notify', 'failed', detail);
+    return result.retry;
   }
 
   return {
@@ -295,17 +324,21 @@ export function createCrashNotifier(deps: {
     close() {
       if (closing) return closing;
       closed = true;
-      for (const timer of [...stable.values(), ...retries.keys()]) clearTimeout(timer);
+      for (const timer of stable.values()) clearTimeout(timer);
+      // A pause message waiting for its minute goes now, within the wait below.
+      for (const [timer, next] of retries) { clearTimeout(timer); if (next.exempt) enqueue({ ...next, attempt: next.attempt + 1 }); }
       stable.clear();
       retries.clear();
       waiting.clear();
       closeCut.abort();
       closing = new Promise<void>(resolve => {
         const wait = deps.closeWaitMs ?? CLOSE_WAIT_MS;
-        const end = (): void => { waitAgain = undefined; finalCut.abort(); resolve(); };
+        const done = (): void => { waitAgain = undefined; clearTimeout(cut); clearTimeout(limit); resolve(); };
+        const end = (): void => { done(); finalCut.abort(); };
         let cut = setTimeout(end, wait);
+        const limit = setTimeout(end, CLOSE_LIMIT_MS);
         waitAgain = () => { waitAgain = undefined; clearTimeout(cut); cut = setTimeout(end, wait); };
-        void queue.then(() => { waitAgain = undefined; clearTimeout(cut); resolve(); });
+        void settled().then(done);
       });
       return closing;
     },

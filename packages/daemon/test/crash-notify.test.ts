@@ -173,6 +173,22 @@ describe('the host\'s messages', () => {
     expect(logs.warn).toHaveBeenCalledWith('crash-notify', 'skipped', expect.objectContaining({ bot: EARLY, why: 'no-owner' }));
     await n.close();
   });
+
+  it.each([
+    ['its token is refused', (call: Call): Reply => (call.body.app_id === EARLY ? { status: 200, body: { code: 10014 } } : ok(call)), ALONE],
+    ['its message is refused', (call: Call): Reply => (call.body.receive_id === `ou_owner_of_${EARLY}` ? { status: 400, body: { code: 230013 } } : ok(call)), ALONE],
+    ['a network error (it may have got through), so not', (call: Call): Reply => (call.body.receive_id === `ou_owner_of_${EARLY}` ? 'throw' : ok(call)), EARLY],
+  ] as const)('⑤ goes to the next bot that joined when Feishu refuses the earliest: %s', async (_label, answer, to) => {
+    reply = answer;
+    const n = make();
+    n.hostStarted(hostNotice({ crashes: 3, pauseEntered: true }), ctx(true));
+    await flush();
+    expect(messages().map(call => call.body.receive_id).at(-1)).toBe(`ou_owner_of_${to}`);
+    expect(messages().map(call => call.body.receive_id)).not.toContain(`ou_owner_of_${LATE}`);
+    const closing = n.close();
+    await tick(15_000);
+    await closing;
+  });
 });
 
 describe('a bot\'s messages', () => {
@@ -222,6 +238,22 @@ describe('a bot\'s messages', () => {
     await tick(60_000);
     expect(calls).toEqual([]);
     expect(logs.warn).toHaveBeenCalledWith('crash-notify', 'skipped', expect.objectContaining({ kind: 'bot-paused', bot: LATE, why: 'secret-unreadable' }));
+    await n.close();
+  });
+
+  it('a secret or config not read this time is tried again 1 and 5 minutes on; no owner is not', async () => {
+    const loads: string[] = [];
+    const n = make({ loadSender: async appId => { loads.push(appId); return loadSender(appId); } });
+    senders[LATE] = 'secret-unreadable';
+    senders[EARLY] = 'no-owner';
+    n.botPaused(LATE, '晚到', 3, 'z');
+    n.botPaused(EARLY, '早到', 3, 'z');
+    await tick(60_000);
+    expect(loads).toEqual([LATE, EARLY, LATE]);
+    senders[LATE] = sender(LATE);
+    await tick(600_000);
+    expect(messages()).toMatchObject([{ body: { receive_id: `ou_owner_of_${LATE}` } }]);
+    expect(loads).toEqual([LATE, EARLY, LATE, LATE]);
     await n.close();
   });
 
@@ -403,6 +435,7 @@ describe('sending', () => {
 
     const paused = make();
     paused.hostStarted(hostNotice({ crashes: 3, pauseEntered: true }), ctx(true));
+    paused.botPaused(LATE, '晚到', 3, 'z'); // queued behind it: never begun, so told as cut too
     await flush();
     const inFlight = messages()[1];
     let done = false;
@@ -414,6 +447,7 @@ describe('sending', () => {
     await closing;
     expect(inFlight?.signal?.aborted).toBe(true);
     expect(logs.warn).toHaveBeenCalledWith('crash-notify', 'cut', expect.objectContaining({ kind: 'host-paused' }));
+    expect(logs.warn).toHaveBeenCalledWith('crash-notify', 'cut', { kind: 'bot-paused', attempt: 1 });
   });
 
   it('⑫ a pause message whose sender is read after close gets the whole wait for its requests, once', async () => {
@@ -428,15 +462,17 @@ describe('sending', () => {
     expect(done).toBe(true);
     expect(logs.info).toHaveBeenCalledWith('crash-notify', 'sent', expect.objectContaining({ kind: 'host-paused' }));
 
-    // Counted again once only: a sender read at 9 s and Feishu hanging end the wait at 19 s.
+    // Counted again once only, and never past 15 s in all (launchd kills at 20 s): a sender read at 9 s and Feishu
+    // hanging end the wait at 15 s.
     reply = () => 'hang';
     const slow = make({ loadSender: slowSender(9_000) });
     slow.hostStarted(hostNotice({ crashes: 3, pauseEntered: true }), ctx(true));
     let ended = false;
     const ending = slow.close().then(() => { ended = true; });
-    await tick(18_999);
+    await tick(14_999);
     expect(ended).toBe(false);
     await tick(1);
+    expect(ended).toBe(true);
     await ending;
     expect(calls.at(-1)?.signal?.aborted).toBe(true);
   });
@@ -452,6 +488,32 @@ describe('sending', () => {
     n.hostStarted(hostNotice({ crashes: 3, pauseEntered: true }), ctx(true));
     await tick(60_000);
     expect(messages()).toHaveLength(1);
+  });
+
+  it('⑫ in the shutdown a pause message is tried again at once, one waiting for its minute too (D1\'s next start tells nothing)', async () => {
+    let fails = 1;
+    reply = call => (call.url.includes('/im/v1/messages') && fails-- > 0 ? 'throw' : ok(call));
+    const n = make();
+    n.hostStarted(hostNotice({ crashes: 3, pauseEntered: true }), ctx(true));
+    const closing = n.close();
+    await tick(1_000);
+    await closing;
+    expect(messages()).toHaveLength(2);
+    expect(logs.info).toHaveBeenCalledWith('crash-notify', 'sent', expect.objectContaining({ kind: 'host-paused', attempt: 2 }));
+    fails = 1;
+    const m = make();
+    m.botPaused(LATE, '晚到', 3, 'z');
+    await flush();
+    await m.close();
+    expect(messages()).toHaveLength(4);
+    // One that fails each time is given up after its three tries, as outside the shutdown.
+    reply = () => 'throw';
+    const o = make();
+    o.botPaused(ALONE, 'alone', 3, 'z');
+    const ending = o.close();
+    await tick(10_000);
+    await ending;
+    expect(logs.warn).toHaveBeenLastCalledWith('crash-notify', 'failed', expect.objectContaining({ bot: ALONE, attempt: 3 }));
   });
 
   it('sendOwnerText goes to the Lark host for a Lark bot', async () => {
@@ -480,6 +542,12 @@ describe('texts and senders', () => {
       '「晚到」10 分钟内崩溃了 3 次，已停止自动重启，别的 bot 照常。最近一次的原因：程序出错：TypeError: x，运行了 3 分 12 秒。查完原因后在状态与诊断页点「恢复运行」。',
     ]);
     for (const text of texts) expect(text).not.toMatch(/\n|\/home\/|\/Users\/|at .*\(/);
+  });
+
+  it('⑬ a reason keeps no local path, only its last part; a web address and a Feishu API path stay', () => {
+    const reason = "出错退出：Error: Cannot find module '/tmp/tmp.x/app/missing-chunk.js'，读 ~/.vonvon-bot/bots/cli_a/config.json 时（file:///opt/x/y.js:1:2）https://open.feishu.cn/open-apis/x via /open-apis/bot/v3/info";
+    expect(noticeText({ kind: 'bot-recovered', appId: LATE, name: '晚到', crashes: 1, reason }))
+      .toBe("「晚到」刚才崩溃过一次，已自动恢复。原因：出错退出：Error: Cannot find module 'missing-chunk.js'，读 config.json 时（y.js:1:2）https://open.feishu.cn/open-apis/x via /open-apis/bot/v3/info。");
   });
 
   it('reads the owner, the tenant and the secret from the bot\'s config, and says why it cannot', async () => {
