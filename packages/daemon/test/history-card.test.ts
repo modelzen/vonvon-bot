@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildHistoryCard } from '../src/card/history-card';
 import type { ThreadHistory, HistoryTurn } from '../src/agent/types';
+import { weaveQuote, weaveRecordBlock, weaveSender } from '../src/bot/context-weave';
 
 function turn(p: Partial<HistoryTurn>): HistoryTurn {
   return { userText: '', assistantText: '', reasoning: '', tools: [], ...p };
@@ -24,7 +25,7 @@ describe('buildHistoryCard', () => {
       turn({ userText: '部署到 staging '.repeat(10), assistantText: 'X'.repeat(5000), reasoning: 'Y'.repeat(5000) }),
     ];
     const history: ThreadHistory = { turns, totalTurns: 12, name: 'login feature', preview: '帮我加登录接口', updatedAt: Math.floor(Date.now() / 1000) - 7200 };
-    const card = buildHistoryCard({ cwd: '/home/user/projects/larkme', projectName: 'larkme', history });
+    const card = buildHistoryCard({ cwd: '/home/user/projects/larkme', projectName: 'larkme', backendName: 'Codex', history });
 
     const json = JSON.stringify(card);
     // valid schema 2.0 shell
@@ -67,7 +68,7 @@ describe('buildHistoryCard', () => {
     const turns: HistoryTurn[] = Array.from({ length: 10 }, (_, i) =>
       turn({ userText: `第${i}个问题 `.repeat(40), assistantText: 'A'.repeat(2000), reasoning: 'R'.repeat(2000) }),
     );
-    const card = buildHistoryCard({ cwd: '/x', history: { turns, totalTurns: 10 } });
+    const card = buildHistoryCard({ cwd: '/x', backendName: 'Codex', history: { turns, totalTurns: 10 } });
     const json = JSON.stringify(card);
     expect(json.length).toBeLessThan(30_000); // hard Feishu limit
     expect(json).toContain('内容已省略'); // oldest turns degraded to title-only
@@ -78,9 +79,86 @@ describe('buildHistoryCard', () => {
   });
 
   it('handles empty history', () => {
-    const card = buildHistoryCard({ cwd: '/x', history: { turns: [], totalTurns: 0 } });
+    const card = buildHistoryCard({ cwd: '/x', backendName: 'Codex', history: { turns: [], totalTurns: 0 } });
     const json = JSON.stringify(card);
     expect(json).toContain('会话已恢复');
     expect(json).toContain('还没有可显示的历史');
+  });
+
+  it("names the group's own backend: a Claude group never reads Codex", () => {
+    const turns = [turn({ userText: '记住暗号', assistantText: '记住了。' })];
+    const card = buildHistoryCard({ cwd: '/x', backendName: 'Claude', history: { turns, totalTurns: 4 } });
+    const json = JSON.stringify(card);
+    expect(json).toContain('**🤖 Claude**');
+    expect(json).toContain('更早的 3 轮 Claude 仍保留在上下文中');
+    expect(json).not.toContain('Codex');
+  });
+
+  // M3 第 4 步：用户那一行露出了 weaveSender 的发信人标注，还多了一行只有标注的 👤。
+  describe('the woven prompt shows only what the person typed', () => {
+    const sender = { senderId: 'ou_secret_id', senderName: '张三' };
+    const record = (text: string): string =>
+      weaveRecordBlock(text, {
+        place: { group: '验收群', me: 'Vonvon Bot 6' },
+        entries: [{ messageId: 'om_old', senderName: '李四', text: '昨天的上文', createTime: 1, from: 'user' }],
+        now: 2,
+      });
+    const quoted = { messageId: 'om_q', senderName: '王五', text: '被引用的话', createTime: 1, from: 'user' as const };
+    const woven = record(weaveSender(weaveQuote('暗号是多少', quoted), sender, 5 * 60_000));
+    const onlyEnvelope = record(weaveSender('', sender));
+    const leaks = /open_id|ou_secret_id|本条消息的发信人|\[飞书 ·|\[\/飞书\]|昨天的上文|用户引用了|被引用的话|bot 断线重连/;
+
+    function panels(history: ThreadHistory): any[] {
+      const card = buildHistoryCard({ cwd: '/x', backendName: 'Claude', history });
+      return ((card as any).body.elements as any[]).filter((e) => e.tag === 'collapsible_panel');
+    }
+
+    it('strips the record block, sender, late note and quote from the row and the title', () => {
+      expect(woven).toMatch(leaks); // the fixture really carries every envelope
+      const [panel] = panels({ turns: [turn({ userText: woven, assistantText: '是 42。' })], totalTurns: 1 });
+      expect(panel.header.title.content).toBe('👤 暗号是多少');
+      const json = JSON.stringify(panel);
+      expect(json).toContain('**👤 你**\\n暗号是多少');
+      expect(json).not.toMatch(leaks);
+    });
+
+    it('drops a row that was only the envelope, and its title is never a bare 👤', () => {
+      const ps = panels({
+        turns: [
+          turn({ userText: onlyEnvelope, assistantText: '收到，看了上文。' }),
+          turn({ userText: weaveSender('', sender) }),
+        ],
+        totalTurns: 2,
+      });
+      for (const p of ps) {
+        const title = p.header.title.content as string;
+        expect(title.replace(/👤/g, '').trim()).not.toBe('');
+        expect(title).not.toMatch(leaks);
+        expect(JSON.stringify(p)).not.toContain('👤 你');
+        expect(p.elements.length).toBeGreaterThan(0); // no empty panel either
+      }
+      expect(ps[0].header.title.content).toBe('👤 （没有文字）');
+      expect(JSON.stringify(ps[0])).toContain('收到，看了上文。');
+    });
+
+    it('上次停在 never falls back to the envelope', () => {
+      const card = buildHistoryCard({
+        cwd: '/x',
+        backendName: 'Claude',
+        history: { turns: [turn({ userText: onlyEnvelope })], totalTurns: 1 },
+      });
+      const json = JSON.stringify(card);
+      expect(json).not.toMatch(leaks);
+      expect(json).not.toContain('上次停在');
+
+      const asked = buildHistoryCard({
+        cwd: '/x',
+        backendName: 'Claude',
+        history: { turns: [turn({ userText: woven })], totalTurns: 1 },
+      });
+      const leftOff = ((asked as any).body.elements as any[]).find((e) => String(e.content ?? '').includes('上次停在'));
+      expect(leftOff.content).toContain('暗号是多少');
+      expect(JSON.stringify(asked)).not.toMatch(leaks);
+    });
   });
 });
