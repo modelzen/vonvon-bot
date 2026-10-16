@@ -6,10 +6,12 @@ export const SESSION_TITLE_SOURCE_MAX_CHARS = 2_000;
 /**
  * Exact one-line block produced by context-weave.weaveSender(). It is removed
  * ONLY when it is the leading block; a look-alike later in the user's message
- * is ordinary content and must survive.
+ * is ordinary content and must survive. The open_id part is lazy: it ends at
+ * the first "）]", the block's own end (after the late note when there is one),
+ * so a preview flattened to one line keeps a "）]" further on in the body.
  */
 const BRIDGE_SENDER_PREFIX =
-  /^\[\u672c\u6761\u6d88\u606f\u7684\u53d1\u4fe1\u4eba\uff1a[^\r\n]*\uff08open_id\uff1a[^\r\n]*\uff09\][ \t]*(?:\r?\n[ \t]*){0,2}/u;
+  /^\[\u672c\u6761\u6d88\u606f\u7684\u53d1\u4fe1\u4eba\uff1a[^\r\n]*\uff08open_id\uff1a[^\r\n]*?\uff09\][ \t]*(?:\r?\n[ \t]*){0,2}/u;
 
 /** Other prompt-only blocks produced by context-weave/media. Their payload is
  * context for the Agent, not the current user's title source. The expressions
@@ -22,6 +24,10 @@ const BRIDGE_QUOTE_PREFIX =
  * the first bare `[/飞书]` line is the block's own. */
 const BRIDGE_RECORD_BLOCK_PREFIX =
   /^\[飞书 · [^\r\n]*\]\r?\n(?:(?!\[\/飞书\][ \t]*(?:\r?\n|$))[^\r\n]*\r?\n)*\[\/飞书\][ \t]*(?:\r?\n[ \t]*){0,2}/u;
+/** The preface handle-message.retryPrompt puts before a replayed turn's input
+ * when [重试] is tapped; the reason is the only part that varies. */
+const BRIDGE_RETRY_PREFIX =
+  /^（重试）上一轮因为[^\r\n。]+。下面是上一轮收到的消息，请重新处理。上一轮可能已经做了一部分，先看看做到哪了再继续，别重复做。[ \t]*(?:\r?\n[ \t]*){0,2}/u;
 const BRIDGE_FILE_MANIFEST_SUFFIX =
   /(?:^|(?:\r?\n){2})\[用户上传了 \d+ 个附件，已保存到本地，可用 shell \/ 读取工具按下面的绝对路径直接打开：\r?\n(?:- [^\r\n]+ → [^\r\n]+\r?\n)+\][ \t]*$/u;
 
@@ -33,7 +39,7 @@ export function stripBridgeSenderPrefix(text: string): string {
 /**
  * Remove every envelope the Bridge may weave around an Agent prompt:
  *
- *   record block -> sender -> quote -> user body -> local file manifest
+ *   retry preface -> record block -> sender -> quote -> user body -> local file manifest
  *
  * Title sources normally travel separately from that woven prompt. This is a
  * strict recovery boundary for a queued/restarted job, so an internal open_id,
@@ -46,6 +52,7 @@ export function stripBridgeMessageEnvelope(text: string): string {
   do {
     previous = out;
     out = out
+      .replace(BRIDGE_RETRY_PREFIX, '')
       .replace(BRIDGE_RECORD_BLOCK_PREFIX, '')
       .replace(BRIDGE_SENDER_PREFIX, '')
       .replace(BRIDGE_QUOTE_PREFIX, '');

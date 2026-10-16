@@ -9,6 +9,8 @@ import { addProject, getProjectByName, removeProject, updateProject } from '../s
 import { getSession, listSessions, upsertSession } from '../src/bot/session-store';
 import { createOrchestrator } from '../src/bot/handle-message';
 import { parseCollaborationRequest, projectRevision } from '../src/admin/collaboration';
+import { weaveSender } from '../src/bot/context-weave';
+import { updateManagedCard } from '../src/card/managed';
 
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
@@ -32,7 +34,7 @@ const target = { projectName: 'demo', chatId: 'oc_demo' };
 const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' } } };
 function backend() {
   const thread = { sessionId: 'fresh', isAlive: () => true, close: vi.fn(async () => {}), compact: vi.fn(async () => ({ usage: { usedTokens: 20, contextWindow: 100 } })) };
-  const backend = { id: 'codex-appserver', displayName: 'Codex', listModels: async () => [], startThread: vi.fn(async () => thread), resumeThread: vi.fn(async () => thread), listThreads: vi.fn(async () => [{ sessionId: 'past', preview: 'historic', createdAt: 1, updatedAt: 2 }]), readHistory: vi.fn(async () => ({ name: 'historic', preview: '', turns: [], totalTurns: 0 })) };
+  const backend = { id: 'codex-appserver', displayName: 'Codex (app-server)', listModels: async () => [], startThread: vi.fn(async () => thread), resumeThread: vi.fn(async () => thread), listThreads: vi.fn(async () => [{ sessionId: 'past', preview: 'historic', createdAt: 1, updatedAt: 2 }]), readHistory: vi.fn(async () => ({ name: 'historic', preview: '', turns: [], totalTurns: 0 })) };
   fixture.backend = backend;
   return { ...backend, thread };
 }
@@ -88,6 +90,58 @@ it('clears a flat binding with its model settings and keeps old backend history 
     await app.collaboration({ action: 'resume', ...target, sessionId: 'past', backend: 'codex-appserver' });
     expect(await getSession('oc_demo')).toMatchObject({ sessionId: 'past' });
     await expect(app.collaboration({ action: 'resume', ...target, sessionId: 'foreign', backend: 'codex-appserver' })).rejects.toThrow('不属于');
+  } finally { await app.shutdown(); }
+});
+it('lists resumable sessions by the person\'s words, not the woven sender line', async () => {
+  backend();
+  const woven = weaveSender('修一下登录', { senderId: 'ou_secret_id', senderName: '张三' });
+  Object.assign(fixture.backend as object, {
+    listThreads: vi.fn(async () => [
+      { sessionId: 'past', preview: woven, createdAt: 1, updatedAt: 2 },
+      { sessionId: 'named', preview: woven, name: '登录修复', createdAt: 1, updatedAt: 2 },
+      { sessionId: 'odd', preview: '', name: woven, createdAt: 1, updatedAt: 2 },
+    ]),
+  });
+  const app = orchestrator();
+  try {
+    const history = await app.collaboration({ action: 'history', ...target }) as { threads: { preview: string; name?: string }[] };
+    expect(history.threads).toEqual([
+      { sessionId: 'past', preview: '修一下登录', createdAt: 1, updatedAt: 2 },
+      { sessionId: 'named', preview: '修一下登录', name: '登录修复', createdAt: 1, updatedAt: 2 },
+      { sessionId: 'odd', preview: '', name: '修一下登录', createdAt: 1, updatedAt: 2 },
+    ]);
+  } finally { await app.shutdown(); }
+});
+it('the DM project settings card names the backend as users know it', async () => {
+  backend(); // the real Codex backend calls itself "Codex (app-server)"
+  vi.mocked(updateManagedCard).mockClear();
+  const app = orchestrator();
+  const settingsCard = () => vi.mocked(updateManagedCard).mock.calls.map(call => JSON.stringify(call)).find(json => json.includes('项目设置'));
+  try {
+    await app.dispatcher.handle({ messageId: 'om_settings', chatId: 'oc_dm', operator: { openId: 'ou_owner' }, action: { tag: 'button', value: { a: 'dm.projectSettings', n: 'demo' } } } as never);
+    await vi.waitFor(() => expect(settingsCard()).toBeDefined(), { timeout: 3000 });
+    expect(settingsCard()).toContain('当前 Codex 🔒');
+    expect(settingsCard()).not.toContain('app-server');
+  } finally { await app.shutdown(); }
+});
+const wovenBy = (text: string) => weaveSender(text, { senderId: 'ou_secret_id', senderName: '张三' });
+it.each([
+  { what: 'an unnamed session', name: undefined, summary: '修一下登录' },
+  { what: 'a session whose name is woven too', name: wovenBy('登录修复'), summary: '登录修复' },
+])("resume names the backend as users know it and keeps the woven sender line out of card and record: $what", async ({ name, summary }) => {
+  backend(); // the real Codex backend calls itself "Codex (app-server)"
+  const woven = wovenBy('修一下登录');
+  Object.assign(fixture.backend as object, {
+    readHistory: vi.fn(async () => ({ ...(name ? { name } : {}), preview: woven, turns: [{ userText: woven, assistantText: '好的', reasoning: '', tools: [] }], totalTurns: 3 })),
+  });
+  const app = orchestrator();
+  try {
+    await app.collaboration({ action: 'resume', ...target, sessionId: 'past', backend: 'codex-appserver' });
+    const card = JSON.stringify(fixture.send.mock.calls.find(call => JSON.stringify(call).includes('已恢复历史会话')));
+    expect(card).toContain('**🤖 Codex**');
+    expect(card).toContain('更早的 2 轮 Codex 仍保留');
+    expect(card).not.toMatch(/app-server|open_id|ou_secret_id|发信人/);
+    expect(await getSession('oc_demo')).toMatchObject({ sessionId: 'past', summary });
   } finally { await app.shutdown(); }
 });
 it('reserves a compacting session against clear and rejects stale run controls', async () => {

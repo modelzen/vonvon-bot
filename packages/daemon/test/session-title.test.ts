@@ -63,6 +63,26 @@ describe('session title pure pipeline', () => {
     expect(prompt).toContain('请修复支付回调超时');
   });
 
+  it('ends the sender block at its own "）]", even when the body on the same line has one', () => {
+    // Claude's firstPrompt arrives flattened to one line.
+    expect(stripBridgeMessageEnvelope('[本条消息的发信人：张三（open_id：ou_x）] 把 a[（1）] 改成 a[2]')).toBe('把 a[（1）] 改成 a[2]');
+    expect(stripBridgeSenderPrefix('[本条消息的发信人：张三（open_id：ou_x）] 备注（草稿）]')).toBe('备注（草稿）]');
+    const late = weaveSender('确认（上线）]', { senderId: 'ou_x', senderName: '张三' }, 5 * 60_000);
+    expect(late).toContain('（这条消息 5 分钟前发出，bot 断线重连后才收到）]');
+    expect(stripBridgeMessageEnvelope(late)).toBe('确认（上线）]');
+    expect(stripBridgeMessageEnvelope(late.replace(/\n+/g, ' '))).toBe('确认（上线）]');
+  });
+
+  it('removes the [重试] preface only when it leads the woven prompt', () => {
+    const preface = '（重试）上一轮因为5 分钟没有输出，被自动停止了。下面是上一轮收到的消息，请重新处理。上一轮可能已经做了一部分，先看看做到哪了再继续，别重复做。';
+    const woven = `${preface}\n\n[本条消息的发信人：张三（open_id：ou_x）]\n\n整理一下文档`;
+    expect(stripBridgeMessageEnvelope(woven)).toBe('整理一下文档');
+    // a retry of a retried turn
+    expect(stripBridgeMessageEnvelope(`${preface}\n\n${woven}`)).toBe('整理一下文档');
+    const quotedInBody = `请解释这句：\n${preface}`;
+    expect(stripBridgeMessageEnvelope(quotedInBody)).toBe(quotedInBody);
+  });
+
   it('keeps Bridge-looking text when it is ordinary body content rather than an edge envelope', () => {
     const body = [
       '请解释下面的日志格式',
