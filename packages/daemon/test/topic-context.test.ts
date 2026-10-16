@@ -80,7 +80,10 @@ describe('createTopicContext', () => {
     expect(events).toEqual([{ kind: 'scopeDenied', denial: { scope: 'im:chat:readonly', where: 'chat-info', at: expect.any(Number) } }]);
     expect(get).toHaveBeenCalledTimes(1);
     expect(info).toHaveBeenCalledWith('intake', 'chat-mode-unknown', { chatId: '456789', reason: 'missing-scope', scope: 'im:chat:readonly' });
-    vi.advanceTimersByTime(10 * 60_000 + 1);
+    vi.advanceTimersByTime(60_000 + 1); // a refused scope stays refused: not the one-minute retry
+    await ctx.noMainArea('oc_123456789');
+    expect(get).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(9 * 60_000);
     await ctx.noMainArea('oc_123456789');
     expect(get).toHaveBeenCalledTimes(2);
   });
