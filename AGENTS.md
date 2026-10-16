@@ -10,7 +10,7 @@
   - Claude 发起的 Mac 检查里发现问题，Codex 直接修，在临时 worktree 里 commit，用 `git push origin HEAD:<分支>` 推到被检查的 `claude/*` 分支，不 force-push，不 rebase。结果评论里写清改了什么、为什么改和提交号。贴出这个任务的结果、或者看到它被取消之后，Codex 不再 push 这个分支。
   - owner 在 Mac 上验收已合入的预览版时发现问题，Codex 从 `main` 开 `codex/fix-<问题>` 分支和自己的 PR，不 push 到任何 `claude/*` 分支。`codex/fix-*` 分支只有 Codex push。Claude 审查发现问题时，把发现写进 PR 评论，在这个 PR 里贴一份修复提示词，再按"工具和同步"开一个修复任务。2026-10-14 之前开的 `codex/*` PR 是旧桌面版的参考栈，不是修复 PR。
 - Codex 的改动和 Claude 的一样过合入门槛：另一个模型的独立审查、CI 在准确 head 上通过、由 Claude 合入。改动让行为和 `docs/product.md` 不一致时，Codex 在 PR 里写明，Claude 在同一个 PR 里改 `docs/product.md`。
-- Codex 不能直接通知 owner。卡住时，Codex 在结果评论第二行写"卡住了："加原因；Claude 看到后原样转告 owner。
+- Codex 不能直接通知 owner。卡住时，Codex 在结果评论第二行写"卡住了："加原因；Claude 看到后原样转告 owner。Claude 自己停下的 Paseo 会话，通知里写明是 Claude 停的、为什么。
 - 每个产品 PR 的描述写清这几项：用户能看到的变化、试用步骤、Claude 跑过的命令和结果、独立审查结论，以及还没在真实 Mac 上验过的项。没有用户可见变化的 PR，要说明为什么现在必须做。
 
 ## 范围和资料
@@ -35,12 +35,12 @@
 ## 硬限制
 
 - `claude/*` 分支平时只有 Claude push。Claude 为某个分支开了检查任务后，就不 push 这个分支，直到这个任务完了。之后 Claude 先 pull 再改。任何人都不 force-push，不 rebase 已 push 的分支。
-  - 经 Paseo 的任务：会话贴出了结果；或者 Claude 用 `paseo stop` 停下会话，`paseo inspect` 确认它已经不在运行。停下的会话可能已经推过，Claude 先 pull，看清多了哪些提交，按"一个 PR 的流程"第 2 步审查。还要做这次检查，开一个新任务。
+  - 经 Paseo 的任务：会话贴出了结果；或者 Claude 用 `paseo stop` 停下会话，`paseo inspect` 确认它已经不在运行。停下的会话可能已经推过：Claude 先 pull，多出来的提交按"一个 PR 的流程"第 2 步审查，这次检查的结论作废，还要查就开一个新任务。连不上 Mac 的 daemon、确认不了会话停没停时（比如 Mac 睡着了），Claude 在提示词所在的地方贴一条第一行是 `<!-- claude-mac-cancel:<任务号> -->` 的取消，通知 owner；等 daemon 连上后 `paseo stop` 加 `paseo inspect` 确认，或者 owner 确认 Mac 上没有这个会话在跑，才 push。Codex 开始任务前和每次 push 前都看一次有没有这条取消，有就停下，贴结果写明停在哪一步。
   - 经 #322 的任务：下面三件事有一件发生：这个任务的结果贴出了；Claude 在它开始之前取消了它，也就是取消贴出后再看一次，#322 里没有比这条取消更早贴的这个任务的开始评论；Claude 按"工具和同步"通知 owner 后，owner 确认 Mac 上没有会话在处理 #322；这时这个任务还没取消的，Claude 先贴取消再 push，免得睡着的 Mac 醒来后旧会话接着推。开始以后才取消的，仍要等结果或 owner 确认。什么时候通知 owner，见"工具和同步"里"转发一次，做完一批"的第 4 条。还要做这次检查，Claude 先取消旧任务，再贴一份新的提示词和一个新任务，按"工具和同步"请 owner 转发。
 - 除了 `frozen`，不给 PR 加别的标签。每次加标签都会按 PR 当时的标签重跑 CI，PR 已带 `frozen` 时会再跑一遍完整平台链。
 - 产品 PR 同时在飞最多两个，第三个要等一个合入。计数方法：开放、非 draft、head 分支以 `claude/` 开头、改动里有 `.github/`、`scripts/`、`AGENTS.md`、`docs/` 和其他 Markdown 以外文件的 PR，再去掉暂停的 #281 和 #285。所以纯文档 PR 和只改 CI、脚本、规则的流程 PR 不计；dependabot PR 和 Codex 的 `codex/fix-*` 修复 PR 不在 `claude/` 分支上，也不计。修复 PR 由 Claude 优先审查和合入。本规则生效前开的 PR 全部暂停：#281（V6b 的 Codex 子进程迁移）、#285（V5 的启动路由），以及 `codex/` 分支上的 #110（V5 的桌面外壳）等。它们的去留在 `docs/product.md` 定稿时由 owner 决定。
 - 一个 PR 对应一个切片，大小以一个审查子代理能读完整个 diff 为准。不含 lockfile 和生成文件时，以 1500 行改动为上限，超过就先拆。
-- 每个功能分支在每台机器上只有一棵 worktree，合入即删。GitHub 在合入时自动删除远端分支。Mac 上的 Codex 每做一个任务，自己建一棵 detach 的临时 worktree：经 Paseo 的，任务做完就删，提示词写明同一个会话还要接着查的除外；经 #322 的，留到整个队列结束时再删。开 `codex/fix-*` PR 的 Codex 会话，push 完、PR 开好就删掉它的 Mac worktree，之后的修改走修复任务。
+- 每个功能分支在每台机器上只有一棵 worktree，合入即删。GitHub 在合入时自动删除远端分支。Mac 上的 Codex 每做一个任务，自己建一棵 detach 的临时 worktree：经 Paseo 的，留到 Claude 归档会话前让它删；经 #322 的，留到整个队列结束时再删。开 `codex/fix-*` PR 的 Codex 会话，push 完、PR 开好就删掉它的 Mac worktree，之后的修改走修复任务。
 - 进度看 `docs/v1-plan.md` 里的清单、PR 状态，以及 Claude 会话里的里程碑消息。issue #122 看板和 `docs/program-graph.json` 停止更新。不做本地进度页、会话映射文件或定时刷新。
 - Claude 每个在飞 PR 一个会话，标题为 `PR #<号>`。并行放在会话内部，不开根会话加多个工作会话。
 - 完整 CI 是 Linux 和 macOS 两个平台，只在 `frozen` head 上跑。macOS 任务跑在 Mac mini 的自托管 runner 上。`linux` 任务不加任务级的 `if:`：名称固定的任务被跳过时算作通过，未冻结的 PR 就能绕过必需检查。真实飞书和真实 Codex 的验收按里程碑做，不是每个 PR 都做。
@@ -51,15 +51,19 @@
 - 两台机器的 Paseo daemon 通过 Tailscale 互通。JP-VPS 为 `100.121.117.46:6767`，provider `claude`，项目 `/home/ops/vonvon/vonvon-bot`。Mac 为 `100.127.134.58:6767`，provider `codex`。owner 自己的会话照旧经它们跑。不通过 SSH 执行 `claude -p`。
 - 2026-10-16 起，Mac 上的事由 Claude 经 Paseo 在 Mac mini 上直接开 Codex 会话，不再请 owner 转发（owner 2026-10-16 让 Claude 定）。issue #322 的队列留作备用：Paseo 连不上时（Mac 睡着、Tailscale 断了、daemon 没开），或者 `paseo run` 失败时才用，规则见下面"经 #322"的几条。Claude 和 Codex 之间不交接 PR。
 - 经 Paseo 开会话：
-  1. Claude 先把提示词贴进 PR（预览版任务没有 PR，贴在 #322），格式见下面三种任务，再开会话：`paseo --host 100.127.134.58:6767 run -d --provider codex/gpt-6.1-sol --thinking medium --mode full-access --cwd <Mac 上的仓库> --title "<任务种类> PR #<号> 任务 <号>" "<一句话>"`。一句话只写"按 <提示词评论的链接> 做，任务号 <号>"。cwd 用 Mac 上仓库的 checkout，不用临时 worktree：会话删掉自己的 cwd 以后就起不了子进程。
-  2. 一个任务一个会话。同一时间 Mac 上只跑一个 Claude 开的任务会话，免得两个任务同时构建、装 app 或用 Computer Use。
-  3. Claude 在后台用 `paseo wait` 等会话空闲，再读 GitHub 上的结果评论；没有结果评论时看 `paseo logs`。超过一小时还在跑，看 `paseo logs` 有没有进展。卡在"model at capacity"、Computer Use 失败或没有进展时，Claude 用 `paseo stop` 停下它，按 `vonvon-collaboration.md` 的格式通知 owner，不反复重开。
-  4. 追问：会话空闲时，Claude 可以用 `paseo send` 在同一个会话里接着问。追问算一个新任务号，提示词同样先贴进 PR。会话在跑时不 send，因为它会打断当前的回合。
-  5. 看完结果、不再追问，Claude 用 `paseo archive` 归档会话。
+  1. 这一节的 `paseo` 命令都由 Claude 在 JP-VPS 上执行，Codex 不用管。
+  2. 取号：任务号由 Claude 在 JP-VPS 上用 `flock /tmp/vonvon-mac-task.lock` 包住，从本机的计数文件取下一个，两个 Claude 会话不会取到同一个号。
+  3. 开之前查：`paseo ls` 里 Mac 上有 Claude 开的、没归档的任务会话还在跑，就等它做完；#322 有活着的队列会话（见下面"经 #322 时"第 2 条），就只往 #322 贴任务，不开 Paseo 会话。同一时间 Mac 上只有一个任务会话，免得两个任务同时构建、装 app 或用 Computer Use。
+  4. Claude 先把提示词贴进 PR（预览版任务没有 PR，贴在 #322），格式见下面三种任务，再开会话：`paseo --host 100.127.134.58:6767 run -d --provider codex/gpt-6.1-sol --thinking medium --mode full-access --cwd <Mac 上的仓库> --title "<任务种类> PR #<号> 任务 <号>" "<一句话>"`。一句话只写"按 <提示词评论的链接> 做，任务号 <号>"。提示词的第 0 步查开始和结果标记，有就不重做，两条路都一样。
+  5. cwd 用 Mac 上仓库的 checkout，不用临时 worktree：会话删掉自己的 cwd 以后就起不了子进程。Codex 不在这个 checkout 里切分支、改文件或删东西。
+  6. `paseo run` 报错或超时：先 `paseo ls` 看会话是不是其实已经建好了，建好了就照常等；确实没有，才改走 #322。
+  7. Claude 在后台用 `paseo wait` 等会话空闲，再读 GitHub 上的结果评论；没有结果评论时看 `paseo logs`。超过一小时还在跑，看 `paseo logs` 有没有进展。卡在"model at capacity"、Computer Use 失败或没有进展时，Claude 用 `paseo stop` 停下它，通知 owner 时写明是 Claude 停的、为什么，不反复重开。
+  8. 追问：会话空闲时，Claude 可以用 `paseo send` 在同一个会话里接着问。追问算一个新任务号，提示词同样先贴进 PR。会话在跑时不 send，因为它会打断当前的回合。
+  9. 不再追问时，Claude 先 `paseo send` 一句"删掉这个会话建的临时 worktree"，等它空闲后用 `paseo archive` 归档。
 - 经 #322：#322 的正文是给 Codex 的完整说明：怎么认作者、心跳和开始评论、任务和结果的格式、取消、轮询和结束、每个任务都要守的规矩，包括临时 worktree、push 的写法和预览版任务能碰什么。改队列的规矩时，正文和本文一起改。
-- Mac 上的事分三种任务。任务号只有一套，经 Paseo 和经 #322 的一起往上数（#322 用到了 13）。经 #322 时，任务贴成 #322 的评论：第一行是 `<!-- claude-mac-task:<任务号> -->`，第二行是标题，下面是内容。长的提示词贴在相关的 PR 里，任务（经 Paseo 时是给会话的那一句话）里给出那条评论的链接（带评论 id），写明哪一步不做、结果贴到哪里。Codex 只照链接指的那一条做；任务只给了标记、找到不止一条时，不猜，结果写"卡住了：提示词有几份"。旧记录里说的检查会话、预览版会话和修复会话，指 Codex 在队列里做的这三种任务：
+- Mac 上的事分三种任务。任务号只有一套，经 Paseo 和经 #322 的一起往上数，从 14 开始（#322 用到了 13）。经 #322 时，任务贴成 #322 的评论：第一行是 `<!-- claude-mac-task:<任务号> -->`，第二行是标题，下面是内容。长的提示词贴在相关的 PR 里，任务（经 Paseo 时是给会话的那一句话）里给出那条评论的链接（带评论 id），写明哪一步不做、结果贴到哪里。Codex 只照链接指的那一条做；任务只给了标记、找到不止一条时，不猜，结果写"卡住了：提示词有几份"。旧记录里说的检查会话、预览版会话和修复会话，指 Codex 在队列里做的这三种任务：
   - 检查任务：提示词贴在 PR 里，第一行是 `<!-- claude-mac-check-prompt-<PR号>-<任务号> -->`；提示词里防重复的开始和结果标记也带任务号，例如 `<!-- codex-mac-check-<PR号>-<任务号>-start -->` 和 `<!-- codex-mac-check-<PR号>-<任务号> -->`。同一个 PR 再查一轮，比如 Codex 改了代码之后，就是新任务号的新提示词，标记不和旧的重名。#320 的第一份（任务 1）是这条规矩之前贴的，没带任务号。Codex 在临时 worktree 里取这个分支，在本机构建和检查。只接短检查：一个任务大约 30 分钟以内，结果能用文字说清对错。
-  - 预览版任务：没有 PR，提示词和结果都贴在 #322（经 Paseo 时也是），不再另开 `Mac 预览版 <里程碑名>` issue。Codex 在临时 worktree 里取 Claude 给的 `main` sha，在 Mac 本机构建；先用隔离的数据目录查 Mac 上的网页端连 Mac 上的 daemon，有问题就停下贴结果，不打包，不 push；过了再用真实 `HOME` 下的钥匙串签名，装到本机给 owner 验收。owner 做完一步、要 Codex 接着查时，Claude 贴一个新任务，按步骤号只列这几步，用已经装好的 app，不重新构建、打包和安装，除非任务写明。
+  - 预览版任务：没有 PR，提示词和结果都贴在 #322。经 Paseo 时，提示词评论的第一行是 `<!-- claude-mac-preview-prompt-<任务号> -->`，不带 `claude-mac-task`，队列会话不会去领；不再另开 `Mac 预览版 <里程碑名>` issue。Codex 在临时 worktree 里取 Claude 给的 `main` sha，在 Mac 本机构建；先用隔离的数据目录查 Mac 上的网页端连 Mac 上的 daemon，有问题就停下贴结果，不打包，不 push；过了再用真实 `HOME` 下的钥匙串签名，装到本机给 owner 验收。owner 做完一步、要 Codex 接着查时，Claude 贴一个新任务，按步骤号只列这几步，用已经装好的 app，不重新构建、打包和安装，除非任务写明。
   - 修复任务：提示词贴在 `codex/fix-*` PR 里，第一行是 `<!-- claude-mac-fix-prompt-<PR号>-<任务号> -->`。Claude 审查这个 PR 发现问题时贴。Codex 在临时 worktree 里取这个分支，按 PR 评论修，push。
 - 两边都只认和本机 `gh api user` 同一个账号贴的标记评论：两台机器的 gh 登的都是 owner 的账号。别的账号和 bot 贴的，不管是任务、取消、结束、提示词还是结果，一律不理。任务指向的提示词评论，作者不是这个账号的，Codex 不做，在结果里写明。
 - 经 #322 时，转发一次，做完一批：
