@@ -8,6 +8,7 @@ import {
   type ResumeCardState,
 } from '../src/card/command-cards';
 import type { ThreadSummary } from '../src/agent/types';
+import { weaveRecordBlock, weaveSender } from '../src/bot/context-weave';
 
 function buttons(node: unknown, acc: any[] = []): any[] {
   if (Array.isArray(node)) node.forEach((n) => buttons(n, acc));
@@ -50,6 +51,23 @@ describe('buildResumeCard', () => {
     expect(longLabel).not.toContain('\n');
     // same-title sessions are disambiguated by the timestamp
     expect(btns[2].text.content).not.toBe(btns[3].text.content);
+  });
+
+  // An unnamed session's preview is its first prompt as the bot wove it.
+  it("titles an unnamed session by the person's words, never the sender line or record block", () => {
+    const woven = weaveRecordBlock(weaveSender('修一下登录', { senderId: 'ou_secret_id', senderName: '张三' }), {
+      place: { group: '验收群', me: 'Vonvon Bot 6' },
+      entries: [{ messageId: 'om_old', senderName: '李四', text: '上文', createTime: 1, from: 'user' }],
+      now: 2,
+    });
+    const threads: ThreadSummary[] = [
+      { sessionId: 'w1', preview: woven, createdAt: NOW - 60, updatedAt: NOW - 60 },
+      { sessionId: 'w2', preview: weaveSender('', { senderId: 'ou_secret_id', senderName: '张三' }), createdAt: NOW - 60, updatedAt: NOW - 60 },
+    ];
+    const labels = buttons(buildResumeCard(state(threads))).map((b) => b.text.content as string);
+    expect(labels[0]).toMatch(/ · 修一下登录$/);
+    expect(labels[1]).toMatch(/ · \(无摘要\)$/);
+    for (const label of labels) expect(label).not.toMatch(/open_id|ou_secret_id|发信人|飞书|上文/);
   });
 
   it('shows an empty-state hint and no buttons when there is no history', () => {

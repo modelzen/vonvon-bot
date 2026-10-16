@@ -39,6 +39,7 @@ import {
   type ModelInfo,
   type PermissionMode,
   type ReasoningEffort,
+  type ThreadHistory,
 } from '../agent/types';
 import type { SelectOption } from '../card/cards';
 import {
@@ -232,6 +233,7 @@ import { topicTitle, type TopicPerson, type TopicRegistry, type TopicSighting, t
 import { createTopicContext, localBots, personOf, topicQuotes, topicRows } from './topic-context';
 import {
   sessionTitleSourceFromMessage,
+  stripBridgeMessageEnvelope,
   type SessionTitleSource,
 } from './session-title';
 import { handleDmConsole } from './dm-console';
@@ -436,6 +438,13 @@ export interface QueuedTurn {
   recallsShown?: string[];
   /** An opening turn's oldest line, written as SessionRecord.from once it starts (s15). */
   from?: number;
+}
+
+/** A resumed session's title for its record and topic. Without a native name
+ * the backend's preview is the first prompt as the bot wove it, record block
+ * and the sender's open_id included, so only the person's words are kept. */
+function resumedTitle(history: ThreadHistory): string | undefined {
+  return history.name || stripBridgeMessageEnvelope(history.preview ?? '').trim() || undefined;
 }
 
 /** How long ago the message was sent (0 when its createTime is unknown). */
@@ -4718,7 +4727,7 @@ export function createOrchestrator(
           const history = await be.readHistory(state.cwd, sessionId);
           resumePending.delete(evt.messageId);
           await withTrace({ chatId: state.chatId, msgId: state.originalMsgId }, async () => {
-            const cardState: HistoryCardState = { cwd: state.cwd, projectName: state.projectName, history };
+            const cardState: HistoryCardState = { cwd: state.cwd, projectName: state.projectName, backendName: be.displayName, history };
             await sendManagedCard(channel, state.chatId, buildHistoryCard(cardState), state.originalMsgId, false).catch((err) =>
               log.fail('card', err, { phase: 'resume-history-single' }),
             );
@@ -4738,7 +4747,7 @@ export function createOrchestrator(
               cwd: state.cwd,
               sessionId,
               backend: be.id,
-              summary: history.name || history.preview || '(恢复会话)',
+              summary: resumedTitle(history) || '(恢复会话)',
               createdAt: now,
               updatedAt: now,
             });
@@ -4768,7 +4777,7 @@ export function createOrchestrator(
 
       let bound = false;
       await withTrace({ chatId: state.chatId, msgId: state.originalMsgId }, async () => {
-        const cardState: HistoryCardState = { cwd: state.cwd, projectName: state.projectName, history };
+        const cardState: HistoryCardState = { cwd: state.cwd, projectName: state.projectName, backendName: be.displayName, history };
         // reply_in_thread on the /resume message turns it into the topic; the
         // history card is that topic's first message.
         const sent = await sendManagedCard(channel, state.chatId, buildHistoryCard(cardState), state.originalMsgId, true);
@@ -4781,14 +4790,14 @@ export function createOrchestrator(
         if (tid) {
           const now = Date.now();
           // Titled by the resumed session's name: the first message is the `/resume` itself.
-          noteOpenedTopic(state.chatId, tid, { id: state.originalMsgId, text: history.name || history.preview });
+          noteOpenedTopic(state.chatId, tid, { id: state.originalMsgId, text: resumedTitle(history) });
           await upsertSession({
             threadId: tid,
             chatId: state.chatId,
             cwd: state.cwd,
             sessionId,
             backend: be.id,
-            summary: history.name || history.preview || '(恢复会话)',
+            summary: resumedTitle(history) || '(恢复会话)',
             createdAt: now,
             updatedAt: now,
           });
@@ -4933,13 +4942,13 @@ export function createOrchestrator(
         const history = await be.readHistory(project.cwd, request.sessionId);
         let threadId = key;
         if (project.kind === 'single') {
-          await sendManagedCard(channel, project.chatId, buildHistoryCard({ cwd: project.cwd, projectName: project.name, history }));
+          await sendManagedCard(channel, project.chatId, buildHistoryCard({ cwd: project.cwd, projectName: project.name, backendName: be.displayName, history }));
         } else {
           const root = await channel.send(project.chatId, { markdown: '从桌面端恢复历史会话' });
-          const sent = await sendManagedCard(channel, project.chatId, buildHistoryCard({ cwd: project.cwd, projectName: project.name, history }), root.messageId, true);
+          const sent = await sendManagedCard(channel, project.chatId, buildHistoryCard({ cwd: project.cwd, projectName: project.name, backendName: be.displayName, history }), root.messageId, true);
           const tid = await getThreadId(channel, sent.messageId, 4);
           if (!tid) throw new AdminWriteError('已创建话题，但飞书尚未返回话题标识；会话未绑定');
-          noteOpenedTopic(project.chatId, tid, { id: root.messageId, from: { kind: 'self' }, at: Date.now(), text: history.name || history.preview });
+          noteOpenedTopic(project.chatId, tid, { id: root.messageId, from: { kind: 'self' }, at: Date.now(), text: resumedTitle(history) });
           threadId = turnSession(tid, project).sessionKey;
           if (active.has(threadId)) throw new AdminWriteError('新话题已有任务，会话未切换');
           active.set(threadId, reserved);
@@ -4948,7 +4957,7 @@ export function createOrchestrator(
         const old = sessions.get(threadId); sessions.delete(threadId); if (old) await old.close();
         lastUsage.delete(threadId);
         const now = Date.now();
-        await upsertSession({ threadId, chatId: project.chatId, cwd: project.cwd, sessionId: request.sessionId, backend: be.id, summary: history.name || history.preview || '(恢复会话)', createdAt: now, updatedAt: now });
+        await upsertSession({ threadId, chatId: project.chatId, cwd: project.cwd, sessionId: request.sessionId, backend: be.id, summary: resumedTitle(history) || '(恢复会话)', createdAt: now, updatedAt: now });
         dropRetries(threadId);
         return { ok: true, threadId };
       } finally {

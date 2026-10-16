@@ -9,6 +9,7 @@ import { addProject, getProjectByName, removeProject, updateProject } from '../s
 import { getSession, listSessions, upsertSession } from '../src/bot/session-store';
 import { createOrchestrator } from '../src/bot/handle-message';
 import { parseCollaborationRequest, projectRevision } from '../src/admin/collaboration';
+import { weaveSender } from '../src/bot/context-weave';
 
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
@@ -88,6 +89,22 @@ it('clears a flat binding with its model settings and keeps old backend history 
     await app.collaboration({ action: 'resume', ...target, sessionId: 'past', backend: 'codex-appserver' });
     expect(await getSession('oc_demo')).toMatchObject({ sessionId: 'past' });
     await expect(app.collaboration({ action: 'resume', ...target, sessionId: 'foreign', backend: 'codex-appserver' })).rejects.toThrow('不属于');
+  } finally { await app.shutdown(); }
+});
+it("resume names the group's backend on the history card and keeps the woven sender line out of card and record", async () => {
+  backend();
+  const woven = weaveSender('修一下登录', { senderId: 'ou_secret_id', senderName: '张三' });
+  Object.assign(fixture.backend as object, {
+    displayName: 'Claude',
+    readHistory: vi.fn(async () => ({ preview: woven, turns: [{ userText: woven, assistantText: '好的', reasoning: '', tools: [] }], totalTurns: 1 })),
+  });
+  const app = orchestrator();
+  try {
+    await app.collaboration({ action: 'resume', ...target, sessionId: 'past', backend: 'codex-appserver' });
+    const card = JSON.stringify(fixture.send.mock.calls.find(call => JSON.stringify(call).includes('已恢复历史会话')));
+    expect(card).toContain('🤖 Claude');
+    expect(card).not.toMatch(/Codex|open_id|ou_secret_id|发信人/);
+    expect(await getSession('oc_demo')).toMatchObject({ sessionId: 'past', summary: '修一下登录' });
   } finally { await app.shutdown(); }
 });
 it('reserves a compacting session against clear and rejects stale run controls', async () => {

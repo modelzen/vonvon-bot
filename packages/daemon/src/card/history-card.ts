@@ -1,4 +1,5 @@
 import type { HistoryTool, HistoryTurn, ThreadHistory } from '../agent/types';
+import { stripBridgeMessageEnvelope } from '../bot/session-title';
 import {
   card,
   collapsiblePanel,
@@ -17,13 +18,15 @@ import { relativeTime } from './command-cards';
  * (reply_in_thread on the /resume message creates the topic). It is a pure,
  * non-streaming digest: every turn is a collapsed {@link collapsiblePanel}
  * (collapse/expand is client-side, no callback), and reasoning + tool detail
- * fold one level deeper ("一层层下钻"). The codex session itself is already
+ * fold one level deeper ("一层层下钻"). The agent session itself is already
  * bound to this topic and resumes on the next message — this card is just the
  * "where we left off" you see before continuing.
  */
 export interface HistoryCardState {
   cwd: string;
   projectName?: string;
+  /** The group's backend as users know it (`AgentBackend.displayName`: Codex, Claude). */
+  backendName: string;
   history: ThreadHistory;
 }
 
@@ -62,7 +65,7 @@ export function buildHistoryCard(state: HistoryCardState): CardObject {
 
   const dropped = history.totalTurns - history.turns.length;
   if (dropped > 0) {
-    elements.push(note(`仅显示最近 ${history.turns.length} 轮，更早的 ${dropped} 轮 Codex 仍保留在上下文中。`));
+    elements.push(note(`仅显示最近 ${history.turns.length} 轮，更早的 ${dropped} 轮 ${state.backendName} 仍保留在上下文中。`));
   }
   elements.push(hr());
 
@@ -74,7 +77,7 @@ export function buildHistoryCard(state: HistoryCardState): CardObject {
     const turn = history.turns[i];
     if (!turn) continue;
     const title = turnTitle(turn);
-    const body = turnBody(turn);
+    const body = turnBody(turn, state.backendName);
     const size = estimateSize(body) + PANEL_SHELL;
     if (used + size > BODY_BUDGET && panels.length > 0) {
       const stub = '_（内容已省略，历史较长）_';
@@ -89,7 +92,7 @@ export function buildHistoryCard(state: HistoryCardState): CardObject {
   elements.push(...panels);
 
   const last = history.turns[history.turns.length - 1];
-  const leftOff = last ? last.assistantText || last.userText || (last.tools.at(-1)?.title ?? '') : '';
+  const leftOff = last ? last.assistantText || userWords(last) || (last.tools.at(-1)?.title ?? '') : '';
   if (leftOff.trim()) {
     elements.push(hr(), noteMd(`📍 **上次停在**：${truncateTail(leftOff, PREVIEW_MAX)}`));
   } else {
@@ -121,23 +124,39 @@ function resumedFooter(): CardElement {
 }
 
 /**
+ * What the person actually typed in a turn. The stored prompt is the woven one
+ * the bot sent the agent: a record block, the sender line with the open_id, a
+ * quote and an attachment list wrapped around the words (context-weave). Those
+ * are context for the agent, not something to show back on the card.
+ */
+function userWords(turn: HistoryTurn): string {
+  return stripBridgeMessageEnvelope(turn.userText).trim();
+}
+
+/**
  * Collapsed-state title of a turn: the user's question on one line, with a
  * trailing '…' when there's more. Tapping expands to the full Q&A + the
  * 思考/工具 detail fold (see {@link turnBody}) — the answer lives there, not in
- * the title, so the collapsed list stays a clean scan of the questions.
+ * the title, so the collapsed list stays a clean scan of the questions. A
+ * message with no words of its own (only an @, a quote or a file) still gets a
+ * title, never a bare 👤.
  */
 function turnTitle(turn: HistoryTurn): string {
-  if (turn.userText.trim()) return `👤 ${escapeInline(truncate(oneLine(turn.userText), TITLE_Q_MAX))}`;
+  const words = userWords(turn);
+  if (words) return `👤 ${escapeInline(truncate(oneLine(words), TITLE_Q_MAX))}`;
+  if (turn.userText.trim()) return '👤 （没有文字）';
   return '⚙️ 系统 / 工具调用';
 }
 
 /** The expandable body of one turn: full Q&A + a deeper fold for 思考/工具. */
-function turnBody(turn: HistoryTurn): CardElement[] {
+function turnBody(turn: HistoryTurn, backendName: string): CardElement[] {
   const out: CardElement[] = [];
-  if (turn.userText.trim()) out.push(md(`**👤 你**\n${truncate(turn.userText, USER_MAX)}`));
-  if (turn.assistantText.trim()) out.push(md(`**🤖 Codex**\n${truncate(turn.assistantText, ASSIST_MAX)}`));
-  if (!turn.assistantText.trim() && !turn.userText.trim() && turn.tools.length) {
-    out.push(noteMd('_（仅工具调用，无文本回复）_'));
+  const words = userWords(turn);
+  if (words) out.push(md(`**👤 你**\n${truncate(words, USER_MAX)}`));
+  if (turn.assistantText.trim()) out.push(md(`**🤖 ${backendName}**\n${truncate(turn.assistantText, ASSIST_MAX)}`));
+  if (!turn.assistantText.trim() && !words) {
+    // Never an empty panel: a wordless message the agent never answered still says so.
+    out.push(noteMd(turn.tools.length ? '_（仅工具调用，无文本回复）_' : '_（没有文字，也没有回复）_'));
   }
 
   const detail: CardElement[] = [];
