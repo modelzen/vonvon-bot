@@ -961,7 +961,7 @@ export function createOrchestrator(
   /** 后端 id → 展示名（项目设置卡）。手编 projects.json 写了未知 id 时原样显示。 */
   const backendDisplayName = (id?: string): string => {
     try {
-      return backendFor(id).displayName;
+      return backendLabel(backendFor(id));
     } catch {
       return id ?? DEFAULT_BACKEND_ID;
     }
