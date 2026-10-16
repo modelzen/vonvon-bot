@@ -137,7 +137,7 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
 
 **给 owner 什么：**
 - 提问卡片（3.8）：agent 向人提问或请人确认方案时，群里单独发一张写清后果的卡片，@ 能回答的人，只有发起人或管理员能点。等回答期间，这一轮不会被超时杀掉；15 分钟没人答，卡片收成一行结果。直接打字回复也算回答。重启后点旧卡，卡片会说明已失效。
-- Claude 的权限档（3.8）：只读、读写档下不再写到工作区以外，关网时连不上网，开网时能用 WebFetch。
+- Claude 的权限档（3.8）：只读、读写档下不再写到工作区以外（M7 起记忆目录除外），关网时连不上网，开网时能用 WebFetch。
 - 子 agent（3.9）：Codex 和 Claude 的子 agent 显示在运行卡的子 agent 区，每个能单独停；子 agent 都结束，这张卡才收尾。
 
 **怎么验收：** owner 要做的：第 1 步里在选项卡上选一项，第 4 步（请同事点卡），第 6 步里在飞书客户端看子 agent 区、单独停掉一个。其余步骤 Claude 和 Codex 先做完，结果写在通知里。JP-VPS 上 Claude 的沙箱 2026-10-15 能用了（本文第 7 节），第 1 到 3 步和第 5 步也在 JP-VPS 上做，不再退回 owner；还没用真 bot 的回合从头到尾验过。第 6 步不靠沙箱，可以用一个改成完全访问的 Claude 测试群做，e01 就是在 JP-VPS 上用完全访问档跑通两个并行子 agent 的。
@@ -155,21 +155,22 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
 - 群详情页：能给每个群补充或替换个性、换工作区、加仓库，查看和修改本群记忆。
 - 把 bot 拉进已有的群，私聊收到设置卡：选会话方式，工作区默认自动建，默认只读、关网（3.4、3.8）；设置好之前群里 @ 它只回一句"还没设置好"。
 - 新群不用再选文件夹，自动建在 `~/.vonvon-bot/projects/<bot 名>/groups/<群名>/`。群没设工作区时只用自己的目录，bot 的代码仓库照常带上。
-- 说"记住……"以后，卡片上显示"已记到本群记忆"，可以撤销；别的群看不到。
-- bot 能同时在多个工作区和代码仓库里干活。
+- 说"记住……"以后，卡片上显示"已记到本群记忆"，可以撤销；别的群看不到，同群的主区和别的话题下一轮就知道。
+- 改了个性、规矩、智能提示词或记忆，已经在聊的群和私聊下一轮就用上，不用 `/new`（3.6）。
+- bot 能同时在多个工作区和代码仓库里干活，用某个仓库前先读它的 AGENTS.md 或 CLAUDE.md。
 - bot 的会话不再读写你自己 Claude 和 Codex 的自动记忆。
 
 **怎么验收：** owner 要做的：第 5 步里在卡片上点撤销。其余步骤 Claude 和 Codex 先做完，结果写在通知里。第 3 步要读写档：Linux 上的 Codex 只能用完全访问，所以用 Claude 做，Claude 的读写档要沙箱。JP-VPS 上的沙箱 2026-10-15 能用了（本文第 7 节），这一步也在 JP-VPS 上做，不再退回 owner；还没用真 bot 的回合从头到尾验过。
-1. Claude 先做：在 Bot 页给一个 bot 写几句个性，比如"说话简短，不客套"；在群里 @ 它，语气变了。
-2. Claude 先做：在某个群的详情页给这个群补一句个性，只在这个群生效。
+1. Claude 先做：找一个已经聊过几轮的群，在 Bot 页给 bot 写几句个性，比如"说话简短，不客套"；不 `/new`，接着在这个群的主区和一个已有的话题里各 @ 它一次，语气都变了。
+2. Claude 先做：在某个群的详情页给这个群补一句个性，不 `/new`，下一轮就生效，只在这个群生效。
 3. Claude 先做：把 bot 拉进一个新建的群：主人私聊收到设置卡，会话方式按 3.4 的顺序列三项、不预选；设置前在群里 @ 它只回一句"还没设置好"；选了多会话、工作区留空，绑定后 @ 它能回。在群详情页把权限档改成读写，让它写一个文件；到 `~/.vonvon-bot/projects/<bot 名>/groups/<群名>/` 下能找到（JP-VPS 上换成它自己的 `VONVON_HOME`）。
 4. Claude 先做：给 bot 加一个本机代码仓库，让它在仓库里改一处，再在工作区里写一个文件。Codex 先查：在 Mac 上加仓库时，目录选择器能选到本机的文件夹。
-5. Claude 先做：在一个群里说"记住：发版在周四"，卡片上出现"已记到本群记忆"；去另一个群问什么时候发版，它不知道。owner：自己说一次，点卡片上的撤销，再说一次。
+5. Claude 先做：在一个群的话题里说"记住：发版在周四"，卡片上出现"已记到本群记忆"；在同一个群的主区问什么时候发版，它知道；去另一个群问，它不知道。owner：自己说一次，点卡片上的撤销，再说一次。
 6. Claude 先做：在 Bot 页查看并修改公共记忆，两个群都能用上。
 
 ### M8 skill、MCP 和查飞书上下文（s43 到 s48）
 
-**给 owner 什么：** 桌面端有本机 skill 库和 MCP 库（3.6）。skill 可以从 `~/.claude/skills`、`~/.codex/skills`、`~/.agents/skills` 或任意文件夹导入；MCP 可以从 Codex、Claude 的配置导入，也可以手填命令或网址。导入后给 bot 启用，在某个群里另外增减。新建的 bot 不再带你的 Claude 个人指令和两家的个人 skill，导入的 bot 不变。Codex 的 `~/.codex/AGENTS.md` 关不掉，新建的 bot 也带着，bot 的指令里写明 bot 自己的规矩优先。bot 能用 vonvon 飞书 skill 查本群的话题和另一条会话（3.5）：在主区问"两个话题的结论"，它去读了再答，卡片上写读了哪些。
+**给 owner 什么：** 桌面端有本机 skill 库和 MCP 库（3.6）。skill 可以从 `~/.claude/skills`、`~/.codex/skills`、`~/.agents/skills` 或任意文件夹导入；MCP 可以从 Codex、Claude 的配置导入，也可以手填命令或网址。导入后给 bot 启用，在某个群里另外增减；名单改了，等下一条会话或 bot 的后台进程重开后生效。新建的 bot 不再带你的 Claude 个人指令和两家的个人 skill，导入的 bot 不变。Codex 的 `~/.codex/AGENTS.md` 关不掉，新建的 bot 也带着，bot 的指令里写明 bot 自己的规矩优先。bot 能用 vonvon 飞书 skill 查本群的话题和另一条会话（3.5）：在主区问"两个话题的结论"，它去读了再答，卡片上写读了哪些。
 
 **怎么验收：** owner 要做的：第 3 步里扫码新建一个 bot、照清单做到全绿，做完回一句。其余步骤 Claude 和 Codex 做，结果写在通知里。
 1. Claude 先做：在 skill 页从 `~/.claude/skills` 导入一个 skill，给 bot 启用，在群里让 bot 用它；在另一个群的详情页把它移除，那个群里就用不上。
@@ -672,7 +673,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 |---|---|---|---|---|---|---|---|
 | [ ] | s29 | 提问的事件和卡片 | 用 ask 事件换掉占位的 approval_request；三种卡一个版面，写清后果；空提交提示"至少选一项"（3.8"卡片"） | 640 | — | 并发、错误路径 | 无（渲染在 s31 的 Mac 检查里看） |
 | [ ] | s30 | 卡片的发送、谁能点、等待和超时 | 同一条会话同时一张卡；单独发一条并 @ 能回答的人；daemon 按点击人判断谁能点；15 分钟超时；等卡时看门狗暂停；普通回合、`/goal`、云文档评论三处都接上（3.8） | 900 | s29、s11、e09 | 并发、关闭清理、错误路径 | 无（真实卡片在 s31 一起看） |
-| [ ] | s31 | Claude 的权限档换算，提问接上 | 只读用 default、读写用 acceptEdits、完全访问照旧；加 canUseTool：提问出卡，越权拒绝并说明，完全访问下 Claude 自己要问的出卡（3.8 换算表） | 440 | s30、e02、e03 | 子进程、并发、关闭清理、错误路径 | 真实 Claude 三档各跑一遍：越权被拒带原因，关网 curl 被拒、开网 WebFetch 能用，选项卡能答、能超时，等卡时能停止 |
+| [ ] | s31 | Claude 的权限档换算，提问接上 | 只读用 default、读写用 acceptEdits、完全访问照旧；加 canUseTool：提问出卡，越权拒绝并说明，完全访问下 Claude 自己要问的出卡（3.8 换算表）；只读、读写档用沙箱的 denyWrite 加 Edit 拒绝规则，挡住主工作区里两家的配置文件（3.6） | 440 | s30、e02、e03 | 子进程、并发、关闭清理、错误路径 | 真实 Claude 三档各跑一遍：越权被拒带原因，关网 curl 被拒、开网 WebFetch 能用，选项卡能答、能超时，等卡时能停止；读写档下用 Write 和 Bash 写工作区的 `.mcp.json`、`.claude/settings.json` 都被拒，先用 Bash 建指向它们的符号链接、硬链接再用 Edit 写链接也被拒；用 Bash 新建原本不存在的 `.mcp.json`、`.claude/skills/x`，把整个 `.claude` 目录 `mv` 走再重建，也都被拒（product.md 第 9 节第 24 项） |
 | [ ] | s32 | Codex 发来的请求不再报错 | 服务端请求进同一个通知队列；提问变选项卡，审批回 decline，不认识的方法仍回 -32601（3.8） | 320 | s30 | 子进程、并发、错误路径 | 真实 Codex：普通回合不发请求，审批请求回 decline 后这一轮不卡 |
 | [ ] | s33 | 打字回答、旧卡自愈、敏感问题去私聊 | 有卡在等时，能回答的人发的消息就是答案；点到失效的卡改成"已失效（后台服务重启过）"；要填密码的题去私聊答（3.8"等待和超时"） | 520 | s30 | 并发、关闭清理、错误路径 | 无 |
 | [ ] | s34 | 子 agent 的事件 | 加子 agent 事件；Codex 收子线程的通知并刷新看门狗，Claude 子 agent 的步骤不再混进主过程；能单独停一个（3.9） | 650 | — | 并发、错误路径 | 真实 Codex 跑带子 agent 的任务：子线程通知送到，父线程不被看门狗杀，单停有效 |
@@ -685,6 +686,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s31：owner 2026-10-15 定（选了 B）：两家的连接器和 Claude Code 自己的工具第一版都留着，不关，Codex 也不传 `features.apps: false`。当时问的是：bot 的会话要不要关掉 claude.ai 连接器，和推送、远程触发、定时任务这类 Claude Code 自己的工具（e02 第 7 节）。建议用内置工具白名单，连接器默认关。Codex 一侧的同一类问题一起问：用主人的 ChatGPT 登录时，每条会话都挂着 `codex_apps`（主人账号的连接器，0.162.1 上 197 个工具，含合并 GitHub PR 这类写操作），会话层 `features.apps: false` 能关（e05），在 s37 的 profile 里传。
 - s31：e02 没测完的两件，开工时补测：完全访问下，Claude 设置里的 ask 规则、删除关键目录会不会走到回调；vonvon 真实的 `['user', 'project']` 下，用户层的权限规则会不会改变哪些调用走回调。e02 用的是空的 `settingSources`。
 - s31：顺手修会话标题的读法：`readSessionTitle` 只认记录里 `custom-title` 的条目，不用 `customTitle` 字段，因为它会退回 CLI 自动起的标题（e02 第 8 节）。放在这一片，是因为 s31 本来就要改 `D/agent/claude-agent/` 下的后端代码；约 40 行，算进这一片的行数。
+- s31：Claude 的只读、读写档不限读（product.md 第 9 节第 20 项）。开工时定挡不挡：候选做法是沙箱的 `filesystem.denyRead` 挡数据目录里的 `bots/` 和根上的凭据，`allowRead` 再放开这一次的记忆目录、`bots/<appId>/skills/` 和评论会话自己的目录，和 e03 一起在 Mac 上测。
 - s32：vonvon 不开计划模式，Codex 的提问实际上不会来。这一片主要是不再回报错，不让回合卡住。
 - s35：e01 测过，变量有效，不做备选，前提是开工时补测的 ⏹ 没问题。运行卡在这一轮唯一的 result 到达时收尾，子 agent 区用 task_* 消息和 `parent_tool_use_id`（e02 第 4 节）。开工时补测两件事：前台子 agent 跑着时按 ⏹ 多久能停下；设了变量后 Monitor 还能不能用。
 
@@ -694,20 +696,28 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 |---|---|---|---|---|---|---|---|
 | [ ] | s36 | bot 默认和群覆盖的数据，新群自动建目录 | bot 默认项和群覆盖进存储，生效值按 3.2 的表算；bot 默认档取读写、开网（本文第 5 节）；新群目录自动建在 `projects/<bot 名>/groups/<群名>/`（3.3） | 820 | s21 | 数据迁移 | 无 |
 | [ ] | s36b | 被拉进已有的群：设置卡 | 在 s21 的三项之上：工作区默认按 3.3 自动建，显示只读、关网（3.8）；拉人的不是主人或管理员时发给主人；设置好之前 @ 只回一句，每群 10 分钟最多一次；话题群把多会话和单会话合成"按话题聊"、和智能二选一（用 s22 读的 `chat_mode`）；网页已有的待绑定提示和对话框跟着改；Linux 上用 Codex 时照常绑定，回合开始时再回说明（s20b） | 350 | s36、s21、s22、s20b | 错误路径、数据迁移 | 无（M7 验收时把 bot 拉进一个群看） |
-| [ ] | s37 | 会话参数统一由 profile 给，关掉两家自带的记忆 | 起会话和恢复会话都带一份 profile：指令、额外根、skill、MCP、给子进程的环境变量、原生设置；关掉 Claude 的 auto memory 和 Codex 的 memories（3.6） | 460 | e04、e05 | 子进程、错误路径 | bot 的 Codex 会话不读写 `$CODEX_HOME/memories`（Claude 一半在 JP-VPS 上看） |
-| [ ] | s38 | 个性和记忆生效 | bot 文件模块（原子写、字数上限）；按 3.6 的顺序拼指令，第一层加"不提别的群的内容"；记忆按位置组合，A 群的不进 B 群；云文档评论只带公共记忆 | 960 | s36、s37 | 错误路径 | 无（指令压不压得住仓库自己的 AGENTS.md，由预览版任务用两家各看一次） |
-| [ ] | s39 | 多工作区和代码仓库交给 Codex 和 Claude | Codex 传 runtimeWorkspaceRoots 并按根配读写，失败直接报错，按 e05 抬高 s03 的最低版本；Claude 传 additionalDirectories，沙箱按档配根（3.6） | 430 | s37、s36、s03、e03、e04、e05 | 子进程、错误路径 | 真实 Codex：第二个根能写、根外被拒、仓库里 `git commit` 能不能成功；真实 Claude：额外目录能读写，只读档哪个根都写不进 |
-| [ ] | s40 | 说"记住"就写进记忆，卡片上能撤销 | agent 直接写自己那份记忆，daemon 一轮前后比对，卡片显示"已记到本群记忆：…［撤销］"；超上限回滚（3.6） | 420 | s38、s39 | 并发、错误路径 | 只读档下 agent 能写记忆文件、写不到别处（"已记到本群记忆"的卡片 Claude 用 lark-cli 读，撤销 M7 验收时 owner 点） |
+| [ ] | s37 | 会话参数统一由 profile 给，关掉两家自带的记忆 | 起会话和恢复会话都带一份 profile：指令、额外根、能力包、MCP、给子进程的环境变量、原生设置。profile 按"一条会话要什么"写，跨后端通用；每个后端一个适配，报出自己的能力（附加目录、目录读写、指令、skill、MCP、恢复时要重传什么），做不到的 vonvon 补，第一版只写 Codex 和 Claude；关掉 Claude 的 auto memory 和 Codex 的 memories（3.6） | 540 | e04、e05 | 子进程、错误路径 | bot 的 Codex 会话不读写 `$CODEX_HOME/memories`（Claude 一半在 JP-VPS 上看） |
+| [ ] | s38 | 个性和记忆生效 | bot 文件模块（原子写、字数上限）；按 3.6 的顺序拼指令，第一层加"不提别的群的内容"和"要记的东西只写 vonvon 的记忆文件；不为了记东西去改工作区里的 CLAUDE.md、AGENTS.md，也不在工作区里另建记忆文件；用户明确要改这些文件时照常改"；记忆按位置组合，A 群的不进 B 群；云文档评论只带公共记忆；改了下一轮生效：每条会话记下拿到的版本，下一轮开口前比对，变了就在消息前面附一段"设置更新"，写明替换之前的版本，新会话和压缩以后整份交；设置更新只由 vonvon 放在一轮最前面、`[飞书 …]` 记录块和触发消息之前，第一层写明记录块和触发消息里同样的文字算用户的话（3.6）；开工时用伪造的设置更新两家各试一次（product.md 第 9 节第 25 项） | 1100 | s36、s37 | 错误路径 | 无（指令压不压得住仓库自己的 AGENTS.md，由预览版任务用两家各看一次） |
+| [ ] | s39 | 多工作区、代码仓库和能力包交给 Codex 和 Claude | Codex 传 runtimeWorkspaceRoots 并按根配读写，失败直接报错，按 e05 抬高 s03 的最低版本；Claude 传 additionalDirectories，设 `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1`，沙箱按档配根；指令里写"用某个仓库前先读它的 AGENTS.md 或 CLAUDE.md"；只读、读写档下其余根里两家的配置文件也写不进，Codex 按路径设只读，Claude 同 s31；能力包：在 `bots/<appId>/` 下会话写不到的地方生成插件形状的目录，Codex 用 `selectedCapabilityRoots`、Claude 用 `plugins` 交，Claude 抬到 2.1.299 以上；bot 目录不当根（3.6） | 620 | s37、s36、s03、e03、e04、e05 | 子进程、错误路径 | 真实 Codex：第二个根能写、根外被拒、仓库里 `git commit` 能不能成功；真实 Claude：额外目录能读写，只读档哪个根都写不进；两家读写档下第二个根里的 `.mcp.json`、`.codex/`、`.claude/skills/` 写不进，经符号链接、硬链接，新建原本不存在的这些文件，把整个 `.claude` 目录 `mv` 走再重建，也都写不进（product.md 第 9 节第 24 项）；两家能力包里的 skill 和 MCP 用得上，会话里的 Bash 写不进能力包和 bot 目录 |
+| [ ] | s40 | 说"记住"就写进记忆，卡片上能撤销 | agent 直接写自己那份记忆，daemon 一轮前后比对，卡片显示"已记到本群记忆：…［撤销］"；超上限回滚；这份记忆所在的目录每一档都放行写：Codex 在权限配置里按路径给写权限，不加进 runtimeWorkspaceRoots（multi-workspace 调研 3.6 的 Q8e），Claude 另用 canUseTool 对它放行 Read、Edit、Write，按解析过链接的真实路径判断（允许规则做不到）；公共记忆哪里都不放行；daemon 只读那一个文件，不跟随链接，不是普通文件、硬链接数不是 1 或超过大小上限就不读、记日志、回滚，回滚和撤销写新文件再 rename，rename 失败（比如 `group.md` 被换成目录）就把原来那个挪到会话写不到的 `bots/<appId>/quarantine/` 再 rename、记日志，不删，每份记忆最多留 3 个（只数 daemon 挪进去的），满了就不写回、卡片说明、诊断页提示清理；两条会话同时写同一份记忆时，daemon 在这几轮期间盯着文件、尽量留下读到的每一版，一轮结束时以行为单位按 diff3 三方合并（基准是这一轮开始时，相同的改动只算一次；怎么认出哪一版是哪条会话写的、按哪几版合，开工时定，守住 product.md 3.6 列的几条保证），两边新增的都留，别的会话还在跑时［撤销］等它结束再点，合并后超上限也不回滚，卡片写"和另一个会话同时改过，已合并"（本文第 5 节）；写了以后，用同一份记忆的其他会话下一轮按 s38 附"设置更新"（3.6） | 460 | s38、s39、s31 | 并发、错误路径 | 只读档下 agent 能写记忆文件、写不到别处；记忆目录里建指向别处的符号链接、硬链接和 FIFO 时 daemon 不跟、不卡住，经链接用 Edit 写 `../SOUL.md` 被拒；同群的主区和话题两条会话同时各记一行、各删一行，合并结果符合 product.md 3.6 列的保证，另一条还在跑时撤销不生效（"已记到本群记忆"的卡片 Claude 用 lark-cli 读，撤销 M7 验收时 owner 点） |
 | [ ] | s41 | Bot 页：个性、规矩、智能提示词、记忆、工作区和仓库 | 编辑 SOUL.md、AGENTS.md、SMART.md（显示内置默认值）、工作区、代码仓库和公共记忆（3.1 第 6 条） | 550 | s36、s38 | — | 无（目录选择器在 M7 验收时看） |
 | [ ] | s42 | 群详情页的覆盖项 | 个性补充或替换、工作区和仓库、本群记忆、智能提示词、权限档、网络、后端和模型的覆盖（3.2） | 400 | s41 | — | 无 |
 
 开工要点：
-- s36：群没设工作区时只用群自己的目录，不带 bot 的其余工作区，代码仓库照常继承（本文第 5 节）。仓库只收本机已有、带 `.git` 的目录。旧项目的 cwd 原样当作主工作区覆盖，不搬目录。
+- s36：群没设工作区时只用群自己的目录，不带 bot 的其余工作区，代码仓库照常继承（本文第 5 节）。仓库只收本机已有、带 `.git` 的目录。工作区和仓库只收数据目录以外或它的 `projects/` 下面的目录，不收数据目录的上级（product.md 3.6）。旧项目的 cwd 原样当作主工作区覆盖，不搬目录。
 - s37：给子进程的环境变量在这一片定下，s46 的令牌也走它，所以 e04、e05 要先做完。
-- s37：e05 实测，profile 在 `thread/start` 和每次 `thread/resume` 都要整份重传：`runtimeWorkspaceRoots`、`mcp_servers`（含禁掉用户的全局 MCP）、`skills.config`、`skills.bundled`、`projects.<cwd>.trust_level`，以及 memories 的两个键加 `features.memories: false`。memories 这三个 resume 后保不保留没查清：只带 cwd resume 后那一轮没重新注入记忆，`memory_mode` 和整合任务没单独查，按保险重传。只关两个键时，用户开着 memories 的话，bot 会话的第一轮仍会用 bot 的配置起一次全局整合任务，花主人的额度。不重传时用户的 MCP 和个人 skill 会悄悄回来。`skills/extraRoots/set` 对整个进程生效，预热池的进程在取出后、`thread/start` 前调。
-- s37：resume 时传新的 `developerInstructions` 不生效（e05，4 个版本）。改过的个性、群的 `SOUL.md` 和记忆，要用 `thread/inject_items` 或 `turn/start` 的 `additionalContext` 放进去，或者开新会话。product.md 3.6"记忆在会话开始或恢复时放进去"的 Codex 一半按这个做，先按本文 4.2 改 product.md。
-- s37：今天的 `thread/start` 会把 bot 的工作区写进用户 `config.toml` 的信任记录（e05），和 3.6"不改用户的全局配置"不符。会话层传 `projects.<cwd>.trust_level` 就不写；`untrusted` 会跳过项目里的 AGENTS.md（读源码，没实测），要加载就传 `trusted`。但 `trusted` 还会加载工作区和仓库里 `.codex/` 的项目配置、hooks 和 exec policy（读源码，没实测），会话层没覆盖的设置会被它们改掉，比如多出 MCP；开工时定怎么处理。拼错的字段和配置键都被静默忽略，实验字段生没生效要自己核对：`runtimeWorkspaceRoots` 看回包回显，MCP 看 `mcpServerStatus/list`，skill 看 `skills/list`。
-- s39：按 e05 把最低版本抬到 0.156.1（见 s03 留下的）。起会话和恢复会话都传 `runtimeWorkspaceRoots`，不靠 0.156.1 起 resume 会保留它；回包回显的和传的不一致就报错。第二个根能写、根外被拒、`.git` 只读时 `git commit` 会不会失败，JP-VPS 上测不了（bwrap 起不来），只在 Mac 检查里看；macOS 上 `feishu` 权限配置加 `runtimeWorkspaceRoots` 时经沙箱读 AGENTS.md 正不正常，也一起看。第二个根里的 AGENTS.md 不会加载（e05），照 3.6 在指令里写"先读该仓库的 AGENTS.md"。
+- s37：e05 实测，profile 在 `thread/start` 和每次 `thread/resume` 都要整份重传：`runtimeWorkspaceRoots`、`mcp_servers`（含禁掉用户的全局 MCP）、`skills.config`、`skills.bundled`、`projects.<cwd>.trust_level`，以及 memories 的两个键加 `features.memories: false`。memories 这三个 resume 后保不保留没查清：只带 cwd resume 后那一轮没重新注入记忆，`memory_mode` 和整合任务没单独查，按保险重传。只关两个键时，用户开着 memories 的话，bot 会话的第一轮仍会用 bot 的配置起一次全局整合任务，花主人的额度。不重传时用户的 MCP 和个人 skill 会悄悄回来。bot 的 skill 和 MCP 改由能力包交（s39），不再用进程级的 `skills/extraRoots/set`，预热池的进程也不用在取出后单独调。
+- s37：resume 时传新的 `developerInstructions` 不生效（e05，4 个版本）；Claude 的 `systemPrompt.append` 也在第一次请求时定住，恢复时传新的被忽略（2.1.296、2.1.301 实测，multi-workspace 调研 4.3）。所以改过的个性、群的 `SOUL.md` 和记忆，按 product.md 3.6"改了什么时候生效"在下一轮消息前面附"设置更新"，归 s38。
+- s37：今天的 `thread/start` 会把 bot 的工作区写进用户 `config.toml` 的信任记录（e05），和 3.6"不改用户的全局配置"不符。会话层传 `projects.<cwd>.trust_level` 就不写；`untrusted` 会跳过主工作区的 AGENTS.md 和项目配置，skill 照样加载；要加载 AGENTS.md 就传 `trusted`。但 `trusted` 还会加载主工作区 `.codex/config.toml` 里的 `developer_instructions` 和 MCP（app-server 0.163.0 实测，multi-workspace 调研 3.2；hooks 和 exec policy 是读源码），会话层没覆盖的设置会被它们改掉，比如多出 MCP；附加的根标了 `trusted` 也不加载项目配置；信任不随恢复保留，每次恢复都传；开工时定怎么处理，连同 product.md 3.3、3.6 里主工作区的 `AGENTS.md` 和 MCP 加不加载。拼错的字段和配置键都被静默忽略，实验字段生没生效要自己核对：`runtimeWorkspaceRoots` 看回包回显，MCP 看 `mcpServerStatus/list`，skill 看 `skills/list`。会话层信任时 `mcpServerStatus/list {threadId}` 不列主工作区项目配置里的 MCP，模型却有这些工具（实测），核对时别当成没起来。
+- s39：按 e05 把最低版本抬到 0.156.1（见 s03 留下的）。起会话和恢复会话都传 `runtimeWorkspaceRoots`，不靠 0.156.1 起 resume 会保留它；回包回显的和传的不一致就报错。第二个根能写、根外被拒、`.git` 只读时 `git commit` 会不会失败，JP-VPS 上只在宽松的 `:root` 读档下测过：第二个根能写，`git commit` 失败（`.git/index.lock` 只读）；vonvon 真用的 `:minimal` 读档 bwrap 起不来，只在 Mac 检查里看（multi-workspace 调研 3.6）；macOS 上 `feishu` 权限配置加 `runtimeWorkspaceRoots` 时经沙箱读 AGENTS.md 正不正常，也一起看。第二个根里的 AGENTS.md 两家都不会加载（e05，bot-home 调研 B1），Claude 默认也不读那里的 CLAUDE.md。owner 2026-10-16 定（2A）两样都做：照 3.6 在指令里写"用某个仓库前先读它的 AGENTS.md 或 CLAUDE.md"；Claude 再设 `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` 原生加载 CLAUDE.md（调研 B2 实测）。这个变量对所有附加目录生效，不受 `settingSources` 管，要排除某个目录用 `claudeMdExcludes`（multi-workspace 调研 4.2）。
+- s39 能力包（owner 2026-10-16 定，1A；product.md 3.6）：
+  - 目录：插件清单（`.claude-plugin/plugin.json`，Codex 也认）加 `skills/`、`.mcp.json`，按每个位置的生效名单生成在 `bots/<appId>/` 下，具体目录这一片定，不能在记忆目录、工作区和临时目录里。这一片先把 bot 自己的东西放进去，s44 接上库里的名单。
+  - Codex：`thread/start` 的 `selectedCapabilityRoots: [{id, location: {type: "environment", environmentId: "local", path}}]`，实验字段，只在 0.163.0 测过：按线程、带 MCP、恢复后保留，不要特性开关；只能在 `thread/start` 给，`turn/start`、`thread/resume` 都没有这个字段，新进程恢复时重读包的内容（multi-workspace 调研 3.3，H5 到 H8）。先在最低版本 0.156.1 上测，不行就把最低版本抬到测过能用的版本，连同 s03 的常量。生没生效用 `skills/list` 和 `mcpServerStatus/list {threadId}` 核对，H5 到 H7 里两样都列得出。
+  - Claude：SDK `plugins: [{type:'local', path}]`，起会话和恢复都传。2.1.296 有沙箱里的 Bash 能写插件目录的洞，2.1.299 修了：把 SDK 抬到带 2.1.299 以上的版本（2026-10-16 最新是 0.3.301，带 2.1.301），改 `D/agent/catalog.ts:31` 和 `packages/daemon/package.json`；抬不了就保证会话写不到能力包。
+  - 开工时测：工作区 `.claude/settings.json` 里写 `"<插件名>@inline": false` 能不能关掉 vonvon 的插件（文档说能），能关就定对策（product.md 第 9 节第 22 项）。
+  - bot 目录不当根：Codex 实测当根就整个可写，加只读条目也盖不住（multi-workspace 调研 3.6）。
+- owner 2026-10-16 定：会话照旧从工作区起，不从 bot 自己的目录起。bot 的东西只在 `bots/<appId>/` 下由 vonvon 交给会话，vonvon 不往工作区写文件；私聊记忆改成一人一个目录 `memory/dm/<open_id>/dm.md`，这样能只放行这一份：s40 定放行的做法，s49 起私聊会话时按它放行这个人的 `memory/dm/<open_id>/`；bot 自己的 skill 放 `bots/<appId>/skills/`，s44 放进能力包交给会话（product.md 3.3、3.6；调研 `docs/research/2026-10-16-bot-home/`）。
+- s31、s39：只读、读写档下 agent 不能写各个根里两家会原生加载的配置：`.mcp.json`、`.claude/settings.json`、`.claude/settings.local.json`、`.claude/skills/`、`.claude/commands/`、`.claude/agents/`、`.codex/`、`.agents/skills/`，只有完全访问档能改，见 product.md 3.6（owner 2026-10-16 问过，待回复时再改）。一起问的还有附加的仓库里的 MCP 要不要加载：今天两家都不加载附加目录里的 MCP，主工作区的 `.mcp.json` 经 SDK 不问批准就拉起、跑在沙箱外（Claude Code 2.1.296、SDK 0.3.296 实测）。Claude 一侧用沙箱的 `filesystem.denyWrite` 加 `Edit(...)` 拒绝规则：e02 只测到 `.claude/` 下的写在读写档的 `acceptEdits` 下也走回调，其余几处没测，所以不靠回调；s31 管主工作区，s39 管其余根。Codex 在权限配置里按路径设只读，归 s39。拒绝规则按工具收到的路径匹配，先建指向这些文件的符号链接、硬链接再写链接能不能挡住，新建原本不存在的这些文件、把整个 `.claude` 目录挪走再重建能不能挡住，两家都没测，开工时测，Claude 在 s31、Codex 在 s39（product.md 第 9 节第 24 项）。`CLAUDE.md`、`AGENTS.md`、`.claude/rules/` 故意不挡，理由见 product.md 3.6。
 - s40：product.md 没定写入方式。这里选"agent 直接写文件，daemon 前后比对"，不在群里另开记忆命令，和 3.7"群里不能用设置命令"一致。公共记忆只在私聊里由 s54 的设置命令写。
 
 ### M8 skill、MCP 和查飞书上下文
@@ -715,16 +725,16 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | 状态 | 编号 | 切片 | 内容 | 约行数 | 依赖 | 风险 | Mac 检查 |
 |---|---|---|---|---|---|---|---|
 | [ ] | s43 | 本机 skill 库和 MCP 库 | skill 从三个目录或本机文件夹拷进来，校验 SKILL.md，记下带不带脚本；MCP 从 Codex、Claude 的配置导入或手填；都不收 git 地址（3.6） | 970 | s38 | 错误路径 | 无 |
-| [ ] | s44 | skill 和 MCP 按名单交给会话，新 bot 不带 Claude 的个人指令 | 按位置算生效名单，交给 Codex 和 Claude 的会话层参数；向导新建的 bot 不带 Claude 的个人指令和两家的个人 skill，Codex 的 `~/.codex/AGENTS.md` 照常带上，指令里声明 bot 的规矩优先；导入的不变（3.6） | 740 | s43、s37、e02、e05 | 子进程、错误路径 | 真实 Codex：用得上 bot 的 skill、看不到个人 skill、MCP 起得来、resume 后还在；新 bot 的 Claude 会话不读 `~/.claude/CLAUDE.md`；`~/.codex/AGENTS.md` 里和 bot 冲突的规矩，bot 的指令压得住 |
-| [ ] | s45 | skill 和 MCP 页面，bot 和群的启用名单 | 两个库页面，删除时列出还在用的 bot 和群；Bot 页的启用名单，群详情页的增减（3.6） | 550 | s43、s41、s42 | — | 无 |
+| [ ] | s44 | skill 和 MCP 按名单交给会话，新 bot 不带 Claude 的个人指令 | 按位置算生效名单，连同 bot 自己的 `bots/<appId>/skills/` 写进 s39 的能力包，名单改了等下一条会话，或者会话进程重开、恢复以后生效；向导新建的 bot 不带 Claude 的个人指令和两家的个人 skill，Codex 的 `~/.codex/AGENTS.md` 照常带上，指令里声明 bot 的规矩优先；导入的不变（3.6） | 680 | s43、s37、s39、e02、e05 | 子进程、错误路径 | 真实 Codex：用得上 bot 的 skill、看不到个人 skill、MCP 起得来、`approvalPolicy: never` 下调得通、resume 后还在；新 bot 的 Claude 会话不读 `~/.claude/CLAUDE.md`；`~/.codex/AGENTS.md` 里和 bot 冲突的规矩，bot 的指令压得住 |
+| [ ] | s45 | skill 和 MCP 页面，bot 和群的启用名单 | 两个库页面，删除时列出还在用的 bot 和群；Bot 页的启用名单，群详情页的增减；Bot 页和群详情页也列出 `bots/<appId>/skills/` 里的 skill，群里能移除（3.2、3.6） | 550 | s43、s41、s42 | — | 无 |
 | [ ] | s46 | 会话令牌和 agent 调 vonvon 的入口 | 每条会话一个令牌，经环境变量交给 agent；host 加一个只接 POST 的路由，子进程依次校验令牌、私聊、触发人、开关（3.7） | 520 | s37、e04 | 子进程、并发、关闭清理、错误路径 | agent 调不调得到 vonvon、带不带得上令牌：Codex 只读、读写、关网各一次，Claude 沙箱一次 |
 | [ ] | s47 | vonvon settings 和 vonvon feishu 命令行框架 | 在 s07a 的命令上加：两组命令从环境变量读地址和令牌，不拿数据租约，输出 JSON；飞书组先做群列表和群成员（3.7） | 380 | s46、s07a | 错误路径 | 无 |
 | [ ] | s48 | vonvon 飞书 skill：列话题、读另一条会话、读飞书消息 | 列本群话题、按会话 id 读另一条会话、按话题或时间读消息；只放行同一个 bot、同一个群、档不高于自己的会话；卡片写"读了话题 T1、T2 的会话"（3.5"查飞书上下文"） | 950 | s47、s44、s13、e02、e11 | 子进程、错误路径 | 无（M8 验收前，预览版任务按 3.5 时间线第 7 步跑一遍） |
 
 开工要点：
 - s44：`~/.codex/AGENTS.md` 按会话关不掉（e05，4 个版本；会话层 `project_doc_max_bytes: 0` 只关项目里的那份）。owner 2026-10-15 定（选了 A）：接受，带上它，在 bot 的指令里声明 bot 的规矩优先；product.md 3.6 已跟着改。`thread/start` 回包的 `instructionSources` 列出实际加载的文件，可以显示在桌面端。
-- s44：bot 的 MCP 在 `feishu` 权限配置（`approvalPolicy: never`，工作区可写）下不配 `default_tools_approval_mode: "approve"` 时调用被拒（e05，0.162.1，只见过一次），和第 9 节第 2 项的推断一致；只读档和完全访问档不配会怎样没测，开工时补测。用户的个人 skill 先 `skills/list` 列出，再用 `skills.config` 逐个禁；系统 skill 用 `skills.bundled.enabled: false` 关。按名字禁会连同名的 bot skill 一起禁，按 `path` 禁没实测，开工时补测。中途换 skill 名单从 0.148.0 起下一轮生效，最低版本 0.156.1 时不用为这个开新会话。
-- s44：Claude 一侧按 e02 第 6 节：新建的 bot 用 `claudeMdExcludes`（经 `options.settings` 传）或只给 `settingSources: ['project']`，导入的 bot 照旧。
+- s44：bot 的 MCP 在 `feishu` 权限配置（`approvalPolicy: never`，工作区可写）下不配 `default_tools_approval_mode: "approve"` 时调用被拒（e05，0.162.1，只见过一次），和第 9 节第 2 项的推断一致；只读档和完全访问档不配会怎样没测，开工时补测。bot 的 MCP 改进能力包以后，包里的 MCP 在 `never` 下会不会被拒、能不能配 `approve` 也没测（product.md 第 9 节第 21 项），一起测；被拒又配不上，bot 的 MCP 改走会话层的 `mcp_servers`，只有 skill 留在能力包里。用户的个人 skill 先 `skills/list` 列出，再用 `skills.config` 逐个禁；系统 skill 用 `skills.bundled.enabled: false` 关。带 cwd 的 `skills/list` 也会列出工作区的 `.agents/skills`、`.codex/skills`（bot-home 调研 B1），按名字禁还会连同名的 bot skill 一起禁，所以只禁用户层的，按 scope 或 `path` 禁，不按名字禁；协议里有 `SkillScope`（`user`、`repo`、`system`、`admin`）。按 `path` 禁没实测，开工时补测。能力包在 `thread/start` 时定，名单改了，等下一条会话，或者进程重开后 `thread/resume`，新进程恢复时重读包的内容（multi-workspace 调研 3.3，H8）。e05 测的"中途换 skill 名单从 0.148.0 起下一轮生效"是进程级的 `skills/extraRoots/set`，不再用。Claude 带着插件恢复时，新加的 skill 会通知，移除的和改了描述的不通知（multi-workspace 调研 4.3）。
+- s44：Claude 一侧按 e02 第 6 节：新建的 bot 用 `claudeMdExcludes`（经 `options.settings` 传）或只给 `settingSources: ['project']`，导入的 bot 照旧。`skills` 白名单是 `string[]` 时会把工作区 `.claude/skills` 里的 skill 一起滤掉（SDK 0.3.296 实测，init 的 `skills` 里仍列着），白名单还会滤掉工作区的 command（multi-workspace 调研 4.3）。所以 vonvon 起会话前自己扫主工作区和附加目录的 `.claude/skills`、`.claude/commands`，把扫到的也加进白名单：白名单在起会话时就要传，init 消息在那之后才到。新 bot 只给 `settingSources: ['project']` 的话，个人 skill 可能本来就不加载（没测）。这一片测了再定：不加载的话可以不传白名单，也就不用扫目录（product.md 3.6）。
 - s46：变量名避开 TOKEN、KEY、SECRET，Codex 默认会滤掉含这些词的变量。e04 证明连不上时，按 product.md 第 9 节第 2 项的退路，把同一组命令做成 vonvon 自己的 MCP 工具，这一片照那个做。
 - s48：飞书 skill 的 SKILL.md 随 daemon 包发，每个会话都装。
 - s48：读 Codex 的会话按 e11：用常驻的 utility 进程发 `thread/turns/list`，带 `itemsView: "summary"`，服务端只留用户消息和 `phase: "final_answer"` 的回答；按 `nextCursor` 翻页，要最近几轮就用默认的 `desc` 加 `limit`。不用 resume、不花额度、不传 cwd。`thread/read` 带 `includeTurns: true` 在 0.162.1 上已标过时，`thread/items/list` 读不了旧格式，都不用。今天的 `mapTurn`（`D/agent/codex-appserver/backend.ts:723`）把 commentary 也拼进回答，不能直接复用；仓库里生成的协议比 0.162.1 旧，没有 `ThreadTurnsListParams`、`TurnItemsView`，按 s03 定的版本重新生成或手写这几种类型。今天的 `readHistory`、`readSessionTitle`（`backend.ts:597-641`）也用 `thread/read`，每次多一条 `deprecationNotice`，顺手换掉。
@@ -737,7 +747,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 
 | 状态 | 编号 | 切片 | 内容 | 约行数 | 依赖 | 风险 | Mac 检查 |
 |---|---|---|---|---|---|---|---|
-| [ ] | s49 | 主人和管理员私聊直接干活 | 私聊走单会话的回合路径，用 bot 的主工作区、名单和默认档；私聊里能 `/new`、`/resume`；私聊里的话题单独成会话（第 4 节、3.5） | 500 | s37、s36、s38、e10 | 并发、错误路径 | 无（M9 验收时看主人和另一个管理员各有一条会话） |
+| [ ] | s49 | 主人和管理员私聊直接干活 | 私聊走单会话的回合路径，用 bot 的主工作区、名单和默认档；私聊里能 `/new`、`/resume`；私聊里的话题单独成会话；这个人的私聊记忆目录 `memory/dm/<open_id>/` 每一档都可写，按 s40 的做法放行（第 4 节、3.5、3.6） | 500 | s37、s36、s38、s40、e10 | 并发、错误路径 | 无（M9 验收时看主人和另一个管理员各有一条会话） |
 | [ ] | s50 | 陌生人私聊卡片和私聊设置页 | 不是管理员的人私聊，回"在群里 @ 我"并列出共同的群；设置页能改私聊用的工作区、skill、MCP、权限档、后端和模型（第 4 节） | 520 | s49 | 错误路径 | 无（陌生人收到的卡片和群链接，M9 验收第 2 步由 owner 请同事看） |
 | [ ] | s51a | 拿掉私聊控制台（一）：菜单和运维卡 | 删私聊首页菜单（含"安装桌面版 · Windows x64"按钮）、bot 菜单事件的路由和引导文案里的 menu_v6，以及体检、重连、重启、更新、用量和分享这些私聊卡（第 4 节） | 900 | s49 | — | 无 |
 | [ ] | s51b | 拿掉私聊控制台（二）：项目和权限卡 | 删新建项目、项目列表、话题、删除确认、项目设置、权限、默认模型、白名单、管理员这些私聊卡；被拉进群时的设置卡留着（3.4、第 4 节） | 950 | s51a、s36b | — | 无 |
@@ -838,7 +848,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 
 | 项 | 默认值 | 理由 | 用在 |
 |---|---|---|---|
-| bot 默认权限档 | 读写、开网。只给私聊用，群在建立时有自己的默认档（3.8） | 管理员包含飞书应用的开发者（第 6 节），他们都能私聊 bot。私聊默认完全访问，等于把主人 Mac 上执行任意命令的权限交给所有开发者。读写档下 agent 只能写工作区，越权直接拒绝，和 owner 第 23 题"超出权限就直接拒绝"一致。主人要完全访问，在桌面端或网页里改 | s36、s49 |
+| bot 默认权限档 | 读写、开网。只给私聊用，群在建立时有自己的默认档（3.8） | 管理员包含飞书应用的开发者（第 6 节），他们都能私聊 bot。私聊默认完全访问，等于把主人 Mac 上执行任意命令的权限交给所有开发者。读写档下 agent 只能写工作区和这一次的记忆目录，越权直接拒绝，和 owner 第 23 题"超出权限就直接拒绝"一致。主人要完全访问，在桌面端或网页里改 | s36、s49 |
 | Linux 上用 Codex 时的私聊 | Linux 的首次运行清单加一步，写明"Linux 上 Codex 只能用完全访问"，由主人自己选要不要把 bot 默认档改成完全访问，不自动放开 | 读写档在 Linux 上的 Codex 起不来（3.8） | s20a |
 | 群没设工作区时 | 只用群自己的目录，不带 bot 的其余工作区；代码仓库照常继承 | 每个群的文件和记忆分开（3.3） | s36 |
 | 每群每小时的判断上限 | 60 次，e12 量完再调 | 3.4 要求有上限，没给数 | s25 |
@@ -855,6 +865,8 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 | 会话方式的文案 | 主标题、副标题见 product.md 3.4；不预选、不标推荐，命令行必须带；多会话、单会话再选免 @，默认沿用 bridge；话题群把多会话和单会话合成"按话题聊"，和智能二选一 | owner 2026-10-16 给了三项的顺序和意思，文案让 Claude 定；不预选是因为 owner 把多会话排第一，第 1 节又主推智能，由选的人定 | s21、s36b |
 | 没设置好的群被 @ 时 | 回一句"主人还没设置好这个群"，同一个群 10 分钟最多一次；不 @ 的消息不读 | 和 Linux 上 Codex 的说明同一个节奏；还没选会话方式和工作区，读了也没处放 | s36b |
 | 记忆怎么写 | agent 直接写自己那份记忆文件，daemon 在一轮前后比对，卡片显示写了什么 | 3.6 只说"记住"能写、带撤销，没说怎么写；不在群里另开记忆命令，和 3.7"群里不能在聊天里改设置"一致 | s40 |
+| 两条会话同时写同一份记忆 | 用这份记忆的会话有一条在跑一轮时，daemon 盯着文件，文件一变或工具步骤结束就读一次，尽量留下每一版；一轮结束时这期间别的会话也在跑、文件也变过，以行为单位按 diff3 三方合并，基准是这一轮开始时的内容，相同的改动只算一次，两边新增的都留，别的会话还在跑时撤销不生效、等它结束，同一行冲突两份都留并标出；卡片写"和另一个会话同时改过，已合并"，［撤销］退回这一轮开始时并写明会连带撤掉另一条的；合并后超字数上限也不回滚，提示先整理 | 同群的主区和话题会话能同时跑，私聊的主会话和话题也是，都直接写同一个记忆文件（3.6）。agent 直接写文件，加锁挡不住；只在一轮前后看，会漏掉中途被另一条会话盖掉的那一版。宁可多留一行，不丢一行；有意删掉的行偶尔被加回来（大多是另一条会话删后的那一版没读到时），主人能在桌面端删；只有读到的版本才有保证 | s40 |
+| "设置更新"什么时候交整份 | 新会话从开场指令交；压缩以后的第一轮整份再交；恢复会话不重交，平时只在变了的下一轮附 | 3.6 定了下一轮生效。压缩可能把之前的"设置更新"摘要掉，和 3.5 压缩后附话题表同一个时机；恢复时开场那份和之前的更新都还在历史里 | s38 |
 | 改设置卡片上的［撤销］谁能点 | 主人和管理员 | 3.7 只说带撤销；和 3.8 里"Claude 自己要问的"卡一样 | s56 |
 | Codex 最低版本 | 0.139.0，比它旧显示"版本太旧"、按钮是更新 | vonvon 依赖的行为实际跑过的最老版本（第 3 节 s03 开工要点）。e05 测出它用 ChatGPT 登录，试过的模型都跑不了，要抬到 0.156.1，见 s03 留下的 | s03、s39 |
 | Codex 验证过的版本 | 跟托管安装锁定的版本，现在是 0.156.1；比它新的照常用，只在本机环境页写一句"比验证过的新" | 只有这个版本完整跑过；新版本大多兼容，拦住反而让用户装旧版 | s03 |
