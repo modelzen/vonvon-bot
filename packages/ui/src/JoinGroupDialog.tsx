@@ -52,9 +52,10 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
     if (busy || mode.kind === 'existing') return false;
     if (!name.trim() || ((mode.kind === 'bind' || existingDirectory) && !folder)) {setError('请填写名称并选择工作目录。'); return false;}
     if (!conversation || !freeAt) {setError('请选择会话方式。'); return false;}
-    // Left out only when a daemon from before s21 stores the same thing: it binds with 3.4's defaults
-    // but creates every group with 免@ on. Otherwise sent, and such a daemon refuses instead of guessing.
-    const picked = freeAt === (mode.kind === 'create' ? 'all' : defaultResponse(conversation)) ? {} : {response: freeAt};
+    // Left out only when the default gives it on this daemon and on one from before s21 alike: those bind
+    // with 3.4's defaults but create every group with 免@ on. Otherwise sent; an old daemon then refuses.
+    const omit = freeAt === defaultResponse(conversation) && (mode.kind === 'bind' || conversation === 'threads');
+    const picked = omit ? {} : {response: freeAt};
     if (nameProblem) {setError(nameProblem); return false;}
     setBusy(true); setError('');
     try {

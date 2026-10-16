@@ -9,7 +9,8 @@ describe('s21 会话方式 read rules (product.md 3.4)', () => {
   it('reads missing and unknown kinds as 多会话, as before s21', () => {
     expect(sessionModeOf(row({}))).toBe('multi');
     expect(sessionModeOf(row({ kind: 'later' as never }))).toBe('multi');
-    expect(sessionModeOf(row({ smart: 'yes' as never }))).toBe('multi');
+    expect(sessionModeOf(row({ kind: 'single', smart: 'yes' as never }))).toBe('single');
+    expect(sessionModeOf(row({ kind: 'multi', smart: true }))).toBe('multi'); // switched by an older daemon
     expect(ruleKind(row({ kind: 'single' }))).toBe('single');
   });
   it('runs a stored 智能 as 单会话 that replies only when @-ed, until s25', () => {

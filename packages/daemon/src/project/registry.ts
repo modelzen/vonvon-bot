@@ -92,8 +92,9 @@ export type SessionMode = 'multi' | 'single' | 'smart';
 
 /** The stored 会话方式; missing or unknown values read as 'multi' (rule mode, as before s21). */
 export function sessionModeOf(p: Pick<Project, 'kind' | 'smart'>): SessionMode {
-  if (p.smart === true) return 'smart';
-  return p.kind === 'single' ? 'single' : 'multi';
+  // `smart` counts only with 'single': a daemon from before s21 that switched the group to 多会话 left it behind.
+  if (p.kind !== 'single') return 'multi';
+  return p.smart === true ? 'smart' : 'single';
 }
 
 /** How the main area runs. 智能 runs as 'single' until s25 brings the smart inbound. */
