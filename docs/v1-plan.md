@@ -543,7 +543,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s17 留下的：
   - 给 s18：bot 子进程的记录（处理器里按 `VONVON_HOST_RUN_ID`、`VONVON_HOST_CHAIN_ID` 记到主进程的运行下，supervisor 在子进程退出时清它那一类，一分钟最多一次，不然反复崩溃的 bot 一天能写几千条）；子进程被信号杀掉或起不来时由 supervisor 补记录；单个 bot 暂停用 `countInWindow` 按 bot 数；快照的 `application.crashes`（暂停和 24 小时内的记录，每次重建只 stat 一次目录），`bot list`、`bot status` 第一行显示暂停；"刚才崩溃过一次"的私聊由最早加入的 bot 在子进程里读记录；私聊 10 分钟一条的限额要另存一个文件。
   - 给 s18：重启或停止时丢掉的排队消息（`shutdown_dropped` 记了条数的那些），owner 2026-10-16 让 Claude 定：关闭前把它们的消息 id 和所在群、话题记下来，bot 起来以后在原处回一句"刚才重启了，这条没处理，请再发一次"，每个群最多一条，诊断页"最近没回的消息"记一条（product.md 3.10）。
-  - 给 s17b：`service status` 加上次退出和自动重启次数，systemd 的上次退出只在服务没跑时看得到（JP-VPS 实测）；AggregateError 里的每条错误各写一行日志，`daemon run` 失败时 stderr 也逐条打印。
+  - 给 s17b：`service status` 加上次退出和自动重启次数，systemd 的上次退出只在服务没跑时看得到（JP-VPS 实测）；AggregateError 里的每条错误各写一行日志，`daemon run` 失败时 stderr 也逐条打印。（s17b 已做，见"s17b 做法"）
   - Mac 检查（隔离的数据目录和临时 npm 前缀，不碰 `com.vonvon.bot.daemon`）：launchd 下 10 分钟内 kill -9 三次，记下每次被拉起隔了多久，进入暂停后 2 分钟内 PID 不变、网页能开；`daemon restart` 恢复，`launchctl print` 的 `last exit code` 和 `last terminating signal` 怎么变（决定 s17b 显示哪几项）；`daemon stop` 后不拉起、没有新记录；`sysctl -n kern.bootsessionuuid` 能读到、睡眠唤醒后不变，记录里带着它。
   - 待 owner（可选）：注销再登录时 daemon 来不来得及退出。launchd 的 `ExitTimeOut` 默认 20 秒，daemon 停止最多要 12 秒再加 Codex 的清理；来不及的话每次注销会多一条强制结束的记录，要在 plist 里加 `ExitTimeOut`。
   - 给 owner 定：关闭时丢掉的排队消息要不要告诉发信人。今天这些消息在重启后只作为补拉的上下文，不会被回答。

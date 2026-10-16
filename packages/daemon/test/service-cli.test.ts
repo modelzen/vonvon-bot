@@ -81,6 +81,35 @@ it('status prints the state, its next step and the files, or JSON', async () => 
   await runServiceStatus(true, { status: async () => status });
   expect(JSON.parse(String(write.mock.calls[1]?.[0]))).toMatchObject({ state: 'running', pid: '9', installed: true });
 });
+describe('the manager\'s record of the exits (s17b)', () => {
+  const killed = { manager: 'launchd', runs: 4, lastExitCode: null, lastExitText: null, lastSignal: 'Killed: 9' } as const;
+  const running = { ...observed, registration: ours, manager: { kind: 'enabled', pid: 9 }, owner: { pid: 9 }, running: true } as const;
+  it('adds the record and its line without changing the state', () => {
+    const plain = serviceStatus(running);
+    const withExits = serviceStatus({ ...running, exits: killed });
+    expect(withExits).toEqual({ ...plain, exits: killed, lastExit: '被信号结束（Killed: 9，kill -9 或内存不够）' });
+    expect(plain).not.toHaveProperty('exits');
+    expect(plain).not.toHaveProperty('lastExit');
+    // systemd while the service runs: the record, no last exit.
+    const cleared = serviceStatus({ ...running, platformName: 'systemd (Linux)', exits: { manager: 'systemd', result: 'success', execMainCode: 0, execMainStatus: 0, nRestarts: 1, exitedAt: null } });
+    expect(cleared.exits).toMatchObject({ nRestarts: 1 });
+    expect(cleared).not.toHaveProperty('lastExit');
+  });
+  it('prints the lines after the state and before the files; --json carries both fields', async () => {
+    const write = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    const status = serviceStatus({ ...running, exits: killed });
+    await runServiceStatus(false, { status: async () => status });
+    expect(String(write.mock.calls[0]?.[0]).split('\n').slice(0, 5)).toEqual([
+      'launchd (macOS) com.vonvon.bot.daemon: running (PID 9)',
+      'Running under the service manager.',
+      '上次退出：被信号结束（Killed: 9，kill -9 或内存不够）',
+      '启动次数：4（launchd 从这次登录或安装服务算起）',
+      'Definition: /Users/u/Library/LaunchAgents/com.vonvon.bot.daemon.plist',
+    ]);
+    await runServiceStatus(true, { status: async () => status });
+    expect(JSON.parse(String(write.mock.calls[1]?.[0]))).toMatchObject({ exits: killed, lastExit: '被信号结束（Killed: 9，kill -9 或内存不够）' });
+  });
+});
 
 describe('Linux: linger and the user manager (s20a)', () => {
   const guide = ['网页地址：', '  http://127.0.0.1:41234/'];

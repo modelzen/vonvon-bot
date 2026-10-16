@@ -4,6 +4,7 @@
 // the caller passes the data root and a log, so a test can bundle this file into a child process.
 import { randomUUID } from 'node:crypto';
 import { writeSync } from 'node:fs';
+import { errorPartLines } from '../core/error-parts';
 import {
   countInWindow, CRASH_EXIT_CODE, CRASH_KIND_TEXT, CRASH_PAUSE_COUNT, crashErrorName, listCrashRecords, pruneCrashRecords,
   readRunMarker, removeRunMarkerSync, sanitizeReason, startedBeforeThisBoot, systemClock, takeResumeRequest,
@@ -34,8 +35,11 @@ const serviceManagedHost = (): boolean => Boolean(process.env.VONVON_SERVICE) &&
 const managedName = (): string | null => process.env.VONVON_SERVICE?.slice(0, 20) || null;
 const during = (intent: HostIntent): 'run' | 'stop' | 'restart' => intent === 'running' ? 'run' : intent;
 function describe(value: unknown): string {
-  try { return value instanceof Error ? value.stack ?? `${value.name}: ${value.message}` : typeof value === 'symbol' ? value.toString() : String(value); }
-  catch { return '(unprintable value)'; }
+  let text: string;
+  try { text = value instanceof Error ? value.stack ?? `${value.name}: ${value.message}` : typeof value === 'symbol' ? value.toString() : String(value); }
+  catch { text = '(unprintable value)'; }
+  // s17b: an AggregateError's stack names only the group; each error inside it gets a line.
+  return [text, ...errorPartLines(value)].join('\n');
 }
 
 function record(ctx: Context, kind: CrashRecord['kind'], error: unknown, intent: HostIntent): CrashRecord {

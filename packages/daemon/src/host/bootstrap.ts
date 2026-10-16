@@ -7,6 +7,7 @@ import { acquirePidLock, getPidLockInfo, isPidLockOwnerRunning, PidLockError, pu
 import { verifyPidLockOwner } from '../server/owner-verification';
 import { readStartupRegistration } from '../service/startup';
 import { log } from '../core/logger';
+import { wasLogged } from '../core/error-parts';
 import { bridgeVersion } from '../core/version';
 import { defaultHolderPath, ProcessHost } from '../provider/process/process-host';
 import { closeHostRun, openHostRun, type HostRunStart } from './crash-guard';
@@ -100,11 +101,21 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
   } catch (error) {
     errors.push(error);
     if (!control.requested) fatal = { error };
+    // The supervisor and a single bot log what fails inside their run; a failure before it (the registration, a
+    // lock, the registry) is logged here (s17b).
+    if (!wasLogged(error)) log.fail('daemon-run', error, { phase: 'run' });
   }
   finally {
     // A cleanup failure no longer turns a requested restart into a stop (v1-plan s17): the replacement starts only
     // after this process has exited, and leftover provider processes are swept at the next boot.
-    try { await host?.closeAll(); } catch (error) { errors.push(error); }
+    try { await host?.closeAll(); } catch (error) { log.fail('daemon-shutdown', error, { phase: 'process-host' }); errors.push(error); }
+    // JP-VPS acceptance seam (s17b): a two-level cleanup failure, to see each error in the logs and on stderr.
+    if (host && !process.send && process.env.VONVON_TEST_CRASH === 'cleanup') {
+      const seam = new AggregateError([new Error('step 1'), new AggregateError([new Error('step 2')], 'VONVON_TEST_CRASH nested')], 'VONVON_TEST_CRASH cleanup');
+      log.fail('daemon-shutdown', seam, { phase: 'test-seam' });
+      errors.push(seam);
+    }
+    // complete() logs its own failure before it throws.
     try { await control.completeShutdown(async () => {}); }
     catch (error) { errors.push(error); }
     control.dispose();
@@ -113,10 +124,10 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
     if (fatal && run?.paused && process.env.VONVON_SERVICE && !process.send) process.exitCode = 0;
     if (!errors.some(listenerCloseUnconfirmed)) {
       if (owner) {
-        try { await releasePidLock(paths.appDir, owner); } catch (error) { errors.push(error); }
+        try { await releasePidLock(paths.appDir, owner); } catch (error) { log.fail('daemon-shutdown', error, { phase: 'pid-lock' }); errors.push(error); }
       }
       if (lock) {
-        try { await closeMutex(lock); } catch (error) { errors.push(error); }
+        try { await closeMutex(lock); } catch (error) { log.fail('daemon-shutdown', error, { phase: 'host-mutex' }); errors.push(error); }
       }
     }
     if (errors.length === 1) throw errors[0];

@@ -4,6 +4,7 @@ import { open, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { paths } from '../config/paths';
+import { errorParts, markLogged, type ExpandedErrors } from './error-parts';
 
 /** Days of `YYYY-MM-DD.log` history to keep. Override via env. */
 const LOG_RETENTION_DAYS = Math.max(
@@ -115,12 +116,12 @@ export function shortenFeishuId(value: string): string {
   return id ? `${id[1]!.slice(-6)}${id[2] ?? ''}` : value;
 }
 
-function emit(level: Level, phase: string, event: string, fields: LogFields = {}): void {
+function emit(level: Level, phase: string, event: string, fields: LogFields = {}, ts = new Date().toISOString()): void {
   const ctx: LogContext = { ...als.getStore() };
   if (ctx.chatId) ctx.chatId = shortenFeishuId(ctx.chatId);
   if (ctx.msgId) ctx.msgId = shortenFeishuId(ctx.msgId);
   const entry: Record<string, unknown> = {
-    ts: new Date().toISOString(),
+    ts,
     level,
     phase,
     event,
@@ -210,6 +211,9 @@ function formatFields(fields: LogFields): string {
   return parts.join(' ');
 }
 
+/** Each AggregateError already split into `fail_part` lines, with the time of those lines. */
+const expanded: ExpandedErrors = new WeakMap();
+
 export const log = {
   info(phase: string, event: string, fields?: LogFields): void {
     emit('info', phase, event, fields);
@@ -217,18 +221,39 @@ export const log = {
   warn(phase: string, event: string, fields?: LogFields): void {
     emit('warn', phase, event, fields);
   },
+  /** s17b: an AggregateError (or an error caused by one) is followed by one `fail_part` line per error inside it. */
   fail(phase: string, err: unknown, fields?: LogFields): void {
     const message = err instanceof Error ? err.message : String(err);
     const stack = err instanceof Error ? err.stack : undefined;
     const apiData = (err as { response?: { data?: unknown } })?.response?.data;
     const apiStatus = (err as { response?: { status?: unknown } })?.response?.status;
+    const ts = new Date().toISOString();
+    markLogged(err);
+    const split = errorParts(err, expanded, ts);
+    // The same group logged again (a cleanup error logged where it is thrown and where it is caught): its parts
+    // are the fail_part lines at `partsAt`.
+    const parts = split.partsAt !== undefined ? { partsLogged: true, partsAt: split.partsAt }
+      : split.total > 0 ? { parts: split.total, ...(split.truncated ? { partsTruncated: true } : {}) } : {};
     emit('error', phase, 'fail', {
       ...fields,
       err: message,
       apiStatus,
       apiData,
       stack,
-    });
+      ...parts,
+    }, ts);
+    for (const part of split.parts) {
+      emit('error', phase, 'fail_part', {
+        ...fields,
+        part: part.path,
+        of: split.total,
+        ...(part.within.length > 0 ? { within: part.within.join(' › ') } : {}),
+        errName: part.name,
+        err: part.message,
+        stack: part.stack,
+        ...(part.repeat ? { repeat: true, partsAt: part.partsAt } : {}),
+      }, ts);
+    }
   },
 };
 
