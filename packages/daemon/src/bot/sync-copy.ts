@@ -17,7 +17,8 @@ import { withDeadline } from './names';
  * so the field is read there although the SDK's types lack it. Whether the
  * event carries it at all is unconfirmed (only `message.get` was seen to
  * return it), so a main-area message the bot would act on is looked up once
- * while no receive event has shown the field in this process.
+ * while no main-area receive event has shown the field in this process: the
+ * topic message's event carrying it says nothing about the copy's.
  */
 
 /** `sync_to_chat_info.type` of the main-area copy. */
@@ -48,7 +49,7 @@ function isCopy(info: unknown): boolean {
 export function createSyncCopyGate(channel: LarkChannel, lookupMs = SYNC_LOOKUP_MS): SyncCopyGate {
   /** What the receive-fields line last said: once without the field, once with it. */
   let fieldsLogged: boolean | undefined;
-  /** A receive event carried the field: one without it is no copy. */
+  /** A main-area receive event carried the field: a main-area one without it is no copy. */
   let eventsCarry = false;
   let lookupLogged = false;
   let failLogged = false;
@@ -60,6 +61,7 @@ export function createSyncCopyGate(channel: LarkChannel, lookupMs = SYNC_LOOKUP_
     log.info('intake', 'receive-fields', { syncToChatInfo: present, fields: Object.keys(m).sort() });
   }
 
+  /** One warning per run of failures: a lookup that succeeds starts a new run. */
   function failed(err: string): false {
     if (!failLogged) {
       failLogged = true;
@@ -78,6 +80,7 @@ export function createSyncCopyGate(channel: LarkChannel, lookupMs = SYNC_LOOKUP_
       const res = await withDeadline(channel.rawClient.im.v1.message.get({ path: { message_id: messageId } }), lookupMs);
       if (!res) return failed('timeout');
       if (typeof res.code === 'number' && res.code !== 0) return failed(`code=${res.code}`);
+      failLogged = false;
       const item = (res.data as { items?: { sync_to_chat_info?: unknown }[] } | undefined)?.items?.[0];
       return isCopy(item?.sync_to_chat_info);
     } catch (err) {
@@ -92,7 +95,7 @@ export function createSyncCopyGate(channel: LarkChannel, lookupMs = SYNC_LOOKUP_
       if (!m) return false;
       const present = 'sync_to_chat_info' in m;
       noteFields(m, present);
-      if (present) eventsCarry = true;
+      if (present && (!msg.threadId || isCopy(m.sync_to_chat_info))) eventsCarry = true;
       let via: 'event' | 'lookup' | undefined;
       if (present) via = isCopy(m.sync_to_chat_info) ? 'event' : undefined;
       else if (!msg.threadId && wouldAct && !eventsCarry && (await lookedUpCopy(msg.messageId))) via = 'lookup';

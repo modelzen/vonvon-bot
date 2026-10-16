@@ -19,6 +19,7 @@ const fake = vi.hoisted(() => ({
   get: vi.fn(),
   react: vi.fn(async () => ({ data: {} })),
   dm: vi.fn(async () => undefined),
+  readHistory: vi.fn(),
   log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() },
 }));
 const startThread = vi.fn(async () => ({
@@ -27,8 +28,8 @@ const startThread = vi.fn(async () => ({
 }));
 
 vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_context: unknown, callback: () => unknown) => callback() }));
-vi.mock('../src/project/registry', async original => ({ ...await original<object>(), getProjectByChatId: async () => fake.project }));
-vi.mock('../src/agent', async original => ({ ...await original<object>(), createBackend: (id: string) => ({ id, listModels: async () => [], startThread }) }));
+vi.mock('../src/project/registry', async original => ({ ...await original<object>(), getProjectByChatId: async () => fake.project, getProjectByName: async () => fake.project }));
+vi.mock('../src/agent', async original => ({ ...await original<object>(), createBackend: (id: string) => ({ id, listModels: async () => [], startThread, listThreads: async () => [{ sessionId: 'past' }], readHistory: fake.readHistory }) }));
 vi.mock('../src/bot/session-store', async original => ({ ...await original<object>(), getSession: async () => undefined, upsertSession: async () => undefined }));
 vi.mock('../src/bot/session-title-coordinator', () => ({ SessionTitleCoordinator: class { startRecovery() {} async shutdown() {} } }));
 vi.mock('../src/bot/dm-console', () => ({ handleDmConsole: fake.dm }));
@@ -71,6 +72,11 @@ function mainCopy(chat: { chat_id: string; chat_type: string }, withSync = true)
   return { message_id: MAIN_COPY, create_time: at, update_time: at, ...chat, message_type: 'text', ...atBot,
     ...(withSync ? { sync_to_chat_info: { type: 1, related_message_id: IN_TOPIC, thread_id: TOPIC } } : {}) };
 }
+/** The same message without the @: 免@, or a group resuming sessions. */
+function noAt(message: Shape): Shape {
+  const { mentions: _mentions, ...rest } = message;
+  return { ...rest, content: JSON.stringify({ text: TEXT }) };
+}
 const GROUP = { chat_id: 'oc_demo', chat_type: 'group' };
 const DM = { chat_id: 'oc_dm', chat_type: 'p2p' };
 
@@ -95,6 +101,7 @@ const logged = (event: string) => fake.log.info.mock.calls.filter(call => call[0
 
 beforeEach(() => {
   vi.clearAllMocks();
+  fake.get.mockReset(); // also drops a failed test's unused once-values
   fake.get.mockImplementation(async () => gotItem({ thread_id: 'omt_opened_topic' }));
 });
 
@@ -150,14 +157,37 @@ describe('createSyncCopyGate', () => {
     expect(logged('sync-lookup')).toHaveLength(1);
   });
 
-  it('does not look up a topic message, one it would not act on, or once events carry the field', async () => {
+  it('does not look up a topic message, one it would not act on, or once a main-area copy\'s event carried the field', async () => {
     const gate = createSyncCopyGate(channel());
     expect(await gate.skip(await receive(topicMessage(GROUP, false)), true)).toBe(false);
     expect(await gate.skip(await receive(mainCopy(GROUP, false)), false)).toBe(false);
     expect(fake.get).not.toHaveBeenCalled();
-    await gate.skip(await receive(topicMessage(GROUP)), true);
+    expect(await gate.skip(await receive(mainCopy(GROUP)), true)).toBe(true);
     expect(await gate.skip(await receive(mainCopy(GROUP, false)), true)).toBe(false);
     expect(fake.get).not.toHaveBeenCalled();
+  });
+
+  it('keeps looking up while only topic messages\' events carry the field', async () => {
+    const gate = createSyncCopyGate(channel());
+    const copyItem = gotItem({ message_id: MAIN_COPY, sync_to_chat_info: { type: 1, related_message_id: IN_TOPIC, thread_id: TOPIC } });
+    for (let pair = 0; pair < 2; pair++) {
+      fake.get.mockResolvedValueOnce(copyItem);
+      expect(await gate.skip(await receive(mainCopy(GROUP, false)), true)).toBe(true);
+      expect(await gate.skip(await receive(topicMessage(GROUP)), true)).toBe(false);
+    }
+    expect(fake.get).toHaveBeenCalledTimes(2);
+    expect(logged('sync-copy-skipped').map(line => line.via)).toEqual(['lookup', 'lookup']);
+  });
+
+  it('skips only type 1: another type, a main-area reply or a quote is answered', async () => {
+    const gate = createSyncCopyGate(channel());
+    expect(await gate.skip(await receive(mainCopy(GROUP)), true)).toBe(true); // events carry the field: no lookups below
+    expect(await gate.skip(await receive({ ...mainCopy(GROUP), message_id: 'om_type3', sync_to_chat_info: { type: 3 } }), true)).toBe(false);
+    expect(await gate.skip(await receive({ ...mainCopy(GROUP), message_id: 'om_type2_main', sync_to_chat_info: { type: 2, related_message_id: IN_TOPIC } }), true)).toBe(false);
+    expect(await gate.skip(await receive({ ...mainCopy(GROUP, false), message_id: 'om_reply', root_id: ROOT, parent_id: ROOT }), true)).toBe(false);
+    expect(await gate.skip(await receive({ ...mainCopy(DM, false), message_id: 'om_quote', parent_id: IN_TOPIC }), true)).toBe(false);
+    expect(fake.get).not.toHaveBeenCalled();
+    expect(logged('sync-copy-skipped')).toHaveLength(1);
   });
 
   it('does nothing without a raw event', async () => {
@@ -166,6 +196,23 @@ describe('createSyncCopyGate', () => {
     expect(await gate.skip(bare, true)).toBe(false);
     expect(fake.get).not.toHaveBeenCalled();
     expect(fake.log.info).not.toHaveBeenCalled();
+  });
+
+  it('warns again for a failure after a lookup succeeded', async () => {
+    const gate = createSyncCopyGate(channel());
+    const copy = await receive(mainCopy(GROUP, false));
+    fake.get.mockRejectedValueOnce(new Error('socket hang up'));
+    expect(await gate.skip(copy, true)).toBe(false);
+    fake.get.mockResolvedValueOnce(gotItem({ message_id: 'om_plain' }));
+    expect(await gate.skip({ ...copy, messageId: 'om_plain' }, true)).toBe(false);
+    fake.get.mockResolvedValueOnce({ code: 99991400, msg: 'rate limited' });
+    expect(await gate.skip({ ...copy, messageId: 'om_limited' }, true)).toBe(false);
+    fake.get.mockResolvedValueOnce({ code: 99991400, msg: 'rate limited' });
+    expect(await gate.skip({ ...copy, messageId: 'om_limited_again' }, true)).toBe(false);
+    expect(fake.log.warn.mock.calls).toEqual([
+      ['intake', 'sync-lookup-failed', { err: 'socket hang up' }],
+      ['intake', 'sync-lookup-failed', { err: 'code=99991400' }],
+    ]);
   });
 
   it('fails open on an error, a refusal and a timeout, warning once', async () => {
@@ -261,6 +308,53 @@ describe('the orchestrator answers only the topic message', () => {
     expect(reactedTo()).not.toContain(MAIN_COPY);
     expect(fake.get.mock.calls.filter(call => (call as unknown as [{ path: { message_id: string } }])[0].path.message_id === MAIN_COPY)).toHaveLength(1);
     expect(records()).toEqual([]);
+  });
+
+  /** Events without the field: the lookup finds the copy, any other id is an opened topic's message. */
+  function lookupFindsCopy(): void {
+    fake.get.mockImplementation(async ({ path }: { path: { message_id: string } }) => path.message_id === MAIN_COPY
+      ? gotItem({ message_id: MAIN_COPY, sync_to_chat_info: { type: 1, related_message_id: IN_TOPIC, thread_id: TOPIC } })
+      : gotItem({ thread_id: 'omt_opened_topic' }));
+  }
+  const lookedUp = () => fake.get.mock.calls.filter(call => (call as unknown as [{ path: { message_id: string } }])[0].path.message_id === MAIN_COPY);
+
+  it('in a 免@ continuous group, looks the copy without an @ up and does not answer it', async () => {
+    fake.project = { ...base, kind: 'single', noMention: true };
+    lookupFindsCopy();
+    await orchestrator.onMessage(await receive(noAt(mainCopy(GROUP, false))));
+    await orchestrator.onMessage(await receive(noAt(topicMessage(GROUP, false))));
+    await drained();
+    expect(lookedUp()).toHaveLength(1);
+    expect(startThread).toHaveBeenCalledTimes(1);
+    expect(reactedTo()).not.toContain(MAIN_COPY);
+    expect(sentFor()).not.toContain(MAIN_COPY);
+    expect(records()).toEqual([]);
+  });
+
+  it('in a 免@ group that opens topics, neither looks up nor answers a main-area copy without an @', async () => {
+    fake.project = { ...base, noMention: true };
+    lookupFindsCopy();
+    await orchestrator.onMessage(await receive(noAt(mainCopy(GROUP, false))));
+    await orchestrator.onMessage(await receive(noAt(topicMessage(GROUP, false))));
+    await drained();
+    expect(lookedUp()).toEqual([]);
+    expect(startThread).toHaveBeenCalledTimes(1);
+    expect(reactedTo()).not.toContain(MAIN_COPY);
+  });
+
+  it('while sessions are being resumed, sends the wait note once, for the topic message', async () => {
+    let failHistory!: (error: Error) => void;
+    fake.readHistory.mockImplementationOnce(() => new Promise((_resolve, reject) => { failHistory = reject; }));
+    lookupFindsCopy();
+    const resuming = orchestrator.collaboration({ action: 'resume', projectName: 'demo', chatId: 'oc_demo', sessionId: 'past', backend: 'codex-appserver' } as never);
+    await vi.waitFor(() => expect(fake.readHistory).toHaveBeenCalledOnce());
+    try {
+      await orchestrator.onMessage(await receive(noAt(mainCopy(GROUP, false))));
+      await orchestrator.onMessage(await receive(noAt(topicMessage(GROUP, false))));
+      expect(lookedUp()).toHaveLength(1);
+      expect(sentFor()).toEqual([IN_TOPIC]);
+    } finally { failHistory(new Error('fixture: resume ends')); }
+    await expect(resuming).rejects.toThrow('fixture: resume ends');
   });
 
   it('answers a main-area @ the lookup cannot place', async () => {
