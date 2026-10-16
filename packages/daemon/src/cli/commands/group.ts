@@ -102,7 +102,7 @@ export async function runGroupBind(rawGroupId: string, options: BindOptions, io:
     return { revision: want('绑定群', bound, 'applied', unknown).revision, name: projectName, folder: chosen.displayPath, several: snapshot.agents.length > 1, agentId: agent.id };
   });
   const human = [`已绑定 ${result.name}（${groupId.data}）→ ${result.folder} · ${tool.data === 'codex' ? 'Codex' : 'Claude'} · ${conversationLabel(conversation.data)}`];
-  // Codex refuses qa and write outside macOS when a thread starts (D/agent/codex-appserver/backend.ts); s20a and s20b decide defaults.
+  // The group stays in qa: on Linux its Codex turns are refused with a reply until the owner picks full (s20b).
   if (host.platform === 'linux' && tool.data === 'codex') {
     human.push(`Linux 上 Codex 只能用完全访问，运行：vonvon settings set${result.several ? ` --bot ${result.agentId}` : ''} --group ${groupId.data} permission.mode=full`);
   }

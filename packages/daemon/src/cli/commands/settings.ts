@@ -1,6 +1,6 @@
 import {
   agentSectionSchemas, projectSectionSchemas, sessionSectionSchemas, sessionThreadIdSchema,
-  type Agent, type Membership, type SessionSettingsView, type SettingsScope, type SettingsView,
+  type Agent, type Membership, type ProjectSettingsView, type SessionSettingsView, type SettingsScope, type SettingsView,
 } from '@vonvon/protocol';
 import {
   conversationLabel, localTime, pickBot, pickGroup, print, toolLabel, want, withDaemon, type Call, type Daemon, type Io,
@@ -132,6 +132,7 @@ export async function runSettingsGet(section: string | undefined, target: Target
   });
   const human = [header(view, agent, membership)];
   const sections = view.sections as Record<string, SectionView>;
+  const fullOnly = view.scope.kind === 'project' ? (view as ProjectSettingsView).identity.fullOnly : undefined;
   for (const name of names.filter(name => section === undefined || name === section)) {
     const value = Object.hasOwn(sections, name) ? sections[name] : undefined;
     if (!value) continue;
@@ -141,6 +142,7 @@ export async function runSettingsGet(section: string | undefined, target: Target
       const live = effective[key];
       human.push(`  ${key} = ${show(stored)}${JSON.stringify(live) === JSON.stringify(stored) ? '' : `（生效：${show(live)}）`}`);
     }
+    if (name === 'permission' && fullOnly) human.push(`  ${fullOnly}`);
   }
   if (sessions) {
     const recent = [...sessions].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 10);

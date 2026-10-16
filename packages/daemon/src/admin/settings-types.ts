@@ -137,6 +137,8 @@ export interface ProjectSettingsView {
     backend: string;
     cwd: string;
     kind: string;
+    /** Set when this host runs the backend only in 完全访问: the reason (AgentBackend.fullAccessOnly). */
+    fullOnly?: string;
   };
   members: {
     openIds: string[];

@@ -424,6 +424,10 @@ export interface AgentBackend {
    * startThread/resumeThread 里对档外 mode fail-closed（声明只是给切换 UI 提前
    * 拦截用的，硬守卫永远在启动路径——绝不静默降级）。 */
   readonly supportedModes?: readonly PermissionMode[];
+  /** Set when this host runs the backend only in 完全访问: the reason the settings show. Unlike
+   * {@link supportedModes}, groups are still bound and stored in 只读 or 读写; their turns are
+   * refused one by one (codex on Linux, s20b). */
+  fullAccessOnly?(): string | undefined;
   isAvailable(): Promise<boolean>;
   /** Probe the backend runtime（版本/路径/装法提示）—— doctor CLI、onboarding、
    * DM 体检卡共用，替代散落的硬编码探测。`force` 绕过探测缓存（体检要看

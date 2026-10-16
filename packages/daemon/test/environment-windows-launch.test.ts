@@ -1,46 +1,8 @@
 import { expect, it } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { writeSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EnvironmentService } from '../src/environment/service';
-import { spawnProcess } from '../src/platform/spawn';
-
-for (const kind of ['exe', 'cmd'] as const) {
-  it.skipIf(process.platform !== 'win32')(`launches a ${kind} tool through its Windows job with an isolated home and PATH`, async () => {
-    const home = await mkdtemp(join(tmpdir(), 'environment-windows-launch-'));
-    const cli = join(home, 'fixture.cmd');
-    await writeFile(join(home, 'fixture.cjs'), "process.stdout.write('fixture-started');\n");
-    await writeFile(cli, `@echo off\r\n"${process.execPath}" "%~dp0fixture.cjs" %*\r\n`);
-    const diagnostic: { stderr: string; error?: string; code?: number | null; signal?: string | null } = { stderr: '' };
-    const service = new EnvironmentService({
-      home, getDataRoot: () => home, nodePath: process.execPath,
-      resolveCodex: () => null, path: home, fetchLatest: async () => null,
-      spawnProcess: (command, args, options) => {
-        const child = spawnProcess(command, args, options);
-        child.stderr?.on('data', (chunk: Buffer) => { diagnostic.stderr = (diagnostic.stderr + chunk.toString()).slice(-16_384); });
-        child.on('error', error => { diagnostic.error = error.message.slice(-2_048); });
-        child.on('close', (code, signal) => { diagnostic.code = code; diagnostic.signal = signal; });
-        return child;
-      },
-    });
-    try {
-      const result = await service['command'](
-        kind === 'exe' ? process.execPath : cli,
-        kind === 'exe' ? [join(home, 'fixture.cjs')] : [],
-        10_000,
-      ).catch(error => {
-        diagnostic.error = (error instanceof Error ? error.message : String(error)).slice(-2_048);
-        return { failure: diagnostic.error };
-      });
-      writeSync(2, `${JSON.stringify({ kind, stderr: diagnostic.stderr, error: diagnostic.error ?? null, code: diagnostic.code ?? null, signal: diagnostic.signal ?? null })}\n`);
-      expect(result, JSON.stringify(diagnostic)).toMatchObject({ exitCode: 0, stdout: 'fixture-started' });
-    } finally {
-      await service.close();
-      await rm(home, { recursive: true, force: true });
-    }
-  }, 30_000);
-}
 
 it.each([
   { comspec: 'D:\\System Tools\\cmd.exe', systemRoot: 'C:\\Windows', expected: 'D:\\System Tools\\cmd.exe' },

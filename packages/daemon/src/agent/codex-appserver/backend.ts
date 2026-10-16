@@ -24,6 +24,7 @@ import { BRIDGE_DEVELOPER_INSTRUCTIONS } from '../bridge-instructions';
 import { AppServerClient } from './app-server-client';
 import { refillWarmPool, takeWarmClient, utilityRequest } from './client-pool';
 import { mapNotification } from './event-map';
+import { CODEX_FULL_ONLY, CodexFullOnlyError, codexConfinesReads } from './full-only';
 import { codexVersionAsync, resolveCodexBin } from './locate';
 import type { ServerNotification, Thread, ThreadItem, Turn, TurnStartResponse } from './protocol';
 
@@ -33,34 +34,25 @@ const APPROVAL_POLICY = 'never';
  * Map a permission tier to the thread/start|resume params that enforce it.
  * 'full' (or unset) keeps the historical danger-full-access. 'qa'/'write' send a
  * custom codex permissions profile ("feishu") whose filesystem rules confine
- * BOTH reads and writes to the workspace roots (cwd). The profile is platform-
- * agnostic config; codex translates it to whatever OS sandbox the host has:
- *   - macOS  → Seatbelt (verified: thread/start reports activePermissionProfile
- *     .id="feishu", reads outside cwd like ~/.ssh are denied).
- *   - Windows → WindowsRestrictedToken (the elevated backend enforces deny-read;
- *     an unelevated one that can't enforce it refuses to run — never leaks).
+ * BOTH reads and writes to the workspace roots (cwd). Only macOS enforces that,
+ * with Seatbelt (verified: thread/start reports activePermissionProfile
+ * .id="feishu", reads outside cwd like ~/.ssh are denied).
  * `:minimal` keeps the read access codex needs to run commands at all.
  *
- * fail-closed: on Linux / WSL codex's sandbox only ro-binds the disk (writes
- * blocked, READS still open — Landlock read-restriction is unimplemented) AND it
- * does NOT refuse, so a privacy tier there would silently run unconfined. We must
- * NEVER do that — so 'qa'/'write' are gated to macOS + Windows; on any other
- * platform we throw BEFORE spawn (a clear run error, never a downgrade).
- *
- * NOTE (Windows): enforcement is codex's, not ours — verify on a real Windows
- * host (ask the bot to read a file outside cwd → it must refuse) before trusting
- * the read-only tiers with an untrusted external group.
+ * fail-closed: on Linux codex's sandbox only ro-binds the disk (writes blocked,
+ * READS still open — Landlock read-restriction is unimplemented) AND it does NOT
+ * refuse, so a privacy tier there would silently run unconfined. We must NEVER
+ * do that — so 'qa'/'write' throw {@link CodexFullOnlyError} BEFORE spawn on any
+ * platform but macOS (a clear run error, never a downgrade). Group turns are
+ * refused earlier, with a reply (handle-message's refuseFullOnly).
  */
 export function sandboxParams(
   mode: PermissionMode | undefined,
   network: boolean | undefined,
+  platform: NodeJS.Platform = process.platform,
 ): Record<string, unknown> {
   if ((mode ?? 'full') === 'full') return { sandbox: 'danger-full-access' };
-  if (process.platform !== 'darwin' && process.platform !== 'win32') {
-    throw new Error(
-      '「项目内只读 / 项目内读写」靠操作系统沙箱把读写锁进项目文件夹，目前只有 macOS 与原生 Windows 能强制执行。当前平台（Linux / WSL 只挡写、不限制读取，无法保证不泄露隐私）已拒绝启动（绝不降级为完全访问）。请改用「完全访问」、把 Codex 跑进容器/隔离环境，或在 macOS / Windows 上运行。',
-    );
-  }
+  if (!codexConfinesReads(platform)) throw new CodexFullOnlyError();
   return {
     config: {
       default_permissions: 'feishu',
@@ -509,6 +501,10 @@ export class CodexAppServerBackend implements AgentBackend {
   private modelCache: ModelInfo[] | null = null;
 
   constructor(private readonly titleDeps: CodexTitleBackendDeps = DEFAULT_TITLE_DEPS) {}
+
+  fullAccessOnly(): string | undefined {
+    return codexConfinesReads() ? undefined : CODEX_FULL_ONLY;
+  }
 
   async isAvailable(): Promise<boolean> {
     return (await this.doctor()).ok;

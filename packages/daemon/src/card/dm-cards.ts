@@ -1527,10 +1527,12 @@ export function permissionSummary(p: Pick<Project, 'mode' | 'guestMode'>): strin
  * 🔐 权限表单卡（DM「项目设置 → 🔐 权限」）。两个下拉:「管理员档」给 owner/管理员、
  * 「普通用户档」给群里其他人——两档**不同**即按档位拆线程(各自独立沙箱+对话历史)、**相同**
  * 则所有人一致。外加联网开关。用 selectMenu(表单收值、提交时才读、不锁卡)而非即时按钮——
- * 选完点提交；提交 handler 落盘 + 驱逐活跃会话让新档立刻生效。
+ * 选完点提交；提交 handler 落盘 + 驱逐活跃会话让新档立刻生效。`fullOnly`（后端在这台主机上
+ * 只能完全访问时的原因）给了时，两个下拉都只剩完全访问，并写明现在的档和原因。
  */
-export function buildPermissionCard(p: Pick<Project, 'name' | 'mode' | 'guestMode' | 'network'>): CardObject {
+export function buildPermissionCard(p: Pick<Project, 'name' | 'mode' | 'guestMode' | 'network'>, fullOnly?: string): CardObject {
   const network = p.network ?? false;
+  const options = fullOnly ? TIER_SELECT_OPTS.filter((o) => o.value === 'full') : TIER_SELECT_OPTS;
   return card(
     [
       md(`**🔐 权限** · ${p.name}`),
@@ -1538,15 +1540,16 @@ export function buildPermissionCard(p: Pick<Project, 'name' | 'mode' | 'guestMod
         'codex 沙箱的访问范围。「管理员档」给 owner / 管理员，「普通用户档」给群里其他人。' +
           '两档**不同**时，两类人各用独立线程（互不串沙箱与对话历史）；**相同**则所有人一致。',
       ),
+      ...(fullOnly ? [note(`现在：${permissionSummary(p)}。${fullOnly}`)] : []),
       form('perm', [
         md('👑 **管理员档**'),
-        selectMenu({ name: 'mode', placeholder: '选择管理员权限档', options: TIER_SELECT_OPTS, initial: effectiveMode(p) }),
+        selectMenu({ name: 'mode', placeholder: '选择管理员权限档', options, initial: fullOnly ? 'full' : effectiveMode(p) }),
         md('👥 **普通用户档**'),
         selectMenu({
           name: 'guestMode',
           placeholder: '选择普通用户权限档',
-          options: TIER_SELECT_OPTS,
-          initial: effectiveGuestMode(p),
+          options,
+          initial: fullOnly ? 'full' : effectiveGuestMode(p),
         }),
         md('🌐 **联网**（只对只读 / 读写档有意义；完全访问恒联网）'),
         selectMenu({
