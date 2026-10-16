@@ -23,6 +23,7 @@ import type {
 } from '@larksuiteoapi/node-sdk';
 import { DEFAULT_BACKEND_ID, backendIds, createBackend, isBackendEntryInstalled } from '../agent';
 import { BackendNotInstalledError } from '../agent/backend-loader';
+import { CodexFullOnlyError, fullOnlyReply } from '../agent/codex-appserver/full-only';
 import { errorKindFromText, type AgentErrorKind } from '../agent/error-kind';
 import { scopeDenial } from '../utils/feishu-error';
 import type { NotReplied, NotRepliedReason } from '@vonvon/protocol';
@@ -181,6 +182,7 @@ import { bridgeVersion } from '../core/version';
 import { getDesktopRelease } from '../service/desktop-release';
 import { runtimeDistribution } from '../service/distribution';
 import { paths } from '../config/paths';
+import { loadBots } from '../config/bots';
 import { fileClaimMode, OutboundFiles } from './outbound-files';
 import { getSecret } from '../config/keystore';
 import { buildScopeGrantUrl, JOIN_GROUP_SCOPES } from '../config/scopes';
@@ -481,6 +483,9 @@ interface TurnFailure { error?: unknown; rs?: RunState; procDead?: boolean }
 /** The message a not-replied record is about. */
 type NotedMessage = Pick<NormalizedMessage, 'chatId' | 'messageId' | 'senderId' | 'createTime' | 'threadId'>;
 
+/** How long a group's full-only explanation quiets the next ones for 免@ messages; an @ always gets one. */
+const FULL_ONLY_QUIET_MS = 10 * 60_000;
+
 const REASON_BY_ERROR_KIND = {
   auth: 'signed-out', version: 'codex-too-old', quota: 'quota', network: 'network',
 } as const satisfies Record<AgentErrorKind, NotRepliedReason>;
@@ -494,6 +499,7 @@ export function failureReason(failure: TurnFailure): { reason: NotRepliedReason;
     return scope ? { reason: 'missing-scope', detail: scope, scope } : { reason: 'missing-scope' };
   }
   if (failure.error instanceof BackendNotInstalledError) return { reason: 'tool-missing' };
+  if (failure.error instanceof CodexFullOnlyError) return { reason: 'tier-unavailable' };
   if (failure.rs?.terminal === 'idle_timeout') return { reason: 'idle-timeout' };
   const message = failure.error === undefined ? failure.rs?.errorMsg : errorDetail(failure.error);
   const kind = failure.rs?.errorKind ?? (message ? errorKindFromText(message) : undefined);
@@ -1442,6 +1448,7 @@ export function createOrchestrator(
         await postContextCard(msg, ts.sessionKey, false);
         return;
       }
+      if (await refuseFullOnly(msg, project, ts)) return;
       if (goalObjective) {
         if (!goalCapable(project)) {
           await denyGoal(msg, false);
@@ -1493,6 +1500,7 @@ export function createOrchestrator(
         await postContextCard(msg, ts.sessionKey, true);
         return;
       }
+      if (await refuseFullOnly(msg, project, ts)) return;
       if (goalObjective) {
         if (!goalCapable(project)) {
           await denyGoal(msg, true);
@@ -1543,6 +1551,7 @@ export function createOrchestrator(
         await denyGoal(msg, false);
         return;
       }
+      if (await refuseFullOnly(msg, project, turnPerm(project, msg.senderId))) return;
       void trackTask(addReaction(msg.messageId, 'OKR'));
       startTopicDirectly(msg, goalObjective, project, true);
       return;
@@ -1563,6 +1572,7 @@ export function createOrchestrator(
       log.info('intake', 'unknown-cmd', { name });
       return;
     }
+    if (await refuseFullOnly(msg, project, turnPerm(project, msg.senderId))) return;
     startTopicDirectly(msg, text, project);
   };
 
@@ -1685,6 +1695,34 @@ export function createOrchestrator(
   ): { sessionKey: string } & TurnPerm {
     const perm = turnPerm(project, senderId);
     return { sessionKey: perm.roleSuffix ? `${baseKey}#${perm.roleSuffix}` : baseKey, ...perm };
+  }
+
+  /** When each group last got the full-only explanation (see refuseFullOnly). */
+  const fullOnlyNoted = new Map<string, number>();
+  /** A 只读 or 读写 turn where the backend runs only in 完全访问 (Codex on Linux): no session starts and
+   * nothing is downloaded or woven first. The message is noted and the group told why, in place: every
+   * @, and a 免@ message only when the group got no explanation in the last {@link FULL_ONLY_QUIET_MS}. */
+  async function refuseFullOnly(msg: NormalizedMessage, project: Project, perm: TurnPerm): Promise<boolean> {
+    const mode = perm.mode ?? 'full';
+    if (mode === 'full') return false;
+    const be = backendFor(project.backend);
+    if (!be.fullAccessOnly?.()) return false;
+    log.info('intake', 'reject', { reason: 'full-only', mode });
+    noteNotReplied(msg, 'tier-unavailable', { backendId: be.id });
+    const now = Date.now();
+    const last = fullOnlyNoted.get(msg.chatId);
+    if (!msg.mentionedBot && now - (last ?? -Infinity) < FULL_ONLY_QUIET_MS) return true;
+    // Stamped before sending so 免@ messages arriving meanwhile stay quiet; put back if the send fails.
+    fullOnlyNoted.set(msg.chatId, now);
+    // The command needs --bot when the host has several bots (pickBot); an unreadable registry counts as one.
+    const several = await loadBots().then((reg) => reg.bots.length > 1, () => false);
+    const markdown = fullOnlyReply(msg.chatId, mode, perm.roleSuffix ?? 'admin', several ? cfg.accounts.app.id : undefined);
+    const sent = await channel.send(msg.chatId, { markdown }, { replyTo: msg.messageId, replyInThread: Boolean(msg.threadId) }).then(() => true, () => false);
+    if (!sent && fullOnlyNoted.get(msg.chatId) === now) {
+      if (last === undefined) fullOnlyNoted.delete(msg.chatId);
+      else fullOnlyNoted.set(msg.chatId, last);
+    }
+    return true;
   }
 
   /**
@@ -4480,7 +4518,7 @@ export function createOrchestrator(
       const name = typeof value.n === 'string' ? value.n : '';
       patch(evt, async () => {
         const p = await getProjectByName(name);
-        return p ? buildPermissionCard(p) : renderDmMenuCard();
+        return p ? buildPermissionCard(p, backendFor(p.backend).fullAccessOnly?.()) : renderDmMenuCard();
       });
     })
     // 提交权限表单：落盘 管理员档 mode / 普通用户档 guestMode / 联网，再驱逐本项目活跃会话
@@ -4493,6 +4531,14 @@ export function createOrchestrator(
       const guestMode = asTier(selectValue(formValue, 'guestMode'));
       const network = selectValue(formValue, 'network') === 'on';
       void trackTask((async () => {
+        // A card sent before the upgrade still offers 只读 and 读写: refused as the web save is, with a fresh card.
+        const p = await getProjectByName(name);
+        const fullOnly = p && backendFor(p.backend).fullAccessOnly?.();
+        if (p && fullOnly && [mode, guestMode].some((m) => m !== undefined && m !== 'full')) {
+          log.info('console', 'permission-refused', { project: name, mode, guestMode });
+          await sendManagedCard(channel, evt.chatId, buildPermissionCard(p, fullOnly)).catch((e) => log.fail('console', e, { phase: 'permission-result' }));
+          return;
+        }
         // 共享层（admin/ops.ts）：落盘 + 驱逐活跃会话让新档立即生效；写后回读，
         // 卡片与盘上一致——与 Web 控制台的 setPermissionMode 完全同一条路径。
         const r = await performSetPermissionMode({ projectName: name, mode, guestMode, network, evictLiveSessionsForChat });

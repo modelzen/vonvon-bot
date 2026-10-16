@@ -51,6 +51,15 @@ it('lists a bot\'s not-replied messages newest first, with the group, place, sen
   expect(html).toContain('Codex 可用 · 0.156.1（1 个群）');
 });
 
+it('gives the full-only fix command, with --bot only when the host has several bots', () => {
+  const refused = {...agent, diagnostics: {deniedScopes: [], notReplied: [record({reason: 'tier-unavailable', backend: 'codex'})]}};
+  const one = render([refused]);
+  expect(one).toContain('Linux 上的 Codex 只能用完全访问，这个群是只读或读写档，这一轮没开始');
+  expect(one).toContain('vonvon settings set --group oc_bound_group permission.mode=full；被拒的是普通成员时，改「普通成员权限」，也就是 permission.guestMode=full。');
+  const two = render([refused, {...agent, id: 'cli_other' as Agent['id'], name: '另一个'}]);
+  expect(two).toContain('vonvon settings set --bot cli_diag --group oc_bound_group permission.mode=full');
+});
+
 it('says what the list holds when a bot has nothing', () => {
   const html = render([agent]);
   expect(html).toContain('最近没有没回的消息');

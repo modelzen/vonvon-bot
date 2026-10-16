@@ -337,17 +337,20 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         throw new SettingsInputError('项目不存在');
       const data = projectData(p);
       const sections = Object.fromEntries(Object.entries(data).map(([key, value]) => [key, makeSection(value, [botId, projectRaw(p, key as keyof T.ProjectSections)], access, effect(Object.keys(value), key === 'model' ? 'new-session' : key === 'permission' ? 'session-rebind' : 'next-message', key === 'model' ? '仅新会话使用项目默认模型' : '下一条消息生效'))])) as T.ProjectSettingsView['sections'];
+      const backendId = p.backend ?? DEFAULT_BACKEND_ID;
       sections.model.effective = {
-        selection: await effectiveSelection(p.backend ?? DEFAULT_BACKEND_ID, p.defaultModel, p.defaultEffort, p.defaultModelCustom)
+        selection: await effectiveSelection(backendId, p.defaultModel, p.defaultEffort, p.defaultModelCustom)
       };
+      const fullOnly = deps.backendFor(backendId).fullAccessOnly?.();
       return {
         scope,
         sections,
         identity: {
           chatId: p.chatId,
-          backend: p.backend ?? DEFAULT_BACKEND_ID,
+          backend: backendId,
           cwd: p.cwd,
-          kind: p.kind ?? 'multi'
+          kind: p.kind ?? 'multi',
+          ...(fullOnly ? { fullOnly } : {})
         },
         members: {
           openIds: [...(p.allowedUsers ?? [])],
@@ -479,9 +482,14 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
                 ...p,
                 ...e.patch
               };
-              const supported = deps.backendFor(p.backend ?? DEFAULT_BACKEND_ID).supportedModes;
+              const backend = deps.backendFor(p.backend ?? DEFAULT_BACKEND_ID);
+              const supported = backend.supportedModes;
               if (supported && (!supported.includes(effectiveMode(next)) || !supported.includes(effectiveGuestMode(next))))
                 throw new SettingsInputError('后端不支持此权限档位');
+              // Only the tiers this save sets: a stored 只读 stays, and network can still change.
+              const fullOnly = backend.fullAccessOnly?.();
+              if (fullOnly && [e.patch.mode, e.patch.guestMode].some(mode => mode !== undefined && mode !== 'full'))
+                throw new SettingsInputError(fullOnly);
               Object.assign(p, e.patch);
               break;
             }

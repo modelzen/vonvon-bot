@@ -4,21 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import type { AgentEvent, AgentInput } from '../src/agent/types';
 
-const transport = vi.hoisted(() => ({
-  spawn: vi.fn(),
-  jobs: [] as Array<{ identity: symbol; proof: symbol | undefined; stop: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn> }>,
-}));
+const transport = vi.hoisted(() => ({ spawn: vi.fn() }));
 vi.mock('../src/platform/spawn', async original => ({ ...await original<object>(), spawnProcess: transport.spawn }));
 vi.mock('../src/agent/codex-appserver/locate', () => ({ resolveCodexBin: () => '/fixture/no-provider' }));
-vi.mock('../src/agent/codex-appserver/windows-job', () => ({ WindowsCodexJob: class {
-  executable = '/fixture/no-powershell';
-  private readonly job = { identity: Symbol('job'), proof: undefined as symbol | undefined, stop: vi.fn(), dispose: vi.fn() };
-  constructor() { transport.jobs.push(this.job); }
-  launch() { return []; }
-  requestStop() { this.job.stop(); }
-  get verifiedEmpty() { return this.job.proof === this.job.identity; }
-  dispose() { this.job.dispose(); }
-} }));
 const fake = vi.hoisted(() => ({
   project: vi.fn(),
   channel: { on: vi.fn((..._args: unknown[]) => {}), connect: vi.fn(async () => {}), disconnect: vi.fn(async () => {}) },
@@ -194,7 +182,6 @@ beforeEach(async () => {
   shells.length = 0;
   nextPid = 987654321;
   endings.length = 0;
-  transport.jobs.length = 0;
   transport.spawn.mockReset().mockImplementation(() => { throw new Error('Unexpected fixture spawn'); });
   fake.project.mockReset().mockImplementation(async () => ({ name: 'test', chatId: 'chat', cwd: '/test', groupMode: 'single' }));
   fake.backend.resumeThread.mockReset();
@@ -213,7 +200,6 @@ beforeEach(async () => {
   ({ createOrchestrator } = await import('../src/bot/handle-message'));
 });
 afterEach(async () => {
-  for (const job of transport.jobs) job.proof = job.identity;
   for (const fixture of shells) fixture.die();
   if (orchestrator) observe(orchestrator.shutdown());
   await vi.advanceTimersByTimeAsync(2000);
@@ -583,108 +569,4 @@ it('actual backend thread close and resident warm client remain pending past gra
   expect(residentResult.status).toBe('rejected');
 });
 
-});
-
-describe('explicit Windows Job model', () => {
-  beforeEach(() => { Object.defineProperty(process, 'platform', { value: 'win32' }); });
-
-  it('retains registry and exact close Promise until matching Job proof and direct exit both arrive', async () => {
-    const { owner, fixture } = born();
-    const job = transport.jobs[0]!;
-    const closing = owner.close();
-    const result = observe(closing);
-    const registry = ownerModule.closeOwnedCodexProcesses();
-    const registryResult = observe(registry);
-    expect(owner.close()).toBe(closing);
-    expect(ownerModule.closeOwnedCodexProcesses()).toBe(registry);
-    expect(() => born()).toThrow('registry is closed');
-    expect(transport.spawn).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(6000);
-    expect(result.status).toBe('pending');
-    expect(ownerModule.unconfirmedCodexPids()).toEqual([fixture.pid]);
-    job.proof = Symbol('unrelated-job');
-    fixture.exit();
-    await vi.advanceTimersByTimeAsync(114000);
-    expect(result.status).toBe('pending');
-    expect(registryResult.status).toBe('pending');
-    expect(job.stop.mock.calls.length).toBeGreaterThanOrEqual(115);
-    expect(job.dispose).not.toHaveBeenCalled();
-    expect(kill).not.toHaveBeenCalled();
-    job.proof = job.identity;
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(result.status).toBe('fulfilled');
-    expect(registryResult.status).toBe('fulfilled');
-    expect(ownerModule.unconfirmedCodexPids()).toEqual([]);
-    expect(job.dispose).toHaveBeenCalledOnce();
-    expect(owner.close()).toBe(closing);
-    expect(ownerModule.closeOwnedCodexProcesses()).toBe(registry);
-  });
-
-  it('keeps an independently owned Job pending after another Job is proven empty', async () => {
-    const first = born();
-    const second = born();
-    const firstResult = observe(first.owner.close());
-    const secondResult = observe(second.owner.close());
-    first.fixture.exit();
-    second.fixture.exit();
-    const [firstJob, secondJob] = transport.jobs;
-    if (!firstJob || !secondJob) throw new Error('Two Job instances required');
-    firstJob.proof = firstJob.identity;
-    secondJob.proof = firstJob.identity;
-    await vi.advanceTimersByTimeAsync(120000);
-    expect(firstResult.status).toBe('fulfilled');
-    expect(secondResult.status).toBe('pending');
-    expect(firstJob.dispose).toHaveBeenCalledOnce();
-    expect(secondJob.dispose).not.toHaveBeenCalled();
-    expect(ownerModule.unconfirmedCodexPids()).toEqual([second.fixture.pid]);
-    secondJob.proof = secondJob.identity;
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(secondResult.status).toBe('fulfilled');
-    expect(kill).not.toHaveBeenCalled();
-  });
-
-  it('requires direct exit even after matching Job proof arrives', async () => {
-    const { owner, fixture } = born();
-    const job = transport.jobs[0]!;
-    const result = observe(owner.close());
-    job.proof = job.identity;
-    await vi.advanceTimersByTimeAsync(120000);
-    expect(result.status).toBe('pending');
-    expect(job.dispose).not.toHaveBeenCalled();
-    fixture.exit();
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(result.status).toBe('fulfilled');
-    expect(job.dispose).toHaveBeenCalledOnce();
-    expect(kill).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { failure: 'unexpected nonzero exit', exitCode: 17, pipeError: false },
-    { failure: 'forced descendant cleanup', exitCode: 1, pipeError: false },
-    { failure: 'postbirth error', exitCode: 0, pipeError: true },
-  ])('retains $failure through real client close and proof confirmation', async ({ exitCode, pipeError }) => {
-    const fixture = shell();
-    transport.spawn.mockReturnValueOnce(fixture.child);
-    const { AppServerClient } = await import('../src/agent/codex-appserver/app-server-client');
-    const client = new AppServerClient({ bin: '/fixture/no-provider', cwd: '/test' });
-    const connecting = client.connect();
-    await vi.advanceTimersByTimeAsync(0);
-    await connecting;
-    const closing = client.close();
-    const result = observe(closing);
-    expect(client.close()).toBe(closing);
-    if (pipeError) fixture.child.emit('error', new Error('unexpected provider pipe error'));
-    fixture.exit(exitCode);
-    await vi.advanceTimersByTimeAsync(120000);
-    expect(result.status).toBe('pending');
-    const job = transport.jobs[0]!;
-    expect(job.dispose).not.toHaveBeenCalled();
-    job.proof = job.identity;
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(result.status).toBe('rejected');
-    expect(result.error).toBeInstanceOf(ownerModule.CodexProcessCleanupError);
-    expect(job.dispose).toHaveBeenCalledOnce();
-    expect(client.close()).toBe(closing);
-    expect(kill).not.toHaveBeenCalled();
-  });
 });

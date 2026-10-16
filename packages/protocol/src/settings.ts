@@ -169,6 +169,8 @@ export const projectViewSchema = z.object({
     backend: z.string(),
     cwd: z.string(),
     kind: z.string(),
+    /** Set when this host runs the backend only in 完全访问 (Codex on Linux): why 只读 and 读写 are greyed out. */
+    fullOnly: z.string().optional(),
   }),
   members: z.object({ openIds: z.array(z.string()), revision: z.string() }),
 });

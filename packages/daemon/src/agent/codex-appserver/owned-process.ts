@@ -1,6 +1,5 @@
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { spawnProcess } from '../../platform/spawn';
-import { WindowsCodexJob } from './windows-job';
 
 export class CodexProcessCleanupError extends Error {}
 
@@ -29,7 +28,6 @@ const hasCode = (error: unknown, code: string): boolean => error instanceof Erro
 export class OwnedCodexProcess {
   readonly child: ChildProcess;
   private readonly pid: number | undefined;
-  private readonly windowsJob: WindowsCodexJob | undefined;
   readonly exited: Promise<Exit>;
   private directExit: Exit | undefined;
   private groupGone = false;
@@ -40,15 +38,7 @@ export class OwnedCodexProcess {
 
   constructor(command: string, args: string[], options: SpawnOptions) {
     if (!accepting) throw new Error('Codex process registry is closed');
-    this.windowsJob = process.platform === 'win32' ? new WindowsCodexJob() : undefined;
-    try {
-      this.child = this.windowsJob
-        ? spawnProcess(this.windowsJob.executable, this.windowsJob.launch(command, args), options)
-        : spawnProcess(command, args, { ...options, detached: true });
-    } catch (error) {
-      this.windowsJob?.dispose();
-      throw error;
-    }
+    this.child = spawnProcess(command, args, { ...options, detached: true });
     this.pid = this.child.pid;
     this.closed = new Promise(resolve => this.child.once('close', () => resolve()));
     this.exited = new Promise((resolve, reject) => {
@@ -64,7 +54,6 @@ export class OwnedCodexProcess {
     });
     void this.exited.catch(() => undefined);
     if (this.pid !== undefined) ownedProcesses.add(this);
-    else this.windowsJob?.dispose();
   }
 
   get unconfirmedPid(): number | undefined {
@@ -92,12 +81,7 @@ export class OwnedCodexProcess {
   }
 
   private deathConfirmed(): boolean {
-    if (this.windowsJob) {
-      if (!this.groupGone) {
-        try { this.groupGone = this.windowsJob.verifiedEmpty; }
-        catch (error) { this.record('job-proof', error); }
-      }
-    } else this.signalGroup(0);
+    this.signalGroup(0);
     return this.directExit !== undefined && this.groupGone;
   }
 
@@ -111,11 +95,6 @@ export class OwnedCodexProcess {
     return true;
   }
 
-  private requestJobStop(): void {
-    try { this.windowsJob?.requestStop(); }
-    catch (error) { this.record('job-stop', error); }
-  }
-
   private killGroup(): void {
     this.signalGroup(0);
     if (this.groupGone) return;
@@ -125,20 +104,14 @@ export class OwnedCodexProcess {
 
   private async stop(graceMs: number): Promise<void> {
     if (this.pid === undefined) return;
-    if (this.windowsJob) {
-      this.requestJobStop();
-      await this.waitForDeath(6000);
-    } else {
-      this.signalGroup('SIGTERM');
-      if (!await this.waitForDeath(Math.min(Math.max(0, graceMs), 4000))) {
-        this.killGroup();
-        await this.waitForDeath(2000);
-      }
+    this.signalGroup('SIGTERM');
+    if (!await this.waitForDeath(Math.min(Math.max(0, graceMs), 4000))) {
+      this.killGroup();
+      await this.waitForDeath(2000);
     }
     while (!this.deathConfirmed()) {
       this.unconfirmed = true;
-      if (this.windowsJob) this.requestJobStop();
-      else this.killGroup();
+      this.killGroup();
       await sleep(1000);
     }
     this.unconfirmed = false;
@@ -151,8 +124,6 @@ export class OwnedCodexProcess {
         }, 500);
       })]);
     } finally { clearTimeout(timer); }
-    try { this.windowsJob?.dispose(); }
-    catch (error) { this.record('job-dispose', error); }
     if (this.errors.size) {
       throw new CodexProcessCleanupError('Codex 子进程树已退出，但清理失败', {
         cause: new AggregateError(this.errors.values(), 'Codex cleanup errors'),
