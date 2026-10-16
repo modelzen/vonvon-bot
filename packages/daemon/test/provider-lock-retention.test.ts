@@ -32,6 +32,7 @@ vi.mock('node:child_process', async original => ({
   execFileSync: () => { throw new Error('Native execFileSync forbidden in provider retention fixture'); },
   fork: () => { throw new Error('Native fork forbidden in provider retention fixture'); },
 }));
+vi.mock('../src/host/crash-guard', async original => ({ ...await original<object>(), installCrashHandlers: vi.fn() }));
 vi.mock('../src/platform/spawn', async original => ({
   ...await original<object>(), spawnProcess: fixture.spawn,
   spawnProcessSync: () => { throw new Error('Synchronous spawn forbidden in provider retention fixture'); },
