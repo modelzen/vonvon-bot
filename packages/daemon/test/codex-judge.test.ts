@@ -485,7 +485,7 @@ describe('Codex 判断进程：空闲、换版本、关机', () => {
     await judge(call());
     const [pid] = fake.pids();
     await vi.waitFor(() => expect(alive(pid!)).toBe(false));
-    expect(pool.residentCount()).toBe(0);
+    await vi.waitFor(() => expect(pool.residentCount()).toBe(0)); // untracked once close() settles, just after the exit
     expect((await judge(call())).cold).toBe(true);
     expect(fake.pids()).toHaveLength(2);
   });
@@ -514,7 +514,7 @@ describe('Codex 判断进程：空闲、换版本、关机', () => {
     expect(pool.residentCount()).toBe(2);
     expect((await running).text).toBe('final:MODE:slow=600');
     await vi.waitFor(() => expect(alive(oldPid!)).toBe(false));
-    expect(pool.residentCount()).toBe(1);
+    await vi.waitFor(() => expect(pool.residentCount()).toBe(1));
     expect((await judge(call())).cold).toBe(false);
   });
 
