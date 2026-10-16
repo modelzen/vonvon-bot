@@ -50,14 +50,12 @@ describe('openHostRun and closeHostRun', () => {
     now = T0; up = UP;
   });
   afterEach(() => { guard.closeHostRun({ kind: 'clean' }); vi.useRealTimers(); });
-
   it('starts a new chain without a marker and writes its own', () => {
     const start = open();
     expect(start).toMatchObject({ tracked: true, paused: false, previous: null });
     expect(readRunMarker(root)).toMatchObject({ runId: start.runId, chainId: start.chainId, pid: 5000, state: 'running', aliveAt: at(T0), startUptimeMs: UP, bootId: 'boot-a' });
     expect(listCrashRecords(root)).toEqual([]);
   });
-
   it('finds the record the previous run wrote and keeps its chain', () => {
     writeRunMarkerSync(root, marker());
     writeCrashRecordSync(root, crash({ runId: PREV_RUN }));
@@ -65,7 +63,6 @@ describe('openHostRun and closeHostRun', () => {
     expect(start).toMatchObject({ chainId: CHAIN, paused: false, previous: { runId: PREV_RUN, kind: 'exception' } });
     expect(listCrashRecords(root)).toHaveLength(1);
   });
-
   it('writes one forced record from the heartbeat of a run that left no record', () => {
     writeRunMarkerSync(root, marker());
     const start = open();
@@ -74,7 +71,6 @@ describe('openHostRun and closeHostRun', () => {
     expect(start.chainId).toBe(CHAIN);
     expect(logs.warn).toHaveBeenCalledWith('daemon-crash', 'previous_forced', expect.objectContaining({ pid: 4242 }));
   });
-
   it('does not count a kill hours ago at the time of the next start', () => {
     writeRunMarkerSync(root, marker({ aliveAt: at(T0 - 7_200_000), aliveUptimeMs: UP - 7_200_000, startUptimeMs: UP - 7_300_000 }));
     writeCrashRecordSync(root, crash({ sysUptimeMs: UP - 60_000 }));
@@ -82,7 +78,6 @@ describe('openHostRun and closeHostRun', () => {
     expect(open().paused).toBe(false);
     expect(listCrashRecords(root)).toHaveLength(3);
   });
-
   it.each([
     ['boot ids differ', 'boot-b' as string | null, {}],
     ['macOS fallback: started before this boot', null, { bootId: undefined, startedAt: at(T0 - UP - 60_000) }],
@@ -94,7 +89,6 @@ describe('openHostRun and closeHostRun', () => {
     expect(listCrashRecords(root)).toEqual([]);
     expect(logs.info).toHaveBeenCalledWith('daemon-crash', 'previous_reboot', { pid: 4242 });
   });
-
   it('pauses at 3 crashes of one chain in 10 minutes, not at 2 plus one 11 minutes back', () => {
     writeRunMarkerSync(root, marker());
     writeCrashRecordSync(root, crash({ runId: PREV_RUN, sysUptimeMs: UP - 30_000 }));
@@ -102,7 +96,6 @@ describe('openHostRun and closeHostRun', () => {
     writeCrashRecordSync(root, crash({ sysUptimeMs: UP - 660_000 }));
     expect(open().paused).toBe(false);
   });
-
   it('comes up paused after the third crash, and stays paused after one more', async () => {
     writeRunMarkerSync(root, marker());
     writeCrashRecordSync(root, crash({ sysUptimeMs: UP - 300_000 }));
@@ -122,24 +115,22 @@ describe('openHostRun and closeHostRun', () => {
     expect(listCrashRecords(root)[0]).toMatchObject({ kind: 'forced', paused: true });
     fresh.closeHostRun({ kind: 'clean' });
   });
-
-  it('a resume request starts a new chain and is consumed', () => {
+  it('a resume request starts a new chain, is consumed and still records the run that was killed', () => {
     writeRunMarkerSync(root, marker({ state: 'paused', pausedAt: at(T0 - 60_000), pauseCrashes: 3 }));
     writeResumeRequest(root, now - 10_000);
     const start = open();
     expect(start.paused).toBe(false);
     expect(start.chainId).not.toBe(CHAIN);
-    expect(readdirSync(crashDir(root))).toEqual(['run.json']);
+    expect(listCrashRecords(root)).toMatchObject([{ kind: 'forced', runId: PREV_RUN, chainId: CHAIN, paused: true }]);
+    expect(readdirSync(crashDir(root))).not.toContain('resume.json');
     expect(logs.info).toHaveBeenCalledWith('daemon-crash', 'resumed', {});
   });
-
   it('runs unpaused and untracked when the crash directory cannot be written', () => {
     writeFileSync(join(root, 'crash'), 'not a directory');
     expect(open()).toEqual({ tracked: false, paused: false, previous: null });
     expect(logs.fail).toHaveBeenCalledWith('daemon-crash', expect.anything(), { phase: 'open-run' });
     guard.closeHostRun({ kind: 'fatal', error: new Error('ignored') });
   });
-
   it('rewrites the heartbeat every minute until closed, and logs a failed write once', () => {
     vi.useFakeTimers();
     const start = open();
@@ -157,7 +148,6 @@ describe('openHostRun and closeHostRun', () => {
     vi.advanceTimersByTime(120_000);
     expect(readRunMarker(root)).toBeNull();
   });
-
   it('a clean end removes only its own marker; a fatal end writes a record and keeps it', async () => {
     open();
     writeRunMarkerSync(root, marker({ runId: '44444444-4444-4444-8444-444444444444' }));
@@ -192,7 +182,6 @@ describe('crash handler in a real process', () => {
     child.stderr?.on('data', chunk => { stderr += String(chunk); });
     return new Promise<{ code: number | null; stderr: string }>(resolve => child.once('close', code => resolve({ code, stderr })));
   }
-
   it('records an uncaught exception, keeps the marker and exits 70', async () => {
     const root = tempRoot();
     const { code, stderr } = await crashChild(root, ['host']);
@@ -202,14 +191,12 @@ describe('crash handler in a real process', () => {
     expect(listCrashRecords(root)).toEqual([expect.objectContaining({ kind: 'exception', scope: 'host', during: 'run', reason: 'TypeError: fixture boom', errorName: 'TypeError', managed: null })]);
     expect(readRunMarker(root)).toMatchObject({ state: 'running' });
   });
-
   it('records an unhandled rejection of a non-Error', async () => {
     const root = tempRoot();
     const { code } = await crashChild(root, ['host-rejection']);
     expect(code).toBe(70);
     expect(listCrashRecords(root)).toEqual([expect.objectContaining({ kind: 'rejection', reason: 'plain string' })]);
   });
-
   it.each([['restart', 75], ['stop', 0]] as const)('under a manager keeps a requested %s (exit %i), not counted, marker removed', async (intent, expected) => {
     const root = tempRoot();
     const { code } = await crashChild(root, ['host', intent], { VONVON_SERVICE: 'systemd' });
@@ -217,7 +204,6 @@ describe('crash handler in a real process', () => {
     expect(listCrashRecords(root)).toEqual([expect.objectContaining({ during: intent, managed: 'systemd' })]);
     expect(readRunMarker(root)).toBeNull();
   });
-
   it('a paused run under a manager exits 0 so the manager leaves it down, and stays paused', async () => {
     const root = tempRoot();
     const bootId = readBootId();
@@ -228,7 +214,6 @@ describe('crash handler in a real process', () => {
     expect(records.find(entry => entry.kind === 'exception')).toMatchObject({ paused: true });
     expect(readRunMarker(root)).toMatchObject({ state: 'paused', pauseCrashes: 3 });
   });
-
   it('a host that crashes before it owns the run writes nothing', async () => {
     const root = tempRoot();
     const { code } = await crashChild(root, ['before-open'], { VONVON_SERVICE: 'systemd' });

@@ -254,11 +254,11 @@ export function removeResumeRequest(root: string, at: number): void {
 
 export type CrashSummary = { paused?: { since: string; crashes: number; running: boolean }; crashes: CrashRecord[] };
 /** For `vonvon daemon status`: read only, never creates the directory, never asks a service manager. */
-export function readCrashSummary(root: string, options: { running: boolean; ownerPid?: number; now: number }): CrashSummary {
+export function readCrashSummary(root: string, options: { running: boolean; ownerPid?: number; now: number; clock?: Clock }): CrashSummary {
   let marker: RunMarker | null = null;
   try { const read = readRunMarker(root); marker = read === 'corrupt' ? null : read; } catch { /* unreadable: no pause shown */ }
-  // A paused marker of another live daemon is not this daemon's; with nothing running it is the paused run that ended.
-  const paused = marker?.state === 'paused' && (!options.running || marker.pid === options.ownerPid)
+  // Another live daemon's paused marker is not this one's; with nothing running it is the paused run that ended, if in this boot.
+  const paused = marker?.state === 'paused' && (options.running ? marker.pid === options.ownerPid : !startedBeforeThisBoot(marker, options.clock ?? systemClock))
     ? { since: marker.pausedAt ?? marker.startedAt, crashes: marker.pauseCrashes ?? CRASH_PAUSE_COUNT, running: options.running } : undefined;
   let crashes: CrashRecord[] = [];
   try { crashes = listCrashRecords(root, { limit: 20 }).filter(record => options.now - Date.parse(record.at) <= CRASH_SHOWN_MS).slice(0, 10); }

@@ -8,7 +8,7 @@ import type { PidLockInfo } from '../src/server/pid-lock';
 
 vi.mock('../src/server/owner-verification', async original => ({ ...await original<object>(), verifyPidLockOwner: vi.fn(async () => {}) }));
 import { runRestart, runStatus, type RestartDeps } from '../src/cli/commands/daemon';
-import { crashDir, writeCrashRecordSync, writeRunMarkerSync, type CrashRecord, type RunMarker } from '../src/host/crash-store';
+import { crashDir, readBootId, writeCrashRecordSync, writeRunMarkerSync, type CrashRecord, type RunMarker } from '../src/host/crash-store';
 import { PidLockError } from '../src/server/pid-lock';
 
 const roots: string[] = [];
@@ -20,8 +20,9 @@ const old: PidLockInfo = { pid: 41234, startedAt: at(T0 - 60_000), listen: '127.
 const next: PidLockInfo = { pid: 41300, startedAt: at(T0 + 5000), listen: '127.0.0.1:43119' };
 const RUN = '11111111-1111-4111-8111-111111111111';
 const CHAIN = '22222222-2222-4222-8222-222222222222';
+const BOOT = readBootId(); // so a stopped daemon's paused marker is not taken for one from an earlier boot (CI VMs boot fresh)
 function marker(fields: Partial<RunMarker> = {}): RunMarker {
-  return { v: 1, runId: RUN, chainId: CHAIN, pid: old.pid, startedAt: old.startedAt, startUptimeMs: 1, aliveAt: old.startedAt, aliveUptimeMs: 1, version: '0.7.0', managed: null, state: 'running', ...fields };
+  return { v: 1, runId: RUN, chainId: CHAIN, pid: old.pid, startedAt: old.startedAt, startUptimeMs: 1, aliveAt: old.startedAt, aliveUptimeMs: 1, ...(BOOT ? { bootId: BOOT } : {}), version: '0.7.0', managed: null, state: 'running', ...fields };
 }
 function crash(fields: Partial<CrashRecord> = {}): CrashRecord {
   return { v: 1, at: at(T0 - 60_000), sysUptimeMs: 1, kind: 'exception', scope: 'host', pid: 4000, runId: RUN, chainId: CHAIN, startedAt: at(T0 - 249_000), uptimeMs: 189_284, version: '0.7.0', managed: null, during: 'run', reason: "TypeError: Cannot read properties of undefined (reading 'x')", ...fields };
@@ -41,7 +42,6 @@ describe('runRestart', () => {
     now: () => clock, pause: async ms => { clock += ms; }, progress: vi.fn(), timeoutMs: 120_000, ...fields,
   });
   beforeEach(() => { home = tempRoot(); clock = T0; sent = []; reply = async () => ({ kind: 'applied', revision: 1 }); });
-
   it('restarts a running daemon through restartHost and waits past the old, an unverifiable and a half-written lock', async () => {
     locks = [old, old, old, new PidLockError('Invalid daemon PID lock JSON.'), next, next];
     const verify = vi.fn().mockRejectedValueOnce(new PidLockError('Cannot verify daemon owner')).mockResolvedValue(undefined);
@@ -53,13 +53,11 @@ describe('runRestart', () => {
     expect(d.start).not.toHaveBeenCalled();
     expect(() => readdirSync(crashDir(home))).toThrow();
   });
-
   it('says resumed when the running daemon was paused', async () => {
     writeRunMarkerSync(home, marker({ state: 'paused', pausedAt: at(T0), pauseCrashes: 3 }));
     locks = [old, next];
     expect((await runRestart(home, deps())).outcome).toBe('resumed');
   });
-
   it('starts a stopped daemon with a resume request, which the start consumes', async () => {
     writeRunMarkerSync(home, marker({ state: 'paused', pausedAt: at(T0), pauseCrashes: 3 }));
     locks = [null];
@@ -70,13 +68,11 @@ describe('runRestart', () => {
     locks = [null];
     expect((await runRestart(tempRoot(), d)).outcome).toBe('started');
   });
-
   it('removes its resume request when the start fails', async () => {
     locks = [null];
     await expect(runRestart(home, deps({ start: async () => { throw new Error('Daemon exited before readiness.'); } }))).rejects.toThrow('before readiness');
     expect(readdirSync(crashDir(home))).toEqual([]);
   });
-
   it('restarts a daemon that came up on its own instead of leaving the request for it', async () => {
     locks = [null, old, next];
     const d = deps({ start: vi.fn(async () => ({ running: true as const, pid: old.pid, listen: old.listen ?? '', startedAt: old.startedAt })) });
@@ -84,20 +80,17 @@ describe('runRestart', () => {
     expect(sent).toEqual([{ type: 'restartHost' }]);
     expect(readdirSync(crashDir(home))).toEqual([]);
   });
-
   it('reports a refused restart and writes nothing', async () => {
     locks = [old];
     reply = async () => ({ kind: 'refused', code: 'x', message: '已有重启正在进行' });
     await expect(runRestart(home, deps())).rejects.toThrow('重启 daemon没有完成：已有重启正在进行');
     expect(() => readdirSync(crashDir(home))).toThrow();
   });
-
   it('tells a draining daemon apart and does not wait for a replacement', async () => {
     locks = [old];
     const d = deps({ daemon: async () => { throw new Error('和 daemon 的连接断了，daemon 可能正在停止。'); } });
     await expect(runRestart(home, d)).rejects.toThrow('daemon 正在停止或重启，等它结束后再试。');
   });
-
   it('gives up after the timeout with a progress line every 5 s', async () => {
     locks = [old];
     const d = deps({ timeoutMs: 12_000 });
@@ -116,7 +109,6 @@ describe('runStatus', () => {
   });
   afterEach(() => { vi.restoreAllMocks(); });
   const running = (): void => writeFileSync(join(home, 'daemon.pid'), JSON.stringify({ pid: process.pid, startedAt: at(Date.now() - 1000), listen: '127.0.0.1:43119' }));
-
   it('prints one line when there is nothing to show', async () => {
     running();
     await runStatus(false, home, () => T0);
@@ -125,7 +117,6 @@ describe('runStatus', () => {
     await runStatus(true, home, () => T0);
     expect(JSON.parse(out)).toMatchObject({ running: true, pid: process.pid, crashes: [] });
   });
-
   it('shows the pause and the last day of crashes', async () => {
     running();
     writeRunMarkerSync(home, marker({ pid: process.pid, state: 'paused', pausedAt: at(T0), pauseCrashes: 3 }));
@@ -152,7 +143,6 @@ describe('runStatus', () => {
     expect(json.crashes[0]).toEqual({ at: at(T0 - 60_000), kind: 'forced', scope: 'host', version: '0.7.0', uptimeMs: 170_000, paused: true, reason: '被系统强制结束' });
     expect(json.crashes[2]).toMatchObject({ scope: 'bot', appId: 'cli_a1b2c3d4' });
   });
-
   it('stopped while paused: the paused run ended and nothing restarted it', async () => {
     writeRunMarkerSync(home, marker({ state: 'paused', pausedAt: at(T0), pauseCrashes: 3 }));
     writeCrashRecordSync(home, crash({ kind: 'fatal', reason: 'Error: listen EADDRINUSE', paused: true }));
@@ -164,12 +154,10 @@ describe('runStatus', () => {
     await runStatus(true, home, () => T0);
     expect(JSON.parse(out)).toMatchObject({ running: false, paused: { running: false, crashes: 3 } });
   });
-
   it('ignores a paused marker of another live daemon', async () => {
     running();
     writeRunMarkerSync(home, marker({ pid: process.pid + 1, state: 'paused', pausedAt: at(T0), pauseCrashes: 3 }));
     await runStatus(false, home, () => T0);
     expect(out).toBe(`running PID ${process.pid} at 127.0.0.1:43119\n`);
   });
-
 });

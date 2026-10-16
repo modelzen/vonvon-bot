@@ -171,8 +171,7 @@ export function observeShutdown(parentControl = false, options: ShutdownOptions 
         }
         log.fail('daemon-shutdown', error, { phase: 'listener_close_unconfirmed' });
         throw new ListenerCloseUnconfirmedError(error);
-      }
-      if (serviceManaged && intent === 'restart') process.exitCode = 75;
+      } finally { if (serviceManaged && intent === 'restart') process.exitCode = 75; } // s17: kept after a failed release
       return;
     }
   };

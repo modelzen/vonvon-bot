@@ -7,7 +7,7 @@ import { build } from 'esbuild';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
   countInWindow, crashDir, crashErrorName, crashScopeKey, createSystemClock, listCrashRecords, pruneCrashRecords, readBootId,
-  readRunMarker, removeResumeRequest, sanitizeReason, startedBeforeThisBoot, takeResumeRequest,
+  readCrashSummary, readRunMarker, removeResumeRequest, sanitizeReason, startedBeforeThisBoot, takeResumeRequest,
   writeCrashRecordSync, writeResumeRequest, writeRunMarkerSync, type Clock, type CrashRecord, type RunMarker,
 } from '../src/host/crash-store';
 
@@ -69,10 +69,8 @@ describe('records', () => {
     const bot = writeCrashRecordSync(root, record({ scope: 'bot', appId: 'cli_abc' }));
     expect(bot.startsWith(`${crashScopeKey('bot', 'cli_abc')}-`)).toBe(true);
     expect(crashScopeKey('bot', 'cli_abc')).toMatch(/^bot-[0-9a-f]{12}$/);
-    if (process.platform !== 'win32') {
-      expect(statSync(crashDir(root)).mode & 0o777).toBe(0o700);
-      expect(statSync(join(crashDir(root), name)).mode & 0o777).toBe(0o600);
-    }
+    expect(statSync(crashDir(root)).mode & 0o777).toBe(0o700);
+    expect(statSync(join(crashDir(root), name)).mode & 0o777).toBe(0o600);
     expect(readdirSync(crashDir(root)).filter(entry => entry.endsWith('.tmp'))).toEqual([]);
     expect(JSON.parse(readFileSync(join(crashDir(root), name), 'utf8'))).toEqual(record());
     expect(() => writeCrashRecordSync(root, record({ reason: '' }))).toThrow();
@@ -200,5 +198,12 @@ describe('marker and resume request', () => {
     expect(readdirSync(crashDir(root))).toEqual(['resume.json']);
     removeResumeRequest(root, mine);
     expect(readdirSync(crashDir(root))).toEqual([]);
+  });
+  it('shows the pause of a stopped daemon only from this boot: the next start counts afresh after a reboot', () => {
+    const root = tempRoot();
+    writeRunMarkerSync(root, marker({ state: 'paused', pausedAt: at(T0), pauseCrashes: 3, bootId: 'boot-a' }));
+    const summary = (bootId: string) => readCrashSummary(root, { running: false, now: T0, clock: clock({ bootId }) }).paused;
+    expect(summary('boot-a')).toEqual({ since: at(T0), crashes: 3, running: false });
+    expect(summary('boot-b')).toBeUndefined();
   });
 });

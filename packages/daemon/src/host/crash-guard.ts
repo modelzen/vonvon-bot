@@ -124,22 +124,23 @@ export function openHostRun(options: { root: string; startedAt: string; version:
     let paused = false;
     let previous: CrashRecord | null = null;
     let count = 0;
-    if (prev && resume !== 'fresh') {
-      if (startedBeforeThisBoot(prev, clock)) safe(() => log.info('daemon-crash', 'previous_reboot', { pid: prev.pid }));
-      else {
+    if (prev && startedBeforeThisBoot(prev, clock)) safe(() => log.info('daemon-crash', 'previous_reboot', { pid: prev.pid }));
+    else if (prev) {
+      const records = listCrashRecords(options.root, { scope: 'host' });
+      previous = records.find(entry => entry.runId === prev.runId) ?? null;
+      if (!previous) { // also under a resume request: a run killed before `daemon restart` still gets its record (3.10)
+        previous = forcedRecord(prev);
+        writeCrashRecordSync(options.root, previous);
+        records.unshift(previous);
+        safe(() => log.warn('daemon-crash', 'previous_forced', { pid: prev.pid, startedAt: prev.startedAt, aliveAt: prev.aliveAt }));
+      }
+      if (resume !== 'fresh') {
         chainId = prev.chainId;
-        const records = listCrashRecords(options.root, { scope: 'host' });
-        previous = records.find(entry => entry.runId === prev.runId) ?? null;
-        if (!previous) {
-          previous = forcedRecord(prev);
-          writeCrashRecordSync(options.root, previous);
-          records.unshift(previous);
-          safe(() => log.warn('daemon-crash', 'previous_forced', { pid: prev.pid, startedAt: prev.startedAt, aliveAt: prev.aliveAt }));
-        }
         count = countInWindow(records, { chainId, nowUptimeMs: clock.uptimeMs() });
         paused = prev.state === 'paused' || count >= CRASH_PAUSE_COUNT;
       }
-    } else if (resume === 'fresh') safe(() => log.info('daemon-crash', 'resumed', {}));
+    }
+    if (resume === 'fresh') safe(() => log.info('daemon-crash', 'resumed', {}));
     const sticky = paused && prev?.state === 'paused' ? prev : undefined;
     const now = new Date(clock.now()).toISOString();
     const up = clock.uptimeMs();
