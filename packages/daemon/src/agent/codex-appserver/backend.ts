@@ -19,7 +19,7 @@ import type {
   ThreadSummary,
   TurnOptions,
 } from '../types';
-import { isGoalTerminal } from '../types';
+import { isGoalTerminal, SessionInUseError } from '../types';
 import { BRIDGE_DEVELOPER_INSTRUCTIONS } from '../bridge-instructions';
 import { AppServerClient } from './app-server-client';
 import { refillWarmPool, takeWarmClient, utilityRequest } from './client-pool';
@@ -251,11 +251,20 @@ class CodexThread implements AgentThread {
     readonly sessionId: string,
     private model: string | undefined,
     private effort: ReasoningEffort | undefined,
+    /** Resumed, or a turn was started: codex has it on disk. A thread that only had
+     * thread/start resumes as `thread not loaded`, so it is kept until its first turn. */
+    private onDisk: boolean,
+    readonly lastCompaction?: string,
   ) {}
+
+  get releaseAfterRun(): boolean {
+    return this.onDisk;
+  }
 
   runStreamed(input: AgentInput, turn?: TurnOptions): AgentRun {
     const self = this;
     this.currentTurnId = undefined;
+    this.onDisk = true;
     // Per-turn overrides persist for subsequent turns (matches turn/start semantics).
     if (turn?.model) this.model = turn.model;
     if (turn?.effort) this.effort = turn.effort;
@@ -657,21 +666,29 @@ export class CodexAppServerBackend implements AgentBackend {
       developerInstructions: BRIDGE_DEVELOPER_INSTRUCTIONS,
       ...(opts.model ? { model: opts.model } : {}),
     });
-    return new CodexThread(client, res.thread.id, opts.model, opts.effort);
+    return new CodexThread(client, res.thread.id, opts.model, opts.effort, false);
   }
 
   async resumeThread(opts: ResumeThreadOptions): Promise<AgentThread> {
     const sandbox = sandboxParams(opts.mode, opts.network);
     const client = await this.spawn(opts.cwd);
-    const res = await client.request<{ thread: { id: string } }>('thread/resume', {
-      threadId: opts.sessionId,
-      cwd: opts.cwd,
-      approvalPolicy: APPROVAL_POLICY,
-      ...sandbox,
-      developerInstructions: BRIDGE_DEVELOPER_INSTRUCTIONS,
-      ...(opts.model ? { model: opts.model } : {}),
-    });
-    return new CodexThread(client, res.thread.id, opts.model, opts.effort);
+    let res: { thread: { id: string; turns?: Turn[] } };
+    try {
+      res = await client.request<{ thread: { id: string; turns?: Turn[] } }>('thread/resume', {
+        threadId: opts.sessionId,
+        cwd: opts.cwd,
+        approvalPolicy: APPROVAL_POLICY,
+        ...sandbox,
+        developerInstructions: BRIDGE_DEVELOPER_INSTRUCTIONS,
+        ...(opts.model ? { model: opts.model } : {}),
+      });
+    } catch (err) {
+      // This process holds nothing yet; a refused resume must not leave it running.
+      await client.close().catch((closeErr: unknown) => log.fail('agent', closeErr, { phase: 'resume-close' }));
+      if (isWriterConflict(err)) throw new SessionInUseError(opts.sessionId, err);
+      throw err;
+    }
+    return new CodexThread(client, res.thread.id, opts.model, opts.effort, true, lastCompactionOf(res.thread.turns));
   }
 
   private async spawn(cwd: string): Promise<AppServerClient> {
@@ -687,6 +704,18 @@ export class CodexAppServerBackend implements AgentBackend {
     await client.connect();
     return client;
   }
+}
+
+/** A second writer is refused with `thread-store conflict: thread … already has an active
+ * writer` (-32600): codex-cli 0.162.1 (e14) and 0.163.0 (s15b, 2026-10-16). */
+function isWriterConflict(err: unknown): boolean {
+  return /already has an active writer/.test(err instanceof Error ? err.message : String(err));
+}
+
+/** The last compaction item in a resumed thread's turns: its id stays the same across resumes. */
+function lastCompactionOf(turns: Turn[] | undefined): string | undefined {
+  const items = (turns ?? []).flatMap((turn) => (turn.items ?? []) as ThreadItem[]);
+  return items.filter((item) => item.type === 'contextCompaction').at(-1)?.id;
 }
 
 /** Skip codex's injected boilerplate so it never shows as a "user message". */
