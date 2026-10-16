@@ -144,6 +144,11 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
       pid, runId, chainId, startedAt: new Date(c.startedAt).toISOString(), uptimeMs: Math.max(0, Date.now() - c.startedAt), version, managed,
       during: 'run', reason: sanitizeReason(reason),
     }));
+    // Pruned at most once a minute, failed spawns included (they never reach countCrash); a paused bot writes no more.
+    if (!(Date.now() - (c.prunedAt ?? 0) < 60_000)) {
+      c.prunedAt = Date.now();
+      tryDisk(c, 'crash-prune', 0, () => pruneCrashRecords(root, { now: clock.now(), scope: crashScopeKey('bot', c.bot.appId) }));
+    }
   };
   /** Counts a crash: the larger of the disk's count (it outlives a host crash) and memory's. True when it paused the bot. */
   const countCrash = (c: Child): boolean => {
@@ -153,8 +158,6 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     const key = crashScopeKey('bot', c.bot.appId);
     const onDisk = tryDisk(c, 'crash-count', 0, () => countInWindow(listCrashRecords(root, { scope: key, limit: 10 }),
       { chainId, nowUptimeMs: up, appId: c.bot.appId, ...(since !== undefined ? { sinceUptimeMs: since } : {}) }));
-    // A bot that keeps crashing is pruned at most once a minute; a paused one writes no more.
-    if (!(Date.now() - (c.prunedAt ?? 0) < 60_000)) { c.prunedAt = Date.now(); tryDisk(c, 'crash-prune', 0, () => pruneCrashRecords(root, { now: clock.now(), scope: key })); }
     api?.invalidate();
     const crashes = Math.max(onDisk, c.crashTimes.length);
     if (crashes < CRASH_PAUSE_COUNT) return false;
@@ -164,6 +167,8 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     console.error(`\x1b[2m[${c.bot.name}]\x1b[0m 10 分钟内崩溃了 ${crashes} 次，已停止自动重启。查完原因后在状态与诊断页点「恢复运行」，或运行 vonvon daemon restart。`);
     return true;
   };
+  const pausedWrite = (c: Child): string =>
+    `机器人「${c.bot.name}」10 分钟内崩溃了 ${c.pause?.crashes ?? CRASH_PAUSE_COUNT} 次，已暂停。在状态与诊断页点「恢复运行」后再试。`;
   const restartLater = (c: Child, fields: Record<string, unknown>, what: string): void => {
     const wait = c.backoffMs;
     c.backoffMs = Math.min(c.backoffMs * 2, BACKOFF_MAX_MS);
@@ -318,7 +323,8 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
             log.info('supervisor', 'bot-resumed', { bot: child.bot.name, appId });
             child.pause = undefined;
             child.crashTimes = [];
-            child.resumedUptimeMs = clock.uptimeMs();
+            // macOS reports uptime in whole seconds: a crash in the same second must still count.
+            child.resumedUptimeMs = clock.uptimeMs() - 1;
             child.backoffMs = BACKOFF_MIN_MS;
             savePauses(child);
             api?.invalidate();
@@ -327,7 +333,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
           spawnChild(child);
           const deadline = Date.now() + 12_000;
           let lastError: unknown;
-          while (!shuttingDown && child.enabled && Date.now() < deadline) {
+          while (!shuttingDown && child.enabled && !child.pause && Date.now() < deadline) {
             const proc = child.proc;
             const ipc = child.ipc;
             if (proc && ipc) {
@@ -338,6 +344,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
             }
             await new Promise((resolve) => setTimeout(resolve, 100));
           }
+          if (child.pause) throw new Error(pausedWrite(child));
           throw new Error(`Agent 启动后未能及时响应，请检查状态与诊断。${lastError instanceof Error ? lastError.message : ''}`, { cause: lastError });
         },
         executeCollaboration: async (botId, request) => {
@@ -358,7 +365,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
         executeWrite: async (botId, op) => {
           const c = byAppId(botId);
           if (!c?.enabled) throw new AdminWriteError(`机器人「${botId}」已停用，请先启用。`);
-          if (c.pause) throw new AdminWriteError(`机器人「${c.bot.name}」10 分钟内崩溃了 ${c.pause.crashes} 次，已暂停。在状态与诊断页点「恢复运行」后再试。`);
+          if (c.pause) throw new AdminWriteError(pausedWrite(c));
           if (!c.proc || !c.ipc) throw new AdminWriteError(`机器人「${c.bot.name}」进程未在运行（崩溃重启中），稍后重试。`);
           return c.ipc.call(op);
         },

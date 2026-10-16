@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { homedir, tmpdir, uptime } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -166,8 +166,31 @@ it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('counts in m
   expect(f.crashes?.application(Date.now())).toEqual({ records: [] });
 });
 
+// Real backoff 1 + 2 + 4 s: longer than vitest's default 5 s when run from the repo root.
 it('a spawn without a PID (EAGAIN) leaves one record a minute and is retried without counting', async () => {
   await start([A], [A], 3);
   expect(records()).toMatchObject([{ kind: 'fatal', reason: 'spawn EAGAIN', during: 'run' }]);
   expect(f.crashes?.paused(A)).toBeUndefined();
+}, 15_000);
+
+it('a failed spawn prunes the old records too', async () => {
+  const at = Date.now() - 3_600_000;
+  for (let i = 0; i < 60; i++) {
+    writeCrashRecordSync(f.root, {
+      v: 1, at: new Date(at + i * 1000).toISOString(), sysUptimeMs: 1, kind: 'exception', scope: 'bot', appId: A, pid: 5000 + i, runId: RUN, chainId: OTHER_CHAIN,
+      startedAt: new Date(at).toISOString(), version: '0.7.0', managed: null, during: 'run', reason: 'Error: old',
+    });
+  }
+  await start([A], [A], 1);
+  expect(readdirSync(join(f.root, 'crash')).filter(name => name.startsWith(crashScopeKey('bot', A)))).toHaveLength(50);
 });
+
+it('恢复运行 that crashes straight back into a pause says so, instead of timing out', async () => {
+  writeBotPausesSync(f.root, CHAIN, { [A]: { pausedAt: new Date().toISOString(), pauseCrashes: 3 } });
+  const deps = await start([A], []);
+  vi.mocked(spawnProcess).mockImplementation((_bin, _args, options) => spawn(process.execPath, ['-e', 'process.exit(1)'], options ?? {}));
+  const begun = Date.now();
+  await expect(deps.applyBotActivation?.(A, true)).rejects.toThrow('已暂停。在状态与诊断页点「恢复运行」后再试');
+  expect(Date.now() - begun).toBeLessThan(11_000);
+  expect(f.crashes?.paused(A)).toMatchObject({ crashes: 3 });
+}, 15_000);
