@@ -31,10 +31,15 @@ export async function runRun(botName?: string, options: RunOptions = {}): Promis
   const managed = Boolean(options.managed);
   if (options.paused) {
     // Paused mode must come up even when reading the registry is what crashed; no onboarding, no inline bot.
+    // When it cannot be read, any bot with a folder may send the pause message: it may be the owner's only word (s18b D1).
     let bots: BotEntry[] = [];
+    let registryUnreadable = false;
     try { bots = activeBots(await ensureRegistry()); }
-    catch (error) { log.fail('daemon-crash', error, { phase: 'paused-registry' }); }
-    await runSupervisor(bots, { control, managed, port: options.port, onListening: options.onListening, paused: true, ...(options.crash ? { crash: options.crash } : {}) });
+    catch (error) { registryUnreadable = true; log.fail('daemon-crash', error, { phase: 'paused-registry' }); }
+    await runSupervisor(bots, {
+      control, managed, port: options.port, onListening: options.onListening, paused: true,
+      ...(options.crash ? { crash: options.crash } : {}), ...(registryUnreadable ? { registryUnreadable: true } : {}),
+    });
     return;
   }
   // Explicit selector always runs exactly that one bot inline (this is also how
