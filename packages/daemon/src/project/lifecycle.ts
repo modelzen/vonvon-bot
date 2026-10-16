@@ -6,7 +6,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { paths } from '../config/paths';
 import { log } from '../core/logger';
-import { addProject, getProjectByChatId, getProjectByName, type Project } from './registry';
+import { addProject, bindNoMention, getProjectByChatId, getProjectByName, type Project } from './registry';
 import type { PermissionMode } from '../agent/types';
 import { isBackendEntryInstalled } from '../agent';
 import { catalogById, isInstallable, projectCreatableBackends } from '../agent/catalog';
@@ -48,8 +48,10 @@ export interface CreateProjectInput {
   existingPath?: string;
   /** optional config.json override for the parent directory of blank projects. */
   projectsRootDir?: string;
-  /** session model for the group (default 'multi'). */
-  kind?: 'multi' | 'single';
+  /** 会话方式, required: every entry asks for it (product.md 3.4). */
+  kind: 'multi' | 'single';
+  /** 免@; left out → {@link bindNoMention}. Always written, so a later 会话方式 switch keeps it. */
+  noMention?: boolean;
   /** permission tier (default 'full' for self-created projects). */
   mode?: PermissionMode;
   /** agent backend chosen at creation (fixed afterwards — no switching). When
@@ -70,8 +72,10 @@ export interface JoinGroupInput {
   existingPath?: string;
   /** optional config.json override for the parent directory of blank projects. */
   projectsRootDir?: string;
-  /** session model for the group (default 'multi'). */
-  kind?: 'multi' | 'single';
+  /** 会话方式, required: every entry asks for it (product.md 3.4). */
+  kind: 'multi' | 'single';
+  /** 免@; left out → {@link bindNoMention}. */
+  noMention?: boolean;
   /** permission tier (default 'qa' — read-only — for joined external groups). */
   mode?: PermissionMode;
   /** agent backend chosen at bind time (fixed afterwards — no switching). */
@@ -170,7 +174,8 @@ export async function createProject(channel: LarkChannel, input: CreateProjectIn
     cwd,
     blank,
     createdAt: Date.now(),
-    kind: input.kind ?? 'multi',
+    kind: input.kind,
+    noMention: input.noMention ?? bindNoMention(input.kind),
     origin: 'created',
     mode: input.mode ?? 'full',
     backend: input.backend || undefined,
@@ -213,7 +218,8 @@ export async function joinExistingGroup(channel: LarkChannel, input: JoinGroupIn
     cwd,
     blank,
     createdAt: Date.now(),
-    kind: input.kind ?? 'multi',
+    kind: input.kind,
+    noMention: input.noMention ?? bindNoMention(input.kind),
     origin: 'joined',
     addedBy: input.addedBy,
     mode: input.mode ?? 'qa',

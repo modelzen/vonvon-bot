@@ -1494,7 +1494,7 @@ export function ProjectPanel({
         render={(draft, set, disabled, commit) => (
           <SettingsRow
             title="不 @ 也能发起任务"
-            description="按话题独立会话时，已有话题和群内支持的命令免 @。整群连续会话时，群内普通消息也会响应。"
+            description="@ 我开新会话：话题里的消息和群内支持的命令不用 @。整群一条会话：群里的普通消息不 @ 也回。切换会话方式不改这一项。"
             trailing={
               <Switch
                 label="不 @ 也能发起任务"

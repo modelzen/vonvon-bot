@@ -117,6 +117,11 @@ describe("pinned contract extraction", () => {
         permission:section({mode:"qa",guestMode:"qa",network:false}),
         response:section({noMention:false}),model:section({selection}),
       },identity:{chatId:"oc_fixture",backend:"codex-appserver",cwd:"/tmp",kind:"multi"},members:{openIds:[],revision:"r1"}},
+      // s21's run section: stored "default" inherits the bot's
+      {scope:{kind:"project",botId:"cli_fixture",projectName:"fixture"},sections:{
+        permission:section({mode:"qa",guestMode:"qa",network:false}),
+        response:section({noMention:false}),model:section({selection}),run:section({pendingPolicy:"default"}),
+      },identity:{chatId:"oc_fixture",backend:"codex-appserver",cwd:"/tmp",kind:"multi"},members:{openIds:[],revision:"r1"}},
       {scope:{kind:"session",botId:"cli_fixture",threadId:"thread"},sections:{model:section({selection})},identity:{backend:"codex-appserver",sessionId:"session",chatId:"oc_fixture",projectName:"fixture"}},
       {scope:{kind:"host"},sections:{execution:section({codexBin:null})},runtime:{codexBin:null,fallbackCwd:"/tmp",platform:"macos"}},
     ];
