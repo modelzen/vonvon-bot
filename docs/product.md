@@ -475,8 +475,8 @@ owner 说过"崩溃报错就好了"，让 Claude 斟酌。自动重启是 Claude
 5. 连 SSH 转发都用不了时，终端里也能扫码建 bot。
 
 要补的：
-- `vonvon open --print`：打印链接、端口和一行 `ssh -L` 示例，并提醒链接里带着凭据，别贴给别人。今天没有图形界面时 `vonvon open` 会失败（`D/cli/commands/open.ts:24`）。
-- 界面在 Linux 上会显示成"这台 Windows 电脑"（`D/server/snapshot.ts:29`、`packages/ui/src/App.tsx:861-865`），要改。
+- `vonvon open --print`：打印链接、端口和一行 `ssh -L` 示例，并提醒链接里带着凭据，别贴给别人。今天没有图形界面时 `vonvon open` 会失败（`D/cli/commands/open.ts:24`）。（s20a 已改）
+- 界面在 Linux 上会显示成"这台 Windows 电脑"（`D/server/snapshot.ts:29`、`packages/ui/src/App.tsx:861-865`），要改。（s20a 已改）
 - Linux 上不显示"登录时启动"开关。
 - 第一版不做 Linux 上从 bridge 自动导入。Linux 上的 Codex 只能用完全访问（3.8）。
 

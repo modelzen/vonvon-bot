@@ -4,19 +4,25 @@ import {useClient, useShellCapabilities} from '../client-context';
 import {SettingsGroup, SettingsRow} from '../reference/components/system-settings';
 import {Button, StatusBadge} from '../reference/components/ui';
 import {openExternalUrl} from '../url-actions';
-import {botSteps, serviceStep, toolSteps, type SetupStep, type StepAction} from '@vonvon/protocol';
+import {botSteps, linuxSteps, serviceStep, toolSteps, type SetupStep, type StepAction} from '@vonvon/protocol';
 import {skipService, toggleService} from './service-toggle';
 import {useSetupStatus} from './useSetupStatus';
 import {useClaudeLoginCheck} from './useClaudeLoginCheck';
 import './setup.css';
 
-/** A step's detail, its items as code chips and its warnings; undefined when it has none, so the row stays plain. */
-export function stepDescription({detail, items, warnings}: Pick<SetupStep, 'detail' | 'items' | 'warnings'>): ReactNode {
-  if (!detail && !items?.length && !warnings?.length) return undefined;
+const SERVICE_FOOTER: Partial<Record<DesktopSnapshot['application']['platform'], string>> = {
+  macos: '装成 macOS 的后台服务（LaunchAgent）。',
+  linux: 'systemd 用户服务。退出 SSH 后也要在线，安装时打开 linger。',
+};
+
+/** A step's detail, its items as code chips, its warnings and its commands; undefined when it has none, so the row stays plain. */
+export function stepDescription({detail, items, warnings, commands}: Pick<SetupStep, 'detail' | 'items' | 'warnings' | 'commands'>): ReactNode {
+  if (!detail && !items?.length && !warnings?.length && !commands?.length) return undefined;
   return <>
     {detail}
     {items?.length ? <span className="setup-step-items">{items.map(item => <code key={item}>{item}</code>)}</span> : null}
     {warnings?.map(warning => <span key={warning} className="setup-step-warning">{warning}</span>)}
+    {commands?.length ? <pre className="setup-step-commands">{commands.join('\n')}</pre> : null}
   </>;
 }
 
@@ -70,6 +76,7 @@ export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEn
       </span>}/>;
   }
   const tools = toolSteps(snapshot.tools, {claudeChecking: claudeLogin.checking});
+  const linux = snapshot.application.platform === 'linux' ? linuxSteps(snapshot.tools) : [];
   return <div className="page-stack setup-checklist">
     <p className="collaboration-footnote">每一步都会自动检测，做完会变成绿色。飞书那边的设置改完后，几秒内这里会跟着变。</p>
     <SettingsGroup label="执行工具" footer="Codex 或 Claude 至少需要一个可用。"
@@ -77,7 +84,9 @@ export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEn
       {tools.steps.map((step, index) => stepRow(step, index))}
     </SettingsGroup>
     {codexJobs}
-    <SettingsGroup label="后台运行" footer={snapshot.application.platform === 'macos' ? '装成 macOS 的后台服务（LaunchAgent）。' : undefined}>
+    {/* Only explains what the qa and write modes need here; not counted in 可以用了 or 还差几步 (s20a). */}
+    {linux.length ? <SettingsGroup label="Linux 上的权限档">{linux.map((step, index) => stepRow(step, index))}</SettingsGroup> : null}
+    <SettingsGroup label="后台运行" footer={SERVICE_FOOTER[snapshot.application.platform]}>
       {stepRow(serviceStep(snapshot.application), 0)}
     </SettingsGroup>
     {snapshot.agents.map(agent => {

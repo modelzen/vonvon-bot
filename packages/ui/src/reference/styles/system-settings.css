@@ -2582,14 +2582,6 @@ html[data-desktop-platform="macos"] .ss-toolbar__drag-region {
   }
 }
 
-html[data-desktop-platform="windows"] .settings-sidebar {
-  padding-top: 16px;
-}
-
-html[data-desktop-platform="windows"] .first-run-preparation__header {
-  padding-left: 16px;
-}
-
 @media (prefers-contrast: more) {
   .settings-sidebar-item.is-selected {
     outline: 2px solid currentColor;

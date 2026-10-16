@@ -3,4 +3,5 @@
 .setup-step-items {display:flex;flex-wrap:wrap;gap:4px 6px;margin-top:4px;}
 .setup-step-items code {font-size:11px;}
 .setup-step-warning {display:block;margin-top:4px;color:var(--color-status-warning);}
+.setup-step-commands {margin:6px 0 0;padding:8px 10px;border-radius:6px;background:var(--color-surface-muted);font:11px/1.5 var(--font-family-mono);white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;}
 @media(max-width:800px){.setup-checklist .ss-row--described,.diagnostics-page .ss-row:has(.setup-step-trailing){flex-wrap:wrap;}.setup-checklist .ss-row__trailing,.diagnostics-page .ss-row:has(.setup-step-trailing) .ss-row__trailing{width:100%;}.setup-step-trailing{justify-content:flex-start;}}

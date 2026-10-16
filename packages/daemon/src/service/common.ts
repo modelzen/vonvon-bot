@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ServiceState } from '@vonvon/protocol';
 import { paths } from '../config/paths';
+import type { Linger } from './linux-session';
 
 /**
  * Where the background service stands:
@@ -38,6 +39,9 @@ export interface ServiceStatus {
   pid?: string;
   /** One line on the state and the next step. */
   detail: string;
+  /** Linux: linger, and why the user manager cannot be asked when the state is `unknown` (s20a). */
+  linger?: Linger;
+  hint?: string;
 }
 
 /** Service log files live under the app dir, identical across platforms. */
