@@ -76,8 +76,7 @@ export function copyFeedback(outcome: CopyOutcome, shortcut = copyShortcut()): s
 
 export function groupUrl(groupId: string, threadId?: string): string {
   const group = encodeURIComponent(groupId);
-  const topic = threadId?.replace(/#(?:admin|guest)$/, "");
-  if (topic && /^omt_[A-Za-z0-9_-]+$/.test(topic))
-    return `https://applink.feishu.cn/client/thread/open?open_chat_id=${group}&open_thread_id=${encodeURIComponent(topic)}&thread_position=0`;
+  if (threadId && /^omt_[A-Za-z0-9_-]+$/.test(threadId))
+    return `https://applink.feishu.cn/client/thread/open?open_chat_id=${group}&open_thread_id=${encodeURIComponent(threadId)}&thread_position=0`;
   return `https://applink.feishu.cn/client/chat/open?openChatId=${group}`;
 }

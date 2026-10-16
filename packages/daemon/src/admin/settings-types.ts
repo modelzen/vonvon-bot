@@ -62,7 +62,6 @@ export interface AgentSections {
 export interface ProjectSections {
   permission: {
     mode: PermissionMode;
-    guestMode: PermissionMode;
     network: boolean;
   };
   response: {

@@ -34,8 +34,6 @@ export interface QuoteWindow {
   exclude?: string;
   /** Already quoted to this session. */
   skip?: (t: TopicView) => boolean;
-  /** The session's tier: only that tier's binding gives a session id. */
-  tier?: 'admin' | 'guest';
 }
 
 /** Someone the registry recorded, as a block names them. */
@@ -47,9 +45,8 @@ export function personOf(p: TopicPerson | undefined, names: NameBook): Who | und
   return { kind: 'user', name: name ?? (p.openId ? `用户${p.openId.slice(-4)}` : undefined) };
 }
 
-function quoteOf(t: TopicView, tier: QuoteWindow['tier'], names: NameBook): TopicQuote {
-  const key = tier ? `${t.topicId}#${tier}` : t.topicId;
-  const sessionId = t.sessions.find((s) => s.key === key)?.sessionId;
+function quoteOf(t: TopicView, names: NameBook): TopicQuote {
+  const sessionId = t.sessions.find((s) => s.key === t.topicId)?.sessionId;
   return {
     topicId: t.topicId,
     title: t.title,
@@ -72,12 +69,12 @@ export function topicQuotes(topics: TopicView[], w: QuoteWindow, names: NameBook
     })
     .sort((a, b) => a.openedAt - b.openedAt);
   const kept = hits.slice(-QUOTES_MAX);
-  return { quotes: kept.map((t) => quoteOf(t, w.tier, names)), more: hits.length - kept.length };
+  return { quotes: kept.map((t) => quoteOf(t, names)), more: hits.length - kept.length };
 }
 
 /** Table rows for topics, in the order given. */
-export function topicRows(topics: TopicView[], tier: QuoteWindow['tier'], names: NameBook): TopicRow[] {
-  return topics.map((t) => ({ ...quoteOf(t, tier, names), lastAt: t.lastAt }));
+export function topicRows(topics: TopicView[], names: NameBook): TopicRow[] {
+  return topics.map((t) => ({ ...quoteOf(t, names), lastAt: t.lastAt }));
 }
 
 /** Another vonvon bot on this daemon: its name and its topic registry's directory. */

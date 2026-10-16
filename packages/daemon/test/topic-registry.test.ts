@@ -68,7 +68,7 @@ describe('mergeTopic', () => {
 });
 
 describe('topic registry file', () => {
-  it("records a topic and joins only this group's live bindings for it", async () => {
+  it("records a topic and joins only this group's live bindings for it, not keys from before s15c", async () => {
     bindings = [
       { threadId: 'omt_a', chatId: CHAT, sessionId: 's-admin', backend: 'codex' },
       { threadId: 'omt_a#guest', chatId: CHAT, sessionId: 's-guest', backend: 'claude' },
@@ -82,7 +82,7 @@ describe('topic registry file', () => {
       topicId: 'omt_a',
       firstId: 'om_root',
       openedBy: user('ou_a'),
-      sessions: [{ key: 'omt_a', sessionId: 's-admin', backend: 'codex' }, { key: 'omt_a#guest', sessionId: 's-guest', backend: 'claude' }],
+      sessions: [{ key: 'omt_a', sessionId: 's-admin', backend: 'codex' }],
     });
     expect((await reg.list(CHAT)).map((t) => t.topicId)).toEqual(['omt_b', 'omt_a']);
     expect((await reg.list(CHAT, { limit: 1 })).map((t) => t.topicId)).toEqual(['omt_b']);
@@ -170,18 +170,18 @@ describe('topic registry file', () => {
     const minute = 60_000;
     for (let i = 0; i < MAX_TOPICS; i++) await reg.note(CHAT, seen(`omt_${i}`, (i + 10) * minute));
     bindings = [
-      { threadId: 'omt_0#guest', chatId: CHAT, sessionId: 's-0', backend: 'codex' },
+      { threadId: 'omt_0', chatId: CHAT, sessionId: 's-0', backend: 'codex' },
       { threadId: 'omt_1', chatId: CHAT, sessionId: 's-1', backend: 'codex', detached: true },
       { threadId: 'omt_2', chatId: 'oc_other', sessionId: 's-2', backend: 'codex' },
+      { threadId: 'omt_3#guest', chatId: CHAT, sessionId: 's-3', backend: 'codex' },
     ];
-    await reg.note(CHAT, seen('omt_new', (MAX_TOPICS + 20) * minute));
-    await reg.note(CHAT, seen('omt_newer', (MAX_TOPICS + 21) * minute));
-    await reg.note(CHAT, seen('omt_newest', (MAX_TOPICS + 22) * minute));
+    for (let i = 0; i < 4; i++) await reg.note(CHAT, seen(`omt_new${i}`, (MAX_TOPICS + 20 + i) * minute));
     const ids = (await reg.list(CHAT)).map((t) => t.topicId);
     expect(ids).toHaveLength(MAX_TOPICS + 1);
     expect(ids.at(-1)).toBe('omt_0');
     expect(ids).not.toContain('omt_1');
     expect(ids).not.toContain('omt_2');
-    expect((await reg.get(CHAT, 'omt_0'))?.sessions).toEqual([{ key: 'omt_0#guest', sessionId: 's-0', backend: 'codex' }]);
+    expect(ids).not.toContain('omt_3'); // bound only under a key from before s15c
+    expect((await reg.get(CHAT, 'omt_0'))?.sessions).toEqual([{ key: 'omt_0', sessionId: 's-0', backend: 'codex' }]);
   });
 });

@@ -1,4 +1,5 @@
 import { rmSync } from 'node:fs';
+import { readFile, writeFile } from 'node:fs/promises';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { paths } from '../src/config/paths';
 import { addProject, getProjectByName, removeProject } from '../src/project/registry';
@@ -246,21 +247,30 @@ describe('performSetCompletionReminder', () => {
 });
 
 describe('performSetPermissionMode', () => {
-  it('落盘 mode/guestMode/network + 驱逐活跃会话（新档立即生效的既有语义）', async () => {
+  it('落盘 mode/network + 驱逐活跃会话（新档立即生效的既有语义）', async () => {
     const evict = vi.fn(async () => undefined);
     const r = await performSetPermissionMode({
       projectName: 'demo',
       mode: 'qa',
-      guestMode: 'write',
       network: true,
       evictLiveSessionsForChat: evict,
     });
     expect(r.ok).toBe(true);
     const p = await getProjectByName('demo');
     expect(p?.mode).toBe('qa');
-    expect(p?.guestMode).toBe('write');
     expect(p?.network).toBe(true);
     expect(evict).toHaveBeenCalledWith('oc_demo');
+  });
+
+  it('a row stored with two tiers (before s15c) has no guestMode after a save, and keeps the saved tier', async () => {
+    const stored = JSON.parse(await readFile(paths.projectsFile, 'utf8'));
+    stored.projects = stored.projects.map((p: Record<string, unknown>) => (p.name === 'demo' ? { ...p, mode: 'full', guestMode: 'qa' } : p));
+    await writeFile(paths.projectsFile, JSON.stringify(stored));
+    const r = await performSetPermissionMode({ projectName: 'demo', mode: 'write', evictLiveSessionsForChat: async () => undefined });
+    expect(r.ok).toBe(true);
+    const row = JSON.parse(await readFile(paths.projectsFile, 'utf8')).projects.find((p: { name: string }) => p.name === 'demo');
+    expect(row).not.toHaveProperty('guestMode');
+    expect(row.mode).toBe('write');
   });
 
   it('缺省字段不改盘（undefined 跳过——与 DM 旧写法等价）', async () => {
@@ -268,7 +278,6 @@ describe('performSetPermissionMode', () => {
     await performSetPermissionMode({ projectName: 'demo', network: false, evictLiveSessionsForChat: evict });
     const p = await getProjectByName('demo');
     expect(p?.mode).toBe('full'); // 原值保留
-    expect(p?.guestMode).toBeUndefined();
   });
 
   it('Web 来路的非法档位 → 拒绝（DM 来路有 asTier 收窄，这里再守一道）', async () => {
@@ -296,13 +305,6 @@ describe('performSetPermissionMode', () => {
     expect(evict).not.toHaveBeenCalled();
     expect((await getProjectByName('cl'))?.mode).toBe('full'); // 未改盘
     await removeProject('cl');
-  });
-
-  it('guestMode 改到后端不支持的档同样被拦（普通用户档也要兼容后端）', async () => {
-    await addProject({ name: 'cl2', chatId: 'oc_cl2', cwd: '/tmp/cl2', blank: false, createdAt: 1, mode: 'full', backend: 'fake-fullonly' });
-    const r = await performSetPermissionMode({ projectName: 'cl2', guestMode: 'qa', evictLiveSessionsForChat: async () => undefined });
-    expect(r.ok).toBe(false);
-    await removeProject('cl2');
   });
 
   it('codex 后端（supportedModes 全档）→ 任意权限档放行', async () => {

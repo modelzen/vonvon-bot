@@ -9,7 +9,9 @@ import type { AppConfig } from '../config/schema';
 import { log } from '../core/logger';
 import { createOrchestrator } from './handle-message';
 import { createTopicRegistry } from './topic-registry';
+import { adoptAdminSessions } from './session-store';
 import { paths } from '../config/paths';
+import { splitTierChats } from '../project/registry';
 
 export interface BridgeOptions {
   cfg: AppConfig;
@@ -38,6 +40,7 @@ export interface BridgeHandle {
  * `card.action.trigger` (lark-cli doesn't deliver it).
  */
 export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
+  await mergeTiers();
   const app = opts.cfg.accounts.app;
   const channel = createLarkChannel({
     appId: app.id,
@@ -164,5 +167,24 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
       throw new AggregateError([error, ...cleanupErrors], 'Bridge startup and cleanup failed');
     }
     throw error;
+  }
+}
+
+/**
+ * s15c: a group has one tier and one session per place. Before anything reads
+ * the stores, admins' `#admin` sessions of groups that still store two tiers
+ * take their place's key; projects.json drops `guestMode` at its next write
+ * (see foldGuestTier), so this reruns until then. The single-instance lock
+ * keeps an old process from writing meanwhile. A failure is logged, never
+ * fatal: the bot starts and the next start tries again.
+ */
+async function mergeTiers(): Promise<void> {
+  try {
+    const split = await splitTierChats();
+    if (!split.size) return;
+    const places = await adoptAdminSessions(split);
+    log.info('run', 'tier-merge', { chats: [...split].map(([chat, tier]) => `${chat.slice(-6)}→${tier}`), sessions: places.length, places: places.map((p) => p.slice(-6)) });
+  } catch (err) {
+    log.fail('run', err, { phase: 'tier-merge' });
   }
 }

@@ -269,7 +269,8 @@ it('settings set parses values as JSON or text and names the bad field', () => {
   for (const text of ['null', '[]', '{}']) expect(() => parseAssignments('agent', [`comments.backend=${text}`])).toThrow('comments.backend');
   for (const [kind, args, message] of [
     ['project', ['permission.mode=bad'], 'permission.mode 只能是 qa、write、full'],
-    ['project', ['permission.nope=1'], 'permission 没有 nope 这一项。可以改的有：mode、guestMode、network'],
+    ['project', ['permission.nope=1'], 'permission 没有 nope 这一项。可以改的有：mode、network'],
+    ['project', ['permission.guestMode=full'], '「普通成员权限」去掉了：一个群只有一个权限档，群里谁说话都用它。改 permission.mode。'],
     ['project', ['permission.mode=full', 'cards.showModel=off'], '一次只能改一节；permission 和 cards 分两次改。'],
     ['agent', ['cliBridge.agents={}'], '咖啡一下第一版已拿掉，不能改。'],
     ['project', ['compact.autoCompact=false'], '自动压缩现在一直开着，不能关了。'],
@@ -286,7 +287,7 @@ it('settings set parses values as JSON or text and names the bad field', () => {
 
 it('settings set saves with the section revision and explains each refusal', async () => {
   const scope = { kind: 'project', botId: 'cli_a', projectName: 'pay' };
-  const view = { scope, sections: { permission: section({ mode: 'qa', guestMode: 'qa', network: false }), model: section({ selection: { kind: 'default' } }) } };
+  const view = { scope, sections: { permission: section({ mode: 'qa', network: false }), model: section({ selection: { kind: 'default' } }) } };
   const results: unknown[] = [
     { kind: 'saved', section: { scope, section: 'permission', value: section({ mode: 'full' }) }, effects: [{ fields: ['mode'], when: 'next-turn', detail: '下一轮生效。' }] },
     { kind: 'conflict', current: {} }, { kind: 'rejected', fields: [{ field: 'mode', message: '后端不支持此权限档位' }] },

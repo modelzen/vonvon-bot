@@ -319,6 +319,32 @@ export async function detachSessionsForChat<T>(chatId: string, commit: () => Pro
   });
 }
 
+/** A key from before s15c (one tier per group): admins' and guests' sessions of
+ * a group with two tiers. Left in sessions.json, never used. */
+export const isRetiredKey = (key: string): boolean => /#(admin|guest)$/.test(key);
+
+/**
+ * At start (s15c): in each group that still stores two tiers, admins talked in
+ * `<place>#admin`, so each live such record takes its place's key, replacing
+ * any record already there (an older binding nothing read while the split
+ * lasted). Guests' `#guest` records, archived `#admin` ones and those of groups
+ * no longer split stay as they are. Returns the places; writes only when one
+ * moved, so a second run is a no-op.
+ */
+export async function adoptAdminSessions(splitChats: { has(chatId: string): boolean }): Promise<string[]> {
+  return withLock(async () => {
+    const store = await read();
+    const moved = store.sessions.filter((s) => !s.detached && splitChats.has(s.chatId) && s.threadId.endsWith('#admin'));
+    if (!moved.length) return [];
+    const places = new Set(moved.map((s) => s.threadId.slice(0, -'#admin'.length)));
+    // One record per key: upsert and patch match the first record by key, archived or not.
+    store.sessions = store.sessions.filter((s) => !places.has(s.threadId));
+    for (const s of moved) s.threadId = s.threadId.slice(0, -'#admin'.length);
+    await write(store);
+    return [...places];
+  });
+}
+
 /** Insert or replace a session by threadId. */
 export async function upsertSession(rec: SessionRecord): Promise<void> {
   return withLock(async () => {

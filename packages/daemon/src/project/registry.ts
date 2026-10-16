@@ -36,15 +36,11 @@ export interface Project {
   /** 项目级响应白名单：谁能让 bot 在本群响应/跑 codex。空/缺省 = 所有人；
    * admin/owner 恒豁免（见 isUserAllowedInProject）。 */
   allowedUsers?: string[];
-  /** permission tier for codex's sandbox — the tier ADMINS/owner get. Omitted on
-   * old data → treated as 'full' (danger-full-access), preserving prior behavior.
-   * Read via {@link effectiveMode}. 'qa'/'write' confine reads+writes to `cwd`. */
+  /** the group's one permission tier for codex's sandbox: everyone in the group runs at it (s15c).
+   * Omitted on old data → treated as 'full' (danger-full-access), preserving prior behavior.
+   * Read via {@link effectiveMode}. 'qa'/'write' confine reads+writes to `cwd`. Old rows'
+   * `guestMode` (a second tier for non-admins) is folded in on read, see {@link foldGuestTier}. */
   mode?: PermissionMode;
-  /** permission tier for NON-admin senders. Unset → same as `mode` (no split,
-   * the historical single-tier behavior). When set to a distinct tier, admin and
-   * guest turns run on SEPARATE codex threads (see {@link turnTier}). Read via
-   * {@link effectiveGuestMode}. */
-  guestMode?: PermissionMode;
   /** allow the agent's shell to reach the network in 'qa'/'write' ('full' always can), and Vonvon to
    * fetch remote images in every tier. Default false. */
   network?: boolean;
@@ -94,35 +90,25 @@ export function effectiveMode(p: Pick<Project, 'mode'>): PermissionMode {
   return p.mode ?? 'full';
 }
 
-/**
- * The effective tier for NON-admin senders. Unset `guestMode` → same as the
- * admin tier ({@link effectiveMode}), i.e. no split (everyone shares one tier,
- * the historical behavior). Single source of truth for the guest-side read.
- */
-export function effectiveGuestMode(p: Pick<Project, 'mode' | 'guestMode'>): PermissionMode {
-  return p.guestMode ?? effectiveMode(p);
+const TIERS: readonly PermissionMode[] = ['qa', 'write', 'full'];
+
+/** The stricter of two tiers (qa < write < full); a value that is not a tier counts as qa. */
+export function stricterTier(a: unknown, b: unknown): PermissionMode {
+  const rank = (t: unknown) => Math.max(0, TIERS.indexOf(t as PermissionMode));
+  return TIERS[Math.min(rank(a), rank(b))]!;
 }
 
 /**
- * Resolve a turn's permission tier + role from the sender's admin status.
- * `split` is true only when a distinct `guestMode` is configured — then the
- * sandbox AND the codex conversation history (both bound per thread) differ by
- * role, so admin and guest turns MUST run on separate threads. The caller
- * namespaces the session key by `role` when `split` to keep a guest from ever
- * inheriting the admin thread (its sandbox or its history). No split → one
- * shared thread per topic, unchanged from before.
+ * A row as the rest of the daemon sees it. Before s15c a row could carry
+ * `guestMode`, a second tier for non-admins; a group has one tier now, the
+ * stricter of the two. `null` meant "same as `mode`" and only drops the key.
+ * Every write starts from read rows, so the next write of projects.json drops
+ * the key from every row.
  */
-export function turnTier(
-  p: Pick<Project, 'mode' | 'guestMode'>,
-  isAdminSender: boolean,
-): { mode: PermissionMode; role: 'admin' | 'guest'; split: boolean } {
-  const adminTier = effectiveMode(p);
-  const guestTier = effectiveGuestMode(p);
-  return {
-    mode: isAdminSender ? adminTier : guestTier,
-    role: isAdminSender ? 'admin' : 'guest',
-    split: guestTier !== adminTier,
-  };
+function foldGuestTier(row: Project): Project {
+  if (!Object.hasOwn(row, 'guestMode')) return row;
+  const { guestMode, ...rest } = row as Project & { guestMode?: unknown };
+  return guestMode == null ? rest : { ...rest, mode: stricterTier(effectiveMode(rest), guestMode) };
 }
 
 interface StoreFile {
@@ -144,11 +130,34 @@ export async function listProjectsIn(file: string): Promise<Project[]> {
     const text = await readFile(file, 'utf8');
     const parsed = JSON.parse(text) as Partial<StoreFile>;
     if (!parsed || !Array.isArray(parsed.projects) || parsed.projects.some(p => !p || typeof p !== 'object' || typeof p.name !== 'string' || typeof p.cwd !== 'string')) throw new Error('项目注册表格式无效');
-    return parsed.projects;
+    return parsed.projects.map(foldGuestTier);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw err;
   }
+}
+
+/**
+ * Groups whose stored row still has two tiers (s15c), chat id → the stricter
+ * one they run at now. Read as stored, before the fold, with the comparison
+ * the old split made: admins of exactly these groups talked in `<place>#admin`
+ * sessions. A missing file has none.
+ */
+export async function splitTierChats(file = paths.projectsFile): Promise<Map<string, PermissionMode>> {
+  let text: string;
+  try {
+    text = await readFile(file, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return new Map();
+    throw err;
+  }
+  const rows = (JSON.parse(text) as Partial<StoreFile>).projects;
+  const split = new Map<string, PermissionMode>();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const raw = row as Project & { guestMode?: unknown };
+    if (raw && typeof raw.chatId === 'string' && raw.guestMode != null && raw.guestMode !== effectiveMode(raw)) split.set(raw.chatId, foldGuestTier(raw).mode!);
+  }
+  return split;
 }
 
 // 同进程内并发的「读-改-写」串行化（addProject/updateProject/removeProject）：既防

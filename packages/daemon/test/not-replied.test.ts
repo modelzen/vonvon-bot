@@ -64,7 +64,7 @@ vi.mock('../src/card/run-card-stream', () => ({
 
 import { createOrchestrator, failureReason } from '../src/bot/handle-message';
 
-const base = { name: 'demo', chatId: 'oc_demo', cwd: '/tmp/demo', kind: 'multi', noMention: false, mode: 'qa', guestMode: 'qa', network: false };
+const base = { name: 'demo', chatId: 'oc_demo', cwd: '/tmp/demo', kind: 'multi', noMention: false, mode: 'qa', network: false };
 const cfg = (allowedChats?: string[]): AppConfig => ({ accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner', ...(allowedChats ? { allowedChats } : {}) }, completionReminder: { mode: 'manual' } } });
 const channel = { send: fake.send, rawClient: { im: { v1: { messageReaction: { create: async () => ({ data: {} }), delete: async () => ({}) }, message: { get: async () => ({ data: { items: [{ thread_id: 'omt_opened_topic' }] } }) } } } } };
 let orchestrator: ReturnType<typeof createOrchestrator>;
@@ -140,12 +140,12 @@ describe('Codex that runs only in 完全访问 (Linux)', () => {
     expect(fake.send).toHaveBeenCalledOnce();
     expect(fake.send).toHaveBeenCalledWith('oc_demo', expect.anything(), { replyTo: msg.messageId, replyInThread: false });
     expect(replies()[0]).toContain('这个群是「只读」档');
-    expect(replies()[0]).toContain('把「管理员权限」改成「完全访问」');
+    expect(replies()[0]).toContain('把「权限档」改成「完全访问」');
     expect(replies()[0]).toContain('`vonvon settings set --group oc_demo permission.mode=full`');
   });
 
   it('answers in the topic, naming the tier', async () => {
-    fake.project = { ...base, mode: 'write', guestMode: 'write' };
+    fake.project = { ...base, mode: 'write' };
     const msg = message({ threadId: 'omt_topic' });
     await orchestrator.onMessage(msg);
     expect(startThread).not.toHaveBeenCalled();
@@ -184,21 +184,22 @@ describe('Codex that runs only in 完全访问 (Linux)', () => {
     expect(replies()).toHaveLength(2);
   });
 
-  it('runs the admin\'s full tier and refuses a guest\'s 只读 with guestMode', async () => {
-    fake.project = { ...base, mode: 'full', guestMode: 'qa' };
+  it('refuses everyone\'s turn in a 只读 group, naming 权限档 and permission.mode', async () => {
     await orchestrator.onMessage(message({ senderId: 'ou_guest', threadId: 'omt_topic' }));
-    expect(replies()[0]).toContain('把「普通成员权限」改成「完全访问」');
-    expect(replies()[0]).toContain('permission.guestMode=full');
-    expect(startThread).not.toHaveBeenCalled();
     await orchestrator.onMessage(message({ threadId: 'omt_topic' }));
-    await vi.waitFor(() => expect(startThread).toHaveBeenCalledOnce());
-    expect(records().map(record => record.reason)).toEqual(['tier-unavailable']);
+    expect(startThread).not.toHaveBeenCalled();
+    expect(records().map(record => record.reason)).toEqual(['tier-unavailable', 'tier-unavailable']);
+    for (const reply of replies()) {
+      expect(reply).toContain('把「权限档」改成「完全访问」');
+      expect(reply).toContain('permission.mode=full');
+      expect(reply).not.toContain('guestMode');
+    }
   });
 
   it('refuses an old DM card that saves 只读, and sends one offering only 完全访问', async () => {
     await addProject({ name: 'demo', chatId: 'oc_demo', cwd: '/tmp/demo', createdAt: 1, blank: false, mode: 'qa' });
     const submit = (mode: string) => orchestrator.dispatcher.handle({ chatId: 'ou_owner', messageId: 'om_card', operator: { openId: 'ou_owner' },
-      action: { tag: 'button', value: { a: DM.permissionSubmit, n: 'demo' } }, raw: { action: { form_value: { mode, guestMode: mode, network: 'off' } } } } as never);
+      action: { tag: 'button', value: { a: DM.permissionSubmit, n: 'demo' } }, raw: { action: { form_value: { mode, network: 'off' } } } } as never);
     try {
       await submit('qa');
       await vi.waitFor(() => expect(fake.card).toHaveBeenCalledOnce());
@@ -206,7 +207,21 @@ describe('Codex that runs only in 完全访问 (Linux)', () => {
       expect((await getProjectByName('demo'))?.mode).toBe('qa');
       await submit('full');
       await vi.waitFor(() => expect(fake.card).toHaveBeenCalledTimes(2));
-      expect(await getProjectByName('demo')).toMatchObject({ mode: 'full', guestMode: 'full' });
+      expect(await getProjectByName('demo')).toMatchObject({ mode: 'full' });
+    } finally { await removeProject('demo'); }
+  });
+
+  it('an old DM card that carries guestMode saves nothing and gets a fresh one-tier card', async () => {
+    fake.fullOnly = undefined;
+    await addProject({ name: 'demo', chatId: 'oc_demo', cwd: '/tmp/demo', createdAt: 1, blank: false, mode: 'qa' });
+    try {
+      await orchestrator.dispatcher.handle({ chatId: 'ou_owner', messageId: 'om_card', operator: { openId: 'ou_owner' },
+        action: { tag: 'button', value: { a: DM.permissionSubmit, n: 'demo' } }, raw: { action: { form_value: { mode: 'full', guestMode: 'qa', network: 'off' } } } } as never);
+      await vi.waitFor(() => expect(fake.card).toHaveBeenCalledOnce());
+      const sent = JSON.stringify(fake.card.mock.calls[0]?.[2]);
+      expect(sent).toContain('dm.proj.perm.submit');
+      expect(sent).not.toContain('guestMode');
+      expect(await getProjectByName('demo')).toMatchObject({ mode: 'qa' });
     } finally { await removeProject('demo'); }
   });
 
@@ -217,9 +232,7 @@ describe('Codex that runs only in 完全访问 (Linux)', () => {
       await orchestrator.dispatcher.handle({ chatId: 'ou_owner', messageId: 'om_card', operator: { openId: 'ou_owner' },
         action: { tag: 'button', value: { a: DM.permissionSubmit, n: 'demo' } }, raw: { action: { form_value: { network: 'on' } } } } as never);
       await vi.waitFor(() => expect(fake.card).toHaveBeenCalledOnce());
-      const saved = await getProjectByName('demo');
-      expect(saved).toMatchObject({ mode: 'qa', network: true });
-      expect(saved?.guestMode).toBeUndefined();
+      expect(await getProjectByName('demo')).toMatchObject({ mode: 'qa', network: true });
     } finally { await removeProject('demo'); }
   });
 
@@ -313,6 +326,29 @@ describe('failed turns', () => {
     expect(JSON.stringify(events)).not.toContain(SECRET);
     const recv = fake.log.info.mock.calls.find(call => call[0] === 'intake' && call[1] === 'recv');
     expect(recv?.[2]).toEqual({ chatType: 'group', mentionedBot: true, threadId: 'abcdef', chat: 'c_demo', ref: msg.messageId.slice(-6) });
+  });
+});
+
+describe('keys left from before s15c', () => {
+  it('the DM project list and topics cards count only live sessions', async () => {
+    await addProject({ name: 'demo', chatId: 'oc_demo', cwd: '/tmp/demo', createdAt: 1, blank: false });
+    const rec = (threadId: string) => ({ threadId, chatId: 'oc_demo', cwd: '/tmp/demo', sessionId: `s-${threadId}`, backend: 'codex-appserver', summary: threadId, createdAt: 1, updatedAt: 1 });
+    writeFileSync(paths.sessionsFile, JSON.stringify({ version: 3, sessions: [rec('omt_a'), rec('omt_b#guest'), rec('omt_c#admin')], titleJobs: [] }));
+    const click = (a: string, value: object) => orchestrator.dispatcher.handle({ chatId: 'ou_owner', messageId: `om_${a}`, operator: { openId: 'ou_owner' },
+      action: { tag: 'button', value: { a, ...value } } } as never);
+    try {
+      await click(DM.projects, { p: 0 });
+      await vi.waitFor(() => expect(fake.card).toHaveBeenCalledOnce());
+      expect(JSON.stringify(fake.card.mock.calls[0]?.[2])).toContain('🧵 1 话题');
+      await click(DM.projectTopics, { n: 'demo' });
+      await vi.waitFor(() => expect(fake.card).toHaveBeenCalledTimes(2));
+      const topics = JSON.stringify(fake.card.mock.calls[1]?.[2]);
+      expect(topics).toContain('共 1 个话题');
+      expect(topics).not.toContain('#guest');
+    } finally {
+      await removeProject('demo');
+      rmSync(paths.sessionsFile, { force: true });
+    }
   });
 });
 

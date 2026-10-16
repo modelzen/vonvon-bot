@@ -78,7 +78,7 @@ beforeAll(async () => {
     ],
   });
 
-  // bot A：一个项目 + 两个话题（另一个 chatId 的会话不算它的话题数）
+  // bot A：一个项目 + 两个话题（另一个 chatId 的会话、s15c 之前分档留下的键都不算它的话题数）
   useBotDir(BOT_A);
   await addProject({
     name: 'proj-a',
@@ -102,6 +102,8 @@ beforeAll(async () => {
     ['t1', 'oc_aaa'],
     ['t2', 'oc_aaa'],
     ['t3', 'oc_other'],
+    ['t1#guest', 'oc_aaa'],
+    ['t2#admin', 'oc_aaa'],
   ] as const) {
     await upsertSession({
       threadId,
@@ -163,13 +165,13 @@ describe('createReadonlyAdminService · 只读方法（显式路径，不碰全�
     expect(p.kind).toBe('multi');
     expect(p.origin).toBe('created'); // 缺省回填
     expect(p.mode).toBe('write');
-    expect(p.guestMode).toBe('write'); // guestMode 未设 → 跟管理员档
+    expect(p.guestMode).toBe('write'); // s15c: deprecated mirror of the one tier
     expect(p.noMention).toBe(true); // created+multi 默认免@ 开
     expect(p).not.toHaveProperty('autoCompact'); // s12: always on, no longer reported
     expect(p.network).toBe(false);
     expect(p.backend).toBe('codex-appserver'); // 显式设的后端原样透传
     expect(p.allowedUsersCount).toBe(1);
-    expect(p.sessionCount).toBe(2); // oc_other 的 t3 不算
+    expect(p.sessionCount).toBe(2); // oc_other 的 t3、停用的 t1#guest / t2#admin 不算
   });
 
   it('listProjects：per-bot 隔离（B 的项目读不到 A 的数据），且 effective 默认后端回填', async () => {
@@ -192,7 +194,7 @@ describe('createReadonlyAdminService · 只读方法（显式路径，不碰全�
     expect(await service.getProject(BOT_A, 'nope')).toBeUndefined();
   });
 
-  it('listSessions：按项目 chatId 过滤并按 updatedAt 新→旧排序', async () => {
+  it('listSessions：按项目 chatId 过滤、去掉 s15c 之前分档留下的键，并按 updatedAt 新→旧排序', async () => {
     const sessions = await service.listSessions(BOT_A, 'proj-a');
     expect(sessions.map((s) => s.threadId)).toEqual(['t1', 't2']);
     expect(sessions[0]!.summary).toBe('话题 t1');
@@ -284,14 +286,14 @@ describe('createAdminService · daemon 进程内（executeWrite + liveStatus 注
       executeWrite: async (botId, op) => void calls.push({ botId, op }),
     });
     await daemon.switchBackend(BOT_A, 'proj-a', 'codex-appserver');
-    await daemon.setPermissionMode(BOT_A, 'proj-a', { mode: 'qa', guestMode: 'write', network: true });
+    await daemon.setPermissionMode(BOT_A, 'proj-a', { mode: 'qa', network: true });
     await daemon.setNoMention(BOT_A, 'proj-a', false);
     await daemon.setCompletionReminder(BOT_A, { mode: 'long', longTaskMinutes: 8 });
     expect(calls).toEqual([
       { botId: BOT_A, op: { kind: 'switchBackend', project: 'proj-a', backend: 'codex-appserver' } },
       {
         botId: BOT_A,
-        op: { kind: 'setPermissionMode', project: 'proj-a', mode: 'qa', guestMode: 'write', network: true },
+        op: { kind: 'setPermissionMode', project: 'proj-a', mode: 'qa', network: true },
       },
       { botId: BOT_A, op: { kind: 'setNoMention', project: 'proj-a', on: false } },
       { botId: BOT_A, op: { kind: 'setCompletionReminder', mode: 'long', longTaskMinutes: 8 } },

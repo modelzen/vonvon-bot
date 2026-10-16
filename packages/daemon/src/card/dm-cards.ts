@@ -18,7 +18,7 @@ import {
   type AppConfig,
   type SessionTitleAiConfig,
 } from '../config/schema';
-import { defaultNoMention, effectiveGuestMode, effectiveMode, type Project } from '../project/registry';
+import { defaultNoMention, effectiveMode, type Project } from '../project/registry';
 import {
   DEFAULT_BACKEND_ID,
   REASONING_EFFORTS,
@@ -111,7 +111,7 @@ export const DM = {
   // 🤖 默认模型/强度：新话题的起始模型 + 推理强度（选完提交的下拉表单子卡，仿权限卡）
   modelDefault: 'dm.proj.modelDefault',
   modelDefaultSubmit: 'dm.proj.modelDefault.submit',
-  // 🔐 权限：codex 沙箱档位（管理员档 + 普通用户档）+ 联网，做成下拉表单（选+提交）
+  // 🔐 权限：codex 沙箱的权限档 + 联网，做成下拉表单（选+提交）
   permission: 'dm.proj.perm',
   permissionSubmit: 'dm.proj.perm.submit',
   // 🧠 后端 backend/backendSubmit 已移除：后端改为「创建时选定、运行时固定、不支持切换」，
@@ -1514,44 +1514,34 @@ export function tierLabel(m: PermissionMode): string {
 /** Tier dropdown options: "label — desc" so the meaning shows in the menu. */
 const TIER_SELECT_OPTS: SelectOption[] = MODE_OPTS.map((o) => ({ label: `${o.label} — ${o.desc}`, value: o.value }));
 
-/** One-line summary of a project's tiers, for the 项目设置 card. */
-export function permissionSummary(p: Pick<Project, 'mode' | 'guestMode'>): string {
-  const admin = effectiveMode(p);
-  const guest = effectiveGuestMode(p);
-  return admin === guest
-    ? `所有人：${tierLabel(admin)}`
-    : `管理员：${tierLabel(admin)}　·　其他人：${tierLabel(guest)}`;
+/** A project's one tier, for the 项目设置 card. */
+export function permissionSummary(p: Pick<Project, 'mode'>): string {
+  return tierLabel(effectiveMode(p));
 }
 
 /**
- * 🔐 权限表单卡（DM「项目设置 → 🔐 权限」）。两个下拉:「管理员档」给 owner/管理员、
- * 「普通用户档」给群里其他人——两档**不同**即按档位拆线程(各自独立沙箱+对话历史)、**相同**
- * 则所有人一致。外加联网开关。用 selectMenu(表单收值、提交时才读、不锁卡)而非即时按钮——
- * 选完点提交；提交 handler 落盘 + 驱逐活跃会话让新档立刻生效。`fullOnly`（后端在这台主机上
- * 只能完全访问时的原因）给了时，两个下拉都只剩完全访问，并写明现在的档和原因；存的不是完全访问的
- * 那个下拉不预选，提示写"不选就不改"，只改联网时提交里没有它，存的档不动（product.md 3.8 不自动放开）。
+ * 🔐 权限表单卡（DM「项目设置 → 🔐 权限」）。一个下拉选权限档，群里所有人都用这一档（s15c），
+ * 外加联网开关。用 selectMenu(表单收值、提交时才读、不锁卡)而非即时按钮——选完点提交；提交
+ * handler 落盘 + 驱逐活跃会话让新档立刻生效。`fullOnly`（后端在这台主机上只能完全访问时的原因）
+ * 给了时，下拉只剩完全访问，并写明现在的档和原因；存的不是完全访问时下拉不预选，提示写"不选就不改"，
+ * 只改联网时提交里没有它，存的档不动（product.md 3.8 不自动放开）。
  */
-export function buildPermissionCard(p: Pick<Project, 'name' | 'mode' | 'guestMode' | 'network'>, fullOnly?: string): CardObject {
+export function buildPermissionCard(p: Pick<Project, 'name' | 'mode' | 'network'>, fullOnly?: string): CardObject {
   const network = p.network ?? false;
   const options = fullOnly ? TIER_SELECT_OPTS.filter((o) => o.value === 'full') : TIER_SELECT_OPTS;
+  const tier = effectiveMode(p);
   /** A stored tier this card cannot offer is not preset: left alone, the dropdown submits nothing. */
-  const tierSelect = (name: 'mode' | 'guestMode', tier: PermissionMode, placeholder: string) =>
-    fullOnly && tier !== 'full'
-      ? selectMenu({ name, placeholder: `现在是${tierLabel(tier)}，不选就不改`, options })
-      : selectMenu({ name, placeholder, options, initial: tier });
+  const tierSelect = fullOnly && tier !== 'full'
+    ? selectMenu({ name: 'mode', placeholder: `现在是${tierLabel(tier)}，不选就不改`, options })
+    : selectMenu({ name: 'mode', placeholder: '选择权限档', options, initial: tier });
   return card(
     [
       md(`**🔐 权限** · ${p.name}`),
-      note(
-        'codex 沙箱的访问范围。「管理员档」给 owner / 管理员，「普通用户档」给群里其他人。' +
-          '两档**不同**时，两类人各用独立线程（互不串沙箱与对话历史）；**相同**则所有人一致。',
-      ),
-      ...(fullOnly ? [note(`现在：${permissionSummary(p)}。${fullOnly}`)] : []),
+      note('codex 沙箱的访问范围。群里所有人都用这一档。'),
+      ...(fullOnly ? [note(`现在是${tierLabel(tier)}。${fullOnly}`)] : []),
       form('perm', [
-        md('👑 **管理员档**'),
-        tierSelect('mode', effectiveMode(p), '选择管理员权限档'),
-        md('👥 **普通用户档**'),
-        tierSelect('guestMode', effectiveGuestMode(p), '选择普通用户权限档'),
+        md('🔒 **权限档**'),
+        tierSelect,
         md('🌐 **联网**（只对只读 / 读写档有意义；完全访问恒联网）'),
         selectMenu({
           name: 'network',
@@ -1740,7 +1730,6 @@ export function buildProjectSettingsCard(
     | 'origin'
     | 'cwd'
     | 'mode'
-    | 'guestMode'
     | 'network'
     | 'backend'
     | 'defaultModel'
@@ -1758,7 +1747,7 @@ export function buildProjectSettingsCard(
       note(`${kindLabel(kind)}${project.cwd ? `   ·   📂 \`${project.cwd}\`` : ''}`),
       hr(),
       actions([button('🔐 权限', { a: DM.permission, n: project.name }, 'primary')]),
-      note(`当前 ${permissionSummary(project)}　·　codex 沙箱可访问的范围（管理员 / 普通用户可分设）。`),
+      note(`当前 ${permissionSummary(project)}　·　codex 沙箱可访问的范围，群里所有人都用这一档。`),
       hr(),
       md('🧠 后端'),
       note(

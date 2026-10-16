@@ -189,12 +189,12 @@ import { buildScopeGrantUrl, JOIN_GROUP_SCOPES } from '../config/scopes';
 import { validateAppCredentials } from '../utils/feishu-auth';
 import {
   defaultNoMention,
+  effectiveMode,
   getProjectByChatId,
   getProjectByName,
   listProjects,
   mutateProject,
   removeProject,
-  turnTier,
   updateProject,
   type Project,
 } from '../project/registry';
@@ -209,6 +209,7 @@ import {
   detachSessionsForChat,
   getSession,
   isDelivered,
+  isRetiredKey,
   isSeen,
   isUnread,
   listSessions,
@@ -1198,8 +1199,7 @@ export function createOrchestrator(
   /** Recall notes as a record block's 〔撤回〕 lines (s15). */
   const recallLines = (notes: RecallNote[]): NonNullable<RecordBlock['recalls']> =>
     notes.map((r) => ({ at: r.at, who: personOf(r.who, names), ...(r.other ? { other: true } : {}) }));
-  const tierOf = (key: string) => /#(admin|guest)$/.exec(key)?.[1] as 'admin' | 'guest' | undefined;
-  const isMainKey = (key: string, chatId: string) => key.replace(/#(admin|guest)$/, '') === chatId;
+  const isMainKey = (key: string, chatId: string) => key === chatId;
   /** Main sessions that compacted, by key: the native session id, '' once the
    * table was shown (in memory first, then SessionRecord.topicsDue). */
   const topicsDue = new Map<string, string>();
@@ -1418,7 +1418,7 @@ export function createOrchestrator(
         await postGroupSettings(msg, project);
         return;
       }
-      const ts = turnSession(msg.chatId, project, msg.senderId);
+      const ts = turnSession(msg.chatId, project);
       if (cmd === 'resume') {
         // 单会话群：就地切回历史会话（重绑本群 session key，不另起话题）。admin 门控在 postResumeCard 内。
         postResumeCard(msg, ts.sessionKey);
@@ -1480,7 +1480,7 @@ export function createOrchestrator(
           .catch(() => undefined);
         return;
       }
-      const ts = turnSession(msg.threadId, project, msg.senderId);
+      const ts = turnSession(msg.threadId, project);
       if (cmd === 'model') {
         postModelCard(msg, ts.sessionKey, true); // 已在话题里：卡片就发在当前话题内
         return;
@@ -1544,7 +1544,7 @@ export function createOrchestrator(
         await denyGoal(msg, false);
         return;
       }
-      if (await refuseFullOnly(msg, project, turnPerm(project, msg.senderId))) return;
+      if (await refuseFullOnly(msg, project, turnPerm(project))) return;
       void trackTask(addReaction(msg.messageId, 'OKR'));
       startTopicDirectly(msg, goalObjective, project, true);
       return;
@@ -1565,7 +1565,7 @@ export function createOrchestrator(
       log.info('intake', 'unknown-cmd', { name });
       return;
     }
-    if (await refuseFullOnly(msg, project, turnPerm(project, msg.senderId))) return;
+    if (await refuseFullOnly(msg, project, turnPerm(project))) return;
     startTopicDirectly(msg, text, project);
   };
 
@@ -1588,7 +1588,7 @@ export function createOrchestrator(
       if (state.deferred) dropped += removeWhere(state.deferred, (held) => held.id === id);
     }
     if (dropped) log.info('intake', 'recall-queued-dropped', { msgId: id, dropped });
-    const bindings = (await listSessions().catch(() => [])).filter((s) => s.chatId === chatId && !s.detached);
+    const bindings = (await listSessions().catch(() => [])).filter((s) => s.chatId === chatId && !s.detached && !isRetiredKey(s.threadId));
     if (!bindings.length) { say('skipped'); return; }
     const x = await orStop(fetchMessageMeta(channel, id, names), undefined);
     if (x?.from === 'self') { say('self', bindings.length); return; } // the bot's own: its native history has it
@@ -1597,7 +1597,7 @@ export function createOrchestrator(
     const who = x ? { kind: x.from, ...(x.senderId ? { openId: x.senderId } : {}) } : undefined;
     let noted = 0;
     for (const rec of bindings) {
-      const rootAt = list.find((t) => t.topicId === rec.threadId.replace(/#(admin|guest)$/, ''))?.firstAt;
+      const rootAt = list.find((t) => t.topicId === rec.threadId)?.firstAt;
       const at = reachedAt(rec, chatId, id, x, rootAt);
       if (at === undefined) continue;
       noted++;
@@ -1667,27 +1667,17 @@ export function createOrchestrator(
     });
   }
 
-  /** A turn's resolved permission, by sender role. `roleSuffix` is set only when
-   * the project splits admin/guest tiers — then the session key is namespaced by
-   * it so a guest never shares the admin thread (sandbox + codex history). */
-  type TurnPerm = { mode?: PermissionMode; network?: boolean; roleSuffix?: 'admin' | 'guest' };
+  /** A turn's resolved permission: the group's one tier, whoever sends (s15c). */
+  type TurnPerm = { mode?: PermissionMode; network?: boolean };
 
-  /** Pick this sender's tier (admin vs guest) for `project`. */
-  function turnPerm(project: Project | undefined, senderId: string): TurnPerm {
-    if (!project) return {};
-    const t = turnTier(project, isAdmin(cfg, senderId));
-    return { mode: t.mode, network: project.network, roleSuffix: t.split ? t.role : undefined };
+  /** The group's tier and network for `project`. */
+  function turnPerm(project: Project | undefined): TurnPerm {
+    return project ? { mode: effectiveMode(project), network: project.network } : {};
   }
 
-  /** As {@link turnPerm}, plus the role-namespaced session key (only namespaced
-   * when the project splits tiers — keeps existing single-tier sessions intact). */
-  function turnSession(
-    baseKey: string,
-    project: Project | undefined,
-    senderId: string,
-  ): { sessionKey: string } & TurnPerm {
-    const perm = turnPerm(project, senderId);
-    return { sessionKey: perm.roleSuffix ? `${baseKey}#${perm.roleSuffix}` : baseKey, ...perm };
+  /** As {@link turnPerm}, plus the session key: the place itself, one session for everyone. */
+  function turnSession(baseKey: string, project: Project | undefined): { sessionKey: string } & TurnPerm {
+    return { sessionKey: baseKey, ...turnPerm(project) };
   }
 
   /** When each group last got the full-only explanation (see refuseFullOnly). */
@@ -1709,7 +1699,7 @@ export function createOrchestrator(
     fullOnlyNoted.set(msg.chatId, now);
     // The command needs --bot when the host has several bots (pickBot); an unreadable registry counts as one.
     const several = await loadBots().then((reg) => reg.bots.length > 1, () => false);
-    const markdown = fullOnlyReply(msg.chatId, mode, perm.roleSuffix ?? 'admin', several ? cfg.accounts.app.id : undefined);
+    const markdown = fullOnlyReply(msg.chatId, mode, several ? cfg.accounts.app.id : undefined);
     const sent = await channel.send(msg.chatId, { markdown }, { replyTo: msg.messageId, replyInThread: Boolean(msg.threadId) }).then(() => true, () => false);
     if (!sent && fullOnlyNoted.get(msg.chatId) === now) {
       if (last === undefined) fullOnlyNoted.delete(msg.chatId);
@@ -2089,7 +2079,7 @@ export function createOrchestrator(
         const isRoot = (m: ContextMessage) => m.messageId === rootId;
         const openingP = rootId
           ? priorP.then((p) => p ? undefined : topicOpening(msg, historyP.then((h) => h?.messages.find(isRoot)
-            ?? orStop(fetchQuotedMessage(channel, rootId, names), undefined)), listP, project, perm.roleSuffix)).catch(() => undefined)
+            ?? orStop(fetchQuotedMessage(channel, rootId, names), undefined)), listP, project)).catch(() => undefined)
           : undefined;
         const [images, ingested, { thread: resolved, recreated, reason: recreateReason }, prior, specHistory, list] = await Promise.all([
           imagesP,
@@ -2175,7 +2165,6 @@ export function createOrchestrator(
             .map((m) => ({ id: m.messageId, at: m.createTime }));
           woven = kept.map((m) => m.messageId);
           const root = rootId ? history.find(isRoot) : undefined;
-          const tier = perm.roleSuffix;
           let topicsPart: Pick<RecordBlock, 'opening' | 'quotes' | 'moreTopics' | 'table' | 'refs'> = {};
           let openingLog = {};
           if (place === 'main') {
@@ -2191,13 +2180,13 @@ export function createOrchestrator(
             const since = codexEmpty ? undefined : prior?.lastSeenAt;
             const skip = codexEmpty ? undefined : (t: TopicView) => isDelivered(prior, t.topicId);
             const { quotes, more } = topicQuotes([...known, ...found],
-              { ...(since ? { after: since } : { from }), to: now, skip, tier }, names);
-            const table = thread && topicsDueFor(sessionKey, msg.chatId, prior, thread.sessionId) ? topicRows(list.slice(0, 5), tier, names) : [];
+              { ...(since ? { after: since } : { from }), to: now, skip }, names);
+            const table = thread && topicsDueFor(sessionKey, msg.chatId, prior, thread.sessionId) ? topicRows(list.slice(0, 5), names) : [];
             topicsPart = { quotes, moreTopics: more, table, refs: mine };
             seenExtra = quotes.map((q) => ({ id: q.topicId, at: q.at }));
             tableShown = table.length > 0;
           } else if (codexEmpty && rootId) {
-            const opening = spec && spec.root === root ? spec : await topicOpening(msg, Promise.resolve(root), Promise.resolve(list), project, tier);
+            const opening = spec && spec.root === root ? spec : await topicOpening(msg, Promise.resolve(root), Promise.resolve(list), project);
             ({ part: topicsPart, log: openingLog } = opening);
           }
           firstText = weaveRecordBlock(firstText, {
@@ -2362,19 +2351,19 @@ export function createOrchestrator(
     }));
   }
 
-  /** The main area's last lines before an opening's first message: 10, with this bot's own unless guest. */
-  function pullMainBefore(chatId: string, before: number, excludeMessageId: string, tier: TurnPerm['roleSuffix']): Promise<ThreadPull> {
-    return orStop(fetchChatContext(channel, chatId, { before, excludeMessageId, enough: OPENING_MAIN_MAX, names, keepSelf: tier !== 'guest' }),
+  /** The main area's last lines before an opening's first message: 10, with this bot's own. */
+  function pullMainBefore(chatId: string, before: number, excludeMessageId: string): Promise<ThreadPull> {
+    return orStop(fetchChatContext(channel, chatId, { before, excludeMessageId, enough: OPENING_MAIN_MAX, names, keepSelf: true }),
       { messages: [], ok: false, complete: false });
   }
 
   /** An opening's main-area section: its lines and the 引用行 among them,
    * with the topics other bots opened there found first. */
-  async function mainSection(chatId: string, pull: ThreadPull, list: TopicView[], to: number, exclude: string | undefined, tier: TurnPerm['roleSuffix']) {
+  async function mainSection(chatId: string, pull: ThreadPull, list: TopicView[], to: number, exclude: string | undefined) {
     const main = pull.ok ? keepRecent(pull.messages, undefined, OPENING_MAIN_MAX) : [];
     const known = await topicCtx.quotable(chatId, list);
     const found = await orStop(topicCtx.discover(chatId, main, knownIds(known)), []);
-    const { quotes, more } = topicQuotes([...known, ...found], { from: main[0]?.createTime ?? 0, to, exclude, tier }, names);
+    const { quotes, more } = topicQuotes([...known, ...found], { from: main[0]?.createTime ?? 0, to, exclude }, names);
     return { main, quotes, moreTopics: more };
   }
 
@@ -2382,16 +2371,16 @@ export function createOrchestrator(
    * A user-opened topic session's opening (product.md 3.5, s14b): a pointer to
    * the message the topic hangs under, and the main area's 10 lines before it
    * with the 引用行 among them; in a single group the pointer names the main
-   * session (same tier). A topic group has no main area: none of it. Each
+   * session. A topic group has no main area: none of it. Each
    * lookup starts once its inputs (the first message, the group's topics) arrive.
    */
-  async function topicOpening(msg: NormalizedMessage, rootP: Promise<ContextMessage | undefined>, listP: Promise<TopicView[]>, project: Project | undefined, tier: TurnPerm['roleSuffix']) {
-    const mainRecP = project?.kind === 'single' ? getSession(tier ? `${msg.chatId}#${tier}` : msg.chatId).catch(() => undefined) : undefined;
+  async function topicOpening(msg: NormalizedMessage, rootP: Promise<ContextMessage | undefined>, listP: Promise<TopicView[]>, project: Project | undefined) {
+    const mainRecP = project?.kind === 'single' ? getSession(msg.chatId).catch(() => undefined) : undefined;
     // The group's mode first (cached), so a topic group pulls no main area.
     const [noMain, root] = await Promise.all([orStop(topicCtx.noMainArea(msg.chatId), false), rootP]);
     if (noMain) return { root, part: {}, log: { topicGroup: true } };
-    const pull = root?.createTime ? await pullMainBefore(msg.chatId, root.createTime, root.messageId, tier) : undefined;
-    const section = pull && root ? await mainSection(msg.chatId, pull, await listP, root.createTime, msg.threadId, tier) : { main: [] };
+    const pull = root?.createTime ? await pullMainBefore(msg.chatId, root.createTime, root.messageId) : undefined;
+    const section = pull && root ? await mainSection(msg.chatId, pull, await listP, root.createTime, msg.threadId) : { main: [] };
     const mainRec = await mainRecP;
     const pointer = {
       ...(root ? { root: { at: root.createTime, who: { kind: root.from, name: root.senderName } } } : {}),
@@ -2524,10 +2513,7 @@ export function createOrchestrator(
       // the OKR reaction (added at dispatch) is their receipt.
       const reaction = goal ? undefined : runReaction(msg.messageId, !sema.hasFree());
       const cwd = project?.cwd ?? fallbackCwd;
-      // The topic creator's role decides this new topic's tier; roleSuffix (when
-      // tiers are split) namespaces the persisted session so the other role gets
-      // its own thread on its first message (see turnSession / adoptThreadId).
-      const perm = turnPerm(project, msg.senderId);
+      const perm = turnPerm(project);
       // lazy banner branch refresh (design §3.2) — best-effort, non-blocking
       if (project) void trackTask(refreshBranch(channel, project).catch(() => undefined));
       // Pick the default model FROM THE PROJECT'S BACKEND — a claude project must
@@ -2556,8 +2542,8 @@ export function createOrchestrator(
       // The opening's main-area lines before the trigger and the 引用行 among them
       // (not for a goal: its objective stays self-contained). Never rejects.
       const listP = !goal && topics ? topics.list(msg.chatId) : Promise.resolve([]);
-      const sectionP = goal ? undefined : Promise.all([pullMainBefore(msg.chatId, msg.createTime, msg.messageId, perm.roleSuffix), listP])
-        .then(async ([pull, list]) => ({ pull, ...await mainSection(msg.chatId, pull, list, msg.createTime, undefined, perm.roleSuffix) }));
+      const sectionP = goal ? undefined : Promise.all([pullMainBefore(msg.chatId, msg.createTime, msg.messageId), listP])
+        .then(async ([pull, list]) => ({ pull, ...await mainSection(msg.chatId, pull, list, msg.createTime, undefined) }));
       let thread: AgentThread;
       let model: string;
       let effort: ReasoningEffort;
@@ -2628,7 +2614,6 @@ export function createOrchestrator(
         // The topic session's oldest line: the opening's first main line, else the trigger (s15).
         from: section ? section.main[0]?.createTime || msg.createTime : undefined,
         openTopic: { id: msg.messageId, from: senderOf(msg), at: msg.createTime || undefined, text: msg.content },
-        roleSuffix: perm.roleSuffix,
         backendId: be.id,
         titleJobKey,
         titleSource,
@@ -3442,7 +3427,7 @@ export function createOrchestrator(
     log.info('intake', 'retry', { key: retry.sessionKey, reason: retry.reason, op: op.slice(-6) });
     await handleTurn(
       msg, text, retry.sessionKey, retry.flat, project,
-      turnPerm(project, retry.turn.requesterOpenId ?? op),
+      turnPerm(project),
       {
         images: images.length ? images : undefined,
         summary: retry.turn.summary ?? retry.turn.titleSource.text,
@@ -3807,6 +3792,7 @@ export function createOrchestrator(
     const [projects, sessions] = await Promise.all([listProjects(), listSessions()]);
     const byChat = new Map<string, SessionRecord[]>();
     for (const s of sessions) {
+      if (isRetiredKey(s.threadId)) continue;
       const arr = byChat.get(s.chatId);
       if (arr) arr.push(s);
       else byChat.set(s.chatId, [s]);
@@ -4481,7 +4467,7 @@ export function createOrchestrator(
       patch(evt, async () => {
         const p = await getProjectByName(name);
         if (!p) return renderDmMenuCard();
-        const sessions = (await listSessions()).filter((s) => s.chatId === p.chatId);
+        const sessions = (await listSessions()).filter((s) => s.chatId === p.chatId && !isRetiredKey(s.threadId));
         return buildProjectTopicsCard(p, sessions);
       });
     })
@@ -4505,7 +4491,7 @@ export function createOrchestrator(
         return p ? buildProjectSettingsCard(p, backendDisplayName(p.backend), AUTO_COMPACT_RETIRED) : renderDmMenuCard();
       });
     })
-    // 🔐 权限：打开下拉表单子卡（管理员档 + 普通用户档 + 联网，选完提交）。
+    // 🔐 权限：打开下拉表单子卡（权限档 + 联网，选完提交）。
     .on(DM.permission, ({ evt, value }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
       const name = typeof value.n === 'string' ? value.n : '';
@@ -4514,29 +4500,30 @@ export function createOrchestrator(
         return p ? buildPermissionCard(p, backendFor(p.backend).fullAccessOnly?.()) : renderDmMenuCard();
       });
     })
-    // 提交权限表单：落盘 管理员档 mode / 普通用户档 guestMode / 联网，再驱逐本项目活跃会话
-    // 让新档立即生效（沙箱在 thread/start 绑定后不可变）。表单卡 card_id 提交后会锁，故发
-    // 一张全新的项目设置卡（旧表单卡留痕），不 patch 原卡。
+    // 提交权限表单：落盘 权限档 mode / 联网，再驱逐本项目活跃会话让新档立即生效（沙箱
+    // 在 thread/start 绑定后不可变）。表单卡 card_id 提交后会锁，故发一张全新的项目设置卡
+    // （旧表单卡留痕），不 patch 原卡。
     .on(DM.permissionSubmit, ({ evt, value, formValue }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
       const name = typeof value.n === 'string' ? value.n : '';
       const mode = asTier(selectValue(formValue, 'mode'));
-      const guestMode = asTier(selectValue(formValue, 'guestMode'));
       const network = selectValue(formValue, 'network') === 'on';
+      // A card sent before s15c still has 普通成员权限: nothing is saved, a fresh one-tier card goes out.
+      const oldCard = selectValue(formValue, 'guestMode') !== undefined;
       void trackTask((async () => {
         // A card sent before the upgrade still offers 只读 and 读写: refused as the web save is, with a fresh card.
         const p = await getProjectByName(name);
         const fullOnly = p && backendFor(p.backend).fullAccessOnly?.();
-        if (p && fullOnly && [mode, guestMode].some((m) => m !== undefined && m !== 'full')) {
-          log.info('console', 'permission-refused', { project: name, mode, guestMode });
+        if (p && (oldCard || (fullOnly && mode !== undefined && mode !== 'full'))) {
+          log.info('console', 'permission-refused', { project: name, mode, reason: oldCard ? 'old-card' : 'full-only' });
           await sendManagedCard(channel, evt.chatId, buildPermissionCard(p, fullOnly)).catch((e) => log.fail('console', e, { phase: 'permission-result' }));
           return;
         }
         // 共享层（admin/ops.ts）：落盘 + 驱逐活跃会话让新档立即生效；写后回读，
         // 卡片与盘上一致——与 Web 控制台的 setPermissionMode 完全同一条路径。
-        const r = await performSetPermissionMode({ projectName: name, mode, guestMode, network, evictLiveSessionsForChat });
+        const r = await performSetPermissionMode({ projectName: name, mode, network, evictLiveSessionsForChat });
         if (!r.ok) return;
-        log.info('console', 'permission', { project: name, mode, guestMode, network });
+        log.info('console', 'permission', { project: name, mode, network });
         await sendManagedCard(channel, evt.chatId, buildProjectSettingsCard(r.project, backendDisplayName(r.project.backend))).catch((e) =>
           log.fail('console', e, { phase: 'permission-result' }),
         );
@@ -4773,7 +4760,8 @@ export function createOrchestrator(
       const sent = await sendManagedCard(channel, project.chatId, buildUsageShareCard(await fetchUsageBundle(), { sections }));
       return { messageId: sent.messageId };
     }
-    const records = (await listSessions()).filter(record => record.chatId === project.chatId);
+    // Keys from before s15c (two tiers) are left in the store, never used: not listed, not acted on.
+    const records = (await listSessions()).filter(record => record.chatId === project.chatId && !isRetiredKey(record.threadId));
     const currentProject = await getProjectByName(project.name);
     if (!currentProject || projectRevision(currentProject) !== projectRevision(project)) throw new AdminWriteError('项目已改变，请刷新后重试');
     const be = backendFor(project.backend);
@@ -4826,7 +4814,7 @@ export function createOrchestrator(
       } finally { projectMutations.delete(project.chatId); }
     }
     if (projectMutations.has(project.chatId) || project.enabled === false) throw new AdminWriteError('项目已停用或正在修改');
-    const perm = turnSession(project.chatId, project, owner);
+    const perm = turnSession(project.chatId, project);
     if (request.action === 'resume') {
       if (request.backend !== be.id) throw new AdminWriteError('项目后端已改变');
       const available = await be.listThreads(project.cwd);
@@ -4850,7 +4838,7 @@ export function createOrchestrator(
           const tid = await getThreadId(channel, sent.messageId, 4);
           if (!tid) throw new AdminWriteError('已创建话题，但飞书尚未返回话题标识；会话未绑定');
           noteOpenedTopic(project.chatId, tid, { id: root.messageId, from: { kind: 'self' }, at: Date.now(), text: history.name || history.preview });
-          threadId = turnSession(tid, project, owner).sessionKey;
+          threadId = turnSession(tid, project).sessionKey;
           if (active.has(threadId)) throw new AdminWriteError('新话题已有任务，会话未切换');
           active.set(threadId, reserved);
           publishedKey = threadId;
@@ -4868,6 +4856,7 @@ export function createOrchestrator(
         if (reserved.queue.length) await channel.send(project.chatId, { markdown: `切回期间收到的 ${reserved.queue.length} 条消息未执行，请重发。` });
       }
     }
+    if (isRetiredKey(request.threadId)) throw new AdminWriteError('这条会话是分管理员、普通成员两档时留下的，已停用；请用群里现在的会话。');
     const record = records.find(item => item.threadId === request.threadId);
     if (!record || record.detached) throw new AdminWriteError('此会话已归档或不属于当前项目，请开始新会话');
     const key = record.threadId;
@@ -4885,7 +4874,6 @@ export function createOrchestrator(
       return { ok: true };
     }
     if (state) throw new AdminWriteError('会话正在运行，请完成后重试');
-    if (key.endsWith('#guest')) throw new AdminWriteError('请在管理员会话中操作，普通用户上下文保持独立');
     if (record.cwd !== project.cwd) throw new AdminWriteError('此历史会话使用原项目目录，请选择新会话');
     const sessionBackend = backendFor(record.backend);
     if (request.action === 'startGoal' && sessionBackend.capabilities?.goal === false) throw new AdminWriteError('当前后端不支持自主目标');
@@ -4916,13 +4904,13 @@ export function createOrchestrator(
       }
       let replyTo: string | undefined;
       if (project.kind !== 'single') {
-        const messages = await channel.rawClient.im.v1.message.list({ params: { container_id_type: 'thread', container_id: key.replace(/#(admin|guest)$/, ''), page_size: 1 } });
+        const messages = await channel.rawClient.im.v1.message.list({ params: { container_id_type: 'thread', container_id: key, page_size: 1 } });
         replyTo = messages.data?.items?.[0]?.message_id;
         if (messages.code !== 0 || !replyTo) throw new AdminWriteError('无法定位原飞书话题，请在飞书确认话题仍然存在');
       }
       const root = await channel.send(project.chatId, { markdown: `桌面端启动目标：${request.objective}` }, replyTo ? { replyTo, replyInThread: true } : undefined);
       launched = true;
-      void trackRun(launchGoalRun({ chatId: project.chatId, replyTo: root.messageId, thread, firstText: request.objective, knownThreadId: key, cwd: project.cwd, mode: perm.mode, network: perm.network, model: record.model, effort: record.effort, flat: project.kind === 'single', roleSuffix: perm.roleSuffix, backendId: sessionBackend.id, requesterOpenId: owner, titleSource: { text: request.objective, rawContentType: 'text' } })).catch(error => log.fail('desktop', error));
+      void trackRun(launchGoalRun({ chatId: project.chatId, replyTo: root.messageId, thread, firstText: request.objective, knownThreadId: key, cwd: project.cwd, mode: perm.mode, network: perm.network, model: record.model, effort: record.effort, flat: project.kind === 'single', backendId: sessionBackend.id, requesterOpenId: owner, titleSource: { text: request.objective, rawContentType: 'text' } })).catch(error => log.fail('desktop', error));
       return { ok: true, threadId: key };
     } finally {
       if (!launched && active.get(key) === reserved) active.delete(key);
@@ -4987,9 +4975,6 @@ export function createOrchestrator(
     from?: number;
     /** single-session group: reply by quoting (no reply_in_thread / topic). */
     flat?: boolean;
-    /** when admin/guest tiers are split: 'admin'|'guest' to namespace the
-     * resolved topic key so the two roles never share a thread (see turnSession). */
-    roleSuffix?: 'admin' | 'guest';
     /** the backend that created `thread` (persisted into the SessionRecord so a
      * restart resumes on the same runtime). Unset → default (codex). */
     backendId?: string;
@@ -5285,10 +5270,10 @@ export function createOrchestrator(
         // So do recall notes no turn of this run said yet (s15).
         const notes = fromQueue && topicThreadId ? (rec?.recalls ?? []).filter((r) => !said.has(r.id)) : [];
         const rows = !currentTurn.tableShown && topics && topicThreadId && topicsDueFor(topicThreadId, opts.chatId, rec, opts.thread.sessionId)
-          ? topicRows(await topics.list(opts.chatId, { limit: 5 }), tierOf(topicThreadId), names) : [];
+          ? topicRows(await topics.list(opts.chatId, { limit: 5 }), names) : [];
         if (topicThreadId && (rows.length || notes.length)) {
           const main = isMainKey(topicThreadId, opts.chatId);
-          const topic = main ? {} : { topic: { title: (await topics?.get(opts.chatId, topicThreadId.replace(/#(admin|guest)$/, '')))?.title } };
+          const topic = main ? {} : { topic: { title: (await topics?.get(opts.chatId, topicThreadId))?.title } };
           const place = { group: (await getProjectByChatId(opts.chatId))?.name, me: channel.botIdentity?.name, ...topic };
           turnInput = { ...turnInput, text: weaveRecordBlock(turnInput.text ?? '', { place, entries: [], now: Date.now(), table: rows, recalls: recallLines(notes) }) };
           if (rows.length) currentTurn.tableShown = true;
@@ -5331,11 +5316,7 @@ export function createOrchestrator(
           if (activeKey.startsWith('pending:')) {
             const tid = await getThreadId(channel, messageId, 3); // F8: 单次抖动别滞留 pending:
             if (tid) {
-              // Logical session key = real Feishu topic id + role suffix (when
-              // admin/guest tiers are split), so the two roles keep separate
-              // threads in the same topic. Feishu reply targeting uses messageId,
-              // not this key, so the suffix is purely bridge-internal.
-              const key = opts.roleSuffix ? `${tid}#${opts.roleSuffix}` : tid;
+              const key = tid;
               active.delete(activeKey);
               active.set(key, state);
               trackSession(key, opts.thread);
@@ -5970,7 +5951,7 @@ export function createOrchestrator(
       if (activeKey.startsWith('pending:')) {
         const tid = await getThreadId(channel, messageId, 3); // F8: 单次抖动别滞留 pending:
         if (tid) {
-          const key = opts.roleSuffix ? `${tid}#${opts.roleSuffix}` : tid;
+          const key = tid;
           active.delete(activeKey);
           active.set(key, state);
           sessions.set(key, opts.thread);
@@ -6576,7 +6557,7 @@ export function createOrchestrator(
       mentions: [],
       mentionAll: false,
       mentionedBot: true,
-      threadId: flat ? undefined : sessionKey.replace(/#(admin|guest)$/, ''),
+      threadId: flat ? undefined : sessionKey,
       createTime: Date.now(),
     };
   }
@@ -6636,16 +6617,13 @@ export function createOrchestrator(
       if (!isChatAllowed(cfg, rec.chatId) || !isUserAllowedInProject(cfg, project, op)) return;
       // Flat only for a single group's main-area session (keyed by chatId); a
       // topic in a single group is its own session and continues in the topic.
-      const baseKey = sessionKey.replace(/#(admin|guest)$/, '');
-      const flat = (project?.kind ?? 'multi') === 'single' && baseKey === rec.chatId;
+      const flat = (project?.kind ?? 'multi') === 'single' && sessionKey === rec.chatId;
       // 合成一条等价的「继续」消息复用整条消息管线（steer/queue/goal 提示全部
       // 生效）：replyTo 指向被点的终态卡，⏳/🫳 生命周期表情也落在卡上作回执；
-      // sessionKey 用卡片自己的会话键（含 #role 后缀），续的就是这张卡的会话。
+      // sessionKey 用卡片自己的会话键，续的就是这张卡的会话。
       const synthetic = cardTurnMessage(evt.messageId, rec.chatId, op, '继续', sessionKey, flat);
       log.info('intake', 'reaction-continue', { key: sessionKey, op: op.slice(-6) });
-      // 权限档随会话原发起人（LIVE 线程本就钉死在 thread/start 的沙箱档；
-      // recreate 兜底时也不该因点赞者身份升降档）。
-      await handleTurn(synthetic, '继续', sessionKey, flat, project, turnPerm(project, rc.requesterOpenId ?? op));
+      await handleTurn(synthetic, '继续', sessionKey, flat, project, turnPerm(project));
     });
   };
 

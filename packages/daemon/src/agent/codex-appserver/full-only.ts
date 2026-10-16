@@ -18,11 +18,9 @@ export class CodexFullOnlyError extends Error {
   }
 }
 
-/** The group's reply when a turn in `mode` is refused. `role` is 'guest' only when the group splits
- * its tiers and a guest sent the message; `bot` is this bot's app id, given when the host has several. */
-export function fullOnlyReply(groupId: string, mode: Exclude<PermissionMode, 'full'>, role: 'admin' | 'guest', bot?: string): string {
-  const [label, field] = role === 'guest' ? ['普通成员权限', 'guestMode'] : ['管理员权限', 'mode'];
-  const command = `vonvon settings set${bot ? ` --bot ${bot}` : ''} --group ${groupId} permission.${field}=full`;
+/** The group's reply when a turn in `mode` is refused. `bot` is this bot's app id, given when the host has several. */
+export function fullOnlyReply(groupId: string, mode: Exclude<PermissionMode, 'full'>, bot?: string): string {
+  const command = `vonvon settings set${bot ? ` --bot ${bot}` : ''} --group ${groupId} permission.mode=full`;
   return `ℹ️ 这一轮没有开始：这个群是「${mode === 'qa' ? '只读' : '读写'}」档，Linux 上的 Codex 只能用完全访问（它的沙箱只挡写、不限制读）。` +
-    `请 bot 的主人在群设置里把「${label}」改成「完全访问」，或者在终端运行 \`${command}\`。不会自动改。`;
+    `请 bot 的主人在群设置里把「权限档」改成「完全访问」，或者在终端运行 \`${command}\`。不会自动改。`;
 }

@@ -488,19 +488,20 @@ describe('record block (s14)', () => {
     expect(fake.records.get('chat').lastSeenAt).toBe(5);
   });
 
-  it("uses the guest tier's own watermark, and leaves the admin tier's alone", async () => {
-    fake.project = { name: 'test', chatId: 'chat', cwd: '/test', kind: 'single', guestMode: 'qa' };
-    fake.records.set('chat#guest', record('chat#guest', { lastSeenAt: 7 }));
-    fake.records.set('chat#admin', record('chat#admin', { lastSeenAt: 3 }));
-    const run = thread('old-chat#guest');
+  it("resumes the group's one session at the group's tier for a member's message, and leaves a key from before s15c alone", async () => {
+    fake.project = { name: 'test', chatId: 'chat', cwd: '/test', kind: 'single', mode: 'full' };
+    fake.records.set('chat', record('chat', { lastSeenAt: 7 }));
+    fake.records.set('chat#guest', record('chat#guest', { lastSeenAt: 3 }));
+    const run = thread('old-chat');
     fake.backend.resumeThread.mockResolvedValue(run.t);
     const o = setup();
-    const m = message('访客的问题', undefined, { senderId: 'ou_guest' });
+    const m = message('成员的问题', undefined, { senderId: 'ou_guest' });
     await o.onMessage(m);
     await done();
+    expect(fake.backend.resumeThread).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'old-chat', mode: 'full' }));
     expect(fake.chat).toHaveBeenCalledWith(expect.anything(), 'chat', expect.objectContaining({ stopAt: 7 }));
-    await vi.waitFor(() => expect(fake.records.get('chat#guest').lastSeenAt).toBe(m.createTime));
-    expect(fake.records.get('chat#admin')).toMatchObject({ lastSeenAt: 3 });
+    await vi.waitFor(() => expect(fake.records.get('chat').lastSeenAt).toBe(m.createTime));
+    expect(fake.records.get('chat#guest')).toMatchObject({ lastSeenAt: 3 });
   });
 
   it("reads a card that was still streaming again on the next turn, so the session gets the bot's final answer", async () => {
@@ -829,17 +830,16 @@ describe('topic openings, 引用行 and the topics table (s14b)', () => {
     expect(fake.log.info).toHaveBeenCalledWith('intake', 'record-block', expect.objectContaining({ place: 'topic', pointer: true, mainLines: 1, mainSession: true, quotes: 1 }));
   });
 
-  it("names the same tier's main session, leaves the bot's own main lines out for a guest, and names none in a multi group", async () => {
-    fake.project = { name: 'test', chatId: 'chat', cwd: '/test', kind: 'single', guestMode: 'qa' };
+  it("names the main session and keeps the bot's own main lines for everyone, and names none in a multi group", async () => {
+    fake.records.set('chat', record('chat'));
     fake.records.set('chat#guest', record('chat#guest'));
-    fake.records.set('chat#admin', record('chat#admin'));
     const run = thread('topic-session');
     fake.backend.startThread.mockResolvedValue(run.t);
     const o = setup();
-    await o.onMessage(message('访客开的话题', 'omt_g', { rootId: 'om_root', senderId: 'ou_guest' }));
+    await o.onMessage(message('成员开的话题', 'omt_g', { rootId: 'om_root', senderId: 'ou_guest' }));
     await done();
-    expect(fake.chat).toHaveBeenCalledWith(expect.anything(), 'chat', expect.objectContaining({ keepSelf: false }));
-    expect(run.consumed[0]!.text).toContain('（主区会话 id：old-chat#guest）');
+    expect(fake.chat).toHaveBeenCalledWith(expect.anything(), 'chat', expect.objectContaining({ keepSelf: true }));
+    expect(run.consumed[0]!.text).toContain('（主区会话 id：old-chat）');
     multi();
     fake.records.set('chat', record('chat'));
     fake.log.info.mockClear();

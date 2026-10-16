@@ -148,21 +148,11 @@ describe('validateBackendSwitch（切换校验的纯函数）', () => {
     expect(validateBackendSwitch({ target: 'codex-appserver', registered, project: {} })).toContain('不可用');
   });
 
-  it('目标后端仅支持 full 时：项目任一档不是 full 都拒绝并说明（含 guestMode 分档）', () => {
-    const supportedModes = ['full'] as const;
-    // 管理员档非 full
-    expect(
-      validateBackendSwitch({ target: 'full-only', registered, project: { mode: 'qa' }, supportedModes, probe: ok }),
-    ).toContain('仅支持');
-    // 管理员档 full 但普通用户档 qa —— guest 档也必须被支持
-    const reason = validateBackendSwitch({
-      target: 'full-only',
-      registered,
-      project: { mode: 'full', guestMode: 'qa' },
-      supportedModes,
-      probe: ok,
-    });
+  it('目标后端仅支持 full 时：只读的项目被拒并说明', () => {
+    const reason = validateBackendSwitch({ target: 'full-only', registered, project: { mode: 'qa' }, supportedModes: ['full'], probe: ok });
+    expect(reason).toContain('仅支持');
     expect(reason).toContain('完全访问');
+    expect(reason).toContain('本项目当前为 🔒 项目内只读');
     expect(reason).toContain('🔐 权限');
   });
 
@@ -183,7 +173,7 @@ describe('validateBackendSwitch（切换校验的纯函数）', () => {
       validateBackendSwitch({
         target: 'codex-appserver',
         registered,
-        project: { mode: 'qa', guestMode: 'write' },
+        project: { mode: 'qa' },
         probe: ok,
       }),
     ).toBeNull();

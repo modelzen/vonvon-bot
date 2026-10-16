@@ -112,7 +112,7 @@ describe("pinned contract extraction", () => {
     const views = [
       fixture("agent-settings.json"),
       {scope:{kind:"project",botId:"cli_fixture",projectName:"fixture"},sections:{
-        permission:section({mode:"qa",guestMode:"qa",network:false}),
+        permission:section({mode:"qa",network:false}),
         response:section({noMention:false}),model:section({selection}),
       },identity:{chatId:"oc_fixture",backend:"codex-appserver",cwd:"/tmp",kind:"multi"},members:{openIds:[],revision:"r1"}},
       {scope:{kind:"session",botId:"cli_fixture",threadId:"thread"},sections:{model:section({selection})},identity:{backend:"codex-appserver",sessionId:"session",chatId:"oc_fixture",projectName:"fixture"}},
@@ -128,6 +128,16 @@ describe("pinned contract extraction", () => {
     const save = (section: string, patch: unknown) => requestSchema.safeParse({type:"request",id:"1",method:"settings",payload:{type:"save",edit:{scope,section,revision:"r1",patch}}}).success;
     expect(save("response", {noMention:true})).toBe(true);
     expect(save("compact", {autoCompact:false})).toBe(false);
+  });
+  it("has one permission tier per group (s15c): no guestMode edit, no member in setPermission", () => {
+    const scope = {kind:"project",botId:"cli_fixture",projectName:"fixture"};
+    const save = (patch: unknown) => requestSchema.safeParse({type:"request",id:"1",method:"settings",payload:{type:"save",edit:{scope,section:"permission",revision:"r1",patch}}}).success;
+    expect(save({mode:"full"})).toBe(true);
+    expect(save({guestMode:"qa"})).toBe(false);
+    expect(save({mode:"full",guestMode:"qa"})).toBe(false);
+    const membershipId = JSON.stringify(["cli_fixture","oc_fixture"]);
+    expect(commandSchema.safeParse({type:"setPermission",membershipId,administrator:"full",network:false}).success).toBe(true);
+    expect(commandSchema.safeParse({type:"setPermission",membershipId,administrator:"full",member:"qa",network:false}).success).toBe(false);
   });
   it("correlates method and payload in both directions", () => {
     expect(requestSchema.safeParse({type:"request",id:"1",method:"settings",payload:{type:"refresh"}}).success).toBe(false);

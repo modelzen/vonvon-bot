@@ -78,7 +78,6 @@ const schemas: Record<string, Record<string, Rule>> = {
   project: {
     permission: shape({
       mode: one('qa', 'write', 'full'),
-      guestMode: one('qa', 'write', 'full'),
       network: bool
     }, true),
     response: shape({

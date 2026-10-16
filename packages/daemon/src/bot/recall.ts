@@ -38,7 +38,7 @@ export function reachedAt(
   const mark = rec.seen?.find((s) => s.id === id);
   if (mark) return mark.at; // a trigger, an interjection or a queued turn
   if (!x) return undefined;
-  const place = rec.threadId.replace(/#(admin|guest)$/, '');
+  const place = rec.threadId;
   const reply = isTopicReply(x, id);
   if (place === chatId) {
     // Main sessions never get topic replies.

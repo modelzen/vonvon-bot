@@ -78,7 +78,6 @@ export const commandSchema = z.discriminatedUnion("type", [
       type: z.literal("setPermission"),
       membershipId: membershipIdSchema,
       administrator: permissionSchema,
-      member: permissionSchema,
       network: z.boolean(),
     })
     .strict(),
@@ -118,7 +117,12 @@ export const membershipSchema = z.object({
   avatarDataUrl: z.string().optional(), id: membershipIdSchema, agentId: agentIdSchema,
   groupId: groupIdSchema, name: z.string(), directory: z.string(), backend: z.string(),
   conversation: conversationSchema, response: z.enum(["mention", "all"]),
-  permission: z.object({ administrator: permissionSchema, member: permissionSchema, network: z.boolean() }),
+  permission: z.object({
+    administrator: permissionSchema,
+    /** @deprecated since s15c always equal to the group's one tier; kept so clients from before s15c still parse */
+    member: permissionSchema,
+    network: z.boolean(),
+  }),
   stale: z.boolean(),
 });
 export type Membership = z.infer<typeof membershipSchema>;

@@ -1387,27 +1387,15 @@ export function ProjectPanel({
         render={(draft, set, disabled, commit) => (
           <>
             <SettingsRow
-              title="管理员权限"
+              title="权限档"
               description={fullOnly}
               trailing={
                 <Select
-                  label="管理员权限"
+                  label="权限档"
                   value={draft.mode}
                   disabled={disabled}
                   choices={tiers}
                   onChange={(mode) => void commit({ mode })}
-                />
-              }
-            />
-            <SettingsRow
-              title="普通成员权限"
-              trailing={
-                <Select
-                  label="普通成员权限"
-                  value={draft.guestMode}
-                  disabled={disabled}
-                  choices={tiers}
-                  onChange={(guestMode) => void commit({ guestMode })}
                 />
               }
             />
@@ -1569,7 +1557,7 @@ function SessionPicker({ view }: { view: ProjectSettingsView }) {
       label="话题模型"
         id={settingAnchor("话题模型")}
       action={<Button onClick={() => setRefresh((value) => value + 1)}>刷新话题</Button>}
-      footer="权限分开时，管理员与普通成员使用独立会话。请选择对应会话；模型从该会话下一轮生效。"
+      footer="模型从该会话下一轮生效。"
     >
       {error && (
         <InlineNotice title="话题列表暂不可用" tone="warning">
@@ -1587,7 +1575,7 @@ function SessionPicker({ view }: { view: ProjectSettingsView }) {
             <option value="">请选择</option>
             {sessions.map((item) => (
               <option key={item.threadId} value={item.threadId}>
-                {item.threadId.endsWith("#admin") ? "管理员" : item.threadId.endsWith("#guest") ? "普通成员" : "共用"} · {item.summary || item.threadId}
+                {item.summary || item.threadId}
               </option>
             ))}
           </select>

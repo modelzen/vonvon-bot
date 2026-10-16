@@ -56,7 +56,6 @@ export const agentSectionSchemas = {
 export const projectSectionSchemas = {
   permission: z.object({
     mode: z.enum(["qa", "write", "full"]),
-    guestMode: z.enum(["qa", "write", "full"]),
     network: z.boolean(),
   }),
   response: z.object({ noMention: z.boolean() }),

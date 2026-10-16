@@ -172,7 +172,7 @@ it('s20b: a full-only backend says why, refuses saving 只读 or 读写, and kee
   const { owner } = await fixture({ backendFor: () => ({ ...backend, fullAccessOnly: () => 'only full here' }) });
   let view = await owner.read(project) as ProjectSettingsView;
   expect(view.identity.fullOnly).toBe('only full here');
-  for (const patch of [{ mode: 'qa' }, { guestMode: 'write' }, { mode: 'full', guestMode: 'qa' }] as const) {
+  for (const patch of [{ mode: 'qa' }, { mode: 'write' }] as const) {
     const result = await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch });
     expect(result).toEqual({ kind: 'rejected', fields: [{ field: 'settings', message: 'only full here' }] });
   }
