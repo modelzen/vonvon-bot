@@ -517,7 +517,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | [x] | s19 | 状态与诊断页 | 按 bot 列连接状态、Codex 和 Claude 的版本与登录、缺的权限；每个 bot 记最近没回的消息和原因（3.1 第 8 条） | 450 | s03、s01 | 并发 | 无 |
 | [x] | s20a | Linux 命令行版（上）：平台、open --print、linger、终端扫码 | 平台枚举加 linux、去掉 windows，界面显示"这台 Linux 主机"；`vonvon open --print`；`service install` 处理 linger；没有用户 systemd 时的说明；`vonvon bot add` 终端扫码；Linux 的首次运行清单加"Linux 上 Codex 只能用完全访问"一步和 Claude 的沙箱检查（3.10） | 1130 | s07、s04 | 子进程、错误路径 | 无 |
 | [x] | s20c | 互斥锁换掉端口 | 四个角色（`admission`、`host`、`keystore`、`service`）的互斥锁不再用和 Linux 临时端口重叠的端口：Linux 用抽象命名空间的 Unix 域套接字，macOS 用带 `O_EXLOCK` 的文件锁；升级那一刻和旧版本的锁过渡；`inspectHost` 跟着改 | 380 | 无 | 并发、关闭清理、合入门禁 | 装着 M3 预览版、它的 daemon 在跑时，新版本的 `vonvon daemon start` 不会再起一个；macOS CI 跑锁的测试 |
-| [ ] | s20b | Linux 命令行版（下）：Codex 只能完全访问，删 windows-job | Linux 上的 Codex 遇到只读、读写档不起会话，回一句说明，设置里置灰；删 `codex-appserver/windows-job.ts`；在这片的 head 上做 Linux 验收（3.8、第 8 节第 5 条） | 400 | s20a | 子进程、关闭清理、错误路径 | 无（Linux 在 JP-VPS 上验） |
+| [x] | s20b | Linux 命令行版（下）：Codex 只能完全访问，删 windows-job | Linux 上的 Codex 遇到只读、读写档不起会话，回一句说明，设置里置灰；删 `codex-appserver/windows-job.ts`；在这片的 head 上做 Linux 验收（3.8、第 8 节第 5 条） | 400 | s20a | 子进程、关闭清理、错误路径 | 无（Linux 在 JP-VPS 上验） |
 
 开工要点：
 - s17：e06 实测 `kill -9` 后约 1 秒被拉起，两次启动至少隔 `minimum runtime`（默认 10 秒；产品 plist 的 `ThrottleInterval` 是 5，实际间隔没测）；`launchctl print` 的 `last exit code` 和 `last terminating signal` 分得清正常退出和被杀。"重新登录过"用 Security 框架 `SessionGetInfo` 取的安全会话 id 判断（e06 只查了资料），开工时先在 Mac 上注销再登录验证一次；区分重启再加开机标识。
@@ -924,6 +924,13 @@ macOS：
 
 Linux：`vonvon service uninstall`，`vonvon daemon stop`，`npm rm -g vonvon-bot`，`rm -rf ~/.vonvon-bot`。卸载不关 linger；装的时候开了 linger、这个账号上又没有别的用户服务要它，再运行 `loginctl disable-linger`（s20a）。
 
-**Linux 验收**（s20b 填，product.md 第 8 节第 5 条的 Linux 一半）：待填。
+**Linux 验收**（s20b 填，product.md 第 8 节第 5 条的 Linux 一半）：2026-10-16，Claude 在 JP-VPS 的普通用户账号里做，用 s20b 的 `b4132c187275b0d295aa88218a438a6a8c37602a`。
+- 打包和安装：在干净的 PR worktree 里 `npm run pack:vonvon-bot -- --out <临时目录>`，得到 `vonvon-bot-0.7.0.tgz`，sha256 `333f6617ecdb2c4aaf5c657698b879efba71e2066e3ce9f045dab5a2421c5c7d`；`check-vonvon-bot-package.mjs --head <这个 sha>` 通过（7269 个文件）。用 `npm install -g --prefix <临时前缀> --offline --ignore-scripts` 装到不在任何 git checkout 里的临时目录，之后每条命令前面带 `npm_config_prefix`、`VONVON_HOME` 和 `PATH`，直接运行 `vonvon`。
+- `vonvon service install --port <P>`：装成 `~/.config/systemd/user/vonvon-bot-<数据目录哈希的 12 位>.service`，`ExecStart` 是 `/usr/bin/node <临时前缀>/lib/node_modules/vonvon-bot/bin/vonvon.mjs daemon run --port <P>`，`Restart=on-failure`、`RestartSec=5`。装完 `active`，MainPID 1675248，`NRestarts=0`；`daemon status --json` 的 pid 和 MainPID 一样，`curl 127.0.0.1:<P>/` 回 200。install 打印"linger 已开"。
+- `kill -9` 这个 MainPID：日志里是 `status=9/KILL` 和 "restart counter is at 1"，7 秒内 MainPID 换成 1675476，`NRestarts` 从 0 到 1，还是同一个端口，`curl` 回 200。
+- `vonvon daemon stop`：打印 `stopped`，退出 0。之后 20 秒里 unit 一直是 `inactive`，MainPID 0，`NRestarts` 还是 1；没有 `daemon.pid`，端口空出来了。
+- `vonvon service uninstall`：打印 `uninstalled: Uninstalled` 和 linger 的提示"linger 没关：…不需要的话运行 loginctl disable-linger。"；`LoadState=not-found`，unit 文件和 `default.target.wants` 里的链接都删了。
+- linger：`loginctl show-user` 前后都是 `Linger=yes`，没关。JP-VPS 上在跑的验收 daemon 前后是同一个进程，它和它的端口都没碰。
+- 无头网页检查（实现时在 JP-VPS 上跑的）：Linux 上 Codex 项目的权限设置里，只读问答、允许写入两档是置灰的。
 
 **发布前的 Mac 验收**（s67 填，product.md 第 8 节第 5 条的 Mac 一半）：待填。
