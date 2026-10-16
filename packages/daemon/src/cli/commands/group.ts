@@ -78,7 +78,7 @@ export async function runGroupBind(rawGroupId: string, options: BindOptions, io:
   if (!groupId.success) throw new Error('群 id 应该以 oc_ 开头。用 vonvon group pending 或 vonvon group joined 查。');
   const tool = toolSchema.safeParse(options.tool ?? 'codex');
   if (!tool.success) throw new Error('--tool 只能是 codex 或 claude。');
-  const picked = options.conversation === undefined ? undefined : CONVERSATIONS[options.conversation];
+  const picked = options.conversation !== undefined && Object.hasOwn(CONVERSATIONS, options.conversation) ? CONVERSATIONS[options.conversation] : undefined;
   if (picked === undefined) throw new Error(CONVERSATION_HELP);
   const conversation = { data: picked };
   const response = options.response === undefined ? undefined : replyModeSchema.safeParse(options.response);

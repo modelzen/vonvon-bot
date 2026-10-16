@@ -19,7 +19,7 @@ import {
   type SessionTitleAiConfig,
 } from '../config/schema';
 import { conversationCopy } from '@vonvon/protocol';
-import { effectiveMode, noMentionOf, ruleKind, type Project, type SessionMode } from '../project/registry';
+import { effectiveMode, noMentionOf, ruleKind, type Project } from '../project/registry';
 import {
   DEFAULT_BACKEND_ID,
   REASONING_EFFORTS,
@@ -142,10 +142,9 @@ export const GS = {
   modelDefaultSubmit: 'gs.modelDefault.submit',
 } as const;
 
-/** Human label for a group's 会话方式 (product.md 3.4). */
-export function kindLabel(kind?: SessionMode): string {
-  if (kind === 'smart') return '智能 · 智能开话题';
-  const copy = conversationCopy[kind === 'single' ? 'shared' : 'threads'];
+/** Human label for a group's 会话方式 (product.md 3.4). 智能 shows as 单会话 until s25. */
+export function kindLabel(p: Pick<Project, 'kind' | 'smart'>): string {
+  const copy = conversationCopy[ruleKind(p) === 'single' ? 'shared' : 'threads'];
   return `${copy.name} · ${copy.title}`;
 }
 
@@ -620,7 +619,7 @@ export function buildNewProjectDoneCard(p: Project): CardObject {
   const backendName = catalogById(p.backend ?? DEFAULT_BACKEND_ID)?.displayName ?? p.backend ?? DEFAULT_BACKEND_ID;
   const elements: CardElement[] = [
     md(`✅ ${verb} **${p.name}**${p.blank ? ' _(空白项目)_' : ''}`),
-    note(`📂 \`${p.cwd}\`   ·   ${kindLabel(p.kind)}   ·   🧠 ${backendName}`),
+    note(`📂 \`${p.cwd}\`   ·   ${kindLabel(p)}   ·   🧠 ${backendName}`),
     md(p.chatId ? '👉 去群里 **@我** 干活。' : '发我任意消息可再次打开管理台。'),
   ];
   if (p.chatId)
@@ -674,7 +673,7 @@ export function buildProjectListCard(
     const topicCount = (p.chatId ? sessionsByChat.get(p.chatId) : undefined)?.length ?? 0;
     const dir = `📂 \`${p.cwd}\`${p.branch && p.branch !== '—' ? `   🌿 ${p.branch}` : ''}`;
     const meta = p.chatId
-      ? `${kindLabel(p.kind)}${(p.origin ?? 'created') === 'joined' ? ' · 🔗已加入' : ''}   ·   免@：${noMentionOf(p) ? '开' : '关'}`
+      ? `${kindLabel(p)}${(p.origin ?? 'created') === 'joined' ? ' · 🔗已加入' : ''}   ·   免@：${noMentionOf(p) ? '开' : '关'}`
       : '⚠️ 未绑定群';
     elements.push(md(`**${p.name}**${p.blank ? ' _(空白)_' : ''}`));
     elements.push(note(`${dir}\n${meta}`));
@@ -1406,8 +1405,8 @@ export function buildCompletionReminderCustomCard(cfg: AppConfig): CardObject {
 export const AUTO_COMPACT_RETIRED = '🗜️ 自动压缩现在一直开着，这个开关已经去掉了。';
 
 /**
- * In-group settings card (@bot /settings). The group type is fixed at creation
- * (read-only label); 免@ is a live toggle. Uses option buttons (never lock) like
+ * In-group settings card (@bot /settings). 会话方式 is a read-only label here (the web
+ * changes it); 免@ is a live toggle. Uses option buttons (never lock) like
  * {@link buildSettingsCard}. Admin-gated by the handler. `notice` = 卡顶提示行。
  */
 export function buildGroupSettingsCard(
@@ -1424,7 +1423,7 @@ export function buildGroupSettingsCard(
     [
       ...(notice ? [md(notice)] : []),
       md(`**群设置** · ${project.name}`),
-      note(`群类型(建群时定，不可改)：${kindLabel(kind)}`),
+      note(`会话方式：${kindLabel(project)}`),
       ...optionRow('✋ 免@（不用 @ 也回复）', GS.setNoMention, noMention ? 'on' : 'off', [
         { label: '开', value: 'on' },
         { label: '关', value: 'off' },
@@ -1768,7 +1767,7 @@ export function buildProjectSettingsCard(
     [
       ...(notice ? [md(notice)] : []),
       md(`**项目设置** · ${project.name}`),
-      note(`${kindLabel(kind)}${project.cwd ? `   ·   📂 \`${project.cwd}\`` : ''}`),
+      note(`${kindLabel(project)}${project.cwd ? `   ·   📂 \`${project.cwd}\`` : ''}`),
       hr(),
       actions([button('🔐 权限', { a: DM.permission, n: project.name }, 'primary')]),
       note(`当前 ${permissionSummary(project)}　·　codex 沙箱可访问的范围，群里所有人都用这一档。`),

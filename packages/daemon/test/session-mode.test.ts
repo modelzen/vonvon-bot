@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { bindNoMention, noMentionOf, pendingPolicyOf, ruleKind, sessionModeOf, type Project } from '../src/project/registry';
 import { buildJoinGroupFormCard, buildNewProjectFormCard, kindLabel, parseNoMentionPick } from '../src/card/dm-cards';
+import { buildWelcomeCard } from '../src/card/command-cards';
 
 const row = (extra: Partial<Project>): Project => ({ name: 'p', chatId: 'oc_p', cwd: '/tmp/p', blank: false, createdAt: 1, ...extra });
 
@@ -8,10 +9,11 @@ describe('s21 会话方式 read rules (product.md 3.4)', () => {
   it('reads missing and unknown kinds as 多会话, as before s21', () => {
     expect(sessionModeOf(row({}))).toBe('multi');
     expect(sessionModeOf(row({ kind: 'later' as never }))).toBe('multi');
+    expect(sessionModeOf(row({ smart: 'yes' as never }))).toBe('multi');
     expect(ruleKind(row({ kind: 'single' }))).toBe('single');
   });
   it('runs a stored 智能 as 单会话 that replies only when @-ed, until s25', () => {
-    const smart = row({ kind: 'smart', noMention: true });
+    const smart = row({ kind: 'single', smart: true, noMention: true });
     expect(sessionModeOf(smart)).toBe('smart');
     expect(ruleKind(smart)).toBe('single');
     expect(noMentionOf(smart)).toBe(false);
@@ -50,6 +52,10 @@ describe('s21 DM bind and new-group cards', () => {
       expect(json).not.toContain('"type":"primary","form_action_type":"submit"');
     });
   }
+  it('the 多会话 welcome card promises 免@ in topics only when it is on', () => {
+    expect(JSON.stringify(buildWelcomeCard('multi', undefined, true))).toContain('免@');
+    expect(JSON.stringify(buildWelcomeCard('multi', undefined, false))).not.toContain('直接发消息（免@）');
+  });
   it('reads an unpicked 免@ as "follow the 会话方式"', () => {
     expect(parseNoMentionPick(undefined)).toBeUndefined();
     expect(parseNoMentionPick({})).toBeUndefined();
@@ -58,7 +64,8 @@ describe('s21 DM bind and new-group cards', () => {
     expect(parseNoMentionPick({ noMention: 'yes' })).toBeUndefined();
   });
   it('labels groups with the 3.4 names', () => {
-    expect(kindLabel(undefined)).toBe('多会话 · @ 我开新会话');
-    expect(kindLabel('single')).toBe('单会话 · 整群一条会话');
+    expect(kindLabel(row({}))).toBe('多会话 · @ 我开新会话');
+    expect(kindLabel(row({ kind: 'single' }))).toBe('单会话 · 整群一条会话');
+    expect(kindLabel(row({ kind: 'single', smart: true }))).toBe('单会话 · 整群一条会话'); // 智能 stays hidden until s25
   });
 });

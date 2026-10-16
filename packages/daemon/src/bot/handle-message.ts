@@ -197,7 +197,6 @@ import {
   noMentionOf,
   pendingPolicyOf,
   ruleKind,
-  sessionModeOf,
   mutateProject,
   removeProject,
   updateProject,
@@ -4909,11 +4908,15 @@ export function createOrchestrator(
         if (request.enabled !== undefined) patch.enabled = request.enabled;
         const commit = () => mutateProject(project.name, latest => {
           if (projectRevision(latest) !== request.expectedRevision) throw new AdminWriteError('项目设置已改变，请刷新后重试');
-          // Switching 会话方式 leaves 免@ as it was (3.4): pin the default it read as before.
-          if (patch.kind !== undefined && patch.kind !== sessionModeOf(latest) && latest.noMention === undefined) latest.noMention = noMentionOf(latest);
+          // Switching 会话方式 leaves 免@ as it was (3.4): pin the value it read as before. 智能 is not
+          // offered here, so a stored one is kept when 单会话 comes back unchanged and dropped on a switch.
+          if (patch.kind !== undefined && patch.kind !== ruleKind(latest)) {
+            if (latest.noMention === undefined || latest.smart) latest.noMention = noMentionOf(latest);
+            delete latest.smart;
+          }
           Object.assign(latest, patch);
         });
-        const archive = (patch.cwd !== undefined && patch.cwd !== project.cwd) || (patch.kind !== undefined && patch.kind !== sessionModeOf(project));
+        const archive = (patch.cwd !== undefined && patch.cwd !== project.cwd) || (patch.kind !== undefined && patch.kind !== ruleKind(project));
         const updated = archive ? await detachSessionsForChat(project.chatId, commit) : await commit();
         if (archive) expireRetries((retry) => retry.chatId === project.chatId); // its sessions start over
         for (const rec of records) {
@@ -5022,7 +5025,7 @@ export function createOrchestrator(
       }
       const root = await channel.send(project.chatId, { markdown: `桌面端启动目标：${request.objective}` }, replyTo ? { replyTo, replyInThread: true } : undefined);
       launched = true;
-      void trackRun(launchGoalRun({ chatId: project.chatId, replyTo: root.messageId, thread, firstText: request.objective, knownThreadId: key, cwd: project.cwd, mode: perm.mode, network: perm.network, model: record.model, effort: record.effort, flat: project.kind === 'single', backendId: sessionBackend.id, requesterOpenId: owner, titleSource: { text: request.objective, rawContentType: 'text' } })).catch(error => log.fail('desktop', error));
+      void trackRun(launchGoalRun({ chatId: project.chatId, replyTo: root.messageId, thread, firstText: request.objective, knownThreadId: key, cwd: project.cwd, mode: perm.mode, network: perm.network, model: record.model, effort: record.effort, flat: ruleKind(project) === 'single', backendId: sessionBackend.id, requesterOpenId: owner, titleSource: { text: request.objective, rawContentType: 'text' } })).catch(error => log.fail('desktop', error));
       return { ok: true, threadId: key };
     } finally {
       if (!launched && active.get(key) === reserved) active.delete(key);

@@ -256,6 +256,7 @@ it('group bind sends an absolute folder, the chosen token and the pending name',
   // 3.4: the command line must name the 会话方式; nothing is picked for the user.
   await expect(runGroupBind('oc_pay', { folder: 'pay' }, offline.io(), offline.daemon, host)).rejects.toThrow('--conversation 必须选一项：multi（@ 我开新会话）或 single（整群一条会话）。');
   await expect(runGroupBind('oc_pay', { folder: 'pay', conversation: 'smart' }, offline.io(), offline.daemon, host)).rejects.toThrow('--conversation 必须选一项');
+  await expect(runGroupBind('oc_pay', { folder: 'pay', conversation: 'toString' }, offline.io(), offline.daemon, host)).rejects.toThrow('--conversation 必须选一项');
   await expect(runGroupBind('oc_pay', { folder: 'pay', conversation: 'multi', response: 'yes' }, offline.io(), offline.daemon, host)).rejects.toThrow('--response 只能是 mention');
   await expect(runGroupBind('oc_pay', { folder: 'missing', conversation: 'multi' }, offline.io(), offline.daemon, host)).rejects.toThrow(`文件夹不存在：${join(home, 'work', 'missing')}`);
   await expect(runGroupBind('oc_pay', { folder: 'file', conversation: 'multi' }, offline.io(), offline.daemon, host)).rejects.toThrow('不是文件夹：');

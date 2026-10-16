@@ -20,11 +20,14 @@ export interface Project {
   createdAt: number;
   /** last branch shown in the announcement (for lazy change detection) */
   branch?: string;
-  /** 会话方式 (product.md 3.4): 'multi' = 多会话, a topic per session; 'single' = 单会话,
-   * the main area is one session keyed by chatId; 'smart' = 智能. Missing or unknown reads
-   * as 'multi'. No entry writes 'smart' before s25; until then it runs as 单会话 + 仅 @,
-   * see {@link ruleKind} and {@link noMentionOf}. */
-  kind?: SessionMode;
+  /** How the main area runs (product.md 3.4): 'multi' = 多会话, a topic per session;
+   * 'single' = 单会话, the main area is one session keyed by chatId. Missing or unknown
+   * reads as 'multi'. Read via {@link ruleKind}. */
+  kind?: 'multi' | 'single';
+  /** 智能 (3.4): stored with `kind: 'single'`, so a daemon from before s21 runs it as 单会话.
+   * No entry writes it before s25; until then it runs as 单会话 + 仅 @ ({@link noMentionOf}).
+   * Read via {@link sessionModeOf}; switching to 多会话 or 单会话 drops it. */
+  smart?: boolean;
   /** respond to non-@ messages too. Read as `noMention ?? defaultNoMention(p)`.
    * multi: only inside a topic; single: whole group. Needs im:message.group_msg. */
   noMention?: boolean;
@@ -81,24 +84,25 @@ export interface Project {
  * so existing data is unaffected. Single source of truth — every
  * `noMention ?? …` read goes through here.
  */
-export function defaultNoMention(p: Pick<Project, 'kind' | 'origin'>): boolean {
+export function defaultNoMention(p: Pick<Project, 'kind' | 'smart' | 'origin'>): boolean {
   return !((p.origin ?? 'created') === 'joined' && ruleKind(p) === 'single');
 }
 
 export type SessionMode = 'multi' | 'single' | 'smart';
 
 /** The stored 会话方式; missing or unknown values read as 'multi' (rule mode, as before s21). */
-export function sessionModeOf(p: Pick<Project, 'kind'>): SessionMode {
-  return p.kind === 'single' || p.kind === 'smart' ? p.kind : 'multi';
+export function sessionModeOf(p: Pick<Project, 'kind' | 'smart'>): SessionMode {
+  if (p.smart === true) return 'smart';
+  return p.kind === 'single' ? 'single' : 'multi';
 }
 
-/** How the main area runs. 'smart' runs as 'single' until s25 brings the smart inbound. */
-export function ruleKind(p: Pick<Project, 'kind'>): 'multi' | 'single' {
+/** How the main area runs. 智能 runs as 'single' until s25 brings the smart inbound. */
+export function ruleKind(p: Pick<Project, 'kind' | 'smart'>): 'multi' | 'single' {
   return sessionModeOf(p) === 'multi' ? 'multi' : 'single';
 }
 
 /** The group's effective 免@. 智能 has no 免@ (3.4); until s25 it replies only when @'d. */
-export function noMentionOf(p: Pick<Project, 'kind' | 'origin' | 'noMention'>): boolean {
+export function noMentionOf(p: Pick<Project, 'kind' | 'smart' | 'origin' | 'noMention'>): boolean {
   if (sessionModeOf(p) === 'smart') return false;
   return p.noMention ?? defaultNoMention(p);
 }

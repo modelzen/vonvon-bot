@@ -5,7 +5,7 @@ import { realpath, stat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { bindModeFor, joinExistingGroup } from '../project/lifecycle';
-import { getProjectByChatId, getProjectByName, listProjects, sessionModeOf, type Project } from '../project/registry';
+import { getProjectByChatId, getProjectByName, listProjects, bindNoMention, noMentionOf, sessionModeOf, type Project } from '../project/registry';
 import { log } from '../core/logger';
 import { feishuError, scopeDenial } from '../utils/feishu-error';
 import { AdminWriteError } from './ops';
@@ -104,7 +104,8 @@ export function createGroupExecutor(channel: LarkChannel): (op: AdminGroupOp) =>
     async function same(project: Project): Promise<boolean> {
       const cwd = await realpath(project.cwd).catch(() => project.cwd);
       const backend = project.backend ?? await effectiveDefaultBackend().catch(() => DEFAULT_BACKEND_ID);
-      return project.name === input.projectName && cwd === directory && backend === input.backend && sessionModeOf(project) === input.kind;
+      return project.name === input.projectName && cwd === directory && backend === input.backend && sessionModeOf(project) === input.kind
+        && noMentionOf(project) === (input.noMention ?? bindNoMention(input.kind));
     }
     const bound = await getProjectByChatId(input.chatId);
     if (bound) {
@@ -112,7 +113,7 @@ export function createGroupExecutor(channel: LarkChannel): (op: AdminGroupOp) =>
         await retireBoundPendingGroup(pendingGroupsFile(paths.projectsFile), bound.chatId);
         return bound;
       }
-      throw new AdminWriteError(`该群已绑定为项目「${bound.name}」，现有文件夹、后端和群类型不可修改`);
+      throw new AdminWriteError(`该群已绑定为项目「${bound.name}」，现有文件夹、后端和会话方式不可修改，免 @ 请在群设置里改`);
     }
     if (await getProjectByName(input.projectName)) throw new AdminWriteError('项目名已被使用');
     try {

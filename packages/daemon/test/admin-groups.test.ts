@@ -65,6 +65,9 @@ describe('desktop group commands in the owning bot', () => {
     const execute = createGroupExecutor(channelFixture().channel);
     expect(await execute({ kind: 'bindGroup', input: { ...input(dir), chatId: 'oc_s21a', projectName: 'S21 A', kind: 'single' } })).toMatchObject({ kind: 'single', noMention: false });
     expect(await execute({ kind: 'bindGroup', input: { ...input(dir), chatId: 'oc_s21b', projectName: 'S21 B', kind: 'single', noMention: true } })).toMatchObject({ kind: 'single', noMention: true });
+    // Binding the same group again with another 免@ is not a silent success.
+    await expect(execute({ kind: 'bindGroup', input: { ...input(dir), chatId: 'oc_s21a', projectName: 'S21 A', kind: 'single', noMention: true } })).rejects.toThrow('免 @ 请在群设置里改');
+    expect(await execute({ kind: 'bindGroup', input: { ...input(dir), chatId: 'oc_s21a', projectName: 'S21 A', kind: 'single', noMention: false } })).toMatchObject({ noMention: false });
     expect(parseBindGroupInput({ ...input(dir), noMention: false })).toMatchObject({ noMention: false });
     expect(() => parseBindGroupInput({ ...input(dir), noMention: 'off' })).toThrow('群绑定参数无效');
     expect(() => parseBindGroupInput({ ...input(dir), kind: 'smart' })).toThrow('群绑定参数无效');
