@@ -2,7 +2,7 @@ import {expect, it, vi} from 'vitest';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {ConnectionError, RpcError} from '@vonvon/client/browser';
 import type {ApplicationService, DesktopSnapshot, MachineReply, MachineRequest} from '@vonvon/protocol';
-import {LoginServiceRow, skipService, toggleService} from '../src/setup/service-toggle';
+import {LoginServiceRow, deviceTitle, skipService, toggleService} from '../src/setup/service-toggle';
 
 const machine = (reply: (request: MachineRequest) => Promise<MachineReply> = async request => ({type: 'done', message: `did ${request.type}`})) => ({machine: vi.fn(reply)});
 
@@ -44,7 +44,7 @@ const switchTag = (html: string) => html.match(/<input[^>]*role="switch"[^>]*>/)
 
 it('shows the switch on macOS only, with the state it cannot change', () => {
   expect(row(application({platform: 'unsupported'}, {}))).toBe('');
-  expect(row(application({platform: 'windows'}, {}))).toBe('');
+  expect(row(application({platform: 'linux'}, {}))).toBe('');
   const ready = row(application({}, {}));
   expect(ready).toContain('登录电脑时启动');
   expect(ready).not.toContain('桌面版提供');
@@ -66,4 +66,8 @@ it('shows the switch on macOS only, with the state it cannot change', () => {
   expect(switchTag(row(application({loginItem: true}, {state: 'detached'})))).toContain('checked');
   const failed = row(application({}, {action: {action: 'install', phase: 'done', ok: false, reason: 'busy', startedAt: Date.now(), finishedAt: Date.now()}}));
   expect(failed).toContain('另一个后台服务操作正在进行，等它结束再试。');
+});
+
+it('names this Mac, this Linux host, or this computer on the 应用与启动 page', () => {
+  expect(['macos', 'linux', 'unsupported'].map(platform => deviceTitle(platform as DesktopSnapshot['application']['platform']))).toEqual(['这台 Mac', '这台 Linux 主机', '这台电脑']);
 });

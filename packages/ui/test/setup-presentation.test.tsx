@@ -4,7 +4,7 @@ import type {AdminSetupStatus, Agent, ApplicationService, DesktopSnapshot, Servi
 import {createClient} from '../../client/src/client';
 import {ClientProvider} from '../src/client-context';
 import {SetupChecklist} from '../src/setup/SetupChecklist';
-import {BOT_ADDED_WARNING, JOIN_SCOPE_WARNING, RECALL_WARNING, botSteps, recentServiceFailure, remoteStepsDone, scopeStep, serviceStep, toolSteps} from '@vonvon/protocol';
+import {BOT_ADDED_WARNING, JOIN_SCOPE_WARNING, LINGER_OFF_WARNING, RECALL_WARNING, botSteps, linuxSteps, recentServiceFailure, remoteStepsDone, scopeStep, serviceStep, toolSteps} from '@vonvon/protocol';
 
 const agent: Agent = {id: 'cli_setup' as Agent['id'], name: '小助手', enabled: true, running: true, connection: 'connected', activation: 'active'};
 const done: AdminSetupStatus = {
@@ -153,7 +153,7 @@ it('drops the warnings while the credentials are rejected', () => {
 
 const service = (fields: Partial<ApplicationService> = {}): ApplicationService => ({state: 'not-installed', skipped: false, ...fields});
 const mac = (fields?: Partial<ApplicationService>, now?: number) => serviceStep({platform: 'macos', service: fields && service(fields)}, now);
-const linux = (fields?: Partial<ApplicationService>) => serviceStep({platform: 'unsupported', service: fields && service(fields)});
+const linux = (fields?: Partial<ApplicationService>) => serviceStep({platform: 'linux', service: fields && service(fields)});
 const labels = (step: ReturnType<typeof serviceStep>) => step.actions.map(action => action.label);
 
 it.each([
@@ -193,9 +193,39 @@ it.each([
   [{state: 'detached'}, '已装 · 这次没交给后台服务', 'warning', true, '在终端运行 vonvon daemon stop，再运行 vonvon daemon start。'],
   [{state: 'conflict', detail: 'An uninstall did not finish. Run vonvon service uninstall.'}, '要处理', 'danger', false, 'An uninstall did not finish. Run vonvon service uninstall.'],
   [{state: 'unknown', detail: 'User manager unavailable'}, '无法确认', 'neutral', false, '暂时问不到 systemd：User manager unavailable'],
+  [{state: 'unknown', detail: 'Failed to connect to bus', hint: '当前终端没有 XDG_RUNTIME_DIR。'}, '无法确认', 'neutral', false, '当前终端没有 XDG_RUNTIME_DIR。'],
+  [{state: 'running', linger: 'on'}, '在运行', 'success', true, 'bot 跑在 systemd 用户服务里，崩溃后自动重启；开机就启动，退出 SSH 也在线。'],
 ] as const)('Linux service step for %j has no buttons', (fields, status, tone, done, detail) => {
   const step = linux(fields as Partial<ApplicationService>);
   expect(step).toMatchObject({id: 'service', title: '后台服务', status, tone, done, detail, actions: []});
+});
+
+it('keeps a running Linux service done without linger, with a warning, and says when a platform has no service', () => {
+  expect(linux({state: 'running', linger: 'off'})).toMatchObject({status: '在运行', tone: 'success', done: true, warnings: [LINGER_OFF_WARNING]});
+  expect(linux({state: 'running', linger: 'unknown'}).warnings).toBeUndefined();
+  expect(serviceStep({platform: 'unsupported', service: service()})).toMatchObject({status: '不支持', done: false, detail: '这台电脑不支持后台服务。', actions: []});
+});
+
+const sandboxed = (sandbox?: NonNullable<ToolState['sandbox']>) => linuxSteps([tool({tool: 'codex'}), tool({tool: 'claude', ...(sandbox ? {sandbox} : {})})]);
+it('adds the Codex note and the Claude sandbox on Linux, only for tools that are installed', () => {
+  expect(linuxSteps([tool({tool: 'codex', installation: 'missing'}), tool({tool: 'claude', installation: 'missing'})])).toEqual([]);
+  const [codex, claude] = sandboxed({bwrap: '/usr/bin/bwrap', socat: true, userns: 'ok'});
+  expect(codex).toMatchObject({id: 'codex-linux', title: 'Codex 的权限档', status: '只能用完全访问', tone: 'neutral', done: true, actions: []});
+  expect(codex?.detail).toContain('vonvon settings set --group <群 id> permission.mode=full');
+  expect(claude).toMatchObject({id: 'claude-sandbox', status: '可以用', tone: 'success', done: true, commands: undefined});
+  expect(linuxSteps([tool({tool: 'codex', installation: 'unknown'})]).map(step => step.id)).toEqual(['codex-linux']);
+  expect(sandboxed()[1]).toMatchObject({status: '无法确认', tone: 'neutral'});
+  expect(sandboxed({bwrap: null, socat: false, userns: 'unchecked'})[1]).toMatchObject({status: '缺 bwrap、socat', tone: 'warning', commands: ['sudo apt install bubblewrap socat']});
+  expect(sandboxed({bwrap: '/usr/bin/bwrap', socat: false, userns: 'ok'})[1]).toMatchObject({status: '缺 socat', commands: ['sudo apt install socat']});
+  const apparmor = sandboxed({bwrap: '/home/u/bin/bwrap', socat: true, userns: 'apparmor'})[1];
+  expect(apparmor).toMatchObject({status: '被 AppArmor 挡住', tone: 'warning', done: false});
+  expect(apparmor?.commands).toContain('profile bwrap /home/u/bin/bwrap flags=(unconfined) {');
+  expect(apparmor?.commands?.at(-1)).toBe('sudo apparmor_parser -r /etc/apparmor.d/bwrap');
+  expect(sandboxed({bwrap: '/usr/bin/bwrap', socat: true, userns: 'disabled', detail: 'kernel.unprivileged_userns_clone'})[1]).toMatchObject({status: '用户命名空间被关掉了', commands: ['sudo sysctl -w kernel.unprivileged_userns_clone=1']});
+  expect(sandboxed({bwrap: '/usr/bin/bwrap', socat: true, userns: 'disabled', detail: 'user.max_user_namespaces'})[1]?.commands).toEqual(['sudo sysctl -w user.max_user_namespaces=15000']);
+  const failed = sandboxed({bwrap: '/usr/bin/bwrap', socat: true, userns: 'failed', detail: 'bwrap: setting up uid map: Permission denied'})[1];
+  expect(failed).toMatchObject({status: '沙箱起不来', commands: ['/usr/bin/bwrap --ro-bind / / --dev /dev --unshare-all --die-with-parent true']});
+  expect(failed?.detail).toContain('bwrap 试跑失败：bwrap: setting up uid map: Permission denied。');
 });
 
 it('ignores the macOS-only parts of the snapshot on Linux', () => {
@@ -225,4 +255,19 @@ it('puts the service step in its own group after the tools', () => {
   expect(other).toContain('1. 后台服务');
   expect(other).not.toContain('LaunchAgent');
   expect(other).not.toContain('<span>打开</span>');
+  expect(other).not.toContain('Linux 上的权限档');
+  expect(html).not.toContain('Linux 上的权限档');
+});
+
+it('shows the Linux group between the tools and the service, with commands in a block', () => {
+  const html = renderToStaticMarkup(<ClientProvider client={client}>
+    <SetupChecklist snapshot={{...snapshot([]), tools: [tool({tool: 'claude', sandbox: {bwrap: null, socat: true, userns: 'unchecked'}})], application: {...snapshot([]).application, platform: 'linux', service: service()}}}
+      ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onRegister={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}} codexJobs={null}/>
+  </ClientProvider>);
+  expect(html.indexOf('执行工具')).toBeLessThan(html.indexOf('Linux 上的权限档'));
+  expect(html.indexOf('Linux 上的权限档')).toBeLessThan(html.indexOf('后台运行'));
+  expect(html).toContain('1. Claude 的权限档');
+  expect(html).toContain('<pre class="setup-step-commands">sudo apt install bubblewrap</pre>');
+  expect(html).toContain('systemd 用户服务。退出 SSH 后也要在线，安装时打开 linger。');
+  expect(html).not.toContain('Codex 的权限档');
 });

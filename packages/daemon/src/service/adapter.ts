@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { paths } from '../config/paths';
 import { runtimeDistribution, type Distribution } from './distribution';
 import { serviceTarget } from './identity';
+import { readLinger, userManagerHint } from './linux-session';
 import { isIrreplaceableDefinition, readDefinitionBytes, type Registration } from './registration';
 import { serviceStderrPath, serviceStdoutPath, type ServiceState, type ServiceStatus } from './common';
 import type { LaunchdTransactionOutcome } from './launchd';
@@ -78,7 +79,7 @@ export function getServiceAdapter(): ServiceAdapter {
     : { platform, home: homedir(), root: paths.appDir, xdgConfigHome: process.env.XDG_CONFIG_HOME });
   const launchd = async (distribution?: Distribution) => (await import('./launchd')).createLaunchdService({ root: paths.appDir }, distribution ? { distribution: async () => distribution } : {});
   const systemd = async (distribution?: Distribution) => (await import('./systemd')).createSystemdService({ root: paths.appDir }, distribution ? { distribution: async () => distribution } : {});
-  return {
+  const adapter: ServiceAdapter = {
     async install(options) {
       // Refuse a development checkout before creating the data directory the services resolve.
       const distribution = await runtimeDistribution();
@@ -123,6 +124,16 @@ export function getServiceAdapter(): ServiceAdapter {
         platformName, name: status.target.unitName, servicePath: status.target.unitPath,
         registration: status.registration, owner: status.owner, running: status.running, ownerError: status.ownerError, manager,
       });
+    },
+  };
+  if (platform !== 'linux') return adapter;
+  return {
+    ...adapter,
+    async status() {
+      const status = await adapter.status();
+      // Asked on every read, with the tools every 60 s: one more loginctl call, about 10 ms.
+      const hint = status.state === 'unknown' ? await userManagerHint() : undefined;
+      return { ...status, linger: await readLinger(), ...(hint ? { hint } : {}) };
     },
   };
 }

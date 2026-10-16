@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import type { ApplicationService, BotDiagnostics, DesktopSnapshot, Job, ServiceActionReport, ToolState } from '@vonvon/protocol';
 import { createBackend } from '../agent';
 import { cachedClaudeLogin, type ClaudeLogin } from '../agent/claude-agent/login';
+import { probeClaudeSandbox } from '../agent/claude-agent/sandbox-probe';
 import { CODEX_MIN_VERSION, CODEX_VERIFIED_VERSION, classifyCodexVersion } from '../agent/codex-appserver/version';
 import type { AdminService } from '../admin/service';
 import { paths } from '../config/paths';
@@ -46,7 +47,7 @@ export async function createSnapshotStore(options: {
 }): Promise<SnapshotStore> {
   const version = bridgeVersion();
   const root = options.root ?? paths.appDir;
-  const base = { platform: process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'unsupported', version, dataPath: paths.appDir } as const;
+  const base = { platform: process.platform === 'darwin' ? 'macos' : process.platform === 'linux' ? 'linux' : 'unsupported', version, dataPath: paths.appDir } as const;
   let snapshot: DesktopSnapshot = {
     revision: 0, observedAt: 0, stale: false,
     host: { kind: 'connected', ownership: 'owned', version },
@@ -56,7 +57,7 @@ export async function createSnapshotStore(options: {
   let tools: ToolState[] = [];
   let loginItem = false;
   // The last manager answer; none before the first read or where there is no manager (Windows).
-  let manager: Pick<ApplicationService, 'state' | 'detail'> | undefined;
+  let manager: Pick<ApplicationService, 'state' | 'detail' | 'linger' | 'hint'> | undefined;
   let blocked: ApplicationService['blocked'];
   const readService = options.readService ?? (() => controlDesktopService('status'));
   // Reads overlap (startup, the 60 s poll, 重新检测, a helper's exit) and launchctl can take seconds: the read that
@@ -75,7 +76,7 @@ export async function createSnapshotStore(options: {
     if (!status.supported || !status.state) return;
     // An unknown answer keeps the last login item, as before s08; the step says it cannot tell.
     if (status.state !== 'unknown') loginItem = status.state === 'running' || status.state === 'stopped' || status.state === 'detached';
-    manager = { state: status.state, ...(status.detail ? { detail: status.detail } : {}) };
+    manager = { state: status.state, ...(status.detail ? { detail: status.detail } : {}), ...(status.linger ? { linger: status.linger.state } : {}), ...(status.hint ? { hint: status.hint } : {}) };
   }
   function serviceAction(): ServiceActionReport | undefined {
     const running = options.serviceAction?.();
@@ -96,16 +97,18 @@ export async function createSnapshotStore(options: {
   let followUp: Promise<void> | undefined;
   let closed = false;
   const readTools = options.readTools ?? (async (): Promise<ToolState[]> => {
-    const [codex, claude] = await Promise.all([
+    const [codex, claude, sandbox] = await Promise.all([
       options.service.codexSetup?.().catch(() => undefined),
       createBackend('claude-agent').doctor({ force: true }).catch(() => undefined),
+      // Linux only: two PATH scans and one 8 ms bwrap run, cheaper than the Codex processes above.
+      probeClaudeSandbox().catch(() => undefined),
     ]);
     // The login is not probed here: the probe starts a ~250 MB Claude CLI, and this runs every
     // 60 s even when no window is open. build() lays the cached answer over it.
     const compatibility = codex?.installation === 'installed' ? { status: classifyCodexVersion(codex.version), minimum: CODEX_MIN_VERSION, verified: CODEX_VERIFIED_VERSION } : undefined;
     return [
       { tool: 'codex', installation: codex?.installation ?? 'unknown', authentication: codex?.authentication ?? 'unknown', version: codex?.version ?? null, ...(codex?.message ? { message: codex.message } : {}), ...(compatibility ? { compatibility } : {}) },
-      { tool: 'claude', installation: claude ? (claude.ok ? 'installed' : claude.depState === 'not-installed' || claude.depState === 'external-missing' ? 'missing' : 'unknown') : 'unknown', authentication: 'unknown', version: claude?.version ?? null, ...(claude?.hint ? { message: claude.hint } : {}) },
+      { tool: 'claude', installation: claude ? (claude.ok ? 'installed' : claude.depState === 'not-installed' || claude.depState === 'external-missing' ? 'missing' : 'unknown') : 'unknown', authentication: 'unknown', version: claude?.version ?? null, ...(claude?.hint ? { message: claude.hint } : {}), ...(sandbox ? { sandbox } : {}) },
     ];
   });
   async function build(committed?: (snapshot: DesktopSnapshot) => void): Promise<void> {

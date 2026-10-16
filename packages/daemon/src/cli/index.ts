@@ -4,6 +4,7 @@ import { bridgeVersion } from '../core/version';
 import { paths } from '../config/paths';
 import { enterDataAccess, type DataLease } from '../config/data-access';
 import { observeShutdown, type ShutdownControl } from '../host/lifecycle';
+import type { LingerChoice } from './commands/service';
 
 const program = new Command().name('vonvon').description('Vonvon Bot daemon').version(bridgeVersion());
 let lease: DataLease | undefined;
@@ -45,17 +46,24 @@ daemon.command('logs').description('Read recent daemon logs').option('--tail <li
     if (!Number.isInteger(options.tail) || options.tail < 1) throw new Error('Invalid tail count.');
     await (await import('./commands/daemon')).runLogs(options.tail);
   });
-program.command('open').description('Open the local web UI').action(async () => {
-  await (await import('./commands/open')).runOpen();
-});
+program.command('open').description('Open the local web UI')
+  .option('--print', '打印网页地址和 SSH 转发的办法，不打开浏览器（带凭据的链接只打印到终端）')
+  .action(async (options: { print?: boolean }) => {
+    await (await import('./commands/open')).runOpen(Boolean(options.print));
+  });
 const service = program.command('service').description('Manage the OS background service');
 const KEEP_RUNNING = ['--keep-running', '结束时之前在跑的 daemon 没了，就按原来的端口起一个分离的 daemon', false] as const;
 service.command('install').description('Install and start the OS service; a running detached daemon is handed over')
   .option('--port <port>', 'Loopback API port', (value) => Number(value))
   .option(...KEEP_RUNNING)
-  .action(async (options: { port?: number; keepRunning: boolean }) => {
+  .option('--linger', 'Linux：linger 没开就直接开，不问')
+  .option('--no-linger', 'Linux：linger 没开也不开，只打印命令')
+  .action(async (options: { port?: number; keepRunning: boolean; linger?: boolean }) => {
     if (options.port !== undefined && (!Number.isInteger(options.port) || options.port < 1 || options.port > 65535)) throw new Error('Invalid port.');
-    await (await import('./commands/service')).runServiceCommand('install', undefined, { ...(options.port ? { port: options.port } : {}), keepRunning: options.keepRunning });
+    let linger: LingerChoice = 'ask';
+    if (options.linger === true) linger = 'on';
+    else if (options.linger === false) linger = 'off';
+    await (await import('./commands/service')).runServiceCommand('install', undefined, { ...(options.port ? { port: options.port } : {}), keepRunning: options.keepRunning, linger });
   });
 service.command('uninstall').description('Stop and remove the OS service').option(...KEEP_RUNNING).action(async (options: { keepRunning: boolean }) => {
   await (await import('./commands/service')).runServiceCommand('uninstall', undefined, { keepRunning: options.keepRunning });
@@ -67,6 +75,9 @@ type Json = { json?: boolean };
 const io = (options: Json) => ({ json: Boolean(options.json), write: (text: string) => { process.stdout.write(text); } });
 const BOT = ['--bot <bot>', 'Bot id (cli_…) or name'] as const;
 const bot = program.command('bot').description('Show bots through the running daemon');
+bot.command('add').description('Register a bot by scanning a QR code in this terminal').action(async () => {
+  await (await import('./commands/bot')).runBotAdd(io({}));
+});
 bot.command('list').description('List bots and their connection state').option('--json', 'Print JSON').action(async (options: Json) => {
   await (await import('./commands/bot')).runBotList(io(options));
 });

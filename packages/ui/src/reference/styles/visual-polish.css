@@ -68,12 +68,6 @@ html[data-desktop-platform="macos"] .settings-sidebar {
     4px 0 16px rgba(22, 31, 49, 0.035);
 }
 
-html[data-desktop-platform="windows"] .settings-sidebar {
-  margin: 0;
-  padding-top: 16px;
-  border-radius: 0;
-}
-
 .settings-sidebar-search {
   border: 1px solid rgba(60, 60, 67, 0.075);
   color: var(--color-text-tertiary);

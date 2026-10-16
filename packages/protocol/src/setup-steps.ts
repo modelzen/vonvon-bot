@@ -1,5 +1,5 @@
 import type {AdminSetupStatus} from './admin.js';
-import type {Agent, ApplicationService, DesktopSnapshot, ServiceActionReason, ServiceActionReport, ToolState} from './domain.js';
+import {BWRAP_TRIAL, type Agent, type ApplicationService, type ClaudeSandbox, type DesktopSnapshot, type ServiceActionReason, type ServiceActionReport, type ToolState} from './domain.js';
 
 export type StepTone = 'success' | 'warning' | 'danger' | 'neutral';
 /** What the step's button does; the checklist component wires each kind. */
@@ -15,11 +15,13 @@ export type StepAction =
   | {kind: 'serviceSkip'; label: string}
   | {kind: 'serviceRecheck'; label: string};
 export type SetupStep = {
-  id: 'credentials' | 'scopes' | 'connection' | 'event' | 'callback' | 'publish' | 'codex' | 'claude' | 'service';
+  id: 'credentials' | 'scopes' | 'connection' | 'event' | 'callback' | 'publish' | 'codex' | 'claude' | 'service' | 'codex-linux' | 'claude-sandbox';
   title: string; status: string; tone: StepTone; done: boolean;
   detail?: string | undefined; items?: readonly string[] | undefined; actions: readonly StepAction[];
   /** Shown under the step without changing its tone or `done`: optional settings whose absence breaks a later flow. */
   warnings?: readonly string[] | undefined;
+  /** Shell lines for the user to run; shown verbatim, never run by vonvon (s20a). */
+  commands?: readonly string[] | undefined;
 };
 
 /** Join-group scope and bot-added event: optional for receiving messages, needed to bind groups (s02a). */
@@ -136,16 +138,60 @@ function claudeStep(tool: ToolState | undefined, checking = false): SetupStep {
   return {...base, status: `${status}${version}`, tone: tool.authentication === 'signedOut' ? 'warning' : 'neutral', done: false, detail: tool.message ?? '在终端运行 claude 并登录，然后点"检查登录"。', actions: [{kind: 'claudeLogin', label: '检查登录'}]};
 }
 
+/** Linux only (s20a): what the qa and write modes need, under the tools. Neither step counts toward 还差几步 or 可以用了,
+ * and neither changes a mode or a system setting: they explain and give the commands. A missing tool has no step. */
+export function linuxSteps(tools: readonly ToolState[]): SetupStep[] {
+  const codex = tools.find(tool => tool.tool === 'codex');
+  const claude = tools.find(tool => tool.tool === 'claude');
+  const steps: SetupStep[] = [];
+  if (codex && codex.installation !== 'missing') steps.push({id: 'codex-linux', title: 'Codex 的权限档', status: '只能用完全访问', tone: 'neutral', done: true, detail: CODEX_LINUX, actions: []});
+  if (claude && claude.installation !== 'missing') steps.push(claudeSandboxStep(claude.sandbox));
+  return steps;
+}
+
+const CODEX_LINUX = 'Linux 上 Codex 的沙箱只挡写、不限制读，vonvon 不在 Linux 上用 Codex 的只读、读写档，这两档的群起不了会话。要用 Codex 的群，在群设置里把权限档改成「完全访问」，或者在终端运行 vonvon settings set --group <群 id> permission.mode=full。完全访问下 Codex 能读写这个账号能碰到的所有文件，群里有别人时先想清楚。不会自动改。';
+const FULL_INSTEAD = '不想改的话，这台主机上用 Claude 的群就用完全访问。';
+const SANDBOX_MISSING = 'Claude 在只读、读写档下用 bubblewrap 沙箱把命令关在项目文件夹里，缺了这两档的回合会失败（Sandbox required but unavailable），完全访问不受影响。别的发行版用自己的包管理器装 bubblewrap 和 socat；装好后一分钟内这里会更新。';
+const SANDBOX_APPARMOR = `Ubuntu 23.10 起默认不让普通程序建用户命名空间（kernel.apparmor_restrict_unprivileged_userns = 1），bwrap 起不来，只读、读写档的回合会失败。给 bwrap 单独加一份 AppArmor 配置就行，不用全局关掉这个限制，命令见下；${FULL_INSTEAD}`;
+const USERNS_SETTINGS: Record<string, string> = {'kernel.unprivileged_userns_clone': '1', 'user.max_user_namespaces': '15000'};
+
+/** The same profile the owner added on JP-VPS (docs/v1-plan.md section 7), for the bwrap the probe found. */
+const apparmorCommands = (bwrap: string): string[] => [
+  "sudo tee /etc/apparmor.d/bwrap >/dev/null <<'EOF'", 'abi <abi/4.0>,', 'include <tunables/global>', `profile bwrap ${bwrap} flags=(unconfined) {`,
+  '  userns,', '  include if exists <local/bwrap>', '}', 'EOF', 'sudo apparmor_parser -r /etc/apparmor.d/bwrap',
+];
+
+function claudeSandboxStep(sandbox: ClaudeSandbox | undefined): SetupStep {
+  const step = (status: string, tone: StepTone, detail?: string, commands?: string[]): SetupStep =>
+    ({id: 'claude-sandbox', title: 'Claude 的权限档', status, tone, done: tone === 'success', detail, actions: [], commands});
+  if (!sandbox) return step('无法确认', 'neutral');
+  const missing = [...(sandbox.bwrap ? [] : ['bwrap']), ...(sandbox.socat ? [] : ['socat'])];
+  if (!sandbox.bwrap || missing.length) return step(`缺 ${missing.join('、')}`, 'warning', SANDBOX_MISSING, [`sudo apt install ${missing.map(name => name === 'bwrap' ? 'bubblewrap' : name).join(' ')}`]);
+  switch (sandbox.userns) {
+    case 'ok': return step('可以用', 'success', 'bubblewrap 和 socat 都在，沙箱起得来。');
+    case 'apparmor': return step('被 AppArmor 挡住', 'warning', SANDBOX_APPARMOR, apparmorCommands(sandbox.bwrap));
+    case 'disabled': {
+      const setting = sandbox.detail && USERNS_SETTINGS[sandbox.detail] ? sandbox.detail : 'user.max_user_namespaces';
+      return step('用户命名空间被关掉了', 'warning', `这台主机关掉了用户命名空间（${setting} = 0），bwrap 起不来，只读、读写档的回合会失败。下面这条马上生效；要长期生效，把同样的设置写进 /etc/sysctl.d/ 下的一个文件。${FULL_INSTEAD}`,
+        [`sudo sysctl -w ${setting}=${USERNS_SETTINGS[setting]}`]);
+    }
+    case 'failed': return step('沙箱起不来', 'warning', `bwrap 试跑失败：${sandbox.detail ?? '原因不明'}。在终端里跑一次下面这条，看完整的报错。`,
+      [[sandbox.bwrap, ...BWRAP_TRIAL].join(' ')]);
+    default: return step('无法确认', 'neutral');
+  }
+}
+
 const SERVICE_RECHECK: StepAction = {kind: 'serviceRecheck', label: '重新检测'};
 /** A failed service action stays on the step for 10 minutes; after that it is history. */
 const SERVICE_FAILURE_SHOWN_FOR = 10 * 60_000;
 const serviceUnreachable = (manager: string, detail: string | undefined): string => `暂时问不到 ${manager}${detail ? `：${detail}` : '。'}`;
 
 /** 登录电脑时自动运行 bot (3.1 item 4, 3.10), for the checklist, the desktop and `vonvon bot status`. On macOS the web UI and
- * the desktop install it; elsewhere the step only names the terminal command (linger comes with s20a). First match wins. */
+ * the desktop install it; on Linux the step only names the terminal command. First match wins. */
 export function serviceStep(application: Pick<DesktopSnapshot['application'], 'platform' | 'service'>, now = Date.now()): SetupStep & {id: 'service'} {
   const service = application.service;
-  if (application.platform !== 'macos') return otherServiceStep(service);
+  if (application.platform === 'linux') return linuxServiceStep(service);
+  if (application.platform !== 'macos') return {id: 'service', title: '后台服务', status: '不支持', tone: 'neutral', done: false, detail: '这台电脑不支持后台服务。', actions: []};
   const failure = recentServiceFailure(service, now);
   const step = (status: string, tone: StepTone, done: boolean, detail: string | undefined, actions: readonly StepAction[] = []) =>
     ({id: 'service', title: '登录电脑时自动运行 bot（推荐）', status, tone, done, detail, actions, warnings: failure ? [failure] : undefined} as const);
@@ -166,17 +212,23 @@ export function serviceStep(application: Pick<DesktopSnapshot['application'], 'p
   }
 }
 
-/** Linux (1.4): read-only, the step names the terminal command. */
-function otherServiceStep(service: ApplicationService | undefined): SetupStep & {id: 'service'} {
-  const step = (status: string, tone: StepTone, done: boolean, detail: string | undefined) => ({id: 'service', title: '后台服务', status, tone, done, detail, actions: []} as const);
+export const LINGER_OFF_WARNING = '没开 linger：退出最后一个登录会话后 bot 会停，开机也不启动。在终端运行 loginctl enable-linger。';
+
+/** Linux (1.4): read-only, the step names the terminal command. Without linger a running service is still done, with a
+ * warning; an unreachable user manager gets the daemon's hint when it has one (s20a). */
+function linuxServiceStep(service: ApplicationService | undefined): SetupStep & {id: 'service'} {
+  const step = (status: string, tone: StepTone, done: boolean, detail: string | undefined, warnings?: readonly string[]) => ({id: 'service', title: '后台服务', status, tone, done, detail, actions: [], warnings} as const);
   switch (service?.state) {
-    case 'running': return step('在运行', 'success', true, 'bot 跑在 systemd 用户服务里，崩溃后自动重启。');
+    case 'running': {
+      const boot = service.linger === 'on' ? '；开机就启动，退出 SSH 也在线' : '';
+      return step('在运行', 'success', true, `bot 跑在 systemd 用户服务里，崩溃后自动重启${boot}。`, service.linger === 'off' ? [LINGER_OFF_WARNING] : undefined);
+    }
     case 'not-installed': return step('没装', 'neutral', false, '在终端运行 vonvon service install，装成 systemd 用户服务，崩溃后自动重启。');
     case 'disabled': return step('没启用', 'neutral', false, '在终端运行 vonvon service install。');
     case 'detached': return step('已装 · 这次没交给后台服务', 'warning', true, '在终端运行 vonvon daemon stop，再运行 vonvon daemon start。');
     case 'stopped': return step('已装 · 没在运行', 'warning', true, '在终端运行 vonvon daemon start。');
     case 'conflict': return step('要处理', 'danger', false, service?.detail);
-    default: return step('无法确认', 'neutral', false, serviceUnreachable('systemd', service?.detail));
+    default: return step('无法确认', 'neutral', false, service?.hint ?? serviceUnreachable('systemd', service?.detail));
   }
 }
 

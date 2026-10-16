@@ -6,7 +6,7 @@ import { PidLockError, readRunningPidLock } from '../server/pid-lock';
 
 /** Where a command prints; `json` switches stdout to one JSON line. Errors stay plain text on stderr. */
 export type Io = { json: boolean; write(text: string): void };
-export type Call = <T>(what: string, run: (c: VonvonClient) => Promise<T>, o?: { feishu?: boolean; unknown?: string }) => Promise<T>;
+export type Call = <T>(what: string, run: (c: VonvonClient) => Promise<T>, o?: { feishu?: boolean; unknown?: string; ms?: number }) => Promise<T>;
 /** One connection for the whole command; s47 passes its own connector through `withDaemon`. */
 export type Daemon = <T>(fn: (call: Call) => Promise<T>) => Promise<T>;
 /** Feishu calls get longer than the supervisor's 60 s IPC timeout, so the daemon's own error arrives first. */
@@ -93,7 +93,7 @@ export async function withDaemon<T>(fn: (call: Call) => Promise<T>, connect = co
   const client = await connect();
   const checked = checkRequests(client);
   const call: Call = async (what, run, o = {}) => {
-    const ms = o.feishu ? timeouts.feishu : timeouts.local;
+    const ms = o.ms ?? (o.feishu ? timeouts.feishu : timeouts.local);
     let timer: NodeJS.Timeout | undefined;
     const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new CallTimeout()), ms); });
     // race keeps a handler on the losing call, so its late "connection closed" from close() is handled.
@@ -117,10 +117,12 @@ export function want<R extends { kind: string }, K extends R['kind']>(what: stri
   throw new Error(`${what}没有完成：daemon 回了意外的结果（${reply.kind}）。`);
 }
 
+export const NO_BOT = '还没有 bot。运行 vonvon bot add 在终端里扫码注册，或者在网页里注册（vonvon open）。';
+
 /** No "current bot": only a single bot is picked without --bot. */
 export function pickBot(agents: readonly Agent[], wanted?: string): Agent {
   const [only] = agents;
-  if (!only) throw new Error('还没有 bot。在网页里扫码注册（vonvon open）。');
+  if (!only) throw new Error(NO_BOT);
   // Error lines keep their own breaks (printableError), so a name loses a line break of its own here.
   const list = agents.map(agent => `${printable(agent.name)}（${agent.id}）`).join('、');
   if (wanted === undefined) {

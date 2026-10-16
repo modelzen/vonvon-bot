@@ -92,7 +92,7 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
 6. Claude 先做：撤回一条 bot 读过的消息，再问它这条消息的内容。
 7. owner：请同事点 bot 回答里的文件链接，能领到。
 
-### M4 崩溃恢复、诊断和 Linux 命令行版（s17、s18、s19、s20a、s20b）
+### M4 崩溃恢复、诊断和 Linux 命令行版（s17、s18、s19、s20a、s20b、s20c）
 
 **给 owner 什么：**
 - 崩溃恢复（3.10）：daemon 或某个 bot 崩溃后自动重启，主人在飞书私聊收到一行原因。10 分钟内崩溃 3 次就停下：网页和桌面端照常打开，诊断页顶上一条红条，带"恢复运行"按钮。只是某一个 bot 反复崩溃时，只停这一个。
@@ -312,8 +312,8 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s07 的 Mac 检查（未签名打包版、临时 `VONVON_HOME`）：接管分离 daemon、plist 内容、`daemon stop` 后 30 秒不拉起、卸载都通过。kill -9 后被拉起，launchd 记下 `last terminating signal = Killed: 9`；连续两次时第二次约 4 秒后看到新进程（每秒采样，没测准 5 秒节流）。Dock 用 Computer Use 没查成（超时），`lsappinfo` 里没有服务进程。在"App 后台活动"里关掉后 `service status` 显示已关掉，这时 `daemon start` 仍能把服务起来，系统设置里的开关还是关的；未签名打包版在那里显示为"Vonvon Bot"、"身份不明的开发者"。install 成功时原来把服务自己的 daemon 写成"Left behind"，已改成"running under the service"。
 - s07 留下的，给 s08：服务正在跑时 install 拒绝替换定义，桌面端换新版本后要先 `daemon stop` 再 `service install`，或者在 s08 给 install 加"替换运行中的服务"。开关读 `service status --json` 的 `state`，`disabled` 就是系统设置里关掉了。网页和桌面端的 machine RPC 里 install、uninstall 仍然拒绝，s08 接到 CLI。系统设置里显示成什么，s08 看要不要在 plist 里加 `AssociatedBundleIdentifiers`（会改定义格式，旧定义变成 `unrecognized`，install 会重写）。
 - s07 留下的，给 s17：`service status` 还不显示 launchd 的 `last exit code` 和 `last terminating signal`，崩溃记录做的时候一起加。
-- s07 留下的，给 s20a：Linux 的 install 没处理 linger；没有用户 systemd（比如容器里）时 `service status` 显示查不到，install 报 `User manager unavailable`。
-- s07a：放在第二条线上尽快做，因为 Linux 先行的验收要用它（本文第 1 节）。owner 2026-10-15 说："改配置也不一定非要网页端改。也可以 vonvon-bot 命令行改。我感觉命令行实现验收的快一些。你自行考虑。当然网页端的验收肯定也要的。"命令只调网页端已经在用的 RPC（快照、`listJoinedGroups`、`listPendingGroups`、`bindGroup`、各设置页的读和存，以及清单的 `admin setupStatus`、选文件夹的 `directory choose` 和群设置页的会话列表 `settings sessions`），走 `@vonvon/client` 的 `connectLocal` 和本机凭据，不改 daemon 的行为。本机凭据这条路和网页端同一级，给在终端里的主人用，不交给 agent，设置 skill 也不走它。s47 以后在同一套命令代码上另加 agent 那条路（从环境变量读地址和会话令牌，按 3.7 校验私聊和触发人）。`vonvon bot add`（终端扫码）仍在 s20a。行数和风险都是估的，开工时先量。
+- s07 留下的，给 s20a：Linux 的 install 没处理 linger；没有用户 systemd（比如容器里）时 `service status` 显示查不到，install 报 `User manager unavailable`。s20a 已改，见 M4 的"s20a 做法（linger）"和"s20a 做法（没有用户 systemd）"。
+- s07a：放在第二条线上尽快做，因为 Linux 先行的验收要用它（本文第 1 节）。owner 2026-10-15 说："改配置也不一定非要网页端改。也可以 vonvon-bot 命令行改。我感觉命令行实现验收的快一些。你自行考虑。当然网页端的验收肯定也要的。"命令只调网页端已经在用的 RPC（快照、`listJoinedGroups`、`listPendingGroups`、`bindGroup`、各设置页的读和存，以及清单的 `admin setupStatus`、选文件夹的 `directory choose` 和群设置页的会话列表 `settings sessions`），走 `@vonvon/client` 的 `connectLocal` 和本机凭据，不改 daemon 的行为。本机凭据这条路和网页端同一级，给在终端里的主人用，不交给 agent，设置 skill 也不走它。s47 以后在同一套命令代码上另加 agent 那条路（从环境变量读地址和会话令牌，按 3.7 校验私聊和触发人）。`vonvon bot add`（终端扫码）仍在 s20a（s20a 已做）。行数和风险都是估的，开工时先量。
 - s07a 的做法：命令是 `vonvon bot list`、`bot status [bot]`（也可以写 `--bot`）、`group list`、`group joined`、`group pending`、`group bind <群 id> --folder <路径> [--name] [--tool codex|claude] [--conversation threads|shared]`、`settings get [节]` 和 `settings set <节.项=值…>`。`--bot` 填 bot 的 id 或名字；`settings` 用 `--group`（群 id 或项目名）或 `--session`（话题 id）选范围，都不填就是 bot 的设置。人看的输出和报错是中文，去掉飞书名字里的控制字符，`--json` 打一行 JSON，原样保留，出错退出 1。
 - s07a 的做法：这三组命令只走 RPC，不建数据目录，不拿数据租约，在 `D/cli/index.ts` 的钩子里和 `service` 一样跳过。daemon 没在跑就提示先 `vonvon daemon start`，不自动起：看状态不该把 bot 跑起来。
 - s07a 的做法：每次调用都有超时，本机 30 秒，要调飞书的（清单、查已加入的群、绑群）75 秒，比 supervisor 的 60 秒 IPC 超时长，daemon 自己的报错先到。绑群、存设置超时或断线时，提示可能已经完成和怎么查。存设置撞上别处的修改不自动重试。
@@ -510,7 +510,8 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | [ ] | s17 | 崩溃记录、整机暂停和 daemon restart | 崩溃前写 `~/.vonvon-bot/crash/` 记录，被强制结束的下次补一条；10 分钟 3 次进入暂停；加 `vonvon daemon restart`，`daemon status` 显示最近崩溃（3.10） | 800 | s07、e06 | 错误路径、关闭清理、并发、子进程 | launchd 下 10 分钟内 kill -9 三次：进入暂停、网页能开、每次都补了记录，`daemon restart` 能恢复 |
 | [ ] | s18 | 单个 bot 暂停和崩溃通知 | 单个 bot 10 分钟崩 3 次只停它；用应用身份直接给主人发私聊，每个 bot 每 10 分钟最多一条；daemon 主进程崩溃时只由最早加入的 bot 发，列出受影响的 bot；诊断页列崩溃记录，红条带"恢复运行"（3.10） | 900 | s17、s19、e10 | 并发、错误路径、子进程 | 无（M4 验收时看私聊和红条） |
 | [x] | s19 | 状态与诊断页 | 按 bot 列连接状态、Codex 和 Claude 的版本与登录、缺的权限；每个 bot 记最近没回的消息和原因（3.1 第 8 条） | 450 | s03、s01 | 并发 | 无 |
-| [ ] | s20a | Linux 命令行版（上）：平台、open --print、linger、终端扫码 | 平台枚举加 linux、去掉 windows，界面显示"这台 Linux 主机"；`vonvon open --print`；`service install` 处理 linger；`vonvon bot add` 终端扫码；Linux 的首次运行清单加"Linux 上 Codex 只能用完全访问"一步（3.10） | 750 | s07、s04 | 子进程、错误路径 | 无 |
+| [x] | s20a | Linux 命令行版（上）：平台、open --print、linger、终端扫码 | 平台枚举加 linux、去掉 windows，界面显示"这台 Linux 主机"；`vonvon open --print`；`service install` 处理 linger；没有用户 systemd 时的说明；`vonvon bot add` 终端扫码；Linux 的首次运行清单加"Linux 上 Codex 只能用完全访问"一步和 Claude 的沙箱检查（3.10） | 1130 | s07、s04 | 子进程、错误路径 | 无 |
+| [ ] | s20c | 互斥锁换掉端口 | 四个角色（`admission`、`host`、`keystore`、`service`）的互斥锁不再用和 Linux 临时端口重叠的端口：Linux 用抽象命名空间的 Unix 域套接字，macOS 用带 `O_EXLOCK` 的文件锁或换到 20000 到 49151 的端口；升级那一刻和旧版本的锁过渡；桌面端的 `inspectHost` 跟着改 | 380 | 无 | 并发、关闭清理、合入门禁 | 装着 M3 预览版、它的 daemon 在跑时，新版本的 `vonvon daemon start` 不会再起一个；macOS CI 跑锁的测试 |
 | [ ] | s20b | Linux 命令行版（下）：Codex 只能完全访问，删 windows-job | Linux 上的 Codex 遇到只读、读写档不起会话，回一句说明，设置里置灰；删 `codex-appserver/windows-job.ts`；在这片的 head 上做 Linux 验收（3.8、第 8 节第 5 条） | 400 | s20a | 子进程、关闭清理、错误路径 | 无（Linux 在 JP-VPS 上验） |
 
 开工要点：
@@ -530,9 +531,22 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
   - 没回的消息按后端写 Codex 或 Claude，没有后端的按 Codex 写（`LaunchOpts.backendId` 不设就是 Codex）；今天只有这两个后端，V7 加 Cursor、Grok 这些时，`P/diagnostics.ts` 的 `tool` 和 `backendTool` 要跟着加。
   - 和 #338（s15）改到同一段：`handleMessage` 里先查撤回再记 `intake recv`；撤回的消息不进没回的消息。
   - bot 子进程关闭时丢掉的排队消息、`/new` 和 `/compact` 期间暂存的消息不告诉发信人，也不记（s15 之前排队的就这样），s17 做重启时一起看。补拉和查引用被拒会进缺的权限，查撤回的消息（`message.get`）被拒只记日志。
-- s20a：互斥锁端口和 Linux 临时端口重叠的事（见 s07）又撞上一次：2026-10-15 #339 的冻结 CI 里 `service-cli.test.ts` 报"Another vonvon service install or uninstall is running"，重跑就过。四个角色（`admission`、`host`、`keystore`、`service`）都用这个端口；macOS 的临时端口从 49152 起，只重叠 848 个。做 Linux 服务时换成 Unix 域套接字或文件锁，macOS 一起换。
+- s20c：互斥锁端口和 Linux 临时端口重叠的事（见 s07）又撞上一次：2026-10-15 #339 的冻结 CI 里 `service-cli.test.ts` 报"Another vonvon service install or uninstall is running"，重跑就过。四个角色（`admission`、`host`、`keystore`、`service`）都用这个端口；macOS 的临时端口从 49152 起，只重叠 848 个。原定在 s20a 换成 Unix 域套接字或文件锁，s20a 开工时看下来不算小而稳，移到 s20c：升级那一刻要有过渡（新锁之外仍去占旧端口；旧端口被占时连一下，连得上是旧版本在持锁，等它；连不上是别人的临时端口，不管），否则新旧版本会在同一个数据目录上各跑一个 daemon；Linux 和 macOS 要两种做法（Linux 用抽象命名空间的 Unix 域套接字，进程一死内核就收回；macOS 没有抽象命名空间，试 `open` 带 `O_EXLOCK | O_NONBLOCK`，要在 Mac 上实测，不行就退回端口、换到 20000 到 49151，同样带过渡）；范围是四个角色、五处调用方和桌面端的 `inspectHost`，`acquireMutex` 的返回类型换成自己的锁对象，碰到 #287 那块认人的代码；按本文的规则属于并发、关闭清理和合入门禁，要单独的多角度审查。不依赖 s20a，最好排在 s20b 前面，CI 少重跑几次。s20a 没加新的抢锁：Linux 安装后的那一步写成单独的函数直接测，不经过 `service` 锁。
 - s20a：清单里那一步写明"Linux 上 Codex 只能用完全访问"，由主人自己选要不要把 bot 默认档改成完全访问，不自动放开（本文第 5 节）。
 - s20a：Linux 的首次运行清单还要查 Claude 只读、读写档要的沙箱：有没有 `bwrap` 和 `socat`，以及 Ubuntu 23.10 以后 AppArmor 是否挡住了非特权的用户命名空间（`kernel.apparmor_restrict_unprivileged_userns`）。缺了就写明 Claude 只能用完全访问或要先装、先放开，给出命令，不自动改系统设置。2026-10-15 JP-VPS 上实际遇到，见本文第 7 节。
+- s20a 做法（平台）：快照的平台是 `macos | linux | unsupported`，去掉了 windows，不升协议版本（网页由 daemon 发，桌面端带着自己的 daemon，命令行和 daemon 是同一个包）。"应用与启动"页写"这台 Mac""这台 Linux 主机"或"这台电脑"；清单的后台服务一步在 Linux 上照旧写 systemd 的那套，别的平台写"不支持"。CSS 里 `data-desktop-platform="windows"` 的几条规则一起删了。
+- s20a 做法（open --print）：`vonvon open --print` 打印地址、一条 `ssh -N -L 端口:127.0.0.1:端口 用户@地址`（有 `SSH_CONNECTION` 时用服务端地址，端口不是 22 时带 `-p`；没有时写占位和主机名），和凭据泄露后怎么换。带凭据的链接只在 stdout 是终端时打印，管道、重定向和服务管理器里只打不带凭据的地址和一行说明。Linux 上没有 `DISPLAY` 和 `WAYLAND_DISPLAY` 时，`vonvon open` 也直接打印；`open`、`xdg-open` 失败时只报退出码，不再带上命令行（里面有凭据）；`cmd /c start` 删了。打印的内容由纯函数 `openGuide` 拼，Linux 上 `service install` 的最后一段也用它。网页没拿到凭据时的提示加了 `vonvon open --print`。
+- s20a 做法（linger）：Linux 上 `service install` 成功（含已经装过）以后读 linger：`loginctl show-user`，失败时看 `/var/lib/systemd/linger/<用户名>`。没开就在终端里问一句，回车或 y 同意，用 `loginctl --no-ask-password enable-linger` 开，再读一次确认；`--linger` 不问就开，`--no-linger` 不开，不是终端时不开、只打命令；开不成给出 sudo 的命令，只有明确带了 `--linger` 时退出 1（服务已经装好）。最后打印打开网页的办法。卸载不关 linger，开着时提示 `loginctl disable-linger`。`service status`（含 `--json`）和快照都带 linger：服务在运行、linger 没开时，清单这一步照旧算完成，下面多一条提醒。新加的提示是中文；s07 安装事务的英文结果行没动。
+- s20a 做法（没有用户 systemd）：`D/service/linux-session.ts` 的 `userManagerHint` 认三种：机器不是用 systemd 启动的（容器）、终端没有 `XDG_RUNTIME_DIR`（`sudo -u`、`su` 切过来的）、这个账号的 systemd 用户实例没在运行。`service status` 在英文的 `Cannot ask systemd (Linux)` 下面打这句，install 报 `User manager unavailable` 时附在报错末尾，清单"无法确认"那一步用它作说明。只给说明，不替用户设环境变量、不自动开 linger 再重试。`systemctl show` 报错末尾的换行去掉了，状态里不再多一个空行。
+- s20a 做法（bot add）：`vonvon bot add` 走网页同一条 `registerAgent` RPC，一条连接里只看这个任务：二维码用已经锁定的 `qrcode`（和网页生成的是同一个码）画在终端里，链接换了（切到国际版）就重画；成功后打 bot 的名字和飞书那几步，清单读不到也退出 0，bot 已经存好了。stdout 不是终端就拒绝，免得二维码进日志；daemon 没在跑时提示 `vonvon daemon start`，不自动起。Ctrl-C 发 `cancelJob`（最多等 5 秒），退出 130；第二次 Ctrl-C、断线或被 kill 时，daemon 的 `detach` 会取消这个连接发起的注册。`Call` 加了可选的 `ms`，等扫码的那一次给 15 分钟。"还没有 bot"的提示加了 `vonvon bot add`。
+- s20a 做法（Linux 的两步）：清单"执行工具"下面加"Linux 上的权限档"一组，只在 Linux 上、对应的工具不是"未安装"时显示，不算进"还差几步"，也不影响"可以用了"；`vonvon bot status` 在 Linux 上也列。Codex 一步只说明 Linux 上只能用完全访问、怎么改，不改任何默认档。Claude 一步由 `D/agent/claude-agent/sandbox-probe.ts` 查：在 daemon 的 PATH 上找 `bwrap` 和 `socat`，有 bwrap 就试跑一次 `bwrap --ro-bind / / --dev /dev --unshare-all --die-with-parent true`（不经 shell，5 秒超时杀掉），失败时读 `/proc` 分出被 AppArmor 挡住、用户命名空间被关掉和别的失败，各给命令（AppArmor 那份配置用查到的 bwrap 路径）。跟执行工具每 60 秒查一次。命令只显示，daemon 和命令行都不执行；`SetupStep` 加了 `commands`，网页用等宽块显示，命令行不缩进、前后各空一行打出，整段能直接贴进终端（缩进了的 `EOF` 结束不了 AppArmor 那段 heredoc）。
+- s20a 和设计不一样的：缺 bwrap、socat 时说明里写"装好后一分钟内这里会更新"，没写"点「重新检测」"：执行工具那组没有重新检测的按钮，后台服务那一步的"重新检测"只重读服务。
+- s20a 留下的：
+  - 给 s36：bot 默认档（私聊用）有了以后，清单里 Codex 那一步加上它。
+  - `qrcode-terminal` 还给 `daemon run` 前台、没有 bot 时的老向导用，那个向导删掉时一起删这个依赖。
+  - 真的开 linger、真的扫码建 bot，JP-VPS 上都没走到：ops 已经是 `Linger=yes`，扫码没有人扫。前者靠单测；后者和网页同一条 RPC，网页这条 M1 已经验过，记成待 owner 验收（可选），M4 验收第 4 步有 Linux 机器的话可以试一次。
+  - `service` 命令里 s07 的英文行没改，s20a 新加的是中文，`classifyServiceFailure` 和测试都钉着那些英文行。
+  - 顺带看到的：s17 要给 `service status` 加 launchd 的 `last exit code`，和这片改的 `runServiceStatus`、`adapter.status()` 是同一段，谁后合谁 merge main；诊断页"这台电脑"一节没跟着改名（搜索索引用它做锚点），要不要在那里也显示 Claude 的沙箱，留给 UX 那一轮。
 - s20b：被拉进的已有群默认只读，在 Linux 上用 Codex 时起不来：bot 回一句说明，等主人改（product.md 第 11 节第 24 条）。今天的代码在绑定之前就抛错（`D/project/lifecycle.ts:206` 附近），要改成照常绑定、回合开始时再回说明。`windows-job.ts` 被 `owned-process.ts` 和 `environment/service.ts` 引用，属于子进程的代码。
 - s20b 的 Linux 验收：Claude 在 JP-VPS 上的普通用户账号里，用这片 PR 的 head 走一遍 npm pack、装到临时前缀、`service install`、kill -9 后被拉起、`daemon stop` 后不再拉起、`service uninstall`。不重启 JP-VPS，linger 看 loginctl 的状态。结果写进本文第 10 节。
 
@@ -738,6 +752,11 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 | 每群每小时的判断上限 | 60 次，e12 量完再调 | 3.4 要求有上限，没给数 | s25 |
 | 许可证 | UNLICENSED | 第一版闭源，第 8 节第 3 条要求发布前改掉 MIT | s65 |
 | Linux 验收在哪做 | JP-VPS 上的普通用户账号，做完卸载 | 第 8 节第 5 条要一台 systemd 主机 | s20b |
+| Linux 上 `service install` 怎么问 linger | 只在终端里问一句，回车或 y 算同意；不是终端、没带 `--linger` 就不开，只打命令；`--linger` 不问就开，`--no-linger` 不开；不用 sudo，开不了给出 sudo 的命令 | 3.10 说"没开就问一句，同意后执行"，没说没人回答时怎么办；没人回答不算同意 | s20a |
+| 卸载时的 linger | 不关，只提示 `loginctl disable-linger` | linger 是这个账号的设置，别的用户服务可能也靠它，也分不出是不是 `service install` 开的 | s20a |
+| `open --print` 什么时候打凭据 | 只在 stdout 是终端时；没有图形界面时的 `vonvon open` 和 Linux 上 `service install` 的最后一段一样 | 管道、重定向和服务管理器会把它留进日志 | s20a |
+| Claude 的沙箱多久查一次 | 跟执行工具每 60 秒一次，装完后端时也查 | 一次是两次目录扫描加一个约 8 毫秒的 bwrap，比同一轮里起的两个 Codex 进程便宜得多 | s20a |
+| Linux 上的两步什么时候显示 | 只在 Linux 上、对应的工具不是"未安装"时；不算进"还差几步"，也不影响"可以用了"；只说明、给命令，不改默认档和系统设置 | 没装的工具没有权限档可说；这两步是说明，不是必做 | s20a |
 | 被拉进群时 | 直接绑定，不再私聊发绑定卡 | 第 4 节拿掉私聊控制台；被拉进的群用什么默认档，3.8 已经给了 | s36b |
 | 记忆怎么写 | agent 直接写自己那份记忆文件，daemon 在一轮前后比对，卡片显示写了什么 | 3.6 只说"记住"能写、带撤销，没说怎么写；不在群里另开记忆命令，和 3.7"群里不能在聊天里改设置"一致 | s40 |
 | 改设置卡片上的［撤销］谁能点 | 主人和管理员 | 3.7 只说带撤销；和 3.8 里"Claude 自己要问的"卡一样 | s56 |
@@ -769,7 +788,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 
 **二、跟着本来就要改这些文件的切片一起删**
 - s08b：`cli-registration.ts` 的 Windows PATH 注册和 `.cmd` 入口，命令行注册只认 macOS；`windows-native.test.ts`；electron-builder 的 win nsis 和 linux AppImage 目标；`daemon-dependencies.ts` 的 `windowsHide` 和两份桌面端测试里的 win32 小分支。删完以后桌面端（`packages/desktop`）不再有 Windows 代码。issue #288 按 product.md 3.10 以"第一版不做 Windows"关闭。
-- s20a：`open.ts` 的 `cmd /c start`；协议平台枚举里的 windows，以及界面上的"这台 Windows 电脑"。
+- s20a：`open.ts` 的 `cmd /c start`；协议平台枚举里的 windows，以及界面上的"这台 Windows 电脑"。（s20a 已删，CSS 里 `data-desktop-platform="windows"` 的几条规则一起删了）
 - s20b：Codex 只读、读写档的 win32 分支；`codex-appserver/windows-job.ts`、它的两处引用和两份测试。
 - s51a：私聊菜单里的"安装桌面版 · Windows x64"按钮。
 - s02c：cli-bridge 整个删掉，它的 cmd.exe 引号、命名管道、PowerShell 离开检测和 Windows 提示跟着没了；`config/paths.ts` 的命名管道分支。分在 s02c2 到 s02c5，见第 3 节的 s02c 拆法。s02c5 删完了，`data-compatibility.ts` 里给 cli-bridge 算旧命名管道名的 `bridgePipeName` 也在 s02c5 删了。
@@ -865,7 +884,7 @@ macOS：
 7. 先删了 app、没关开关的：运行 `launchctl bootout gui/$(id -u)/com.vonvon.bot.daemon`，再删掉上面那个 plist。
 8. 可选：在飞书开发者后台删掉这个应用。
 
-Linux：`vonvon service uninstall`，`vonvon daemon stop`，`npm rm -g vonvon-bot`，`rm -rf ~/.vonvon-bot`。linger 那一行由 s20a 补。
+Linux：`vonvon service uninstall`，`vonvon daemon stop`，`npm rm -g vonvon-bot`，`rm -rf ~/.vonvon-bot`。卸载不关 linger；装的时候开了 linger、这个账号上又没有别的用户服务要它，再运行 `loginctl disable-linger`（s20a）。
 
 **Linux 验收**（s20b 填，product.md 第 8 节第 5 条的 Linux 一半）：待填。
 
