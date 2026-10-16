@@ -5,6 +5,7 @@ import { runSupervisor, type SupervisorCrash } from '../../bot/supervisor';
 import { BOT_LOCK_BUSY_EXIT } from '../../host/crash-store';
 import { acquireSingleInstanceLock, BridgeAlreadyRunningError } from '../../core/single-instance';
 import { activeBots, ensureRegistry, type BotEntry } from '../../config/bots';
+import { botPaths } from '../../config/paths';
 import { log } from '../../core/logger';
 import { AdminWriteError } from '../../admin/ops';
 import { createAdminIpcResponder } from '../../admin/ipc';
@@ -97,7 +98,7 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
     ? event => diagnostics.accept(ownAppId, event)
     : ipcDiagnosticsSink((message, callback) => { if (process.connected) process.send?.(message, undefined, undefined, callback); }));
   try {
-    const handle = bridge = await startBridge({ cfg, appSecret: secret, fallbackCwd, onConnectionChange: () => {
+    const handle = bridge = await startBridge({ cfg, appSecret: secret, fallbackCwd, droppedFile: botPaths(ownAppId).droppedFile, onConnectionChange: () => {
       if (process.send) {
         if (process.connected) process.send({ fcb: 'fcb.connection' }, undefined, undefined, (error: Error | null) => { if (error && process.connected) log.fail('run', error, { phase: 'connection-notice' }); });
       }

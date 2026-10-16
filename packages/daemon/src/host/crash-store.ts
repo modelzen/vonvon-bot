@@ -140,8 +140,8 @@ export function crashErrorName(value: unknown): string | undefined {
   return (typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,40}$/.test(code) ? `${value.name}:${code}` : value.name).slice(0, 60);
 }
 
-/** A write cut short (a full disk) or a failed rename leaves no temp file behind. */
-function writeAtomicSync(dir: string, name: string, text: string): void {
+/** A write cut short (a full disk) or a failed rename leaves no temp file behind. 0600; also bot/restart-dropped's. */
+export function writeAtomicSync(dir: string, name: string, text: string): void {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const tmp = join(dir, `.${name}.${randomBytes(4).toString('hex')}.tmp`);
   try {

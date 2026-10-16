@@ -38,6 +38,8 @@ export function botPaths(appId: string): {
   processesFile: string;
   setupFile: string;
   topicsDir: string;
+  /** Queued messages a shutdown dropped, replied to once the bot is back (bot/restart-dropped, s18c). */
+  droppedFile: string;
 } {
   const dir = botDir(appId);
   return {
@@ -48,6 +50,7 @@ export function botPaths(appId: string): {
     processesFile: join(dir, 'processes.json'),
     setupFile: join(dir, 'setup.json'),
     topicsDir: join(dir, 'topics'),
+    droppedFile: join(dir, 'dropped.json'),
   };
 }
 

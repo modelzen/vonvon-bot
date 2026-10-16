@@ -68,6 +68,15 @@ describe('buildQueuedCard', () => {
     expect(json).not.toContain('排队中（第');
   });
 
+  it('stopped layout (s18c): the bot stopped, nobody cancelled', () => {
+    const card = buildQueuedCard({ cancelled: true, stopped: true, dropped: 0 }) as { config?: { summary?: { content?: string } } };
+    const json = JSON.stringify(card);
+    expect(json).toContain('bot 停止运行了，这一轮没开始');
+    expect(card.config?.summary?.content).toBe('bot 停止运行了');
+    expect(json).not.toContain('已取消排队');
+    expect(buttons(card).length).toBe(0);
+  });
+
   it('started layout (goal) is a short note with no buttons', () => {
     const card = buildQueuedCard({ started: true });
     expect(buttons(card).length).toBe(0);

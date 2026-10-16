@@ -28,6 +28,7 @@ import { errorKindFromText, type AgentErrorKind } from '../agent/error-kind';
 import { scopeDenial } from '../utils/feishu-error';
 import type { NotReplied, NotRepliedReason } from '@vonvon/protocol';
 import { deniedScopeName, errorDetail, reportNotReplied, reportScopeDenied } from './diagnostics';
+import { createDroppedReplies, originOf, type DroppedOrigin } from './restart-dropped';
 import { catalogById, projectCreatableBackends, visibleCatalog } from '../agent/catalog';
 import {
   DEFAULT_PERMISSION_MODE,
@@ -444,6 +445,8 @@ export interface QueuedTurn {
   recallsShown?: string[];
   /** An opening turn's oldest line, written as SessionRecord.from once it starts (s15). */
   from?: number;
+  /** The message's place, for the reply asking to send it again when a shutdown drops it (s18c). */
+  origin?: DroppedOrigin;
 }
 
 /** A resumed session's title for its record and topic. Without a native name
@@ -624,9 +627,11 @@ interface ActiveState {
   /** Set while /compact or /new holds the session with no run: input waits here and
    * goes through intake again once the command is done (s15). `early` tells one
    * sent before a /new that swapped ({@link newAt}) instead. */
-  deferred?: { id: string; at?: number; go: () => void; early: () => void }[];
+  deferred?: { id: string; at?: number; go: () => void; early: () => void; origin: DroppedOrigin }[];
   /** The /new command's send time, once its swap is done: input sent before it belongs to the old session. */
   newAt?: number;
+  /** The run's trigger while it waits for a global slot (acquireRunSlot), for a shutdown to keep (s18c). */
+  waiting?: DroppedOrigin;
 }
 
 /** Inputs a synthetic turn (🔁 重试) carries that a real message would not. */
@@ -724,6 +729,8 @@ export interface Orchestrator {
   /** Close every live codex session (SIGKILLs the app-server children) so a
    *  graceful exit leaves no orphan processes. */
   shutdown: () => Promise<void>;
+  /** Once connected: ask the senders of what the last shutdown dropped to send again (s18c). Not after shutdown. */
+  replyDropped: () => void;
 }
 
 /**
@@ -879,6 +886,9 @@ export function createOrchestrator(
   fallbackCwd: string,
   /** The topic registry (s13); without it nothing is recorded (tests). */
   topics?: TopicRegistry,
+  /** `droppedFile`: where a shutdown keeps the queued messages it drops (s18c). No default: without it, nothing is
+   * kept or answered (tests, and every caller but `daemon run`). */
+  options?: { droppedFile?: string },
 ): Orchestrator {
   /** Lazily-constructed backends by id — one instance per backend for the whole
    * bridge (mirrors the old single-instance shape; codex stays the default). */
@@ -1024,6 +1034,22 @@ export function createOrchestrator(
   const sema = new Semaphore(getMaxConcurrentRuns(cfg));
   let shuttingDown = false;
   let shutdownPromise: Promise<void> | undefined;
+  const droppedReplies = options?.droppedFile ? createDroppedReplies({
+    appId: cfg.accounts.app.id, file: options.droppedFile, log,
+    // The raw API, not channel.send: with the message gone, that sends a new one to the main area instead.
+    reply: async (entry, text, uuid) => {
+      const body = await channel.rawClient.im.v1.message.reply({
+        path: { message_id: entry.messageId },
+        data: { msg_type: 'text', content: JSON.stringify({ text }), reply_in_thread: entry.replyInThread, uuid },
+      });
+      // The SDK resolves a 2xx with Feishu's error code in it.
+      if (body?.code !== 0) throw Object.assign(new Error(`Feishu did not take the reply (code ${String(body?.code)})`), { code: body?.code, msg: body?.msg });
+    },
+    report: (entry, times, detail, scope) => {
+      if (scope) reportScopeDenied(scope, 'send');
+      reportNotReplied({ at: entry.at, groupId: entry.chatId, place: entry.place, reason: 'restarted', ref: entry.messageId.slice(-6), ...(detail ? { detail } : {}) }, times);
+    },
+  }) : undefined;
   const onStop = new Set<() => void>();
   /** `p`, or `fallback` once shutdown starts: shutdown does not wait on a back-fill's Feishu calls. */
   function orStop<T>(p: Promise<T>, fallback: T): Promise<T> {
@@ -2109,7 +2135,7 @@ export function createOrchestrator(
     if (existing) {
       // A /compact or /new holds the session: wait, then go through here again (s15).
       if (existing.deferred && !extra?.retry) {
-        existing.deferred.push({ id: msg.messageId, at: msg.createTime, go: () =>
+        existing.deferred.push({ id: msg.messageId, at: msg.createTime, origin: originOf(msg, flat), go: () =>
           startReservedRun(msg, text, sessionKey, flat, project, perm, preloadedImages, preIngested, summaryText, goal, extra), early: () => {
           log.info('intake', 'reject', { reason: 'before-new', msgId: msg.messageId });
           void trackTask(channel.send(msg.chatId, { markdown: '⚠️ 这条在 `/new` 之前发的，新会话不带它，要问就再发一次。' },
@@ -2150,6 +2176,7 @@ export function createOrchestrator(
         requestedAt: msg.createTime || Date.now(),
         summary: stripFileTokens(summaryText ?? text).slice(0, 80) || undefined,
         seen: { id: msg.messageId, at: msg.createTime },
+        origin: originOf(msg, flat),
       });
       dropRetries(sessionKey);
       log.info('intake', 'queued', { depth: existing.queue.length });
@@ -5232,6 +5259,11 @@ export function createOrchestrator(
       // 前面有人拿到槽/取消 → 原地刷新位置。走合并泵（非阻塞、合并、限频）。
       if (msgId) stream.streamCoalesced(channel, queueCard({ position: pos, cardKey: msgId }), null);
     });
+    // Replied to where the queue card is (s18c), until a slot or a cancel ends the wait.
+    state.waiting = {
+      chatId: opts.chatId, messageId: opts.replyTo, at: opts.requestedAt ?? Date.now(),
+      replyInThread: opts.flat ? false : (opts.replyInThread ?? Boolean(opts.knownThreadId)), place: opts.flat ? 'main' : 'topic',
+    };
     try {
       msgId = await stream.create(channel, opts.chatId, queueCard({ position: q.position() }), {
         replyTo: opts.replyTo,
@@ -5268,13 +5300,15 @@ export function createOrchestrator(
         runsByCard.delete(msgId);
         runStreams.delete(msgId);
         completionReminderRefreshers.delete(msgId);
-        void trackTask(stream.updateCard(channel, queueCard({ cancelled: true, dropped: state.queue.length })));
+        // At shutdown nobody cancelled it: the card says the bot stopped, and the bot says so again once back (s18c).
+        void trackTask(stream.updateCard(channel, queueCard({ cancelled: true, dropped: state.queue.length, ...(shuttingDown ? { stopped: true } : {}) })));
       }
       reaction?.done();
       log.info('card', 'action', { actionId: 'run.stop', queuedCancel: true });
     };
     const release = await q.acquired;
     state.interrupt = undefined;
+    state.waiting = undefined;
     if (!release) return null; // 已取消：占位卡已翻终态，预订已释放
     return { release, queuedCard: msgId ? { stream, msgId } : undefined };
   }
@@ -6938,9 +6972,26 @@ export function createOrchestrator(
   }, SESSION_REAP_SWEEP_MS);
   reaper.unref(); // 不挡进程退出（CLI/测试里 orchestrator 可能不走 shutdown）
 
+  /** What a shutdown drops unanswered (product.md 3.10, s18c), read only: queued turns (not ones the running turn's
+   * record block already carried), input held by /compact or /new, a /compact waiting on a run, and a run waiting for a
+   * slot. A run preparing its first turn and a started one are not here. A state can sit under two keys. */
+  function collectLost(): DroppedOrigin[] {
+    const lost: DroppedOrigin[] = [];
+    for (const state of new Set(active.values())) {
+      for (const turn of state.queue) if (turn.origin && !(turn.seen && state.woven?.has(turn.seen.id))) lost.push(turn.origin);
+      for (const held of state.deferred ?? []) lost.push(held.origin);
+      // Where dropCompact would answer it.
+      if (state.compactAfter) lost.push(originOf(state.compactAfter.msg, !state.compactAfter.inThread));
+      if (state.waiting) lost.push(state.waiting);
+    }
+    return lost;
+  }
+
   function shutdown(): Promise<void> {
     if (shutdownPromise) return shutdownPromise;
     shuttingDown = true;
+    // Written at once, before anything is cleared below and long before the Codex processes end or the lock goes.
+    droppedReplies?.saveSync(collectLost(), 'shutdown');
     for (const stop of onStop) stop();
     clearInterval(pendingGroupTimer);
     clearInterval(reaper);
@@ -6958,8 +7009,8 @@ export function createOrchestrator(
       dropped.held += state.deferred?.length ?? 0;
       if (state.compactAfter) dropped.compacts++;
       state.queue.length = 0;
-      // A waiting /compact and input held by /compact or /new go silently; the input comes back in the next back-fill
-      // as context only, unanswered. s17 logs the counts; telling the senders is the owner's call (v1-plan s17).
+      // A waiting /compact and input held by /compact or /new go without a word now; collectLost kept them, and their
+      // senders hear once the bot is back (s18c). The input also comes back in the next back-fill as context only.
       state.compactAfter = undefined;
       state.deferred?.splice(0);
       try { state.interrupt?.(); }
@@ -7014,6 +7065,7 @@ export function createOrchestrator(
     adminExecute: admit(adminExecute),
     settings: { read: admit(settings.read), save: admit(settings.save), models: admit(settings.models), act: admit(settings.act) },
     shutdown,
+    replyDropped: () => { if (!shuttingDown) droppedReplies?.start(); },
   };
 }
 

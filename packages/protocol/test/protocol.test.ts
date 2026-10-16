@@ -9,7 +9,7 @@ import {
   adminRequestSchema, adminReplySchema, adminStateSchema, directoryRequestSchema, directoryReplySchema,
   jobSchema, environmentReplySchema,
   type DesktopSnapshot, settingsViewSchema, projectViewSchema, projectEditableSchemas, settingsReplySchema,
-  applicationCrashesSchema, crashText, FORCED_DETAIL,
+  applicationCrashesSchema, crashText, FORCED_DETAIL, NOT_REPLIED_TEXT, diagnosticsEventSchema,
 } from "../src/index.js";
 
 const fixture = (name: string): unknown => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
@@ -204,4 +204,14 @@ it("writes a crash in one line: a signal the supervisor saw with its uptime, a f
   // A newer daemon's extra field or longer list does not fail the snapshot (the daemon trims to 20).
   const records = Array.from({ length: 25 }, () => ({ at: 1, kind: "fatal", reason: "x", extra: true }));
   expect(applicationCrashesSchema.parse({ records }).records).toHaveLength(25);
+});
+
+it("words a queued message a restart dropped, and lets one event count several messages (s18c)", () => {
+  const record = { at: 1, groupId: "oc_fixture_group", place: "topic" as const, reason: "restarted" as const, ref: "abc123" };
+  expect(NOT_REPLIED_TEXT.restarted.reason({ ...record, count: 1 })).toBe("重启或停止时这条还在排队，没处理");
+  expect(NOT_REPLIED_TEXT.restarted.next({ ...record, count: 1 })).toBe("已在原处回了一句请重发。");
+  expect(NOT_REPLIED_TEXT.restarted.next({ ...record, count: 1, detail: "HTTP 503" })).toBe("在原处回一句请重发没成功（HTTP 503），请告诉发消息的人重发。");
+  expect(diagnosticsEventSchema.parse({ kind: "notReplied", record, times: 3 })).toEqual({ kind: "notReplied", record, times: 3 });
+  expect(diagnosticsEventSchema.safeParse({ kind: "notReplied", record, times: 0 }).success).toBe(false);
+  expect(diagnosticsEventSchema.safeParse({ kind: "notReplied", record, times: 10_001 }).success).toBe(false);
 });
