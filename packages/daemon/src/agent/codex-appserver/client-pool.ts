@@ -25,7 +25,7 @@ const NEUTRAL_CWD = tmpdir();
 
 /** initialize 握手死线：utility/预热进程连不上必须可恢复（卡死的 create 单飞
  * Promise 会饿死后续所有 acquire），超时即 close（SIGKILL）重来。 */
-const CONNECT_TIMEOUT_MS = 15_000;
+export const CONNECT_TIMEOUT_MS = 15_000;
 
 /** 预热 thread/start 死线：实测 ~1.6s（MCP 启动），放宽兜异常环境。 */
 const PREWARM_TIMEOUT_MS = 60_000;
@@ -34,7 +34,7 @@ const PREWARM_TIMEOUT_MS = 60_000;
  * 地老」从此有界；超时即杀进程重建（等价旧短命进程的 finally close 语义）。 */
 const DEFAULT_UTILITY_TIMEOUT_MS = 30_000;
 
-function withDeadline<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+export function withDeadline<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const t = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
     p.then(
@@ -54,15 +54,27 @@ const residents = new Set<AppServerClient>();
 let closing: Promise<void> | undefined;
 let accepting = true;
 
-function track(client: AppServerClient): void {
+/** Registers a resident process so {@link shutdownResidentClients} closes it (the judge process, s23b, uses it too). */
+export function trackResident(client: AppServerClient): void {
   residents.add(client);
+}
+
+/** False once {@link shutdownResidentClients} has started: no new resident process may come up. */
+export function poolAccepting(): boolean {
+  return accepting;
+}
+
+/** For tests: resident processes not yet closed. */
+export function residentCount(): number {
+  return residents.size;
 }
 
 function untrack(client: AppServerClient): void {
   residents.delete(client);
 }
 
-function closeDiscarded(client: AppServerClient): void {
+/** Closes a resident process and drops it from the registry once it is gone. */
+export function closeDiscarded(client: AppServerClient): void {
   void client.close().then(
     () => untrack(client),
     error => { untrack(client); log.fail('agent', error, { phase: 'resident-close' }); },
@@ -92,7 +104,7 @@ async function acquireUtility(bin: string): Promise<AppServerClient> {
   }
   const create = (async () => {
     const client = new AppServerClient({ bin, cwd: NEUTRAL_CWD, clientName: 'feishu-codex-bridge-utility' });
-    track(client);
+    trackResident(client);
     try {
       await withDeadline(client.connect(), CONNECT_TIMEOUT_MS, 'utility connect');
       requireOpen();
@@ -169,7 +181,7 @@ let warming: Promise<void> | null = null;
  * 链接，能在取用热进程的瞬间发现「codex 已原地升级/被替换」；版本字符串探测
  * （codex --version ~320ms）放在取用路径会吃掉预热的全部收益，而 locate 的版本
  * 缓存恰恰看不见原地升级——指纹比版本号更严也更便宜。 */
-function binFingerprint(bin: string): string | null {
+export function binFingerprint(bin: string): string | null {
   try {
     const s = statSync(bin);
     return `${s.mtimeMs}:${s.size}`;
@@ -219,7 +231,7 @@ export function refillWarmPool(): Promise<void> {
     const fingerprint = binFingerprint(bin);
     // clientName 用默认值：这个进程取走后就是真实会话的进程（compliance log 同名）。
     const client = new AppServerClient({ bin, cwd: NEUTRAL_CWD });
-    track(client);
+    trackResident(client);
     try {
       await withDeadline(client.connect(), CONNECT_TIMEOUT_MS, 'prewarm connect');
       requireOpen();

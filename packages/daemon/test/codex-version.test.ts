@@ -24,11 +24,11 @@ describe('Codex version check', () => {
   });
 
   it('classifies against the minimum and the verified version', () => {
-    expect(CODEX_MIN_VERSION).toBe('0.139.0');
+    expect(CODEX_MIN_VERSION).toBe('0.156.1');
     expect(CODEX_VERIFIED_VERSION).toBe('0.156.1');
-    expect(classifyCodexVersion('codex-cli 0.138.9')).toBe('tooOld');
-    expect(classifyCodexVersion('codex-cli 0.139.0-alpha.1')).toBe('tooOld');
-    expect(classifyCodexVersion('codex-cli 0.139.0')).toBe('ok');
+    expect(classifyCodexVersion('codex-cli 0.139.0')).toBe('tooOld');
+    expect(classifyCodexVersion('codex-cli 0.148.0')).toBe('tooOld');
+    expect(classifyCodexVersion('codex-cli 0.156.1-alpha.1')).toBe('tooOld');
     expect(classifyCodexVersion('codex-cli 0.156.1')).toBe('ok');
     expect(classifyCodexVersion('codex-cli 0.162.1')).toBe('newer');
     expect(classifyCodexVersion('not a version')).toBe('unknown');

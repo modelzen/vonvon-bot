@@ -9,6 +9,8 @@ import type {
   CompactResult,
   GenerateSessionTitleOptions,
   HistoryTool,
+  JudgeCall,
+  JudgeCallOutput,
   HistoryTurn,
   ModelInfo,
   PermissionMode,
@@ -24,6 +26,7 @@ import { BRIDGE_DEVELOPER_INSTRUCTIONS } from '../bridge-instructions';
 import { AppServerClient } from './app-server-client';
 import { refillWarmPool, takeWarmClient, utilityRequest } from './client-pool';
 import { mapNotification } from './event-map';
+import { runCodexJudge } from './judge-process';
 import { CODEX_FULL_ONLY, CodexFullOnlyError, codexConfinesReads } from './full-only';
 import { codexVersionAsync, resolveCodexBin } from './locate';
 import type { ServerNotification, Thread, ThreadItem, Turn, TurnStartResponse } from './protocol';
@@ -553,6 +556,16 @@ export class CodexAppServerBackend implements AgentBackend {
       log.fail('agent', err, { phase: 'model/list' });
       return STATIC_MODELS;
     }
+  }
+
+  /** The cached `model/list`, or undefined; never fetches (the judge path must not wait for it). */
+  peekModels(): ModelInfo[] | undefined {
+    return this.modelCache ?? undefined;
+  }
+
+  /** One smart-mode judgement on the resident judge process (s23b, judge-process.ts). */
+  judge(call: JudgeCall): Promise<JudgeCallOutput> {
+    return runCodexJudge(call);
   }
 
   async listThreads(cwd: string, limit = 15): Promise<ThreadSummary[]> {
