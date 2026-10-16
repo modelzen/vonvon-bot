@@ -91,15 +91,15 @@ describe.skipIf(!REAL)('真实 Codex 判断（VONVON_REAL_JUDGE=1）', () => {
   });
 
   // first, so the first judgement starts the process
-  it('复用：同一个进程，第二次更快；4 条并发都出结果', async () => {
+  it('复用：同一个进程；4 条并发都出结果', async () => {
     const first = await judge.judge(request('main'));
     const pid = judgeProcessStats().pid;
     const second = await judge.judge(request('main'));
     expect(first.error).toBeUndefined();
     expect(second.error).toBeUndefined();
     expect(judgeProcessStats().pid).toBe(pid);
+    // Logged, not asserted: the model's own latency (seconds) swamps the ~2 s cold start.
     console.log(JSON.stringify({ coldMs: first.ms, warmMs: second.ms }));
-    expect(second.ms).toBeLessThan(first.ms);
     const four = await Promise.all((['main', 'mentioned', 'topic', 'main'] as const).map(v => judge.judge(request(v))));
     expect(four.map(r => r.error)).toEqual([undefined, undefined, undefined, undefined]);
     expect(judgeProcessStats().pid).toBe(pid);
