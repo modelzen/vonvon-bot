@@ -4,6 +4,7 @@ import { open, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { paths } from '../config/paths';
+import { errorParts, markLogged, type ExpandedErrors } from './error-parts';
 
 /** Days of `YYYY-MM-DD.log` history to keep. Override via env. */
 const LOG_RETENTION_DAYS = Math.max(
@@ -71,9 +72,9 @@ function logsDir(): string {
   return inTestEnv() ? TEST_LOGS_DIR : join(paths.appDir, 'logs');
 }
 
-function getStream(): WriteStream | null {
-  const today = todayKey();
-  if (stream && currentDate === today) return stream;
+/** The stream of `day`'s file (`YYYY-MM-DD`), today's by default. */
+function getStream(day = todayKey()): WriteStream | null {
+  if (stream && currentDate === day) return stream;
   if (stream) {
     try {
       stream.end();
@@ -83,8 +84,8 @@ function getStream(): WriteStream | null {
   }
   try {
     mkdirSync(logsDir(), { recursive: true });
-    stream = createWriteStream(join(logsDir(), `${today}.log`), { flags: 'a' });
-    currentDate = today;
+    stream = createWriteStream(join(logsDir(), `${day}.log`), { flags: 'a' });
+    currentDate = day;
     return stream;
   } catch {
     return null;
@@ -115,12 +116,13 @@ export function shortenFeishuId(value: string): string {
   return id ? `${id[1]!.slice(-6)}${id[2] ?? ''}` : value;
 }
 
-function emit(level: Level, phase: string, event: string, fields: LogFields = {}): void {
+/** `toConsole: false` writes the JSON line only. */
+function emit(level: Level, phase: string, event: string, fields: LogFields = {}, ts = new Date().toISOString(), toConsole = true): void {
   const ctx: LogContext = { ...als.getStore() };
   if (ctx.chatId) ctx.chatId = shortenFeishuId(ctx.chatId);
   if (ctx.msgId) ctx.msgId = shortenFeishuId(ctx.msgId);
   const entry: Record<string, unknown> = {
-    ts: new Date().toISOString(),
+    ts,
     level,
     phase,
     event,
@@ -136,7 +138,8 @@ function emit(level: Level, phase: string, event: string, fields: LogFields = {}
       entry[k] = v;
     }
   }
-  const s = getStream();
+  // The file of the line's own day: a fail line and its parts share one `ts`, and stay in one file across midnight.
+  const s = getStream(ts.slice(0, 10));
   if (s) {
     try {
       s.write(`${JSON.stringify(entry)}\n`);
@@ -147,7 +150,7 @@ function emit(level: Level, phase: string, event: string, fields: LogFields = {}
 
   const showOnStdout =
     level !== 'info' || STDOUT_INFO_ALLOWLIST.has(`${phase}.${event}`);
-  if (!showOnStdout) return;
+  if (!showOnStdout || !toConsole) return;
 
   const fn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
   fn(formatStdout(level, phase, event, ctx, shown));
@@ -210,6 +213,9 @@ function formatFields(fields: LogFields): string {
   return parts.join(' ');
 }
 
+/** Each AggregateError already split into `fail_part` lines, with the time of those lines. */
+const expanded: ExpandedErrors = new WeakMap();
+
 export const log = {
   info(phase: string, event: string, fields?: LogFields): void {
     emit('info', phase, event, fields);
@@ -217,18 +223,43 @@ export const log = {
   warn(phase: string, event: string, fields?: LogFields): void {
     emit('warn', phase, event, fields);
   },
-  fail(phase: string, err: unknown, fields?: LogFields): void {
+  /**
+   * s17b: an AggregateError (or an error caused by one) is followed by one `fail_part` line per error inside it.
+   * `console: false` keeps the lines out of the terminal, for an error the command prints itself next.
+   */
+  fail(phase: string, err: unknown, fields?: LogFields, options?: { console?: boolean }): void {
+    const toConsole = options?.console !== false;
     const message = err instanceof Error ? err.message : String(err);
     const stack = err instanceof Error ? err.stack : undefined;
     const apiData = (err as { response?: { data?: unknown } })?.response?.data;
     const apiStatus = (err as { response?: { status?: unknown } })?.response?.status;
+    const ts = new Date().toISOString();
+    markLogged(err);
+    const split = errorParts(err, expanded, ts);
+    // The same group logged again (a cleanup error logged where it is thrown and where it is caught): its parts
+    // are the fail_part lines at `partsAt`.
+    const parts = split.partsAt !== undefined ? { partsLogged: true, partsAt: split.partsAt }
+      : split.total > 0 ? { parts: split.total, ...(split.truncated ? { partsTruncated: true } : {}) } : {};
     emit('error', phase, 'fail', {
       ...fields,
       err: message,
       apiStatus,
       apiData,
       stack,
-    });
+      ...parts,
+    }, ts, toConsole);
+    for (const part of split.parts) {
+      emit('error', phase, 'fail_part', {
+        ...fields,
+        part: part.path,
+        of: split.total,
+        ...(part.within.length > 0 ? { within: part.within.join(' › ') } : {}),
+        errName: part.name,
+        err: part.message,
+        stack: part.stack,
+        ...(part.repeat ? { repeat: true, partsAt: part.partsAt } : {}),
+      }, ts, toConsole);
+    }
   },
 };
 

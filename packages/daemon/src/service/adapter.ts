@@ -6,6 +6,7 @@ import { serviceTarget } from './identity';
 import { readLinger, userManagerHint } from './linux-session';
 import { isIrreplaceableDefinition, readDefinitionBytes, type Registration } from './registration';
 import { serviceStderrPath, serviceStdoutPath, type ServiceState, type ServiceStatus } from './common';
+import { describeServiceExits, type ServiceExits } from './exits';
 import type { LaunchdTransactionOutcome } from './launchd';
 
 export type { ServiceStatus };
@@ -27,6 +28,8 @@ type Observed = {
   owner: { pid: number } | null;
   running: boolean;
   ownerError: string | null;
+  /** s17b: the manager's record of the previous exits, read beside `manager`; never changes the state. */
+  exits?: ServiceExits;
 };
 
 /** Folds what the definition, the manager and the data root's lock say into one state. Exported for tests. */
@@ -52,12 +55,14 @@ export function serviceStatus(o: Observed): ServiceStatus {
     if (o.running) return ['detached', `Daemon PID ${o.owner?.pid} was not started by the service manager. Run vonvon daemon stop, then vonvon daemon start.`];
     return ['stopped', 'Installed, not running. Run vonvon daemon start.'];
   })();
+  const { lastExit } = describeServiceExits(o.exits);
   return {
     platformName: o.platformName, state: state[0], detail: state[1],
     installed: r.kind !== 'absent', running: o.running,
     name: o.name, servicePath: o.servicePath,
     stdoutPath: serviceStdoutPath(), stderrPath: serviceStderrPath(),
     ...(o.running && o.owner ? { pid: String(o.owner.pid) } : {}),
+    ...(o.exits ? { exits: o.exits } : {}), ...(lastExit ? { lastExit } : {}),
   };
 }
 
@@ -112,6 +117,7 @@ export function getServiceAdapter(): ServiceAdapter {
           platformName, name: status.target.label, servicePath: status.target.plistPath,
           registration: status.registration, owner: status.owner, running: status.running, ownerError: status.ownerError,
           manager: job.kind === 'loaded' ? { kind: 'enabled', pid: job.pid } : job,
+          ...(status.exits ? { exits: status.exits } : {}),
         });
       }
       const status = await (await systemd()).status();
@@ -123,6 +129,7 @@ export function getServiceAdapter(): ServiceAdapter {
       return serviceStatus({
         platformName, name: status.target.unitName, servicePath: status.target.unitPath,
         registration: status.registration, owner: status.owner, running: status.running, ownerError: status.ownerError, manager,
+        ...(status.exits ? { exits: status.exits } : {}),
       });
     },
   };

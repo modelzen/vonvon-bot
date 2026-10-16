@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 import { mkdir } from 'node:fs/promises';
+import { formatErrorTree } from '../core/error-parts';
 import { bridgeVersion } from '../core/version';
 import { paths } from '../config/paths';
 import { enterDataAccess, type DataLease } from '../config/data-access';
@@ -173,7 +174,8 @@ program.parseAsync(process.argv).then(async () => {
   await (await import('../core/logger')).flushLogs();
   process.exit(process.exitCode ?? 0);
 }).catch(async (err) => {
-  console.error(err instanceof Error ? err.message : String(err));
+  // s17b: an AggregateError (a failed shutdown) also prints each error inside it, one per line.
+  console.error(formatErrorTree(err));
   await (await import('../core/logger')).flushLogs();
   // A service-managed host keeps a stop (0) or a requested restart (75) even when cleanup failed; anything else is 1.
   const code = process.exitCode;
