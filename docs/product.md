@@ -392,7 +392,7 @@ owner 的话："确认卡、选项卡、授权卡这些需要用户交互、用�
 - Claude 的只读、读写两档不再用 `bypassPermissions`。今天用它，推断有两个缺口：关网时 Bash 可能仍能连外网，Edit 和 Write 可能写到工作区以外（`approval-ux.md` 3.3）。不带沙箱时这两个缺口都在：今天的只读档下 Bash 能写工作区内外的文件、能 curl 出去，`bypassPermissions` 下工作区以外的 Write 也直接放行；带上今天的沙箱还在不在，第 9 节第 12 项在 Mac 上测。换成上表以后，只读档下写文件的 Bash、联网的 Bash、工作区以外的读写都会先到 `canUseTool`；读写档下工作区里的写直接放行，其余同样先到回调（实测，e02 第 1 节）。只读档可以对这些一律拒绝；读写档关网时，回调分不出哪条 Bash 在联网，要看命令文字或者靠沙箱，在 Mac 上测（e03）。代价是今天这两档下能用的 WebFetch、往工作区以外写文件会被拒；开网时给 WebFetch、WebSearch 加允许规则。
 - Codex 三档都保留 `never`：模型知道不能申请，就不会白白尝试。`never` 下没有标成只读的 MCP 工具会被拒（`approval-ux.md` 1.5），vonvon 自己的 MCP 要配 `approve`（第 9 节第 2 项）。
 - 中途改档不用重开会话：Codex 每一轮的 `turn/start` 能带新的设置，Claude 运行中能 `setPermissionMode`，升档降档都是下一轮生效（实测，e02 第 3 节）。升到完全访问要求会话启动时带 `allowDangerouslySkipPermissions`，所以每条会话启动时都带上；resume 不恢复上次的档（`settingSources` 为空时测的），每次都明确传。Codex 一半还是推断。
-- Linux 上 Codex 的只读、读写档今天直接拒绝启动（`D/agent/codex-appserver/backend.ts:78-82`），所以 Linux 上的 Codex 只能用完全访问，界面写明。被拉进的已有群默认只读，在 Linux 上用 Codex 时起不来：bot 回一句说明，等主人在设置里明确改成完全访问，不自动放开。
+- Linux 上 Codex 的只读、读写档今天直接拒绝启动（`D/agent/codex-appserver/backend.ts` 的 `sandboxParams`），所以 Linux 上的 Codex 只能用完全访问，界面写明。被拉进的已有群默认只读，在 Linux 上用 Codex 时起不来：bot 回一句说明，等主人在设置里明确改成完全访问，不自动放开。（s20b 已改）
 
 **完全访问下还会问什么。** 不问权限。Claude 自己在任何模式下都会停下来问的少数几类，照样发卡问，和 Claude 自己的行为一致，比如用户在自己的 Claude 设置里写了"这类操作必须问"、删除关键目录（`approval-ux.md` 2.2）。这种卡只有主人和管理员能点，15 分钟没人点按拒绝。只读、读写两档下，这几类直接拒绝。实测里 `bypassPermissions` 下只有 AskUserQuestion 走到回调，写 `.claude/` 下的文件也直接放行；ask 规则和删除关键目录还没测，测试时 `settingSources` 为空，用户层的 ask 规则也没测到（e02 第 1 节，第 9 节第 11 项）。测出来走不到回调的几类，按 `docs/v1-plan.md` 4.2 第 3 条问 owner。
 

@@ -518,7 +518,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | [x] | s19 | 状态与诊断页 | 按 bot 列连接状态、Codex 和 Claude 的版本与登录、缺的权限；每个 bot 记最近没回的消息和原因（3.1 第 8 条） | 450 | s03、s01 | 并发 | 无 |
 | [x] | s20a | Linux 命令行版（上）：平台、open --print、linger、终端扫码 | 平台枚举加 linux、去掉 windows，界面显示"这台 Linux 主机"；`vonvon open --print`；`service install` 处理 linger；没有用户 systemd 时的说明；`vonvon bot add` 终端扫码；Linux 的首次运行清单加"Linux 上 Codex 只能用完全访问"一步和 Claude 的沙箱检查（3.10） | 1130 | s07、s04 | 子进程、错误路径 | 无 |
 | [x] | s20c | 互斥锁换掉端口 | 四个角色（`admission`、`host`、`keystore`、`service`）的互斥锁不再用和 Linux 临时端口重叠的端口：Linux 用抽象命名空间的 Unix 域套接字，macOS 用带 `O_EXLOCK` 的文件锁；升级那一刻和旧版本的锁过渡；`inspectHost` 跟着改 | 380 | 无 | 并发、关闭清理、合入门禁 | 装着 M3 预览版、它的 daemon 在跑时，新版本的 `vonvon daemon start` 不会再起一个；macOS CI 跑锁的测试 |
-| [ ] | s20b | Linux 命令行版（下）：Codex 只能完全访问，删 windows-job | Linux 上的 Codex 遇到只读、读写档不起会话，回一句说明，设置里置灰；删 `codex-appserver/windows-job.ts`；在这片的 head 上做 Linux 验收（3.8、第 8 节第 5 条） | 400 | s20a | 子进程、关闭清理、错误路径 | 无（Linux 在 JP-VPS 上验） |
+| [x] | s20b | Linux 命令行版（下）：Codex 只能完全访问，删 windows-job | Linux 上的 Codex 遇到只读、读写档不起会话，回一句说明，设置里置灰；删 `codex-appserver/windows-job.ts`；在这片的 head 上做 Linux 验收（3.8、第 8 节第 5 条） | 400 | s20a | 子进程、关闭清理、错误路径 | 无（Linux 在 JP-VPS 上验） |
 
 开工要点：
 - s17：e06 实测 `kill -9` 后约 1 秒被拉起，两次启动至少隔 `minimum runtime`（默认 10 秒；产品 plist 的 `ThrottleInterval` 是 5，实际间隔没测）；`launchctl print` 的 `last exit code` 和 `last terminating signal` 分得清正常退出和被杀。原先打算用 Security 框架 `SessionGetInfo` 的安全会话 id 判断"重新登录过"，s17 没用（要原生代码，e06 也没验过）：正常退出就开始新的一轮计数，注销时 launchd 发 SIGTERM，daemon 照停止处理，下次登录重新数。注销时 daemon 是不是来得及退出没验过，见"s17 留下的"。开机用开机标识区分（Linux 的 `boot_id`，macOS 的 `kern.bootsessionuuid`）。
@@ -579,8 +579,15 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
   - 真的开 linger、真的扫码建 bot，JP-VPS 上都没走到：ops 已经是 `Linger=yes`，扫码没有人扫。前者靠单测；后者和网页同一条 RPC，网页这条 M1 已经验过，记成待 owner 验收（可选），M4 验收第 4 步有 Linux 机器的话可以试一次。
   - `service` 命令里 s07 的英文行没改，s20a 新加的是中文，`classifyServiceFailure` 和测试都钉着那些英文行。
   - 顺带看到的：s17b 要给 `service status` 加 launchd 的 `last exit code`，和这片改的 `runServiceStatus`、`adapter.status()` 是同一段，谁后合谁 merge main；诊断页"这台电脑"一节没跟着改名（搜索索引用它做锚点），要不要在那里也显示 Claude 的沙箱，留给 UX 那一轮。
-- s20b：被拉进的已有群默认只读，在 Linux 上用 Codex 时起不来：bot 回一句说明，等主人改（product.md 第 11 节第 24 条）。今天的代码在绑定之前就抛错（`D/project/lifecycle.ts:206` 附近），要改成照常绑定、回合开始时再回说明。`windows-job.ts` 被 `owned-process.ts` 和 `environment/service.ts` 引用，属于子进程的代码。
+- s20b：被拉进的已有群默认只读，在 Linux 上用 Codex 时起不来：bot 回一句说明，等主人改（product.md 第 11 节第 24 条）。开工时核对过，绑定从来不抛错（`assertBackendUsable` 只按 `supportedModes` 过滤，Codex 没声明），原来写的"绑定之前就抛错"不对：错是在回合开始时由 `sandboxParams` 抛的，群里看到的是一段提到 Windows 的"❌ 启动失败"，诊断页记成"出错了"。所以绑定照旧，改的是回合开始时的回复、设置和删 windows-job。`windows-job.ts` 被 `owned-process.ts` 和 `environment/service.ts` 引用，属于子进程的代码。
 - s20b 的 Linux 验收：Claude 在 JP-VPS 上的普通用户账号里，用这片 PR 的 head 走一遍 npm pack、装到临时前缀、`service install`、kill -9 后被拉起、`daemon stop` 后不再拉起、`service uninstall`。不重启 JP-VPS，linger 看 loginctl 的状态。结果写进本文第 10 节。
+- s20b 做法（回合开始时）：Linux 上用 Codex 的群，发消息的人对应的档（分档时按发消息的人取）是只读或读写时不起会话：不加表情、不下载图片、不织入上下文、不补拉，直接在原处回一句说明，话题里的回在话题里。说明写明是哪一档、要改「管理员权限」还是「普通成员权限」，和 `vonvon settings set --group <群 id> permission.mode=full`（普通成员是 `permission.guestMode`；这台主机有几个 bot 时带 `--bot`）。被 @ 每次都回；免@ 触发的，每个群 10 分钟最多回一次，从这个群上一次说明算起，被 @ 时回的也算，没发出去的不算。每条都记进诊断页"最近没回的消息"，原因是新加的 `tier-unavailable`。判断放在后端实例上（`AgentBackend.fullAccessOnly`，Codex 在 macOS 以外返回理由），不直接读 `process.platform`，用假后端的测试在 Linux CI 上不受影响。挡在四处：单会话群的主区和话题里（都在命令之后、`/goal` 之前），多会话群主区的 `/goal` 和开新话题。重试、继续、`/new`、`/compact` 和协作的几个动作不经过这道门，走到 `sandboxParams` 时抛 `CodexFullOnlyError`，回"❌ Linux 上的 Codex 只能用完全访问……"，诊断页同样记 `tier-unavailable`。
+- s20b 做法（设置）：网页群内设置的两个权限下拉里，只读问答、允许写入置灰，已存的只读照样显示为选中，理由写在「管理员权限」下面。daemon 保存时（网页和 `vonvon settings set` 是同一条路）只看这次改的字段：`mode` 或 `guestMode` 改成完全访问以外的就拒，理由同上；不改档、只改联网照常保存，已存的只读不动。`vonvon settings get --group <群>` 在 `[permission]` 下多打一行理由。私聊 🔐 权限卡的两个下拉只剩完全访问，写明现在的档和理由，存的不是完全访问的那个不预选、写"不选就不改"，只改联网时存的档不动；升级前发出的旧卡提交只读、读写时不保存，再发一张新的权限卡。`vonvon group bind` 的提示不变。
+- s20b 做法（windows-job）：删了 `codex-appserver/windows-job.ts` 和它的两份测试，`owned-process.ts`、`environment/service.ts` 只剩 POSIX 进程组这条路，信号、步骤顺序和超时都没变；`environment/service.ts` 里每个子进程只记一个"管道关了"的 promise。`sandboxParams` 的 win32 分支去掉，macOS 以外一律抛 `CodexFullOnlyError`。`codex-process-tree.test.ts` 里"自然退出 7、254 时 close 报错"那条原来放在 Windows 那组，测的不是 Windows 的事，挪进 POSIX 组。`provider/process/windows-*` 按第 6 节第三类留着；`import-core.json` 里的 `windows-job.ts` 是导入时的记录，不改。
+- s20b 留下的：
+  - 给 s36、s49：私聊的 bot 默认档是读写（第 5 节），Linux 上用 Codex 时私聊也要同样的检查。
+  - 给 s36b：被拉进群就绑定时照旧默认只读，靠回合开始时的这道检查回说明，不自动放开。
+  - owner 2026-10-16 定了在 s15c 去掉"普通成员权限"（#344）。这片没动分档：回复里分得出 `guestMode`，网页两个下拉都置灰，诊断页的"下一步"两个字段都写（记录里没有发消息的人是什么角色）。s15c 删分档时这几处一起改。
 
 ### M5 智能模式
 
@@ -801,6 +808,8 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 | `open --print` 什么时候打凭据 | 只在 stdout 是终端时；没有图形界面时的 `vonvon open` 和 Linux 上 `service install` 的最后一段一样 | 管道、重定向和服务管理器会把它留进日志 | s20a |
 | Claude 的沙箱多久查一次 | 跟执行工具每 60 秒一次，装完后端时也查 | 一次是两次目录扫描加一个约 8 毫秒的 bwrap，比同一轮里起的两个 Codex 进程便宜得多 | s20a |
 | Linux 上的两步什么时候显示 | 只在 Linux 上、对应的工具不是"未安装"时；不算进"还差几步"，也不影响"可以用了"；只说明、给命令，不改默认档和系统设置 | 没装的工具没有权限档可说；这两步是说明，不是必做 | s20a |
+| Linux 上 Codex 的群多久回一次说明 | 被 @ 每次；免@ 每群 10 分钟一次，被 @ 时回的也算 | 免@ 的单会话群每条消息都会触发，条条都回就刷屏；被 @ 是有人在等它回 | s20b |
+| Linux 上 Codex 的群改成只读、读写 | 网页置灰，保存拒绝，已存的不动 | 3.8 说不自动放开：已存的只读是被拉进群时的默认档，留着，改不改由主人定；能存下却起不了会话的档不该让人再选 | s20b |
 | 被拉进群时 | 直接绑定，不再私聊发绑定卡 | 第 4 节拿掉私聊控制台；被拉进的群用什么默认档，3.8 已经给了 | s36b |
 | 记忆怎么写 | agent 直接写自己那份记忆文件，daemon 在一轮前后比对，卡片显示写了什么 | 3.6 只说"记住"能写、带撤销，没说怎么写；不在群里另开记忆命令，和 3.7"群里不能在聊天里改设置"一致 | s40 |
 | 改设置卡片上的［撤销］谁能点 | 主人和管理员 | 3.7 只说带撤销；和 3.8 里"Claude 自己要问的"卡一样 | s56 |
@@ -833,7 +842,7 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 **二、跟着本来就要改这些文件的切片一起删**
 - s08b：`cli-registration.ts` 的 Windows PATH 注册和 `.cmd` 入口，命令行注册只认 macOS；`windows-native.test.ts`；electron-builder 的 win nsis 和 linux AppImage 目标；`daemon-dependencies.ts` 的 `windowsHide` 和两份桌面端测试里的 win32 小分支。删完以后桌面端（`packages/desktop`）不再有 Windows 代码。issue #288 按 product.md 3.10 以"第一版不做 Windows"关闭。
 - s20a：`open.ts` 的 `cmd /c start`；协议平台枚举里的 windows，以及界面上的"这台 Windows 电脑"。（s20a 已删，CSS 里 `data-desktop-platform="windows"` 的几条规则一起删了）
-- s20b：Codex 只读、读写档的 win32 分支；`codex-appserver/windows-job.ts`、它的两处引用和两份测试。
+- s20b：Codex 只读、读写档的 win32 分支；`codex-appserver/windows-job.ts`、它的两处引用和两份测试。（s20b 已删）
 - s51a：私聊菜单里的"安装桌面版 · Windows x64"按钮。
 - s02c：cli-bridge 整个删掉，它的 cmd.exe 引号、命名管道、PowerShell 离开检测和 Windows 提示跟着没了；`config/paths.ts` 的命名管道分支。分在 s02c2 到 s02c5，见第 3 节的 s02c 拆法。s02c5 删完了，`data-compatibility.ts` 里给 cli-bridge 算旧命名管道名的 `bridgePipeName` 也在 s02c5 删了。
 - s58：从没上线的改名迁移（`data-root-migration.ts`、`legacy-data-root.ts`、`host/migration.ts`）；`data-compatibility.ts` 剩下的 Windows 分支（`bridgePipeName` 已随 s02c5 删）。`isBridgeGetter` 还有人用，留下。
@@ -930,6 +939,13 @@ macOS：
 
 Linux：`vonvon service uninstall`，`vonvon daemon stop`，`npm rm -g vonvon-bot`，`rm -rf ~/.vonvon-bot`。卸载不关 linger；装的时候开了 linger、这个账号上又没有别的用户服务要它，再运行 `loginctl disable-linger`（s20a）。
 
-**Linux 验收**（s20b 填，product.md 第 8 节第 5 条的 Linux 一半）：待填。
+**Linux 验收**（s20b 填，product.md 第 8 节第 5 条的 Linux 一半）：2026-10-16，Claude 在 JP-VPS 的普通用户账号里做，用 s20b 的 `b4132c187275b0d295aa88218a438a6a8c37602a`。
+- 打包和安装：在干净的 PR worktree 里 `npm run pack:vonvon-bot -- --out <临时目录>`，得到 `vonvon-bot-0.7.0.tgz`，sha256 `333f6617ecdb2c4aaf5c657698b879efba71e2066e3ce9f045dab5a2421c5c7d`；`check-vonvon-bot-package.mjs --head <这个 sha>` 通过（7269 个文件）。用 `npm install -g --prefix <临时前缀> --offline --ignore-scripts` 装到不在任何 git checkout 里的临时目录，之后每条命令前面带 `npm_config_prefix`、`VONVON_HOME` 和 `PATH`，直接运行 `vonvon`。
+- `vonvon service install --port <P>`：装成 `~/.config/systemd/user/vonvon-bot-<数据目录哈希的 12 位>.service`，`ExecStart` 是 `/usr/bin/node <临时前缀>/lib/node_modules/vonvon-bot/bin/vonvon.mjs daemon run --port <P>`，`Restart=on-failure`、`RestartSec=5`。装完 `active`，MainPID 1675248，`NRestarts=0`；`daemon status --json` 的 pid 和 MainPID 一样，`curl 127.0.0.1:<P>/` 回 200。install 打印"linger 已开"。
+- `kill -9` 这个 MainPID：日志里是 `status=9/KILL` 和 "restart counter is at 1"，7 秒内 MainPID 换成 1675476，`NRestarts` 从 0 到 1，还是同一个端口，`curl` 回 200。
+- `vonvon daemon stop`：打印 `stopped`，退出 0。之后 20 秒里 unit 一直是 `inactive`，MainPID 0，`NRestarts` 还是 1；没有 `daemon.pid`，端口空出来了。
+- `vonvon service uninstall`：打印 `uninstalled: Uninstalled` 和 linger 的提示"linger 没关：…不需要的话运行 loginctl disable-linger。"；`LoadState=not-found`，unit 文件和 `default.target.wants` 里的链接都删了。
+- linger：`loginctl show-user` 前后都是 `Linger=yes`，没关。JP-VPS 上在跑的验收 daemon 前后是同一个进程，它和它的端口都没碰。
+- 无头网页检查（实现时在 JP-VPS 上跑的）：Linux 上 Codex 项目的权限设置里，只读问答、允许写入两档是置灰的。
 
 **发布前的 Mac 验收**（s67 填，product.md 第 8 节第 5 条的 Mac 一半）：待填。

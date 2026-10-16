@@ -4,7 +4,7 @@ import { z } from "zod";
  * s25 adds the smart mode's reasons here and to {@link NOT_REPLIED_TEXT}. */
 export const notRepliedReasonSchema = z.enum([
   "group-disabled", "group-updating", "chat-not-allowed", "user-not-allowed", "unbound",
-  "signed-out", "codex-too-old", "tool-missing", "missing-scope", "quota", "network", "idle-timeout", "agent-exited", "failed",
+  "signed-out", "codex-too-old", "tool-missing", "tier-unavailable", "missing-scope", "quota", "network", "idle-timeout", "agent-exited", "failed",
 ]);
 export type NotRepliedReason = z.infer<typeof notRepliedReasonSchema>;
 /** Where a running bot was refused a scope: the back-fill, real names, a group's info, or a reply. */
@@ -32,7 +32,8 @@ export type DiagnosticsEvent = z.infer<typeof diagnosticsEventSchema>;
 export const botDiagnosticsSchema = z.object({ notReplied: z.array(notRepliedSchema), deniedScopes: z.array(deniedScopeSchema) });
 export type BotDiagnostics = z.infer<typeof botDiagnosticsSchema>;
 
-type Text = { reason: (record: NotReplied) => string; next: (record: NotReplied) => string };
+/** `bot` is the bot the record belongs to, and whether the host has more than one (a command then needs --bot). */
+type Text = { reason: (record: NotReplied) => string; next: (record: NotReplied, bot?: { id: string; several: boolean }) => string };
 const tool = (record: NotReplied) => record.backend === "claude" ? "Claude" : "Codex";
 const CLAUDE_LOGIN_NEXT = "在终端运行 claude，用 /login 登录，再点「检查登录」。";
 /** The page's wording, one per reason; the type makes every reason have one. */
@@ -45,6 +46,10 @@ export const NOT_REPLIED_TEXT: Record<NotRepliedReason, Text> = {
   "signed-out": { reason: r => `${tool(r)} 没登录或登录过期了`, next: r => r.backend === "claude" ? CLAUDE_LOGIN_NEXT : "在本机环境里登录 Codex，或在终端运行 codex login。" },
   "codex-too-old": { reason: () => "Codex 版本太旧，服务端不让它用这个模型", next: () => "在本机环境里更新 Codex。" },
   "tool-missing": { reason: r => r.backend === "claude" ? "Claude Agent SDK 还没下载" : "Codex 没装好", next: () => "去本机环境安装。" },
+  "tier-unavailable": {
+    reason: () => "Linux 上的 Codex 只能用完全访问，这个群是只读或读写档，这一轮没开始",
+    next: (r, bot) => `在群内设置里把权限改成「完全访问」，或者运行 vonvon settings set${bot?.several ? ` --bot ${bot.id}` : ""} --group ${r.groupId} permission.mode=full；被拒的是普通成员时，改「普通成员权限」，也就是 permission.guestMode=full。`,
+  },
   "missing-scope": { reason: r => `飞书拒绝了：缺 ${r.detail ?? "权限"}`, next: () => "在上面「缺的权限」里一键开权限，开完发布一个新版本。" },
   quota: { reason: r => `${tool(r)} 的用量到上限了`, next: () => "用量恢复后再发。" },
   network: { reason: () => "连不上模型服务", next: () => "检查这台电脑的网络；卡片上的「重试」可以再跑一次。" },
