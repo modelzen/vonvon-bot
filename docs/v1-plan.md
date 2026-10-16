@@ -737,6 +737,13 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
   - `baseInstructions` 两行中性文字换掉 Codex 自带的约 18k 字系统提示词：gpt-6-luna 一条判断的 input 从 9.1k 降到 5.6k tokens，服务端不拒；`summary: 'none'` 时请求里没有 summary 字段。
   - 一个进程 4 条并发总用时 3.7 秒，单条 3.2 到 3.7 秒，没被串行，Codex 的上限保持 4。`config/read`、`skills/list` 在 0.156.1 上都有，形状一样。
   - 额度：`prompt_cache_key` 等于线程 id，每条判断基本不命中缓存，e12 按每条约 5.6k 不命中缓存的 input、约 30 output 估。一轮 3 到 4 秒（gpt-6-luna，low）。
+- s23c 做法（Claude 判断、判断模型的设置和命令行）：Claude 的 `judge()` 每次调一次 SDK `query()`，用标题任务的那组选项（不带工具、MCP、hooks、skill，不存会话，不读个人 CLAUDE.md），`systemPrompt` 是字符串，整段换成 `SMART.md` 加格式行；没选推理强度时传 `thinking: {type:'disabled'}`，`finally` 里一定 `query.close()`，promise 在它之后才落定。`assistant.error` 的代码算结构化的错误（`model_not_found` 归 `model`），只靠文字认出来的不算。默认模型 `haiku`，只有 `ANTHROPIC_BASE_URL` 指向非 Anthropic 的主机才用网关的模型；`~/.claude/settings.json` 每次只读一遍（`readClaudeUserSettings`）。判断模型存在 `preferences.judge` 和 `projects.json` 那一行的 `judge`，存的时候一定带后端：bot 层不写是 Codex，群层不写是群的后端，群层写了别的后端就拒。判断时按群、bot、默认的顺序找这个后端的设置，手改坏的值当没设，每个值只记一次 `judge.setting-ignored`。冷却在 `D/judge/cooldown.ts`，只认结构化的 auth、quota（冷这个后端）和 version、model（冷这个后端加模型），5 分钟。设置视图里 `judge` 节、`smartPrompt`、bot 页的 `judgeByBackend` 都是可选字段，不升 `PROTOCOL_VERSION`；`ModelQuery.purpose` 加了 `judge`。`vonvon settings get` 在 `[judge]` 下按后端各打一行、打提示词来源，`settings get judge` 另打提示词全文、三段格式行和输入示例。`smartPrompt.backendNote` 按 s23b 的结果写成"两行基础指令加 `~/.codex/AGENTS.md`"，不再说带 Codex 自带的系统提示词。
+- s23c 开工验证（设计 6.3 第 5 条，2026-10-16，JP-VPS，SDK 0.3.296，claude.ai 登录，7 次真实调用）：
+  - 字符串 `systemPrompt` 在订阅登录下能跑通，服务端不拒，回的是判断格式，不用退回 preset。input token（含缓存写和读）字符串约 1.9k，preset 加 append 加 `excludeDynamicSections` 约 4.6k；`outputFormat` 带来的 StructuredOutput 工具定义约 530。
+  - `model: 'haiku'` 能用，实际是 `claude-haiku-5-5`。`tools: []` 加 `maxTurns: 1` 加 `outputFormat` 拿得到 `structured_output`（`num_turns` 是 2，`maxTurns: 1` 不挡）。
+  - haiku 收 `thinking: {type:'disabled'}` 不报错，但每次仍有 100 到 600 个 thinking token；照传，用时和额度按"有思考"估。一次 2.3 到 4.9 秒（`duration_ms`），连 CLI 启动 4.3 到 7.0 秒，判断超时的默认值够用。
+  - `structured_output` 的 reason 里出现过标签残渣（`</reason>`），`parseVerdict` 从第一个标签起截掉。
+  - 不写会话记录，但 `~/.claude/projects` 下会按判断 cwd 建一个只有空 `memory/` 的目录，所以判断 cwd 固定用 `<数据目录>/judge`。
 - s23：判断看不到 bot 的个性。接口留了 `persona`，s25 在 s38 合入后传 SOUL.md 的前 1,500 字；在那之前，主人可以把分工写进各个 bot 自己的 `SMART.md`。
 - s24 不做了：填 key 的判断模型（Decisions API、Jev）移到 product.md 第 10 节（owner 2026-10-15）。编号空着，不挪别的片。
 - s25：每群每小时的上限先按 60 次做，e12 量完再调。

@@ -1,4 +1,5 @@
 import { REASONING_EFFORTS, type ReasoningEffort } from '../agent/types';
+import type { JudgeSelectionStored } from '../judge/types';
 
 export type TenantBrand = 'feishu' | 'lark';
 
@@ -124,6 +125,9 @@ export interface AppPreferences {
   /** Bridge 新建聊天会话的 resume 标题配置。每个 agent 后端独立；
    * 缺省/未命中的后端不调模型，直接截断清洗后的首句。 */
   sessionTitles?: SessionTitlesConfig;
+  /** 智能模式的判断模型（s23c）。带后端：只给这个后端的群用，别的后端的群用它的默认小模型。
+   * 没有就是默认小模型；手改坏了当没设（parseStoredJudge），不改写。 */
+  judge?: JudgeSelectionStored;
 }
 
 /** 开启 AI 的完整配置；不允许只填 model 或只填 effort。 */

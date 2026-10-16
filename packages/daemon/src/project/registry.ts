@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import { paths } from '../config/paths';
 import type { PermissionMode, ReasoningEffort } from '../agent/types';
+import type { JudgeSelectionStored } from '../judge/types';
 
 /** A project = a Feishu group bound to a fixed working directory. */
 export interface Project {
@@ -73,6 +74,9 @@ export interface Project {
   /** true 表示 {@link defaultModel} 是手填的 id（3.11）：不在模型列表里也照用，不回落
    * 后端默认。选回列表里的模型时写 false。 */
   defaultModelCustom?: boolean;
+  /** 智能模式的判断模型，覆盖 bot 层的（s23c）。`backend` 一定是存的时候群的后端；群后来换了后端，
+   * 这一项不再适用、也不删。手改坏了当没设（parseStoredJudge）。 */
+  judge?: JudgeSelectionStored;
 }
 
 /**

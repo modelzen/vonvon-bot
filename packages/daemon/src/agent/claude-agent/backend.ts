@@ -16,6 +16,8 @@ import type {
   BackendLogin,
   BackendProbe,
   GenerateSessionTitleOptions,
+  JudgeCall,
+  JudgeCallOutput,
   ModelInfo,
   PermissionMode,
   ReasoningEffort,
@@ -24,6 +26,8 @@ import type {
   ThreadHistory,
   ThreadSummary,
 } from '../types';
+import { JudgeCallError } from '../types';
+import { claudeErrorKind, errorKindFromText } from '../error-kind';
 import { BRIDGE_DEVELOPER_INSTRUCTIONS } from '../bridge-instructions';
 import { BackendNotInstalledError, isBackendDepInstalled, installedBackendVersion, loadBackendDep } from '../backend-loader';
 import { permissionOptions } from './permission';
@@ -183,6 +187,39 @@ export async function consumeClaudeTitleQuery(query: Query): Promise<string | un
     return titleFromStructuredOutput(message.structured_output) ?? parseGeneratedTitle(message.result);
   }
   throw new Error('Claude title query closed before returning a result');
+}
+
+/** A judge failure: an `assistant.error` code is structured (it may start a cooldown), a kind only
+ * read from the text is not (design 3.1). */
+function claudeJudgeError(code: unknown, message: string): JudgeCallError {
+  const coded = code === 'model_not_found' ? 'model' : claudeErrorKind(code);
+  if (coded) return new JudgeCallError(coded, message, true);
+  return new JudgeCallError(errorKindFromText(message) ?? 'failed', message, false);
+}
+
+/** Consume a judge query to its result. Exported for the mock-only unit test. */
+export async function consumeClaudeJudgeQuery(query: Query): Promise<JudgeCallOutput> {
+  let code: unknown;
+  try {
+    for await (const message of query) {
+      if (message.type === 'assistant' && message.error) code = message.error;
+      if (message.type !== 'result') continue;
+      if (message.subtype !== 'success') throw claudeJudgeError(code, message.errors.join('; ') || `Claude 判断失败：${message.subtype}`);
+      const u = message.usage;
+      return {
+        text: message.result,
+        structured: message.structured_output,
+        usage: {
+          input: (u?.input_tokens ?? 0) + (u?.cache_creation_input_tokens ?? 0) + (u?.cache_read_input_tokens ?? 0),
+          cached: u?.cache_read_input_tokens ?? 0,
+          output: u?.output_tokens ?? 0,
+        },
+      };
+    }
+  } catch (error) {
+    throw error instanceof JudgeCallError ? error : claudeJudgeError(code, error instanceof Error ? error.message : String(error));
+  }
+  throw claudeJudgeError(code, 'Claude 判断没有返回结果');
 }
 
 function withAbortDeadline<T>(
@@ -435,6 +472,46 @@ export class ClaudeAgentBackend implements AgentBackend {
       );
     } finally {
       query.close();
+    }
+  }
+
+  /**
+   * One smart-mode judgement (design 3.3): a single turn of the helper options (no tools, MCP, hooks,
+   * skills, saved session or personal CLAUDE.md) whose system prompt is replaced whole by the string
+   * `call.system`, which works on a claude.ai login (s23c spike). No effort turns thinking off; Haiku
+   * 5.5 accepts that and still thinks a little. Settles only after `query.close()`, so the judge
+   * layer gives the slot back once the CLI is gone.
+   */
+  async judge(call: JudgeCall): Promise<JudgeCallOutput> {
+    let sdk: ClaudeSdkFacade;
+    try {
+      sdk = await this.sdkLoader();
+    } catch (error) {
+      if (error instanceof BackendNotInstalledError) throw new JudgeCallError('unavailable', '还没下载 Claude Agent SDK', false);
+      throw error;
+    }
+    // aborted while the SDK loaded: start no CLI
+    if (call.signal.aborted) throw new JudgeCallError('aborted', '判断已放弃', false);
+    const abortController = new AbortController();
+    const onAbort = (): void => abortController.abort(call.signal.reason);
+    call.signal.addEventListener('abort', onAbort, { once: true });
+    let query: Query | undefined;
+    try {
+      query = sdk.query({
+        prompt: call.input,
+        options: {
+          ...helperQueryOptions(call.cwd),
+          systemPrompt: call.system,
+          model: call.model,
+          ...(call.effort ? { effort: call.effort as EffortLevel } : { thinking: { type: 'disabled' as const } }),
+          outputFormat: { type: 'json_schema', schema: call.schema },
+          abortController,
+        },
+      });
+      return await consumeClaudeJudgeQuery(query);
+    } finally {
+      call.signal.removeEventListener('abort', onAbort);
+      query?.close();
     }
   }
 

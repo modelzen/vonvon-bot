@@ -222,7 +222,8 @@ export function parseVerdict(
   for (const candidate of [asObject(output.structured), parseText(output.text ?? '')]) {
     const decision = candidate?.decision;
     if (typeof decision !== 'string' || !(JUDGE_ALLOWED[variant] as readonly string[]).includes(decision)) continue;
-    const raw = typeof candidate?.reason === 'string' ? candidate.reason : '';
+    // Haiku has left tag debris in a schema-valid reason ("…更合适</reason>\n</invoke>", s23c spike): cut from the first tag.
+    const raw = typeof candidate?.reason === 'string' ? candidate.reason.replace(/<\/?[A-Za-z][\s\S]*$/, '') : '';
     const chars = [...raw.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').replace(/\s+/g, ' ').trim()];
     // at most REASON_MAX code points, the ellipsis included
     const reason = chars.length > REASON_MAX ? `${chars.slice(0, REASON_MAX - 1).join('')}…` : chars.join('');
@@ -230,3 +231,7 @@ export function parseVerdict(
   }
   return undefined;
 }
+
+/** What else a Codex judgement's model sees (the settings view's `smartPrompt.backendNote`). A Claude
+ * judgement's system prompt is SMART.md plus the format lines, nothing more. */
+export const JUDGE_CODEX_NOTE = 'Codex 判断时还带 vonvon 的两行基础指令（换掉了 Codex 自带的系统提示词）和你的 ~/.codex/AGENTS.md（关不掉）';

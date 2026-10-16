@@ -91,7 +91,8 @@ describe('judge', () => {
     const kinds: JudgeErrorKind[] = ['auth', 'quota', 'version', 'model', 'network', 'failed', 'unavailable'];
     for (const kind of kinds) {
       const f = fakeBackend();
-      f.answer(async () => { throw new JudgeCallError(kind, `boom ${kind}\nsecond line`, true); });
+      // not structured, so no cooldown repeats the first failure (judge-cooldown.test.ts)
+      f.answer(async () => { throw new JudgeCallError(kind, `boom ${kind}\nsecond line`, false); });
       const judge = make(f.backend);
       for (const variant of ['main', 'mentioned', 'topic'] as const) {
         const result = await judge.judge(req(variant));

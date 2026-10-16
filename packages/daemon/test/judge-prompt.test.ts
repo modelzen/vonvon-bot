@@ -150,6 +150,10 @@ describe('judge prompt', () => {
     expect(parseVerdict('main', { text: '好的：{"decision":"skip","reason":"闲聊"} 完' })).toEqual({ decision: 'skip', reason: '闲聊' });
     expect(parseVerdict('topic', { text: '{"decision":"skip"}', structured: { decision: 'reply', reason: 'r' } })).toEqual({ decision: 'reply', reason: 'r' });
     expect(parseVerdict('topic', { text: '{"decision":"reply"}' })).toEqual({ decision: 'reply', reason: '' });
+    // tag debris Haiku left in a schema-valid reason (s23c spike)
+    expect(parseVerdict('main', { text: '', structured: { decision: 'topic', reason: '开新话题更合适</reason>\n</invoke>\n' } })).toEqual({ decision: 'topic', reason: '开新话题更合适' });
+    expect(parseVerdict('main', { text: '', structured: { decision: 'topic', reason: ' 要查日志 <parameter name="x">' } })!.reason).toBe('要查日志');
+    expect(parseVerdict('main', { text: '', structured: { decision: 'main', reason: '1 < 2 也算' } })!.reason).toBe('1 < 2 也算');
     // at most 80 characters, the ellipsis included
     const long = parseVerdict('main', { text: `{"decision":"main","reason":"a\\u0001\\n  b${'长'.repeat(100)}"}` });
     expect(long).toEqual({ decision: 'main', reason: `a b${'长'.repeat(76)}…` });

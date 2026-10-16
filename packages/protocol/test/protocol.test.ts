@@ -136,6 +136,36 @@ describe("pinned contract extraction", () => {
     expect(save("response", {noMention:true})).toBe(true);
     expect(save("compact", {autoCompact:false})).toBe(false);
   });
+  it("s23c: the judge section, smartPrompt and judgeByBackend are optional in views; only default and llm save", () => {
+    const section = (value: unknown) => ({stored:value,effective:value,revision:"r1",access:{kind:"writable"},apply:[]});
+    const old = fixture("agent-settings.json") as { sections: Record<string, unknown> };
+    expect(agentViewSchema.parse(old).sections.judge).toBeUndefined();
+    const llm = {kind:"llm",backend:"codex-appserver",model:"gpt-6-luna",effort:"low"};
+    const prompt = {source:"default",path:"/p",text:"t",formatLines:{main:"a",mentioned:"b",topic:"c"},inputExample:"x",maxLength:8000};
+    const parsed = agentViewSchema.parse({ ...old, sections: { ...old.sections, judge: section({selection:llm}) }, smartPrompt: prompt,
+      judgeByBackend: {"codex-appserver":{model:"gpt-6-luna",effort:"low",source:"default"},"claude-agent":{model:"haiku",source:"bot"}} });
+    expect(parsed.sections.judge?.effective.selection).toEqual(llm);
+    expect(parsed.judgeByBackend?.["claude-agent"]).toEqual({model:"haiku",source:"bot"});
+    expect(agentViewSchema.safeParse({ ...old, sections: { ...old.sections, judge: section({selection:{kind:"decision",provider:"openai",model:"x"}}) } }).success).toBe(false);
+    const project = {scope:{kind:"project",botId:"cli_fixture",projectName:"fixture"},sections:{
+      permission:section({mode:"qa",guestMode:"qa",network:false}),response:section({noMention:false}),model:section({selection:{kind:"default"}}),
+    },identity:{chatId:"oc_fixture",backend:"codex-appserver",cwd:"/tmp",kind:"multi"},members:{openIds:[],revision:"r1"}};
+    expect(projectViewSchema.parse(project).sections.judge).toBeUndefined();
+    expect(projectViewSchema.parse({ ...project, sections: { ...project.sections, judge: section({selection:{kind:"default"}}) }, smartPrompt: { ...prompt, error: "SMART.md 是符号链接" } }).smartPrompt?.error).toBe("SMART.md 是符号链接");
+
+    const save = (kind: string, patch: unknown) => requestSchema.safeParse({type:"request",id:"1",method:"settings",payload:{type:"save",edit:{
+      scope: kind === "agent" ? {kind,botId:"cli_fixture"} : {kind,botId:"cli_fixture",projectName:"fixture"},section:"judge",revision:"r1",patch}}}).success;
+    for (const kind of ["agent", "project"]) {
+      expect(save(kind, {selection:{kind:"default"}})).toBe(true);
+      expect(save(kind, {selection:{kind:"llm",model:"my-gw/qwen3-coder",custom:true}})).toBe(true);
+      expect(save(kind, {selection:llm})).toBe(true);
+      expect(save(kind, {selection:{kind:"decision",provider:"openai",model:"x"}})).toBe(false);
+      expect(save(kind, {selection:{kind:"llm",model:"m",extra:1}})).toBe(false);
+    }
+    const models = (purpose: string) => requestSchema.safeParse({type:"request",id:"1",method:"settings",payload:{type:"models",query:{botId:"cli_fixture",backend:"claude-agent",purpose}}}).success;
+    expect(models("judge")).toBe(true);
+    expect(models("decision")).toBe(false);
+  });
   it("has one permission tier per group (s15c): no guestMode edit, no member in setPermission", () => {
     const scope = {kind:"project",botId:"cli_fixture",projectName:"fixture"};
     const save = (patch: unknown) => requestSchema.safeParse({type:"request",id:"1",method:"settings",payload:{type:"save",edit:{scope,section:"permission",revision:"r1",patch}}}).success;
