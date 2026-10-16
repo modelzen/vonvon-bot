@@ -109,15 +109,18 @@ function oneLine(text: string, max = NAME_MAX): string {
   return cut(cleanLine(text), max) || '某人';
 }
 
-const BOT_SUFFIX = /(?:\s*[（(]\s*bot\s*[）)])+$/i;
+const BOT_SUFFIX = /(?:\s*[（(]\s*[bｂ][oｏ][tｔ]\s*[）)])+$/i;
 
 /** A person's or another bot's display name, so neither can pass for this bot (你) or a person for a
- * bot: a trailing （bot） is dropped and a person named exactly 你 is written “你”. */
+ * bot. A trailing （bot）, in ASCII or fullwidth letters, is dropped. A name starting with 你 is quoted
+ * (“你：…”), since only this bot's own lines begin with a bare 你. A person's name still ending in bot
+ * (小码【bot】 loses its 【】 and becomes 小码bot) is quoted too. */
 function speakerName(name: string, from: 'bot' | 'user'): string {
   const bare = cleanLine(name).replace(BOT_SUFFIX, '').trim();
   const shown = bare ? cut(bare, NAME_MAX) : '某人';
-  if (from === 'bot') return `${shown}（bot）`;
-  return shown === '你' ? '“你”' : shown;
+  const botLike = from === 'user' && /bot$/i.test(shown.normalize('NFKC'));
+  const quoted = shown.startsWith('你') || botLike ? `“${shown}”` : shown;
+  return from === 'bot' ? `${quoted}（bot）` : quoted;
 }
 
 const MENTIONS_MAX = 10;
