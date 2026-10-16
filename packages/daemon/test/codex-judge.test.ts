@@ -25,12 +25,14 @@ beforeEach(async () => {
 // A fake `codex app-server`. Every request goes to `<script>.log` with the pid. `MODE:<m>` in
 // developerInstructions steers thread/start, in the turn input steers the turn. Files next to the
 // script: `.mcp` (config/read lists, one per call, the last repeats; thread/start rejects names
-// not in the last), `.skills`, `.config-error`, `.init-delay`, `.model-list-error`, `.exit-on-start`.
+// not in the last), `.skills`, `.config-error`, `.init-delay`, `.model-list-error`, `.exit-on-start`,
+// `.version` (what `--version` prints; that run is not counted in `.pids`).
 const FAKE = String.raw`#!/usr/bin/env node
 const fs = require('fs');
 const base = __filename;
-fs.appendFileSync(base + '.pids', process.pid + '\n');
 const read = (name, fallback) => { try { return JSON.parse(fs.readFileSync(base + '.' + name, 'utf8')); } catch { return fallback; } };
+if (process.argv.includes('--version')) { process.stdout.write(read('version', 'codex-cli 0.163.0') + '\n'); process.exit(0); }
+fs.appendFileSync(base + '.pids', process.pid + '\n');
 if (read('exit-on-start', false)) process.exit(3);
 const send = (o) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...o }) + '\n');
 const reply = (id, result) => send({ id, result });
@@ -97,6 +99,8 @@ function handle(msg) {
     const started = { method: 'turn/started', params: { threadId, turn: { id: turnId, status: 'inProgress', items: [], error: null } } };
     const ok = () => reply(msg.id, { turn: { id: turnId, status: 'inProgress', items: [], error: null } });
     if (mode === 'exit') process.exit(1);
+    if (mode === 'bad-turn-start') return reply(msg.id, {}); // no turn, and nothing follows
+    if (mode === 'null-turn-start') { reply(msg.id, null); send(started); return turnEnd(threadId, turnId, text).forEach(send); }
     if (mode === 'early') { [started, ...turnEnd(threadId, turnId, text)].forEach(send); return ok(); }
     if (mode.startsWith('slow-turn-start=')) return later(msOf(mode), ok);
     ok();
@@ -105,6 +109,10 @@ function handle(msg) {
     if (mode === 'quota') {
       send({ method: 'error', params: { threadId, turnId, willRetry: false, error: { message: 'You have hit your usage limit', codexErrorInfo: 'usageLimitExceeded', additionalDetails: null } } });
       return send(failed(threadId, turnId, 'You have hit your usage limit', 'usageLimitExceeded'));
+    }
+    if (mode === 'bad-usage') { // a usage update without last, then a normal end
+      send({ method: 'thread/tokenUsage/updated', params: { threadId, turnId, tokenUsage: {} } });
+      return later(50, () => turnEnd(threadId, turnId, text).forEach(send));
     }
     if (mode === 'fail') return send(failed(threadId, turnId, (/ERR:(.*)/.exec(text) || [])[1], null));
     if (mode === 'interleave') { // each thread in order, threads interleaved
@@ -249,6 +257,37 @@ describe('Codex 判断进程：参数和结果', () => {
     expect(error).toBeInstanceOf(JudgeCallError);
     expect(error).toMatchObject({ kind: 'failed', structured: false, message: expect.stringContaining('thread/start 回包异常') });
     expect((error as Error).message).not.toContain('退出了');
+    expect(alive(fake.pids()[0]!)).toBe(true);
+    expect((await judge(call())).cold).toBe(false);
+  });
+
+  it.each(['bad-turn-start', 'null-turn-start'])('turn/start 回包没有 turn.id（%s）→ 马上 failed、写明回包异常，没有 unhandledRejection，进程照用', async mode => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const { signal } = abortAfter(3000);
+      const begun = Date.now();
+      const error = await judge(call(mode, { signal })).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(JudgeCallError);
+      expect(error).toMatchObject({ kind: 'failed', structured: false, message: expect.stringContaining('turn/start 回包异常') });
+      expect(Date.now() - begun).toBeLessThan(2000);
+      await sleep(100);
+      expect(unhandled).toEqual([]);
+      expect(alive(fake.pids()[0]!)).toBe(true);
+      expect((await judge(call())).cold).toBe(false);
+      expect(proc.judgeProcessStats().stuck).toBe(0);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
+  it('一条线程的通知缺字段 → 只这一条 failed（通知回包异常）；同进程另一条照常做完，不杀进程、不退避', async () => {
+    const other = judge(call('slow=800'));
+    await vi.waitFor(() => expect(fake.requests('turn/start')).toHaveLength(1));
+    await expect(judge(call('bad-usage'))).rejects.toMatchObject({ kind: 'failed', message: expect.stringContaining('通知回包异常') });
+    expect((await other).text).toBe('final:MODE:slow=800');
+    expect(fake.pids()).toHaveLength(1);
     expect(alive(fake.pids()[0]!)).toBe(true);
     expect((await judge(call())).cold).toBe(false);
   });
@@ -424,6 +463,19 @@ describe('Codex 判断进程：错误归类', () => {
     expect(error).toBeInstanceOf(JudgeCallError);
     expect(error).toMatchObject({ kind, structured, message });
     expect(readVersion).toHaveBeenCalledTimes(message.includes('not supported') ? 1 : 0);
+  });
+});
+
+describe('Codex 判断进程：原地升级后的版本', () => {
+  it('"not supported" 按新进程读到的新版本归类，不用 locate 缓存里的旧版本', async () => {
+    const message = "The 'gpt-6-luna' model is not supported when using Codex with a ChatGPT account.";
+    fake.set('version', 'codex-cli 0.150.0');
+    await expect(judge(call(`fail\nERR:${message}`))).rejects.toMatchObject({ kind: 'version' });
+    // upgraded in place: same path, new fingerprint, new version
+    fake.set('version', 'codex-cli 0.163.0');
+    appendFileSync(fake.bin, '\n# upgraded\n');
+    await expect(judge(call(`fail\nERR:${message}`))).rejects.toMatchObject({ kind: 'model' });
+    expect(fake.pids()).toHaveLength(2);
   });
 });
 

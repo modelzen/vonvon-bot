@@ -48,7 +48,8 @@ export interface JudgeProcessOptions {
   idleMs: number;
   backoffMs: readonly number[];
   resolveBin(): string | null;
-  /** read once per process, only when a "not supported" error needs it */
+  /** read once per process, only when a "not supported" error needs it; forced past the locate
+   * cache, which cannot see an in-place upgrade */
   version(bin: string): Promise<string | null>;
   now(): number;
 }
@@ -59,7 +60,7 @@ const DEFAULTS: JudgeProcessOptions = {
   idleMs: JUDGE_IDLE_MS,
   backoffMs: JUDGE_BACKOFF_MS,
   resolveBin: () => resolveCodexBin(),
-  version: bin => codexVersionAsync(bin),
+  version: bin => codexVersionAsync(bin, { force: true }),
   now: Date.now,
 };
 let opts = DEFAULTS;
@@ -99,6 +100,11 @@ const goneError = (): JudgeCallError => poolAccepting()
   ? new JudgeCallError('failed', 'Codex 判断进程退出了', false)
   : closedError();
 const messageOf = (error: unknown): string => error instanceof Error ? error.message : String(error);
+/** The turn id of a `turn/start` reply, if the reply has one (a malformed reply must not throw). */
+const turnIdOf = (reply: TurnStartResponse | null | undefined): string | undefined => {
+  const id = (reply as { turn?: { id?: unknown } } | null | undefined)?.turn?.id;
+  return typeof id === 'string' && id ? id : undefined;
+};
 
 function startBackoff(): void {
   const ms = opts.backoffMs[Math.min(backoffStep, opts.backoffMs.length - 1)] ?? 0;
@@ -205,7 +211,16 @@ async function dispatch(slot: Slot): Promise<void> {
   try {
     for await (const n of slot.client.stream()) {
       const id = threadOf(n);
-      if (id) slot.watches.get(id)?.accept(n);
+      const watch = id ? slot.watches.get(id) : undefined;
+      if (!watch) continue;
+      try {
+        watch.accept(n);
+      } catch (error) {
+        // A notification in a shape we don't expect fails only its own judgement; the process is fine.
+        if (watch.finished) continue;
+        log.fail('judge', error, { phase: 'notification', method: n.method });
+        watch.fail(new JudgeCallError('failed', `Codex 通知回包异常（${n.method}）：${messageOf(error).slice(0, 120)}`, false));
+      }
     }
   } catch (error) {
     log.fail('judge', error, { phase: 'dispatch' });
@@ -413,10 +428,18 @@ async function judgeOn(slot: Slot, call: JudgeCall, cold: boolean): Promise<Judg
       outputSchema: call.schema,
       summary: 'none',
     });
-    turnStart.then(reply => watch.setTurnId(reply.turn.id), () => undefined);
+    turnStart.then(reply => {
+      const id = turnIdOf(reply);
+      if (id) watch.setTurnId(id);
+    }, () => undefined);
     const outcome = Promise.race([
       watch.done,
-      turnStart.then(() => watch.done, async (error: unknown) => {
+      turnStart.then(reply => {
+        if (!turnIdOf(reply)) {
+          throw new JudgeCallError('failed', `Codex turn/start 回包异常：${JSON.stringify(reply ?? null).slice(0, 120)}`, false);
+        }
+        return watch.done;
+      }, async (error: unknown) => {
         throw error instanceof JsonRpcError ? await classify(slot, error.message) : goneError();
       }),
     ]);
@@ -428,7 +451,7 @@ async function judgeOn(slot: Slot, call: JudgeCall, cold: boolean): Promise<Judg
     } catch (error) {
       if (!signal.aborted) throw error;
       if (!watch.finished) {
-        const turnId = await Promise.race([watch.turnId, turnStart.then(reply => reply.turn.id)]).catch(() => undefined);
+        const turnId = await Promise.race([watch.turnId, turnStart.then(turnIdOf)]).catch(() => undefined);
         if (turnId && !watch.finished) sendQuietly(slot, 'turn/interrupt', { threadId, turnId });
       }
       throw signal.reason;
