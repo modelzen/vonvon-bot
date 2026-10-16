@@ -5229,6 +5229,8 @@ export function createOrchestrator(
   interface QueuedCardHandle {
     stream: RunCardStream;
     msgId: string;
+    /** The slot came while a shutdown began: the card says the bot stopped, as a cancel at shutdown does (s18c). */
+    stopped: () => void;
   }
 
   /**
@@ -5287,6 +5289,15 @@ export function createOrchestrator(
       log.fail('card', err, { phase: 'queued-card' });
     }
     log.info('intake', 'run-queued', { position: q.position(), key: activeKey });
+    /** The card's last word for a run that never starts. */
+    const endCard = (): void => {
+      if (!msgId) return;
+      runsByCard.delete(msgId);
+      runStreams.delete(msgId);
+      completionReminderRefreshers.delete(msgId);
+      // At shutdown nobody cancelled it: the card says the bot stopped, and the bot says so again once back (s18c).
+      void trackTask(stream.updateCard(channel, queueCard({ cancelled: true, dropped: state.queue.length, ...(shuttingDown ? { stopped: true } : {}) })));
+    };
     // 等待期 ⏹ = 移除 waiter + 释放预订。槽已到手的瞬间 cancel() 返回 false →
     // 让位给运行期 interrupt（launchRun 每轮重装）。
     state.interrupt = () => {
@@ -5296,21 +5307,17 @@ export function createOrchestrator(
       if (opts.knownThreadId) sessions.delete(opts.knownThreadId);
       // 还没跑过任何 turn：直接回收进程。持久化记录保留，重发消息经 resume 兜底。
       void trackTask(opts.thread.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
-      if (msgId) {
-        runsByCard.delete(msgId);
-        runStreams.delete(msgId);
-        completionReminderRefreshers.delete(msgId);
-        // At shutdown nobody cancelled it: the card says the bot stopped, and the bot says so again once back (s18c).
-        void trackTask(stream.updateCard(channel, queueCard({ cancelled: true, dropped: state.queue.length, ...(shuttingDown ? { stopped: true } : {}) })));
-      }
+      endCard();
       reaction?.done();
       log.info('card', 'action', { actionId: 'run.stop', queuedCancel: true });
     };
+    // A shutdown that began while the card was being created found no interrupt to call: it is cancelled now (s18c).
+    if (shuttingDown) state.interrupt();
     const release = await q.acquired;
     state.interrupt = undefined;
     state.waiting = undefined;
     if (!release) return null; // 已取消：占位卡已翻终态，预订已释放
-    return { release, queuedCard: msgId ? { stream, msgId } : undefined };
+    return { release, queuedCard: msgId ? { stream, msgId, stopped: endCard } : undefined };
   }
 
   async function launchRun(
@@ -5339,6 +5346,7 @@ export function createOrchestrator(
       return;
     }
     if (shuttingDown) {
+      slot.queuedCard?.stopped();
       slot.release();
       active.delete(activeKey);
       reaction?.done();
@@ -6091,6 +6099,7 @@ export function createOrchestrator(
     const slot = await acquireRunSlot(opts, state, activeKey);
     if (!slot) return;
     if (shuttingDown) {
+      slot.queuedCard?.stopped();
       slot.release();
       active.delete(activeKey);
       await opts.thread.close();

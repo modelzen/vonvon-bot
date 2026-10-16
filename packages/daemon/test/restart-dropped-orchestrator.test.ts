@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -149,6 +149,14 @@ const seed = (items: DroppedOrigin[], at = Date.now()) => dropped.recordDroppedS
 const place = (chat: string, message: string, at: number, fields: Partial<DroppedOrigin> = {}): DroppedOrigin =>
   ({ chatId: chat, messageId: message, at, replyInThread: true, place: 'topic', ...fields });
 const http = (status: number, data?: unknown) => Object.assign(new Error(`Request failed with status code ${status}`), { isAxiosError: true, response: { status, data } });
+const stoppedCards = () => fake.final.mock.calls.filter(call => JSON.stringify(call[1]).includes('bot 停止运行了，这一轮没开始'));
+/** The next queue card is created only when `created` resolves; other cards at once. */
+function holdQueueCard() {
+  const created = deferred<string>();
+  fake.createCard.mockImplementation(async (...args: unknown[]) => JSON.stringify(args[2]).includes('排队中') ? created.promise : 'card');
+  const asked = () => until(() => expect(fake.createCard.mock.calls.some(call => JSON.stringify(call[2]).includes('排队中'))).toBe(true));
+  return { created, asked };
+}
 
 describe('a shutdown keeps what it drops (s18c)', () => {
   it('① a single group\'s main area: the newest queued message, two of them, quoted in place', async () => {
@@ -222,6 +230,78 @@ describe('a shutdown keeps what it drops (s18c)', () => {
     expect(JSON.stringify(card)).not.toContain('已取消排队');
     expect(card?.config?.summary?.content).toBe('bot 停止运行了');
     expect(two.consumed).toHaveLength(0);
+  });
+
+  it('④ a shutdown while the queue card is still being created: the card says the bot stopped once it exists', async () => {
+    const one = thread(), two = thread();
+    fake.backend.resumeThread.mockResolvedValueOnce(one.t).mockResolvedValueOnce(two.t);
+    const o = setup({ maxConcurrentRuns: 1 });
+    await o.onMessage(message('first'));
+    await until(() => expect(one.consumed).toHaveLength(1));
+    // The running turn keeps its slot through the close until it is let go below.
+    one.t.close.mockImplementation(async () => undefined);
+    const card = holdQueueCard();
+    const waiting = message('second topic', { threadId: 'omt_topic_2' });
+    await o.onMessage(waiting);
+    await card.asked();
+    const closing = o.shutdown();
+    expect(entries()).toMatchObject([{ messageId: waiting.messageId, count: 1 }]);
+    card.created.resolve('card_queued');
+    // Cancelled as soon as the card exists, not when the slot comes.
+    await until(() => expect(stoppedCards()).toHaveLength(1));
+    expect(two.t.close).toHaveBeenCalled();
+    one.turns[0]!.resolve();
+    await closing;
+    expect(stoppedCards()).toHaveLength(1);
+    expect(two.consumed).toHaveLength(0);
+  });
+
+  it('④ the slot came while the queue card was being created, then a shutdown: the card says the bot stopped', async () => {
+    const one = thread(), two = thread();
+    fake.backend.resumeThread.mockResolvedValueOnce(one.t).mockResolvedValueOnce(two.t);
+    const o = setup({ maxConcurrentRuns: 1 });
+    await o.onMessage(message('first'));
+    await until(() => expect(one.consumed).toHaveLength(1));
+    const card = holdQueueCard();
+    const waiting = message('second topic', { threadId: 'omt_topic_2' });
+    await o.onMessage(waiting);
+    await card.asked();
+    one.turns[0]!.resolve();
+    // The first run gives its slot back in the same step that logs its final card.
+    await until(() => expect(fake.log.info).toHaveBeenCalledWith('card', 'final', expect.anything()));
+    const closing = o.shutdown();
+    // Not started yet: kept.
+    expect(entries()).toMatchObject([{ messageId: waiting.messageId, count: 1 }]);
+    card.created.resolve('card_queued');
+    await closing;
+    expect(stoppedCards()).toHaveLength(1);
+    expect(two.consumed).toHaveLength(0);
+  });
+
+  it('④ a run that waited for its slot and started is not kept', async () => {
+    const one = thread(), two = thread();
+    fake.backend.resumeThread.mockResolvedValueOnce(one.t).mockResolvedValueOnce(two.t);
+    const o = setup({ maxConcurrentRuns: 1 });
+    await o.onMessage(message('first'));
+    await until(() => expect(one.consumed).toHaveLength(1));
+    await o.onMessage(message('second topic', { threadId: 'omt_topic_2' }));
+    await until(() => expect(fake.log.info).toHaveBeenCalledWith('intake', 'run-queued', expect.anything()));
+    one.turns[0]!.resolve();
+    await until(() => expect(two.consumed).toHaveLength(1));
+    await o.shutdown();
+    expect(existsSync(file)).toBe(false);
+  });
+
+  it('⑭ a dropped.json it cannot write is logged, and the shutdown goes on', async () => {
+    writeFileSync(join(root, 'blocker'), '');
+    const run = thread(); fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup({ droppedFile: join(root, 'blocker', 'dropped.json') });
+    await o.onMessage(message('first'));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    await o.onMessage(message('queued')); await queued(1);
+    await o.shutdown();
+    expect(fake.log.fail).toHaveBeenCalledWith('bridge', expect.objectContaining({ code: 'ENOTDIR' }), { phase: 'dropped-record' });
+    expect(run.t.close).toHaveBeenCalled();
   });
 
   it('⑧ merges what two shutdowns drop when the bot never connected between them', async () => {

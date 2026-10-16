@@ -222,3 +222,53 @@ it('answers what the last shutdown dropped once connected, and closes the long c
   expect(fixture.disconnect).toHaveBeenCalledOnce();
   expect(fixture.lockHeld).toBe(false);
 });
+
+it('a supervised child still reports a dropped message whose reply settles during the close (s18c)', async () => {
+  // A bot child under the supervisor: what it sends over IPC is recorded, and each send's callback is called.
+  const sent: unknown[] = [];
+  const child = Object.create(process) as NodeJS.Process;
+  Object.defineProperties(child, {
+    send: { value: (message: unknown, ...rest: unknown[]) => {
+      sent.push(message);
+      (rest.find(item => typeof item === 'function') as ((error: Error | null) => void) | undefined)?.(null);
+      return true;
+    } },
+    connected: { value: true },
+    // Its own listeners: `process.on('message')` must not reach the real process.
+    _events: { value: Object.create(null), writable: true },
+    _eventsCount: { value: 0, writable: true },
+  });
+  vi.stubGlobal('process', child);
+  const { runHostRuntime } = await import('../src/host/bootstrap');
+  const { verification } = await pendingVerification();
+  const dropped = await seedDropped();
+  fixture.connect.mockResolvedValue(undefined);
+  const answered = deferred<unknown>();
+  fixture.reply.mockReturnValueOnce(answered.promise);
+  const stop = deferred<void>();
+  const control: ShutdownControl = {
+    requested: false,
+    waitForRequest: () => stop.promise,
+    requestStop() {},
+    requestRestart() {},
+    completeShutdown: async release => { await release(); },
+    dispose() {},
+  };
+  const running = outcome(runHostRuntime({ bot: 'startup-drain', managed: false, control }));
+  try {
+    await vi.waitFor(() => expect(fixture.reply).toHaveBeenCalledOnce(), COLD);
+    await vi.waitFor(() => expect(fixture.membership).toHaveBeenCalledOnce());
+    stop.resolve();
+    // The close has begun, and waits for the verification: the reply's answer comes now.
+    await vi.waitFor(() => expect(fixture.disconnect).toHaveBeenCalledOnce());
+    answered.resolve({ code: 0 });
+    await vi.waitFor(() => expect(existsSync(dropped)).toBe(false));
+    expect(running.state()).toBe('pending');
+  } finally {
+    stop.resolve();
+    answered.resolve({ code: 0 });
+    verification.resolve({ code: 0, data: { is_in_chat: true } });
+    await running.settled;
+  }
+  expect(sent).toContainEqual({ fcb: 'fcb.diagnostics', event: { kind: 'notReplied', record: expect.objectContaining({ reason: 'restarted', groupId: 'oc_dropped', place: 'topic' }) } });
+});

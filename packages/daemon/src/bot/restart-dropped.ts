@@ -125,13 +125,26 @@ export class ReplyTimeoutError extends Error {
   constructor(ms: number) { super(`${Math.round(ms / 1000)} 秒没有响应`); this.name = 'ReplyTimeoutError'; }
 }
 export type ReplyFailure = { retry: boolean; detail?: string; scope?: string; recalled?: boolean; unexpected?: boolean };
+/** The SDK's own error when the token endpoint answers a 2xx without a token (`buildTokenError` in 1.71.1): a plain
+ * Error whose message alone carries Feishu's code, or `unknown` when the body had none. */
+const TOKEN_ERROR = /^failed to get \w+, code: ([^,]*), msg: ([\s\S]*)$/;
+
 /**
  * How a reply failed. The SDK throws an HTTP error (`response.status`, with Feishu's `{code, msg}` in `response.data`)
  * and resolves a 2xx with a code other than 0, which the caller throws with `code` and `msg` on it. A rate limit, 5xx,
- * 429, no answer and a timeout are tried again; any other refusal is not. Anything else is not Feishu's and not retried.
+ * 429, no answer and a timeout are tried again; any other refusal is not. A token the SDK could not get is judged as
+ * crash-notify judges it: a rate limit or a body with no code is tried again, another code is a refusal. Anything else
+ * is not Feishu's and not retried.
  */
 export function replyFailure(error: unknown): ReplyFailure {
   if (error instanceof ReplyTimeoutError) return { retry: true, detail: error.message };
+  const token = error instanceof Error ? TOKEN_ERROR.exec(error.message) : null;
+  if (token) {
+    const code = /^\d+$/.test(token[1]!) ? Number(token[1]) : undefined;
+    const msg = token[2]!.split('\n')[0]!.replace(/[\x00-\x1f\x7f]/g, '').trim();
+    const said = code === undefined ? '飞书没给错误码' : `飞书 ${code}${msg && msg !== 'no message' ? `：${msg}` : ''}`;
+    return { retry: code === undefined || FEISHU_RATE_LIMIT_CODES.has(code), detail: `没拿到 token，${said}`.slice(0, 120) };
+  }
   const status = (error as { response?: { status?: unknown } } | null)?.response?.status;
   const http = typeof status === 'number' ? status : undefined;
   const feishu = feishuError(error);

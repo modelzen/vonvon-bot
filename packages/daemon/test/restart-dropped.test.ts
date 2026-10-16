@@ -3,14 +3,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  DROPPED_MAX_AGE_MS, ReplyTimeoutError, droppedText, droppedUuid, readDropped, recordDroppedSync, replyFailure, settleDroppedSync,
-  type DroppedOrigin,
+  DROPPED_MAX_AGE_MS, ReplyTimeoutError, createDroppedReplies, droppedText, droppedUuid, readDropped, recordDroppedSync, replyFailure,
+  settleDroppedSync, type DroppedEntry, type DroppedOrigin,
 } from '../src/bot/restart-dropped';
 
 let dir: string;
 let file: string;
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'vonvon-dropped-')); file = join(dir, 'dropped.json'); });
-afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => { vi.useRealTimers(); rmSync(dir, { recursive: true, force: true }); });
 
 const NOW = 1_760_600_000_000;
 const origin = (chat: string, message: string, at: number, fields: Partial<DroppedOrigin> = {}): DroppedOrigin =>
@@ -63,7 +63,9 @@ describe('dropped.json', () => {
     expect(readDropped(file, NOW).entries.map(entry => [entry.messageId, entry.count])).toEqual([['om_a2', 2]]);
     settleDroppedSync(file, { chatId: 'oc_a', messageId: 'om_a2' });
     expect(existsSync(file)).toBe(false);
-    for (const bad of ['{not json', JSON.stringify({ v: 2, entries: [] }), JSON.stringify({ v: 1, entries: [], pad: 'x'.repeat(70_000) })]) {
+    // The last is well-formed but past 64 KB (JSON.parse takes trailing blanks): the size alone turns it away.
+    const oversize = JSON.stringify({ v: 1, entries: [{ ...origin('a', 'a1', 1), count: 1, droppedAt: NOW }] }) + ' '.repeat(70_000);
+    for (const bad of ['{not json', JSON.stringify({ v: 2, entries: [] }), oversize]) {
       writeFileSync(file, bad);
       const onCorrupt = vi.fn();
       expect(readDropped(file, NOW, onCorrupt)).toEqual({ entries: [], stale: 0 });
@@ -128,5 +130,74 @@ describe('the reply', () => {
     expect(replyFailure(http(400, { code: 99991672, msg: 'scope required', error: { permission_violations: [{ subject: 'im:message:send_as_bot' }] } })))
       .toEqual({ retry: false, scope: 'im:message:send_as_bot', detail: '缺 im:message:send_as_bot' });
     expect(replyFailure(new TypeError("Cannot read properties of undefined (reading 'reply')"))).toMatchObject({ retry: false, unexpected: true });
+    // The SDK's own error when the token endpoint answers a 2xx without a token: judged by the code in its message.
+    const token = (code: string, msg: string) => new Error(`failed to get tenant_access_token, code: ${code}, msg: ${msg}`);
+    expect(replyFailure(token('99991400', 'request trigger frequency limit'))).toEqual({ retry: true, detail: '没拿到 token，飞书 99991400：request trigger frequency limit' });
+    expect(replyFailure(token('unknown', 'no message'))).toEqual({ retry: true, detail: '没拿到 token，飞书没给错误码' });
+    expect(replyFailure(token('10014', 'app secret invalid'))).toEqual({ retry: false, detail: '没拿到 token，飞书 10014：app secret invalid' });
+  });
+});
+
+describe('the replies, one group after another', () => {
+  const start = (reply: (entry: DroppedEntry, text: string, uuid: string) => Promise<void>, at = file) => {
+    const log = { info: vi.fn(), warn: vi.fn(), fail: vi.fn() };
+    const report = vi.fn();
+    return { replies: createDroppedReplies({ appId: 'cli_app', file: at, reply, report, log }), log, report };
+  };
+  const http503 = () => Object.assign(new Error('Request failed with status code 503'), { isAxiosError: true, response: { status: 503, data: '<html>' } });
+
+  it('⑪ gives a reply 10 seconds: the next group goes on, and the first is sent again a minute later under the same uuid', async () => {
+    vi.useFakeTimers({ now: NOW });
+    recordDroppedSync(file, [origin('a', 'a1', 2), origin('b', 'b1', 1)], NOW);
+    let hung = false;
+    const reply = vi.fn(async (entry: DroppedEntry, _text: string, _uuid: string) => {
+      if (entry.chatId === 'oc_a' && !hung) { hung = true; await new Promise(() => {}); }
+    });
+    const { replies, log, report } = start(reply);
+    replies.start();
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(reply.mock.calls.map(call => call[0].chatId)).toEqual(['oc_a']);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reply.mock.calls.map(call => call[0].chatId)).toEqual(['oc_a', 'oc_b']);
+    expect(log.warn).toHaveBeenCalledWith('bridge', 'dropped-retry', { chat: 'oc_a', attempt: 1, retryInMs: 60_000, detail: '10 秒没有响应' });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reply.mock.calls.map(call => call[0].chatId)).toEqual(['oc_a', 'oc_b', 'oc_a']);
+    expect(reply.mock.calls[2]![2]).toBe(reply.mock.calls[0]![2]);
+    expect(existsSync(file)).toBe(false);
+    expect(report).toHaveBeenCalledTimes(2);
+  });
+
+  it('⑫ schedules no retry after the shutdown: none waiting is sent, and one failing after it is not scheduled', async () => {
+    vi.useFakeTimers({ now: NOW });
+    recordDroppedSync(file, [origin('a', 'a1', 1)], NOW);
+    // A retry already waiting when the shutdown comes.
+    const failing = vi.fn(async () => { throw http503(); });
+    const first = start(failing);
+    first.replies.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(first.log.warn).toHaveBeenCalledWith('bridge', 'dropped-retry', expect.objectContaining({ attempt: 1 }));
+    first.replies.saveSync([], 'shutdown');
+    await vi.advanceTimersByTimeAsync(400_000);
+    expect(failing).toHaveBeenCalledOnce();
+    expect(readDropped(file, NOW).entries.map(entry => entry.messageId)).toEqual(['om_a1']);
+    // A reply still out when the shutdown comes, failing after it.
+    let fail!: (error: Error) => void;
+    const inFlight = vi.fn(() => new Promise<void>((_, reject) => { fail = reject; }));
+    const second = start(inFlight);
+    second.replies.start();
+    await vi.advanceTimersByTimeAsync(0);
+    second.replies.saveSync([], 'shutdown');
+    fail(http503());
+    await vi.advanceTimersByTimeAsync(400_000);
+    expect(inFlight).toHaveBeenCalledOnce();
+    expect(second.log.warn).not.toHaveBeenCalledWith('bridge', 'dropped-retry', expect.anything());
+    expect(readDropped(file, NOW).entries.map(entry => entry.messageId)).toEqual(['om_a1']);
+  });
+
+  it('⑬ a dropped.json it cannot write is logged, and saveSync returns', () => {
+    writeFileSync(join(dir, 'blocker'), '');
+    const { replies, log } = start(vi.fn(async () => undefined), join(dir, 'blocker', 'dropped.json'));
+    expect(() => replies.saveSync([origin('a', 'a1', 1)], 'shutdown')).not.toThrow();
+    expect(log.fail).toHaveBeenCalledWith('bridge', expect.objectContaining({ code: 'ENOTDIR' }), { phase: 'dropped-record' });
   });
 });

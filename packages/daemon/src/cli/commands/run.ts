@@ -171,13 +171,14 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
     await control.waitForRequest();
   } catch (error) { errors.push(error); }
   finally {
-    setDiagnosticsSink(undefined);
-    diagnostics?.close();
     const cleanup = await Promise.allSettled([closeOwnedProviders(async () => {
       const drained = await Promise.allSettled([Promise.resolve().then(() => api?.beginDrain())]);
       drained.push(...await Promise.allSettled([Promise.resolve().then(() => bridge?.shutdown())]));
       errors.push(...drained.filter(result => result.status === 'rejected').map(result => result.reason));
     })]);
+    // Only once the bridge is closed: a dropped message's reply settled during the close still reaches the page (s18c).
+    setDiagnosticsSink(undefined);
+    diagnostics?.close();
     cleanup.push(...await Promise.allSettled([control.completeShutdown(() => api?.release() ?? Promise.resolve())]));
     const failures = cleanup.filter((result) => result.status === 'rejected');
     errors.push(...failures.map(failure => failure.reason));
