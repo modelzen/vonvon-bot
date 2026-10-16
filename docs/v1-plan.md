@@ -529,7 +529,15 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s17 做法（daemon status）：第一行不变；暂停时加一行"已暂停：10 分钟内崩溃了 3 次，bot 都没有启动。查完原因后运行 vonvon daemon restart 恢复运行。"（没在跑时写"暂停期间 daemon 又出错退出，没有自动重启"；上次开机留下的暂停不显示，下次启动也不算暂停），再列 24 小时内最多 10 条记录。`--json` 多了 `paused` 和 `crashes`（总是数组）。只读文件，不问服务管理器，不建目录，因为每条 RPC 命令前都要跑它。
 - s17 做法（行数）：设计估出约 1,450 行，`service status` 那段先拆给 s17b；写完量出约 1,790 行，又把 bot 子进程的记录和快照里的 `application.crashes` 移到 s18（两样都是 s18 才用），AggregateError 逐条写日志移到 s17b，剩下约 1,500 行。
 - s17 和设计不一样的：除了上面移走的三样，暂停中又崩溃时暂停行里的次数沿用进入暂停时的；`daemon restart` 遇到还没准备好的 daemon 直接说"正在启动，稍后再试"，不等它；`pid-lock.ts` 没动，开机标识的读法放在 `D/host/crash-store.ts`；崩溃种类和文字先放在 daemon 里（daemon 用 zod 4，协议包是 zod 3），s18 搬进协议。
-- s17 JP-VPS 实测（2026-10-16，分离运行，临时数据目录）：kill -9 后 `daemon start`，连做三次，第四次启动进入暂停，`daemon status` 显示暂停和三条"被系统强制结束"，网页返回 200；`daemon restart` 换了 PID、端口不变、不再暂停、没有新记录；`daemon stop` 删掉 `run.json`、不加记录；`VONVON_TEST_CRASH=exception` 约 2 秒后退出，留下一条"程序出错"，下次启动没有重复的强制结束记录；前台 `daemon run` 收到 SIGHUP 退出 0、不留记录。systemd 和 launchd 管着的那几步（L1 到 L4b、Mac 检查）还没做。
+- s17 JP-VPS 实测（2026-10-16，分离运行，临时数据目录）：kill -9 后 `daemon start`，连做三次，第四次启动进入暂停，`daemon status` 显示暂停和三条"被系统强制结束"，网页返回 200；`daemon restart` 换了 PID、端口不变、不再暂停、没有新记录；`daemon stop` 删掉 `run.json`、不加记录；`VONVON_TEST_CRASH=exception` 约 2 秒后退出，留下一条"程序出错"，下次启动没有重复的强制结束记录；前台 `daemon run` 收到 SIGHUP 退出 0、不留记录。
+- s17 JP-VPS 实测（systemd，2026-10-16，用 3e91872 打的包装到临时前缀，临时数据目录）：
+  - `service install` 后在跑，`crash/` 里只有 `run.json`；`daemon stop` 后 unit 是 inactive，`run.json` 删了，没有记录；`daemon start` 由 systemd 拉起。
+  - 连续 `kill -9` 三次，每次从 kill 到新的 daemon 能答话 11 到 23 秒（`RestartSec=5` 加启动；同时机器上在跑 `npm ci`）。第三次以后进入暂停，三条"被系统强制结束"；60 秒内 PID 不变、`NRestarts` 停在 3，网页返回 200。
+  - 暂停中 `kill -9`，再占住它的端口：systemd 拉起一次，新的一次 `EADDRINUSE` 退出 0，unit 停在 inactive、`Result=success`，60 秒内 `NRestarts` 不涨；`daemon status` 显示 stopped 和"暂停期间 daemon 又出错退出，没有自动重启"，多一条强制结束和一条"出错退出"（都标暂停期间）。放开端口后 `daemon restart` 恢复，不再暂停。
+  - 再 kill 三次进入暂停，`daemon restart`：换了 PID、端口不变、"已恢复运行"，记录条数不变，网页 200。
+  - 心跳：`run.json` 的 `aliveAt` 每 60 秒更新；kill -9 后两分钟再启动，补的强制结束记录时间是 kill 前 17 秒的那次心跳，不是启动时间，带开机标识。
+  - `VONVON_TEST_CRASH=exception` 的那一套（分离运行）同上一条；`service uninstall` 后 unit 文件没了，`LoadState=not-found`。验收 daemon 前后是同一个进程。
+  - launchd 那几步等 Mac 检查。
 - s17 留下的：
   - 给 s18：bot 子进程的记录（处理器里按 `VONVON_HOST_RUN_ID`、`VONVON_HOST_CHAIN_ID` 记到主进程的运行下，supervisor 在子进程退出时清它那一类，一分钟最多一次，不然反复崩溃的 bot 一天能写几千条）；子进程被信号杀掉或起不来时由 supervisor 补记录；单个 bot 暂停用 `countInWindow` 按 bot 数；快照的 `application.crashes`（暂停和 24 小时内的记录，每次重建只 stat 一次目录），`bot list`、`bot status` 第一行显示暂停；"刚才崩溃过一次"的私聊由最早加入的 bot 在子进程里读记录；私聊 10 分钟一条的限额要另存一个文件。
   - 给 s18：重启或停止时丢掉的排队消息（`shutdown_dropped` 记了条数的那些），owner 2026-10-16 让 Claude 定：关闭前把它们的消息 id 和所在群、话题记下来，bot 起来以后在原处回一句"刚才重启了，这条没处理，请再发一次"，每个群最多一条，诊断页"最近没回的消息"记一条（product.md 3.10）。
