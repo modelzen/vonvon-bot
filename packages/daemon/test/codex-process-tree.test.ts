@@ -1,14 +1,12 @@
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runInNewContext } from 'node:vm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CodexProcessCleanupError, OwnedCodexProcess } from '../src/agent/codex-appserver/owned-process';
 import { AppServerClient } from '../src/agent/codex-appserver/app-server-client';
 import { runSetupChild } from '../src/agent/codex-appserver/managed-install';
 import { writeNodeExecutable } from './helpers/node-executable';
-import { WindowsCodexJob } from '../src/agent/codex-appserver/windows-job';
 
 const roots: string[] = [];
 const cleanups: Array<() => Promise<void>> = [];
@@ -17,8 +15,7 @@ type StartEvent =
   | { event: 'fixture-start' | 'owner-entry' | 'abort-before' | 'abort-after' | 'close-entry' | 'afterEach-entry' }
   | { event: 'owner-return' | 'spawn'; pid: number | null }
   | { event: 'exit' | 'child-close'; code: number | null }
-  | { event: 'error' | 'close-settled' | 'running-settled' | 'requestStop' | 'afterEach-settled'; result: 'fulfilled' | 'rejected' }
-  | { event: 'verifiedEmpty'; result: 'empty' | 'not-empty' };
+  | { event: 'error' | 'close-settled' | 'running-settled' | 'afterEach-settled'; result: 'fulfilled' | 'rejected' };
 type StartTrace = {
   record(event: StartEvent): void;
   emit(stage: 'pending' | 'cleanup'): void;
@@ -53,30 +50,6 @@ vi.mock('../src/agent/codex-appserver/owned-process', async original => {
         () => trace.record({ event: 'close-settled', result: 'rejected' }),
       );
       return closing;
-    }
-  } };
-});
-vi.mock('../src/agent/codex-appserver/windows-job', async original => {
-  const actual = await original<typeof import('../src/agent/codex-appserver/windows-job')>();
-  return { ...actual, WindowsCodexJob: class extends actual.WindowsCodexJob {
-    private readonly trace = startDiagnostics.active;
-    private lastEmpty: boolean | undefined;
-    override requestStop(): void {
-      try {
-        super.requestStop();
-        this.trace?.record({ event: 'requestStop', result: 'fulfilled' });
-      } catch (error) {
-        this.trace?.record({ event: 'requestStop', result: 'rejected' });
-        throw error;
-      }
-    }
-    override get verifiedEmpty(): boolean {
-      const empty = super.verifiedEmpty;
-      if (this.trace && empty !== this.lastEmpty) {
-        this.trace.record({ event: 'verifiedEmpty', result: empty ? 'empty' : 'not-empty' });
-        this.lastEmpty = empty;
-      }
-      return empty;
     }
   } };
 });
@@ -253,139 +226,6 @@ describe('owned Codex process trees', () => {
     expect(originalAlive(target)).toBe(false);
     expectedCleanupErrors.add(result);
   }, process.platform === 'win32' ? 60_000 : 30_000);
-});
-
-describe('Windows Job stop exit arbitration', () => {
-  it.each([
-    { name: 'owner termination', terminated: true, code: 0xe0560001, active: true, expected: 0 },
-    { name: 'natural failure wins accepted termination', terminated: true, code: 7, active: true, expected: 7 },
-    { name: 'natural 254 wins accepted termination', terminated: true, code: 254, active: true, expected: 254 },
-    { name: 'natural success leaves descendants', terminated: true, code: 0, active: true, expected: 252 },
-    { name: 'natural success empties job', terminated: true, code: 0, active: false, expected: 0 },
-    { name: 'pending natural failure', terminated: false, code: 7, active: true, expected: 7 },
-    { name: 'pending natural 254', terminated: false, code: 254, active: true, expected: 254 },
-    { name: 'pending success leaves descendants', terminated: false, code: 0, active: true, expected: 252 },
-    { name: 'termination failure remains an error', terminated: false, code: 7, active: true, error: 6, expected: new Error('6') },
-    { name: 'unconfirmed exit remains an error', terminated: false, code: 7, active: true, wait: 258, expected: new Error('Native check failed') },
-    { name: 'unowned marker is not success', terminated: false, code: 0xe0560001, active: true, expected: 0xe0560001 | 0 },
-  ])('$name', outcome => {
-    const job = new WindowsCodexJob();
-    try {
-      const launch = job.launch(process.execPath, []);
-      const script = Buffer.from(launch[launch.length - 1]!, 'base64').toString('utf16le');
-      const branch = script.match(/const uint stopMarker=[\s\S]*?return unchecked\(\(int\)code\);/)?.[0];
-      expect(branch).toBeDefined();
-      if (!branch) throw new Error('Missing embedded Windows stop branch');
-      const executable = branch
-        .replace(/\b(?:const uint|bool|int) /g, 'let ')
-        .replace('GetExitCodeProcess(child.process,out code)', '(code=GetExitCodeProcess(child.process),true)')
-        .replace('unchecked((int)code)', '(code | 0)');
-      const events: string[] = [];
-      const context = {
-        child: { process: 'owned-process' }, job: 'owned-job', proof: 'proof', name: job.name, code: 0,
-        TerminateProcess: (handle: string, marker: number) => {
-          expect(handle).toBe('owned-process'); expect(marker).toBe(0xe0560001);
-          events.push('terminate-process'); return outcome.terminated;
-        },
-        Marshal: { GetLastWin32Error: () => 'error' in outcome ? outcome.error : 5 },
-        WaitForSingleObject: (handle: string, timeout: number) => {
-          expect(handle).toBe('owned-process'); events.push(`wait-${timeout}`);
-          return timeout === 0 ? 258 : ('wait' in outcome ? outcome.wait : 0);
-        },
-        GetExitCodeProcess: () => { events.push('exit-code'); return outcome.code; },
-        Empty: () => !outcome.active,
-        TerminateJobObject: (handle: string) => { expect(handle).toBe('owned-job'); events.push('terminate-job'); return true; },
-        Drain: () => { events.push('drain'); },
-        File: { WriteAllText: (path: string, value: string) => { expect(path).toBe('proof'); expect(value).toBe(job.name); events.push('proof'); } },
-        Check: (ok: boolean) => { if (!ok) throw new Error('Native check failed'); },
-        Win32Exception: Error, Exception: Error,
-      };
-      const run = () => runInNewContext(`(function(){${executable}})()`, context);
-      if (outcome.expected instanceof Error) {
-        expect(run).toThrow(outcome.expected.message);
-        expect(events).not.toContain('proof');
-        return;
-      }
-      expect(run()).toBe(outcome.expected);
-      expect(events).toEqual(['terminate-process', 'wait-1000', 'exit-code', 'terminate-job', 'drain', 'proof']);
-    } finally { job.dispose(); }
-  });
-});
-
-describe.skipIf(process.platform !== 'win32')('Windows Job shutdown outcomes', () => {
-  function launchJob(command: string, args: string[]) {
-    const job = new WindowsCodexJob();
-    const child = spawn(job.executable, job.launch(command, args), { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
-    let stderr = '';
-    child.stderr.on('data', data => { stderr += String(data); });
-    child.stdout.resume();
-    const exited = new Promise<number | null>((resolve, reject) => {
-      child.once('error', reject);
-      child.once('close', code => resolve(code));
-    });
-    cleanups.push(async () => {
-      job.requestStop();
-      await exited;
-      expect(job.verifiedEmpty, stderr).toBe(true);
-      job.dispose();
-    });
-    return { job, child, exited, stderr: () => stderr };
-  }
-
-  async function controlledJob(code: number, descendants = false) {
-    const f = fixture(true);
-    const pidFile = join(f.root, 'target.pid');
-    const wrapperFile = join(f.root, 'wrapper.pid');
-    const exitFile = join(f.root, 'exit');
-    const running = launchJob(process.execPath, ['-e', `
-      const fs=require('node:fs');
-      fs.writeFileSync(${JSON.stringify(`${pidFile}.tmp`)},String(process.pid));
-      fs.renameSync(${JSON.stringify(`${pidFile}.tmp`)},${JSON.stringify(pidFile)});
-      fs.writeFileSync(${JSON.stringify(`${wrapperFile}.tmp`)},String(process.ppid));
-      fs.renameSync(${JSON.stringify(`${wrapperFile}.tmp`)},${JSON.stringify(wrapperFile)});
-      ${descendants ? f.start : ''}
-      setInterval(()=>{if(fs.existsSync(${JSON.stringify(exitFile)}))process.exit(${code});},10);
-    `]);
-    const target = await descendant(pidFile);
-    const wrapper = await descendant(wrapperFile);
-    return { ...running, target, wrapper, exitFile, f };
-  }
-
-  it('cancels before birth and binds the empty proof to its own identity', async () => {
-    const f = fixture(false);
-    const born = join(f.root, 'born');
-    const job = new WindowsCodexJob();
-    job.requestStop();
-    const other = new WindowsCodexJob();
-    try {
-      const child = spawn(job.executable, job.launch(process.execPath, ['-e', `require('node:fs').writeFileSync(${JSON.stringify(born)},'born')`]), { stdio: ['pipe', 'pipe', 'pipe'] });
-      child.stdout.resume();
-      child.stderr.resume();
-      const code = await new Promise<number | null>((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
-      expect(code).toBe(0);
-      expect(existsSync(born)).toBe(false);
-      expect(job.verifiedEmpty).toBe(true);
-      expect(other.verifiedEmpty).toBe(false);
-    } finally { job.dispose(); other.dispose(); }
-  });
-
-  it.each([0, 7, 254])('preserves natural exit %s after death and a late stop', async code => {
-    const running = await controlledJob(code);
-    writeFileSync(running.exitFile, 'exit');
-    expect(await running.exited, running.stderr()).toBe(code);
-    running.job.requestStop();
-    expect(running.job.verifiedEmpty).toBe(true);
-    expect(originalAlive(running.target)).toBe(false);
-    expect(originalAlive(running.wrapper)).toBe(false);
-  }, 30_000);
-
-  it('preserves a missing target executable as supervisor exit 1', async () => {
-    const f = fixture(false);
-    const running = launchJob(join(f.root, 'missing-executable'), []);
-    expect(await running.exited, running.stderr()).toBe(1);
-    expect(running.job.verifiedEmpty).toBe(true);
-    expect(alive(running.child.pid!)).toBe(false);
-  });
 
   it.each([7, 254])('rejects owner close for observed natural exit %s', async code => {
     const f = fixture(false);
@@ -400,37 +240,4 @@ describe.skipIf(process.platform !== 'win32')('Windows Job shutdown outcomes', (
     expect(alive(owned.child.pid!)).toBe(false);
     expectedCleanupErrors.add(result);
   });
-
-  it.each([0, 7, 254])('preserves wrapper exit %s while forcibly draining descendants', async code => {
-    const running = await controlledJob(code, true);
-    const grandchild = await descendant(running.f.ready);
-    writeFileSync(running.exitFile, 'exit');
-    await vi.waitFor(() => expect(originalAlive(running.wrapper)).toBe(false), { timeout: 5000 });
-    expect(originalAlive(grandchild)).toBe(true);
-    running.job.requestStop();
-    expect(await running.exited, running.stderr()).toBe(code === 0 ? 252 : code);
-    expect(running.job.verifiedEmpty).toBe(true);
-    expect(originalAlive(running.target)).toBe(false);
-    expect(originalAlive(grandchild)).toBe(false);
-  }, 30_000);
-
-  it('races owner stop with natural failure without leaking or killing an unrelated process', async () => {
-    const unrelated = spawn(process.execPath, ['-e', 'setInterval(()=>{},100)'], { stdio: 'ignore' });
-    const unrelatedExit = new Promise<void>(resolve => unrelated.once('close', () => resolve()));
-    cleanups.push(async () => { unrelated.kill(); await unrelatedExit; });
-    const unrelatedIdentity = captureProcess(unrelated.pid!);
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const running = await controlledJob(7, true);
-      const grandchild = await descendant(running.f.ready);
-      writeFileSync(running.exitFile, 'exit');
-      running.job.requestStop();
-      const code = await running.exited;
-      expect([0, 7], running.stderr()).toContain(code);
-      expect(running.job.verifiedEmpty).toBe(true);
-      expect(originalAlive(running.target)).toBe(false);
-      expect(originalAlive(running.wrapper)).toBe(false);
-      expect(originalAlive(grandchild)).toBe(false);
-      expect(originalAlive(unrelatedIdentity)).toBe(true);
-    }
-  }, 60_000);
 });

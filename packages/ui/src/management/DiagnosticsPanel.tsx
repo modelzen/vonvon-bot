@@ -64,7 +64,7 @@ export function setupView(agent: Agent, read: SetupRead | undefined): {badge: Re
   return {badge: left.length ? badge(`还差 ${left.length} 步：${left.map(step => step.title).join('、')}`, 'warning') : badge('全部完成', 'success'), warnings};
 }
 
-function NotRepliedList({records, snapshot, now}: {records: readonly NotReplied[]; snapshot: DesktopSnapshot; now: number}) {
+function NotRepliedList({records, agent, snapshot, now}: {records: readonly NotReplied[]; agent: Agent; snapshot: DesktopSnapshot; now: number}) {
   if (!records.length) return <>最近没有没回的消息。这里只记 @ 了这个 bot、或者按群设置该它回却没回的消息；daemon 重启后清空。</>;
   const groups = new Map(snapshot.groups.map(group => [group.id as string, group.name]));
   return <ul className="diagnostics-replies">{records.map(record => {
@@ -78,7 +78,7 @@ function NotRepliedList({records, snapshot, now}: {records: readonly NotReplied[
     return <li key={`${record.at}-${record.ref ?? ''}-${record.reason}`}>
       <span className="diagnostics-replies__head"><time>{shortTime(record.at, now)}</time><strong>{text.reason(record)}</strong>{record.count > 1 && <span>{record.count} 次</span>}</span>
       <span>{where}</span>
-      <span>{text.next(record)}</span>
+      <span>{text.next(record, {id: agent.id, several: snapshot.agents.length > 1})}</span>
     </li>;
   })}</ul>;
 }
@@ -111,7 +111,7 @@ function BotDiagnostics({agent, snapshot, read, tools, onOpenSetup, onError}: {
       trailing={<span className="setup-step-trailing">{scopes.badge}{grantUrl && scopes.lines.length > 0 && <Button size="sm"
         onClick={() => void openExternalUrl(grantUrl, 'app-console', shell).catch(error => onError(error instanceof Error ? error.message : '无法打开开发者后台。'))}>一键开权限</Button>}</span>}/>
     <SettingsRow title="执行工具" description={toolText || '还没有绑定群'}/>
-    <SettingsRow title="最近没回的消息" description={<NotRepliedList records={records} snapshot={snapshot} now={now}/>}/>
+    <SettingsRow title="最近没回的消息" description={<NotRepliedList records={records} agent={agent} snapshot={snapshot} now={now}/>}/>
   </SettingsGroup>;
 }
 

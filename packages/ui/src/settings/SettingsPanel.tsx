@@ -345,7 +345,7 @@ function Select<T extends string>({
 }: {
   label: string;
   value: T;
-  choices: readonly { value: T; label: string }[];
+  choices: readonly { value: T; label: string; disabled?: boolean }[];
   onChange: (value: T) => void;
   disabled: boolean;
 }) {
@@ -362,7 +362,7 @@ function Select<T extends string>({
       }}
     >
       {choices.map((item) => (
-        <option key={item.value} value={item.value}>
+        <option key={item.value} value={item.value} disabled={item.disabled}>
           {item.label}
         </option>
       ))}
@@ -1297,7 +1297,7 @@ function AgentPanel({
     </>
   );
 }
-function ProjectPanel({
+export function ProjectPanel({
   view,
   refresh,
 }: {
@@ -1350,6 +1350,10 @@ function ProjectPanel({
   const permission = view.sections.permission,
     response = view.sections.response,
     model = view.sections.model;
+  // Codex on Linux: 只读 and 读写 are greyed out; a stored one still shows (product.md 3.8).
+  const fullOnly = view.identity.fullOnly;
+  const tiers = ([["qa", "只读问答"], ["write", "允许写入"], ["full", "完全访问"]] as const)
+    .map(([value, label]) => ({ value, label, disabled: Boolean(fullOnly) && value !== "full" }));
   return (
     <>
       <h2 className="membership-settings-heading">Bot 与执行</h2>
@@ -1384,16 +1388,13 @@ function ProjectPanel({
           <>
             <SettingsRow
               title="管理员权限"
+              description={fullOnly}
               trailing={
                 <Select
                   label="管理员权限"
                   value={draft.mode}
                   disabled={disabled}
-                  choices={[
-                    { value: "qa", label: "只读问答" },
-                    { value: "write", label: "允许写入" },
-                    { value: "full", label: "完全访问" },
-                  ]}
+                  choices={tiers}
                   onChange={(mode) => void commit({ mode })}
                 />
               }
@@ -1405,11 +1406,7 @@ function ProjectPanel({
                   label="普通成员权限"
                   value={draft.guestMode}
                   disabled={disabled}
-                  choices={[
-                    { value: "qa", label: "只读问答" },
-                    { value: "write", label: "允许写入" },
-                    { value: "full", label: "完全访问" },
-                  ]}
+                  choices={tiers}
                   onChange={(guestMode) => void commit({ guestMode })}
                 />
               }

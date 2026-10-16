@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { effectiveGuestMode, effectiveMode, turnTier, type Project } from '../src/project/registry';
-import { sandboxParams } from '../src/agent/codex-appserver/backend';
+import { CodexAppServerBackend, sandboxParams } from '../src/agent/codex-appserver/backend';
+import { CODEX_FULL_ONLY, CodexFullOnlyError } from '../src/agent/codex-appserver/full-only';
 import { AUTO_COMPACT_RETIRED, buildGroupSettingsCard, buildPermissionCard, buildProjectSettingsCard } from '../src/card/dm-cards';
 
 describe('effectiveMode', () => {
@@ -62,35 +63,41 @@ describe('sandboxParams', () => {
     }
   });
 
-  // qa/write read-confinement is enforceable on macOS (Seatbelt) and native
-  // Windows (restricted token) — assert the profile shape on both.
-  for (const plat of ['darwin', 'win32'] as const) {
-    it(`${plat}: qa → read-only confined to workspace, network off`, () => {
-      withPlatform(plat, () => {
-        const p = sandboxParams('qa', false) as any;
-        expect(p.sandbox).toBeUndefined();
-        expect(p.config.default_permissions).toBe('feishu');
-        const fs = p.config.permissions.feishu.filesystem;
-        expect(fs[':minimal']).toBe('read');
-        expect(fs[':workspace_roots']['.']).toBe('read');
-        expect(p.config.permissions.feishu.network.enabled).toBe(false);
-      });
+  // qa/write read-confinement is enforceable only on macOS (Seatbelt): assert the profile shape there.
+  it('darwin: qa → read-only confined to workspace, network off', () => {
+    withPlatform('darwin', () => {
+      const p = sandboxParams('qa', false) as any;
+      expect(p.sandbox).toBeUndefined();
+      expect(p.config.default_permissions).toBe('feishu');
+      const fs = p.config.permissions.feishu.filesystem;
+      expect(fs[':minimal']).toBe('read');
+      expect(fs[':workspace_roots']['.']).toBe('read');
+      expect(p.config.permissions.feishu.network.enabled).toBe(false);
     });
-    it(`${plat}: write → workspace write + network honored`, () => {
-      withPlatform(plat, () => {
-        const p = sandboxParams('write', true) as any;
-        expect(p.config.permissions.feishu.filesystem[':workspace_roots']['.']).toBe('write');
-        expect(p.config.permissions.feishu.network.enabled).toBe(true);
-      });
+  });
+  it('darwin: write → workspace write + network honored', () => {
+    withPlatform('darwin', () => {
+      const p = sandboxParams('write', true) as any;
+      expect(p.config.permissions.feishu.filesystem[':workspace_roots']['.']).toBe('write');
+      expect(p.config.permissions.feishu.network.enabled).toBe(true);
     });
-  }
+  });
 
-  it('fail-closed on Linux/WSL: qa/write throw (reads not confined there), full still works', () => {
-    withPlatform('linux', () => {
-      expect(() => sandboxParams('qa', false)).toThrow();
-      expect(() => sandboxParams('write', false)).toThrow();
-      expect(sandboxParams('full', false)).toEqual({ sandbox: 'danger-full-access' });
-    });
+  it('fail-closed elsewhere: qa/write throw CodexFullOnlyError before spawn (reads not confined), full still works', () => {
+    for (const plat of ['linux', 'win32'] as const) {
+      withPlatform(plat, () => {
+        expect(() => sandboxParams('qa', false)).toThrow(CodexFullOnlyError);
+        expect(() => sandboxParams('write', true)).toThrow(CodexFullOnlyError);
+        expect(sandboxParams('full', false)).toEqual({ sandbox: 'danger-full-access' });
+      });
+      expect(() => sandboxParams('qa', false, plat)).toThrow('Linux 上的 Codex 只能用完全访问');
+    }
+  });
+
+  it('the Codex backend says it is full-only everywhere but macOS', () => {
+    const backend = new CodexAppServerBackend();
+    expect(withPlatform('darwin', () => backend.fullAccessOnly())).toBeUndefined();
+    for (const plat of ['linux', 'win32'] as const) expect(withPlatform(plat, () => backend.fullAccessOnly())).toBe(CODEX_FULL_ONLY);
   });
 });
 
@@ -154,5 +161,29 @@ describe('permission cards', () => {
     expect(json).toContain('"initial_option":"on"'); // network
     // both dropdowns default to qa (guest falls back to admin tier)
     expect((json.match(/"initial_option":"qa"/g) ?? []).length).toBe(2);
+  });
+
+  it('a full-only backend offers only 完全访问 in both dropdowns and says why', () => {
+    const json = JSON.stringify(buildPermissionCard({ name: 'P', mode: 'qa', guestMode: 'write', network: false }, CODEX_FULL_ONLY));
+    expect(json).not.toContain('"value":"qa"');
+    expect(json).not.toContain('"value":"write"');
+    expect((json.match(/"value":"full"/g) ?? []).length).toBe(2);
+    expect(json).toContain('现在：管理员：🔒 项目内只读　·　其他人：✏️ 项目内读写。');
+    expect(json).toContain(CODEX_FULL_ONLY);
+  });
+
+  it('a full-only backend presets only a stored 完全访问, so a save that leaves a dropdown alone keeps the stored tier', () => {
+    const tiers = (p: Parameters<typeof buildPermissionCard>[0]) => {
+      const form = (buildPermissionCard(p, CODEX_FULL_ONLY) as any).body.elements.find((e: any) => e.tag === 'form');
+      return Object.fromEntries(form.elements.filter((e: any) => e.name === 'mode' || e.name === 'guestMode')
+        .map((e: any) => [e.name, { initial: e.initial_option, placeholder: e.placeholder.content }]));
+    };
+    expect(tiers({ name: 'P', mode: 'qa', guestMode: 'write', network: false })).toEqual({
+      mode: { initial: undefined, placeholder: '现在是🔒 项目内只读，不选就不改' },
+      guestMode: { initial: undefined, placeholder: '现在是✏️ 项目内读写，不选就不改' },
+    });
+    expect(tiers({ name: 'P', mode: 'full', guestMode: 'qa', network: false })).toMatchObject({
+      mode: { initial: 'full' }, guestMode: { initial: undefined },
+    });
   });
 });

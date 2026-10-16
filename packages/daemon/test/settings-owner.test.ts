@@ -166,6 +166,22 @@ it('project persistence survives failed runtime eviction with an explicit restar
   expect(result.kind).toBe('saved'); if (result.kind === 'saved') expect(result.effects.some(e => e.when === 'restart')).toBe(true);
   expect((await getProjectByName('demo'))?.network).toBe(true);
 });
+it('s20b: a full-only backend says why, refuses saving 只读 or 读写, and keeps a stored 只读', async () => {
+  expect((await (await fixture()).owner.read(project) as ProjectSettingsView).identity).not.toHaveProperty('fullOnly');
+  await updateProject('demo', { mode: 'qa' });
+  const { owner } = await fixture({ backendFor: () => ({ ...backend, fullAccessOnly: () => 'only full here' }) });
+  let view = await owner.read(project) as ProjectSettingsView;
+  expect(view.identity.fullOnly).toBe('only full here');
+  for (const patch of [{ mode: 'qa' }, { guestMode: 'write' }, { mode: 'full', guestMode: 'qa' }] as const) {
+    const result = await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch });
+    expect(result).toEqual({ kind: 'rejected', fields: [{ field: 'settings', message: 'only full here' }] });
+  }
+  expect((await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch: { network: true } })).kind).toBe('saved');
+  expect(await getProjectByName('demo')).toMatchObject({ mode: 'qa', network: true });
+  view = await owner.read(project) as ProjectSettingsView;
+  expect((await owner.save({ scope: project, section: 'permission', revision: view.sections.permission.revision, patch: { mode: 'full' } })).kind).toBe('saved');
+  expect((await getProjectByName('demo'))?.mode).toBe('full');
+});
 it('s12: a stored autoCompact:false is ignored on read and the switch cannot be saved', async () => {
   // An old projects.json row with auto-compaction off; nothing migrates it.
   await updateProject('demo', JSON.parse('{"autoCompact":false}') as Parameters<typeof updateProject>[1]);

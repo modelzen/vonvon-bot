@@ -5,7 +5,6 @@ import { constants } from "node:fs";
 import { access, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { basename, delimiter, dirname, isAbsolute, join, relative, win32 } from "node:path";
 import { spawnProcess } from "../platform/spawn";
-import { WindowsCodexJob } from "../agent/codex-appserver/windows-job";
 import { CODEX_MIN_VERSION, CODEX_VERIFIED_VERSION, classifyCodexVersion } from "../agent/codex-appserver/version";
 import {
   environmentProfileSchema,
@@ -66,7 +65,8 @@ export class EnvironmentService {
   private installCompletion?: Promise<EnvironmentReply>;
   private closing = false;
   private closePromise?: Promise<void>;
-  private readonly children = new Map<ChildProcess, { closed: Promise<void>; job?: WindowsCodexJob }>();
+  /** Each launched tool process, with a promise that settles when its pipes close. */
+  private readonly children = new Map<ChildProcess, Promise<void>>();
   private readonly requests = new Set<Promise<EnvironmentReply>>();
 
   constructor(options: EnvironmentServiceOptions) {
@@ -97,44 +97,30 @@ export class EnvironmentService {
 
   private async drain(): Promise<void> {
     await Promise.allSettled([...this.requests]);
-    await Promise.all([...this.children.values()].map(child => child.closed));
+    await Promise.all([...this.children.values()]);
     for (const child of this.children.keys()) {
       while (this.groupAlive(child)) await new Promise(resolve => setTimeout(resolve, 50));
-      this.forget(child);
+      this.children.delete(child);
     }
   }
 
   private launch(executablePath: string, args: string[], secret?: string): ChildProcess {
     if (this.closing) throw new Error("本机环境正在退出。");
-    const job = process.platform === "win32" ? new WindowsCodexJob() : undefined;
-    let child: ChildProcess;
-    try {
-      child = this.spawnProcess(job?.executable ?? executablePath, job ? job.launch(executablePath, args) : args, {
-        env: this.environment(executablePath), stdio: [secret === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-        windowsHide: true, detached: process.platform !== "win32",
-      });
-    } catch (error) { job?.dispose(); throw error; }
+    const child = this.spawnProcess(executablePath, args, {
+      env: this.environment(executablePath), stdio: [secret === undefined ? "ignore" : "pipe", "pipe", "pipe"], detached: true,
+    });
     const closed = new Promise<void>((resolve) => child.once("close", resolve));
-    this.children.set(child, { closed, job });
+    this.children.set(child, closed);
     void closed.then(() => {
-      try { if (!this.groupAlive(child)) this.forget(child); }
+      try { if (!this.groupAlive(child)) this.children.delete(child); }
       catch {}
     });
     return child;
   }
 
-  private forget(child: ChildProcess): void {
-    const owned = this.children.get(child);
-    if (!owned) return;
-    owned.job?.dispose();
-    this.children.delete(child);
-  }
-
   private groupAlive(child: ChildProcess): boolean {
     if (!child.pid) return false;
-    const job = this.children.get(child)?.job;
-    if (job) return !job.verifiedEmpty;
-    try { process.kill(process.platform === "win32" ? child.pid : -child.pid, 0); return true; }
+    try { process.kill(-child.pid, 0); return true; }
     catch (error) {
       if (error instanceof Error && "code" in error && error.code === "ESRCH") return false;
       throw error;
@@ -142,15 +128,8 @@ export class EnvironmentService {
   }
 
   private async terminate(child: ChildProcess): Promise<void> {
-    const owned = this.children.get(child);
-    if (!owned) return;
-    if (owned.job) {
-      owned.job.requestStop();
-      while (this.groupAlive(child)) await new Promise(resolve => setTimeout(resolve, 25));
-      await owned.closed;
-      this.forget(child);
-      return;
-    }
+    const closed = this.children.get(child);
+    if (!closed) return;
     for (const signal of ["SIGTERM", "SIGKILL"] as const) {
       if (this.groupAlive(child)) {
         const pid = child.pid;
@@ -163,8 +142,8 @@ export class EnvironmentService {
       const deadline = Date.now() + 2_000;
       while (this.groupAlive(child) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 25));
       if (!this.groupAlive(child)) {
-        await within(owned.closed, 2_000);
-        this.forget(child);
+        await within(closed, 2_000);
+        this.children.delete(child);
         return;
       }
     }
