@@ -1728,7 +1728,7 @@ export function createOrchestrator(
    */
   async function forThisBot(msg: NormalizedMessage, project: Project): Promise<boolean> {
     let alone: Promise<boolean> | undefined;
-    const lonely = (): Promise<boolean> => (alone ??= topicCtx.chatInfo(msg.chatId).then((r) => r.ok && r.bots !== undefined && r.bots <= 1));
+    const lonely = (): Promise<boolean> => (alone ??= topicCtx.chatInfo(msg.chatId).then((r) => r.ok && r.bots === 1));
     const who = await audienceOf(msg, { noMention: noMentionOf(project) }, {
       lonely,
       quoted: (id) => fetchMessageMeta(channel, id, names, { event: 'quote-lookup-failed', deadlineMs: LOOKUP_DEADLINE_MS }),

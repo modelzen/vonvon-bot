@@ -170,7 +170,8 @@ export function createTopicContext(
       const d = res.data as { chat_mode?: string; group_message_type?: string; bot_count?: string | number } | undefined;
       const topic = d?.chat_mode === 'topic' || d?.group_message_type === 'thread';
       // A string in the API; a missing or odd value leaves the count unknown.
-      const count = d?.bot_count === undefined || d.bot_count === '' ? NaN : Number(d.bot_count);
+      const raw = d?.bot_count;
+      const count = typeof raw === 'number' || (typeof raw === 'string' && raw.trim() !== '') ? Number(raw) : NaN;
       const bots = Number.isInteger(count) && count >= 0 ? count : undefined;
       log.info('intake', 'chat-mode', { chatId: chatId.slice(-6), topic, bots: bots ?? null });
       return { ok: true, topic, ...(bots !== undefined ? { bots } : {}) };

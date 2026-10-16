@@ -56,9 +56,10 @@ export async function audienceOf(msg: NormalizedMessage, opts: { noMention: bool
   if (msg.mentionedBot) return { to: 'me', by: 'mention' };
   if (msg.mentionAll) return { to: 'other', by: 'mention-all' };
   const mentionsOther = msg.mentions.some((m) => !m.isBot); // SDK: isBot = this bot
+  const withoutLookup: Audience = mentionsOther ? { to: 'other', by: 'mention' } : { to: 'nobody' };
   const quote = opts.noMention ? quotedId(msg) : undefined;
-  if (!quote && (mentionsOther || !opts.noMention || !msg.threadId)) return mentionsOther ? { to: 'other', by: 'mention' } : { to: 'nobody' };
-  if (await lookups.lonely()) return mentionsOther ? { to: 'other', by: 'mention' } : { to: 'nobody' };
+  if (!quote && (mentionsOther || !opts.noMention || !msg.threadId)) return withoutLookup;
+  if (await lookups.lonely()) return withoutLookup;
   if (quote) {
     const q = await lookups.quoted(quote);
     if (!q) return { to: 'unknown', why: 'quote' };

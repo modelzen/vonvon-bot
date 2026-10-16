@@ -64,10 +64,8 @@ function message(s: Shape = {}): NormalizedMessage {
 }
 
 describe('audienceOf (product.md 3.4 三条底线)', () => {
-  const lookups = (o: { lonely?: boolean; quoted?: Awaited<ReturnType<AudienceLookups['quoted']>>; last?: Awaited<ReturnType<AudienceLookups['lastBot']>> } = {}) => {
-    const l = { lonely: vi.fn(async () => o.lonely ?? false), quoted: vi.fn(async () => o.quoted), lastBot: vi.fn(async () => o.last) };
-    return l;
-  };
+  const lookups = (o: { lonely?: boolean; quoted?: Awaited<ReturnType<AudienceLookups['quoted']>>; last?: Awaited<ReturnType<AudienceLookups['lastBot']>> } = {}) =>
+    ({ lonely: vi.fn(async () => o.lonely ?? false), quoted: vi.fn(async () => o.quoted), lastBot: vi.fn(async () => o.last) });
   const on = { noMention: true };
 
   it('takes an @ of this bot first, also beside @所有人 or an @ of another bot', async () => {
