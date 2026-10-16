@@ -12,7 +12,7 @@ vi.mock('../src/config/paths', async original => {
   const real = await original<typeof import('../src/config/paths')>();
   return { ...real, botPaths: (appId: string) => ({ ...real.botPaths(appId), configFile: join(f.botDir, appId, 'config.json') }) };
 });
-import { createCrashNotifier, loadOwnerSender, noticeText, sendOwnerText, type HostNotice, type LoadSender, type Sender } from '../src/host/crash-notify';
+import { botFolders, createCrashNotifier, loadOwnerSender, noticeText, sendOwnerText, type HostNotice, type LoadSender, type Sender } from '../src/host/crash-notify';
 
 const roots: string[] = [];
 afterAll(() => { for (const root of roots) rmSync(root, { recursive: true, force: true }); });
@@ -32,7 +32,7 @@ const previous: CrashEntry = { at: Date.parse('2026-10-16T05:00:00Z'), kind: 'fo
 const hostNotice = (fields: Partial<HostNotice> = {}): HostNotice => ({ previous, crashes: 1, resumed: false, pauseEntered: false, ...fields });
 
 type Call = { url: string; body: Record<string, unknown>; auth?: string; redirect?: string; signal?: AbortSignal };
-type Reply = { status: number; body?: unknown } | 'throw' | 'hang';
+type Reply = { status: number; body?: unknown } | 'throw' | 'hang' | { delay: number; then: Reply };
 let calls: Call[];
 let reply: (call: Call) => Reply;
 const ok = (call: Call): Reply => call.url.includes('tenant_access_token')
@@ -40,7 +40,15 @@ const ok = (call: Call): Reply => call.url.includes('tenant_access_token')
 const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
   const call: Call = { url: String(input), body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>, auth: (init?.headers as Record<string, string> | undefined)?.Authorization, redirect: init?.redirect, signal: init?.signal ?? undefined };
   calls.push(call);
-  const answer = reply(call);
+  let answer = reply(call);
+  while (typeof answer === 'object' && 'delay' in answer) {
+    const { delay, then } = answer;
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(resolve, delay);
+      call.signal?.addEventListener('abort', () => { clearTimeout(timer); reject(Object.assign(new Error('aborted'), { name: 'AbortError' })); });
+    });
+    answer = then;
+  }
   if (answer === 'throw') throw new TypeError('fetch failed');
   if (answer === 'hang') {
     return new Promise((_resolve, reject) => {
@@ -67,6 +75,8 @@ const flush = async (): Promise<void> => { for (let i = 0; i < 40; i++) await Pr
 /** Moves the clock and the timers together. */
 const tick = async (ms: number): Promise<void> => { now += ms; up += ms; await vi.advanceTimersByTimeAsync(ms); await flush(); };
 const ctx = (paused = false, botPaused: (appId: string) => boolean = () => false) => ({ bots, paused, botPaused });
+/** A loadSender that waits `ms` (fake timers) before it answers. */
+const slowSender = (ms: number): LoadSender => async appId => { await new Promise(resolve => setTimeout(resolve, ms)); return loadSender(appId); };
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -116,6 +126,15 @@ describe('the host\'s messages', () => {
     await n.close();
   });
 
+  it('③ a start by hand long after the crash (none in the last 10 minutes) tells nothing', async () => {
+    const n = make();
+    n.hostStarted(hostNotice({ crashes: 0 }), ctx());
+    await tick(60_000);
+    expect(calls).toEqual([]);
+    expect(logs.info).toHaveBeenCalledWith('crash-notify', 'skipped', { kind: 'host-recovered', why: 'stale' });
+    await n.close();
+  });
+
   it('④ the start that paused the host tells at once and lists every enabled bot; a start already paused tells nothing', async () => {
     const n = make();
     n.hostStarted(hostNotice({ crashes: 3, pauseEntered: true }), ctx(true, appId => appId === ALONE));
@@ -127,6 +146,21 @@ describe('the host\'s messages', () => {
     await tick(60_000);
     expect(messages()).toHaveLength(1);
     await Promise.all([n.close(), again.close()]);
+  });
+
+  it('④ with bots.json unreadable, the pause message goes from a bot that has a folder (D1)', async () => {
+    for (const name of [LATE, ALONE, 'not-a-bot']) mkdirSync(join(root, 'bots', name), { recursive: true });
+    writeFileSync(join(root, 'bots', 'cli_file'), '');
+    expect(botFolders(root).sort()).toEqual([ALONE, LATE].sort());
+    senders[LATE] = 'no-owner';
+    const n = make();
+    n.hostStarted(hostNotice({ crashes: 3, pauseEntered: true }), { bots: [], paused: true, botPaused: () => false, registryUnreadable: true });
+    await flush();
+    // Not EARLY: it has a sender, but no folder.
+    expect(messages()).toMatchObject([{ body: { receive_id: `ou_owner_of_${ALONE}` } }]);
+    expect(textOf(messages()[0])).toMatch(/^daemon 10 分钟内崩溃了 3 次，已停止自动重启，bot 都没有启动。/);
+    expect(botFolders(join(root, 'nothing-here'))).toEqual([]);
+    await n.close();
   });
 
   it('⑤ goes to the next bot that joined when the earliest cannot send, and says why', async () => {
@@ -255,6 +289,20 @@ describe('a bot\'s messages', () => {
     expect(calls).toEqual([]);
     await n.close();
   });
+
+  it('恢复运行 or a disable while the sender is being read drops the message too', async () => {
+    let release: (() => void) | undefined;
+    const n = make({ loadSender: appId => new Promise(resolve => { release = () => resolve(senders[appId] ?? 'no-owner'); }) });
+    n.botCrashed(LATE, '晚到', 1, 'x');
+    n.botStarted(LATE);
+    await tick(30_000);
+    expect(release).toBeDefined();
+    n.botForget(LATE);
+    release?.();
+    await flush();
+    expect(calls).toEqual([]);
+    await n.close();
+  });
 });
 
 describe('sending', () => {
@@ -349,6 +397,9 @@ describe('sending', () => {
     await flush();
     expect(messages()[0]?.signal?.aborted).toBe(true);
     await closed;
+    // Cut by the shutdown is not a failure to send.
+    expect(logs.warn).not.toHaveBeenCalledWith('crash-notify', 'failed', expect.anything());
+    expect(logs.info).toHaveBeenCalledWith('crash-notify', 'cut', expect.objectContaining({ kind: 'bot-recovered', bot: LATE }));
 
     const paused = make();
     paused.hostStarted(hostNotice({ crashes: 3, pauseEntered: true }), ctx(true));
@@ -362,6 +413,32 @@ describe('sending', () => {
     await tick(1_000);
     await closing;
     expect(inFlight?.signal?.aborted).toBe(true);
+    expect(logs.warn).toHaveBeenCalledWith('crash-notify', 'cut', expect.objectContaining({ kind: 'host-paused' }));
+  });
+
+  it('⑫ a pause message whose sender is read after close gets the whole wait for its requests, once', async () => {
+    reply = call => ({ delay: 3_000, then: ok(call) });
+    const n = make({ loadSender: slowSender(6_000) });
+    n.hostStarted(hostNotice({ crashes: 3, pauseEntered: true }), ctx(true));
+    let done = false;
+    const closing = n.close().then(() => { done = true; });
+    await tick(9_000); // the sender read at 6 s, the token at 9 s
+    await tick(3_000); // the message at 12 s: past the 10 s counted from close
+    await closing;
+    expect(done).toBe(true);
+    expect(logs.info).toHaveBeenCalledWith('crash-notify', 'sent', expect.objectContaining({ kind: 'host-paused' }));
+
+    // Counted again once only: a sender read at 9 s and Feishu hanging end the wait at 19 s.
+    reply = () => 'hang';
+    const slow = make({ loadSender: slowSender(9_000) });
+    slow.hostStarted(hostNotice({ crashes: 3, pauseEntered: true }), ctx(true));
+    let ended = false;
+    const ending = slow.close().then(() => { ended = true; });
+    await tick(18_999);
+    expect(ended).toBe(false);
+    await tick(1);
+    await ending;
+    expect(calls.at(-1)?.signal?.aborted).toBe(true);
   });
 
   it('⑫ close waits for a pause message queued at the start (D1), and calls after it do nothing', async () => {

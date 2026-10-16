@@ -58,7 +58,7 @@ const fixture = `
 const procs = new Map<string, ChildProcess[]>();
 /** Records what the supervisor tells the notifier (s18b), in order with the stops sent to children. */
 const recorder: CrashNotifier = {
-  hostStarted: (notice, ctx) => { f.notes.push(['hostStarted', notice, ctx.bots.map(bot => bot.appId), ctx.paused]); },
+  hostStarted: (notice, ctx) => { f.notes.push(['hostStarted', notice, ctx.bots.map(bot => bot.appId), ctx.paused, ...(ctx.registryUnreadable ? ['registry-unreadable'] : [])]); },
   botStarted: appId => { f.notes.push(['botStarted', appId]); },
   botExited: appId => { f.notes.push(['botExited', appId]); },
   botCrashed: (...args) => { f.notes.push(['botCrashed', ...args]); },
@@ -80,7 +80,7 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
-async function start(ids: string[], running = ids, failSpawns = 0, notice?: HostNotice): Promise<AdminServiceDeps> {
+async function start(ids: string[], running = ids, failSpawns = 0, notice?: HostNotice, extra: { paused?: boolean; registryUnreadable?: boolean } = {}): Promise<AdminServiceDeps> {
   f.deps = undefined;
   vi.mocked(spawnProcess).mockImplementation((_bin, args, options) => {
     if (failSpawns-- > 0) throw Object.assign(new Error('spawn EAGAIN'), { code: 'EAGAIN' });
@@ -96,7 +96,7 @@ async function start(ids: string[], running = ids, failSpawns = 0, notice?: Host
   });
   const pending = new Promise<void>(resolve => { shutdown = resolve; });
   supervisor = runSupervisor(ids.map(appId => ({ appId, name: appId, tenant: 'feishu' as const, createdAt: 0 })), {
-    crash: { runId: RUN, chainId: CHAIN, ...(notice ? { notice } : {}) }, notifier: recorder,
+    crash: { runId: RUN, chainId: CHAIN, ...(notice ? { notice } : {}) }, notifier: recorder, ...extra,
     control: { requested: false, waitForRequest: () => pending, requestStop() {}, requestRestart() {}, completeShutdown: async release => release(), dispose() {} },
   });
   await vi.waitFor(() => expect(f.deps).toBeDefined());
@@ -131,7 +131,8 @@ it('records what the child could not, once each, and the third crash stops only 
   await crash('kill');
   expect(vi.mocked(spawnProcess).mock.calls[0]?.[2]?.env).toMatchObject({ VONVON_HOST_RUN_ID: RUN, VONVON_HOST_CHAIN_ID: CHAIN });
   expect(records()).toMatchObject([{ kind: 'forced', reason: 'SIGKILL', scope: 'bot', appId: A, runId: RUN, chainId: CHAIN, during: 'run' }]);
-  await crash({ code: 1, line: `Error: no config at ${homedir()}/x` });
+  // Node's own printout of an uncaught error, before a crash handler is in place: the error, not `Node.js vX` (s18b).
+  await crash({ code: 1, line: `[eval]:1\nthrow new Error('no config')\n^\n\nError: no config at ${homedir()}/x\n    at [eval]:1:7\n\nNode.js v24.21.0` });
   expect(records()[0]).toMatchObject({ kind: 'fatal', reason: 'Error: no config at ~/x' });
   // The child's own handler wrote this one before exiting 70: the supervisor adds none.
   const [fatal] = records();
@@ -319,6 +320,12 @@ describe('the owner\'s private message (s18b)', () => {
     f.notes = [];
     await deps.applyBotActivation?.(B, false);
     expect(told(B)).toEqual([['botForget', B], ['botExited', B]]);
+  });
+
+  it('a paused host whose bots.json could not be read says so to the notifier (D1)', async () => {
+    const notice: HostNotice = { previous: { at: 1, kind: 'fatal', reason: 'SyntaxError: bots.json' }, crashes: 3, resumed: false, pauseEntered: true };
+    await start([], [], 0, notice, { paused: true, registryUnreadable: true });
+    expect(f.notes[0]).toEqual(['hostStarted', notice, [], true, 'registry-unreadable']);
   });
 
   it('a spawn that fails without a PID ends the 30 s wait it began, and counts as a crash told later', async () => {

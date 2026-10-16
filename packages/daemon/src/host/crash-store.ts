@@ -22,7 +22,7 @@ const KEEP_MS = 30 * 24 * 60 * 60_000;
 const TMP_MAX_AGE_MS = 60 * 60_000;
 const LIST_LIMIT = 200;
 const MAX_FILE_BYTES = 16 * 1024;
-const APP_ID = /^cli_[A-Za-z0-9_-]{1,200}$/;
+export const APP_ID = /^cli_[A-Za-z0-9_-]{1,200}$/;
 const RECORD_NAME = /^(host|bot-[0-9a-f]{12})-(\d{8}T\d{9}Z)-(\d{1,10})-([0-9a-f]{8})\.json$/;
 const TMP_NAME = /^\..+\.tmp$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -98,6 +98,26 @@ function reasonText(value: unknown): string {
     return String(value);
   } catch { return ''; }
 }
+
+const NODE_TRAILER = /^Node\.js v\d/;
+const CARET = /^\s*\^+\s*$/;
+const ERROR_HEAD = /^[A-Za-z_$][\w$.]*(?:Error|Exception|Rejection)\b/;
+/** A fatal exit's reason from a child's last non-empty stderr lines, newest last. Node's own printout of an uncaught
+ * error (where, the source line, a caret, the error, its stack, `Node.js vX`) gives the error's first line, not the
+ * version (s18b review 2); without the caret, its last error-like line. Any other ending gives the last line. */
+export function stderrReason(lines: readonly string[]): string | undefined {
+  const last = lines[lines.length - 1];
+  if (last === undefined || !NODE_TRAILER.test(last.trim())) return last;
+  for (let i = lines.length - 2; i >= 0; i--) {
+    if (!CARET.test(lines[i] ?? '')) continue;
+    const error = lines[i + 1];
+    if (error !== undefined && !NODE_TRAILER.test(error.trim())) return error;
+    break;
+  }
+  for (let i = lines.length - 2; i >= 0; i--) if (ERROR_HEAD.test(lines[i] ?? '')) return lines[i];
+  return undefined;
+}
+
 /** The first line, with the home folder, Feishu ids, URL credentials and anything token-like taken out; ≤ 200. */
 export function sanitizeReason(value: unknown, home = homedir()): string {
   let text = (reasonText(value).split(/\r\n|\r|\n/)[0] ?? '').replace(CONTROL, '').trim();

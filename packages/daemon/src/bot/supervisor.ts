@@ -16,7 +16,7 @@ import { createDiagnosticsStore, parseDiagnosticsIpc } from './diagnostics';
 import { bridgeVersion } from '../core/version';
 import {
   BOT_LOCK_BUSY_EXIT, countInWindow, CRASH_EXIT_CODE, CRASH_PAUSE_COUNT, CRASH_WINDOW_MS, crashRecordFor, crashScopeKey, createCrashRecordCache, hasCrashRecordFor,
-  listCrashRecords, pruneCrashRecords, readBotPauses, sanitizeReason, systemClock, writeBotPausesSync, writeCrashRecordSync, type BotPauseState, type CrashRecord,
+  listCrashRecords, pruneCrashRecords, readBotPauses, sanitizeReason, stderrReason, systemClock, writeBotPausesSync, writeCrashRecordSync, type BotPauseState, type CrashRecord,
 } from '../host/crash-store';
 import { botLabel, createCrashNotifier, type CrashNotifier, type HostNotice } from '../host/crash-notify';
 import { crashText, type CrashKind, type CrashPause } from '@vonvon/protocol';
@@ -68,9 +68,11 @@ const NO_RECORD_REASON = '程序出错（子进程出错退出，没留下记录
 /** 实时状态查询（{kind:'status'}）的短超时：/api/state 是 5s 轮询，不能被一个
  * 假死子进程拖住整页——超时按 connection:'unknown' 渲染。 */
 const STATUS_IPC_TIMEOUT_MS = 2_000;
+/** Enough for Node's printout of an uncaught error: where, a caret, the error, 10 frames, its fields and a cause. */
+const STDERR_TAIL_LINES = 64;
 export const HOST_PAUSED_ACTIVATION = 'daemon 已暂停（10 分钟内崩溃了 3 次），这个 bot 恢复运行后才会启动。运行 vonvon daemon restart 恢复。';
 
-export async function runSupervisor(bots: BotEntry[], options: { control?: ShutdownControl; managed?: boolean; port?: number; onListening?: (listen: string) => Promise<void>; paused?: boolean; crash?: SupervisorCrash; notifier?: CrashNotifier } = {}): Promise<void> {
+export async function runSupervisor(bots: BotEntry[], options: { control?: ShutdownControl; managed?: boolean; port?: number; onListening?: (listen: string) => Promise<void>; paused?: boolean; crash?: SupervisorCrash; notifier?: CrashNotifier; registryUnreadable?: boolean } = {}): Promise<void> {
   const control = options.control ?? observeShutdown();
   const supervisorStartedAt = Date.now();
   const cliEntry = process.argv[1];
@@ -281,10 +283,14 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     });
     log.info('supervisor', 'child-start', { bot: c.bot.name, appId: c.bot.appId, pid: proc.pid ?? null });
     // The reason of a fatal exit the child did not record; best effort, as the last line may arrive after 'exit' ('close'
-    // would wait for a Codex grandchild holding the same stderr).
-    let lastStderr: string | undefined;
+    // would wait for a Codex grandchild holding the same stderr). A few lines back, for Node's own printout (s18b).
+    const stderrTail: string[] = [];
     prefixPipe(c.bot.name, proc.stdout, process.stdout);
-    prefixPipe(c.bot.name, proc.stderr, process.stderr, line => { if (line.trim()) lastStderr = line.slice(0, 300); });
+    prefixPipe(c.bot.name, proc.stderr, process.stderr, line => {
+      if (!line.trim()) return;
+      stderrTail.push(line.slice(0, 300));
+      if (stderrTail.length > STDERR_TAIL_LINES) stderrTail.shift();
+    });
 
     proc.on('exit', (code, signal) => {
       if (c.proc !== proc) return;
@@ -307,7 +313,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
         const key = crashScopeKey('bot', c.bot.appId);
         let entry: CrashRecord | undefined;
         if (signal) entry = recordCrash(c, 'forced', signal, pid);
-        else if (code !== CRASH_EXIT_CODE) entry = recordCrash(c, 'fatal', lastStderr ?? `退出码 ${code}`, pid);
+        else if (code !== CRASH_EXIT_CODE) entry = recordCrash(c, 'fatal', stderrReason(stderrTail) ?? `退出码 ${code}`, pid);
         else if (!tryDisk(c, 'crash-lookup', false, () => hasCrashRecordFor(root, key, pid, c.startedAt))) {
           entry = recordCrash(c, 'exception', '子进程出错退出，没留下记录', pid);
         } else entry = tryDisk(c, 'crash-read', undefined, () => crashRecordFor(root, key, pid, c.startedAt)); // the child's own
@@ -349,7 +355,9 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
 
   try {
     // Before startApi: a paused host whose port is taken still sends its pause message while it shuts down (D1).
-    notifier.hostStarted(options.crash?.notice, { bots, paused, botPaused: appId => Boolean(children.get(appId)?.pause) });
+    notifier.hostStarted(options.crash?.notice, {
+      bots, paused, botPaused: appId => Boolean(children.get(appId)?.pause), ...(options.registryUnreadable ? { registryUnreadable: true } : {}),
+    });
     for (const c of children.values()) spawnChild(c);
 
     const byAppId = (botId: string): Child | undefined => children.get(botId);

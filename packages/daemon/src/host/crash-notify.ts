@@ -1,6 +1,8 @@
 // The crash messages to a bot's owner (product.md 3.10, s18b). The host sends them itself with the bot's app identity over
 // Feishu's HTTP API, not through a bot's long connection, so they go out while the bots are down or paused.
 import { randomUUID } from 'node:crypto';
+import { readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { crashText, type CrashEntry } from '@vonvon/protocol';
 import { FEISHU_API_BASES } from '../admin/avatar';
 import type { BotEntry } from '../config/bots';
@@ -9,7 +11,7 @@ import { isComplete, resolveOwner, type TenantBrand } from '../config/schema';
 import { resolveAppSecret } from '../config/secret-resolver';
 import { loadConfig } from '../config/store';
 import type { CrashLog } from './crash-guard';
-import { CRASH_WINDOW_MS, readNotices, startedBeforeThisBoot, systemClock, writeNoticesSync, type Clock, type NoticeStamp } from './crash-store';
+import { APP_ID, CRASH_WINDOW_MS, readNotices, startedBeforeThisBoot, systemClock, writeNoticesSync, type Clock, type NoticeStamp } from './crash-store';
 
 /** What the host's start knows of the run before it (bootstrap, from `openHostRun`). */
 export type HostNotice = { previous?: CrashEntry; crashes: number; resumed: boolean; pauseEntered: boolean };
@@ -22,7 +24,7 @@ export type LoadSender = (appId: string) => Promise<Sender | string>;
 
 export interface CrashNotifier {
   /** Whole host: "已自动恢复" after 30 s up, or "已停止自动重启" at once in the start that paused it. */
-  hostStarted(notice: HostNotice | undefined, ctx: { bots: readonly BotEntry[]; paused: boolean; botPaused: (appId: string) => boolean }): void;
+  hostStarted(notice: HostNotice | undefined, ctx: { bots: readonly BotEntry[]; paused: boolean; botPaused: (appId: string) => boolean; registryUnreadable?: boolean }): void;
   /** A child of this bot is up: with a crash waiting to be told, its 30 s start now. */
   botStarted(appId: string): void;
   /** Its child ended: the 30 s are void, the crash waits for the next child. */
@@ -34,7 +36,8 @@ export interface CrashNotifier {
   /** 恢复运行 or a disable: whatever of this bot is untold or waiting to be tried again is dropped. */
   botForget(appId: string): void;
   /** First thing in the supervisor's shutdown: timers stop, ordinary messages are cut; a pause message in flight or queued
-   * is waited for, at most 10 s. Never rejects; calls after it do nothing. */
+   * is waited for, at most 10 s, counted again once from when its sender is read if that ends after this. Never rejects;
+   * calls after it do nothing. */
   close(): Promise<void>;
 }
 
@@ -67,6 +70,19 @@ export function noticeText(event: NoticeEvent): string {
     case 'bot-paused':
       return `「${event.name}」10 分钟内崩溃了 ${event.crashes} 次，已停止自动重启，别的 bot 照常。${because('最近一次的原因', event.reason)}查完原因后在状态与诊断页点「恢复运行」。`;
   }
+}
+
+/** The bots with a folder, the oldest folder first, then by name: who may send the host's pause message when `bots.json`
+ * cannot be read (D1), with no `createdAt` to go by. */
+export function botFolders(root: string): string[] {
+  const dir = join(root, 'bots');
+  let names: string[];
+  try { names = readdirSync(dir, { withFileTypes: true }).filter(entry => entry.isDirectory() && APP_ID.test(entry.name)).map(entry => entry.name); }
+  catch { return []; }
+  const born = new Map(names.map(name => {
+    try { return [name, statSync(join(dir, name)).birthtimeMs] as const; } catch { return [name, 0] as const; }
+  }));
+  return names.sort((a, b) => (born.get(a) ?? 0) - (born.get(b) ?? 0) || (a < b ? -1 : a > b ? 1 : 0));
 }
 
 /** The bot's own config, read at each send (no secret kept in memory). */
@@ -139,6 +155,8 @@ export function createCrashNotifier(deps: {
   let closed = false;
   let closing: Promise<void> | undefined;
   let queue: Promise<void> = Promise.resolve();
+  /** Set by close: the pause message's sender was read after it, so its two requests get the whole wait (once). */
+  let waitAgain: (() => void) | undefined;
   const closeCut = new AbortController();
   const finalCut = new AbortController();
   const waiting = new Map<string, BotEvent>();
@@ -201,6 +219,7 @@ export function createCrashNotifier(deps: {
     }
     if (!next.candidates.length) log.warn('crash-notify', 'skipped', { ...fields, why: 'no-bot' });
     if (!sender || !current()) return;
+    if (closed && next.exempt) waitAgain?.();
     if (!next.exempt && limited(sender.appId)) { log.info('crash-notify', 'limited', { ...fields, bot: sender.appId }); return; }
     const signal = next.exempt ? finalCut.signal : AbortSignal.any([closeCut.signal, finalCut.signal]);
     const result = await sendOwnerText(sender, noticeText(next.event), next.uuid, signal, fetchImpl);
@@ -210,6 +229,12 @@ export function createCrashNotifier(deps: {
       return;
     }
     const detail = { ...fields, bot: sender.appId, ...(result.status !== undefined ? { status: result.status } : {}), ...(result.code !== undefined ? { code: result.code } : {}), ...(result.msg ? { msg: result.msg } : {}) };
+    // Cut by the shutdown, not refused by Feishu: an ordinary one is no failure; a pause message lost is worth a warning.
+    if (result.retry && signal.aborted) {
+      if (next.exempt) log.warn('crash-notify', 'cut', detail);
+      else log.info('crash-notify', 'cut', detail);
+      return;
+    }
     const wait = retryMs[next.attempt];
     if (result.retry && wait !== undefined && !closed && gen(next.scope) === next.gen) {
       log.warn('crash-notify', 'retry', { ...detail, inMs: wait });
@@ -223,14 +248,18 @@ export function createCrashNotifier(deps: {
     hostStarted(notice, ctx) {
       guard('host-started', () => {
         if (closed || !notice || notice.resumed) return;
-        // The earliest bot that can send sends, chosen at each send (D2); ties keep the registry's order.
-        const candidates = [...ctx.bots].sort((a, b) => a.createdAt - b.createdAt).map(bot => bot.appId);
+        // The earliest bot that can send sends, chosen at each send (D2); ties keep the registry's order. With no
+        // registry (a paused host comes up without it), the bots with a folder.
+        const candidates = ctx.registryUnreadable ? botFolders(root)
+          : [...ctx.bots].sort((a, b) => a.createdAt - b.createdAt).map(bot => bot.appId);
         const reason = notice.previous ? crashText(notice.previous) : undefined;
         if (ctx.paused) {
           if (notice.pauseEntered) enqueue(job({ kind: 'host-paused', crashes: notice.crashes, ...(reason ? { reason } : {}), bots: ctx.bots.map(botLabel) }, HOST, true, candidates));
           return;
         }
         if (!reason) return;
+        // Up again long after the crash, by hand (no service manager): nothing to say "刚才" or "已自动恢复" of.
+        if (notice.crashes < 1) { log.info('crash-notify', 'skipped', { kind: 'host-recovered', why: 'stale' }); return; }
         // A bot paused alone before the host went down was not taken down by it (D3).
         const bots = ctx.bots.filter(bot => !ctx.botPaused(bot.appId)).map(botLabel);
         arm(HOST, () => { if (!closed) enqueue(job({ kind: 'host-recovered', crashes: notice.crashes, reason, bots }, HOST, false, candidates)); });
@@ -272,8 +301,11 @@ export function createCrashNotifier(deps: {
       waiting.clear();
       closeCut.abort();
       closing = new Promise<void>(resolve => {
-        const cut = setTimeout(() => { finalCut.abort(); resolve(); }, deps.closeWaitMs ?? CLOSE_WAIT_MS);
-        void queue.then(() => { clearTimeout(cut); resolve(); });
+        const wait = deps.closeWaitMs ?? CLOSE_WAIT_MS;
+        const end = (): void => { waitAgain = undefined; finalCut.abort(); resolve(); };
+        let cut = setTimeout(end, wait);
+        waitAgain = () => { waitAgain = undefined; clearTimeout(cut); cut = setTimeout(end, wait); };
+        void queue.then(() => { waitAgain = undefined; clearTimeout(cut); resolve(); });
       });
       return closing;
     },

@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,7 +7,7 @@ import { build } from 'esbuild';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import {
   countInWindow, crashDir, crashErrorName, crashRecordFor, crashScopeKey, createCrashRecordCache, createSystemClock, hasCrashRecordFor, listCrashRecords,
-  pruneCrashRecords, readBootId, readBotPauses, readCrashSummary, readNotices, readRunMarker, removeResumeRequest, sanitizeReason, startedBeforeThisBoot,
+  pruneCrashRecords, readBootId, readBotPauses, readCrashSummary, readNotices, readRunMarker, removeResumeRequest, sanitizeReason, startedBeforeThisBoot, stderrReason,
   takeResumeRequest, writeBotPausesSync, writeCrashRecordSync, writeNoticesSync, writeResumeRequest, writeRunMarkerSync, type Clock, type CrashRecord, type RunMarker,
 } from '../src/host/crash-store';
 
@@ -32,6 +32,29 @@ function record(fields: Partial<CrashRecord> = {}): CrashRecord {
 }
 const clock = (fields: Partial<{ now: number; uptimeMs: number; bootId: string | undefined }> = {}): Clock => ({
   now: () => fields.now ?? T0, uptimeMs: () => fields.uptimeMs ?? 1_000_000, bootId: () => fields.bootId,
+});
+
+describe('stderrReason', () => {
+  // Node's own printout of an uncaught error, as this Node writes it: its first line, never the closing `Node.js vX`.
+  it.each([
+    ['an error thrown', "throw new TypeError('x')", 'TypeError: x'],
+    ['a module that is not there', "require('/vonvon-no-such-module')", "Error: Cannot find module '/vonvon-no-such-module'"],
+    ['an error with a cause', "throw new Error('a', { cause: new Error('b') })", 'Error: a'],
+    ['a string thrown', "throw 'just text'", 'just text'],
+    ['a rejection that is not an error', 'Promise.reject(42)', expect.stringMatching(/^UnhandledPromiseRejection: /)],
+  ])('%s', (_label, source, expected) => {
+    const { stderr } = spawnSync(process.execPath, ['-e', source], { encoding: 'utf8' });
+    const lines = stderr.split(/\r?\n/).filter(line => line.trim());
+    expect(lines.at(-1)).toMatch(/^Node\.js v\d/);
+    expect(stderrReason(lines)).toEqual(expected);
+  });
+  it('without the caret, the last error-like line; any other ending is the last line', () => {
+    expect(stderrReason(['Error: early', 'TypeError: late', '    at x (y.js:1:1)', 'Node.js v24.0.0'])).toBe('TypeError: late');
+    expect(stderrReason(['  ^', 'Node.js v24.0.0'])).toBeUndefined();
+    expect(stderrReason(['Node.js v24.0.0'])).toBeUndefined();
+    expect(stderrReason(['TypeError: logged earlier', 'fatal: no config'])).toBe('fatal: no config');
+    expect(stderrReason([])).toBeUndefined();
+  });
 });
 
 describe('sanitizeReason', () => {
