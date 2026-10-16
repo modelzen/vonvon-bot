@@ -184,3 +184,14 @@ PR 进话题和回复接口文档一致："如果要回复的消息已经是话�
   - bot 两条都处理了：话题里回了；主区那条被当成新的 @ 去开话题，飞书回 500（code 2200 internal error）。
 - 私聊话题里勾"同时发送到会话"：同样两个事件，一条在话题里，一条在私聊主界面。
 - `sync_to_chat_info` 是单条查询消息接口返回的字段；飞书 SDK 的类型里没有，长连接事件里带不带没确认。后续见 `docs/v1-plan.md` 的 s14d。
+
+## 补测：话题群里的引用（2026-10-16，s22）
+
+上面"没测到的"里的话题群（`chat_mode=topic`）引用。lark-cli 以 owner 身份建了一个话题群，带测试 bot 和 lark-cli 自己的应用，用测试 bot 的应用身份 `GET /im/v1/messages/:id` 看字段：
+
+- 群信息：`chat_mode=topic`，没有 `group_message_type`，`bot_count` 是字符串。
+- 帖子本身：带 `thread_id`，没有 `root_id`、`parent_id`。
+- 帖子里直接回（`+messages-reply` 回帖子，不带 `--reply-in-thread`）：同一个 `thread_id`，`root_id`、`parent_id` 都是帖子。
+- 回复帖子里的某一条：`root_id` 是帖子，`parent_id` 是被回复的那条。
+
+和普通群里的话题一样，按 `parent_id` 不等于 `root_id` 认引用。客户端里的回复是不是同一种消息，和第 4 项一样没看。
