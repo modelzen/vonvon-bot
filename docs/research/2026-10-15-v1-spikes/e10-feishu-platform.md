@@ -10,7 +10,7 @@
 | 2 | 拉历史带 `with_sender_name` 拿不拿得到名字 | **能**，真人和 bot 都有 | 带上以后，`sender` 多出 `sender_name` 和 `sender_i18n_names`；bot 还多一个 `open_bot_id`（`ou_` 开头）。不带就只有 id。系统消息没有发送者 |
 | 3 | 能不能拉到别的 bot 卡片回答的正文 | **能**，要带 `card_msg_content_type` | 不带时，2.0 卡片（包括 CardKit 流式卡片）只返回标题和"请升级至最新版本客户端，以查看内容"，1.0 卡片能拿到正文。带 `user_card_content` 返回发送时的卡片 JSON，带 `raw_card_content` 返回 `json_card` 包装；别的 bot 发的卡片也一样能拿到。lark-cli 的 `+chat-messages-list` 已经返回 2.0 卡片正文 |
 | 4 | 话题里引用某一条消息，分不分得出是哪条 | **能**（接口层面） | 在话题里回复话题里的某一条 T1：`parent_id` 是 T1，`root_id` 是话题根，`thread_id` 是话题。直接在话题里发的消息，`parent_id` 是话题根。事件和 `GET /im/v1/messages/:id` 一致 |
-| 5 | 勾了"同时发送到群"收到几次事件 | **没测到**，由 owner 在客户端发 | 回复接口只有 `reply_in_thread` 和 `uuid`，lark-cli 也发不出这种消息 |
+| 5 | 勾了"同时发送到群"收到几次事件 | 两次（2026-10-16 补测，见文末） | 回复接口只有 `reply_in_thread` 和 `uuid`，lark-cli 也发不出这种消息，由 Codex 在 owner 的客户端里发 |
 | 6 | 私聊里的话题 | **能**，事件带 `thread_id` | 用户在和 bot 的私聊里用话题回复，事件 `chat_type=p2p`，带 `thread_id`、`root_id`、`parent_id`。bot 用 `reply_in_thread: true` 回私聊消息也成功，响应带 `thread_id`；用户在这个话题里回复，事件也带 `thread_id` |
 | 7 | 机器人能不能给没开过会话的人发私聊 | **没测到** | owner 2026-10-15 已经私聊过这个测试 bot，测不干净。留给 owner 和一位同事 |
 | 8 | daemon 断线期间的消息，重连后会不会补推 | **这次补推了，但不是 daemon 一重连就到**：在消息发出约 5 分 16 秒后才到，只有一个样本 | 断线时发的两条 @bot，daemon 重连后 3 分 18 秒内一条都没收到；停掉 daemon、换上自己的长连接后，在消息创建 316.0 秒和 317.2 秒后收到，事件头的 `create_time` 仍是原来的时间 |
@@ -172,3 +172,16 @@ PR 进话题和回复接口文档一致："如果要回复的消息已经是话�
 - **话题群（`chat_mode=topic`）里的引用**没测，这次只测了普通群里的话题。s22 要在话题群里补一次。
 - 第 4 项是接口层面的结果：用 `+messages-reply` 回复话题里的某一条。客户端里在话题中"回复"某条消息，发出的是不是同一种消息，由 owner 在客户端里回一次，Claude 看 `parent_id`。
 - 新建的三个群都留着。`<bot>` 已经加入公开群，`<另一个 bot>` 在两个 bot 的群里。
+
+## 补测：第 5 项"同时发送到群"（2026-10-16）
+
+#322 任务 10 里 Codex 用 owner 的飞书客户端发，JP-VPS 的验收 bot（按话题的 Codex 群）收，Claude 看 daemon 日志并用 owner 身份查消息。
+
+- 在一个已有话题里回复某一条（不是第一条）：一个事件，带 `thread_id`，按话题消息处理。
+- 在话题里回复时勾"同时发送到群"并 @bot：两个事件、两条消息，发送时间相同。
+  - 话题里那条带 `thread_id`、`root_id`、`parent_id`，`sync_to_chat_info` 是 `{type: 2, related_message_id: 主区那条}`。
+  - 主区那条不带 `thread_id`、`root_id`，`sync_to_chat_info` 是 `{type: 1, related_message_id: 话题里那条, thread_id: 原话题}`，消息列表里排在主区。
+  - bot 两条都处理了：话题里回了；主区那条被当成新的 @ 去开话题，飞书回 500（code 2200 internal error）。
+- 私聊话题里勾"同时发送到会话"：同样两个事件，一条在话题里，一条在私聊主界面。
+- `sync_to_chat_info` 是单条查询消息接口返回的字段；飞书 SDK 的类型里没有，长连接事件里带不带没确认。后续见 `docs/v1-plan.md` 的 s14d。
+
