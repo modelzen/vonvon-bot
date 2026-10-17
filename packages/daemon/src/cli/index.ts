@@ -127,9 +127,7 @@ Examples:
   vonvon settings set --group oc_xxx permission.mode=full
   vonvon settings set --group oc_xxx permission.mode=write permission.network=true
   vonvon settings set cards.showToolCalls=false
-  vonvon settings set --group oc_xxx model.selection='{"kind":"explicit","model":"gpt-5.5","effort":"medium"}'
-  vonvon settings set judge.selection='{"kind":"llm","model":"gpt-6-luna","effort":"low"}'
-  vonvon settings set --group oc_xxx judge.selection='{"kind":"default"}'   # 群里去掉覆盖，用 bot 的`)
+  vonvon settings set --group oc_xxx model.selection='{"kind":"explicit","model":"gpt-5.5","effort":"medium"}'`)
   .action(async (assignments: string[], options: Target) => {
     await (await import('./commands/settings')).runSettingsSet(assignments, options, io(options));
   });

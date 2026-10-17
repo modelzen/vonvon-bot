@@ -1,7 +1,6 @@
 import {
   agentSectionSchemas, projectEditableSchemas, sessionSectionSchemas, sessionThreadIdSchema,
-  type Agent, type AgentSettingsView, type Membership, type ProjectSettingsView, type SessionSettingsView, type SettingsScope,
-  type SettingsView, type SmartPromptView,
+  type Agent, type Membership, type ProjectSettingsView, type SessionSettingsView, type SettingsScope, type SettingsView,
 } from '@vonvon/protocol';
 import {
   conversationLabel, localTime, pickBot, pickGroup, print, toolLabel, want, withDaemon, type Call, type Daemon, type Io,
@@ -121,31 +120,6 @@ function cut(text: string, max = 40): string {
   return chars.length > max ? `${chars.slice(0, max).join('')}…` : chars.join('');
 }
 
-/** Where the judge prompt comes from, and which file to make or delete to change it (design 第 5 节). */
-function promptSource(prompt: SmartPromptView, group: boolean): string {
-  if (prompt.error) return `智能提示词：读不了 ${prompt.path}：${prompt.error}`;
-  if (prompt.source === 'group') return `智能提示词：这个群自己的 ${prompt.path}，删掉它就回到 bot 的`;
-  if (!group) return prompt.source === 'bot' ? `智能提示词：${prompt.path}，删掉它就恢复默认` : `智能提示词：内置默认。要改就新建 ${prompt.path}，删掉它就恢复默认`;
-  return `智能提示词：${prompt.source === 'bot' ? '用 bot 的 SMART.md' : '内置默认'}。要只改这个群就新建 ${prompt.path}，删掉它就回到 bot 的`;
-}
-
-/** The judge prompt in full, for `get judge` only: it runs to a few thousand characters. */
-function promptText(prompt: SmartPromptView): string[] {
-  const where = { main: '群主区', mentioned: '主区被 @', topic: '话题里' } as const;
-  return [
-    '—— 智能提示词 ——', prompt.text,
-    ...(Object.keys(where) as (keyof typeof where)[]).flatMap(v => [`—— 程序附的格式行（只读）：${where[v]} ——`, prompt.formatLines[v]]),
-    '—— 程序给模型的输入（示例，只读）——', prompt.inputExample,
-    ...(prompt.backendNote ? [prompt.backendNote] : []),
-  ];
-}
-
-/** One line per backend: the bot has no backend of its own, so a single effective model would mislead. */
-function judgeLines(view: AgentSettingsView): string[] {
-  return Object.entries(view.judgeByBackend ?? {}).map(([id, j]) =>
-    `  ${toolLabel(id)} 的群用：${j.model}，${j.effort ? `推理强度 ${j.effort}` : id === 'claude-agent' ? '关思考' : '不传推理强度'}（${j.source === 'bot' ? 'bot 设的' : '默认'}）`);
-}
-
 export async function runSettingsGet(section: string | undefined, target: Target, io: Io, daemon: Daemon = withDaemon): Promise<void> {
   const kind = scopeKind(target);
   const names = sectionNames(kind);
@@ -168,21 +142,12 @@ export async function runSettingsGet(section: string | undefined, target: Target
     const effective = (value.effective ?? {}) as Record<string, unknown>;
     // Only what `set` takes: the view's deprecated permission.guestMode (s15c) is left out.
     const settable = TABLES[kind][name]!.shape;
-    // The bot's judge model differs per backend: judgeLines, not one effective value.
-    const botJudge = name === 'judge' && view.scope.kind === 'agent';
     for (const [key, stored] of Object.entries((value.stored ?? {}) as Record<string, unknown>)) {
       if (!Object.hasOwn(settable, key)) continue;
       const live = effective[key];
-      human.push(`  ${key} = ${show(stored)}${botJudge || JSON.stringify(live) === JSON.stringify(stored) ? '' : `（生效：${show(live)}）`}`);
+      human.push(`  ${key} = ${show(stored)}${JSON.stringify(live) === JSON.stringify(stored) ? '' : `（生效：${show(live)}）`}`);
     }
     if (name === 'permission' && fullOnly) human.push(`  ${fullOnly}`);
-    if (name === 'judge') {
-      const prompt = (view as AgentSettingsView | ProjectSettingsView).smartPrompt;
-      if (botJudge) human.push(...judgeLines(view as AgentSettingsView));
-      if (prompt) human.push(`  ${promptSource(prompt, view.scope.kind === 'project')}`);
-      human.push('  只在智能模式的群里用');
-      if (prompt && section === 'judge') human.push(...promptText(prompt));
-    }
   }
   if (sessions) {
     const recent = [...sessions].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 10);
@@ -208,9 +173,6 @@ export async function runSettingsSet(assignments: readonly string[], target: Tar
   if (result.kind === 'conflict') throw new Error('这项设置刚在别处改过，没有保存。重新运行一次。');
   if (result.kind === 'rejected') throw new Error(`没有保存：${result.fields.map(field => `${field.field}：${field.message}`).join('；')}`);
   if (result.kind === 'unavailable') throw new Error(result.reason.kind === 'readonly' ? result.reason.message : '当前不可编辑。');
-  // The daemon fills in the judge model's backend: show what was stored, and for which groups.
-  const stored = section === 'judge' ? (result.section.value.stored as { selection?: { backend?: string } }).selection : undefined;
-  const saved = stored ? `judge.selection = ${show(stored)}${stored.backend && target.group === undefined ? `（${toolLabel(stored.backend)} 的群用）` : ''}`
-    : Object.entries(patch).map(([key, value]) => `${section}.${key} = ${show(value)}`).join('、');
+  const saved = Object.entries(patch).map(([key, value]) => `${section}.${key} = ${show(value)}`).join('、');
   print(io, [`已保存 ${saved}。`, ...result.effects.map(effect => effect.detail)], { section: result.section, effects: result.effects });
 }

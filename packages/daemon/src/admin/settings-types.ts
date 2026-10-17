@@ -27,26 +27,6 @@ export type ModelSelection = {
   /** a hand-typed id, not checked against the model list (product.md 3.11) */
   custom?: boolean;
 };
-/** The judge model of a layer (s23c); `default` removes the layer. See the protocol's judgeSelection. */
-export type JudgeSelection = {
-  kind: 'default';
-} | {
-  kind: 'llm';
-  backend?: string;
-  model: string;
-  effort?: ReasoningEffort;
-  custom?: boolean;
-};
-export interface SmartPromptView {
-  source: 'default' | 'bot' | 'group';
-  path: string;
-  text: string;
-  formatLines: Record<'main' | 'mentioned' | 'topic', string>;
-  inputExample: string;
-  backendNote?: string;
-  maxLength: number;
-  error?: string;
-}
 export type TitlePolicy = {
   enabled: false;
 } | {
@@ -78,9 +58,6 @@ export interface AgentSections {
   access: {
     allowedChats: string[];
   };
-  judge: {
-    selection: JudgeSelection;
-  };
 }
 export interface ProjectSections {
   permission: {
@@ -98,9 +75,6 @@ export interface ProjectSections {
   /** 运行中来了消息: 'default' (stored only) inherits the bot's; effective is what runs. */
   run: {
     pendingPolicy: 'default' | PendingPolicy;
-  };
-  judge: {
-    selection: JudgeSelection;
   };
 }
 export interface SessionSections {
@@ -157,13 +131,6 @@ export interface AgentSettingsView {
     revision: string;
     maxEditLength: number;
   };
-  smartPrompt?: SmartPromptView;
-  /** per backend, what this bot's groups on it judge with */
-  judgeByBackend?: Record<string, {
-    model: string;
-    effort?: ReasoningEffort;
-    source: 'bot' | 'default';
-  }>;
 }
 export interface ProjectSettingsView {
   scope: Extract<SettingsScope, {
@@ -182,7 +149,6 @@ export interface ProjectSettingsView {
     openIds: string[];
     revision: string;
   };
-  smartPrompt?: SmartPromptView;
 }
 export interface SessionSettingsView {
   scope: Extract<SettingsScope, {
@@ -298,7 +264,7 @@ export type SettingsActionResult = {
 export interface ModelQuery {
   botId: string;
   backend: string;
-  purpose: 'project' | 'session' | 'comments' | 'titles' | 'judge';
+  purpose: 'project' | 'session' | 'comments' | 'titles';
 }
 export interface ModelCatalog {
   backend: string;
