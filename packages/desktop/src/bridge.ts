@@ -142,8 +142,8 @@ export function installBridge(
 
   function onError(error: Error, from: AttachedDaemon): void {
     if (disposed) return;
-    // The window's own switch or restart expects the drop; a helper started elsewhere the shell follows.
-    if (error instanceof ConnectionError && (actions.isExpectedDisconnect() || actions.followServiceHelper(from.identity))) return;
+    // The shell owns reattachment and reports a drop if recovery fails.
+    if (error instanceof ConnectionError && (actions.isExpectedDisconnect() || actions.recoverConnection(from.identity))) return;
     const safe = safeFailure(error);
     if (!subscribed || !currentDocument()) retain(safe);
     else send({ type: 'error', value: safe });
@@ -167,6 +167,7 @@ export function installBridge(
     let latest: Awaited<ReturnType<AttachedDaemon['client']['snapshot']>> | undefined;
     let revision = -1;
     let bound = true;
+    let connectionFailure: ConnectionError | undefined;
     const removers: (() => void)[] = [];
     const dispose = () => { if (!bound) return; bound = false; latest = undefined; for (const off of removers) off(); };
     try {
@@ -179,10 +180,14 @@ export function installBridge(
       }));
       removers.push(current.client.onLog(value => { if (!paused && activeOwner === current) send({ type: 'log', value }); }));
       removers.push(current.client.onBackendInstall(value => { if (!paused && activeOwner === current) send({ type: 'backendInstall', value }); }));
-      removers.push(current.client.onError(error => { if (!paused && activeOwner === current) onError(error, current); }));
+      removers.push(current.client.onError(error => {
+        if (paused && error instanceof ConnectionError) connectionFailure = error;
+        else if (!paused && activeOwner === current) onError(error, current);
+      }));
     } catch (error) { dispose(); throw error; }
     return {
       dispose,
+      connectionFailure: () => connectionFailure,
       activate(initial: Awaited<ReturnType<AttachedDaemon['client']['snapshot']>>) {
         const value = latest && latest.revision >= initial.revision ? latest : initial;
         latest = undefined;
@@ -302,14 +307,18 @@ export function installBridge(
         catch (error) { await next.dispose(); throw error; }
         if (disposed) { await next.dispose(); throw new Error('Desktop connection is unavailable'); }
         let initial: Awaited<ReturnType<AttachedDaemon['client']['snapshot']>>;
+        let nextBinding: ReturnType<typeof bind> | undefined;
         try {
-          binding = bind(next, true);
+          nextBinding = bind(next, true);
+          binding = nextBinding;
           initial = await next.client.snapshot();
+          const lost = nextBinding.connectionFailure();
+          if (lost) throw lost;
           if (disposed) throw new Error('Desktop connection is unavailable');
         } catch (error) {
           binding.dispose();
           await next.dispose();
-          throw error;
+          throw nextBinding?.connectionFailure() ?? error;
         }
         activeOwner = next;
         stoppedStatus = undefined;
