@@ -293,6 +293,7 @@ class CodexThread implements AgentThread {
     // before it and stay buffered in the client; never infer identity from the
     // first turn/started (it may belong to an old turn or a subagent).
     // Observe rejection eagerly, even if card creation delays consumption.
+    const requests = self.client.openRequestScope(self.sessionId);
     let activeTurnId: string | undefined;
     const started = self.client.request<TurnStartResponse>('turn/start', params)
       .then((result) => {
@@ -303,6 +304,7 @@ class CodexThread implements AgentThread {
       })
       .catch((err: unknown) => {
         const error = err instanceof Error ? err : new Error(String(err));
+        requests.close();
         log.fail('agent', error, { phase: 'turn/start' });
         return { error };
       });
@@ -315,7 +317,18 @@ class CodexThread implements AgentThread {
         }
         // Do not race stream.next() with start failure: the losing read would
         // remain queued and steal the next request's first notification.
-        for await (const notification of self.client.stream()) {
+        for await (const notification of self.client.events()) {
+          if (!('method' in notification)) {
+            if (notification.kind === 'request_cancelled') {
+              if (notification.owner === requests) yield { type: 'ask_cancelled', requestId: notification.requestId };
+              continue;
+            }
+            if (requests.accepts(notification, result.turnId)) {
+              lastActivityAt = Date.now();
+              yield { type: 'ask', request: notification.request };
+            }
+            continue;
+          }
           const p = notification.params;
           if (!('threadId' in p) || p.threadId !== self.sessionId) continue;
           if ('turnId' in p && p.turnId !== result.turnId) continue;
@@ -326,6 +339,7 @@ class CodexThread implements AgentThread {
           const ev = mapNotification(notification);
           if (!ev) continue;
           if (ev.type === 'done' || (ev.type === 'error' && !ev.willRetry)) {
+            requests.close();
             activeTurnId = undefined; // no steering during terminal-card I/O
             yield ev;
             return;
@@ -333,14 +347,16 @@ class CodexThread implements AgentThread {
           yield ev;
         }
       } finally {
+        requests.close();
         activeTurnId = undefined;
       }
     }
-    return { events: gen(), turnId: () => activeTurnId, lastActivity: () => lastActivityAt };
+    return { events: gen(), respondToAsk: (id, resolution) => requests.respond(id, resolution), turnId: () => activeTurnId, lastActivity: () => lastActivityAt };
   }
 
   runGoal(objective: string): AgentRun {
     const self = this;
+    const requests = self.client.openRequestScope(self.sessionId);
     this.currentTurnId = undefined;
     // Same liveness clock as runStreamed — the goal's 30min idle backstop must
     // also see raw activity, not just mapped events.
@@ -366,13 +382,14 @@ class CodexThread implements AgentThread {
         self.client
           .request('thread/goal/set', { threadId: self.sessionId, objective })
           .then(undefined, (err: unknown) => {
+            requests.close();
             setError = err instanceof Error ? err : new Error(String(err));
             log.fail('agent', setError, { phase: 'thread/goal/set' });
             resolve('set-failed');
           });
       });
 
-      const stream = self.client.stream()[Symbol.asyncIterator]();
+      const stream = self.client.events()[Symbol.asyncIterator]();
       // Guard against a STALE goal snapshot: resuming a thread that had a prior
       // goal re-emits a thread/goal/updated for THAT goal (often already complete)
       // around resume time — before ours runs. If we honored it we'd "complete"
@@ -380,6 +397,7 @@ class CodexThread implements AgentThread {
       // goal_updates whose objective isn't ours, and don't honor a terminal status
       // until our goal has actually started (a turn started, or it went active).
       let armed = false;
+      let ownedTurnId: string | undefined;
       let turnActive = false;
       let goalDone = false; // a terminal goal status was seen; drain the live turn, then stop
       try {
@@ -390,17 +408,36 @@ class CodexThread implements AgentThread {
             return;
           }
           if (step.done) return;
+          if (!('method' in step.value)) {
+            if (step.value.kind === 'request_cancelled') {
+              if (step.value.owner === requests) yield { type: 'ask_cancelled', requestId: step.value.requestId };
+              continue;
+            }
+            if (requests.accepts(step.value, ownedTurnId)) {
+              lastActivityAt = Date.now();
+              yield { type: 'ask', request: step.value.request };
+            }
+            continue;
+          }
+          const p = step.value.params;
+          if (!p || typeof p !== 'object' || !('threadId' in p) || p.threadId !== self.sessionId) continue;
+          if ('turnId' in p && p.turnId !== ownedTurnId) continue;
+          if (step.value.method === 'turn/completed' && step.value.params.turn.id !== ownedTurnId) continue;
           lastActivityAt = Date.now();
           const ev = mapNotification(step.value);
           if (!ev) continue;
           if (ev.type === 'turn_started') {
             self.currentTurnId = ev.turnId;
+            if (ownedTurnId && ownedTurnId !== ev.turnId) requests.finishTurn(ownedTurnId);
+            ownedTurnId = ev.turnId;
             armed = true; // a real turn for our goal is running
             turnActive = true;
             yield ev;
             continue;
           }
           if (ev.type === 'done') {
+            if (ownedTurnId) requests.finishTurn(ownedTurnId);
+            ownedTurnId = undefined;
             turnActive = false;
             yield ev;
             // The goal is terminal AND its final turn just finished — now stop.
@@ -423,15 +460,17 @@ class CodexThread implements AgentThread {
             }
             continue;
           }
+          if (ev.type === 'error' && !ev.willRetry) requests.close();
           yield ev;
           if (ev.type === 'error' && !ev.willRetry) return; // a fatal error kills the run
         }
       } finally {
+        requests.close();
         await stream.return?.();
         self.currentTurnId = undefined;
       }
     }
-    return { events: gen(), turnId: () => self.currentTurnId, lastActivity: () => lastActivityAt };
+    return { events: gen(), respondToAsk: (id, resolution) => requests.respond(id, resolution), turnId: () => self.currentTurnId, lastActivity: () => lastActivityAt };
   }
 
   async clearGoal(): Promise<void> {
@@ -447,6 +486,7 @@ class CodexThread implements AgentThread {
   }
 
   async abort(turnId: string): Promise<void> {
+    this.client.cancelRequests(this.sessionId, turnId);
     await this.client.request('turn/interrupt', { threadId: this.sessionId, turnId });
   }
 

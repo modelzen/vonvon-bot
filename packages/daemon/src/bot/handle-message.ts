@@ -5784,6 +5784,7 @@ export function createOrchestrator(
         let textChars = 0;
         for await (const ev of cardEvents.consume(guarded)) {
           if (ev.type === 'ask') { askTurn.enqueue(ev.request); continue; }
+          if (ev.type === 'ask_cancelled') { askTurn.cancel(ev.requestId); continue; }
           if (ev.type === 'done' || (ev.type === 'error' && !ev.willRetry)) askTurn.close('turn-ended');
           if (ev.type === 'steer_accepted') {
             await splitCard(ev);
@@ -6396,6 +6397,7 @@ export function createOrchestrator(
       const originalInterrupt = state.interrupt;
       let unseen = opts.seen; // marked once the host starts the goal's first turn (see launchRun)
       for await (const ev of guarded) {
+        if (ev.type === 'ask_cancelled') { askTurn?.cancel(ev.requestId); continue; }
         if (ev.type === 'ask') {
           if (askTurn) askTurn.enqueue(ev.request);
           else { asks.unavailable(run, ev.request, error => log.fail('agent', error)); originalInterrupt(); }
@@ -6639,6 +6641,7 @@ export function createOrchestrator(
             }, askStopped, run.lastActivity);
             try {
               for await (const ev of guarded) {
+                if (ev.type === 'ask_cancelled') continue;
                 if (ev.type === 'ask') {
                   asks.unavailable(run, ev.request, error => {
                     log.fail('agent', error, { phase: 'comment-ask' });
