@@ -1,7 +1,7 @@
 import { setSecret } from '../config/keystore';
-import { buildEncryptedAccountConfig, loadConfig, saveConfig } from '../config/store';
+import { buildEncryptedAccountConfig, saveConfig } from '../config/store';
 import { botPaths } from '../config/paths';
-import { isComplete, secretKeyForApp, type AppPreferences, type TenantBrand } from '../config/schema';
+import { secretKeyForApp, type AppPreferences, type TenantBrand } from '../config/schema';
 import { validateAppCredentials } from '../utils/feishu-auth';
 import { registerBotEntry, loadBots } from '../config/bots';
 import { log } from '../core/logger';
@@ -101,14 +101,14 @@ export async function registerBotFromCredentials(
 
   try {
     const result = await registerBotEntry({ appId, tenant, botName: v.botName,
-      desiredName: input.desiredName ?? v.botName ?? input.fallbackName ?? appId }, async () => {
-      // Fixed ownership order: bots, then keystore/config. All paths are explicit.
+      desiredName: input.desiredName ?? v.botName ?? input.fallbackName ?? appId,
+      initialPreferences: input.initialPreferences }, async ({ snapshot, preferences, namespaceRoot }) => {
+      const owned = withOwnerAdmin(preferences, ownerOpenId);
+      const next = { ...owned, directories: { ...owned.directories,
+        workspaces: owned.directories?.workspaces ?? { primary: namespaceRoot, additional: [] } } };
+      const cfg = await buildEncryptedAccountConfig(appId, tenant, next);
       await setSecret(secretKeyForApp(appId), appSecret);
-      const files = botPaths(appId);
-      const existing = await loadConfig(files.configFile);
-      const preferences = withOwnerAdmin(isComplete(existing) ? existing.preferences : input.initialPreferences, ownerOpenId);
-      const cfg = await buildEncryptedAccountConfig(appId, tenant, preferences);
-      await saveConfig(cfg, files.configFile);
+      await saveConfig(cfg, botPaths(appId).configFile, snapshot);
     });
     if (result.kind === 'already-registered') {
       return { ok: false, code: 'already_registered', reason: '此 Agent 已存在，请使用刷新凭据。' };

@@ -2,7 +2,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { paths } from '../src/config/paths';
-import { resolveProjectsRootDir } from '../src/project/lifecycle';
+import { resolveProjectsRootDir } from '../src/config/directories';
 
 describe('resolveProjectsRootDir', () => {
   it('keeps the historical default when the setting is omitted or blank', () => {

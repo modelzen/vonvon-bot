@@ -88,7 +88,8 @@ export async function ensureSecretsGetterWrapper(): Promise<string> {
 // 同进程内并发 saveConfig 串行化 + tmp 唯一名：避免两次写共用 tmp 文件交错（rename
 // 命中被对方写一半的 tmp → JSON 损坏，或丢写）。
 let saveChain: Promise<unknown> = Promise.resolve();
-export function saveConfig(cfg: AppConfig, path: string = paths.configFile, expected?: AppConfig): Promise<void> {
+export function saveConfig(cfg: AppConfig, path: string = paths.configFile, expected?: Partial<AppConfig>): Promise<void> {
+  const expectedSnapshot = expected === undefined ? undefined : structuredClone(expected);
   // Snapshot before yielding so queued saves validate exactly what they write.
   let serialized: string;
   try {
@@ -103,8 +104,8 @@ export function saveConfig(cfg: AppConfig, path: string = paths.configFile, expe
   const run = saveChain.then(async () => {
     const nextDirectories = configDirectories(JSON.parse(serialized));
     // Old callers without a declaration/CAS can still replace malformed legacy JSON.
-    const previous = expected || nextDirectories ? await loadConfig(path) : {};
-    if (expected && JSON.stringify(previous) !== JSON.stringify(expected)) throw new Error('配置已被其他进程修改，请重启 Host 后重新加载');
+    const previous = expectedSnapshot || nextDirectories ? await loadConfig(path) : {};
+    if (expectedSnapshot && JSON.stringify(previous) !== JSON.stringify(expectedSnapshot)) throw new Error('配置已被其他进程修改，请重启 Host 后重新加载');
     await admitDirectoryChanges(nextDirectories, configDirectories(previous), paths.appDir);
     await mkdir(dirname(path), { recursive: true });
     const tmp = `${path}.tmp-${process.pid}-${randomUUID()}`;
