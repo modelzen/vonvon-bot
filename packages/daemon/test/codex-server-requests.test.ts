@@ -5,6 +5,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AppServerClient } from '../src/provider/transport/jsonrpc';
 import { CodexAppServerBackend } from '../src/agent/codex-appserver/backend';
 import { shutdownResidentClients } from '../src/agent/codex-appserver/client-pool';
+import { AskCoordinator, type AskTurn } from '../src/bot/ask-coordinator';
+import { createIdlePause } from '../src/bot/watchdog';
+import type { LarkChannel } from '@larksuiteoapi/node-sdk';
+import type { AppConfig } from '../src/config/schema';
 import type { AgentEvent, AgentRun } from '../src/agent/types';
 import { writeNodeExecutable } from './helpers/node-executable';
 
@@ -33,16 +37,30 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', li
     const id = 'turn-' + ++turn;
     const text = m.params.input[0].text;
     send(ask('ask-' + turn, id, text === 'secret' ? { isSecret: true } : {}));
+    if (text === 'pre-cancel') send({ method: 'serverRequest/resolved', params: { threadId: 'thread', requestId: 'ask-' + turn } });
     if (text === 'fail') { send({ id: m.id, error: { code: -1, message: 'refused' } }); return; }
     send({ id: m.id, result: { turn: { id } } });
     send({ method: 'turn/started', params: { threadId: 'thread', turn: { id } } });
     send({ kind: 'request', method: 'item/agentMessage/delta', params: { threadId: 'thread', turnId: id, itemId: 'a', delta: 'still consuming' } });
-    if (text === 'complete' || text === 'secret') send({ method: 'turn/completed', params: { threadId: 'thread', turn: { id } } });
+    if (text === 'complete' || text === 'secret' || text === 'pre-cancel') send({ method: 'turn/completed', params: { threadId: 'thread', turn: { id } } });
+    if (text === 'cancel') setTimeout(() => {
+      send({ method: 'serverRequest/resolved', params: { threadId: 'thread', requestId: 'ask-' + turn } });
+      send({ method: 'item/agentMessage/delta', params: { threadId: 'thread', turnId: id, itemId: 'a', delta: 'after cancellation' } });
+      send({ method: 'turn/completed', params: { threadId: 'thread', turn: { id } } });
+    }, 40);
     if (text === 'eof') setTimeout(() => process.exit(0), 30);
     return;
   } else if (m.method === 'thread/goal/set') {
     send({ kind: 'request', method: 'turn/started', params: { threadId: 'thread', turn: { id: 'goal-turn' } } });
+    if (m.params.objective === 'foreign lifecycle') send(ask('held-before-foreign', 'goal-turn'));
     send({ method: 'turn/started', params: { threadId: 'foreign', turn: { id: 'foreign-turn' } } });
+    if (m.params.objective === 'foreign lifecycle') {
+      send({ method: 'turn/completed', params: { threadId: 'foreign', turn: { id: 'foreign-turn' } } });
+      send({ method: 'turn/completed', params: { threadId: 'thread', turn: { id: 'wrong-turn' } } });
+      send({ method: 'error', params: { threadId: 'foreign', turnId: 'foreign-turn', error: { message: 'foreign fatal' }, willRetry: false } });
+      send({ method: 'error', params: { threadId: 'thread', turnId: 'wrong-turn', error: { message: 'wrong turn fatal' }, willRetry: false } });
+      send({ method: 'item/agentMessage/delta', params: { threadId: 'thread', turnId: 'goal-turn', itemId: 'own', delta: 'owned marker' } });
+    }
     send(ask('foreign-goal', 'foreign-turn'));
     send(ask('own-goal', 'goal-turn'));
     send({ method: 'thread/goal/updated', params: { threadId: 'thread', goal: { objective: m.params.objective, status: 'complete' } } });
@@ -114,6 +132,21 @@ function answer(run: AgentRun, id: string) {
   } });
 }
 
+function coordinatorFixture(run: AgentRun) {
+  let cards = 0;
+  const channel = { rawClient: {
+    cardkit: { v1: { card: { create: async () => ({ data: { card_id: `card-${++cards}` } }), update: async () => ({}) } } },
+    im: { v1: { message: { reply: async () => ({ data: { message_id: `message-${cards}` } }) } } },
+  } };
+  const cfg: AppConfig = { accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner' } } };
+  const coordinator = new AskCoordinator(channel as unknown as LarkChannel, cfg, { peek: () => 'Owner' });
+  cleanup.push(async () => coordinator.shutdown());
+  const pause = createIdlePause();
+  const open = () => coordinator.openTurn({ run, sessionKey: 'fixture', placement: { chatId: 'chat', replyTo: 'message', replyInThread: true },
+    initiator: { kind: 'user', openId: 'owner' }, idlePause: pause, waiting: () => {}, fault: error => { throw error; } });
+  return { coordinator, pause, open };
+}
+
 describe('Codex inbound requests over the real app-server transport', () => {
   it('uses protocol-specific negative replies with original numeric/string IDs and preserves unknown methods', async () => {
     const f = await clientFixture();
@@ -142,7 +175,7 @@ describe('Codex inbound requests over the real app-server transport', () => {
     await f.emit([{ method: 'before', params: {} }, question(77), { method: 'after', params: {} }]);
     expect((await events.next()).value).toMatchObject({ method: 'before' });
     const entry = (await events.next()).value;
-    if (!entry || 'method' in entry) throw new Error('Expected request');
+    if (!entry || 'method' in entry || entry.kind !== 'request') throw new Error('Expected request');
     expect(scope.accepts(entry, 'turn')).toBe(true);
     expect((await events.next()).value).toMatchObject({ method: 'after' });
     await scope.respond(entry.request.id, { kind: 'answered', answer: { kind: 'choices', answers: [{ questionId: 'q0', selected: ['o0'] }] } });
@@ -158,7 +191,7 @@ describe('Codex inbound requests over the real app-server transport', () => {
     await f.emit([question('opaque', { ...params, questions: [{ ...params.questions[0], id: providerId,
       options: [{ label: ' Original label ', description: '' }] }] })]);
     const entry = (await stream.next()).value;
-    if (!entry || 'method' in entry) throw new Error('Expected request');
+    if (!entry || 'method' in entry || entry.kind !== 'request') throw new Error('Expected request');
     await scope.respond(entry.request.id, { kind: 'answered', answer: { kind: 'choices', answers: [{ questionId: 'q0', selected: ['o0'] }] } });
     await vi.waitFor(() => expect(f.replies()).toEqual([{ jsonrpc: '2.0', id: 'opaque',
       result: { answers: Object.fromEntries([[providerId, { answers: [' Original label '] }]]) } }]));
@@ -194,7 +227,7 @@ describe('Codex inbound requests over the real app-server transport', () => {
     for (const reply of f.replies()) expect(reply).toMatchObject({ result: { answers: {} } });
   });
 
-  it.each(['clear', 'iterator-return', 'utility', 'resolved', 'filtered'] as const)('releases %s requests without stranding wire replies', async kind => {
+  it.each(['clear', 'iterator-return', 'utility', 'filtered'] as const)('releases %s requests without stranding wire replies', async kind => {
     const f = await clientFixture();
     const scope = f.client.openRequestScope('thread');
     await f.emit([question('pending')]);
@@ -204,16 +237,33 @@ describe('Codex inbound requests over the real app-server transport', () => {
       await f.emit([{ method: 'marker', params: {} }]);
       expect((await stream.next()).value).toMatchObject({ method: 'marker' });
       await stream.return?.();
-    } else if (kind === 'resolved') {
-      await f.emit([{ method: 'serverRequest/resolved', params: { threadId: 'thread', requestId: 'pending' } }]);
     } else {
       const stream = f.client.events()[Symbol.asyncIterator]();
       const entry = (await stream.next()).value;
-      if (!entry || 'method' in entry) throw new Error('Expected request');
+      if (!entry || 'method' in entry || entry.kind !== 'request') throw new Error('Expected request');
       if (kind === 'filtered') expect(scope.accepts(entry, 'later-turn')).toBe(false);
       await stream.return?.();
     }
     await vi.waitFor(() => expect(f.replies()).toEqual([{ jsonrpc: '2.0', id: 'pending', result: { answers: {} } }]));
+  });
+
+  it('cancels only the matching original RPC ID and keeps another queued request answerable', async () => {
+    const f = await clientFixture();
+    const scope = f.client.openRequestScope('thread');
+    const stream = f.client.events()[Symbol.asyncIterator]();
+    await f.emit([question('cancel-this'), question(81), { method: 'serverRequest/resolved', params: { threadId: 'thread', requestId: 'cancel-this' } }]);
+    const old = (await stream.next()).value;
+    if (!old || 'method' in old || old.kind !== 'request') throw new Error('Expected request');
+    expect(scope.accepts(old, 'turn')).toBe(false);
+    const current = (await stream.next()).value;
+    if (!current || 'method' in current || current.kind !== 'request') throw new Error('Expected request');
+    expect(scope.accepts(current, 'turn')).toBe(true);
+    expect((await stream.next()).value).toMatchObject({ kind: 'request_cancelled', requestId: old.request.id });
+    await scope.respond(current.request.id, { kind: 'answered', answer: { kind: 'choices', answers: [{ questionId: 'q0', selected: ['o0'] }] } });
+    await f.emit([{ method: 'marker', params: {} }]);
+    await vi.waitFor(() => expect(f.replies()).toEqual([{ jsonrpc: '2.0', id: 81, result: { answers: { 'original-question': { answers: ['Original label'] } } } }]));
+    await scope.respond(old.request.id);
+    await stream.return?.();
   });
 
   it('releases unowned warm/utility requests immediately', async () => {
@@ -297,6 +347,66 @@ describe('Codex AgentRun request ownership', () => {
       { jsonrpc: '2.0', id: 'foreign-goal', result: { answers: {} } },
       { jsonrpc: '2.0', id: 'own-goal', result: { answers: {} } },
     ]));
+  });
+
+  it('foreign goal lifecycle cannot clear an owned coordinator ask or replace the active turn', async () => {
+    const f = setup();
+    vi.stubEnv('CODEX_BIN', f.bin);
+    const thread = await new CodexAppServerBackend().resumeThread({ cwd: f.dir, sessionId: 'thread' });
+    cleanup.push(() => thread.close());
+    if (!thread.runGoal) throw new Error('Goal support missing');
+    const run = thread.runGoal('foreign lifecycle');
+    const c = coordinatorFixture(run);
+    let turn: AskTurn | undefined;
+    let marker = false;
+    for await (const event of run.events) {
+      if (event.type === 'turn_started') { turn?.close('turn-ended'); turn = c.open(); }
+      else if (event.type === 'ask') turn?.enqueue(event.request);
+      else if (event.type === 'done') turn?.close('turn-ended');
+      else if (event.type === 'text_delta' && event.delta === 'owned marker') {
+        marker = true;
+        expect(run.turnId()).toBe('goal-turn');
+        expect(c.pause.held).toBe(true);
+        expect(f.replies()).not.toContainEqual(expect.objectContaining({ id: 'held-before-foreign' }));
+      }
+      expect(event).not.toMatchObject({ type: 'error' });
+      if (event.type === 'turn_started' || event.type === 'done') expect(event.turnId).toBe('goal-turn');
+    }
+    expect(marker).toBe(true);
+    expect(c.pause.held).toBe(false);
+  });
+
+  it('server cancellation releases the actual coordinator hold without replying or ending the run', async () => {
+    const f = await runFixture('cancel');
+    const c = coordinatorFixture(f.run);
+    const turn = c.open();
+    let cancelled = false;
+    let after = false;
+    for await (const event of { [Symbol.asyncIterator]: () => f.iterator }) {
+      if (event.type === 'ask') turn.enqueue(event.request);
+      else if (event.type === 'ask_cancelled') {
+        turn.cancel(event.requestId);
+        cancelled = true;
+        expect(c.pause.held).toBe(false);
+      } else if (event.type === 'text_delta' && event.delta === 'after cancellation') after = true;
+    }
+    expect(cancelled).toBe(true);
+    expect(after).toBe(true);
+    expect(c.pause.held).toBe(false);
+    expect(f.replies()).toEqual([]);
+  });
+
+  it('pre-ACK cancellation suppresses the old ask and cannot clear a later turn', async () => {
+    const f = await runFixture('pre-cancel');
+    const events = await drain(f.iterator);
+    expect(events.some(event => event.type === 'ask')).toBe(false);
+    expect(f.replies()).toEqual([]);
+    const next = f.thread.runStreamed({ text: 'wait' });
+    const iterator = next.events[Symbol.asyncIterator]();
+    const request = await nextAsk(iterator);
+    await answer(next, request.id);
+    await vi.waitFor(() => expect(f.replies()).toEqual([{ jsonrpc: '2.0', id: 'ask-2', result: { answers: { 'provider-question': { answers: ['Original label'] } } } }]));
+    await iterator.return?.();
   });
 
 });

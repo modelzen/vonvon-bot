@@ -319,6 +319,10 @@ class CodexThread implements AgentThread {
         // remain queued and steal the next request's first notification.
         for await (const notification of self.client.events()) {
           if (!('method' in notification)) {
+            if (notification.kind === 'request_cancelled') {
+              if (notification.owner === requests) yield { type: 'ask_cancelled', requestId: notification.requestId };
+              continue;
+            }
             if (requests.accepts(notification, result.turnId)) {
               lastActivityAt = Date.now();
               yield { type: 'ask', request: notification.request };
@@ -404,32 +408,36 @@ class CodexThread implements AgentThread {
             return;
           }
           if (step.done) return;
-          lastActivityAt = Date.now();
           if (!('method' in step.value)) {
+            if (step.value.kind === 'request_cancelled') {
+              if (step.value.owner === requests) yield { type: 'ask_cancelled', requestId: step.value.requestId };
+              continue;
+            }
             if (requests.accepts(step.value, ownedTurnId)) {
+              lastActivityAt = Date.now();
               yield { type: 'ask', request: step.value.request };
             }
             continue;
           }
-          const ownNotification = 'threadId' in step.value.params && step.value.params.threadId === self.sessionId;
+          const p = step.value.params;
+          if (!('threadId' in p) || p.threadId !== self.sessionId) continue;
+          if ('turnId' in p && p.turnId !== ownedTurnId) continue;
+          if ('turn' in p && step.value.method !== 'turn/started' && p.turn.id !== ownedTurnId) continue;
+          lastActivityAt = Date.now();
           const ev = mapNotification(step.value);
           if (!ev) continue;
           if (ev.type === 'turn_started') {
             self.currentTurnId = ev.turnId;
-            if (ownNotification) {
-              if (ownedTurnId && ownedTurnId !== ev.turnId) requests.finishTurn(ownedTurnId);
-              ownedTurnId = ev.turnId;
-            }
+            if (ownedTurnId && ownedTurnId !== ev.turnId) requests.finishTurn(ownedTurnId);
+            ownedTurnId = ev.turnId;
             armed = true; // a real turn for our goal is running
             turnActive = true;
             yield ev;
             continue;
           }
           if (ev.type === 'done') {
-            if (ownNotification && 'turn' in step.value.params && step.value.params.turn.id === ownedTurnId) {
-              requests.finishTurn(ownedTurnId);
-              ownedTurnId = undefined;
-            }
+            if (ownedTurnId) requests.finishTurn(ownedTurnId);
+            ownedTurnId = undefined;
             turnActive = false;
             yield ev;
             // The goal is terminal AND its final turn just finished — now stop.

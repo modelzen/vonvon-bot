@@ -1,4 +1,4 @@
-import { approvalAnswer, CodexRequestScope, userInputRequest, type InboundQuestion } from '../../agent/codex-appserver/server-requests';
+import { approvalAnswer, CodexRequestScope, userInputRequest, type InboundQuestion, type InboundCancellation } from '../../agent/codex-appserver/server-requests';
 import { UnsentRequestError } from '../../agent/types';
 import { StringDecoder } from 'node:string_decoder';
 import type { Readable, Writable } from 'node:stream';
@@ -73,7 +73,8 @@ export type JsonRpcAnswer = { result: unknown } | { error: { code: number; messa
 export class JsonRpcPeer {
   onFrame?: (frame: JsonRpcFrame) => void;
   onNotification?: (method: string, params: unknown, frame: JsonRpcFrame) => void;
-  onRequest?: (method: string, params: unknown, frame: JsonRpcFrame) => JsonRpcAnswer | undefined | Promise<JsonRpcAnswer | undefined>;
+  /** undefined leaves the method unknown; null retires an already server-resolved request without a reply. */
+  onRequest?: (method: string, params: unknown, frame: JsonRpcFrame) => JsonRpcAnswer | null | undefined | Promise<JsonRpcAnswer | null | undefined>;
   onInvalidFrame?: (line: string) => void;
 
   readonly closed: Promise<void>;
@@ -198,12 +199,12 @@ export class JsonRpcPeer {
   }
 
   private async answerRequest(id: JsonRpcId, method: string, frame: JsonRpcFrame): Promise<void> {
-    let answer: JsonRpcAnswer | undefined;
+    let answer: JsonRpcAnswer | null | undefined;
     try { answer = await this.onRequest?.(method, frame.params, frame); }
     catch (error) {
       answer = { error: { code: -32603, message: error instanceof Error ? error.message : 'Internal error' } };
     }
-    if (this.ended) return;
+    if (this.ended || answer === null) return;
     try {
       this.output.write(`${JSON.stringify({ jsonrpc: '2.0', id,
         ...(answer ?? { error: { code: -32601, message: 'not handled' } }) })}\n`);
@@ -233,7 +234,7 @@ export class AppServerClient {
   private child: ChildProcessWithoutNullStreams | null = null;
   private owned: OwnedCodexProcess | undefined;
   private peer: JsonRpcPeer | undefined;
-  private readonly notifications = new AsyncQueue<ServerNotification | InboundQuestion>();
+  private readonly notifications = new AsyncQueue<ServerNotification | InboundQuestion | InboundCancellation>();
   private requestScope: CodexRequestScope | undefined;
   private requestSerial = 0;
   private closed = false;
@@ -284,7 +285,7 @@ export class AppServerClient {
       if (method === 'serverRequest/resolved') {
         const resolved = resolvedRequestSchema.safeParse(params);
         if (resolved.success && resolved.data.threadId === this.requestScope?.threadId) {
-          this.requestScope.retireRpc(resolved.data.requestId);
+          for (const cancelled of this.requestScope.retireRpc(resolved.data.requestId)) this.notifications.push(cancelled);
         }
       }
       this.notifications.push(frame as unknown as ServerNotification);
@@ -367,7 +368,9 @@ export class AppServerClient {
             while (true) {
               const step = await iterator.next();
               if (step.done) return { done: true, value: undefined };
-              if (!('method' in step.value)) step.value.settle();
+              if (!('method' in step.value)) {
+                if (step.value.kind === 'request') step.value.settle();
+              }
               else return { done: false, value: step.value };
             }
           },
@@ -380,7 +383,7 @@ export class AppServerClient {
     };
   }
 
-  events(): AsyncIterable<ServerNotification | InboundQuestion> {
+  events(): AsyncIterable<ServerNotification | InboundQuestion | InboundCancellation> {
     const queue = this.notifications;
     const scope = this.requestScope;
     return {

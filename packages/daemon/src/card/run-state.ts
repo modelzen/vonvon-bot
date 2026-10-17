@@ -260,8 +260,17 @@ export function reduce(state: RunState, evt: AgentEvent): RunState {
         footer: null,
       };
 
-    default:
+    case 'system':
+    case 'turn_started':
+    case 'usage':
+    case 'goal_update':
+    case 'ask':
+    case 'ask_cancelled':
       return state;
+    default: {
+      const exhaustive: never = evt;
+      return exhaustive;
+    }
   }
 }
 

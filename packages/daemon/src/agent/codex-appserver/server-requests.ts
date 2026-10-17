@@ -26,6 +26,13 @@ export interface InboundQuestion {
   turnId: string;
   request: AskRequest;
   settle(resolution?: AskResolution): void;
+  cancel(): void;
+}
+
+export interface InboundCancellation {
+  kind: 'request_cancelled';
+  requestId: string;
+  owner: CodexRequestScope;
 }
 
 /** A single run owns these continuations, including requests buffered before its start ACK. */
@@ -58,10 +65,14 @@ export class CodexRequestScope {
     if (this.pending.get(question.request.id) === question) this.pending.delete(question.request.id);
   }
 
-  retireRpc(id: JsonRpcId): void {
+  retireRpc(id: JsonRpcId): InboundCancellation[] {
+    const cancelled: InboundCancellation[] = [];
     for (const question of this.pending.values()) {
-      if (question.rpcId === id) void this.respond(question.request.id);
+      if (question.rpcId !== id) continue;
+      question.cancel();
+      cancelled.push({ kind: 'request_cancelled', requestId: question.request.id, owner: this });
     }
+    return cancelled;
   }
 
   finishTurn(turnId: string): void {
@@ -96,7 +107,7 @@ export function approvalAnswer(method: string): JsonRpcAnswer | undefined {
 export function userInputRequest(
   params: unknown, id: JsonRpcId, serial: number, scope: CodexRequestScope | undefined,
   enqueue: (question: InboundQuestion) => void,
-): Promise<JsonRpcAnswer> | JsonRpcAnswer {
+): Promise<JsonRpcAnswer | null> | JsonRpcAnswer {
   const parsed = inputSchema.safeParse(params);
   if (!parsed.success || !scope) return unavailable();
   const input = parsed.data satisfies ToolRequestUserInputParams;
@@ -114,6 +125,12 @@ export function userInputRequest(
     let settled = false;
     const question: InboundQuestion = {
       kind: 'request', rpcId: id, threadId: input.threadId, turnId: input.turnId, request,
+      cancel() {
+        if (settled) return;
+        settled = true;
+        scope.forget(question);
+        resolve(null); // The server already cleared this request; no second wire reply.
+      },
       settle(resolution) {
         if (settled) return;
         settled = true;
