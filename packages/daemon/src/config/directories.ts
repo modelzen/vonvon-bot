@@ -1,5 +1,7 @@
+import { homedir } from 'node:os';
+import { paths } from './paths';
 import { lstat, realpath, stat } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { spawnProcess } from '../platform/spawn';
 
@@ -57,6 +59,38 @@ async function prospectiveRealpath(path: string): Promise<string> {
     const resolvedParent = await prospectiveRealpath(parent);
     return join(resolvedParent, relative(parent, path));
   }
+}
+
+function allowedTarget(dataDir: string, target: string): boolean {
+  const projects = join(dataDir, 'projects');
+  return !contains(target, dataDir)
+    && (!contains(dataDir, target) || (target !== projects && contains(projects, target)));
+}
+
+export async function admitNamespaceReservation(input: { parent: string; component: string }, policy: { dataDir: string }): Promise<{ parent: string; path: string }> {
+  if (!isAbsolute(policy.dataDir) || policy.dataDir.includes('\0')) throw new Error('Invalid directory policy');
+  if (!isAbsolute(input.parent) || input.parent.includes('\0') || !input.component
+    || input.component === '.' || input.component === '..' || /[\/\\\x00-\x1f\x7f]/.test(input.component)) {
+    throw new Error('Invalid namespace location');
+  }
+  try {
+    const dataDir = await prospectiveRealpath(policy.dataDir);
+    const parent = await prospectiveRealpath(input.parent);
+    const path = join(parent, input.component);
+    if (!allowedTarget(dataDir, path)) throw new Error('outside allowed locations');
+    return { parent, path };
+  } catch { throw new Error('Invalid namespace location'); }
+}
+
+export function resolveProjectsRootDir(configured?: unknown): string {
+  if (configured === undefined || configured === null) return paths.projectsRootDir;
+  if (typeof configured !== 'string') throw new Error('配置 preferences.projectsRootDir 必须是字符串');
+  const value = configured.trim();
+  if (!value) return paths.projectsRootDir;
+  if (value === '~') return homedir();
+  if (value.startsWith('~/') || value.startsWith('~\\')) return resolve(homedir(), value.slice(2));
+  if (!isAbsolute(value)) throw new Error('配置 preferences.projectsRootDir 必须是绝对路径或以 ~ 开头');
+  return resolve(value);
 }
 
 class GitCleanupError extends Error {
@@ -123,13 +157,10 @@ export async function admitDirectorySettings(raw: unknown, policy: { dataDir: st
   let dataDir: string;
   try { dataDir = await prospectiveRealpath(policy.dataDir); }
   catch { throw new Error('Invalid directory policy'); }
-  // Derive this lexically from canonical dataDir: projects -> bots must not admit bots.
-  const projects = join(dataDir, 'projects');
   async function directory(path: string, field: string): Promise<string> {
     try {
       const canonical = await realpath(path);
-      if (!(await stat(canonical)).isDirectory() || contains(canonical, dataDir)
-        || (contains(dataDir, canonical) && !(canonical !== projects && contains(projects, canonical)))) {
+      if (!(await stat(canonical)).isDirectory() || !allowedTarget(dataDir, canonical)) {
         throw new Error('outside allowed locations');
       }
       return canonical;

@@ -43,6 +43,7 @@ vi.mock('../src/config/paths', async () => {
     },
     paths: {
       appDir,
+      projectsRootDir: join(appDir, 'projects'),
       cacheDir: appDir,
       botsFile: join(appDir, 'bots.json'),
       secretsFile: join(appDir, 'secrets.enc'),

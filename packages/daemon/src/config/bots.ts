@@ -1,11 +1,13 @@
-import { existsSync } from 'node:fs';
+import { constants, existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, open, rename, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { paths, botDir } from './paths';
+import { paths, botDir, botPaths } from './paths';
 import { loadConfig } from './store';
-import { isComplete, type TenantBrand } from './schema';
+import { isComplete, type TenantBrand, type AppConfig, type AppPreferences } from './schema';
 import { acquireMutex, closeMutex } from './data-access';
+import { type Allocation, SafeAppIdSchema, parseAllocations, ensureDurableDirectory, materializeAllocation, planAllocation, syncDirectory } from './bot-namespace';
+import { resolveProjectsRootDir } from './directories';
 
 /** One saved bot. Credentials' secret lives in the keystore (key `app-<appId>`). */
 export interface BotEntry {
@@ -38,27 +40,59 @@ export interface BotsRegistry {
    */
   current?: string;
   bots: BotEntry[];
+  allocations?: Record<string, Allocation>;
 }
 
 const emptyRegistry = (): BotsRegistry => ({ version: 1, bots: [] });
 
+const MAX_REGISTRY_BYTES = 4 * 1024 * 1024;
 export async function loadBots(): Promise<BotsRegistry> {
   try {
-    const text = await readFile(paths.botsFile, 'utf8');
-    const reg = JSON.parse(text) as BotsRegistry;
-    return { ...reg, version: 1, current: reg.current, bots: Array.isArray(reg.bots) ? reg.bots : [] };
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return emptyRegistry();
-    throw err;
+    const file = await open(paths.botsFile, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      const info = await file.stat();
+      if (!info.isFile() || info.nlink !== 1 || info.size > MAX_REGISTRY_BYTES) throw new Error('Invalid bot registry file');
+      const bytes = Buffer.alloc(MAX_REGISTRY_BYTES + 1);
+      let offset = 0;
+      while (offset < bytes.length) {
+        const read = await file.read(bytes, offset, bytes.length - offset, null);
+        if (!read.bytesRead) break;
+        offset += read.bytesRead;
+      }
+      if (offset > MAX_REGISTRY_BYTES) throw new Error('Bot registry size limit exceeded');
+      const reg = JSON.parse(bytes.subarray(0, offset).toString('utf8')) as BotsRegistry;
+      const allocations = parseAllocations(reg.allocations);
+      return { ...reg, version: 1, current: reg.current, bots: Array.isArray(reg.bots) ? reg.bots : [],
+        ...(allocations === undefined ? {} : { allocations }) };
+    } finally { await file.close(); }
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return emptyRegistry();
+    throw error;
   }
 }
 
 async function publish(reg: BotsRegistry): Promise<void> {
-  await mkdir(dirname(paths.botsFile), { recursive: true });
+  parseAllocations(reg.allocations);
+  const content = `${JSON.stringify(reg, null, 2)}\n`;
+  if (Buffer.byteLength(content) > MAX_REGISTRY_BYTES) throw new Error('Bot registry size limit exceeded');
+  await ensureDurableDirectory(dirname(paths.botsFile));
   const tmp = `${paths.botsFile}.tmp-${process.pid}-${randomUUID()}`;
-  await writeFile(tmp, `${JSON.stringify(reg, null, 2)}\n`, 'utf8');
-  await chmod(tmp, 0o600);
-  await rename(tmp, paths.botsFile);
+  let primaryError: unknown;
+  try {
+    const file = await open(tmp, 'wx', 0o600);
+    let failed = false;
+    try { await file.writeFile(content, 'utf8'); await file.sync(); }
+    catch (error) { failed = true; throw error; }
+    finally { try { await file.close(); } catch (error) { if (!failed) throw error; } }
+    await rename(tmp, paths.botsFile);
+    await syncDirectory(dirname(paths.botsFile));
+  } catch (error) { primaryError = error; throw error; }
+  finally {
+    try { await unlink(tmp); }
+    catch (error) {
+      if (primaryError === undefined && !(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+    }
+  }
 }
 
 /**
@@ -68,7 +102,10 @@ async function publish(reg: BotsRegistry): Promise<void> {
  * register it as `default` (current). Idempotent — a no-op once bots.json exists.
  */
 async function loadOrMigrate(): Promise<BotsRegistry> {
-  if (existsSync(paths.botsFile)) return loadBots();
+  try { await lstat(paths.botsFile); return loadBots(); }
+  catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+  }
 
   // No registry yet. Read the legacy flat config explicitly (don't rely on the
   // current useBotDir() state) and migrate it if it's a complete bot.
@@ -95,7 +132,7 @@ async function loadOrMigrate(): Promise<BotsRegistry> {
 let writers: Promise<unknown> = Promise.resolve();
 function ownBots<T>(operation: (registry: BotsRegistry) => Promise<T>): Promise<T> {
   const run = writers.then(async () => {
-    await mkdir(paths.appDir, { recursive: true, mode: 0o700 });
+    await ensureDurableDirectory(paths.appDir);
     const mutex = await acquireMutex(paths.appDir, 'bots', 30_000);
     try { return await operation(await loadOrMigrate()); }
     finally { await closeMutex(mutex); }
@@ -119,22 +156,52 @@ function sameIdentity(entry: BotEntry, expected: BotIdentity): boolean {
 }
 
 type RegisterEntryResult = { kind: 'registered'; entry: BotEntry } | { kind: 'already-registered'; entry: BotEntry };
+export type RegistrationCommit = Readonly<{
+  entry: Readonly<BotEntry>; snapshot: Readonly<Partial<AppConfig>>;
+  preferences: Readonly<AppPreferences> | undefined; namespaceRoot: string;
+}>;
 export function registerBotEntry(
-  input: Pick<BotEntry, 'appId' | 'tenant' | 'botName'> & { desiredName: string },
-  persistAccount: (selected: Readonly<BotEntry>) => Promise<void>,
+  input: Pick<BotEntry, 'appId' | 'tenant' | 'botName'> & { desiredName: string; initialPreferences?: AppPreferences },
+  persistAccount: (selected: RegistrationCommit) => Promise<void>,
 ): Promise<RegisterEntryResult> {
-  const identity = { ...input };
+  const identity = structuredClone(input);
   return ownBots(async registry => {
     const previous = registry.bots.find(bot => bot.appId === identity.appId);
     if (previous) return { kind: 'already-registered', entry: previous };
+    if (!SafeAppIdSchema.safeParse(identity.appId).success) throw new Error('Invalid bot app ID');
+    const snapshot = await loadConfig(botPaths(identity.appId).configFile);
+    const preferences = structuredClone(isComplete(snapshot) ? snapshot.preferences : identity.initialPreferences);
+    const allocations = registry.allocations ?? {};
+    let allocation = Object.hasOwn(allocations, identity.appId) ? allocations[identity.appId] : undefined;
+    if (allocation) validateAccountClaim(registry, allocation, identity);
+    else {
+      if (Object.keys(allocations).length >= 4096) throw new Error('Bot allocation limit reached');
+      allocation = await planAllocation({ ...identity, handle: uniqueName(registry, identity.desiredName),
+        parent: resolveProjectsRootDir(preferences?.projectsRootDir), dataDir: paths.appDir }, allocations);
+      registry.allocations = { ...allocations, [identity.appId]: allocation };
+    }
+    // Re-publish visible intent before a retry can create or trust its directory.
+    await publish(registry);
+    allocation = await materializeAllocation(allocation, paths.appDir);
+    registry.allocations = { ...registry.allocations, [identity.appId]: allocation };
+    await publish(registry);
     const entry: BotEntry = { appId: identity.appId, tenant: identity.tenant, botName: identity.botName,
-      name: uniqueName(registry, identity.desiredName), createdAt: Date.now(), registrationId: randomUUID() };
-    await persistAccount(Object.freeze({ ...entry }));
+      name: allocation.handle, createdAt: Date.now(), registrationId: randomUUID() };
+    await persistAccount(Object.freeze({ entry: Object.freeze({ ...entry }), snapshot: structuredClone(snapshot),
+      preferences: structuredClone(preferences), namespaceRoot: allocation.namespaceRoot }));
     registry.bots.push(entry);
     registry.current ??= entry.appId;
     await publish(registry);
     return { kind: 'registered', entry };
   });
+}
+
+function validateAccountClaim(registry: BotsRegistry, allocation: Allocation, account: Pick<BotEntry, 'appId' | 'tenant'>): void {
+  if (allocation.appId !== account.appId || allocation.tenant !== account.tenant
+    || registry.bots.some(bot => bot.appId !== account.appId && bot.name === allocation.handle)
+    || registry.bots.some(bot => bot.appId === account.appId && bot.name !== allocation.handle)) {
+    throw new Error('Bot allocation account conflict');
+  }
 }
 
 export function findBot(reg: BotsRegistry, nameOrAppId: string): BotEntry | undefined {
@@ -188,6 +255,8 @@ export function removeBot(
     if (!sameIdentity(entry, identity)) return { kind: 'stale' };
     if (await callbacks.isRunning()) return { kind: 'running' };
     if (activeBots(registry).some(bot => bot.appId === identity.appId)) return { kind: 'active' };
+    const allocation = registry.allocations?.[entry.appId];
+    if (allocation) validateAccountClaim(registry, allocation, entry);
     await callbacks.cleanup();
     registry.bots = registry.bots.filter(bot => bot !== entry);
     if (registry.current === entry.appId) registry.current = registry.bots[0]?.appId;
@@ -211,10 +280,11 @@ export function commitBotCredentialRefresh(
 /** A registry-unique short name derived from `desired` (slugified, suffixed on clash). */
 export function uniqueName(reg: BotsRegistry, desired: string): string {
   const base = slugify(desired) || 'bot';
-  if (!reg.bots.some((b) => b.name === base)) return base;
+  const claimed = new Set([...reg.bots.map(bot => bot.name), ...Object.values(reg.allocations ?? {}).map(record => record.handle)]);
+  if (!claimed.has(base)) return base;
   for (let i = 2; ; i++) {
     const candidate = `${base}-${i}`;
-    if (!reg.bots.some((b) => b.name === candidate)) return candidate;
+    if (!claimed.has(candidate)) return candidate;
   }
 }
 

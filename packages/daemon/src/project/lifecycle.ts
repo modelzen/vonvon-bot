@@ -1,10 +1,10 @@
 import { pendingGroupsFile, retireBoundPendingGroup } from './pending-groups';
 import { mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { paths } from '../config/paths';
+import { resolveProjectsRootDir } from '../config/directories';
 import { log } from '../core/logger';
 import { addProject, bindNoMention, getProjectByChatId, getProjectByName, type Project } from './registry';
 import type { PermissionMode } from '../agent/types';
@@ -104,28 +104,6 @@ async function resolveCwd(
   const cwd = join(resolveProjectsRootDir(configuredProjectsRootDir), name);
   await mkdir(cwd, { recursive: true });
   return { cwd, blank: true };
-}
-
-/**
- * Resolve `preferences.projectsRootDir` without depending on the daemon's cwd.
- * An empty value preserves the historical default; a relative value is
- * rejected because a background service may start from different directories.
- */
-export function resolveProjectsRootDir(configured?: unknown): string {
-  if (configured === undefined || configured === null) return paths.projectsRootDir;
-  if (typeof configured !== 'string') {
-    throw new Error('配置 preferences.projectsRootDir 必须是字符串');
-  }
-  const value = configured.trim();
-  if (!value) return paths.projectsRootDir;
-  if (value === '~') return homedir();
-  if (value.startsWith('~/') || value.startsWith('~\\')) {
-    return resolve(homedir(), value.slice(2));
-  }
-  if (!isAbsolute(value)) {
-    throw new Error('配置 preferences.projectsRootDir 必须是绝对路径或以 ~ 开头');
-  }
-  return resolve(value);
 }
 
 /**
