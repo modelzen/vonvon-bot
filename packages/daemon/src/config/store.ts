@@ -6,6 +6,7 @@ import { paths } from './paths';
 import type { AppConfig, AppPreferences, TenantBrand } from './schema';
 import { secretKeyForApp } from './schema';
 import { parseBotDefaults, resolveBotDefaults, validateConfigDefaults } from './defaults';
+import { admitDirectoryChanges, configDirectories } from './directories';
 
 export async function loadConfig(path: string = paths.configFile): Promise<Partial<AppConfig>> {
   try {
@@ -17,6 +18,7 @@ export async function loadConfig(path: string = paths.configFile): Promise<Parti
       throw new Error('Invalid config JSON');
     }
     validateConfigDefaults(config);
+    configDirectories(config);
     return config as Partial<AppConfig>;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
@@ -35,6 +37,7 @@ export async function buildEncryptedAccountConfig(
   preferences?: AppPreferences,
 ): Promise<AppConfig> {
   const defaults = parseBotDefaults(preferences?.defaults);
+  configDirectories({ preferences });
   const resolved = resolveBotDefaults(defaults);
   const initialPreferences: AppPreferences = {
     ...preferences,
@@ -90,13 +93,19 @@ export function saveConfig(cfg: AppConfig, path: string = paths.configFile, expe
   let serialized: string;
   try {
     validateConfigDefaults(cfg);
+    configDirectories(cfg);
     serialized = `${JSON.stringify(cfg, null, 2)}\n`;
     validateConfigDefaults(JSON.parse(serialized));
+    configDirectories(JSON.parse(serialized));
   } catch (error) {
     return Promise.reject(error);
   }
   const run = saveChain.then(async () => {
-    if (expected && JSON.stringify(await loadConfig(path)) !== JSON.stringify(expected)) throw new Error('配置已被其他进程修改，请重启 Host 后重新加载');
+    const nextDirectories = configDirectories(JSON.parse(serialized));
+    // Old callers without a declaration/CAS can still replace malformed legacy JSON.
+    const previous = expected || nextDirectories ? await loadConfig(path) : {};
+    if (expected && JSON.stringify(previous) !== JSON.stringify(expected)) throw new Error('配置已被其他进程修改，请重启 Host 后重新加载');
+    await admitDirectoryChanges(nextDirectories, configDirectories(previous), paths.appDir);
     await mkdir(dirname(path), { recursive: true });
     const tmp = `${path}.tmp-${process.pid}-${randomUUID()}`;
     await writeFile(tmp, serialized, 'utf8');
