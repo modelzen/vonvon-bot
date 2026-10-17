@@ -5702,6 +5702,7 @@ export function createOrchestrator(
           // event queue retains all backend output produced while cards rotate.
           boundary = nextBoundary;
           segmentStartedAt = nextStartedAt;
+          next.askWaiting = rc.askWaiting;
           rc = next;
           stream = nextStream;
           cardMsgId = nextId;

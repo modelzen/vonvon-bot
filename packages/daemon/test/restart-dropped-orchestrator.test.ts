@@ -12,6 +12,7 @@ const fake = vi.hoisted(() => ({
   askCreate: vi.fn(async (_input: unknown): Promise<unknown> => ({ data: { card_id: 'ask-entity' } })),
   askUpdate: vi.fn(async (_input: unknown): Promise<unknown> => ({})),
   kind: 'multi' as 'single' | 'multi',
+  policy: 'queue' as 'queue' | 'steer',
   backend: { capabilities: { steer: true }, id: 'codex', listModels: vi.fn(async () => []), resumeThread: vi.fn(), startThread: vi.fn() },
   live: vi.fn(),
   final: vi.fn(async (..._args: unknown[]) => true),
@@ -26,7 +27,7 @@ vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_ctx: unknown,
 vi.mock('../src/agent', async (original) => ({ ...await original<object>(), createBackend: () => fake.backend }));
 vi.mock('../src/project/registry', async (original) => ({
   ...await original<object>(),
-  getProjectByChatId: async (chatId: string) => ({ name: 'test', chatId, cwd: '/test', kind: fake.kind, pendingPolicy: 'queue' }),
+  getProjectByChatId: async (chatId: string) => ({ name: 'test', chatId, cwd: '/test', kind: fake.kind, pendingPolicy: fake.policy }),
 }));
 vi.mock('../src/bot/session-store', async (original) => ({
   ...await original<object>(),
@@ -78,6 +79,7 @@ beforeEach(async () => {
   fake.askCreate.mockReset().mockResolvedValue({ data: { card_id: 'ask-entity' } });
   fake.askUpdate.mockReset().mockResolvedValue({});
   fake.kind = 'multi';
+  fake.policy = 'queue';
   fake.record = {};
   fake.history.mockReset().mockResolvedValue({ messages: [], ok: true, complete: true });
   fake.final.mockReset().mockResolvedValue(true);
@@ -579,7 +581,7 @@ describe('ordinary ask lifecycle through the real orchestrator', () => {
 it('goal generations settle asks before reset, retain lazy waiting labels, and keep original trigger placement', async () => {
   const gates = [deferred<void>(), deferred<void>()];
   const respond = vi.fn<NonNullable<AgentRun['respondToAsk']>>(async () => {});
-  fake.askCreate.mockImplementation(input => JSON.stringify(input).includes('继续吗') ? new Promise(() => {}) : Promise.resolve({ data: { card_id: 'goal-summary' } }));
+  fake.reply.mockResolvedValue({ code: 0, data: { message_id: 'ask-carrier' } });
   const run = thread();
   const goal = Object.assign(run.t, {
     clearGoal: vi.fn(async () => {}),
@@ -601,7 +603,10 @@ it('goal generations settle asks before reset, retain lazy waiting labels, and k
   await o.onMessage(trigger);
   await until(() => expect(fake.createCard.mock.calls.some(args => JSON.stringify(args).includes('回答（见下方卡片）'))).toBe(true));
   gates[0]!.resolve();
-  await until(() => expect(fake.askCreate).toHaveBeenCalledTimes(2));
+  await until(() => expect(fake.reply.mock.calls.filter(args => JSON.stringify(args).includes('interactive'))).toHaveLength(2));
+  for (const [reply] of fake.reply.mock.calls.filter(args => JSON.stringify(args).includes('interactive'))) {
+    expect(reply).toMatchObject({ path: { message_id: trigger.messageId }, data: { reply_in_thread: true } });
+  }
   expect(respond.mock.calls).toEqual([['goal-ask-0', { kind: 'unanswered', reason: 'turn-ended' }]]);
   gates[1]!.resolve();
   await until(() => expect(respond).toHaveBeenCalledTimes(2));
@@ -626,4 +631,27 @@ it.each(['stop', 'iterator-error'] as const)('ordinary %s closes ask continuatio
     await until(() => expect(respond).toHaveBeenCalledExactlyOnceWith('a', { kind: 'unanswered', reason: 'turn-ended' }));
     expect(run.t.close).toHaveBeenCalled();
   }
+});
+
+it('a steer card created while an ask is answered renders the current waiting state after the swap', async () => {
+  fake.policy = 'steer';
+  fake.reply.mockResolvedValue({ code: 0, data: { message_id: 'ask-carrier' } });
+  const respond = vi.fn<NonNullable<AgentRun['respondToAsk']>>(async () => {});
+  const run = thread({ respond, events: [{ type: 'ask', request: askRequest('a') }] });
+  fake.backend.resumeThread.mockResolvedValue(run.t);
+  const o = setup({ droppedFile: false });
+  await o.onMessage(message('ask me'));
+  await until(() => expect(fake.reply.mock.calls.some(args => JSON.stringify(args).includes('post'))).toBe(true));
+  const creating = deferred<string>();
+  fake.createCard.mockReturnValueOnce(creating.promise);
+  await o.onMessage(message('follow-up'));
+  await until(() => expect(fake.createCard).toHaveBeenCalledTimes(2));
+  expect(JSON.stringify(fake.createCard.mock.calls[1])).toContain('回答（见下方卡片）');
+  await o.dispatcher.handle({ messageId: 'ask-carrier', chatId: 'oc_group_a', operator: { openId: 'owner' }, action: { value: { a: 'ask_submit', requestId: 'a', decision: 'proceed' } } } as never);
+  expect(respond).toHaveBeenCalledExactlyOnceWith('a', { kind: 'answered', answer: { kind: 'confirmation', decision: 'proceed' } });
+  const afterAnswer = fake.live.mock.calls.length;
+  creating.resolve('steer-card');
+  await until(() => expect(fake.live.mock.calls.slice(afterAnswer).some(args => JSON.stringify(args).includes('steer-card'))).toBe(true));
+  expect(JSON.stringify(fake.live.mock.calls.slice(afterAnswer))).not.toContain('回答（见下方卡片）');
+  run.turns[0]!.resolve();
 });
