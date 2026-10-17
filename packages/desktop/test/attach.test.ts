@@ -52,6 +52,21 @@ describe('read-only desktop attachment', () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
+  it('rereads the listener and credential when attaching again after a restart', async () => {
+    const first = await attachExisting(root);
+    await first.dispose();
+    const successor = { ...identity, pid: 4322, startedAt: 'later', listen: '127.0.0.1:43567' };
+    const rotated = 'b'.repeat(64);
+    await writeFile(join(root, 'local-credential'), rotated);
+    fake.readRunning.mockResolvedValue(successor);
+    fake.current.mockResolvedValue(successor);
+    admin.mockResolvedValue({ kind: 'daemonStatus', status: { running: true, pid: successor.pid } });
+    const next = await attachExisting(root);
+    expect(fake.connect).toHaveBeenLastCalledWith({ url: `ws://${successor.listen}`, credential: rotated, clientKind: 'desktop' });
+    expect(next.identity).toEqual(successor);
+    await next.dispose();
+  });
+
   it('refuses a missing or invalid owner before reading the credential or connecting', async () => {
     fake.readRunning.mockResolvedValue(null);
     await expect(attachExisting(root)).rejects.toMatchObject({ reason: 'owner' });

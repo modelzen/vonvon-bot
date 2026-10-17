@@ -16,6 +16,7 @@ import { desktopCliOptions, observeCli, registerCli } from './cli-registration.j
 import { liveServiceActionRecord } from '../../daemon/src/service/action-report.js';
 import { changeLoginItem, followServiceHelper, repairServiceAtStartup, type LoginItemHooks, type ServiceRuntime } from './login-item.js';
 import type { CommandResult, MachineReply } from '@vonvon/protocol';
+import { ConnectionError } from '@vonvon/client/browser';
 
 const restartDeadlineMs = 60_000;
 
@@ -311,13 +312,67 @@ export async function startDesktop(): Promise<void> {
       return guardedService(() => changeLoginItem(serviceRuntime, enabled, previous, loginItemHooks));
     }
 
-    /** The web UI's or a terminal's helper took the daemon away: the window follows it as it follows its own switch. */
-    function followForeignHelper(lost: AttachedDaemon['identity']): boolean {
-      if (starting || terminating || cleanupPromise || !bridge || liveServiceActionRecord(root)?.phase !== 'running') return false;
+    async function reconnectPassive(cancel: AbortController): Promise<void> {
+      const stopped = (): boolean => cancel.signal.aborted || terminating || cleanupPromise !== undefined || !bridge;
+      const refusal = (): Error => new Error('Desktop reconnection was cancelled or timed out.');
+      const unlessStopped = <T>(pending: Promise<T>): Promise<T> => new Promise<T>((resolve, reject) => {
+        const stop = (): void => reject(refusal());
+        if (stopped()) { stop(); return; }
+        cancel.signal.addEventListener('abort', stop, { once: true });
+        pending.then(resolve, reject).finally(() => cancel.signal.removeEventListener('abort', stop));
+      });
+      for (;;) {
+        if (stopped()) throw refusal();
+        const attaching = attachExisting(root);
+        let next: AttachedDaemon;
+        try { next = await unlessStopped(attaching); }
+        catch (error) {
+          if (stopped()) {
+            void attaching.then(late => late.dispose()).catch(() => {});
+            throw error;
+          }
+          if (!(error instanceof AttachError) ||
+              (error.reason !== 'owner' && error.reason !== 'connection' && error.reason !== 'identity')) throw error;
+          await unlessStopped(new Promise(resolve => setTimeout(resolve, 250)));
+          continue;
+        }
+        if (stopped() || !bridge) { await next.dispose(); throw refusal(); }
+        const closeCandidate = (): void => { void next.dispose().catch(() => {}); };
+        cancel.signal.addEventListener('abort', closeCandidate, { once: true });
+        try {
+          try { await unlessStopped(bridge.replaceOwner(next)); }
+          finally { cancel.signal.removeEventListener('abort', closeCandidate); }
+        } catch (error) {
+          if (stopped() || !(error instanceof ConnectionError)) throw error;
+          await unlessStopped(new Promise(resolve => setTimeout(resolve, 250)));
+          continue;
+        }
+        connectionFailureShown = false;
+        return;
+      }
+    }
+
+    /** Follow a helper's handover, or passively authenticate whatever daemon comes back after a connection loss. */
+    function recoverConnection(lost: AttachedDaemon['identity']): boolean {
+      if (starting || terminating || cleanupPromise || !bridge) return false;
       controlledDisconnect = true;
-      void guardedService(() => followServiceHelper(serviceRuntime, lost, loginItemHooks)).catch(() => {
+      if (liveServiceActionRecord(root)?.phase === 'running') {
+        void guardedService(() => followServiceHelper(serviceRuntime, lost, loginItemHooks)).catch(() => {
+          controlledDisconnect = false;
+          showConnectionLost();
+        });
+        return true;
+      }
+      const cancel = new AbortController();
+      const deadline = setTimeout(() => cancel.abort(), restartDeadlineMs);
+      restartCancel = cancel;
+      starting = reconnectPassive(cancel).catch(() => {
+        if (!terminating && !cleanupPromise) showConnectionLost();
+      }).finally(() => {
+        clearTimeout(deadline);
         controlledDisconnect = false;
-        showConnectionLost();
+        starting = undefined;
+        if (restartCancel === cancel) restartCancel = undefined;
       });
       return true;
     }
@@ -356,7 +411,7 @@ export async function startDesktop(): Promise<void> {
         return run;
       },
       isExpectedDisconnect: () => controlledDisconnect,
-      followServiceHelper: followForeignHelper,
+      recoverConnection,
       setLoginItem,
       service: async (action, previous) => {
         if (action === 'install' || action === 'uninstall') {
