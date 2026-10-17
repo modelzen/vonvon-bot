@@ -13,7 +13,6 @@ import { attachExisting } from './attach.js';
 import type { DaemonManagerDependencies } from './daemon-manager.js';
 
 export async function prepareDesktopRoot(selected: DataRoot): Promise<string> {
-  if (selected.kind === 'legacy') throw new Error('Migrate the legacy data folder before opening Vonvon Bot.');
   if (selected.kind === 'fresh') await mkdir(selected.path, { recursive: true, mode: 0o700 });
   const info = await lstat(selected.path);
   if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('The Vonvon data folder must be a physical directory.');

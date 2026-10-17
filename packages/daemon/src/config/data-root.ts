@@ -3,18 +3,8 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
 export type DataRoot = {
   path: string;
-  kind: 'fresh' | 'legacy' | 'canonical';
+  kind: 'fresh' | 'canonical';
 };
-
-export const migrationJournalName = '.vonvon-bridge-migration.json';
-export const migrationWitnessName = '.vonvon-bridge-migration-witness.json';
-
-export class DataRootMigrationError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(`${message} Keep both data paths intact and complete offline recovery before starting Bridge.`, options);
-    this.name = 'DataRootMigrationError';
-  }
-}
 
 export function resolveDataRoot(home: string): DataRoot {
   const override = process.env.VONVON_HOME;

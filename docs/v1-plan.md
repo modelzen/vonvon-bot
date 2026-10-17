@@ -102,7 +102,7 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
 5. 10-15，Bot 3，Codex。跑 `sleep 150`，没被掐断，但等的时候 Codex 往卡上写过两句进度，算不上"没有输出"。10-16 用 Claude（Bot 6）重做：150 秒里卡上没有任何新内容，卡片用时 2 分 40 秒，答"done，实际用了 150.01 秒"。日志里第一个事件在 47 毫秒，下一段文字在 159 秒。
 6. 10-16，Bot 6。主区不 @ 发暗号，@ bot 让它记下，回"收到"。撤回那条暗号，日志记 `recall`，`noted: 1`。再问，答"不知道"。Mac 上订阅了撤回事件的 Bot 4 同样答"不知道"。10-16 凌晨的 Bot 3 没订阅撤回事件，答出了被撤回的暗号，和清单里的提示一致。
 
-### M4 崩溃恢复、诊断和 Linux 命令行版（s17、s17b、s18a、s18b、s18c、s18d、s18e、s19、s20a、s20b、s20c）
+### M4 崩溃恢复、诊断和 Linux 命令行版（s17、s17b、s18a、s18b、s18c、s18d、s18e、s18f、s19、s20a、s20b、s20c）
 
 **给 owner 什么：**
 - 崩溃恢复（3.10）：daemon 或某个 bot 崩溃后自动重启，主人在飞书私聊收到一行原因。10 分钟内崩溃 3 次就停下：网页和桌面端照常打开，诊断页顶上一条红条，带"恢复运行"按钮。只是某一个 bot 反复崩溃时，只停这一个。
@@ -122,7 +122,9 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
    - 可选：在一轮输出时发 `/compact`（"等这一轮结束就压缩"），再 `daemon restart`，`/compact` 下面同样回一句。
    - 可选，owner 同意后做：撤回的消息回复接口回什么码没实测，代码按文档写的 `230011`。一轮在跑时在同一话题排一条，`daemon stop`，撤回排着的那条，再 `daemon start`：日志 `dropped-reply-failed` 的 `detail` 里是实际的错误码；是 `230011` 时诊断页不多这一条，不是时改 `replyFailure`。
 
-2026-10-17：JP-VPS Codex 在 main `191980f` 升级隔离验收 daemon 后，第 5 步通过：真实 Codex 长任务中排队、重启，新进程在原话题回请重发，旧卡片显示中断，`dropped.json` 清除；构建后的网页诊断页显示原因和已回复的下一步。重启窗口另一个话题的新消息也补送并回答；这是一次成功样本，不保证补送时限。群排队设置已恢复 `default`。可选的 `/compact` 与撤回步骤未做，未调用真实 Claude 推理。记录：https://github.com/modelzen/vonvon-bot/pull/365#issuecomment-6229126717 。Mac 任务 21 的隔离 launchd 自动拉起、三次崩溃后的网页暂停与恢复、签名和安装已通过；安装的是同一提交 `191980f`。Computer Use 在重新定位已装 app 时超时，桌面三次崩溃/恢复及默认环境的正常启动、窗口、托盘、菜单未验，M4 桌面验收仍未完成。[任务 21 结果](https://github.com/modelzen/vonvon-bot/issues/322#issuecomment-6229245321)。旧 worktree 已清理，证据和安装备份保留。Paseo 连不上后改走 #322，由 owner 转发[任务 22](https://github.com/modelzen/vonvon-bot/issues/322#issuecomment-6229793120)，只用已装预览版补查上述桌面项目。[任务 22 结果](https://github.com/modelzen/vonvon-bot/issues/322#issuecomment-6230058746) 复现了桌面重连故障：launchd 已自动拉起 daemon，CLI 确认暂停、网页仍可访问，但桌面弹断线提示、停在旧诊断快照，刷新报 Desktop request failed；本次 Computer Use 正常。隔离 app 和服务已清理，默认环境未验且未改。故障由 s18f 修复，完成 Mac 复查和新预览版安装前，M4 桌面验收继续保留。
+2026-10-17：JP-VPS Codex 在 main `191980f` 升级隔离验收 daemon 后，第 5 步通过：真实 Codex 长任务中排队、重启，新进程在原话题回请重发，旧卡片显示中断，`dropped.json` 清除；构建后的网页诊断页显示原因和已回复的下一步。重启窗口另一个话题的新消息也补送并回答；这是一次成功样本，不保证补送时限。群排队设置已恢复 `default`。可选的 `/compact` 与撤回步骤未做，未调用真实 Claude 推理。记录：https://github.com/modelzen/vonvon-bot/pull/365#issuecomment-6229126717 。
+
+Mac [任务 21](https://github.com/modelzen/vonvon-bot/issues/322#issuecomment-6229245321) 先通过隔离 launchd、网页崩溃暂停/恢复、签名和安装，Computer Use 超时留下桌面检查；[任务 22](https://github.com/modelzen/vonvon-bot/issues/322#issuecomment-6230058746) 在 Computer Use 正常时复现桌面断线、旧快照和 Desktop request failed。s18f（#372）已合入，[任务 23](https://github.com/modelzen/vonvon-bot/pull/372#issuecomment-6230322157) 在准确 head `7f7a746` 的临时 app 通过三次崩溃后的自动重连、第三次暂停红条和桌面按钮恢复，隔离 app 与服务清理完毕。[任务 24](https://github.com/modelzen/vonvon-bot/issues/322#issuecomment-6230533303) 从 main `0befaf8` 重建的隔离服务/网页三次崩溃与恢复通过，Developer ID 签名和安装通过。安装后 Computer Use 返回默认实例，无法可靠绑定隔离 PID/窗口；按规则停止，未做桌面三次崩溃或默认正常启动、窗口、托盘、菜单的完整验收。隔离 app、服务和哈希任务已清理，默认 daemon/bot 保持原 PID，未做崩溃或暂停操作；新 app 已装好、GUI 未留开。M4 桌面验收仍未完成，不能用任务 23 的临时 app 结果替代安装后的验收。
 
 2026-10-16：第 1 到 3 步 Claude 先做的部分都通过；第 4 步不用做。Mac 上 Codex 先查的那一半放进 M4 预览版任务，等 s18c 合入后一起做（s18d、s18e 不等）。
 - 环境：Claude 在 JP-VPS 上用验收 daemon（main 955a5c3，分离运行，三个测试 bot）做。这里没有服务管理器，每次 `kill -9` 后手动 `daemon start`，代替服务管理器拉起。私聊用 lark-cli 以 owner 的身份读，网页用无头浏览器看。
@@ -888,7 +890,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 
 | 状态 | 编号 | 切片 | 内容 | 约行数 | 依赖 | 风险 | Mac 检查 |
 |---|---|---|---|---|---|---|---|
-| [ ] | s58 | 迁移前的清理：删掉没上线的改名迁移 | 删从没上线的改名迁移（cli-bridge 和它的 Windows 分支由 s02c 删） | 450 | — | — | 无 |
+| [x] | s58 | 迁移前的清理：删掉没上线的改名迁移 | 删从没上线的改名迁移及专属兼容修复；保留现行数据目录、凭据 getter 识别和互斥/租约（cli-bridge 和它的 Windows 分支由 s02c 删） | 450 | — | — | 无 |
 | [ ] | s59 | 导入预检 | 从 #226 移植预检、本地文件读取和旧密钥库，去掉准入互斥锁和 Windows 部分；每个 bot 只读地查第 5 节第 2 步那几项 | 1180 | s58 | 数据迁移、macOS 原生、错误路径 | 用 bridge 0.6.14 的数据副本和隔离的 HOME：预检和实际一致，真实主机名能解开密钥，launchctl 看得出 bridge 在跑 |
 | [ ] | s60 | 把 bridge 的数据换算成第一版的形状 | 一个纯函数：bot 照搬，管理员进本机名单，个人指令照旧带上；每个群变成规则模式下的覆盖，cwd 原地引用（第 5 节） | 320 | s59、s36、s21、s12 | 数据迁移 | 无 |
 | [ ] | s61 | 导入事务（上）：停 bridge、占锁、复制、回滚 | 第 5 节第 3 到 5 步：调 bridge 自己的 stop，按 bridge 的格式占锁，复制并用新密钥重新加密；任何一步失败就倒序回滚，再 start bridge | 650 | s60、e07、e08 | 子进程、并发、关闭清理、错误路径、数据迁移、macOS 原生 | 在 Mac 的测试用户账号里装 bridge 0.6.14：前半段后 plist 被删、手动 run 被拒；复制后故意失败，回滚后 bridge 重新起来 |
@@ -898,7 +900,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 
 开工要点：
 - s58、s59 不依赖 M3 到 M9，M4 之后在第二条线上做。
-- s58：从没上线的改名迁移（`data-root-migration.ts` 等）生产路径调不到，做法又和第 5 节"复制数据、旧目录原地引用"相反，留着会让 s59 的预检读到两套说法，所以在迁移前删掉。`~/.vonvon-bridge` 的识别在 s59 里按预检的需要重写。
+- s58 做法（#373）：删除生产入口未使用的 `data-root-migration.ts`、`legacy-data-root.ts`、`host/migration.ts`，以及只为改名迁移服务的兼容修复、错误类型和测试。现行 `resolveDataRoot` 继续默认使用 `~/.vonvon-bot`，显式 `VONVON_HOME` 的行为不变；getter 识别、互斥与租约仍保留。隔离的真实 CLI 启动与退出验证默认和显式目录两条路径，两个旧目录的实体、内容和孤立迁移日志均保留。原来的改名做法和第 5 节"复制数据、旧目录原地引用"相反；`~/.vonvon-bridge` 的识别在 s59 里按预检的需要重写。
 - s59：合入后在 #226 里写明移植了哪些代码，先不关。
 - s59：预检只直接导入有 `bots.json` 的安装。没有它的老式平铺安装，bridge 下次运行时会把顶层的 `processes.json` 改名到 `bots/<appId>/processes.json`，盖掉 vonvon 写的锁（e07 第 8 条）。用过 0.6.x 的应该都有；遇到没有的怎么办（比如提示先让 bridge 跑一次升级目录）开工时定，要是变成不导入，按本文 4.2 第 3 条问 owner。
 - s61：按 e07：bridge 的锁每个 bot 一把，在 `~/.feishu-codex-bridge/bots/<appId>/processes.json`，`appId` 要和目录名完全一致，调 v2 的 `acquireSingleInstanceLock` 时显式传这个路径。持有者是同一用户下、活过整个事务的进程，由它自己写锁，不复用旧记录、不自己拼 `startedAt`。`stop` 以后 bridge 还在优雅退出，要轮询重试到抢到为止并设上限；抢不到时持有者已不是预检看到的那个 bridge，就按失败回滚。回滚时先放锁再 `start` bridge，不然被拉起的 `run` 会被自己的锁拒掉。抢锁本身是原子的，不用另加互斥。
