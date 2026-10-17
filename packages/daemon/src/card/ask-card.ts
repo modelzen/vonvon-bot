@@ -1,11 +1,6 @@
 import { z } from 'zod';
-import type { AskRequest } from '../agent/types';
+import type { AskAnswer, AskRequest } from '../agent/types';
 import { actions, button, card, form, md, multiSelectMenu, note, selectMenu, submitButton, type ActionValue, type CardElement, type CardObject } from './cards';
-
-export type AskAnswer =
-  | { kind: 'choices'; answers: [{ questionId: string; selected: [string, ...string[]] }, ...{ questionId: string; selected: [string, ...string[]] }[]] }
-  | { kind: 'confirmation'; decision: 'proceed' | 'explain' }
-  | { kind: 'permission'; decision: 'allow-once' | 'deny' };
 
 export type AskCardState =
   | { kind: 'pending' }

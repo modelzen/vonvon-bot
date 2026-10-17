@@ -160,6 +160,11 @@ export const askRequestSchema = z.discriminatedUnion('kind', [
 
 export type AskRequest = z.infer<typeof askRequestSchema>;
 
+export type AskAnswer =
+  | { kind: 'choices'; answers: [{ questionId: string; selected: [string, ...string[]] }, ...{ questionId: string; selected: [string, ...string[]] }[]] }
+  | { kind: 'confirmation'; decision: 'proceed' | 'explain' }
+  | { kind: 'permission'; decision: 'allow-once' | 'deny' };
+
 /** Validate once where a provider request enters the bot. */
 export function parseAskRequest(raw: unknown): AskRequest {
   return askRequestSchema.parse(raw);
