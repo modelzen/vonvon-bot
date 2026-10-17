@@ -68,6 +68,21 @@ function handle(msg) {
   const m = msg.method;
   const p = msg.params || {};
   fs.appendFileSync(base + '.log', JSON.stringify({ pid: process.pid, method: m, params: p }) + '\n');
+  const mode = modeOf(m === 'thread/start' ? p.developerInstructions : p.input?.[0]?.text);
+  const gate = 'hold-' + m.replaceAll('/', '-') + '-' + mode;
+  if (read(gate, false)) {
+    const timer = setInterval(() => {
+      if (read(gate, false)) return;
+      clearInterval(timer);
+      respond(msg);
+    }, 10);
+    return;
+  }
+  respond(msg);
+}
+function respond(msg) {
+  const m = msg.method;
+  const p = msg.params || {};
   if (m === 'initialize') return later(read('init-delay', 0), () => reply(msg.id, {}));
   if (m === 'config/read') {
     if (read('config-error', false)) return send({ id: msg.id, error: { code: -32000, message: 'config broke' } });
@@ -150,6 +165,11 @@ function makeFake() {
     bin,
     cwd: dir,
     set: (name: string, value: unknown) => writeFileSync(`${script}.${name}`, JSON.stringify(value)),
+    hold: (method: string, mode = 'ok') => {
+      const file = `${script}.hold-${method.replaceAll('/', '-')}-${mode}`;
+      writeFileSync(file, 'true');
+      return () => writeFileSync(file, 'false');
+    },
     pids: () => lines('pids').map(Number),
     requests: (method?: string) => lines('log')
       .map(line => JSON.parse(line) as { pid: number; method: string; params: Record<string, any> })
@@ -171,6 +191,8 @@ const alive = (pid: number): boolean => {
   try { process.kill(pid, 0); return true; } catch { return false; }
 };
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+// Observing a real child includes cold Node startup and scheduling on a busy CI runner.
+const waitForProcess = (assertion: () => void) => vi.waitFor(assertion, { timeout: 5000 });
 
 /** `start` steers thread/start, `turn` the turn (see FAKE). */
 function call(turn = 'ok', o: { start?: string; signal?: AbortSignal; effort?: boolean; tag?: string } = {}): JudgeCall {
@@ -242,7 +264,7 @@ describe('Codex 判断进程：参数和结果', () => {
     expect(fake.pids()).toHaveLength(1);
     // every thread is unsubscribed
     const pid = fake.pids()[0];
-    await vi.waitFor(() => expect(fake.requests('thread/unsubscribe').map(threadOf).sort()).toEqual([`th1_${pid}`, `th2_${pid}`]));
+    await waitForProcess(() => expect(fake.requests('thread/unsubscribe').map(threadOf).sort()).toEqual([`th1_${pid}`, `th2_${pid}`]));
   });
 
   it('4 条并发、通知跨线程交错，各拿各的结果；cold 只给起进程的那一条', async () => {
@@ -266,6 +288,7 @@ describe('Codex 判断进程：参数和结果', () => {
     const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
     process.on('unhandledRejection', onUnhandled);
     try {
+      await judge(call());
       const { signal } = abortAfter(3000);
       const begun = Date.now();
       const error = await judge(call(mode, { signal })).catch((e: unknown) => e);
@@ -283,10 +306,13 @@ describe('Codex 判断进程：参数和结果', () => {
   });
 
   it('一条线程的通知缺字段 → 只这一条 failed（通知回包异常）；同进程另一条照常做完，不杀进程、不退避', async () => {
-    const other = judge(call('slow=800'));
-    await vi.waitFor(() => expect(fake.requests('turn/start')).toHaveLength(1));
+    const release = fake.hold('turn/start', 'held');
+    const other = judge(call('held'));
+    void other.catch(() => undefined);
+    await waitForProcess(() => expect(fake.requests('turn/start')).toHaveLength(1));
     await expect(judge(call('bad-usage'))).rejects.toMatchObject({ kind: 'failed', message: expect.stringContaining('通知回包异常') });
-    expect((await other).text).toBe('final:MODE:slow=800');
+    release();
+    expect((await other).text).toBe('final:MODE:held');
     expect(fake.pids()).toHaveLength(1);
     expect(alive(fake.pids()[0]!)).toBe(true);
     expect((await judge(call())).cold).toBe(false);
@@ -337,44 +363,57 @@ describe('Codex 判断进程：超时和收尾', () => {
     const reason = new Error('caller deadline');
     const pending = failure(judge(call('hang', { signal: ctl.signal })));
     // The deadline must fall in the turn, after the cold process has started.
-    await vi.waitFor(() => expect(fake.requests('turn/start')).toHaveLength(1), { timeout: 5000 });
+    await waitForProcess(() => expect(fake.requests('turn/start')).toHaveLength(1));
     ctl.abort(reason);
     expect(await pending).toBe(reason);
     const [turn] = fake.requests('turn/start');
-    await vi.waitFor(() => expect(fake.requests('turn/interrupt').map(r => r.params)).toEqual([{ threadId: threadOf(turn!), turnId: `tu_${threadOf(turn!)}` }]));
-    await vi.waitFor(() => expect(fake.requests('thread/unsubscribe').map(threadOf)).toEqual([threadOf(turn!)]));
+    await waitForProcess(() => expect(fake.requests('turn/interrupt').map(r => r.params)).toEqual([{ threadId: threadOf(turn!), turnId: `tu_${threadOf(turn!)}` }]));
+    await waitForProcess(() => expect(fake.requests('thread/unsubscribe').map(threadOf)).toEqual([threadOf(turn!)]));
     expect(proc.judgeProcessStats()).toMatchObject({ interrupts: 1, stuck: 0 });
     const next = await judge(call());
     expect(next.cold).toBe(false);
     expect(fake.pids()).toHaveLength(1);
   });
 
-  it('只剩 50 毫秒时 thread/start 慢：这一条超时，进程不杀，同进程的另一条拿到结果；回包到了补发 unsubscribe，promise 这时才落定', async () => {
+  it('thread/start 等回包时放弃：进程不杀，同进程的另一条拿到结果；回包到了补发 unsubscribe，promise 这时才落定', async () => {
     await judge(call()); // warm
-    const other = judge(call('slow=900'));
-    const { signal, reason } = abortAfter(50);
-    const begun = Date.now();
-    const late = judge(call('ok', { start: 'slow-start=400', signal }));
-    await expect(late).rejects.toBe(reason);
-    expect(Date.now() - begun).toBeGreaterThanOrEqual(350); // settled after the reply, not at the deadline
+    const release = fake.hold('thread/start', 'held');
+    const ctl = new AbortController();
+    const reason = new Error('caller deadline');
+    let settled = false;
+    const late = failure(judge(call('ok', { start: 'held', signal: ctl.signal })));
+    void late.then(() => { settled = true; });
+    await waitForProcess(() => expect(fake.requests('thread/start')).toHaveLength(2));
+    ctl.abort(reason);
+    expect((await judge(call())).cold).toBe(false);
+    expect(settled).toBe(false);
+    release();
+    expect(await late).toBe(reason);
     const pid = fake.pids()[0];
-    // the warm-up thread, then the late one (th3: the other judgement started th2 first)
-    await vi.waitFor(() => expect(fake.requests('thread/unsubscribe').map(threadOf)).toEqual([`th1_${pid}`, `th3_${pid}`]));
+    // The held request creates its thread only after the concurrent judgement completes.
+    await waitForProcess(() => expect(fake.requests('thread/unsubscribe').map(threadOf)).toEqual([`th1_${pid}`, `th2_${pid}`, `th3_${pid}`]));
     expect(fake.requests('turn/start')).toHaveLength(2); // no turn for the late one
-    expect((await other).text).toBe('final:MODE:slow=900');
     expect(fake.pids()).toHaveLength(1);
     expect(proc.judgeProcessStats().stuck).toBe(0);
   });
 
   it('turn/start 的回包晚于死线：回包到了先补发 turn/interrupt，再 unsubscribe', async () => {
     await judge(call()); // warm, so the deadline falls while turn/start waits
-    await vi.waitFor(() => expect(fake.requests('thread/unsubscribe')).toHaveLength(1));
-    const { signal, reason } = abortAfter(50);
-    const begun = Date.now();
-    await expect(judge(call('slow-turn-start=300', { signal }))).rejects.toBe(reason);
-    expect(Date.now() - begun).toBeGreaterThanOrEqual(250);
+    await waitForProcess(() => expect(fake.requests('thread/unsubscribe')).toHaveLength(1));
+    const release = fake.hold('turn/start', 'slow-turn-start=0');
+    const ctl = new AbortController();
+    const reason = new Error('caller deadline');
+    let settled = false;
+    const pending = failure(judge(call('slow-turn-start=0', { signal: ctl.signal })));
+    void pending.then(() => { settled = true; });
+    await waitForProcess(() => expect(fake.requests('turn/start')).toHaveLength(2));
+    ctl.abort(reason);
+    await sleep(0);
+    expect(settled).toBe(false);
+    release();
+    expect(await pending).toBe(reason);
     const thread = threadOf(fake.requests('turn/start')[1]!);
-    await vi.waitFor(() => expect(fake.requests().filter(r => r.method === 'turn/interrupt' || r.method === 'thread/unsubscribe').slice(1))
+    await waitForProcess(() => expect(fake.requests().filter(r => r.method === 'turn/interrupt' || r.method === 'thread/unsubscribe').slice(1))
       .toEqual([
         expect.objectContaining({ method: 'turn/interrupt', params: { threadId: thread, turnId: `tu_${thread}` } }),
         expect.objectContaining({ method: 'thread/unsubscribe', params: { threadId: thread } }),
@@ -385,12 +424,12 @@ describe('Codex 判断进程：超时和收尾', () => {
     proc.configureJudgeProcess({ stuckMs: 300, backoffMs: [500] });
     await judge(call()); // the process is up
     const running = failure(judge(call('hang')));
-    await vi.waitFor(() => expect(fake.requests('turn/start')).toHaveLength(2));
+    await waitForProcess(() => expect(fake.requests('turn/start')).toHaveLength(2));
     const stuck = judge(call('ok', { start: 'stuck-start' }));
     await expect(stuck).rejects.toMatchObject({ kind: 'failed' });
     expect(await running).toMatchObject({ kind: 'failed', message: 'Codex 判断进程退出了' });
     const [pid] = fake.pids();
-    await vi.waitFor(() => expect(alive(pid!)).toBe(false));
+    await waitForProcess(() => expect(alive(pid!)).toBe(false));
     expect(proc.judgeProcessStats().stuck).toBe(1);
     await expect(judge(call())).rejects.toMatchObject({ kind: 'unavailable', message: expect.stringContaining('秒后再试') });
     await sleep(550);
@@ -415,8 +454,8 @@ describe('Codex 判断进程：超时和收尾', () => {
     await expect(judge(call())).rejects.toMatchObject({ kind: 'failed', message: expect.stringContaining('起不来') });
     const [pid] = fake.pids();
     expect(fake.requests('initialize')).toHaveLength(1);
-    await vi.waitFor(() => expect(alive(pid!)).toBe(false));
-    await vi.waitFor(() => expect(pool.residentCount()).toBe(0));
+    await waitForProcess(() => expect(alive(pid!)).toBe(false));
+    await waitForProcess(() => expect(pool.residentCount()).toBe(0));
     await expect(judge(call())).rejects.toMatchObject({ kind: 'unavailable' });
     expect(fake.pids()).toHaveLength(1);
   });
@@ -425,9 +464,9 @@ describe('Codex 判断进程：超时和收尾', () => {
     proc.configureJudgeProcess({ backoffMs: [10_000] });
     fake.set('exit-on-start', true);
     await expect(judge(call())).rejects.toMatchObject({ kind: 'failed', message: expect.stringContaining('起不来') });
-    await vi.waitFor(() => expect(fake.pids()).toHaveLength(1));
+    await waitForProcess(() => expect(fake.pids()).toHaveLength(1));
     expect(alive(fake.pids()[0]!)).toBe(false);
-    await vi.waitFor(() => expect(pool.residentCount()).toBe(0));
+    await waitForProcess(() => expect(pool.residentCount()).toBe(0));
     await expect(judge(call())).rejects.toMatchObject({ kind: 'unavailable' });
     expect(fake.pids()).toHaveLength(1);
   });
@@ -435,10 +474,10 @@ describe('Codex 判断进程：超时和收尾', () => {
   it('进程中途退出 → 在跑的 failed、不在注册表里；退避期内 unavailable，过了重建；成功一次退避清零', async () => {
     proc.configureJudgeProcess({ backoffMs: [300, 10_000] });
     const running = failure(judge(call('hang')));
-    await vi.waitFor(() => expect(fake.requests('turn/start')).toHaveLength(1));
+    await waitForProcess(() => expect(fake.requests('turn/start')).toHaveLength(1));
     await expect(judge(call('exit'))).rejects.toMatchObject({ kind: 'failed' });
     expect(await running).toMatchObject({ kind: 'failed', structured: false });
-    await vi.waitFor(() => expect(pool.residentCount()).toBe(0));
+    await waitForProcess(() => expect(pool.residentCount()).toBe(0));
     await expect(judge(call())).rejects.toMatchObject({ kind: 'unavailable' });
     await sleep(350);
     expect((await judge(call())).cold).toBe(true);
@@ -491,26 +530,36 @@ describe('Codex 判断进程：空闲、换版本、关机', () => {
     proc.configureJudgeProcess({ idleMs: 200 });
     await judge(call());
     const [pid] = fake.pids();
-    await vi.waitFor(() => expect(alive(pid!)).toBe(false));
-    await vi.waitFor(() => expect(pool.residentCount()).toBe(0)); // untracked once close() settles, just after the exit
+    await waitForProcess(() => expect(alive(pid!)).toBe(false));
+    await waitForProcess(() => expect(pool.residentCount()).toBe(0)); // untracked once close() settles, just after the exit
     expect((await judge(call())).cold).toBe(true);
     expect(fake.pids()).toHaveLength(2);
   });
 
   it('起进程的那条判断先放弃了：进程照样连完，空闲后关掉', async () => {
     proc.configureJudgeProcess({ idleMs: 300 });
-    const { signal, reason } = abortAfter(1);
-    await expect(judge(call('ok', { signal }))).rejects.toBe(reason);
-    await vi.waitFor(() => expect(fake.pids()).toHaveLength(1));
+    const release = fake.hold('initialize');
+    const ctl = new AbortController();
+    const reason = new Error('caller deadline');
+    const pending = failure(judge(call('ok', { signal: ctl.signal })));
+    await waitForProcess(() => expect(fake.requests('initialize')).toHaveLength(1));
+    ctl.abort(reason);
+    expect(await pending).toBe(reason);
+    await waitForProcess(() => expect(fake.pids()).toHaveLength(1));
     const [pid] = fake.pids();
-    await vi.waitFor(() => expect(fake.requests('initialize')).toHaveLength(1));
-    await vi.waitFor(() => expect(alive(pid!)).toBe(false), { timeout: 5000 });
+    expect(alive(pid!)).toBe(true);
+    release();
+    await waitForProcess(() => expect(proc.judgeProcessStats().spawned).toBe(1));
+    await waitForProcess(() => expect(alive(pid!)).toBe(false));
+    await waitForProcess(() => expect(pool.residentCount()).toBe(0));
     expect(fake.requests('thread/start')).toHaveLength(0);
   });
 
   it('二进制指纹变了：在跑的留在旧进程做完，新判断起新进程，旧的空下来就关', async () => {
-    const running = judge(call('slow=600'));
-    await vi.waitFor(() => expect(fake.requests('turn/start')).toHaveLength(1));
+    const release = fake.hold('turn/start', 'held');
+    const running = judge(call('held'));
+    void running.catch(() => undefined);
+    await waitForProcess(() => expect(fake.requests('turn/start')).toHaveLength(1));
     appendFileSync(fake.bin, '\n# upgraded\n');
     const fresh = await judge(call());
     expect(fresh.cold).toBe(true);
@@ -519,15 +568,16 @@ describe('Codex 判断进程：空闲、换版本、关机', () => {
     expect(fake.requests('turn/start').map(r => r.pid)).toEqual([oldPid, newPid]);
     expect(alive(oldPid!)).toBe(true);
     expect(pool.residentCount()).toBe(2);
-    expect((await running).text).toBe('final:MODE:slow=600');
-    await vi.waitFor(() => expect(alive(oldPid!)).toBe(false));
-    await vi.waitFor(() => expect(pool.residentCount()).toBe(1));
+    release();
+    expect((await running).text).toBe('final:MODE:held');
+    await waitForProcess(() => expect(alive(oldPid!)).toBe(false));
+    await waitForProcess(() => expect(pool.residentCount()).toBe(1));
     expect((await judge(call())).cold).toBe(false);
   });
 
   it('shutdownResidentClients 关掉判断进程，在跑的马上结束，之后再起被拒', async () => {
     const running = failure(judge(call('hang')));
-    await vi.waitFor(() => expect(fake.requests('turn/start')).toHaveLength(1));
+    await waitForProcess(() => expect(fake.requests('turn/start')).toHaveLength(1));
     await pool.shutdownResidentClients();
     expect(await running).toMatchObject({ kind: 'closed' });
     expect(alive(fake.pids()[0]!)).toBe(false);
@@ -535,12 +585,11 @@ describe('Codex 判断进程：空闲、换版本、关机', () => {
   });
 
   it('正在连接时关机：连接方自己关掉，没有孤儿进程', async () => {
-    fake.set('init-delay', 400);
+    fake.hold('initialize');
     const pending = failure(judge(call()));
-    await vi.waitFor(() => expect(fake.pids()).toHaveLength(1));
+    await waitForProcess(() => expect(fake.requests('initialize')).toHaveLength(1));
     await pool.shutdownResidentClients();
     expect(await pending).toMatchObject({ kind: 'closed' });
-    await sleep(500);
     expect(fake.pids().filter(alive)).toEqual([]);
     expect(pool.residentCount()).toBe(0);
   });
