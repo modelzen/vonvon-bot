@@ -1,4 +1,5 @@
 import type { BotDefaults } from './defaults';
+import type { DirectorySettings } from './directories';
 import { REASONING_EFFORTS, type ReasoningEffort } from '../agent/types';
 
 export type TenantBrand = 'feishu' | 'lark';
@@ -91,6 +92,8 @@ export interface AppAccess {
 export interface AppPreferences {
   /** Stored execution defaults; group/runtime inheritance is resolved separately. */
   defaults?: BotDefaults;
+  /** Stored directory declarations; runtime inheritance is resolved separately. */
+  directories?: DirectorySettings;
   /** Opt-in Feishu ASR; unavailable recognition preserves the original audio. */
   voice?: import('../voice/types').VoiceConfig;
   /** 空白项目的默认父目录。仅通过 config.json 配置；缺省时仍使用
