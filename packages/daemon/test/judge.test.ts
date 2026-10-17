@@ -271,6 +271,19 @@ describe('judge', () => {
     expect(failedAt(fake.log.warn)).toEqual(['quota']);
   });
 
+  it('a stored effort the backend does not take counts as unset and is logged once as setting-ignored', async () => {
+    const f = fakeBackend({ id: 'claude-agent', displayName: 'Claude' });
+    const judge = make(f.backend);
+    const bad = { kind: 'llm', backend: 'claude-agent', model: 'sonnet', effort: 'minimal' } as const;
+    const ask = () => judge.judge(req('main', { group: { chatId: 'oc_g', name: '群', backend: 'claude-agent', judge: bad as never } }));
+    expect(await ask()).toMatchObject({ modelSource: 'default' });
+    expect(await ask()).toMatchObject({ modelSource: 'default' });
+    expect(f.calls[0]).not.toHaveProperty('effort');
+    expect(f.calls[0]!.model).not.toBe('sonnet');
+    const ignored = fake.log.warn.mock.calls.filter((c) => c[1] === 'setting-ignored');
+    expect(ignored).toEqual([['judge', 'setting-ignored', { layer: 'oc_g', why: '推理强度这个后端不收' }]]);
+  });
+
   it('a backend with no judge method is unavailable', async () => {
     const f = fakeBackend({ judge: undefined });
     expect(await make(f.backend).judge(req('topic'))).toMatchObject({ decision: 'skip', error: { kind: 'unavailable' } });

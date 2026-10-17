@@ -90,6 +90,39 @@ describe('Claude judge (design 3.3)', () => {
     }
   });
 
+  it('a success result with is_error is an API error: the assistant code is structured, the text alone is not', async () => {
+    const apiError = (text: string) => success({ is_error: true, result: text, structured_output: undefined });
+    const cases: Array<[SDKMessage[], string, boolean]> = [
+      [[assistantError('rate_limit'), apiError("You've hit your limit")], 'quota', true],
+      [[assistantError('authentication_failed'), apiError('Invalid API key · Please run /login')], 'auth', true],
+      [[apiError("You've hit your usage limit")], 'quota', false],
+      [[apiError('Invalid API key · Please run /login')], 'auth', false],
+      [[apiError('')], 'failed', false],
+    ];
+    for (const [messages, kind, structured] of cases) {
+      const { backend } = backendWith(messages);
+      const error = await backend.judge!(call()).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(JudgeCallError);
+      expect(error).toMatchObject({ kind, structured });
+    }
+  });
+
+  it('account, verification, request and unknown codes fall back to the text and never cool', async () => {
+    // claudeJudgeError: only codes that stop the whole machine or model are structured
+    const cases: Array<[string, string, string]> = [
+      ['account_on_hold', 'Your account is on hold', 'failed'],
+      ['verification_required', 'Please verify your account', 'failed'],
+      ['invalid_request', 'prompt is too long', 'failed'],
+      ['unknown', 'something odd', 'failed'],
+      ['account_on_hold', 'Please login again', 'auth'],
+    ];
+    for (const [code, text, kind] of cases) {
+      const { backend } = backendWith([assistantError(code), failure([text])]);
+      const error = await backend.judge!(call()).catch((e: unknown) => e);
+      expect(error).toMatchObject({ kind, structured: false });
+    }
+  });
+
   it('on abort: the SDK controller aborts, close() is called, and the promise settles after it', async () => {
     const { backend, query, made } = backendWith([], true);
     const ctl = new AbortController();

@@ -64,6 +64,43 @@ describe('judge cooldown (design 第 4 节)', () => {
     expect(s.calls).toHaveBeenCalledTimes(3);
   });
 
+  it('a structured auth failure cools the whole backend, whatever the model', async () => {
+    const s = setup();
+    s.fail('auth', true);
+    expect((await s.judge.judge(req('a'))).error?.kind).toBe('auth');
+    s.succeed();
+    expect((await s.judge.judge(req('a'))).error).toMatchObject({ kind: 'auth', detail: '不到 1 分钟前刚失败过，5 分钟内不再调' });
+    expect((await s.judge.judge(req('b'))).error?.kind).toBe('auth');
+    expect(s.calls).toHaveBeenCalledTimes(1);
+  });
+
+  it('a structured version failure cools only that model of the backend', async () => {
+    const s = setup();
+    s.fail('version', true);
+    expect((await s.judge.judge(req('new-model'))).error?.kind).toBe('version');
+    s.succeed();
+    expect((await s.judge.judge(req('new-model'))).error).toMatchObject({ kind: 'version', detail: '不到 1 分钟前刚失败过，5 分钟内不再调' });
+    expect(s.calls).toHaveBeenCalledTimes(1);
+    expect((await s.judge.judge(req('old-model'))).error).toBeUndefined();
+    expect(s.calls).toHaveBeenCalledTimes(2);
+  });
+
+  it('a judgement queued while another starts a cooldown does not call the backend once granted', async () => {
+    const s = setup();
+    const pending: Array<{ resolve(v: JudgeCallOutput): void; reject(e: unknown): void }> = [];
+    s.calls.mockImplementation(() => new Promise<JudgeCallOutput>((resolve, reject) => { pending.push({ resolve, reject }); }));
+    // Codex runs 4 at a time: the fifth queues
+    const running = [1, 2, 3, 4].map(() => s.judge.judge(req()));
+    const queued = s.judge.judge(req());
+    await vi.waitFor(() => expect(pending).toHaveLength(4));
+    pending[0]!.reject(new JudgeCallError('quota', 'boom quota', true));
+    expect((await running[0])!.error?.kind).toBe('quota');
+    expect(await queued).toMatchObject({ decision: 'main', error: { kind: 'quota', detail: '不到 1 分钟前刚失败过，5 分钟内不再调' } });
+    expect(s.calls).toHaveBeenCalledTimes(4);
+    for (const p of pending.slice(1)) p.resolve({ text: '{"decision":"main","reason":""}' });
+    for (const r of running.slice(1)) expect((await r).error).toBeUndefined();
+  });
+
   it('a kind only read from the text does not cool: the next judgement calls the backend', async () => {
     const s = setup();
     for (const kind of ['auth', 'quota', 'model'] as const) {

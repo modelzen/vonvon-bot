@@ -189,8 +189,17 @@ export async function consumeClaudeTitleQuery(query: Query): Promise<string | un
   throw new Error('Claude title query closed before returning a result');
 }
 
-/** A judge failure: an `assistant.error` code is structured (it may start a cooldown), a kind only
- * read from the text is not (design 3.1). */
+/**
+ * A judge failure: an `assistant.error` code is structured (it may start a cooldown), a kind only
+ * read from the text is not (design 3.1). Only codes saying the whole machine or the whole model
+ * cannot be used are structured: auth (`authentication_failed`, `oauth_org_not_allowed`,
+ * `cloud_credential_error`), quota (`rate_limit`, `billing_error`) and `model_not_found`; overloaded
+ * and server errors are structured `network`, which never cools. The other codes fall back to the
+ * text and so never cool: `account_on_hold` and `verification_required` need the owner to act in the
+ * account, which a 5-minute pause does not help, and the error detail still carries their text;
+ * `invalid_request` comes from this one input (too long, a bad character), not from the backend;
+ * `unknown` says nothing.
+ */
 function claudeJudgeError(code: unknown, message: string): JudgeCallError {
   const coded = code === 'model_not_found' ? 'model' : claudeErrorKind(code);
   if (coded) return new JudgeCallError(coded, message, true);
@@ -205,6 +214,8 @@ export async function consumeClaudeJudgeQuery(query: Query): Promise<JudgeCallOu
       if (message.type === 'assistant' && message.error) code = message.error;
       if (message.type !== 'result') continue;
       if (message.subtype !== 'success') throw claudeJudgeError(code, message.errors.join('; ') || `Claude 判断失败：${message.subtype}`);
+      // `success` with is_error: the turn ended on an API error, and `result` is its text (sdk.d.ts)
+      if (message.is_error) throw claudeJudgeError(code, message.result || 'Claude 判断失败：API 出错');
       const u = message.usage;
       return {
         text: message.result,
@@ -479,8 +490,8 @@ export class ClaudeAgentBackend implements AgentBackend {
    * One smart-mode judgement (design 3.3): a single turn of the helper options (no tools, MCP, hooks,
    * skills, saved session or personal CLAUDE.md) whose system prompt is replaced whole by the string
    * `call.system`, which works on a claude.ai login (s23c spike). No effort turns thinking off; Haiku
-   * 5.5 accepts that and still thinks a little. Settles only after `query.close()`, so the judge
-   * layer gives the slot back once the CLI is gone.
+   * 5.5 accepts that and still thinks a little. Calls `query.close()` before settling; SDK cleanup
+   * bounds its wait for process exit, so an unresponsive CLI may outlive the released judge slot.
    */
   async judge(call: JudgeCall): Promise<JudgeCallOutput> {
     let sdk: ClaudeSdkFacade;

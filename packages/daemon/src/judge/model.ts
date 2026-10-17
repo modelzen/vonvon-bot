@@ -1,5 +1,6 @@
 import { readClaudeUserSettings } from '../agent/claude-agent/configured-model';
 import { parseModelId } from '../agent/model-id';
+import { getSessionTitleEfforts } from '../config/schema';
 import { REASONING_EFFORTS, type ModelInfo, type ReasoningEffort } from '../agent/types';
 import type { JudgeResult, JudgeSelectionStored } from './types';
 
@@ -51,11 +52,12 @@ export function claudeJudgeDefault(
 ): string {
   const baseUrl = envValue('ANTHROPIC_BASE_URL', settingsEnv, processEnv);
   if (!baseUrl) return CLAUDE_JUDGE_MODEL;
-  let host: string | undefined;
+  let host: string;
   try {
     host = new URL(baseUrl).hostname.toLowerCase();
   } catch {
-    host = undefined;
+    // not a URL: the CLI cannot reach a gateway with it either, so judge as without one
+    return CLAUDE_JUDGE_MODEL;
   }
   if (host === 'api.anthropic.com') return CLAUDE_JUDGE_MODEL;
   if (envValue('ANTHROPIC_DEFAULT_HAIKU_MODEL', settingsEnv, processEnv)) return CLAUDE_JUDGE_MODEL;
@@ -90,7 +92,8 @@ export function parseStoredJudge(value: unknown, backends: readonly string[]): {
   if (typeof v.backend !== 'string' || !backends.includes(v.backend)) return { why: '后端没注册' };
   const id = typeof v.model === 'string' ? parseModelId(v.model) : undefined;
   if (!id?.ok) return { why: '模型 id 不对' };
-  if (v.effort !== undefined && !(REASONING_EFFORTS as readonly unknown[]).includes(v.effort)) return { why: '推理强度不认识' };
+  // per backend, as the settings command checks a hand-typed id: Claude takes only low to max
+  if (v.effort !== undefined && !(getSessionTitleEfforts(v.backend) as readonly unknown[]).includes(v.effort)) return { why: '推理强度这个后端不收' };
   if (v.custom !== undefined && typeof v.custom !== 'boolean') return { why: 'custom 不是 true 或 false' };
   return {
     value: {

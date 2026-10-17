@@ -49,6 +49,9 @@ describe('judge default model', () => {
     expect(claudeJudgeDefault({}, { ANTHROPIC_BASE_URL: 'https://gw.example.com', ANTHROPIC_SMALL_FAST_MODEL: 'fast' }, 'big')).toBe('fast');
     expect(claudeJudgeDefault({ ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic' }, {}, 'deepseek-chat')).toBe('deepseek-chat');
     expect(claudeJudgeDefault({ ANTHROPIC_BASE_URL: 'https://gw.example.com' }, {}, undefined)).toBe('haiku');
+    // not a URL: no gateway, so Haiku even with a configured model
+    expect(claudeJudgeDefault({}, { ANTHROPIC_BASE_URL: 'gw.example.com', ANTHROPIC_SMALL_FAST_MODEL: 'fast' }, 'big')).toBe('haiku');
+    expect(claudeJudgeDefault({ ANTHROPIC_BASE_URL: 'not a url' }, {}, 'big')).toBe('haiku');
   });
 
   it('readClaudeUserSettings reads settings.json once: the env (strings only) and the configured model', () => {
@@ -100,6 +103,17 @@ describe('judge model layers (design 2.2)', () => {
     expect(resolveJudgeModel('codex-appserver', { bot: llm('codex-appserver', 'm') }, list)).toEqual({ model: 'm', effort: 'medium', modelSource: 'bot' });
     expect(resolveJudgeModel('codex-appserver', { bot: llm('codex-appserver', 'm', { custom: true }) }, list)).toEqual({ model: 'm', modelSource: 'bot' });
     expect(resolveJudgeModel('claude-agent', { group: llm('claude-agent', 'gpt-6-luna') }, [LUNA])).toEqual({ model: 'gpt-6-luna', modelSource: 'group' });
+  });
+
+  it('parseStoredJudge checks the effort against the backend: Claude takes low to max, Codex the whole ladder', () => {
+    for (const effort of ['low', 'medium', 'high', 'xhigh', 'max']) {
+      expect(parseStoredJudge({ kind: 'llm', backend: 'claude-agent', model: 'haiku', effort }, IDS).value?.effort).toBe(effort);
+    }
+    for (const effort of ['none', 'minimal', 'ultra']) {
+      expect(parseStoredJudge({ kind: 'llm', backend: 'claude-agent', model: 'haiku', effort }, IDS)).toEqual({ why: '推理强度这个后端不收' });
+      expect(parseStoredJudge({ kind: 'llm', backend: 'codex-appserver', model: 'm', effort }, IDS).value?.effort).toBe(effort);
+    }
+    expect(parseStoredJudge({ kind: 'llm', backend: 'codex-appserver', model: 'm', effort: 'tiny' }, IDS).value).toBeUndefined();
   });
 
   it('parseStoredJudge keeps a good value and says why a bad one counts as unset', () => {

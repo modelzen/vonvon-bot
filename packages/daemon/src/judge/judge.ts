@@ -282,6 +282,12 @@ export function createJudge(deps: JudgeDeps): Judge {
           limiter.release();
           throw ctl.signal.reason;
         }
+        // a judgement that ran while this one queued may have just started a cooldown
+        const cooledWhileQueued = cooldown.check(backend.id, base.model);
+        if (cooledWhileQueued) {
+          limiter.release();
+          throw new JudgeFail(cooledWhileQueued.kind, cooledWhileQueued.detail);
+        }
         try {
           call = backend.judge({
             system: judgeSystem(prompt.text, req.variant),
