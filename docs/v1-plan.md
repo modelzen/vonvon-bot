@@ -896,7 +896,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 
 开工要点：
 - s58、s59 不依赖 M3 到 M9，M4 之后在第二条线上做。
-- s58 做法：删除生产入口未使用的 `data-root-migration.ts`、`legacy-data-root.ts`、`host/migration.ts`，以及只为改名迁移服务的兼容修复、错误类型和测试。现行 `resolveDataRoot` 继续默认使用 `~/.vonvon-bot`，显式 `VONVON_HOME` 的行为不变；getter 识别、互斥与租约仍保留。隔离的真实 CLI 启动与退出验证默认和显式目录两条路径，两个旧目录的实体、内容和孤立迁移日志均保留。原来的改名做法和第 5 节"复制数据、旧目录原地引用"相反；`~/.vonvon-bridge` 的识别在 s59 里按预检的需要重写。
+- s58 做法（#373）：删除生产入口未使用的 `data-root-migration.ts`、`legacy-data-root.ts`、`host/migration.ts`，以及只为改名迁移服务的兼容修复、错误类型和测试。现行 `resolveDataRoot` 继续默认使用 `~/.vonvon-bot`，显式 `VONVON_HOME` 的行为不变；getter 识别、互斥与租约仍保留。隔离的真实 CLI 启动与退出验证默认和显式目录两条路径，两个旧目录的实体、内容和孤立迁移日志均保留。原来的改名做法和第 5 节"复制数据、旧目录原地引用"相反；`~/.vonvon-bridge` 的识别在 s59 里按预检的需要重写。
 - s59：合入后在 #226 里写明移植了哪些代码，先不关。
 - s59：预检只直接导入有 `bots.json` 的安装。没有它的老式平铺安装，bridge 下次运行时会把顶层的 `processes.json` 改名到 `bots/<appId>/processes.json`，盖掉 vonvon 写的锁（e07 第 8 条）。用过 0.6.x 的应该都有；遇到没有的怎么办（比如提示先让 bridge 跑一次升级目录）开工时定，要是变成不导入，按本文 4.2 第 3 条问 owner。
 - s61：按 e07：bridge 的锁每个 bot 一把，在 `~/.feishu-codex-bridge/bots/<appId>/processes.json`，`appId` 要和目录名完全一致，调 v2 的 `acquireSingleInstanceLock` 时显式传这个路径。持有者是同一用户下、活过整个事务的进程，由它自己写锁，不复用旧记录、不自己拼 `startedAt`。`stop` 以后 bridge 还在优雅退出，要轮询重试到抢到为止并设上限；抢不到时持有者已不是预检看到的那个 bridge，就按失败回滚。回滚时先放锁再 `start` bridge，不然被拉起的 `run` 会被自己的锁拒掉。抢锁本身是原子的，不用另加互斥。
