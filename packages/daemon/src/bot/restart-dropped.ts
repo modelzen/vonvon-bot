@@ -178,6 +178,8 @@ export interface DroppedReplies {
   start(): void;
   /** At shutdown: merge what is lost into the file, synchronously, and start no more replies. Once only. */
   saveSync(lost: readonly DroppedOrigin[], why: 'shutdown' | 'crash'): void;
+  /** A first turn that was still preparing when shutdown saved the queues. */
+  appendSync(origin: DroppedOrigin): void;
 }
 
 /**
@@ -268,6 +270,13 @@ export function createDroppedReplies(deps: {
       try { groups = recordDroppedSync(file, lost, now(), corrupt); }
       catch (error) { log.fail('bridge', error, { phase: 'dropped-record' }); return; }
       if (groups) log.info('bridge', 'dropped-recorded', { groups, messages: lost.length, why });
+    },
+    appendSync(origin) {
+      if (!saved) return;
+      try {
+        const groups = recordDroppedSync(file, [origin], now(), corrupt);
+        if (groups) log.info('bridge', 'dropped-appended', { groups });
+      } catch (error) { log.fail('bridge', error, { phase: 'dropped-append' }); }
     },
   };
 }

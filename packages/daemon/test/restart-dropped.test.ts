@@ -224,6 +224,27 @@ describe('the replies, one group after another', () => {
     expect(readDropped(file, NOW).entries.map(entry => entry.messageId)).toEqual(['om_a1']);
   });
 
+  it('appends only after a shutdown saved, and a later crash cannot count it twice', () => {
+    const { replies } = start(vi.fn(async () => undefined));
+    const first = origin('a', 'first', NOW);
+    const second = origin('a', 'second', NOW + 1);
+    replies.appendSync(first);
+    expect(existsSync(file)).toBe(false);
+    replies.saveSync([], 'shutdown');
+    replies.appendSync(first);
+    replies.appendSync(second);
+    replies.saveSync([first, second], 'crash');
+    expect(readDropped(file, NOW).entries).toMatchObject([{ messageId: second.messageId, count: 2 }]);
+  });
+
+  it('a dropped.json it cannot append is logged without throwing', () => {
+    writeFileSync(join(dir, 'blocker'), '');
+    const { replies, log } = start(vi.fn(async () => undefined), join(dir, 'blocker', 'dropped.json'));
+    replies.saveSync([], 'shutdown');
+    expect(() => replies.appendSync(origin('a', 'first', NOW))).not.toThrow();
+    expect(log.fail).toHaveBeenCalledWith('bridge', expect.objectContaining({ code: 'ENOTDIR' }), { phase: 'dropped-append' });
+  });
+
   it('⑬ a dropped.json it cannot write is logged, and saveSync returns', () => {
     writeFileSync(join(dir, 'blocker'), '');
     const { replies, log } = start(vi.fn(async () => undefined), join(dir, 'blocker', 'dropped.json'));

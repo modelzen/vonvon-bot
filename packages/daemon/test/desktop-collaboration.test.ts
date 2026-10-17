@@ -11,6 +11,8 @@ import { createOrchestrator } from '../src/bot/handle-message';
 import { parseCollaborationRequest, projectRevision } from '../src/admin/collaboration';
 import { weaveSender } from '../src/bot/context-weave';
 import { updateManagedCard } from '../src/card/managed';
+import { readDropped } from '../src/bot/restart-dropped';
+import { existsSync } from 'node:fs';
 
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
@@ -38,7 +40,7 @@ function backend() {
   fixture.backend = backend;
   return { ...backend, thread };
 }
-function orchestrator(channel: unknown = { send: fixture.send }) { return createOrchestrator(channel as never, cfg, paths.appDir); }
+function orchestrator(channel: unknown = { send: fixture.send }, droppedFile?: string) { return createOrchestrator(channel as never, cfg, paths.appDir, undefined, droppedFile ? { droppedFile } : undefined); }
 beforeEach(async () => {
   await rm(pendingGroupsFile(paths.projectsFile), { force: true });
   await rm(paths.projectsFile, { force: true }); await rm(paths.sessionsFile, { force: true });
@@ -55,6 +57,23 @@ it('rejects untrusted identity, extra fields and relative paths at the HTTP boun
   expect(parseCollaborationRequest({ action: 'shareUsage', ...target, sections: ['stats', 'heatmap'] })).toMatchObject({ sections: ['stats', 'heatmap'] });
   expect(() => parseCollaborationRequest({ action: 'shareUsage', ...target, sections: ['unknown'] })).toThrow('分享区块无效');
   expect(() => parseCollaborationRequest({ action: 'shareUsage', ...target, sections: 'stats' })).toThrow('分享区块无效');
+});
+
+it('does not tell a sender to resend a desktop goal interrupted during preparation', async () => {
+  const be = backend();
+  let prepared!: (value: typeof be.thread) => void;
+  be.resumeThread.mockReturnValue(new Promise(resolve => { prepared = resolve; }));
+  const file = join(paths.appDir, 'desktop-dropped.json');
+  const app = orchestrator(undefined, file);
+  const starting = app.collaboration({ action: 'startGoal', ...target, threadId: 'oc_demo', objective: 'Finish' });
+  await vi.waitFor(() => expect(be.resumeThread).toHaveBeenCalledOnce());
+  const closing = app.shutdown();
+  prepared(be.thread);
+  await starting;
+  await closing;
+  expect(be.thread.close).toHaveBeenCalled();
+  expect(readDropped(file, Date.now()).entries).toEqual([]);
+  expect(existsSync(file)).toBe(false);
 });
 
 it('generates a share card with only the requested sections', async () => {

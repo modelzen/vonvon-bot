@@ -225,6 +225,7 @@ describe('a shutdown keeps what it drops (s18c)', () => {
     const closing = o.shutdown();
     expect(entries()).toMatchObject([{ messageId: waiting.messageId, replyInThread: true, place: 'topic', count: 1 }]);
     await closing;
+    expect(entries()).toMatchObject([{ messageId: waiting.messageId, count: 1 }]);
     const card = fake.final.mock.calls.map(call => call[1] as { config?: { summary?: { content?: string } } }).find(c => JSON.stringify(c).includes('这一轮没开始'));
     expect(JSON.stringify(card)).toContain('bot 停止运行了，这一轮没开始');
     expect(JSON.stringify(card)).not.toContain('已取消排队');
@@ -274,6 +275,7 @@ describe('a shutdown keeps what it drops (s18c)', () => {
     expect(entries()).toMatchObject([{ messageId: waiting.messageId, count: 1 }]);
     card.created.resolve('card_queued');
     await closing;
+    expect(entries()).toMatchObject([{ messageId: waiting.messageId, count: 1 }]);
     expect(stoppedCards()).toHaveLength(1);
     expect(two.consumed).toHaveLength(0);
   });
@@ -324,16 +326,45 @@ describe('a shutdown keeps what it drops (s18c)', () => {
     expect(fake.reply).not.toHaveBeenCalled();
   });
 
-  it('⑩ a run still preparing its first turn is not kept (s18e)', async () => {
+  it.each(['first', '/goal first'])('keeps the message still preparing %s when shutdown begins', async text => {
     const resume = deferred<ReturnType<typeof thread>['t']>();
     fake.backend.resumeThread.mockReturnValue(resume.promise);
     const o = setup();
-    await o.onMessage(message('first'));
+    const first = message(text);
+    await o.onMessage(first);
     await until(() => expect(fake.backend.resumeThread).toHaveBeenCalled());
     const closing = o.shutdown();
     expect(existsSync(file)).toBe(false);
     resume.resolve(thread().t);
     await closing;
+    expect(entries()).toMatchObject([{ messageId: first.messageId, count: 1, replyInThread: true, place: 'topic' }]);
+  });
+
+  it('keeps a main-area opening that is still preparing when shutdown begins', async () => {
+    const start = deferred<ReturnType<typeof thread>['t']>();
+    fake.backend.startThread.mockReturnValue(start.promise);
+    const o = setup();
+    const first = message('open a topic', { threadId: undefined });
+    await o.onMessage(first);
+    await until(() => expect(fake.backend.startThread).toHaveBeenCalled());
+    const closing = o.shutdown();
+    start.resolve(thread().t);
+    await closing;
+    expect(entries()).toMatchObject([{ messageId: first.messageId, count: 1, replyInThread: true, place: 'topic' }]);
+  });
+
+  it('a crash saves queued messages once, including ones accepted before shutdown', async () => {
+    const run = thread(); fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup();
+    await o.onMessage(message('first'));
+    await until(() => expect(run.consumed).toHaveLength(1));
+    const next = message('queued');
+    await o.onMessage(next); await queued(1);
+    o.saveDroppedSync('crash');
+    expect(entries()).toMatchObject([{ messageId: next.messageId, count: 1 }]);
+    await o.shutdown();
+    o.saveDroppedSync('crash');
+    expect(entries()).toMatchObject([{ messageId: next.messageId, count: 1 }]);
   });
 
   it('⑫ a queued message the running turn\'s record block already carried is not kept', async () => {

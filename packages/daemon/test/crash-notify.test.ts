@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { crashText, type CrashEntry } from '@vonvon/protocol';
 import type { BotEntry } from '../src/config/bots';
-import type { Clock } from '../src/host/crash-store';
+import { readUnsentNotices, writeNoticesSync, writeUnsentNoticesSync, type UnsentNotice, type Clock } from '../src/host/crash-store';
 
 // The owner's private messages (s18b): fake fetch, fake timers, an injected clock and senders, crash/ in a temp dir.
 const f = vi.hoisted(() => ({ botDir: '' }));
@@ -18,6 +18,7 @@ const roots: string[] = [];
 afterAll(() => { for (const root of roots) rmSync(root, { recursive: true, force: true }); });
 const tempRoot = (): string => { const root = mkdtempSync(join(tmpdir(), 'vonvon-crash-notify-')); roots.push(root); return root; };
 
+const CHAIN = '11111111-1111-4111-8111-111111111111';
 const EARLY = 'cli_early';
 const LATE = 'cli_late';
 const ALONE = 'cli_alone';
@@ -74,7 +75,7 @@ const make = (extra: Partial<Parameters<typeof createCrashNotifier>[0]> = {}) =>
 const flush = async (): Promise<void> => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
 /** Moves the clock and the timers together. */
 const tick = async (ms: number): Promise<void> => { now += ms; up += ms; await vi.advanceTimersByTimeAsync(ms); await flush(); };
-const ctx = (paused = false, botPaused: (appId: string) => boolean = () => false) => ({ bots, paused, botPaused });
+const ctx = (paused = false, botPaused: (appId: string) => boolean = () => false) => ({ chainId: CHAIN, bots, paused, botPaused });
 /** A loadSender that waits `ms` (fake timers) before it answers. */
 const slowSender = (ms: number): LoadSender => async appId => { await new Promise(resolve => setTimeout(resolve, ms)); return loadSender(appId); };
 
@@ -154,7 +155,7 @@ describe('the host\'s messages', () => {
     expect(botFolders(root).sort()).toEqual([ALONE, LATE].sort());
     senders[LATE] = 'no-owner';
     const n = make();
-    n.hostStarted(hostNotice({ crashes: 3, pauseEntered: true }), { bots: [], paused: true, botPaused: () => false, registryUnreadable: true });
+    n.hostStarted(hostNotice({ crashes: 3, pauseEntered: true }), { chainId: CHAIN, bots: [], paused: true, botPaused: () => false, registryUnreadable: true });
     await flush();
     // Not EARLY: it has a sender, but no folder.
     expect(messages()).toMatchObject([{ body: { receive_id: `ou_owner_of_${ALONE}` } }]);
@@ -580,5 +581,141 @@ describe('texts and senders', () => {
     expect(await loadOwnerSender(ALONE)).toBe('config-incomplete');
     expect(await loadOwnerSender('cli_missing')).toBe('config-incomplete');
     expect(await loadOwnerSender('cli_broken')).toBe('config-unreadable');
+  });
+});
+
+describe('durable pause notices', () => {
+  const saved = (fields: Partial<Extract<UnsentNotice, { kind: 'bot-paused' }>> = {}): UnsentNotice => ({
+    kind: 'bot-paused', appId: ALONE, name: 'alone', reason: '出错退出', crashes: 3,
+    uuid: 'vc-11111111111111111111111111111111', chainId: CHAIN, at: new Date(now).toISOString(), ...fields,
+  });
+  const seed = (item = saved()): void => writeUnsentNoticesSync(root, [item], now);
+  const pending = (): UnsentNotice[] => readUnsentNotices(root);
+
+  it('writes synchronously with private permissions, survives a failed close, and reuses its UUID in a new notifier', async () => {
+    const n = make({ retryMs: [] });
+    n.hostStarted(hostNotice({ previous: undefined }), ctx());
+    reply = call => call.url.includes('tenant_access_token') ? ok(call) : { status: 503 };
+    n.botPaused(ALONE, 'alone', 3, '出错退出');
+    const [item] = pending();
+    expect(item).toMatchObject({ kind: 'bot-paused', chainId: CHAIN });
+    expect(statSync(join(root, 'crash/unsent-notices.json')).mode & 0o777).toBe(0o600);
+    await flush();
+    await n.close();
+    expect(pending()).toEqual([item]);
+    reply = ok;
+    writeNoticesSync(root, { [ALONE]: { at: new Date(now).toISOString(), uptimeMs: up, bootId: boot } }, now);
+    const next = make();
+    next.hostStarted(hostNotice(), ctx(false, () => true));
+    await flush();
+    expect(messages().map(call => call.body.uuid)).toEqual([item?.uuid, item?.uuid]);
+    expect(pending()).toEqual([]);
+    await next.close();
+  });
+
+  it.each(['chain', 'old', 'bot-running', 'host-running', 'resumed'])( 'discards stale notice: %s', async why => {
+    const item = why === 'host-running'
+      ? { kind: 'host-paused', crashes: 3, bots: [], uuid: saved().uuid, chainId: CHAIN, at: saved().at } satisfies UnsentNotice
+      : saved(why === 'chain' ? { chainId: '22222222-2222-4222-8222-222222222222' } : {});
+    seed(item);
+    if (why === 'old') now += 24 * 60 * 60_000 + 1;
+    const n = make();
+    n.hostStarted(hostNotice({ previous: undefined, resumed: why === 'resumed' }), ctx(false, () => why !== 'bot-running'));
+    await flush();
+    expect(pending()).toEqual([]);
+    expect(calls).toEqual([]);
+    await n.close();
+  });
+
+  it('leaves untracked runs untouched and preserves bot notices when the registry is unreadable', async () => {
+    seed();
+    const original = readFileSync(join(root, 'crash/unsent-notices.json'), 'utf8');
+    const n = make();
+    n.hostStarted(undefined, ctx());
+    expect(readFileSync(join(root, 'crash/unsent-notices.json'), 'utf8')).toBe(original);
+    n.hostStarted(hostNotice({ previous: undefined }), { ...ctx(), registryUnreadable: true });
+    await flush();
+    expect(pending()).toHaveLength(1);
+    expect(calls).toEqual([]);
+    n.botForget(ALONE);
+    expect(pending()).toEqual([]);
+    await n.close();
+  });
+
+  it.each(['later', 'refused', 'unreadable'])('settles the entire host candidate list: %s', async result => {
+    seed({ kind: 'host-paused', crashes: 3, bots: [], uuid: saved().uuid, chainId: CHAIN, at: saved().at });
+    if (result === 'unreadable') senders[ALONE] = 'config-unreadable';
+    reply = call => call.url.includes('tenant_access_token') ? ok(call)
+      : call.auth === `Bearer t-${ALONE}` && result === 'later' ? { status: 503 } : { status: 400, body: { code: 123 } };
+    const n = make({ retryMs: [] });
+    n.hostStarted(hostNotice(), ctx(true));
+    await flush();
+    expect(pending()).toHaveLength(result === 'refused' ? 0 : 1);
+    expect(messages()[0]?.auth).toBe(`Bearer t-${EARLY}`);
+    await n.close();
+  });
+
+  it('supersedes a saved host pause with the new pause and removes a permanent bot refusal', async () => {
+    seed({ kind: 'host-paused', crashes: 3, bots: [], uuid: saved().uuid, chainId: CHAIN, at: saved().at });
+    const n = make();
+    n.hostStarted(hostNotice({ pauseEntered: true, crashes: 3 }), ctx(true));
+    await flush();
+    expect(messages()).toHaveLength(1);
+    expect(messages()[0]?.body.uuid).not.toBe(saved().uuid);
+    reply = () => ({ status: 400, body: { code: 123 } });
+    n.botPaused(ALONE, 'alone', 3, '出错退出');
+    await flush();
+    expect(pending()).toEqual([]);
+    await n.close();
+  });
+
+  it.each([true, false])('still sends the current host notice when saved notices are unreadable (paused=%s)', async paused => {
+    mkdirSync(join(root, 'crash/unsent-notices.json'), { recursive: true });
+    const n = make();
+    n.hostStarted(hostNotice({ crashes: 3, pauseEntered: paused }), ctx(paused));
+    await tick(paused ? 0 : 30_000);
+    expect(messages()).toHaveLength(1);
+    expect(logs.fail).toHaveBeenCalledWith('crash-notify', expect.anything(), { phase: 'unsent-read' });
+    await n.close();
+  });
+
+  it('continues sending when persistence fails and reports the write failure once', async () => {
+    const n = make();
+    n.hostStarted(hostNotice({ previous: undefined }), ctx());
+    mkdirSync(join(root, 'crash/unsent-notices.json'), { recursive: true });
+    n.botPaused(ALONE, 'alone', 3, '出错退出');
+    await flush();
+    n.botPaused(ALONE, 'alone', 3, '出错退出');
+    await flush();
+    expect(messages()).toHaveLength(2);
+    expect(logs.fail.mock.calls.filter(call => call[2]?.phase === 'unsent')).toHaveLength(1);
+    await n.close();
+  });
+
+  it('concludes a host notice when there are no possible senders', async () => {
+    seed({ kind: 'host-paused', crashes: 3, bots: [], uuid: saved().uuid, chainId: CHAIN, at: saved().at });
+    const n = make();
+    n.hostStarted(hostNotice(), { ...ctx(true), bots: [] });
+    await flush();
+    expect(pending()).toEqual([]);
+    expect(calls).toEqual([]);
+    await n.close();
+  });
+
+  it('keeps a pause cut by final shutdown and reports one corrupt file once', async () => {
+    seed();
+    reply = () => 'hang';
+    const n = make({ closeWaitMs: 20 });
+    n.hostStarted(hostNotice(), ctx(false, () => true));
+    await flush();
+    const closing = n.close();
+    await tick(20);
+    await closing;
+    expect(pending()).toHaveLength(1);
+    writeFileSync(join(root, 'crash/unsent-notices.json'), '{bad');
+    const next = make();
+    next.hostStarted(hostNotice({ previous: undefined }), ctx());
+    expect(logs.warn.mock.calls.filter(call => call[1] === 'unsent-corrupt')).toHaveLength(1);
+    await next.close();
   });
 });

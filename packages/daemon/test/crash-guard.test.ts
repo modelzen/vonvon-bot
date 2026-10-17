@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { chmodSync, existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -226,6 +226,14 @@ describe('crash handler in a real process', () => {
   });
   const RUN = '55555555-5555-4555-8555-555555555555';
   const ids = { VONVON_HOST_RUN_ID: RUN, VONVON_HOST_CHAIN_ID: CHAIN };
+  it.each(['bot-hook', 'bot-hook-throws', 'bot-hook-noctx'])('%s runs remaining sync hooks before exiting, even without a crash context', async scenario => {
+    const root = tempRoot();
+    expect((await crashChild(root, [scenario], ids)).code).toBe(70);
+    const count = scenario === 'bot-hook-noctx' ? 0 : 1;
+    expect(readFileSync(join(root, 'hooked'), 'utf8')).toBe(String(count));
+    expect(listCrashRecords(root)).toHaveLength(count);
+    expect(existsSync(join(root, 'unregistered'))).toBe(false);
+  });
   it('a bot child records under its host run and chain, exits 70 even under a manager, and never removes the host marker (s18a)', async () => {
     const root = tempRoot();
     writeRunMarkerSync(root, marker({ runId: RUN }));
