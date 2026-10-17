@@ -2,7 +2,8 @@ import {runtimeDistribution} from '../src/service/distribution';
 import { rmSync, existsSync } from 'node:fs';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { paths, botDir, useBotDir } from '../src/config/paths';
-import { loadBots, saveBots } from '../src/config/bots';
+import { loadBots } from '../src/config/bots';
+import { seedBots } from './helpers/bot-fixture';
 import { addProject } from '../src/project/registry';
 import { upsertSession } from '../src/bot/session-store';
 import { setSecret, listSecretIds } from '../src/config/keystore';
@@ -76,7 +77,7 @@ const BOT_A = 'cli_hostA';
 const BOT_B = 'cli_hostB';
 
 async function seedTwoBots(): Promise<void> {
-  await saveBots({
+  await seedBots({
     version: 1,
     current: BOT_A,
     bots: [
@@ -260,7 +261,7 @@ describe('AdminService · setBotEnabled（活跃集 enabled 落盘）', () => {
 
 describe('AdminService · deleteBot（删除 + 保护分支）', () => {
   it('启用中的唯一 bot 拒删，注册表/密钥/目录都不动', async () => {
-    await saveBots({ version: 1, current: BOT_A, bots: [{ name: 'alpha', appId: BOT_A, tenant: 'feishu', createdAt: 1, active: true }] });
+    await seedBots({ version: 1, current: BOT_A, bots: [{ name: 'alpha', appId: BOT_A, tenant: 'feishu', createdAt: 1, active: true }] });
     await setSecret(secretKeyForApp(BOT_A), 'secret-A');
     const svc = createAdminService();
     const r = await svc.deleteBot(BOT_A);
@@ -271,12 +272,12 @@ describe('AdminService · deleteBot（删除 + 保护分支）', () => {
   });
 
   it('已停用且停止的唯一 bot 可删除，空注册表可读并能再次注册', async () => {
-    await saveBots({ version: 1, current: BOT_A, bots: [{ name: 'alpha', appId: BOT_A, tenant: 'feishu', createdAt: 1, active: false }] });
+    await seedBots({ version: 1, current: BOT_A, bots: [{ name: 'alpha', appId: BOT_A, tenant: 'feishu', createdAt: 1, active: false }] });
     const service = createAdminService();
     expect((await service.deleteBot(BOT_A)).ok).toBe(true);
     expect((await loadBots()).bots).toEqual([]);
     expect(await service.listBots()).toEqual([]);
-    await saveBots({ version: 1, current: BOT_A, bots: [{ name: 'alpha', appId: BOT_A, tenant: 'feishu', createdAt: 2, active: false }] });
+    await seedBots({ version: 1, current: BOT_A, bots: [{ name: 'alpha', appId: BOT_A, tenant: 'feishu', createdAt: 2, active: false }] });
     expect((await service.listBots()).map(bot => bot.appId)).toEqual([BOT_A]);
   });
 

@@ -3,7 +3,7 @@ import { buildEncryptedAccountConfig, loadConfig, saveConfig } from '../config/s
 import { botPaths } from '../config/paths';
 import { isComplete, secretKeyForApp, type AppPreferences, type TenantBrand } from '../config/schema';
 import { validateAppCredentials } from '../utils/feishu-auth';
-import { addBot, loadBots, uniqueName } from '../config/bots';
+import { registerBotEntry, loadBots } from '../config/bots';
 import { log } from '../core/logger';
 
 /**
@@ -25,6 +25,9 @@ export interface RegisterBotInput {
   desiredName?: string;
   /** 扫码注册者的 open_id；必填并落成 owner+admin，禁止保存无管理员配置。 */
   ownerOpenId: string;
+  initialPreferences?: AppPreferences;
+  /** Interactive onboarding historically uses default when no validated name exists. */
+  fallbackName?: string;
 }
 
 export interface RegisterBotResult {
@@ -97,30 +100,20 @@ export async function registerBotFromCredentials(
   }
 
   try {
-    if ((await loadBots()).bots.some(bot => bot.appId === appId)) {
+    const result = await registerBotEntry({ appId, tenant, botName: v.botName,
+      desiredName: input.desiredName ?? v.botName ?? input.fallbackName ?? appId }, async () => {
+      // Fixed ownership order: bots, then keystore/config. All paths are explicit.
+      await setSecret(secretKeyForApp(appId), appSecret);
+      const files = botPaths(appId);
+      const existing = await loadConfig(files.configFile);
+      const preferences = withOwnerAdmin(isComplete(existing) ? existing.preferences : input.initialPreferences, ownerOpenId);
+      const cfg = await buildEncryptedAccountConfig(appId, tenant, preferences);
+      await saveConfig(cfg, files.configFile);
+    });
+    if (result.kind === 'already-registered') {
       return { ok: false, code: 'already_registered', reason: '此 Agent 已存在，请使用刷新凭据。' };
     }
-    // secret 先进 keystore（AES-256-GCM），再写指向它的 exec SecretRef config——
-    // 顺序保证 config 落盘时密钥已可解析；明文绝不进 config.json / bots.json。
-    await setSecret(secretKeyForApp(appId), appSecret);
-
-    const files = botPaths(appId);
-    // 显式路径读旧 config（同 appId 重复扫码时保留既有 preferences，如管理员名单），
-    // 不存在 / 不完整就建全新的——绝不 useBotDir 切全局目录。
-    const existing = await loadConfig(files.configFile);
-    const basePrefs = isComplete(existing) ? existing.preferences : undefined;
-    // 扫码人 open_id → 落成 owner+admin（与 CLI wizard 对齐）。
-    const preferences = withOwnerAdmin(basePrefs, ownerOpenId);
-    const cfg = await buildEncryptedAccountConfig(appId, tenant, preferences);
-    await saveConfig(cfg, files.configFile);
-
-    const reg = await loadBots();
-    const previous = reg.bots.find(bot => bot.appId === appId);
-    const name = uniqueName(
-      { ...reg, bots: reg.bots.filter(bot => bot.appId !== appId) },
-      input.desiredName ?? previous?.name ?? v.botName ?? appId,
-    );
-    await addBot({ ...previous, name, appId, tenant, botName: v.botName, createdAt: previous?.createdAt ?? Date.now() });
+    const { name } = result.entry;
 
     log.info('register-bot', 'bot-registered', { name, appId, bot: v.botName ?? null });
     return { ok: true, name, appId, tenant, botName: v.botName, missingScopes: v.missingScopes };
