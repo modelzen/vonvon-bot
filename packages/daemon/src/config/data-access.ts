@@ -6,7 +6,7 @@ import { join } from 'node:path';
 
 export class DataAccessError extends Error {}
 /** `service` serializes `vonvon service install|uninstall`, whoever runs it: the terminal, the daemon's helper or the desktop's. */
-type MutexRole = 'admission' | 'host' | 'keystore' | 'service' | 'bots';
+type MutexRole = 'admission' | 'host' | 'keystore' | 'service' | 'bots' | 'projects';
 export interface DataLease { release(): void }
 /** A held coordination mutex. `closeMutex` releases it; the kernel releases it when the process dies. */
 export interface Mutex { readonly role: MutexRole }
