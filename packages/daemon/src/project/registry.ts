@@ -1,8 +1,9 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import { paths } from '../config/paths';
 import type { PermissionMode, ReasoningEffort } from '../agent/types';
+import { admitDirectoryChanges, parseDirectorySettings, type DirectorySettings } from '../config/directories';
 
 /** A project = a Feishu group bound to a fixed working directory. */
 export interface Project {
@@ -15,6 +16,8 @@ export interface Project {
   chatId: string;
   /** absolute working directory codex runs in for this project */
   cwd: string;
+  /** Raw group overrides; absent repositories inherit, [] explicitly clears. */
+  directories?: DirectorySettings;
   /** true when bridge created the cwd as a blank project (under projectsRootDir) */
   blank: boolean;
   createdAt: number;
@@ -169,6 +172,7 @@ export async function listProjectsIn(file: string): Promise<Project[]> {
     const text = await readFile(file, 'utf8');
     const parsed = JSON.parse(text) as Partial<StoreFile>;
     if (!parsed || !Array.isArray(parsed.projects) || parsed.projects.some(p => !p || typeof p !== 'object' || typeof p.name !== 'string' || typeof p.cwd !== 'string')) throw new Error('项目注册表格式无效');
+    for (const project of parsed.projects) parseDirectorySettings(project.directories);
     return parsed.projects.map(foldGuestTier);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
@@ -228,16 +232,60 @@ async function readStored(): Promise<Record<string, unknown>> {
   return readFile(paths.projectsFile, 'utf8').then(text => JSON.parse(text)).catch(error => { if (error.code === 'ENOENT') return {}; throw error; });
 }
 
-async function writeStored(body: object): Promise<void> {
+type DirectoryRow = Pick<Project, 'name' | 'cwd'> & Record<string, unknown>;
+function isDirectoryRow(row: unknown): row is DirectoryRow {
+  return typeof row === 'object' && row !== null && !Array.isArray(row)
+    && 'name' in row && typeof row.name === 'string' && 'cwd' in row && typeof row.cwd === 'string';
+}
+function directoryRows(raw: unknown): DirectoryRow[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) throw new Error('项目注册表格式无效');
+  const rows: unknown[] = raw;
+  return rows.map(row => {
+    if (!isDirectoryRow(row)) throw new Error('项目注册表格式无效');
+    return row;
+  });
+}
+
+async function writeStored(body: Record<string, unknown>, previous: Record<string, unknown>): Promise<void> {
+  // Both callers own detached rows and a separate previous disk snapshot.
+  const next = body;
+  const oldProjects = directoryRows(previous.projects);
+  const nextProjects = directoryRows(next.projects);
+  for (const row of nextProjects) {
+    const directories = parseDirectorySettings(row.directories);
+    const old = oldProjects.find(project => project.chatId === row.chatId && project.name === row.name);
+    const oldDirectories = parseDirectorySettings(old?.directories);
+    if (directories?.workspaces && (row.cwd !== old?.cwd
+      || JSON.stringify(directories.workspaces) !== JSON.stringify(oldDirectories?.workspaces))) {
+      let cwd: string;
+      try { cwd = await realpath(row.cwd); }
+      catch { throw new Error('Invalid directory settings: directories.workspaces.primary (cwd unavailable)'); }
+      // A legacy explicit cwd edit also updates a declaration that still names the old primary.
+      if (oldDirectories?.workspaces && row.cwd !== old?.cwd && directories.workspaces.primary === oldDirectories.workspaces.primary) {
+        directories.workspaces.primary = cwd;
+        row.directories = directories;
+      }
+      if (directories.workspaces.primary !== cwd) throw new Error('Invalid directory settings: directories.workspaces.primary (must match cwd)');
+    }
+    await admitDirectoryChanges(directories, oldDirectories, paths.appDir);
+  }
+  const serialized = `${JSON.stringify(next, null, 2)}\n`;
   await mkdir(dirname(paths.projectsFile), { recursive: true });
   const tmp = `${paths.projectsFile}.tmp-${process.pid}-${randomUUID()}`;
-  await writeFile(tmp, `${JSON.stringify(body, null, 2)}\n`, 'utf8');
+  await writeFile(tmp, serialized, 'utf8');
   await rename(tmp, paths.projectsFile);
 }
 
-async function write(projects: Project[]): Promise<void> {
-  const body: StoreFile = { ...(await readStored()), version: FILE_VERSION, projects };
-  await writeStored(body);
+async function write(projects: Project[]): Promise<void>;
+async function write(projects: Project[], selected: Project): Promise<Project>;
+async function write(projects: Project[], selected?: Project): Promise<Project | void> {
+  const detached: Project[] = JSON.parse(JSON.stringify(projects));
+  const result = selected === undefined ? undefined : detached[projects.indexOf(selected)];
+  if (selected !== undefined && result === undefined) throw new Error('待保存的项目不存在');
+  const previous = await readStored();
+  await writeStored({ ...previous, version: FILE_VERSION, projects: detached }, previous);
+  return result;
 }
 
 /**
@@ -249,9 +297,10 @@ export async function setTierMergePending(chats: readonly string[]): Promise<voi
   return withLock(async () => {
     const stored = await readStored();
     if (!Array.isArray(stored.projects) || (!chats.length && !Object.hasOwn(stored, TIER_MERGE_PENDING))) return;
+    const previous: Record<string, unknown> = JSON.parse(JSON.stringify(stored));
     if (chats.length) stored[TIER_MERGE_PENDING] = [...chats];
     else delete stored[TIER_MERGE_PENDING];
-    await writeStored(stored);
+    await writeStored(stored, previous);
   });
 }
 
@@ -324,7 +373,17 @@ export async function mutateProject(name: string, mutate: (project: Project) => 
     const project = projects.find(item => item.name === name);
     if (!project) throw new Error('项目不存在');
     await mutate(project);
+    return write(projects, project);
+  });
+}
+
+/** Remove exactly one raw directory override; other keys/settings are retained. */
+export async function resetProjectDirectoryOverride(name: string, key: keyof DirectorySettings): Promise<void> {
+  return withLock(async () => {
+    const projects = await read();
+    const project = projects.find(item => item.name === name);
+    if (!project?.directories || !Object.hasOwn(project.directories, key)) return;
+    delete project.directories[key];
     await write(projects);
-    return project;
   });
 }
