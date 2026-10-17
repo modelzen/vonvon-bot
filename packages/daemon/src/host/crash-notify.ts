@@ -10,6 +10,7 @@ import { botPaths } from '../config/paths';
 import { isComplete, resolveOwner, type TenantBrand } from '../config/schema';
 import { resolveAppSecret } from '../config/secret-resolver';
 import { loadConfig } from '../config/store';
+import { FEISHU_RATE_LIMIT_CODES } from '../utils/feishu-error';
 import type { CrashLog } from './crash-guard';
 import { APP_ID, CRASH_WINDOW_MS, readNotices, startedBeforeThisBoot, systemClock, writeNoticesSync, type Clock, type NoticeStamp } from './crash-store';
 
@@ -51,8 +52,6 @@ const CLOSE_LIMIT_MS = 15_000;
 const CLOSE_RETRY_MS = 1_000;
 /** A sender not read for these may be read the next time (a secret provider timing out), so it is tried again. */
 const UNREAD_FOR_NOW = new Set(['config-unreadable', 'secret-unreadable']);
-/** Feishu's rate limits: the platform's code and the send-message API's own, besides HTTP 429. */
-const RATE_LIMITED = new Set([99991400, 230020]);
 const HOST = '#host';
 
 /** The name the pages show. */
@@ -125,7 +124,7 @@ async function post(fetchImpl: typeof fetch, url: string, body: unknown, signal:
 /** Undefined when Feishu took it. A network error, 5xx, 429 or a rate limit is tried again; any other refusal is not. */
 function refused(reply: Reply): SendResult | undefined {
   const detail = { status: reply.status, ...(reply.code !== undefined ? { code: reply.code } : {}), ...(reply.msg ? { msg: reply.msg } : {}) };
-  if (reply.status >= 500 || reply.status === 429 || (reply.code !== undefined && RATE_LIMITED.has(reply.code))) return { ok: false, retry: true, ...detail };
+  if (reply.status >= 500 || reply.status === 429 || (reply.code !== undefined && FEISHU_RATE_LIMIT_CODES.has(reply.code))) return { ok: false, retry: true, ...detail };
   // A 2xx whose body was not read (cut in transit) may have been taken: tried again with the same uuid, never another bot.
   if (reply.status >= 200 && reply.status < 300 && reply.code === undefined) return { ok: false, retry: true, ...detail };
   if (reply.status < 200 || reply.status >= 300 || reply.code !== 0) return { ok: false, retry: false, ...detail };

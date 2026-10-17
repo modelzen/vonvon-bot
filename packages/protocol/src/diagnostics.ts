@@ -1,10 +1,11 @@
 import { z } from "zod";
 
-/** Why a message to this bot got no answer (product.md 3.1 item 8). Gates first, then failed turns.
- * s25 adds the smart mode's reasons here and to {@link NOT_REPLIED_TEXT}. */
+/** Why a message to this bot got no answer (product.md 3.1 item 8). Gates first, then failed turns, then queued
+ * messages a restart dropped (s18c). s25 adds the smart mode's reasons here and to {@link NOT_REPLIED_TEXT}. */
 export const notRepliedReasonSchema = z.enum([
   "group-disabled", "group-updating", "chat-not-allowed", "user-not-allowed", "unbound", "lookup-failed",
   "signed-out", "codex-too-old", "tool-missing", "tier-unavailable", "missing-scope", "quota", "network", "idle-timeout", "agent-exited", "failed",
+  "restarted",
 ]);
 export type NotRepliedReason = z.infer<typeof notRepliedReasonSchema>;
 /** Where a running bot was refused a scope: the back-fill, real names, a group's info, or a reply. */
@@ -22,9 +23,10 @@ export const notRepliedSchema = z.object({
 export type NotReplied = z.infer<typeof notRepliedSchema>;
 export const deniedScopeSchema = z.object({ scope: z.string().min(1).max(100), where: scopeDenialPlaceSchema, at: z.number().finite().nonnegative() }).strict();
 export type DeniedScope = z.infer<typeof deniedScopeSchema>;
-/** What a bot child reports (the `fcb.diagnostics` IPC message); s18 adds its kinds here. */
+/** What a bot child reports (the `fcb.diagnostics` IPC message); s18 adds its kinds here. `times` counts one record as
+ * several messages (s18c: a group's dropped queue); child and host are always the same version. */
 export const diagnosticsEventSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("notReplied"), record: notRepliedSchema.omit({ count: true }) }).strict(),
+  z.object({ kind: z.literal("notReplied"), record: notRepliedSchema.omit({ count: true }), times: z.number().int().positive().max(10_000).optional() }).strict(),
   z.object({ kind: z.literal("scopeDenied"), denial: deniedScopeSchema }).strict(),
 ]);
 export type DiagnosticsEvent = z.infer<typeof diagnosticsEventSchema>;
@@ -60,6 +62,10 @@ export const NOT_REPLIED_TEXT: Record<NotRepliedReason, Text> = {
   "idle-timeout": { reason: () => "太久没有输出，这一轮停了", next: () => "卡片上的「重试」可以再跑一次。" },
   "agent-exited": { reason: r => `${tool(r)} 进程中途退出了`, next: () => "重发这条消息；反复出现时看下面的日志。" },
   failed: { reason: r => `这一轮出错了${r.detail ? `：${r.detail}` : ""}`, next: () => "看下面的日志。" },
+  restarted: {
+    reason: () => "重启或停止时这条还在排队，没处理",
+    next: r => r.detail ? `在原处回一句请重发没成功（${r.detail}），请告诉发消息的人重发。` : "已在原处回了一句请重发。",
+  },
 };
 
 /** The optional scopes of 3.11 that change what the bot does in a chat, and what is lost without each. */

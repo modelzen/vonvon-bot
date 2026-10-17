@@ -447,7 +447,8 @@ it('real BridgeHandle shares shutdown and retains provider failure through trans
   expect.soft(concurrent).toBe(closing);
   await vi.advanceTimersByTimeAsync(120000);
   expect.soft(result.status).toBe('pending');
-  expect.soft(fake.channel.disconnect).not.toHaveBeenCalled();
+  // s18c: the long connection goes first; the close still waits for the provider.
+  expect.soft(fake.channel.disconnect).toHaveBeenCalledOnce();
   fixture.die();
   await vi.advanceTimersByTimeAsync(1000);
   await expect(closing).rejects.toThrow('Bridge cleanup failed');
@@ -508,7 +509,8 @@ it.each(['clean', 'failed'] as const)('startup failure waits for the accepted ru
   const providerClosing = observe(owner.close());
   const registryClosing = observe(ownerModule.closeOwnedCodexProcesses());
   expect(starting.status).toBe('pending');
-  expect(fake.channel.disconnect).not.toHaveBeenCalled();
+  // s18c: disconnected as the cleanup began, while it still waits for the accepted run and the provider.
+  expect(fake.channel.disconnect).toHaveBeenCalledOnce();
 
   if (cleanup === 'clean') {
     fixture.die();
@@ -516,7 +518,7 @@ it.each(['clean', 'failed'] as const)('startup failure waits for the accepted ru
     expect(providerClosing.status).toBe('fulfilled');
     expect(registryClosing.status).toBe('fulfilled');
     expect(starting.status).toBe('pending');
-    expect(fake.channel.disconnect).not.toHaveBeenCalled();
+    expect(fake.channel.disconnect).toHaveBeenCalledOnce();
     run.turns[0]!.resolve();
   } else {
     run.turns[0]!.resolve();
@@ -525,7 +527,7 @@ it.each(['clean', 'failed'] as const)('startup failure waits for the accepted ru
     expect(starting.status).toBe('pending');
     expect(providerClosing.status).toBe('pending');
     expect(registryClosing.status).toBe('pending');
-    expect(fake.channel.disconnect).not.toHaveBeenCalled();
+    expect(fake.channel.disconnect).toHaveBeenCalledOnce();
     fixture.die(17);
   }
   await vi.advanceTimersByTimeAsync(1000);
