@@ -1,6 +1,5 @@
-import { loadConfig, saveConfig, buildEncryptedAccountConfig } from '../config/store';
-import { setSecret } from '../config/keystore';
-import { isComplete, secretKeyForApp, type AppConfig } from '../config/schema';
+import { loadConfig } from '../config/store';
+import { isComplete, type AppConfig } from '../config/schema';
 import { resolveAppSecret } from '../config/secret-resolver';
 import { runRegistrationWizard } from './wizard';
 import { validateAppCredentials } from '../utils/feishu-auth';
@@ -14,8 +13,9 @@ import {
 import { buildScopeGrantUrl, buildEventConfigUrl, labelScope } from '../config/scopes';
 import { detectAgents } from '../agent';
 import { log } from '../core/logger';
-import { useBotDir } from '../config/paths';
-import { ensureRegistry, addBot, currentBot, findBot, loadBots, uniqueName, type BotEntry } from '../config/bots';
+import { botPaths, useBotDir } from '../config/paths';
+import { ensureRegistry, currentBot, findBot, type BotEntry } from '../config/bots';
+import { registerBotFromCredentials } from './register-bot';
 
 export interface OnboardResult {
   cfg: AppConfig;
@@ -125,31 +125,24 @@ export async function registerNewBot(desiredName?: string): Promise<OnboardResul
     return null;
   }
 
-  // Validate with the plaintext secret before persisting — bad creds shouldn't
-  // leave a half-registered bot behind.
-  const v = await validateAppCredentials(app.id, app.secret, app.tenant);
-  if (!v.ok) {
-    console.error(`✗ 应用凭据校验失败：${v.reason}`);
+  const registered = await registerBotFromCredentials({ appId: app.id, appSecret: app.secret,
+    tenant: app.tenant, desiredName, fallbackName: 'default',
+    ownerOpenId: wizardCfg.preferences?.access?.ownerOpenId ?? '', initialPreferences: wizardCfg.preferences });
+  if (!registered.ok) {
+    console.error(`✗ ${registered.reason}`);
     return null;
   }
-
-  await setSecret(secretKeyForApp(app.id), app.secret);
-  useBotDir(app.id); // from here all per-bot files land under bots/<appId>/
-  const cfg = await buildEncryptedAccountConfig(app.id, app.tenant, wizardCfg.preferences);
-  await saveConfig(cfg);
-
-  const reg = await loadBots();
-  const name = uniqueName(reg, desiredName ?? v.botName ?? 'default');
-  await addBot({ name, appId: app.id, tenant: app.tenant, botName: v.botName, createdAt: Date.now() });
-
-  console.log(`✓ 已创建机器人「${name}」  bot: ${v.botName ?? '-'}  appId: ${app.id}`);
-  log.info('onboard', 'bot-created', { name, appId: app.id, bot: v.botName ?? null });
-  noticeMissingScopes(cfg, v.missingScopes);
+  const cfg = await loadConfig(botPaths(app.id).configFile);
+  if (!isComplete(cfg)) throw new Error('注册后配置不完整');
+  useBotDir(app.id);
+  console.log(`✓ 已创建机器人「${registered.name}」  bot: ${registered.botName ?? '-'}  appId: ${app.id}`);
+  log.info('onboard', 'bot-created', { name: registered.name, appId: app.id, bot: registered.botName ?? null });
+  noticeMissingScopes(cfg, registered.missingScopes);
   const events = await diagnoseEventSubscription(app.id, app.secret, app.tenant);
   noticeEventDiagnosis(cfg, events);
 
   const secret = await resolveAppSecret(cfg);
-  return { cfg, secret, missingScopes: v.missingScopes, events };
+  return { cfg, secret, missingScopes: registered.missingScopes, events };
 }
 
 /** Resolve secret, validate credentials, report result; on missing scopes,

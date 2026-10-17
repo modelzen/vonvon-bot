@@ -59,7 +59,8 @@ vi.mock('../src/bot/register-bot', () => ({
 import { rmSync } from 'node:fs';
 import { createAdminService } from '../src/admin/service';
 import { runRegistrationWizard, startRegistration } from '../src/bot/wizard';
-import { loadBots, saveBots, type BotEntry } from '../src/config/bots';
+import { loadBots, type BotEntry } from '../src/config/bots';
+import { seedBots } from './helpers/bot-fixture';
 import { paths } from '../src/config/paths';
 
 afterEach(() => {
@@ -221,7 +222,7 @@ describe('registerBotByQr · 注册完默认启用（s02e）', () => {
   });
 
   it('新 Bot 写成启用并马上启动；主人停用的 Bot 仍是停用', async () => {
-    await saveBots({ version: 1, current: ON, bots: [bot(ON, true), bot(OFF, false)] });
+    await seedBots({ version: 1, current: ON, bots: [bot(ON, true), bot(OFF, false)] });
     const apply = vi.fn(async () => {});
     scanned('cli_newbot00001');
     const r = await createAdminService({ applyBotActivation: apply }).registerBotByQr(scan);
@@ -232,7 +233,7 @@ describe('registerBotByQr · 注册完默认启用（s02e）', () => {
   });
 
   it('旧安装没有启用标记：原来的 current 仍启用，其余照旧不启用', async () => {
-    await saveBots({ version: 1, current: ON, bots: [bot(ON), bot(OFF)] });
+    await seedBots({ version: 1, current: ON, bots: [bot(ON), bot(OFF)] });
     scanned('cli_newbot00002');
     expect(await createAdminService().registerBotByQr(scan)).toMatchObject({ ok: true });
     expect(await activeFlags()).toEqual({ [ON]: true, [OFF]: false, cli_newbot00002: true });
@@ -240,7 +241,7 @@ describe('registerBotByQr · 注册完默认启用（s02e）', () => {
   });
 
   it('启动失败不让注册失败：Bot 仍算启用，之后的开关照常', async () => {
-    await saveBots({ version: 1, bots: [] });
+    await seedBots({ version: 1, bots: [] });
     const apply = vi.fn(async (_appId: string, enabled: boolean) => {
       if (enabled) throw new Error('Agent 启动后未能及时响应');
     });
@@ -254,7 +255,7 @@ describe('registerBotByQr · 注册完默认启用（s02e）', () => {
   });
 
   it('重新扫码只换凭据，不动启用状态；同一个应用再注册也不会被打开', async () => {
-    await saveBots({ version: 1, bots: [] });
+    await seedBots({ version: 1, bots: [] });
     const apply = vi.fn(async () => {});
     const service = createAdminService({ applyBotActivation: apply });
     scanned('cli_newbot00004');

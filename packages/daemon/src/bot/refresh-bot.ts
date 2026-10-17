@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { loadBots } from '../config/bots';
+import { botIdentity, commitBotCredentialRefresh, loadBots } from '../config/bots';
 import { botPaths } from '../config/paths';
 import { loadConfig } from '../config/store';
 import { isComplete, secretKeyForApp } from '../config/schema';
@@ -23,6 +23,7 @@ export async function refreshBotCredentials(
     if (!entry || !isComplete(config) || config.accounts.app.id !== appId || config.accounts.app.tenant !== entry.tenant) {
       return fail('stale_target', 'Agent 已移除或配置已变更，请重新加载。');
     }
+    const expected = botIdentity(entry);
     const owner = config.preferences?.access?.ownerOpenId;
     const secret = config.accounts.app.secret;
     if (!owner || typeof secret !== 'object' || secret.source !== 'exec' || secret.provider !== 'bridge' || secret.id !== secretKeyForApp(appId)) {
@@ -36,11 +37,11 @@ export async function refreshBotCredentials(
     }
     const validation = await validate(appId, creds.clientSecret, entry.tenant);
     if (!validation.ok) return fail('credential_rejected', '新凭据校验失败，未保存。');
-    await setSecret(secretKeyForApp(appId), creds.clientSecret, async () => {
+    const committed = await commitBotCredentialRefresh(expected, () => setSecret(secretKeyForApp(appId), creds.clientSecret, async () => {
       if (options.signal.aborted) throw { code: 'abort' };
-      const current = (await loadBots()).bots.find(bot => bot.appId === appId);
-      if (JSON.stringify(current) !== JSON.stringify(entry) || await readFile(file, 'utf8') !== original) throw { code: 'stale_target' };
-    });
+      if (await readFile(file, 'utf8') !== original) throw { code: 'stale_target' };
+    }));
+    if (committed === 'stale') return fail('stale_target', 'Agent 已移除或配置已变更，请重新加载。');
     return { ok: true, appId, name: entry.name, tenant: entry.tenant, adminOpenId: owner, botName: entry.botName, missingScopes: validation.missingScopes };
   } catch (error) {
     const code = registrationErrorCode(error);
