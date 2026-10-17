@@ -238,7 +238,13 @@ export function isGoalSuccess(status: string): boolean {
   return status === 'complete';
 }
 
+export type AskResolution =
+  | { kind: 'answered'; answer: AskAnswer }
+  | { kind: 'unanswered'; reason: 'timeout' | 'stopped' | 'turn-ended' | 'unavailable' };
+
 export interface AgentRun {
+  /** Claim/release the local continuation synchronously before returning delivery work. */
+  respondToAsk?(requestId: string, resolution: AskResolution): Promise<void>;
   events: AsyncIterable<AgentEvent>;
   /** current turn id, available after `turn_started` */
   turnId(): string | undefined;

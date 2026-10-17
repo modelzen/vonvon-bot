@@ -7,6 +7,7 @@ export type AskCardState =
   | { kind: 'answered'; answer: AskAnswer; actor: string; at: string }
   | { kind: 'timed-out' }
   | { kind: 'stopped' }
+  | { kind: 'unavailable'; reason: 'turn-ended' | 'unavailable' }
   | { kind: 'expired'; reason: 'restart' };
 
 export type AskSubmissionResult =
@@ -27,7 +28,9 @@ function callback(request: AskRequest, decision: z.infer<typeof callbackSchema>[
 
 /** Validate callbacks against the exact outstanding request; authorization belongs to the caller. */
 export function parseAskSubmission(input: { request: AskRequest; value: unknown; formValue: unknown }): AskSubmissionResult {
-  const parsed = callbackSchema.safeParse(input.value);
+  const clean = input.value && typeof input.value === 'object' && !Array.isArray(input.value)
+    ? Object.fromEntries(Object.entries(input.value).filter(([key]) => key !== '__r')) : input.value;
+  const parsed = callbackSchema.safeParse(clean);
   if (!parsed.success) return invalid;
   const { request, formValue } = input;
   const { decision, requestId } = parsed.data;
@@ -115,7 +118,7 @@ function answerSummary(request: AskRequest, answer: AskAnswer): string {
   }).join('\n');
 }
 
-export function buildAskCard(input: { request: AskRequest; state: AskCardState; respondents: readonly string[] }): CardObject {
+export function buildAskCard(input: { request: AskRequest; state: AskCardState; respondents: readonly { openId: string; name: string }[] }): CardObject {
   const { request, state, respondents } = input;
   const elements: CardElement[] = [];
   if (request.kind === 'choices') {
@@ -125,7 +128,7 @@ export function buildAskCard(input: { request: AskRequest; state: AskCardState; 
     }
   } else elements.push(md(request.detail));
   elements.push(md(`回答后：${request.acceptedConsequence}\n\n未回答或拒绝后：${request.declinedConsequence}`));
-  elements.push(note(`可回答：${respondents.length ? respondents.join('、') : '等待指定成员回答'}`));
+  elements.push(md(`可回答：${respondents.length ? respondents.map(person => `<at id="${person.openId}">${person.name}</at>`).join('、') : '等待指定成员回答'}`));
   if (state.kind === 'pending') {
     if (request.kind === 'choices') {
       elements.push(form('ask', [
@@ -145,6 +148,7 @@ export function buildAskCard(input: { request: AskRequest; state: AskCardState; 
       case 'answered': elements.push(md(answerSummary(request, state.answer)), note(`${state.actor} · ${state.at}`)); break;
       case 'timed-out': elements.push(note('⏱ 15 分钟没人回答')); break;
       case 'stopped': elements.push(note('⏹ 已停止')); break;
+      case 'unavailable': elements.push(note(state.reason === 'turn-ended' ? '本轮已结束' : '暂时无法回答')); break;
       case 'expired': elements.push(note('已失效（后台服务重启过）')); break;
       default: { const exhaustive: never = state; return exhaustive; }
     }
