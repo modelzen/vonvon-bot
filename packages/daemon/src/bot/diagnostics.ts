@@ -19,7 +19,8 @@ function report(event: DiagnosticsEvent): void {
   const parsed = diagnosticsEventSchema.safeParse(event);
   try { if (parsed.success) sink?.(parsed.data); } catch { /* the page is best-effort; a turn never fails for it */ }
 }
-export function reportNotReplied(record: Omit<NotReplied, 'count'>): void { report({ kind: 'notReplied', record }); }
+/** `times` > 1: one record for that many messages (a group's dropped queue, s18c). */
+export function reportNotReplied(record: Omit<NotReplied, 'count'>, times = 1): void { report({ kind: 'notReplied', record, ...(times > 1 ? { times } : {}) }); }
 /** Only scopes the console check reads reach 缺的权限, which may call one 后台显示已开; Feishu's list of scopes that
  * would do can start with an alias (`im:message`), so the name is the first the check reads, else the first. */
 const CHECKED_SCOPES: ReadonlySet<string> = new Set([...REQUIRED_SCOPES, ...CHAT_OPTIONAL_SCOPES]);
@@ -81,7 +82,7 @@ export function createDiagnosticsStore(opts: { changed: () => void; claudeSigned
         // Any matching record, moved to the front; always a new array, or the snapshot's deep compare sees no change.
         const same = bot.notReplied.find(item => item.groupId === record.groupId && item.place === record.place
           && item.reason === record.reason && item.backend === record.backend && Math.abs(record.at - item.at) < MERGE_MS);
-        bot.notReplied = [{ ...record, count: (same?.count ?? 0) + 1 }, ...bot.notReplied.filter(item => item !== same)].slice(0, NOT_REPLIED_LIMIT);
+        bot.notReplied = [{ ...record, count: (same?.count ?? 0) + (event.times ?? 1) }, ...bot.notReplied.filter(item => item !== same)].slice(0, NOT_REPLIED_LIMIT);
         // Stamped now: a queued turn can fail long after its message was sent.
         if (record.reason === 'signed-out' && record.backend === 'claude') opts.claudeSignedOut?.(now());
       }

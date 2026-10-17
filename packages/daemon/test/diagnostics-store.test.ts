@@ -67,6 +67,19 @@ describe('diagnostics store', () => {
     expect(changed).toHaveBeenCalledOnce();
   });
 
+  it('counts a record reported for several messages as that many (s18c)', () => {
+    const store = createDiagnosticsStore({ changed: () => {} });
+    store.accept('cli_a', { kind: 'notReplied', record: record({ reason: 'restarted' }), times: 3 });
+    expect(store.view('cli_a')?.notReplied.map(item => item.count)).toEqual([3]);
+    store.accept('cli_a', { kind: 'notReplied', record: record({ reason: 'restarted', at: 1_000_000 + 9 * 60_000 }), times: 2 });
+    expect(store.view('cli_a')?.notReplied.map(item => item.count)).toEqual([5]);
+    const seen: DiagnosticsEvent[] = [];
+    setDiagnosticsSink(event => seen.push(event));
+    reportNotReplied(record({ reason: 'restarted' }), 3);
+    reportNotReplied(record({ reason: 'restarted' }), 1);
+    expect(seen).toEqual([{ kind: 'notReplied', record: record({ reason: 'restarted' }), times: 3 }, { kind: 'notReplied', record: record({ reason: 'restarted' }) }]);
+  });
+
   it('tells the login cache when a Claude turn failed for its login', () => {
     const claudeSignedOut = vi.fn();
     const store = createDiagnosticsStore({ changed: () => {}, claudeSignedOut, now: () => 5_000_000 });

@@ -13,13 +13,14 @@ const fixture = vi.hoisted(() => ({
   releaseLock: vi.fn(),
   registryClose: vi.fn(async () => {}),
   logFail: vi.fn(),
+  reply: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ code: 0 })),
 }));
 
 vi.mock('@larksuiteoapi/node-sdk', async original => ({
   ...await original<object>(),
   createLarkChannel: () => ({
     on: vi.fn(), connect: fixture.connect, disconnect: fixture.disconnect,
-    rawClient: { im: { v1: { chatMembers: { isInChat: fixture.membership } } } },
+    rawClient: { im: { v1: { chatMembers: { isInChat: fixture.membership }, message: { reply: fixture.reply } } } },
     getChatInfo: async () => ({ chatType: 'group', name: 'Research', ownerId: 'owner' }),
   }),
 }));
@@ -50,6 +51,10 @@ vi.mock('../src/core/single-instance', () => ({
     fixture.lockHeld = true;
     return () => { fixture.lockHeld = false; fixture.releaseLock(); };
   },
+}));
+// A connected start serves the page; no real port here.
+vi.mock('../src/server/http', () => ({
+  startApi: async () => ({ listen: '127.0.0.1:1', beginDrain: async () => {}, release: async () => {}, invalidate() {} }),
 }));
 vi.mock('../src/core/logger', () => ({
   log: { info() {}, warn() {}, fail: fixture.logFail },
@@ -97,19 +102,22 @@ afterEach(() => {
   fixture.registryClose.mockClear();
   fixture.releaseLock.mockClear();
   fixture.logFail.mockClear();
+  fixture.reply.mockClear();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
+
+/** The first wait covers runHostRuntime's cold import of the whole bot, which can take more than waitFor's 1 s. */
+const COLD = { timeout: 10_000 };
 
 function reasons(error: unknown): unknown[] {
   return error instanceof AggregateError ? error.errors.flatMap(reasons) : [error];
 }
 
-it.each([false, true])('keeps host and Bot ownership through accepted startup verification when connection fails, cleanup fails=%s', async cleanupFails => {
+/** A pending group whose membership check is still out when the close starts: an accepted task it waits for. */
+async function pendingVerification() {
   const { paths } = await import('../src/config/paths');
-  const { pendingGroupsFile, readPendingGroups } = await import('../src/project/pending-groups');
-  const { runHostRuntime } = await import('../src/host/bootstrap');
-  expect(process.send).toBeUndefined();
+  const { pendingGroupsFile } = await import('../src/project/pending-groups');
   const file = pendingGroupsFile(paths.projectsFile);
   await mkdir(dirname(file), { recursive: true });
   await writeFile(file, JSON.stringify({ version: 1, groups: [{
@@ -117,6 +125,27 @@ it.each([false, true])('keeps host and Bot ownership through accepted startup ve
   }] }));
   const verification = deferred<{ code: number; data: { is_in_chat: boolean } }>();
   fixture.membership.mockReturnValue(verification.promise);
+  return { file, verification };
+}
+
+/** What the last shutdown dropped (s18c), where `daemon run` keeps it for this bot. */
+async function seedDropped() {
+  const { botPaths } = await import('../src/config/paths');
+  const { recordDroppedSync } = await import('../src/bot/restart-dropped');
+  const file = botPaths('startup-drain').droppedFile;
+  await mkdir(dirname(file), { recursive: true });
+  recordDroppedSync(file, [{ chatId: 'oc_dropped', messageId: 'om_dropped', at: 1, replyInThread: true, place: 'topic' }], Date.now());
+  return file;
+}
+
+it.each([false, true])('keeps host and Bot ownership through accepted startup verification when connection fails, cleanup fails=%s', async cleanupFails => {
+  const { paths } = await import('../src/config/paths');
+  const { readPendingGroups } = await import('../src/project/pending-groups');
+  const { runHostRuntime } = await import('../src/host/bootstrap');
+  expect(process.send).toBeUndefined();
+  const { file, verification } = await pendingVerification();
+  const dropped = await seedDropped();
+  const kept = await readFile(dropped, 'utf8');
   const connectError = new Error('fixture connect rejected');
   const cleanupError = new Error('fixture disconnect rejected');
   if (cleanupFails) fixture.disconnect.mockImplementationOnce(async () => { throw cleanupError; });
@@ -131,12 +160,13 @@ it.each([false, true])('keeps host and Bot ownership through accepted startup ve
   };
   const running = outcome(runHostRuntime({ bot: 'startup-drain', managed: false, control }));
   try {
-    await vi.waitFor(() => expect(fixture.membership).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(fixture.membership).toHaveBeenCalledOnce(), COLD);
     await Promise.resolve();
     expect(running.state()).toBe('pending');
     expect(fixture.lockHeld).toBe(true);
     expect(existsSync(join(paths.appDir, 'daemon.pid'))).toBe(true);
-    expect(fixture.disconnect).not.toHaveBeenCalled();
+    // s18c: the long connection went first; lock and pid file stay while the verification runs.
+    expect(fixture.disconnect).toHaveBeenCalledOnce();
   } finally {
     verification.resolve({ code: 0, data: { is_in_chat: true } });
     await running.settled;
@@ -149,4 +179,96 @@ it.each([false, true])('keeps host and Bot ownership through accepted startup ve
   expect(fixture.lockHeld).toBe(false);
   expect(existsSync(join(paths.appDir, 'daemon.pid'))).toBe(false);
   expect(await readFile(file, 'utf8')).toContain('Research');
+  // Not connected: nothing was answered, and the file waits for the next start.
+  expect(fixture.reply).not.toHaveBeenCalled();
+  expect(await readFile(dropped, 'utf8')).toBe(kept);
+});
+
+it('answers what the last shutdown dropped once connected, and closes the long connection before the orchestrator (s18c)', async () => {
+  const { paths } = await import('../src/config/paths');
+  const { runHostRuntime } = await import('../src/host/bootstrap');
+  const { verification } = await pendingVerification();
+  const dropped = await seedDropped();
+  fixture.connect.mockResolvedValue(undefined);
+  const stop = deferred<void>();
+  const control: ShutdownControl = {
+    requested: false,
+    waitForRequest: () => stop.promise,
+    requestStop() {},
+    requestRestart() {},
+    completeShutdown: async release => { await release(); },
+    dispose() {},
+  };
+  const running = outcome(runHostRuntime({ bot: 'startup-drain', managed: false, control }));
+  try {
+    await vi.waitFor(() => expect(existsSync(dropped)).toBe(false), COLD);
+    expect(fixture.reply).toHaveBeenCalledWith({ path: { message_id: 'om_dropped' }, data: expect.objectContaining({ reply_in_thread: true, uuid: expect.stringMatching(/^vd-/) }) });
+    await vi.waitFor(() => expect(fixture.membership).toHaveBeenCalledOnce());
+    stop.resolve();
+    await vi.waitFor(() => expect(fixture.disconnect).toHaveBeenCalledOnce());
+    // The orchestrator's close starts by closing its Codex processes: after the disconnect.
+    await vi.waitFor(() => expect(fixture.registryClose).toHaveBeenCalled());
+    expect(fixture.disconnect.mock.invocationCallOrder[0]).toBeLessThan(fixture.registryClose.mock.invocationCallOrder[0]!);
+    await Promise.resolve();
+    expect(running.state()).toBe('pending');
+    expect(fixture.lockHeld).toBe(true);
+    expect(existsSync(join(paths.appDir, 'daemon.pid'))).toBe(true);
+  } finally {
+    stop.resolve();
+    verification.resolve({ code: 0, data: { is_in_chat: true } });
+    await running.settled;
+  }
+  expect(running.state()).toBe('fulfilled');
+  expect(fixture.disconnect).toHaveBeenCalledOnce();
+  expect(fixture.lockHeld).toBe(false);
+});
+
+it('a supervised child still reports a dropped message whose reply settles during the close (s18c)', async () => {
+  // A bot child under the supervisor: what it sends over IPC is recorded, and each send's callback is called.
+  const sent: unknown[] = [];
+  const child = Object.create(process) as NodeJS.Process;
+  Object.defineProperties(child, {
+    send: { value: (message: unknown, ...rest: unknown[]) => {
+      sent.push(message);
+      (rest.find(item => typeof item === 'function') as ((error: Error | null) => void) | undefined)?.(null);
+      return true;
+    } },
+    connected: { value: true },
+    // Its own listeners: `process.on('message')` must not reach the real process.
+    _events: { value: Object.create(null), writable: true },
+    _eventsCount: { value: 0, writable: true },
+  });
+  vi.stubGlobal('process', child);
+  const { runHostRuntime } = await import('../src/host/bootstrap');
+  const { verification } = await pendingVerification();
+  const dropped = await seedDropped();
+  fixture.connect.mockResolvedValue(undefined);
+  const answered = deferred<unknown>();
+  fixture.reply.mockReturnValueOnce(answered.promise);
+  const stop = deferred<void>();
+  const control: ShutdownControl = {
+    requested: false,
+    waitForRequest: () => stop.promise,
+    requestStop() {},
+    requestRestart() {},
+    completeShutdown: async release => { await release(); },
+    dispose() {},
+  };
+  const running = outcome(runHostRuntime({ bot: 'startup-drain', managed: false, control }));
+  try {
+    await vi.waitFor(() => expect(fixture.reply).toHaveBeenCalledOnce(), COLD);
+    await vi.waitFor(() => expect(fixture.membership).toHaveBeenCalledOnce());
+    stop.resolve();
+    // The close has begun, and waits for the verification: the reply's answer comes now.
+    await vi.waitFor(() => expect(fixture.disconnect).toHaveBeenCalledOnce());
+    answered.resolve({ code: 0 });
+    await vi.waitFor(() => expect(existsSync(dropped)).toBe(false));
+    expect(running.state()).toBe('pending');
+  } finally {
+    stop.resolve();
+    answered.resolve({ code: 0 });
+    verification.resolve({ code: 0, data: { is_in_chat: true } });
+    await running.settled;
+  }
+  expect(sent).toContainEqual({ fcb: 'fcb.diagnostics', event: { kind: 'notReplied', record: expect.objectContaining({ reason: 'restarted', groupId: 'oc_dropped', place: 'topic' }) } });
 });
