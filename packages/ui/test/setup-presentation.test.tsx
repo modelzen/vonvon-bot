@@ -67,9 +67,9 @@ const tool = (value: Partial<ToolState> & Pick<ToolState, 'tool'>): ToolState =>
 
 it('needs Codex or Claude installed, signed in and new enough', () => {
   expect(toolSteps([tool({tool: 'codex'}), tool({tool: 'claude', installation: 'missing', authentication: 'unknown', version: null})]).ready).toBe(true);
-  const old = toolSteps([tool({tool: 'codex', compatibility: {status: 'tooOld', minimum: '0.139.0', verified: '0.156.1'}}), tool({tool: 'claude', authentication: 'signedOut'})]);
+  const old = toolSteps([tool({tool: 'codex', compatibility: {status: 'tooOld', minimum: '0.156.1', verified: '0.156.1'}}), tool({tool: 'claude', authentication: 'signedOut'})]);
   expect(old.ready).toBe(false);
-  expect(old.steps[0]).toMatchObject({status: '版本太旧 · 0.162.1', detail: '最低要 0.139.0，请在本机环境更新。'});
+  expect(old.steps[0]).toMatchObject({status: '版本太旧 · 0.162.1', detail: '最低要 0.156.1，请在本机环境更新。'});
   expect(old.steps[1]?.actions).toEqual([{kind: 'claudeLogin', label: '检查登录'}]);
   const missing = toolSteps([tool({tool: 'codex', installation: 'missing', authentication: 'unknown', version: null})]);
   expect(missing.steps[0]?.detail).toContain('Homebrew');
