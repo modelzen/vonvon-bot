@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { chmodSync, existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -252,6 +253,35 @@ describe('crash handler in a real process', () => {
     expect(existsSync(join(root, 'drained'))).toBe(expected === 0);
     expect(listCrashRecords(root)).toEqual(expected === 0 ? [] : [expect.objectContaining({ scope: 'bot', during: 'stop', errorName: 'Error:EPIPE' })]);
     expect(readRunMarker(root)).toMatchObject({ runId: RUN });
+  });
+  it.each(['bot-orphan', 'bot-orphan-flush', 'bot-orphan-fast'])('%s exits cleanly and releases its bot lock after IPC disconnects', async scenario => {
+    const root = tempRoot();
+    const child = spawn(process.execPath, [bundle, root, scenario], { env: { ...process.env, ...ids, VONVON_HOME: root }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+    child.stdout?.resume(); child.stderr?.resume();
+    try {
+      const ready = new AbortController();
+      const deadline = setTimeout(() => ready.abort(new Error('fixture readiness timed out')), 5000);
+      try {
+        await Promise.race([
+          once(child, 'message', { signal: ready.signal }),
+          once(child, 'exit', { signal: ready.signal }).then(() => { throw new Error('fixture exited before ready'); }),
+        ]);
+      } finally { clearTimeout(deadline); ready.abort(); }
+      await new Promise(resolve => setTimeout(resolve, 500));
+      expect(child.exitCode).toBeNull();
+      expect(existsSync(join(root, 'orphan-lock.json'))).toBe(true);
+      child.disconnect();
+      await vi.waitFor(() => expect(child.exitCode).toBe(0), { timeout: 5000 });
+      expect(existsSync(join(root, 'exited'))).toBe(true);
+      expect(existsSync(join(root, 'orphan-lock.json'))).toBe(false);
+      expect(listCrashRecords(root)).toEqual([]);
+    } finally {
+      if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
+        const exited = once(child, 'exit');
+        child.kill('SIGKILL');
+        await exited;
+      }
+    }
   });
   it('a host that crashes before it owns the run writes nothing', async () => {
     const root = tempRoot();

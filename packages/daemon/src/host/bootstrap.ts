@@ -6,11 +6,11 @@ import { readServiceCodexBin } from '../service/codex-bin';
 import { acquirePidLock, getPidLockInfo, isPidLockOwnerRunning, PidLockError, publishPidLock, readRunningPidLock, releasePidLock, type PidLockInfo } from '../server/pid-lock';
 import { verifyPidLockOwner } from '../server/owner-verification';
 import { readStartupRegistration } from '../service/startup';
-import { log } from '../core/logger';
+import { flushLogs, log } from '../core/logger';
 import { wasLogged } from '../core/error-parts';
 import { bridgeVersion } from '../core/version';
 import { defaultHolderPath, ProcessHost } from '../provider/process/process-host';
-import { closeHostRun, guardParentPipes, openBotCrashContext, openHostRun, type HostRunStart } from './crash-guard';
+import { capOrphanDrain, closeHostRun, guardParentPipes, openBotCrashContext, openHostRun, type HostRunStart } from './crash-guard';
 import { crashEntry } from './crash-store';
 import type { HostNotice } from './crash-notify';
 
@@ -75,6 +75,7 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
         intent: () => control.intent ?? (control.requested ? 'stop' : 'running'),
       });
       guardParentPipes(control);
+      capOrphanDrain({ log, flush: flushLogs });
     }
     if (control.requested) return;
     host = new ProcessHost({

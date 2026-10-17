@@ -31,12 +31,27 @@ export type HostRunStart = {
 };
 
 export const HEARTBEAT_MS = 60_000;
+export const ORPHAN_DRAIN_MS = 20_000;
 let context: Context | undefined;
 let hostRun: HostRun | undefined;
 let installedIntent: (() => HostIntent) | undefined;
 let handling = false;
 
 const safe = (fn: () => void): void => { try { fn(); } catch { /* logging never ends a start or a crash */ } };
+
+/** No supervisor remains to kill a child stuck draining after IPC disconnects. */
+export function capOrphanDrain(options: { log: CrashLog; flush?: () => Promise<void>; ms?: number }): void {
+  process.once('disconnect', () => {
+    const since = Date.now();
+    const timer = setTimeout(() => {
+      safe(() => options.log.warn('run', 'orphan-drain-cut', { waitedMs: Date.now() - since }));
+      const finish = (): never => { clearTimeout(fallback); process.exit(0); };
+      const fallback = setTimeout(finish, 1500);
+      void Promise.resolve().then(() => options.flush?.()).then(finish, finish);
+    }, options.ms ?? ORPHAN_DRAIN_MS);
+    timer.unref();
+  });
+}
 const serviceManagedHost = (): boolean => Boolean(process.env.VONVON_SERVICE) && !process.send;
 const managedName = (): string | null => process.env.VONVON_SERVICE?.slice(0, 20) || null;
 const during = (intent: HostIntent): 'run' | 'stop' | 'restart' => intent === 'running' ? 'run' : intent;

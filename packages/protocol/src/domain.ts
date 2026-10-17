@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { botDiagnosticsSchema } from "./diagnostics.js";
-import { applicationCrashesSchema, crashPauseSchema } from "./crash.js";
+import { applicationCrashesSchema, crashPauseSchema, lockHeldSchema } from "./crash.js";
 
 export const agentIdSchema = z
   .string()
@@ -124,6 +124,7 @@ export const agentSchema = z.object({
   diagnostics: botDiagnosticsSchema.optional(),
   /** This bot alone stopped restarting after 3 crashes in 10 minutes (s18a); absent from older daemons. */
   paused: crashPauseSchema.optional(),
+  lockHeld: lockHeldSchema.optional(),
 });
 export type Agent = z.infer<typeof agentSchema>;
 export const membershipSchema = z.object({
