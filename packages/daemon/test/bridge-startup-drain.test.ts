@@ -14,6 +14,15 @@ const fixture = vi.hoisted(() => ({
   registryClose: vi.fn(async () => {}),
   logFail: vi.fn(),
   reply: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ code: 0 })),
+  crashHooks: new Set<() => void>(),
+}));
+
+vi.mock('../src/host/crash-guard', async original => ({
+  ...await original<object>(),
+  onCrashSync: (hook: () => void) => {
+    fixture.crashHooks.add(hook);
+    return () => { fixture.crashHooks.delete(hook); };
+  },
 }));
 
 vi.mock('@larksuiteoapi/node-sdk', async original => ({
@@ -97,6 +106,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  expect(fixture.crashHooks.size).toBe(0);
   fixture.connect.mockReset();
   fixture.membership.mockReset();
   fixture.disconnect.mockClear();
@@ -106,6 +116,24 @@ afterEach(() => {
   fixture.reply.mockClear();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
+});
+
+it('registers the bridge crash hook before connecting and removes it after closing', async () => {
+  const { startBridge } = await import('../src/bot/bridge');
+  const file = await seedDropped();
+  const saved = await readFile(file, 'utf8');
+  const connect = deferred<void>();
+  fixture.connect.mockReturnValue(connect.promise);
+  const starting = startBridge({ cfg, appSecret: 'fixture', fallbackCwd: '/test', droppedFile: file });
+  await vi.waitFor(() => expect(fixture.crashHooks.size).toBe(1), COLD);
+  for (const hook of fixture.crashHooks) hook();
+  connect.resolve();
+  const handle = await starting;
+  try {
+    expect(fixture.reply).not.toHaveBeenCalled();
+    expect(await readFile(file, 'utf8')).toBe(saved);
+  } finally { await handle.shutdown(); }
+  expect(fixture.crashHooks.size).toBe(0);
 });
 
 /** The first wait covers runHostRuntime's cold import of the whole bot, which can take more than waitFor's 1 s. */

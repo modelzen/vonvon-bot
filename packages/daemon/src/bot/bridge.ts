@@ -13,6 +13,7 @@ import { adoptAdminSessions } from './session-store';
 import { paths } from '../config/paths';
 import { setTierMergePending, splitTierChats } from '../project/registry';
 import type { PermissionMode } from '../agent/types';
+import { onCrashSync } from '../host/crash-guard';
 
 export interface BridgeOptions {
   cfg: AppConfig;
@@ -75,6 +76,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   // hooks run an empty `vonvon hook`, and the tools ask in the terminal.
   const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd, createTopicRegistry({ dir: paths.topicsDir }),
     opts.droppedFile ? { droppedFile: opts.droppedFile } : undefined);
+  const offCrash = onCrashSync(() => orchestrator.saveDroppedSync('crash'));
   const groupTasks = new Set<Promise<JoinedGroups | Project>>();
   let closing: Promise<void> | undefined;
   const shutdown = (): Promise<void> => {
@@ -96,7 +98,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
         if (result.status === 'rejected') { log.fail('ws', result.reason, { phase: 'disconnect' }); errors.push(result.reason); }
       }
       if (errors.length) throw new AggregateError(errors, 'Bridge cleanup failed');
-    })();
+    })().finally(offCrash);
     return closing;
   };
   try {

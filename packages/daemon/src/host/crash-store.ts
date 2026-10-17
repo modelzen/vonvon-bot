@@ -381,3 +381,29 @@ export function readCrashSummary(root: string, options: { running: boolean; owne
   catch { /* unreadable directory */ }
   return { ...(paused ? { paused } : {}), pausedBots, crashes };
 }
+
+/** Pause messages awaiting a conclusive result. Only the host writes; UUID identifies the whole send job. */
+const unsentBase = { uuid: z.string().regex(/^vc-[0-9a-f]{32}$/), chainId: z.string().uuid(), at: iso,
+  crashes: z.number().int().positive(), reason: z.string().max(1000).optional() };
+export const unsentNoticeSchema = z.discriminatedUnion('kind', [
+  z.object({ ...unsentBase, kind: z.literal('host-paused'), bots: z.array(z.string()) }).strict(),
+  z.object({ ...unsentBase, kind: z.literal('bot-paused'), appId: z.string().regex(APP_ID), name: z.string(), reason: z.string().max(1000) }).strict(),
+]);
+export type UnsentNotice = z.infer<typeof unsentNoticeSchema>;
+const unsentSchema = z.object({ v: z.literal(1), items: z.array(unsentNoticeSchema).max(20) }).strict();
+const unsentPath = (root: string): string => join(crashDir(root), 'unsent-notices.json');
+export function readUnsentNotices(root: string, onCorrupt?: () => void): UnsentNotice[] {
+  let raw: string;
+  try { raw = readFileSync(unsentPath(root), 'utf8'); } catch (error) { if (isMissing(error)) return []; throw error; }
+  try {
+    const parsed = unsentSchema.safeParse(JSON.parse(raw));
+    if (parsed.success) return parsed.data.items;
+  } catch { /* malformed JSON */ }
+  onCorrupt?.();
+  return [];
+}
+export function writeUnsentNoticesSync(root: string, items: readonly UnsentNotice[], now: number): void {
+  const kept = items.filter(item => now - Date.parse(item.at) <= CRASH_SHOWN_MS).slice(-20);
+  if (!kept.length) { try { unlinkSync(unsentPath(root)); } catch (error) { if (!isMissing(error)) throw error; } return; }
+  writeAtomicSync(crashDir(root), 'unsent-notices.json', JSON.stringify(unsentSchema.parse({ v: 1, items: kept })));
+}

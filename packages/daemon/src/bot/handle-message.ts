@@ -730,6 +730,8 @@ export interface Orchestrator {
   /** Close every live codex session (SIGKILLs the app-server children) so a
    *  graceful exit leaves no orphan processes. */
   shutdown: () => Promise<void>;
+  /** Persist queued messages before an uncaught failure exits the bot. */
+  saveDroppedSync: (why: 'shutdown' | 'crash') => void;
   /** Once connected: ask the senders of what the last shutdown dropped to send again (s18c). Not after shutdown. */
   replyDropped: () => void;
 }
@@ -2472,6 +2474,7 @@ export function createOrchestrator(
         launchOpts = {
           chatId: msg.chatId,
           replyTo: msg.messageId,
+          origin: originOf(msg, flat),
           replyInThread: !flat,
           flat,
           thread,
@@ -2811,6 +2814,7 @@ export function createOrchestrator(
       const launchOpts: LaunchOpts = {
         chatId: msg.chatId,
         replyTo: msg.messageId,
+        origin: originOf(msg, false),
         replyInThread: true,
         thread,
         firstText,
@@ -5152,6 +5156,8 @@ export function createOrchestrator(
   }
 
   interface LaunchOpts {
+    /** Only group-message launches have a sender to notify if preparation is cut short. */
+    origin?: DroppedOrigin;
     voice?: VoiceReply;
     chatId: string;
     replyTo: string;
@@ -5328,7 +5334,7 @@ export function createOrchestrator(
     reaction?: RunReaction,
     onTopicCreated?: () => void,
   ): Promise<void> {
-    if (shuttingDown) { reaction?.done(); await opts.thread.close(); return; }
+    if (shuttingDown) { if (opts.origin) droppedReplies?.appendSync(opts.origin); reaction?.done(); await opts.thread.close(); return; }
     let activeKey = opts.knownThreadId ?? `pending:${opts.replyTo}`;
     let topicThreadId = opts.knownThreadId;
     // The turn's workspace: resolves relative image refs in the reply and is what
@@ -6082,7 +6088,7 @@ export function createOrchestrator(
    * non-complete goal is cleared first so it won't reactivate on the next resume.
    */
   async function launchGoalRun(opts: LaunchOpts): Promise<void> {
-    if (shuttingDown) { await opts.thread.close(); return; }
+    if (shuttingDown) { if (opts.origin) droppedReplies?.appendSync(opts.origin); await opts.thread.close(); return; }
     const objective = opts.firstText;
     let activeKey = opts.knownThreadId ?? `pending:${opts.replyTo}`;
     let topicThreadId = opts.knownThreadId;
@@ -7078,6 +7084,7 @@ export function createOrchestrator(
     adminExecute: admit(adminExecute),
     settings: { read: admit(settings.read), save: admit(settings.save), models: admit(settings.models), act: admit(settings.act) },
     shutdown,
+    saveDroppedSync: (why: 'shutdown' | 'crash') => droppedReplies?.saveSync(collectLost(), why),
     replyDropped: () => { if (!shuttingDown) droppedReplies?.start(); },
   };
 }

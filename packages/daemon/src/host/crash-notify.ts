@@ -12,20 +12,26 @@ import { resolveAppSecret } from '../config/secret-resolver';
 import { loadConfig } from '../config/store';
 import { FEISHU_RATE_LIMIT_CODES } from '../utils/feishu-error';
 import type { CrashLog } from './crash-guard';
-import { APP_ID, CRASH_WINDOW_MS, readNotices, startedBeforeThisBoot, systemClock, writeNoticesSync, type Clock, type NoticeStamp } from './crash-store';
+import {
+  APP_ID, CRASH_SHOWN_MS, CRASH_WINDOW_MS, readNotices, readUnsentNotices, startedBeforeThisBoot, systemClock,
+  writeNoticesSync, writeUnsentNoticesSync, type Clock, type NoticeStamp, type UnsentNotice,
+} from './crash-store';
 
 /** What the host's start knows of the run before it (bootstrap, from `openHostRun`). */
 export type HostNotice = { previous?: CrashEntry; crashes: number; resumed: boolean; pauseEntered: boolean };
 export type Sender = { appId: string; tenant: TenantBrand; appSecret: string; openId: string };
-type BotEvent = { kind: 'bot-recovered' | 'bot-paused'; appId: string; name: string; crashes: number; reason: string };
-export type NoticeEvent = { kind: 'host-recovered' | 'host-paused'; crashes: number; reason?: string; bots: string[] } | BotEvent;
+type PauseEvent<T = UnsentNotice> = T extends UnsentNotice ? Omit<T, 'uuid' | 'chainId' | 'at'> : never;
+type BotPausedEvent = Extract<PauseEvent, { kind: 'bot-paused' }>;
+type BotEvent = BotPausedEvent | (Omit<BotPausedEvent, 'kind'> & { kind: 'bot-recovered' });
+export type NoticeEvent = PauseEvent | BotEvent
+  | (Omit<Extract<PauseEvent, { kind: 'host-paused' }>, 'kind'> & { kind: 'host-recovered' });
 export type SendResult = { ok: true } | { ok: false; retry: boolean; status?: number; code?: number; msg?: string };
 /** A sender, or why this bot cannot send (no complete config, no owner, no secret). */
 export type LoadSender = (appId: string) => Promise<Sender | string>;
 
 export interface CrashNotifier {
   /** Whole host: "已自动恢复" after 30 s up, or "已停止自动重启" at once in the start that paused it. */
-  hostStarted(notice: HostNotice | undefined, ctx: { bots: readonly BotEntry[]; paused: boolean; botPaused: (appId: string) => boolean; registryUnreadable?: boolean }): void;
+  hostStarted(notice: HostNotice | undefined, ctx: { chainId: string; bots: readonly BotEntry[]; paused: boolean; botPaused: (appId: string) => boolean; registryUnreadable?: boolean }): void;
   /** A child of this bot is up: with a crash waiting to be told, its 30 s start now. */
   botStarted(appId: string): void;
   /** Its child ended: the 30 s are void, the crash waits for the next child. */
@@ -163,6 +169,19 @@ export function createCrashNotifier(deps: {
   const stableMs = deps.stableMs ?? NOTICE_STABLE_MS;
   const retryMs = deps.retryMs ?? NOTICE_RETRY_MS;
   const last = new Map<string, NoticeStamp>(Object.entries(readNotices(root, () => log.warn('crash-notify', 'notices-corrupt', {}))));
+  let chainId: string | undefined;
+  let unsent: UnsentNotice[] = [];
+  let writeFailed = false;
+  let corruptReported = false;
+  const persist = (): void => {
+    try { writeUnsentNoticesSync(root, unsent, clock.now()); }
+    catch (error) { if (!writeFailed) log.fail('crash-notify', error, { phase: 'unsent' }); writeFailed = true; }
+  };
+  const complete = (uuid: string): void => {
+    if (!unsent.some(item => item.uuid === uuid)) return;
+    unsent = unsent.filter(item => item.uuid !== uuid);
+    persist();
+  };
   let closed = false;
   let closing: Promise<void> | undefined;
   let queue: Promise<void> = Promise.resolve();
@@ -194,6 +213,14 @@ export function createCrashNotifier(deps: {
   };
   const job = (event: NoticeEvent, scope: string, exempt: boolean, candidates: readonly string[]): Job =>
     ({ event, uuid: `vc-${randomUUID().replace(/-/g, '')}`, attempt: 0, scope, gen: gen(scope), exempt, candidates });
+  const pauseJob = (event: PauseEvent, scope: string, candidates: readonly string[]): Job => {
+    const next = job(event, scope, true, candidates);
+    if (chainId) {
+      unsent.push({ ...event, uuid: next.uuid, chainId, at: new Date(clock.now()).toISOString() });
+      persist();
+    }
+    return next;
+  };
   /** One chain: the limit check, the send and the stamp of one message never interleave with another's. */
   const enqueue = (next: Job, pauseMs = 0): void => {
     queue = queue.then(() => (pauseMs && !finalCut.signal.aborted ? new Promise<void>(resolve => {
@@ -223,6 +250,8 @@ export function createCrashNotifier(deps: {
     stable.set(scope, timer);
   };
   const forget = (scope: string): void => {
+    const kept = unsent.filter(item => (item.kind === 'host-paused' ? HOST : item.appId) !== scope);
+    if (kept.length !== unsent.length) { unsent = kept; persist(); }
     gens.set(scope, gen(scope) + 1);
     waiting.delete(scope);
     clearTimeout(stable.get(scope));
@@ -247,46 +276,77 @@ export function createCrashNotifier(deps: {
       if (typeof loaded === 'string') {
         log.warn('crash-notify', 'skipped', { ...fields, bot: appId, why: loaded });
         if (UNREAD_FOR_NOW.has(loaded)) unread = loaded;
-      } else if (await send(next, loaded, fields)) return;
+      } else {
+        const result = await send(next, loaded, fields);
+        if (result === 'sent') { complete(next.uuid); return; }
+        if (result === 'later') return;
+      }
     }
     if (unread) again(next, { ...fields, why: unread });
+    else complete(next.uuid);
   }
 
-  /** False when Feishu refused it for good: the host's message then goes to the next bot (a retryable failure stays,
+  /** Refused when Feishu rejected it for good: the host's message then goes to the next bot (a retryable failure stays,
    * as the message may have got through). */
-  async function send(next: Job, sender: Sender, fields: { kind: string; attempt: number }): Promise<boolean> {
+  async function send(next: Job, sender: Sender, fields: { kind: string; attempt: number }): Promise<'sent' | 'refused' | 'later'> {
     if (closed && next.exempt) waitAgain?.();
-    if (!next.exempt && limited(sender.appId)) { log.info('crash-notify', 'limited', { ...fields, bot: sender.appId }); return true; }
+    if (!next.exempt && limited(sender.appId)) { log.info('crash-notify', 'limited', { ...fields, bot: sender.appId }); return 'sent'; }
     const signal = next.exempt ? finalCut.signal : AbortSignal.any([closeCut.signal, finalCut.signal]);
     const result = await sendOwnerText(sender, noticeText(next.event), next.uuid, signal, fetchImpl);
     if (result.ok) {
       stampSent(sender.appId);
       log.info('crash-notify', 'sent', { ...fields, bot: sender.appId, owner: sender.openId });
-      return true;
+      return 'sent';
     }
     const detail = { ...fields, bot: sender.appId, ...(result.status !== undefined ? { status: result.status } : {}), ...(result.code !== undefined ? { code: result.code } : {}), ...(result.msg ? { msg: result.msg } : {}) };
     // Cut by the shutdown, not refused by Feishu: an ordinary one is no failure; a pause message lost is worth a warning.
     if (result.retry && signal.aborted) {
       if (next.exempt) log.warn('crash-notify', 'cut', detail);
       else log.info('crash-notify', 'cut', detail);
-      return true;
+      return 'later';
     }
-    if (result.retry && again(next, detail)) return true;
+    if (result.retry && again(next, detail)) return 'later';
     log.warn('crash-notify', 'failed', detail);
-    return result.retry;
+    return result.retry ? 'later' : 'refused';
   }
 
   return {
     hostStarted(notice, ctx) {
       guard('host-started', () => {
-        if (closed || !notice || notice.resumed) return;
+        if (closed || !notice) return;
+        chainId = ctx.chainId;
+        try {
+          unsent = readUnsentNotices(root, () => {
+            if (!corruptReported) log.warn('crash-notify', 'unsent-corrupt', {});
+            corruptReported = true;
+          });
+        } catch (error) {
+          unsent = [];
+          log.fail('crash-notify', error, { phase: 'unsent-read' });
+        }
+        if (notice.resumed) { unsent = []; persist(); forget(HOST); return; }
         // The earliest bot that can send sends, chosen at each send (D2); ties keep the registry's order. With no
         // registry (a paused host comes up without it), the bots with a folder.
         const candidates = ctx.registryUnreadable ? botFolders(root)
           : [...ctx.bots].sort((a, b) => a.createdAt - b.createdAt).map(bot => bot.appId);
+        let stale = 0;
+        unsent = unsent.filter(item => {
+          const valid = item.chainId === chainId && clock.now() - Date.parse(item.at) <= CRASH_SHOWN_MS
+            && (item.kind === 'host-paused' ? ctx.paused && !notice.pauseEntered : ctx.registryUnreadable || ctx.botPaused(item.appId));
+          if (!valid) stale++;
+          return valid;
+        });
+        persist();
+        if (stale) log.info('crash-notify', 'unsent-stale', { n: stale });
+        for (const item of unsent) {
+          if (item.kind === 'bot-paused' && ctx.registryUnreadable) continue;
+          const scope = item.kind === 'host-paused' ? HOST : item.appId;
+          enqueue({ ...job(item, scope, true, item.kind === 'host-paused' ? candidates : [item.appId]), uuid: item.uuid });
+          log.info('crash-notify', 'unsent-resent', { kind: item.kind });
+        }
         const reason = notice.previous ? crashText(notice.previous) : undefined;
         if (ctx.paused) {
-          if (notice.pauseEntered) enqueue(job({ kind: 'host-paused', crashes: notice.crashes, ...(reason ? { reason } : {}), bots: ctx.bots.map(botLabel) }, HOST, true, candidates));
+          if (notice.pauseEntered) enqueue(pauseJob({ kind: 'host-paused', crashes: notice.crashes, ...(reason ? { reason } : {}), bots: ctx.bots.map(botLabel) }, HOST, candidates));
           return;
         }
         if (!reason) return;
@@ -318,7 +378,7 @@ export function createCrashNotifier(deps: {
       guard('bot-paused', () => {
         if (closed) return;
         forget(appId);
-        enqueue(job({ kind: 'bot-paused', appId, name, crashes, reason }, appId, true, [appId]));
+        enqueue(pauseJob({ kind: 'bot-paused', appId, name, crashes, reason }, appId, [appId]));
       });
     },
     botForget(appId) {
