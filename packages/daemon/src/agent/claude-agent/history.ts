@@ -149,5 +149,6 @@ export function foldSessionMessages(messages: SessionMessage[], maxTurns: number
 
   const totalTurns = turns.length;
   const kept = totalTurns > maxTurns ? turns.slice(totalTurns - maxTurns) : turns;
-  return { turns: kept, totalTurns };
+  const preview = turns.find(turn => turn.userText)?.userText;
+  return { turns: kept, totalTurns, ...(preview ? { preview } : {}) };
 }
