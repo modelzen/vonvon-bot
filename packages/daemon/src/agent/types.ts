@@ -213,6 +213,7 @@ export type AgentEvent =
       tokenBudget: number | null;
     }
   | { type: 'ask'; request: AskRequest }
+  | { type: 'ask_cancelled'; requestId: string }
   | { type: 'error'; message: string; willRetry: boolean; kind?: AgentErrorKind };
 
 /**
