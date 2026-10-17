@@ -1,3 +1,4 @@
+import { approvalAnswer, CodexRequestScope, userInputRequest, type InboundQuestion } from '../../agent/codex-appserver/server-requests';
 import { UnsentRequestError } from '../../agent/types';
 import { StringDecoder } from 'node:string_decoder';
 import type { Readable, Writable } from 'node:stream';
@@ -62,6 +63,7 @@ interface Pending {
   reject: (error: Error) => void;
 }
 
+const resolvedRequestSchema = z.object({ threadId: z.string(), requestId: z.union([z.string(), z.number()]) });
 const frameSchema = z.record(z.string(), z.unknown());
 export type JsonRpcFrame = z.infer<typeof frameSchema>;
 export type JsonRpcId = number | string;
@@ -231,7 +233,9 @@ export class AppServerClient {
   private child: ChildProcessWithoutNullStreams | null = null;
   private owned: OwnedCodexProcess | undefined;
   private peer: JsonRpcPeer | undefined;
-  private readonly notifications = new AsyncQueue<ServerNotification>();
+  private readonly notifications = new AsyncQueue<ServerNotification | InboundQuestion>();
+  private requestScope: CodexRequestScope | undefined;
+  private requestSerial = 0;
   private closed = false;
   private hasExited = false;
 
@@ -268,6 +272,7 @@ export class AppServerClient {
     const peer = new JsonRpcPeer(child.stdout, child.stdin, error => {
       if (this.closed) return;
       this.closed = true;
+      this.requestScope?.close();
       // stdout can end before child exit delivers the legacy failure reason.
       inputCloseTimer = setTimeout(() => {
         peer.close(error);
@@ -275,8 +280,22 @@ export class AppServerClient {
       }, 500);
     });
     this.peer = peer;
-    peer.onNotification = (_method, _params, frame) => {
+    peer.onNotification = (method, params, frame) => {
+      if (method === 'serverRequest/resolved') {
+        const resolved = resolvedRequestSchema.safeParse(params);
+        if (resolved.success && resolved.data.threadId === this.requestScope?.threadId) {
+          this.requestScope.retireRpc(resolved.data.requestId);
+        }
+      }
       this.notifications.push(frame as unknown as ServerNotification);
+    };
+    peer.onRequest = (method, params, frame) => {
+      const denial = approvalAnswer(method);
+      if (denial) return denial;
+      if (method !== 'item/tool/requestUserInput') return undefined;
+      const id = frame.id;
+      if (typeof id !== 'string' && typeof id !== 'number') return undefined;
+      return userInputRequest(params, id, ++this.requestSerial, this.requestScope, question => this.notifications.push(question));
     };
     peer.onInvalidFrame = line => {
       if (!this.opts.quietOutput) log.warn('agent', 'nonjson', { line: line.slice(0, 120) });
@@ -285,6 +304,7 @@ export class AppServerClient {
       clearTimeout(inputCloseTimer);
       this.closed = true;
       this.hasExited = true;
+      this.requestScope?.close();
       this.notifications.close();
     });
     child.stderr.on('data', (d: Buffer) => {
@@ -296,16 +316,19 @@ export class AppServerClient {
       this.hasExited = true;
       this.closed = true;
       peer.close(new Error(`app-server exited (code=${code} signal=${signal})`));
+      this.requestScope?.close();
       this.notifications.close();
     });
     child.on('error', (err) => {
       this.closed = true;
       peer.close(err);
+      this.requestScope?.close();
       this.notifications.close();
       void this.close().catch(error => log.fail('agent', error, { phase: 'process-error-close' }));
     });
     const outputClosed = (err: Error) => {
       peer.close(err);
+      this.requestScope?.close();
       this.notifications.close();
       if (!this.hasExited) void this.close().catch(error => log.fail('agent', error));
     };
@@ -335,7 +358,49 @@ export class AppServerClient {
 
   /** async-iterate server notifications (closes when the transport or process ends). */
   stream(): AsyncIterable<ServerNotification> {
-    return this.notifications;
+    const source = this.events();
+    return {
+      [Symbol.asyncIterator]() {
+        const iterator = source[Symbol.asyncIterator]();
+        return {
+          async next(): Promise<IteratorResult<ServerNotification>> {
+            while (true) {
+              const step = await iterator.next();
+              if (step.done) return { done: true, value: undefined };
+              if (!('method' in step.value)) step.value.settle();
+              else return { done: false, value: step.value };
+            }
+          },
+          async return(): Promise<IteratorResult<ServerNotification>> {
+            await iterator.return?.();
+            return { done: true, value: undefined };
+          },
+        };
+      },
+    };
+  }
+
+  events(): AsyncIterable<ServerNotification | InboundQuestion> {
+    const queue = this.notifications;
+    const scope = this.requestScope;
+    return {
+      [Symbol.asyncIterator]() {
+        const iterator = queue[Symbol.asyncIterator]();
+        return {
+          next: () => iterator.next(),
+          return: () => { scope?.close(); return iterator.return?.() ?? Promise.resolve({ done: true, value: undefined }); },
+        };
+      },
+    };
+  }
+
+  openRequestScope(threadId: string): CodexRequestScope {
+    this.requestScope?.close();
+    return this.requestScope = new CodexRequestScope(threadId);
+  }
+
+  cancelRequests(threadId: string, turnId: string): void {
+    if (this.requestScope?.threadId === threadId) this.requestScope.finishTurn(turnId);
   }
 
   /** Drop buffered, un-consumed notifications. Used when a prewarmed pool client
@@ -343,6 +408,7 @@ export class AppServerClient {
    * pool (MCP startup progress, the ephemeral warmup thread/started, …) belong
    * to the warmup thread and must never leak into the session's event stream. */
   clearNotifications(): void {
+    this.requestScope?.close();
     this.notifications.clear();
   }
 
@@ -355,6 +421,7 @@ export class AppServerClient {
 
   private async closeChild(graceMs: number): Promise<void> {
     this.closed = true;
+    this.requestScope?.close();
     this.peer?.close(new Error('app-server client closed'));
     this.notifications.close();
     await this.owned?.close(graceMs);
