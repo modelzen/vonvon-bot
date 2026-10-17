@@ -2,6 +2,8 @@ import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { spawnProcess } from '../platform/spawn';
 
 export class ProviderProcessCleanupError extends Error {}
+/** Process group is gone; the only reported failure is its nonzero exit status. */
+export class ProviderProcessExitError extends ProviderProcessCleanupError {}
 
 const ownedProcesses = new Set<OwnedProviderProcess>();
 let accepting = true;
@@ -125,7 +127,8 @@ export class OwnedProviderProcess {
       })]);
     } finally { clearTimeout(timer); }
     if (this.errors.size) {
-      throw new ProviderProcessCleanupError(`${this.provider} 子进程树已退出，但清理失败`, {
+      const Failure = this.errors.size === 1 && this.errors.has('exit') ? ProviderProcessExitError : ProviderProcessCleanupError;
+      throw new Failure(`${this.provider} 子进程树已退出，但清理失败`, {
         cause: new AggregateError(this.errors.values(), 'Provider cleanup errors'),
       });
     }

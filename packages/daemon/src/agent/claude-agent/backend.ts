@@ -8,7 +8,7 @@ import type {
   Query,
   SettingSource,
 } from '@anthropic-ai/claude-agent-sdk';
-import { OwnedProviderProcess } from '../owned-process';
+import { OwnedProviderProcess, ProviderProcessExitError } from '../owned-process';
 import { log } from '../../core/logger';
 import type {
   AgentBackend,
@@ -505,6 +505,7 @@ export class ClaudeAgentBackend implements AgentBackend {
     call.signal.addEventListener('abort', onAbort, { once: true });
     let query: Query | undefined;
     let owned: OwnedProviderProcess | undefined;
+    let judgeError: JudgeCallError | undefined;
     try {
       query = sdk.query({
         prompt: call.input,
@@ -524,10 +525,19 @@ export class ClaudeAgentBackend implements AgentBackend {
         },
       });
       return await consumeClaudeJudgeQuery(query);
+    } catch (error) {
+      if (error instanceof JudgeCallError) judgeError = error;
+      throw error;
     } finally {
       call.signal.removeEventListener('abort', onAbort);
       try { query?.close(); }
-      finally { await owned?.close(); }
+      finally {
+        try { await owned?.close(); }
+        catch (error) {
+          if (!(error instanceof ProviderProcessExitError) || !judgeError) throw error;
+          log.fail('agent', error, { backend: 'claude-agent', phase: 'judge-exit' });
+        }
+      }
     }
   }
 

@@ -3,11 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import * as sdk from '@anthropic-ai/claude-agent-sdk';
+import { createCooldown } from '../src/judge/cooldown';
 import { ClaudeAgentBackend } from '../src/agent/claude-agent/backend';
 
 // Real SDK transport, a local fake CLI: never starts Claude or submits inference.
 describe('Claude judge process ownership', () => {
-  it.each(['normal', 'result', 'abort', 'error', 'exit', 'signal'] as const)('waits for process death on %s', async mode => {
+  it.each(['normal', 'result', 'abort', 'error', 'exit', 'signal', 'auth', 'quota', 'model'] as const)('waits for process death on %s', async mode => {
     const root = await mkdtemp(join(tmpdir(), 'claude-judge-process-'));
     const cli = join(root, 'fake-cli.mjs');
     const pidFile = join(root, 'pid');
@@ -23,8 +24,14 @@ createInterface({ input: process.stdin }).on('line', line => {
   const message = JSON.parse(line);
   if (message.type === 'control_request') send({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id, response: {} } });
   if (message.type === 'user') {
+    if (['auth', 'quota', 'model'].includes(${JSON.stringify(mode)})) {
+      send({ type: 'assistant', error: ${JSON.stringify(mode === 'auth' ? 'authentication_failed' : mode === 'quota' ? 'rate_limit' : 'model_not_found')}, message: { content: [] } });
+      process.stdout.write(JSON.stringify({ type: 'result', subtype: 'error_during_execution', errors: ['structured fake error'] }) + '\\n', () => process.exit(1));
+      return;
+    }
     if (${JSON.stringify(mode)} === 'exit') process.exit(7);
     if (${JSON.stringify(mode)} === 'signal') process.kill(process.pid, 'SIGUSR2');
+    if (${JSON.stringify(mode)} === 'error') send({ type: 'assistant', error: 'rate_limit', message: { content: [] } });
     if (${JSON.stringify(mode)} !== 'abort') send({ type: 'result', subtype: ${JSON.stringify(mode === 'error' ? 'error_during_execution' : 'success')}, result: '{}', errors: ['fake error'], usage: {} });
   }
 });
@@ -46,7 +53,13 @@ createInterface({ input: process.stdin }).on('line', line => {
       const outcome = await pending;
       expect(pid).toBeTypeOf('number');
       expect(() => process.kill(pid!, 0)).toThrow();
-      // Ignoring TERM requires KILL and is reported as a cleanup failure, never silent success.
+      if (['auth', 'quota', 'model'].includes(mode)) {
+        expect(outcome).toMatchObject({ error: { kind: mode, structured: true } });
+        const cooldown = createCooldown(() => 1000);
+        if ('error' in outcome) cooldown.note('claude-agent', 'fake', outcome.error);
+        expect(cooldown.check('claude-agent', 'fake')).toMatchObject({ kind: mode });
+      }
+      // Ignoring TERM requires KILL: even a structured quota error must report cleanup failure.
       expect(outcome).toHaveProperty(mode === 'normal' ? 'value' : 'error');
       if (['result', 'abort', 'error'].includes(mode)) expect(outcome).toMatchObject({ error: { name: 'Error', message: 'Claude 子进程树已退出，但清理失败' } });
     } finally {
