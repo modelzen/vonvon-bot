@@ -63,6 +63,7 @@ interface Pending {
   reject: (error: Error) => void;
 }
 
+const EOF_GRACE_MS = 500;
 const resolvedRequestSchema = z.object({ threadId: z.string(), requestId: z.union([z.string(), z.number()]) });
 const frameSchema = z.record(z.string(), z.unknown());
 export type JsonRpcFrame = z.infer<typeof frameSchema>;
@@ -278,7 +279,7 @@ export class AppServerClient {
       inputCloseTimer = setTimeout(() => {
         peer.close(error);
         void this.close().catch(closeError => log.fail('agent', closeError, { phase: 'input-close' }));
-      }, 500);
+      }, EOF_GRACE_MS);
     });
     this.peer = peer;
     peer.onNotification = (method, params, frame) => {
@@ -331,7 +332,10 @@ export class AppServerClient {
       peer.close(err);
       this.requestScope?.close();
       this.notifications.close();
-      if (!this.hasExited) void this.close().catch(error => log.fail('agent', error));
+      if (!this.hasExited) {
+        this.closing ??= this.closeChild(4000, true);
+        void this.closing.catch(error => log.fail('agent', error));
+      }
     };
     child.stdin.on('error', outputClosed);
     child.stdin.on('close', () => outputClosed(new Error('app-server stdin closed')));
@@ -422,12 +426,22 @@ export class AppServerClient {
     return this.closing;
   }
 
-  private async closeChild(graceMs: number): Promise<void> {
+  private async closeChild(graceMs: number, waitForNaturalExit = false): Promise<void> {
     this.closed = true;
     this.requestScope?.close();
     this.peer?.close(new Error('app-server client closed'));
     this.notifications.close();
-    await this.owned?.close(graceMs);
+    const owned = this.owned;
+    if (!owned) return;
+    if (waitForNaturalExit) {
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        await Promise.race([owned.exited, new Promise<void>(resolve => {
+          timer = setTimeout(resolve, EOF_GRACE_MS);
+        })]);
+      } finally { clearTimeout(timer); }
+    }
+    await owned.close(graceMs);
   }
 
 }

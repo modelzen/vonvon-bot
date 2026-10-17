@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -49,6 +49,15 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', li
       send({ method: 'turn/completed', params: { threadId: 'thread', turn: { id } } });
     }, 40);
     if (text === 'eof') setTimeout(() => process.exit(0), 30);
+    if (text.startsWith('pipe-')) {
+      fs.writeFileSync(path.join(__dirname, 'eof-pid'), String(process.pid));
+      fs.closeSync(0);
+      fs.closeSync(1);
+      if (text !== 'pipe-hang') setTimeout(() => {
+        fs.writeFileSync(path.join(__dirname, 'natural-exit'), text);
+        process.exit(text === 'pipe-nonzero' ? 7 : 0);
+      }, 100);
+    }
     return;
   } else if (m.method === 'thread/goal/set') {
     if (m.params.objective === 'unknown turn-null') send({ method: 'future/notification', params: { threadId: 'thread', turn: null } });
@@ -78,9 +87,12 @@ setInterval(() => {}, 1000);
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
-  for (const close of cleanup.splice(0).reverse()) await close();
-  await shutdownResidentClients();
-  vi.unstubAllEnvs();
+  const failures: unknown[] = [];
+  for (const close of [...cleanup.splice(0).reverse(), shutdownResidentClients, async () => vi.unstubAllEnvs()]) {
+    try { await close(); }
+    catch (error) { failures.push(error); }
+  }
+  if (failures.length) throw new AggregateError(failures, 'Codex request fixture cleanup failed');
 });
 
 function setup() {
@@ -424,6 +436,40 @@ describe('Codex AgentRun request ownership', () => {
       { type: 'turn_started', turnId: 'goal-turn' }, { type: 'done', turnId: 'goal-turn' },
     ]);
     expect(events.filter(event => event.type === 'ask')).toHaveLength(1);
+  });
+
+  it('waits for a short natural exit after pipe closure with a pending ask even when explicitly closed immediately', async () => {
+    const f = await runFixture('pipe-exit');
+    const events = await drain(f.iterator);
+    expect(events.some(event => event.type === 'ask')).toBe(true);
+    await expect(f.thread.close()).resolves.toBeUndefined();
+    expect(readFileSync(join(f.dir, 'natural-exit'), 'utf8')).toBe('pipe-exit');
+    const pid = Number(readFileSync(join(f.dir, 'eof-pid'), 'utf8'));
+    expect(() => process.kill(pid, 0)).toThrowError(expect.objectContaining({ code: 'ESRCH' }));
+  });
+
+  it('preserves a natural nonzero exit after pipe closure instead of terminating it first', async () => {
+    const f = await runFixture('pipe-nonzero');
+    await drain(f.iterator);
+    const closing = f.thread.close();
+    await expect(closing).rejects.toThrow('Codex 子进程树已退出，但清理失败');
+    await expect(closing).rejects.toMatchObject({ cause: { errors: expect.arrayContaining([
+      expect.objectContaining({ message: 'Codex child exited with code 7' }),
+    ]) } });
+    expect(readFileSync(join(f.dir, 'natural-exit'), 'utf8')).toBe('pipe-nonzero');
+    // The expected strict owner rejection was asserted above; remove only this already-joined cleanup.
+    cleanup.pop();
+  });
+
+  it('bounds the pipe-close wait and terminates a child that remains alive', async () => {
+    const f = await runFixture('pipe-hang');
+    await drain(f.iterator);
+    const pid = Number(readFileSync(join(f.dir, 'eof-pid'), 'utf8'));
+    const closing = f.thread.close();
+    expect(f.thread.close()).toBe(closing);
+    await expect(closing).resolves.toBeUndefined();
+    expect(existsSync(join(f.dir, 'natural-exit'))).toBe(false);
+    expect(() => process.kill(pid, 0)).toThrowError(expect.objectContaining({ code: 'ESRCH' }));
   });
 
 });
