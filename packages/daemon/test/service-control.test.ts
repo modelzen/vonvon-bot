@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { afterEach, expect, it, vi } from 'vitest';
-import { migrateHostDataOffline } from '../src/host/migration';
 import { assertKnownOwnersStopped, stopInstallation } from '../src/service/control';
 
 vi.mock('node:child_process', () => ({ spawnSync: vi.fn() }));
@@ -49,15 +48,4 @@ it.each(['runaway', 'botany', 'webhook', '__unrelated', 'secrets-other'])('does 
   const home = mkdtempSync(join(tmpdir(), 'bridge-unrelated-')); homes.push(home);
   vi.mocked(spawnSync).mockReturnValue({ pid: 1, output: [], signal: null, status: 0, stdout: `424242 node /installed/bin/feishu-codex-bridge.mjs ${command}`, stderr: '' });
   expect(() => assertKnownOwnersStopped(home)).not.toThrow();
-});
-
-it('defers migration for a shipped legacy bot client before publishing a journal', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'bridge-bot-migrate-')); homes.push(home);
-  mkdirSync(join(home, '.feishu-codex-bridge'));
-  vi.mocked(spawnSync).mockImplementation((command, args) => ({ pid: 1, output: [], signal: null, status: 0,
-    stdout: command === 'ps' || (command === 'powershell.exe' && args?.some(arg => arg.includes('Get-CimInstance')))
-      ? '424242 node /installed/bin/feishu-codex-bridge.mjs bot use' : '', stderr: '' }));
-  const result = await migrateHostDataOffline(home, { nodePath: process.execPath, cliPath: import.meta.filename });
-  expect(result.kind).toBe('deferred');
-  expect(() => readFileSync(join(home, '.vonvon-bridge-migration.json'))).toThrow();
 });

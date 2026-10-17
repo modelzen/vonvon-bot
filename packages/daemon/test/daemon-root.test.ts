@@ -1,4 +1,4 @@
-import { realpathSync } from 'node:fs';
+import { lstatSync, realpathSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,12 +10,23 @@ afterEach(async () => { vi.unstubAllEnvs(); await Promise.all(fixtures.splice(0)
 describe('daemon data root', () => {
   it('defaults to a fresh daemon path while ignoring conflicting legacy directories and migration metadata', async () => {
     const home = await fixture();
-    for (const name of ['.feishu-codex-bridge', '.vonvon-bridge']) await mkdir(join(home, name));
+    const oldRoots = ['.feishu-codex-bridge', '.vonvon-bridge'];
+    for (const name of oldRoots) {
+      await mkdir(join(home, name));
+      await writeFile(join(home, name, 'marker'), name);
+    }
+    const identities = oldRoots.map(name => lstatSync(join(home, name)).ino);
     await writeFile(join(home, '.vonvon-bridge-migration.json'), 'pending');
     const before = await readdir(home);
     vi.stubEnv('VONVON_HOME', undefined);
     expect(resolveDataRoot(home)).toEqual({ path: join(realpathSync(home), '.vonvon-bot'), kind: 'fresh' });
     expect(await readdir(home)).toEqual(before);
+    for (const [index, name] of oldRoots.entries()) {
+      const stat = lstatSync(join(home, name));
+      expect(stat.isSymbolicLink()).toBe(false);
+      expect(stat.ino).toBe(identities[index]);
+      expect(await readFile(join(home, name, 'marker'), 'utf8')).toBe(name);
+    }
     expect(await readFile(join(home, '.vonvon-bridge-migration.json'), 'utf8')).toBe('pending');
   });
   it('uses VONVON_HOME and canonicalizes normal ancestor aliases without creating a home directory', async () => {

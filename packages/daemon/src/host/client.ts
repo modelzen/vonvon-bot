@@ -8,7 +8,6 @@ import { readHostEndpoint, refusal, type HostEndpoint, type HostInspection, type
 import { stopChild } from './lifecycle';
 
 export type { HostInspection, HostRefusal } from './discovery';
-export { migrateHostDataOffline, type HostMigration } from './migration';
 export { resolveDataRoot } from '../config/data-root';
 export type { CodexResolutionOptions } from '../agent/codex-appserver/locate';
 export async function resolveCodexBin(options: import('../agent/codex-appserver/locate').CodexResolutionOptions = {}): Promise<string | null> {
