@@ -6,7 +6,6 @@ import { BOT_LOCK_BUSY_EXIT } from '../../host/crash-store';
 import { acquireSingleInstanceLock, BridgeAlreadyRunningError, readSingleInstanceHolder } from '../../core/single-instance';
 import { botPaths } from '../../config/paths';
 import { activeBots, ensureRegistry, type BotEntry } from '../../config/bots';
-import { botPaths } from '../../config/paths';
 import { log } from '../../core/logger';
 import { AdminWriteError } from '../../admin/ops';
 import { createAdminIpcResponder } from '../../admin/ipc';
