@@ -17,6 +17,7 @@ export interface AskTurnInput {
 }
 export interface AskTurn {
   enqueue(request: AskRequest): void;
+  cancel(requestId: string): void;
   close(reason: 'stopped' | 'turn-ended'): void;
 }
 type EntryState = { kind: 'queued' } | { kind: 'sending' } | { kind: 'visible'; messageId: string }
@@ -86,6 +87,10 @@ export class AskCoordinator {
         this.waiting(turn);
         this.promote(turn);
       },
+      cancel: requestId => {
+        const entry = turn.queue.find(candidate => candidate.request.id === requestId);
+        if (entry) this.settle(turn, entry, { kind: 'unanswered', reason: 'unavailable' }, { providerResolved: true });
+      },
       close: reason => this.close(turn, reason),
     };
   }
@@ -146,14 +151,14 @@ export class AskCoordinator {
       }
       return 'denied';
     }
-    this.settle(turn, entry, { kind: 'answered', answer: parsed.answer }, this.names.peek(operator) ?? `成员 …${operator.slice(-6)}`);
+    this.settle(turn, entry, { kind: 'answered', answer: parsed.answer }, { actor: this.names.peek(operator) ?? `成员 …${operator.slice(-6)}` });
     return 'accepted';
   }
-  private settle(turn: Turn, entry: Entry, resolution: AskResolution, actor = ''): void {
+  private settle(turn: Turn, entry: Entry, resolution: AskResolution, options: { actor?: string; providerResolved?: boolean } = {}): void {
     if (entry.state.kind === 'settled') return;
     const messageId = entry.state.kind === 'visible' ? entry.state.messageId : undefined;
     const presentation: AskCardState = resolution.kind === 'answered'
-      ? { kind: 'answered', answer: resolution.answer, actor, at: new Date().toISOString() }
+      ? { kind: 'answered', answer: resolution.answer, actor: options.actor ?? '', at: new Date().toISOString() }
       : resolution.reason === 'timeout' ? { kind: 'timed-out' }
       : resolution.reason === 'stopped' ? { kind: 'stopped' } : { kind: 'unavailable', reason: resolution.reason };
     entry.state = { kind: 'settled', presentation };
@@ -162,7 +167,7 @@ export class AskCoordinator {
     turn.queue = turn.queue.filter(candidate => candidate !== entry);
     entry.release();
     // Invoke the provider's local claim before doing presentation or any network work.
-    this.effect(() => turn.run.respondToAsk?.(entry.request.id, resolution), error => this.fault(turn, error));
+    if (!options.providerResolved) this.effect(() => turn.run.respondToAsk?.(entry.request.id, resolution), error => this.fault(turn, error));
     this.waiting(turn);
     this.promote(turn);
     if (messageId) this.terminal(turn, entry, messageId, presentation);

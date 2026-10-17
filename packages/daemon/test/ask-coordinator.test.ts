@@ -186,3 +186,42 @@ it('a synchronous click wins a same-tick timeout and stop exactly once', async (
   expect(f.submit()).toBe('accepted'); turn.close('stopped'); await vi.advanceTimersByTimeAsync(1);
   expect(f.response).toHaveBeenCalledOnce(); expect(f.pause.held).toBe(false);
 });
+
+
+it('provider cancellation removes only the matching visible or queued card without answering twice', async () => {
+  vi.useFakeTimers();
+  const f = fixture(); const turn = f.open();
+  turn.enqueue(ask('a')); turn.enqueue(ask('b')); turn.enqueue(ask('c')); await flush();
+  turn.cancel('b');
+  expect(f.create).toHaveBeenCalledOnce();
+  expect(f.pause.held).toBe(true);
+  turn.cancel('a');
+  expect(f.submit()).toBe('inactive');
+  expect(f.response).not.toHaveBeenCalled();
+  await flush();
+  expect(f.create).toHaveBeenCalledTimes(2);
+  expect(f.update).toHaveBeenCalled();
+  turn.cancel('c'); turn.cancel('a');
+  expect(f.pause.held).toBe(false);
+  expect(f.response).not.toHaveBeenCalled();
+  expect(vi.getTimerCount()).toBe(0);
+  turn.close('turn-ended');
+});
+
+it('cancels sending cards and terminalizes late delivery without affecting a later turn', async () => {
+  vi.useFakeTimers(); const f = fixture(); const held = deferred<{ data: { card_id: string } }>();
+  f.create.mockReturnValueOnce(held.promise);
+  const first = f.open(); first.enqueue(ask('old')); await flush();
+  first.cancel('old');
+  expect(f.pause.held).toBe(false);
+  const second = f.open(); second.enqueue(ask('new')); await flush();
+  first.cancel('new'); first.cancel('old');
+  expect(f.pause.held).toBe(true);
+  held.resolve({ data: { card_id: 'late-cancelled' } }); await flush();
+  expect(f.response).not.toHaveBeenCalled();
+  expect(f.update).toHaveBeenCalled();
+  second.cancel('new');
+  expect(f.pause.held).toBe(false);
+  expect(vi.getTimerCount()).toBe(0);
+  expect(f.reply.mock.calls.filter(([input]) => input.data.msg_type === 'post')).toHaveLength(1);
+});
