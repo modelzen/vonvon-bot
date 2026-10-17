@@ -333,8 +333,13 @@ describe('Codex 判断进程：参数和结果', () => {
 
 describe('Codex 判断进程：超时和收尾', () => {
   it('turn 不结束：调用方的死线到了，发 turn/interrupt 和 thread/unsubscribe，进程不杀，下一条照常', async () => {
-    const { signal, reason } = abortAfter(300);
-    await expect(judge(call('hang', { signal }))).rejects.toBe(reason);
+    const ctl = new AbortController();
+    const reason = new Error('caller deadline');
+    const pending = failure(judge(call('hang', { signal: ctl.signal })));
+    // The deadline must fall in the turn, after the cold process has started.
+    await vi.waitFor(() => expect(fake.requests('turn/start')).toHaveLength(1), { timeout: 5000 });
+    ctl.abort(reason);
+    expect(await pending).toBe(reason);
     const [turn] = fake.requests('turn/start');
     await vi.waitFor(() => expect(fake.requests('turn/interrupt').map(r => r.params)).toEqual([{ threadId: threadOf(turn!), turnId: `tu_${threadOf(turn!)}` }]));
     await vi.waitFor(() => expect(fake.requests('thread/unsubscribe').map(threadOf)).toEqual([threadOf(turn!)]));
@@ -404,10 +409,12 @@ describe('Codex 判断进程：超时和收尾', () => {
   });
 
   it('连接超时（initialize 迟迟不回）→ failed、进程被杀、不在注册表里，接着 unavailable', async () => {
-    proc.configureJudgeProcess({ connectMs: 200, backoffMs: [10_000] });
-    fake.set('init-delay', 5000);
+    // Leave time for a cold Node process to start on the macOS CI runner, then stall initialize.
+    proc.configureJudgeProcess({ connectMs: 2000, backoffMs: [10_000] });
+    fake.set('init-delay', 30_000);
     await expect(judge(call())).rejects.toMatchObject({ kind: 'failed', message: expect.stringContaining('起不来') });
     const [pid] = fake.pids();
+    expect(fake.requests('initialize')).toHaveLength(1);
     await vi.waitFor(() => expect(alive(pid!)).toBe(false));
     await vi.waitFor(() => expect(pool.residentCount()).toBe(0));
     await expect(judge(call())).rejects.toMatchObject({ kind: 'unavailable' });
@@ -485,7 +492,7 @@ describe('Codex 判断进程：空闲、换版本、关机', () => {
     await judge(call());
     const [pid] = fake.pids();
     await vi.waitFor(() => expect(alive(pid!)).toBe(false));
-    expect(pool.residentCount()).toBe(0);
+    await vi.waitFor(() => expect(pool.residentCount()).toBe(0)); // untracked once close() settles, just after the exit
     expect((await judge(call())).cold).toBe(true);
     expect(fake.pids()).toHaveLength(2);
   });
@@ -514,7 +521,7 @@ describe('Codex 判断进程：空闲、换版本、关机', () => {
     expect(pool.residentCount()).toBe(2);
     expect((await running).text).toBe('final:MODE:slow=600');
     await vi.waitFor(() => expect(alive(oldPid!)).toBe(false));
-    expect(pool.residentCount()).toBe(1);
+    await vi.waitFor(() => expect(pool.residentCount()).toBe(1));
     expect((await judge(call())).cold).toBe(false);
   });
 
