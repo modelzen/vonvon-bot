@@ -24,6 +24,14 @@ const render = (agents: Agent[], crashes?: ApplicationCrashes) => renderToStatic
   <DiagnosticsPanel snapshot={snapshot(agents, crashes)} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onOpenSetup={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}}/>
 </ClientProvider>);
 
+it('shows the lock holder across retries, and gives a pause priority', () => {
+  const waiting = { ...agent, lockHeld: { since: now, pid: 123 } };
+  expect(render([waiting])).toContain('PID 123');
+  expect(render([{ ...waiting, running: false }])).toContain('等待占用的进程退出');
+  expect(render([{ ...waiting, lockHeld: { since: now } }])).toContain('另一个进程占着这个 bot');
+  expect(render([{ ...waiting, paused: { since: now, crashes: 3 } }])).not.toContain('等待占用的进程退出');
+});
+
 it('shows this machine, and 检查中 for Claude before its first login check', () => {
   const html = render([]);
   expect(html).toContain('这台电脑');
