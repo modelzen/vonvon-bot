@@ -59,7 +59,7 @@ describe('daemon environment operations', () => {
     const environment = new EnvironmentService({ home: dir, getDataRoot: () => dir, resolveCodex: () => codex, nodePath, path: join(dir, 'bin'), fetchLatest: async () => null, npmPath: join(dir, 'missing-npm') });
     try {
       expect(await environment.run({ type: 'scan' })).toMatchObject({ kind: 'tools', tools: expect.arrayContaining([expect.objectContaining({
-        tool: 'codex', version: '0.162.1', compatibility: { status: 'newer', minimum: '0.139.0', verified: '0.156.1' },
+        tool: 'codex', version: '0.162.1', compatibility: { status: 'newer', minimum: '0.156.1', verified: '0.156.1' },
       })]) });
     } finally { await environment.close(); }
   }, processTestTimeout);
