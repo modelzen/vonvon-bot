@@ -51,6 +51,9 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', li
     if (text === 'eof') setTimeout(() => process.exit(0), 30);
     return;
   } else if (m.method === 'thread/goal/set') {
+    if (m.params.objective === 'unknown turn-null') send({ method: 'future/notification', params: { threadId: 'thread', turn: null } });
+    if (m.params.objective === 'unknown params-null') send({ method: 'future/notification', params: null });
+    if (m.params.objective === 'unknown params-absent') send({ method: 'future/notification' });
     send({ kind: 'request', method: 'turn/started', params: { threadId: 'thread', turn: { id: 'goal-turn' } } });
     if (m.params.objective === 'foreign lifecycle') send(ask('held-before-foreign', 'goal-turn'));
     send({ method: 'turn/started', params: { threadId: 'foreign', turn: { id: 'foreign-turn' } } });
@@ -407,6 +410,20 @@ describe('Codex AgentRun request ownership', () => {
     await answer(next, request.id);
     await vi.waitFor(() => expect(f.replies()).toEqual([{ jsonrpc: '2.0', id: 'ask-2', result: { answers: { 'provider-question': { answers: ['Original label'] } } } }]));
     await iterator.return?.();
+  });
+
+  it.each(['turn-null', 'params-null', 'params-absent'])('ignores unknown goal notifications with %s and continues the owned turn', async variant => {
+    const f = setup();
+    vi.stubEnv('CODEX_BIN', f.bin);
+    const thread = await new CodexAppServerBackend().resumeThread({ cwd: f.dir, sessionId: 'thread' });
+    cleanup.push(() => thread.close());
+    if (!thread.runGoal) throw new Error('Goal support missing');
+    const run = thread.runGoal(`unknown ${variant}`);
+    const events = await drain(run.events[Symbol.asyncIterator]());
+    expect(events.filter(event => event.type === 'turn_started' || event.type === 'done')).toEqual([
+      { type: 'turn_started', turnId: 'goal-turn' }, { type: 'done', turnId: 'goal-turn' },
+    ]);
+    expect(events.filter(event => event.type === 'ask')).toHaveLength(1);
   });
 
 });

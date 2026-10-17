@@ -420,9 +420,9 @@ class CodexThread implements AgentThread {
             continue;
           }
           const p = step.value.params;
-          if (!('threadId' in p) || p.threadId !== self.sessionId) continue;
+          if (!p || typeof p !== 'object' || !('threadId' in p) || p.threadId !== self.sessionId) continue;
           if ('turnId' in p && p.turnId !== ownedTurnId) continue;
-          if ('turn' in p && step.value.method !== 'turn/started' && p.turn.id !== ownedTurnId) continue;
+          if (step.value.method === 'turn/completed' && step.value.params.turn.id !== ownedTurnId) continue;
           lastActivityAt = Date.now();
           const ev = mapNotification(step.value);
           if (!ev) continue;
