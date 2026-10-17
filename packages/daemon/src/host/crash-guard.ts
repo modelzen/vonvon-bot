@@ -36,6 +36,13 @@ let context: Context | undefined;
 let hostRun: HostRun | undefined;
 let installedIntent: (() => HostIntent) | undefined;
 let handling = false;
+const crashHooks = new Set<() => void>();
+
+/** Synchronous work that must finish before a crashing process exits. */
+export function onCrashSync(hook: () => void): () => void {
+  crashHooks.add(hook);
+  return () => { crashHooks.delete(hook); };
+}
 
 const safe = (fn: () => void): void => { try { fn(); } catch { /* logging never ends a start or a crash */ } };
 
@@ -97,6 +104,7 @@ function crashed(kind: 'exception' | 'rejection', error: unknown): void {
     // shares its host's run id but never owns the marker (a child crashing while it drains must not end the chain).
     if (intent !== 'running' && ctx.scope === 'host') { try { removeRunMarkerSync(ctx.root, ctx.runId); } catch { /* the next start writes a forced record */ } }
   }
+  for (const hook of crashHooks) safe(hook);
   process.exit(exitCodeFor(ctx, intent));
 }
 

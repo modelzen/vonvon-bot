@@ -5,7 +5,8 @@
 // every 10 ms for 300 ms, then write <root>/drained and exit 0.
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { capOrphanDrain, guardParentPipes, installCrashHandlers, openBotCrashContext, openHostRun, type HostIntent } from '../../src/host/crash-guard';
+import { capOrphanDrain, guardParentPipes, installCrashHandlers, onCrashSync, openBotCrashContext, openHostRun, type HostIntent } from '../../src/host/crash-guard';
+import { listCrashRecords } from '../../src/host/crash-store';
 import { acquireSingleInstanceLock } from '../../src/core/single-instance';
 
 const [root = '', scenario = 'host', intent = 'running'] = process.argv.slice(2);
@@ -14,8 +15,13 @@ const wanted = (): HostIntent => stopping ? 'stop' : intent === 'stop' || intent
 const log = { info() {}, warn() {}, fail() {} };
 installCrashHandlers({ intent: wanted });
 if (scenario.startsWith('bot')) {
-  openBotCrashContext({ root, appId: 'cli_fixture', runId: process.env.VONVON_HOST_RUN_ID, chainId: process.env.VONVON_HOST_CHAIN_ID, startedAt: new Date().toISOString(), version: '0.7.0', intent: wanted });
+  openBotCrashContext({ root, appId: 'cli_fixture', runId: scenario === 'bot-hook-noctx' ? undefined : process.env.VONVON_HOST_RUN_ID, chainId: process.env.VONVON_HOST_CHAIN_ID, startedAt: new Date().toISOString(), version: '0.7.0', intent: wanted });
 } else if (!scenario.startsWith('before-open')) openHostRun({ root, startedAt: new Date().toISOString(), version: '0.7.0', intent: wanted, log });
+if (scenario.includes('hook')) {
+  onCrashSync(() => writeFileSync(join(root, 'unregistered'), ''))();
+  if (scenario === 'bot-hook-throws') onCrashSync(() => { throw new Error('hook failure'); });
+  onCrashSync(() => writeFileSync(join(root, 'hooked'), String(listCrashRecords(root).length)));
+}
 if (scenario.startsWith('bot-orphan')) {
   acquireSingleInstanceLock('cli_fixture', join(root, 'orphan-lock.json'));
   process.once('exit', () => writeFileSync(join(root, 'exited'), ''));
