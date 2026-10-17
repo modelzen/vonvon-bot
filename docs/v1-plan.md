@@ -122,6 +122,8 @@ s01（#295）和 s02（#296）已合入，M1 预览版 2026-10-14 装到了 owne
    - 可选：在一轮输出时发 `/compact`（"等这一轮结束就压缩"），再 `daemon restart`，`/compact` 下面同样回一句。
    - 可选，owner 同意后做：撤回的消息回复接口回什么码没实测，代码按文档写的 `230011`。一轮在跑时在同一话题排一条，`daemon stop`，撤回排着的那条，再 `daemon start`：日志 `dropped-reply-failed` 的 `detail` 里是实际的错误码；是 `230011` 时诊断页不多这一条，不是时改 `replyFailure`。
 
+2026-10-17：JP-VPS Codex 在 main `191980f` 升级隔离验收 daemon 后，第 5 步通过：真实 Codex 长任务中排队、重启，新进程在原话题回请重发，旧卡片显示中断，`dropped.json` 清除；构建后的网页诊断页显示原因和已回复的下一步。重启窗口另一个话题的新消息也补送并回答；这是一次成功样本，不保证补送时限。群排队设置已恢复 `default`。可选的 `/compact` 与撤回步骤未做，未调用真实 Claude 推理。记录：https://github.com/modelzen/vonvon-bot/pull/365#issuecomment-6229126717 。Mac 第 1、2 步和签名预览版由任务 21 执行，结果未回前不记通过。
+
 2026-10-16：第 1 到 3 步 Claude 先做的部分都通过；第 4 步不用做。Mac 上 Codex 先查的那一半放进 M4 预览版任务，等 s18c 合入后一起做（s18d、s18e 不等）。
 - 环境：Claude 在 JP-VPS 上用验收 daemon（main 955a5c3，分离运行，三个测试 bot）做。这里没有服务管理器，每次 `kill -9` 后手动 `daemon start`，代替服务管理器拉起。私聊用 lark-cli 以 owner 的身份读，网页用无头浏览器看。
 1. 17:58（UTC）`kill -9` 主进程再起来，bot 几秒内连上，30 秒后 Bot 6 私聊 owner："daemon 刚才崩溃过一次，已自动恢复。受影响的 bot：Vonvon Bot 6、Vonvon Bot 7、Vonvon Bot 8。原因：被系统强制结束（kill -9、内存不够，或者关机、注销时没来得及退出），运行了至少 2 分 0 秒。"发信的是最早加入的 Bot 6。
