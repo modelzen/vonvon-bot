@@ -23,7 +23,7 @@ vi.mock('node:net', async original => {
   return { ...net, connect };
 });
 
-const roles = ['admission', 'host', 'keystore', 'service'] as const;
+const roles = ['admission', 'host', 'keystore', 'service', 'bots'] as const;
 type Role = typeof roles[number];
 let scratch = '';
 let entry = '';
