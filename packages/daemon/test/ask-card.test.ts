@@ -29,7 +29,7 @@ function nodes(value: unknown): Record<string, unknown>[] {
 }
 
 function render(request: AskRequest, state: AskCardState = { kind: 'pending' }) {
-  return JSON.parse(JSON.stringify(buildAskCard({ request, state, respondents: ['张三', '李四'] })));
+  return JSON.parse(JSON.stringify(buildAskCard({ request, state, respondents: [{ openId: 'u1', name: '张三' }, { openId: 'u2', name: '李四' }] })));
 }
 
 describe('provider request boundary', () => {
@@ -195,4 +195,10 @@ describe('asks stay separate from streaming cards', () => {
     expect(run.snapshot()).toBe(terminal);
     expect(run.snapshot().completedAt).toBe(terminal.completedAt);
   });
+});
+
+it.each(['__proto__', 'constructor', 'prototype'])('rejects extra own callback key %s even beside managed metadata', key => {
+  const request = { id: 'metadata', kind: 'confirmation', title: '确认', detail: '继续', acceptedConsequence: '继续', declinedConsequence: '停止' } satisfies AskRequest;
+  const value: unknown = JSON.parse(`{"a":"ask_submit","requestId":"metadata","decision":"proceed","__r":"managed","${key}":"foreign"}`);
+  expect(parseAskSubmission({ request, value, formValue: undefined }).ok).toBe(false);
 });

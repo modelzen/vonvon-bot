@@ -101,6 +101,7 @@ function stopControl(cardKey: string, presentation: StopControlPresentation): Ca
 
 /** Routing + render inputs for one run card. */
 export interface RunCardState {
+  askWaiting?: string;
   rs: RunState;
   /** This display segment ended because an accepted steer opened a new card. */
   continued?: boolean;
@@ -244,7 +245,8 @@ function renderRunning(state: RunState, rc: RunCardState): CardElement[] {
   // Footer: status (left) + 模型·effort footnote (right) share one row when the
   // 显示模型 pref is on; either alone falls back to a single line.
   const mEl = modelEl(rc);
-  if (state.footer && mEl) elements.push(splitRow(footerStatus(state.footer), mEl));
+  if (rc.askWaiting) elements.push(md(rc.askWaiting));
+  else if (state.footer && mEl) elements.push(splitRow(footerStatus(state.footer), mEl));
   else if (state.footer) elements.push(footerStatus(state.footer));
   else if (mEl) elements.push(mEl);
 

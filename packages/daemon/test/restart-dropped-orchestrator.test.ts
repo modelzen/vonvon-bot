@@ -3,12 +3,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
-import type { AgentEvent, AgentInput } from '../src/agent/types';
+import type { AgentEvent, AgentInput, AgentRun, AskRequest } from '../src/agent/types';
 import type { AppConfig } from '../src/config/schema';
 import type { DroppedOrigin } from '../src/bot/restart-dropped';
 import type { DiagnosticsEvent } from '../src/bot/diagnostics';
 
 const fake = vi.hoisted(() => ({
+  askCreate: vi.fn(async (_input: unknown): Promise<unknown> => ({ data: { card_id: 'ask-entity' } })),
+  askUpdate: vi.fn(async (_input: unknown): Promise<unknown> => ({})),
   kind: 'multi' as 'single' | 'multi',
   backend: { capabilities: { steer: true }, id: 'codex', listModels: vi.fn(async () => []), resumeThread: vi.fn(), startThread: vi.fn() },
   live: vi.fn(),
@@ -73,6 +75,8 @@ beforeEach(async () => {
   events = [];
   diagnostics.setDiagnosticsSink(event => events.push(event));
   file = join(root, 'dropped.json');
+  fake.askCreate.mockReset().mockResolvedValue({ data: { card_id: 'ask-entity' } });
+  fake.askUpdate.mockReset().mockResolvedValue({});
   fake.kind = 'multi';
   fake.record = {};
   fake.history.mockReset().mockResolvedValue({ messages: [], ok: true, complete: true });
@@ -96,7 +100,7 @@ function deferred<T>() {
   const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
   return { promise, resolve, reject };
 }
-function thread() {
+function thread(options: { events?: AgentEvent[]; respond?: AgentRun['respondToAsk'] } = {}) {
   const turns: ReturnType<typeof deferred<void>>[] = [];
   const consumed: AgentInput[] = [];
   const t = {
@@ -110,8 +114,10 @@ function thread() {
       const id = `turn-${turns.push(end)}`;
       return {
         turnId: () => id,
+        respondToAsk: options.respond,
         events: (async function* (): AsyncGenerator<AgentEvent> {
           yield { type: 'turn_started', turnId: id };
+          for (const event of options.events ?? []) yield event;
           await end.promise;
           yield { type: 'done', turnId: id };
         })(),
@@ -133,7 +139,7 @@ function setup(options: { droppedFile?: string | false; maxConcurrentRuns?: numb
     pendingPolicy: 'queue', access: { ownerOpenId: 'owner' }, completionReminder: { mode: 'manual' },
     ...(options.maxConcurrentRuns ? { maxConcurrentRuns: options.maxConcurrentRuns } : {}),
   } };
-  const channel = { send: fake.send, rawClient: { im: { v1: {
+  const channel = { send: fake.send, rawClient: { cardkit: { v1: { card: { create: fake.askCreate, update: fake.askUpdate } } }, im: { v1: {
     message: { get: async () => ({ data: { items: [{ thread_id: 'omt_new_topic' }] } }), reply: options.reply ?? fake.reply },
     messageReaction: { create: async () => ({ data: {} }), delete: async () => ({}) },
   } } } };
@@ -519,4 +525,105 @@ describe('once back, each group hears once (s18c)', () => {
       expect(fake.log.fail).toHaveBeenCalledWith('bridge', expect.any(TypeError), expect.objectContaining({ phase: 'dropped-reply-failed' }));
     } finally { process.off('unhandledRejection', unhandled); }
   });
+});
+
+const askRequest = (id: string): AskRequest => ({ id, kind: 'confirmation', title: '继续吗', detail: '确认下一步', acceptedConsequence: '继续', declinedConsequence: '停止' });
+
+describe('ordinary ask lifecycle through the real orchestrator', () => {
+  it('consumes later events without waiting for a hung ask send/response, and closes continuations before providers at shutdown', async () => {
+    const order: string[] = [];
+    fake.askCreate.mockImplementation(() => new Promise(() => {}));
+    const respond = vi.fn<NonNullable<AgentRun['respondToAsk']>>((id) => { order.push(id); return new Promise(() => {}); });
+    const run = thread({ respond, events: [{ type: 'ask', request: askRequest('a') }, { type: 'ask', request: askRequest('b') }, { type: 'text_delta', itemId: 'answer', delta: 'after asks' }] });
+    const originalClose = run.t.close;
+    run.t.close = vi.fn(async () => { order.push('close'); await originalClose(); });
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup({ droppedFile: false });
+    await o.onMessage(message('ask me'));
+    await until(() => expect(fake.live.mock.calls.some(args => JSON.stringify(args).includes('after asks'))).toBe(true));
+    expect(respond).not.toHaveBeenCalled();
+    await o.shutdown();
+    expect(order.slice(0, 2)).toEqual(['a', 'b']);
+    expect(order.indexOf('close')).toBeGreaterThan(1);
+    expect(respond.mock.calls).toEqual([['a', { kind: 'unanswered', reason: 'stopped' }], ['b', { kind: 'unanswered', reason: 'stopped' }]]);
+  });
+
+  it('makes a real dispatcher submission nonblocking while response and terminal card edits hang', async () => {
+    fake.reply.mockResolvedValue({ code: 0, data: { message_id: 'ask-carrier' } });
+    fake.askUpdate.mockImplementation(() => new Promise(() => {}));
+    const respond = vi.fn<NonNullable<AgentRun['respondToAsk']>>(() => new Promise(() => {}));
+    const run = thread({ respond, events: [{ type: 'ask', request: askRequest('a') }] });
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup({ droppedFile: false });
+    await o.onMessage(message('ask me'));
+    await until(() => expect(fake.reply).toHaveBeenCalled());
+    await o.dispatcher.handle({ messageId: 'ask-carrier', chatId: 'oc_group_a', operator: { openId: 'owner' }, action: { value: { a: 'ask_submit', requestId: 'a', decision: 'proceed', __r: 'actual-infra' } } } as never);
+    expect(respond).toHaveBeenCalledExactlyOnceWith('a', { kind: 'answered', answer: { kind: 'confirmation', decision: 'proceed' } });
+    await o.shutdown();
+  });
+
+  it('turn end settles pending asks before terminal rendering even if card sending is hung', async () => {
+    fake.askCreate.mockImplementation(() => new Promise(() => {}));
+    const respond = vi.fn<NonNullable<AgentRun['respondToAsk']>>(async () => {});
+    const run = thread({ respond, events: [{ type: 'ask', request: askRequest('a') }] });
+    fake.backend.resumeThread.mockResolvedValue(run.t);
+    const o = setup({ droppedFile: false });
+    await o.onMessage(message('ask me'));
+    await until(() => expect(fake.askCreate).toHaveBeenCalled());
+    run.turns[0]!.resolve();
+    await until(() => expect(respond).toHaveBeenCalledExactlyOnceWith('a', { kind: 'unanswered', reason: 'turn-ended' }));
+    await until(() => expect(fake.final).toHaveBeenCalled());
+  });
+});
+
+it('goal generations settle asks before reset, retain lazy waiting labels, and keep original trigger placement', async () => {
+  const gates = [deferred<void>(), deferred<void>()];
+  const respond = vi.fn<NonNullable<AgentRun['respondToAsk']>>(async () => {});
+  fake.askCreate.mockImplementation(input => JSON.stringify(input).includes('继续吗') ? new Promise(() => {}) : Promise.resolve({ data: { card_id: 'goal-summary' } }));
+  const run = thread();
+  const goal = Object.assign(run.t, {
+    clearGoal: vi.fn(async () => {}),
+    close: vi.fn(async () => { gates.forEach(gate => gate.resolve()); }),
+    runGoal: () => ({ turnId: () => 'goal', respondToAsk: respond, events: (async function* (): AsyncGenerator<AgentEvent> {
+      for (const [index, gate] of gates.entries()) {
+        yield { type: 'turn_started', turnId: `goal-${index}` };
+        yield { type: 'ask', request: askRequest(`goal-ask-${index}`) };
+        yield { type: 'text_delta', itemId: 'answer', delta: `turn ${index}` };
+        await gate.promise;
+        yield { type: 'done', turnId: `goal-${index}` };
+      }
+      yield { type: 'goal_update', status: 'complete', objective: 'work', tokensUsed: 1, timeUsedSeconds: 1, tokenBudget: null };
+    })() }),
+  });
+  fake.backend.resumeThread.mockResolvedValue(goal);
+  const o = setup({ droppedFile: false });
+  const trigger = message('/goal work');
+  await o.onMessage(trigger);
+  await until(() => expect(fake.createCard.mock.calls.some(args => JSON.stringify(args).includes('回答（见下方卡片）'))).toBe(true));
+  gates[0]!.resolve();
+  await until(() => expect(fake.askCreate).toHaveBeenCalledTimes(2));
+  expect(respond.mock.calls).toEqual([['goal-ask-0', { kind: 'unanswered', reason: 'turn-ended' }]]);
+  gates[1]!.resolve();
+  await until(() => expect(respond).toHaveBeenCalledTimes(2));
+  await o.shutdown();
+  expect(respond.mock.calls[1]).toEqual(['goal-ask-1', { kind: 'unanswered', reason: 'turn-ended' }]);
+});
+
+it.each(['stop', 'iterator-error'] as const)('ordinary %s closes ask continuations before cleanup I/O', async kind => {
+  fake.askCreate.mockImplementation(() => new Promise(() => {}));
+  const respond = vi.fn<NonNullable<AgentRun['respondToAsk']>>(async () => {});
+  const run = thread({ respond, events: [{ type: 'ask', request: askRequest('a') }] });
+  fake.backend.resumeThread.mockResolvedValue(run.t);
+  const o = setup({ droppedFile: false });
+  await o.onMessage(message('ask me'));
+  await until(() => expect(fake.askCreate).toHaveBeenCalled());
+  if (kind === 'stop') {
+    await o.dispatcher.handle({ messageId: 'card', chatId: 'oc_group_a', operator: { openId: 'owner' }, action: { value: { a: 'run.stop', m: 'card' } } } as never);
+    expect(respond).toHaveBeenCalledExactlyOnceWith('a', { kind: 'unanswered', reason: 'stopped' });
+    run.turns[0]!.resolve();
+  } else {
+    run.turns[0]!.reject(new Error('source failed'));
+    await until(() => expect(respond).toHaveBeenCalledExactlyOnceWith('a', { kind: 'unanswered', reason: 'turn-ended' }));
+    expect(run.t.close).toHaveBeenCalled();
+  }
 });

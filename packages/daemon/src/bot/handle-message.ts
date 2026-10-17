@@ -1,3 +1,4 @@
+import { AskCoordinator, type AskTurn } from './ask-coordinator';
 import { createPendingGroups, pendingGroupsFile } from '../project/pending-groups';
 import { realpath, stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -423,6 +424,7 @@ export interface QueuedTurn {
    * host turn. Never recover a title from AgentInput.text. */
   titleSource: SessionTitleSource;
   requesterOpenId?: string;
+  requesterKind?: 'user' | 'bot' | 'unknown';
   requestedAt: number;
   /** Clean user-authored label; never derive reminder copy from woven input. */
   summary?: string;
@@ -1205,6 +1207,10 @@ export function createOrchestrator(
 
   function topicPerson(kind: 'user' | 'bot', openId: string | undefined): TopicPerson {
     return openId ? { kind, openId } : { kind };
+  }
+  function askRequesterKind(msg: NormalizedMessage): 'user' | 'bot' | 'unknown' {
+    const senderType = (msg.raw as { sender?: { sender_type?: string } } | undefined)?.sender?.sender_type;
+    return senderType === 'user' ? 'user' : senderType === 'app' ? 'bot' : 'unknown';
   }
   /** Who sent a message, as the topic registry records it. */
   function senderOf(msg: NormalizedMessage): TopicPerson {
@@ -2177,7 +2183,7 @@ export function createOrchestrator(
         input: { text, images: preloadedImages },
         voice: preIngested?.voice,
         titleSource,
-        requesterOpenId: msg.senderId,
+        requesterOpenId: msg.senderId, requesterKind: askRequesterKind(msg),
         requestedAt: msg.createTime || Date.now(),
         summary: stripFileTokens(summaryText ?? text).slice(0, 80) || undefined,
         seen: { id: msg.messageId, at: msg.createTime },
@@ -2496,7 +2502,7 @@ export function createOrchestrator(
           // The backend resolveThread routed by: the record's, else the project's.
           backendId: backendFor(prior?.backend ?? project?.backend).id,
           summary: stripFileTokens(summaryText ?? text).slice(0, 80) || '(本轮任务)',
-          requesterOpenId: msg.senderId,
+          requesterOpenId: msg.senderId, requesterKind: askRequesterKind(msg),
           requestedAt: msg.createTime || tIntake,
           replayText: extra?.replayText,
           seen: seenMark,
@@ -2827,7 +2833,7 @@ export function createOrchestrator(
         mode: perm.mode,
         network: perm.network,
         summary: stripFileTokens(text).slice(0, 80) || '(空)',
-        requesterOpenId: msg.senderId,
+        requesterOpenId: msg.senderId, requesterKind: askRequesterKind(msg),
         requestedAt: msg.createTime || tIntake,
         seenAt: msg.createTime,
         // The topic session's oldest line: the opening's first main line, else the trigger (s15).
@@ -3226,6 +3232,10 @@ export function createOrchestrator(
       return super.on(actionId, admitEvent(handler));
     }
   }(channel, cfg);
+  const asks = new AskCoordinator(channel, cfg, names);
+  dispatcher.on('ask_submit', ({ evt, value, formValue }) => {
+    asks.submit({ messageId: evt.messageId, chatId: evt.chatId, operatorOpenId: evt.operator?.openId, value, formValue });
+  });
   const outboundFiles = new OutboundFiles(paths.outboundFilesDir);
   void trackTask(outboundFiles.recover(channel));
   outboundFiles.register(dispatcher, async (record, openId) =>
@@ -3631,7 +3641,7 @@ export function createOrchestrator(
     };
     if (!await admitRetry()) return;
     const text = retryPrompt(retry, retry.replayText);
-    const msg = cardTurnMessage(key, retry.chatId, op, text, retry.sessionKey, retry.flat);
+    const msg = { ...cardTurnMessage(key, retry.chatId, op, text, retry.sessionKey, retry.flat), raw: { sender: { sender_type: 'user' } } };
     if (active.get(retry.sessionKey)?.isGoal) {
       await replyGoalBusy(msg, retry.flat);
       return;
@@ -5141,7 +5151,7 @@ export function createOrchestrator(
       }
       const root = await channel.send(project.chatId, { markdown: `桌面端启动目标：${request.objective}` }, replyTo ? { replyTo, replyInThread: true } : undefined);
       launched = true;
-      void trackRun(launchGoalRun({ chatId: project.chatId, replyTo: root.messageId, thread, firstText: request.objective, knownThreadId: key, cwd: project.cwd, mode: perm.mode, network: perm.network, model: record.model, effort: record.effort, flat: ruleKind(project) === 'single', backendId: sessionBackend.id, requesterOpenId: owner, titleSource: { text: request.objective, rawContentType: 'text' } })).catch(error => log.fail('desktop', error));
+      void trackRun(launchGoalRun({ chatId: project.chatId, replyTo: root.messageId, thread, firstText: request.objective, knownThreadId: key, cwd: project.cwd, mode: perm.mode, network: perm.network, model: record.model, effort: record.effort, flat: ruleKind(project) === 'single', backendId: sessionBackend.id, requesterOpenId: owner, requesterKind: 'user', titleSource: { text: request.objective, rawContentType: 'text' } })).catch(error => log.fail('desktop', error));
       return { ok: true, threadId: key };
     } finally {
       if (!launched && active.get(key) === reserved) active.delete(key);
@@ -5186,6 +5196,7 @@ export function createOrchestrator(
     replayText?: string;
     /** who triggered this run (for ⏹/⚙️ ownership gating) */
     requesterOpenId?: string;
+    requesterKind?: 'user' | 'bot' | 'unknown';
     /** wall-clock origin for completion reminders; normally the inbound
      * message's createTime, so global/session queueing is included. */
     requestedAt?: number;
@@ -5365,6 +5376,7 @@ export function createOrchestrator(
     const { release } = slot;
     let queuedCard = slot.queuedCard;
     reaction?.started(); // slot acquired → flip OneSecond → Typing
+    let askTurn: AskTurn | undefined;
     let firstCardSent = false;
     let titleStart: Promise<boolean> | undefined;
     let titleApplyRequested = false;
@@ -5476,7 +5488,7 @@ export function createOrchestrator(
         input: { text: opts.firstText, images: opts.images },
         voice: opts.voice,
         titleSource: opts.titleSource,
-        requesterOpenId: opts.requesterOpenId,
+        requesterOpenId: opts.requesterOpenId, requesterKind: opts.requesterKind,
         requestedAt: opts.requestedAt ?? Date.now(),
         summary: opts.summary,
         replayText: opts.replayText,
@@ -5740,10 +5752,17 @@ export function createOrchestrator(
           forceStop: resolveStop,
         });
         disposeInterrupt = stopper.dispose;
-        state.interrupt = () => { state.intakeCancelled = true; stopper.interrupt(); };
+        state.interrupt = () => { askTurn?.close('stopped'); state.intakeCancelled = true; stopper.interrupt(); };
         const idleMs = currentIdleMs();
         const idlePause = createIdlePause();
         state.idlePause = idlePause;
+        const originalInterrupt = state.interrupt;
+        askTurn = asks.openTurn({ run, sessionKey: activeKey,
+          placement: { chatId: opts.chatId, replyTo: currentTurn.seen?.id ?? opts.replyTo, replyInThread: !opts.flat },
+          initiator: { kind: currentTurn.requesterKind ?? 'unknown', openId: currentTurn.requesterOpenId }, idlePause,
+          waiting: label => { rc.askWaiting = label; stream.streamCoalesced(channel, buildRunCard(rc), ANSWER_EID); },
+          fault: error => { log.fail('agent', error, { phase: 'ask-response' }); if (state.run === run) originalInterrupt(); },
+        });
         const guarded = withIdleTimeout(
           run.events,
           idleMs,
@@ -5763,6 +5782,8 @@ export function createOrchestrator(
         let evCount = 0;
         let textChars = 0;
         for await (const ev of cardEvents.consume(guarded)) {
+          if (ev.type === 'ask') { askTurn.enqueue(ev.request); continue; }
+          if (ev.type === 'done' || (ev.type === 'error' && !ev.willRetry)) askTurn.close('turn-ended');
           if (ev.type === 'steer_accepted') {
             await splitCard(ev);
             continue;
@@ -5816,6 +5837,7 @@ export function createOrchestrator(
           // typewriter (cardElement.content), structure → whole-card update.
           stream.streamCoalesced(channel, buildRunCard(rc), ANSWER_EID);
         }
+        askTurn.close('turn-ended');
         clearInterval(cardClock);
         cardClock = undefined;
         state.steerReply = undefined;
@@ -6032,6 +6054,7 @@ export function createOrchestrator(
         activateQueuedTurn(state, currentTurn);
       }
     } catch (err) {
+      askTurn?.close('turn-ended');
       // Detach before any await: new messages must not join a failed consumer.
       if (active.get(activeKey) === state) active.delete(activeKey);
       const dropped = state.queue.splice(0).length;
@@ -6049,6 +6072,7 @@ export function createOrchestrator(
         .send(opts.chatId, { markdown: runFailureMessage(err, dropped, opts.sessionNotice) }, { replyTo: opts.replyTo, replyInThread: !opts.flat })
         .catch((sendError) => log.fail('intake', sendError, { phase: 'run-failure-feedback', dropped }));
     } finally {
+      askTurn?.close('turn-ended');
       // A replacement run may have reserved the key while failure feedback
       // was in flight. Never delete another run's reservation.
       if (active.get(activeKey) === state) active.delete(activeKey);
@@ -6284,6 +6308,7 @@ export function createOrchestrator(
         channel,
         upload: (sources) => uploadOutboundImages(channel, sources, runCwd, opts.mode ?? DEFAULT_PERMISSION_MODE, opts.network ?? false),
       });
+      ctx.rc.askWaiting = askWaiting;
       const cardMsgId = await stream.create(channel, opts.chatId, buildRunCard(ctx.rc), { replyTo, replyInThread });
       ctx.rc.cardKey = cardMsgId;
       ctx.stream = stream;
@@ -6302,6 +6327,9 @@ export function createOrchestrator(
       replyInThread = !opts.flat;
     };
 
+    let askTurn: AskTurn | undefined;
+    let askWaiting: string | undefined;
+    const askPlacement = { chatId: opts.chatId, replyTo: opts.replyTo, replyInThread: !opts.flat };
     let lastStatus = 'active';
     let goalTokens = 0;
     let goalSeconds = 0;
@@ -6325,6 +6353,7 @@ export function createOrchestrator(
       // the loop immediately — cutting the in-flight turn's output.
       state.interrupt = () => {
         if (interrupted) return;
+        askTurn?.close('stopped');
         interrupted = true;
         void opts.thread.clearGoal().catch(() => undefined);
         resolveStop();
@@ -6334,6 +6363,7 @@ export function createOrchestrator(
       // `done` branch below breaks the loop after the current turn completes.
       state.endGoal = () => {
         if (goalEnded || interrupted) return;
+        askTurn?.close('stopped');
         goalEnded = true;
         void opts.thread.clearGoal().catch(() => undefined);
         if (cur) {
@@ -6362,8 +6392,14 @@ export function createOrchestrator(
       const guarded = withIdleTimeout(run.events, GOAL_IDLE_MS, () => {
         idledOut = true;
       }, stop, run.lastActivity, idlePause);
+      const originalInterrupt = state.interrupt;
       let unseen = opts.seen; // marked once the host starts the goal's first turn (see launchRun)
       for await (const ev of guarded) {
+        if (ev.type === 'ask') {
+          if (askTurn) askTurn.enqueue(ev.request);
+          else { asks.unavailable(run, ev.request, error => log.fail('agent', error)); originalInterrupt(); }
+          continue;
+        }
         if (ev.type === 'goal_update') {
           lastStatus = ev.status;
           goalTokens = ev.tokensUsed;
@@ -6385,6 +6421,7 @@ export function createOrchestrator(
           continue;
         }
         if (ev.type === 'turn_started') {
+          askTurn?.close('turn-ended');
           idlePause.reset();
           if (unseen && topicThreadId) markSeen(topicThreadId, unseen, opts.seenHow);
           unseen = undefined;
@@ -6394,9 +6431,16 @@ export function createOrchestrator(
           if (topicThreadId) requestGoalSessionTitleApply();
           await finalizeCard(cur); // close the previous turn's card (if it produced one)
           cur = startTurn(); // render-only; the card is sent lazily on first content
+          askTurn = asks.openTurn({ run, sessionKey: activeKey, placement: askPlacement,
+            initiator: { kind: opts.requesterKind ?? 'unknown', openId: opts.requesterOpenId }, idlePause,
+            waiting: label => { askWaiting = label; if (cur) { cur.rc.askWaiting = label; if (cur.stream) cur.stream.streamCoalesced(channel, buildRunCard(cur.rc), ANSWER_EID); } },
+            fault: error => { log.fail('agent', error, { phase: 'ask-response' }); if (state.run === run) originalInterrupt(); },
+          });
           continue;
         }
         if (ev.type === 'done') {
+          askTurn?.close('turn-ended');
+          askTurn = undefined;
           idlePause.reset();
           // turn/completed for an intermediate turn — finalize its card (if any).
           // codex auto-continues with the next turn (a terminal goal status, handled
@@ -6415,7 +6459,7 @@ export function createOrchestrator(
         if (ev.type === 'error') {
           // A retry notice (the backend is retrying the call itself) is not why
           // the goal ended; keep it off the summary card.
-          if (!ev.willRetry) goalErrorMsg = ev.message;
+          if (!ev.willRetry) { askTurn?.close('turn-ended'); askTurn = undefined; goalErrorMsg = ev.message; }
           if (!cur) continue; // set-failure before any turn → terminal card only
         }
         if (!cur) cur = startTurn();
@@ -6434,6 +6478,7 @@ export function createOrchestrator(
         cur.rc.rs = cur.render.snapshot();
         cur.stream!.streamCoalesced(channel, buildRunCard(cur.rc), ANSWER_EID);
       }
+      askTurn?.close('turn-ended');
       state.idlePause = undefined;
       // ⏹ 终止: mark the in-flight turn's card as interrupted before finalizing
       // (finalize() is a no-op once terminal, so this doesn't clash).
@@ -6471,11 +6516,13 @@ export function createOrchestrator(
       }
       if (topicThreadId) await patchSession(topicThreadId, { updatedAt: Date.now(), ...savedMeter(topicThreadId, opts.thread) }).catch(() => undefined);
     } catch (err) {
+      askTurn?.close('turn-ended');
       log.fail('intake', err);
       await channel
         .send(opts.chatId, { markdown: runFailureMessage(err, 0, opts.sessionNotice) }, { replyTo: opts.replyTo, replyInThread: !opts.flat })
         .catch(() => undefined);
     } finally {
+      askTurn?.close('turn-ended');
       state.idlePause = undefined;
       clearInterval(cur?.clock);
       active.delete(activeKey);
@@ -6581,13 +6628,32 @@ export function createOrchestrator(
 
             let state: RunState = initialState;
             let timedOut = false;
+            let askFault = false;
+            let consuming = true;
+            let stopAsk!: () => void;
+            const askStopped = new Promise<void>(resolve => { stopAsk = resolve; });
             const idleMs = currentIdleMs();
             const guarded = withIdleTimeout(run.events, idleMs, () => {
               timedOut = true;
-            }, undefined, run.lastActivity);
-            for await (const ev of guarded) state = reduce(state, ev);
+            }, askStopped, run.lastActivity);
+            try {
+              for await (const ev of guarded) {
+                if (ev.type === 'ask') {
+                  asks.unavailable(run, ev.request, error => {
+                    log.fail('agent', error, { phase: 'comment-ask' });
+                    if (!consuming) return;
+                    askFault = true;
+                    stopAsk();
+                    const id = run.turnId();
+                    if (id) void thread.abort(id).catch(() => undefined);
+                  });
+                  continue;
+                }
+                state = reduce(state, ev);
+              }
+            } finally { consuming = false; }
 
-            if (timedOut) {
+            if (timedOut || askFault) {
               const tid = run.turnId();
               // Recycle the thread so the hung turn's never-terminating stream
               // doesn't poison the next comment; the doc resumes from the
@@ -7008,6 +7074,7 @@ export function createOrchestrator(
   function shutdown(): Promise<void> {
     if (shutdownPromise) return shutdownPromise;
     shuttingDown = true;
+    asks.shutdown();
     // Written at once, before anything is cleared below and long before the Codex processes end or the lock goes.
     droppedReplies?.saveSync(collectLost(), 'shutdown');
     for (const stop of onStop) stop();
