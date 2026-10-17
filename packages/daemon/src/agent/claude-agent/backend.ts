@@ -8,6 +8,7 @@ import type {
   Query,
   SettingSource,
 } from '@anthropic-ai/claude-agent-sdk';
+import { OwnedProviderProcess } from '../owned-process';
 import { log } from '../../core/logger';
 import type {
   AgentBackend,
@@ -93,8 +94,9 @@ function bridgeClaudeEnv(): Record<string, string> {
  * key there counts (ANTHROPIC_AUTH_TOKEN, or ANTHROPIC_BASE_URL and
  * ANTHROPIC_MODEL for DeepSeek or Kimi). With `settingSources: []` those keys were
  * ignored and the helpers reported "not logged in" on such machines. Hooks,
- * tools, MCP servers, claude.ai connectors, the transcript and the user's
- * personal CLAUDE.md stay off. The project layer is not loaded: the model list is
+ * tools, MCP servers, claude.ai connectors, the transcript and personal CLAUDE.md
+ * are disabled by the options below. Managed policy can override hook settings;
+ * user apiKeyHelper may still execute to obtain credentials. The project layer is not loaded: the model list is
  * cached per backend, not per project, and titles only need the credentials.
  */
 function helperQueryOptions(cwd: string): Options {
@@ -486,13 +488,8 @@ export class ClaudeAgentBackend implements AgentBackend {
     }
   }
 
-  /**
-   * One smart-mode judgement (design 3.3): a single turn of the helper options (no tools, MCP, hooks,
-   * skills, saved session or personal CLAUDE.md) whose system prompt is replaced whole by the string
-   * `call.system`, which works on a claude.ai login (s23c spike). No effort turns thinking off; Haiku
-   * 5.5 accepts that and still thinks a little. Calls `query.close()` before settling; SDK cleanup
-   * bounds its wait for process exit, so an unresponsive CLI may outlive the released judge slot.
-   */
+  /** One tool-less judge turn. User credential helpers and managed-policy hooks may still run.
+   * The shared provider registry retains ownership until the child process group is gone. */
   async judge(call: JudgeCall): Promise<JudgeCallOutput> {
     let sdk: ClaudeSdkFacade;
     try {
@@ -507,11 +504,18 @@ export class ClaudeAgentBackend implements AgentBackend {
     const onAbort = (): void => abortController.abort(call.signal.reason);
     call.signal.addEventListener('abort', onAbort, { once: true });
     let query: Query | undefined;
+    let owned: OwnedProviderProcess | undefined;
     try {
       query = sdk.query({
         prompt: call.input,
         options: {
           ...helperQueryOptions(call.cwd),
+          spawnClaudeCodeProcess: ({ command, args, ...options }) => {
+            owned = new OwnedProviderProcess(command, args, { ...options, stdio: ['pipe', 'pipe', 'pipe'] }, 'Claude');
+            owned.child.stderr?.resume();
+            if (!owned.child.stdin || !owned.child.stdout) throw new Error('Claude child pipes are missing');
+            return Object.assign(owned.child, { stdin: owned.child.stdin, stdout: owned.child.stdout });
+          },
           systemPrompt: call.system,
           model: call.model,
           ...(call.effort ? { effort: call.effort as EffortLevel } : { thinking: { type: 'disabled' as const } }),
@@ -522,7 +526,8 @@ export class ClaudeAgentBackend implements AgentBackend {
       return await consumeClaudeJudgeQuery(query);
     } finally {
       call.signal.removeEventListener('abort', onAbort);
-      query?.close();
+      try { query?.close(); }
+      finally { await owned?.close(); }
     }
   }
 

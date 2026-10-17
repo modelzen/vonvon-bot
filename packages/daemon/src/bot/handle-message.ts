@@ -84,7 +84,7 @@ import {
   type SessionTitleBackendConfig,
 } from '../config/schema';
 import { CardDispatcher, type CardActionHandler } from '../card/dispatcher';
-import { closeOwnedCodexProcesses } from '../agent/codex-appserver/owned-process';
+import { closeOwnedProviderProcesses } from '../agent/owned-process';
 import { shutdownResidentClients } from '../agent/codex-appserver/client-pool';
 import { createJudge } from '../judge/judge';
 import { sendManagedCard, updateManagedCard } from '../card/managed';
@@ -6952,7 +6952,7 @@ export function createOrchestrator(
       try { cleanup.push(operation()); }
       catch (error) { shutdownErrors.add(error); }
     };
-    startCleanup(closeOwnedCodexProcesses);
+    startCleanup(closeOwnedProviderProcesses);
     startCleanup(shutdownResidentClients);
     const dropped = { queued: 0, held: 0, compacts: 0 };
     for (const state of active.values()) {

@@ -22,7 +22,7 @@ vi.mock('../src/config/paths', async original => {
   const real = await original<typeof import('../src/config/paths')>();
   return { ...real, paths: { ...real.paths, get appDir() { return f.root; } } };
 });
-vi.mock('../src/agent/codex-appserver/owned-process', () => ({ closeOwnedCodexProcesses: async () => {}, unconfirmedCodexPids: () => [] }));
+vi.mock('../src/agent/owned-process', () => ({ closeOwnedProviderProcesses: async () => {}, unconfirmedProviderPids: () => [] }));
 vi.mock('../src/admin/service', () => ({ createAdminService: (deps: AdminServiceDeps) => { f.deps = deps; return deps; } }));
 vi.mock('../src/server/http', async original => ({ ...await original<typeof import('../src/server/http')>(), startApi: vi.fn(async (options: { crashes?: typeof f.crashes }) => {
   f.crashes = options.crashes;

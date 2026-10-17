@@ -202,8 +202,8 @@ beforeEach(async () => {
   fixture.spawn.mockReset().mockReturnValueOnce(child).mockImplementation(() => { throw new Error('Unexpected provider birth'); });
   ({ paths } = await import('../src/config/paths'));
   dataAccess = await import('../src/config/data-access');
-  const { OwnedCodexProcess } = await import('../src/agent/codex-appserver/owned-process');
-  const owner = new OwnedCodexProcess('/fixture/no-provider', [], {});
+  const { OwnedProviderProcess } = await import('../src/agent/owned-process');
+  const owner = new OwnedProviderProcess('/fixture/no-provider', [], {});
   const thread: AgentThread = {
     sessionId: 'host', isAlive: () => !directExited,
     close: () => owner.close(), abort: async () => {}, steer: async () => {},

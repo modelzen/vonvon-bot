@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { paths } from '../config/paths';
 import { ApiCleanupError } from '../server/http';
-import { closeOwnedCodexProcesses, unconfirmedCodexPids } from '../agent/codex-appserver/owned-process';
+import { closeOwnedProviderProcesses, unconfirmedProviderPids } from '../agent/owned-process';
 
 export interface ShutdownControl {
   readonly requested: boolean;
@@ -33,7 +33,7 @@ export function listenerCloseUnconfirmed(error: unknown): boolean {
 
 export async function closeOwnedProviders(shutdown: () => Promise<void> = async () => {}): Promise<void> {
   const report = (settled: boolean): Promise<void> => {
-    const pids = unconfirmedCodexPids();
+    const pids = unconfirmedProviderPids();
     if (!settled && pids.length) log.warn('daemon-shutdown', 'owned_work_unconfirmed', { pid: process.pid, pids });
     if (!process.send) return Promise.resolve();
     return new Promise((resolve, reject) => {
@@ -49,7 +49,7 @@ export async function closeOwnedProviders(shutdown: () => Promise<void> = async 
   const errors: unknown[] = [];
   try { await shutdown(); }
   catch (error) { errors.push(error); }
-  try { await closeOwnedCodexProcesses(); }
+  try { await closeOwnedProviderProcesses(); }
   catch (error) { errors.push(error); }
   finally { clearInterval(timer); }
   try { await report(true); }
