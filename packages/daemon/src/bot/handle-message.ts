@@ -87,6 +87,7 @@ import {
 import { CardDispatcher, type CardActionHandler } from '../card/dispatcher';
 import { closeOwnedCodexProcesses } from '../agent/codex-appserver/owned-process';
 import { shutdownResidentClients } from '../agent/codex-appserver/client-pool';
+import { createJudge } from '../judge/judge';
 import { sendManagedCard, updateManagedCard } from '../card/managed';
 import { RunRender } from '../card/run-render';
 import { finalMessageText, initialState, reduce, type RunState } from '../card/run-state';
@@ -927,6 +928,8 @@ export function createOrchestrator(
    * using it directly — identical to the pre-registry behavior. */
   const backend = backendFor();
   const sessionTitles = new SessionTitleCoordinator({ backendFor: (id) => backendFor(id) });
+  /** Smart-mode judgements (s23); s25 calls it for groups in 智能. */
+  const judge = createJudge({ backendFor: (id) => backendFor(id) });
 
   /** Snapshot the selected backend's title policy when its native session is
    * created. Later DM-setting changes affect future sessions only. */
@@ -7027,6 +7030,7 @@ export function createOrchestrator(
     }
     if (dropped.queued || dropped.held || dropped.compacts) log.info('bridge', 'shutdown_dropped', dropped);
     startCleanup(() => sessionTitles.shutdown());
+    startCleanup(() => judge.shutdown());
     const live = [...new Set(sessions.values())];
     sessions.clear();
     for (const thread of live) startCleanup(() => thread.close());

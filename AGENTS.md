@@ -1,5 +1,16 @@
 # vonvon-bot 分工规则
 
+## 2026-10-17 起的临时职责覆盖
+
+owner 已说明 Claude 因额度限制约两天无法使用，开发继续由 Codex 推进。本节覆盖下文冲突的职责分配，直到 owner 明确交还职责；额度恢复不自动切回。
+
+- JP-VPS 上的 Codex 接手原属 Claude 的设计、实现、测试、审查安排、PR 管理和合入，包括 `docs/product.md`、`docs/v1-plan.md`、真实飞书自测及里程碑验收。下文和 v1-plan 中作为开发者或协调者的 "Claude" 均按此分工执行，产品支持的 Claude 后端及历史验收记录保持原意。不等待 Claude 开会话、审查、转告或合入。
+- Linux 和 Mac 继续分工：JP-VPS Codex 负责主开发，Mac Codex 负责桌面检查与签名打包。原由 Claude 执行的 Paseo 调度、任务号、GitHub 结果检查、取消和归档由 JP-VPS Codex 执行。`AGENTS.md`、本地工具及 #322 的 `claude-mac-*` 标记和任务号沿用，已有任务的归属、取消及防重复规则照旧。
+- 接手前核对原会话状态及 Mac 任务，原会话仍运行或检查任务未结束的分支继续按下文等待或取消规则处理。确认交接后，JP-VPS Codex 可正常 push 已接手的 `claude/*` 分支，新切片仍用 `claude/<切片>`；旧 Claude 会话不得同时 push。原有 `codex/fix-*` 分支的独占规则照旧，不 force-push，不 rebase 已 push 的分支。
+- 独立审查由与实现模型不同、当前可用的 Codex 模型子代理完成，结论贴进 PR。下文“一个 PR 的流程”第 2 步规定的多角度审查触发条件全部保留，不依赖 Claude 模型。审查人和实现人分开。
+- JP-VPS Codex 按准确 head 的 SHA 合入。产品 PR 仍要求独立审查、线程解决、描述完整，以及准确 head 的 `linux` 和 `macOS checks` 都成功；冻结前后 push 的流程、在飞上限、重命令锁、隔离数据和真实 Mac 检查范围不变。纯文档 PR 仍不冻结，独立审查及准确 head 的 `linux` 成功后合入。
+- JP-VPS Codex 在 owner 的当前 Codex 会话汇报进展和阻塞，Mac Codex 仍把任务结果贴到 GitHub。PR 描述按实际执行者记录命令与结果。真实 Claude 后端的验收若受额度限制，明确列为待验，继续其余开发；必需验收未通过时不声称完成，也不绕过合入门槛。
+
 2026-10-14 起生效，取代 2026-10-13 的版本，适用于 v1 开发。2026-10-16 起，Mac 上的 Codex 由 Claude 经 Paseo 直接开会话，一个任务一个会话，结果贴回 GitHub；Paseo 用不了时（连不上、开不了会话，或者 #322 上还有活着的队列会话），才把任务贴进队列 issue #322 请 owner 转发，见"工具和同步"。两台机器读同一份规则。本文的 owner 指用户本人；旧的 `owner:` 标签不再使用。Claude 的非平凡任务用 Ultracode 工作流编排。Claude 侧的会话、模型和通知格式另见 JP-VPS 上的 `/home/ops/.claude/vonvon-collaboration.md`，这个文件不在仓库里，Mac 上没有。
 
 ## 分工
