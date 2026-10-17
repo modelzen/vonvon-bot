@@ -76,8 +76,8 @@ describe('real bot writer ownership', () => {
     const marker = join(root, 'accounts');
     const code = `await m.registerBotEntry(${identity('same')},async selected=>{
       require('node:fs').appendFileSync(${JSON.stringify(marker)},'once');
-      if(!Object.isFrozen(selected))throw Error('not frozen');
-      try{selected.name='corrupted'}catch{};
+      if(!Object.isFrozen(selected.entry))throw Error('not frozen');
+      try{selected.entry.name='corrupted'}catch{};
     });`;
     await Promise.all([successful(root, code), successful(root, code)]);
     expect(await readFile(marker, 'utf8')).toBe('once');
@@ -132,6 +132,6 @@ describe('real bot writer ownership', () => {
     expect((await registry(root)).bots.map((bot: { appId: string }) => bot.appId)).toEqual(['legacy', 'new']);
     expect(JSON.parse(await readFile(join(root, 'bots', 'legacy', 'config.json'), 'utf8'))).toEqual(flat);
     expect(JSON.parse(await readFile(join(root, 'bots', 'legacy', 'projects.json'), 'utf8')).projects[0].cwd).toBe('/legacy-unmoved');
-    await expect(readFile(join(root, 'projects'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(Object.keys((await registry(root)).allocations)).toEqual(['new']);
   });
 });
