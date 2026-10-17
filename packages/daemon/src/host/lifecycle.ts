@@ -32,12 +32,16 @@ export function listenerCloseUnconfirmed(error: unknown): boolean {
 }
 
 export async function closeOwnedProviders(shutdown: () => Promise<void> = async () => {}): Promise<void> {
+  let orphanLogged = false;
   const report = (settled: boolean): Promise<void> => {
     const pids = unconfirmedProviderPids();
+    if (process.send && !process.connected) {
+      if (!orphanLogged) { orphanLogged = true; log.info('daemon-shutdown', 'owned-work-orphan', { pids }); }
+      return Promise.resolve();
+    }
     if (!settled && pids.length) log.warn('daemon-shutdown', 'owned_work_unconfirmed', { pid: process.pid, pids });
     if (!process.send) return Promise.resolve();
     return new Promise((resolve, reject) => {
-      if (!process.connected) { reject(new Error('Owned-work IPC channel is closed.')); return; }
       process.send?.({ fcb: 'fcb.owned-work', pids, settled }, (error: Error | null) => error ? reject(error) : resolve());
     });
   };

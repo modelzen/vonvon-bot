@@ -3,9 +3,9 @@ import { ensureOnboarded, announceEventsWhenLive } from '../../bot/onboarding';
 import { startBridge } from '../../bot/bridge';
 import { runSupervisor, type SupervisorCrash } from '../../bot/supervisor';
 import { BOT_LOCK_BUSY_EXIT } from '../../host/crash-store';
-import { acquireSingleInstanceLock, BridgeAlreadyRunningError } from '../../core/single-instance';
-import { activeBots, ensureRegistry, type BotEntry } from '../../config/bots';
+import { acquireSingleInstanceLock, BridgeAlreadyRunningError, readSingleInstanceHolder } from '../../core/single-instance';
 import { botPaths } from '../../config/paths';
+import { activeBots, ensureRegistry, type BotEntry } from '../../config/bots';
 import { log } from '../../core/logger';
 import { AdminWriteError } from '../../admin/ops';
 import { createAdminIpcResponder } from '../../admin/ipc';
@@ -62,6 +62,17 @@ export async function runRun(botName?: string, options: RunOptions = {}): Promis
 /** Run a single bot inline in this process. `botName` undefined → the implicit
  *  current/default bot (with first-run onboarding allowed). */
 async function runSingle(botName: string | undefined, control: ShutdownControl, options: RunOptions): Promise<void> {
+  if (process.send && botName?.startsWith('cli_')) {
+    let holder: ReturnType<typeof readSingleInstanceHolder>;
+    try { holder = readSingleInstanceHolder(botName, botPaths(botName).processesFile); }
+    catch { /* The actual lock acquisition below remains authoritative. */ }
+    if (holder) {
+      console.error(`✗ ${new BridgeAlreadyRunningError(holder.pid).message}`);
+      log.info('run', 'already-running', { pid: holder.pid, early: true });
+      process.exitCode = BOT_LOCK_BUSY_EXIT;
+      return;
+    }
+  }
   const ready = await ensureOnboarded({ allowCreate: !botName, bot: botName });
   if (!ready) {
     process.exitCode = 1;

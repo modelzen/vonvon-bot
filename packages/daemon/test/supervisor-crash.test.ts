@@ -10,7 +10,7 @@ import {
 } from '../src/host/crash-store';
 
 // Real children (`node -e`) under the real supervisor, its data root a temp dir: s18a's records, count, pause and resume.
-const f = vi.hoisted(() => ({ root: '', deps: undefined as AdminServiceDeps | undefined, crashes: undefined as { application(now: number): unknown; paused(appId: string): unknown } | undefined, warn: vi.fn(), notes: [] as unknown[][] }));
+const f = vi.hoisted(() => ({ root: '', holderPid: 0, deps: undefined as AdminServiceDeps | undefined, crashes: undefined as { application(now: number): unknown; paused(appId: string): unknown; lockHeld?(appId: string): unknown } | undefined, warn: vi.fn(), notes: [] as unknown[][] }));
 // A CI runner may have booted minutes ago: shift uptime an hour for the source and the seeds alike, so a seed
 // 11 minutes back is never negative.
 vi.mock('node:os', async original => {
@@ -30,7 +30,7 @@ vi.mock('../src/server/http', async original => ({ ...await original<typeof impo
 }) }));
 vi.mock('../src/core/logger', () => ({ log: { info() {}, warn: f.warn, fail() {} } }));
 vi.mock('../src/agent', () => ({ installBackendDep() {}, uninstallBackendDep() {} }));
-vi.mock('../src/core/single-instance', () => ({ readSingleInstanceHolder: () => undefined }));
+vi.mock('../src/core/single-instance', () => ({ readSingleInstanceHolder: () => f.holderPid ? { pid: f.holderPid, startedAt: 0 } : undefined }));
 vi.mock('../src/platform/spawn', () => ({ spawnProcess: vi.fn() }));
 import { spawnProcess } from '../src/platform/spawn';
 import { startApi } from '../src/server/http';
@@ -50,12 +50,14 @@ const fixture = `
   process.on('SIGTERM', stop);
   process.on('message', m => {
     if (m.type === 'bridge:shutdown') stop();
+    else if (m.fcb === 'connected') process.send({ fcb: 'fcb.connection' });
     else if (m.fcb === 'exit') { if (m.line) process.stderr.write(m.line + '\\n'); setTimeout(() => process.exit(m.code), 100); }
     // A 'hold' request is never answered: a web write still in flight when the child ends.
     else if (m.fcb === 'fcb.admin.req' && m.op.kind !== 'hold') process.send({ fcb: 'fcb.admin.res', id: m.id, ok: true, result: { connection: 'connected' } });
   });
 `;
 const procs = new Map<string, ChildProcess[]>();
+const spawnedAt = new WeakMap<ChildProcess, number>();
 /** Records what the supervisor tells the notifier (s18b), in order with the stops sent to children. */
 const recorder: CrashNotifier = {
   hostStarted: (notice, ctx) => { f.notes.push(['hostStarted', notice, ctx.bots.map(bot => bot.appId), ctx.paused, ...(ctx.registryUnreadable ? ['registry-unreadable'] : [])]); },
@@ -70,7 +72,7 @@ const told = (appId = A): unknown[][] => f.notes.filter(note => note[1] === appI
 let shutdown = (): void => {};
 let supervisor: Promise<void> | undefined;
 
-beforeEach(() => { f.root = mkdtempSync(join(tmpdir(), 'vonvon-supervisor-crash-')); procs.clear(); f.notes = []; });
+beforeEach(() => { f.root = mkdtempSync(join(tmpdir(), 'vonvon-supervisor-crash-')); procs.clear(); f.notes = []; f.holderPid = 0; });
 afterEach(async () => {
   shutdown();
   await supervisor;
@@ -80,11 +82,12 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
-async function start(ids: string[], running = ids, failSpawns = 0, notice?: HostNotice, extra: { paused?: boolean; registryUnreadable?: boolean } = {}): Promise<AdminServiceDeps> {
+async function start(ids: string[], running = ids, failSpawns = 0, notice?: HostNotice, extra: { paused?: boolean; registryUnreadable?: boolean; timing?: { lockRetryMs?: number; lockWarnMs?: number; lockSlowMs?: number } } = {}): Promise<AdminServiceDeps> {
   f.deps = undefined;
   vi.mocked(spawnProcess).mockImplementation((_bin, args, options) => {
     if (failSpawns-- > 0) throw Object.assign(new Error('spawn EAGAIN'), { code: 'EAGAIN' });
     const child = spawn(process.execPath, ['-e', fixture], options ?? {});
+    spawnedAt.set(child, performance.now());
     const id = String(args?.[4]);
     procs.set(id, [...procs.get(id) ?? [], child]);
     const send = child.send.bind(child) as (message: unknown, callback?: (error: Error | null) => void) => boolean;
@@ -105,17 +108,18 @@ async function start(ids: string[], running = ids, failSpawns = 0, notice?: Host
   return deps;
 }
 /** Ends A's child (SIGKILL, or an exit with a last stderr line) and waits for the restart unless told it stays down. */
-async function crash(how: 'kill' | { code: number; line?: string }, restarts = true): Promise<void> {
+async function crash(how: 'kill' | { code: number; line?: string }, restarts = true): Promise<number | undefined> {
   const before = procs.get(A) ?? [];
   const child = before.at(-1);
   if (!child) throw new Error('no child');
-  const exited = new Promise(resolve => child.once('exit', resolve));
+  const exited = new Promise<number>(resolve => child.once('exit', () => resolve(performance.now())));
   if (how === 'kill') child.kill('SIGKILL');
   else child.send({ fcb: 'exit', ...how });
-  await exited;
+  const endedAt = await exited;
   if (!restarts) return;
   await vi.waitFor(() => expect(procs.get(A)).toHaveLength(before.length + 1), { timeout: 10_000, interval: 50 });
   await vi.waitFor(async () => expect(await f.deps?.liveStatus?.(A)).toMatchObject({ connection: 'connected' }), { timeout: 10_000, interval: 50 });
+  return spawnedAt.get(procs.get(A)!.at(-1)!)! - endedAt;
 }
 const records = (): CrashRecord[] => listCrashRecords(f.root, { scope: crashScopeKey('bot', A) });
 const pauses = (): { chainId: string; bots: Record<string, object> } => JSON.parse(readFileSync(join(f.root, 'crash', 'bot-pauses.json'), 'utf8'));
@@ -156,6 +160,25 @@ it('exit 70 without a record gets one; exits 0 and 75 are not crashes', async ()
   await crash({ code: 0 }, false);
   expect(records()).toHaveLength(1);
   expect(f.crashes?.paused(A)).toBeUndefined();
+});
+
+it('lock retries stay separate from crash backoff, refresh the holder, and clear on connection', async () => {
+  await start([A], [A], 0, undefined, { timing: { lockRetryMs: 40, lockWarnMs: 100, lockSlowMs: 150 } });
+  f.holderPid = 111;
+  expect(await crash({ code: 75 })).toBeGreaterThanOrEqual(30);
+  expect(f.crashes?.lockHeld?.(A)).toBeUndefined();
+  expect(await crash({ code: 75 })).toBeGreaterThanOrEqual(130);
+  expect(f.crashes?.lockHeld?.(A)).toMatchObject({ pid: 111 });
+  f.holderPid = 222;
+  expect(await crash({ code: 75 })).toBeGreaterThanOrEqual(130);
+  expect(f.crashes?.lockHeld?.(A)).toMatchObject({ pid: 222 });
+  expect(f.warn.mock.calls.filter(call => call[1] === 'lock-held')).toHaveLength(2);
+  expect(records()).toEqual([]);
+  expect(f.crashes?.paused(A)).toBeUndefined();
+  procs.get(A)?.at(-1)?.send({ fcb: 'connected' });
+  await vi.waitFor(() => expect(f.crashes?.lockHeld?.(A)).toBeUndefined());
+  await crash({ code: 1 }, false);
+  expect(f.warn).toHaveBeenCalledWith('supervisor', 'child-exit', expect.objectContaining({ restartInMs: 1000 }));
 });
 
 it('counts this chain\'s crashes on disk in the window, and none from before 恢复运行', async () => {
