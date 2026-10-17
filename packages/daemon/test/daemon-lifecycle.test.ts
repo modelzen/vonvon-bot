@@ -76,7 +76,7 @@ vi.mock('../src/bot/onboarding', () => ({
 vi.mock('../src/config/bots', () => ({ ensureRegistry: async () => ({ bots: [] }), activeBots: () => [], loadBots: async () => ({ bots: [] }) }));
 vi.mock('../src/platform/spawn', () => ({ spawnProcess: fixture.spawn, spawnProcessSync: fixture.spawnSync }));
 vi.mock('../src/admin/service', () => ({ createAdminService: (deps: AdminServiceDeps) => { fixture.admin = deps; return deps; } }));
-vi.mock('../src/core/logger', () => ({ log: { info() {}, warn: fixture.logWarn, fail: fixture.logFail } }));
+vi.mock('../src/core/logger', () => ({ log: { info() {}, warn: fixture.logWarn, fail: fixture.logFail }, flushLogs: async () => {} }));
 vi.mock('../src/core/single-instance', () => ({
   BridgeAlreadyRunningError: class extends Error {},
   readSingleInstanceHolder: () => undefined,
