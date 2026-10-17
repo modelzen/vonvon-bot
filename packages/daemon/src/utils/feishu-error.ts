@@ -1,5 +1,7 @@
 /** Feishu OpenAPI error code for "the app lacks a scope this call needs" (same on every endpoint). */
 const SCOPE_DENIED_CODE = 99991672;
+/** Feishu's rate limits: the platform's code and the send-message API's own, besides HTTP 429. */
+export const FEISHU_RATE_LIMIT_CODES: ReadonlySet<number> = new Set([99991400, 230020]);
 
 /** Feishu's error body, as thrown by the SDK (axios `response.data`) or returned with a non-zero code. */
 export interface FeishuErrorBody {

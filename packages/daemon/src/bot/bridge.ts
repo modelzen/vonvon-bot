@@ -20,6 +20,9 @@ export interface BridgeOptions {
   /** fallback cwd for groups that aren't registered projects. */
   fallbackCwd: string;
   onConnectionChange?: () => void;
+  /** `bots/<appId>/dropped.json` (s18c): the queued messages a shutdown drops are kept there and answered once connected
+   * again. Only `daemon run` passes it; without it nothing is kept or answered. */
+  droppedFile?: string;
 }
 
 export interface BridgeHandle {
@@ -28,8 +31,8 @@ export interface BridgeHandle {
   adminGroups: (op: AdminGroupOp) => Promise<JoinedGroups | Project>;
   adminExecute: (op: AdminWriteOp) => Promise<AdminWriteResult>;
   settings: HostSettings;
-  /** Graceful teardown: close every codex session (no orphan app-servers) then
-   *  drop the long connection. Idempotent enough for a signal handler. */
+  /** Graceful teardown: drop the long connection first, then close every codex
+   *  session (no orphan app-servers). Idempotent enough for a signal handler. */
   shutdown: () => Promise<void>;
 }
 
@@ -70,11 +73,17 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   // 咖啡一下 (the local Claude Code / Codex hook relay) left v1 in s02b: no
   // service and no socket; s02c deleted D/cli-bridge. Since s02c2 the installed
   // hooks run an empty `vonvon hook`, and the tools ask in the terminal.
-  const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd, createTopicRegistry({ dir: paths.topicsDir }));
+  const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd, createTopicRegistry({ dir: paths.topicsDir }),
+    opts.droppedFile ? { droppedFile: opts.droppedFile } : undefined);
   const groupTasks = new Set<Promise<JoinedGroups | Project>>();
   let closing: Promise<void> | undefined;
   const shutdown = (): Promise<void> => {
     if (closing) return closing;
+    // s18c: stop taking events first. One that comes after this is not acknowledged, so Feishu pushes it again to the
+    // next process, which answers it; taken now, it would be acknowledged and dropped by the closing orchestrator.
+    // Replies and card updates go over HTTP, which this does not close. allSettled handles a rejection at once: it must
+    // not wait unhandled while the orchestrator drains.
+    const transportClosing = Promise.allSettled([channel.disconnect()]);
     const groupsClosing = Promise.allSettled([...groupTasks]);
     const orchestratorClosing = orchestrator.shutdown();
     closing = (async () => {
@@ -83,8 +92,9 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
       catch (error) { errors.push(error); }
       const groups = await groupsClosing;
       for (const result of groups) if (result.status === 'rejected') errors.push(result.reason);
-      try { await channel.disconnect(); }
-      catch (error) { log.fail('ws', error, { phase: 'disconnect' }); errors.push(error); }
+      for (const result of await transportClosing) {
+        if (result.status === 'rejected') { log.fail('ws', result.reason, { phase: 'disconnect' }); errors.push(result.reason); }
+      }
       if (errors.length) throw new AggregateError(errors, 'Bridge cleanup failed');
     })();
     return closing;
@@ -151,6 +161,8 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     await channel.connect();
     opts.onConnectionChange?.();
     log.info('ws', 'connected', { appId: app.id, fallbackCwd: opts.fallbackCwd });
+    // Only once connected: when this start fails, the file stays as it is for the next one.
+    orchestrator.replyDropped();
 
     const executeGroup = createGroupExecutor(channel);
     const adminGroups: BridgeHandle['adminGroups'] = op => {
