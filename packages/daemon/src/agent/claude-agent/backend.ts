@@ -387,7 +387,14 @@ export class ClaudeAgentBackend implements AgentBackend {
     try {
       const sdk = await this.sdkLoader();
       const messages = await sdk.getSessionMessages(sessionId, { dir: cwd });
-      return foldSessionMessages(messages, maxTurns, cwd);
+      const history = foldSessionMessages(messages, maxTurns, cwd);
+      try {
+        const name = await this.readSessionTitle(cwd, sessionId);
+        return { ...history, ...(name ? { name } : {}) };
+      } catch (err) {
+        log.fail('agent', err, { backend: 'claude-agent', phase: 'getSessionInfo', sessionId });
+        return history;
+      }
     } catch (err) {
       log.fail('agent', err, { backend: 'claude-agent', phase: 'getSessionMessages', sessionId });
       return { turns: [], totalTurns: 0 };
