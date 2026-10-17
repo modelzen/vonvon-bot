@@ -1,12 +1,13 @@
 import { CODEX_INSTALL_VERSION } from './managed-install';
 
 /**
- * Oldest Codex whose behaviour vonvon depends on and has run against: `turn/interrupt`
- * ending in `turn/completed(interrupted)` (watchdog.ts), goal auto-start and goal statuses
- * (backend.ts, types.ts). Every app-server method vonvon calls exists from 0.131.0, but
- * nothing below 0.139.0 was run. e05 and s39 raise this later (v1-plan).
+ * Oldest Codex vonvon supports. e05: with a ChatGPT login the server refused every model tried on
+ * 0.139.0 and gpt-6-luna on 0.148.0; 0.156.1 passed everything, including the smart-mode judge
+ * (s23b). The server's line keeps moving up, so a newer Codex can still be refused: a turn with
+ * "requires a newer version" is `version` (s19); a judgement "not supported when using Codex with
+ * a ChatGPT account" is `version` below this line and `model` above it (judge-process.ts).
  */
-export const CODEX_MIN_VERSION = '0.139.0';
+export const CODEX_MIN_VERSION = '0.156.1';
 /** The version vonvon was tested on; the managed install pins the same one. */
 export const CODEX_VERIFIED_VERSION = CODEX_INSTALL_VERSION;
 

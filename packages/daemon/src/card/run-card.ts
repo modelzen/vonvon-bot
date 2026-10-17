@@ -422,6 +422,8 @@ export interface QueuedCardState {
   cardKey?: string;
   /** ⏹ tapped while waiting — terminal「已取消排队」layout. */
   cancelled?: boolean;
+  /** With {@link cancelled}: the bot stopped, nobody cancelled; it says so once back (s18c). */
+  stopped?: boolean;
   /** follow-up messages queued behind the cancelled run (told, not swallowed). */
   dropped?: number;
   /** goal runs only: slot granted — the goal's own (lazily created) run cards
@@ -442,9 +444,9 @@ export interface QueuedCardState {
  */
 export function buildQueuedCard(qc: QueuedCardState): CardObject {
   if (qc.cancelled) {
-    const els: CardElement[] = [...voiceReplyElements(qc.voiceMessages), noteMd('_⏹ 已取消排队_')];
+    const els: CardElement[] = [...voiceReplyElements(qc.voiceMessages), noteMd(qc.stopped ? '_⏹ bot 停止运行了，这一轮没开始_' : '_⏹ 已取消排队_')];
     if (qc.dropped) els.push(noteMd(`_⚠️ ${qc.dropped} 条排队消息已丢弃，请重发。_`));
-    return card(els, { summary: '已取消排队' });
+    return card(els, { summary: qc.stopped ? 'bot 停止运行了' : '已取消排队' });
   }
   if (qc.started) return card([noteMd('_🎯 排队结束，目标已开始执行_')], { summary: '已开始执行' });
   const els: CardElement[] = [

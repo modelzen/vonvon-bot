@@ -59,6 +59,16 @@ it('lists a bot\'s not-replied messages newest first, with the group, place, sen
   expect(html).toContain('Codex 可用 · 0.156.1（1 个群）');
 });
 
+it('lists a group\'s queued messages a restart dropped as one record with their count (s18c)', () => {
+  const html = render([{...agent, diagnostics: {deniedScopes: [], notReplied: [record({reason: 'restarted', place: 'topic', count: 3})]}}]);
+  expect(html).toContain('重启或停止时这条还在排队，没处理');
+  expect(html).toContain('3 次');
+  expect(html).toContain('已在原处回了一句请重发。');
+  expect(html).toContain('3 条没回');
+  expect(render([{...agent, diagnostics: {deniedScopes: [], notReplied: [record({reason: 'restarted', detail: '最新那条撤回了'})]}}]))
+    .toContain('在原处回一句请重发没成功（最新那条撤回了），请告诉发消息的人重发。');
+});
+
 it('gives the full-only fix command, with --bot only when the host has several bots', () => {
   const refused = {...agent, diagnostics: {deniedScopes: [], notReplied: [record({reason: 'tier-unavailable', backend: 'codex'})]}};
   const one = render([refused]);
