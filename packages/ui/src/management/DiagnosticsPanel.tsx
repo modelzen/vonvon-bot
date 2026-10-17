@@ -28,6 +28,7 @@ const TOOL_NAMES: Record<string, string> = {'codex-appserver': 'Codex', 'claude-
 /** 连接: the checklist's 长连接 step, plus a paused bot or daemon, a child that is down or a switch waiting for a restart. */
 function connectionView(agent: Agent, hostPaused: boolean): Pick<SetupStep, 'status' | 'tone' | 'detail'> {
   if (agent.enabled && agent.paused) return {status: '已暂停', tone: 'danger', detail: `10 分钟内崩溃了 ${agent.paused.crashes} 次，见上面的红条。`};
+  if (agent.enabled && agent.lockHeld) return {status: '等待占用的进程退出', tone: 'warning', detail: `另一个进程${agent.lockHeld.pid ? `（PID ${agent.lockHeld.pid}）` : ''}占着这个 bot；它退出后会自动接上。`};
   if (!agent.readError && agent.enabled && !agent.running) return {status: '没在运行', tone: 'warning', detail: hostPaused ? 'daemon 已暂停，见上面的红条。' : '可能正在崩溃重启，或者要重启 daemon 才生效；一直这样时看下面的日志。'};
   if (!agent.readError && !agent.enabled && agent.running) return {status: '待生效', tone: 'neutral', detail: '停用要重启 daemon 后才生效。'};
   if (agent.enabled && agent.connection === 'reconnecting') return {status: '重连中', tone: 'neutral'};

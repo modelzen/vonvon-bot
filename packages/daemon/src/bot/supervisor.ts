@@ -19,7 +19,7 @@ import {
   listCrashRecords, pruneCrashRecords, readBotPauses, sanitizeReason, stderrReason, systemClock, writeBotPausesSync, writeCrashRecordSync, type BotPauseState, type CrashRecord,
 } from '../host/crash-store';
 import { botLabel, createCrashNotifier, type CrashNotifier, type HostNotice } from '../host/crash-notify';
-import { crashText, type CrashKind, type CrashPause } from '@vonvon/protocol';
+import { crashText, type CrashKind, type CrashPause, type LockHeld } from '@vonvon/protocol';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 
@@ -38,6 +38,9 @@ const BACKOFF_MAX_MS = 30_000;
 const HEALTHY_UPTIME_MS = 60_000;
 /** A failed write of `crash/bot-pauses.json` is tried again this often, besides at each exit and spawn (s18a). */
 const PAUSES_RETRY_MS = 30_000;
+const LOCK_RETRY_MS = 5_000;
+const LOCK_WARN_MS = 120_000;
+const LOCK_SLOW_MS = 30_000;
 
 interface Child {
   bot: BotEntry;
@@ -57,6 +60,7 @@ interface Child {
   resumedUptimeMs?: number;
   prunedAt?: number;
   spawnRecordedAt?: number;
+  lockWait?: { since: number; reported?: LockHeld };
 }
 
 /** The host's run and chain, under which the children's records go, and its own pause (s18a); what its start knows of
@@ -72,7 +76,7 @@ const STATUS_IPC_TIMEOUT_MS = 2_000;
 const STDERR_TAIL_LINES = 64;
 export const HOST_PAUSED_ACTIVATION = 'daemon 已暂停（10 分钟内崩溃了 3 次），这个 bot 恢复运行后才会启动。运行 vonvon daemon restart 恢复。';
 
-export async function runSupervisor(bots: BotEntry[], options: { control?: ShutdownControl; managed?: boolean; port?: number; onListening?: (listen: string) => Promise<void>; paused?: boolean; crash?: SupervisorCrash; notifier?: CrashNotifier; registryUnreadable?: boolean } = {}): Promise<void> {
+export async function runSupervisor(bots: BotEntry[], options: { control?: ShutdownControl; managed?: boolean; port?: number; onListening?: (listen: string) => Promise<void>; paused?: boolean; crash?: SupervisorCrash; notifier?: CrashNotifier; registryUnreadable?: boolean; timing?: { lockRetryMs?: number; lockWarnMs?: number; lockSlowMs?: number } } = {}): Promise<void> {
   const control = options.control ?? observeShutdown();
   const supervisorStartedAt = Date.now();
   const cliEntry = process.argv[1];
@@ -87,6 +91,9 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   const clock = systemClock;
   const version = bridgeVersion().slice(0, 40) || '0.0.0';
   const managed = process.env.VONVON_SERVICE?.slice(0, 20) || null;
+  const lockRetryMs = options.timing?.lockRetryMs ?? LOCK_RETRY_MS;
+  const lockWarnMs = options.timing?.lockWarnMs ?? LOCK_WARN_MS;
+  const lockSlowMs = options.timing?.lockSlowMs ?? LOCK_SLOW_MS;
   // Same chain after a host crash: a paused bot stays paused. A new chain (restart, stop and start) starts them all, and
   // so does a damaged file, logged like a damaged run.json.
   const saved = readBotPauses(root, chainId, () => log.warn('daemon-crash', 'bot_pauses_corrupt', {}));
@@ -232,6 +239,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
    * a missing or unrunnable executable (ENOENT, EACCES) counts toward the pause. */
   const spawnFailed = (c: Child, error: unknown): void => {
     if (shuttingDown || !c.enabled || c.stopping) return;
+    c.lockWait = undefined;
     const code = String((error as NodeJS.ErrnoException | undefined)?.code ?? (error instanceof Error ? error.message : error));
     if (Date.now() - (c.spawnRecordedAt ?? 0) >= 60_000) { c.spawnRecordedAt = Date.now(); recordCrash(c, 'fatal', `spawn ${code}`, process.pid); }
     if (code === 'ENOENT' || code === 'EACCES') {
@@ -277,7 +285,10 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
       if (c.proc !== proc) return;
       const parsed = ownedWorkSchema.safeParse(message);
       if (parsed.success && !owned.report?.settled) owned.report = parsed.data;
-      if (message && typeof message === 'object' && 'fcb' in message && message.fcb === 'fcb.connection') api?.invalidate();
+      if (message && typeof message === 'object' && 'fcb' in message && message.fcb === 'fcb.connection') {
+        c.lockWait = undefined;
+        api?.invalidate();
+      }
       const event = parseDiagnosticsIpc(message);
       if (event) diagnostics.accept(c.bot.appId, event);
     });
@@ -304,11 +315,30 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
       const exited = `机器人「${c.bot.name}」进程已退出（等待自动重启）`;
       if (shuttingDown || !c.enabled || c.stopping) { ipc.rejectAll(exited); return; }
       retryPauses();
+      if (code === BOT_LOCK_BUSY_EXIT) {
+        ipc.rejectAll(exited);
+        const waiting = c.lockWait ??= { since: Date.now() };
+        const waited = Date.now() - waiting.since;
+        if (waited >= lockWarnMs) {
+          const holder = tryDisk(c, 'lock-holder', undefined, () => readSingleInstanceHolder(c.bot.appId, botPaths(c.bot.appId).processesFile));
+          if (!waiting.reported || (holder && holder.pid !== waiting.reported.pid)) {
+            waiting.reported = { since: waiting.since, ...(holder ? { pid: holder.pid } : {}) };
+            log.warn('supervisor', 'lock-held', { bot: c.bot.name, appId: c.bot.appId, holderPid: holder?.pid ?? null, waitedMs: waited });
+            console.error(`[${c.bot.name}] 另一个进程${holder ? `（PID ${holder.pid}）` : ''}占着这个 bot；它退出后会自动接上。`);
+            api?.invalidate();
+          }
+        }
+        const wait = waited >= lockWarnMs ? lockSlowMs : lockRetryMs;
+        log.info('supervisor', 'lock-busy', { bot: c.bot.name, retryInMs: wait });
+        c.restartTimer = setTimeout(() => spawnChild(c), wait);
+        return;
+      }
+      c.lockWait = undefined;
       // Reset backoff if it had been healthy a while; otherwise grow it.
       const uptime = Date.now() - c.startedAt;
       if (uptime >= HEALTHY_UPTIME_MS) c.backoffMs = BACKOFF_MIN_MS;
-      // 0 (an exit nobody asked for) and 75 (the lock still held by the child before it, s18 D2) are not crashes.
-      if (code !== 0 && code !== BOT_LOCK_BUSY_EXIT) {
+      // 0 (an exit nobody asked for) is not a crash.
+      if (code !== 0) {
         const pid = proc.pid ?? process.pid;
         const key = crashScopeKey('bot', c.bot.appId);
         let entry: CrashRecord | undefined;
@@ -366,13 +396,14 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
       port: options.port,
       control,
       diagnostics,
-      crashes: { application: now => ({ ...(hostPause ? { paused: hostPause } : {}), records: records(now) }), paused: appId => children.get(appId)?.pause },
+      crashes: { application: now => ({ ...(hostPause ? { paused: hostPause } : {}), records: records(now) }), paused: appId => children.get(appId)?.pause, lockHeld: appId => children.get(appId)?.lockWait?.reported },
       service: createAdminService({
         applyBotActivation: async (appId, enabled) => {
           if (shuttingDown) throw new Error('Host 正在退出。');
           let child = children.get(appId);
           if (child) {
             child.enabled = enabled;
+            child.lockWait = undefined;
             if (child.restartTimer) clearTimeout(child.restartTimer);
             child.restartTimer = undefined;
           }
