@@ -67,7 +67,7 @@ function harness() {
     service: vi.fn(async (_action: 'install' | 'start' | 'stop' | 'uninstall', _previous?: AttachedDaemon['identity'] | null) => ({ type: 'done' as const, message: 'service updated' })),
     setLoginItem: vi.fn(async (_enabled: boolean, _previous?: AttachedDaemon['identity'] | null) => {}),
     isExpectedDisconnect: vi.fn(() => false),
-    followServiceHelper: vi.fn((_lost: AttachedDaemon['identity']) => false),
+    recoverConnection: vi.fn((_lost: AttachedDaemon['identity']) => false),
     repairCli: vi.fn(async () => ({ type: 'done' as const, message: 'installed' })),
     observeCli: vi.fn(async () => ({ kind: 'error' as const, message: 'not registered' })),
     chooseExecutablePath: vi.fn(async (): Promise<string | null> => '/usr/local/bin/codex'),
@@ -205,12 +205,12 @@ describe('desktop IPC boundary', () => {
   it('hands a drop during a helper started elsewhere to the shell instead of reporting it', async () => {
     const h = harness();
     await h.invoke(desktopChannels.subscribe);
-    h.actions.followServiceHelper.mockReturnValue(true);
+    h.actions.recoverConnection.mockReturnValue(true);
     h.emitError(new ConnectionError('drained by the web UI\'s helper'));
-    expect(h.actions.followServiceHelper).toHaveBeenCalledExactlyOnceWith(h.owner.identity);
+    expect(h.actions.recoverConnection).toHaveBeenCalledExactlyOnceWith(h.owner.identity);
     expect(h.actions.connectionLost).not.toHaveBeenCalled();
     expect(h.webContents.send).not.toHaveBeenCalled();
-    h.actions.followServiceHelper.mockReturnValue(false);
+    h.actions.recoverConnection.mockReturnValue(false);
     h.emitError(new ConnectionError('daemon crashed'));
     expect(h.actions.connectionLost).toHaveBeenCalledOnce();
     await h.bridge.dispose();
@@ -497,5 +497,53 @@ it('asks the current owner to read the service again after a switch, even a fail
   expect(await h.invoke(desktopChannels.service, { type: 'service', action: 'uninstall' })).toMatchObject({ ok: false });
   expect(next.client.machine).toHaveBeenCalledTimes(3);
   expect(h.webContents.send.mock.calls.map(call => call[1].type)).toEqual(['reattached', 'snapshot']);
+  await h.bridge.dispose();
+});
+
+
+it('delivers fresh snapshots through the facade across three replacements, including daemon pause', async () => {
+  const h = harness();
+  const initial = {
+    revision: 10, observedAt: 1, stale: false, host: { kind: 'starting' },
+    agents: [], groups: [], memberships: [], tools: [], jobs: [],
+    application: { platform: 'macos', version: '1', loginItem: false, dataPath: fixtureRoot },
+  };
+  h.snapshot.mockResolvedValue(initial);
+  let receive: (event: unknown) => void = () => {};
+  h.webContents.send.mockImplementation((_channel, event) => receive(event));
+  const { client } = createDesktopFacades({
+    invoke: (channel, ...args) => h.invoke(channel, ...args),
+    receive: listener => { receive = listener; return () => {}; },
+  });
+  const seen: Array<Awaited<ReturnType<VonvonClient['snapshot']>>> = [];
+  const off = client.watchSnapshots(value => seen.push(value));
+  await vi.waitFor(() => expect(seen).toHaveLength(1));
+  for (let crash = 1; crash <= 3; crash++) {
+    const snapshot = { ...initial, revision: 1, observedAt: crash + 1,
+      application: { ...initial.application, crashes: {
+        records: [], ...(crash === 3 ? { paused: { since: 3, crashes: 3 } } : {}),
+      } },
+    };
+    const next = candidate(async () => snapshot);
+    await h.bridge.replaceOwner(next.owner);
+    expect(seen.at(-1)).toEqual(snapshot);
+  }
+  expect(seen).toHaveLength(4);
+  expect(seen.at(-1)?.application.crashes?.paused).toEqual({ since: 3, crashes: 3 });
+  off();
+  await h.bridge.dispose();
+});
+
+
+it.each(['rejected', 'resolved'] as const)('rejects an observed candidate connection loss even with a %s first snapshot', async state => {
+  const h = harness();
+  const next = candidate(async () => {
+    if (state === 'rejected') throw new Error('Daemon connection closed');
+    return { revision: 1 };
+  });
+  const loss = new ConnectionError('candidate crashed before binding');
+  next.owner.client.onError = listener => { listener(loss); return () => {}; };
+  await expect(h.bridge.replaceOwner(next.owner)).rejects.toBe(loss);
+  expect(next.dispose).toHaveBeenCalledOnce();
   await h.bridge.dispose();
 });
