@@ -30,7 +30,7 @@ describe('dropped.json', () => {
     expect(recordDroppedSync(file, [origin('a', 'a1', 100), origin('a', 'a2', 300, { replyInThread: false, place: 'main' }), origin('b', 'b1', 200)], NOW)).toBe(2);
     expect(recordDroppedSync(file, [origin('a', 'a3', 250)], NOW + 5000)).toBe(1);
     expect(onDisk()).toEqual({ v: 1, entries: [
-      { chatId: 'oc_a', messageId: 'om_a2', at: 300, replyInThread: false, place: 'main', count: 3, droppedAt: NOW + 5000 },
+      { chatId: 'oc_a', messageId: 'om_a2', at: 300, replyInThread: false, place: 'main', count: 3, droppedAt: NOW + 5000, revision: 2 },
       { chatId: 'oc_b', messageId: 'om_b1', at: 200, replyInThread: true, place: 'topic', count: 1, droppedAt: NOW },
     ] });
   });
@@ -61,7 +61,7 @@ describe('dropped.json', () => {
     settleDroppedSync(file, { chatId: 'oc_a', messageId: 'om_a1' }); // merged into om_a2 meanwhile: kept
     settleDroppedSync(file, { chatId: 'oc_b', messageId: 'om_b1' });
     expect(readDropped(file, NOW).entries.map(entry => [entry.messageId, entry.count])).toEqual([['om_a2', 2]]);
-    settleDroppedSync(file, { chatId: 'oc_a', messageId: 'om_a2' });
+    settleDroppedSync(file, readDropped(file, NOW).entries[0]!);
     expect(existsSync(file)).toBe(false);
     // The last is well-formed but past 64 KB (JSON.parse takes trailing blanks): the size alone turns it away.
     const oversize = JSON.stringify({ v: 1, entries: [{ ...origin('a', 'a1', 1), count: 1, droppedAt: NOW }] }) + ' '.repeat(70_000);
@@ -145,6 +145,36 @@ describe('the replies, one group after another', () => {
     return { replies: createDroppedReplies({ appId: 'cli_app', file: at, reply, report, log }), log, report };
   };
   const http503 = () => Object.assign(new Error('Request failed with status code 503'), { isAxiosError: true, response: { status: 503, data: '<html>' } });
+
+  it.each(['success', 'refusal'])('keeps an older message merged during an in-flight reply (%s), with a new uuid', async result => {
+    vi.useFakeTimers({ now: NOW });
+    recordDroppedSync(file, [origin('a', 'latest', NOW)], NOW);
+    let finish!: () => void;
+    let refuse!: (error: Error) => void;
+    const oldReply = vi.fn((_entry: DroppedEntry, _text: string, _uuid: string) => new Promise<void>((resolve, reject) => {
+      finish = resolve;
+      refuse = reject;
+    }));
+    const first = start(oldReply);
+    first.replies.start();
+    await vi.advanceTimersByTimeAsync(0);
+    first.replies.saveSync([origin('a', 'delayed', NOW - 1000)], 'shutdown');
+    if (result === 'success') finish();
+    else refuse(Object.assign(new Error('refused'), { code: 230001, msg: 'refused' }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(readDropped(file, NOW).entries).toEqual([
+      expect.objectContaining({ messageId: 'om_latest', count: 2 }),
+    ]);
+    const newReply = vi.fn(async (_entry: DroppedEntry, _text: string, _uuid: string) => undefined);
+    const second = start(newReply);
+    second.replies.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(newReply).toHaveBeenCalledOnce();
+    expect(newReply.mock.calls[0]![1]).toContain('另外 1 条');
+    expect(newReply.mock.calls[0]![2]).not.toBe(oldReply.mock.calls[0]![2]);
+    expect(second.report).toHaveBeenCalledWith(expect.objectContaining({ count: 2 }), 2);
+    expect(existsSync(file)).toBe(false);
+  });
 
   it('⑪ gives a reply 10 seconds: the next group goes on, and the first is sent again a minute later under the same uuid', async () => {
     vi.useFakeTimers({ now: NOW });

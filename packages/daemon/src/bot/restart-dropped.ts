@@ -15,7 +15,7 @@ import { deniedScopeName, errorDetail } from './diagnostics';
 /** Where a dropped message was: the reply goes under it, in its topic when it was in one. */
 export type DroppedOrigin = { chatId: string; messageId: string; at: number; replyInThread: boolean; place: 'main' | 'topic' };
 /** A group's entry: the newest dropped message, how many were dropped there, and when the last of them was. */
-export type DroppedEntry = DroppedOrigin & { count: number; droppedAt: number };
+export type DroppedEntry = z.infer<typeof entrySchema>;
 
 /** Older than this, the sender has most likely moved on: no reply, the entry goes. */
 export const DROPPED_MAX_AGE_MS = 24 * 60 * 60_000;
@@ -35,6 +35,7 @@ const entrySchema = z.object({
   chatId: z.string().regex(/^oc_[A-Za-z0-9_-]{1,61}$/), messageId: z.string().regex(/^om_[A-Za-z0-9_-]{1,61}$/),
   at: z.number().finite().nonnegative(), replyInThread: z.boolean(), place: z.enum(['main', 'topic']),
   count: z.number().int().min(1).max(DROPPED_MAX_COUNT), droppedAt: z.number().finite().nonnegative(),
+  revision: z.number().int().nonnegative().optional(),
 }).strict();
 const fileSchema = z.object({ v: z.literal(1), entries: z.array(z.unknown()) }).strict();
 
@@ -81,7 +82,7 @@ export function recordDroppedSync(file: string, items: readonly DroppedOrigin[],
     const had = groups.get(entry.chatId);
     if (!had) { groups.set(entry.chatId, entry); continue; }
     const newer = entry.at >= had.at ? entry : had;
-    groups.set(entry.chatId, { ...newer, count: Math.min(DROPPED_MAX_COUNT, had.count + entry.count), droppedAt: Math.max(had.droppedAt, entry.droppedAt) });
+    groups.set(entry.chatId, { ...newer, count: Math.min(DROPPED_MAX_COUNT, had.count + entry.count), droppedAt: Math.max(had.droppedAt, entry.droppedAt), revision: (had.revision ?? 0) + 1 });
   }
   const kept = [...groups.values()].sort((a, b) => b.droppedAt - a.droppedAt || b.at - a.at).slice(0, DROPPED_MAX_GROUPS);
   write(file, kept);
@@ -100,11 +101,11 @@ export function readDropped(file: string, now: number, onCorrupt?: () => void): 
   return { entries, stale };
 }
 
-/** A group is done with: its entry leaves the file, unless a later shutdown merged a newer message into it. */
-export function settleDroppedSync(file: string, settled: Pick<DroppedEntry, 'chatId' | 'messageId'>): void {
+/** A reply settles only its snapshot: a later shutdown may merge even an older message into the same group. */
+export function settleDroppedSync(file: string, settled: Pick<DroppedEntry, 'chatId' | 'messageId' | 'revision'>): void {
   const loaded = load(file);
   if (typeof loaded !== 'object') return;
-  const kept = loaded.entries.filter(entry => entry.chatId !== settled.chatId || entry.messageId !== settled.messageId);
+  const kept = loaded.entries.filter(entry => entry.chatId !== settled.chatId || entry.messageId !== settled.messageId || (entry.revision ?? 0) !== (settled.revision ?? 0));
   if (kept.length !== loaded.entries.length) write(file, kept);
 }
 
@@ -114,10 +115,12 @@ export function droppedText(count: number, sinceMs: number): string {
   return count === 1 ? `${head}，这条没处理，请再发一次。` : `${head}，这条和这个群里另外 ${count - 1} 条都没处理，请再发一次。`;
 }
 
-/** Fixed by the message, never random: a retry here or a resend by the next process is the same request, and Feishu
+/** Fixed by the message and snapshot revision: retries, including in the next process, use the same uuid; a merge
+ * uses a new one even if the newest message stays the same. Feishu
  * answers one uuid once within an hour (verified 2026-10-16 on the reply API: the same message_id twice). 43 of 50. */
-export function droppedUuid(appId: string, entry: Pick<DroppedEntry, 'chatId' | 'messageId'>): string {
-  return `vd-${createHash('sha256').update(`${appId}\n${entry.chatId}\n${entry.messageId}`).digest('hex').slice(0, 40)}`;
+export function droppedUuid(appId: string, entry: Pick<DroppedEntry, 'chatId' | 'messageId' | 'revision'>): string {
+  const key = `${appId}\n${entry.chatId}\n${entry.messageId}${entry.revision ? `\n${entry.revision}` : ''}`;
+  return `vd-${createHash('sha256').update(key).digest('hex').slice(0, 40)}`;
 }
 
 /** No answer within the limit; the request may still have gone through. */

@@ -171,7 +171,7 @@ describe('a shutdown keeps what it drops (s18c)', () => {
     await o.onMessage(third); await queued(2);
     const closing = o.shutdown();
     // Written in shutdown()'s own synchronous step, before the queue is cleared.
-    expect(entries()).toEqual([{ chatId: 'oc_group_a', messageId: third.messageId, at: third.createTime, replyInThread: false, place: 'main', count: 2, droppedAt: expect.any(Number) }]);
+    expect(entries()).toEqual([{ chatId: 'oc_group_a', messageId: third.messageId, at: third.createTime, replyInThread: false, place: 'main', count: 2, droppedAt: expect.any(Number), revision: 1 }]);
     expect(fake.log.info).toHaveBeenCalledWith('bridge', 'dropped-recorded', { groups: 1, messages: 2, why: 'shutdown' });
     await closing;
   });
@@ -384,7 +384,7 @@ describe('once back, each group hears once (s18c)', () => {
     const calls = fake.reply.mock.calls.map(call => call[0] as { path: { message_id: string }; data: { msg_type: string; content: string; reply_in_thread: boolean; uuid: string } });
     expect(calls.find(call => call.path.message_id === 'om_a2_abcdef')?.data).toEqual({
       msg_type: 'text', content: JSON.stringify({ text: '刚才重启了，这条和这个群里另外 1 条都没处理，请再发一次。' }), reply_in_thread: false,
-      uuid: dropped.droppedUuid(APP, { chatId: 'oc_group_a', messageId: 'om_a2_abcdef' }),
+      uuid: dropped.droppedUuid(APP, { chatId: 'oc_group_a', messageId: 'om_a2_abcdef', revision: 1 }),
     });
     expect(calls.find(call => call.path.message_id === 'om_b1_123456')?.data).toMatchObject({ content: JSON.stringify({ text: '刚才重启了，这条没处理，请再发一次。' }), reply_in_thread: true });
     expect(notReplied()).toEqual(expect.arrayContaining([
