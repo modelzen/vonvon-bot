@@ -1,6 +1,7 @@
 import { mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
+import { z } from 'zod';
 import { paths } from '../config/paths';
 import { acquireMutex, closeMutex } from '../config/data-access';
 import type { PermissionMode, ReasoningEffort } from '../agent/types';
@@ -160,6 +161,34 @@ interface StoreFile {
 }
 
 const FILE_VERSION = 1;
+const operationId = z.string().regex(/^[\w-]{16,80}$/);
+const creationEvidenceSchema = z.object({
+  creationRemovals: z.array(operationId).max(4096).optional(),
+  projects: z.array(z.object({ chatId: z.string().optional(), creationRequestId: operationId.optional(),
+    creationRequestSignature: z.string().optional() })).optional(),
+});
+function creationEvidence(stored: unknown) {
+  const parsed = creationEvidenceSchema.parse(stored);
+  const removed = parsed.creationRemovals ?? [], live = new Set<string>();
+  if (new Set(removed).size !== removed.length) throw new Error('Duplicate creation removal evidence');
+  for (const row of parsed.projects ?? []) {
+    if (row.creationRequestId === undefined) {
+      if (row.creationRequestSignature !== undefined) throw new Error('Missing creation operation identity');
+      continue;
+    }
+    if (!row.chatId || live.has(row.creationRequestId) || removed.includes(row.creationRequestId)) throw new Error('Conflicting creation operation evidence');
+    live.add(row.creationRequestId);
+  }
+  return { removed, projects: parsed.projects ?? [], live };
+}
+
+function projectsFromStored(stored: unknown): Project[] {
+  const parsed = stored as Partial<StoreFile>;
+  if (!parsed || !Array.isArray(parsed.projects) || parsed.projects.some(p => !p || typeof p !== 'object' || typeof p.name !== 'string' || typeof p.cwd !== 'string')) throw new Error('项目注册表格式无效');
+  creationEvidence(stored);
+  for (const project of parsed.projects) parseDirectorySettings(project.directories);
+  return parsed.projects.map(foldGuestTier);
+}
 
 async function read(file = paths.projectsFile): Promise<Project[]> {
   return listProjectsIn(file);
@@ -170,11 +199,7 @@ async function read(file = paths.projectsFile): Promise<Project[]> {
  * 视为空注册表（与当前 bot 路径同语义）。 */
 export async function listProjectsIn(file: string): Promise<Project[]> {
   try {
-    const text = await readFile(file, 'utf8');
-    const parsed = JSON.parse(text) as Partial<StoreFile>;
-    if (!parsed || !Array.isArray(parsed.projects) || parsed.projects.some(p => !p || typeof p !== 'object' || typeof p.name !== 'string' || typeof p.cwd !== 'string')) throw new Error('项目注册表格式无效');
-    for (const project of parsed.projects) parseDirectorySettings(project.directories);
-    return parsed.projects.map(foldGuestTier);
+    return projectsFromStored(JSON.parse(await readFile(file, 'utf8')));
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw err;
@@ -240,7 +265,14 @@ function ownProjects<T>(operation: (location: RegistryLocation) => Promise<T>, t
 
 /** projects.json as stored, `{}` when missing. */
 async function readStored(file: string): Promise<Record<string, unknown>> {
-  return readFile(file, 'utf8').then(text => JSON.parse(text)).catch(error => { if (error.code === 'ENOENT') return {}; throw error; });
+  const stored = await readFile(file, 'utf8').then(text => {
+    const value = z.record(z.string(), z.unknown()).parse(JSON.parse(text));
+    projectsFromStored(value);
+    return value;
+  })
+    .catch(error => { if (error.code === 'ENOENT') return {}; throw error; });
+  creationEvidence(stored);
+  return stored;
 }
 
 type DirectoryRow = Pick<Project, 'name' | 'cwd'> & Record<string, unknown>;
@@ -260,7 +292,19 @@ function directoryRows(raw: unknown): DirectoryRow[] {
 
 async function writeStored(location: RegistryLocation, body: Record<string, unknown>, previous: Record<string, unknown>): Promise<void> {
   // Both callers own detached rows and a separate previous disk snapshot.
-  const next = body;
+  const oldEvidence = creationEvidence(previous), nextEvidence = creationEvidence(body);
+  if (JSON.stringify(oldEvidence.removed) !== JSON.stringify(nextEvidence.removed)) throw new Error('Creation removal evidence cannot be changed');
+  for (const old of oldEvidence.projects) {
+    const sameChat = nextEvidence.projects.find(row => row.chatId === old.chatId);
+    const sameId = old.creationRequestId === undefined ? undefined : nextEvidence.projects.find(row => row.creationRequestId === old.creationRequestId);
+    if ((sameChat && (sameChat.creationRequestId !== old.creationRequestId || sameChat.creationRequestSignature !== old.creationRequestSignature))
+      || (sameId && (sameId.chatId !== old.chatId || sameId.creationRequestSignature !== old.creationRequestSignature))) throw new Error('Creation operation identity cannot be changed');
+  }
+  const removed = [...oldEvidence.removed, ...oldEvidence.projects.flatMap(row =>
+    row.creationRequestId !== undefined && !nextEvidence.live.has(row.creationRequestId) ? [row.creationRequestId] : [])];
+  if (removed.length > 4096) throw new Error('Creation removal limit reached; retained evidence was not removed');
+  const next = removed.length || body.creationRemovals !== undefined ? { ...body, creationRemovals: removed } : body;
+  creationEvidence(next);
   const oldProjects = directoryRows(previous.projects);
   const nextProjects = directoryRows(next.projects);
   for (const row of nextProjects) {
@@ -343,6 +387,38 @@ export async function addProject(input: Project, target?: RegistryLocation): Pro
     }
     projects.push(p);
     await write(location, projects);
+  }, target);
+}
+
+type CreationLookup = { kind: 'retired' } | { kind: 'absent' } | { kind: 'existing'; project: Project };
+/** Call after account/operator authorization. Reads one atomic registry image. */
+export async function getCreationProject(requestId: string, target: RegistryLocation): Promise<CreationLookup> {
+  const stored = await readStored(target.file), evidence = creationEvidence(stored);
+  if (evidence.removed.includes(requestId)) return { kind: 'retired' };
+  const project = (stored.projects === undefined ? [] : projectsFromStored(stored)).find(row => row.creationRequestId === requestId);
+  return project ? { kind: 'existing', project } : { kind: 'absent' };
+}
+
+/** Local filesystem preparation only, after checking terminal deletion evidence.
+ * Completed replay returns current settings without checking the old cwd. */
+export function publishCreatedProject(input: { requestId: string; signature: string; name: string; chatId: string },
+  prepareNew: () => Promise<Omit<Project, 'name' | 'chatId' | 'creationRequestId' | 'creationRequestSignature'>>,
+  target: RegistryLocation): Promise<{ kind: 'removed' } | { kind: 'published' | 'existing'; project: Project }> {
+  const captured = { ...input };
+  return ownProjects(async location => {
+    const stored = await readStored(location.file);
+    if (creationEvidence(stored).removed.includes(captured.requestId)) return { kind: 'removed' };
+    const projects = stored.projects === undefined ? [] : projectsFromStored(stored);
+    const existing = projects.find(row => row.creationRequestId === captured.requestId);
+    if (existing) {
+      if (existing.creationRequestSignature !== captured.signature || existing.chatId !== captured.chatId) throw new Error('Creation operation input conflict');
+      return { kind: 'existing', project: existing };
+    }
+    if (projects.some(row => row.name === captured.name || row.chatId === captured.chatId)) throw new Error('项目名称或群已绑定');
+    const project: Project = { ...await prepareNew(), name: captured.name, chatId: captured.chatId,
+      creationRequestId: captured.requestId, creationRequestSignature: captured.signature };
+    projects.push(project);
+    return { kind: 'published', project: await write(location, projects, project) };
   }, target);
 }
 

@@ -17,7 +17,7 @@ beforeAll(async () => {
   scratch = await realpath(await mkdtemp(join(tmpdir(), 'project-writers-')));
   bundle = join(scratch, 'registry.cjs');
   const actual = fileURLToPath(new URL('../src/config/data-access.ts', import.meta.url));
-  await build({ stdin: { contents: `export * from './src/project/registry';export {useBotDir} from './src/config/paths';`,
+  await build({ stdin: { contents: `export * from './src/project/registry';export * from './src/project/creation-journal';export {useBotDir} from './src/config/paths';`,
     resolveDir: fileURLToPath(new URL('..', import.meta.url)) }, outfile: bundle,
     bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent', plugins: [{ name: 'observe-real-mutex', setup(api) {
       api.onResolve({ filter: /\/data-access$/ }, () => ({ path: 'mutex-observer', namespace: 'fixture' }));
@@ -38,16 +38,19 @@ afterAll(async () => {
 async function home(): Promise<string> { return mkdtemp(join(scratch, 'data-')); }
 const project = (name: string, cwd = '/legacy-cwd') => ({ name, chatId: `fixture-${name}`, cwd, blank: true, createdAt: 1 });
 const add = (name: string) => `await m.addProject(${JSON.stringify(project(name))});`;
-function actor(root: string, name: string, code: string, options: { hold?: boolean; shortWait?: boolean; failRelease?: boolean; renameFailure?: boolean } = {}) {
+function actor(root: string, name: string, code: string, options: { hold?: boolean; shortWait?: boolean; failRelease?: boolean; renameFailure?: boolean; journalFailure?: 'before' | 'after' } = {}) {
   const setup = `const fs=require('node:fs/promises');const probe=(event,file)=>process.send({event,file,actor:process.env.ACTOR,time:performance.now()});
     const read=fs.readFile,write=fs.writeFile,rename=fs.rename;
     fs.readFile=async(p,...args)=>{if(String(p).endsWith('/projects.json'))probe('read-start',String(p));try{const result=await read(p,...args);if(String(p).endsWith('/projects.json'))probe('read-done',String(p));return result}catch(error){if(String(p).endsWith('/projects.json'))probe('read-failed',String(p));throw error}};
     fs.writeFile=async(p,...args)=>{const result=await write(p,...args);if(String(p).includes('projects.json.tmp-'))probe('temp-written',String(p));return result};
-    fs.rename=async(a,b)=>{if(String(b).endsWith('/projects.json')){probe('rename',String(b));if(process.env.HOLD_RENAME)await new Promise(resolve=>process.once('message',resolve));if(process.env.FAIL_RENAME)throw Error('rename-failure');}return rename(a,b)};
+    fs.rename=async(a,b)=>{if(String(b).endsWith('/projects.json')){probe('rename',String(b));if(process.env.HOLD_RENAME)await new Promise(resolve=>process.once('message',resolve));if(process.env.FAIL_RENAME)throw Error('rename-failure');}
+      if(process.env.JOURNAL_FAILURE&&String(b).endsWith('/operation.json')&&JSON.parse(await read(a,'utf8')).phase.kind==='published'){
+        if(process.env.JOURNAL_FAILURE==='after')await rename(a,b);throw Error('terminal-marker-failure');}return rename(a,b)};
     const m=require(${JSON.stringify(bundle)});`;
   const child = spawn(process.execPath, ['-e', `${setup}(async()=>{${code};probe('success')})().catch(e=>{console.error(e);process.exitCode=1}).finally(()=>process.disconnect?.())`], {
     env: { ...process.env, VONVON_HOME: root, ACTOR: name, ...(options.hold ? { HOLD_RENAME: '1' } : {}),
-      ...(options.shortWait ? { SHORT_WAIT: '1' } : {}), ...(options.failRelease ? { FAIL_RELEASE: '1' } : {}), ...(options.renameFailure ? { FAIL_RENAME: '1' } : {}) },
+      ...(options.shortWait ? { SHORT_WAIT: '1' } : {}), ...(options.failRelease ? { FAIL_RELEASE: '1' } : {}), ...(options.renameFailure ? { FAIL_RENAME: '1' } : {}),
+      ...(options.journalFailure ? { JOURNAL_FAILURE: options.journalFailure } : {}) },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
   const events: Probe[] = [];
@@ -85,6 +88,199 @@ async function releaseAll(states: ReturnType<typeof actor>[]): Promise<void> {
   const pending = new Map(states.map(state => [state, state.wait('rename').then(() => state)]));
   while (pending.size) { const state = await Promise.race(pending.values()); pending.delete(state); state.release(); expect((await state.done).code).toBe(0); }
 }
+
+const creation = { requestId: 'creation-request-0001', signature: 'legacy-signature', name: 'Created', chatId: 'oc_created' };
+const target = `{file:process.env.VONVON_HOME+'/projects.json',dataRoot:process.env.VONVON_HOME}`;
+const publish = `await m.publishCreatedProject(${JSON.stringify(creation)},async()=>{probe('prepare');return {cwd:'/legacy-cwd',blank:true,createdAt:1}},${target})`;
+
+describe('creation publication and terminal removal', () => {
+  it.each(['before', 'after'] as const)('respects removal when the real journal terminal rename reports failure %s replacement', async stage => {
+    const root = await home();
+    const seed = { kind: 'prepare', bot: { appId: 'cli_fixture', tenant: 'feishu', createdAt: 1 }, operatorOpenId: 'ou_fixture',
+      input: { name: 'Created', workspace: { kind: 'default', root: join(root, 'projects') }, kind: 'multi', noMention: true, backend: 'codex-appserver', mode: 'full', network: false } };
+    const key = { appId: 'cli_fixture', tenant: 'feishu', id: creation.requestId };
+    const failed = actor(root, 'marker-failure', `await m.withCreationJournal(${JSON.stringify(key)},async journal=>{
+      await journal.change(${JSON.stringify(seed)});await journal.change({kind:'dispatch',at:1});await journal.change({kind:'know',chatId:'oc_created',evidence:'response'});
+      ${publish};await journal.change({kind:'publish'});},process.env.VONVON_HOME);`, { journalFailure: stage });
+    const failure = await failed.done;
+    expect(failure.code).toBe(1); expect(failure.stderr).toContain('terminal-marker-failure');
+    expect((await disk(root)).projects).toHaveLength(1);
+    await successful(root, `await m.removeProject('Created');`);
+    const resumed = actor(root, 'resume', `await m.withCreationJournal(${JSON.stringify(key)},async journal=>{
+      if(journal.read().phase.kind!==${JSON.stringify(stage === 'before' ? 'known' : 'published')})throw Error('wrong persisted phase');
+      console.log(JSON.stringify(${publish}));},process.env.VONVON_HOME);`);
+    const result = await resumed.done;
+    expect(result.code).toBe(0); expect(result.stderr).toBe(''); expect(JSON.parse(result.stdout)).toEqual({ kind: 'removed' });
+    expect(resumed.events.some(event => event.event === 'prepare')).toBe(false);
+    expect(await disk(root)).toMatchObject({ projects: [], creationRemovals: [creation.requestId] });
+  });
+
+  it('serializes first publication, removal and six later resumes without another preparation', async () => {
+    const root = await home();
+    const first = actor(root, 'create', publish + ';', { hold: true }); await first.wait('rename');
+    const removal = actor(root, 'remove', `await m.removeProject('Created');`, { hold: true }); await removal.wait('attempt');
+    first.release(); expect((await first.done).code).toBe(0); await removal.wait('rename');
+    const rest = Array.from({ length: 6 }, (_, i) => actor(root, `resume-${i}`, `console.log(JSON.stringify(${publish}));`));
+    await Promise.all(rest.map(state => state.wait('attempt'))); removal.release(); expect((await removal.done).code).toBe(0);
+    for (const state of rest) {
+      const result = await state.done;
+      expect(result.code).toBe(0); expect(JSON.parse(result.stdout)).toEqual({ kind: 'removed' });
+      expect(state.events.some(event => event.event === 'prepare')).toBe(false);
+    }
+    expect((await disk(root)).creationRemovals).toEqual([creation.requestId]);
+  });
+
+  // Coverage generation pass 1, gap 22.
+  // Value: protects=authoritative existing and absent creation lookups without writes;
+  // fails_when=lookup loses current settings, returns an unrelated row or writes on read;
+  // why_new=existing lookup assertions cover retired operations only; seam=none;
+  // no_claim=authorization and production caller wiring remain outside this registry fixture.
+  it('returns current completed settings and missing cwd unchanged, and refuses conflicting evidence before preparation', async () => {
+    const root = await home();
+    const missing = actor(root, 'lookup-missing', `console.log(JSON.stringify(await m.getCreationProject(${JSON.stringify(creation.requestId)},${target})));`);
+    const missingResult = await missing.done;
+    expect(missingResult.code).toBe(0); expect(missingResult.stderr).toBe(''); expect(JSON.parse(missingResult.stdout)).toEqual({ kind: 'absent' });
+    await expect(readFile(join(root, 'projects.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(missing.events.some(event => event.event === 'temp-written' || event.event === 'rename')).toBe(false);
+    await successful(root, publish + ';');
+    await successful(root, `await m.mutateProject('Created',row=>{row.name='Renamed';row.cwd='/gone';row.backend='changed';row.createdAt=7;row.noMention=false});`);
+    const bytes = await readFile(join(root, 'projects.json'), 'utf8');
+    const lookup = actor(root, 'lookup-current', `console.log(JSON.stringify([
+      await m.getCreationProject(${JSON.stringify(creation.requestId)},${target}),await m.getCreationProject('creation-request-0002',${target})]));`);
+    const lookupResult = await lookup.done;
+    expect(lookupResult.code).toBe(0); expect(lookupResult.stderr).toBe('');
+    expect(JSON.parse(lookupResult.stdout)).toEqual([{ kind: 'existing', project: (await disk(root)).projects[0] }, { kind: 'absent' }]);
+    expect(lookup.events.some(event => event.event === 'temp-written' || event.event === 'rename')).toBe(false);
+    expect(await readFile(join(root, 'projects.json'), 'utf8')).toBe(bytes);
+    const replay = actor(root, 'replay', `console.log(JSON.stringify(${publish}));`);
+    const result = await replay.done;
+    expect(result.code).toBe(0); expect(JSON.parse(result.stdout)).toMatchObject({ kind: 'existing', project: { name: 'Renamed', cwd: '/gone', backend: 'changed', createdAt: 7, noMention: false } });
+    expect(replay.events.some(event => event.event === 'prepare')).toBe(false);
+    for (const patch of [{ signature: 'different' }, { chatId: 'oc_different' }]) {
+      const conflict = actor(root, 'conflict', `await m.publishCreatedProject(${JSON.stringify({ ...creation, ...patch })},async()=>{probe('prepare');throw Error('must not prepare')},${target});`);
+      expect((await conflict.done).stderr).toContain('input conflict'); expect(conflict.events.some(event => event.event === 'prepare')).toBe(false);
+    }
+    expect(await readFile(join(root, 'projects.json'), 'utf8')).toBe(bytes);
+  });
+
+  // Coverage generation pass 1, gap 23.
+  // Value: protects=fresh creation operations reject independent name and chat collisions before preparation;
+  // fails_when=either collision guard is removed or preparation runs before refusal;
+  // why_new=same-operation conflicts return before the fresh-operation exclusivity guard; seam=none;
+  // no_claim=no remote group creation or UI acceptance is exercised.
+  it('refuses fresh creation name and chat conflicts before preparation without changing bytes', async () => {
+    const root = await home(); await successful(root, publish + ';');
+    const bytes = await readFile(join(root, 'projects.json'), 'utf8');
+    for (const input of [
+      { ...creation, requestId: 'creation-request-0002', chatId: 'oc_different' },
+      { ...creation, requestId: 'creation-request-0003', name: 'Different' },
+    ]) {
+      const conflict = actor(root, 'fresh-conflict', `await m.publishCreatedProject(${JSON.stringify(input)},async()=>{probe('prepare');throw Error('must not prepare')},${target});`);
+      const result = await conflict.done;
+      expect(result.code).toBe(1); expect(result.stderr).toContain('项目名称或群已绑定');
+      expect(conflict.events.some(event => event.event === 'prepare')).toBe(false);
+      expect(await readFile(join(root, 'projects.json'), 'utf8')).toBe(bytes);
+    }
+  });
+
+  // Coverage generation pass 1, gap 24.
+  // Value: protects=failed creation preparation publishes no row and releases ownership for another process;
+  // fails_when=the original error is replaced, a partial row is saved or ownership stays held;
+  // why_new=existing preparation-rejection coverage calls bindProject rather than creation publication; seam=none;
+  // no_claim=external directory rollback is not promised or tested.
+  it('retains the creation preparation error without a row and lets a separate process publish', async () => {
+    const root = await home();
+    const failed = actor(root, 'creation-prepare-failed', `const primary=Error('creation-prepare-failed');
+      try{await m.publishCreatedProject(${JSON.stringify(creation)},async()=>{probe('prepare');throw primary},${target})}
+      catch(error){if(error!==primary)throw Error('original preparation error replaced');throw error}`);
+    const result = await failed.done;
+    expect(result.code).toBe(1); expect(result.stderr).toMatch(/^Error: creation-prepare-failed\b/);
+    expect(failed.events.filter(event => event.event === 'prepare')).toHaveLength(1);
+    expect(failed.events.some(event => event.event === 'released')).toBe(true);
+    expect(failed.events.some(event => event.event === 'temp-written' || event.event === 'rename')).toBe(false);
+    await expect(readFile(join(root, 'projects.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const saved = JSON.parse(await successful(root, `console.log(JSON.stringify(${publish}));`));
+    expect(saved).toMatchObject({ kind: 'published', project: { name: creation.name, chatId: creation.chatId,
+      creationRequestId: creation.requestId, creationRequestSignature: creation.signature } });
+    expect((await disk(root)).projects).toEqual([saved.project]);
+  });
+
+  it('retains legacy deletion across every registry writer and allows ordinary rebind without reviving its old identity', async () => {
+    const root = await home(); await successful(root, publish + ';' + add('Other'));
+    await successful(root, `await m.removeProject('Created');await m.updateProject('Other',{branch:'changed'});
+      await m.mutateProject('Other',row=>{row.directories={repositories:[]}});await m.resetProjectDirectoryOverride('Other','repositories');
+      await m.setTierMergePending(['fixture-Other']);${add('Added')}
+      await m.bindProject({name:'Rebound',chatId:'oc_created',cwd:{kind:'existing',path:'/legacy-cwd'},backend:'codex-appserver',defaultBackend:'codex-appserver',kind:'multi',noMention:true},async()=>({cwd:'/legacy-cwd',blank:false,createdAt:2,origin:'joined'}));
+      console.log(JSON.stringify(await m.getCreationProject(${JSON.stringify(creation.requestId)},${target})));`);
+    const saved = await disk(root);
+    expect(saved.creationRemovals).toEqual([creation.requestId]); expect(saved.projects.map((p: { name: string }) => p.name)).toEqual(['Other', 'Added', 'Rebound']);
+    const lookup = await successful(root, `console.log(JSON.stringify(await m.getCreationProject(${JSON.stringify(creation.requestId)},${target})));`);
+    expect(JSON.parse(lookup)).toEqual({ kind: 'retired' });
+    const readd = await actor(root, 'readd', `await m.addProject(${JSON.stringify({ ...project('Resurrected'), creationRequestId: creation.requestId })});`).done;
+    expect(readd.code).toBe(1); expect(readd.stderr).toContain('Conflicting creation');
+    expect(await disk(root)).toEqual(saved);
+  });
+
+  it('leaves bytes unchanged on guarded removal, failed replacement and identity mutation', async () => {
+    const root = await home(); await successful(root, publish + ';'); const bytes = await readFile(join(root, 'projects.json'), 'utf8');
+    const attempts = [
+      `await m.removeProject('Created',row=>{row.creationRequestId='mutated-request-0001';throw Error('stale revision')});`,
+      `await m.updateProject('Created',{creationRequestId:'mutated-request-0001'});`,
+      `await m.mutateProject('Created',row=>{delete row.creationRequestId;delete row.creationRequestSignature});`,
+      `await m.updateProject('Created',{creationRequestSignature:'changed'});`, `await m.updateProject('Created',{chatId:'oc_changed'});`,
+    ];
+    for (const code of attempts) { expect((await actor(root, 'rejected', code).done).code).toBe(1); expect(await readFile(join(root, 'projects.json'), 'utf8')).toBe(bytes); }
+    expect((await actor(root, 'failed-remove', `await m.removeProject('Created');`, { renameFailure: true }).done).code).toBe(1);
+    expect(await readFile(join(root, 'projects.json'), 'utf8')).toBe(bytes);
+    await successful(root, `if(await m.removeProject('absent')!==undefined)throw Error('missing remove');await m.removeProject('Created');`);
+    expect((await disk(root)).creationRemovals).toEqual([creation.requestId]);
+  });
+
+  it.each([null, {}, ['short'], ['creation-request-0001', 'creation-request-0001'], Array.from({ length: 4097 }, (_, i) => `retired-request-${String(i).padStart(5, '0')}`)])('refuses malformed deletion evidence without rewriting it (%#)', async removals => {
+    const root = await home(), bytes = JSON.stringify({ version: 1, projects: [project('Other')], creationRemovals: removals });
+    await writeFile(join(root, 'projects.json'), bytes);
+    const result = await actor(root, 'corrupt', `await m.listProjects();await m.removeProject('Other');`).done;
+    expect(result.code).toBe(1); expect(await readFile(join(root, 'projects.json'), 'utf8')).toBe(bytes);
+    expect((await actor(root, 'tier-corrupt', `await m.setTierMergePending(['fixture-Other']);`).done).code).toBe(1);
+    expect(await readFile(join(root, 'projects.json'), 'utf8')).toBe(bytes);
+  });
+
+  // Coverage generation pass 1, gap 25.
+  // Value: protects=invalid live creation evidence refuses reads and writes with stored bytes unchanged;
+  // fails_when=invalid IDs, orphan signatures or missing or empty chats are admitted;
+  // why_new=existing corruption cases cover removal sets, duplicate IDs and live/removed contradictions; seam=none;
+  // no_claim=no hostile writer or hardware power-loss protection is demonstrated.
+  it('refuses duplicate live identities and live/removed contradictions, retaining unknown metadata on valid writes', async () => {
+    const root = await home(), row = { ...project('Created'), creationRequestId: creation.requestId, creationRequestSignature: 'opaque legacy signature' };
+    const malformedRows = [{ ...row, creationRequestId: 'short' },
+      { ...project('Created'), creationRequestSignature: row.creationRequestSignature }, { ...row, chatId: undefined }, { ...row, chatId: '' }];
+    for (const data of [{ projects: [row, { ...row, name: 'Other', chatId: 'oc_other' }] }, { projects: [row], creationRemovals: [creation.requestId] },
+      ...malformedRows.map(invalid => ({ projects: [invalid] }))]) {
+      const bytes = JSON.stringify({ version: 1, ...data }); await writeFile(join(root, 'projects.json'), bytes);
+      expect((await actor(root, 'evidence-read', `await m.getCreationProject(${JSON.stringify(creation.requestId)},${target});`).done).code).toBe(1);
+      expect(await readFile(join(root, 'projects.json'), 'utf8')).toBe(bytes);
+      expect((await actor(root, 'contradiction', `await m.removeProject('Created');`).done).code).toBe(1);
+      expect(await readFile(join(root, 'projects.json'), 'utf8')).toBe(bytes);
+      expect((await actor(root, 'evidence-tier-write', `await m.setTierMergePending(['fixture-Created']);`).done).code).toBe(1);
+      expect(await readFile(join(root, 'projects.json'), 'utf8')).toBe(bytes);
+    }
+    await writeFile(join(root, 'projects.json'), JSON.stringify({ version: 1, projects: [row], future: { keep: true } }));
+    await successful(root, `await m.removeProject('Created');${add('After')}`);
+    expect(await disk(root)).toMatchObject({ creationRemovals: [creation.requestId], future: { keep: true } });
+  });
+
+  it('keeps all 4096 retirements, refuses the next tracked removal and still removes untracked rows', async () => {
+    const root = await home(), removals = Array.from({ length: 4095 }, (_, i) => `retired-request-${String(i).padStart(5, '0')}`);
+    await writeFile(join(root, 'projects.json'), JSON.stringify({ version: 1, creationRemovals: removals, projects: [
+      { ...project('Created'), creationRequestId: creation.requestId }, { ...project('Next'), creationRequestId: 'creation-request-0002' }, project('Untracked'),
+    ] }));
+    await successful(root, `await m.removeProject('Created');`); const full = await readFile(join(root, 'projects.json'), 'utf8');
+    const failed = await actor(root, 'full', `await m.removeProject('Next');`).done;
+    expect(failed.code).toBe(1); expect(failed.stderr).toContain('Creation removal limit'); expect(await readFile(join(root, 'projects.json'), 'utf8')).toBe(full);
+    await successful(root, `await m.removeProject('Untracked');`);
+    const saved = await disk(root); expect(saved.creationRemovals).toEqual([...removals, creation.requestId]); expect(saved.projects.map((p: { name: string }) => p.name)).toEqual(['Next']);
+  });
+});
 
 describe('project registry process ownership', () => {
   it('prepares and publishes one binding across eight independent processes', async () => {

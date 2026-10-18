@@ -69,6 +69,52 @@ function intercept(stage: string): string {
 }
 
 describe('stable bot directory evidence', () => {
+  it('admits creation after parent preparation, without reserving a group, and reuses that parent for binding', async () => {
+    const root = await home();
+    const output = await successful(root, `${register('cli_groups123')}
+      const bot=m.botIdentity((await m.loadBots()).bots[0]);
+      await m.withBotCreationAdmission(bot,{kind:'default',projectsRootDir:process.env.VONVON_HOME+'/projects'},async()=>{
+        const state=await m.loadBots();if(state.groupContainers[bot.appId].state!=='ready'||state.groupAllocations)throw Error('wrong preflight');
+        console.log(state.groupContainers[bot.appId].namespaceRoot);
+      });
+      const first=(await m.loadBots()).groupContainers[bot.appId];const bound=await ${bind()};
+      if(!bound.project.cwd.startsWith(first.namespaceRoot+'/'))throw Error('second allocation authority');
+      await require('node:fs/promises').writeFile(bound.project.cwd+'/sentinel','keep');
+      await m.withBotCreationAdmission(bot,{kind:'default',projectsRootDir:process.env.VONVON_HOME+'/changed-root'},async()=>{});
+      if(await require('node:fs/promises').readFile(bound.project.cwd+'/sentinel','utf8')!=='keep')throw Error('lost content');`);
+    expect(output.trim()).toBe(join(root, 'projects/shared/groups'));
+    const state = await registry(root);
+    expect(Object.keys(state.groupAllocations)).toHaveLength(1); expect(state.groupContainers.cli_groups123.namespaceRoot).toBe(output.trim());
+  });
+
+  it('identity-only admission leaves absent parents alone and refuses stale registration before callbacks', async () => {
+    const root = await home();
+    await successful(root, `${register('cli_groups123')}
+      const bot=m.botIdentity((await m.loadBots()).bots[0]);const fs=require('node:fs/promises');
+      const bytes=await fs.readFile(process.env.VONVON_HOME+'/bots.json','utf8');
+      await fs.rm(process.env.VONVON_HOME+'/projects',{recursive:true,force:true});
+      if(await m.withBotCreationAdmission(bot,{kind:'identity'},async()=>7)!==7)throw Error('callback result');
+      if(await fs.readFile(process.env.VONVON_HOME+'/bots.json','utf8')!==bytes)throw Error('identity rewrote registry');
+      if(require('node:fs').existsSync(process.env.VONVON_HOME+'/projects'))throw Error('identity recreated directory');
+      for(const stale of [{...bot,registrationId:'another-incarnation'},{...bot,tenant:'lark'},{...bot,createdAt:bot.createdAt+1}]){
+        let rejected=false;try{await m.withBotCreationAdmission(stale,{kind:'identity'},async()=>{throw Error('must-not-call')})}catch(e){rejected=e.message.includes('重新注册')}
+        if(!rejected)throw Error('stale admission');
+      }`);
+  });
+
+  it('refuses a replaced ready parent before local work and releases ownership after callback failure', async () => {
+    const root = await home();
+    await successful(root, `${register('cli_groups123')}
+      const bot=m.botIdentity((await m.loadBots()).bots[0]),workspace={kind:'default',projectsRootDir:process.env.VONVON_HOME+'/projects'};
+      const failure=Error('local failure');try{await m.withBotCreationAdmission(bot,workspace,async()=>{throw failure})}catch(error){if(error!==failure)throw error}
+      await m.withBotCreationAdmission(bot,{kind:'identity'},async()=>{});
+      const state=await m.loadBots(),path=state.groupContainers[bot.appId].namespaceRoot,fs=require('node:fs/promises');
+      await fs.rename(path,path+'-saved');await fs.mkdir(path);
+      let called=false,rejected=false;try{await m.withBotCreationAdmission(bot,workspace,async()=>{called=true})}catch{rejected=true}
+      if(called||!rejected)throw Error('replacement admitted');
+      await m.withBotCreationAdmission(bot,{kind:'identity'},async()=>{});`);
+  });
+
   it('retains group content through rename, root change, unbind and account re-registration, fencing the old identity', async () => {
     const root = await home();
     const output = await successful(root, `${register('cli_groups123')}

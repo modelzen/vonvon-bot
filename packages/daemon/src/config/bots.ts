@@ -158,6 +158,43 @@ function sameIdentity(entry: BotEntry, expected: BotIdentity): boolean {
     && entry.createdAt === expected.createdAt && entry.registrationId === expected.registrationId;
 }
 
+async function prepareGroupContainer(registry: BotsRegistry, entry: BotEntry, projectsRootDir: string) {
+  let bot = registry.allocations?.[entry.appId];
+  if (!bot) {
+    if (Object.keys(registry.allocations ?? {}).length >= 4096) throw new Error('Bot allocation limit reached');
+    bot = await planAllocation({ ...entry, handle: entry.name, parent: projectsRootDir, dataDir: paths.appDir }, registry.allocations ?? {});
+    registry.allocations = { ...registry.allocations, [entry.appId]: bot };
+    await publish(registry);
+  }
+  validateAccountClaim(registry, bot, entry);
+  bot = await materializeAllocation(bot, paths.appDir);
+  registry.allocations = { ...registry.allocations, [entry.appId]: bot };
+  await publish(registry);
+  let container = registry.groupContainers?.[entry.appId];
+  if (!container) {
+    container = { version: 1, appId: entry.appId, tenant: entry.tenant,
+      ...await planDirectory({ name: 'groups', parent: bot.namespaceRoot, dataDir: paths.appDir, selection: { kind: 'fixed' } }, []) };
+    registry.groupContainers = { ...registry.groupContainers, [entry.appId]: container };
+    await publish(registry);
+  }
+  container = { ...container, ...await materializeDirectory(container, paths.appDir) };
+  registry.groupContainers = { ...registry.groupContainers, [entry.appId]: container };
+  await publish(registry);
+  return { bot, container };
+}
+
+/** Local admission only: no remote work runs while the bots owner is held. */
+export function withBotCreationAdmission<T>(expected: BotIdentity,
+  workspace: { kind: 'identity' } | { kind: 'default'; projectsRootDir: string }, local: () => Promise<T>): Promise<T> {
+  const identity = { ...expected }, input = { ...workspace };
+  return ownBots(async registry => {
+    const entry = registry.bots.find(bot => bot.appId === identity.appId);
+    if (!entry || !sameIdentity(entry, identity)) throw new Error('机器人已移除或重新注册，请重启后再创建');
+    if (input.kind === 'default') await prepareGroupContainer(registry, entry, input.projectsRootDir);
+    return local();
+  });
+}
+
 export function withBotGroupBinding<T>(expected: BotIdentity, group: { chatId: string; name: string; projectsRootDir: string }, operation: (scope: {
   allocatedPath: string | undefined;
   prepareDefault: () => Promise<{ cwd: string; blank: true; directories: DirectorySettings }>;
@@ -169,27 +206,7 @@ export function withBotGroupBinding<T>(expected: BotIdentity, group: { chatId: s
     const key = groupAllocationKey({ ...identity, chatId: input.chatId });
     const previous = registry.groupAllocations?.[key];
     return operation({ allocatedPath: previous?.state === 'ready' ? previous.namespaceRoot : undefined, prepareDefault: async () => {
-      let bot = registry.allocations?.[entry.appId];
-      if (!bot) {
-        if (Object.keys(registry.allocations ?? {}).length >= 4096) throw new Error('Bot allocation limit reached');
-        bot = await planAllocation({ ...entry, handle: entry.name, parent: input.projectsRootDir, dataDir: paths.appDir }, registry.allocations ?? {});
-        registry.allocations = { ...registry.allocations, [entry.appId]: bot };
-        await publish(registry);
-      }
-      validateAccountClaim(registry, bot, entry);
-      bot = await materializeAllocation(bot, paths.appDir);
-      registry.allocations = { ...registry.allocations, [entry.appId]: bot };
-      await publish(registry);
-      let container = registry.groupContainers?.[entry.appId];
-      if (!container) {
-        container = { version: 1, appId: entry.appId, tenant: entry.tenant,
-          ...await planDirectory({ name: 'groups', parent: bot.namespaceRoot, dataDir: paths.appDir, selection: { kind: 'fixed' } }, []) };
-        registry.groupContainers = { ...registry.groupContainers, [entry.appId]: container };
-        await publish(registry);
-      }
-      container = { ...container, ...await materializeDirectory(container, paths.appDir) };
-      registry.groupContainers = { ...registry.groupContainers, [entry.appId]: container };
-      await publish(registry);
+      const { bot, container } = await prepareGroupContainer(registry, entry, input.projectsRootDir);
       let claim = registry.groupAllocations?.[key];
       if (!claim) {
         if (Object.keys(registry.groupAllocations ?? {}).length >= 4096) throw new Error('Group allocation limit reached');
