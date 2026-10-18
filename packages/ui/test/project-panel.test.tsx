@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { membershipSchema, type ProjectSettingsView } from "@vonvon/protocol";
 import { createClient } from "../../client/src/client";
 import { ClientProvider } from "../src/client-context";
-import { ConversationRow, conversationNote } from "../src/management/ProjectPanel";
+import { appliedNotice, ConversationRow, conversationNote } from "../src/management/ProjectPanel";
 import { membershipSettingsKey, ProjectPanel as GroupSettings } from "../src/settings/SettingsPanel";
 
 const client = createClient({ isOpen: () => true, onMessage: () => {}, onClose: () => {}, onError: () => {}, send: () => {}, close: async () => {} });
@@ -50,4 +50,12 @@ it("s25c: switching 会话方式 remounts the group settings, which read once, s
     conversation: "shared", response: "mention", permission: { administrator: "full", member: "full", network: false }, stale: false });
   expect(membershipSettingsKey({ ...member, conversation: "smart" })).not.toBe(membershipSettingsKey(member));
   expect(membershipSettingsKey(member)).toBe(membershipSettingsKey({ ...member }));
+});
+
+it("s25c: a save's warning is its own sentence; a removal's failed group step keeps its lead (审查低)", () => {
+  expect(appliedNotice("项目已更新。", { warning: "已改成智能开话题，但没能在群里说一句：send refused" }, ""))
+    .toBe("项目已更新。 已改成智能开话题，但没能在群里说一句：send refused");
+  expect(appliedNotice("项目绑定已解除，目录已保留。", { warning: "permission denied" }))
+    .toBe("项目绑定已解除，目录已保留。 飞书群后续操作未完成：permission denied");
+  expect(appliedNotice("项目已更新。", {}, "")).toBe("项目已更新。");
 });

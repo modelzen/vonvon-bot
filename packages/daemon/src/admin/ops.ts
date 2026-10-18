@@ -272,8 +272,14 @@ export async function performSetNoMention(opts: { projectName: string; on: boole
   const p = await getProjectByName(opts.projectName);
   if (!p) return { ok: false, reason: `项目「${opts.projectName}」不存在` };
   if (sessionModeOf(p) === 'smart') return { ok: false, reason: SMART_NO_MENTION_REFUSED };
-  // Turned 智能 meanwhile: nothing is written, the fresh row shows it.
-  await updateProject(opts.projectName, latest => sessionModeOf(latest) === 'smart' ? {} : { noMention: opts.on });
+  // Turned 智能 meanwhile: nothing is written, and it is refused the same way so the card says so (审查低).
+  let turned = false;
+  await updateProject(opts.projectName, latest => {
+    if (sessionModeOf(latest) !== 'smart') return { noMention: opts.on };
+    turned = true;
+    return {};
+  });
+  if (turned) return { ok: false, reason: SMART_NO_MENTION_REFUSED };
   return { ok: true, project: await freshOr(opts.projectName, { ...p, noMention: opts.on }) };
 }
 

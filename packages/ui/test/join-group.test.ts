@@ -3,7 +3,7 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import {expect, it} from 'vitest';
 import {collaborationRequestSchema} from '@vonvon/protocol';
 import {RpcError} from '@vonvon/client/browser';
-import {CONVERSATIONS, CREATION_UNKNOWN, CreationLockNotice, creationFailure, projectNameProblem, sentResponse, shownResponse} from '../src/JoinGroupDialog';
+import {CONVERSATIONS, CREATION_UNKNOWN, CreationLockNotice, creationFailure, keptResponse, projectNameProblem, sentResponse, shownResponse} from '../src/JoinGroupDialog';
 import {canSaveAll} from '../src/settings/DraftGuard';
 
 it('rejects the names the protocol would refuse, before submit', () => {
@@ -58,6 +58,9 @@ it('s25c: lists the three 会话方式 in 3.4\'s order and words, and 智能 has
   expect(shownResponse('shared', undefined)).toBe('mention');
   // A hand pick made under another 会话方式 is not carried into 智能.
   expect(shownResponse('smart', 'all')).toBeUndefined();
+  // Nor out of it: picked 关 under 多会话, then 智能, then 多会话 again shows 多会话's default (审查低).
+  expect(shownResponse('threads', keptResponse('threads', keptResponse('smart', 'mention')))).toBe('all');
+  expect(keptResponse('shared', 'all')).toBe('all');
   for (const kind of ['create', 'bind'] as const) expect(sentResponse(kind, 'smart', shownResponse('smart', 'all'))).toEqual({});
   expect(sentResponse('bind', 'shared', 'mention')).toEqual({});
   expect(sentResponse('create', 'shared', 'mention')).toEqual({response: 'mention'});

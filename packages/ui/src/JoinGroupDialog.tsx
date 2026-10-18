@@ -19,6 +19,10 @@ const defaultResponse = (conversation: Conversation): 'all' | 'mention' => conve
 export function shownResponse(conversation: Conversation | undefined, picked: 'all' | 'mention' | undefined): 'all' | 'mention' | undefined {
   return conversation === undefined || conversation === 'smart' ? undefined : picked ?? defaultResponse(conversation);
 }
+/** A hand pick of 免@ after a 会话方式 pick: 智能 has none and drops it, so coming back 免@ follows the 会话方式 again (审查低). */
+export function keptResponse(conversation: Conversation, picked: 'all' | 'mention' | undefined): 'all' | 'mention' | undefined {
+  return conversation === 'smart' ? undefined : picked;
+}
 /** What goes on the wire. Left out only when the default gives it on this daemon and on one from before s21 alike:
  * those bind with 3.4's defaults but create every group with 免@ on. Otherwise sent; an old daemon then refuses. */
 export function sentResponse(kind: 'create' | 'bind', conversation: Conversation, freeAt: 'all' | 'mention' | undefined): {response?: 'all' | 'mention'} {
@@ -151,7 +155,7 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
           <SettingsRow title="执行工具" trailing={<select aria-label="执行工具" disabled={busy} value={tool} onChange={event => setTool(toolSchema.parse(event.target.value))}><option value="codex">Codex</option><option value="claude">Claude</option></select>} />
         </SettingsGroup>
         <FormField label="会话方式">
-          <ChoiceGroup<Conversation | ''> label="会话方式" aria-required disabled={busy} value={conversation ?? ''} options={CONVERSATIONS} onChange={value => {if (value) setConversation(value);}} />
+          <ChoiceGroup<Conversation | ''> label="会话方式" aria-required disabled={busy} value={conversation ?? ''} options={CONVERSATIONS} onChange={value => {if (value) {setConversation(value); setResponse(picked => keptResponse(value, picked));}}} />
         </FormField>
         {freeAt && <SettingsGroup>
           <SettingsRow title="免 @" value={freeAt === 'all' ? '不 @ 也回' : '@ 我才回'} trailing={<select aria-label="免 @" disabled={busy} value={freeAt} onChange={event => setResponse(event.target.value === 'all' ? 'all' : 'mention')}><option value="all">开</option><option value="mention">关</option></select>} />

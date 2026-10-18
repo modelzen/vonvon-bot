@@ -30,6 +30,12 @@ export function conversationNote(target: Conversation, current: Conversation): s
   return "切换会话方式不改免 @，需要时在本页的「不 @ 也能发起任务」里改。";
 }
 
+/** What the page says after a save. Removing warns with the failed group step's raw error; a save's warning is a whole
+ * sentence already ("已改成智能开话题，但没能在群里说一句：…", s25c), so it gets no second lead (审查低). */
+export function appliedNotice(success: string, reply: { warning?: string; message?: string }, warningLead = "飞书群后续操作未完成："): string {
+  return reply.warning ? `${success} ${warningLead}${reply.warning}` : reply.message || success;
+}
+
 /** The 会话方式 picker: the three of product.md 3.4, in its order. */
 export function ConversationRow({ target, current, disabled, onChange }: { target: Conversation; current: Conversation; disabled: boolean; onChange: (next: Conversation) => void }) {
   return <SettingsRow title="会话方式" description={conversationNote(target, current)} trailing={<select aria-label="项目会话方式" value={target} disabled={disabled} onChange={(event) => onChange(conversationSchema.catch(current).parse(event.target.value))}>{conversationSchema.options.map((value) => <option key={value} value={value}>{conversationCopy[value].title}</option>)}</select>} />;
@@ -126,7 +132,7 @@ export function ProjectPanel({ scope, request, onChanged, children }: Props) {
     }
     return reply.project.revision;
   }
-  async function run(operation: () => Promise<CollaborationReply | undefined>, success: string) {
+  async function run(operation: () => Promise<CollaborationReply | undefined>, success: string, warningLead?: string) {
     if (busy.current) return false;
     busy.current = true;
     setSaving(true);
@@ -145,7 +151,7 @@ export function ProjectPanel({ scope, request, onChanged, children }: Props) {
         acceptProject(undefined);
         setDeleteArmed(false);
       }
-      setNotice(reply.warning ? `${success} 飞书群后续操作未完成：${reply.warning}` : reply.message || success);
+      setNotice(appliedNotice(success, reply, warningLead));
       await onChanged();
       return true;
     } catch (failure) {
@@ -162,7 +168,7 @@ export function ProjectPanel({ scope, request, onChanged, children }: Props) {
       const expectedRevision = await reconciledRevision();
       if (!expectedRevision) return undefined;
       return requestRef.current({action: 'editProject', ...target, expectedRevision, ...(folder ? {folderToken: folder.token} : {}), conversation, enabled});
-    }, '项目已更新。');
+    }, '项目已更新。', '');
   }
   async function removeProject() {
     return run(async () => {

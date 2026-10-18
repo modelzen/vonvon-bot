@@ -5447,6 +5447,8 @@ export function createOrchestrator(
   }
 
   const projectMutations = new Set<string>();
+  /** Groups being told 智能's sentence after a switch (s25c): their settings wait for it, their messages do not. */
+  const smartNotices = new Set<string>();
   const runIds = new WeakMap<ActiveState, { run: AgentRun | undefined; id: string }>();
   let createChain: Promise<unknown> = Promise.resolve();
   /** Aborts every Feishu call of a creation still running when the bridge stops, so the drain does not wait out its budget. */
@@ -5521,6 +5523,7 @@ export function createOrchestrator(
     }
     if (request.action === 'editProject' || request.action === 'removeProject') {
       if (projectRevision(project) !== request.expectedRevision) throw new AdminWriteError('项目设置已改变，请刷新后重试');
+      if (smartNotices.has(project.chatId)) throw new AdminWriteError('正在群里说一句，请稍后再改');
       if (projectMutations.has(project.chatId) || active.size > 0 || intakeChats.has(project.chatId) || pendingTopics.has(project.chatId)) throw new AdminWriteError('Agent 正在执行任务，请结束后修改项目');
       let edited: { ok: true; project: ReturnType<typeof projectView> } | undefined;
       let announce = false;
@@ -5566,7 +5569,8 @@ export function createOrchestrator(
             if (latest.noMention === undefined || sessionModeOf(latest) === 'smart') latest.noMention = noMentionOf(latest);
             delete latest.smart;
             Object.assign(latest, storedMode(mode));
-          } else if (mode !== undefined && sessionModeOf(latest) !== 'smart') delete latest.smart; // left by an old daemon, never counted
+          } else if (sessionModeOf(latest) === 'smart') latest.noMention = false; // a hand-edited 开 too: older daemons read it (审查低)
+          else if (mode !== undefined) delete latest.smart; // left by an old daemon, never counted
           Object.assign(latest, patch);
           if (patch.cwd !== undefined) latest.directories = { ...latest.directories, workspaces: { primary: patch.cwd, additional: latest.directories?.workspaces?.additional ?? [] } };
         });
@@ -5583,7 +5587,9 @@ export function createOrchestrator(
       } finally { projectMutations.delete(project.chatId); }
       if (!announce) return edited;
       // 选了智能 tells the group (3.4), once the group is unlocked so a message meanwhile is not turned away (s25c).
+      // Another edit waits until it is said, so it never lands in a group switched away meanwhile (审查低).
       // Saved already: a failure is a warning, not retried and not made up on a later save.
+      smartNotices.add(project.chatId);
       try {
         const sent = await channel.send(project.chatId, { text: SMART_NOTICE });
         recent.addOwn(project.chatId, project.chatId, { id: sent.messageId, at: Date.now(), text: SMART_NOTICE });
@@ -5591,7 +5597,7 @@ export function createOrchestrator(
       } catch (error) {
         log.fail('desktop', error, { phase: 'smart-notice' });
         return { ...edited, warning: `已改成智能开话题，但没能在群里说一句：${error instanceof Error ? error.message : String(error)}` };
-      }
+      } finally { smartNotices.delete(project.chatId); }
     }
     if (projectMutations.has(project.chatId) || project.enabled === false) throw new AdminWriteError('项目已停用或正在修改');
     const perm = turnSession(project.chatId, project);

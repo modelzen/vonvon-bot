@@ -2,7 +2,7 @@ import { rmSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { paths } from '../src/config/paths';
-import { addProject, getProjectByName, removeProject } from '../src/project/registry';
+import { addProject, getProjectByName, mutateProject, removeProject } from '../src/project/registry';
 import {
   AdminWriteError,
   createAppPreferencesWriter,
@@ -127,6 +127,24 @@ describe('performSetNoMention', () => {
     const before = await readFile(paths.projectsFile, 'utf8');
     expect(await performSetNoMention({ projectName: 'demo', on: true })).toEqual({ ok: false, reason: '这个群是智能开话题，回不回由 Bot 判断，没有免 @ 这一项' });
     expect(await readFile(paths.projectsFile, 'utf8')).toBe(before);
+  });
+
+  it('s25c：读的时候不是智能、写盘时已改成智能，照样拒绝，卡上能写"没有改"（审查低）', async () => {
+    await removeProject('demo');
+    await addProject({ name: 'demo', chatId: 'oc_demo', cwd: '/tmp/demo', blank: false, createdAt: 1, kind: 'single', noMention: false });
+    let entered!: () => void;
+    let release!: () => void;
+    const holding = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    // The switch holds the registry while the button reads the row (a plain read, outside the lock) and queues its write.
+    const switching = mutateProject('demo', async latest => { entered(); await gate; Object.assign(latest, { smart: true, noMention: false }); });
+    await holding;
+    const pressed = performSetNoMention({ projectName: 'demo', on: true });
+    await new Promise(resolve => setTimeout(resolve, 50));
+    release();
+    await switching;
+    expect(await pressed).toEqual({ ok: false, reason: '这个群是智能开话题，回不回由 Bot 判断，没有免 @ 这一项' });
+    expect(await getProjectByName('demo')).toMatchObject({ kind: 'single', smart: true, noMention: false });
   });
 });
 

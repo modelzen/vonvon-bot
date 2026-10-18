@@ -242,9 +242,14 @@ it('s21, s25c: a stored 智能 is kept by a save that sends it back and dropped 
   try {
     await updateProject('demo', { smart: true, noMention: true });
     let revision = projectRevision((await getProjectByName('demo'))!);
-    // The page sends the 会话方式 it shows: 智能 stays 智能, says nothing and archives nothing.
+    // The page sends the 会话方式 it shows: 智能 stays 智能, says nothing and archives nothing. A hand-edited 免@ 开
+    // goes back to 关, so an older daemon still runs it as 单会话、仅 @ (审查低).
     await app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'smart', enabled: true });
-    expect(await getProjectByName('demo')).toMatchObject({ kind: 'single', smart: true, noMention: true });
+    expect(await getProjectByName('demo')).toMatchObject({ kind: 'single', smart: true, noMention: false });
+    await updateProject('demo', { noMention: true });
+    revision = projectRevision((await getProjectByName('demo'))!);
+    await app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, enabled: true });
+    expect(await getProjectByName('demo')).toMatchObject({ kind: 'single', smart: true, noMention: false });
     expect(fixture.send).not.toHaveBeenCalled();
     revision = projectRevision((await getProjectByName('demo'))!);
     // Since s25c 单会话 is a real pick: the same main-area session goes on, 免@ is what it ran as (off).
@@ -263,7 +268,14 @@ it('s25c: switching to 智能 stores it with 免@ off, keeps the 单会话 sessi
     await updateProject('demo', { noMention: true });
     // Said after the edit lets go of the group: anything else the page does meanwhile is not turned away.
     let during: unknown;
-    fixture.send.mockImplementationOnce(async () => { during = await app.collaboration({ action: 'context', ...target, threadId: 'oc_demo' }).then(() => 'free', (error: Error) => error.message); return { messageId: 'om_notice' }; });
+    let edit: unknown;
+    fixture.send.mockImplementationOnce(async () => {
+      during = await app.collaboration({ action: 'context', ...target, threadId: 'oc_demo' }).then(() => 'free', (error: Error) => error.message);
+      // Another edit waits until it is said: the sentence never lands in a group switched away meanwhile (审查低).
+      const fresh = projectRevision((await getProjectByName('demo'))!);
+      edit = await app.collaboration({ action: 'editProject', ...target, expectedRevision: fresh, kind: 'multi' }).then(() => 'edited', (error: Error) => error.message);
+      return { messageId: 'om_notice' };
+    });
     const revision = projectRevision((await getProjectByName('demo'))!);
     const reply = await app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'smart' });
     expect(reply).toMatchObject({ ok: true, project: { kind: 'smart' } });
@@ -272,6 +284,7 @@ it('s25c: switching to 智能 stores it with 免@ off, keeps the 单会话 sessi
     expect(fixture.send).toHaveBeenCalledTimes(1);
     expect(fixture.send).toHaveBeenCalledWith('oc_demo', { text: '我会读群消息，合适时接话。' });
     expect(during).toBe('free');
+    expect(edit).toBe('正在群里说一句，请稍后再改');
     expect((await listSessions())[0]?.detached).not.toBe(true);
   } finally { await app.shutdown(); }
 });
