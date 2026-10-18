@@ -37,7 +37,7 @@ it('s36d1: says a creation may have made a group unless the daemon itself refuse
 });
 
 it('s36d1: locks the form on a group created and not saved, with the daemon\'s binding guide and no retry advice', () => {
-  const guide = '群「x」已建好，但没存上：project disk failure。请在网页「加入现有飞书群」→「查找已经加入的群」里选它绑定，不要再建';
+  const guide = '群「x」已建好，但没存上：project disk failure。请在网页「加入现有飞书群」→「查找已经加入的群」里选它绑定，不要再建。绑回来是只读，要完全访问就到群设置里改';
   // Anything but a refusal locks the form (JoinGroupDialog's catch), so a second click cannot make a second group.
   const unsaved = creationFailure(new RpcError('created_unsaved', guide));
   expect(unsaved).toEqual({kind: 'unsaved', message: guide});

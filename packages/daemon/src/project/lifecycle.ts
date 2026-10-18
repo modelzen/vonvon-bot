@@ -93,7 +93,7 @@ export const CREATED_UNSAVED = 'CREATED_UNSAVED';
 export class CreatedButUnsavedError extends Error {
   readonly code = CREATED_UNSAVED;
   constructor(readonly chatId: string, name: string, reason: unknown) {
-    super(`群「${name}」已建好，但没存上：${reason instanceof Error ? reason.message : String(reason)}。请在网页「加入现有飞书群」→「查找已经加入的群」里选它绑定，不要再建`);
+    super(`群「${name}」已建好，但没存上：${reason instanceof Error ? reason.message : String(reason)}。请在网页「加入现有飞书群」→「查找已经加入的群」里选它绑定，不要再建。绑回来是只读，要完全访问就到群设置里改`);
   }
 }
 
@@ -131,12 +131,7 @@ export interface JoinGroupInput {
   backend?: string;
   /** allow the sandboxed shell to reach the network (default false). */
   network?: boolean;
-  /** How long to wait for Feishu to say who owns the group. Default {@link OWNER_LOOKUP_MS}. */
-  ownerLookupMs?: number;
 }
-
-/** A bind waits this long for the group's owner, then binds it as not the bot's (s36d1). */
-export const OWNER_LOOKUP_MS = 5_000;
 
 /**
  * Admit an explicit `existingPath` (must exist, outside protected locations).
@@ -239,8 +234,9 @@ export async function createProject(channel: Pick<LarkChannel, 'rawClient'>, req
  * the bot stays a plain member. Onboarding only posts a (non-pinned) welcome
  * card. Identical bindings return the existing row without rewriting it or
  * sending another welcome. Conflicts fail before preparing a new workspace.
- * A group the bot owns is one it created whose row was not saved (s36d1): it is
- * bound as created, at full access, like {@link createProject} would have saved it.
+ * A group this bot created whose row was not saved binds here too, as joined and
+ * read-only: Feishu leaves `owner_id` out of chat.get when a bot owns the group
+ * (measured 2026-10-18), so it cannot be told from another app's bot's group (s36d1).
  */
 export async function joinExistingGroup(channel: LarkChannel, request: JoinGroupInput, target: RegistryLocation = { file: paths.projectsFile, dataRoot: paths.appDir }): Promise<Project> {
   const input = structuredClone(request);
@@ -258,17 +254,14 @@ export async function joinExistingGroup(channel: LarkChannel, request: JoinGroup
     } catch { throw new Error('所选文件夹不存在或不是目录'); }
   }
   const defaultBackend = await effectiveDefaultBackend().catch(() => DEFAULT_BACKEND_ID);
-  // A group already bound keeps its row, so who owns it does not matter and Feishu is not asked.
-  const bound = (await listProjectsIn(location.file)).some(project => project.chatId === input.chatId);
-  const owned = !bound && await ownedByBot(channel, input.chatId, input.ownerLookupMs ?? OWNER_LOOKUP_MS);
-  const mode = input.mode ?? (owned ? 'full' : 'qa');
+  const mode = input.mode ?? 'qa';
   const result = await withBotGroupBinding(input.bot, { name, chatId: input.chatId, projectsRootDir: root }, async scope => {
     const binding = await bindProject({ name, chatId: input.chatId,
       cwd: existingPath ? { kind: 'existing', path: cwd } : { kind: 'default', legacyPath: cwd, allocatedPath: scope.allocatedPath }, defaultBackend,
       backend: input.backend ?? defaultBackend, kind: input.kind, noMention: input.noMention ?? bindNoMention(input.kind) }, async () => {
       assertBackendUsable(input.backend, mode);
       const workspace = existingPath ? await admitExistingDirectory(existingPath, location.dataRoot) : await scope.prepareDefault();
-      return { ...workspace, createdAt: Date.now(), ...(owned ? { origin: 'created' } : { origin: 'joined', addedBy: input.addedBy }),
+      return { ...workspace, createdAt: Date.now(), origin: 'joined', addedBy: input.addedBy,
         mode, backend: input.backend || defaultBackend, network: input.network ?? false };
     }, location);
     await retireBoundPendingGroup(pendingGroupsFile(location.file), binding.project.chatId);
@@ -276,22 +269,10 @@ export async function joinExistingGroup(channel: LarkChannel, request: JoinGroup
   });
   const project = result.project;
   if (result.kind === 'existing') return project;
-  log.info('project', 'join', { name, chatId: project.chatId, cwd: project.cwd, blank: project.blank, kind: project.kind, mode: project.mode, backend: project.backend, origin: project.origin });
+  log.info('project', 'join', { name, chatId: project.chatId, cwd: project.cwd, blank: project.blank, kind: project.kind, mode: project.mode, backend: project.backend });
 
-  // Onboarding only (no announcement; a joined group gets no Pin / tab either —
-  // see onboardGroup's joined branch); best-effort, the binding holds even if the welcome card fails.
+  // Onboarding only (no announcement / Pin / tab — see onboardGroup's joined
+  // branch); best-effort, the binding holds even if the welcome card fails.
   await onboardGroup(channel, project).catch((err) => log.fail('project', err, { phase: 'onboard-join' }));
   return project;
-}
-
-/** Whether the bot owns `chatId`, by the same reading as the pending-group reminder. Unknown, or no answer within
- * `timeoutMs`, counts as not owned: the group then binds as joined, read-only, as before s36d1. */
-async function ownedByBot(channel: Pick<LarkChannel, 'botIdentity' | 'getChatInfo'>, chatId: string, timeoutMs: number): Promise<boolean> {
-  const bot = channel.botIdentity?.openId;
-  if (!bot) return false;
-  let timer: NodeJS.Timeout | undefined;
-  const silent = new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error(`查群主 ${timeoutMs}ms 没有回应`)), timeoutMs); });
-  try { return (await Promise.race([channel.getChatInfo(chatId), silent])).ownerId === bot; }
-  catch (error) { log.fail('project', error, { phase: 'join-owner' }); return false; }
-  finally { clearTimeout(timer); }
 }

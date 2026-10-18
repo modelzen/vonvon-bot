@@ -381,7 +381,7 @@ it('s36d1: a web creation whose group was made and not saved reaches the page as
       const service = { listBots: async () => [{ appId: bot.appId, active: true, running: true }], collaboration };
       const failure = await collaborationRpc(service as never, {} as never, create).catch((error: unknown) => error);
       expect(failure).toBeInstanceOf(RpcError);
-      expect(failure).toMatchObject({ code: 'created_unsaved', message: expect.stringMatching(/^群「Unsaved」已建好，但没存上：.*加入现有飞书群.*不要再建$/) });
+      expect(failure).toMatchObject({ code: 'created_unsaved', message: expect.stringMatching(/^群「Unsaved」已建好，但没存上：.*加入现有飞书群.*不要再建。绑回来是只读，要完全访问就到群设置里改$/) });
     }
     expect(await getProjectByName('Unsaved')).toBeUndefined();
   } finally { fixture.failProjectsWrite = false; await app.shutdown(); }

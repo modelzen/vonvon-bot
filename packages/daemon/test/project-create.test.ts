@@ -219,7 +219,7 @@ describe('s36d1 createProject', () => {
     const failure = await createProject({ rawClient: fake.client }, input('Raced')).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(CreatedButUnsavedError);
     expect((failure as CreatedButUnsavedError).chatId).toMatch(/^oc_request-/);
-    expect((failure as Error).message).toMatch(/^群「Raced」已建好，但没存上：.*加入现有飞书群.*不要再建$/);
+    expect((failure as Error).message).toMatch(/^群「Raced」已建好，但没存上：.*加入现有飞书群.*不要再建。绑回来是只读，要完全访问就到群设置里改$/);
     expect((failure as Error).message).not.toContain('相同请求重试');
   });
 

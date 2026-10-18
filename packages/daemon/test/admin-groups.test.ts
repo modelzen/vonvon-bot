@@ -321,32 +321,17 @@ describe('desktop group commands in the owning bot', () => {
     expect(fixture.message).not.toHaveBeenCalled();
   });
 
-  it('s36d1: binds a group the bot owns as created at full access, any other as joined', async () => {
+  it('s36d1: binds a group the bot itself owns as joined and read-only, without asking Feishu who owns it', async () => {
+    // Feishu leaves owner_id out when a bot owns the group (2026-10-18), the same as for another app's bot's group.
     const fixture = channelFixture();
-    const owner = vi.fn(async (chatId: string) => ({ chatId, chatType: 'group' as const, ownerId: chatId === 'oc_owned' ? 'ou_bot' : 'ou_someone' }));
-    const channel = Object.assign(fixture.channel, { botIdentity: { openId: 'ou_bot', name: 'Bot' }, getChatInfo: owner });
-    const owned = await createGroupExecutor(channel)({ kind: 'bindGroup', input: { chatId: 'oc_owned', projectName: 'Owned', backend: 'codex-appserver', kind: 'multi' } });
-    expect(owned).toMatchObject({ origin: 'created', mode: 'full', network: false });
-    expect(owned).not.toHaveProperty('addedBy');
+    const chatInfo = vi.fn(async (chatId: string) => ({ chatId, chatType: 'group' as const }));
+    const channel = Object.assign(fixture.channel, { botIdentity: { openId: 'ou_bot', name: 'Bot' }, getChatInfo: chatInfo });
+    const unsaved = await createGroupExecutor(channel)({ kind: 'bindGroup', input: { chatId: 'oc_bot_owned', projectName: 'Bot owned', backend: 'codex-appserver', kind: 'multi' } });
+    expect(unsaved).toMatchObject({ origin: 'joined', mode: 'qa', network: false });
     // A bind with no backend picked writes the one it runs on, so it never follows a later default.
     expect(await joinExistingGroup(channel, { name: 'Not owned', chatId: 'oc_not_owned', kind: 'multi', addedBy: 'ou_admin' })).toMatchObject({ origin: 'joined', mode: 'qa', addedBy: 'ou_admin',
       backend: await effectiveDefaultBackend() });
-    owner.mockRejectedValueOnce(new Error('offline'));
-    expect(await joinExistingGroup(channel, { name: 'Unknown owner', chatId: 'oc_unknown_owner', kind: 'multi' })).toMatchObject({ origin: 'joined', mode: 'qa' });
-    expect(owner).toHaveBeenCalledTimes(3);
-  });
-
-  it('s36d1: binds as joined when Feishu does not say who owns the group in time, and does not ask for a group already bound', async () => {
-    const fixture = channelFixture();
-    const hung = vi.fn(() => new Promise<never>(() => {}));
-    const channel = Object.assign(fixture.channel, { botIdentity: { openId: 'ou_bot', name: 'Bot' }, getChatInfo: hung });
-    const binding = joinExistingGroup(channel, { name: 'Silent owner', chatId: 'oc_silent_owner', kind: 'multi', ownerLookupMs: 100 });
-    const outcome = await Promise.race([binding, new Promise(resolve => setTimeout(() => resolve('still waiting'), 3_000))]);
-    expect(outcome).toMatchObject({ chatId: 'oc_silent_owner', origin: 'joined', mode: 'qa' });
-    expect(hung).toHaveBeenCalledTimes(1);
-    // The same bind again returns the stored row; who owns the group no longer matters.
-    expect(await joinExistingGroup(channel, { name: 'Silent owner', chatId: 'oc_silent_owner', kind: 'multi', ownerLookupMs: 100 })).toEqual(outcome);
-    expect(hung).toHaveBeenCalledTimes(1);
+    expect(chatInfo).not.toHaveBeenCalled();
   });
 
   it('registry rejects duplicate races while preserving unrelated existing projects', async () => {
