@@ -265,7 +265,7 @@ it('creates in the bot\'s stable directory once and preserves idempotency across
     const replies = await Promise.all([app.collaboration(request), app.collaboration(request)]);
     expect(replies[0]).toEqual(replies[1]);
     expect(fake.creates()).toMatchObject([{ params: { user_id_type: 'open_id', uuid: request.requestId }, data: { name: 'created', user_id_list: ['ou_owner'] } }]);
-    expect(await getProjectByName('created')).toMatchObject({ cwd: join(paths.projectsRootDir, 'fixture', 'groups', 'created'), creationRequestId: request.requestId,
+    expect(await getProjectByName('created')).toMatchObject({ cwd: await realpath(join(paths.projectsRootDir, 'fixture', 'groups', 'created')), creationRequestId: request.requestId,
       origin: 'created', mode: 'full', backend: 'codex-appserver' });
     await app.shutdown(); app = creator(fake.client);
     expect(await app.collaboration(request)).toEqual(replies[0]);
