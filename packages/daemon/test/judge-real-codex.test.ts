@@ -8,7 +8,7 @@ import { shutdownResidentClients } from '../src/agent/codex-appserver/client-poo
 import { judgeProcessStats } from '../src/agent/codex-appserver/judge-process';
 import { createJudge } from '../src/judge/judge';
 import { DEFAULT_SMART_PROMPT, JUDGE_ALLOWED } from '../src/judge/prompt';
-import type { JudgeRequest, JudgeVariant } from '../src/judge/types';
+import type { JudgeLine, JudgeRequest, JudgeVariant } from '../src/judge/types';
 import { filesWith } from './helpers/marker-scan';
 
 /**
@@ -106,6 +106,21 @@ describe.skipIf(!REAL)('真实 Codex 判断（VONVON_REAL_JUDGE=1）', () => {
       console.log(JSON.stringify({ release: release.decision, lunch: lunch.decision }));
       expect([release.error, lunch.error]).toEqual([undefined, undefined]);
       expect(lunch.decision).toBe('skip');
+    }
+  }, 60_000 * RUNS);
+
+  // s25b：锚点只在主区没点名时问；模型指哪条是模型的事，只记下来（k/n），断言它在给的几条里。
+  it('锚点：补一句的那条接的是前面的哪条', async () => {
+    const at = Date.now();
+    const context: JudgeLine[] = [
+      { id: 'om_ask', at: at - 60_000, from: 'user', name: '张三', text: '导出接口 500 是谁在看？' },
+      { id: 'om_mine', at: at - 30_000, from: 'user', name: '李四', text: '我在看' },
+    ];
+    for (let run = 0; run < RUNS; run++) {
+      const result = await judge.judge(request('main', { context, message: { at, from: 'user', name: '张三', text: `补一句：是生产环境 ${marker}` } }));
+      console.log(JSON.stringify({ decision: result.decision, anchor: result.anchor ?? 'm0' }));
+      expect(result.error).toBeUndefined();
+      expect([undefined, 'om_ask', 'om_mine']).toContain(result.anchor);
     }
   }, 60_000 * RUNS);
 

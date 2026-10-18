@@ -9,7 +9,7 @@ import { paths } from '../config/paths';
 import { log } from '../core/logger';
 import { createCooldown } from './cooldown';
 import { parseStoredJudge, resolveJudgeModel } from './model';
-import { judgeSchema, judgeSystem, parseVerdict, renderJudgeInput } from './prompt';
+import { judgeAnchors, judgeSchema, judgeSystem, parseVerdict, renderJudgeInput } from './prompt';
 import { readSmartPrompt, SmartPromptError } from './smart-file';
 import type { JudgeDecision, JudgeErrorKind, JudgeRequest, JudgeResult } from './types';
 
@@ -322,9 +322,14 @@ export function createJudge(deps: JudgeDeps): Judge {
       const output = await Promise.race([work, aborted]);
       const verdict = parseVerdict(req.variant, output);
       if (!verdict) throw new JudgeFail('format', '模型没按格式回答');
+      const { anchor: number, ...rest } = verdict;
+      // The m-number as a message id; one past the lines shown, or a line without an id, names nothing (s25b).
+      const anchor = number ? judgeAnchors(req)[number] : undefined;
+      if (number && !anchor) log.info('judge', 'anchor-invalid', { ...fields, number });
       const usage = output.usage;
-      return finish({ ...verdict, ...base, ms: now() - started }, {
+      return finish({ ...rest, ...(anchor ? { anchor } : {}), ...base, ms: now() - started }, {
         cold: output.cold, inputTokens: usage?.input, cachedTokens: usage?.cached, outputTokens: usage?.output, reasoningTokens: usage?.reasoning,
+        anchor: anchor?.slice(-6),
       });
     } catch (error) {
       // Once the controller fired, its reason names the failure, whatever the backend threw after.

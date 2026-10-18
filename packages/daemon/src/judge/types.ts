@@ -21,6 +21,8 @@ export type JudgeDecision = 'skip' | 'main' | 'topic' | 'reply';
 export type JudgeSelectionStored = { kind: 'llm'; backend: string; model: string; effort?: ReasoningEffort; custom?: true };
 
 export interface JudgeLine {
+  /** message id: what an anchor names (s25b); never rendered */
+  id?: string;
   /** epoch ms */
   at: number;
   /** this bot, another bot, a person */
@@ -63,8 +65,13 @@ export interface JudgeRequest {
 export interface JudgeResult {
   /** always set; on failure `main` for mentioned and `skip` otherwise, but `skip` for aborted and closed */
   decision: JudgeDecision;
-  /** the model's reason, at most 80 characters; empty on failure */
+  /** the model's reason, at most 80 characters; may be empty: on failure, or from a decision model (s23f) */
   reason: string;
+  /** main variant: the earlier message the judged one follows up on (its m-number in the input, s25b), where a
+   * topic opens; unset when that is the message itself, or the model named no line shown */
+  anchor?: string;
+  /** 0 to 1: a decision model's (s23f); a language model gives none */
+  confidence?: number;
   error?: { kind: JudgeErrorKind; detail?: string };
   backend: string;
   model: string;
