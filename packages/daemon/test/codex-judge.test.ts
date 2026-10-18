@@ -608,15 +608,17 @@ describe('Codex 判断进程：空闲、换版本、关机', () => {
     expect(alive(newPid!)).toBe(true);
   });
 
-  it('换新时几条同时来：只起一个新进程，cold 只给起进程的那一条', async () => {
+  it('换新时几条同时来：同一刻分给旧进程的那条照样做完，只起一个新进程，cold 只给起进程的那一条', async () => {
     proc.configureJudgeProcess({ recycleAfter: 2 });
-    await judge(call());
     await judge(call());
     const results = await Promise.all([1, 2, 3].map(i => judge(call('ok', { tag: `ID${i}` }))));
     expect(results.map(r => r.text)).toEqual([1, 2, 3].map(i => `final:MODE:ok ID${i}`));
-    expect(results.map(r => r.cold)).toEqual([true, false, false]);
+    expect(results.map(r => r.cold)).toEqual([false, true, false]);
+    const [oldPid, newPid] = fake.pids();
     expect(fake.pids()).toHaveLength(2);
+    expect(fake.requests('turn/start').map(r => r.pid)).toEqual([oldPid, oldPid, newPid, newPid]);
     expect(proc.judgeProcessStats()).toMatchObject({ spawned: 2, recycled: 1 });
+    await waitForProcess(() => expect(alive(oldPid!)).toBe(false));
   });
 
   it('shutdownResidentClients 关掉判断进程，在跑的马上结束，之后再起被拒', async () => {

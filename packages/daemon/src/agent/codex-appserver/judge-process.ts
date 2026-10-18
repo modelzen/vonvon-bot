@@ -327,9 +327,12 @@ async function acquire(cwd: string): Promise<{ slot: Slot; cold: boolean }> {
   if (!poolAccepting()) throw closedError();
   const bin = opts.resolveBin();
   if (!bin) throw new JudgeCallError('unavailable', 'codex CLI not found (set CODEX_BIN or install @openai/codex)', false);
-  // counted when handed out, in the same tick as the check, so concurrent judgements cannot overshoot
+  // Counted, and in flight, in the same tick as the checks: a judgement handed the old process just
+  // before it retires keeps it open (the s23e real test lost two that way), and concurrent ones cannot overshoot.
   const take = (slot: Slot, cold: boolean): { slot: Slot; cold: boolean } => {
     slot.judgements++;
+    slot.inflight++;
+    clearTimeout(slot.idleTimer);
     return { slot, cold };
   };
   const slot = current;
@@ -486,21 +489,32 @@ async function judgeOn(slot: Slot, call: JudgeCall, cold: boolean): Promise<Judg
   }
 }
 
+/** A judgement is done with its process: the last one closes a retired process or starts the idle clock. */
+function release(slot: Slot): void {
+  slot.inflight--;
+  if (slot.inflight === 0 && !slot.client.exited) {
+    if (slot.ending === 'retired') closeDiscarded(slot.client);
+    else idleLater(slot);
+  }
+}
+
 /**
  * Runs one judgement on the judge process. Rejects with {@link JudgeCallError}, or with the
  * signal's reason once it fired; settles only after the cleanup RPCs went out.
  */
 export async function runCodexJudge(call: JudgeCall): Promise<JudgeCallOutput> {
-  const { slot, cold } = await untilAbort(acquire(call.cwd), call.signal);
-  slot.inflight++;
-  clearTimeout(slot.idleTimer);
+  const acquiring = acquire(call.cwd);
+  let taken: { slot: Slot; cold: boolean };
   try {
-    return await judgeOn(slot, call, cold);
+    taken = await untilAbort(acquiring, call.signal);
+  } catch (error) {
+    // gave up while the process came up: give back the place it still gets
+    void acquiring.then(({ slot }) => release(slot), () => undefined);
+    throw error;
+  }
+  try {
+    return await judgeOn(taken.slot, call, taken.cold);
   } finally {
-    slot.inflight--;
-    if (slot.inflight === 0 && !slot.client.exited) {
-      if (slot.ending === 'retired') closeDiscarded(slot.client);
-      else idleLater(slot);
-    }
+    release(taken.slot);
   }
 }
