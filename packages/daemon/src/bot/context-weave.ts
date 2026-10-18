@@ -92,6 +92,8 @@ export interface ContextMessage {
   createTime: number;
   /** It @-mentions this bot (that mention is then left out of `text`). */
   mentionsMe?: boolean;
+  /** It @-mentions someone, this bot included, or everyone (s25b). */
+  named?: true;
   /** A card still streaming: its bot has not finished answering. */
   streaming?: boolean;
   /** The topic it is in (a main-area pull lists only a topic's first message). */
@@ -216,20 +218,17 @@ export async function fetchMessageMeta(channel: LarkChannel, messageId: string, 
   }
 }
 
-/** Pages {@link fetchTopicLastBot} reads at most before it gives up. */
+/** Pages a topic's lookups read at most before they give up. */
 const LAST_BOT_PAGES = 3;
 
-/**
- * The bot that spoke last in a topic (s22, 接着聊): `self`, `bot` (another
- * one), or `none` when no bot is among its newest {@link LAST_BOT_PAGES}
- * pages. Undefined when a page fails or `deadlineMs` runs out (logged).
- * The topic's first message counts: a topic hung under another bot's message
- * is that bot's until someone else speaks.
- */
-export async function fetchTopicLastBot(channel: LarkChannel, threadId: string, deadlineMs: number): Promise<'self' | 'bot' | 'none' | undefined> {
-  const failed = (err: unknown, code?: number): undefined => {
+/** Pages a topic newest first, {@link LAST_BOT_PAGES} pages at most within `deadlineMs`, handing each item and its
+ * sender's kind to `visit` until it says stop. Ends `stopped`, `start` (the topic's first message read), `cap`, or
+ * `failed` (a page failed or the time ran out; logged). */
+async function walkTopic(channel: LarkChannel, threadId: string, deadlineMs: number,
+  visit: (item: RawMsgItem, kind: ContextMessage['from'] | undefined) => boolean): Promise<'stopped' | 'start' | 'cap' | 'failed'> {
+  const failed = (err: unknown, code?: number): 'failed' => {
     log.warn('intake', 'topic-speaker-failed', { threadId, err: String(err), ...(code !== undefined ? { code } : {}) });
-    return undefined;
+    return 'failed';
   };
   const deadline = Date.now() + deadlineMs;
   const me = meOf(channel);
@@ -249,18 +248,71 @@ export async function fetchTopicLastBot(channel: LarkChannel, threadId: string, 
       if (typeof res.code === 'number' && res.code !== 0) return failed(res.msg, res.code);
       const data = res.data as { items?: RawMsgItem[]; has_more?: boolean; page_token?: string } | undefined;
       const items = data?.items ?? [];
-      for (const it of items) {
-        const kind = kindOf(it.sender, me);
-        if (kind === 'self' || kind === 'bot') return kind;
-      }
-      if (!data?.has_more || !data.page_token || items.length === 0) return 'none';
+      for (const it of items) if (visit(it, kindOf(it.sender, me))) return 'stopped';
+      if (!data?.has_more || !data.page_token || items.length === 0) return 'start';
       pageToken = data.page_token;
     }
     log.info('intake', 'topic-speaker-page-cap', { threadId, pages: LAST_BOT_PAGES });
-    return 'none';
+    return 'cap';
   } catch (err) {
     return failed(err, feishuError(err)?.code);
   }
+}
+
+/**
+ * The bot that spoke last in a topic (s22, 接着聊): `self`, `bot` (another
+ * one), or `none` when no bot is among its newest {@link LAST_BOT_PAGES}
+ * pages. Undefined when a page fails or `deadlineMs` runs out (logged).
+ * The topic's first message counts: a topic hung under another bot's message
+ * is that bot's until someone else speaks. A deleted message counts too.
+ */
+export async function fetchTopicLastBot(channel: LarkChannel, threadId: string, deadlineMs: number): Promise<'self' | 'bot' | 'none' | undefined> {
+  let found: 'self' | 'bot' | undefined;
+  const end = await walkTopic(channel, threadId, deadlineMs, (_, kind) => {
+    if (kind !== 'self' && kind !== 'bot') return false;
+    found = kind;
+    return true;
+  });
+  return end === 'failed' ? undefined : found ?? 'none';
+}
+
+/** A smart group's topic, read once for the message `sender` posted (s25b). */
+export interface TopicScan {
+  /** As {@link fetchTopicLastBot} has it, settled at the first bot met: 三条底线 waits for nothing more. */
+  lastBot: Promise<'self' | 'bot' | 'none' | undefined>;
+  /** Only `sender` among people talks with this bot here (product.md 3.4 控制成本): of the bots, this one spoke last,
+   * and the newest pages (3, or back to the topic's start) were read, every one of them, with no other person in them.
+   * Another bot further back does not count. Never rejects. */
+  solo: Promise<boolean>;
+}
+
+/** One walk of the topic for both answers. Another bot spoke last: it stops there. Someone else spoke: it stops once
+ * the last bot is known. Deleted messages and system notices are no one; a sender that is not a person known by open_id
+ * (anonymous, another id type) is someone else. */
+export function scanTopic(channel: LarkChannel, threadId: string, sender: string, deadlineMs: number): TopicScan {
+  let settle!: (value: 'self' | 'bot' | 'none' | undefined) => void;
+  const lastBot = new Promise<'self' | 'bot' | 'none' | undefined>((resolve) => { settle = resolve; });
+  let bot: 'self' | 'bot' | undefined;
+  let other = false;
+  const solo = walkTopic(channel, threadId, deadlineMs, (it, kind) => {
+    if (kind === 'self' || kind === 'bot') {
+      if (!bot) {
+        bot = kind;
+        settle(kind);
+      }
+      return other || bot === 'bot';
+    }
+    if (!other && !it.deleted && it.msg_type !== 'system' && it.sender?.sender_type) {
+      const s = it.sender;
+      other = !(s.sender_type === 'user' && isOpenId(s.id_type) && s.id === sender);
+    }
+    return other && bot !== undefined;
+  }).then((end) => {
+    // Failed before a bot was met: unknown, as fetchTopicLastBot. After: what was read stands, marked not whole (s25 M3).
+    settle(end === 'failed' ? bot : bot ?? 'none');
+    return end !== 'failed' && bot === 'self' && !other;
+  });
+  return { lastBot, solo };
 }
 
 /** One history pull: the messages found, oldest→newest. */
@@ -487,6 +539,7 @@ function toContextMessage(item: RawMsgItem, me: Me, names?: NameBook): ContextMe
     senderId: senderIdOf(item.sender),
     createTime: Number(item.create_time) || 0,
     ...(mine.length ? { mentionsMe: true } : {}),
+    ...(item.mentions?.length || item.body?.content?.includes('@_all') ? { named: true as const } : {}),
     ...(item.msg_type === 'interactive' && isStreamingCard(item.body?.content) ? { streaming: true } : {}),
     ...(item.thread_id ? { threadId: item.thread_id } : {}),
   };
@@ -865,6 +918,8 @@ export interface Who {
 export interface TopicPointer {
   /** This bot opened the topic on the trigger (a main @ in a multi group). */
   botOpened?: boolean;
+  /** It opened it on an earlier message the trigger follows up on (s25b). */
+  earlier?: boolean;
   /** The message it hangs under; undefined when that could not be read. */
   root?: { at: number; who: Who };
   /** The main area's session in a single group, same tier. */
@@ -996,7 +1051,7 @@ function pointerLine(p: TopicPointer, now: number): string {
   const at = p.root ? ` ${clockOf(p.root.at, now)} ` : '';
   if (p.botOpened) {
     const under = p.root ? `${at}${whoText(p.root.who)}的这条` : '的一条';
-    return `这个话题是你在群主区${under}消息下开的，就是下面这条。${rest}`;
+    return `这个话题是你在群主区${under}消息下开的，${p.earlier ? '下面这条是接着它说的' : '就是下面这条'}。${rest}`;
   }
   let where = '的一条消息';
   if (p.root?.who.kind === 'self') where = `${at}你的回复`;
