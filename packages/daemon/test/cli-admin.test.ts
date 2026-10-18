@@ -421,4 +421,9 @@ it('judge: set takes the selection JSON, get prints a row per backend and the pr
   expect(h.out()).toBe(`已保存 judge.selection = ${JSON.stringify(stored)}（各后端的群都用）。\n智能模式的下一次判断就用新模型\n`);
   const old = harness({ snapshot: one(), settings: vi.fn(async () => ({ kind: 'view', view: { scope: { kind: 'agent', botId: 'cli_a' }, sections: {} } })) });
   await expect(runSettingsSet(['judge.selection={"kind":"default"}'], {}, old.io(), old.daemon)).rejects.toThrow('daemon 没有 judge 这一节。daemon 可能比命令行旧。');
+  // asked for by name, a section the daemon lacks is said, not left out
+  await runSettingsGet('judge', {}, old.io(), old.daemon);
+  expect(old.out()).toBe('bot Vonvon Bot（cli_a）的设置\ndaemon 没有 judge 这一节。daemon 可能比命令行旧。\n');
+  old.clear(); await runSettingsGet(undefined, {}, old.io(), old.daemon);
+  expect(old.out()).toBe('bot Vonvon Bot（cli_a）的设置\n');
 });

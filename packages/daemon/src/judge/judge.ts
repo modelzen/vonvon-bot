@@ -264,7 +264,6 @@ export function createJudge(deps: JudgeDeps): Judge {
     try {
       const backend = deps.backendFor(base.backend);
       const models = backend.peekModels?.();
-      if (backend.peekModels && !models) fetchModels(backend);
       base = {
         ...base, backend: backend.id,
         ...resolveJudgeModel(backend.id, { group: storedJudge(req.group.judge, req.group.chatId), bot: storedJudge(req.botJudge, 'bot') }, models),
@@ -272,6 +271,8 @@ export function createJudge(deps: JudgeDeps): Judge {
       // s23f calls decision models. Until then one fails like a decision model without its key: no
       // quiet switch to the subscription's small model (product.md 3.4).
       if (base.provider) throw new JudgeFail('unavailable', `这个版本还不能用决策模型判断（${base.provider}）`);
+      // a decision model needs no backend model list
+      if (backend.peekModels && !models) fetchModels(backend);
 
       // Steps 3 to 6 race the shared controller: a stuck file read, queue or backend still returns
       // on time. The backend call keeps running and cleans up on its own; its slot waits for that.

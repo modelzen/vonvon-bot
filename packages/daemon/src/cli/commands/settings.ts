@@ -1,5 +1,5 @@
 import {
-  agentSectionSchemas, JUDGE_SELECTION_KINDS, projectEditableSchemas, sessionSectionSchemas, sessionThreadIdSchema,
+  agentSectionSchemas, isKnownJudgeSelection, projectEditableSchemas, sessionSectionSchemas, sessionThreadIdSchema,
   type Agent, type AgentSettingsView, type JudgeSelectionView, type Membership, type ProjectSettingsView, type SessionSettingsView,
   type SettingsScope, type SettingsView, type SmartPromptView,
 } from '@vonvon/protocol';
@@ -166,7 +166,7 @@ function judgeLines(view: AgentSettingsView): string[] {
 
 /** A kind a newer daemon wrote shows as sent (v1-plan 第 5 节"旧客户端读到决策模型"); say so. */
 function unknownJudge(selection: JudgeSelectionView | undefined): string[] {
-  return selection && !JUDGE_SELECTION_KINDS.includes(selection.kind) ? [`  这个版本的命令行不认识 ${selection.kind} 这一类判断模型，上面是原样`] : [];
+  return selection && !isKnownJudgeSelection(selection) ? [`  这个版本的命令行不认识 ${selection.kind} 这一类判断模型，上面是原样`] : [];
 }
 
 export async function runSettingsGet(section: string | undefined, target: Target, io: Io, daemon: Daemon = withDaemon): Promise<void> {
@@ -186,7 +186,11 @@ export async function runSettingsGet(section: string | undefined, target: Target
   const fullOnly = view.scope.kind === 'project' ? (view as ProjectSettingsView).identity.fullOnly : undefined;
   for (const name of names.filter(name => section === undefined || name === section)) {
     const value = Object.hasOwn(sections, name) ? sections[name] : undefined;
-    if (!value) continue;
+    if (!value) {
+      // asked for by name: say why nothing shows (same words as set)
+      if (section !== undefined) human.push(`daemon 没有 ${name} 这一节。daemon 可能比命令行旧。`);
+      continue;
+    }
     human.push(`[${name}]${value.access.kind === 'readonly' ? `（只读：${value.access.message}）` : ''}`);
     const effective = (value.effective ?? {}) as Record<string, unknown>;
     // Only what `set` takes: the view's deprecated permission.guestMode (s15c) is left out.
@@ -234,8 +238,9 @@ export async function runSettingsSet(assignments: readonly string[], target: Tar
   if (result.kind === 'unavailable') throw new Error(result.reason.kind === 'readonly' ? result.reason.message : '当前不可编辑。');
   // The daemon fills in a language model's backend: show what was stored, and for which groups.
   const stored = section === 'judge' ? (result.section.value.stored as { selection?: JudgeSelectionView }).selection : undefined;
-  const whose = target.group !== undefined ? '' : stored?.kind === 'decision' ? '（各后端的群都用）'
-    : stored?.kind === 'llm' && typeof stored.backend === 'string' ? `（${toolLabel(stored.backend)} 的群用）` : '';
+  const known = stored && isKnownJudgeSelection(stored) ? stored : undefined;
+  const whose = target.group !== undefined ? '' : known?.kind === 'decision' ? '（各后端的群都用）'
+    : known?.kind === 'llm' && known.backend ? `（${toolLabel(known.backend)} 的群用）` : '';
   const saved = stored ? `judge.selection = ${show(stored)}${whose}`
     : Object.entries(patch).map(([key, value]) => `${section}.${key} = ${show(value)}`).join('、');
   print(io, [`已保存 ${saved}。`, ...result.effects.map(effect => effect.detail)], { section: result.section, effects: result.effects });

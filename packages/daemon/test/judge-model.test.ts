@@ -229,9 +229,11 @@ describe('decision models (s23d stores them, s23f calls them)', () => {
 
   it('the judge does not call a backend with a decision model: it fails as unavailable and falls back by variant', async () => {
     const judgeFn = vi.fn();
-    const backend = { id: 'codex-appserver', displayName: 'Codex', listModels: async () => [], peekModels: () => [LUNA], judge: judgeFn } as unknown as AgentBackend;
+    // no cached list either: a decision model needs none, so none is fetched
+    const listModels = vi.fn(async () => [LUNA]);
+    const backend = { id: 'codex-appserver', displayName: 'Codex', listModels, peekModels: () => undefined, judge: judgeFn } as unknown as AgentBackend;
     const judge = createJudge({ backendFor: () => backend, readPrompt: async () => ({ source: 'default', text: 'S', path: '' }), cwd: async () => '/j' });
-    const req = (variant: 'main' | 'mentioned') => ({
+    const req = (variant: 'main' | 'mentioned' | 'topic') => ({
       variant, appId: 'cli_a', botName: 'P', botJudge: { kind: 'decision', provider: 'typesafe', model: 'jev-latest' },
       group: { chatId: 'oc_g', name: 'g', backend: 'codex-appserver' }, context: [], message: { at: 0, from: 'user' as const, name: 'u', text: 't' },
     });
@@ -240,6 +242,8 @@ describe('decision models (s23d stores them, s23f calls them)', () => {
       backend: 'codex-appserver', model: 'jev-latest', provider: 'typesafe', modelSource: 'bot',
     });
     expect(await judge.judge(req('mentioned'))).toMatchObject({ decision: 'main', error: { kind: 'unavailable' } });
+    expect(await judge.judge(req('topic'))).toMatchObject({ decision: 'skip', error: { kind: 'unavailable' } });
     expect(judgeFn).not.toHaveBeenCalled();
+    expect(listModels).not.toHaveBeenCalled();
   });
 });

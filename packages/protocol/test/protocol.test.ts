@@ -10,6 +10,7 @@ import {
   jobSchema, environmentReplySchema,
   type DesktopSnapshot, settingsViewSchema, projectViewSchema, projectEditableSchemas, settingsReplySchema,
   applicationCrashesSchema, crashText, FORCED_DETAIL, NOT_REPLIED_TEXT, diagnosticsEventSchema,
+  isKnownJudgeSelection, type JudgeSelectionView,
 } from "../src/index.js";
 
 const fixture = (name: string): unknown => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
@@ -159,6 +160,12 @@ describe("pinned contract extraction", () => {
     // a kind from a newer daemon parses as sent; a known kind that is malformed does not
     const future = {kind:"oracle",provider:"x",model:"y",weights:[1,2]};
     expect(agentViewSchema.parse({ ...old, sections: { ...old.sections, judge: section({selection:future}) } }).sections.judge?.stored.selection).toEqual(future);
+    // a client narrows with the guard first: `kind` alone leaves the fields unknown
+    const read = (selection: JudgeSelectionView): string => !isKnownJudgeSelection(selection) ? `unknown ${selection.kind}`
+      : selection.kind === "llm" ? `${selection.backend} ${selection.model}` : selection.kind === "decision" ? `${selection.provider} ${selection.model}` : "default";
+    const pick = (selection: unknown) => agentViewSchema.parse({ ...old, sections: { ...old.sections, judge: section({selection}) } }).sections.judge!.stored.selection;
+    expect([llm, jev, {kind:"default"}, future].map((selection) => read(pick(selection))))
+      .toEqual(["codex-appserver gpt-6-luna", "typesafe jev-latest", "default", "unknown oracle"]);
     for (const bad of [{kind:"llm"}, {kind:"decision",model:"x"}, {kind:""}, {model:"x"}]) {
       expect(agentViewSchema.safeParse({ ...old, sections: { ...old.sections, judge: section({selection:bad}) } }).success).toBe(false);
     }

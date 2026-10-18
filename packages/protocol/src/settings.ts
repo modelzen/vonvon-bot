@@ -300,6 +300,12 @@ export type TitlePolicy = z.infer<typeof title>;
 export type JudgeSelection = z.infer<typeof judgeSelection>;
 /** A view's judge selection: a known kind, or one this client does not know, as sent. */
 export type JudgeSelectionView = z.infer<typeof judgeViewSection>["selection"];
+/** Whether a view's judge selection is a kind this version knows. Check it before comparing `kind`:
+ * the other branch's `kind: string` matches every literal, so `kind === "llm"` alone leaves the
+ * fields `unknown`. A parsed view's known kind always has its fields (judgeViewSection). */
+export function isKnownJudgeSelection(selection: JudgeSelectionView): selection is JudgeSelection {
+  return JUDGE_SELECTION_KINDS.includes(selection.kind);
+}
 export type SmartPromptView = z.infer<typeof smartPrompt>;
 
 const editablePatches: Record<

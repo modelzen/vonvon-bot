@@ -82,7 +82,9 @@ function storedJudge(value: unknown): JudgeSelectionStored | undefined {
 }
 /** The judge setting a view shows: what the judge reads; a kind this version does not know as stored,
  * so it shows and is never rewritten (v1-plan 第 5 节"旧客户端读到决策模型"); anything else unusable
- * as default, which is what the judge then uses. */
+ * as default, which is what the judge then uses. Such a kind goes out whole to every client that
+ * reads the view, so no kind may keep a credential in its selection (keys live in secrets.enc,
+ * s23g). One over 4,000 characters of JSON shows as default, with no "unknown kind" line. */
 function storedJudgeView(value: unknown): T.JudgeSelectionView {
   const parsed = storedJudge(value);
   if (parsed)
@@ -203,6 +205,22 @@ function check(actual: unknown, revision: string): void {
   if (settingsRevision(actual) !== revision)
     throw new Conflict();
 }
+/** A judge choice checked before the write lock; `layerBackend` when the check used the layer's
+ * backend: a group's language model, or the bot's that names none. */
+interface PreparedJudge {
+  chosen?: JudgeSelectionStored;
+  layerBackend?: string;
+}
+/** Under the write lock. If the layer's backend the check used moved in between (the bot's default
+ * backend, a group's switch), the check no longer holds. */
+function storeJudge(target: { judge?: JudgeSelectionStored }, prepared: PreparedJudge, layerBackend: string): void {
+  if (prepared.layerBackend !== undefined && layerBackend !== prepared.layerBackend)
+    throw new Conflict();
+  if (prepared.chosen)
+    target.judge = prepared.chosen;
+  else
+    delete target.judge;
+}
 function rejected(error: unknown): {
   kind: 'rejected';
   fields: T.SettingsFieldError[];
@@ -310,11 +328,20 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       throw new SettingsInputError('模型或推理强度不在当前后端支持列表中，请刷新模型列表');
     return value;
   }
+  const peekModels = (id: string): ModelInfo[] | undefined => {
+    try {
+      return deps.backendFor(id).peekModels?.();
+    }
+    catch {
+      return undefined;
+    }
+  };
   /** Returns what to store, or nothing for `default` (design 2.4). A language model is stored with its
    * backend: a group's must be the group's, or the judge would ignore it; the bot's is its default
-   * backend unless it says otherwise. A listed model is checked against the catalog, except while the
-   * catalog cannot be read: then the choice and its effort are kept as given, and each judgement fits
-   * the effort to the model (Rakazo 第二轮 A6). A decision model is checked for its shape only. */
+   * backend unless it says otherwise. A listed model is checked against the list the backend holds
+   * (what the judge fits the effort with), else a fresh catalog, except while the catalog cannot be
+   * read: then the choice and its effort are kept as given, and each judgement fits the effort to the
+   * model (Rakazo 第二轮 A6). A decision model is checked for its shape only. */
   async function validateJudgeSelection(value: T.JudgeSelection, layerBackend: string, group: boolean): Promise<JudgeSelectionStored | undefined> {
     if (value.kind === 'default')
       return undefined;
@@ -338,24 +365,28 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
     const stored: JudgeSelectionStored = { kind: 'llm', backend, model: id.id, ...(value.effort ? { effort: value.effort } : {}) };
     if (value.custom)
       return { ...stored, custom: true };
-    const catalog = await models({ botId, backend, purpose: 'judge' });
-    if (!catalog.models.length)
+    const listed = peekModels(backend) ?? (await models({ botId, backend, purpose: 'judge' })).models;
+    if (!listed.length)
       return stored;
-    const model = catalog.models.find(item => item.id === id.id && !item.hidden);
+    const model = listed.find(item => item.id === id.id && !item.hidden);
     if (!model)
       throw new SettingsInputError('列表里没有这个模型；手填的 id 加 "custom":true');
     if (value.effort && !model.supportedEfforts.includes(value.effort))
       throw new SettingsInputError(model.supportedEfforts.length ? '这个模型不支持这个推理强度' : '这个模型不支持推理强度，effort 不能写');
     return stored;
   }
-  const peekModels = (id: string): ModelInfo[] | undefined => {
-    try {
-      return deps.backendFor(id).peekModels?.();
-    }
-    catch {
-      return undefined;
-    }
-  };
+  /** A judge save is checked before the write lock: reading the model list can take a while (a cold
+   * backend), and the lock holds up every other save of the bot, or of all groups. `current` is the
+   * layer as read now; the save checks its revision again under the lock ({@link storeJudge}). */
+  async function prepareJudge(selection: T.JudgeSelectionView | undefined, current: unknown, revision: string, layerBackend: string, group: boolean): Promise<PreparedJudge> {
+    check(current, revision);
+    if (!selection)
+      throw new SettingsInputError('缺少模型选择');
+    // parseSettingsEdit took only the known kinds
+    const value = selection as T.JudgeSelection;
+    const chosen = await validateJudgeSelection(value, layerBackend, group);
+    return { chosen, ...(value.kind === 'llm' && (group || !value.backend) ? { layerBackend } : {}) };
+  }
   /** What a group on `backend` judges with (design 2.5), as a selection. */
   function judgeEffective(backend: string, layers: { group?: JudgeSelectionStored; bot?: JudgeSelectionStored }): T.AgentSections['judge'] {
     const { model, effort, provider } = resolveJudgeModel(backend, layers, peekModels(backend));
@@ -524,6 +555,9 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         const e = edit as Extract<T.BotSettingsEdit, {
           section: keyof T.AgentSections;
         }>;
+        const judge = e.section === 'judge'
+          ? await prepareJudge(e.patch.selection, [botId, agentRaw(cfg.preferences ?? {}, 'judge')], e.revision, botBackendId(cfg.preferences), false)
+          : undefined;
         await deps.writePreferences(async (p) => {
           check([botId, agentRaw(p, e.section as keyof T.AgentSections)], e.revision);
           switch (e.section) {
@@ -582,17 +616,9 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
                 ...e.patch
               };
               break;
-            case 'judge': {
-              if (!e.patch.selection)
-                throw new SettingsInputError('缺少模型选择');
-              // parseSettingsEdit took only the known kinds
-              const chosen = await validateJudgeSelection(e.patch.selection as T.JudgeSelection, botBackendId(p), false);
-              if (chosen)
-                p.judge = chosen;
-              else
-                delete p.judge;
+            case 'judge':
+              storeJudge(p, judge!, botBackendId(p));
               break;
-            }
             default: throw new SettingsInputError('无效 Agent 设置');
           }
         });
@@ -603,6 +629,13 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         const e = edit as Extract<T.BotSettingsEdit, {
           scope: T.ProjectSettingsView['scope'];
         }>;
+        let judge: PreparedJudge | undefined;
+        if (e.section === 'judge') {
+          const now = await readProject(e.scope.projectName);
+          if (!now)
+            throw new SettingsInputError('项目不存在');
+          judge = await prepareJudge(e.patch.selection, [botId, projectRaw(now, 'judge')], e.revision, groupBackendId(now), true);
+        }
         const p = await changeProject(e.scope.projectName, async (p) => {
           check([botId, projectRaw(p, e.section)], e.revision);
           switch (e.section) {
@@ -647,15 +680,8 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
               }
               break;
             }
-            case 'judge': {
-              if (!e.patch.selection)
-                throw new SettingsInputError('缺少模型选择');
-              const chosen = await validateJudgeSelection(e.patch.selection as T.JudgeSelection, groupBackendId(p), true);
-              if (chosen)
-                p.judge = chosen;
-              else
-                delete p.judge;
-            }
+            case 'judge':
+              storeJudge(p, judge!, groupBackendId(p));
           }
         });
         if (e.section === 'permission') {

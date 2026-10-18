@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { agentViewSchema, projectViewSchema } from '@vonvon/protocol';
@@ -46,6 +46,22 @@ async function save(scope: typeof agent | typeof project, selection: JudgeSelect
   const o = owner();
   const view = await o.read(scope) as AgentSettingsView | ProjectSettingsView;
   return o.save({ scope, section: 'judge', revision: view.sections.judge.revision, patch: { selection } } as Parameters<typeof o.save>[0]);
+}
+/** Codex with no cached list, whose list calls made while `hold` is on wait for `release()`. */
+function slowList() {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const state = { hold: false, held: 0, release: () => release() };
+  // a failing test still lets go, so the shared write locks do not stall the tests after it
+  onTestFinished(() => release());
+  backends['codex-appserver'] = { ...fake('codex-appserver', []), peekModels: () => undefined, listModels: async () => {
+    if (state.hold) {
+      state.held++;
+      await gate;
+    }
+    return LISTS['codex-appserver']!;
+  } } as unknown as AgentBackend;
+  return state;
 }
 const messageOf = (result: Awaited<ReturnType<typeof save>>) => result.kind === 'rejected' ? result.fields[0]?.message : result.kind;
 const JEV = { kind: 'decision', provider: 'typesafe', model: 'jev-latest' } as const;
@@ -139,6 +155,66 @@ describe('judge settings: checks (design 2.4)', () => {
     expect(view.judgeByBackend?.['codex-appserver']).toEqual({ model: 'gpt-6-luna', effort: 'minimal', source: 'bot' });
     backends['codex-appserver'] = fake('codex-appserver', LISTS['codex-appserver']!);
     expect((await owner().read(agent) as AgentSettingsView).judgeByBackend?.['codex-appserver']).toEqual({ model: 'gpt-6-luna', effort: 'low', source: 'bot' });
+  });
+
+  it('reads the model list outside the write locks: a slow list holds up no other save', async () => {
+    const slow = slowList();
+    const o = owner();
+    const a = await o.read(agent) as AgentSettingsView;
+    const p = await o.read(project) as ProjectSettingsView;
+    slow.hold = true;
+    const botJudge = o.save({ scope: agent, section: 'judge', revision: a.sections.judge.revision, patch: { selection: { kind: 'llm', model: 'gpt-6-luna' } } });
+    const groupJudge = o.save({ scope: project, section: 'judge', revision: p.sections.judge.revision, patch: { selection: { kind: 'llm', model: 'gpt-6-luna' } } });
+    await vi.waitFor(() => expect(slow.held).toBe(2));
+    slow.hold = false;
+    expect((await o.save({ scope: agent, section: 'cards', revision: a.sections.cards.revision, patch: { showToolCalls: false } })).kind).toBe('saved');
+    expect((await o.save({ scope: project, section: 'response', revision: p.sections.response.revision, patch: { noMention: true } })).kind).toBe('saved');
+    slow.release();
+    expect((await botJudge).kind).toBe('saved');
+    expect((await groupJudge).kind).toBe('saved');
+    expect((await getProjectByName('demo'))?.judge).toEqual({ kind: 'llm', backend: 'codex-appserver', model: 'gpt-6-luna' });
+  });
+
+  it('the bot default backend moving while the list is read is a conflict, not a model stored for the old one', async () => {
+    const slow = slowList();
+    const writePreferences = createAppPreferencesWriter({ cfg });
+    const o = owner({ writePreferences });
+    const a = await o.read(agent) as AgentSettingsView;
+    slow.hold = true;
+    const pending = o.save({ scope: agent, section: 'judge', revision: a.sections.judge.revision, patch: { selection: { kind: 'llm', model: 'gpt-6-luna' } } });
+    await vi.waitFor(() => expect(slow.held).toBe(1));
+    slow.hold = false;
+    await writePreferences(prefs => { prefs.defaults = { backend: 'claude-agent' }; });
+    slow.release();
+    expect((await pending).kind).toBe('conflict');
+    expect((await loadConfig()).preferences).toEqual({ defaults: { backend: 'claude-agent' } });
+    // a model that names its backend did not depend on the default: it saves
+    const again = slowList();
+    const fresh = await o.read(agent) as AgentSettingsView;
+    again.hold = true;
+    const named = o.save({ scope: agent, section: 'judge', revision: fresh.sections.judge.revision, patch: { selection: { kind: 'llm', backend: 'codex-appserver', model: 'gpt-6-luna' } } });
+    await vi.waitFor(() => expect(again.held).toBe(1));
+    again.hold = false;
+    await writePreferences(prefs => { prefs.defaults = { backend: 'codex-appserver' }; });
+    again.release();
+    expect((await named).kind).toBe('saved');
+    expect((await loadConfig()).preferences?.judge).toEqual({ kind: 'llm', backend: 'codex-appserver', model: 'gpt-6-luna' });
+  });
+
+  it('checks against the cached list without probing the backend again', async () => {
+    const doctor = vi.fn(async () => ({ ok: true }));
+    backends['codex-appserver'] = { ...fake('codex-appserver', LISTS['codex-appserver']!), doctor } as unknown as AgentBackend;
+    const o = owner();
+    // reading the view back after a save probes too: count only what the save adds to that
+    const probes = async (scope: typeof agent | typeof project, section: string, patch: Record<string, unknown>) => {
+      const view = await o.read(scope) as AgentSettingsView | ProjectSettingsView;
+      const before = doctor.mock.calls.length;
+      const result = await o.save({ scope, section, revision: (view.sections as Record<string, { revision: string }>)[section]!.revision, patch } as Parameters<typeof o.save>[0]);
+      return { kind: result.kind, probes: doctor.mock.calls.length - before };
+    };
+    const cards = await probes(agent, 'cards', { showToolCalls: false });
+    expect(await probes(agent, 'judge', { selection: { kind: 'llm', model: 'gpt-6-luna', effort: 'high' } })).toEqual({ kind: 'saved', probes: cards.probes });
+    expect(await probes(project, 'judge', { selection: { kind: 'llm', model: 'missing' } })).toEqual({ kind: 'rejected', probes: 0 });
   });
 
   it('a group takes only its own backend, which it fills in when left out', async () => {
