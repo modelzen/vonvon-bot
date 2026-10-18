@@ -67,6 +67,29 @@ afterEach(() => {
 });
 
 describe('judge', () => {
+  it('gives the anchor as the message id of the line it numbers; m0 or a number past the lines shown names nothing (s25b)', async () => {
+    const f = fakeBackend();
+    let anchor = 'm1';
+    f.answer(async () => ({ text: '', structured: { decision: 'topic', anchor, reason: '' } }));
+    const judge = make(f.backend);
+    const context = [{ id: 'om_old', at: 0, from: 'user' as const, name: '张三', text: '导出接口 500 有人看吗' }, { id: 'om_new', at: 1, from: 'user' as const, name: '李四', text: '我也遇到了' }];
+    const ask = () => judge.judge(req('main', { context, message: { id: 'om_msg', at: 2, from: 'user', name: '张三', text: '是生产环境' } }));
+    const first = await ask();
+    expect(first).toMatchObject({ decision: 'topic', anchor: 'om_new', reason: '' });
+    expect(first.error).toBeUndefined();
+    expect(fake.log.info.mock.calls.find((c) => c[1] === 'verdict')![2]).toMatchObject({ anchor: 'om_new'.slice(-6) });
+    anchor = 'm2';
+    expect((await ask()).anchor).toBe('om_old');
+    for (const none of ['m0', 'm3']) {
+      anchor = none;
+      const result = await ask();
+      expect(result).toMatchObject({ decision: 'topic' });
+      expect(result).not.toHaveProperty('anchor');
+    }
+    expect(fake.log.info.mock.calls.filter((c) => c[1] === 'anchor-invalid')).toHaveLength(1);
+    expect(f.calls[0]!.schema).toHaveProperty('properties.anchor');
+  });
+
   it('returns the verdict with sources, model and ms, and calls onResult once', async () => {
     const f = fakeBackend();
     f.answer(async () => { await new Promise((r) => setTimeout(r, 300)); return ANSWER; });

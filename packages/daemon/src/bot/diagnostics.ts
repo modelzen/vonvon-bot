@@ -63,7 +63,7 @@ const MERGE_MS = 10 * 60_000;
 /** Of the 30, the most kept for the smart mode's normal outcomes (s25): a busy group's quiet judgements do
  * not push out the failures the page is for. */
 export const QUIET_LIMIT = 10;
-const QUIET_REASONS: ReadonlySet<NotRepliedReason> = new Set(['judge-skip', 'judge-superseded']);
+const QUIET_REASONS: ReadonlySet<NotRepliedReason> = new Set(['judge-skip', 'judge-superseded', 'judge-empty']);
 
 export interface DiagnosticsStore {
   accept(appId: string, event: DiagnosticsEvent): void;

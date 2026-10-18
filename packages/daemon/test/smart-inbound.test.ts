@@ -6,7 +6,7 @@ import type { AppConfig } from '../src/config/schema';
 import { paths } from '../src/config/paths';
 import { setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
 import { INITIATIVE_NOTE } from '../src/bot/session-title';
-import { JUDGE_BUDGET } from '../src/bot/smart-intake';
+import { JUDGE_BUDGET, JudgeBudget } from '../src/bot/smart-intake';
 import type { JudgeRequest, JudgeResult } from '../src/judge/types';
 import { receive, type EventMessage, type ReceiveOpts } from './helpers/lark-events';
 
@@ -30,20 +30,28 @@ const fake = vi.hoisted(() => ({
   /** Holds every session read while set: an intake parked on the disk. */
   hold: undefined as Promise<void> | undefined,
   send: vi.fn(async () => ({ messageId: 'om_sent' })),
-  get: vi.fn(async () => ({ code: 0, data: { items: [{ thread_id: 'omt_opened' }] } })),
+  get: vi.fn(async (_req: { path: { message_id: string } }) =>
+    ({ code: 0, data: { items: [{ thread_id: 'omt_opened' }] as Array<{ thread_id?: string; create_time?: string }> } })),
   list: vi.fn(),
   // One id per emoji, so the test sees which reaction went.
   react: vi.fn(async (req: { data: { reaction_type: { emoji_type: string } } }) => ({ data: { reaction_id: `r_${req.data.reaction_type.emoji_type}` } })),
   unreact: vi.fn(async () => ({})),
   inputs: [] as string[],
+  /** A turn's events, when a test says; else it ends at once with nothing said. */
+  events: undefined as (() => AsyncGenerator<unknown>) | undefined,
+  del: vi.fn(),
+  /** Each run card's create arguments, and the frames cards were finalized with. */
+  cards: [] as unknown[][],
+  finals: [] as unknown[],
+  bots: '1',
   judge: vi.fn(),
   log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() },
 }));
 const startThread = vi.fn(async () => ({
-  sessionId: 'native-fixture', isAlive: () => true, close: async () => {}, abort: async () => {},
+  sessionId: 'native-fixture', isAlive: () => true, close: async () => {}, abort: async () => {}, steer: async () => {},
   runStreamed: (input: { text: string }) => {
     fake.inputs.push(input.text);
-    return { turnId: () => 'turn-fixture', events: (async function* () { yield { type: 'done', turnId: 'turn-fixture' }; })() };
+    return { turnId: () => 'turn-fixture', events: fake.events?.() ?? (async function* () { yield { type: 'done', turnId: 'turn-fixture' }; })() };
   },
 }));
 
@@ -58,7 +66,8 @@ vi.mock('../src/judge/judge', async original => ({
 }));
 vi.mock('../src/card/run-card-stream', () => ({
   RunCardStream: class {
-    async create() { return 'card'; }
+    async create(...args: unknown[]) { fake.cards.push(args); return `card_${fake.cards.length}`; }
+    async finalizeCard(_channel: unknown, card: unknown) { fake.finals.push(card); return true; }
     getCardId() { return 'card'; }
     async drain() {}
     async settleImages() { return new Map(); }
@@ -78,9 +87,9 @@ const channel = {
   send: fake.send, botIdentity: BOT,
   rawClient: { appId: APP, im: { v1: {
     messageReaction: { create: fake.react, delete: fake.unreact },
-    message: { get: fake.get, list: fake.list },
+    message: { get: fake.get, list: fake.list, delete: fake.del },
     // The group's only bot unless a test says otherwise.
-    chat: { get: async () => ({ code: 0, data: { chat_mode: 'group', bot_count: '1' } }) },
+    chat: { get: async () => ({ code: 0, data: { chat_mode: 'group', bot_count: fake.bots } }) },
   } } },
 };
 
@@ -127,6 +136,12 @@ beforeEach(() => {
   fake.hold = undefined;
   fake.project = { ...base };
   fake.list.mockImplementation(async () => ({ code: 0, data: { items: [], has_more: false } }));
+  fake.get.mockImplementation(async () => ({ code: 0, data: { items: [{ thread_id: 'omt_opened' }] } }));
+  fake.del.mockImplementation(async () => ({ code: 0 }));
+  fake.events = undefined;
+  fake.cards = [];
+  fake.finals = [];
+  fake.bots = '1';
   fake.judge.mockImplementation((req: JudgeRequest) => {
     const answer = deferred<JudgeResult>();
     asked.set(req.ref!, { req, answer });
@@ -335,5 +350,215 @@ describe('smart mode intake (s25)', () => {
     expect(readFileSync(file, 'utf8')).toContain(idOf(named));
     expect(fake.react).not.toHaveBeenCalled();
     expect(fake.judge).not.toHaveBeenCalled();
+  });
+});
+
+describe('smart mode: one person in a topic, the anchor, the empty card (s25b)', () => {
+  const owner = { id: 'ou_owner', id_type: 'open_id', sender_type: 'user' };
+  const me = { id: APP, id_type: 'app_id', sender_type: 'app', open_bot_id: BOT.openId };
+  /** A topic page newest first; `more` says another page follows. */
+  const page = (senders: object[], more = false) => ({ code: 0, data: { items: senders.map((sender, i) => ({ message_id: `om_p${i}`, msg_type: 'text', sender })), has_more: more, ...(more ? { page_token: 'p2' } : {}) } });
+  /** Only the topic scan lists without sender names. */
+  const scans = () => fake.list.mock.calls.filter(([r]) => (r as { params: { with_sender_name?: boolean } }).params.with_sender_name === undefined);
+  const answered = () => vi.waitFor(() => expect(fake.inputs).toHaveLength(1));
+
+  it('answers unjudged, outside the budget, where only the sender talks with this bot', async () => {
+    const take = vi.spyOn(JudgeBudget.prototype, 'take');
+    fake.list.mockImplementation(async () => page([owner, me, owner]));
+    await send(says('接着说', { thread: 'omt_t' }));
+    await answered();
+    expect(fake.judge).not.toHaveBeenCalled();
+    expect(take).not.toHaveBeenCalled();
+    expect(fake.log.info).toHaveBeenCalledWith('intake', 'judge-solo', expect.anything());
+    expect(fake.inputs[0]).not.toContain(INITIATIVE_NOTE);
+    take.mockRestore();
+  });
+
+  it('judges when someone else spoke there, or a later page failed', async () => {
+    fake.list.mockImplementation(async () => page([owner, me, { ...owner, id: 'ou_other' }]));
+    const second = says('接着说', { thread: 'omt_t' });
+    await send(second);
+    await judged(second);
+    fake.list.mockImplementation(async ({ params }: { params: { page_token?: string } }) => params.page_token ? { code: 230002, msg: 'x' } : page([owner, me], true));
+    const failed = says('还在吗', { thread: 'omt_u' });
+    await send(failed);
+    await judged(failed);
+  });
+
+  it('with other bots, 三条底线 and the judgement read the topic once', async () => {
+    fake.bots = '2';
+    fake.list.mockImplementation(async () => page([owner, me]));
+    await send(says('接着说', { thread: 'omt_t' }));
+    await answered();
+    expect(scans()).toHaveLength(1);
+    expect(fake.judge).not.toHaveBeenCalled();
+  });
+
+  it('opens the topic under the earlier line the judgement names', async () => {
+    const asked = says('导出接口 500 有人看吗？');
+    await send(asked);
+    await decide(asked, result('skip', { reason: '闲聊' }));
+    const more = says('顺便说一下是生产环境');
+    await send(more);
+    fake.get.mockImplementationOnce(async () => ({ code: 0, data: { items: [{ create_time: '1' }] } })); // no topic under it
+    await decide(more, result('topic', { anchor: idOf(asked) }));
+    await answered();
+    expect(fake.cards[0]![3]).toMatchObject({ replyTo: idOf(asked), replyInThread: true });
+    expect(fake.get).toHaveBeenCalledWith(expect.objectContaining({ path: { message_id: idOf(asked) } }));
+    expect(fake.inputs[0]).toContain('下面这条是接着它说的');
+    expect(fake.inputs[0]).toContain('顺便说一下是生产环境');
+  });
+
+  it('opens it on the message itself when the line has a topic, names someone, is not a person\'s or too far back, or the message named this bot (H2, M5, M6)', async () => {
+    const [plain, threaded] = [says('导出接口 500 有人看吗？'), says('登录也挂了')];
+    for (const m of [plain, threaded]) {
+      await send(m);
+      await decide(m, result('skip', { reason: '闲聊' }));
+    }
+    // Only `threaded` has a topic under it, by Feishu; a card has the one it opened.
+    fake.get.mockImplementation(async ({ path }: { path: { message_id: string } }) =>
+      ({ code: 0, data: { items: [{ create_time: '1', ...(path.message_id === idOf(threaded) || path.message_id.startsWith('card') ? { thread_id: 'omt_x' } : {}) }] } }));
+    // Says nothing to this bot (it names another), but is a line of the ring.
+    const named = says('@_user_2 你看下');
+    named.mentions = [{ key: '@_user_2', id: { open_id: 'ou_x', union_id: 'on_x' }, name: '小审', tenant_key: 't' }];
+    await send(named);
+    const [first, third] = [says('顺便说一下是生产环境'), says('还有一件事')];
+    const cases: Array<[EventMessage, string]> = [
+      [first, idOf(threaded)],
+      [says('他说的那个'), idOf(named)],
+      [third, `act:${idOf(first)}`], // this bot's own line
+      [says('看下这个', { at: true }), idOf(third)], // a plain line right before, but this one named the bot
+      [says('最早那条'), idOf(plain)], // more than 5 lines back (M6)
+    ];
+    for (const [i, [m, anchor]] of cases.entries()) {
+      await send(m);
+      await decide(m, result('topic', { anchor }));
+      await vi.waitFor(() => expect(fake.cards).toHaveLength(i + 1));
+      expect(fake.cards[i]![3]).toMatchObject({ replyTo: idOf(m) });
+    }
+  });
+
+  it('a second judgement naming the line a topic is still being opened under opens on its own message', async () => {
+    const [lisi, zhang] = [{ openId: 'ou_lisi', name: '李四' }, { openId: 'ou_owner', name: '张三' }];
+    const asked = says('导出接口 500 有人看吗？');
+    await send(asked, lisi);
+    await decide(asked, result('skip', { reason: '闲聊' }));
+    // Feishu shows no topic under the line until its card is there; the first topic's backend is slow to start.
+    fake.get.mockImplementation(async ({ path }: { path: { message_id: string } }) =>
+      ({ code: 0, data: { items: [{ create_time: '1', ...(path.message_id.startsWith('card') ? { thread_id: 'omt_x' } : {}) }] } }));
+    const started = deferred<void>();
+    const impl = startThread.getMockImplementation()!;
+    startThread.mockImplementationOnce(async () => { await started.promise; return impl(); });
+    const first = says('顺便说一下是生产环境');
+    await send(first, zhang);
+    await decide(first, result('topic', { anchor: idOf(asked) }));
+    await vi.waitFor(() => expect(startThread).toHaveBeenCalledTimes(1));
+    const second = says('对，就是导出那个');
+    await send(second, zhang);
+    await decide(second, result('topic', { anchor: idOf(asked) }));
+    await vi.waitFor(() => expect(fake.cards).toHaveLength(1));
+    started.resolve();
+    await vi.waitFor(() => expect(fake.cards).toHaveLength(2));
+    expect(fake.cards.map((c) => (c[3] as { replyTo: string }).replyTo).sort()).toEqual([idOf(asked), idOf(second)].sort());
+    expect(fake.log.info).toHaveBeenCalledWith('intake', 'anchor-dropped', { ref: idOf(second).slice(-6), why: 'has-topic' });
+    // What the next judgement reads: the dropped line's name written over with the sender's.
+    const next = says('好的');
+    await send(next);
+    expect((await judged(next)).req.context.filter((l) => l.from === 'self' && l.text.includes('开了话题')).map((l) => l.text))
+      .toEqual(['（在 李四 的这条下开了话题来回）', '（在 张三 的这条下开了话题来回）']);
+  });
+
+  it('the next judgement sees the topic it opens while the line under it is still looked up', async () => {
+    const asked = says('导出接口 500 有人看吗？');
+    await send(asked, { openId: 'ou_owner', name: '张三' });
+    await decide(asked, result('skip', { reason: '闲聊' }));
+    const lookup = deferred<{ code: number; data: { items: Array<{ thread_id?: string; create_time?: string }> } }>();
+    fake.get.mockImplementation(async ({ path }: { path: { message_id: string } }) => path.message_id === idOf(asked)
+      ? lookup.promise : { code: 0, data: { items: [{ thread_id: 'omt_opened' }] } });
+    const more = says('顺便说一下是生产环境');
+    await send(more, { openId: 'ou_owner', name: '张三' });
+    await decide(more, result('topic', { anchor: idOf(asked) }));
+    await vi.waitFor(() => expect(fake.get).toHaveBeenCalledWith(expect.objectContaining({ path: { message_id: idOf(asked) } })));
+    const next = says('好的');
+    await send(next);
+    expect((await judged(next)).req.context.filter((l) => l.from === 'self').map((l) => l.text)).toEqual(['（在 张三 的这条下开了话题来回）']);
+    lookup.resolve({ code: 0, data: { items: [{ create_time: '1' }] } });
+    await answered();
+    expect(fake.cards[0]![3]).toMatchObject({ replyTo: idOf(asked) });
+  });
+
+  it('notes the confidence when a skip gives no reason (s23f)', async () => {
+    const m = says('嗯');
+    await send(m);
+    await decide(m, result('skip', { reason: '', confidence: 0.62 }));
+    await vi.waitFor(() => expect(records().map((r) => r.detail)).toEqual(['把握度 0.62']));
+  });
+
+  it('deletes the card of a turn it joined on its own and said nothing in, notes it, and the next judgement sees it', async () => {
+    const m = says('3 加 3 等于几');
+    await send(m);
+    await decide(m, result('main'));
+    await vi.waitFor(() => expect(fake.del).toHaveBeenCalledWith({ path: { message_id: 'card_1' } }));
+    await vi.waitFor(() => expect(records().map((r) => [r.reason, r.detail])).toEqual([['judge-empty', undefined]]));
+    expect(fake.finals).toEqual([]);
+    const next = says('好吧');
+    await send(next);
+    expect((await judged(next)).req.context.some((l) => l.from === 'self' && l.text === '（看了，没有要补的，没有回）')).toBe(true);
+    // Its own card's recall event does not take that line out.
+    await orchestrator.onRecall({ messageId: 'card_1', chatId: CHAT } as never);
+    const third = says('再问一句');
+    await send(third);
+    await decide(next, result('skip', { reason: '闲聊' }));
+    expect((await judged(third)).req.context.some((l) => l.text === '（看了，没有要补的，没有回）')).toBe(true);
+  });
+
+  it('a delete Feishu refuses leaves one short line and says why (M8)', async () => {
+    fake.del.mockImplementation(async () => ({ code: 230027, msg: 'Lack of necessary permissions' }));
+    const m = says('3 加 3 等于几');
+    await send(m);
+    await decide(m, result('main'));
+    await vi.waitFor(() => expect(fake.finals).toHaveLength(1));
+    expect(JSON.stringify(fake.finals[0])).toContain('（没有要补的）');
+    expect(JSON.stringify(fake.finals[0])).not.toContain('未返回内容');
+    expect(records()[0]).toMatchObject({ reason: 'judge-empty', detail: '空卡没删成，缺权限（230027），卡上留了一行' });
+  });
+
+  it('keeps the card of a turn that used a tool or failed, and of an @ answered with nothing', async () => {
+    const turns = [
+      async function* () { yield { type: 'tool_use', itemId: 't1', title: 'ls' }; yield { type: 'tool_result', itemId: 't1', output: '' }; yield { type: 'done', turnId: 'turn-fixture' }; },
+      async function* () { yield { type: 'error', message: 'boom', willRetry: false }; },
+    ];
+    for (const turn of turns) {
+      fake.events = turn;
+      const m = says(`空：${turns.indexOf(turn)}`);
+      await send(m);
+      await decide(m, result('main'));
+      await vi.waitFor(() => expect(fake.finals).toHaveLength(turns.indexOf(turn) + 1));
+    }
+    fake.events = undefined;
+    const named = says('你好', { at: true });
+    await send(named);
+    await decide(named, result('main'));
+    await vi.waitFor(() => expect(fake.finals).toHaveLength(3));
+    expect(JSON.stringify(fake.finals[2])).toContain('未返回内容');
+    expect(fake.del).not.toHaveBeenCalled();
+  });
+
+  it('H1: an @ steered into the turn it joined gets its own card, which stays though nothing is said', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    fake.events = async function* () { await gate; yield { type: 'done', turnId: 'turn-fixture' }; };
+    const chatter = says('线上挂了吗');
+    await send(chatter);
+    await decide(chatter, result('main'));
+    await vi.waitFor(() => expect(fake.cards).toHaveLength(1));
+    const named = says('看下这个', { at: true });
+    await send(named);
+    await decide(named, result('main'));
+    await vi.waitFor(() => expect(fake.cards).toHaveLength(2));
+    expect(fake.cards[1]![3]).toMatchObject({ replyTo: idOf(named) });
+    release();
+    await vi.waitFor(() => expect(fake.finals).toHaveLength(2));
+    expect(fake.del).not.toHaveBeenCalled();
   });
 });
