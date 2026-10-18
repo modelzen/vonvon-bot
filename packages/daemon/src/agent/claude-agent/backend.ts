@@ -209,9 +209,11 @@ function claudeJudgeError(code: unknown, message: string): JudgeCallError {
   return new JudgeCallError(errorKindFromText(message) ?? 'failed', message, false);
 }
 
-/** The CLI's own name for the judge session: with one, it starts no title request of its own,
- * which resends the whole judge input to haiku and adds about 60% to the tokens (e12). */
+/** The CLI's own names for the judge and title-job sessions. Without one, the CLI starts its own
+ * title request on the first user message, resending the whole input to haiku: about 60% more tokens
+ * for a judgement (e12). The login probe and the model list send no user message, so start none (s23e). */
 const JUDGE_SESSION_TITLE = 'vonvon judge';
+const TITLE_JOB_SESSION_TITLE = 'vonvon title';
 
 /** Tokens of the whole query: `modelUsage` counts every model call of it, `usage` only the main loop
  * (sdk.d.ts); `usage` only when there is no `modelUsage`. */
@@ -506,6 +508,7 @@ export class ClaudeAgentBackend implements AgentBackend {
       prompt: opts.prompt,
       options: {
         ...helperQueryOptions(opts.cwd),
+        title: TITLE_JOB_SESSION_TITLE,
         model: opts.model,
         // Pass through verbatim. If a stale configuration names an effort the
         // installed SDK rejects, that error must reach the coordinator; never

@@ -327,6 +327,7 @@ describe('Claude backend native session titles', () => {
     expect(titleCall.prompt).toBe('完整标题提示词');
     expect(titleCall.options).toEqual(expect.objectContaining({
       cwd: '/repo',
+      title: 'vonvon title', // or the CLI starts a title request of its own (s23e)
       model: 'claude-title-model',
       effort: 'xhigh',
       persistSession: false,
