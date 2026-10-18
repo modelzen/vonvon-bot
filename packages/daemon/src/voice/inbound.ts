@@ -23,7 +23,7 @@ export async function ingestVoice(
   if (!ref) {
     return unavailable('语音消息未能读取：未获取到音频资源，请重新发送或改发文字。', '语音未能读取，请重新发送或改发文字。');
   }
-  const files = await collectInboundFiles(channel, { ...msg, resources: [{ ...ref, type: 'file', fileName: 'voice.ogg' }] });
+  const { files } = await collectInboundFiles(channel, { ...msg, resources: [{ ...ref, type: 'file', fileName: 'voice.ogg' }] });
   const file = files[0];
   if (!file) return unavailable('语音消息未能下载，请告知用户重新发送或改发文字。', '语音未能下载，请重新发送或改发文字。');
   let reason: string;
