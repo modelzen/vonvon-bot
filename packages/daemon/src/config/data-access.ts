@@ -6,7 +6,7 @@ import { join } from 'node:path';
 
 export class DataAccessError extends Error {}
 /** `service` serializes `vonvon service install|uninstall`, whoever runs it: the terminal, the daemon's helper or the desktop's. */
-type MutexRole = 'admission' | 'host' | 'keystore' | 'service' | 'bots' | 'projects';
+type MutexRole = 'admission' | 'host' | 'keystore' | 'service' | 'bots' | 'projects' | 'creation';
 export interface DataLease { release(): void }
 /** A held coordination mutex. `closeMutex` releases it; the kernel releases it when the process dies. */
 export interface Mutex { readonly role: MutexRole }
@@ -126,7 +126,7 @@ export async function acquireMutex(home: string, role: MutexRole, timeoutMs = 15
     for (;;) {
       lock ??= await tryLock(path, role);
       if (lock) {
-        const legacy = role === 'projects' ? noRelease : await holdLegacyPort(path, role);
+        const legacy = role === 'projects' || role === 'creation' ? noRelease : await holdLegacyPort(path, role);
         if (legacy) return heldMutex(role, [legacy, lock]);
       }
       if (Date.now() >= deadline) throw new DataAccessError(`Bridge ${role} is busy on its local coordination endpoint.`);

@@ -144,6 +144,14 @@ process-ci、draft 和 final 里的流程说法，凡和 `AGENTS.md` 不一致�
 
 本轮索引经独立 gpt-6-astra 核对；各报告末尾保留核实记录。
 
+## 2026-10-18 飞书建群操作恢复
+
+`2026-10-18-feishu-creation/`。s36c2c4 开工前核对官方建群去重合同，源码起点为 `main` 的 `fae1c32`。只读查文档、CLI schema 和安装的 SDK，没有创建真实飞书群。
+
+| 报告 | 内容 | 说明 |
+|---|---|---|
+| [uuid-contract](2026-10-18-feishu-creation/uuid-contract.md) | 去重键、10 小时窗口、50 字符上限、未知结果的恢复边界和 SDK 请求行为 | 不承诺重复请求返回原群号；真实飞书验收仍待后续 |
+
 ## 补充
 
 codex-desktop 报告写完以后，对照 openai/codex 源码又核实了一次。`codex mcp list` 里的 `cua_repl` 来自内置插件 `unified-computer-use@openai-bundled`，就是原生 Computer Use；显示为 disabled 的 `computer-use` 是旧通道。经 Paseo 调用时，Mac 锁屏会失败（getpaseo/paseo#3346），`full-access` 模式会自动批准打开应用。process 报告里的相关说法和这里一致。
