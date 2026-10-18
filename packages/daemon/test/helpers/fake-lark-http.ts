@@ -40,7 +40,7 @@ export function fakeLark(answer?: Answer) {
   let open = 0;
   function handle(method: string, url: string, options: HttpRequestOptions<unknown> | undefined, data: unknown): Promise<unknown> {
     const request: FakeRequest = { method: method.toUpperCase(), path: new URL(url, FAKE_DOMAIN).pathname,
-      params: options?.params as Record<string, unknown> | undefined, data, signal: options?.signal as AbortSignal | undefined, timeout: options?.timeout };
+      params: options?.params as Record<string, unknown> | undefined, data, signal: (options as { signal?: AbortSignal } | undefined)?.signal, timeout: options?.timeout };
     requests.push(request);
     open++;
     return new Promise<unknown>((resolve, reject) => {
