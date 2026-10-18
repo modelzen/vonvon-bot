@@ -6,6 +6,7 @@ import type {
   ModelInfo as ClaudeModelInfo,
   Options,
   Query,
+  SDKResultMessage,
   SettingSource,
 } from '@anthropic-ai/claude-agent-sdk';
 import { OwnedProviderProcess, ProviderProcessExitError } from '../owned-process';
@@ -208,26 +209,57 @@ function claudeJudgeError(code: unknown, message: string): JudgeCallError {
   return new JudgeCallError(errorKindFromText(message) ?? 'failed', message, false);
 }
 
-/** Consume a judge query to its result. Exported for the mock-only unit test. */
-export async function consumeClaudeJudgeQuery(query: Query): Promise<JudgeCallOutput> {
+/** The CLI's own names for the judge and title-job sessions. Without one, the CLI starts its own
+ * title request on the first user message, resending the whole input to haiku: about 60% more tokens
+ * for a judgement (e12). The login probe and the model list send no user message, so start none (s23e). */
+const JUDGE_SESSION_TITLE = 'vonvon judge';
+const TITLE_JOB_SESSION_TITLE = 'vonvon title';
+
+/** Tokens of the whole query: `modelUsage` counts every model call of it, `usage` only the main loop
+ * (sdk.d.ts); `usage` only when there is no `modelUsage`. */
+function judgeUsage(message: SDKResultMessage): NonNullable<JudgeCallOutput['usage']> {
+  const models = Object.values(message.modelUsage ?? {});
+  if (models.length) {
+    const sum = (pick: (m: (typeof models)[number]) => number | undefined): number => models.reduce((n, m) => n + (pick(m) ?? 0), 0);
+    const cached = sum(m => m.cacheReadInputTokens);
+    return {
+      input: sum(m => m.inputTokens) + sum(m => m.cacheCreationInputTokens) + cached,
+      cached, output: sum(m => m.outputTokens), reasoning: sum(m => m.thinkingTokens),
+    };
+  }
+  const u = message.usage as Partial<SDKResultMessage['usage']> & { output_tokens_details?: { thinking_tokens?: number } } | undefined;
+  return {
+    input: (u?.input_tokens ?? 0) + (u?.cache_creation_input_tokens ?? 0) + (u?.cache_read_input_tokens ?? 0),
+    cached: u?.cache_read_input_tokens ?? 0,
+    output: u?.output_tokens ?? 0,
+    reasoning: u?.output_tokens_details?.thinking_tokens ?? 0,
+  };
+}
+
+/**
+ * Consume a judge query to its result. Exported for the mock-only unit test. `maxTurns`: haiku answered
+ * in text instead of calling the StructuredOutput tool, which ends the turn on `error_max_turns` (e12:
+ * 13 of 137, often in a ```json block); its last text goes to `parseVerdict` like any answer, and the
+ * CLI then exits 1.
+ */
+export async function consumeClaudeJudgeQuery(query: Query): Promise<{ output: JudgeCallOutput; maxTurns: boolean }> {
   let code: unknown;
+  let lastText = '';
   try {
     for await (const message of query) {
-      if (message.type === 'assistant' && message.error) code = message.error;
+      if (message.type === 'assistant') {
+        if (message.error) code = message.error;
+        const text = (message.message?.content ?? []).flatMap(block => block.type === 'text' ? [block.text] : []).join('\n').trim();
+        if (text) lastText = text;
+      }
       if (message.type !== 'result') continue;
+      if (message.subtype === 'error_max_turns' && lastText && !code) {
+        return { output: { text: lastText, usage: judgeUsage(message) }, maxTurns: true };
+      }
       if (message.subtype !== 'success') throw claudeJudgeError(code, message.errors.join('; ') || `Claude 判断失败：${message.subtype}`);
       // `success` with is_error: the turn ended on an API error, and `result` is its text (sdk.d.ts)
       if (message.is_error) throw claudeJudgeError(code, message.result || 'Claude 判断失败：API 出错');
-      const u = message.usage;
-      return {
-        text: message.result,
-        structured: message.structured_output,
-        usage: {
-          input: (u?.input_tokens ?? 0) + (u?.cache_creation_input_tokens ?? 0) + (u?.cache_read_input_tokens ?? 0),
-          cached: u?.cache_read_input_tokens ?? 0,
-          output: u?.output_tokens ?? 0,
-        },
-      };
+      return { output: { text: message.result, structured: message.structured_output, usage: judgeUsage(message) }, maxTurns: false };
     }
   } catch (error) {
     throw error instanceof JudgeCallError ? error : claudeJudgeError(code, error instanceof Error ? error.message : String(error));
@@ -476,6 +508,7 @@ export class ClaudeAgentBackend implements AgentBackend {
       prompt: opts.prompt,
       options: {
         ...helperQueryOptions(opts.cwd),
+        title: TITLE_JOB_SESSION_TITLE,
         model: opts.model,
         // Pass through verbatim. If a stale configuration names an effort the
         // installed SDK rejects, that error must reach the coordinator; never
@@ -511,6 +544,8 @@ export class ClaudeAgentBackend implements AgentBackend {
     let query: Query | undefined;
     let owned: OwnedProviderProcess | undefined;
     let judgeError: JudgeCallError | undefined;
+    // the CLI exits 1 after error_max_turns, also when its text still gave the answer
+    let exitMayFail = false;
     // On abort the SDK only ends stdin and sends its own SIGTERM 2 s later, and a CLI waiting on the
     // API ignores the EOF: stop the whole group now, so the judge slot is not held for nothing.
     // The finally awaits the same close and reports how it went.
@@ -535,13 +570,16 @@ export class ClaudeAgentBackend implements AgentBackend {
             return Object.assign(owned.child, { stdin: owned.child.stdin, stdout: owned.child.stdout });
           },
           systemPrompt: call.system,
+          title: JUDGE_SESSION_TITLE,
           model: call.model,
           ...(call.effort ? { effort: call.effort as EffortLevel } : { thinking: { type: 'disabled' as const } }),
           outputFormat: { type: 'json_schema', schema: call.schema },
           abortController,
         },
       });
-      return await consumeClaudeJudgeQuery(query);
+      const { output, maxTurns } = await consumeClaudeJudgeQuery(query);
+      exitMayFail = maxTurns;
+      return output;
     } catch (error) {
       if (error instanceof JudgeCallError) judgeError = error;
       throw error;
@@ -551,8 +589,9 @@ export class ClaudeAgentBackend implements AgentBackend {
       finally {
         try { await owned?.close(); }
         catch (error) {
-          if (!(error instanceof ProviderProcessExitError) || !judgeError) throw error;
-          log.fail('agent', error, { backend: 'claude-agent', phase: 'judge-exit' });
+          if (!(error instanceof ProviderProcessExitError) || !(judgeError || exitMayFail)) throw error;
+          if (judgeError) log.fail('agent', error, { backend: 'claude-agent', phase: 'judge-exit' });
+          else log.info('agent', 'judge-exit', { backend: 'claude-agent', after: 'error_max_turns' });
         }
       }
     }

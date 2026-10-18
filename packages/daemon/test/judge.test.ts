@@ -16,7 +16,7 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
-const ANSWER: JudgeCallOutput = { text: '{"decision":"topic","reason":"新的事"}', usage: { input: 10, cached: 2, output: 3 } };
+const ANSWER: JudgeCallOutput = { text: '{"decision":"topic","reason":"新的事"}', usage: { input: 10, cached: 2, output: 3, reasoning: 1 } };
 
 function fakeBackend(extra: Partial<AgentBackend> = {}) {
   const calls: JudgeCall[] = [];
@@ -83,7 +83,7 @@ describe('judge', () => {
     expect(call.system.startsWith('SMART\n\n——以下由 vonvon 附加')).toBe(true);
     expect(call.input).toContain('【要判断的消息】');
     const verdict = fake.log.info.mock.calls.find((c) => c[1] === 'verdict')![2];
-    expect(verdict).toMatchObject({ ref: '123456', decision: 'topic', inputTokens: 10, cachedTokens: 2, outputTokens: 3 });
+    expect(verdict).toMatchObject({ ref: '123456', decision: 'topic', inputTokens: 10, cachedTokens: 2, outputTokens: 3, reasoningTokens: 1 });
     // never the text, the reason or the prompt
     expect(JSON.stringify(fake.log.info.mock.calls)).not.toMatch(/新的事|你好|SMART/);
   });
@@ -132,10 +132,12 @@ describe('judge', () => {
     await vi.advanceTimersByTimeAsync(500);
     expect(prompt.value).toMatchObject({ decision: 'skip', error: { kind: 'timeout' } });
 
-    // the default timeout for a mention is 10 s
+    // the default timeout for a mention is 12 s (e12)
     const def = timed(make(f.backend).judge(req('mentioned')));
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(def.at).toBe(1_000_000 + 1_500 + 10_000);
+    await vi.advanceTimersByTimeAsync(11_999);
+    expect(def.value).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(def.at).toBe(1_000_000 + 1_500 + 12_000);
 
     const list = fakeBackend({ listModels: vi.fn(() => new Promise<ModelInfo[]>(() => undefined)) });
     const result = await make(list.backend).judge(req());

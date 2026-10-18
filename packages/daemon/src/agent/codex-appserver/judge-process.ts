@@ -2,7 +2,7 @@ import { log } from '../../core/logger';
 import { codexErrorKind, errorKindFromText } from '../error-kind';
 import { JudgeCallError, type JudgeCall, type JudgeCallOutput } from '../types';
 import { AppServerClient, JsonRpcError } from './app-server-client';
-import { binFingerprint, closeDiscarded, CONNECT_TIMEOUT_MS, poolAccepting, trackResident, withDeadline } from './client-pool';
+import { binFingerprint, closeDiscarded, connectGatedWithin, CONNECT_TIMEOUT_MS, poolAccepting, trackResident } from './client-pool';
 import { codexVersionAsync, resolveCodexBin } from './locate';
 import type { ServerNotification, TurnStartResponse } from './protocol';
 import type { CodexErrorInfo } from './protocol/generated/v2/CodexErrorInfo';
@@ -19,11 +19,18 @@ import { CODEX_MIN_VERSION, compareCodexVersions, parseCodexVersion } from './ve
  * still gets its `thread/unsubscribe` and a running turn its `turn/interrupt`. A process is judged
  * stuck only when one RPC goes {@link JUDGE_RPC_STUCK_MS} without a reply, however little time the
  * caller had left; then it is killed and the judgements on it fail.
+ *
+ * A process takes {@link JUDGE_RECYCLE_AFTER} judgements, then retires the way an upgraded one does:
+ * it finishes its own, the next judgement starts a new process (s23e).
  */
 
 /** One RPC without a reply this long means the process is wedged. */
 export const JUDGE_RPC_STUCK_MS = 15_000;
 export const JUDGE_IDLE_MS = 10 * 60_000;
+/** On 0.163.0 an ephemeral thread stays loaded after `thread/unsubscribe`, and `thread/delete` and
+ * `thread/archive` refuse it (s23e), so the process grows 2 to 3 MB a judgement from about 215 MB idle
+ * (e12, s23e). 100 keeps it under about 520 MB, at one 8 to 11 s cold start per 100 judgements. */
+export const JUDGE_RECYCLE_AFTER = 100;
 /** No new process this long after a connect failure, an unexpected exit or a stuck kill. */
 export const JUDGE_BACKOFF_MS: readonly number[] = [5_000, 15_000, 60_000];
 const INVENTORY_TIMEOUT_MS = 5_000;
@@ -43,9 +50,11 @@ export const TOOL_OFF_KEYS = {
 
 export interface JudgeProcessOptions {
   stuckMs: number;
-  /** spawn to `initialize` reply */
+  /** spawn to `initialize` reply; the wait at the first-start gate before the spawn is not counted */
   connectMs: number;
   idleMs: number;
+  /** judgements a process takes before it retires */
+  recycleAfter: number;
   backoffMs: readonly number[];
   resolveBin(): string | null;
   /** read once per process, only when a "not supported" error needs it; forced past the locate
@@ -58,6 +67,7 @@ const DEFAULTS: JudgeProcessOptions = {
   stuckMs: JUDGE_RPC_STUCK_MS,
   connectMs: CONNECT_TIMEOUT_MS,
   idleMs: JUDGE_IDLE_MS,
+  recycleAfter: JUDGE_RECYCLE_AFTER,
   backoffMs: JUDGE_BACKOFF_MS,
   resolveBin: () => resolveCodexBin(),
   version: bin => codexVersionAsync(bin, { force: true }),
@@ -70,7 +80,7 @@ export function configureJudgeProcess(overrides: Partial<JudgeProcessOptions>): 
   opts = { ...DEFAULTS, ...overrides };
 }
 
-const stats = { spawned: 0, interrupts: 0, unsubscribes: 0, stuck: 0 };
+const stats = { spawned: 0, recycled: 0, interrupts: 0, unsubscribes: 0, stuck: 0 };
 
 /** For tests (judge-real-codex): what the judge process did so far. */
 export function judgeProcessStats(): typeof stats & { pid: number | undefined } {
@@ -82,6 +92,8 @@ interface Slot {
   bin: string;
   fingerprint: string | null;
   inflight: number;
+  /** judgements handed this process so far */
+  judgements: number;
   /** why we closed it; unset = it exited on its own */
   ending?: 'idle' | 'retired' | 'stuck';
   watches: Map<string, Watch>;
@@ -176,8 +188,11 @@ class Watch {
         else this.lastText = n.params.item.text;
         break;
       case 'thread/tokenUsage/updated': {
-        const last = n.params.tokenUsage.last;
-        this.usage = { input: last.inputTokens, cached: last.cachedInputTokens, output: last.outputTokens };
+        // the thread's total: one judgement is its only turn, and `last` is only its last model request (e12)
+        const total = n.params.tokenUsage.total;
+        this.usage = {
+          input: total.inputTokens, cached: total.cachedInputTokens, output: total.outputTokens, reasoning: total.reasoningOutputTokens,
+        };
         break;
       }
       case 'error':
@@ -275,10 +290,12 @@ function idleLater(slot: Slot): void {
   slot.idleTimer.unref?.();
 }
 
-function retire(slot: Slot): void {
+/** New judgements go to a new process; this one closes once its own are done. */
+function retire(slot: Slot, why: 'version' | 'count'): void {
   slot.ending = 'retired';
   if (current === slot) current = null;
-  log.info('judge', 'process-retire', { pid: slot.client.pid ?? null, inflight: slot.inflight });
+  if (why === 'count') stats.recycled++;
+  log.info('judge', 'process-retire', { pid: slot.client.pid ?? null, inflight: slot.inflight, judgements: slot.judgements, why });
   if (slot.inflight === 0) closeDiscarded(slot.client);
 }
 
@@ -288,7 +305,7 @@ async function create(bin: string, cwd: string): Promise<Slot> {
   const client = new AppServerClient({ bin, cwd, clientName: 'vonvon-judge' });
   trackResident(client);
   try {
-    await withDeadline(client.connect(), opts.connectMs, 'judge connect');
+    await connectGatedWithin(client, bin, opts.connectMs, 'judge');
     if (!poolAccepting()) throw closedError();
   } catch (error) {
     // A connect that loses to shutdown closes itself here.
@@ -297,7 +314,7 @@ async function create(bin: string, cwd: string): Promise<Slot> {
     startBackoff();
     throw error instanceof JudgeCallError ? error : new JudgeCallError('failed', `Codex 判断进程起不来：${messageOf(error)}`, false);
   }
-  const slot: Slot = { client, bin, fingerprint, inflight: 0, watches: new Map() };
+  const slot: Slot = { client, bin, fingerprint, inflight: 0, judgements: 0, watches: new Map() };
   stats.spawned++;
   current = slot;
   idleLater(slot); // the judgement that started it may already have given up
@@ -310,18 +327,28 @@ async function acquire(cwd: string): Promise<{ slot: Slot; cold: boolean }> {
   if (!poolAccepting()) throw closedError();
   const bin = opts.resolveBin();
   if (!bin) throw new JudgeCallError('unavailable', 'codex CLI not found (set CODEX_BIN or install @openai/codex)', false);
+  // Counted, and in flight, in the same tick as the checks: a judgement handed the old process just
+  // before it retires keeps it open (the s23e real test lost two that way), and concurrent ones cannot overshoot.
+  const take = (slot: Slot, cold: boolean): { slot: Slot; cold: boolean } => {
+    slot.judgements++;
+    slot.inflight++;
+    clearTimeout(slot.idleTimer);
+    return { slot, cold };
+  };
   const slot = current;
   if (slot && !slot.client.exited) {
     // Codex upgraded in place or moved: new judgements go to a new process, the old one finishes its own.
-    if (slot.bin === bin && slot.fingerprint === binFingerprint(bin)) return { slot, cold: false };
-    retire(slot);
+    if (slot.bin !== bin || slot.fingerprint !== binFingerprint(bin)) retire(slot, 'version');
+    // Full (its threads never unload): the same way out.
+    else if (slot.judgements >= opts.recycleAfter) retire(slot, 'count');
+    else return take(slot, false);
   }
   // cold only for the judgement that started the process; the others share its single flight
-  if (creating) return { slot: await creating, cold: false };
+  if (creating) return take(await creating, false);
   const wait = backoffUntil - opts.now();
   if (wait > 0) throw new JudgeCallError('unavailable', `Codex 判断进程刚退出，${Math.ceil(wait / 1000)} 秒后再试`, false);
   creating = create(bin, cwd).finally(() => { creating = null; });
-  return { slot: await creating, cold: true };
+  return take(await creating, true);
 }
 
 /** Rejects with the abort reason when the signal fires first; `work` keeps running. */
@@ -462,21 +489,32 @@ async function judgeOn(slot: Slot, call: JudgeCall, cold: boolean): Promise<Judg
   }
 }
 
+/** A judgement is done with its process: the last one closes a retired process or starts the idle clock. */
+function release(slot: Slot): void {
+  slot.inflight--;
+  if (slot.inflight === 0 && !slot.client.exited) {
+    if (slot.ending === 'retired') closeDiscarded(slot.client);
+    else idleLater(slot);
+  }
+}
+
 /**
  * Runs one judgement on the judge process. Rejects with {@link JudgeCallError}, or with the
  * signal's reason once it fired; settles only after the cleanup RPCs went out.
  */
 export async function runCodexJudge(call: JudgeCall): Promise<JudgeCallOutput> {
-  const { slot, cold } = await untilAbort(acquire(call.cwd), call.signal);
-  slot.inflight++;
-  clearTimeout(slot.idleTimer);
+  const acquiring = acquire(call.cwd);
+  let taken: { slot: Slot; cold: boolean };
   try {
-    return await judgeOn(slot, call, cold);
+    taken = await untilAbort(acquiring, call.signal);
+  } catch (error) {
+    // gave up while the process came up: give back the place it still gets
+    void acquiring.then(({ slot }) => release(slot), () => undefined);
+    throw error;
+  }
+  try {
+    return await judgeOn(taken.slot, call, taken.cold);
   } finally {
-    slot.inflight--;
-    if (slot.inflight === 0 && !slot.client.exited) {
-      if (slot.ending === 'retired') closeDiscarded(slot.client);
-      else idleLater(slot);
-    }
+    release(taken.slot);
   }
 }

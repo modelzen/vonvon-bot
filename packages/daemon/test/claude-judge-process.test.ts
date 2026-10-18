@@ -8,7 +8,7 @@ import { claudeWithFakeCli, writeWaitingClaudeCli } from './helpers/fake-claude-
 
 // Real SDK transport, a local fake CLI: never starts Claude or submits inference.
 describe('Claude judge process ownership', () => {
-  it.each(['normal', 'result', 'abort', 'error', 'exit', 'signal', 'auth', 'quota', 'model'] as const)('waits for process death on %s', async mode => {
+  it.each(['normal', 'result', 'abort', 'error', 'exit', 'signal', 'auth', 'quota', 'model', 'max-turns'] as const)('waits for process death on %s', async mode => {
     const root = await mkdtemp(join(tmpdir(), 'claude-judge-process-'));
     const cli = join(root, 'fake-cli.mjs');
     const pidFile = join(root, 'pid');
@@ -27,6 +27,12 @@ createInterface({ input: process.stdin }).on('line', line => {
     if (['auth', 'quota', 'model'].includes(${JSON.stringify(mode)})) {
       send({ type: 'assistant', error: ${JSON.stringify(mode === 'auth' ? 'authentication_failed' : mode === 'quota' ? 'rate_limit' : 'model_not_found')}, message: { content: [] } });
       process.stdout.write(JSON.stringify({ type: 'result', subtype: 'error_during_execution', errors: ['structured fake error'] }) + '\\n', () => process.exit(1));
+      return;
+    }
+    if (${JSON.stringify(mode)} === 'max-turns') {
+      // the CLI 2.1.296 after a text answer: error_max_turns, then exit 1 (e12)
+      send({ type: 'assistant', message: { content: [{ type: 'text', text: '{"decision":"skip","reason":"闲聊"}' }] } });
+      process.stdout.write(JSON.stringify({ type: 'result', subtype: 'error_max_turns', is_error: true, errors: ['Reached maximum number of turns (1)'], usage: {} }) + '\\n', () => process.exit(1));
       return;
     }
     if (${JSON.stringify(mode)} === 'exit') process.exit(7);
@@ -56,7 +62,9 @@ createInterface({ input: process.stdin }).on('line', line => {
         expect(cooldown.check('claude-agent', 'fake')).toMatchObject({ kind: mode });
       }
       // Ignoring TERM requires KILL: even a structured quota error must report cleanup failure.
-      expect(outcome).toHaveProperty(mode === 'normal' ? 'value' : 'error');
+      expect(outcome).toHaveProperty(mode === 'normal' || mode === 'max-turns' ? 'value' : 'error');
+      // its exit 1 is expected there, not a cleanup failure
+      if (mode === 'max-turns') expect(outcome).toMatchObject({ value: { text: '{"decision":"skip","reason":"闲聊"}' } });
       if (['result', 'abort', 'error'].includes(mode)) expect(outcome).toMatchObject({ error: { name: 'Error', message: 'Claude 子进程树已退出，但清理失败' } });
       // The group is killed by us, not through the SDK's forwarded signal on spawn, which also
       // reported an AbortError (s23c review F3): the only failure left is the SIGKILL.
