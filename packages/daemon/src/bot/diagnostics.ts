@@ -1,6 +1,6 @@
 import {
   DENIED_SCOPE_SHOWN_MS, diagnosticsEventSchema,
-  type BotDiagnostics, type DeniedScope, type DiagnosticsEvent, type NotReplied, type ScopeDenialPlace,
+  type BotDiagnostics, type DeniedScope, type DiagnosticsEvent, type NotReplied, type NotRepliedReason, type ScopeDenialPlace,
 } from '@vonvon/protocol';
 import { CHAT_OPTIONAL_SCOPES, REQUIRED_SCOPES } from '../config/scopes';
 
@@ -39,6 +39,18 @@ export function parseDiagnosticsIpc(message: unknown): DiagnosticsEvent | undefi
   return parsed.success ? parsed.data : undefined;
 }
 
+/** Cut to the record's 120 UTF-16 units, which its schema counts, without splitting a character: a judge's
+ * 80-character reason in emoji is 160 (s25). */
+export function fitDetail(text: string | undefined): string | undefined {
+  if (!text || text.length <= 120) return text;
+  let out = '';
+  for (const char of text) {
+    if (out.length + char.length > 120) break;
+    out += char;
+  }
+  return out;
+}
+
 /** An error's first line without control characters, cut to the record's 120. */
 export function errorDetail(error: unknown): string | undefined {
   const text = (error instanceof Error ? error.message : String(error ?? '')).split('\n')[0]!.replace(/[\x00-\x1f\x7f]/g, '').trim();
@@ -48,6 +60,10 @@ export function errorDetail(error: unknown): string | undefined {
 export const NOT_REPLIED_LIMIT = 30;
 const DENIED_SCOPE_LIMIT = 10;
 const MERGE_MS = 10 * 60_000;
+/** Of the 30, the most kept for the smart mode's normal outcomes (s25): a busy group's quiet judgements do
+ * not push out the failures the page is for. */
+export const QUIET_LIMIT = 10;
+const QUIET_REASONS: ReadonlySet<NotRepliedReason> = new Set(['judge-skip', 'judge-superseded']);
 
 export interface DiagnosticsStore {
   accept(appId: string, event: DiagnosticsEvent): void;
@@ -58,8 +74,8 @@ export interface DiagnosticsStore {
   close(): void;
 }
 
-/** The supervisor's memory, per bot: 30 records newest first, the same group, place, reason and backend
- * within 10 minutes merged into a count; each scope's latest denial, 10 at most. `changed` fires at most
+/** The supervisor's memory, per bot: 30 records newest first, at most 10 of them judgements that did not
+ * answer, the same group, place, reason and backend within 10 minutes merged into a count; each scope's latest denial, 10 at most. `changed` fires at most
  * once a second. A Claude turn that failed for its login tells `claudeSignedOut`. */
 export function createDiagnosticsStore(opts: { changed: () => void; claudeSignedOut?: (at: number) => void; now?: () => number; throttleMs?: number }): DiagnosticsStore {
   const now = opts.now ?? Date.now;
@@ -82,7 +98,9 @@ export function createDiagnosticsStore(opts: { changed: () => void; claudeSigned
         // Any matching record, moved to the front; always a new array, or the snapshot's deep compare sees no change.
         const same = bot.notReplied.find(item => item.groupId === record.groupId && item.place === record.place
           && item.reason === record.reason && item.backend === record.backend && Math.abs(record.at - item.at) < MERGE_MS);
-        bot.notReplied = [{ ...record, count: (same?.count ?? 0) + (event.times ?? 1) }, ...bot.notReplied.filter(item => item !== same)].slice(0, NOT_REPLIED_LIMIT);
+        let quiet = 0;
+        bot.notReplied = [{ ...record, count: (same?.count ?? 0) + (event.times ?? 1) }, ...bot.notReplied.filter(item => item !== same)]
+          .filter(item => !QUIET_REASONS.has(item.reason) || ++quiet <= QUIET_LIMIT).slice(0, NOT_REPLIED_LIMIT);
         // Stamped now: a queued turn can fail long after its message was sent.
         if (record.reason === 'signed-out' && record.backend === 'claude') opts.claudeSignedOut?.(now());
       }

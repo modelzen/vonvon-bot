@@ -69,7 +69,7 @@ process-ci、draft 和 final 里的流程说法，凡和 `AGENTS.md` 不一致�
 
 | 报告 | 内容 | 说明 |
 |---|---|---|
-| [decision-models](2026-10-14-decision-models/decision-models.md) | 两个判断模型的接口、价格、速度、认证，以及用在 vonvon-bot 上要注意的地方 | 更正 v1-definition 里 group-response、draft 和 final"没找到 Jev"的说法 |
+| [decision-models](2026-10-14-decision-models/decision-models.md) | 两个判断模型的接口、价格、速度、认证，以及用在 vonvon-bot 上要注意的地方 | 更正 v1-definition 里 group-response、draft 和 final"没找到 Jev"的说法。Jev 的确切格式、实测和怎么接，见 2026-10-18-jev |
 
 ## 2026-10-14 飞书应用的主人和管理员
 
@@ -177,6 +177,14 @@ process-ci、draft 和 final 里的流程说法，凡和 `AGENTS.md` 不一致�
 | 报告 | 内容 | 说明 |
 |---|---|---|
 | [e12-judge-latency](2026-10-18-e12-judge/e12-judge-latency.md) | 两家判断的延迟分布（按变体和上下文条数）、冷启动、排队、token 和额度、Claude 那次额外调用的原因（CLI 自动起标题）和关法、判错的例子、内存，对 s25 的建议 | 在 JP-VPS 上量的，不是 product.md 3.4 写的 Mac；额度只有上界（精度 1 个百分点），没请 owner 看账户页面 |
+
+## 2026-10-18 决策模型 Jev
+
+`2026-10-18-jev/`，基于 `main` 的 `8e166a6`。owner 想让智能模式的判断用 TypeSafe 的 Jev，Claude 读了它的全部文档和条款，在 JP-VPS 上用 owner 给的测试 key 调了 116 次，和 e12 的订阅小模型比。实测脚本、原始数据和下载的文档留在 JP-VPS 本机，不进仓库，测试 key 也不进仓库。没有核实记录，用之前自己核对关键事实。
+
+| 报告 | 内容 | 说明 |
+|---|---|---|
+| [report](2026-10-18-jev/report.md) | Jev 的接口、错误码、价格和数据条款；31 个用例判得对不对、把握度、延迟、一次问几个问题、并发和多个 bot、错误；怎么接进 `D/judge/`、要改的文件和行数、s25 要预留的三处、风险；问 owner 的 5 题 | owner 10-18 第 3 题选了不提示、第 4 题选了照现有的兜底，和报告建议不同，以 `docs/product.md` 3.4 为准；延迟只代表从日本连 Cloudflare 东京节点，Mac 和中国大陆没测 |
 
 ## 2026-10-18 补做审查：Codex 代班期间的 PR
 

@@ -28,6 +28,10 @@ const BRIDGE_RECORD_BLOCK_PREFIX =
  * when [重试] is tapped; the reason is the only part that varies. */
 const BRIDGE_RETRY_PREFIX =
   /^（重试）上一轮因为[^\r\n。]+。下面是上一轮收到的消息，请重新处理。上一轮可能已经做了一部分，先看看做到哪了再继续，别重复做。[ \t]*(?:\r?\n[ \t]*){0,2}/u;
+/** The line before a turn the smart mode joined on its own (s25, handle-message): fixed text, never the judge's reason. */
+export const INITIATIVE_NOTE = '（这条消息没有 @ 你，是你按智能模式自己判断该接话。只说有用的；没有要补的就只回一句很短的话或什么都不说。）';
+// The note holds no regular-expression syntax (its brackets are fullwidth).
+const BRIDGE_INITIATIVE_PREFIX = new RegExp(`^${INITIATIVE_NOTE}[ \\t]*(?:\\r?\\n[ \\t]*){0,2}`, 'u');
 /** The file manifest (media.weaveFileManifest), with its 没下载下来 lines and the header without a saved file. */
 const BRIDGE_FILE_MANIFEST_SUFFIX =
   /(?:^|(?:\r?\n){2})\[用户上传了 \d+ 个附件(?:，(?:\d+ 个)?已保存到本地，可用 shell \/ 读取工具按下面的绝对路径直接打开)?：\r?\n(?:(?:- [^\r\n]+ → [^\r\n]+|没下载下来：[^\r\n]+)\r?\n)+\][ \t]*$/u;
@@ -40,7 +44,7 @@ export function stripBridgeSenderPrefix(text: string): string {
 /**
  * Remove every envelope the Bridge may weave around an Agent prompt:
  *
- *   retry preface -> record block -> sender -> quote -> user body -> local file manifest
+ *   retry preface -> record block -> smart-mode note -> sender -> quote -> user body -> local file manifest
  *
  * Title sources normally travel separately from that woven prompt. This is a
  * strict recovery boundary for a queued/restarted job, so an internal open_id,
@@ -55,6 +59,7 @@ export function stripBridgeMessageEnvelope(text: string): string {
     out = out
       .replace(BRIDGE_RETRY_PREFIX, '')
       .replace(BRIDGE_RECORD_BLOCK_PREFIX, '')
+      .replace(BRIDGE_INITIATIVE_PREFIX, '')
       .replace(BRIDGE_SENDER_PREFIX, '')
       .replace(BRIDGE_QUOTE_PREFIX, '');
   } while (out !== previous);

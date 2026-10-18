@@ -351,14 +351,45 @@ export async function adoptAdminSessions(splitChats: { has(chatId: string): bool
   });
 }
 
+/** Puts `rec` in place of the record at its key, or adds it. */
+function put(store: StoreFile, rec: SessionRecord): void {
+  const idx = store.sessions.findIndex((s) => s.threadId === rec.threadId);
+  if (idx === -1) store.sessions.push(rec);
+  else store.sessions[idx] = rec;
+}
+
 /** Insert or replace a session by threadId. */
 export async function upsertSession(rec: SessionRecord): Promise<void> {
   return withLock(async () => {
     const store = await read();
-    const idx = store.sessions.findIndex((s) => s.threadId === rec.threadId);
-    if (idx === -1) store.sessions.push(rec);
-    else store.sessions[idx] = rec;
+    put(store, rec);
     await write(store);
+  });
+}
+
+/** The live record of the group `chatId` that holds the native session, at a key other than
+ * `key` (s15f): another topic or the main area. Archived and retired records hold nothing. */
+export function sessionHolder(
+  sessions: readonly SessionRecord[],
+  want: { chatId: string; key?: string; backend: string; sessionId: string },
+): SessionRecord | undefined {
+  return sessions.find((s) =>
+    s.chatId === want.chatId && s.threadId !== want.key && !s.detached && !isRetiredKey(s.threadId) &&
+    s.backend === want.backend && s.sessionId === want.sessionId);
+}
+
+/** {@link upsertSession} for a `/resume` (s15f): unless another place of the group holds the
+ * native session, then nothing is written and that place's record comes back. Look and write
+ * share the lock, so of two places resuming one session at once only one binds it. Resuming
+ * the session a key already holds into that key is fine. */
+export async function bindSession(rec: SessionRecord): Promise<SessionRecord | undefined> {
+  return withLock(async () => {
+    const store = await read();
+    const holder = sessionHolder(store.sessions, { ...rec, key: rec.threadId });
+    if (holder) return holder;
+    put(store, rec);
+    await write(store);
+    return undefined;
   });
 }
 

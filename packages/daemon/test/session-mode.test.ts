@@ -13,7 +13,7 @@ describe('s21 会话方式 read rules (product.md 3.4)', () => {
     expect(sessionModeOf(row({ kind: 'multi', smart: true }))).toBe('multi'); // switched by an older daemon
     expect(ruleKind(row({ kind: 'single' }))).toBe('single');
   });
-  it('runs a stored 智能 as 单会话 that replies only when @-ed, until s25', () => {
+  it('runs a stored 智能 main area as one session, with no 免@: its judgement decides (s25)', () => {
     const smart = row({ kind: 'single', smart: true, noMention: true });
     expect(sessionModeOf(smart)).toBe('smart');
     expect(ruleKind(smart)).toBe('single');
@@ -67,6 +67,6 @@ describe('s21 DM bind and new-group cards', () => {
   it('labels groups with the 3.4 names', () => {
     expect(kindLabel(row({}))).toBe('多会话 · @ 我开新会话');
     expect(kindLabel(row({ kind: 'single' }))).toBe('单会话 · 整群一条会话');
-    expect(kindLabel(row({ kind: 'single', smart: true }))).toBe('单会话 · 整群一条会话'); // 智能 stays hidden until s25
+    expect(kindLabel(row({ kind: 'single', smart: true }))).toBe('单会话 · 整群一条会话'); // 智能 stays hidden until s25c
   });
 });
