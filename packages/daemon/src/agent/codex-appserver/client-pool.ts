@@ -1,5 +1,6 @@
 import { statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { log } from '../../core/logger';
 import { AppServerClient, JsonRpcError } from './app-server-client';
 import { resolveCodexBin } from './locate';
@@ -54,6 +55,60 @@ const residents = new Set<AppServerClient>();
 let closing: Promise<void> | undefined;
 let accepting = true;
 
+// ── 首启闸（R3-1） ────────────────────────────────────────────────────
+
+/** How long one first start holds the gate before the next may try anyway. */
+export const FIRST_START_HOLD_MS = CONNECT_TIMEOUT_MS;
+
+/** Per CODEX_HOME and codex build: `ready` once an app-server there answered `initialize`, else the
+ * turn of the one connecting now. */
+const firstStarts = new Map<string, 'ready' | Promise<void>>();
+let poolClosed: { promise: Promise<never>; reject: (error: Error) => void } | undefined;
+
+function closedPool(): Promise<never> {
+  if (!accepting) return Promise.reject(new Error('Codex client pool is closed'));
+  if (!poolClosed) {
+    let reject!: (error: Error) => void;
+    const promise = new Promise<never>((_, fail) => { reject = fail; });
+    promise.catch(() => undefined);
+    poolClosed = { promise, reject };
+  }
+  return poolClosed.promise;
+}
+
+/**
+ * Connects an app-server, one at a time until one has answered `initialize` under this CODEX_HOME.
+ * Codex creates its sqlite state (`state_5.sqlite` and others) on start; two first starts on an empty
+ * CODEX_HOME race for it and one exits 1 before `initialize` (0.163.0, review R3-1). So the prewarm,
+ * judge, utility and session processes wait here while the first one connects; a failure, or no
+ * answer within {@link FIRST_START_HOLD_MS}, lets the next one try; {@link shutdownResidentClients}
+ * rejects the waiting ones. Keyed by the build too: a new codex may bring a new state schema.
+ */
+export async function connectGated(client: Pick<AppServerClient, 'connect'>, bin: string, holdMs = FIRST_START_HOLD_MS): Promise<void> {
+  const key = `${process.env.CODEX_HOME || join(homedir(), '.codex')}\n${binFingerprint(bin)}`;
+  for (let gate = firstStarts.get(key); gate !== undefined; gate = firstStarts.get(key)) {
+    if (gate === 'ready') return client.connect();
+    await Promise.race([gate, closedPool()]);
+  }
+  let letGo!: () => void;
+  const turn = new Promise<void>(resolve => {
+    letGo = () => {
+      if (firstStarts.get(key) === turn) firstStarts.delete(key);
+      resolve();
+    };
+  });
+  firstStarts.set(key, turn);
+  const timer = setTimeout(letGo, holdMs);
+  timer.unref?.();
+  try {
+    await client.connect();
+    firstStarts.set(key, 'ready');
+  } finally {
+    clearTimeout(timer);
+    letGo();
+  }
+}
+
 /** Registers a resident process so {@link shutdownResidentClients} closes it (the judge process, s23b, uses it too). */
 export function trackResident(client: AppServerClient): void {
   residents.add(client);
@@ -106,7 +161,7 @@ async function acquireUtility(bin: string): Promise<AppServerClient> {
     const client = new AppServerClient({ bin, cwd: NEUTRAL_CWD, clientName: 'feishu-codex-bridge-utility' });
     trackResident(client);
     try {
-      await withDeadline(client.connect(), CONNECT_TIMEOUT_MS, 'utility connect');
+      await withDeadline(connectGated(client, bin), CONNECT_TIMEOUT_MS, 'utility connect');
       requireOpen();
     } catch (err) {
       closeDiscarded(client);
@@ -233,7 +288,7 @@ export function refillWarmPool(): Promise<void> {
     const client = new AppServerClient({ bin, cwd: NEUTRAL_CWD });
     trackResident(client);
     try {
-      await withDeadline(client.connect(), CONNECT_TIMEOUT_MS, 'prewarm connect');
+      await withDeadline(connectGated(client, bin), CONNECT_TIMEOUT_MS, 'prewarm connect');
       requireOpen();
       await withDeadline(
         client.request('thread/start', {
@@ -264,6 +319,7 @@ export function refillWarmPool(): Promise<void> {
 export function shutdownResidentClients(): Promise<void> {
   if (closing) return closing;
   accepting = false;
+  poolClosed?.reject(new Error('Codex client pool is closed'));
   const targets = [...residents];
   utility = null;
   warm = null;
