@@ -13,11 +13,16 @@ import { weaveSender } from '../src/bot/context-weave';
 import { updateManagedCard } from '../src/card/managed';
 import { readDropped } from '../src/bot/restart-dropped';
 import { existsSync } from 'node:fs';
+import { AdminWriteError } from '../src/admin/ops';
+import { CreationOutcomeUnknownError } from '../src/project/lifecycle';
+import { seedBots } from './helpers/bot-fixture';
+import { fakeLark, httpError, stall } from './helpers/fake-lark-http';
 
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
   const appDir = mkdtempSync(join(tmpdir(), 'desktop-collaboration-'));
-  return { paths: { appDir, sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), commentInstructionsFile: join(appDir, 'instructions.md'), commentsRootDir: join(appDir, 'comments'), projectsRootDir: join(appDir, 'projects') } };
+  return { paths: { appDir, sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), botsFile: join(appDir, 'bots.json'), commentInstructionsFile: join(appDir, 'instructions.md'), commentsRootDir: join(appDir, 'comments'), projectsRootDir: join(appDir, 'projects') },
+    botPaths: () => ({ projectsFile: join(appDir, 'projects.json'), configFile: join(appDir, 'config.json') }) };
 });
 const fixture = vi.hoisted(() => ({ failProjectsWrite: false, backend: undefined as unknown, leave: vi.fn(), send: vi.fn(async () => ({ messageId: 'om_sent' })), usage: vi.fn<() => Promise<AccountUsageBundle>>(async () => ({ profile: { topInvocations: [], dailyBuckets: [] }, usage: { main: {}, extras: [], fetchedAt: 1 } })) }));
 vi.mock('node:fs/promises', async original => {
@@ -41,7 +46,11 @@ function backend() {
   return { ...backend, thread };
 }
 function orchestrator(channel: unknown = { send: fixture.send }, droppedFile?: string) { return createOrchestrator(channel as never, cfg, paths.appDir, undefined, droppedFile ? { droppedFile } : undefined); }
+const bot = { appId: 'cli_fixture', tenant: 'feishu' as const, createdAt: 1, registrationId: 'fixture' };
+/** An owner that can create groups: registered bot identity, a real SDK client over fake HTTP. */
+function creator(rawClient: unknown) { return createOrchestrator({ send: fixture.send, rawClient } as never, cfg, paths.appDir, undefined, { bot }); }
 beforeEach(async () => {
+  await seedBots({ version: 1, bots: [{ ...bot, name: 'fixture' }] });
   await rm(pendingGroupsFile(paths.projectsFile), { force: true });
   await rm(paths.projectsFile, { force: true }); await rm(paths.sessionsFile, { force: true });
   fixture.failProjectsWrite = false;
@@ -242,21 +251,20 @@ it('never applies a stale project target to another binding and refreshes actual
   } finally { await app.shutdown(); }
 });
 
-it('creates under the configured root once and preserves idempotency across owner restart', async () => {
+it('creates in the bot\'s stable directory once and preserves idempotency across owner restart', async () => {
   backend();
-  const create = vi.fn(async () => ({ code: 0, data: { chat_id: 'oc_created' } }));
-  const channel = { send: fixture.send, rawClient: { im: { v1: { chat: { create }, chatManagers: { addManagers: vi.fn(async () => ({ code: 0 })) } } } } };
-  let app = orchestrator(channel);
+  const fake = fakeLark();
+  let app = creator(fake.client);
   const request = { action: 'createProject' as const, requestId: 'c848d29f-69db-4f53-849d-577453388ac7', name: 'created', kind: 'single' as const, backend: 'codex-appserver' as const };
   try {
     const replies = await Promise.all([app.collaboration(request), app.collaboration(request)]);
     expect(replies[0]).toEqual(replies[1]);
-    expect(create).toHaveBeenCalledOnce();
-    expect(create).toHaveBeenCalledWith({ params: { user_id_type: 'open_id', uuid: request.requestId }, data: { name: 'created', user_id_list: ['ou_owner'] } });
-    expect(await getProjectByName('created')).toMatchObject({ cwd: join(paths.projectsRootDir, 'created'), creationRequestId: request.requestId });
-    await app.shutdown(); app = orchestrator(channel);
+    expect(fake.creates()).toMatchObject([{ params: { user_id_type: 'open_id', uuid: request.requestId }, data: { name: 'created', user_id_list: ['ou_owner'] } }]);
+    expect(await getProjectByName('created')).toMatchObject({ cwd: join(paths.projectsRootDir, 'fixture', 'groups', 'created'), creationRequestId: request.requestId,
+      origin: 'created', mode: 'full', backend: 'codex-appserver' });
+    await app.shutdown(); app = creator(fake.client);
     expect(await app.collaboration(request)).toEqual(replies[0]);
-    expect(create).toHaveBeenCalledOnce();
+    expect(fake.creates()).toHaveLength(1);
     await expect(app.collaboration({ ...request, name: 'changed' })).rejects.toThrow('其他参数');
   } finally { await app.shutdown(); }
 });
@@ -266,23 +274,58 @@ it.each(['directory', 'alias'] as const)('admits an explicit %s before remote cr
   const alias = `${dir}-alias`;
   await mkdir(dir, { recursive: true });
   await symlink(dir, alias);
-  const create = vi.fn(async () => ({ code: 0, data: { chat_id: 'oc_explicit_created' } }));
-  const managers = vi.fn(async () => ({ code: 0 }));
-  const channel = { send: fixture.send, rawClient: { im: { v1: { chat: { create }, chatManagers: { addManagers: managers } } } } };
-  let app = orchestrator(channel);
+  const fake = fakeLark();
+  let app = creator(fake.client);
   const request = { action: 'createProject' as const, requestId: 'f0cfe579-c6bc-40c6-91f9-963fcffb2c1c', name: 'Explicit created', directory: selection === 'alias' ? alias : dir, kind: 'single' as const, backend: 'codex-appserver' as const };
+  const admins = () => fake.requests.filter(r => r.path.endsWith('/managers/add_managers'));
   try {
     const first = await app.collaboration(request);
     expect(await getProjectByName(request.name)).toMatchObject({ cwd: await realpath(dir), blank: false,
       directories: { workspaces: { primary: await realpath(dir), additional: [] } }, creationRequestId: request.requestId });
     expect(await getProjectByName(request.name)).not.toHaveProperty('directories.repositories');
-    expect(create).toHaveBeenCalledWith({ params: { user_id_type: 'open_id', uuid: request.requestId }, data: { name: request.name, user_id_list: ['ou_owner'] } });
-    expect(managers).toHaveBeenCalledWith({ path: { chat_id: 'oc_explicit_created' }, params: { member_id_type: 'open_id' }, data: { manager_ids: ['ou_owner'] } });
-    await app.shutdown(); app = orchestrator(channel);
+    expect(fake.creates()).toMatchObject([{ params: { user_id_type: 'open_id', uuid: request.requestId }, data: { name: request.name, user_id_list: ['ou_owner'] } }]);
+    expect(admins()).toMatchObject([{ path: `/open-apis/im/v1/chats/oc_${request.requestId}/managers/add_managers`, params: { member_id_type: 'open_id' }, data: { manager_ids: ['ou_owner'] } }]);
+    await app.shutdown(); app = creator(fake.client);
     expect(await app.collaboration(request)).toEqual(first);
-    expect(create).toHaveBeenCalledOnce();
-    expect(managers).toHaveBeenCalledOnce();
+    expect(fake.creates()).toHaveLength(1);
+    expect(admins()).toHaveLength(1);
   } finally { await app.shutdown(); }
+});
+it('s36d1: keeps a result not known apart from every refusal, which crosses IPC as the bot\'s own word', async () => {
+  backend();
+  let answer = (): unknown => { throw httpError(503, 'unavailable'); };
+  const fake = fakeLark(request => request.method === 'POST' && request.path === '/open-apis/im/v1/chats' ? answer() : undefined);
+  const app = creator(fake.client);
+  const request = { action: 'createProject' as const, requestId: 'a1b2c3d4-0000-4000-8000-000000000001', name: 'Outcome', kind: 'multi' as const, backend: 'codex-appserver' as const };
+  try {
+    const unknown = await app.collaboration(request).catch((error: unknown) => error);
+    expect(unknown).toBeInstanceOf(CreationOutcomeUnknownError);
+    expect(unknown).not.toBeInstanceOf(AdminWriteError);
+    answer = () => { throw httpError(400, { code: 232001, msg: 'invalid name' }); };
+    await expect(app.collaboration({ ...request, requestId: 'a1b2c3d4-0000-4000-8000-000000000002' })).rejects.toThrow(new AdminWriteError('飞书拒绝建群 code=232001：invalid name'));
+    await expect(app.collaboration({ ...request, requestId: 'a1b2c3d4-0000-4000-8000-000000000003', name: 'demo' })).rejects.toBeInstanceOf(AdminWriteError);
+    const unregistered = orchestrator({ send: fixture.send, rawClient: fake.client });
+    await expect(unregistered.collaboration({ ...request, requestId: 'a1b2c3d4-0000-4000-8000-000000000004' })).rejects.toThrow(new AdminWriteError('缺少机器人注册身份，请重启后再建群'));
+    await unregistered.shutdown();
+    expect(fake.creates()).toHaveLength(2);
+  } finally { await app.shutdown(); }
+});
+it('s36d1: shutdown stops a creation in flight at once and starts none of those queued or new', async () => {
+  backend();
+  const fake = fakeLark(request => request.method === 'POST' && request.path === '/open-apis/im/v1/chats' ? stall() : undefined);
+  const app = creator(fake.client);
+  const request = { action: 'createProject' as const, requestId: 'b1b2c3d4-0000-4000-8000-000000000001', name: 'In flight', kind: 'multi' as const, backend: 'codex-appserver' as const };
+  const flying = app.collaboration(request).catch((error: unknown) => error);
+  const queued = app.collaboration({ ...request, requestId: 'b1b2c3d4-0000-4000-8000-000000000002', name: 'Queued' }).catch((error: unknown) => error);
+  await vi.waitFor(() => expect(fake.creates()).toHaveLength(1));
+  const started = Date.now();
+  await app.shutdown();
+  expect(Date.now() - started).toBeLessThan(5_000);
+  expect(await flying).toBeInstanceOf(CreationOutcomeUnknownError);
+  expect(await queued).toEqual(new AdminWriteError('后台服务正在关闭，没有建群'));
+  await expect(app.collaboration({ ...request, requestId: 'b1b2c3d4-0000-4000-8000-000000000003', name: 'Late' })).rejects.toThrow(new AdminWriteError('后台服务正在关闭，没有建群'));
+  expect(fake.creates()).toHaveLength(1);
+  expect(fake.open()).toBe(0);
 });
 it('leaves a key from before s15c unused and refuses unsupported goal before posting to Feishu', async () => {
   const be = backend(); fixture.backend = { ...be, capabilities: { goal: false, compact: true, resume: true } };

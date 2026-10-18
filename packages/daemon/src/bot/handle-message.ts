@@ -2,7 +2,7 @@ import { AskCoordinator, type AskTurn } from './ask-coordinator';
 import { createPendingGroups, pendingGroupsFile } from '../project/pending-groups';
 import { realpath, stat } from 'node:fs/promises';
 import type { BotIdentity } from '../config/bots';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { projectRevision, projectView, type CollaborationRequest } from '../admin/collaboration';
 import { AdminWriteError } from '../admin/ops';
 import { createSettingsOwner } from '../admin/settings';
@@ -150,6 +150,7 @@ import {
   parseModelDefaultFormValue,
   buildNewProjectDoneCard,
   buildNewProjectFormCard,
+  buildNewProjectUncertainCard,
   buildPermissionCard,
   PERMISSION_CARD_VERSION,
   buildProjectListCard,
@@ -208,7 +209,7 @@ import {
   updateProject,
   type Project,
 } from '../project/registry';
-import { bindModeFor, createProject, joinExistingGroup } from '../project/lifecycle';
+import { bindModeFor, createProject, CreatedButUnsavedError, CreationOutcomeUnknownError, joinExistingGroup } from '../project/lifecycle';
 export { bindModeFor } from '../project/lifecycle';
 import { refreshBranch } from '../project/announcement';
 import { leaveChat, transferOwnership } from '../project/group-ops';
@@ -404,6 +405,18 @@ function backendOptionsFor(mode: PermissionMode): SelectOption[] {
   // 只剩默认 codex（无真实选择）时不渲染后端区，卡片回到「无后端概念」形态。
   return opts.length > 1 ? opts : [];
 }
+
+/**
+ * Feishu's chat.create `uuid` for one DM card click (s36d1): the card message, the clicker and the render token
+ * stamped into that card's buttons. A click Feishu delivers again, even after a restart, sends the same uuid;
+ * a fresh card, or the same card rendered again, makes a new one. 32 hex characters, within Feishu's 50.
+ */
+export function dmCreationId(messageId: string, operator: string, renderToken: unknown): string {
+  return createHash('sha256').update(JSON.stringify([messageId, operator, typeof renderToken === 'string' ? renderToken : ''])).digest('hex').slice(0, 32);
+}
+
+/** Said when a creation reaches its turn after shutdown began: nothing was sent to Feishu. */
+const CREATION_STOPPING = '后台服务正在关闭，没有建群';
 
 /** 把卡片提交的 backend 收成安全值：必须是注册表里的 id，否则丢弃（落回默认 codex），防伪造。 */
 export function safeBackendId(formValue: Record<string, unknown> | undefined): string | undefined {
@@ -4108,7 +4121,12 @@ export function createOrchestrator(
         else if (!op) result = buildNewProjectFormCard({ name, cwd: cwdIn, error: '无法识别操作者身份', backends });
         else {
           try {
-            const p = await createProject(channel, {
+            if (!bindingBot) throw new Error('缺少机器人注册身份，请重启后再建群');
+            const bot = bindingBot;
+            const requestId = dmCreationId(evt.messageId, op, value.__r);
+            const p = await serialCreate(signal => createProject(channel, {
+              requestId,
+              bot,
               name,
               ownerOpenId: op,
               existingPath: cwdIn || undefined,
@@ -4116,11 +4134,15 @@ export function createOrchestrator(
               kind,
               noMention: parseNoMentionPick(formValue),
               backend,
-            });
-            log.info('console', 'new-project', { name: p.name, blank: p.blank, backend: p.backend });
+              signal,
+            }));
+            log.info('console', 'new-project', { name: p.name, blank: p.blank, backend: p.backend, requestId });
             result = buildNewProjectDoneCard(p);
           } catch (err) {
-            result = buildNewProjectFormCard({ name, cwd: cwdIn, error: err instanceof Error ? err.message : String(err), backends });
+            // A group may exist (s36d1): say so, with no form that could create a second one.
+            result = err instanceof CreationOutcomeUnknownError || err instanceof CreatedButUnsavedError
+              ? buildNewProjectUncertainCard({ name, cwd: cwdIn, warning: err.message, ...(err instanceof CreatedButUnsavedError ? { chatId: err.chatId } : {}) })
+              : buildNewProjectFormCard({ name, cwd: cwdIn, error: err instanceof Error ? err.message : String(err), backends });
           }
         }
         await sendManagedCard(channel, evt.chatId, result).catch((e) =>
@@ -4956,6 +4978,19 @@ export function createOrchestrator(
   const projectMutations = new Set<string>();
   const runIds = new WeakMap<ActiveState, { run: AgentRun | undefined; id: string }>();
   let createChain: Promise<unknown> = Promise.resolve();
+  /** Aborts every Feishu call of a creation still running when the bridge stops, so the drain does not wait out its budget. */
+  const creationStop = new AbortController();
+  onStop.add(() => creationStop.abort());
+  /** DM and web creations run one at a time (s36d1): a name both pick at once is refused locally, not created twice.
+   * One that reaches its turn after shutdown began is refused without calling Feishu. */
+  function serialCreate<T>(create: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const result = createChain.then(() => {
+      if (shuttingDown) throw new AdminWriteError(CREATION_STOPPING);
+      return create(creationStop.signal);
+    });
+    createChain = result.catch(() => undefined);
+    return result;
+  }
   const createRequests = new Map<string, { signature: string; result: Promise<unknown> }>();
   const runId = (state: ActiveState): string => {
     let identity = runIds.get(state);
@@ -4978,13 +5013,19 @@ export function createOrchestrator(
         if (prior.signature !== signature) throw new AdminWriteError('创建请求标识已用于其他参数');
         return prior.result;
       }
-      const result = createChain.then(async () => {
+      if (!bindingBot) throw new AdminWriteError('缺少机器人注册身份，请重启后再建群');
+      const bot = bindingBot;
+      const result = serialCreate(async signal => {
         const directory = request.directory === undefined ? undefined : await realpath(request.directory);
         if (directory !== undefined && !(await stat(directory)).isDirectory()) throw new AdminWriteError('所选文件夹不是目录');
-        const project = await createProject(channel, { requestId: request.requestId, requestSignature: signature, name: request.name, ownerOpenId: owner, existingPath: directory, projectsRootDir: cfg.preferences?.projectsRootDir, kind: request.kind, noMention: request.noMention, backend: request.backend, mode: bindModeFor(request.backend) });
+        const project = await createProject(channel, { requestId: request.requestId, requestSignature: signature, bot, name: request.name, ownerOpenId: owner, existingPath: directory, projectsRootDir: cfg.preferences?.projectsRootDir, kind: request.kind, noMention: request.noMention, backend: request.backend, mode: bindModeFor(request.backend), signal });
         return { ok: true, project: projectView(project) };
+      }).catch((error: unknown) => {
+        // Every refusal crosses IPC as the bot's own word; only a result not known stays a plain error, which the
+        // RPC layer reports as "maybe created" together with a lost connection or a bot that never answered.
+        if (error instanceof CreationOutcomeUnknownError || error instanceof AdminWriteError) throw error;
+        throw new AdminWriteError(error instanceof Error ? error.message : String(error));
       });
-      createChain = result.catch(() => undefined);
       void result.then(() => createRequests.delete(request.requestId), () => createRequests.delete(request.requestId));
       createRequests.set(request.requestId, { signature, result });
       return result;
@@ -7146,8 +7187,18 @@ export function createOrchestrator(
     return result;
   };
 
+  const admittedCollaboration = admit(collaboration);
+  /** s36d1: a creation refused at shutdown says nothing was created, where admit's refusal would read as a result
+   * not known. The drain waits for one in flight, but how it ended is its caller's answer, not a cleanup failure. */
+  function collaborate(request: CollaborationRequest): Promise<unknown> {
+    if (request.action !== 'createProject') return admittedCollaboration(request);
+    if (shuttingDown) return Promise.reject(new AdminWriteError(CREATION_STOPPING));
+    const result = collaboration(request);
+    void trackTask(result.catch(() => undefined));
+    return result;
+  }
   return {
-    collaboration: admit(collaboration),
+    collaboration: collaborate,
     onMessage: admitEvent(onMessage),
     onComment: admitEvent(onComment),
     onBotAddedToChat: admitEvent(onBotAddedToChat),

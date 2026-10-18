@@ -1,6 +1,7 @@
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { log } from '../core/logger';
 import { currentBranch } from './git-info';
+import { creationStopped } from './creation-client';
 import { updateProject, type Project } from './registry';
 
 /**
@@ -36,7 +37,8 @@ function buildAnnouncementLine(project: Project, branch: string | null): string 
  * ready immediately — `list` blocks returns a gateway 500 (code 1771002) for a
  * short window after `chat.create`. Linear backoff rides that out (and any
  * other transient 5xx). Permission/4xx errors still get retried but fail fast
- * enough (a few seconds) and surface the real error.
+ * enough (a few seconds) and surface the real error. A creation's budget that ran
+ * out or was stopped ends it at once: no more tries, no more waiting (s36d1).
  */
 async function withRetry<T>(fn: () => Promise<T>, attempts = 5): Promise<T> {
   let lastErr: unknown;
@@ -45,6 +47,7 @@ async function withRetry<T>(fn: () => Promise<T>, attempts = 5): Promise<T> {
       return await fn();
     } catch (err) {
       lastErr = err;
+      if (creationStopped(err)) break;
       if (i < attempts - 1) await new Promise((r) => setTimeout(r, 800 * (i + 1)));
     }
   }
@@ -56,7 +59,7 @@ async function withRetry<T>(fn: () => Promise<T>, attempts = 5): Promise<T> {
  * → create sequence is wrapped as one retry unit, and each attempt re-lists so
  * it always works off the latest revision/children (idempotent on retry).
  */
-async function writeAnnouncement(channel: LarkChannel, chatId: string, line: string): Promise<void> {
+async function writeAnnouncement(channel: Pick<LarkChannel, 'rawClient'>, chatId: string, line: string): Promise<void> {
   const docx = channel.rawClient.docx.v1;
   await withRetry(async () => {
     const listed = await docx.chatAnnouncementBlock.list({ path: { chat_id: chatId } });
@@ -88,7 +91,7 @@ async function writeAnnouncement(channel: LarkChannel, chatId: string, line: str
  * means "announcement" (vs "1" = a specific message), so no message_id is
  * needed. Reuses the `im:chat` scope — no extra permission. Idempotent.
  */
-async function pinAnnouncement(channel: LarkChannel, chatId: string): Promise<void> {
+async function pinAnnouncement(channel: Pick<LarkChannel, 'rawClient'>, chatId: string): Promise<void> {
   await withRetry(() =>
     channel.rawClient.im.v1.chatTopNotice.putTopNotice({
       path: { chat_id: chatId },
@@ -98,7 +101,7 @@ async function pinAnnouncement(channel: LarkChannel, chatId: string): Promise<vo
 }
 
 /** Set the project group's announcement, pin it to the top, persist the branch. */
-export async function setAnnouncement(channel: LarkChannel, project: Project): Promise<void> {
+export async function setAnnouncement(channel: Pick<LarkChannel, 'rawClient'>, project: Project): Promise<void> {
   const branch = await currentBranch(project.cwd); // null when not a git repo
   await writeAnnouncement(channel, project.chatId, buildAnnouncementLine(project, branch));
   // Pin is best-effort: the announcement content is already written, so a pin

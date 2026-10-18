@@ -4,6 +4,9 @@ import { collaborationReplySchema, projectRecordSchema, type CollaborationReques
 import type { AdminService } from '../../admin/service';
 import type { CollaborationRequest as ServiceRequest } from '../../admin/collaboration';
 import { UsageError, type UsageErrorKind } from '../../agent/types';
+import { AdminWriteError } from '../../admin/ops';
+import { NotWiredYetError } from '../../admin/service';
+import { CREATION_UNKNOWN } from '../../project/lifecycle';
 import type { DirectoryBrowser } from '../directory-browser';
 import type { RpcOutcome } from '../rpc';
 import { RpcError, unsupported } from '../errors';
@@ -69,7 +72,14 @@ export async function collaborationRpc(service: AdminService, directory: Directo
     const { agentId: _agentId, groupId, ...rest } = request;
     operation = { ...rest, chatId: groupId };
   }
-  const raw = await service.collaboration(request.agentId, operation);
+  let raw: unknown;
+  try { raw = await service.collaboration(request.agentId, operation); }
+  catch (error) {
+    // s36d1: only the bot's own refusal says no group was made. A lost IPC answer, a bot that exited or timed out, or
+    // a creation the bot itself could not settle, may have made one; the desktop then says so instead of a raw error.
+    if (request.action === 'createProject' && !(error instanceof AdminWriteError || error instanceof NotWiredYetError)) throw new RpcError('outcome_unknown', CREATION_UNKNOWN);
+    throw error;
+  }
   let reply: unknown;
   switch (request.action) {
     case 'project': reply = { kind: 'project', ...projectResult.parse(raw) }; break;

@@ -539,10 +539,26 @@ export function buildNewProjectFormCard(
   }
   formItems.push(...sessionModeItems('创建', { a: DM.newProjectSubmit }), actions([button('⬅️ 菜单', { a: DM.menu })]));
   elements.push(
-    md('填项目名（必填）。**文件夹路径留空** = 自动在默认位置新建一个空白项目；**填绝对路径** = 用电脑上已有的文件夹。'),
+    md('填项目名（必填）。**文件夹路径留空** = 为这个群新建独立目录；**填绝对路径** = 用电脑上已有的文件夹。'),
     form('new_project', formItems),
   );
   return card(elements, { header: { title: '➕ 新建项目', template: 'turquoise' } });
+}
+
+/**
+ * A creation that may have made a group (s36d1): the request reached Feishu and no answer says what came of it, or
+ * the group exists and its row was not saved (`chatId` then opens it). It repeats what was asked but carries no
+ * form, so one more click cannot create a second group; 新建项目 from the menu starts a new request.
+ */
+export function buildNewProjectUncertainCard(opts: { name: string; cwd?: string; warning: string; chatId?: string }): CardObject {
+  return card([
+    md(`⚠️ **不确定建好没有**：${opts.warning}`),
+    note(`项目名：${opts.name}   ·   文件夹：${opts.cwd || '留空（为这个群新建独立目录）'}`),
+    actions([
+      ...(opts.chatId ? [linkButton('💬 打开群聊', openChatUrl(opts.chatId), 'primary')] : []),
+      button('⬅️ 菜单', { a: DM.menu }),
+    ]),
+  ], { header: { title: '➕ 新建项目', template: 'orange' } });
 }
 
 /**

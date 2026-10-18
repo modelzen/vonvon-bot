@@ -1,18 +1,20 @@
 import { pendingGroupsFile, retireBoundPendingGroup } from './pending-groups';
-import { mkdir, realpath, stat } from 'node:fs/promises';
+import { realpath, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { paths } from '../config/paths';
 import { botPaths } from '../config/paths';
-import { withBotGroupBinding, type BotIdentity } from '../config/bots';
+import { assertBotIdentity, withBotGroupBinding, type BotIdentity } from '../config/bots';
 import { admitDirectorySettings, resolveProjectsRootDir } from '../config/directories';
 import { log } from '../core/logger';
+import { feishuError } from '../utils/feishu-error';
 import { addProject, bindNoMention, bindProject, listProjectsIn, type Project, type RegistryLocation } from './registry';
 import type { PermissionMode } from '../agent/types';
 import { DEFAULT_BACKEND_ID, effectiveDefaultBackend, isBackendEntryInstalled } from '../agent';
 import { catalogById, isInstallable, projectCreatableBackends } from '../agent/catalog';
 import { setAnnouncement } from './announcement';
 import { onboardGroup } from './onboarding';
+import { CreationClientClosedError, withCreationClient } from './creation-client';
 
 /**
  * 校验「创建时选定的后端」此刻仍可用（已下载 + 支持该权限档）。防御卡渲染与提交之间
@@ -40,8 +42,12 @@ export function bindModeFor(backend?: string): PermissionMode | undefined {
 }
 
 export interface CreateProjectInput {
-  requestId?: string;
+  /** Feishu's dedupe key for this one creation (chat.create `uuid`, at most 50 characters): the web makes one per
+   * RPC, the DM one per card click. Nothing retries chat.create; a retry would have to reuse it. */
+  requestId: string;
   requestSignature?: string;
+  /** The registered bot this process runs as. Checked before Feishu is called; the default directory is under it. */
+  bot: BotIdentity;
   name: string;
   /** DM sender open_id — invited to the new group + set as a member. */
   ownerOpenId: string;
@@ -55,11 +61,48 @@ export interface CreateProjectInput {
   noMention?: boolean;
   /** permission tier (default 'full' for self-created projects). */
   mode?: PermissionMode;
-  /** agent backend chosen at creation (fixed afterwards — no switching). When
-   *  omitted, runtime falls back to DEFAULT_BACKEND_ID (codex). */
+  /** agent backend chosen at creation (fixed afterwards — no switching). Left out → DEFAULT_BACKEND_ID (codex),
+   *  written into the row so the group never follows a later default (s36d1). */
   backend?: string;
   /** allow the sandboxed shell to reach the network (default false). */
   network?: boolean;
+  /** Stops every Feishu call of this creation, for the daemon's shutdown. */
+  signal?: AbortSignal;
+  /** One budget for every Feishu call: token, create, admin, announcement and welcome. Default {@link CREATION_BUDGET_MS}. */
+  timeoutMs?: number;
+}
+
+export const CREATION_BUDGET_MS = 30_000;
+/** What the owner (2026-10-18) has the person told when a creation's result is not known. */
+export const CREATION_UNKNOWN = '可能已经建好了，先去飞书看一眼再重试';
+/** Feishu's "the group is being created" (uuid-contract.md): no proof that no group came of it. */
+const CREATING_CODE = 232068;
+/** Network failures before a connection exists: the request never reached Feishu. */
+const UNSENT_CODES = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED']);
+
+/** Nothing was created: the request never left, or Feishu answered with a refusal. */
+export class CreationRefusedError extends Error {}
+/** chat.create was sent and no answer says what came of it: a group may exist. */
+export class CreationOutcomeUnknownError extends Error {
+  constructor(readonly reason: unknown) { super(CREATION_UNKNOWN); }
+}
+/** The group exists on Feishu but its row was not saved. Creating again would make a second group. */
+export class CreatedButUnsavedError extends Error {
+  constructor(readonly chatId: string, name: string, reason: unknown) {
+    super(`群「${name}」已建好，但没存上：${reason instanceof Error ? reason.message : String(reason)}。请在网页「加入现有飞书群」→「查找已经加入的群」里选它绑定，不要再建`);
+  }
+}
+
+/** What a chat.create failure means. Only a refusal Feishu answered, or a request that never left, says no group exists. */
+function creationFailure(error: unknown, dispatched: boolean): Error {
+  const status = (error as { response?: { status?: unknown } } | null)?.response?.status;
+  const code = (error as { code?: unknown } | null)?.code;
+  if (!dispatched || (status === undefined && typeof code === 'string' && UNSENT_CODES.has(code))) {
+    return new CreationRefusedError(`没有发出建群请求：${error instanceof CreationClientClosedError ? '已超时或已取消' : error instanceof Error ? error.message : String(error)}`);
+  }
+  const feishu = feishuError(error);
+  if (feishu && feishu.code !== CREATING_CODE && typeof status === 'number' && status < 500) return new CreationRefusedError(`飞书拒绝建群 code=${feishu.code}：${feishu.msg ?? '没有说明'}`);
+  return new CreationOutcomeUnknownError(error);
 }
 
 export interface JoinGroupInput {
@@ -87,95 +130,96 @@ export interface JoinGroupInput {
 }
 
 /**
- * Resolve the working directory for a project: an explicit `existingPath` (must
- * exist) binds a folder you already have; otherwise a blank project dir is
- * created under the configured projects root (falling back to
- * {@link paths.projectsRootDir}). Throws before any group is touched so a bad
- * path never leaves an orphan group.
+ * Admit an explicit `existingPath` (must exist, outside protected locations).
+ * Throws before any group is touched so a bad path never leaves an orphan group.
+ * A default directory is allocated by {@link withBotGroupBinding} once the group exists.
  */
-async function resolveCwd(
-  name: string,
-  existingPath: string | undefined,
-  projectsRootDir: string,
-  dataDir: string,
-): Promise<Pick<Project, 'cwd' | 'blank' | 'directories'>> {
-  if (existingPath) {
-    const directories = await admitDirectorySettings({ workspaces: { primary: existingPath, additional: [] } }, { dataDir });
-    if (!directories?.workspaces) throw new Error('Invalid directory settings: directories.workspaces.primary');
-    return { cwd: directories.workspaces.primary, blank: false, directories };
-  }
-  const cwd = join(projectsRootDir, name);
-  await mkdir(cwd, { recursive: true });
-  return { cwd, blank: true };
+async function admitExistingDirectory(existingPath: string, dataDir: string): Promise<Pick<Project, 'cwd' | 'blank' | 'directories'>> {
+  const directories = await admitDirectorySettings({ workspaces: { primary: existingPath, additional: [] } }, { dataDir });
+  if (!directories?.workspaces) throw new Error('Invalid directory settings: directories.workspaces.primary');
+  return { cwd: directories.workspaces.primary, blank: false, directories };
 }
 
 /**
- * Create a project: resolve/prepare the cwd, create a bound Feishu group
- * (bot stays owner, creator invited + promoted to admin), register it, and set
- * the group announcement.
- * Throws on duplicate name or missing existing path (before creating a group,
- * so no orphan groups).
+ * Create a project: check everything local, create a bound Feishu group (bot
+ * stays owner, creator invited + promoted to admin), save its row at once, then
+ * the admin, announcement and welcome. Every Feishu call of it shares one budget
+ * (s36d1); the steps after the save are best-effort and cut when it runs out.
+ * Throws on duplicate name, a bad path or a stale bot before creating a group,
+ * so those leave no orphan group; see {@link creationFailure} for the rest.
  */
-export async function createProject(channel: LarkChannel, request: CreateProjectInput, target: RegistryLocation = { file: paths.projectsFile, dataRoot: paths.appDir }): Promise<Project> {
-  const input = { ...request };
+export async function createProject(channel: Pick<LarkChannel, 'rawClient'>, request: CreateProjectInput, target: RegistryLocation = { file: paths.projectsFile, dataRoot: paths.appDir }): Promise<Project> {
+  const { signal, ...fields } = request;
+  const input = structuredClone(fields);
   const location = { ...target };
+  if (!input.bot) throw new Error('缺少机器人注册身份，请重启后再建群');
+  if (location.file !== botPaths(input.bot.appId).projectsFile || location.dataRoot !== paths.appDir) throw new Error('机器人项目目录不匹配');
+  if (typeof input.requestId !== 'string' || !/^[\w-]{1,50}$/.test(input.requestId)) throw new Error('建群请求标识无效');
   const name = input.name.trim();
-  const existingPath = input.existingPath ? resolve(input.existingPath) : undefined;
-  const root = existingPath ? '' : resolveProjectsRootDir(input.projectsRootDir);
   if (!name) throw new Error('项目名不能为空');
   if ((await listProjectsIn(location.file)).some(project => project.name === name)) throw new Error(`项目名「${name}」已存在，换个名或用 /projects 看已有的`);
-  assertBackendUsable(input.backend, input.mode ?? 'full'); // 创建默认「完全访问」档
+  const mode = input.mode ?? 'full'; // 创建默认「完全访问」档
+  assertBackendUsable(input.backend, mode);
+  const existingPath = input.existingPath ? resolve(input.existingPath) : undefined;
+  const explicit = existingPath ? await admitExistingDirectory(existingPath, location.dataRoot) : undefined;
+  const root = existingPath ? '' : resolveProjectsRootDir(input.projectsRootDir);
+  await assertBotIdentity(input.bot);
+  const row = { createdAt: Date.now(), origin: 'created' as const, mode, backend: input.backend || DEFAULT_BACKEND_ID,
+    network: input.network ?? false, creationRequestId: input.requestId,
+    ...(input.requestSignature === undefined ? {} : { creationRequestSignature: input.requestSignature }) };
+  const noMention = input.noMention ?? bindNoMention(input.kind);
 
-  // 1. resolve cwd
-  const workspace = await resolveCwd(name, existingPath, root, location.dataRoot);
-  const { cwd, blank } = workspace;
+  let dispatched = false;
+  return withCreationClient(channel.rawClient, async client => {
+    // Create the bound group — bot stays as owner (no owner_id passed); the creator is
+    // invited as a member here, then promoted to admin below so the two share every
+    // day-to-day permission. The owner (bot) keeps only disband / transfer /
+    // manage-admins to itself — Feishu allows exactly one owner.
+    let chatId: string | undefined;
+    try {
+      const res = await client.im.v1.chat.create({
+        params: { user_id_type: 'open_id', uuid: input.requestId },
+        data: { name, user_id_list: [input.ownerOpenId] },
+      });
+      // The SDK resolves a 2xx with Feishu's error code in it.
+      if (typeof res.code === 'number' && res.code !== 0) throw Object.assign(new Error(`chat.create code ${res.code}`), { response: { status: 200, data: res } });
+      chatId = res.data?.chat_id;
+    } catch (error) {
+      log.fail('project', error, { phase: 'create', requestId: input.requestId });
+      throw creationFailure(error, dispatched);
+    }
+    if (!chatId) throw new CreationOutcomeUnknownError(new Error('chat.create returned no chat_id'));
 
-  // 2. create the bound group — bot stays as owner (no owner_id passed); the
-  //    creator is invited as a member here, then promoted to admin in 2b so the
-  //    two share every day-to-day permission. The owner (bot) keeps only
-  //    disband / transfer / manage-admins to itself — those can't be shared
-  //    because Feishu allows exactly one owner.
-  const res = await channel.rawClient.im.v1.chat.create({
-    params: { user_id_type: 'open_id', ...(input.requestId ? { uuid: input.requestId } : {}) },
-    data: { name, user_id_list: [input.ownerOpenId] },
+    // Saved before anything else, so a stuck admin call cannot keep a created group out of projects.json.
+    let saved: Project;
+    try {
+      if (explicit) {
+        saved = { ...row, ...explicit, name, chatId, kind: input.kind, noMention };
+        await addProject(saved, location);
+      } else {
+        saved = (await withBotGroupBinding(input.bot, { chatId, name, projectsRootDir: root }, scope => bindProject({ name, chatId,
+          cwd: { kind: 'default', allocatedPath: scope.allocatedPath }, defaultBackend: row.backend, backend: row.backend, kind: input.kind, noMention },
+          async () => ({ ...await scope.prepareDefault(), ...row }), location))).project;
+      }
+    } catch (error) { throw new CreatedButUnsavedError(chatId, name, error); }
+    log.info('project', 'create', { name, chatId, cwd: saved.cwd, blank: saved.blank, mode, backend: saved.backend, requestId: input.requestId });
+
+    // Promote the creator to group admin (only the owner, our bot, may), then the
+    // announcement (top banner) and onboarding (welcome card / Pin / tab). All
+    // best-effort: the group is usable even if they fail or run out of budget.
+    await client.im.v1.chatManagers
+      .addManagers({ path: { chat_id: chatId }, params: { member_id_type: 'open_id' }, data: { manager_ids: [input.ownerOpenId] } })
+      .catch((err) => log.fail('project', err, { phase: 'add-manager' }));
+    await setAnnouncement({ rawClient: client }, saved).catch((err) => log.fail('project', err, { phase: 'announcement' }));
+    await onboardGroup({ rawClient: client }, saved).catch((err) => log.fail('project', err, { phase: 'onboard' }));
+    return saved;
+  }, { timeoutMs: input.timeoutMs ?? CREATION_BUDGET_MS, signal, onSend: sent => {
+    if (sent.method === 'POST' && /\/open-apis\/im\/v1\/chats$/.test(sent.url)) dispatched = true;
+  } }).catch((error: unknown) => {
+    // Errors from inside are already sorted; the rest come from the scope itself.
+    if (error instanceof CreationRefusedError || error instanceof CreationOutcomeUnknownError || error instanceof CreatedButUnsavedError) throw error;
+    throw creationFailure(error, dispatched);
   });
-  const chatId = (res.data as { chat_id?: string } | undefined)?.chat_id;
-  if (!chatId) throw new Error(`建群失败：${JSON.stringify(res).slice(0, 200)}`);
-
-  // 2b. promote the creator to group admin. Only the owner (our bot) may do
-  //     this; best-effort — the group is usable even if it fails.
-  await channel.rawClient.im.v1.chatManagers
-    .addManagers({
-      path: { chat_id: chatId },
-      params: { member_id_type: 'open_id' },
-      data: { manager_ids: [input.ownerOpenId] },
-    })
-    .catch((err) => log.fail('project', err, { phase: 'add-manager' }));
-
-  // 3. register
-  const project: Project = {
-    ...(input.requestId ? { creationRequestId: input.requestId, creationRequestSignature: input.requestSignature } : {}),
-    name,
-    chatId,
-    ...workspace,
-    createdAt: Date.now(),
-    kind: input.kind,
-    noMention: input.noMention ?? bindNoMention(input.kind),
-    origin: 'created',
-    mode: input.mode ?? 'full',
-    backend: input.backend || undefined,
-    network: input.network ?? false,
-  };
-  try { await addProject(project, location); } catch (error) {
-    throw new Error(`飞书群已创建（${chatId}），项目保存失败；请使用相同请求重试或绑定已有群：${error instanceof Error ? error.message : String(error)}`);
-  }
-  log.info('project', 'create', { name, chatId, cwd, blank, mode: project.mode, backend: project.backend });
-
-  // 4. group announcement (top banner) + onboarding (welcome card / Pin / tab),
-  //    both best-effort — a group is usable even if these fail.
-  await setAnnouncement(channel, project).catch((err) => log.fail('project', err, { phase: 'announcement' }));
-  await onboardGroup(channel, project).catch((err) => log.fail('project', err, { phase: 'onboard' }));
-  return project;
 }
 
 /**
@@ -185,6 +229,8 @@ export async function createProject(channel: LarkChannel, request: CreateProject
  * the bot stays a plain member. Onboarding only posts a (non-pinned) welcome
  * card. Identical bindings return the existing row without rewriting it or
  * sending another welcome. Conflicts fail before preparing a new workspace.
+ * A group the bot owns is one it created whose row was not saved (s36d1): it is
+ * bound as created, at full access, like {@link createProject} would have saved it.
  */
 export async function joinExistingGroup(channel: LarkChannel, request: JoinGroupInput, target: RegistryLocation = { file: paths.projectsFile, dataRoot: paths.appDir }): Promise<Project> {
   const input = structuredClone(request);
@@ -202,24 +248,35 @@ export async function joinExistingGroup(channel: LarkChannel, request: JoinGroup
     } catch { throw new Error('所选文件夹不存在或不是目录'); }
   }
   const defaultBackend = await effectiveDefaultBackend().catch(() => DEFAULT_BACKEND_ID);
+  const owned = await ownedByBot(channel, input.chatId);
+  const mode = input.mode ?? (owned ? 'full' : 'qa');
   const result = await withBotGroupBinding(input.bot, { name, chatId: input.chatId, projectsRootDir: root }, async scope => {
     const binding = await bindProject({ name, chatId: input.chatId,
       cwd: existingPath ? { kind: 'existing', path: cwd } : { kind: 'default', legacyPath: cwd, allocatedPath: scope.allocatedPath }, defaultBackend,
       backend: input.backend ?? defaultBackend, kind: input.kind, noMention: input.noMention ?? bindNoMention(input.kind) }, async () => {
-      assertBackendUsable(input.backend, input.mode ?? 'qa');
-      const workspace = existingPath ? await resolveCwd(name, existingPath, root, location.dataRoot) : await scope.prepareDefault();
-      return { ...workspace, createdAt: Date.now(), origin: 'joined', addedBy: input.addedBy,
-        mode: input.mode ?? 'qa', backend: input.backend || undefined, network: input.network ?? false };
+      assertBackendUsable(input.backend, mode);
+      const workspace = existingPath ? await admitExistingDirectory(existingPath, location.dataRoot) : await scope.prepareDefault();
+      return { ...workspace, createdAt: Date.now(), ...(owned ? { origin: 'created' } : { origin: 'joined', addedBy: input.addedBy }),
+        mode, backend: input.backend || undefined, network: input.network ?? false };
     }, location);
     await retireBoundPendingGroup(pendingGroupsFile(location.file), binding.project.chatId);
     return binding;
   });
   const project = result.project;
   if (result.kind === 'existing') return project;
-  log.info('project', 'join', { name, chatId: project.chatId, cwd: project.cwd, blank: project.blank, kind: project.kind, mode: project.mode, backend: project.backend });
+  log.info('project', 'join', { name, chatId: project.chatId, cwd: project.cwd, blank: project.blank, kind: project.kind, mode: project.mode, backend: project.backend, origin: project.origin });
 
-  // Onboarding only (no announcement / Pin / tab — see onboardGroup's joined
-  // branch); best-effort, the binding holds even if the welcome card fails.
+  // Onboarding only (no announcement; a joined group gets no Pin / tab either —
+  // see onboardGroup's joined branch); best-effort, the binding holds even if the welcome card fails.
   await onboardGroup(channel, project).catch((err) => log.fail('project', err, { phase: 'onboard-join' }));
   return project;
+}
+
+/** Whether the bot owns `chatId`, by the same reading as the pending-group reminder. Unknown counts as not owned:
+ * the group then binds as joined, read-only, as before s36d1. */
+async function ownedByBot(channel: Pick<LarkChannel, 'botIdentity' | 'getChatInfo'>, chatId: string): Promise<boolean> {
+  const bot = channel.botIdentity?.openId;
+  if (!bot) return false;
+  try { return (await channel.getChatInfo(chatId)).ownerId === bot; }
+  catch (error) { log.fail('project', error, { phase: 'join-owner' }); return false; }
 }
