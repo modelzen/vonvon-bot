@@ -37,6 +37,9 @@ export interface JudgeLine {
   text: string;
   /** names this message @-mentions */
   mentions?: string[];
+  /** It @-mentions someone or everyone, also when the names are unknown (a line pulled from history): a topic never
+   * opens under it, so it is never an anchor (s25b); never rendered */
+  named?: true;
   /** whose line it quotes (s25 cuts the text to 200 characters) */
   quote?: { name: string; text: string };
 }

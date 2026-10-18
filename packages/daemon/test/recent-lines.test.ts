@@ -31,9 +31,10 @@ describe('RecentLines', () => {
     const context = r.context('g', { id: 'm25', at: 25 });
     expect(context).toHaveLength(RECENT_CONTEXT);
     expect(context.at(-1)!.text).toBe('m24');
-    // Ids are what an anchor names (s25b); the sender's open_id and the line's own flags are not a judge line's.
+    // Ids are what an anchor names (s25b), and `named` keeps a line out of the anchors; the sender's open_id is not
+    // a judge line's.
     r.add('g', { ...line('om_x', 24.5), senderId: 'ou_secret', named: true });
-    expect(r.context('g', { id: 'm25', at: 25 }).at(-1)).toEqual({ id: 'om_x', at: 24.5, from: 'user', name: '张三', text: 'om_x' });
+    expect(r.context('g', { id: 'm25', at: 25 }).at(-1)).toEqual({ id: 'om_x', at: 24.5, from: 'user', name: '张三', text: 'om_x', named: true });
   });
 
   it('drops the place used longest ago past the cap', () => {

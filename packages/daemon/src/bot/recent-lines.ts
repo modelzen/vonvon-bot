@@ -15,8 +15,6 @@ export interface RecentLine extends JudgeLine {
   id: string;
   /** A person's open_id, another bot's open_bot_id. */
   senderId?: string;
-  /** It @-mentions someone, this bot included, or everyone: a topic never opens under it. */
-  named?: true;
 }
 
 /** Lines kept per place, newest kept. */
@@ -125,11 +123,12 @@ export class RecentLines {
   }
 
   /** The judgement's context: the place's last {@link RECENT_CONTEXT} lines before the message, oldest first. Only a
-   * judge line's fields: ids are what an anchor names, an open_id goes nowhere. */
+   * judge line's fields: ids are what an anchor names, `named` keeps a line pulled from history (no names) out of a
+   * decision model's anchor options, an open_id goes nowhere. */
   context(key: string, message: { id: string; at: number }): JudgeLine[] {
     const before = (this.places.get(key)?.lines ?? []).filter((l) => l.id !== message.id && l.at <= message.at);
-    return before.slice(-RECENT_CONTEXT).map(({ id, at, from, name, text, mentions, quote }) =>
-      ({ id, at, from, name, text, ...(mentions ? { mentions } : {}), ...(quote ? { quote } : {}) }));
+    return before.slice(-RECENT_CONTEXT).map(({ id, at, from, name, text, mentions, named, quote }) =>
+      ({ id, at, from, name, text, ...(mentions ? { mentions } : {}), ...(named ? { named } : {}), ...(quote ? { quote } : {}) }));
   }
 
   /**
