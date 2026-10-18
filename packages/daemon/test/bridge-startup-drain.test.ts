@@ -50,7 +50,7 @@ vi.mock('../src/project/registry', async original => ({
   getProjectByChatId: async () => undefined,
 }));
 vi.mock('../src/bot/onboarding', () => ({
-  ensureOnboarded: async () => ({ cfg, secret: 'fixture' }),
+  ensureOnboarded: async () => ({ cfg, secret: 'fixture', identity: { appId: cfg.accounts.app.id, tenant: cfg.accounts.app.tenant, createdAt: 1 } }),
   announceEventsWhenLive() {},
 }));
 vi.mock('../src/core/single-instance', () => ({
@@ -124,7 +124,7 @@ it('registers the bridge crash hook before connecting and removes it after closi
   const saved = await readFile(file, 'utf8');
   const connect = deferred<void>();
   fixture.connect.mockReturnValue(connect.promise);
-  const starting = startBridge({ cfg, appSecret: 'fixture', fallbackCwd: '/test', droppedFile: file });
+  const starting = startBridge({ identity: { appId: cfg.accounts.app.id, tenant: cfg.accounts.app.tenant, createdAt: 1 }, cfg, appSecret: 'fixture', fallbackCwd: '/test', droppedFile: file });
   await vi.waitFor(() => expect(fixture.crashHooks.size).toBe(1), COLD);
   for (const hook of fixture.crashHooks) hook();
   connect.resolve();

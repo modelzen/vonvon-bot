@@ -4,12 +4,18 @@ import { basename, dirname, isAbsolute, join, parse, sep } from 'node:path';
 import { z } from 'zod';
 import { admitNamespaceReservation } from './directories';
 
-const ObjectSchema = z.strictObject({ dev: z.string().regex(/^(0|[1-9]\d*)$/), ino: z.string().regex(/^(0|[1-9]\d*)$/) });
+export const ObjectSchema = z.strictObject({ dev: z.string().regex(/^(0|[1-9]\d*)$/), ino: z.string().regex(/^(0|[1-9]\d*)$/) });
 const PathSchema = z.string().min(1).refine(value => isAbsolute(value) && !value.includes('\0'));
 export const SafeAppIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
+export const directoryFields = { parent: PathSchema, namespaceRoot: PathSchema, parentIdentity: ObjectSchema };
+export const DirectoryClaimSchema = z.discriminatedUnion('state', [
+  z.strictObject({ ...directoryFields, state: z.literal('reserved') }),
+  z.strictObject({ ...directoryFields, state: z.literal('ready'), object: ObjectSchema }),
+]);
+export type DirectoryClaim = z.infer<typeof DirectoryClaimSchema>;
 const fields = {
   version: z.literal(1), appId: SafeAppIdSchema, tenant: z.enum(['feishu', 'lark']),
-  handle: z.string().min(1).max(128).regex(/^[a-z0-9一-龥][a-z0-9一-龥-]*$/), parent: PathSchema, namespaceRoot: PathSchema, parentIdentity: ObjectSchema,
+  handle: z.string().min(1).max(128).regex(/^[a-z0-9一-龥][a-z0-9一-龥-]*$/), ...directoryFields,
 };
 export const AllocationSchema = z.discriminatedUnion('state', [
   z.strictObject({ ...fields, state: z.literal('reserved') }),
@@ -92,7 +98,12 @@ function componentFor(handle: string): string {
 }
 
 export async function planAllocation(input: { appId: string; tenant: 'feishu' | 'lark'; handle: string; parent: string; dataDir: string }, allocations: Record<string, Allocation>): Promise<Allocation> {
-  const base = componentFor(input.handle);
+  return { version: 1, appId: input.appId, tenant: input.tenant, handle: input.handle,
+    ...await planDirectory({ name: input.handle, parent: input.parent, dataDir: input.dataDir, selection: { kind: 'unique', key: input.appId } }, Object.values(allocations)) };
+}
+
+export async function planDirectory(input: { name: string; parent: string; dataDir: string; selection: { kind: 'fixed' } | { kind: 'unique'; key: string } }, claims: readonly DirectoryClaim[]): Promise<Extract<DirectoryClaim, { state: 'reserved' }>> {
+  const base = componentFor(input.name);
   const admitted = await admitNamespaceReservation({ parent: input.parent, component: base }, { dataDir: input.dataDir });
   const validate = async (): Promise<void> => {
     const checked = await admitNamespaceReservation({ parent: admitted.parent, component: base }, { dataDir: input.dataDir });
@@ -100,23 +111,26 @@ export async function planAllocation(input: { appId: string; tenant: 'feishu' | 
   };
   await ensureDurableDirectory(admitted.parent, validate);
   const occupied = new Set((await readdir(admitted.parent)).map(folded));
-  for (const claim of Object.values(allocations)) if (claim.parent === admitted.parent) occupied.add(folded(basename(claim.namespaceRoot)));
-  const suffix = createHash('sha256').update(input.appId).digest('hex').slice(0, 8);
-  for (let count = 0; count < 4096; count++) {
+  for (const claim of claims) if (claim.parent === admitted.parent) occupied.add(folded(basename(claim.namespaceRoot)));
+  const suffix = input.selection.kind === 'unique' ? createHash('sha256').update(input.selection.key).digest('hex').slice(0, 8) : '';
+  for (let count = 0; count < (input.selection.kind === 'fixed' ? 1 : 4096); count++) {
     const component = count === 0 ? base : `${base}-${suffix}${count === 1 ? '' : `-${count}`}`;
     if (occupied.has(folded(component))) continue;
-    return { version: 1, appId: input.appId, tenant: input.tenant, handle: input.handle, state: 'reserved',
+    return { state: 'reserved',
       parent: admitted.parent, namespaceRoot: join(admitted.parent, component), parentIdentity: await directoryIdentity(admitted.parent) };
   }
   throw new Error('Namespace collision limit reached');
 }
 
-async function validateParent(record: Allocation, dataDir: string): Promise<void> {
+async function validateParent(record: DirectoryClaim, dataDir: string): Promise<void> {
   const admitted = await admitNamespaceReservation({ parent: record.parent, component: basename(record.namespaceRoot) }, { dataDir });
   if (admitted.parent !== record.parent || admitted.path !== record.namespaceRoot
     || !sameObject(await directoryIdentity(record.parent), record.parentIdentity)) throw new Error('Namespace parent changed');
 }
 export async function materializeAllocation(record: Allocation, dataDir: string): Promise<Allocation> {
+  return { ...record, ...await materializeDirectory(record, dataDir) };
+}
+export async function materializeDirectory(record: DirectoryClaim, dataDir: string): Promise<Extract<DirectoryClaim, { state: 'ready' }>> {
   await validateParent(record, dataDir);
   await ensureDurableDirectory(record.parent, () => validateParent(record, dataDir));
   if (record.state === 'reserved') {

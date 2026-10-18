@@ -24,7 +24,7 @@ describe('desktop companion RPC capabilities', () => {
       expect(pendingGroups).toHaveBeenCalledWith(bot.appId);
       const chosen = await client.call({ type: 'request', id: 'folder', method: 'directory', payload: { type: 'choose', path: homedir() } });
       if (chosen.type !== 'response' || chosen.method !== 'directory' || chosen.payload.kind !== 'folderChosen') throw new Error('folder token missing');
-      expect(await client.call({ type: 'request', id: 'bind', method: 'command', payload: { type: 'bindGroup', agentId, groupId, projectName: project.name, folderToken: chosen.payload.folder.token, tool: 'codex', conversation: 'threads' } })).toMatchObject({ type: 'response', payload: { kind: 'applied' } });
+      expect(await client.call({ type: 'request', id: 'bind', method: 'command', payload: { type: 'bindGroup', agentId, groupId, projectName: project.name, folder: { kind: 'existing', folderToken: chosen.payload.folder.token }, tool: 'codex', conversation: 'threads' } })).toMatchObject({ type: 'response', payload: { kind: 'applied' } });
       expect(bindGroup).toHaveBeenCalledWith(bot.appId, { chatId: project.chatId, projectName: project.name, directory: homedir(), backend: 'codex-appserver', kind: 'multi' });
       await client.close();
     } finally { await fixture.close(); }

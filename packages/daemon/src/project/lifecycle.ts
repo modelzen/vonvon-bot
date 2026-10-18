@@ -3,6 +3,8 @@ import { mkdir, realpath, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { paths } from '../config/paths';
+import { botPaths } from '../config/paths';
+import { withBotGroupBinding, type BotIdentity } from '../config/bots';
 import { admitDirectorySettings, resolveProjectsRootDir } from '../config/directories';
 import { log } from '../core/logger';
 import { addProject, bindNoMention, bindProject, listProjectsIn, type Project, type RegistryLocation } from './registry';
@@ -61,6 +63,7 @@ export interface CreateProjectInput {
 }
 
 export interface JoinGroupInput {
+  bot: BotIdentity;
   /** project name — editable in the bind card, defaults to the group's name. */
   name: string;
   /** the pre-existing group the bot was added to. */
@@ -184,8 +187,9 @@ export async function createProject(channel: LarkChannel, request: CreateProject
  * sending another welcome. Conflicts fail before preparing a new workspace.
  */
 export async function joinExistingGroup(channel: LarkChannel, request: JoinGroupInput, target: RegistryLocation = { file: paths.projectsFile, dataRoot: paths.appDir }): Promise<Project> {
-  const input = { ...request };
+  const input = structuredClone(request);
   const location = { ...target };
+  if (location.file !== botPaths(input.bot.appId).projectsFile || location.dataRoot !== paths.appDir) throw new Error('机器人项目目录不匹配');
   const name = input.name.trim();
   if (!name) throw new Error('项目名不能为空');
   const existingPath = input.existingPath ? resolve(input.existingPath) : undefined;
@@ -198,15 +202,19 @@ export async function joinExistingGroup(channel: LarkChannel, request: JoinGroup
     } catch { throw new Error('所选文件夹不存在或不是目录'); }
   }
   const defaultBackend = await effectiveDefaultBackend().catch(() => DEFAULT_BACKEND_ID);
-  const result = await bindProject({ name, chatId: input.chatId, cwd, defaultBackend,
-    backend: input.backend ?? defaultBackend, kind: input.kind, noMention: input.noMention ?? bindNoMention(input.kind) }, async () => {
-    assertBackendUsable(input.backend, input.mode ?? 'qa');
-    const { blank, directories } = await resolveCwd(name, existingPath, root, location.dataRoot);
-    return { blank, directories, createdAt: Date.now(), origin: 'joined', addedBy: input.addedBy,
-      mode: input.mode ?? 'qa', backend: input.backend || undefined, network: input.network ?? false };
-  }, location);
+  const result = await withBotGroupBinding(input.bot, { name, chatId: input.chatId, projectsRootDir: root }, async scope => {
+    const binding = await bindProject({ name, chatId: input.chatId,
+      cwd: existingPath ? { kind: 'existing', path: cwd } : { kind: 'default', legacyPath: cwd, allocatedPath: scope.allocatedPath }, defaultBackend,
+      backend: input.backend ?? defaultBackend, kind: input.kind, noMention: input.noMention ?? bindNoMention(input.kind) }, async () => {
+      assertBackendUsable(input.backend, input.mode ?? 'qa');
+      const workspace = existingPath ? await resolveCwd(name, existingPath, root, location.dataRoot) : await scope.prepareDefault();
+      return { ...workspace, createdAt: Date.now(), origin: 'joined', addedBy: input.addedBy,
+        mode: input.mode ?? 'qa', backend: input.backend || undefined, network: input.network ?? false };
+    }, location);
+    await retireBoundPendingGroup(pendingGroupsFile(location.file), binding.project.chatId);
+    return binding;
+  });
   const project = result.project;
-  await retireBoundPendingGroup(pendingGroupsFile(location.file), project.chatId);
   if (result.kind === 'existing') return project;
   log.info('project', 'join', { name, chatId: project.chatId, cwd: project.cwd, blank: project.blank, kind: project.kind, mode: project.mode, backend: project.backend });
 

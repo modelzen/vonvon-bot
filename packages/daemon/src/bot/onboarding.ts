@@ -14,10 +14,11 @@ import { buildScopeGrantUrl, buildEventConfigUrl, labelScope } from '../config/s
 import { detectAgents } from '../agent';
 import { log } from '../core/logger';
 import { botPaths, useBotDir } from '../config/paths';
-import { ensureRegistry, currentBot, findBot, type BotEntry } from '../config/bots';
+import { ensureRegistry, currentBot, findBot, botIdentity, type BotIdentity, type BotEntry } from '../config/bots';
 import { registerBotFromCredentials } from './register-bot';
 
 export interface OnboardResult {
+  identity: BotIdentity;
   cfg: AppConfig;
   secret: string;
   /** required scopes still ungranted at validation time (undefined = couldn't check). */
@@ -89,6 +90,7 @@ export async function ensureOnboarded(
     return registerNewBot('default');
   }
 
+  const identity = botIdentity(entry);
   useBotDir(entry.appId);
   const cfg = await loadConfig();
   if (!isComplete(cfg)) {
@@ -97,7 +99,7 @@ export async function ensureOnboarded(
   }
   const r = await validateAndReport(cfg);
   if (r === null) return null;
-  return { cfg, secret: r.secret, missingScopes: r.missingScopes, events: r.events };
+  return { identity, cfg, secret: r.secret, missingScopes: r.missingScopes, events: r.events };
 }
 
 /**
@@ -142,7 +144,7 @@ export async function registerNewBot(desiredName?: string): Promise<OnboardResul
   noticeEventDiagnosis(cfg, events);
 
   const secret = await resolveAppSecret(cfg);
-  return { cfg, secret, missingScopes: registered.missingScopes, events };
+  return { identity: registered.identity, cfg, secret, missingScopes: registered.missingScopes, events };
 }
 
 /** Resolve secret, validate credentials, report result; on missing scopes,

@@ -59,9 +59,9 @@ vi.mock('../src/config/paths', async () => {
 
 import { refreshBotCredentials } from '../src/bot/refresh-bot';
 import { registerBotFromCredentials } from '../src/bot/register-bot';
-import { registerNewBot } from '../src/bot/onboarding';
+import { ensureOnboarded, registerNewBot } from '../src/bot/onboarding';
 import { getSecret } from '../src/config/keystore';
-import { botIdentity, commitBotCredentialRefresh, loadBots, registerBotEntry, removeBot, setBotActivation } from '../src/config/bots';
+import { botIdentity, commitBotCredentialRefresh, loadBots, withBotGroupBinding, registerBotEntry, removeBot, setBotActivation } from '../src/config/bots';
 import { removeSecret } from '../src/config/keystore';
 import { rm } from 'node:fs/promises';
 import { seedBots } from './helpers/bot-fixture';
@@ -322,6 +322,29 @@ function snapshotAccountFiles() {
 }
 
 describe('interactive shared registration adapter', () => {
+  it('keeps the selected incarnation across validation and fences it after re-registration', async () => {
+    const restoreFiles = snapshotAccountFiles(), restoreSelection = onboarding.captureSelection();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const entered = barrier(), release = barrier();
+    try {
+      const result = await registerBotFromCredentials({ appId: 'cli_selection123', appSecret: 'fixture', tenant: 'feishu', ownerOpenId: 'ou_owner' }, okValidate);
+      if (!result.ok) throw new Error(result.reason);
+      onboarding.validate.mockImplementationOnce(async () => { entered.open(); await release.wait; return { ok: true }; });
+      onboarding.diagnose.mockResolvedValue({ state: 'unchecked', reason: 'fixture' });
+      const starting = ensureOnboarded({ bot: result.appId });
+      await entered.wait;
+      await setBotActivation(result.appId, false);
+      await removeBot(result.identity, { isRunning: async () => false, cleanup: async () => {} });
+      await registerBotEntry({ appId: result.appId, tenant: 'feishu', desiredName: result.name }, async () => {});
+      release.open();
+      const ready = await starting;
+      expect(ready?.identity).toEqual(result.identity);
+      const prepare = vi.fn(async () => {});
+      await expect(withBotGroupBinding(result.identity, { chatId: 'oc_selection', name: 'Selected', projectsRootDir: paths.projectsRootDir }, prepare)).rejects.toThrow('重新注册');
+      expect(prepare).not.toHaveBeenCalled();
+    } finally { release.open(); errors.mockRestore(); restoreFiles(); restoreSelection(); }
+  });
+
   it('validates once, preserves wizard preferences/defaults and selects paths only after success', async () => {
     const restoreFiles = snapshotAccountFiles();
     const restoreSelection = onboarding.captureSelection();
@@ -337,6 +360,8 @@ describe('interactive shared registration adapter', () => {
       onboarding.validate.mockClear();
       const result = await registerNewBot();
       expect(result?.secret).toBe('wizard-secret');
+      const selected = (await loadBots()).bots.find(bot => bot.appId === 'cli_wizard0001');
+      expect(result?.identity).toEqual(selected && botIdentity(selected));
       expect(onboarding.validate).toHaveBeenCalledExactlyOnceWith('cli_wizard0001', 'wizard-secret', 'feishu');
       expect(onboarding.diagnose).toHaveBeenCalledExactlyOnceWith('cli_wizard0001', 'wizard-secret', 'feishu');
       expect(result?.cfg.preferences).toMatchObject({ pendingPolicy: 'queue', defaults: { permission: 'write', network: true },
