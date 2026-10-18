@@ -66,6 +66,22 @@ describe('extractMessageText', () => {
     expect(extractMessageText('post', content)).toBe('https://x.cn/a 和 https://x.cn/b没地址');
   });
 
+  it('writes a link so it reads back as one: brackets in the text, and what would end the address, escaped (s14e)', () => {
+    const content = JSON.stringify({
+      content: [[
+        { tag: 'text', text: '看 ' },
+        { tag: 'a', text: 'a]b[c', href: 'https://en.wikipedia.org/wiki/A_(b)_c d' },
+        { tag: 'text', text: ' ' },
+        { tag: 'a', href: 'https://x.cn/a，b c' },
+      ]],
+    });
+    const text = extractMessageText('post', content);
+    expect(text).toBe('看 [a］b［c](https://en.wikipedia.org/wiki/A_%28b%29_c%20d) https://x.cn/a%EF%BC%8Cb%20c');
+    // The cut falls in either link: it is left out whole.
+    expect(sanitizeContext(text, 40, true, true)).toBe('看…');
+    expect(sanitizeContext(text, 70, true, true)).toBe('看 [a］b［c](https://en.wikipedia.org/wiki/A_%28b%29_c%20d)…');
+  });
+
   it('flattens a locale-wrapped post body', () => {
     const content = JSON.stringify({
       zh_cn: { title: '', content: [[{ tag: 'text', text: '看看日志' }, { tag: 'img', image_key: 'k' }]] },
@@ -199,6 +215,19 @@ describe('sanitizeContext (sanitization boundary)', () => {
     expect(sanitizeContext(huge, 10, true, true)).toBe('https://x.…');
     expect(sanitizeContext('[a](b'.repeat(6000), 10, true, true)).toBe('[a](b[a](b…');
     expect(sanitizeContext(`看下 ${link}`, 10, true)).toBe('看下 [文档](ht…');
+  });
+
+  it('with links, reads a Markdown address with parentheses, and a bare one with non-ASCII, to its end (s14e)', () => {
+    // One level of balanced parentheses stays in the address, as Markdown reads it.
+    expect(sanitizeContext('see [w](https://en.wikipedia.org/wiki/A_(b)_c_d_e_f_g_h) rest', 45, true, true)).toBe('see…');
+    // A bare address runs to whitespace or CJK punctuation, non-ASCII included.
+    expect(sanitizeContext('看 https://x.cn/路径/很长很长很长很长 后面', 22, true, true)).toBe('看…');
+    expect(sanitizeContext('日志 https://x.cn/logs，里面有错误信息很多', 20, true, true)).toBe('日志 https://x.cn/logs…');
+    expect(sanitizeContext('（见 https://x.cn/a）后面的字很多很多', 20, true, true)).toBe('（见 https://x.cn/a）后面…');
+    // Typed by hand with a space in the address, it is no link, but its bare address is still left out whole.
+    expect(sanitizeContext('see [t](https://x.com/a b c d e f g) rest', 20, true, true)).toBe('see [t](…');
+    // Past 800 chars a Markdown address is not a link either.
+    expect(sanitizeContext(`[a](https://x.cn/${'a'.repeat(900)})`, 10, true, true)).toBe('[a](https:…');
   });
 });
 

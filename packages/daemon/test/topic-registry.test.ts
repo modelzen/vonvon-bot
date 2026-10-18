@@ -63,6 +63,7 @@ describe('mergeTopic', () => {
   it('makes a short one-line title without file tokens', () => {
     expect(topicTitle('看下 <file key="x" name="a.log"/> 这个')).toBe('看下 这个');
     expect(topicTitle('看下 [设计稿](https://x.cn/design/very/long/path) 这个')).toBe('看下 设计稿 这个');
+    expect(topicTitle('看 [词条](https://en.wikipedia.org/wiki/A_(b)_c) 吧')).toBe('看 词条 吧');
     expect(topicTitle('一'.repeat(40))).toBe(`${'一'.repeat(30)}…`);
     expect(topicTitle('   ')).toBeUndefined();
   });

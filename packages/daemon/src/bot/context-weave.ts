@@ -644,11 +644,20 @@ function nodeToText(node: unknown): string {
 
 /** A link node as `[文字](地址)`, the way the SDK writes a trigger's links; the
  * address alone when the text is empty or the same, the text alone without an
- * address (s14e). */
+ * address (s14e). Written so {@link LINK} reads it back whole: brackets in the
+ * text become full-width, and the chars that would end the address early
+ * (whitespace and parentheses, or for a bare address whitespace and CJK
+ * punctuation) are percent-encoded. */
 function linkText(text: string, href: unknown): string {
   const url = typeof href === 'string' ? href.trim() : '';
   if (!url) return text;
-  return text.trim() && text.trim() !== url ? `[${text}](${url})` : url;
+  if (!text.trim() || text.trim() === url) return url.replace(ADDRESS_END_CHAR, encodeAddressChar);
+  const label = text.replace(/\[/g, '［').replace(/\]/g, '］');
+  return `[${label}](${url.replace(/[\s()]/g, encodeAddressChar)})`;
+}
+
+function encodeAddressChar(c: string): string {
+  return c === '(' ? '%28' : c === ')' ? '%29' : encodeURIComponent(c);
 }
 
 /**
@@ -775,24 +784,35 @@ export function sanitizeContext(s: string, maxLen: number, oneLine: boolean, lin
  * which keeps the scan short on a crafted body. */
 const LINK_TEXT_MAX = 200;
 const LINK_ADDRESS_MAX = 800;
+/** What ends a bare address: whitespace, and the CJK and full-width punctuation
+ * Chinese puts right after an address with no space. Anything else, non-ASCII
+ * included (`https://x.cn/路径`), is still address. */
+const ADDRESS_END = '\\s\\u2018-\\u201f\\u2026\\u3000-\\u303f\\uff01-\\uff0f\\uff1a-\\uff20\\uff3b-\\uff40\\uff5b-\\uff65';
+const ADDRESS_END_CHAR = new RegExp(`[${ADDRESS_END}]`, 'g');
+/** `[文字](地址)`, the text without brackets and the address without whitespace,
+ * holding at most one level of balanced parentheses (a Wikipedia address), as
+ * Markdown reads it. Group 1 is the text, group 2 the address. */
+const MD_LINK = `\\[([^\\[\\]]{0,${LINK_TEXT_MAX}})\\]\\(((?:[^()\\s]|\\([^()\\s]*\\))+)\\)`;
 /** A link in a body: `[文字](地址)` as {@link linkText} writes it, or a bare address. */
-const LINK = new RegExp(
-  `\\[[^\\]]{0,${LINK_TEXT_MAX}}\\]\\([^)\\s]{1,${LINK_ADDRESS_MAX}}\\)` +
-    `|\\b[a-z][a-z0-9+.-]{0,30}://[\\x21-\\x7e]{1,${LINK_ADDRESS_MAX}}(?![\\x21-\\x7e])`,
-  'gi',
-);
+const LINK = new RegExp(`${MD_LINK}|\\b[a-z][a-z0-9+.-]{0,30}://[^${ADDRESS_END}]+`, 'gi');
+
+/** `s` with each `[文字](地址)` link down to its text (a topic's title). */
+export function linkLabels(s: string): string {
+  return s.replace(new RegExp(MD_LINK, 'g'), '$1');
+}
 
 /** Where to cut `s` (longer than `max`) so that no link is cut in two (s14e): a
  * link the cut falls in is left out whole, or kept whole when it starts `s`
- * (it is at most about 1,000 chars); past the limits of {@link LINK} the cut
- * stays at `max`, as before. */
+ * (it is at most about 1,000 chars); past the limits above the cut stays at
+ * `max`, as before. */
 function linkCut(s: string, max: number): number {
-  // No link is longer than this, so one the cut falls in lies within it.
+  // No link is longer than this, so one the cut falls in lies within it; a
+  // longer one is cut short here and then fails the address limit.
   const head = s.slice(0, max + LINK_TEXT_MAX + LINK_ADDRESS_MAX + 4);
   for (const m of head.matchAll(LINK)) {
     const end = m.index + m[0].length;
     if (m.index >= max) break;
-    if (end <= max) continue;
+    if (end <= max || (m[2] ?? m[0]).length > LINK_ADDRESS_MAX) continue;
     return m.index > 0 ? s.slice(0, m.index).trimEnd().length : end;
   }
   return max;

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { log } from '../core/logger';
-import { sanitizeContext } from './context-weave';
+import { linkLabels, sanitizeContext } from './context-weave';
 import { isRetiredKey, listSessions, type SessionRecord } from './session-store';
 
 /**
@@ -98,7 +98,7 @@ interface RegistryFile {
 
 /** The title for a first message's text (file tokens dropped, a `[文字](地址)` link as its text, one line, clamped). */
 export function topicTitle(text: string | undefined): string | undefined {
-  const plain = (text ?? '').replace(/<file\b[^<]*\/>/g, '').replace(/\[([^\]]*)\]\([^)\s]+\)/g, '$1');
+  const plain = linkLabels((text ?? '').replace(/<file\b[^<]*\/>/g, ''));
   return sanitizeContext(plain, TITLE_MAX, true) || undefined;
 }
 
