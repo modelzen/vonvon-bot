@@ -13,7 +13,7 @@
 ### R4-1（中）新建群的名字和某个 bot 的句柄相同时，群目录落进这个 bot 的稳定目录
 
 - PR：#381。缺陷在 `packages/daemon/src/project/lifecycle.ts` 第 107 行（`resolveCwd` 的 `join(projectsRootDir, name)`），根因是 `config/bot-namespace.ts` 的 `planAllocation`。
-- 缺陷：#381 把 bot 的稳定目录分配在 `<projects 根>/<句柄>`，和旧建群入口的默认目录 `<projects 根>/<群名>` 共用同一个父目录。分配时只避开已经存在的目录，事后建群的那一边（`createProject`，私聊建群卡和网页建群都走它）不查账本，直接 `mkdir -p` 然后照用。群名和任一 bot 的句柄相同时，新群的 cwd 就是那个 bot 的主工作区根。这个根下面放着 s36c2c3 给已有群分配的 `groups/<群名>/` 目录。新建群默认是"完全访问"档，于是这个群的会话能读写别的群的工作区，也和 bot 的主工作区（私聊用的就是它）混在一起，违反 product.md 3.3"每个群默认有自己的目录"。所有 bot 共用默认的 projects 根，所以 bot B 建一个和 bot A 句柄同名的群，也会落进 A 的目录，跨 bot 串目录。macOS 默认的 APFS 不分大小写，句柄 `jojo` 和群名 `Jojo` 也会撞上（Linux 上复现不了，这一点是读代码得出的）。
+- 缺陷：#381 把 bot 的稳定目录分配在 `<projects 根>/<句柄>`，和旧建群入口的默认目录 `<projects 根>/<群名>` 共用同一个父目录。分配时只避开已经存在的目录，事后建群的那一边（`createProject`，私聊建群卡和网页建群都走它）不查账本，直接 `mkdir -p` 然后照用。群名和任一 bot 的句柄相同时，新群的 cwd 就是那个 bot 的主工作区根。这个根下面放着 s36c2c3 给已有群分配的 `groups/<群名>/` 目录。新建群默认是"完全访问"档，于是这个群的会话能读写别的群的工作区，也和 bot 的主工作区（私聊用的就是它）混在一起，违反 product.md 3.3"每个群默认有自己的目录"。所有 bot 共用默认的 projects 根，所以 bot B 建一个和 bot A 句柄同名的群，也会落进 A 的目录，跨 bot 串目录。macOS 默认的 APFS 不分大小写，句柄 `alpha` 和群名 `Alpha` 也会撞上（Linux 上复现不了，这一点是读代码得出的）。
 - 复现：注册 bot，句柄 `shared`；绑定一个已有群 `Joined`，得到 `projects/shared/groups/Joined`；再用假 channel 调 `createProject({name:'shared'})`。实际输出是 `namespaceRoot: …/projects/shared  group cwd: …/projects/shared  contents: ['groups']  groups: ['Joined']`，新群的 cwd 和 bot 的稳定目录完全相同。断言 `expect(cwd).not.toBe(namespaceRoot)` 失败。
 - 现状：origin/main 上仍然存在。还没合入的 s36d1 分支把 `createProject` 改走了 `withBotGroupBinding`，合入后这个碰撞会消失，但那个分支没有"群名等于 bot 句柄"的回归用例。
 - 建议：s36d1 合入时加上这条回归用例（同一个 bot 和跨 bot 各一条），约 30 行。如果 s36d1 还要等，就先在 `resolveCwd` 的默认分支里查 `loadBots().allocations` 里同一父目录下的 namespaceRoot，按忽略大小写比较，碰上了就拒绝或加后缀，约 10 行。
