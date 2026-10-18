@@ -126,7 +126,7 @@ export async function acquireMutex(home: string, role: MutexRole, timeoutMs = 15
     for (;;) {
       lock ??= await tryLock(path, role);
       if (lock) {
-        const legacy = await holdLegacyPort(path, role);
+        const legacy = role === 'projects' ? noRelease : await holdLegacyPort(path, role);
         if (legacy) return heldMutex(role, [legacy, lock]);
       }
       if (Date.now() >= deadline) throw new DataAccessError(`Bridge ${role} is busy on its local coordination endpoint.`);

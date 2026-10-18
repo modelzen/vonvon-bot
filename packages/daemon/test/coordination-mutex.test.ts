@@ -24,7 +24,7 @@ vi.mock('node:net', async original => {
 });
 
 const roles = ['admission', 'host', 'keystore', 'service', 'bots'] as const;
-type Role = typeof roles[number];
+type Role = typeof roles[number] | 'projects';
 let scratch = '';
 let entry = '';
 let homes = 0;
@@ -157,6 +157,14 @@ describe('the transition from builds before s20c', () => {
     }
     throw new Error('No free old port for the fixture');
   }
+
+  it('projects ignores a silent legacy listener while retaining native exclusion', async () => {
+    const { home } = await oldBuild('projects', () => {});
+    const held = await acquireMutex(home, 'projects', 0);
+    try { await expect(acquireMutex(home, 'projects', 0)).rejects.toThrow(busy('projects')); }
+    finally { await closeMutex(held); }
+    await closeMutex(await acquireMutex(home, 'projects', 0));
+  });
 
   it.each<[string, (socket: Socket) => void]>([
     ['closes every connection', socket => socket.destroy()],
