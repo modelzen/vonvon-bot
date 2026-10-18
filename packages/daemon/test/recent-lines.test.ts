@@ -69,6 +69,19 @@ describe('RecentLines', () => {
     expect(none).not.toHaveBeenCalled();
   });
 
+  it("a judgement coming while its cold place pulls waits for that pull, and does not pull again", async () => {
+    const r = new RecentLines();
+    let release!: (got: ThreadPull) => void;
+    const slow = vi.fn<RecentPull>(() => new Promise((resolve) => { release = resolve; }));
+    const first = r.fill('g', 100, slow, false);
+    const second = r.fill('g', 100, slow, false).then(() => r.context('g', { id: 'x', at: 100 }).length);
+    await new Promise((resolve) => setImmediate(resolve));
+    release(pull([pulled('o1', 50)]));
+    await first;
+    expect(await second).toBe(1);
+    expect(slow).toHaveBeenCalledOnce();
+  });
+
   it("with other bots, pulls what came since the last pull: they never reach this bot as events (M2)", async () => {
     const r = new RecentLines();
     const got = vi.fn<RecentPull>(async () => pull([pulled('o1', 50)]));

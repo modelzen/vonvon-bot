@@ -56,6 +56,8 @@ interface Place {
   lines: RecentLine[];
   /** Its history was pulled once, whatever came of it. */
   filled: boolean;
+  /** The pull in flight: a judgement coming meanwhile waits for it. */
+  pulling?: Promise<void>;
   /** Up to when a pull has read its history: the next one stops there. */
   pulledTo?: number;
 }
@@ -126,17 +128,22 @@ export class RecentLines {
    * Before a judgement. A place's first judgement, with fewer than {@link COLD_LINES} lines, pulls its latest
    * history once whatever comes of it (a cold start). With `others` (other bots in the group, or the count
    * unread), it also pulls what came since its last pull: Feishu does not push other bots' messages to this
-   * one (3.11), so only a pull shows what they said. A failed pull leaves the ring as it was.
+   * one (3.11), so only a pull shows what they said. A failed pull leaves the ring as it was. One pull at a
+   * time per place: a judgement coming meanwhile waits for it, then decides.
    */
   async fill(key: string, before: number, pull: RecentPull, others: boolean): Promise<void> {
     const p = this.place(key);
+    while (p.pulling) await p.pulling.catch(() => undefined);
     const cold = !p.filled && p.lines.length < COLD_LINES;
     p.filled = true;
     if (!cold && !others) return;
-    const got = await pull(!cold && p.pulledTo ? { stopAt: p.pulledTo } : { enough: RECENT_CONTEXT });
-    if (!got?.ok) return;
-    this.add(key, ...got.messages.map(lineOfPulled));
-    p.pulledTo = Math.max(p.pulledTo ?? 0, before);
+    const pulling = pull(!cold && p.pulledTo ? { stopAt: p.pulledTo } : { enough: RECENT_CONTEXT }).then((got) => {
+      if (!got?.ok) return;
+      this.add(key, ...got.messages.map(lineOfPulled));
+      p.pulledTo = Math.max(p.pulledTo ?? 0, before);
+    });
+    p.pulling = pulling;
+    try { await pulling; } finally { if (p.pulling === pulling) p.pulling = undefined; }
   }
 }
 

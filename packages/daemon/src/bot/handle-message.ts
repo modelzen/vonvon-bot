@@ -30,8 +30,8 @@ import { errorKindFromText, type AgentErrorKind } from '../agent/error-kind';
 import { scopeDenial } from '../utils/feishu-error';
 import type { NotReplied, NotRepliedReason } from '@vonvon/protocol';
 import type { JudgeDecision, JudgeResult, JudgeVariant } from '../judge/types';
-import { JUDGE_INPUT_LIMITS } from '../judge/prompt';
-import { deniedScopeName, errorDetail, reportNotReplied, reportScopeDenied } from './diagnostics';
+import { JUDGE_INPUT_LIMITS, oneLine } from '../judge/prompt';
+import { deniedScopeName, errorDetail, fitDetail, reportNotReplied, reportScopeDenied } from './diagnostics';
 import { createDroppedReplies, originOf, type DroppedOrigin } from './restart-dropped';
 import { catalogById, projectCreatableBackends, visibleCatalog } from '../agent/catalog';
 import {
@@ -1491,7 +1491,7 @@ export function createOrchestrator(
     const backend = backendTool(extra.backendId);
     reportNotReplied({
       at: msg.createTime || Date.now(), groupId: msg.chatId, place: extra.place ?? (msg.threadId ? 'topic' : 'main'), reason,
-      ...(sender ? { sender } : {}), ...(backend ? { backend } : {}), ...(extra.detail ? { detail: extra.detail } : {}), ref: msg.messageId.slice(-6),
+      ...(sender ? { sender } : {}), ...(backend ? { backend } : {}), ...(extra.detail ? { detail: fitDetail(extra.detail) } : {}), ref: msg.messageId.slice(-6),
     });
   }
   /** A turn that started but did not answer; a refused scope also goes to the page's 缺的权限. */
@@ -1515,6 +1515,11 @@ export function createOrchestrator(
   /** Hands a smart group's message to its lane: `mentioned` (named, in the main area), `main` or `topic` (unnamed). */
   function submitSmart(msg: NormalizedMessage, variant: JudgeVariant): void {
     const named = variant === 'mentioned';
+    // Its intake crossed the shutdown (a disk read): a named one is answered once the bot is back, as launchRun does (s18c).
+    if (shuttingDown) {
+      if (named) droppedReplies?.appendSync(originOf(msg, !msg.threadId));
+      return;
+    }
     const item: SmartItem = { id: msg.messageId, place: msg.threadId ?? msg.chatId, named, msg, variant };
     // Seen at once while its place is judged (up to 12 s): it gets an answer whatever the judgement says. The
     // run's own ⏳ and 🫳 follow once it lands, so this one is taken off then.
@@ -1533,7 +1538,7 @@ export function createOrchestrator(
       return await judgeItem(item, signal);
     } catch (error) {
       log.fail('intake', error, { phase: 'smart-judge', ref: item.msg.messageId.slice(-6) });
-      if (!item.named) noteNotReplied(item.msg, 'judge-failed', { detail: errorDetail(error) });
+      if (!item.named) for (const b of batch) noteNotReplied(b.msg, 'judge-failed', { detail: errorDetail(error) });
       return item.named ? { kind: 'direct' } : { kind: 'drop' };
     }
   }
@@ -1577,8 +1582,15 @@ export function createOrchestrator(
     try {
       await landVerdict(item, batch, verdict);
     } finally {
-      void item.ack?.then((id) => { if (id) removeReaction(item.msg.messageId, id); });
+      dropAck(item);
     }
+  }
+
+  /** Takes a named message's THINKING off, once (a shutdown may come while it lands). */
+  function dropAck(item: SmartItem): void {
+    const ack = item.ack;
+    item.ack = undefined;
+    if (ack) void trackTask(ack.then((id) => { if (id) removeReaction(item.msg.messageId, id); }));
   }
 
   /**
@@ -1653,7 +1665,7 @@ export function createOrchestrator(
     const initiative = variant === 'main';
     log.info('intake', 'judge-landed', { ref, decision, variant });
     // The next judgement here sees what this bot is doing, before its answer comes.
-    const who = names.peek(msg.senderId) ?? msg.senderName ?? '某人';
+    const who = oneLine(names.peek(msg.senderId) ?? msg.senderName ?? '某人');
     recent.addOwn(place, msg.chatId, { id: `act:${msg.messageId}`, at: Date.now(),
       text: decision === 'topic' ? `（在 ${who} 的这条下开了话题来回）` : `（在回 ${who} 的这条）` });
     if (decision === 'topic') startTopicDirectly(msg, text, project, false, initiative);
@@ -7396,7 +7408,8 @@ export function createOrchestrator(
     asks.shutdown();
     // Written at once, before anything is cleared below and long before the Codex processes end or the lock goes.
     droppedReplies?.saveSync(collectLost(), 'shutdown');
-    // After collectLost read the lanes, before the judge's processes go: nothing judged lands now.
+    // After collectLost read the lanes, before the judge's processes go: nothing judged lands now, nor takes its THINKING off.
+    for (const item of smartLanes.pending()) dropAck(item);
     smartLanes.shutdown();
     for (const stop of onStop) stop();
     clearInterval(pendingGroupTimer);

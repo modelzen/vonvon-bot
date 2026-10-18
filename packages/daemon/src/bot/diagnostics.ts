@@ -39,6 +39,18 @@ export function parseDiagnosticsIpc(message: unknown): DiagnosticsEvent | undefi
   return parsed.success ? parsed.data : undefined;
 }
 
+/** Cut to the record's 120 UTF-16 units, which its schema counts, without splitting a character: a judge's
+ * 80-character reason in emoji is 160 (s25). */
+export function fitDetail(text: string | undefined): string | undefined {
+  if (!text || text.length <= 120) return text;
+  let out = '';
+  for (const char of text) {
+    if (out.length + char.length > 120) break;
+    out += char;
+  }
+  return out;
+}
+
 /** An error's first line without control characters, cut to the record's 120. */
 export function errorDetail(error: unknown): string | undefined {
   const text = (error instanceof Error ? error.message : String(error ?? '')).split('\n')[0]!.replace(/[\x00-\x1f\x7f]/g, '').trim();

@@ -5,8 +5,8 @@ export type EventMessage = Record<string, unknown>;
 
 export interface ReceiveOpts {
   bot: { openId: string; name: string };
-  /** The sender's open_id; `app` for another bot. Default: a person, ou_owner. */
-  sender?: { openId: string; type?: 'user' | 'app' };
+  /** The sender's open_id; `app` for another bot; the name the SDK resolves for it. Default: a person, ou_owner. */
+  sender?: { openId: string; type?: 'user' | 'app'; name?: string };
 }
 
 /** The SDK's own path: a WS frame's JSON through its EventDispatcher, then its
@@ -16,7 +16,7 @@ export async function receive(message: EventMessage, opts: ReceiveOpts): Promise
   const at = String(message.create_time ?? Date.now());
   let out: Promise<NormalizedMessage> | undefined;
   const dispatcher = new EventDispatcher({ loggerLevel: LoggerLevel.error }).register({
-    'im.message.receive_v1': (raw: never) => { out = normalize(raw, { botIdentity: opts.bot, includeRaw: true }); },
+    'im.message.receive_v1': (raw: never) => { out = normalize(raw, { botIdentity: opts.bot, includeRaw: true, resolveSenderName: () => sender.name }); },
   } as never);
   await dispatcher.invoke({
     schema: '2.0',

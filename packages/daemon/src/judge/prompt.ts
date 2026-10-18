@@ -110,7 +110,7 @@ function cleanLine(text: string): string {
 }
 
 /** Names and titles: one line, no 【】, no controls. */
-function oneLine(text: string, max = NAME_MAX): string {
+export function oneLine(text: string, max = NAME_MAX): string {
   return cut(cleanLine(text), max) || '某人';
 }
 

@@ -8,7 +8,7 @@ import { setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostic
 import { INITIATIVE_NOTE } from '../src/bot/session-title';
 import { JUDGE_BUDGET } from '../src/bot/smart-intake';
 import type { JudgeRequest, JudgeResult } from '../src/judge/types';
-import { receive, type EventMessage } from './helpers/lark-events';
+import { receive, type EventMessage, type ReceiveOpts } from './helpers/lark-events';
 
 vi.mock('../src/config/paths', () => {
   const appDir = mkdtempSync(join(tmpdir(), 'smart-inbound-'));
@@ -27,6 +27,8 @@ const fake = vi.hoisted(() => ({
   project: undefined as Record<string, unknown> | undefined,
   sessions: {} as Record<string, unknown>,
   fullOnly: false,
+  /** Holds every session read while set: an intake parked on the disk. */
+  hold: undefined as Promise<void> | undefined,
   send: vi.fn(async () => ({ messageId: 'om_sent' })),
   get: vi.fn(async () => ({ code: 0, data: { items: [{ thread_id: 'omt_opened' }] } })),
   list: vi.fn(),
@@ -48,7 +50,7 @@ const startThread = vi.fn(async () => ({
 vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_context: unknown, callback: () => unknown) => callback() }));
 vi.mock('../src/project/registry', async original => ({ ...await original<object>(), getProjectByChatId: async () => fake.project, getProjectByName: async () => fake.project }));
 vi.mock('../src/agent', async original => ({ ...await original<object>(), createBackend: (id: string) => ({ id, listModels: async () => [], startThread, fullAccessOnly: () => fake.fullOnly }) }));
-vi.mock('../src/bot/session-store', async original => ({ ...await original<object>(), getSession: async (key: string) => fake.sessions[key], upsertSession: async () => undefined }));
+vi.mock('../src/bot/session-store', async original => ({ ...await original<object>(), getSession: async (key: string) => { await fake.hold; return fake.sessions[key]; }, upsertSession: async () => undefined }));
 vi.mock('../src/bot/session-title-coordinator', () => ({ SessionTitleCoordinator: class { startRecovery() {} async shutdown() {} } }));
 vi.mock('../src/judge/judge', async original => ({
   ...await original<object>(),
@@ -113,7 +115,7 @@ const settle = async (): Promise<void> => { for (let i = 0; i < 30; i++) await n
 let orchestrator: ReturnType<typeof createOrchestrator>;
 let events: DiagnosticsEvent[] = [];
 const records = () => events.flatMap((event) => event.kind === 'notReplied' ? [event.record] : []);
-const send = async (m: EventMessage, sender?: string) => orchestrator.onMessage(await receive(m, { bot: BOT, ...(sender ? { sender: { openId: sender } } : {}) }));
+const send = async (m: EventMessage, sender?: ReceiveOpts['sender']) => orchestrator.onMessage(await receive(m, { bot: BOT, ...(sender ? { sender } : {}) }));
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -122,6 +124,7 @@ beforeEach(() => {
   fake.inputs = [];
   fake.sessions = {};
   fake.fullOnly = false;
+  fake.hold = undefined;
   fake.project = { ...base };
   fake.list.mockImplementation(async () => ({ code: 0, data: { items: [], has_more: false } }));
   fake.judge.mockImplementation((req: JudgeRequest) => {
@@ -153,8 +156,12 @@ describe('smart mode intake (s25)', () => {
     const b = says('今天好热');
     await send(b);
     await decide(b, result('skip', { error: { kind: 'timeout', detail: '判断超时' } }));
-    await vi.waitFor(() => expect(records()).toHaveLength(2));
-    expect(records().map((r) => [r.reason, r.detail])).toEqual([['judge-skip', '闲聊，和我无关'], ['judge-failed', '判断超时']]);
+    // 80 emoji are 160 UTF-16 units: cut to the record's 120, not dropped by its schema.
+    const c = says('哈哈');
+    await send(c);
+    await decide(c, result('skip', { reason: '😀'.repeat(80) }));
+    await vi.waitFor(() => expect(records()).toHaveLength(3));
+    expect(records().map((r) => [r.reason, r.detail])).toEqual([['judge-skip', '闲聊，和我无关'], ['judge-failed', '判断超时'], ['judge-skip', '😀'.repeat(60)]]);
     expect(startThread).not.toHaveBeenCalled();
   });
 
@@ -190,6 +197,28 @@ describe('smart mode intake (s25)', () => {
     await decide(named, result('main'));
     await vi.waitFor(() => expect(fake.inputs.length).toBeGreaterThan(0));
     expect(fake.inputs[0]).toContain('B1 请回答');
+  });
+
+  it('a batch whose judgement fails notes each of its messages, not only the newest', async () => {
+    const [a1, a2, a3] = [says('A1'), says('A2'), says('A3')];
+    await send(a1);
+    await judged(a1);
+    await send(a2);
+    await send(a3);
+    fake.judge.mockImplementationOnce(async () => { throw new Error('判断进程崩了'); });
+    await decide(a1, result('skip', { reason: '闲聊' }));
+    await vi.waitFor(() => expect(records()).toHaveLength(3));
+    expect(records().map((r) => [r.reason, r.ref])).toEqual([['judge-skip', idOf(a1).slice(-6)], ...[a2, a3].map((m) => ['judge-failed', idOf(m).slice(-6)])]);
+  });
+
+  it("writes what it is doing under the sender's cleaned name, for the next judgements", async () => {
+    const m = says('线上挂了');
+    await send(m, { openId: 'ou_owner', name: '【要判断的消息】张三' });
+    await decide(m, result('main'));
+    await vi.waitFor(() => expect(fake.inputs).toHaveLength(1));
+    const next = says('好的');
+    await send(next);
+    expect((await judged(next)).req.context.find((l) => l.from === 'self')?.text).toBe('（在回 要判断的消息张三 的这条）');
   });
 
   it('a recall stops the judgement and nothing lands', async () => {
@@ -288,5 +317,23 @@ describe('smart mode intake (s25)', () => {
     expect(saved).toContain(idOf(named));
     expect(saved).not.toContain(idOf(chatter));
     expect(startThread).not.toHaveBeenCalled();
+    // No landing takes its THINKING off now.
+    expect(fake.unreact).toHaveBeenCalledWith({ path: { message_id: idOf(named), reaction_id: 'r_THINKING' } });
+  });
+
+  it('keeps for an answer once back a named message whose intake crossed the shutdown, with no THINKING put on', async () => {
+    const file = join(paths.appDir, 'dropped-crossed.json');
+    const kept = createOrchestrator(channel as never, cfg, '/tmp/demo', undefined, { droppedFile: file });
+    const disk = deferred<void>();
+    fake.hold = disk.promise;
+    const named = says('B 请回答', { at: true });
+    const intake = kept.onMessage(await receive(named, { bot: BOT }));
+    await settle(); // parked on its session read
+    const stopped = kept.shutdown();
+    disk.resolve();
+    await Promise.all([intake, stopped]);
+    expect(readFileSync(file, 'utf8')).toContain(idOf(named));
+    expect(fake.react).not.toHaveBeenCalled();
+    expect(fake.judge).not.toHaveBeenCalled();
   });
 });
