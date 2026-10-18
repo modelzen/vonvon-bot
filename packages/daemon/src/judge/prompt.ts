@@ -236,6 +236,9 @@ export function parseVerdict(
   return undefined;
 }
 
-/** What else a Codex judgement's model sees (the settings view's `smartPrompt.backendNote`). A Claude
- * judgement's system prompt is SMART.md plus the format lines, nothing more. */
+/** What else a judgement's model sees besides SMART.md, the format lines and the input (the settings
+ * view's `smartPrompt.backendNote`). Claude: e12 caught the CLI adding an Agent SDK line before the
+ * system prompt, and before the first user message a `<system-reminder>` with the account's email and
+ * a `# Environment` block of about 1,300 characters; no switch turns them off for a judgement. */
 export const JUDGE_CODEX_NOTE = 'Codex 判断时还带 vonvon 的两行基础指令（换掉了 Codex 自带的系统提示词）和你的 ~/.codex/AGENTS.md（关不掉）';
+export const JUDGE_CLAUDE_NOTE = 'Claude 判断时，Claude Code 还在提示词前加一句 Agent SDK 的身份说明，在输入前加一段带你账号邮箱的提醒和约 1,300 字的环境信息（工作目录、系统版本等），关不掉';
