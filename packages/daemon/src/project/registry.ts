@@ -351,13 +351,14 @@ export async function addProject(input: Project, target?: RegistryLocation): Pro
 }
 
 type ProjectBinding = Pick<Project, 'name' | 'chatId'> & {
-  cwd: { kind: 'existing'; path: string } | { kind: 'default'; legacyPath: string; allocatedPath?: string };
+  /** A new group has no `legacyPath`: its chat id is fresh, so no stored row is compared with it. */
+  cwd: { kind: 'existing'; path: string } | { kind: 'default'; legacyPath?: string; allocatedPath?: string };
   backend: string;
   defaultBackend: string;
   kind: 'multi' | 'single';
   noMention: boolean;
 };
-type NewBinding = Pick<Project, 'cwd' | 'blank' | 'createdAt' | 'directories' | 'origin' | 'addedBy' | 'mode' | 'backend' | 'network'>;
+type NewBinding = Pick<Project, 'cwd' | 'blank' | 'createdAt' | 'directories' | 'origin' | 'addedBy' | 'mode' | 'backend' | 'network' | 'creationRequestId' | 'creationRequestSignature'>;
 type BindingResult = { kind: 'bound'; project: Project } | { kind: 'existing'; project: Project };
 
 /** Decide against the latest row under the projects owner. prepareNew is local
@@ -369,7 +370,8 @@ export function bindProject(input: ProjectBinding, prepareNew: () => Promise<New
     const existing = projects.find(project => project.chatId === binding.chatId);
     if (existing) {
       const cwd = await realpath(existing.cwd).catch(() => existing.cwd);
-      const candidates = binding.cwd.kind === 'existing' ? [binding.cwd.path] : [binding.cwd.legacyPath, ...(binding.cwd.allocatedPath ? [binding.cwd.allocatedPath] : [])];
+      const candidates = binding.cwd.kind === 'existing' ? [binding.cwd.path]
+        : [binding.cwd.legacyPath, binding.cwd.allocatedPath].filter((path): path is string => path !== undefined);
       const requested = await Promise.all(candidates.map(path => realpath(path).catch(() => path)));
       if (existing.name === binding.name && requested.includes(cwd)
         && (existing.backend ?? binding.defaultBackend) === binding.backend

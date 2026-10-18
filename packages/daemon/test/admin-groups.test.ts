@@ -11,6 +11,8 @@ import { addProject, listProjects, listProjectsIn } from '../src/project/registr
 import { createProject, joinExistingGroup as joinOwnedGroup, type JoinGroupInput } from '../src/project/lifecycle';
 import type { RegistryLocation } from '../src/project/registry';
 import { paths } from '../src/config/paths';
+import { fakeLark } from './helpers/fake-lark-http';
+import { effectiveDefaultBackend } from '../src/agent';
 
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync, realpathSync } = await import('node:fs');
@@ -187,7 +189,7 @@ describe('desktop group commands in the owning bot', () => {
     const value = { name: 'Protected', existingPath: paths.appDir, kind: 'multi' as const };
     await expect(joinExistingGroup(fixture.channel, { ...value, chatId: 'oc_protected' })).rejects.toThrow('directories.workspaces.primary');
     await expect(createGroupExecutor(fixture.channel)({ kind: 'bindGroup', input: { ...input(paths.appDir), projectName: value.name, chatId: 'oc_protected_web' } })).rejects.toThrow('directories.workspaces.primary');
-    await expect(createProject(fixture.channel, { ...value, ownerOpenId: 'ou_owner' })).rejects.toThrow('directories.workspaces.primary');
+    await expect(createProject(fixture.channel, { ...value, ownerOpenId: 'ou_owner', requestId: 'protected-request', bot })).rejects.toThrow('directories.workspaces.primary');
     expect(fixture.message).not.toHaveBeenCalled();
     expect(fixture.create).not.toHaveBeenCalled();
     expect((await listProjects()).some(project => project.name === value.name)).toBe(false);
@@ -271,20 +273,20 @@ describe('desktop group commands in the owning bot', () => {
 
   it.each(['join', 'create'] as const)('captures %s inputs and registry target before asynchronous preparation', async action => {
     const fixture = channelFixture();
+    const fake = fakeLark();
     const dir = await workspace();
-    const file = action === 'join' ? paths.projectsFile : join(paths.appDir, `captured-${action}`, 'projects.json');
-    const target = { file, dataRoot: paths.appDir };
-    const value = { name: `Captured ${action}`, chatId: `oc_captured_${action}`, ownerOpenId: 'ou_owner', requestId: 'original-request', requestSignature: 'original-signature', existingPath: dir, kind: 'multi' as const, backend: 'codex-appserver' };
-    const pending = action === 'join' ? joinExistingGroup(fixture.channel, value, target) : createProject(fixture.channel, value, target);
-    value.name = 'mutated'; value.existingPath = paths.appDir; value.backend = 'unavailable'; value.ownerOpenId = 'ou_changed'; value.requestId = 'changed-request'; value.requestSignature = 'changed-signature';
+    const target = { file: paths.projectsFile, dataRoot: paths.appDir };
+    const value = { name: `Captured ${action}`, chatId: `oc_captured_${action}`, ownerOpenId: 'ou_owner', requestId: 'original-request', requestSignature: 'original-signature', existingPath: dir, kind: 'multi' as const, backend: 'codex-appserver', bot: { ...bot } };
+    const pending = action === 'join' ? joinOwnedGroup(fixture.channel, value, target) : createProject({ rawClient: fake.client }, value, target);
+    value.name = 'mutated'; value.existingPath = paths.appDir; value.backend = 'unavailable'; value.ownerOpenId = 'ou_changed'; value.requestId = 'changed-request'; value.requestSignature = 'changed-signature'; value.bot.registrationId = 'changed';
     target.file = join(paths.appDir, `wrong-${action}`, 'projects.json'); target.dataRoot = dir;
     const result = await pending;
     expect(result).toMatchObject({ name: `Captured ${action}`, cwd: await realpath(dir), backend: 'codex-appserver' });
-    expect((await listProjectsIn(file)).find(row => row.chatId === result.chatId)).toMatchObject(result);
+    expect((await listProjectsIn(paths.projectsFile)).find(row => row.chatId === result.chatId)).toMatchObject(result);
     await expect(readFile(target.file)).rejects.toMatchObject({ code: 'ENOENT' });
     if (action === 'create') {
       expect(result.creationRequestSignature).toBe('original-signature');
-      expect(fixture.create).toHaveBeenCalledWith({ params: { user_id_type: 'open_id', uuid: 'original-request' }, data: { name: 'Captured create', user_id_list: ['ou_owner'] } });
+      expect(fake.creates()).toMatchObject([{ params: { user_id_type: 'open_id', uuid: 'original-request' }, data: { name: 'Captured create', user_id_list: ['ou_owner'] } }]);
     }
   });
 
@@ -312,11 +314,24 @@ describe('desktop group commands in the owning bot', () => {
     const value = { name: `Invalid ${kind}`, existingPath: dir, kind: 'multi' as const };
     await expect(joinExistingGroup(fixture.channel, { ...value, chatId: `oc_invalid_${kind}` })).rejects.toThrow();
     await expect(createGroupExecutor(fixture.channel)({ kind: 'bindGroup', input: { ...input(dir), projectName: value.name, chatId: `oc_invalid_web_${kind}` } })).rejects.toThrow();
-    await expect(createProject(fixture.channel, { ...value, ownerOpenId: 'ou_owner' })).rejects.toThrow('directories.workspaces.primary');
+    await expect(createProject(fixture.channel, { ...value, ownerOpenId: 'ou_owner', requestId: `invalid-${kind}`, bot })).rejects.toThrow('directories.workspaces.primary');
     expect(await readFile(paths.projectsFile, 'utf8')).toBe(bytes);
     expect(fixture.create).not.toHaveBeenCalled();
     expect(fixture.managers).not.toHaveBeenCalled();
     expect(fixture.message).not.toHaveBeenCalled();
+  });
+
+  it('s36d1: binds a group the bot itself owns as joined and read-only, without asking Feishu who owns it', async () => {
+    // Feishu leaves owner_id out when a bot owns the group (2026-10-18), the same as for another app's bot's group.
+    const fixture = channelFixture();
+    const chatInfo = vi.fn(async (chatId: string) => ({ chatId, chatType: 'group' as const }));
+    const channel = Object.assign(fixture.channel, { botIdentity: { openId: 'ou_bot', name: 'Bot' }, getChatInfo: chatInfo });
+    const unsaved = await createGroupExecutor(channel)({ kind: 'bindGroup', input: { chatId: 'oc_bot_owned', projectName: 'Bot owned', backend: 'codex-appserver', kind: 'multi' } });
+    expect(unsaved).toMatchObject({ origin: 'joined', mode: 'qa', network: false });
+    // A bind with no backend picked writes the one it runs on, so it never follows a later default.
+    expect(await joinExistingGroup(channel, { name: 'Not owned', chatId: 'oc_not_owned', kind: 'multi', addedBy: 'ou_admin' })).toMatchObject({ origin: 'joined', mode: 'qa', addedBy: 'ou_admin',
+      backend: await effectiveDefaultBackend() });
+    expect(chatInfo).not.toHaveBeenCalled();
   });
 
   it('registry rejects duplicate races while preserving unrelated existing projects', async () => {
