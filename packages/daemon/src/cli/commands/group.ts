@@ -66,9 +66,11 @@ export async function runGroupPending(options: { bot?: string }, io: Io, daemon:
 
 export type BindOptions = { folder: string; name?: string; tool?: string; conversation?: string; response?: string; bot?: string };
 
-/** `--conversation` values: multi / single (product.md 3.4's 多会话、单会话); the wire names threads / shared still work. */
-const CONVERSATIONS: Record<string, Conversation> = { multi: 'threads', single: 'shared', threads: 'threads', shared: 'shared' };
-const CONVERSATION_HELP = `--conversation 必须选一项：multi（${conversationCopy.threads.title}）或 single（${conversationCopy.shared.title}）。`;
+/** `--conversation` values: multi / single / smart (product.md 3.4's 多会话、单会话、智能); the wire names threads / shared still work. */
+const CONVERSATIONS: Record<string, Conversation> = { multi: 'threads', single: 'shared', smart: 'smart', threads: 'threads', shared: 'shared' };
+const CONVERSATION_HELP = `--conversation 必须选一项：multi（${conversationCopy.threads.title}）、single（${conversationCopy.shared.title}）或 smart（${conversationCopy.smart.title}）。`;
+/** 智能 has no 免@ (3.4, s25c). */
+const SMART_RESPONSE_HELP = `${conversationCopy.smart.title}由 Bot 判断回不回，没有免 @，不能带 --response。`;
 export type Host = { cwd: string; home: string; platform: NodeJS.Platform };
 
 /** Everything that can be checked offline is checked before connecting, so a typo sends no RPC. */
@@ -81,6 +83,7 @@ export async function runGroupBind(rawGroupId: string, options: BindOptions, io:
   const picked = options.conversation !== undefined && Object.hasOwn(CONVERSATIONS, options.conversation) ? CONVERSATIONS[options.conversation] : undefined;
   if (picked === undefined) throw new Error(CONVERSATION_HELP);
   const conversation = { data: picked };
+  if (picked === 'smart' && options.response !== undefined) throw new Error(SMART_RESPONSE_HELP);
   const response = options.response === undefined ? undefined : replyModeSchema.safeParse(options.response);
   if (response && !response.success) throw new Error('--response 只能是 mention（@ 我才回）或 all（免 @，不 @ 也回）。');
   // Left out: 3.4's default, 多会话开，单会话关; the daemon writes the same. Only a different pick goes
@@ -113,10 +116,11 @@ export async function runGroupBind(rawGroupId: string, options: BindOptions, io:
     const bound = await call('绑定群', c => c.run({ type: 'bindGroup', agentId: agent.id, groupId: groupId.data, projectName, folder: { kind: 'existing', folderToken: chosen.token }, tool: tool.data, conversation: conversation.data, ...sent }), { feishu: true, unknown });
     return { revision: want('绑定群', bound, 'applied', unknown).revision, name: projectName, folder: chosen.displayPath, several: snapshot.agents.length > 1, agentId: agent.id };
   });
-  const human = [`已绑定 ${result.name}（${groupId.data}）→ ${result.folder} · ${tool.data === 'codex' ? 'Codex' : 'Claude'} · ${conversationLabel(conversation.data)} · 免 @ ${reply === 'all' ? '开' : '关'}`];
+  const smart = picked === 'smart';
+  const human = [`已绑定 ${result.name}（${groupId.data}）→ ${result.folder} · ${tool.data === 'codex' ? 'Codex' : 'Claude'} · ${conversationLabel(conversation.data)}${smart ? '' : ` · 免 @ ${reply === 'all' ? '开' : '关'}`}`];
   // The group stays in qa: on Linux its Codex turns are refused with a reply until the owner picks full (s20b).
   if (host.platform === 'linux' && tool.data === 'codex') {
     human.push(`Linux 上 Codex 只能用完全访问，运行：vonvon settings set${result.several ? ` --bot ${result.agentId}` : ''} --group ${groupId.data} permission.mode=full`);
   }
-  print(io, human, { groupId: groupId.data, name: result.name, folder: result.folder, tool: tool.data, conversation: conversation.data, response: reply, revision: result.revision });
+  print(io, human, { groupId: groupId.data, name: result.name, folder: result.folder, tool: tool.data, conversation: conversation.data, ...(smart ? {} : { response: reply }), revision: result.revision });
 }

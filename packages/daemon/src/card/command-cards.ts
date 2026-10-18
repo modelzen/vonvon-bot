@@ -2,6 +2,7 @@ import { MODEL_ID_MAX_LENGTH } from '../agent/model-id';
 import type { ModelInfo, ReasoningEffort, ThreadSummary } from '../agent/types';
 import { getSessionTitleEfforts } from '../config/schema';
 import { stripBridgeMessageEnvelope } from '../bot/session-title';
+import type { SessionMode } from '../project/registry';
 import {
   actions,
   button,
@@ -318,6 +319,15 @@ function talkLine(noMention: boolean, tail: string): string {
     : `· **@我 + 内容** → ${tail}（本群默认需 @；\`/settings\` 可开启免@）`;
 }
 
+/** What 选了智能 tells the group (3.4): the welcome card's first line when it is bound so, and a plain message
+ * when the web switches a group to it (s25c). */
+export const SMART_NOTICE = '我会读群消息，合适时接话。';
+
+/** How to talk to a group: 智能 has no 免@, a judgement decides and an @ always gets an answer (s25, s25c). */
+function talkLines(kind: SessionMode, noMention: boolean, tail: string, smartTail: string): string[] {
+  return kind === 'smart' ? [`· 直接说话 → ${smartTail}`, '· **@我 + 内容** → 一定回'] : [talkLine(noMention, tail)];
+}
+
 /** 后端能力（只取 /help 关心的三项）。undefined ⇒ 全支持（codex 不声明
  * capabilities，约定 undefined=全能；不支持某命令的后端显式标 false）。 */
 export interface HelpCaps {
@@ -332,9 +342,9 @@ export interface HelpCaps {
  * don't see them listed (they'd be denied anyway — see handle-message 的门控).
  * `caps` 按会话后端能力裁剪：不支持 /goal、/compact、/resume 的后端
  * （能力守卫会拒），就不在速查卡里列出来——避免「列了点了才发现不支持」的不一致。
- * 缺省（undefined 或不传）= 全列（codex 行为，向后兼容）。`kind` 是群的类型：
- * 连续群的话题里，新会话在主区的消息下开（s15）。 */
-export function buildHelpCard(scope: HelpScope, noMention = true, isAdmin = false, caps?: HelpCaps, kind: 'multi' | 'single' = 'multi'): CardObject {
+ * 缺省（undefined 或不传）= 全列（codex 行为，向后兼容）。`kind` 是群的会话方式：
+ * 单会话和智能的话题里，新会话在主区的消息下开（s15）；智能没有免@（s25c）。 */
+export function buildHelpCard(scope: HelpScope, noMention = true, isAdmin = false, caps?: HelpCaps, kind: SessionMode = 'multi'): CardObject {
   const showGoal = caps?.goal ?? true;
   const showCompact = caps?.compact ?? true;
   const showResume = caps?.resume ?? true;
@@ -342,18 +352,20 @@ export function buildHelpCard(scope: HelpScope, noMention = true, isAdmin = fals
   const compactLine = '· `/compact` → 压缩上下文（正忙时等这一轮结束再压）';
 
   const elements: CardElement[] = [];
+  const settingsLine = kind === 'smart' ? '· `/settings` → 群设置' : '· `/settings` → 群设置（免@ 开关）';
   if (scope === 'single') {
-    const lines = [talkLine(noMention, '交给我处理')];
+    const lines = talkLines(kind, noMention, '交给我处理', '我看情况接话或开话题');
     if (showGoal) lines.push(goalLine);
     lines.push('· `/model` → 切换模型 / 推理强度', '· `/context` → 看上下文占比');
     if (showCompact) lines.push(compactLine);
     if (isAdmin) lines.push(`· \`/new\`（或 \`/clear\`）→ 换一条新会话${showResume ? '，旧的能 `/resume` 回来' : ''}（飞书消息保留）`);
     if (isAdmin && showResume) lines.push('· `/resume` → 切回历史会话');
-    if (isAdmin) lines.push('· `/settings` → 群设置（免@ 开关）');
+    if (isAdmin) lines.push(settingsLine);
     lines.push('· `/help` → 这张速查卡');
-    elements.push(md('💬 **整群一条会话** — 主区一条会话，上下文一直连着。'), hr(), md(lines.join('\n')));
+    const head = kind === 'smart' ? `💬 **智能开话题** — 不用 @ 我，${SMART_NOTICE}主区一条会话；聊到新的事，我自己开话题。` : '💬 **整群一条会话** — 主区一条会话，上下文一直连着。';
+    elements.push(md(head), hr(), md(lines.join('\n')));
   } else if (scope === 'topic') {
-    const lines = [talkLine(noMention, '继续当前会话')];
+    const lines = talkLines(kind, noMention, '继续当前会话', '我看情况回');
     if (showGoal) lines.push(goalLine);
     lines.push('· `/model` → 切换模型 / 推理强度', '· `/context` → 看上下文占比');
     if (showCompact) lines.push(compactLine);
@@ -362,13 +374,13 @@ export function buildHelpCard(scope: HelpScope, noMention = true, isAdmin = fals
       md('🧵 **话题内** — 每个话题是一个独立会话。'),
       hr(),
       md(lines.join('\n')),
-      note(kind === 'single' ? '要新的会话，就在主区的某条消息下开一个新话题。' : '开新话题：回到主群区 @我 + 内容。'),
+      note(kind !== 'multi' ? '要新的会话，就在主区的某条消息下开一个新话题。' : '开新话题：回到主群区 @我 + 内容。'),
     );
   } else {
     const lines = ['· **@我 + 内容** → 开一个新话题并开始'];
     if (showGoal) lines.push(goalLine);
     if (isAdmin && showResume) lines.push('· `/resume` → 恢复历史会话');
-    if (isAdmin) lines.push('· `/settings` → 群设置（免@ 开关）');
+    if (isAdmin) lines.push(settingsLine);
     lines.push('· `/model` → 需要在话题里用', '· `/help` → 这张速查卡');
     elements.push(md('👥 **主群区** — @我开话题，每个话题是独立会话。'), hr(), md(lines.join('\n')));
   }
@@ -388,7 +400,7 @@ export function buildHelpCard(scope: HelpScope, noMention = true, isAdmin = fals
  * 保持全列。避免用户第一眼的「使用说明」就推销点了不支持的命令。
  */
 export function buildWelcomeCard(
-  kind: 'multi' | 'single',
+  kind: SessionMode,
   docUrl?: string,
   noMention = true,
   caps?: HelpCaps,
@@ -405,17 +417,18 @@ export function buildWelcomeCard(
     md(`👋 **欢迎使用 Vonvon Bot** — 本群已绑定一个项目目录，在群里就能驱动本机 ${agentName} 干活。`),
     hr(),
   ];
-  if (kind === 'single') {
+  if (kind !== 'multi') {
     elements.push(
-      md('💬 **整群一条会话**（主区一条会话，上下文一直连着）'),
+      // 智能's first line is what 选了智能 tells the group, merged with how its main area runs (s25c).
+      md(kind === 'smart' ? `💬 **智能开话题** — 不用 @ 我，${SMART_NOTICE}主区一条会话；聊到新的事，我自己开话题。` : '💬 **整群一条会话**（主区一条会话，上下文一直连着）'),
       md(
         [
-          talkLine(noMention, '交给我处理'),
+          ...talkLines(kind, noMention, '交给我处理', '我看情况接话或开话题'),
           ...(showGoal ? [goalLine] : []),
           '· `/model` → 切换模型 / 推理强度',
           `· \`/new\`（或 \`/clear\`）→ 开新会话（管理员，${showResume ? '旧的能 `/resume` 回来，' : ''}飞书消息保留）`,
           ...(showResume ? ['· `/resume` → 切回历史会话（管理员）'] : []),
-          '· `/settings` → 群设置（免@ 开关）',
+          kind === 'smart' ? '· `/settings` → 群设置' : '· `/settings` → 群设置（免@ 开关）',
           '· `/help` → 命令速查卡',
         ].join('\n'),
       ),

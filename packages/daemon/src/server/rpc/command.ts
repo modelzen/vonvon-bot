@@ -1,4 +1,5 @@
-import { groupIdSchema, pendingGroupsSchema, type Command, type CommandResult } from '@vonvon/protocol';
+import { conversationToMode, groupIdSchema, pendingGroupsSchema, type Command, type CommandResult } from '@vonvon/protocol';
+import { SMART_NO_MENTION } from '../../admin/groups';
 import type { AdminService } from '../../admin/service';
 import type { ShutdownControl } from '../../host/lifecycle';
 import type { DirectoryBrowser } from '../directory-browser';
@@ -39,7 +40,8 @@ export async function commandRpc(options: { service: AdminService; jobs: Jobs; p
     case 'bindGroup': {
       await requireRunningAgent(service, request.agentId);
       if (!service.bindGroup) return unsupported();
-      await service.bindGroup(request.agentId, { chatId: request.groupId, projectName: request.projectName, directory: request.folder.kind === 'existing' ? await directory.resolve(request.folder.folderToken) : undefined, backend: request.tool === 'codex' ? 'codex-appserver' : 'claude-agent', kind: request.conversation === 'threads' ? 'multi' : 'single', ...(request.response ? { noMention: request.response === 'all' } : {}) });
+      if (request.conversation === 'smart' && request.response !== undefined) throw new RpcError('invalid_request', `${SMART_NO_MENTION}。`);
+      await service.bindGroup(request.agentId, { chatId: request.groupId, projectName: request.projectName, directory: request.folder.kind === 'existing' ? await directory.resolve(request.folder.folderToken) : undefined, backend: request.tool === 'codex' ? 'codex-appserver' : 'claude-agent', kind: conversationToMode(request.conversation), ...(request.response ? { noMention: request.response === 'all' } : {}) });
       return applied;
     }
     case 'setPermission': case 'setResponse': {

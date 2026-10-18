@@ -131,7 +131,7 @@ export function decisionBody(req: Pick<JudgeRequest, 'variant' | 'botName' | 'gr
   };
   if (req.variant === 'main') {
     // Only lines a topic may open under (handle-message anchorLine): a person's, with an id, naming no one.
-    const options = recent.filter(({ line }) => line.from === 'user' && line.id && !line.mentions?.length).slice(0, ANCHOR_OPTIONS);
+    const options = recent.filter(({ line }) => line.from === 'user' && line.id && !line.named && !line.mentions?.length).slice(0, ANCHOR_OPTIONS);
     if (options.length) {
       body.questions.anchor = { type: 'choice', instructions: ANCHOR_QUESTION, criteria: Object.fromEntries([message, ...options.map(({ item }) => item)].map((line) => [line.id, snippet(line)])) };
     }

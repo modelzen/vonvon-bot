@@ -4,7 +4,7 @@ import { agentIdSchema, permissionSchema } from "./domain.js";
 export const adminProjectSchema = z.object({
   avatarDataUrl: z.string().optional(),
   name: z.string(), chatId: z.string(), cwd: z.string(), blank: z.boolean(),
-  branch: z.string().optional(), kind: z.enum(["multi", "single"]),
+  branch: z.string().optional(), kind: z.enum(["multi", "single", "smart"]),
   origin: z.enum(["created", "joined"]), noMention: z.boolean(),
   mode: permissionSchema,
   /** @deprecated since s15c always equal to the group's one tier; kept so clients from before s15c still parse */

@@ -27,9 +27,10 @@ import {
 } from '../config/schema';
 import {
   noMentionOf,
-  ruleKind,
+  sessionModeOf,
   effectiveMode,
   listProjectsIn,
+  type SessionMode,
 } from '../project/registry';
 import { isRetiredKey, listSessionsIn } from '../bot/session-store';
 import { loadConfig } from '../config/store';
@@ -297,7 +298,7 @@ export interface AdminProject {
   cwd: string;
   blank: boolean;
   branch?: string;
-  kind: 'multi' | 'single';
+  kind: SessionMode;
   origin: 'created' | 'joined';
   /** effective 免@（noMentionOf） */
   noMention: boolean;
@@ -527,7 +528,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       cwd: p.cwd,
       blank: p.blank,
       branch: p.branch,
-      kind: ruleKind(p),
+      kind: sessionModeOf(p),
       origin: p.origin ?? 'created',
       noMention: noMentionOf(p),
       mode: effectiveMode(p),

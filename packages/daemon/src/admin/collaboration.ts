@@ -1,16 +1,16 @@
 import { isAbsolute } from 'node:path';
 import { createHash } from 'node:crypto';
-import { ruleKind, type Project } from '../project/registry';
+import { sessionModeOf, type Project, type SessionMode } from '../project/registry';
 import { groupBackendId } from '../config/execution';
-import { InvalidGroupInput } from './groups';
+import { InvalidGroupInput, SMART_NO_MENTION } from './groups';
 import { SHARE_SECTIONS, type ShareSectionKey } from '../card/usage-cards';
 
 export type ProjectTarget = { projectName: string; chatId: string };
 export type CollaborationRequest =
-  | { action: 'createProject'; requestId: string; name: string; directory?: string; kind: 'single' | 'multi'; noMention?: boolean; backend: 'codex-appserver' | 'claude-agent' }
+  | { action: 'createProject'; requestId: string; name: string; directory?: string; kind: SessionMode; noMention?: boolean; backend: 'codex-appserver' | 'claude-agent' }
   | ({ [K in 'project' | 'history']: { action: K } & ProjectTarget }['project' | 'history'])
   | ({ action: 'shareUsage'; sections?: ShareSectionKey[] } & ProjectTarget)
-  | ({ action: 'editProject'; expectedRevision: string; directory?: string; kind?: 'single' | 'multi'; enabled?: boolean } & ProjectTarget)
+  | ({ action: 'editProject'; expectedRevision: string; directory?: string; kind?: SessionMode; enabled?: boolean } & ProjectTarget)
   | ({ action: 'removeProject'; expectedRevision: string } & ProjectTarget)
   | ({ [K in 'context' | 'clear' | 'compact']: { action: K; threadId: string } & ProjectTarget }['context' | 'clear' | 'compact'])
   | ({ action: 'resume'; sessionId: string; backend: string } & ProjectTarget)
@@ -23,7 +23,7 @@ export function projectRevision(project: Project): string {
   return createHash('sha256').update(JSON.stringify(project)).digest('hex');
 }
 export function projectView(project: Project) {
-  return { name: project.name, chatId: project.chatId, cwd: project.cwd, kind: ruleKind(project), backend: groupBackendId(project), enabled: project.enabled !== false, revision: projectRevision(project) };
+  return { name: project.name, chatId: project.chatId, cwd: project.cwd, kind: sessionModeOf(project), backend: groupBackendId(project), enabled: project.enabled !== false, revision: projectRevision(project) };
 }
 export function parseCollaborationRequest(raw: Record<string, unknown>): CollaborationRequest {
   const str = (key: string, max = 4096) => typeof raw[key] === 'string' && (raw[key] as string).trim().length > 0 && (raw[key] as string).length <= max && !(key === 'objective' ? /[\x00-\x08\x0b\x0c\x0e-\x1f]/ : /[\x00-\x1f]/).test(raw[key] as string);
@@ -45,7 +45,8 @@ export function parseCollaborationRequest(raw: Record<string, unknown>): Collabo
     else if (!str(key, key === 'objective' ? 16000 : 4096)) throw new InvalidGroupInput('协作参数无效');
   }
   if (raw.directory !== undefined && !isAbsolute(raw.directory as string)) throw new InvalidGroupInput('文件夹必须为绝对路径');
-  if (raw.kind !== undefined && raw.kind !== 'single' && raw.kind !== 'multi') throw new InvalidGroupInput('会话类型无效');
+  if (raw.kind !== undefined && raw.kind !== 'single' && raw.kind !== 'multi' && raw.kind !== 'smart') throw new InvalidGroupInput('会话类型无效');
+  if (raw.kind === 'smart' && raw.noMention !== undefined) throw new InvalidGroupInput(SMART_NO_MENTION);
   if (raw.sections !== undefined && (!Array.isArray(raw.sections) || raw.sections.length > SHARE_SECTIONS.length || raw.sections.some(section => typeof section !== 'string' || !SHARE_SECTIONS.some(option => option.key === section)))) throw new InvalidGroupInput('分享区块无效');
   if (action === 'createProject' && (raw.kind === undefined || !['codex-appserver','claude-agent'].includes(raw.backend as string) || !/^[\w-]{16,50}$/.test(raw.requestId as string) || (!str('name',200) || /[\\/]/.test(raw.name as string) || ['.','..'].includes((raw.name as string).trim())))) throw new InvalidGroupInput('新项目参数无效');
   return raw as CollaborationRequest;

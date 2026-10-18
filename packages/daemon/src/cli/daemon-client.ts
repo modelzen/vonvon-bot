@@ -153,7 +153,7 @@ export function print(io: Io, human: string[], json: unknown): void {
 
 export const withoutAvatar = <T extends { avatarDataUrl?: string }>({ avatarDataUrl: _avatar, ...rest }: T): Omit<T, 'avatarDataUrl'> => rest;
 export const toolLabel = backendLabel;
-export const conversationLabel = (conversation: string): string => conversation === 'threads' || conversation === 'shared' ? `${conversationCopy[conversation].name}（${conversationCopy[conversation].title}）` : conversation;
+export const conversationLabel = (conversation: string): string => conversation === 'threads' || conversation === 'shared' || conversation === 'smart' ? `${conversationCopy[conversation].name}（${conversationCopy[conversation].title}）` : conversation;
 const pad = (value: number): string => String(value).padStart(2, '0');
 export function localTime(ms: number): string {
   const date = new Date(ms);

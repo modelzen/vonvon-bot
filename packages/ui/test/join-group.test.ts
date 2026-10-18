@@ -3,7 +3,7 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import {expect, it} from 'vitest';
 import {collaborationRequestSchema} from '@vonvon/protocol';
 import {RpcError} from '@vonvon/client/browser';
-import {CREATION_UNKNOWN, CreationLockNotice, creationFailure, projectNameProblem} from '../src/JoinGroupDialog';
+import {CONVERSATIONS, CREATION_UNKNOWN, CreationLockNotice, creationFailure, keptResponse, projectNameProblem, sentResponse, shownResponse} from '../src/JoinGroupDialog';
 import {canSaveAll} from '../src/settings/DraftGuard';
 
 it('rejects the names the protocol would refuse, before submit', () => {
@@ -45,4 +45,25 @@ it('s36d1: locks the form on a group created and not saved, with the daemon\'s b
   expect(notice).toContain(guide);
   expect(notice).toContain('群已建好，但没存上');
   expect(notice).not.toContain('重试');
+});
+
+it('s25c: lists the three 会话方式 in 3.4\'s order and words, and 智能 has no 免@ to show or send', () => {
+  expect(CONVERSATIONS).toEqual([
+    {value: 'threads', label: '@ 我开新会话', description: '在主区 @ 我就开一个话题，一个话题一条会话，几件事各聊各的'},
+    {value: 'shared', label: '整群一条会话', description: '主区一条会话，上下文一直连着；想另起一件事，开个话题和我聊'},
+    {value: 'smart', label: '智能开话题', description: '主区一条会话，不用 @ 我也会看情况接话；聊到新的事，我自己开话题、起新会话'},
+  ]);
+  expect(shownResponse(undefined, undefined)).toBeUndefined();
+  expect(shownResponse('threads', undefined)).toBe('all');
+  expect(shownResponse('shared', undefined)).toBe('mention');
+  // A hand pick made under another 会话方式 is not carried into 智能.
+  expect(shownResponse('smart', 'all')).toBeUndefined();
+  // Nor out of it: picked 关 under 多会话, then 智能, then 多会话 again shows 多会话's default (审查低).
+  expect(shownResponse('threads', keptResponse('threads', keptResponse('smart', 'mention')))).toBe('all');
+  expect(keptResponse('shared', 'all')).toBe('all');
+  for (const kind of ['create', 'bind'] as const) expect(sentResponse(kind, 'smart', shownResponse('smart', 'all'))).toEqual({});
+  expect(sentResponse('bind', 'shared', 'mention')).toEqual({});
+  expect(sentResponse('create', 'shared', 'mention')).toEqual({response: 'mention'});
+  expect(sentResponse('create', 'threads', 'all')).toEqual({});
+  expect(collaborationRequestSchema.safeParse({action: 'createProject', agentId: 'cli_join', name: 'n', folder: {kind: 'default'}, tool: 'codex', conversation: 'smart'}).success).toBe(true);
 });

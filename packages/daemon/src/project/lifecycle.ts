@@ -8,7 +8,7 @@ import { assertBotIdentity, withBotGroupBinding, type BotIdentity } from '../con
 import { admitDirectorySettings, resolveProjectsRootDir } from '../config/directories';
 import { log } from '../core/logger';
 import { feishuError } from '../utils/feishu-error';
-import { addProject, bindNoMention, bindProject, listProjectsIn, type PreviousDirectory, type Project, type RegistryLocation } from './registry';
+import { addProject, bindNoMention, bindProject, listProjectsIn, sessionModeOf, storedMode, type PreviousDirectory, type Project, type RegistryLocation, type SessionMode } from './registry';
 import { directoryContext, legacyDirectoryProblems } from './directory-audit';
 import { DirectoryError, directoryError } from '../config/directory-errors';
 import type { PermissionMode } from '../agent/types';
@@ -58,8 +58,8 @@ export interface CreateProjectInput {
   /** optional config.json override for the parent directory of blank projects. */
   projectsRootDir?: string;
   /** 会话方式, required: every entry asks for it (product.md 3.4). */
-  kind: 'multi' | 'single';
-  /** 免@; left out → {@link bindNoMention}. Always written, so a later 会话方式 switch keeps it. */
+  kind: SessionMode;
+  /** 免@; left out → {@link bindNoMention}. Always written, so a later 会话方式 switch keeps it. 智能 ignores it. */
   noMention?: boolean;
   /** permission tier (default 'full' for self-created projects). */
   mode?: PermissionMode;
@@ -111,6 +111,11 @@ function creationFailure(error: unknown, dispatched: boolean): Error {
   return new CreationOutcomeUnknownError(error);
 }
 
+/** 免@ an entry writes: the picked one, else {@link bindNoMention}. 智能 has none, so a pick is dropped (s25c). */
+function entryNoMention(input: { kind: SessionMode; noMention?: boolean }): boolean {
+  return input.kind === 'smart' ? false : input.noMention ?? bindNoMention(input.kind);
+}
+
 export interface JoinGroupInput {
   bot: BotIdentity;
   /** project name — editable in the bind card, defaults to the group's name. */
@@ -124,8 +129,8 @@ export interface JoinGroupInput {
   /** optional config.json override for the parent directory of blank projects. */
   projectsRootDir?: string;
   /** 会话方式, required: every entry asks for it (product.md 3.4). */
-  kind: 'multi' | 'single';
-  /** 免@; left out → {@link bindNoMention}. */
+  kind: SessionMode;
+  /** 免@; left out → {@link bindNoMention}. 智能 ignores it. */
   noMention?: boolean;
   /** permission tier (default 'qa' — read-only — for joined external groups). */
   mode?: PermissionMode;
@@ -193,7 +198,7 @@ export async function createProject(channel: Pick<LarkChannel, 'rawClient'>, req
   const row = { createdAt: Date.now(), origin: 'created' as const, mode, backend,
     network: input.network ?? false, creationRequestId: input.requestId,
     ...(input.requestSignature === undefined ? {} : { creationRequestSignature: input.requestSignature }) };
-  const noMention = input.noMention ?? bindNoMention(input.kind);
+  const noMention = entryNoMention(input);
 
   let dispatched = false;
   return withCreationClient(channel.rawClient, async (client, limits) => {
@@ -220,7 +225,7 @@ export async function createProject(channel: Pick<LarkChannel, 'rawClient'>, req
     let saved: Project;
     try {
       if (explicit) {
-        saved = { ...row, ...explicit, name, chatId, kind: input.kind, noMention };
+        saved = { ...row, ...explicit, name, chatId, noMention, ...storedMode(input.kind) };
         await addProject(saved, location);
       } else {
         saved = (await withBotGroupBinding(input.bot, { chatId, name, projectsRootDir: root }, scope => bindProject({ name, chatId,
@@ -228,7 +233,7 @@ export async function createProject(channel: Pick<LarkChannel, 'rawClient'>, req
           async () => ({ ...await scope.prepareDefault(), ...row }), location))).project;
       }
     } catch (error) { throw new CreatedButUnsavedError(chatId, name, error); }
-    log.info('project', 'create', { name, chatId, cwd: saved.cwd, blank: saved.blank, mode, backend: saved.backend, requestId: input.requestId });
+    log.info('project', 'create', { name, chatId, cwd: saved.cwd, blank: saved.blank, kind: sessionModeOf(saved), mode, backend: saved.backend, requestId: input.requestId });
 
     // Promote the creator to group admin (only the owner, our bot, may), then the
     // announcement (top banner) and onboarding (welcome card / Pin / tab). All
@@ -279,7 +284,7 @@ export async function joinExistingGroup(channel: LarkChannel, request: JoinGroup
   const result = await withBotGroupBinding(input.bot, { name, chatId: input.chatId, projectsRootDir: root }, async scope => {
     const binding = await bindProject({ name, chatId: input.chatId,
       cwd: existingPath ? { kind: 'existing', path: cwd } : { kind: 'default', legacyPath: cwd, allocatedPath: scope.allocatedPath }, defaultBackend,
-      backend: input.backend ?? defaultBackend, kind: input.kind, noMention: input.noMention ?? bindNoMention(input.kind) }, async previous => {
+      backend: input.backend ?? defaultBackend, kind: input.kind, noMention: entryNoMention(input) }, async previous => {
       assertBackendUsable(input.backend, mode);
       const restored = existingPath || scope.allocatedPath ? undefined : await restorableDirectory(previous, location.dataRoot, root);
       const workspace = existingPath ? await admitExistingDirectory(existingPath, location.dataRoot) : restored ?? await scope.prepareDefault();
@@ -291,7 +296,7 @@ export async function joinExistingGroup(channel: LarkChannel, request: JoinGroup
   });
   const project = result.project;
   if (result.kind === 'existing') return project;
-  log.info('project', 'join', { name, chatId: project.chatId, cwd: project.cwd, blank: project.blank, kind: project.kind, mode: project.mode, backend: project.backend });
+  log.info('project', 'join', { name, chatId: project.chatId, cwd: project.cwd, blank: project.blank, kind: sessionModeOf(project), mode: project.mode, backend: project.backend });
 
   // Onboarding only (no announcement / Pin / tab — see onboardGroup's joined
   // branch); best-effort, the binding holds even if the welcome card fails.

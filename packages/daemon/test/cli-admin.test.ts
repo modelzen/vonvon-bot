@@ -279,8 +279,8 @@ it('group bind sends an absolute folder, the chosen token and the pending name',
 
   const offline = harness({});
   // 3.4: the command line must name the 会话方式; nothing is picked for the user.
-  await expect(runGroupBind('oc_pay', { folder: 'pay' }, offline.io(), offline.daemon, host)).rejects.toThrow('--conversation 必须选一项：multi（@ 我开新会话）或 single（整群一条会话）。');
-  await expect(runGroupBind('oc_pay', { folder: 'pay', conversation: 'smart' }, offline.io(), offline.daemon, host)).rejects.toThrow('--conversation 必须选一项');
+  await expect(runGroupBind('oc_pay', { folder: 'pay' }, offline.io(), offline.daemon, host)).rejects.toThrow('--conversation 必须选一项：multi（@ 我开新会话）、single（整群一条会话）或 smart（智能开话题）。');
+  await expect(runGroupBind('oc_pay', { folder: 'pay', conversation: 'later' }, offline.io(), offline.daemon, host)).rejects.toThrow('--conversation 必须选一项');
   await expect(runGroupBind('oc_pay', { folder: 'pay', conversation: 'toString' }, offline.io(), offline.daemon, host)).rejects.toThrow('--conversation 必须选一项');
   await expect(runGroupBind('oc_pay', { folder: 'pay', conversation: 'multi', response: 'yes' }, offline.io(), offline.daemon, host)).rejects.toThrow('--response 只能是 mention');
   await expect(runGroupBind('oc_pay', { folder: 'missing', conversation: 'multi' }, offline.io(), offline.daemon, host)).rejects.toThrow(`文件夹不存在：${join(home, 'work', 'missing')}`);
@@ -291,6 +291,44 @@ it('group bind sends an absolute folder, the chosen token and the pending name',
   const hung = harness({ snapshot: one(), directory, run: (command: { type: string }) => command.type === 'bindGroup' ? new Promise(() => {}) : run(command) });
   await expect(runGroupBind('oc_pay', { folder: 'pay', conversation: 'multi' }, hung.io(), hung.daemon, host)).rejects.toThrow('绑定可能已经完成，运行 vonvon group list 查看。');
   expect(hung.close).toHaveBeenCalledTimes(1);
+});
+
+it('s25c: group bind --conversation smart sends no 免@, prints none, and refuses --response before connecting', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'vonvon-cli-smart-')); dirs.push(home);
+  await mkdir(join(home, 'pay'), { recursive: true });
+  const host = { cwd: home, home, platform: 'darwin' as const };
+  const token = '7d1f1a6e-3b8e-4d0c-9a51-2f6a0e4b9c12';
+  const run = vi.fn(async (command: { type: string }) => command.type === 'listPendingGroups'
+    ? { kind: 'pendingGroups', groups: [{ chatId: 'oc_pay', name: '支付组', addedAt: 1 }] } : { kind: 'applied', revision: 7 });
+  const h = harness({ snapshot: one(), run, directory: vi.fn(async (request: { path: string }) => ({ kind: 'folderChosen', folder: { token, displayPath: request.path } })) });
+  await runGroupBind('oc_pay', { folder: 'pay', conversation: 'smart' }, h.io(), h.daemon, host);
+  expect(run).toHaveBeenLastCalledWith({ type: 'bindGroup', agentId: 'cli_a', groupId: 'oc_pay', projectName: '支付组', folder: { kind: 'existing', folderToken: token }, tool: 'codex', conversation: 'smart' });
+  expect(h.out()).toBe(`已绑定 支付组（oc_pay）→ ${join(home, 'pay')} · Codex · 智能（智能开话题）\n`);
+  h.clear(); await runGroupBind('oc_pay', { folder: 'pay', conversation: 'smart' }, h.io(true), h.daemon, host);
+  expect(JSON.parse(h.out())).not.toHaveProperty('response');
+  const offline = harness({});
+  for (const response of ['all', 'mention']) {
+    await expect(runGroupBind('oc_pay', { folder: 'pay', conversation: 'smart', response }, offline.io(), offline.daemon, host)).rejects.toThrow('智能开话题由 Bot 判断回不回，没有免 @，不能带 --response。');
+  }
+  expect(offline.connect).not.toHaveBeenCalled();
+});
+
+it('s25c: settings on a 智能 group leave 免@ out of get and print the daemon\'s refusal of set', async () => {
+  const refusal = '这个群是智能开话题，回不回由 Bot 判断，没有免 @ 这一项。要用免 @，先在网页把会话方式改成多会话或单会话';
+  const view = (kind: string) => ({ scope: { kind: 'project', botId: 'cli_a', projectName: 'pay' }, sections: { response: section({ noMention: true }) },
+    identity: { chatId: 'oc_pay', backend: 'codex-appserver', cwd: '/home/u/pay', kind } });
+  let kind = 'smart';
+  const settings = vi.fn(async (request: { type: string }): Promise<unknown> => request.type === 'sessions' ? { kind: 'sessions', sessions: [] }
+    : request.type === 'save' ? { kind: 'saved', result: { kind: 'rejected', fields: [{ field: 'settings', message: refusal }] } }
+    : { kind: 'view', view: view(kind) });
+  const h = harness({ snapshot: one(undefined, [{ ...member('cli_a', 'oc_pay', 'pay'), conversation: 'smart' }]), settings });
+  await runSettingsGet(undefined, { group: 'pay' }, h.io(), h.daemon);
+  expect(h.out()).toContain('群 pay（oc_pay）· Codex · 智能（智能开话题） · /home/u/pay\n免 @：智能群没有这一项，回不回由 Bot 判断\n');
+  expect(h.out()).not.toContain('[response]');
+  kind = 'single';
+  h.clear(); await runSettingsGet(undefined, { group: 'pay' }, h.io(), h.daemon);
+  expect(h.out()).toContain('[response]\n  noMention = true\n');
+  await expect(runSettingsSet(['response.noMention=true'], { group: 'pay' }, h.io(), h.daemon)).rejects.toThrow(`没有保存：settings：${refusal}`);
 });
 
 it('settings set parses values as JSON or text and names the bad field', () => {

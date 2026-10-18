@@ -124,8 +124,8 @@ group.command('bind <groupId>').description('Bind a group (oc_…) to a folder')
   .requiredOption('--folder <path>', 'Working folder')
   .option('--name <name>', 'Project name; defaults to the group name')
   .option('--tool <tool>', 'codex or claude', 'codex')
-  .option('--conversation <mode>', 'Required. multi (@ me opens a topic, one session per topic) or single (one session for the main area)')
-  .option('--response <reply>', 'mention (reply only when @-ed) or all (no @ needed); defaults: multi all, single mention')
+  .option('--conversation <mode>', 'Required. multi (@ me opens a topic, one session per topic), single (one session for the main area) or smart (the Bot reads the group and replies when it fits)')
+  .option('--response <reply>', 'mention (reply only when @-ed) or all (no @ needed); defaults: multi all, single mention; not with smart')
   .option(...BOT).option('--json', 'Print JSON')
   .action(async (groupId: string, options: Json & { folder: string; name?: string; tool: string; conversation?: string; response?: string; bot?: string }) => {
     await (await import('./commands/group')).runGroupBind(groupId, options, io(options));

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, InlineNotice } from "../reference/components/ui";
 import { SettingsGroup, SettingsRow } from "../reference/components/system-settings";
 import {settingAnchor} from '../search';
-import type { AgentId, GroupId } from "@vonvon/protocol";
+import type { AgentId, Conversation, GroupId } from "@vonvon/protocol";
 import type { CollaborationClient, CollaborationReply } from "@vonvon/protocol";
 import "../settings/settings.css";
 import {useShellCapabilities} from '../client-context';
@@ -12,7 +12,8 @@ type Props = {
   agentId: AgentId;
   projectName: string;
   groupId: GroupId;
-  conversation: "shared" | "threads";
+  /** 单会话 and 智能 have one main-area session, so both can clear it. */
+  conversation: Conversation;
   request: CollaborationClient;
 };
 type History = Extract<CollaborationReply, { kind: "history" }>;
@@ -99,7 +100,7 @@ export function ConversationPanel({ agentId, projectName, groupId, conversation,
     {current && <SettingsGroup label="当前会话" footer="清空和压缩只作用于当前会话。">
       <SettingsRow title="会话" value={current.summary || current.threadId} />
       <SettingsRow title="上下文" value={context?.usage ? `${context.usage.used.toLocaleString()} / ${context.usage.window?.toLocaleString() ?? "未知窗口"}` : "暂无可用统计"} trailing={<Button size="sm" onClick={() => void request({ action: "context", ...target, threadId: selected }).then((reply) => { if (reply.kind === "context") setContext(reply); else if (reply.kind === "refused") setError(reply.message); })}>刷新</Button>} />
-      <SettingsRow title="会话操作" description={conversation === "threads" ? "@ 我开新会话的群可压缩当前会话；清空只用于整群一条会话的群。" : undefined} trailing={<div className="settings-inline-actions"><Button size="sm" disabled={busy || conversation === "threads"} onClick={() => void execute({ action: "clear", ...target, threadId: selected }, "已开始新会话。")}>清空会话</Button><Button size="sm" disabled={busy} onClick={() => void execute({ action: "compact", ...target, threadId: selected }, "上下文已压缩。")}>压缩上下文</Button></div>} />
+      <SettingsRow title="会话操作" description={conversation === "threads" ? "@ 我开新会话的群可压缩当前会话；清空只用于主区一条会话的群（整群一条会话、智能开话题）。" : undefined} trailing={<div className="settings-inline-actions"><Button size="sm" disabled={busy || conversation === "threads"} onClick={() => void execute({ action: "clear", ...target, threadId: selected }, "已开始新会话。")}>清空会话</Button><Button size="sm" disabled={busy} onClick={() => void execute({ action: "compact", ...target, threadId: selected }, "上下文已压缩。")}>压缩上下文</Button></div>} />
       <SettingsRow title="自主任务目标" trailing={<div className="settings-inline-actions"><input aria-label="自主任务目标" className="settings-field" value={objective} maxLength={4000} onChange={(event) => setObjective(event.target.value)} placeholder="输入目标" /><Button size="sm" disabled={busy || !objective.trim()} onClick={() => void execute({ action: "startGoal", ...target, threadId: selected, objective: objective.trim() }, "目标任务已开始。")}>开始</Button></div>} />
       {run && <>
         <SettingsRow title="正在运行" value={run.goal ? "自主目标" : "当前任务"} trailing={<div className="settings-inline-actions"><Button size="sm" variant="danger" disabled={busy || !run.canStop} onClick={() => void execute({ action: "stop", ...target, threadId: selected, runId: run.id }, "已请求停止任务。")}>停止</Button><Button size="sm" disabled={busy || !run.canEndGoal} onClick={() => void execute({ action: "endGoal", ...target, threadId: selected, runId: run.id }, "已结束目标。")}>结束目标</Button></div>} />

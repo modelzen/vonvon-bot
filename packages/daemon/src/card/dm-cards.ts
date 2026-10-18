@@ -18,8 +18,8 @@ import {
   type AppConfig,
   type SessionTitleAiConfig,
 } from '../config/schema';
-import { conversationCopy } from '@vonvon/protocol';
-import { effectiveMode, noMentionOf, ruleKind, type Project } from '../project/registry';
+import { conversationCopy, modeToConversation } from '@vonvon/protocol';
+import { effectiveMode, noMentionOf, ruleKind, sessionModeOf, type Project } from '../project/registry';
 import {
   DEFAULT_BACKEND_ID,
   REASONING_EFFORTS,
@@ -143,11 +143,14 @@ export const GS = {
   modelDefaultSubmit: 'gs.modelDefault.submit',
 } as const;
 
-/** Human label for a group's 会话方式 (product.md 3.4). 智能 shows as 单会话 until s25c. */
+/** Human label for a group's 会话方式 (product.md 3.4). */
 export function kindLabel(p: Pick<Project, 'kind' | 'smart'>): string {
-  const copy = conversationCopy[ruleKind(p) === 'single' ? 'shared' : 'threads'];
+  const copy = conversationCopy[modeToConversation(sessionModeOf(p))];
   return `${copy.name} · ${copy.title}`;
 }
+
+/** What a settings card shows in place of 免@ for a 智能 group (s25c): a judgement decides, there is nothing to set. */
+export const SMART_NO_MENTION_NOTE = '✋ 免 @：智能开话题由我判断回不回，没有这一项。';
 
 function desktopReleaseElements(release?: DesktopRelease | null): CardElement[] {
   if (!release) return [];
@@ -565,25 +568,21 @@ export function buildNewProjectUncertainCard(opts: { name: string; cwd?: string;
 
 /**
  * 会话方式 in the order and words of product.md 3.4, then 免@. One submit button per
- * mode, so nothing is preselected and nothing is marked as recommended; 智能 joins in s25c.
+ * mode, so nothing is preselected and nothing is marked as recommended.
  * 免@ left unpicked takes the mode's default (多会话开，单会话关), see {@link parseNoMentionPick}.
+ * 智能 has no 免@: the buttons share one form, so its pick is dropped rather than hidden (s25c).
  */
 function sessionModeItems(verb: string, value: ActionValue): CardElement[] {
-  const multi = conversationCopy.threads;
-  const single = conversationCopy.shared;
+  const modes = [['multi', conversationCopy.threads], ['single', conversationCopy.shared], ['smart', conversationCopy.smart]] as const;
   return [
     md('**会话方式**（点下面的按钮就选了这一项）'),
-    note(`**${multi.title}**：${multi.subtitle}`),
-    note(`**${single.title}**：${single.subtitle}`),
+    ...modes.map(([, copy]) => note(`**${copy.title}**：${copy.subtitle}`)),
     selectMenu({
       name: 'noMention',
-      placeholder: '免 @：不选就按会话方式（@ 我开新会话 开，整群一条会话 关）',
+      placeholder: '免 @：不选就按会话方式（@ 我开新会话 开，整群一条会话 关；智能开话题没有这一项）',
       options: [{ label: '免 @ 开：不 @ 也回', value: 'on' }, { label: '免 @ 关：@ 我才回', value: 'off' }],
     }),
-    actions([
-      submitButton(`${verb}·${multi.title}`, { ...value, kind: 'multi' }, 'default', 'submit_multi'),
-      submitButton(`${verb}·${single.title}`, { ...value, kind: 'single' }, 'default', 'submit_single'),
-    ]),
+    actions(modes.map(([kind, copy]) => submitButton(`${verb}·${copy.title}`, { ...value, kind }, 'default', `submit_${kind}`))),
   ];
 }
 
@@ -629,8 +628,9 @@ export function buildJoinGroupFormCard(
 
 /** Shown after a project is created/bound — a terminal "留痕" record with a
  * jump-to-group button so the admin can hop straight into the group and start
- * working. (Re-open the console any time by messaging the bot.) */
-export function buildNewProjectDoneCard(p: Project): CardObject {
+ * working. (Re-open the console any time by messaging the bot.) `droppedNoMention`:
+ * the form picked 免@ and the group went 智能, which has none (s25c). */
+export function buildNewProjectDoneCard(p: Project, droppedNoMention = false): CardObject {
   const joined = (p.origin ?? 'created') === 'joined';
   const verb = joined ? '已绑定群' : '已创建项目';
   const title = joined ? '🔗 绑定已有群' : '➕ 新建项目';
@@ -639,6 +639,7 @@ export function buildNewProjectDoneCard(p: Project): CardObject {
   const elements: CardElement[] = [
     md(`✅ ${verb} **${p.name}**${p.blank ? ' _(空白项目)_' : ''}`),
     note(`📂 \`${p.cwd}\`   ·   ${kindLabel(p)}   ·   🧠 ${backendName}`),
+    ...(droppedNoMention ? [note('智能开话题没有免 @，刚才选的没用上。')] : []),
     md(p.chatId ? '👉 去群里 **@我** 干活。' : '发我任意消息可再次打开管理台。'),
   ];
   if (p.chatId)
@@ -691,8 +692,9 @@ export function buildProjectListCard(
   for (const p of projects.slice(start, start + PROJECT_LIST_PAGE_SIZE)) {
     const topicCount = (p.chatId ? sessionsByChat.get(p.chatId) : undefined)?.length ?? 0;
     const dir = `📂 \`${p.cwd}\`${p.branch && p.branch !== '—' ? `   🌿 ${p.branch}` : ''}`;
+    // 智能 has no 免@ (s25c).
     const meta = p.chatId
-      ? `${kindLabel(p)}${(p.origin ?? 'created') === 'joined' ? ' · 🔗已加入' : ''}   ·   免@：${noMentionOf(p) ? '开' : '关'}`
+      ? `${kindLabel(p)}${(p.origin ?? 'created') === 'joined' ? ' · 🔗已加入' : ''}${sessionModeOf(p) === 'smart' ? '' : `   ·   免@：${noMentionOf(p) ? '开' : '关'}`}`
       : '⚠️ 未绑定群';
     elements.push(md(`**${p.name}**${p.blank ? ' _(空白)_' : ''}`));
     elements.push(note(`${dir}\n${meta}`));
@@ -1429,7 +1431,7 @@ export const AUTO_COMPACT_RETIRED = '🗜️ 自动压缩现在一直开着，�
  * {@link buildSettingsCard}. Admin-gated by the handler. `notice` = 卡顶提示行。
  */
 export function buildGroupSettingsCard(
-  project: Pick<Project, 'name' | 'kind' | 'noMention' | 'origin' | 'defaultModel' | 'defaultEffort'>,
+  project: Pick<Project, 'name' | 'kind' | 'smart' | 'noMention' | 'origin' | 'defaultModel' | 'defaultEffort'>,
   notice?: string,
 ): CardObject {
   const kind = ruleKind(project);
@@ -1443,12 +1445,14 @@ export function buildGroupSettingsCard(
       ...(notice ? [md(notice)] : []),
       md(`**群设置** · ${project.name}`),
       note(`会话方式：${kindLabel(project)}`),
-      ...optionRow('✋ 免@（不用 @ 也回复）', GS.setNoMention, noMention ? 'on' : 'off', [
-        { label: '开', value: 'on' },
-        { label: '关', value: 'off' },
+      ...(sessionModeOf(project) === 'smart' ? [note(SMART_NO_MENTION_NOTE)] : [
+        ...optionRow('✋ 免@（不用 @ 也回复）', GS.setNoMention, noMention ? 'on' : 'off', [
+          { label: '开', value: 'on' },
+          { label: '关', value: 'off' },
+        ]),
+        note(scopeNote),
+        note('⚠️ 免@ 需应用已开通「接收群内所有消息」(im:message.group_msg)权限，否则收不到非 @ 消息。'),
       ]),
-      note(scopeNote),
-      note('⚠️ 免@ 需应用已开通「接收群内所有消息」(im:message.group_msg)权限，否则收不到非 @ 消息。'),
       hr(),
       md('🤖 默认模型 / 推理强度'),
       actions([button('设置默认模型', { a: GS.modelDefault }, 'primary')]),
@@ -1768,6 +1772,7 @@ export function buildProjectSettingsCard(
     Project,
     | 'name'
     | 'kind'
+    | 'smart'
     | 'noMention'
     | 'origin'
     | 'cwd'
@@ -1796,16 +1801,18 @@ export function buildProjectSettingsCard(
         `当前 ${backendName ?? project.backend ?? DEFAULT_BACKEND_ID} 🔒　·　后端在**新建项目时选定**，运行时固定、不支持切换。如需更改，请删除该项目后用新后端重新创建。`,
       ),
       hr(),
-      md('✋ 免@（不用 @ 也回复）'),
-      actions([
-        button('开', { a: DM.setNoMentionDm, v: 'on', n: project.name }, noMention ? 'primary' : 'default'),
-        button('关', { a: DM.setNoMentionDm, v: 'off', n: project.name }, noMention ? 'default' : 'primary'),
+      ...(sessionModeOf(project) === 'smart' ? [note(SMART_NO_MENTION_NOTE)] : [
+        md('✋ 免@（不用 @ 也回复）'),
+        actions([
+          button('开', { a: DM.setNoMentionDm, v: 'on', n: project.name }, noMention ? 'primary' : 'default'),
+          button('关', { a: DM.setNoMentionDm, v: 'off', n: project.name }, noMention ? 'default' : 'primary'),
+        ]),
+        note(
+          kind === 'single'
+            ? '开启后：本群所有消息(不用 @)都交给我处理。'
+            : '开启后：话题内消息(不用 @)都处理；**开新话题仍需 @我**。',
+        ),
       ]),
-      note(
-        kind === 'single'
-          ? '开启后：本群所有消息(不用 @)都交给我处理。'
-          : '开启后：话题内消息(不用 @)都处理；**开新话题仍需 @我**。',
-      ),
       hr(),
       md('🤖 默认模型 / 推理强度'),
       actions([button('设置默认模型', { a: DM.modelDefault, n: project.name }, 'primary')]),
