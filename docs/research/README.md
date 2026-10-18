@@ -152,6 +152,24 @@ process-ci、draft 和 final 里的流程说法，凡和 `AGENTS.md` 不一致�
 |---|---|---|
 | [uuid-contract](2026-10-18-feishu-creation/uuid-contract.md) | 去重键、10 小时窗口、50 字符上限、未知结果的恢复边界和 SDK 请求行为 | 不承诺重复请求返回原群号；真实飞书验收仍待后续 |
 
+## 2026-10-18 Rakazo 第二轮
+
+`2026-10-18-rakazo-2/`。Rakazo 换到 `b884f43`，对照 Vonvon `main`（本文行号按 `d187d00` 重查）。七个子代理按专题读源码写深挖，一个代理综合出初稿，Fable 对初稿逐条做对抗审查；report 按审查后的结论写。只读源码，没有运行 Rakazo 的代码或测试，这一轮不搬文件，product.md 没改。深挖里说的"代码地图"和初稿没进仓库。
+
+| 报告 | 内容 | 说明 |
+|---|---|---|
+| [report](2026-10-18-rakazo-2/report.md) | 纠正上一轮、现在改 main 的三条（s14e、s15f、s23d）、按切片的开工要点、待 owner 定的 4 条、复用和许可 | 以它为准；开工要点已写进 `docs/v1-plan.md` 各片说明 |
+| [d1-team-chat](2026-10-18-rakazo-2/d1-team-chat.md) | Slack team-chat 和个人线路的接入、投递和失败处理 | 原始深挖，没有逐条复核 |
+| [d2-judge-multibot](2026-10-18-rakazo-2/d2-judge-multibot.md) | 何时回复的判断器、多 bot 和跳数 | 同上 |
+| [d3-tools-settings](2026-10-18-rakazo-2/d3-tools-settings.md) | 工具目录和自我设置（每回合给哪些工具、改指令、密钥） | 同上 |
+| [d4-prompt-memory](2026-10-18-rakazo-2/d4-prompt-memory.md) | 指令拼装、防注入和记忆 | 同上 |
+| [d5-conversations](2026-10-18-rakazo-2/d5-conversations.md) | 对话和线程管理（恢复、压缩、查历史） | 同上；"LICENSE 没有版权行"有误，见 report |
+| [d6-models-sandbox](2026-10-18-rakazo-2/d6-models-sandbox.md) | 模型和沙箱的选择（模型目录、推理档位、读写范围） | 同上 |
+| [d7-onboarding-testing](2026-10-18-rakazo-2/d7-onboarding-testing.md) | 首次体验、设置界面和测试验收方法 | 同上；许可一句同 d5 |
+| [critique](2026-10-18-rakazo-2/critique.md) | 对初稿的对抗审查：逐条核对、删减、owner 问题从 8 条减到 4 条 | 审查的是初稿，不是 report；行号按当时的 `main` |
+
+上一轮"没有外部聊天"的说法由本轮更正，上一轮的 report 和 product-ux 已加更正行。
+
 ## 补充
 
 codex-desktop 报告写完以后，对照 openai/codex 源码又核实了一次。`codex mcp list` 里的 `cua_repl` 来自内置插件 `unified-computer-use@openai-bundled`，就是原生 Computer Use；显示为 disabled 的 `computer-use` 是旧通道。经 Paseo 调用时，Mac 锁屏会失败（getpaseo/paseo#3346），`full-access` 模式会自动批准打开应用。process 报告里的相关说法和这里一致。
