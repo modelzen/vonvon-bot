@@ -1956,14 +1956,15 @@ export function createOrchestrator(
     const ingested = msg.rawContentType === 'audio' ? await ingestVoice(channel, msg, voice) : { text };
     let body = ingested.text;
     if (messageHasFiles(msg)) {
-      const files = await collectInboundFiles(channel, msg);
-      body = weaveFileManifest(text, files);
+      const { files, failed } = await collectInboundFiles(channel, msg);
+      // With text, the manifest ends with a line per file that did not download, and why (s14e).
+      body = weaveFileManifest(text, files, failed);
       // A file-ONLY message whose download failed (oversize / Feishu reject /
       // transient) strips to '' — don't hand codex a blank turn (wasted run +
       // empty card). Tell it the attachment couldn't be read so it can say so.
       if (!body.trim()) {
         body =
-          '用户发来一个附件，但桥没能下载它（可能超过 50MB 上限或被飞书拒绝）。请告诉用户附件没读到，可以重发，或改为粘贴文本 / 发图片。';
+          '用户发来一个附件，但没能下载下来（可能超过 50MB 上限或被飞书拒绝）。请告诉用户附件没读到，可以重发，或改为粘贴文本 / 发图片。';
       }
     }
     // In a topic, a message posted straight into it has parent_id = root_id (the

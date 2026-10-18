@@ -28,8 +28,9 @@ const BRIDGE_RECORD_BLOCK_PREFIX =
  * when [重试] is tapped; the reason is the only part that varies. */
 const BRIDGE_RETRY_PREFIX =
   /^（重试）上一轮因为[^\r\n。]+。下面是上一轮收到的消息，请重新处理。上一轮可能已经做了一部分，先看看做到哪了再继续，别重复做。[ \t]*(?:\r?\n[ \t]*){0,2}/u;
+/** The file manifest (media.weaveFileManifest), with its 没下载下来 lines and the header without a saved file. */
 const BRIDGE_FILE_MANIFEST_SUFFIX =
-  /(?:^|(?:\r?\n){2})\[用户上传了 \d+ 个附件，已保存到本地，可用 shell \/ 读取工具按下面的绝对路径直接打开：\r?\n(?:- [^\r\n]+ → [^\r\n]+\r?\n)+\][ \t]*$/u;
+  /(?:^|(?:\r?\n){2})\[用户上传了 \d+ 个附件(?:，(?:\d+ 个)?已保存到本地，可用 shell \/ 读取工具按下面的绝对路径直接打开)?：\r?\n(?:(?:- [^\r\n]+ → [^\r\n]+|没下载下来：[^\r\n]+)\r?\n)+\][ \t]*$/u;
 
 /** Strip the bridge-generated sender prefix without touching body content. */
 export function stripBridgeSenderPrefix(text: string): string {

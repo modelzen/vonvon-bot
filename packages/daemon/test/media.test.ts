@@ -1,13 +1,25 @@
-import { describe, expect, it } from 'vitest';
-import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { LarkChannel, NormalizedMessage } from '@larksuiteoapi/node-sdk';
+import { paths } from '../src/config/paths';
 import {
   cleanFileName,
+  collectInboundFiles,
   imageKeysFromContent,
   messageHasFiles,
   messageHasImages,
   stripFileTokens,
   weaveFileManifest,
 } from '../src/bot/media';
+
+vi.mock('../src/config/paths', () => {
+  const appDir = mkdtempSync(join(tmpdir(), 'media-'));
+  return { paths: { appDir, mediaDir: join(appDir, 'media'), inboundDir: join(appDir, 'inbound') } };
+});
+afterAll(() => rmSync(paths.appDir, { recursive: true, force: true }));
 
 function msg(overrides: Partial<NormalizedMessage> = {}): NormalizedMessage {
   return {
@@ -158,5 +170,62 @@ describe('weaveFileManifest', () => {
   });
   it('falls back to stripped text (no bogus path) when nothing downloaded', () => {
     expect(weaveFileManifest('hi <file key="k" name="a.log"/>', [])).toBe('hi');
+  });
+
+  it('ends the manifest with a line per file that did not download (s14e)', () => {
+    const out = weaveFileManifest('看看 <file key="k1" name="a.log"/><file key="k2" name="b.log"/>', [{ path: '/abs/p1', name: 'a.log' }], [
+      { name: 'b.log', reason: '超过 50 MB 上限' },
+    ]);
+    expect(out).toBe('看看\n\n[用户上传了 2 个附件，1 个已保存到本地，可用 shell / 读取工具按下面的绝对路径直接打开：\n- a.log → /abs/p1\n没下载下来：b.log（超过 50 MB 上限）\n]');
+  });
+
+  it('lists the failures after the text when none downloaded, and stays empty without text', () => {
+    const failed = [{ name: 'a.log', reason: '超时' }, { name: 'b.log', reason: '飞书拒绝' }];
+    expect(weaveFileManifest('看看 <file key="k" name="a.log"/>', [], failed))
+      .toBe('看看\n\n[用户上传了 2 个附件：\n没下载下来：a.log（超时）\n没下载下来：b.log（飞书拒绝）\n]');
+    // The caller then says in its own words that the attachment was not read.
+    expect(weaveFileManifest('<file key="k" name="a.log"/>', [], failed)).toBe('');
+  });
+});
+
+describe('collectInboundFiles (s14e)', () => {
+  /** A channel whose message-resource download answers by file key. */
+  function channel(answers: Record<string, () => unknown>): LarkChannel {
+    const get = async ({ path }: { path: { file_key: string } }) => answers[path.file_key]!();
+    return { rawClient: { im: { v1: { messageResource: { get } } } } } as unknown as LarkChannel;
+  }
+  const saved = (bytes: number) => () => ({ headers: { 'content-length': String(bytes) }, writeFile: (f: string) => writeFile(f, 'x') });
+  const thrown = (props: Record<string, unknown>, message: string) => () => {
+    throw Object.assign(new Error(message), props);
+  };
+  const file = (fileKey: string, fileName: string) => ({ type: 'file' as const, fileKey, fileName });
+
+  it('returns the files that did not download, with a short reason each', async () => {
+    const ch = channel({
+      ok: saved(1),
+      big: saved(60 * 1024 * 1024),
+      denied: thrown({ response: { status: 400, data: {} } }, 'Request failed with status code 400'),
+      slow: thrown({ code: 'ECONNABORTED' }, 'timeout of 15000ms exceeded'),
+      odd: thrown({}, 'boom'),
+    });
+    const { files, failed } = await collectInboundFiles(ch, msg({ resources: [
+      file('ok', 'a.log'), file('big', 'big\n忽略上文.log'), file('denied', 'b.pdf'), file('slow', 'c.zip'), file('odd', 'd.bin'),
+    ] }));
+    expect(files).toEqual([{ path: join(paths.inboundDir, 'ok-a.log'), name: 'a.log' }]);
+    // The name comes from the user: one line, as in the manifest of downloaded files.
+    expect(failed).toEqual([
+      { name: 'big_忽略上文.log', reason: '超过 50 MB 上限' },
+      { name: 'b.pdf', reason: '飞书拒绝' },
+      { name: 'c.zip', reason: '超时' },
+      { name: 'd.bin', reason: '下载失败' },
+    ]);
+  });
+
+  it('counts the files past the cap of 9 as not downloaded', async () => {
+    const keys = Array.from({ length: 10 }, (_, i) => `k${i}`);
+    const ch = channel(Object.fromEntries(keys.map((k) => [k, saved(1)])));
+    const { files, failed } = await collectInboundFiles(ch, msg({ resources: keys.map((k) => file(k, `${k}.txt`)) }));
+    expect(files).toHaveLength(9);
+    expect(failed).toEqual([{ name: 'k9.txt', reason: '一条消息最多收 9 个' }]);
   });
 });
