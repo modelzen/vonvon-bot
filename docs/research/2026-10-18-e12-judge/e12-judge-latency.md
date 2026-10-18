@@ -18,6 +18,8 @@
 
 ## 怎么测的
 
+下文的 `D/` 指 `packages/daemon/src/`，和 v1-plan 一样。
+
 - **机器**：JP-VPS，2 核，3.9 GB 内存加 4 GB swap。Codex 是 codex-cli 0.163.0，用 ChatGPT Pro 登录；Claude 是 Agent SDK 0.3.296 自带的 CLI 2.1.296，用 claude.ai 登录（Max）。两边都用真实 HOME 里的登录。
 - **路径**：探针直接调仓库里的 `createJudge` 加 `CodexAppServerBackend.judge` 或 `ClaudeAgentBackend.judge`，用内置默认的 SMART.md，模型按默认解析：Codex 是 gpt-6-luna、推理强度 low；Claude 是别名 `haiku`（实际 `claude-haiku-5-5`），传 `thinking: {type:'disabled'}`。Claude 一半只换了 `sdkLoader`，包一层真实 SDK，用来记下每条 SDK 消息、CLI 的 pid 和内存，按阶段给 CLI 加环境变量或选项。
 - **隔离**：仓库用 `git archive` 导出到仓库外再装依赖，原仓库没动。`VONVON_HOME` 和判断 cwd 放在 `mktemp -d` 建的临时目录下，只写在那一条命令前面。跑 Claude 前去掉了父会话的 `CLAUDE*`、`CLAUDECODE` 环境变量。`~/.codex/config.toml` 和 `~/.claude/settings.json` 跑前跑后的 sha256 一致。没发飞书消息，没碰验收 bot 的数据和 owner 的 `~/.vonvon-bot`。
@@ -178,7 +180,7 @@ s23c 收尾实测时看到 `modelUsage` 比 `usage` 多一次 haiku 调用，原
 
 - `title` 选项：input 和 output 都省约 40%，用时不变（两路本来就并行）。关掉以后 `usage` 和 `modelUsage` 9/9 相等，判断层按 `usage` 记就不再少算。群聊内容也不再多送进一次请求。
 - NONESSENTIAL 环境变量：除了不起标题，还跳过启动时的几项网络拉取和退出时的遥测上报，每条快约 1.3 秒，也不再在 `/tmp/claude-<uid>/` 下每条判断建一个空目录（第 6 节）。`haiku` 照样解析成 `claude-haiku-5-5`，`rate_limit_event` 照样有。用网关（`ANTHROPIC_BASE_URL`）的情况没测。
-- 任务里提到的 `DISABLE_NON_ESSENTIAL_MODEL_CALLS`，2.1.296 里没有这个名字。
+- 容易猜到的 `DISABLE_NON_ESSENTIAL_MODEL_CALLS`，2.1.296 里没有这个名字。
 
 ## 4. 判得对不对
 
@@ -266,4 +268,4 @@ s23c 收尾实测时看到 `modelUsage` 比 `usage` 多一次 haiku 调用，原
 
 ## 原始数据
 
-原始数据、探针和汇总脚本不进仓库，留在 JP-VPS 的 `<home>/vonvon/claude-work/e12/`：`codex-raw.jsonl`（186 行，其中判断 154 条）、`codex-summary.md`、`claude-raw.jsonl`（190 行，其中判断 142 条）、`claude-summary.md`，以及各自的探针和汇总脚本、批次日志、配置文件跑前跑后的 sha256、调试日志摘录。原始数据里的账号邮箱已打码。
+原始数据、探针和汇总脚本不进仓库，留在 JP-VPS 的 `<home>/vonvon/claude-work/e12/`：`codex-raw.jsonl`（186 行，其中判断 154 条）、`codex-summary.md`、`claude-raw.jsonl`（190 行，其中判断 142 条，5 条是新 HOME 没登录的，统计用其余 137 条）、`claude-summary.md`，以及各自的探针和汇总脚本、批次日志、配置文件跑前跑后的 sha256、调试日志摘录。原始数据里的账号邮箱已打码。
