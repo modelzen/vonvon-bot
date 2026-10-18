@@ -377,7 +377,9 @@ export interface JudgeCallOutput {
   text: string;
   /** Claude's `structured_output` */
   structured?: unknown;
-  usage?: { input?: number; cached?: number; output?: number };
+  /** the whole call: input with cache reads and writes, `cached` the reads; `reasoning` (Codex reasoning,
+   * Claude thinking) is already in `output` */
+  usage?: { input?: number; cached?: number; output?: number; reasoning?: number };
   /** this call started a new process (Codex) */
   cold?: boolean;
 }
