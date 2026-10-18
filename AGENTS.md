@@ -32,7 +32,7 @@
 
 合入产品 PR 的条件：两个 CI 任务在准确 head 上成功，独立审查结论已贴进 PR，评审线程都已解决，PR 描述各项齐全。
 
-纯文档 PR 不打 `frozen`。独立审查结论贴进 PR、`linux` 在准确 head 上通过后，Claude 合入。dependabot PR 改依赖，按产品 PR 的条件审查、冻结和合入，或者直接关闭。
+纯文档 PR 指改动只有根目录的 `README.md`、`AGENTS.md`、`CLAUDE.md`，以及 `docs/` 和 `.claude/skills/` 下的 Markdown，CI 照 `.github/scripts/ci-scope.mjs` 这样判断，只跑轻量检查。纯文档 PR 不打 `frozen`。独立审查结论贴进 PR、`linux` 在准确 head 上通过后，Claude 合入。dependabot PR 改依赖，按产品 PR 的条件审查、冻结和合入，或者直接关闭。
 
 ## 硬限制
 
