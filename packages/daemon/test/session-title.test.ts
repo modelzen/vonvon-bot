@@ -11,6 +11,7 @@ import {
   cleanSessionTitleSourcePreservingLines,
   isShortSessionTitleSource,
   prepareSessionTitle,
+  INITIATIVE_NOTE,
   stripBridgeMessageEnvelope,
   stripBridgeSenderPrefix,
   truncateFirstSentenceTitle,
@@ -61,6 +62,12 @@ describe('session title pure pipeline', () => {
     const prompt = buildSessionTitlePrompt(clean);
     expect(prompt).not.toMatch(/open_id|ou_secret|用户引用|飞书|王五|小P|private\/tmp|trace\.log|生产环境又超时/);
     expect(prompt).toContain('请修复支付回调超时');
+  });
+
+  it('removes the note of a turn the smart mode joined on its own, also flattened to one line (s25)', () => {
+    const woven = weaveSender('这个报错是不是缓存的问题', { senderId: 'ou_x', senderName: '张三' });
+    expect(stripBridgeMessageEnvelope(`${INITIATIVE_NOTE}\n\n${woven}`)).toBe('这个报错是不是缓存的问题');
+    expect(stripBridgeMessageEnvelope(`${INITIATIVE_NOTE} ${woven.replace(/\n/g, ' ')}`)).toBe('这个报错是不是缓存的问题');
   });
 
   it('removes a file manifest with files that did not download (s14e)', () => {

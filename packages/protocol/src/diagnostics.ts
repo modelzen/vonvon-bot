@@ -1,11 +1,11 @@
 import { z } from "zod";
 
 /** Why a message to this bot got no answer (product.md 3.1 item 8). Gates first, then failed turns, then queued
- * messages a restart dropped (s18c). s25 adds the smart mode's reasons here and to {@link NOT_REPLIED_TEXT}. */
+ * messages a restart dropped (s18c), then the smart mode's judgements (s25). */
 export const notRepliedReasonSchema = z.enum([
   "group-disabled", "group-updating", "chat-not-allowed", "user-not-allowed", "unbound", "lookup-failed",
   "signed-out", "codex-too-old", "tool-missing", "tier-unavailable", "missing-scope", "quota", "network", "idle-timeout", "agent-exited", "failed",
-  "restarted",
+  "restarted", "judge-skip", "judge-failed", "judge-budget", "judge-superseded",
 ]);
 export type NotRepliedReason = z.infer<typeof notRepliedReasonSchema>;
 /** Where a running bot was refused a scope: the back-fill, real names, a group's info, or a reply. */
@@ -13,7 +13,9 @@ export const scopeDenialPlaceSchema = z.enum(["history", "names", "chat-info", "
 export type ScopeDenialPlace = z.infer<typeof scopeDenialPlaceSchema>;
 
 /** One not-replied record. No message text, topic title, quote or file name (3.5): the group id, the
- * sender's name only if already cached, the error's first line, and the message id's last 6 characters. */
+ * sender's name only if already cached, the error's first line, and the message id's last 6 characters.
+ * A judgement's `detail` is the judge model's one-line reason (3.4 keeps it on this page only), which may
+ * repeat words of the message; the page lives in the supervisor's memory and is never logged or saved. */
 export const notRepliedSchema = z.object({
   at: z.number().finite().nonnegative(), count: z.number().int().positive(),
   groupId: z.string().regex(/^oc_[A-Za-z0-9_-]{1,200}$/), place: z.enum(["main", "topic"]),
@@ -66,6 +68,16 @@ export const NOT_REPLIED_TEXT: Record<NotRepliedReason, Text> = {
     reason: () => "重启或停止时这条还在排队，没处理",
     next: r => r.detail ? `在原处回一句请重发没成功（${r.detail}），请告诉发消息的人重发。` : "已在原处回了一句请重发。",
   },
+  "judge-skip": {
+    reason: r => `判断后没接话${r.detail ? `：${r.detail}` : ""}`,
+    next: () => "智能模式下这是正常的。要它一定回就 @ 它；总是漏回就改智能提示词。",
+  },
+  "judge-failed": {
+    reason: r => `判断没出结果${r.detail ? `（${r.detail}）` : ""}，没 @ 它的这条没回`,
+    next: () => "@ 它一定会回；反复出现时看下面的日志。",
+  },
+  "judge-budget": { reason: () => "这个群这一小时判断了 60 次，到了上限，没 @ 它的这条没判断", next: () => "一小时内会恢复；@ 它仍然会回。" },
+  "judge-superseded": { reason: () => "判断说要回，但它已随后来的消息进了会话，没单独回", next: () => "不用处理。" },
 };
 
 /** The optional scopes of 3.11 that change what the bot does in a chat, and what is lost without each. */

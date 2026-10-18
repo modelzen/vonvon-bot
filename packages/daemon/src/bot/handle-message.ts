@@ -29,7 +29,9 @@ import { CodexFullOnlyError, fullOnlyReply } from '../agent/codex-appserver/full
 import { errorKindFromText, type AgentErrorKind } from '../agent/error-kind';
 import { scopeDenial } from '../utils/feishu-error';
 import type { NotReplied, NotRepliedReason } from '@vonvon/protocol';
-import { deniedScopeName, errorDetail, reportNotReplied, reportScopeDenied } from './diagnostics';
+import type { JudgeDecision, JudgeResult, JudgeVariant } from '../judge/types';
+import { JUDGE_INPUT_LIMITS, oneLine } from '../judge/prompt';
+import { deniedScopeName, errorDetail, fitDetail, reportNotReplied, reportScopeDenied } from './diagnostics';
 import { createDroppedReplies, originOf, type DroppedOrigin } from './restart-dropped';
 import { catalogById, projectCreatableBackends, visibleCatalog } from '../agent/catalog';
 import {
@@ -204,6 +206,7 @@ import {
   listProjects,
   noMentionOf,
   ruleKind,
+  sessionModeOf,
   mutateProject,
   removeProject,
   updateProject,
@@ -244,10 +247,13 @@ import { topicTitle, type TopicPerson, type TopicRegistry, type TopicSighting, t
 import { createTopicContext, localBots, personOf, topicQuotes, topicRows, type ChatInfo } from './topic-context';
 import { audienceOf, fromBot, quotedId } from './baselines';
 import {
+  INITIATIVE_NOTE,
   sessionTitleSourceFromMessage,
   stripBridgeMessageEnvelope,
   type SessionTitleSource,
 } from './session-title';
+import { lineOfMessage, quotedLine, RecentLines } from './recent-lines';
+import { JudgeBudget, SmartLanes, type LaneEntry } from './smart-intake';
 import { handleDmConsole } from './dm-console';
 import { createSyncCopyGate } from './sync-copy';
 import { fetchInteractiveCardText, isDegradedCardContent } from './card-content';
@@ -651,6 +657,9 @@ interface ActiveState {
   newAt?: number;
   /** The run's trigger while it waits for a global slot (acquireRunSlot), for a shutdown to keep (s18c). */
   waiting?: DroppedOrigin;
+  /** A main-area run's trigger time: until {@link woven} is known, its record block will carry the unread
+   * messages before it (a smart verdict to open a topic checks this, s25). */
+  triggerAt?: number;
 }
 
 /** Inputs a synthetic turn (🔁 重试) carries that a real message would not. */
@@ -665,7 +674,27 @@ interface TurnExtra {
   replayText?: string;
   /** Asked right before the turn is reserved (see startReservedRun). */
   retry?: RetryGate;
+  /** The smart mode joined in on its own (s25): the agent gets {@link INITIATIVE_NOTE} before the message. */
+  initiative?: true;
 }
+
+/** A smart group's message on its lane (s25). */
+interface SmartItem extends LaneEntry {
+  msg: NormalizedMessage;
+  variant: JudgeVariant;
+  /** The reaction a named message got while it waits on its judgement. */
+  ack?: Promise<string | undefined>;
+}
+
+/** What a smart group's lane decided for a batch (s25). */
+type SmartVerdict =
+  | { kind: 'judged'; result: JudgeResult }
+  /** Answered without a judgement: a named message over the budget. */
+  | { kind: 'direct' }
+  /** Not judged: the group's hourly budget is spent. */
+  | { kind: 'budget' }
+  /** Not answered, nothing noted: a 同时发送到群 copy, or a group no longer bound. */
+  | { kind: 'drop' };
 
 /** A 🔁 重试 turn's say in its own reservation. */
 interface RetryGate {
@@ -972,8 +1001,11 @@ export function createOrchestrator(
    * using it directly — identical to the pre-registry behavior. */
   const backend = backendFor();
   const sessionTitles = new SessionTitleCoordinator({ backendFor: (id) => backendFor(id) });
-  /** Smart-mode judgements (s23); s25 calls it for groups in 智能. */
+  /** Smart-mode judgements (s23), for groups in 智能 (s25). */
   const judge = createJudge({ backendFor: (id) => backendFor(id) });
+  /** What smart groups' judgements read, and how many each group may make in an hour (s25). */
+  const recent = new RecentLines();
+  const budget = new JudgeBudget();
 
   /** Snapshot the selected backend's title policy when its native session is
    * created. Later DM-setting changes affect future sessions only. */
@@ -1463,7 +1495,7 @@ export function createOrchestrator(
     const backend = backendTool(extra.backendId);
     reportNotReplied({
       at: msg.createTime || Date.now(), groupId: msg.chatId, place: extra.place ?? (msg.threadId ? 'topic' : 'main'), reason,
-      ...(sender ? { sender } : {}), ...(backend ? { backend } : {}), ...(extra.detail ? { detail: extra.detail } : {}), ref: msg.messageId.slice(-6),
+      ...(sender ? { sender } : {}), ...(backend ? { backend } : {}), ...(extra.detail ? { detail: fitDetail(extra.detail) } : {}), ref: msg.messageId.slice(-6),
     });
   }
   /** A turn that started but did not answer; a refused scope also goes to the page's 缺的权限. */
@@ -1471,6 +1503,178 @@ export function createOrchestrator(
     const { reason, detail, scope } = failureReason(failure);
     if (scope) reportScopeDenied(scope, 'send');
     noteNotReplied(msg, reason, { place, backendId, detail });
+  }
+
+  // ── the smart mode's intake (s25) ─────────────────────────────────
+  /** Judgements by place, off the SDK's per-chat queue (smart-intake.ts). */
+  const smartLanes = new SmartLanes<SmartItem, SmartVerdict>({
+    judge: judgeSmart,
+    // Into the place's session: after the earlier named messages there (design H1).
+    ordered: (v) => v.kind === 'direct' || (v.kind === 'judged' && (v.result.decision === 'main' || v.result.decision === 'reply')),
+    land: landSmart,
+    fail: (error) => log.fail('intake', error, { phase: 'smart-lane' }),
+    track: (task) => { void trackTask(task); },
+  });
+
+  /** Hands a smart group's message to its lane: `mentioned` (named, in the main area), `main` or `topic` (unnamed). */
+  function submitSmart(msg: NormalizedMessage, variant: JudgeVariant): void {
+    const named = variant === 'mentioned';
+    // Its intake crossed the shutdown (a disk read): a named one is answered once the bot is back, as launchRun does (s18c).
+    if (shuttingDown) {
+      if (named) droppedReplies?.appendSync(originOf(msg, !msg.threadId));
+      return;
+    }
+    const item: SmartItem = { id: msg.messageId, place: msg.threadId ?? msg.chatId, named, msg, variant };
+    // Seen at once while its place is judged (up to 12 s): it gets an answer whatever the judgement says. The
+    // run's own ⏳ and 🫳 follow once it lands, so this one is taken off then.
+    if (named) item.ack = trackTask(addReaction(msg.messageId, 'THINKING'));
+    // Counted here, as a named message is judged at once; over the budget it goes to the main area unjudged (3.4).
+    const over = named && !budget.take(msg.chatId, Date.now());
+    if (over) log.info('intake', 'judge-budget', { ref: msg.messageId.slice(-6), named: true });
+    smartLanes.submit(item, over ? { value: { kind: 'direct' } } : undefined);
+  }
+
+  /** Judges the newest message of a batch (the others came while the one before was judged: its context). Never
+   * rejects: a lookup that throws answers a named message in the main area, as a failed judgement would. */
+  async function judgeSmart(batch: SmartItem[], signal: AbortSignal): Promise<SmartVerdict> {
+    const item = batch[batch.length - 1]!;
+    try {
+      return await judgeItem(item, signal);
+    } catch (error) {
+      log.fail('intake', error, { phase: 'smart-judge', ref: item.msg.messageId.slice(-6) });
+      if (!item.named) for (const b of batch) noteNotReplied(b.msg, 'judge-failed', { detail: errorDetail(error) });
+      return item.named ? { kind: 'direct' } : { kind: 'drop' };
+    }
+  }
+
+  async function judgeItem(item: SmartItem, signal: AbortSignal): Promise<SmartVerdict> {
+    const { msg, variant } = item;
+    // A 同时发送到群 copy is looked up here, not on the chat's queue (s14d).
+    if (!msg.threadId && !msg.mentionedBot && (await syncCopy.skip(msg, true))) return { kind: 'drop' };
+    if (!item.named && !budget.take(msg.chatId, Date.now())) return { kind: 'budget' };
+    const project = await getProjectByChatId(msg.chatId);
+    if (!project) return { kind: 'drop' };
+    // Other bots' messages reach this one only through a pull (3.11): read them where there may be some.
+    const others = await topicCtx.chatInfo(msg.chatId).then((r) => !r.ok || r.bots === undefined || r.bots > 1);
+    await recent.fill(item.place, msg.createTime, (o) => {
+      const opts = { ...o, before: msg.createTime, keepSelf: true, names };
+      return withDeadline(msg.threadId ? fetchThreadContext(channel, msg.threadId, opts) : fetchChatContext(channel, msg.chatId, opts), LOOKUP_DEADLINE_MS);
+    }, others);
+    const title = msg.threadId && topics ? (await topics.list(msg.chatId)).find((t) => t.topicId === msg.threadId)?.title : undefined;
+    const name = names.peek(msg.senderId) ?? msg.senderName ?? '某人';
+    const result = await judge.judge({
+      variant, appId: cfg.accounts.app.id, botName: channel.botIdentity?.name ?? '',
+      group: { chatId: project.chatId, name: project.name, backend: project.backend, judge: project.judge },
+      botJudge: cfg.preferences?.judge, ...(title ? { topicTitle: title } : {}),
+      context: recent.context(item.place, { id: msg.messageId, at: msg.createTime }),
+      message: lineOfMessage(msg, name, quotedLine(recent, msg), JUDGE_INPUT_LIMITS.messageChars),
+      ref: msg.messageId, signal,
+    });
+    return { kind: 'judged', result };
+  }
+
+  /** Whether the main session's turn being prepared carries `msg` in its record block (design M5). */
+  function mainWillWeave(msg: NormalizedMessage): boolean {
+    const state = active.get(msg.chatId);
+    if (!state) return false;
+    if (state.woven) return state.woven.has(msg.messageId);
+    return (state.triggerAt ?? 0) > msg.createTime;
+  }
+
+  async function landSmart(batch: SmartItem[], verdict: SmartVerdict): Promise<void> {
+    const item = batch[batch.length - 1]!;
+    try {
+      await landVerdict(item, batch, verdict);
+    } finally {
+      dropAck(item);
+    }
+  }
+
+  /** Takes a named message's THINKING off, once (a shutdown may come while it lands). */
+  function dropAck(item: SmartItem): void {
+    const ack = item.ack;
+    item.ack = undefined;
+    if (ack) void trackTask(ack.then((id) => { if (id) removeReaction(item.msg.messageId, id); }));
+  }
+
+  /**
+   * A verdict lands: noted on the page when it is not to answer, else handed to the place's session or a new
+   * topic as any message would be, the place's 运行中来了消息 setting included (product.md 3.5). Checked first,
+   * and only this: the message was not recalled, the bot is not stopping, the group is still bound, enabled,
+   * smart and not being changed, and the message did not land already (Rakazo A2).
+   */
+  async function landVerdict(item: SmartItem, batch: SmartItem[], verdict: SmartVerdict): Promise<void> {
+    const { msg, variant } = item;
+    const ref = msg.messageId.slice(-6);
+    if (verdict.kind === 'drop') return;
+    if (verdict.kind === 'budget') {
+      log.info('intake', 'judge-budget', { ref, batch: batch.length });
+      for (const b of batch) noteNotReplied(b.msg, 'judge-budget');
+      return;
+    }
+    let decision: JudgeDecision = msg.threadId ? 'reply' : 'main';
+    if (verdict.kind === 'judged') {
+      const { result } = verdict;
+      if (result.decision === 'skip') {
+        const kind = result.error?.kind;
+        // Recalled meanwhile, or the bot is stopping: nothing to say.
+        if (kind === 'aborted' || kind === 'closed') return;
+        const reason: NotRepliedReason = kind ? 'judge-failed' : 'judge-skip';
+        // The model's reason goes on the page only (3.4).
+        const detail = kind ? result.error?.detail ?? kind : result.reason || undefined;
+        for (const b of batch) noteNotReplied(b.msg, reason, { backendId: result.backend, detail });
+        return;
+      }
+      decision = result.decision;
+    }
+    if (recalledSkip(msg) || shuttingDown) return;
+    const project = await getProjectByChatId(msg.chatId);
+    if (!project || project.enabled === false) {
+      noteNotReplied(msg, project ? 'group-disabled' : 'group-updating');
+      return;
+    }
+    if (projectMutations.has(msg.chatId) || resumePublications.has(msg.chatId)) {
+      noteNotReplied(msg, 'group-updating');
+      return;
+    }
+    const text = msg.content.trim();
+    if (sessionModeOf(project) !== 'smart') {
+      // Switched away while judged: a named message is answered by the new settings, an unnamed one is not.
+      if (!item.named) {
+        noteNotReplied(msg, 'group-updating');
+        return;
+      }
+      if (!msg.threadId && ruleKind(project) === 'multi') {
+        if (!(await refuseFullOnly(msg, project, turnPerm(project)))) startTopicDirectly(msg, text, project);
+        return;
+      }
+      decision = msg.threadId ? 'reply' : 'main';
+    }
+    const place = msg.threadId ?? msg.chatId;
+    const ts = turnSession(place, project);
+    // Not twice: an unnamed message a later turn's record block carried is not answered on its own. A named one is
+    // never dropped so; landings into the session wait for it (SmartLanes), and a re-push was checked on intake.
+    if (decision === 'topic') {
+      if (await reopenedTopic(msg)) return;
+      if (!item.named && (mainWillWeave(msg) || await alreadySeen(msg, msg.chatId))) {
+        noteNotReplied(msg, 'judge-superseded');
+        return;
+      }
+    } else if (!item.named && await alreadySeen(msg, ts.sessionKey)) {
+      noteNotReplied(msg, 'judge-superseded');
+      return;
+    }
+    if (await refuseFullOnly(msg, project, ts)) return;
+    // Joined in on its own: the agent is told so (2.13), never the judge's reason.
+    const initiative = variant === 'main';
+    log.info('intake', 'judge-landed', { ref, decision, variant });
+    // The next judgement here sees what this bot is doing, before its answer comes.
+    const who = oneLine(names.peek(msg.senderId) ?? msg.senderName ?? '某人');
+    recent.addOwn(place, msg.chatId, { id: `act:${msg.messageId}`, at: Date.now(),
+      text: decision === 'topic' ? `（在 ${who} 的这条下开了话题来回）` : `（在回 ${who} 的这条）` });
+    if (decision === 'topic') startTopicDirectly(msg, text, project, false, initiative);
+    else void trackTask(handleTurn(msg, text, ts.sessionKey, !msg.threadId, project, ts, initiative ? { initiative } : undefined)
+      .catch((err) => log.fail('intake', err)));
   }
 
   // ── inbound messages ──────────────────────────────────────────────
@@ -1513,10 +1717,17 @@ export function createOrchestrator(
     // single 整群;非项目群一律不响应非 @ 消息。Another bot's message never is (s22:
     // rule mode's bots do not see each other). Who an unnamed message is for (三条
     // 底线) is looked up below, after the cheap gates; this is what may be for it.
+    // A smart group's every message from a person may be (s25).
+    const smart = project !== undefined && sessionModeOf(project) === 'smart';
     const bot = fromBot(msg);
     const maybe = !bot && (msg.mentionedBot || Boolean(project && (shouldRespondWithoutMention(project, msg)
-      || (noMentionOf(project) && quotedId(msg) !== undefined))));
-    if (await syncCopy.skip(msg, maybe || resumePublications.has(msg.chatId))) return;
+      || ((smart || noMentionOf(project)) && quotedId(msg) !== undefined))));
+    // A smart group's unnamed message is looked up for a copy in its lane, off this chat's queue (s25).
+    if (await syncCopy.skip(msg, (smart ? msg.mentionedBot : maybe) || resumePublications.has(msg.chatId))) return;
+    // Every message of a smart group is a line its judgements may read, said to this bot or not (product.md 3.5).
+    if (smart && isChatAllowed(cfg, msg.chatId)) {
+      recent.add(msg.threadId ?? msg.chatId, lineOfMessage(msg, names.peek(msg.senderId) ?? msg.senderName ?? '某人', quotedLine(recent, msg)));
+    }
     if (resumePublications.has(msg.chatId)) {
       await channel.send(msg.chatId, { markdown: '正在恢复历史会话，请完成后重发此消息。' }, { replyTo: msg.messageId });
       return;
@@ -1526,7 +1737,8 @@ export function createOrchestrator(
       return;
     }
     if (projectMutations.has(msg.chatId)) {
-      if (!bot && (msg.mentionedBot || (project && shouldRespondWithoutMention(project, msg)))) noteNotReplied(msg, 'group-updating');
+      // A smart group's chatter is not noted: it was not said to this bot.
+      if (!bot && (msg.mentionedBot || (project && !smart && shouldRespondWithoutMention(project, msg)))) noteNotReplied(msg, 'group-updating');
       return;
     }
     if (project && msg.threadId && isChatAllowed(cfg, msg.chatId)) noteTopicMessage(msg);
@@ -1539,10 +1751,11 @@ export function createOrchestrator(
     else if (!isUserAllowedInProject(cfg, project, msg.senderId)) refused = 'user-not-allowed';
     if (refused) {
       log.info('intake', 'reject', { reason: 'not_allowed', chatId: msg.chatId.slice(-6) });
-      noteNotReplied(msg, refused);
+      if (!smart || msg.mentionedBot) noteNotReplied(msg, refused);
       return;
     }
-    if (project && !msg.mentionedBot && !(await forThisBot(msg, project))) return;
+    const audience = project && !msg.mentionedBot ? await forThisBot(msg, project) : 'me';
+    if (!audience) return;
 
     // The bot is in a group not bound to any project (e.g. it was just added and
     // the admin hasn't finished binding in DM yet). Don't run codex in the
@@ -1621,6 +1834,12 @@ export function createOrchestrator(
         await postContextCard(msg, ts.sessionKey, false);
         return;
       }
+      // Smart: a judgement decides (s25); the refusal of a tier the backend cannot run waits for it to say reply.
+      if (smart && !goalObjective) {
+        if (await alreadySeen(msg, ts.sessionKey)) return;
+        submitSmart(msg, audience === 'me' ? 'mentioned' : 'main');
+        return;
+      }
       if (await refuseFullOnly(msg, project, ts)) return;
       if (goalObjective) {
         if (!(await goalCapable(project, ts.sessionKey))) {
@@ -1671,6 +1890,12 @@ export function createOrchestrator(
       }
       if (cmd === 'context') {
         await postContextCard(msg, ts.sessionKey, true);
+        return;
+      }
+      // Smart: an unnamed topic message is judged, only reply or not (s25); a named one is answered as before.
+      if (smart && audience === 'nobody' && !goalObjective) {
+        if (await alreadySeen(msg, ts.sessionKey)) return;
+        submitSmart(msg, 'topic');
         return;
       }
       if (await refuseFullOnly(msg, project, ts)) return;
@@ -1762,6 +1987,9 @@ export function createOrchestrator(
     // Pushed again: the first event's notes stand (once said, a second lookup would add them back).
     if (recalled.has(id)) { say('repeat'); return; }
     noteRecalled(id);
+    // Out of what later judgements read; a judgement made for it stops (its landing checks again).
+    recent.remove(id);
+    smartLanes.abort(id);
     let dropped = 0;
     for (const state of active.values()) {
       dropped += removeWhere(state.queue, (turn) => turn.seen?.id === id);
@@ -1810,10 +2038,13 @@ export function createOrchestrator(
    * 不能让随便一句话就开话题)，but explicit commands (/help /resume /settings
    * /model) and a `/goal` trigger respond without @ since they're unambiguous intent.
    * 即使开了免@，若消息 @了所有人 或 @了具体的(非机器人)用户,说明是定向给别人的,
-   * bot 不插话。(此函数仅在 !mentionedBot 时调用,故 @到 bot 的情况已被排除。) */
+   * bot 不插话。(此函数仅在 !mentionedBot 时调用,故 @到 bot 的情况已被排除。)
+   * 智能群没有免@：除了 @所有人、@ 了别人，每条都可能是对它说的，由判断决定 (s25)。 */
   function shouldRespondWithoutMention(project: Project, msg: NormalizedMessage): boolean {
-    if (!noMentionOf(project)) return false;
+    const smart = sessionModeOf(project) === 'smart';
+    if (!smart && !noMentionOf(project)) return false;
     if (msg.mentionAll || msg.mentions.some((m) => !m.isBot)) return false;
+    if (smart) return true;
     if (ruleKind(project) === 'single') return true;
     const content = msg.content.trim();
     return Boolean(msg.threadId) || parseCommand(content) !== null || parseGoalTrigger(content) !== null;
@@ -1825,15 +2056,18 @@ export function createOrchestrator(
    * except: a quote of this bot's message names it (免@, even in a 多会话 main
    * area); a quote of someone else's, or a topic another bot spoke in last, is
    * someone else's; with other bots in the group (or the count unread) a 多会话
-   * main-area command needs an @. A lookup that fails leaves the message
-   * unanswered and noted.
+   * main-area command needs an @, as does a smart group's (s25). A lookup that
+   * fails leaves the message unanswered and noted.
    * The group's only bot looks nothing up and answers as before s22.
+   * A smart group reads it as 免@ on (s25).
+   * 'me': it names this bot; 'nobody': the mode decides; undefined: not answered.
    */
-  async function forThisBot(msg: NormalizedMessage, project: Project): Promise<boolean> {
+  async function forThisBot(msg: NormalizedMessage, project: Project): Promise<'me' | 'nobody' | undefined> {
     let info: Promise<ChatInfo> | undefined;
     const chat = (): Promise<ChatInfo> => (info ??= topicCtx.chatInfo(msg.chatId));
     const lonely = (): Promise<boolean> => chat().then((r) => r.ok && r.bots === 1);
-    const who = await audienceOf(msg, { noMention: noMentionOf(project) }, {
+    const smart = sessionModeOf(project) === 'smart';
+    const who = await audienceOf(msg, { noMention: smart || noMentionOf(project), smart }, {
       lonely,
       quoted: (id) => fetchMessageMeta(channel, id, names, { event: 'quote-lookup-failed', deadlineMs: LOOKUP_DEADLINE_MS }),
       lastBot: (threadId) => fetchTopicLastBot(channel, threadId, LOOKUP_DEADLINE_MS),
@@ -1842,25 +2076,28 @@ export function createOrchestrator(
     switch (who.to) {
       case 'me':
         if (who.by === 'quote') log.info('intake', 'audience', { to: 'me', by: 'quote', ref });
-        return true;
+        return 'me';
       case 'other':
         log.info('intake', 'audience', { to: 'other', by: who.by, ref });
-        return false;
+        return undefined;
       case 'unknown':
         log.info('intake', 'audience', { to: 'unknown', why: who.why, ref });
         noteNotReplied(msg, 'lookup-failed', { detail: who.why === 'quote' ? '引用的消息' : '话题里谁在说话' });
-        return false;
-      case 'nobody':
-        if (!shouldRespondWithoutMention(project, msg)) return false;
-        // Here only a main-area command or /goal of a 多会话 group: each bot would answer it.
-        if (ruleKind(project) === 'multi' && !msg.threadId && !(await lonely())) {
+        return undefined;
+      case 'nobody': {
+        if (!shouldRespondWithoutMention(project, msg)) return undefined;
+        // A main-area command or /goal of a 多会话 group (nothing else gets here), or of a smart group: each bot would answer it.
+        const text = msg.content.trim();
+        const command = parseCommand(text) !== null || parseGoalTrigger(text) !== null;
+        if (!msg.threadId && (ruleKind(project) === 'multi' || (smart && command)) && !(await lonely())) {
           log.info('intake', 'audience', { to: 'other', by: 'command-needs-at', ref });
           // Unread, the count may be just this bot: the page says why the command got nothing.
           const r = await chat();
           if (!r.ok || r.bots === undefined) noteNotReplied(msg, 'lookup-failed', { detail: '群里有几个 bot' });
-          return false;
+          return undefined;
         }
-        return true;
+        return 'nobody';
+      }
     }
   }
 
@@ -1949,10 +2186,10 @@ export function createOrchestrator(
    * session-scoped, not per-message). Voice display metadata stays separate
    * from the woven agent input.
    */
-  function ingestContext(msg: NormalizedMessage, text: string): Promise<IngestedContext> {
-    return orderContext(msg.threadId ?? msg.chatId, () => ingestContextImpl(msg, text));
+  function ingestContext(msg: NormalizedMessage, text: string, initiative?: boolean): Promise<IngestedContext> {
+    return orderContext(msg.threadId ?? msg.chatId, () => ingestContextImpl(msg, text, initiative));
   }
-  async function ingestContextImpl(msg: NormalizedMessage, text: string): Promise<IngestedContext> {
+  async function ingestContextImpl(msg: NormalizedMessage, text: string, initiative?: boolean): Promise<IngestedContext> {
     names.learnMentions(msg.mentions);
     // Started first so the lookup overlaps the voice, file and quote fetches;
     // bounded, and undefined on failure (the block then says 某用户, as before).
@@ -1983,6 +2220,9 @@ export function createOrchestrator(
     // first-turn (startReservedRun) and mid-turn (handleTurn) paths.
     const senderName = (await senderNameP) ?? msg.senderName;
     body = weaveSender(body, { senderId: msg.senderId, senderName }, deliveryLagMs(msg));
+    // A turn the smart mode joined on its own (s25): a fixed line, never the judge model's reason, which was
+    // written by a small model that read untrusted group messages (Rakazo 第二轮 5).
+    if (initiative) body = `${INITIATIVE_NOTE}\n\n${body}`;
     return { ...ingested, text: body };
   }
 
@@ -2035,7 +2275,7 @@ export function createOrchestrator(
       // A retry brings its own saved images instead.
       let pendingImages: Promise<string[] | undefined> = Promise.resolve(extra?.images);
       if (!extra?.images && messageHasImages(msg)) pendingImages = collectInboundImages(channel, msg);
-      const [images, woven] = await Promise.all([pendingImages, ingestContext(msg, text)]);
+      const [images, woven] = await Promise.all([pendingImages, ingestContext(msg, text, extra?.initiative)]);
       if (existing.intakeCancelled) {
         await channel.send(msg.chatId, { markdown: '本条消息处理期间会话已停止，请重发。' }, { replyTo: msg.messageId, replyInThread: !flat }).catch(() => undefined);
         return;
@@ -2236,7 +2476,8 @@ export function createOrchestrator(
       log.info('intake', 'queued', { depth: existing.queue.length });
       return;
     }
-    const reserved: ActiveState = { queue: [], requesterOpenId: msg.senderId, isGoal: goal, runLoop: true };
+    const reserved: ActiveState = { queue: [], requesterOpenId: msg.senderId, isGoal: goal, runLoop: true,
+      ...(flat && !msg.threadId && !goal ? { triggerAt: msg.createTime } : {}) };
     active.set(sessionKey, reserved);
     dropRetries(sessionKey);
     extra?.retry?.accepted();
@@ -2262,7 +2503,7 @@ export function createOrchestrator(
             : Promise.resolve(undefined);
         // File attachments / quoted message woven into the prompt. Skipped when
         // preIngested (handleTurn already wove them into `text`).
-        const ingestP = preIngested ? Promise.resolve(preIngested) : ingestContext(msg, text);
+        const ingestP = preIngested ? Promise.resolve(preIngested) : ingestContext(msg, text, extra?.initiative);
         let tResolveDone = tIntake;
         const resolveP = resolveThread(sessionKey, msg.chatId, {
           mode: perm.mode,
@@ -2762,7 +3003,7 @@ export function createOrchestrator(
   /** Group @bot (no topic): create the topic + run with the default model.
    * Detached — onMessage must return fast (see {@link handleTurn}); a new
    * topic has a unique reply target so no same-topic reservation is needed. */
-  function startTopicDirectly(msg: NormalizedMessage, text: string, project?: Project, goal?: boolean): void {
+  function startTopicDirectly(msg: NormalizedMessage, text: string, project?: Project, goal?: boolean, initiative?: boolean): void {
     if (resumePublications.has(msg.chatId) || projectMutations.has(msg.chatId)) {
       noteNotReplied(msg, 'group-updating');
       return;
@@ -2801,7 +3042,7 @@ export function createOrchestrator(
       // Download any attached/forwarded images so the opening turn can see them,
       // and any file attachments (their paths get woven into the prompt text).
       const imagesP = messageHasImages(msg) ? collectInboundImages(channel, msg) : Promise.resolve(undefined);
-      const ingestP = ingestContext(msg, text);
+      const ingestP = ingestContext(msg, text, initiative);
       // The opening's main-area lines before the trigger and the 引用行 among them
       // (not for a goal: its objective stays self-contained). Never rejects.
       const listP = !goal && topics ? topics.list(msg.chatId) : Promise.resolve([]);
@@ -6118,6 +6359,8 @@ export function createOrchestrator(
           // Best-effort throughout: an unresolved ref renders as text, a failed
           // card is logged.
           const answerText = finalMessageText(rc.rs);
+          // What this bot said, for the place's next judgements (smart groups only: none other is tracked).
+          if (topicThreadId && answerText.trim()) recent.addOwn(topicThreadId, opts.chatId, { id: finalMsgId, at: Date.now(), text: answerText });
           rc.localFiles = await outboundFiles.prepare(answerText, {
             messageId: finalMsgId, chatId: opts.chatId, cwd: runCwd,
             mode: opts.mode ?? DEFAULT_PERMISSION_MODE, requesterOpenId: currentTurn.requesterOpenId,
@@ -7264,6 +7507,8 @@ export function createOrchestrator(
       if (state.compactAfter) lost.push(originOf(state.compactAfter.msg, !state.compactAfter.inThread));
       if (state.waiting) lost.push(state.waiting);
     }
+    // Named messages still judged (s25): their senders were promised an answer. Unnamed ones go without a word.
+    for (const item of smartLanes.pending()) if (item.named) lost.push(originOf(item.msg, !item.msg.threadId));
     return lost;
   }
 
@@ -7273,6 +7518,9 @@ export function createOrchestrator(
     asks.shutdown();
     // Written at once, before anything is cleared below and long before the Codex processes end or the lock goes.
     droppedReplies?.saveSync(collectLost(), 'shutdown');
+    // After collectLost read the lanes, before the judge's processes go: nothing judged lands now, nor takes its THINKING off.
+    for (const item of smartLanes.pending()) dropAck(item);
+    smartLanes.shutdown();
     for (const stop of onStop) stop();
     clearInterval(pendingGroupTimer);
     clearInterval(reaper);

@@ -3,7 +3,8 @@ import { join } from 'node:path';
 import { catalogBackendIds } from '../agent/catalog';
 import { BackendNotInstalledError } from '../agent/backend-loader';
 import { ProviderProcessCleanupError } from '../agent/owned-process';
-import { DEFAULT_BACKEND_ID, JudgeCallError, type AgentBackend, type JudgeCallOutput } from '../agent/types';
+import { JudgeCallError, type AgentBackend, type JudgeCallOutput } from '../agent/types';
+import { groupBackendId } from '../config/execution';
 import { paths } from '../config/paths';
 import { log } from '../core/logger';
 import { createCooldown } from './cooldown';
@@ -46,7 +47,7 @@ export interface JudgeDeps {
   /** default `<data root>/judge`, 0700, empty */
   cwd?: () => Promise<string>;
   now?: () => number;
-  /** s25 counts judgements per group per hour, s28 per day */
+  /** s28 counts judgements per day (s25's hourly budget is taken before the call: bot/smart-intake.ts) */
   onResult?: (req: JudgeRequest, result: JudgeResult) => void;
 }
 
@@ -219,8 +220,9 @@ export function createJudge(deps: JudgeDeps): Judge {
   async function run(req: JudgeRequest, started: number): Promise<JudgeResult> {
     const fields = { chatId: req.group.chatId, ref: req.ref?.slice(-6), variant: req.variant };
     // Backend and model first, so every later failure still reports them.
+    // The group's own backend, Codex for old rows and ids not in the catalog (s36d2): never the bot default.
     let base: Pick<JudgeResult, 'backend' | 'model' | 'effort' | 'modelSource' | 'promptSource'> = {
-      backend: req.group.backend ?? DEFAULT_BACKEND_ID, model: '', modelSource: 'default', promptSource: 'default',
+      backend: groupBackendId(req.group), model: '', modelSource: 'default', promptSource: 'default',
     };
     let queueMs: number | undefined;
     const finish = (result: JudgeResult, extra: Record<string, unknown> = {}): JudgeResult => {
@@ -342,7 +344,7 @@ export function createJudge(deps: JudgeDeps): Judge {
         log.fail('judge', error, { phase: 'judge' });
         return {
           decision: fallback(req.variant, 'failed'), reason: '', error: { kind: 'failed' as const, detail: detailOf(error) },
-          backend: req.group.backend ?? DEFAULT_BACKEND_ID, model: '', modelSource: 'default' as const, promptSource: 'default' as const, ms: now() - started,
+          backend: groupBackendId(req.group), model: '', modelSource: 'default' as const, promptSource: 'default' as const, ms: now() - started,
         };
       });
     },
