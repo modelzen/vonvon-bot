@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { CodexProcessCleanupError, OwnedCodexProcess } from '../src/agent/codex-appserver/owned-process';
+import { ProviderProcessCleanupError, OwnedProviderProcess } from '../src/agent/owned-process';
 import { CodexSetupService } from '../src/agent/codex-appserver/setup';
 import { resolveCodexBin } from '../src/agent/codex-appserver/locate';
 import { writeNodeExecutable } from './helpers/node-executable';
@@ -152,7 +152,7 @@ it('cleanup uncertainty remains failed after cancellation and prevents successfu
   vi.stubEnv('CODEX_BIN', '');
   const value = new CodexSetupService({ install: async signal => {
     await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }));
-    throw new CodexProcessCleanupError('fixture cleanup unknown');
+    throw new ProviderProcessCleanupError('fixture cleanup unknown');
   } });
   const { id } = value.start('install');
   await Promise.resolve();
@@ -163,10 +163,10 @@ it('cleanup uncertainty remains failed after cancellation and prevents successfu
 });
 
 it('probe cleanup failure remains visible to later Host close', async () => {
-  const close = OwnedCodexProcess.prototype.close;
-  const failure = vi.spyOn(OwnedCodexProcess.prototype, 'close').mockImplementationOnce(async function (this: OwnedCodexProcess, graceMs) {
+  const close = OwnedProviderProcess.prototype.close;
+  const failure = vi.spyOn(OwnedProviderProcess.prototype, 'close').mockImplementationOnce(async function (this: OwnedProviderProcess, graceMs) {
     await close.call(this, graceMs);
-    throw new CodexProcessCleanupError('fixture probe cleanup unknown');
+    throw new ProviderProcessCleanupError('fixture probe cleanup unknown');
   });
   const value = new CodexSetupService();
   try {

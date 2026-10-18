@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 import { AppServerClient } from '../src/agent/codex-appserver/app-server-client';
 import { CodexAppServerBackend } from '../src/agent/codex-appserver/backend';
 import { shutdownResidentClients } from '../src/agent/codex-appserver/client-pool';
-import { CodexProcessCleanupError } from '../src/agent/codex-appserver/owned-process';
+import { ProviderProcessCleanupError } from '../src/agent/owned-process';
 import { writeNodeExecutable } from './helpers/node-executable';
 
 // 一个最小的假 codex app-server：应答 initialize / thread/start，收到 turn/start
@@ -80,7 +80,7 @@ describe('app-server shutdown completion', () => {
     await expect(client.connect()).rejects.toThrow();
     if (process.platform === 'win32') {
       expect(client.pid).toBeDefined();
-      await expect(client.close()).rejects.toBeInstanceOf(CodexProcessCleanupError);
+      await expect(client.close()).rejects.toBeInstanceOf(ProviderProcessCleanupError);
       expect(() => process.kill(client.pid!, 0)).toThrow();
     } else await expect(client.close()).resolves.toBeUndefined();
   });
@@ -97,7 +97,7 @@ describe('app-server shutdown completion', () => {
     await client.connect();
     const pid = client.pid;
     if (process.platform === 'win32') await expect(client.close(20)).resolves.toBeUndefined();
-    else await expect(client.close(20)).rejects.toBeInstanceOf(CodexProcessCleanupError);
+    else await expect(client.close(20)).rejects.toBeInstanceOf(ProviderProcessCleanupError);
     expect(client.exited).toBe(true);
     expect(() => process.kill(pid!, 0)).toThrow();
   });

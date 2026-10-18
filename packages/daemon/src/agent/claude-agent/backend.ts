@@ -8,6 +8,7 @@ import type {
   Query,
   SettingSource,
 } from '@anthropic-ai/claude-agent-sdk';
+import { OwnedProviderProcess, ProviderProcessExitError } from '../owned-process';
 import { log } from '../../core/logger';
 import type {
   AgentBackend,
@@ -16,6 +17,8 @@ import type {
   BackendLogin,
   BackendProbe,
   GenerateSessionTitleOptions,
+  JudgeCall,
+  JudgeCallOutput,
   ModelInfo,
   PermissionMode,
   ReasoningEffort,
@@ -24,6 +27,8 @@ import type {
   ThreadHistory,
   ThreadSummary,
 } from '../types';
+import { JudgeCallError } from '../types';
+import { claudeErrorKind, errorKindFromText } from '../error-kind';
 import { BRIDGE_DEVELOPER_INSTRUCTIONS } from '../bridge-instructions';
 import { BackendNotInstalledError, isBackendDepInstalled, installedBackendVersion, loadBackendDep } from '../backend-loader';
 import { permissionOptions } from './permission';
@@ -89,8 +94,9 @@ function bridgeClaudeEnv(): Record<string, string> {
  * key there counts (ANTHROPIC_AUTH_TOKEN, or ANTHROPIC_BASE_URL and
  * ANTHROPIC_MODEL for DeepSeek or Kimi). With `settingSources: []` those keys were
  * ignored and the helpers reported "not logged in" on such machines. Hooks,
- * tools, MCP servers, claude.ai connectors, the transcript and the user's
- * personal CLAUDE.md stay off. The project layer is not loaded: the model list is
+ * tools, MCP servers, claude.ai connectors, the transcript and personal CLAUDE.md
+ * are disabled by the options below. Managed policy can override hook settings;
+ * user apiKeyHelper may still execute to obtain credentials. The project layer is not loaded: the model list is
  * cached per backend, not per project, and titles only need the credentials.
  */
 function helperQueryOptions(cwd: string): Options {
@@ -183,6 +189,50 @@ export async function consumeClaudeTitleQuery(query: Query): Promise<string | un
     return titleFromStructuredOutput(message.structured_output) ?? parseGeneratedTitle(message.result);
   }
   throw new Error('Claude title query closed before returning a result');
+}
+
+/**
+ * A judge failure: an `assistant.error` code is structured (it may start a cooldown), a kind only
+ * read from the text is not (design 3.1). Only codes saying the whole machine or the whole model
+ * cannot be used are structured: auth (`authentication_failed`, `oauth_org_not_allowed`,
+ * `cloud_credential_error`), quota (`rate_limit`, `billing_error`) and `model_not_found`; overloaded
+ * and server errors are structured `network`, which never cools. The other codes fall back to the
+ * text and so never cool: `account_on_hold` and `verification_required` need the owner to act in the
+ * account, which a 5-minute pause does not help, and the error detail still carries their text;
+ * `invalid_request` comes from this one input (too long, a bad character), not from the backend;
+ * `unknown` says nothing.
+ */
+function claudeJudgeError(code: unknown, message: string): JudgeCallError {
+  const coded = code === 'model_not_found' ? 'model' : claudeErrorKind(code);
+  if (coded) return new JudgeCallError(coded, message, true);
+  return new JudgeCallError(errorKindFromText(message) ?? 'failed', message, false);
+}
+
+/** Consume a judge query to its result. Exported for the mock-only unit test. */
+export async function consumeClaudeJudgeQuery(query: Query): Promise<JudgeCallOutput> {
+  let code: unknown;
+  try {
+    for await (const message of query) {
+      if (message.type === 'assistant' && message.error) code = message.error;
+      if (message.type !== 'result') continue;
+      if (message.subtype !== 'success') throw claudeJudgeError(code, message.errors.join('; ') || `Claude 判断失败：${message.subtype}`);
+      // `success` with is_error: the turn ended on an API error, and `result` is its text (sdk.d.ts)
+      if (message.is_error) throw claudeJudgeError(code, message.result || 'Claude 判断失败：API 出错');
+      const u = message.usage;
+      return {
+        text: message.result,
+        structured: message.structured_output,
+        usage: {
+          input: (u?.input_tokens ?? 0) + (u?.cache_creation_input_tokens ?? 0) + (u?.cache_read_input_tokens ?? 0),
+          cached: u?.cache_read_input_tokens ?? 0,
+          output: u?.output_tokens ?? 0,
+        },
+      };
+    }
+  } catch (error) {
+    throw error instanceof JudgeCallError ? error : claudeJudgeError(code, error instanceof Error ? error.message : String(error));
+  }
+  throw claudeJudgeError(code, 'Claude 判断没有返回结果');
 }
 
 function withAbortDeadline<T>(
@@ -442,6 +492,69 @@ export class ClaudeAgentBackend implements AgentBackend {
       );
     } finally {
       query.close();
+    }
+  }
+
+  /** One tool-less judge turn. User credential helpers and managed-policy hooks may still run.
+   * The shared provider registry retains ownership until the child process group is gone. */
+  async judge(call: JudgeCall): Promise<JudgeCallOutput> {
+    let sdk: ClaudeSdkFacade;
+    try {
+      sdk = await this.sdkLoader();
+    } catch (error) {
+      if (error instanceof BackendNotInstalledError) throw new JudgeCallError('unavailable', '还没下载 Claude Agent SDK', false);
+      throw error;
+    }
+    // aborted while the SDK loaded: start no CLI
+    if (call.signal.aborted) throw new JudgeCallError('aborted', '判断已放弃', false);
+    const abortController = new AbortController();
+    let query: Query | undefined;
+    let owned: OwnedProviderProcess | undefined;
+    let judgeError: JudgeCallError | undefined;
+    // On abort the SDK only ends stdin and sends its own SIGTERM 2 s later, and a CLI waiting on the
+    // API ignores the EOF: stop the whole group now, so the judge slot is not held for nothing.
+    // The finally awaits the same close and reports how it went.
+    const stopOwned = (): void => { void owned?.close().catch(() => undefined); };
+    const onAbort = (): void => {
+      abortController.abort(call.signal.reason);
+      stopOwned();
+    };
+    call.signal.addEventListener('abort', onAbort, { once: true });
+    try {
+      query = sdk.query({
+        prompt: call.input,
+        options: {
+          ...helperQueryOptions(call.cwd),
+          // Not the SDK's forwarded `signal`: Node would kill only the direct child with it and report
+          // an AbortError. The owned process kills the group itself.
+          spawnClaudeCodeProcess: ({ command, args, signal: _forwarded, ...options }) => {
+            owned = new OwnedProviderProcess(command, args, { ...options, stdio: ['pipe', 'pipe', 'pipe'] }, 'Claude');
+            owned.child.stderr?.resume();
+            if (call.signal.aborted) stopOwned();
+            if (!owned.child.stdin || !owned.child.stdout) throw new Error('Claude child pipes are missing');
+            return Object.assign(owned.child, { stdin: owned.child.stdin, stdout: owned.child.stdout });
+          },
+          systemPrompt: call.system,
+          model: call.model,
+          ...(call.effort ? { effort: call.effort as EffortLevel } : { thinking: { type: 'disabled' as const } }),
+          outputFormat: { type: 'json_schema', schema: call.schema },
+          abortController,
+        },
+      });
+      return await consumeClaudeJudgeQuery(query);
+    } catch (error) {
+      if (error instanceof JudgeCallError) judgeError = error;
+      throw error;
+    } finally {
+      call.signal.removeEventListener('abort', onAbort);
+      try { query?.close(); }
+      finally {
+        try { await owned?.close(); }
+        catch (error) {
+          if (!(error instanceof ProviderProcessExitError) || !judgeError) throw error;
+          log.fail('agent', error, { backend: 'claude-agent', phase: 'judge-exit' });
+        }
+      }
     }
   }
 
