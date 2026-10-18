@@ -217,6 +217,7 @@ import { leaveChat, transferOwnership } from '../project/group-ops';
 import {
   addRecall,
   backfillFrom,
+  bindSession,
   clearSessionTitleJobKey,
   detachSessionsForChat,
   getSession,
@@ -229,6 +230,7 @@ import {
   nextSeen,
   nothingSeen,
   patchSession,
+  sessionHolder,
   sessionTitleJobKey,
   upsertSession,
   type RecallNote,
@@ -3133,6 +3135,44 @@ export function createOrchestrator(
     }));
   }
 
+  /** The title a holder's topic goes by (s15f): its record's summary, the topic's first message
+   * or the resumed session's name. Unset for a placeholder such as `(新会话)`. */
+  function holderTopicTitle(holder: Pick<SessionRecord, 'summary'>): string | undefined {
+    return /^\(.*\)$/.test(holder.summary) ? undefined : topicTitle(holder.summary);
+  }
+  /** Where in the group a `/resume` found its session in use (s15f): the main area, or a topic by
+   * its title so it can be found, never an id. */
+  function inUseText(holder: Pick<SessionRecord, 'threadId' | 'chatId' | 'summary'>): string {
+    if (isMainKey(holder.threadId, holder.chatId)) return '这条会话正在本群的主区用着，到那里接着聊。';
+    const title = holderTopicTitle(holder);
+    return `这条会话正在本群的${title ? `话题「${title}」` : '一个话题'}里用着，到那里接着聊。`;
+  }
+  /** The places of the picker's sessions left off (s15f): `主区、话题「…」、2 个话题`. */
+  function inUsePlaces(holders: readonly SessionRecord[]): string {
+    const topics = holders.filter((h) => !isMainKey(h.threadId, h.chatId));
+    const titled = topics.map(holderTopicTitle).filter((t): t is string => Boolean(t)).map((t) => `话题「${t}」`);
+    const untitled = topics.length - titled.length;
+    return [
+      ...(holders.length > topics.length ? ['主区'] : []),
+      ...titled,
+      ...(untitled ? [untitled === 1 ? '一个话题' : `${untitled} 个话题`] : []),
+    ].join('、');
+  }
+  /** The place of the group other than `key` that holds the session (s15f). A look before the
+   * slow steps; {@link bindSession} decides. */
+  async function resumeHolder(chatId: string, key: string | undefined, backend: string, sessionId: string): Promise<SessionRecord | undefined> {
+    return sessionHolder(await listSessions(), { chatId, key, backend, sessionId });
+  }
+  /** A topic a `/resume` opened without binding the session says why (s15f): another place took
+   * it meanwhile, or the topic started a session of its own first. */
+  function noteUnbound(chatId: string, topicMsgId: string, why: string): Promise<unknown> {
+    return channel
+      .send(chatId, { markdown: `这个话题没有接上会话：${why}` }, { replyTo: topicMsgId, replyInThread: true })
+      .catch(() => undefined);
+  }
+  /** Why a card `/resume` left its new topic unbound when a message there started a session first. */
+  const RESUME_TOPIC_BUSY = '新话题里已经开始了新的会话，没有接上这条。';
+
   /** Group @bot /resume: post the history picker for this project's cwd. Owner-only
    * (admins[]) — 恢复会话会改变上下文，属管理类命令；非管理员收到无权限提示。
    * Detached — listThreads spawns an app-server (slow); holding onMessage on it
@@ -3151,7 +3191,16 @@ export function createOrchestrator(
         // button's callback value (`b`), so the pick → readHistory → rebind path
         // stays on the same backend that listed the sessions.
         const be = groupBackend(project);
-        const threads = await be.listThreads(cwd);
+        const listed = await be.listThreads(cwd);
+        // Sessions another place of this group holds are left off (s15f): resuming one here
+        // would give it two writers. The key being resumed may pick its own again.
+        const records = await listSessions();
+        const holders: SessionRecord[] = [];
+        const threads = listed.filter((t) => {
+          const holder = sessionHolder(records, { chatId: msg.chatId, key: singleSessionKey, backend: be.id, sessionId: t.sessionId });
+          if (holder) holders.push(holder);
+          return !holder;
+        });
         const state: ResumeCardState = {
           chatId: msg.chatId,
           originalMsgId: msg.messageId,
@@ -3160,6 +3209,7 @@ export function createOrchestrator(
           projectName: project?.name,
           backend: be.id,
           threads,
+          ...(holders.length ? { inUse: holders.length, inUseAt: inUsePlaces(holders) } : {}),
           createdAt: Date.now(),
           // Single-session group: pick rebinds this key flat (no new topic).
           ...(singleSessionKey ? { flat: true, sessionKey: singleSessionKey } : {}),
@@ -5126,6 +5176,13 @@ export function createOrchestrator(
     // unset on legacy cards → default (codex), the historical behavior.
     const be = backendFor(backendId);
     try {
+      // Another place of the group holds the picked session: refuse and say where (s15f).
+      const holder = await resumeHolder(state.chatId, state.flat ? state.sessionKey : undefined, be.id, sessionId);
+      if (holder) {
+        resumePending.delete(evt.messageId);
+        settleUpdate(evt.messageId, buildResumeErrorCard(state, inUseText(holder)));
+        return;
+      }
       // Single-session group (flat): rebind the group's session key IN PLACE —
       // post the same history card flat (no reply_in_thread, so no topic) and
       // repoint the record. Binding is deterministic (the key IS the chatId
@@ -5149,7 +5206,24 @@ export function createOrchestrator(
         try {
           const history = await be.readHistory(state.cwd, sessionId);
           resumePending.delete(evt.messageId);
+          let taken: SessionRecord | undefined;
           await withTrace({ chatId: state.chatId, msgId: state.originalMsgId }, async () => {
+            const now = Date.now();
+            // Bound before the history card goes out: a place that took the session meanwhile wins (s15f).
+            taken = await bindSession({
+              threadId: sessionKey,
+              chatId: state.chatId,
+              cwd: state.cwd,
+              sessionId,
+              backend: be.id,
+              summary: resumedTitle(history) || '(恢复会话)',
+              createdAt: now,
+              updatedAt: now,
+            });
+            if (taken) {
+              log.info('card', 'resume-in-use', { sessionKey, sessionId, holder: taken.threadId });
+              return;
+            }
             const cardState: HistoryCardState = { cwd: state.cwd, projectName: state.projectName, backendName: backendLabel(be), history };
             await sendManagedCard(channel, state.chatId, buildHistoryCard(cardState), state.originalMsgId, false).catch((err) =>
               log.fail('card', err, { phase: 'resume-history-single' }),
@@ -5163,21 +5237,10 @@ export function createOrchestrator(
               void trackTask(old.close().catch(error => log.fail('agent', error, { phase: 'thread-close' })));
             }
             lastUsage.delete(sessionKey); // context gauge reflects the resumed thread on its next turn
-            const now = Date.now();
-            await upsertSession({
-              threadId: sessionKey,
-              chatId: state.chatId,
-              cwd: state.cwd,
-              sessionId,
-              backend: be.id,
-              summary: resumedTitle(history) || '(恢复会话)',
-              createdAt: now,
-              updatedAt: now,
-            });
             dropRetries(sessionKey); // the next turn runs in the picked session
             log.info('card', 'resume-done-single', { sessionKey, sessionId, turns: history.totalTurns });
           });
-          settleUpdate(evt.messageId, buildResumeDoneCard(state));
+          settleUpdate(evt.messageId, taken ? buildResumeErrorCard(state, inUseText(taken)) : buildResumeDoneCard(state));
         } finally {
           if (active.get(sessionKey) === reserved) active.delete(sessionKey);
           if (reserved.queue.length > 0) {
@@ -5199,6 +5262,8 @@ export function createOrchestrator(
       resumePending.delete(evt.messageId);
 
       let bound = false;
+      let taken: SessionRecord | undefined;
+      let busy = false;
       await withTrace({ chatId: state.chatId, msgId: state.originalMsgId }, async () => {
         const cardState: HistoryCardState = { cwd: state.cwd, projectName: state.projectName, backendName: backendLabel(be), history };
         // reply_in_thread on the /resume message turns it into the topic; the
@@ -5211,24 +5276,45 @@ export function createOrchestrator(
         // the reply, so retry a few times before giving up.
         const tid = await getThreadId(channel, sent.messageId, 4);
         if (tid) {
-          const now = Date.now();
           // Titled by the resumed session's name: the first message is the `/resume` itself.
           noteOpenedTopic(state.chatId, tid, { id: state.originalMsgId, text: resumedTitle(history) });
-          await upsertSession({
-            threadId: tid,
-            chatId: state.chatId,
-            cwd: state.cwd,
-            sessionId,
-            backend: be.id,
-            summary: resumedTitle(history) || '(恢复会话)',
-            createdAt: now,
-            updatedAt: now,
-          });
-          bound = true;
+        }
+        if (tid && (active.has(tid) || sessions.has(tid))) {
+          // A message in the new topic started a session before the topic's id came back: the
+          // topic keeps that one, as the web resume refuses such a topic.
+          busy = true;
+          await noteUnbound(state.chatId, sent.messageId, RESUME_TOPIC_BUSY);
+        } else if (tid) {
+          // Held while binding, as the web resume holds it: a message meanwhile is named for resending.
+          const reserved: ActiveState = { queue: [], requesterOpenId: state.requesterOpenId };
+          active.set(tid, reserved);
+          try {
+            const now = Date.now();
+            taken = await bindSession({
+              threadId: tid,
+              chatId: state.chatId,
+              cwd: state.cwd,
+              sessionId,
+              backend: be.id,
+              summary: resumedTitle(history) || '(恢复会话)',
+              createdAt: now,
+              updatedAt: now,
+            });
+            // Another place took the session while this topic opened (s15f): the topic stays without it.
+            if (taken) await noteUnbound(state.chatId, sent.messageId, inUseText(taken));
+            bound = !taken;
+          } finally {
+            if (active.get(tid) === reserved) active.delete(tid);
+            if (reserved.queue.length > 0) {
+              await channel
+                .send(state.chatId, { markdown: `⚠️ 恢复期间收到的 ${reserved.queue.length} 条消息未进入会话，请重发。` }, { replyTo: sent.messageId, replyInThread: true })
+                .catch(() => undefined);
+            }
+          }
         } else {
           log.warn('card', 'resume-no-threadid', { messageId: sent.messageId });
         }
-        log.info('card', 'resume-done', { sessionId, threadId: tid ?? null, bound, turns: history.totalTurns });
+        log.info('card', 'resume-done', { sessionId, threadId: tid ?? null, bound, turns: history.totalTurns, ...(taken ? { holder: taken.threadId } : {}), ...(busy ? { busy } : {}) });
       });
 
       // Only promise continuity once the thread is actually bound — else the
@@ -5241,7 +5327,7 @@ export function createOrchestrator(
         evt.messageId,
         bound
           ? buildResumeDoneCard(state)
-          : buildResumeErrorCard(state, '已建话题但未能绑定会话，请重新 /resume'),
+          : buildResumeErrorCard(state, taken ? inUseText(taken) : busy ? RESUME_TOPIC_BUSY : '已建话题但未能绑定会话，请重新 /resume'),
       );
     } catch (err) {
       state.launching = false;
@@ -5379,6 +5465,9 @@ export function createOrchestrator(
       if (request.backend !== be.id) throw new AdminWriteError('项目后端已改变');
       const available = await be.listThreads(project.cwd);
       if (!available.some(item => item.sessionId === request.sessionId)) throw new AdminWriteError('历史会话不属于当前项目');
+      // Another place of the group holds it (s15f); a single group's own key may take it again.
+      const holder = await resumeHolder(project.chatId, ruleKind(project) === 'single' ? perm.sessionKey : undefined, be.id, request.sessionId);
+      if (holder) throw new AdminWriteError(inUseText(holder));
       const current = await getProjectByName(project.name);
       if (!current || projectMutations.has(project.chatId) || projectRevision(current) !== projectRevision(project)) throw new AdminWriteError('项目已改变，请刷新后重试');
       const key = ruleKind(project) === 'single' ? perm.sessionKey : `desktop-resume:${project.chatId}`;
@@ -5390,11 +5479,11 @@ export function createOrchestrator(
       try {
         const history = await be.readHistory(project.cwd, request.sessionId);
         let threadId = key;
-        if (ruleKind(project) === 'single') {
-          await sendManagedCard(channel, project.chatId, buildHistoryCard({ cwd: project.cwd, projectName: project.name, backendName: backendLabel(be), history }));
-        } else {
+        let topicCard: string | undefined;
+        if (ruleKind(project) !== 'single') {
           const root = await channel.send(project.chatId, { markdown: '从桌面端恢复历史会话' });
           const sent = await sendManagedCard(channel, project.chatId, buildHistoryCard({ cwd: project.cwd, projectName: project.name, backendName: backendLabel(be), history }), root.messageId, true);
+          topicCard = sent.messageId;
           const tid = await getThreadId(channel, sent.messageId, 4);
           if (!tid) throw new AdminWriteError('已创建话题，但飞书尚未返回话题标识；会话未绑定');
           noteOpenedTopic(project.chatId, tid, { id: root.messageId, from: { kind: 'self' }, at: Date.now(), text: resumedTitle(history) });
@@ -5403,10 +5492,22 @@ export function createOrchestrator(
           active.set(threadId, reserved);
           publishedKey = threadId;
         }
-        const old = sessions.get(threadId); sessions.delete(threadId); if (old) await old.close();
-        lastUsage.delete(threadId);
         const now = Date.now();
-        await upsertSession({ threadId, chatId: project.chatId, cwd: project.cwd, sessionId: request.sessionId, backend: be.id, summary: resumedTitle(history) || '(恢复会话)', createdAt: now, updatedAt: now });
+        // Bound before the main area's history card and its thread swap (s15f): when another place
+        // took the session meanwhile, nothing here changes; a new topic says it got none.
+        const taken = await bindSession({ threadId, chatId: project.chatId, cwd: project.cwd, sessionId: request.sessionId, backend: be.id, summary: resumedTitle(history) || '(恢复会话)', createdAt: now, updatedAt: now });
+        if (taken) {
+          if (topicCard) await noteUnbound(project.chatId, topicCard, inUseText(taken));
+          throw new AdminWriteError(inUseText(taken));
+        }
+        // Bound now, so neither of these fails the resume (as the card's flat path).
+        if (ruleKind(project) === 'single') {
+          await sendManagedCard(channel, project.chatId, buildHistoryCard({ cwd: project.cwd, projectName: project.name, backendName: backendLabel(be), history }))
+            .catch(error => log.fail('desktop', error, { phase: 'resume-history-single' }));
+        }
+        const old = sessions.get(threadId); sessions.delete(threadId);
+        if (old) await old.close().catch(error => log.fail('desktop', error, { phase: 'resume-thread-close' }));
+        lastUsage.delete(threadId);
         dropRetries(threadId);
         return { ok: true, threadId };
       } finally {
