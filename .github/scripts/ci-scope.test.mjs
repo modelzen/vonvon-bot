@@ -145,7 +145,7 @@ test('code, config, Markdown outside docs, and mixed changes require full', () =
     'packages/ui/README.md', 'package.json', 'package-lock.json', '.github/workflows/ci.yml',
     'scripts/check.js', 'docs/notes.txt', 'unknown', '.claude/settings.json', '.claude/agents/review.md',
     '.claude/skills.md', '.claude/skills/animate/scripts/run.mjs', '.claude/skills/animate/SKILL.MD',
-    'x/.claude/skills/a.md']) {
+    'x/.claude/skills/a.md', '.claude/skills/animate/SKILL.md.bak', 'docs/x.md.ts', 'Xclaude/skills/a.md']) {
     put(path);
     const head = commit();
     assert.equal(determineScope('pull_request', pr(before, head), dir).scope, 'full', path);
