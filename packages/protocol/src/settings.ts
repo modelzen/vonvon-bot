@@ -203,6 +203,22 @@ const voice = z.object({
   result: z.string(),
   grantUrl: z.string(),
 });
+/** The decision models this daemon can call (s23f), and whether this machine has each one's key: what a judge model
+ * picker lists. A daemon from before s23f sends none. */
+const decisionModels = z
+  .array(
+    z.object({
+      provider: z.string(),
+      displayName: z.string(),
+      models: z.array(z.object({ id: z.string(), displayName: z.string() })),
+      /** its name in the keystore (`vonvon secrets set <keyId>`) */
+      keyId: z.string(),
+      keySet: z.boolean(),
+      /** the keystore could not be read: keySet is false and says nothing */
+      keyUnreadable: z.boolean().optional(),
+    }),
+  )
+  .optional();
 export const agentViewSchema = z.object({
   scope: z.object({ kind: z.literal("agent"), botId: agentIdSchema }),
   /** `judge`, `smartPrompt` and `judgeByBackend` came in s23d: a daemon from before sends none. */
@@ -220,6 +236,7 @@ export const agentViewSchema = z.object({
       }),
     )
     .optional(),
+  decisionModels,
   ownerOpenId: z.string().nullable(),
   administrators: z.object({
     openIds: z.array(z.string()),
@@ -247,6 +264,7 @@ export const projectViewSchema = z.object({
     judge: section(judgeViewSection).optional(),
   }),
   smartPrompt: smartPrompt.optional(),
+  decisionModels,
   identity: z.object({
     chatId: z.string(),
     backend: z.string(),
@@ -307,6 +325,7 @@ export function isKnownJudgeSelection(selection: JudgeSelectionView): selection 
   return JUDGE_SELECTION_KINDS.includes(selection.kind);
 }
 export type SmartPromptView = z.infer<typeof smartPrompt>;
+export type DecisionModelsView = NonNullable<z.infer<typeof decisionModels>>;
 
 const editablePatches: Record<
   SettingsScope["kind"],
