@@ -69,7 +69,7 @@ export interface JudgeRequest {
 export interface JudgeResult {
   /** always set; on failure `main` for mentioned and `skip` otherwise, but `skip` for aborted and closed */
   decision: JudgeDecision;
-  /** the model's reason, at most 80 characters; may be empty: on failure, or from a decision model (s23f) */
+  /** the model's reason, at most 80 characters, empty on failure; a decision model's is written from its options (s23f) */
   reason: string;
   /** main variant: the earlier message the judged one follows up on (its m-number in the input, s25b), where a
    * topic opens; unset when that is the message itself, or the model named no line shown */

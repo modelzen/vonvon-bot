@@ -1,11 +1,12 @@
 import {
   agentSectionSchemas, isKnownJudgeSelection, projectEditableSchemas, sessionSectionSchemas, sessionThreadIdSchema,
-  type Agent, type AgentSettingsView, type JudgeSelectionView, type Membership, type ProjectSettingsView, type SessionSettingsView,
+  type Agent, type AgentSettingsView, type DecisionModelsView, type JudgeSelectionView, type Membership, type ProjectSettingsView, type SessionSettingsView,
   type SettingsScope, type SettingsView, type SmartPromptView,
 } from '@vonvon/protocol';
 import {
   conversationLabel, localTime, pickBot, pickGroup, print, toolLabel, want, withDaemon, type Call, type Daemon, type Io,
 } from '../daemon-client';
+import { keyMissingText } from '../../judge/decision';
 
 // Structural views of the protocol's zod objects: the daemon's own zod is v4, protocol's is v3 (see daemon-client).
 type Issue = {
@@ -156,10 +157,25 @@ function promptText(prompt: SmartPromptView): string[] {
   ].flatMap(text => text.split('\n'));
 }
 
+/** A decision model by its service's name; one the daemon lists none for is said so (a daemon from before s23f lists none at all). */
+function decisionName(models: DecisionModelsView | undefined, provider: string, model: string): string {
+  const known = models?.find(m => m.provider === provider);
+  return `决策模型 ${known?.displayName ?? provider} 的 ${model}${models && !known ? '，这个版本的 daemon 不认识这家决策模型' : ''}`;
+}
+
+/** For each decision model the daemon calls (s23f): its key not filled in while one in use, and under `get judge`
+ * how to choose it, the key filled in or not (owner: choose first, fill in later). */
+function decisionLines(models: DecisionModelsView | undefined, inUse: ReadonlySet<string>, choices: boolean, scope: string): string[] {
+  return (models ?? []).flatMap(m => [
+    ...(inUse.has(m.provider) && !m.keySet ? [`  ${keyMissingText(m)}`] : []),
+    ...(choices ? m.models.map(model => `  可选的决策模型：${m.displayName} 的 ${model.id}（${model.displayName}，key ${m.keySet ? '已填' : m.keyUnreadable ? '填没填看不出，密钥库读不了' : '还没填'}）。选它：vonvon settings set ${scope}judge.selection='${JSON.stringify({ kind: 'decision', provider: m.provider, model: model.id })}'`) : []),
+  ]);
+}
+
 /** One line per backend: the bot has no backend of its own, so a single effective model would mislead. */
 function judgeLines(view: AgentSettingsView): string[] {
   return Object.entries(view.judgeByBackend ?? {}).map(([id, j]) => {
-    const what = j.provider ? `决策模型 ${j.provider} 的 ${j.model}` : `${j.model}，${j.effort ? `推理强度 ${j.effort}` : id === 'claude-agent' ? '关思考' : '不传推理强度'}`;
+    const what = j.provider ? decisionName(view.decisionModels, j.provider, j.model) : `${j.model}，${j.effort ? `推理强度 ${j.effort}` : id === 'claude-agent' ? '关思考' : '不传推理强度'}`;
     return `  ${toolLabel(id)} 的群用：${what}（${j.source === 'bot' ? 'Bot 设的' : '默认'}）`;
   });
 }
@@ -209,9 +225,15 @@ export async function runSettingsGet(section: string | undefined, target: Target
     }
     if (name === 'permission' && fullOnly) human.push(`  ${fullOnly}`);
     if (name === 'judge') {
-      const prompt = (view as AgentSettingsView | ProjectSettingsView).smartPrompt;
+      const { smartPrompt: prompt, decisionModels } = view as AgentSettingsView | ProjectSettingsView;
       human.push(...unknownJudge((value.stored as { selection?: JudgeSelectionView } | undefined)?.selection));
       if (botJudge) human.push(...judgeLines(view as AgentSettingsView));
+      const live = (effective as { selection?: JudgeSelectionView }).selection;
+      const inUse = new Set(botJudge ? Object.values((view as AgentSettingsView).judgeByBackend ?? {}).flatMap(j => j.provider ?? [])
+        : live && isKnownJudgeSelection(live) && live.kind === 'decision' ? [live.provider] : []);
+      // the --bot and --group this command was given, so the line runs as printed on a machine with several bots
+      const scope = `${target.bot !== undefined ? `--bot ${target.bot} ` : ''}${view.scope.kind === 'project' && target.group !== undefined ? `--group ${target.group} ` : ''}`;
+      human.push(...decisionLines(decisionModels, inUse, section === 'judge', scope));
       if (prompt) human.push(`  ${promptSource(prompt, view.scope.kind === 'project')}`);
       human.push('  只在智能模式的群里用');
       if (prompt && section === 'judge') human.push(...promptText(prompt));

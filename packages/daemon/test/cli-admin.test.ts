@@ -459,6 +459,33 @@ it('judge: set takes the selection JSON, get prints a row per backend and the pr
   agentView.judgeByBackend = { 'codex-appserver': { model: 'jev-latest', provider: 'typesafe', source: 'bot' }, 'claude-agent': { model: 'jev-latest', provider: 'typesafe', source: 'bot' } } as never;
   h.clear(); await runSettingsGet('judge', {}, h.io(), h.daemon);
   expect(h.out()).toContain('  Codex 的群用：决策模型 typesafe 的 jev-latest（Bot 设的）\n  Claude 的群用：决策模型 typesafe 的 jev-latest（Bot 设的）\n');
+  // s23f: the daemon lists its decision models: their names, a key not filled in, and under get judge how to choose one
+  const typesafe = { provider: 'typesafe', displayName: 'TypeSafe', models: [{ id: 'jev-latest', displayName: 'Jev' }], keyId: 'typesafe-api-key', keySet: false };
+  const missing = '  还没填 TypeSafe 的 key，填之前要判断的消息按出错处理（没 @ Bot 的不回，@ 的回在主区）。在终端运行 vonvon secrets set typesafe-api-key < 存着 key 的文件\n';
+  const choose = (keyState: string, group = '') => `  可选的决策模型：TypeSafe 的 jev-latest（Jev，key ${keyState}）。选它：vonvon settings set ${group}judge.selection='{"kind":"decision","provider":"typesafe","model":"jev-latest"}'\n`;
+  Object.assign(agentView, { decisionModels: [typesafe] });
+  h.clear(); await runSettingsGet('judge', {}, h.io(), h.daemon);
+  expect(h.out()).toContain(`  Codex 的群用：决策模型 TypeSafe 的 jev-latest（Bot 设的）\n  Claude 的群用：决策模型 TypeSafe 的 jev-latest（Bot 设的）\n${missing}${choose('还没填')}`);
+  h.clear(); await runSettingsGet(undefined, {}, h.io(), h.daemon);
+  expect(h.out()).toContain(missing);
+  expect(h.out()).not.toContain('可选的决策模型');
+  Object.assign(agentView, { decisionModels: [{ ...typesafe, keySet: true }], judgeByBackend: { 'codex-appserver': { model: 'x', provider: 'oracle', source: 'bot' } } });
+  h.clear(); await runSettingsGet('judge', {}, h.io(), h.daemon);
+  expect(h.out()).toContain(`  Codex 的群用：决策模型 oracle 的 x，这个版本的 daemon 不认识这家决策模型（Bot 设的）\n${choose('已填')}`);
+  expect(h.out()).not.toContain('还没填');
+  // a group judging with it: the same line, and the command names the group
+  const jev = { kind: 'decision', provider: 'typesafe', model: 'jev-latest' };
+  Object.assign(projectView, { decisionModels: [typesafe], sections: { judge: section({ selection: jev }, 'r', { selection: jev }) } });
+  h.clear(); await runSettingsGet('judge', { group: 'pay' }, h.io(), h.daemon);
+  expect(h.out()).toContain(`${missing}${choose('还没填', '--group pay ')}`);
+  // and the bot it was given, so the line runs as printed where there are several bots
+  h.clear(); await runSettingsGet('judge', { bot: 'cli_a', group: 'pay' }, h.io(), h.daemon);
+  expect(h.out()).toContain(choose('还没填', '--bot cli_a --group pay '));
+  // a keystore the daemon cannot read: said so, not taken for a missing key
+  Object.assign(projectView, { decisionModels: [{ ...typesafe, keyUnreadable: true }] });
+  h.clear(); await runSettingsGet('judge', { group: 'pay' }, h.io(), h.daemon);
+  expect(h.out()).toContain(`  读不了密钥库，看不出填没填 TypeSafe 的 key，读得了之前要判断的消息按出错处理（没 @ Bot 的不回，@ 的回在主区）。在终端运行 vonvon secrets list 看报错\n${choose('填没填看不出，密钥库读不了', '--group pay ')}`);
+  expect(h.out()).not.toContain('还没填');
   // a kind from a newer daemon: shown as sent, and said so
   const future = { kind: 'oracle', provider: 'x', model: 'y' };
   agentView.sections.judge = section({ selection: future }, 'rev-judge', { selection: future }) as never;

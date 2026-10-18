@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { JudgeCallError, type AgentBackend, type JudgeCall, type JudgeCallOutput } from '../src/agent/types';
-import { JUDGE_COOLDOWN_MS } from '../src/judge/cooldown';
+import { createCooldown, JUDGE_COOLDOWN_MS } from '../src/judge/cooldown';
+import { DecisionError } from '../src/judge/typesafe';
 import { createJudge } from '../src/judge/judge';
 import type { JudgeErrorKind, JudgeRequest } from '../src/judge/types';
 
@@ -113,5 +114,24 @@ describe('judge cooldown (design 第 4 节)', () => {
     expect((await s.judge.judge(req())).error).toBeUndefined();
     expect(s.calls).toHaveBeenCalledTimes(5);
     expect(fake.log.info.mock.calls.some((c) => c[1] === 'cooldown')).toBe(false);
+  });
+
+  it('a decision model\'s failure says how long; busy cools the whole provider; a tagged one holds for that tag only (s23f)', () => {
+    const cooldown = createCooldown(Date.now);
+    cooldown.note('typesafe', 'jev-latest', new DecisionError('busy', 'TypeSafe 限流了', 150_000), 'k1');
+    expect(cooldown.check('typesafe', 'jev-preview', 'k1')).toEqual({ kind: 'busy', detail: '不到 1 分钟前刚失败过，3 分钟内不再调' });
+    expect(cooldown.check('typesafe', 'jev-latest', 'k2')).toBeUndefined();
+    expect(cooldown.check('codex-appserver', 'jev-latest', 'k1')).toBeUndefined();
+    vi.advanceTimersByTime(150_000);
+    expect(cooldown.check('typesafe', 'jev-latest', 'k1')).toBeUndefined();
+    // no cooldown without one: network, format and failed are not structured
+    for (const kind of ['network', 'format', 'failed'] as const) cooldown.note('typesafe', 'm', new DecisionError(kind, 'x'), 'k1');
+    expect(cooldown.check('typesafe', 'm', 'k1')).toBeUndefined();
+    // a backend's busy never cools, even structured: only a decision model's 429 says how long
+    cooldown.note('codex-appserver', 'm', new JudgeCallError('busy', 'x', true));
+    expect(cooldown.check('codex-appserver', 'm')).toBeUndefined();
+    // a backend's structured auth still cools its default 5 minutes untagged
+    cooldown.note('codex-appserver', 'm', new JudgeCallError('auth', 'x', true));
+    expect(cooldown.check('codex-appserver', 'other', 'any')?.detail).toBe('不到 1 分钟前刚失败过，5 分钟内不再调');
   });
 });
