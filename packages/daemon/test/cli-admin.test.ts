@@ -118,7 +118,7 @@ it('bot status prints the service step after the tools without counting it', asy
   const mac = harness({ snapshot: status({ platform: 'macos', version: '1', loginItem: false, dataPath: '/x', service: { state: 'not-installed', skipped: false } }), admin: async () => ({ kind: 'setupStatus', status: setup }) });
   await runBotStatus(undefined, mac.io(), mac.daemon);
   expect(mac.out()).toContain(['✓ Codex：可用 · 0.156.1', '· Claude：无法确认', '    在网页里点「去本机环境」（vonvon open）',
-    '! 登录电脑时自动运行 bot（推荐）：推荐打开', '    打开后 bot 跑在 macOS 的后台服务里：退出 app、注销再登录都在线，崩溃后自动重启。',
+    '! 登录电脑时自动运行 Bot（推荐）：推荐打开', '    打开后 Bot 跑在 macOS 的后台服务里：退出 app、注销再登录都在线，崩溃后自动重启。',
     '    运行 vonvon service install', '    在网页里点「跳过」（vonvon open）', '全部就绪。', ''].join('\n'));
   mac.clear(); await runBotStatus(undefined, mac.io(true), mac.daemon);
   expect(JSON.parse(mac.out())).toMatchObject({ ready: true, steps: expect.arrayContaining([expect.objectContaining({ id: 'service', done: false })]) });
@@ -177,7 +177,7 @@ function scanner(jobs: Job[], o: { reply?: unknown; dropAt?: number; onQr?: () =
 
 it('bot add draws the QR, draws it again for a new link, and prints the saved bot', async () => {
   const s = scanner([{ id: jobId, type: 'registerAgent', phase: 'running', message: '正在创建扫码会话。' }, qr('https://open.feishu.cn/q?a=1'), qr('https://open.feishu.cn/q?a=1', 'slow_down'),
-    qr('https://open.feishu.cn/q?a=1', 'domain_switched'), qr('https://open.larksuite.com/q?a=\u0007'), { id: jobId, type: 'registerAgent', phase: 'succeeded', message: '机器人已保存。', agentId: agentIdSchema.parse('cli_new') }]);
+    qr('https://open.feishu.cn/q?a=1', 'domain_switched'), qr('https://open.larksuite.com/q?a=\u0007'), { id: jobId, type: 'registerAgent', phase: 'succeeded', message: 'Bot 已保存。', agentId: agentIdSchema.parse('cli_new') }]);
   await s.add();
   expect(s.out()).toBe(['正在创建扫码会话。', '用飞书 App 扫下面的二维码，建一个新的飞书应用（14:32 前有效）：', '[QR https://open.feishu.cn/q?a=1]', '扫不了的话，在手机飞书里打开：https://open.feishu.cn/q?a=1', '等你在飞书里确认…（Ctrl-C 取消）',
     '识别到国际版租户，改用 larksuite.com。', '用飞书 App 扫下面的二维码，建一个新的飞书应用（14:32 前有效）：', '[QR https://open.larksuite.com/q?a=\u0007]', '扫不了的话，在手机飞书里打开：https://open.larksuite.com/q?a=', '等你在飞书里确认…（Ctrl-C 取消）',
@@ -190,7 +190,7 @@ it('bot add draws the QR, draws it again for a new link, and prints the saved bo
     appId: 'cli_new', tenant: 'feishu', credentials: { ok: true }, connection: { running: true, connection: 'connected' }, event: { state: 'unpublished' },
     scopes: { missingRequired: ['im:message:readonly'], grantUrl: 'https://open.feishu.cn/app/cli_new/auth' }, eventConfigUrl: 'https://open.feishu.cn/app/cli_new/event', consoleUrl: 'https://open.feishu.cn/app/cli_new', cardCallback: { confirmed: false },
   };
-  const read = scanner([{ id: jobId, type: 'registerAgent', phase: 'succeeded', message: '机器人已保存。', agentId: agentIdSchema.parse('cli_new') }], { admin: async () => ({ kind: 'setupStatus', status: setup }) });
+  const read = scanner([{ id: jobId, type: 'registerAgent', phase: 'succeeded', message: 'Bot 已保存。', agentId: agentIdSchema.parse('cli_new') }], { admin: async () => ({ kind: 'setupStatus', status: setup }) });
   await read.add();
   expect(read.out()).toContain('接下来在飞书开发者后台做完这几步，做完一步运行 vonvon bot status 看进度：\n✓ 飞书应用：凭据有效\n! 权限：还缺 1 项\n    一键开权限会预选下面这些权限，在飞书开发者后台确认即可。\n    - im:message:readonly\n');
 });
@@ -239,8 +239,8 @@ it('group pending leaves out groups already bound to this bot', async () => {
 });
 
 it('group pending reports the daemon refusal and still closes', async () => {
-  const h = harness({ snapshot: one(), run: async () => { throw new RpcError('conflict', '机器人未启用或尚未运行'); } });
-  await expect(runGroupPending({}, h.io(), h.daemon)).rejects.toThrow('查待绑定的群失败：机器人未启用或尚未运行');
+  const h = harness({ snapshot: one(), run: async () => { throw new RpcError('conflict', 'Bot 没启用或没在运行'); } });
+  await expect(runGroupPending({}, h.io(), h.daemon)).rejects.toThrow('查待绑定的群失败：Bot 没启用或没在运行');
   expect(h.close).toHaveBeenCalledTimes(1);
 });
 
@@ -313,7 +313,7 @@ it('settings set saves with the section revision and explains each refusal', asy
   const results: unknown[] = [
     { kind: 'saved', section: { scope, section: 'permission', value: section({ mode: 'full' }) }, effects: [{ fields: ['mode'], when: 'next-turn', detail: '下一轮生效。' }] },
     { kind: 'conflict', current: {} }, { kind: 'rejected', fields: [{ field: 'mode', message: '后端不支持此权限档位' }] },
-    { kind: 'unavailable', reason: { kind: 'readonly', reason: 'owner-offline', message: '请先启动此 Agent，再编辑设置' } },
+    { kind: 'unavailable', reason: { kind: 'readonly', reason: 'owner-offline', message: '这个 Bot 没在运行，运行起来后才能改设置' } },
   ];
   const settings = vi.fn(async (request: { type: string }): Promise<unknown> => request.type === 'read' ? { kind: 'view', view } : { kind: 'saved', result: results.shift() });
   const h = harness({ snapshot: one(undefined, [member('cli_a', 'oc_pay', 'pay')]), settings });
@@ -321,7 +321,7 @@ it('settings set saves with the section revision and explains each refusal', asy
   expect(settings).toHaveBeenNthCalledWith(1, { type: 'read', scope });
   expect(settings).toHaveBeenNthCalledWith(2, { type: 'save', edit: { scope, section: 'permission', revision: 'rev-mode', patch: { mode: 'full' } } });
   expect(h.out()).toBe('已保存 permission.mode = full。\n下一轮生效。\n');
-  for (const message of ['这项设置刚在别处改过，没有保存。重新运行一次。', '没有保存：mode：后端不支持此权限档位', '请先启动此 Agent，再编辑设置']) {
+  for (const message of ['这项设置刚在别处改过，没有保存。重新运行一次。', '没有保存：mode：后端不支持此权限档位', '这个 Bot 没在运行，运行起来后才能改设置']) {
     await expect(runSettingsSet(['permission.mode=full'], { group: 'pay' }, h.io(), h.daemon)).rejects.toThrow(message);
   }
   await expect(runSettingsSet(['permission.mode=full'], { group: 'pay', session: 'omt_x' }, h.io(), h.daemon)).rejects.toThrow('--group 和 --session 只能选一个。');
@@ -352,7 +352,7 @@ it('settings get prints each section, gives the view as JSON, and lists a group\
     comments: section({ backend: 'codex-appserver', selection: { kind: 'default' } }, 'r', { backend: 'codex-appserver', selection: { kind: 'explicit', model: 'gpt-5.5', effort: 'medium' } }),
   } };
   // guestMode: the view's deprecated mirror of the one tier (s15c), not printed.
-  const projectView = { scope: { kind: 'project', botId: 'cli_a', projectName: 'pay' }, sections: { permission: { ...section({ mode: 'qa', guestMode: 'qa' }), access: { kind: 'readonly', reason: 'owner-offline', message: '请先启动此 Agent，再编辑设置' } } },
+  const projectView = { scope: { kind: 'project', botId: 'cli_a', projectName: 'pay' }, sections: { permission: { ...section({ mode: 'qa', guestMode: 'qa' }), access: { kind: 'readonly', reason: 'owner-offline', message: '这个 Bot 没在运行，运行起来后才能改设置' } } },
     identity: { chatId: 'oc_pay', backend: 'codex-appserver', cwd: '/home/u/pay', kind: 'multi', fullOnly: 'Linux 上只能选完全访问。' } };
   const sessions = [{ threadId: 'omt_old', chatId: 'oc_pay', summary: '旧的', backend: 'codex-appserver', createdAt: 1, updatedAt: 1 },
     { threadId: 'omt_new', chatId: 'oc_pay', summary: '修'.repeat(50), backend: 'codex-appserver', model: 'gpt-5.5', createdAt: 2, updatedAt: 2 }];
@@ -366,7 +366,7 @@ it('settings get prints each section, gives the view as JSON, and lists a group\
   expect(Object.keys(JSON.parse(h.out()).view.sections)).toEqual(['cards', 'comments']);
   h.clear(); await runSettingsGet(undefined, { group: 'pay' }, h.io(), h.daemon);
   const out = h.out();
-  expect(out).toContain('群 pay（oc_pay）· Codex · 多会话（@ 我开新会话） · /home/u/pay\n[permission]（只读：请先启动此 Agent，再编辑设置）\n  mode = qa\n  Linux 上只能选完全访问。\n');
+  expect(out).toContain('群 pay（oc_pay）· Codex · 多会话（@ 我开新会话） · /home/u/pay\n[permission]（只读：这个 Bot 没在运行，运行起来后才能改设置）\n  mode = qa\n  Linux 上只能选完全访问。\n');
   expect(out).toContain('会话（最近 2 个，共 2 个；看单个会话：vonvon settings get --session <id>）');
   expect(out.indexOf('omt_new')).toBeLessThan(out.indexOf('omt_old'));
   expect(out).toContain(`gpt-5.5  ${'修'.repeat(40)}…\n`);

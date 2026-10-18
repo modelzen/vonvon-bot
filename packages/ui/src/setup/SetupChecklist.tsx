@@ -79,8 +79,8 @@ export function SetupChecklist({snapshot, ready, busy, run, onRegister, onOpenEn
   const linux = snapshot.application.platform === 'linux' ? linuxSteps(snapshot.tools) : [];
   return <div className="page-stack setup-checklist">
     <p className="collaboration-footnote">每一步都会自动检测，做完会变成绿色。飞书那边的设置改完后，几秒内这里会跟着变。</p>
-    <SettingsGroup label="执行工具" footer="Codex 或 Claude 至少需要一个可用。"
-      action={<StatusBadge tone={tools.ready ? 'success' : 'warning'} variant="pill">{tools.ready ? '可以用了' : '还没有可用的工具'}</StatusBadge>}>
+    <SettingsGroup label="后端" footer="Codex 或 Claude 至少需要一个可用。"
+      action={<StatusBadge tone={tools.ready ? 'success' : 'warning'} variant="pill">{tools.ready ? '可以用了' : '还没有能用的后端'}</StatusBadge>}>
       {tools.steps.map((step, index) => stepRow(step, index))}
     </SettingsGroup>
     {codexJobs}

@@ -399,7 +399,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
       crashes: { application: now => ({ ...(hostPause ? { paused: hostPause } : {}), records: records(now) }), paused: appId => children.get(appId)?.pause, lockHeld: appId => children.get(appId)?.lockWait?.reported },
       service: createAdminService({
         applyBotActivation: async (appId, enabled) => {
-          if (shuttingDown) throw new Error('Host 正在退出。');
+          if (shuttingDown) throw new Error('daemon 正在退出。');
           let child = children.get(appId);
           if (child) {
             child.enabled = enabled;
@@ -425,7 +425,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
               log.info('supervisor', 'bot-pause-dropped', { bot: child.bot.name, appId });
               clearPause(child);
             }
-            child.ipc?.rejectAll('Agent 已停用。');
+            child.ipc?.rejectAll('Bot 已停用。');
             await stopBot(child);
             return;
           }

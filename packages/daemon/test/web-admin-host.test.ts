@@ -266,7 +266,7 @@ describe('AdminService · deleteBot（删除 + 保护分支）', () => {
     const svc = createAdminService();
     const r = await svc.deleteBot(BOT_A);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toContain('启用');
+    if (!r.ok) expect(r.reason).toContain('停用');
     expect((await loadBots()).bots).toHaveLength(1);
     expect(await listSecretIds()).toContain(secretKeyForApp(BOT_A));
   });

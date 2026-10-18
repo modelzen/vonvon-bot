@@ -26,14 +26,14 @@ it('lets the desktop shell run the helper when it has one', async () => {
   const client = machine();
   const setLoginItem = vi.fn(async () => {});
   await expect(toggleService(true, client, {setLoginItem})).resolves.toBe('已打开登录时启动。');
-  await expect(toggleService(false, client, {setLoginItem})).resolves.toBe('已关闭登录时启动。bot 改成单独启动的 daemon，这样崩溃后不会自动重启。');
+  await expect(toggleService(false, client, {setLoginItem})).resolves.toBe('已关闭登录时启动。Bot 改成单独启动的 daemon，这样崩溃后不会自动重启。');
   expect(setLoginItem.mock.calls).toEqual([[true], [false]]);
   expect(client.machine.mock.calls.map(([request]) => request)).toEqual([{type: 'setServiceSkipped', skipped: false}, {type: 'setServiceSkipped', skipped: true}]);
 });
 
 it('skips by remembering the choice only', async () => {
   const client = machine();
-  await expect(skipService(client)).resolves.toBe('已跳过。bot 跑在分离的 daemon 里，这样崩溃后不会自动重启。');
+  await expect(skipService(client)).resolves.toBe('已跳过。Bot 跑在分离的 daemon 里，这样崩溃后不会自动重启。');
   expect(client.machine.mock.calls.map(([request]) => request)).toEqual([{type: 'setServiceSkipped', skipped: true}]);
 });
 

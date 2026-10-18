@@ -16,7 +16,7 @@ export function createHostSettings(options: {
     ? process.env.CODEX_BIN || null
     : options.runningCodexBin;
   let writes: Promise<unknown> = Promise.resolve();
-  const effect: ApplyEffect = { fields: ['codexBin'], when: 'restart', detail: '已保存，下次启动 Bridge 时使用；当前会话保持原来的执行程序。' };
+  const effect: ApplyEffect = { fields: ['codexBin'], when: 'restart', detail: '已保存，下次启动 daemon 时使用；当前会话保持原来的执行程序。' };
   function view(): HostSettingsView {
     const stored = readServiceCodexBin(appDir);
     return {
@@ -27,7 +27,7 @@ export function createHostSettings(options: {
           effective: { codexBin: runningCodexBin },
           revision: createHash('sha256').update(JSON.stringify({ configured: stored !== undefined, codexBin: stored ?? null })).digest('hex'),
           access: options.readonly
-            ? { kind: 'readonly', reason: 'preview', message: '只读预览不能更改执行程序，请先启动 Bridge。' }
+            ? { kind: 'readonly', reason: 'preview', message: '只读预览不能更改执行程序，请先启动 daemon。' }
             : { kind: 'writable' },
           apply: [effect],
         },

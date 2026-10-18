@@ -26,7 +26,7 @@ it('maps the real daemon\'s replies and refusals without printing the local cred
       runGroupPending({}, { json: false, write: text => { out += text; } }, daemon).then(() => '', (error: Error) => error.message),
       runSettingsGet(undefined, {}, { json: false, write: text => { out += text; } }, daemon).then(() => '', (error: Error) => error.message),
     ]);
-    expect(errors[0]).toBe('查待绑定的群失败：机器人未启用或尚未运行');
+    expect(errors[0]).toBe('查待绑定的群失败：Bot 没启用或没在运行');
     expect(errors[1]).toBe('读取设置失败：当前 daemon 不支持此操作。\ndaemon 可能比命令行旧。');
     // The real client would throw its request-side ZodError here; the CLI's own check names the field instead.
     const scope = { kind: 'session' as const, botId: agentIdSchema.parse('cli_a'), threadId: '' };

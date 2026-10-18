@@ -148,7 +148,7 @@ export type AfterInstallDependencies = {
   write: (text: string) => void;
 };
 
-export const LINGER_QUESTION = 'linger 没开：退出最后一个登录会话后，systemd 会停掉 bot，开机也不会启动。要开吗？[Y/n] ';
+export const LINGER_QUESTION = 'linger 没开：退出最后一个登录会话后，systemd 会停掉 Bot，开机也不会启动。要开吗？[Y/n] ';
 
 /**
  * After a Linux install (3.10): linger, then how to open the web page. Enter or y agrees; n, EOF, Ctrl-C and a

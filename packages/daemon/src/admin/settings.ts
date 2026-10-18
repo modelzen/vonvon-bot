@@ -26,7 +26,7 @@ const writable: T.SettingsAccess = {
 export const offlineSettings: T.SettingsAccess = {
   kind: 'readonly',
   reason: 'owner-offline',
-  message: '请先启动此 Agent，再编辑设置'
+  message: '这个 Bot 没在运行，运行起来后才能改设置'
 };
 export interface SettingsOwnerDeps {
   cfg: AppConfig;
@@ -59,11 +59,11 @@ const agentEffects: {
   [K in keyof T.AgentSections]: T.ApplyEffect[];
 } = {
   cards: effect(['showToolCalls', 'showModel'], 'next-message', '后续任务卡片输出生效'),
-  run: [...effect(['maxConcurrentRuns'], 'restart', '已保存的并发上限在 Host 重启后生效'), ...effect(['pendingPolicy'], 'next-message', '下一条消息生效'), ...effect(['runIdleTimeoutSeconds'], 'next-turn', '下一次超时检测生效')],
+  run: [...effect(['maxConcurrentRuns'], 'restart', '已保存的并发上限在 daemon 重启后生效'), ...effect(['pendingPolicy'], 'next-message', '下一条消息生效'), ...effect(['runIdleTimeoutSeconds'], 'next-turn', '下一次超时检测生效')],
   completion: effect(['mode', 'longTaskMinutes'], 'task-completion', '任务结束时读取最新策略'),
   comments: effect(['backend', 'selection'], 'new-comment', '下一条评论使用新设置'),
-  titles: effect(['byBackend'], 'new-session', '仅影响之后由 Bridge 新建的会话'),
-  paths: effect(['projectsRootDir'], 'new-project', '仅影响之后新建的空白项目'),
+  titles: effect(['byBackend'], 'new-session', '只影响之后新建的会话'),
+  paths: effect(['projectsRootDir'], 'new-project', '只影响之后新建的群'),
   access: effect(['allowedChats'], 'next-message', '下一条消息使用新权限'),
 };
 function selection(model?: string, effort?: ReasoningEffort, custom?: boolean): T.ModelSelection {
@@ -179,7 +179,7 @@ function rejected(error: unknown): {
     kind: 'rejected',
     fields: [{
         field: 'settings',
-        message: error instanceof SettingsInputError ? error.message : '保存失败，请刷新设置后重试；若配置被其他进程修改，请重启 Host'
+        message: error instanceof SettingsInputError ? error.message : '保存失败，请刷新设置后重试；若配置被其他进程修改，请重启 daemon'
       }]
   };
 }
@@ -204,7 +204,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
   let actionChain: Promise<unknown> = Promise.resolve();
   const own = (scope: T.SettingsScope) => {
     if (scope.kind === 'host' || scope.botId !== botId)
-      throw new SettingsInputError('设置不属于此 Agent');
+      throw new SettingsInputError('设置不属于这个 Bot');
   };
   async function models(query: T.ModelQuery): Promise<T.ModelCatalog> {
     own({
@@ -388,7 +388,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         }
       };
     }
-    throw new SettingsInputError('安装设置由 Host 管理');
+    throw new SettingsInputError('安装设置由 daemon 管理');
   }
   async function sectionView(edit: T.BotSettingsEdit): Promise<T.SettingsSectionView> {
     const view = await read(edit.scope);
@@ -409,7 +409,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         reason: access
       };
     if (parsed.scope.kind === 'host')
-      throw new SettingsInputError('安装设置由 Host 管理');
+      throw new SettingsInputError('安装设置由 daemon 管理');
     const edit = parsed as T.BotSettingsEdit;
     let additionalEffects: T.ApplyEffect[] = [];
     try {
@@ -475,7 +475,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
                 ...e.patch
               };
               break;
-            default: throw new SettingsInputError('无效 Agent 设置');
+            default: throw new SettingsInputError('无效的 Bot 设置');
           }
         });
         if (e.section === 'completion')
@@ -535,7 +535,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
             await deps.evictLiveSessionsForChat(p.chatId);
           }
           catch {
-            additionalEffects = effect([e.section], 'restart', '设置已保存，但活跃会话重新绑定失败。请重启 Host 使权限设置生效');
+            additionalEffects = effect([e.section], 'restart', '设置已保存，但活跃会话重新绑定失败。请重启 daemon 使权限设置生效');
           }
         }
       }
@@ -607,7 +607,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           await deps.writePreferences(p => {
             check([botId, resolveOwner(cfg), p.access?.admins ?? []], action.revision);
             if (action.openId === resolveOwner(cfg) && action.membership === 'absent')
-              throw new SettingsInputError('所有者不可移除');
+              throw new SettingsInputError('主人不能移除');
             const admins = new Set(p.access?.admins ?? []);
             if (action.membership === 'present')
               admins.add(action.openId);

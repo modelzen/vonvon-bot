@@ -68,8 +68,8 @@ test('results are complete, ranked, uniquely identified, and have valid destinat
 
 test('conditional settings lead to parent controls with clear prerequisites', () => {
   const threshold = findEntries(entries, '长任务阈值')[0];
-  assert.equal(threshold?.destination.section, '任务结束提醒');
-  assert.match(threshold?.destination.guide ?? '', /提醒方式/);
+  assert.equal(threshold?.destination.section, '完成提醒');
+  assert.match(threshold?.destination.guide ?? '', /什么时候提醒/);
   const topic = findEntries(entries, '本话题模型')[0];
   assert.equal(topic?.destination.field, '选择话题');
   assert.match(topic?.destination.guide ?? '', /选择话题/);
@@ -78,8 +78,8 @@ test('conditional settings lead to parent controls with clear prerequisites', ()
 
 test('tool search destinations use the same section names as the rendered tool cards', () => {
   for (const [query, section, reveal] of [
-    ['安装位置 Codex', 'Codex CLI', 'codex-tool'],
-    ['安装位置 Claude', 'Claude Code CLI', 'claude-tool'],
+    ['安装位置 Codex', 'Codex', 'codex-tool'],
+    ['安装位置 Claude', 'Claude', 'claude-tool'],
     ['安装位置 飞书 CLI', '飞书 CLI', 'lark-tool'],
   ]) {
     const result = findEntries(entries, query!)[0];

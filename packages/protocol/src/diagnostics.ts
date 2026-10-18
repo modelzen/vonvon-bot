@@ -83,9 +83,9 @@ export const NOT_REPLIED_TEXT: Record<NotRepliedReason, Text> = {
 /** The optional scopes of 3.11 that change what the bot does in a chat, and what is lost without each. */
 export const OPTIONAL_SCOPE_EFFECTS: Record<string, string> = {
   "contact:user.base:readonly": "叫不出群里人的真名",
-  "im:chat:readonly": "认不出话题群；数不出群里几个 bot，多会话主区的命令要 @；把 bot 拉进群后不提醒绑定",
-  "im:message.group_at_msg.include_bot:readonly": "别的 bot @ 它时收不到",
-  "application:application:self_manage": "飞书里的应用管理员不能管这个 bot",
+  "im:chat:readonly": "认不出话题群；数不出群里几个 Bot，多会话主区的命令要 @；把 Bot 拉进群后不提醒绑定",
+  "im:message.group_at_msg.include_bot:readonly": "别的 Bot @ 它时收不到",
+  "application:application:self_manage": "飞书里的应用管理员不能管这个 Bot",
 };
 export const SCOPE_DENIAL_PLACE_TEXT: Record<ScopeDenialPlace, string> = {
   history: "补拉群消息时", names: "查群里人的真名时", "chat-info": "读群信息时", send: "发消息时",

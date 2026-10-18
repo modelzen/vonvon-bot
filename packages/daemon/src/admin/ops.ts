@@ -96,7 +96,7 @@ export function createAppPreferencesWriter(opts: {
     const run = chain.then(async () => {
       if (!opts.persistConfig) {
         const disk = await loadConfig();
-        if (JSON.stringify(disk) !== JSON.stringify(opts.cfg)) throw new AdminWriteError('配置已被其他进程修改，请重启 Host 后重新加载设置');
+        if (JSON.stringify(disk) !== JSON.stringify(opts.cfg)) throw new AdminWriteError('配置已被其他进程修改，请重启 daemon 后重新加载设置');
       }
       const preferences = structuredClone(opts.cfg.preferences ?? {});
       await mutate(preferences);

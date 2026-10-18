@@ -8,6 +8,7 @@ import {
   SettingsRow,
 } from "../reference/components/system-settings";
 import {
+  backendLabel,
   groupIdSchema,
   type AgentId,
   type Membership,
@@ -52,6 +53,8 @@ type Section<T> = {
     | { kind: "readonly"; reason: string; message: string };
   apply: { detail: string }[];
 };
+/** The backends a Bot-wide setting can pick, named as the UI names them. */
+const backendChoices = (["codex-appserver", "claude-agent"] as const).map((value) => ({ value, label: backendLabel(value) }));
 const effortOptions = [
   "none",
   "minimal",
@@ -766,7 +769,7 @@ function AgentPanel({
               run.stored.maxConcurrentRuns && (
               <SettingsRow
                 title="当前运行并发"
-                description="已保存的上限等待 Host 重启。"
+                description="已保存的上限要重启 daemon 后才生效。"
                 value={String(run.effective.maxConcurrentRuns)}
               />
             )}
@@ -786,15 +789,15 @@ function AgentPanel({
               }
             />
             <SettingsRow
-              title="运行中收到新消息"
-              description="选择新消息加入当前任务，或等当前任务结束后处理。"
+              title="运行中来了消息"
+              description="插话交给正在跑的这一轮，排队等它跑完；Claude 只能排队。"
               trailing={
                 <Select
-                  label="待处理消息策略"
+                  label="运行中来了消息"
                   value={draft.pendingPolicy}
                   disabled={disabled}
                   choices={[
-                    { value: "steer", label: "引导当前任务" },
+                    { value: "steer", label: "插话" },
                     { value: "queue", label: "排队" },
                   ]}
                   onChange={(value) => void commit({ pendingPolicy: value })}
@@ -805,17 +808,17 @@ function AgentPanel({
         )}
       />
       <Editor
-        title="任务结束提醒"
+        title="完成提醒"
         section={completion}
         save={(draft, revision) => save("completion", draft, revision)}
         render={(draft, set, disabled, commit) => (
           <>
             <SettingsRow
-              title="提醒方式"
-              description="控制 Bot 任务结束后何时发送提醒。"
+              title="什么时候提醒"
+              description="任务跑完后，什么时候在飞书里提醒发起人。"
               trailing={
                 <Select
-                  label="提醒方式"
+                  label="什么时候提醒"
                   value={draft.mode}
                   disabled={disabled}
                   choices={[
@@ -950,16 +953,13 @@ function AgentPanel({
               return (
                 <>
                   <SettingsRow
-                    title="执行工具"
+                    title="后端"
                     trailing={
                       <Select
-                        label="标题执行工具"
+                        label="标题后端"
                         value={titleBackend}
                         disabled={disabled}
-                        choices={[
-                          { value: "codex-appserver", label: "Codex" },
-                          { value: "claude-agent", label: "Claude" },
-                        ]}
+                        choices={backendChoices}
                         onChange={setTitleBackend}
                       />
                     }
@@ -1043,16 +1043,13 @@ function AgentPanel({
             render={(draft, set, disabled) => (
               <>
                 <SettingsRow
-                  title="执行工具"
+                  title="后端"
                   trailing={
                     <Select
-                      label="评论执行工具"
+                      label="评论后端"
                       value={draft.backend}
                       disabled={disabled}
-                      choices={[
-                        { value: "codex-appserver", label: "Codex" },
-                        { value: "claude-agent", label: "Claude" },
-                      ]}
+                      choices={backendChoices}
                       onChange={(value) => {
                         setCommentBackend(value);
                         set({
@@ -1144,10 +1141,10 @@ function AgentPanel({
         footer={
           cards.access.kind === "readonly"
             ? cards.access.message
-            : "注册 Bot 的所有者始终拥有管理员权限，不能在这里移除。"
+            : "注册 Bot 的主人始终有管理员权限，不能在这里移除。"
         }
       >
-        <SettingsRow title="所有者" value={view.ownerOpenId ?? "尚未确认"} />
+        <SettingsRow title="主人" value={view.ownerOpenId ?? "尚未确认"} />
         {view.administrators.openIds.map((id) => (
           <SettingsRow
             key={id}
@@ -1201,18 +1198,18 @@ function AgentPanel({
       </SettingsGroup>
       </details>
       <details className="agent-settings-disclosure">
-        <summary><span>更多设置<small>项目目录与允许的飞书群</small></span></summary>
+        <summary><span>更多设置<small>工作区的默认位置与允许的飞书群</small></span></summary>
       <Editor
-        title="新项目默认目录"
+        title="工作区的默认位置"
         section={paths}
         save={(draft, revision) => save("paths", draft, revision)}
         render={(draft, set, disabled) => (
           <SettingsRow
-            title="根目录"
-            description="只用于之后创建的空白项目。"
+            title="文件夹"
+            description="新建的群在这里建自己的工作区，只影响之后新建的群。"
             trailing={
               <Text
-                label="新项目根目录"
+                label="工作区的默认位置"
                 value={draft.projectsRootDir ?? ""}
                 disabled={disabled}
                 placeholder="使用默认目录"
@@ -1352,7 +1349,7 @@ export function ProjectPanel({
     model = view.sections.model;
   // Codex on Linux: 只读 and 读写 are greyed out; a stored one still shows (product.md 3.8).
   const fullOnly = view.identity.fullOnly;
-  const tiers = ([["qa", "只读问答"], ["write", "允许写入"], ["full", "完全访问"]] as const)
+  const tiers = ([["qa", "只读"], ["write", "读写"], ["full", "完全访问"]] as const)
     .map(([value, label]) => ({ value, label, disabled: Boolean(fullOnly) && value !== "full" }));
   return (
     <>

@@ -25,10 +25,10 @@ export type SetupStep = {
 };
 
 /** Join-group scope and bot-added event: optional for receiving messages, needed to bind groups (s02a). */
-export const JOIN_SCOPE_WARNING = '还没开读群信息的权限（im:chat:readonly）：把 bot 拉进群后不会提醒你绑定，「查找已经加入的群」也会失败。';
-export const BOT_ADDED_WARNING = '没订阅「机器人进群」（im.chat.member.bot.added_v1）：把 bot 拉进群后不会提醒你绑定。';
+export const JOIN_SCOPE_WARNING = '还没开读群信息的权限（im:chat:readonly）：把 Bot 拉进群后不会提醒你绑定，「查找已经加入的群」也会失败。';
+export const BOT_ADDED_WARNING = '没订阅「机器人进群」（im.chat.member.bot.added_v1）：把 Bot 拉进群后不会提醒你绑定。';
 /** Recall event: optional, without it a recalled message the bot read is still used (s15). */
-export const RECALL_WARNING = '没订阅「撤回消息」（im.message.recalled_v1）：撤回 bot 读过的消息后，bot 不会知道，还会接着用它。';
+export const RECALL_WARNING = '没订阅「撤回消息」（im.message.recalled_v1）：撤回 Bot 读过的消息后，Bot 不会知道，还会接着用它。';
 /** Optional events whose absence gets a warning under the 事件订阅 step. */
 const OPTIONAL_EVENT_WARNINGS = [
   ['im.chat.member.bot.added_v1', BOT_ADDED_WARNING],
@@ -151,7 +151,7 @@ export function linuxSteps(tools: readonly ToolState[]): SetupStep[] {
 
 const CODEX_LINUX = 'Linux 上 Codex 的沙箱只挡写、不限制读，vonvon 不在 Linux 上用 Codex 的只读、读写档，这两档的群不起会话，有人 @ 它时回一句说明，免@ 触发时每个群 10 分钟最多回一次。要用 Codex 的群，在群设置里把权限档改成「完全访问」，或者在终端运行 vonvon settings set --group <群 id> permission.mode=full。完全访问下 Codex 能读写这个账号能碰到的所有文件，群里有别人时先想清楚。不会自动改。';
 const FULL_INSTEAD = '不想改的话，这台主机上用 Claude 的群就用完全访问。';
-const SANDBOX_MISSING = 'Claude 在只读、读写档下用 bubblewrap 沙箱把命令关在项目文件夹里，缺了这两档的回合会失败（Sandbox required but unavailable），完全访问不受影响。别的发行版用自己的包管理器装 bubblewrap 和 socat；装好后一分钟内这里会更新。';
+const SANDBOX_MISSING = 'Claude 在只读、读写档下用 bubblewrap 沙箱把命令关在工作区里，缺了这两档的回合会失败（Sandbox required but unavailable），完全访问不受影响。别的发行版用自己的包管理器装 bubblewrap 和 socat；装好后一分钟内这里会更新。';
 const SANDBOX_APPARMOR = `Ubuntu 23.10 起默认不让普通程序建用户命名空间（kernel.apparmor_restrict_unprivileged_userns = 1），bwrap 起不来，只读、读写档的回合会失败。给 bwrap 单独加一份 AppArmor 配置就行，不用全局关掉这个限制，命令见下；${FULL_INSTEAD}`;
 const USERNS_SETTINGS: Record<string, string> = {'kernel.unprivileged_userns_clone': '1', 'user.max_user_namespaces': '15000'};
 
@@ -194,25 +194,25 @@ export function serviceStep(application: Pick<DesktopSnapshot['application'], 'p
   if (application.platform !== 'macos') return {id: 'service', title: '后台服务', status: '不支持', tone: 'neutral', done: false, detail: '这台电脑不支持后台服务。', actions: []};
   const failure = recentServiceFailure(service, now);
   const step = (status: string, tone: StepTone, done: boolean, detail: string | undefined, actions: readonly StepAction[] = []) =>
-    ({id: 'service', title: '登录电脑时自动运行 bot（推荐）', status, tone, done, detail, actions, warnings: failure ? [failure] : undefined} as const);
+    ({id: 'service', title: '登录电脑时自动运行 Bot（推荐）', status, tone, done, detail, actions, warnings: failure ? [failure] : undefined} as const);
   const action = service?.action;
   if (action?.phase === 'running') return step(action.action === 'install' ? '正在打开…' : '正在关闭…', 'neutral', false, '页面会断开几秒再连上。');
   if (service?.blocked === 'development') return step('开发版不能装', 'neutral', false, SERVICE_DISTRIBUTION_MESSAGE);
   if (service?.blocked === 'translocated') return step('先移到"应用程序"', 'warning', false, 'Vonvon Bot 正从临时位置运行，装成后台服务后下次会找不到它。把它拖到"应用程序"文件夹，从那里打开，再回到这一步。', [SERVICE_RECHECK]);
   switch (service?.state) {
-    case 'running': return step('已开启', 'success', true, 'bot 跑在后台服务里：退出 app、注销再登录都在线，崩溃后自动重启。');
+    case 'running': return step('已开启', 'success', true, 'Bot 跑在后台服务里：退出 app、注销再登录都在线，崩溃后自动重启。');
     case 'detached': case 'stopped':
       return step('已开启 · 这次没交给后台服务', 'warning', true, '现在的 daemon 是单独启动的，崩溃后不会自动重启；下次登录电脑时会由后台服务启动。', [{kind: 'serviceInstall', label: '交给后台服务'}]);
     case 'disabled': return step('已在系统设置里关掉', 'warning', false, '在"系统设置 › 通用 › 登录项与扩展"的"允许在后台"里打开 Vonvon Bot，再点「重新检测」。', [SERVICE_RECHECK]);
     case 'not-installed': return service?.skipped
-      ? step('已跳过', 'neutral', true, 'bot 跑在单独启动的 daemon 里，退出 app 不停，但这样崩溃后不会自动重启；注销或重启电脑后要重新打开 app。', [{kind: 'serviceInstall', label: '改为自动运行'}])
-      : step('推荐打开', 'warning', false, '打开后 bot 跑在 macOS 的后台服务里：退出 app、注销再登录都在线，崩溃后自动重启。', [{kind: 'serviceInstall', label: '打开', primary: true}, {kind: 'serviceSkip', label: '跳过'}]);
+      ? step('已跳过', 'neutral', true, 'Bot 跑在单独启动的 daemon 里，退出 app 不停，但这样崩溃后不会自动重启；注销或重启电脑后要重新打开 app。', [{kind: 'serviceInstall', label: '改为自动运行'}])
+      : step('推荐打开', 'warning', false, '打开后 Bot 跑在 macOS 的后台服务里：退出 app、注销再登录都在线，崩溃后自动重启。', [{kind: 'serviceInstall', label: '打开', primary: true}, {kind: 'serviceSkip', label: '跳过'}]);
     case 'conflict': return step('要处理', 'danger', false, service?.detail, [SERVICE_RECHECK]);
     default: return step('无法确认', 'neutral', false, serviceUnreachable('launchd', service?.detail), [SERVICE_RECHECK]);
   }
 }
 
-export const LINGER_OFF_WARNING = '没开 linger：退出最后一个登录会话后 bot 会停，开机也不启动。在终端运行 loginctl enable-linger。';
+export const LINGER_OFF_WARNING = '没开 linger：退出最后一个登录会话后 Bot 会停，开机也不启动。在终端运行 loginctl enable-linger。';
 
 /** Linux (1.4): read-only, the step names the terminal command. Without linger a running service is still done, with a
  * warning; an unreachable user manager gets the daemon's hint when it has one (s20a). */
@@ -221,7 +221,7 @@ function linuxServiceStep(service: ApplicationService | undefined): SetupStep & 
   switch (service?.state) {
     case 'running': {
       const boot = service.linger === 'on' ? '；开机就启动，退出 SSH 也在线' : '';
-      return step('在运行', 'success', true, `bot 跑在 systemd 用户服务里，崩溃后自动重启${boot}。`, service.linger === 'off' ? [LINGER_OFF_WARNING] : undefined);
+      return step('在运行', 'success', true, `Bot 跑在 systemd 用户服务里，崩溃后自动重启${boot}。`, service.linger === 'off' ? [LINGER_OFF_WARNING] : undefined);
     }
     case 'not-installed': return step('没装', 'neutral', false, '在终端运行 vonvon service install，装成 systemd 用户服务，崩溃后自动重启。');
     case 'disabled': return step('没启用', 'neutral', false, '在终端运行 vonvon service install。');
@@ -271,7 +271,7 @@ export function serviceActionMessage(report: ServiceActionReport): string {
     return `没装上：${detail}`;
   };
   const parts = report.ok ? [] : [failure()];
-  if (report.restarted) parts.push('已按原来的端口重新起了 bot（分离运行）。');
-  if (report.restartError) parts.push('bot 现在没在运行：在终端运行 vonvon daemon start。');
+  if (report.restarted) parts.push('已按原来的端口重新起了 Bot（分离运行）。');
+  if (report.restartError) parts.push('Bot 现在没在运行：在终端运行 vonvon daemon start。');
   return parts.map((part, index) => index < parts.length - 1 && !part.endsWith('。') ? `${part}。` : part).join('');
 }
