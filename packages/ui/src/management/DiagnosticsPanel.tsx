@@ -67,7 +67,7 @@ export function setupView(agent: Agent, read: SetupRead | undefined): {badge: Re
 }
 
 function NotRepliedList({records, agent, snapshot, now}: {records: readonly NotReplied[]; agent: Agent; snapshot: DesktopSnapshot; now: number}) {
-  if (!records.length) return <>最近没有没回的消息。这里只记 @ 了这个 bot、或者按群设置该它回却没回的消息；daemon 重启后清空。</>;
+  if (!records.length) return <>最近没有没回的消息。这里只记 @ 了这个 bot、按群设置该它回、或者智能模式判断过却没回的消息；daemon 重启后清空。</>;
   const groups = new Map(snapshot.groups.map(group => [group.id as string, group.name]));
   return <ul className="diagnostics-replies">{records.map(record => {
     const text = NOT_REPLIED_TEXT[record.reason];

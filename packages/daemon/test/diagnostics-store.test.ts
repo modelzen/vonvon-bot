@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { NotReplied } from '@vonvon/protocol';
-import { createDiagnosticsStore, errorDetail, parseDiagnosticsIpc, reportNotReplied, reportScopeDenied, setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
+import { createDiagnosticsStore, errorDetail, NOT_REPLIED_LIMIT, QUIET_LIMIT, parseDiagnosticsIpc, reportNotReplied, reportScopeDenied, setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
 
 const record = (fields: Partial<Omit<NotReplied, 'count'>> = {}): Omit<NotReplied, 'count'> =>
   ({ at: 1_000_000, groupId: 'oc_fixture_group', place: 'main', reason: 'signed-out', backend: 'codex', ref: 'abc123', ...fields });
@@ -48,6 +48,19 @@ describe('diagnostics store', () => {
     expect(store.view('cli_a')?.deniedScopes).toEqual([{ scope: 'im:chat:readonly', where: 'chat-info', at: now }, { scope: 'im:message:readonly', where: 'send', at: now }]);
     now += 24 * 60 * 60_000;
     expect(store.view('cli_a')?.deniedScopes).toEqual([]);
+  });
+
+  it('keeps at most 10 judgements that did not answer, so they never push out the failures (s25)', () => {
+    const store = createDiagnosticsStore({ changed: () => {} });
+    store.accept('cli_a', replied({ reason: 'quota' }));
+    // Different groups, so none merge.
+    for (let i = 0; i < 40; i++) store.accept('cli_a', replied({ groupId: `oc_${i}`, reason: i % 2 ? 'judge-skip' : 'judge-superseded', at: 1_000_000 + i }));
+    const kept = store.view('cli_a')!.notReplied;
+    expect(kept.filter(item => item.reason !== 'quota')).toHaveLength(QUIET_LIMIT);
+    expect(kept[0]!.groupId).toBe('oc_39');
+    expect(kept.at(-1)!.reason).toBe('quota');
+    for (let i = 0; i < 40; i++) store.accept('cli_a', replied({ groupId: `oc_f${i}`, reason: 'failed' }));
+    expect(store.view('cli_a')!.notReplied).toHaveLength(NOT_REPLIED_LIMIT);
   });
 
   it('drops a deleted bot, and refreshes the page at most once a second', () => {
