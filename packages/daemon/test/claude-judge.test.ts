@@ -3,6 +3,7 @@ import type { Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import { ClaudeAgentBackend, type ClaudeSdkFacade } from '../src/agent/claude-agent/backend';
 import { BackendNotInstalledError } from '../src/agent/backend-loader';
 import { JudgeCallError, type JudgeCall } from '../src/agent/types';
+import { parseVerdict } from '../src/judge/prompt';
 
 const SCHEMA = { type: 'object', properties: { decision: { type: 'string' } } };
 
@@ -35,10 +36,10 @@ const call = (extra: Partial<JudgeCall> = {}): JudgeCall => ({
   system: 'SMART\n\n格式行', input: '【群】g', model: 'haiku', schema: SCHEMA, cwd: '/data/judge', signal: new AbortController().signal, ...extra,
 });
 
+const USAGE = { input_tokens: 2, cache_creation_input_tokens: 510, cache_read_input_tokens: 1411, output_tokens: 293 };
 const success = (extra: Record<string, unknown> = {}) => ({
   type: 'result', subtype: 'success', result: '{"decision":"main","reason":"文本"}',
-  structured_output: { decision: 'topic', reason: '结构化' },
-  usage: { input_tokens: 2, cache_creation_input_tokens: 510, cache_read_input_tokens: 1411, output_tokens: 293 }, ...extra,
+  structured_output: { decision: 'topic', reason: '结构化' }, usage: USAGE, ...extra,
 }) as unknown as SDKMessage;
 
 const failure = (errors: string[]) => ({ type: 'result', subtype: 'error_during_execution', errors }) as unknown as SDKMessage;
@@ -50,18 +51,51 @@ describe('Claude judge (design 3.3)', () => {
     const out = await backend.judge!(call());
     expect(out).toEqual({
       text: '{"decision":"main","reason":"文本"}', structured: { decision: 'topic', reason: '结构化' },
-      usage: { input: 1923, cached: 1411, output: 293 },
+      usage: { input: 1923, cached: 1411, output: 293, reasoning: 0 },
     });
     const { prompt, options } = query.mock.calls[0]![0];
     expect(prompt).toBe('【群】g');
     expect(options).toMatchObject({
-      cwd: '/data/judge', systemPrompt: 'SMART\n\n格式行', model: 'haiku', tools: [], skills: [], mcpServers: {}, strictMcpConfig: true,
+      cwd: '/data/judge', systemPrompt: 'SMART\n\n格式行', title: 'vonvon judge', model: 'haiku', tools: [], skills: [], mcpServers: {}, strictMcpConfig: true,
       persistSession: false, maxTurns: 1, settingSources: ['user'], thinking: { type: 'disabled' },
       outputFormat: { type: 'json_schema', schema: SCHEMA },
       settings: { disableAllHooks: true, claudeMdExcludes: expect.arrayContaining(['**/.claude/CLAUDE.md']) },
     });
     expect(options).not.toHaveProperty('effort');
     expect(options?.env).toMatchObject({ ENABLE_CLAUDEAI_MCP_SERVERS: 'false' });
+  });
+
+  it('tokens come from modelUsage, every model of the query, thinking included; usage only without it', async () => {
+    const modelUsage = {
+      'claude-haiku-5-5': { inputTokens: 2, cacheCreationInputTokens: 1258, cacheReadInputTokens: 1035, outputTokens: 300, thinkingTokens: 190 },
+      'claude-other': { inputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 10, outputTokens: 20, thinkingTokens: 0 },
+    };
+    const withModels = backendWith([success({ modelUsage })]);
+    expect((await withModels.backend.judge!(call())).usage).toEqual({ input: 2310, cached: 1045, output: 320, reasoning: 190 });
+    const usageOnly = backendWith([success({ usage: { ...USAGE, output_tokens_details: { thinking_tokens: 7 } } })]);
+    expect((await usageOnly.backend.judge!(call())).usage).toEqual({ input: 1923, cached: 1411, output: 293, reasoning: 7 });
+  });
+
+  // e12: 13 of 137 judgements had haiku answer in text, without the StructuredOutput tool
+  const assistantText = (text: string) => ({ type: 'assistant', message: { content: [{ type: 'thinking', thinking: '…' }, { type: 'text', text }] } }) as unknown as SDKMessage;
+  const maxTurns = { type: 'result', subtype: 'error_max_turns', is_error: true, errors: ['Reached maximum number of turns (1)'], usage: USAGE } as unknown as SDKMessage;
+
+  it.each([
+    ['main', '```json\n{"decision":"skip","reason":"张三是@王五约时间，与小码无关，不需要插话"}\n```', 'skip'],
+    ['topic', '{"decision":"reply","reason":"张三在问迁移期间缓存抖动的降级方案，属于小码可协助的技术问题，群里暂无人答。"}', 'reply'],
+    ['mentioned', '{"decision":"topic","reason":"点名要查线上500日志，需要排查和多轮来回，开新话题更合适"}', 'topic'],
+  ] as const)('error_max_turns with a %s answer in text: the last text goes to parseVerdict', async (variant, text, decision) => {
+    const { backend } = backendWith([assistantText('先想一下'), { type: 'user', message: { content: [] } } as unknown as SDKMessage, assistantText(text), maxTurns]);
+    const out = await backend.judge!(call());
+    expect(out).toEqual({ text, usage: { input: 1923, cached: 1411, output: 293, reasoning: 0 } });
+    expect(parseVerdict(variant, out)).toMatchObject({ decision });
+  });
+
+  it('error_max_turns without any text, or with an assistant error code, still fails', async () => {
+    const bare = backendWith([{ type: 'assistant', message: { content: [{ type: 'thinking', thinking: '…' }] } } as unknown as SDKMessage, maxTurns]);
+    await expect(bare.backend.judge!(call())).rejects.toMatchObject({ kind: 'failed', message: 'Reached maximum number of turns (1)' });
+    const coded = backendWith([assistantError('rate_limit'), assistantText('{"decision":"skip","reason":"x"}'), maxTurns]);
+    await expect(coded.backend.judge!(call())).rejects.toMatchObject({ kind: 'quota', structured: true });
   });
 
   it('a chosen effort is passed and thinking is left to it', async () => {

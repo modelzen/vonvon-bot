@@ -3,6 +3,7 @@ let AppServerClient: typeof import('../src/agent/codex-appserver/app-server-clie
 import { appendFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import v8 from 'node:v8';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 let CodexAppServerBackend: typeof import('../src/agent/codex-appserver/backend').CodexAppServerBackend;
 import { writeNodeExecutable } from './helpers/node-executable';
@@ -10,13 +11,15 @@ let refillWarmPool: typeof import('../src/agent/codex-appserver/client-pool').re
 let shutdownResidentClients: typeof import('../src/agent/codex-appserver/client-pool').shutdownResidentClients;
 let takeWarmClient: typeof import('../src/agent/codex-appserver/client-pool').takeWarmClient;
 let utilityRequest: typeof import('../src/agent/codex-appserver/client-pool').utilityRequest;
+let connectGated: typeof import('../src/agent/codex-appserver/client-pool').connectGated;
+let CONNECT_TIMEOUT_MS: number;
 
 beforeEach(async () => {
   vi.resetModules();
   ({ UnsentRequestError } = await import('../src/agent/types'));
   ({ AppServerClient } = await import('../src/agent/codex-appserver/app-server-client'));
   ({ CodexAppServerBackend } = await import('../src/agent/codex-appserver/backend'));
-  ({ refillWarmPool, shutdownResidentClients, takeWarmClient, utilityRequest } = await import('../src/agent/codex-appserver/client-pool'));
+  ({ CONNECT_TIMEOUT_MS, connectGated, refillWarmPool, shutdownResidentClients, takeWarmClient, utilityRequest } = await import('../src/agent/codex-appserver/client-pool'));
 });
 
 // M-2（research/08 probe 思路的单测化）：utility client 复用/出错即重建 + 容量 1
@@ -247,4 +250,128 @@ it('returning a notification iterator removes its pending read', async () => {
   expect(await fresh.next()).toMatchObject({done:false,value:{method:'real/event'}});
   await fresh.return?.();
  } finally {await client.close();}
+});
+
+describe('首启闸（R3-1）：同一个 CODEX_HOME 第一个进程回 initialize 之前不起第二个', () => {
+  /** A fake AppServerClient whose connect settles when the test says so. */
+  function fakeClient() {
+    let ok!: () => void;
+    let fail!: (error: Error) => void;
+    const connect = vi.fn(() => new Promise<void>((resolve, reject) => { ok = resolve; fail = reject; }));
+    return { connect, ok: () => ok(), fail: () => fail(new Error('app-server exited (code=1 signal=null)')) };
+  }
+  const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+  const prevHome = process.env.CODEX_HOME;
+  afterEach(() => {
+    if (prevHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = prevHome;
+  });
+
+  it('首启没落定不连第二个；成功以后闸常开，后面的一起连', async () => {
+    const [a, b, c, d] = [fakeClient(), fakeClient(), fakeClient(), fakeClient()];
+    const first = connectGated(a, 'codex');
+    const waiting = [connectGated(b, 'codex'), connectGated(c, 'codex')];
+    await tick();
+    expect([a, b, c].map(x => x.connect.mock.calls.length)).toEqual([1, 0, 0]);
+    a.ok();
+    await first;
+    await tick();
+    expect([b, c].map(x => x.connect.mock.calls.length)).toEqual([1, 1]);
+    b.ok(); c.ok();
+    await Promise.all(waiting);
+    void connectGated(d, 'codex');
+    expect(d.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it('首启失败就放闸，下一个接着试，仍然一次一个', async () => {
+    const [a, b, c] = [fakeClient(), fakeClient(), fakeClient()];
+    const first = connectGated(a, 'codex');
+    const second = connectGated(b, 'codex');
+    const third = connectGated(c, 'codex');
+    await tick();
+    a.fail();
+    await expect(first).rejects.toThrow('code=1');
+    await tick();
+    expect([b, c].map(x => x.connect.mock.calls.length)).toEqual([1, 0]);
+    b.ok();
+    await second;
+    await tick();
+    expect(c.connect).toHaveBeenCalledTimes(1);
+    c.ok();
+    await third;
+  });
+
+  it('按 CODEX_HOME 分：另一个 CODEX_HOME 的首启不用等', async () => {
+    const [a, b] = [fakeClient(), fakeClient()];
+    process.env.CODEX_HOME = '/codex-home-a';
+    void connectGated(a, 'codex');
+    process.env.CODEX_HOME = '/codex-home-b';
+    void connectGated(b, 'codex');
+    await tick();
+    expect([a, b].map(x => x.connect.mock.calls.length)).toEqual([1, 1]);
+  });
+
+  it('关闭时在等的马上放开（reject），不再连', async () => {
+    const [a, b] = [fakeClient(), fakeClient()];
+    // held far longer than the test may run: only shutdown can let b go
+    void connectGated(a, 'codex', 60_000).catch(() => undefined);
+    const waiting = connectGated(b, 'codex');
+    await tick();
+    await shutdownResidentClients();
+    await expect(waiting).rejects.toThrow('closed');
+    expect(b.connect).not.toHaveBeenCalled();
+  });
+
+  it('首启一直不落定：过了 holdMs 让下一个试，等的不会永远卡住', async () => {
+    const [a, b] = [fakeClient(), fakeClient()];
+    void connectGated(a, 'codex', 50);
+    void connectGated(b, 'codex', 50);
+    await tick();
+    expect(b.connect).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(b.connect).toHaveBeenCalledTimes(1), { timeout: 2000 });
+  });
+
+  it('等闸的时间不算进 utility 和预热自己的连接时限：首启快到时限才连上，等着的照样连上（审查 F1）', async () => {
+    const { bin } = makeFakeCodex();
+    // No real process: connect takes 500 ms of fake time, requests answer at once.
+    const connect = vi.spyOn(AppServerClient.prototype, 'connect')
+      .mockImplementation(() => new Promise(resolve => setTimeout(resolve, 500)));
+    vi.spyOn(AppServerClient.prototype, 'request').mockResolvedValue({ data: [] });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const holder = fakeClient();
+      void connectGated(holder, bin);
+      const listed = utilityRequest('model/list');
+      void listed.catch(() => undefined);
+      const warmed = refillWarmPool();
+      await vi.advanceTimersByTimeAsync(CONNECT_TIMEOUT_MS - 100);
+      expect(connect).not.toHaveBeenCalled();
+      holder.ok();
+      // inside the old deadline the waiters' own connects would end past 15 s from their start
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(listed).resolves.toEqual({ data: [] });
+      await warmed;
+      expect(connect).toHaveBeenCalledTimes(2);
+      expect(takeWarmClient(bin)).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('等闸只挂在这一轮上，不挂在活到关机的 Promise 上：等过 1,000 次，用过的 Promise 都能回收（审查 S3）', async () => {
+    // plain objects: vitest keeps every vi.fn and the promises it returned
+    const waitOnce = async (): Promise<void> => {
+      let fail!: (error: Error) => void;
+      const first = connectGated({ connect: () => new Promise<void>((_, reject) => { fail = reject; }) }, 'codex');
+      const waiter = connectGated({ connect: () => Promise.reject(new Error('exit 1')) }, 'codex');
+      fail(new Error('exit 1')); // the waiter then tries, fails too, and the gate is empty again
+      await Promise.allSettled([first, waiter]);
+    };
+    await waitOnce();
+    const live = (): number => v8.queryObjects(Promise) as number; // after a full GC
+    const before = live();
+    for (let i = 0; i < 1000; i++) await waitOnce();
+    expect(live() - before).toBeLessThan(100);
+  });
 });

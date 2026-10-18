@@ -13,13 +13,17 @@ import { readSmartPrompt, SmartPromptError } from './smart-file';
 import type { JudgeDecision, JudgeErrorKind, JudgeRequest, JudgeResult } from './types';
 
 /** From the call to the result, queueing and a cold start included (design 3.2). A mention always
- * gets a reply and the judgement only picks where, so it waits less. e12 tunes these. */
-export const JUDGE_TIMEOUT_MS = { main: 20_000, mentioned: 10_000, topic: 20_000 } as const;
+ * gets a reply and the judgement only picks where, so it waits less. e12: warm judgements took at most
+ * 7.9 s (Codex) and 6.1 s (Claude), a new Codex judge process 10.3 to 11.1 s; 12 s covers those, 20 s
+ * a warm judgement queued one round. */
+export const JUDGE_TIMEOUT_MS = { main: 20_000, mentioned: 12_000, topic: 20_000 } as const;
 /** How long an aborted backend call may take to clean up before its slot is given back anyway. */
 export const JUDGE_SETTLE_MS = 15_000;
 /** After a model-list fetch that left nothing cached, how long before trying again. */
 export const MODEL_LIST_RETRY_MS = 5 * 60_000;
-/** Per backend, per bot process: a Claude judgement runs a ~250 MB CLI. */
+/** Per backend, per bot process. A Claude judgement runs a CLI of about 340 MB (e12: median 338 MB,
+ * at most about 380 MB), so two are about 0.7 GB; four Codex judgements run truly in parallel on one
+ * judge process. */
 const LIMITS: Record<string, { running: number; queued: number }> = {
   'codex-appserver': { running: 4, queued: 16 },
   'claude-agent': { running: 2, queued: 16 },
@@ -318,7 +322,7 @@ export function createJudge(deps: JudgeDeps): Judge {
       if (!verdict) throw new JudgeFail('format', '模型没按格式回答');
       const usage = output.usage;
       return finish({ ...verdict, ...base, ms: now() - started }, {
-        cold: output.cold, inputTokens: usage?.input, cachedTokens: usage?.cached, outputTokens: usage?.output,
+        cold: output.cold, inputTokens: usage?.input, cachedTokens: usage?.cached, outputTokens: usage?.output, reasoningTokens: usage?.reasoning,
       });
     } catch (error) {
       // Once the controller fired, its reason names the failure, whatever the backend threw after.
