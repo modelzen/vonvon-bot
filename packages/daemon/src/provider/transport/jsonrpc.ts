@@ -7,7 +7,7 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mergeProcessEnv } from '../../platform/spawn';
 import { log } from '../../core/logger';
 import type { ServerNotification } from '../../agent/codex-appserver/protocol';
-import { OwnedCodexProcess } from '../../agent/codex-appserver/owned-process';
+import { OwnedProviderProcess } from '../../agent/owned-process';
 import { binChildEnv } from '../../platform/tool-path';
 
 class AsyncQueue<T> {
@@ -233,7 +233,7 @@ export interface AppServerClientOptions {
 
 export class AppServerClient {
   private child: ChildProcessWithoutNullStreams | null = null;
-  private owned: OwnedCodexProcess | undefined;
+  private owned: OwnedProviderProcess | undefined;
   private peer: JsonRpcPeer | undefined;
   private readonly notifications = new AsyncQueue<ServerNotification | InboundQuestion | InboundCancellation>();
   private requestScope: CodexRequestScope | undefined;
@@ -260,7 +260,7 @@ export class AppServerClient {
     // Launch via cross-spawn (platform/spawn) so a Windows `.cmd` codex shim
     // runs instead of throwing EINVAL (CVE-2024-27980). With stdio all-piped the
     // streams are non-null, so the cast to *WithoutNullStreams is sound.
-    const owned = new OwnedCodexProcess(this.opts.bin, ['app-server', '--listen', 'stdio://'], {
+    const owned = new OwnedProviderProcess(this.opts.bin, ['app-server', '--listen', 'stdio://'], {
       cwd: this.opts.cwd,
       env: binChildEnv(this.opts.bin, mergeProcessEnv(process.env, { ...this.opts.env, FEISHU_CODEX_BRIDGE: '1' })),
       stdio: ['pipe', 'pipe', 'pipe'],

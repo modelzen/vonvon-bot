@@ -131,7 +131,7 @@ interface Shell {
 }
 const shells: Shell[] = [];
 const endings: Promise<unknown>[] = [];
-let ownerModule: typeof import('../src/agent/codex-appserver/owned-process');
+let ownerModule: typeof import('../src/agent/owned-process');
 let kill: MockInstance<typeof process.kill>;
 let nextPid = 987654321;
 const nativePlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
@@ -173,7 +173,7 @@ function shell(pid: number | undefined = nextPid++): Shell {
 }
 function born(fixture = shell()) {
   transport.spawn.mockReturnValueOnce(fixture.child);
-  const owner = new ownerModule.OwnedCodexProcess('/fixture/no-provider', [], {});
+  const owner = new ownerModule.OwnedProviderProcess('/fixture/no-provider', [], {});
   return { fixture, owner };
 }
 
@@ -199,7 +199,7 @@ beforeEach(async () => {
     if (fixture.state() === 'permission-denied' && signal === 0) throw Object.assign(new Error('denied'), { code: 'EPERM' });
     return true;
   });
-  ownerModule = await import('../src/agent/codex-appserver/owned-process');
+  ownerModule = await import('../src/agent/owned-process');
   ({ createOrchestrator } = await import('../src/bot/handle-message'));
 });
 afterEach(async () => {
@@ -230,7 +230,7 @@ it('retains close at 6 and 120 seconds until group death', async () => {
   fixture.die();
   await vi.advanceTimersByTimeAsync(1000);
   expect(result.status).toBe('rejected');
-  expect(result.error).toBeInstanceOf(ownerModule.CodexProcessCleanupError);
+  expect(result.error).toBeInstanceOf(ownerModule.ProviderProcessCleanupError);
   expect(owner.close()).toBe(closing);
 });
 
@@ -238,19 +238,19 @@ it('registry retains uncertainty, caches its exact Promise, and seals new births
   const { owner, fixture } = born();
   const closing = owner.close();
   observe(closing);
-  const registry = ownerModule.closeOwnedCodexProcesses();
+  const registry = ownerModule.closeOwnedProviderProcesses();
   const result = observe(registry);
-  expect(ownerModule.closeOwnedCodexProcesses()).toBe(registry);
-  expect(() => new ownerModule.OwnedCodexProcess('/fixture/late', [], {})).toThrow();
+  expect(ownerModule.closeOwnedProviderProcesses()).toBe(registry);
+  expect(() => new ownerModule.OwnedProviderProcess('/fixture/late', [], {})).toThrow();
   expect(transport.spawn).toHaveBeenCalledTimes(1);
   await vi.advanceTimersByTimeAsync(120000);
   expect(result.status).toBe('pending');
-  expect(ownerModule.unconfirmedCodexPids()).toEqual([fixture.pid]);
+  expect(ownerModule.unconfirmedProviderPids()).toEqual([fixture.pid]);
   fixture.die();
   await vi.advanceTimersByTimeAsync(1000);
   expect(result.status).toBe('rejected');
-  expect(ownerModule.unconfirmedCodexPids()).toEqual([]);
-  expect(ownerModule.closeOwnedCodexProcesses()).toBe(registry);
+  expect(ownerModule.unconfirmedProviderPids()).toEqual([]);
+  expect(ownerModule.closeOwnedProviderProcesses()).toBe(registry);
 });
 
 it('postbirth error neither settles exited nor proves death and becomes a cleanup failure after death', async () => {
@@ -271,7 +271,7 @@ it('birthless spawn error rejects exited promptly without signals or unhandled r
   const fixture = shell();
   Object.defineProperty(fixture.child, 'pid', { value: undefined });
   transport.spawn.mockReturnValueOnce(fixture.child);
-  const owner = new ownerModule.OwnedCodexProcess('/fixture/missing', [], {});
+  const owner = new ownerModule.OwnedProviderProcess('/fixture/missing', [], {});
   const failure = new Error('spawn ENOENT');
   const unhandled = vi.fn();
   process.on('unhandledRejection', unhandled);
@@ -287,10 +287,10 @@ it('birthless spawn error rejects exited promptly without signals or unhandled r
     expect(owner.close()).toBe(closing);
     await closing;
     expect(kill).not.toHaveBeenCalled();
-    const registry = ownerModule.closeOwnedCodexProcesses();
-    expect(ownerModule.closeOwnedCodexProcesses()).toBe(registry);
+    const registry = ownerModule.closeOwnedProviderProcesses();
+    expect(ownerModule.closeOwnedProviderProcesses()).toBe(registry);
     await registry;
-    expect(ownerModule.unconfirmedCodexPids()).toEqual([]);
+    expect(ownerModule.unconfirmedProviderPids()).toEqual([]);
   } finally { process.off('unhandledRejection', unhandled); }
 });
 
@@ -327,7 +327,7 @@ it('nonzero direct exit propagates a cleanup failure after confirmed death', asy
   fixture.die(17);
   await vi.advanceTimersByTimeAsync(1000);
   expect(result.status).toBe('rejected');
-  expect(result.error).toBeInstanceOf(ownerModule.CodexProcessCleanupError);
+  expect(result.error).toBeInstanceOf(ownerModule.ProviderProcessCleanupError);
 });
 
 it('real AppServerClient close retains its exact Promise and forced-death failure', async () => {
@@ -346,7 +346,7 @@ it('real AppServerClient close retains its exact Promise and forced-death failur
   fixture.die();
   await vi.advanceTimersByTimeAsync(1000);
   expect(result.status).toBe('rejected');
-  expect(result.error).toBeInstanceOf(ownerModule.CodexProcessCleanupError);
+  expect(result.error).toBeInstanceOf(ownerModule.ProviderProcessCleanupError);
 });
 
 it('connecting an already closed client rejects without spawning', async () => {
@@ -507,7 +507,7 @@ it.each(['clean', 'failed'] as const)('startup failure waits for the accepted ru
   expect(run.t.close).toHaveBeenCalledOnce();
   expect(kill).toHaveBeenCalledWith(-fixture.pid!, 'SIGTERM');
   const providerClosing = observe(owner.close());
-  const registryClosing = observe(ownerModule.closeOwnedCodexProcesses());
+  const registryClosing = observe(ownerModule.closeOwnedProviderProcesses());
   expect(starting.status).toBe('pending');
   // s18c: disconnected as the cleanup began, while it still waits for the accepted run and the provider.
   expect(fake.channel.disconnect).toHaveBeenCalledOnce();
@@ -533,13 +533,13 @@ it.each(['clean', 'failed'] as const)('startup failure waits for the accepted ru
   await vi.advanceTimersByTimeAsync(1000);
   await expect(startup).rejects.toThrow(cleanup === 'clean' ? startupError : 'Bridge startup and cleanup failed');
   expect(starting.status).toBe('rejected');
-  expect(ownerModule.unconfirmedCodexPids()).toEqual([]);
+  expect(ownerModule.unconfirmedProviderPids()).toEqual([]);
   expect(fake.channel.disconnect).toHaveBeenCalledOnce();
   if (cleanup === 'clean') {
     expect(starting.error).toBe(startupError);
   } else {
     expect(providerClosing.status).toBe('rejected');
-    expect(providerClosing.error).toBeInstanceOf(ownerModule.CodexProcessCleanupError);
+    expect(providerClosing.error).toBeInstanceOf(ownerModule.ProviderProcessCleanupError);
     expect(registryClosing.status).toBe('rejected');
     if (!(starting.error instanceof AggregateError)) throw new Error('Startup cleanup failure was not aggregated');
     expect(starting.error.errors).toHaveLength(2);

@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { installManagedCodex, managedCodexBin, runSetupChild } from '../src/agent/codex-appserver/managed-install';
 import { resolveCodexBin } from '../src/agent/codex-appserver/locate';
 import { paths } from '../src/config/paths';
-import { CodexProcessCleanupError, OwnedCodexProcess } from '../src/agent/codex-appserver/owned-process';
+import { ProviderProcessCleanupError, OwnedProviderProcess } from '../src/agent/owned-process';
 
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync, mkdirSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
@@ -99,10 +99,10 @@ describe('managed Codex installation', () => {
   });
 
   it('removes staging after confirmed process-tree cleanup failure', async () => {
-    const close = OwnedCodexProcess.prototype.close;
-    const failure = vi.spyOn(OwnedCodexProcess.prototype, 'close').mockImplementationOnce(async function (this: OwnedCodexProcess, graceMs) {
+    const close = OwnedProviderProcess.prototype.close;
+    const failure = vi.spyOn(OwnedProviderProcess.prototype, 'close').mockImplementationOnce(async function (this: OwnedProviderProcess, graceMs) {
       await close.call(this, graceMs);
-      throw new CodexProcessCleanupError('fixture cleanup failed after death');
+      throw new ProviderProcessCleanupError('fixture cleanup failed after death');
     });
     try {
       await expect(install()).rejects.toThrow('fixture cleanup failed after death');
@@ -115,16 +115,16 @@ describe('managed Codex installation', () => {
 
   it('retains staging and the prior install while a close is still pending', async () => {
     const previous = managedCodexBin();
-    const close = OwnedCodexProcess.prototype.close;
+    const close = OwnedProviderProcess.prototype.close;
     let entered!: () => void;
     const closing = new Promise<void>(resolve => { entered = resolve; });
     let release!: () => void;
     const permitted = new Promise<void>(resolve => { release = resolve; });
-    const held = vi.spyOn(OwnedCodexProcess.prototype, 'close').mockImplementationOnce(async function (this: OwnedCodexProcess, graceMs) {
+    const held = vi.spyOn(OwnedProviderProcess.prototype, 'close').mockImplementationOnce(async function (this: OwnedProviderProcess, graceMs) {
       entered();
       await permitted;
       await close.call(this, graceMs);
-      throw new CodexProcessCleanupError('fixture cleanup failed after death');
+      throw new ProviderProcessCleanupError('fixture cleanup failed after death');
     });
     const result = install().then(() => 'fulfilled', error => error);
     try {
@@ -133,7 +133,7 @@ describe('managed Codex installation', () => {
       expect(existsSync(join(home, stages()[0]!, 'install'))).toBe(true);
       expect(managedCodexBin()).toBe(previous);
       release();
-      expect(await result).toBeInstanceOf(CodexProcessCleanupError);
+      expect(await result).toBeInstanceOf(ProviderProcessCleanupError);
       expect(managedCodexBin()).toBe(previous);
       expect(stages()).toEqual([]);
     } finally {

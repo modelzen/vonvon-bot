@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ProviderProcessCleanupError } from '../src/agent/owned-process';
 import { JudgeCallError, type AgentBackend, type JudgeCall, type JudgeCallOutput, type ModelInfo } from '../src/agent/types';
 import { createJudge, JUDGE_SETTLE_MS, MODEL_LIST_RETRY_MS, type JudgeDeps } from '../src/judge/judge';
 import { SmartPromptError } from '../src/judge/smart-file';
@@ -91,7 +92,8 @@ describe('judge', () => {
     const kinds: JudgeErrorKind[] = ['auth', 'quota', 'version', 'model', 'network', 'failed', 'unavailable'];
     for (const kind of kinds) {
       const f = fakeBackend();
-      f.answer(async () => { throw new JudgeCallError(kind, `boom ${kind}\nsecond line`, true); });
+      // not structured, so no cooldown repeats the first failure (judge-cooldown.test.ts)
+      f.answer(async () => { throw new JudgeCallError(kind, `boom ${kind}\nsecond line`, false); });
       const judge = make(f.backend);
       for (const variant of ['main', 'mentioned', 'topic'] as const) {
         const result = await judge.judge(req(variant));
@@ -227,6 +229,34 @@ describe('judge', () => {
     expect(seventh.value).toBeUndefined();
   });
 
+  it('logs a cleanup failure of a call it already gave up on, which the result could not report', async () => {
+    const f = fakeBackend();
+    const failure = new ProviderProcessCleanupError('Claude 子进程树已退出，但清理失败', { cause: new AggregateError([new Error('Claude process group required SIGKILL')]) });
+    const after = (error: unknown) => (call: JudgeCall) => new Promise<JudgeCallOutput>((_, reject) => {
+      call.signal.addEventListener('abort', () => setTimeout(() => reject(error), 100), { once: true });
+    });
+    const judge = make(f.backend);
+    f.answer(after(failure));
+    const timedOut = timed(judge.judge(req('main', { timeoutMs: 1_000 })));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(timedOut.value).toMatchObject({ error: { kind: 'timeout' } });
+    expect(fake.log.fail).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(fake.log.fail.mock.calls).toEqual([['judge', failure, { phase: 'abandoned-call', backend: 'codex-appserver' }]]);
+
+    // what an abandoned call usually throws is not a fault
+    fake.log.fail.mockClear();
+    f.answer(after(new Error('The operation was aborted')));
+    void judge.judge(req('main', { timeoutMs: 1_000 }));
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(fake.log.fail).not.toHaveBeenCalled();
+
+    // before the judgement gave up, the failure is its result, logged once as a failed judgement
+    f.answer(async () => { throw failure; });
+    expect(await judge.judge(req('main'))).toMatchObject({ error: { kind: 'failed', detail: 'Claude 子进程树已退出，但清理失败' } });
+    expect(fake.log.fail).not.toHaveBeenCalled();
+  });
+
   it('a queued judgement aborted in the tick its slot is granted hands the slot on', async () => {
     const f = fakeBackend();
     const pending: Deferred<JudgeCallOutput>[] = [];
@@ -268,6 +298,19 @@ describe('judge', () => {
     g.answer(async () => { throw new JudgeCallError('quota', 'q', true); });
     await make(g.backend).judge(req('main'));
     expect(failedAt(fake.log.warn)).toEqual(['quota']);
+  });
+
+  it('a stored effort the backend does not take counts as unset and is logged once as setting-ignored', async () => {
+    const f = fakeBackend({ id: 'claude-agent', displayName: 'Claude' });
+    const judge = make(f.backend);
+    const bad = { kind: 'llm', backend: 'claude-agent', model: 'sonnet', effort: 'minimal' } as const;
+    const ask = () => judge.judge(req('main', { group: { chatId: 'oc_g', name: '群', backend: 'claude-agent', judge: bad as never } }));
+    expect(await ask()).toMatchObject({ modelSource: 'default' });
+    expect(await ask()).toMatchObject({ modelSource: 'default' });
+    expect(f.calls[0]).not.toHaveProperty('effort');
+    expect(f.calls[0]!.model).not.toBe('sonnet');
+    const ignored = fake.log.warn.mock.calls.filter((c) => c[1] === 'setting-ignored');
+    expect(ignored).toEqual([['judge', 'setting-ignored', { layer: 'oc_g', why: '推理强度这个后端不收' }]]);
   });
 
   it('a backend with no judge method is unavailable', async () => {

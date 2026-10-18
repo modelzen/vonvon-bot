@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -9,6 +9,7 @@ import { judgeProcessStats } from '../src/agent/codex-appserver/judge-process';
 import { createJudge } from '../src/judge/judge';
 import { DEFAULT_SMART_PROMPT, JUDGE_ALLOWED } from '../src/judge/prompt';
 import type { JudgeRequest, JudgeVariant } from '../src/judge/types';
+import { filesWith } from './helpers/marker-scan';
 
 /**
  * The real Codex judge on the owner's ChatGPT login (design 6.2). Skipped unless
@@ -43,28 +44,6 @@ const request = (variant: JudgeVariant, extra: Partial<JudgeRequest> = {}): Judg
 });
 
 const sha256 = (path: string): string => createHash('sha256').update(readFileSync(path)).digest('hex');
-
-/** Read-only: files under `root` changed since `since` (no symlinks followed, nothing over 50 MB)
- * that contain `needle`. Returns paths only. */
-function filesWith(root: string, since: number, needle: string): string[] {
-  const hits: string[] = [];
-  const bytes = Buffer.from(needle);
-  const walk = (dir: string): void => {
-    let names: string[];
-    try { names = readdirSync(dir); } catch { return; }
-    for (const name of names) {
-      const path = join(dir, name);
-      let stat;
-      try { stat = lstatSync(path); } catch { continue; }
-      if (stat.isDirectory()) walk(path);
-      else if (stat.isFile() && stat.mtimeMs >= since && stat.size <= 50 * 1024 * 1024) {
-        try { if (readFileSync(path).includes(bytes)) hits.push(path); } catch { /* unreadable */ }
-      }
-    }
-  };
-  walk(root);
-  return hits;
-}
 
 describe.skipIf(!REAL)('真实 Codex 判断（VONVON_REAL_JUDGE=1）', () => {
   const started = Date.now() - 1000;

@@ -13,6 +13,28 @@ function nonEmpty(value: unknown): string | undefined {
   return value.trim() || undefined;
 }
 
+/** The user settings.json, read once: its `env` block (string values only; the CLI copies it over
+ * its own environment) and {@link readConfiguredClaudeModel}'s answer. The judge (s23c) needs both. */
+export function readClaudeUserSettings(
+  env: NodeJS.ProcessEnv = process.env,
+  home = homedir(),
+): { env: Record<string, string>; configuredModel: string | undefined } {
+  let settings: { env?: unknown; model?: unknown } = {};
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(claudeConfigDir(env, home), 'settings.json'), 'utf8'));
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) settings = parsed as typeof settings;
+  } catch {
+    // missing / unreadable / not JSON: fall through to the process env
+  }
+  const raw = settings.env && typeof settings.env === 'object' && !Array.isArray(settings.env) ? settings.env as Record<string, unknown> : {};
+  const settingsEnv: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw)) if (typeof value === 'string') settingsEnv[key] = value;
+  return {
+    env: settingsEnv,
+    configuredModel: nonEmpty(settingsEnv.ANTHROPIC_MODEL) ?? nonEmpty(env.ANTHROPIC_MODEL) ?? nonEmpty(settings.model),
+  };
+}
+
 /**
  * The model Claude Code itself would start on when no `--model` is given, read
  * the way the CLI does for the user layer: `env.ANTHROPIC_MODEL` in the user
@@ -29,13 +51,5 @@ export function readConfiguredClaudeModel(
   env: NodeJS.ProcessEnv = process.env,
   home = homedir(),
 ): string | undefined {
-  let settings: { env?: Record<string, unknown>; model?: unknown } = {};
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(join(claudeConfigDir(env, home), 'settings.json'), 'utf8'));
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) settings = parsed as typeof settings;
-  } catch {
-    // missing / unreadable / not JSON: fall through to the process env
-  }
-  const settingsEnv = settings.env && typeof settings.env === 'object' ? settings.env : {};
-  return nonEmpty(settingsEnv.ANTHROPIC_MODEL) ?? nonEmpty(env.ANTHROPIC_MODEL) ?? nonEmpty(settings.model);
+  return readClaudeUserSettings(env, home).configuredModel;
 }
