@@ -167,6 +167,8 @@ export interface ResumeCardState {
   threads: ThreadSummary[];
   /** Sessions of this cwd left off {@link threads}: another place of the group holds them (s15f). */
   inUse?: number;
+  /** Where they are held, by place, e.g. `主区、话题「…」` (s15f): titles, never ids. */
+  inUseAt?: string;
   createdAt: number;
   /** in-flight guard (anti double-click) */
   launching?: boolean;
@@ -190,10 +192,11 @@ const RESUME_TITLE_MAX = 30;
  */
 export function buildResumeCard(state: ResumeCardState): CardObject {
   const elements = [md('🕘 **恢复历史会话**'), note(metaNote(state)), hr()];
-  const inUse = state.inUse ? `另有 ${state.inUse} 条正在本群的话题或主区里用着，没有列出。` : '';
+  const where = state.inUseAt ? `：${state.inUseAt}` : '';
+  const inUse = state.inUse ? `另有 ${state.inUse} 条在本群别处用着，没有列出${where}。` : '';
   if (state.threads.length === 0) {
     elements.push(md(state.inUse
-      ? `_该目录下的 ${state.inUse} 条历史会话都在本群的话题或主区里用着。直接 @我 即可新建。_`
+      ? `_该目录下的 ${state.inUse} 条历史会话都在本群别处用着${where}。到那里接着聊，或直接 @我 新建。_`
       : '_该目录下还没有历史会话。直接 @我 即可新建。_'));
   } else {
     elements.push(
