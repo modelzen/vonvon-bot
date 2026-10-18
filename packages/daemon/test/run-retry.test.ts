@@ -45,6 +45,7 @@ vi.mock('../src/bot/session-store', async (original) => ({
     }
   },
   upsertSession: async () => undefined,
+  bindSession: async () => undefined,
   listSessions: async () => fake.sessions,
   detachSessionsForChat: async (_chatId: string, commit: () => Promise<unknown>) => commit(),
 }));
