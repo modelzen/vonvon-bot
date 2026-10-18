@@ -14,7 +14,7 @@ export function projectState(state: AdminState, previous: DesktopSnapshot, pendi
       memberships.push(...previous.memberships.filter(member => member.agentId === bot.appId).map(member => ({ ...member, stale: true })));
       continue;
     }
-    for (const project of bot.projects) memberships.push({ id: membershipIdSchema.parse(JSON.stringify([bot.appId, project.chatId])), agentId, groupId: groupIdSchema.parse(project.chatId), name: project.name, ...(project.avatarDataUrl ? { avatarDataUrl: project.avatarDataUrl } : {}), directory: project.cwd, backend: project.backend, conversation: project.kind === 'multi' ? 'threads' : 'shared', response: project.noMention ? 'all' : 'mention', permission: { administrator: project.mode, member: project.mode, network: project.network }, stale: false });
+    for (const project of bot.projects) memberships.push({ id: membershipIdSchema.parse(JSON.stringify([bot.appId, project.chatId])), agentId, groupId: groupIdSchema.parse(project.chatId), name: project.name, ...(project.avatarDataUrl ? { avatarDataUrl: project.avatarDataUrl } : {}), directory: project.cwd, ...(project.directoryProblem ? { directoryProblem: project.directoryProblem } : {}), backend: project.backend, conversation: project.kind === 'multi' ? 'threads' : 'shared', response: project.noMention ? 'all' : 'mention', permission: { administrator: project.mode, member: project.mode, network: project.network }, stale: false });
   }
   const groups = new Map<string, Group>();
   for (const member of memberships) {

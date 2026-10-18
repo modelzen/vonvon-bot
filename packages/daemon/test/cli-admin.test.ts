@@ -8,7 +8,7 @@ import {
   type AdminSetupStatus, type Agent, type DesktopSnapshot, type Job, type Membership, type SettingsReply, type ToolState,
 } from '@vonvon/protocol';
 import { pickBot, withDaemon, type Daemon } from '../src/cli/daemon-client';
-import { runBotAdd, runBotList, runBotStatus, type AddDependencies } from '../src/cli/commands/bot';
+import { runBotAdd, runBotList, runBotRepairDir, runBotStatus, type AddDependencies } from '../src/cli/commands/bot';
 import { runGroupBind, runGroupJoined, runGroupPending } from '../src/cli/commands/group';
 import { parseAssignments, runSettingsGet, runSettingsSet } from '../src/cli/commands/settings';
 
@@ -44,6 +44,17 @@ it('picks a bot by id or a unique name and lists the choices otherwise', () => {
   expect(pickBot([a, b, c], '支付')).toBe(c);
   expect(() => pickBot([a, b, c], 'Vonvon Bot')).toThrow('有 2 个 bot 都叫「Vonvon Bot」，用 id 指定：cli_a、cli_b');
   expect(() => pickBot([a], 'x')).toThrow('没有找到 bot「x」。现有的 bot：Vonvon Bot（cli_a）');
+});
+
+it('bot repair-dir says how many directories it recorded and which will be made again (s36c2d)', async () => {
+  const h = harness({});
+  const repair = vi.fn(async () => ({ handle: '研发助手', recorded: 2, missing: 1 }));
+  await runBotRepairDir('研发助手', h.io(), repair);
+  expect(repair).toHaveBeenCalledWith('研发助手');
+  expect(h.out()).toBe('✓ 已按现在的位置重新记录「研发助手」的 2 个目录。\n另有 1 个目录不在了，下次用到时会重建一个空的。\n');
+  h.clear(); await runBotRepairDir('研发助手', h.io(true), repair);
+  expect(JSON.parse(h.out())).toEqual({ handle: '研发助手', recorded: 2, missing: 1 });
+  expect(h.connect).not.toHaveBeenCalled();
 });
 
 it('bot list shows state and connection, and its JSON has no avatars', async () => {

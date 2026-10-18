@@ -131,9 +131,15 @@ export const agentSchema = z.object({
   lockHeld: lockHeldSchema.optional(),
 });
 export type Agent = z.infer<typeof agentSchema>;
+/** A group directory an old creation entry left in the wrong place (s36c2d): a bot's own directory, the projects
+ * root itself, or in the data directory outside `projects/`. */
+export const directoryProblemSchema = z.enum(["botRoot", "projectsRoot", "dataDir"]);
+export type DirectoryProblem = z.infer<typeof directoryProblemSchema>;
 export const membershipSchema = z.object({
   avatarDataUrl: z.string().optional(), id: membershipIdSchema, agentId: agentIdSchema,
   groupId: groupIdSchema, name: z.string(), directory: z.string(), backend: z.string(),
+  /** Absent when the directory is fine, and from daemons before s36c2d. */
+  directoryProblem: directoryProblemSchema.optional(),
   conversation: conversationSchema, response: replyModeSchema,
   permission: z.object({
     administrator: permissionSchema,

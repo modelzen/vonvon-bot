@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, cp, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,7 +13,7 @@ const children = new Set<ChildProcess>();
 beforeAll(async () => {
   scratch = await realpath(await mkdtemp(join(tmpdir(), 'bot-namespace-')));
   entry = join(scratch, 'entry.cjs');
-  await build({ stdin: { contents: `export * from './src/config/bots';export * from './src/bot/register-bot';export * from './src/config/store';export * from './src/project/registry';export {useBotDir,botPaths} from './src/config/paths';`,
+  await build({ stdin: { contents: `export * from './src/config/bots';export * from './src/bot/register-bot';export * from './src/config/store';export * from './src/project/registry';export {useBotDir,botPaths} from './src/config/paths';export * from './src/project/directory-audit';`,
     resolveDir: fileURLToPath(new URL('..', import.meta.url)) }, outfile: entry,
     bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent', external: ['@larksuiteoapi/node-sdk'] });
 });
@@ -344,7 +344,7 @@ describe('stable bot directory evidence', () => {
     await expect(readdir(join(root, 'projects'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('refuses missing ready directories and malformed allocation deletion before cleanup', async () => {
+  it('rebuilds a deleted ready directory and refuses malformed allocation deletion before cleanup', async () => {
     const root = await home();
     await successful(root, register('saved') + `await m.setBotActivation('saved',false)`);
     const before = await registry(root);
@@ -361,9 +361,11 @@ describe('stable bot directory evidence', () => {
     await successful(root, register('saved'));
     expect((await registry(root)).bots[0].registrationId).not.toBe(originalId);
     await successful(root, `await m.setBotActivation('saved',false);const row=(await m.loadBots()).bots[0];await m.removeBot(m.botIdentity(row),{isRunning:async()=>false,cleanup:async()=>{}})`);
+    // s36c2d (review R4-2): an empty directory the user deleted is made again, under the parent it was checked in.
     await rm(allocation.namespaceRoot, { recursive: true });
-    expect((await run(root, register('saved')).done).code).toBe(1);
-    await expect(readdir(allocation.namespaceRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+    await successful(root, register('saved'));
+    expect(await readdir(allocation.namespaceRoot)).toEqual([]);
+    expect((await registry(root)).allocations.saved).toMatchObject({ state: 'ready', namespaceRoot: allocation.namespaceRoot, parentIdentity: allocation.parentIdentity });
   });
 
   it('rejects dangling registry links and hard-linked evidence', async () => {
@@ -415,20 +417,21 @@ describe('stable bot directory evidence', () => {
     expect(await readdir(join(root, 'projects/ＳＨＡＲＥＤ'))).toEqual([]);
   });
 
-  it('resynchronizes parent chains left visible by an earlier failed attempt', async () => {
+  it('syncs only the directories it creates and their parents', async () => {
+    // s36c2d (review R4-3): a directory that is there is not synced again, whoever made it; one made here syncs its parent.
     const root = await home();
     const parent = join(root, 'projects/nested/final');
     const failedNode = join(root, 'projects/nested');
     const setup = `const fs=require('node:fs/promises');const oldOpen=fs.open;fs.open=async(...args)=>{
       const file=await oldOpen(...args);if(String(args[0])===${JSON.stringify(failedNode)})file.sync=async()=>{throw Error('ancestor-sync-failure')};return file;};`;
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (const made of [[], ['final']]) {
       const result = await run(root, register('ancestor', { initialPreferences: { projectsRootDir: parent } }), setup).done;
       expect(result.code).toBe(1);
       expect(result.stderr).toContain('ancestor-sync-failure');
-      expect(await readdir(failedNode)).toEqual([]);
+      expect(await readdir(failedNode)).toEqual(made);
       await expect(readFile(join(root, 'bots.json'))).rejects.toMatchObject({ code: 'ENOENT' });
     }
-    await successful(root, register('ancestor', { initialPreferences: { projectsRootDir: parent } }));
+    await successful(root, register('ancestor', { initialPreferences: { projectsRootDir: parent } }), setup);
     expect((await registry(root)).allocations.ancestor.parent).toBe(parent);
   });
 
@@ -459,5 +462,92 @@ describe('stable bot directory evidence', () => {
     await successful(root, `const fs=require('node:fs/promises');const p=${JSON.stringify(root)}+'/config.json';await fs.writeFile(p,'{}');
       const expected={};const promise=m.saveConfig({accounts:{app:{id:'save',secret:'fixture',tenant:'feishu'}}},p,expected);expected.preferences={future:'mutation'};await promise;`);
     expect(JSON.parse(await readFile(join(root, 'config.json'), 'utf8')).accounts.app.id).toBe('save');
+  });
+});
+
+describe('s36c2d: deleted, moved and misplaced directories', () => {
+  /** Deletes only what a test made under its own scratch directory. */
+  async function removeOwned(path: string): Promise<void> {
+    expect(path.startsWith(`${scratch}/`)).toBe(true);
+    await rm(path, { recursive: true });
+  }
+  const bound = async (root: string, name = 'Group', chatId = 'oc_group') => JSON.parse(await successful(root, `console.log(JSON.stringify(await ${bind(name, chatId)}))`)).project;
+
+  it.each(['group', 'groups', 'bot', 'projects'] as const)('makes a deleted %s directory again when its parent checks out (review R4-2, R6-2)', async level => {
+    const root = await home();
+    await successful(root, `${register('cli_groups123')}const first=await ${bind()};await require('node:fs/promises').writeFile(first.project.cwd+'/sentinel','x');await m.removeProject('Group');`);
+    const bot = (await registry(root)).allocations.cli_groups123.namespaceRoot;
+    await removeOwned({ group: join(bot, 'groups/Group'), groups: join(bot, 'groups'), bot, projects: join(root, 'projects') }[level]);
+    // Before s36c2d: ENOENT … realpath for the group and every new one, and for the root lstat, every time.
+    const again = await bound(root);
+    expect(again.cwd).toBe(join(root, 'projects/shared/groups/Group'));
+    expect(await readdir(again.cwd)).toEqual([]);
+    expect((await bound(root, 'Beta', 'oc_beta')).cwd).toBe(join(root, 'projects/shared/groups/Beta'));
+    const state = await registry(root);
+    expect(state.groupContainers.cli_groups123.parentIdentity).toEqual(state.allocations.cli_groups123.object);
+    await successful(root, 'await m.loadBots()');
+  });
+
+  it('does not make a projects root whose own parent is gone, and says so without the path', async () => {
+    const root = await home();
+    const volume = join(await mkdtemp(join(scratch, 'volume-')), 'disk');
+    await successful(root, register('cli_volume123', { initialPreferences: { projectsRootDir: join(volume, 'projects') } }));
+    await removeOwned(volume);
+    const failed = await run(root, `await ${bind('Group', 'oc_group', undefined, JSON.stringify(join(volume, 'projects')))}`).done;
+    expect(failed.code).toBe(1);
+    expect(failed.stderr).toContain('目录所在的位置不在了');
+    await expect(readdir(volume)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('refuses a projects root copied back with new inodes, then binds where it was after repair-dir (review R4-2)', async () => {
+    const root = await home();
+    await successful(root, `${register('cli_groups123')}const first=await ${bind()};await require('node:fs/promises').writeFile(first.project.cwd+'/sentinel','keep');await m.removeProject('Group');`);
+    await rename(join(root, 'projects'), join(root, 'projects.bak'));
+    await cp(join(root, 'projects.bak'), join(root, 'projects'), { recursive: true });
+    const refused = await run(root, `try{await ${bind()}}catch(e){console.log(e.message);process.exitCode=1}`).done;
+    expect(refused.code).toBe(1);
+    expect(refused.stdout).toContain('可能整机迁移过或从备份恢复过');
+    expect(refused.stdout).toContain('vonvon bot repair-dir shared');
+    expect(refused.stdout).not.toContain(root);
+    expect(JSON.parse(await successful(root, `console.log(JSON.stringify(await m.repairBotDirectories('shared')))`))).toEqual({ handle: 'shared', recorded: 3, missing: 0 });
+    const again = await bound(root);
+    expect(again.cwd).toBe(join(root, 'projects/shared/groups/Group'));
+    expect(await readFile(join(again.cwd, 'sentinel'), 'utf8')).toBe('keep');
+    const missing = await run(root, `await m.repairBotDirectories('nobody')`).done;
+    expect(missing.code).toBe(1);
+    expect(missing.stderr).toContain('没有找到「nobody」的目录记录');
+  });
+
+  it('repair-dir keeps a missing group directory recorded, to be made again on use', async () => {
+    const root = await home();
+    await successful(root, `${register('cli_groups123')}await ${bind()};await m.removeProject('Group');`);
+    const bot = (await registry(root)).allocations.cli_groups123.namespaceRoot;
+    await removeOwned(join(bot, 'groups/Group'));
+    expect(JSON.parse(await successful(root, `console.log(JSON.stringify(await m.repairBotDirectories('cli_groups123')))`))).toEqual({ handle: 'shared', recorded: 2, missing: 1 });
+    expect((await bound(root)).cwd).toBe(join(bot, 'groups/Group'));
+  });
+
+  it('registers and reads under a data directory whose ancestor cannot be listed (review R4-3)', async () => {
+    const locked = await mkdtemp(join(scratch, 'locked-'));
+    const root = join(locked, 'vh');
+    await mkdir(root);
+    await chmod(locked, 0o311);
+    // Before s36c2d: EACCES … open '<locked>' from every registry operation.
+    try { await successful(root, `await m.ensureRegistry();${register('cli_locked123')}`); }
+    finally { await chmod(locked, 0o700); }
+    expect((await registry(root)).allocations.cli_locked123.state).toBe('ready');
+  });
+
+  it('marks old rows in a bot directory, the projects root or the data directory outside projects/ (review R4-1, R6-1)', async () => {
+    const root = await home();
+    await successful(root, `${register('cli_groups123')}await ${bind()};`);
+    for (const dir of ['escape', 'projects/fine']) await mkdir(join(root, dir), { recursive: true });
+    const outside = await mkdtemp(join(scratch, 'outside-'));
+    const cwds = [join(root, 'projects/shared'), join(root, 'projects/shared/groups'), join(root, 'projects'), `${root}/projects/..`, join(root, 'escape'),
+      join(root, 'bots'), join(root, 'projects/fine'), join(root, 'projects/shared/groups/Group'), outside, join(root, 'projects/SHARED')];
+    const problems = JSON.parse(await successful(root, `console.log(JSON.stringify(await m.legacyDirectoryProblems(${JSON.stringify(cwds)},await m.directoryContext())))`));
+    // A name that differs only in case is the bot's directory where the file system folds case (macOS).
+    const folded = process.platform === 'darwin' ? 'botRoot' : null;
+    expect(problems).toEqual(['botRoot', 'botRoot', 'projectsRoot', 'dataDir', 'dataDir', 'dataDir', null, null, null, folded]);
   });
 });
