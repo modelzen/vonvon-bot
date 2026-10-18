@@ -14,6 +14,8 @@ import type { VoiceAction, VoiceView } from '../voice/types';
 import { readFile, rm } from 'node:fs/promises';
 import { botIdentity, loadBots, setBotActivation, removeBot } from '../config/bots';
 import { botPaths, botDir } from '../config/paths';
+import { configuredProjectsRoots, directoryContext, legacyDirectoryProblems } from '../project/directory-audit';
+import type { DirectoryProblem } from '@vonvon/protocol';
 import { removeSecret } from '../config/keystore';
 import {
   getCompletionReminderConfig,
@@ -310,6 +312,8 @@ export interface AdminProject {
   /** 🧵 话题数（该群名下的会话记录数） */
   sessionCount: number;
   createdAt: number;
+  /** Where an old creation entry put the directory wrongly (s36c2d); absent when it is fine. */
+  directoryProblem?: DirectoryProblem;
 }
 
 export interface AdminSession {
@@ -514,7 +518,9 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       if (!isRetiredKey(s.threadId)) countByChat.set(s.chatId, (countByChat.get(s.chatId) ?? 0) + 1);
     }
     groupAvatars.retainChats(botId, new Set(projects.map(p => p.chatId).filter(Boolean)));
-    const result = projects.map((p) => ({
+    const problems = await legacyDirectoryProblems(projects.map(p => p.cwd), await directoryContext(undefined, await configuredProjectsRoots(files.configFile)))
+      .catch(() => projects.map(() => undefined));
+    const result = projects.map((p, index) => ({
       avatarDataUrl: groupAvatars.get(botId, p.chatId),
       name: p.name,
       chatId: p.chatId,
@@ -532,6 +538,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       allowedUsersCount: p.allowedUsers?.length ?? 0,
       sessionCount: p.chatId ? (countByChat.get(p.chatId) ?? 0) : 0,
       createdAt: p.createdAt,
+      ...(problems[index] ? { directoryProblem: problems[index] } : {}),
     }));
     for (const project of projects) if (project.chatId) void groupAvatars.refresh(botId, project.chatId);
     return result;

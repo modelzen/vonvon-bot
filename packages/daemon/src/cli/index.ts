@@ -11,9 +11,10 @@ const program = new Command().name('vonvon').description('Vonvon Bot daemon').ve
 let lease: DataLease | undefined;
 let control: ShutdownControl | undefined;
 program.hook('preAction', async (_command, action) => {
-  // bot, group and settings only talk RPC to a running daemon, so they never create the data root or take a lease.
+  // bot, group and settings only talk RPC to a running daemon, so they never create the data root or take a lease;
+  // bot repair-dir writes bots.json itself, under the daemon's own lock, and takes one.
   const parent = action.parent?.name();
-  if (parent === 'service' || parent === 'bot' || parent === 'group' || parent === 'settings' || action.name() === '__daemon-control') return;
+  if (parent === 'service' || (parent === 'bot' && action.name() !== 'repair-dir') || parent === 'group' || parent === 'settings' || action.name() === '__daemon-control') return;
   if (action.name() === 'run') {
     const runControl = control = observeShutdown(Boolean(action.opts().parentControl));
     (await import('../host/crash-guard')).installCrashHandlers({ intent: () => runControl.intent ?? (runControl.requested ? 'stop' : 'running') });
@@ -95,6 +96,20 @@ bot.command('status [bot]').description("Show a bot's setup checklist").option(.
   if (wanted !== undefined && options.bot !== undefined && wanted !== options.bot) throw new Error(`bot 填了两次（${wanted} 和 --bot ${options.bot}），只留一个。`);
   await (await import('./commands/bot')).runBotStatus(options.bot ?? wanted, io(options));
 });
+bot.command('repair-dir <bot>').description("Record a bot's directories again where they are now, after a move or a restore")
+  .option('--json', 'Print JSON')
+  .addHelpText('after', `
+The bot's directory, its groups folder and each group's folder keep their paths, but a move to another computer,
+a restore from a backup or a copy back changes what the files are on disk, and binding a group then fails with a
+hint to run this. Check the folders first. The paths themselves cannot change. A folder that is gone stays
+recorded and is made again, empty, when it is next used. Run it once for each bot; it names the other bots under
+the same projects root that need it too. Works with or without the daemon running.
+
+Example:
+  vonvon bot repair-dir 研发助手`)
+  .action(async (wanted: string, options: Json) => {
+    await (await import('./commands/bot')).runBotRepairDir(wanted, io(options));
+  });
 const group = program.command('group').description('List and bind Feishu groups');
 group.command('list').description('List bound groups').option(...BOT).option('--json', 'Print JSON').action(async (options: Json & { bot?: string }) => {
   await (await import('./commands/group')).runGroupList(options, io(options));
