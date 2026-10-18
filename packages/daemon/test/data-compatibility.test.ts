@@ -1,8 +1,8 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { getterContents, isBridgeGetter, repairLinkedCompatibility } from '../src/config/data-compatibility';
+import { getterContents, isBridgeGetter } from '../src/config/data-compatibility';
 const homes: string[] = [];
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
 it('recognizes the legacy getter path only through a validated directory alias', () => {
@@ -16,7 +16,7 @@ it('recognizes the legacy getter path only through a validated directory alias',
   expect(isBridgeGetter('/arbitrary/program', ['secrets', 'get'], home, wrapper)).toBe(false);
 });
 
-it('recognizes only a Node provider proven by the exact generated wrapper and refreshes Windows providers', () => {
+it('recognizes only a Node provider proven by the exact generated wrapper', () => {
   const home = mkdtempSync(join(tmpdir(), 'vonvon-provider-')); homes.push(home);
   const root = join(home, '.vonvon-bridge'); mkdirSync(root);
   const wrapper = join(root, 'secrets-getter');
@@ -25,17 +25,4 @@ it('recognizes only a Node provider proven by the exact generated wrapper and re
   writeFileSync(wrapper, getterContents(old));
   expect(isBridgeGetter(old.nodePath, args, home, wrapper)).toBe(true);
   expect(isBridgeGetter(old.nodePath, ['C:\\custom\\cli.mjs', 'secrets', 'get'], home, wrapper)).toBe(false);
-  const custom = { command: old.nodePath, args: ['custom-cli.mjs', 'secrets', 'get'] };
-  const configPath = join(root, 'config.json');
-  writeFileSync(configPath, JSON.stringify({ secrets: { providers: { bridge: { command: old.nodePath, args, env: { KEEP: 'yes' } }, custom } } }));
-  const runtime = { nodePath: join(home, 'node.exe'), cliPath: join(home, 'cli.mjs') };
-  writeFileSync(runtime.nodePath, 'fixture'); writeFileSync(runtime.cliPath, 'fixture');
-  const platform = process.platform;
-  Object.defineProperty(process, 'platform', { value: 'win32' });
-  try { repairLinkedCompatibility(home, root, runtime); } finally { Object.defineProperty(process, 'platform', { value: platform }); }
-  const providers = JSON.parse(readFileSync(configPath, 'utf8')).secrets.providers;
-  expect(providers.bridge).toEqual({ command: runtime.nodePath, args: [runtime.cliPath, 'secrets', 'get'], env: { KEEP: 'yes', HOME: home, USERPROFILE: home } });
-  expect(providers.custom).toEqual(custom);
-  expect(isBridgeGetter(runtime.nodePath, providers.bridge.args, home, wrapper)).toBe(true);
-  expect(isBridgeGetter(old.nodePath, args, home, wrapper)).toBe(false);
 });

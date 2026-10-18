@@ -1,11 +1,10 @@
-import { pendingGroupsFile, retireBoundPendingGroup } from '../project/pending-groups';
 import { paths } from '../config/paths';
-import { DEFAULT_BACKEND_ID, effectiveDefaultBackend } from '../agent';
+import type { BotIdentity } from '../config/bots';
 import { realpath, stat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { bindModeFor, joinExistingGroup } from '../project/lifecycle';
-import { getProjectByChatId, getProjectByName, listProjects, bindNoMention, noMentionOf, sessionModeOf, type Project } from '../project/registry';
+import { listProjects, type Project } from '../project/registry';
 import { log } from '../core/logger';
 import { feishuError, scopeDenial } from '../utils/feishu-error';
 import { AdminWriteError } from './ops';
@@ -13,7 +12,7 @@ import { AdminWriteError } from './ops';
 export interface BindGroupInput {
   chatId: string;
   projectName: string;
-  directory: string;
+  directory?: string;
   backend: 'codex-appserver' | 'claude-agent';
   kind: 'multi' | 'single';
   /** 免@; left out → 3.4's default for `kind` */
@@ -34,7 +33,7 @@ export function parseBindGroupInput(raw: Record<string, unknown>): BindGroupInpu
   if (Object.keys(raw).some(key => !['chatId', 'projectName', 'directory', 'backend', 'kind', 'noMention'].includes(key)) ||
       typeof chatId !== 'string' || !/^oc_[\w-]{1,200}$/.test(chatId) ||
       typeof projectName !== 'string' || !projectName.trim() || projectName.length > 200 || /[\x00-\x1f]/.test(projectName) ||
-      typeof directory !== 'string' || !isAbsolute(directory) || directory.length > 4096 || /[\x00-\x1f]/.test(directory) ||
+      (directory !== undefined && (typeof directory !== 'string' || !isAbsolute(directory) || directory.length > 4096 || /[\x00-\x1f]/.test(directory))) ||
       (backend !== 'codex-appserver' && backend !== 'claude-agent') || (kind !== 'multi' && kind !== 'single') || (noMention !== undefined && typeof noMention !== 'boolean')) {
     throw new InvalidGroupInput('群绑定参数无效');
   }
@@ -90,48 +89,28 @@ function refused(phase: GroupPhase, reply: { code?: number; msg?: string }, fall
   throw error;
 }
 
-export function createGroupExecutor(channel: LarkChannel): (op: AdminGroupOp) => Promise<JoinedGroups | Project> {
-  let bindChain: Promise<unknown> = Promise.resolve();
-  async function bind(input: BindGroupInput): Promise<Project> {
-    let directory: string;
-    try {
+export function createGroupExecutor(channel: LarkChannel, identity: BotIdentity, projectsRootDir?: string): (op: AdminGroupOp) => Promise<JoinedGroups | Project> {
+  const bot = { ...identity };
+  async function bind(request: BindGroupInput): Promise<Project> {
+    const input = { ...request };
+    const location = { file: paths.projectsFile, dataRoot: paths.appDir };
+    let directory: string | undefined;
+    if (input.directory !== undefined) try {
       directory = await realpath(input.directory);
       if (!(await stat(directory)).isDirectory()) throw new Error('not directory');
     } catch { throw new InvalidGroupInput('所选文件夹不存在或不是目录'); }
     const membership = await channel.rawClient.im.v1.chatMembers.isInChat({ path: { chat_id: input.chatId } }).catch(upstream('bind-group'));
     if (membership.code !== 0 || typeof membership.data?.is_in_chat !== 'boolean') refused('bind-group', membership, '无法确认机器人群成员身份');
     if (!membership.data.is_in_chat) throw new AdminWriteError('机器人不在此群中');
-    async function same(project: Project): Promise<boolean> {
-      const cwd = await realpath(project.cwd).catch(() => project.cwd);
-      const backend = project.backend ?? await effectiveDefaultBackend().catch(() => DEFAULT_BACKEND_ID);
-      return project.name === input.projectName && cwd === directory && backend === input.backend && sessionModeOf(project) === input.kind
-        && noMentionOf(project) === (input.noMention ?? bindNoMention(input.kind));
-    }
-    const bound = await getProjectByChatId(input.chatId);
-    if (bound) {
-      if (await same(bound)) {
-        await retireBoundPendingGroup(pendingGroupsFile(paths.projectsFile), bound.chatId);
-        return bound;
-      }
-      throw new AdminWriteError(`该群已绑定为项目「${bound.name}」，现有文件夹、后端和会话方式不可修改，免 @ 请在群设置里改`);
-    }
-    if (await getProjectByName(input.projectName)) throw new AdminWriteError('项目名已被使用');
     try {
-      return await joinExistingGroup(channel, { name: input.projectName, chatId: input.chatId, existingPath: directory, backend: input.backend, kind: input.kind, noMention: input.noMention, mode: bindModeFor(input.backend) });
+      return await joinExistingGroup(channel, { bot, name: input.projectName, chatId: input.chatId, existingPath: directory, projectsRootDir, backend: input.backend, kind: input.kind, noMention: input.noMention, mode: bindModeFor(input.backend) }, location);
     } catch (error) {
-      const raced = await getProjectByChatId(input.chatId);
-      if (raced && await same(raced)) {
-        await retireBoundPendingGroup(pendingGroupsFile(paths.projectsFile), raced.chatId);
-        return raced;
-      }
       throw new AdminWriteError(error instanceof Error ? error.message : '群绑定失败');
     }
   }
   return async op => {
     if (op.kind === 'bindGroup') {
-      const run = bindChain.then(() => bind(op.input));
-      bindChain = run.catch(() => undefined);
-      return run;
+      return bind(op.input);
     }
     const response = await channel.rawClient.im.v1.chat.list({ params: { page_size: 50, ...(op.cursor ? { page_token: op.cursor } : {}) } }).catch(upstream('joined-groups'));
     if (response.code !== 0 || !response.data || !Array.isArray(response.data.items)) refused('joined-groups', response, '飞书群列表响应无效');

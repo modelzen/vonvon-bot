@@ -1,5 +1,4 @@
-import { randomUUID } from 'node:crypto';
-import { chmodSync, lstatSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 
 export interface BridgeRuntime { nodePath: string; cliPath: string }
@@ -31,71 +30,4 @@ export function getterContents(runtime: BridgeRuntime): string {
 function regularFile(path: string): void {
   const stat = lstatSync(path);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error(`Expected a private regular file at ${path}.`);
-}
-
-function configFiles(root: string): string[] {
-  const files = [join(root, 'config.json')];
-  try { for (const bot of readdirSync(join(root, 'bots'))) files.push(join(root, 'bots', bot, 'config.json')); }
-  catch (error) { if (!missing(error)) throw error; }
-  return files.filter((path) => { try { regularFile(path); return true; } catch (error) { if (missing(error)) return false; throw error; } });
-}
-
-export function preflightCompatibility(root: string, runtime: BridgeRuntime): void {
-  regularFile(realpathSync(runtime.nodePath));
-  regularFile(realpathSync(runtime.cliPath));
-  if (process.platform === 'win32' && !/\.exe$/i.test(runtime.nodePath)) throw new Error('Windows migration requires an executable Node runtime.');
-  try {
-    regularFile(join(root, 'secrets-getter'));
-    if (!readFileSync(join(root, 'secrets-getter'), 'utf8').startsWith(`#!/bin/sh\n${marker}\nexec `)) {
-      throw new Error('The secrets getter has custom content. Offline migration cannot replace it.');
-    }
-  } catch (error) { if (!missing(error)) throw error; }
-  for (const file of configFiles(root)) {
-    const config: unknown = JSON.parse(readFileSync(file, 'utf8'));
-    if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error(`Invalid config ${file}.`);
-  }
-}
-
-function replaceFile(path: string, content: string, mode: number): void {
-  const temp = `${path}.tmp-${randomUUID()}`;
-  writeFileSync(temp, content, { mode, flag: 'wx' });
-  chmodSync(temp, mode);
-  renameSync(temp, path);
-}
-
-export function repairLinkedCompatibility(home: string, root: string, runtime: BridgeRuntime): void {
-  try {
-    if (realpathSync(root) !== realpathSync(join(home, '.vonvon-bridge'))) throw new Error('Compatibility repair requires the canonical data directory.');
-    if (!lstatSync(root).isDirectory()) throw new Error('Compatibility repair requires a physical data directory.');
-  } catch (error) { if (missing(error)) return; throw error; }
-  preflightCompatibility(root, runtime);
-  const canonical = join(root, 'secrets-getter');
-  const legacy = join(home, '.feishu-codex-bridge', 'secrets-getter');
-  let previousGetter: string | undefined;
-  try { previousGetter = readFileSync(canonical, 'utf8'); } catch (error) { if (!missing(error)) throw error; }
-  let needsGetter = false;
-  for (const file of configFiles(root)) {
-    const config: unknown = JSON.parse(readFileSync(file, 'utf8'));
-    if (typeof config !== 'object' || config === null || !('secrets' in config) || typeof config.secrets !== 'object' || config.secrets === null
-      || !('providers' in config.secrets) || typeof config.secrets.providers !== 'object' || config.secrets.providers === null) continue;
-    let changed = false;
-    for (const provider of Object.values(config.secrets.providers)) {
-      if (typeof provider !== 'object' || provider === null || !('command' in provider) || typeof provider.command !== 'string') continue;
-      const args = 'args' in provider ? provider.args : undefined;
-      const wrapper = (provider.command === canonical || (hasLegacyAlias(home) && provider.command === legacy))
-        && (args === undefined || (Array.isArray(args) && args.length === 0));
-      const generatedRuntime = Array.isArray(args) && args.length === 3 && typeof args[0] === 'string'
-        && args[1] === 'secrets' && args[2] === 'get'
-        && previousGetter === getterContents({ nodePath: provider.command, cliPath: args[0] });
-      if (!wrapper && !generatedRuntime) continue;
-      needsGetter = true;
-      Object.assign(provider, process.platform === 'win32'
-        ? { command: runtime.nodePath, args: [runtime.cliPath, 'secrets', 'get'], env: { ...('env' in provider && typeof provider.env === 'object' && provider.env !== null ? provider.env : {}), HOME: home, USERPROFILE: home } }
-        : { command: canonical, args: [] });
-      changed = true;
-    }
-    if (changed) replaceFile(file, `${JSON.stringify(config, null, 2)}\n`, 0o600);
-  }
-  try { regularFile(canonical); needsGetter = true; } catch (error) { if (!missing(error)) throw error; }
-  if (needsGetter) replaceFile(canonical, getterContents(runtime), 0o700);
 }

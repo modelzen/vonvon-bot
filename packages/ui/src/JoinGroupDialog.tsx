@@ -50,7 +50,7 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
   }
   async function save() {
     if (busy || mode.kind === 'existing') return false;
-    if (!name.trim() || ((mode.kind === 'bind' || existingDirectory) && !folder)) {setError('请填写名称并选择工作目录。'); return false;}
+    if (!name.trim() || (existingDirectory && !folder)) {setError('请填写名称并选择工作目录。'); return false;}
     if (!conversation || !freeAt) {setError('请选择会话方式。'); return false;}
     // Left out only when the default gives it on this daemon and on one from before s21 alike: those bind
     // with 3.4's defaults but create every group with 免@ on. Otherwise sent; an old daemon then refuses.
@@ -61,7 +61,7 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
     try {
       const reply = mode.kind === 'create'
         ? await client.collaboration({action: 'createProject', agentId: agent.id, name: name.trim(), folder: existingDirectory && folder ? {kind: 'existing', folderToken: folder.token} : {kind: 'default'}, tool, conversation, ...picked})
-        : folder && await client.run({type: 'bindGroup', agentId: agent.id, groupId: mode.group.chatId, projectName: name.trim(), folderToken: folder.token, tool, conversation, ...picked});
+        : await client.run({type: 'bindGroup', agentId: agent.id, groupId: mode.group.chatId, projectName: name.trim(), folder: existingDirectory && folder ? {kind: 'existing', folderToken: folder.token} : {kind: 'default'}, tool, conversation, ...picked});
       if (!reply || reply.kind !== 'applied') {setError(reply && 'message' in reply ? reply.message : '操作未完成，请重试。'); return false;}
       await onChanged();
       active.current = false;
@@ -98,7 +98,7 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
       </div>}
       {mode.kind === 'existing' ? <>
         <p>在飞书客户端打开目标群，进入「设置 → 群机器人 → 添加机器人」，搜索并添加「{agent.name}」。请使用这个 Bot 的管理员身份操作。</p>
-        <p role="status">添加后，Vonvon 会显示绑定通知。点击「继续绑定」选择工作目录。</p>
+        <p role="status">添加后，Vonvon 会显示绑定通知。点击「继续绑定」设置独立目录或选择现有目录。</p>
         {pending?.problem && <InlineNotice title={pending.problem.kind === 'unsupported' ? '当前后台不支持绑定通知' : '绑定通知读取失败'} tone="warning">{pending.problem.message} {pending.problem.kind === 'unsupported' && '请更新 Vonvon daemon，或使用下方的群查找入口。'}</InlineNotice>}
         {pending?.groups.map(group => <InlineNotice key={group.chatId} title={`${agent.name} 已加入 ${group.name}`} actions={<Button disabled={busy} onClick={() => switchMode({kind: 'bind', group})}>继续绑定</Button>}>选择工作目录后即可开始协作。</InlineNotice>)}
         <Button disabled={busy} onClick={() => void findGroups()}>查找已经加入的群</Button>
@@ -108,8 +108,8 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
         {mode.kind === 'bind' && <InlineNotice title={`绑定 ${mode.group.name}`}>Bot · {agent.name}</InlineNotice>}
         <FormField label={mode.kind === 'create' ? '飞书群名称' : '本地绑定名称'} error={nameProblem}><input aria-label={mode.kind === 'create' ? '飞书群名称' : '本地绑定名称'} maxLength={100} disabled={busy} value={name} onChange={event => setName(event.target.value)} /></FormField>
         <SettingsGroup>
-          {mode.kind === 'create' && <SettingsRow title="工作目录来源" trailing={<select aria-label="目录来源" disabled={busy} value={existingDirectory ? 'existing' : 'default'} onChange={event => {setExistingDirectory(event.target.value === 'existing'); setFolder(undefined);}}><option value="default">新建空白目录</option><option value="existing">使用现有目录</option></select>} />}
-          <SettingsRow title="工作目录" value={mode.kind === 'create' && !existingDirectory ? '在 Bot 的默认项目目录中创建空白目录' : folder?.displayPath ?? '未选择'} trailing={(mode.kind === 'bind' || existingDirectory) && <Button disabled={busy} onClick={() => void chooseFolder()}>选择文件夹</Button>} />
+          <SettingsRow title="工作目录来源" trailing={<select aria-label="目录来源" disabled={busy} value={existingDirectory ? 'existing' : 'default'} onChange={event => {setExistingDirectory(event.target.value === 'existing'); setFolder(undefined);}}><option value="default">新建空白目录</option><option value="existing">使用现有目录</option></select>} />
+          <SettingsRow title="工作目录" value={!existingDirectory ? (mode.kind === 'create' ? '在默认项目目录中创建空白目录' : '为本群创建独立空白目录') : folder?.displayPath ?? '未选择'} trailing={existingDirectory && <Button disabled={busy} onClick={() => void chooseFolder()}>选择文件夹</Button>} />
           <SettingsRow title="执行工具" trailing={<select aria-label="执行工具" disabled={busy} value={tool} onChange={event => setTool(toolSchema.parse(event.target.value))}><option value="codex">Codex</option><option value="claude">Claude</option></select>} />
         </SettingsGroup>
         <FormField label="会话方式">
@@ -118,7 +118,7 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
         {conversation && <SettingsGroup>
           <SettingsRow title="免 @" value={freeAt === 'all' ? '不 @ 也回' : '@ 我才回'} trailing={<select aria-label="免 @" disabled={busy} value={freeAt} onChange={event => setResponse(event.target.value === 'all' ? 'all' : 'mention')}><option value="all">开</option><option value="mention">关</option></select>} />
         </SettingsGroup>}
-        <Button variant="primary" loading={busy} disabled={!name.trim() || Boolean(nameProblem) || ((mode.kind === 'bind' || existingDirectory) && !folder) || !conversation} onClick={() => void save()}>{mode.kind === 'create' ? '创建飞书群并加入' : '绑定工作目录并发送欢迎卡片'}</Button>
+        <Button variant="primary" loading={busy} disabled={!name.trim() || Boolean(nameProblem) || (existingDirectory && !folder) || !conversation} onClick={() => void save()}>{mode.kind === 'create' ? '创建飞书群并加入' : '绑定工作目录并发送欢迎卡片'}</Button>
       </>}
       {error && <InlineNotice title="操作未完成" tone="danger">{error}</InlineNotice>}
     </div>

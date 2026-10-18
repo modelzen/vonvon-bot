@@ -78,7 +78,9 @@ vi.mock('electron', async () => {
   };
 });
 
-vi.mock('../src/attach.js', () => ({ attachExisting: fake.attach, AttachError: class AttachError extends Error {} }));
+vi.mock('../src/attach.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../src/attach.js')>(), attachExisting: fake.attach,
+}));
 vi.mock('../src/bridge.js', () => ({ installBridge: fake.install, openAllowedExternal: fake.openExternal }));
 vi.mock('../src/tray.js', () => ({ createDesktopTray: vi.fn(() => fake.tray) }));
 vi.mock('../src/update-configuration.js', () => ({ desktopUpdateConfiguration: fake.updateConfiguration }));
@@ -103,6 +105,8 @@ vi.mock('../src/login-item.js', async importOriginal => {
 
 import { startDesktop, desktopResources } from '../src/main.js';
 import { changeLoginItem, repairServiceAtStartup } from '../src/login-item.js';
+import { AttachError } from '../src/attach.js';
+import { ConnectionError } from '@vonvon/client/browser';
 import { autoUpdater, dialog, net } from 'electron';
 
 type MockApp = EventEmitter & { requestSingleInstanceLock: ReturnType<typeof vi.fn>; quit: ReturnType<typeof vi.fn>; getAppPath: ReturnType<typeof vi.fn> };
@@ -405,16 +409,118 @@ describe('a service helper started from the web UI or a terminal', () => {
     fake.verified.mockResolvedValueOnce(null).mockResolvedValue(successor);
     fake.ready.mockResolvedValueOnce(successor);
     fake.attach.mockResolvedValueOnce(next);
-    expect(actions.followServiceHelper(previous)).toBe(true);
+    expect(actions.recoverConnection(previous)).toBe(true);
     expect(actions.isExpectedDisconnect()).toBe(true);
     await vi.waitFor(() => expect(fake.bridge.replaceOwner).toHaveBeenCalledExactlyOnceWith(next));
     expect(actions.isExpectedDisconnect()).toBe(false);
     expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
   });
 
-  it('leaves a drop with no helper running to the lost-connection dialog', () => {
-    expect(actions.followServiceHelper(previous)).toBe(false);
+
+});
+
+describe('passive daemon reconnection', () => {
+  const previous = { pid: 42, startedAt: 'initial', listen: '127.0.0.1:42345' };
+
+  it('follows three external restarts without starting a daemon', async () => {
+    let lost = previous;
+    for (let crash = 1; crash <= 3; crash++) {
+      const identity = { pid: 42 + crash, startedAt: `crash-${crash}`, listen: `127.0.0.1:${43000 + crash}` };
+      const next = { identity, dispose: vi.fn(async () => {}) };
+      fake.attach.mockRejectedValueOnce(new AttachError('owner')).mockResolvedValueOnce(next);
+      expect(actions.recoverConnection(lost)).toBe(true);
+      await vi.waitFor(() => expect(fake.bridge.replaceOwner).toHaveBeenCalledTimes(crash));
+      expect(fake.bridge.replaceOwner).toHaveBeenLastCalledWith(next);
+      expect(actions.isExpectedDisconnect()).toBe(false);
+      lost = identity;
+    }
+    expect(fake.ready).toHaveBeenCalledTimes(1);
+    expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
+  });
+
+  it('can reconnect the same authenticated daemon after a transport failure', async () => {
+    const next = { identity: previous, dispose: vi.fn(async () => {}) };
+    fake.attach.mockResolvedValueOnce(next);
+    expect(actions.recoverConnection(previous)).toBe(true);
+    await vi.waitFor(() => expect(fake.bridge.replaceOwner).toHaveBeenCalledExactlyOnceWith(next));
+    expect(fake.ready).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains the lost-connection dialog when no daemon comes back', async () => {
+    fake.attach.mockRejectedValue(new AttachError('owner'));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+    try {
+      expect(actions.recoverConnection(previous)).toBe(true);
+      await vi.advanceTimersByTimeAsync(61_000);
+    } finally { vi.useRealTimers(); }
+    expect(dialog.showMessageBoxSync).toHaveBeenCalledOnce();
+    expect(fake.bridge.replaceOwner).not.toHaveBeenCalled();
+    expect(fake.ready).toHaveBeenCalledTimes(1);
+    expect(window.destroyed).toBe(false);
+  });
+
+  it.each(['root', 'credential'] as const)('does not retry invalid %s state', async reason => {
+    fake.attach.mockRejectedValue(new AttachError(reason));
+    expect(actions.recoverConnection(previous)).toBe(true);
+    await vi.waitFor(() => expect(dialog.showMessageBoxSync).toHaveBeenCalledOnce());
+    expect(fake.attach).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['connection', 'identity'] as const)('retries a transient %s failure', async reason => {
+    const next = { identity: previous, dispose: vi.fn(async () => {}) };
+    fake.attach.mockRejectedValueOnce(new AttachError(reason)).mockResolvedValueOnce(next);
+    expect(actions.recoverConnection(previous)).toBe(true);
+    await vi.waitFor(() => expect(fake.bridge.replaceOwner).toHaveBeenCalledExactlyOnceWith(next));
+    expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
+  });
+
+  it('retries when a replacement daemon loses its connection before its first snapshot', async () => {
+    const lost = { identity: previous, dispose: vi.fn(async () => {}) };
+    const next = { identity: { ...previous, pid: 45 }, dispose: vi.fn(async () => {}) };
+    fake.attach.mockResolvedValueOnce(lost).mockResolvedValueOnce(next);
+    fake.bridge.replaceOwner.mockRejectedValueOnce(new ConnectionError('candidate crashed'));
+    expect(actions.recoverConnection(previous)).toBe(true);
+    await vi.waitFor(() => expect(fake.bridge.replaceOwner).toHaveBeenCalledTimes(2));
+    expect(fake.bridge.replaceOwner).toHaveBeenLastCalledWith(next);
+    expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
+    expect(fake.ready).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports an unexpected attachment failure without retrying it', async () => {
+    fake.attach.mockRejectedValueOnce(new Error('physical close failed'));
+    expect(actions.recoverConnection(previous)).toBe(true);
+    await vi.waitFor(() => expect(dialog.showMessageBoxSync).toHaveBeenCalledOnce());
+    expect(fake.attach).toHaveBeenCalledTimes(2);
+  });
+
+  it('closes a candidate when the deadline expires during its initial snapshot', async () => {
+    let rejectReplacement!: (error: Error) => void;
+    const next = { identity: previous, dispose: vi.fn(async () => { rejectReplacement(new Error('closed')); }) };
+    fake.attach.mockResolvedValueOnce(next);
+    fake.bridge.replaceOwner.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectReplacement = reject; }));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+    try {
+      expect(actions.recoverConnection(previous)).toBe(true);
+      await vi.advanceTimersByTimeAsync(61_000);
+    } finally { vi.useRealTimers(); }
+    expect(next.dispose).toHaveBeenCalledOnce();
+    expect(dialog.showMessageBoxSync).toHaveBeenCalledOnce();
     expect(actions.isExpectedDisconnect()).toBe(false);
+  });
+
+  it.each(['quit', 'update cleanup'] as const)('lets %s cancel a pending attachment and closes its late candidate once', async stop => {
+    if (stop === 'update cleanup') await downloadUpdate();
+    const next = { identity: previous, dispose: vi.fn(async () => {}) };
+    let deliver!: () => void;
+    fake.attach.mockImplementationOnce(() => new Promise(resolve => { deliver = () => resolve(next); }));
+    expect(actions.recoverConnection(previous)).toBe(true);
+    expect(actions.recoverConnection(previous)).toBe(false);
+    await (stop === 'quit' ? actions.confirmQuit() : actions.installDesktopUpdate());
+    expect(fake.bridge.dispose).toHaveBeenCalledOnce();
+    deliver();
+    await vi.waitFor(() => expect(next.dispose).toHaveBeenCalledOnce());
+    expect(fake.bridge.replaceOwner).not.toHaveBeenCalled();
+    expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
   });
 });
 

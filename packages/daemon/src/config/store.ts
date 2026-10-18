@@ -5,11 +5,21 @@ import { dirname } from 'node:path';
 import { paths } from './paths';
 import type { AppConfig, AppPreferences, TenantBrand } from './schema';
 import { secretKeyForApp } from './schema';
+import { parseBotDefaults, resolveBotDefaults, validateConfigDefaults } from './defaults';
+import { admitDirectoryChanges, configDirectories } from './directories';
 
 export async function loadConfig(path: string = paths.configFile): Promise<Partial<AppConfig>> {
   try {
     const text = await readFile(path, 'utf8');
-    return JSON.parse(text) as Partial<AppConfig>;
+    let config: unknown;
+    try {
+      config = JSON.parse(text);
+    } catch {
+      throw new Error('Invalid config JSON');
+    }
+    validateConfigDefaults(config);
+    configDirectories(config);
+    return config as Partial<AppConfig>;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
     throw err;
@@ -26,6 +36,13 @@ export async function buildEncryptedAccountConfig(
   tenant: TenantBrand,
   preferences?: AppPreferences,
 ): Promise<AppConfig> {
+  const defaults = parseBotDefaults(preferences?.defaults);
+  configDirectories({ preferences });
+  const resolved = resolveBotDefaults(defaults);
+  const initialPreferences: AppPreferences = {
+    ...preferences,
+    defaults: { ...defaults, permission: resolved.permission, network: resolved.network },
+  };
   const wrapperPath = await ensureSecretsGetterWrapper();
   return {
     accounts: {
@@ -42,7 +59,7 @@ export async function buildEncryptedAccountConfig(
           : { source: 'exec', command: wrapperPath, args: [] },
       },
     },
-    ...(preferences ? { preferences } : {}),
+    preferences: initialPreferences,
   };
 }
 
@@ -71,12 +88,28 @@ export async function ensureSecretsGetterWrapper(): Promise<string> {
 // 同进程内并发 saveConfig 串行化 + tmp 唯一名：避免两次写共用 tmp 文件交错（rename
 // 命中被对方写一半的 tmp → JSON 损坏，或丢写）。
 let saveChain: Promise<unknown> = Promise.resolve();
-export function saveConfig(cfg: AppConfig, path: string = paths.configFile, expected?: AppConfig): Promise<void> {
+export function saveConfig(cfg: AppConfig, path: string = paths.configFile, expected?: Partial<AppConfig>): Promise<void> {
+  const expectedSnapshot = expected === undefined ? undefined : structuredClone(expected);
+  // Snapshot before yielding so queued saves validate exactly what they write.
+  let serialized: string;
+  try {
+    validateConfigDefaults(cfg);
+    configDirectories(cfg);
+    serialized = `${JSON.stringify(cfg, null, 2)}\n`;
+    validateConfigDefaults(JSON.parse(serialized));
+    configDirectories(JSON.parse(serialized));
+  } catch (error) {
+    return Promise.reject(error);
+  }
   const run = saveChain.then(async () => {
-    if (expected && JSON.stringify(await loadConfig(path)) !== JSON.stringify(expected)) throw new Error('配置已被其他进程修改，请重启 Host 后重新加载');
+    const nextDirectories = configDirectories(JSON.parse(serialized));
+    // Old callers without a declaration/CAS can still replace malformed legacy JSON.
+    const previous = expectedSnapshot || nextDirectories ? await loadConfig(path) : {};
+    if (expectedSnapshot && JSON.stringify(previous) !== JSON.stringify(expectedSnapshot)) throw new Error('配置已被其他进程修改，请重启 Host 后重新加载');
+    await admitDirectoryChanges(nextDirectories, configDirectories(previous), paths.appDir);
     await mkdir(dirname(path), { recursive: true });
     const tmp = `${path}.tmp-${process.pid}-${randomUUID()}`;
-    await writeFile(tmp, `${JSON.stringify(cfg, null, 2)}\n`, 'utf8');
+    await writeFile(tmp, serialized, 'utf8');
     await chmod(tmp, 0o600);
     await rename(tmp, path);
   });

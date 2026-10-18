@@ -1,31 +1,44 @@
 import { createPendingGroups, pendingGroupsFile, readPendingGroups } from '../src/project/pending-groups';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
-import { afterAll, describe, expect, it, vi } from 'vitest';
-import { createGroupExecutor, describeGroupFailure, parseBindGroupInput, UNNAMED_GROUP, type BindGroupInput } from '../src/admin/groups';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { createGroupExecutor as createOwnedGroupExecutor, describeGroupFailure, parseBindGroupInput, UNNAMED_GROUP, type BindGroupInput } from '../src/admin/groups';
 import { log } from '../src/core/logger';
 import { createAdminIpcCaller, createAdminIpcResponder } from '../src/admin/ipc';
 import { addProject, listProjects, listProjectsIn } from '../src/project/registry';
-import { joinExistingGroup } from '../src/project/lifecycle';
+import { createProject, joinExistingGroup as joinOwnedGroup, type JoinGroupInput } from '../src/project/lifecycle';
+import type { RegistryLocation } from '../src/project/registry';
 import { paths } from '../src/config/paths';
 
 vi.mock('../src/config/paths', async () => {
-  const { mkdtempSync } = await import('node:fs');
+  const { mkdtempSync, realpathSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
-  const root = mkdtempSync(join(tmpdir(), 'groups-fixture-'));
-  return { paths: { appDir: root, projectsFile: join(root, 'projects.json'), projectsRootDir: join(root, 'projects'), backendsDir: join(root, 'backends') } };
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'groups-fixture-')));
+  return { paths: { appDir: root, botsFile: join(root, 'bots.json'), projectsFile: join(root, 'projects.json'), projectsRootDir: join(root, 'projects'), backendsDir: join(root, 'backends') },
+    botPaths: () => ({ projectsFile: join(root, 'projects.json'), configFile: join(root, 'config.json') }) };
 });
+const bot = { appId: 'cli_fixture', tenant: 'feishu' as const, name: 'fixture', createdAt: 1, registrationId: 'original' };
+beforeAll(() => writeFile(paths.botsFile, JSON.stringify({ version: 1, bots: [bot] })));
+const createGroupExecutor = (channel: LarkChannel) => createOwnedGroupExecutor(channel, bot);
+const joinExistingGroup = (channel: LarkChannel, request: Omit<JoinGroupInput, 'bot'>, target?: RegistryLocation) => joinOwnedGroup(channel, { ...request, bot }, target);
 afterAll(async () => { await rm(paths.appDir, { recursive: true, force: true }); });
+
+async function workspace(): Promise<string> {
+  await mkdir(paths.projectsRootDir, { recursive: true });
+  return mkdtemp(join(paths.projectsRootDir, 'workspace-'));
+}
 
 function channelFixture() {
   const message = vi.fn(async () => ({ code: 0, data: { message_id: 'message' } }));
   const membership = vi.fn(async () => ({ code: 0, data: { is_in_chat: true } }));
   const list = vi.fn(async () => ({ code: 0, data: { items: [{ chat_id: 'oc_a', name: 'Group A' }], has_more: true, page_token: 'page2' } }));
-  const channel = { rawClient: { im: { v1: { message: { create: message }, chatMembers: { isInChat: membership }, chat: { list } } } } } as unknown as LarkChannel;
-  return { channel, message, membership, list };
+  const create = vi.fn(async () => ({ code: 0, data: { chat_id: 'oc_created' } }));
+  const managers = vi.fn(async () => ({ code: 0 }));
+  const channel = { rawClient: { im: { v1: { message: { create: message }, chatMembers: { isInChat: membership }, chat: { list, create }, chatManagers: { addManagers: managers } } } } } as unknown as LarkChannel;
+  return { channel, message, membership, list, create, managers };
 }
 /** A thrown SDK (axios) error carrying the Feishu body in `response.data`. */
 function axiosError(status: number, data: unknown): Error {
@@ -34,8 +47,33 @@ function axiosError(status: number, data: unknown): Error {
 const input = (directory: string): BindGroupInput => ({ chatId: 'oc_a', projectName: 'First', directory, backend: 'codex-appserver', kind: 'multi' });
 
 describe('desktop group commands in the owning bot', () => {
+  it('binds a default empty workspace and keeps pending state for stale or non-member requests', async () => {
+    const fixture = channelFixture();
+    const execute = createGroupExecutor(fixture.channel);
+    const request = { chatId: 'oc_default_web', projectName: 'Default web', backend: 'codex-appserver', kind: 'multi' } satisfies BindGroupInput;
+    const pendingFile = pendingGroupsFile(paths.projectsFile);
+    const queue = createPendingGroups({ file: pendingFile, eligible: async () => true, verify: async () => ({ state: 'ready', name: request.projectName }), onError: error => { throw error; } });
+    await queue.add(request.chatId, 'ou_owner'); await queue.refresh();
+    const projects = await readFile(paths.projectsFile, 'utf8').catch(() => undefined);
+    const registry = await readFile(paths.botsFile, 'utf8');
+    const stale = createOwnedGroupExecutor(fixture.channel, { ...bot, registrationId: 'stale' });
+    await expect(stale({ kind: 'bindGroup', input: request })).rejects.toThrow('重新注册');
+    expect(await readPendingGroups(pendingFile)).toHaveLength(1);
+    expect(await readFile(paths.projectsFile, 'utf8').catch(() => undefined)).toBe(projects);
+    expect(await readFile(paths.botsFile, 'utf8')).toBe(registry);
+    fixture.membership.mockResolvedValueOnce({ code: 0, data: { is_in_chat: false } });
+    await expect(execute({ kind: 'bindGroup', input: request })).rejects.toThrow('不在此群');
+    expect(await readPendingGroups(pendingFile)).toHaveLength(1);
+    const result = await execute({ kind: 'bindGroup', input: request });
+    expect(result).toMatchObject({ cwd: join(paths.projectsRootDir, 'fixture/groups/Default web'), blank: true, directories: { workspaces: { primary: join(paths.projectsRootDir, 'fixture/groups/Default web'), additional: [] } } });
+    expect(await readPendingGroups(pendingFile)).toEqual([]);
+    expect(await execute({ kind: 'bindGroup', input: request })).toEqual(result);
+    expect(fixture.message).toHaveBeenCalledTimes(1);
+    await import('../src/project/registry').then(m => m.removeProject(request.projectName));
+  });
+
   it('commits once through IPC, sends one welcome, and retries identical bindings', async () => {
-    const dir = await mkdtemp(join(paths.appDir, 'workspace-'));
+    const dir = await workspace();
     const fixture = channelFixture();
     const execute = createGroupExecutor(fixture.channel);
     let receive = (_raw: unknown): void => {};
@@ -61,7 +99,7 @@ describe('desktop group commands in the owning bot', () => {
   });
 
   it('s21: a bind writes 免@ from the pick, else 单会话 off, and checks its type', async () => {
-    const dir = await mkdtemp(join(paths.appDir, 'workspace-'));
+    const dir = await workspace();
     const execute = createGroupExecutor(channelFixture().channel);
     expect(await execute({ kind: 'bindGroup', input: { ...input(dir), chatId: 'oc_s21a', projectName: 'S21 A', kind: 'single' } })).toMatchObject({ kind: 'single', noMention: false });
     expect(await execute({ kind: 'bindGroup', input: { ...input(dir), chatId: 'oc_s21b', projectName: 'S21 B', kind: 'single', noMention: true } })).toMatchObject({ kind: 'single', noMention: true });
@@ -83,50 +121,202 @@ describe('desktop group commands in the owning bot', () => {
     const queue = createPendingGroups({ file: pendingFile, eligible: async () => true, verify: async () => ({ state: 'ready', name: 'Unbound' }), onError: error => { throw error; } });
     await queue.add('oc_a', 'ou_admin');
     fixture.membership.mockResolvedValue({ code: 0, data: { is_in_chat: false } });
-    await expect(execute({ kind: 'bindGroup', input: input(paths.appDir) })).rejects.toThrow('不在此群');
+    await expect(execute({ kind: 'bindGroup', input: input(await workspace()) })).rejects.toThrow('不在此群');
     expect(fixture.message).not.toHaveBeenCalled();
     expect(await readPendingGroups(pendingFile)).toHaveLength(1);
     await queue.remove('oc_a');
     fixture.membership.mockRejectedValue(new Error('upstream unavailable'));
-    await expect(execute({ kind: 'bindGroup', input: input(paths.appDir) })).rejects.toMatchObject({ code: 'GROUP_UPSTREAM' });
+    await expect(execute({ kind: 'bindGroup', input: input(await workspace()) })).rejects.toMatchObject({ code: 'GROUP_UPSTREAM' });
   });
 
   it('keeps a committed binding when welcome fails and preserves actual DM operator', async () => {
     const fixture = channelFixture();
     fixture.message.mockRejectedValue(new Error('welcome unavailable'));
     const execute = createGroupExecutor(fixture.channel);
-    const value = { ...input(paths.appDir), projectName: 'Second', chatId: 'oc_second' };
+    const dir = await workspace();
+    const value = { ...input(dir), projectName: 'Second', chatId: 'oc_second' };
     await execute({ kind: 'bindGroup', input: value });
     await execute({ kind: 'bindGroup', input: value });
     expect(fixture.message).toHaveBeenCalledTimes(1);
     const queue = createPendingGroups({ file: pendingGroupsFile(paths.projectsFile), eligible: async () => true, verify: async () => ({ state: 'ready', name: 'DM' }), onError: error => { throw error; } });
     await queue.add('oc_dm', 'ou_actual_sender');
     await queue.refresh();
-    const dm = await joinExistingGroup(fixture.channel, { name: 'DM', chatId: 'oc_dm', existingPath: paths.appDir, addedBy: 'ou_actual_sender', kind: 'multi' });
+    const dm = await joinExistingGroup(fixture.channel, { name: 'DM', chatId: 'oc_dm', existingPath: dir, addedBy: 'ou_actual_sender', kind: 'multi' });
     expect(dm.addedBy).toBe('ou_actual_sender');
     expect(dm.noMention).toBe(true); // 3.4: 多会话 defaults 免@ on, written down at bind
     expect(await readPendingGroups(pendingGroupsFile(paths.projectsFile))).toEqual([]);
-    const retried = await execute({ kind: 'bindGroup', input: { ...input(paths.appDir), projectName: 'DM', chatId: 'oc_dm' } });
+    const retried = await execute({ kind: 'bindGroup', input: { ...input(dir), projectName: 'DM', chatId: 'oc_dm' } });
     expect(retried).toEqual(dm);
     expect(fixture.message).toHaveBeenCalledTimes(2);
   });
 
   it('keeps successful DM and desktop bindings when pending cleanup cannot read its file', async () => {
+    const dir = await workspace();
     const pendingFile = pendingGroupsFile(paths.projectsFile);
     await writeFile(pendingFile, '{');
     const fixture = channelFixture();
     try {
-      const dm = await joinExistingGroup(fixture.channel, { name: 'Corrupt queue DM', chatId: 'oc_corrupt_dm', existingPath: paths.appDir, addedBy: 'ou_admin', kind: 'multi' });
+      const dm = await joinExistingGroup(fixture.channel, { name: 'Corrupt queue DM', chatId: 'oc_corrupt_dm', existingPath: dir, addedBy: 'ou_admin', kind: 'multi' });
       expect(dm.chatId).toBe('oc_corrupt_dm');
       expect((await listProjects()).find(project => project.chatId === dm.chatId)).toEqual(dm);
       const execute = createGroupExecutor(fixture.channel);
-      const value = { ...input(paths.appDir), projectName: 'Corrupt queue desktop', chatId: 'oc_corrupt_desktop' };
+      const value = { ...input(dir), projectName: 'Corrupt queue desktop', chatId: 'oc_corrupt_desktop' };
       const desktop = await execute({ kind: 'bindGroup', input: value });
       expect(desktop).toMatchObject({ chatId: value.chatId });
       expect(await execute({ kind: 'bindGroup', input: value })).toEqual(desktop);
       expect(fixture.message).toHaveBeenCalledTimes(2);
       expect(await readFile(pendingFile, 'utf8')).toBe('{');
     } finally { await rm(pendingFile); }
+  });
+
+  it('returns the same binding through DM retries and the desktop', async () => {
+    const dir = join(paths.projectsRootDir, 'dm-retry');
+    await mkdir(dir, { recursive: true });
+    const fixture = channelFixture();
+    const value = { name: 'DM retry', chatId: 'oc_dm_retry', existingPath: dir, backend: 'codex-appserver', kind: 'multi' as const, addedBy: 'ou_first' };
+    const first = await joinExistingGroup(fixture.channel, value);
+    const bytes = await readFile(paths.projectsFile, 'utf8');
+    expect(await joinExistingGroup(fixture.channel, { ...value, addedBy: 'ou_later' })).toEqual(first);
+    expect(await createGroupExecutor(fixture.channel)({ kind: 'bindGroup', input: { ...input(dir), projectName: value.name, chatId: value.chatId } })).toEqual(first);
+    expect(await readFile(paths.projectsFile, 'utf8')).toBe(bytes);
+    expect(fixture.message).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects protected explicit workspaces before binding or creating a group', async () => {
+    const fixture = channelFixture();
+    const value = { name: 'Protected', existingPath: paths.appDir, kind: 'multi' as const };
+    await expect(joinExistingGroup(fixture.channel, { ...value, chatId: 'oc_protected' })).rejects.toThrow('directories.workspaces.primary');
+    await expect(createGroupExecutor(fixture.channel)({ kind: 'bindGroup', input: { ...input(paths.appDir), projectName: value.name, chatId: 'oc_protected_web' } })).rejects.toThrow('directories.workspaces.primary');
+    await expect(createProject(fixture.channel, { ...value, ownerOpenId: 'ou_owner' })).rejects.toThrow('directories.workspaces.primary');
+    expect(fixture.message).not.toHaveBeenCalled();
+    expect(fixture.create).not.toHaveBeenCalled();
+    expect((await listProjects()).some(project => project.name === value.name)).toBe(false);
+  });
+
+  it('commits one canonical binding and welcome across eight mixed DM and web callers', async () => {
+    const dir = await workspace();
+    const alias = `${dir}-alias`;
+    await symlink(dir, alias);
+    const fixture = channelFixture();
+    const value = { ...input(alias), projectName: 'Mixed bind', chatId: 'oc_mixed' };
+    const replies = await Promise.all(Array.from({ length: 8 }, (_, index) => index % 2
+      ? createGroupExecutor(fixture.channel)({ kind: 'bindGroup', input: value })
+      : joinExistingGroup(fixture.channel, { name: value.projectName, chatId: value.chatId, existingPath: dir, kind: value.kind, backend: value.backend })));
+    expect(replies.every(reply => JSON.stringify(reply) === JSON.stringify(replies[0]))).toBe(true);
+    expect(replies[0]).toMatchObject({ cwd: await realpath(dir), blank: false, directories: { workspaces: { primary: await realpath(dir), additional: [] } } });
+    expect(replies[0]).not.toHaveProperty('directories.repositories');
+    expect((await listProjects()).filter(project => project.chatId === value.chatId)).toHaveLength(1);
+    expect(fixture.message).toHaveBeenCalledTimes(1);
+    expect(fixture.membership).toHaveBeenCalledTimes(4);
+  });
+
+  it('rejects every binding identity conflict while retaining mutable settings and operator', async () => {
+    const fixture = channelFixture();
+    const dir = await workspace();
+    const value = { name: 'Conflicts', chatId: 'oc_conflicts', existingPath: dir, kind: 'multi' as const, backend: 'codex-appserver', addedBy: 'ou_original' };
+    const first = await joinExistingGroup(fixture.channel, value);
+    const bytes = await readFile(paths.projectsFile, 'utf8');
+    for (const patch of [{ name: 'Different' }, { existingPath: await workspace() }, { backend: 'claude-agent' }, { kind: 'single' as const }, { noMention: false }]) {
+      await expect(joinExistingGroup(fixture.channel, { ...value, ...patch })).rejects.toThrow('不可修改');
+    }
+    await expect(joinExistingGroup(fixture.channel, { ...value, chatId: 'oc_name_conflict' })).rejects.toThrow('项目名');
+    expect(await joinExistingGroup(fixture.channel, { ...value, name: ' Conflicts ', mode: 'full', network: true, addedBy: 'ou_changed', noMention: true })).toEqual(first);
+    expect(await readFile(paths.projectsFile, 'utf8')).toBe(bytes);
+    expect(fixture.message).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns legacy protected bindings unchanged, even with an unavailable backend', async () => {
+    const fixture = channelFixture();
+    const legacy = { name: 'Legacy retry', chatId: 'oc_legacy_retry', cwd: paths.appDir, blank: false, createdAt: 1,
+      kind: 'single' as const, backend: 'claude-agent' as const, origin: 'joined' as const, addedBy: 'ou_legacy',
+      mode: 'full' as const, network: true, enabled: false, future: { keep: true } };
+    await addProject(legacy);
+    const bytes = await readFile(paths.projectsFile, 'utf8');
+    const value = { name: legacy.name, chatId: legacy.chatId, existingPath: paths.appDir, kind: legacy.kind, backend: legacy.backend, noMention: false };
+    expect(await joinExistingGroup(fixture.channel, value)).toEqual(legacy);
+    const execute = createGroupExecutor(fixture.channel);
+    const web = { ...input(paths.appDir), projectName: legacy.name, chatId: legacy.chatId, backend: legacy.backend, kind: legacy.kind };
+    expect(await execute({ kind: 'bindGroup', input: web })).toEqual(legacy);
+    fixture.membership.mockResolvedValueOnce({ code: 0, data: { is_in_chat: false } });
+    await expect(execute({ kind: 'bindGroup', input: web })).rejects.toThrow('不在此群');
+    fixture.membership.mockRejectedValueOnce(new Error('offline'));
+    await expect(execute({ kind: 'bindGroup', input: web })).rejects.toMatchObject({ code: 'GROUP_UPSTREAM' });
+    expect(await readFile(paths.projectsFile, 'utf8')).toBe(bytes);
+    expect(fixture.message).not.toHaveBeenCalled();
+    await addProject({ ...legacy, name: 'Smart legacy', chatId: 'oc_smart_legacy', smart: true });
+    await expect(joinExistingGroup(fixture.channel, { ...value, name: 'Smart legacy', chatId: 'oc_smart_legacy' })).rejects.toThrow('不可修改');
+  });
+
+  it('retries default-directory bindings without recreating their directory', async () => {
+    const fixture = channelFixture();
+    const value = { name: 'Default retry', chatId: 'oc_default_retry', kind: 'multi' as const };
+    const first = await joinExistingGroup(fixture.channel, value);
+    expect(first.cwd).toBe(join(paths.projectsRootDir, bot.name, 'groups', value.name));
+    expect(first.directories?.workspaces).toEqual({ primary: first.cwd, additional: [] });
+    await rm(first.cwd, { recursive: true });
+    const bytes = await readFile(paths.projectsFile, 'utf8');
+    expect(await joinExistingGroup(fixture.channel, value)).toEqual(first);
+    await expect(stat(first.cwd)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(paths.projectsFile, 'utf8')).toBe(bytes);
+    expect(fixture.message).toHaveBeenCalledTimes(1);
+  });
+
+  it('allocates a stable empty group workspace below the bot namespace', async () => {
+    const fixture = channelFixture();
+    const row = await joinExistingGroup(fixture.channel, { name: 'Allocated group', chatId: 'oc_allocated', kind: 'multi' });
+    expect(row.cwd).toBe(join(paths.projectsRootDir, bot.name, 'groups', 'Allocated group'));
+    expect(row.directories?.workspaces).toEqual({ primary: row.cwd, additional: [] });
+    expect(JSON.parse(await readFile(paths.botsFile, 'utf8')).groupAllocations).toBeDefined();
+  });
+
+  it.each(['join', 'create'] as const)('captures %s inputs and registry target before asynchronous preparation', async action => {
+    const fixture = channelFixture();
+    const dir = await workspace();
+    const file = action === 'join' ? paths.projectsFile : join(paths.appDir, `captured-${action}`, 'projects.json');
+    const target = { file, dataRoot: paths.appDir };
+    const value = { name: `Captured ${action}`, chatId: `oc_captured_${action}`, ownerOpenId: 'ou_owner', requestId: 'original-request', requestSignature: 'original-signature', existingPath: dir, kind: 'multi' as const, backend: 'codex-appserver' };
+    const pending = action === 'join' ? joinExistingGroup(fixture.channel, value, target) : createProject(fixture.channel, value, target);
+    value.name = 'mutated'; value.existingPath = paths.appDir; value.backend = 'unavailable'; value.ownerOpenId = 'ou_changed'; value.requestId = 'changed-request'; value.requestSignature = 'changed-signature';
+    target.file = join(paths.appDir, `wrong-${action}`, 'projects.json'); target.dataRoot = dir;
+    const result = await pending;
+    expect(result).toMatchObject({ name: `Captured ${action}`, cwd: await realpath(dir), backend: 'codex-appserver' });
+    expect((await listProjectsIn(file)).find(row => row.chatId === result.chatId)).toMatchObject(result);
+    await expect(readFile(target.file)).rejects.toMatchObject({ code: 'ENOENT' });
+    if (action === 'create') {
+      expect(result.creationRequestSignature).toBe('original-signature');
+      expect(fixture.create).toHaveBeenCalledWith({ params: { user_id_type: 'open_id', uuid: 'original-request' }, data: { name: 'Captured create', user_id_list: ['ou_owner'] } });
+    }
+  });
+
+  it('captures web input and owning bot before its membership request returns', async () => {
+    const fixture = channelFixture();
+    const originalFile = paths.projectsFile;
+    const wrongFile = join(paths.appDir, 'other-bot', 'projects.json');
+    const value = { ...input(await workspace()), projectName: 'Captured web', chatId: 'oc_captured_web' };
+    const pending = createGroupExecutor(fixture.channel)({ kind: 'bindGroup', input: value });
+    value.projectName = 'mutated'; value.chatId = 'oc_mutated'; value.directory = paths.appDir;
+    Object.assign(paths, { projectsFile: wrongFile });
+    try {
+      expect(await pending).toMatchObject({ name: 'Captured web', chatId: 'oc_captured_web' });
+      expect((await listProjectsIn(originalFile)).some(project => project.chatId === 'oc_captured_web')).toBe(true);
+      await expect(readFile(wrongFile)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally { Object.assign(paths, { projectsFile: originalFile }); }
+  });
+
+  it.each(['internal', 'file', 'missing'] as const)('rejects %s explicit paths in both binding entries and before remote creation', async kind => {
+    const dir = join(paths.appDir, kind === 'internal' ? 'bots' : `invalid-${kind}`);
+    if (kind === 'internal') await mkdir(dir, { recursive: true });
+    if (kind === 'file') await writeFile(dir, 'file');
+    const fixture = channelFixture();
+    const bytes = await readFile(paths.projectsFile, 'utf8');
+    const value = { name: `Invalid ${kind}`, existingPath: dir, kind: 'multi' as const };
+    await expect(joinExistingGroup(fixture.channel, { ...value, chatId: `oc_invalid_${kind}` })).rejects.toThrow();
+    await expect(createGroupExecutor(fixture.channel)({ kind: 'bindGroup', input: { ...input(dir), projectName: value.name, chatId: `oc_invalid_web_${kind}` } })).rejects.toThrow();
+    await expect(createProject(fixture.channel, { ...value, ownerOpenId: 'ou_owner' })).rejects.toThrow('directories.workspaces.primary');
+    expect(await readFile(paths.projectsFile, 'utf8')).toBe(bytes);
+    expect(fixture.create).not.toHaveBeenCalled();
+    expect(fixture.managers).not.toHaveBeenCalled();
+    expect(fixture.message).not.toHaveBeenCalled();
   });
 
   it('registry rejects duplicate races while preserving unrelated existing projects', async () => {
@@ -154,10 +344,10 @@ describe('desktop group commands in the owning bot', () => {
       expect(fail).toHaveBeenLastCalledWith('groups', expect.objectContaining({ message: missing }), { phase: 'joined-groups', code: 99991672, msg: 'scopes is required: [im:chat:readonly]' });
       const notMember = axiosError(400, { code: 232011, msg: 'operator is not in the chat' });
       fixture.membership.mockRejectedValueOnce(notMember);
-      await expect(execute({ kind: 'bindGroup', input: input(paths.appDir) })).rejects.toThrow('飞书接口出错 code=232011：operator is not in the chat');
+      await expect(execute({ kind: 'bindGroup', input: input(await workspace()) })).rejects.toThrow('飞书接口出错 code=232011：operator is not in the chat');
       expect(fail).toHaveBeenLastCalledWith('groups', notMember, { phase: 'bind-group' });
       fixture.membership.mockResolvedValueOnce({ code: 0, data: {} } as never);
-      await expect(execute({ kind: 'bindGroup', input: input(paths.appDir) })).rejects.toThrow('无法确认机器人群成员身份');
+      await expect(execute({ kind: 'bindGroup', input: input(await workspace()) })).rejects.toThrow('无法确认机器人群成员身份');
       expect(fail).toHaveBeenLastCalledWith('groups', expect.any(Error), { phase: 'bind-group' });
     } finally { fail.mockRestore(); }
   });

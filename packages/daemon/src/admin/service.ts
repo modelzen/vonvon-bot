@@ -12,7 +12,7 @@ import { parseJoinedGroups, type AdminGroupOp, type BindGroupInput, type JoinedG
 import { voiceView } from '../voice/view';
 import type { VoiceAction, VoiceView } from '../voice/types';
 import { readFile, rm } from 'node:fs/promises';
-import { activeBots, loadBots, setActiveBots, removeBot } from '../config/bots';
+import { botIdentity, loadBots, setBotActivation, removeBot } from '../config/bots';
 import { botPaths, botDir } from '../config/paths';
 import { removeSecret } from '../config/keystore';
 import {
@@ -492,7 +492,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
    */
   function enableRegisteredBot(appId: string): Promise<void> {
     const saved = activationQueue.then(async () => {
-      await setActiveBots([...activeBots(await loadBots()).map((bot) => bot.appId), appId]);
+      await setBotActivation(appId, true);
     });
     const started = saved.then(async () => {
       try {
@@ -1018,14 +1018,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
         if (!reg.bots.some((bot) => bot.appId === appId)) {
           return { ok: false, reason: `机器人「${appId}」不存在。` };
         }
-        const current = new Set(
-          reg.bots.some((bot) => bot.active !== undefined)
-            ? reg.bots.filter((bot) => bot.active === true).map((bot) => bot.appId)
-            : reg.current ? [reg.current] : [],
-        );
-        if (enabled) current.add(appId);
-        else current.delete(appId);
-        await setActiveBots([...current]);
+        await setBotActivation(appId, enabled);
         if (!deps.applyBotActivation) {
           return { ok: true, activation: 'restartRequired', message: '已保存。当前 Host 需重启后才能应用启停状态。' };
         }
@@ -1045,19 +1038,27 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       const reg = await loadBots();
       const target = reg.bots.find((b) => b.appId === appId);
       if (!target) return { ok: false, reason: `机器人「${appId}」不存在。` };
-      const run = await runState(appId);
-      if (run.running) {
-        return { ok: false, reason: `机器人「${target.name}」仍在运行。请先关闭启用状态并重启 Host，确认已停止后再删除。` };
+      const expected = botIdentity(target);
+      let result;
+      try {
+        result = await removeBot(expected, {
+          isRunning: async () => (await runState(appId)).running,
+          cleanup: async () => {
+            await removeSecret(secretKeyForApp(appId));
+            await rm(botDir(appId), { recursive: true, force: true });
+          },
+        });
+      } catch (error) {
+        log.fail('bot-remove', error, { appId });
+        return { ok: false, reason: '移除未完成，部分本地数据可能已经改变，请检查后重试。' };
       }
-      const enabled = reg.bots.some(bot => bot.active !== undefined) ? target.active === true : reg.current === appId;
-      if (enabled) {
-        return { ok: false, reason: '请先关闭此机器人的启用状态并确认已经停止，再删除。' };
+      if (result.kind !== 'removed') {
+        const reason = result.kind === 'active' ? '请先关闭此机器人的启用状态并确认已经停止，再删除。'
+          : result.kind === 'running' ? `机器人「${target.name}」仍在运行。请先关闭启用状态并重启 Host，确认已停止后再删除。`
+          : '机器人已移除或重新注册，请重新加载后再操作。';
+        return { ok: false, reason };
       }
-      // 注册表 + keystore 密钥 + 状态目录（projects/sessions/config），与 `bot rm` 同语义。
-      await removeBot(appId);
-      await removeSecret(secretKeyForApp(appId)).catch(() => undefined);
-      await rm(botDir(appId), { recursive: true, force: true }).catch(() => undefined);
-      avatars.retain(new Set(reg.bots.filter(bot => bot.appId !== appId).map(bot => bot.appId)));
+      avatars.retain(new Set(result.registry.bots.map(bot => bot.appId)));
       return { ok: true };
     },
   };

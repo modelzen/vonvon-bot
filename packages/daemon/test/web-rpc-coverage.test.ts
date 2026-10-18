@@ -161,7 +161,7 @@ else process.exit(0);
       command: [
         { type: 'refresh' }, { type: 'listPendingGroups', agentId }, { type: 'openEventSettings', url: 'https://open.feishu.cn/app/cli_fixture/event' },
         { type: 'registerAgent' }, { type: 'refreshAgentCredentials', agentId }, { type: 'installCodex' }, { type: 'startCodexLogin' }, { type: 'restartHost' },
-        { type: 'listJoinedGroups', agentId }, { type: 'bindGroup', agentId, groupId, projectName, folderToken, tool: 'codex', conversation: 'threads' },
+        { type: 'listJoinedGroups', agentId }, { type: 'bindGroup', agentId, groupId, projectName, folder: { kind: 'existing', folderToken }, tool: 'codex', conversation: 'threads' },
         { type: 'setResponse', membershipId: JSON.stringify([agentId, groupId]), response: 'all' },
         { type: 'setPermission', membershipId: JSON.stringify([agentId, groupId]), administrator: 'write', network: true },
         { type: 'setAgentEnabled', agentId, enabled: true }, { type: 'deleteAgent', agentId }, { type: 'cancelJob', jobId: operationId },

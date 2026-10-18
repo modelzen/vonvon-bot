@@ -1,37 +1,20 @@
-import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { acquireMutex, assertNoDataLeases, closeMutex, enterDataAccess } from '../src/config/data-access';
-import { migrateHostDataOffline } from '../src/host/migration';
-import { getterContents } from '../src/config/data-compatibility';
-import { inspectInstallation, assertKnownOwnersStopped } from '../src/service/control';
 
-vi.mock('../src/service/control', async (original) => ({
-  ...await original<typeof import('../src/service/control')>(),
-  inspectInstallation: vi.fn(() => ({ kind: 'absent' })),
-  assertKnownOwnersStopped: vi.fn(),
-}));
 const homes: string[] = [];
 const home = (): string => { const path = mkdtempSync(join(tmpdir(), 'bridge-admission-')); homes.push(path); return path; };
-afterEach(() => { for (const path of homes.splice(0)) rmSync(path, { recursive: true, force: true }); vi.clearAllMocks(); });
-const runtimeDir = mkdtempSync(join(tmpdir(), 'bridge-admission-runtime-'));
-const runtime = { nodePath: join(runtimeDir, basename(process.execPath)), cliPath: join(runtimeDir, 'cli.ts') };
-beforeAll(() => {
-  copyFileSync(process.execPath, runtime.nodePath);
-  copyFileSync(import.meta.filename, runtime.cliPath);
-});
-afterAll(() => rmSync(runtimeDir, { recursive: true, force: true }));
+afterEach(() => { for (const path of homes.splice(0)) rmSync(path, { recursive: true, force: true }); vi.restoreAllMocks(); });
 
 describe('offline access admission', () => {
-  it('blocks relocation while a data user owns a lifetime lease', async () => {
-    const dir = home(); mkdirSync(join(dir, '.feishu-codex-bridge'));
+  it('blocks exclusive access while a data user owns a lifetime lease', async () => {
+    const dir = home();
     const lease = await enterDataAccess(dir);
-    const result = await migrateHostDataOffline(dir, runtime);
-    expect(result.kind).toBe('deferred');
-    expect(readdirSync(dir)).not.toContain('.vonvon-bridge-migration.json');
-    lease.release();
-    expect((await migrateHostDataOffline(dir, runtime)).kind).toBe('linked');
+    try { expect(() => assertNoDataLeases(dir)).toThrow(/data is in use/); }
+    finally { lease.release(); }
+    expect(() => assertNoDataLeases(dir)).not.toThrow();
   });
   it('fails closed on partial durable publication', () => {
     const dir = home(); mkdirSync(join(dir, '.access'));
@@ -44,16 +27,6 @@ describe('offline access admission', () => {
     try { await expect(acquireMutex(dir, 'admission', 30)).rejects.toThrow(/busy/); }
     finally { await closeMutex(owner); }
   });
-  it('defers registered and unknown service state before writing a journal', async () => {
-    const dir = home(); mkdirSync(join(dir, '.feishu-codex-bridge'));
-    vi.mocked(inspectInstallation).mockReturnValueOnce({ kind: 'registered', detail: 'fixture' });
-    expect((await migrateHostDataOffline(dir, runtime)).kind).toBe('deferred');
-    vi.mocked(inspectInstallation).mockImplementationOnce(() => { throw new Error('query failed'); });
-    expect((await migrateHostDataOffline(dir, runtime)).kind).toBe('deferred');
-    // macOS keeps the mutex lock files in `.locks`.
-    expect(readdirSync(dir).filter(name => name !== '.locks')).toEqual(['.feishu-codex-bridge']);
-    expect(assertKnownOwnersStopped).not.toHaveBeenCalled();
-  });
   it('retains a lease when process liveness is unknown', () => {
     const dir = home(); mkdirSync(join(dir, '.access'));
     const file = join(dir, '.access', 'unknown.json');
@@ -65,30 +38,4 @@ describe('offline access admission', () => {
     } finally { kill.mockRestore(); }
   });
 
-});
-
-it.each(['.feishu-codex-bridge', '.vonvon-bridge'])('refreshes runtime paths for offline %s data after an app update', async (name) => {
-  const dir = home(); const root = join(dir, name); mkdirSync(root);
-  writeFileSync(join(root, 'secrets-getter'), getterContents({ nodePath: '/removed/runtime-A/node', cliPath: '/removed/runtime-A/cli' }));
-  const result = await migrateHostDataOffline(dir, runtime);
-  expect(result.kind).toBe(name === '.vonvon-bridge' ? 'unchanged' : 'linked');
-  expect(readFileSync(join(dir, '.vonvon-bridge', 'secrets-getter'), 'utf8')).toBe(getterContents(runtime));
-  const runtimeB = { ...runtime, cliPath: runtime.nodePath };
-  expect((await migrateHostDataOffline(dir, runtimeB)).kind).toBe('unchanged');
-  expect(readFileSync(join(dir, '.vonvon-bridge', 'secrets-getter'), 'utf8')).toBe(getterContents(runtimeB));
-});
-
-it('keeps runtime refresh behind leases, service and owner checks', async () => {
-  const dir = home(); const root = join(dir, '.vonvon-bridge'); mkdirSync(root);
-  const wrapper = join(root, 'secrets-getter'); const old = getterContents({ nodePath: '/old/node', cliPath: '/old/cli' });
-  writeFileSync(wrapper, old);
-  const lease = await enterDataAccess(dir);
-  try { expect((await migrateHostDataOffline(dir, runtime)).kind).toBe('deferred'); }
-  finally { lease.release(); }
-  vi.mocked(inspectInstallation).mockReturnValueOnce({ kind: 'registered', detail: 'fixture' });
-  expect((await migrateHostDataOffline(dir, runtime)).kind).toBe('deferred');
-  vi.mocked(assertKnownOwnersStopped).mockImplementationOnce(() => { throw new Error('live owner'); });
-  expect((await migrateHostDataOffline(dir, runtime)).kind).toBe('deferred');
-  expect(readFileSync(wrapper, 'utf8')).toBe(old);
-  expect(readdirSync(dir)).not.toContain('.vonvon-bridge-migration.json');
 });

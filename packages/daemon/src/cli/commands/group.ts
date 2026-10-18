@@ -106,11 +106,11 @@ export async function runGroupBind(rawGroupId: string, options: BindOptions, io:
     }
     name ??= (await joinedGroups(call, agent.id)).groups.find(group => group.id === groupId.data)?.name;
     if (name === undefined) throw new Error('找不到这个群的名字，用 --name 指定项目名。');
-    const command = commandSchema.safeParse({ type: 'bindGroup', agentId: agent.id, groupId: groupId.data, projectName: name, folderToken: randomUUID(), tool: tool.data, conversation: conversation.data, ...sent });
+    const command = commandSchema.safeParse({ type: 'bindGroup', agentId: agent.id, groupId: groupId.data, projectName: name, folder: { kind: 'existing', folderToken: randomUUID() }, tool: tool.data, conversation: conversation.data, ...sent });
     if (!command.success || command.data.type !== 'bindGroup') throw new Error('项目名要 1 到 100 个字，不能有 / 、\\ 和控制字符，用 --name 换一个。');
     const projectName = command.data.projectName;
     const chosen = want('选择文件夹', await call('选择文件夹', c => c.directory({ type: 'choose', path: folder })), 'folderChosen').folder;
-    const bound = await call('绑定群', c => c.run({ type: 'bindGroup', agentId: agent.id, groupId: groupId.data, projectName, folderToken: chosen.token, tool: tool.data, conversation: conversation.data, ...sent }), { feishu: true, unknown });
+    const bound = await call('绑定群', c => c.run({ type: 'bindGroup', agentId: agent.id, groupId: groupId.data, projectName, folder: { kind: 'existing', folderToken: chosen.token }, tool: tool.data, conversation: conversation.data, ...sent }), { feishu: true, unknown });
     return { revision: want('绑定群', bound, 'applied', unknown).revision, name: projectName, folder: chosen.displayPath, several: snapshot.agents.length > 1, agentId: agent.id };
   });
   const human = [`已绑定 ${result.name}（${groupId.data}）→ ${result.folder} · ${tool.data === 'codex' ? 'Codex' : 'Claude'} · ${conversationLabel(conversation.data)} · 免 @ ${reply === 'all' ? '开' : '关'}`];

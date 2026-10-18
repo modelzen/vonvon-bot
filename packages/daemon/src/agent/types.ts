@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { AgentErrorKind, JudgeErrorKind } from './error-kind';
 
 /** Request rejected locally before any transport write: safe to resubmit. */
@@ -122,6 +123,53 @@ export interface ThreadHistory {
  */
 export type ToolKind = 'command' | 'file' | 'search' | 'tool';
 
+const askText = z.string().trim().min(1);
+const askOptionSchema = z.object({ id: askText, label: askText, description: z.string() }).strict();
+const askQuestionSchema = z.object({
+  id: askText,
+  title: askText,
+  detail: z.string(),
+  selection: z.enum(['single', 'multiple']),
+  options: z.tuple([askOptionSchema]).rest(askOptionSchema),
+}).strict();
+const askBase = {
+  id: askText,
+  title: askText,
+  acceptedConsequence: askText,
+  declinedConsequence: askText,
+};
+
+/** Provider asks are separate messages; permission asks only occur in full access. */
+export const askRequestSchema = z.discriminatedUnion('kind', [
+  z.object({ ...askBase, kind: z.literal('choices'), questions: z.tuple([askQuestionSchema]).rest(askQuestionSchema) }).strict(),
+  z.object({ ...askBase, kind: z.literal('confirmation'), detail: askText }).strict(),
+  z.object({ ...askBase, kind: z.literal('permission'), permissionMode: z.literal('full'), detail: askText }).strict(),
+]).superRefine((request, ctx) => {
+  if (request.kind !== 'choices') return;
+  const questionIds = new Set<string>();
+  request.questions.forEach((question, index) => {
+    if (questionIds.has(question.id)) ctx.addIssue({ code: 'custom', path: ['questions', index, 'id'], message: 'Duplicate question id' });
+    questionIds.add(question.id);
+    const optionIds = new Set<string>();
+    question.options.forEach((option, optionIndex) => {
+      if (optionIds.has(option.id)) ctx.addIssue({ code: 'custom', path: ['questions', index, 'options', optionIndex, 'id'], message: 'Duplicate option id' });
+      optionIds.add(option.id);
+    });
+  });
+});
+
+export type AskRequest = z.infer<typeof askRequestSchema>;
+
+export type AskAnswer =
+  | { kind: 'choices'; answers: [{ questionId: string; selected: [string, ...string[]] }, ...{ questionId: string; selected: [string, ...string[]] }[]] }
+  | { kind: 'confirmation'; decision: 'proceed' | 'explain' }
+  | { kind: 'permission'; decision: 'allow-once' | 'deny' };
+
+/** Validate once where a provider request enters the bot. */
+export function parseAskRequest(raw: unknown): AskRequest {
+  return askRequestSchema.parse(raw);
+}
+
 /** Normalized stream events, mapped from app-server notifications. */
 export type AgentEvent =
   | { type: 'system'; threadId: string }
@@ -164,12 +212,8 @@ export type AgentEvent =
       timeUsedSeconds: number;
       tokenBudget: number | null;
     }
-  // A backend tool call awaits user approval —— 占位（L-1 审批转发切片）：
-  // 将来支持工具审批的后端可挂起工具调用并 emit 这个事件，由 orchestrator
-  // 渲染飞书审批卡（先响应再延迟更新），用 requestId 把批/拒回执关联回去。
-  // codex 后端在 approvalPolicy 'never' 下永不 emit；run-state 的 reduce 对
-  // 未知事件走 default no-op，所以提前声明是安全的。
-  | { type: 'approval_request'; requestId: string; title: string; detail?: string }
+  | { type: 'ask'; request: AskRequest }
+  | { type: 'ask_cancelled'; requestId: string }
   | { type: 'error'; message: string; willRetry: boolean; kind?: AgentErrorKind };
 
 /**
@@ -195,7 +239,13 @@ export function isGoalSuccess(status: string): boolean {
   return status === 'complete';
 }
 
+export type AskResolution =
+  | { kind: 'answered'; answer: AskAnswer }
+  | { kind: 'unanswered'; reason: 'timeout' | 'stopped' | 'turn-ended' | 'unavailable' };
+
 export interface AgentRun {
+  /** Claim/release the local continuation synchronously before returning delivery work. */
+  respondToAsk?(requestId: string, resolution: AskResolution): Promise<void>;
   events: AsyncIterable<AgentEvent>;
   /** current turn id, available after `turn_started` */
   turnId(): string | undefined;
@@ -474,7 +524,7 @@ export interface AgentCapabilities {
   /** /resume 历史会话选择卡（listThreads/readHistory）。注意 resumeThread 本身
    * 不在此能力位之下 —— 重启恢复路径（resolveThread）对所有后端直接调用它。 */
   resume: boolean;
-  /** 后端可能 emit approval_request（工具审批转发到飞书卡片）。codex 在
+  /** 后端可能 emit permission ask（工具确认转发到飞书卡片）。codex 在
    * approvalPolicy 'never' 下从不发（undefined ⇒ true 无害——事件是被动的）。 */
   approvals: boolean;
 }

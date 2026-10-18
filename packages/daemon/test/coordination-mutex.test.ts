@@ -23,8 +23,8 @@ vi.mock('node:net', async original => {
   return { ...net, connect };
 });
 
-const roles = ['admission', 'host', 'keystore', 'service'] as const;
-type Role = typeof roles[number];
+const roles = ['admission', 'host', 'keystore', 'service', 'bots'] as const;
+type Role = typeof roles[number] | 'projects' | 'creation';
 let scratch = '';
 let entry = '';
 let homes = 0;
@@ -60,8 +60,11 @@ function homeOnPort(port: number, role: Role): string {
 /** Listens the way a build before s20c locks: exclusive on 127.0.0.1. Null when the port is taken. */
 function listenOld(port: number, onConnection: (socket: Socket) => void): Promise<Server | null> {
   const server = createServer(socket => { sockets.push(socket); onConnection(socket); });
-  return new Promise(resolve => {
-    server.once('error', () => resolve(null));
+  return new Promise((resolve, reject) => {
+    server.once('error', error => {
+      if ('code' in error && error.code === 'EADDRINUSE') resolve(null);
+      else reject(error);
+    });
     server.listen({ host: '127.0.0.1', port, exclusive: true }, () => { servers.push(server); resolve(server); });
   });
 }
@@ -78,15 +81,27 @@ function answer(port: number): Promise<string | null> {
     socket.once('close', () => resolve(null));
   });
 }
-/** Holds `role` of a new home in this process, on a home whose old port it took: another socket may have that port. */
-async function holdWithOldPort(role: Role): Promise<{ home: string; mutex: Mutex }> {
+/** A home whose old `role` port this fixture owns. */
+async function oldBuild(role: Role, onConnection: (socket: Socket) => void): Promise<{ home: string; server: Server }> {
   for (let attempt = 0; attempt < 5; attempt++) {
     const home = newHome();
-    const mutex = await acquireMutex(home, role, 0);
-    if (await answer(legacyPort(home, role)) === MARKER) return { home, mutex };
-    await closeMutex(mutex);
+    const server = await listenOld(legacyPort(home, role), onConnection);
+    if (server) return { home, server };
   }
   throw new Error('No free old port for the fixture');
+}
+/** Selects an available old port before the single product acquisition; later contention fails the fixture. */
+async function holdWithOldPort(role: Role): Promise<{ home: string; mutex: Mutex }> {
+  const { home, server } = await oldBuild(role, socket => socket.destroy());
+  await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  const mutex = await acquireMutex(home, role, 0);
+  try {
+    if (await answer(legacyPort(home, role)) !== MARKER) throw new Error('Fixture did not retain its old port');
+    return { home, mutex };
+  } catch (error) {
+    await closeMutex(mutex);
+    throw error;
+  }
 }
 
 describe('the coordination mutex', () => {
@@ -148,15 +163,16 @@ const c=require('node:child_process').spawn(process.execPath,['-e','setInterval(
 });
 
 describe('the transition from builds before s20c', () => {
-  /** A home whose old `role` port a build before s20c holds. */
-  async function oldBuild(role: Role, onConnection: (socket: Socket) => void): Promise<{ home: string; server: Server }> {
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const home = newHome();
-      const server = await listenOld(legacyPort(home, role), onConnection);
-      if (server) return { home, server };
-    }
-    throw new Error('No free old port for the fixture');
-  }
+  // /ship coverage pass 1. Value: protects=creation ignores legacy TCP collisions while retaining native exclusion;
+  // fails_when=creation falls through legacy coordination or loses native exclusion;
+  // why_new=the existing bypass case covered projects only; seam=none; no_claim=platforms not executing this test.
+  it.each(['projects', 'creation'] satisfies Role[])('%s ignores a silent legacy listener while retaining native exclusion', async role => {
+    const { home } = await oldBuild(role, () => {});
+    const held = await acquireMutex(home, role, 0);
+    try { await expect(acquireMutex(home, role, 0)).rejects.toThrow(busy(role)); }
+    finally { await closeMutex(held); }
+    await closeMutex(await acquireMutex(home, role, 0));
+  });
 
   it.each<[string, (socket: Socket) => void]>([
     ['closes every connection', socket => socket.destroy()],
@@ -254,5 +270,23 @@ describe('the transition from builds before s20c', () => {
     try { expect(await listenOld(legacyPort(home, role), () => {})).toBeNull(); }
     finally { await closeMutex(mutex); }
     expect(await listenOld(legacyPort(home, role), () => {})).not.toBeNull();
+  });
+
+  it('prepares a free legacy port before acquiring a fixture lock', async () => {
+    let occupied = '';
+    for (let attempt = 0; attempt < 5 && !occupied; attempt++) {
+      const candidate = join(scratch, `home-${homes}`);
+      if (await listenOld(portOf(candidate, 'keystore'), socket => socket.destroy())) occupied = candidate;
+      else homes++;
+    }
+    if (!occupied) throw new Error('No free old port for the blocking fixture');
+    const { home, mutex } = await holdWithOldPort('keystore');
+    try {
+      expect(home).not.toBe(occupied);
+      expect(await answer(legacyPort(home, 'keystore'))).toBe(MARKER);
+      await expect(acquireMutex(home, 'keystore', 0)).rejects.toThrow(busy('keystore'));
+      expect(await listenOld(legacyPort(home, 'keystore'), () => {})).toBeNull();
+    } finally { await closeMutex(mutex); }
+    expect(await listenOld(legacyPort(home, 'keystore'), () => {})).not.toBeNull();
   });
 });

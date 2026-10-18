@@ -109,7 +109,7 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
     ? event => diagnostics.accept(ownAppId, event)
     : ipcDiagnosticsSink((message, callback) => { if (process.connected) process.send?.(message, undefined, undefined, callback); }));
   try {
-    const handle = bridge = await startBridge({ cfg, appSecret: secret, fallbackCwd, droppedFile: botPaths(ownAppId).droppedFile, onConnectionChange: () => {
+    const handle = bridge = await startBridge({ identity: ready.identity, cfg, appSecret: secret, fallbackCwd, droppedFile: botPaths(ownAppId).droppedFile, onConnectionChange: () => {
       if (process.send) {
         if (process.connected) process.send({ fcb: 'fcb.connection' }, undefined, undefined, (error: Error | null) => { if (error && process.connected) log.fail('run', error, { phase: 'connection-notice' }); });
       }

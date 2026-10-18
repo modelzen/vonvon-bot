@@ -1,9 +1,14 @@
-import { existsSync } from 'node:fs';
-import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { constants, existsSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { lstat, mkdir, open, rename, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { paths, botDir } from './paths';
+import { paths, botDir, botPaths } from './paths';
 import { loadConfig } from './store';
-import { isComplete, type TenantBrand } from './schema';
+import { isComplete, type TenantBrand, type AppConfig, type AppPreferences } from './schema';
+import { acquireMutex, closeMutex } from './data-access';
+import { type Allocation, SafeAppIdSchema, parseAllocations, ensureDurableDirectory, materializeAllocation, materializeDirectory, planDirectory, planAllocation, syncDirectory } from './bot-namespace';
+import { resolveProjectsRootDir, type DirectorySettings } from './directories';
+import { groupAllocationKey, parseGroupNamespaces, type GroupNamespaceState } from './group-namespace';
 
 /** One saved bot. Credentials' secret lives in the keystore (key `app-<appId>`). */
 export interface BotEntry {
@@ -14,6 +19,8 @@ export interface BotEntry {
   /** bot display name from credential validation (best-effort, for `bots` list) */
   botName?: string;
   createdAt: number;
+  /** New registrations get an incarnation; old rows remain absent until re-registration. */
+  registrationId?: string;
   /**
    * Whether `run` / `start` brings this bot up. The active set is multi-select
    * (`bot use`): N bots can be active at once and run simultaneously (each in
@@ -24,7 +31,7 @@ export interface BotEntry {
   active?: boolean;
 }
 
-export interface BotsRegistry {
+export interface BotsRegistry extends GroupNamespaceState {
   version: 1;
   /**
    * Primary bot's appId — kept in sync with the active set (first active bot)
@@ -34,27 +41,61 @@ export interface BotsRegistry {
    */
   current?: string;
   bots: BotEntry[];
+  allocations?: Record<string, Allocation>;
 }
 
-const EMPTY: BotsRegistry = { version: 1, bots: [] };
+const emptyRegistry = (): BotsRegistry => ({ version: 1, bots: [] });
 
+const MAX_REGISTRY_BYTES = 4 * 1024 * 1024;
 export async function loadBots(): Promise<BotsRegistry> {
   try {
-    const text = await readFile(paths.botsFile, 'utf8');
-    const reg = JSON.parse(text) as BotsRegistry;
-    return { version: 1, current: reg.current, bots: Array.isArray(reg.bots) ? reg.bots : [] };
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { ...EMPTY };
-    throw err;
+    const file = await open(paths.botsFile, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      const info = await file.stat();
+      if (!info.isFile() || info.nlink !== 1 || info.size > MAX_REGISTRY_BYTES) throw new Error('Invalid bot registry file');
+      const bytes = Buffer.alloc(MAX_REGISTRY_BYTES + 1);
+      let offset = 0;
+      while (offset < bytes.length) {
+        const read = await file.read(bytes, offset, bytes.length - offset, null);
+        if (!read.bytesRead) break;
+        offset += read.bytesRead;
+      }
+      if (offset > MAX_REGISTRY_BYTES) throw new Error('Bot registry size limit exceeded');
+      const reg = JSON.parse(bytes.subarray(0, offset).toString('utf8')) as BotsRegistry;
+      const allocations = parseAllocations(reg.allocations);
+      const groups = parseGroupNamespaces({ groupContainers: reg.groupContainers, groupAllocations: reg.groupAllocations }, allocations);
+      return { ...reg, version: 1, current: reg.current, bots: Array.isArray(reg.bots) ? reg.bots : [],
+        ...(allocations === undefined ? {} : { allocations }), ...groups };
+    } finally { await file.close(); }
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return emptyRegistry();
+    throw error;
   }
 }
 
-export async function saveBots(reg: BotsRegistry): Promise<void> {
-  await mkdir(dirname(paths.botsFile), { recursive: true });
-  const tmp = `${paths.botsFile}.tmp-${process.pid}`;
-  await writeFile(tmp, `${JSON.stringify(reg, null, 2)}\n`, 'utf8');
-  await chmod(tmp, 0o600);
-  await rename(tmp, paths.botsFile);
+async function publish(reg: BotsRegistry): Promise<void> {
+  parseAllocations(reg.allocations);
+  parseGroupNamespaces({ groupContainers: reg.groupContainers, groupAllocations: reg.groupAllocations }, reg.allocations);
+  const content = `${JSON.stringify(reg, null, 2)}\n`;
+  if (Buffer.byteLength(content) > MAX_REGISTRY_BYTES) throw new Error('Bot registry size limit exceeded');
+  await ensureDurableDirectory(dirname(paths.botsFile));
+  const tmp = `${paths.botsFile}.tmp-${process.pid}-${randomUUID()}`;
+  let primaryError: unknown;
+  try {
+    const file = await open(tmp, 'wx', 0o600);
+    let failed = false;
+    try { await file.writeFile(content, 'utf8'); await file.sync(); }
+    catch (error) { failed = true; throw error; }
+    finally { try { await file.close(); } catch (error) { if (!failed) throw error; } }
+    await rename(tmp, paths.botsFile);
+    await syncDirectory(dirname(paths.botsFile));
+  } catch (error) { primaryError = error; throw error; }
+  finally {
+    try { await unlink(tmp); }
+    catch (error) {
+      if (primaryError === undefined && !(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+    }
+  }
 }
 
 /**
@@ -63,14 +104,17 @@ export async function saveBots(reg: BotsRegistry): Promise<void> {
  * exists, move its config/projects/sessions/processes into `bots/<appId>/` and
  * register it as `default` (current). Idempotent — a no-op once bots.json exists.
  */
-export async function ensureRegistry(): Promise<BotsRegistry> {
-  if (existsSync(paths.botsFile)) return loadBots();
+async function loadOrMigrate(): Promise<BotsRegistry> {
+  try { await lstat(paths.botsFile); return loadBots(); }
+  catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+  }
 
   // No registry yet. Read the legacy flat config explicitly (don't rely on the
   // current useBotDir() state) and migrate it if it's a complete bot.
   const flatConfigPath = join(paths.appDir, 'config.json');
   const flat = await loadConfig(flatConfigPath);
-  if (!isComplete(flat)) return { ...EMPTY };
+  if (!isComplete(flat)) return emptyRegistry();
 
   const { id: appId, tenant } = flat.accounts.app;
   const dest = botDir(appId);
@@ -84,8 +128,134 @@ export async function ensureRegistry(): Promise<BotsRegistry> {
     current: appId,
     bots: [{ name: 'default', appId, tenant, createdAt: nowMs() }],
   };
-  await saveBots(reg);
+  await publish(reg);
   return reg;
+}
+
+let writers: Promise<unknown> = Promise.resolve();
+function ownBots<T>(operation: (registry: BotsRegistry) => Promise<T>): Promise<T> {
+  const run = writers.then(async () => {
+    await ensureDurableDirectory(paths.appDir);
+    const mutex = await acquireMutex(paths.appDir, 'bots', 30_000);
+    try { return await operation(await loadOrMigrate()); }
+    finally { await closeMutex(mutex); }
+  });
+  writers = run.catch(() => undefined);
+  return run;
+}
+
+export function ensureRegistry(): Promise<BotsRegistry> {
+  return ownBots(async registry => registry);
+}
+
+export type BotIdentity = Readonly<Pick<BotEntry, 'appId' | 'tenant' | 'createdAt' | 'registrationId'>>;
+export function botIdentity(entry: BotEntry): BotIdentity {
+  return Object.freeze({ appId: entry.appId, tenant: entry.tenant, createdAt: entry.createdAt,
+    ...(entry.registrationId === undefined ? {} : { registrationId: entry.registrationId }) });
+}
+function sameIdentity(entry: BotEntry, expected: BotIdentity): boolean {
+  return entry.appId === expected.appId && entry.tenant === expected.tenant
+    && entry.createdAt === expected.createdAt && entry.registrationId === expected.registrationId;
+}
+
+export function withBotGroupBinding<T>(expected: BotIdentity, group: { chatId: string; name: string; projectsRootDir: string }, operation: (scope: {
+  allocatedPath: string | undefined;
+  prepareDefault: () => Promise<{ cwd: string; blank: true; directories: DirectorySettings }>;
+}) => Promise<T>): Promise<T> {
+  const identity = { ...expected }, input = { ...group };
+  return ownBots(async registry => {
+    const entry = registry.bots.find(bot => bot.appId === identity.appId);
+    if (!entry || !sameIdentity(entry, identity)) throw new Error('机器人已移除或重新注册，请重启后再绑定');
+    const key = groupAllocationKey({ ...identity, chatId: input.chatId });
+    const previous = registry.groupAllocations?.[key];
+    return operation({ allocatedPath: previous?.state === 'ready' ? previous.namespaceRoot : undefined, prepareDefault: async () => {
+      let bot = registry.allocations?.[entry.appId];
+      if (!bot) {
+        if (Object.keys(registry.allocations ?? {}).length >= 4096) throw new Error('Bot allocation limit reached');
+        bot = await planAllocation({ ...entry, handle: entry.name, parent: input.projectsRootDir, dataDir: paths.appDir }, registry.allocations ?? {});
+        registry.allocations = { ...registry.allocations, [entry.appId]: bot };
+        await publish(registry);
+      }
+      validateAccountClaim(registry, bot, entry);
+      bot = await materializeAllocation(bot, paths.appDir);
+      registry.allocations = { ...registry.allocations, [entry.appId]: bot };
+      await publish(registry);
+      let container = registry.groupContainers?.[entry.appId];
+      if (!container) {
+        container = { version: 1, appId: entry.appId, tenant: entry.tenant,
+          ...await planDirectory({ name: 'groups', parent: bot.namespaceRoot, dataDir: paths.appDir, selection: { kind: 'fixed' } }, []) };
+        registry.groupContainers = { ...registry.groupContainers, [entry.appId]: container };
+        await publish(registry);
+      }
+      container = { ...container, ...await materializeDirectory(container, paths.appDir) };
+      registry.groupContainers = { ...registry.groupContainers, [entry.appId]: container };
+      await publish(registry);
+      let claim = registry.groupAllocations?.[key];
+      if (!claim) {
+        if (Object.keys(registry.groupAllocations ?? {}).length >= 4096) throw new Error('Group allocation limit reached');
+        claim = { version: 1, appId: entry.appId, tenant: entry.tenant, chatId: input.chatId, initialName: input.name,
+          ...await planDirectory({ name: input.name, parent: container.namespaceRoot, dataDir: paths.appDir,
+            selection: { kind: 'unique', key } }, Object.values(registry.groupAllocations ?? {})) };
+        registry.groupAllocations = { ...registry.groupAllocations, [key]: claim };
+        await publish(registry);
+      }
+      claim = { ...claim, ...await materializeDirectory(claim, paths.appDir) };
+      registry.groupAllocations = { ...registry.groupAllocations, [key]: claim };
+      await publish(registry);
+      await materializeAllocation(bot, paths.appDir);
+      await materializeDirectory(container, paths.appDir);
+      return { cwd: claim.namespaceRoot, blank: true, directories: { workspaces: { primary: claim.namespaceRoot, additional: [] } } };
+    } });
+  });
+}
+
+type RegisterEntryResult = { kind: 'registered'; entry: BotEntry } | { kind: 'already-registered'; entry: BotEntry };
+export type RegistrationCommit = Readonly<{
+  entry: Readonly<BotEntry>; snapshot: Readonly<Partial<AppConfig>>;
+  preferences: Readonly<AppPreferences> | undefined; namespaceRoot: string;
+}>;
+export function registerBotEntry(
+  input: Pick<BotEntry, 'appId' | 'tenant' | 'botName'> & { desiredName: string; initialPreferences?: AppPreferences },
+  persistAccount: (selected: RegistrationCommit) => Promise<void>,
+): Promise<RegisterEntryResult> {
+  const identity = structuredClone(input);
+  return ownBots(async registry => {
+    const previous = registry.bots.find(bot => bot.appId === identity.appId);
+    if (previous) return { kind: 'already-registered', entry: previous };
+    if (!SafeAppIdSchema.safeParse(identity.appId).success) throw new Error('Invalid bot app ID');
+    const snapshot = await loadConfig(botPaths(identity.appId).configFile);
+    const preferences = structuredClone(isComplete(snapshot) ? snapshot.preferences : identity.initialPreferences);
+    const allocations = registry.allocations ?? {};
+    let allocation = Object.hasOwn(allocations, identity.appId) ? allocations[identity.appId] : undefined;
+    if (allocation) validateAccountClaim(registry, allocation, identity);
+    else {
+      if (Object.keys(allocations).length >= 4096) throw new Error('Bot allocation limit reached');
+      allocation = await planAllocation({ ...identity, handle: uniqueName(registry, identity.desiredName),
+        parent: resolveProjectsRootDir(preferences?.projectsRootDir), dataDir: paths.appDir }, allocations);
+      registry.allocations = { ...allocations, [identity.appId]: allocation };
+    }
+    // Re-publish visible intent before a retry can create or trust its directory.
+    await publish(registry);
+    allocation = await materializeAllocation(allocation, paths.appDir);
+    registry.allocations = { ...registry.allocations, [identity.appId]: allocation };
+    await publish(registry);
+    const entry: BotEntry = { appId: identity.appId, tenant: identity.tenant, botName: identity.botName,
+      name: allocation.handle, createdAt: Date.now(), registrationId: randomUUID() };
+    await persistAccount(Object.freeze({ entry: Object.freeze({ ...entry }), snapshot: structuredClone(snapshot),
+      preferences: structuredClone(preferences), namespaceRoot: allocation.namespaceRoot }));
+    registry.bots.push(entry);
+    registry.current ??= entry.appId;
+    await publish(registry);
+    return { kind: 'registered', entry };
+  });
+}
+
+function validateAccountClaim(registry: BotsRegistry, allocation: Allocation, account: Pick<BotEntry, 'appId' | 'tenant'>): void {
+  if (allocation.appId !== account.appId || allocation.tenant !== account.tenant
+    || registry.bots.some(bot => bot.appId !== account.appId && bot.name === allocation.handle)
+    || registry.bots.some(bot => bot.appId === account.appId && bot.name !== allocation.handle)) {
+    throw new Error('Bot allocation account conflict');
+  }
 }
 
 export function findBot(reg: BotsRegistry, nameOrAppId: string): BotEntry | undefined {
@@ -112,55 +282,63 @@ export function activeBots(reg: BotsRegistry): BotEntry[] {
   return cur ? [cur] : [];
 }
 
-/**
- * Set the whole active set to exactly `appIds` (overwrite). Stamps an explicit
- * `active` boolean on every bot so the set is "configured" from now on (an empty
- * selection stays empty rather than silently falling back to `current`). Keeps
- * `current` pointing at a still-active primary (first active bot) for the
- * single-bot code paths; leaves it untouched when the set is emptied.
- */
-export async function setActiveBots(appIds: string[]): Promise<BotsRegistry> {
-  const reg = await loadBots();
-  const want = new Set(appIds);
-  for (const b of reg.bots) b.active = want.has(b.appId);
-  const firstActive = reg.bots.find((b) => b.active);
-  if (firstActive) reg.current = firstActive.appId;
-  await saveBots(reg);
-  return reg;
+/** Apply one activation delta to the current disk state, including the legacy current fallback. */
+export function setBotActivation(appId: string, enabled: boolean): Promise<BotsRegistry> {
+  return ownBots(async registry => {
+    if (!registry.bots.some(bot => bot.appId === appId)) throw new Error(`机器人「${appId}」不存在。`);
+    const active = new Set(activeBots(registry).map(bot => bot.appId));
+    if (enabled) active.add(appId); else active.delete(appId);
+    for (const bot of registry.bots) bot.active = active.has(bot.appId);
+    const primary = registry.bots.find(bot => bot.active);
+    if (primary) registry.current = primary.appId;
+    await publish(registry);
+    return registry;
+  });
 }
 
-/** Add (or replace by appId) a bot; first bot added becomes current. */
-export async function addBot(entry: BotEntry): Promise<BotsRegistry> {
-  const reg = await loadBots();
-  reg.bots = reg.bots.filter((b) => b.appId !== entry.appId);
-  reg.bots.push(entry);
-  if (!reg.current) reg.current = entry.appId;
-  await saveBots(reg);
-  return reg;
+export type RemoveBotResult = { kind: 'removed'; registry: BotsRegistry }
+  | { kind: 'missing' | 'stale' | 'active' | 'running' };
+export function removeBot(
+  expected: BotIdentity,
+  callbacks: { isRunning: () => Promise<boolean>; cleanup: () => Promise<void> },
+): Promise<RemoveBotResult> {
+  const identity = { ...expected };
+  return ownBots(async registry => {
+    const entry = registry.bots.find(bot => bot.appId === identity.appId);
+    if (!entry) return { kind: 'missing' };
+    if (!sameIdentity(entry, identity)) return { kind: 'stale' };
+    if (await callbacks.isRunning()) return { kind: 'running' };
+    if (activeBots(registry).some(bot => bot.appId === identity.appId)) return { kind: 'active' };
+    const allocation = registry.allocations?.[entry.appId];
+    if (allocation) validateAccountClaim(registry, allocation, entry);
+    await callbacks.cleanup();
+    registry.bots = registry.bots.filter(bot => bot !== entry);
+    if (registry.current === entry.appId) registry.current = registry.bots[0]?.appId;
+    await publish(registry);
+    return { kind: 'removed', registry };
+  });
 }
 
-export async function setCurrent(appId: string): Promise<void> {
-  const reg = await loadBots();
-  reg.current = appId;
-  await saveBots(reg);
-}
-
-/** Remove a bot from the registry; if it was current, fall back to the first remaining. */
-export async function removeBot(appId: string): Promise<BotsRegistry> {
-  const reg = await loadBots();
-  reg.bots = reg.bots.filter((b) => b.appId !== appId);
-  if (reg.current === appId) reg.current = reg.bots[0]?.appId;
-  await saveBots(reg);
-  return reg;
+export function commitBotCredentialRefresh(
+  expected: BotIdentity, persist: () => Promise<void>,
+): Promise<'committed' | 'stale'> {
+  const identity = { ...expected };
+  return ownBots(async registry => {
+    const entry = registry.bots.find(bot => bot.appId === identity.appId);
+    if (!entry || !sameIdentity(entry, identity)) return 'stale';
+    await persist();
+    return 'committed';
+  });
 }
 
 /** A registry-unique short name derived from `desired` (slugified, suffixed on clash). */
 export function uniqueName(reg: BotsRegistry, desired: string): string {
   const base = slugify(desired) || 'bot';
-  if (!reg.bots.some((b) => b.name === base)) return base;
+  const claimed = new Set([...reg.bots.map(bot => bot.name), ...Object.values(reg.allocations ?? {}).map(record => record.handle)]);
+  if (!claimed.has(base)) return base;
   for (let i = 2; ; i++) {
     const candidate = `${base}-${i}`;
-    if (!reg.bots.some((b) => b.name === candidate)) return candidate;
+    if (!claimed.has(candidate)) return candidate;
   }
 }
 

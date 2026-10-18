@@ -19,13 +19,29 @@ function requests(agentId: string, folderToken = '00000000-0000-4000-8000-000000
   return [
     { method: 'command', payload: { type: 'listPendingGroups', agentId } },
     { method: 'command', payload: { type: 'listJoinedGroups', agentId, cursor: 'opaque' } },
-    { method: 'command', payload: { type: 'bindGroup', agentId, groupId: 'oc_group', projectName: 'Project', folderToken, tool: 'codex', conversation: 'threads' } },
+    { method: 'command', payload: { type: 'bindGroup', agentId, groupId: 'oc_group', projectName: 'Project', folder: { kind: 'existing', folderToken }, tool: 'codex', conversation: 'threads' } },
     { method: 'collaboration', payload: { action: 'compact', agentId, groupId: 'oc_group', projectName: 'Project', threadId: 'omt_thread' } },
     { method: 'collaboration', payload: { action: 'createProject', agentId, name: 'Project', folder: { kind: 'existing', folderToken }, tool: 'codex', conversation: 'threads' } },
   ];
 }
 
 describe('RPC owner admission', () => {
+  it('binds a default workspace without a folder token and rejects a stopped owner', async () => {
+    let active = true;
+    const bindGroup = vi.fn(async () => project);
+    const fixture = await startFixture(fakeService({ listBots: async () => [{ ...bot, active }], bindGroup }));
+    try {
+      const client = await socketClient(fixture.api.port, fixture.credential); await client.ready();
+      const request = requestSchema.parse({ type: 'request', id: 'default', method: 'command', payload: { type: 'bindGroup', agentId: bot.appId, groupId: 'oc_group', projectName: 'Project', folder: { kind: 'default' }, tool: 'codex', conversation: 'threads' } });
+      expect(await client.call(request)).toMatchObject({ type: 'response' });
+      expect(bindGroup).toHaveBeenCalledExactlyOnceWith(bot.appId, { chatId: 'oc_group', projectName: 'Project', directory: undefined, backend: 'codex-appserver', kind: 'multi' });
+      active = false;
+      expect(await client.call({ ...request, id: 'stopped-default' })).toMatchObject({ type: 'error', code: 'conflict' });
+      expect(bindGroup).toHaveBeenCalledTimes(1);
+      await client.close();
+    } finally { await fixture.close(); }
+  });
+
   it.each([
     { name: 'missing', target: undefined },
     { name: 'inactive', target: { ...bot, active: false } },

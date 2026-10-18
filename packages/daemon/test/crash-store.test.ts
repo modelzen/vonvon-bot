@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import {
-  countInWindow, crashDir, crashErrorName, crashRecordFor, crashScopeKey, createCrashRecordCache, createSystemClock, hasCrashRecordFor, listCrashRecords,
+  readUnsentNotices, writeUnsentNoticesSync, type UnsentNotice, countInWindow, crashDir, crashErrorName, crashRecordFor, crashScopeKey, createCrashRecordCache, createSystemClock, hasCrashRecordFor, listCrashRecords,
   pruneCrashRecords, readBootId, readBotPauses, readCrashSummary, readNotices, readRunMarker, removeResumeRequest, sanitizeReason, startedBeforeThisBoot, stderrReason,
   takeResumeRequest, writeBotPausesSync, writeCrashRecordSync, writeNoticesSync, writeResumeRequest, writeRunMarkerSync, type Clock, type CrashRecord, type RunMarker,
 } from '../src/host/crash-store';
@@ -337,5 +337,31 @@ describe('marker and resume request', () => {
     writeBotPausesSync(root, CHAIN, { cli_a: { pausedAt: at(T0), pauseCrashes: 4 }, cli_b: { resumedUptimeMs: 5 } });
     expect(readCrashSummary(root, { running: true, ownerPid: process.pid, now: T0 }).pausedBots).toEqual([{ appId: 'cli_a', since: at(T0), crashes: 4 }]);
     expect(readCrashSummary(root, { running: true, ownerPid: process.pid + 1, now: T0 }).pausedBots).toEqual([]);
+  });
+});
+
+
+describe('unsent pause message storage', () => {
+  const item = (i = 0): UnsentNotice => ({ kind: 'bot-paused', appId: 'cli_one', name: 'One', crashes: 3, reason: '出错退出',
+    uuid: `vc-${i.toString(16).padStart(32, '0')}`, chainId: CHAIN, at: at(T0) });
+  it('bounds retained records, prunes old ones, and leaves crash listing and pruning independent', () => {
+    const root = tempRoot();
+    writeUnsentNoticesSync(root, [...Array.from({ length: 25 }, (_, i) => item(i)), { ...item(30), at: at(T0 - 86_400_001) }], T0);
+    expect(readUnsentNotices(root)).toEqual(Array.from({ length: 20 }, (_, i) => item(i + 5)));
+    expect(statSync(join(crashDir(root), 'unsent-notices.json')).mode & 0o777).toBe(0o600);
+    expect(listCrashRecords(root)).toEqual([]);
+    pruneCrashRecords(root, { now: T0 + 100 * 86_400_000 });
+    expect(readUnsentNotices(root)).toHaveLength(20);
+    writeUnsentNoticesSync(root, [], T0);
+    expect(readdirSync(crashDir(root))).not.toContain('unsent-notices.json');
+  });
+  it.each(['{bad', JSON.stringify({ v: 1, items: [{ ...item(), secret: 'unexpected' }] }),
+    JSON.stringify({ v: 1, items: [{ ...item(), uuid: 'foreign' }] })])('parses unknown disk data strictly: %s', raw => {
+    const root = tempRoot();
+    mkdirSync(crashDir(root));
+    writeFileSync(join(crashDir(root), 'unsent-notices.json'), raw);
+    const corrupt = vi.fn();
+    expect(readUnsentNotices(root, corrupt)).toEqual([]);
+    expect(corrupt).toHaveBeenCalledOnce();
   });
 });

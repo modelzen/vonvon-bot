@@ -81,6 +81,22 @@ describe('JsonRpcPeer', () => {
     ]);
   });
 
+  it('distinguishes a silently retired server request from a null result and an unknown method', async () => {
+    const { input, peer, outbound } = fixture();
+    peer.onRequest = method => {
+      if (method === 'retired') return Promise.resolve(null);
+      if (method === 'null-result') return { result: null };
+      return undefined;
+    };
+    input.write('{"id":"retired","method":"retired"}\n{"id":8,"method":"null-result"}\n{"id":"unknown","method":"unknown"}\n');
+    await settle();
+    expect(outbound).toEqual([
+      { jsonrpc: '2.0', id: 8, result: null },
+      { jsonrpc: '2.0', id: 'unknown', error: { code: -32601, message: 'not handled' } },
+    ]);
+    peer.close();
+  });
+
   it('times out only its own request and preserves JSON-RPC error identity', async () => {
     const { input, peer, outbound } = fixture();
     const timed = peer.request('slow', {}, 10);

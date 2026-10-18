@@ -2,7 +2,7 @@ import { createPendingGroups, pendingGroupsFile } from '../src/project/pending-g
 import { existsSync, rmSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { paths, botPaths, useBotDir } from '../src/config/paths';
-import { saveBots } from '../src/config/bots';
+import { seedBots } from './helpers/bot-fixture';
 import { addProject } from '../src/project/registry';
 import { upsertSession } from '../src/bot/session-store';
 import {
@@ -69,7 +69,7 @@ const BOT_B = 'cli_botB';
 let service: AdminService;
 
 beforeAll(async () => {
-  await saveBots({
+  await seedBots({
     version: 1,
     current: BOT_A,
     bots: [
@@ -381,7 +381,7 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
   });
 
   beforeAll(async () => {
-    await saveBots({
+    await seedBots({
       version: 1,
       current: BOT_A,
       bots: [
@@ -538,7 +538,7 @@ describe('createAdminService · getSetupStatus（初始化 checklist 聚合）',
 it('reads pending events directly and filters bound groups, changed admins and disabled bots', async () => {
   const id = 'cli_pending';
   const prior = await import('../src/config/bots').then(module => module.loadBots());
-  await saveBots({ ...prior, bots: [...prior.bots, { appId: id, name: 'Pending', tenant: 'feishu', createdAt: 1, active: true }] });
+  await seedBots({ ...prior, bots: [...prior.bots, { appId: id, name: 'Pending', tenant: 'feishu', createdAt: 1, active: true }] });
   const files = botPaths(id); mkdirSync(files.dir, { recursive: true });
   const config = { accounts: { app: { id, secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { admins: ['ou_admin'] } } };
   writeFileSync(files.configFile, JSON.stringify(config));
@@ -554,5 +554,5 @@ it('reads pending events directly and filters bound groups, changed admins and d
     expect(await reader.pendingGroups?.('cli_missing')).toEqual({ groups: [] });
     writeFileSync(pendingGroupsFile(files.projectsFile), '{');
     await expect(reader.pendingGroups?.(id)).rejects.toThrow();
-  } finally { await reader.close?.(); await saveBots(prior); }
+  } finally { await reader.close?.(); await seedBots(prior); }
 });

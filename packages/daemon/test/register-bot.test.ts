@@ -1,5 +1,15 @@
 import { rmSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const onboarding = vi.hoisted(() => ({
+  wizard: vi.fn<typeof import('../src/bot/wizard').runRegistrationWizard>(),
+  validate: vi.fn<typeof import('../src/utils/feishu-auth').validateAppCredentials>(),
+  diagnose: vi.fn<typeof import('../src/utils/event-diagnosis').diagnoseEventSubscription>(),
+  captureSelection: (): (() => void) => () => {},
+}));
+vi.mock('../src/bot/wizard', async original => ({ ...await original<typeof import('../src/bot/wizard')>(), runRegistrationWizard: onboarding.wizard }));
+vi.mock('../src/utils/feishu-auth', async original => ({ ...await original<typeof import('../src/utils/feishu-auth')>(), validateAppCredentials: onboarding.validate }));
+vi.mock('../src/utils/event-diagnosis', async original => ({ ...await original<typeof import('../src/utils/event-diagnosis')>(), diagnoseEventSubscription: onboarding.diagnose }));
 
 // 把整个 ~/.feishu-codex-bridge 指到临时目录——keystore(secrets.enc/.salt) +
 // bots.json + 每 bot config.json 全落临时区，绝不碰真实用户数据。secretsGetterScript
@@ -21,6 +31,10 @@ vi.mock('../src/config/paths', async () => {
     };
   };
   let currentBotDir = appDir;
+  onboarding.captureSelection = () => {
+    const prior = currentBotDir;
+    return () => { currentBotDir = prior; };
+  };
   return {
     botDir,
     botPaths,
@@ -29,6 +43,7 @@ vi.mock('../src/config/paths', async () => {
     },
     paths: {
       appDir,
+      projectsRootDir: join(appDir, 'projects'),
       cacheDir: appDir,
       botsFile: join(appDir, 'bots.json'),
       secretsFile: join(appDir, 'secrets.enc'),
@@ -44,8 +59,12 @@ vi.mock('../src/config/paths', async () => {
 
 import { refreshBotCredentials } from '../src/bot/refresh-bot';
 import { registerBotFromCredentials } from '../src/bot/register-bot';
+import { ensureOnboarded, registerNewBot } from '../src/bot/onboarding';
 import { getSecret } from '../src/config/keystore';
-import { loadBots, saveBots } from '../src/config/bots';
+import { botIdentity, commitBotCredentialRefresh, loadBots, withBotGroupBinding, registerBotEntry, removeBot, setBotActivation } from '../src/config/bots';
+import { removeSecret } from '../src/config/keystore';
+import { rm } from 'node:fs/promises';
+import { seedBots } from './helpers/bot-fixture';
 import { botPaths, paths } from '../src/config/paths';
 import { secretKeyForApp } from '../src/config/schema';
 
@@ -154,7 +173,7 @@ describe('registerBotFromCredentials · 注册落盘', () => {
     const before = await loadBots();
     const original = before.bots.find(b => b.appId === 'cli_dup1234567')!;
     original.active = true;
-    await saveBots(before);
+    await seedBots(before);
     const duplicate = await registerBotFromCredentials(
       { appId: 'cli_dup1234567', appSecret: 'secret-2', tenant: 'feishu', ownerOpenId: 'ou_dup' },
       okValidate,
@@ -283,5 +302,190 @@ describe('targeted credential refresh', () => {
     });
     expect(result).toMatchObject({ ok: false, code: 'abort' });
     expect(readFileSync(paths.secretsFile, 'utf8')).toBe(before);
+  });
+});
+
+function barrier() {
+  let open = () => {};
+  const wait = new Promise<void>(resolve => { open = resolve; });
+  return { wait, open };
+}
+
+function snapshotAccountFiles() {
+  const snapshots = [paths.botsFile, paths.secretsFile].map(file => ({ file, contents: existsSync(file) ? readFileSync(file) : undefined }));
+  return () => {
+    for (const { file, contents } of snapshots) {
+      if (contents === undefined) rmSync(file, { force: true });
+      else writeFileSync(file, contents);
+    }
+  };
+}
+
+describe('interactive shared registration adapter', () => {
+  it('keeps the selected incarnation across validation and fences it after re-registration', async () => {
+    const restoreFiles = snapshotAccountFiles(), restoreSelection = onboarding.captureSelection();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const entered = barrier(), release = barrier();
+    try {
+      const result = await registerBotFromCredentials({ appId: 'cli_selection123', appSecret: 'fixture', tenant: 'feishu', ownerOpenId: 'ou_owner' }, okValidate);
+      if (!result.ok) throw new Error(result.reason);
+      onboarding.validate.mockImplementationOnce(async () => { entered.open(); await release.wait; return { ok: true }; });
+      onboarding.diagnose.mockResolvedValue({ state: 'unchecked', reason: 'fixture' });
+      const starting = ensureOnboarded({ bot: result.appId });
+      await entered.wait;
+      await setBotActivation(result.appId, false);
+      await removeBot(result.identity, { isRunning: async () => false, cleanup: async () => {} });
+      await registerBotEntry({ appId: result.appId, tenant: 'feishu', desiredName: result.name }, async () => {});
+      release.open();
+      const ready = await starting;
+      expect(ready?.identity).toEqual(result.identity);
+      const prepare = vi.fn(async () => {});
+      await expect(withBotGroupBinding(result.identity, { chatId: 'oc_selection', name: 'Selected', projectsRootDir: paths.projectsRootDir }, prepare)).rejects.toThrow('重新注册');
+      expect(prepare).not.toHaveBeenCalled();
+    } finally { release.open(); errors.mockRestore(); restoreFiles(); restoreSelection(); }
+  });
+
+  it('validates once, preserves wizard preferences/defaults and selects paths only after success', async () => {
+    const restoreFiles = snapshotAccountFiles();
+    const restoreSelection = onboarding.captureSelection();
+    const tty = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      onboarding.validate.mockResolvedValue({ ok: true });
+      onboarding.diagnose.mockResolvedValue({ state: 'unchecked', reason: 'fixture' });
+      onboarding.wizard.mockResolvedValue({ accounts: { app: { id: 'cli_wizard0001', secret: 'wizard-secret', tenant: 'feishu' } },
+        preferences: { access: { ownerOpenId: 'ou_wizard', admins: ['ou_friend', 'ou_wizard'] }, pendingPolicy: 'queue' } });
+      onboarding.validate.mockClear();
+      const result = await registerNewBot();
+      expect(result?.secret).toBe('wizard-secret');
+      const selected = (await loadBots()).bots.find(bot => bot.appId === 'cli_wizard0001');
+      expect(result?.identity).toEqual(selected && botIdentity(selected));
+      expect(onboarding.validate).toHaveBeenCalledExactlyOnceWith('cli_wizard0001', 'wizard-secret', 'feishu');
+      expect(onboarding.diagnose).toHaveBeenCalledExactlyOnceWith('cli_wizard0001', 'wizard-secret', 'feishu');
+      expect(result?.cfg.preferences).toMatchObject({ pendingPolicy: 'queue', defaults: { permission: 'write', network: true },
+        access: { ownerOpenId: 'ou_wizard', admins: ['ou_friend', 'ou_wizard'] } });
+      expect((await loadBots()).bots.find(bot => bot.appId === 'cli_wizard0001')?.name).toMatch(/^default(?:-\d+)?$/);
+      expect(paths.configFile).toBe(botPaths('cli_wizard0001').configFile);
+      const priorPath = paths.configFile;
+      onboarding.wizard.mockResolvedValue({ accounts: { app: { id: 'cli_wizard0002', secret: 'bad', tenant: 'feishu' } },
+        preferences: { access: { ownerOpenId: 'ou_wizard', admins: ['ou_wizard'] } } });
+      onboarding.validate.mockResolvedValue({ ok: false, reason: 'fixture rejection' });
+      expect(await registerNewBot('named')).toBeNull();
+      expect(paths.configFile).toBe(priorPath);
+      expect((await loadBots()).bots.some(bot => bot.appId === 'cli_wizard0002')).toBe(false);
+    } finally {
+      restoreFiles(); restoreSelection();
+      for (const id of ['cli_wizard0001', 'cli_wizard0002']) rmSync(botPaths(id).dir, { recursive: true, force: true });
+      log.mockRestore(); errors.mockRestore();
+      if (tty) Object.defineProperty(process.stdout, 'isTTY', tty); else Reflect.deleteProperty(process.stdout, 'isTTY');
+    }
+  });
+});
+
+describe('bot removal and refresh ownership', () => {
+  let serial = 0;
+  let restoreFiles = () => {};
+  const created: string[] = [];
+  beforeEach(() => { restoreFiles = snapshotAccountFiles(); });
+  afterEach(() => {
+    restoreFiles();
+    for (const id of created.splice(0)) rmSync(botPaths(id).dir, { recursive: true, force: true });
+  });
+  async function fixture() {
+    const appId = `cli_lifecycle${++serial}`;
+    created.push(appId);
+    const result = await registerBotFromCredentials({ appId, appSecret: 'original', tenant: 'feishu', ownerOpenId: 'ou_owner' }, okValidate);
+    if (!result.ok) throw new Error(result.reason);
+    await setBotActivation(appId, false);
+    const entry = (await loadBots()).bots.find(bot => bot.appId === appId);
+    if (!entry) throw new Error('fixture missing');
+    return { appId, expected: botIdentity(entry) };
+  }
+  const noCleanup = () => ({ isRunning: async () => false, cleanup: vi.fn(async () => {}) });
+
+  it('refuses active/running/missing targets without cleanup and preserves legacy fallback', async () => {
+    const f = await fixture();
+    const callbacks = noCleanup();
+    await setBotActivation(f.appId, true);
+    expect(await removeBot(f.expected, callbacks)).toEqual({ kind: 'active' });
+    await setBotActivation(f.appId, false);
+    expect(await removeBot(f.expected, { ...callbacks, isRunning: async () => true })).toEqual({ kind: 'running' });
+    expect(await removeBot({ ...f.expected, appId: 'missing' }, callbacks)).toEqual({ kind: 'missing' });
+    expect(callbacks.cleanup).not.toHaveBeenCalled();
+    const prior = await loadBots();
+    const legacy = { appId: 'legacy', name: 'legacy', tenant: 'feishu' as const, createdAt: 1 };
+    await seedBots({ version: 1, current: legacy.appId, bots: [legacy] });
+    expect(await removeBot(botIdentity(legacy), callbacks)).toEqual({ kind: 'active' });
+    expect((await loadBots()).bots[0]).not.toHaveProperty('registrationId');
+    await seedBots(prior);
+  });
+
+  it('rejects stale legacy and new incarnations even when createdAt is the same millisecond', async () => {
+    const prior = await loadBots();
+    const legacy = { appId: 'same', name: 'same', tenant: 'feishu' as const, createdAt: 1, active: false };
+    await seedBots({ version: 1, bots: [legacy] });
+    const old = botIdentity(legacy);
+    const callbacks = noCleanup();
+    expect((await removeBot(old, callbacks)).kind).toBe('removed');
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1);
+    try {
+      const registered = await registerBotEntry({ appId: 'same', tenant: 'feishu', desiredName: 'same' }, async () => {});
+      if (registered.kind !== 'registered') throw new Error('fixture duplicate');
+      await setBotActivation('same', false);
+      expect(registered.entry.createdAt).toBe(1);
+      expect(registered.entry.registrationId).toBeTypeOf('string');
+      callbacks.cleanup.mockClear();
+      expect(await removeBot(old, callbacks)).toEqual({ kind: 'stale' });
+      const refresh = vi.fn(async () => {});
+      expect(await commitBotCredentialRefresh(old, refresh)).toBe('stale');
+      expect(refresh).not.toHaveBeenCalled();
+      const expected = botIdentity(registered.entry);
+      await removeBot(expected, noCleanup());
+      await registerBotEntry({ appId: 'same', tenant: 'feishu', desiredName: 'same' }, async () => {});
+      await setBotActivation('same', false);
+      expect(await removeBot(expected, callbacks)).toEqual({ kind: 'stale' });
+      expect(callbacks.cleanup).not.toHaveBeenCalled();
+    } finally { clock.mockRestore(); await seedBots(prior); }
+  });
+
+  it('keeps a deletion failure observable and releases ownership for later writers', async () => {
+    const f = await fixture();
+    await expect(removeBot(f.expected, { isRunning: async () => false, cleanup: async () => { throw new Error('partial cleanup'); } })).rejects.toThrow('partial cleanup');
+    expect((await loadBots()).bots.some(bot => bot.appId === f.appId)).toBe(true);
+    await setBotActivation(f.appId, true);
+    expect((await loadBots()).bots.find(bot => bot.appId === f.appId)?.active).toBe(true);
+  });
+
+  it('does not let validated refresh resurrect a secret while deletion owns account cleanup', async () => {
+    const f = await fixture();
+    const entered = barrier(), release = barrier(), validated = barrier();
+    const deletion = removeBot(f.expected, {
+      isRunning: async () => { entered.open(); await release.wait; return false; },
+      cleanup: async () => { await removeSecret(secretKeyForApp(f.appId)); await rm(botPaths(f.appId).dir, { recursive: true }); },
+    });
+    await entered.wait;
+    const refreshing = refreshBotCredentials(f.appId, { signal: new AbortController().signal, onQr: () => {} },
+      async () => ({ clientId: f.appId, clientSecret: 'must-not-resurrect', tenant: 'feishu', operatorOpenId: 'ou_owner' }),
+      async () => { validated.open(); return { ok: true }; });
+    try { await validated.wait; }
+    finally { release.open(); }
+    expect((await deletion).kind).toBe('removed');
+    expect(await refreshing).toMatchObject({ ok: false, code: 'stale_target' });
+    expect(await getSecret(secretKeyForApp(f.appId))).toBeUndefined();
+  });
+
+  it('holds deletion behind a credential commit, preserving the bots-before-keystore order', async () => {
+    const f = await fixture();
+    const entered = barrier(), release = barrier();
+    const order: string[] = [];
+    const refresh = commitBotCredentialRefresh(f.expected, async () => { entered.open(); await release.wait; order.push('refresh'); });
+    await entered.wait;
+    const deletion = removeBot(f.expected, { isRunning: async () => { order.push('check'); return false; }, cleanup: async () => { order.push('cleanup'); } });
+    release.open();
+    expect(await refresh).toBe('committed');
+    expect((await deletion).kind).toBe('removed');
+    expect(order).toEqual(['refresh', 'check', 'cleanup']);
   });
 });

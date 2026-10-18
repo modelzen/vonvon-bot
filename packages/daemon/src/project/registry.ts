@@ -1,8 +1,10 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { dirname } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { paths } from '../config/paths';
+import { acquireMutex, closeMutex } from '../config/data-access';
 import type { PermissionMode, ReasoningEffort } from '../agent/types';
+import { admitDirectoryChanges, parseDirectorySettings, type DirectorySettings } from '../config/directories';
 import type { JudgeSelectionStored } from '../judge/types';
 
 /** A project = a Feishu group bound to a fixed working directory. */
@@ -16,6 +18,8 @@ export interface Project {
   chatId: string;
   /** absolute working directory codex runs in for this project */
   cwd: string;
+  /** Raw group overrides; absent repositories inherit, [] explicitly clears. */
+  directories?: DirectorySettings;
   /** true when bridge created the cwd as a blank project (under projectsRootDir) */
   blank: boolean;
   createdAt: number;
@@ -161,8 +165,8 @@ interface StoreFile {
 
 const FILE_VERSION = 1;
 
-async function read(): Promise<Project[]> {
-  return listProjectsIn(paths.projectsFile);
+async function read(file = paths.projectsFile): Promise<Project[]> {
+  return listProjectsIn(file);
 }
 
 /** 读取指定 projects.json（绝对路径）。Web 控制台 / supervisor 跨 bot 聚合视图
@@ -173,6 +177,7 @@ export async function listProjectsIn(file: string): Promise<Project[]> {
     const text = await readFile(file, 'utf8');
     const parsed = JSON.parse(text) as Partial<StoreFile>;
     if (!parsed || !Array.isArray(parsed.projects) || parsed.projects.some(p => !p || typeof p !== 'object' || typeof p.name !== 'string' || typeof p.cwd !== 'string')) throw new Error('项目注册表格式无效');
+    for (const project of parsed.projects) parseDirectorySettings(project.directories);
     return parsed.projects.map(foldGuestTier);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
@@ -214,34 +219,87 @@ export async function splitTierChats(file = paths.projectsFile): Promise<Map<str
   return split;
 }
 
-// 同进程内并发的「读-改-写」串行化（addProject/updateProject/removeProject）：既防
-// 共用 tmp 文件交错损坏，也防两个回调基于同一旧快照算 next、后写覆盖前写的丢更新
-// （白名单数组增删最易踩中）。配合函数式 updater，把 read+算+write 收进一个临界区。
+export type RegistryLocation = Readonly<{ file: string; dataRoot: string }>;
 let opChain: Promise<unknown> = Promise.resolve();
-function withLock<T>(fn: () => Promise<T>): Promise<T> {
-  const run = opChain.then(fn, fn);
-  opChain = run.then(
-    () => undefined,
-    () => undefined,
-  );
+function ownProjects<T>(operation: (location: RegistryLocation) => Promise<T>, target: RegistryLocation = { file: paths.projectsFile, dataRoot: paths.appDir }): Promise<T> {
+  const captured = { ...target };
+  const run = opChain.then(async () => {
+    await mkdir(dirname(captured.file), { recursive: true });
+    const parent = await realpath(dirname(captured.file));
+    const location = { ...captured, file: join(parent, basename(captured.file)) };
+    const mutex = await acquireMutex(parent, 'projects', 30_000);
+    let result: T;
+    try { result = await operation(location); }
+    catch (error) {
+      try { await closeMutex(mutex); }
+      catch (releaseError) { throw new AggregateError([error, releaseError], 'Project operation and mutex release failed'); }
+      throw error;
+    }
+    await closeMutex(mutex);
+    return result;
+  });
+  opChain = run.catch(() => undefined);
   return run;
 }
 
 /** projects.json as stored, `{}` when missing. */
-async function readStored(): Promise<Record<string, unknown>> {
-  return readFile(paths.projectsFile, 'utf8').then(text => JSON.parse(text)).catch(error => { if (error.code === 'ENOENT') return {}; throw error; });
+async function readStored(file: string): Promise<Record<string, unknown>> {
+  return readFile(file, 'utf8').then(text => JSON.parse(text)).catch(error => { if (error.code === 'ENOENT') return {}; throw error; });
 }
 
-async function writeStored(body: object): Promise<void> {
-  await mkdir(dirname(paths.projectsFile), { recursive: true });
-  const tmp = `${paths.projectsFile}.tmp-${process.pid}-${randomUUID()}`;
-  await writeFile(tmp, `${JSON.stringify(body, null, 2)}\n`, 'utf8');
-  await rename(tmp, paths.projectsFile);
+type DirectoryRow = Pick<Project, 'name' | 'cwd'> & Record<string, unknown>;
+function isDirectoryRow(row: unknown): row is DirectoryRow {
+  return typeof row === 'object' && row !== null && !Array.isArray(row)
+    && 'name' in row && typeof row.name === 'string' && 'cwd' in row && typeof row.cwd === 'string';
+}
+function directoryRows(raw: unknown): DirectoryRow[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) throw new Error('项目注册表格式无效');
+  const rows: unknown[] = raw;
+  return rows.map(row => {
+    if (!isDirectoryRow(row)) throw new Error('项目注册表格式无效');
+    return row;
+  });
 }
 
-async function write(projects: Project[]): Promise<void> {
-  const body: StoreFile = { ...(await readStored()), version: FILE_VERSION, projects };
-  await writeStored(body);
+async function writeStored(location: RegistryLocation, body: Record<string, unknown>, previous: Record<string, unknown>): Promise<void> {
+  // Both callers own detached rows and a separate previous disk snapshot.
+  const next = body;
+  const oldProjects = directoryRows(previous.projects);
+  const nextProjects = directoryRows(next.projects);
+  for (const row of nextProjects) {
+    const directories = parseDirectorySettings(row.directories);
+    const old = oldProjects.find(project => project.chatId === row.chatId && project.name === row.name);
+    const oldDirectories = parseDirectorySettings(old?.directories);
+    if (directories?.workspaces && (row.cwd !== old?.cwd
+      || JSON.stringify(directories.workspaces) !== JSON.stringify(oldDirectories?.workspaces))) {
+      let cwd: string;
+      try { cwd = await realpath(row.cwd); }
+      catch { throw new Error('Invalid directory settings: directories.workspaces.primary (cwd unavailable)'); }
+      // A legacy explicit cwd edit also updates a declaration that still names the old primary.
+      if (oldDirectories?.workspaces && row.cwd !== old?.cwd && directories.workspaces.primary === oldDirectories.workspaces.primary) {
+        directories.workspaces.primary = cwd;
+        row.directories = directories;
+      }
+      if (directories.workspaces.primary !== cwd) throw new Error('Invalid directory settings: directories.workspaces.primary (must match cwd)');
+    }
+    await admitDirectoryChanges(directories, oldDirectories, location.dataRoot);
+  }
+  const serialized = `${JSON.stringify(next, null, 2)}\n`;
+  const tmp = `${location.file}.tmp-${process.pid}-${randomUUID()}`;
+  await writeFile(tmp, serialized, 'utf8');
+  await rename(tmp, location.file);
+}
+
+async function write(location: RegistryLocation, projects: Project[]): Promise<void>;
+async function write(location: RegistryLocation, projects: Project[], selected: Project): Promise<Project>;
+async function write(location: RegistryLocation, projects: Project[], selected?: Project): Promise<Project | void> {
+  const detached: Project[] = JSON.parse(JSON.stringify(projects));
+  const result = selected === undefined ? undefined : detached[projects.indexOf(selected)];
+  if (selected !== undefined && result === undefined) throw new Error('待保存的项目不存在');
+  const previous = await readStored(location.file);
+  await writeStored(location, { ...previous, version: FILE_VERSION, projects: detached }, previous);
+  return result;
 }
 
 /**
@@ -250,12 +308,14 @@ async function write(projects: Project[]): Promise<void> {
  * as stored. Writes only when there is something to change.
  */
 export async function setTierMergePending(chats: readonly string[]): Promise<void> {
-  return withLock(async () => {
-    const stored = await readStored();
-    if (!Array.isArray(stored.projects) || (!chats.length && !Object.hasOwn(stored, TIER_MERGE_PENDING))) return;
-    if (chats.length) stored[TIER_MERGE_PENDING] = [...chats];
+  const capturedChats = [...chats];
+  return ownProjects(async location => {
+    const stored = await readStored(location.file);
+    if (!Array.isArray(stored.projects) || (!capturedChats.length && !Object.hasOwn(stored, TIER_MERGE_PENDING))) return;
+    const previous: Record<string, unknown> = JSON.parse(JSON.stringify(stored));
+    if (capturedChats.length) stored[TIER_MERGE_PENDING] = capturedChats;
     else delete stored[TIER_MERGE_PENDING];
-    await writeStored(stored);
+    await writeStored(location, stored, previous);
   });
 }
 
@@ -274,9 +334,10 @@ export async function getProjectByName(name: string): Promise<Project | undefine
 /** Add a project. Throws if the name — or the bound chat — is already taken.
  * The chatId check is the registry-level hard guard against binding one group
  * twice (createProject's chatId is freshly minted so it never trips). */
-export async function addProject(p: Project): Promise<void> {
-  return withLock(async () => {
-    const projects = await read();
+export async function addProject(input: Project, target?: RegistryLocation): Promise<void> {
+  const p = structuredClone(input);
+  return ownProjects(async location => {
+    const projects = await read(location.file);
     if (projects.some((x) => x.name === p.name)) {
       throw new Error(`项目名「${p.name}」已存在`);
     }
@@ -285,8 +346,46 @@ export async function addProject(p: Project): Promise<void> {
       if (bound) throw new Error(`该群已绑定为项目「${bound.name}」`);
     }
     projects.push(p);
-    await write(projects);
-  });
+    await write(location, projects);
+  }, target);
+}
+
+type ProjectBinding = Pick<Project, 'name' | 'chatId'> & {
+  cwd: { kind: 'existing'; path: string } | { kind: 'default'; legacyPath: string; allocatedPath?: string };
+  backend: string;
+  defaultBackend: string;
+  kind: 'multi' | 'single';
+  noMention: boolean;
+};
+type NewBinding = Pick<Project, 'cwd' | 'blank' | 'createdAt' | 'directories' | 'origin' | 'addedBy' | 'mode' | 'backend' | 'network'>;
+type BindingResult = { kind: 'bound'; project: Project } | { kind: 'existing'; project: Project };
+
+/** Decide against the latest row under the projects owner. prepareNew is local
+ * filesystem work only; callers send welcomes after this operation releases. */
+export function bindProject(input: ProjectBinding, prepareNew: () => Promise<NewBinding>, target?: RegistryLocation): Promise<BindingResult> {
+  const binding = structuredClone(input);
+  return ownProjects(async location => {
+    const projects = await read(location.file);
+    const existing = projects.find(project => project.chatId === binding.chatId);
+    if (existing) {
+      const cwd = await realpath(existing.cwd).catch(() => existing.cwd);
+      const candidates = binding.cwd.kind === 'existing' ? [binding.cwd.path] : [binding.cwd.legacyPath, ...(binding.cwd.allocatedPath ? [binding.cwd.allocatedPath] : [])];
+      const requested = await Promise.all(candidates.map(path => realpath(path).catch(() => path)));
+      if (existing.name === binding.name && requested.includes(cwd)
+        && (existing.backend ?? binding.defaultBackend) === binding.backend
+        && sessionModeOf(existing) === binding.kind && noMentionOf(existing) === binding.noMention) {
+        return { kind: 'existing', project: existing };
+      }
+      throw new Error(`该群已绑定为项目「${existing.name}」，现有文件夹、后端和会话方式不可修改，免 @ 请在群设置里改`);
+    }
+    if (projects.some(project => project.name === binding.name)) throw new Error(`项目名「${binding.name}」已存在`);
+    const prepared = await prepareNew();
+    if (binding.cwd.kind === 'existing' && prepared.cwd !== binding.cwd.path) throw new Error('工作目录已改变，请重新选择');
+    const project: Project = { ...prepared, name: binding.name, chatId: binding.chatId,
+      kind: binding.kind, noMention: binding.noMention };
+    projects.push(project);
+    return { kind: 'bound', project: await write(location, projects, project) };
+  }, target);
 }
 
 /** Patch fields of a project by name; no-op if it doesn't exist. `patch` 可以是
@@ -296,39 +395,50 @@ export async function updateProject(
   name: string,
   patch: Partial<Omit<Project, 'name'>> | ((p: Project) => Partial<Omit<Project, 'name'>>),
 ): Promise<void> {
-  return withLock(async () => {
-    const projects = await read();
+  const capturedPatch = typeof patch === 'function' ? patch : structuredClone(patch);
+  return ownProjects(async location => {
+    const projects = await read(location.file);
     const p = projects.find((x) => x.name === name);
     if (!p) return;
-    const actual = typeof patch === 'function' ? patch(p) : patch;
+    const actual = typeof capturedPatch === 'function' ? capturedPatch(p) : capturedPatch;
     const target = p as unknown as Record<string, unknown>;
     for (const [k, v] of Object.entries(actual)) {
       if (v !== undefined) target[k] = v;
     }
-    await write(projects);
+    await write(location, projects);
   });
 }
 
 /** Remove (unbind) a project by name. Returns the removed entry, if any. */
 export async function removeProject(name: string, beforeRemove?: (project: Project) => void): Promise<Project | undefined> {
-  return withLock(async () => {
-    const projects = await read();
+  return ownProjects(async location => {
+    const projects = await read(location.file);
     const idx = projects.findIndex((p) => p.name === name);
     if (idx === -1) return undefined;
     beforeRemove?.(projects[idx]!);
     const [removed] = projects.splice(idx, 1);
-    await write(projects);
+    await write(location, projects);
     return removed;
   });
 }
 
 export async function mutateProject(name: string, mutate: (project: Project) => void | Promise<void>): Promise<Project> {
-  return withLock(async () => {
-    const projects = await read();
+  return ownProjects(async location => {
+    const projects = await read(location.file);
     const project = projects.find(item => item.name === name);
     if (!project) throw new Error('项目不存在');
     await mutate(project);
-    await write(projects);
-    return project;
+    return write(location, projects, project);
+  });
+}
+
+/** Remove exactly one raw directory override; other keys/settings are retained. */
+export async function resetProjectDirectoryOverride(name: string, key: keyof DirectorySettings): Promise<void> {
+  return ownProjects(async location => {
+    const projects = await read(location.file);
+    const project = projects.find(item => item.name === name);
+    if (!project?.directories || !Object.hasOwn(project.directories, key)) return;
+    delete project.directories[key];
+    await write(location, projects);
   });
 }

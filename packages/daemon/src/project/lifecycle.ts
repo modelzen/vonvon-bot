@@ -1,14 +1,15 @@
 import { pendingGroupsFile, retireBoundPendingGroup } from './pending-groups';
-import { mkdir } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { isAbsolute, join, resolve } from 'node:path';
+import { mkdir, realpath, stat } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { paths } from '../config/paths';
+import { botPaths } from '../config/paths';
+import { withBotGroupBinding, type BotIdentity } from '../config/bots';
+import { admitDirectorySettings, resolveProjectsRootDir } from '../config/directories';
 import { log } from '../core/logger';
-import { addProject, bindNoMention, getProjectByChatId, getProjectByName, type Project } from './registry';
+import { addProject, bindNoMention, bindProject, listProjectsIn, type Project, type RegistryLocation } from './registry';
 import type { PermissionMode } from '../agent/types';
-import { isBackendEntryInstalled } from '../agent';
+import { DEFAULT_BACKEND_ID, effectiveDefaultBackend, isBackendEntryInstalled } from '../agent';
 import { catalogById, isInstallable, projectCreatableBackends } from '../agent/catalog';
 import { setAnnouncement } from './announcement';
 import { onboardGroup } from './onboarding';
@@ -62,6 +63,7 @@ export interface CreateProjectInput {
 }
 
 export interface JoinGroupInput {
+  bot: BotIdentity;
   /** project name — editable in the bind card, defaults to the group's name. */
   name: string;
   /** the pre-existing group the bot was added to. */
@@ -93,39 +95,18 @@ export interface JoinGroupInput {
  */
 async function resolveCwd(
   name: string,
-  existingPath?: string,
-  configuredProjectsRootDir?: string,
-): Promise<{ cwd: string; blank: boolean }> {
+  existingPath: string | undefined,
+  projectsRootDir: string,
+  dataDir: string,
+): Promise<Pick<Project, 'cwd' | 'blank' | 'directories'>> {
   if (existingPath) {
-    const cwd = isAbsolute(existingPath) ? existingPath : resolve(existingPath);
-    if (!existsSync(cwd)) throw new Error(`文件夹不存在：${cwd}`);
-    return { cwd, blank: false };
+    const directories = await admitDirectorySettings({ workspaces: { primary: existingPath, additional: [] } }, { dataDir });
+    if (!directories?.workspaces) throw new Error('Invalid directory settings: directories.workspaces.primary');
+    return { cwd: directories.workspaces.primary, blank: false, directories };
   }
-  const cwd = join(resolveProjectsRootDir(configuredProjectsRootDir), name);
+  const cwd = join(projectsRootDir, name);
   await mkdir(cwd, { recursive: true });
   return { cwd, blank: true };
-}
-
-/**
- * Resolve `preferences.projectsRootDir` without depending on the daemon's cwd.
- * An empty value preserves the historical default; a relative value is
- * rejected because a background service may start from different directories.
- */
-export function resolveProjectsRootDir(configured?: unknown): string {
-  if (configured === undefined || configured === null) return paths.projectsRootDir;
-  if (typeof configured !== 'string') {
-    throw new Error('配置 preferences.projectsRootDir 必须是字符串');
-  }
-  const value = configured.trim();
-  if (!value) return paths.projectsRootDir;
-  if (value === '~') return homedir();
-  if (value.startsWith('~/') || value.startsWith('~\\')) {
-    return resolve(homedir(), value.slice(2));
-  }
-  if (!isAbsolute(value)) {
-    throw new Error('配置 preferences.projectsRootDir 必须是绝对路径或以 ~ 开头');
-  }
-  return resolve(value);
 }
 
 /**
@@ -135,14 +116,19 @@ export function resolveProjectsRootDir(configured?: unknown): string {
  * Throws on duplicate name or missing existing path (before creating a group,
  * so no orphan groups).
  */
-export async function createProject(channel: LarkChannel, input: CreateProjectInput): Promise<Project> {
+export async function createProject(channel: LarkChannel, request: CreateProjectInput, target: RegistryLocation = { file: paths.projectsFile, dataRoot: paths.appDir }): Promise<Project> {
+  const input = { ...request };
+  const location = { ...target };
   const name = input.name.trim();
+  const existingPath = input.existingPath ? resolve(input.existingPath) : undefined;
+  const root = existingPath ? '' : resolveProjectsRootDir(input.projectsRootDir);
   if (!name) throw new Error('项目名不能为空');
-  if (await getProjectByName(name)) throw new Error(`项目名「${name}」已存在，换个名或用 /projects 看已有的`);
+  if ((await listProjectsIn(location.file)).some(project => project.name === name)) throw new Error(`项目名「${name}」已存在，换个名或用 /projects 看已有的`);
   assertBackendUsable(input.backend, input.mode ?? 'full'); // 创建默认「完全访问」档
 
   // 1. resolve cwd
-  const { cwd, blank } = await resolveCwd(name, input.existingPath, input.projectsRootDir);
+  const workspace = await resolveCwd(name, existingPath, root, location.dataRoot);
+  const { cwd, blank } = workspace;
 
   // 2. create the bound group — bot stays as owner (no owner_id passed); the
   //    creator is invited as a member here, then promoted to admin in 2b so the
@@ -171,8 +157,7 @@ export async function createProject(channel: LarkChannel, input: CreateProjectIn
     ...(input.requestId ? { creationRequestId: input.requestId, creationRequestSignature: input.requestSignature } : {}),
     name,
     chatId,
-    cwd,
-    blank,
+    ...workspace,
     createdAt: Date.now(),
     kind: input.kind,
     noMention: input.noMention ?? bindNoMention(input.kind),
@@ -181,7 +166,7 @@ export async function createProject(channel: LarkChannel, input: CreateProjectIn
     backend: input.backend || undefined,
     network: input.network ?? false,
   };
-  try { await addProject(project); } catch (error) {
+  try { await addProject(project, location); } catch (error) {
     throw new Error(`飞书群已创建（${chatId}），项目保存失败；请使用相同请求重试或绑定已有群：${error instanceof Error ? error.message : String(error)}`);
   }
   log.info('project', 'create', { name, chatId, cwd, blank, mode: project.mode, backend: project.backend });
@@ -198,37 +183,40 @@ export async function createProject(channel: LarkChannel, input: CreateProjectIn
  * `joined` project. Unlike {@link createProject}: no group is created, no
  * announcement is written, no admin is promoted and ownership is never touched —
  * the bot stays a plain member. Onboarding only posts a (non-pinned) welcome
- * card. Throws on duplicate name (the name is editable in the bind card, so the
- * user can pick another) or if this chat is already bound — before resolving the
- * cwd, so nothing partial is left behind.
+ * card. Identical bindings return the existing row without rewriting it or
+ * sending another welcome. Conflicts fail before preparing a new workspace.
  */
-export async function joinExistingGroup(channel: LarkChannel, input: JoinGroupInput): Promise<Project> {
+export async function joinExistingGroup(channel: LarkChannel, request: JoinGroupInput, target: RegistryLocation = { file: paths.projectsFile, dataRoot: paths.appDir }): Promise<Project> {
+  const input = structuredClone(request);
+  const location = { ...target };
+  if (location.file !== botPaths(input.bot.appId).projectsFile || location.dataRoot !== paths.appDir) throw new Error('机器人项目目录不匹配');
   const name = input.name.trim();
   if (!name) throw new Error('项目名不能为空');
-  if (await getProjectByName(name)) throw new Error(`项目名「${name}」已存在，换个名或用 /projects 看已有的`);
-  const bound = await getProjectByChatId(input.chatId);
-  if (bound) throw new Error(`该群已绑定为项目「${bound.name}」`);
-  assertBackendUsable(input.backend, input.mode ?? 'qa'); // 外部群默认「只读」档
-
-  const { cwd, blank } = await resolveCwd(name, input.existingPath, input.projectsRootDir);
-
-  const project: Project = {
-    name,
-    chatId: input.chatId,
-    cwd,
-    blank,
-    createdAt: Date.now(),
-    kind: input.kind,
-    noMention: input.noMention ?? bindNoMention(input.kind),
-    origin: 'joined',
-    addedBy: input.addedBy,
-    mode: input.mode ?? 'qa',
-    backend: input.backend || undefined,
-    network: input.network ?? false,
-  };
-  await addProject(project);
-  await retireBoundPendingGroup(pendingGroupsFile(paths.projectsFile), project.chatId);
-  log.info('project', 'join', { name, chatId: input.chatId, cwd, blank, kind: project.kind, mode: project.mode, backend: project.backend });
+  const existingPath = input.existingPath ? resolve(input.existingPath) : undefined;
+  const root = existingPath ? '' : resolveProjectsRootDir(input.projectsRootDir);
+  let cwd = existingPath ?? join(root, name);
+  if (existingPath) {
+    try {
+      cwd = await realpath(existingPath);
+      if (!(await stat(cwd)).isDirectory()) throw new Error('not directory');
+    } catch { throw new Error('所选文件夹不存在或不是目录'); }
+  }
+  const defaultBackend = await effectiveDefaultBackend().catch(() => DEFAULT_BACKEND_ID);
+  const result = await withBotGroupBinding(input.bot, { name, chatId: input.chatId, projectsRootDir: root }, async scope => {
+    const binding = await bindProject({ name, chatId: input.chatId,
+      cwd: existingPath ? { kind: 'existing', path: cwd } : { kind: 'default', legacyPath: cwd, allocatedPath: scope.allocatedPath }, defaultBackend,
+      backend: input.backend ?? defaultBackend, kind: input.kind, noMention: input.noMention ?? bindNoMention(input.kind) }, async () => {
+      assertBackendUsable(input.backend, input.mode ?? 'qa');
+      const workspace = existingPath ? await resolveCwd(name, existingPath, root, location.dataRoot) : await scope.prepareDefault();
+      return { ...workspace, createdAt: Date.now(), origin: 'joined', addedBy: input.addedBy,
+        mode: input.mode ?? 'qa', backend: input.backend || undefined, network: input.network ?? false };
+    }, location);
+    await retireBoundPendingGroup(pendingGroupsFile(location.file), binding.project.chatId);
+    return binding;
+  });
+  const project = result.project;
+  if (result.kind === 'existing') return project;
+  log.info('project', 'join', { name, chatId: project.chatId, cwd: project.cwd, blank: project.blank, kind: project.kind, mode: project.mode, backend: project.backend });
 
   // Onboarding only (no announcement / Pin / tab — see onboardGroup's joined
   // branch); best-effort, the binding holds even if the welcome card fails.

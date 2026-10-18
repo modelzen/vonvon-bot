@@ -9,12 +9,15 @@ import type { AppConfig } from '../config/schema';
 import { log } from '../core/logger';
 import { createOrchestrator } from './handle-message';
 import { createTopicRegistry } from './topic-registry';
+import type { BotIdentity } from '../config/bots';
 import { adoptAdminSessions } from './session-store';
 import { paths } from '../config/paths';
 import { setTierMergePending, splitTierChats } from '../project/registry';
 import type { PermissionMode } from '../agent/types';
+import { onCrashSync } from '../host/crash-guard';
 
 export interface BridgeOptions {
+  identity: BotIdentity;
   cfg: AppConfig;
   appSecret: string;
   /** fallback cwd for groups that aren't registered projects. */
@@ -44,6 +47,8 @@ export interface BridgeHandle {
  * `card.action.trigger` (lark-cli doesn't deliver it).
  */
 export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
+  const identity = { ...opts.identity };
+  if (identity.appId !== opts.cfg.accounts.app.id || identity.tenant !== opts.cfg.accounts.app.tenant) throw new Error('机器人注册身份与配置不匹配');
   await mergeTiers();
   const app = opts.cfg.accounts.app;
   const channel = createLarkChannel({
@@ -74,7 +79,8 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   // service and no socket; s02c deleted D/cli-bridge. Since s02c2 the installed
   // hooks run an empty `vonvon hook`, and the tools ask in the terminal.
   const orchestrator = createOrchestrator(channel, opts.cfg, opts.fallbackCwd, createTopicRegistry({ dir: paths.topicsDir }),
-    opts.droppedFile ? { droppedFile: opts.droppedFile } : undefined);
+    { droppedFile: opts.droppedFile, bot: identity });
+  const offCrash = onCrashSync(() => orchestrator.saveDroppedSync('crash'));
   const groupTasks = new Set<Promise<JoinedGroups | Project>>();
   let closing: Promise<void> | undefined;
   const shutdown = (): Promise<void> => {
@@ -96,7 +102,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
         if (result.status === 'rejected') { log.fail('ws', result.reason, { phase: 'disconnect' }); errors.push(result.reason); }
       }
       if (errors.length) throw new AggregateError(errors, 'Bridge cleanup failed');
-    })();
+    })().finally(offCrash);
     return closing;
   };
   try {
@@ -164,7 +170,7 @@ export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
     // Only once connected: when this start fails, the file stays as it is for the next one.
     orchestrator.replyDropped();
 
-    const executeGroup = createGroupExecutor(channel);
+    const executeGroup = createGroupExecutor(channel, identity, opts.cfg.preferences?.projectsRootDir);
     const adminGroups: BridgeHandle['adminGroups'] = op => {
       if (closing) return Promise.reject(new Error('Bridge is shutting down'));
       const task = executeGroup(op);

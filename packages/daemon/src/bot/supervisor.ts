@@ -386,7 +386,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   try {
     // Before startApi: a paused host whose port is taken still sends its pause message while it shuts down (D1).
     notifier.hostStarted(options.crash?.notice, {
-      bots, paused, botPaused: appId => Boolean(children.get(appId)?.pause), ...(options.registryUnreadable ? { registryUnreadable: true } : {}),
+      chainId, bots, paused, botPaused: appId => Boolean(children.get(appId)?.pause), ...(options.registryUnreadable ? { registryUnreadable: true } : {}),
     });
     for (const c of children.values()) spawnChild(c);
 

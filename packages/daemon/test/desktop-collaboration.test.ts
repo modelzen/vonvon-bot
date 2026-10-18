@@ -1,6 +1,6 @@
 import { pendingGroupsFile, readPendingGroups } from '../src/project/pending-groups';
 import { afterAll, beforeEach, expect, it, vi } from 'vitest';
-import { rm, mkdir, realpath, writeFile } from 'node:fs/promises';
+import { rm, mkdir, realpath, symlink, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import type { AccountUsageBundle } from '../src/agent/types';
 import type { AppConfig } from '../src/config/schema';
@@ -11,6 +11,8 @@ import { createOrchestrator } from '../src/bot/handle-message';
 import { parseCollaborationRequest, projectRevision } from '../src/admin/collaboration';
 import { weaveSender } from '../src/bot/context-weave';
 import { updateManagedCard } from '../src/card/managed';
+import { readDropped } from '../src/bot/restart-dropped';
+import { existsSync } from 'node:fs';
 
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
@@ -38,7 +40,7 @@ function backend() {
   fixture.backend = backend;
   return { ...backend, thread };
 }
-function orchestrator(channel: unknown = { send: fixture.send }) { return createOrchestrator(channel as never, cfg, paths.appDir); }
+function orchestrator(channel: unknown = { send: fixture.send }, droppedFile?: string) { return createOrchestrator(channel as never, cfg, paths.appDir, undefined, droppedFile ? { droppedFile } : undefined); }
 beforeEach(async () => {
   await rm(pendingGroupsFile(paths.projectsFile), { force: true });
   await rm(paths.projectsFile, { force: true }); await rm(paths.sessionsFile, { force: true });
@@ -55,6 +57,23 @@ it('rejects untrusted identity, extra fields and relative paths at the HTTP boun
   expect(parseCollaborationRequest({ action: 'shareUsage', ...target, sections: ['stats', 'heatmap'] })).toMatchObject({ sections: ['stats', 'heatmap'] });
   expect(() => parseCollaborationRequest({ action: 'shareUsage', ...target, sections: ['unknown'] })).toThrow('分享区块无效');
   expect(() => parseCollaborationRequest({ action: 'shareUsage', ...target, sections: 'stats' })).toThrow('分享区块无效');
+});
+
+it('does not tell a sender to resend a desktop goal interrupted during preparation', async () => {
+  const be = backend();
+  let prepared!: (value: typeof be.thread) => void;
+  be.resumeThread.mockReturnValue(new Promise(resolve => { prepared = resolve; }));
+  const file = join(paths.appDir, 'desktop-dropped.json');
+  const app = orchestrator(undefined, file);
+  const starting = app.collaboration({ action: 'startGoal', ...target, threadId: 'oc_demo', objective: 'Finish' });
+  await vi.waitFor(() => expect(be.resumeThread).toHaveBeenCalledOnce());
+  const closing = app.shutdown();
+  prepared(be.thread);
+  await starting;
+  await closing;
+  expect(be.thread.close).toHaveBeenCalled();
+  expect(readDropped(file, Date.now()).entries).toEqual([]);
+  expect(existsSync(file)).toBe(false);
 });
 
 it('generates a share card with only the requested sections', async () => {
@@ -239,6 +258,30 @@ it('creates under the configured root once and preserves idempotency across owne
     expect(await app.collaboration(request)).toEqual(replies[0]);
     expect(create).toHaveBeenCalledOnce();
     await expect(app.collaboration({ ...request, name: 'changed' })).rejects.toThrow('其他参数');
+  } finally { await app.shutdown(); }
+});
+it.each(['directory', 'alias'] as const)('admits an explicit %s before remote creation and retains the request after restart', async selection => {
+  backend();
+  const dir = join(paths.projectsRootDir, `explicit-${selection}`);
+  const alias = `${dir}-alias`;
+  await mkdir(dir, { recursive: true });
+  await symlink(dir, alias);
+  const create = vi.fn(async () => ({ code: 0, data: { chat_id: 'oc_explicit_created' } }));
+  const managers = vi.fn(async () => ({ code: 0 }));
+  const channel = { send: fixture.send, rawClient: { im: { v1: { chat: { create }, chatManagers: { addManagers: managers } } } } };
+  let app = orchestrator(channel);
+  const request = { action: 'createProject' as const, requestId: 'f0cfe579-c6bc-40c6-91f9-963fcffb2c1c', name: 'Explicit created', directory: selection === 'alias' ? alias : dir, kind: 'single' as const, backend: 'codex-appserver' as const };
+  try {
+    const first = await app.collaboration(request);
+    expect(await getProjectByName(request.name)).toMatchObject({ cwd: await realpath(dir), blank: false,
+      directories: { workspaces: { primary: await realpath(dir), additional: [] } }, creationRequestId: request.requestId });
+    expect(await getProjectByName(request.name)).not.toHaveProperty('directories.repositories');
+    expect(create).toHaveBeenCalledWith({ params: { user_id_type: 'open_id', uuid: request.requestId }, data: { name: request.name, user_id_list: ['ou_owner'] } });
+    expect(managers).toHaveBeenCalledWith({ path: { chat_id: 'oc_explicit_created' }, params: { member_id_type: 'open_id' }, data: { manager_ids: ['ou_owner'] } });
+    await app.shutdown(); app = orchestrator(channel);
+    expect(await app.collaboration(request)).toEqual(first);
+    expect(create).toHaveBeenCalledOnce();
+    expect(managers).toHaveBeenCalledOnce();
   } finally { await app.shutdown(); }
 });
 it('leaves a key from before s15c unused and refuses unsupported goal before posting to Feishu', async () => {

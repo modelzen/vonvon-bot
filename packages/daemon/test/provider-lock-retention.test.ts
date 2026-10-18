@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import type { AgentEvent, AgentInput, AgentThread } from '../src/agent/types';
 import type { AppConfig } from '../src/config/schema';
+import type { OnboardResult } from '../src/bot/onboarding';
 
 const fixture = vi.hoisted(() => ({
   spawn: vi.fn(), exit: vi.fn(), ready: false,
@@ -81,7 +82,7 @@ vi.mock('../src/bot/onboarding', () => ({
       accounts: { app: { id: 'provider-lock-fixture', secret: 'fixture', tenant: 'feishu' } },
       preferences: { access: { ownerOpenId: 'owner' }, completionReminder: { mode: 'manual' } },
     };
-    return { cfg, secret: 'fixture' };
+    return { cfg, secret: 'fixture', identity: { appId: cfg.accounts.app.id, tenant: cfg.accounts.app.tenant, createdAt: 1 } } satisfies OnboardResult;
   },
   announceEventsWhenLive: async () => {},
 }));

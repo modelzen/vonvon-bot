@@ -121,6 +121,37 @@ process-ci、draft 和 final 里的流程说法，凡和 `AGENTS.md` 不一致�
 | [multi-workspace](2026-10-16-bot-home/multi-workspace.md) | 13 个后端一条会话能有几个目录、附加目录里加载什么、调用方能直接交什么；Codex 的主文件夹、`selectedCapabilityRoots`、多个环境、按路径的权限；Claude 2.1.296 以后的变化、从附加目录加载什么、交个性和 skill 的几种办法及恢复时的表现；每个后端一个适配的做法 | 没测：`selectedCapabilityRoots` 在 0.156.1 上、`never` 下能力包的 MCP 会不会被拒；`enabledPlugins` 能不能关掉插件；macOS 和 `:minimal` 读档下按路径的权限。Cursor、Kimi、Goose、OpenCode、DeepSeek Harness 多数只看了源码 |
 | [comma-home](2026-10-16-bot-home/comma-home.md) | comma 的 agent 家目录、人设、记忆、skill、MCP 放在哪里，Claude Code 和 Codex 用什么 cwd 和参数起 | AGPL，只看思路。comma 用每个会话一个空目录当 cwd，不继承工作区的配置 |
 
+## 2026-10-17 Codex 服务端请求
+
+`2026-10-17-codex-requests/`，基于 `main` 的 `07ff9e4` 和当前仓库生成协议。s32 接线时补核对不同审批的否定回复，不重复 e05 的会话配置实验。
+
+| 报告 | 内容 | 说明 |
+|---|---|---|
+| [negative-replies](2026-10-17-codex-requests/negative-replies.md) | 命令、文件、旧协议与权限配置审批的不同回复；问题答案如何回传 | 空权限子集的含义据官方文档推断；真实 Codex 拒绝后继续执行仍须 Mac 验证 |
+
+## 2026-10-17 Rakazo 源码比较
+
+`2026-10-17-rakazo/`。owner 提供 Rakazo 后，由三个 Astra 分析方向对照固定源码与 Vonvon `bbb329b`，主会话另执行 8 项纯源码检查。没有运行上游完整应用或改变已定产品范围。
+
+| 报告 | 内容 | 说明 |
+|---|---|---|
+| [report](2026-10-17-rakazo/report.md) | 产品建议、M/s 顺序、可复用模块与许可边界 | 建议优先完整私聊/个性/记忆体验；调整依赖与新增范围仍需按主计划决策 |
+| [architecture](2026-10-17-rakazo/architecture.md) | 消息、执行、停止、恢复和状态归属 | 中文架构解释，保留原生后端边界 |
+| [product-ux](2026-10-17-rakazo/product-ux.md) | Astra 产品与聊天体验分析 | 源码分析附件，含首次体验与范围重考虑 |
+| [runtime-state](2026-10-17-rakazo/runtime-state.md) | Astra 运行时与持久状态分析 | 不将数据库重放视为任意外部动作恰好执行一次 |
+| [reuse-engineering](2026-10-17-rakazo/reuse-engineering.md) | Astra 模块复用、依赖与测试分析 | 区分小函数提取、适配与不采用 |
+| [probes](2026-10-17-rakazo/probes.md) | 8 项实际源码检查与可重现程序 | 局部 helper 结果，不是产品或安全验收 |
+
+本轮索引经独立 gpt-6-astra 核对；各报告末尾保留核实记录。
+
+## 2026-10-18 飞书建群操作恢复
+
+`2026-10-18-feishu-creation/`。s36c2c4 开工前核对官方建群去重合同，源码起点为 `main` 的 `fae1c32`。只读查文档、CLI schema 和安装的 SDK，没有创建真实飞书群。
+
+| 报告 | 内容 | 说明 |
+|---|---|---|
+| [uuid-contract](2026-10-18-feishu-creation/uuid-contract.md) | 去重键、10 小时窗口、50 字符上限、未知结果的恢复边界和 SDK 请求行为 | 不承诺重复请求返回原群号；真实飞书验收仍待后续 |
+
 ## 补充
 
 codex-desktop 报告写完以后，对照 openai/codex 源码又核实了一次。`codex mcp list` 里的 `cua_repl` 来自内置插件 `unified-computer-use@openai-bundled`，就是原生 Computer Use；显示为 disabled 的 `computer-use` 是旧通道。经 Paseo 调用时，Mac 锁屏会失败（getpaseo/paseo#3346），`full-access` 模式会自动批准打开应用。process 报告里的相关说法和这里一致。

@@ -1,6 +1,6 @@
 import { afterAll, expect, it, vi } from 'vitest';
 import { rm } from 'node:fs/promises';
-import type { AgentBackend, AgentEvent } from '../src/agent/types';
+import type { AgentBackend, AgentEvent, AgentRun, AskRequest } from '../src/agent/types';
 import type { AppConfig } from '../src/config/schema';
 import { paths } from '../src/config/paths';
 import { getSession } from '../src/bot/session-store';
@@ -19,11 +19,11 @@ vi.mock('../src/bot/comments', async original => ({
   resolveComment: async () => ({ target: { fileType: 'docx', fileToken: 'fixture-doc' }, ctx: { question: 'fixture question', isWhole: true, targetReplyId: undefined } }),
   postCommentReply: async () => { fixture.replies++; },
 }));
-function backend(id: string) {
+function backend(id: string, ask?: { request: AskRequest; respond?: AgentRun['respondToAsk']; events?: () => AsyncIterable<AgentEvent>; turnId?: () => string | undefined }) {
   let next = 0;
   const threads: ReturnType<typeof thread>[] = [];
   function thread(sessionId: string) {
-    return { sessionId, isAlive: () => true, close: vi.fn(async () => {}), runStreamed: vi.fn(() => ({ turnId: () => 'turn', events: (async function* (): AsyncGenerator<AgentEvent> { yield { type: 'done', turnId: 'turn' }; })() })) };
+    return { sessionId, isAlive: () => true, close: vi.fn(async () => {}), abort: vi.fn(async () => {}), runStreamed: vi.fn(() => ({ turnId: ask?.turnId ?? (() => 'turn'), respondToAsk: ask?.respond, events: ask?.events?.() ?? (async function* (): AsyncGenerator<AgentEvent> { if (ask) yield { type: 'ask', request: ask.request }; yield { type: 'done', turnId: 'turn' }; })() })) };
   }
   const result = {
     id, displayName: id,
@@ -54,5 +54,58 @@ it('the next comment applies model changes to the same native session and backen
     expect(claude.startThread).toHaveBeenCalledOnce();
     expect(await getSession('doc:fixture-doc:comment')).toMatchObject({ backend: 'claude-agent', model: 'one' });
     expect(fixture.replies).toBe(3);
+  } finally { await orchestrator.shutdown(); }
+});
+
+it('cloud comment asks resolve unavailable immediately with zero card or notification traffic', async () => {
+  const respond = vi.fn<NonNullable<AgentRun['respondToAsk']>>(() => new Promise(() => {}));
+  backend('codex-appserver', { request: { id: 'comment-permission', kind: 'permission', permissionMode: 'full', title: '允许吗', detail: 'need approval', acceptedConsequence: 'continue', declinedConsequence: 'deny' }, respond });
+  const network = vi.fn(() => { throw new Error('unexpected network'); });
+  const cfg: AppConfig = { accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, comments: { backend: 'codex-appserver' } } };
+  const orchestrator = createOrchestrator({ send: network, rawClient: { cardkit: { v1: { card: { create: network } } } } } as never, cfg, paths.appDir);
+  try {
+    await orchestrator.onComment({ fileType: 'docx', fileToken: 'ask-fixture-doc', commentId: 'ask-comment', replyId: 'ask', mentionedBot: true, operator: { openId: 'ou_owner' } } as never);
+    expect(respond).toHaveBeenCalledExactlyOnceWith('comment-permission', { kind: 'unanswered', reason: 'unavailable' });
+    expect(network).not.toHaveBeenCalled();
+  } finally { await orchestrator.shutdown(); }
+});
+
+it('a late comment response rejection cannot interrupt the next run on the reused thread', async () => {
+  let rejectOld!: (error: Error) => void;
+  let finishNext!: () => void;
+  const delivery = new Promise<void>((_resolve, reject) => { rejectOld = reject; });
+  const next = new Promise<void>(resolve => { finishNext = resolve; });
+  let starts = 0;
+  const request: AskRequest = { id: 'old-comment', kind: 'confirmation', title: '继续', detail: '继续', acceptedConsequence: '继续', declinedConsequence: '停止' };
+  const provider = backend('codex-appserver', { request, respond: () => delivery, events: () => (async function* (): AsyncGenerator<AgentEvent> {
+    const index = starts++;
+    if (index === 0) yield { type: 'ask', request };
+    else { yield { type: 'turn_started', turnId: 'next' }; await next; }
+    yield { type: 'done', turnId: 'done' };
+  })() });
+  const cfg: AppConfig = { accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, comments: { backend: 'codex-appserver' } } };
+  const orchestrator = createOrchestrator({} as never, cfg, paths.appDir);
+  const event = { fileType: 'docx', fileToken: 'late-doc', commentId: 'late-comment', mentionedBot: true, operator: { openId: 'ou_owner' } };
+  try {
+    await orchestrator.onComment({ ...event, replyId: 'first' } as never);
+    const second = orchestrator.onComment({ ...event, replyId: 'second' } as never);
+    await vi.waitFor(() => expect(starts).toBe(2));
+    rejectOld(new Error('old response failed'));
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(provider.threads[0]!.abort).not.toHaveBeenCalled();
+    finishNext(); await second;
+  } finally { finishNext(); await orchestrator.shutdown(); }
+});
+
+it('a missing comment response port recycles the origin even before a turn id exists', async () => {
+  const request: AskRequest = { id: 'broken-comment', kind: 'confirmation', title: '继续', detail: '继续', acceptedConsequence: '继续', declinedConsequence: '停止' };
+  const provider = backend('codex-appserver', { request, turnId: () => undefined, events: () => (async function* (): AsyncGenerator<AgentEvent> {
+    yield { type: 'ask', request }; await new Promise<void>(() => {});
+  })() });
+  const cfg: AppConfig = { accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, comments: { backend: 'codex-appserver' } } };
+  const orchestrator = createOrchestrator({} as never, cfg, paths.appDir);
+  try {
+    await orchestrator.onComment({ fileType: 'docx', fileToken: 'broken-doc', commentId: 'broken-comment', replyId: 'one', mentionedBot: true, operator: { openId: 'ou_owner' } } as never);
+    expect(provider.threads[0]!.close).toHaveBeenCalled();
   } finally { await orchestrator.shutdown(); }
 });
