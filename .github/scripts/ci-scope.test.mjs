@@ -127,10 +127,14 @@ test('root and nested Markdown documentation is lightweight', () => fixture(({ d
   put('CLAUDE.md');
   put('docs/plan.md');
   put('docs/nested/deep.md');
+  put('.claude/skills/LICENSE-x.md');
+  put('.claude/skills/animate/SKILL.md');
+  put('.claude/skills/animate/refs/RECIPES.md');
   const head = commit();
   const result = determineScope('pull_request', pr(base, head), dir);
   assert.equal(result.scope, 'docs');
-  assert.deepEqual(result.paths, ['AGENTS.md', 'CLAUDE.md', 'README.md', 'docs/nested/deep.md', 'docs/plan.md']);
+  assert.deepEqual(result.paths, ['.claude/skills/LICENSE-x.md', '.claude/skills/animate/SKILL.md',
+    '.claude/skills/animate/refs/RECIPES.md', 'AGENTS.md', 'CLAUDE.md', 'README.md', 'docs/nested/deep.md', 'docs/plan.md']);
   assert.equal(result.base, base);
   assert.equal(result.head, head);
 }));
@@ -139,7 +143,9 @@ test('code, config, Markdown outside docs, and mixed changes require full', () =
   let before = base;
   for (const path of ['packages/protocol/src/index.ts', 'packages/protocol/test/index.test.ts',
     'packages/ui/README.md', 'package.json', 'package-lock.json', '.github/workflows/ci.yml',
-    'scripts/check.js', 'docs/notes.txt', 'unknown']) {
+    'scripts/check.js', 'docs/notes.txt', 'unknown', '.claude/settings.json', '.claude/agents/review.md',
+    '.claude/skills.md', '.claude/skills/animate/scripts/run.mjs', '.claude/skills/animate/SKILL.MD',
+    'x/.claude/skills/a.md', '.claude/skills/animate/SKILL.md.bak', 'docs/x.md.ts', 'Xclaude/skills/a.md']) {
     put(path);
     const head = commit();
     assert.equal(determineScope('pull_request', pr(before, head), dir).scope, 'full', path);
