@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
-import { connect, createServer, type ListenOptions, type Server } from 'node:net';
+import { createServer, type ListenOptions, type Server } from 'node:net';
 import { platform } from 'node:os';
 import { join } from 'node:path';
 
@@ -47,7 +47,7 @@ async function listenOn(server: Server, address: ListenOptions): Promise<boolean
 }
 
 const portHash = (path: string, role: MutexRole): Buffer => createHash('sha256').update(`vonvon-bot-v2:${role}:${path}`).digest();
-const legacyPort = (path: string, role: MutexRole): number => 20000 + portHash(path, role).readUInt32BE(0) % 30000;
+const portOf = (path: string, role: MutexRole): number => 20000 + portHash(path, role).readUInt32BE(0) % 30000;
 
 /**
  * One try at this OS's lock for `role` on the data root `path`; null while someone holds it. Linux: an abstract Unix
@@ -75,84 +75,27 @@ async function tryLock(path: string, role: MutexRole): Promise<Release | null> {
 function socketAddress(path: string, role: MutexRole): ListenOptions {
   if (OS === 'linux') return { path: `\0vonvon-bot-mutex-v3:${role}:${createHash('sha256').update(path).digest('hex')}` };
   if (OS === 'win32') return { path: `\\\\.\\pipe\\vonvon-bot-${role}-${portHash(path.toLowerCase(), role).toString('hex')}` };
-  return { host: '127.0.0.1', port: legacyPort(path, role), exclusive: true };
+  return { host: '127.0.0.1', port: portOf(path, role), exclusive: true };
 }
-
-// --- Transition from builds before s20c. Delete it and its tests once no pre-s20c build is installed (docs/v1-plan.md
-// s20c). Those builds lock only by listening on the port, so a holder of the new lock takes the port too when it can.
-const LEGACY_MARKER = 'vonvon-mutex-v3\n';
-const noRelease: Release = async () => {};
-
-/** Who answers on the old port: a pre-s20c mutex closes without a word, a newer holder of another key sends the marker. */
-function legacyOwner(port: number): Promise<'old-build' | 'not-a-lock'> {
-  return new Promise((resolve) => {
-    const socket = connect({ host: '127.0.0.1', port });
-    let connected = false;
-    let data = '';
-    const settle = (owner: 'old-build' | 'not-a-lock'): void => { socket.destroy(); resolve(owner); };
-    // An old daemon whose event loop is blocked still completes the handshake, so silence counts as one.
-    socket.setTimeout(1000, () => settle('old-build'));
-    socket.setEncoding('utf8');
-    socket.once('connect', () => { connected = true; });
-    socket.on('data', (chunk: string) => {
-      data += chunk;
-      if (data === LEGACY_MARKER) settle('not-a-lock');
-      else if (!LEGACY_MARKER.startsWith(data)) settle('old-build');
-    });
-    socket.once('end', () => settle('old-build'));
-    // Refused: some connection's local port or a TIME_WAIT, not a listener. Any other failure may hide an old build.
-    socket.on('error', (error) => settle(!connected && errorCode(error) === 'ECONNREFUSED' ? 'not-a-lock' : 'old-build'));
-  });
-}
-
-/** Holds the pre-s20c port as well where the new lock is not that port; null while an old build holds it. */
-async function holdLegacyPort(path: string, role: MutexRole): Promise<Release | null> {
-  if (OS !== 'linux' && OS !== 'darwin') return noRelease;
-  const port = legacyPort(path, role);
-  // Destroyed once the marker is out: a peer that keeps its end open would otherwise hold up `closeServer`.
-  const server = createServer((socket) => { socket.on('error', () => {}); socket.end(LEGACY_MARKER, () => socket.destroy()); });
-  if (await listenOn(server, { host: '127.0.0.1', port, exclusive: true })) return () => closeServer(server);
-  return await legacyOwner(port) === 'old-build' ? null : noRelease;
-}
-// --- End of the transition.
 
 const mutexReleases = new WeakMap<Mutex, Release>();
 
 export async function acquireMutex(home: string, role: MutexRole, timeoutMs = 1500): Promise<Mutex> {
   const path = realpathSync(home);
   const deadline = Date.now() + timeoutMs;
-  let lock: Release | null = null;
-  try {
-    for (;;) {
-      lock ??= await tryLock(path, role);
-      if (lock) {
-        const legacy = role === 'projects' || role === 'creation' ? noRelease : await holdLegacyPort(path, role);
-        if (legacy) return heldMutex(role, [legacy, lock]);
-      }
-      if (Date.now() >= deadline) throw new DataAccessError(`Bridge ${role} is busy on its local coordination endpoint.`);
-      await new Promise((resolve) => setTimeout(resolve, 40));
-    }
-  } catch (error) {
-    // Busy or failed: nothing stays held, the new lock included.
-    if (lock) await lock().catch(() => {});
-    throw error;
+  for (;;) {
+    const release = await tryLock(path, role);
+    if (release) return heldMutex(role, release);
+    if (Date.now() >= deadline) throw new DataAccessError(`Bridge ${role} is busy on its local coordination endpoint.`);
+    await new Promise((resolve) => setTimeout(resolve, 40));
   }
 }
 
-function heldMutex(role: MutexRole, releases: Release[]): Mutex {
+function heldMutex(role: MutexRole, release: Release): Mutex {
   const mutex: Mutex = Object.freeze({ role });
   let released: Promise<void> | undefined;
-  mutexReleases.set(mutex, () => released ??= releaseAll(role, releases));
+  mutexReleases.set(mutex, () => released ??= release());
   return mutex;
-}
-
-async function releaseAll(role: MutexRole, releases: Release[]): Promise<void> {
-  const errors: unknown[] = [];
-  for (const release of releases) {
-    try { await release(); } catch (error) { errors.push(error); }
-  }
-  if (errors.length === 1) throw errors[0];
-  if (errors.length) throw new AggregateError(errors, `Cannot release the Bridge ${role} mutex.`);
 }
 
 /** Releases the mutex; calling it again returns the first call's result. */
