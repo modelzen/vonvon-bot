@@ -111,6 +111,8 @@ Root must complete license/file exceptions and review any extracted code before 
 
 Files/ranges read are cited inline. Additional targeted source inspection covered `apps/web/src/pages/bot-panel.tsx` saved-description handling, `apps/api/src/router.ts` memory list scope and follow-up handlers, `packages/adapters/src/memory-tools.ts`, and Vonvon `card/run-state.ts`, `card/tool-presentation.ts`, `docs/product.md` and the M5–M9 slice table. No broad claims about untraced integrations or external channels are made.
 
+> 更正（2026-10-18）：外部渠道这一轮查到了：Slack 频道的 team-chat（`apps/api/src/team-chat-bridge.ts`，e55263f 就有），以及接 iMessage/SMS、Slack、WhatsApp、Telegram 和飞书私聊的个人线路；上面判断器"限制了上下文"的说法也要按第二轮看，见 [../2026-10-18-rakazo-2/report.md](../2026-10-18-rakazo-2/report.md)。
+
 ## Product reconsideration: sequencing the teammate experience
 
 The current M ordering is technically defensible but **delays the experience that makes Rakazo attractive**: users first meet a configurable Feishu execution bridge, while conversational DM work, a stable persona and self-service configuration arrive only after substantial infrastructure. If the owner's intended product is now closer to a Grok-style personal teammate, that is a reason to reconsider sequencing explicitly. The finalized scope constrains implementation today; it does not make the product order optimal by definition.
