@@ -8,7 +8,7 @@ const names: Record<ProviderId, string> = {
   codex: 'Codex', claude: 'Claude Code',
 };
 const systems: Record<Os, string> = { darwin: 'macOS', linux: 'Linux', win32: 'Windows' };
-const tiers: Record<Tier, string> = { qa: '问答', write: '读写', full: '完全访问' };
+const tiers: Record<Tier, string> = { qa: '只读', write: '读写', full: '完全访问' };
 const loginCommands: Record<ProviderId, string> = {
   codex: 'codex login', claude: 'claude login',
 };

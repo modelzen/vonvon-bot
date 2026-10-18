@@ -24,11 +24,11 @@ const render = (fullOnly?: string) => renderToStaticMarkup(
 );
 const select = (html: string, label: string) => html.match(new RegExp(`<select aria-label="${label}"[^>]*>(.*?)</select>`))?.[1] ?? "";
 
-it("greys out 只读问答 and 允许写入 when the backend is full-only, keeps the stored 只读 selected, and says why", () => {
+it("greys out 只读 and 读写 when the backend is full-only, keeps the stored 只读 selected, and says why", () => {
   const html = render(REASON);
   const options = select(html, "权限档");
-  expect(options).toContain('<option value="qa" disabled="" selected="">只读问答</option>');
-  expect(options).toContain('<option value="write" disabled="">允许写入</option>');
+  expect(options).toContain('<option value="qa" disabled="" selected="">只读</option>');
+  expect(options).toContain('<option value="write" disabled="">读写</option>');
   expect(options).toContain('<option value="full">完全访问</option>');
   expect(html.indexOf(REASON)).toBeGreaterThan(html.indexOf("权限档"));
 });
@@ -42,7 +42,7 @@ it("has one tier for the whole group (s15c)", () => {
 
 it("offers every tier when the backend can confine reads", () => {
   const html = render();
-  expect(html).not.toContain("disabled=\"\">只读问答");
-  expect(select(html, "权限档")).toContain('<option value="qa" selected="">只读问答</option>');
+  expect(html).not.toContain("disabled=\"\">只读");
+  expect(select(html, "权限档")).toContain('<option value="qa" selected="">只读</option>');
   expect(html).not.toContain(REASON);
 });

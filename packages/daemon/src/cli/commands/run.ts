@@ -97,7 +97,7 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
   }
 
   const fallbackCwd = process.env.FEISHU_CODEX_CWD || process.cwd();
-  console.log('\n正在启动长连接 bot…');
+  console.log('\n正在启动 Bot 的长连接…');
   console.log('私聊我 `/new <名>` 建项目；在项目群里 @我 干活。Ctrl+C 退出。\n');
   let api: Awaited<ReturnType<typeof startApi>> | undefined;
   let bridge: Awaited<ReturnType<typeof startBridge>> | undefined;
@@ -140,21 +140,21 @@ async function runSingle(botName: string | undefined, control: ShutdownControl, 
         ...(diagnostics ? { diagnostics } : {}),
         service: createAdminService({
           executeCollaboration: async (botId, request) => {
-            if (botId !== ownAppId) throw new AdminWriteError('机器人不在本进程的活跃集里');
+            if (botId !== ownAppId) throw new AdminWriteError('这个 Bot 不归本进程管');
             return handle.collaboration(request);
           },
           executeGroups: async (botId, op) => {
-            if (botId !== ownAppId) throw new AdminWriteError('机器人不在本进程的活跃集里');
+            if (botId !== ownAppId) throw new AdminWriteError('这个 Bot 不归本进程管');
             return handle.adminGroups(op);
           },
           executeSettingsRead: async (botId, op) => {
-            if (botId !== ownAppId) throw new AdminWriteError('机器人不在本进程的活跃集里');
+            if (botId !== ownAppId) throw new AdminWriteError('这个 Bot 不归本进程管');
             return op.kind === 'settingsRead' ? handle.settings.read(op.scope) : handle.settings.models(op.query);
           },
           executeWrite: async (botId, op) => {
             if (botId !== ownAppId) {
               throw new AdminWriteError(
-                '该机器人不归本进程管：当前是单 bot 运行模式，只能改本 bot 的项目。多 bot 请 `bot use` 勾选后重启，由 supervisor 聚合管理。',
+                '这个 Bot 不归本进程管：当前只运行一个 Bot，只能改它的设置。要同时管几个 Bot，用 `vonvon daemon start` 启动 daemon。',
               );
             }
             return handle.adminExecute(op);

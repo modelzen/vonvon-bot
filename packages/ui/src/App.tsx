@@ -41,6 +41,8 @@ import {
   type DesktopSnapshot,
   type Job,
   type Membership,
+  backendLabel,
+  formatTime,
 } from "@vonvon/protocol";
 import type { CollaborationView, Page } from "./collaboration-model";
 import {SettingsPanel,membershipSettingsTarget} from "./settings/SettingsPanel";
@@ -68,12 +70,9 @@ type Modal =
   | { kind: "deleteAgent"; agentId: AgentId; name: string }
   | null;
 
+/** u08 drops the suffix for a backend this build does not know (F50). */
 const backendName = (backend: string) =>
-  backend === "codex-appserver"
-    ? "Codex"
-    : backend === "claude-agent"
-      ? "Claude"
-      : `${backend}（暂不支持修改）`;
+  backendLabel(backend) === backend ? `${backend}（暂不支持修改）` : backendLabel(backend);
 const connectedLabel = (connection: string) =>
   connection === "connected"
     ? "已连接"
@@ -488,7 +487,7 @@ function DesktopApp() {
                   <SettingsRow
                     icon={ListChecks}
                     title="首次运行清单"
-                    description="执行工具、扫码、开权限、事件订阅、发布，一步步检测。"
+                    description="后端、扫码、开权限、事件订阅、发布，一步步检测。"
                     onClick={() => openPage("setup")}
                   />
                   <SettingsRow
@@ -683,7 +682,7 @@ function DesktopApp() {
                     </div>
                   </SettingsGroup>
                   </> : <div className="agent-settings-page">
-                  <p className="collaboration-scope-note">这里管理 {agent.name} 的身份、运行与通知。群内工作目录和响应方式在对应飞书群中设置。</p>
+                  <p className="collaboration-scope-note">这里管理 {agent.name} 的身份、运行与通知。群里的工作区和响应方式在各个群的设置里改。</p>
                   <SettingsGroup className="agent-activation" id={settingAnchor('Bot 身份')}>
                     <SettingsRow
                       title="启用 Bot"
@@ -712,7 +711,7 @@ function DesktopApp() {
                     <ScopeGrantRow key={`grant-${agent.id}`} agentId={agent.id} disabled={busy || !ready} onError={message => setNotice({message, error: true})}/>
                     <SettingsRow title="刷新飞书凭据" description="重新扫码换一份凭据，保留群绑定、会话和设置。开权限用上面的「一键开权限」。"
                       trailing={<Button size="sm" disabled={busy || !ready} onClick={() => void register(agent.id)}>重新扫码</Button>}/>
-                    <SettingsRow title="状态与诊断" description="连接、缺的权限、执行工具和最近没回的消息。"
+                    <SettingsRow title="状态与诊断" description="连接、缺的权限、后端和最近没回的消息。"
                       trailing={<Button size="sm" onClick={() => { openPage("diagnostics"); setSearchTarget({page: "diagnostics", section: diagnosticsSection(agent.id)}); }}>查看</Button>}/>
                   </SettingsGroup>
                   <SettingsPanel
@@ -916,7 +915,7 @@ function DesktopApp() {
             <GrantStep key={modal.agentId} agentId={modal.agentId} onOpenChecklist={() => { setModal(null); openPage("setup"); }} onDone={() => setModal(null)} />
           )}
           {modal?.kind === "register" && !modal.agentId && registration && (
-            <><p>{modal.refresh ? "重新扫码刷新这个 Bot 的凭据，保留原有项目、群绑定和设置。请使用此 Bot 的管理员身份扫码。" : "第 1 步：用飞书扫码注册机器人。注册好后在这里接着一键开权限。"}</p><JobPanel job={registration} run={run} busy={busy} /></>
+            <><p>{modal.refresh ? "重新扫码刷新这个 Bot 的凭据，保留群绑定、会话和设置。请用这个 Bot 的管理员身份扫码。" : "第 1 步：用飞书扫码注册 Bot。注册好后在这里接着一键开权限。"}</p><JobPanel job={registration} run={run} busy={busy} /></>
           )}
           {modal?.kind === "collaboration" && (
             <>
@@ -1027,7 +1026,7 @@ function JobPanel({
                 <img className="desktop-qr" src={job.image} alt="飞书注册二维码" />
                 <p>
                   请用飞书扫码，或打开注册链接。有效期至{" "}
-                  {new Date(job.expiresAt).toLocaleTimeString()}。
+                  {formatTime(job.expiresAt)}。
                 </p>
                 <FormField className="desktop-registration-url" label="完整注册链接">
                   <input ref={urlInput} aria-label="完整注册链接" readOnly value={job.url} />

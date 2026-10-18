@@ -105,7 +105,7 @@ export function saveConfig(cfg: AppConfig, path: string = paths.configFile, expe
     const nextDirectories = configDirectories(JSON.parse(serialized));
     // Old callers without a declaration/CAS can still replace malformed legacy JSON.
     const previous = expectedSnapshot || nextDirectories ? await loadConfig(path) : {};
-    if (expectedSnapshot && JSON.stringify(previous) !== JSON.stringify(expectedSnapshot)) throw new Error('配置已被其他进程修改，请重启 Host 后重新加载');
+    if (expectedSnapshot && JSON.stringify(previous) !== JSON.stringify(expectedSnapshot)) throw new Error('配置已被其他进程修改，请重启 daemon 后重新加载');
     await admitDirectoryChanges(nextDirectories, configDirectories(previous), paths.appDir);
     await mkdir(dirname(path), { recursive: true });
     const tmp = `${path}.tmp-${process.pid}-${randomUUID()}`;

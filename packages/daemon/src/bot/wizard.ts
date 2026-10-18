@@ -132,7 +132,7 @@ export async function runRegistrationWizard(): Promise<AppConfig> {
 
   const ownerOpenId = creds.operatorOpenId?.trim();
   if (!ownerOpenId) {
-    throw new Error('扫码成功，但未获取到你的飞书身份；未保存机器人。请重新扫码并确认授权。');
+    throw new Error('扫码成功，但未获取到你的飞书身份；未保存 Bot。请重新扫码并确认授权。');
   }
   const cfg: AppConfig = {
     accounts: { app: { id: creds.clientId, secret: creds.clientSecret, tenant: creds.tenant } },

@@ -68,8 +68,8 @@ test('results are complete, ranked, uniquely identified, and have valid destinat
 
 test('conditional settings lead to parent controls with clear prerequisites', () => {
   const threshold = findEntries(entries, '长任务阈值')[0];
-  assert.equal(threshold?.destination.section, '任务结束提醒');
-  assert.match(threshold?.destination.guide ?? '', /提醒方式/);
+  assert.equal(threshold?.destination.section, '完成提醒');
+  assert.match(threshold?.destination.guide ?? '', /什么时候提醒/);
   const topic = findEntries(entries, '本话题模型')[0];
   assert.equal(topic?.destination.field, '选择话题');
   assert.match(topic?.destination.guide ?? '', /选择话题/);
@@ -78,8 +78,8 @@ test('conditional settings lead to parent controls with clear prerequisites', ()
 
 test('tool search destinations use the same section names as the rendered tool cards', () => {
   for (const [query, section, reveal] of [
-    ['安装位置 Codex', 'Codex CLI', 'codex-tool'],
-    ['安装位置 Claude', 'Claude Code CLI', 'claude-tool'],
+    ['安装位置 Codex', 'Codex', 'codex-tool'],
+    ['安装位置 Claude', 'Claude', 'claude-tool'],
     ['安装位置 飞书 CLI', '飞书 CLI', 'lark-tool'],
   ]) {
     const result = findEntries(entries, query!)[0];
@@ -99,4 +99,12 @@ test('注册 Bot is the one name, and the old word and the grant button still fi
   assert.equal(grant?.destination.field, '飞书权限');
   assert.equal(findEntries(entries, '一键开权限').some(entry => entry.title === '飞书权限'), true);
   assert.equal(findEntries(entries, '重新扫码')[0]?.title, '刷新飞书凭据');
+});
+
+test('words the 叫法表 retired still find the renamed fields', () => {
+  assert.equal(findEntries(entries, '待处理消息策略')[0]?.title, '运行中来了消息');
+  assert.equal(findEntries(entries, 'Host 状态')[0]?.title, '后端状态 Codex');
+  assert.equal(findEntries(entries, 'Host 版本')[0]?.title, '后端版本 Codex');
+  assert.equal(findEntries(entries, '当前 Profile')[0]?.title, '当前账号配置 飞书 CLI');
+  assert.ok(findEntries(entries, '机器人').some(entry => entry.id === 'agents'));
 });

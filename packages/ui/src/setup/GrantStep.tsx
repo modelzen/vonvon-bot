@@ -105,7 +105,7 @@ export function GrantStep({agentId, onOpenChecklist, onDone}: {agentId: AgentId;
     catch (failure) { setError(failure instanceof Error ? failure.message : '无法打开飞书开发者后台。'); }
   }
   return <>
-    <p>机器人已注册。下一步：一键开权限，在飞书开发者后台确认预选好的权限。</p>
+    <p>Bot 已注册。下一步：一键开权限，在飞书开发者后台确认预选好的权限。</p>
     <SettingsGroup label="第 2 步 · 开权限">
       <SettingsRow title="权限" description={stepDescription(view)}
         trailing={<span className="setup-step-trailing">

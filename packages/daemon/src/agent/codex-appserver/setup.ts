@@ -47,7 +47,7 @@ export class CodexSetupService {
   constructor(private readonly options: { install?: (signal: AbortSignal) => Promise<void>; retain?: number } = {}) {}
 
   setup(): Promise<CodexSetup> {
-    if (this.closed) throw new CodexSetupConflict('Host 正在退出');
+    if (this.closed) throw new CodexSetupConflict('daemon 正在退出');
     if (this.cleanupFailures.size) throw new CodexSetupConflict('此前 Codex 子进程清理未确认，请先退出并检查');
     if (this.probe) return this.probe.done;
     const abort = new AbortController();
@@ -87,7 +87,7 @@ export class CodexSetupService {
   }
 
   start(type: CodexJobType): { id: string } {
-    if (this.closed) throw new CodexSetupConflict('Host 正在退出');
+    if (this.closed) throw new CodexSetupConflict('daemon 正在退出');
     if (this.cleanupFailures.size) throw new CodexSetupConflict('此前 Codex 子进程清理未确认，请先退出并检查');
     if (this.active) throw new CodexSetupConflict('已有 Codex 设置操作正在进行');
     if (type === 'install' && process.env.CODEX_BIN) throw new CodexSetupConflict(`当前使用显式 CODEX_BIN：${process.env.CODEX_BIN}；请先移除此覆盖再安装`);

@@ -151,7 +151,7 @@ export async function runStop(home = paths.appDir): Promise<boolean> {
   }
 }
 
-const PAUSED_RUNNING = '已暂停：10 分钟内崩溃了 {n} 次，bot 都没有启动。查完原因后运行 vonvon daemon restart 恢复运行。';
+const PAUSED_RUNNING = '已暂停：10 分钟内崩溃了 {n} 次，Bot 都没有启动。查完原因后运行 vonvon daemon restart 恢复运行。';
 const PAUSED_STOPPED = '已暂停：10 分钟内崩溃了 {n} 次；暂停期间 daemon 又出错退出，没有自动重启。查完原因后运行 vonvon daemon restart 恢复运行。';
 
 /** Bot names from `bots.json`, read only; an unreadable registry leaves the app ids. */
@@ -176,7 +176,7 @@ export async function runStatus(json = false, home = paths.appDir, now: () => nu
   const lines = [status.running ? `running PID ${status.pid} at ${status.listen}` : 'stopped'];
   if (summary.paused) lines.push((summary.paused.running ? PAUSED_RUNNING : PAUSED_STOPPED).replace('{n}', String(summary.paused.crashes)));
   if (summary.pausedBots.length) {
-    lines.push(`已暂停的 bot：${summary.pausedBots.map(bot => `${names.get(bot.appId) ?? bot.appId}（10 分钟内崩溃了 ${bot.crashes} 次）`).join('、')}。查完原因后在网页的状态与诊断页点「恢复运行」，或运行 vonvon daemon restart。`);
+    lines.push(`已暂停的 Bot：${summary.pausedBots.map(bot => `${names.get(bot.appId) ?? bot.appId}（10 分钟内崩溃了 ${bot.crashes} 次）`).join('、')}。查完原因后在网页的状态与诊断页点「恢复运行」，或运行 vonvon daemon restart。`);
   }
   if (summary.crashes.length) lines.push('最近 24 小时的崩溃：', ...summary.crashes.map(record => crashLine(record, names)));
   process.stdout.write(`${lines.join('\n')}\n`);

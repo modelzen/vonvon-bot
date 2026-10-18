@@ -18,7 +18,7 @@ export function createSettingsService(deps: AdminServiceDeps): HostSettings {
   const unavailable = (): SettingsAccess => deps.readonlyPreview ? {
     kind: 'readonly',
     reason: 'preview',
-    message: '预览模式不可编辑，请先启动 Host'
+    message: '预览模式不能改设置，请先启动 daemon'
   } : offlineSettings;
   const owned = async (botId: string) => !deps.readonlyPreview && !!deps.executeWrite && (await deps.liveStatus?.(botId))?.running === true;
   return {
@@ -32,7 +32,7 @@ export function createSettingsService(deps: AdminServiceDeps): HostSettings {
         }) as SettingsView;
       const cfg = await loadConfig(botPaths(scope.botId).configFile);
       if (!isComplete(cfg))
-        throw new SettingsInputError('机器人不存在或配置不完整');
+        throw new SettingsInputError('这个 Bot 不存在，或者配置不完整');
       const files = botPaths(scope.botId);
       return createSettingsOwner({
         cfg,
@@ -93,7 +93,7 @@ export function createSettingsService(deps: AdminServiceDeps): HostSettings {
           state: 'unavailable',
           source: 'backend-provided',
           observedAt: new Date().toISOString(),
-          error: 'Agent 未运行',
+          error: '这个 Bot 没在运行',
           titleEfforts: []
         };
       return await deps.executeSettingsRead(query.botId, {

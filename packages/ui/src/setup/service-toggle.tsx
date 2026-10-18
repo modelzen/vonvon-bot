@@ -15,7 +15,7 @@ export async function toggleService(enabled: boolean, client: ServiceClient, she
   await client.machine({type: 'setServiceSkipped', skipped: !enabled});
   if (shell?.setLoginItem) {
     await shell.setLoginItem(enabled);
-    return enabled ? '已打开登录时启动。' : '已关闭登录时启动。bot 改成单独启动的 daemon，这样崩溃后不会自动重启。';
+    return enabled ? '已打开登录时启动。' : '已关闭登录时启动。Bot 改成单独启动的 daemon，这样崩溃后不会自动重启。';
   }
   const action = enabled ? 'install' : 'uninstall';
   try {
@@ -31,7 +31,7 @@ export async function toggleService(enabled: boolean, client: ServiceClient, she
 /** 跳过: the daemon the page talks to is already a detached one, so there is nothing to start. */
 export async function skipService(client: ServiceClient): Promise<string> {
   await client.machine({type: 'setServiceSkipped', skipped: true});
-  return '已跳过。bot 跑在分离的 daemon 里，这样崩溃后不会自动重启。';
+  return '已跳过。Bot 跑在分离的 daemon 里，这样崩溃后不会自动重启。';
 }
 
 const DEVICE_TITLE: Record<DesktopSnapshot['application']['platform'], string> = {macos: '这台 Mac', linux: '这台 Linux 主机', unsupported: '这台电脑'};

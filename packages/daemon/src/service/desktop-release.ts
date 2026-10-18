@@ -90,5 +90,5 @@ export function desktopInstallerForHost(release: DesktopRelease): DesktopInstall
 export function desktopReleaseNoticeForHost(release: DesktopRelease): string | null {
   const installer = desktopInstallerForHost(release);
   if (!installer) return null;
-  return `Vonvon Bridge 桌面版 v${release.version} 已提供。安装后可接续已有 Agent、飞书群和配置，无需重新配置；CLI 仍可单独使用。\n${installer.platform} 安装包：${installer.url}`;
+  return `Vonvon Bot 桌面版 v${release.version} 已提供。装好后接着用已有的 Bot、飞书群和配置，不用重新配置；命令行仍可单独使用。\n${installer.platform} 安装包：${installer.url}`;
 }

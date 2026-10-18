@@ -93,7 +93,7 @@ bot.command('list').description('List bots and their connection state').option('
   await (await import('./commands/bot')).runBotList(io(options));
 });
 bot.command('status [bot]').description("Show a bot's setup checklist").option(...BOT).option('--json', 'Print JSON').action(async (wanted: string | undefined, options: Json & { bot?: string }) => {
-  if (wanted !== undefined && options.bot !== undefined && wanted !== options.bot) throw new Error(`bot 填了两次（${wanted} 和 --bot ${options.bot}），只留一个。`);
+  if (wanted !== undefined && options.bot !== undefined && wanted !== options.bot) throw new Error(`Bot 填了两次（${wanted} 和 --bot ${options.bot}），只留一个。`);
   await (await import('./commands/bot')).runBotStatus(options.bot ?? wanted, io(options));
 });
 bot.command('repair-dir <bot>').description("Record a bot's directories again where they are now, after a move or a restore")

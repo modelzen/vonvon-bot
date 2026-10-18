@@ -37,13 +37,13 @@ const one = (agents = [agent('cli_a')], memberships: Membership[] = [], tools: T
 
 it('picks a bot by id or a unique name and lists the choices otherwise', () => {
   const [a, b, c] = [agent('cli_a'), agent('cli_b'), agent('cli_c', '支付')];
-  expect(() => pickBot([])).toThrow('还没有 bot。');
+  expect(() => pickBot([])).toThrow('还没有 Bot。');
   expect(pickBot([a])).toBe(a);
-  expect(() => pickBot([a, b, c])).toThrow('有 3 个 bot，用 --bot 指定：Vonvon Bot（cli_a）、Vonvon Bot（cli_b）、支付（cli_c）');
+  expect(() => pickBot([a, b, c])).toThrow('有 3 个 Bot，用 --bot 指定：Vonvon Bot（cli_a）、Vonvon Bot（cli_b）、支付（cli_c）');
   expect(pickBot([a, b, c], 'cli_b')).toBe(b);
   expect(pickBot([a, b, c], '支付')).toBe(c);
-  expect(() => pickBot([a, b, c], 'Vonvon Bot')).toThrow('有 2 个 bot 都叫「Vonvon Bot」，用 id 指定：cli_a、cli_b');
-  expect(() => pickBot([a], 'x')).toThrow('没有找到 bot「x」。现有的 bot：Vonvon Bot（cli_a）');
+  expect(() => pickBot([a, b, c], 'Vonvon Bot')).toThrow('有 2 个 Bot 都叫「Vonvon Bot」，用 id 指定：cli_a、cli_b');
+  expect(() => pickBot([a], 'x')).toThrow('没有找到 Bot「x」。现有的 Bot：Vonvon Bot（cli_a）');
 });
 
 it('bot repair-dir says how many directories it recorded and which will be made again (s36c2d)', async () => {
@@ -88,7 +88,7 @@ it('human output drops control characters from Feishu names and --json keeps the
   expect(h.out()).toBe('[2J坏31m名字  cli_a  已启用 · 已连接 · 0 个群 · 读取失败：读不到\n');
   h.clear(); await runBotList(h.io(true), h.daemon);
   expect(JSON.parse(h.out()).bots[0].name).toBe(name);
-  await expect(h.daemon(async () => pickBot([agent('cli_a', name)], 'x'))).rejects.toThrow(/^没有找到 bot「x」。现有的 bot：\[2J坏31m名字（cli_a）$/);
+  await expect(h.daemon(async () => pickBot([agent('cli_a', name)], 'x'))).rejects.toThrow(/^没有找到 Bot「x」。现有的 Bot：\[2J坏31m名字（cli_a）$/);
 });
 
 it('bot status prints the checklist with its links and next steps', async () => {
@@ -130,7 +130,7 @@ it('bot status prints the service step after the tools without counting it', asy
   const mac = harness({ snapshot: status({ platform: 'macos', version: '1', loginItem: false, dataPath: '/x', service: { state: 'not-installed', skipped: false } }), admin: async () => ({ kind: 'setupStatus', status: setup }) });
   await runBotStatus(undefined, mac.io(), mac.daemon);
   expect(mac.out()).toContain(['✓ Codex：可用 · 0.156.1', '· Claude：无法确认', '    在网页里点「去本机环境」（vonvon open）',
-    '! 登录电脑时自动运行 bot（推荐）：推荐打开', '    打开后 bot 跑在 macOS 的后台服务里：退出 app、注销再登录都在线，崩溃后自动重启。',
+    '! 登录电脑时自动运行 Bot（推荐）：推荐打开', '    打开后 Bot 跑在 macOS 的后台服务里：退出 app、注销再登录都在线，崩溃后自动重启。',
     '    运行 vonvon service install', '    在网页里点「跳过」（vonvon open）', '全部就绪。', ''].join('\n'));
   mac.clear(); await runBotStatus(undefined, mac.io(true), mac.daemon);
   expect(JSON.parse(mac.out())).toMatchObject({ ready: true, steps: expect.arrayContaining([expect.objectContaining({ id: 'service', done: false })]) });
@@ -189,11 +189,11 @@ function scanner(jobs: Job[], o: { reply?: unknown; dropAt?: number; onQr?: () =
 
 it('bot add draws the QR, draws it again for a new link, and prints the saved bot', async () => {
   const s = scanner([{ id: jobId, type: 'registerAgent', phase: 'running', message: '正在创建扫码会话。' }, qr('https://open.feishu.cn/q?a=1'), qr('https://open.feishu.cn/q?a=1', 'slow_down'),
-    qr('https://open.feishu.cn/q?a=1', 'domain_switched'), qr('https://open.larksuite.com/q?a=\u0007'), { id: jobId, type: 'registerAgent', phase: 'succeeded', message: '机器人已保存。', agentId: agentIdSchema.parse('cli_new') }]);
+    qr('https://open.feishu.cn/q?a=1', 'domain_switched'), qr('https://open.larksuite.com/q?a=\u0007'), { id: jobId, type: 'registerAgent', phase: 'succeeded', message: 'Bot 已保存。', agentId: agentIdSchema.parse('cli_new') }]);
   await s.add();
   expect(s.out()).toBe(['正在创建扫码会话。', '用飞书 App 扫下面的二维码，建一个新的飞书应用（14:32 前有效）：', '[QR https://open.feishu.cn/q?a=1]', '扫不了的话，在手机飞书里打开：https://open.feishu.cn/q?a=1', '等你在飞书里确认…（Ctrl-C 取消）',
     '识别到国际版租户，改用 larksuite.com。', '用飞书 App 扫下面的二维码，建一个新的飞书应用（14:32 前有效）：', '[QR https://open.larksuite.com/q?a=\u0007]', '扫不了的话，在手机飞书里打开：https://open.larksuite.com/q?a=', '等你在飞书里确认…（Ctrl-C 取消）',
-    '✓ 已保存 bot：新[2Jbot（cli_new），已启用。', '清单没读到：读取清单状态失败：飞书接口超时。稍后运行 vonvon bot status。', ''].join('\n'));
+    '✓ 已保存 Bot：新[2Jbot（cli_new），已启用。', '清单没读到：读取清单状态失败：飞书接口超时。稍后运行 vonvon bot status。', ''].join('\n'));
   expect(s.run).toHaveBeenCalledWith({ type: 'registerAgent' });
   expect(s.exitCode).not.toHaveBeenCalled();
   expect(s.interrupted()).toBe(true);
@@ -202,7 +202,7 @@ it('bot add draws the QR, draws it again for a new link, and prints the saved bo
     appId: 'cli_new', tenant: 'feishu', credentials: { ok: true }, connection: { running: true, connection: 'connected' }, event: { state: 'unpublished' },
     scopes: { missingRequired: ['im:message:readonly'], grantUrl: 'https://open.feishu.cn/app/cli_new/auth' }, eventConfigUrl: 'https://open.feishu.cn/app/cli_new/event', consoleUrl: 'https://open.feishu.cn/app/cli_new', cardCallback: { confirmed: false },
   };
-  const read = scanner([{ id: jobId, type: 'registerAgent', phase: 'succeeded', message: '机器人已保存。', agentId: agentIdSchema.parse('cli_new') }], { admin: async () => ({ kind: 'setupStatus', status: setup }) });
+  const read = scanner([{ id: jobId, type: 'registerAgent', phase: 'succeeded', message: 'Bot 已保存。', agentId: agentIdSchema.parse('cli_new') }], { admin: async () => ({ kind: 'setupStatus', status: setup }) });
   await read.add();
   expect(read.out()).toContain('接下来在飞书开发者后台做完这几步，做完一步运行 vonvon bot status 看进度：\n✓ 飞书应用：凭据有效\n! 权限：还缺 1 项\n    一键开权限会预选下面这些权限，在飞书开发者后台确认即可。\n    - im:message:readonly\n');
 });
@@ -251,8 +251,8 @@ it('group pending leaves out groups already bound to this bot', async () => {
 });
 
 it('group pending reports the daemon refusal and still closes', async () => {
-  const h = harness({ snapshot: one(), run: async () => { throw new RpcError('conflict', '机器人未启用或尚未运行'); } });
-  await expect(runGroupPending({}, h.io(), h.daemon)).rejects.toThrow('查待绑定的群失败：机器人未启用或尚未运行');
+  const h = harness({ snapshot: one(), run: async () => { throw new RpcError('conflict', 'Bot 没启用或没在运行'); } });
+  await expect(runGroupPending({}, h.io(), h.daemon)).rejects.toThrow('查待绑定的群失败：Bot 没启用或没在运行');
   expect(h.close).toHaveBeenCalledTimes(1);
 });
 
@@ -325,7 +325,7 @@ it('settings set saves with the section revision and explains each refusal', asy
   const results: unknown[] = [
     { kind: 'saved', section: { scope, section: 'permission', value: section({ mode: 'full' }) }, effects: [{ fields: ['mode'], when: 'next-turn', detail: '下一轮生效。' }] },
     { kind: 'conflict', current: {} }, { kind: 'rejected', fields: [{ field: 'mode', message: '后端不支持此权限档位' }] },
-    { kind: 'unavailable', reason: { kind: 'readonly', reason: 'owner-offline', message: '请先启动此 Agent，再编辑设置' } },
+    { kind: 'unavailable', reason: { kind: 'readonly', reason: 'owner-offline', message: '这个 Bot 没在运行，运行起来后才能改设置' } },
   ];
   const settings = vi.fn(async (request: { type: string }): Promise<unknown> => request.type === 'read' ? { kind: 'view', view } : { kind: 'saved', result: results.shift() });
   const h = harness({ snapshot: one(undefined, [member('cli_a', 'oc_pay', 'pay')]), settings });
@@ -333,7 +333,7 @@ it('settings set saves with the section revision and explains each refusal', asy
   expect(settings).toHaveBeenNthCalledWith(1, { type: 'read', scope });
   expect(settings).toHaveBeenNthCalledWith(2, { type: 'save', edit: { scope, section: 'permission', revision: 'rev-mode', patch: { mode: 'full' } } });
   expect(h.out()).toBe('已保存 permission.mode = full。\n下一轮生效。\n');
-  for (const message of ['这项设置刚在别处改过，没有保存。重新运行一次。', '没有保存：mode：后端不支持此权限档位', '请先启动此 Agent，再编辑设置']) {
+  for (const message of ['这项设置刚在别处改过，没有保存。重新运行一次。', '没有保存：mode：后端不支持此权限档位', '这个 Bot 没在运行，运行起来后才能改设置']) {
     await expect(runSettingsSet(['permission.mode=full'], { group: 'pay' }, h.io(), h.daemon)).rejects.toThrow(message);
   }
   await expect(runSettingsSet(['permission.mode=full'], { group: 'pay', session: 'omt_x' }, h.io(), h.daemon)).rejects.toThrow('--group 和 --session 只能选一个。');
@@ -364,7 +364,7 @@ it('settings get prints each section, gives the view as JSON, and lists a group\
     comments: section({ backend: 'codex-appserver', selection: { kind: 'default' } }, 'r', { backend: 'codex-appserver', selection: { kind: 'explicit', model: 'gpt-5.5', effort: 'medium' } }),
   } };
   // guestMode: the view's deprecated mirror of the one tier (s15c), not printed.
-  const projectView = { scope: { kind: 'project', botId: 'cli_a', projectName: 'pay' }, sections: { permission: { ...section({ mode: 'qa', guestMode: 'qa' }), access: { kind: 'readonly', reason: 'owner-offline', message: '请先启动此 Agent，再编辑设置' } } },
+  const projectView = { scope: { kind: 'project', botId: 'cli_a', projectName: 'pay' }, sections: { permission: { ...section({ mode: 'qa', guestMode: 'qa' }), access: { kind: 'readonly', reason: 'owner-offline', message: '这个 Bot 没在运行，运行起来后才能改设置' } } },
     identity: { chatId: 'oc_pay', backend: 'codex-appserver', cwd: '/home/u/pay', kind: 'multi', fullOnly: 'Linux 上只能选完全访问。' } };
   const sessions = [{ threadId: 'omt_old', chatId: 'oc_pay', summary: '旧的', backend: 'codex-appserver', createdAt: 1, updatedAt: 1 },
     { threadId: 'omt_new', chatId: 'oc_pay', summary: '修'.repeat(50), backend: 'codex-appserver', model: 'gpt-5.5', createdAt: 2, updatedAt: 2 }];
@@ -372,13 +372,13 @@ it('settings get prints each section, gives the view as JSON, and lists a group\
     ? { kind: 'sessions', sessions } : { kind: 'view', view: request.scope?.kind === 'project' ? projectView : agentView }) as SettingsReply);
   const h = harness({ snapshot: one(undefined, [member('cli_a', 'oc_pay', 'pay')]), settings });
   await runSettingsGet(undefined, {}, h.io(), h.daemon);
-  expect(h.out()).toContain('bot Vonvon Bot（cli_a）的设置\n[cards]\n  showToolCalls = true\n  showModel = running\n[comments]\n  backend = codex-appserver\n');
+  expect(h.out()).toContain('Bot Vonvon Bot（cli_a）的设置\n[cards]\n  showToolCalls = true\n  showModel = running\n[comments]\n  backend = codex-appserver\n');
   expect(h.out()).toContain('  selection = {"kind":"default"}（生效：{"kind":"explicit","model":"gpt-5.5","effort":"medium"}）\n');
   h.clear(); await runSettingsGet(undefined, {}, h.io(true), h.daemon);
   expect(Object.keys(JSON.parse(h.out()).view.sections)).toEqual(['cards', 'comments']);
   h.clear(); await runSettingsGet(undefined, { group: 'pay' }, h.io(), h.daemon);
   const out = h.out();
-  expect(out).toContain('群 pay（oc_pay）· Codex · 多会话（@ 我开新会话） · /home/u/pay\n[permission]（只读：请先启动此 Agent，再编辑设置）\n  mode = qa\n  Linux 上只能选完全访问。\n');
+  expect(out).toContain('群 pay（oc_pay）· Codex · 多会话（@ 我开新会话） · /home/u/pay\n[permission]（只读：这个 Bot 没在运行，运行起来后才能改设置）\n  mode = qa\n  Linux 上只能选完全访问。\n');
   expect(out).toContain('会话（最近 2 个，共 2 个；看单个会话：vonvon settings get --session <id>）');
   expect(out.indexOf('omt_new')).toBeLessThan(out.indexOf('omt_old'));
   expect(out).toContain(`gpt-5.5  ${'修'.repeat(40)}…\n`);
@@ -408,19 +408,19 @@ it('judge: set takes the selection JSON, get prints a row per backend and the pr
   const h = harness({ snapshot: one(undefined, [member('cli_a', 'oc_pay', 'pay')]), settings });
 
   await runSettingsGet(undefined, {}, h.io(), h.daemon);
-  expect(h.out()).toContain(['[judge]', '  selection = {"kind":"default"}', '  Codex 的群用：gpt-6-luna，推理强度 low（默认）', '  Claude 的群用：sonnet，关思考（bot 设的）',
+  expect(h.out()).toContain(['[judge]', '  selection = {"kind":"default"}', '  Codex 的群用：gpt-6-luna，推理强度 low（默认）', '  Claude 的群用：sonnet，关思考（Bot 设的）',
     '  智能提示词：内置默认。要改就新建 /d/bots/cli_a/SMART.md，删掉它就恢复默认', '  只在智能模式的群里用', ''].join('\n'));
   expect(h.out()).not.toContain('默认提示词全文');
   h.clear(); await runSettingsGet('judge', {}, h.io(), h.daemon);
   // multi-line texts keep their breaks: printing strips control characters line by line
   for (const text of ['—— 智能提示词 ——\n默认提示词全文\n第二行\n', '—— 程序附的格式行（只读）：主区被 @ ——\n格式B\n只输出 JSON\n', '—— 程序给模型的输入（示例，只读）——\n【群】产品讨论\n【你】小P\n—— 模型还会看到（只读）——\nCodex 的说明\nClaude 的说明']) expect(h.out()).toContain(text);
   h.clear(); await runSettingsGet(undefined, { group: 'pay' }, h.io(), h.daemon);
-  expect(h.out()).toContain(`  selection = {"kind":"default"}（生效：${JSON.stringify(llm)}）\n  智能提示词：用 bot 的 SMART.md。要只改这个群就新建 /d/bots/cli_a/groups/oc_pay/SMART.md，删掉它就回到 bot 的\n`);
+  expect(h.out()).toContain(`  selection = {"kind":"default"}（生效：${JSON.stringify(llm)}）\n  智能提示词：用 Bot 的 SMART.md。要只改这个群就新建 /d/bots/cli_a/groups/oc_pay/SMART.md，删掉它就回到 Bot 的\n`);
 
   // a decision model on the bot: every backend's row says so
   agentView.judgeByBackend = { 'codex-appserver': { model: 'jev-latest', provider: 'typesafe', source: 'bot' }, 'claude-agent': { model: 'jev-latest', provider: 'typesafe', source: 'bot' } } as never;
   h.clear(); await runSettingsGet('judge', {}, h.io(), h.daemon);
-  expect(h.out()).toContain('  Codex 的群用：决策模型 typesafe 的 jev-latest（bot 设的）\n  Claude 的群用：决策模型 typesafe 的 jev-latest（bot 设的）\n');
+  expect(h.out()).toContain('  Codex 的群用：决策模型 typesafe 的 jev-latest（Bot 设的）\n  Claude 的群用：决策模型 typesafe 的 jev-latest（Bot 设的）\n');
   // a kind from a newer daemon: shown as sent, and said so
   const future = { kind: 'oracle', provider: 'x', model: 'y' };
   agentView.sections.judge = section({ selection: future }, 'rev-judge', { selection: future }) as never;
@@ -436,7 +436,7 @@ it('judge: set takes the selection JSON, get prints a row per backend and the pr
   await expect(runSettingsSet(['judge.selection={"kind":"default"}'], {}, old.io(), old.daemon)).rejects.toThrow('daemon 没有 judge 这一节。daemon 可能比命令行旧。');
   // asked for by name, a section the daemon lacks is said, not left out
   await runSettingsGet('judge', {}, old.io(), old.daemon);
-  expect(old.out()).toBe('bot Vonvon Bot（cli_a）的设置\ndaemon 没有 judge 这一节。daemon 可能比命令行旧。\n');
+  expect(old.out()).toBe('Bot Vonvon Bot（cli_a）的设置\ndaemon 没有 judge 这一节。daemon 可能比命令行旧。\n');
   old.clear(); await runSettingsGet(undefined, {}, old.io(), old.daemon);
-  expect(old.out()).toBe('bot Vonvon Bot（cli_a）的设置\n');
+  expect(old.out()).toBe('Bot Vonvon Bot（cli_a）的设置\n');
 });

@@ -54,7 +54,7 @@ export interface JudgeDeps {
 /** Ends a judgement early; the reason of the shared AbortController. */
 class JudgeAbort extends Error {
   constructor(readonly kind: 'timeout' | 'aborted' | 'closed') {
-    super(kind === 'timeout' ? '判断超时' : kind === 'aborted' ? '调用方放弃了' : 'bot 正在关闭');
+    super(kind === 'timeout' ? '判断超时' : kind === 'aborted' ? '调用方放弃了' : 'Bot 正在关闭');
     this.name = 'JudgeAbort';
   }
 }

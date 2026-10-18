@@ -13,7 +13,7 @@ it('bundled CLI update points to its desktop owner before querying npm',async()=
   const output = vi.spyOn(console,'log').mockImplementation(()=>{});
   try {
     await runUpdate();
-    expect(output).toHaveBeenCalledWith('此 CLI 随 Vonvon Bridge 桌面应用提供，请在桌面应用中更新。');
+    expect(output).toHaveBeenCalledWith('这个命令行随 Vonvon Bot 桌面应用提供，请在桌面应用里更新。');
     expect(spawnProcess).not.toHaveBeenCalled();
   } finally { output.mockRestore(); }
 });

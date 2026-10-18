@@ -1,9 +1,9 @@
 import {expect, it} from 'vitest';
 import {renderToStaticMarkup} from 'react-dom/server';
-import type {AdminSetupStatus, Agent, ApplicationCrashes, DesktopSnapshot, NotReplied, ToolState} from '@vonvon/protocol';
+import {formatTime, type AdminSetupStatus, type Agent, type ApplicationCrashes, type DesktopSnapshot, type NotReplied, type ToolState} from '@vonvon/protocol';
 import {createClient} from '../../client/src/client';
 import {ClientProvider} from '../src/client-context';
-import {crashBars, DiagnosticsPanel, scopeView, setupView, shortTime} from '../src/management/DiagnosticsPanel';
+import {crashBars, DiagnosticsPanel, scopeView, setupView} from '../src/management/DiagnosticsPanel';
 import {diagnosticsSection, findEntries, searchEntries, settingAnchor} from '../src/search';
 
 const client = createClient({isOpen: () => true, onMessage: () => {}, onClose: () => {}, onError: () => {}, send: () => {}, close: async () => {}});
@@ -28,7 +28,7 @@ it('shows the lock holder across retries, and gives a pause priority', () => {
   const waiting = { ...agent, lockHeld: { since: now, pid: 123 } };
   expect(render([waiting])).toContain('PID 123');
   expect(render([{ ...waiting, running: false }])).toContain('等待占用的进程退出');
-  expect(render([{ ...waiting, lockHeld: { since: now } }])).toContain('另一个进程占着这个 bot');
+  expect(render([{ ...waiting, lockHeld: { since: now } }])).toContain('另一个进程占着这个 Bot');
   expect(render([{ ...waiting, paused: { since: now, crashes: 3 } }])).not.toContain('等待占用的进程退出');
 });
 
@@ -90,7 +90,7 @@ it('shows a red bar per paused bot that starts it alone again, and the paused da
     {at: now - 1000, kind: 'forced', reason: '被系统强制结束', uptimeMs: 0, paused: true},
   ]});
   expect(html).toContain('role="alert"');
-  expect(html).toContain('「值班助手」10 分钟内崩溃了 3 次，已停止自动重启，别的 bot 照常。');
+  expect(html).toContain('「值班助手」10 分钟内崩溃了 3 次，已停止自动重启，别的 Bot 照常。');
   expect(html).toContain('恢复运行');
   expect(html).toContain('已暂停');
   expect(html).toContain('被系统强制结束（SIGKILL），运行了 12 秒');
@@ -138,8 +138,8 @@ it('says 全部完成 with the optional events the checklist warns about, and le
 
 it('writes today\'s time short and another day\'s with its date, and finds each bot from search', () => {
   const at = new Date(2026, 9, 14, 14, 2).getTime();
-  expect(shortTime(at, new Date(2026, 9, 14, 20, 0).getTime())).toBe('14:02');
-  expect(shortTime(at, new Date(2026, 9, 15, 9, 0).getTime())).toBe('10月14日 14:02');
+  expect(formatTime(at, {now: new Date(2026, 9, 14, 20, 0).getTime()})).toBe('14:02');
+  expect(formatTime(at, {now: new Date(2026, 9, 15, 9, 0).getTime()})).toBe('10月14日 14:02');
   const entry = findEntries(searchEntries(snapshot([agent])), '没回的消息').find(item => item.id === `${agent.id}-diagnostics`);
   expect(entry?.destination).toEqual({page: 'diagnostics', section: diagnosticsSection(agent.id)});
 });
@@ -155,7 +155,7 @@ it('lists the groups an older version put in a wrong directory, only when there 
   </ClientProvider>);
   expect(html).toContain('群目录');
   expect(html).toContain('3 个群放错了位置');
-  expect(html).toContain('「发布群」用的是某个 bot 自己的目录');
+  expect(html).toContain('「发布群」用的是某个 Bot 自己的目录');
   expect(html).toContain('「点」在 Vonvon 的数据目录里');
   expect(html).toContain('「家」用的是 Vonvon 数据目录的上级文件夹');
   expect(html).toContain('点「更换目录」');

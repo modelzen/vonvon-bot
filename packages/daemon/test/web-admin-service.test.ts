@@ -243,7 +243,7 @@ it('Host 退出等待在途用量读取，再清理 Codex 常驻客户端，并�
     await Promise.resolve();
     expect(closed).toBe(false);
     expect(events).toEqual([]);
-    await expect(account.accountUsage(true)).rejects.toThrow('Host 正在退出');
+    await expect(account.accountUsage(true)).rejects.toThrow('daemon 正在退出');
     releaseUsage(usage);
     expect(await read).toEqual(usage);
     await closing;

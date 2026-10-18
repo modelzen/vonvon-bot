@@ -65,7 +65,7 @@ export async function runHostRuntime(options: { bot?: string; port?: number; man
       if (previous && isPidLockOwnerRunning(previous)) log.info('daemon-startup', 'stale_owner_replaced', { pid: previous.pid });
       owner = await acquirePidLock(paths.appDir, { hostMutexHeld: true });
       run = openHostRun({ root: paths.appDir, startedAt: owner.startedAt, version: bridgeVersion(), intent: () => control.intent ?? (control.requested ? 'stop' : 'running'), log });
-      if (run.paused) console.log(`daemon 已暂停：10 分钟内崩溃了 ${run.pauseCrashes ?? 3} 次，bot 都没有启动。查完原因后运行 vonvon daemon restart 恢复运行。`);
+      if (run.paused) console.log(`daemon 已暂停：10 分钟内崩溃了 ${run.pauseCrashes ?? 3} 次，Bot 都没有启动。查完原因后运行 vonvon daemon restart 恢复运行。`);
     } else if (options.bot) {
       // A supervised bot child (s18a): its records go under the host's run and chain, and a host that died does not
       // turn the drain's next console.log into a crash.

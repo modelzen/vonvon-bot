@@ -166,7 +166,7 @@ const render = (node: React.ReactNode) => renderToStaticMarkup(<ClientProvider c
 
 it('renders the grant step with both ways out before the first read', () => {
   const html = render(<GrantStep agentId={agentId} onOpenChecklist={() => {}} onDone={() => {}}/>);
-  expect(html).toContain('机器人已注册');
+  expect(html).toContain('Bot 已注册');
   expect(html).toContain('第 2 步 · 开权限');
   expect(html).toContain('正在检测…');
   expect(html).toContain('去首次运行清单');

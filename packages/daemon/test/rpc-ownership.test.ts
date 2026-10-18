@@ -114,7 +114,7 @@ describe('RPC owner admission', () => {
         expect(await client.wait(frame => frame.type === 'error' && frame.id === id)).toMatchObject({ code: 'invalid_request' });
       }
       expect(act).not.toHaveBeenCalled(); expect(collaboration).not.toHaveBeenCalled();
-      expect(await client.call(requestSchema.parse({ type: 'request', id: 'wrong-owner', method: 'settings', payload: { type: 'act', action } }))).toMatchObject({ type: 'error', code: 'invalid_request', message: '设置不属于此 Agent' });
+      expect(await client.call(requestSchema.parse({ type: 'request', id: 'wrong-owner', method: 'settings', payload: { type: 'act', action } }))).toMatchObject({ type: 'error', code: 'invalid_request', message: '设置不属于这个 Bot' });
       expect(writePreferences).not.toHaveBeenCalled();
       await client.close();
     } finally { await fixture.close(); }

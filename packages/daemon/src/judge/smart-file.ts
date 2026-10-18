@@ -70,7 +70,7 @@ async function readLayer(path: string): Promise<string | undefined> {
 export async function readSmartPrompt(appId: string, chatId?: string, dir?: string): Promise<SmartPrompt> {
   // The protocol's own id rules, so `../` never reaches a path and an appId accepted elsewhere is
   // accepted here too.
-  if (!agentIdSchema.safeParse(appId).success) throw new SmartPromptError('bot 的 id 不对');
+  if (!agentIdSchema.safeParse(appId).success) throw new SmartPromptError('Bot 的 id 不对');
   if (chatId !== undefined && !groupIdSchema.safeParse(chatId).success) throw new SmartPromptError('群的 id 不对');
   const base = dir ?? botDir(appId);
   const botPath = join(base, 'SMART.md');

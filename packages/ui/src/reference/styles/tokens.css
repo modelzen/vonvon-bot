@@ -1,8 +1,27 @@
+/*
+ * The only :root in the UI (u01, docs/v1-plan.md 界面打底). The values the app showed before u01 came from three
+ * :root blocks (this file, then system-settings.css, then visual-polish.css); they are merged here, and the
+ * contrast and type values below are the ones u01 settled. Files that still write colours, sizes or weights
+ * literally move onto these tokens in u03.
+ * Contrast is WCAG 2 against white (#fff) and the window canvas (#f5f5f7); 4.5:1 is the floor for text.
+ */
 :root {
   color-scheme: light;
 
   --font-family-system: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   --font-family-mono: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+
+  /* Type scale (F04). The root font size is 13px (system-settings.css), so sizes are in px. */
+  --font-size-page-title: 22px; /* with --font-weight-semibold */
+  /* Between the two: Bot names in list rows, group headings and dialog titles, like macOS Title 3. u03 moves
+     the 14px to 19px literals here and the 20px and 21px headings onto the page title. */
+  --font-size-title: 15px; /* with --font-weight-semibold */
+  --font-size-section-title: 13px; /* with --font-weight-semibold */
+  --font-size-body: 13px;
+  --font-size-secondary: 12px;
+  --font-size-caption: 11px; /* the smallest size; nothing uses 10px */
+  /* Older rem steps: against the 13px root they come out smaller than their names (md is 10.6px). u03 moves
+     their users onto the scale above and then removes them. */
   --font-size-2xs: 0.625rem;
   --font-size-xs: 0.6875rem;
   --font-size-sm: 0.75rem;
@@ -12,10 +31,11 @@
   --font-size-2xl: 1.3125rem;
   --font-size-3xl: 1.75rem;
   --font-size-4xl: 2rem;
+  /* PingFang only has fixed weights, so these four are all there are. */
   --font-weight-regular: 400;
-  --font-weight-medium: 510;
+  --font-weight-medium: 500;
   --font-weight-semibold: 600;
-  --font-weight-bold: 650;
+  --font-weight-bold: 700;
   --line-height-tight: 1.18;
   --line-height-body: 1.55;
   --line-height-relaxed: 1.7;
@@ -54,67 +74,82 @@
   --radius-xs: 0.375rem;
   --radius-sm: 0.5rem;
   --radius-md: 0.625rem;
-  --radius-lg: 0.875rem;
-  --radius-xl: 1.125rem;
+  --radius-lg: 14px;
+  --radius-xl: 16px;
   --radius-2xl: 1.5rem;
   --radius-pill: 999px;
 
-  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.05);
-  --shadow-sm: 0 8px 24px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 18px 48px rgba(0, 0, 0, 0.09), 0 2px 8px rgba(0, 0, 0, 0.05);
+  --shadow-xs: 0 1px 2px rgba(16, 24, 40, 0.055);
+  --shadow-sm: 0 7px 22px rgba(16, 24, 40, 0.065), 0 1px 3px rgba(16, 24, 40, 0.04);
+  --shadow-md: 0 18px 48px rgba(16, 24, 40, 0.12), 0 2px 8px rgba(16, 24, 40, 0.055);
   --shadow-lg: 0 32px 90px rgba(0, 0, 0, 0.3);
-  --focus-ring: 0 0 0 3px rgba(0, 122, 255, 0.2);
 
-  --duration-instant: 80ms;
-  --duration-fast: 120ms;
+  --duration-instant: 90ms;
+  --duration-fast: 140ms;
   --duration-base: 180ms;
   --duration-slow: 320ms;
-  --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-standard: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-emphasized: cubic-bezier(0.16, 1, 0.3, 1);
 
   --material-blur-sm: 12px;
   --material-blur-md: 22px;
   --material-saturation: 160%;
 
+  /* Surfaces. The canvas is the window background, defined once (F01). */
   --color-canvas: #f5f5f7;
-  --color-canvas-raised: #fafafa;
+  --color-canvas-raised: #ffffff;
   --color-surface: #ffffff;
-  --color-surface-translucent: rgba(255, 255, 255, 0.78);
-  --color-surface-elevated: rgba(255, 255, 255, 0.94);
-  --color-surface-muted: #efeff1;
-  --color-surface-hover: #f5f5f7;
-  --color-text: #1d1d1f;
-  --color-text-secondary: #6e6e73;
-  --color-text-tertiary: #747478;
-  --color-text-disabled: #b0b0b5;
-  --color-border: rgba(0, 0, 0, 0.1);
-  --color-border-strong: rgba(0, 0, 0, 0.17);
-  --color-separator: rgba(0, 0, 0, 0.08);
-  --color-overlay: rgba(0, 0, 0, 0.5);
+  --color-surface-translucent: rgba(255, 255, 255, 0.88);
+  --color-surface-elevated: rgba(255, 255, 255, 0.98);
+  --color-surface-muted: #f2f2f2;
+  --color-surface-hover: rgba(30, 30, 36, 0.048);
+  --surface: var(--color-surface); /* pending-groups.css reads this name */
 
-  --color-accent: #007aff;
-  --color-accent-hover: #006ee6;
-  --color-accent-active: #005ec4;
-  --color-accent-subtle: #eaf4ff;
+  /* Grey text, darkest first (F03).
+     text      #1c1c1e  17.0:1 on white, 15.6:1 on the canvas
+     secondary #55555b   7.4:1 on white,  6.8:1 on the canvas (was #636369, only 1.18:1 from tertiary: one grey to the eye)
+     tertiary  #6e6e73   5.1:1 on white,  4.7:1 on the canvas; the lightest grey for text (was #85858b, 3.7:1)
+     disabled  #b0b0b5   2.2:1, only on disabled controls, which WCAG leaves out
+     Tertiary cannot get lighter, so secondary is the one that moved; the two are 1.46:1 apart. */
+  --color-text: #1c1c1e;
+  --color-text-secondary: #55555b;
+  --color-text-tertiary: #6e6e73;
+  --color-text-disabled: #b0b0b5;
+  --color-border: rgba(60, 60, 67, 0.13);
+  --color-border-strong: rgba(60, 60, 67, 0.22);
+  --color-separator: var(--system-separator);
+  --color-overlay: rgba(0, 0, 0, 0.16); /* behind dialogs */
+
+  /* The one blue (F01, F03): buttons, switches, the selected sidebar row, links and focus.
+     #086bdc is 5.1:1 on white and 4.7:1 on the canvas, so small links need no darker blue, and white on it is 5.1:1.
+     Before u01 buttons were #0878ef (3.9:1 on the canvas) and the sidebar #086bdc. */
+  --color-accent: #086bdc;
+  --color-accent-hover: #0760c6;
+  --color-accent-active: #0656b0;
+  --color-accent-subtle: #edf6ff;
   --color-accent-muted: #cfe4ff;
   --color-on-accent: #ffffff;
+  --color-link: var(--color-accent);
+  --color-focus: var(--color-accent);
+  --focus-ring: 0 0 0 3px rgba(8, 107, 220, 0.24);
 
-  --color-sidebar: rgba(235, 235, 237, 0.86);
+  --color-sidebar: var(--system-sidebar);
   --color-sidebar-elevated: rgba(255, 255, 255, 0.58);
   --color-sidebar-text: #1d1d1f;
   --color-sidebar-secondary: #5f5f64;
   --color-sidebar-muted: #68686d;
   --color-sidebar-hover: rgba(0, 0, 0, 0.045);
-  --color-sidebar-selected: rgba(0, 122, 255, 0.12);
+  --color-sidebar-selected: var(--color-accent);
   --color-sidebar-border: rgba(0, 0, 0, 0.08);
 
+  /* Status text sits on its own -bg; every pair is 4.5:1 or more. Success was #248a3d (4.0:1 on its -bg). */
   --color-status-neutral: #6e6e73;
   --color-status-neutral-bg: #f2f2f7;
   --color-status-neutral-border: #d1d1d6;
   --color-status-info: #0066cc;
   --color-status-info-bg: #edf6ff;
   --color-status-info-border: #b9ddff;
-  --color-status-success: #248a3d;
+  --color-status-success: #1e7b34;
   --color-status-success-bg: #edf8f0;
   --color-status-success-border: #b9dec3;
   --color-status-warning: #9a6700;
@@ -123,12 +158,41 @@
   --color-status-danger: #d70015;
   --color-status-danger-bg: #fff0f1;
   --color-status-danger-border: #ffc2c7;
+  --color-warning: var(--color-status-warning); /* environment.css reads this name */
+
+  /* Sidebar and page icons: one colour each, used from u03 on instead of the copies in three files. */
+  --color-icon-purple: #8a56de;
+  --color-icon-blue: #1687f8;
+  --color-icon-green: #34c759;
+  --color-icon-teal: #10a9c9;
+  --color-icon-orange: #ff9f0a;
+  --color-icon-pink: #ff375f;
+  --color-icon-grey: #6c6c70;
+  --color-icon-neutral: #8e8e93;
+  --color-avatar-bot: #8552c4;
+  --color-avatar-bot-bg: #efe7fc;
+  --color-avatar-group: #3188a9;
+  --color-avatar-group-bg: #e0f0f7;
+
+  /* Bars and the usage heat map, in the accent's hue. Level 0 is an empty cell and a bar's track. */
+  --color-track: #ececf0;
+  --color-chart-1: #cfe4ff;
+  --color-chart-2: #8cbcf5;
+  --color-chart-3: #3f8ae6;
+  --color-chart-4: #086bdc;
 
   --color-qr-background: #ffffff;
   --color-qr-foreground: #1d1d1f;
 
+  /* macOS-settings names kept from the reference styles; u03 moves their users onto the tokens above. */
+  --system-group: #f7f7f7;
+  --system-separator: rgba(60, 60, 67, 0.105);
+  --system-search: rgba(118, 118, 128, 0.12);
+  --system-sidebar: rgba(249, 249, 249, 0.94);
+  --system-blue: var(--color-accent);
 }
 
+/* These used to lose to the later :root blocks; with one :root they apply again. */
 @media (prefers-reduced-motion: reduce) {
   :root {
     --duration-instant: 0.01ms;

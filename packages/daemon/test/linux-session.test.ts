@@ -29,7 +29,7 @@ it('turns linger on for this account without a password prompt, and gives the su
   expect(done.run).toHaveBeenCalledWith('loginctl', ['--no-ask-password', 'enable-linger'], 30_000);
   const denied = session([no]);
   expect(await enableLinger(denied.d)).toEqual({ ok: false, detail: 'Access denied' });
-  expect(lingerLine({ state: 'off' }, 'ops')).toBe('没开 linger：退出最后一个登录会话后 bot 会停，开机也不启动。要开就运行 loginctl enable-linger（不行再用 sudo loginctl enable-linger ops）。');
+  expect(lingerLine({ state: 'off' }, 'ops')).toBe('没开 linger：退出最后一个登录会话后 Bot 会停，开机也不启动。要开就运行 loginctl enable-linger（不行再用 sudo loginctl enable-linger ops）。');
   expect(lingerLine({ state: 'unknown', detail: '找不到 loginctl' }, 'ops')).toMatch(/^查不到 linger 的状态：找不到 loginctl。要开就运行/);
 });
 

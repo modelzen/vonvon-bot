@@ -20,9 +20,9 @@ describe("login-time service (s08)", () => {
   });
   it("adds whether the bot was started again", () => {
     expect(serviceActionMessage(failed({ reason: "other", kind: "install_rolled_back", detail: "Bootstrap failed", restarted: { pid: 7 } })))
-      .toBe("没装上，已经恢复原样：Bootstrap failed。已按原来的端口重新起了 bot（分离运行）。");
+      .toBe("没装上，已经恢复原样：Bootstrap failed。已按原来的端口重新起了 Bot（分离运行）。");
     expect(serviceActionMessage({ action: "uninstall", phase: "done", ok: true, kind: "uninstalled", startedAt: 1, restartError: "timed out" }))
-      .toBe("bot 现在没在运行：在终端运行 vonvon daemon start。");
+      .toBe("Bot 现在没在运行：在终端运行 vonvon daemon start。");
   });
   it("carries the service field and the skip request", () => {
     const application = { platform: "macos", version: "1", loginItem: false, dataPath: "/tmp",

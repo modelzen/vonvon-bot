@@ -73,7 +73,7 @@ export async function registerBotFromCredentials(
     return {
       ok: false,
       code: 'invalid_input',
-      reason: '未获取到扫码人的飞书身份，已拒绝保存无管理员的机器人配置。请重新扫码。',
+      reason: '未获取到扫码人的飞书身份，已拒绝保存没有管理员的 Bot 配置。请重新扫码。',
     };
   }
   if (!APP_ID_RE.test(appId)) {
@@ -85,7 +85,7 @@ export async function registerBotFromCredentials(
   }
 
   if ((await loadBots()).bots.some(bot => bot.appId === appId)) {
-    return { ok: false, code: 'already_registered', reason: '此 Agent 已存在，请使用刷新凭据。' };
+    return { ok: false, code: 'already_registered', reason: '这个 Bot 已经注册过，请用「重新扫码」刷新凭据。' };
   }
 
   // 真探活：换 tenant_access_token，密钥无效直接拒绝——不让坏密钥落进 keystore。
@@ -112,7 +112,7 @@ export async function registerBotFromCredentials(
       await saveConfig(cfg, botPaths(appId).configFile, snapshot);
     });
     if (result.kind === 'already-registered') {
-      return { ok: false, code: 'already_registered', reason: '此 Agent 已存在，请使用刷新凭据。' };
+      return { ok: false, code: 'already_registered', reason: '这个 Bot 已经注册过，请用「重新扫码」刷新凭据。' };
     }
     const { name } = result.entry;
 

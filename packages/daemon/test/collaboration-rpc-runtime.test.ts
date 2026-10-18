@@ -91,7 +91,7 @@ it('s36d1: answers a creation that may have made a group as not known, and passe
   try {
     await client.ready();
     let index = 0;
-    for (const failure of [new Error('bot 进程 180000ms 未响应（可能正忙或已假死）'), new Error('child exited'), new Error('可能已经建好了，先去飞书看一眼再重试')]) {
+    for (const failure of [new Error('Bot 进程 180000ms 未响应（可能正忙或已假死）'), new Error('child exited'), new Error('可能已经建好了，先去飞书看一眼再重试')]) {
       collaboration.mockRejectedValueOnce(failure);
       expect(await client.call({ type: 'request', id: `unknown-${index++}`, method: 'collaboration', payload: create })).toMatchObject({ type: 'error', code: 'outcome_unknown', message: '可能已经建好了，先去飞书看一眼再重试' });
     }

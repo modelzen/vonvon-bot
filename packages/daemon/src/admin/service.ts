@@ -484,7 +484,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
   let closing: Promise<void> | undefined;
   const credentials = async (botId: string) => {
     const cfg = await loadConfig(botPaths(botId).configFile);
-    if (!isComplete(cfg)) throw new Error('机器人配置不完整');
+    if (!isComplete(cfg)) throw new Error('这个 Bot 的配置不完整');
     return { appId: botId, tenant: cfg.accounts.app.tenant, appSecret: await resolveAppSecret(cfg) };
   };
   const avatars = createAgentAvatarProvider({ credentials });
@@ -581,7 +581,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
 
   return {
     accountUsage(force) {
-      if (closing) return Promise.reject(new Error('Host 正在退出'));
+      if (closing) return Promise.reject(new Error('daemon 正在退出'));
       const read = Promise.resolve().then(() => (deps.fetchAccountUsage ?? fetchUsageBundle)(force));
       inFlightUsage.add(read);
       void read.then(
@@ -637,7 +637,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     },
     async getVoice(botId: string): Promise<VoiceView> {
       const cfg = await loadConfig(botPaths(botId).configFile);
-      if (!isComplete(cfg)) throw new Error('机器人配置不完整');
+      if (!isComplete(cfg)) throw new Error('这个 Bot 的配置不完整');
       return voiceView(cfg);
     },
     async setVoice(botId: string, value: VoiceAction): Promise<void> {
@@ -719,7 +719,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     async eventDiagnosis(botId: string): Promise<EventDiagnosis> {
       try {
         const cfg = await loadConfig(botPaths(botId).configFile);
-        if (!isComplete(cfg)) return { state: 'unchecked', reason: '配置缺失（该 bot 尚未完成初始化）' };
+        if (!isComplete(cfg)) return { state: 'unchecked', reason: '配置缺失（这个 Bot 还没初始化完）' };
         const { app } = cfg.accounts;
         const secret = await resolveAppSecret(cfg);
         return await diagnoseEventSubscription(app.id, secret, app.tenant);
@@ -777,7 +777,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       if (!cfg || !isComplete(cfg)) {
         return {
           ...base,
-          credentials: { ok: false, reason: '配置缺失（该机器人尚未完成注册或文件损坏）' },
+          credentials: { ok: false, reason: '配置缺失（这个 Bot 还没注册完，或者文件损坏了）' },
           connection: { running: run.running, connection: run.connection },
           event: { state: 'unchecked', reason: '配置缺失，无法诊断事件订阅' },
           scopes: { grantUrl: buildScopeGrantUrl(botId, tenant) },
@@ -848,7 +848,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
         return {
           ok: false,
           code: 'identity_missing',
-          reason: '未获取到扫码人的飞书身份，未保存机器人。请重新扫码并确认授权。',
+          reason: '未获取到扫码人的飞书身份，未保存 Bot。请重新扫码并确认授权。',
         };
       }
       // ② 入库：「探活→keystore→config→bots.json」，扫码人 open_id 落成 owner+admin。
@@ -880,7 +880,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     },
 
     async refreshBotByQr(botId, opts) {
-      if (deps.readonlyPreview) throw new NotWiredYetError('刷新 Agent 凭据');
+      if (deps.readonlyPreview) throw new NotWiredYetError('刷新 Bot 凭据');
       return refreshBotCredentials(botId, opts);
     },
 
@@ -1022,15 +1022,15 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       const operation = activationQueue.then(async (): Promise<BotActivationResult> => {
         const reg = await loadBots();
         if (!reg.bots.some((bot) => bot.appId === appId)) {
-          return { ok: false, reason: `机器人「${appId}」不存在。` };
+          return { ok: false, reason: `Bot「${appId}」不存在。` };
         }
         await setBotActivation(appId, enabled);
         if (!deps.applyBotActivation) {
-          return { ok: true, activation: 'restartRequired', message: '已保存。当前 Host 需重启后才能应用启停状态。' };
+          return { ok: true, activation: 'restartRequired', message: '已保存。重启 daemon 后才会按新的启停状态运行。' };
         }
         try {
           await deps.applyBotActivation(appId, enabled);
-          return { ok: true, activation: 'applied', message: enabled ? 'Agent 已启用。' : 'Agent 已停止。' };
+          return { ok: true, activation: 'applied', message: enabled ? 'Bot 已启用。' : 'Bot 已停用。' };
         } catch (error) {
           const reason = error instanceof Error ? error.message : String(error);
           return { ok: false, reason: `已保存${enabled ? '启用' : '停用'}状态，但未能确认运行状态。${reason}` };
@@ -1043,7 +1043,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     async deleteBot(appId: string): Promise<BotMutationResult> {
       const reg = await loadBots();
       const target = reg.bots.find((b) => b.appId === appId);
-      if (!target) return { ok: false, reason: `机器人「${appId}」不存在。` };
+      if (!target) return { ok: false, reason: `Bot「${appId}」不存在。` };
       const expected = botIdentity(target);
       let result;
       try {
@@ -1059,9 +1059,9 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
         return { ok: false, reason: '移除未完成，部分本地数据可能已经改变，请检查后重试。' };
       }
       if (result.kind !== 'removed') {
-        const reason = result.kind === 'active' ? '请先关闭此机器人的启用状态并确认已经停止，再删除。'
-          : result.kind === 'running' ? `机器人「${target.name}」仍在运行。请先关闭启用状态并重启 Host，确认已停止后再删除。`
-          : '机器人已移除或重新注册，请重新加载后再操作。';
+        const reason = result.kind === 'active' ? '请先停用这个 Bot，等它停止运行，再移除。'
+          : result.kind === 'running' ? `Bot「${target.name}」仍在运行。请先停用它并重启 daemon，确认已停止后再移除。`
+          : '这个 Bot 已移除或重新注册，请重新加载后再操作。';
         return { ok: false, reason };
       }
       avatars.retain(new Set(result.registry.bots.map(bot => bot.appId)));
