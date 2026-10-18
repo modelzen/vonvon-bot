@@ -6,7 +6,7 @@ import { ingestVoice } from '../src/voice/inbound';
 const msg = { rawContentType: 'audio', messageId: 'message', resources: [{ type: 'audio', fileKey: 'file', durationMs: 7000 }] };
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.files.mockResolvedValue([{ path: '/audio/voice.ogg', name: 'voice.ogg' }]);
+  mocks.files.mockResolvedValue({ files: [{ path: '/audio/voice.ogg', name: 'voice.ogg' }], failed: [] });
   mocks.stat.mockResolvedValue({ size: 100 }); mocks.read.mockResolvedValue(Buffer.from('voice'));
 });
 describe('voice message delivery', () => {
@@ -22,7 +22,7 @@ describe('voice message delivery', () => {
     expect(text.text).toContain('未转写'); expect(text.text).toContain('/audio/voice.ogg'); expect(text.text).toContain('不要猜测');
   });
   it('reports failed downloads without calling ASR', async () => {
-    mocks.files.mockResolvedValue([]); const transcribe = vi.fn();
+    mocks.files.mockResolvedValue({ files: [], failed: [{ name: 'voice.ogg', reason: '超时' }] }); const transcribe = vi.fn();
     expect((await ingestVoice({} as never, msg as never, { transcribe } as never)).text).toContain('未能下载');
     expect(transcribe).not.toHaveBeenCalled();
   });

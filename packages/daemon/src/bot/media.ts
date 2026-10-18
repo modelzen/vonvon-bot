@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type { LarkChannel, NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import { paths } from '../config/paths';
 import { log } from '../core/logger';
+import { feishuError } from '../utils/feishu-error';
 
 /**
  * Inbound image handling: download the images a user sends to (or forwards to)
@@ -254,12 +255,20 @@ const MAX_FILES = 9;
 /** Skip files larger than this — codex reads them within the turn; a giant
  * upload just stalls the download and fills the disk. */
 const MAX_FILE_BYTES = 50 * 1024 * 1024;
+const TOO_LARGE = `超过 ${MAX_FILE_BYTES / 1024 / 1024} MB 上限`;
 
 /** A downloaded inbound file: absolute local path + the original name the user
  * sent (shown in the prompt manifest so codex can refer to it naturally). */
 export interface InboundFile {
   path: string;
   name: string;
+}
+
+/** An attachment that did not download: its sanitized name and why, in a few
+ * words, for the manifest's 没下载下来 line (s14e). */
+export interface FailedFile {
+  name: string;
+  reason: string;
 }
 
 interface FileRef {
@@ -277,11 +286,14 @@ export function messageHasFiles(msg: NormalizedMessage): boolean {
 
 /**
  * Download every file attachment in `msg` to {@link paths.inboundDir} and
- * return their local paths + original names. Best-effort end to end: a failed
- * download is logged and skipped, never thrown — a missing file must not break
- * the turn.
+ * return their local paths + original names, and the ones that did not
+ * download with why. Best-effort end to end: a failed download is logged and
+ * returned in `failed`, never thrown — a missing file must not break the turn.
  */
-export async function collectInboundFiles(channel: LarkChannel, msg: NormalizedMessage): Promise<InboundFile[]> {
+export async function collectInboundFiles(
+  channel: LarkChannel,
+  msg: NormalizedMessage,
+): Promise<{ files: InboundFile[]; failed: FailedFile[] }> {
   const refs: FileRef[] = [];
   const seen = new Set<string>();
   for (const r of msg.resources ?? []) {
@@ -290,7 +302,7 @@ export async function collectInboundFiles(channel: LarkChannel, msg: NormalizedM
       refs.push({ messageId: msg.messageId, fileKey: r.fileKey, fileName: r.fileName });
     }
   }
-  if (refs.length === 0) return [];
+  if (refs.length === 0) return { files: [], failed: [] };
 
   await pruneOldMedia(paths.inboundDir);
   try {
@@ -299,16 +311,28 @@ export async function collectInboundFiles(channel: LarkChannel, msg: NormalizedM
     /* mkdir failure surfaces on writeFile below */
   }
 
-  const out: InboundFile[] = [];
-  for (const ref of refs.slice(0, MAX_FILES)) {
-    const f = await downloadOneFile(channel, ref);
-    if (f) out.push(f);
+  const files: InboundFile[] = [];
+  const failed: FailedFile[] = [];
+  for (const [i, ref] of refs.entries()) {
+    const name = cleanFileName(ref.fileName) || 'attachment';
+    const got = i < MAX_FILES ? await downloadOneFile(channel, ref, name) : { reason: `一条消息最多收 ${MAX_FILES} 个` };
+    if ('path' in got) files.push(got);
+    else failed.push({ name, reason: got.reason });
   }
-  log.info('intake', 'files', { found: refs.length, downloaded: out.length });
-  return out;
+  log.info('intake', 'files', { found: refs.length, downloaded: files.length });
+  return { files, failed };
 }
 
-async function downloadOneFile(channel: LarkChannel, ref: FileRef): Promise<InboundFile | undefined> {
+/** A few words on why a download threw, for the agent to pass on (s14e). */
+function downloadFailure(err: unknown): string {
+  const e = err as { code?: unknown; response?: { status?: unknown } } | null;
+  if (e?.code === 'ECONNABORTED' || e?.code === 'ETIMEDOUT' || /timeout/i.test(String(err))) return '超时';
+  const status = e?.response?.status;
+  if (feishuError(err) || (typeof status === 'number' && status >= 400 && status < 500)) return '飞书拒绝';
+  return '下载失败';
+}
+
+async function downloadOneFile(channel: LarkChannel, ref: FileRef, name: string): Promise<InboundFile | { reason: string }> {
   try {
     const res = await channel.rawClient.im.v1.messageResource.get({
       path: { message_id: ref.messageId, file_key: ref.fileKey },
@@ -317,9 +341,8 @@ async function downloadOneFile(channel: LarkChannel, ref: FileRef): Promise<Inbo
     const declared = Number(readHeader(res.headers, 'content-length'));
     if (Number.isFinite(declared) && declared > MAX_FILE_BYTES) {
       log.warn('intake', 'file-too-large', { fileKey: ref.fileKey.slice(0, 24), bytes: declared });
-      return undefined;
+      return { reason: TOO_LARGE };
     }
-    const name = cleanFileName(ref.fileName) || 'attachment';
     // file_key is globally unique per resource — prefix the (sanitized, ≤40-char)
     // key so two uploads sharing a name never clash in the shared inboundDir.
     const onDisk = `${safeName(ref.fileKey)}-${name}`;
@@ -331,7 +354,7 @@ async function downloadOneFile(channel: LarkChannel, ref: FileRef): Promise<Inbo
       if (st.size > MAX_FILE_BYTES) {
         await rm(file, { force: true });
         log.warn('intake', 'file-too-large', { fileKey: ref.fileKey.slice(0, 24), bytes: st.size });
-        return undefined;
+        return { reason: TOO_LARGE };
       }
     } catch {
       /* stat failed — keep the file rather than lose it */
@@ -343,7 +366,7 @@ async function downloadOneFile(channel: LarkChannel, ref: FileRef): Promise<Inbo
     return { path: file, name };
   } catch (err) {
     log.warn('intake', 'file-download-failed', { fileKey: ref.fileKey.slice(0, 24), err: String(err) });
-    return undefined;
+    return { reason: downloadFailure(err) };
   }
 }
 
@@ -381,13 +404,18 @@ export function stripFileTokens(text: string): string {
 /**
  * Fold downloaded attachments into the user's prompt: strip the raw `<file/>`
  * placeholders, then append a manifest mapping each original filename to its
- * absolute local path so codex can open it with its shell / read tools. When
- * nothing downloaded, just return the stripped text (never a bogus path).
+ * absolute local path so codex can open it with its shell / read tools, and
+ * ending with a `没下载下来：a.log（超时）` line per failed one (s14e). When
+ * nothing downloaded and there is no text, return '' (the caller says so in
+ * its own words); never a bogus path.
  */
-export function weaveFileManifest(text: string, files: InboundFile[]): string {
+export function weaveFileManifest(text: string, files: InboundFile[], failed: FailedFile[] = []): string {
   const stripped = stripFileTokens(text);
-  if (files.length === 0) return stripped;
-  const lines = files.map((f) => `- ${f.name} → ${f.path}`).join('\n');
+  if (files.length === 0 && (failed.length === 0 || !stripped)) return stripped;
+  const total = files.length + failed.length;
+  const saved = failed.length ? `${files.length} 个已保存到本地` : '已保存到本地';
+  const intro = files.length ? `，${saved}，可用 shell / 读取工具按下面的绝对路径直接打开` : '';
+  const lines = [...files.map((f) => `- ${f.name} → ${f.path}`), ...failed.map((f) => `没下载下来：${f.name}（${f.reason}）`)];
   const head = stripped ? `${stripped}\n\n` : '';
-  return `${head}[用户上传了 ${files.length} 个附件，已保存到本地，可用 shell / 读取工具按下面的绝对路径直接打开：\n${lines}\n]`;
+  return `${head}[用户上传了 ${total} 个附件${intro}：\n${lines.join('\n')}\n]`;
 }

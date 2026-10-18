@@ -63,6 +63,14 @@ describe('session title pure pipeline', () => {
     expect(prompt).toContain('请修复支付回调超时');
   });
 
+  it('removes a file manifest with files that did not download (s14e)', () => {
+    const body = '看下这两个日志';
+    const partial = weaveFileManifest(body, [{ name: 'a.log', path: '/private/tmp/inbound/k-a.log' }], [{ name: 'b.log', reason: '超时' }]);
+    const none = weaveFileManifest(body, [], [{ name: 'b.log', reason: '飞书拒绝' }]);
+    expect(stripBridgeMessageEnvelope(partial)).toBe(body);
+    expect(stripBridgeMessageEnvelope(none)).toBe(body);
+  });
+
   it('ends the sender block at its own "）]", even when the body on the same line has one', () => {
     // Claude's firstPrompt arrives flattened to one line.
     expect(stripBridgeMessageEnvelope('[本条消息的发信人：张三（open_id：ou_x）] 把 a[（1）] 改成 a[2]')).toBe('把 a[（1）] 改成 a[2]');

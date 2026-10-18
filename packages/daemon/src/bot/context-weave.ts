@@ -626,7 +626,7 @@ function nodeToText(node: unknown): string {
     case 'text':
       return typeof n.text === 'string' ? n.text : '';
     case 'a':
-      return typeof n.text === 'string' ? n.text : typeof n.href === 'string' ? n.href : '';
+      return linkText(typeof n.text === 'string' ? n.text : '', n.href);
     case 'at': {
       const name = typeof n.user_name === 'string' ? n.user_name : '';
       return name ? `@${name}` : '@某人';
@@ -640,6 +640,15 @@ function nodeToText(node: unknown): string {
     default:
       return typeof n.text === 'string' ? n.text : '';
   }
+}
+
+/** A link node as `[文字](地址)`, the way the SDK writes a trigger's links; the
+ * address alone when the text is empty or the same, the text alone without an
+ * address (s14e). */
+function linkText(text: string, href: unknown): string {
+  const url = typeof href === 'string' ? href.trim() : '';
+  if (!url) return text;
+  return text.trim() && text.trim() !== url ? `[${text}](${url})` : url;
 }
 
 /**
@@ -702,7 +711,7 @@ function cardNodeToText(node: unknown): string {
     case 'text':
       return textValue(n.text);
     case 'a':
-      return textValue(n.text) || (typeof n.href === 'string' ? n.href : '');
+      return linkText(textValue(n.text), n.href);
     case 'at': {
       const name = typeof n.user_name === 'string' ? n.user_name : '';
       return name ? `@${name}` : '@某人';
@@ -746,9 +755,10 @@ function replaceKey(text: string, key: string, by: string): string {
  * clamps length. `oneLine` collapses ALL whitespace to single spaces — both
  * weave callers use it so a crafted body can't forge fenced-block structure
  * (a `\n]\n[fake]`) to inject instructions. The multi-line branch (kept for
- * generality) only squeezes whitespace runs. Exported for testing.
+ * generality) only squeezes whitespace runs. `links` (a message body) moves a
+ * cut that falls inside a link, see {@link linkCut}. Exported for testing.
  */
-export function sanitizeContext(s: string, maxLen: number, oneLine: boolean): string {
+export function sanitizeContext(s: string, maxLen: number, oneLine: boolean, links = false): string {
   if (!s) return '';
   let out = s
     // eslint-disable-next-line no-control-regex
@@ -756,7 +766,36 @@ export function sanitizeContext(s: string, maxLen: number, oneLine: boolean): st
     .replace(/\r\n?/g, '\n');
   out = oneLine ? out.replace(/\s+/g, ' ') : out.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n');
   out = out.trim();
-  return out.length > maxLen ? `${out.slice(0, maxLen)}…` : out;
+  if (out.length <= maxLen) return out;
+  const cut = links ? linkCut(out, maxLen) : maxLen;
+  return cut < out.length ? `${out.slice(0, cut)}…` : out;
+}
+
+/** The longest link text and address that count as a link; longer is plain text,
+ * which keeps the scan short on a crafted body. */
+const LINK_TEXT_MAX = 200;
+const LINK_ADDRESS_MAX = 800;
+/** A link in a body: `[文字](地址)` as {@link linkText} writes it, or a bare address. */
+const LINK = new RegExp(
+  `\\[[^\\]]{0,${LINK_TEXT_MAX}}\\]\\([^)\\s]{1,${LINK_ADDRESS_MAX}}\\)` +
+    `|\\b[a-z][a-z0-9+.-]{0,30}://[\\x21-\\x7e]{1,${LINK_ADDRESS_MAX}}(?![\\x21-\\x7e])`,
+  'gi',
+);
+
+/** Where to cut `s` (longer than `max`) so that no link is cut in two (s14e): a
+ * link the cut falls in is left out whole, or kept whole when it starts `s`
+ * (it is at most about 1,000 chars); past the limits of {@link LINK} the cut
+ * stays at `max`, as before. */
+function linkCut(s: string, max: number): number {
+  // No link is longer than this, so one the cut falls in lies within it.
+  const head = s.slice(0, max + LINK_TEXT_MAX + LINK_ADDRESS_MAX + 4);
+  for (const m of head.matchAll(LINK)) {
+    const end = m.index + m[0].length;
+    if (m.index >= max) break;
+    if (end <= max) continue;
+    return m.index > 0 ? s.slice(0, m.index).trimEnd().length : end;
+  }
+  return max;
 }
 
 /**
@@ -780,7 +819,7 @@ export function weaveQuote(text: string, quoted: ContextMessage | undefined): st
   // oneLine=true: collapse newlines so a crafted quote body (or @mention name)
   // can't forge a `\n]\n[fake block]` to fabricate context — same defense as
   // weaveRecordBlock. sanitizeContext is the single boundary for this text.
-  const body = sanitizeContext(quoted.text, QUOTE_MAX, true);
+  const body = sanitizeContext(quoted.text, QUOTE_MAX, true, true);
   if (!body) return text;
   const block = `[用户引用了一条消息（来自 ${who}）：\n${body}\n]`;
   return prependBlock(block, text);
@@ -1022,7 +1061,7 @@ function earlierNote(earlier: RecordBlock['earlier']): string | undefined {
 
 /** One message as a line, or '' when its text sanitizes to nothing. */
 function recordLine(m: ContextMessage, now: number): string {
-  const body = sanitizeContext(m.text, m.from === 'user' ? LINE_MAX : BOT_LINE_MAX, true);
+  const body = sanitizeContext(m.text, m.from === 'user' ? LINE_MAX : BOT_LINE_MAX, true, true);
   if (!body) return '';
   const at = clockOf(m.createTime, now);
   if (m.from === 'self') return `${at} 你：${body}`;
