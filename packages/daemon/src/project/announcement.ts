@@ -1,6 +1,8 @@
+import { setTimeout as sleep } from 'node:timers/promises';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { log } from '../core/logger';
 import { currentBranch } from './git-info';
+import type { CreationLimits } from './creation-client';
 import { updateProject, type Project } from './registry';
 
 /**
@@ -36,16 +38,22 @@ function buildAnnouncementLine(project: Project, branch: string | null): string 
  * ready immediately — `list` blocks returns a gateway 500 (code 1771002) for a
  * short window after `chat.create`. Linear backoff rides that out (and any
  * other transient 5xx). Permission/4xx errors still get retried but fail fast
- * enough (a few seconds) and surface the real error.
+ * enough (a few seconds) and surface the real error. Inside a creation (`limits`,
+ * s36d1) no wait outlasts its budget: one that would end past the deadline is not
+ * begun, and the creation's stop cuts one short. Elsewhere every failure is
+ * retried as before.
  */
-async function withRetry<T>(fn: () => Promise<T>, attempts = 5): Promise<T> {
+async function withRetry<T>(fn: () => Promise<T>, limits?: CreationLimits, attempts = 5): Promise<T> {
   let lastErr: unknown;
   for (let i = 0; i < attempts; i++) {
     try {
       return await fn();
     } catch (err) {
       lastErr = err;
-      if (i < attempts - 1) await new Promise((r) => setTimeout(r, 800 * (i + 1)));
+      if (i === attempts - 1) break;
+      const wait = 800 * (i + 1);
+      if (limits && (limits.signal.aborted || performance.now() + wait >= limits.deadline)) break;
+      try { await sleep(wait, undefined, limits && { signal: limits.signal }); } catch { break; }
     }
   }
   throw lastErr;
@@ -56,7 +64,7 @@ async function withRetry<T>(fn: () => Promise<T>, attempts = 5): Promise<T> {
  * → create sequence is wrapped as one retry unit, and each attempt re-lists so
  * it always works off the latest revision/children (idempotent on retry).
  */
-async function writeAnnouncement(channel: LarkChannel, chatId: string, line: string): Promise<void> {
+async function writeAnnouncement(channel: Pick<LarkChannel, 'rawClient'>, chatId: string, line: string, limits?: CreationLimits): Promise<void> {
   const docx = channel.rawClient.docx.v1;
   await withRetry(async () => {
     const listed = await docx.chatAnnouncementBlock.list({ path: { chat_id: chatId } });
@@ -80,7 +88,7 @@ async function writeAnnouncement(channel: LarkChannel, chatId: string, line: str
         children: [{ block_type: TEXT_BLOCK_TYPE, text: { elements: [{ text_run: { content: line } }] } }],
       },
     });
-  });
+  }, limits);
 }
 
 /**
@@ -88,23 +96,21 @@ async function writeAnnouncement(channel: LarkChannel, chatId: string, line: str
  * means "announcement" (vs "1" = a specific message), so no message_id is
  * needed. Reuses the `im:chat` scope — no extra permission. Idempotent.
  */
-async function pinAnnouncement(channel: LarkChannel, chatId: string): Promise<void> {
-  await withRetry(() =>
-    channel.rawClient.im.v1.chatTopNotice.putTopNotice({
-      path: { chat_id: chatId },
-      data: { chat_top_notice: [{ action_type: '2' }] },
-    }),
-  );
+async function pinAnnouncement(channel: Pick<LarkChannel, 'rawClient'>, chatId: string, limits?: CreationLimits): Promise<void> {
+  await withRetry(() => channel.rawClient.im.v1.chatTopNotice.putTopNotice({
+    path: { chat_id: chatId },
+    data: { chat_top_notice: [{ action_type: '2' }] },
+  }), limits);
 }
 
-/** Set the project group's announcement, pin it to the top, persist the branch. */
-export async function setAnnouncement(channel: LarkChannel, project: Project): Promise<void> {
+/** Set the project group's announcement, pin it to the top, persist the branch. A creation passes its `limits`. */
+export async function setAnnouncement(channel: Pick<LarkChannel, 'rawClient'>, project: Project, limits?: CreationLimits): Promise<void> {
   const branch = await currentBranch(project.cwd); // null when not a git repo
-  await writeAnnouncement(channel, project.chatId, buildAnnouncementLine(project, branch));
+  await writeAnnouncement(channel, project.chatId, buildAnnouncementLine(project, branch), limits);
   // Pin is best-effort: the announcement content is already written, so a pin
   // failure shouldn't lose the persisted branch below — just no top banner.
   try {
-    await pinAnnouncement(channel, project.chatId);
+    await pinAnnouncement(channel, project.chatId, limits);
   } catch (err) {
     log.fail('project', err, { phase: 'announcement-pin' });
   }
