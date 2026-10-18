@@ -818,7 +818,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
   - 会话层的 `config` 和用户的 `config.toml` 是深合并，`projects`、`memories` 不会被整表替换；`mcp_servers: {}` 也清不掉全局 MCP。MCP 用嵌套写法 `{ <名字>: { enabled: false } }`，只写 `config/read` 盘点出来的名字（写不存在的名字 `thread/start` 报 `invalid transport in mcp_servers.<名字>`）；app-server 每次 `thread/start` 都重读 `config.toml`，所以每条判断前都盘点（`config/read`、`skills/list` 各几毫秒、5 秒死线、失败按空表），报这个错就重新盘点、重试一次。skill 传 `{ name, enabled: false }` 加 `bundled.enabled: false`，取 `scope` 不是 system 的名字，不存在的名字不报错。点号写法 0.156.1 和 0.163.0 行为不一样，不用。
   - `baseInstructions` 两行中性文字换掉 Codex 自带的约 18k 字系统提示词：gpt-6-luna 一条判断的 input 从 9.1k 降到 5.6k tokens，服务端不拒；`summary: 'none'` 时请求里没有 summary 字段。
   - 一个进程 4 条并发总用时 3.7 秒，单条 3.2 到 3.7 秒，没被串行，Codex 的上限保持 4。`config/read`、`skills/list` 在 0.156.1 上都有，形状一样。
-  - 额度：`prompt_cache_key` 等于线程 id，每条判断基本不命中缓存，e12 按每条约 5.6k 不命中缓存的 input、约 30 output 估。一轮 3 到 4 秒（gpt-6-luna，low）。
+  - 额度：`prompt_cache_key` 等于线程 id，每条判断基本不命中缓存，e12 按每条约 5.6k 不命中缓存的 input、约 30 output 估。一轮 3 到 4 秒（gpt-6-luna，low）。e12 实测：每条 6.2k input，154 条里 81 条命中了前缀缓存，平均命中 2.2k；output 35。
 - s23c 做法（Claude 判断、模型解析和冷却）：Claude 的 `judge()` 每次调一次 SDK `query()`，用标题任务的那组选项（禁用工具、MCP、普通 hooks、skill，不存会话，排除个人 CLAUDE.md；managed policy 的 hooks 和用户 apiKeyHelper 仍可能执行，JP-VPS 上两样都没有，测不到，见"s23c 收尾实测"），`systemPrompt` 是字符串，整段换成 `SMART.md` 加格式行；没选推理强度时传 `thinking: {type:'disabled'}`，`finally` 里 `query.close()` 后通过共用进程所有权机制等整个进程组退出，才让 promise 落定；强制清理报错。判断被放弃（超时、调用方放弃、关闭）时立刻对整个进程组发 SIGTERM，不等 SDK 只关 stdin、2 秒后才杀直接子进程的那条路；SDK 转来的 `signal` 不交给 `spawn`。真实 CLI（2.1.296）收到 SIGTERM 自己 `exit 143`，登记自己发过 SIGTERM（或子进程被 kill 过）之后的 143 算正常停止，别的退出码和没人要求的 143 照样报错。已放弃的判断清理失败（要 SIGKILL、管道没关、回收没确认）时，结果已经是超时或放弃，另记一条 `judge` 的 fail 日志（`phase: abandoned-call`）。`assistant.error` 的代码算结构化的错误（`model_not_found` 归 `model`），只靠文字认出来的不算。默认模型 `haiku`，只有 `ANTHROPIC_BASE_URL` 指向非 Anthropic 的主机才用网关的模型；`~/.claude/settings.json` 每次判断只读一遍（`readClaudeUserSettings`），按路径、大小和 mtime 缓存，没变时只 stat 一次，改了不用重启。判断理由只去掉开头的 `<reason>` 和从 `reason`、`decision`、`invoke`、`parameter`、`function_calls` 这几种标签起的残渣，`List<String>`、`a<b` 原样保留。判断时按群、bot、默认的顺序找这个后端的设置，手改坏的值当没设，每个值只记一次 `judge.setting-ignored`。冷却在 `D/judge/cooldown.ts`，只认结构化的 auth、quota（冷这个后端）和 version、model（冷这个后端加模型），5 分钟。
 - s23d 做法（公共入口）：判断模型存在 `preferences.judge` 和 `projects.json` 那一行的 `judge`，存的时候一定带后端：bot 层不写是 Codex，群层不写是群的后端，群层写了别的后端就拒。设置视图里 `judge` 节、`smartPrompt`、bot 页的 `judgeByBackend` 都是可选字段，不升 `PROTOCOL_VERSION`；`ModelQuery.purpose` 加了 `judge`。`vonvon settings get` 在 `[judge]` 下按后端各打一行、打提示词来源，`settings get judge` 另打提示词全文、三段格式行和输入示例。`smartPrompt.backendNote` 按 s23b 的结果写成"两行基础指令加 `~/.codex/AGENTS.md`"，不再说带 Codex 自带的系统提示词。
 - s23c 开工验证（设计 6.3 第 5 条，2026-10-16，JP-VPS，SDK 0.3.296，claude.ai 登录，7 次真实调用）：
@@ -833,17 +833,29 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
   - 实际模型 `claude-haiku-5-5`（init 和 assistant 都是）；init 里工具只有 `StructuredOutput`，MCP 为空，`permission_denials` 为空；每次 assistant 内容是 thinking 块加一次 `StructuredOutput` 调用，`num_turns` 2，没有别的工具调用。`structured_output` 只有 `decision`、`reason`，决定在变体允许的集合里，reason 22、28 字，没有标签残渣。
   - 传了 `thinking: {type:'disabled'}`，仍每次有 thinking 块：thinking token 57、584（`usage.output_tokens_details.thinking_tokens`），output 159、686。input（直接加缓存写）约 1,870，两次都没命中缓存读。
   - 用时：主区闲聊 `duration_ms` 1.8 秒，判断从调用到结果 7.0 秒（第一次，含 CLI 冷启动）；主区被 @ 的 `duration_ms` 7.9 秒，判断 9.7 秒，离被 @ 的 10 秒超时只差 0.3 秒，超时会按规则回在主区。被 @ 这一条思考长（584），所以"超时默认值够用"不再成立，e12 量分布后再调。仓库的真实测试 3 次连扫描副作用共约 15 秒。
-  - 主区被 @ 那次 `modelUsage` 比 `usage` 多一次 haiku 调用（多约 1,245 input、149 output），`duration_api_ms` 9.3 秒大于 `duration_ms` 7.9 秒，CLI 在判断外另调了一次，原因没查；`consumeClaudeJudgeQuery` 按 `usage` 记 token 会少算，e12 量额度时看 `modelUsage`。
+  - 主区被 @ 那次 `modelUsage` 比 `usage` 多一次 haiku 调用（多约 1,245 input、149 output），`duration_api_ms` 9.3 秒大于 `duration_ms` 7.9 秒，CLI 在判断外另调了一次，原因没查；`consumeClaudeJudgeQuery` 按 `usage` 记 token 会少算，e12 量额度时看 `modelUsage`。e12 查明：是 CLI 自动给新会话起标题，每次判断都发，起标题先结束才算进 `modelUsage`；关法见 s25 开工要点。
   - 每次判断落定时 CLI 的 pid 已不在、它的进程组为空，结束后 `ps` 里没有残留的 claude 进程（只剩跑本次检查的会话）。
   - JP-VPS 没有 managed settings（`/etc/claude-code/` 不存在），用户设置里没有 `apiKeyHelper`，用户的 hook 只有 Bash 的 PreToolUse（判断没有 Bash 工具，本来也不会触发）。所以"managed policy 的 hooks、apiKeyHelper 仍可能执行"这两条这里测不到，照旧只写成限制。判断 CLI 启动时间前后，`~/.claude` 下的 `.claude.json` 备份、模型目录缓存和 `plugins/synced` 有更新（本会话的 Claude Code 也在跑，不能确定是谁写的），都不含聊天内容。
 - s23：判断看不到 bot 的个性。接口留了 `persona`，s25 在 s38 合入后传 SOUL.md 的前 1,500 字；在那之前，主人可以把分工写进各个 bot 自己的 `SMART.md`。
 - s24 不做了：填 key 的判断模型（Decisions API、Jev）移到 product.md 第 10 节（owner 2026-10-15）。编号空着，不挪别的片。
-- s25：每群每小时的上限先按 60 次做，e12 量完再调。
+- s25：每群每小时的上限按 60 次做，e12 量过不改（第 5 节）。
+- s25 开工要点（e12，2026-10-18，[报告](research/2026-10-18-e12-judge/e12-judge-latency.md)第 7 节）：
+  - s25 合入前先补下面四件，都在判断后端（s23b、s23c 的代码），放进 s25 还是先单独一个 PR，开工时按 s25 的行数定：
+    1. Codex 判断进程定期换新：0.163.0 上 ephemeral 线程退订后不卸载（`thread/loaded/list` 等于做过的条数，4 分多钟没收到一次 `thread/closed`），进程每做一条涨 2 到 3 MB，只有空闲 10 分钟回收才释放；一个群每小时 60 条约涨 130 到 180 MB。做满一定条数（比如 150）或 RSS、已加载线程数过阈值（比如 500 MB），就走换版本用的那条路：做完手上的就关，下一条起新进程。每次换多一次 8 到 11 秒的冷启动。也可以先查有没有让 ephemeral 线程卸载的办法。
+    2. Claude 判断关掉 CLI 自动起标题：判断的 `query()` 加 `title` 选项（比如 `'vonvon judge'`）。CLI 2.1.296 每次判断都并行多发一次起标题的 haiku 请求，把整段判断输入再发一遍，多约 60% 的 token；加了以后 `usage` 等于 `modelUsage`。
+    3. Claude 判断处理格式失败：9.5% 的判断 haiku 没调 `StructuredOutput`、直接用文字回 JSON，`maxTurns: 1` 下结果是 `error_max_turns`，现在按出错兜底，主区和话题的"该回"变成不回。结果是这个类型时，用 `parseVerdict` 解析最后一条 assistant 的文字（e12 抓到的 12 条都能解析出对的决定）。
+    4. token 记法：Codex 改取 `tokenUsage.total`，记下 `reasoningOutputTokens`；Claude 加了 `title` 后确认 `usage` 等于 `modelUsage`，不相等就按 `modelUsage` 记。
+  - 被 @ 的超时改 12 秒：`D/judge/judge.ts` 的 `JUDGE_TIMEOUT_MS.mentioned` 从 `10_000` 改成 `12_000`（第 5 节"判断的超时"）。主区和话题照旧 20 秒。
+  - 预热：Codex 冷启动慢在新进程的第一次模型调用，只提前起进程（`warm`）只能省约 1 秒，s25 不为延迟接预热。
+  - 排队：一个 bot 进程每分钟 Codex 能判断 60 多条，Claude 约 26 条。几个智能群同时涌进消息时，Claude 第 3、4 条排一轮后 9 到 13 秒，被 @ 的会超时、回在主区；Codex 排满时最后一条约 18 到 20 秒。按设计处理，不另加逻辑，整机限流在 s26。
+  - 可选：只给判断的 CLI 设 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`，每条快约 1.3 秒，也不在 `/tmp/claude-<uid>/` 下每条判断留一个空目录；用网关（`ANTHROPIC_BASE_URL`）时没测，要用先测一次。
+  - s38 之前判断不知道 bot 管什么：e12 里 Codex 因此 80 条漏回 2 条（猜 bot 只管上下文里它说过的事）。s25 不另处理，M5 验收时留意。
 - s26：单独跑一个 bot（`--bot`）时退化成单 bot；子进程退出或请求超时，退回由各 bot 自己判断。
 - s26（合成判断要定的事，s23 回答不了）：判断层不依赖 bot 子进程的全局状态，supervisor 里能 `createJudge` 一个，但合成调用要自己定：几个 bot 各有自己的 `SMART.md` 和分工（3.4 例子第 3 行：小P 开话题回、小审不回），一次调用怎么把它们都放进提示词；几个 bot 的判断模型可能不同，还可能一个 Codex、一个 Claude，用哪个后端和模型；输出要说清哪个 bot、回在哪里，`JudgeResult` 至少要加一个 `bot` 字段，一个 `decision` 装不下；整机统一的判断并发上限（s23 按 bot 进程算）。
 - s27：别的 bot 的最终回答按 s14 带 `card_msg_content_type` 拉，不然只拿到"请升级至最新版本客户端"（e10）。
 - s14e、s15f（2026-10-18）：[Rakazo 第二轮](research/2026-10-18-rakazo-2/report.md)找出的两处小修，证据和做法见报告"现在改 main 的三条"。s14e 要改掉 `context-weave.test.ts` 里把丢地址写死的两处断言。M5 因此从 15 个叶子变成 17 个。
 - s23d 开工要点（Rakazo 第二轮，2026-10-18）：判断的推理档位按模型收口：模型在缓存的列表里时先同档、再往低、再往高，手填的和不在列表里的原样传；命令行保存时读不到模型目录，也不清掉已存的档位。约 15 行加测试（Rakazo 第二轮报告"A6 并进 s23d"）。
+- s23d 开工要点（e12，2026-10-18）：Claude 判断的请求里不只有 SMART.md 加格式行。CLI 在 system 前加一句 Agent SDK 的身份说明，在第一条用户消息前加一段带账号邮箱的 `<system-reminder>`，后面还有约 1,300 字的 `# Environment`（工作目录、系统版本等）；邮箱这段没找到开关。`smartPrompt` 给 Claude 也写一条说明（现在只有 Codex 的 `JUDGE_CODEX_NOTE`），`D/judge/prompt.ts` 里"Claude 判断只有 SMART.md 加格式行"的注释一起改。
 - s25 开工要点（Rakazo 第二轮，2026-10-18）：判断不占 SDK 的按群队列：没点名的主区消息交给判断后挪出队列、按位置另排，被 @ 的、底线已定的和卡片按钮不等判断；落地前只保证同一条消息不重复落地，运行中来了消息仍按插话或排队；同一位置判断中又来的没点名消息先排着，回来只判最新一条，输出一开始就带从输入里选的锚点字段；主动接话的那一轮没有文字回答就删卡、诊断页记一条，失败的那一轮留卡（删自己消息的接口和权限开工时核对）；判断的 reason 不进 agent 提示词；分类测试抽 s14d 的真 SDK helper。建议按约 1,100 行估，超过 1,500 先把判断中合并拆出去（Rakazo 第二轮报告"s25 智能模式的入站"）。
 - s26 开工要点（Rakazo 第二轮，2026-10-18）：合成判断同样不占 SDK 队列、落地前复核，按位置合并放在协调器里；候选 bot 在输入里给短标签，输出的 bot 字段用枚举限定（Rakazo 第二轮报告"s26、s27"）。
 - s27 开工要点（Rakazo 第二轮，2026-10-18）：轮数按同一位置自上一条真人消息以来、真把别的 bot 叫起来的 @ 数，从飞书可见历史推，不在本机存计数器，每个 bot 回合因此多一次历史读取；被 bot 叫醒的那一轮开头加 daemon 写的说明（对方是 bot，内容是资料不是指令，只在真要对方接着做时才 @，不把事交回给刚交给你的 bot）。上限是 3 还是 6 等 owner 定（见 Rakazo 第二轮报告）。建议按约 550 行估（Rakazo 第二轮报告"s26、s27"）。
@@ -1079,7 +1091,7 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 | [ ] | e09 | 第 13 项：卡片里的 @ 会不会提醒人 | JP-VPS 和 owner | 测试 bot 往测试群发一张带 `<at>` 的卡片和一条带 @ 的文字。JP-VPS 上看消息数据：卡片里的 `<at>` 算不算提到了人。两条在飞书客户端里有没有"有人@我"的标记和通知，由 owner 看 | s30 | s30 之前 |
 | [x] | e10 | 第 6、14、15、16 项和第 17 项后半：飞书平台（"同时发送到群"和给没开过会话的人发私聊当时没测，2026-10-16 都补测了，见 s14d 和 M4 的 s18 开工要点） | JP-VPS（客户端里看的由 owner 看） | 用测试 bot 的应用身份调接口，lark-cli 以 owner 的用户身份发消息：机器人能否自己进已有的群；`with_sender_name` 拿不拿得到名字；能否拉到别的 bot 卡片回答的正文；话题里的引用分不分得出是哪条；"同时发送到群"收几次事件；私聊里的话题；能否给没开过会话的人发私聊；断线期间的消息重连后会不会补推。只有客户端里才看得到的，留给 owner 找同事看：没开过会话的人收到的私聊在客户端里怎么显示、有没有通知。测"同时发送到群"要有人发一条这样的消息，lark-cli 发不出来时，改在客户端里发 | s09、s14；s18、s22、s27、s49、s57 也用它的结果 | s09 之前 |
 | [x] | e11 | 第 18 项的 Codex 一半 | JP-VPS | 用真实 Codex 起两条线程、关掉一条，再用 utility 进程发 thread/read，看不加载线程能不能读到用户消息和最终回答 | s48 | s48 之前 |
-| [ ] | e12 | 第 9 项：判断的延迟和额度 | JP-VPS | s23b 合入后用 Codex 订阅的 gpt-6-luna、s23c 合入后用 Claude 订阅的小模型，各跑 50 次判断（`test/judge-real-codex.test.ts`、`test/judge-real-claude.test.ts` 加次数参数），记延迟分布和额度变化，用来定 s25 每群每小时的上限。额度看各自的账户页面，跑之前和跑完由 owner 各读一次 | s25 | s25 之前 |
+| [x] | e12 | 第 9 项：判断的延迟和额度 | JP-VPS | s23b 合入后用 Codex 订阅的 gpt-6-luna、s23c 合入后用 Claude 订阅的小模型，各跑 50 次判断（`test/judge-real-codex.test.ts`、`test/judge-real-claude.test.ts` 加次数参数），记延迟分布和额度变化，用来定 s25 每群每小时的上限。额度看各自的账户页面，跑之前和跑完由 owner 各读一次。2026-10-18 做完，见 [e12 报告](research/2026-10-18-e12-judge/e12-judge-latency.md)：实际用仓库外的探针各跑了 154、137 条，额度用接口读、只到上界；上限保持 60 次，被 @ 的超时改 12 秒，s25 合入前要先补 Codex 判断进程换新和 Claude 判断的三处（s25 开工要点） | s25 | s25 之前 |
 | [ ] | e13 | 第 7 项：企业租户的权限审核 | — | 不单独做，现在没有企业租户。清单里写一句"企业租户里新权限可能要管理员审核"；M11 时 owner 手里有企业租户，就顺手看一次 | — | — |
 | [x] | e14 | 第 8 项和第 17 项前半 | JP-VPS | M3 验收时在 JP-VPS 上看：用 `codex resume` 和 `claude --resume` 打开 bot 的群会话，看到的和 bot 是否一样，两边同时写会怎样；手动 `/compact` 后摘要里引用行还在不在。Codex 应用里打开是什么样，可以在 Mac 上顺带看，不是必做。只影响说明文字和"最近 5 个活跃话题"那张表 | — | M3 验收时 |
 
@@ -1091,7 +1103,9 @@ e05、e06、e07、e10、e11 已做完，结果在 `docs/research/2026-10-15-v1-s
 
 Mac 上按最晚期限排：e03、e04、e08，一次一个。e10 留给 owner 的两项在 s14、s18 之前，e09 在客户端里看的部分在 s30 之前，Claude 分别请 owner 做。
 
-JP-VPS 上剩下的按最晚期限排：e12（Codex 的一半等 s23b 合入，Claude 的一半等 s23c）、e09 看消息数据的一半。e14 已在 2026-10-15 做完，见 `docs/research/2026-10-15-v1-spikes/e14-resume-same-session.md`；"两边都写"要不要改（每轮开口前看一眼会话，别人写过就重新接上；Codex 每轮结束就放开线程），等 owner 定。
+e12 已在 2026-10-18 做完，结果在 `docs/research/2026-10-18-e12-judge/`，对 s23b、s23c、s23d、s25 的影响写进了各自的开工要点，第 5 节的上限、超时和并发三行按它改了。没测完的：在 Mac 上量（product.md 3.4 写的是 Mac），额度的精确值（owner 没看账户页面，接口只到 1 个百分点）。
+
+JP-VPS 上剩下的：e09 看消息数据的一半。e14 已在 2026-10-15 做完，见 `docs/research/2026-10-15-v1-spikes/e14-resume-same-session.md`；"两边都写"要不要改（每轮开口前看一眼会话，别人写过就重新接上；Codex 每轮结束就放开线程），等 owner 定。
 
 ### 4.2 实验结果和 product.md 不一致时
 
@@ -1110,11 +1124,11 @@ product.md 没给值、由 Claude 定的。owner 可以在任何时候改。
 | bot 默认权限档 | 读写、开网。只给私聊用，群在建立时有自己的默认档（3.8） | 管理员包含飞书应用的开发者（第 6 节），他们都能私聊 bot。私聊默认完全访问，等于把主人 Mac 上执行任意命令的权限交给所有开发者。读写档下 agent 只能写工作区和这一次的记忆目录，越权直接拒绝，和 owner 第 23 题"超出权限就直接拒绝"一致。主人要完全访问，在桌面端或网页里改 | s36、s49 |
 | Linux 上用 Codex 时的私聊 | Linux 的首次运行清单加一步，写明"Linux 上 Codex 只能用完全访问"，由主人自己选要不要把 bot 默认档改成完全访问，不自动放开 | 读写档在 Linux 上的 Codex 起不来（3.8） | s20a |
 | 群没设工作区时 | 只用群自己的目录，不带 bot 的其余工作区；代码仓库照常继承 | 每个群的文件和记忆分开（3.3） | s36 |
-| 每群每小时的判断上限 | 60 次，e12 量完再调 | 3.4 要求有上限，没给数 | s25 |
+| 每群每小时的判断上限 | 60 次（e12 量过，不改） | 3.4 要求有上限，没给数。e12：额度没有成为瓶颈的迹象，但只量到上界，Codex 154 条用掉的周额度不到 1 个百分点；吞吐上一个 bot 进程每分钟 Codex 能判断 60 多条，Claude 约 26 条。没有数据支持改动，卡住的是内存和排队（下面"判断的并发"） | s25 |
 | 界面上要不要先露出决策模型 | 不露出。存设置时留出"大模型""决策模型"两类，界面只显示大模型 | owner 说决策模型先不用支持，第四题没答；放一个点不了的选项只会让人困惑，以后加选项不用迁移数据 | s23、s41 |
 | 智能提示词的显示 | 完整显示内置默认值，改过的能一键恢复默认；程序附的格式行只读显示 | owner 要提示词"都可以看到"；格式行改了程序就读不懂结果 | s41、s42 |
-| 判断的超时 | 主区和话题 20 秒，主区被 @ 的 10 秒，从调用算到出结果，含排队和冷启动；e12 量完再调 | 规格没给。被 @ 的一定回，判断只定位置，超时就回在主区，少让人等 | s23a |
-| 判断的并发 | 每个 bot 进程、每个后端：Codex 同时 4 条，Claude 2 条，各排队 16 条，满了算 busy（不回，被 @ 的回在主区）；名额等后端调用落定才还，最多等 15 秒。上限按 bot 进程算：N 个 Claude 智能 bot 最多 2N 个 CLI（3 个约 1.5 GB），N 个 Codex 智能 bot 各一个判断进程；整机统一限流在 s26 | Claude 每次判断起一个约 250 MB 的 CLI，JP-VPS 只有 3.9 GB；s25 到 s26 之间接受按进程算的上限 | s23a、s26 |
+| 判断的超时 | 主区和话题 20 秒，主区被 @ 的 12 秒（e12 后从 10 秒改，代码里 `D/judge/judge.ts` 的 `JUDGE_TIMEOUT_MS.mentioned` 在 s25 改），从调用算到出结果，含排队和冷启动 | 规格没给。被 @ 的一定回，判断只定位置，超时就回在主区，少让人等。e12：热判断 Codex 最长 7.9 秒、Claude 最长 6.1 秒；Codex 判断进程冷启动 10.3 到 11.1 秒（4 次里 3 次超过 10 秒），进程空闲 10 分钟就回收，消息不多的群里被 @ 时多半碰上冷进程，10 秒时这些都回在主区、丢掉"开话题"。12 秒盖住这次看到的全部冷启动，热判断不受影响，代价是判断卡住时被 @ 的回复晚 2 秒开始。主区和话题加排一轮也在 20 秒内，只有排满时碰线 | s23a、s25 |
+| 判断的并发 | 每个 bot 进程、每个后端：Codex 同时 4 条，Claude 2 条，各排队 16 条，满了算 busy（不回，被 @ 的回在主区）；名额等后端调用落定才还，最多等 15 秒。上限按 bot 进程算：N 个 Claude 智能 bot 最多 2N 个 CLI（3 个约 2.1 GB），N 个 Codex 智能 bot 各一个判断进程（空闲约 215 MB，做一条涨 2 到 3 MB，s25 起做满一定条数就换新）；整机统一限流在 s26 | Claude 每次判断起一个约 350 MB 的 CLI（e12：中位 338 MB，最大约 380 MB），JP-VPS 只有 3.9 GB；s25 到 s26 之间接受按进程算的上限。e12：Codex 一个进程 4 条是真并行；Claude 在 2 核上两个 CLI 同时启动已在抢 CPU，第 3、4 条排一轮后 9 到 13 秒 | s23a、s25、s26 |
 | 判断出错后的冷却 | 结构化的错误码才冷却 5 分钟：没登录、额度用完冷这个后端，版本、模型冷这个后端加模型；只从文字猜出来的不冷却 | 额度用完时每条消息都去调只会白白排队；文字匹配很宽，误判一次让这个 bot 所有智能群停 5 分钟，代价太大 | s23c |
 | 默认判断模型 | Codex 用 gpt-6-luna，推理强度取模型列表里最低的一档（现在是 low），列表还没拉到时也用 low；手填的 id 和不支持推理强度的模型不传。Claude 用别名 haiku、请求时关思考（haiku 仍会少量思考，s23c 实测）；只有 `ANTHROPIC_BASE_URL` 指向非 Anthropic 的地址（网关）时才用网关的模型（s23c）| 3.4 要小模型、控制成本；订阅用户在 settings 里写 `"model":"opus"` 很常见，判断跟着用 Opus，每条群消息一次，额度高一个数量级 | s23a、s23c |
 | 以后加决策模型 | 升 `PROTOCOL_VERSION`，或者先发一版让设置视图里 `judge.selection` 的 kind 有兜底分支 | 视图里的 selection 按 kind 区分，老的命令行和网页读到不认识的 kind 会整个设置视图解析失败 | 加决策模型的那片 |
