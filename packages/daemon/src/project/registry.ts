@@ -1,7 +1,8 @@
 import { mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { dirname } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { paths } from '../config/paths';
+import { acquireMutex, closeMutex } from '../config/data-access';
 import type { PermissionMode, ReasoningEffort } from '../agent/types';
 import { admitDirectoryChanges, parseDirectorySettings, type DirectorySettings } from '../config/directories';
 
@@ -160,8 +161,8 @@ interface StoreFile {
 
 const FILE_VERSION = 1;
 
-async function read(): Promise<Project[]> {
-  return listProjectsIn(paths.projectsFile);
+async function read(file = paths.projectsFile): Promise<Project[]> {
+  return listProjectsIn(file);
 }
 
 /** 读取指定 projects.json（绝对路径）。Web 控制台 / supervisor 跨 bot 聚合视图
@@ -214,22 +215,32 @@ export async function splitTierChats(file = paths.projectsFile): Promise<Map<str
   return split;
 }
 
-// 同进程内并发的「读-改-写」串行化（addProject/updateProject/removeProject）：既防
-// 共用 tmp 文件交错损坏，也防两个回调基于同一旧快照算 next、后写覆盖前写的丢更新
-// （白名单数组增删最易踩中）。配合函数式 updater，把 read+算+write 收进一个临界区。
+type RegistryLocation = Readonly<{ file: string; dataRoot: string }>;
 let opChain: Promise<unknown> = Promise.resolve();
-function withLock<T>(fn: () => Promise<T>): Promise<T> {
-  const run = opChain.then(fn, fn);
-  opChain = run.then(
-    () => undefined,
-    () => undefined,
-  );
+function ownProjects<T>(operation: (location: RegistryLocation) => Promise<T>): Promise<T> {
+  const captured = { file: paths.projectsFile, dataRoot: paths.appDir };
+  const run = opChain.then(async () => {
+    await mkdir(dirname(captured.file), { recursive: true });
+    const parent = await realpath(dirname(captured.file));
+    const location = { ...captured, file: join(parent, basename(captured.file)) };
+    const mutex = await acquireMutex(parent, 'projects', 30_000);
+    let result: T;
+    try { result = await operation(location); }
+    catch (error) {
+      try { await closeMutex(mutex); }
+      catch (releaseError) { throw new AggregateError([error, releaseError], 'Project operation and mutex release failed'); }
+      throw error;
+    }
+    await closeMutex(mutex);
+    return result;
+  });
+  opChain = run.catch(() => undefined);
   return run;
 }
 
 /** projects.json as stored, `{}` when missing. */
-async function readStored(): Promise<Record<string, unknown>> {
-  return readFile(paths.projectsFile, 'utf8').then(text => JSON.parse(text)).catch(error => { if (error.code === 'ENOENT') return {}; throw error; });
+async function readStored(file: string): Promise<Record<string, unknown>> {
+  return readFile(file, 'utf8').then(text => JSON.parse(text)).catch(error => { if (error.code === 'ENOENT') return {}; throw error; });
 }
 
 type DirectoryRow = Pick<Project, 'name' | 'cwd'> & Record<string, unknown>;
@@ -247,7 +258,7 @@ function directoryRows(raw: unknown): DirectoryRow[] {
   });
 }
 
-async function writeStored(body: Record<string, unknown>, previous: Record<string, unknown>): Promise<void> {
+async function writeStored(location: RegistryLocation, body: Record<string, unknown>, previous: Record<string, unknown>): Promise<void> {
   // Both callers own detached rows and a separate previous disk snapshot.
   const next = body;
   const oldProjects = directoryRows(previous.projects);
@@ -268,23 +279,22 @@ async function writeStored(body: Record<string, unknown>, previous: Record<strin
       }
       if (directories.workspaces.primary !== cwd) throw new Error('Invalid directory settings: directories.workspaces.primary (must match cwd)');
     }
-    await admitDirectoryChanges(directories, oldDirectories, paths.appDir);
+    await admitDirectoryChanges(directories, oldDirectories, location.dataRoot);
   }
   const serialized = `${JSON.stringify(next, null, 2)}\n`;
-  await mkdir(dirname(paths.projectsFile), { recursive: true });
-  const tmp = `${paths.projectsFile}.tmp-${process.pid}-${randomUUID()}`;
+  const tmp = `${location.file}.tmp-${process.pid}-${randomUUID()}`;
   await writeFile(tmp, serialized, 'utf8');
-  await rename(tmp, paths.projectsFile);
+  await rename(tmp, location.file);
 }
 
-async function write(projects: Project[]): Promise<void>;
-async function write(projects: Project[], selected: Project): Promise<Project>;
-async function write(projects: Project[], selected?: Project): Promise<Project | void> {
+async function write(location: RegistryLocation, projects: Project[]): Promise<void>;
+async function write(location: RegistryLocation, projects: Project[], selected: Project): Promise<Project>;
+async function write(location: RegistryLocation, projects: Project[], selected?: Project): Promise<Project | void> {
   const detached: Project[] = JSON.parse(JSON.stringify(projects));
   const result = selected === undefined ? undefined : detached[projects.indexOf(selected)];
   if (selected !== undefined && result === undefined) throw new Error('待保存的项目不存在');
-  const previous = await readStored();
-  await writeStored({ ...previous, version: FILE_VERSION, projects: detached }, previous);
+  const previous = await readStored(location.file);
+  await writeStored(location, { ...previous, version: FILE_VERSION, projects: detached }, previous);
   return result;
 }
 
@@ -294,13 +304,14 @@ async function write(projects: Project[], selected?: Project): Promise<Project |
  * as stored. Writes only when there is something to change.
  */
 export async function setTierMergePending(chats: readonly string[]): Promise<void> {
-  return withLock(async () => {
-    const stored = await readStored();
-    if (!Array.isArray(stored.projects) || (!chats.length && !Object.hasOwn(stored, TIER_MERGE_PENDING))) return;
+  const capturedChats = [...chats];
+  return ownProjects(async location => {
+    const stored = await readStored(location.file);
+    if (!Array.isArray(stored.projects) || (!capturedChats.length && !Object.hasOwn(stored, TIER_MERGE_PENDING))) return;
     const previous: Record<string, unknown> = JSON.parse(JSON.stringify(stored));
-    if (chats.length) stored[TIER_MERGE_PENDING] = [...chats];
+    if (capturedChats.length) stored[TIER_MERGE_PENDING] = capturedChats;
     else delete stored[TIER_MERGE_PENDING];
-    await writeStored(stored, previous);
+    await writeStored(location, stored, previous);
   });
 }
 
@@ -319,9 +330,10 @@ export async function getProjectByName(name: string): Promise<Project | undefine
 /** Add a project. Throws if the name — or the bound chat — is already taken.
  * The chatId check is the registry-level hard guard against binding one group
  * twice (createProject's chatId is freshly minted so it never trips). */
-export async function addProject(p: Project): Promise<void> {
-  return withLock(async () => {
-    const projects = await read();
+export async function addProject(input: Project): Promise<void> {
+  const p = structuredClone(input);
+  return ownProjects(async location => {
+    const projects = await read(location.file);
     if (projects.some((x) => x.name === p.name)) {
       throw new Error(`项目名「${p.name}」已存在`);
     }
@@ -330,7 +342,7 @@ export async function addProject(p: Project): Promise<void> {
       if (bound) throw new Error(`该群已绑定为项目「${bound.name}」`);
     }
     projects.push(p);
-    await write(projects);
+    await write(location, projects);
   });
 }
 
@@ -341,49 +353,50 @@ export async function updateProject(
   name: string,
   patch: Partial<Omit<Project, 'name'>> | ((p: Project) => Partial<Omit<Project, 'name'>>),
 ): Promise<void> {
-  return withLock(async () => {
-    const projects = await read();
+  const capturedPatch = typeof patch === 'function' ? patch : structuredClone(patch);
+  return ownProjects(async location => {
+    const projects = await read(location.file);
     const p = projects.find((x) => x.name === name);
     if (!p) return;
-    const actual = typeof patch === 'function' ? patch(p) : patch;
+    const actual = typeof capturedPatch === 'function' ? capturedPatch(p) : capturedPatch;
     const target = p as unknown as Record<string, unknown>;
     for (const [k, v] of Object.entries(actual)) {
       if (v !== undefined) target[k] = v;
     }
-    await write(projects);
+    await write(location, projects);
   });
 }
 
 /** Remove (unbind) a project by name. Returns the removed entry, if any. */
 export async function removeProject(name: string, beforeRemove?: (project: Project) => void): Promise<Project | undefined> {
-  return withLock(async () => {
-    const projects = await read();
+  return ownProjects(async location => {
+    const projects = await read(location.file);
     const idx = projects.findIndex((p) => p.name === name);
     if (idx === -1) return undefined;
     beforeRemove?.(projects[idx]!);
     const [removed] = projects.splice(idx, 1);
-    await write(projects);
+    await write(location, projects);
     return removed;
   });
 }
 
 export async function mutateProject(name: string, mutate: (project: Project) => void | Promise<void>): Promise<Project> {
-  return withLock(async () => {
-    const projects = await read();
+  return ownProjects(async location => {
+    const projects = await read(location.file);
     const project = projects.find(item => item.name === name);
     if (!project) throw new Error('项目不存在');
     await mutate(project);
-    return write(projects, project);
+    return write(location, projects, project);
   });
 }
 
 /** Remove exactly one raw directory override; other keys/settings are retained. */
 export async function resetProjectDirectoryOverride(name: string, key: keyof DirectorySettings): Promise<void> {
-  return withLock(async () => {
-    const projects = await read();
+  return ownProjects(async location => {
+    const projects = await read(location.file);
     const project = projects.find(item => item.name === name);
     if (!project?.directories || !Object.hasOwn(project.directories, key)) return;
     delete project.directories[key];
-    await write(projects);
+    await write(location, projects);
   });
 }
