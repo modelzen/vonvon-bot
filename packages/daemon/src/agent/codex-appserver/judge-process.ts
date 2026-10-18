@@ -29,7 +29,7 @@ export const JUDGE_RPC_STUCK_MS = 15_000;
 export const JUDGE_IDLE_MS = 10 * 60_000;
 /** On 0.163.0 an ephemeral thread stays loaded after `thread/unsubscribe`, and `thread/delete` and
  * `thread/archive` refuse it (s23e), so the process grows 2 to 3 MB a judgement from about 215 MB idle
- * (e12). 100 keeps it near 450 MB, at one 8 to 11 s cold start per 100 judgements. */
+ * (e12, s23e). 100 keeps it under about 520 MB, at one 8 to 11 s cold start per 100 judgements. */
 export const JUDGE_RECYCLE_AFTER = 100;
 /** No new process this long after a connect failure, an unexpected exit or a stuck kill. */
 export const JUDGE_BACKOFF_MS: readonly number[] = [5_000, 15_000, 60_000];
