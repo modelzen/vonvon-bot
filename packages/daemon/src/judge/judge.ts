@@ -1,10 +1,13 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { catalogBackendIds } from '../agent/catalog';
 import { BackendNotInstalledError } from '../agent/backend-loader';
+import { ProviderProcessCleanupError } from '../agent/owned-process';
 import { DEFAULT_BACKEND_ID, JudgeCallError, type AgentBackend, type JudgeCallOutput } from '../agent/types';
 import { paths } from '../config/paths';
 import { log } from '../core/logger';
-import { defaultJudgeModel } from './model';
+import { createCooldown } from './cooldown';
+import { parseStoredJudge, resolveJudgeModel } from './model';
 import { judgeSchema, judgeSystem, parseVerdict, renderJudgeInput } from './prompt';
 import { readSmartPrompt, SmartPromptError } from './smart-file';
 import type { JudgeDecision, JudgeErrorKind, JudgeRequest, JudgeResult } from './types';
@@ -126,6 +129,9 @@ export function createJudge(deps: JudgeDeps): Judge {
     return cwdOnce;
   });
   const limiters = new Map<string, Limiter>();
+  const cooldown = createCooldown(now);
+  /** Stored settings already reported as unusable, so each is logged once. */
+  const ignored = new Set<string>();
   const listFetch = new Map<string, { running: boolean; retryAt: number }>();
   /** Controllers of judgements not yet settled, aborted on shutdown. */
   const live = new Set<AbortController>();
@@ -160,6 +166,19 @@ export function createJudge(deps: JudgeDeps): Judge {
     } catch {
       done();
     }
+  }
+
+  /** A stored setting, or nothing (logged once per layer and value) when it cannot be used. */
+  function storedJudge(value: unknown, layer: string) {
+    const parsed = parseStoredJudge(value, catalogBackendIds());
+    if (parsed.why) {
+      const key = `${layer}\n${JSON.stringify(value)}`;
+      if (!ignored.has(key)) {
+        ignored.add(key);
+        log.warn('judge', 'setting-ignored', { layer, why: parsed.why });
+      }
+    }
+    return parsed.value;
   }
 
   /** Give the slot back when the backend call settles, or 15 s after the judgement was aborted. */
@@ -240,7 +259,10 @@ export function createJudge(deps: JudgeDeps): Judge {
       const backend = deps.backendFor(base.backend);
       const models = backend.peekModels?.();
       if (backend.peekModels && !models) fetchModels(backend);
-      base = { ...base, backend: backend.id, ...defaultJudgeModel(backend.id, models) };
+      base = {
+        ...base, backend: backend.id,
+        ...resolveJudgeModel(backend.id, { group: storedJudge(req.group.judge, req.group.chatId), bot: storedJudge(req.botJudge, 'bot') }, models),
+      };
 
       // Steps 3 to 6 race the shared controller: a stuck file read, queue or backend still returns
       // on time. The backend call keeps running and cleans up on its own; its slot waits for that.
@@ -248,6 +270,8 @@ export function createJudge(deps: JudgeDeps): Judge {
         const prompt = await readPrompt(req.appId, req.group.chatId);
         base = { ...base, promptSource: prompt.source };
         if (!backend.judge) throw new JudgeFail('unavailable', `${backend.displayName} 不支持判断`);
+        const cooling = cooldown.check(backend.id, base.model);
+        if (cooling) throw new JudgeFail(cooling.kind, cooling.detail);
         const dir = await cwd();
         const limiter = limiterFor(backend.id);
         const queuedAt = now();
@@ -258,6 +282,12 @@ export function createJudge(deps: JudgeDeps): Judge {
           // granted in the same tick as the abort: hand the slot straight back
           limiter.release();
           throw ctl.signal.reason;
+        }
+        // a judgement that ran while this one queued may have just started a cooldown
+        const cooledWhileQueued = cooldown.check(backend.id, base.model);
+        if (cooledWhileQueued) {
+          limiter.release();
+          throw new JudgeFail(cooledWhileQueued.kind, cooledWhileQueued.detail);
         }
         try {
           call = backend.judge({
@@ -272,6 +302,13 @@ export function createJudge(deps: JudgeDeps): Judge {
         } catch (error) {
           call = Promise.reject(error);
         }
+        const { model } = base;
+        call.catch((error: unknown) => {
+          cooldown.note(backend.id, model, error);
+          // The result already says timeout, aborted or closed; a process the call could not clean up
+          // (it needed SIGKILL, pipes stayed open, its exit was never confirmed) would go unreported.
+          if (ctl.signal.aborted && error instanceof ProviderProcessCleanupError) log.fail('judge', error, { phase: 'abandoned-call', backend: backend.id });
+        });
         releaseWhenSettled(limiter, call, ctl.signal, backend.id);
         return call;
       })();

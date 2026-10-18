@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const fixture = vi.hoisted(() => ({ api: vi.fn(), providers: vi.fn(), shutdown: vi.fn(), onboard: vi.fn() }));
 vi.mock('../src/core/logger', () => ({ log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() } }));
-vi.mock('../src/agent/codex-appserver/owned-process', () => ({ closeOwnedCodexProcesses: fixture.providers, unconfirmedCodexPids: () => [] }));
+vi.mock('../src/agent/owned-process', () => ({ closeOwnedProviderProcesses: fixture.providers, unconfirmedProviderPids: () => [] }));
 vi.mock('../src/bot/onboarding', () => ({ ensureOnboarded: fixture.onboard, announceEventsWhenLive: vi.fn() }));
 vi.mock('../src/bot/bridge', () => ({ startBridge: vi.fn(async () => ({ shutdown: fixture.shutdown })) }));
 vi.mock('../src/core/single-instance', () => ({ acquireSingleInstanceLock: () => () => {}, BridgeAlreadyRunningError: class extends Error {} }));

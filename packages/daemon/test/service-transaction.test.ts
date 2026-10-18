@@ -743,6 +743,15 @@ it('launchd start kickstarts past a stale owner that failed authentication and w
     expect(started).toMatchObject({ startedAt: first.startedAt, port: 49101 });
   });
 });
+// s20e: the new lock cannot see a pre-s20c daemon's port lock, so start must reuse the live owner, not ask launchd again.
+it('launchd start reuses a live authenticated owner without bootstrapping or kickstarting', async () => {
+  await withLaunchd(async f => {
+    await f.seed();
+    f.state.owner = { ...first }; f.state.pid = first.pid;
+    await expect(f.service.start()).resolves.toMatchObject({ pid: first.pid, startedAt: first.startedAt, port: 49101 });
+    expect(f.calls.filter(call => /^(bootstrap|kickstart) /.test(call))).toEqual([]);
+  });
+});
 it.each(['loaded', 'absent'] as const)('launchd start after a failed bootstrap that left the job %s', async after => {
   await withLaunchd(async f => {
     await f.seed(); f.state.loaded = false; f.state.bootstrap = 'error';

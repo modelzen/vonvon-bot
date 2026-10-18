@@ -63,9 +63,9 @@ vi.mock('../src/server/owner-verification', () => ({ verifyPidLockOwner: fixture
 vi.mock('../src/service/adapter', () => ({ getServiceAdapter: fixture.getAdapter }));
 vi.mock('../src/service/startup', () => ({ readStartupRegistration: async () => ({ kind: 'absent' }), startRegisteredDaemon: async () => { throw new Error('unexpected service start'); } }));
 
-vi.mock('../src/agent/codex-appserver/owned-process', () => ({
-  closeOwnedCodexProcesses: fixture.registryClose,
-  unconfirmedCodexPids: fixture.registryPids,
+vi.mock('../src/agent/owned-process', () => ({
+  closeOwnedProviderProcesses: fixture.registryClose,
+  unconfirmedProviderPids: fixture.registryPids,
 }));
 vi.mock('../src/agent', () => ({ installBackendDep() {}, uninstallBackendDep() {} }));
 vi.mock('../src/bot/bridge', () => ({ startBridge: fixture.startBridge }));
