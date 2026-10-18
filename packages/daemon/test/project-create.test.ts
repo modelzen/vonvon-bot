@@ -65,7 +65,8 @@ describe('s36d1 createProject', () => {
     expect(taken.cwd).toMatch(new RegExp(`^${groups()}/Taken-[0-9a-f]{8}$`));
     expect(await readFile(join(groups(), 'Taken', 'keep.txt'), 'utf8')).toBe('mine');
     expect(await readdir(taken.cwd)).toEqual([]);
-    for (const name of ['..', '.', 'a/b']) {
+    // A name equal to a bot's handle (any case) or climbing out must not land on a bot directory, the projects root or the data dir (review R4-1, R6-1).
+    for (const name of ['..', '.', 'a/b', '../x', 'fixture', 'Fixture', 'other-bot']) {
       const project = await createProject({ rawClient: fakeLark().client }, input(name));
       expect(project.cwd.startsWith(`${groups()}/`)).toBe(true);
       expect(await realpath(project.cwd)).toBe(project.cwd);
