@@ -13,6 +13,13 @@ export type { JudgeErrorKind } from '../agent/error-kind';
 export type JudgeVariant = 'main' | 'mentioned' | 'topic';
 export type JudgeDecision = 'skip' | 'main' | 'topic' | 'reply';
 
+/**
+ * The judge model a bot (`preferences.judge`) or a group (`Project.judge`) stores (design 2.1).
+ * `backend` says whose model id this is: a layer applies only to groups on that backend. A later
+ * decision model would be another kind; an unknown kind reads as unset and is never rewritten.
+ */
+export type JudgeSelectionStored = { kind: 'llm'; backend: string; model: string; effort?: ReasoningEffort; custom?: true };
+
 export interface JudgeLine {
   /** epoch ms */
   at: number;
@@ -34,8 +41,10 @@ export interface JudgeRequest {
   appId: string;
   /** the 你 of the prompt */
   botName: string;
-  /** s23c adds the group's `judge` setting here, and `botJudge` next to it */
-  group: Pick<Project, 'chatId' | 'name' | 'backend'>;
+  /** the group's backend and its judge model override (unchecked, as stored) */
+  group: Pick<Project, 'chatId' | 'name' | 'backend' | 'judge'>;
+  /** `cfg.preferences.judge` as stored; the judge layer checks it (parseStoredJudge) */
+  botJudge?: unknown;
   /** a summary of the bot's personality (SOUL.md from s38 on), cut to 1,500 characters */
   persona?: string;
   /** topic variant: the topic's title */

@@ -4,7 +4,7 @@ import { AppServerClient } from './app-server-client';
 import { resolveCodexBin } from './locate';
 import { binChildEnv } from '../../platform/tool-path';
 import { installManagedCodex, runSetupChild } from './managed-install';
-import { CodexProcessCleanupError } from './owned-process';
+import { ProviderProcessCleanupError } from '../owned-process';
 
 export interface CodexSetup {
   installation: 'missing' | 'installed' | 'unknown';
@@ -39,7 +39,7 @@ function deviceLogin(raw: unknown): { loginId: string; userCode: string; verific
 export class CodexSetupService {
   private readonly jobs = new Map<string, JobEntry>();
   private active: JobEntry | undefined;
-  private readonly cleanupFailures = new Map<string, CodexProcessCleanupError>();
+  private readonly cleanupFailures = new Map<string, ProviderProcessCleanupError>();
   private closed = false;
   private probe: { abort: AbortController; done: Promise<CodexSetup> } | undefined;
   private closing: Promise<void> | undefined;
@@ -52,7 +52,7 @@ export class CodexSetupService {
     if (this.probe) return this.probe.done;
     const abort = new AbortController();
     const done = this.readSetup(abort.signal).catch(error => {
-      if (error instanceof CodexProcessCleanupError) this.cleanupFailures.set('probe', error);
+      if (error instanceof ProviderProcessCleanupError) this.cleanupFailures.set('probe', error);
       throw error;
     }).finally(() => { this.probe = undefined; });
     this.probe = { abort, done };
@@ -78,7 +78,7 @@ export class CodexSetupService {
       const authentication = accountState(await client.request('account/read', { refreshToken: false }, 10_000));
       return { installation: 'installed', authentication, version, executable: bin, message: `当前 Codex：${bin}` };
     } catch (error) {
-      if (error instanceof CodexProcessCleanupError) throw error;
+      if (error instanceof ProviderProcessCleanupError) throw error;
       return { installation: version && /^codex-cli \S+$/.test(version) ? 'installed' : 'unknown', authentication: 'unknown', version, executable: bin, message: `无法确认当前 Codex 的账户状态：${bin}` };
     } finally {
       signal.removeEventListener('abort', stop);
@@ -105,8 +105,8 @@ export class CodexSetupService {
         abort.signal.throwIfAborted();
         entry.snapshot = { id, type, state: 'succeeded', message: type === 'install' ? 'Codex 已安装并通过版本校验' : 'Codex 账户已确认登录' };
       } catch (error) {
-        if (error instanceof CodexProcessCleanupError) this.cleanupFailures.set(id, error);
-        const cancelled = abort.signal.aborted && !(error instanceof CodexProcessCleanupError);
+        if (error instanceof ProviderProcessCleanupError) this.cleanupFailures.set(id, error);
+        const cancelled = abort.signal.aborted && !(error instanceof ProviderProcessCleanupError);
         entry.snapshot = { id, type, state: cancelled ? 'cancelled' : 'failed', message: cancelled ? '操作已取消' : error instanceof Error ? error.message : 'Codex 设置失败' };
       } finally {
         clearTimeout(timeout);

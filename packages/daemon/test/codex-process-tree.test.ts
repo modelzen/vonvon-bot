@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CodexProcessCleanupError, OwnedCodexProcess } from '../src/agent/codex-appserver/owned-process';
+import { ProviderProcessCleanupError, OwnedProviderProcess } from '../src/agent/owned-process';
 import { AppServerClient } from '../src/agent/codex-appserver/app-server-client';
 import { runSetupChild } from '../src/agent/codex-appserver/managed-install';
 import { writeNodeExecutable } from './helpers/node-executable';
@@ -23,11 +23,11 @@ type StartTrace = {
 };
 const startDiagnostics = vi.hoisted((): { active: StartTrace | undefined } => ({ active: undefined }));
 const owners = vi.hoisted(() => new Set<{ close(): Promise<void> }>());
-vi.mock('../src/agent/codex-appserver/owned-process', async original => {
-  const actual = await original<typeof import('../src/agent/codex-appserver/owned-process')>();
-  return { ...actual, OwnedCodexProcess: class extends actual.OwnedCodexProcess {
+vi.mock('../src/agent/owned-process', async original => {
+  const actual = await original<typeof import('../src/agent/owned-process')>();
+  return { ...actual, OwnedProviderProcess: class extends actual.OwnedProviderProcess {
     private readonly trace: StartTrace | undefined;
-    constructor(...args: ConstructorParameters<typeof actual.OwnedCodexProcess>) {
+    constructor(...args: ConstructorParameters<typeof actual.OwnedProviderProcess>) {
       const trace = startDiagnostics.active;
       trace?.record({ event: 'owner-entry' });
       super(...args);
@@ -41,7 +41,7 @@ vi.mock('../src/agent/codex-appserver/owned-process', async original => {
         this.child.once('close', code => trace.record({ event: 'child-close', code }));
       }
     }
-    override close(...args: Parameters<InstanceType<typeof actual.OwnedCodexProcess>['close']>): Promise<void> {
+    override close(...args: Parameters<InstanceType<typeof actual.OwnedProviderProcess>['close']>): Promise<void> {
       const trace = this.trace;
       trace?.record({ event: 'close-entry' });
       const closing = super.close(...args);
@@ -129,7 +129,7 @@ async function descendant(ready: string): Promise<FixtureProcess> {
 describe('owned Codex process trees', () => {
   it.skipIf(process.platform === 'win32')('keeps polling an EPERM liveness result until the owned group is absent', async () => {
     const f = fixture(false);
-    const owned = new OwnedCodexProcess(process.execPath, ['-e', 'setInterval(()=>{},100)'], { cwd: f.root, stdio: 'ignore' });
+    const owned = new OwnedProviderProcess(process.execPath, ['-e', 'setInterval(()=>{},100)'], { cwd: f.root, stdio: 'ignore' });
     const pid = owned.child.pid!;
     const kill = process.kill.bind(process);
     let permissionDenied = false;
@@ -187,7 +187,7 @@ describe('owned Codex process trees', () => {
     abort.abort();
     const result = await running;
     if (process.platform === 'win32') expect(result).toBe(abort.signal.reason);
-    else expect(result).toBeInstanceOf(CodexProcessCleanupError);
+    else expect(result).toBeInstanceOf(ProviderProcessCleanupError);
     expect(originalAlive(target)).toBe(false);
     expectedCleanupErrors.add(result);
   });
@@ -222,20 +222,20 @@ describe('owned Codex process trees', () => {
     }
     const result = await Promise.race([client.close(50).catch(error => error), delay(8000).then(() => 'timeout')]);
     if (process.platform === 'win32' && !earlyExit) expect(result).toBeUndefined();
-    else expect(result).toBeInstanceOf(CodexProcessCleanupError);
+    else expect(result).toBeInstanceOf(ProviderProcessCleanupError);
     expect(originalAlive(target)).toBe(false);
     expectedCleanupErrors.add(result);
   }, process.platform === 'win32' ? 60_000 : 30_000);
 
   it.each([7, 254])('rejects owner close for observed natural exit %s', async code => {
     const f = fixture(false);
-    const owned = new OwnedCodexProcess(process.execPath, ['-e', `process.exit(${code})`], { cwd: f.root, stdio: ['pipe', 'pipe', 'pipe'] });
+    const owned = new OwnedProviderProcess(process.execPath, ['-e', `process.exit(${code})`], { cwd: f.root, stdio: ['pipe', 'pipe', 'pipe'] });
     owned.child.stdout?.resume();
     owned.child.stderr?.resume();
     expect((await owned.exited).code).toBe(code);
     const result: unknown = await owned.close().catch((error: unknown) => error);
-    expect(result).toBeInstanceOf(CodexProcessCleanupError);
-    if (!(result instanceof CodexProcessCleanupError && result.cause instanceof AggregateError)) throw new Error('Missing cleanup failure details');
+    expect(result).toBeInstanceOf(ProviderProcessCleanupError);
+    if (!(result instanceof ProviderProcessCleanupError && result.cause instanceof AggregateError)) throw new Error('Missing cleanup failure details');
     expect(result.cause.errors).toContainEqual(new Error(`Codex child exited with code ${code}`));
     expect(alive(owned.child.pid!)).toBe(false);
     expectedCleanupErrors.add(result);

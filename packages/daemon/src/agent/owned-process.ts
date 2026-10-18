@@ -1,23 +1,25 @@
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
-import { spawnProcess } from '../../platform/spawn';
+import { spawnProcess } from '../platform/spawn';
 
-export class CodexProcessCleanupError extends Error {}
+export class ProviderProcessCleanupError extends Error {}
+/** Process group is gone; the only reported failure is its nonzero exit status. */
+export class ProviderProcessExitError extends ProviderProcessCleanupError {}
 
-const ownedProcesses = new Set<OwnedCodexProcess>();
+const ownedProcesses = new Set<OwnedProviderProcess>();
 let accepting = true;
 let registryClose: Promise<void> | undefined;
 
-export function closeOwnedCodexProcesses(): Promise<void> {
+export function closeOwnedProviderProcesses(): Promise<void> {
   if (registryClose) return registryClose;
   accepting = false;
   registryClose = Promise.allSettled([...ownedProcesses].map(process => process.close())).then(results => {
     const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
-    if (errors.length) throw new AggregateError(errors, 'Codex process cleanup failed');
+    if (errors.length) throw new AggregateError(errors, 'Provider process cleanup failed');
   });
   return registryClose;
 }
 
-export function unconfirmedCodexPids(): number[] {
+export function unconfirmedProviderPids(): number[] {
   return [...ownedProcesses].flatMap(process => process.unconfirmedPid === undefined ? [] : [process.unconfirmedPid]);
 }
 
@@ -25,26 +27,29 @@ type Exit = { kind: 'exit'; code: number | null; signal: NodeJS.Signals | null }
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 const hasCode = (error: unknown, code: string): boolean => error instanceof Error && 'code' in error && error.code === code;
 
-export class OwnedCodexProcess {
+export class OwnedProviderProcess {
   readonly child: ChildProcess;
   private readonly pid: number | undefined;
   readonly exited: Promise<Exit>;
   private directExit: Exit | undefined;
   private groupGone = false;
   private unconfirmed = false;
+  /** set before our SIGTERM: a child that handles it and exits 143 (the Claude CLI does) stopped as asked */
+  private terminating = false;
   private readonly errors = new Map<string, unknown>();
   private readonly closed: Promise<void>;
   private closing: Promise<void> | undefined;
 
-  constructor(command: string, args: string[], options: SpawnOptions) {
-    if (!accepting) throw new Error('Codex process registry is closed');
+  constructor(command: string, args: string[], options: SpawnOptions, private readonly provider = 'Codex') {
+    if (!accepting) throw new Error(`${this.provider} process registry is closed`);
     this.child = spawnProcess(command, args, { ...options, detached: true });
     this.pid = this.child.pid;
     this.closed = new Promise(resolve => this.child.once('close', () => resolve()));
     this.exited = new Promise((resolve, reject) => {
       this.child.once('exit', (code, signal) => {
         this.directExit = { kind: 'exit', code, signal };
-        if (code !== null && code !== 0) this.record('exit', new Error(`Codex child exited with code ${code}`));
+        const askedToStop = this.terminating || this.child.killed;
+        if (code !== null && code !== 0 && !(askedToStop && code === 143)) this.record('exit', new Error(`${this.provider} child exited with code ${code}`));
         resolve(this.directExit);
       });
       this.child.on('error', error => {
@@ -98,12 +103,13 @@ export class OwnedCodexProcess {
   private killGroup(): void {
     this.signalGroup(0);
     if (this.groupGone) return;
-    this.record('forced', new Error('Codex process group required SIGKILL'));
+    this.record('forced', new Error(`${this.provider} process group required SIGKILL`));
     this.signalGroup('SIGKILL');
   }
 
   private async stop(graceMs: number): Promise<void> {
     if (this.pid === undefined) return;
+    this.terminating = true;
     this.signalGroup('SIGTERM');
     if (!await this.waitForDeath(Math.min(Math.max(0, graceMs), 4000))) {
       this.killGroup();
@@ -119,14 +125,15 @@ export class OwnedCodexProcess {
     try {
       await Promise.race([this.closed, new Promise<void>(resolve => {
         timer = setTimeout(() => {
-          this.record('pipes', new Error('Codex child pipes did not close'));
+          this.record('pipes', new Error(`${this.provider} child pipes did not close`));
           resolve();
         }, 500);
       })]);
     } finally { clearTimeout(timer); }
     if (this.errors.size) {
-      throw new CodexProcessCleanupError('Codex 子进程树已退出，但清理失败', {
-        cause: new AggregateError(this.errors.values(), 'Codex cleanup errors'),
+      const Failure = this.errors.size === 1 && this.errors.has('exit') ? ProviderProcessExitError : ProviderProcessCleanupError;
+      throw new Failure(`${this.provider} 子进程树已退出，但清理失败`, {
+        cause: new AggregateError(this.errors.values(), 'Provider cleanup errors'),
       });
     }
   }

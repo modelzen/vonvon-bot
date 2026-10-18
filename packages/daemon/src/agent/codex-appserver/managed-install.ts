@@ -6,7 +6,7 @@ import { paths } from '../../config/paths';
 import { bundledNpmCli } from '../../platform/npm';
 import { mergeProcessEnv } from '../../platform/spawn';
 import lock from './codex-install-lock.json';
-import { OwnedCodexProcess } from './owned-process';
+import { OwnedProviderProcess } from '../owned-process';
 
 export const CODEX_INSTALL_VERSION = '0.156.1';
 export const privateCodexBin = (prefix: string): string => join(prefix, 'node_modules', '.bin', process.platform === 'win32' ? 'codex.cmd' : 'codex');
@@ -22,7 +22,7 @@ export function managedCodexBin(codexCliDir = paths.codexCliDir): string | null 
 
 export async function runSetupChild(command: string, args: string[], options: { cwd: string; signal: AbortSignal; env?: NodeJS.ProcessEnv; timeoutMs?: number }): Promise<string> {
   options.signal.throwIfAborted();
-  const owned = new OwnedCodexProcess(command, args, { cwd: options.cwd, env: options.env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const owned = new OwnedProviderProcess(command, args, { cwd: options.cwd, env: options.env, stdio: ['ignore', 'pipe', 'pipe'] });
   let output = '';
   let stop: () => void = () => {};
   const interrupted = new Promise<undefined>(resolve => { stop = () => resolve(undefined); });

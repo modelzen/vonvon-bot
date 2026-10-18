@@ -2,8 +2,8 @@ import { afterEach, expect, it, vi } from 'vitest';
 
 const f = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), fail: vi.fn() }));
 vi.mock('../src/core/logger', () => ({ log: f }));
-vi.mock('../src/agent/codex-appserver/owned-process', () => ({
-  closeOwnedCodexProcesses: async () => {}, unconfirmedCodexPids: () => [123],
+vi.mock('../src/agent/owned-process', () => ({
+  closeOwnedProviderProcesses: async () => {}, unconfirmedProviderPids: () => [123],
 }));
 import { closeOwnedProviders } from '../src/host/lifecycle';
 
