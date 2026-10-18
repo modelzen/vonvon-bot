@@ -87,6 +87,43 @@ async function releaseAll(states: ReturnType<typeof actor>[]): Promise<void> {
 }
 
 describe('project registry process ownership', () => {
+  it('prepares and publishes one binding across eight independent processes', async () => {
+    const root = await home();
+    const cwd = join(root, 'projects', 'bound');
+    await mkdir(cwd, { recursive: true });
+    const identity = { name: 'bound', chatId: 'oc_bound', cwd, backend: 'codex-appserver', defaultBackend: 'codex-appserver', kind: 'multi', noMention: true };
+    const code = `const result=await m.bindProject(${JSON.stringify(identity)},async()=>{probe('prepare');return {blank:false,createdAt:1,origin:'joined',backend:'codex-appserver',directories:{workspaces:{primary:${JSON.stringify(cwd)},additional:[]}}}});console.log(JSON.stringify(result));`;
+    const first = actor(root, 'bind-0', code, { hold: true });
+    await first.wait('rename');
+    const rest = Array.from({ length: 7 }, (_, index) => actor(root, `bind-${index + 1}`, code));
+    await Promise.all(rest.map(state => state.wait('attempt')));
+    first.release();
+    const states = [first, ...rest];
+    const results = await Promise.all(states.map(async state => {
+      const result = await state.done;
+      expect(result.stderr).toBe(''); expect(result.code).toBe(0);
+      return JSON.parse(result.stdout);
+    }));
+    expect(results.filter(result => result.kind === 'bound')).toHaveLength(1);
+    expect(results.filter(result => result.kind === 'existing')).toHaveLength(7);
+    expect(results.every(result => JSON.stringify(result.project) === JSON.stringify(results[0].project))).toBe(true);
+    expect(states.flatMap(state => state.events).filter(event => event.event === 'prepare')).toHaveLength(1);
+    expect((await disk(root)).projects).toEqual([results[0].project]);
+  });
+
+  it('releases a failed binding preparation and lets a separate process bind', async () => {
+    const root = await home();
+    const identity = { name: 'bound', chatId: 'oc_bound', cwd: '/legacy-cwd', backend: 'codex-appserver', defaultBackend: 'codex-appserver', kind: 'multi', noMention: true };
+    const failed = actor(root, 'bind-failed', `await m.bindProject(${JSON.stringify(identity)},async()=>{throw Error('prepare-failed')});`);
+    const result = await failed.done;
+    expect(result.code).toBe(1); expect(result.stderr).toContain('prepare-failed');
+    await expect(readFile(join(root, 'projects.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(failed.events.some(event => event.event === 'released')).toBe(true);
+    const saved = await successful(root, `console.log(JSON.stringify(await m.bindProject(${JSON.stringify(identity)},async()=>({blank:true,createdAt:1}))));`);
+    expect(JSON.parse(saved).kind).toBe('bound');
+    expect((await disk(root)).projects).toHaveLength(1);
+  });
+
   it('preserves all eight successful adds across a forced publication interleaving', async () => {
     const root = await home();
     const first = actor(root, 'add-0', add('add-0'), { hold: true });

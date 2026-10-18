@@ -215,10 +215,10 @@ export async function splitTierChats(file = paths.projectsFile): Promise<Map<str
   return split;
 }
 
-type RegistryLocation = Readonly<{ file: string; dataRoot: string }>;
+export type RegistryLocation = Readonly<{ file: string; dataRoot: string }>;
 let opChain: Promise<unknown> = Promise.resolve();
-function ownProjects<T>(operation: (location: RegistryLocation) => Promise<T>): Promise<T> {
-  const captured = { file: paths.projectsFile, dataRoot: paths.appDir };
+function ownProjects<T>(operation: (location: RegistryLocation) => Promise<T>, target: RegistryLocation = { file: paths.projectsFile, dataRoot: paths.appDir }): Promise<T> {
+  const captured = { ...target };
   const run = opChain.then(async () => {
     await mkdir(dirname(captured.file), { recursive: true });
     const parent = await realpath(dirname(captured.file));
@@ -330,7 +330,7 @@ export async function getProjectByName(name: string): Promise<Project | undefine
 /** Add a project. Throws if the name — or the bound chat — is already taken.
  * The chatId check is the registry-level hard guard against binding one group
  * twice (createProject's chatId is freshly minted so it never trips). */
-export async function addProject(input: Project): Promise<void> {
+export async function addProject(input: Project, target?: RegistryLocation): Promise<void> {
   const p = structuredClone(input);
   return ownProjects(async location => {
     const projects = await read(location.file);
@@ -343,7 +343,42 @@ export async function addProject(input: Project): Promise<void> {
     }
     projects.push(p);
     await write(location, projects);
-  });
+  }, target);
+}
+
+type ProjectBinding = Pick<Project, 'name' | 'chatId' | 'cwd'> & {
+  backend: string;
+  defaultBackend: string;
+  kind: 'multi' | 'single';
+  noMention: boolean;
+};
+type NewBinding = Pick<Project, 'blank' | 'createdAt' | 'directories' | 'origin' | 'addedBy' | 'mode' | 'backend' | 'network'>;
+type BindingResult = { kind: 'bound'; project: Project } | { kind: 'existing'; project: Project };
+
+/** Decide against the latest row under the projects owner. prepareNew is local
+ * filesystem work only; callers send welcomes after this operation releases. */
+export function bindProject(input: ProjectBinding, prepareNew: () => Promise<NewBinding>, target?: RegistryLocation): Promise<BindingResult> {
+  const binding = { ...input };
+  return ownProjects(async location => {
+    const projects = await read(location.file);
+    const existing = projects.find(project => project.chatId === binding.chatId);
+    if (existing) {
+      const cwd = await realpath(existing.cwd).catch(() => existing.cwd);
+      const requested = await realpath(binding.cwd).catch(() => binding.cwd);
+      if (existing.name === binding.name && cwd === requested
+        && (existing.backend ?? binding.defaultBackend) === binding.backend
+        && sessionModeOf(existing) === binding.kind && noMentionOf(existing) === binding.noMention) {
+        return { kind: 'existing', project: existing };
+      }
+      throw new Error(`该群已绑定为项目「${existing.name}」，现有文件夹、后端和会话方式不可修改，免 @ 请在群设置里改`);
+    }
+    if (projects.some(project => project.name === binding.name)) throw new Error(`项目名「${binding.name}」已存在`);
+    const prepared = await prepareNew();
+    const project: Project = { ...prepared, name: binding.name, chatId: binding.chatId, cwd: binding.cwd,
+      kind: binding.kind, noMention: binding.noMention };
+    projects.push(project);
+    return { kind: 'bound', project: await write(location, projects, project) };
+  }, target);
 }
 
 /** Patch fields of a project by name; no-op if it doesn't exist. `patch` 可以是
