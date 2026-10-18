@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -34,6 +35,28 @@ async function fixture() {
   const home = join(dir, 'home'); const root = join(dir, 'daemon');
   await mkdir(home); await mkdir(root);
   return { home, root };
+}
+/** Keep unrelated listeners out of this registration test's legacy admission
+ * port. The CLI still acquires its real native mutex; the marker identifies
+ * this fixture as a newer holder of another key, never an old-build owner. */
+async function serviceFixture() {
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const f = await fixture();
+    const port = 20000 + createHash('sha256').update(`vonvon-bot-v2:admission:${await realpath(f.root)}`).digest().readUInt32BE(0) % 30000;
+    const listener = createServer(socket => {
+      socket.on('error', () => {});
+      socket.end('vonvon-mutex-v3\n', () => socket.destroy());
+    });
+    const available = await new Promise<boolean>((resolve, reject) => {
+      listener.once('error', error => {
+        if ('code' in error && error.code === 'EADDRINUSE') resolve(false);
+        else reject(error);
+      });
+      listener.listen({ host: '127.0.0.1', port, exclusive: true }, () => resolve(true));
+    });
+    if (available) return { ...f, listener };
+  }
+  throw new Error('No free legacy admission port for service fixture');
 }
 function launch(home: string, root: string, args: string[], extraEnv: NodeJS.ProcessEnv = {}) {
   const prefix = process.platform === 'win32' && args[0] === 'daemon' && args[1] === 'run'
@@ -226,11 +249,16 @@ it('replaces a dead daemon lock whose PID was reused without signaling the reusi
   await expect(readFile(join(f.root, 'daemon.pid'))).rejects.toMatchObject({ code: 'ENOENT' });
 }, 40_000);
 
-it('service-managed run exits 0 without locks when no registration names this root', async () => {
-  const f = await fixture();
-  const run = launch(f.home, f.root, ['daemon', 'run', '--port', '0'], { VONVON_SERVICE: process.platform === 'darwin' ? 'launchd' : 'systemd' });
-  expect(await run.exited, run.output()).toBe(0);
-  expect(await readdir(f.root)).not.toContain('daemon.pid');
+it('service-managed run exits 0 without a daemon PID lease when no registration names this root', async () => {
+  const f = await serviceFixture();
+  try {
+    const run = launch(f.home, f.root, ['daemon', 'run', '--port', '0'], { VONVON_SERVICE: process.platform === 'darwin' ? 'launchd' : 'systemd' });
+    expect(await run.exited, run.output()).toBe(0);
+    expect(await readdir(f.root)).not.toContain('daemon.pid');
+    expect(await readdir(join(f.root, '.access'))).toEqual([]);
+  } finally {
+    await new Promise<void>((resolve, reject) => f.listener.close(error => error ? reject(error) : resolve()));
+  }
 });
 
 it('service commands from a checkout and hidden controls leave an absent data home untouched', async () => {
