@@ -1,6 +1,6 @@
 # vonvon-bot 分工规则
 
-2026-10-17 到 10-18，Claude 额度用完期间，owner 把开发临时交给 JP-VPS 上的 Codex（#367）。这期间合入的 #364 到 #385 由 Codex 实现或收尾并合入（#364、#365 的主体是 Claude 之前写的），独立审查主要是 gpt-6-astra 审 gpt-6.1-sol。2026-10-18 owner 停下 Codex、交还职责，下文的分工照旧生效。
+2026-10-17 到 10-18，Claude 额度用完期间，owner 把开发临时交给 JP-VPS 上的 Codex（#367）。这期间的 PR（#364 到 #385）由 Codex 推进和合入，其中 #364、#365 的主体是 Claude 之前写的；独立审查主要由 gpt-6-astra 做，实现也是 Codex。2026-10-18 owner 停下 Codex、交还职责，下文的分工照旧生效。
 
 2026-10-14 起生效，取代 2026-10-13 的版本，适用于 v1 开发。2026-10-16 起，Mac 上的 Codex 由 Claude 经 Paseo 直接开会话，一个任务一个会话，结果贴回 GitHub；Paseo 用不了时（连不上、开不了会话，或者 #322 上还有活着的队列会话），才把任务贴进队列 issue #322 请 owner 转发，见"工具和同步"。两台机器读同一份规则。本文的 owner 指用户本人；旧的 `owner:` 标签不再使用。Claude 的非平凡任务用 Ultracode 工作流编排。Claude 侧的会话、模型和通知格式另见 JP-VPS 上的 `/home/ops/.claude/vonvon-collaboration.md`，这个文件不在仓库里，Mac 上没有。
 
