@@ -103,6 +103,13 @@ describe('the model a new session starts from', () => {
   it('is none when nothing is set', () => {
     expect(resolveModelPreference({ bot: bot(), group: group() }, CODEX)).toBeUndefined();
   });
+
+  it("counts on the backend a group runs on when its own id left the catalog or has spaces", () => {
+    const old = group({ backend: 'claude-sdk', defaultModel: 'kimi-x', defaultModelCustom: true });
+    expect(resolveModelPreference({ group: old }, groupBackendId(old))).toEqual({ model: 'kimi-x', effort: undefined, custom: true, source: 'group' });
+    expect(resolveExecution({ group: old }).model?.model).toBe('kimi-x');
+    expect(resolveModelPreference({ group: group({ backend: ' claude-agent ', defaultModel: 'opus' }) }, CLAUDE)?.model).toBe('opus');
+  });
 });
 
 describe('no group (私聊 from s49, 云文档)', () => {
@@ -116,6 +123,13 @@ describe('no group (私聊 from s49, 云文档)', () => {
 
   it("falls back to Codex for a bot default backend no longer in the catalog", () => {
     expect(botBackendId(bot({ defaults: { backend: 'claude-sdk' } }))).toBe(CODEX);
+  });
+
+  it("then takes the bot's model on Codex, for a group, no group and 云文档评论", () => {
+    const b = bot({ defaults: { backend: 'claude-sdk', model: { kind: 'catalog', id: 'gpt-x' } } });
+    expect(resolveExecution({ bot: b }).model?.model).toBe('gpt-x');
+    expect(resolveExecution({ bot: b, group: group() }).model?.model).toBe('gpt-x');
+    expect(resolveCommentsExecution(b).model?.model).toBe('gpt-x');
   });
 });
 

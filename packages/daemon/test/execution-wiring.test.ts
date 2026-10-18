@@ -179,6 +179,16 @@ describe('the model a session starts from', () => {
     expect(claude.startThread).toHaveBeenCalledWith(expect.objectContaining({ model: 'sonnet-x', effort: 'high' }));
   });
 
+  it.each([
+    ['listed', { defaultModel: 'gpt-old' }, 'gpt-old'],
+    ['hand-typed', { defaultModel: 'kimi-x', defaultModelCustom: true }, 'kimi-x'],
+  ])("starts a new topic of a group whose backend left the catalog on Codex with the group's %s model", async (_name, group, expected) => {
+    fake.project = { ...fake.project, backend: 'claude-sdk', ...group };
+    await setup().onMessage(message('a new topic'));
+    await vi.waitFor(() => expect(codex.startThread).toHaveBeenCalled());
+    expect(codex.startThread).toHaveBeenCalledWith(expect.objectContaining({ model: expected }));
+  });
+
   it("shows the bot's default model on the /model card of a topic with no session yet", async () => {
     await setup({ defaults: { model: { kind: 'catalog', id: 'gpt-bot', effort: 'low' } } }).onMessage(message('/model', 'omt_fresh'));
     await vi.waitFor(() => expect(fake.cards.length).toBe(1));

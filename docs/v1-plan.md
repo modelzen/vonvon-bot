@@ -938,13 +938,13 @@ product.md 第 8 节留给 owner 的事，应该已经按本文第 8 节提前�
 - s36d2 做法（2026-10-18）：`D/config/execution.ts` 是纯函数，复用 `resolveBotDefaults`。`resolveExecution` 返回后端、档、网络、工作区、仓库、运行中来了消息和每项的来源。
   - 有群：档 `mode ?? 完全访问`，网络 `?? 关`，后端是群自己的，没写或不在 catalog 里的算 Codex，都不看 bot 默认（复核三-1）。工作区只有群自己的目录，附加目录不继承 bot 的；仓库群 → bot → 空，群写 `[]` 算清空。
   - 没有群：取 bot 默认（读写、开网、bot 的后端和工作区），留给 s49。编排器里没有群时 cwd 照旧 fallbackCwd、档照旧不传（复核三-7）。
-  - 模型偏好 `resolveModelPreference(后端)` 按实际起会话的后端取：群的默认模型只用在群的后端上，bot 的默认模型只用在 bot 的默认后端上，调用方照旧交给 `pickDefault` 核对实时列表（复核三-2）。所以 Claude 群里的旧 Codex 会话不再拿到群里手填的 Claude 模型。
+  - 模型偏好 `resolveModelPreference(后端)` 按实际起会话的后端取：群的默认模型只用在群的后端上，bot 的默认模型只用在 bot 的默认后端上，调用方照旧交给 `pickDefault` 核对实时列表（复核三-2）。所以 Claude 群里的旧 Codex 会话不再拿到群里手填的 Claude 模型。比较时群和 bot 的后端都先经 `groupBackendId`、`botBackendId`，和起会话、网页和私聊卡保存时核对的后端一致：后端 id 不在 catalog 里（手改的旧数据）或带空格时按 Codex 比，群或 bot 的默认模型照旧用在 Codex 的新会话上（审查 S1、F1）。
   - 运行中来了消息只按"群、bot、插话"取，不看后端；Claude 线程自己 `supportsSteer: false` 排队（复核三-3）。所以 Claude 群里的旧 Codex 话题改成可以插话。群设置页的生效值照旧对 Claude 群显示排队，新会话确实排队。
   - 编排器经 `groupBackend`、`sessionBackendOf`、`workCwd`、`modelPrefOf` 取值。已有会话用记录里的后端和模型，目录变了重建也一样，修掉了原来换成群的后端、把一家的模型 id 交给另一家。`/clear` 用群当前的目录，记录里没有模型时按模型偏好起；`/goal` 看会话记录的后端。
   - 云文档评论：后端按"评论设置、bot 默认、Codex"，模型按"评论设置、同后端的 bot 默认"，档位照旧不传。网页和私聊卡保存评论设置时，没选别的后端就不写后端，继承来的后端不会被写死（复核三-4）。
   - 显示：网页项目列表和桌面端项目视图的后端、群设置页的生效后端和模型、私聊"已创建项目"卡的后端、评论设置的摘要和卡片都走解析器。私聊项目设置卡的"默认模型"一行照旧只显示群自己设的，bot 默认模型的显示留给 s42。
   - 没改的：`resolveThread` 恢复失败时 `perm ?? project.mode` 的兜底、`launchGoalRun` 图片外发的档（复核三-5）；`lifecycle.ts` 绑定时比较用的默认后端（值也是 Codex，留给 s36d1 一起看）。删掉了没人调用的 `backendForProject`。
-- s36d2 测试（2026-10-18）：新增 `test/execution-resolve.test.ts`（解析器 17 项）和 `test/execution-wiring.test.ts`（编排器 12 项，两家后端各一个假实例）；`settings-owner`、`comment-settings-runtime`、`comment-settings-card` 各补用例。`single-session-model-display` 的假后端 id 从 `codex` 改成真实的 `codex-appserver`：模型偏好按后端 id 比，假 id 对不上。变异检查 20 处（档、网络、后端、模型偏好、工作区、仓库、重建和恢复用的后端、`/clear`、`/goal`、插话、评论的后端和保存、没有群时的 cwd），每处至少一项变红，明细见 PR 描述。
+- s36d2 测试（2026-10-18）：新增 `test/execution-resolve.test.ts`（解析器 19 项）和 `test/execution-wiring.test.ts`（编排器 14 项，两家后端各一个假实例）；`settings-owner`、`comment-settings-runtime`、`comment-settings-card` 各补用例。`single-session-model-display` 的假后端 id 从 `codex` 改成真实的 `codex-appserver`：模型偏好按后端 id 比，假 id 对不上。变异检查 21 处（档、网络、后端、模型偏好、模型偏好比的后端不经 catalog 回退、工作区、仓库、重建和恢复用的后端、`/clear`、`/goal`、插话、评论的后端和保存、没有群时的 cwd），每处至少一项变红，明细见 PR 描述。
 - s36a 做法：`config/defaults.ts` 从一份 Zod schema 推导类型，模型记录区分列表选择和手填，推理强度随模型保存；未选择的后端和模型不写 null。普通加载和保存不补默认值；注册构建配置时（也包括恢复已有 preferences）初始化缺省的读写、开网。保存先固定并校验将写的内容，再走现有串行写入和并发修改检查；不合法的值在建目录或覆盖文件前拒绝，错误不带配置原文。`load → 改无关偏好 → save` 保留未知旧字段，不承诺重新注册重建配置时保留任意顶层元数据。
 - s36a JP-VPS 验证（2026-10-17，Codex）：`bot-defaults` 和 `register-bot` 两份定向测试共 54 项、daemon typecheck 通过；覆盖缺省旧配置不改盘、注册初始化、模型和自定义后端保留、无效保存不覆盖、排队写快照、并发修改拒绝后可恢复，以及显式路径的多 bot 隔离。完整平台链以 PR 准确 head 的 Linux/macOS 结果为准。
 - s37：给子进程的环境变量在这一片定下，s46 的令牌也走它，所以 e04、e05 要先做完。

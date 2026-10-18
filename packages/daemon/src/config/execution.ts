@@ -60,14 +60,15 @@ export function botBackendId(bot: AppPreferences | undefined): string {
  * The model a new session on `backendId` starts from: the group's default when the group's
  * backend is `backendId`, else the bot's default when the bot's default backend is (the bot's
  * model carries no backend, 3.2), else none (the backend's own default). An old session keeps
- * its record's backend, so a model meant for the other backend never reaches it.
+ * its record's backend, so a model meant for the other backend never reaches it. The backends
+ * compared are the ones sessions run on and saves check against: a removed id counts as Codex.
  */
 export function resolveModelPreference({ bot, group }: ExecutionLayers, backendId: string): ModelPreference | undefined {
-  if (group?.defaultModel && (group.backend ?? DEFAULT_BACKEND_ID) === backendId) {
+  if (group?.defaultModel && groupBackendId(group) === backendId) {
     return { model: group.defaultModel, effort: group.defaultEffort, custom: group.defaultModelCustom === true, source: 'group' };
   }
   const chosen = bot?.defaults?.model;
-  if (chosen && (bot?.defaults?.backend ?? DEFAULT_BACKEND_ID) === backendId) {
+  if (chosen && botBackendId(bot) === backendId) {
     return { model: chosen.id, effort: chosen.effort, custom: chosen.kind === 'custom', source: 'bot' };
   }
   return undefined;

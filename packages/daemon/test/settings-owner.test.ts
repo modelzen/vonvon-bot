@@ -278,3 +278,12 @@ it('s36d2: comments and a group without a model show the bot default on its back
   expect((await owner.save({ scope: agent, section: 'comments', revision: a.sections.comments.revision, patch: { backend: 'codex-appserver' } })).kind).toBe('saved');
   expect((await loadConfig()).preferences?.comments).toEqual({ backend: 'codex-appserver', model: 'fixture-model', effort: 'high' });
 });
+it('s36d2: a group whose backend left the catalog runs Codex and shows the Codex model it saved', async () => {
+  await updateProject('demo', { backend: 'claude-sdk' });
+  const { owner } = await fixture();
+  let p = await owner.read(project) as ProjectSettingsView;
+  expect(p.identity.backend).toBe('codex-appserver');
+  expect((await owner.save({ scope: project, section: 'model', revision: p.sections.model.revision, patch: { selection: { kind: 'explicit', model: 'fixture-model', effort: 'low' } } })).kind).toBe('saved');
+  p = await owner.read(project) as ProjectSettingsView;
+  expect(p.sections.model.effective.selection).toEqual({ kind: 'explicit', model: 'fixture-model', effort: 'low' });
+});
