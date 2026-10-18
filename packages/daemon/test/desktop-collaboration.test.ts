@@ -1,6 +1,6 @@
 import { pendingGroupsFile, readPendingGroups } from '../src/project/pending-groups';
 import { afterAll, beforeEach, expect, it, vi } from 'vitest';
-import { rm, mkdir, realpath, writeFile } from 'node:fs/promises';
+import { rm, mkdir, realpath, symlink, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import type { AccountUsageBundle } from '../src/agent/types';
 import type { AppConfig } from '../src/config/schema';
@@ -258,6 +258,30 @@ it('creates under the configured root once and preserves idempotency across owne
     expect(await app.collaboration(request)).toEqual(replies[0]);
     expect(create).toHaveBeenCalledOnce();
     await expect(app.collaboration({ ...request, name: 'changed' })).rejects.toThrow('其他参数');
+  } finally { await app.shutdown(); }
+});
+it.each(['directory', 'alias'] as const)('admits an explicit %s before remote creation and retains the request after restart', async selection => {
+  backend();
+  const dir = join(paths.projectsRootDir, `explicit-${selection}`);
+  const alias = `${dir}-alias`;
+  await mkdir(dir, { recursive: true });
+  await symlink(dir, alias);
+  const create = vi.fn(async () => ({ code: 0, data: { chat_id: 'oc_explicit_created' } }));
+  const managers = vi.fn(async () => ({ code: 0 }));
+  const channel = { send: fixture.send, rawClient: { im: { v1: { chat: { create }, chatManagers: { addManagers: managers } } } } };
+  let app = orchestrator(channel);
+  const request = { action: 'createProject' as const, requestId: 'f0cfe579-c6bc-40c6-91f9-963fcffb2c1c', name: 'Explicit created', directory: selection === 'alias' ? alias : dir, kind: 'single' as const, backend: 'codex-appserver' as const };
+  try {
+    const first = await app.collaboration(request);
+    expect(await getProjectByName(request.name)).toMatchObject({ cwd: await realpath(dir), blank: false,
+      directories: { workspaces: { primary: await realpath(dir), additional: [] } }, creationRequestId: request.requestId });
+    expect(await getProjectByName(request.name)).not.toHaveProperty('directories.repositories');
+    expect(create).toHaveBeenCalledWith({ params: { user_id_type: 'open_id', uuid: request.requestId }, data: { name: request.name, user_id_list: ['ou_owner'] } });
+    expect(managers).toHaveBeenCalledWith({ path: { chat_id: 'oc_explicit_created' }, params: { member_id_type: 'open_id' }, data: { manager_ids: ['ou_owner'] } });
+    await app.shutdown(); app = orchestrator(channel);
+    expect(await app.collaboration(request)).toEqual(first);
+    expect(create).toHaveBeenCalledOnce();
+    expect(managers).toHaveBeenCalledOnce();
   } finally { await app.shutdown(); }
 });
 it('leaves a key from before s15c unused and refuses unsupported goal before posting to Feishu', async () => {
