@@ -97,6 +97,18 @@ describe.skipIf(!REAL)('真实 Codex 判断（VONVON_REAL_JUDGE=1）', () => {
     }
   }, 60_000 * RUNS);
 
+  // product.md 3.4 例子第 3、4 行，主区没点名（s25 的分类；e12 里约 2.5% 会漏回，所以只记不断言第 3 行的去向）
+  it('分类：发布要不要砍功能该接话，食堂闲聊不回', async () => {
+    const ask = (text: string) => judge.judge(request('main', { message: { at: Date.now(), from: 'user', name: '张三', text: `${text} ${marker}` } }));
+    for (let run = 0; run < RUNS; run++) {
+      const release = await ask('下周发布要不要先砍掉导出功能？');
+      const lunch = await ask('今天食堂的红烧肉不错');
+      console.log(JSON.stringify({ release: release.decision, lunch: lunch.decision }));
+      expect([release.error, lunch.error]).toEqual([undefined, undefined]);
+      expect(lunch.decision).toBe('skip');
+    }
+  }, 60_000 * RUNS);
+
   it('超时：turn 跑起来以后超时，补发 interrupt，兜底回在主区，进程照常用', async () => {
     const warm = await judge.judge(request('mentioned'));
     expect(warm.error).toBeUndefined();

@@ -2,10 +2,11 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { EventDispatcher, LoggerLevel, normalize, type NormalizedMessage } from '@larksuiteoapi/node-sdk';
+import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import type { AppConfig } from '../src/config/schema';
 import { paths } from '../src/config/paths';
 import { setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
+import { receive as receiveEvent } from './helpers/lark-events';
 
 vi.mock('../src/config/paths', () => {
   const appDir = mkdtempSync(join(tmpdir(), 'sync-copy-'));
@@ -80,21 +81,8 @@ function noAt(message: Shape): Shape {
 const GROUP = { chat_id: 'oc_demo', chat_type: 'group' };
 const DM = { chat_id: 'oc_dm', chat_type: 'p2p' };
 
-/** The SDK's own path: a WS frame's JSON through its EventDispatcher, then its
- * normalize with includeRaw, as LarkChannel does with includeRawEvent. */
-async function receive(message: Shape): Promise<NormalizedMessage> {
-  let out: Promise<NormalizedMessage> | undefined;
-  const dispatcher = new EventDispatcher({ loggerLevel: LoggerLevel.error }).register({
-    'im.message.receive_v1': (raw: never) => { out = normalize(raw, { botIdentity: BOT, includeRaw: true }); },
-  } as never);
-  await dispatcher.invoke({
-    schema: '2.0',
-    header: { event_id: `ev_${String(message.message_id)}`, event_type: 'im.message.receive_v1', create_time: at, token: '', app_id: 'cli_fixture', tenant_key: 't' },
-    event: { sender: { sender_id: { open_id: 'ou_owner', union_id: 'on_owner' }, sender_type: 'user', tenant_key: 't' }, message },
-  }, { needCheck: false });
-  if (!out) throw new Error('no receive handler ran');
-  return out;
-}
+/** The owner sends it (helpers/lark-events). */
+const receive = (message: Shape): Promise<NormalizedMessage> => receiveEvent(message, { bot: BOT });
 
 const gotItem = (item: Shape) => ({ code: 0, data: { items: [item] } });
 const logged = (event: string) => fake.log.info.mock.calls.filter(call => call[0] === 'intake' && call[1] === event).map(call => call[2] as Shape);

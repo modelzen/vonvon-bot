@@ -125,6 +125,17 @@ describe('audienceOf (product.md 3.4 三条底线)', () => {
     expect([l.quoted, l.lastBot].map((f) => f.mock.calls.length)).toEqual([0, 0]);
   });
 
+  it('in 智能 as the only bot, still reads a quote: quoting this bot names it, so the judge is not asked (s25 M6)', async () => {
+    const smart = { noMention: true, smart: true };
+    const l = lookups({ lonely: true, quoted: { from: 'self' } });
+    expect(await audienceOf(message({ parent: 'om_q' }), smart, l)).toEqual({ to: 'me', by: 'quote' });
+    expect(await audienceOf(message({ parent: 'om_q' }), on, l)).toEqual({ to: 'nobody' });
+    const other = lookups({ lonely: true, quoted: { from: 'user', senderId: 'ou_zhang' } });
+    expect(await audienceOf(message({ parent: 'om_q' }), smart, other)).toEqual({ to: 'nobody' });
+    expect(await audienceOf(message({ thread: 'omt_t', root: 'om_r', parent: 'om_r' }), smart, other)).toEqual({ to: 'nobody' });
+    expect(other.lastBot).not.toHaveBeenCalled();
+  });
+
   it('reads a quote in a topic only when it replies to a message other than the first (e10 item 4)', () => {
     expect(quotedId(message({ thread: 'omt_t', root: 'om_r', parent: 'om_r' }))).toBeUndefined();
     expect(quotedId(message({ thread: 'omt_t', root: 'om_r', parent: 'om_t1' }))).toBe('om_t1');
