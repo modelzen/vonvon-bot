@@ -438,6 +438,55 @@ describe('smart mode: one person in a topic, the anchor, the empty card (s25b)',
     }
   });
 
+  it('a second judgement naming the line a topic is still being opened under opens on its own message', async () => {
+    const [lisi, zhang] = [{ openId: 'ou_lisi', name: '李四' }, { openId: 'ou_owner', name: '张三' }];
+    const asked = says('导出接口 500 有人看吗？');
+    await send(asked, lisi);
+    await decide(asked, result('skip', { reason: '闲聊' }));
+    // Feishu shows no topic under the line until its card is there; the first topic's backend is slow to start.
+    fake.get.mockImplementation(async ({ path }: { path: { message_id: string } }) =>
+      ({ code: 0, data: { items: [{ create_time: '1', ...(path.message_id.startsWith('card') ? { thread_id: 'omt_x' } : {}) }] } }));
+    const started = deferred<void>();
+    const impl = startThread.getMockImplementation()!;
+    startThread.mockImplementationOnce(async () => { await started.promise; return impl(); });
+    const first = says('顺便说一下是生产环境');
+    await send(first, zhang);
+    await decide(first, result('topic', { anchor: idOf(asked) }));
+    await vi.waitFor(() => expect(startThread).toHaveBeenCalledTimes(1));
+    const second = says('对，就是导出那个');
+    await send(second, zhang);
+    await decide(second, result('topic', { anchor: idOf(asked) }));
+    await vi.waitFor(() => expect(fake.cards).toHaveLength(1));
+    started.resolve();
+    await vi.waitFor(() => expect(fake.cards).toHaveLength(2));
+    expect(fake.cards.map((c) => (c[3] as { replyTo: string }).replyTo).sort()).toEqual([idOf(asked), idOf(second)].sort());
+    expect(fake.log.info).toHaveBeenCalledWith('intake', 'anchor-dropped', { ref: idOf(second).slice(-6), why: 'has-topic' });
+    // What the next judgement reads: the dropped line's name written over with the sender's.
+    const next = says('好的');
+    await send(next);
+    expect((await judged(next)).req.context.filter((l) => l.from === 'self' && l.text.includes('开了话题')).map((l) => l.text))
+      .toEqual(['（在 李四 的这条下开了话题来回）', '（在 张三 的这条下开了话题来回）']);
+  });
+
+  it('the next judgement sees the topic it opens while the line under it is still looked up', async () => {
+    const asked = says('导出接口 500 有人看吗？');
+    await send(asked, { openId: 'ou_owner', name: '张三' });
+    await decide(asked, result('skip', { reason: '闲聊' }));
+    const lookup = deferred<{ code: number; data: { items: Array<{ thread_id?: string; create_time?: string }> } }>();
+    fake.get.mockImplementation(async ({ path }: { path: { message_id: string } }) => path.message_id === idOf(asked)
+      ? lookup.promise : { code: 0, data: { items: [{ thread_id: 'omt_opened' }] } });
+    const more = says('顺便说一下是生产环境');
+    await send(more, { openId: 'ou_owner', name: '张三' });
+    await decide(more, result('topic', { anchor: idOf(asked) }));
+    await vi.waitFor(() => expect(fake.get).toHaveBeenCalledWith(expect.objectContaining({ path: { message_id: idOf(asked) } })));
+    const next = says('好的');
+    await send(next);
+    expect((await judged(next)).req.context.filter((l) => l.from === 'self').map((l) => l.text)).toEqual(['（在 张三 的这条下开了话题来回）']);
+    lookup.resolve({ code: 0, data: { items: [{ create_time: '1' }] } });
+    await answered();
+    expect(fake.cards[0]![3]).toMatchObject({ replyTo: idOf(asked) });
+  });
+
   it('notes the confidence when a skip gives no reason (s23f)', async () => {
     const m = says('嗯');
     await send(m);

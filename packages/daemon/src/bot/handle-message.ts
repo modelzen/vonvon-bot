@@ -1019,6 +1019,9 @@ export function createOrchestrator(
   /** What smart groups' judgements read, and how many each group may make in an hour (s25). */
   const recent = new RecentLines();
   const budget = new JudgeBudget();
+  /** The lines a smart topic is being opened under, until its start ends (s25b): neither the registry nor Feishu
+   * knows that topic yet, so a second judgement naming one meanwhile opens on its own message. */
+  const openingUnder = new Set<string>();
 
   /** Snapshot the selected backend's title policy when its native session is
    * created. Later DM-setting changes affect future sessions only. */
@@ -1621,7 +1624,8 @@ export function createOrchestrator(
   /**
    * The earlier line a judged main-area message follows up on, when its topic may open there (s25b): a person's line
    * that names no one, one of the batch or of the last few minutes, still there and with no topic under it yet (the
-   * registry knows the topics this bot saw; Feishu is asked for the rest). Else undefined: it opens on the message.
+   * registry knows the topics this bot saw; Feishu is asked for the rest; {@link openingUnder} the ones it is opening).
+   * Else undefined: it opens on the message. A line returned is in {@link openingUnder}: startTopicDirectly takes it out.
    */
   async function anchorLine(msg: NormalizedMessage, batch: SmartItem[], anchor: string | undefined): Promise<RecentLine | undefined> {
     if (!anchor) return undefined;
@@ -1630,7 +1634,8 @@ export function createOrchestrator(
       return undefined;
     };
     const line = recent.get(anchor);
-    const lines = recent.context(msg.chatId, { id: msg.messageId, at: msg.createTime });
+    // Not counting what this landing wrote about itself.
+    const lines = recent.context(msg.chatId, { id: msg.messageId, at: msg.createTime }).filter((l) => l.id !== `act:${msg.messageId}`);
     const back = lines.length - lines.findIndex((l) => l.id === anchor);
     if (!line || recalled.has(anchor) || back > lines.length) return dropped('gone');
     if (line.from !== 'user' || line.named) return dropped('not-plain');
@@ -1638,7 +1643,10 @@ export function createOrchestrator(
     if ((await topics?.list(msg.chatId))?.some((t) => t.firstId === anchor)) return dropped('has-topic');
     const meta = await fetchMessageMeta(channel, anchor, names, { event: 'anchor-lookup-failed', deadlineMs: LOOKUP_DEADLINE_MS });
     if (!meta) return dropped('lookup-failed');
-    return meta.threadId ? dropped('has-topic') : line;
+    // Checked and taken with no await between: two landings never both open under it.
+    if (meta.threadId || openingUnder.has(anchor)) return dropped('has-topic');
+    openingUnder.add(anchor);
+    return line;
   }
 
   /**
@@ -1713,12 +1721,25 @@ export function createOrchestrator(
     // Joined in on its own: the agent is told so (2.13), never the judge's reason.
     const initiative = variant === 'main';
     // An unnamed message that follows up on an earlier one opens its topic there (s25b); a named one under itself.
-    const under = decision === 'topic' && variant === 'main' && verdict.kind === 'judged' ? await anchorLine(msg, batch, verdict.result.anchor) : undefined;
+    const proposed = decision === 'topic' && variant === 'main' && verdict.kind === 'judged' ? verdict.result.anchor : undefined;
+    // The next judgement here sees what this bot is doing, before its answer comes and before the line it opens
+    // under is looked up: written for the person's line the judgement named, again if that one is dropped.
+    const actId = `act:${msg.messageId}`;
+    const actAt = Date.now();
+    const actText = (line: RecentLine | undefined): string => {
+      const who = oneLine(line?.name ?? names.peek(msg.senderId) ?? msg.senderName ?? '某人');
+      return decision === 'topic' ? `（在 ${who} 的这条下开了话题来回）` : `（在回 ${who} 的这条）`;
+    };
+    const guess = proposed ? recent.get(proposed) : undefined;
+    const guessed = actText(guess?.from === 'user' ? guess : undefined);
+    recent.addOwn(place, msg.chatId, { id: actId, at: actAt, text: guessed });
+    const under = proposed ? await anchorLine(msg, batch, proposed) : undefined;
+    const landed = actText(under);
+    if (landed !== guessed) {
+      recent.remove(actId);
+      recent.addOwn(place, msg.chatId, { id: actId, at: actAt, text: landed });
+    }
     log.info('intake', 'judge-landed', { ref, decision, variant, ...(under ? { anchor: under.id.slice(-6) } : {}) });
-    // The next judgement here sees what this bot is doing, before its answer comes.
-    const who = oneLine(under?.name ?? names.peek(msg.senderId) ?? msg.senderName ?? '某人');
-    recent.addOwn(place, msg.chatId, { id: `act:${msg.messageId}`, at: Date.now(),
-      text: decision === 'topic' ? `（在 ${who} 的这条下开了话题来回）` : `（在回 ${who} 的这条）` });
     if (decision === 'topic') startTopicDirectly(msg, text, project, false, initiative, under);
     else void trackTask(handleTurn(msg, text, ts.sessionKey, !msg.threadId, project, ts, initiative ? { initiative } : undefined)
       .catch((err) => log.fail('intake', err)));
@@ -3059,7 +3080,10 @@ export function createOrchestrator(
    * topic has a unique reply target so no same-topic reservation is needed.
    * `under`: the earlier line the smart mode opens it on instead (s25b). */
   function startTopicDirectly(msg: NormalizedMessage, text: string, project?: Project, goal?: boolean, initiative?: boolean, under?: RecentLine): void {
+    // When this start ends, the registry or Feishu knows the topic under that line, or it did not open (anchorLine put it in).
+    const opened = (): void => { if (under) openingUnder.delete(under.id); };
     if (resumePublications.has(msg.chatId) || projectMutations.has(msg.chatId)) {
+      opened();
       noteNotReplied(msg, 'group-updating');
       return;
     }
@@ -3195,6 +3219,7 @@ export function createOrchestrator(
           () => reaction?.done(), // topic created → ✅ DONE (don't wait for the reply)
         ));
     }).catch((err) => log.fail('intake', err)).finally(() => {
+      opened();
       const remaining = (pendingTopics.get(msg.chatId) ?? 1) - 1;
       if (remaining) pendingTopics.set(msg.chatId, remaining); else pendingTopics.delete(msg.chatId);
     }));
