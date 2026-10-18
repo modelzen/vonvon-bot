@@ -36,6 +36,20 @@ const selection: Rule = value => shape({
   effort: one(...REASONING_EFFORTS),
   custom: bool
 })(value);
+// The judge model (s23d): llm may leave out backend, effort and custom; decision takes no backend.
+const judgeSelection: Rule = value => shape({
+  kind: one('default')
+})(value) || shape({
+  kind: one('llm'),
+  backend: text,
+  model: text,
+  effort: one(...REASONING_EFFORTS),
+  custom: bool
+}, true)(value) && (value as Record<string, unknown>).kind === 'llm' && Object.hasOwn(value as object, 'model') || shape({
+  kind: one('decision'),
+  provider: text,
+  model: text
+})(value);
 const title: Rule = value => shape({
   enabled: one(false)
 })(value) || shape({
@@ -74,6 +88,9 @@ const schemas: Record<string, Record<string, Rule>> = {
     access: shape({
       allowedChats: array(identifier('oc'))
     }, true),
+    judge: shape({
+      selection: judgeSelection
+    }),
   },
   project: {
     permission: shape({
@@ -88,6 +105,9 @@ const schemas: Record<string, Record<string, Rule>> = {
     }),
     run: shape({
       pendingPolicy: one('default', 'steer', 'queue')
+    }),
+    judge: shape({
+      selection: judgeSelection
     })
   },
   session: {
@@ -149,7 +169,7 @@ export function parseModelQuery(input: unknown): ModelQuery {
   if (!shape({
     botId: identifier('cli'),
     backend: text,
-    purpose: one('project', 'session', 'comments', 'titles')
+    purpose: one('project', 'session', 'comments', 'titles', 'judge')
   })(input))
     throw new SettingsInputError('模型查询无效');
   return input as ModelQuery;

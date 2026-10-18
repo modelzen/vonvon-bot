@@ -1,16 +1,21 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import type { AgentBackend, ReasoningEffort } from '../agent/types';
+import { JUDGE_SELECTION_KINDS } from '@vonvon/protocol';
+import type { AgentBackend, ModelInfo, ReasoningEffort } from '../agent/types';
 import { backendIds } from '../agent';
 import { parseModelId } from '../agent/model-id';
 import { getCompletionReminderConfig, getMaxConcurrentRuns, getModelDisplay, getPendingPolicy, getRunIdleTimeoutMs, getSessionTitleConfig, getSessionTitleEfforts, getShowToolCalls, resolveOwner, type AppConfig, type AppPreferences } from '../config/schema';
 import { paths } from '../config/paths';
 import { resolveProjectsRootDir } from '../config/directories';
-import { groupBackendId, resolveCommentsExecution, resolveModelPreference } from '../config/execution';
+import { botBackendId, groupBackendId, resolveCommentsExecution, resolveModelPreference } from '../config/execution';
 import { effectiveMode, getProjectByName, listProjects, mutateProject, noMentionOf, pendingPolicyOf, ruleKind, type Project } from '../project/registry';
 import { getSession, isRetiredKey, mutateSession, RETIRED_KEY_TEXT, type SessionRecord } from '../bot/session-store';
 import { DEFAULT_COMMENT_INSTRUCTIONS, saveCommentInstructions, syncAllCommentInstructions } from '../bot/comments';
 import { voiceView } from '../voice/view';
+import { DECISION_PROVIDER_ID, parseStoredJudge, resolveJudgeModel } from '../judge/model';
+import { JUDGE_CLAUDE_NOTE, JUDGE_CODEX_NOTE, JUDGE_FORMAT_LINES, JUDGE_INPUT_EXAMPLE } from '../judge/prompt';
+import { readSmartPrompt, SMART_MAX_CHARS, SmartPromptError } from '../judge/smart-file';
+import type { JudgeSelectionStored } from '../judge/types';
 import type { VoiceAction } from '../voice/types';
 import { probeBackends, type AppPreferencesWriter } from './ops';
 import { parseSettingsAction, parseSettingsEdit, SettingsInputError } from './settings-parse';
@@ -42,6 +47,8 @@ export interface SettingsOwnerDeps {
   readSession?: typeof getSession;
   mutateProject?: typeof mutateProject;
   mutateSession?: typeof mutateSession;
+  /** tests point it at a temporary bot directory */
+  readSmartPrompt?: (appId: string, chatId?: string) => ReturnType<typeof readSmartPrompt>;
   instructions?: {
     read(): Promise<string>;
     save(text: string): Promise<void>;
@@ -65,7 +72,27 @@ const agentEffects: {
   titles: effect(['byBackend'], 'new-session', '只影响之后新建的会话'),
   paths: effect(['projectsRootDir'], 'new-project', '只影响之后新建的群'),
   access: effect(['allowedChats'], 'next-message', '下一条消息使用新权限'),
+  judge: effect(['selection'], 'next-message', '智能模式的下一次判断就用新模型'),
 };
+/** What else each backend's judge model sees (`smartPrompt.backendNote`). */
+const JUDGE_NOTES: Record<string, string> = { 'codex-appserver': JUDGE_CODEX_NOTE, 'claude-agent': JUDGE_CLAUDE_NOTE };
+/** A stored judge setting, or nothing when unset or unusable (the judge ignores those too). */
+function storedJudge(value: unknown): JudgeSelectionStored | undefined {
+  return parseStoredJudge(value, backendIds()).value;
+}
+/** The judge setting a view shows: what the judge reads; a kind this version does not know as stored,
+ * so it shows and is never rewritten (v1-plan 第 5 节"旧客户端读到决策模型"); anything else unusable
+ * as default, which is what the judge then uses. Such a kind goes out whole to every client that
+ * reads the view, so no kind may keep a credential in its selection (keys live in secrets.enc,
+ * s23g). One over 4,000 characters of JSON shows as default, with no "unknown kind" line. */
+function storedJudgeView(value: unknown): T.JudgeSelectionView {
+  const parsed = storedJudge(value);
+  if (parsed)
+    return parsed;
+  const kind = (value as { kind?: unknown } | null)?.kind;
+  const unknownKind = typeof value === 'object' && !Array.isArray(value) && typeof kind === 'string' && kind.length > 0 && kind.length <= 100 && !JUDGE_SELECTION_KINDS.includes(kind);
+  return unknownKind && JSON.stringify(value).length <= 4000 ? structuredClone(value as T.JudgeSelectionView) : { kind: 'default' };
+}
 function selection(model?: string, effort?: ReasoningEffort, custom?: boolean): T.ModelSelection {
   return model ? {
     kind: 'explicit',
@@ -118,6 +145,9 @@ function agentData(cfg: AppConfig): T.AgentSections {
     access: {
       allowedChats: [...(p.access?.allowedChats ?? [])]
     },
+    judge: {
+      selection: storedJudgeView(p.judge)
+    },
   };
 }
 function agentRaw(p: AppPreferences, section: keyof T.AgentSections): unknown {
@@ -129,6 +159,7 @@ function agentRaw(p: AppPreferences, section: keyof T.AgentSections): unknown {
     case 'titles': return Object.entries(p.sessionTitles?.byBackend ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([id, v]) => [id, v?.enabled, v?.model, v?.effort]);
     case 'paths': return p.projectsRootDir ?? null;
     case 'access': return p.access?.allowedChats ?? [];
+    case 'judge': return p.judge;
   }
 }
 function projectData(p: Project): T.ProjectSections {
@@ -146,11 +177,14 @@ function projectData(p: Project): T.ProjectSections {
     },
     run: {
       pendingPolicy: p.pendingPolicy ?? 'default'
+    },
+    judge: {
+      selection: storedJudgeView(p.judge)
     }
   };
 }
 function projectRaw(p: Project, section: keyof T.ProjectSections): unknown {
-  const data = section === 'permission' ? [p.mode, p.network] : section === 'response' ? p.noMention : section === 'run' ? p.pendingPolicy : [p.defaultModel, p.defaultEffort, p.defaultModelCustom === true];
+  const data = section === 'permission' ? [p.mode, p.network] : section === 'response' ? p.noMention : section === 'run' ? p.pendingPolicy : section === 'judge' ? p.judge : [p.defaultModel, p.defaultEffort, p.defaultModelCustom === true];
   return [p.name, p.chatId, p.cwd, p.backend, data];
 }
 function sessionRaw(s: SessionRecord): unknown {
@@ -170,6 +204,22 @@ class Conflict extends Error {
 function check(actual: unknown, revision: string): void {
   if (settingsRevision(actual) !== revision)
     throw new Conflict();
+}
+/** A judge choice checked before the write lock; `layerBackend` when the check used the layer's
+ * backend: a group's language model, or the bot's that names none. */
+interface PreparedJudge {
+  chosen?: JudgeSelectionStored;
+  layerBackend?: string;
+}
+/** Under the write lock. If the layer's backend the check used moved in between (the bot's default
+ * backend, a group's switch), the check no longer holds. */
+function storeJudge(target: { judge?: JudgeSelectionStored }, prepared: PreparedJudge, layerBackend: string): void {
+  if (prepared.layerBackend !== undefined && layerBackend !== prepared.layerBackend)
+    throw new Conflict();
+  if (prepared.chosen)
+    target.judge = prepared.chosen;
+  else
+    delete target.judge;
 }
 function rejected(error: unknown): {
   kind: 'rejected';
@@ -278,6 +328,81 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       throw new SettingsInputError('模型或推理强度不在当前后端支持列表中，请刷新模型列表');
     return value;
   }
+  const peekModels = (id: string): ModelInfo[] | undefined => {
+    try {
+      return deps.backendFor(id).peekModels?.();
+    }
+    catch {
+      return undefined;
+    }
+  };
+  /** Returns what to store, or nothing for `default` (design 2.4). A language model is stored with its
+   * backend: a group's must be the group's, or the judge would ignore it; the bot's is its default
+   * backend unless it says otherwise. A listed model is checked against the list the backend holds
+   * (what the judge fits the effort with), else a fresh catalog, except while the catalog cannot be
+   * read: then the choice and its effort are kept as given, and each judgement fits the effort to the
+   * model (Rakazo 第二轮 A6). A decision model is checked for its shape only. */
+  async function validateJudgeSelection(value: T.JudgeSelection, layerBackend: string, group: boolean): Promise<JudgeSelectionStored | undefined> {
+    if (value.kind === 'default')
+      return undefined;
+    const id = parseModelId(value.model);
+    if (!id.ok)
+      throw new SettingsInputError(id.message);
+    if (value.kind === 'decision') {
+      if (!DECISION_PROVIDER_ID.test(value.provider))
+        throw new SettingsInputError('决策模型的 provider 只能是小写字母、数字和 -，40 个字以内');
+      return { kind: 'decision', provider: value.provider, model: id.id };
+    }
+    const backend = value.backend ?? layerBackend;
+    if (!backendIds().includes(backend))
+      throw new SettingsInputError('未知后端');
+    if (group && backend !== layerBackend) {
+      const name = deps.backendFor(layerBackend).displayName;
+      throw new SettingsInputError(`这个群用 ${name}，判断模型要选 ${name} 的模型`);
+    }
+    if (value.effort && !getSessionTitleEfforts(backend).includes(value.effort))
+      throw new SettingsInputError('当前后端不支持这个推理强度');
+    const stored: JudgeSelectionStored = { kind: 'llm', backend, model: id.id, ...(value.effort ? { effort: value.effort } : {}) };
+    if (value.custom)
+      return { ...stored, custom: true };
+    const listed = peekModels(backend) ?? (await models({ botId, backend, purpose: 'judge' })).models;
+    if (!listed.length)
+      return stored;
+    const model = listed.find(item => item.id === id.id && !item.hidden);
+    if (!model)
+      throw new SettingsInputError('列表里没有这个模型；手填的 id 加 "custom":true');
+    if (value.effort && !model.supportedEfforts.includes(value.effort))
+      throw new SettingsInputError(model.supportedEfforts.length ? '这个模型不支持这个推理强度' : '这个模型不支持推理强度，effort 不能写');
+    return stored;
+  }
+  /** A judge save is checked before the write lock: reading the model list can take a while (a cold
+   * backend), and the lock holds up every other save of the bot, or of all groups. `current` is the
+   * layer as read now; the save checks its revision again under the lock ({@link storeJudge}). */
+  async function prepareJudge(selection: T.JudgeSelectionView | undefined, current: unknown, revision: string, layerBackend: string, group: boolean): Promise<PreparedJudge> {
+    check(current, revision);
+    if (!selection)
+      throw new SettingsInputError('缺少模型选择');
+    // parseSettingsEdit took only the known kinds
+    const value = selection as T.JudgeSelection;
+    const chosen = await validateJudgeSelection(value, layerBackend, group);
+    return { chosen, ...(value.kind === 'llm' && (group || !value.backend) ? { layerBackend } : {}) };
+  }
+  /** What a group on `backend` judges with (design 2.5), as a selection. */
+  function judgeEffective(backend: string, layers: { group?: JudgeSelectionStored; bot?: JudgeSelectionStored }): T.AgentSections['judge'] {
+    const { model, effort, provider } = resolveJudgeModel(backend, layers, peekModels(backend));
+    return { selection: provider ? { kind: 'decision', provider, model } : { kind: 'llm', backend, model, ...(effort ? { effort } : {}) } };
+  }
+  /** SMART.md of the bot (no chatId) or the group, with the read-only parts around it. */
+  async function smartPromptView(chatId: string | undefined, notes: string[]): Promise<T.SmartPromptView> {
+    const fixed = { formatLines: { ...JUDGE_FORMAT_LINES }, inputExample: JUDGE_INPUT_EXAMPLE, maxLength: SMART_MAX_CHARS, ...(notes.length ? { backendNote: notes.join('\n') } : {}) };
+    try {
+      return { ...await (deps.readSmartPrompt ?? readSmartPrompt)(botId, chatId), ...fixed };
+    }
+    catch (error) {
+      const known = error instanceof SmartPromptError;
+      return { source: 'default', path: known && error.path || '', text: '', ...fixed, error: known ? error.message : '读不了 SMART.md' };
+    }
+  }
   async function effectiveSelection(backend: string, model?: string, effort?: ReasoningEffort, custom?: boolean): Promise<T.ModelSelection> {
     if (access.kind !== 'writable' || custom && model)
       return selection(model, effort, custom);
@@ -313,6 +438,13 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         ...sections.run.stored,
         maxConcurrentRuns: runningConcurrency
       };
+      const botJudge = storedJudge(cfg.preferences?.judge);
+      sections.judge.effective = judgeEffective(botJudge?.kind === 'llm' ? botJudge.backend : botBackendId(cfg.preferences), { bot: botJudge });
+      const judgeByBackend: NonNullable<T.AgentSettingsView['judgeByBackend']> = {};
+      for (const id of backendIds()) {
+        const { model, effort, provider, modelSource } = resolveJudgeModel(id, { bot: botJudge }, peekModels(id));
+        judgeByBackend[id] = { model, ...(effort ? { effort } : {}), ...(provider ? { provider } : {}), source: modelSource === 'bot' ? 'bot' : 'default' };
+      }
       const text = await instructions.read();
       return {
         scope,
@@ -333,7 +465,9 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           },
           revision: settingsRevision([botId, text]),
           maxEditLength: 30000
-        }
+        },
+        smartPrompt: await smartPromptView(undefined, backendIds().flatMap(id => JUDGE_NOTES[id] ?? [])),
+        judgeByBackend
       };
     }
     if (scope.kind === 'project') {
@@ -341,7 +475,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       if (!p)
         throw new SettingsInputError('项目不存在');
       const data = projectData(p);
-      const sections = Object.fromEntries(Object.entries(data).map(([key, value]) => [key, makeSection(value, [botId, projectRaw(p, key as keyof T.ProjectSections)], access, effect(Object.keys(value), key === 'model' ? 'new-session' : key === 'permission' ? 'session-rebind' : 'next-message', key === 'model' ? '仅新会话使用项目默认模型' : key === 'run' && p.backend === 'claude-agent' ? 'Claude 不支持插话，运行中来的消息照样排队' : '下一条消息生效'))])) as T.ProjectSettingsView['sections'];
+      const sections = Object.fromEntries(Object.entries(data).map(([key, value]) => [key, makeSection(value, [botId, projectRaw(p, key as keyof T.ProjectSections)], access, effect(Object.keys(value), key === 'model' ? 'new-session' : key === 'permission' ? 'session-rebind' : 'next-message', key === 'model' ? '仅新会话使用项目默认模型' : key === 'judge' ? agentEffects.judge[0]!.detail : key === 'run' && p.backend === 'claude-agent' ? 'Claude 不支持插话，运行中来的消息照样排队' : '下一条消息生效'))])) as T.ProjectSettingsView['sections'];
       const backendId = groupBackendId(p);
       sections.run.effective = { pendingPolicy: pendingPolicyOf(getPendingPolicy(cfg), p) };
       // The group's default, else the bot's on the same backend (s36d2).
@@ -349,6 +483,9 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       sections.model.effective = {
         selection: await effectiveSelection(backendId, prefer?.model, prefer?.effort, prefer?.custom)
       };
+      sections.judge.effective = judgeEffective(backendId, { group: storedJudge(p.judge), bot: storedJudge(cfg.preferences?.judge) });
+      // a decision model gets none of a backend's extras
+      const judgeNote = sections.judge.effective.selection.kind === 'llm' ? JUDGE_NOTES[backendId] : undefined;
       const fullOnly = deps.backendFor(backendId).fullAccessOnly?.();
       return {
         scope,
@@ -363,7 +500,8 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         members: {
           openIds: [...(p.allowedUsers ?? [])],
           revision: settingsRevision([botId, p.name, p.chatId, p.allowedUsers ?? []])
-        }
+        },
+        smartPrompt: await smartPromptView(p.chatId, judgeNote ? [judgeNote] : [])
       };
     }
     if (scope.kind === 'session') {
@@ -417,6 +555,9 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         const e = edit as Extract<T.BotSettingsEdit, {
           section: keyof T.AgentSections;
         }>;
+        const judge = e.section === 'judge'
+          ? await prepareJudge(e.patch.selection, [botId, agentRaw(cfg.preferences ?? {}, 'judge')], e.revision, botBackendId(cfg.preferences), false)
+          : undefined;
         await deps.writePreferences(async (p) => {
           check([botId, agentRaw(p, e.section as keyof T.AgentSections)], e.revision);
           switch (e.section) {
@@ -475,6 +616,9 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
                 ...e.patch
               };
               break;
+            case 'judge':
+              storeJudge(p, judge!, botBackendId(p));
+              break;
             default: throw new SettingsInputError('无效的 Bot 设置');
           }
         });
@@ -485,6 +629,13 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         const e = edit as Extract<T.BotSettingsEdit, {
           scope: T.ProjectSettingsView['scope'];
         }>;
+        let judge: PreparedJudge | undefined;
+        if (e.section === 'judge') {
+          const now = await readProject(e.scope.projectName);
+          if (!now)
+            throw new SettingsInputError('项目不存在');
+          judge = await prepareJudge(e.patch.selection, [botId, projectRaw(now, 'judge')], e.revision, groupBackendId(now), true);
+        }
         const p = await changeProject(e.scope.projectName, async (p) => {
           check([botId, projectRaw(p, e.section)], e.revision);
           switch (e.section) {
@@ -527,7 +678,10 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
                 p.defaultEffort = chosen.effort;
                 p.defaultModelCustom = chosen.custom === true;
               }
+              break;
             }
+            case 'judge':
+              storeJudge(p, judge!, groupBackendId(p));
           }
         });
         if (e.section === 'permission') {

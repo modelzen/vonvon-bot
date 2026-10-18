@@ -72,7 +72,7 @@ describe('retained settings behavior over real WebSocket', () => {
 
       const readProject = await client.call({ type: 'request', id: 'read-project', method: 'settings', payload: { type: 'read', scope: project } });
       if (readProject.type !== 'response' || readProject.method !== 'settings' || readProject.payload.kind !== 'view' || !('response' in readProject.payload.view.sections)) throw new Error('project view missing');
-      expect(Object.keys(readProject.payload.view.sections).sort()).toEqual(['model', 'permission', 'response', 'run']);
+      expect(Object.keys(readProject.payload.view.sections).sort()).toEqual(['judge', 'model', 'permission', 'response', 'run']);
       const responseRevision = readProject.payload.view.sections.response.revision;
       const response = await client.call({ type: 'request', id: 'save-project', method: 'settings', payload: { type: 'save', edit: { scope: project, section: 'response', revision: responseRevision, patch: { noMention: false } } } });
       expect(response).toMatchObject({ type: 'response', method: 'settings', payload: { kind: 'saved', result: { kind: 'saved', section: { scope: project, section: 'response', value: { stored: { noMention: false } } } } } });
@@ -86,6 +86,39 @@ describe('retained settings behavior over real WebSocket', () => {
       client.socket.send(JSON.stringify({ type: 'request', id: 'compact', method: 'settings', payload: { type: 'save', edit: { scope: project, section: 'compact', revision: responseRevision, patch: { autoCompact: true } } } }));
       expect(await client.wait(frame => frame.type === 'error' && frame.id === 'compact')).toMatchObject({ code: 'invalid_request' });
       expect(await readFile(fixture.projectFile, 'utf8')).toBe(afterSave);
+    } finally { await client.close(); await fixture.close(); }
+  });
+
+  it('judge (s23d): saves both kinds on both layers, reads them back, shows a kind from a newer vonvon as stored, lists models for judge', async () => {
+    const fixture = await settingsFixture();
+    const client = await socketClient(fixture.api.api.port, fixture.api.credential);
+    const jev = { kind: 'decision', provider: 'typesafe', model: 'jev-latest' } as const;
+    let reads = 0;
+    const judgeOf = async (scope: typeof agent | typeof project) => {
+      const read = await client.call({ type: 'request', id: `read-${++reads}`, method: 'settings', payload: { type: 'read', scope } });
+      if (read.type !== 'response' || read.method !== 'settings' || read.payload.kind !== 'view' || !('judge' in read.payload.view.sections) || !read.payload.view.sections.judge) throw new Error('judge section missing');
+      return read.payload.view.sections.judge;
+    };
+    try {
+      await client.ready();
+      const bot = await judgeOf(agent);
+      expect(bot.stored).toEqual({ selection: { kind: 'default' } });
+      const saved = await client.call({ type: 'request', id: 'save-bot', method: 'settings', payload: { type: 'save', edit: { scope: agent, section: 'judge', revision: bot.revision, patch: { selection: jev } } } });
+      expect(saved).toMatchObject({ payload: { kind: 'saved', result: { kind: 'saved', section: { section: 'judge', value: { stored: { selection: jev }, effective: { selection: jev } } } } } });
+      expect((JSON.parse(await readFile(fixture.configFile, 'utf8')) as AppConfig).preferences?.judge).toEqual(jev);
+
+      const group = await judgeOf(project);
+      const custom = { kind: 'llm', model: 'my-gw/qwen3-coder', effort: 'low', custom: true } as const;
+      const savedGroup = await client.call({ type: 'request', id: 'save-group', method: 'settings', payload: { type: 'save', edit: { scope: project, section: 'judge', revision: group.revision, patch: { selection: custom } } } });
+      expect(savedGroup).toMatchObject({ payload: { result: { kind: 'saved', section: { value: { stored: { selection: { ...custom, backend: 'codex-appserver' } } } } } } });
+      expect(JSON.parse(await readFile(fixture.projectFile, 'utf8')).judge).toEqual({ ...custom, backend: 'codex-appserver' });
+
+      const future = { kind: 'oracle', provider: 'x', model: 'y' };
+      await writeFile(fixture.projectFile, JSON.stringify({ ...JSON.parse(await readFile(fixture.projectFile, 'utf8')), judge: future }));
+      expect((await judgeOf(project)).stored).toEqual({ selection: future });
+
+      const models = await client.call({ type: 'request', id: 'models', method: 'settings', payload: { type: 'models', query: { botId, backend: 'nope', purpose: 'judge' } } });
+      expect(models).toMatchObject({ payload: { kind: 'models', catalog: { backend: 'nope', state: 'unavailable', models: [] } } });
     } finally { await client.close(); await fixture.close(); }
   });
 

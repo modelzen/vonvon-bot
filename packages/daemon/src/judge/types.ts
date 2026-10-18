@@ -15,10 +15,14 @@ export type JudgeDecision = 'skip' | 'main' | 'topic' | 'reply';
 
 /**
  * The judge model a bot (`preferences.judge`) or a group (`Project.judge`) stores (design 2.1).
- * `backend` says whose model id this is: a layer applies only to groups on that backend. A later
- * decision model would be another kind; an unknown kind reads as unset and is never rewritten.
+ * `llm`, a language model: `backend` says whose model id this is, and the layer applies only to
+ * groups on that backend. `decision`, a decision model (product.md 3.4): no backend, the layer
+ * applies to groups on every backend; s23f calls it. An unknown kind reads as unset and is never
+ * rewritten.
  */
-export type JudgeSelectionStored = { kind: 'llm'; backend: string; model: string; effort?: ReasoningEffort; custom?: true };
+export type JudgeSelectionStored =
+  | { kind: 'llm'; backend: string; model: string; effort?: ReasoningEffort; custom?: true }
+  | { kind: 'decision'; provider: string; model: string };
 
 export interface JudgeLine {
   /** epoch ms */
@@ -69,6 +73,8 @@ export interface JudgeResult {
   backend: string;
   model: string;
   effort?: ReasoningEffort;
+  /** set when a decision model was chosen: whose `model` it is (`backend` is then the group's) */
+  provider?: string;
   modelSource: 'default' | 'bot' | 'group';
   promptSource: 'default' | 'bot' | 'group';
   /** from the call to the result */
