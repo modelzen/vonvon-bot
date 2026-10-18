@@ -85,6 +85,7 @@ describe('s36d1 createProject', () => {
     await expect(createProject({ rawClient: silent.client }, input('No bot', { bot: undefined as never }))).rejects.toThrow('缺少机器人注册身份');
     await expect(createProject({ rawClient: silent.client }, input('Long', { requestId: 'r'.repeat(51) }))).rejects.toThrow('建群请求标识无效');
     await expect(createProject({ rawClient: silent.client }, input('Elsewhere'), { file: join(paths.appDir, 'other', 'projects.json'), dataRoot: paths.appDir })).rejects.toThrow('机器人项目目录不匹配');
+    await expect(createProject({ rawClient: silent.client }, input('Elsewhere'), { file: paths.projectsFile, dataRoot: join(paths.appDir, 'other') })).rejects.toThrow('机器人项目目录不匹配');
     expect(silent.requests).toEqual([]);
     expect((await listProjects()).some(p => ['Refused', 'Stale', 'No bot', 'Long', 'Elsewhere'].includes(p.name))).toBe(false);
   });
@@ -133,10 +134,14 @@ describe('s36d1 createProject', () => {
     expect(closing.open()).toBe(0);
   });
 
-  it('saves and returns within the budget when addManagers never answers', async () => {
+  it('saves before addManagers is sent, and returns within the budget when it never answers', async () => {
     const fake = fakeLark(request => request.path.endsWith('/managers/add_managers') ? stall() : undefined);
     const started = Date.now();
-    const outcome = await Promise.race([createProject({ rawClient: fake.client }, input('Stuck admin', { timeoutMs: 400 })), wait(3_000).then(() => 'hung' as const)]);
+    const creating = createProject({ rawClient: fake.client }, input('Stuck admin', { timeoutMs: 1_500 }));
+    await vi.waitFor(() => expect(fake.requests.some(r => r.path.endsWith('/managers/add_managers'))).toBe(true));
+    // The row is on disk while the admin call is still out, so a kill during it cannot lose the group.
+    expect((await listProjects()).some(p => p.name === 'Stuck admin')).toBe(true);
+    const outcome = await Promise.race([creating, wait(3_000).then(() => 'hung' as const)]);
     expect(outcome).not.toBe('hung');
     expect(Date.now() - started).toBeLessThan(3_000);
     expect((await listProjects()).some(p => p.name === 'Stuck admin')).toBe(true);
@@ -145,13 +150,14 @@ describe('s36d1 createProject', () => {
 
   it('cuts the announcement and welcome at the budget instead of retrying them', async () => {
     const fake = fakeLark(request => {
-      if (request.method === 'POST' && request.path === '/open-apis/im/v1/chats') return wait(500).then(() => ({ code: 0, data: { chat_id: 'oc_slow' } }));
+      if (request.method === 'POST' && request.path === '/open-apis/im/v1/chats') return wait(300).then(() => ({ code: 0, data: { chat_id: 'oc_slow' } }));
       if (request.path.endsWith('/announcement/blocks')) return stall();
       return undefined;
     });
     const started = Date.now();
-    const project = await createProject({ rawClient: fake.client }, input('Slow create', { timeoutMs: 1_000 }));
-    expect(Date.now() - started).toBeLessThan(2_500);
+    const project = await createProject({ rawClient: fake.client }, input('Slow create', { timeoutMs: 2_000 }));
+    // Retrying would add 8 s of backoff on top of the 2 s budget.
+    expect(Date.now() - started).toBeLessThan(4_000);
     expect(project.chatId).toBe('oc_slow');
     expect(fake.requests.filter(r => r.path.endsWith('/announcement/blocks'))).toHaveLength(1);
     expect(fake.requests.filter(r => r.path === '/open-apis/im/v1/messages')).toEqual([]);
