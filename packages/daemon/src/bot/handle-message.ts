@@ -193,6 +193,8 @@ import { getDesktopRelease } from '../service/desktop-release';
 import { runtimeDistribution } from '../service/distribution';
 import { paths } from '../config/paths';
 import { loadBots } from '../config/bots';
+import { admitDirectorySettings } from '../config/directories';
+import { DirectoryError, directoryFailure } from '../config/directory-errors';
 import { botBackendId, groupBackendId, resolveCommentsExecution, resolveExecution, resolveModelPreference, type ModelPreference } from '../config/execution';
 import { fileClaimMode, OutboundFiles } from './outbound-files';
 import { getSecret } from '../config/keystore';
@@ -5432,8 +5434,14 @@ export function createOrchestrator(
         }
         const patch: Partial<Project> = {};
         if (request.directory !== undefined) {
-          const cwd = await realpath(request.directory);
+          // The same admission as creating and binding (s36c2d). Only a new directory is checked, so an old row already
+          // in a refused place can still be turned off; the first change gives an old row its declaration.
+          let cwd: string;
+          try { cwd = await realpath(request.directory); } catch { throw new AdminWriteError('所选文件夹不存在'); }
           if (!(await stat(cwd)).isDirectory()) throw new AdminWriteError('所选文件夹不是目录');
+          const admitted = await admitDirectorySettings({ workspaces: { primary: cwd, additional: [] } }, { dataDir: paths.appDir })
+            .catch((error: unknown) => { const failure = directoryFailure(error); throw failure instanceof DirectoryError ? new AdminWriteError(failure.message) : failure; });
+          cwd = admitted?.workspaces?.primary ?? cwd;
           patch.cwd = cwd;
           if (cwd !== project.cwd) patch.blank = false;
         }
@@ -5448,6 +5456,7 @@ export function createOrchestrator(
             delete latest.smart;
           }
           Object.assign(latest, patch);
+          if (patch.cwd !== undefined) latest.directories = { ...latest.directories, workspaces: { primary: patch.cwd, additional: latest.directories?.workspaces?.additional ?? [] } };
         });
         const archive = (patch.cwd !== undefined && patch.cwd !== project.cwd) || (patch.kind !== undefined && patch.kind !== ruleKind(project));
         const updated = archive ? await detachSessionsForChat(project.chatId, commit) : await commit();
