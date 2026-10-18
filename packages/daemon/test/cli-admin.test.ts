@@ -395,7 +395,7 @@ it('judge: set takes the selection JSON, get prints a row per backend and the pr
   expect(() => parseAssignments('agent', [`access.allowedChats=${JSON.stringify(Array.from({ length: 1001 }, (_, i) => `oc_${i}`))}`])).toThrow('access.allowedChats 最多 1000 项');
   expect(() => parseAssignments('session', ['judge.selection={"kind":"default"}'])).toThrow('没有 judge 这一节');
 
-  const prompt = { source: 'default', path: '/d/bots/cli_a/SMART.md', text: '默认提示词全文', formatLines: { main: '格式A', mentioned: '格式B', topic: '格式C' }, inputExample: '【群】产品讨论', backendNote: 'Codex 的说明', maxLength: 8000 };
+  const prompt = { source: 'default', path: '/d/bots/cli_a/SMART.md', text: '默认提示词全文\n第二行', formatLines: { main: '格式A', mentioned: '格式B\n只输出 JSON', topic: '格式C' }, inputExample: '【群】产品讨论\n【你】小P', backendNote: 'Codex 的说明\nClaude 的说明', maxLength: 8000 };
   const llm = { kind: 'llm', backend: 'codex-appserver', model: 'gpt-6-luna', effort: 'low' };
   const agentView = { scope: { kind: 'agent', botId: 'cli_a' }, sections: { judge: section({ selection: { kind: 'default' } }, 'rev-judge', { selection: llm }) },
     smartPrompt: prompt, judgeByBackend: { 'codex-appserver': { model: 'gpt-6-luna', effort: 'low', source: 'default' }, 'claude-agent': { model: 'sonnet', source: 'bot' } } };
@@ -412,7 +412,8 @@ it('judge: set takes the selection JSON, get prints a row per backend and the pr
     '  智能提示词：内置默认。要改就新建 /d/bots/cli_a/SMART.md，删掉它就恢复默认', '  只在智能模式的群里用', ''].join('\n'));
   expect(h.out()).not.toContain('默认提示词全文');
   h.clear(); await runSettingsGet('judge', {}, h.io(), h.daemon);
-  for (const text of ['—— 智能提示词 ——\n默认提示词全文', '—— 程序附的格式行（只读）：主区被 @ ——\n格式B', '—— 程序给模型的输入（示例，只读）——\n【群】产品讨论\n—— 模型还会看到（只读）——\nCodex 的说明']) expect(h.out()).toContain(text);
+  // multi-line texts keep their breaks: printing strips control characters line by line
+  for (const text of ['—— 智能提示词 ——\n默认提示词全文\n第二行\n', '—— 程序附的格式行（只读）：主区被 @ ——\n格式B\n只输出 JSON\n', '—— 程序给模型的输入（示例，只读）——\n【群】产品讨论\n【你】小P\n—— 模型还会看到（只读）——\nCodex 的说明\nClaude 的说明']) expect(h.out()).toContain(text);
   h.clear(); await runSettingsGet(undefined, { group: 'pay' }, h.io(), h.daemon);
   expect(h.out()).toContain(`  selection = {"kind":"default"}（生效：${JSON.stringify(llm)}）\n  智能提示词：用 bot 的 SMART.md。要只改这个群就新建 /d/bots/cli_a/groups/oc_pay/SMART.md，删掉它就回到 bot 的\n`);
 

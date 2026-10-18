@@ -145,7 +145,7 @@ function promptSource(prompt: SmartPromptView, group: boolean): string {
   return `智能提示词：${prompt.source === 'bot' ? '用 bot 的 SMART.md' : '内置默认'}。要只改这个群就新建 ${prompt.path}，删掉它就回到 bot 的`;
 }
 
-/** The judge prompt in full, for `get judge` only: it runs to a few thousand characters. */
+/** The judge prompt in full, for `get judge` only: it runs to a few thousand characters. Split into lines, since printing strips a line's own breaks. */
 function promptText(prompt: SmartPromptView): string[] {
   const where = { main: '群主区', mentioned: '主区被 @', topic: '话题里' } as const;
   return [
@@ -153,7 +153,7 @@ function promptText(prompt: SmartPromptView): string[] {
     ...(Object.keys(where) as (keyof typeof where)[]).flatMap(v => [`—— 程序附的格式行（只读）：${where[v]} ——`, prompt.formatLines[v]]),
     '—— 程序给模型的输入（示例，只读）——', prompt.inputExample,
     ...(prompt.backendNote ? ['—— 模型还会看到（只读）——', prompt.backendNote] : []),
-  ];
+  ].flatMap(text => text.split('\n'));
 }
 
 /** One line per backend: the bot has no backend of its own, so a single effective model would mislead. */
