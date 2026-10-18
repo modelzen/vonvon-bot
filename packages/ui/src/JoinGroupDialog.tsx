@@ -1,3 +1,4 @@
+import {RpcError} from '@vonvon/client/browser';
 import {useClient} from './client-context';
 import {useDirectoryPicker} from './directory-picker';
 import {useEffect, useRef, useState} from 'react';
@@ -21,6 +22,16 @@ export function projectNameProblem(value: string): string | undefined {
   if (/[\x00-\x1f]/.test(name)) return '名称里不能有换行、制表符等控制字符。';
   return undefined;
 }
+/** The owner's words (2026-10-18) for a creation whose result is not known. */
+export const CREATION_UNKNOWN = '可能已经建好了，先去飞书看一眼再重试。';
+/**
+ * What a failed 创建新飞书群 tells the user (s36d1). Only the daemon's own refusal says no group was made; a lost
+ * connection, or the daemon saying it does not know, may have made one, so the form must not invite another click.
+ */
+export function creationFailure(failure: unknown): {message: string; uncertain: boolean} {
+  if (failure instanceof RpcError && failure.code !== 'outcome_unknown') return {message: failure.message, uncertain: false};
+  return {message: CREATION_UNKNOWN, uncertain: true};
+}
 type Props = {agent: Agent; pending?: PendingAgentGroups; initialGroup?: PendingGroup; onClose: () => void; onChanged: () => Promise<void>};
 export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChanged}: Props) {
   const {navigate} = useDraftGuard();
@@ -36,6 +47,9 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
   const [response, setResponse] = useState<'all' | 'mention'>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  /** Set once a creation may have made a group: this dialog then creates nothing more, binding still works. */
+  const [uncertain, setUncertain] = useState(false);
+  const locked = mode.kind === 'create' && uncertain;
   const [manual, setManual] = useState<Extract<CommandResult, {kind: 'groups'}>>();
   const active = useRef(true);
   useEffect(() => () => {active.current = false;}, []);
@@ -49,7 +63,7 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
     navigate(() => {setMode(next); setName(next.kind === 'bind' ? next.group.name : ''); setFolder(undefined); setExistingDirectory(false); setError('');});
   }
   async function save() {
-    if (busy || mode.kind === 'existing') return false;
+    if (busy || mode.kind === 'existing' || locked) return false;
     if (!name.trim() || (existingDirectory && !folder)) {setError('请填写名称并选择工作目录。'); return false;}
     if (!conversation || !freeAt) {setError('请选择会话方式。'); return false;}
     // Left out only when the default gives it on this daemon and on one from before s21 alike: those bind
@@ -67,7 +81,14 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
       active.current = false;
       onClose();
       return true;
-    } catch (failure) {setError(failure instanceof Error ? failure.message : '操作失败，填写的内容已保留。'); return false;}
+    } catch (failure) {
+      if (mode.kind === 'create') {
+        const outcome = creationFailure(failure);
+        setUncertain(outcome.uncertain);
+        setError(outcome.uncertain ? '' : outcome.message);
+      } else setError(failure instanceof Error ? failure.message : '操作失败，填写的内容已保留。');
+      return false;
+    }
     finally {setBusy(false);}
   }
   // No save action: "保存并离开" would create a real Feishu group on the way out.
@@ -109,7 +130,7 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
         <FormField label={mode.kind === 'create' ? '飞书群名称' : '本地绑定名称'} error={nameProblem}><input aria-label={mode.kind === 'create' ? '飞书群名称' : '本地绑定名称'} maxLength={100} disabled={busy} value={name} onChange={event => setName(event.target.value)} /></FormField>
         <SettingsGroup>
           <SettingsRow title="工作目录来源" trailing={<select aria-label="目录来源" disabled={busy} value={existingDirectory ? 'existing' : 'default'} onChange={event => {setExistingDirectory(event.target.value === 'existing'); setFolder(undefined);}}><option value="default">新建空白目录</option><option value="existing">使用现有目录</option></select>} />
-          <SettingsRow title="工作目录" value={!existingDirectory ? (mode.kind === 'create' ? '在默认项目目录中创建空白目录' : '为本群创建独立空白目录') : folder?.displayPath ?? '未选择'} trailing={existingDirectory && <Button disabled={busy} onClick={() => void chooseFolder()}>选择文件夹</Button>} />
+          <SettingsRow title="工作目录" value={!existingDirectory ? '为本群创建独立空白目录' : folder?.displayPath ?? '未选择'} trailing={existingDirectory && <Button disabled={busy} onClick={() => void chooseFolder()}>选择文件夹</Button>} />
           <SettingsRow title="执行工具" trailing={<select aria-label="执行工具" disabled={busy} value={tool} onChange={event => setTool(toolSchema.parse(event.target.value))}><option value="codex">Codex</option><option value="claude">Claude</option></select>} />
         </SettingsGroup>
         <FormField label="会话方式">
@@ -118,8 +139,9 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
         {conversation && <SettingsGroup>
           <SettingsRow title="免 @" value={freeAt === 'all' ? '不 @ 也回' : '@ 我才回'} trailing={<select aria-label="免 @" disabled={busy} value={freeAt} onChange={event => setResponse(event.target.value === 'all' ? 'all' : 'mention')}><option value="all">开</option><option value="mention">关</option></select>} />
         </SettingsGroup>}
-        <Button variant="primary" loading={busy} disabled={!name.trim() || Boolean(nameProblem) || (existingDirectory && !folder) || !conversation} onClick={() => void save()}>{mode.kind === 'create' ? '创建飞书群并加入' : '绑定工作目录并发送欢迎卡片'}</Button>
+        <Button variant="primary" loading={busy} disabled={locked || !name.trim() || Boolean(nameProblem) || (existingDirectory && !folder) || !conversation} onClick={() => void save()}>{mode.kind === 'create' ? '创建飞书群并加入' : '绑定工作目录并发送欢迎卡片'}</Button>
       </>}
+      {locked && <InlineNotice title="不确定建好没有" tone="warning">{CREATION_UNKNOWN}要重试，关掉这个窗口再建。</InlineNotice>}
       {error && <InlineNotice title="操作未完成" tone="danger">{error}</InlineNotice>}
     </div>
   </Dialog>;
