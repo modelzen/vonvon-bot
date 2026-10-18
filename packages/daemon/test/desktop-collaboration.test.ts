@@ -316,15 +316,18 @@ it('s36d1: shutdown stops a creation in flight at once and starts none of those 
   const app = creator(fake.client);
   const request = { action: 'createProject' as const, requestId: 'b1b2c3d4-0000-4000-8000-000000000001', name: 'In flight', kind: 'multi' as const, backend: 'codex-appserver' as const };
   const flying = app.collaboration(request).catch((error: unknown) => error);
-  const queued = app.collaboration({ ...request, requestId: 'b1b2c3d4-0000-4000-8000-000000000002', name: 'Queued' }).catch((error: unknown) => error);
+  // Each request first reads projects.json for an earlier result of its id, so two sent together may queue in
+  // either order: the second is sent once the first is out.
   await vi.waitFor(() => expect(fake.creates()).toHaveLength(1), { timeout: 10_000 });
+  const queued = app.collaboration({ ...request, requestId: 'b1b2c3d4-0000-4000-8000-000000000002', name: 'Queued' }).catch((error: unknown) => error);
+  await new Promise(resolve => setTimeout(resolve, 200));
   const started = Date.now();
   await app.shutdown();
   expect(Date.now() - started).toBeLessThan(5_000);
   expect(await flying).toBeInstanceOf(CreationOutcomeUnknownError);
   expect(await queued).toEqual(new AdminWriteError('后台服务正在关闭，没有建群'));
   await expect(app.collaboration({ ...request, requestId: 'b1b2c3d4-0000-4000-8000-000000000003', name: 'Late' })).rejects.toThrow(new AdminWriteError('后台服务正在关闭，没有建群'));
-  expect(fake.creates()).toHaveLength(1);
+  expect(fake.creates()).toMatchObject([{ data: { name: 'In flight' } }]);
   expect(fake.open()).toBe(0);
 });
 it('leaves a key from before s15c unused and refuses unsupported goal before posting to Feishu', async () => {
