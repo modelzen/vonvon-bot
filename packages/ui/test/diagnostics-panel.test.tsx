@@ -143,3 +143,21 @@ it('writes today\'s time short and another day\'s with its date, and finds each 
   const entry = findEntries(searchEntries(snapshot([agent])), '没回的消息').find(item => item.id === `${agent.id}-diagnostics`);
   expect(entry?.destination).toEqual({page: 'diagnostics', section: diagnosticsSection(agent.id)});
 });
+
+it('lists the groups an older version put in a wrong directory, only when there are some (s36c2d)', () => {
+  const misplaced = {...snapshot([agent]), memberships: [
+    {...snapshot([agent]).memberships[0]!, directory: '/tmp/vonvon-home/projects/助手', directoryProblem: 'botRoot' as const},
+    {...snapshot([agent]).memberships[0]!, id: 'm2' as never, groupId: 'oc_dot' as never, name: '点', directory: '/tmp/vonvon-home', directoryProblem: 'dataDir' as const},
+    {...snapshot([agent]).memberships[0]!, id: 'm3' as never, groupId: 'oc_home' as never, name: '家', directory: '/tmp', directoryProblem: 'dataDirParent' as const},
+  ]};
+  const html = renderToStaticMarkup(<ClientProvider client={client}>
+    <DiagnosticsPanel snapshot={misplaced} ready busy={false} run={async () => ({kind: 'applied', revision: 1})} onOpenSetup={() => {}} onOpenEnvironment={() => {}} onNotice={() => {}}/>
+  </ClientProvider>);
+  expect(html).toContain('群目录');
+  expect(html).toContain('3 个群放错了位置');
+  expect(html).toContain('「发布群」用的是某个 Bot 自己的目录');
+  expect(html).toContain('「点」在 Vonvon 的数据目录里');
+  expect(html).toContain('「家」用的是 Vonvon 数据目录的上级文件夹');
+  expect(html).toContain('点「更换目录」');
+  expect(render([agent])).not.toContain('群目录');
+});

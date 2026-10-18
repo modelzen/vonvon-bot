@@ -32,6 +32,13 @@ describe('lossless admin state and pinned projection', () => {
     expect(projected.agents[0]?.readError).toBe('invalid projects.json');
   });
 
+  it('s36c2d: carries a misplaced directory to the membership only when there is one', async () => {
+    const state = await readAdminState({ listBots: async () => [bot], listProjects: async () => [{ ...project, directoryProblem: 'botRoot' }, { ...project, name: 'fine', chatId: 'oc_fine' }] });
+    const projected = projectState(state, empty, new Set());
+    expect(desktopSnapshotSchema.parse({ ...empty, ...projected }).memberships.map(member => member.directoryProblem)).toEqual(['botRoot', undefined]);
+    expect(projected.memberships[1]).not.toHaveProperty('directoryProblem');
+  });
+
   it('marks duplicate group bindings stale and preserves pinned activation semantics', async () => {
     const state = await readAdminState({ listBots: async () => [{ ...bot, running: false }], listProjects: async () => [project, project] });
     const projected = projectState(state, empty, new Set());

@@ -1,7 +1,7 @@
 import type {ReactNode} from 'react';
 import {
   NOT_REPLIED_TEXT, OPTIONAL_SCOPE_EFFECTS, SCOPE_DENIAL_PLACE_TEXT, backendLabel, botSteps, connectionStep, crashText, formatTime, toolSteps,
-  type AdminSetupStatus, type Agent, type Command, type CommandResult, type CrashEntry, type DesktopSnapshot, type NotReplied, type SetupStep, type StepAction, type StepTone,
+  type AdminSetupStatus, type Agent, type Command, type CommandResult, type CrashEntry, type DesktopSnapshot, type DirectoryProblem, type Membership, type NotReplied, type SetupStep, type StepAction, type StepTone,
 } from '@vonvon/protocol';
 import {useClient, useShellCapabilities} from '../client-context';
 import {AgentAvatar} from '../AgentAvatar';
@@ -77,6 +77,22 @@ function NotRepliedList({records, agent, snapshot, now}: {records: readonly NotR
   })}</ul>;
 }
 
+/** Why a directory an older version gave a group is wrong (s36c2d). */
+export const DIRECTORY_PROBLEM_TEXT: Record<DirectoryProblem, string> = {
+  botRoot: '用的是某个 Bot 自己的目录，这个 Bot 的群目录都在它下面',
+  projectsRoot: '用的是工作区的默认位置本身，所有 Bot 的目录都在它下面',
+  dataDir: '在 Vonvon 的数据目录里（projects/ 以外），这里不能当工作区',
+  dataDirParent: '用的是 Vonvon 数据目录的上级文件夹，这里不能当工作区',
+};
+
+/** 群目录: groups an older version put in a wrong place; nothing is moved for them. */
+function DirectoryProblems({members}: {members: readonly Membership[]}) {
+  return <>
+    <ul className="diagnostics-scopes">{members.map(member => <li key={member.id}>「{member.name}」{DIRECTORY_PROBLEM_TEXT[member.directoryProblem!]}：<code>{member.directory}</code></li>)}</ul>
+    这些群的目录是旧版本定下的。到群的「项目运行」里点「更换目录」换一个文件夹，原来的文件不会自动搬过去。
+  </>;
+}
+
 /** 最近的崩溃 (s18a): the last day's records, newest first; absent when the daemon is older than s18a. */
 function CrashList({records, now}: {records: readonly CrashEntry[]; now: number}) {
   if (!records.length) return <>最近 24 小时没有崩溃。</>;
@@ -100,6 +116,7 @@ function BotDiagnostics({agent, snapshot, read, tools, onOpenSetup, onError}: {
   const grantUrl = read?.status?.scopes.grantUrl;
   const counts = new Map<string, number>();
   for (const member of snapshot.memberships) if (member.agentId === agent.id) counts.set(member.backend, (counts.get(member.backend) ?? 0) + 1);
+  const misplaced = snapshot.memberships.filter(member => member.agentId === agent.id && member.directoryProblem);
   const toolText = [...counts].map(([backend, count]) => {
     const step = tools.find(item => item.title === backendLabel(backend));
     return `${backendLabel(backend)}${step ? ` ${step.status}` : ''}（${count} 个群）`;
@@ -114,6 +131,7 @@ function BotDiagnostics({agent, snapshot, read, tools, onOpenSetup, onError}: {
       trailing={<span className="setup-step-trailing">{scopes.badge}{grantUrl && scopes.lines.length > 0 && <Button size="sm"
         onClick={() => void openExternalUrl(grantUrl, 'app-console', shell).catch(error => onError(error instanceof Error ? error.message : '无法打开开发者后台。'))}>一键开权限</Button>}</span>}/>
     <SettingsRow title="后端" description={toolText || '还没有绑定群'}/>
+    {misplaced.length > 0 && <SettingsRow title="群目录" description={<DirectoryProblems members={misplaced}/>} trailing={badge(`${misplaced.length} 个群放错了位置`, 'warning')}/>}
     <SettingsRow title="最近没回的消息" description={<NotRepliedList records={records} agent={agent} snapshot={snapshot} now={now}/>}/>
     {crashes && <SettingsRow title="最近的崩溃" description={<CrashList records={crashes} now={now}/>}/>}
   </SettingsGroup>;
@@ -135,7 +153,7 @@ function CrashBars({snapshot, ready, busy, run}: {snapshot: DesktopSnapshot; rea
 }
 
 /** 状态与诊断 (product.md 3.1 item 8): the red bar of a crash pause, this machine's tools and the daemon's crashes, then
- * each bot's connection, setup, scopes, tools, recent not-replied messages and crashes, then the daemon log. */
+ * each bot's connection, setup, scopes, tools, misplaced group directories, recent not-replied messages and crashes, then the daemon log. */
 export function DiagnosticsPanel({snapshot, ready, busy, run, onOpenSetup, onOpenEnvironment, onNotice}: {
   snapshot: DesktopSnapshot; ready: boolean; busy: boolean;
   run: (command: Command) => Promise<CommandResult>;
