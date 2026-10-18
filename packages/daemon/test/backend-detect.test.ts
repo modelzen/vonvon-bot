@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * codex-only：智能默认 effectiveDefaultBackend 规则、detectAgents 单 agent 分组、
- * backendForProject 显式优先/回退、ensureAnyAgent 放行。codex 探测 mock，不碰真机环境。
+ * ensureAnyAgent 放行（群用哪个后端见 execution-resolve.test.ts）。codex 探测 mock，不碰真机环境。
  */
 
 // ── 受控的 codex 探测（detectAgents 据它推导默认）────────────────────────
@@ -13,7 +13,7 @@ vi.mock('../src/agent/codex-appserver/locate', () => ({
   codexVersionAsync: vi.fn(async () => detectState.codexVersion),
 }));
 
-import { detectAgents, effectiveDefaultBackend, backendForProject } from '../src/agent/detect';
+import { detectAgents, effectiveDefaultBackend } from '../src/agent/detect';
 import { ensureAnyAgent } from '../src/bot/onboarding';
 
 beforeEach(() => {
@@ -33,25 +33,6 @@ describe('智能默认 effectiveDefaultBackend（detect 推导）', () => {
     detectState.codexBin = null;
     detectState.codexVersion = null;
     expect(await effectiveDefaultBackend({ force: true })).toBe('codex-appserver');
-  });
-});
-
-describe('backendForProject：显式优先（须为已注册后端），否则有效默认', () => {
-  it('项目显式选了已注册后端 codex-appserver → 用它（不探测）', async () => {
-    detectState.codexBin = null; // 即便探不到 codex，显式值也优先
-    expect(await backendForProject({ backend: 'codex-appserver' })).toBe('codex-appserver');
-  });
-
-  it('项目指向已移除后端（旧 claude-sdk 配置）→ 回退有效默认 codex-appserver（避免 createBackend 抛未知后端）', async () => {
-    detectState.codexBin = '/usr/bin/codex';
-    detectState.codexVersion = 'codex 9.9';
-    expect(await backendForProject({ backend: 'claude-sdk' }, { force: true })).toBe('codex-appserver');
-  });
-
-  it('项目没选 → 落有效默认', async () => {
-    detectState.codexBin = '/usr/bin/codex';
-    detectState.codexVersion = 'codex 9.9';
-    expect(await backendForProject({}, { force: true })).toBe('codex-appserver');
   });
 });
 

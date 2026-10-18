@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { DEFAULT_BACKEND_ID, type AgentBackend, type ReasoningEffort } from '../agent/types';
+import type { AgentBackend, ReasoningEffort } from '../agent/types';
 import { backendIds } from '../agent';
 import { parseModelId } from '../agent/model-id';
 import { getCompletionReminderConfig, getMaxConcurrentRuns, getModelDisplay, getPendingPolicy, getRunIdleTimeoutMs, getSessionTitleConfig, getSessionTitleEfforts, getShowToolCalls, resolveOwner, type AppConfig, type AppPreferences } from '../config/schema';
 import { paths } from '../config/paths';
 import { resolveProjectsRootDir } from '../config/directories';
+import { groupBackendId, resolveCommentsExecution, resolveModelPreference } from '../config/execution';
 import { effectiveMode, getProjectByName, listProjects, mutateProject, noMentionOf, pendingPolicyOf, ruleKind, type Project } from '../project/registry';
 import { getSession, isRetiredKey, mutateSession, RETIRED_KEY_TEXT, type SessionRecord } from '../bot/session-store';
 import { DEFAULT_COMMENT_INSTRUCTIONS, saveCommentInstructions, syncAllCommentInstructions } from '../bot/comments';
@@ -105,7 +106,7 @@ function agentData(cfg: AppConfig): T.AgentSections {
     },
     completion: getCompletionReminderConfig(cfg),
     comments: {
-      backend: p.comments?.backend ?? DEFAULT_BACKEND_ID,
+      backend: resolveCommentsExecution(p).backend,
       selection: selection(p.comments?.model, p.comments?.effort)
     },
     titles: {
@@ -303,9 +304,10 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       sections.paths.effective = {
         projectsRootDir: resolveProjectsRootDir(cfg.preferences?.projectsRootDir)
       };
+      const comments = resolveCommentsExecution(cfg.preferences);
       sections.comments.effective = {
-        backend: data.comments.backend,
-        selection: await effectiveSelection(data.comments.backend, cfg.preferences?.comments?.model, cfg.preferences?.comments?.effort)
+        backend: comments.backend,
+        selection: await effectiveSelection(comments.backend, comments.model?.model, comments.model?.effort, comments.model?.custom)
       };
       sections.run.effective = {
         ...sections.run.stored,
@@ -340,10 +342,12 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         throw new SettingsInputError('项目不存在');
       const data = projectData(p);
       const sections = Object.fromEntries(Object.entries(data).map(([key, value]) => [key, makeSection(value, [botId, projectRaw(p, key as keyof T.ProjectSections)], access, effect(Object.keys(value), key === 'model' ? 'new-session' : key === 'permission' ? 'session-rebind' : 'next-message', key === 'model' ? '仅新会话使用项目默认模型' : key === 'run' && p.backend === 'claude-agent' ? 'Claude 不支持插话，运行中来的消息照样排队' : '下一条消息生效'))])) as T.ProjectSettingsView['sections'];
-      const backendId = p.backend ?? DEFAULT_BACKEND_ID;
+      const backendId = groupBackendId(p);
       sections.run.effective = { pendingPolicy: pendingPolicyOf(getPendingPolicy(cfg), p) };
+      // The group's default, else the bot's on the same backend (s36d2).
+      const prefer = resolveModelPreference({ bot: cfg.preferences, group: p }, backendId);
       sections.model.effective = {
-        selection: await effectiveSelection(backendId, p.defaultModel, p.defaultEffort, p.defaultModelCustom)
+        selection: await effectiveSelection(backendId, prefer?.model, prefer?.effort, prefer?.custom)
       };
       const fullOnly = deps.backendFor(backendId).fullAccessOnly?.();
       return {
@@ -429,12 +433,13 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
               };
               break;
             case 'comments': {
-              const backend = e.patch.backend ?? p.comments?.backend ?? DEFAULT_BACKEND_ID;
+              const backend = e.patch.backend ?? resolveCommentsExecution(p).backend;
               const choice = e.patch.selection ?? selection(p.comments?.model, p.comments?.effort);
               await validateSelection(backend, choice);
+              // An inherited backend stays inherited: only a chosen one is written (s36d2).
               p.comments = {
                 ...p.comments,
-                backend
+                ...(e.patch.backend !== undefined ? { backend } : {})
               };
               applySelection(p.comments, choice);
               break;
@@ -488,7 +493,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
                 ...p,
                 ...e.patch
               };
-              const backend = deps.backendFor(p.backend ?? DEFAULT_BACKEND_ID);
+              const backend = deps.backendFor(groupBackendId(p));
               const supported = backend.supportedModes;
               if (supported && !supported.includes(effectiveMode(next)))
                 throw new SettingsInputError('后端不支持此权限档位');
@@ -511,7 +516,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
             case 'model': {
               if (!e.patch.selection)
                 throw new SettingsInputError('缺少模型选择');
-              const chosen = await validateSelection(p.backend ?? DEFAULT_BACKEND_ID, e.patch.selection, true);
+              const chosen = await validateSelection(groupBackendId(p), e.patch.selection, true);
               if (chosen.kind === 'default') {
                 delete p.defaultModel;
                 delete p.defaultEffort;

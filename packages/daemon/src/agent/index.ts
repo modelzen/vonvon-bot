@@ -48,7 +48,6 @@ export type { AgentFamily, BackendAccess, DepKind, BackendDep, BackendCatalogEnt
 export {
   detectAgents,
   effectiveDefaultBackend,
-  backendForProject,
   type AgentId,
   type AgentRuntime,
   type BackendAvailability,
