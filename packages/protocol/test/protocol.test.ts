@@ -10,6 +10,7 @@ import {
   jobSchema, environmentReplySchema,
   type DesktopSnapshot, settingsViewSchema, projectViewSchema, projectEditableSchemas, settingsReplySchema,
   applicationCrashesSchema, crashText, FORCED_DETAIL, NOT_REPLIED_TEXT, diagnosticsEventSchema,
+  isKnownJudgeSelection, type JudgeSelectionView,
 } from "../src/index.js";
 
 const fixture = (name: string): unknown => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
@@ -143,6 +144,51 @@ describe("pinned contract extraction", () => {
     const save = (section: string, patch: unknown) => requestSchema.safeParse({type:"request",id:"1",method:"settings",payload:{type:"save",edit:{scope,section,revision:"r1",patch}}}).success;
     expect(save("response", {noMention:true})).toBe(true);
     expect(save("compact", {autoCompact:false})).toBe(false);
+  });
+  it("s23d: the judge section, smartPrompt and judgeByBackend are optional in views; default, llm and decision save", () => {
+    const section = (value: unknown) => ({stored:value,effective:value,revision:"r1",access:{kind:"writable"},apply:[]});
+    const old = fixture("agent-settings.json") as { sections: Record<string, unknown> };
+    expect(agentViewSchema.parse(old).sections.judge).toBeUndefined();
+    const llm = {kind:"llm",backend:"codex-appserver",model:"gpt-6-luna",effort:"low"};
+    const jev = {kind:"decision",provider:"typesafe",model:"jev-latest"};
+    const prompt = {source:"default",path:"/p",text:"t",formatLines:{main:"a",mentioned:"b",topic:"c"},inputExample:"x",maxLength:8000};
+    const parsed = agentViewSchema.parse({ ...old, sections: { ...old.sections, judge: {...section({selection:{kind:"default"}}),effective:{selection:llm}} }, smartPrompt: prompt,
+      judgeByBackend: {"codex-appserver":{model:"gpt-6-luna",effort:"low",source:"default"},"claude-agent":{model:"jev-latest",provider:"typesafe",source:"bot"}} });
+    expect(parsed.sections.judge?.effective.selection).toEqual(llm);
+    expect(parsed.judgeByBackend?.["claude-agent"]).toEqual({model:"jev-latest",provider:"typesafe",source:"bot"});
+    expect(agentViewSchema.parse({ ...old, sections: { ...old.sections, judge: section({selection:jev}) } }).sections.judge?.stored.selection).toEqual(jev);
+    // a kind from a newer daemon parses as sent; a known kind that is malformed does not
+    const future = {kind:"oracle",provider:"x",model:"y",weights:[1,2]};
+    expect(agentViewSchema.parse({ ...old, sections: { ...old.sections, judge: section({selection:future}) } }).sections.judge?.stored.selection).toEqual(future);
+    // a client narrows with the guard first: `kind` alone leaves the fields unknown
+    const read = (selection: JudgeSelectionView): string => !isKnownJudgeSelection(selection) ? `unknown ${selection.kind}`
+      : selection.kind === "llm" ? `${selection.backend} ${selection.model}` : selection.kind === "decision" ? `${selection.provider} ${selection.model}` : "default";
+    const pick = (selection: unknown) => agentViewSchema.parse({ ...old, sections: { ...old.sections, judge: section({selection}) } }).sections.judge!.stored.selection;
+    expect([llm, jev, {kind:"default"}, future].map((selection) => read(pick(selection))))
+      .toEqual(["codex-appserver gpt-6-luna", "typesafe jev-latest", "default", "unknown oracle"]);
+    for (const bad of [{kind:"llm"}, {kind:"decision",model:"x"}, {kind:""}, {model:"x"}]) {
+      expect(agentViewSchema.safeParse({ ...old, sections: { ...old.sections, judge: section({selection:bad}) } }).success).toBe(false);
+    }
+    const project = {scope:{kind:"project",botId:"cli_fixture",projectName:"fixture"},sections:{
+      permission:section({mode:"qa",guestMode:"qa",network:false}),response:section({noMention:false}),model:section({selection:{kind:"default"}}),
+    },identity:{chatId:"oc_fixture",backend:"codex-appserver",cwd:"/tmp",kind:"multi"},members:{openIds:[],revision:"r1"}};
+    expect(projectViewSchema.parse(project).sections.judge).toBeUndefined();
+    expect(projectViewSchema.parse({ ...project, sections: { ...project.sections, judge: section({selection:{kind:"default"}}) }, smartPrompt: { ...prompt, error: "SMART.md 是符号链接" } }).smartPrompt?.error).toBe("SMART.md 是符号链接");
+
+    const save = (kind: string, patch: unknown) => requestSchema.safeParse({type:"request",id:"1",method:"settings",payload:{type:"save",edit:{
+      scope: kind === "agent" ? {kind,botId:"cli_fixture"} : {kind,botId:"cli_fixture",projectName:"fixture"},section:"judge",revision:"r1",patch}}}).success;
+    for (const kind of ["agent", "project"]) {
+      expect(save(kind, {selection:{kind:"default"}})).toBe(true);
+      expect(save(kind, {selection:{kind:"llm",model:"my-gw/qwen3-coder",custom:true}})).toBe(true);
+      expect(save(kind, {selection:llm})).toBe(true);
+      expect(save(kind, {selection:jev})).toBe(true);
+      expect(save(kind, {selection:{...jev,backend:"codex-appserver"}})).toBe(false);
+      expect(save(kind, {selection:future})).toBe(false);
+      expect(save(kind, {selection:{kind:"llm",model:"m",extra:1}})).toBe(false);
+    }
+    const models = (purpose: string) => requestSchema.safeParse({type:"request",id:"1",method:"settings",payload:{type:"models",query:{botId:"cli_fixture",backend:"claude-agent",purpose}}}).success;
+    expect(models("judge")).toBe(true);
+    expect(models("decision")).toBe(false);
   });
   it("has one permission tier per group (s15c): no guestMode edit, no member in setPermission", () => {
     const scope = {kind:"project",botId:"cli_fixture",projectName:"fixture"};

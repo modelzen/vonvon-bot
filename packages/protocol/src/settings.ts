@@ -34,6 +34,61 @@ const title = z.discriminatedUnion("enabled", [
     })
     .strict(),
 ]);
+/**
+ * The smart-mode judge model of a layer (s23d, product.md 3.4). `default` removes the layer: the bot
+ * then judges on each backend's default small model, a group inherits the bot. `llm`, a language
+ * model: `backend` says whose model id it is; left out, the group's backend, or the bot's default
+ * backend for the bot. `decision`, a decision model: no backend, it applies to groups on every
+ * backend (s23f lists and calls them).
+ */
+const judgeKinds = {
+  default: z.object({ kind: z.literal("default") }),
+  llm: z.object({
+    kind: z.literal("llm"),
+    backend: z.string().trim().min(1).max(100).optional(),
+    model: z.string().trim().min(1).max(1000),
+    effort: effort.optional(),
+    /** a hand-typed id, not checked against the model list (product.md 3.11) */
+    custom: z.boolean().optional(),
+  }),
+  decision: z.object({
+    kind: z.literal("decision"),
+    provider: z.string().trim().min(1).max(100),
+    model: z.string().trim().min(1).max(1000),
+  }),
+};
+const judgeSelection = z.discriminatedUnion("kind", [
+  judgeKinds.default.strict(),
+  judgeKinds.llm.strict(),
+  judgeKinds.decision.strict(),
+]);
+export const judgeSectionSchema = z.object({ selection: judgeSelection });
+/** The judge kinds this version knows; a view carries others as sent. */
+export const JUDGE_SELECTION_KINDS: readonly string[] = Object.keys(judgeKinds);
+/** In a view, a kind this client does not know (a newer daemon, v1-plan 第 5 节"旧客户端读到决策模型")
+ * parses as sent, so the rest of the view still shows; a known kind with extra fields drops them. */
+const judgeViewSection = z.object({
+  selection: z.union([
+    z.discriminatedUnion("kind", [judgeKinds.default, judgeKinds.llm, judgeKinds.decision]),
+    z
+      .object({ kind: z.string().min(1).max(100).refine((kind) => !JUDGE_SELECTION_KINDS.includes(kind)) })
+      .passthrough(),
+  ]),
+});
+/** What the judge prompt is, read only: SMART.md, the format lines vonvon adds, a sample input. */
+const smartPrompt = z.object({
+  source: z.enum(["default", "bot", "group"]),
+  /** the file to make or edit: the group's for a group, the bot's for the bot */
+  path: z.string(),
+  text: z.string(),
+  formatLines: z.object({ main: z.string(), mentioned: z.string(), topic: z.string() }),
+  inputExample: z.string(),
+  /** what else the backend's model sees */
+  backendNote: z.string().optional(),
+  maxLength: z.number(),
+  /** SMART.md exists but cannot be used: judgements fail until it is fixed */
+  error: z.string().optional(),
+});
 export const agentSectionSchemas = {
   cards: z.object({
     showToolCalls: z.boolean(),
@@ -52,6 +107,7 @@ export const agentSectionSchemas = {
   titles: z.object({ byBackend: z.record(title) }),
   paths: z.object({ projectsRootDir: z.string().nullable() }),
   access: z.object({ allowedChats: z.array(groupIdSchema).max(1000) }),
+  judge: judgeSectionSchema,
 };
 const tier = z.enum(["qa", "write", "full"]);
 /** What a save may set in a group's settings; the view adds the deprecated `permission.guestMode`. */
@@ -61,6 +117,7 @@ export const projectEditableSchemas = {
   model: z.object({ selection }),
   /** 运行中来了消息 for this group; stored "default" inherits the bot's `run.pendingPolicy` */
   run: z.object({ pendingPolicy: z.enum(["default", "steer", "queue"]) }),
+  judge: judgeSectionSchema,
 };
 export const projectSectionSchemas = {
   ...projectEditableSchemas,
@@ -148,7 +205,21 @@ const voice = z.object({
 });
 export const agentViewSchema = z.object({
   scope: z.object({ kind: z.literal("agent"), botId: agentIdSchema }),
-  sections: sections(agentSectionSchemas),
+  /** `judge`, `smartPrompt` and `judgeByBackend` came in s23d: a daemon from before sends none. */
+  sections: sections(agentSectionSchemas).extend({ judge: section(judgeViewSection).optional() }),
+  smartPrompt: smartPrompt.optional(),
+  /** per backend, what this bot's groups on it judge with: the bot has no backend of its own */
+  judgeByBackend: z
+    .record(
+      z.object({
+        model: z.string(),
+        effort: effort.optional(),
+        /** set for a decision model */
+        provider: z.string().optional(),
+        source: z.enum(["bot", "default"]),
+      }),
+    )
+    .optional(),
   ownerOpenId: z.string().nullable(),
   administrators: z.object({
     openIds: z.array(z.string()),
@@ -170,8 +241,12 @@ export const projectViewSchema = z.object({
     botId: agentIdSchema,
     projectName: z.string(),
   }),
-  /** `run` came in s21: a daemon from before it sends none, and this view still parses. */
-  sections: sections(projectSectionSchemas).extend({ run: section(projectSectionSchemas.run).optional() }),
+  /** `run` came in s21, `judge` and `smartPrompt` in s23d: a daemon from before sends none, and this view still parses. */
+  sections: sections(projectSectionSchemas).extend({
+    run: section(projectSectionSchemas.run).optional(),
+    judge: section(judgeViewSection).optional(),
+  }),
+  smartPrompt: smartPrompt.optional(),
   identity: z.object({
     chatId: z.string(),
     backend: z.string(),
@@ -222,6 +297,16 @@ export type SettingsView =
   | HostSettingsView;
 export type ModelSelection = z.infer<typeof selection>;
 export type TitlePolicy = z.infer<typeof title>;
+export type JudgeSelection = z.infer<typeof judgeSelection>;
+/** A view's judge selection: a known kind, or one this client does not know, as sent. */
+export type JudgeSelectionView = z.infer<typeof judgeViewSection>["selection"];
+/** Whether a view's judge selection is a kind this version knows. Check it before comparing `kind`:
+ * the other branch's `kind: string` matches every literal, so `kind === "llm"` alone leaves the
+ * fields `unknown`. A parsed view's known kind always has its fields (judgeViewSection). */
+export function isKnownJudgeSelection(selection: JudgeSelectionView): selection is JudgeSelection {
+  return JUDGE_SELECTION_KINDS.includes(selection.kind);
+}
+export type SmartPromptView = z.infer<typeof smartPrompt>;
 
 const editablePatches: Record<
   SettingsScope["kind"],
@@ -349,7 +434,7 @@ export const modelQuerySchema = z
   .object({
     botId: agentIdSchema,
     backend: z.string().trim().min(1).max(1000),
-    purpose: z.enum(["project", "session", "comments", "titles"]),
+    purpose: z.enum(["project", "session", "comments", "titles", "judge"]),
   })
   .strict();
 export type ModelQuery = z.infer<typeof modelQuerySchema>;

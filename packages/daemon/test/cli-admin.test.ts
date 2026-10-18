@@ -382,5 +382,61 @@ it('settings get prints each section, gives the view as JSON, and lists a group\
   expect(out).toContain('会话（最近 2 个，共 2 个；看单个会话：vonvon settings get --session <id>）');
   expect(out.indexOf('omt_new')).toBeLessThan(out.indexOf('omt_old'));
   expect(out).toContain(`gpt-5.5  ${'修'.repeat(40)}…\n`);
-  await expect(runSettingsGet('nope', {}, h.io(), h.daemon)).rejects.toThrow('没有 nope 这一节。可以看的有：cards、run、completion、comments、titles、paths、access');
+  await expect(runSettingsGet('nope', {}, h.io(), h.daemon)).rejects.toThrow('没有 nope 这一节。可以看的有：cards、run、completion、comments、titles、paths、access、judge');
+});
+
+it('judge: set takes the selection JSON, get prints a row per backend and the prompt source, get judge the whole prompt', async () => {
+  expect(parseAssignments('agent', ['judge.selection={"kind":"llm","model":"gpt-6-luna","effort":"low"}']).patch).toEqual({ selection: { kind: 'llm', model: 'gpt-6-luna', effort: 'low' } });
+  expect(parseAssignments('project', ['judge.selection={"kind":"default"}']).patch).toEqual({ selection: { kind: 'default' } });
+  expect(parseAssignments('agent', ['judge.selection={"kind":"decision","provider":"typesafe","model":"jev-latest"}']).patch).toEqual({ selection: { kind: 'decision', provider: 'typesafe', model: 'jev-latest' } });
+  expect(() => parseAssignments('agent', ['judge.selection={"kind":"oracle","model":"x"}'])).toThrow('judge.selection 的 kind 只能是 default 或 llm 或 decision');
+  expect(() => parseAssignments('agent', ['judge.selection={"kind":"llm","model":"  "}'])).toThrow('judge.selection.model 不能为空');
+  expect(() => parseAssignments('agent', [`judge.selection={"kind":"decision","provider":"typesafe","model":"${'m'.repeat(1001)}"}`])).toThrow('judge.selection.model 最多 1000 个字');
+  expect(() => parseAssignments('agent', [`access.allowedChats=${JSON.stringify(Array.from({ length: 1001 }, (_, i) => `oc_${i}`))}`])).toThrow('access.allowedChats 最多 1000 项');
+  expect(() => parseAssignments('session', ['judge.selection={"kind":"default"}'])).toThrow('没有 judge 这一节');
+
+  const prompt = { source: 'default', path: '/d/bots/cli_a/SMART.md', text: '默认提示词全文\n第二行', formatLines: { main: '格式A', mentioned: '格式B\n只输出 JSON', topic: '格式C' }, inputExample: '【群】产品讨论\n【你】小P', backendNote: 'Codex 的说明\nClaude 的说明', maxLength: 8000 };
+  const llm = { kind: 'llm', backend: 'codex-appserver', model: 'gpt-6-luna', effort: 'low' };
+  const agentView = { scope: { kind: 'agent', botId: 'cli_a' }, sections: { judge: section({ selection: { kind: 'default' } }, 'rev-judge', { selection: llm }) },
+    smartPrompt: prompt, judgeByBackend: { 'codex-appserver': { model: 'gpt-6-luna', effort: 'low', source: 'default' }, 'claude-agent': { model: 'sonnet', source: 'bot' } } };
+  const projectView = { scope: { kind: 'project', botId: 'cli_a', projectName: 'pay' }, sections: { judge: section({ selection: { kind: 'default' } }, 'r', { selection: llm }) },
+    identity: { chatId: 'oc_pay', backend: 'codex-appserver', cwd: '/home/u/pay', kind: 'multi' }, smartPrompt: { ...prompt, source: 'bot', path: '/d/bots/cli_a/groups/oc_pay/SMART.md' } };
+  let stored: object = llm;
+  const settings = vi.fn(async (request: { type: string; scope?: { kind: string } }): Promise<unknown> => request.type === 'sessions' ? { kind: 'sessions', sessions: [] }
+    : request.type === 'save' ? { kind: 'saved', result: { kind: 'saved', section: { scope: agentView.scope, section: 'judge', value: section({ selection: stored }) }, effects: [{ fields: ['selection'], when: 'next-message', detail: '智能模式的下一次判断就用新模型' }] } }
+    : { kind: 'view', view: request.scope?.kind === 'project' ? projectView : agentView });
+  const h = harness({ snapshot: one(undefined, [member('cli_a', 'oc_pay', 'pay')]), settings });
+
+  await runSettingsGet(undefined, {}, h.io(), h.daemon);
+  expect(h.out()).toContain(['[judge]', '  selection = {"kind":"default"}', '  Codex 的群用：gpt-6-luna，推理强度 low（默认）', '  Claude 的群用：sonnet，关思考（bot 设的）',
+    '  智能提示词：内置默认。要改就新建 /d/bots/cli_a/SMART.md，删掉它就恢复默认', '  只在智能模式的群里用', ''].join('\n'));
+  expect(h.out()).not.toContain('默认提示词全文');
+  h.clear(); await runSettingsGet('judge', {}, h.io(), h.daemon);
+  // multi-line texts keep their breaks: printing strips control characters line by line
+  for (const text of ['—— 智能提示词 ——\n默认提示词全文\n第二行\n', '—— 程序附的格式行（只读）：主区被 @ ——\n格式B\n只输出 JSON\n', '—— 程序给模型的输入（示例，只读）——\n【群】产品讨论\n【你】小P\n—— 模型还会看到（只读）——\nCodex 的说明\nClaude 的说明']) expect(h.out()).toContain(text);
+  h.clear(); await runSettingsGet(undefined, { group: 'pay' }, h.io(), h.daemon);
+  expect(h.out()).toContain(`  selection = {"kind":"default"}（生效：${JSON.stringify(llm)}）\n  智能提示词：用 bot 的 SMART.md。要只改这个群就新建 /d/bots/cli_a/groups/oc_pay/SMART.md，删掉它就回到 bot 的\n`);
+
+  // a decision model on the bot: every backend's row says so
+  agentView.judgeByBackend = { 'codex-appserver': { model: 'jev-latest', provider: 'typesafe', source: 'bot' }, 'claude-agent': { model: 'jev-latest', provider: 'typesafe', source: 'bot' } } as never;
+  h.clear(); await runSettingsGet('judge', {}, h.io(), h.daemon);
+  expect(h.out()).toContain('  Codex 的群用：决策模型 typesafe 的 jev-latest（bot 设的）\n  Claude 的群用：决策模型 typesafe 的 jev-latest（bot 设的）\n');
+  // a kind from a newer daemon: shown as sent, and said so
+  const future = { kind: 'oracle', provider: 'x', model: 'y' };
+  agentView.sections.judge = section({ selection: future }, 'rev-judge', { selection: future }) as never;
+  h.clear(); await runSettingsGet(undefined, {}, h.io(), h.daemon);
+  expect(h.out()).toContain(`  selection = ${JSON.stringify(future)}\n  这个版本的命令行不认识 oracle 这一类判断模型，上面是原样\n`);
+
+  h.clear(); await runSettingsSet(['judge.selection={"kind":"llm","model":"gpt-6-luna","effort":"low"}'], {}, h.io(), h.daemon);
+  expect(h.out()).toBe(`已保存 judge.selection = ${JSON.stringify(llm)}（Codex 的群用）。\n智能模式的下一次判断就用新模型\n`);
+  stored = { kind: 'decision', provider: 'typesafe', model: 'jev-latest' };
+  h.clear(); await runSettingsSet(['judge.selection={"kind":"decision","provider":"typesafe","model":"jev-latest"}'], {}, h.io(), h.daemon);
+  expect(h.out()).toBe(`已保存 judge.selection = ${JSON.stringify(stored)}（各后端的群都用）。\n智能模式的下一次判断就用新模型\n`);
+  const old = harness({ snapshot: one(), settings: vi.fn(async () => ({ kind: 'view', view: { scope: { kind: 'agent', botId: 'cli_a' }, sections: {} } })) });
+  await expect(runSettingsSet(['judge.selection={"kind":"default"}'], {}, old.io(), old.daemon)).rejects.toThrow('daemon 没有 judge 这一节。daemon 可能比命令行旧。');
+  // asked for by name, a section the daemon lacks is said, not left out
+  await runSettingsGet('judge', {}, old.io(), old.daemon);
+  expect(old.out()).toBe('bot Vonvon Bot（cli_a）的设置\ndaemon 没有 judge 这一节。daemon 可能比命令行旧。\n');
+  old.clear(); await runSettingsGet(undefined, {}, old.io(), old.daemon);
+  expect(old.out()).toBe('bot Vonvon Bot（cli_a）的设置\n');
 });

@@ -102,14 +102,38 @@ export function defaultJudgeModel(
   return codexJudgeDefault(models);
 }
 
+/** A decision model's provider id; which providers exist is s23f's registry, not checked here. */
+export const DECISION_PROVIDER_ID = /^[a-z][a-z0-9-]{0,39}$/;
+
+/**
+ * A chosen effort fitted to the model (Rakazo 第二轮 A6): when the cached list has the model, the
+ * same level if it takes it, else the nearest lower (a judgement stays cheap), else the nearest
+ * higher; none when it takes no effort. A hand-typed id, a model the list lacks, and every model
+ * before the list is cached pass as stored, so an unreadable list never drops a chosen effort.
+ */
+export function fitJudgeEffort(model: string, effort: ReasoningEffort, models: ModelInfo[] | undefined, custom = false): ReasoningEffort | undefined {
+  const info = custom ? undefined : models?.find((m) => m.id === model);
+  if (!info || info.supportedEfforts.includes(effort)) return effort;
+  const at = REASONING_EFFORTS.indexOf(effort);
+  const fits = (level: ReasoningEffort): boolean => info.supportedEfforts.includes(level);
+  return REASONING_EFFORTS.slice(0, at).reverse().find(fits) ?? REASONING_EFFORTS.slice(at + 1).find(fits);
+}
+
 /**
  * A stored judge setting as read back (design 2.1): `{}` when unset, `{ why }` when it cannot be
- * used (hand-edited config.json or projects.json), which then counts as unset.
+ * used (hand-edited config.json or projects.json, or a kind from a newer vonvon), which then counts
+ * as unset. A decision model is checked for its shape only.
  */
 export function parseStoredJudge(value: unknown, backends: readonly string[]): { value?: JudgeSelectionStored; why?: string } {
   if (value === undefined || value === null) return {};
   if (typeof value !== 'object' || Array.isArray(value)) return { why: '不是对象' };
   const v = value as Record<string, unknown>;
+  if (v.kind === 'decision') {
+    if (typeof v.provider !== 'string' || !DECISION_PROVIDER_ID.test(v.provider)) return { why: '决策模型的 provider 不对' };
+    const id = typeof v.model === 'string' ? parseModelId(v.model) : undefined;
+    if (!id?.ok) return { why: '模型 id 不对' };
+    return { value: { kind: 'decision', provider: v.provider, model: id.id } };
+  }
   if (v.kind !== 'llm') return { why: `不认识的 kind ${String(v.kind).slice(0, 40)}` };
   if (typeof v.backend !== 'string' || !backends.includes(v.backend)) return { why: '后端没注册' };
   const id = typeof v.model === 'string' ? parseModelId(v.model) : undefined;
@@ -126,20 +150,24 @@ export function parseStoredJudge(value: unknown, backends: readonly string[]): {
 }
 
 /**
- * The model for a group on backend `backendId` (design 2.2): the group's setting when stored for
- * this backend, else the bot's when stored for it, else the default small model. A setting without
- * an effort gets the default rule (2.3): Codex the lowest the list gives, Claude none (thinking off).
+ * The model for a group on backend `backendId` (design 2.2): the group's setting when it is a
+ * decision model or stored for this backend, else the bot's likewise, else the default small model.
+ * A decision model applies on every backend (product.md 3.4). A chosen effort is fitted to the model
+ * ({@link fitJudgeEffort}); a setting without one gets the default rule (2.3): Codex the lowest the
+ * list gives, Claude none (thinking off).
  */
 export function resolveJudgeModel(
   backendId: string,
   layers: { group?: JudgeSelectionStored; bot?: JudgeSelectionStored },
   models: ModelInfo[] | undefined,
   readClaude?: ClaudeUserSettings,
-): Pick<JudgeResult, 'model' | 'effort' | 'modelSource'> {
+): Pick<JudgeResult, 'model' | 'effort' | 'provider' | 'modelSource'> {
   for (const source of ['group', 'bot'] as const) {
     const chosen = layers[source];
+    if (chosen?.kind === 'decision') return { model: chosen.model, provider: chosen.provider, modelSource: source };
     if (chosen?.backend !== backendId) continue;
-    const effort = chosen.effort ?? (backendId === CLAUDE_BACKEND_ID ? undefined : judgeEffort(chosen.model, models, chosen.custom));
+    const effort = chosen.effort ? fitJudgeEffort(chosen.model, chosen.effort, models, chosen.custom)
+      : backendId === CLAUDE_BACKEND_ID ? undefined : judgeEffort(chosen.model, models, chosen.custom);
     return { model: chosen.model, ...(effort ? { effort } : {}), modelSource: source };
   }
   return { ...defaultJudgeModel(backendId, models, readClaude), modelSource: 'default' };
