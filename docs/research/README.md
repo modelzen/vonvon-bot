@@ -199,7 +199,7 @@ process-ci、draft 和 final 里的流程说法，凡和 `AGENTS.md` 不一致�
 
 | 报告 | 内容 | 说明 |
 |---|---|---|
-| [report](2026-10-18-ui-foundation/report.md) | 去重后的 55 条问题（F01 到 F55）、建议的 u01 到 u10、叫法表草稿、要 owner 定的 10 件事、留给最后一轮的 | v1-plan 记着的"会话方式叫法不一样"已核对为一致；死样式的行数以删前的 CSS coverage 为准 |
+| [report](2026-10-18-ui-foundation/report.md) | 去重后的 55 条问题（F01 到 F55）、建议的 u01 到 u10、叫法表草稿、要 owner 定的 11 件事（D1 到 D11）、带行为改动的条目（第 1 节 G）、留给最后一轮的 | v1-plan 记着的"会话方式叫法不一样"已核对为一致；死样式的行数以删前的 CSS coverage 为准 |
 
 ## 补充
 
