@@ -268,4 +268,4 @@ s23c 收尾实测时看到 `modelUsage` 比 `usage` 多一次 haiku 调用，原
 
 ## 原始数据
 
-原始数据、探针和汇总脚本不进仓库，留在 JP-VPS 的 `<home>/vonvon/claude-work/e12/`：`codex-raw.jsonl`（186 行，其中判断 154 条）、`codex-summary.md`、`claude-raw.jsonl`（190 行，其中判断 142 条，5 条是新 HOME 没登录的，统计用其余 137 条）、`claude-summary.md`，以及各自的探针和汇总脚本、批次日志、配置文件跑前跑后的 sha256、调试日志摘录。原始数据里的账号邮箱已打码。
+原始数据、探针和汇总脚本不进仓库，留在 JP-VPS 的 `<home>/vonvon/claude-work/e12/`：`codex-raw.jsonl`（186 行，其中判断 154 条）、`codex-summary.md`、`claude-raw.jsonl`（190 行，其中判断 142 条，5 条是新 HOME 没登录的（含 1 条冷却中直接返回），统计用其余 137 条）、`claude-summary.md`，以及各自的探针和汇总脚本、批次日志、配置文件跑前跑后的 sha256、调试日志摘录。原始数据里的账号邮箱已打码。
