@@ -24,7 +24,7 @@ import type {
 import { isGoalTerminal, SessionInUseError } from '../types';
 import { BRIDGE_DEVELOPER_INSTRUCTIONS } from '../bridge-instructions';
 import { AppServerClient } from './app-server-client';
-import { refillWarmPool, takeWarmClient, utilityRequest } from './client-pool';
+import { connectGated, refillWarmPool, takeWarmClient, utilityRequest } from './client-pool';
 import { mapNotification } from './event-map';
 import { runCodexJudge } from './judge-process';
 import { CODEX_FULL_ONLY, CodexFullOnlyError, codexConfinesReads } from './full-only';
@@ -750,11 +750,15 @@ export class CodexAppServerBackend implements AgentBackend {
     // 预热池（M-2）：取走（或扑空）都异步补位——下一个会话拿到的就是热进程
     // （MCP 已启动，thread/start 从 ~2.1s 冷路径降到 ~64ms）。热进程的 spawn
     // cwd 是中性目录，没关系：thread/start|resume 的 cwd 是 thread 级参数。
+    // 扑空时先连上再补位：空的 CODEX_HOME 里两个进程同时首启必有一个退出（R3-1）。
     const warmed = takeWarmClient(bin);
-    void refillWarmPool();
-    if (warmed) return warmed;
+    if (warmed) {
+      void refillWarmPool();
+      return warmed;
+    }
     const client = new AppServerClient({ bin, cwd });
-    await client.connect();
+    await connectGated(client, bin);
+    void refillWarmPool();
     return client;
   }
 }
