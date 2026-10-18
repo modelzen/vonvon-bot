@@ -144,7 +144,7 @@ describe('adoptAdminSessions', () => {
 
 describe('at bot start', () => {
   const cfg = { accounts: { app: { id: 'cli_fixture', secret: 'x', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' } } } as AppConfig;
-  const start = async () => (await startBridge({ cfg, appSecret: 'x', fallbackCwd: '/w' })).shutdown();
+  const start = async () => (await startBridge({ identity: { appId: cfg.accounts.app.id, tenant: cfg.accounts.app.tenant, createdAt: 1 }, cfg, appSecret: 'x', fallbackCwd: '/w' })).shutdown();
   const rawStore = async () => JSON.parse(await readFile(paths.projectsFile, 'utf8')) as Record<string, unknown>;
   beforeEach(() => { logged.info.length = 0; logged.fail.length = 0; logged.adoptFails = false; });
 

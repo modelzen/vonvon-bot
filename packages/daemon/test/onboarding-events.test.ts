@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EventDiagnosis } from '../src/utils/event-diagnosis';
+import type { BotEntry } from '../src/config/bots';
 import { ensureOnboarded, announceEventsWhenLive } from '../src/bot/onboarding';
 
 const mocks = vi.hoisted(() => ({
@@ -24,9 +25,10 @@ vi.mock('../src/config/secret-resolver', () => ({ resolveAppSecret: async () => 
 vi.mock('../src/config/keystore', () => ({ setSecret: vi.fn() }));
 vi.mock('../src/config/paths', () => ({ useBotDir: vi.fn() }));
 vi.mock('../src/bot/wizard', () => ({ runRegistrationWizard: vi.fn() }));
-vi.mock('../src/config/bots', () => {
-  const bot = { name: 'test', appId: 'cli_test', tenant: 'feishu', active: true };
+vi.mock('../src/config/bots', async original => {
+  const bot = { name: 'test', appId: 'cli_test', tenant: 'feishu', active: true, createdAt: 1 } satisfies BotEntry;
   return {
+    ...await original<typeof import('../src/config/bots')>(),
     ensureRegistry: async () => ({ bots: [bot] }), loadBots: async () => ({ bots: [bot] }),
     currentBot: () => bot, findBot: () => bot, activeBots: () => [bot],
   };
@@ -77,6 +79,7 @@ describe('automatic event checks during startup', () => {
     mocks.diagnosis.mockResolvedValue({ ...healthy, missingOptional: ['application.bot.menu_v6'] });
     mocks.validate.mockResolvedValue({ ok: true, missingScopes: ['im:message:send_as_bot'] });
     const result = await ensureOnboarded({ bot: 'test' });
+    expect(result?.identity).toEqual({ appId: 'cli_test', tenant: 'feishu', createdAt: 1 });
     expect(result?.events?.state).toBe('ok');
     expect(output()).toContain('可选事件未订阅：application.bot.menu_v6');
     expect(output()).toContain('/event');

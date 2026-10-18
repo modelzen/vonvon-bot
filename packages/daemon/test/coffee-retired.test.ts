@@ -117,7 +117,7 @@ describe('s02b: 咖啡一下 is gone', () => {
 
   it('the bot starts and stops when the stored 咖啡一下 setting says enabled, and leaves it alone', async () => {
     const appCfg = cfg();
-    const bridge = await startBridge({ cfg: appCfg, appSecret: 'secret', fallbackCwd: '/repo' });
+    const bridge = await startBridge({ identity: { appId: appCfg.accounts.app.id, tenant: appCfg.accounts.app.tenant, createdAt: 1 }, cfg: appCfg, appSecret: 'secret', fallbackCwd: '/repo' });
     await expect(bridge.shutdown()).resolves.toBeUndefined();
     expect(saveConfig).not.toHaveBeenCalled();
     expect(JSON.stringify(appCfg)).toBe(STORED);

@@ -3,21 +3,27 @@ import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
-import { afterAll, describe, expect, it, vi } from 'vitest';
-import { createGroupExecutor, describeGroupFailure, parseBindGroupInput, UNNAMED_GROUP, type BindGroupInput } from '../src/admin/groups';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { createGroupExecutor as createOwnedGroupExecutor, describeGroupFailure, parseBindGroupInput, UNNAMED_GROUP, type BindGroupInput } from '../src/admin/groups';
 import { log } from '../src/core/logger';
 import { createAdminIpcCaller, createAdminIpcResponder } from '../src/admin/ipc';
 import { addProject, listProjects, listProjectsIn } from '../src/project/registry';
-import { createProject, joinExistingGroup } from '../src/project/lifecycle';
+import { createProject, joinExistingGroup as joinOwnedGroup, type JoinGroupInput } from '../src/project/lifecycle';
+import type { RegistryLocation } from '../src/project/registry';
 import { paths } from '../src/config/paths';
 
 vi.mock('../src/config/paths', async () => {
-  const { mkdtempSync } = await import('node:fs');
+  const { mkdtempSync, realpathSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
-  const root = mkdtempSync(join(tmpdir(), 'groups-fixture-'));
-  return { paths: { appDir: root, projectsFile: join(root, 'projects.json'), projectsRootDir: join(root, 'projects'), backendsDir: join(root, 'backends') } };
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'groups-fixture-')));
+  return { paths: { appDir: root, botsFile: join(root, 'bots.json'), projectsFile: join(root, 'projects.json'), projectsRootDir: join(root, 'projects'), backendsDir: join(root, 'backends') },
+    botPaths: () => ({ projectsFile: join(root, 'projects.json'), configFile: join(root, 'config.json') }) };
 });
+const bot = { appId: 'cli_fixture', tenant: 'feishu' as const, name: 'fixture', createdAt: 1, registrationId: 'original' };
+beforeAll(() => writeFile(paths.botsFile, JSON.stringify({ version: 1, bots: [bot] })));
+const createGroupExecutor = (channel: LarkChannel) => createOwnedGroupExecutor(channel, bot);
+const joinExistingGroup = (channel: LarkChannel, request: Omit<JoinGroupInput, 'bot'>, target?: RegistryLocation) => joinOwnedGroup(channel, { ...request, bot }, target);
 afterAll(async () => { await rm(paths.appDir, { recursive: true, force: true }); });
 
 async function workspace(): Promise<string> {
@@ -41,6 +47,31 @@ function axiosError(status: number, data: unknown): Error {
 const input = (directory: string): BindGroupInput => ({ chatId: 'oc_a', projectName: 'First', directory, backend: 'codex-appserver', kind: 'multi' });
 
 describe('desktop group commands in the owning bot', () => {
+  it('binds a default empty workspace and keeps pending state for stale or non-member requests', async () => {
+    const fixture = channelFixture();
+    const execute = createGroupExecutor(fixture.channel);
+    const request = { chatId: 'oc_default_web', projectName: 'Default web', backend: 'codex-appserver', kind: 'multi' } satisfies BindGroupInput;
+    const pendingFile = pendingGroupsFile(paths.projectsFile);
+    const queue = createPendingGroups({ file: pendingFile, eligible: async () => true, verify: async () => ({ state: 'ready', name: request.projectName }), onError: error => { throw error; } });
+    await queue.add(request.chatId, 'ou_owner'); await queue.refresh();
+    const projects = await readFile(paths.projectsFile, 'utf8').catch(() => undefined);
+    const registry = await readFile(paths.botsFile, 'utf8');
+    const stale = createOwnedGroupExecutor(fixture.channel, { ...bot, registrationId: 'stale' });
+    await expect(stale({ kind: 'bindGroup', input: request })).rejects.toThrow('重新注册');
+    expect(await readPendingGroups(pendingFile)).toHaveLength(1);
+    expect(await readFile(paths.projectsFile, 'utf8').catch(() => undefined)).toBe(projects);
+    expect(await readFile(paths.botsFile, 'utf8')).toBe(registry);
+    fixture.membership.mockResolvedValueOnce({ code: 0, data: { is_in_chat: false } });
+    await expect(execute({ kind: 'bindGroup', input: request })).rejects.toThrow('不在此群');
+    expect(await readPendingGroups(pendingFile)).toHaveLength(1);
+    const result = await execute({ kind: 'bindGroup', input: request });
+    expect(result).toMatchObject({ cwd: join(paths.projectsRootDir, 'fixture/groups/Default web'), blank: true, directories: { workspaces: { primary: join(paths.projectsRootDir, 'fixture/groups/Default web'), additional: [] } } });
+    expect(await readPendingGroups(pendingFile)).toEqual([]);
+    expect(await execute({ kind: 'bindGroup', input: request })).toEqual(result);
+    expect(fixture.message).toHaveBeenCalledTimes(1);
+    await import('../src/project/registry').then(m => m.removeProject(request.projectName));
+  });
+
   it('commits once through IPC, sends one welcome, and retries identical bindings', async () => {
     const dir = await workspace();
     const fixture = channelFixture();
@@ -220,8 +251,8 @@ describe('desktop group commands in the owning bot', () => {
     const fixture = channelFixture();
     const value = { name: 'Default retry', chatId: 'oc_default_retry', kind: 'multi' as const };
     const first = await joinExistingGroup(fixture.channel, value);
-    expect(first.cwd).toBe(join(paths.projectsRootDir, value.name));
-    expect(first).not.toHaveProperty('directories');
+    expect(first.cwd).toBe(join(paths.projectsRootDir, bot.name, 'groups', value.name));
+    expect(first.directories?.workspaces).toEqual({ primary: first.cwd, additional: [] });
     await rm(first.cwd, { recursive: true });
     const bytes = await readFile(paths.projectsFile, 'utf8');
     expect(await joinExistingGroup(fixture.channel, value)).toEqual(first);
@@ -230,10 +261,18 @@ describe('desktop group commands in the owning bot', () => {
     expect(fixture.message).toHaveBeenCalledTimes(1);
   });
 
+  it('allocates a stable empty group workspace below the bot namespace', async () => {
+    const fixture = channelFixture();
+    const row = await joinExistingGroup(fixture.channel, { name: 'Allocated group', chatId: 'oc_allocated', kind: 'multi' });
+    expect(row.cwd).toBe(join(paths.projectsRootDir, bot.name, 'groups', 'Allocated group'));
+    expect(row.directories?.workspaces).toEqual({ primary: row.cwd, additional: [] });
+    expect(JSON.parse(await readFile(paths.botsFile, 'utf8')).groupAllocations).toBeDefined();
+  });
+
   it.each(['join', 'create'] as const)('captures %s inputs and registry target before asynchronous preparation', async action => {
     const fixture = channelFixture();
     const dir = await workspace();
-    const file = join(paths.appDir, `captured-${action}`, 'projects.json');
+    const file = action === 'join' ? paths.projectsFile : join(paths.appDir, `captured-${action}`, 'projects.json');
     const target = { file, dataRoot: paths.appDir };
     const value = { name: `Captured ${action}`, chatId: `oc_captured_${action}`, ownerOpenId: 'ou_owner', requestId: 'original-request', requestSignature: 'original-signature', existingPath: dir, kind: 'multi' as const, backend: 'codex-appserver' };
     const pending = action === 'join' ? joinExistingGroup(fixture.channel, value, target) : createProject(fixture.channel, value, target);
@@ -241,7 +280,7 @@ describe('desktop group commands in the owning bot', () => {
     target.file = join(paths.appDir, `wrong-${action}`, 'projects.json'); target.dataRoot = dir;
     const result = await pending;
     expect(result).toMatchObject({ name: `Captured ${action}`, cwd: await realpath(dir), backend: 'codex-appserver' });
-    expect((await listProjectsIn(file))[0]).toMatchObject(result);
+    expect((await listProjectsIn(file)).find(row => row.chatId === result.chatId)).toMatchObject(result);
     await expect(readFile(target.file)).rejects.toMatchObject({ code: 'ENOENT' });
     if (action === 'create') {
       expect(result.creationRequestSignature).toBe('original-signature');

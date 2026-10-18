@@ -19,7 +19,7 @@ const samples = [
   {type:"startCodexLogin"},
   {type:"restartHost"},
   {type:"listJoinedGroups",agentId},
-  {type:"bindGroup",agentId,groupId,projectName:"fixture",folderToken,tool:"codex",conversation:"threads"},
+  {type:"bindGroup",agentId,groupId,projectName:"fixture",folder:{kind:"existing",folderToken},tool:"codex",conversation:"threads"},
   {type:"setResponse",membershipId,response:"mention"},
   {type:"setPermission",membershipId,administrator:"full",network:false},
   {type:"setAgentEnabled",agentId,enabled:true},
@@ -30,6 +30,7 @@ const samples = [
 ];
 assert.deepEqual(new Set(samples.map(sample => sample.type)), new Set(commandSchema.optionsMap.keys()));
 for (const sample of samples) commandSchema.parse(sample);
+commandSchema.parse({type:"bindGroup",agentId,groupId,projectName:"fixture",folder:{kind:"default"},tool:"codex",conversation:"threads"});
 for (const type of ["quit","hideWindow","setLoginItem","chooseFolder"]) {
   assert.equal(commandSchema.safeParse({type}).success,false);
 }

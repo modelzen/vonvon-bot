@@ -433,7 +433,7 @@ it('real BridgeHandle shares shutdown and retains provider failure through trans
   run.t.close.mockImplementation(() => owner.close());
   fake.backend.resumeThread.mockResolvedValue(run.t);
   const { startBridge } = await import('../src/bot/bridge');
-  const bridge = await startBridge({ cfg, appSecret: 'fixture', fallbackCwd: '/test' });
+  const bridge = await startBridge({ identity: { appId: cfg.accounts.app.id, tenant: cfg.accounts.app.tenant, createdAt: 1 }, cfg, appSecret: 'fixture', fallbackCwd: '/test' });
   const registration = fake.channel.on.mock.calls.find(call => call[0] === 'message');
   if (!registration || typeof registration[1] !== 'function') throw new Error('Message handler absent');
   await registration[1](message('first'));
@@ -496,7 +496,7 @@ it.each(['clean', 'failed'] as const)('startup failure waits for the accepted ru
     throw startupError;
   });
   const { startBridge } = await import('../src/bot/bridge');
-  const startup = startBridge({ cfg, appSecret: 'fixture', fallbackCwd: '/test' });
+  const startup = startBridge({ identity: { appId: cfg.accounts.app.id, tenant: cfg.accounts.app.tenant, createdAt: 1 }, cfg, appSecret: 'fixture', fallbackCwd: '/test' });
   const starting = observe(startup);
   await vi.advanceTimersByTimeAsync(0);
   expect(run.consumed).toHaveLength(1);

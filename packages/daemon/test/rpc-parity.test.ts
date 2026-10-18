@@ -37,7 +37,7 @@ function inventory(folderToken: string) {
     ['GET account usage', 'collaboration', { action: 'usage', force: false }],
     ['GET pending-groups', 'command', { type: 'listPendingGroups', agentId: bot.appId }],
     ['GET joined-groups', 'command', { type: 'listJoinedGroups', agentId: bot.appId }],
-    ['POST bind-group', 'command', { type: 'bindGroup', agentId: bot.appId, groupId: project.chatId, projectName: project.name, folderToken, tool: 'codex', conversation: 'threads' }],
+    ['POST bind-group', 'command', { type: 'bindGroup', agentId: bot.appId, groupId: project.chatId, projectName: project.name, folder: { kind: 'existing', folderToken }, tool: 'codex', conversation: 'threads' }],
     ['GET codex/setup', 'admin', { type: 'codexSetup' }],
     ['POST codex/install', 'command', { type: 'installCodex' }],
     ['POST codex/login', 'command', { type: 'startCodexLogin' }],
