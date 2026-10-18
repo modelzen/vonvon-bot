@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { chmod, cp, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -499,6 +499,80 @@ describe('s36c2d: deleted, moved and misplaced directories', () => {
     await expect(readdir(volume)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('does not make a projects root that was on another device than the folder it is in, a volume\'s mount point', async () => {
+    const root = await home();
+    const volume = join(await mkdtemp(join(scratch, 'mnt-')), 'disk');
+    await successful(root, register('cli_volume123', { initialPreferences: { projectsRootDir: volume } }));
+    await removeOwned(volume);
+    // An unplugged volume leaves its mount point's folder gone or empty, on another device than the root was.
+    const state = await registry(root);
+    const recorded = state.allocations.cli_volume123.parentIdentity;
+    state.allocations.cli_volume123.parentIdentity = { ...recorded, dev: String(BigInt(recorded.dev) + 1n) };
+    await writeFile(join(root, 'bots.json'), JSON.stringify(state, null, 2));
+    // Before the fix: bound with exit 0, `disk/shared/groups/Group` made on the disk below, the record moved to it.
+    const failed = await run(root, `try{await ${bind('Group', 'oc_group', undefined, JSON.stringify(volume))}}catch(e){console.log(e.message);process.exitCode=1}`).done;
+    expect(failed.code).toBe(1);
+    expect(failed.stdout).toContain('「shared」的项目根目录不在了，它原来在另一块盘上');
+    expect(failed.stdout).not.toContain(scratch);
+    await expect(readdir(volume)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await registry(root)).allocations.cli_volume123).toEqual(state.allocations.cli_volume123);
+  });
+
+  it.each(['projects root', 'group'] as const)('says a %s directory replaced by a link is a link, in binding and in repair-dir', async level => {
+    const root = await home();
+    await successful(root, `${register('cli_groups123')}await ${bind()};await m.removeProject('Group');`);
+    if (level === 'projects root') {
+      await rename(join(root, 'projects'), join(root, 'projects-moved'));
+      await symlink(join(root, 'projects-moved'), join(root, 'projects'));
+    } else {
+      await removeOwned(join(root, 'projects/shared/groups/Group'));
+      await symlink(join(root, 'absent'), join(root, 'projects/shared/groups/Group'));
+    }
+    // Before the fix: "项目根目录不能用…" and "目录所在的文件夹不在了" for the root, "目录所在的位置不在了" for the group.
+    for (const code of [`await ${bind()}`, ...level === 'projects root' ? [`await m.repairBotDirectories('shared')`] : []]) {
+      const result = await run(root, `try{${code}}catch(e){console.log(e.message);process.exitCode=1}`).done;
+      expect(result.code).toBe(1);
+      expect(result.stdout).toContain('目录被换成了文件或链接');
+    }
+  });
+
+  it('asks for repair-dir when a directory was made again but its record was not written', async () => {
+    const root = await home();
+    await successful(root, `${register('cli_groups123')}await ${bind()};await m.removeProject('Group');`);
+    const group = join(root, 'projects/shared/groups/Group');
+    await removeOwned(group);
+    const full = `const fs=require('node:fs/promises');const oldRename=fs.rename;fs.rename=async(a,b)=>{
+      if(String(b).endsWith('/bots.json')&&require('node:fs').existsSync(${JSON.stringify(group)}))throw Object.assign(Error('no space'),{code:'ENOSPC'});return oldRename(a,b)};`;
+    const failed = await run(root, `try{await ${bind()}}catch(e){console.log(e.message);process.exitCode=1}`, full).done;
+    expect(failed.code).toBe(1);
+    expect(failed.stdout).toContain('ENOSPC');
+    expect(await readdir(group)).toEqual([]);
+    const refused = await run(root, `try{await ${bind()}}catch(e){console.log(e.message);process.exitCode=1}`).done;
+    expect(refused.code).toBe(1);
+    expect(refused.stdout).toContain('或者上次重建目录后没登记完');
+    expect(refused.stdout).toContain('vonvon bot repair-dir shared');
+    await successful(root, `await m.repairBotDirectories('shared')`);
+    expect((await bound(root)).cwd).toBe(group);
+  });
+
+  it('repair-dir names the other bots under the same projects root, and says a broken bots.json in Chinese', async () => {
+    const root = await home();
+    await successful(root, `${register('cli_first123')}${register('cli_second123')}`);
+    expect((await registry(root)).bots.map((bot: { name: string }) => bot.name)).toEqual(['shared', 'shared-2']);
+    await rename(join(root, 'projects'), join(root, 'projects.bak'));
+    await cp(join(root, 'projects.bak'), join(root, 'projects'), { recursive: true });
+    const repair = async (name: string) => JSON.parse(await successful(root, `console.log(JSON.stringify(await m.repairBotDirectories(${JSON.stringify(name)})))`));
+    expect(await repair('shared')).toEqual({ handle: 'shared', recorded: 1, missing: 0, others: ['shared-2'] });
+    expect(await repair('shared-2')).toEqual({ handle: 'shared-2', recorded: 1, missing: 0, others: [] });
+    await successful(root, `await ${bind('Group', 'oc_group', `m.botIdentity((await m.loadBots()).bots[1])`)}`);
+    const state = await registry(root);
+    await writeFile(join(root, 'bots.json'), JSON.stringify({ ...state, allocations: { ...state.allocations, cli_first123: { ...state.allocations.cli_first123, appId: 'other' } } }));
+    // Before the fix: "Invalid bot allocation ledger".
+    const broken = await run(root, `try{await m.repairBotDirectories('shared')}catch(e){console.log(e.message);process.exitCode=1}`).done;
+    expect(broken.code).toBe(1);
+    expect(broken.stdout).toContain('bots.json 里的目录记录损坏了');
+  });
+
   it('refuses a projects root copied back with new inodes, then binds where it was after repair-dir (review R4-2)', async () => {
     const root = await home();
     await successful(root, `${register('cli_groups123')}const first=await ${bind()};await require('node:fs/promises').writeFile(first.project.cwd+'/sentinel','keep');await m.removeProject('Group');`);
@@ -506,10 +580,10 @@ describe('s36c2d: deleted, moved and misplaced directories', () => {
     await cp(join(root, 'projects.bak'), join(root, 'projects'), { recursive: true });
     const refused = await run(root, `try{await ${bind()}}catch(e){console.log(e.message);process.exitCode=1}`).done;
     expect(refused.code).toBe(1);
-    expect(refused.stdout).toContain('可能整机迁移过或从备份恢复过');
+    expect(refused.stdout).toContain('可能整机迁移过、从备份恢复过');
     expect(refused.stdout).toContain('vonvon bot repair-dir shared');
     expect(refused.stdout).not.toContain(root);
-    expect(JSON.parse(await successful(root, `console.log(JSON.stringify(await m.repairBotDirectories('shared')))`))).toEqual({ handle: 'shared', recorded: 3, missing: 0 });
+    expect(JSON.parse(await successful(root, `console.log(JSON.stringify(await m.repairBotDirectories('shared')))`))).toEqual({ handle: 'shared', recorded: 3, missing: 0, others: [] });
     const again = await bound(root);
     expect(again.cwd).toBe(join(root, 'projects/shared/groups/Group'));
     expect(await readFile(join(again.cwd, 'sentinel'), 'utf8')).toBe('keep');
@@ -523,7 +597,7 @@ describe('s36c2d: deleted, moved and misplaced directories', () => {
     await successful(root, `${register('cli_groups123')}await ${bind()};await m.removeProject('Group');`);
     const bot = (await registry(root)).allocations.cli_groups123.namespaceRoot;
     await removeOwned(join(bot, 'groups/Group'));
-    expect(JSON.parse(await successful(root, `console.log(JSON.stringify(await m.repairBotDirectories('cli_groups123')))`))).toEqual({ handle: 'shared', recorded: 2, missing: 1 });
+    expect(JSON.parse(await successful(root, `console.log(JSON.stringify(await m.repairBotDirectories('cli_groups123')))`))).toEqual({ handle: 'shared', recorded: 2, missing: 1, others: [] });
     expect((await bound(root)).cwd).toBe(join(bot, 'groups/Group'));
   });
 
@@ -538,16 +612,16 @@ describe('s36c2d: deleted, moved and misplaced directories', () => {
     expect((await registry(root)).allocations.cli_locked123.state).toBe('ready');
   });
 
-  it('marks old rows in a bot directory, the projects root or the data directory outside projects/ (review R4-1, R6-1)', async () => {
+  it('marks old rows in a bot directory, the projects root, the data directory outside projects/ or above it (review R4-1, R6-1)', async () => {
     const root = await home();
     await successful(root, `${register('cli_groups123')}await ${bind()};`);
     for (const dir of ['escape', 'projects/fine']) await mkdir(join(root, dir), { recursive: true });
     const outside = await mkdtemp(join(scratch, 'outside-'));
     const cwds = [join(root, 'projects/shared'), join(root, 'projects/shared/groups'), join(root, 'projects'), `${root}/projects/..`, join(root, 'escape'),
-      join(root, 'bots'), join(root, 'projects/fine'), join(root, 'projects/shared/groups/Group'), outside, join(root, 'projects/SHARED')];
+      join(root, 'bots'), join(root, 'projects/fine'), join(root, 'projects/shared/groups/Group'), outside, join(root, 'projects/SHARED'), dirname(root)];
     const problems = JSON.parse(await successful(root, `console.log(JSON.stringify(await m.legacyDirectoryProblems(${JSON.stringify(cwds)},await m.directoryContext())))`));
     // A name that differs only in case is the bot's directory where the file system folds case (macOS).
     const folded = process.platform === 'darwin' ? 'botRoot' : null;
-    expect(problems).toEqual(['botRoot', 'botRoot', 'projectsRoot', 'dataDir', 'dataDir', 'dataDir', null, null, null, folded]);
+    expect(problems).toEqual(['botRoot', 'botRoot', 'projectsRoot', 'dataDir', 'dataDir', 'dataDir', null, null, null, folded, 'dataDirParent']);
   });
 });

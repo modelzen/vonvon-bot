@@ -248,21 +248,24 @@ function adoptParent(registry: BotsRegistry, appId: string, level: 'bot' | 'cont
     [key, claim.appId === appId ? { ...claim, parentIdentity: object } : claim]));
 }
 
-export type DirectoryRepair = { handle: string; recorded: number; missing: number };
+/** `others`: the registered bots under the same projects root whose records still name the root as it was. */
+export type DirectoryRepair = { handle: string; recorded: number; missing: number; others: string[] };
 /**
  * `vonvon bot repair-dir`: after a migration or a restore from backup, take the bot's directories at their recorded
  * paths as its own again: the bot directory, its `groups` and each group's. A directory that is gone keeps its record
- * and is made again on use. A bot found by name, app ID, or the handle a removed bot's allocation keeps.
+ * and is made again on use. A bot found by name, app ID, or the handle a removed bot's allocation keeps. It repairs
+ * one bot; the others under the same projects root are named, to run it for each. Its failures are told in Chinese,
+ * a broken bots.json and a held lock included.
  */
 export function repairBotDirectories(wanted: string): Promise<DirectoryRepair> {
   const target = String(wanted);
-  return ownBots(async registry => {
+  return directoryError(target, () => ownBots(async registry => {
     const appId = registry.bots.find(bot => bot.name === target || bot.appId === target)?.appId
       ?? Object.values(registry.allocations ?? {}).find(record => record.handle === target || record.appId === target)?.appId;
     const allocation = appId === undefined ? undefined : registry.allocations?.[appId];
     if (!appId || !allocation) throw new Error(`没有找到「${target}」的目录记录：它不是这台电脑上注册的 bot，或者注册得早，还没分配过自己的目录。`);
     return directoryError(allocation.handle, async () => {
-      const result = { handle: allocation.handle, recorded: 0, missing: 0 };
+      const result: DirectoryRepair = { handle: allocation.handle, recorded: 0, missing: 0, others: [] };
       const count = (present: boolean): void => { if (present) result.recorded++; else result.missing++; };
       const recordCurrent: typeof recordAt = (record, parent, dataDir) => recordAt(record, parent, dataDir).catch((error: unknown) => {
         if (!(error instanceof Error && error.message === 'Namespace path changed')) throw error;
@@ -270,7 +273,13 @@ export function repairBotDirectories(wanted: string): Promise<DirectoryRepair> {
       });
       let parentIdentity: ObjectIdentity;
       try { parentIdentity = await directoryIdentity(allocation.parent); }
-      catch { throw new DirectoryError(`「${allocation.handle}」的目录所在的文件夹不在了（外接盘没接上的话，接上后重试）。`); }
+      catch (error) {
+        // A link, a file or no permission is said as itself by directoryError.
+        if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+        throw new DirectoryError(`「${allocation.handle}」的目录所在的文件夹不在了（外接盘没接上的话，接上后重试）。`, { cause: error });
+      }
+      result.others = Object.values(registry.allocations ?? {}).filter(record => record.appId !== appId && record.parent === allocation.parent
+        && !sameObject(record.parentIdentity, parentIdentity) && registry.bots.some(bot => bot.appId === record.appId)).map(record => record.handle);
       const bot = await recordCurrent(allocation, parentIdentity, paths.appDir);
       registry.allocations = { ...registry.allocations, [appId]: bot.record };
       count(bot.present);
@@ -292,7 +301,7 @@ export function repairBotDirectories(wanted: string): Promise<DirectoryRepair> {
       await publish(registry);
       return result;
     });
-  });
+  }));
 }
 
 type RegisterEntryResult = { kind: 'registered'; entry: BotEntry } | { kind: 'already-registered'; entry: BotEntry };

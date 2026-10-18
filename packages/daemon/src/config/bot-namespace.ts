@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { Stats } from 'node:fs';
 import { lstat, mkdir, open, readdir, realpath } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, parse, sep } from 'node:path';
 import { z } from 'zod';
@@ -130,6 +131,8 @@ export async function planDirectory(input: { name: string; parent: string; dataD
 }
 
 async function validateParent(record: DirectoryClaim, dataDir: string): Promise<void> {
+  // A parent replaced by a link says so before the admission follows it somewhere else (s36c2d review).
+  await directoryIdentity(record.parent);
   const admitted = await admitNamespaceReservation({ parent: record.parent, component: basename(record.namespaceRoot) }, { dataDir });
   if (admitted.parent !== record.parent || admitted.path !== record.namespaceRoot
     || !sameObject(await directoryIdentity(record.parent), record.parentIdentity)) throw new Error('Namespace parent changed');
@@ -144,10 +147,10 @@ export async function materializeAllocation(record: Allocation, dataDir: string)
  */
 export async function materializeDirectory(record: DirectoryClaim, dataDir: string): Promise<Extract<DirectoryClaim, { state: 'ready' }>> {
   await validateParent(record, dataDir);
-  let present = true;
-  try { await lstat(record.namespaceRoot); }
-  catch (error) { if (!hasCode(error, 'ENOENT')) throw error; present = false; }
-  if (!present) {
+  let entry: Stats | undefined;
+  try { entry = await lstat(record.namespaceRoot); }
+  catch (error) { if (!hasCode(error, 'ENOENT')) throw error; }
+  if (!entry) {
     await mkdir(record.namespaceRoot, { mode: 0o700 });
     await syncDirectory(record.namespaceRoot);
     await syncDirectory(record.parent);
@@ -158,6 +161,8 @@ export async function materializeDirectory(record: DirectoryClaim, dataDir: stri
     return { ...record, state: 'ready', namespaceRoot: canonical, object: await directoryIdentity(canonical) };
   }
   if (record.state === 'reserved') throw new Error('Reserved namespace already exists; recovery requires operator review');
+  // A link in its place, even a dangling one, is a link, not a missing directory (s36c2d review).
+  if (entry.isSymbolicLink() || !entry.isDirectory()) throw new Error('Invalid namespace directory');
   await verifyDirectory(record, dataDir);
   return record;
 }
@@ -169,13 +174,15 @@ export async function verifyDirectory(record: Extract<DirectoryClaim, { state: '
 }
 
 /**
- * Make a deleted projects root (a bot allocation's parent) again, one level only: its own parent must be there, so an
- * unmounted volume's mount point is never made on the system disk (s36c2d). Undefined when the root is there.
+ * Make a deleted projects root (a bot allocation's parent) again, one level only, and only on the device it was on:
+ * its own parent must be there, on the device the root was recorded on (s36c2d). A root that was a volume's mount
+ * point, or in a volume whose mount point's folder is left behind, is on another device than that folder, so an
+ * unplugged volume is never made on the disk below. Undefined when the root is there.
  */
 export async function restoreParent(record: DirectoryClaim, dataDir: string): Promise<ObjectIdentity | undefined> {
   try { await lstat(record.parent); return undefined; }
   catch (error) { if (!hasCode(error, 'ENOENT')) throw error; }
-  await directoryIdentity(dirname(record.parent));
+  if ((await directoryIdentity(dirname(record.parent))).dev !== record.parentIdentity.dev) throw new Error('Namespace volume missing');
   await mkdir(record.parent, { mode: 0o700 });
   if (await realpath(record.parent) !== record.parent) throw new Error('Namespace parent changed');
   const admitted = await admitNamespaceReservation({ parent: record.parent, component: basename(record.namespaceRoot) }, { dataDir });

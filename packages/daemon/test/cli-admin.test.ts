@@ -48,12 +48,13 @@ it('picks a bot by id or a unique name and lists the choices otherwise', () => {
 
 it('bot repair-dir says how many directories it recorded and which will be made again (s36c2d)', async () => {
   const h = harness({});
-  const repair = vi.fn(async () => ({ handle: '研发助手', recorded: 2, missing: 1 }));
+  const repair = vi.fn(async () => ({ handle: '研发助手', recorded: 2, missing: 1, others: ['测试', '运维'] }));
   await runBotRepairDir('研发助手', h.io(), repair);
   expect(repair).toHaveBeenCalledWith('研发助手');
-  expect(h.out()).toBe('✓ 已按现在的位置重新记录「研发助手」的 2 个目录。\n另有 1 个目录不在了，下次用到时会重建一个空的。\n');
+  expect(h.out()).toBe('✓ 已按现在的位置重新记录「研发助手」的 2 个目录。\n另有 1 个目录不在了，下次用到时会重建一个空的。\n'
+    + '同一个项目根目录下的 bot 也要各运行一次：vonvon bot repair-dir 测试；vonvon bot repair-dir 运维。\n');
   h.clear(); await runBotRepairDir('研发助手', h.io(true), repair);
-  expect(JSON.parse(h.out())).toEqual({ handle: '研发助手', recorded: 2, missing: 1 });
+  expect(JSON.parse(h.out())).toEqual({ handle: '研发助手', recorded: 2, missing: 1, others: ['测试', '运维'] });
   expect(h.connect).not.toHaveBeenCalled();
 });
 

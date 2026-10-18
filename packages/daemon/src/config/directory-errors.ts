@@ -15,8 +15,12 @@ function message(error: Error, bot?: string): string | undefined {
   }
   if (error.message === 'Invalid namespace location') return `项目根目录不能用：${REFUSED}`;
   if (/^(Namespace (directory|parent|path) changed|Directory changed during allocation)$/.test(error.message)) {
-    return `${bot ? `「${bot}」` : '这个 bot '}的目录和记录的不一致，可能整机迁移过或从备份恢复过。确认目录没问题后，${repairStep(bot)}`;
+    return `${bot ? `「${bot}」` : '这个 bot '}的目录和记录的不一致，可能整机迁移过、从备份恢复过，或者上次重建目录后没登记完。确认目录没问题后，${repairStep(bot)}`;
   }
+  if (error.message === 'Namespace volume missing') {
+    return `${bot ? `「${bot}」` : '这个 bot '}的项目根目录不在了，它原来在另一块盘上。外接盘没接上的话，接上后重试；整机迁移过的话，在原处建回这个文件夹后，${repairStep(bot)}`;
+  }
+  if (/^Bridge bots is busy on its local coordination endpoint\.$/.test(error.message)) return '另一个 vonvon 进程正在改 bot 的目录记录，稍后再试';
   if (error.message.startsWith('Reserved namespace already exists')) return `上次分配目录时中断了，目录建好了但没登记完。确认里面没有别人的文件后，${repairStep(bot)}`;
   if (error.message === 'Invalid namespace directory') return '目录被换成了文件或链接，请把它恢复成普通文件夹';
   if (error.message === 'Namespace collision limit reached') return '同名的目录太多，分配不出新目录，请换个名字';

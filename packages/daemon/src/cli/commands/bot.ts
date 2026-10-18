@@ -199,5 +199,6 @@ export async function runBotRepairDir(wanted: string, io: Io, repair?: (wanted: 
   const result = await (repair ?? (await import('../../config/bots')).repairBotDirectories)(wanted);
   const human = [`✓ 已按现在的位置重新记录「${result.handle}」的 ${result.recorded} 个目录。`];
   if (result.missing) human.push(`另有 ${result.missing} 个目录不在了，下次用到时会重建一个空的。`);
+  if (result.others.length) human.push(`同一个项目根目录下的 bot 也要各运行一次：${result.others.map(handle => `vonvon bot repair-dir ${handle}`).join('；')}。`);
   print(io, human, result);
 }

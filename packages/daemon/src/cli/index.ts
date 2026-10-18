@@ -102,7 +102,8 @@ bot.command('repair-dir <bot>').description("Record a bot's directories again wh
 The bot's directory, its groups folder and each group's folder keep their paths, but a move to another computer,
 a restore from a backup or a copy back changes what the files are on disk, and binding a group then fails with a
 hint to run this. Check the folders first. The paths themselves cannot change. A folder that is gone stays
-recorded and is made again, empty, when it is next used. Works with or without the daemon running.
+recorded and is made again, empty, when it is next used. Run it once for each bot; it names the other bots under
+the same projects root that need it too. Works with or without the daemon running.
 
 Example:
   vonvon bot repair-dir 研发助手`)

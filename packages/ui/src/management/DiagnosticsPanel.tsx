@@ -85,18 +85,19 @@ function NotRepliedList({records, agent, snapshot, now}: {records: readonly NotR
   })}</ul>;
 }
 
-/** Why an old creation entry's directory is wrong (s36c2d). */
+/** Why a directory an older version gave a group is wrong (s36c2d). */
 export const DIRECTORY_PROBLEM_TEXT: Record<DirectoryProblem, string> = {
   botRoot: '用的是某个 bot 自己的目录，这个 bot 的群目录都在它下面',
   projectsRoot: '用的是项目根目录本身，所有 bot 的目录都在它下面',
   dataDir: '在 Vonvon 的数据目录里（projects/ 以外），这里不能当工作目录',
+  dataDirParent: '用的是 Vonvon 数据目录的上级文件夹，这里不能当工作目录',
 };
 
-/** 群目录: groups an old creation entry put in a wrong place; nothing is moved for them. */
+/** 群目录: groups an older version put in a wrong place; nothing is moved for them. */
 function DirectoryProblems({members}: {members: readonly Membership[]}) {
   return <>
     <ul className="diagnostics-scopes">{members.map(member => <li key={member.id}>「{member.name}」{DIRECTORY_PROBLEM_TEXT[member.directoryProblem!]}：<code>{member.directory}</code></li>)}</ul>
-    这些群是旧的建群入口建的。到群的「项目运行」里点「更换目录」换一个文件夹，原来的文件不会自动搬过去。
+    这些群的目录是旧版本定下的。到群的「项目运行」里点「更换目录」换一个文件夹，原来的文件不会自动搬过去。
   </>;
 }
 

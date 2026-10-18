@@ -131,9 +131,9 @@ export const agentSchema = z.object({
   lockHeld: lockHeldSchema.optional(),
 });
 export type Agent = z.infer<typeof agentSchema>;
-/** A group directory an old creation entry left in the wrong place (s36c2d): a bot's own directory, the projects
- * root itself, or in the data directory outside `projects/`. */
-export const directoryProblemSchema = z.enum(["botRoot", "projectsRoot", "dataDir"]);
+/** A group directory an older version left in the wrong place (s36c2d): a bot's own directory, the projects root
+ * itself, in the data directory outside `projects/`, or a folder above the data directory. */
+export const directoryProblemSchema = z.enum(["botRoot", "projectsRoot", "dataDir", "dataDirParent"]);
 export type DirectoryProblem = z.infer<typeof directoryProblemSchema>;
 export const membershipSchema = z.object({
   avatarDataUrl: z.string().optional(), id: membershipIdSchema, agentId: agentIdSchema,

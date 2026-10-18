@@ -42,9 +42,10 @@ function inside(parent: string, child: string): boolean {
 /**
  * Rows the old creation entries left in the wrong place (s36c2d, review R4-1/R6-1): before s36d1 a new group's
  * default directory was `<projects root>/<group name>`, so a name equal to a bot's handle landed in that bot's stable
- * directory, `.` in the projects root and `..` or the DM's `../x` in the data directory. A directory is compared by
- * its canonical path and its inode, which also catches a name that differs only in case on macOS. Read only; nothing
- * is moved. `projects/` and below is where workspaces may be, so only its root counts there.
+ * directory, `.` in the projects root and `..` or the DM's `../x` in the data directory. The desktop's edit took any
+ * folder before s36c2d (R5-1), a folder above the data directory too, which admission refuses (product.md 3.6). A
+ * directory is compared by its canonical path and its inode, which also catches a name that differs only in case on
+ * macOS. Read only; nothing is moved. `projects/` and below is where workspaces may be, so only its root counts there.
  */
 export async function legacyDirectoryProblems(cwds: readonly string[], context: DirectoryContext): Promise<Array<DirectoryProblem | undefined>> {
   const places = async (list: readonly string[]) => {
@@ -59,6 +60,7 @@ export async function legacyDirectoryProblems(cwds: readonly string[], context: 
     if (matches(bots)) return 'botRoot';
     if (matches(roots)) return 'projectsRoot';
     if (inside(dataDir, path) && !(path !== projects && inside(projects, path))) return 'dataDir';
+    if (inside(path, dataDir)) return 'dataDirParent';
     return undefined;
   }));
 }
