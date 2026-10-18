@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { collaborationReplySchema, projectRecordSchema, type CollaborationRequest, type CollaborationReply } from '@vonvon/protocol';
+import { collaborationReplySchema, conversationToMode, projectRecordSchema, type CollaborationRequest, type CollaborationReply } from '@vonvon/protocol';
+import { SMART_NO_MENTION } from '../../admin/groups';
 import type { AdminService } from '../../admin/service';
 import type { CollaborationRequest as ServiceRequest } from '../../admin/collaboration';
 import { UsageError, type UsageErrorKind } from '../../agent/types';
@@ -65,9 +66,10 @@ export async function collaborationRpc(service: AdminService, directory: Directo
   if (!service.collaboration) return unsupported();
   let operation: ServiceRequest;
   if (request.action === 'createProject') {
-    operation = { action: 'createProject', requestId: randomUUID(), name: request.name, kind: request.conversation === 'threads' ? 'multi' : 'single', ...(request.response ? { noMention: request.response === 'all' } : {}), backend: request.tool === 'codex' ? 'codex-appserver' : 'claude-agent', ...(request.folder.kind === 'existing' ? { directory: await directory.resolve(request.folder.folderToken) } : {}) };
+    if (request.conversation === 'smart' && request.response !== undefined) throw new RpcError('invalid_request', `${SMART_NO_MENTION}。`);
+    operation = { action: 'createProject', requestId: randomUUID(), name: request.name, kind: conversationToMode(request.conversation), ...(request.response ? { noMention: request.response === 'all' } : {}), backend: request.tool === 'codex' ? 'codex-appserver' : 'claude-agent', ...(request.folder.kind === 'existing' ? { directory: await directory.resolve(request.folder.folderToken) } : {}) };
   } else if (request.action === 'editProject') {
-    operation = { action: 'editProject', projectName: request.projectName, chatId: request.groupId, expectedRevision: request.expectedRevision, ...(request.folderToken ? { directory: await directory.resolve(request.folderToken) } : {}), ...(request.conversation ? { kind: request.conversation === 'threads' ? 'multi' : 'single' } : {}), ...(request.enabled !== undefined ? { enabled: request.enabled } : {}) };
+    operation = { action: 'editProject', projectName: request.projectName, chatId: request.groupId, expectedRevision: request.expectedRevision, ...(request.folderToken ? { directory: await directory.resolve(request.folderToken) } : {}), ...(request.conversation ? { kind: conversationToMode(request.conversation) } : {}), ...(request.enabled !== undefined ? { enabled: request.enabled } : {}) };
   } else {
     const { agentId: _agentId, groupId, ...rest } = request;
     operation = { ...rest, chatId: groupId };

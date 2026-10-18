@@ -164,6 +164,32 @@ describe('buildHelpCard 权限过滤', () => {
     expect(JSON.stringify(buildHelpCard('topic', true, false))).toContain('开新话题：回到主群区 @我 + 内容。');
   });
 
+  it('智能群（s25c）：主区和话题里都不提免@，说直接说话我看情况回、@ 一定回；单会话群照旧', () => {
+    for (const [scope, admin] of [['single', true], ['single', false], ['topic', false]] as const) {
+      // noMentionOf is false for 智能: the card must not offer /settings for a 免@ it lacks.
+      const smart = JSON.stringify(buildHelpCard(scope, false, admin, undefined, 'smart'));
+      expect(smart).not.toContain('免@');
+      expect(smart).not.toContain('本群默认需 @');
+      expect(smart).toContain('· **@我 + 内容** → 一定回');
+      expect(smart).toContain(scope === 'topic' ? '· 直接说话 → 我看情况回' : '· 直接说话 → 我看情况接话或开话题');
+    }
+    const head = JSON.stringify(buildHelpCard('single', false, true, undefined, 'smart'));
+    expect(head).toContain('💬 **智能开话题** — 不用 @ 我，我会读群消息，合适时接话。');
+    expect(head).toContain('· `/settings` → 群设置\\n');
+    expect(JSON.stringify(buildHelpCard('topic', false, false, undefined, 'smart'))).toContain('要新的会话，就在主区的某条消息下开一个新话题。');
+    expect(JSON.stringify(buildHelpCard('single', false, true, undefined, 'single'))).toContain('本群默认需 @；`/settings` 可开启免@');
+  });
+
+  it('智能群的欢迎卡（s25c）：第一行就是那一句"我会读群消息，合适时接话"，不提免@', () => {
+    const smart = JSON.stringify(buildWelcomeCard('smart', undefined, false));
+    expect(smart).toContain('💬 **智能开话题** — 不用 @ 我，我会读群消息，合适时接话。主区一条会话；聊到新的事，我自己开话题。');
+    expect(smart.match(/我会读群消息/g)).toHaveLength(1);
+    expect(smart).not.toContain('免@');
+    expect(smart).toContain('· **@我 + 内容** → 一定回');
+    expect(smart).toContain('/new');
+    expect(JSON.stringify(buildWelcomeCard('single', undefined, false))).toContain('群设置（免@ 开关）');
+  });
+
   it('单会话群：后端不支持 resume（caps.resume=false）时管理员也不列 /resume，但仍列 /clear', () => {
     const admin = JSON.stringify(buildHelpCard('single', true, true, { resume: false }));
     expect(admin).not.toContain('/resume');

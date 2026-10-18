@@ -1484,7 +1484,10 @@ export function ProjectPanel({
           />
         )}
       </SettingsGroup>
-      <Editor
+      {/* 智能 has no 免@: a judgement decides (s25c). The group keeps its anchor, so search still lands here. */}
+      {view.identity.kind === "smart" ? <SettingsGroup id={settingAnchor("群内响应")} label="群内响应">
+        <SettingsRow title="免 @" value="由 Bot 判断" description="智能开话题没有免 @，回不回由 Bot 判断。" />
+      </SettingsGroup> : <Editor
         title="群内响应"
         section={response}
         save={(draft, revision) => save("response", draft, revision)}
@@ -1502,7 +1505,7 @@ export function ProjectPanel({
             }
           />
         )}
-      />
+      />}
       <details className="membership-settings-details"><summary>话题模型</summary><SessionPicker view={view} /></details>
       <ActionNotice message={notice} />
     </>
@@ -1917,4 +1920,9 @@ function ScopedSettingsPanel(props: PanelProps) {
 }
 export function membershipSettingsTarget(member: Membership): ProjectScope {
   return { kind: "project", botId: member.agentId, projectName: member.name };
+}
+/** The group's settings are read once, on mount, and its 会话方式 decides whether 免@ shows (s25c): a switch on the
+ * same page remounts them. */
+export function membershipSettingsKey(member: Membership): string {
+  return `project-${member.id}-${member.conversation}`;
 }

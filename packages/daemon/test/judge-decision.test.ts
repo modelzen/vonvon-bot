@@ -71,6 +71,8 @@ describe('decision model request (s23f 做法（问法）)', () => {
     const people: JudgeLine[] = Array.from({ length: 6 }, (_, i) => ({ id: `om_${i}`, at: at(10, i), from: 'user', name: `人${i}`, text: `第 ${i} 条` }));
     expect(keys('main', { context: people })).toEqual([['skip', 'main', 'topic'], ['m0', 'm1', 'm2', 'm3', 'm4']]);
     expect(keys('main', { context: [CONTEXT[1]!, CONTEXT[2]!, { ...CONTEXT[0]!, id: undefined }] })[1]).toBeUndefined();
+    // a line pulled from history that @-mentions someone has no names, only `named`: not an option either
+    expect(keys('main', { context: [...people.slice(0, 5), { ...people[5]!, named: true }] })[1]).toEqual(['m0', 'm2', 'm3', 'm4', 'm5']);
   });
 
   it('gives the persona as bot_role, cut as the text input cuts it', () => {

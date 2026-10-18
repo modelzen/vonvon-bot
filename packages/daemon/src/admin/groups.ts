@@ -4,7 +4,7 @@ import { realpath, stat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import { bindModeFor, joinExistingGroup } from '../project/lifecycle';
-import { listProjects, type Project } from '../project/registry';
+import { listProjects, type Project, type SessionMode } from '../project/registry';
 import { log } from '../core/logger';
 import { feishuError, scopeDenial } from '../utils/feishu-error';
 import { AdminWriteError } from './ops';
@@ -14,8 +14,8 @@ export interface BindGroupInput {
   projectName: string;
   directory?: string;
   backend: 'codex-appserver' | 'claude-agent';
-  kind: 'multi' | 'single';
-  /** 免@; left out → 3.4's default for `kind` */
+  kind: SessionMode;
+  /** 免@; left out → 3.4's default for `kind`. 智能 has none and refuses it. */
   noMention?: boolean;
 }
 export type AdminGroupOp = { kind: 'joinedGroups'; cursor?: string } | { kind: 'bindGroup'; input: BindGroupInput };
@@ -27,6 +27,8 @@ export class GroupUpstreamError extends Error {
   readonly code = 'GROUP_UPSTREAM';
 }
 export class InvalidGroupInput extends Error { readonly code = 'INVALID_GROUP_INPUT'; }
+/** 智能 has no 免@ (3.4): a bind or a new group that asks for both is refused (s25c). */
+export const SMART_NO_MENTION = '智能开话题由 Bot 判断回不回，没有免 @';
 
 export function parseBindGroupInput(raw: Record<string, unknown>): BindGroupInput {
   const { chatId, projectName, directory, backend, kind, noMention } = raw;
@@ -34,9 +36,10 @@ export function parseBindGroupInput(raw: Record<string, unknown>): BindGroupInpu
       typeof chatId !== 'string' || !/^oc_[\w-]{1,200}$/.test(chatId) ||
       typeof projectName !== 'string' || !projectName.trim() || projectName.length > 200 || /[\x00-\x1f]/.test(projectName) ||
       (directory !== undefined && (typeof directory !== 'string' || !isAbsolute(directory) || directory.length > 4096 || /[\x00-\x1f]/.test(directory))) ||
-      (backend !== 'codex-appserver' && backend !== 'claude-agent') || (kind !== 'multi' && kind !== 'single') || (noMention !== undefined && typeof noMention !== 'boolean')) {
+      (backend !== 'codex-appserver' && backend !== 'claude-agent') || (kind !== 'multi' && kind !== 'single' && kind !== 'smart') || (noMention !== undefined && typeof noMention !== 'boolean')) {
     throw new InvalidGroupInput('群绑定参数无效');
   }
+  if (kind === 'smart' && noMention !== undefined) throw new InvalidGroupInput(SMART_NO_MENTION);
   return { chatId, projectName: projectName.trim(), directory, backend, kind, ...(noMention === undefined ? {} : { noMention }) };
 }
 

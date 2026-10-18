@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { agentIdSchema, folderTokenSchema, folderSelectionSchema, groupIdSchema, replyModeSchema, toolSchema } from "./domain.js";
+import { agentIdSchema, conversationSchema, folderTokenSchema, folderSelectionSchema, groupIdSchema, replyModeSchema, toolSchema } from "./domain.js";
 
 const projectName = z.string().trim().min(1).max(100).regex(/^[^/\\\x00-\x1f]+$/);
 const threadId = z.string().min(1).max(1000);
@@ -10,7 +10,7 @@ export const usageShareSectionSchema = z.enum(["stats", "heatmap", "insights", "
 export type UsageShareSection = z.infer<typeof usageShareSectionSchema>;
 const sessionTarget = { ...target, threadId };
 const backend = z.enum(["codex-appserver", "claude-agent"]);
-const conversation = z.enum(["shared", "threads"]);
+const conversation = conversationSchema;
 const folder = folderSelectionSchema;
 
 export const collaborationRequestSchema = z.discriminatedUnion("action", [
@@ -37,7 +37,7 @@ export const projectRecordSchema = z.object({
   name: projectName,
   chatId: groupIdSchema,
   cwd: z.string(),
-  kind: z.enum(["single", "multi"]),
+  kind: z.enum(["single", "multi", "smart"]),
   backend: z.string(),
   enabled: z.boolean(),
   revision,

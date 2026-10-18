@@ -1,0 +1,129 @@
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { AppConfig } from '../src/config/schema';
+import { paths } from '../src/config/paths';
+import { setDiagnosticsSink, type DiagnosticsEvent } from '../src/bot/diagnostics';
+import { addProject, getProjectByName } from '../src/project/registry';
+import { projectRevision } from '../src/admin/collaboration';
+import type { JudgeRequest, JudgeResult } from '../src/judge/types';
+import { receive, type EventMessage } from './helpers/lark-events';
+import { DM, GS, SMART_NO_MENTION_NOTE } from '../src/card/dm-cards';
+
+// s25c: what an entry writes is what the inbound path reads. Real registry on disk, the SDK's own event parsing;
+// only Feishu, the agent and the judge are fakes.
+vi.mock('../src/config/paths', () => {
+  const appDir = mkdtempSync(join(tmpdir(), 'smart-entry-'));
+  return { paths: { appDir, sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), configFile: join(appDir, 'config.json'), commentsRootDir: join(appDir, 'comments'), botsFile: join(appDir, 'bots.json') } };
+});
+afterAll(() => rmSync(paths.appDir, { recursive: true, force: true }));
+
+const fake = vi.hoisted(() => ({
+  send: vi.fn(async () => ({ messageId: 'om_sent' })),
+  judge: vi.fn(),
+  /** Cards a tap redrew in place. */
+  updated: [] as unknown[],
+  log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() },
+}));
+vi.mock('../src/core/logger', () => ({ log: fake.log, withTrace: (_context: unknown, callback: () => unknown) => callback() }));
+vi.mock('../src/agent', async original => ({ ...await original<object>(), createBackend: (id: string) => ({ id, listModels: async () => [], startThread: vi.fn() }) }));
+vi.mock('../src/card/managed', () => ({ sendManagedCard: vi.fn(async () => ({ messageId: 'om_card' })), updateManagedCard: vi.fn(async (_channel: unknown, _id: string, card: unknown) => { fake.updated.push(card); return true; }) }));
+vi.mock('../src/bot/session-title-coordinator', () => ({ SessionTitleCoordinator: class { startRecovery() {} async shutdown() {} } }));
+vi.mock('../src/judge/judge', async original => ({ ...await original<object>(), createJudge: () => ({ judge: fake.judge, warm: () => {}, shutdown: async () => {} }) }));
+
+import { createOrchestrator } from '../src/bot/handle-message';
+
+const BOT = { openId: 'ou_bot', name: '小码' };
+const CHAT = 'oc_entry';
+const target = { projectName: 'entry', chatId: CHAT };
+const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, completionReminder: { mode: 'manual' } } };
+const channel = {
+  send: fake.send, botIdentity: BOT,
+  rawClient: { appId: 'cli_fixture', im: { v1: {
+    message: { list: async () => ({ code: 0, data: { items: [], has_more: false } }), get: async () => ({ code: 0, data: { items: [] } }) },
+    messageReaction: { create: async () => ({ data: { reaction_id: 'r' } }), delete: async () => ({}) },
+    chat: { get: async () => ({ code: 0, data: { chat_mode: 'group', bot_count: '1' } }) },
+  } } },
+};
+
+let sequence = 0;
+/** A main-area message from the owner that names no one. */
+function chatter(text: string): EventMessage {
+  const id = `om_entry_${++sequence}`;
+  const time = String(Date.now() + sequence * 1000);
+  return { message_id: id, create_time: time, update_time: time, chat_id: CHAT, chat_type: 'group', message_type: 'text', content: JSON.stringify({ text }) };
+}
+
+let orchestrator: ReturnType<typeof createOrchestrator>;
+let events: DiagnosticsEvent[] = [];
+const judgeRecords = () => events.flatMap(event => event.kind === 'notReplied' && event.record.reason.startsWith('judge') ? [event.record] : []);
+const send = async (m: EventMessage) => orchestrator.onMessage(await receive(m, { bot: BOT }));
+async function switchTo(kind: 'multi' | 'single' | 'smart') {
+  const expectedRevision = projectRevision((await getProjectByName('entry'))!);
+  return orchestrator.collaboration({ action: 'editProject', ...target, expectedRevision, kind });
+}
+
+beforeEach(async () => {
+  vi.clearAllMocks();
+  events = [];
+  fake.updated = [];
+  await rm(paths.projectsFile, { force: true });
+  await rm(paths.sessionsFile, { force: true });
+  await addProject({ name: 'entry', chatId: CHAT, cwd: paths.appDir, kind: 'single', blank: false, origin: 'joined', createdAt: 1, backend: 'codex-appserver', mode: 'full', noMention: true });
+  fake.judge.mockImplementation(async (_req: JudgeRequest): Promise<JudgeResult> =>
+    ({ decision: 'skip', reason: '闲聊', backend: 'codex-appserver', model: 'm', modelSource: 'default', promptSource: 'default', ms: 1 }));
+  setDiagnosticsSink(event => events.push(event));
+  orchestrator = createOrchestrator(channel as never, cfg, paths.appDir);
+});
+afterEach(async () => { setDiagnosticsSink(undefined); await orchestrator.shutdown(); });
+
+describe('s25c: the web entry writes 智能 the way the inbound path reads it', () => {
+  it('judges an unnamed main-area message once switched to 智能, stops after 多会话, and says so again on the way back', async () => {
+    await switchTo('smart');
+    expect(fake.send).toHaveBeenCalledWith(CHAT, { text: '我会读群消息，合适时接话。' });
+    await send(chatter('下周发布要不要先砍掉导出功能？'));
+    await vi.waitFor(() => expect(fake.judge).toHaveBeenCalledTimes(1));
+    expect(fake.judge.mock.calls[0]![0]).toMatchObject({ variant: 'main' });
+    await vi.waitFor(() => expect(judgeRecords().map(record => record.reason)).toEqual(['judge-skip']));
+
+    await switchTo('multi');
+    await send(chatter('今天食堂的红烧肉不错'));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(fake.judge).toHaveBeenCalledTimes(1);
+    expect(judgeRecords()).toHaveLength(1);
+
+    fake.send.mockClear();
+    await switchTo('smart');
+    expect(fake.send).toHaveBeenCalledTimes(1);
+    expect(fake.send).toHaveBeenCalledWith(CHAT, { text: '我会读群消息，合适时接话。' });
+    await send(chatter('导出功能谁在用？'));
+    await vi.waitFor(() => expect(fake.judge).toHaveBeenCalledTimes(2));
+  });
+
+  it('a 单会话 group reached from 智能 answers by its own rule again: no judgement, 免@ off', async () => {
+    await switchTo('smart');
+    await switchTo('single');
+    expect(await getProjectByName('entry')).toMatchObject({ kind: 'single', noMention: false });
+    await send(chatter('有人在吗'));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(fake.judge).not.toHaveBeenCalled();
+    expect(judgeRecords()).toEqual([]);
+  });
+
+  it('an old card\'s 免@ button on a group since switched to 智能 is refused and redraws the card without it', async () => {
+    await switchTo('smart');
+    const tap = (a: string, extra: Record<string, unknown> = {}) => ({ chatId: CHAT, messageId: `om_old_${a}`, operator: { openId: 'ou_owner' }, action: { tag: 'button', value: { a, v: 'on', ...extra } } });
+    await orchestrator.dispatcher.handle(tap(GS.setNoMention) as never);
+    await orchestrator.dispatcher.handle(tap(DM.setNoMentionDm, { n: 'entry' }) as never);
+    await vi.waitFor(() => expect(fake.updated).toHaveLength(2), { timeout: 3000 });
+    for (const card of fake.updated.map(item => JSON.stringify(item))) {
+      expect(card).toContain('⚠️ 没有改：这个群现在是智能开话题。');
+      expect(card).toContain(SMART_NO_MENTION_NOTE);
+      expect(card).not.toContain(`"a":"${GS.setNoMention}"`);
+      expect(card).not.toContain(`"a":"${DM.setNoMentionDm}"`);
+    }
+    expect(await getProjectByName('entry')).toMatchObject({ kind: 'single', smart: true, noMention: false });
+  });
+});
