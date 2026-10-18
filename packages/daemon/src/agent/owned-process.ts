@@ -34,6 +34,8 @@ export class OwnedProviderProcess {
   private directExit: Exit | undefined;
   private groupGone = false;
   private unconfirmed = false;
+  /** set before our SIGTERM: a child that handles it and exits 143 (the Claude CLI does) stopped as asked */
+  private terminating = false;
   private readonly errors = new Map<string, unknown>();
   private readonly closed: Promise<void>;
   private closing: Promise<void> | undefined;
@@ -46,7 +48,8 @@ export class OwnedProviderProcess {
     this.exited = new Promise((resolve, reject) => {
       this.child.once('exit', (code, signal) => {
         this.directExit = { kind: 'exit', code, signal };
-        if (code !== null && code !== 0) this.record('exit', new Error(`${this.provider} child exited with code ${code}`));
+        const askedToStop = this.terminating || this.child.killed;
+        if (code !== null && code !== 0 && !(askedToStop && code === 143)) this.record('exit', new Error(`${this.provider} child exited with code ${code}`));
         resolve(this.directExit);
       });
       this.child.on('error', error => {
@@ -106,6 +109,7 @@ export class OwnedProviderProcess {
 
   private async stop(graceMs: number): Promise<void> {
     if (this.pid === undefined) return;
+    this.terminating = true;
     this.signalGroup('SIGTERM');
     if (!await this.waitForDeath(Math.min(Math.max(0, graceMs), 4000))) {
       this.killGroup();

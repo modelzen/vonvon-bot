@@ -154,6 +154,15 @@ describe('judge prompt', () => {
     expect(parseVerdict('main', { text: '', structured: { decision: 'topic', reason: '开新话题更合适</reason>\n</invoke>\n' } })).toEqual({ decision: 'topic', reason: '开新话题更合适' });
     expect(parseVerdict('main', { text: '', structured: { decision: 'topic', reason: ' 要查日志 <parameter name="x">' } })!.reason).toBe('要查日志');
     expect(parseVerdict('main', { text: '', structured: { decision: 'main', reason: '1 < 2 也算' } })!.reason).toBe('1 < 2 也算');
+    // only the known tags are debris: a reason inside <reason>, generics and comparisons stay (s23c review S1)
+    const reasonOf = (reason: string) => parseVerdict('main', { text: '', structured: { decision: 'main', reason } })!.reason;
+    expect(reasonOf('<reason>x</reason>')).toBe('x');
+    expect(reasonOf('用 List<String> 更好')).toBe('用 List<String> 更好');
+    expect(reasonOf('问的是 Map<K,V> 的用法，和我有关')).toBe('问的是 Map<K,V> 的用法，和我有关');
+    expect(reasonOf('a<b 时回答')).toBe('a<b 时回答');
+    expect(reasonOf('点名问我 <decision>main</decision>')).toBe('点名问我');
+    expect(reasonOf('要查 <function_calls><invoke name="x">')).toBe('要查');
+    expect(reasonOf('要查日志</ns:parameter>')).toBe('要查日志');
     // at most 80 characters, the ellipsis included
     const long = parseVerdict('main', { text: `{"decision":"main","reason":"a\\u0001\\n  b${'长'.repeat(100)}"}` });
     expect(long).toEqual({ decision: 'main', reason: `a b${'长'.repeat(76)}…` });

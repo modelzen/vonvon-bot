@@ -2,6 +2,7 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { catalogBackendIds } from '../agent/catalog';
 import { BackendNotInstalledError } from '../agent/backend-loader';
+import { ProviderProcessCleanupError } from '../agent/owned-process';
 import { DEFAULT_BACKEND_ID, JudgeCallError, type AgentBackend, type JudgeCallOutput } from '../agent/types';
 import { paths } from '../config/paths';
 import { log } from '../core/logger';
@@ -302,7 +303,12 @@ export function createJudge(deps: JudgeDeps): Judge {
           call = Promise.reject(error);
         }
         const { model } = base;
-        call.catch((error: unknown) => cooldown.note(backend.id, model, error));
+        call.catch((error: unknown) => {
+          cooldown.note(backend.id, model, error);
+          // The result already says timeout, aborted or closed; a process the call could not clean up
+          // (it needed SIGKILL, pipes stayed open, its exit was never confirmed) would go unreported.
+          if (ctl.signal.aborted && error instanceof ProviderProcessCleanupError) log.fail('judge', error, { phase: 'abandoned-call', backend: backend.id });
+        });
         releaseWhenSettled(limiter, call, ctl.signal, backend.id);
         return call;
       })();

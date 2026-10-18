@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -65,6 +65,31 @@ describe('judge default model', () => {
     expect(readConfiguredClaudeModel(env, home)).toBe('opus');
     writeFileSync(join(home, 'c', 'settings.json'), '{not json');
     expect(readClaudeUserSettings(env, home)).toEqual({ env: {}, configuredModel: undefined });
+  });
+
+  it('the Claude default reads settings.json again only after it changes (s23c review S3)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'judge-claude-cache-'));
+    dirs.push(dir);
+    const file = join(dir, 'settings.json');
+    const write = (model: string, mtime: number) => {
+      writeFileSync(file, JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://gw.example.com', ANTHROPIC_SMALL_FAST_MODEL: model } }));
+      utimesSync(file, mtime, mtime);
+    };
+    vi.stubEnv('CLAUDE_CONFIG_DIR', dir);
+    for (const key of ['ANTHROPIC_BASE_URL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL', 'ANTHROPIC_MODEL']) vi.stubEnv(key, '');
+    try {
+      write('m-one', 1_700_000_000);
+      expect(defaultJudgeModel('claude-agent', undefined)).toEqual({ model: 'm-one' });
+      // same size and mtime: not read again
+      write('m-two', 1_700_000_000);
+      expect(defaultJudgeModel('claude-agent', undefined)).toEqual({ model: 'm-one' });
+      write('m-two', 1_700_000_005);
+      expect(defaultJudgeModel('claude-agent', undefined)).toEqual({ model: 'm-two' });
+      rmSync(file);
+      expect(defaultJudgeModel('claude-agent', undefined)).toEqual({ model: 'haiku' });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 

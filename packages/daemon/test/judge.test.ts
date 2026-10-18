@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ProviderProcessCleanupError } from '../src/agent/owned-process';
 import { JudgeCallError, type AgentBackend, type JudgeCall, type JudgeCallOutput, type ModelInfo } from '../src/agent/types';
 import { createJudge, JUDGE_SETTLE_MS, MODEL_LIST_RETRY_MS, type JudgeDeps } from '../src/judge/judge';
 import { SmartPromptError } from '../src/judge/smart-file';
@@ -226,6 +227,34 @@ describe('judge', () => {
     expect(f.backend.judge).toHaveBeenCalledTimes(7);
     expect(sixth.value).toBeUndefined();
     expect(seventh.value).toBeUndefined();
+  });
+
+  it('logs a cleanup failure of a call it already gave up on, which the result could not report', async () => {
+    const f = fakeBackend();
+    const failure = new ProviderProcessCleanupError('Claude 子进程树已退出，但清理失败', { cause: new AggregateError([new Error('Claude process group required SIGKILL')]) });
+    const after = (error: unknown) => (call: JudgeCall) => new Promise<JudgeCallOutput>((_, reject) => {
+      call.signal.addEventListener('abort', () => setTimeout(() => reject(error), 100), { once: true });
+    });
+    const judge = make(f.backend);
+    f.answer(after(failure));
+    const timedOut = timed(judge.judge(req('main', { timeoutMs: 1_000 })));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(timedOut.value).toMatchObject({ error: { kind: 'timeout' } });
+    expect(fake.log.fail).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(fake.log.fail.mock.calls).toEqual([['judge', failure, { phase: 'abandoned-call', backend: 'codex-appserver' }]]);
+
+    // what an abandoned call usually throws is not a fault
+    fake.log.fail.mockClear();
+    f.answer(after(new Error('The operation was aborted')));
+    void judge.judge(req('main', { timeoutMs: 1_000 }));
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(fake.log.fail).not.toHaveBeenCalled();
+
+    // before the judgement gave up, the failure is its result, logged once as a failed judgement
+    f.answer(async () => { throw failure; });
+    expect(await judge.judge(req('main'))).toMatchObject({ error: { kind: 'failed', detail: 'Claude 子进程树已退出，但清理失败' } });
+    expect(fake.log.fail).not.toHaveBeenCalled();
   });
 
   it('a queued judgement aborted in the tick its slot is granted hands the slot on', async () => {

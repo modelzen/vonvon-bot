@@ -2,9 +2,9 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import * as sdk from '@anthropic-ai/claude-agent-sdk';
 import { createCooldown } from '../src/judge/cooldown';
-import { ClaudeAgentBackend } from '../src/agent/claude-agent/backend';
+import { JudgeCallError } from '../src/agent/types';
+import { claudeWithFakeCli, writeWaitingClaudeCli } from './helpers/fake-claude-cli';
 
 // Real SDK transport, a local fake CLI: never starts Claude or submits inference.
 describe('Claude judge process ownership', () => {
@@ -37,11 +37,7 @@ createInterface({ input: process.stdin }).on('line', line => {
 });
 `);
     const controller = new AbortController();
-    const backend = new ClaudeAgentBackend(async () => ({ ...sdk, query: args => sdk.query({
-      ...args, options: { ...args.options, pathToClaudeCodeExecutable: cli, executable: 'node',
-        env: { ...args.options?.env, HOME: root, VONVON_HOME: join(root, 'vonvon'), CLAUDE_CONFIG_DIR: root },
-      },
-    }) }), () => undefined);
+    const backend = claudeWithFakeCli(root, cli);
     let pid: number | undefined;
     try {
       const pending = backend.judge!({ system: 'fake', input: 'fake', model: 'fake', schema: {}, cwd: root, signal: controller.signal })
@@ -62,9 +58,41 @@ createInterface({ input: process.stdin }).on('line', line => {
       // Ignoring TERM requires KILL: even a structured quota error must report cleanup failure.
       expect(outcome).toHaveProperty(mode === 'normal' ? 'value' : 'error');
       if (['result', 'abort', 'error'].includes(mode)) expect(outcome).toMatchObject({ error: { name: 'Error', message: 'Claude 子进程树已退出，但清理失败' } });
+      // The group is killed by us, not through the SDK's forwarded signal on spawn, which also
+      // reported an AbortError (s23c review F3): the only failure left is the SIGKILL.
+      if (mode === 'abort' && 'error' in outcome) {
+        const cause = (outcome.error as Error).cause;
+        expect(cause).toBeInstanceOf(AggregateError);
+        expect((cause as AggregateError).errors.map((error: Error) => error.message)).toEqual(['Claude process group required SIGKILL']);
+      }
     } finally {
       if (pid) { try { process.kill(-pid, 'SIGKILL'); } catch { /* already reaped */ } }
       await rm(root, { recursive: true, force: true });
     }
   }, 20_000);
+
+  // The real CLI exits 143 soon after SIGTERM, and with a request in flight ignores stdin EOF. The SDK
+  // alone only ends stdin on abort and sends its own SIGTERM 2 s later (s23c review F2, F3).
+  it.skipIf(process.platform === 'win32')('an abort stops a CLI waiting on the API at once, and its exit 143 is not a cleanup failure', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'claude-judge-term-'));
+    const { cli, pidFile } = await writeWaitingClaudeCli(root);
+    const controller = new AbortController();
+    let pid: number | undefined;
+    try {
+      const pending = claudeWithFakeCli(root, cli).judge!({ system: 'fake', input: 'fake', model: 'fake', schema: {}, cwd: root, signal: controller.signal })
+        .then(value => ({ value }), (error: unknown) => ({ error }));
+      await expect.poll(async () => readFile(`${pidFile}.user`, 'utf8').catch(() => undefined), { timeout: 10_000 }).toBe('1');
+      pid = Number(await readFile(pidFile, 'utf8'));
+      const abortedAt = Date.now();
+      controller.abort();
+      const outcome = await pending;
+      const settledMs = Date.now() - abortedAt;
+      expect('error' in outcome && outcome.error).toBeInstanceOf(JudgeCallError);
+      expect(settledMs).toBeLessThan(1_500);
+      expect(() => process.kill(pid!, 0)).toThrow();
+    } finally {
+      if (pid) { try { process.kill(-pid, 'SIGKILL'); } catch { /* already reaped */ } }
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

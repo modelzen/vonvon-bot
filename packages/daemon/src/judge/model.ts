@@ -1,4 +1,7 @@
-import { readClaudeUserSettings } from '../agent/claude-agent/configured-model';
+import { statSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { claudeConfigDir, readClaudeUserSettings } from '../agent/claude-agent/configured-model';
 import { parseModelId } from '../agent/model-id';
 import { getSessionTitleEfforts } from '../config/schema';
 import { REASONING_EFFORTS, type ModelInfo, type ReasoningEffort } from '../agent/types';
@@ -66,12 +69,31 @@ export function claudeJudgeDefault(
 
 export type ClaudeUserSettings = typeof readClaudeUserSettings;
 
+let claudeSettingsCache: { key: string; value: ReturnType<ClaudeUserSettings> } | undefined;
+
+/** {@link readClaudeUserSettings}, read again only when settings.json's path, size or mtime (or the
+ * daemon's ANTHROPIC_MODEL) changed: a stat per judgement instead of a read and parse, and an edit
+ * still applies without a restart. */
+export function cachedClaudeUserSettings(env: NodeJS.ProcessEnv = process.env, home = homedir()): ReturnType<ClaudeUserSettings> {
+  const file = join(claudeConfigDir(env, home), 'settings.json');
+  let stamp = 'missing';
+  try {
+    const stat = statSync(file, { throwIfNoEntry: false });
+    if (stat) stamp = `${stat.size}:${stat.mtimeMs}`;
+  } catch {
+    stamp = 'unreadable';
+  }
+  const key = `${file}\n${stamp}\n${env.ANTHROPIC_MODEL ?? ''}`;
+  if (claudeSettingsCache?.key !== key) claudeSettingsCache = { key, value: readClaudeUserSettings(env, home) };
+  return claudeSettingsCache.value;
+}
+
 /** The backend's default small model. Claude passes no effort: the backend turns thinking off.
- * `readClaude` reads ~/.claude/settings.json once (tests inject it). */
+ * `readClaude` reads ~/.claude/settings.json, again only once it changed (tests inject it). */
 export function defaultJudgeModel(
   backendId: string,
   models: ModelInfo[] | undefined,
-  readClaude: ClaudeUserSettings = readClaudeUserSettings,
+  readClaude: ClaudeUserSettings = cachedClaudeUserSettings,
 ): { model: string; effort?: ReasoningEffort } {
   if (backendId === CLAUDE_BACKEND_ID) {
     const settings = readClaude();

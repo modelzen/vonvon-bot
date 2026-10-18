@@ -508,19 +508,29 @@ export class ClaudeAgentBackend implements AgentBackend {
     // aborted while the SDK loaded: start no CLI
     if (call.signal.aborted) throw new JudgeCallError('aborted', '判断已放弃', false);
     const abortController = new AbortController();
-    const onAbort = (): void => abortController.abort(call.signal.reason);
-    call.signal.addEventListener('abort', onAbort, { once: true });
     let query: Query | undefined;
     let owned: OwnedProviderProcess | undefined;
     let judgeError: JudgeCallError | undefined;
+    // On abort the SDK only ends stdin and sends its own SIGTERM 2 s later, and a CLI waiting on the
+    // API ignores the EOF: stop the whole group now, so the judge slot is not held for nothing.
+    // The finally awaits the same close and reports how it went.
+    const stopOwned = (): void => { void owned?.close().catch(() => undefined); };
+    const onAbort = (): void => {
+      abortController.abort(call.signal.reason);
+      stopOwned();
+    };
+    call.signal.addEventListener('abort', onAbort, { once: true });
     try {
       query = sdk.query({
         prompt: call.input,
         options: {
           ...helperQueryOptions(call.cwd),
-          spawnClaudeCodeProcess: ({ command, args, ...options }) => {
+          // Not the SDK's forwarded `signal`: Node would kill only the direct child with it and report
+          // an AbortError. The owned process kills the group itself.
+          spawnClaudeCodeProcess: ({ command, args, signal: _forwarded, ...options }) => {
             owned = new OwnedProviderProcess(command, args, { ...options, stdio: ['pipe', 'pipe', 'pipe'] }, 'Claude');
             owned.child.stderr?.resume();
+            if (call.signal.aborted) stopOwned();
             if (!owned.child.stdin || !owned.child.stdout) throw new Error('Claude child pipes are missing');
             return Object.assign(owned.child, { stdin: owned.child.stdin, stdout: owned.child.stdout });
           },
