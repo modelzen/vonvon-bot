@@ -40,8 +40,8 @@ const EMPTY_LOCK_STALE_MS = 2_000;
 export class BridgeAlreadyRunningError extends Error {
   constructor(public readonly pid: number) {
     super(
-      `另一个 bridge 进程已在运行 (PID ${pid})。先停掉它（kill ${pid}）再启动——` +
-        `两个进程会抢同一 App 的卡片回调，导致按钮时灵时不灵。`,
+      `这个 Bot 已经有一个进程在运行 (PID ${pid})。先停掉它（kill ${pid}）再启动——` +
+        `两个进程会抢同一个飞书应用的卡片回调，导致按钮时灵时不灵。`,
     );
     this.name = 'BridgeAlreadyRunningError';
   }
