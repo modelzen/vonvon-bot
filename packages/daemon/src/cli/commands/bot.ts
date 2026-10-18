@@ -1,6 +1,7 @@
 import QRCode from 'qrcode';
 import { ConnectionError, type VonvonClient } from '@vonvon/client';
 import { botSteps, linuxSteps, serviceStep, toolSteps, type AdminSetupStatus, type Agent, type AgentId, type DesktopSnapshot, type Job, type JobId, type SetupStep, type StepTone } from '@vonvon/protocol';
+import type { DirectoryRepair } from '../../config/bots';
 import { localTime, pickBot, print, printable, want, withDaemon, withoutAvatar, NO_BOT, type Daemon, type Io } from '../daemon-client';
 
 const MARK: Record<StepTone, string> = { success: '✓', warning: '!', danger: '✗', neutral: '·' };
@@ -188,4 +189,16 @@ export async function runBotAdd(io: Io, daemon: Daemon = withDaemon, overrides: 
       print(io, human, null);
     });
   } finally { stop(); }
+}
+
+/**
+ * `vonvon bot repair-dir`: the bot's directories, recorded again where they are now (s36c2d). It writes bots.json under
+ * the lock the daemon uses, so it runs with or without one.
+ */
+export async function runBotRepairDir(wanted: string, io: Io, repair?: (wanted: string) => Promise<DirectoryRepair>): Promise<void> {
+  const result = await (repair ?? (await import('../../config/bots')).repairBotDirectories)(wanted);
+  const human = [`✓ 已按现在的位置重新记录「${result.handle}」的 ${result.recorded} 个目录。`];
+  if (result.missing) human.push(`另有 ${result.missing} 个目录不在了，下次用到时会重建一个空的。`);
+  if (result.others.length) human.push(`同一个项目根目录下的 bot 也要各运行一次：${result.others.map(handle => `vonvon bot repair-dir ${handle}`).join('；')}。`);
+  print(io, human, result);
 }

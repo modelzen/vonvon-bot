@@ -1,3 +1,9 @@
+/**
+ * Not wired into v1 (s36c2d): no code calls this module. It is s36c2c4a's retained creation-operation record; the
+ * creation entries and recovery that would use it (s36c2c4b, s36c2c4c) moved to after v1 (owner 2026-10-18, product.md
+ * section 10), and s36d1 creates groups without it. Nothing reads or writes `creation-operations/` until a later slice
+ * wires it in.
+ */
 import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, readdir, realpath, rename, unlink } from 'node:fs/promises';

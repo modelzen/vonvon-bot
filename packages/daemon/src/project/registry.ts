@@ -350,6 +350,22 @@ export async function addProject(input: Project, target?: RegistryLocation): Pro
   }, target);
 }
 
+/**
+ * Top-level key of projects.json (s36c2d): chat id → the directory a row from before s36c2c3 (one without
+ * `directories`) had when its group was unbound. Binding the group again with the default directory goes back there,
+ * as it did before s36c2c3, instead of a new empty one; rows from s36c2c3 on come back through their allocation.
+ */
+const PREVIOUS_DIRECTORIES = 'previousDirectories';
+export type PreviousDirectory = { cwd: string; blank: boolean };
+function previousDirectories(stored: Record<string, unknown>): Record<string, PreviousDirectory> {
+  const raw = stored[PREVIOUS_DIRECTORIES];
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return {};
+  return Object.fromEntries(Object.entries(raw).filter((entry): entry is [string, PreviousDirectory] => {
+    const value: unknown = entry[1];
+    return typeof value === 'object' && value !== null && 'cwd' in value && typeof value.cwd === 'string' && 'blank' in value && typeof value.blank === 'boolean';
+  }));
+}
+
 type ProjectBinding = Pick<Project, 'name' | 'chatId'> & {
   /** A new group has no `legacyPath`: its chat id is fresh, so no stored row is compared with it. */
   cwd: { kind: 'existing'; path: string } | { kind: 'default'; legacyPath?: string; allocatedPath?: string };
@@ -362,16 +378,18 @@ type NewBinding = Pick<Project, 'cwd' | 'blank' | 'createdAt' | 'directories' | 
 type BindingResult = { kind: 'bound'; project: Project } | { kind: 'existing'; project: Project };
 
 /** Decide against the latest row under the projects owner. prepareNew is local
- * filesystem work only; callers send welcomes after this operation releases. */
-export function bindProject(input: ProjectBinding, prepareNew: () => Promise<NewBinding>, target?: RegistryLocation): Promise<BindingResult> {
+ * filesystem work only; callers send welcomes after this operation releases. A
+ * default binding hands it the chat's {@link PreviousDirectory}, if any. */
+export function bindProject(input: ProjectBinding, prepareNew: (previous?: PreviousDirectory) => Promise<NewBinding>, target?: RegistryLocation): Promise<BindingResult> {
   const binding = structuredClone(input);
   return ownProjects(async location => {
     const projects = await read(location.file);
+    const previous = binding.cwd.kind === 'default' ? previousDirectories(await readStored(location.file))[binding.chatId] : undefined;
     const existing = projects.find(project => project.chatId === binding.chatId);
     if (existing) {
       const cwd = await realpath(existing.cwd).catch(() => existing.cwd);
       const candidates = binding.cwd.kind === 'existing' ? [binding.cwd.path]
-        : [binding.cwd.legacyPath, binding.cwd.allocatedPath].filter((path): path is string => path !== undefined);
+        : [binding.cwd.legacyPath, binding.cwd.allocatedPath, previous?.cwd].filter((path): path is string => path !== undefined);
       const requested = await Promise.all(candidates.map(path => realpath(path).catch(() => path)));
       if (existing.name === binding.name && requested.includes(cwd)
         && (existing.backend ?? binding.defaultBackend) === binding.backend
@@ -381,7 +399,7 @@ export function bindProject(input: ProjectBinding, prepareNew: () => Promise<New
       throw new Error(`该群已绑定为项目「${existing.name}」，现有文件夹、后端和会话方式不可修改，免 @ 请在群设置里改`);
     }
     if (projects.some(project => project.name === binding.name)) throw new Error(`项目名「${binding.name}」已存在`);
-    const prepared = await prepareNew();
+    const prepared = await prepareNew(previous);
     if (binding.cwd.kind === 'existing' && prepared.cwd !== binding.cwd.path) throw new Error('工作目录已改变，请重新选择');
     const project: Project = { ...prepared, name: binding.name, chatId: binding.chatId,
       kind: binding.kind, noMention: binding.noMention };
@@ -411,7 +429,8 @@ export async function updateProject(
   });
 }
 
-/** Remove (unbind) a project by name. Returns the removed entry, if any. */
+/** Remove (unbind) a project by name. Returns the removed entry, if any. A row
+ * from before s36c2c3 leaves its directory as the chat's {@link PreviousDirectory}. */
 export async function removeProject(name: string, beforeRemove?: (project: Project) => void): Promise<Project | undefined> {
   return ownProjects(async location => {
     const projects = await read(location.file);
@@ -419,7 +438,13 @@ export async function removeProject(name: string, beforeRemove?: (project: Proje
     if (idx === -1) return undefined;
     beforeRemove?.(projects[idx]!);
     const [removed] = projects.splice(idx, 1);
-    await write(location, projects);
+    if (!removed?.chatId || removed.directories?.workspaces) {
+      await write(location, projects);
+      return removed;
+    }
+    const previous = await readStored(location.file);
+    const remembered = { ...previousDirectories(previous), [removed.chatId]: { cwd: removed.cwd, blank: removed.blank === true } };
+    await writeStored(location, { ...previous, version: FILE_VERSION, projects: JSON.parse(JSON.stringify(projects)), [PREVIOUS_DIRECTORIES]: remembered }, previous);
     return removed;
   });
 }
