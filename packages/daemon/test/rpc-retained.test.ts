@@ -72,7 +72,7 @@ describe('retained settings behavior over real WebSocket', () => {
 
       const readProject = await client.call({ type: 'request', id: 'read-project', method: 'settings', payload: { type: 'read', scope: project } });
       if (readProject.type !== 'response' || readProject.method !== 'settings' || readProject.payload.kind !== 'view' || !('response' in readProject.payload.view.sections)) throw new Error('project view missing');
-      expect(Object.keys(readProject.payload.view.sections).sort()).toEqual(['judge', 'model', 'permission', 'response', 'run']);
+      expect(Object.keys(readProject.payload.view.sections).sort()).toEqual(['model', 'permission', 'response', 'run']);
       const responseRevision = readProject.payload.view.sections.response.revision;
       const response = await client.call({ type: 'request', id: 'save-project', method: 'settings', payload: { type: 'save', edit: { scope: project, section: 'response', revision: responseRevision, patch: { noMention: false } } } });
       expect(response).toMatchObject({ type: 'response', method: 'settings', payload: { kind: 'saved', result: { kind: 'saved', section: { scope: project, section: 'response', value: { stored: { noMention: false } } } } } });
