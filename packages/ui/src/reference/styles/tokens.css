@@ -13,6 +13,9 @@
 
   /* Type scale (F04). The root font size is 13px (system-settings.css), so sizes are in px. */
   --font-size-page-title: 22px; /* with --font-weight-semibold */
+  /* Between the two: Bot names in list rows, group headings and dialog titles, like macOS Title 3. u03 moves
+     the 14px to 19px literals here and the 20px and 21px headings onto the page title. */
+  --font-size-title: 15px; /* with --font-weight-semibold */
   --font-size-section-title: 13px; /* with --font-weight-semibold */
   --font-size-body: 13px;
   --font-size-secondary: 12px;
@@ -104,11 +107,12 @@
 
   /* Grey text, darkest first (F03).
      text      #1c1c1e  17.0:1 on white, 15.6:1 on the canvas
-     secondary #636369   6.0:1 on white,  5.5:1 on the canvas
+     secondary #55555b   7.4:1 on white,  6.8:1 on the canvas (was #636369, only 1.18:1 from tertiary: one grey to the eye)
      tertiary  #6e6e73   5.1:1 on white,  4.7:1 on the canvas; the lightest grey for text (was #85858b, 3.7:1)
-     disabled  #b0b0b5   2.2:1, only on disabled controls, which WCAG leaves out */
+     disabled  #b0b0b5   2.2:1, only on disabled controls, which WCAG leaves out
+     Tertiary cannot get lighter, so secondary is the one that moved; the two are 1.46:1 apart. */
   --color-text: #1c1c1e;
-  --color-text-secondary: #636369;
+  --color-text-secondary: #55555b;
   --color-text-tertiary: #6e6e73;
   --color-text-disabled: #b0b0b5;
   --color-border: rgba(60, 60, 67, 0.13);

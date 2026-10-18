@@ -32,7 +32,7 @@ export function createSettingsService(deps: AdminServiceDeps): HostSettings {
         }) as SettingsView;
       const cfg = await loadConfig(botPaths(scope.botId).configFile);
       if (!isComplete(cfg))
-        throw new SettingsInputError('机器人不存在或配置不完整');
+        throw new SettingsInputError('这个 Bot 不存在，或者配置不完整');
       const files = botPaths(scope.botId);
       return createSettingsOwner({
         cfg,

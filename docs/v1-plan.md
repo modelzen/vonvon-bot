@@ -1308,7 +1308,7 @@ u01 定的（2026-10-18），从[网页端打底审查](research/2026-10-18-ui-f
 
 | 概念 | 界面上写 | 不再写 | 说明 | 改在 |
 |---|---|---|---|---|
-| Bot | Bot；数量写"2 个 Bot" | 机器人、Agent、小写的 bot | 应用名"Vonvon Bot"不变，只在说应用本身时用 | u01；群聊页和群详情页 u09 |
+| Bot | Bot；数量写"2 个 Bot" | 机器人、Agent、小写的 bot | 应用名"Vonvon Bot"不变，只在说应用本身时用；搜索的别名里留着"机器人"，用旧词也能搜到 | u01；Bot 详情页头 u06；加入已有的群时 daemon 的报错 u07；群聊页和群详情页 u09 |
 | 后端 | 后端，取值 Codex、Claude，统一用 `backendLabel()` | 执行工具、执行后端、Bot 工具、原始 id `codex-appserver` | 见下面 D8 第 1 项；本机环境的后端条目在详情行写"命令行"，Claude 的 SDK 单列一行 | u01；建群对话框 u07；群详情页 u09 |
 | Claude | 标题写 Claude | 标题里的 Claude Code、Claude Code CLI | product.md 第 2 节的品牌规定；命令行和 SDK 放进详情行 | u01 |
 | 权限档的选项 | 只读 / 读写 / 完全访问 | 只读问答、允许写入 | 协议里的值 `qa`、`write`、`full` 不变 | u01（网页和 daemon）；飞书卡片最后一轮 |
