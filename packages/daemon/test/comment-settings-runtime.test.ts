@@ -4,12 +4,13 @@ import type { AgentBackend, AgentEvent, AgentRun, AskRequest } from '../src/agen
 import type { AppConfig } from '../src/config/schema';
 import { paths } from '../src/config/paths';
 import { getSession } from '../src/bot/session-store';
+import { loadConfig, saveConfig } from '../src/config/store';
 import { createOrchestrator } from '../src/bot/handle-message';
 
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
   const appDir = mkdtempSync(join(tmpdir(), 'comment-settings-runtime-'));
-  return { paths: { appDir, sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), commentInstructionsFile: join(appDir, 'instructions.md'), commentsRootDir: join(appDir, 'comments'), projectsRootDir: join(appDir, 'projects') } };
+  return { paths: { appDir, configFile: join(appDir, 'config.json'), sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), commentInstructionsFile: join(appDir, 'instructions.md'), commentsRootDir: join(appDir, 'comments'), projectsRootDir: join(appDir, 'projects') } };
 });
 const fixture = vi.hoisted(() => ({ backends: new Map<string, unknown>(), replies: 0 }));
 vi.mock('../src/agent', async original => ({ ...await original<object>(), createBackend: (id = 'codex-appserver') => fixture.backends.get(id) }));
@@ -107,5 +108,36 @@ it('a missing comment response port recycles the origin even before a turn id ex
   try {
     await orchestrator.onComment({ fileType: 'docx', fileToken: 'broken-doc', commentId: 'broken-comment', replyId: 'one', mentionedBot: true, operator: { openId: 'ou_owner' } } as never);
     expect(provider.threads[0]!.close).toHaveBeenCalled();
+  } finally { await orchestrator.shutdown(); }
+});
+
+it('s36d2: with no comment backend a comment runs on the bot default backend and its model, still with no tier', async () => {
+  const codex = backend('codex-appserver'); const claude = backend('claude-agent');
+  const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' }, defaults: { backend: 'claude-agent', model: { kind: 'catalog', id: 'two', effort: 'high' } } } };
+  const orchestrator = createOrchestrator({} as never, cfg, paths.appDir);
+  try {
+    await orchestrator.onComment({ fileType: 'docx', fileToken: 'fixture-doc', commentId: 'inherit', replyId: 'one', mentionedBot: true, operator: { openId: 'ou_owner' } } as never);
+    expect(codex.startThread).not.toHaveBeenCalled();
+    expect(claude.startThread).toHaveBeenCalledOnce();
+    const started = (claude.startThread.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+    expect(started).toMatchObject({ model: 'two', effort: 'high' });
+    expect(started).not.toHaveProperty('mode');
+    expect(await getSession('doc:fixture-doc:inherit')).toMatchObject({ backend: 'claude-agent', model: 'two', effort: 'high' });
+  } finally { await orchestrator.shutdown(); }
+});
+
+it('s36d2: saving a comment model from the DM card leaves an inherited backend unset, and writes one chosen away from it', async () => {
+  backend('codex-appserver'); backend('claude-agent');
+  const cfg: AppConfig = { accounts: { app: { id: 'cli_fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'ou_owner' } } };
+  await saveConfig(cfg);
+  const orchestrator = createOrchestrator({ send: async () => ({}) } as never, cfg, paths.appDir);
+  const submit = (b: string, model: string) => orchestrator.dispatcher.handle({ messageId: `om_${b}_${model}`, chatId: 'oc_dm', operator: { openId: 'ou_owner' },
+    action: { tag: 'button', value: { a: 'dm.comment.submit', b } }, raw: { action: { form_value: { model, effort: 'high' } } } } as never);
+  try {
+    await submit('codex-appserver', 'two');
+    await vi.waitFor(() => expect(cfg.preferences?.comments).toEqual({ model: 'two', effort: 'high' }));
+    expect((await loadConfig()).preferences?.comments).not.toHaveProperty('backend');
+    await submit('claude-agent', 'one');
+    await vi.waitFor(() => expect(cfg.preferences?.comments).toEqual({ backend: 'claude-agent', model: 'one', effort: 'high' }));
   } finally { await orchestrator.shutdown(); }
 });

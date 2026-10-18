@@ -31,6 +31,7 @@ import {
 } from '../project/registry';
 import { isRetiredKey, listSessionsIn } from '../bot/session-store';
 import { loadConfig } from '../config/store';
+import { groupBackendId } from '../config/execution';
 import { resolveAppSecret } from '../config/secret-resolver';
 import { createAgentAvatarProvider, createGroupAvatarProvider } from './avatar';
 import { diagnoseEventSubscription, type EventDiagnosis } from '../utils/event-diagnosis';
@@ -303,7 +304,7 @@ export interface AdminProject {
   /** @deprecated since s15c always equal to the group's one tier; kept so clients from before s15c still parse */
   guestMode: PermissionMode;
   network: boolean;
-  /** effective 后端 id（显式 backend ?? 智能默认 effectiveDefaultBackend，与运行时路由同源） */
+  /** effective 后端 id（显式 backend ?? Codex，与运行时路由同源，见 config/execution.ts） */
   backend: string;
   allowedUsersCount: number;
   /** 🧵 话题数（该群名下的会话记录数） */
@@ -508,9 +509,6 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     const files = botPaths(botId);
     const projects = await listProjectsIn(files.projectsFile);
     const sessions = await listSessionsIn(files.sessionsFile);
-    // 未显式选后端的项目，effective backend = 智能默认（与运行时 backendForProject
-    // 同源），UI 展示「会实际路由到哪」而非硬编码 codex；探测失败回退常量默认。
-    const defaultBackend = await effectiveDefaultBackend().catch(() => DEFAULT_BACKEND_ID);
     const countByChat = new Map<string, number>();
     for (const s of sessions) {
       if (!isRetiredKey(s.threadId)) countByChat.set(s.chatId, (countByChat.get(s.chatId) ?? 0) + 1);
@@ -529,7 +527,8 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       mode: effectiveMode(p),
       guestMode: effectiveMode(p),
       network: p.network ?? false,
-      backend: p.backend ?? defaultBackend,
+      // What the group's sessions actually start on: its own backend, else Codex (s36d2).
+      backend: groupBackendId(p),
       allowedUsersCount: p.allowedUsers?.length ?? 0,
       sessionCount: p.chatId ? (countByChat.get(p.chatId) ?? 0) : 0,
       createdAt: p.createdAt,

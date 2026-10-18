@@ -4,7 +4,7 @@ import type { AgentEvent, AgentInput, TurnOptions } from '../src/agent/types';
 
 const fake = vi.hoisted(() => ({
   record: undefined as any,
-  backend: { capabilities: { steer: true }, id: 'codex', listModels: vi.fn(async () => []), resumeThread: vi.fn(), startThread: vi.fn() },
+  backend: { capabilities: { steer: true }, id: 'codex-appserver', listModels: vi.fn(async () => []), resumeThread: vi.fn(), startThread: vi.fn() },
   final: vi.fn(async () => true),
   createCard: vi.fn(async () => 'card'),
   send: vi.fn(async () => ({})),
@@ -131,7 +131,7 @@ describe('single-session model display', () => {
 
   it.each([false, true])('repairs missing metadata without replacing an existing selection (hasSelection=%s)', async (hasSelection) => {
     const selected = hasSelection ? { model: 'existing-model', effort: 'high' } : {};
-    fake.record = { threadId: 'chat', chatId: 'chat', sessionId: 'host', backend: 'codex', cwd: '/test', summary: '', ...selected };
+    fake.record = { threadId: 'chat', chatId: 'chat', sessionId: 'host', backend: 'codex-appserver', cwd: '/test', summary: '', ...selected };
     const run = thread();
     fake.backend.resumeThread.mockResolvedValue(run.t);
     const o = setup();

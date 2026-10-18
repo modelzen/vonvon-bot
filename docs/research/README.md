@@ -178,6 +178,21 @@ process-ci、draft 和 final 里的流程说法，凡和 `AGENTS.md` 不一致�
 |---|---|---|
 | [e12-judge-latency](2026-10-18-e12-judge/e12-judge-latency.md) | 两家判断的延迟分布（按变体和上下文条数）、冷启动、排队、token 和额度、Claude 那次额外调用的原因（CLI 自动起标题）和关法、判错的例子、内存，对 s25 的建议 | 在 JP-VPS 上量的，不是 product.md 3.4 写的 Mac；额度只有上界（精度 1 个百分点），没请 owner 看账户页面 |
 
+## 2026-10-18 补做审查：Codex 代班期间的 PR
+
+`2026-10-18-codex-period-review/`，基于 `main` 的 `d187d00` 到 `c82fd22`。10-17 到 10-18 Codex 代班时合入的 #368 到 #385 只有同厂商的审查，Claude 接回后用另一家的模型补做了一遍，中级以上的发现再逐条对抗复核。report.md 是复核结论和排进哪一片，以它为准；r1 到 r7 是各份审查报告。
+
+| 报告 | 内容 | 说明 |
+|---|---|---|
+| [report](2026-10-18-codex-period-review/report.md) | 7 条中级以上发现的复核结论、严重度调整、放进哪一片和行数 | R4-1 与 R6-1 是同一个缺陷，复核后定为高；R3-1 的代码出自 10-10 的预热池，不是 #377 |
+| [r1-drain-reconnect](2026-10-18-codex-period-review/r1-drain-reconnect.md) | #368 子进程排空上限、#372 桌面在 daemon 崩溃后重新连接 | |
+| [r2-crash-queue](2026-10-18-codex-period-review/r2-crash-queue.md) | #369 崩溃时保存排队消息、补发暂停私聊 | 没有发现 |
+| [r3-codex-server-requests](2026-10-18-codex-period-review/r3-codex-server-requests.md) | #377 Codex 服务端请求的接线；空 `CODEX_HOME` 下预热和会话同时首启 | |
+| [r4-registration-dirs](2026-10-18-codex-period-review/r4-registration-dirs.md) | #379 注册表单写入者、#381 bot 稳定目录和账本 | |
+| [r5-registry-binding](2026-10-18-codex-period-review/r5-registry-binding.md) | #382、#383 项目表写入和目录准入 | |
+| [r6-stable-dirs-journal](2026-10-18-codex-period-review/r6-stable-dirs-journal.md) | #384 群的稳定目录、#385 建群操作记录；给 s36d1 的提醒 | |
+| [r7-product-clauses](2026-10-18-codex-period-review/r7-product-clauses.md) | #381 对 product.md 的六处改动逐处分类 | R7-1、R7-2 复核后降为低，处理写进 s27、s56a 的开工要点 |
+
 ## 补充
 
 codex-desktop 报告写完以后，对照 openai/codex 源码又核实了一次。`codex mcp list` 里的 `cua_repl` 来自内置插件 `unified-computer-use@openai-bundled`，就是原生 Computer Use；显示为 disabled 的 `computer-use` 是旧通道。经 Paseo 调用时，Mac 锁屏会失败（getpaseo/paseo#3346），`full-access` 模式会自动批准打开应用。process 报告里的相关说法和这里一致。
