@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { catalogBackendIds } from '../agent/catalog';
@@ -5,12 +6,15 @@ import { BackendNotInstalledError } from '../agent/backend-loader';
 import { ProviderProcessCleanupError } from '../agent/owned-process';
 import { JudgeCallError, type AgentBackend, type JudgeCallOutput } from '../agent/types';
 import { groupBackendId } from '../config/execution';
+import { getSecret } from '../config/keystore';
 import { paths } from '../config/paths';
 import { log } from '../core/logger';
 import { createCooldown } from './cooldown';
+import { decisionBody, decisionProvider, readDecision, type DecisionProvider } from './decision';
 import { parseStoredJudge, resolveJudgeModel } from './model';
 import { judgeAnchors, judgeSchema, judgeSystem, parseVerdict, renderJudgeInput } from './prompt';
 import { readSmartPrompt, SmartPromptError } from './smart-file';
+import { DecisionError } from './typesafe';
 import type { JudgeDecision, JudgeErrorKind, JudgeRequest, JudgeResult } from './types';
 
 /** From the call to the result, queueing and a cold start included (design 3.2). A mention always
@@ -24,7 +28,7 @@ export const JUDGE_SETTLE_MS = 15_000;
 export const MODEL_LIST_RETRY_MS = 5 * 60_000;
 /** Per backend, per bot process. A Claude judgement runs a CLI of about 340 MB (e12: median 338 MB,
  * at most about 380 MB), so two are about 0.7 GB; four Codex judgements run truly in parallel on one
- * judge process. */
+ * judge process. A decision model's provider has its own (decision.ts). */
 const LIMITS: Record<string, { running: number; queued: number }> = {
   'codex-appserver': { running: 4, queued: 16 },
   'claude-agent': { running: 2, queued: 16 },
@@ -49,7 +53,16 @@ export interface JudgeDeps {
   now?: () => number;
   /** s28 counts judgements per day (s25's hourly budget is taken before the call: bot/smart-intake.ts) */
   onResult?: (req: JudgeRequest, result: JudgeResult) => void;
+  /** A decision model's key, read before each of its judgements (the keystore, so a key set or changed by any
+   * means is used at once). */
+  getSecret?: (id: string) => Promise<string | undefined>;
+  /** a decision model's HTTP calls */
+  fetch?: typeof fetch;
 }
+
+/** A key as an HTTP header can carry it: printable ASCII, no space. Anything else would make fetch throw an error
+ * that quotes the header, key and all. */
+const KEY_SHAPE = /^[\x21-\x7e]+$/;
 
 /** Ends a judgement early; the reason of the shared AbortController. */
 class JudgeAbort extends Error {
@@ -124,6 +137,7 @@ function detailOf(error: unknown): string | undefined {
 export function createJudge(deps: JudgeDeps): Judge {
   const now = deps.now ?? Date.now;
   const readPrompt = deps.readPrompt ?? readSmartPrompt;
+  const readSecret = deps.getSecret ?? getSecret;
   let cwdOnce: Promise<string> | undefined;
   const cwd = deps.cwd ?? (() => {
     const dir = join(paths.appDir, 'judge');
@@ -145,10 +159,25 @@ export function createJudge(deps: JudgeDeps): Judge {
   let closed = false;
   let shutdownPromise: Promise<void> | undefined;
 
-  function limiterFor(id: string): Limiter {
+  function limiterFor(id: string, limit = LIMITS[id] ?? OTHER_LIMIT): Limiter {
     let limiter = limiters.get(id);
-    if (!limiter) limiters.set(id, limiter = new Limiter(LIMITS[id] ?? OTHER_LIMIT));
+    if (!limiter) limiters.set(id, limiter = new Limiter(limit));
     return limiter;
+  }
+
+  /** A decision model's key; fails as `key` without one, so nothing is sent, and as `failed` when the keystore cannot
+   * be read. Neither error carries any of the keystore's own words. */
+  async function readKey(provider: DecisionProvider): Promise<string> {
+    let key: string | undefined;
+    try {
+      key = await readSecret(provider.keyId);
+    } catch (error) {
+      log.warn('judge', 'keystore-unreadable', { provider: provider.id, code: (error as { code?: unknown } | undefined)?.code ?? (error as Error | undefined)?.name });
+      throw new JudgeFail('failed', '密钥库读不了');
+    }
+    if (!key) throw new JudgeFail('key', `没填 ${provider.displayName} 的 key`);
+    if (!KEY_SHAPE.test(key)) throw new JudgeFail('key', `${provider.displayName} 的 key 不是一串可见字符，重新填一次`);
+    return key;
   }
 
   /** One background `listModels()` per backend at a time, never awaited by a judgement. When it
@@ -228,8 +257,9 @@ export function createJudge(deps: JudgeDeps): Judge {
     const finish = (result: JudgeResult, extra: Record<string, unknown> = {}): JudgeResult => {
       const common = { ...fields, backend: result.backend, model: result.model, effort: result.effort, provider: result.provider, modelSource: result.modelSource, promptSource: result.promptSource, ms: result.ms, queueMs, ...extra };
       if (result.error) {
-        // the caller giving up and shutdown are not faults: info, so a shutdown does not fill the terminal with warnings
-        const quiet = result.error.kind === 'aborted' || result.error.kind === 'closed';
+        // the caller giving up and shutdown are not faults: info, so a shutdown does not fill the terminal with warnings;
+        // nor is a decision model chosen before its key is filled in (owner: choose first, fill in later), each message
+        const quiet = result.error.kind === 'aborted' || result.error.kind === 'closed' || result.error.kind === 'key';
         log[quiet ? 'info' : 'warn']('judge', 'failed', { ...common, kind: result.error.kind, detail: result.error.detail });
       }
       else log.info('judge', 'verdict', { ...common, decision: result.decision });
@@ -242,7 +272,7 @@ export function createJudge(deps: JudgeDeps): Judge {
     };
     const fail = (error: unknown): JudgeResult => {
       const kind = kindOf(error);
-      const detail = kind === 'format' ? '模型没按格式回答' : detailOf(error);
+      const detail = kind === 'format' ? `${base.provider ? '决策' : ''}模型没按格式回答` : detailOf(error);
       return finish({ decision: fallback(req.variant, kind), reason: '', error: { kind, ...(detail ? { detail } : {}) }, ...base, ms: now() - started });
     };
 
@@ -268,59 +298,93 @@ export function createJudge(deps: JudgeDeps): Judge {
         ...base, backend: backend.id,
         ...resolveJudgeModel(backend.id, { group: storedJudge(req.group.judge, req.group.chatId), bot: storedJudge(req.botJudge, 'bot') }, models),
       };
-      // s23f calls decision models. Until then one fails like a decision model without its key: no
-      // quiet switch to the subscription's small model (product.md 3.4).
-      if (base.provider) throw new JudgeFail('unavailable', `这个版本还不能用决策模型判断（${base.provider}）`);
-      // a decision model needs no backend model list
-      if (backend.peekModels && !models) fetchModels(backend);
-
-      // Steps 3 to 6 race the shared controller: a stuck file read, queue or backend still returns
-      // on time. The backend call keeps running and cleans up on its own; its slot waits for that.
-      const work = (async (): Promise<JudgeCallOutput> => {
-        const prompt = await readPrompt(req.appId, req.group.chatId);
-        base = { ...base, promptSource: prompt.source };
-        if (!backend.judge) throw new JudgeFail('unavailable', `${backend.displayName} 不支持判断`);
-        const cooling = cooldown.check(backend.id, base.model);
+      /** Steps 4 to 6, for a backend or a decision model's provider (`id`): the cooldown, a slot, the cooldown
+       * again (a judgement that ran while this one queued may have just started one), the call. The call keeps
+       * running past an abort and cleans up on its own; its slot waits for that. */
+      const inSlot = async <T>(id: string, limit: { running: number; queued: number } | undefined, tag: string | undefined, start: () => Promise<T>): Promise<T> => {
+        const { model } = base;
+        const cooling = cooldown.check(id, model, tag);
         if (cooling) throw new JudgeFail(cooling.kind, cooling.detail);
-        const dir = await cwd();
-        const limiter = limiterFor(backend.id);
+        const limiter = limiterFor(id, limit);
         const queuedAt = now();
         await limiter.acquire(ctl.signal);
         queueMs = now() - queuedAt;
-        let call: Promise<JudgeCallOutput>;
         if (ctl.signal.aborted) {
           // granted in the same tick as the abort: hand the slot straight back
           limiter.release();
           throw ctl.signal.reason;
         }
-        // a judgement that ran while this one queued may have just started a cooldown
-        const cooledWhileQueued = cooldown.check(backend.id, base.model);
+        const cooledWhileQueued = cooldown.check(id, model, tag);
         if (cooledWhileQueued) {
           limiter.release();
           throw new JudgeFail(cooledWhileQueued.kind, cooledWhileQueued.detail);
         }
+        let call: Promise<T>;
+        const sentAt = now();
         try {
-          call = backend.judge({
-            system: judgeSystem(prompt.text, req.variant),
-            input: renderJudgeInput(req),
-            model: base.model,
-            ...(base.effort ? { effort: base.effort } : {}),
-            schema: judgeSchema(req.variant),
-            cwd: dir,
-            signal: ctl.signal,
-          });
+          call = start();
         } catch (error) {
           call = Promise.reject(error);
         }
-        const { model } = base;
         call.catch((error: unknown) => {
-          cooldown.note(backend.id, model, error);
+          cooldown.note(id, model, error, tag);
+          // status and error type only: the service's body may echo the group messages (v1-plan s23f 做法（调用）)
+          if (error instanceof DecisionError) log.warn('judge', 'decision-error', { ...fields, provider: id, model, kind: error.kind, ...error.info, coolMs: error.coolMs, ms: now() - sentAt });
           // The result already says timeout, aborted or closed; a process the call could not clean up
           // (it needed SIGKILL, pipes stayed open, its exit was never confirmed) would go unreported.
-          if (ctl.signal.aborted && error instanceof ProviderProcessCleanupError) log.fail('judge', error, { phase: 'abandoned-call', backend: backend.id });
+          if (ctl.signal.aborted && error instanceof ProviderProcessCleanupError) log.fail('judge', error, { phase: 'abandoned-call', backend: id });
         });
-        releaseWhenSettled(limiter, call, ctl.signal, backend.id);
+        releaseWhenSettled(limiter, call, ctl.signal, id);
         return call;
+      };
+
+      if (base.provider) {
+        // A provider this version does not know (a newer vonvon wrote the setting): no quiet switch to the
+        // subscription's small model (product.md 3.4). A decision model needs no backend model list.
+        const provider = decisionProvider(base.provider);
+        if (!provider) throw new JudgeFail('unavailable', `这个版本不认识决策模型 ${base.provider.slice(0, 40)}`);
+        let sent: ReturnType<typeof decisionBody> | undefined;
+        const work = (async () => {
+          const prompt = await readPrompt(req.appId, req.group.chatId);
+          base = { ...base, promptSource: prompt.source };
+          const key = await readKey(provider);
+          const body = sent = decisionBody(req, prompt.text, base.model);
+          // a cooldown holds for the key it was noted with only (cooldown.ts); the tag never leaves this process
+          const tag = createHash('sha256').update(key).digest('hex').slice(0, 16);
+          return inSlot(provider.id, provider.limit, tag, () => provider.call(body, key, ctl.signal, deps.fetch));
+        })();
+        work.catch(() => undefined);
+        const reply = await Promise.race([work, aborted]);
+        const answer = readDecision(sent!, req.variant, provider.label(base.model), reply.body);
+        if ('why' in answer) {
+          log.info('judge', 'decision-bad-answer', { ...fields, provider: provider.id, why: answer.why, requestId: reply.requestId });
+          throw new JudgeFail('format', '决策模型没按格式回答');
+        }
+        for (const why of answer.notes) log.info('judge', 'decision-note', { ...fields, why });
+        const anchor = answer.anchor ? judgeAnchors(req)[answer.anchor] : undefined;
+        return finish({ decision: answer.decision, reason: answer.reason, confidence: answer.confidence, ...(anchor ? { anchor } : {}), ...base, ms: now() - started }, {
+          confidence: answer.confidence, providerModel: answer.providerModel, requestId: reply.requestId,
+          inputTokens: answer.inputTokens, outputTokens: answer.outputTokens, anchor: anchor?.slice(-6),
+        });
+      }
+      if (backend.peekModels && !models) fetchModels(backend);
+
+      // Steps 3 to 6 race the shared controller: a stuck file read, queue or backend still returns
+      // on time.
+      const work = (async (): Promise<JudgeCallOutput> => {
+        const prompt = await readPrompt(req.appId, req.group.chatId);
+        base = { ...base, promptSource: prompt.source };
+        if (!backend.judge) throw new JudgeFail('unavailable', `${backend.displayName} 不支持判断`);
+        const dir = await cwd();
+        return inSlot(backend.id, undefined, undefined, () => backend.judge!({
+          system: judgeSystem(prompt.text, req.variant),
+          input: renderJudgeInput(req),
+          model: base.model,
+          ...(base.effort ? { effort: base.effort } : {}),
+          schema: judgeSchema(req.variant),
+          cwd: dir,
+          signal: ctl.signal,
+        }));
       })();
       work.catch(() => undefined);
       const output = await Promise.race([work, aborted]);
