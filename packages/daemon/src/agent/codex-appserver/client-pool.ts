@@ -60,21 +60,17 @@ let accepting = true;
 /** How long one first start holds the gate before the next may try anyway. */
 export const FIRST_START_HOLD_MS = CONNECT_TIMEOUT_MS;
 
-/** Per CODEX_HOME and codex build: `ready` once an app-server there answered `initialize`, else the
- * turn of the one connecting now. */
-const firstStarts = new Map<string, 'ready' | Promise<void>>();
-let poolClosed: { promise: Promise<never>; reject: (error: Error) => void } | undefined;
-
-function closedPool(): Promise<never> {
-  if (!accepting) return Promise.reject(new Error('Codex client pool is closed'));
-  if (!poolClosed) {
-    let reject!: (error: Error) => void;
-    const promise = new Promise<never>((_, fail) => { reject = fail; });
-    promise.catch(() => undefined);
-    poolClosed = { promise, reject };
-  }
-  return poolClosed.promise;
+/** One process's first start under a key. `ended` settles when it connects or fails, after
+ * {@link FIRST_START_HOLD_MS}, or at shutdown, so a wait on it never outlives the turn (review S3). */
+interface FirstStart {
+  readonly ended: Promise<void>;
+  end(): void;
 }
+
+/** Per CODEX_HOME and codex build: `ready` once an app-server there answered `initialize`, else the
+ * first start under way. The data directory is not looked at: after each daemon start and each codex
+ * upgrade, an already initialized CODEX_HOME also waits for one `initialize` (review F2). */
+const firstStarts = new Map<string, 'ready' | FirstStart>();
 
 /**
  * Connects an app-server, one at a time until one has answered `initialize` under this CODEX_HOME.
@@ -88,25 +84,38 @@ export async function connectGated(client: Pick<AppServerClient, 'connect'>, bin
   const key = `${process.env.CODEX_HOME || join(homedir(), '.codex')}\n${binFingerprint(bin)}`;
   for (let gate = firstStarts.get(key); gate !== undefined; gate = firstStarts.get(key)) {
     if (gate === 'ready') return client.connect();
-    await Promise.race([gate, closedPool()]);
+    requireOpen();
+    await gate.ended;
+    requireOpen();
   }
-  let letGo!: () => void;
-  const turn = new Promise<void>(resolve => {
-    letGo = () => {
+  let resolveEnded!: () => void;
+  const turn: FirstStart = {
+    ended: new Promise<void>(resolve => { resolveEnded = resolve; }),
+    end: () => {
       if (firstStarts.get(key) === turn) firstStarts.delete(key);
-      resolve();
-    };
-  });
+      resolveEnded();
+    },
+  };
   firstStarts.set(key, turn);
-  const timer = setTimeout(letGo, holdMs);
+  const timer = setTimeout(turn.end, holdMs);
   timer.unref?.();
   try {
     await client.connect();
     firstStarts.set(key, 'ready');
   } finally {
     clearTimeout(timer);
-    letGo();
+    turn.end();
   }
+}
+
+/**
+ * {@link connectGated} with `ms` on this process's own connect only. The wait at the gate is bounded
+ * by the gate itself (each first start ahead holds it at most {@link FIRST_START_HOLD_MS}) and by
+ * shutdown. With the wait inside the deadline, a first start ahead that took nearly 15 s timed out a
+ * judge, utility or prewarm process before it had even tried (review F1).
+ */
+export function connectGatedWithin(client: Pick<AppServerClient, 'connect'>, bin: string, ms: number, label: string): Promise<void> {
+  return connectGated({ connect: () => withDeadline(client.connect(), ms, `${label} connect`) }, bin);
 }
 
 /** Registers a resident process so {@link shutdownResidentClients} closes it (the judge process, s23b, uses it too). */
@@ -161,7 +170,7 @@ async function acquireUtility(bin: string): Promise<AppServerClient> {
     const client = new AppServerClient({ bin, cwd: NEUTRAL_CWD, clientName: 'feishu-codex-bridge-utility' });
     trackResident(client);
     try {
-      await withDeadline(connectGated(client, bin), CONNECT_TIMEOUT_MS, 'utility connect');
+      await connectGatedWithin(client, bin, CONNECT_TIMEOUT_MS, 'utility');
       requireOpen();
     } catch (err) {
       closeDiscarded(client);
@@ -288,7 +297,7 @@ export function refillWarmPool(): Promise<void> {
     const client = new AppServerClient({ bin, cwd: NEUTRAL_CWD });
     trackResident(client);
     try {
-      await withDeadline(connectGated(client, bin), CONNECT_TIMEOUT_MS, 'prewarm connect');
+      await connectGatedWithin(client, bin, CONNECT_TIMEOUT_MS, 'prewarm');
       requireOpen();
       await withDeadline(
         client.request('thread/start', {
@@ -319,7 +328,8 @@ export function refillWarmPool(): Promise<void> {
 export function shutdownResidentClients(): Promise<void> {
   if (closing) return closing;
   accepting = false;
-  poolClosed?.reject(new Error('Codex client pool is closed'));
+  // the processes waiting at a first-start gate wake and see the pool closed
+  for (const gate of [...firstStarts.values()]) if (gate !== 'ready') gate.end();
   const targets = [...residents];
   utility = null;
   warm = null;

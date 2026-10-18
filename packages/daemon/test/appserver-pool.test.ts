@@ -3,6 +3,7 @@ let AppServerClient: typeof import('../src/agent/codex-appserver/app-server-clie
 import { appendFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import v8 from 'node:v8';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 let CodexAppServerBackend: typeof import('../src/agent/codex-appserver/backend').CodexAppServerBackend;
 import { writeNodeExecutable } from './helpers/node-executable';
@@ -11,13 +12,14 @@ let shutdownResidentClients: typeof import('../src/agent/codex-appserver/client-
 let takeWarmClient: typeof import('../src/agent/codex-appserver/client-pool').takeWarmClient;
 let utilityRequest: typeof import('../src/agent/codex-appserver/client-pool').utilityRequest;
 let connectGated: typeof import('../src/agent/codex-appserver/client-pool').connectGated;
+let CONNECT_TIMEOUT_MS: number;
 
 beforeEach(async () => {
   vi.resetModules();
   ({ UnsentRequestError } = await import('../src/agent/types'));
   ({ AppServerClient } = await import('../src/agent/codex-appserver/app-server-client'));
   ({ CodexAppServerBackend } = await import('../src/agent/codex-appserver/backend'));
-  ({ connectGated, refillWarmPool, shutdownResidentClients, takeWarmClient, utilityRequest } = await import('../src/agent/codex-appserver/client-pool'));
+  ({ CONNECT_TIMEOUT_MS, connectGated, refillWarmPool, shutdownResidentClients, takeWarmClient, utilityRequest } = await import('../src/agent/codex-appserver/client-pool'));
 });
 
 // M-2（research/08 probe 思路的单测化）：utility client 复用/出错即重建 + 容量 1
@@ -311,7 +313,8 @@ describe('首启闸（R3-1）：同一个 CODEX_HOME 第一个进程回 initiali
 
   it('关闭时在等的马上放开（reject），不再连', async () => {
     const [a, b] = [fakeClient(), fakeClient()];
-    void connectGated(a, 'codex').catch(() => undefined);
+    // held far longer than the test may run: only shutdown can let b go
+    void connectGated(a, 'codex', 60_000).catch(() => undefined);
     const waiting = connectGated(b, 'codex');
     await tick();
     await shutdownResidentClients();
@@ -326,5 +329,49 @@ describe('首启闸（R3-1）：同一个 CODEX_HOME 第一个进程回 initiali
     await tick();
     expect(b.connect).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(b.connect).toHaveBeenCalledTimes(1), { timeout: 2000 });
+  });
+
+  it('等闸的时间不算进 utility 和预热自己的连接时限：首启快到时限才连上，等着的照样连上（审查 F1）', async () => {
+    const { bin } = makeFakeCodex();
+    // No real process: connect takes 500 ms of fake time, requests answer at once.
+    const connect = vi.spyOn(AppServerClient.prototype, 'connect')
+      .mockImplementation(() => new Promise(resolve => setTimeout(resolve, 500)));
+    vi.spyOn(AppServerClient.prototype, 'request').mockResolvedValue({ data: [] });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const holder = fakeClient();
+      void connectGated(holder, bin);
+      const listed = utilityRequest('model/list');
+      void listed.catch(() => undefined);
+      const warmed = refillWarmPool();
+      await vi.advanceTimersByTimeAsync(CONNECT_TIMEOUT_MS - 100);
+      expect(connect).not.toHaveBeenCalled();
+      holder.ok();
+      // inside the old deadline the waiters' own connects would end past 15 s from their start
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(listed).resolves.toEqual({ data: [] });
+      await warmed;
+      expect(connect).toHaveBeenCalledTimes(2);
+      expect(takeWarmClient(bin)).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('等闸只挂在这一轮上，不挂在活到关机的 Promise 上：等过 1,000 次，用过的 Promise 都能回收（审查 S3）', async () => {
+    // plain objects: vitest keeps every vi.fn and the promises it returned
+    const waitOnce = async (): Promise<void> => {
+      let fail!: (error: Error) => void;
+      const first = connectGated({ connect: () => new Promise<void>((_, reject) => { fail = reject; }) }, 'codex');
+      const waiter = connectGated({ connect: () => Promise.reject(new Error('exit 1')) }, 'codex');
+      fail(new Error('exit 1')); // the waiter then tries, fails too, and the gate is empty again
+      await Promise.allSettled([first, waiter]);
+    };
+    await waitOnce();
+    const live = (): number => v8.queryObjects(Promise) as number; // after a full GC
+    const before = live();
+    for (let i = 0; i < 1000; i++) await waitOnce();
+    expect(live() - before).toBeLessThan(100);
   });
 });

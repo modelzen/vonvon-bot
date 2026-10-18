@@ -621,6 +621,30 @@ describe('Codex 判断进程：空闲、换版本、关机', () => {
     await waitForProcess(() => expect(alive(oldPid!)).toBe(false));
   });
 
+  it('等新进程起来的那条也算条数和在飞：它还在跑时新进程做满换新，新进程等它做完才关（审查 S1）', async () => {
+    proc.configureJudgeProcess({ recycleAfter: 2 });
+    await judge(call());
+    const release = fake.hold('turn/start', 'held');
+    // ID1 fills the old process, ID2 starts the new one, ID3 waits for it and stays in flight there
+    const a = judge(call('ok', { tag: 'ID1' }));
+    const b = judge(call('ok', { tag: 'ID2' }));
+    const c = judge(call('held', { tag: 'ID3' }));
+    void c.catch(() => undefined);
+    expect((await a).cold).toBe(false);
+    expect((await b).cold).toBe(true);
+    await waitForProcess(() => expect(fake.requests('turn/start')).toHaveLength(4));
+    const [oldPid, newPid] = fake.pids();
+    expect(fake.requests('turn/start').map(r => r.pid)).toEqual([oldPid, oldPid, newPid, newPid]);
+    // ID2 and ID3 filled the new process: the next judgement starts a third, the new one keeps ID3
+    expect((await judge(call())).cold).toBe(true);
+    expect((await judge(call())).cold).toBe(false);
+    expect(alive(newPid!)).toBe(true);
+    release();
+    expect((await c).text).toBe('final:MODE:held ID3');
+    await waitForProcess(() => expect(alive(newPid!)).toBe(false));
+    expect(fake.pids()).toHaveLength(3);
+  });
+
   it('shutdownResidentClients 关掉判断进程，在跑的马上结束，之后再起被拒', async () => {
     const running = failure(judge(call('hang')));
     await waitForProcess(() => expect(fake.requests('turn/start')).toHaveLength(1));
@@ -657,6 +681,31 @@ describe('Codex 首启闸（R3-1）', () => {
     try {
       expect((await judged).text).toBe('final:MODE:ok');
       // the session, the judge process and the prewarm refill the session's cold start asked for
+      await waitForProcess(() => expect(fake.pids()).toHaveLength(3));
+      await pool.refillWarmPool();
+    } finally {
+      await thread.close();
+    }
+  });
+
+  it('等闸不算进判断进程的连接时限：会话首启卡得比 connectMs 久，判断等它连上再起，不报起不来、不退避（审查 F1）', async () => {
+    // connectMs still leaves a cold Node process time to start on the macOS CI runner
+    proc.configureJudgeProcess({ connectMs: 1500 });
+    const release = fake.hold('initialize');
+    const session = new CodexAppServerBackend().startThread({ cwd: fake.cwd });
+    void session.catch(() => undefined);
+    let settled = false;
+    const judged = judge(call());
+    void judged.then(() => { settled = true; }, () => { settled = true; });
+    await waitForProcess(() => expect(fake.requests('initialize')).toHaveLength(1));
+    await sleep(1800); // past connectMs while the session's first start holds the gate
+    expect(settled).toBe(false);
+    expect(fake.pids()).toHaveLength(1);
+    release();
+    const thread = await session;
+    try {
+      expect(await judged).toMatchObject({ text: 'final:MODE:ok', cold: true });
+      expect((await judge(call())).cold).toBe(false);
       await waitForProcess(() => expect(fake.pids()).toHaveLength(3));
       await pool.refillWarmPool();
     } finally {

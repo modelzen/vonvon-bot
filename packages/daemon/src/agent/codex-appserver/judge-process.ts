@@ -2,7 +2,7 @@ import { log } from '../../core/logger';
 import { codexErrorKind, errorKindFromText } from '../error-kind';
 import { JudgeCallError, type JudgeCall, type JudgeCallOutput } from '../types';
 import { AppServerClient, JsonRpcError } from './app-server-client';
-import { binFingerprint, closeDiscarded, connectGated, CONNECT_TIMEOUT_MS, poolAccepting, trackResident, withDeadline } from './client-pool';
+import { binFingerprint, closeDiscarded, connectGatedWithin, CONNECT_TIMEOUT_MS, poolAccepting, trackResident } from './client-pool';
 import { codexVersionAsync, resolveCodexBin } from './locate';
 import type { ServerNotification, TurnStartResponse } from './protocol';
 import type { CodexErrorInfo } from './protocol/generated/v2/CodexErrorInfo';
@@ -50,7 +50,7 @@ export const TOOL_OFF_KEYS = {
 
 export interface JudgeProcessOptions {
   stuckMs: number;
-  /** spawn to `initialize` reply */
+  /** spawn to `initialize` reply; the wait at the first-start gate before the spawn is not counted */
   connectMs: number;
   idleMs: number;
   /** judgements a process takes before it retires */
@@ -305,7 +305,7 @@ async function create(bin: string, cwd: string): Promise<Slot> {
   const client = new AppServerClient({ bin, cwd, clientName: 'vonvon-judge' });
   trackResident(client);
   try {
-    await withDeadline(connectGated(client, bin), opts.connectMs, 'judge connect');
+    await connectGatedWithin(client, bin, opts.connectMs, 'judge');
     if (!poolAccepting()) throw closedError();
   } catch (error) {
     // A connect that loses to shutdown closes itself here.
