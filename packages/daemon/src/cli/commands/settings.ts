@@ -8,7 +8,10 @@ import {
 } from '../daemon-client';
 
 // Structural views of the protocol's zod objects: the daemon's own zod is v4, protocol's is v3 (see daemon-client).
-type Issue = { code: string; path: readonly (string | number)[]; message: string; keys?: readonly string[]; options?: readonly unknown[]; expected?: unknown; received?: unknown };
+type Issue = {
+  code: string; path: readonly (string | number)[]; message: string; keys?: readonly string[]; options?: readonly unknown[]; expected?: unknown; received?: unknown;
+  type?: string; minimum?: unknown; maximum?: unknown;
+};
 type Check = { safeParse(value: unknown): { success: true } | { success: false; error: { issues: readonly Issue[] } } };
 type SectionSchema = { shape: Record<string, unknown>; partial(): { strict(): Check } };
 type SectionView = { stored: unknown; effective: unknown; revision: string; access: { kind: 'writable' } | { kind: 'readonly'; message: string } };
@@ -48,6 +51,19 @@ function explain(section: string, schema: SectionSchema, issue: Issue): string {
       const expected = String(issue.expected);
       // A non-string for an enum reports the options as the expected type: 'off' | 'running' | 'always'.
       return `${where} ${TYPES[expected] ?? `只能是 ${expected.split(' | ').map(option => option.replace(/^'(.*)'$/, '$1')).join('、')}`}`;
+    }
+    // Lengths of text (after trimming) and lists; numbers carry no bounds in the settings schemas.
+    case 'too_small': {
+      const least = Number(issue.minimum);
+      if (issue.type === 'string') return least <= 1 ? `${where} 不能为空` : `${where} 至少要 ${least} 个字`;
+      if (issue.type === 'array') return `${where} 至少要 ${least} 项`;
+      return `${where}：${issue.message}`;
+    }
+    case 'too_big': {
+      const most = Number(issue.maximum);
+      if (issue.type === 'string') return `${where} 最多 ${most} 个字`;
+      if (issue.type === 'array') return `${where} 最多 ${most} 项`;
+      return `${where}：${issue.message}`;
     }
     default: return `${where}：${issue.message}`;
   }

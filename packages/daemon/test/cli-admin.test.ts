@@ -378,6 +378,9 @@ it('judge: set takes the selection JSON, get prints a row per backend and the pr
   expect(parseAssignments('project', ['judge.selection={"kind":"default"}']).patch).toEqual({ selection: { kind: 'default' } });
   expect(parseAssignments('agent', ['judge.selection={"kind":"decision","provider":"typesafe","model":"jev-latest"}']).patch).toEqual({ selection: { kind: 'decision', provider: 'typesafe', model: 'jev-latest' } });
   expect(() => parseAssignments('agent', ['judge.selection={"kind":"oracle","model":"x"}'])).toThrow('judge.selection 的 kind 只能是 default 或 llm 或 decision');
+  expect(() => parseAssignments('agent', ['judge.selection={"kind":"llm","model":"  "}'])).toThrow('judge.selection.model 不能为空');
+  expect(() => parseAssignments('agent', [`judge.selection={"kind":"decision","provider":"typesafe","model":"${'m'.repeat(1001)}"}`])).toThrow('judge.selection.model 最多 1000 个字');
+  expect(() => parseAssignments('agent', [`access.allowedChats=${JSON.stringify(Array.from({ length: 1001 }, (_, i) => `oc_${i}`))}`])).toThrow('access.allowedChats 最多 1000 项');
   expect(() => parseAssignments('session', ['judge.selection={"kind":"default"}'])).toThrow('没有 judge 这一节');
 
   const prompt = { source: 'default', path: '/d/bots/cli_a/SMART.md', text: '默认提示词全文', formatLines: { main: '格式A', mentioned: '格式B', topic: '格式C' }, inputExample: '【群】产品讨论', backendNote: 'Codex 的说明', maxLength: 8000 };
