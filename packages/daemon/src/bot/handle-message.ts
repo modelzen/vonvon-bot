@@ -7188,11 +7188,11 @@ export function createOrchestrator(
   };
 
   const admittedCollaboration = admit(collaboration);
-  /** s36d1: a creation refused at shutdown says nothing was created, where admit's refusal would read as a result
-   * not known. The drain waits for one in flight, but how it ended is its caller's answer, not a cleanup failure. */
+  /** s36d1: creations skip admit, whose shutdown refusal would read as a result not known; serialCreate refuses
+   * them instead, saying nothing was created. The drain waits for one in flight, but how it ended is its caller's
+   * answer, not a cleanup failure. */
   function collaborate(request: CollaborationRequest): Promise<unknown> {
     if (request.action !== 'createProject') return admittedCollaboration(request);
-    if (shuttingDown) return Promise.reject(new AdminWriteError(CREATION_STOPPING));
     const result = collaboration(request);
     void trackTask(result.catch(() => undefined));
     return result;
