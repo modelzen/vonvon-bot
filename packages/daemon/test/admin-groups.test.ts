@@ -12,6 +12,7 @@ import { createProject, joinExistingGroup as joinOwnedGroup, type JoinGroupInput
 import type { RegistryLocation } from '../src/project/registry';
 import { paths } from '../src/config/paths';
 import { fakeLark } from './helpers/fake-lark-http';
+import { effectiveDefaultBackend } from '../src/agent';
 
 vi.mock('../src/config/paths', async () => {
   const { mkdtempSync, realpathSync } = await import('node:fs');
@@ -327,7 +328,9 @@ describe('desktop group commands in the owning bot', () => {
     const owned = await createGroupExecutor(channel)({ kind: 'bindGroup', input: { chatId: 'oc_owned', projectName: 'Owned', backend: 'codex-appserver', kind: 'multi' } });
     expect(owned).toMatchObject({ origin: 'created', mode: 'full', network: false });
     expect(owned).not.toHaveProperty('addedBy');
-    expect(await joinExistingGroup(channel, { name: 'Not owned', chatId: 'oc_not_owned', kind: 'multi', addedBy: 'ou_admin' })).toMatchObject({ origin: 'joined', mode: 'qa', addedBy: 'ou_admin' });
+    // A bind with no backend picked writes the one it runs on, so it never follows a later default.
+    expect(await joinExistingGroup(channel, { name: 'Not owned', chatId: 'oc_not_owned', kind: 'multi', addedBy: 'ou_admin' })).toMatchObject({ origin: 'joined', mode: 'qa', addedBy: 'ou_admin',
+      backend: await effectiveDefaultBackend() });
     owner.mockRejectedValueOnce(new Error('offline'));
     expect(await joinExistingGroup(channel, { name: 'Unknown owner', chatId: 'oc_unknown_owner', kind: 'multi' })).toMatchObject({ origin: 'joined', mode: 'qa' });
     expect(owner).toHaveBeenCalledTimes(3);

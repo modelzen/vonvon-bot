@@ -61,8 +61,9 @@ export interface CreateProjectInput {
   noMention?: boolean;
   /** permission tier (default 'full' for self-created projects). */
   mode?: PermissionMode;
-  /** agent backend chosen at creation (fixed afterwards — no switching). Left out → DEFAULT_BACKEND_ID (codex),
-   *  written into the row so the group never follows a later default (s36d1). */
+  /** agent backend chosen at creation (fixed afterwards — no switching). Left out (the DM form shows no picker
+   *  for a single backend) → the effective default the runtime used to fall back to, written into the row so the
+   *  group never follows a later default (s36d1). */
   backend?: string;
   /** allow the sandboxed shell to reach the network (default false). */
   network?: boolean;
@@ -160,11 +161,12 @@ export async function createProject(channel: Pick<LarkChannel, 'rawClient'>, req
   if ((await listProjectsIn(location.file)).some(project => project.name === name)) throw new Error(`项目名「${name}」已存在，换个名或用 /projects 看已有的`);
   const mode = input.mode ?? 'full'; // 创建默认「完全访问」档
   assertBackendUsable(input.backend, mode);
+  const backend = input.backend || await effectiveDefaultBackend().catch(() => DEFAULT_BACKEND_ID);
   const existingPath = input.existingPath ? resolve(input.existingPath) : undefined;
   const explicit = existingPath ? await admitExistingDirectory(existingPath, location.dataRoot) : undefined;
   const root = existingPath ? '' : resolveProjectsRootDir(input.projectsRootDir);
   await assertBotIdentity(input.bot);
-  const row = { createdAt: Date.now(), origin: 'created' as const, mode, backend: input.backend || DEFAULT_BACKEND_ID,
+  const row = { createdAt: Date.now(), origin: 'created' as const, mode, backend,
     network: input.network ?? false, creationRequestId: input.requestId,
     ...(input.requestSignature === undefined ? {} : { creationRequestSignature: input.requestSignature }) };
   const noMention = input.noMention ?? bindNoMention(input.kind);
@@ -257,7 +259,7 @@ export async function joinExistingGroup(channel: LarkChannel, request: JoinGroup
       assertBackendUsable(input.backend, mode);
       const workspace = existingPath ? await admitExistingDirectory(existingPath, location.dataRoot) : await scope.prepareDefault();
       return { ...workspace, createdAt: Date.now(), ...(owned ? { origin: 'created' } : { origin: 'joined', addedBy: input.addedBy }),
-        mode, backend: input.backend || undefined, network: input.network ?? false };
+        mode, backend: input.backend || defaultBackend, network: input.network ?? false };
     }, location);
     await retireBoundPendingGroup(pendingGroupsFile(location.file), binding.project.chatId);
     return binding;

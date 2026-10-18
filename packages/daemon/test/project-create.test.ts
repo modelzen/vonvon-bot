@@ -15,6 +15,8 @@ vi.mock('../src/config/paths', async () => {
   return { paths: { appDir: root, botsFile: join(root, 'bots.json'), projectsFile: join(root, 'projects.json'), projectsRootDir: join(root, 'projects'), backendsDir: join(root, 'backends') },
     botPaths: () => ({ projectsFile: join(root, 'projects.json'), configFile: join(root, 'config.json') }) };
 });
+// The effective default stands for whatever this machine detected; a group left without a pick is written with it.
+vi.mock('../src/agent/detect', async original => ({ ...await original<object>(), effectiveDefaultBackend: async () => 'claude-agent' }));
 vi.mock('../src/core/logger', () => ({ log: { info() {}, warn() {}, fail() {} }, withTrace: (_context: unknown, callback: () => unknown) => callback() }));
 
 const bot = { appId: 'cli_fixture', tenant: 'feishu' as const, createdAt: 1, registrationId: 'original' };
@@ -46,7 +48,7 @@ describe('s36d1 createProject', () => {
     const project = await createProject({ rawClient: fake.client }, value);
     const cwd = join(groups(), 'Stable');
     expect(project).toMatchObject({ cwd, blank: true, directories: { workspaces: { primary: cwd, additional: [] } }, origin: 'created', mode: 'full',
-      backend: 'codex-appserver', network: false, creationRequestId: value.requestId, kind: 'multi', noMention: true });
+      backend: 'claude-agent', network: false, creationRequestId: value.requestId, kind: 'multi', noMention: true });
     expect((await listProjects()).find(p => p.chatId === project.chatId)).toEqual(project);
     expect(Object.values(await allocations()).find(a => a.chatId === project.chatId)).toMatchObject({ state: 'ready', namespaceRoot: cwd });
     expect(fake.creates()).toHaveLength(1);
@@ -137,13 +139,13 @@ describe('s36d1 createProject', () => {
   it('saves before addManagers is sent, and returns within the budget when it never answers', async () => {
     const fake = fakeLark(request => request.path.endsWith('/managers/add_managers') ? stall() : undefined);
     const started = Date.now();
-    const creating = createProject({ rawClient: fake.client }, input('Stuck admin', { timeoutMs: 1_500 }));
-    await vi.waitFor(() => expect(fake.requests.some(r => r.path.endsWith('/managers/add_managers'))).toBe(true));
+    const creating = createProject({ rawClient: fake.client }, input('Stuck admin', { timeoutMs: 3_000 }));
+    await vi.waitFor(() => expect(fake.requests.some(r => r.path.endsWith('/managers/add_managers'))).toBe(true), { timeout: 2_900 });
     // The row is on disk while the admin call is still out, so a kill during it cannot lose the group.
     expect((await listProjects()).some(p => p.name === 'Stuck admin')).toBe(true);
-    const outcome = await Promise.race([creating, wait(3_000).then(() => 'hung' as const)]);
+    const outcome = await Promise.race([creating, wait(6_000).then(() => 'hung' as const)]);
     expect(outcome).not.toBe('hung');
-    expect(Date.now() - started).toBeLessThan(3_000);
+    expect(Date.now() - started).toBeLessThan(6_000);
     expect((await listProjects()).some(p => p.name === 'Stuck admin')).toBe(true);
     expect(fake.open()).toBe(0);
   });

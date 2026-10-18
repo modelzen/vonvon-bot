@@ -17,7 +17,8 @@ vi.mock('../src/config/paths', async () => {
     botPaths: () => ({ projectsFile: join(appDir, 'projects.json'), configFile: join(appDir, 'config.json') }) };
 });
 const fixture = vi.hoisted(() => ({ send: vi.fn(async (..._args: unknown[]) => ({ messageId: 'om_result', cardId: 'card' })) }));
-vi.mock('../src/agent', async original => ({ ...await original<object>(), createBackend: () => ({ id: 'codex-appserver', listModels: async () => [] }) }));
+// One backend: the form shows no picker, so the group gets the effective default written in.
+vi.mock('../src/agent', async original => ({ ...await original<object>(), createBackend: () => ({ id: 'codex-appserver', listModels: async () => [] }), effectiveDefaultBackend: async () => 'claude-agent' }));
 vi.mock('../src/card/managed', () => ({ sendManagedCard: fixture.send, updateManagedCard: vi.fn(async () => true) }));
 vi.mock('../src/core/logger', () => ({ log: { info() {}, warn() {}, fail() {} }, withTrace: (_context: unknown, callback: () => unknown) => callback() }));
 
@@ -55,7 +56,7 @@ it('creates from the DM in the bot\'s stable directory with a uuid of the card, 
     expect(requestId).toMatch(/^[0-9a-f]{32}$/);
     expect(fake.creates()).toMatchObject([{ params: { uuid: requestId }, data: { name: 'From DM', user_id_list: ['ou_owner'] } }]);
     expect(await getProjectByName('From DM')).toMatchObject({ cwd: join(paths.projectsRootDir, 'fixture', 'groups', 'From DM'), origin: 'created', mode: 'full',
-      backend: 'codex-appserver', creationRequestId: requestId });
+      backend: 'claude-agent', creationRequestId: requestId });
     await orchestrator.dispatcher.handle(submit('Second', 'om_form', '2'));
     await reply(2);
     expect(new Set(fake.creates().map(r => r.params?.uuid)).size).toBe(2);
