@@ -193,6 +193,14 @@ process-ci、draft 和 final 里的流程说法，凡和 `AGENTS.md` 不一致�
 | [r6-stable-dirs-journal](2026-10-18-codex-period-review/r6-stable-dirs-journal.md) | #384 群的稳定目录、#385 建群操作记录；给 s36d1 的提醒 | |
 | [r7-product-clauses](2026-10-18-codex-period-review/r7-product-clauses.md) | #381 对 product.md 的六处改动逐处分类 | R7-1、R7-2 复核后降为低，处理写进 s27、s56a 的开工要点 |
 
+## 2026-10-18 网页端打底审查
+
+`2026-10-18-ui-foundation/`，基于 `main` 的 `2e2c161`。`docs/v1-plan.md` 第 1 节"界面分三段调"第一段的只读审查：隔离的临时 daemon 加假 Bot，Playwright 在 1280 和 390 两种宽度下截了 204 个场景，四个审查者各看一个角度（视觉、极端数据、流程、样式体系和叫法），Fable 抽查源码和截图后合成。截图留在 JP-VPS 本机，不进仓库。没改代码，没改 v1-plan；u 片表等 owner 挑完再加。
+
+| 报告 | 内容 | 说明 |
+|---|---|---|
+| [report](2026-10-18-ui-foundation/report.md) | 去重后的 55 条问题（F01 到 F55）、建议的 u01 到 u10、叫法表草稿、要 owner 定的 10 件事、留给最后一轮的 | v1-plan 记着的"会话方式叫法不一样"已核对为一致；死样式的行数以删前的 CSS coverage 为准 |
+
 ## 补充
 
 codex-desktop 报告写完以后，对照 openai/codex 源码又核实了一次。`codex mcp list` 里的 `cua_repl` 来自内置插件 `unified-computer-use@openai-bundled`，就是原生 Computer Use；显示为 disabled 的 `computer-use` 是旧通道。经 Paseo 调用时，Mac 锁屏会失败（getpaseo/paseo#3346），`full-access` 模式会自动批准打开应用。process 报告里的相关说法和这里一致。
