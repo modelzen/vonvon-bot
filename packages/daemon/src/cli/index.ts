@@ -118,7 +118,7 @@ group.command('bind <groupId>').description('Bind a group (oc_…) to a folder')
 const settings = program.command('settings').description('Read and change bot, group and session settings');
 type Target = Json & { bot?: string; group?: string; session?: string };
 const scoped = (command: Command) => command.option(...BOT).option('--group <group>', 'Group id (oc_…) or project name').option('--session <threadId>', 'Session thread id').option('--json', 'Print JSON');
-scoped(settings.command('get [section]').description('Show settings, or one section')).action(async (section: string | undefined, options: Target) => {
+scoped(settings.command('get [section]').description('Show settings, or one section; `get judge` also prints the whole judge prompt')).action(async (section: string | undefined, options: Target) => {
   await (await import('./commands/settings')).runSettingsGet(section, options, io(options));
 });
 scoped(settings.command('set <section.key=value...>').description('Change fields of one section; values are JSON or plain text'))
@@ -127,7 +127,9 @@ Examples:
   vonvon settings set --group oc_xxx permission.mode=full
   vonvon settings set --group oc_xxx permission.mode=write permission.network=true
   vonvon settings set cards.showToolCalls=false
-  vonvon settings set --group oc_xxx model.selection='{"kind":"explicit","model":"gpt-5.5","effort":"medium"}'`)
+  vonvon settings set --group oc_xxx model.selection='{"kind":"explicit","model":"gpt-5.5","effort":"medium"}'
+  vonvon settings set judge.selection='{"kind":"llm","model":"gpt-6-luna","effort":"low"}'
+  vonvon settings set --group oc_xxx judge.selection='{"kind":"default"}'   # 群里去掉覆盖，用 bot 的`)
   .action(async (assignments: string[], options: Target) => {
     await (await import('./commands/settings')).runSettingsSet(assignments, options, io(options));
   });

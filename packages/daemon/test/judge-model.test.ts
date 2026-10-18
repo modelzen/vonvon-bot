@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readClaudeUserSettings, readConfiguredClaudeModel } from '../src/agent/claude-agent/configured-model';
 import type { AgentBackend, JudgeCall, ModelInfo, ReasoningEffort } from '../src/agent/types';
 import { createJudge } from '../src/judge/judge';
-import { claudeJudgeDefault, codexJudgeDefault, defaultJudgeModel, judgeEffort, parseStoredJudge, resolveJudgeModel } from '../src/judge/model';
+import { claudeJudgeDefault, codexJudgeDefault, defaultJudgeModel, fitJudgeEffort, judgeEffort, parseStoredJudge, resolveJudgeModel } from '../src/judge/model';
 import type { JudgeSelectionStored } from '../src/judge/types';
 
 const fake = vi.hoisted(() => ({ log: { info: vi.fn(), warn: vi.fn(), fail: vi.fn() } }));
@@ -99,7 +99,9 @@ afterEach(() => {
 });
 
 const IDS = ['codex-appserver', 'claude-agent'];
-const llm = (backend: string, model: string, extra: Partial<JudgeSelectionStored> = {}): JudgeSelectionStored => ({ kind: 'llm', backend, model, ...extra });
+type Llm = Extract<JudgeSelectionStored, { kind: 'llm' }>;
+const llm = (backend: string, model: string, extra: Partial<Llm> = {}): Llm => ({ kind: 'llm', backend, model, ...extra });
+const jev: JudgeSelectionStored = { kind: 'decision', provider: 'typesafe', model: 'jev-latest' };
 const noClaude = () => ({ env: {}, configuredModel: undefined });
 
 describe('judge model layers (design 2.2)', () => {
@@ -132,11 +134,11 @@ describe('judge model layers (design 2.2)', () => {
 
   it('parseStoredJudge checks the effort against the backend: Claude takes low to max, Codex the whole ladder', () => {
     for (const effort of ['low', 'medium', 'high', 'xhigh', 'max']) {
-      expect(parseStoredJudge({ kind: 'llm', backend: 'claude-agent', model: 'haiku', effort }, IDS).value?.effort).toBe(effort);
+      expect(parseStoredJudge({ kind: 'llm', backend: 'claude-agent', model: 'haiku', effort }, IDS).value).toMatchObject({ effort });
     }
     for (const effort of ['none', 'minimal', 'ultra']) {
       expect(parseStoredJudge({ kind: 'llm', backend: 'claude-agent', model: 'haiku', effort }, IDS)).toEqual({ why: '推理强度这个后端不收' });
-      expect(parseStoredJudge({ kind: 'llm', backend: 'codex-appserver', model: 'm', effort }, IDS).value?.effort).toBe(effort);
+      expect(parseStoredJudge({ kind: 'llm', backend: 'codex-appserver', model: 'm', effort }, IDS).value).toMatchObject({ effort });
     }
     expect(parseStoredJudge({ kind: 'llm', backend: 'codex-appserver', model: 'm', effort: 'tiny' }, IDS).value).toBeUndefined();
   });
@@ -147,7 +149,8 @@ describe('judge model layers (design 2.2)', () => {
       .toEqual({ value: { kind: 'llm', backend: 'claude-agent', model: 'haiku', effort: 'low', custom: true } });
     expect(parseStoredJudge({ kind: 'llm', backend: 'codex-appserver', model: 'm', custom: false }, IDS)).toEqual({ value: llm('codex-appserver', 'm') });
     for (const bad of [
-      'gpt', { kind: 'decision', provider: 'openai', model: 'x' }, { kind: 'llm', backend: 'gemini', model: 'x' },
+      'gpt', { kind: 'llm', backend: 'gemini', model: 'x' }, { kind: 'next', model: 'x' },
+      { kind: 'decision', model: 'x' }, { kind: 'decision', provider: 'Type Safe', model: 'x' }, { kind: 'decision', provider: 'typesafe', model: 'two words' },
       { kind: 'llm', backend: 'codex-appserver', model: 'two words' }, { kind: 'llm', backend: 'codex-appserver', model: 'm', effort: 'tiny' },
       { kind: 'llm', backend: 'codex-appserver', model: 'm', custom: 'yes' },
     ]) {
@@ -176,5 +179,67 @@ describe('judge model layers (design 2.2)', () => {
     const ignored = fake.log.warn.mock.calls.filter((c) => c[1] === 'setting-ignored');
     expect(ignored.map((c) => c[2].layer)).toEqual(['oc_g', 'bot']);
     expect(calls.at(-1)).toMatchObject({ model: 'gpt-6-luna', effort: 'low' });
+  });
+});
+
+describe('a chosen effort fitted to the model (Rakazo 第二轮 A6)', () => {
+  const twoLevels = model('m', ['low', 'high']);
+  it('the same level, else the nearest lower, else the nearest higher, none for a model without efforts', () => {
+    expect(fitJudgeEffort('m', 'high', [twoLevels])).toBe('high');
+    expect(fitJudgeEffort('m', 'medium', [twoLevels])).toBe('low');
+    expect(fitJudgeEffort('m', 'ultra', [twoLevels])).toBe('high');
+    expect(fitJudgeEffort('m', 'minimal', [twoLevels])).toBe('low');
+    expect(fitJudgeEffort('gpt-6-luna', 'minimal', [LUNA])).toBe('low');
+    expect(fitJudgeEffort('m', 'low', [model('m', [])])).toBeUndefined();
+  });
+
+  it('a hand-typed id, a model the list lacks and a list not cached yet pass the effort as stored', () => {
+    expect(fitJudgeEffort('m', 'medium', [twoLevels], true)).toBe('medium');
+    expect(fitJudgeEffort('other', 'minimal', [twoLevels])).toBe('minimal');
+    expect(fitJudgeEffort('m', 'minimal', undefined)).toBe('minimal');
+    expect(fitJudgeEffort('m', 'minimal', [])).toBe('minimal');
+  });
+
+  it('resolveJudgeModel sends the fitted effort, on Claude too', () => {
+    expect(resolveJudgeModel('codex-appserver', { bot: llm('codex-appserver', 'gpt-6-luna', { effort: 'minimal' }) }, [LUNA]))
+      .toEqual({ model: 'gpt-6-luna', effort: 'low', modelSource: 'bot' });
+    expect(resolveJudgeModel('claude-agent', { group: llm('claude-agent', 'm', { effort: 'medium' }) }, [twoLevels]))
+      .toEqual({ model: 'm', effort: 'low', modelSource: 'group' });
+    expect(resolveJudgeModel('codex-appserver', { bot: llm('codex-appserver', 'm', { effort: 'medium', custom: true }) }, [twoLevels]))
+      .toEqual({ model: 'm', effort: 'medium', modelSource: 'bot' });
+    expect(resolveJudgeModel('codex-appserver', { bot: llm('codex-appserver', 'm', { effort: 'xhigh' }) }, undefined))
+      .toEqual({ model: 'm', effort: 'xhigh', modelSource: 'bot' });
+  });
+});
+
+describe('decision models (s23d stores them, s23f calls them)', () => {
+  it('parseStoredJudge keeps the shape: a provider id and a model id', () => {
+    expect(parseStoredJudge({ kind: 'decision', provider: 'typesafe', model: ' jev-latest ' }, IDS)).toEqual({ value: jev });
+    // which providers exist is s23f's registry
+    expect(parseStoredJudge({ kind: 'decision', provider: 'openai', model: 'x' }, IDS).value).toEqual({ kind: 'decision', provider: 'openai', model: 'x' });
+  });
+
+  it('apply on every backend; a group layer still wins over the bot', () => {
+    for (const id of IDS) expect(resolveJudgeModel(id, { bot: jev }, undefined, noClaude)).toEqual({ model: 'jev-latest', provider: 'typesafe', modelSource: 'bot' });
+    expect(resolveJudgeModel('claude-agent', { group: jev, bot: llm('claude-agent', 'sonnet') }, undefined)).toMatchObject({ provider: 'typesafe', modelSource: 'group' });
+    expect(resolveJudgeModel('codex-appserver', { group: llm('codex-appserver', 'g'), bot: jev }, undefined)).toEqual({ model: 'g', modelSource: 'group' });
+    // a group setting for another backend no longer applies: the bot's decision model does
+    expect(resolveJudgeModel('claude-agent', { group: llm('codex-appserver', 'g'), bot: jev }, undefined)).toMatchObject({ provider: 'typesafe', modelSource: 'bot' });
+  });
+
+  it('the judge does not call a backend with a decision model: it fails as unavailable and falls back by variant', async () => {
+    const judgeFn = vi.fn();
+    const backend = { id: 'codex-appserver', displayName: 'Codex', listModels: async () => [], peekModels: () => [LUNA], judge: judgeFn } as unknown as AgentBackend;
+    const judge = createJudge({ backendFor: () => backend, readPrompt: async () => ({ source: 'default', text: 'S', path: '' }), cwd: async () => '/j' });
+    const req = (variant: 'main' | 'mentioned') => ({
+      variant, appId: 'cli_a', botName: 'P', botJudge: { kind: 'decision', provider: 'typesafe', model: 'jev-latest' },
+      group: { chatId: 'oc_g', name: 'g', backend: 'codex-appserver' }, context: [], message: { at: 0, from: 'user' as const, name: 'u', text: 't' },
+    });
+    expect(await judge.judge(req('main'))).toMatchObject({
+      decision: 'skip', error: { kind: 'unavailable', detail: '这个版本还不能用决策模型判断（typesafe）' },
+      backend: 'codex-appserver', model: 'jev-latest', provider: 'typesafe', modelSource: 'bot',
+    });
+    expect(await judge.judge(req('mentioned'))).toMatchObject({ decision: 'main', error: { kind: 'unavailable' } });
+    expect(judgeFn).not.toHaveBeenCalled();
   });
 });
