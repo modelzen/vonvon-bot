@@ -281,8 +281,17 @@ describe('judge settings: the view', () => {
     const p = await o.read(project) as ProjectSettingsView;
     expect(p.decisionModels).toEqual([{ ...listed[0], keySet: true }]);
     expect(projectViewSchema.safeParse(p).error?.issues).toBeUndefined();
-    // a keystore it cannot read counts as no key
-    expect((await owner({ secretIds: async () => { throw new Error('bad'); } }).read(agent) as AgentSettingsView).decisionModels?.[0]?.keySet).toBe(false);
+    // a keystore it cannot read is said so, not taken for a missing key: filling one in would hit the same error
+    const unreadable = owner({ secretIds: async () => { throw new Error('bad'); } });
+    const u = await unreadable.read(project) as ProjectSettingsView;
+    expect(u.decisionModels).toEqual([{ ...listed[0], keySet: false, keyUnreadable: true }]);
+    expect(projectViewSchema.safeParse(u).error?.issues).toBeUndefined();
+    const unread = keyMissingText(u.decisionModels![0]!);
+    expect(unread).toBe('读不了密钥库，看不出填没填 TypeSafe 的 key，读得了之前要判断的消息按出错处理（没 @ Bot 的不回，@ 的回在主区）。在终端运行 vonvon secrets list 看报错');
+    await save(project, { kind: 'llm', model: 'gpt-6-luna' });
+    const before = await unreadable.read(project) as ProjectSettingsView;
+    const saved = await unreadable.save({ scope: project, section: 'judge', revision: before.sections.judge.revision, patch: { selection: JEV } } as Parameters<typeof unreadable.save>[0]);
+    expect(saved).toMatchObject({ kind: 'saved', effects: [{ detail: '智能模式的下一次判断就用新模型' }, { detail: unread }] });
   });
 
   it('a kind this version does not know shows as stored, parses in the protocol and is never rewritten; a broken value shows as default', async () => {

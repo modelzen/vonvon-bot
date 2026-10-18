@@ -41,11 +41,14 @@ export function createCooldown(now: () => number) {
       }
       return undefined;
     },
-    /** Records a backend failure; only a structured auth, quota, version, model or (decision model) busy one starts a cooldown. */
+    /** Records a backend failure; only a structured auth, quota, version or model one, or a decision model's busy, starts a cooldown. */
     note(backend: string, model: string, error: unknown, tag?: string): void {
       if (!(error instanceof JudgeCallError) || !error.structured) return;
       const kind = error.kind;
       if (!COOL_KINDS.includes(kind)) return;
+      // only a decision model's 429 says how long; no backend reports busy structured today, and one that did
+      // should not stop the backend for every smart group of the bot unasked (review)
+      if (kind === 'busy' && !(error instanceof DecisionError)) return;
       const at = now();
       const end = at + (error instanceof DecisionError && error.coolMs !== undefined ? error.coolMs : JUDGE_COOLDOWN_MS);
       until.set(keyOf(kind as CoolKind, backend, model), { kind: kind as CoolKind, at, until: end, ...(tag ? { tag } : {}) });

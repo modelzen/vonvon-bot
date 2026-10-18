@@ -127,8 +127,11 @@ describe('judge cooldown (design 第 4 节)', () => {
     // no cooldown without one: network, format and failed are not structured
     for (const kind of ['network', 'format', 'failed'] as const) cooldown.note('typesafe', 'm', new DecisionError(kind, 'x'), 'k1');
     expect(cooldown.check('typesafe', 'm', 'k1')).toBeUndefined();
-    // a backend's busy never comes structured, but would cool its default 5 minutes untagged
+    // a backend's busy never cools, even structured: only a decision model's 429 says how long
     cooldown.note('codex-appserver', 'm', new JudgeCallError('busy', 'x', true));
+    expect(cooldown.check('codex-appserver', 'm')).toBeUndefined();
+    // a backend's structured auth still cools its default 5 minutes untagged
+    cooldown.note('codex-appserver', 'm', new JudgeCallError('auth', 'x', true));
     expect(cooldown.check('codex-appserver', 'other', 'any')?.detail).toBe('不到 1 分钟前刚失败过，5 分钟内不再调');
   });
 });

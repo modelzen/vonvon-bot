@@ -80,13 +80,20 @@ describe('callTypeSafe (s23f 做法（调用）)', () => {
     const error = await failure(callTypeSafe(BODY, bad, new AbortController().signal, fakeFetch(({ init }) => { new Headers(init.headers); return json(200, OK); }).fn));
     expect(error).toMatchObject({ kind: 'network', message: '连不上 TypeSafe' });
     expect(JSON.stringify([error.message, error.info])).not.toContain('TESTKEY');
+    // a 2xx body that breaks halfway: the stream's error has its code on itself, not on a cause
+    const cut = fakeFetch(() => new Response(new ReadableStream({
+      start(c) { c.enqueue(new TextEncoder().encode('{"model":"群消息原文')); c.error(Object.assign(new Error('read ECONNRESET 群消息原文'), { code: 'ECONNRESET' })); },
+    }), { status: 200 }));
+    const broken = await failure(callTypeSafe(BODY, KEY, new AbortController().signal, cut.fn));
+    expect(broken).toMatchObject({ kind: 'network', message: '连不上 TypeSafe（ECONNRESET）', info: { code: 'ECONNRESET' } });
+    expect(JSON.stringify([broken.message, broken.info])).not.toContain('群消息原文');
   });
 
   it('gives up after 5 s, the body read included, even when fetch ignores its signal', async () => {
     const hang = fakeFetch(() => new Promise<Response>(() => undefined));
     const first = failure(callTypeSafe(BODY, KEY, new AbortController().signal, hang.fn));
     await vi.advanceTimersByTimeAsync(DECISION_TIMEOUT_MS);
-    expect(await first).toMatchObject({ kind: 'network', message: 'TypeSafe 5 秒没回' });
+    expect(await first).toMatchObject({ kind: 'timeout', message: 'TypeSafe 5 秒没回', structured: false });
     expect((hang.calls[0]!.init.signal as AbortSignal).aborted).toBe(true);
     // headers came, the body never ends
     const slow = fakeFetch(() => new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('{"model":')); } }), { status: 200 }));
@@ -97,7 +104,17 @@ describe('callTypeSafe (s23f 做法（调用）)', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(settled).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
-    expect(await second).toMatchObject({ kind: 'network', message: 'TypeSafe 5 秒没回' });
+    expect(await second).toMatchObject({ kind: 'timeout', message: 'TypeSafe 5 秒没回' });
+  });
+
+  it('a status in hand outlives an error body that runs past 5 s: a 401 still cools, a 429 still says how long', async () => {
+    const stalled = (status: number, headers: Record<string, string> = {}) =>
+      fakeFetch(() => new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('{"detail":')); } }), { status, headers }));
+    const auth = failure(callTypeSafe(BODY, KEY, new AbortController().signal, stalled(401).fn));
+    const busy = failure(callTypeSafe(BODY, KEY, new AbortController().signal, stalled(429, { 'retry-after': '30' }).fn));
+    await vi.advanceTimersByTimeAsync(DECISION_TIMEOUT_MS);
+    expect(await auth).toMatchObject({ kind: 'auth', coolMs: 300_000, structured: true, info: { status: 401 } });
+    expect(await busy).toMatchObject({ kind: 'busy', coolMs: 30_000, structured: true });
   });
 
   it('an abort from outside rejects with its reason at once, and is forwarded to fetch', async () => {

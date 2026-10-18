@@ -53,6 +53,8 @@ export type DecisionModelsView = Array<{
   models: Array<{ id: string; displayName: string }>;
   keyId: string;
   keySet: boolean;
+  /** the keystore could not be read, so whether the key is in is not known (keySet false) */
+  keyUnreadable?: boolean;
 }>;
 export interface SmartPromptView {
   source: 'default' | 'bot' | 'group';

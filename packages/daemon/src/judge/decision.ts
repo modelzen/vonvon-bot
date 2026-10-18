@@ -38,9 +38,13 @@ export const decisionProvider = (id: string): DecisionProvider | undefined => PR
 export const decisionProviders = (): DecisionProvider[] => [...PROVIDERS.values()];
 
 /** After a decision model is chosen without its key: what happens meanwhile, and where to fill it in (s23g adds the
- * web page). A file, not `echo`: the key stays out of the shell history. */
-export function keyMissingText(m: { displayName: string; keyId: string }): string {
-  return `还没填 ${m.displayName} 的 key，填之前要判断的消息按出错处理（没 @ Bot 的不回，@ 的回在主区）。在终端运行 vonvon secrets set ${m.keyId} < 存着 key 的文件`;
+ * web page). A file, not `echo`: the key stays out of the shell history. A keystore that cannot be read is not
+ * a missing key: filling one in would hit the same error, so it says where to see that error. */
+export function keyMissingText(m: { displayName: string; keyId: string; keyUnreadable?: boolean }): string {
+  const meanwhile = '要判断的消息按出错处理（没 @ Bot 的不回，@ 的回在主区）';
+  return m.keyUnreadable
+    ? `读不了密钥库，看不出填没填 ${m.displayName} 的 key，读得了之前${meanwhile}。在终端运行 vonvon secrets list 看报错`
+    : `还没填 ${m.displayName} 的 key，填之前${meanwhile}。在终端运行 vonvon secrets set ${m.keyId} < 存着 key 的文件`;
 }
 
 // The decision question of the Jev report's Chinese runs, word for word (2.1: 30/31 right with four more questions,

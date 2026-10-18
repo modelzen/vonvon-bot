@@ -399,11 +399,14 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
     const { model, effort, provider } = resolveJudgeModel(backend, layers, peekModels(backend));
     return { selection: provider ? { kind: 'decision', provider, model } : { kind: 'llm', backend, model, ...(effort ? { effort } : {}) } };
   }
-  /** Every decision model this version calls, and whether its key is filled in (an unreadable keystore counts as
-   * not): what `settings get` and a picker list (s23f, s28). */
+  /** Every decision model this version calls, and whether its key is filled in (an unreadable keystore is said so,
+   * not taken for a missing key): what `settings get` and a picker list (s23f, s28). */
   async function decisionModels(): Promise<T.DecisionModelsView> {
-    const ids = await (deps.secretIds ?? listSecretIds)().catch(() => [] as string[]);
-    return decisionProviders().map(p => ({ provider: p.id, displayName: p.displayName, models: p.models.map(m => ({ ...m })), keyId: p.keyId, keySet: ids.includes(p.keyId) }));
+    const ids = await (deps.secretIds ?? listSecretIds)().catch(() => undefined);
+    return decisionProviders().map(p => ({
+      provider: p.id, displayName: p.displayName, models: p.models.map(m => ({ ...m })), keyId: p.keyId,
+      keySet: ids?.includes(p.keyId) ?? false, ...(ids ? {} : { keyUnreadable: true }),
+    }));
   }
   /** SMART.md of the bot (no chatId) or the group, with the read-only parts around it: a decision model's options
    * and state in place of the format lines and the text input when one judges (s23f). */

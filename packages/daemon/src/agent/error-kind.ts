@@ -11,7 +11,8 @@ export type AgentErrorKind = 'network' | 'auth' | 'quota' | 'version';
 /**
  * Why a smart-mode judgement (s23) fell back to its default decision. The judge layer (`src/judge/`)
  * re-exports it; it lives here so `src/judge/` depends on `src/agent/` and never the other way.
- * `aborted`: the caller gave up; `closed`: the bot is shutting down; `busy`: the queue was full;
+ * `timeout`: the judgement's own time, or a decision model's 5 s; `aborted`: the caller gave up; `closed`: the bot
+ * is shutting down; `busy`: the queue was full, or a decision model's service rate-limited it (429);
  * `format`: the model did not answer in the format; `prompt`: SMART.md could not be read; `key`: a decision
  * model's key is not filled in (or not a key), so nothing was sent (s23f).
  */

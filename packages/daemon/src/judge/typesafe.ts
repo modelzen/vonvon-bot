@@ -3,8 +3,8 @@ import type { JudgeErrorKind } from './types';
 
 /** TypeSafe's decision endpoint (Jev report 第 1 节). */
 export const TYPESAFE_URL = 'https://api.typesafe.ai/v1/systemone';
-/** From sending the request to the last byte of the answer, inside the judgement's own timeout (JUDGE_TIMEOUT_MS).
- * Jev answered in at most 0.32 s (Jev report 2.4); no retry. */
+/** From sending the request to the last byte of the answer, inside the judgement's own timeout (JUDGE_TIMEOUT_MS);
+ * past it the call fails as `timeout`. Jev answered in at most 0.32 s (Jev report 2.4); no retry. */
 export const DECISION_TIMEOUT_MS = 5_000;
 /** A key or model failure cools 5 minutes, as a backend's does (v1-plan 第 5 节"决策模型出错时"). */
 const COOL_MS = 5 * 60_000;
@@ -129,9 +129,13 @@ export async function callTypeSafe(body: unknown, key: string, signal: AbortSign
     return { body: parsed, ...(requestId ? { requestId } : {}) };
   } catch (error) {
     if (signal.aborted) throw signal.reason;
-    if (ctl.signal.aborted) throw new DecisionError('network', `TypeSafe ${DECISION_TIMEOUT_MS / 1000} 秒没回`);
+    // a status already in hand says more than the 5 s its error body ran past: a 401 still cools
     if (error instanceof DecisionError) throw error;
-    const code = token((error as { cause?: { code?: unknown } } | undefined)?.cause?.code, 30);
+    // `timeout`, not `network`: it neither cools nor falls back differently, but counts apart (review)
+    if (ctl.signal.aborted) throw new DecisionError('timeout', `TypeSafe ${DECISION_TIMEOUT_MS / 1000} 秒没回`);
+    // fetch puts the code on the cause; a body stream that breaks halfway, on the error itself
+    const cause = error as { code?: unknown; cause?: { code?: unknown } } | undefined;
+    const code = token(cause?.cause?.code ?? cause?.code, 30);
     throw new DecisionError('network', `连不上 TypeSafe${code ? `（${code}）` : ''}`, undefined, code ? { code } : {});
   } finally {
     clearTimeout(timer);

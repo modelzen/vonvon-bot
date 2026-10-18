@@ -440,6 +440,11 @@ it('judge: set takes the selection JSON, get prints a row per backend and the pr
   Object.assign(projectView, { decisionModels: [typesafe], sections: { judge: section({ selection: jev }, 'r', { selection: jev }) } });
   h.clear(); await runSettingsGet('judge', { group: 'pay' }, h.io(), h.daemon);
   expect(h.out()).toContain(`${missing}${choose('还没填', '--group pay ')}`);
+  // a keystore the daemon cannot read: said so, not taken for a missing key
+  Object.assign(projectView, { decisionModels: [{ ...typesafe, keyUnreadable: true }] });
+  h.clear(); await runSettingsGet('judge', { group: 'pay' }, h.io(), h.daemon);
+  expect(h.out()).toContain(`  读不了密钥库，看不出填没填 TypeSafe 的 key，读得了之前要判断的消息按出错处理（没 @ Bot 的不回，@ 的回在主区）。在终端运行 vonvon secrets list 看报错\n${choose('填没填看不出，密钥库读不了', '--group pay ')}`);
+  expect(h.out()).not.toContain('还没填');
   // a kind from a newer daemon: shown as sent, and said so
   const future = { kind: 'oracle', provider: 'x', model: 'y' };
   agentView.sections.judge = section({ selection: future }, 'rev-judge', { selection: future }) as never;

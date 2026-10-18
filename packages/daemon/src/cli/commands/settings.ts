@@ -168,7 +168,7 @@ function decisionName(models: DecisionModelsView | undefined, provider: string, 
 function decisionLines(models: DecisionModelsView | undefined, inUse: ReadonlySet<string>, choices: boolean, group: string | undefined): string[] {
   return (models ?? []).flatMap(m => [
     ...(inUse.has(m.provider) && !m.keySet ? [`  ${keyMissingText(m)}`] : []),
-    ...(choices ? m.models.map(model => `  可选的决策模型：${m.displayName} 的 ${model.id}（${model.displayName}，key ${m.keySet ? '已填' : '还没填'}）。选它：vonvon settings set ${group ? `--group ${group} ` : ''}judge.selection='${JSON.stringify({ kind: 'decision', provider: m.provider, model: model.id })}'`) : []),
+    ...(choices ? m.models.map(model => `  可选的决策模型：${m.displayName} 的 ${model.id}（${model.displayName}，key ${m.keySet ? '已填' : m.keyUnreadable ? '填没填看不出，密钥库读不了' : '还没填'}）。选它：vonvon settings set ${group ? `--group ${group} ` : ''}judge.selection='${JSON.stringify({ kind: 'decision', provider: m.provider, model: model.id })}'`) : []),
   ]);
 }
 

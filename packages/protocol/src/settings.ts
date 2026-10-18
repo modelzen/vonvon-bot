@@ -214,6 +214,8 @@ const decisionModels = z
       /** its name in the keystore (`vonvon secrets set <keyId>`) */
       keyId: z.string(),
       keySet: z.boolean(),
+      /** the keystore could not be read: keySet is false and says nothing */
+      keyUnreadable: z.boolean().optional(),
     }),
   )
   .optional();

@@ -507,12 +507,12 @@ describe('decision models (s23f)', () => {
     expect(j.fetchFn).toHaveBeenCalledTimes(40);
   });
 
-  it('its own 5 s is network; the judgement\'s timeout, queueing included, is timeout and sends no queued request', async () => {
+  it('its own 5 s is timeout too; the judgement\'s timeout, queueing included, is timeout and sends no queued request', async () => {
     const j = jev();
     j.respond(() => new Promise(() => undefined));
     const one = timed(j.judge.judge(jreq('mentioned')));
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(one.value).toMatchObject({ decision: 'main', error: { kind: 'network', detail: 'TypeSafe 5 秒没回' } });
+    expect(one.value).toMatchObject({ decision: 'main', error: { kind: 'timeout', detail: 'TypeSafe 5 秒没回' } });
     const running = Array.from({ length: 8 }, () => timed(j.judge.judge(jreq('main', { timeoutMs: 4_000 }))));
     const queued = timed(j.judge.judge(jreq('main', { timeoutMs: 2_000 })));
     await vi.advanceTimersByTimeAsync(2_000);
