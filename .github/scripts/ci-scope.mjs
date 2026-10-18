@@ -9,7 +9,7 @@ const decoder = new TextDecoder('utf-8', { fatal: true });
 
 export function isDocsPath(path) {
   return path === 'README.md' || path === 'AGENTS.md' || path === 'CLAUDE.md' ||
-    /^docs\/(?:[^/]+\/)*[^/]+\.md$/.test(path);
+    /^(?:docs|\.claude\/skills)\/(?:[^/]+\/)*[^/]+\.md$/.test(path);
 }
 
 export function parseChangedPaths(bytes) {
