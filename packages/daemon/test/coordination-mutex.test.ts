@@ -24,7 +24,7 @@ vi.mock('node:net', async original => {
 });
 
 const roles = ['admission', 'host', 'keystore', 'service', 'bots'] as const;
-type Role = typeof roles[number] | 'projects';
+type Role = typeof roles[number] | 'projects' | 'creation';
 let scratch = '';
 let entry = '';
 let homes = 0;
@@ -163,12 +163,15 @@ const c=require('node:child_process').spawn(process.execPath,['-e','setInterval(
 });
 
 describe('the transition from builds before s20c', () => {
-  it('projects ignores a silent legacy listener while retaining native exclusion', async () => {
-    const { home } = await oldBuild('projects', () => {});
-    const held = await acquireMutex(home, 'projects', 0);
-    try { await expect(acquireMutex(home, 'projects', 0)).rejects.toThrow(busy('projects')); }
+  // /ship coverage pass 1. Value: protects=creation ignores legacy TCP collisions while retaining native exclusion;
+  // fails_when=creation falls through legacy coordination or loses native exclusion;
+  // why_new=the existing bypass case covered projects only; seam=none; no_claim=platforms not executing this test.
+  it.each(['projects', 'creation'] satisfies Role[])('%s ignores a silent legacy listener while retaining native exclusion', async role => {
+    const { home } = await oldBuild(role, () => {});
+    const held = await acquireMutex(home, role, 0);
+    try { await expect(acquireMutex(home, role, 0)).rejects.toThrow(busy(role)); }
     finally { await closeMutex(held); }
-    await closeMutex(await acquireMutex(home, 'projects', 0));
+    await closeMutex(await acquireMutex(home, role, 0));
   });
 
   it.each<[string, (socket: Socket) => void]>([
