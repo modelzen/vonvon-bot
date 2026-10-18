@@ -14,10 +14,13 @@ function partsOf(date: Date, timeZone: string | undefined): Parts {
 /**
  * A moment in local time, without seconds: 14:05 today, 10月18日 14:05 this year, 2025年10月18日 14:05 before.
  * Takes milliseconds, an ISO string or a Date; a string that is not a time comes back unchanged.
+ * Nothing, an empty string and 0 are "no time" (the daemon writes 0 for never), never 1970.
  * `now` and `timeZone` are for tests.
  */
-export function formatTime(value: number | string | Date, options: { now?: number; timeZone?: string } = {}): string {
+export function formatTime(value: number | string | Date | null | undefined, options: { now?: number; timeZone?: string } = {}): string {
+  if (value === null || value === undefined || value === "") return "时间未知";
   const date = new Date(value);
+  if (date.getTime() === 0) return "时间未知";
   if (Number.isNaN(date.getTime())) return typeof value === "string" ? value : "时间未知";
   const at = partsOf(date, options.timeZone);
   const today = partsOf(new Date(options.now ?? Date.now()), options.timeZone);

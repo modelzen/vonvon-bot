@@ -100,3 +100,11 @@ test('注册 Bot is the one name, and the old word and the grant button still fi
   assert.equal(findEntries(entries, '一键开权限').some(entry => entry.title === '飞书权限'), true);
   assert.equal(findEntries(entries, '重新扫码')[0]?.title, '刷新飞书凭据');
 });
+
+test('words the 叫法表 retired still find the renamed fields', () => {
+  assert.equal(findEntries(entries, '待处理消息策略')[0]?.title, '运行中来了消息');
+  assert.equal(findEntries(entries, 'Host 状态')[0]?.title, '后端状态 Codex');
+  assert.equal(findEntries(entries, 'Host 版本')[0]?.title, '后端版本 Codex');
+  assert.equal(findEntries(entries, '当前 Profile')[0]?.title, '当前账号配置 飞书 CLI');
+  assert.ok(findEntries(entries, '机器人').some(entry => entry.id === 'agents'));
+});

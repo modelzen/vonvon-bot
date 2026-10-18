@@ -21,19 +21,19 @@ export async function refreshBotCredentials(
     const original = await readFile(file, 'utf8');
     const config = await loadConfig(file);
     if (!entry || !isComplete(config) || config.accounts.app.id !== appId || config.accounts.app.tenant !== entry.tenant) {
-      return fail('stale_target', 'Agent 已移除或配置已变更，请重新加载。');
+      return fail('stale_target', '这个 Bot 已移除或配置已变更，请重新加载。');
     }
     const expected = botIdentity(entry);
     const owner = config.preferences?.access?.ownerOpenId;
     const secret = config.accounts.app.secret;
     if (!owner || typeof secret !== 'object' || secret.source !== 'exec' || secret.provider !== 'bridge' || secret.id !== secretKeyForApp(appId)) {
-      return fail('credential_rejected', '此 Agent 未使用 Bridge 密钥存储或缺少管理员，无法刷新凭据。');
+      return fail('credential_rejected', '这个 Bot 的密钥不是 daemon 保存的，或者它还没有主人，无法刷新凭据。');
     }
     const creds = await register({ ...options, appId });
     if (options.signal.aborted) return fail('abort', '已取消。');
     if (creds.clientId !== appId || creds.tenant !== entry.tenant) return fail('credential_rejected', '扫码返回的应用或租户不匹配，未保存凭据。');
     if (!creds.operatorOpenId || (creds.operatorOpenId !== owner && !config.preferences?.access?.admins?.includes(creds.operatorOpenId))) {
-      return fail('access_denied', '请由此 Agent 已有的所有者或管理员扫码，未保存凭据。');
+      return fail('access_denied', '请由这个 Bot 的主人或管理员扫码，未保存凭据。');
     }
     const validation = await validate(appId, creds.clientSecret, entry.tenant);
     if (!validation.ok) return fail('credential_rejected', '新凭据校验失败，未保存。');
@@ -41,7 +41,7 @@ export async function refreshBotCredentials(
       if (options.signal.aborted) throw { code: 'abort' };
       if (await readFile(file, 'utf8') !== original) throw { code: 'stale_target' };
     }));
-    if (committed === 'stale') return fail('stale_target', 'Agent 已移除或配置已变更，请重新加载。');
+    if (committed === 'stale') return fail('stale_target', '这个 Bot 已移除或配置已变更，请重新加载。');
     return { ok: true, appId, name: entry.name, tenant: entry.tenant, adminOpenId: owner, botName: entry.botName, missingScopes: validation.missingScopes };
   } catch (error) {
     const code = registrationErrorCode(error);

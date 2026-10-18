@@ -128,7 +128,7 @@ describe('runStatus', () => {
     await runStatus(false, home, () => T0);
     const lines = out.trimEnd().split('\n');
     expect(lines[0]).toBe(`running PID ${process.pid} at 127.0.0.1:43119`);
-    expect(lines[1]).toBe('已暂停：10 分钟内崩溃了 3 次，bot 都没有启动。查完原因后运行 vonvon daemon restart 恢复运行。');
+    expect(lines[1]).toBe('已暂停：10 分钟内崩溃了 3 次，Bot 都没有启动。查完原因后运行 vonvon daemon restart 恢复运行。');
     expect(lines[2]).toBe('最近 24 小时的崩溃：');
     expect(lines[3]).toMatch(/^ {2}\d{4}-\d\d-\d\d \d\d:\d\d {2}daemon {2}被系统强制结束（kill -9、内存不够，或者关机、注销时没来得及退出），运行了至少 2 分 50 秒（暂停期间）$/);
     expect(lines[4]).toMatch(/ {2}daemon {2}程序出错：TypeError: Cannot read properties of undefined \(reading 'x'\)，运行了 3 分 9 秒$/);
@@ -162,7 +162,7 @@ describe('runStatus', () => {
     writeCrashRecordSync(home, crash({ scope: 'bot', appId: 'cli_a1b2c3d4', kind: 'forced', reason: 'SIGKILL', uptimeMs: 5000 }));
     await runStatus(false, home, () => T0);
     const lines = out.trimEnd().split('\n');
-    expect(lines[1]).toBe('已暂停的 bot：值班助手（10 分钟内崩溃了 3 次）。查完原因后在网页的状态与诊断页点「恢复运行」，或运行 vonvon daemon restart。');
+    expect(lines[1]).toBe('已暂停的 Bot：值班助手（10 分钟内崩溃了 3 次）。查完原因后在网页的状态与诊断页点「恢复运行」，或运行 vonvon daemon restart。');
     expect(lines[3]).toMatch(/ {2}bot 值班助手 {2}被系统强制结束（SIGKILL），运行了 5 秒$/);
     out = '';
     await runStatus(true, home, () => T0);

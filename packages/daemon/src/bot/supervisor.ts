@@ -74,7 +74,7 @@ const NO_RECORD_REASON = '程序出错（子进程出错退出，没留下记录
 const STATUS_IPC_TIMEOUT_MS = 2_000;
 /** Enough for Node's printout of an uncaught error: where, a caret, the error, 10 frames, its fields and a cause. */
 const STDERR_TAIL_LINES = 64;
-export const HOST_PAUSED_ACTIVATION = 'daemon 已暂停（10 分钟内崩溃了 3 次），这个 bot 恢复运行后才会启动。运行 vonvon daemon restart 恢复。';
+export const HOST_PAUSED_ACTIVATION = 'daemon 已暂停（10 分钟内崩溃了 3 次），这个 Bot 恢复运行后才会启动。运行 vonvon daemon restart 恢复。';
 
 export async function runSupervisor(bots: BotEntry[], options: { control?: ShutdownControl; managed?: boolean; port?: number; onListening?: (listen: string) => Promise<void>; paused?: boolean; crash?: SupervisorCrash; notifier?: CrashNotifier; registryUnreadable?: boolean; timing?: { lockRetryMs?: number; lockWarnMs?: number; lockSlowMs?: number } } = {}): Promise<void> {
   const control = options.control ?? observeShutdown();
@@ -116,7 +116,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
   const records = createCrashRecordCache(root);
   const notifier = options.notifier ?? createCrashNotifier({ root, clock, log });
 
-  console.log(paused ? `\ndaemon 已暂停，${bots.length} 个机器人都不启动：` : `\n正在启动 ${bots.length} 个机器人（各自独立进程）：`);
+  console.log(paused ? `\ndaemon 已暂停，${bots.length} 个 Bot 都不启动：` : `\n正在启动 ${bots.length} 个 Bot（各自独立进程）：`);
   for (const b of bots) console.log(`  • ${b.name}  (${b.appId})  [${b.tenant}]`);
   console.log('Ctrl+C 退出（关闭全部）。\n');
 
@@ -217,7 +217,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
     else notifier.botCrashed(c.bot.appId, botLabel(c.bot), counted.crashes, reason);
   };
   const pausedWrite = (c: Child): string =>
-    `机器人「${c.bot.name}」10 分钟内崩溃了 ${c.pause?.crashes ?? CRASH_PAUSE_COUNT} 次，已暂停。在状态与诊断页点「恢复运行」后再试。`;
+    `Bot「${c.bot.name}」10 分钟内崩溃了 ${c.pause?.crashes ?? CRASH_PAUSE_COUNT} 次，已暂停。在状态与诊断页点「恢复运行」后再试。`;
   /** 恢复运行 of this bot alone, and the disable of a paused bot (s18a): the crashes before it no longer count, on disk either. */
   const clearPause = (c: Child): void => {
     c.pause = undefined;
@@ -312,7 +312,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
       api?.invalidate();
       // In-flight requests are told what comes next: paused or a restart, once counted (each disk step only logs, so
       // every path below reaches a rejectAll).
-      const exited = `机器人「${c.bot.name}」进程已退出（等待自动重启）`;
+      const exited = `Bot「${c.bot.name}」进程已退出（等待自动重启）`;
       if (shuttingDown || !c.enabled || c.stopping) { ipc.rejectAll(exited); return; }
       retryPauses();
       if (code === BOT_LOCK_BUSY_EXIT) {
@@ -324,7 +324,7 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
           if (!waiting.reported || (holder && holder.pid !== waiting.reported.pid)) {
             waiting.reported = { since: waiting.since, ...(holder ? { pid: holder.pid } : {}) };
             log.warn('supervisor', 'lock-held', { bot: c.bot.name, appId: c.bot.appId, holderPid: holder?.pid ?? null, waitedMs: waited });
-            console.error(`[${c.bot.name}] 另一个进程${holder ? `（PID ${holder.pid}）` : ''}占着这个 bot；它退出后会自动接上。`);
+            console.error(`[${c.bot.name}] 另一个进程${holder ? `（PID ${holder.pid}）` : ''}占着这个 Bot；它退出后会自动接上。`);
             api?.invalidate();
           }
         }
@@ -409,12 +409,12 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
           }
           if (!child?.proc) {
             const foreign = readSingleInstanceHolder(appId, botPaths(appId).processesFile);
-            if (foreign) throw new Error(`Agent 由其他进程运行（PID ${foreign.pid}），请先停止该独立进程。`);
+            if (foreign) throw new Error(`这个 Bot 由其他进程运行（PID ${foreign.pid}），请先停止那个进程。`);
             if (!child && !enabled) return;
           }
           if (!child) {
             const bot = (await loadBots()).bots.find((entry) => entry.appId === appId);
-            if (!bot) throw new Error('机器人不存在。');
+            if (!bot) throw new Error('这个 Bot 不存在。');
             child = newChild(bot, enabled);
             children.set(appId, child);
           }
@@ -451,30 +451,30 @@ export async function runSupervisor(bots: BotEntry[], options: { control?: Shutd
             await new Promise((resolve) => setTimeout(resolve, 100));
           }
           if (child.pause) throw new Error(pausedWrite(child));
-          throw new Error(`Agent 启动后未能及时响应，请检查状态与诊断。${lastError instanceof Error ? lastError.message : ''}`, { cause: lastError });
+          throw new Error(`Bot 启动后未能及时响应，请查看状态与诊断。${lastError instanceof Error ? lastError.message : ''}`, { cause: lastError });
         },
         executeCollaboration: async (botId, request) => {
           const child = byAppId(botId);
           if (child?.enabled && child.pause) throw new AdminWriteError(pausedWrite(child));
-          if (!child?.enabled || !child.proc || !child.ipc) throw new AdminWriteError('机器人不在运行中的活跃集里');
+          if (!child?.enabled || !child.proc || !child.ipc) throw new AdminWriteError('这个 Bot 没在运行');
           return child.ipc.call({ kind: 'collaboration', request }, 180_000);
         },
         executeGroups: async (botId, op) => {
           const child = byAppId(botId);
           if (child?.enabled && child.pause) throw new AdminWriteError(pausedWrite(child));
-          if (!child?.enabled || !child.proc || !child.ipc) throw new AdminWriteError('机器人不在运行中的活跃集里');
+          if (!child?.enabled || !child.proc || !child.ipc) throw new AdminWriteError('这个 Bot 没在运行');
           return child.ipc.call(op, 60_000);
         },
         executeSettingsRead: async (botId, op) => {
           const child = byAppId(botId);
-          if (!child?.enabled || !child.proc || !child.ipc) throw new AdminWriteError('机器人不在运行中的活跃集里');
+          if (!child?.enabled || !child.proc || !child.ipc) throw new AdminWriteError('这个 Bot 没在运行');
           return child.ipc.call(op);
         },
         executeWrite: async (botId, op) => {
           const c = byAppId(botId);
-          if (!c?.enabled) throw new AdminWriteError(`机器人「${botId}」已停用，请先启用。`);
+          if (!c?.enabled) throw new AdminWriteError(`Bot「${botId}」已停用，请先启用。`);
           if (c.pause) throw new AdminWriteError(pausedWrite(c));
-          if (!c.proc || !c.ipc) throw new AdminWriteError(`机器人「${c.bot.name}」进程未在运行（崩溃重启中），稍后重试。`);
+          if (!c.proc || !c.ipc) throw new AdminWriteError(`Bot「${c.bot.name}」的进程没在运行（正在崩溃后重启），稍后再试。`);
           return c.ipc.call(op);
         },
         liveStatus: async (botId) => {

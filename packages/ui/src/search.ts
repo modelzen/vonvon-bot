@@ -19,7 +19,7 @@ const agentGroups: readonly AgentGroup[] = [
   {title: 'Bot 身份', fields: [item('启用 Bot', ['停用 Bot'])]},
   {title: '连接与权限', fields: [item('应用 ID', ['App ID']), item('首次运行清单', ['开权限', '事件订阅', '发布版本']), item('飞书权限', ['一键开权限']), item('刷新飞书凭据', ['重新扫码', '重新授权']), item('状态与诊断', ['检查连接', '没回的消息'])]},
   {title: '任务卡片', aliases: ['飞书任务卡片', '卡片显示'], fields: [item('显示工具调用'), item('显示模型')]},
-  {title: '运行策略', aliases: ['任务行为与提醒'], fields: [item('最大并发任务'), item('当前运行并发'), item('空闲超时（秒，0 为关闭）', ['空闲超时']), item('运行中来了消息', ['运行中收到新消息', '插话', '排队', 'steer', 'queue'])]},
+  {title: '运行策略', aliases: ['任务行为与提醒'], fields: [item('最大并发任务'), item('当前运行并发'), item('空闲超时（秒，0 为关闭）', ['空闲超时']), item('运行中来了消息', ['运行中收到新消息', '待处理消息策略', '插话', '排队', 'steer', 'queue'])]},
   {title: '完成提醒', aliases: ['任务结束提醒'], fields: [item('什么时候提醒', ['提醒方式']), item('长任务阈值（分钟）', ['长任务阈值'], {guide: '先把「什么时候提醒」设为「长任务」，就能调阈值。'})]},
   {title: '语音转文字', fields: [item('启用语音', ['语音识别']), item('权限与测试'), item('重新检测'), item('测试语音', [], {field: '测试'})]},
   {title: '云文档评论', fields: [item('后端', ['执行工具']), item('模型'), item('推理强度', [], {guide: '先选择一个具体模型，再调整推理强度。'})]},
@@ -39,6 +39,8 @@ const membershipGroups: readonly Group[] = [
   {title: '响应成员', fields: [item('添加成员 Open ID'), item('移除成员', [], {field: '', guide: '在响应成员列表中找到要移除的成员。'}), item('允许所有成员', ['清空白名单'], {guide: '设置了成员白名单后，会显示「清空白名单」。'})]},
   {title: '话题模型', fields: [item('选择话题'), item('话题身份', [], {field: '选择话题', guide: '选择话题后可以查看身份。'}), item('本话题模型', [], {field: '选择话题', guide: '先选择话题，再设置该话题的模型。'}), item('自定义模型 ID', ['话题手填模型 ID'], {field: '选择话题', guide: '先选择话题，再在「本话题模型」里选「自定义模型 ID…」。'}), item('推理强度', ['话题推理强度'], {field: '选择话题', guide: '先选择话题并选定具体模型，再调整推理强度。'})]},
 ];
+/** What the 本机环境 fields were called before the 叫法表 (docs/v1-plan.md section 5), so the old words still find them. */
+const formerly: Readonly<Record<string, string>> = {'后端状态': 'Host 状态', '后端版本': 'Host 版本', '当前账号配置': '当前 Profile'};
 const globalGroups: readonly {page: Page; section: string; fields: readonly Target[]}[] = [
   {page: 'application', section: '启动选项', fields: [item('运行状态'), item('重启 daemon'), item('登录电脑时启动', ['开机启动'])]},
   {page: 'application', section: '命令行工具', fields: [item('vonvon', ['CLI', '修复命令行工具'])]},
@@ -49,7 +51,7 @@ const globalGroups: readonly {page: Page; section: string; fields: readonly Targ
   {page: 'application', section: 'Codex 可执行文件', fields: [item('已保存路径'), item('当前路径配置'), item('本次所选'), item('选择文件'), item('保存路径'), item('恢复自动检测'), item('未绑定工作目录时的运行后备')]},
   {page: 'application', section: '窗口与退出', fields: [item('隐藏到托盘'), item('退出 Vonvon Bot', ['退出应用'])]},
   {page: 'environment', section: '本机环境', fields: [item('重新检测'), ...['安装后端', '检查后端版本', '更新后端', '卸载后端'].map(title => item(title, ['Claude Agent SDK', '托管后端'], {field: '', guide: '在本机环境的后端条目里操作；能用哪些按钮看安装状态。'}))]},
-  ...(['Codex', 'Claude', '飞书 CLI'] as const).map((section, index) => ({page: 'environment' as const, section: toolNames[(['codex', 'claude', 'lark-cli'] as const)[index]!], fields: ['安装', '更新', '登录', '检查授权', '重新登录', '安装托管副本', '重新安装最新版', '停用托管副本', '安装来源', '安装位置', '当前版本', '托管版本', '最新版本', '授权状态', ...(section === 'Codex' ? ['后端状态', '后端版本'] : []), ...(section === '飞书 CLI' ? ['当前账号配置'] : [])].map(title => item(`${title} ${section}`, [title], {field: title, reveal: (['codex-tool', 'claude-tool', 'lark-tool'] as const)[index], guide: ['安装来源', '安装位置', '当前版本', '托管版本', '最新版本', '授权状态', '后端状态', '后端版本', '当前账号配置'].includes(title) ? undefined : '此操作是否可用取决于本机工具的安装与授权状态。'}))})),
+  ...(['Codex', 'Claude', '飞书 CLI'] as const).map((section, index) => ({page: 'environment' as const, section: toolNames[(['codex', 'claude', 'lark-cli'] as const)[index]!], fields: ['安装', '更新', '登录', '检查授权', '重新登录', '安装托管副本', '重新安装最新版', '停用托管副本', '安装来源', '安装位置', '当前版本', '托管版本', '最新版本', '授权状态', ...(section === 'Codex' ? ['后端状态', '后端版本'] : []), ...(section === '飞书 CLI' ? ['当前账号配置'] : [])].map(title => item(`${title} ${section}`, [title, ...(formerly[title] ? [formerly[title]] : [])], {field: title, reveal: (['codex-tool', 'claude-tool', 'lark-tool'] as const)[index], guide: ['安装来源', '安装位置', '当前版本', '托管版本', '最新版本', '授权状态', '后端状态', '后端版本', '当前账号配置'].includes(title) ? undefined : '此操作是否可用取决于本机工具的安装与授权状态。'}))})),
   {page: 'environment', section: '飞书 CLI 账号配置', fields: [item('管理飞书 CLI', ['管理账号配置', '切换账号配置', 'Profile'], {reveal: 'profile-manager'}), item('添加已有应用', ['添加账号配置', '添加 Profile'], {reveal: 'profile-add'}), item('创建新应用', ['创建账号配置', '创建 Profile'], {reveal: 'profile-create'}), ...['账号配置名称', 'App ID', 'App Secret', '平台', '添加后设为当前'].map(title => item(title, ['飞书应用'], {reveal: 'profile-add'})), item('设为当前', ['切换账号配置', '切换飞书 Profile'], {reveal: 'profile-manager'})]},
   {page: 'diagnostics', section: '这台电脑', fields: [item('daemon 版本'), item('重新检查'), item('最近读取'), item('数据目录')]},
   {page: 'diagnostics', section: 'daemon 日志', fields: [item('刷新日志'), item('持续跟随'), item('daemon 日志')]},

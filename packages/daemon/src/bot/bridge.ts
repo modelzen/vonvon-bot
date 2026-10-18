@@ -48,7 +48,7 @@ export interface BridgeHandle {
  */
 export async function startBridge(opts: BridgeOptions): Promise<BridgeHandle> {
   const identity = { ...opts.identity };
-  if (identity.appId !== opts.cfg.accounts.app.id || identity.tenant !== opts.cfg.accounts.app.tenant) throw new Error('机器人注册身份与配置不匹配');
+  if (identity.appId !== opts.cfg.accounts.app.id || identity.tenant !== opts.cfg.accounts.app.tenant) throw new Error('Bot 的注册身份与配置不匹配');
   await mergeTiers();
   const app = opts.cfg.accounts.app;
   const channel = createLarkChannel({

@@ -294,7 +294,7 @@ export function activeBots(reg: BotsRegistry): BotEntry[] {
 /** Apply one activation delta to the current disk state, including the legacy current fallback. */
 export function setBotActivation(appId: string, enabled: boolean): Promise<BotsRegistry> {
   return ownBots(async registry => {
-    if (!registry.bots.some(bot => bot.appId === appId)) throw new Error(`机器人「${appId}」不存在。`);
+    if (!registry.bots.some(bot => bot.appId === appId)) throw new Error(`Bot「${appId}」不存在。`);
     const active = new Set(activeBots(registry).map(bot => bot.appId));
     if (enabled) active.add(appId); else active.delete(appId);
     for (const bot of registry.bots) bot.active = active.has(bot.appId);

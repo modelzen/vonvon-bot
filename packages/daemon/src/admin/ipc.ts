@@ -76,7 +76,7 @@ export function createAdminIpcCaller(send: (msg: AdminIpcRequest) => void): Admi
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           pending.delete(id);
-          reject(new Error(`bot 进程 ${timeoutMs}ms 未响应（可能正忙或已假死）`));
+          reject(new Error(`Bot 进程 ${timeoutMs}ms 未响应（可能正忙或已假死）`));
         }, timeoutMs);
         timer.unref?.();
         pending.set(id, { resolve, reject, timer });

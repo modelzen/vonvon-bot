@@ -102,7 +102,7 @@ export function readSingleInstanceHolder(appId: string, file: string = paths.pro
       !('pid' in record) || typeof record.pid !== 'number' || !Number.isInteger(record.pid) || record.pid <= 0 ||
       !('appId' in record) || typeof record.appId !== 'string' ||
       !('startedAt' in record) || typeof record.startedAt !== 'number') {
-    throw new Error('无法确认 Agent 进程状态，锁文件格式无效。');
+    throw new Error('无法确认 Bot 进程的状态，锁文件格式无效。');
   }
   const holder = { pid: record.pid, appId: record.appId, startedAt: record.startedAt };
   return isLiveHolder(holder, appId) ? { pid: holder.pid, startedAt: holder.startedAt } : undefined;

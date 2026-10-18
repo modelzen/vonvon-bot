@@ -37,13 +37,13 @@ const one = (agents = [agent('cli_a')], memberships: Membership[] = [], tools: T
 
 it('picks a bot by id or a unique name and lists the choices otherwise', () => {
   const [a, b, c] = [agent('cli_a'), agent('cli_b'), agent('cli_c', '支付')];
-  expect(() => pickBot([])).toThrow('还没有 bot。');
+  expect(() => pickBot([])).toThrow('还没有 Bot。');
   expect(pickBot([a])).toBe(a);
-  expect(() => pickBot([a, b, c])).toThrow('有 3 个 bot，用 --bot 指定：Vonvon Bot（cli_a）、Vonvon Bot（cli_b）、支付（cli_c）');
+  expect(() => pickBot([a, b, c])).toThrow('有 3 个 Bot，用 --bot 指定：Vonvon Bot（cli_a）、Vonvon Bot（cli_b）、支付（cli_c）');
   expect(pickBot([a, b, c], 'cli_b')).toBe(b);
   expect(pickBot([a, b, c], '支付')).toBe(c);
-  expect(() => pickBot([a, b, c], 'Vonvon Bot')).toThrow('有 2 个 bot 都叫「Vonvon Bot」，用 id 指定：cli_a、cli_b');
-  expect(() => pickBot([a], 'x')).toThrow('没有找到 bot「x」。现有的 bot：Vonvon Bot（cli_a）');
+  expect(() => pickBot([a, b, c], 'Vonvon Bot')).toThrow('有 2 个 Bot 都叫「Vonvon Bot」，用 id 指定：cli_a、cli_b');
+  expect(() => pickBot([a], 'x')).toThrow('没有找到 Bot「x」。现有的 Bot：Vonvon Bot（cli_a）');
 });
 
 it('bot list shows state and connection, and its JSON has no avatars', async () => {
@@ -76,7 +76,7 @@ it('human output drops control characters from Feishu names and --json keeps the
   expect(h.out()).toBe('[2J坏31m名字  cli_a  已启用 · 已连接 · 0 个群 · 读取失败：读不到\n');
   h.clear(); await runBotList(h.io(true), h.daemon);
   expect(JSON.parse(h.out()).bots[0].name).toBe(name);
-  await expect(h.daemon(async () => pickBot([agent('cli_a', name)], 'x'))).rejects.toThrow(/^没有找到 bot「x」。现有的 bot：\[2J坏31m名字（cli_a）$/);
+  await expect(h.daemon(async () => pickBot([agent('cli_a', name)], 'x'))).rejects.toThrow(/^没有找到 Bot「x」。现有的 Bot：\[2J坏31m名字（cli_a）$/);
 });
 
 it('bot status prints the checklist with its links and next steps', async () => {
@@ -181,7 +181,7 @@ it('bot add draws the QR, draws it again for a new link, and prints the saved bo
   await s.add();
   expect(s.out()).toBe(['正在创建扫码会话。', '用飞书 App 扫下面的二维码，建一个新的飞书应用（14:32 前有效）：', '[QR https://open.feishu.cn/q?a=1]', '扫不了的话，在手机飞书里打开：https://open.feishu.cn/q?a=1', '等你在飞书里确认…（Ctrl-C 取消）',
     '识别到国际版租户，改用 larksuite.com。', '用飞书 App 扫下面的二维码，建一个新的飞书应用（14:32 前有效）：', '[QR https://open.larksuite.com/q?a=\u0007]', '扫不了的话，在手机飞书里打开：https://open.larksuite.com/q?a=', '等你在飞书里确认…（Ctrl-C 取消）',
-    '✓ 已保存 bot：新[2Jbot（cli_new），已启用。', '清单没读到：读取清单状态失败：飞书接口超时。稍后运行 vonvon bot status。', ''].join('\n'));
+    '✓ 已保存 Bot：新[2Jbot（cli_new），已启用。', '清单没读到：读取清单状态失败：飞书接口超时。稍后运行 vonvon bot status。', ''].join('\n'));
   expect(s.run).toHaveBeenCalledWith({ type: 'registerAgent' });
   expect(s.exitCode).not.toHaveBeenCalled();
   expect(s.interrupted()).toBe(true);

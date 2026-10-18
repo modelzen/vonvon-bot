@@ -25,6 +25,9 @@ describe("formatTime", () => {
     expect(formatTime("不是时间", { now, timeZone })).toBe("不是时间");
     expect(formatTime(Number.NaN, { now, timeZone })).toBe("时间未知");
   });
+  it("writes 时间未知 for no time instead of 1970", () => {
+    for (const value of [null, undefined, "", 0, new Date(0)]) expect(formatTime(value, { now, timeZone })).toBe("时间未知");
+  });
   it("counts midnight as 00, not 24", () => {
     expect(formatTime(Date.parse("2026-10-17T16:00:00Z"), { now, timeZone })).toBe("00:00");
   });

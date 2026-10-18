@@ -26,7 +26,7 @@ async function printDesktopGuidance(): Promise<void> {
 export async function runUpdate(opts: { check?: boolean } = {}): Promise<void> {
   const distribution = await runtimeDistribution();
   if (distribution.kind === 'bundled') {
-    console.log('此 CLI 随 Vonvon Bridge 桌面应用提供，请在桌面应用中更新。');
+    console.log('这个命令行随 Vonvon Bot 桌面应用提供，请在桌面应用里更新。');
     return;
   }
   try {

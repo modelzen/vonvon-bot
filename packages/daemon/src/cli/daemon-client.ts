@@ -117,7 +117,7 @@ export function want<R extends { kind: string }, K extends R['kind']>(what: stri
   throw new Error(`${what}没有完成：daemon 回了意外的结果（${reply.kind}）。`);
 }
 
-export const NO_BOT = '还没有 bot。运行 vonvon bot add 在终端里扫码注册，或者在网页里注册（vonvon open）。';
+export const NO_BOT = '还没有 Bot。运行 vonvon bot add 在终端里扫码注册，或者在网页里注册（vonvon open）。';
 
 /** No "current bot": only a single bot is picked without --bot. */
 export function pickBot(agents: readonly Agent[], wanted?: string): Agent {
@@ -127,21 +127,21 @@ export function pickBot(agents: readonly Agent[], wanted?: string): Agent {
   const list = agents.map(agent => `${printable(agent.name)}（${agent.id}）`).join('、');
   if (wanted === undefined) {
     if (agents.length === 1) return only;
-    throw new Error(`有 ${agents.length} 个 bot，用 --bot 指定：${list}`);
+    throw new Error(`有 ${agents.length} 个 Bot，用 --bot 指定：${list}`);
   }
   const byId = agents.find(agent => agent.id === wanted);
   if (byId) return byId;
   const named = agents.filter(agent => agent.name === wanted);
-  if (named.length > 1) throw new Error(`有 ${named.length} 个 bot 都叫「${wanted}」，用 id 指定：${named.map(agent => agent.id).join('、')}`);
+  if (named.length > 1) throw new Error(`有 ${named.length} 个 Bot 都叫「${wanted}」，用 id 指定：${named.map(agent => agent.id).join('、')}`);
   if (named[0]) return named[0];
-  throw new Error(`没有找到 bot「${wanted}」。现有的 bot：${list}`);
+  throw new Error(`没有找到 Bot「${wanted}」。现有的 Bot：${list}`);
 }
 
 /** Group id or project name; both are unique per bot because bind refuses a duplicate project name. */
 export function pickGroup(memberships: readonly Membership[], bot: Agent, wanted: string): Membership {
   const own = memberships.filter(membership => membership.agentId === bot.id);
   const found = own.find(membership => membership.groupId === wanted) ?? own.find(membership => membership.name === wanted);
-  if (!found) throw new Error(`bot「${printable(bot.name)}」没有绑定「${wanted}」。用 vonvon group list 查看。`);
+  if (!found) throw new Error(`Bot「${printable(bot.name)}」没有绑定「${wanted}」。用 vonvon group list 查看。`);
   return found;
 }
 

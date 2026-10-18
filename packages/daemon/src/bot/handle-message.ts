@@ -5360,7 +5360,7 @@ export function createOrchestrator(
   };
   async function collaboration(request: CollaborationRequest): Promise<unknown> {
     const owner = resolveOwner(cfg);
-    if (!owner) throw new AdminWriteError('请先配置此 Agent 的飞书管理员');
+    if (!owner) throw new AdminWriteError('请先给这个 Bot 配置飞书管理员');
     if (request.action === 'usage') return { data: await fetchUsageBundle(request.force) };
     if (request.action === 'createProject') {
       const signature = JSON.stringify(request);

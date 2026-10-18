@@ -73,7 +73,7 @@ export async function registerBotFromCredentials(
     return {
       ok: false,
       code: 'invalid_input',
-      reason: '未获取到扫码人的飞书身份，已拒绝保存无管理员的机器人配置。请重新扫码。',
+      reason: '未获取到扫码人的飞书身份，已拒绝保存没有管理员的 Bot 配置。请重新扫码。',
     };
   }
   if (!APP_ID_RE.test(appId)) {

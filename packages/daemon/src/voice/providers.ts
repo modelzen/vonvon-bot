@@ -68,7 +68,7 @@ export function createFeishuVoiceClient(cfg: AppConfig): FeishuVoiceClient {
     try {
       secret = await resolveAppSecret(cfg);
     } catch {
-      throw new VoiceFailure('无法读取飞书应用凭据，请检查机器人配置', 'unavailable', { issue: 'authentication' });
+      throw new VoiceFailure('无法读取飞书应用凭据，请检查这个 Bot 的配置', 'unavailable', { issue: 'authentication' });
     }
     const res = await request(base + '/open-apis/auth/v3/tenant_access_token/internal', {
       method: 'POST',
@@ -78,7 +78,7 @@ export function createFeishuVoiceClient(cfg: AppConfig): FeishuVoiceClient {
     const body = await readResponse(res);
     if (!res.ok || body.code !== 0 || typeof body.tenant_access_token !== 'string') {
       throw new VoiceFailure(
-        '飞书应用认证失败，请检查该机器人的 App ID 和 App Secret；这不是套餐判定',
+        '飞书应用认证失败，请检查这个 Bot 的 App ID 和 App Secret；这不是套餐判定',
         res.status >= 500 ? 'temporary_error' : 'unavailable',
         { issue: 'authentication', code: String(body.code ?? res.status), detail: safeReason(body.msg, [secret]) },
       );
@@ -123,7 +123,7 @@ export function createFeishuVoiceClient(cfg: AppConfig): FeishuVoiceClient {
     // Generic 403, permission and rate-limit errors are NOT evidence of a free plan.
     const explicitPlan = /(?:免费版|免费版本|套餐|租户版本).*(?:不支持|不包含)|(?:not supported|not available).*(?:free|plan)|(?:free (?:edition|plan|version)).*(?:not support|not available)/i.test(msg);
     throw new VoiceFailure(
-      explicitPlan ? '飞书明确返回：当前机器人租户的套餐不支持 ASR' : '飞书拒绝了此次调用，尚不能确定是否由套餐导致',
+      explicitPlan ? '飞书明确返回：这个 Bot 所在租户的套餐不支持 ASR' : '飞书拒绝了此次调用，尚不能确定是否由套餐导致',
       'unavailable',
       { ...diagnostics, issue: explicitPlan ? 'unsupported_plan' : 'rejected' },
     );

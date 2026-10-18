@@ -1734,7 +1734,7 @@ export function HostPanel({
         type: "save",
         edit: {scope: view.scope, section: "execution", revision: execution.revision, patch: {codexBin: path}},
       });
-      const message = errorText(reply) ?? (path === null ? "Codex 路径已恢复自动检测。" : "Codex 路径已保存，将在下次 Host 启动时使用。");
+      const message = errorText(reply) ?? (path === null ? "Codex 路径已恢复自动检测。" : "Codex 路径已保存，下次启动 daemon 时使用。");
       if (reply.kind === "saved" && reply.result.kind === "saved") {
         setPathDraft(null);
         await refresh();

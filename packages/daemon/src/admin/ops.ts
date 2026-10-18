@@ -355,7 +355,7 @@ export function createAdminWriteExecutor(deps: AdminWriteExecutorDeps): (op: Adm
     (deps.cfg ? createAppPreferencesWriter({ cfg: deps.cfg, persistConfig: deps.persistConfig }) : undefined);
   return async (op) => {
     if (op.kind === 'settingsPatch' || op.kind === 'settingsAction') {
-      if (!deps.settings) return { kind: 'unavailable', reason: { kind: 'readonly', reason: 'owner-offline', message: 'Agent 设置服务未就绪' } };
+      if (!deps.settings) return { kind: 'unavailable', reason: { kind: 'readonly', reason: 'owner-offline', message: 'Bot 设置服务还没准备好' } };
       return op.kind === 'settingsPatch' ? deps.settings.save(op.edit) : deps.settings.act(op.action);
     }
     const outcome = await runAdminWriteOp(op, { ...deps, writePreferences });
@@ -386,7 +386,7 @@ export async function runAdminWriteOp(
     case 'setNoMention':
       return performSetNoMention({ projectName: op.project, on: op.on });
     case 'setCompletionReminder':
-      if (!deps.cfg) return { ok: false, reason: 'bot 运行配置不可用，无法即时更新完成提醒' };
+      if (!deps.cfg) return { ok: false, reason: 'Bot 的运行配置不可用，无法即时更新完成提醒' };
       return performSetCompletionReminder({
         cfg: deps.cfg,
         mode: op.mode,

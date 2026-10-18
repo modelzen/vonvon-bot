@@ -140,8 +140,8 @@ describe('synchronous desktop facade', () => {
     expect(rejected).not.toHaveProperty('code');
     const seen: Error[] = [];
     client.onError(error => seen.push(error));
-    h.event({ type: 'error', value: { kind: 'rpc', code: 'conflict', message: '机器人未启用或尚未运行' } });
-    expect(seen[0]).toMatchObject({ message: '机器人未启用或尚未运行', code: 'conflict' });
+    h.event({ type: 'error', value: { kind: 'rpc', code: 'conflict', message: 'Bot 没启用或没在运行' } });
+    expect(seen[0]).toMatchObject({ message: 'Bot 没启用或没在运行', code: 'conflict' });
   });
 
   it('retains errors and quit requests until listeners attach', () => {

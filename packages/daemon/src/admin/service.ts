@@ -480,7 +480,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
   let closing: Promise<void> | undefined;
   const credentials = async (botId: string) => {
     const cfg = await loadConfig(botPaths(botId).configFile);
-    if (!isComplete(cfg)) throw new Error('机器人配置不完整');
+    if (!isComplete(cfg)) throw new Error('这个 Bot 的配置不完整');
     return { appId: botId, tenant: cfg.accounts.app.tenant, appSecret: await resolveAppSecret(cfg) };
   };
   const avatars = createAgentAvatarProvider({ credentials });
@@ -630,7 +630,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     },
     async getVoice(botId: string): Promise<VoiceView> {
       const cfg = await loadConfig(botPaths(botId).configFile);
-      if (!isComplete(cfg)) throw new Error('机器人配置不完整');
+      if (!isComplete(cfg)) throw new Error('这个 Bot 的配置不完整');
       return voiceView(cfg);
     },
     async setVoice(botId: string, value: VoiceAction): Promise<void> {
@@ -712,7 +712,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     async eventDiagnosis(botId: string): Promise<EventDiagnosis> {
       try {
         const cfg = await loadConfig(botPaths(botId).configFile);
-        if (!isComplete(cfg)) return { state: 'unchecked', reason: '配置缺失（该 bot 尚未完成初始化）' };
+        if (!isComplete(cfg)) return { state: 'unchecked', reason: '配置缺失（这个 Bot 还没初始化完）' };
         const { app } = cfg.accounts;
         const secret = await resolveAppSecret(cfg);
         return await diagnoseEventSubscription(app.id, secret, app.tenant);
@@ -841,7 +841,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
         return {
           ok: false,
           code: 'identity_missing',
-          reason: '未获取到扫码人的飞书身份，未保存机器人。请重新扫码并确认授权。',
+          reason: '未获取到扫码人的飞书身份，未保存 Bot。请重新扫码并确认授权。',
         };
       }
       // ② 入库：「探活→keystore→config→bots.json」，扫码人 open_id 落成 owner+admin。
@@ -873,7 +873,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
     },
 
     async refreshBotByQr(botId, opts) {
-      if (deps.readonlyPreview) throw new NotWiredYetError('刷新 Agent 凭据');
+      if (deps.readonlyPreview) throw new NotWiredYetError('刷新 Bot 凭据');
       return refreshBotCredentials(botId, opts);
     },
 
