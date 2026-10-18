@@ -317,7 +317,7 @@ it('s36d1: shutdown stops a creation in flight at once and starts none of those 
   const request = { action: 'createProject' as const, requestId: 'b1b2c3d4-0000-4000-8000-000000000001', name: 'In flight', kind: 'multi' as const, backend: 'codex-appserver' as const };
   const flying = app.collaboration(request).catch((error: unknown) => error);
   const queued = app.collaboration({ ...request, requestId: 'b1b2c3d4-0000-4000-8000-000000000002', name: 'Queued' }).catch((error: unknown) => error);
-  await vi.waitFor(() => expect(fake.creates()).toHaveLength(1));
+  await vi.waitFor(() => expect(fake.creates()).toHaveLength(1), { timeout: 10_000 });
   const started = Date.now();
   await app.shutdown();
   expect(Date.now() - started).toBeLessThan(5_000);

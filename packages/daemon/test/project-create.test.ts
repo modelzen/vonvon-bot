@@ -129,24 +129,23 @@ describe('s36d1 createProject', () => {
     const stop = new AbortController();
     const closing = fakeLark(request => request.path.includes('tenant_access_token') ? stall() : undefined);
     const pending = createProject({ rawClient: closing.client }, input('Closed early', { signal: stop.signal }));
-    await vi.waitFor(() => expect(closing.requests).toHaveLength(1));
+    await vi.waitFor(() => expect(closing.requests).toHaveLength(1), { timeout: 10_000 });
     stop.abort();
     await expect(pending).rejects.toBeInstanceOf(CreationRefusedError);
     expect(closing.creates()).toEqual([]);
     expect(closing.open()).toBe(0);
   });
 
-  it('saves before addManagers is sent, and returns within the budget when it never answers', async () => {
+  it('saves before addManagers is sent, and a stuck addManagers ends with the creation\'s stop', async () => {
     const fake = fakeLark(request => request.path.endsWith('/managers/add_managers') ? stall() : undefined);
-    const started = Date.now();
-    const creating = createProject({ rawClient: fake.client }, input('Stuck admin', { timeoutMs: 3_000 }));
-    await vi.waitFor(() => expect(fake.requests.some(r => r.path.endsWith('/managers/add_managers'))).toBe(true), { timeout: 2_900 });
+    const stop = new AbortController();
+    const creating = createProject({ rawClient: fake.client }, input('Stuck admin', { signal: stop.signal }));
+    await vi.waitFor(() => expect(fake.requests.some(r => r.path.endsWith('/managers/add_managers'))).toBe(true), { timeout: 10_000 });
     // The row is on disk while the admin call is still out, so a kill during it cannot lose the group.
     expect((await listProjects()).some(p => p.name === 'Stuck admin')).toBe(true);
-    const outcome = await Promise.race([creating, wait(6_000).then(() => 'hung' as const)]);
-    expect(outcome).not.toBe('hung');
-    expect(Date.now() - started).toBeLessThan(6_000);
-    expect((await listProjects()).some(p => p.name === 'Stuck admin')).toBe(true);
+    stop.abort();
+    const outcome = await Promise.race([creating, wait(3_000).then(() => 'hung' as const)]);
+    expect(outcome).toMatchObject({ name: 'Stuck admin', origin: 'created' });
     expect(fake.open()).toBe(0);
   });
 

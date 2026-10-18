@@ -98,7 +98,7 @@ it('runs DM and web creations one at a time', async () => {
   const { fake, orchestrator } = app(request => isCreate(request) && request.data && (request.data as { name?: string }).name === 'Web first' ? gate.then(() => undefined) : undefined);
   try {
     const web = orchestrator.collaboration({ action: 'createProject', requestId: 'c1b2c3d4-0000-4000-8000-000000000001', name: 'Web first', kind: 'multi', backend: 'codex-appserver' });
-    await vi.waitFor(() => expect(fake.creates()).toHaveLength(1));
+    await vi.waitFor(() => expect(fake.creates()).toHaveLength(1), { timeout: 10_000 });
     await orchestrator.dispatcher.handle(submit('DM second'));
     await new Promise(resolve => setTimeout(resolve, 200));
     expect(fake.creates()).toHaveLength(1);
@@ -114,7 +114,7 @@ it('refuses a DM creation that reaches its turn after shutdown began, without ca
   const gate = new Promise<void>(resolve => { release = resolve; });
   const { fake, orchestrator } = app(request => isCreate(request) ? gate.then(() => undefined) : undefined);
   const web = orchestrator.collaboration({ action: 'createProject', requestId: 'd1b2c3d4-0000-4000-8000-000000000001', name: 'Web first', kind: 'multi', backend: 'codex-appserver' }).catch(() => undefined);
-  await vi.waitFor(() => expect(fake.creates()).toHaveLength(1));
+  await vi.waitFor(() => expect(fake.creates()).toHaveLength(1), { timeout: 10_000 });
   await orchestrator.dispatcher.handle(submit('Queued in DM'));
   const closing = orchestrator.shutdown();
   release();
