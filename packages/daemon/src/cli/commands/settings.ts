@@ -165,10 +165,10 @@ function decisionName(models: DecisionModelsView | undefined, provider: string, 
 
 /** For each decision model the daemon calls (s23f): its key not filled in while one in use, and under `get judge`
  * how to choose it, the key filled in or not (owner: choose first, fill in later). */
-function decisionLines(models: DecisionModelsView | undefined, inUse: ReadonlySet<string>, choices: boolean, group: string | undefined): string[] {
+function decisionLines(models: DecisionModelsView | undefined, inUse: ReadonlySet<string>, choices: boolean, scope: string): string[] {
   return (models ?? []).flatMap(m => [
     ...(inUse.has(m.provider) && !m.keySet ? [`  ${keyMissingText(m)}`] : []),
-    ...(choices ? m.models.map(model => `  可选的决策模型：${m.displayName} 的 ${model.id}（${model.displayName}，key ${m.keySet ? '已填' : m.keyUnreadable ? '填没填看不出，密钥库读不了' : '还没填'}）。选它：vonvon settings set ${group ? `--group ${group} ` : ''}judge.selection='${JSON.stringify({ kind: 'decision', provider: m.provider, model: model.id })}'`) : []),
+    ...(choices ? m.models.map(model => `  可选的决策模型：${m.displayName} 的 ${model.id}（${model.displayName}，key ${m.keySet ? '已填' : m.keyUnreadable ? '填没填看不出，密钥库读不了' : '还没填'}）。选它：vonvon settings set ${scope}judge.selection='${JSON.stringify({ kind: 'decision', provider: m.provider, model: model.id })}'`) : []),
   ]);
 }
 
@@ -226,7 +226,9 @@ export async function runSettingsGet(section: string | undefined, target: Target
       const live = (effective as { selection?: JudgeSelectionView }).selection;
       const inUse = new Set(botJudge ? Object.values((view as AgentSettingsView).judgeByBackend ?? {}).flatMap(j => j.provider ?? [])
         : live && isKnownJudgeSelection(live) && live.kind === 'decision' ? [live.provider] : []);
-      human.push(...decisionLines(decisionModels, inUse, section === 'judge', view.scope.kind === 'project' ? target.group : undefined));
+      // the --bot and --group this command was given, so the line runs as printed on a machine with several bots
+      const scope = `${target.bot !== undefined ? `--bot ${target.bot} ` : ''}${view.scope.kind === 'project' && target.group !== undefined ? `--group ${target.group} ` : ''}`;
+      human.push(...decisionLines(decisionModels, inUse, section === 'judge', scope));
       if (prompt) human.push(`  ${promptSource(prompt, view.scope.kind === 'project')}`);
       human.push('  只在智能模式的群里用');
       if (prompt && section === 'judge') human.push(...promptText(prompt));

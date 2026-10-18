@@ -440,6 +440,9 @@ it('judge: set takes the selection JSON, get prints a row per backend and the pr
   Object.assign(projectView, { decisionModels: [typesafe], sections: { judge: section({ selection: jev }, 'r', { selection: jev }) } });
   h.clear(); await runSettingsGet('judge', { group: 'pay' }, h.io(), h.daemon);
   expect(h.out()).toContain(`${missing}${choose('还没填', '--group pay ')}`);
+  // and the bot it was given, so the line runs as printed where there are several bots
+  h.clear(); await runSettingsGet('judge', { bot: 'cli_a', group: 'pay' }, h.io(), h.daemon);
+  expect(h.out()).toContain(choose('还没填', '--bot cli_a --group pay '));
   // a keystore the daemon cannot read: said so, not taken for a missing key
   Object.assign(projectView, { decisionModels: [{ ...typesafe, keyUnreadable: true }] });
   h.clear(); await runSettingsGet('judge', { group: 'pay' }, h.io(), h.daemon);
