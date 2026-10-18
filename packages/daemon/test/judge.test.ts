@@ -394,3 +394,182 @@ describe('judge', () => {
     expect(result).toMatchObject({ decision: 'main', backend: 'codex-appserver', error: { kind: 'failed', detail: '未知后端' } });
   });
 });
+
+describe('decision models (s23f)', () => {
+  const KEY = 'ts_TESTKEY0000';
+  const JEV = { kind: 'decision', provider: 'typesafe', model: 'jev-latest' } as const;
+  /** Jev's answer to a request: `best` at 0.7 (its first option by default), the rest sharing 0.3. */
+  const answerTo = (init: RequestInit, best?: string, extra: Record<string, unknown> = {}): Response => {
+    const options = Object.keys(JSON.parse(init.body as string).questions.decision.criteria as object);
+    const top = best ?? options[0]!;
+    const probabilities = Object.fromEntries(options.map((o) => [o, o === top ? 0.7 : 0.3 / (options.length - 1)]));
+    return new Response(JSON.stringify({ model: 'jev-1.13.0', answers: { decision: { type: 'choice', choice: top, probabilities }, ...extra }, usage: { input_tokens: 1200, output_tokens: 30 } }),
+      { status: 200, headers: { 'x-typesafe-request-id': 'req_1' } });
+  };
+  function jev(key: () => Promise<string | undefined> = async () => KEY) {
+    const f = fakeBackend();
+    const sent: RequestInit[] = [];
+    let respond: (init: RequestInit) => Promise<Response> | Response = (init) => answerTo(init);
+    const fetchFn = vi.fn(async (_: unknown, init?: RequestInit) => { sent.push(init!); return respond(init!); });
+    const getSecret = vi.fn(key);
+    const judge = make(f.backend, { getSecret, fetch: fetchFn as unknown as typeof fetch });
+    return { judge, backend: f.backend, sent, fetchFn, getSecret, respond(fn: typeof respond) { respond = fn; } };
+  }
+  const jreq = (variant: JudgeVariant = 'main', extra: Partial<JudgeRequest> = {}) => req(variant, { botJudge: JEV, ...extra });
+  const logged = () => JSON.stringify([fake.log.info.mock.calls, fake.log.warn.mock.calls, fake.log.fail.mock.calls]);
+  const json = (status: number, body: unknown, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status, headers });
+
+  it('judges with the provider, not the backend: the reason and confidence from the probabilities, the version and tokens logged', async () => {
+    const j = jev();
+    j.respond((init) => answerTo(init, 'reply'));
+    const result = await j.judge.judge(jreq('topic', { topicTitle: '发版' }));
+    expect(result).toEqual({
+      decision: 'reply', reason: 'Jev：不回 0.30、回 0.70（把握度 0.40）', confidence: 0.4, backend: 'codex-appserver', model: 'jev-latest', provider: 'typesafe',
+      modelSource: 'bot', promptSource: 'bot', ms: 0,
+    });
+    expect(j.backend.judge).not.toHaveBeenCalled();
+    expect(j.backend.listModels).not.toHaveBeenCalled();
+    expect(j.getSecret).toHaveBeenCalledWith('typesafe-api-key');
+    expect(j.fetchFn).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(j.sent[0]!.body as string)).toMatchObject({ model: 'jev-latest', state: { topic_title: '发版', new_message: { text: '你好' } }, questions: { decision: { instructions: { rules: 'SMART' } } } });
+    expect(fake.log.info.mock.calls.find((c) => c[1] === 'verdict')![2]).toMatchObject({
+      provider: 'typesafe', model: 'jev-latest', decision: 'reply', confidence: 0.4, providerModel: 'jev-1.13.0', requestId: 'req_1', inputTokens: 1200, outputTokens: 30,
+    });
+    expect(logged()).not.toMatch(/TESTKEY|你好|SMART|Jev：/);
+  });
+
+  it('opens a topic under the anchor Jev picks, as the message id of its m-number', async () => {
+    const j = jev();
+    j.respond((init) => answerTo(init, 'topic', { anchor: { type: 'choice', choice: 'm2' } }));
+    const context = [{ id: 'om_old', at: 0, from: 'user' as const, name: '张三', text: '导出接口 500 有人看吗' }, { id: 'om_new', at: 1, from: 'bot' as const, name: '小码', text: '我看下' }];
+    expect(await j.judge.judge(jreq('main', { context }))).toMatchObject({ decision: 'topic', anchor: 'om_old' });
+  });
+
+  it('without a key sends nothing and falls back by variant, each time, logged as info; a key that is no key likewise', async () => {
+    const j = jev(async () => undefined);
+    expect(await j.judge.judge(jreq('main'))).toMatchObject({ decision: 'skip', provider: 'typesafe', error: { kind: 'key', detail: '没填 TypeSafe 的 key' } });
+    expect(await j.judge.judge(jreq('mentioned'))).toMatchObject({ decision: 'main', error: { kind: 'key' } });
+    expect(fake.log.info.mock.calls.filter((c) => c[1] === 'failed')).toHaveLength(2);
+    expect(fake.log.warn).not.toHaveBeenCalled();
+    const bad = jev(async () => `${KEY}\n`);
+    expect(await bad.judge.judge(jreq('topic'))).toMatchObject({ decision: 'skip', error: { kind: 'key', detail: 'TypeSafe 的 key 不是一串可见字符，重新填一次' } });
+    expect(j.fetchFn).not.toHaveBeenCalled();
+    expect(bad.fetchFn).not.toHaveBeenCalled();
+    expect(logged()).not.toContain('TESTKEY');
+  });
+
+  it('a keystore it cannot read fails with a fixed detail, none of its own words', async () => {
+    const j = jev(async () => { throw Object.assign(new Error('Master key must be owned by the current user: /home/u/master.key'), { code: 'EACCES' }); });
+    expect(await j.judge.judge(jreq('mentioned'))).toMatchObject({ decision: 'main', error: { kind: 'failed', detail: '密钥库读不了' } });
+    expect(fake.log.warn.mock.calls.find((c) => c[1] === 'keystore-unreadable')![2]).toMatchObject({ provider: 'typesafe', code: 'EACCES' });
+    expect(logged()).not.toMatch(/Master key|master\.key/);
+    expect(j.fetchFn).not.toHaveBeenCalled();
+  });
+
+  it('a provider this version does not know is unavailable: no quiet switch to the small model', async () => {
+    const j = jev();
+    expect(await j.judge.judge(jreq('mentioned', { botJudge: { ...JEV, provider: 'openai' } }))).toMatchObject({
+      decision: 'main', provider: 'openai', error: { kind: 'unavailable', detail: '这个版本不认识决策模型 openai' },
+    });
+    expect(j.fetchFn).not.toHaveBeenCalled();
+    expect(j.backend.judge).not.toHaveBeenCalled();
+  });
+
+  it('logs a failure by status and error type only, and an answer out of format by why', async () => {
+    const j = jev();
+    j.respond(() => json(401, { detail: { error_type: 'authentication_error', message: 'Cannot authenticate 群消息' } }, { 'x-typesafe-request-id': 'req_2' }));
+    expect(await j.judge.judge(jreq('main'))).toMatchObject({ decision: 'skip', error: { kind: 'auth', detail: 'TypeSafe 不认这个 key' } });
+    expect(fake.log.warn.mock.calls.find((c) => c[1] === 'decision-error')![2]).toEqual({
+      chatId: 'oc_g', ref: '123456', variant: 'main', provider: 'typesafe', model: 'jev-latest', kind: 'auth', status: 401, errorType: 'authentication_error', requestId: 'req_2', coolMs: 300_000, ms: 0,
+    });
+    const html = jev();
+    html.respond(() => new Response('<html>群消息</html>', { status: 200 }));
+    expect(await html.judge.judge(jreq('main'))).toMatchObject({ error: { kind: 'format', detail: '决策模型没按格式回答' } });
+    const shape = jev();
+    shape.respond(() => json(200, { answers: { decision: { choice: 'skip' } } }));
+    expect(await shape.judge.judge(jreq('main'))).toMatchObject({ error: { kind: 'format', detail: '决策模型没按格式回答' } });
+    expect(fake.log.info.mock.calls.find((c) => c[1] === 'decision-bad-answer')![2]).toMatchObject({ provider: 'typesafe', why: 'no-probabilities' });
+    expect(logged()).not.toMatch(/群消息|Cannot authenticate|你好/);
+  });
+
+  it('runs 8 at a time with 32 queued per provider, refuses the 41st as busy, and gives each slot on as a call settles', async () => {
+    const j = jev();
+    const pending: Array<() => void> = [];
+    j.respond((init) => new Promise((resolve) => pending.push(() => resolve(answerTo(init)))));
+    const results = Array.from({ length: 40 }, () => j.judge.judge(jreq('main')));
+    await vi.waitFor(() => expect(pending).toHaveLength(8));
+    expect(await j.judge.judge(jreq('mentioned'))).toMatchObject({ decision: 'main', error: { kind: 'busy', detail: '判断排队满了' } });
+    for (let round = 0; round < 5; round++) {
+      await vi.waitFor(() => expect(pending).toHaveLength(8));
+      for (const release of pending.splice(0)) release();
+    }
+    expect((await Promise.all(results)).every((r) => !r.error && r.decision === 'skip')).toBe(true);
+    expect(j.fetchFn).toHaveBeenCalledTimes(40);
+  });
+
+  it('its own 5 s is network; the judgement\'s timeout, queueing included, is timeout and sends no queued request', async () => {
+    const j = jev();
+    j.respond(() => new Promise(() => undefined));
+    const one = timed(j.judge.judge(jreq('mentioned')));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(one.value).toMatchObject({ decision: 'main', error: { kind: 'network', detail: 'TypeSafe 5 秒没回' } });
+    const running = Array.from({ length: 8 }, () => timed(j.judge.judge(jreq('main', { timeoutMs: 4_000 }))));
+    const queued = timed(j.judge.judge(jreq('main', { timeoutMs: 2_000 })));
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(queued.value).toMatchObject({ decision: 'skip', error: { kind: 'timeout' } });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(running.map((r) => r.value?.error?.kind)).toEqual(Array(8).fill('timeout'));
+    expect(j.fetchFn).toHaveBeenCalledTimes(1 + 8);
+    expect(fake.log.warn.mock.calls.filter((c) => c[1] === 'decision-error')).toHaveLength(1);
+  });
+
+  it('a 429 cools the whole provider for its retry-after; a model it does not have cools only that model', async () => {
+    const j = jev();
+    j.respond(() => json(429, {}, { 'retry-after': '90' }));
+    expect(await j.judge.judge(jreq('main'))).toMatchObject({ decision: 'skip', error: { kind: 'busy', detail: 'TypeSafe 限流了' } });
+    j.respond((init) => answerTo(init));
+    const other = { group: { chatId: 'oc_g', name: '群', backend: 'codex-appserver', judge: { ...JEV, model: 'jev-preview' } } };
+    expect(await j.judge.judge(jreq('mentioned', other))).toMatchObject({ decision: 'main', error: { kind: 'busy', detail: '不到 1 分钟前刚失败过，2 分钟内不再调' } });
+    expect(j.fetchFn).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect((await j.judge.judge(jreq('main'))).error).toBeUndefined();
+
+    j.respond(() => json(400, { detail: { error_type: 'api_usage_error', message: 'Unknown model: jev-preview' } }));
+    expect((await j.judge.judge(jreq('main', other))).error).toMatchObject({ kind: 'model', detail: 'TypeSafe 没有这个模型' });
+    j.respond((init) => answerTo(init));
+    expect((await j.judge.judge(jreq('main', other))).error?.kind).toBe('model');
+    expect((await j.judge.judge(jreq('main'))).error).toBeUndefined();
+    expect(j.fetchFn).toHaveBeenCalledTimes(4);
+  });
+
+  it('a key it refused cools 5 minutes, but a key changed meanwhile is tried at once', async () => {
+    let key = KEY;
+    const j = jev(async () => key);
+    j.respond(() => json(401, { detail: { error_type: 'authentication_error' } }));
+    expect((await j.judge.judge(jreq('main'))).error?.kind).toBe('auth');
+    j.respond((init) => answerTo(init));
+    expect((await j.judge.judge(jreq('main'))).error).toMatchObject({ kind: 'auth', detail: '不到 1 分钟前刚失败过，5 分钟内不再调' });
+    expect(j.fetchFn).toHaveBeenCalledTimes(1);
+    key = 'ts_NEWKEY0000';
+    expect((await j.judge.judge(jreq('main'))).error).toBeUndefined();
+    expect(j.fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('shutdown aborts the requests in flight and resolves once they settle', async () => {
+    const j = jev();
+    const signals: AbortSignal[] = [];
+    j.respond((init) => new Promise((_, reject) => {
+      signals.push(init.signal!);
+      init.signal!.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    }));
+    const results = [timed(j.judge.judge(jreq('main'))), timed(j.judge.judge(jreq('mentioned')))];
+    await vi.waitFor(() => expect(signals).toHaveLength(2));
+    let done = false;
+    void j.judge.shutdown().then(() => { done = true; });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(results.map((r) => [r.value?.decision, r.value?.error?.kind])).toEqual([['skip', 'closed'], ['skip', 'closed']]);
+    expect(signals.every((s) => s.aborted)).toBe(true);
+    expect(done).toBe(true);
+    expect(fake.log.warn.mock.calls.filter((c) => c[1] === 'decision-error')).toHaveLength(0);
+  });
+});

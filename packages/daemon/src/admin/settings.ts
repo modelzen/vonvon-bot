@@ -12,6 +12,8 @@ import { effectiveMode, getProjectByName, listProjects, mutateProject, noMention
 import { getSession, isRetiredKey, mutateSession, RETIRED_KEY_TEXT, type SessionRecord } from '../bot/session-store';
 import { DEFAULT_COMMENT_INSTRUCTIONS, saveCommentInstructions, syncAllCommentInstructions } from '../bot/comments';
 import { voiceView } from '../voice/view';
+import { listSecretIds } from '../config/keystore';
+import { DECISION_FORMAT_LINES, DECISION_INPUT_EXAMPLE, decisionProvider, decisionProviders, keyMissingText } from '../judge/decision';
 import { DECISION_PROVIDER_ID, parseStoredJudge, resolveJudgeModel } from '../judge/model';
 import { JUDGE_CLAUDE_NOTE, JUDGE_CODEX_NOTE, JUDGE_FORMAT_LINES, JUDGE_INPUT_EXAMPLE } from '../judge/prompt';
 import { readSmartPrompt, SMART_MAX_CHARS, SmartPromptError } from '../judge/smart-file';
@@ -49,6 +51,8 @@ export interface SettingsOwnerDeps {
   mutateSession?: typeof mutateSession;
   /** tests point it at a temporary bot directory */
   readSmartPrompt?: (appId: string, chatId?: string) => ReturnType<typeof readSmartPrompt>;
+  /** the keystore's ids, for whether a decision model's key is filled in */
+  secretIds?: () => Promise<string[]>;
   instructions?: {
     read(): Promise<string>;
     save(text: string): Promise<void>;
@@ -351,6 +355,9 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
     if (value.kind === 'decision') {
       if (!DECISION_PROVIDER_ID.test(value.provider))
         throw new SettingsInputError('决策模型的 provider 只能是小写字母、数字和 -，40 个字以内');
+      // any model id, as a hand-typed one: a wrong one fails its judgements as `model` and cools (s23f)
+      if (!decisionProvider(value.provider))
+        throw new SettingsInputError(`没有 ${value.provider} 这家决策模型，现在有：${decisionProviders().map(p => `${p.displayName}（${p.id}）`).join('、')}`);
       return { kind: 'decision', provider: value.provider, model: id.id };
     }
     const backend = value.backend ?? layerBackend;
@@ -392,9 +399,16 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
     const { model, effort, provider } = resolveJudgeModel(backend, layers, peekModels(backend));
     return { selection: provider ? { kind: 'decision', provider, model } : { kind: 'llm', backend, model, ...(effort ? { effort } : {}) } };
   }
-  /** SMART.md of the bot (no chatId) or the group, with the read-only parts around it. */
-  async function smartPromptView(chatId: string | undefined, notes: string[]): Promise<T.SmartPromptView> {
-    const fixed = { formatLines: { ...JUDGE_FORMAT_LINES }, inputExample: JUDGE_INPUT_EXAMPLE, maxLength: SMART_MAX_CHARS, ...(notes.length ? { backendNote: notes.join('\n') } : {}) };
+  /** Every decision model this version calls, and whether its key is filled in (an unreadable keystore counts as
+   * not): what `settings get` and a picker list (s23f, s28). */
+  async function decisionModels(): Promise<T.DecisionModelsView> {
+    const ids = await (deps.secretIds ?? listSecretIds)().catch(() => [] as string[]);
+    return decisionProviders().map(p => ({ provider: p.id, displayName: p.displayName, models: p.models.map(m => ({ ...m })), keyId: p.keyId, keySet: ids.includes(p.keyId) }));
+  }
+  /** SMART.md of the bot (no chatId) or the group, with the read-only parts around it: a decision model's options
+   * and state in place of the format lines and the text input when one judges (s23f). */
+  async function smartPromptView(chatId: string | undefined, notes: string[], decision: boolean): Promise<T.SmartPromptView> {
+    const fixed = { formatLines: { ...(decision ? DECISION_FORMAT_LINES : JUDGE_FORMAT_LINES) }, inputExample: decision ? DECISION_INPUT_EXAMPLE : JUDGE_INPUT_EXAMPLE, maxLength: SMART_MAX_CHARS, ...(notes.length ? { backendNote: notes.join('\n') } : {}) };
     try {
       return { ...await (deps.readSmartPrompt ?? readSmartPrompt)(botId, chatId), ...fixed };
     }
@@ -440,6 +454,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       };
       const botJudge = storedJudge(cfg.preferences?.judge);
       sections.judge.effective = judgeEffective(botJudge?.kind === 'llm' ? botJudge.backend : botBackendId(cfg.preferences), { bot: botJudge });
+      const botDecides = sections.judge.effective.selection.kind === 'decision';
       const judgeByBackend: NonNullable<T.AgentSettingsView['judgeByBackend']> = {};
       for (const id of backendIds()) {
         const { model, effort, provider, modelSource } = resolveJudgeModel(id, { bot: botJudge }, peekModels(id));
@@ -466,8 +481,10 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           revision: settingsRevision([botId, text]),
           maxEditLength: 30000
         },
-        smartPrompt: await smartPromptView(undefined, backendIds().flatMap(id => JUDGE_NOTES[id] ?? [])),
-        judgeByBackend
+        // the bot's default backend's groups, as `effective`; a decision model gets none of a backend's extras
+        smartPrompt: await smartPromptView(undefined, botDecides ? [] : backendIds().flatMap(id => JUDGE_NOTES[id] ?? []), botDecides),
+        judgeByBackend,
+        decisionModels: await decisionModels()
       };
     }
     if (scope.kind === 'project') {
@@ -501,7 +518,8 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           openIds: [...(p.allowedUsers ?? [])],
           revision: settingsRevision([botId, p.name, p.chatId, p.allowedUsers ?? []])
         },
-        smartPrompt: await smartPromptView(p.chatId, judgeNote ? [judgeNote] : [])
+        smartPrompt: await smartPromptView(p.chatId, judgeNote ? [judgeNote] : [], sections.judge.effective.selection.kind === 'decision'),
+        decisionModels: await decisionModels()
       };
     }
     if (scope.kind === 'session') {
@@ -527,6 +545,14 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
       };
     }
     throw new SettingsInputError('安装设置由 daemon 管理');
+  }
+  /** After a decision model is chosen without its key (owner: choose first, fill in later): what happens meanwhile
+   * and how to fill it in, as one more effect line, which the command line and the web page show as they are. */
+  async function keyMissing(selection: T.JudgeSelectionView | undefined): Promise<string | undefined> {
+    if (selection?.kind !== 'decision')
+      return undefined;
+    const chosen = (await decisionModels()).find(m => m.provider === selection.provider);
+    return chosen && !chosen.keySet ? keyMissingText(chosen) : undefined;
   }
   async function sectionView(edit: T.BotSettingsEdit): Promise<T.SettingsSectionView> {
     const view = await read(edit.scope);
@@ -712,10 +738,11 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
         });
       }
       const section = await sectionView(edit);
+      const keyless = edit.section === 'judge' ? await keyMissing(edit.patch.selection as T.JudgeSelectionView | undefined) : undefined;
       return {
         kind: 'saved',
         section,
-        effects: [...section.value.apply.filter(item => item.fields.some(field => Object.hasOwn(edit.patch, field))), ...additionalEffects]
+        effects: [...section.value.apply.filter(item => item.fields.some(field => Object.hasOwn(edit.patch, field))), ...additionalEffects, ...(keyless ? effect(['selection'], 'next-message', keyless) : [])]
       };
     }
     catch (error) {

@@ -11,6 +11,7 @@ import type { AgentSettingsView, JudgeSelection, ProjectSettingsView } from '../
 import { addProject, getProjectByName, updateProject } from '../src/project/registry';
 import { readSmartPrompt } from '../src/judge/smart-file';
 import { DEFAULT_SMART_PROMPT, JUDGE_CLAUDE_NOTE, JUDGE_CODEX_NOTE, JUDGE_FORMAT_LINES, JUDGE_INPUT_EXAMPLE } from '../src/judge/prompt';
+import { DECISION_FORMAT_LINES, DECISION_INPUT_EXAMPLE, keyMissingText } from '../src/judge/decision';
 import type { AppConfig } from '../src/config/schema';
 import type { AgentBackend, ModelInfo, ReasoningEffort } from '../src/agent/types';
 
@@ -35,11 +36,13 @@ const fake = (id: string, list: ModelInfo[]) => ({
 let backends: Record<string, AgentBackend>;
 const botDir = () => join(paths.appDir, 'bot');
 let cfg: AppConfig;
+/** the keystore's ids */
+let secretIds: string[] = [];
 
 function owner(overrides: Partial<SettingsOwnerDeps> = {}) {
   return createSettingsOwner({
     cfg, writePreferences: createAppPreferencesWriter({ cfg }), backendFor: (id) => backends[id] ?? backends['codex-appserver']!,
-    evictLiveSessionsForChat: vi.fn(async () => {}), readSmartPrompt: (appId, chatId) => readSmartPrompt(appId, chatId, botDir()), ...overrides,
+    evictLiveSessionsForChat: vi.fn(async () => {}), readSmartPrompt: (appId, chatId) => readSmartPrompt(appId, chatId, botDir()), secretIds: async () => secretIds, ...overrides,
   });
 }
 async function save(scope: typeof agent | typeof project, selection: JudgeSelection) {
@@ -70,6 +73,7 @@ beforeEach(async () => {
   vi.stubEnv('CLAUDE_CONFIG_DIR', join(paths.appDir, 'no-claude'));
   vi.stubEnv('ANTHROPIC_BASE_URL', '');
   backends = Object.fromEntries(Object.entries(LISTS).map(([id, list]) => [id, fake(id, list)]));
+  secretIds = [];
   await rm(paths.appDir, { recursive: true, force: true }); await mkdir(paths.appDir, { recursive: true });
   cfg = { accounts: { app: { id: botId, tenant: 'feishu', secret: { source: 'exec', id: 's' } } }, preferences: {} } as unknown as AppConfig;
   await saveConfig(cfg);
@@ -136,6 +140,8 @@ describe('judge settings: checks (design 2.4)', () => {
     [{ kind: 'llm', backend: 'gemini', model: 'x', custom: true }, '未知后端'],
     [{ kind: 'decision', provider: 'Type Safe', model: 'jev-latest' }, '决策模型的 provider 只能是小写字母、数字和 -，40 个字以内'],
     [{ kind: 'decision', provider: 'typesafe', model: 'jev <latest>' }, '模型 ID 不能包含空格、换行、反引号或尖括号。'],
+    [{ kind: 'decision', provider: 'openai', model: 'x' }, '没有 openai 这家决策模型，现在有：TypeSafe（typesafe）'],
+    [{ kind: 'decision', provider: 'constructor', model: 'x' }, '没有 constructor 这家决策模型，现在有：TypeSafe（typesafe）'],
   ])('bot layer refuses %j', async (selection, message) => {
     expect(messageOf(await save(agent, selection))).toBe(message);
   });
@@ -261,6 +267,24 @@ describe('judge settings: the view', () => {
     expect((await o.read(project) as ProjectSettingsView).sections.judge.effective.selection).toEqual({ kind: 'llm', backend: 'codex-appserver', model: 'gpt-6-luna', effort: 'low' });
   });
 
+  it('lists the decision models and whether each key is in; choosing one without it says how to fill it in (s23f)', async () => {
+    const o = owner();
+    const listed = [{ provider: 'typesafe', displayName: 'TypeSafe', models: [{ id: 'jev-latest', displayName: 'Jev' }], keyId: 'typesafe-api-key', keySet: false }];
+    expect((await o.read(agent) as AgentSettingsView).decisionModels).toEqual(listed);
+    const missing = keyMissingText(listed[0]!);
+    expect(missing).toContain('vonvon secrets set typesafe-api-key < 存着 key 的文件');
+    expect(await save(project, JEV)).toMatchObject({ kind: 'saved', effects: [{ detail: '智能模式的下一次判断就用新模型' }, { fields: ['selection'], when: 'next-message', detail: missing }] });
+    // a language model, or the key in: no such line
+    expect(await save(agent, { kind: 'llm', model: 'gpt-6-luna' })).toMatchObject({ effects: [{ detail: '智能模式的下一次判断就用新模型' }] });
+    secretIds = ['app-secret', 'typesafe-api-key'];
+    expect(await save(agent, JEV)).toMatchObject({ effects: [{ detail: '智能模式的下一次判断就用新模型' }] });
+    const p = await o.read(project) as ProjectSettingsView;
+    expect(p.decisionModels).toEqual([{ ...listed[0], keySet: true }]);
+    expect(projectViewSchema.safeParse(p).error?.issues).toBeUndefined();
+    // a keystore it cannot read counts as no key
+    expect((await owner({ secretIds: async () => { throw new Error('bad'); } }).read(agent) as AgentSettingsView).decisionModels?.[0]?.keySet).toBe(false);
+  });
+
   it('a kind this version does not know shows as stored, parses in the protocol and is never rewritten; a broken value shows as default', async () => {
     const future = { kind: 'oracle', provider: 'x', model: 'y', weights: [1, 2] };
     cfg.preferences = { judge: future as never, showToolCalls: true };
@@ -296,9 +320,13 @@ describe('judge settings: the view', () => {
     await updateProject('demo', { backend: 'claude-agent' });
     p = await o.read(project) as ProjectSettingsView;
     expect(p.smartPrompt).toMatchObject({ source: 'group', text: '群的提示词', backendNote: JUDGE_CLAUDE_NOTE });
-    // a decision model gets none of a backend's extras
+    // a decision model gets none of a backend's extras, and its options and state in place of the format lines and input
     await save(project, JEV);
-    expect((await o.read(project) as ProjectSettingsView).smartPrompt).not.toHaveProperty('backendNote');
+    p = await o.read(project) as ProjectSettingsView;
+    expect(p.smartPrompt).not.toHaveProperty('backendNote');
+    expect(p.smartPrompt).toMatchObject({ source: 'group', formatLines: DECISION_FORMAT_LINES, inputExample: DECISION_INPUT_EXAMPLE });
+    await save(agent, JEV);
+    expect((await o.read(agent) as AgentSettingsView).smartPrompt).toEqual({ source: 'bot', path: join(botDir(), 'SMART.md'), text: 'bot 的提示词', formatLines: DECISION_FORMAT_LINES, inputExample: DECISION_INPUT_EXAMPLE, maxLength: 8000 });
     await writeFile(join(botDir(), 'SMART.md'), 'x'.repeat(8001));
     a = await o.read(agent) as AgentSettingsView;
     expect(a.smartPrompt).toMatchObject({ error: 'SMART.md 超过 8000 字', path: join(botDir(), 'SMART.md'), text: '' });

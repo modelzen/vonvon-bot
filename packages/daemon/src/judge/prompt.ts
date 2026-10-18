@@ -105,11 +105,15 @@ function cut(text: string, max: number): string {
   return chars.length > max ? `${chars.slice(0, max).join('')}…` : text;
 }
 
-/** Message text: cut, controls dropped, every newline indented two spaces, so no text written in a
- * message can start a line of its own (a forged 【要判断的消息】 stays indented). */
+/** Message text: cut, controls other than the newline dropped. */
+export function plainText(text: string, max: number): string {
+  return cut(text.replace(/\r\n?|[\u2028\u2029]/g, '\n').replace(CONTROL, ''), max);
+}
+
+/** Message text as {@link plainText}, every newline indented two spaces, so no text written in a message can start a
+ * line of its own (a forged 【要判断的消息】 stays indented). */
 function body(text: string, max: number): string {
-  const clean = text.replace(/\r\n?|[\u2028\u2029]/g, '\n').replace(CONTROL, '');
-  return cut(clean, max).replace(/\n/g, '\n  ');
+  return plainText(text, max).replace(/\n/g, '\n  ');
 }
 
 function cleanLine(text: string): string {
@@ -153,6 +157,22 @@ function renderLine(line: JudgeLine, max: number): string {
   if (line.quote) notes.push(`引用 ${oneLine(line.quote.name)}：${body(line.quote.text, JUDGE_INPUT_LIMITS.quoteChars)}`);
   const note = notes.length ? `（${notes.join('；')}）` : '';
   return `${hhmm(line.at)} ${who}${note}：${body(line.text, max)}`;
+}
+
+/** One line as a decision model's state gives it (s23f): the cuts and cleaning of the text input. A JSON string
+ * cannot start a line, so newlines stay as they are; the speaker's kind is a field of its own, so a name loses a
+ * trailing （bot） and needs no quotes. This bot's own lines have no `speaker`: the caller puts the bot's name. */
+export function lineFields(line: JudgeLine, max: number): {
+  time: string; speaker?: string; text: string; mentions?: string[]; quote?: { speaker: string; text: string };
+} {
+  const mentions = line.mentions ?? [];
+  return {
+    time: hhmm(line.at),
+    ...(line.from === 'self' ? {} : { speaker: oneLine(cleanLine(line.name).replace(BOT_SUFFIX, '')) }),
+    text: plainText(line.text, max),
+    ...(mentions.length ? { mentions: mentions.slice(0, MENTIONS_MAX).map((name) => oneLine(name)) } : {}),
+    ...(line.quote ? { quote: { speaker: oneLine(line.quote.name), text: plainText(line.quote.text, JUDGE_INPUT_LIMITS.quoteChars) } } : {}),
+  };
 }
 
 /** The context lines the input shows, newest first: m1, m2… (s25b). Cut by the line and character budget, so a line
@@ -205,10 +225,12 @@ export const JUDGE_INPUT_EXAMPLE_REQUEST = {
   },
 } satisfies Parameters<typeof renderJudgeInput>[0];
 
+/** The input's bounds, under each sample input. */
+export const JUDGE_INPUT_BOUNDS = `（上限：最近的消息最多 ${JUDGE_INPUT_LIMITS.contextLines} 条、合计 ${JUDGE_INPUT_LIMITS.contextChars} 字，每条 ${JUDGE_INPUT_LIMITS.lineChars} 字；要判断的消息 ${JUDGE_INPUT_LIMITS.messageChars} 字；个性 ${JUDGE_INPUT_LIMITS.personaChars} 字；引用 ${JUDGE_INPUT_LIMITS.quoteChars} 字）`;
+
 /** What the model is given, filled with sample data, plus the bounds: shown read-only (product.md
  * 第 11 节 2026-10-16 "也都可以看到"). */
-export const JUDGE_INPUT_EXAMPLE = `${renderJudgeInput(JUDGE_INPUT_EXAMPLE_REQUEST)}
-（上限：最近的消息最多 ${JUDGE_INPUT_LIMITS.contextLines} 条、合计 ${JUDGE_INPUT_LIMITS.contextChars} 字，每条 ${JUDGE_INPUT_LIMITS.lineChars} 字；要判断的消息 ${JUDGE_INPUT_LIMITS.messageChars} 字；个性 ${JUDGE_INPUT_LIMITS.personaChars} 字；引用 ${JUDGE_INPUT_LIMITS.quoteChars} 字）`;
+export const JUDGE_INPUT_EXAMPLE = `${renderJudgeInput(JUDGE_INPUT_EXAMPLE_REQUEST)}\n${JUDGE_INPUT_BOUNDS}`;
 
 function asObject(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;

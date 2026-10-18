@@ -46,6 +46,14 @@ export type JudgeSelectionView = JudgeSelection | {
   kind: string;
   [key: string]: unknown;
 };
+/** The decision models a daemon calls and whether each key is filled in (s23f); see the protocol's decisionModels. */
+export type DecisionModelsView = Array<{
+  provider: string;
+  displayName: string;
+  models: Array<{ id: string; displayName: string }>;
+  keyId: string;
+  keySet: boolean;
+}>;
 export interface SmartPromptView {
   source: 'default' | 'bot' | 'group';
   path: string;
@@ -174,6 +182,7 @@ export interface AgentSettingsView {
     provider?: string;
     source: 'bot' | 'default';
   }>;
+  decisionModels?: DecisionModelsView;
 }
 export interface ProjectSettingsView {
   scope: Extract<SettingsScope, {
@@ -193,6 +202,7 @@ export interface ProjectSettingsView {
     revision: string;
   };
   smartPrompt?: SmartPromptView;
+  decisionModels?: DecisionModelsView;
 }
 export interface SessionSettingsView {
   scope: Extract<SettingsScope, {

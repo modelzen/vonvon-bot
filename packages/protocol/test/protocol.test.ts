@@ -145,6 +145,13 @@ describe("pinned contract extraction", () => {
     expect(save("response", {noMention:true})).toBe(true);
     expect(save("compact", {autoCompact:false})).toBe(false);
   });
+  it("s23f: decisionModels is optional in agent and project views", () => {
+    const old = fixture("agent-settings.json") as Record<string, unknown>;
+    expect(agentViewSchema.parse(old).decisionModels).toBeUndefined();
+    const decisionModels = [{provider:"typesafe",displayName:"TypeSafe",models:[{id:"jev-latest",displayName:"Jev"}],keyId:"typesafe-api-key",keySet:false}];
+    expect(agentViewSchema.parse({ ...old, decisionModels }).decisionModels).toEqual(decisionModels);
+    expect(agentViewSchema.safeParse({ ...old, decisionModels: [{ ...decisionModels[0], keySet: "no" }] }).success).toBe(false);
+  });
   it("s23d: the judge section, smartPrompt and judgeByBackend are optional in views; default, llm and decision save", () => {
     const section = (value: unknown) => ({stored:value,effective:value,revision:"r1",access:{kind:"writable"},apply:[]});
     const old = fixture("agent-settings.json") as { sections: Record<string, unknown> };
