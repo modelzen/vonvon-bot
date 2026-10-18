@@ -61,7 +61,6 @@ import { isGoalTerminal, SessionInUseError, UsageError } from '../agent/types';
 import { parseModelId } from '../agent/model-id';
 import {
   getMaxConcurrentRuns,
-  getPendingPolicy,
   getModelDisplay,
   getRunIdleTimeoutMs,
   getSessionTitleConfig,
@@ -191,17 +190,16 @@ import { getDesktopRelease } from '../service/desktop-release';
 import { runtimeDistribution } from '../service/distribution';
 import { paths } from '../config/paths';
 import { loadBots } from '../config/bots';
+import { botBackendId, groupBackendId, resolveCommentsExecution, resolveExecution, resolveModelPreference, type ModelPreference } from '../config/execution';
 import { fileClaimMode, OutboundFiles } from './outbound-files';
 import { getSecret } from '../config/keystore';
 import { buildScopeGrantUrl, JOIN_GROUP_SCOPES } from '../config/scopes';
 import { validateAppCredentials } from '../utils/feishu-auth';
 import {
-  effectiveMode,
   getProjectByChatId,
   getProjectByName,
   listProjects,
   noMentionOf,
-  pendingPolicyOf,
   ruleKind,
   mutateProject,
   removeProject,
@@ -380,11 +378,11 @@ export function pickDefault(
   return { model: def?.id ?? 'gpt-5.5', effort };
 }
 
-/** Whether `model` is the project's hand-typed default (3.11): a session started
+/** Whether `model` is the hand-typed default it started from (3.11): a session started
  * on it records `modelCustom`, so the /model card and the web keep showing it as
- * hand-typed after the project default changes. */
-function isCustomDefault(project: Pick<Project, 'defaultModel' | 'defaultModelCustom'> | undefined, model: string | undefined): boolean {
-  return Boolean(model && project?.defaultModelCustom && project.defaultModel === model);
+ * hand-typed after the default changes. */
+function isCustomDefault(prefer: ModelPreference | undefined, model: string | undefined): boolean {
+  return Boolean(model && prefer?.custom && prefer.model === model);
 }
 
 /**
@@ -912,9 +910,32 @@ export function createOrchestrator(
     return be;
   }
 
-  /** 会话后端是否支持 `/goal` 自治目标（codex caps undefined ⇒ true）。 */
-  function goalCapable(project?: Project): boolean {
-    return backendFor(project?.backend).capabilities?.goal ?? true;
+  /** The group's execution values (s36d2): its tier, network, workspace and 运行中来了消息. */
+  function execOf(project: Project | undefined) {
+    return resolveExecution({ bot: cfg.preferences, group: project });
+  }
+  /** The group's backend: its own, else Codex; not the bot default (product.md 3.2). */
+  function groupBackend(project: Pick<Project, 'backend'> | undefined): AgentBackend {
+    return backendFor(groupBackendId(project));
+  }
+  /** A session runs on its record's backend; a new one on the group's. */
+  function sessionBackendOf(rec: Pick<SessionRecord, 'backend'> | undefined, project: Project | undefined): AgentBackend {
+    return backendFor(rec?.backend ?? groupBackendId(project));
+  }
+  /** Where a session of `project` runs: the group's primary workspace (3.3). Without a group,
+   * the record's cwd, else fallbackCwd: the bot's own workspace waits for 私聊 (s49). */
+  function workCwd(project: Project | undefined, rec?: Pick<SessionRecord, 'cwd'>): string {
+    return project ? execOf(project).workspaces.primary ?? project.cwd : rec?.cwd ?? fallbackCwd;
+  }
+  /** The model a new session on `backendId` starts from: the group's, else the bot's on the same backend. */
+  function modelPrefOf(project: Project | undefined, backendId: string): ModelPreference | undefined {
+    return resolveModelPreference({ bot: cfg.preferences, group: project }, backendId);
+  }
+
+  /** 会话后端是否支持 `/goal` 自治目标（codex caps undefined ⇒ true）：已有会话看记录里的后端。 */
+  async function goalCapable(project: Project | undefined, sessionKey?: string): Promise<boolean> {
+    const rec = sessionKey ? await getSession(sessionKey).catch(() => undefined) : undefined;
+    return sessionBackendOf(rec, project).capabilities?.goal ?? true;
   }
 
   /** 后端不支持 `/goal` 时的统一回执。关键：在「加 OKR reaction / 起 reserved run」之前
@@ -1585,7 +1606,7 @@ export function createOrchestrator(
       }
       if (await refuseFullOnly(msg, project, ts)) return;
       if (goalObjective) {
-        if (!goalCapable(project)) {
+        if (!(await goalCapable(project, ts.sessionKey))) {
           await denyGoal(msg, false);
           return;
         }
@@ -1637,7 +1658,7 @@ export function createOrchestrator(
       }
       if (await refuseFullOnly(msg, project, ts)) return;
       if (goalObjective) {
-        if (!goalCapable(project)) {
+        if (!(await goalCapable(project, ts.sessionKey))) {
           await denyGoal(msg, true);
           return;
         }
@@ -1682,7 +1703,7 @@ export function createOrchestrator(
     }
     if (await reopenedTopic(msg)) return;
     if (goalObjective) {
-      if (!goalCapable(project)) {
+      if (!(await goalCapable(project))) {
         await denyGoal(msg, false);
         return;
       }
@@ -1857,9 +1878,11 @@ export function createOrchestrator(
   /** A turn's resolved permission: the group's one tier, whoever sends (s15c). */
   type TurnPerm = { mode?: PermissionMode; network?: boolean };
 
-  /** The group's tier and network for `project`. */
+  /** The group's tier and network for `project`; none without a group (私聊 waits for s49). */
   function turnPerm(project: Project | undefined): TurnPerm {
-    return project ? { mode: effectiveMode(project), network: project.network } : {};
+    if (!project) return {};
+    const exec = execOf(project);
+    return { mode: exec.permission, network: exec.network };
   }
 
   /** As {@link turnPerm}, plus the session key: the place itself, one session for everyone. */
@@ -1875,7 +1898,7 @@ export function createOrchestrator(
   async function refuseFullOnly(msg: NormalizedMessage, project: Project, perm: TurnPerm): Promise<boolean> {
     const mode = perm.mode ?? 'full';
     if (mode === 'full') return false;
-    const be = backendFor(project.backend);
+    const be = groupBackend(project);
     if (!be.fullAccessOnly?.()) return false;
     log.info('intake', 'reject', { reason: 'full-only', mode });
     noteNotReplied(msg, 'tier-unavailable', { backendId: be.id });
@@ -2042,7 +2065,7 @@ export function createOrchestrator(
   ): Promise<void> {
     // Already a line of the running turn's record block (see ActiveState.woven): not steered in again.
     if (wovenSkip(cur, msg) || recalledSkip(msg)) return;
-    if (!extra?.queueOnly && pendingPolicyOf(getPendingPolicy(cfg), project) === 'steer' && cur.run && cur.thread && cur.thread.supportsSteer !== false) {
+    if (!extra?.queueOnly && execOf(project).pendingPolicy === 'steer' && cur.run && cur.thread && cur.thread.supportsSteer !== false) {
       const tid = cur.run.turnId();
       if (tid) {
         const voiceReply = cur.voiceReply?.run === cur.run ? cur.voiceReply : undefined;
@@ -2289,15 +2312,13 @@ export function createOrchestrator(
         // sessions may also lack these fields; bind the next ordinary turn to
         // explicit defaults so the card describes what we actually request.
         if (!thread || (flat && !goal && !model)) {
-          const be = backendFor(prior?.backend ?? project?.backend);
-          const defaults = pickDefault(await listModels(be), {
-            model: project?.defaultModel,
-            effort: project?.defaultEffort,
-            custom: project?.defaultModelCustom,
-          });
+          // The backend the session runs on: the record's (also when rebuilt in a new cwd), else the group's.
+          const be = sessionBackendOf(prior, project);
+          const prefer = modelPrefOf(project, be.id);
+          const defaults = pickDefault(await listModels(be), prefer);
           if (!model) {
             model = defaults.model;
-            modelCustom = isCustomDefault(project, model);
+            modelCustom = isCustomDefault(prefer, model);
           }
           effort ??= defaults.effort;
           if (prior) await patchSession(sessionKey, { model, effort, modelCustom });
@@ -2413,8 +2434,9 @@ export function createOrchestrator(
         if (!thread) {
           // Unknown session (created before this bridge, or store lost): treat as
           // a fresh session bound to the resolved cwd, on the project's backend.
-          const cwd = project?.cwd ?? fallbackCwd;
-          const be = backendFor(project?.backend);
+          // Rebuilt after the cwd changed: the record's backend, as its model is (s36d2).
+          const cwd = workCwd(project);
+          const be = sessionBackendOf(prior, project);
           thread = await be.startThread({ cwd, model, effort, mode: perm.mode, network: perm.network });
           trackSession(sessionKey, thread);
           // 自愈观测：来源=全新会话（无持久化记录），与 resume-ok/resume-recreate
@@ -2443,8 +2465,8 @@ export function createOrchestrator(
         } else if (recreated) {
           // resume 失败后创建的是一个全新的 HOST 会话；它属于升级后的新会话，
           // 应独立登记标题任务（旧 sessionId 的 ledger/标题绝不复用）。
-          const be = backendFor(prior?.backend ?? project?.backend);
-          const cwd = project?.cwd ?? prior?.cwd ?? fallbackCwd;
+          const be = sessionBackendOf(prior, project);
+          const cwd = workCwd(project, prior);
           titleJobKey = await registerSessionTitle(be, thread.sessionId, cwd, titleSource);
           // Full replacement drops the old session's titleJobKey even if title
           // registration failed; carrying it across would let a later turn attach
@@ -2468,7 +2490,7 @@ export function createOrchestrator(
           // `/clear` 先创建一个没有首条提问的 waiting_source job；只有它能在
           // 此处被补源。手动 `/resume` 没有 ledger row，attach 返回 false，因而
           // 不会给导入/历史会话自动改名。
-          const be = backendFor(prior?.backend ?? project?.backend);
+          const be = sessionBackendOf(prior, project);
           const expected = sessionTitleJobKey(be.id, thread.sessionId);
           if (prior?.titleJobKey === expected) {
             await attachSessionTitleSource(be.id, thread.sessionId, titleSource);
@@ -2498,11 +2520,11 @@ export function createOrchestrator(
           // session's cwd. Omitting it silently fell back to the bridge process's
           // own cwd (the launchd service has none → `/`), so every relative image
           // ref was resolved against `/` and rejected as image-outside-cwd.
-          cwd: project?.cwd ?? prior?.cwd ?? fallbackCwd,
+          cwd: workCwd(project, prior),
           mode: perm.mode,
           network: perm.network,
           // The backend resolveThread routed by: the record's, else the project's.
-          backendId: backendFor(prior?.backend ?? project?.backend).id,
+          backendId: sessionBackendOf(prior, project).id,
           summary: stripFileTokens(summaryText ?? text).slice(0, 80) || '(本轮任务)',
           requesterOpenId: msg.senderId, requesterKind: askRequesterKind(msg),
           requestedAt: msg.createTime || tIntake,
@@ -2533,7 +2555,7 @@ export function createOrchestrator(
         dropCompact(reserved);
         reaction?.done();
         log.fail('intake', err);
-        if (!goal) noteFailure(msg, flat ? 'main' : 'topic', launchOpts?.backendId ?? backendFor(project?.backend).id, { error: err });
+        if (!goal) noteFailure(msg, flat ? 'main' : 'topic', launchOpts?.backendId ?? groupBackend(project).id, { error: err });
         await channel
           .send(msg.chatId, { markdown: runFailureMessage(err, dropped, launchOpts?.sessionNotice) }, { replyTo: msg.messageId, replyInThread: !flat })
           .catch(() => undefined);
@@ -2678,7 +2700,7 @@ export function createOrchestrator(
       log.fail('agent', err, { phase: 'resume-on-turn', threadId });
       // Open in a terminal or the Codex app (s15b): say so and keep the session.
       if (err instanceof SessionInUseError) throw err;
-      const cwd = project?.cwd ?? rec.cwd ?? fallbackCwd;
+      const cwd = workCwd(project, rec);
       const fresh = await be.startThread({
         cwd,
         model: rec.model,
@@ -2738,13 +2760,14 @@ export function createOrchestrator(
       // unlike an in-topic turn (see handleTurn). Goal runs skip this lifecycle —
       // the OKR reaction (added at dispatch) is their receipt.
       const reaction = goal ? undefined : runReaction(msg.messageId, !sema.hasFree());
-      const cwd = project?.cwd ?? fallbackCwd;
+      const cwd = workCwd(project);
       const perm = turnPerm(project);
       // lazy banner branch refresh (design §3.2) — best-effort, non-blocking
       if (project) void trackTask(refreshBranch(channel, project).catch(() => undefined));
       // Pick the default model FROM THE PROJECT'S BACKEND — a claude project must
       // not be handed codex's default ('gpt-5.5'). Unset backend → codex, as before.
-      const be = backendFor(project?.backend);
+      const be = groupBackend(project);
+      const prefer = modelPrefOf(project, be.id);
       // ── 入站并行（M-1）── listModels+startThread（本地 spawn，实测 250ms–1.6s）
       // 与图片下载 / 文件+引用织入（飞书 API）互不依赖。任何一路失败都终止本轮
       // 并回 ❌（原先 ingest 失败只进日志、reaction 卡死——顺带修正），但已起的
@@ -2752,11 +2775,7 @@ export function createOrchestrator(
       const tIntake = Date.now();
       let tResolveDone = tIntake;
       const threadP = (async () => {
-        const { model, effort } = pickDefault(await listModels(be), {
-          model: project?.defaultModel,
-          effort: project?.defaultEffort,
-          custom: project?.defaultModelCustom,
-        });
+        const { model, effort } = pickDefault(await listModels(be), prefer);
         const thread = await be.startThread({ cwd, model, effort, mode: perm.mode, network: perm.network });
         tResolveDone = Date.now();
         return { thread, model, effort };
@@ -2830,7 +2849,7 @@ export function createOrchestrator(
         images,
         model,
         effort,
-        modelCustom: isCustomDefault(project, model),
+        modelCustom: isCustomDefault(prefer, model),
         cwd,
         mode: perm.mode,
         network: perm.network,
@@ -2871,12 +2890,12 @@ export function createOrchestrator(
       }
       try {
         const project = await getProjectByChatId(msg.chatId);
-        const cwd = project?.cwd ?? fallbackCwd;
+        const cwd = workCwd(project);
         // Routed so a no-resume backend surfaces its clear "not supported" error
         // here. The resolved backend id rides the card state AND each pick
         // button's callback value (`b`), so the pick → readHistory → rebind path
         // stays on the same backend that listed the sessions.
-        const be = backendFor(project?.backend);
+        const be = groupBackend(project);
         const threads = await be.listThreads(cwd);
         const state: ResumeCardState = {
           chatId: msg.chatId,
@@ -2914,16 +2933,12 @@ export function createOrchestrator(
         // claude 项目的 /model 卡绝不能列 codex 模型——选中即经 patchSession
         // 持久化，重启 resume 会把 codex model id 喂给 claude CLI，会话坏死。
         const [rec, project] = await Promise.all([getSession(sessionKey), getProjectByChatId(msg.chatId)]);
-        const be = backendFor(rec?.backend ?? project?.backend);
+        const be = sessionBackendOf(rec, project);
         const models = await listModels(be);
-        // Seed the /model card's "current" from the project default (when this
-        // topic has no session record yet) so a fresh topic shows what it WILL
-        // start on; pickDefault validates it against the live list.
-        const def = pickDefault(models, {
-          model: project?.defaultModel,
-          effort: project?.defaultEffort,
-          custom: project?.defaultModelCustom,
-        });
+        // Seed the /model card's "current" from the default (when this topic has
+        // no session record yet) so a fresh topic shows what it WILL start on;
+        // pickDefault validates it against the live list.
+        const def = pickDefault(models, modelPrefOf(project, be.id));
         // 记录里跨后端污染的 model id（旧版未路由的 /model 卡写入）不在本后端
         // 列表里——回落默认，别把坏值当 select 初值渲染。手填的 id（会话上标了
         // modelCustom）不在列表里也照显示。
@@ -3149,16 +3164,28 @@ export function createOrchestrator(
       try {
         const [rec, project] = await Promise.all([getSession(sessionKey), getProjectByChatId(msg.chatId)]);
         // Route by the session's backend (fall back to the project's) — a fresh
-        // codex thread for a codex session, claude for a claude one.
-        const be = backendFor(rec?.backend ?? project?.backend);
-        const cwd = rec?.cwd ?? project?.cwd ?? fallbackCwd;
+        // codex thread for a codex session, claude for a claude one. The cwd is the
+        // group's current one, not the record's (s36d2).
+        const be = sessionBackendOf(rec, project);
+        const cwd = workCwd(project, rec);
         // Carry the session's chosen model/effort into the new thread so /clear
-        // resets the CONVERSATION, not the user's model pick. Tier (mode/network)
-        // comes from the caller's live perm.
+        // resets the CONVERSATION, not the user's model pick; a session without one
+        // starts on the default, as its next turn would. Tier (mode/network) comes
+        // from the caller's live perm.
+        let model = rec?.model;
+        let effort = rec?.effort;
+        let modelCustom = rec?.modelCustom;
+        if (!model) {
+          const prefer = modelPrefOf(project, be.id);
+          const picked = pickDefault(await listModels(be), prefer);
+          model = picked.model;
+          effort ??= picked.effort;
+          modelCustom = isCustomDefault(prefer, model);
+        }
         const fresh = await be.startThread({
           cwd,
-          model: rec?.model,
-          effort: rec?.effort,
+          model,
+          effort,
           mode: perm.mode,
           network: perm.network,
         });
@@ -3183,9 +3210,9 @@ export function createOrchestrator(
           sessionId: fresh.sessionId,
           backend: be.id,
           titleJobKey,
-          model: rec?.model,
-          effort: rec?.effort,
-          modelCustom: rec?.modelCustom,
+          model,
+          effort,
+          modelCustom,
           summary: '(新会话)',
           // The new session starts at this command (product.md 3.5 "命令"), also
           // when it is rebuilt before its first turn (from).
@@ -3218,7 +3245,7 @@ export function createOrchestrator(
     const noMention = project ? noMentionOf(project) : true;
     // 按本群项目的后端能力裁剪命令清单：不支持的后端不列 /goal、/compact、/resume
     // （能力守卫会拒），避免「列了点了才发现不支持」。codex(capabilities undefined)=全列。
-    const caps = backendFor(project?.backend).capabilities;
+    const caps = groupBackend(project).capabilities;
     await withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
       const card = buildHelpCard(scope, noMention, isAdmin(cfg, msg.senderId), caps, project ? ruleKind(project) : 'multi');
       await sendManagedCard(channel, msg.chatId, card, msg.messageId, inThread).catch((err) =>
@@ -3878,7 +3905,7 @@ export function createOrchestrator(
    * the selected Agent/model/effort commit together only on form submit. */
   async function renderCommentSettings(notice?: string, selectedBackendId?: string): Promise<object> {
     const options = commentBackendOptions();
-    const configured = getCommentsConfig(cfg).backend ?? DEFAULT_BACKEND_ID;
+    const configured = resolveCommentsExecution(cfg.preferences).backend;
     const selected =
       selectedBackendId && options.some((entry) => entry.id === selectedBackendId)
         ? selectedBackendId
@@ -3896,9 +3923,11 @@ export function createOrchestrator(
       ) {
         continue;
       }
+      // The card preselects what a comment would run on: the settings, else the bot default.
+      const effective = resolveCommentsExecution({ ...cfg.preferences, comments });
       const snapshot: AppConfig = {
         ...cfg,
-        preferences: { ...(cfg.preferences ?? {}), comments: { ...comments } },
+        preferences: { ...(cfg.preferences ?? {}), comments: { backend: effective.backend, model: effective.model?.model, effort: effective.model?.effort } },
       };
       return buildCommentSettingsCard(snapshot, options, models, notice, selected);
     }
@@ -4457,7 +4486,7 @@ export function createOrchestrator(
     // current value, so a submit always carries a concrete model/effort to store.
     .on(DM.commentSubmit, ({ evt, value, formValue }) => {
       if (!dmAdmin(evt.operator?.openId)) return;
-      const backendId = typeof value.b === 'string' ? value.b : getCommentsConfig(cfg).backend ?? DEFAULT_BACKEND_ID;
+      const backendId = typeof value.b === 'string' ? value.b : resolveCommentsExecution(cfg.preferences).backend;
       if (!commentBackendOptions().some((entry) => entry.id === backendId)) {
         sendFreshSettingsResult(
           evt,
@@ -4493,7 +4522,8 @@ export function createOrchestrator(
         applyCommentsPref(
           evt,
           (c) => {
-            c.backend = backendId;
+            // An inherited backend stays inherited (s36d2): only a choice away from it is written.
+            if (c.backend !== undefined || backendId !== botBackendId(cfg.preferences)) c.backend = backendId;
             c.model = selected.id;
             c.effort = effort;
           },
@@ -4567,7 +4597,7 @@ export function createOrchestrator(
       patch(evt, async () => {
         const project = await getProjectByChatId(evt.chatId);
         if (!project) return buildGroupSettingsCard({ name: '本群', kind: 'multi' });
-        const models = await listModels(backendFor(project.backend));
+        const models = await listModels(groupBackend(project));
         return buildModelDefaultCard(project, models, 'group');
       });
     })
@@ -4578,8 +4608,8 @@ export function createOrchestrator(
       void trackTask((async () => {
         const project = await getProjectByChatId(evt.chatId);
         if (!project) return;
-        const backendId = project.backend ?? DEFAULT_BACKEND_ID;
-        const models = await listModels(backendFor(project.backend));
+        const backendId = groupBackendId(project);
+        const models = await listModels(backendFor(backendId));
         const parsed = parseModelDefaultFormValue(formValue, models, backendId);
         let next: object;
         if (!parsed.ok) {
@@ -4734,7 +4764,7 @@ export function createOrchestrator(
       const name = typeof value.n === 'string' ? value.n : '';
       patch(evt, async () => {
         const p = await getProjectByName(name);
-        return p ? buildPermissionCard(p, backendFor(p.backend).fullAccessOnly?.()) : renderDmMenuCard();
+        return p ? buildPermissionCard(p, groupBackend(p).fullAccessOnly?.()) : renderDmMenuCard();
       });
     })
     // 提交权限表单：落盘 权限档 mode / 联网，再驱逐本项目活跃会话让新档立即生效（沙箱
@@ -4750,7 +4780,7 @@ export function createOrchestrator(
       void trackTask((async () => {
         // On a full-only backend a save of 只读 or 读写 is refused as the web save is, with a fresh card.
         const p = await getProjectByName(name);
-        const fullOnly = p && backendFor(p.backend).fullAccessOnly?.();
+        const fullOnly = p && groupBackend(p).fullAccessOnly?.();
         if (p && (oldCard || (fullOnly && mode !== undefined && mode !== 'full'))) {
           log.info('console', 'permission-refused', { project: name, mode, reason: oldCard ? 'old-card' : 'full-only' });
           await sendManagedCard(channel, evt.chatId, buildPermissionCard(p, fullOnly)).catch((e) => log.fail('console', e, { phase: 'permission-result' }));
@@ -4773,7 +4803,7 @@ export function createOrchestrator(
       patch(evt, async () => {
         const p = await getProjectByName(name);
         if (!p) return renderDmMenuCard();
-        const models = await listModels(backendFor(p.backend));
+        const models = await listModels(groupBackend(p));
         return buildModelDefaultCard(p, models, 'dm');
       });
     })
@@ -4786,8 +4816,9 @@ export function createOrchestrator(
       void trackTask((async () => {
         const p = await getProjectByName(name);
         if (!p) return;
-        const models = await listModels(backendFor(p.backend));
-        const parsed = parseModelDefaultFormValue(formValue, models, p.backend ?? DEFAULT_BACKEND_ID);
+        const backendId = groupBackendId(p);
+        const models = await listModels(backendFor(backendId));
+        const parsed = parseModelDefaultFormValue(formValue, models, backendId);
         if (!parsed.ok) {
           // 无效的选择或手填的 id：带提示重发表单，让管理员直接改。
           await sendManagedCard(channel, evt.chatId, buildModelDefaultCard(p, models, 'dm', `⚠️ ${parsed.message}`));
@@ -5001,7 +5032,7 @@ export function createOrchestrator(
     const records = (await listSessions()).filter(record => record.chatId === project.chatId && !isRetiredKey(record.threadId));
     const currentProject = await getProjectByName(project.name);
     if (!currentProject || projectRevision(currentProject) !== projectRevision(project)) throw new AdminWriteError('项目已改变，请刷新后重试');
-    const be = backendFor(project.backend);
+    const be = groupBackend(project);
     if (request.action === 'history') {
       try { return { sessions: records, threads: (await be.listThreads(project.cwd)).map(resumableThread), backend: be.id }; }
       catch (error) { return { sessions: records, threads: [], backend: be.id, threadsError: error instanceof Error ? error.message : '无法读取后端历史' }; }
@@ -6733,9 +6764,11 @@ export function createOrchestrator(
     instructions: string,
     question: string,
   ): Promise<AgentThread> {
-    const comments = getCommentsConfig(cfg);
+    // The comment settings, else the bot default, else built in (s36d2); no tier, as before.
+    const comments = resolveCommentsExecution(cfg.preferences);
     const be = backendFor(comments.backend);
-    const { model, effort } = pickDefault(await listModels(be), { model: comments.model, effort: comments.effort });
+    const { model, effort } = pickDefault(await listModels(be), comments.model);
+    const modelCustom = isCustomDefault(comments.model, model);
     const rec = await getSession(sessionKey);
     const selectionChanged = rec && (rec.backend !== be.id || rec.model !== model || rec.effort !== effort);
     const live = sessions.get(sessionKey);
@@ -6748,8 +6781,8 @@ export function createOrchestrator(
     if (rec && rec.backend === be.id) {
       try {
         const resumed = await be.resumeThread({ cwd: rec.cwd, sessionId: rec.sessionId, model, effort });
-        // 评论的模型来自评论设置，不是手填的
-        await patchSession(sessionKey, { model, effort, modelCustom: false });
+        // 评论的模型来自评论设置（不是手填的）或 bot 默认
+        await patchSession(sessionKey, { model, effort, modelCustom });
         trackSession(sessionKey, resumed);
         commentInstrUsed.set(sessionKey, instructions);
         return resumed;

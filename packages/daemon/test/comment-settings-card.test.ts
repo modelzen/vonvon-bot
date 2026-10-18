@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildCommentPromptCard,
   buildCommentSettingsCard,
+  buildSettingsCard,
   resolveCommentModelFormValue,
 } from '../src/card/dm-cards';
 import type { AppConfig } from '../src/config/schema';
@@ -199,5 +200,17 @@ describe('buildCommentPromptCard', () => {
   it('can render a notice (e.g. validation error)', () => {
     const j = JSON.stringify(buildCommentPromptCard('x', '⚠️ 提示词不能为空，未保存。'));
     expect(j).toContain('不能为空');
+  });
+});
+
+describe('the comment summary on the settings card (s36d2)', () => {
+  const summary = (c: AppConfig) => JSON.stringify(buildSettingsCard(c)).match(/\*\*当前\*\*：([^"\\]*)/)?.[1];
+  it('shows the bot default backend and model when comments set none', () => {
+    const c: AppConfig = { accounts: { app: { id: 'cli_app', secret: 's', tenant: 'feishu' } }, preferences: { defaults: { backend: 'claude-agent', model: { kind: 'catalog', id: 'sonnet' } } } };
+    expect(summary(c)).toBe('Claude · sonnet · 默认推理强度');
+  });
+  it('shows the comment settings over the bot default', () => {
+    const c: AppConfig = { accounts: { app: { id: 'cli_app', secret: 's', tenant: 'feishu' } }, preferences: { defaults: { backend: 'claude-agent' }, comments: { backend: 'codex-appserver', model: 'gpt-5.5', effort: 'high' } } };
+    expect(summary(c)).toMatch(/^Codex.* · gpt-5\.5 · /);
   });
 });

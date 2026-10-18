@@ -251,3 +251,30 @@ it('real instruction propagation retains saved master and reports partial filesy
   expect(await readFile(paths.commentInstructionsFile, 'utf8')).toBe('Use {fileToken} safely');
   expect(await readFile(join(healthy, 'AGENTS.md'), 'utf8')).toBe('Use healthy safely');
 });
+it('s36d2: comments and a group without a model show the bot default on its backend; saving a comment model leaves the backend inherited', async () => {
+  const { owner, writer } = await fixture();
+  await writer(p => { p.defaults = { model: { kind: 'catalog', id: 'fixture-model', effort: 'low' } }; });
+  let a = await owner.read(agent) as AgentSettingsView;
+  expect(a.sections.comments.stored.backend).toBe('codex-appserver');
+  expect(a.sections.comments.effective).toEqual({ backend: 'codex-appserver', selection: { kind: 'explicit', model: 'fixture-model', effort: 'low' } });
+  let p = await owner.read(project) as ProjectSettingsView;
+  expect(p.sections.model.stored.selection).toEqual({ kind: 'default' });
+  expect(p.sections.model.effective.selection).toEqual({ kind: 'explicit', model: 'fixture-model', effort: 'low' });
+  expect(p.identity.backend).toBe('codex-appserver');
+
+  // The bot's model is for Claude: the Codex group and the Codex comments start on the backend default.
+  await writer(c => { c.defaults = { backend: 'claude-agent', model: { kind: 'catalog', id: 'fixture-model', effort: 'low' } }; });
+  p = await owner.read(project) as ProjectSettingsView;
+  expect(p.identity.backend).toBe('codex-appserver');
+  expect(p.sections.model.effective.selection).toEqual({ kind: 'explicit', model: 'fixture-model', effort: 'high' });
+  a = await owner.read(agent) as AgentSettingsView;
+  expect(a.sections.comments.effective.backend).toBe('claude-agent');
+
+  await writer(c => { c.defaults = {}; });
+  a = await owner.read(agent) as AgentSettingsView;
+  expect((await owner.save({ scope: agent, section: 'comments', revision: a.sections.comments.revision, patch: { selection: { kind: 'explicit', model: 'fixture-model', effort: 'high' } } })).kind).toBe('saved');
+  expect((await loadConfig()).preferences?.comments).toEqual({ model: 'fixture-model', effort: 'high' });
+  a = await owner.read(agent) as AgentSettingsView;
+  expect((await owner.save({ scope: agent, section: 'comments', revision: a.sections.comments.revision, patch: { backend: 'codex-appserver' } })).kind).toBe('saved');
+  expect((await loadConfig()).preferences?.comments).toEqual({ backend: 'codex-appserver', model: 'fixture-model', effort: 'high' });
+});
