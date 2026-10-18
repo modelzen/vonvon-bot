@@ -170,6 +170,14 @@ process-ci、draft 和 final 里的流程说法，凡和 `AGENTS.md` 不一致�
 
 上一轮"没有外部聊天"的说法由本轮更正，上一轮的 report 和 product-ux 已加更正行。
 
+## 2026-10-18 第一版实验 e12
+
+`2026-10-18-e12-judge/`，基于 `main` 的 `d187d00`（含 s23a、s23b、s23c）。`docs/v1-plan.md` 第 4 节的 e12，在 JP-VPS 上用真实登录跑判断：Codex 0.163.0 的 gpt-6-luna（low）154 条，Claude CLI 2.1.296 的 haiku 137 条。没有核实记录，用之前自己核对关键事实。
+
+| 报告 | 内容 | 说明 |
+|---|---|---|
+| [e12-judge-latency](2026-10-18-e12-judge/e12-judge-latency.md) | 两家判断的延迟分布（按变体和上下文条数）、冷启动、排队、token 和额度、Claude 那次额外调用的原因（CLI 自动起标题）和关法、判错的例子、内存，对 s25 的建议 | 在 JP-VPS 上量的，不是 product.md 3.4 写的 Mac；额度只有上界（精度 1 个百分点），没请 owner 看账户页面 |
+
 ## 补充
 
 codex-desktop 报告写完以后，对照 openai/codex 源码又核实了一次。`codex mcp list` 里的 `cua_repl` 来自内置插件 `unified-computer-use@openai-bundled`，就是原生 Computer Use；显示为 disabled 的 `computer-use` 是旧通道。经 Paseo 调用时，Mac 锁屏会失败（getpaseo/paseo#3346），`full-access` 模式会自动批准打开应用。process 报告里的相关说法和这里一致。
