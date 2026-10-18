@@ -158,6 +158,15 @@ function sameIdentity(entry: BotEntry, expected: BotIdentity): boolean {
     && entry.createdAt === expected.createdAt && entry.registrationId === expected.registrationId;
 }
 
+/** Refuse a group creation before it reaches Feishu when this process's bot was removed or registered again (s36d1). */
+export function assertBotIdentity(expected: BotIdentity): Promise<void> {
+  const identity = { ...expected };
+  return ownBots(async registry => {
+    const entry = registry.bots.find(bot => bot.appId === identity.appId);
+    if (!entry || !sameIdentity(entry, identity)) throw new Error('机器人已移除或重新注册，请重启后再建群');
+  });
+}
+
 export function withBotGroupBinding<T>(expected: BotIdentity, group: { chatId: string; name: string; projectsRootDir: string }, operation: (scope: {
   allocatedPath: string | undefined;
   prepareDefault: () => Promise<{ cwd: string; blank: true; directories: DirectorySettings }>;

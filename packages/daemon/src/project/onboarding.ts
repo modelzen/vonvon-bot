@@ -47,7 +47,7 @@ export function sidebarPcUrl(url: string): string {
  * are the command cheat-sheet. Every step is best-effort — the group is still
  * usable if any of them fails (e.g. missing scope).
  */
-export async function onboardGroup(channel: LarkChannel, project: Project): Promise<void> {
+export async function onboardGroup(channel: Pick<LarkChannel, 'rawClient'>, project: Project): Promise<void> {
   const kind = ruleKind(project);
   const chatId = project.chatId;
   const agentName = welcomeAgentName(project.backend);
