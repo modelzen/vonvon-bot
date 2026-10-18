@@ -6,7 +6,7 @@ import type { AppConfig } from '../src/config/schema';
 import { paths } from '../src/config/paths';
 import { getProjectByName } from '../src/project/registry';
 import { createOrchestrator, dmCreationId } from '../src/bot/handle-message';
-import { DM } from '../src/card/dm-cards';
+import { DM, buildNewProjectUncertainCard } from '../src/card/dm-cards';
 import { seedBots } from './helpers/bot-fixture';
 import { fakeLark, httpError, type Answer } from './helpers/fake-lark-http';
 
@@ -80,6 +80,14 @@ it('warns without a form when the result is not known, and sends the same uuid f
     const [first, second] = fake.creates();
     expect(second?.params?.uuid).toBe(first?.params?.uuid);
   } finally { await orchestrator.shutdown(); }
+});
+
+it('says a group built and not saved was built, with no form and a button to open it', () => {
+  const card = JSON.stringify(buildNewProjectUncertainCard({ name: 'Unsaved', warning: '群「Unsaved」已建好，但没存上：disk full。', chatId: 'oc_unsaved' }));
+  expect(card).toContain('群「Unsaved」已建好，但没存上');
+  expect(card).not.toContain('不确定建好没有');
+  expect(card).toContain('打开群聊');
+  expect(card).not.toContain('"tag":"form"');
 });
 
 it('keeps the form for a refusal Feishu answered', async () => {

@@ -548,12 +548,13 @@ export function buildNewProjectFormCard(
 
 /**
  * A creation that may have made a group (s36d1): the request reached Feishu and no answer says what came of it, or
- * the group exists and its row was not saved (`chatId` then opens it). It repeats what was asked but carries no
- * form, so one more click cannot create a second group; 新建项目 from the menu starts a new request.
+ * the group exists and its row was not saved (`chatId` then opens it, and the warning already says it was built).
+ * It repeats what was asked but carries no form, so one more click cannot create a second group; 新建项目 from the
+ * menu starts a new request.
  */
 export function buildNewProjectUncertainCard(opts: { name: string; cwd?: string; warning: string; chatId?: string }): CardObject {
   return card([
-    md(`⚠️ **不确定建好没有**：${opts.warning}`),
+    md(opts.chatId ? `⚠️ ${opts.warning}` : `⚠️ **不确定建好没有**：${opts.warning}`),
     note(`项目名：${opts.name}   ·   文件夹：${opts.cwd || '留空（为这个群新建独立目录）'}`),
     actions([
       ...(opts.chatId ? [linkButton('💬 打开群聊', openChatUrl(opts.chatId), 'primary')] : []),
