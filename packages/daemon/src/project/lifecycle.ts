@@ -8,7 +8,9 @@ import { assertBotIdentity, withBotGroupBinding, type BotIdentity } from '../con
 import { admitDirectorySettings, resolveProjectsRootDir } from '../config/directories';
 import { log } from '../core/logger';
 import { feishuError } from '../utils/feishu-error';
-import { addProject, bindNoMention, bindProject, listProjectsIn, type Project, type RegistryLocation } from './registry';
+import { addProject, bindNoMention, bindProject, listProjectsIn, type PreviousDirectory, type Project, type RegistryLocation } from './registry';
+import { directoryContext, legacyDirectoryProblems } from './directory-audit';
+import { DirectoryError, directoryError } from '../config/directory-errors';
 import type { PermissionMode } from '../agent/types';
 import { DEFAULT_BACKEND_ID, effectiveDefaultBackend, isBackendEntryInstalled } from '../agent';
 import { catalogById, isInstallable, projectCreatableBackends } from '../agent/catalog';
@@ -139,9 +141,28 @@ export interface JoinGroupInput {
  * A default directory is allocated by {@link withBotGroupBinding} once the group exists.
  */
 async function admitExistingDirectory(existingPath: string, dataDir: string): Promise<Pick<Project, 'cwd' | 'blank' | 'directories'>> {
-  const directories = await admitDirectorySettings({ workspaces: { primary: existingPath, additional: [] } }, { dataDir });
-  if (!directories?.workspaces) throw new Error('Invalid directory settings: directories.workspaces.primary');
-  return { cwd: directories.workspaces.primary, blank: false, directories };
+  try { if (!(await stat(existingPath)).isDirectory()) throw new Error('not directory'); }
+  catch { throw new DirectoryError('所选文件夹不存在或不是目录'); }
+  return directoryError(undefined, async () => {
+    const directories = await admitDirectorySettings({ workspaces: { primary: existingPath, additional: [] } }, { dataDir });
+    if (!directories?.workspaces) throw new Error('Invalid directory settings: directories.workspaces.primary');
+    return { cwd: directories.workspaces.primary, blank: false, directories };
+  });
+}
+
+/**
+ * The directory a row from before s36c2c3 had when its group was unbound, if binding that group again with the
+ * default directory can go back there, as it did before s36c2c3 (s36c2d): still a directory a workspace may be, and
+ * not one of the wrong places an old creation entry left ({@link legacyDirectoryProblems}). The row keeps its old
+ * shape, with no `directories`, so unbinding it again remembers it again.
+ */
+async function restorableDirectory(previous: PreviousDirectory | undefined, dataDir: string, projectsRoot: string): Promise<Pick<Project, 'cwd' | 'blank'> | undefined> {
+  if (!previous) return undefined;
+  try {
+    const { cwd } = await admitExistingDirectory(previous.cwd, dataDir);
+    const [problem] = await legacyDirectoryProblems([cwd], await directoryContext(dataDir, [projectsRoot]));
+    return problem ? undefined : { cwd, blank: previous.blank };
+  } catch { return undefined; }
 }
 
 /**
@@ -258,9 +279,10 @@ export async function joinExistingGroup(channel: LarkChannel, request: JoinGroup
   const result = await withBotGroupBinding(input.bot, { name, chatId: input.chatId, projectsRootDir: root }, async scope => {
     const binding = await bindProject({ name, chatId: input.chatId,
       cwd: existingPath ? { kind: 'existing', path: cwd } : { kind: 'default', legacyPath: cwd, allocatedPath: scope.allocatedPath }, defaultBackend,
-      backend: input.backend ?? defaultBackend, kind: input.kind, noMention: input.noMention ?? bindNoMention(input.kind) }, async () => {
+      backend: input.backend ?? defaultBackend, kind: input.kind, noMention: input.noMention ?? bindNoMention(input.kind) }, async previous => {
       assertBackendUsable(input.backend, mode);
-      const workspace = existingPath ? await admitExistingDirectory(existingPath, location.dataRoot) : await scope.prepareDefault();
+      const restored = existingPath || scope.allocatedPath ? undefined : await restorableDirectory(previous, location.dataRoot, root);
+      const workspace = existingPath ? await admitExistingDirectory(existingPath, location.dataRoot) : restored ?? await scope.prepareDefault();
       return { ...workspace, createdAt: Date.now(), origin: 'joined', addedBy: input.addedBy,
         mode, backend: input.backend || defaultBackend, network: input.network ?? false };
     }, location);

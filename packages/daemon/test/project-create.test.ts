@@ -230,6 +230,6 @@ describe('s36d1 createProject', () => {
     const project = await createProject({ rawClient: fakeLark().client }, input('Explicit', { existingPath: dir, backend: 'claude-agent' }));
     expect(project).toMatchObject({ cwd: await realpath(dir), blank: false, directories: { workspaces: { primary: await realpath(dir), additional: [] } }, backend: 'claude-agent', origin: 'created' });
     expect(await allocations()).toEqual(before);
-    await expect(createProject({ rawClient: fakeLark().client }, input('Protected', { existingPath: paths.appDir }))).rejects.toThrow('directories.workspaces.primary');
+    await expect(createProject({ rawClient: fakeLark().client }, input('Protected', { existingPath: paths.appDir }))).rejects.toThrow('不能当工作目录');
   });
 });

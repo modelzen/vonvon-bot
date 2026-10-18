@@ -1,6 +1,6 @@
 import { pendingGroupsFile, readPendingGroups } from '../src/project/pending-groups';
 import { afterAll, beforeEach, expect, it, vi } from 'vitest';
-import { rm, mkdir, realpath, symlink, writeFile } from 'node:fs/promises';
+import { readFile, rm, mkdir, realpath, symlink, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import type { AccountUsageBundle } from '../src/agent/types';
 import type { AppConfig } from '../src/config/schema';
@@ -191,7 +191,7 @@ it('reserves a compacting session against clear and rejects stale run controls',
 });
 it('changes directory only after checking revision and archives old bindings without deleting history', async () => {
   backend(); const app = orchestrator();
-  const directory = `${paths.appDir}/new`; await mkdir(directory, { recursive: true });
+  const directory = `${paths.appDir}/projects/new`; await mkdir(directory, { recursive: true });
   try {
     await expect(app.collaboration({ action: 'editProject', ...target, expectedRevision: 'stale', directory })).rejects.toThrow('已改变');
     const revision = projectRevision((await getProjectByName('demo'))!);
@@ -199,6 +199,30 @@ it('changes directory only after checking revision and archives old bindings wit
     expect(await getProjectByName('demo')).toMatchObject({ cwd: await realpath(directory), enabled: false });
     expect(await getSession('oc_demo')).toBeUndefined();
     expect(await listSessions()).toMatchObject([{ sessionId: 'old', detached: true }]);
+  } finally { await app.shutdown(); }
+});
+it('s36c2d: admits a new directory for an old row and declares it, refusing the data directory (review R5-1)', async () => {
+  backend(); const app = orchestrator();
+  try {
+    const bots = join(paths.appDir, 'bots'); await mkdir(bots, { recursive: true });
+    const before = await readFile(paths.projectsFile, 'utf8');
+    // Before s36c2d: the old row (no `directories`) moved into bots/ and to the data directory itself, ok: true.
+    for (const directory of [bots, paths.appDir]) {
+      const expectedRevision = projectRevision((await getProjectByName('demo'))!);
+      const refused = await app.collaboration({ action: 'editProject', ...target, expectedRevision, directory }).then(() => undefined, (error: unknown) => error);
+      expect(refused).toBeInstanceOf(AdminWriteError);
+      expect((refused as Error).message).toContain('不能当工作目录');
+      expect((refused as Error).message).not.toContain(paths.appDir);
+    }
+    expect(await readFile(paths.projectsFile, 'utf8')).toBe(before);
+    // The old row still sits in the data directory; changing something else is not refused for it.
+    let expectedRevision = projectRevision((await getProjectByName('demo'))!);
+    await app.collaboration({ action: 'editProject', ...target, expectedRevision, enabled: false });
+    const directory = join(paths.appDir, 'projects', 'moved'); await mkdir(directory, { recursive: true });
+    expectedRevision = projectRevision((await getProjectByName('demo'))!);
+    await app.collaboration({ action: 'editProject', ...target, expectedRevision, directory });
+    const canonical = await realpath(directory);
+    expect(await getProjectByName('demo')).toMatchObject({ cwd: canonical, directories: { workspaces: { primary: canonical, additional: [] } } });
   } finally { await app.shutdown(); }
 });
 it('s21: switching 会话方式 keeps 免@ as it read before (a joined 单会话 group stays off)', async () => {

@@ -187,9 +187,11 @@ describe('desktop group commands in the owning bot', () => {
   it('rejects protected explicit workspaces before binding or creating a group', async () => {
     const fixture = channelFixture();
     const value = { name: 'Protected', existingPath: paths.appDir, kind: 'multi' as const };
-    await expect(joinExistingGroup(fixture.channel, { ...value, chatId: 'oc_protected' })).rejects.toThrow('directories.workspaces.primary');
-    await expect(createGroupExecutor(fixture.channel)({ kind: 'bindGroup', input: { ...input(paths.appDir), projectName: value.name, chatId: 'oc_protected_web' } })).rejects.toThrow('directories.workspaces.primary');
-    await expect(createProject(fixture.channel, { ...value, ownerOpenId: 'ou_owner', requestId: 'protected-request', bot })).rejects.toThrow('directories.workspaces.primary');
+    // s36c2d (review R5-2): said in Chinese, without the path or the internal field name.
+    const refused = (error: unknown) => error instanceof Error && error.message.includes('不能当工作目录') && !error.message.includes(paths.appDir) && !error.message.includes('directories.');
+    await expect(joinExistingGroup(fixture.channel, { ...value, chatId: 'oc_protected' }).catch(refused)).resolves.toBe(true);
+    await expect(createGroupExecutor(fixture.channel)({ kind: 'bindGroup', input: { ...input(paths.appDir), projectName: value.name, chatId: 'oc_protected_web' } }).catch(refused)).resolves.toBe(true);
+    await expect(createProject(fixture.channel, { ...value, ownerOpenId: 'ou_owner', requestId: 'protected-request', bot }).catch(refused)).resolves.toBe(true);
     expect(fixture.message).not.toHaveBeenCalled();
     expect(fixture.create).not.toHaveBeenCalled();
     expect((await listProjects()).some(project => project.name === value.name)).toBe(false);
@@ -314,7 +316,7 @@ describe('desktop group commands in the owning bot', () => {
     const value = { name: `Invalid ${kind}`, existingPath: dir, kind: 'multi' as const };
     await expect(joinExistingGroup(fixture.channel, { ...value, chatId: `oc_invalid_${kind}` })).rejects.toThrow();
     await expect(createGroupExecutor(fixture.channel)({ kind: 'bindGroup', input: { ...input(dir), projectName: value.name, chatId: `oc_invalid_web_${kind}` } })).rejects.toThrow();
-    await expect(createProject(fixture.channel, { ...value, ownerOpenId: 'ou_owner', requestId: `invalid-${kind}`, bot })).rejects.toThrow('directories.workspaces.primary');
+    await expect(createProject(fixture.channel, { ...value, ownerOpenId: 'ou_owner', requestId: `invalid-${kind}`, bot })).rejects.toThrow(kind === 'internal' ? '不能当工作目录' : '不存在或不是目录');
     expect(await readFile(paths.projectsFile, 'utf8')).toBe(bytes);
     expect(fixture.create).not.toHaveBeenCalled();
     expect(fixture.managers).not.toHaveBeenCalled();
@@ -384,6 +386,41 @@ describe('desktop group commands in the owning bot', () => {
       { chatId: 'oc_blank', name: UNNAMED_GROUP, bound: false },
       { chatId: 'oc_none', name: '（未命名群）', bound: false },
     ] });
+  });
+
+  it('s36c2d: binds an old group again in the directory it had before it was unbound (review R6-3)', async () => {
+    const fixture = channelFixture();
+    const { removeProject } = await import('../src/project/registry');
+    const legacy = join(paths.projectsRootDir, 'Legacy group');
+    await mkdir(legacy, { recursive: true });
+    await writeFile(join(legacy, 'notes.md'), 'keep');
+    await addProject({ name: 'Legacy group', chatId: 'oc_legacy_group', cwd: legacy, blank: true, createdAt: 1 });
+    const request = { name: 'Legacy group', chatId: 'oc_legacy_group', kind: 'multi' as const };
+    expect(await joinExistingGroup(fixture.channel, request)).toMatchObject({ cwd: legacy, createdAt: 1 });
+    await removeProject('Legacy group');
+    // Before s36c2d: a new empty projects/fixture/groups/Legacy group, the notes left behind in the old one.
+    const again = await joinExistingGroup(fixture.channel, request);
+    expect(again).toMatchObject({ cwd: legacy, blank: true, origin: 'joined' });
+    expect(again).not.toHaveProperty('directories');
+    expect(await readFile(join(again.cwd, 'notes.md'), 'utf8')).toBe('keep');
+    expect(await joinExistingGroup(fixture.channel, request)).toEqual(again);
+    expect(fixture.message).toHaveBeenCalledTimes(1);
+    await removeProject('Legacy group');
+    expect(await joinExistingGroup(fixture.channel, { ...request, name: 'Renamed legacy' })).toMatchObject({ cwd: legacy });
+    await removeProject('Renamed legacy');
+  });
+
+  it('s36c2d: does not go back to an old directory that is now refused or in the wrong place', async () => {
+    const fixture = channelFixture();
+    const { removeProject } = await import('../src/project/registry');
+    // The bot's own directory is a workspace admission lets through; the bot has one after the first default binding.
+    for (const [chatId, cwd] of [['oc_legacy_data', paths.appDir], ['oc_legacy_root', paths.projectsRootDir], ['oc_legacy_bot', join(paths.projectsRootDir, 'fixture')]] as const) {
+      await addProject({ name: chatId, chatId, cwd, blank: true, createdAt: 1 });
+      await removeProject(chatId);
+      const bound = await joinExistingGroup(fixture.channel, { name: chatId, chatId, kind: 'multi' });
+      expect(bound.cwd).toBe(join(paths.projectsRootDir, 'fixture/groups', chatId));
+      await removeProject(chatId);
+    }
   });
 
   it('parses the exact supported binding shape', () => {

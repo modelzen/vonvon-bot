@@ -6,7 +6,8 @@ import { paths, botDir, botPaths } from './paths';
 import { loadConfig } from './store';
 import { isComplete, type TenantBrand, type AppConfig, type AppPreferences } from './schema';
 import { acquireMutex, closeMutex } from './data-access';
-import { type Allocation, SafeAppIdSchema, parseAllocations, ensureDurableDirectory, materializeAllocation, materializeDirectory, planDirectory, planAllocation, syncDirectory } from './bot-namespace';
+import { type Allocation, type ObjectIdentity, SafeAppIdSchema, parseAllocations, ensureDurableDirectory, directoryIdentity, materializeAllocation, materializeDirectory, planDirectory, planAllocation, recordCurrent as recordAt, restoreParent, sameObject, syncDirectory, verifyDirectory } from './bot-namespace';
+import { DirectoryError, directoryError } from './directory-errors';
 import { resolveProjectsRootDir, type DirectorySettings } from './directories';
 import { groupAllocationKey, parseGroupNamespaces, type GroupNamespaceState } from './group-namespace';
 
@@ -177,7 +178,7 @@ export function withBotGroupBinding<T>(expected: BotIdentity, group: { chatId: s
     if (!entry || !sameIdentity(entry, identity)) throw new Error('机器人已移除或重新注册，请重启后再绑定');
     const key = groupAllocationKey({ ...identity, chatId: input.chatId });
     const previous = registry.groupAllocations?.[key];
-    return operation({ allocatedPath: previous?.state === 'ready' ? previous.namespaceRoot : undefined, prepareDefault: async () => {
+    return operation({ allocatedPath: previous?.state === 'ready' ? previous.namespaceRoot : undefined, prepareDefault: () => directoryError(entry.name, async () => {
       let bot = registry.allocations?.[entry.appId];
       if (!bot) {
         if (Object.keys(registry.allocations ?? {}).length >= 4096) throw new Error('Bot allocation limit reached');
@@ -186,24 +187,24 @@ export function withBotGroupBinding<T>(expected: BotIdentity, group: { chatId: s
         await publish(registry);
       }
       validateAccountClaim(registry, bot, entry);
-      bot = await materializeAllocation(bot, paths.appDir);
-      registry.allocations = { ...registry.allocations, [entry.appId]: bot };
+      const readyBot = await materializeBot(registry, bot);
       await publish(registry);
       let container = registry.groupContainers?.[entry.appId];
       if (!container) {
         container = { version: 1, appId: entry.appId, tenant: entry.tenant,
-          ...await planDirectory({ name: 'groups', parent: bot.namespaceRoot, dataDir: paths.appDir, selection: { kind: 'fixed' } }, []) };
+          ...await planDirectory({ name: 'groups', parent: readyBot.namespaceRoot, dataDir: paths.appDir, selection: { kind: 'fixed' } }, []) };
         registry.groupContainers = { ...registry.groupContainers, [entry.appId]: container };
         await publish(registry);
       }
-      container = { ...container, ...await materializeDirectory(container, paths.appDir) };
-      registry.groupContainers = { ...registry.groupContainers, [entry.appId]: container };
+      const readyContainer = { ...container, ...await materializeDirectory(container, paths.appDir) };
+      registry.groupContainers = { ...registry.groupContainers, [entry.appId]: readyContainer };
+      if (container.state === 'ready' && !sameObject(container.object, readyContainer.object)) adoptParent(registry, entry.appId, 'container', readyContainer.object);
       await publish(registry);
       let claim = registry.groupAllocations?.[key];
       if (!claim) {
         if (Object.keys(registry.groupAllocations ?? {}).length >= 4096) throw new Error('Group allocation limit reached');
         claim = { version: 1, appId: entry.appId, tenant: entry.tenant, chatId: input.chatId, initialName: input.name,
-          ...await planDirectory({ name: input.name, parent: container.namespaceRoot, dataDir: paths.appDir,
+          ...await planDirectory({ name: input.name, parent: readyContainer.namespaceRoot, dataDir: paths.appDir,
             selection: { kind: 'unique', key } }, Object.values(registry.groupAllocations ?? {})) };
         registry.groupAllocations = { ...registry.groupAllocations, [key]: claim };
         await publish(registry);
@@ -211,11 +212,96 @@ export function withBotGroupBinding<T>(expected: BotIdentity, group: { chatId: s
       claim = { ...claim, ...await materializeDirectory(claim, paths.appDir) };
       registry.groupAllocations = { ...registry.groupAllocations, [key]: claim };
       await publish(registry);
-      await materializeAllocation(bot, paths.appDir);
-      await materializeDirectory(container, paths.appDir);
-      return { cwd: claim.namespaceRoot, blank: true, directories: { workspaces: { primary: claim.namespaceRoot, additional: [] } } };
-    } });
+      await verifyDirectory(readyBot, paths.appDir);
+      await verifyDirectory(readyContainer, paths.appDir);
+      return { cwd: claim.namespaceRoot, blank: true as const, directories: { workspaces: { primary: claim.namespaceRoot, additional: [] } } };
+    }) });
   });
+}
+
+/**
+ * A bot's stable directory, made again with a deleted projects root above it when its parent checks out (s36c2d). A
+ * made root is published at once, the rest by the caller. A new inode is the parent of the records under it, which
+ * change in the same publish.
+ */
+async function materializeBot(registry: BotsRegistry, allocation: Allocation): Promise<Extract<Allocation, { state: 'ready' }>> {
+  const root = await restoreParent(allocation, paths.appDir);
+  // Every bot under that root lost its directory with it: their records name the new root, made again on use.
+  if (root) {
+    registry.allocations = Object.fromEntries(Object.entries(registry.allocations ?? {}).map(([appId, record]) =>
+      [appId, record.parent === allocation.parent ? { ...record, parentIdentity: root } : record]));
+    await publish(registry);
+  }
+  const recorded = registry.allocations?.[allocation.appId] ?? allocation;
+  const ready = await materializeAllocation(recorded, paths.appDir);
+  registry.allocations = { ...registry.allocations, [allocation.appId]: ready };
+  if (recorded.state === 'ready' && !sameObject(recorded.object, ready.object)) adoptParent(registry, allocation.appId, 'bot', ready.object);
+  return ready;
+}
+function adoptParent(registry: BotsRegistry, appId: string, level: 'bot' | 'container', object: ObjectIdentity): void {
+  if (level === 'bot') {
+    const container = registry.groupContainers?.[appId];
+    if (container) registry.groupContainers = { ...registry.groupContainers, [appId]: { ...container, parentIdentity: object } };
+    return;
+  }
+  registry.groupAllocations = Object.fromEntries(Object.entries(registry.groupAllocations ?? {}).map(([key, claim]) =>
+    [key, claim.appId === appId ? { ...claim, parentIdentity: object } : claim]));
+}
+
+/** `others`: the registered bots under the same projects root whose records still name the root as it was. */
+export type DirectoryRepair = { handle: string; recorded: number; missing: number; others: string[] };
+/**
+ * `vonvon bot repair-dir`: after a migration or a restore from backup, take the bot's directories at their recorded
+ * paths as its own again: the bot directory, its `groups` and each group's. A directory that is gone keeps its record
+ * and is made again on use. A bot found by name, app ID, or the handle a removed bot's allocation keeps. It repairs
+ * one bot; the others under the same projects root are named, to run it for each. Its failures are told in Chinese,
+ * a broken bots.json and a held lock included.
+ */
+export function repairBotDirectories(wanted: string): Promise<DirectoryRepair> {
+  const target = String(wanted);
+  return directoryError(target, () => ownBots(async registry => {
+    const appId = registry.bots.find(bot => bot.name === target || bot.appId === target)?.appId
+      ?? Object.values(registry.allocations ?? {}).find(record => record.handle === target || record.appId === target)?.appId;
+    const allocation = appId === undefined ? undefined : registry.allocations?.[appId];
+    if (!appId || !allocation) throw new Error(`没有找到「${target}」的目录记录：它不是这台电脑上注册的 bot，或者注册得早，还没分配过自己的目录。`);
+    return directoryError(allocation.handle, async () => {
+      const result: DirectoryRepair = { handle: allocation.handle, recorded: 0, missing: 0, others: [] };
+      const count = (present: boolean): void => { if (present) result.recorded++; else result.missing++; };
+      const recordCurrent: typeof recordAt = (record, parent, dataDir) => recordAt(record, parent, dataDir).catch((error: unknown) => {
+        if (!(error instanceof Error && error.message === 'Namespace path changed')) throw error;
+        throw new DirectoryError(`「${allocation.handle}」的目录位置变了（比如换成了链接），只能按原来的路径重新记录。把目录放回原处后再运行。`, { cause: error });
+      });
+      let parentIdentity: ObjectIdentity;
+      try { parentIdentity = await directoryIdentity(allocation.parent); }
+      catch (error) {
+        // A link, a file or no permission is said as itself by directoryError.
+        if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+        throw new DirectoryError(`「${allocation.handle}」的目录所在的文件夹不在了（外接盘没接上的话，接上后重试）。`, { cause: error });
+      }
+      result.others = Object.values(registry.allocations ?? {}).filter(record => record.appId !== appId && record.parent === allocation.parent
+        && !sameObject(record.parentIdentity, parentIdentity) && registry.bots.some(bot => bot.appId === record.appId)).map(record => record.handle);
+      const bot = await recordCurrent(allocation, parentIdentity, paths.appDir);
+      registry.allocations = { ...registry.allocations, [appId]: bot.record };
+      count(bot.present);
+      const container = registry.groupContainers?.[appId];
+      if (bot.present && bot.record.state === 'ready' && container) {
+        const groups = await recordCurrent(container, bot.record.object, paths.appDir);
+        registry.groupContainers = { ...registry.groupContainers, [appId]: groups.record };
+        count(groups.present);
+        if (groups.present && groups.record.state === 'ready') {
+          const owner = groups.record.object;
+          for (const [key, claim] of Object.entries(registry.groupAllocations ?? {})) {
+            if (claim.appId !== appId) continue;
+            const group = await recordCurrent(claim, owner, paths.appDir);
+            registry.groupAllocations = { ...registry.groupAllocations, [key]: group.record };
+            count(group.present);
+          }
+        }
+      }
+      await publish(registry);
+      return result;
+    });
+  }));
 }
 
 type RegisterEntryResult = { kind: 'registered'; entry: BotEntry } | { kind: 'already-registered'; entry: BotEntry };
@@ -239,14 +325,15 @@ export function registerBotEntry(
     if (allocation) validateAccountClaim(registry, allocation, identity);
     else {
       if (Object.keys(allocations).length >= 4096) throw new Error('Bot allocation limit reached');
-      allocation = await planAllocation({ ...identity, handle: uniqueName(registry, identity.desiredName),
-        parent: resolveProjectsRootDir(preferences?.projectsRootDir), dataDir: paths.appDir }, allocations);
+      const handle = uniqueName(registry, identity.desiredName);
+      allocation = await directoryError(handle, () => planAllocation({ ...identity, handle,
+        parent: resolveProjectsRootDir(preferences?.projectsRootDir), dataDir: paths.appDir }, allocations));
       registry.allocations = { ...allocations, [identity.appId]: allocation };
     }
     // Re-publish visible intent before a retry can create or trust its directory.
     await publish(registry);
-    allocation = await materializeAllocation(allocation, paths.appDir);
-    registry.allocations = { ...registry.allocations, [identity.appId]: allocation };
+    const pending = allocation;
+    allocation = await directoryError(pending.handle, () => materializeBot(registry, pending));
     await publish(registry);
     const entry: BotEntry = { appId: identity.appId, tenant: identity.tenant, botName: identity.botName,
       name: allocation.handle, createdAt: Date.now(), registrationId: randomUUID() };
