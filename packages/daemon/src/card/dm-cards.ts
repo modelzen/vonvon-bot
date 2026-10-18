@@ -143,7 +143,7 @@ export const GS = {
   modelDefaultSubmit: 'gs.modelDefault.submit',
 } as const;
 
-/** Human label for a group's 会话方式 (product.md 3.4). 智能 shows as 单会话 until s25. */
+/** Human label for a group's 会话方式 (product.md 3.4). 智能 shows as 单会话 until s25c. */
 export function kindLabel(p: Pick<Project, 'kind' | 'smart'>): string {
   const copy = conversationCopy[ruleKind(p) === 'single' ? 'shared' : 'threads'];
   return `${copy.name} · ${copy.title}`;
@@ -565,7 +565,7 @@ export function buildNewProjectUncertainCard(opts: { name: string; cwd?: string;
 
 /**
  * 会话方式 in the order and words of product.md 3.4, then 免@. One submit button per
- * mode, so nothing is preselected and nothing is marked as recommended; 智能 joins in s25.
+ * mode, so nothing is preselected and nothing is marked as recommended; 智能 joins in s25c.
  * 免@ left unpicked takes the mode's default (多会话开，单会话关), see {@link parseNoMentionPick}.
  */
 function sessionModeItems(verb: string, value: ActionValue): CardElement[] {

@@ -30,7 +30,7 @@ export interface Project {
    * reads as 'multi'. Read via {@link ruleKind}. */
   kind?: 'multi' | 'single';
   /** 智能 (3.4): stored with `kind: 'single'`, so a daemon from before s21 runs it as 单会话.
-   * No entry writes it before s25; until then it runs as 单会话 + 仅 @ ({@link noMentionOf}).
+   * No entry writes it before s25c; a group that has it judges every message (s25, {@link noMentionOf}).
    * Read via {@link sessionModeOf}; switching to 多会话 or 单会话 drops it. */
   smart?: boolean;
   /** respond to non-@ messages too. Read as `noMention ?? defaultNoMention(p)`.
@@ -105,12 +105,12 @@ export function sessionModeOf(p: Pick<Project, 'kind' | 'smart'>): SessionMode {
   return p.smart === true ? 'smart' : 'single';
 }
 
-/** How the main area runs. 智能 runs as 'single' until s25 brings the smart inbound. */
+/** How the main area runs. 智能's main area is one session, as 单会话; a judgement comes first (s25). */
 export function ruleKind(p: Pick<Project, 'kind' | 'smart'>): 'multi' | 'single' {
   return sessionModeOf(p) === 'multi' ? 'multi' : 'single';
 }
 
-/** The group's effective 免@. 智能 has no 免@ (3.4); until s25 it replies only when @'d. */
+/** The group's effective 免@. 智能 has no 免@ (3.4): a judgement decides instead (s25, handle-message). */
 export function noMentionOf(p: Pick<Project, 'kind' | 'smart' | 'origin' | 'noMention'>): boolean {
   if (sessionModeOf(p) === 'smart') return false;
   return p.noMention ?? defaultNoMention(p);

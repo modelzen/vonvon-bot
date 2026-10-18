@@ -356,6 +356,15 @@ describe('judge', () => {
     expect(f.backend.listModels).toHaveBeenCalledTimes(1); // only the first judgement's
   });
 
+  it("judges with the group's backend, Codex for one not in the catalog (s25)", async () => {
+    const f = fakeBackend();
+    const backendFor = vi.fn(() => f.backend);
+    const result = make(f.backend, { backendFor }).judge(req('main', { group: { chatId: 'oc_g', name: '群', backend: 'gone-backend' } }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(backendFor).toHaveBeenCalledWith('codex-appserver');
+    expect(await result).toMatchObject({ backend: 'codex-appserver' });
+  });
+
   it('never rejects, even when backendFor throws', async () => {
     const judge = createJudge({ backendFor: () => { throw new Error('未知后端'); }, readPrompt: async () => ({ source: 'default', text: 'S', path: '/p' }) });
     const result: JudgeResult = await judge.judge(req('mentioned'));

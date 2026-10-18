@@ -11,7 +11,7 @@ import {useDraft, useDraftGuard} from './settings/DraftGuard';
 import type {PendingAgentGroups} from './pending-groups';
 
 type Mode = {kind: 'create'} | {kind: 'existing'} | {kind: 'bind'; group: PendingGroup};
-/** product.md 3.4: in this order, title plus one line, nothing preselected or marked as recommended (智能 joins in s25). */
+/** product.md 3.4: in this order, title plus one line, nothing preselected or marked as recommended (智能 joins in s25c). */
 const CONVERSATIONS = (['threads', 'shared'] as const).map(value => ({value, label: conversationCopy[value].title, description: conversationCopy[value].subtitle}));
 /** 免@ when the user has not touched it: 多会话开，单会话关. */
 const defaultResponse = (conversation: Conversation): 'all' | 'mention' => conversation === 'threads' ? 'all' : 'mention';

@@ -27,7 +27,7 @@ export interface JudgeLine {
   from: 'self' | 'bot' | 'user';
   /** display name; s25 passes the cached real name, else 某人 */
   name: string;
-  /** plain text; s25 writes images and files as 〔图片〕〔文件 名字〕 */
+  /** plain text; images and files as a record block writes them: [图片], [文件：名字] (recent-lines.ts) */
   text: string;
   /** names this message @-mentions */
   mentions?: string[];

@@ -2,7 +2,7 @@ import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
 
 /**
  * 三条底线 (product.md 3.4, s22): before a mode decides, who a group message
- * is for. Shared by both modes; only rule mode reads it until s25.
+ * is for. Shared by both modes; the smart mode (s25) reads it as 免@ on.
  *   1. 点名: whom it @-mentions or quotes is the only one to answer. An @ of
  *      someone else, @所有人, or a quote of someone else's message leaves the
  *      other bots out; @-ing two bots names both. In rule mode's 仅@ a quote
@@ -49,9 +49,10 @@ export function quotedId(msg: NormalizedMessage): string | undefined {
 /**
  * Who `msg` is for. `noMention` is 免@: a quote of this bot's message names it
  * and an unnamed topic message goes to its last bot. In 仅@ only an @ names this
- * bot and nothing is looked up.
+ * bot and nothing is looked up. `smart` (s25): as the group's only bot, a quote
+ * is still looked up, since a quote of this bot then gets the named variant.
  */
-export async function audienceOf(msg: NormalizedMessage, opts: { noMention: boolean }, lookups: AudienceLookups): Promise<Audience> {
+export async function audienceOf(msg: NormalizedMessage, opts: { noMention: boolean; smart?: boolean }, lookups: AudienceLookups): Promise<Audience> {
   if (fromBot(msg)) return msg.mentionedBot ? { to: 'me', by: 'mention', fromBot: true } : { to: 'other', by: 'bot-sender' };
   if (msg.mentionedBot) return { to: 'me', by: 'mention' };
   if (msg.mentionAll) return { to: 'other', by: 'mention-all' };
@@ -59,7 +60,10 @@ export async function audienceOf(msg: NormalizedMessage, opts: { noMention: bool
   const withoutLookup: Audience = mentionsOther ? { to: 'other', by: 'mention' } : { to: 'nobody' };
   const quote = opts.noMention ? quotedId(msg) : undefined;
   if (!quote && (mentionsOther || !opts.noMention || !msg.threadId)) return withoutLookup;
-  if (await lookups.lonely()) return withoutLookup;
+  if (await lookups.lonely()) {
+    if (opts.smart && quote && (await lookups.quoted(quote))?.from === 'self') return { to: 'me', by: 'quote' };
+    return withoutLookup;
+  }
   if (quote) {
     const q = await lookups.quoted(quote);
     if (!q) return { to: 'unknown', why: 'quote' };
