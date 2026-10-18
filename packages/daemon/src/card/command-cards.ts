@@ -165,6 +165,8 @@ export interface ResumeCardState {
    * legacy state → default (codex). */
   backend?: string;
   threads: ThreadSummary[];
+  /** Sessions of this cwd left off {@link threads}: another place of the group holds them (s15f). */
+  inUse?: number;
   createdAt: number;
   /** in-flight guard (anti double-click) */
   launching?: boolean;
@@ -188,14 +190,17 @@ const RESUME_TITLE_MAX = 30;
  */
 export function buildResumeCard(state: ResumeCardState): CardObject {
   const elements = [md('🕘 **恢复历史会话**'), note(metaNote(state)), hr()];
+  const inUse = state.inUse ? `另有 ${state.inUse} 条正在本群的话题或主区里用着，没有列出。` : '';
   if (state.threads.length === 0) {
-    elements.push(md('_该目录下还没有历史会话。直接 @我 即可新建。_'));
+    elements.push(md(state.inUse
+      ? `_该目录下的 ${state.inUse} 条历史会话都在本群的话题或主区里用着。直接 @我 即可新建。_`
+      : '_该目录下还没有历史会话。直接 @我 即可新建。_'));
   } else {
     elements.push(
       note(
-        state.flat
+        (state.flat
           ? '点一条即切回 —— 就地继续，不另起话题。'
-          : '点一条即恢复 —— 在新话题里打开历史、可直接继续。',
+          : '点一条即恢复 —— 在新话题里打开历史、可直接继续。') + inUse,
       ),
     );
     for (const t of state.threads) {
