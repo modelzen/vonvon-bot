@@ -22,6 +22,10 @@ export const jobIdSchema = z
   .regex(/^[A-Za-z0-9_-]+$/)
   .brand<"JobId">();
 export const folderTokenSchema = z.string().uuid().brand<"FolderToken">();
+export const folderSelectionSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("default") }).strict(),
+  z.object({ kind: z.literal("existing"), folderToken: folderTokenSchema }).strict(),
+]);
 export const permissionSchema = z.enum(["qa", "write", "full"]);
 export const toolSchema = z.enum(["codex", "claude"]);
 /** 会话方式 on the wire: threads = 多会话（@ 我开新会话）, shared = 单会话（整群一条会话）. */
@@ -71,7 +75,7 @@ export const commandSchema = z.discriminatedUnion("type", [
         .min(1)
         .max(100)
         .regex(/^[^/\\\x00-\x1f]+$/),
-      folderToken: folderTokenSchema,
+      folder: folderSelectionSchema,
       tool: toolSchema,
       conversation: conversationSchema,
       response: replyModeSchema.optional(),

@@ -6,8 +6,9 @@ import { paths, botDir, botPaths } from './paths';
 import { loadConfig } from './store';
 import { isComplete, type TenantBrand, type AppConfig, type AppPreferences } from './schema';
 import { acquireMutex, closeMutex } from './data-access';
-import { type Allocation, SafeAppIdSchema, parseAllocations, ensureDurableDirectory, materializeAllocation, planAllocation, syncDirectory } from './bot-namespace';
-import { resolveProjectsRootDir } from './directories';
+import { type Allocation, SafeAppIdSchema, parseAllocations, ensureDurableDirectory, materializeAllocation, materializeDirectory, planDirectory, planAllocation, syncDirectory } from './bot-namespace';
+import { resolveProjectsRootDir, type DirectorySettings } from './directories';
+import { groupAllocationKey, parseGroupNamespaces, type GroupNamespaceState } from './group-namespace';
 
 /** One saved bot. Credentials' secret lives in the keystore (key `app-<appId>`). */
 export interface BotEntry {
@@ -30,7 +31,7 @@ export interface BotEntry {
   active?: boolean;
 }
 
-export interface BotsRegistry {
+export interface BotsRegistry extends GroupNamespaceState {
   version: 1;
   /**
    * Primary bot's appId — kept in sync with the active set (first active bot)
@@ -62,8 +63,9 @@ export async function loadBots(): Promise<BotsRegistry> {
       if (offset > MAX_REGISTRY_BYTES) throw new Error('Bot registry size limit exceeded');
       const reg = JSON.parse(bytes.subarray(0, offset).toString('utf8')) as BotsRegistry;
       const allocations = parseAllocations(reg.allocations);
+      const groups = parseGroupNamespaces({ groupContainers: reg.groupContainers, groupAllocations: reg.groupAllocations }, allocations);
       return { ...reg, version: 1, current: reg.current, bots: Array.isArray(reg.bots) ? reg.bots : [],
-        ...(allocations === undefined ? {} : { allocations }) };
+        ...(allocations === undefined ? {} : { allocations }), ...groups };
     } finally { await file.close(); }
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return emptyRegistry();
@@ -73,6 +75,7 @@ export async function loadBots(): Promise<BotsRegistry> {
 
 async function publish(reg: BotsRegistry): Promise<void> {
   parseAllocations(reg.allocations);
+  parseGroupNamespaces({ groupContainers: reg.groupContainers, groupAllocations: reg.groupAllocations }, reg.allocations);
   const content = `${JSON.stringify(reg, null, 2)}\n`;
   if (Buffer.byteLength(content) > MAX_REGISTRY_BYTES) throw new Error('Bot registry size limit exceeded');
   await ensureDurableDirectory(dirname(paths.botsFile));
@@ -153,6 +156,57 @@ export function botIdentity(entry: BotEntry): BotIdentity {
 function sameIdentity(entry: BotEntry, expected: BotIdentity): boolean {
   return entry.appId === expected.appId && entry.tenant === expected.tenant
     && entry.createdAt === expected.createdAt && entry.registrationId === expected.registrationId;
+}
+
+export function withBotGroupBinding<T>(expected: BotIdentity, group: { chatId: string; name: string; projectsRootDir: string }, operation: (scope: {
+  allocatedPath: string | undefined;
+  prepareDefault: () => Promise<{ cwd: string; blank: true; directories: DirectorySettings }>;
+}) => Promise<T>): Promise<T> {
+  const identity = { ...expected }, input = { ...group };
+  return ownBots(async registry => {
+    const entry = registry.bots.find(bot => bot.appId === identity.appId);
+    if (!entry || !sameIdentity(entry, identity)) throw new Error('机器人已移除或重新注册，请重启后再绑定');
+    const key = groupAllocationKey({ ...identity, chatId: input.chatId });
+    const previous = registry.groupAllocations?.[key];
+    return operation({ allocatedPath: previous?.state === 'ready' ? previous.namespaceRoot : undefined, prepareDefault: async () => {
+      let bot = registry.allocations?.[entry.appId];
+      if (!bot) {
+        if (Object.keys(registry.allocations ?? {}).length >= 4096) throw new Error('Bot allocation limit reached');
+        bot = await planAllocation({ ...entry, handle: entry.name, parent: input.projectsRootDir, dataDir: paths.appDir }, registry.allocations ?? {});
+        registry.allocations = { ...registry.allocations, [entry.appId]: bot };
+        await publish(registry);
+      }
+      validateAccountClaim(registry, bot, entry);
+      bot = await materializeAllocation(bot, paths.appDir);
+      registry.allocations = { ...registry.allocations, [entry.appId]: bot };
+      await publish(registry);
+      let container = registry.groupContainers?.[entry.appId];
+      if (!container) {
+        container = { version: 1, appId: entry.appId, tenant: entry.tenant,
+          ...await planDirectory({ name: 'groups', parent: bot.namespaceRoot, dataDir: paths.appDir, selection: { kind: 'fixed' } }, []) };
+        registry.groupContainers = { ...registry.groupContainers, [entry.appId]: container };
+        await publish(registry);
+      }
+      container = { ...container, ...await materializeDirectory(container, paths.appDir) };
+      registry.groupContainers = { ...registry.groupContainers, [entry.appId]: container };
+      await publish(registry);
+      let claim = registry.groupAllocations?.[key];
+      if (!claim) {
+        if (Object.keys(registry.groupAllocations ?? {}).length >= 4096) throw new Error('Group allocation limit reached');
+        claim = { version: 1, appId: entry.appId, tenant: entry.tenant, chatId: input.chatId, initialName: input.name,
+          ...await planDirectory({ name: input.name, parent: container.namespaceRoot, dataDir: paths.appDir,
+            selection: { kind: 'unique', key } }, Object.values(registry.groupAllocations ?? {})) };
+        registry.groupAllocations = { ...registry.groupAllocations, [key]: claim };
+        await publish(registry);
+      }
+      claim = { ...claim, ...await materializeDirectory(claim, paths.appDir) };
+      registry.groupAllocations = { ...registry.groupAllocations, [key]: claim };
+      await publish(registry);
+      await materializeAllocation(bot, paths.appDir);
+      await materializeDirectory(container, paths.appDir);
+      return { cwd: claim.namespaceRoot, blank: true, directories: { workspaces: { primary: claim.namespaceRoot, additional: [] } } };
+    } });
+  });
 }
 
 type RegisterEntryResult = { kind: 'registered'; entry: BotEntry } | { kind: 'already-registered'; entry: BotEntry };

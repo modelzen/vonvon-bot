@@ -13,7 +13,7 @@ const children = new Set<ChildProcess>();
 beforeAll(async () => {
   scratch = await realpath(await mkdtemp(join(tmpdir(), 'bot-namespace-')));
   entry = join(scratch, 'entry.cjs');
-  await build({ stdin: { contents: `export * from './src/config/bots';export * from './src/bot/register-bot';export * from './src/config/store';`,
+  await build({ stdin: { contents: `export * from './src/config/bots';export * from './src/bot/register-bot';export * from './src/config/store';export * from './src/project/registry';export {useBotDir,botPaths} from './src/config/paths';`,
     resolveDir: fileURLToPath(new URL('..', import.meta.url)) }, outfile: entry,
     bundle: true, platform: 'node', format: 'cjs', logLevel: 'silent', external: ['@larksuiteoapi/node-sdk'] });
 });
@@ -27,7 +27,7 @@ afterAll(async () => {
 async function home(): Promise<string> { return mkdtemp(join(scratch, 'data-')); }
 function run(root: string, code: string, setup = '') {
   const child = spawn(process.execPath, ['-e', `${setup};const m=require(${JSON.stringify(entry)});(async()=>{${code}})().catch(e=>{console.error(e);process.exitCode=1})`],
-    { env: { ...process.env, VONVON_HOME: root }, stdio: ['ignore', 'pipe', 'pipe'] });
+    { env: { ...process.env, VONVON_HOME: root }, stdio: ['pipe', 'pipe', 'pipe'] });
   children.add(child);
   let stdout = '', stderr = '';
   child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
@@ -54,6 +54,9 @@ const input = (appId: string, extra = {}) => JSON.stringify({ appId, tenant: 'fe
 const register = (appId: string, extra = {}, callback = 'async()=>{}') => `await m.registerBotEntry(${input(appId, extra)},${callback});`;
 const credentials = (appId: string, preferences = {}) => `const result=await m.registerBotFromCredentials(${JSON.stringify({ appId, appSecret: 'fake-only', tenant: 'feishu', ownerOpenId: 'fixture', initialPreferences: preferences })},async()=>({ok:true,botName:'Shared'}));if(!result.ok)throw Error(result.reason);`;
 const pause = `process.stdout.write('BARRIER');await new Promise(()=>setInterval(()=>{},1000));`;
+function bind(name = 'Group', chatId = 'oc_group', identity = `m.botIdentity((await m.loadBots()).bots[0])`, parent = `process.env.VONVON_HOME+'/projects'`): string {
+  return `(async()=>{const bot=${identity};m.useBotDir(bot.appId);return m.withBotGroupBinding(bot,{name:${JSON.stringify(name)},chatId:${JSON.stringify(chatId)},projectsRootDir:${parent}},async scope=>m.bindProject({name:${JSON.stringify(name)},chatId:${JSON.stringify(chatId)},cwd:{kind:'default',legacyPath:${parent}+'/'+${JSON.stringify(name)},allocatedPath:scope.allocatedPath},backend:'codex-appserver',defaultBackend:'codex-appserver',kind:'multi',noMention:true},async()=>({...await scope.prepareDefault(),createdAt:1,origin:'joined'}),{file:m.botPaths(bot.appId).projectsFile,dataRoot:process.env.VONVON_HOME}))})()`;
+}
 
 function intercept(stage: string): string {
   return `const fs=require('node:fs/promises');const oldRename=fs.rename,oldMkdir=fs.mkdir;
@@ -66,6 +69,123 @@ function intercept(stage: string): string {
 }
 
 describe('stable bot directory evidence', () => {
+  it('retains group content through rename, root change, unbind and account re-registration, fencing the old identity', async () => {
+    const root = await home();
+    const output = await successful(root, `${register('cli_groups123')}
+      const old=m.botIdentity((await m.loadBots()).bots[0]);const first=await ${bind()};
+      await require('node:fs/promises').writeFile(first.project.cwd+'/sentinel','keep');
+      await m.removeProject('Group');const renamed=await ${bind('Renamed', 'oc_group', 'old', `process.env.VONVON_HOME+'/elsewhere'`)};
+      if(renamed.project.cwd!==first.project.cwd)throw Error('renamed directory');
+      await m.setBotActivation(old.appId,false);await m.removeBot(old,{isRunning:async()=>false,cleanup:async()=>require('node:fs/promises').rm(m.botPaths(old.appId).dir??require('node:path').dirname(m.botPaths(old.appId).projectsFile),{recursive:true,force:true})});
+      try{await ${bind('Stale', 'oc_stale', 'old')};throw Error('accepted stale')}catch(error){if(!error.message.includes('重新注册'))throw error}
+      if(require('node:fs').existsSync(m.botPaths(old.appId).projectsFile))throw Error('stale recreated state');
+      ${register('cli_groups123')}
+      const next=await ${bind('Restored')};
+      if(next.project.cwd!==first.project.cwd)throw Error('new namespace');
+      if(await require('node:fs/promises').readFile(next.project.cwd+'/sentinel','utf8')!=='keep')throw Error('lost content');
+      console.log(JSON.stringify(next.project));`);
+    const saved = JSON.parse(output);
+    expect(saved.cwd).toBe(join(root, 'projects/shared/groups/Group'));
+    expect(saved.directories.workspaces).toEqual({ primary: saved.cwd, additional: [] });
+    expect(saved.directories).not.toHaveProperty('repositories');
+    const state = await registry(root);
+    expect(Object.keys(state.groupAllocations)).toHaveLength(1);
+    expect(Object.values(state.groupAllocations)[0]).toMatchObject({ initialName: 'Group', chatId: 'oc_group', state: 'ready' });
+  });
+
+  it('does not allocate or rewrite a legacy default binding on an identical retry or conflict', async () => {
+    const root = await home();
+    const bot = { name: 'legacy', appId: 'cli_legacy123', tenant: 'feishu', createdAt: 1 };
+    const bytes = JSON.stringify({ version: 1, bots: [bot], future: true });
+    await writeFile(join(root, 'bots.json'), bytes);
+    await successful(root, `m.useBotDir('cli_legacy123');await m.addProject({name:'Group',chatId:'oc_group',cwd:process.env.VONVON_HOME+'/projects/Group',blank:true,createdAt:1});`);
+    const file = join(root, 'bots/cli_legacy123/projects.json');
+    const projects = await readFile(file, 'utf8');
+    await successful(root, `const result=await ${bind()};if(result.kind!=='existing')throw Error('not existing');try{await ${bind('Other')};throw Error('accepted conflict')}catch(error){if(!error.message.includes('不可修改'))throw error}`);
+    expect(await readFile(join(root, 'bots.json'), 'utf8')).toBe(bytes);
+    expect(await readFile(file, 'utf8')).toBe(projects);
+    await expect(readdir(join(root, 'projects'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await successful(root, `const result=await ${bind('Fresh','oc_fresh')};if(!result.project.cwd.endsWith('/legacy/groups/Fresh'))throw Error('wrong old bot namespace');`);
+    expect((await registry(root)).bots[0]).toEqual(bot);
+  });
+
+  it('separates case-folding collisions and refuses replaced ancestors', async () => {
+    const root = await home();
+    await successful(root, `${register('cli_groups123')}const a=await ${bind()};const b=await ${bind('group','oc_other')};if(a.project.cwd===b.project.cwd)throw Error('collision');`);
+    const state = await registry(root);
+    const parent = state.allocations.cli_groups123.namespaceRoot;
+    await rename(parent, `${parent}-old`);
+    await mkdir(parent);
+    const failed = await run(root, `await ${bind('New','oc_new')}`).done;
+    expect(failed.code).toBe(1); expect(failed.stderr).toContain('Namespace directory changed');
+  });
+
+  it.each(['empty', 'content', 'symlink'])('refuses an unclaimed %s groups container', async occupied => {
+      const data = await home();
+      await successful(data, register('cli_groups123'));
+      const target = join(data, 'projects/shared/groups');
+      if (occupied === 'symlink') await symlink(scratch, target);
+      else { await mkdir(target); if (occupied === 'content') await writeFile(join(target, 'keep'), 'keep'); }
+      const result = await run(data, `await ${bind()}`).done;
+      expect(result.code).toBe(1); expect(result.stderr).toContain('Namespace collision limit');
+      expect((await registry(data)).groupContainers).toBeUndefined();
+  });
+
+  it.each(['account', 'parent', 'object', 'duplicate', 'limit'])('rejects a malformed group ledger: %s', async fault => {
+    const root = await home();
+    await successful(root, `${register('cli_groups123')}await ${bind()};`);
+    const state = await registry(root);
+    const container = state.groupContainers.cli_groups123;
+    const key = Object.keys(state.groupAllocations)[0];
+    if (key === undefined) throw new Error('Missing fixture group claim');
+    const claim = state.groupAllocations[key];
+    if (fault === 'account') container.tenant = 'lark';
+    if (fault === 'parent') claim.parent = scratch;
+    if (fault === 'object') claim.parentIdentity = { dev: '0', ino: '0' };
+    if (fault === 'duplicate') state.groupAllocations[JSON.stringify(['cli_groups123', 'feishu', 'oc_duplicate'])] = { ...claim, chatId: 'oc_duplicate', namespaceRoot: join(claim.parent, 'gRoUp') };
+    if (fault === 'limit') state.groupAllocations = Object.fromEntries(Array.from({ length: 4097 }, (_, i) => [`${key}-${i}`, claim]));
+    const bytes = JSON.stringify(state);
+    await writeFile(join(root, 'bots.json'), bytes);
+    const result = await run(root, 'await m.loadBots()').done;
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain(fault === 'limit' ? 'Group allocation limit' : 'Invalid group');
+    expect(await readFile(join(root, 'bots.json'), 'utf8')).toBe(bytes);
+  });
+
+  it.each(['container-intent', 'group-mkdir', 'group-ready'])('retains %s evidence across an actual killed binding', async stage => {
+    const root = await home();
+    await successful(root, register('cli_groups123'));
+    const setup = `const fs=require('node:fs/promises'),rename=fs.rename,mkdir=fs.mkdir;let paused=false;
+      fs.rename=async(a,b)=>{await rename(a,b);if(!paused&&b.endsWith('/bots.json')){const doc=JSON.parse(await fs.readFile(b,'utf8'));if((${JSON.stringify(stage)}==='container-intent'&&doc.groupContainers?.cli_groups123?.state==='reserved')||(${JSON.stringify(stage)}==='group-ready'&&Object.values(doc.groupAllocations??{}).some(c=>c.state==='ready'))){paused=true;${pause}}}};
+      fs.mkdir=async(p,o)=>{const result=await mkdir(p,o);if(${JSON.stringify(stage)}==='group-mkdir'&&p.endsWith('/groups/Group')){${pause}}return result};`;
+    const child = run(root, `await ${bind()}`, setup);
+    await child.ready; child.child.kill('SIGKILL'); await child.done;
+    const result = await run(root, `console.log(JSON.stringify(await ${bind()}))`).done;
+    if (stage === 'group-mkdir') {
+      expect(result.code).toBe(1); expect(result.stderr).toContain('Reserved namespace already exists');
+      expect(Object.values((await registry(root)).groupAllocations)[0]).toMatchObject({ state: 'reserved' });
+    } else {
+      expect(result.code).toBe(0); expect(result.stderr).toBe('');
+      expect(JSON.parse(result.stdout).project.cwd).toBe(join(root, 'projects/shared/groups/Group'));
+    }
+  });
+
+  it('serializes competing root-to-project binders and an ordinary project writer', async () => {
+    const root = await home();
+    await successful(root, register('cli_groups123'));
+    const setup = `const fs=require('node:fs/promises'),rename=fs.rename;let paused=false;fs.rename=async(a,b)=>{await rename(a,b);if(!paused&&b.endsWith('/bots.json')){const doc=JSON.parse(await fs.readFile(b,'utf8'));if(Object.values(doc.groupAllocations??{}).some(c=>c.state==='ready')){paused=true;process.stdout.write('BARRIER');await new Promise(r=>process.stdin.once('data',r));process.stdin.destroy()}}};`;
+    const first = run(root, `console.log(JSON.stringify(await ${bind()}))`, setup);
+    await first.ready;
+    const next = run(root, `console.log('BARRIER');console.log(JSON.stringify(await ${bind()}))`);
+    const writer = run(root, `m.useBotDir('cli_groups123');process.stdout.write('BARRIER');await m.addProject({name:'unrelated',chatId:'oc_unrelated',cwd:'/legacy',blank:false,createdAt:1})`);
+    await Promise.all([next.ready, writer.ready]); first.child.stdin?.end('continue');
+    const [a,b,c] = await Promise.all([first.done,next.done,writer.done]);
+    expect([a.code,b.code,c.code]).toEqual([0,0,0]);
+    expect(JSON.parse(a.stdout.replace('BARRIER','')).kind).toBe('bound');
+    expect(JSON.parse(b.stdout.replace('BARRIER\n','')).kind).toBe('existing');
+    const projects = JSON.parse(await readFile(join(root, 'bots/cli_groups123/projects.json'), 'utf8')).projects;
+    expect(projects.map((p: { name: string }) => p.name).sort()).toEqual(['Group','unrelated']);
+  });
   it('creates a default empty workspace through shared credential registration', async () => {
     const root = await home();
     await successful(root, credentials('cli_default123'));

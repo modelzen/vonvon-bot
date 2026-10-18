@@ -83,8 +83,16 @@ describe("pinned contract extraction", () => {
       { kind: "setHostCliRoute", botId: null, revision: "r" }, { kind: "repairHostCliHooks", agents: ["codex"] },
     ]) expect(requestSchema.safeParse({ type: "request", id: "x", method: "settings", payload: { type: "act", action } }).success).toBe(false);
   });
+  it("requires an explicit default or tokenized existing folder when binding", () => {
+    const base = {type:"bindGroup",agentId:"cli_fixture",groupId:"oc_fixture",projectName:"Group",tool:"codex",conversation:"threads"};
+    expect(commandSchema.safeParse({...base,folder:{kind:"default"}}).success).toBe(true);
+    expect(commandSchema.safeParse({...base,folder:{kind:"existing",folderToken:randomUUID()}}).success).toBe(true);
+    for (const folder of [undefined, {kind:"existing"}, {kind:"default",folderToken:randomUUID()}, {kind:"existing",path:"/untrusted"}]) {
+      expect(commandSchema.safeParse({...base,folder}).success).toBe(false);
+    }
+  });
   it("rejects a bindGroup project name with a slash", () => {
-    expect(commandSchema.safeParse({type:"bindGroup",agentId:"cli_fixture",groupId:"oc_fixture",projectName:"a/b",folderToken:randomUUID(),tool:"codex",conversation:"threads"}).success).toBe(false);
+    expect(commandSchema.safeParse({type:"bindGroup",agentId:"cli_fixture",groupId:"oc_fixture",projectName:"a/b",folder:{kind:"existing",folderToken:randomUUID()},tool:"codex",conversation:"threads"}).success).toBe(false);
   });
   it("omits only the four desktop commands", () => {
     for (const type of ["quit", "hideWindow", "setLoginItem", "chooseFolder"]) {

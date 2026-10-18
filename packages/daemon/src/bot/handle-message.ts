@@ -1,6 +1,7 @@
 import { AskCoordinator, type AskTurn } from './ask-coordinator';
 import { createPendingGroups, pendingGroupsFile } from '../project/pending-groups';
 import { realpath, stat } from 'node:fs/promises';
+import type { BotIdentity } from '../config/bots';
 import { randomUUID } from 'node:crypto';
 import { projectRevision, projectView, type CollaborationRequest } from '../admin/collaboration';
 import { AdminWriteError } from '../admin/ops';
@@ -893,8 +894,9 @@ export function createOrchestrator(
   topics?: TopicRegistry,
   /** `droppedFile`: where a shutdown keeps the queued messages it drops (s18c). No default: without it, nothing is
    * kept or answered (tests, and every caller but `daemon run`). */
-  options?: { droppedFile?: string },
+  options?: { droppedFile?: string; bot?: BotIdentity },
 ): Orchestrator {
+  const bindingBot = options?.bot ? { ...options.bot } : undefined;
   /** Lazily-constructed backends by id — one instance per backend for the whole
    * bridge (mirrors the old single-instance shape; codex stays the default). */
   const backends = new Map<string, AgentBackend>();
@@ -4148,7 +4150,9 @@ export function createOrchestrator(
         else if (!op) result = buildJoinGroupFormCard({ chatId, name, cwd: cwdIn, error: '无法识别操作者身份', backends });
         else {
           try {
+            if (!bindingBot) throw new Error('缺少机器人注册身份，请重启后再绑定');
             const p = await joinExistingGroup(channel, {
+              bot: bindingBot,
               name,
               chatId,
               addedBy: op,

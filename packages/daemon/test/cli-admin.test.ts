@@ -255,7 +255,7 @@ it('group bind sends an absolute folder, the chosen token and the pending name',
   const h = harness({ snapshot: one(), run, directory });
   await runGroupBind('oc_pay', { folder: 'pay', conversation: 'multi' }, h.io(), h.daemon, host);
   expect(directory).toHaveBeenCalledWith({ type: 'choose', path: join(home, 'work', 'pay') });
-  expect(run).toHaveBeenLastCalledWith({ type: 'bindGroup', agentId: 'cli_a', groupId: 'oc_pay', projectName: '支付组', folderToken: token, tool: 'codex', conversation: 'threads' });
+  expect(run).toHaveBeenLastCalledWith({ type: 'bindGroup', agentId: 'cli_a', groupId: 'oc_pay', projectName: '支付组', folder: { kind: 'existing', folderToken: token }, tool: 'codex', conversation: 'threads' });
   expect(h.out()).toBe(`已绑定 支付组（oc_pay）→ ${join(home, 'work', 'pay')} · Codex · 多会话（@ 我开新会话） · 免 @ 开\nLinux 上 Codex 只能用完全访问，运行：vonvon settings set --group oc_pay permission.mode=full\n`);
   await runGroupBind('oc_pay', { folder: '~/work/pay', name: '新名字', tool: 'claude', conversation: 'single' }, h.io(), h.daemon, host);
   expect(directory).toHaveBeenLastCalledWith({ type: 'choose', path: join(home, 'work', 'pay') });

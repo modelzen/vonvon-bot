@@ -3,7 +3,7 @@ import { buildEncryptedAccountConfig, saveConfig } from '../config/store';
 import { botPaths } from '../config/paths';
 import { secretKeyForApp, type AppPreferences, type TenantBrand } from '../config/schema';
 import { validateAppCredentials } from '../utils/feishu-auth';
-import { registerBotEntry, loadBots } from '../config/bots';
+import { registerBotEntry, loadBots, botIdentity, type BotIdentity } from '../config/bots';
 import { log } from '../core/logger';
 
 /**
@@ -31,6 +31,7 @@ export interface RegisterBotInput {
 }
 
 export interface RegisterBotResult {
+  identity: BotIdentity;
   ok: true;
   name: string;
   appId: string;
@@ -116,7 +117,7 @@ export async function registerBotFromCredentials(
     const { name } = result.entry;
 
     log.info('register-bot', 'bot-registered', { name, appId, bot: v.botName ?? null });
-    return { ok: true, name, appId, tenant, botName: v.botName, missingScopes: v.missingScopes };
+    return { ok: true, identity: botIdentity(result.entry), name, appId, tenant, botName: v.botName, missingScopes: v.missingScopes };
   } catch (err) {
     log.fail('register-bot', err, { phase: 'persist', appId });
     return {

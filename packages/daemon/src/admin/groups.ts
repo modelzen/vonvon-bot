@@ -1,4 +1,5 @@
 import { paths } from '../config/paths';
+import type { BotIdentity } from '../config/bots';
 import { realpath, stat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
@@ -11,7 +12,7 @@ import { AdminWriteError } from './ops';
 export interface BindGroupInput {
   chatId: string;
   projectName: string;
-  directory: string;
+  directory?: string;
   backend: 'codex-appserver' | 'claude-agent';
   kind: 'multi' | 'single';
   /** 免@; left out → 3.4's default for `kind` */
@@ -32,7 +33,7 @@ export function parseBindGroupInput(raw: Record<string, unknown>): BindGroupInpu
   if (Object.keys(raw).some(key => !['chatId', 'projectName', 'directory', 'backend', 'kind', 'noMention'].includes(key)) ||
       typeof chatId !== 'string' || !/^oc_[\w-]{1,200}$/.test(chatId) ||
       typeof projectName !== 'string' || !projectName.trim() || projectName.length > 200 || /[\x00-\x1f]/.test(projectName) ||
-      typeof directory !== 'string' || !isAbsolute(directory) || directory.length > 4096 || /[\x00-\x1f]/.test(directory) ||
+      (directory !== undefined && (typeof directory !== 'string' || !isAbsolute(directory) || directory.length > 4096 || /[\x00-\x1f]/.test(directory))) ||
       (backend !== 'codex-appserver' && backend !== 'claude-agent') || (kind !== 'multi' && kind !== 'single') || (noMention !== undefined && typeof noMention !== 'boolean')) {
     throw new InvalidGroupInput('群绑定参数无效');
   }
@@ -88,12 +89,13 @@ function refused(phase: GroupPhase, reply: { code?: number; msg?: string }, fall
   throw error;
 }
 
-export function createGroupExecutor(channel: LarkChannel): (op: AdminGroupOp) => Promise<JoinedGroups | Project> {
+export function createGroupExecutor(channel: LarkChannel, identity: BotIdentity, projectsRootDir?: string): (op: AdminGroupOp) => Promise<JoinedGroups | Project> {
+  const bot = { ...identity };
   async function bind(request: BindGroupInput): Promise<Project> {
     const input = { ...request };
     const location = { file: paths.projectsFile, dataRoot: paths.appDir };
-    let directory: string;
-    try {
+    let directory: string | undefined;
+    if (input.directory !== undefined) try {
       directory = await realpath(input.directory);
       if (!(await stat(directory)).isDirectory()) throw new Error('not directory');
     } catch { throw new InvalidGroupInput('所选文件夹不存在或不是目录'); }
@@ -101,7 +103,7 @@ export function createGroupExecutor(channel: LarkChannel): (op: AdminGroupOp) =>
     if (membership.code !== 0 || typeof membership.data?.is_in_chat !== 'boolean') refused('bind-group', membership, '无法确认机器人群成员身份');
     if (!membership.data.is_in_chat) throw new AdminWriteError('机器人不在此群中');
     try {
-      return await joinExistingGroup(channel, { name: input.projectName, chatId: input.chatId, existingPath: directory, backend: input.backend, kind: input.kind, noMention: input.noMention, mode: bindModeFor(input.backend) }, location);
+      return await joinExistingGroup(channel, { bot, name: input.projectName, chatId: input.chatId, existingPath: directory, projectsRootDir, backend: input.backend, kind: input.kind, noMention: input.noMention, mode: bindModeFor(input.backend) }, location);
     } catch (error) {
       throw new AdminWriteError(error instanceof Error ? error.message : '群绑定失败');
     }
