@@ -7,7 +7,7 @@ import { ClaudeAgentBackend } from '../src/agent/claude-agent/backend';
 import { claudeConfigDir } from '../src/agent/claude-agent/configured-model';
 import { createJudge } from '../src/judge/judge';
 import { DEFAULT_SMART_PROMPT, JUDGE_ALLOWED } from '../src/judge/prompt';
-import type { JudgeRequest, JudgeVariant } from '../src/judge/types';
+import type { JudgeLine, JudgeRequest, JudgeVariant } from '../src/judge/types';
 import { filesWith } from './helpers/marker-scan';
 
 /**
@@ -31,7 +31,7 @@ const MESSAGES: Record<JudgeVariant, { text: string; mentions?: string[] }> = {
   topic: { text: '这个报错能帮我看下吗' },
 };
 
-const request = (variant: JudgeVariant): JudgeRequest => ({
+const request = (variant: JudgeVariant, extra: Partial<JudgeRequest> = {}): JudgeRequest => ({
   variant,
   appId: 'cli_realjudge',
   botName: '小码',
@@ -39,6 +39,7 @@ const request = (variant: JudgeVariant): JudgeRequest => ({
   ...(variant === 'topic' ? { topicTitle: '订单接口报错' } : {}),
   context: [],
   message: { at: Date.now(), from: 'user', name: '张三', ...MESSAGES[variant], text: `${MESSAGES[variant].text} ${marker}` },
+  ...extra,
 });
 
 const sha256 = (path: string): string | undefined => {
@@ -78,6 +79,21 @@ describe.skipIf(!REAL)('真实 Claude 判断（VONVON_REAL_JUDGE=1）', () => {
       }
     }
   }, 90_000 * RUNS);
+
+  // s25b：锚点只在主区没点名时问；模型指哪条是模型的事，只记下来（k/n），断言它在给的几条里。
+  it('锚点：补一句的那条接的是前面的哪条', async () => {
+    const at = Date.now();
+    const context: JudgeLine[] = [
+      { id: 'om_ask', at: at - 60_000, from: 'user', name: '张三', text: '导出接口 500 是谁在看？' },
+      { id: 'om_mine', at: at - 30_000, from: 'user', name: '李四', text: '我在看' },
+    ];
+    for (let run = 0; run < RUNS; run++) {
+      const result = await judge.judge(request('main', { context, message: { at, from: 'user', name: '张三', text: `补一句：是生产环境 ${marker}` } }));
+      console.log(JSON.stringify({ decision: result.decision, anchor: result.anchor ?? 'm0' }));
+      expect(result.error).toBeUndefined();
+      expect([undefined, 'om_ask', 'om_mine']).toContain(result.anchor);
+    }
+  }, 60_000 * RUNS);
 
   it('副作用：settings.json 没变，聊天内容没写进 ~/.claude 和 ~/.codex', () => {
     expect(sha256(settingsPath)).toBe(settingsBefore);

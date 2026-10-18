@@ -50,11 +50,11 @@ describe('diagnostics store', () => {
     expect(store.view('cli_a')?.deniedScopes).toEqual([]);
   });
 
-  it('keeps at most 10 judgements that did not answer, so they never push out the failures (s25)', () => {
+  it('keeps at most 10 judgements that did not answer, so they never push out the failures (s25, s25b)', () => {
     const store = createDiagnosticsStore({ changed: () => {} });
     store.accept('cli_a', replied({ reason: 'quota' }));
     // Different groups, so none merge.
-    for (let i = 0; i < 40; i++) store.accept('cli_a', replied({ groupId: `oc_${i}`, reason: i % 2 ? 'judge-skip' : 'judge-superseded', at: 1_000_000 + i }));
+    for (let i = 0; i < 40; i++) store.accept('cli_a', replied({ groupId: `oc_${i}`, reason: (['judge-skip', 'judge-superseded', 'judge-empty'] as const)[i % 3], at: 1_000_000 + i }));
     const kept = store.view('cli_a')!.notReplied;
     expect(kept.filter(item => item.reason !== 'quota')).toHaveLength(QUIET_LIMIT);
     expect(kept[0]!.groupId).toBe('oc_39');

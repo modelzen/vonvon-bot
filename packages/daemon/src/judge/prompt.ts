@@ -35,7 +35,8 @@ const FORMAT_BODY: Record<JudgeVariant, string> = {
 skip：不回。
 main：在主区接着聊。
 topic：开一个新话题来回。
-只输出一个 JSON 对象，不要别的文字：{"decision":"skip 或 main 或 topic","reason":"一句话原因，40 字以内"}`,
+anchor：这条消息接的是哪一条，按消息前面的编号写，m0 是它自己，m1 是它前面最近的一条。它是在接着前面哪条说（比如补充 m1、回答 m2 提的问题），就写那条的编号；不是或者拿不准，写 m0。
+只输出一个 JSON 对象，不要别的文字：{"decision":"skip 或 main 或 topic","anchor":"m0","reason":"一句话原因，40 字以内"}`,
   mentioned: `这条消息在群主区点名了你，你一定要回，只选回在哪里：
 main：在主区接着聊。
 topic：开一个新话题来回。
@@ -59,14 +60,17 @@ export function judgeSystem(smart: string, variant: JudgeVariant): string {
   return `${smart}\n\n${JUDGE_FORMAT_LINES[variant]}`;
 }
 
-/** The answer's JSON schema (Codex `outputSchema`, Claude `outputFormat`). */
+/** The answer's JSON schema (Codex `outputSchema`, Claude `outputFormat`). The main variant also names the line its
+ * message follows up on (s25b): only there can it change where the answer goes (a topic opens under that line). */
 export function judgeSchema(variant: JudgeVariant): Record<string, unknown> {
+  const anchored = variant === 'main';
   return {
     type: 'object',
     additionalProperties: false,
-    required: ['decision', 'reason'],
+    required: anchored ? ['decision', 'anchor', 'reason'] : ['decision', 'reason'],
     properties: {
       decision: { type: 'string', enum: [...JUDGE_ALLOWED[variant]] },
+      ...(anchored ? { anchor: { type: 'string', enum: ANCHORS } } : {}),
       reason: { type: 'string', maxLength: REASON_MAX },
     },
   };
@@ -84,6 +88,9 @@ export const JUDGE_INPUT_LIMITS = {
 } as const;
 const NAME_MAX = 50;
 const REASON_MAX = 80;
+/** m0 (the message) to m20: one enum whatever the count, so the schema stays the same (a backend may cache it) and a
+ * number past the lines shown names nothing (s25b). */
+const ANCHORS = Array.from({ length: JUDGE_INPUT_LIMITS.contextLines + 1 }, (_, i) => `m${i}`);
 
 // Controls other than the newline; \r and the Unicode line separators become newlines first.
 const CONTROL = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/g;
@@ -148,23 +155,35 @@ function renderLine(line: JudgeLine, max: number): string {
   return `${hhmm(line.at)} ${who}${note}：${body(line.text, max)}`;
 }
 
+/** The context lines the input shows, newest first: m1, m2… (s25b). Cut by the line and character budget, so a line
+ * not shown has no number. A decision model's state (s23f) numbers them through this too. */
+export function shownContext(context: readonly JudgeLine[]): Array<{ line: JudgeLine; text: string }> {
+  const shown: Array<{ line: JudgeLine; text: string }> = [];
+  let total = 0;
+  for (const line of context.slice(-JUDGE_INPUT_LIMITS.contextLines).reverse()) {
+    const text = renderLine(line, JUDGE_INPUT_LIMITS.lineChars);
+    total += [...text].length;
+    if (total > JUDGE_INPUT_LIMITS.contextChars) break;
+    shown.push({ line, text });
+  }
+  return shown;
+}
+
+/** Each number's message id: `[k]` is m`k`'s, m0 the message's. */
+export function judgeAnchors(req: Pick<JudgeRequest, 'context' | 'message'>): Array<string | undefined> {
+  return [req.message.id, ...shownContext(req.context).map(({ line }) => line.id)];
+}
+
 /** The user input of one judgement. Built in memory only, never logged (product.md 3.5). */
 export function renderJudgeInput(req: Pick<JudgeRequest, 'variant' | 'botName' | 'group' | 'persona' | 'topicTitle' | 'context' | 'message'>): string {
   const out = [`【群】${oneLine(req.group.name, 100)}`, `【你】${oneLine(req.botName)}`];
   const persona = req.persona?.trim();
   if (persona) out.push('【你的个性】', `  ${body(persona, JUDGE_INPUT_LIMITS.personaChars)}`);
   if (req.variant === 'topic' && req.topicTitle?.trim()) out.push(`【话题】${oneLine(req.topicTitle, 100)}`);
-  // Newest first until the budget is spent, then back to oldest first.
-  const recent: string[] = [];
-  let total = 0;
-  for (const line of req.context.slice(-JUDGE_INPUT_LIMITS.contextLines).reverse()) {
-    const text = renderLine(line, JUDGE_INPUT_LIMITS.lineChars);
-    total += [...text].length;
-    if (total > JUDGE_INPUT_LIMITS.contextChars) break;
-    recent.unshift(text);
-  }
+  // Numbered newest first, shown oldest first.
+  const recent = shownContext(req.context).map(({ text }, i) => `m${i + 1} ${text}`).reverse();
   out.push('【最近的消息】旧的在前', ...(recent.length ? recent : ['（没有）']));
-  out.push('【要判断的消息】', renderLine(req.message, JUDGE_INPUT_LIMITS.messageChars));
+  out.push('【要判断的消息】', `m0 ${renderLine(req.message, JUDGE_INPUT_LIMITS.messageChars)}`);
   return out.join('\n');
 }
 
@@ -218,7 +237,7 @@ function parseText(text: string): Record<string, unknown> | undefined {
 export function parseVerdict(
   variant: JudgeVariant,
   output: Pick<JudgeCallOutput, 'text' | 'structured'>,
-): { decision: JudgeDecision; reason: string } | undefined {
+): { decision: JudgeDecision; reason: string; anchor?: number } | undefined {
   for (const candidate of [asObject(output.structured), parseText(output.text ?? '')]) {
     const decision = candidate?.decision;
     if (typeof decision !== 'string' || !(JUDGE_ALLOWED[variant] as readonly string[]).includes(decision)) continue;
@@ -231,7 +250,9 @@ export function parseVerdict(
     const chars = [...raw.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').replace(/\s+/g, ' ').trim()];
     // at most REASON_MAX code points, the ellipsis included
     const reason = chars.length > REASON_MAX ? `${chars.slice(0, REASON_MAX - 1).join('')}…` : chars.join('');
-    return { decision: decision as JudgeDecision, reason };
+    // An anchor out of format is dropped, not the verdict (s25b): the topic then opens on the message.
+    const anchor = variant === 'main' && typeof candidate?.anchor === 'string' ? ANCHORS.indexOf(candidate.anchor) : -1;
+    return { decision: decision as JudgeDecision, reason, ...(anchor > 0 ? { anchor } : {}) };
   }
   return undefined;
 }

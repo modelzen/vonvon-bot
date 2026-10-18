@@ -31,7 +31,9 @@ describe('RecentLines', () => {
     const context = r.context('g', { id: 'm25', at: 25 });
     expect(context).toHaveLength(RECENT_CONTEXT);
     expect(context.at(-1)!.text).toBe('m24');
-    expect(context[0]).not.toHaveProperty('id');
+    // Ids are what an anchor names (s25b); the sender's open_id and the line's own flags are not a judge line's.
+    r.add('g', { ...line('om_x', 24.5), senderId: 'ou_secret', named: true });
+    expect(r.context('g', { id: 'm25', at: 25 }).at(-1)).toEqual({ id: 'om_x', at: 24.5, from: 'user', name: '张三', text: 'om_x' });
   });
 
   it('drops the place used longest ago past the cap', () => {
@@ -107,7 +109,10 @@ describe('lineOfMessage', () => {
       mentions: [{ key: '@_user_1', openId: 'ou_me', name: '小码', isBot: true }, { key: '@_user_2', openId: 'ou_b', name: '李四', isBot: false }],
       raw: { sender: { sender_type: 'user' }, message: { message_type: 'text', content: JSON.stringify({ text: '@_user_1 @_user_2 看下' }) } },
     });
-    expect(lineOfMessage(msg, '张三')).toEqual({ id: 'om_1', at: 1_000, from: 'user', name: '张三', text: '@李四 看下', mentions: ['小码', '李四'] });
+    expect(lineOfMessage(msg, '张三')).toEqual({ id: 'om_1', at: 1_000, from: 'user', name: '张三', text: '@李四 看下', mentions: ['小码', '李四'], senderId: 'ou_a', named: true });
+    // @所有人 is not among the mentions, but names everyone (s25b).
+    expect(lineOfMessage(message({ mentionAll: true }), '张三').named).toBe(true);
+    expect(lineOfMessage(message(), '张三')).not.toHaveProperty('named');
     const long = message({ content: 'a'.repeat(900) });
     expect([...lineOfMessage(long, '张三').text]).toHaveLength(401);
     expect([...lineOfMessage(long, '张三', undefined, 800).text]).toHaveLength(801);

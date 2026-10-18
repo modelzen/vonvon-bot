@@ -10,9 +10,13 @@ import { extractMessageText, type ContextMessage, type ThreadPull } from './cont
  * decided to do, and once per place from Feishu's history; a recall takes its line out.
  */
 
-/** A line and its message id. */
+/** A line and its message id, with what a topic opened under it needs (s25b). */
 export interface RecentLine extends JudgeLine {
   id: string;
+  /** A person's open_id, another bot's open_bot_id. */
+  senderId?: string;
+  /** It @-mentions someone, this bot included, or everyone: a topic never opens under it. */
+  named?: true;
 }
 
 /** Lines kept per place, newest kept. */
@@ -42,6 +46,7 @@ export function lineOfMessage(msg: NormalizedMessage, name: string, quoted?: Rec
   const mentions = msg.mentions.map((m) => m.name ?? '某人');
   return {
     id: msg.messageId, at: msg.createTime || Date.now(), from: fromBot(msg) ? 'bot' : 'user', name, text: cut(text, max),
+    ...(msg.senderId ? { senderId: msg.senderId } : {}), ...(mentions.length || msg.mentionAll ? { named: true as const } : {}),
     ...(mentions.length ? { mentions } : {}),
     ...(quoted ? { quote: { name: quoted.from === 'self' ? '你' : quoted.name, text: cut(quoted.text, 200) } } : {}),
   };
@@ -49,7 +54,8 @@ export function lineOfMessage(msg: NormalizedMessage, name: string, quoted?: Rec
 
 /** A pulled history message as a line. */
 function lineOfPulled(m: ContextMessage): RecentLine {
-  return { id: m.messageId, at: m.createTime, from: m.from, name: m.senderName, text: cut(m.text) };
+  return { id: m.messageId, at: m.createTime, from: m.from, name: m.senderName, text: cut(m.text),
+    ...(m.senderId ? { senderId: m.senderId } : {}), ...(m.named ? { named: true } : {}) };
 }
 
 interface Place {
@@ -118,10 +124,12 @@ export class RecentLines {
     if (p) p.lines = p.lines.filter((l) => l.id !== id);
   }
 
-  /** The judgement's context: the place's last {@link RECENT_CONTEXT} lines before the message, oldest first. */
+  /** The judgement's context: the place's last {@link RECENT_CONTEXT} lines before the message, oldest first. Only a
+   * judge line's fields: ids are what an anchor names, an open_id goes nowhere. */
   context(key: string, message: { id: string; at: number }): JudgeLine[] {
     const before = (this.places.get(key)?.lines ?? []).filter((l) => l.id !== message.id && l.at <= message.at);
-    return before.slice(-RECENT_CONTEXT).map(({ id: _id, ...line }) => line);
+    return before.slice(-RECENT_CONTEXT).map(({ id, at, from, name, text, mentions, quote }) =>
+      ({ id, at, from, name, text, ...(mentions ? { mentions } : {}), ...(quote ? { quote } : {}) }));
   }
 
   /**

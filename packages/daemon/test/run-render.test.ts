@@ -388,6 +388,13 @@ describe('buildRunCard — terminal collapse', () => {
     expect(els.some((e) => e.tag === 'collapsible_panel')).toBe(true);
     expect(JSON.stringify(els)).toContain('未返回内容');
   });
+
+  it('a silent initiative card that could not be deleted keeps only one line (s25b)', () => {
+    const rs = run([{ type: 'done', turnId: 'turn-1' }]);
+    const els = bodyEls(buildRunCard({ rs, cardKey: 'm1', emptyNote: true }));
+    expect(els).toHaveLength(1);
+    expect(els[0]!.content).toBe('_（没有要补的）_');
+  });
 });
 
 describe('buildRunCard — full command visibility', () => {

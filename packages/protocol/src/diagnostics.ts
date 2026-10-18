@@ -5,7 +5,7 @@ import { z } from "zod";
 export const notRepliedReasonSchema = z.enum([
   "group-disabled", "group-updating", "chat-not-allowed", "user-not-allowed", "unbound", "lookup-failed",
   "signed-out", "codex-too-old", "tool-missing", "tier-unavailable", "missing-scope", "quota", "network", "idle-timeout", "agent-exited", "failed",
-  "restarted", "judge-skip", "judge-failed", "judge-budget", "judge-superseded",
+  "restarted", "judge-skip", "judge-failed", "judge-budget", "judge-superseded", "judge-empty",
 ]);
 export type NotRepliedReason = z.infer<typeof notRepliedReasonSchema>;
 /** Where a running bot was refused a scope: the back-fill, real names, a group's info, or a reply. */
@@ -78,6 +78,10 @@ export const NOT_REPLIED_TEXT: Record<NotRepliedReason, Text> = {
   },
   "judge-budget": { reason: () => "这个群这一小时判断了 60 次，到了上限，没 @ 它的这条没判断", next: () => "一小时内会恢复；@ 它仍然会回。" },
   "judge-superseded": { reason: () => "判断说要回，但它已随后来的消息进了会话，没单独回", next: () => "不用处理。" },
+  "judge-empty": {
+    reason: r => `自己接话后没有要说的，${r.detail ?? "删掉了空卡"}`,
+    next: () => "智能模式下这是正常的。总是这样就改智能提示词，让它少接话。",
+  },
 };
 
 /** The optional scopes of 3.11 that change what the bot does in a chat, and what is lost without each. */

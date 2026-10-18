@@ -105,6 +105,11 @@ export interface RunCardState {
   rs: RunState;
   /** This display segment ended because an accepted steer opened a new card. */
   continued?: boolean;
+  /** The first card of a turn the smart mode joined on its own (s25b): deleted when the turn ends with nothing to say.
+   * A card a steer splits off is not. */
+  initiativeCard?: true;
+  /** Such a card that could not be deleted: one short line, nothing else. */
+  emptyNote?: true;
   /** Independent of model text, preserved across live and terminal renders. */
   voiceMessages?: VoiceReply[];
   /** Identity for stop routing, using the card's own messageId. */
@@ -209,7 +214,7 @@ export function attachRunImages(opts: {
 export function buildRunCard(rc: RunCardState): CardObject {
   const state = rc.rs;
   const running = state.terminal === 'running';
-  const elements = running ? renderRunning(state, rc) : renderTerminal(state, rc);
+  const elements = rc.emptyNote ? [noteMd('_（没有要补的）_')] : running ? renderRunning(state, rc) : renderTerminal(state, rc);
   const result = card([...voiceReplyElements(rc.voiceMessages), ...elements].map(runTypography), { streaming: running, summary: rc.continued ? '已接收补充，继续处理' : summaryText(state) });
   result.body = { ...(result.body as Record<string, unknown>), vertical_spacing: '16px' };
   return result;
