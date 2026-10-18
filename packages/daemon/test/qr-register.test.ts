@@ -244,7 +244,7 @@ describe('registerBotByQr · 注册完默认启用（s02e）', () => {
   it('启动失败不让注册失败：Bot 仍算启用，之后的开关照常', async () => {
     await seedBots({ version: 1, bots: [] });
     const apply = vi.fn(async (_appId: string, enabled: boolean) => {
-      if (enabled) throw new Error('Agent 启动后未能及时响应');
+      if (enabled) throw new Error('Bot 启动后未能及时响应');
     });
     const service = createAdminService({ applyBotActivation: apply });
     scanned('cli_newbot00003');

@@ -19,7 +19,7 @@ export async function runGroupList(options: { bot?: string }, io: Io, daemon: Da
   const human = groups.length ? groups.map(m => {
     const owner = prefix ? `${snapshot.agents.find(agent => agent.id === m.agentId)?.name ?? m.agentId} / ` : '';
     return `${owner}${m.name}  ${m.groupId}  ${toolLabel(m.backend)}  ${conversationLabel(m.conversation)}  ${m.directory}${m.stale ? '（读取失败，显示的是上次的数据）' : ''}`;
-  }) : ['还没有绑定的群。用 vonvon group pending 看 bot 刚加入的群，再用 vonvon group bind 绑定。'];
+  }) : ['还没有绑定的群。用 vonvon group pending 看 Bot 刚加入的群，再用 vonvon group bind 绑定。'];
   print(io, human, { groups: groups.map(withoutAvatar) });
 }
 
@@ -45,7 +45,7 @@ export async function runGroupJoined(options: { bot?: string }, io: Io, daemon: 
     return joinedGroups(call, agent.id);
   });
   const human = groups.map(group => `${group.id}  ${group.name}  ${group.bound ? '已绑定' : '未绑定'}`);
-  if (!groups.length) human.push('bot 还没加入任何群。');
+  if (!groups.length) human.push('Bot 还没加入任何群。');
   if (!complete) human.push(`只显示了前 ${MAX_PAGES * 50} 个群。`);
   print(io, human, { groups, complete });
 }
@@ -60,7 +60,7 @@ export async function runGroupPending(options: { bot?: string }, io: Io, daemon:
   });
   const human = groups.length
     ? groups.map(group => `${group.chatId}  ${group.name}  ${localTime(group.addedAt)} 加入`)
-    : ['没有待绑定的群。bot 离线时被拉进的群，用 vonvon group joined 查。'];
+    : ['没有待绑定的群。Bot 离线时被拉进的群，用 vonvon group joined 查。'];
   print(io, human, { groups });
 }
 

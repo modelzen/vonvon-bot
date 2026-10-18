@@ -107,7 +107,7 @@ let creating: Promise<Slot> | null = null;
 let backoffStep = 0;
 let backoffUntil = 0;
 
-const closedError = (): JudgeCallError => new JudgeCallError('closed', 'bot 正在关闭', false);
+const closedError = (): JudgeCallError => new JudgeCallError('closed', 'Bot 正在关闭', false);
 const goneError = (): JudgeCallError => poolAccepting()
   ? new JudgeCallError('failed', 'Codex 判断进程退出了', false)
   : closedError();

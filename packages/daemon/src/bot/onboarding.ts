@@ -79,12 +79,12 @@ export async function ensureOnboarded(
   if (!entry) {
     if (opts.bot) {
       console.error(
-        `✗ 找不到机器人「${opts.bot}」。运行 \`vonvon open\` 在网页里查看已注册的机器人。`,
+        `✗ 找不到 Bot「${opts.bot}」。运行 \`vonvon open\` 在网页里查看已注册的 Bot。`,
       );
       return null;
     }
     if (!opts.allowCreate) {
-      console.error('✗ 尚未配置任何飞书机器人。请运行 `vonvon open` 在网页里「注册 Bot」，或在终端前台运行 `vonvon daemon run` 扫码创建。');
+      console.error('✗ 还没有配置任何 Bot。请运行 `vonvon open` 在网页里「注册 Bot」，或在终端前台运行 `vonvon daemon run` 扫码创建。');
       return null;
     }
     return registerNewBot('default');
@@ -94,7 +94,7 @@ export async function ensureOnboarded(
   useBotDir(entry.appId);
   const cfg = await loadConfig();
   if (!isComplete(cfg)) {
-    console.error(`✗ 当前机器人「${entry.name}」(${entry.appId}) 配置缺失或损坏。请运行 \`vonvon open\`，在网页的「移除 Bot」里删掉它，再重新注册。`);
+    console.error(`✗ 当前 Bot「${entry.name}」(${entry.appId}) 配置缺失或损坏。请运行 \`vonvon open\`，在网页的「移除 Bot」里删掉它，再重新注册。`);
     return null;
   }
   const r = await validateAndReport(cfg);
@@ -137,7 +137,7 @@ export async function registerNewBot(desiredName?: string): Promise<OnboardResul
   const cfg = await loadConfig(botPaths(app.id).configFile);
   if (!isComplete(cfg)) throw new Error('注册后配置不完整');
   useBotDir(app.id);
-  console.log(`✓ 已创建机器人「${registered.name}」  bot: ${registered.botName ?? '-'}  appId: ${app.id}`);
+  console.log(`✓ 已创建 Bot「${registered.name}」  飞书里的名字: ${registered.botName ?? '-'}  appId: ${app.id}`);
   log.info('onboard', 'bot-created', { name: registered.name, appId: app.id, bot: registered.botName ?? null });
   noticeMissingScopes(cfg, registered.missingScopes);
   const events = await diagnoseEventSubscription(app.id, app.secret, app.tenant);
@@ -182,7 +182,7 @@ function noticeMissingScopes(cfg: AppConfig, missingScopes: string[] | undefined
   for (const s of missingScopes) console.log(`   · ${labelScope(s)}`);
   console.log('   权限授权链接（勾选后即时生效，无需重启）：');
   console.log(`   👉 ${url}`);
-  console.log('   不想现在弄也行：之后私聊机器人 →「🩺 诊断」可随时再申请。');
+  console.log('   不想现在弄也行：之后私聊 Bot →「🩺 诊断」可随时再申请。');
   console.log(`${rule}\n`);
 }
 

@@ -189,7 +189,7 @@ export function EnvironmentPanel({ request, onCodexLogin, codexJobs, codexBusy, 
     if (saved) { discardProfile(); setProfileMode(null); }
     return saved;
   }
-  useDraft(Boolean(name || appId || appSecret || useProfile || brand !== "feishu"), { title: "飞书 CLI Profile", save: saveProfile, discard: discardProfile });
+  useDraft(Boolean(name || appId || appSecret || useProfile || brand !== "feishu"), { title: "飞书 CLI 账号配置", save: saveProfile, discard: discardProfile });
   const running = toolInstall?.kind === "running" ? toolInstall : null;
   const activeProfile = profiles.find((profile) => profile.effective) ?? profiles.find((profile) => profile.active);
   const { codexHost, otherBackends } = groupAgentBackends(tools, backends);
@@ -212,13 +212,13 @@ export function EnvironmentPanel({ request, onCodexLogin, codexJobs, codexBusy, 
 
   return <section className="environment-panel" aria-label="本机环境" id={settingAnchor('本机环境')}>
     <header className="environment-lead">
-      <p>管理这台设备上的 Bot 工具和飞书 CLI。</p>
+      <p>管理这台电脑上的后端和飞书 CLI。</p>
       <Button size="sm" icon={<RefreshCw size={15} />} disabled={busy} onClick={() => void refresh()}>重新检测</Button>
     </header>
     {notice && <p className="environment-notice" role="status">{notice}</p>}
     {running && !progressOpen && <div className="environment-notice" role="status">{toolNames[running.tool]} 正在{running.update ? "更新" : "安装"}。<Button size="sm" onClick={() => setProgressOpen(true)}>返回进度</Button></div>}
     <div className="environment-groups">
-      <DependencyGroup title="Bot" description="Codex 或 Claude 至少需要一个可用。">
+      <DependencyGroup title="后端" description="Codex 或 Claude 至少需要一个可用。">
         {order.slice(0, 2).map((kind) => tools.find((item) => item.tool === kind)).filter((item): item is EnvironmentToolState => Boolean(item)).map((tool) => <ToolRow key={tool.tool} reveal={reveal === `${tool.tool}-tool`} tool={tool} auth={auth[tool.tool]} hostBackend={tool.tool === "codex" ? codexHost : undefined} backendActions={backendActions} profiles={profiles} busy={busy || Boolean(running) || (tool.tool === "codex" && codexBusy)} running={running?.tool === tool.tool} onIntent={setIntent} onCheckAuth={checkAuth} onLogin={() => { if (tool.tool === "codex") void onCodexLogin(); else void act({ type: "startLogin", tool: tool.tool }); }} onProgress={() => setProgressOpen(true)} />)}
         {otherBackends.map((backend) => <BackendRow key={backend.id} backend={backend} actions={backendActions} login={logins[backend.id]} onCheckLogin={() => void checkLogin(backend.id, true)} />)}
       </DependencyGroup>
@@ -244,21 +244,21 @@ export function EnvironmentPanel({ request, onCodexLogin, codexJobs, codexBusy, 
       </div>}
     </Dialog>
     <ConfirmDialog open={Boolean(backendDisable)} title={backendDisable ? `卸载 ${backendDisable.displayName}` : "卸载后端"} description="仅卸载 Vonvon 托管的后端依赖。" confirmLabel="卸载后端" tone="danger" onCancel={() => setBackendDisable(null)} onConfirm={() => { const selected = backendDisable; setBackendDisable(null); if (selected) void act({ type: "backendUninstall", id: selected.id }); }} />
-    <ConfirmDialog open={Boolean(intent)} title={intent ? `${intent.kind === "disable" ? "停用" : intent.kind === "update" ? "更新" : "安装"} ${toolNames[intent.tool]}` : "确认操作"} description={intent?.kind === "disable" ? "只停用 Vonvon 托管副本。其他已安装的工具不会被删除。" : intent?.kind === "update" ? "Vonvon 将安装并验证新版本，然后切换到托管副本。" : "Bridge 将在本机安装并验证托管副本。"} confirmLabel={intent?.kind === "disable" ? "停用托管副本" : intent?.kind === "update" ? "开始更新" : "开始安装"} tone={intent?.kind === "disable" ? "danger" : "primary"} onCancel={() => setIntent(null)} onConfirm={() => void confirm()} />
-    <Dialog open={profilesOpen} onClose={() => setProfilesOpen(false)} size="md" title="管理飞书 CLI" description="添加应用、切换 Profile，并查看当前生效的身份。">
-      <div className="environment-profiles" id={settingAnchor('飞书 Profile')}>
+    <ConfirmDialog open={Boolean(intent)} title={intent ? `${intent.kind === "disable" ? "停用" : intent.kind === "update" ? "更新" : "安装"} ${toolNames[intent.tool]}` : "确认操作"} description={intent?.kind === "disable" ? "只停用 Vonvon 托管副本。其他已安装的工具不会被删除。" : intent?.kind === "update" ? "Vonvon 将安装并验证新版本，然后切换到托管副本。" : "Vonvon 会在本机安装并验证托管副本。"} confirmLabel={intent?.kind === "disable" ? "停用托管副本" : intent?.kind === "update" ? "开始更新" : "开始安装"} tone={intent?.kind === "disable" ? "danger" : "primary"} onCancel={() => setIntent(null)} onConfirm={() => void confirm()} />
+    <Dialog open={profilesOpen} onClose={() => setProfilesOpen(false)} size="md" title="管理飞书 CLI" description="账号配置（Profile）是飞书 CLI 用的一个飞书应用加上登录的用户。在这里添加、切换，并查看现在用的是哪一份。">
+      <div className="environment-profiles" id={settingAnchor('飞书 CLI 账号配置')}>
         {notice && <p className="environment-notice" role="status">{notice}</p>}
         <p>当前生效：{activeProfile ? `${activeProfile.name} · ${activeProfile.appId}${activeProfile.effectiveSource ? ` · ${profileSourceLabel(activeProfile.effectiveSource)}` : ""}` : "尚未确认"}</p>
         {profiles.map((profile) => <div className="environment-profile" key={profile.name}>
           <div><strong>{profile.name}</strong><span>{profile.brand === "feishu" ? "飞书" : "Lark"} · {profile.appId} · {profile.user ?? "用户未知"} · {profileTokenLabel(profile.tokenStatus)}</span></div>
           <div>{profile.effective && <StatusBadge tone="success">生效中</StatusBadge>}{profile.active && <StatusBadge tone="info">已选择</StatusBadge>}{!profile.active && <Button size="sm" disabled={busy} onClick={() => void act({ type: "profileUse", name: profile.name })}>设为当前</Button>}</div>
         </div>)}
-        {!profiles.length && <p>还没有 Profile，请先添加或创建应用。</p>}
+        {!profiles.length && <p>还没有账号配置，先添加已有应用或创建新应用。</p>}
         <div className="environment-profile-choice"><Button size="sm" onClick={() => setProfileMode(profileMode === "add" ? null : "add")}>添加已有应用</Button><Button size="sm" onClick={() => setProfileMode(profileMode === "create" ? null : "create")}>创建新应用</Button></div>
         {profileMode && <form className="environment-form" onSubmit={(event) => { event.preventDefault(); if (profileMode === "add") void saveProfile(); else void act({ type: "profileInit", name: name.trim() }).then((started) => { if (started) { setName(""); setProfileMode(null); setProfilesOpen(false); } }); }}>
-          <label data-search-title="Profile 名称">Profile 名称<input value={name} maxLength={128} required onChange={(event) => setName(event.target.value)} /></label>
+          <label data-search-title="账号配置名称">账号配置名称<input value={name} maxLength={128} required onChange={(event) => setName(event.target.value)} /></label>
           {profileMode === "add" && <><label data-search-title="App ID">App ID<input value={appId} maxLength={256} required onChange={(event) => setAppId(event.target.value)} /></label><label data-search-title="App Secret">App Secret<input type="password" value={appSecret} maxLength={512} required onChange={(event) => setAppSecret(event.target.value)} /></label><label data-search-title="平台">平台<select value={brand} onChange={(event) => setBrand(event.target.value === "lark" ? "lark" : "feishu")}><option value="feishu">飞书</option><option value="lark">Lark</option></select></label><label data-search-title="添加后设为当前" className="environment-checkbox"><input type="checkbox" checked={useProfile} onChange={(event) => setUseProfile(event.target.checked)} />添加后设为当前</label></>}
-          <Button type="submit" variant="primary" disabled={busy || !name.trim() || (profileMode === "add" && (!appId.trim() || !appSecret))}>{profileMode === "add" ? "添加 Profile" : "创建并授权"}</Button>
+          <Button type="submit" variant="primary" disabled={busy || !name.trim() || (profileMode === "add" && (!appId.trim() || !appSecret))}>{profileMode === "add" ? "添加账号配置" : "创建并授权"}</Button>
         </form>}
       </div>
     </Dialog>
@@ -292,11 +292,11 @@ function BackendRow({ backend, actions, login, onCheckLogin }: { backend: Backen
   const sdk = backend.id === "claude-agent" && backend.depKind === "npm-ondemand";
   const state = backendStateLabel(backend.depState);
   const checksLogin = sdk && backend.depState === "installed";
-  return <article className="environment-backend" aria-label={`${sdk ? "Claude Agent SDK" : backend.displayName} 执行后端`}>
+  return <article className="environment-backend" aria-label={`${sdk ? "Claude Agent SDK" : backend.displayName} 后端`}>
     <div>
       <strong>{sdk ? "Claude Agent SDK" : backend.displayName}</strong>
       <span>{state}{state === "状态未知" ? `（${backend.depState}）` : ""} · {backend.installedVersion ?? backend.version ?? "版本未知"}</span>
-      {sdk && <small>Bot 任务执行依赖，与 Claude Code CLI 分开管理。</small>}
+      {sdk && <small>Bot 跑 Claude 的任务靠它，和 Claude 命令行分开管理。</small>}
       {checksLogin && <small className="environment-backend-login">Claude 登录：{login ? <><StatusBadge tone={loginTones[login.state]}>{loginLabels[login.state]}</StatusBadge> {login.message}</> : "正在检查…"}</small>}
       {backend.hint && login?.state !== "signedIn" && <small>{backend.hint}</small>}
     </div>
@@ -340,7 +340,7 @@ function ToolRow({ tool, auth, hostBackend, backendActions, profiles, busy, runn
           {tool.tool === "codex" && <source media="(prefers-color-scheme: dark)" srcSet="./agent-icons/codex-dark.png" />}
           <img src={tool.tool === "codex" ? "./agent-icons/codex-light.png" : tool.tool === "claude" ? "./agent-icons/claude-code.svg" : "./agent-icons/feishu.png"} alt="" />
         </picture>
-        <span className="environment-tool-copy"><strong>{toolNames[tool.tool]}</strong><small>{presentation.summary}</small>{hostWarning && <small className="environment-host-warning">Host：{backendStateLabel(hostBackend.depState)}{hostBackend.hint ? ` · ${hostBackend.hint}` : ""}</small>}</span>
+        <span className="environment-tool-copy"><strong>{toolNames[tool.tool]}</strong><small>{presentation.summary}</small>{hostWarning && <small className="environment-host-warning">后端：{backendStateLabel(hostBackend.depState)}{hostBackend.hint ? ` · ${hostBackend.hint}` : ""}</small>}</span>
         <StatusBadge tone={presentation.tone}>{presentation.status}</StatusBadge><ChevronDown className={expanded ? "environment-chevron environment-chevron-open" : "environment-chevron"} size={15} />
       </button>
       <div className="environment-primary">
@@ -350,7 +350,7 @@ function ToolRow({ tool, auth, hostBackend, backendActions, profiles, busy, runn
       </div>
     </div>
     <div className="environment-details" id={detailsId} hidden={!expanded}>
-      <dl><div><dt>安装来源</dt><dd>{tool.installation === "managed" ? "Vonvon 托管" : tool.installation === "external" ? "现有安装" : "未安装"}</dd></div><div><dt>安装位置</dt><dd>{tool.executable ? <code>{tool.executable}</code> : "暂无"}</dd></div><div><dt>当前版本</dt><dd>{tool.version ?? "未知"}</dd></div><div><dt>托管版本</dt><dd>{tool.managedVersion ?? "无"}</dd></div><div><dt>最新版本</dt><dd>{tool.latestVersion ?? "未取得"}</dd></div>{tool.compatibility && <><div><dt>最低版本</dt><dd>{tool.compatibility.minimum}</dd></div><div><dt>验证过的版本</dt><dd>{tool.compatibility.verified}</dd></div></>}<div><dt>授权状态</dt><dd>{auth?.message ?? "尚未确认"}</dd></div>{tool.tool === "lark-cli" && <div><dt>当前 Profile</dt><dd>{profile ? `${profile.name}${profile.effectiveSource ? ` · ${profileSourceLabel(profile.effectiveSource)}` : ""}` : "尚未确认"}</dd></div>}{hostBackend && <><div><dt>Host 状态</dt><dd>{backendStateLabel(hostBackend.depState)}{backendStateLabel(hostBackend.depState) === "状态未知" ? `（${hostBackend.depState}）` : ""}</dd></div><div><dt>Host 版本</dt><dd>{hostBackend.installedVersion ?? hostBackend.version ?? "未知"}</dd></div>{hostBackend.hint && <div className="environment-host-detail"><dt>Host 说明</dt><dd>{hostBackend.hint}</dd></div>}</>}</dl>
+      <dl><div><dt>安装来源</dt><dd>{tool.installation === "managed" ? "Vonvon 托管" : tool.installation === "external" ? "现有安装" : "未安装"}</dd></div><div><dt>安装位置</dt><dd>{tool.executable ? <code>{tool.executable}</code> : "暂无"}</dd></div><div><dt>当前版本</dt><dd>{tool.version ?? "未知"}</dd></div><div><dt>托管版本</dt><dd>{tool.managedVersion ?? "无"}</dd></div><div><dt>最新版本</dt><dd>{tool.latestVersion ?? "未取得"}</dd></div>{tool.compatibility && <><div><dt>最低版本</dt><dd>{tool.compatibility.minimum}</dd></div><div><dt>验证过的版本</dt><dd>{tool.compatibility.verified}</dd></div></>}<div><dt>授权状态</dt><dd>{auth?.message ?? "尚未确认"}</dd></div>{tool.tool === "lark-cli" && <div><dt>当前账号配置</dt><dd>{profile ? `${profile.name}${profile.effectiveSource ? ` · ${profileSourceLabel(profile.effectiveSource)}` : ""}` : "尚未确认"}</dd></div>}{hostBackend && <><div><dt>后端状态</dt><dd>{backendStateLabel(hostBackend.depState)}{backendStateLabel(hostBackend.depState) === "状态未知" ? `（${hostBackend.depState}）` : ""}</dd></div><div><dt>后端版本</dt><dd>{hostBackend.installedVersion ?? hostBackend.version ?? "未知"}</dd></div>{hostBackend.hint && <div className="environment-host-detail"><dt>后端说明</dt><dd>{hostBackend.hint}</dd></div>}</>}</dl>
       <div className="environment-secondary"><Button size="sm" disabled={busy || tool.installation === "missing"} onClick={() => onCheckAuth(tool.tool)}>检查授权</Button>{tool.installation !== "missing" && presentation.action !== "login" && <Button size="sm" disabled={busy} onClick={onLogin}>重新登录</Button>}{tool.installation === "external" && <Button size="sm" disabled={busy} onClick={() => onIntent({ kind: "update", tool: tool.tool })}>安装托管副本</Button>}{tool.installation === "managed" && presentation.action !== "update" && <Button size="sm" disabled={busy} onClick={() => onIntent({ kind: "update", tool: tool.tool })}>重新安装最新版</Button>}{tool.canUninstall && <Button size="sm" disabled={busy} onClick={() => onIntent({ kind: "disable", tool: tool.tool })}>停用托管副本</Button>}</div>
       {hostBackend && backendActions && <BackendActions backend={hostBackend} actions={backendActions} />}
     </div>
@@ -366,7 +366,7 @@ function backendStateLabel(state: string): string {
 }
 
 function profileSourceLabel(source: string): string {
-  if (source === "active" || source === "config") return "默认 Profile";
+  if (source === "active" || source === "config") return "默认账号配置";
   if (source === "environment") return "环境变量";
   return "生效来源未知";
 }

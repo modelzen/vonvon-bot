@@ -21,7 +21,7 @@ function resultMessage(h: VoiceHealth): string {
   if (h.issue === 'unsupported_plan') return '当前租户不支持此服务。';
   if (h.issue === 'rate_limit') return '请求受限，请稍后测试。';
   if (h.issue === 'quota') return '调用额度已用尽，请管理员检查用量。';
-  if (h.issue === 'authentication') return '应用凭据无效，请检查机器人配置。';
+  if (h.issue === 'authentication') return '应用凭据无效，请检查这个 Bot 的配置。';
   if (h.issue === 'network') return '网络连接失败，请稍后重试。';
   if (h.issue === 'rejected') return '调用被拒绝，请联系飞书支持核查。';
   return '转写未成功，请稍后重试。';

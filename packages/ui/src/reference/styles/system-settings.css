@@ -1,28 +1,3 @@
-
-:root {
-  --system-group: #f7f7f7;
-  --system-separator: #ebebeb;
-  --system-search: #e8e8e8;
-  --system-sidebar: rgba(249, 249, 249, 0.94);
-  --system-blue: #0164e1;
-  --color-canvas: #ffffff;
-  --color-canvas-raised: #ffffff;
-  --color-surface: #ffffff;
-  --color-surface-muted: #f2f2f2;
-  --color-surface-hover: rgba(0, 0, 0, 0.045);
-  --color-text: #262626;
-  --color-text-secondary: #7c7c7c;
-  --color-text-tertiary: #96969a;
-  --color-border: rgba(0, 0, 0, 0.12);
-  --color-border-strong: rgba(0, 0, 0, 0.2);
-  --color-separator: #ebebeb;
-  --color-sidebar: var(--system-sidebar);
-  --color-sidebar-selected: var(--system-blue);
-  --color-accent: #007aff;
-  --radius-lg: 12px;
-  --radius-xl: 12px;
-}
-
 html,
 body,
 #root {

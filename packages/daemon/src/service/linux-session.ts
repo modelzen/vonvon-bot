@@ -68,8 +68,8 @@ export const enableFailed = (detail: string, user: string): string => `没开成
 
 /** The linger line of `service status` and of an install that leaves it alone. */
 export function lingerLine(linger: Linger, user: string): string {
-  if (linger.state === 'on') return 'linger 已开：开机就启动，退出 SSH 以后 bot 也还在跑。';
-  if (linger.state === 'off') return `没开 linger：退出最后一个登录会话后 bot 会停，开机也不启动。${lingerOffHint(user)}`;
+  if (linger.state === 'on') return 'linger 已开：开机就启动，退出 SSH 以后 Bot 也还在跑。';
+  if (linger.state === 'off') return `没开 linger：退出最后一个登录会话后 Bot 会停，开机也不启动。${lingerOffHint(user)}`;
   return `查不到 linger 的状态：${linger.detail ?? '原因不明'}。${lingerOffHint(user)}`;
 }
 

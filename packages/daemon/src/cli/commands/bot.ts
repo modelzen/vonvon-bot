@@ -127,7 +127,7 @@ function follow(c: VonvonClient, io: Io, d: AddDependencies, onStop: (stop: () =
         io.write(`用飞书 App 扫下面的二维码，建一个新的飞书应用（${localTime(job.expiresAt).slice(11)} 前有效）：\n${art.replace(/\n?$/, '\n')}`
           + `扫不了的话，在手机飞书里打开：${printable(job.url)}\n等你在飞书里确认…（Ctrl-C 取消）\n`);
       }
-      if (job.phase === 'succeeded') finish(job.agentId ? { kind: 'succeeded', agentId: job.agentId } : { kind: 'failed', message: 'daemon 没说存成了哪个 bot。运行 vonvon bot list 看看。' });
+      if (job.phase === 'succeeded') finish(job.agentId ? { kind: 'succeeded', agentId: job.agentId } : { kind: 'failed', message: 'daemon 没说存成了哪个 Bot。运行 vonvon bot list 看看。' });
       if (job.phase === 'failed') finish({ kind: 'failed', message: job.message, code: job.code });
       if (job.phase === 'cancelled' && !interrupted) finish({ kind: 'cancelled' });
     }
@@ -182,7 +182,7 @@ export async function runBotAdd(io: Io, daemon: Daemon = withDaemon, overrides: 
         agent = (await call('读取快照', c => c.snapshot())).agents.find(each => each.id === outcome.agentId);
         if (agent) setup = want('读取清单状态', await call('读取清单状态', c => c.admin({ type: 'setupStatus', agentId: outcome.agentId }), { feishu: true }), 'setupStatus').status;
       } catch (error) { problem = messageOf(error).replace(/[。.]\s*$/, ''); }
-      const human = [`✓ 已保存 bot：${agent ? `${agent.name}（${agent.id}）` : outcome.agentId}${agent?.enabled ? '，已启用' : ''}。`];
+      const human = [`✓ 已保存 Bot：${agent ? `${agent.name}（${agent.id}）` : outcome.agentId}${agent?.enabled ? '，已启用' : ''}。`];
       if (problem !== undefined) human.push(`清单没读到：${problem}。稍后运行 vonvon bot status。`);
       else if (agent && setup) human.push('接下来在飞书开发者后台做完这几步，做完一步运行 vonvon bot status 看进度：', ...botSteps(agent, setup).flatMap(stepLines));
       else human.push('运行 vonvon bot status 看接下来的几步。');

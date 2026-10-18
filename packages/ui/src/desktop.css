@@ -79,4 +79,4 @@ html,body,#root{height:100%;margin:0;overflow:hidden}button,input,select,textare
     max-width: 100%;
   }
 }
-html,body{min-width:720px;min-height:560px}
+html,body{min-width:780px;min-height:560px}

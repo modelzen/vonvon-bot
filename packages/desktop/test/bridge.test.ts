@@ -130,8 +130,8 @@ describe('desktop IPC boundary', () => {
     h.machine.mockRejectedValueOnce(new RpcError('upstream', '缺少飞书权限 im:chat:readonly（读取群信息）。\n在 Bot 设置点「一键开权限」。'));
     expect(await h.invoke(desktopChannels.machine, { type: 'status' })).toEqual({ ok: false, error: {
       kind: 'rpc', code: 'upstream', message: '缺少飞书权限 im:chat:readonly（读取群信息）。 在 Bot 设置点「一键开权限」。' } });
-    h.machine.mockRejectedValueOnce(new RpcError('bad code\n', '机器人未启用或尚未运行'));
-    expect(await h.invoke(desktopChannels.machine, { type: 'status' })).toEqual({ ok: false, error: { kind: 'rpc', message: '机器人未启用或尚未运行' } });
+    h.machine.mockRejectedValueOnce(new RpcError('bad code\n', 'Bot 没启用或没在运行'));
+    expect(await h.invoke(desktopChannels.machine, { type: 'status' })).toEqual({ ok: false, error: { kind: 'rpc', message: 'Bot 没启用或没在运行' } });
     await h.invoke(desktopChannels.subscribe);
     h.emitError(new RpcError('conflict', 'token=t-g1044abcdefghijklmnopqrstuvwxyz0123'));
     expect(h.webContents.send).toHaveBeenLastCalledWith(desktopChannels.event, { type: 'error', value: { kind: 'rpc', code: 'conflict', message: 'token=…' } });

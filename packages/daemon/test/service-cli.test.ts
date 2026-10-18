@@ -125,9 +125,9 @@ describe('Linux: linger and the user manager (s20a)', () => {
     };
     return { d, out: () => out, run: (choice: LingerChoice) => afterLinuxInstall(choice, d) };
   }
-  const OFF = '没开 linger：退出最后一个登录会话后 bot 会停，开机也不启动。要开就运行 loginctl enable-linger（不行再用 sudo loginctl enable-linger ops）。';
+  const OFF = '没开 linger：退出最后一个登录会话后 Bot 会停，开机也不启动。要开就运行 loginctl enable-linger（不行再用 sudo loginctl enable-linger ops）。';
   it.each([
-    ['on', 'ask', true, ['linger 已开：开机就启动，退出 SSH 以后 bot 也还在跑。'], false, false],
+    ['on', 'ask', true, ['linger 已开：开机就启动，退出 SSH 以后 Bot 也还在跑。'], false, false],
     ['off', 'ask', true, ['已开 linger。'], true, true],
     ['off', 'ask', false, [OFF], true, false],
     ['off', 'off', true, [OFF], false, false],
@@ -175,7 +175,7 @@ describe('Linux: linger and the user manager (s20a)', () => {
     const write = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
     const status = serviceStatus({ ...observed, platformName: 'systemd (Linux)', registration: ours, manager: { kind: 'unknown', detail: 'Failed to connect to bus: No medium found' }, owner: null, running: false });
     await runServiceStatus(false, { status: async () => ({ ...status, hint: '当前终端没有 XDG_RUNTIME_DIR。', linger: { state: 'on' } }) });
-    expect(String(write.mock.calls[0]?.[0])).toMatch(/: unknown\nCannot ask systemd \(Linux\): Failed to connect to bus: No medium found\n当前终端没有 XDG_RUNTIME_DIR。\nlinger 已开：开机就启动，退出 SSH 以后 bot 也还在跑。\nDefinition: /);
+    expect(String(write.mock.calls[0]?.[0])).toMatch(/: unknown\nCannot ask systemd \(Linux\): Failed to connect to bus: No medium found\n当前终端没有 XDG_RUNTIME_DIR。\nlinger 已开：开机就启动，退出 SSH 以后 Bot 也还在跑。\nDefinition: /);
     await runServiceStatus(true, { status: async () => ({ ...status, linger: { state: 'off' } }) });
     expect(JSON.parse(String(write.mock.calls[1]?.[0]))).toMatchObject({ state: 'unknown', linger: { state: 'off' } });
   });

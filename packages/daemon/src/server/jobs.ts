@@ -91,7 +91,7 @@ export class Jobs {
         },
       };
       const result = agentId ? await this.options.service.refreshBotByQr(agentId, callbacks) : await this.options.service.registerBotByQr(callbacks);
-      if (result.ok) update({ id, type: 'registerAgent', phase: 'succeeded', message: '机器人已保存。', agentId: agentIdSchema.parse(result.appId) });
+      if (result.ok) update({ id, type: 'registerAgent', phase: 'succeeded', message: 'Bot 已保存。', agentId: agentIdSchema.parse(result.appId) });
       else if (result.code === 'abort') this.cancelRegistration(entry);
       else update({ id, type: 'registerAgent', phase: 'failed', code: result.code, message: result.reason.slice(0, 1024) });
     }).catch(error => {

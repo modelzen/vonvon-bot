@@ -129,7 +129,7 @@ function header(view: SettingsView, agent: Agent, membership?: Membership): stri
     const identity = (view as SessionSettingsView).identity;
     return `会话 ${view.scope.threadId} · 群 ${identity.projectName ?? identity.chatId} · ${toolLabel(identity.backend)}`;
   }
-  return `bot ${agent.name}（${agent.id}）的设置`;
+  return `Bot ${agent.name}（${agent.id}）的设置`;
 }
 
 function cut(text: string, max = 40): string {
@@ -140,9 +140,9 @@ function cut(text: string, max = 40): string {
 /** Where the judge prompt comes from, and which file to make or delete to change it (design 第 5 节). */
 function promptSource(prompt: SmartPromptView, group: boolean): string {
   if (prompt.error) return `智能提示词：读不了 ${prompt.path}：${prompt.error}`;
-  if (prompt.source === 'group') return `智能提示词：这个群自己的 ${prompt.path}，删掉它就回到 bot 的`;
+  if (prompt.source === 'group') return `智能提示词：这个群自己的 ${prompt.path}，删掉它就回到 Bot 的`;
   if (!group) return prompt.source === 'bot' ? `智能提示词：${prompt.path}，删掉它就恢复默认` : `智能提示词：内置默认。要改就新建 ${prompt.path}，删掉它就恢复默认`;
-  return `智能提示词：${prompt.source === 'bot' ? '用 bot 的 SMART.md' : '内置默认'}。要只改这个群就新建 ${prompt.path}，删掉它就回到 bot 的`;
+  return `智能提示词：${prompt.source === 'bot' ? '用 Bot 的 SMART.md' : '内置默认'}。要只改这个群就新建 ${prompt.path}，删掉它就回到 Bot 的`;
 }
 
 /** The judge prompt in full, for `get judge` only: it runs to a few thousand characters. Split into lines, since printing strips a line's own breaks. */
@@ -160,7 +160,7 @@ function promptText(prompt: SmartPromptView): string[] {
 function judgeLines(view: AgentSettingsView): string[] {
   return Object.entries(view.judgeByBackend ?? {}).map(([id, j]) => {
     const what = j.provider ? `决策模型 ${j.provider} 的 ${j.model}` : `${j.model}，${j.effort ? `推理强度 ${j.effort}` : id === 'claude-agent' ? '关思考' : '不传推理强度'}`;
-    return `  ${toolLabel(id)} 的群用：${what}（${j.source === 'bot' ? 'bot 设的' : '默认'}）`;
+    return `  ${toolLabel(id)} 的群用：${what}（${j.source === 'bot' ? 'Bot 设的' : '默认'}）`;
   });
 }
 
