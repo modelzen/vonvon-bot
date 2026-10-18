@@ -87,8 +87,11 @@ export class CreationRefusedError extends Error {}
 export class CreationOutcomeUnknownError extends Error {
   constructor(readonly reason: unknown) { super(CREATION_UNKNOWN); }
 }
+/** {@link CreatedButUnsavedError}'s code. It crosses the admin IPC, so the web also hears "created" and locks its form. */
+export const CREATED_UNSAVED = 'CREATED_UNSAVED';
 /** The group exists on Feishu but its row was not saved. Creating again would make a second group. */
 export class CreatedButUnsavedError extends Error {
+  readonly code = CREATED_UNSAVED;
   constructor(readonly chatId: string, name: string, reason: unknown) {
     super(`群「${name}」已建好，但没存上：${reason instanceof Error ? reason.message : String(reason)}。请在网页「加入现有飞书群」→「查找已经加入的群」里选它绑定，不要再建`);
   }
@@ -128,7 +131,12 @@ export interface JoinGroupInput {
   backend?: string;
   /** allow the sandboxed shell to reach the network (default false). */
   network?: boolean;
+  /** How long to wait for Feishu to say who owns the group. Default {@link OWNER_LOOKUP_MS}. */
+  ownerLookupMs?: number;
 }
+
+/** A bind waits this long for the group's owner, then binds it as not the bot's (s36d1). */
+export const OWNER_LOOKUP_MS = 5_000;
 
 /**
  * Admit an explicit `existingPath` (must exist, outside protected locations).
@@ -172,7 +180,7 @@ export async function createProject(channel: Pick<LarkChannel, 'rawClient'>, req
   const noMention = input.noMention ?? bindNoMention(input.kind);
 
   let dispatched = false;
-  return withCreationClient(channel.rawClient, async client => {
+  return withCreationClient(channel.rawClient, async (client, limits) => {
     // Create the bound group — bot stays as owner (no owner_id passed); the creator is
     // invited as a member here, then promoted to admin below so the two share every
     // day-to-day permission. The owner (bot) keeps only disband / transfer /
@@ -212,7 +220,7 @@ export async function createProject(channel: Pick<LarkChannel, 'rawClient'>, req
     await client.im.v1.chatManagers
       .addManagers({ path: { chat_id: chatId }, params: { member_id_type: 'open_id' }, data: { manager_ids: [input.ownerOpenId] } })
       .catch((err) => log.fail('project', err, { phase: 'add-manager' }));
-    await setAnnouncement({ rawClient: client }, saved).catch((err) => log.fail('project', err, { phase: 'announcement' }));
+    await setAnnouncement({ rawClient: client }, saved, limits).catch((err) => log.fail('project', err, { phase: 'announcement' }));
     await onboardGroup({ rawClient: client }, saved).catch((err) => log.fail('project', err, { phase: 'onboard' }));
     return saved;
   }, { timeoutMs: input.timeoutMs ?? CREATION_BUDGET_MS, signal, onSend: sent => {
@@ -250,7 +258,9 @@ export async function joinExistingGroup(channel: LarkChannel, request: JoinGroup
     } catch { throw new Error('所选文件夹不存在或不是目录'); }
   }
   const defaultBackend = await effectiveDefaultBackend().catch(() => DEFAULT_BACKEND_ID);
-  const owned = await ownedByBot(channel, input.chatId);
+  // A group already bound keeps its row, so who owns it does not matter and Feishu is not asked.
+  const bound = (await listProjectsIn(location.file)).some(project => project.chatId === input.chatId);
+  const owned = !bound && await ownedByBot(channel, input.chatId, input.ownerLookupMs ?? OWNER_LOOKUP_MS);
   const mode = input.mode ?? (owned ? 'full' : 'qa');
   const result = await withBotGroupBinding(input.bot, { name, chatId: input.chatId, projectsRootDir: root }, async scope => {
     const binding = await bindProject({ name, chatId: input.chatId,
@@ -274,11 +284,14 @@ export async function joinExistingGroup(channel: LarkChannel, request: JoinGroup
   return project;
 }
 
-/** Whether the bot owns `chatId`, by the same reading as the pending-group reminder. Unknown counts as not owned:
- * the group then binds as joined, read-only, as before s36d1. */
-async function ownedByBot(channel: Pick<LarkChannel, 'botIdentity' | 'getChatInfo'>, chatId: string): Promise<boolean> {
+/** Whether the bot owns `chatId`, by the same reading as the pending-group reminder. Unknown, or no answer within
+ * `timeoutMs`, counts as not owned: the group then binds as joined, read-only, as before s36d1. */
+async function ownedByBot(channel: Pick<LarkChannel, 'botIdentity' | 'getChatInfo'>, chatId: string, timeoutMs: number): Promise<boolean> {
   const bot = channel.botIdentity?.openId;
   if (!bot) return false;
-  try { return (await channel.getChatInfo(chatId)).ownerId === bot; }
+  let timer: NodeJS.Timeout | undefined;
+  const silent = new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error(`查群主 ${timeoutMs}ms 没有回应`)), timeoutMs); });
+  try { return (await Promise.race([channel.getChatInfo(chatId), silent])).ownerId === bot; }
   catch (error) { log.fail('project', error, { phase: 'join-owner' }); return false; }
+  finally { clearTimeout(timer); }
 }

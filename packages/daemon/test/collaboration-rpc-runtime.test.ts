@@ -1,6 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { collaborationRequestSchema, collaborationReplySchema } from '@vonvon/protocol';
 import { AdminWriteError } from '../src/admin/ops';
+import { CreatedButUnsavedError } from '../src/project/lifecycle';
 import type { AdminBot } from '../src/admin/service';
 import { fakeService, socketClient, startFixture } from './server-fixture';
 
@@ -96,6 +97,12 @@ it('s36d1: answers a creation that may have made a group as not known, and passe
     }
     collaboration.mockRejectedValueOnce(new AdminWriteError('飞书拒绝建群 code=232001：invalid name'));
     expect(await client.call({ type: 'request', id: 'refused', method: 'collaboration', payload: create })).toMatchObject({ type: 'error', code: 'conflict', message: '飞书拒绝建群 code=232001：invalid name' });
+    // A group made and not saved is said as such, in the bot's words, whether it came in process or over IPC with its code.
+    const unsaved = new CreatedButUnsavedError('oc_made', 'demo', new Error('project disk failure'));
+    for (const failure of [unsaved, Object.assign(new Error(unsaved.message), { code: 'CREATED_UNSAVED' })]) {
+      collaboration.mockRejectedValueOnce(failure);
+      expect(await client.call({ type: 'request', id: `unsaved-${index++}`, method: 'collaboration', payload: create })).toMatchObject({ type: 'error', code: 'created_unsaved', message: unsaved.message });
+    }
     // Only a creation is read this way; another action's failure stays as it was.
     collaboration.mockRejectedValueOnce(new Error('child exited'));
     expect(await client.call({ type: 'request', id: 'other', method: 'collaboration', payload: collaborationRequestSchema.parse({ action: 'project', ...target }) })).toMatchObject({ type: 'error', code: 'operation_failed', message: 'child exited' });

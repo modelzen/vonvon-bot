@@ -336,6 +336,19 @@ describe('desktop group commands in the owning bot', () => {
     expect(owner).toHaveBeenCalledTimes(3);
   });
 
+  it('s36d1: binds as joined when Feishu does not say who owns the group in time, and does not ask for a group already bound', async () => {
+    const fixture = channelFixture();
+    const hung = vi.fn(() => new Promise<never>(() => {}));
+    const channel = Object.assign(fixture.channel, { botIdentity: { openId: 'ou_bot', name: 'Bot' }, getChatInfo: hung });
+    const binding = joinExistingGroup(channel, { name: 'Silent owner', chatId: 'oc_silent_owner', kind: 'multi', ownerLookupMs: 100 });
+    const outcome = await Promise.race([binding, new Promise(resolve => setTimeout(() => resolve('still waiting'), 3_000))]);
+    expect(outcome).toMatchObject({ chatId: 'oc_silent_owner', origin: 'joined', mode: 'qa' });
+    expect(hung).toHaveBeenCalledTimes(1);
+    // The same bind again returns the stored row; who owns the group no longer matters.
+    expect(await joinExistingGroup(channel, { name: 'Silent owner', chatId: 'oc_silent_owner', kind: 'multi', ownerLookupMs: 100 })).toEqual(outcome);
+    expect(hung).toHaveBeenCalledTimes(1);
+  });
+
   it('registry rejects duplicate races while preserving unrelated existing projects', async () => {
     const values = await Promise.allSettled(['A', 'B'].map(name => addProject({ name, chatId: 'oc_race', cwd: paths.appDir, blank: false, createdAt: 1 })));
     expect(values.filter(value => value.status === 'fulfilled')).toHaveLength(1);

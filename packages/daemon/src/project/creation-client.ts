@@ -10,16 +10,13 @@ export class CreationClientClosedError extends Error {
   constructor() { super('Creation request scope is closed'); }
 }
 
-/** The scope ran out of time or was stopped, so trying again inside it cannot help (s36d1). */
-export function creationStopped(error: unknown): boolean {
-  if (error instanceof CreationClientClosedError) return true;
-  const code = (error as { code?: unknown } | null)?.code;
-  return code === 'ERR_CANCELED' || code === 'ECONNABORTED' || code === 'ETIMEDOUT';
-}
+/** What the work's own waits keep to (s36d1): `signal` aborts when the scope closes, `deadline` is the
+ * `performance.now()` at which its budget runs out. */
+export type CreationLimits = Readonly<{ signal: AbortSignal; deadline: number }>;
 
 /** Own authentication and every HTTP request through cancellation and settlement.
  * Callers still await SDK methods; a closed scope refuses late SDK continuations. */
-export async function withCreationClient<T>(raw: Client, work: (client: Client) => Promise<T>, budget: Budget = {}): Promise<T> {
+export async function withCreationClient<T>(raw: Client, work: (client: Client, limits: CreationLimits) => Promise<T>, budget: Budget = {}): Promise<T> {
   const { timeoutMs = 30_000, signal, onSend } = budget;
   if (!Number.isInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) throw new RangeError('Invalid creation request budget');
   if (raw.appType !== AppType.SelfBuild || raw.clientAssertionProvider || !raw.appSecret) throw new Error('Creation requires app-secret authentication');
@@ -57,7 +54,7 @@ export async function withCreationClient<T>(raw: Client, work: (client: Client) 
   try {
     const client = new Client({ appId: raw.appId, appSecret: raw.appSecret, domain: raw.domain,
       cache: new DefaultCache(), httpInstance: http, logger: quietLogger, source: 'vonvon-create' });
-    outcome = { kind: 'value', value: await work(client) };
+    outcome = { kind: 'value', value: await work(client, { signal: abort.signal, deadline }) };
   } catch (error) { outcome = { kind: 'error', error }; }
 
   closed = true;

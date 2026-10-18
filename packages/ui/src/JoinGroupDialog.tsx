@@ -24,13 +24,23 @@ export function projectNameProblem(value: string): string | undefined {
 }
 /** The owner's words (2026-10-18) for a creation whose result is not known. */
 export const CREATION_UNKNOWN = '可能已经建好了，先去飞书看一眼再重试。';
+/** How a failed 创建新飞书群 ended: refused (nothing was made), unknown (a group may exist) or unsaved (it exists, unbound). */
+export type CreationFailure = {kind: 'refused' | 'unknown' | 'unsaved'; message: string};
 /**
  * What a failed 创建新飞书群 tells the user (s36d1). Only the daemon's own refusal says no group was made; a lost
- * connection, or the daemon saying it does not know, may have made one, so the form must not invite another click.
+ * connection, or the daemon saying it does not know, may have made one, and `created_unsaved` says one was made.
+ * Only a refusal leaves the form open: after the others another click could make a second group.
  */
-export function creationFailure(failure: unknown): {message: string; uncertain: boolean} {
-  if (failure instanceof RpcError && failure.code !== 'outcome_unknown') return {message: failure.message, uncertain: false};
-  return {message: CREATION_UNKNOWN, uncertain: true};
+export function creationFailure(failure: unknown): CreationFailure {
+  if (failure instanceof RpcError && failure.code === 'created_unsaved') return {kind: 'unsaved', message: failure.message};
+  if (failure instanceof RpcError && failure.code !== 'outcome_unknown') return {kind: 'refused', message: failure.message};
+  return {kind: 'unknown', message: CREATION_UNKNOWN};
+}
+/** Shown while a creation that may have made a group keeps the form locked: the daemon's binding guide, else retry advice. */
+export function CreationLockNotice({failure}: {failure: CreationFailure}) {
+  return failure.kind === 'unsaved'
+    ? <InlineNotice title="群已建好，但没存上" tone="warning">{failure.message}</InlineNotice>
+    : <InlineNotice title="不确定建好没有" tone="warning">{CREATION_UNKNOWN}要重试，关掉这个窗口再建。</InlineNotice>;
 }
 type Props = {agent: Agent; pending?: PendingAgentGroups; initialGroup?: PendingGroup; onClose: () => void; onChanged: () => Promise<void>};
 export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChanged}: Props) {
@@ -48,8 +58,8 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   /** Set once a creation may have made a group: this dialog then creates nothing more, binding still works. */
-  const [uncertain, setUncertain] = useState(false);
-  const locked = mode.kind === 'create' && uncertain;
+  const [lock, setLock] = useState<CreationFailure>();
+  const locked = mode.kind === 'create' && lock !== undefined;
   const [manual, setManual] = useState<Extract<CommandResult, {kind: 'groups'}>>();
   const active = useRef(true);
   useEffect(() => () => {active.current = false;}, []);
@@ -84,8 +94,8 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
     } catch (failure) {
       if (mode.kind === 'create') {
         const outcome = creationFailure(failure);
-        setUncertain(outcome.uncertain);
-        setError(outcome.uncertain ? '' : outcome.message);
+        if (outcome.kind === 'refused') setError(outcome.message);
+        else setLock(outcome);
       } else setError(failure instanceof Error ? failure.message : '操作失败，填写的内容已保留。');
       return false;
     }
@@ -141,7 +151,7 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
         </SettingsGroup>}
         <Button variant="primary" loading={busy} disabled={locked || !name.trim() || Boolean(nameProblem) || (existingDirectory && !folder) || !conversation} onClick={() => void save()}>{mode.kind === 'create' ? '创建飞书群并加入' : '绑定工作目录并发送欢迎卡片'}</Button>
       </>}
-      {locked && <InlineNotice title="不确定建好没有" tone="warning">{CREATION_UNKNOWN}要重试，关掉这个窗口再建。</InlineNotice>}
+      {mode.kind === 'create' && lock && <CreationLockNotice failure={lock} />}
       {error && <InlineNotice title="操作未完成" tone="danger">{error}</InlineNotice>}
     </div>
   </Dialog>;

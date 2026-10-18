@@ -4,7 +4,7 @@ import type { Socket } from 'node:net';
 import { AppType, Client, DefaultCache, type HttpInstance } from '@larksuiteoapi/node-sdk';
 import { afterEach, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { CreationClientClosedError, creationStopped, withCreationClient } from '../src/project/creation-client';
+import { CreationClientClosedError, withCreationClient, type CreationLimits } from '../src/project/creation-client';
 import { FAKE_DOMAIN, fakeLark } from './helpers/fake-lark-http';
 
 const quiet = { error() {}, warn() {}, info() {}, debug() {}, trace() {} };
@@ -185,17 +185,22 @@ it('refuses an already canceled scope and invalid budgets without sending HTTP o
   expect(work).not.toHaveBeenCalled(); expect(transport.starts).toHaveLength(0);
 });
 
-it('s36d1: reports each admitted request before sending it, never a refused one', async () => {
+it('s36d1: reports each admitted request before sending it, never a refused one, and hands the work its limits', async () => {
   const fake = fakeLark(), sent: { method: string; url: string }[] = [];
   let escaped: Client | undefined;
-  await withCreationClient(fake.client, async scoped => {
-    escaped = scoped;
+  let limits: CreationLimits | undefined;
+  const started = performance.now();
+  await withCreationClient(fake.client, async (scoped, given) => {
+    escaped = scoped; limits = given;
+    expect(given.signal.aborted).toBe(false);
     await scoped.im.v1.chat.create({ params: { user_id_type: 'open_id', uuid: 'fixture' }, data: { name: 'Research' } });
-  }, { onSend: sent.push.bind(sent) });
+  }, { onSend: sent.push.bind(sent), timeoutMs: 5_000 });
+  // The deadline the requests are held to, and a signal that ends with the scope.
+  expect(limits?.deadline).toBeGreaterThanOrEqual(started + 5_000);
+  expect(limits?.deadline).toBeLessThanOrEqual(performance.now() + 5_000);
+  expect(limits?.signal.aborted).toBe(true);
   // lifecycle.ts knows chat.create by exactly this method and URL.
   expect(sent).toEqual([{ method: 'POST', url: `${FAKE_DOMAIN}/open-apis/auth/v3/tenant_access_token/internal` }, { method: 'POST', url: `${FAKE_DOMAIN}/open-apis/im/v1/chats` }]);
   await expect(escaped?.request(request)).rejects.toBeInstanceOf(CreationClientClosedError);
   expect(sent).toHaveLength(2); expect(fake.requests).toHaveLength(2);
-  for (const stopped of [new CreationClientClosedError(), { code: 'ERR_CANCELED' }, { code: 'ECONNABORTED' }, { code: 'ETIMEDOUT' }]) expect(creationStopped(stopped)).toBe(true);
-  for (const other of [new Error('x'), { code: 'ECONNRESET' }, { code: 232068 }, null]) expect(creationStopped(other)).toBe(false);
 });

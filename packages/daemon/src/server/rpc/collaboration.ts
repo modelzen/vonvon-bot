@@ -6,7 +6,7 @@ import type { CollaborationRequest as ServiceRequest } from '../../admin/collabo
 import { UsageError, type UsageErrorKind } from '../../agent/types';
 import { AdminWriteError } from '../../admin/ops';
 import { NotWiredYetError } from '../../admin/service';
-import { CREATION_UNKNOWN } from '../../project/lifecycle';
+import { CREATED_UNSAVED, CREATION_UNKNOWN } from '../../project/lifecycle';
 import type { DirectoryBrowser } from '../directory-browser';
 import type { RpcOutcome } from '../rpc';
 import { RpcError, unsupported } from '../errors';
@@ -77,6 +77,8 @@ export async function collaborationRpc(service: AdminService, directory: Directo
   catch (error) {
     // s36d1: only the bot's own refusal says no group was made. A lost IPC answer, a bot that exited or timed out, or
     // a creation the bot itself could not settle, may have made one; the desktop then says so instead of a raw error.
+    // A group made and not saved is named as such, with the bot's word on where to bind it.
+    if (request.action === 'createProject' && (error as { code?: unknown } | null)?.code === CREATED_UNSAVED) throw new RpcError('created_unsaved', (error as Error).message);
     if (request.action === 'createProject' && !(error instanceof AdminWriteError || error instanceof NotWiredYetError)) throw new RpcError('outcome_unknown', CREATION_UNKNOWN);
     throw error;
   }

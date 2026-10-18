@@ -164,6 +164,49 @@ describe('s36d1 createProject', () => {
     expect(fake.requests.filter(r => r.path === '/open-apis/im/v1/messages')).toEqual([]);
   });
 
+  it('begins no announcement backoff that would end past the budget', async () => {
+    let deadline = 0, failedAt = 0;
+    const fake = fakeLark(async request => {
+      // Each request carries what is left of the budget.
+      if (!deadline) deadline = performance.now() + (request.timeout ?? 0);
+      if (request.method === 'GET' && request.path.endsWith('/announcement/blocks')) {
+        // Fail with less time left than the first backoff, 800 ms, would take.
+        await wait(Math.max(0, deadline - 700 - performance.now()));
+        failedAt = performance.now();
+        throw httpError(500, { code: 1771002, msg: 'not ready' });
+      }
+      return undefined;
+    });
+    const project = await createProject({ rawClient: fake.client }, input('Short budget', { timeoutMs: 3_000 }));
+    const ended = performance.now();
+    expect(project.name).toBe('Short budget');
+    expect(failedAt).toBeGreaterThan(0);
+    // Not: sleep 800 ms, wake past the deadline, and only then find the budget gone.
+    expect(ended).toBeLessThan(deadline);
+    expect(ended - failedAt).toBeLessThan(400);
+    expect(fake.requests.filter(r => r.path.endsWith('/announcement/blocks'))).toHaveLength(1);
+    expect(fake.open()).toBe(0);
+  });
+
+  it('cuts an announcement backoff short when the creation is stopped', async () => {
+    const lists: number[] = [];
+    const fake = fakeLark(request => {
+      if (request.method === 'GET' && request.path.endsWith('/announcement/blocks')) { lists.push(performance.now()); throw httpError(500, { code: 1771002, msg: 'not ready' }); }
+      return undefined;
+    });
+    const stop = new AbortController();
+    const creating = createProject({ rawClient: fake.client }, input('Stopped backoff', { signal: stop.signal }));
+    // The second try failed: the next wait is 1600 ms.
+    await vi.waitFor(() => expect(lists).toHaveLength(2), { timeout: 10_000 });
+    await wait(50);
+    const stoppedAt = performance.now();
+    stop.abort();
+    expect(await creating).toMatchObject({ name: 'Stopped backoff', origin: 'created' });
+    expect(performance.now() - stoppedAt).toBeLessThan(500);
+    expect(lists).toHaveLength(2);
+    expect(fake.open()).toBe(0);
+  });
+
   it('tells where to bind a created group that was not saved, never to retry', async () => {
     const fake = fakeLark(only(request => {
       // Another writer takes the name while the group is being created.

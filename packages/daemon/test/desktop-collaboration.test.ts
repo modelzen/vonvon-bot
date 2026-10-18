@@ -15,6 +15,10 @@ import { readDropped } from '../src/bot/restart-dropped';
 import { existsSync } from 'node:fs';
 import { AdminWriteError } from '../src/admin/ops';
 import { CreationOutcomeUnknownError } from '../src/project/lifecycle';
+import { createAdminIpcCaller, createAdminIpcResponder, type AdminIpcOp } from '../src/admin/ipc';
+import { collaborationRpc } from '../src/server/rpc/collaboration';
+import { collaborationRequestSchema } from '@vonvon/protocol';
+import { RpcError } from '../src/server/errors';
 import { seedBots } from './helpers/bot-fixture';
 import { fakeLark, httpError, stall } from './helpers/fake-lark-http';
 
@@ -24,11 +28,12 @@ vi.mock('../src/config/paths', async () => {
   return { paths: { appDir, sessionsFile: join(appDir, 'sessions.json'), projectsFile: join(appDir, 'projects.json'), botsFile: join(appDir, 'bots.json'), commentInstructionsFile: join(appDir, 'instructions.md'), commentsRootDir: join(appDir, 'comments'), projectsRootDir: join(appDir, 'projects') },
     botPaths: () => ({ projectsFile: join(appDir, 'projects.json'), configFile: join(appDir, 'config.json') }) };
 });
-const fixture = vi.hoisted(() => ({ failProjectsWrite: false, backend: undefined as unknown, leave: vi.fn(), send: vi.fn(async () => ({ messageId: 'om_sent' })), usage: vi.fn<() => Promise<AccountUsageBundle>>(async () => ({ profile: { topInvocations: [], dailyBuckets: [] }, usage: { main: {}, extras: [], fetchedAt: 1 } })) }));
+const fixture = vi.hoisted(() => ({ failProjectsWrite: false, holdProjectsWrite: undefined as Promise<void> | undefined, reachedProjectsWrite: () => {}, backend: undefined as unknown, leave: vi.fn(), send: vi.fn(async () => ({ messageId: 'om_sent' })), usage: vi.fn<() => Promise<AccountUsageBundle>>(async () => ({ profile: { topInvocations: [], dailyBuckets: [] }, usage: { main: {}, extras: [], fetchedAt: 1 } })) }));
 vi.mock('node:fs/promises', async original => {
   const actual = await original<typeof import('node:fs/promises')>();
   return { ...actual, rename: async (...args: Parameters<typeof actual.rename>) => {
     if (fixture.failProjectsWrite && basename(String(args[1])) === 'projects.json') throw new Error('project disk failure');
+    if (fixture.holdProjectsWrite && basename(String(args[1])) === 'projects.json') { fixture.reachedProjectsWrite(); await fixture.holdProjectsWrite; }
     return actual.rename(...args);
   } };
 });
@@ -53,7 +58,7 @@ beforeEach(async () => {
   await seedBots({ version: 1, bots: [{ ...bot, name: 'fixture' }] });
   await rm(pendingGroupsFile(paths.projectsFile), { force: true });
   await rm(paths.projectsFile, { force: true }); await rm(paths.sessionsFile, { force: true });
-  fixture.failProjectsWrite = false;
+  fixture.failProjectsWrite = false; fixture.holdProjectsWrite = undefined;
   fixture.leave.mockReset(); fixture.send.mockClear();
   await addProject({ name: 'demo', chatId: 'oc_demo', cwd: paths.appDir, kind: 'single', blank: false, origin: 'joined', createdAt: 1, backend: 'codex-appserver' });
   await upsertSession({ threadId: 'oc_demo', chatId: 'oc_demo', cwd: paths.appDir, sessionId: 'old', backend: 'codex-appserver', summary: 'old', createdAt: 1, updatedAt: 1 });
@@ -329,6 +334,57 @@ it('s36d1: shutdown stops a creation in flight at once and starts none of those 
   await expect(app.collaboration({ ...request, requestId: 'b1b2c3d4-0000-4000-8000-000000000003', name: 'Late' })).rejects.toThrow(new AdminWriteError('后台服务正在关闭，没有建群'));
   expect(fake.creates()).toMatchObject([{ data: { name: 'In flight' } }]);
   expect(fake.open()).toBe(0);
+});
+it('s36d1: shutdown waits for a web creation whose group exists and whose row is still being saved', async () => {
+  backend();
+  let releaseCreate = () => {}, releaseSave = () => {};
+  const createGate = new Promise<void>(resolve => { releaseCreate = resolve; });
+  const fake = fakeLark(request => request.method === 'POST' && request.path === '/open-apis/im/v1/chats' ? createGate.then(() => undefined) : undefined);
+  const app = creator(fake.client);
+  const request = { action: 'createProject' as const, requestId: 'e1b2c3d4-0000-4000-8000-000000000001', name: 'Saving', kind: 'multi' as const, backend: 'codex-appserver' as const };
+  const flying = app.collaboration(request).then(value => ({ value }), (error: unknown) => ({ error }));
+  let closedWhileSaving: boolean | undefined;
+  try {
+    await vi.waitFor(() => expect(fake.creates()).toHaveLength(1), { timeout: 10_000 });
+    let reached = false;
+    fixture.holdProjectsWrite = new Promise<void>(resolve => { releaseSave = resolve; });
+    fixture.reachedProjectsWrite = () => { reached = true; };
+    releaseCreate();
+    await vi.waitFor(() => expect(reached).toBe(true), { timeout: 10_000 });
+    let closed = false;
+    const closing = app.shutdown().then(() => { closed = true; });
+    await new Promise(resolve => setTimeout(resolve, 300));
+    closedWhileSaving = closed;
+    fixture.holdProjectsWrite = undefined; releaseSave();
+    await closing;
+  } finally { fixture.holdProjectsWrite = undefined; releaseSave(); releaseCreate(); }
+  // The group exists and its row was on its way to disk: the drain must not have let the process exit under it.
+  expect(closedWhileSaving).toBe(false);
+  expect(await flying).toMatchObject({ value: { ok: true } });
+  expect(await getProjectByName('Saving')).toMatchObject({ chatId: `oc_${request.requestId}` });
+});
+it('s36d1: a web creation whose group was made and not saved reaches the page as created_unsaved, over IPC or in process', async () => {
+  backend();
+  const fake = fakeLark();
+  const app = creator(fake.client);
+  // The bot's answer crosses IPC the way run.ts and the supervisor wire it.
+  let receive: (message: unknown) => void = () => {};
+  const respond = createAdminIpcResponder(async op => app.collaboration((op as Extract<AdminIpcOp, { kind: 'collaboration' }>).request), message => receive(message));
+  const caller = createAdminIpcCaller(respond);
+  receive = caller.onMessage;
+  const overIpc = async (_botId: string, request: unknown) => caller.call({ kind: 'collaboration', request } as AdminIpcOp);
+  const inProcess = async (_botId: string, request: unknown) => app.collaboration(request as never);
+  const create = collaborationRequestSchema.parse({ action: 'createProject', agentId: bot.appId, name: 'Unsaved', folder: { kind: 'default' }, tool: 'codex', conversation: 'threads' });
+  try {
+    fixture.failProjectsWrite = true;
+    for (const collaboration of [overIpc, inProcess]) {
+      const service = { listBots: async () => [{ appId: bot.appId, active: true, running: true }], collaboration };
+      const failure = await collaborationRpc(service as never, {} as never, create).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(RpcError);
+      expect(failure).toMatchObject({ code: 'created_unsaved', message: expect.stringMatching(/^群「Unsaved」已建好，但没存上：.*加入现有飞书群.*不要再建$/) });
+    }
+    expect(await getProjectByName('Unsaved')).toBeUndefined();
+  } finally { fixture.failProjectsWrite = false; await app.shutdown(); }
 });
 it('leaves a key from before s15c unused and refuses unsupported goal before posting to Feishu', async () => {
   const be = backend(); fixture.backend = { ...be, capabilities: { goal: false, compact: true, resume: true } };

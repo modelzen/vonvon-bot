@@ -4124,7 +4124,9 @@ export function createOrchestrator(
             if (!bindingBot) throw new Error('缺少机器人注册身份，请重启后再建群');
             const bot = bindingBot;
             const requestId = dmCreationId(evt.messageId, op, value.__r);
-            const p = await serialCreate(signal => createProject(channel, {
+            // A click Feishu delivers again after it created the group (s36d1) finds that row, here in the queue
+            // behind it, and answers as the first delivery did instead of with a duplicate-name form.
+            const p = await serialCreate(async signal => (await listProjects()).find(row => row.creationRequestId === requestId) ?? createProject(channel, {
               requestId,
               bot,
               name,
@@ -5021,9 +5023,10 @@ export function createOrchestrator(
         const project = await createProject(channel, { requestId: request.requestId, requestSignature: signature, bot, name: request.name, ownerOpenId: owner, existingPath: directory, projectsRootDir: cfg.preferences?.projectsRootDir, kind: request.kind, noMention: request.noMention, backend: request.backend, mode: bindModeFor(request.backend), signal });
         return { ok: true, project: projectView(project) };
       }).catch((error: unknown) => {
-        // Every refusal crosses IPC as the bot's own word; only a result not known stays a plain error, which the
-        // RPC layer reports as "maybe created" together with a lost connection or a bot that never answered.
-        if (error instanceof CreationOutcomeUnknownError || error instanceof AdminWriteError) throw error;
+        // Every refusal crosses IPC as the bot's own word; a result not known stays a plain error, which the RPC
+        // layer reports as "maybe created" together with a lost connection or a bot that never answered. A group
+        // created and not saved keeps its own code, so the web locks its form as the DM does (s36d1).
+        if (error instanceof CreationOutcomeUnknownError || error instanceof CreatedButUnsavedError || error instanceof AdminWriteError) throw error;
         throw new AdminWriteError(error instanceof Error ? error.message : String(error));
       });
       void result.then(() => createRequests.delete(request.requestId), () => createRequests.delete(request.requestId));

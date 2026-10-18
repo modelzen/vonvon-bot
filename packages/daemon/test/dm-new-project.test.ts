@@ -122,3 +122,29 @@ it('refuses a DM creation that reaches its turn after shutdown began, without ca
   expect(await reply(1)).toContain('后台服务正在关闭，没有建群');
   expect(fake.creates()).toHaveLength(1);
 });
+
+it('gives two form cards with the same render token different uuids, as after a restart restarts the token count', async () => {
+  const { fake, orchestrator } = app();
+  try {
+    await orchestrator.dispatcher.handle(submit('Card A', 'om_card_a', '1'));
+    await reply(1);
+    await orchestrator.dispatcher.handle(submit('Card B', 'om_card_b', '1'));
+    await reply(2);
+    expect(dmCreationId('om_card_a', 'ou_owner', '1')).not.toBe(dmCreationId('om_card_b', 'ou_owner', '1'));
+    expect(fake.creates().map(r => r.params?.uuid)).toEqual([dmCreationId('om_card_a', 'ou_owner', '1'), dmCreationId('om_card_b', 'ou_owner', '1')]);
+  } finally { await orchestrator.shutdown(); }
+});
+
+it('answers a click delivered again after its group was created with the created project, not a duplicate-name form', async () => {
+  const { fake, orchestrator } = app();
+  try {
+    await orchestrator.dispatcher.handle(submit('Again'));
+    expect(await reply(1)).toContain('已创建项目');
+    await orchestrator.dispatcher.handle(submit('Again'));
+    const second = await reply(2);
+    expect(second).toContain('已创建项目');
+    expect(second).not.toContain('已存在');
+    expect(second).not.toContain('"tag":"form"');
+    expect(fake.creates()).toHaveLength(1);
+  } finally { await orchestrator.shutdown(); }
+});
