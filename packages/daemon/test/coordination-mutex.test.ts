@@ -2,29 +2,15 @@ import type { ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
-import { connect, createServer, type Server, type Socket } from 'node:net';
+import { createServer, type Server, type Socket } from 'node:net';
 import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { acquireMutex, closeMutex, DataAccessError, type Mutex } from '../src/config/data-access';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { acquireMutex, closeMutex, DataAccessError } from '../src/config/data-access';
 import { bundleDataAccess, holdMutex, mutexChild } from './helpers/mutex-child';
 
-/** While set, `connect` fails with this code before connecting, the way a probe of the old port can fail. */
-const probe = vi.hoisted(() => ({ fail: undefined as string | undefined }));
-vi.mock('node:net', async original => {
-  const net = await original<typeof import('node:net')>();
-  const connect = (...args: Parameters<typeof net.connect>) => {
-    const code = probe.fail;
-    if (!code) return net.connect(...args);
-    const socket = new net.Socket();
-    process.nextTick(() => socket.destroy(Object.assign(new Error(`connect ${code}`), { code })));
-    return socket;
-  };
-  return { ...net, connect };
-});
-
-const roles = ['admission', 'host', 'keystore', 'service', 'bots'] as const;
-type Role = typeof roles[number] | 'projects' | 'creation';
+const roles = ['admission', 'host', 'keystore', 'service', 'bots', 'projects', 'creation'] as const;
+type Role = typeof roles[number];
 let scratch = '';
 let entry = '';
 let homes = 0;
@@ -36,7 +22,6 @@ beforeAll(async () => {
   entry = await bundleDataAccess(scratch);
 });
 afterEach(async () => {
-  probe.fail = undefined;
   for (const child of children.splice(0)) child.kill('SIGKILL');
   for (const socket of sockets.splice(0)) socket.destroy();
   await Promise.all(servers.splice(0).map(server => new Promise(resolve => server.close(resolve))));
@@ -45,63 +30,22 @@ afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 const newHome = (): string => { const path = join(scratch, `home-${homes++}`); mkdirSync(path); return path; };
 const busy = (role: Role) => `Bridge ${role} is busy on its local coordination endpoint.`;
-const MARKER = 'vonvon-mutex-v3\n';
-const portOf = (path: string, role: Role): number => 20000 + createHash('sha256').update(`vonvon-bot-v2:${role}:${path}`).digest().readUInt32BE(0) % 30000;
-/** The port builds before s20c lock `role` of `home` on. */
-const legacyPort = (home: string, role: Role): number => portOf(realpathSync(home), role);
-/** A new home whose `role` has the old port `port`. */
-function homeOnPort(port: number, role: Role): string {
-  if (port < 20000 || port >= 50000) throw new Error(`Port ${port} is outside the old range`);
-  for (let i = 0; ; i++) {
-    const path = join(scratch, `port-${port}-${i}`);
-    if (portOf(path, role) === port) { mkdirSync(path); return path; }
-  }
-}
-/** Listens the way a build before s20c locks: exclusive on 127.0.0.1. Null when the port is taken. */
-function listenOld(port: number, onConnection: (socket: Socket) => void): Promise<Server | null> {
-  const server = createServer(socket => { sockets.push(socket); onConnection(socket); });
-  return new Promise((resolve, reject) => {
-    server.once('error', error => {
-      if ('code' in error && error.code === 'EADDRINUSE') resolve(null);
-      else reject(error);
-    });
-    server.listen({ host: '127.0.0.1', port, exclusive: true }, () => { servers.push(server); resolve(server); });
-  });
-}
-/** What a peer reads from `port` before the other end closes; null when it is refused or nothing ends within a second. */
-function answer(port: number): Promise<string | null> {
-  const socket = connect({ host: '127.0.0.1', port });
-  sockets.push(socket);
-  socket.setTimeout(1000, () => socket.destroy());
-  socket.on('error', () => {});
-  let data = '';
-  socket.on('data', chunk => { data += String(chunk); });
-  return new Promise(resolve => {
-    socket.once('end', () => resolve(data));
-    socket.once('close', () => resolve(null));
-  });
-}
-/** A home whose old `role` port this fixture owns. */
-async function oldBuild(role: Role, onConnection: (socket: Socket) => void): Promise<{ home: string; server: Server }> {
+/**
+ * A new home whose `role` port from before s20c (`20000 + sha256("vonvon-bot-v2:<role>:<realpath>") % 30000`, which
+ * builds from s20c until s20e still probed) is held by an unrelated listener that does `onConnection`.
+ */
+async function homeBehindListener(role: Role, onConnection: (socket: Socket) => void): Promise<string> {
   for (let attempt = 0; attempt < 5; attempt++) {
     const home = newHome();
-    const server = await listenOld(legacyPort(home, role), onConnection);
-    if (server) return { home, server };
+    const port = 20000 + createHash('sha256').update(`vonvon-bot-v2:${role}:${home}`).digest().readUInt32BE(0) % 30000;
+    const server = createServer(socket => { sockets.push(socket); socket.on('error', () => {}); onConnection(socket); });
+    const listening = await new Promise<boolean>((resolve, reject) => {
+      server.once('error', error => 'code' in error && error.code === 'EADDRINUSE' ? resolve(false) : reject(error));
+      server.listen({ host: '127.0.0.1', port, exclusive: true }, () => resolve(true));
+    });
+    if (listening) { servers.push(server); return home; }
   }
-  throw new Error('No free old port for the fixture');
-}
-/** Selects an available old port before the single product acquisition; later contention fails the fixture. */
-async function holdWithOldPort(role: Role): Promise<{ home: string; mutex: Mutex }> {
-  const { home, server } = await oldBuild(role, socket => socket.destroy());
-  await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
-  const mutex = await acquireMutex(home, role, 0);
-  try {
-    if (await answer(legacyPort(home, role)) !== MARKER) throw new Error('Fixture did not retain its old port');
-    return { home, mutex };
-  } catch (error) {
-    await closeMutex(mutex);
-    throw error;
-  }
+  throw new Error('No free port for the fixture listener');
 }
 
 describe('the coordination mutex', () => {
@@ -160,133 +104,17 @@ const c=require('node:child_process').spawn(process.execPath,['-e','setInterval(
     symlinkSync(newHome(), join(home, '.locks'));
     await expect(acquireMutex(home, 'host', 0)).rejects.toThrow(/Invalid lock directory/);
   });
-});
 
-describe('the transition from builds before s20c', () => {
-  // /ship coverage pass 1. Value: protects=creation ignores legacy TCP collisions while retaining native exclusion;
-  // fails_when=creation falls through legacy coordination or loses native exclusion;
-  // why_new=the existing bypass case covered projects only; seam=none; no_claim=platforms not executing this test.
-  it.each(['projects', 'creation'] satisfies Role[])('%s ignores a silent legacy listener while retaining native exclusion', async role => {
-    const { home } = await oldBuild(role, () => {});
-    const held = await acquireMutex(home, role, 0);
-    try { await expect(acquireMutex(home, role, 0)).rejects.toThrow(busy(role)); }
-    finally { await closeMutex(held); }
-    await closeMutex(await acquireMutex(home, role, 0));
-  });
-
-  it.each<[string, (socket: Socket) => void]>([
-    ['closes every connection', socket => socket.destroy()],
-    ['accepts and never answers', () => {}],
-  ])('waits for an old holder that %s, and gives the new lock back at the deadline', async (_case, onConnection) => {
-    const { home, server } = await oldBuild('host', onConnection);
+  // s20e: until then a holder probed this port too and took any listener that stayed silent for a second, or closed
+  // without a word, for a build before s20c holding the lock. Unrelated listeners on macOS CI made #382 and #385 busy.
+  it.each(roles.flatMap(role => [
+    [role, 'never speaks', () => {}],
+    [role, 'closes every connection at once', (socket: Socket) => socket.destroy()],
+  ] as const))('takes %s at once while an unrelated listener that %s has its port from before s20c', async (role, _kind, onConnection) => {
+    const home = await homeBehindListener(role, onConnection);
     const started = Date.now();
-    await expect(acquireMutex(home, 'host', 300)).rejects.toThrow(busy('host'));
-    expect(Date.now() - started).toBeGreaterThanOrEqual(300);
-    for (const socket of sockets) socket.destroy();
-    await new Promise(resolve => server.close(resolve));
-    // The new lock was given back: a leftover would refuse this same process.
-    await closeMutex(await acquireMutex(home, 'host', 0));
-  });
-
-  it('takes the lock when the old port is only some connection\'s local port', async () => {
-    let local: Socket | undefined;
-    // Linux numbers the local ports towards one destination from a hashed start, so each try uses a new one. macOS
-    // counts them up from 49152, so its tries would mostly miss the old range: it binds the local port below instead.
-    for (let attempt = 0; attempt < (platform() === 'linux' ? 400 : 0) && !local; attempt++) {
-      const address = (await listenOld(0, () => {}))?.address();
-      if (!address || typeof address === 'string') throw new Error('No fixture port');
-      const socket = connect({ host: '127.0.0.1', port: address.port });
-      sockets.push(socket);
-      await once(socket, 'connect');
-      if (socket.localPort !== undefined && socket.localPort >= 20000 && socket.localPort < 50000) local = socket;
-      else socket.destroy();
-    }
-    let failure: string | undefined;
-    if (!local && platform() !== 'linux') {
-      // Not on Linux: libuv sets SO_REUSEADDR on a bound socket, and Linux then lets the listen below succeed. The local
-      // address is given because Node binds 0.0.0.0 without it, and macOS then lets the bind pass a listener on
-      // 127.0.0.1 of the same user; with it the bind fails where the mutex's listen would, and the next port is tried.
-      const address = (await listenOld(0, () => {}))?.address();
-      if (!address || typeof address === 'string') throw new Error('No fixture port');
-      for (let i = 0; i < 20 && !local; i++) {
-        const localPort = 20000 + (portOf(scratch, 'service') - 20000 + i) % 30000;
-        const socket = connect({ host: '127.0.0.1', port: address.port, localAddress: '127.0.0.1', localPort });
-        sockets.push(socket);
-        failure = await once(socket, 'connect').then(() => undefined, (error: NodeJS.ErrnoException) => error.code ?? error.message);
-        if (!failure) local = socket;
-      }
-    }
-    if (!local?.localPort) throw new Error(`No ephemeral port in the old range${failure ? ` (last try: ${failure})` : ''}`);
-    const home = homeOnPort(local.localPort, 'service');
-    // As in #339's CI: the port cannot be bound, yet nothing listens on it. Checked on Linux only, where it was seen.
-    if (platform() === 'linux') expect(await listenOld(local.localPort, () => {})).toBeNull();
-    await closeMutex(await acquireMutex(home, 'service', 0));
-  });
-
-  it('takes the lock when connecting to the taken old port is refused', async () => {
-    // What #339's CI met: the bind fails, yet nothing listens. Simulated, because macOS can let that bind succeed.
-    const { home } = await oldBuild('host', socket => socket.destroy());
-    probe.fail = 'ECONNREFUSED';
-    await closeMutex(await acquireMutex(home, 'host', 0));
-  });
-
-  it.each(['EMFILE', 'EADDRNOTAVAIL'])('stays busy when the probe of a taken old port fails with %s', async code => {
-    const { home, server } = await oldBuild('host', socket => socket.destroy());
-    probe.fail = code;
-    await expect(acquireMutex(home, 'host', 0)).rejects.toThrow(busy('host'));
-    probe.fail = undefined;
-    await new Promise(resolve => server.close(resolve));
-    await closeMutex(await acquireMutex(home, 'host', 0));
-  });
-
-  it('takes the lock when a newer holder of another root has the same old port', async () => {
-    let port = 0;
-    for (let attempt = 0; attempt < 5 && !port; attempt++) {
-      const first = newHome();
-      const holder = await holdMutex(entry, first, 'host');
-      children.push(holder.child);
-      // The holder answers with the marker on its old port; another socket may have had that port, so try another root.
-      if (await answer(legacyPort(first, 'host')) === MARKER) port = legacyPort(first, 'host');
-      else holder.child.kill('SIGKILL');
-    }
-    if (!port) throw new Error('No free old port for the fixture');
-    const second = homeOnPort(port, 'admission');
-    await closeMutex(await acquireMutex(second, 'admission', 0));
-  });
-
-  it('gives both locks back while a peer keeps its connection to the old port open', async () => {
-    const { home, mutex } = await holdWithOldPort('host');
-    const peer = connect({ host: '127.0.0.1', port: legacyPort(home, 'host'), allowHalfOpen: true });
-    sockets.push(peer);
-    peer.resume();
-    await once(peer, 'end');
-    const released = await Promise.race([closeMutex(mutex).then(() => true), new Promise(resolve => setTimeout(resolve, 1000, false))]);
-    expect(released).toBe(true);
-    await closeMutex(await acquireMutex(home, 'host', 0));
-  });
-
-  it.each(roles)('keeps builds before s20c out of %s while it holds the lock', async role => {
-    const { home, mutex } = await holdWithOldPort(role);
-    try { expect(await listenOld(legacyPort(home, role), () => {})).toBeNull(); }
-    finally { await closeMutex(mutex); }
-    expect(await listenOld(legacyPort(home, role), () => {})).not.toBeNull();
-  });
-
-  it('prepares a free legacy port before acquiring a fixture lock', async () => {
-    let occupied = '';
-    for (let attempt = 0; attempt < 5 && !occupied; attempt++) {
-      const candidate = join(scratch, `home-${homes}`);
-      if (await listenOld(portOf(candidate, 'keystore'), socket => socket.destroy())) occupied = candidate;
-      else homes++;
-    }
-    if (!occupied) throw new Error('No free old port for the blocking fixture');
-    const { home, mutex } = await holdWithOldPort('keystore');
-    try {
-      expect(home).not.toBe(occupied);
-      expect(await answer(legacyPort(home, 'keystore'))).toBe(MARKER);
-      await expect(acquireMutex(home, 'keystore', 0)).rejects.toThrow(busy('keystore'));
-      expect(await listenOld(legacyPort(home, 'keystore'), () => {})).toBeNull();
-    } finally { await closeMutex(mutex); }
-    expect(await listenOld(legacyPort(home, 'keystore'), () => {})).not.toBeNull();
+    await closeMutex(await acquireMutex(home, role, 0));
+    // One try, well under the second the old probe waited for an answer.
+    expect(Date.now() - started).toBeLessThan(900);
   });
 });
