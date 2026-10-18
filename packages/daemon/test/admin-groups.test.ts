@@ -110,7 +110,30 @@ describe('desktop group commands in the owning bot', () => {
     expect(await execute({ kind: 'bindGroup', input: { ...input(dir), chatId: 'oc_s21a', projectName: 'S21 A', kind: 'single', noMention: false } })).toMatchObject({ noMention: false });
     expect(parseBindGroupInput({ ...input(dir), noMention: false })).toMatchObject({ noMention: false });
     expect(() => parseBindGroupInput({ ...input(dir), noMention: 'off' })).toThrow('群绑定参数无效');
-    expect(() => parseBindGroupInput({ ...input(dir), kind: 'smart' })).toThrow('群绑定参数无效');
+    expect(() => parseBindGroupInput({ ...input(dir), kind: 'later' })).toThrow('群绑定参数无效');
+  });
+
+  it('s25c: binds 智能 as 单会话 plus smart with 免@ off, says so in the one welcome card, and refuses a 免@ with it', async () => {
+    const dir = await workspace();
+    const fixture = channelFixture();
+    const execute = createGroupExecutor(fixture.channel);
+    expect(parseBindGroupInput({ ...input(dir), kind: 'smart' })).toMatchObject({ kind: 'smart' });
+    for (const noMention of [true, false]) expect(() => parseBindGroupInput({ ...input(dir), kind: 'smart', noMention })).toThrow('没有免 @');
+    const smart = { ...input(dir), chatId: 'oc_s25c', projectName: 'S25c', kind: 'smart' as const };
+    const bound = await execute({ kind: 'bindGroup', input: smart });
+    expect(bound).toMatchObject({ kind: 'single', smart: true, noMention: false });
+    expect(fixture.message).toHaveBeenCalledTimes(1);
+    const welcome = JSON.stringify(fixture.message.mock.calls[0]);
+    expect(welcome).toContain('智能开话题');
+    expect(welcome).toContain('我会读群消息，合适时接话。');
+    expect(welcome).not.toContain('可开启免@');
+    // The same bind again is a retry: no second welcome.
+    expect(await execute({ kind: 'bindGroup', input: smart })).toEqual(bound);
+    expect(fixture.message).toHaveBeenCalledTimes(1);
+    await expect(execute({ kind: 'bindGroup', input: { ...smart, kind: 'single' } })).rejects.toThrow('不可修改');
+    // A 免@ reaching the entry with 智能 (a DM card's shared form) is dropped, never stored on.
+    const picked = await joinExistingGroup(fixture.channel, { name: 'S25c picked', chatId: 'oc_s25c_picked', existingPath: dir, kind: 'smart', noMention: true });
+    expect(picked).toMatchObject({ kind: 'single', smart: true, noMention: false });
   });
 
   it('refuses invalid directories and non-members without welcome or persistence', async () => {
@@ -247,8 +270,12 @@ describe('desktop group commands in the owning bot', () => {
     await expect(execute({ kind: 'bindGroup', input: web })).rejects.toMatchObject({ code: 'GROUP_UPSTREAM' });
     expect(await readFile(paths.projectsFile, 'utf8')).toBe(bytes);
     expect(fixture.message).not.toHaveBeenCalled();
-    await addProject({ ...legacy, name: 'Smart legacy', chatId: 'oc_smart_legacy', smart: true });
+    const smartLegacy = { ...legacy, name: 'Smart legacy', chatId: 'oc_smart_legacy', smart: true };
+    await addProject(smartLegacy);
+    // A hand-written 智能 row binds again as 智能 (s25c); 单会话 is another 会话方式.
+    expect(await joinExistingGroup(fixture.channel, { ...value, name: 'Smart legacy', chatId: 'oc_smart_legacy', kind: 'smart' })).toEqual(smartLegacy);
     await expect(joinExistingGroup(fixture.channel, { ...value, name: 'Smart legacy', chatId: 'oc_smart_legacy' })).rejects.toThrow('不可修改');
+    expect(fixture.message).not.toHaveBeenCalled();
   });
 
   it('retries default-directory bindings without recreating their directory', async () => {

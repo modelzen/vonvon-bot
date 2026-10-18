@@ -186,6 +186,11 @@ export async function runSettingsGet(section: string | undefined, target: Target
   const fullOnly = view.scope.kind === 'project' ? (view as ProjectSettingsView).identity.fullOnly : undefined;
   for (const name of names.filter(name => section === undefined || name === section)) {
     const value = Object.hasOwn(sections, name) ? sections[name] : undefined;
+    // 智能 has no 免@ (s25c): its stored value does nothing, so it is not shown.
+    if (name === 'response' && view.scope.kind === 'project' && (view as ProjectSettingsView).identity.kind === 'smart') {
+      human.push('免 @：智能群没有这一项，回不回由 Bot 判断');
+      continue;
+    }
     if (!value) {
       // asked for by name: say why nothing shows (same words as set)
       if (section !== undefined) human.push(`daemon 没有 ${name} 这一节。daemon 可能比命令行旧。`);

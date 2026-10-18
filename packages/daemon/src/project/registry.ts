@@ -30,7 +30,7 @@ export interface Project {
    * reads as 'multi'. Read via {@link ruleKind}. */
   kind?: 'multi' | 'single';
   /** 智能 (3.4): stored with `kind: 'single'`, so a daemon from before s21 runs it as 单会话.
-   * No entry writes it before s25c; a group that has it judges every message (s25, {@link noMentionOf}).
+   * Every entry writes it through {@link storedMode} (s25c); a group that has it judges every message (s25, {@link noMentionOf}).
    * Read via {@link sessionModeOf}; switching to 多会话 or 单会话 drops it. */
   smart?: boolean;
   /** respond to non-@ messages too. Read as `noMention ?? defaultNoMention(p)`.
@@ -116,9 +116,16 @@ export function noMentionOf(p: Pick<Project, 'kind' | 'smart' | 'origin' | 'noMe
   return p.noMention ?? defaultNoMention(p);
 }
 
-/** 免@ written for a new bind or a new group when the entry left it out (3.4): 多会话开，单会话关. */
-export function bindNoMention(kind: 'multi' | 'single'): boolean {
+/** 免@ written for a new bind or a new group when the entry left it out (3.4): 多会话开，单会话关.
+ * 智能 has none and always stores false, so a daemon from before s21 runs it as 单会话、仅 @ (s25c). */
+export function bindNoMention(kind: SessionMode): boolean {
   return kind === 'multi';
+}
+
+/** The stored fields of a 会话方式 (s25c). 智能 keeps `kind: 'single'` and pins `noMention: false`: older daemons
+ * read it as 单会话 that answers only an @. */
+export function storedMode(mode: SessionMode): Pick<Project, 'kind' | 'smart'> & { noMention?: false } {
+  return mode === 'smart' ? { kind: 'single', smart: true, noMention: false } : { kind: mode };
 }
 
 /** The group's 运行中来了消息: its own override, else the bot's. Claude cannot steer, so it queues. */
@@ -371,7 +378,7 @@ type ProjectBinding = Pick<Project, 'name' | 'chatId'> & {
   cwd: { kind: 'existing'; path: string } | { kind: 'default'; legacyPath?: string; allocatedPath?: string };
   backend: string;
   defaultBackend: string;
-  kind: 'multi' | 'single';
+  kind: SessionMode;
   noMention: boolean;
 };
 type NewBinding = Pick<Project, 'cwd' | 'blank' | 'createdAt' | 'directories' | 'origin' | 'addedBy' | 'mode' | 'backend' | 'network' | 'creationRequestId' | 'creationRequestSignature'>;
@@ -402,7 +409,7 @@ export function bindProject(input: ProjectBinding, prepareNew: (previous?: Previ
     const prepared = await prepareNew(previous);
     if (binding.cwd.kind === 'existing' && prepared.cwd !== binding.cwd.path) throw new Error('工作目录已改变，请重新选择');
     const project: Project = { ...prepared, name: binding.name, chatId: binding.chatId,
-      kind: binding.kind, noMention: binding.noMention };
+      noMention: binding.noMention, ...storedMode(binding.kind) };
     projects.push(project);
     return { kind: 'bound', project: await write(location, projects, project) };
   }, target);

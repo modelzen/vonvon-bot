@@ -16,6 +16,7 @@ import { loadConfig, saveConfig } from '../config/store';
 import {
   effectiveMode,
   getProjectByName,
+  sessionModeOf,
   updateProject,
   type Project,
 } from '../project/registry';
@@ -262,12 +263,17 @@ export async function performSetPermissionMode(opts: {
   return { ok: true, project: await freshOr(opts.projectName, p) };
 }
 
+/** 智能 has no 免@ (s25c): an old card's button or an old page's switch is refused with this. */
+export const SMART_NO_MENTION_REFUSED = '这个群是智能开话题，回不回由 Bot 判断，没有免 @ 这一项';
+
 /** ✋ 免@ 开关（DM dm.proj.noMention / gs.noMention 与 Web setNoMention 同源）。
- * 即时生效（每条消息读盘判定），无需驱逐。 */
+ * 即时生效（每条消息读盘判定），无需驱逐。智能群没有这一项，拒绝（s25c）。 */
 export async function performSetNoMention(opts: { projectName: string; on: boolean }): Promise<AdminWriteOutcome> {
   const p = await getProjectByName(opts.projectName);
   if (!p) return { ok: false, reason: `项目「${opts.projectName}」不存在` };
-  await updateProject(opts.projectName, { noMention: opts.on });
+  if (sessionModeOf(p) === 'smart') return { ok: false, reason: SMART_NO_MENTION_REFUSED };
+  // Turned 智能 meanwhile: nothing is written, the fresh row shows it.
+  await updateProject(opts.projectName, latest => sessionModeOf(latest) === 'smart' ? {} : { noMention: opts.on });
   return { ok: true, project: await freshOr(opts.projectName, { ...p, noMention: opts.on }) };
 }
 

@@ -11,6 +11,7 @@ import {
   type DesktopSnapshot, settingsViewSchema, projectViewSchema, projectEditableSchemas, settingsReplySchema,
   applicationCrashesSchema, crashText, FORCED_DETAIL, NOT_REPLIED_TEXT, diagnosticsEventSchema,
   isKnownJudgeSelection, type JudgeSelectionView,
+  adminProjectSchema, collaborationRequestSchema, conversationCopy, conversationSchema, conversationToMode, modeToConversation, projectRecordSchema,
 } from "../src/index.js";
 
 const fixture = (name: string): unknown => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
@@ -91,6 +92,17 @@ describe("pinned contract extraction", () => {
     for (const folder of [undefined, {kind:"existing"}, {kind:"default",folderToken:randomUUID()}, {kind:"existing",path:"/untrusted"}]) {
       expect(commandSchema.safeParse({...base,folder}).success).toBe(false);
     }
+  });
+  it("s25c: carries 智能 as smart on every 会话方式 field, mapped one to one with the stored mode", () => {
+    expect(conversationSchema.options).toEqual(["threads", "shared", "smart"]);
+    expect(Object.keys(conversationCopy)).toEqual(["threads", "shared", "smart"]);
+    expect(conversationSchema.options.map(conversationToMode)).toEqual(["multi", "single", "smart"]);
+    for (const value of conversationSchema.options) expect(modeToConversation(conversationToMode(value))).toBe(value);
+    expect(commandSchema.safeParse({type:"bindGroup",agentId:"cli_fixture",groupId:"oc_fixture",projectName:"Group",folder:{kind:"default"},tool:"codex",conversation:"smart"}).success).toBe(true);
+    expect(collaborationRequestSchema.safeParse({action:"editProject",agentId:"cli_fixture",projectName:"Group",groupId:"oc_fixture",expectedRevision:"r",conversation:"smart"}).success).toBe(true);
+    expect(projectRecordSchema.parse({name:"Group",chatId:"oc_fixture",cwd:"/tmp",kind:"smart",backend:"codex-appserver",enabled:true,revision:"r"}).kind).toBe("smart");
+    expect(adminProjectSchema.shape.kind.options).toEqual(["multi", "single", "smart"]);
+    expect(conversationSchema.safeParse("smart-ish").success).toBe(false);
   });
   it("rejects a bindGroup project name with a slash", () => {
     expect(commandSchema.safeParse({type:"bindGroup",agentId:"cli_fixture",groupId:"oc_fixture",projectName:"a/b",folder:{kind:"existing",folderToken:randomUUID()},tool:"codex",conversation:"threads"}).success).toBe(false);

@@ -28,14 +28,20 @@ export const folderSelectionSchema = z.discriminatedUnion("kind", [
 ]);
 export const permissionSchema = z.enum(["qa", "write", "full"]);
 export const toolSchema = z.enum(["codex", "claude"]);
-/** 会话方式 on the wire: threads = 多会话（@ 我开新会话）, shared = 单会话（整群一条会话）. */
-export const conversationSchema = z.enum(["threads", "shared"]);
+/** 会话方式 on the wire: threads = 多会话（@ 我开新会话）, shared = 单会话（整群一条会话）, smart = 智能（智能开话题，s25c）. */
+export const conversationSchema = z.enum(["threads", "shared", "smart"]);
 export type Conversation = z.infer<typeof conversationSchema>;
-/** product.md 3.4 的叫法、主标题、副标题，三个绑定入口按这个顺序列（智能 s25c 再加）。 */
+/** product.md 3.4 的叫法、主标题、副标题，三个绑定入口按这个顺序列。 */
 export const conversationCopy = {
   threads: { name: "多会话", title: "@ 我开新会话", subtitle: "在主区 @ 我就开一个话题，一个话题一条会话，几件事各聊各的" },
   shared: { name: "单会话", title: "整群一条会话", subtitle: "主区一条会话，上下文一直连着；想另起一件事，开个话题和我聊" },
+  smart: { name: "智能", title: "智能开话题", subtitle: "主区一条会话，不用 @ 我也会看情况接话；聊到新的事，我自己开话题、起新会话" },
 } as const;
+/** 会话方式 as the daemon stores it (`sessionModeOf`): multi = 多会话, single = 单会话, smart = 智能. */
+export type SessionMode = "multi" | "single" | "smart";
+const MODES = { threads: "multi", shared: "single", smart: "smart" } as const satisfies Record<Conversation, SessionMode>;
+export const conversationToMode = (conversation: Conversation): SessionMode => MODES[conversation];
+export const modeToConversation = (mode: SessionMode): Conversation => mode === "multi" ? "threads" : mode === "single" ? "shared" : "smart";
 /** 免@ on the wire: all = 开 (no @ needed), mention = 关. Left out on a bind: 多会话开，单会话关 (product.md 3.4). */
 export const replyModeSchema = z.enum(["mention", "all"]);
 export type AgentId = z.infer<typeof agentIdSchema>;

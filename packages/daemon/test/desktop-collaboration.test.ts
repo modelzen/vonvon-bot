@@ -237,20 +237,87 @@ it('s21: switching 会话方式 keeps 免@ as it read before (a joined 单会话
     expect(await getProjectByName('demo')).toMatchObject({ kind: 'single', noMention: false });
   } finally { await app.shutdown(); }
 });
-it('s21: a stored 智能 is kept by an unrelated save and dropped by a switch, 免@ as it ran', async () => {
+it('s21, s25c: a stored 智能 is kept by a save that sends it back and dropped by a switch, 免@ as it ran', async () => {
   backend(); const app = orchestrator();
   try {
     await updateProject('demo', { smart: true, noMention: true });
     let revision = projectRevision((await getProjectByName('demo'))!);
-    await app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'single', enabled: true });
+    // The page sends the 会话方式 it shows: 智能 stays 智能, says nothing and archives nothing.
+    await app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'smart', enabled: true });
+    expect(await getProjectByName('demo')).toMatchObject({ kind: 'single', smart: true, noMention: true });
+    expect(fixture.send).not.toHaveBeenCalled();
+    revision = projectRevision((await getProjectByName('demo'))!);
+    // Since s25c 单会话 is a real pick: the same main-area session goes on, 免@ is what it ran as (off).
+    await app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'single' });
+    const after = (await getProjectByName('demo'))!;
+    expect(after).toMatchObject({ kind: 'single', noMention: false });
+    expect(after).not.toHaveProperty('smart');
+    expect((await listSessions())[0]).toMatchObject({ sessionId: 'old' });
+    expect((await listSessions())[0]?.detached).not.toBe(true);
+    expect(fixture.send).not.toHaveBeenCalled();
+  } finally { await app.shutdown(); }
+});
+it('s25c: switching to 智能 stores it with 免@ off, keeps the 单会话 session and says so once the group is unlocked', async () => {
+  backend(); const app = orchestrator();
+  try {
+    await updateProject('demo', { noMention: true });
+    // Said after the edit lets go of the group: anything else the page does meanwhile is not turned away.
+    let during: unknown;
+    fixture.send.mockImplementationOnce(async () => { during = await app.collaboration({ action: 'context', ...target, threadId: 'oc_demo' }).then(() => 'free', (error: Error) => error.message); return { messageId: 'om_notice' }; });
+    const revision = projectRevision((await getProjectByName('demo'))!);
+    const reply = await app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'smart' });
+    expect(reply).toMatchObject({ ok: true, project: { kind: 'smart' } });
+    expect(reply).not.toHaveProperty('warning');
+    expect(await getProjectByName('demo')).toMatchObject({ kind: 'single', smart: true, noMention: false });
+    expect(fixture.send).toHaveBeenCalledTimes(1);
+    expect(fixture.send).toHaveBeenCalledWith('oc_demo', { text: '我会读群消息，合适时接话。' });
+    expect(during).toBe('free');
+    expect((await listSessions())[0]?.detached).not.toBe(true);
+  } finally { await app.shutdown(); }
+});
+it('s25c: a failed notice is a warning on a saved switch, and a disabled group is told nothing', async () => {
+  backend(); const app = orchestrator();
+  try {
+    fixture.send.mockRejectedValueOnce(new Error('send refused'));
+    let revision = projectRevision((await getProjectByName('demo'))!);
+    expect(await app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'smart' }))
+      .toMatchObject({ ok: true, project: { kind: 'smart' }, warning: '已改成智能开话题，但没能在群里说一句：send refused' });
     expect(await getProjectByName('demo')).toMatchObject({ kind: 'single', smart: true });
-    expect(await getSession('oc_demo')).toBeDefined(); // nothing changed, nothing archived
     revision = projectRevision((await getProjectByName('demo'))!);
     await app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'multi' });
+    expect(await getProjectByName('demo')).toMatchObject({ kind: 'multi', noMention: false });
+    fixture.send.mockClear();
+    revision = projectRevision((await getProjectByName('demo'))!);
+    await app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'smart', enabled: false });
+    expect(await getProjectByName('demo')).toMatchObject({ kind: 'single', smart: true, enabled: false });
+    revision = projectRevision((await getProjectByName('demo'))!);
+    await app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'single', enabled: false });
+    revision = projectRevision((await getProjectByName('demo'))!);
+    await app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'smart' });
+    expect(fixture.send).not.toHaveBeenCalled();
+  } finally { await app.shutdown(); }
+});
+it('s25c: 多会话 and 智能 archive each other\'s sessions, as 多会话 and 单会话 do', async () => {
+  backend(); const app = orchestrator();
+  try {
+    let revision = projectRevision((await getProjectByName('demo'))!);
+    await app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'smart' });
+    expect((await listSessions())[0]?.detached).not.toBe(true);
+    revision = projectRevision((await getProjectByName('demo'))!);
+    await app.collaboration({ action: 'editProject', ...target, expectedRevision: revision, kind: 'multi' });
+    expect(await listSessions()).toMatchObject([{ sessionId: 'old', detached: true }]);
     const after = (await getProjectByName('demo'))!;
     expect(after).toMatchObject({ kind: 'multi', noMention: false });
     expect(after).not.toHaveProperty('smart');
   } finally { await app.shutdown(); }
+});
+it('s25c: parses 智能 from the web and refuses a 免@ with it', () => {
+  expect(parseCollaborationRequest({ action: 'editProject', ...target, expectedRevision: 'x', kind: 'smart' })).toMatchObject({ kind: 'smart' });
+  expect(parseCollaborationRequest({ action: 'createProject', requestId: 'r'.repeat(16), name: 'n', kind: 'smart', backend: 'codex-appserver' })).toMatchObject({ kind: 'smart' });
+  for (const noMention of [true, false]) {
+    expect(() => parseCollaborationRequest({ action: 'createProject', requestId: 'r'.repeat(16), name: 'n', kind: 'smart', noMention, backend: 'codex-appserver' })).toThrow('没有免 @');
+  }
+  expect(() => parseCollaborationRequest({ action: 'editProject', ...target, expectedRevision: 'x', kind: 'later' })).toThrow('会话类型无效');
 });
 it('s21: a new group from the web writes 免@ from the pick, else from the 会话方式', () => {
   expect(parseCollaborationRequest({ action: 'createProject', requestId: 'r'.repeat(16), name: 'n', kind: 'single', backend: 'codex-appserver' })).not.toHaveProperty('noMention');
@@ -258,7 +325,6 @@ it('s21: a new group from the web writes 免@ from the pick, else from the 会�
   expect(parseCollaborationRequest({ action: 'createProject', requestId: 'r'.repeat(16), name: 'n', kind: 'single', noMention: true, backend: 'codex-appserver' })).toMatchObject({ noMention: true });
   expect(() => parseCollaborationRequest({ action: 'createProject', requestId: 'r'.repeat(16), name: 'n', kind: 'single', noMention: 'yes', backend: 'codex-appserver' })).toThrow();
   expect(() => parseCollaborationRequest({ action: 'createProject', requestId: 'r'.repeat(16), name: 'n', backend: 'codex-appserver' })).toThrow();
-  expect(() => parseCollaborationRequest({ action: 'editProject', ...target, expectedRevision: 'x', kind: 'smart' })).toThrow('会话类型无效');
 });
 it('unbinds a joined project, preserves sessions and reports failed external leave honestly', async () => {
   backend(); const app = orchestrator(); fixture.leave.mockRejectedValueOnce(new Error('permission denied'));

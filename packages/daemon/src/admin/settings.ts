@@ -8,7 +8,7 @@ import { getCompletionReminderConfig, getMaxConcurrentRuns, getModelDisplay, get
 import { paths } from '../config/paths';
 import { resolveProjectsRootDir } from '../config/directories';
 import { botBackendId, groupBackendId, resolveCommentsExecution, resolveModelPreference } from '../config/execution';
-import { effectiveMode, getProjectByName, listProjects, mutateProject, noMentionOf, pendingPolicyOf, ruleKind, type Project } from '../project/registry';
+import { effectiveMode, getProjectByName, listProjects, mutateProject, noMentionOf, pendingPolicyOf, sessionModeOf, type Project } from '../project/registry';
 import { getSession, isRetiredKey, mutateSession, RETIRED_KEY_TEXT, type SessionRecord } from '../bot/session-store';
 import { DEFAULT_COMMENT_INSTRUCTIONS, saveCommentInstructions, syncAllCommentInstructions } from '../bot/comments';
 import { voiceView } from '../voice/view';
@@ -17,7 +17,7 @@ import { JUDGE_CLAUDE_NOTE, JUDGE_CODEX_NOTE, JUDGE_FORMAT_LINES, JUDGE_INPUT_EX
 import { readSmartPrompt, SMART_MAX_CHARS, SmartPromptError } from '../judge/smart-file';
 import type { JudgeSelectionStored } from '../judge/types';
 import type { VoiceAction } from '../voice/types';
-import { probeBackends, type AppPreferencesWriter } from './ops';
+import { probeBackends, SMART_NO_MENTION_REFUSED, type AppPreferencesWriter } from './ops';
 import { parseSettingsAction, parseSettingsEdit, SettingsInputError } from './settings-parse';
 import type * as T from './settings-types';
 export type * from './settings-types';
@@ -28,6 +28,9 @@ export function settingsRevision(value: unknown): string {
 const writable: T.SettingsAccess = {
   kind: 'writable'
 };
+/** `settings set response.*` on a 智能 group (s25c): the command line prints it after "没有保存：settings：". */
+const SMART_RESPONSE_REFUSED = `${SMART_NO_MENTION_REFUSED}。要用免 @，先在网页把会话方式改成多会话或单会话`;
+
 export const offlineSettings: T.SettingsAccess = {
   kind: 'readonly',
   reason: 'owner-offline',
@@ -494,7 +497,7 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
           chatId: p.chatId,
           backend: backendId,
           cwd: p.cwd,
-          kind: ruleKind(p),
+          kind: sessionModeOf(p),
           ...(fullOnly ? { fullOnly } : {})
         },
         members: {
@@ -656,6 +659,9 @@ export function createSettingsOwner(deps: SettingsOwnerDeps): T.HostSettings {
               break;
             }
             case 'response':
+              // 智能 has no 免@ (s25c); the web hides it, so this is the command line or an old page.
+              if (sessionModeOf(p) === 'smart')
+                throw new SettingsInputError(SMART_RESPONSE_REFUSED);
               Object.assign(p, e.patch);
               break;
             case 'run':

@@ -120,6 +120,14 @@ describe('performSetNoMention', () => {
     const r1 = await performSetNoMention({ projectName: 'nope', on: true });
     expect(r1.ok).toBe(false);
   });
+
+  it('智能群（s25c）没有免@：旧卡、旧页面的写入被拒，盘上不变', async () => {
+    await removeProject('demo');
+    await addProject({ name: 'demo', chatId: 'oc_demo', cwd: '/tmp/demo', blank: false, createdAt: 1, kind: 'single', smart: true, noMention: false });
+    const before = await readFile(paths.projectsFile, 'utf8');
+    expect(await performSetNoMention({ projectName: 'demo', on: true })).toEqual({ ok: false, reason: '这个群是智能开话题，回不回由 Bot 判断，没有免 @ 这一项' });
+    expect(await readFile(paths.projectsFile, 'utf8')).toBe(before);
+  });
 });
 
 describe('performSetCompletionReminder', () => {

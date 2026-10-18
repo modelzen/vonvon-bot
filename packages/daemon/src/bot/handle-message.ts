@@ -106,6 +106,7 @@ import {
   modelIdCode,
   reasoningEffortLabel,
   RES,
+  SMART_NOTICE,
   type HelpScope,
   type ModelCardState,
   type ResumeCardState,
@@ -207,10 +208,12 @@ import {
   noMentionOf,
   ruleKind,
   sessionModeOf,
+  storedMode,
   mutateProject,
   removeProject,
   updateProject,
   type Project,
+  type SessionMode,
 } from '../project/registry';
 import { bindModeFor, createProject, CreatedButUnsavedError, CreationOutcomeUnknownError, joinExistingGroup } from '../project/lifecycle';
 export { bindModeFor } from '../project/lifecycle';
@@ -350,6 +353,16 @@ function selectValue(formValue: Record<string, unknown> | undefined, name: strin
     for (const v of [o.value, o.id]) if (typeof v === 'string') return v;
   }
   return undefined;
+}
+
+/** Top line of a settings card redrawn after its 免@ button was refused (s25c). */
+function noMentionRefused(p: Project | undefined, reason: string): string {
+  return `⚠️ 没有改：${p && sessionModeOf(p) === 'smart' ? '这个群现在是智能开话题' : reason}。`;
+}
+
+/** The 会话方式 a bind or new-project button carries; anything else reads as 多会话, as before s25c. */
+function pickedMode(v: unknown): SessionMode {
+  return v === 'single' || v === 'smart' ? v : 'multi';
 }
 
 /** Narrow an arbitrary string to a PermissionMode, else undefined. */
@@ -3644,7 +3657,7 @@ export function createOrchestrator(
     // （能力守卫会拒），避免「列了点了才发现不支持」。codex(capabilities undefined)=全列。
     const caps = groupBackend(project).capabilities;
     await withTrace({ chatId: msg.chatId, msgId: msg.messageId }, async () => {
-      const card = buildHelpCard(scope, noMention, isAdmin(cfg, msg.senderId), caps, project ? ruleKind(project) : 'multi');
+      const card = buildHelpCard(scope, noMention, isAdmin(cfg, msg.senderId), caps, project ? sessionModeOf(project) : 'multi');
       await sendManagedCard(channel, msg.chatId, card, msg.messageId, inThread).catch((err) =>
         log.fail('card', err, { cmd: 'help', scope }),
       );
@@ -4522,7 +4535,7 @@ export function createOrchestrator(
       const name = String((formValue?.name as string) ?? '').trim();
       const cwdIn = String((formValue?.cwd as string) ?? '').trim();
       const backend = safeBackendId(formValue);
-      const kind: 'multi' | 'single' = value.kind === 'single' ? 'single' : 'multi';
+      const kind = pickedMode(value.kind);
       const backends = backendOptionsFor('full');
       // A submitted form locks its card_id (its buttons — retry/返回 on an error
       // re-render — stop firing, and an in-place update no-ops). So the result
@@ -4552,7 +4565,7 @@ export function createOrchestrator(
               signal,
             }));
             log.info('console', 'new-project', { name: p.name, blank: p.blank, backend: p.backend, requestId });
-            result = buildNewProjectDoneCard(p);
+            result = buildNewProjectDoneCard(p, kind === 'smart' && parseNoMentionPick(formValue) !== undefined);
           } catch (err) {
             // A group may exist (s36d1): say so, with no form that could create a second one.
             result = err instanceof CreationOutcomeUnknownError || err instanceof CreatedButUnsavedError
@@ -4572,7 +4585,7 @@ export function createOrchestrator(
       const cwdIn = String((formValue?.cwd as string) ?? '').trim();
       const chatId = typeof value.chatId === 'string' ? value.chatId : '';
       const backend = safeBackendId(formValue);
-      const kind: 'multi' | 'single' = value.kind === 'single' ? 'single' : 'multi';
+      const kind = pickedMode(value.kind);
       // 列「全后端」（full 档过滤面 = 已下载的都列，含 claude 系）。默认仍是 codex（列表
       // 首项），绑定后按所选后端定档：codex→qa（外部群安全默认）、claude→full（见 bindModeFor）。
       const backends = backendOptionsFor('full');
@@ -4601,7 +4614,7 @@ export function createOrchestrator(
               mode: bindModeFor(backend),
             });
             log.info('console', 'join-group', { name: p.name, blank: p.blank, backend: p.backend, mode: p.mode });
-            result = buildNewProjectDoneCard(p);
+            result = buildNewProjectDoneCard(p, kind === 'smart' && parseNoMentionPick(formValue) !== undefined);
           } catch (err) {
             result = buildJoinGroupFormCard({ chatId, name, cwd: cwdIn, error: err instanceof Error ? err.message : String(err), backends });
           }
@@ -4976,8 +4989,11 @@ export function createOrchestrator(
         const project = await getProjectByChatId(evt.chatId);
         if (project) {
           const r = await performSetNoMention({ projectName: project.name, on });
-          log.info('console', 'group-nomention', { project: project.name, on });
-          return buildGroupSettingsCard(r.ok ? r.project : { ...project, noMention: on });
+          log.info('console', 'group-nomention', { project: project.name, on, ok: r.ok });
+          if (r.ok) return buildGroupSettingsCard(r.project);
+          // Refused (turned 智能 since the card was sent, s25c): redraw from the row as it is now.
+          const latest = await getProjectByChatId(evt.chatId);
+          return buildGroupSettingsCard(latest ?? project, noMentionRefused(latest, r.reason));
         }
         return buildGroupSettingsCard({ name: '本群', kind: 'multi', noMention: on });
       });
@@ -5153,8 +5169,10 @@ export function createOrchestrator(
       const on = value.v === 'on';
       patch(evt, async () => {
         const r = await performSetNoMention({ projectName: name, on });
-        if (!r.ok) return renderDmMenuCard();
-        return buildProjectSettingsCard(r.project, backendDisplayName(r.project.backend));
+        if (r.ok) return buildProjectSettingsCard(r.project, backendDisplayName(r.project.backend));
+        // Refused (turned 智能 since the card was sent, s25c): redraw it as it is now; a project gone goes to the menu.
+        const p = await getProjectByName(name);
+        return p ? buildProjectSettingsCard(p, backendDisplayName(p.backend), noMentionRefused(p, r.reason)) : renderDmMenuCard();
       });
     })
     // 旧卡上的 🗜️ 自动压缩按钮：同群设置，不写盘，只刷新卡。
@@ -5504,6 +5522,8 @@ export function createOrchestrator(
     if (request.action === 'editProject' || request.action === 'removeProject') {
       if (projectRevision(project) !== request.expectedRevision) throw new AdminWriteError('项目设置已改变，请刷新后重试');
       if (projectMutations.has(project.chatId) || active.size > 0 || intakeChats.has(project.chatId) || pendingTopics.has(project.chatId)) throw new AdminWriteError('Agent 正在执行任务，请结束后修改项目');
+      let edited: { ok: true; project: ReturnType<typeof projectView> } | undefined;
+      let announce = false;
       projectMutations.add(project.chatId);
       try {
         const current = await getProjectByName(project.name);
@@ -5535,28 +5555,43 @@ export function createOrchestrator(
           patch.cwd = cwd;
           if (cwd !== project.cwd) patch.blank = false;
         }
-        if (request.kind !== undefined) patch.kind = request.kind;
         if (request.enabled !== undefined) patch.enabled = request.enabled;
+        // The page sends the 会话方式 it shows, so an unchanged one (智能 included) is left alone (s25c).
+        const mode = request.kind;
         const commit = () => mutateProject(project.name, latest => {
           if (projectRevision(latest) !== request.expectedRevision) throw new AdminWriteError('项目设置已改变，请刷新后重试');
-          // Switching 会话方式 leaves 免@ as it was (3.4): pin the value it read as before. 智能 is not
-          // offered here, so a stored one is kept when 单会话 comes back unchanged and dropped on a switch.
-          if (patch.kind !== undefined && patch.kind !== ruleKind(latest)) {
-            if (latest.noMention === undefined || latest.smart) latest.noMention = noMentionOf(latest);
+          // Switching 会话方式 leaves 免@ as it was (3.4): pin the value it read as before. 智能 has none, so leaving it
+          // writes 关, what it ran as, and entering it stores 关 too (storedMode), the value older daemons read.
+          if (mode !== undefined && mode !== sessionModeOf(latest)) {
+            if (latest.noMention === undefined || sessionModeOf(latest) === 'smart') latest.noMention = noMentionOf(latest);
             delete latest.smart;
-          }
+            Object.assign(latest, storedMode(mode));
+          } else if (mode !== undefined && sessionModeOf(latest) !== 'smart') delete latest.smart; // left by an old daemon, never counted
           Object.assign(latest, patch);
           if (patch.cwd !== undefined) latest.directories = { ...latest.directories, workspaces: { primary: patch.cwd, additional: latest.directories?.workspaces?.additional ?? [] } };
         });
-        const archive = (patch.cwd !== undefined && patch.cwd !== project.cwd) || (patch.kind !== undefined && patch.kind !== ruleKind(project));
+        // 单会话 and 智能 share the main area's session (keyed by chatId): switching between them archives nothing.
+        const archive = (patch.cwd !== undefined && patch.cwd !== project.cwd) || (mode !== undefined && (mode === 'multi' ? 'multi' : 'single') !== ruleKind(project));
         const updated = archive ? await detachSessionsForChat(project.chatId, commit) : await commit();
         if (archive) expireRetries((retry) => retry.chatId === project.chatId); // its sessions start over
         for (const rec of records) {
           const thread = sessions.get(rec.threadId); sessions.delete(rec.threadId);
           if (thread) await thread.close().catch(error => log.fail('desktop', error, { phase: 'project-session-close' }));
         }
-        return { ok: true, project: projectView(updated) };
+        announce = sessionModeOf(project) !== 'smart' && sessionModeOf(updated) === 'smart' && updated.enabled !== false;
+        edited = { ok: true, project: projectView(updated) };
       } finally { projectMutations.delete(project.chatId); }
+      if (!announce) return edited;
+      // 选了智能 tells the group (3.4), once the group is unlocked so a message meanwhile is not turned away (s25c).
+      // Saved already: a failure is a warning, not retried and not made up on a later save.
+      try {
+        const sent = await channel.send(project.chatId, { text: SMART_NOTICE });
+        recent.addOwn(project.chatId, project.chatId, { id: sent.messageId, at: Date.now(), text: SMART_NOTICE });
+        return edited;
+      } catch (error) {
+        log.fail('desktop', error, { phase: 'smart-notice' });
+        return { ...edited, warning: `已改成智能开话题，但没能在群里说一句：${error instanceof Error ? error.message : String(error)}` };
+      }
     }
     if (projectMutations.has(project.chatId) || project.enabled === false) throw new AdminWriteError('项目已停用或正在修改');
     const perm = turnSession(project.chatId, project);

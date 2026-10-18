@@ -2,7 +2,7 @@ import {useDirectoryPicker} from '../directory-picker';
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button, InlineNotice } from "../reference/components/ui";
 import { SettingsGroup, SettingsRow } from "../reference/components/system-settings";
-import { conversationCopy, type AgentId, type FolderChoice, type GroupId } from "@vonvon/protocol";
+import { conversationCopy, conversationSchema, modeToConversation, type AgentId, type Conversation, type FolderChoice, type GroupId } from "@vonvon/protocol";
 import type { CollaborationClient, CollaborationReply, ProjectRecord } from "@vonvon/protocol";
 import "../settings/settings.css";
 import {useShellCapabilities} from '../client-context';
@@ -21,6 +21,19 @@ function sameBinding(a: ProjectRecord, b: ProjectRecord): boolean {
   return a.name === b.name && a.chatId === b.chatId && a.cwd === b.cwd && a.kind === b.kind && a.backend === b.backend && a.enabled === b.enabled;
 }
 
+
+/** What the 会话方式 row says under a pick: its own line, or what a switch does to 免@ (s21, s25c). */
+export function conversationNote(target: Conversation, current: Conversation): string {
+  if (target === current) return conversationCopy[target].subtitle;
+  if (target === "smart") return "智能开话题没有免 @，回不回由 Bot 判断；以后切回多会话或单会话时免 @ 是关。";
+  if (current === "smart") return "切过去以后免 @ 是关，需要时在本页的「不 @ 也能发起任务」里改。";
+  return "切换会话方式不改免 @，需要时在本页的「不 @ 也能发起任务」里改。";
+}
+
+/** The 会话方式 picker: the three of product.md 3.4, in its order. */
+export function ConversationRow({ target, current, disabled, onChange }: { target: Conversation; current: Conversation; disabled: boolean; onChange: (next: Conversation) => void }) {
+  return <SettingsRow title="会话方式" description={conversationNote(target, current)} trailing={<select aria-label="项目会话方式" value={target} disabled={disabled} onChange={(event) => onChange(conversationSchema.catch(current).parse(event.target.value))}>{conversationSchema.options.map((value) => <option key={value} value={value}>{conversationCopy[value].title}</option>)}</select>} />;
+}
 
 function replyError(reply: CollaborationReply): string | undefined {
   return reply.kind === "refused" ? reply.message : undefined;
@@ -63,7 +76,7 @@ export function ProjectPanel({ scope, request, onChanged, children }: Props) {
   const baseline = useRef<ProjectRecord | undefined>(undefined);
   const busy = useRef(false);
   const [folder, setFolder] = useState<FolderChoice>();
-  const [conversation, setConversation] = useState<"shared" | "threads">("threads");
+  const [conversation, setConversation] = useState<Conversation>("threads");
   const [enabled, setEnabled] = useState(true);
   const [project, setProject] = useState<ProjectRecord>();
   const [removed, setRemoved] = useState(false);
@@ -87,7 +100,7 @@ export function ProjectPanel({ scope, request, onChanged, children }: Props) {
         if (!active) return;
         if (reply.kind === "project") {
           acceptProject(reply.project);
-          setConversation(reply.project.kind === "multi" ? "threads" : "shared");
+          setConversation(modeToConversation(reply.project.kind));
           setEnabled(reply.project.enabled);
         } else setError(replyError(reply) ?? "无法读取项目。");
       })
@@ -141,7 +154,8 @@ export function ProjectPanel({ scope, request, onChanged, children }: Props) {
     } finally { busy.current = false; setSaving(false); }
   }
 
-  const changed = !!project && (conversation !== (project.kind === "multi" ? "threads" : "shared") || enabled !== project.enabled || !!folder);
+  const current = project ? modeToConversation(project.kind) : undefined;
+  const changed = !!project && (conversation !== current || enabled !== project.enabled || !!folder);
   async function saveDraft() {
     if (!baseline.current) return false;
     return run(async () => {
@@ -159,7 +173,7 @@ export function ProjectPanel({ scope, request, onChanged, children }: Props) {
   }
   function discard() {
     setFolder(undefined);
-    setConversation(project?.kind === 'single' ? 'shared' : 'threads');
+    setConversation(project ? modeToConversation(project.kind) : 'threads');
     setEnabled(project?.enabled ?? true);
   }
   useDraft(changed, {title: '项目管理', save: saveDraft, discard});
@@ -170,9 +184,9 @@ export function ProjectPanel({ scope, request, onChanged, children }: Props) {
       {project && <>
         <SettingsRow title="飞书群" value={project.name} trailing={<Button size="sm" onClick={() => void openExternalUrl(groupUrl(scope.groupId), 'group', shell).catch((failure: unknown) => setError(failure instanceof Error ? failure.message : "无法打开飞书群。"))}>在飞书打开</Button>} />
         <SettingsRow title="工作目录" description={folder?.displayPath ?? project.cwd} trailing={<Button size="sm" disabled={saving} onClick={() => void pickDirectory().then((choice) => { if (choice) setFolder(choice); }).catch((failure: unknown) => setError(failure instanceof Error ? failure.message : "目录选择失败。"))}>更换目录</Button>} />
-        <SettingsRow title="会话方式" description={conversation !== (project.kind === "multi" ? "threads" : "shared") ? "切换会话方式不改免 @，需要时在本页的「不 @ 也能发起任务」里改。" : conversationCopy[conversation].subtitle} trailing={<select aria-label="项目会话方式" value={conversation} disabled={saving} onChange={(event) => setConversation(event.target.value === "shared" ? "shared" : "threads")}><option value="threads">{conversationCopy.threads.title}</option><option value="shared">{conversationCopy.shared.title}</option></select>} />
+        <ConversationRow target={conversation} current={modeToConversation(project.kind)} disabled={saving} onChange={setConversation} />
         <SettingsRow title="项目状态" trailing={<select aria-label="项目状态" value={enabled ? "enabled" : "disabled"} disabled={saving} onChange={(event) => setEnabled(event.target.value === "enabled")}><option value="enabled">启用</option><option value="disabled">停用</option></select>} />
-        <div className="settings-edit-actions"><Button size="sm" disabled={!changed || saving} onClick={() => { setConversation(project.kind === "multi" ? "threads" : "shared"); setEnabled(project.enabled); setFolder(undefined); }}>放弃修改</Button><Button size="sm" variant="primary" loading={saving} disabled={!changed} onClick={() => void saveDraft()}>保存项目</Button></div>
+        <div className="settings-edit-actions"><Button size="sm" disabled={!changed || saving} onClick={() => { setConversation(modeToConversation(project.kind)); setEnabled(project.enabled); setFolder(undefined); }}>放弃修改</Button><Button size="sm" variant="primary" loading={saving} disabled={!changed} onClick={() => void saveDraft()}>保存项目</Button></div>
       </>}
     </SettingsGroup>
     {!removed && children}

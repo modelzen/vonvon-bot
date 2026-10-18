@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { AdminBot, AdminProject } from '../src/admin/service';
 import { readAdminState } from '../src/server/state';
 import { projectState } from '../src/server/projection';
-import { desktopSnapshotSchema } from '@vonvon/protocol';
+import { adminProjectSchema, desktopSnapshotSchema } from '@vonvon/protocol';
 
 const bot: AdminBot = { appId: 'cli_test', name: 'test', tenant: 'feishu', active: true, current: true, running: true, pid: 123, startedAt: 100, completionReminder: { mode: 'failures', longTaskMinutes: 3 } };
 const project: AdminProject = { name: 'project', chatId: 'oc_test', cwd: '/tmp/project', blank: false, branch: 'main', kind: 'multi', origin: 'joined', noMention: false, mode: 'write', guestMode: 'qa', network: true, backend: 'codex-appserver', allowedUsersCount: 2, sessionCount: 3, createdAt: 1 };
@@ -37,6 +37,14 @@ describe('lossless admin state and pinned projection', () => {
     const projected = projectState(state, empty, new Set());
     expect(desktopSnapshotSchema.parse({ ...empty, ...projected }).memberships.map(member => member.directoryProblem)).toEqual(['botRoot', undefined]);
     expect(projected.memberships[1]).not.toHaveProperty('directoryProblem');
+  });
+
+  it('s25c: shows 智能 as smart on the wire, its response always mention', async () => {
+    const smart: AdminProject = { ...project, kind: 'smart', noMention: false };
+    expect(adminProjectSchema.parse(smart).kind).toBe('smart');
+    const state = await readAdminState({ listBots: async () => [bot], listProjects: async () => [smart, { ...project, name: 'single', chatId: 'oc_single', kind: 'single', noMention: true }] });
+    const memberships = desktopSnapshotSchema.parse({ ...empty, ...projectState(state, empty, new Set()) }).memberships;
+    expect(memberships.map(member => [member.conversation, member.response])).toEqual([['smart', 'mention'], ['shared', 'all']]);
   });
 
   it('marks duplicate group bindings stale and preserves pinned activation semantics', async () => {

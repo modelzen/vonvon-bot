@@ -304,3 +304,21 @@ describe('judge settings: the view', () => {
     expect(a.smartPrompt).toMatchObject({ error: 'SMART.md 超过 8000 字', path: join(botDir(), 'SMART.md'), text: '' });
   });
 });
+
+describe('s25c: a 智能 group has no 免@ in its settings', () => {
+  it('names the 会话方式 in the view and refuses a response save, which works again after a switch', async () => {
+    await updateProject('demo', { kind: 'single', smart: true, noMention: false });
+    const o = owner();
+    const view = await o.read(project) as ProjectSettingsView;
+    expect(view.identity.kind).toBe('smart');
+    expect(projectViewSchema.parse(view).identity.kind).toBe('smart');
+    const refused = await o.save({ scope: project, section: 'response', revision: view.sections.response.revision, patch: { noMention: true } });
+    expect(refused).toEqual({ kind: 'rejected', fields: [{ field: 'settings', message: '这个群是智能开话题，回不回由 Bot 判断，没有免 @ 这一项。要用免 @，先在网页把会话方式改成多会话或单会话' }] });
+    expect((await getProjectByName('demo'))?.noMention).toBe(false);
+    await updateProject('demo', { smart: false });
+    const single = await o.read(project) as ProjectSettingsView;
+    expect(single.identity.kind).toBe('single');
+    expect((await o.save({ scope: project, section: 'response', revision: single.sections.response.revision, patch: { noMention: true } })).kind).toBe('saved');
+    expect((await getProjectByName('demo'))?.noMention).toBe(true);
+  });
+});

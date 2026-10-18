@@ -11,10 +11,20 @@ import {useDraft, useDraftGuard} from './settings/DraftGuard';
 import type {PendingAgentGroups} from './pending-groups';
 
 type Mode = {kind: 'create'} | {kind: 'existing'} | {kind: 'bind'; group: PendingGroup};
-/** product.md 3.4: in this order, title plus one line, nothing preselected or marked as recommended (智能 joins in s25c). */
-const CONVERSATIONS = (['threads', 'shared'] as const).map(value => ({value, label: conversationCopy[value].title, description: conversationCopy[value].subtitle}));
+/** product.md 3.4: in this order, title plus one line, nothing preselected or marked as recommended. */
+export const CONVERSATIONS = (['threads', 'shared', 'smart'] as const).map(value => ({value, label: conversationCopy[value].title, description: conversationCopy[value].subtitle}));
 /** 免@ when the user has not touched it: 多会话开，单会话关. */
 const defaultResponse = (conversation: Conversation): 'all' | 'mention' => conversation === 'threads' ? 'all' : 'mention';
+/** The 免@ the dialog shows: the hand pick, else the 会话方式's default. 智能 has none (s25c). */
+export function shownResponse(conversation: Conversation | undefined, picked: 'all' | 'mention' | undefined): 'all' | 'mention' | undefined {
+  return conversation === undefined || conversation === 'smart' ? undefined : picked ?? defaultResponse(conversation);
+}
+/** What goes on the wire. Left out only when the default gives it on this daemon and on one from before s21 alike:
+ * those bind with 3.4's defaults but create every group with 免@ on. Otherwise sent; an old daemon then refuses. */
+export function sentResponse(kind: 'create' | 'bind', conversation: Conversation, freeAt: 'all' | 'mention' | undefined): {response?: 'all' | 'mention'} {
+  if (freeAt === undefined) return {};
+  return freeAt === defaultResponse(conversation) && (kind === 'bind' || conversation === 'threads') ? {} : {response: freeAt};
+}
 /** The protocol's project-name rule, checked here so the user sees why instead of a generic request failure. */
 export function projectNameProblem(value: string): string | undefined {
   const name = value.trim();
@@ -64,7 +74,7 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
   const active = useRef(true);
   useEffect(() => () => {active.current = false;}, []);
   const nameProblem = projectNameProblem(name);
-  const freeAt = response ?? (conversation && defaultResponse(conversation));
+  const freeAt = shownResponse(conversation, response);
   const dirty = Boolean(name !== (mode.kind === 'bind' ? mode.group.name : '') || folder || existingDirectory || tool !== 'codex' || conversation || response);
   function discard() {setName(''); setFolder(undefined); setExistingDirectory(false); setTool('codex'); setConversation(undefined); setResponse(undefined);}
   function close() {if (!busy) navigate(() => {active.current = false; onClose();});}
@@ -75,11 +85,8 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
   async function save() {
     if (busy || mode.kind === 'existing' || locked) return false;
     if (!name.trim() || (existingDirectory && !folder)) {setError('请填写名称并选择工作目录。'); return false;}
-    if (!conversation || !freeAt) {setError('请选择会话方式。'); return false;}
-    // Left out only when the default gives it on this daemon and on one from before s21 alike: those bind
-    // with 3.4's defaults but create every group with 免@ on. Otherwise sent; an old daemon then refuses.
-    const omit = freeAt === defaultResponse(conversation) && (mode.kind === 'bind' || conversation === 'threads');
-    const picked = omit ? {} : {response: freeAt};
+    if (!conversation) {setError('请选择会话方式。'); return false;}
+    const picked = sentResponse(mode.kind, conversation, freeAt);
     if (nameProblem) {setError(nameProblem); return false;}
     setBusy(true); setError('');
     try {
@@ -146,7 +153,7 @@ export function JoinGroupDialog({agent, pending, initialGroup, onClose, onChange
         <FormField label="会话方式">
           <ChoiceGroup<Conversation | ''> label="会话方式" aria-required disabled={busy} value={conversation ?? ''} options={CONVERSATIONS} onChange={value => {if (value) setConversation(value);}} />
         </FormField>
-        {conversation && <SettingsGroup>
+        {freeAt && <SettingsGroup>
           <SettingsRow title="免 @" value={freeAt === 'all' ? '不 @ 也回' : '@ 我才回'} trailing={<select aria-label="免 @" disabled={busy} value={freeAt} onChange={event => setResponse(event.target.value === 'all' ? 'all' : 'mention')}><option value="all">开</option><option value="mention">关</option></select>} />
         </SettingsGroup>}
         <Button variant="primary" loading={busy} disabled={locked || !name.trim() || Boolean(nameProblem) || (existingDirectory && !folder) || !conversation} onClick={() => void save()}>{mode.kind === 'create' ? '创建飞书群并加入' : '绑定工作目录并发送欢迎卡片'}</Button>
