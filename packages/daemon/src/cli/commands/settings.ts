@@ -1,13 +1,17 @@
 import {
-  agentSectionSchemas, projectEditableSchemas, sessionSectionSchemas, sessionThreadIdSchema,
-  type Agent, type Membership, type ProjectSettingsView, type SessionSettingsView, type SettingsScope, type SettingsView,
+  agentSectionSchemas, isKnownJudgeSelection, projectEditableSchemas, sessionSectionSchemas, sessionThreadIdSchema,
+  type Agent, type AgentSettingsView, type JudgeSelectionView, type Membership, type ProjectSettingsView, type SessionSettingsView,
+  type SettingsScope, type SettingsView, type SmartPromptView,
 } from '@vonvon/protocol';
 import {
   conversationLabel, localTime, pickBot, pickGroup, print, toolLabel, want, withDaemon, type Call, type Daemon, type Io,
 } from '../daemon-client';
 
 // Structural views of the protocol's zod objects: the daemon's own zod is v4, protocol's is v3 (see daemon-client).
-type Issue = { code: string; path: readonly (string | number)[]; message: string; keys?: readonly string[]; options?: readonly unknown[]; expected?: unknown; received?: unknown };
+type Issue = {
+  code: string; path: readonly (string | number)[]; message: string; keys?: readonly string[]; options?: readonly unknown[]; expected?: unknown; received?: unknown;
+  type?: string; minimum?: unknown; maximum?: unknown;
+};
 type Check = { safeParse(value: unknown): { success: true } | { success: false; error: { issues: readonly Issue[] } } };
 type SectionSchema = { shape: Record<string, unknown>; partial(): { strict(): Check } };
 type SectionView = { stored: unknown; effective: unknown; revision: string; access: { kind: 'writable' } | { kind: 'readonly'; message: string } };
@@ -47,6 +51,19 @@ function explain(section: string, schema: SectionSchema, issue: Issue): string {
       const expected = String(issue.expected);
       // A non-string for an enum reports the options as the expected type: 'off' | 'running' | 'always'.
       return `${where} ${TYPES[expected] ?? `只能是 ${expected.split(' | ').map(option => option.replace(/^'(.*)'$/, '$1')).join('、')}`}`;
+    }
+    // Lengths of text (after trimming) and lists; numbers carry no bounds in the settings schemas.
+    case 'too_small': {
+      const least = Number(issue.minimum);
+      if (issue.type === 'string') return least <= 1 ? `${where} 不能为空` : `${where} 至少要 ${least} 个字`;
+      if (issue.type === 'array') return `${where} 至少要 ${least} 项`;
+      return `${where}：${issue.message}`;
+    }
+    case 'too_big': {
+      const most = Number(issue.maximum);
+      if (issue.type === 'string') return `${where} 最多 ${most} 个字`;
+      if (issue.type === 'array') return `${where} 最多 ${most} 项`;
+      return `${where}：${issue.message}`;
     }
     default: return `${where}：${issue.message}`;
   }
@@ -120,6 +137,38 @@ function cut(text: string, max = 40): string {
   return chars.length > max ? `${chars.slice(0, max).join('')}…` : chars.join('');
 }
 
+/** Where the judge prompt comes from, and which file to make or delete to change it (design 第 5 节). */
+function promptSource(prompt: SmartPromptView, group: boolean): string {
+  if (prompt.error) return `智能提示词：读不了 ${prompt.path}：${prompt.error}`;
+  if (prompt.source === 'group') return `智能提示词：这个群自己的 ${prompt.path}，删掉它就回到 bot 的`;
+  if (!group) return prompt.source === 'bot' ? `智能提示词：${prompt.path}，删掉它就恢复默认` : `智能提示词：内置默认。要改就新建 ${prompt.path}，删掉它就恢复默认`;
+  return `智能提示词：${prompt.source === 'bot' ? '用 bot 的 SMART.md' : '内置默认'}。要只改这个群就新建 ${prompt.path}，删掉它就回到 bot 的`;
+}
+
+/** The judge prompt in full, for `get judge` only: it runs to a few thousand characters. Split into lines, since printing strips a line's own breaks. */
+function promptText(prompt: SmartPromptView): string[] {
+  const where = { main: '群主区', mentioned: '主区被 @', topic: '话题里' } as const;
+  return [
+    '—— 智能提示词 ——', prompt.error ? '（读不了，见上面）' : prompt.text,
+    ...(Object.keys(where) as (keyof typeof where)[]).flatMap(v => [`—— 程序附的格式行（只读）：${where[v]} ——`, prompt.formatLines[v]]),
+    '—— 程序给模型的输入（示例，只读）——', prompt.inputExample,
+    ...(prompt.backendNote ? ['—— 模型还会看到（只读）——', prompt.backendNote] : []),
+  ].flatMap(text => text.split('\n'));
+}
+
+/** One line per backend: the bot has no backend of its own, so a single effective model would mislead. */
+function judgeLines(view: AgentSettingsView): string[] {
+  return Object.entries(view.judgeByBackend ?? {}).map(([id, j]) => {
+    const what = j.provider ? `决策模型 ${j.provider} 的 ${j.model}` : `${j.model}，${j.effort ? `推理强度 ${j.effort}` : id === 'claude-agent' ? '关思考' : '不传推理强度'}`;
+    return `  ${toolLabel(id)} 的群用：${what}（${j.source === 'bot' ? 'bot 设的' : '默认'}）`;
+  });
+}
+
+/** A kind a newer daemon wrote shows as sent (v1-plan 第 5 节"旧客户端读到决策模型"); say so. */
+function unknownJudge(selection: JudgeSelectionView | undefined): string[] {
+  return selection && !isKnownJudgeSelection(selection) ? [`  这个版本的命令行不认识 ${selection.kind} 这一类判断模型，上面是原样`] : [];
+}
+
 export async function runSettingsGet(section: string | undefined, target: Target, io: Io, daemon: Daemon = withDaemon): Promise<void> {
   const kind = scopeKind(target);
   const names = sectionNames(kind);
@@ -137,17 +186,31 @@ export async function runSettingsGet(section: string | undefined, target: Target
   const fullOnly = view.scope.kind === 'project' ? (view as ProjectSettingsView).identity.fullOnly : undefined;
   for (const name of names.filter(name => section === undefined || name === section)) {
     const value = Object.hasOwn(sections, name) ? sections[name] : undefined;
-    if (!value) continue;
+    if (!value) {
+      // asked for by name: say why nothing shows (same words as set)
+      if (section !== undefined) human.push(`daemon 没有 ${name} 这一节。daemon 可能比命令行旧。`);
+      continue;
+    }
     human.push(`[${name}]${value.access.kind === 'readonly' ? `（只读：${value.access.message}）` : ''}`);
     const effective = (value.effective ?? {}) as Record<string, unknown>;
     // Only what `set` takes: the view's deprecated permission.guestMode (s15c) is left out.
     const settable = TABLES[kind][name]!.shape;
+    // The bot's judge model differs per backend: judgeLines, not one effective value.
+    const botJudge = name === 'judge' && view.scope.kind === 'agent';
     for (const [key, stored] of Object.entries((value.stored ?? {}) as Record<string, unknown>)) {
       if (!Object.hasOwn(settable, key)) continue;
       const live = effective[key];
-      human.push(`  ${key} = ${show(stored)}${JSON.stringify(live) === JSON.stringify(stored) ? '' : `（生效：${show(live)}）`}`);
+      human.push(`  ${key} = ${show(stored)}${botJudge || JSON.stringify(live) === JSON.stringify(stored) ? '' : `（生效：${show(live)}）`}`);
     }
     if (name === 'permission' && fullOnly) human.push(`  ${fullOnly}`);
+    if (name === 'judge') {
+      const prompt = (view as AgentSettingsView | ProjectSettingsView).smartPrompt;
+      human.push(...unknownJudge((value.stored as { selection?: JudgeSelectionView } | undefined)?.selection));
+      if (botJudge) human.push(...judgeLines(view as AgentSettingsView));
+      if (prompt) human.push(`  ${promptSource(prompt, view.scope.kind === 'project')}`);
+      human.push('  只在智能模式的群里用');
+      if (prompt && section === 'judge') human.push(...promptText(prompt));
+    }
   }
   if (sessions) {
     const recent = [...sessions].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 10);
@@ -173,6 +236,12 @@ export async function runSettingsSet(assignments: readonly string[], target: Tar
   if (result.kind === 'conflict') throw new Error('这项设置刚在别处改过，没有保存。重新运行一次。');
   if (result.kind === 'rejected') throw new Error(`没有保存：${result.fields.map(field => `${field.field}：${field.message}`).join('；')}`);
   if (result.kind === 'unavailable') throw new Error(result.reason.kind === 'readonly' ? result.reason.message : '当前不可编辑。');
-  const saved = Object.entries(patch).map(([key, value]) => `${section}.${key} = ${show(value)}`).join('、');
+  // The daemon fills in a language model's backend: show what was stored, and for which groups.
+  const stored = section === 'judge' ? (result.section.value.stored as { selection?: JudgeSelectionView }).selection : undefined;
+  const known = stored && isKnownJudgeSelection(stored) ? stored : undefined;
+  const whose = target.group !== undefined ? '' : known?.kind === 'decision' ? '（各后端的群都用）'
+    : known?.kind === 'llm' && known.backend ? `（${toolLabel(known.backend)} 的群用）` : '';
+  const saved = stored ? `judge.selection = ${show(stored)}${whose}`
+    : Object.entries(patch).map(([key, value]) => `${section}.${key} = ${show(value)}`).join('、');
   print(io, [`已保存 ${saved}。`, ...result.effects.map(effect => effect.detail)], { section: result.section, effects: result.effects });
 }

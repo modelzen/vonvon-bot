@@ -221,12 +221,12 @@ export function createJudge(deps: JudgeDeps): Judge {
     const fields = { chatId: req.group.chatId, ref: req.ref?.slice(-6), variant: req.variant };
     // Backend and model first, so every later failure still reports them.
     // The group's own backend, Codex for old rows and ids not in the catalog (s36d2): never the bot default.
-    let base: Pick<JudgeResult, 'backend' | 'model' | 'effort' | 'modelSource' | 'promptSource'> = {
+    let base: Pick<JudgeResult, 'backend' | 'model' | 'effort' | 'provider' | 'modelSource' | 'promptSource'> = {
       backend: groupBackendId(req.group), model: '', modelSource: 'default', promptSource: 'default',
     };
     let queueMs: number | undefined;
     const finish = (result: JudgeResult, extra: Record<string, unknown> = {}): JudgeResult => {
-      const common = { ...fields, backend: result.backend, model: result.model, effort: result.effort, modelSource: result.modelSource, promptSource: result.promptSource, ms: result.ms, queueMs, ...extra };
+      const common = { ...fields, backend: result.backend, model: result.model, effort: result.effort, provider: result.provider, modelSource: result.modelSource, promptSource: result.promptSource, ms: result.ms, queueMs, ...extra };
       if (result.error) {
         // the caller giving up and shutdown are not faults: info, so a shutdown does not fill the terminal with warnings
         const quiet = result.error.kind === 'aborted' || result.error.kind === 'closed';
@@ -264,11 +264,15 @@ export function createJudge(deps: JudgeDeps): Judge {
     try {
       const backend = deps.backendFor(base.backend);
       const models = backend.peekModels?.();
-      if (backend.peekModels && !models) fetchModels(backend);
       base = {
         ...base, backend: backend.id,
         ...resolveJudgeModel(backend.id, { group: storedJudge(req.group.judge, req.group.chatId), bot: storedJudge(req.botJudge, 'bot') }, models),
       };
+      // s23f calls decision models. Until then one fails like a decision model without its key: no
+      // quiet switch to the subscription's small model (product.md 3.4).
+      if (base.provider) throw new JudgeFail('unavailable', `这个版本还不能用决策模型判断（${base.provider}）`);
+      // a decision model needs no backend model list
+      if (backend.peekModels && !models) fetchModels(backend);
 
       // Steps 3 to 6 race the shared controller: a stuck file read, queue or backend still returns
       // on time. The backend call keeps running and cleans up on its own; its slot waits for that.
