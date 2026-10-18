@@ -13,10 +13,10 @@ import type { RegistryLocation } from '../src/project/registry';
 import { paths } from '../src/config/paths';
 
 vi.mock('../src/config/paths', async () => {
-  const { mkdtempSync } = await import('node:fs');
+  const { mkdtempSync, realpathSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
-  const root = mkdtempSync(join(tmpdir(), 'groups-fixture-'));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'groups-fixture-')));
   return { paths: { appDir: root, botsFile: join(root, 'bots.json'), projectsFile: join(root, 'projects.json'), projectsRootDir: join(root, 'projects'), backendsDir: join(root, 'backends') },
     botPaths: () => ({ projectsFile: join(root, 'projects.json'), configFile: join(root, 'config.json') }) };
 });
