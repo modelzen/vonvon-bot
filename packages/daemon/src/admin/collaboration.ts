@@ -1,6 +1,7 @@
 import { isAbsolute } from 'node:path';
 import { createHash } from 'node:crypto';
 import { ruleKind, type Project } from '../project/registry';
+import { groupBackendId } from '../config/execution';
 import { InvalidGroupInput } from './groups';
 import { SHARE_SECTIONS, type ShareSectionKey } from '../card/usage-cards';
 
@@ -22,7 +23,7 @@ export function projectRevision(project: Project): string {
   return createHash('sha256').update(JSON.stringify(project)).digest('hex');
 }
 export function projectView(project: Project) {
-  return { name: project.name, chatId: project.chatId, cwd: project.cwd, kind: ruleKind(project), backend: project.backend ?? 'codex-appserver', enabled: project.enabled !== false, revision: projectRevision(project) };
+  return { name: project.name, chatId: project.chatId, cwd: project.cwd, kind: ruleKind(project), backend: groupBackendId(project), enabled: project.enabled !== false, revision: projectRevision(project) };
 }
 export function parseCollaborationRequest(raw: Record<string, unknown>): CollaborationRequest {
   const str = (key: string, max = 4096) => typeof raw[key] === 'string' && (raw[key] as string).trim().length > 0 && (raw[key] as string).length <= max && !(key === 'objective' ? /[\x00-\x08\x0b\x0c\x0e-\x1f]/ : /[\x00-\x1f]/).test(raw[key] as string);

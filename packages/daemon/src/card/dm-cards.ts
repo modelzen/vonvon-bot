@@ -29,6 +29,7 @@ import {
   type ReasoningEffort,
 } from '../agent/types';
 import { catalogById } from '../agent/catalog';
+import { groupBackendId, resolveCommentsExecution } from '../config/execution';
 import { CUSTOM_MODEL_OPTION, MODEL_ID_MAX_LENGTH, parseModelId } from '../agent/model-id';
 import type { SessionRecord } from '../bot/session-store';
 import { labelScope } from '../config/scopes';
@@ -616,7 +617,8 @@ export function buildNewProjectDoneCard(p: Project): CardObject {
   const joined = (p.origin ?? 'created') === 'joined';
   const verb = joined ? '已绑定群' : '已创建项目';
   const title = joined ? '🔗 绑定已有群' : '➕ 新建项目';
-  const backendName = catalogById(p.backend ?? DEFAULT_BACKEND_ID)?.displayName ?? p.backend ?? DEFAULT_BACKEND_ID;
+  const backendId = groupBackendId(p);
+  const backendName = catalogById(backendId)?.displayName ?? backendId;
   const elements: CardElement[] = [
     md(`✅ ${verb} **${p.name}**${p.blank ? ' _(空白项目)_' : ''}`),
     note(`📂 \`${p.cwd}\`   ·   ${kindLabel(p)}   ·   🧠 ${backendName}`),
@@ -783,11 +785,11 @@ function settingItem(
 
 /** Compact, IO-free status for the document-comment entry on the global card. */
 function summarizeCommentSettings(cfg: AppConfig): string {
-  const comments = cfg.preferences?.comments ?? {};
-  const backendId = comments.backend?.trim() || DEFAULT_BACKEND_ID;
-  const backend = catalogById(backendId)?.displayName ?? backendId;
-  const model = comments.model?.trim() || '默认模型';
-  const effort = comments.effort ? reasoningEffortLabel(comments.effort) : '默认推理强度';
+  // What a comment runs on: the settings, else the bot default, else built in (s36d2).
+  const comments = resolveCommentsExecution(cfg.preferences);
+  const backend = catalogById(comments.backend)?.displayName ?? comments.backend;
+  const model = comments.model?.model ?? '默认模型';
+  const effort = comments.model?.effort ? reasoningEffortLabel(comments.model.effort) : '默认推理强度';
   return `${backend} · ${model} · ${effort}`;
 }
 

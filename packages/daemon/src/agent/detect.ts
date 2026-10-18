@@ -77,9 +77,9 @@ export function pickDefaultBackend(agents: AgentRuntime[]): string {
 }
 
 /**
- * 有效默认后端：缓存一次 detectAgents → pickDefaultBackend。散落的
- * `?? DEFAULT_BACKEND_ID` 应收敛到这里 / {@link backendForProject}，避免硬编码
- * 常量回退绕过智能默认。探测失败回退 DEFAULT_BACKEND_ID（保持现状语义）。
+ * 有效默认后端：缓存一次 detectAgents → pickDefaultBackend。给后端页和体检显示
+ * 「这台电脑的默认」；群和会话用哪个后端见 config/execution.ts（群不跟它走）。
+ * 探测失败回退 DEFAULT_BACKEND_ID（保持现状语义）。
  *
  * 缓存：detect 要 spawn（codex --version），daemon 生命周期内本机装配几乎不变；
  * `force` 绕过缓存（体检 / 用户刚装完后要看「现在」的默认）。
@@ -93,21 +93,6 @@ export async function effectiveDefaultBackend(opts?: { force?: boolean }): Promi
     defaultCache = DEFAULT_BACKEND_ID;
   }
   return defaultCache;
-}
-
-/**
- * 一个项目实际用哪个后端：显式选择优先，否则用有效默认（智能默认）。
- * 收敛全部 `p.backend ?? DEFAULT_BACKEND_ID` 的回退点 —— 未显式设的项目运行时
- * 按「有效默认」路由（design backend-detection.md §3.2 方案B：全局默认 + 项目继承）。
- */
-export async function backendForProject(
-  p: { backend?: string },
-  opts?: { force?: boolean },
-): Promise<string> {
-  // 显式选择优先——但 id 必须仍是已注册后端；指向已移除后端（如历史 claude-*）的旧
-  // 配置回退到有效默认，避免 createBackend 抛「未知后端」。
-  if (p.backend && catalogById(p.backend)) return p.backend;
-  return effectiveDefaultBackend(opts);
 }
 
 /** 一个 agent 家族下的全部后端可用性（picker 分组用）。 */
