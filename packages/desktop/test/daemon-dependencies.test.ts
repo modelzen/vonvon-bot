@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ChildProcess, spawn } from 'node:child_process';
+import { ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
@@ -7,7 +7,7 @@ import { PROTOCOL_VERSION } from '@vonvon/protocol';
 import { createDaemonDependencies, prepareDesktopRoot } from '../src/daemon-dependencies.js';
 import type { Registration } from '../src/daemon-manager.js';
 import { planStartupRepair } from '../src/login-item.js';
-import { readRunningPidLock } from '../../daemon/src/server/pid-lock.js';
+import { isPidLockOwnerRunning, readRunningPidLock } from '../../daemon/src/server/pid-lock.js';
 import { verifyPidLockOwner } from '../../daemon/src/server/owner-verification.js';
 import { toolDirectories } from '../../daemon/src/platform/tool-path.js';
 import { renderDefinition } from '../../daemon/src/service/definitions.js';
@@ -19,7 +19,7 @@ vi.mock('node:child_process', async importOriginal => ({
   ...await importOriginal<typeof import('node:child_process')>(),
   spawn: vi.fn(),
 }));
-vi.mock('../../daemon/src/server/pid-lock.js', () => ({ readRunningPidLock: vi.fn() }));
+vi.mock('../../daemon/src/server/pid-lock.js', () => ({ readRunningPidLock: vi.fn(), isPidLockOwnerRunning: vi.fn() }));
 vi.mock('../../daemon/src/server/owner-verification.js', () => ({ verifyPidLockOwner: vi.fn() }));
 vi.mock('../src/attach.js', () => ({ attachExisting: attach }));
 
@@ -53,6 +53,26 @@ afterEach(async () => {
 });
 
 describe('desktop daemon dependencies', () => {
+  it('s18g ownerRunning asks only whether the old process is alive', async () => {
+    vi.mocked(isPidLockOwnerRunning).mockReturnValue(true);
+    const previous = { pid: 12345, startedAt: owner.startedAt };
+    await expect(dependencies().ownerRunning(previous)).resolves.toBe(true);
+    expect(isPidLockOwnerRunning).toHaveBeenCalledExactlyOnceWith({ ...previous, listen: null });
+    expect(readRunningPidLock).not.toHaveBeenCalled();
+    vi.mocked(isPidLockOwnerRunning).mockReturnValue(false);
+    await expect(dependencies().ownerRunning(previous)).resolves.toBe(false);
+  });
+
+  it('s18g ownerRunning uses real process liveness without a PID lock file', async () => {
+    const actual = await vi.importActual<typeof import('../../daemon/src/server/pid-lock.js')>('../../daemon/src/server/pid-lock.js');
+    vi.mocked(isPidLockOwnerRunning).mockImplementation(actual.isPidLockOwnerRunning);
+    await expect(dependencies().ownerRunning({ pid: process.pid, startedAt: new Date().toISOString() })).resolves.toBe(true);
+    const child = spawnSync(process.execPath, ['-e', '']);
+    expect(child.pid).toBeTypeOf('number');
+    await expect(dependencies().ownerRunning({ pid: child.pid!, startedAt: new Date().toISOString() })).resolves.toBe(false);
+    expect(readRunningPidLock).not.toHaveBeenCalled();
+  });
+
   it('creates a fresh private root and refuses a symlink root', async () => {
     const parent = await realpath(await mkdtemp(join(tmpdir(), 'desktop-root-')));
     roots.push(parent);

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { API_KEY_SHAPE } from '@vonvon/protocol';
+import { API_KEY_SHAPE, KEY_FAILURE } from '@vonvon/protocol';
 import { catalogBackendIds } from '../agent/catalog';
 import { BackendNotInstalledError } from '../agent/backend-loader';
 import { ProviderProcessCleanupError } from '../agent/owned-process';
@@ -170,11 +170,11 @@ export function createJudge(deps: JudgeDeps): Judge {
       key = await readSecret(provider.keyId);
     } catch (error) {
       log.warn('judge', 'keystore-unreadable', { provider: provider.id, code: (error as { code?: unknown } | undefined)?.code ?? (error as Error | undefined)?.name });
-      throw new JudgeFail('failed', '密钥库读不了');
+      throw new JudgeFail('failed', KEY_FAILURE.unreadable);
     }
-    if (!key) throw new JudgeFail('key', `没填 ${provider.displayName} 的 key`);
+    if (!key) throw new JudgeFail('key', KEY_FAILURE.missing(provider.displayName));
     // anything else would make fetch throw an error that quotes the header, key and all
-    if (!API_KEY_SHAPE.test(key)) throw new JudgeFail('key', `${provider.displayName} 的 key 不是一串可见字符，重新填一次`);
+    if (!API_KEY_SHAPE.test(key)) throw new JudgeFail('key', KEY_FAILURE.invalid(provider.displayName));
     return key;
   }
 

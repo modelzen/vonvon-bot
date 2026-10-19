@@ -53,7 +53,8 @@ const globalGroups: readonly {page: Page; section: string; fields: readonly Targ
   {page: 'environment', section: '本机环境', fields: [item('重新检测'), ...['安装后端', '检查后端版本', '更新后端', '卸载后端'].map(title => item(title, ['Claude Agent SDK', '托管后端'], {field: '', guide: '在本机环境的后端条目里操作；能用哪些按钮看安装状态。'}))]},
   ...(['Codex', 'Claude', '飞书 CLI'] as const).map((section, index) => ({page: 'environment' as const, section: toolNames[(['codex', 'claude', 'lark-cli'] as const)[index]!], fields: ['安装', '更新', '登录', '检查授权', '重新登录', '安装托管副本', '重新安装最新版', '停用托管副本', '安装来源', '安装位置', '当前版本', '托管版本', '最新版本', '授权状态', ...(section === 'Codex' ? ['后端状态', '后端版本'] : []), ...(section === '飞书 CLI' ? ['当前账号配置'] : [])].map(title => item(`${title} ${section}`, [title, ...(formerly[title] ? [formerly[title]] : [])], {field: title, reveal: (['codex-tool', 'claude-tool', 'lark-tool'] as const)[index], guide: ['安装来源', '安装位置', '当前版本', '托管版本', '最新版本', '授权状态', '后端状态', '后端版本', '当前账号配置'].includes(title) ? undefined : '此操作是否可用取决于本机工具的安装与授权状态。'}))})),
   {page: 'environment', section: '飞书 CLI 账号配置', fields: [item('管理飞书 CLI', ['管理账号配置', '切换账号配置', 'Profile'], {reveal: 'profile-manager'}), item('添加已有应用', ['添加账号配置', '添加 Profile'], {reveal: 'profile-add'}), item('创建新应用', ['创建账号配置', '创建 Profile'], {reveal: 'profile-create'}), ...['账号配置名称', 'App ID', 'App Secret', '平台', '添加后设为当前'].map(title => item(title, ['飞书应用'], {reveal: 'profile-add'})), item('设为当前', ['切换账号配置', '切换飞书 Profile'], {reveal: 'profile-manager'})]},
-  {page: 'diagnostics', section: '这台电脑', fields: [item('daemon 版本'), item('重新检查'), item('最近读取'), item('数据目录')]},
+  {page: 'secrets', section: '决策模型', fields: [item('TypeSafe 的 key', ['填 key', '换 key', '删除 key', '试一次', 'Jev', 'typesafe-api-key']), item('谁在用')]},
+  {page: 'diagnostics', section: '这台电脑', fields: [item('daemon 版本'), item('重新检查'), item('决策模型的 key', ['没填 key']), item('最近读取'), item('数据目录')]},
   {page: 'diagnostics', section: 'daemon 日志', fields: [item('刷新日志'), item('持续跟随'), item('daemon 日志')]},
 ];
 function expand(id: string, context: string, base: Destination, groups: readonly Group[], pane: DetailPane): SearchEntry[] {
@@ -73,6 +74,7 @@ export function searchEntries(snapshot: DesktopSnapshot): SearchEntry[] {
     {id: 'usage', title: 'Codex 用量', aliases: ['账号', '套餐', '限额', '活动', '热力图'], page: 'usage'},
     {id: 'environment', title: '本机环境', aliases: ['工具', '安装', '授权'], page: 'environment'},
     {id: 'application', title: '应用与启动', aliases: ['版本', '更新', '后台服务'], page: 'application'},
+    {id: 'secrets', title: '密钥', aliases: ['key', 'API key', 'TypeSafe', 'Jev', '决策模型'], page: 'secrets'},
     {id: 'diagnostics', title: '状态与诊断', aliases: ['日志', '数据目录', '连接', '没回的消息', '缺的权限'], page: 'diagnostics'},
   ];
   const entries: SearchEntry[] = pages.map(page => ({id: page.id, title: page.title, context: '页面', aliases: page.aliases, destination: {page: page.page, view: page.view, selection: page.view ? {kind: 'overview'} : undefined}, kind: 'page'}));
@@ -108,7 +110,7 @@ export function searchEntries(snapshot: DesktopSnapshot): SearchEntry[] {
 }
 export function findEntries(entries: readonly SearchEntry[], query: string): SearchEntry[] {
   const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
-  if (!terms.length) return ['agents', 'groups', 'usage', 'environment', 'application', 'diagnostics'].flatMap(id => entries.find(entry => entry.id === id) ?? []);
+  if (!terms.length) return ['agents', 'groups', 'usage', 'environment', 'application', 'secrets', 'diagnostics'].flatMap(id => entries.find(entry => entry.id === id) ?? []);
   const rank = (entry: SearchEntry) => {
     const title = entry.title.toLocaleLowerCase();
     const needle = terms.join(' ');

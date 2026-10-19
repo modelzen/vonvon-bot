@@ -66,6 +66,7 @@ vi.mock('../src/service/startup', () => ({ readStartupRegistration: async () => 
 vi.mock('../src/agent/owned-process', () => ({
   closeOwnedProviderProcesses: fixture.registryClose,
   unconfirmedProviderPids: fixture.registryPids,
+  registeredProviderPids: fixture.registryPids,
 }));
 vi.mock('../src/agent', () => ({ installBackendDep() {}, uninstallBackendDep() {} }));
 vi.mock('../src/bot/bridge', () => ({ startBridge: fixture.startBridge }));
