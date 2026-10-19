@@ -7,6 +7,7 @@ import type { AgentEvent, AgentInput, AgentRun, AskRequest } from '../src/agent/
 import type { AppConfig } from '../src/config/schema';
 import type { DroppedOrigin } from '../src/bot/restart-dropped';
 import type { DiagnosticsEvent } from '../src/bot/diagnostics';
+import { writeNodeExecutable } from './helpers/node-executable';
 
 const fake = vi.hoisted(() => ({
   askCreate: vi.fn(async (_input: unknown): Promise<unknown> => ({ data: { card_id: 'ask-entity' } })),
@@ -654,4 +655,115 @@ it('a steer card created while an ask is answered renders the current waiting st
   await until(() => expect(fake.live.mock.calls.slice(afterAnswer).some(args => JSON.stringify(args).includes('steer-card'))).toBe(true));
   expect(JSON.stringify(fake.live.mock.calls.slice(afterAnswer))).not.toContain('回答（见下方卡片）');
   run.turns[0]!.resolve();
+});
+
+it('goal child events before and between parent turns never create an empty card', async () => {
+  const between = deferred<void>();
+  const resume = deferred<void>();
+  const childEvents: AgentEvent[] = [
+    { type: 'subagent_start', id: 'child', name: '助手', task: '工作', stoppable: true },
+    { type: 'subagent_step', id: 'child', stepId: 'step', title: '读取', status: 'running' },
+    { type: 'subagent_status', id: 'child', status: 'completed' },
+  ];
+  const run = thread();
+  const goal = Object.assign(run.t, {
+    clearGoal: vi.fn(async () => {}),
+    close: vi.fn(async () => { resume.resolve(); }),
+    runGoal: () => ({ turnId: () => 'goal', events: (async function* (): AsyncGenerator<AgentEvent> {
+      yield* childEvents;
+      yield { type: 'turn_started', turnId: 'first' };
+      yield { type: 'text', itemId: 'first', text: '第一轮' };
+      yield { type: 'done', turnId: 'first' };
+      yield* childEvents;
+      between.resolve();
+      await resume.promise;
+      yield { type: 'turn_started', turnId: 'second' };
+      yield { type: 'text', itemId: 'second', text: '第二轮' };
+      yield { type: 'done', turnId: 'second' };
+      yield { type: 'goal_update', status: 'complete', objective: 'work', tokensUsed: 1, timeUsedSeconds: 1, tokenBudget: null };
+    })() }),
+  });
+  fake.backend.resumeThread.mockResolvedValue(goal);
+  const o = setup({ droppedFile: false });
+  await o.onMessage(message('/goal work'));
+  await between.promise;
+  expect(fake.createCard).toHaveBeenCalledTimes(1);
+  expect(fake.log.info.mock.calls.filter(args => args[0] === 'agent' && args[1] === 'subagent')).toEqual([]);
+  resume.resolve();
+  await until(() => expect(fake.log.info).toHaveBeenCalledWith('card', 'goal-final', expect.anything()));
+  expect(fake.createCard).toHaveBeenCalledTimes(2);
+});
+
+it.each(['ordinary', 'goal'] as const)('%s logs actual child transitions, including fatal error closure', async mode => {
+  const childEvents: AgentEvent[] = [
+    { type: 'subagent_status', id: 'unknown', status: 'completed' },
+    { type: 'subagent_start', id: 'child-123456', name: '助手', task: '秘密任务', stoppable: true },
+    { type: 'subagent_start', id: 'child-123456', name: '助手', task: '重复', stoppable: true },
+    { type: 'subagent_step', id: 'child-123456', stepId: 'step', title: '读取', status: 'running' },
+    { type: 'subagent_status', id: 'child-123456', status: 'failed' },
+    { type: 'subagent_status', id: 'child-123456', status: 'completed' },
+    { type: 'subagent_start', id: 'child-654321', name: '助手', task: '秘密任务', stoppable: true },
+    { type: 'error', message: '进程失败', willRetry: false },
+  ];
+  const run = thread({ events: childEvents });
+  const goal = Object.assign(run.t, {
+    clearGoal: vi.fn(async () => {}),
+    runGoal: () => ({ turnId: () => 'goal', events: (async function* (): AsyncGenerator<AgentEvent> {
+      yield { type: 'turn_started', turnId: 'goal' };
+      yield { type: 'text', itemId: 'answer', text: '开始' };
+      yield* childEvents;
+    })() }),
+  });
+  fake.backend.resumeThread.mockResolvedValue(goal);
+  const o = setup({ droppedFile: false });
+  await o.onMessage(message(mode === 'goal' ? '/goal work' : 'work'));
+  await until(() => expect(fake.log.info.mock.calls.filter(args => args[0] === 'agent' && args[1] === 'subagent')).toHaveLength(4));
+  expect(fake.log.info.mock.calls.filter(args => args[0] === 'agent' && args[1] === 'subagent')).toEqual([
+    ['agent', 'subagent', { id: '123456', status: 'start', steps: 0 }],
+    ['agent', 'subagent', { id: '123456', status: 'failed', steps: 1 }],
+    ['agent', 'subagent', { id: '654321', status: 'start', steps: 0 }],
+    ['agent', 'subagent', { id: '654321', status: 'failed', steps: 0 }],
+  ]);
+  run.turns.forEach(turn => turn.resolve());
+  await until(() => expect(fake.final).toHaveBeenCalled());
+  expect(fake.log.info.mock.calls.filter(args => args[0] === 'agent' && args[1] === 'subagent')).toHaveLength(4);
+});
+
+it('a resumed goal ignores a null-turn old complete snapshot before its real turn and failure summary', async () => {
+  const { bin } = writeNodeExecutable(root, 'goal-server', `
+const send = obj => process.stdout.write(JSON.stringify({jsonrpc:'2.0',...obj})+'\\n');
+const event = (method,params) => send({method,params});
+require('node:readline').createInterface({input:process.stdin}).on('line',line => {
+  const msg = JSON.parse(line);
+  if (typeof msg.id !== 'number') return;
+  send({id:msg.id,result:msg.method === 'thread/resume' ? {thread:{id:'host'}} : {}});
+  if (msg.method === 'thread/goal/set') {
+    event('thread/goal/updated',{threadId:'host',turnId:null,goal:{objective:msg.params.objective,
+      status:'complete',tokensUsed:9001,timeUsedSeconds:999,tokenBudget:null}});
+    event('turn/started',{threadId:'host',turn:{id:'fresh'}});
+    event('item/agentMessage/delta',{threadId:'host',turnId:'fresh',itemId:'answer',delta:'真实新回合'});
+    event('error',{threadId:'host',turnId:'fresh',willRetry:false,error:{message:'新回合失败'}});
+  }
+});
+`);
+  vi.stubEnv('CODEX_BIN', bin);
+  const { CodexAppServerBackend } = await import('../src/agent/codex-appserver/backend');
+  const actual = await new CodexAppServerBackend().resumeThread({ cwd: root, sessionId: 'host' });
+  fake.backend.resumeThread.mockResolvedValue(actual);
+  const o = setup({ droppedFile: false });
+  try {
+    await o.onMessage(message('/goal work'));
+    await until(() => expect(fake.log.info).toHaveBeenCalledWith('card', 'goal-final', { status: 'error', tokens: 0, seconds: 0 }));
+    expect(fake.createCard).toHaveBeenCalledTimes(1);
+    const summaries = fake.askCreate.mock.calls.map(([input]) => JSON.stringify(input)).filter(card => card.includes('目标已中止'));
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toContain('新回合失败');
+    expect(summaries[0]).toContain('用量　0 tokens');
+    expect(summaries[0]).not.toContain('9,001');
+  } finally {
+    await o.shutdown();
+    await actual.close();
+    const { shutdownResidentClients } = await import('../src/agent/codex-appserver/client-pool');
+    await shutdownResidentClients();
+  }
 });

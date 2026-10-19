@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
+import { withIdleTimeout } from '../src/bot/watchdog';
 import { CodexAppServerBackend } from '../src/agent/codex-appserver/backend';
 import { shutdownResidentClients } from '../src/agent/codex-appserver/client-pool';
 import { writeNodeExecutable } from './helpers/node-executable';
@@ -23,8 +24,12 @@ process.stdin.on('data', (d) => {
     if (typeof msg.id !== 'number') continue; // notification — ignore
     if (msg.method === 'turn/start') {
       send({ jsonrpc: '2.0', id: msg.id, result: { turn: { id: 't1' } } });
+      const child = msg.params.input[0].text === 'children';
+      if (child) send({jsonrpc:'2.0',method:'thread/started',params:{thread:{id:'child',source:{subagent:{thread_spawn:{
+        parent_thread_id:'th_live',depth:1,agent_path:null,agent_nickname:null,agent_role:null
+      }}}}}});
       setInterval(() => {
-        send({ jsonrpc: '2.0', method: 'item/commandExecution/outputDelta', params: { threadId: 'th_live', turnId: 't1', itemId: 'i1', delta: 'x' } });
+        send({ jsonrpc: '2.0', method: 'item/commandExecution/outputDelta', params: { threadId: child ? 'child' : 'th_live', turnId: 't1', itemId: 'i1', delta: 'x' } });
       }, 20);
       continue;
     }
@@ -68,4 +73,28 @@ describe('runStreamed 原始通知刷新 lastActivity（QW-5）', () => {
       else process.env.CODEX_BIN = prev;
     }
   });
+});
+
+
+it('child-only output keeps the parent watchdog alive', async () => {
+  const previous = process.env.CODEX_BIN;
+  process.env.CODEX_BIN = bin;
+  const thread = await new CodexAppServerBackend().startThread({ cwd: dir });
+  try {
+    const run = thread.runStreamed({ text: 'children' });
+    const before = run.lastActivity?.() ?? 0;
+    const timedOut = vi.fn();
+    const drained = (async () => {
+      for await (const event of withIdleTimeout(run.events, 300, timedOut, undefined, run.lastActivity)) void event;
+    })();
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    expect(timedOut).not.toHaveBeenCalled();
+    expect(run.lastActivity?.()).toBeGreaterThan(before);
+    await thread.close();
+    await drained;
+  } finally {
+    await thread.close();
+    if (previous === undefined) delete process.env.CODEX_BIN;
+    else process.env.CODEX_BIN = previous;
+  }
 });
