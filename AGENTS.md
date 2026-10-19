@@ -40,8 +40,8 @@ owner 2026-10-19 定（Claude 的周额度用到一半）：从 s27a 起，新�
   - 没有在做的任务时，只有 Claude push，只限两件事：把 `main` merge 进来，以及合入前的同步。push 前先看 #322：这个分支没有开始了却还没有结果的任务。
   - `codex/fix-*` 照旧。
 - **在飞：**
-  - 在飞产品 PR 照旧最多两个。计数加上 `codex/<片>` 开发 PR（2026-10-19 以后开的；`codex/fix-*` 和 10-14 以前开的旧 `codex/*` PR 不算）。
-  - Claude 贴开发任务时（#322 或 #422），已贴出、还没开出 PR 的开发任务也算一个，总数不超过两个。Codex 开 PR 时不用再数。
+  - 在飞产品 PR 最多四个（owner 2026-10-19 从两个放宽，两台 Codex 都不闲着）。计数加上 `codex/<片>` 开发 PR（2026-10-19 以后开的；`codex/fix-*` 和 10-14 以前开的旧 `codex/*` PR 不算）。
+  - Claude 贴开发任务时（#322 或 #422），已贴出、还没开出 PR 的开发任务也算一个，总数不超过四个。Codex 开 PR 时不用再数。
 - **Mac 检查：**
   - #322 有活着的队列会话时，Mac 上的检查也贴进 #322，不开 Paseo 会话，免得两个会话抢 Computer Use。
   - Codex 写的片，Mac 上的验收在开发任务里一起做，不另开检查。
@@ -69,7 +69,7 @@ owner 2026-10-19 定（Claude 的周额度用到一半）：从 s27a 起，新�
 
 ## 一个 PR 的流程
 
-1. Claude 从 `main` 开 `claude/<切片>` 分支。开产品 PR 时，把复查在飞产品 PR 数和创建 PR 放进同一个 `flock /tmp/vonvon-pr-slot.lock` 里执行，数到两个就不开。实现，跑 JP-VPS 上的检查，push。
+1. Claude 从 `main` 开 `claude/<切片>` 分支。开产品 PR 时，把复查在飞产品 PR 数和创建 PR 放进同一个 `flock /tmp/vonvon-pr-slot.lock` 里执行，数到四个就不开。实现，跑 JP-VPS 上的检查，push。
 2. 由另一个模型的子代理做独立审查，结论写进 PR 评论。改动涉及子进程、并发、关闭或清理顺序、错误路径、macOS 原生代码、数据迁移或合入门禁（CI 和本文的规则）时，再加一轮多角度审查。每条发现先复现或驳回，再改。
 3. 有桌面专属项时，Claude 把 Mac 检查的提示词贴进 PR，再按"工具和同步"开一个检查任务。Mac 检查只在没带 `frozen` 的 PR 上发起。Codex 改了代码，它的改动回到第 2 步审查；审查后如果改动碰到桌面行为，Claude 再贴一份检查提示词和一个新任务。做不了的项，在 PR 里记为"待 owner 验收"。
 4. 审查和 Mac 检查都完成后，Claude 打 `frozen`，等 `linux` 和 `macOS checks` 在准确 head 上都显示成功。合入规则只强制 `linux`，`macOS checks` 由 Claude 用 `gh pr checks` 确认；它显示跳过、排队或 runner 离线都不算通过，这时通知 owner。打了 `frozen` 之后还要 push，先去掉 `frozen`，push 后让改动回到第 2 步，再重新打。去掉 `frozen` 后再加任何标签，`linux` 都会变红，重新打 `frozen` 才恢复。合入规则要求分支和 `main` 同步，所以冻结后 `main` 前进了，要先把 `main` merge 进分支，这也算一次 push，按同样的步骤走。
@@ -85,7 +85,7 @@ owner 2026-10-19 定（Claude 的周额度用到一半）：从 s27a 起，新�
   - 经 Paseo 的任务：会话贴出了结果；或者 Claude 用 `paseo stop` 停下会话，`paseo inspect` 确认它已经不在运行。停下的会话可能已经推过：Claude 先 pull，多出来的提交按"一个 PR 的流程"第 2 步审查，这次检查的结论作废，还要查就开一个新任务。连不上 Mac 的 daemon、确认不了会话停没停时（比如 Mac 睡着了），Claude 在提示词所在的地方贴一条第一行是 `<!-- claude-mac-cancel:<任务号> -->` 的取消，通知 owner；等 daemon 连上后 `paseo stop` 加 `paseo inspect` 确认，或者 owner 确认 Mac 上没有这个会话在跑，才 push。Codex 开始任务前、每次 push 前、替换装好的 app 前都看一次有没有这条取消，有就停下，贴结果写明停在哪一步。这几处要看取消写在每份提示词里，不靠 Mac 上那份可能过时的 AGENTS.md。
   - 经 #322 的任务：下面三件事有一件发生：这个任务的结果贴出了；Claude 在它开始之前取消了它，也就是取消贴出后再看一次，#322 里没有比这条取消更早贴的这个任务的开始评论；Claude 按"工具和同步"通知 owner 后，owner 确认 Mac 上没有会话在处理 #322；这时这个任务还没取消的，Claude 先贴取消再 push，免得睡着的 Mac 醒来后旧会话接着推。开始以后才取消的，仍要等结果或 owner 确认。什么时候通知 owner，见"工具和同步"里"转发一次，做完一批"的第 4 条。还要做这次检查，Claude 先取消旧任务，再贴一份新的提示词和一个新任务，按"工具和同步"请 owner 转发。
 - 除了 `frozen`，不给 PR 加别的标签。每次加标签都会按 PR 当时的标签重跑 CI，PR 已带 `frozen` 时会再跑一遍完整平台链。
-- 产品 PR 同时在飞最多两个，第三个要等一个合入。计数方法：开放、非 draft、head 分支以 `claude/` 开头（2026-10-19 起还有 `codex/<片>` 开发分支，见"2026-10-19 起"）、改动里有 `.github/`、`scripts/`、`AGENTS.md`、`docs/` 和其他 Markdown 以外文件的 PR，再去掉暂停的 #281 和 #285。所以纯文档 PR 和只改 CI、脚本、规则的流程 PR 不计；dependabot PR 和 Codex 的 `codex/fix-*` 修复 PR 不计。修复 PR 由 Claude 优先审查和合入。本规则生效前开的 PR 全部暂停：#281（V6b 的 Codex 子进程迁移）、#285（V5 的启动路由），以及 `codex/` 分支上的 #110（V5 的桌面外壳）等。它们的去留在 `docs/product.md` 定稿时由 owner 决定。
+- 产品 PR 同时在飞最多四个（2026-10-19 起，原来是两个），第五个要等一个合入。计数方法：开放、非 draft、head 分支以 `claude/` 开头（2026-10-19 起还有 `codex/<片>` 开发分支，见"2026-10-19 起"）、改动里有 `.github/`、`scripts/`、`AGENTS.md`、`docs/` 和其他 Markdown 以外文件的 PR，再去掉暂停的 #281 和 #285。所以纯文档 PR 和只改 CI、脚本、规则的流程 PR 不计；dependabot PR 和 Codex 的 `codex/fix-*` 修复 PR 不计。修复 PR 由 Claude 优先审查和合入。本规则生效前开的 PR 全部暂停：#281（V6b 的 Codex 子进程迁移）、#285（V5 的启动路由），以及 `codex/` 分支上的 #110（V5 的桌面外壳）等。它们的去留在 `docs/product.md` 定稿时由 owner 决定。
 - 一个 PR 对应一个切片，大小以一个审查子代理能读完整个 diff 为准。不含 lockfile 和生成文件时，以 1500 行改动为上限，超过就先拆。只删死样式（CSS）的纯删除 PR 例外，可以超过：diff 里只有删除的行，没有新增或改动的行，按文件一片；独立审查和 `frozen` 照旧，审查者用脚本和前后截图核，不逐行读（owner 2026-10-18 同意，见 `docs/research/2026-10-18-ui-foundation/report.md` 的 D7）。
 - 每个功能分支在每台机器上只有一棵 worktree，合入即删。GitHub 在合入时自动删除远端分支。Mac 上的 Codex 每做一个任务，自己建一棵 detach 的临时 worktree：经 Paseo 的，留到 Claude 归档会话前让它删；经 #322 的，留到整个队列结束时再删。开 `codex/fix-*` PR 的 Codex 会话，push 完、PR 开好就删掉它的 Mac worktree，之后的修改走修复任务。
 - 进度看 `docs/v1-plan.md` 里的清单、PR 状态，以及 Claude 会话里的里程碑消息。issue #122 看板和 `docs/program-graph.json` 停止更新。不做本地进度页、会话映射文件或定时刷新。
