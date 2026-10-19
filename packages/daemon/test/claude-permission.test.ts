@@ -103,9 +103,9 @@ it('uses directory identity for case aliases and propagates errors', async () =>
 });
 it('resolves real filesystem paths, aliases, missing suffixes and dangling links', async () => {
   const dir = await mkdtemp(join(tmpdir(), 's31-path-')); dirs.push(dir);
-  const work = join(dir, 'Work'); const outside = join(dir, 'work');
+  const work = join(dir, 'Work'); const outside = join(dir, 'outside');
   await mkdir(work); await mkdir(join(outside, 'sub'), { recursive: true });
-  await symlink(work, join(dir, 'wORK'));
+  await symlink(work, join(dir, 'workspace-alias'));
   await symlink(join(outside, 'sub'), join(work, 'link'));
   await symlink(join(outside, 'new.txt'), join(work, 'dl'));
   await symlink(join(outside, 'nodir'), join(work, 'dd'));
@@ -114,9 +114,30 @@ it('resolves real filesystem paths, aliases, missing suffixes and dangling links
   for (const path of [join(outside, 'f'), `${work}/link/../x`, `${work}/new/../x`, `${work}/dl`, `${work}/dd/sub/f`]) {
     expect(await decide(a, call('Write', { file_path: path }), 'callback')).toMatchObject({ kind: 'deny', message: expect.stringContaining('工作区以外') });
   }
-  for (const path of [join(dir, 'wORK/f'), `${work}/new/f`, `${work}/new2/f`]) expect(await decide(a, call('Write', { file_path: path }), 'callback')).toEqual({ kind: 'allow' });
+  for (const path of [join(dir, 'workspace-alias/f'), `${work}/new/f`, `${work}/new2/f`]) expect(await decide(a, call('Write', { file_path: path }), 'callback')).toEqual({ kind: 'allow' });
   await expect(decide(a, call('Write', { file_path: `${work}/loop/f` }), 'callback')).rejects.toMatchObject({ code: 'ELOOP' });
   await expect(fsAccess(join(outside, 'new.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
   const native = await import('node:fs/promises');
   expect(await resolveReal('new/f', work, native)).toBe(`${work}/new/f`);
+});
+
+it('checks case identities according to the actual filesystem', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 's31-case-')); dirs.push(dir);
+  const work = join(dir, 'Work'); const lower = join(dir, 'work');
+  await mkdir(work);
+  const caseSensitive = await mkdir(lower).then(() => true, (error: unknown) => {
+    if (error instanceof Error && 'code' in error && error.code === 'EEXIST') return false;
+    throw error;
+  });
+  const native = await import('node:fs/promises');
+  const root = await native.stat(work); const sibling = await native.stat(lower);
+  expect(root.dev === sibling.dev && root.ino === sibling.ino).toBe(!caseSensitive);
+  const a = claudeAccess('write', false, work, work);
+  expect(await decide(a, call('Write', { file_path: join(lower, 'f') }), 'callback'))
+    .toMatchObject(caseSensitive ? { kind: 'deny', message: expect.stringContaining('工作区以外') } : { kind: 'allow' });
+  expect(await within(work, join(lower, 'new/f'), native)).toBe(!caseSensitive);
+  if (caseSensitive) {
+    await symlink(work, join(dir, 'wORK'));
+    expect(await decide(a, call('Write', { file_path: join(dir, 'wORK/f') }), 'callback')).toEqual({ kind: 'allow' });
+  }
 });
