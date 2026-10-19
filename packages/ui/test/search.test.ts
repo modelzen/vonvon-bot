@@ -108,3 +108,11 @@ test('words the 叫法表 retired still find the renamed fields', () => {
   assert.equal(findEntries(entries, '当前 Profile')[0]?.title, '当前账号配置 飞书 CLI');
   assert.ok(findEntries(entries, '机器人').some(entry => entry.id === 'agents'));
 });
+
+
+test('s28a: judge models and interruptions lead to the group settings', () => {
+  const judge = findEntries(entries, '判断模型')[0];
+  assert.equal(judge?.destination.detail?.kind, 'membership-settings');
+  assert.equal(judge?.destination.section, '判断模型');
+  assert.ok(findEntries(entries, '插话').some(entry => entry.destination.detail?.kind === 'membership-settings' && entry.destination.section === '运行中来了消息'));
+});
