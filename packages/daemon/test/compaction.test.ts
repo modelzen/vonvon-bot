@@ -1,3 +1,4 @@
+import { claudeAccess } from '../src/agent/claude-agent/permission';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { mapNotification } from '../src/agent/codex-appserver/event-map';
@@ -142,7 +143,7 @@ describe('Claude compaction line and meter, through the real thread and mapper',
   it('forces auto-compaction on, and shows the line and a moving meter', async () => {
     let options: Options | undefined;
     const thread = new ClaudeAgentThread({
-      sessionId: 's', resume: false, cwd: process.cwd(), permission: {}, settingSources: [],
+      sessionId: 's', resume: false, cwd: process.cwd(), access: claudeAccess(undefined, undefined, process.cwd(), process.cwd()), permission: {}, settingSources: [],
       query: ({ prompt, options: given }) => {
         options = given;
         return Object.assign((async function* () { for await (const _ of prompt) yield* turn; })(), {
@@ -180,7 +181,7 @@ describe('Claude compaction line and meter, through the real thread and mapper',
       m({ type: 'result', subtype: 'success', is_error: false, result: 'ok', session_id: 's', usage: { input_tokens: 0, output_tokens: 0 } }),
     ];
     const thread = new ClaudeAgentThread({
-      sessionId: 's', resume: false, cwd: process.cwd(), permission: {}, settingSources: [],
+      sessionId: 's', resume: false, cwd: process.cwd(), access: claudeAccess(undefined, undefined, process.cwd(), process.cwd()), permission: {}, settingSources: [],
       query: ({ prompt }) => Object.assign((async function* () { for await (const _ of prompt) yield* firstTurn; })(), {
         getContextUsage: async () => ({ totalTokens: 160_000, maxTokens: 1_000_000 }),
         interrupt: async () => {}, close: () => {},
