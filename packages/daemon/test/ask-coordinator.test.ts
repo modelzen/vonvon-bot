@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import type { AgentRun, AskRequest } from '../src/agent/types';
 import type { AppConfig } from '../src/config/schema';
@@ -27,7 +27,9 @@ function fixture() {
   const reply = vi.fn(async (input: { data: { msg_type: string } }) => ({ data: { message_id: input.data.msg_type === 'interactive' ? `msg-${counter}` : 'mention' } }));
   const update = vi.fn(async (_input: unknown) => ({}));
   const send = vi.fn(async () => ({}));
-  const channel = { send, rawClient: { cardkit: { v1: { card: { create, update } } }, im: { v1: { message: { reply } } } } };
+  let dmCounter = 0;
+  const messageCreate = vi.fn(async (_input: unknown) => ({ data: { message_id: `dm-${++dmCounter}` } }));
+  const channel = { send, rawClient: { cardkit: { v1: { card: { create, update } } }, im: { v1: { message: { reply, create: messageCreate } } } } };
   const cfg: AppConfig = { accounts: { app: { id: 'fixture', secret: 'fixture', tenant: 'feishu' } }, preferences: { access: { ownerOpenId: 'owner', admins: ['admin'] } } };
   const coordinator = new AskCoordinator(channel as unknown as LarkChannel, cfg, { peek: id => `name-${id}` });
   const response = vi.fn<NonNullable<AgentRun['respondToAsk']>>(async () => {});
@@ -40,7 +42,7 @@ function fixture() {
     value: { a: 'ask_submit', requestId: id, decision: 'proceed' }, formValue: undefined, ...extra });
   const typed = (place = 'session', senderId = 'starter', text = '我的回答', chatId = 'chat', createTime = Date.now(),
     senderKind: 'user' | 'bot' | 'unknown' = 'user') => coordinator.typed({ place, senderId, text, chatId, createTime, senderKind });
-  return { coordinator, channel, cfg, create, update, reply, send, response, run, pause, waiting, fault, open, submit, typed };
+  return { coordinator, channel, cfg, messageCreate, create, update, reply, send, response, run, pause, waiting, fault, open, submit, typed };
 }
 const flush = async () => { for (let n = 0; n < 12; n++) await Promise.resolve(); };
 afterEach(() => { vi.useRealTimers(); });
@@ -377,4 +379,169 @@ it('retires queued asks too when provider completion wins before the next promot
   expect(f.typed()).toBe('none'); await flush();
   expect(f.create).toHaveBeenCalledOnce(); expect(f.response).not.toHaveBeenCalled();
   expect(f.pause.held).toBe(false); turn.close('turn-ended');
+});
+
+function sensitive(id = 'secret'): Extract<AskRequest, { kind: 'choices' }> {
+  return { ...choices(id), questions: [{ id: 'secret-q', title: '密码', detail: '', selection: 'text', sensitive: true }] };
+}
+function dmInput(openId = 'starter', text = '机密答案', createTime = Date.now()) {
+  return { openId, text, messageId: 'typed-dm', createTime };
+}
+function secretSubmission(id = 'secret', text = '机密答案') {
+  return { value: { a: 'ask_submit', requestId: id, decision: 'submit' }, formValue: { q0: text }, chatId: 'p2p-chat' };
+}
+
+describe('s33b sensitive DM coordination', () => {
+  it('sends every eligible recipient a DM, rejects forged group/cross-recipient clicks, and hides the winning answer', async () => {
+    const info = vi.spyOn(log, 'info').mockImplementation(() => {});
+    try {
+      const f = fixture(); const turn = f.open(); turn.enqueue(sensitive()); await flush();
+      expect(f.create).toHaveBeenCalledTimes(4);
+      expect(f.create.mock.calls[0]).toEqual([expect.objectContaining({ data: expect.objectContaining({ data: expect.not.stringContaining('\"tag\":\"form\"') }) })]);
+      expect(f.messageCreate.mock.calls).toEqual(['owner', 'admin', 'starter'].map(receive_id => [expect.objectContaining({ params: { receive_id_type: 'open_id' }, data: expect.objectContaining({ receive_id, msg_type: 'interactive' }) })]));
+      expect(f.typed()).toBe('sensitive');
+      expect(f.submit('secret', 'msg-1', 'starter', { ...secretSubmission(), chatId: 'chat' })).toBe('invalid');
+      expect(f.submit('secret', 'msg-1', 'starter', { ...secretSubmission(), chatId: 'chat' })).toBe('invalid');
+      expect(f.send).toHaveBeenCalledOnce();
+      expect(JSON.stringify(f.send.mock.calls)).toContain('私聊');
+      expect(f.submit('secret', 'dm-1', 'starter', secretSubmission())).toBe('denied');
+      expect(f.send).toHaveBeenCalledOnce();
+      expect(f.submit('secret', 'dm-3', 'starter', secretSubmission())).toBe('accepted'); await flush();
+      expect(f.response).toHaveBeenCalledExactlyOnceWith('secret', { kind: 'answered', answer: { kind: 'choices', answers: [{ questionId: 'secret-q', text: '机密答案' }] } });
+      expect(f.update).toHaveBeenCalledTimes(4);
+      const edits = JSON.stringify(f.update.mock.calls);
+      expect(edits).toContain('已在私聊里回答'); expect(edits).toContain('已由 name-starter 回答'); expect(edits).toContain('已提交');
+      for (const calls of [f.create.mock.calls, f.update.mock.calls, f.send.mock.calls, f.messageCreate.mock.calls, f.reply.mock.calls, info.mock.calls]) expect(JSON.stringify(calls)).not.toContain('机密答案');
+      expect(f.coordinator.dmText(dmInput())).toBe(false); expect(f.submit('secret', 'dm-1', 'owner', secretSubmission())).toBe('inactive');
+      turn.close('turn-ended');
+    } finally { info.mockRestore(); }
+  });
+
+  it('accepts only a visible, current DM and trims/truncates text without logging the answer or recipient', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-19T00:00:00Z'));
+    const info = vi.spyOn(log, 'info').mockImplementation(() => {});
+    try {
+      const f = fixture(); expect(f.coordinator.dmText(dmInput())).toBe(false);
+      const held = deferred<{ data: { message_id: string } }>();
+      f.messageCreate.mockReturnValueOnce(held.promise);
+      const turn = f.open(); turn.enqueue(sensitive()); await flush();
+      expect(f.coordinator.dmText(dmInput('owner'))).toBe(false);
+      await vi.advanceTimersByTimeAsync(1000); held.resolve({ data: { message_id: 'late-owner' } }); await flush();
+      expect(f.coordinator.dmText(dmInput('owner', 'old', Date.now() - 1))).toBe(false);
+      expect(f.coordinator.dmText({ openId: 'owner', text: 'missing timestamp', messageId: 'old' })).toBe(false);
+      expect(f.coordinator.dmText(dmInput('owner', ' \n '))).toBe(false);
+      const answer = '机'.repeat(4001);
+      expect(f.coordinator.dmText(dmInput('owner', ` ${answer} `))).toBe(true); await flush();
+      expect(f.response).toHaveBeenCalledExactlyOnceWith('secret', { kind: 'answered', answer: { kind: 'text', text: '机'.repeat(4000) } });
+      expect(info).toHaveBeenCalledWith('card', 'ask-dm-typed', { len: 4000 });
+      for (const calls of [f.create.mock.calls, f.update.mock.calls, f.send.mock.calls, f.messageCreate.mock.calls, info.mock.calls]) expect(JSON.stringify(calls)).not.toContain(answer.slice(0, 100));
+      expect(JSON.stringify(info.mock.calls.filter(([, event]) => event === 'ask-dm-typed'))).not.toContain('owner');
+      turn.close('stopped'); expect(vi.getTimerCount()).toBe(0);
+    } finally { info.mockRestore(); }
+  });
+
+  it('deduplicates multiple-question guidance and rechecks authorization before counting waiting DMs', async () => {
+    const f = fixture(); const one = f.open('one'); const two = f.open('two');
+    one.enqueue(sensitive('one')); two.enqueue(sensitive('two')); await flush();
+    expect(f.coordinator.dmText(dmInput('admin'))).toBe(true);
+    expect(f.coordinator.dmText(dmInput('admin'))).toBe(true); await flush();
+    const guidance = f.messageCreate.mock.calls.filter(([input]) => JSON.stringify(input).includes('有 2 个问题'));
+    expect(guidance).toHaveLength(1);
+    expect(guidance[0]).toEqual([expect.objectContaining({ params: { receive_id_type: 'open_id' }, data: expect.objectContaining({ receive_id: 'admin', msg_type: 'text' }) })]);
+    expect(f.response).not.toHaveBeenCalled();
+    f.cfg.preferences!.access!.admins = [];
+    const count = f.messageCreate.mock.calls.length;
+    expect(f.coordinator.dmText(dmInput('admin'))).toBe(false); expect(f.messageCreate).toHaveBeenCalledTimes(count);
+    expect(f.submit('one', 'dm-2', 'admin', secretSubmission('one'))).toBe('denied');
+    expect(f.response).not.toHaveBeenCalled();
+    f.coordinator.shutdown(); expect(f.pause.held).toBe(false);
+  });
+
+  it('filters authorization per turn so a revoked admin can still answer their own human-initiated question', async () => {
+    const f = fixture(); f.cfg.preferences!.access!.admins = ['starter'];
+    const own = f.open('own'); const bot = f.open('bot', 'bot');
+    own.enqueue(sensitive('own')); bot.enqueue(sensitive('bot')); await flush();
+    f.cfg.preferences!.access!.admins = [];
+    expect(f.coordinator.dmText(dmInput())).toBe(true);
+    expect(f.response).toHaveBeenCalledExactlyOnceWith('own', { kind: 'answered', answer: { kind: 'text', text: '机密答案' } });
+    expect(f.coordinator.dmText(dmInput())).toBe(false); f.coordinator.shutdown();
+  });
+
+  it('settles all failed deliveries and empty eligibility immediately, while partial failures remain answerable', async () => {
+    vi.useFakeTimers();
+    const f = fixture(); f.messageCreate.mockRejectedValue(new Error('not friends'));
+    const turn = f.open(); turn.enqueue(sensitive()); await flush();
+    expect(f.response).toHaveBeenCalledExactlyOnceWith('secret', { kind: 'unanswered', reason: 'unavailable' });
+    expect(JSON.stringify(f.update.mock.calls)).toContain('没能私聊到'); expect(f.pause.held).toBe(false); turn.close('stopped');
+    const empty = fixture(); empty.cfg.preferences!.access = {};
+    const emptyTurn = empty.open('empty', 'bot'); emptyTurn.enqueue(sensitive()); await flush();
+    expect(empty.messageCreate).not.toHaveBeenCalled(); expect(empty.create).toHaveBeenCalledOnce();
+    expect(empty.response).toHaveBeenCalledExactlyOnceWith('secret', { kind: 'unanswered', reason: 'unavailable' });
+    expect(JSON.stringify(empty.update.mock.calls)).toContain('没能私聊到'); emptyTurn.close('stopped');
+    const partial = fixture(); partial.messageCreate.mockRejectedValueOnce(new Error('not friends'));
+    const partialTurn = partial.open(); partialTurn.enqueue(sensitive()); await flush();
+    expect(partial.response).not.toHaveBeenCalled(); expect(partial.send).not.toHaveBeenCalled();
+    expect(partial.update).not.toHaveBeenCalled(); expect(partial.reply).toHaveBeenCalledTimes(2);
+    expect(partial.coordinator.dmText(dmInput('admin'))).toBe(true); partialTurn.close('stopped');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['answered', 'timeout', 'stopped', 'shutdown'] as const)('terminalizes every late DM after %s without restoring carriers or timers', async winner => {
+    vi.useFakeTimers(); const f = fixture();
+    const held = [deferred<{ data: { message_id: string } }>(), deferred<{ data: { message_id: string } }>()];
+    f.messageCreate.mockReturnValueOnce(held[0]!.promise).mockReturnValueOnce(held[1]!.promise);
+    const turn = f.open(); turn.enqueue(sensitive()); await flush();
+    if (winner === 'answered') expect(f.coordinator.dmText(dmInput())).toBe(true);
+    else if (winner === 'timeout') await vi.advanceTimersByTimeAsync(15 * 60_000);
+    else if (winner === 'shutdown') f.coordinator.shutdown();
+    else turn.close('stopped');
+    held[0]!.resolve({ data: { message_id: 'late-1' } }); held[1]!.resolve({ data: { message_id: 'late-2' } }); await flush();
+    expect(f.update).toHaveBeenCalledTimes(4);
+    expect(f.submit('secret', 'late-1', 'owner', secretSubmission())).toBe('inactive');
+    expect(f.submit('secret', 'late-2', 'admin', secretSubmission())).toBe('inactive');
+    expect(f.coordinator.dmText(dmInput('owner'))).toBe(false); expect(f.response).toHaveBeenCalledOnce();
+    expect(f.pause.held).toBe(false); expect(vi.getTimerCount()).toBe(0); turn.close('stopped');
+  });
+
+  it('ignores individual late delivery failures after an answer has already settled the request', async () => {
+    vi.useFakeTimers(); const f = fixture();
+    const held = [deferred<{ data: { message_id: string } }>(), deferred<{ data: { message_id: string } }>()];
+    f.messageCreate.mockReturnValueOnce(held[0]!.promise).mockReturnValueOnce(held[1]!.promise);
+    const turn = f.open(); turn.enqueue(sensitive()); await flush();
+    expect(f.coordinator.dmText(dmInput())).toBe(true);
+    held[0]!.reject(new Error('late delivery rejected')); held[1]!.reject(new Error('late delivery rejected')); await flush();
+    expect(f.response).toHaveBeenCalledOnce(); expect(f.update).toHaveBeenCalledTimes(2); expect(f.fault).not.toHaveBeenCalled();
+    expect(f.coordinator.dmText(dmInput('owner'))).toBe(false); turn.close('stopped'); expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['click', 'typed', 'timeout', 'stopped', 'shutdown'] as const)('allows only %s to win a race with all other terminal paths', async winner => {
+    vi.useFakeTimers(); const f = fixture(); const turn = f.open(); turn.enqueue(sensitive()); await flush();
+    await vi.advanceTimersByTimeAsync(15 * 60_000 - 1);
+    if (winner === 'click') expect(f.submit('secret', 'dm-3', 'starter', secretSubmission())).toBe('accepted');
+    if (winner === 'typed') expect(f.coordinator.dmText(dmInput())).toBe(true);
+    if (winner === 'timeout') await vi.advanceTimersByTimeAsync(1);
+    if (winner === 'stopped') turn.close('stopped');
+    if (winner === 'shutdown') f.coordinator.shutdown();
+    expect(f.coordinator.dmText(dmInput())).toBe(false);
+    expect(f.submit('secret', 'dm-3', 'starter', secretSubmission())).toBe('inactive');
+    turn.close('stopped'); f.coordinator.shutdown(); await vi.advanceTimersByTimeAsync(1);
+    expect(f.response).toHaveBeenCalledOnce(); expect(f.pause.held).toBe(false); expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('s33b rejects an expired provider DM click without recording an answer', async () => {
+    const f = fixture(); const pending = vi.fn(() => true); f.run.askPending = pending;
+    const turn = f.open(); turn.enqueue(sensitive()); await flush(); pending.mockReturnValue(false);
+    expect(f.submit('secret', 'dm-3', 'starter', secretSubmission())).toBe('inactive'); await flush();
+    expect(f.response).not.toHaveBeenCalled(); expect(JSON.stringify(f.update.mock.calls)).toContain('本轮已结束');
+    expect(f.coordinator.dmText(dmInput())).toBe(false); expect(f.pause.held).toBe(false); turn.close('stopped');
+  });
+
+  it('retires an expired provider request before claiming a DM answer or promoting queued asks', async () => {
+    const f = fixture(); const pending = vi.fn(() => true); f.run.askPending = pending;
+    const turn = f.open(); turn.enqueue(sensitive('first')); turn.enqueue(sensitive('second')); await flush();
+    pending.mockReturnValue(false);
+    expect(f.coordinator.dmText(dmInput())).toBe(false); await flush();
+    expect(f.response).not.toHaveBeenCalled(); expect(f.create).toHaveBeenCalledTimes(4);
+    expect(f.pause.held).toBe(false); expect(f.submit('first', 'dm-3', 'starter', secretSubmission('first'))).toBe('inactive'); turn.close('stopped');
+  });
 });

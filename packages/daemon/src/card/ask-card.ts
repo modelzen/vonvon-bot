@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { AskAnswer, AskChoiceAnswer, AskRequest } from '../agent/types';
+import { isSensitiveAsk, type AskAnswer, type AskChoiceAnswer, type AskRequest } from '../agent/types';
 import { keepAts } from './at-guard';
 import { actions, button, card, form, input as textInput, md, multiSelectMenu, note, selectMenu, submitButton, type ActionValue, type CardElement, type CardObject } from './cards';
 
@@ -8,10 +8,10 @@ export const ASK_CONTROLS_EID = 'ask_controls';
 
 export type AskCardState =
   | { kind: 'pending' }
-  | { kind: 'answered'; answer: AskAnswer; actor: string; at: string }
+  | { kind: 'answered'; answer: AskAnswer; actor: string; at: string; by?: 'self' | 'other' }
   | { kind: 'timed-out' }
   | { kind: 'stopped' }
-  | { kind: 'unavailable'; reason: 'turn-ended' | 'unavailable' }
+  | { kind: 'unavailable'; reason: 'turn-ended' | 'unavailable' | 'dm-failed' }
   // Restarted old cards are healed by replacing their controls in s33c.
   | { kind: 'expired'; reason: 'restart' };
 
@@ -112,7 +112,7 @@ function answerSummary(request: AskRequest, answer: AskAnswer): string {
   if (answer.kind === 'text') {
     const text = answer.text.trim();
     if (request.kind !== 'choices' || !text || text.length > 4000) throw mismatch();
-    return excerpt(text);
+    return isSensitiveAsk(request) ? '已在私聊里回答（内容不显示）' : excerpt(text);
   }
   let result: AskSubmissionResult;
   if (answer.kind === 'choices') {
@@ -139,6 +139,7 @@ function answerSummary(request: AskRequest, answer: AskAnswer): string {
   if (result.answer.kind === 'text') throw mismatch();
   if (result.answer.kind !== 'choices') return decisionLabel(result.answer);
   if (request.kind !== 'choices') throw new Error('Answer does not match ask request');
+  if (isSensitiveAsk(request)) return '已在私聊里回答（内容不显示）';
   const parsedAnswers = result.answer.answers;
   return request.questions.map(question => {
     const item = parsedAnswers.find(item => item.questionId === question.id);
@@ -149,9 +150,10 @@ function answerSummary(request: AskRequest, answer: AskAnswer): string {
   }).join('\n');
 }
 
-export function buildAskCard(input: { request: AskRequest; state: AskCardState; respondents: readonly { openId: string; name: string }[] }): CardObject {
-  const { request, state, respondents } = input;
+export function buildAskCard(input: { request: AskRequest; state: AskCardState; respondents: readonly { openId: string; name: string }[]; scope?: 'group' | 'dm' }): CardObject {
+  const { request, state, respondents, scope = 'group' } = input;
   const elements: CardElement[] = [];
+  if (scope === 'dm') elements.push(md('这是群里 agent 问的问题。答案只交给 agent，不会出现在群里。'));
   if (request.kind === 'choices') {
     for (const question of request.questions) {
       elements.push(md(`**${question.title}**\n${question.detail}`));
@@ -159,9 +161,11 @@ export function buildAskCard(input: { request: AskRequest; state: AskCardState; 
     }
   } else elements.push(md(request.detail));
   elements.push(md(`回答后：${request.acceptedConsequence}\n\n未回答或拒绝后：${request.declinedConsequence}`));
-  elements.push(md(`可回答：${respondents.length ? respondents.map(person => `<at id="${person.openId}">${person.name}</at>`).join('、') : '等待指定成员回答'}`));
+  if (scope === 'group') elements.push(md(`可回答：${respondents.length ? respondents.map(person => `<at id="${person.openId}">${person.name}</at>`).join('、') : '等待指定成员回答'}`));
   if (state.kind === 'pending') {
-    if (request.kind === 'choices') {
+    if (scope === 'group' && isSensitiveAsk(request)) {
+      elements.push(md('🔒 这个问题要填敏感信息，不在群里显示输入框。我已经私聊了能回答的人，请在和我的私聊里回答；答完这里会更新。'));
+    } else if (request.kind === 'choices') {
       elements.push(form('ask', [
         ...request.questions.flatMap((question, index) => {
           if (question.selection === 'text') return [textInput({ name: `q${index}`, placeholder: question.title, inputType: 'multiline_text', rows: 2, maxLength: 1000 })];
@@ -178,10 +182,17 @@ export function buildAskCard(input: { request: AskRequest; state: AskCardState; 
     }
   } else {
     switch (state.kind) {
-      case 'answered': elements.push(md(answerSummary(request, state.answer)), note(`${state.actor} · ${state.at}`)); break;
+      case 'answered': {
+        const summary = answerSummary(request, state.answer);
+        const attribution = scope === 'dm'
+          ? state.by === 'self' ? `已提交 · ${state.at}（内容不显示）` : `已由 ${state.actor} 回答 · ${state.at}`
+          : `${state.actor} · ${state.at}`;
+        elements.push(md(summary), note(attribution));
+        break;
+      }
       case 'timed-out': elements.push(note('⏱ 15 分钟没人回答')); break;
       case 'stopped': elements.push(note('⏹ 已停止')); break;
-      case 'unavailable': elements.push(note(state.reason === 'turn-ended' ? '本轮已结束' : '暂时无法回答')); break;
+      case 'unavailable': elements.push(note(state.reason === 'dm-failed' ? '没能私聊到能回答的人，这题没法回答' : state.reason === 'turn-ended' ? '本轮已结束' : '暂时无法回答')); break;
       case 'expired': elements.push(note('已失效（后台服务重启过）')); break;
       default: { const exhaustive: never = state; return exhaustive; }
     }
