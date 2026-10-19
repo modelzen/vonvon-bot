@@ -5,7 +5,7 @@ import { feishuError, scopeDenial } from '../utils/feishu-error';
 import { deniedScopeName, errorDetail, reportScopeDenied } from './diagnostics';
 import { withDeadline } from './names';
 
-/** How long a chat's bot list is trusted by the `<at>` guard (D/card/at-guard.ts). A wake count reads past it. */
+/** How long a chat's bot list is trusted by the `<at>` guard (D/card/at-guard.ts). */
 export const ROSTER_TTL_MS = 10 * 60_000;
 /** A failed read is not tried again sooner: the guard asks on every frame. */
 export const ROSTER_RETRY_MS = 60_000;
@@ -23,13 +23,6 @@ type Bots = ReadonlyMap<string, RosterBot>;
 /** `pending` is a read in flight, settling with what it read, or undefined when it failed. */
 interface Entry { bots?: Bots; until: number; pending?: Promise<Bots | undefined> }
 
-/** The guard's view, and a fresh read for a wake count (s27a-0). */
-export interface BotRoster extends ChatBots {
-  /** A fresh read, past the cache: this read's list, or undefined when it failed (never the old list: two computers
-   * could hold different ones). Shares a read in flight; a success refreshes the cache too. */
-  refresh(chatId: string): Promise<Bots | undefined>;
-}
-
 /**
  * The bots in a chat, from Feishu's member list: the `bots` bucket of `GET im/v1/chats/<chat_id>/members/list`
  * (`member_types=bot`), which the SDK has no call for. Keyed by `member_id`, this app's open_id for that bot. Each bot
@@ -39,7 +32,7 @@ export interface BotRoster extends ChatBots {
 export function createBotRoster(
   channel: Pick<LarkChannel, 'rawClient' | 'botIdentity'>,
   opts: { stop: <T>(p: Promise<T>, fallback: T) => Promise<T> },
-): BotRoster {
+): ChatBots {
   const entries = new Map<string, Entry>();
 
   async function read(chatId: string, stale: boolean): Promise<Bots | undefined> {
@@ -101,10 +94,6 @@ export function createBotRoster(
       const entry = entryOf(chatId);
       if (entry.pending) await entry.pending;
       else if (entry.until <= Date.now()) await start(chatId, entry);
-    },
-    refresh(chatId) {
-      const entry = entryOf(chatId);
-      return entry.pending ?? start(chatId, entry);
     },
   };
 }

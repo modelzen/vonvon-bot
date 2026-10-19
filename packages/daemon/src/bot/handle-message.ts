@@ -293,6 +293,7 @@ import {
   type ThreadPull,
   type TopicScan,
   type Who,
+  wakeTriggerText,
 } from './context-weave';
 import {
   addCommentReaction,
@@ -312,7 +313,6 @@ import {
 } from './comments';
 import { createGracefulInterrupt, createIdlePause, Semaphore, withIdleTimeout, type IdlePause } from './watchdog';
 import { createBotRoster } from './bot-roster';
-import { wakeTriggerText } from './bot-wake';
 import { createNameBook, fetchChatMembers, resolveNames, withDeadline } from './names';
 
 /** 所有项目群成员的并集（去重）—— admins 加人的候选源（admins 通常是项目相关的人）。
