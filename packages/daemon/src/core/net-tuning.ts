@@ -14,7 +14,7 @@ export const AUTO_SELECT_ATTEMPT_MS = 1_000;
 
 /**
  * Sets the process-wide connection defaults, before any connection is made. Every daemon process runs it: the CLI
- * entry calls it first, and the supervisor starts each bot with that same entry. Both outgoing stacks take the global
+ * entry's first import (`cli/tune-network`) calls it, and the supervisor starts each bot with that same entry. Both outgoing stacks take the global
  * defaults: the Feishu SDK (axios with no agent of its own, so `https.globalAgent` and `net.connect`) and the
  * judgement's `fetch` (Node's undici, which passes no `autoSelectFamily` options of its own).
  *

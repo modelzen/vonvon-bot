@@ -129,7 +129,9 @@ export function createNameBook(
             if (name) put(id, name); // also when it arrives after the hard deadline
             return name;
           });
-        pending = withDeadline(looked, hardDeadlineMs)
+        // One late-answer line per lookup, with its real time past the hard deadline too, however many turns wait.
+        void withDeadline(looked, deadlineMs, 'sender-name');
+        pending = withDeadline(looked, hardDeadlineMs, false)
           .then(() => {
             // A history pull may have learned the name while this lookup failed.
             if (!peek(id)) put(id, undefined);
@@ -138,7 +140,7 @@ export function createNameBook(
           .finally(() => inflight.delete(id));
         inflight.set(id, pending);
       }
-      return withDeadline(pending, deadlineMs);
+      return withDeadline(pending, deadlineMs, false);
     },
   };
 }
@@ -146,9 +148,9 @@ export function createNameBook(
 /**
  * `p`, or undefined once `ms` passed (the SDK's calls have no timeout). A `p` that settles after that is still
  * watched: one info line says how long it took and whether it succeeded, to tell a slow call from a dead one (s23f2).
- * `what` names the call in that line.
+ * `what` names the call in that line; `false` writes none, for a wait on a promise that is already watched.
  */
-export function withDeadline<T>(p: Promise<T>, ms: number, what?: string): Promise<T | undefined> {
+export function withDeadline<T>(p: Promise<T>, ms: number, what: string | false): Promise<T | undefined> {
   const started = Date.now();
   let expired = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -156,7 +158,7 @@ export function withDeadline<T>(p: Promise<T>, ms: number, what?: string): Promi
     timer = setTimeout(() => { expired = true; resolve(undefined); }, ms);
   });
   const settled = (ok: boolean): void => {
-    if (expired) log.info('intake', 'late-answer', { ...(what ? { what } : {}), deadlineMs: ms, ms: Date.now() - started, ok });
+    if (expired && what) log.info('intake', 'late-answer', { what, deadlineMs: ms, ms: Date.now() - started, ok });
   };
   // handles the rejection too, so a late failure is never unhandled
   p.then(() => settled(true), () => settled(false));

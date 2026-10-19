@@ -175,7 +175,7 @@ describe('withDeadline (s23f2: a late answer is logged, not dropped)', () => {
     process.on('unhandledRejection', unhandled);
     try {
       const d = deferred<string>();
-      const result = withDeadline(d.promise, 3000);
+      const result = withDeadline(d.promise, 3000, 'chat-get');
       await vi.advanceTimersByTimeAsync(4000);
       expect(await result).toBeUndefined();
       d.reject(new Error('socket hang up'));
@@ -183,19 +183,47 @@ describe('withDeadline (s23f2: a late answer is logged, not dropped)', () => {
       // a real turn of the loop, where Node reports a rejection nobody handled
       vi.useRealTimers();
       await new Promise((resolve) => setImmediate(resolve));
-      expect(late()).toEqual([{ deadlineMs: 3000, ms: 4000, ok: false }]);
+      expect(late()).toEqual([{ what: 'chat-get', deadlineMs: 3000, ms: 4000, ok: false }]);
       expect(unhandled).not.toHaveBeenCalled();
     } finally {
       process.off('unhandledRejection', unhandled);
     }
   });
 
+  it('a slow name lookup logs one line with its real time, however many turns wait on it and past the hard deadline too', async () => {
+    vi.useFakeTimers();
+    for (const answerAt of [300, 800]) {
+      vi.mocked(log.info).mockClear();
+      let release!: () => void;
+      const c = channel({ message: { om_1: '张三' }, slow: new Promise<void>((r) => { release = r; }) });
+      const book = createNameBook(c.ch, { deadlineMs: 100, hardDeadlineMs: 500 });
+      const waits = [book.senderName(msg('om_1')), book.senderName(msg('om_2'))];
+      await vi.advanceTimersByTimeAsync(answerAt);
+      release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await Promise.all(waits)).toEqual([undefined, undefined]);
+      expect(c.get).toHaveBeenCalledTimes(1);
+      expect(late()).toEqual([{ what: 'sender-name', deadlineMs: 100, ms: answerAt, ok: true }]);
+    }
+  });
+
   it('an answer in time is returned as before and logs nothing; a failure in time still rejects', async () => {
     vi.useFakeTimers();
-    expect(await withDeadline(Promise.resolve(7), 1000)).toBe(7);
-    const failing = withDeadline(Promise.reject(new Error('boom')), 1000);
+    expect(await withDeadline(Promise.resolve(7), 1000, 'chat-get')).toBe(7);
+    const failing = withDeadline(Promise.reject(new Error('boom')), 1000, 'chat-get');
     await expect(failing).rejects.toThrow('boom');
     await vi.advanceTimersByTimeAsync(2000);
+    expect(late()).toEqual([]);
+  });
+
+  it('a wait named false gives up the same way and logs nothing', async () => {
+    vi.useFakeTimers();
+    const d = deferred<string>();
+    const result = withDeadline(d.promise, 1000, false);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await result).toBeUndefined();
+    d.resolve('answer');
+    await vi.advanceTimersByTimeAsync(0);
     expect(late()).toEqual([]);
   });
 });

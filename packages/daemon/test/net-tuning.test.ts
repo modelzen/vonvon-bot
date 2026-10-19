@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import dns from 'node:dns';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -24,6 +24,13 @@ describe('network defaults (s23f2)', () => {
     expect(AUTO_SELECT_ATTEMPT_MS).toBe(1_000);
     expect(net.getDefaultAutoSelectFamilyAttemptTimeout()).toBe(1_000);
     expect(dns.getDefaultResultOrder()).toBe('ipv4first');
+  });
+
+  it('the CLI entry imports the module that sets them before anything else, so no daemon module runs without them', async () => {
+    const source = await readFile(resolve('src/cli/index.ts'), 'utf8');
+    expect(source.match(/^import\s[^;]*;/m)?.[0]).toBe("import './tune-network';");
+    const tune = await readFile(resolve('src/cli/tune-network.ts'), 'utf8');
+    expect(tune).toMatch(/^tuneNetworkDefaults\(\);$/m);
   });
 
   it('the CLI entry sets them as it loads, so the supervisor, each bot it starts with that entry and each command have them', async () => {
