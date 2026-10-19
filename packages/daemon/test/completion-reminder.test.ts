@@ -10,6 +10,7 @@ import {
 } from '../src/bot/handle-message';
 import { sendCompletionReminderReply } from '../src/bot/completion-reminder';
 import type { AppConfig } from '../src/config/schema';
+import { log } from '../src/core/logger';
 
 function dedupe() {
   const ids = new Set<string>();
@@ -184,6 +185,23 @@ describe('completion reminder native reply orchestration', () => {
     const content = JSON.parse(reply.mock.calls[0]![0].data.content);
     expect(content.zh_cn.content[0][0]).toEqual({ tag: 'at', user_id: 'ou_requester' });
     expect(reply.mock.calls[1]?.[0].data.reply_in_thread).toBe(false);
+  });
+
+  it('@-s a bot that woke the turn the same way, as a post; an id that is not an open_id gets no at node (s27a-0)', async () => {
+    const { channel, reply } = replyChannel();
+    const info = vi.spyOn(log, 'info').mockImplementation(() => undefined);
+    const deps = { channel, cfg: config('always'), dedupe: dedupe(), now: () => 11_000 };
+    const base = { requestedAt: 1_000, manuallyRequested: false, summary: '审方案', cardUpdated: true, replyInThread: false, outcome: 'done' as const };
+    await sendCompletionReminderReply(deps, { ...base, cardMsgId: 'om_1', requesterOpenId: 'ou_other', requesterKind: 'bot' });
+    await sendCompletionReminderReply(deps, { ...base, cardMsgId: 'om_2', requesterOpenId: 'cli_other', requesterKind: 'bot' });
+    expect(reply.mock.calls.map((c) => c[0].data.msg_type)).toEqual(['post', 'post']);
+    const [bot, noId] = reply.mock.calls.map((c) => JSON.parse(c[0].data.content).zh_cn.content);
+    expect(bot[0][0]).toEqual({ tag: 'at', user_id: 'ou_other' });
+    expect(noId[0]).toEqual([{ tag: 'text', text: '✅「审方案」已完成 · 用时 10 秒' }]);
+    expect(noId[1]).toEqual([{ tag: 'text', text: '结果在上方卡片。' }]);
+    expect(JSON.stringify(noId)).not.toContain('cli_other');
+    expect(info).toHaveBeenCalledWith('card', 'completion-reminder', expect.objectContaining({ requester: 'bot' }));
+    info.mockRestore();
   });
 
   it('uses a reply as terminal-card fallback even when the selected policy would skip success', async () => {

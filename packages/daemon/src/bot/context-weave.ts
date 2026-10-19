@@ -98,6 +98,15 @@ export interface ContextMessage {
   streaming?: boolean;
   /** The topic it is in (a main-area pull lists only a topic's first message). */
   threadId?: string;
+  /** The ids it @-mentions that are open_ids in this app's namespace (a wake count, s27a-0). */
+  mentionIds?: string[];
+  /** Feishu's `msg_type`. */
+  msgType?: string;
+  /** An app sender's app_id: the same for every reader, unlike its open_bot_id. */
+  senderAppId?: string;
+  /** The message it replies to (Feishu's `parent_id`), and its thread's first message (`root_id`). */
+  parentId?: string;
+  rootId?: string;
 }
 
 /** Subset of the `im.v1.message.get` / `.list` item shape we read. */
@@ -108,6 +117,7 @@ interface RawMsgItem {
   deleted?: boolean;
   thread_id?: string;
   root_id?: string;
+  parent_id?: string;
   /** `sender_name` and `open_bot_id` come only `with_sender_name` (e10). */
   sender?: { id?: string; id_type?: string; sender_type?: string; sender_name?: string; open_bot_id?: string };
   body?: { content?: string };
@@ -337,6 +347,14 @@ export interface PullOpts {
   /** Keep this bot's own messages too (a topic opening's main-area lines). */
   keepSelf?: boolean;
   names?: NameBook;
+  /** A wake count (s27a-0): keep a message whose text is empty too, as a bare `<at>` still wakes. */
+  mentions?: true;
+  /** Stop after the page where a message taken straight from it (not a held one) passes this; the pull is then complete. */
+  stopWhen?: (m: ContextMessage) => boolean;
+  /** All pages together; FETCH_DEADLINE_MS when unset. */
+  deadlineMs?: number;
+  /** Looked at before each page: once aborted, the pull fails. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -350,7 +368,9 @@ export interface PullOpts {
  *   - `before`: only messages up to this (the trigger's createTime), so a
  *     message that arrives as its own turn later is not woven twice; one in
  *     the same ms is kept, as the watermark moving to the trigger covers it.
- * This bot's own replies, system notices, deleted, empty and
+ *   - `stopWhen`: also stop, complete, after the page where a kept message
+ *     passes it (a wake count stops at the last person's message, s27a-0).
+ * This bot's own replies, system notices, deleted, empty (kept with `mentions`) and
  * `excludeMessageId` messages are dropped, except `keepId` (the topic's first
  * message, kept even when this bot sent it). Other bots stay. Own replies are
  * dropped as already in the session (product.md 3.5).
@@ -384,12 +404,17 @@ async function pullContext(channel: LarkChannel, c: Container, opts: PullOpts): 
   /** Each listed message's topic, and the main-area messages whose root_id is another message (see below). */
   const threadOf = new Map<string, string>();
   const held: { m: ContextMessage; own: boolean; rootId: string }[] = [];
-  const take = (m: ContextMessage, own: boolean): void => {
+  /** True when `m` went into the messages. */
+  const take = (m: ContextMessage, own: boolean): boolean => {
     if (!own) {
-      if (m.text.trim().length > 0) found.push(m);
+      if (opts.mentions || m.text.trim().length > 0) {
+        found.push(m);
+        return true;
+      }
     } else if (c.type === 'chat' && m.threadId) {
       ownRoots.push(m);
     }
+    return false;
   };
   function done(complete: boolean): ThreadPull {
     for (const h of held.splice(0)) if (threadOf.get(h.rootId) !== h.m.threadId) take(h.m, h.own);
@@ -402,10 +427,11 @@ async function pullContext(channel: LarkChannel, c: Container, opts: PullOpts): 
   if (c.type === 'chat' && stopAt > 0) window.start_time = String(Math.floor(stopAt / 1000));
   if (c.type === 'chat' && opts.before) window.end_time = String(Math.ceil(opts.before / 1000));
   let pageToken: string | undefined;
-  const deadline = Date.now() + FETCH_DEADLINE_MS;
+  const deadline = Date.now() + (opts.deadlineMs ?? FETCH_DEADLINE_MS);
   try {
     const me = meOf(channel);
     for (let page = 0; page < PAGE_CAP; page++) {
+      if (opts.signal?.aborted) return failedPull();
       const res = await withDeadline(channel.rawClient.im.v1.message.list({
         params: {
           container_id_type: c.type,
@@ -436,6 +462,7 @@ async function pullContext(channel: LarkChannel, c: Container, opts: PullOpts): 
       const data = res.data as { items?: RawMsgItem[]; has_more?: boolean; page_token?: string } | undefined;
       const items = data?.items ?? [];
       let oldest = Infinity;
+      let stop = false;
       for (const it of items) {
         learnNames(opts.names, it);
         const m = toContextMessage(it, me, opts.names);
@@ -457,9 +484,10 @@ async function pullContext(channel: LarkChannel, c: Container, opts: PullOpts): 
           continue;
         }
         // The bot's own messages are left out; one a topic hangs under is handed back apart (s14c).
-        take(m, own);
+        if (take(m, own) && opts.stopWhen?.(m)) stop = true;
       }
       if (!data?.has_more || !data.page_token || items.length === 0) return done(true);
+      if (stop) return done(true);
       if (stopAt > 0 && oldest <= stopAt) return done(true);
       if (opts.enough && found.length >= opts.enough) return done(false);
       pageToken = data.page_token;
@@ -531,6 +559,8 @@ function toContextMessage(item: RawMsgItem, me: Me, names?: NameBook): ContextMe
   const mine = me.openId ? (item.mentions ?? []).filter((m) => m.id === me.openId) : [];
   const others = item.mentions?.filter((m) => !mine.includes(m));
   const drop = mine.map((m) => m.key).filter((k): k is string => Boolean(k));
+  const mentionIds = (item.mentions ?? []).filter((m) => m.id && isOpenId(m.id_type)).map((m) => m.id as string);
+  const s = item.sender;
   return {
     messageId: item.message_id ?? '',
     senderName: name,
@@ -542,6 +572,11 @@ function toContextMessage(item: RawMsgItem, me: Me, names?: NameBook): ContextMe
     ...(item.mentions?.length || item.body?.content?.includes('@_all') ? { named: true as const } : {}),
     ...(item.msg_type === 'interactive' && isStreamingCard(item.body?.content) ? { streaming: true } : {}),
     ...(item.thread_id ? { threadId: item.thread_id } : {}),
+    ...(mentionIds.length ? { mentionIds } : {}),
+    ...(item.msg_type ? { msgType: item.msg_type } : {}),
+    ...(s?.sender_type === 'app' && s.id_type === 'app_id' && s.id ? { senderAppId: s.id } : {}),
+    ...(item.parent_id ? { parentId: item.parent_id } : {}),
+    ...(item.root_id ? { rootId: item.root_id } : {}),
   };
 }
 
@@ -1109,8 +1144,8 @@ function whoText(who: Who | undefined): string {
   return name || '某人';
 }
 
-/** Without parentheses, a person's name cannot pass for "名字（bot）". */
-function personName(s: string): string {
+/** Without parentheses, a person's name cannot pass for "名字（bot）". One line, at most 40. */
+export function personName(s: string): string {
   return label(s.replace(/[（）()]/g, ''), 40);
 }
 
@@ -1174,16 +1209,21 @@ const LATE_NOTE_MS = 2 * 60_000;
  * Returns `text` unchanged when there's no usable open_id (nothing to assert).
  * sanitizeContext is the single boundary for the display name — it is
  * uploader-influenced, so oneLine=true collapses it so a crafted name can't
- * forge a fenced block (mirrors weaveQuote / weaveRecordBlock).
+ * forge a fenced block (mirrors weaveQuote / weaveRecordBlock). `bot`: the
+ * sender is another bot, written `名字（bot）` as the record block does.
  */
 export function weaveSender(
   text: string,
   sender: { senderId?: string; senderName?: string },
   lateMs = 0,
+  opts: { bot?: boolean } = {},
 ): string {
   const id = (sender.senderId ?? '').trim();
   if (!id) return text;
-  const who = sanitizeContext(sender.senderName ?? '', SENDER_NAME_MAX, true) || '某用户';
+  // Another bot (s27a-0): as a record block's line names it, without parentheses and then 「（bot）」.
+  const who = opts.bot
+    ? whoText({ kind: 'bot', name: sender.senderName })
+    : sanitizeContext(sender.senderName ?? '', SENDER_NAME_MAX, true) || '某用户';
   // Inside the block (still ending in "）]") so session-title strips it with the block.
   const late = lateMs > LATE_NOTE_MS ? `（这条消息 ${Math.round(lateMs / 60_000)} 分钟前发出，bot 断线重连后才收到）` : '';
   const block = `[本条消息的发信人：${who}（open_id：${id}）${late}]`;

@@ -2,12 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createBotRoster, ROSTER_RETRY_MS, ROSTER_TTL_MS } from '../src/bot/bot-roster';
 import { setDiagnosticsSink } from '../src/bot/diagnostics';
 
-// s27a0, all new on main.
+// s27a0, all new on main; `refresh` and my app_id are s27a-0.
+const APP = 'cli_me';
 const body = (bots: object[]) => ({ code: 0, data: { bots, has_more: false } });
 const B8 = { app_id: 'cli_8', member_id: 'ou_b8', name: 'Bot 8', tenant_key: 't' };
 
 function roster(request: ReturnType<typeof vi.fn>, stop = <T>(p: Promise<T>, _f: T) => p) {
-  return createBotRoster({ rawClient: { request }, botIdentity: { openId: 'ou_me', name: '我' } } as never, { stop });
+  return createBotRoster({ rawClient: { request, appId: APP }, botIdentity: { openId: 'ou_me', name: '我' } } as never, { stop });
 }
 
 afterEach(() => { vi.useRealTimers(); setDiagnosticsSink(undefined); });
@@ -20,7 +21,7 @@ describe('bot roster', () => {
     await r.load('oc_1/x');
     expect(request).toHaveBeenCalledWith({ method: 'GET', url: '/open-apis/im/v1/chats/oc_1%2Fx/members/list',
       params: { member_types: 'bot', member_id_type: 'open_id', page_size: 100 } });
-    expect([...r.peek('oc_1/x')!]).toEqual([['ou_b8', { appId: 'cli_8', name: 'Bot 8' }], ['ou_me', { appId: '', name: '我' }]]);
+    expect([...r.peek('oc_1/x')!]).toEqual([['ou_b8', { appId: 'cli_8', name: 'Bot 8' }], ['ou_me', { appId: APP, name: '我' }]]);
   });
 
   it('takes a success without the bots bucket for a failed read; an empty bucket is a read', async () => {
@@ -63,6 +64,40 @@ describe('bot roster', () => {
     stop();
     await pending; // settles with the request still hanging
     expect(cut.peek('oc_1')).toBeUndefined();
+  });
+
+  it('refresh reads past the cache every time, returns what it read, and refreshes the cache', async () => {
+    const B7 = { app_id: 'cli_7', member_id: 'ou_b7', name: 'Bot 7' };
+    const request = vi.fn().mockResolvedValueOnce(body([B8])).mockResolvedValueOnce(body([B8, B7])).mockResolvedValueOnce(body([B7]));
+    const r = roster(request);
+    await r.load('oc_1');
+    const fresh = await r.refresh('oc_1');
+    expect(request).toHaveBeenCalledTimes(2);
+    expect([...fresh!.keys()]).toEqual(['ou_b8', 'ou_b7', 'ou_me']);
+    expect(r.peek('oc_1')).toBe(fresh);
+    expect([...(await r.refresh('oc_1'))!.keys()]).toEqual(['ou_b7', 'ou_me']);
+    expect(request).toHaveBeenCalledTimes(3);
+    await r.load('oc_1'); // fresh again: no read
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it('refresh shares a read in flight, and gives undefined, not the old list, when that read fails', async () => {
+    let fail!: (e: Error) => void;
+    const request = vi.fn().mockResolvedValueOnce(body([B8])).mockImplementationOnce(() => new Promise((_, reject) => { fail = reject; }));
+    vi.useFakeTimers();
+    const r = roster(request);
+    await r.load('oc_1');
+    await vi.advanceTimersByTimeAsync(ROSTER_TTL_MS);
+    const loading = r.load('oc_1');
+    const fresh = r.refresh('oc_1');
+    expect(request).toHaveBeenCalledTimes(2);
+    fail(new Error('offline'));
+    expect(await fresh).toBeUndefined();
+    await loading;
+    expect(r.peek('oc_1')?.has('ou_b8')).toBe(true); // the guard keeps the old list
+    // A read that never answers or is cut by shutdown is a failure too.
+    const cut = roster(vi.fn(() => new Promise(() => {})), (_p, fallback) => Promise.resolve(fallback));
+    expect(await cut.refresh('oc_1')).toBeUndefined();
   });
 
   it('reports a missing scope, from a thrown error or a returned code', async () => {

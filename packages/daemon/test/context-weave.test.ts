@@ -1110,3 +1110,103 @@ describe('weaveSender', () => {
     expect(lines.filter((l) => l.startsWith('['))).toHaveLength(1); // only the real block opens a '['-line
   });
 });
+
+describe('a wake count\'s pull (s27a-0)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+  const person = (id: string, t: number, text: string, extra: object = {}) => ({
+    message_id: id, msg_type: 'text', create_time: String(t),
+    sender: { id: `ou_${id}`, id_type: 'open_id', sender_type: 'user', sender_name: '张三' }, body: { content: JSON.stringify({ text }) }, ...extra,
+  });
+  const other = (id: string, t: number, extra: object = {}) => ({
+    message_id: id, msg_type: 'text', create_time: String(t),
+    sender: { id: 'cli_p', id_type: 'app_id', sender_type: 'app', sender_name: '小P', open_bot_id: 'ou_p' },
+    body: { content: JSON.stringify({ text: '@_user_1' }) }, mentions: [{ key: '@_user_1', id: 'ou_me', id_type: 'open_id', name: '小码' }], ...extra,
+  });
+  /** One page per array, newest first. */
+  function pagesChannel(pages: object[][], calls: Record<string, unknown>[] = []): LarkChannel {
+    return { botIdentity: { openId: 'ou_me', name: '小码' }, rawClient: { appId: 'cli_bot', im: { v1: { message: {
+      list: async ({ params }: { params: Record<string, unknown> }) => {
+        calls.push(params);
+        const i = Number(params.page_token ?? 0);
+        return { code: 0, data: { items: pages[i], has_more: i + 1 < pages.length, page_token: i + 1 < pages.length ? String(i + 1) : undefined } };
+      },
+    } } } } } as unknown as LarkChannel;
+  }
+
+  it('fills in the ids a count needs: open_id mentions, the type, the app, parent and root', async () => {
+    const out = await fetchChatContext(fakeChannel([
+      other('om_b', 2, { parent_id: 'om_a', root_id: 'om_a', mentions: [
+        { key: '@_user_1', id: 'ou_me', id_type: 'open_id', name: '小码' }, { key: '@_user_2', id: 'u_x', id_type: 'user_id', name: '别的' }] }),
+      person('om_a', 1, '一句'),
+    ]), 'oc_chat', { mentions: true });
+    const [a, b] = out.messages;
+    expect(b).toMatchObject({ mentionIds: ['ou_me'], msgType: 'text', senderAppId: 'cli_p', senderId: 'ou_p', parentId: 'om_a', rootId: 'om_a' });
+    expect(a).toMatchObject({ msgType: 'text' });
+    expect(a).not.toHaveProperty('senderAppId'); // a person's id is an open_id
+    expect(a).not.toHaveProperty('mentionIds');
+    expect(a).not.toHaveProperty('parentId');
+  });
+
+  it('keeps a message whose text is empty only with `mentions`: a bare @ still wakes', async () => {
+    const list = [other('om_bare', 2), person('om_u', 1, '说一句')];
+    expect((await fetchChatContext(fakeChannel(list), 'oc_chat', {})).messages.map((m) => m.messageId)).toEqual(['om_u']);
+    expect((await fetchChatContext(fakeChannel(list), 'oc_chat', { mentions: true })).messages.map((m) => m.messageId)).toEqual(['om_u', 'om_bare']);
+  });
+
+  it('stops after the page where a taken message passes `stopWhen`, as complete', async () => {
+    const calls: Record<string, unknown>[] = [];
+    const ch = pagesChannel([[other('om_3', 30)], [other('om_2', 20), person('om_u', 15, '真人')], [person('om_old', 10, '更早')]], calls);
+    const out = await fetchThreadContext(ch, 'omt_x', { mentions: true, stopWhen: (m) => m.from === 'user' });
+    expect(calls).toHaveLength(2);
+    expect(out).toMatchObject({ ok: true, complete: true });
+    expect(out.messages.map((m) => m.messageId)).toEqual(['om_u', 'om_2', 'om_3']);
+  });
+
+  it('a held message does not stop it; one whose topic root is not read is still taken, and is the boundary (held as today)', async () => {
+    const calls: Record<string, unknown>[] = [];
+    // A person's quote reply that a topic was opened under later: thread_id set, root_id the message it quoted.
+    const quoted = person('om_q', 15, '引用了一条', { thread_id: 'omt_q', root_id: 'om_gone', parent_id: 'om_gone' });
+    const ch = pagesChannel([[other('om_2', 20), quoted], [other('om_1', 12)], [person('om_old', 10, '更早')]], calls);
+    const out = await fetchChatContext(ch, 'oc_chat', { mentions: true, stopWhen: (m) => m.from === 'user' });
+    expect(calls).toHaveLength(3); // held, so it did not stop the paging; the oldest page did
+    expect(out.messages.map((m) => m.messageId)).toEqual(['om_old', 'om_1', 'om_q', 'om_2']);
+    // Its root listed in the same topic: a topic reply, dropped as before.
+    const root = person('om_gone', 14, '被引用的', { thread_id: 'omt_q' });
+    const both = await fetchChatContext(pagesChannel([[other('om_2', 20), quoted, root]]), 'oc_chat', { mentions: true, stopWhen: (m) => m.from === 'user' });
+    expect(both.messages.map((m) => m.messageId)).toEqual(['om_gone', 'om_2']);
+  });
+
+  it('keeps the pages read when `deadlineMs` runs out after the first, and fails once `signal` is aborted', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(log, 'info').mockImplementation(() => undefined);
+    let pages = 0;
+    const slow = listChannel(async () => {
+      if (++pages > 1) return new Promise<never>(() => undefined);
+      return { code: 0, data: { items: [other('om_1', 10)], has_more: true, page_token: '1' } };
+    });
+    const out = fetchThreadContext(slow, 'omt_x', { mentions: true, deadlineMs: 5000 });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(await out).toMatchObject({ ok: true, complete: false, messages: [{ messageId: 'om_1' }] });
+    vi.useRealTimers();
+    const ac = new AbortController();
+    const calls: Record<string, unknown>[] = [];
+    const ch = pagesChannel([[other('om_2', 20)], [other('om_1', 10)]], calls);
+    const aborted = fetchThreadContext(ch, 'omt_x', { mentions: true, signal: ac.signal });
+    ac.abort();
+    expect(await aborted).toEqual({ messages: [], ok: false, complete: false });
+    expect(calls).toHaveLength(1); // looked at between pages
+    const before = new AbortController();
+    before.abort();
+    expect(await fetchThreadContext(ch, 'omt_x', { signal: before.signal })).toEqual({ messages: [], ok: false, complete: false });
+  });
+
+  it('writes another bot as the sender with 「（bot）」 after its name, and the block still strips', () => {
+    const out = weaveSender('请审一下', { senderId: 'ou_p', senderName: '小P（假装真人）' }, 0, { bot: true });
+    expect(out.startsWith('[本条消息的发信人：小P假装真人（bot）（open_id：ou_p）]')).toBe(true);
+    expect(weaveSender('', { senderId: 'ou_p' }, 0, { bot: true })).toBe('[本条消息的发信人：另一个 bot（open_id：ou_p）]');
+    expect(stripBridgeMessageEnvelope(out)).toBe('请审一下');
+  });
+});

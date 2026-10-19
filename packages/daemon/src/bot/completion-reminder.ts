@@ -10,6 +10,8 @@ import { log } from '../core/logger';
 export interface CompletionReminderReplyInput {
   cardMsgId: string;
   requesterOpenId?: string;
+  /** Who started the turn: a person, or another bot that woke this one (s27a-0; logged). */
+  requesterKind?: 'user' | 'bot' | 'unknown';
   outcome: CompletionReminderOutcome;
   requestedAt: number;
   manuallyRequested: boolean;
@@ -73,6 +75,7 @@ export async function sendCompletionReminderReply(
       terminal: input.outcome,
       elapsedMs,
       cardUpdated: input.cardUpdated,
+      ...(input.requesterKind ? { requester: input.requesterKind } : {}),
     });
     return 'sent';
   } catch (err) {
