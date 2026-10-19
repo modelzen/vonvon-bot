@@ -624,7 +624,7 @@ export function createAdminService(deps: AdminServiceDeps = {}): AdminService {
       const bound = new Set((await listProjectsIn(files.projectsFile)).map(project => project.chatId));
       const groups = (await readPendingGroups(pendingGroupsFile(files.projectsFile)))
         .flatMap(group => group.state === 'ready' && !bound.has(group.chatId)
-          ? [{ chatId: group.chatId, name: group.name, addedAt: group.addedAt, ...(group.topic === undefined ? {} : { topic: group.topic }) }] : []);
+          ? [{ chatId: group.chatId, name: group.name, addedAt: group.addedAt, ...(group.topic === undefined ? {} : { topic: group.topic }), ...(group.hasOtherBots === undefined ? {} : { hasOtherBots: group.hasOtherBots }) }] : []);
       return { groups: groups.length > MAX_PENDING_GROUPS
         ? groups.sort((a, b) => b.addedAt - a.addedAt).slice(0, MAX_PENDING_GROUPS) : groups };
     },
