@@ -1,5 +1,6 @@
 import { getAppRoleSnapshot } from '../config/app-roles';
-import { findHandoffs, handoffSendResult, type HandoffSendResult, handoffText, handoffNote, ambiguousNote, HANDOFF_SEND_MS, type HandoffMiss } from './bot-handoff';
+import { createChatPeople } from './chat-people';
+import { findHandoffs, handoffSendResult, type HandoffSendResult, handoffText, handoffNote, ambiguousNote, ambiguousPersonNote, overNote, incompleteNote, otherBotNames, HANDOFF_SEND_MS, type HandoffMiss } from './bot-handoff';
 import { AskCoordinator, type AskTurn } from './ask-coordinator';
 import { createPendingGroups, pendingGroupsFile } from '../project/pending-groups';
 import { realpath, stat } from 'node:fs/promises';
@@ -256,6 +257,7 @@ import { createTopicContext, localBots, personOf, topicQuotes, topicRows, type C
 import { audienceOf, fromBot, quotedId, rawSender } from './baselines';
 import {
   BOT_WAKE_NOTE,
+  AT_HINT_NOTE,
   INITIATIVE_NOTE,
   sessionTitleSourceFromMessage,
   stripBridgeMessageEnvelope,
@@ -1205,6 +1207,7 @@ export function createOrchestrator(
   /** s27a0: no card or markdown post of this bot carries a real `<at>` of a bot; the chat's bot list is read on the
    * first `<at>` there (D/card/at-guard.ts). Rule groups too: a rule bot's card wakes a smart bot just the same. */
   const roster = createBotRoster(channel, { stop: orStop });
+  const people = createChatPeople(channel, { stop: orStop });
   installAtGuard(channel, roster);
   const acceptedTasks = new Set<Promise<unknown>>();
   const shutdownErrors = new Set<unknown>();
@@ -2537,14 +2540,19 @@ export function createOrchestrator(
    * session-scoped, not per-message). Voice display metadata stays separate
    * from the woven agent input.
    */
-  function ingestContext(msg: NormalizedMessage, text: string, extra?: Pick<TurnExtra, 'initiative' | 'wake'>): Promise<IngestedContext> {
-    return orderContext(msg.threadId ?? msg.chatId, () => ingestContextImpl(msg, text, extra));
+  function ingestContext(msg: NormalizedMessage, text: string, extra?: Pick<TurnExtra, 'initiative' | 'wake'>, project?: Project): Promise<IngestedContext> {
+    return orderContext(msg.threadId ?? msg.chatId, () => ingestContextImpl(msg, text, extra, project));
   }
-  async function ingestContextImpl(msg: NormalizedMessage, text: string, extra?: Pick<TurnExtra, 'initiative' | 'wake'>): Promise<IngestedContext> {
+  async function ingestContextImpl(msg: NormalizedMessage, text: string, extra?: Pick<TurnExtra, 'initiative' | 'wake'>, project?: Project): Promise<IngestedContext> {
     names.learnMentions(msg.mentions);
     // Started first so the lookup overlaps the voice, file and quote fetches;
     // bounded, and undefined on failure (the block then says 某用户, as before).
     const senderNameP = extra?.wake ? Promise.resolve(extra.wake.name || undefined) : names.senderName(msg);
+    const hintP = project && sessionModeOf(project) === 'smart'
+      ? orStop(roster.load(msg.chatId), undefined)
+        .then(() => AT_HINT_NOTE(otherBotNames(roster.peek(msg.chatId), { openId: channel.botIdentity?.openId, appId: channel.rawClient?.appId })))
+        .catch(() => AT_HINT_NOTE([]))
+      : undefined;
     const ingested = msg.rawContentType === 'audio' ? await ingestVoice(channel, msg, voice) : { text };
     let body = ingested.text;
     if (messageHasFiles(msg)) {
@@ -2571,6 +2579,8 @@ export function createOrchestrator(
     // first-turn (startReservedRun) and mid-turn (handleTurn) paths.
     const senderName = (await senderNameP) ?? msg.senderName;
     body = weaveSender(body, { senderId: msg.senderId, senderName }, deliveryLagMs(msg), { bot: fromBot(msg) });
+    const hint = await hintP;
+    if (hint) body = `${hint}\n\n${body}`;
     // A turn the smart mode joined on its own (s25): a fixed line, never the judge model's reason, which was
     // written by a small model that read untrusted group messages (Rakazo 第二轮 5).
     if (extra?.initiative) body = `${INITIATIVE_NOTE}\n\n${body}`;
@@ -2628,7 +2638,7 @@ export function createOrchestrator(
       // A retry brings its own saved images instead.
       let pendingImages: Promise<string[] | undefined> = Promise.resolve(extra?.images);
       if (!extra?.images && messageHasImages(msg)) pendingImages = collectInboundImages(channel, msg);
-      const [images, woven] = await Promise.all([pendingImages, ingestContext(msg, text, extra)]);
+      const [images, woven] = await Promise.all([pendingImages, ingestContext(msg, text, extra, project)]);
       if (existing.intakeCancelled) {
         if (dropBotMessage(msg, 'intake-cancelled', '会话被停下了')) return;
         await channel.send(msg.chatId, { markdown: '本条消息处理期间会话已停止，请重发。' }, { replyTo: msg.messageId, replyInThread: !flat }).catch(() => undefined);
@@ -2861,7 +2871,7 @@ export function createOrchestrator(
             : Promise.resolve(undefined);
         // File attachments / quoted message woven into the prompt. Skipped when
         // preIngested (handleTurn already wove them into `text`).
-        const ingestP = preIngested ? Promise.resolve(preIngested) : ingestContext(msg, text, extra);
+        const ingestP = preIngested ? Promise.resolve(preIngested) : ingestContext(msg, text, extra, goal ? undefined : project);
         let tResolveDone = tIntake;
         const resolveP = resolveThread(sessionKey, msg.chatId, {
           mode: perm.mode,
@@ -3407,7 +3417,7 @@ export function createOrchestrator(
       // Download any attached/forwarded images so the opening turn can see them,
       // and any file attachments (their paths get woven into the prompt text).
       const imagesP = messageHasImages(msg) ? collectInboundImages(channel, msg) : Promise.resolve(undefined);
-      const ingestP = ingestContext(msg, text, extra);
+      const ingestP = ingestContext(msg, text, extra, goal ? undefined : project);
       // The opening's main-area lines before the trigger and the 引用行 among them
       // (not for a goal: its objective stays self-contained). Never rejects.
       const listP = !goal && topics ? topics.list(msg.chatId) : Promise.resolve([]);
@@ -6084,18 +6094,25 @@ export function createOrchestrator(
     const ref = cardId.slice(-6);
     const done = (fields: Record<string, unknown>): void => log.info('card', 'handoff', { ref, ...fields });
     if (shuttingDown) { done({ sent: false, why: 'shutdown' }); return; }
-    await orStop(roster.load(opts.chatId), undefined);
+    await Promise.all([orStop(roster.load(opts.chatId), undefined), orStop(people.load(opts.chatId), undefined)]);
     // Shutdown while reading the roster must not send or repaint, even for ambiguous names.
     if (shuttingDown) { done({ sent: false, why: 'shutdown' }); return; }
     const bots = roster.peekForHandoff(opts.chatId);
     if (!bots) { done({ sent: false, why: 'no-roster' }); return; }
-    const { handoffs: found, ambiguous } = findHandoffs(answerText, bots, {
+    const known = people.peek(opts.chatId);
+    const { handoffs: found, ambiguous, ambiguousPeople, over, unverified } = findHandoffs(answerText, bots, {
       openId: channel.botIdentity?.openId, appId: channel.rawClient.appId,
-    });
-    if (!found.length && !ambiguous.length) return;
+    }, known?.people, known?.complete ?? false);
+    if (!found.length && !ambiguous.length && !ambiguousPeople.length && !unverified.length) return;
     const to = found.map(h => h.openId.slice(-6));
     const note = async (why?: HandoffMiss): Promise<void> => {
-      const lines = [...(why ? [handoffNote(found.map(h => h.name), why)] : []), ...ambiguous.map(ambiguousNote)];
+      const lines = [
+        ...(why ? [handoffNote(found, why)] : []),
+        ...ambiguous.map(ambiguousNote),
+        ...ambiguousPeople.map(ambiguousPersonNote),
+        ...(unverified.length ? [incompleteNote(unverified)] : []),
+        ...(over.length ? [overNote(over)] : []),
+      ];
       if (!lines.length || shuttingDown) return;
       rc.handoffNotes = lines;
       if (!(await stream.finalizeCard(channel, buildRunCard(rc)))) {
@@ -6103,7 +6120,15 @@ export function createOrchestrator(
       }
     };
     if (!cardUpdated) { done({ to, sent: false, why: 'finalize-failed' }); return; }
-    if (!found.length) { done({ sent: false, why: 'ambiguous', names: ambiguous.length }); await note(); return; }
+    if (!found.length) {
+      done({
+        sent: false, why: unverified.length ? 'incomplete' : 'ambiguous',
+        names: ambiguous.length + ambiguousPeople.length + unverified.length,
+        ...(unverified.length ? { incomplete: true, unverified: unverified.length, ...(!known ? { people: false } : {}) } : {}),
+      });
+      await note();
+      return;
+    }
     if (shuttingDown) { done({ to, sent: false, why: 'shutdown' }); return; }
     const text = handoffText(found);
     const send: Promise<HandoffSendResult> = channel.rawClient.im.v1.message.reply({
@@ -6123,7 +6148,10 @@ export function createOrchestrator(
       await note('failed');
       return;
     }
-    done({ to, sent: true, len: text.length, ...(ambiguous.length ? { ambiguous: ambiguous.length } : {}) });
+    done({ to, sent: true, len: text.length, ...(ambiguous.length ? { ambiguous: ambiguous.length } : {}),
+      ...(ambiguousPeople.length ? { ambiguousPeople: ambiguousPeople.length } : {}),
+      ...(over.length ? { over: over.length } : {}),
+      ...(found.some(h => h.person) ? { persons: found.filter(h => h.person).length } : {}) });
     await note();
   }
 
