@@ -5957,7 +5957,7 @@ export function createOrchestrator(
       if (!current || projectMutations.has(project.chatId) || projectRevision(current) !== projectRevision(project)) throw new AdminWriteError('项目已改变，请刷新后重试');
       const key = ruleKind(project) === 'single' ? perm.sessionKey : `desktop-resume:${project.chatId}`;
       if (active.has(key) || intakeChats.has(project.chatId) || pendingTopics.has(project.chatId)) throw new AdminWriteError('会话正在运行');
-      const reserved: ActiveState = { queue: [], requesterOpenId: owner };
+      const reserved: ActiveState = { queue: [], requesterOpenId: owner, requesterKind: 'user', smart: sessionModeOf(project) === 'smart' };
       active.set(key, reserved);
       if (ruleKind(project) !== 'single') resumePublications.add(project.chatId);
       let publishedKey: string | undefined;
@@ -6032,7 +6032,7 @@ export function createOrchestrator(
     const sessionBackend = backendFor(record.backend);
     if (request.action === 'startGoal' && sessionBackend.capabilities?.goal === false) throw new AdminWriteError('当前后端不支持自主目标');
     if (request.action === 'compact' && sessionBackend.capabilities?.compact === false) throw new AdminWriteError('当前后端不支持手动压缩');
-    const reserved: ActiveState = { queue: [], requesterOpenId: owner };
+    const reserved: ActiveState = { queue: [], requesterOpenId: owner, requesterKind: 'user', smart: sessionModeOf(project) === 'smart', isGoal: request.action === 'startGoal' };
     active.set(key, reserved);
     let launched = false;
     let compacted: AgentThread | undefined;
@@ -6399,6 +6399,7 @@ export function createOrchestrator(
     // queued during startup aren't lost); fall back to a fresh state otherwise.
     const state: ActiveState = active.get(activeKey) ?? { queue: [], requesterOpenId: opts.requesterOpenId, runLoop: true };
     state.thread = opts.thread;
+    state.runLoop = true;
     state.smart = opts.smart === true;
     if (opts.requesterOpenId) state.requesterOpenId = opts.requesterOpenId;
     if (opts.requesterKind) state.requesterKind = opts.requesterKind;

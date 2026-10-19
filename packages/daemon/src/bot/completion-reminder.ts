@@ -33,12 +33,13 @@ export interface CompletionReminderReplyDeps {
 
 export type CompletionReminderReplyResult = 'sent' | 'skipped' | 'failed';
 
-/** Manual reminder controls are only offered outside smart groups and bot turns. */
+/** Only ordinary runs outside smart groups offer manual reminder controls. */
 export function reminderButtonOffered(
   cfg: AppConfig,
-  run: Pick<CompletionReminderReplyInput, 'requesterKind' | 'smart'>,
+  run: Pick<CompletionReminderReplyInput, 'requesterKind' | 'smart'> & { runLoop?: true; isGoal?: boolean; compacting?: boolean },
 ): boolean {
-  return shouldShowCompletionReminderButton(cfg) && run.requesterKind !== 'bot' && !run.smart;
+  return run.runLoop === true && !run.isGoal && !run.compacting &&
+    shouldShowCompletionReminderButton(cfg) && run.requesterKind !== 'bot' && !run.smart;
 }
 
 /**

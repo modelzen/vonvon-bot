@@ -306,10 +306,19 @@ describe('smart completion reminders (s27b3)', () => {
     } finally { fail.mockRestore(); }
   });
 
-  it('offers the manual button only outside smart turns and never to bots', () => {
-    expect(reminderButtonOffered(config('manual'), { requesterKind: 'user' })).toBe(true);
-    expect(reminderButtonOffered(config('manual'), { requesterKind: 'user', smart: true })).toBe(false);
-    expect(reminderButtonOffered(config('manual'), { requesterKind: 'bot', smart: false })).toBe(false);
-    for (const mode of ['long', 'failures', 'always'] as const) expect(reminderButtonOffered(config(mode), { requesterKind: 'user' })).toBe(false);
+  it('offers the manual button only for an ordinary run outside smart groups', () => {
+    const run = { runLoop: true as const, requesterKind: 'user' as const };
+    expect(reminderButtonOffered(config('manual'), run)).toBe(true);
+    expect(reminderButtonOffered(config('manual'), { ...run, smart: true })).toBe(false);
+    expect(reminderButtonOffered(config('manual'), { ...run, requesterKind: 'bot', smart: false })).toBe(false);
+    for (const mode of ['long', 'failures', 'always'] as const) expect(reminderButtonOffered(config(mode), run)).toBe(false);
+  });
+
+  it('never offers subscriptions for maintenance, goal preparation or between-turn compaction', () => {
+    const cfg = config('manual');
+    expect(reminderButtonOffered(cfg, { requesterKind: 'user', smart: false })).toBe(false);
+    expect(reminderButtonOffered(cfg, { requesterKind: 'user', smart: true })).toBe(false);
+    expect(reminderButtonOffered(cfg, { requesterKind: 'user', runLoop: true, isGoal: true })).toBe(false);
+    expect(reminderButtonOffered(cfg, { requesterKind: 'user', runLoop: true, compacting: true })).toBe(false);
   });
 });

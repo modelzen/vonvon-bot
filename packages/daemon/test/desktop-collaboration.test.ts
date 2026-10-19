@@ -198,6 +198,50 @@ it('reserves a compacting session against clear and rejects stale run controls',
     finish(); await compact;
   } finally { await app.shutdown(); }
 });
+it.each([
+  { action: 'compact', smart: true },
+  { action: 'compact', smart: false },
+  { action: 'resume', smart: true },
+  { action: 'resume', smart: false },
+  { action: 'startGoal', smart: true },
+  { action: 'startGoal', smart: false },
+] as const)('desktop $action preparation in smart=$smart exposes no completion subscription', async ({ action, smart }) => {
+  await updateProject('demo', { smart });
+  const be = backend();
+  let release!: () => void;
+  let reached!: () => void;
+  const entered = new Promise<void>(resolve => { reached = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const preparationError = new Error('finish suspended desktop preparation');
+  if (action === 'compact') {
+    be.thread.compact.mockImplementationOnce(async () => { reached(); await gate; throw preparationError; });
+  } else if (action === 'resume') {
+    be.readHistory.mockImplementationOnce(async () => { reached(); await gate; throw preparationError; });
+  } else {
+    be.startThread.mockRejectedValueOnce(preparationError);
+    be.resumeThread.mockImplementationOnce(async () => { reached(); await gate; throw preparationError; });
+  }
+  const manualCfg: AppConfig = { ...cfg, preferences: { ...cfg.preferences, completionReminder: { mode: 'manual' } } };
+  const app = createOrchestrator({ send: fixture.send } as never, manualCfg, paths.appDir);
+  const operation = action === 'resume'
+    ? app.collaboration({ action, ...target, sessionId: 'past', backend: 'codex-appserver' })
+    : action === 'startGoal'
+      ? app.collaboration({ action, ...target, threadId: 'oc_demo', objective: 'Finish' })
+      : app.collaboration({ action, ...target, threadId: 'oc_demo' });
+  const settled = expect(operation).rejects.toThrow(preparationError.message);
+  try {
+    await entered;
+    const context = await app.collaboration({ action: 'context', ...target, threadId: 'oc_demo' });
+    expect.soft(context).toMatchObject({ run: { goal: action === 'startGoal', canRemind: false, reminderRequested: false } });
+    if (!context || typeof context !== 'object' || !('run' in context) || !context.run || typeof context.run !== 'object' || !('id' in context.run) || typeof context.run.id !== 'string') throw new Error('suspended desktop preparation has no run');
+    await expect.soft(app.collaboration({ action: 'reminder', ...target, threadId: 'oc_demo', runId: context.run.id, requested: true })).rejects.toThrow('仅任务发起人');
+    expect.soft(await app.collaboration({ action: 'context', ...target, threadId: 'oc_demo' })).toMatchObject({ run: { reminderRequested: false } });
+  } finally {
+    release();
+    await settled;
+    await app.shutdown();
+  }
+});
 it('changes directory only after checking revision and archives old bindings without deleting history', async () => {
   backend(); const app = orchestrator();
   const directory = `${paths.appDir}/projects/new`; await mkdir(directory, { recursive: true });
