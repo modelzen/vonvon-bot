@@ -209,7 +209,7 @@ describe('the key row', () => {
     expect(uses).toContain('前端开发 · 小审，自己选了 TypeSafe 的 Jev');
     expect(uses).toContain('周报整理 · 小审，自己选了 TypeSafe 的 Jev；现在不是智能群，什么都不判断');
     expect(uses).toContain('2 个 Bot · 3 个飞书群');
-    expect(text(html(<UsesRow service={service({inUse: []})} view={view(service({inUse: []}))}/>))).toContain('现在没有 Bot 或飞书群选它。');
+    expect(text(html(<UsesRow service={service({inUse: []})} view={view(service({inUse: []}))}/>))).toContain('现在没有 Bot 或飞书群选它。在智能群的群详情页把「判断模型」选成 TypeSafe 的 Jev，才用这个 key。');
     const unread = text(html(<UsesRow service={service({inUse: []})} view={view(service({inUse: []}), {botsUnreadable: true, unreadBots: 2})}/>));
     expect(unread).toContain('Bot 清单（bots.json）读不了，谁选了它没算进来；vonvon daemon logs 里的 secrets.bots-unreadable 有原因。');
     expect(unread).toContain('有 2 个 Bot 的设置读不了，没算进来');
