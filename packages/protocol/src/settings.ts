@@ -239,6 +239,8 @@ export const agentViewSchema = z.object({
   decisionModels,
   ownerOpenId: z.string().nullable(),
   administrators: z.object({
+    feishu: z.object({ ownerOpenId: z.string().nullable(), adminOpenIds: z.array(z.string()) }).optional(),
+    scannerOpenId: z.string().nullable().optional(),
     openIds: z.array(z.string()),
     revision: z.string(),
   }),

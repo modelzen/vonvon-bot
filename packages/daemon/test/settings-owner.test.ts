@@ -1,3 +1,5 @@
+import { buildAdminsCard } from '../src/card/dm-cards';
+import * as appRoles from '../src/config/app-roles';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { paths } from '../src/config/paths';
@@ -286,4 +288,33 @@ it('s36d2: a group whose backend left the catalog runs Codex and shows the Codex
   expect((await owner.save({ scope: project, section: 'model', revision: p.sections.model.revision, patch: { selection: { kind: 'explicit', model: 'fixture-model', effort: 'low' } } })).kind).toBe('saved');
   p = await owner.read(project) as ProjectSettingsView;
   expect(p.sections.model.effective.selection).toEqual({ kind: 'explicit', model: 'fixture-model', effort: 'low' });
+});
+
+it('shows Feishu administrator sources and prevents their local removal', async () => {
+  const roles = vi.spyOn(appRoles, 'getAppRoleSnapshot').mockReturnValue({
+    appId: botId, tenant: 'feishu', fetchedAt: Date.now(), ownerOpenId: 'ou_feishu_owner', admins: ['ou_feishu_admin'],
+  });
+  try {
+    cfg.preferences ??= {};
+    cfg.preferences.access ??= {};
+    cfg.preferences.access.admins = [...(cfg.preferences.access.admins ?? []), 'ou_feishu_admin'];
+    await saveConfig(cfg);
+    const { owner } = await fixture();
+    const view = await owner.read(agent);
+    if (view.scope.kind !== 'agent' || !('administrators' in view)) throw new Error('Expected agent settings');
+    expect(view.administrators.feishu).toEqual({ ownerOpenId: 'ou_feishu_owner', adminOpenIds: ['ou_feishu_admin'] });
+    expect(view.administrators.scannerOpenId).toBe('ou_owner');
+    const card = JSON.stringify(buildAdminsCard(cfg, new Map()));
+    expect(card).toContain('飞书应用拥有者');
+    expect(card).toContain('飞书应用管理员');
+    expect(card).toContain('扫码注册者');
+    expect(card).toContain('本地管理员');
+    expect(card).not.toContain('\"u\":\"ou_feishu_admin\"');
+    expect(card).toContain('\"u\":\"ou_admin\"');
+    for (const openId of ['ou_feishu_owner', 'ou_feishu_admin', 'ou_owner']) {
+      expect((await owner.act({ kind: 'adminMember', botId, openId, membership: 'absent', revision: view.administrators.revision })).kind).toBe('rejected');
+    }
+    expect((await owner.act({ kind: 'adminMember', botId, openId: 'ou_admin', membership: 'absent', revision: view.administrators.revision })).kind).toBe('saved');
+    expect(cfg.preferences?.access?.admins).toContain('ou_feishu_admin');
+  } finally { roles.mockRestore(); }
 });

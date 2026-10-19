@@ -1,3 +1,4 @@
+import { getAppRoleSnapshot } from './app-roles';
 import type { BotDefaults } from './defaults';
 import type { DirectorySettings } from './directories';
 import { REASONING_EFFORTS, type ReasoningEffort } from '../agent/types';
@@ -348,19 +349,19 @@ export function isChatAllowed(cfg: AppConfig, chatId: string): boolean {
   return list.includes(chatId);
 }
 
-/** The bot owner's open_id: explicit `ownerOpenId`, else the first admin (惰性
- * 兼容老 config——无 ownerOpenId 时回退首个 admin，不写盘). undefined 仅当从未注册。 */
+/** Feishu application owner when known; otherwise the scanner, or first legacy local admin. */
 export function resolveOwner(cfg: AppConfig): string | undefined {
   const access = cfg.preferences?.access;
-  return access?.ownerOpenId ?? access?.admins?.[0];
+  return getAppRoleSnapshot(cfg.accounts.app.id, cfg.accounts.app.tenant)?.ownerOpenId ?? access?.ownerOpenId ?? access?.admins?.[0];
 }
 
-/** True when `senderId` is the owner or an admin (may DM / create project /
- * destructive). Owner 恒为 admin、不受 admins 增删影响；admins 为空时仅 owner 是 admin。 */
+/** Management access is the union of Feishu owner/admins/developers, scanner and local admins. */
 export function isAdmin(cfg: AppConfig, senderId: string): boolean {
   if (!senderId) return false;
-  if (senderId === resolveOwner(cfg)) return true;
-  return Boolean(cfg.preferences?.access?.admins?.includes(senderId));
+  const roles = getAppRoleSnapshot(cfg.accounts.app.id, cfg.accounts.app.tenant);
+  return senderId === roles?.ownerOpenId || Boolean(roles?.admins.includes(senderId))
+    || senderId === cfg.preferences?.access?.ownerOpenId
+    || Boolean(cfg.preferences?.access?.admins?.includes(senderId));
 }
 
 /** True when `senderId` may make the bot respond in a project group. admin/owner

@@ -9,12 +9,19 @@ const fixture = vi.hoisted(() => ({
   connect: vi.fn(),
   disconnect: vi.fn(async () => {}),
   membership: vi.fn(),
+  refreshRoles: vi.fn(async () => {}),
+  stopRoles: vi.fn(async () => {}),
   lockHeld: false,
   releaseLock: vi.fn(),
   registryClose: vi.fn(async () => {}),
   logFail: vi.fn(),
   reply: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ code: 0 })),
   crashHooks: new Set<() => void>(),
+}));
+
+vi.mock('../src/config/app-roles', async original => ({
+  ...await original<object>(),
+  createAppRoleRefresher: () => ({ refresh: fixture.refreshRoles, stop: fixture.stopRoles }),
 }));
 
 vi.mock('../src/host/crash-guard', async original => ({
@@ -109,6 +116,8 @@ afterEach(() => {
   expect(fixture.crashHooks.size).toBe(0);
   fixture.connect.mockReset();
   fixture.membership.mockReset();
+  fixture.refreshRoles.mockReset();
+  fixture.stopRoles.mockClear();
   fixture.disconnect.mockClear();
   fixture.registryClose.mockClear();
   fixture.releaseLock.mockClear();
@@ -153,8 +162,9 @@ async function pendingVerification() {
     chatId: 'oc_pending', operator: 'owner', addedAt: 1, generation: 'first', state: 'verifying',
   }] }));
   const verification = deferred<{ code: number; data: { is_in_chat: boolean } }>();
-  fixture.membership.mockReturnValue(verification.promise);
-  return { file, verification };
+  const checking = deferred<void>();
+  fixture.membership.mockImplementation(() => { checking.resolve(); return verification.promise; });
+  return { file, verification, checking };
 }
 
 /** What the last shutdown dropped (s18c), where `daemon run` keeps it for this bot. */
@@ -172,13 +182,25 @@ it.each([false, true])('keeps host and Bot ownership through accepted startup ve
   const { readPendingGroups } = await import('../src/project/pending-groups');
   const { runHostRuntime } = await import('../src/host/bootstrap');
   expect(process.send).toBeUndefined();
-  const { file, verification } = await pendingVerification();
+  const { file, verification, checking } = await pendingVerification();
   const dropped = await seedDropped();
   const kept = await readFile(dropped, 'utf8');
   const connectError = new Error('fixture connect rejected');
   const cleanupError = new Error('fixture disconnect rejected');
-  if (cleanupFails) fixture.disconnect.mockImplementationOnce(async () => { throw cleanupError; });
-  fixture.connect.mockRejectedValue(connectError);
+  const roleRefresh = deferred<void>();
+  const connecting = deferred<void>();
+  const failConnection = deferred<void>();
+  const disconnected = deferred<void>();
+  fixture.refreshRoles.mockReturnValueOnce(roleRefresh.promise);
+  fixture.connect.mockImplementationOnce(async () => {
+    connecting.resolve();
+    await failConnection.promise;
+    throw connectError;
+  });
+  fixture.disconnect.mockImplementationOnce(async () => {
+    disconnected.resolve();
+    if (cleanupFails) throw cleanupError;
+  });
   const control: ShutdownControl = {
     requested: false,
     waitForRequest: () => new Promise<void>(() => {}),
@@ -189,19 +211,32 @@ it.each([false, true])('keeps host and Bot ownership through accepted startup ve
   };
   const running = outcome(runHostRuntime({ bot: 'startup-drain', managed: false, control }));
   try {
-    await vi.waitFor(() => expect(fixture.membership).toHaveBeenCalledOnce(), COLD);
-    await Promise.resolve();
+    await checking.promise;
+    expect(fixture.membership).toHaveBeenCalledOnce();
+    expect(fixture.connect).not.toHaveBeenCalled();
+    roleRefresh.resolve();
+    await connecting.promise;
+    expect(fixture.refreshRoles).toHaveBeenCalledOnce();
+    expect(fixture.disconnect).not.toHaveBeenCalled();
+    failConnection.resolve();
+    await disconnected.promise;
+    await vi.waitFor(() => expect(fixture.registryClose).toHaveBeenCalled());
+    expect(fixture.connect.mock.invocationCallOrder[0]).toBeLessThan(fixture.disconnect.mock.invocationCallOrder[0]!);
+    expect(fixture.disconnect.mock.invocationCallOrder[0]).toBeLessThan(fixture.registryClose.mock.invocationCallOrder[0]!);
     expect(running.state()).toBe('pending');
     expect(fixture.lockHeld).toBe(true);
     expect(existsSync(join(paths.appDir, 'daemon.pid'))).toBe(true);
     // s18c: the long connection went first; lock and pid file stay while the verification runs.
     expect(fixture.disconnect).toHaveBeenCalledOnce();
   } finally {
+    roleRefresh.resolve();
+    failConnection.resolve();
     verification.resolve({ code: 0, data: { is_in_chat: true } });
     await running.settled;
   }
   expect(running.state()).toBe('rejected');
   expect(reasons(running.error())).toContain(connectError);
+  expect(fixture.stopRoles).toHaveBeenCalledOnce();
   if (cleanupFails) expect(reasons(running.error())).toContain(cleanupError);
   expect((await readPendingGroups(file))[0]).toMatchObject({ state: 'ready', name: 'Research' });
   expect(fixture.disconnect).toHaveBeenCalledOnce();
