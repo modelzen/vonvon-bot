@@ -87,3 +87,19 @@ it('reads missing files as empty and rejects invalid versions and counts', async
     await expect(readJudgeUsage(file)).rejects.toHaveProperty('newer', newer);
   }
 });
+
+it.each(['EACCES', 'EIO', 'EMFILE'])('keeps history and pending increments on a temporary read failure: %s', async code => {
+  const history = { version: 1, days: { '2026-10-18': { 'llm:claude-agent': 4 }, '2026-10-19': { 'llm:codex-appserver': 3 } } };
+  await writeFile(file, JSON.stringify(history));
+  const read = vi.fn(readJudgeUsage).mockRejectedValueOnce(new JudgeUsageUnreadable(code));
+  const usage = createJudgeUsage({ file, read });
+  usage.add(result()); await usage.flush();
+  expect(await stored()).toEqual(history);
+  expect(log.warn).toHaveBeenCalledWith('judge', 'usage-read-failed', { code });
+  usage.add(result());
+  await vi.advanceTimersByTimeAsync(59_999); expect(read).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(1); expect(read).toHaveBeenCalledTimes(2);
+  await usage.flush();
+  expect((await stored()).days).toEqual({ '2026-10-18': { 'llm:claude-agent': 4 }, '2026-10-19': { 'llm:codex-appserver': 5 } });
+  await usage.close();
+});

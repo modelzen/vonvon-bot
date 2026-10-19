@@ -27,20 +27,22 @@ function errorCode(error: unknown): string | undefined {
   return typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string' ? error.code : undefined;
 }
 export class JudgeUsageUnreadable extends Error {
-  constructor(readonly code?: string, readonly newer?: boolean) { super('判断次数读不了'); }
+  constructor(readonly code?: string, readonly newer?: boolean, readonly corrupt = false) { super('判断次数读不了'); }
 }
 export async function readJudgeUsage(file: string): Promise<JudgeUsageDays> {
-  try {
-    const value: unknown = JSON.parse(await readFile(file, 'utf8'));
-    if (z.object({ version: z.number().int().gt(1) }).safeParse(value).success) throw new JudgeUsageUnreadable(undefined, true);
-    const parsed = fileSchema.safeParse(value);
-    if (!parsed.success) throw new JudgeUsageUnreadable();
-    return parsed.data.days;
-  } catch (error) {
+  let text: string;
+  try { text = await readFile(file, 'utf8'); }
+  catch (error) {
     if (errorCode(error) === 'ENOENT') return {};
-    if (error instanceof JudgeUsageUnreadable) throw error;
     throw new JudgeUsageUnreadable(errorCode(error));
   }
+  let value: unknown;
+  try { value = JSON.parse(text); }
+  catch { throw new JudgeUsageUnreadable(undefined, undefined, true); }
+  if (z.object({ version: z.number().int().gt(1) }).safeParse(value).success) throw new JudgeUsageUnreadable(undefined, true);
+  const parsed = fileSchema.safeParse(value);
+  if (!parsed.success) throw new JudgeUsageUnreadable(undefined, undefined, true);
+  return parsed.data.days;
 }
 export interface JudgeUsage { add(result: JudgeResult): void; flush(): Promise<void>; close(): Promise<void> }
 function merge(into: JudgeUsageDays, delta: JudgeUsageDays): void {
@@ -64,6 +66,11 @@ export function createJudgeUsage(opts: {
     timer = setTimeout(() => { timer = undefined; void flush(); }, delay);
     timer.unref();
   };
+  const retry = (delta: JudgeUsageDays, error: unknown, event: 'usage-read-failed' | 'usage-write-failed'): void => {
+    merge(pending, delta);
+    log.warn('judge', event, { code: errorCode(error) });
+    clear(); schedule(flushMs * 12);
+  };
   const flush = (): Promise<void> => {
     clear();
     chain = chain.then(async () => {
@@ -76,6 +83,10 @@ export function createJudgeUsage(opts: {
           if (!newerLogged) { log.warn('judge', 'usage-newer-file'); newerLogged = true; }
           return;
         }
+        if (!(error instanceof JudgeUsageUnreadable) || !error.corrupt) {
+          retry(delta, error, 'usage-read-failed');
+          return;
+        }
         if (!unreadLogged) { log.warn('judge', 'usage-unreadable', { code: errorCode(error) }); unreadLogged = true; }
         days = {};
       }
@@ -84,9 +95,7 @@ export function createJudgeUsage(opts: {
       for (const day of Object.keys(days)) if (day < oldest) delete days[day];
       try { await (opts.write ?? writeFileAtomic)(opts.file, JSON.stringify({ version: 1, days })); }
       catch (error) {
-        merge(pending, delta);
-        log.warn('judge', 'usage-write-failed', { code: errorCode(error) });
-        clear(); schedule(flushMs * 12);
+        retry(delta, error, 'usage-write-failed');
       }
     });
     return chain;

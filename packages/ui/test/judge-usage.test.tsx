@@ -32,7 +32,7 @@ test('fourteen empty days show only today and the smart group explanation', () =
 });
 test('unreadable bots and old daemon failures explain what happened', () => {
   const html = render({kind: 'ready', view: {...view, unreadBots: 2, botsUnreadable: true}, problem: '没连上 daemon'});
-  for (const text of ['有 2 个 Bot 的判断次数读不了', 'Bot 列表读不了，判断次数都没算进来', 'judge usage-unreadable', '没连上 daemon', '5 次']) expect(html).toContain(text);
+  for (const text of ['有 2 个 Bot 的判断次数读不了', 'Bot 列表读不了，判断次数都没算进来', 'judge usage-unreadable', 'judge usage-bots-unreadable', '没连上 daemon', '5 次']) expect(html).toContain(text);
   expect(render({kind: 'failed', problem: 'daemon 比网页旧，重启 daemon 后再开这一页'})).toContain('daemon 比网页旧，重启 daemon 后再开这一页');
   expect(render({kind: 'loading'})).toContain('正在读取判断次数');
 });
@@ -50,4 +50,13 @@ test('only the latest requested read lands and refresh failure retains the numbe
   const fourth = reader.read();
   pending[3]?.({kind: 'secrets', services: [], unreadBots: 0}); await fourth;
   expect(published.at(-1)).toEqual({kind: 'ready', view, problem: 'daemon 回的不是判断次数'});
+});
+
+test.each([{unreadBots: 1}, {botsUnreadable: true}])('empty unreadable usage does not claim only smart groups judge: %j', problem => {
+  const html = render({kind: 'ready', view: {...view, days: [{date: '2026-10-19', total: 0, sources: [], bots: []}], ...problem}});
+  expect(html).not.toContain('只有智能群会判断。');
+  expect(html).toContain('0 次');
+});
+test('footer describes attempted calls including connection failures', () => {
+  expect(render({kind: 'ready', view})).toContain('发起了调用的才算一次（连不上也算）');
 });

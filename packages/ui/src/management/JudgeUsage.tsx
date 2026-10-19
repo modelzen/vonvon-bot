@@ -28,11 +28,11 @@ export function botTotals(days: readonly JudgeUsageDay[]) {
 export function JudgeUsageRows({read, onRead}: {read: JudgeUsageRead; onRead: () => void}) {
   const view = read.kind === 'ready' ? read.view : undefined;
   const bots = botTotals(view?.days ?? []);
-  const empty = view?.days.every(day => day.total === 0);
+  const empty = view && !view.unreadBots && !view.botsUnreadable && view.days.every(day => day.total === 0);
   const logNote = '原因在状态与诊断页底部的 daemon 日志（judge usage-unreadable）。';
   return <SettingsGroup id={settingAnchor('智能模式的判断次数')} label="智能模式的判断次数"
     action={<Button size="sm" onClick={onRead}>重新读取</Button>}
-    footer="按这台电脑的日期算，最近 14 天。真发给语言模型或决策模型的才算一次；没填 key、冷却中、到了每小时上限没判断的不算。最多晚几秒。">
+    footer="按这台电脑的日期算，最近 14 天。发起了调用的才算一次（连不上也算）；没填 key、冷却中、到了每小时上限没判断的不算。最多晚几秒。">
     {read.kind === 'loading' && <SettingsRow title="正在读取判断次数"/>}
     {read.kind === 'failed' && <SettingsRow title="判断次数读取失败" description={read.problem}/>}
     {read.kind === 'ready' && read.problem && <SettingsRow title="判断次数读取失败" description={read.problem}/>}
@@ -40,7 +40,7 @@ export function JudgeUsageRows({read, onRead}: {read: JudgeUsageRead; onRead: ()
       title={dayLabel(day.date, view.days[0]?.date ?? day.date)} value={`${day.total} 次`}
       description={empty ? '只有智能群会判断。' : sourcesText(day)}/>)}
     {view && view.unreadBots > 0 && <SettingsRow title={`有 ${view.unreadBots} 个 Bot 的判断次数读不了`} description={logNote}/>}
-    {view?.botsUnreadable && <SettingsRow title="Bot 列表读不了，判断次数都没算进来" description={logNote}/>}
+    {view?.botsUnreadable && <SettingsRow title="Bot 列表读不了，判断次数都没算进来" description="原因在状态与诊断页底部的 daemon 日志（judge usage-bots-unreadable）。"/>}
     {bots.length > 0 && <details className="usage-details"><summary>按 Bot 看</summary>
       {bots.map(bot => <SettingsRow key={bot.agentId} title={bot.agentName} value={`今天 ${bot.today} 次 · 14 天 ${bot.total} 次`}/>)}
     </details>}
