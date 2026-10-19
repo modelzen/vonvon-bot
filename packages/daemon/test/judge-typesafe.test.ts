@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { callTypeSafe, DecisionError, DECISION_TIMEOUT_MS, retryAfterMs, TYPESAFE_URL } from '../src/judge/typesafe';
+import { callTypeSafe, DecisionError, DECISION_TIMEOUT_MS, probeTypeSafe, retryAfterMs, TYPESAFE_MODELS_URL, TYPESAFE_URL } from '../src/judge/typesafe';
 
 const KEY = 'ts_TESTKEY0000';
 const BODY = { model: 'jev-latest', state: { new_message: { text: '群消息原文' } }, questions: {} };
@@ -140,5 +140,45 @@ describe('callTypeSafe (s23f 做法（调用）)', () => {
     expect(retryAfterMs('Sun, 18 Oct 2026 10:02:00 GMT', now)).toBe(120_000);
     expect(retryAfterMs('Sun, 18 Oct 2026 09:00:00 GMT', now)).toBe(1_000);
     for (const bad of [null, '', 'soon', '-5', '1.5']) expect(retryAfterMs(bad, now)).toBe(60_000);
+  });
+});
+
+describe('probeTypeSafe (s23g 试一次)', () => {
+  const probe = (answer: Parameters<typeof fakeFetch>[0], key = KEY) => {
+    const f = fakeFetch(answer);
+    return { f, result: probeTypeSafe(key, new AbortController().signal, f.fn) };
+  };
+  it('asks the model list with the key as a bearer token, sends no body and follows no redirect', async () => {
+    const { f, result } = probe(() => json(200, { data: [{ id: 'jev-latest' }] }));
+    expect(await result).toEqual({ outcome: 'ok', message: '能用' });
+    const { url, init } = f.calls[0]!;
+    expect(url).toBe(TYPESAFE_MODELS_URL);
+    expect(init).toMatchObject({ method: 'GET', redirect: 'error' });
+    expect(init.body).toBeUndefined();
+    expect(init.headers).toEqual({ Authorization: `Bearer ${KEY}`, Accept: 'application/json', 'User-Agent': 'vonvon-bot' });
+  });
+
+  const offline = Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' }) });
+  // Node's redirect: 'error' rejects as fetch failed with no code
+  const redirect = Object.assign(new TypeError('fetch failed'), { cause: new Error('unexpected redirect') });
+  it.each<[string, () => Response, object]>([
+    ['401', () => json(401, { detail: { error_type: 'authentication_error' } }), { outcome: 'auth', message: 'key 不对：TypeSafe 不认这个 key', status: 401 }],
+    ['402', () => json(402, {}), { outcome: 'failed', message: 'TypeSafe 不收这个请求（402）', status: 402 }],
+    ['403', () => json(403, {}), { outcome: 'failed', message: 'TypeSafe 不收这个请求（403）', status: 403 }],
+    ['429', () => json(429, {}), { outcome: 'busy', message: '连上了，但 TypeSafe 限流了，稍后再试', status: 429 }],
+    ['503', () => json(503, {}), { outcome: 'network', message: 'TypeSafe 出错了（503）', status: 503 }],
+    ['2xx not JSON', () => new Response('<html>', { status: 200 }), { outcome: 'failed', message: 'TypeSafe 回的内容读不懂', status: 200 }],
+    ['offline', () => { throw offline; }, { outcome: 'network', message: '连不上 TypeSafe（ENOTFOUND）' }],
+    ['a redirect', () => { throw redirect; }, { outcome: 'network', message: '连不上 TypeSafe' }],
+  ])('%s', async (_, answer, expected) => {
+    expect(await probe(answer).result).toEqual(expected);
+  });
+
+  it('5 s without an answer is a timeout; an error quoting the key never reaches the message', async () => {
+    const hang = probe(() => new Promise<Response>(() => undefined));
+    await vi.advanceTimersByTimeAsync(DECISION_TIMEOUT_MS);
+    expect(await hang.result).toEqual({ outcome: 'timeout', message: 'TypeSafe 5 秒没回' });
+    const quoted = await probe(({ init }) => { new Headers(init.headers); return json(200, {}); }, `${KEY}\nX: y`).result;
+    expect(quoted).toEqual({ outcome: 'network', message: '连不上 TypeSafe' });
   });
 });

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { API_KEY_SHAPE } from '@vonvon/protocol';
 import { catalogBackendIds } from '../agent/catalog';
 import { BackendNotInstalledError } from '../agent/backend-loader';
 import { ProviderProcessCleanupError } from '../agent/owned-process';
@@ -59,10 +60,6 @@ export interface JudgeDeps {
   /** a decision model's HTTP calls */
   fetch?: typeof fetch;
 }
-
-/** A key as an HTTP header can carry it: printable ASCII, no space. Anything else would make fetch throw an error
- * that quotes the header, key and all. */
-const KEY_SHAPE = /^[\x21-\x7e]+$/;
 
 /** Ends a judgement early; the reason of the shared AbortController. */
 class JudgeAbort extends Error {
@@ -176,7 +173,8 @@ export function createJudge(deps: JudgeDeps): Judge {
       throw new JudgeFail('failed', '密钥库读不了');
     }
     if (!key) throw new JudgeFail('key', `没填 ${provider.displayName} 的 key`);
-    if (!KEY_SHAPE.test(key)) throw new JudgeFail('key', `${provider.displayName} 的 key 不是一串可见字符，重新填一次`);
+    // anything else would make fetch throw an error that quotes the header, key and all
+    if (!API_KEY_SHAPE.test(key)) throw new JudgeFail('key', `${provider.displayName} 的 key 不是一串可见字符，重新填一次`);
     return key;
   }
 

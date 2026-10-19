@@ -4,6 +4,7 @@ import { buildEventConfigUrl } from '../../config/scopes';
 import { readAdminState } from '../state';
 import type { RpcOutcome } from '../rpc';
 import { unsupported } from '../errors';
+import { secretsAction } from '../../admin/secrets';
 
 export async function diagnosis(service: AdminService, agentId?: string): Promise<Extract<AdminReply, { kind: 'diagnosis' }>> {
   const bots = await service.listBots();
@@ -37,5 +38,8 @@ export async function adminRpc(service: AdminService, followLogs: (follow: boole
       await service.switchBackend(request.agentId, request.projectName, request.backend);
       return { kind: 'mutation', reply: snapshot => ({ kind: 'applied', revision: snapshot.revision }) };
     }
+    // Nothing in the snapshot shows a key, so a save is a read: no rebuild, no revision (s23g)
+    case 'secrets': case 'setSecret': case 'removeSecret': case 'testSecret':
+      return { kind: 'read', value: await secretsAction(request) };
   }
 }
