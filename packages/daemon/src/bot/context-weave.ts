@@ -172,6 +172,7 @@ export async function fetchQuotedMessage(
   channel: LarkChannel,
   messageId: string,
   names?: NameBook,
+  opts: { refOnly?: boolean } = {},
 ): Promise<ContextMessage | undefined> {
   try {
     const res = await withDeadline(channel.rawClient.im.v1.message.get({
@@ -179,7 +180,7 @@ export async function fetchQuotedMessage(
       params: { with_sender_name: true, card_msg_content_type: CARD_CONTENT },
     }), FETCH_DEADLINE_MS, 'quoted-message');
     if (!res) {
-      log.warn('intake', 'quote-fetch-failed', { messageId, err: 'timeout' });
+      log.warn('intake', 'quote-fetch-failed', opts.refOnly ? { ref: messageId.slice(-6) } : { messageId, err: 'timeout' });
       return undefined;
     }
     const items = (res.data as { items?: RawMsgItem[] } | undefined)?.items ?? [];
@@ -189,7 +190,10 @@ export async function fetchQuotedMessage(
     const cm = toContextMessage(item, meOf(channel), names);
     return cm.text.trim() ? cm : undefined;
   } catch (err) {
-    log.warn('intake', 'quote-fetch-failed', { messageId, err: String(err) });
+    const code = feishuError(err)?.code;
+    log.warn('intake', 'quote-fetch-failed', opts.refOnly
+      ? { ref: messageId.slice(-6), ...(code !== undefined ? { code } : {}) }
+      : { messageId, err: String(err) });
     return undefined;
   }
 }
@@ -200,9 +204,11 @@ export async function fetchQuotedMessage(
  * Undefined on a failure, a timeout or a missing create_time (logged).
  */
 export async function fetchMessageMeta(channel: LarkChannel, messageId: string, names?: NameBook,
-  opts: { event?: string; deadlineMs?: number } = {}): Promise<MessageMeta | undefined> {
+  opts: { event?: string; deadlineMs?: number; refOnly?: boolean } = {}): Promise<MessageMeta | undefined> {
   const failed = (err: unknown, code?: number) => {
-    log.warn('intake', opts.event ?? 'recall-lookup-failed', { messageId, err: String(err), ...(code !== undefined ? { code } : {}) });
+    log.warn('intake', opts.event ?? 'recall-lookup-failed', opts.refOnly
+      ? { ref: messageId.slice(-6), ...(code !== undefined ? { code } : {}) }
+      : { messageId, err: String(err), ...(code !== undefined ? { code } : {}) });
     return undefined;
   };
   try {
