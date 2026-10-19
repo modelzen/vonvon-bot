@@ -11,7 +11,7 @@ import {
   type DesktopSnapshot, settingsViewSchema, projectViewSchema, projectEditableSchemas, settingsReplySchema,
   applicationCrashesSchema, crashText, FORCED_DETAIL, NOT_REPLIED_TEXT, diagnosticsEventSchema, notRepliedSchema, KEY_FAILURE, keyFailureOf, keyProblem,
   isKnownJudgeSelection, type JudgeSelectionView,
-  adminProjectSchema, collaborationRequestSchema, conversationCopy, conversationSchema, conversationToMode, modeToConversation, projectRecordSchema,
+  adminProjectSchema, collaborationRequestSchema, topicConversationCopy, conversationCopy, conversationSchema, conversationToMode, modeToConversation, projectRecordSchema,
 } from "../src/index.js";
 
 const fixture = (name: string): unknown => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
@@ -356,4 +356,10 @@ it("words judging a bot mention without promising that every @ is answered (s27a
   expect(NOT_REPLIED_TEXT["bot-wake-failed"].reason({ ...record, reason: "bot-wake-failed", detail: "boom" })).toBe("处理这条 Bot 的 @ 时出错（boom），没回");
   expect(NOT_REPLIED_TEXT["bot-wake-failed"].next({ ...record, reason: "bot-wake-failed" })).toBe("反复出现时看下面的日志。");
   expect(NOT_REPLIED_TEXT["bot-wake-dropped"].next({ ...record, reason: "bot-wake-dropped" })).toBe("不用处理。");
+});
+
+it("s36b: topic conversation copy has two choices in product order", () => {
+  expect(Object.keys(topicConversationCopy)).toEqual(["threads", "smart"]);
+  expect(topicConversationCopy.threads).toEqual({ name: "按话题聊", title: "按话题聊", subtitle: "一个话题一条会话，几件事各聊各的" });
+  expect(topicConversationCopy.smart.subtitle).toBe("一个话题一条会话，不用 @ 我也会看情况接话");
 });

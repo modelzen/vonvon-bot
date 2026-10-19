@@ -23,7 +23,7 @@ import type {
   NormalizedMessage,
   ReactionEvent,
 } from '@larksuiteoapi/node-sdk';
-import { DEFAULT_BACKEND_ID, backendIds, createBackend, isBackendEntryInstalled } from '../agent';
+import { DEFAULT_BACKEND_ID, effectiveDefaultBackend, backendIds, createBackend, isBackendEntryInstalled } from '../agent';
 import { BackendNotInstalledError } from '../agent/backend-loader';
 import { CodexFullOnlyError, fullOnlyReply } from '../agent/codex-appserver/full-only';
 import { errorKindFromText, type AgentErrorKind } from '../agent/error-kind';
@@ -780,7 +780,7 @@ interface RetryTurn {
 }
 
 /** Reply to an @ (or a 🔁 重试) in a group not bound to any project. */
-const UNBOUND_GROUP_REPLY = '本群还没绑定为项目。请**把我拉进群的管理员**在与我的私聊里完成绑定后再 @我。';
+const UNBOUND_GROUP_REPLY = '主人还没设置好这个群，设置好就能用。';
 
 /** What the agent receives when [重试] is tapped: why the last turn stopped,
  * then that turn's input as it was sent. */
@@ -4808,22 +4808,27 @@ export function createOrchestrator(
       const cwdIn = String((formValue?.cwd as string) ?? '').trim();
       const chatId = typeof value.chatId === 'string' ? value.chatId : '';
       const backend = safeBackendId(formValue);
+      // 'topic' is 按话题聊, persisted as multi.
       const kind = pickedMode(value.kind);
-      // 列「全后端」（full 档过滤面 = 已下载的都列，含 claude 系）。默认仍是 codex（列表
-      // 首项），绑定后按所选后端定档：codex→qa（外部群安全默认）、claude→full（见 bindModeFor）。
+      const topic = value.t === 'topic';
       const backends = backendOptionsFor('full');
+      const fullOnly = Boolean(backendFor(DEFAULT_BACKEND_ID).fullAccessOnly?.());
+      const form = { chatId, name, cwd: cwdIn, backends, backend, topic, fullOnly };
       // Same fresh-card pattern as DM.newProjectSubmit: a submitted form locks
       // its card_id, so the result goes to a new card while the form stays above
       // as a 留痕. Detached so the click acks immediately (join is slow).
       void trackTask((async () => {
         let result;
         if (!chatId)
-          result = buildJoinGroupFormCard({ chatId: '', name, cwd: cwdIn, error: '缺少群标识，请重新从进群通知里打开绑定卡', backends });
-        else if (!name) result = buildJoinGroupFormCard({ chatId, cwd: cwdIn, error: '项目名不能为空', backends });
-        else if (!op) result = buildJoinGroupFormCard({ chatId, name, cwd: cwdIn, error: '无法识别操作者身份', backends });
+          result = buildJoinGroupFormCard({ ...form, error: '缺少群标识，请重新从进群通知里打开绑定卡' });
+        else if (!name) result = buildJoinGroupFormCard({ ...form, error: '项目名不能为空' });
+        else if (!op) result = buildJoinGroupFormCard({ ...form, error: '无法识别操作者身份' });
         else {
           try {
             if (!bindingBot) throw new Error('缺少机器人注册身份，请重启后再绑定');
+            const inChat = await withDeadline(channel.rawClient.im.v1.chatMembers.isInChat({ path: { chat_id: chatId } })
+              .then(r => r.code === 0 && typeof r.data?.is_in_chat === 'boolean' ? r.data.is_in_chat : undefined, () => undefined), 3000, 'join-in-chat');
+            if (inChat === false) throw new Error('我已经不在这个群里了：重新把我拉进群，会再收到一张设置卡。');
             const p = await joinExistingGroup(channel, {
               bot: bindingBot,
               name,
@@ -4837,9 +4842,9 @@ export function createOrchestrator(
               mode: bindModeFor(backend),
             });
             log.info('console', 'join-group', { name: p.name, blank: p.blank, backend: p.backend, mode: p.mode });
-            result = buildNewProjectDoneCard(p, kind === 'smart' && parseNoMentionPick(formValue) !== undefined);
+            result = buildNewProjectDoneCard(p, kind === 'smart' && parseNoMentionPick(formValue) !== undefined, topic);
           } catch (err) {
-            result = buildJoinGroupFormCard({ chatId, name, cwd: cwdIn, error: err instanceof Error ? err.message : String(err), backends });
+            result = buildJoinGroupFormCard({ ...form, error: err instanceof Error ? err.message : String(err) });
           }
         }
         await sendManagedCard(channel, evt.chatId, result).catch((e) =>
@@ -7673,18 +7678,26 @@ export function createOrchestrator(
     return fresh;
   }
 
+  async function defaultBindBackend(backends: SelectOption[]): Promise<string | undefined> {
+    const preferred = cfg.preferences?.defaults?.backend ?? await effectiveDefaultBackend().catch(() => DEFAULT_BACKEND_ID);
+    return backends.some(option => option.value === preferred) ? preferred : backends[0]?.value;
+  }
+
   const pendingGroups = createPendingGroups({
     file: pendingGroupsFile(paths.projectsFile),
-    eligible: async ({ chatId, operator }) => isAdmin(cfg, operator) && !(await getProjectByChatId(chatId)),
+    eligible: async ({ chatId }) => !(await getProjectByChatId(chatId)),
     verify: async chatId => {
       const membership = await channel.rawClient.im.v1.chatMembers.isInChat({ path: { chat_id: chatId } });
       if (membership.code !== 0 || typeof membership.data?.is_in_chat !== 'boolean') throw new Error('无法确认机器人群成员身份');
       if (!membership.data.is_in_chat) return { state: 'retry' };
-      const info = await channel.getChatInfo(chatId);
-      if (info.chatType !== 'group' || (channel.botIdentity?.openId && info.ownerId === channel.botIdentity.openId)) return { state: 'ignore' };
+      const info = await withDeadline(channel.getChatInfo(chatId), 3000, 'pending-chatinfo');
+      if (!info) throw new Error('读取飞书群信息超时');
+      if (info.chatType === 'p2p' || (channel.botIdentity?.openId && info.ownerId === channel.botIdentity.openId)) return { state: 'ignore' };
       const name = info?.name?.trim();
       if (!name) throw new Error('无法读取飞书群名称');
-      return { state: 'ready', name };
+      // Feishu also returns topic; the SDK declaration only lists group and p2p.
+      const chatType: string = info.chatType;
+      return { state: 'ready', name, topic: chatType === 'topic' || (await topicCtx.chatInfo(chatId)).topic };
     },
     onError: error => log.fail('intake', error, { phase: 'pending-groups' }),
   });
@@ -7692,46 +7705,85 @@ export function createOrchestrator(
   const pendingGroupTimer = setInterval(() => { void trackTask(pendingGroups.refresh()); }, 15_000);
   pendingGroupTimer.unref();
 
-  /**
-   * `botAdded` event: a human added the bot to a group. If the adder is an admin
-   * (binding ties the group to a cwd on the operator's machine — privileged) and
-   * the group isn't already bound, DM them a bind card with the project name
-   * pre-filled from the group name. Groups the bridge created itself are already
-   * registered (or added by the bot, not an admin), so they fall through.
-   */
+  /** Record arrivals before lookup; notify privileged adders directly, otherwise the owner.
+   * Self joins and redeliveries do not send cards. Shutdown can interrupt each bounded lookup. */
   async function onBotAddedToChat(evt: BotAddedEvent): Promise<void> {
-    // The SDK fires botAdded fire-and-forget (no await around the handler), so a
-    // rejection here would surface as an unhandled rejection — guard the whole
-    // body (getProjectByChatId can throw on a corrupt/locked projects.json).
     await withTrace({ chatId: evt.chatId }, async () => {
       const op = evt.operator?.openId;
+      const tail = { chatId: evt.chatId.slice(-6), op: op?.slice(-6) };
+      if (op && op === channel.botIdentity?.openId) {
+        log.info('intake', 'bot-added-self', tail);
+        return;
+      }
       if (await getProjectByChatId(evt.chatId)) {
-        log.info('intake', 'bot-added-bound', { chatId: evt.chatId.slice(-6) });
+        log.info('intake', 'bot-added-bound', tail);
         return;
       }
-      if (!op || !isAdmin(cfg, op)) {
-        log.info('intake', 'bot-added-nonadmin', { chatId: evt.chatId.slice(-6), op: op?.slice(-6) });
+      if (!op) {
+        log.info('intake', 'bot-added-no-operator', tail);
         return;
       }
-      await pendingGroups.add(evt.chatId, op).catch(error => log.fail('intake', error, { phase: 'pending-group-add' }));
-      void trackTask(pendingGroups.refresh());
-      // Best-effort group name (needs im:chat:readonly); the bind card's name is
-      // editable, so an empty/failed lookup just means the admin types one.
-      const info = await channel.getChatInfo(evt.chatId).catch((err) => {
-        log.fail('intake', err, { phase: 'bot-added-chatinfo' });
-        return undefined;
+      const fresh = await pendingGroups.add(evt.chatId, op).catch(error => {
+        log.fail('intake', error, { phase: 'pending-group-add' });
+        return true;
       });
-      const name = (info?.name ?? '').trim();
-      await sendManagedCard(
-        channel,
-        op,
-        buildJoinGroupFormCard({ chatId: evt.chatId, name, backends: backendOptionsFor('full') }),
-        undefined,
-        false,
-        'open_id',
-      ).catch((err) => log.fail('intake', err, { phase: 'bot-added-bindcard' }));
-      log.info('intake', 'bot-added', { chatId: evt.chatId.slice(-6), op: op.slice(-6), named: Boolean(name) });
-    }).catch((err) => log.fail('intake', err, { phase: 'bot-added' }));
+      void trackTask(pendingGroups.refresh());
+      if (!fresh) {
+        log.info('intake', 'bot-added-again', tail);
+        return;
+      }
+      const admin = isAdmin(cfg, op);
+      const to = admin ? op : resolveOwner(cfg);
+      if (!to) {
+        log.info('intake', 'bot-added-no-owner', tail);
+        return;
+      }
+      const [info, mode, adderName] = await Promise.all([
+        orStop(withDeadline(channel.getChatInfo(evt.chatId), 3000, 'bot-added-chatinfo').catch(error => {
+          log.fail('intake', error, { phase: 'bot-added-chatinfo' });
+          return undefined;
+        }), undefined),
+        orStop(topicCtx.chatInfo(evt.chatId), { ok: false, topic: false }),
+        admin ? undefined : names.peek(op) ?? orStop(withDeadline((async () => {
+          const contact = (await resolveNames(channel, [op])).get(op);
+          if (contact) return contact;
+          let found: string | undefined;
+          for (const member of await fetchChatMembers(channel, evt.chatId)) {
+            if (member.name.startsWith('…')) continue;
+            names.remember(member.openId, member.name);
+            if (member.openId === op) found = member.name;
+          }
+          return found;
+        })(), 3000, 'bot-added-adder'), undefined),
+      ]);
+      if (adderName) names.remember(op, adderName);
+      if (shuttingDown) {
+        log.info('intake', 'bot-added-dropped', tail);
+        return;
+      }
+      if (await getProjectByChatId(evt.chatId)) {
+        log.info('intake', 'bot-added-bound', tail);
+        return;
+      }
+      const name = info?.name?.trim() ?? '';
+      const chatType: string | undefined = info?.chatType;
+      const topic = chatType === 'topic' || mode.topic;
+      const backends = backendOptionsFor('full');
+      const backend = await defaultBindBackend(backends);
+      if (shuttingDown) {
+        log.info('intake', 'bot-added-dropped', tail);
+        return;
+      }
+      const fullOnly = Boolean(backendFor(DEFAULT_BACKEND_ID).fullAccessOnly?.());
+      const card = buildJoinGroupFormCard({ chatId: evt.chatId, name, topic, backends, backend,
+        fullOnly, addedBy: admin ? undefined : { name: adderName } });
+      const sent = await orStop(sendManagedCard(channel, to, card, undefined, false, 'open_id').then(() => 'yes', error => {
+        log.fail('intake', error, { phase: 'bot-added-bindcard', to: admin ? 'adder' : 'owner' });
+        return 'no';
+      }), 'unknown');
+      log.info('intake', 'bot-added', { ...tail, to: admin ? 'adder' : 'owner', topic,
+        named: Boolean(name), adderNamed: Boolean(adderName), sent });
+    }).catch(error => log.fail('intake', error, { phase: 'bot-added' }));
   }
 
   /**

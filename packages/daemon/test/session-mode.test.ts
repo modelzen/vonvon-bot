@@ -103,3 +103,33 @@ describe('s21 DM bind and new-group cards', () => {
     expect(kindLabel(row({ kind: 'multi', smart: true }))).toBe('多会话 · @ 我开新会话');
   });
 });
+
+
+it('s36b: topic binding offers only 按话题聊 and 智能 with topic action values', () => {
+  const json = JSON.stringify(buildJoinGroupFormCard({ chatId: 'oc_topic', topic: true }));
+  expect(json).toContain('一个话题一条会话，几件事各聊各的');
+  expect(json).toContain('一个话题一条会话，不用 @ 我也会看情况接话');
+  expect(json).toContain('免 @：不选就是开（不 @ 也回）');
+  expect([...json.matchAll(/"name":"(submit_\w+)"/g)].map(match => match[1])).toEqual(['submit_topic', 'submit_smart']);
+  expect([...json.matchAll(/"t":"topic"/g)]).toHaveLength(2);
+  expect(json).not.toContain('initial_option');
+  expect(json).not.toContain('推荐');
+  const multi = row({ kind: 'multi', origin: 'joined' });
+  expect(JSON.stringify(buildNewProjectDoneCard(multi, false, true))).toContain('按话题聊');
+  expect(JSON.stringify(buildNewProjectDoneCard(multi, false, true))).not.toContain('多会话');
+});
+
+it('s36b: the setup card names the adder, workspace defaults, backend and permissions', () => {
+  const opts = { chatId: 'oc_topic', name: 'Test group', backends: [{ label: 'Codex', value: 'codex-appserver' }, { label: 'Claude', value: 'claude-agent' }], backend: 'claude-agent' };
+  const json = JSON.stringify(buildJoinGroupFormCard({ ...opts, addedBy: { name: 'Guest' }, fullOnly: true }));
+  for (const text of ['🔗 设置这个群', '**Guest** 把我拉进了「Test group」', '拉我的不是主人或管理员，所以发给你', '留空就给这个群新建一个目录', '只读 · 网络：关', '这台电脑是 Linux', '默认用这个 bot 的后端']) expect(json).toContain(text);
+  expect(json).toContain('"initial_option":"claude-agent"');
+  expect(json).not.toContain('/Users/you');
+  const plain = JSON.stringify(buildJoinGroupFormCard({ chatId: 'oc_unknown', addedBy: {} }));
+  expect(plain).toContain('**有人** 把我拉进了一个群（没读到群名）');
+  expect(plain).not.toContain('这台电脑是 Linux');
+  expect(JSON.stringify(buildJoinGroupFormCard(opts))).toContain('你把我拉进了「Test group」');
+  const retry = JSON.stringify(buildJoinGroupFormCard({ ...opts, error: 'failed' }));
+  expect(retry).toContain('重新选一下，点下面对应的按钮');
+  expect(retry).toContain('绑定失败');
+});
